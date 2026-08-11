@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import graphData from "./data/graph.json";
 import { TopBar } from "./components/TopBar";
 import { TowerMap } from "./components/TowerMap";
@@ -29,14 +29,6 @@ export default function App() {
     [subject],
   );
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSelectedPathId(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
   const selectedPath = selectedPathId
     ? graph.paths.find((p) => p.id === selectedPathId) ?? null
     : null;
@@ -59,8 +51,9 @@ export default function App() {
         />
         {selectedPath && (
           <DetailPane
+            key={selectedPath.id}
+            graph={graph}
             path={selectedPath}
-            nodes={graph.nodes}
             onClose={() => setSelectedPathId(null)}
           />
         )}
