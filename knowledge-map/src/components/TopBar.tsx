@@ -1,14 +1,16 @@
-import { Sparkles } from "lucide-react";
+import { RotateCcw, Sparkles } from "lucide-react";
 import { isWritten, PALETTE } from "../lib/colors";
 import type { SubjectGraph } from "../lib/types";
 
 interface Props {
   graphs: SubjectGraph[];
   subject: string;
+  manualCount: number;
+  onReset: () => void;
   onSelect: (subject: string) => void;
 }
 
-export function TopBar({ graphs, subject, onSelect }: Props) {
+export function TopBar({ graphs, subject, manualCount, onReset, onSelect }: Props) {
   const writtenCount = (g: SubjectGraph) => g.paths.filter((p) => isWritten(p.status)).length;
   return (
     <header className="cockpit-bar shrink-0">
@@ -39,6 +41,16 @@ export function TopBar({ graphs, subject, onSelect }: Props) {
           <span className="size-2 rounded-full" style={{ background: PALETTE.resolved }} />
           written 已寫
         </span>
+        <button
+          type="button"
+          onClick={onReset}
+          disabled={manualCount === 0}
+          title="清除手動標記的通關進度（content-written 的自動完成不受影響）"
+          className="flex h-6 items-center gap-1 rounded-md border border-input px-2 font-mono text-[0.65rem] text-muted-foreground transition-colors hover:border-ring hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        >
+          <RotateCcw className="size-3" />
+          重置進度
+        </button>
       </div>
     </header>
   );
