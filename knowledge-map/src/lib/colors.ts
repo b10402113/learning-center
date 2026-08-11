@@ -12,3 +12,15 @@ export const PALETTE = {
 export function isWritten(status: string): boolean {
   return status === "content-written" || status === "edges-written";
 }
+
+const STATUS_LABELS: Record<string, string> = {
+  draft: "草稿",
+  confirmed: "已確認",
+  "nodes-written": "節點已寫",
+  "content-written": "內容已寫",
+  "edges-written": "邊緣已寫",
+};
+
+export function statusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status;
+}

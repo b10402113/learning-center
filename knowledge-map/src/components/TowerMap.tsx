@@ -1,6 +1,6 @@
 import { Crown } from "lucide-react";
-import { useMemo } from "react";
-import { isWritten, PALETTE } from "../lib/colors";
+import { useMemo, useState } from "react";
+import { isWritten, PALETTE, statusLabel } from "../lib/colors";
 import {
   computeLayout,
   LANE_X,
@@ -53,11 +53,15 @@ function EdgePath({ link, d, stroke, width, opacity, dash, glow, arrow }: {
   );
 }
 
-function Tile({ path, boss, lit }: { path: PathNode; boss: boolean; lit: boolean }) {
+function Tile({ path, boss, lit, selected }: { path: PathNode; boss: boolean; lit: boolean; selected: boolean }) {
   return (
     <div
       className={`relative h-full w-full overflow-hidden rounded-lg border p-2 transition-colors ${
-        lit ? "border-[#5b9077]/60 bg-[oklch(0.2_0.03_155)]/85" : "border-transparent bg-card/50"
+        selected
+          ? "border-ring bg-secondary"
+          : lit
+            ? "border-[#5b9077]/60 bg-[oklch(0.2_0.03_155)]/85"
+            : "border-transparent bg-card/50"
       }`}
     >
       <div className="absolute left-1.5 top-1.5 grid size-5 place-items-center rounded-full border border-border font-mono text-[0.65rem] text-muted-foreground">
@@ -68,22 +72,39 @@ function Tile({ path, boss, lit }: { path: PathNode; boss: boolean; lit: boolean
         {path.title}
       </div>
       <div className="absolute bottom-1 left-2 right-2 truncate font-mono text-[0.6rem] text-muted-foreground">
-        {lit ? "content-written" : path.status}
+        {statusLabel(path.status)}
       </div>
     </div>
   );
 }
 
-export function TowerMap({ graph }: { graph: SubjectGraph }) {
+interface Tooltip {
+  id: string;
+  x: number;
+  y: number;
+}
+
+interface Props {
+  graph: SubjectGraph;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+}
+
+export function TowerMap({ graph, selectedId, onSelect }: Props) {
   const layout = useMemo(() => computeLayout(graph), [graph]);
   const pathById = useMemo(() => new Map(graph.paths.map((p) => [p.id, p])), [graph]);
   const written = useMemo(
     () => new Set(graph.paths.filter((p) => isWritten(p.status)).map((p) => p.id)),
     [graph],
   );
+  const [tooltip, setTooltip] = useState<Tooltip | null>(null);
+  const hovered = tooltip ? pathById.get(tooltip.id) : null;
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto">
+    <div
+      className="relative min-h-0 flex-1 overflow-auto"
+      onClick={() => onSelect(null)}
+    >
       <svg
         viewBox={`0 0 ${layout.width} ${layout.height}`}
         className="block h-auto min-w-[720px] w-full"
@@ -182,8 +203,18 @@ export function TowerMap({ graph }: { graph: SubjectGraph }) {
           if (!path) return null;
           const lit = written.has(t.id);
           const boss = layout.bossIds.includes(t.id);
+          const selected = selectedId === t.id;
           return (
-            <g key={t.id}>
+            <g
+              key={t.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelect(selected ? null : t.id);
+              }}
+              onMouseMove={(e) => setTooltip({ id: t.id, x: e.clientX, y: e.clientY })}
+              onMouseLeave={() => setTooltip(null)}
+              className="cursor-pointer"
+            >
               {lit && (
                 <rect
                   x={t.x}
@@ -197,14 +228,30 @@ export function TowerMap({ graph }: { graph: SubjectGraph }) {
                 />
               )}
               <foreignObject x={t.x} y={t.y} width={TILE_W} height={TILE_H}>
-                <div style={{ width: "100%", height: "100%" }} className={lit ? "" : "opacity-55"}>
-                  <Tile path={path} boss={boss} lit={lit} />
+                <div style={{ width: "100%", height: "100%" }} className={lit || selected ? "" : "opacity-55"}>
+                  <Tile path={path} boss={boss} lit={lit} selected={selected} />
                 </div>
               </foreignObject>
             </g>
           );
         })}
       </svg>
+
+      {tooltip && hovered && (
+        <div
+          className="pointer-events-none fixed z-20 w-64 rounded-lg border border-border bg-card/95 p-2.5 shadow-xl backdrop-blur-sm"
+          style={{
+            left: Math.min(tooltip.x + 14, window.innerWidth - 268),
+            top: tooltip.y + 14,
+          }}
+        >
+          <div className="text-xs font-semibold text-foreground">{hovered.title}</div>
+          <div className="mt-0.5 font-mono text-[0.65rem] text-muted-foreground">{statusLabel(hovered.status)}</div>
+          {hovered.goal && (
+            <div className="mt-1 line-clamp-3 text-[0.7rem] leading-relaxed text-muted-foreground">{hovered.goal}</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
