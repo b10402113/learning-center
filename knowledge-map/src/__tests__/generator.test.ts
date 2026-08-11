@@ -111,7 +111,8 @@ order: 3
 duration: 10-15 minutes
 status: content-written
 goal: Third lesson goal.
-sources: []
+sources:
+  - "[[sources/fixture-subject/book.pdf#Intro]]"
 nodes:
   - fixture-subject/n2
   - fixture-subject/n1
@@ -309,6 +310,23 @@ describe("buildSubjectGraph", () => {
     expect(p1.taughtNodeIds).toEqual(["n1"]);
     expect(p1.contentHtml).toContain("<h2>");
     expect(p1.fullArticleHtml).toContain("<h1>P One</h1>");
+  });
+
+  it("appends a Sources section to fullArticleHtml when the body lacks one", () => {
+    const g = build();
+    const p3 = g.paths.find((p) => p.id === "p3")!;
+    expect(p3.contentHtml).not.toContain("<h2>Sources</h2>");
+    expect(p3.fullArticleHtml).toContain("<h2>Sources</h2>");
+    expect(p3.fullArticleHtml).toContain(
+      '<span class="source-ref">sources/fixture-subject/book.pdf#Intro</span>',
+    );
+  });
+
+  it("does not duplicate a Sources section already present in the body", () => {
+    const g = build();
+    const p1 = g.paths.find((p) => p.id === "p1")!;
+    const count = p1.fullArticleHtml.match(/<h2>Sources<\/h2>/g);
+    expect(count).toHaveLength(1);
   });
 
   it("treats a skeleton path as empty taught nodes", () => {

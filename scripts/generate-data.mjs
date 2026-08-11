@@ -187,6 +187,12 @@ export function renderMarkdown(md) {
   return out.join("\n");
 }
 
+export function renderSourcesSection(sources) {
+  if (!sources || sources.length === 0) return "";
+  const items = sources.map((s) => `<li>${renderInline(String(s))}</li>`).join("\n");
+  return `\n<h2>Sources</h2>\n<ul>\n${items}\n</ul>\n`;
+}
+
 function stripSubjectPrefix(value) {
   return String(value).split("/").pop();
 }
@@ -221,6 +227,8 @@ export function buildSubjectGraph({ subject, roadmap, pathFiles, nodeFiles, edge
     const { data, body } = parseFrontmatter(content);
     if (!data.id) continue;
     const html = renderMarkdown(body);
+    const hasSourcesHeading = /^##\s+Sources\s*$/m.test(body);
+    const sourcesSection = hasSourcesHeading ? "" : renderSourcesSection(data.sources);
     paths.push({
       id: data.id,
       title: data.title ?? data.id,
@@ -232,7 +240,7 @@ export function buildSubjectGraph({ subject, roadmap, pathFiles, nodeFiles, edge
       taughtNodeIds: (data.nodes ?? []).map(stripSubjectPrefix),
       sources: data.sources ?? [],
       contentHtml: html,
-      fullArticleHtml: html,
+      fullArticleHtml: html + sourcesSection,
     });
   }
   paths.sort((a, b) => a.tier - b.tier || a.order - b.order);
