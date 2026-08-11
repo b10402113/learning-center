@@ -53,3 +53,10 @@ export interface SubjectGraph {
   nodes: Record<string, NodeRecord>;
   edges: Edge[];
 }
+
+// A request to seat the camera on one tile, e.g. from a deep-link. `tick` makes
+// each request distinct so focusing the same path again re-seats the camera.
+export interface FocusRequest {
+  pathId: string;
+  tick: number;
+}

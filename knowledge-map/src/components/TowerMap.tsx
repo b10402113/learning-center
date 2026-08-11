@@ -1,5 +1,5 @@
-import { CheckCircle2, Circle, Crown } from "lucide-react";
-import { useMemo, useState } from "react";
+import { CheckCircle2, Circle, Crown, LocateFixed, ZoomIn, ZoomOut } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isWritten, PALETTE, statusLabel } from "../lib/colors";
 import {
   computeLayout,
@@ -9,7 +9,9 @@ import {
   type LinkPos,
   type Point,
 } from "../lib/layout";
-import type { PathNode, SubjectGraph } from "../lib/types";
+import type { FocusRequest, PathNode, SubjectGraph } from "../lib/types";
+import { useCamera } from "../lib/useCamera";
+import type { Viewport, WorldBounds } from "../lib/camera";
 
 function horizCurve(a: Point, b: Point): string {
   const mx = (a.x + b.x) / 2;
@@ -117,12 +119,13 @@ interface Tooltip {
 interface Props {
   graph: SubjectGraph;
   selectedId: string | null;
+  focusRequest: FocusRequest | null;
   manualCompleted: Set<string>;
   onToggleComplete: (id: string) => void;
   onSelect: (id: string | null) => void;
 }
 
-export function TowerMap({ graph, selectedId, manualCompleted, onToggleComplete, onSelect }: Props) {
+export function TowerMap({ graph, selectedId, focusRequest, manualCompleted, onToggleComplete, onSelect }: Props) {
   const layout = useMemo(() => computeLayout(graph), [graph]);
   const pathById = useMemo(() => new Map(graph.paths.map((p) => [p.id, p])), [graph]);
   const written = useMemo(
@@ -132,14 +135,147 @@ export function TowerMap({ graph, selectedId, manualCompleted, onToggleComplete,
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const hovered = tooltip ? pathById.get(tooltip.id) : null;
 
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState<Viewport>({ w: 0, h: 0 });
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => setViewport({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const bounds: WorldBounds = useMemo(
+    () => ({ w: layout.width, h: layout.height }),
+    [layout],
+  );
+  const { cam, animating, zoomAt, panBy, seat, reset } = useCamera(graph.subject, bounds, viewport);
+
+  // A deep-link names a tile to focus: seat the camera on it once per request.
+  // The request is only consumed once the tile exists in the current layout, so
+  // a race between a focus request and a subject switch is not lost silently.
+  const lastFocus = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusRequest || viewport.w === 0) return;
+    const key = `${focusRequest.pathId}#${focusRequest.tick}`;
+    if (lastFocus.current === key) return;
+    const tile = layout.floors.flatMap((f) => f.tiles).find((t) => t.id === focusRequest.pathId);
+    if (!tile) return;
+    lastFocus.current = key;
+    seat(tile.x + TILE_W / 2, tile.y + TILE_H / 2);
+  }, [focusRequest, layout, viewport.w, seat]);
+
+  // Wheel must be a non-passive native listener so preventDefault works; React's
+  // onWheel is passive and cannot stop the page from scrolling under the map.
+  // A trackpad pinch arrives as a ctrl-flagged wheel (Chrome/Firefox); WebKit
+  // reports it through the gesture events instead — both are handled here.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const point = (e: { clientX: number; clientY: number }) => {
+      const rect = el.getBoundingClientRect();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    };
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const { x, y } = point(e);
+      const px = Math.max(-140, Math.min(140, e.deltaY));
+      const pinch = e.ctrlKey;
+      zoomAt(x, y, Math.exp(-px * (pinch ? 0.011 : 0.0016)));
+    };
+    let gestureScale = 1;
+    const onGestureStart = (e: Event) => {
+      e.preventDefault();
+      gestureScale = 1;
+    };
+    const onGestureChange = (e: Event) => {
+      e.preventDefault();
+      const ge = e as unknown as { scale: number; clientX: number; clientY: number };
+      const { x, y } = point(ge);
+      const s = ge.scale || 1;
+      zoomAt(x, y, s / (gestureScale || 1));
+      gestureScale = s;
+    };
+    const onGestureEnd = (e: Event) => {
+      e.preventDefault();
+      gestureScale = 1;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("gesturestart", onGestureStart as EventListener);
+    el.addEventListener("gesturechange", onGestureChange as EventListener);
+    el.addEventListener("gestureend", onGestureEnd as EventListener);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("gesturestart", onGestureStart as EventListener);
+      el.removeEventListener("gesturechange", onGestureChange as EventListener);
+      el.removeEventListener("gestureend", onGestureEnd as EventListener);
+    };
+  }, [zoomAt]);
+
+  // Pointer drag pans the camera. Move/up are tracked on the window so a drag
+  // that leaves the map still ends cleanly, and a press that moved becomes a
+  // drag whose trailing click must not select a tile underneath.
+  const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      const dx = e.clientX - d.x;
+      const dy = e.clientY - d.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
+      if (d.moved) {
+        panBy(dx, dy);
+        d.x = e.clientX;
+        d.y = e.clientY;
+      }
+    };
+    const onUp = () => {
+      const d = drag.current;
+      drag.current = null;
+      if (d?.moved) {
+        suppressClick.current = true;
+        setTimeout(() => {
+          suppressClick.current = false;
+        }, 0);
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, [panBy]);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    drag.current = { x: e.clientX, y: e.clientY, moved: false };
+  };
+
+  const transform = `translate(${cam.x}px, ${cam.y}px) scale(${cam.s})`;
+
   return (
     <div
-      className="relative min-h-0 flex-1 overflow-auto"
-      onClick={() => onSelect(null)}
+      ref={containerRef}
+      className="relative min-h-0 flex-1 touch-none select-none overflow-hidden"
+      onPointerDown={onPointerDown}
+      onClick={() => {
+        if (suppressClick.current) return;
+        onSelect(null);
+      }}
     >
+      {viewport.w > 0 && (
       <svg
-        viewBox={`0 0 ${layout.width} ${layout.height}`}
-        className="block h-auto min-w-[720px] w-full"
+        width={viewport.w}
+        height={viewport.h}
+        className="block h-full w-full cursor-grab"
         role="img"
         aria-label={`${graph.subject} 學習路線塔`}
       >
@@ -163,120 +299,165 @@ export function TowerMap({ graph, selectedId, manualCompleted, onToggleComplete,
           </marker>
         </defs>
 
-        <rect x={0} y={0} width={layout.width} height={layout.height} fill="var(--background)" />
+        <g
+          style={{
+            transform,
+            transformOrigin: "0 0",
+            transformBox: "view-box",
+            transition: animating ? "transform 0.45s cubic-bezier(0.22, 1, 0.36, 1)" : "none",
+          }}
+        >
+          <rect x={0} y={0} width={layout.width} height={layout.height} fill="var(--background)" />
 
-        {layout.stars.map((s, i) => (
-          <circle key={i} cx={s.x} cy={s.y} r={i % 5 === 0 ? 1.3 : 0.7} fill={PALETTE.frontier} opacity={0.25} />
-        ))}
+          {layout.stars.map((s, i) => (
+            <circle key={i} cx={s.x} cy={s.y} r={i % 5 === 0 ? 1.3 : 0.7} fill={PALETTE.frontier} opacity={0.25} />
+          ))}
 
-        {layout.floors.map((f) => (
-          <g key={f.tier}>
-            <line
-              x1={LANE_X - 20}
-              x2={layout.width}
-              y1={f.y + TILE_H / 2}
-              y2={f.y + TILE_H / 2}
-              stroke="var(--border)"
-              strokeWidth={1}
-              strokeDasharray="2 8"
-              opacity={0.5}
-            />
-            <text
-              x={LANE_X - 26}
-              y={f.y + TILE_H / 2}
-              textAnchor="end"
-              dominantBaseline="middle"
-              fontSize={13}
-              fontWeight={600}
-              fill="var(--muted-foreground)"
-            >
-              {`T${f.tier}`}
-            </text>
-            <text
-              x={LANE_X - 26}
-              y={f.y + TILE_H / 2 + 15}
-              textAnchor="end"
-              dominantBaseline="middle"
-              fontSize={10}
-              fill="var(--muted-foreground)"
-              opacity={0.7}
-            >
-              {f.title}
-            </text>
-          </g>
-        ))}
-
-        {layout.shared.map((link, i) => (
-          <EdgePath
-            key={`s${i}`}
-            link={link}
-            d={horizCurve(link.from, link.to)}
-            stroke={PALETTE.claimed}
-            width={1}
-            opacity={0.4}
-            dash="4 4"
-          />
-        ))}
-
-        {layout.spine.map((link, i) => (
-          <EdgePath key={`sp${i}`} link={link} d={horizCurve(link.from, link.to)} stroke={PALETTE.frontier} width={1.6} opacity={0.85} arrow />
-        ))}
-
-        {layout.boundarySpine.map((link, i) => (
-          <EdgePath key={`bp${i}`} link={link} d={dropCurve(link.from, link.to)} stroke={PALETTE.frontier} width={1.6} opacity={0.85} arrow />
-        ))}
-
-        {layout.explicit.map((link, i) => (
-          <EdgePath key={`e${i}`} link={link} d={horizCurve(link.from, link.to)} stroke={PALETTE.resolved} width={1.4} opacity={0.9} glow arrow />
-        ))}
-
-        {layout.floors.flatMap((f) => f.tiles).map((t) => {
-          const path = pathById.get(t.id);
-          if (!path) return null;
-          const auto = written.has(t.id);
-          const manual = manualCompleted.has(t.id) && !auto;
-          const lit = auto || manual;
-          const boss = layout.bossIds.includes(t.id);
-          const selected = selectedId === t.id;
-          return (
-            <g
-              key={t.id}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelect(selected ? null : t.id);
-              }}
-              onMouseMove={(e) => setTooltip({ id: t.id, x: e.clientX, y: e.clientY })}
-              onMouseLeave={() => setTooltip(null)}
-              className="cursor-pointer"
-            >
-              {lit && (
-                <rect
-                  x={t.x}
-                  y={t.y}
-                  width={TILE_W}
-                  height={TILE_H}
-                  rx={8}
-                  fill={manual ? PALETTE.claimedGlow : PALETTE.resolvedGlow}
-                  opacity={0.22}
-                  filter="url(#tileGlow)"
-                />
-              )}
-              <foreignObject x={t.x} y={t.y} width={TILE_W} height={TILE_H}>
-                <div style={{ width: "100%", height: "100%" }} className={lit || selected ? "" : "opacity-55"}>
-                  <Tile
-                    path={path}
-                    boss={boss}
-                    lit={lit}
-                    manual={manual}
-                    selected={selected}
-                    onToggle={() => onToggleComplete(t.id)}
-                  />
-                </div>
-              </foreignObject>
+          {layout.floors.map((f) => (
+            <g key={f.tier}>
+              <line
+                x1={LANE_X - 20}
+                x2={layout.width}
+                y1={f.y + TILE_H / 2}
+                y2={f.y + TILE_H / 2}
+                stroke="var(--border)"
+                strokeWidth={1}
+                strokeDasharray="2 8"
+                opacity={0.5}
+              />
+              <text
+                x={LANE_X - 26}
+                y={f.y + TILE_H / 2}
+                textAnchor="end"
+                dominantBaseline="middle"
+                fontSize={13}
+                fontWeight={600}
+                fill="var(--muted-foreground)"
+              >
+                {`T${f.tier}`}
+              </text>
+              <text
+                x={LANE_X - 26}
+                y={f.y + TILE_H / 2 + 15}
+                textAnchor="end"
+                dominantBaseline="middle"
+                fontSize={10}
+                fill="var(--muted-foreground)"
+                opacity={0.7}
+              >
+                {f.title}
+              </text>
             </g>
-          );
-        })}
+          ))}
+
+          {layout.shared.map((link, i) => (
+            <EdgePath
+              key={`s${i}`}
+              link={link}
+              d={horizCurve(link.from, link.to)}
+              stroke={PALETTE.claimed}
+              width={1}
+              opacity={0.4}
+              dash="4 4"
+            />
+          ))}
+
+          {layout.spine.map((link, i) => (
+            <EdgePath key={`sp${i}`} link={link} d={horizCurve(link.from, link.to)} stroke={PALETTE.frontier} width={1.6} opacity={0.85} arrow />
+          ))}
+
+          {layout.boundarySpine.map((link, i) => (
+            <EdgePath key={`bp${i}`} link={link} d={dropCurve(link.from, link.to)} stroke={PALETTE.frontier} width={1.6} opacity={0.85} arrow />
+          ))}
+
+          {layout.explicit.map((link, i) => (
+            <EdgePath key={`e${i}`} link={link} d={horizCurve(link.from, link.to)} stroke={PALETTE.resolved} width={1.4} opacity={0.9} glow arrow />
+          ))}
+
+          {layout.floors.flatMap((f) => f.tiles).map((t) => {
+            const path = pathById.get(t.id);
+            if (!path) return null;
+            const auto = written.has(t.id);
+            const manual = manualCompleted.has(t.id) && !auto;
+            const lit = auto || manual;
+            const boss = layout.bossIds.includes(t.id);
+            const selected = selectedId === t.id;
+            return (
+              <g
+                key={t.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (suppressClick.current) return;
+                  onSelect(selected ? null : t.id);
+                }}
+                onMouseMove={(e) => setTooltip({ id: t.id, x: e.clientX, y: e.clientY })}
+                onMouseLeave={() => setTooltip(null)}
+                className="cursor-pointer"
+              >
+                {lit && (
+                  <rect
+                    x={t.x}
+                    y={t.y}
+                    width={TILE_W}
+                    height={TILE_H}
+                    rx={8}
+                    fill={manual ? PALETTE.claimedGlow : PALETTE.resolvedGlow}
+                    opacity={0.22}
+                    filter="url(#tileGlow)"
+                  />
+                )}
+                <foreignObject x={t.x} y={t.y} width={TILE_W} height={TILE_H}>
+                  <div style={{ width: "100%", height: "100%" }} className={lit || selected ? "" : "opacity-55"}>
+                    <Tile
+                      path={path}
+                      boss={boss}
+                      lit={lit}
+                      manual={manual}
+                      selected={selected}
+                      onToggle={() => onToggleComplete(t.id)}
+                    />
+                  </div>
+                </foreignObject>
+              </g>
+            );
+          })}
+        </g>
       </svg>
+      )}
+
+      <div
+        className="absolute bottom-3 left-3 z-10 flex flex-col gap-1.5"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={() => zoomAt(viewport.w / 2, viewport.h / 2, 1.4)}
+          aria-label="放大"
+          title="放大"
+          className="grid size-8 place-items-center rounded-md border border-input bg-card/85 text-muted-foreground backdrop-blur-sm transition-colors hover:border-ring hover:text-foreground"
+        >
+          <ZoomIn className="size-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => zoomAt(viewport.w / 2, viewport.h / 2, 1 / 1.4)}
+          aria-label="縮小"
+          title="縮小"
+          className="grid size-8 place-items-center rounded-md border border-input bg-card/85 text-muted-foreground backdrop-blur-sm transition-colors hover:border-ring hover:text-foreground"
+        >
+          <ZoomOut className="size-4" />
+        </button>
+        <button
+          type="button"
+          onClick={reset}
+          aria-label="回到鳥瞰"
+          title="回到鳥瞰"
+          className="grid size-8 place-items-center rounded-md border border-input bg-card/85 text-muted-foreground backdrop-blur-sm transition-colors hover:border-ring hover:text-foreground"
+        >
+          <LocateFixed className="size-4" />
+        </button>
+      </div>
 
       {tooltip && hovered && (
         <div
