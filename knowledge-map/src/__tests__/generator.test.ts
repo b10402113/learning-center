@@ -220,6 +220,29 @@ Depends.
 Compare them.
 `;
 
+const PREPARE_P1 = `---
+path: fixture-subject/p1
+tier: 1
+duration: 3-5 minutes
+sources:
+  - "[[sources/fixture-subject/book.pdf#Intro]]"
+created: 2026-08-09
+updated: 2026-08-09
+---
+
+# P One — 預習
+
+## Key ideas
+1. First plain preview idea.
+2. Second plain preview idea.
+
+## 術語預告
+- **Term A** — one-line gloss
+
+## 已有基礎
+- [[learn/fixture-subject/nodes/n1|N One]] — reminder
+`;
+
 const FILES = {
   "paths/p1.md": P1,
   "paths/p2.md": P2,
@@ -228,6 +251,7 @@ const FILES = {
   "nodes/n2.md": N2,
   "nodes/n3.md": N3,
   "edges/e1.md": EDGE,
+  "prepares/p1.md": PREPARE_P1,
 };
 
 function build() {
@@ -245,6 +269,7 @@ function build() {
       "nodes/n3.md": FILES["nodes/n3.md"],
     },
     edgeFiles: { "edges/e1.md": FILES["edges/e1.md"] },
+    prepareFiles: { "prepares/p1.md": FILES["prepares/p1.md"] },
   });
 }
 
@@ -394,6 +419,25 @@ describe("buildSubjectGraph", () => {
     expect(n1.sources).toEqual(["[[sources/fixture-subject/book.pdf#Intro]]"]);
   });
 
+  it("carries a prepare note into the path as rendered prepareHtml + hasPrepare", () => {
+    const g = build();
+    const p1 = g.paths.find((p) => p.id === "p1")!;
+    expect(p1.hasPrepare).toBe(true);
+    expect(p1.prepareHtml).toContain("First plain preview idea.");
+    expect(p1.prepareHtml).toContain("data-target=\"learn/fixture-subject/nodes/n1\"");
+    expect(p1.prepareHtml).not.toContain("path: fixture-subject/p1");
+  });
+
+  it("defaults paths without a prepare note to null and false", () => {
+    const g = build();
+    const p2 = g.paths.find((p) => p.id === "p2")!;
+    const p3 = g.paths.find((p) => p.id === "p3")!;
+    expect(p2.hasPrepare).toBe(false);
+    expect(p2.prepareHtml).toBeNull();
+    expect(p3.hasPrepare).toBe(false);
+    expect(p3.prepareHtml).toBeNull();
+  });
+
   it("is deterministic: two runs produce identical output", () => {
     expect(build()).toEqual(build());
   });
@@ -406,9 +450,14 @@ describe("scanSubject", () => {
       mkdirSync(join(root, "learn", "fixture-subject", "paths"), { recursive: true });
       mkdirSync(join(root, "learn", "fixture-subject", "nodes"), { recursive: true });
       mkdirSync(join(root, "learn", "fixture-subject", "edges"), { recursive: true });
+      mkdirSync(join(root, "learn", "fixture-subject", "prepares"), { recursive: true });
       mkdirSync(join(root, "learn", "fixture-subject", "learn", "fixture-subject", "paths"), { recursive: true });
       writeFileSync(join(root, "learn", "fixture-subject", "ROADMAP.md"), ROADMAP);
       writeFileSync(join(root, "learn", "fixture-subject", "paths", "p1.md"), P1);
+      writeFileSync(
+        join(root, "learn", "fixture-subject", "prepares", "p1.md"),
+        PREPARE_P1,
+      );
       writeFileSync(
         join(root, "learn", "fixture-subject", "learn", "fixture-subject", "paths", "stub.md"),
         "# stub",
@@ -417,6 +466,7 @@ describe("scanSubject", () => {
       expect(Object.keys(scanned.pathFiles)).toEqual(["paths/p1.md"]);
       expect(scanned.roadmap).toContain("Tier 1");
       expect(scanned.nodeFiles).toEqual({});
+      expect(scanned.prepareFiles).toEqual({ "prepares/p1.md": PREPARE_P1 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

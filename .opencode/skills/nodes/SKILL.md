@@ -15,9 +15,10 @@ Prereqs: `learn/<subject>/MEMORY.md` exists and the path file exists. Invoking `
 4. **Canonicalize.** Give each concept an immutable kebab-case `id`. Reuse an existing node when the core concept is the same. A path-specific framing belongs in the path article, not in a duplicate node.
 5. **Update nodes.** For each selected concept, create or incrementally update `learn/<subject>/nodes/<node-id>.md`. Preserve useful existing explanations. Add supported depth, examples, connections, source references, and retrieval questions; never replace a useful node with a shallower rewrite. Add the current `<subject>/<path-id>` to `paths` and deduplicate `sources`.
 6. **Set canonical metadata.** `tier` is the node's subject-level abstraction depth. `order` is its stable canonical display order; neither is the node's order in this lesson. The path's `nodes` array is the teaching order.
-7. **Write the path article.** After all selected node files exist, update the path file's `nodes` array and write a self-contained 10–15 minute `## Lesson` following `docs/reference/article-writing.md`. Link the core concepts at their first useful appearance with stable path-qualified node links. The article teaches the path's main idea without copying every node's deep dive. Write the lesson as a flowing narrative in the register of `examples/PATH.md`.
-8. **Verify.** Check that every path node exists, every article node link resolves, every source link points into `sources/<subject>/` and its section locator resolves in the source's digest, every node has at least two meaningful connections, and each node has relationship and value-judgment retrieval questions. When a tune applies, check the prose follows the voice and language from `MEMORY.md`.
-9. **Report.** List created nodes, updated nodes, the completed path article, and any unresolved source or link issues. Move the path through `nodes-written` and `content-written` only when those checks pass.
+7. **Write the prepare note (optional).** Check whether `learn/<subject>/prepares/<path-id>.md` exists. When it does not, write a short prepare note following the format below — one page of "before you read" concepts, 3–5 minutes to read, so the learner builds a first-pass mental model before the lesson. It is a preview, not a condensed lesson. Skip it when the path is simple, when the learner prefers to dive straight in, or when this is an incremental update of an already-written lesson. When updating an existing prepare note, preserve useful prior content.
+8. **Write the path article.** After all selected node files exist, update the path file's `nodes` array and write a self-contained 10–15 minute `## Lesson` following `docs/reference/article-writing.md`. Link the core concepts at their first useful appearance with stable path-qualified node links. The article teaches the path's main idea without copying every node's deep dive. Write the lesson as a flowing narrative in the register of `examples/PATH.md`.
+9. **Verify.** Check that every path node exists, every article node link resolves, every source link points into `sources/<subject>/` and its section locator resolves in the source's digest, every node has at least two meaningful connections, and each node has relationship and value-judgment retrieval questions. When a tune applies, check the prose follows the voice and language from `MEMORY.md`.
+10. **Report.** List created nodes, updated nodes, the completed path article, any prepare note written, and any unresolved source or link issues. Move the path through `nodes-written` and `content-written` only when those checks pass.
 
 Completion: the selected canonical nodes exist or are updated without losing prior useful content, the path's `nodes` list matches its article links, the path article is complete and readable in 10–15 minutes, all citations resolve, and — when a tune applies — the prose is in the subject's `language` and follows the voice.
 
@@ -82,6 +83,38 @@ A3. <answer>
 ```
 
 Rendered section headings follow `MEMORY.md` `language`. `Problem Statement`, `Connections`, `Deep dive`, and `Questions` stay in English; the other headings translate, with the rendered set shown in `examples/NODE.md`.
+
+## Prepare note format
+
+An optional short preview for one path: `learn/<subject>/prepares/<path-id>.md`. It exists to lower cognitive load before the 10–15 minute lesson — 2–4 key ideas in plain language, a glossary of terms to watch, and links to already-known concepts. Readable in 3–5 minutes. Headings render in the `MEMORY.md` `language`.
+
+```markdown
+---
+path: <subject>/<path-id>
+tier: <tier>
+duration: 3-5 minutes
+sources:
+  - "[[sources/<subject>/<file>#<section>]]"
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+---
+
+# <Path title> — <預習>
+
+## <Key ideas>
+1. <plain-language preview of one key idea the lesson will build>
+2. <...>
+3. <...>
+
+## <術語預告 (gloss)>
+- **<term>** — one-line plain gloss
+- **<term>** — one-line plain gloss
+
+## <已有基礎 (related concepts)>
+- [[learn/<subject>/nodes/<node-id>|<Node title>]] — one-line reminder
+```
+
+The generator picks a prepare note up by matching its filename to the path id (`prepares/<path-id>.md`); the `path` frontmatter records the owner for traceability. A prepare note is never created by `/roadmap`.
 
 ## Examples
 

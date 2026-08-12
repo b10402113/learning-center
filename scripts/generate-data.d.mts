@@ -23,6 +23,8 @@ export interface GraphPath {
   contentHtml: string;
   fullArticleHtml: string;
   sources: string[];
+  prepareHtml: string | null;
+  hasPrepare: boolean;
 }
 
 export interface GraphNode {
@@ -49,6 +51,7 @@ export interface ScannedFiles {
   pathFiles: Record<string, string>;
   nodeFiles: Record<string, string>;
   edgeFiles: Record<string, string>;
+  prepareFiles: Record<string, string>;
 }
 
 export function coerce(value: string): string | number;
@@ -62,6 +65,7 @@ export function buildSubjectGraph(args: {
   pathFiles: Record<string, string>;
   nodeFiles: Record<string, string>;
   edgeFiles: Record<string, string>;
+  prepareFiles: Record<string, string>;
 }): SubjectGraphData;
 export function scanSubject(subject: string, learnRoot: string): ScannedFiles;
 export function loadAllSubjects(learnRoot: string): SubjectGraphData[];

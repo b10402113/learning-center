@@ -221,7 +221,17 @@ function parseTiers(roadmap) {
   return tiers;
 }
 
-export function buildSubjectGraph({ subject, roadmap, pathFiles, nodeFiles, edgeFiles }) {
+function prepareById(prepareFiles) {
+  const map = new Map();
+  for (const [key, content] of Object.entries(prepareFiles ?? {})) {
+    const m = key.match(/^prepares\/(.+)\.md$/);
+    if (m) map.set(m[1], content);
+  }
+  return map;
+}
+
+export function buildSubjectGraph({ subject, roadmap, pathFiles, nodeFiles, edgeFiles, prepareFiles }) {
+  const prepares = prepareById(prepareFiles);
   const paths = [];
   for (const content of Object.values(pathFiles)) {
     const { data, body } = parseFrontmatter(content);
@@ -229,6 +239,8 @@ export function buildSubjectGraph({ subject, roadmap, pathFiles, nodeFiles, edge
     const html = renderMarkdown(body);
     const hasSourcesHeading = /^##\s+Sources\s*$/m.test(body);
     const sourcesSection = hasSourcesHeading ? "" : renderSourcesSection(data.sources);
+    const prepareContent = prepares.get(data.id);
+    const prepareHtml = prepareContent ? renderMarkdown(parseFrontmatter(prepareContent).body) : null;
     paths.push({
       id: data.id,
       title: data.title ?? data.id,
@@ -241,6 +253,8 @@ export function buildSubjectGraph({ subject, roadmap, pathFiles, nodeFiles, edge
       sources: data.sources ?? [],
       contentHtml: html,
       fullArticleHtml: html + sourcesSection,
+      prepareHtml,
+      hasPrepare: prepareHtml !== null,
     });
   }
   paths.sort((a, b) => a.tier - b.tier || a.order - b.order);
@@ -362,6 +376,7 @@ export function scanSubject(subject, learnRoot) {
     pathFiles: list("paths"),
     nodeFiles: list("nodes"),
     edgeFiles: list("edges"),
+    prepareFiles: list("prepares"),
   };
 }
 
@@ -378,6 +393,7 @@ export function loadAllSubjects(learnRoot) {
       pathFiles: scanned.pathFiles,
       nodeFiles: scanned.nodeFiles,
       edgeFiles: scanned.edgeFiles,
+      prepareFiles: scanned.prepareFiles,
     });
   });
 }

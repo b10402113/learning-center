@@ -17,6 +17,7 @@ This repo turns raw material into customized, subject-specific lessons. A **path
 │       ├── MEMORY.md  ← learner profile from /learn-init (incl. language, tune, tune-scope)
 │       ├── ROADMAP.md ← path index and course plan
 │       ├── digests/   ← two-level source digests from /learn-init & /roadmap
+│       ├── prepares/  ← optional per-path pre-lesson preview notes
 │       ├── paths/     ← one lesson file per path
 │       ├── nodes/     ← canonical concept pages
 │       └── edges/     ← relationship pages between node pairs
@@ -131,6 +132,7 @@ Periodically check `learn/<subject>/` for:
 - Path count deviating more than ±40% from the formula baseline
 - Digest `source_hash` that no longer matches its source file
 - Source locators in paths or nodes that cannot be found in the source's digest
+- Prepare notes whose `path` frontmatter does not match an existing `<subject>/<path-id>`
 - A `tune` in `MEMORY.md` that does not resolve to `tune/<slug>/TUNE.md`
 - TUNE `files` hashes that no longer match their transcript files
 - Transcripts in `tune/<author>/` with no `TUNE.md` (cannot be chosen at `/learn-init`)

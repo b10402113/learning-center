@@ -17,6 +17,8 @@ function path(id: string, tier: number, status: PathStatus = "draft"): PathNode 
     contentHtml: "",
     fullArticleHtml: "",
     sources: [],
+    prepareHtml: null,
+    hasPrepare: false,
   };
 }
 

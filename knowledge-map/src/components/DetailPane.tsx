@@ -275,6 +275,16 @@ export function DetailPane({
                 </section>
               )}
 
+              {currentPath.hasPrepare && currentPath.prepareHtml && (
+                <section className="mb-4 flex flex-col gap-1" onClick={handleContentClick}>
+                  <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint"><span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden />預習 · 讀文章前</h3>
+                  <div
+                    className="prose-sm"
+                    dangerouslySetInnerHTML={{ __html: stripLeadingH1(currentPath.prepareHtml) }}
+                  />
+                </section>
+              )}
+
               {currentPath.contentHtml && (
                 <section className="mb-4" onClick={handleContentClick}>
                   <div

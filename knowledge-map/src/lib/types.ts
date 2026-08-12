@@ -18,6 +18,8 @@ export interface PathNode {
   contentHtml: string;
   fullArticleHtml: string;
   sources: string[];
+  prepareHtml: string | null;
+  hasPrepare: boolean;
 }
 
 export interface NodeRecord {
