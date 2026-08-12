@@ -1,4 +1,4 @@
-import { RotateCcw, Sparkles } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { isWritten, PALETTE } from "../lib/colors";
 import type { SubjectGraph } from "../lib/types";
 
@@ -12,44 +12,57 @@ interface Props {
 
 export function TopBar({ graphs, subject, manualCount, onReset, onSelect }: Props) {
   const writtenCount = (g: SubjectGraph) => g.paths.filter((p) => isWritten(p.status)).length;
+  const plate = graphs.findIndex((g) => g.subject === subject) + 1;
   return (
-    <header className="cockpit-bar shrink-0">
-      <Sparkles className="size-4 text-primary" />
-      <span className="text-sm font-semibold tracking-tight">知識星雲</span>
-      <span className="text-xs text-muted-foreground">/</span>
-      <select
-        value={subject}
-        onChange={(e) => onSelect(e.target.value)}
-        className="h-7 rounded-md border border-input bg-input/20 px-2 font-mono text-xs font-medium text-foreground outline-none focus:border-ring"
-      >
-        {graphs.map((g) => (
-          <option key={g.subject} value={g.subject}>
-            {g.subject} · {g.paths.length} paths · {writtenCount(g)} written
-          </option>
-        ))}
-      </select>
-      <div className="ml-auto flex items-center gap-4 text-[0.65rem] text-muted-foreground">
-        <span className="flex items-center gap-1.5">
+    <header className="cockpit-bar shrink-0 gap-3">
+      <span className="font-display text-lg leading-none tracking-wide text-foreground">
+        知識星雲
+      </span>
+      <span className="hidden font-mono text-[0.6rem] uppercase tracking-[0.22em] text-faint md:inline">
+        Knowledge Nebula · Sheet {String(plate).padStart(2, "0")}
+      </span>
+
+      <div className="mx-1 h-4 w-px shrink-0 bg-steel/50" aria-hidden />
+
+      <label className="flex min-w-0 items-center gap-1.5">
+        <span className="hidden font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint lg:inline">
+          Subject
+        </span>
+        <select
+          value={subject}
+          onChange={(e) => onSelect(e.target.value)}
+          className="h-7 min-w-0 max-w-56 flex-1 truncate rounded-sm border border-input bg-card px-1.5 font-mono text-xs font-medium text-foreground outline-none transition-colors hover:border-steel/60 focus:border-brass"
+        >
+          {graphs.map((g) => (
+            <option key={g.subject} value={g.subject}>
+              {g.subject} · {g.paths.length} plates · {writtenCount(g)} charted
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <div className="ml-auto flex items-center gap-4 text-[0.65rem] text-faint">
+        <span className="hidden items-center gap-1.5 md:flex" title="spine：路徑的順序">
           <span className="h-0.5 w-4" style={{ background: PALETTE.frontier }} />
-          spine 順序
+          spine
         </span>
-        <span className="flex items-center gap-1.5">
+        <span className="hidden items-center gap-1.5 md:flex" title="shared：共享概念">
           <span className="h-px w-4 border-t border-dashed" style={{ borderColor: PALETTE.claimed }} />
-          shared 共享概念
+          shared
         </span>
-        <span className="flex items-center gap-1.5">
+        <span className="hidden items-center gap-1.5 md:flex" title="written：已寫內容">
           <span className="size-2 rounded-full" style={{ background: PALETTE.resolved }} />
-          written 已寫
+          charted
         </span>
         <button
           type="button"
           onClick={onReset}
           disabled={manualCount === 0}
           title="清除手動標記的通關進度（content-written 的自動完成不受影響）"
-          className="flex h-6 items-center gap-1 rounded-md border border-input px-2 font-mono text-[0.65rem] text-muted-foreground transition-colors hover:border-ring hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+          className="flex h-6 items-center gap-1 rounded-sm border border-input px-2 font-mono text-[0.65rem] text-faint transition-colors hover:border-brass hover:text-brass disabled:pointer-events-none disabled:opacity-40"
         >
           <RotateCcw className="size-3" />
-          重置進度
+          <span className="hidden sm:inline">重置進度</span>
         </button>
       </div>
     </header>

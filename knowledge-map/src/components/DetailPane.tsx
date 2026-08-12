@@ -84,9 +84,9 @@ export function DetailPane({ graph, path, onClose }: Props) {
     <aside
       role="complementary"
       aria-label={`${titleFor(current)} 詳情`}
-      className={`absolute z-10 flex flex-col overflow-hidden rounded-none border-border bg-card/80 backdrop-blur-sm ${
+      className={`absolute z-10 flex flex-col overflow-hidden rounded-none border-border bg-[#0e1526]/85 backdrop-blur-sm ${
         fullRead
-          ? "inset-0 w-auto max-w-none border-0 bg-card/95"
+          ? "inset-0 w-auto max-w-none border-0 bg-[#0c1424]/95"
           : "inset-y-0 right-0 w-[26rem] max-w-[85%] border-l"
       }`}
     >
@@ -97,14 +97,14 @@ export function DetailPane({ graph, path, onClose }: Props) {
             onClick={() => setFullRead(false)}
             aria-label="返回面板"
             title="返回面板 (Esc)"
-            className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            className="grid size-7 shrink-0 place-items-center rounded-sm text-faint transition-colors hover:bg-secondary hover:text-brass"
           >
             <ChevronLeft className="size-4" />
           </button>
-          <span className="min-w-0 flex-1 truncate text-sm font-medium" title={titleFor(current)}>
+          <span className="min-w-0 flex-1 truncate font-display text-base" title={titleFor(current)}>
             {titleFor(current)}
           </span>
-          <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border font-mono text-[0.65rem] text-muted-foreground">
+          <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border font-mono text-[0.65rem] text-faint">
             {current.kind === "path" ? currentPath?.order : `T${currentNode?.tier ?? "?"}`}
           </span>
           <button
@@ -112,7 +112,7 @@ export function DetailPane({ graph, path, onClose }: Props) {
             onClick={onClose}
             aria-label="關閉面板"
             title="關閉"
-            className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            className="grid size-7 shrink-0 place-items-center rounded-sm text-faint transition-colors hover:bg-secondary hover:text-brass"
           >
             <X className="size-4" />
           </button>
@@ -126,13 +126,13 @@ export function DetailPane({ graph, path, onClose }: Props) {
               disabled={stack.length <= 1}
               aria-label="返回"
               title="返回 (上一層)"
-              className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              className="grid size-7 shrink-0 place-items-center rounded-sm text-faint transition-colors hover:bg-secondary hover:text-brass disabled:pointer-events-none disabled:opacity-40"
             >
               <ChevronLeft className="size-4" />
             </button>
             <nav
               aria-label="所在位置"
-              className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap font-mono text-[0.65rem] text-muted-foreground"
+              className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap font-mono text-[0.65rem] text-faint"
             >
               {stack.map((v, i) => (
                 <span key={`${v.kind}:${v.id}`} className="flex min-w-0 items-center gap-1">
@@ -144,7 +144,7 @@ export function DetailPane({ graph, path, onClose }: Props) {
                       type="button"
                       onClick={() => jumpTo(i)}
                       title={titleFor(v)}
-                      className="truncate underline-offset-2 transition-colors hover:text-foreground hover:underline"
+                      className="truncate underline-offset-2 transition-colors hover:text-brass hover:underline"
                     >
                       {titleFor(v)}
                     </button>
@@ -158,7 +158,7 @@ export function DetailPane({ graph, path, onClose }: Props) {
                 onClick={() => setFullRead(true)}
                 aria-label="整篇閱讀"
                 title="整篇閱讀"
-                className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-border px-2 font-mono text-[0.65rem] text-muted-foreground transition-colors hover:border-ring hover:text-foreground"
+                className="flex h-7 shrink-0 items-center gap-1 rounded-sm border border-steel/40 px-2 font-mono text-[0.65rem] text-faint transition-colors hover:border-brass hover:text-brass"
               >
                 <Expand className="size-3.5" />
                 整篇閱讀
@@ -169,7 +169,7 @@ export function DetailPane({ graph, path, onClose }: Props) {
               onClick={onClose}
               aria-label="關閉面板 (Esc)"
               title="關閉 (Esc)"
-              className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              className="grid size-7 shrink-0 place-items-center rounded-sm text-faint transition-colors hover:bg-secondary hover:text-brass"
             >
               <X className="size-4" />
             </button>
@@ -177,19 +177,19 @@ export function DetailPane({ graph, path, onClose }: Props) {
 
           <div className="flex items-center gap-1.5">
             {current.kind === "path" && currentPath ? (
-              <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border font-mono text-[0.65rem] text-muted-foreground">
+              <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border font-mono text-[0.65rem] text-faint">
                 {currentPath.order}
               </span>
             ) : (
-              <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border font-mono text-[0.65rem] text-muted-foreground">
+              <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border font-mono text-[0.65rem] text-faint">
                 T{currentNode?.tier ?? "?"}
               </span>
             )}
-            <span className="min-w-0 flex-1 truncate text-sm font-medium" title={titleFor(current)}>
+            <span className="min-w-0 flex-1 truncate font-display text-base" title={titleFor(current)}>
               {titleFor(current)}
             </span>
           </div>
-          <div className="flex items-center gap-2 text-[0.7rem] text-muted-foreground">
+          <div className="flex items-center gap-2 text-[0.7rem] text-faint">
             {current.kind === "path" && currentPath ? (
               <>
                 <span className="font-mono">{statusLabel(currentPath.status)}</span>
@@ -218,9 +218,7 @@ export function DetailPane({ graph, path, onClose }: Props) {
             <>
               {currentPath.goal && (
                 <section className="mb-4 flex flex-col gap-1">
-                  <h3 className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground uppercase">
-                    學習目標
-                  </h3>
+                  <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint"><span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden />學習目標</h3>
                   <p className="text-sm leading-relaxed text-foreground/90">{currentPath.goal}</p>
                 </section>
               )}
@@ -235,9 +233,7 @@ export function DetailPane({ graph, path, onClose }: Props) {
               )}
 
               <section className="mb-4 flex flex-col gap-1.5">
-                <h3 className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground uppercase">
-                  教的 node · {currentPath.taughtNodeIds.length}
-                </h3>
+                <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint"><span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden />教的 node · {currentPath.taughtNodeIds.length}</h3>
                 {currentPath.taughtNodeIds.length ? (
                   <div className="flex flex-wrap gap-1.5">
                     {currentPath.taughtNodeIds.map((id) => {
@@ -247,7 +243,7 @@ export function DetailPane({ graph, path, onClose }: Props) {
                           key={id}
                           type="button"
                           onClick={() => push({ kind: "node", id })}
-                          className="chip transition-colors hover:border-ring hover:text-foreground"
+                          className="chip"
                           title={node?.title ?? id}
                         >
                           {node?.title ?? id}
@@ -261,9 +257,7 @@ export function DetailPane({ graph, path, onClose }: Props) {
               </section>
 
               <section className="mb-4 flex flex-col gap-1.5">
-                <h3 className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground uppercase">
-                  關聯 node · {currentPath.relatedNodeIds.length}
-                </h3>
+                <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint"><span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden />關聯 node · {currentPath.relatedNodeIds.length}</h3>
                 {currentPath.relatedNodeIds.length ? (
                   <div className="flex flex-wrap gap-1.5">
                     {currentPath.relatedNodeIds.map((id) => {
@@ -273,7 +267,7 @@ export function DetailPane({ graph, path, onClose }: Props) {
                           key={id}
                           type="button"
                           onClick={() => push({ kind: "node", id })}
-                          className="chip transition-colors hover:border-ring hover:text-foreground"
+                          className="chip"
                           title={node?.title ?? id}
                         >
                           {node?.title ?? id}
@@ -287,9 +281,7 @@ export function DetailPane({ graph, path, onClose }: Props) {
               </section>
 
               <section className="flex flex-col gap-1">
-                <h3 className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground uppercase">
-                  Sources
-                </h3>
+                <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint"><span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden />Sources</h3>
                 {currentPath.sources.length ? (
                   <ul className="flex flex-col gap-0.5">
                     {currentPath.sources.map((s, i) => (
@@ -315,9 +307,7 @@ export function DetailPane({ graph, path, onClose }: Props) {
               />
               {currentNode.taughtBy.length > 0 && (
                 <section className="mt-5 flex flex-col gap-1.5">
-                  <h3 className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground uppercase">
-                    教的 path · {currentNode.taughtBy.length}
-                  </h3>
+                  <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint"><span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden />教的 path · {currentNode.taughtBy.length}</h3>
                   <div className="flex flex-wrap gap-1.5">
                     {currentNode.taughtBy.map((pid) => {
                       const p = pathById.get(pid);
@@ -326,7 +316,7 @@ export function DetailPane({ graph, path, onClose }: Props) {
                           key={pid}
                           type="button"
                           onClick={() => push({ kind: "path", id: pid })}
-                          className="chip transition-colors hover:border-ring hover:text-foreground"
+                          className="chip"
                           title={p?.title ?? pid}
                         >
                           {p?.title ?? pid}

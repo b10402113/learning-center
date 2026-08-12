@@ -1,12 +1,12 @@
 export const PALETTE = {
-  resolved: "#b9d6c4",
-  resolvedGlow: "#5b9077",
-  frontier: "#8ad8ff",
-  frontierGlow: "#2f9be0",
-  claimed: "#ffd873",
-  claimedGlow: "#ffb020",
-  blocked: "#e2c3c3",
-  outOfScope: "#948da4",
+  resolved: "#a3cea1",
+  resolvedGlow: "#6fa67a",
+  frontier: "#86cfe8",
+  frontierGlow: "#3e86a8",
+  claimed: "#e0b455",
+  claimedGlow: "#c79a3f",
+  blocked: "#d7a6a0",
+  outOfScope: "#7a8699",
 } as const;
 
 export function isWritten(status: string): boolean {
