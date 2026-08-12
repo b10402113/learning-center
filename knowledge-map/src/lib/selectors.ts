@@ -60,6 +60,46 @@ export function tierIsUnlocked(
   return true;
 }
 
+/** Boss-gate lifecycle of one tier, used to render lock styles and the gate. */
+export type TierBossState = "locked" | "open" | "ready" | "beaten";
+
+/**
+ * The boss-gate state of one tier:
+ * - `"locked"`: the tier is not unlocked yet — its tiles render dimmed and its
+ *   paths cannot be marked complete, though content stays readable.
+ * - `"open"`: unlocked but not every path in the tier is charted; the boss
+ *   gate is not reachable yet.
+ * - `"ready"`: unlocked and every path in the tier is charted, but this tier's
+ *   boss was not beaten — the boss-gate entrance is shown.
+ * - `"beaten"`: the tier records a beaten boss in `progress.tiers`.
+ *
+ * The unlock chain is checked first, so a tier that re-locks (e.g. an earlier
+ * path was unmarked) reports `"locked"` again instead of a stale "beaten".
+ */
+export function tierBossState(
+  graph: SubjectGraph,
+  tier: number,
+  progress: SubjectProgress,
+  opts: UnlockOptions = {},
+): TierBossState {
+  if (!tierIsUnlocked(graph, tier, progress, opts)) return "locked";
+
+  const tierDef = graph.tiers.find((t) => t.tier === tier);
+  if (!tierDef) return "locked";
+  if (progress.tiers.includes(String(tier))) return "beaten";
+
+  // A tier with no paths is trivially fully charted, so its boss gate can be
+  // reached (mirrors tierIsUnlocked treating an empty previous tier as covered).
+  const manual = new Set(progress.paths);
+  const allCharted =
+    tierDef.pathIds.length === 0 ||
+    tierDef.pathIds.every((id) => {
+      const p = graph.paths.find((q) => q.id === id);
+      return isWritten(p?.status ?? "") || manual.has(id);
+    });
+  return allCharted ? "ready" : "open";
+}
+
 export function chartedCount(graph: SubjectGraph, manual: Set<string>): number {
   return graph.paths.filter((p) => isWritten(p.status) || manual.has(p.id)).length;
 }

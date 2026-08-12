@@ -1,6 +1,7 @@
-import { ChevronLeft, Expand, X } from "lucide-react";
+import { Check, ChevronLeft, Circle, Crown, Expand, Lock, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { statusLabel } from "../lib/colors";
+import { isWritten, statusLabel } from "../lib/colors";
+import type { TierBossState } from "../lib/selectors";
 import type { PathNode, SubjectGraph } from "../lib/types";
 type View = { kind: "path"; id: string } | { kind: "node"; id: string };
 
@@ -19,10 +20,26 @@ function parseWikilinkTarget(
 interface Props {
   graph: SubjectGraph;
   path: PathNode;
+  manualCompleted: Set<string>;
+  manualNodes: Set<string>;
+  bossStates: Map<number, TierBossState>;
+  onToggleComplete: (id: string) => void;
+  onToggleNode: (id: string) => void;
+  onUnlockTier: (tier: number) => void;
   onClose: () => void;
 }
 
-export function DetailPane({ graph, path, onClose }: Props) {
+export function DetailPane({
+  graph,
+  path,
+  manualCompleted,
+  manualNodes,
+  bossStates,
+  onToggleComplete,
+  onToggleNode,
+  onUnlockTier,
+  onClose,
+}: Props) {
   const pathById = useMemo(() => new Map(graph.paths.map((p) => [p.id, p])), [graph]);
   const [stack, setStack] = useState<View[]>([{ kind: "path", id: path.id }]);
   const [dir, setDir] = useState<"forward" | "back">("forward");
@@ -84,9 +101,9 @@ export function DetailPane({ graph, path, onClose }: Props) {
     <aside
       role="complementary"
       aria-label={`${titleFor(current)} 詳情`}
-      className={`absolute z-10 flex flex-col overflow-hidden rounded-none border-border bg-[#0e1526]/85 backdrop-blur-sm ${
+      className={`absolute z-10 flex flex-col overflow-hidden rounded-none border-border bg-surface/85 backdrop-blur-sm ${
         fullRead
-          ? "inset-0 w-auto max-w-none border-0 bg-[#0c1424]/95"
+          ? "inset-0 w-auto max-w-none border-0 bg-surface/95"
           : "inset-y-0 right-0 w-[26rem] max-w-[85%] border-l"
       }`}
     >
@@ -223,6 +240,41 @@ export function DetailPane({ graph, path, onClose }: Props) {
                 </section>
               )}
 
+              {!isWritten(currentPath.status) &&
+                (bossStates.get(currentPath.tier) !== "locked" ? (
+                  <section className="mb-4">
+                    <CompletionToggle
+                      active={manualCompleted.has(currentPath.id)}
+                      onClick={() => onToggleComplete(currentPath.id)}
+                      activeLabel="已手動標記完成"
+                      idleLabel="標記為完成"
+                    />
+                  </section>
+                ) : (
+                  <section className="mb-4">
+                    <div className="flex w-full items-center gap-2 rounded-md border border-steel/40 bg-surface-2/50 px-3 py-2 font-mono text-xs text-muted">
+                      <Lock className="size-3.5 shrink-0" />
+                      <span>
+                        此 tier 尚未解鎖：完成上一層的頭目戰後才能標記完成。內容仍可閱讀。
+                      </span>
+                    </div>
+                  </section>
+                ))}
+
+              {bossStates.get(currentPath.tier) === "ready" && (
+                <section className="mb-4">
+                  <button
+                    type="button"
+                    onClick={() => onUnlockTier(currentPath.tier)}
+                    title="通過 /quiz 驗證後按下此鍵解鎖本層與下一層"
+                    className="flex w-full items-center justify-center gap-2 rounded-md border border-brass-dim/70 bg-brass/10 px-3 py-2 font-mono text-xs text-brass transition-colors hover:bg-brass/20 focus-visible:ring-2 focus-visible:ring-beacon"
+                  >
+                    <Crown className="size-3.5" />
+                    頭目戰 · 解鎖此層
+                  </button>
+                </section>
+              )}
+
               {currentPath.contentHtml && (
                 <section className="mb-4" onClick={handleContentClick}>
                   <div
@@ -246,6 +298,9 @@ export function DetailPane({ graph, path, onClose }: Props) {
                           className="chip"
                           title={node?.title ?? id}
                         >
+                          {manualNodes.has(id) && (
+                            <Check className="mr-1 size-3 shrink-0 text-brass" aria-hidden />
+                          )}
                           {node?.title ?? id}
                         </button>
                       );
@@ -270,6 +325,9 @@ export function DetailPane({ graph, path, onClose }: Props) {
                           className="chip"
                           title={node?.title ?? id}
                         >
+                          {manualNodes.has(id) && (
+                            <Check className="mr-1 size-3 shrink-0 text-brass" aria-hidden />
+                          )}
                           {node?.title ?? id}
                         </button>
                       );
@@ -301,6 +359,14 @@ export function DetailPane({ graph, path, onClose }: Props) {
             </>
           ) : currentNode ? (
             <div onClick={handleContentClick}>
+              <section className="mb-4">
+                <CompletionToggle
+                  active={manualNodes.has(currentNode.id)}
+                  onClick={() => onToggleNode(currentNode.id)}
+                  activeLabel="已標記 node 完成"
+                  idleLabel="標記 node 完成"
+                />
+              </section>
               <div
                 className="prose-sm"
                 dangerouslySetInnerHTML={{ __html: stripLeadingH1(currentNode.bodyHtml) }}
@@ -350,5 +416,33 @@ export function DetailPane({ graph, path, onClose }: Props) {
         )}
       </div>
     </aside>
+  );
+}
+
+function CompletionToggle({
+  active,
+  onClick,
+  activeLabel,
+  idleLabel,
+}: {
+  active: boolean;
+  onClick: () => void;
+  activeLabel: string;
+  idleLabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex w-full items-center justify-center gap-2 rounded-md border px-3 py-2 font-mono text-xs transition-colors focus-visible:ring-2 focus-visible:ring-beacon ${
+        active
+          ? "border-brass-dim/60 bg-brass/10 text-brass"
+          : "border-input text-faint hover:border-brass hover:text-brass"
+      }`}
+    >
+      {active ? <Check className="size-3.5" /> : <Circle className="size-3.5" />}
+      {active ? activeLabel : idleLabel}
+    </button>
   );
 }

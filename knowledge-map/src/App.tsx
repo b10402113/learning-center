@@ -14,8 +14,9 @@ import {
   saveProgress,
   toggleId,
   type ProgressRecord,
+  type SubjectProgress,
 } from "./lib/progress";
-import { firstUnchartedInSpine } from "./lib/selectors";
+import { firstUnchartedInSpine, tierBossState, tierIsUnlocked } from "./lib/selectors";
 import type { FocusRequest, SubjectGraph } from "./lib/types";
 
 const graphs = graphData as unknown as SubjectGraph[];
@@ -103,24 +104,78 @@ export default function App() {
     [subject],
   );
 
-  const manualCompleted = useMemo(
-    () => new Set(progress[graph.subject]?.paths ?? []),
+  const subjectProgress = useMemo(
+    () => progress[graph.subject] ?? emptySubjectProgress(),
     [progress, graph.subject],
+  );
+
+  const manualCompleted = useMemo(
+    () => new Set(subjectProgress.paths),
+    [subjectProgress],
+  );
+
+  const manualNodes = useMemo(
+    () => new Set(subjectProgress.nodes),
+    [subjectProgress],
+  );
+
+  // Per-tier boss lifecycle: drives lock styling on tiles and the boss gate.
+  const bossStates = useMemo(
+    () =>
+      new Map(
+        graph.tiers.map((t) => [t.tier, tierBossState(graph, t.tier, subjectProgress)]),
+      ),
+    [graph, subjectProgress],
+  );
+
+  const hasProgress =
+    subjectProgress.paths.length > 0 ||
+    subjectProgress.nodes.length > 0 ||
+    subjectProgress.tiers.length > 0;
+
+  // Mutate one subject's progress record inside the shared ProgressRecord.
+  const updateSubject = useCallback(
+    (subjectKey: string, update: (s: SubjectProgress) => SubjectProgress) => {
+      setProgress((prev) => {
+        const current = prev[subjectKey] ?? emptySubjectProgress();
+        return { ...prev, [subjectKey]: update(current) };
+      });
+    },
+    [],
   );
 
   const toggleComplete = useCallback(
     (id: string) => {
       const path = graph.paths.find((p) => p.id === id);
       if (!path || isWritten(path.status)) return;
-      setProgress((prev) => {
-        const subject = prev[graph.subject] ?? emptySubjectProgress();
-        return {
-          ...prev,
-          [graph.subject]: { ...subject, paths: toggleId(subject.paths, id) },
-        };
+      // a locked tier cannot be formally progressed, only read
+      if (!tierIsUnlocked(graph, path.tier, progress[graph.subject] ?? emptySubjectProgress())) {
+        return;
+      }
+      updateSubject(graph.subject, (s) => ({ ...s, paths: toggleId(s.paths, id) }));
+    },
+    [graph, progress, updateSubject],
+  );
+
+  const toggleNode = useCallback(
+    (id: string) => {
+      updateSubject(graph.subject, (s) => ({ ...s, nodes: toggleId(s.nodes, id) }));
+    },
+    [graph.subject, updateSubject],
+  );
+
+  // The learner beats a tier's boss (after /quiz passes) and manually records
+  // the unlock; the app never decides correctness itself.
+  const unlockTier = useCallback(
+    (tier: number) => {
+      updateSubject(graph.subject, (s) => {
+        const tiers = s.tiers.includes(String(tier))
+          ? s.tiers
+          : [...s.tiers, String(tier)];
+        return { ...s, tiers };
       });
     },
-    [graph],
+    [graph.subject, updateSubject],
   );
 
   const resetProgress = useCallback(() => {
@@ -179,7 +234,7 @@ export default function App() {
       <TopBar
         graphs={graphs}
         subject={graph.subject}
-        manualCount={manualCompleted.size}
+        hasProgress={hasProgress}
         onReset={resetProgress}
         onSelect={switchSubject}
       />
@@ -190,9 +245,12 @@ export default function App() {
           selectedId={selectedPathId}
           focusRequest={focusRequest}
           manualCompleted={manualCompleted}
+          manualNodes={manualNodes}
+          bossStates={bossStates}
           hoveredId={hoveredId}
           onSelect={selectPath}
           onHover={setHoveredId}
+          onUnlockTier={unlockTier}
         />
 
         <Legend />
@@ -203,7 +261,7 @@ export default function App() {
           onReset={() => mapRef.current?.fit()}
           onResetProgress={resetProgress}
           onNextUp={goNextUp}
-          canResetProgress={manualCompleted.size > 0}
+          canResetProgress={hasProgress}
           hasNextUp={Boolean(nextUp)}
         />
 
@@ -216,7 +274,11 @@ export default function App() {
             graph={graph}
             path={selectedPath}
             manualCompleted={manualCompleted}
+            manualNodes={manualNodes}
+            bossStates={bossStates}
             onToggleComplete={toggleComplete}
+            onToggleNode={toggleNode}
+            onUnlockTier={unlockTier}
             onClose={() => selectPath(null)}
           />
         )}

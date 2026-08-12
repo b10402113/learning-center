@@ -1,16 +1,16 @@
 import { RotateCcw } from "lucide-react";
-import { isWritten, PALETTE } from "../lib/colors";
+import { isWritten } from "../lib/colors";
 import type { SubjectGraph } from "../lib/types";
 
 interface Props {
   graphs: SubjectGraph[];
   subject: string;
-  manualCount: number;
+  hasProgress: boolean;
   onReset: () => void;
   onSelect: (subject: string) => void;
 }
 
-export function TopBar({ graphs, subject, manualCount, onReset, onSelect }: Props) {
+export function TopBar({ graphs, subject, hasProgress, onReset, onSelect }: Props) {
   const writtenCount = (g: SubjectGraph) => g.paths.filter((p) => isWritten(p.status)).length;
   const plate = graphs.findIndex((g) => g.subject === subject) + 1;
   return (
@@ -43,22 +43,22 @@ export function TopBar({ graphs, subject, manualCount, onReset, onSelect }: Prop
 
       <div className="ml-auto flex items-center gap-4 text-[0.65rem] text-faint">
         <span className="hidden items-center gap-1.5 md:flex" title="spine：路徑的順序">
-          <span className="h-0.5 w-4" style={{ background: PALETTE.frontier }} />
+          <span className="h-0.5 w-4 bg-muted" />
           spine
         </span>
         <span className="hidden items-center gap-1.5 md:flex" title="shared：共享概念">
-          <span className="h-px w-4 border-t border-dashed" style={{ borderColor: PALETTE.claimed }} />
+          <span className="h-px w-4 border-t-2 border-dashed border-brass-dim" />
           shared
         </span>
         <span className="hidden items-center gap-1.5 md:flex" title="written：已寫內容">
-          <span className="size-2 rounded-full" style={{ background: PALETTE.resolved }} />
+          <span className="size-2 rounded-full bg-brass" />
           charted
         </span>
         <button
           type="button"
           onClick={onReset}
-          disabled={manualCount === 0}
-          title="清除手動標記的通關進度（content-written 的自動完成不受影響）"
+          disabled={!hasProgress}
+          title="清除手動標記的進度（path / node / tier 解鎖一起清；content-written 的自動完成不受影響）"
           className="flex h-6 items-center gap-1 rounded-sm border border-input px-2 font-mono text-[0.65rem] text-faint transition-colors hover:border-brass hover:text-brass disabled:pointer-events-none disabled:opacity-40"
         >
           <RotateCcw className="size-3" />

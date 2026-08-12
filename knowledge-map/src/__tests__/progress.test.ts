@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySubjectProgress, parseProgress, type ProgressRecord } from "../lib/progress";
-import { tierIsUnlocked } from "../lib/selectors";
+import { tierBossState, tierIsUnlocked } from "../lib/selectors";
 import type { PathNode, PathStatus, SubjectGraph } from "../lib/types";
 
 function path(id: string, tier: number, status: PathStatus = "draft"): PathNode {
@@ -154,5 +154,96 @@ describe("tierIsUnlocked", () => {
     const graph = makeGraph();
     const progress = { paths: ["p2"], nodes: [], tiers: ["1"] };
     expect(tierIsUnlocked(graph, 99, progress)).toBe(false);
+  });
+});
+
+describe("tierBossState", () => {
+  it("is open for an unlocked tier whose paths are not all charted", () => {
+    const graph = makeGraph();
+    expect(tierBossState(graph, 1, { paths: [], nodes: [], tiers: [] })).toBe("open");
+    // p1 is auto-charted, p2 is draft — not all charted
+    expect(tierBossState(graph, 1, { paths: ["p1"], nodes: [], tiers: [] })).toBe("open");
+  });
+
+  it("is ready once every path in the tier is charted but the boss is not beaten", () => {
+    const graph = makeGraph();
+    // p1 auto-charted + p2 manual = all charted
+    expect(tierBossState(graph, 1, { paths: ["p2"], nodes: [], tiers: [] })).toBe("ready");
+    expect(tierBossState(graph, 1, { paths: ["p1", "p2"], nodes: [], tiers: [] })).toBe("ready");
+  });
+
+  it("is beaten once the tier records its boss, even while paths stay charted", () => {
+    const graph = makeGraph();
+    expect(tierBossState(graph, 1, { paths: ["p2"], nodes: [], tiers: ["1"] })).toBe("beaten");
+  });
+
+  it("locks a tier until the previous tier's boss is beaten", () => {
+    const graph = makeGraph();
+    // tier 2 fully charted but tier 1's boss never beaten
+    expect(
+      tierBossState(graph, 2, { paths: ["p3"], nodes: [], tiers: [] }),
+    ).toBe("locked");
+  });
+
+  it("is open for a just-unlocked higher tier still being read", () => {
+    const graph = makeGraph();
+    // tier 1 boss beaten and tier 1 charted unlocks tier 2; p3 (draft) not done
+    expect(
+      tierBossState(graph, 2, { paths: ["p2"], nodes: [], tiers: ["1"] }),
+    ).toBe("open");
+  });
+
+  it("is ready for a higher tier once charted and its boss not beaten", () => {
+    const graph = makeGraph();
+    const progress = { paths: ["p2", "p3"], nodes: [], tiers: ["1"] };
+    expect(tierBossState(graph, 2, progress)).toBe("ready");
+  });
+
+  it("cascades: tier 3 stays locked until tier 2's boss is beaten", () => {
+    const graph = makeGraph();
+    const progress = { paths: ["p1", "p2", "p3"], nodes: [], tiers: ["1"] };
+    expect(tierBossState(graph, 3, progress)).toBe("locked");
+    // once tier 2's boss is beaten and p4 is charted, tier 3 is ready
+    expect(
+      tierBossState(graph, 3, { ...progress, paths: ["p1", "p2", "p3", "p4"], tiers: ["1", "2"] }),
+    ).toBe("ready");
+  });
+
+  it("is locked for a tier that does not exist in the graph", () => {
+    expect(tierBossState(makeGraph(), 99, emptySubjectProgress())).toBe("locked");
+  });
+
+  it("re-locks a beaten tier when the chain above it un-charts", () => {
+    const graph = makeGraph();
+    // tier 2 records a beaten boss but tier 1's p2 was unmarked afterwards
+    const stale = { paths: ["p1"], nodes: [], tiers: ["1", "2"] };
+    expect(tierBossState(graph, 2, stale)).toBe("locked");
+  });
+
+  it("lets an empty tier reach the boss gate instead of deadlocking", () => {
+    const graph = {
+      ...makeGraph(),
+      tiers: [
+        { tier: 1, title: "T1", pathIds: [] },
+        { tier: 2, title: "T2", pathIds: ["p3"] },
+      ],
+    };
+    // an empty tier is trivially charted → ready once unlocked and not beaten
+    expect(tierBossState(graph, 1, { paths: [], nodes: [], tiers: [] })).toBe("ready");
+    expect(
+      tierBossState(graph, 1, { paths: [], nodes: [], tiers: ["1"] }),
+    ).toBe("beaten");
+  });
+
+  it("counts auto-written paths as charted without a manual mark", () => {
+    const written = {
+      ...makeGraph(),
+      paths: makeGraph().paths.map((p) =>
+        p.id === "p3" ? { ...p, status: "content-written" as const } : p,
+      ),
+    };
+    expect(
+      tierBossState(written, 2, { paths: ["p2"], nodes: [], tiers: ["1"] }),
+    ).toBe("ready");
   });
 });
