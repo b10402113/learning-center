@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { isWritten, statusLabel } from "../lib/colors";
+import { statusLabel } from "../lib/colors";
 import { button } from "../lib/buttonVariants";
 import { cn } from "../lib/cn";
-import type { TierBossState } from "../lib/selectors";
+import { isNodeComplete, nodeItems } from "../lib/completion";
 import type { SubjectGraph, View } from "../lib/types";
 import { Check } from "./icons/Check";
 import { ChevronLeft } from "./icons/ChevronLeft";
-import { Crown } from "./icons/Crown";
+import { Circle } from "./icons/Circle";
 import { Expand } from "./icons/Expand";
-import { Lock } from "./icons/Lock";
 import { X } from "./icons/X";
 import { CompletionToggle } from "./CompletionToggle";
 
@@ -19,36 +18,28 @@ function stripLeadingH1(html: string): string {
 
 function parseWikilinkTarget(
   target: string,
-): { subject: string; kind: "node" | "path"; id: string } | null {
-  const m = target.match(/^learn\/([^/]+)\/(nodes|paths)\/([^#/]+)/);
+): { subject: string; kind: "element" | "node"; id: string } | null {
+  const m = target.match(/^learn\/([^/]+)\/(elements|nodes)\/([^#/]+)/);
   if (!m) return null;
-  return { subject: m[1], kind: m[2] === "nodes" ? "node" : "path", id: m[3] };
+  return { subject: m[1], kind: m[2] === "elements" ? "element" : "node", id: m[3] };
 }
 
 interface DetailPaneProps {
   graph: SubjectGraph;
   root: View;
-  manualCompleted: Set<string>;
-  manualNodes: Set<string>;
-  bossStates: Map<number, TierBossState>;
-  onToggleComplete: (id: string) => void;
-  onToggleNode: (id: string) => void;
-  onUnlockTier: (tier: number) => void;
+  manualElements: Set<string>;
+  onToggleCompletion: (id: string) => void;
   onClose: () => void;
 }
 
 export function DetailPane({
   graph,
   root,
-  manualCompleted,
-  manualNodes,
-  bossStates,
-  onToggleComplete,
-  onToggleNode,
-  onUnlockTier,
+  manualElements,
+  onToggleCompletion,
   onClose,
 }: DetailPaneProps) {
-  const pathById = useMemo(() => new Map(graph.paths.map((p) => [p.id, p])), [graph]);
+  const nodeById = useMemo(() => new Map(graph.nodes.map((p) => [p.id, p])), [graph]);
 
   const [stack, setStack] = useState<View[]>([root]);
   const [dir, setDir] = useState<"forward" | "back">("forward");
@@ -69,12 +60,26 @@ export function DetailPane({
   // Until the stack is seeded (which happens before the first commit), the
   // current view falls back to the incoming root.
   const current = stack.length > 0 ? stack[stack.length - 1] : root;
-  const currentPath = current.kind === "path" ? (pathById.get(current.id) ?? null) : null;
-  const currentNode = current.kind === "node" ? (graph.nodes[current.id] ?? null) : null;
+  const currentNode = current.kind === "node" ? (nodeById.get(current.id) ?? null) : null;
+  const currentElement = current.kind === "element" ? (graph.elements[current.id] ?? null) : null;
   const titleFor = (v: View): string =>
-    v.kind === "path"
-      ? (pathById.get(v.id)?.title ?? v.id)
-      : (graph.nodes[v.id]?.title ?? v.id);
+    v.kind === "node"
+      ? (nodeById.get(v.id)?.title ?? v.id)
+      : (graph.elements[v.id]?.title ?? v.id);
+
+  // Node completion is derived from the checklist: taught elements + main row.
+  const nodeChecklist = useMemo(
+    () => (currentNode ? nodeItems(currentNode) : []),
+    [currentNode],
+  );
+  const nodeComplete = useMemo(
+    () => (currentNode ? isNodeComplete(currentNode, manualElements) : false),
+    [currentNode, manualElements],
+  );
+  const checkedCount = useMemo(
+    () => nodeChecklist.filter((item) => manualElements.has(item.id)).length,
+    [nodeChecklist, manualElements],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -121,38 +126,21 @@ export function DetailPane({
     const parsed = parseWikilinkTarget(target);
     if (!parsed || parsed.subject !== graph.subject) return;
     push(
-      parsed.kind === "node"
-        ? { kind: "node", id: parsed.id }
-        : { kind: "path", id: parsed.id },
+      parsed.kind === "element"
+        ? { kind: "element", id: parsed.id }
+        : { kind: "node", id: parsed.id },
     );
   }
 
-  function handleToggleComplete() {
-    if (!currentPath) return;
-    const wasActive = manualCompleted.has(currentPath.id);
-    onToggleComplete(currentPath.id);
+  function handleToggleElement() {
+    if (!currentElement) return;
+    const wasActive = manualElements.has(currentElement.id);
+    onToggleCompletion(currentElement.id);
     if (wasActive) {
-      toast("已取消標記完成", { description: currentPath.title });
+      toast("已取消標記元素", { description: currentElement.title });
     } else {
-      toast.success("已標記完成", { description: currentPath.title });
+      toast.success("元素已學", { description: currentElement.title });
     }
-  }
-
-  function handleToggleNode() {
-    if (!currentNode) return;
-    const wasActive = manualNodes.has(currentNode.id);
-    onToggleNode(currentNode.id);
-    if (wasActive) {
-      toast("已取消標記 node", { description: currentNode.title });
-    } else {
-      toast.success("node 已學", { description: currentNode.title });
-    }
-  }
-
-  function handleUnlockTier() {
-    if (!currentPath) return;
-    onUnlockTier(currentPath.tier);
-    toast.success(`已解鎖 Tier ${currentPath.tier}`);
   }
 
   const paneClass = cn(
@@ -162,11 +150,11 @@ export function DetailPane({
       : "inset-y-0 right-0 w-[26rem] max-w-[85%] border-l",
   );
 
-  const orderBadge = current.kind === "path" ? currentPath?.order : `T${currentNode?.tier ?? "?"}`;
+  const orderBadge = current.kind === "node" ? currentNode?.order : `T${currentElement?.tier ?? "?"}`;
 
   return (
     <aside aria-label={`${titleFor(current)} 詳情`} className={paneClass}>
-      {fullRead && (currentPath || currentNode) ? (
+      {fullRead && (currentNode || currentElement) ? (
         <header className="flex shrink-0 items-center gap-1.5 border-b border-border px-3 py-2">
           <button
             type="button"
@@ -228,7 +216,7 @@ export function DetailPane({
                 </span>
               ))}
             </nav>
-            {current.kind === "path" && currentPath ? (
+            {current.kind === "node" && currentNode ? (
               <button
                 type="button"
                 onClick={() => setFullRead(true)}
@@ -260,18 +248,18 @@ export function DetailPane({
             </span>
           </div>
           <div className="flex items-center gap-2 text-[0.7rem] text-faint">
-            {current.kind === "path" && currentPath ? (
+            {current.kind === "node" && currentNode ? (
               <>
-                <span className="font-mono">{statusLabel(currentPath.status)}</span>
-                {currentPath.duration ? (
+                <span className="font-mono">{statusLabel(currentNode.status)}</span>
+                {currentNode.duration ? (
                   <>
                     <span className="text-border">/</span>
-                    <span className="font-mono">{currentPath.duration}</span>
+                    <span className="font-mono">{currentNode.duration}</span>
                   </>
                 ) : null}
               </>
             ) : (
-              <span className="font-mono">node</span>
+              <span className="font-mono">element</span>
             )}
           </div>
         </header>
@@ -288,123 +276,109 @@ export function DetailPane({
             role="presentation"
             onClick={handleContentClick}
           >
-            {current.kind === "path" && currentPath ? (
+            {current.kind === "node" && currentNode ? (
               <>
                 <section className="mb-4 flex flex-col gap-1">
                   <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint">
                     <span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden="true"></span>學習目標
                   </h3>
-                  <p className="text-sm leading-relaxed text-foreground/90">{currentPath.goal}</p>
+                  <p className="text-sm leading-relaxed text-foreground/90">{currentNode.goal}</p>
                 </section>
 
-                {!isWritten(currentPath.status) && bossStates.get(currentPath.tier) !== "locked" ? (
+                {currentNode ? (
                   <section className="mb-4">
-                    <CompletionToggle
-                      active={manualCompleted.has(currentPath.id)}
-                      onClick={handleToggleComplete}
-                      activeLabel="已手動標記完成"
-                      idleLabel="標記為完成"
-                    />
-                  </section>
-                ) : !isWritten(currentPath.status) ? (
-                  <section className="mb-4">
-                    <div className="flex w-full items-center gap-2 rounded-md border border-steel/40 bg-surface-2/50 px-3 py-2 font-mono text-xs text-muted">
-                      <Lock size={14} className="shrink-0" />
-                      <span>此 tier 尚未解鎖：完成上一層的頭目戰後才能標記完成。內容仍可閱讀。</span>
+                    <div
+                      className={cn(
+                        "flex w-full items-center justify-center gap-2 rounded-md border px-3 py-2 font-mono text-xs",
+                        nodeComplete
+                          ? "border-brass-dim/60 bg-brass/10 text-brass"
+                          : "border-input text-faint",
+                      )}
+                    >
+                      {nodeComplete ? <Check size={14} /> : <Circle size={14} />}
+                      {nodeComplete
+                        ? "檢查清單已全數完成"
+                        : `已完成 ${checkedCount} / ${nodeChecklist.length} 項`}
                     </div>
                   </section>
                 ) : null}
 
-                {bossStates.get(currentPath.tier) === "ready" ? (
-                  <section className="mb-4">
-                    <button
-                      type="button"
-                      onClick={handleUnlockTier}
-                      title="通過 /quiz 驗證後按下此鍵解鎖本層與下一層"
-                      className={button({ variant: "brass", size: "md" })}
-                    >
-                      <Crown size={14} />
-                      頭目戰 · 解鎖此層
-                    </button>
-                  </section>
-                ) : null}
-
-                {currentPath.hasPrepare && currentPath.prepareHtml ? (
+                {currentNode.hasPrepare && currentNode.prepareHtml ? (
                   <section className="mb-4 flex flex-col gap-1">
                     <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint">
                       <span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden="true"></span>預習 · 讀文章前
                     </h3>
                     <div
                       className="prose-sm"
-                      dangerouslySetInnerHTML={{ __html: stripLeadingH1(currentPath.prepareHtml) }}
+                      dangerouslySetInnerHTML={{ __html: stripLeadingH1(currentNode.prepareHtml) }}
                     />
                   </section>
                 ) : null}
 
-                {currentPath.contentHtml ? (
+                {currentNode.contentHtml ? (
                   <section className="mb-4">
                     <div
                       className="prose-sm"
-                      dangerouslySetInnerHTML={{ __html: stripLeadingH1(currentPath.contentHtml) }}
+                      dangerouslySetInnerHTML={{ __html: stripLeadingH1(currentNode.contentHtml) }}
                     />
                   </section>
                 ) : null}
 
                 <section className="mb-4 flex flex-col gap-1.5">
                   <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint">
-                    <span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden="true"></span>教的 node · {currentPath.taughtNodeIds.length}
+                    <span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden="true"></span>教的元素 · {currentNode.taughtElementIds.length}
                   </h3>
-                  {currentPath.taughtNodeIds.length ? (
+                  {currentNode.taughtElementIds.length ? (
                     <div className="flex flex-wrap gap-1.5">
-                      {currentPath.taughtNodeIds.map((id) => {
-                        const node = graph.nodes[id];
+                      {currentNode.taughtElementIds.map((id) => {
+                        const element = graph.elements[id];
                         return (
                           <button
                             key={id}
                             type="button"
-                            onClick={() => push({ kind: "node", id })}
+                            onClick={() => push({ kind: "element", id })}
                             className="chip"
-                            title={node?.title ?? id}
+                            title={element?.title ?? id}
                           >
-                            {manualNodes.has(id) ? (
+                            {manualElements.has(id) ? (
                               <Check size={12} className="mr-1 shrink-0 text-brass" aria-hidden="true" />
                             ) : null}
-                            {node?.title ?? id}
+                            {element?.title ?? id}
                           </button>
                         );
                       })}
                     </div>
                   ) : (
-                    <p className="text-xs text-muted-foreground">尚未撰寫 node。</p>
+                    <p className="text-xs text-muted-foreground">尚未撰寫元素。</p>
                   )}
                 </section>
 
                 <section className="mb-4 flex flex-col gap-1.5">
                   <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint">
-                    <span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden="true"></span>關聯 node · {currentPath.relatedNodeIds.length}
+                    <span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden="true"></span>關聯元素 · {currentNode.relatedElementIds.length}
                   </h3>
-                  {currentPath.relatedNodeIds.length ? (
+                  {currentNode.relatedElementIds.length ? (
                     <div className="flex flex-wrap gap-1.5">
-                      {currentPath.relatedNodeIds.map((id) => {
-                        const node = graph.nodes[id];
+                      {currentNode.relatedElementIds.map((id) => {
+                        const element = graph.elements[id];
                         return (
                           <button
                             key={id}
                             type="button"
-                            onClick={() => push({ kind: "node", id })}
+                            onClick={() => push({ kind: "element", id })}
                             className="chip"
-                            title={node?.title ?? id}
+                            title={element?.title ?? id}
                           >
-                            {manualNodes.has(id) ? (
+                            {manualElements.has(id) ? (
                               <Check size={12} className="mr-1 shrink-0 text-brass" aria-hidden="true" />
                             ) : null}
-                            {node?.title ?? id}
+                            {element?.title ?? id}
                           </button>
                         );
                       })}
                     </div>
                   ) : (
-                    <p className="text-xs text-muted-foreground">無關聯 node。</p>
+                    <p className="text-xs text-muted-foreground">無關聯元素。</p>
                   )}
                 </section>
 
@@ -412,9 +386,9 @@ export function DetailPane({
                   <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint">
                     <span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden="true"></span>Sources
                   </h3>
-                  {currentPath.sources.length ? (
+                  {currentNode.sources.length ? (
                     <ul className="flex flex-col gap-0.5">
-                      {currentPath.sources.map((s) => (
+                      {currentNode.sources.map((s) => (
                         <li key={s} className="truncate font-mono text-[0.65rem] text-muted-foreground" title={s}>
                           {s}
                         </li>
@@ -425,37 +399,37 @@ export function DetailPane({
                   )}
                 </section>
               </>
-            ) : currentNode ? (
+            ) : currentElement ? (
               <div>
                 <section className="mb-4">
                   <CompletionToggle
-                    active={manualNodes.has(currentNode.id)}
-                    onClick={handleToggleNode}
-                    activeLabel="已標記 node 完成"
-                    idleLabel="標記 node 完成"
+                    active={manualElements.has(currentElement.id)}
+                    onClick={handleToggleElement}
+                    activeLabel="已標記元素完成"
+                    idleLabel="標記元素完成"
                   />
                 </section>
                 <div
                   className="prose-sm"
-                  dangerouslySetInnerHTML={{ __html: stripLeadingH1(currentNode.bodyHtml) }}
+                  dangerouslySetInnerHTML={{ __html: stripLeadingH1(currentElement.bodyHtml) }}
                 />
-                {currentNode.taughtBy.length > 0 ? (
+                {currentElement.taughtByNodes.length > 0 ? (
                   <section className="mt-5 flex flex-col gap-1.5">
                     <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint">
-                      <span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden="true"></span>教的 path · {currentNode.taughtBy.length}
+                      <span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden="true"></span>教的節點 · {currentElement.taughtByNodes.length}
                     </h3>
                     <div className="flex flex-wrap gap-1.5">
-                      {currentNode.taughtBy.map((pid) => {
-                        const p = pathById.get(pid);
+                      {currentElement.taughtByNodes.map((nid) => {
+                        const n = nodeById.get(nid);
                         return (
                           <button
-                            key={pid}
+                            key={nid}
                             type="button"
-                            onClick={() => push({ kind: "path", id: pid })}
+                            onClick={() => push({ kind: "node", id: nid })}
                             className="chip"
-                            title={p?.title ?? pid}
+                            title={n?.title ?? nid}
                           >
-                            {p?.title ?? pid}
+                            {n?.title ?? nid}
                           </button>
                         );
                       })}
@@ -469,17 +443,17 @@ export function DetailPane({
           </div>
         </div>
 
-        {fullRead && (currentPath || currentNode) ? (
+        {fullRead && (currentNode || currentElement) ? (
           <div
             className="pane-view pane-fade absolute inset-0 overflow-y-auto px-6 py-8"
             role="presentation"
             onClick={handleContentClick}
           >
             <article className="prose mx-auto max-w-[42rem]">
-              {current.kind === "path" && currentPath ? (
-                <div dangerouslySetInnerHTML={{ __html: currentPath.fullArticleHtml }} />
-              ) : currentNode ? (
-                <div dangerouslySetInnerHTML={{ __html: currentNode.bodyHtml }} />
+              {current.kind === "node" && currentNode ? (
+                <div dangerouslySetInnerHTML={{ __html: currentNode.fullArticleHtml }} />
+              ) : currentElement ? (
+                <div dangerouslySetInnerHTML={{ __html: currentElement.bodyHtml }} />
               ) : null}
             </article>
           </div>

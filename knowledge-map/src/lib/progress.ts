@@ -1,12 +1,12 @@
 export const STORAGE_KEY = "knowledge-map:progress";
 
 export interface SubjectProgress {
-  /** Path ids the learner manually marked complete. */
-  paths: string[];
-  /** Node ids the learner read and marked complete. */
-  nodes: string[];
-  /** Tier numbers whose boss battle was beaten ("1", "2", …). */
-  tiers: string[];
+  /**
+   * Ids the learner manually checked complete: element ids, plus node ids for
+   * a node's final "main" article row (see nodeItems in lib/completion). Node
+   * completion is derived from this set — it is never stored separately.
+   */
+  elements: string[];
 }
 
 export type ProgressRecord = {
@@ -14,7 +14,7 @@ export type ProgressRecord = {
 };
 
 export function emptySubjectProgress(): SubjectProgress {
-  return { paths: [], nodes: [], tiers: [] };
+  return { elements: [] };
 }
 
 function toStringArray(value: unknown): string[] {
@@ -31,16 +31,20 @@ export function parseProgress(raw: string | null): ProgressRecord {
     const record: ProgressRecord = {};
     for (const [subject, value] of Object.entries(parsed)) {
       if (Array.isArray(value)) {
-        // Legacy shape: a bare array per subject. Treat it as the paths list.
-        record[subject] = { ...emptySubjectProgress(), paths: toStringArray(value) };
+        // Legacy shape: a bare array per subject held gating-era node ids.
+        // There is no element data to recover, so it becomes empty.
+        record[subject] = { elements: [] };
       } else if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-        const { paths, nodes, tiers } = value as Record<string, unknown>;
-        record[subject] = {
-          ...emptySubjectProgress(),
-          paths: toStringArray(paths),
-          nodes: toStringArray(nodes),
-          tiers: toStringArray(tiers),
-        };
+        // Legacy three-column shape: element completions live under `elements`
+        // (post-rename) or, in older stored data, under `nodes`. Path/node ids
+        // and beaten-tier marks are gone with the gating model.
+        const { elements, nodes } = value as Record<string, unknown>;
+        const elementIds = Array.isArray(elements)
+          ? elements
+          : Array.isArray(nodes)
+            ? nodes
+            : [];
+        record[subject] = { elements: toStringArray(elementIds) };
       }
     }
     return record;

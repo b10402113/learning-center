@@ -2,13 +2,15 @@ import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import graphData from "./data/graph.json";
+import { RoadMap } from "./components/RoadMap";
 import { DetailPane } from "./components/DetailPane";
 import { ForceMap } from "./components/ForceMap";
 import { HoverCard } from "./components/HoverCard";
 import { Legend } from "./components/Legend";
 import { MapControls } from "./components/MapControls";
+import { NodeDetailView } from "./components/NodeDetailView";
 import { TopBar } from "./components/TopBar";
-import { TowerMap } from "./components/TowerMap";
+import { isNodeComplete } from "./lib/completion";
 import { isWritten } from "./lib/colors";
 import { buildHash, parseHash } from "./lib/hashlink";
 import {
@@ -19,8 +21,7 @@ import {
   type ProgressRecord,
   type SubjectProgress,
 } from "./lib/progress";
-import { firstUnchartedInSpine, tierBossState, tierIsUnlocked } from "./lib/selectors";
-import type { FocusRequest, SubjectGraph, TowerMapHandle, View } from "./lib/types";
+import type { FocusRequest, MapHandle, SubjectGraph, View } from "./lib/types";
 
 const graphs = graphData as unknown as SubjectGraph[];
 
@@ -28,7 +29,7 @@ function defaultSubject(): string {
   let best = graphs[0]?.subject ?? "";
   let bestCount = -1;
   for (const g of graphs) {
-    const count = g.paths.filter((p) => isWritten(p.status)).length;
+    const count = g.nodes.filter((n) => isWritten(n.status)).length;
     if (count > bestCount) {
       bestCount = count;
       best = g.subject;
@@ -37,19 +38,19 @@ function defaultSubject(): string {
   return best;
 }
 
-// Resolve a hash to a concrete subject + path. The subject must exist and the
-// path must exist in that subject; anything else falls back to the given
+// Resolve a hash to a concrete subject + node. The subject must exist and the
+// node must exist in that subject; anything else falls back to the given
 // subject with no selection.
 function resolveHash(
   hash: string,
   fallbackSubject: string,
-): { subject: string; pathId: string | null } {
-  const { subject, pathId } = parseHash(hash);
+): { subject: string; nodeId: string | null } {
+  const { subject, nodeId } = parseHash(hash);
   const graph = graphs.find((g) => g.subject === subject);
-  const validPath = graph?.paths.some((p) => p.id === pathId) ? pathId : null;
+  const validNode = graph?.nodes.some((n) => n.id === nodeId) ? nodeId : null;
   return {
     subject: graph ? graph.subject : fallbackSubject,
-    pathId: validPath,
+    nodeId: validNode,
   };
 }
 
@@ -57,19 +58,20 @@ export default function App() {
   const [subject, setSubject] = useState<string>(() =>
     resolveHash(window.location.hash, defaultSubject()).subject,
   );
-  const [selectedPathId, setSelectedPathId] = useState<string | null>(() =>
-    resolveHash(window.location.hash, defaultSubject()).pathId,
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(() =>
+    resolveHash(window.location.hash, defaultSubject()).nodeId,
   );
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(() => {
     const initial = resolveHash(window.location.hash, defaultSubject());
-    return initial.pathId ? { pathId: initial.pathId, tick: 0 } : null;
+    return initial.nodeId ? { nodeId: initial.nodeId, tick: 0 } : null;
   });
   const [progress, setProgress] = useState<ProgressRecord>(loadProgress);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
-  const [view, setView] = useState<"nebula" | "tower">("nebula");
-  const mapRef = useRef<TowerMapHandle | null>(null);
+  const [view, setView] = useState<"nebula" | "roadmap">("nebula");
+  const [nodeDetailOpen, setNodeDetailOpen] = useState(false);
+  const mapRef = useRef<MapHandle | null>(null);
 
   // Mirror subject + selection into the hash so the current view is shareable.
   // replaceState (not pushState) so the map never floods the history stack.
@@ -79,20 +81,20 @@ export default function App() {
       firstRenderRef.current = false;
       return;
     }
-    const next = buildHash(subject, selectedPathId);
+    const next = buildHash(subject, selectedNodeId);
     if (window.location.hash !== next) {
       window.history.replaceState(null, "", next);
     }
-  }, [subject, selectedPathId]);
+  }, [subject, selectedNodeId]);
 
   // React to external hash edits (back/forward, pasted links, manual typing).
   useEffect(() => {
     const onHashChange = () => {
       const next = resolveHash(window.location.hash, subject);
       setSubject(next.subject);
-      setSelectedPathId(next.pathId);
-      setSelectedNodeId(null);
-      if (next.pathId) setFocusRequest({ pathId: next.pathId, tick: performance.now() });
+      setSelectedNodeId(next.nodeId);
+      setSelectedElementId(null);
+      if (next.nodeId) setFocusRequest({ nodeId: next.nodeId, tick: performance.now() });
       else setFocusRequest(null);
     };
     window.addEventListener("hashchange", onHashChange);
@@ -107,22 +109,18 @@ export default function App() {
 
   const subjectProgress = progress[graph.subject] ?? emptySubjectProgress();
 
-  const manualCompleted = useMemo(() => new Set(subjectProgress.paths), [subjectProgress]);
-  const manualNodes = useMemo(() => new Set(subjectProgress.nodes), [subjectProgress]);
-
-  // Per-tier boss lifecycle: drives lock styling on tiles and the boss gate.
-  const bossStates = useMemo(
+  // The manual completion set holds element ids and a node's own id (its main
+  // article row). Node completion is derived from it — never stored.
+  const manualElements = useMemo(() => new Set(subjectProgress.elements), [subjectProgress]);
+  const completedNodes = useMemo(
     () =>
-      new Map(
-        graph.tiers.map((t) => [t.tier, tierBossState(graph, t.tier, subjectProgress)]),
+      new Set(
+        graph.nodes.filter((n) => isNodeComplete(n, manualElements)).map((n) => n.id),
       ),
-    [graph, subjectProgress],
+    [graph, manualElements],
   );
 
-  const hasProgress =
-    subjectProgress.paths.length > 0 ||
-    subjectProgress.nodes.length > 0 ||
-    subjectProgress.tiers.length > 0;
+  const hasProgress = subjectProgress.elements.length > 0;
 
   // Mutate one subject's progress record inside the shared ProgressRecord.
   function updateSubject(
@@ -133,29 +131,9 @@ export default function App() {
     setProgress({ ...progress, [subjectKey]: update(current) });
   }
 
-  function toggleComplete(id: string) {
-    const path = graph.paths.find((p) => p.id === id);
-    if (!path || isWritten(path.status)) return;
-    // a locked tier cannot be formally progressed, only read
-    if (!tierIsUnlocked(graph, path.tier, progress[graph.subject] ?? emptySubjectProgress())) {
-      return;
-    }
-    updateSubject(graph.subject, (s) => ({ ...s, paths: toggleId(s.paths, id) }));
-  }
-
-  function toggleNode(id: string) {
-    updateSubject(graph.subject, (s) => ({ ...s, nodes: toggleId(s.nodes, id) }));
-  }
-
-  // The learner beats a tier's boss (after /quiz passes) and manually records
-  // the unlock; the app never decides correctness itself.
-  function unlockTier(tier: number) {
-    updateSubject(graph.subject, (s) => {
-      const tiers = s.tiers.includes(String(tier))
-        ? s.tiers
-        : [...s.tiers, String(tier)];
-      return { ...s, tiers };
-    });
+  // Toggle one checklist row: an element id, or a node id for its main row.
+  function toggleCompletion(id: string) {
+    updateSubject(graph.subject, (s) => ({ ...s, elements: toggleId(s.elements, id) }));
   }
 
   function resetProgress() {
@@ -176,46 +154,64 @@ export default function App() {
     return () => window.removeEventListener("mousemove", onMove);
   }, [hoveredId]);
 
-  function selectPath(id: string | null) {
-    setSelectedPathId(id);
-    setSelectedNodeId(null);
-    if (id) setFocusRequest({ pathId: id, tick: performance.now() });
+  function selectNode(id: string | null) {
+    setSelectedNodeId(id);
+    setSelectedElementId(null);
+    if (id && view === "roadmap") {
+      setNodeDetailOpen(true);
+    }
+    if (id) setFocusRequest({ nodeId: id, tick: performance.now() });
     else setFocusRequest(null);
   }
 
-  function selectNode(id: string) {
-    setSelectedNodeId(id);
-    setSelectedPathId(null);
+  function closeNodeDetail() {
+    setNodeDetailOpen(false);
+    setSelectedNodeId(null);
+    setSelectedElementId(null);
+    setFocusRequest(null);
+  }
+
+  function openElementFromDetail(elementId: string) {
+    setNodeDetailOpen(false);
+    setSelectedElementId(elementId);
+    setSelectedNodeId(null);
+  }
+
+  function openContentFromDetail() {
+    // Keep the node selected so DetailPane opens with full-read.
+    setNodeDetailOpen(false);
+  }
+
+  function selectElement(id: string) {
+    setSelectedElementId(id);
+    setSelectedNodeId(null);
     setFocusRequest(null);
   }
 
   function switchSubject(s: string) {
     if (s === subject) return;
     setSubject(s);
-    setSelectedPathId(null);
     setSelectedNodeId(null);
+    setSelectedElementId(null);
+    setNodeDetailOpen(false);
     setFocusRequest(null);
     setHoveredId(null);
   }
 
-  const nextUp = useMemo(() => firstUnchartedInSpine(graph, manualCompleted), [graph, manualCompleted]);
-
-  function goNextUp() {
-    if (nextUp) selectPath(nextUp.id);
-  }
-
-  const selectedPath = selectedPathId
-    ? (graph.paths.find((p) => p.id === selectedPathId) ?? null)
+  const selectedNode = selectedNodeId
+    ? (graph.nodes.find((n) => n.id === selectedNodeId) ?? null)
     : null;
-  const selectedNode = selectedNodeId ? (graph.nodes[selectedNodeId] ?? null) : null;
-  const root: View | null = selectedNode
-    ? { kind: "node", id: selectedNode.id }
-    : selectedPath
-      ? { kind: "path", id: selectedPath.id }
-      : null;
-  const hoveredPath =
-    hoveredId && hoveredId !== selectedPathId
-      ? (graph.paths.find((p) => p.id === hoveredId) ?? null)
+  const selectedElement = selectedElementId ? (graph.elements[selectedElementId] ?? null) : null;
+  const root: View | null = nodeDetailOpen
+    ? null
+    : selectedElement
+      ? { kind: "element", id: selectedElement.id }
+      : selectedNode
+        ? { kind: "node", id: selectedNode.id }
+        : null;
+  const hoveredNode =
+    hoveredId && hoveredId !== selectedNodeId
+      ? (graph.nodes.find((n) => n.id === hoveredId) ?? null)
       : null;
 
   return (
@@ -228,38 +224,31 @@ export default function App() {
           hasProgress={hasProgress}
           onReset={resetProgress}
           onSelect={switchSubject}
-          onViewChange={(v: "nebula" | "tower") => setView(v)}
+          onViewChange={(v: "nebula" | "roadmap") => setView(v)}
         />
         <div className="relative min-h-0 flex-1">
-          {view === "tower" ? (
-            <TowerMap
+          {view === "roadmap" ? (
+            <RoadMap
               ref={mapRef}
               graph={graph}
-              selectedId={selectedPathId}
-              selectedNodeId={selectedNodeId}
+              selectedId={selectedNodeId}
               focusRequest={focusRequest}
-              manualCompleted={manualCompleted}
-              manualNodes={manualNodes}
-              bossStates={bossStates}
-              hoveredId={hoveredId}
-              onSelect={selectPath}
-              onSelectNode={selectNode}
+              completedNodes={completedNodes}
+              onSelect={selectNode}
               onHover={setHoveredId}
-              onUnlockTier={unlockTier}
             />
           ) : (
             <ForceMap
               ref={mapRef}
               graph={graph}
-              selectedId={selectedPathId}
-              selectedNodeId={selectedNodeId}
+              selectedId={selectedNodeId}
+              selectedElementId={selectedElementId}
               focusRequest={focusRequest}
-              manualCompleted={manualCompleted}
-              manualNodes={manualNodes}
-              bossStates={bossStates}
+              completedNodes={completedNodes}
+              manualElements={manualElements}
               hoveredId={hoveredId}
-              onSelect={selectPath}
-              onSelectNode={selectNode}
+              onSelect={selectNode}
+              onSelectElement={selectElement}
               onHover={setHoveredId}
             />
           )}
@@ -271,24 +260,30 @@ export default function App() {
             onZoomOut={() => mapRef.current?.zoomBy(0.8)}
             onReset={() => mapRef.current?.fit()}
             onResetProgress={resetProgress}
-            onNextUp={goNextUp}
             canResetProgress={hasProgress}
-            hasNextUp={Boolean(nextUp)}
           />
 
-          {hoveredPath ? <HoverCard path={hoveredPath} x={pointer.x} y={pointer.y} /> : null}
+          {hoveredNode ? <HoverCard node={hoveredNode} x={pointer.x} y={pointer.y} /> : null}
 
           {root ? (
             <DetailPane
               graph={graph}
               root={root}
-              manualCompleted={manualCompleted}
-              manualNodes={manualNodes}
-              bossStates={bossStates}
-              onToggleComplete={toggleComplete}
-              onToggleNode={toggleNode}
-              onUnlockTier={unlockTier}
-              onClose={() => selectPath(null)}
+              manualElements={manualElements}
+              onToggleCompletion={toggleCompletion}
+              onClose={() => selectNode(null)}
+            />
+          ) : null}
+
+          {nodeDetailOpen && selectedNode ? (
+            <NodeDetailView
+              graph={graph}
+              node={selectedNode}
+              manualElements={manualElements}
+              onToggleCompletion={toggleCompletion}
+              onViewElement={openElementFromDetail}
+              onViewContent={openContentFromDetail}
+              onClose={closeNodeDetail}
             />
           ) : null}
         </div>

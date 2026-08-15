@@ -21,21 +21,21 @@ created: 2026-08-09
 
 Test fixture subject.
 
-## Paths
+## Nodes
 
 ### Tier 1 — 基礎
 
-1. **[[learn/fixture-subject/paths/p1|P One]]** — 10–15 minutes
+1. **[[learn/fixture-subject/nodes/p1|P One]]** — 10–15 minutes
    - Goal: first lesson
    - Sources:
      - [[sources/fixture-subject/book.pdf#Intro]]
 
-2. **[[learn/fixture-subject/paths/p2|P Two]]** — 10–15 minutes
+2. **[[learn/fixture-subject/nodes/p2|P Two]]** — 10–15 minutes
    - Goal: second lesson
 
 ### Tier 2 — 進階
 
-3. **[[learn/fixture-subject/paths/p3|P Three]]** — 10–15 minutes
+3. **[[learn/fixture-subject/nodes/p3|P Three]]** — 10–15 minutes
    - Goal: third lesson
 `;
 
@@ -50,7 +50,7 @@ status: content-written
 goal: First lesson goal.
 sources:
   - "[[sources/fixture-subject/book.pdf#Intro]]"
-nodes:
+elements:
   - fixture-subject/n1
 created: 2026-08-09
 updated: 2026-08-09
@@ -61,8 +61,8 @@ updated: 2026-08-09
 ## Learning goal
 First lesson goal.
 
-## Nodes
-- [[learn/fixture-subject/nodes/n1|N One]] — 教 n1
+## Elements
+- [[learn/fixture-subject/elements/n1|N One]] — 教 n1
 
 ## Lesson
 ### 開場
@@ -83,7 +83,7 @@ duration: 10-15 minutes
 status: draft
 goal: Second lesson goal.
 sources: []
-nodes: []
+elements: []
 created: 2026-08-09
 updated: 2026-08-09
 ---
@@ -93,7 +93,7 @@ updated: 2026-08-09
 ## Learning goal
 Second.
 
-## Nodes
+## Elements
 <!-- /nodes fills this list -->
 
 ## Lesson
@@ -113,7 +113,7 @@ status: content-written
 goal: Third lesson goal.
 sources:
   - "[[sources/fixture-subject/book.pdf#Intro]]"
-nodes:
+elements:
   - fixture-subject/n2
   - fixture-subject/n1
 created: 2026-08-09
@@ -132,7 +132,7 @@ title: N One
 subject: fixture-subject
 tier: 1
 order: 1
-paths:
+nodes:
   - fixture-subject/p1
 sources:
   - "[[sources/fixture-subject/book.pdf#Intro]]"
@@ -146,8 +146,8 @@ updated: 2026-08-09
 First idea.
 
 ## Connections
-- [[learn/fixture-subject/nodes/n2|N Two]] — links to n2
-- [[learn/fixture-subject/nodes/n3|N Three]] — links to n3
+- [[learn/fixture-subject/elements/n2|N Two]] — links to n2
+- [[learn/fixture-subject/elements/n3|N Three]] — links to n3
 
 ## Deep dive
 - [[sources/fixture-subject/book.pdf#Intro]]
@@ -159,7 +159,7 @@ title: N Two
 subject: fixture-subject
 tier: 2
 order: 2
-paths:
+nodes:
   - fixture-subject/p3
 sources: []
 created: 2026-08-09
@@ -172,7 +172,7 @@ updated: 2026-08-09
 Second idea.
 
 ## Connections
-- [[learn/fixture-subject/nodes/n1|N One]] — backlink to n1
+- [[learn/fixture-subject/elements/n1|N One]] — backlink to n1
 `;
 
 const N3 = `---
@@ -181,7 +181,7 @@ title: N Three
 subject: fixture-subject
 tier: 1
 order: 3
-paths: []
+nodes: []
 sources: []
 created: 2026-08-09
 updated: 2026-08-09
@@ -193,7 +193,7 @@ updated: 2026-08-09
 Third idea.
 
 ## Connections
-- [[learn/fixture-subject/nodes/n1|N One]] — links back
+- [[learn/fixture-subject/elements/n1|N One]] — links back
 `;
 
 const EDGE = `---
@@ -201,7 +201,7 @@ title: N One to N Two
 type: extends
 from: fixture-subject/n1
 to: fixture-subject/n2
-paths:
+nodes:
   - fixture-subject/p1
 created: 2026-08-09
 updated: 2026-08-09
@@ -221,7 +221,7 @@ Compare them.
 `;
 
 const PREPARE_P1 = `---
-path: fixture-subject/p1
+node: fixture-subject/p1
 tier: 1
 duration: 3-5 minutes
 sources:
@@ -240,16 +240,16 @@ updated: 2026-08-09
 - **Term A** — one-line gloss
 
 ## 已有基礎
-- [[learn/fixture-subject/nodes/n1|N One]] — reminder
+- [[learn/fixture-subject/elements/n1|N One]] — reminder
 `;
 
 const FILES = {
-  "paths/p1.md": P1,
-  "paths/p2.md": P2,
-  "paths/p3.md": P3,
-  "nodes/n1.md": N1,
-  "nodes/n2.md": N2,
-  "nodes/n3.md": N3,
+  "nodes/p1.md": P1,
+  "nodes/p2.md": P2,
+  "nodes/p3.md": P3,
+  "elements/n1.md": N1,
+  "elements/n2.md": N2,
+  "elements/n3.md": N3,
   "edges/e1.md": EDGE,
   "prepares/p1.md": PREPARE_P1,
 };
@@ -258,15 +258,15 @@ function build() {
   return buildSubjectGraph({
     subject: "fixture-subject",
     roadmap: ROADMAP,
-    pathFiles: {
-      "paths/p1.md": FILES["paths/p1.md"],
-      "paths/p2.md": FILES["paths/p2.md"],
-      "paths/p3.md": FILES["paths/p3.md"],
-    },
     nodeFiles: {
-      "nodes/n1.md": FILES["nodes/n1.md"],
-      "nodes/n2.md": FILES["nodes/n2.md"],
-      "nodes/n3.md": FILES["nodes/n3.md"],
+      "nodes/p1.md": FILES["nodes/p1.md"],
+      "nodes/p2.md": FILES["nodes/p2.md"],
+      "nodes/p3.md": FILES["nodes/p3.md"],
+    },
+    elementFiles: {
+      "elements/n1.md": FILES["elements/n1.md"],
+      "elements/n2.md": FILES["elements/n2.md"],
+      "elements/n3.md": FILES["elements/n3.md"],
     },
     edgeFiles: { "edges/e1.md": FILES["edges/e1.md"] },
     prepareFiles: { "prepares/p1.md": FILES["prepares/p1.md"] },
@@ -281,14 +281,14 @@ describe("parseFrontmatter", () => {
     expect(data.tier).toBe(1);
     expect(data.order).toBe(1);
     expect(data.status).toBe("content-written");
-    expect(data.nodes).toEqual(["fixture-subject/n1"]);
+    expect(data.elements).toEqual(["fixture-subject/n1"]);
     expect((data.sources as string[])[0]).toBe("[[sources/fixture-subject/book.pdf#Intro]]");
     expect(body).toContain("# P One");
   });
 
   it("parses an empty list as []", () => {
     const { data } = parseFrontmatter(P2);
-    expect(data.nodes).toEqual([]);
+    expect(data.elements).toEqual([]);
     expect(data.sources).toEqual([]);
   });
 });
@@ -301,8 +301,8 @@ describe("renderMarkdown", () => {
   });
 
   it("renders wikilinks as anchors with data-target", () => {
-    const html = renderMarkdown("See [[learn/fixture-subject/nodes/n2|N Two]].");
-    expect(html).toContain("data-target=\"learn/fixture-subject/nodes/n2\"");
+    const html = renderMarkdown("See [[learn/fixture-subject/elements/n2|N Two]].");
+    expect(html).toContain("data-target=\"learn/fixture-subject/elements/n2\"");
     expect(html).toContain(">N Two</a>");
   });
 
@@ -318,10 +318,10 @@ describe("renderMarkdown", () => {
 });
 
 describe("buildSubjectGraph", () => {
-  it("parses paths with tier, order, status, sources, and taught nodes", () => {
+  it("parses nodes with tier, order, status, sources, and taught elements", () => {
     const g = build();
     expect(g.subject).toBe("fixture-subject");
-    const p1 = g.paths.find((p) => p.id === "p1")!;
+    const p1 = g.nodes.find((n) => n.id === "p1")!;
     expect(p1).toMatchObject({
       id: "p1",
       title: "P One",
@@ -332,14 +332,14 @@ describe("buildSubjectGraph", () => {
       status: "content-written",
     });
     expect(p1.sources).toEqual(["[[sources/fixture-subject/book.pdf#Intro]]"]);
-    expect(p1.taughtNodeIds).toEqual(["n1"]);
+    expect(p1.taughtElementIds).toEqual(["n1"]);
     expect(p1.contentHtml).toContain("<h2>");
     expect(p1.fullArticleHtml).toContain("<h1>P One</h1>");
   });
 
   it("appends a Sources section to fullArticleHtml when the body lacks one", () => {
     const g = build();
-    const p3 = g.paths.find((p) => p.id === "p3")!;
+    const p3 = g.nodes.find((n) => n.id === "p3")!;
     expect(p3.contentHtml).not.toContain("<h2>Sources</h2>");
     expect(p3.fullArticleHtml).toContain("<h2>Sources</h2>");
     expect(p3.fullArticleHtml).toContain(
@@ -349,24 +349,24 @@ describe("buildSubjectGraph", () => {
 
   it("does not duplicate a Sources section already present in the body", () => {
     const g = build();
-    const p1 = g.paths.find((p) => p.id === "p1")!;
+    const p1 = g.nodes.find((n) => n.id === "p1")!;
     const count = p1.fullArticleHtml.match(/<h2>Sources<\/h2>/g);
     expect(count).toHaveLength(1);
   });
 
-  it("treats a skeleton path as empty taught nodes", () => {
+  it("treats a skeleton node as empty taught elements", () => {
     const g = build();
-    const p2 = g.paths.find((p) => p.id === "p2")!;
+    const p2 = g.nodes.find((n) => n.id === "p2")!;
     expect(p2.status).toBe("draft");
-    expect(p2.taughtNodeIds).toEqual([]);
-    expect(p2.relatedNodeIds).toEqual([]);
+    expect(p2.taughtElementIds).toEqual([]);
+    expect(p2.relatedElementIds).toEqual([]);
   });
 
-  it("builds tiers from ROADMAP headings in ascending order with pathIds", () => {
+  it("builds tiers from ROADMAP headings in ascending order with nodeIds", () => {
     const g = build();
     expect(g.tiers).toEqual([
-      { tier: 1, title: "基礎", pathIds: ["p1", "p2"] },
-      { tier: 2, title: "進階", pathIds: ["p3"] },
+      { tier: 1, title: "基礎", nodeIds: ["p1", "p2"] },
+      { tier: 2, title: "進階", nodeIds: ["p3"] },
     ]);
   });
 
@@ -379,7 +379,7 @@ describe("buildSubjectGraph", () => {
     ]);
   });
 
-  it("derives shared-concept edges for paths teaching the same node, deduped and oriented by global order", () => {
+  it("derives shared-concept edges for nodes teaching the same element, deduped and oriented by global order", () => {
     const g = build();
     const shared = g.edges.filter((e) => e.kind === "shared-concept");
     // p1 and p3 both teach n1; p1 comes earlier in global order
@@ -387,7 +387,7 @@ describe("buildSubjectGraph", () => {
     expect(shared.filter((e) => e.from === "p3" && e.to === "p1")).toHaveLength(0);
   });
 
-  it("maps explicit node edges to path-level edges via teaching paths, with label", () => {
+  it("maps explicit element edges to node-level edges via teaching nodes, with label", () => {
     const g = build();
     const explicit = g.edges.filter((e) => e.kind === "explicit");
     // n1 (taught by p1, p3) -> n2 (taught by p3) yields p1->p3; p3->p3 is self and dropped
@@ -399,39 +399,39 @@ describe("buildSubjectGraph", () => {
     });
   });
 
-  it("derives relatedNodeIds from node Connections in both directions", () => {
+  it("derives relatedElementIds from element Connections in both directions", () => {
     const g = build();
-    const p1 = g.paths.find((p) => p.id === "p1")!;
+    const p1 = g.nodes.find((n) => n.id === "p1")!;
     // p1 teaches n1; n1 links out to n2,n3; n2,n3 link back to n1
-    expect(p1.relatedNodeIds.sort()).toEqual(["n2", "n3"]);
-    const p3 = g.paths.find((p) => p.id === "p3")!;
+    expect(p1.relatedElementIds.sort()).toEqual(["n2", "n3"]);
+    const p3 = g.nodes.find((n) => n.id === "p3")!;
     // p3 teaches n2,n1; related = n3 only (n2 and n1 are already taught)
-    expect(p3.relatedNodeIds).toEqual(["n3"]);
+    expect(p3.relatedElementIds).toEqual(["n3"]);
   });
 
-  it("records a node map with body, connections, and sources", () => {
+  it("records an element map with body, connections, and sources", () => {
     const g = build();
-    const n1 = g.nodes.n1;
+    const n1 = g.elements.n1;
     expect(n1.title).toBe("N One");
     expect(n1.bodyHtml).toContain("<h2>Connections</h2>");
     expect(n1.connections).toEqual(["n2", "n3"]);
-    expect(n1.taughtBy).toEqual(["p1"]);
+    expect(n1.taughtByNodes).toEqual(["p1"]);
     expect(n1.sources).toEqual(["[[sources/fixture-subject/book.pdf#Intro]]"]);
   });
 
-  it("carries a prepare note into the path as rendered prepareHtml + hasPrepare", () => {
+  it("carries a prepare note into the node as rendered prepareHtml + hasPrepare", () => {
     const g = build();
-    const p1 = g.paths.find((p) => p.id === "p1")!;
+    const p1 = g.nodes.find((n) => n.id === "p1")!;
     expect(p1.hasPrepare).toBe(true);
     expect(p1.prepareHtml).toContain("First plain preview idea.");
-    expect(p1.prepareHtml).toContain("data-target=\"learn/fixture-subject/nodes/n1\"");
-    expect(p1.prepareHtml).not.toContain("path: fixture-subject/p1");
+    expect(p1.prepareHtml).toContain("data-target=\"learn/fixture-subject/elements/n1\"");
+    expect(p1.prepareHtml).not.toContain("node: fixture-subject/p1");
   });
 
-  it("defaults paths without a prepare note to null and false", () => {
+  it("defaults nodes without a prepare note to null and false", () => {
     const g = build();
-    const p2 = g.paths.find((p) => p.id === "p2")!;
-    const p3 = g.paths.find((p) => p.id === "p3")!;
+    const p2 = g.nodes.find((n) => n.id === "p2")!;
+    const p3 = g.nodes.find((n) => n.id === "p3")!;
     expect(p2.hasPrepare).toBe(false);
     expect(p2.prepareHtml).toBeNull();
     expect(p3.hasPrepare).toBe(false);
@@ -447,25 +447,25 @@ describe("scanSubject", () => {
   it("reads depth-1 files and excludes nested duplicate subject folders", () => {
     const root = mkdtempSync(join(tmpdir(), "km-test-"));
     try {
-      mkdirSync(join(root, "learn", "fixture-subject", "paths"), { recursive: true });
       mkdirSync(join(root, "learn", "fixture-subject", "nodes"), { recursive: true });
+      mkdirSync(join(root, "learn", "fixture-subject", "elements"), { recursive: true });
       mkdirSync(join(root, "learn", "fixture-subject", "edges"), { recursive: true });
       mkdirSync(join(root, "learn", "fixture-subject", "prepares"), { recursive: true });
-      mkdirSync(join(root, "learn", "fixture-subject", "learn", "fixture-subject", "paths"), { recursive: true });
+      mkdirSync(join(root, "learn", "fixture-subject", "learn", "fixture-subject", "nodes"), { recursive: true });
       writeFileSync(join(root, "learn", "fixture-subject", "ROADMAP.md"), ROADMAP);
-      writeFileSync(join(root, "learn", "fixture-subject", "paths", "p1.md"), P1);
+      writeFileSync(join(root, "learn", "fixture-subject", "nodes", "p1.md"), P1);
       writeFileSync(
         join(root, "learn", "fixture-subject", "prepares", "p1.md"),
         PREPARE_P1,
       );
       writeFileSync(
-        join(root, "learn", "fixture-subject", "learn", "fixture-subject", "paths", "stub.md"),
+        join(root, "learn", "fixture-subject", "learn", "fixture-subject", "nodes", "stub.md"),
         "# stub",
       );
       const scanned = scanSubject("fixture-subject", join(root, "learn"));
-      expect(Object.keys(scanned.pathFiles)).toEqual(["paths/p1.md"]);
+      expect(Object.keys(scanned.nodeFiles)).toEqual(["nodes/p1.md"]);
       expect(scanned.roadmap).toContain("Tier 1");
-      expect(scanned.nodeFiles).toEqual({});
+      expect(scanned.elementFiles).toEqual({});
       expect(scanned.prepareFiles).toEqual({ "prepares/p1.md": PREPARE_P1 });
     } finally {
       rmSync(root, { recursive: true, force: true });

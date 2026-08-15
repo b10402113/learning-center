@@ -5,7 +5,6 @@ import {
   useImperativeHandle,
   useMemo,
   useRef,
-  useState,
 } from "react";
 import ForceGraph, {
   type GraphData,
@@ -13,18 +12,15 @@ import ForceGraph, {
   type NodeObject,
 } from "force-graph";
 import { isWritten } from "../lib/colors";
-import { makeStars } from "../lib/layout";
-import type { TierBossState } from "../lib/selectors";
-import type { FocusRequest, SubjectGraph, TowerMapHandle } from "../lib/types";
+import type { FocusRequest, MapHandle, SubjectGraph } from "../lib/types";
 
 interface FNode extends NodeObject {
   id: string;
-  kind: "path" | "node";
-  pathId?: string;
+  kind: "node" | "element";
   nodeId?: string;
+  elementId?: string;
   title: string;
   tier: number;
-  boss?: boolean;
 }
 interface FLink extends LinkObject<FNode> {
   kind: "spine" | "shared" | "explicit" | "teach";
@@ -35,35 +31,32 @@ type FGraph = ForceGraph<FNode, FLink>;
 interface ForceMapProps {
   graph: SubjectGraph;
   selectedId: string | null;
-  selectedNodeId: string | null;
+  selectedElementId: string | null;
   focusRequest: FocusRequest | null;
-  manualCompleted: Set<string>;
-  manualNodes: Set<string>;
-  bossStates: Map<number, TierBossState>;
+  completedNodes: Set<string>;
+  manualElements: Set<string>;
   hoveredId: string | null;
   onSelect: (id: string | null) => void;
-  onSelectNode: (id: string) => void;
+  onSelectElement: (id: string) => void;
   onHover: (id: string | null) => void;
 }
 
-export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function ForceMap(
+export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
   {
     graph,
     selectedId,
-    selectedNodeId,
+    selectedElementId,
     focusRequest,
-    manualCompleted,
-    manualNodes,
-    bossStates,
+    completedNodes,
+    manualElements,
     hoveredId,
     onSelect,
-    onSelectNode,
+    onSelectElement,
     onHover,
   }: ForceMapProps,
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const gRef = useRef<FGraph | null>(null);
   const engineStoppedRef = useRef(false);
   const pendingSeatRef = useRef<string | null>(null);
@@ -71,17 +64,15 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
 
   // Theme tokens (mirrors app.css, drawn directly onto the canvas).
   const C = {
-    brass: "oklch(0.82 0.13 82)",
-    brassDim: "oklch(0.55 0.09 82)",
-    beacon: "oklch(0.78 0.13 205)",
-    surface2: "oklch(0.26 0.028 265)",
-    lockedFill: "oklch(0.17 0.022 265)",
-    border: "oklch(0.34 0.03 265)",
-    muted: "oklch(0.62 0.02 260)",
-    foreground: "oklch(0.92 0.01 260)",
-    steel: "oklch(0.42 0.03 265)",
-    faint: "oklch(0.62 0.02 260)",
-    teach: "oklch(0.45 0.03 265)",
+    brass: "#ff0071",
+    brassDim: "#c40058",
+    beacon: "#ff5ca8",
+    surface2: "#1e1e21",
+    border: "#2a2a2e",
+    muted: "#a0a0a5",
+    foreground: "#f5f5f5",
+    faint: "#8b8b8f",
+    teach: "#2f2f33",
   };
 
   const LINK_STYLES: Record<
@@ -95,21 +86,8 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
   };
 
   const written = useMemo(
-    () => new Set(graph.paths.filter((p) => isWritten(p.status)).map((p) => p.id)),
+    () => new Set(graph.nodes.filter((p) => isWritten(p.status)).map((p) => p.id)),
     [graph],
-  );
-  const bossIds = useMemo(
-    () =>
-      new Set(
-        graph.tiers
-          .map((t) => t.pathIds[t.pathIds.length - 1])
-          .filter((id): id is string => Boolean(id)),
-      ),
-    [graph],
-  );
-  const stars = useMemo(
-    () => makeStars(graph.subject, viewport.w || 800, viewport.h || 600),
-    [graph.subject, viewport],
   );
 
   // The draw callbacks are registered once with force-graph; the continuous
@@ -117,28 +95,24 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
   // selection / hover / completion changes redraw without re-registering.
   const liveRef = useRef({
     selectedId,
-    selectedNodeId,
+    selectedElementId,
     written,
-    bossIds,
-    manualCompleted,
-    manualNodes,
-    bossStates,
+    completedNodes,
+    manualElements,
     hoveredId,
     onSelect,
-    onSelectNode,
+    onSelectElement,
     onHover,
   });
   liveRef.current = {
     selectedId,
-    selectedNodeId,
+    selectedElementId,
     written,
-    bossIds,
-    manualCompleted,
-    manualNodes,
-    bossStates,
+    completedNodes,
+    manualElements,
     hoveredId,
     onSelect,
-    onSelectNode,
+    onSelectElement,
     onHover,
   };
 
@@ -147,67 +121,51 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
   }
 
   const radiusOf = (n: FNode): number => {
-    const { selectedId, selectedNodeId, written, manualCompleted, bossStates } = liveRef.current;
-    if (n.kind === "path") {
-      if (n.pathId === selectedId) return 11;
-      if (bossStates.get(n.tier) === "locked") return 7;
-      if (written.has(n.pathId!) || manualCompleted.has(n.pathId!)) return 9;
+    const { selectedId, selectedElementId, written, completedNodes } = liveRef.current;
+    if (n.kind === "node") {
+      if (n.nodeId === selectedId) return 11;
+      if (written.has(n.nodeId!) || completedNodes.has(n.nodeId!)) return 9;
       return 8;
     }
-    return n.nodeId === selectedNodeId ? 7 : 5;
+    return n.elementId === selectedElementId ? 7 : 5;
   };
 
   const matches = (n: FNode, id: string) =>
-    n.kind === "path" ? n.pathId === id : n.nodeId === id;
+    n.kind === "node" ? n.nodeId === id : n.elementId === id;
 
   function drawNode(node: FNode, ctx: CanvasRenderingContext2D, gs: number) {
-    const { selectedId, selectedNodeId, written, manualCompleted, manualNodes, bossStates } =
+    const { selectedId, selectedElementId, written, completedNodes, manualElements } =
       liveRef.current;
-    const isPath = node.kind === "path";
-    const selected = isPath
-      ? node.pathId === selectedId
-      : node.nodeId === selectedNodeId;
+    const isLesson = node.kind === "node";
+    const selected = isLesson
+      ? node.nodeId === selectedId
+      : node.elementId === selectedElementId;
     const lit =
-      isPath && (written.has(node.pathId!) || manualCompleted.has(node.pathId!));
-    const locked = isPath && bossStates.get(node.tier) === "locked";
+      isLesson && (written.has(node.nodeId!) || completedNodes.has(node.nodeId!));
     const r = radiusOf(node);
     ctx.save();
     ctx.translate(node.x ?? 0, node.y ?? 0);
-    if (isPath) {
+    if (isLesson) {
       if (selected) {
         ctx.beginPath();
         ctx.arc(0, 0, r + 6, 0, Math.PI * 2);
-        ctx.fillStyle = "oklch(0.78 0.13 205 / 0.16)";
+        ctx.fillStyle = "rgba(255, 92, 168, 0.16)";
         ctx.fill();
       }
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
-      ctx.fillStyle = locked ? C.lockedFill : lit ? "oklch(0.3 0.045 90)" : C.surface2;
+      ctx.fillStyle = lit ? "#241019" : C.surface2;
       ctx.fill();
-      ctx.strokeStyle = selected ? C.beacon : locked ? C.steel : lit ? C.brassDim : C.border;
+      ctx.strokeStyle = selected ? C.beacon : lit ? C.brassDim : C.border;
       ctx.lineWidth = selected ? 2 : 1;
       ctx.stroke();
-      if (node.boss) {
-        ctx.font = `${12 / gs}px "IBM Plex Mono", ui-monospace, monospace`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = C.brass;
-        ctx.fillText("♛", 0, -r - 8 / gs);
-      }
-      if (locked) {
-        ctx.font = `${9 / gs}px "IBM Plex Mono", ui-monospace, monospace`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = C.faint;
-        ctx.fillText("🔒", 0, -r - 6 / gs);
-      }
       ctx.font = `${10 / gs}px "IBM Plex Sans", system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       ctx.fillStyle = selected ? C.foreground : C.faint;
       ctx.fillText(node.title, 0, r + 5 / gs);
     } else {
-      const completed = manualNodes.has(node.nodeId ?? "");
+      const completed = manualElements.has(node.elementId ?? "");
       const nr = selected ? 7 : 5;
       ctx.beginPath();
       ctx.arc(0, 0, nr, 0, Math.PI * 2);
@@ -277,21 +235,20 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
     (subject: SubjectGraph): GraphData<FNode, FLink> => {
       const nodes: FNode[] = [];
       const links: FLink[] = [];
-      for (const p of subject.paths) {
+      for (const p of subject.nodes) {
         nodes.push({
           id: `p:${p.id}`,
-          kind: "path",
-          pathId: p.id,
+          kind: "node",
+          nodeId: p.id,
           title: p.title,
           tier: p.tier,
-          boss: bossIds.has(p.id),
         });
-        for (const nid of p.taughtNodeIds) {
+        for (const nid of p.taughtElementIds) {
           links.push({ source: `p:${p.id}`, target: `n:${nid}`, kind: "teach" });
         }
       }
-      for (const [nid, n] of Object.entries(subject.nodes)) {
-        nodes.push({ id: `n:${nid}`, kind: "node", nodeId: nid, title: n.title, tier: n.tier });
+      for (const [nid, n] of Object.entries(subject.elements)) {
+        nodes.push({ id: `n:${nid}`, kind: "element", elementId: nid, title: n.title, tier: n.tier });
       }
       for (const e of subject.edges) {
         const kind = e.kind === "shared-concept" ? "shared" : e.kind;
@@ -299,14 +256,14 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
       }
       return { nodes, links };
     },
-    [bossIds],
+    [],
   );
 
-  const seatNow = useCallback((pathId: string) => {
+  const seatNow = useCallback((nodeId: string) => {
     const g = gRef.current;
     if (!g) return;
     const n = g.graphData().nodes.find(
-      (node) => node.kind === "path" && node.pathId === pathId,
+      (node) => node.kind === "node" && node.nodeId === nodeId,
     );
     if (!n) return;
     g.centerAt(n.x ?? 0, n.y ?? 0, 450);
@@ -320,16 +277,16 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
     g.zoom(1.5, 400);
   }, []);
 
-  const requestSeat = useCallback((pathId: string) => {
+  const requestSeat = useCallback((nodeId: string) => {
     if (!gRef.current) return;
     if (engineStoppedRef.current) {
-      seatNow(pathId);
+      seatNow(nodeId);
     } else {
-      pendingSeatRef.current = pathId;
+      pendingSeatRef.current = nodeId;
     }
   }, [seatNow]);
 
-  // Imperative surface shared with the tower view's controls.
+  // Imperative surface shared with the roadmap view's controls.
   useImperativeHandle(
     ref,
     () => ({
@@ -341,8 +298,8 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
         if (!g) return;
         g.zoom(g.zoom() * factor, 200);
       },
-      seatOnPath: (pathId: string) => {
-        requestSeat(pathId);
+      seatOnNode: (nodeId: string) => {
+        requestSeat(nodeId);
       },
     }),
     [requestSeat],
@@ -353,7 +310,6 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
     if (!host) return;
     const w = host.clientWidth || 1;
     const h = host.clientHeight || 1;
-    setViewport({ w, h });
     const g = new ForceGraph<FNode, FLink>(host)
       .nodeId("id")
       .linkSource("source")
@@ -361,7 +317,7 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
       .graphData(buildData(graph))
       .width(w)
       .height(h)
-      .nodeVal((n) => (n.kind === "path" ? 1.6 : 1))
+      .nodeVal((n) => (n.kind === "node" ? 1.6 : 1))
       .cooldownTime(2200)
       .d3VelocityDecay(0.34)
       .autoPauseRedraw(false)
@@ -373,15 +329,15 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
       .linkCanvasObject(drawLink)
       .onNodeClick((node) => {
         const n = node as FNode;
-        if (n.kind === "path") liveRef.current.onSelect(n.pathId ?? null);
+        if (n.kind === "node") liveRef.current.onSelect(n.nodeId ?? null);
         else {
           centerOn(n);
-          liveRef.current.onSelectNode(n.nodeId ?? "");
+          liveRef.current.onSelectElement(n.elementId ?? "");
         }
       })
       .onNodeHover((node) => {
         const n = node as FNode | null;
-        if (n?.kind === "path") liveRef.current.onHover(n.pathId ?? null);
+        if (n?.kind === "node") liveRef.current.onHover(n.nodeId ?? null);
         else liveRef.current.onHover(null);
       })
       .onEngineStop(() => {
@@ -393,16 +349,15 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
           g.zoomToFit(450, 48);
         }
       });
-    // Tune the default forces: lessons spread more than concept nodes, and the
-    // teach-links pull each concept node closer to its lessons.
+    // Tune the default forces: nodes spread more than concept elements, and the
+    // teach-links pull each concept element closer to its nodes.
     const charge = g.d3Force("charge");
-    if (charge) charge.strength((n: FNode) => (n.kind === "path" ? -28 : -16));
+    if (charge) charge.strength((n: FNode) => (n.kind === "node" ? -28 : -16));
     const link = g.d3Force("link");
     if (link) link.distance((l: FLink) => (l.kind === "teach" ? 55 : 80));
     gRef.current = g;
-    if (focusRequest) requestSeat(focusRequest.pathId);
+    if (focusRequest) requestSeat(focusRequest.nodeId);
     const ro = new ResizeObserver(() => {
-      setViewport({ w: host.clientWidth, h: host.clientHeight });
       g.width(host.clientWidth).height(host.clientHeight);
     });
     ro.observe(host);
@@ -426,10 +381,10 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
   // A deep-link names a tile to focus: seat the camera on it once per request.
   useEffect(() => {
     if (!focusRequest || !gRef.current) return;
-    const key = `${focusRequest.pathId}#${focusRequest.tick}`;
+    const key = `${focusRequest.nodeId}#${focusRequest.tick}`;
     if (lastFocusRef.current === key) return;
     lastFocusRef.current = key;
-    requestSeat(focusRequest.pathId);
+    requestSeat(focusRequest.nodeId);
   }, [focusRequest, requestSeat]);
 
   return (
@@ -438,23 +393,18 @@ export const ForceMap = forwardRef<TowerMapHandle, ForceMapProps>(function Force
       className="absolute inset-0 h-full w-full touch-none select-none overflow-hidden"
       style={{
         background:
-          "radial-gradient(120% 120% at 50% 18%, oklch(0.24 0.05 275), oklch(0.18 0.03 268) 42%, oklch(0.12 0.02 265))",
+          "radial-gradient(120% 120% at 50% 18%, #161618, #121214 42%, #0a0a0c)",
       }}
       aria-label={`${graph.subject} 星雲圖`}
       role="application"
     >
       <svg className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true">
-        {stars.map((s, i) => (
-          <circle
-            key={i}
-            cx={s.x}
-            cy={s.y}
-            r={s.r}
-            fill="var(--color-foreground)"
-            opacity={s.o}
-            style={{ animation: `nb-twinkle ${5 + (i % 5)}s ease-in-out ${s.delay}s infinite` }}
-          />
-        ))}
+        <defs>
+          <pattern id="fgDotGrid" width="24" height="24" patternUnits="userSpaceOnUse">
+            <circle cx="1.5" cy="1.5" r="1.1" fill="#2a2a2e" fillOpacity="0.7" />
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#fgDotGrid)" />
       </svg>
     </div>
   );

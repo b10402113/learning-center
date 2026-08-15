@@ -2,7 +2,6 @@ import { button } from "../lib/buttonVariants";
 import { cn } from "../lib/cn";
 import { Crosshair } from "./icons/Crosshair";
 import { Minus } from "./icons/Minus";
-import { Navigate } from "./icons/Navigate";
 import { Plus } from "./icons/Plus";
 import { Reset } from "./icons/Reset";
 import { Tooltip } from "./ui/Tooltip";
@@ -12,9 +11,7 @@ interface MapControlsProps {
   onZoomOut: () => void;
   onReset: () => void;
   onResetProgress: () => void;
-  onNextUp: () => void;
   canResetProgress: boolean;
-  hasNextUp: boolean;
 }
 
 export function MapControls({
@@ -22,23 +19,10 @@ export function MapControls({
   onZoomOut,
   onReset,
   onResetProgress,
-  onNextUp,
   canResetProgress,
-  hasNextUp,
 }: MapControlsProps) {
   return (
     <div className="pointer-events-none absolute bottom-5 right-5 flex flex-col items-end gap-2">
-      {hasNextUp ? (
-        <button
-          onClick={onNextUp}
-          className={cn(button({ variant: "surface", size: "md" }), "pointer-events-auto border-beacon/40 text-beacon")}
-          aria-label="跳到下一課"
-        >
-          <Navigate size={14} />
-          下一課
-        </button>
-      ) : null}
-
       <div className="pointer-events-auto flex flex-col overflow-hidden rounded-lg border border-border bg-surface/80 backdrop-blur-md">
         <Tooltip
           trigger={(props) => (

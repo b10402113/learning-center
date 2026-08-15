@@ -1,6 +1,4 @@
 import { Check } from "./icons/Check";
-import { Crown } from "./icons/Crown";
-import { Lock } from "./icons/Lock";
 
 export function Legend() {
   return (
@@ -42,22 +40,16 @@ export function Legend() {
           <span>已成圖 · charted</span>
         </li>
         <li className="flex items-center gap-2.5">
-          <span className="inline-flex h-5 w-6 items-center justify-center rounded-sm border border-steel bg-surface-2/60">
-            <Lock size={11} className="text-muted" />
-          </span>
-          <span>鎖定 · locked</span>
-        </li>
-        <li className="flex items-center gap-2.5">
           <span className="inline-flex h-5 w-6 items-center justify-center rounded-sm border border-brass-dim/60 bg-brass/10">
-            <Crown size={11} className="text-brass" />
+            <Check size={11} className="text-brass" />
           </span>
-          <span>已解鎖 · unlocked</span>
+          <span>已勾選 · checked</span>
         </li>
         <li className="flex items-center gap-2.5">
           <span className="inline-flex h-5 w-6 items-center justify-center rounded-sm border border-brass-dim/60 bg-brass/10">
             <Check size={11} className="text-brass" />
           </span>
-          <span>node 已學 · node read</span>
+          <span>節點完成 · node complete</span>
         </li>
       </ul>
     </div>

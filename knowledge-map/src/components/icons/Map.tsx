@@ -2,7 +2,7 @@ import type { SVGProps } from "react";
 
 export type IconProps = SVGProps<SVGSVGElement> & { size?: number };
 
-export function Crown({ size = 16, ...rest }: IconProps) {
+export function Map({ size = 16, ...rest }: IconProps) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -17,8 +17,8 @@ export function Crown({ size = 16, ...rest }: IconProps) {
       aria-hidden="true"
       {...rest}
     >
-      <path d="M4 18h16" />
-      <path d="M4 18l-1-9 5.5 3.5L12 5l3.5 7.5L21 9l-1 9" />
+      <path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z" />
+      <path d="M9 4v14M15 6v14" />
     </svg>
   );
 }
