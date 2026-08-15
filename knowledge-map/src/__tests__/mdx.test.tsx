@@ -189,6 +189,7 @@ describe("TYPE badge and prerequisite colors", () => {
         graph={graph}
         prerequisiteIds={["n2", "p2"]}
         manualElements={new Set()}
+        quizSolved={new Set()}
         onToggleCompletion={vi.fn()}
         onNavigate={vi.fn()}
       />,
@@ -199,5 +200,55 @@ describe("TYPE badge and prerequisite colors", () => {
     expect(nodeCard).not.toBeNull();
     expect(elementCard!.className).not.toContain("prereq-node");
     expect(nodeCard!.className).toContain("prereq-node");
+  });
+
+  it("does not let a question prerequisite be checked before its quiz is solved", async () => {
+    const user = userEvent.setup();
+    const questionGraph: SubjectGraph = {
+      ...graph,
+      elements: {
+        ...graph.elements,
+        nq: {
+          id: "nq",
+          title: "N Question",
+          tier: 1,
+          order: 3,
+          type: "question",
+          taughtByNodes: [],
+          sources: [],
+          connections: [],
+          prerequisiteIds: [],
+          questions: [{ question: "Q", options: ["A", "B"], answer: 0 }],
+        },
+      },
+    };
+    const onToggle = vi.fn();
+    const { rerender } = render(
+      <PrereqSection
+        graph={questionGraph}
+        prerequisiteIds={["nq"]}
+        manualElements={new Set()}
+        quizSolved={new Set()}
+        onToggleCompletion={onToggle}
+        onNavigate={vi.fn()}
+      />,
+    );
+    const check = screen.getByRole("checkbox");
+    expect(check).toHaveAttribute("aria-disabled", "true");
+    await user.click(check);
+    expect(onToggle).not.toHaveBeenCalled();
+
+    rerender(
+      <PrereqSection
+        graph={questionGraph}
+        prerequisiteIds={["nq"]}
+        manualElements={new Set()}
+        quizSolved={new Set(["nq"])}
+        onToggleCompletion={onToggle}
+        onNavigate={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("checkbox"));
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });

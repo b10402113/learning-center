@@ -1,10 +1,8 @@
 import { useMemo, type ComponentType } from "react";
 import { isCompletionLocked } from "../lib/completion";
+import { elementMdxComponents } from "../lib/mdxComponents";
 import type { Element } from "../lib/types";
 import { CompletionToggle } from "./CompletionToggle";
-import { QuizBlock } from "./QuizBlock";
-import { VideoEmbed } from "./VideoEmbed";
-import { WikiLink } from "./WikiLink";
 
 interface ElementMdxViewProps {
   element: Element;
@@ -33,16 +31,7 @@ export function ElementMdxView({
   const Content = content;
 
   const components = useMemo(
-    () => ({
-      a: WikiLink,
-      QuizBlock: () => (
-        <QuizBlock
-          questions={element.questions ?? []}
-          onSolved={element.type === "question" ? onQuizSolved : undefined}
-        />
-      ),
-      VideoEmbed: () => <VideoEmbed url={element.videoUrl} title={element.title} />,
-    }),
+    () => elementMdxComponents(element, element.type === "question" ? onQuizSolved : undefined),
     [element, onQuizSolved],
   );
 

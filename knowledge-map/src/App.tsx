@@ -67,6 +67,7 @@ export default function App() {
     return initial.nodeId ? { nodeId: initial.nodeId, tick: 0 } : null;
   });
   const [progress, setProgress] = useState<ProgressRecord>(loadProgress);
+  const [quizSolved, setQuizSolved] = useState<Set<string>>(new Set());
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const [view, setView] = useState<"nebula" | "roadmap">("nebula");
@@ -191,6 +192,12 @@ export default function App() {
     setFocusRequest({ nodeId, tick: performance.now() });
   }
 
+  // A question element's in-app quiz unlocks its completion check. Session-only
+  // (self-test, not a gate) — the persisted completion is the manual check.
+  function markQuizSolved(elementId: string) {
+    setQuizSolved((prev) => (prev.has(elementId) ? prev : new Set(prev).add(elementId)));
+  }
+
   function selectElement(id: string) {
     setSelectedElementId(id);
     setSelectedNodeId(null);
@@ -279,6 +286,8 @@ export default function App() {
               graph={graph}
               root={root}
               manualElements={manualElements}
+              quizSolved={quizSolved}
+              onQuizSolved={markQuizSolved}
               onToggleCompletion={toggleCompletion}
               onClose={() => selectNode(null)}
             />
@@ -289,6 +298,7 @@ export default function App() {
               graph={graph}
               node={selectedNode}
               manualElements={manualElements}
+              quizSolved={quizSolved}
               onToggleCompletion={toggleCompletion}
               onViewElement={openElementFromDetail}
               onViewNode={openNodeFromDetail}

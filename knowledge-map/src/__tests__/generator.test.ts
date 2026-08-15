@@ -479,6 +479,25 @@ describe("buildSubjectGraph", () => {
     expect(g.elements.n3.prerequisiteIds).toEqual([]);
   });
 
+  it("reads element prerequisite links from localized Prerequisites headings", () => {
+    const g = buildSubjectGraph({
+      subject: "fixture-subject",
+      roadmap: ROADMAP,
+      nodeFiles: {},
+      elementFiles: {
+        "elements/zh.mdx": `---
+id: zh
+title: ZH
+---
+## 我需要先知道什麼？
+- [[learn/fixture-subject/elements/n1|N One]]
+`,
+      },
+      edgeFiles: {},
+    });
+    expect(g.elements.zh.prerequisiteIds).toEqual(["n1"]);
+  });
+
   it("merges node frontmatter prerequisites with derived relatedElementIds, deduped, with source", () => {
     const g = build();
     const p1 = g.nodes.find((n) => n.id === "p1")!;

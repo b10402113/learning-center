@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { statusLabel } from "../lib/colors";
 import { button } from "../lib/buttonVariants";
 import { cn } from "../lib/cn";
 import { isNodeComplete, nodeItems } from "../lib/completion";
+import { elementMdxComponents, nodeMdxComponents } from "../lib/mdxComponents";
 import { getElementMdx, getNodeMdx } from "../lib/mdxRegistry";
 import type { SubjectGraph, View } from "../lib/types";
 import { Check } from "./icons/Check";
@@ -12,9 +13,6 @@ import { Circle } from "./icons/Circle";
 import { Expand } from "./icons/Expand";
 import { X } from "./icons/X";
 import { ElementMdxView } from "./ElementMdxView";
-import { QuizBlock } from "./QuizBlock";
-import { VideoEmbed } from "./VideoEmbed";
-import { WikiLink } from "./WikiLink";
 
 function parseWikilinkTarget(
   target: string,
@@ -28,22 +26,22 @@ interface DetailPaneProps {
   graph: SubjectGraph;
   root: View;
   manualElements: Set<string>;
+  quizSolved: Set<string>;
+  onQuizSolved: (elementId: string) => void;
   onToggleCompletion: (id: string) => void;
   onClose: () => void;
 }
 
-// The MDX `components` map. `a` renders Obsidian wikilinks (rewritten to `km:`
-// URLs by remark) as in-app navigation or source refs; `h1` is hidden in the
-// narrow pane so the article does not duplicate the header title.
-const MDX_PANE_COMPONENTS: Record<string, ComponentType | string> = {
-  a: WikiLink,
-  h1: () => null,
-};
+// The pane's `components` map: wikilinks as in-app nav or source refs, and the
+// `h1` hidden so the narrow article does not duplicate the header title.
+const MDX_PANE_COMPONENTS = { ...nodeMdxComponents, h1: () => null };
 
 export function DetailPane({
   graph,
   root,
   manualElements,
+  quizSolved,
+  onQuizSolved,
   onToggleCompletion,
   onClose,
 }: DetailPaneProps) {
@@ -52,7 +50,6 @@ export function DetailPane({
   const [stack, setStack] = useState<View[]>([root]);
   const [dir, setDir] = useState<"forward" | "back">("forward");
   const [fullRead, setFullRead] = useState(false);
-  const [quizSolved, setQuizSolved] = useState<Set<string>>(new Set());
 
   // A new selection from the map replaces the whole navigation stack. The
   // state is adjusted during render so the committed frame never flashes the
@@ -158,7 +155,7 @@ export function DetailPane({
 
   function markQuizSolved() {
     if (!currentElement) return;
-    setQuizSolved((prev) => new Set(prev).add(currentElement.id));
+    onQuizSolved(currentElement.id);
   }
 
   const paneClass = cn(
@@ -433,21 +430,10 @@ export function DetailPane({
           >
             <article className="prose mx-auto max-w-[42rem]">
               {current.kind === "node" && currentNode && NodeMdx ? (
-                <NodeMdx components={{ a: WikiLink }} />
+                <NodeMdx components={nodeMdxComponents} />
               ) : currentElement && ElementMdx ? (
                 <ElementMdx
-                  components={{
-                    a: WikiLink,
-                    QuizBlock: () => (
-                      <QuizBlock
-                        questions={currentElement.questions ?? []}
-                        onSolved={markQuizSolved}
-                      />
-                    ),
-                    VideoEmbed: () => (
-                      <VideoEmbed url={currentElement.videoUrl} title={currentElement.title} />
-                    ),
-                  }}
+                  components={elementMdxComponents(currentElement, markQuizSolved)}
                 />
               ) : (
                 <p className="text-xs text-muted-foreground">找不到此內容。</p>

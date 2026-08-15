@@ -1,4 +1,5 @@
 import { cn } from "../lib/cn";
+import { isCompletionLocked } from "../lib/completion";
 import type { SubjectGraph } from "../lib/types";
 import { Check } from "./icons/Check";
 import { Circle } from "./icons/Circle";
@@ -7,6 +8,7 @@ interface PrereqSectionProps {
   graph: SubjectGraph;
   prerequisiteIds: string[];
   manualElements: Set<string>;
+  quizSolved: Set<string>;
   onToggleCompletion: (id: string) => void;
   onNavigate: (kind: "element" | "node", id: string) => void;
 }
@@ -27,6 +29,7 @@ export function PrereqSection({
   graph,
   prerequisiteIds,
   manualElements,
+  quizSolved,
   onToggleCompletion,
   onNavigate,
 }: PrereqSectionProps) {
@@ -59,6 +62,12 @@ export function PrereqSection({
       <div className="path-detail-prereq-grid">
         {entries.map((entry) => {
           const isElement = entry.kind === "element";
+          const elementType = isElement ? (graph.elements[entry.id]?.type ?? "article") : undefined;
+          const locked = isCompletionLocked(
+            elementType,
+            manualElements.has(entry.id),
+            quizSolved.has(entry.id),
+          );
           const done = manualElements.has(entry.id);
           return (
             <button
@@ -78,10 +87,12 @@ export function PrereqSection({
                     className={cn("prereq-card-check", done ? "check-on" : "")}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onToggleCompletion(entry.id);
+                      if (!locked) onToggleCompletion(entry.id);
                     }}
                     role="checkbox"
                     aria-checked={done}
+                    aria-disabled={locked}
+                    title={locked ? "先答對測驗即可標記" : undefined}
                   >
                     {done ? <Check size={14} /> : <Circle size={14} />}
                   </span>

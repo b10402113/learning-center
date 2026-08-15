@@ -18,7 +18,8 @@ export function QuizBlock({ questions, onSolved }: QuizBlockProps) {
   const [wrong, setWrong] = useState<number[]>([]);
   const solvedRef = useRef(false);
 
-  const allCorrect = questions.every((q, i) => picks[i] === q.answer);
+  // A question element with no questions is malformed — never auto-solve it.
+  const allCorrect = questions.length > 0 && questions.every((q, i) => picks[i] === q.answer);
 
   useEffect(() => {
     if (allCorrect && !solvedRef.current) {

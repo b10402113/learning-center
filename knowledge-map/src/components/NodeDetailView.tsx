@@ -13,6 +13,7 @@ interface NodeDetailViewProps {
   graph: SubjectGraph;
   node: Node;
   manualElements: Set<string>;
+  quizSolved: Set<string>;
   onToggleCompletion: (id: string) => void;
   onViewElement: (elementId: string) => void;
   onViewNode: (nodeId: string) => void;
@@ -28,6 +29,7 @@ export function NodeDetailView({
   graph,
   node,
   manualElements,
+  quizSolved,
   onToggleCompletion,
   onViewElement,
   onViewNode,
@@ -167,6 +169,7 @@ export function NodeDetailView({
             graph={graph}
             prerequisiteIds={node.prerequisiteIds}
             manualElements={manualElements}
+            quizSolved={quizSolved}
             onToggleCompletion={onToggleCompletion}
             onNavigate={(kind, id) =>
               kind === "element" ? onViewElement(id) : onViewNode(id)

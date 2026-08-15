@@ -198,15 +198,22 @@ function extractElementLinks(body, subject) {
   return [...links];
 }
 
-// Extract element links from one named `## Heading` section of a body.
-function extractSectionElementLinks(body, subject, heading) {
-  const re = new RegExp(`^##\\s+${heading}\\s*$`, "m");
-  const match = body.match(re);
-  if (!match) return [];
-  const rest = body.slice(match.index + match[0].length);
-  const nextHeading = rest.match(/^##\s/m);
-  const section = nextHeading ? rest.slice(0, nextHeading.index) : rest;
-  return extractElementLinks(section, subject);
+// Extract element links from one named `## Heading` section of a body. Node
+// and element templates guarantee "Connections" and "Deep dive" stay in
+// English, but the prerequisites section may use localized headings, so accept
+// a list of candidates and use whichever is present.
+function extractSectionElementLinks(body, subject, headings) {
+  for (const heading of headings) {
+    const re = new RegExp(`^##\\s+${heading}\\s*$`, "m");
+    const match = body.match(re);
+    if (!match) continue;
+    const rest = body.slice(match.index + match[0].length);
+    const nextHeading = rest.match(/^##\s/m);
+    const section = nextHeading ? rest.slice(0, nextHeading.index) : rest;
+    const links = extractElementLinks(section, subject);
+    if (links.length > 0) return links;
+  }
+  return [];
 }
 
 function parseTiers(roadmap) {
@@ -255,7 +262,11 @@ export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, e
       taughtByNodes: (data.nodes ?? []).map(stripSubjectPrefix),
       sources: data.sources ?? [],
       connections: extractElementLinks(body, subject),
-      prerequisiteIds: extractSectionElementLinks(body, subject, "Prerequisites"),
+      prerequisiteIds: extractSectionElementLinks(body, subject, [
+        "Prerequisites",
+        "前置知識",
+        "我需要先知道什麼？",
+      ]),
       ...(type === "video" ? { videoUrl: data.videoUrl ?? "" } : {}),
       ...(type === "question" ? { questions: normalizeQuestions(data.questions) } : {}),
     };
