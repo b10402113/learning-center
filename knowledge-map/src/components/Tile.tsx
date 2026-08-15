@@ -1,7 +1,9 @@
-import { Check, Crown, Lock } from "lucide-react";
 import { STATUS_LABEL } from "../lib/colors";
 import type { TileBox } from "../lib/layout";
 import type { PathNode } from "../lib/types";
+import { Check } from "./icons/Check";
+import { Crown } from "./icons/Crown";
+import { Lock } from "./icons/Lock";
 
 interface TileProps {
   path: PathNode;
@@ -15,17 +17,7 @@ interface TileProps {
   onHover: (id: string | null) => void;
 }
 
-export function Tile({
-  path,
-  box,
-  lit,
-  locked,
-  nodeReadCount,
-  boss,
-  selected,
-  onSelect,
-  onHover,
-}: TileProps) {
+export function Tile({ path, box, lit, locked, nodeReadCount, boss, selected, onSelect, onHover }: TileProps) {
   const stroke = selected
     ? "var(--color-beacon)"
     : locked
@@ -33,6 +25,10 @@ export function Tile({
       : lit
         ? "var(--color-brass-dim)"
         : "var(--color-border)";
+
+  function truncate(s: string, max: number): string {
+    return s.length > max ? s.slice(0, max - 1) + "…" : s;
+  }
 
   return (
     <g
@@ -53,7 +49,7 @@ export function Tile({
       onFocus={() => onHover(path.id)}
       onBlur={() => onHover(null)}
     >
-      {lit && !locked && (
+      {lit && !locked ? (
         <rect
           x={-6}
           y={-6}
@@ -65,7 +61,7 @@ export function Tile({
           strokeOpacity={0.18}
           strokeWidth={10}
         />
-      )}
+      ) : null}
       <rect
         width={box.w}
         height={box.h}
@@ -113,12 +109,7 @@ export function Tile({
 
         {/* status label */}
         <g transform={`translate(14 ${box.h - 22})`}>
-          <circle
-            cx={4}
-            cy={-4}
-            r={4}
-            fill={lit ? "var(--color-brass)" : "var(--color-muted)"}
-          />
+          <circle cx={4} cy={-4} r={4} fill={lit ? "var(--color-brass)" : "var(--color-muted)"} />
           <text
             x={16}
             y={0}
@@ -131,8 +122,8 @@ export function Tile({
         </g>
 
         {/* brass seal when charted */}
-        {lit && (
-          <g transform={`translate(${box.w - 30} ${box.h - 30})`} aria-hidden>
+        {lit ? (
+          <g transform={`translate(${box.w - 30} ${box.h - 30})`} aria-hidden="true">
             <circle
               r={11}
               cx={11}
@@ -151,11 +142,11 @@ export function Tile({
               strokeLinejoin="round"
             />
           </g>
-        )}
+        ) : null}
       </g>
 
       {/* node-read badge: how many taught nodes were marked complete */}
-      {nodeReadCount > 0 && (
+      {nodeReadCount > 0 ? (
         <g transform={`translate(${boss ? box.w - 62 : box.w - 38} 12)`} aria-label={`已學 ${nodeReadCount} 個 node`}>
           <title>{`已學 ${nodeReadCount} 個 node`}</title>
           <rect
@@ -166,7 +157,9 @@ export function Tile({
             stroke="var(--color-brass-dim)"
             strokeWidth={1}
           />
-          <Check size={12} x={2} y={2} color="var(--color-brass)" strokeWidth={2.5} />
+          <g transform="translate(2 2)" style={{ color: "var(--color-brass)" }}>
+            <Check size={12} strokeWidth={2.5} />
+          </g>
           <text
             x={17}
             y={18}
@@ -178,17 +171,17 @@ export function Tile({
             {nodeReadCount}
           </text>
         </g>
-      )}
+      ) : null}
 
-      {boss && (
-        <g transform={`translate(${box.w - 34} 12)`} aria-hidden>
-          <Crown size={20} color="var(--color-brass)" strokeWidth={2} x={0} y={0} />
+      {boss ? (
+        <g transform={`translate(${box.w - 34} 12)`} aria-hidden="true" style={{ color: "var(--color-brass)" }}>
+          <Crown size={20} strokeWidth={2} />
         </g>
-      )}
+      ) : null}
 
       {/* lock overlay for gated tiers */}
-      {locked && (
-        <g transform={`translate(${box.w / 2} 20)`} aria-hidden>
+      {locked ? (
+        <g transform={`translate(${box.w / 2} 20)`} aria-hidden="true">
           <rect
             x={-11}
             y={-11}
@@ -198,13 +191,11 @@ export function Tile({
             fill="var(--color-surface-2)"
             fillOpacity={0.9}
           />
-          <Lock size={14} x={-7} y={-7} color="var(--color-muted)" strokeWidth={2} />
+          <g transform="translate(-7 -7)" style={{ color: "var(--color-muted)" }}>
+            <Lock size={14} strokeWidth={2} />
+          </g>
         </g>
-      )}
+      ) : null}
     </g>
   );
-}
-
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }

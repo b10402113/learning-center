@@ -1,6 +1,6 @@
-import { Crown } from "lucide-react";
 import type { FloorBox } from "../lib/layout";
 import type { TierBossState } from "../lib/selectors";
+import { Crown } from "./icons/Crown";
 
 interface FloorLayerProps {
   floors: FloorBox[];
@@ -15,9 +15,9 @@ export function FloorLayer({ floors, width, bossStates, onUnlock }: FloorLayerPr
       {floors.map((f, i) => {
         const state = bossStates.get(f.tier) ?? "locked";
         return (
-          <g key={`${f.tier}-${f.title}`}>
+          <g key={f.tier}>
             {/* floor band */}
-            <g aria-hidden>
+            <g aria-hidden="true">
               <rect
                 x={f.laneX - 40}
                 y={f.y}
@@ -91,7 +91,9 @@ export function FloorLayer({ floors, width, bossStates, onUnlock }: FloorLayerPr
                   stroke="var(--color-brass-dim)"
                   strokeWidth={1}
                 />
-                <Crown size={13} x={4} y={69} color="var(--color-brass)" strokeWidth={2} />
+                <g transform="translate(4 69)" style={{ color: "var(--color-brass)" }}>
+                  <Crown size={13} strokeWidth={2} />
+                </g>
                 <text
                   x={24}
                   y={80}
@@ -103,10 +105,7 @@ export function FloorLayer({ floors, width, bossStates, onUnlock }: FloorLayerPr
                 </text>
               </g>
             ) : state === "beaten" ? (
-              <g
-                transform={`translate(${f.laneX} ${f.y + f.height / 2})`}
-                aria-label={`${f.title}：已解鎖`}
-              >
+              <g transform={`translate(${f.laneX} ${f.y + f.height / 2})`} aria-label={`${f.title}：已解鎖`}>
                 <text
                   x={2}
                   y={80}

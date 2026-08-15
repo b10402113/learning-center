@@ -2,11 +2,11 @@ import type { SubjectGraph } from "./types";
 
 export const TILE_W = 200;
 export const TILE_H = 96;
-export const COL_GAP = 56;
-export const ROW_GAP = 150;
+export const COL_GAP = 78;
+export const ROW_GAP = 172;
 export const LANE_W = 132;
-export const TIER_PAD_TOP = 44;
-export const TIER_PAD_BOTTOM = 44;
+export const TIER_PAD_TOP = 76;
+export const TIER_PAD_BOTTOM = 76;
 export const MAP_PAD = 200;
 
 const ROMAN = ["", "Ⅰ", "Ⅱ", "Ⅲ", "Ⅳ", "Ⅴ", "Ⅵ", "Ⅶ", "Ⅷ", "Ⅸ", "Ⅹ", "Ⅺ", "Ⅻ"];
@@ -56,10 +56,21 @@ export interface Star {
   delay: number;
 }
 
+export interface NodeMarker {
+  id: string;
+  title: string;
+  tier: number;
+  x: number;
+  y: number;
+  /** Teaching-lesson tile centers this node is force-connected to. */
+  anchors: { x: number; y: number; pathId: string }[];
+}
+
 export interface TowerLayout {
   tiles: Record<string, TileBox>;
   floors: FloorBox[];
   edges: EdgePath[];
+  nodeMarkers: NodeMarker[];
   bossIds: string[];
   stars: Star[];
   width: number;
@@ -86,10 +97,87 @@ function mulberry32(seed: number) {
   };
 }
 
+interface LayoutNode {
+  id: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  anchors: { x: number; y: number }[];
+  /** Seeded constant bias that breaks symmetric equilibria organically. */
+  wanderX: number;
+  wanderY: number;
+}
+
+// A tiny, fully deterministic force layout: concept nodes are springs tethered
+// to their teaching lessons, repelled by each other and gently pushed off every
+// tile. Fixed iteration count + seeded start = stable positions across runs.
+function settleNodes(
+  nodes: LayoutNode[],
+  tileRects: { x: number; y: number; w: number; h: number }[],
+): void {
+  const STEPS = 300;
+  const SPRING_K = 0.12;
+  const SPRING_TARGET = 88;
+  const REPULSE = 240;
+  const DAMPING = 0.86;
+  for (let s = 0; s < STEPS; s++) {
+      for (const n of nodes) {
+        let fx = n.wanderX;
+        let fy = n.wanderY;
+        for (const a of n.anchors) {
+        let dx = a.x - n.x;
+        let dy = a.y - n.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const f = SPRING_K * (len - SPRING_TARGET);
+        fx += (dx / len) * f;
+        fy += (dy / len) * f;
+      }
+      for (const m of nodes) {
+        if (m === n) continue;
+        let dx = n.x - m.x;
+        let dy = n.y - m.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 1) {
+          dx = n.id < m.id ? 1 : -1;
+          dy = 0;
+          d2 = 1;
+        }
+        const d = Math.sqrt(d2);
+        fx += (dx / d) * (REPULSE / d);
+        fy += (dy / d) * (REPULSE / d);
+      }
+      for (const r of tileRects) {
+        const cx = Math.max(r.x, Math.min(n.x, r.x + r.w));
+        const cy = Math.max(r.y, Math.min(n.y, r.y + r.h));
+        let dx = n.x - cx;
+        let dy = n.y - cy;
+        let d = Math.hypot(dx, dy);
+        if (d < 30) {
+          if (d < 1) {
+            dx = 1;
+            d = 1;
+          }
+          const push = 9 * (1 - d / 30);
+          fx += (dx / d) * push;
+          fy += (dy / d) * push;
+        }
+      }
+      n.vx = (n.vx + fx) * DAMPING;
+      n.vy = (n.vy + fy) * DAMPING;
+    }
+    for (const n of nodes) {
+      n.x += n.vx;
+      n.y += n.vy;
+    }
+  }
+}
+
 export function computeLayout(graph: SubjectGraph): TowerLayout {
   const tiles: Record<string, TileBox> = {};
   const floors: FloorBox[] = [];
   const bossIds: string[] = [];
+  const nodeMarkers: NodeMarker[] = [];
 
   const laneX = MAP_PAD;
   const firstCol = laneX + LANE_W + COL_GAP;
@@ -128,6 +216,60 @@ export function computeLayout(graph: SubjectGraph): TowerLayout {
     const last = tier.pathIds[tier.pathIds.length - 1];
     if (last) bossIds.push(last);
 
+    // Concept node markers are force-laid out and tethered to the lessons that
+    // teach them: each node springs toward its teaching tiles, repels its
+    // neighbours, and is pushed off every tile. The tiles themselves stay
+    // exactly where the tower puts them — only the nodes float. Deterministic:
+    // seeded start positions + a fixed number of steps.
+    const tierNodes = Object.values(graph.nodes)
+      .filter((n) => n.tier === tier.tier)
+      .sort((a, b) => a.order - b.order);
+    const rand = mulberry32(hashSeed(`${graph.subject}:tier:${tier.tier}`));
+    const tierTiles = tier.pathIds
+      .map((id) => tiles[id])
+      .filter((t): t is TileBox => Boolean(t));
+    const fallback = tierTiles.length
+      ? {
+          x: tierTiles.reduce((a, t) => a + t.cx, 0) / tierTiles.length,
+          y: tierTiles.reduce((a, t) => a + t.cy, 0) / tierTiles.length,
+        }
+      : null;
+    const teachingAnchors = (nodeId: string): { x: number; y: number; pathId: string }[] =>
+      (graph.nodes[nodeId]?.taughtBy ?? [])
+        .map((pid) => tiles[pid])
+        .filter((t): t is TileBox => Boolean(t))
+        .map((t) => ({ x: t.cx, y: t.cy, pathId: t.id }));
+    const forceNodes: LayoutNode[] = tierNodes.map((n) => {
+      const anchors = teachingAnchors(n.id);
+      const home = anchors.length
+        ? anchors.reduce((a, p) => ({ x: a.x + p.x / anchors.length, y: a.y + p.y / anchors.length }), { x: 0, y: 0 })
+        : fallback ?? { x: firstCol + TILE_W / 2, y: contentTop + TILE_H / 2 };
+      return {
+        id: n.id,
+        x: home.x + (rand() - 0.5) * 96,
+        y: home.y + (rand() - 0.5) * 64,
+        vx: 0,
+        vy: 0,
+        anchors: anchors.length ? anchors : fallback ? [fallback] : [],
+        wanderX: (rand() - 0.5) * 6,
+        wanderY: (rand() - 0.5) * 6,
+      };
+    });
+    settleNodes(forceNodes, Object.values(tiles).map((t) => ({ x: t.x, y: t.y, w: t.w, h: t.h })));
+    forceNodes.forEach((fn, i) => {
+      const n = tierNodes[i];
+      nodeMarkers.push({
+        id: n.id,
+        title: n.title,
+        tier: n.tier,
+        x: fn.x,
+        y: fn.y,
+        anchors: teachingAnchors(n.id),
+      });
+      // the label + leader line reach ~74px to the right of the marker
+      maxRight = Math.max(maxRight, fn.x + 18 + Math.min(56, n.title.length * 7) + 6);
+    });
+
     cursorY = floorTop + floorHeight + ROW_GAP;
   }
 
@@ -138,7 +280,7 @@ export function computeLayout(graph: SubjectGraph): TowerLayout {
 
   const stars = makeStars(graph.subject, width, height);
 
-  return { tiles, floors, edges, bossIds, stars, width, height };
+  return { tiles, floors, edges, nodeMarkers, bossIds, stars, width, height };
 }
 
 function buildEdgePaths(

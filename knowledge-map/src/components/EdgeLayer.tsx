@@ -7,7 +7,7 @@ interface EdgeLayerProps {
 
 export function EdgeLayer({ edges, hoveredId }: EdgeLayerProps) {
   return (
-    <g aria-hidden>
+    <g aria-hidden="true">
       {edges.map((e) => {
         const active = hoveredId !== null && (e.from === hoveredId || e.to === hoveredId);
         const dim = hoveredId !== null && !active;
@@ -26,7 +26,6 @@ export function EdgeLayer({ edges, hoveredId }: EdgeLayerProps) {
             </g>
           );
         }
-
         if (e.kind === "shared") {
           return (
             <g key={e.id} opacity={baseOpacity}>
@@ -38,7 +37,7 @@ export function EdgeLayer({ edges, hoveredId }: EdgeLayerProps) {
                 strokeDasharray="4 5"
                 strokeOpacity={0.85}
               />
-              {active && e.label && (
+              {active && e.label ? (
                 <text
                   x={e.labelX}
                   y={e.labelY}
@@ -49,12 +48,10 @@ export function EdgeLayer({ edges, hoveredId }: EdgeLayerProps) {
                 >
                   {e.label}
                 </text>
-              )}
+              ) : null}
             </g>
           );
         }
-
-        // explicit
         return (
           <g key={e.id} opacity={baseOpacity} filter="url(#beaconGlow)">
             <path
@@ -65,7 +62,7 @@ export function EdgeLayer({ edges, hoveredId }: EdgeLayerProps) {
               strokeOpacity={0.9}
               markerEnd="url(#arrowExplicit)"
             />
-            {e.label && (
+            {e.label ? (
               <text
                 x={e.labelX}
                 y={e.labelY}
@@ -76,7 +73,7 @@ export function EdgeLayer({ edges, hoveredId }: EdgeLayerProps) {
               >
                 {e.label}
               </text>
-            )}
+            ) : null}
           </g>
         );
       })}

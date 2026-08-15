@@ -62,3 +62,14 @@ export interface FocusRequest {
   pathId: string;
   tick: number;
 }
+
+// Imperative camera surface exposed by TowerMap to its owner (map controls,
+// subject switches, deep-link seating).
+export interface TowerMapHandle {
+  fit: () => void;
+  seatOnPath: (pathId: string) => void;
+  zoomBy: (factor: number) => void;
+}
+
+// A detail-pane destination: a lesson path or a concept node.
+export type View = { kind: "path"; id: string } | { kind: "node"; id: string };
