@@ -1,6 +1,6 @@
 # Learning Path Schema
 
-This repo turns raw material into customized, subject-specific lessons. A **path** is one 10–15 minute lesson article. A **node** is a reusable concept page that carries the detailed explanation behind one or more paths. **Edges** connect nodes for higher-order comparison and judgment.
+This repo turns raw material into customized, subject-specific lessons. A **node** is one 10–15 minute lesson article. An **element** is a reusable concept page that carries the detailed explanation behind one or more nodes. **Edges** connect elements for higher-order comparison and judgment.
 
 ## Architecture
 
@@ -15,12 +15,12 @@ This repo turns raw material into customized, subject-specific lessons. A **path
 ├── learn/             ← generated learning material, one folder per subject
 │   └── <subject>/
 │       ├── MEMORY.md  ← learner profile from /learn-init (incl. language, tune, tune-scope)
-│       ├── ROADMAP.md ← path index and course plan
+│       ├── ROADMAP.md ← node index and course plan
 │       ├── digests/   ← two-level source digests from /learn-init & /roadmap
-│       ├── prepares/  ← optional per-path pre-lesson preview notes
-│       ├── paths/     ← one lesson file per path
-│       ├── nodes/     ← canonical concept pages
-│       └── edges/     ← relationship pages between node pairs
+│       ├── prepares/  ← optional per-node pre-lesson preview notes
+│       ├── nodes/     ← one lesson file per node
+│       ├── elements/  ← canonical concept pages
+│       └── edges/     ← relationship pages between element pairs
 ├── wiki/              ← legacy, no longer maintained
 └── *.md               ← pedagogy references
 ```
@@ -31,29 +31,29 @@ This repo turns raw material into customized, subject-specific lessons. A **path
 /tune <author>                ← optional, before /learn-init; produces tune/<author>/TUNE.md
 /learn-init <subject>
     → /roadmap <subject>
-    → /nodes <subject>/<path-name>
-    → /edges <subject>/<path-name>
+    → /nodes <subject>/<node-name>
+    → /edges <subject>/<node-name>
 ```
 
-Each stage is user-invoked. `subject/path-name` is explicit so a path name never has to be unique across subjects. The roadmap stage creates lesson skeletons; the nodes stage extracts canonical concepts and writes the lesson; the edges stage adds high-value relationships. A tune is a styling layer chosen per subject at `/learn-init` and applied by the writer skills.
+Each stage is user-invoked. `subject/node-name` is explicit so a node name never has to be unique across subjects. The roadmap stage creates lesson skeletons; the nodes stage extracts canonical elements and writes the lesson; the edges stage adds high-value relationships. A tune is a styling layer chosen per subject at `/learn-init` and applied by the writer skills.
 
 ## Core Principles
 
 1. **Sources are immutable** — Never modify files in `sources/`. Transcripts in `tune/` are immutable the same way.
-2. **Paths teach** — Each path has one learning goal and is readable as a 10–15 minute lesson. A path may use several nodes.
-3. **Nodes crystallize** — A node is self-contained, reusable, and anchored to `MEMORY.md` or an earlier concept. The node carries detail; the path carries the lesson narrative.
-4. **Nodes compound** — Reusing a concept updates its canonical node incrementally. Preserve useful existing explanations while adding supported depth, examples, connections, and sources.
+2. **Nodes teach** — Each node has one learning goal and is readable as a 10–15 minute lesson. A node may use several elements.
+3. **Elements crystallize** — An element is self-contained, reusable, and anchored to `MEMORY.md` or an earlier concept. The element carries detail; the node carries the lesson narrative.
+4. **Elements compound** — Reusing a concept updates its canonical element incrementally. Preserve useful existing explanations while adding supported depth, examples, connections, and sources.
 5. **Edges interleave** — Edges make the learner compare, contrast, and judge instead of retrieving in isolation. Prefer a few strong relationships.
-6. **Knowledge stays traceable** — Every claim points to a source, and every path records the nodes it actually teaches.
+6. **Knowledge stays traceable** — Every claim points to a source, and every node records the elements it actually teaches.
 7. **Voice styles, pedagogy decides** — A tune supplies the voice; `MEMORY.md` owns the language and teaching constraints. Writer skills enforce both, and content stays cited to its subject sources.
 
 ## Skills
 
 - `/tune <author>` — read one YouTuber's transcripts in `tune/<author>/` and write their `TUNE.md` voice profile (merge lifecycle, per `docs/reference/tune.md`)
 - `/learn-init <subject>` — ensure the subject's source digests exist (sub-agent path for large sources per `docs/reference/source-reading.md`), interview the learner, and write `learn/<subject>/MEMORY.md` (including language, tune, and tune-scope)
-- `/roadmap <subject>` — partition the material into 10–15 minute paths against the formula baseline, propose the full candidate list for learner confirmation, then write `ROADMAP.md` and path skeletons
-- `/nodes <subject>/<path-name>` — extract or update the path's canonical nodes from digests (lazy sub-agent pulls for section detail), write detailed node pages, and complete that path's lesson article
-- `/edges <subject>/<path-name>` — propose and incrementally write strong edges for the path, including justified cross-path edges
+- `/roadmap <subject>` — partition the material into 10–15 minute nodes against the formula baseline, propose the full candidate list for learner confirmation, then write `ROADMAP.md` and node skeletons
+- `/nodes <subject>/<node-name>` — extract or update the node's canonical elements from digests (lazy sub-agent pulls for section detail), write detailed element pages, and complete that node's lesson article
+- `/edges <subject>/<node-name>` — propose and incrementally write strong edges for the node, including justified cross-node edges
 
 ## Source reading
 
@@ -63,7 +63,7 @@ All stages share `docs/reference/source-reading.md`. Sources are read once into 
 - Small source: the main context reads it directly and writes the digest itself.
 - Digest lifecycle: compare the stored `source_hash`; reuse on match, rebuild on missing/mismatch. Sources are immutable, so digests are stable.
 
-**Path count baseline.** `target = clamp(round(total_pdftotext_lines / 1100), 3, 30)`. It is a soft target for the roadmap checkpoint, not a gate — the learner confirms or adjusts the final partition.
+**Node count baseline.** `target = clamp(round(total_pdftotext_lines / 1100), 3, 30)`. It is a soft target for the roadmap checkpoint, not a gate — the learner confirms or adjusts the final partition.
 
 ## Tune reading
 
@@ -73,16 +73,16 @@ All stages share `docs/reference/source-reading.md`. Sources are read once into 
 
 The writing skills are the single source of truth for generated templates.
 
-- **Roadmap** — `learn/<subject>/ROADMAP.md`. Frontmatter: `subject, status, created`. It indexes paths; it does not list nodes.
-- **Path** — `learn/<subject>/paths/<path-id>.md`. Frontmatter: `id, title, subject, tier, order, duration, status, goal, sources, nodes, created, updated`. Sections: Learning goal · Nodes · Lesson · Sources. Tiers organize paths from general to specific; they do not enumerate nodes.
-- **Node** — `learn/<subject>/nodes/<node-id>.md`. Frontmatter: `id, title, subject, tier, order, paths, sources, created, updated`. Sections: Problem Statement · Why it matters · How it works · In plain terms (optional) · Analogy (optional) · Practical use · Prerequisites (optional) · Connections · Deep dive · Questions. `Connections` and `Deep dive` stay in English; other headings render per `MEMORY.md` language.
-- **Edge** — `learn/<subject>/edges/<edge-id>.md`. Frontmatter: `title, type, from, to, paths, created, updated`. Sections: The relationship · Why it matters · When each applies · Interleave.
+- **Roadmap** — `learn/<subject>/ROADMAP.md`. Frontmatter: `subject, status, created`. It indexes nodes; it does not list elements.
+- **Node** — `learn/<subject>/nodes/<node-id>.md`. Frontmatter: `id, title, subject, tier, order, duration, status, goal, sources, elements, prerequisites, created, updated`. Sections: Learning goal · Elements · Lesson · Sources. Tiers organize nodes from general to specific; they do not enumerate elements. `prerequisites` is a list of `learn/<subject>/elements/<id>` or `learn/<subject>/nodes/<id>` stable IDs; the generator merges these with connections derived from element `Connections` sections.
+- **Element** — `learn/<subject>/elements/<element-id>.md`. Frontmatter: `id, title, subject, tier, order, type, nodes, sources, created, updated`. `type` is `article` (default), `video`, or `question`; `video` requires `videoUrl`, `question` requires a `questions:` block (each entry has `question`, `options`, `answer` — 0-indexed). Sections: Problem Statement · Why it matters · How it works · In plain terms (optional) · Analogy (optional) · Practical use · Prerequisites (optional) · Connections · Deep dive · Questions. `Connections` and `Deep dive` stay in English; other headings render per `MEMORY.md` language.
+- **Edge** — `learn/<subject>/edges/<edge-id>.md`. Frontmatter: `title, type, from, to, nodes, created, updated`. Sections: The relationship · Why it matters · When each applies · Interleave.
 - **TUNE** — `tune/<author-slug>/TUNE.md`. Frontmatter: `id, title, files, created, updated`. Sections: Voice · Explanation moves · Style habits · Rhetorical devices · Exemplars · Negative list. Format and merge lifecycle per `docs/reference/tune.md`.
 
-Node links use stable, path-qualified IDs with display aliases:
+Element links use stable, node-qualified IDs with display aliases:
 
 ```markdown
-[[learn/<subject>/nodes/<node-id>|<Node title>]]
+[[learn/<subject>/elements/<element-id>|<Element title>]]
 ```
 
 Source links use:
@@ -91,21 +91,21 @@ Source links use:
 [[sources/<subject>/<file>]]
 ```
 
-Path links use stable path IDs with display aliases:
+Node links use stable node IDs with display aliases:
 
 ```markdown
-[[learn/<subject>/paths/<path-id>|<Path title>]]
+[[learn/<subject>/nodes/<node-id>|<Node title>]]
 ```
 
 ## Status
 
-The subject roadmap uses `draft → confirmed`. Each path uses:
+The subject roadmap uses `draft → confirmed`. Each node uses:
 
 ```text
 draft → confirmed → nodes-written → content-written → edges-written
 ```
 
-`/roadmap` creates `draft` paths. Invoking `/nodes <subject>/<path-id>` confirms that path automatically, then moves it through `nodes-written` and `content-written`. `/edges` asks for confirmation of its candidate edge set and only then marks the path `edges-written`.
+`/roadmap` creates `draft` nodes. Invoking `/nodes <subject>/<node-id>` confirms that node automatically, then moves it through `nodes-written` and `content-written`. `/edges` asks for confirmation of its candidate edge set and only then marks the node `edges-written`.
 
 ## Operations
 
@@ -113,35 +113,35 @@ draft → confirmed → nodes-written → content-written → edges-written
 
 When the learner asks a question about a subject:
 
-1. Search the subject's paths, nodes, and edges.
-2. Synthesize an answer with stable node citations and source citations.
-3. Offer to file a reusable answer as a node or edge when it adds durable knowledge.
+1. Search the subject's nodes, elements, and edges.
+2. Synthesize an answer with stable element citations and source citations.
+3. Offer to file a reusable answer as an element or edge when it adds durable knowledge.
 
 ### Lint
 
 Periodically check `learn/<subject>/` for:
 
-- Broken path-qualified node links or source links
-- Node IDs that do not match their filenames
-- Paths whose `nodes` list disagrees with article links
-- Nodes missing two or more connections or retrieval questions
-- Orphan nodes, paths, or edges
+- Broken node-qualified element links or source links
+- Element IDs that do not match their filenames
+- Nodes whose `elements` list disagrees with article links
+- Elements missing two or more connections or retrieval questions
+- Orphan nodes, elements, or edges
 - Contradictory or stale claims; mark stale claims `[needs update]` instead of deleting them
-- Edges whose `from`, `to`, or `paths` references no longer resolve
+- Edges whose `from`, `to`, or `nodes` references no longer resolve
 - Large sources missing a digest in `learn/<subject>/digests/`
-- Path count deviating more than ±40% from the formula baseline
+- Node count deviating more than ±40% from the formula baseline
 - Digest `source_hash` that no longer matches its source file
-- Source locators in paths or nodes that cannot be found in the source's digest
-- Prepare notes whose `path` frontmatter does not match an existing `<subject>/<path-id>`
+- Source locators in nodes or elements that cannot be found in the source's digest
+- Prepare notes whose `node` frontmatter does not match an existing `<subject>/<node-id>`
 - A `tune` in `MEMORY.md` that does not resolve to `tune/<slug>/TUNE.md`
 - TUNE `files` hashes that no longer match their transcript files
 - Transcripts in `tune/<author>/` with no `TUNE.md` (cannot be chosen at `/learn-init`)
 
 ## Quality Standards
 
-- **Useful** — every path has one learner-facing goal and a readable lesson
-- **Connected** — every node has at least two meaningful cross-references
-- **Anchored** — every node ties to learner experience or an earlier concept
-- **Checked** — every node ends with retrieval questions, including relationship and value-judgment questions
-- **Current** — later paths deepen canonical nodes without erasing useful prior explanations
+- **Useful** — every node has one learner-facing goal and a readable lesson
+- **Connected** — every element has at least two meaningful cross-references
+- **Anchored** — every element ties to learner experience or an earlier concept
+- **Checked** — every element ends with retrieval questions, including relationship and value-judgment questions
+- **Current** — later nodes deepen canonical elements without erasing useful prior explanations
 - **Cited** — every substantive claim traces back to an immutable source

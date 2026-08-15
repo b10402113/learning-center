@@ -1,44 +1,81 @@
-# Worked node
+# Worked node article
 
-A complete `learn/<subject>/nodes/<node-id>.md` as it should look after `/nodes`: frontmatter, every section, glosses, cross-node `Connections`, source-linked `Deep dive`, and the retrieval `Questions`, in the subject's `language`.
+A complete `learn/<subject>/nodes/<node-id>.md` as it should look after `/nodes`: frontmatter with `prerequisites`, the `## Lesson` narrative, node-qualified element links, and source citations, in the subject's `language`.
 
-## 物件導向 (Object-Oriented)
+```markdown
+---
+id: oop-foundation
+title: 理論一：當談論面向對象的時候，我們到底在談論什麼？
+subject: design-patterns
+tier: 1
+order: 1
+duration: 10-15 minutes
+status: content-written
+goal: 理解物件導向編程、物件導向編程語言、物件導向分析與設計的定義與差異，以及它們在軟體開發流程中的角色。
+sources:
+  - "[[sources/design-patterns/oop-ch1#oop-concepts-overview]]"
+  - "[[sources/design-patterns/oop-ch1#oop-vs-oopl]]"
+  - "[[sources/design-patterns/oop-ch1#ooa-ood]]"
+elements:
+  - design-patterns/oop-paradigm
+  - design-patterns/oop-history-video
+  - design-patterns/oop-four-features-quiz
+prerequisites:
+  - learn/design-patterns/elements/data-types-variables
+  - learn/design-patterns/elements/functions-parameters
+created: 2026-08-10
+updated: 2026-08-10
+---
 
-### Problem Statement
+# 理論一：當談論面向對象的時候，我們到底在談論什麼？
 
-在早期撰寫程式時，通常採用「程序式設計」（Procedural Programming），也就是把指令由上到下一行一行寫出來，並透過大量的全域變數與函式來處理資料。當專案規模變大、邏輯變得複雜時，程式碼會變成難以牽一髮而動全身的「義大利麵條程式碼」（Spaghetti Code）。變數容易被意外修改，且相同邏輯在不同地方重複出現，導致協作困難、維護成本極高。
+## Learning goal
 
-### 為甚麼這個重要？
+理解物件導向編程（OOP）、物件導向編程語言（OOPL）、物件導向分析（OOA）與物件導向設計（OOD）的定義與差異，以及它們在軟體開發流程中的角色。
 
-物件導向提供了一種符合人類認知直覺的「模組化」架構思維。它將複雜的系統拆解成互相獨立卻又能彼此溝通的個體，大幅提升了程式碼的**可讀性**、**可重用性**與**易維護性**，是建構大型軟體系統與團隊協作不可或缺的基礎。
+## Elements
 
-### 如何解決
+- [[design-patterns/oop-paradigm|物件導向典範 (Object-Oriented Paradigm)]] — 文章，介紹 OOP 四大特性
+- [[design-patterns/oop-history-video|物件導向發展史 (History of OOP)]] — 影片，從 Simula 到 C++ 的演進
+- [[design-patterns/oop-four-features-quiz|物件導向四大特性自測 (OOP Four Features Quiz)]] — 測驗，確認你能區分四大特性
 
-物件導向程式設計（OOP）透過將「資料（屬性，Attributes）」與「操作這些資料的行為（方法，Methods）」綁定在一起，形成一個個獨立的「物件（Objects）」。
-它主要依賴四大核心特性來解決上述問題：
+## Lesson
 
-1. **封裝（Encapsulation）**：隱藏物件內部的細節與狀態，只對外提供必要的接口（API），防止外部程式隨意修改內部資料。
-2. **繼承（Inheritance）**：允許新的類別（Class）直接沿用現有類別的屬性與方法，減少重複撰寫相同的程式碼。
-3. **多型（Polymorphism）**：相同的介面或呼叫方式，可以根據不同的物件型態，展現出不同的實作結果，提升系統的彈性。
-4. **抽象（Abstraction）**：提取出事物的核心特徵，忽略不必要的細節，讓開發者只需專注於「這東西能做什麼」，而不是「這東西底層怎麼實作的」。
+考慮到各個水平層次的同學，並且保證專欄內容的系統性、全面性，我會循序漸進地講解跟設計模式相關的所有內容。所以，專欄正文的第一個模塊，我會講一些設計原則、設計思想，比如，面向對象設計思想、經典設計原則以及重構相關的知識，為之後學習設計模式做鋪墊。
 
-### 白話解釋
+在第一個模塊中，我們又首先會講到面向對象相關的理論知識。提到面向對象，我相信很多人都不陌生，隨口都可以說出面向對象的四大特性：封裝、抽象、繼承、多態。實際上，面向對象這個概念包含的內容還不止這些。所以，今天我打算花一節課的時間，先大概跟你聊一下，當我們談論面向對象的時候，經常會談到的一些概念和知識點，為學習後面的幾節更加細化的內容做一個鋪墊。
 
-不要把程式當作「一份從頭讀到尾的待辦事項清單」，而是把程式碼想像成「一家公司」。公司裡有各式各樣的員工（物件），每個員工都有自己的職稱和專業能力（屬性與方法）。身為老闆（主程式），你不需要知道會計是怎麼按計算機的，你只需要叫會計（呼叫物件）去「產出財務報表（執行方法）」就好，員工們彼此會互相溝通合作來完成任務。
+### 什麼是面向對象編程和面向對象編程語言？
 
-### 譬喻
+面向對象編程的英文縮寫是 OOP，全稱是 Object Oriented Programming。對應地，面向對象編程語言的英文縮寫是 OOPL，全稱是 Object Oriented Programming Language。
 
-想像你在設計一款「汽車」。
+面向對象編程中有兩個非常重要、非常基礎的概念，那就是類（class）和對象（object）。這兩個概念最早出現在 1960 年，在 Simula 這種編程語言中第一次使用。而面向對象編程這個概念第一次被使用是在 Smalltalk 這種編程語言中。Smalltalk 被認為是第一個真正意義上的面向對象編程語言。
 
-- **類別（Class）**：就像是汽車的「設計藍圖」，定義了這輛車會有幾個輪子、什麼顏色，以及具有加速、煞車等功能。
-- **物件（Object）**：根據藍圖真正被製造出來、停在你車庫裡的那台「實體汽車」。
-- **封裝**：你只需要知道踩油門（呼叫方法）車子就會往前跑，完全不需要懂引擎內部是如何進行噴油與燃燒的（隱藏實作細節）。
-- **繼承**：如果今天要設計一台「電動車」，你可以直接拿「一般汽車」的藍圖來擴充（繼承），只要把「引擎」換成「馬達」，而不需要把輪胎、方向盤等設計圖重畫一遍。
+> **面向對象編程**是一種編程範式或編程風格。它以類或對象作為組織代碼的基本單元，並將封裝、抽象、繼承、多態四個特性，作為代碼設計和實現的基石。
 
-### 實務上的運用
+> **面向對象編程語言**是支持類或對象的語法機制，並有現成的語法機制，能方便地實現面向對象編程四大特性（封裝、抽象、繼承、多態）的編程語言。
 
-在後端架構或資料庫設計中極為常見。例如使用 SQLAlchemy 建立資料庫模型時，我們不會手寫一長串的 SQL 語法，而是會定義一個 `User` 類別，裡面的屬性包含 `id`、`username`、`email` 等。當我們需要更新資料庫時，只需實例化一個 `User` 物件，並呼叫類似 `user.save()` 的方法即可。在建構如高併發的股票監控系統時，也會將每一檔股票實作為一個物件，負責封裝自身的價格狀態（State）與價格更新邏輯（Method），再由外部的佇列系統來排程呼叫。
+一般來講，面向對象編程都是通過使用面向對象編程語言來進行的，但是，不用面向對象編程語言，我們照樣可以進行面向對象編程。反過來講，即便我們使用面向對象編程語言，寫出來的代碼也不一定是面向對象編程風格的，也有可能是面向過程編程風格的。
 
-### 我需要先知道什麼知識點，才能讓學習這個變得更容易？
+### 如何判定某編程語言是否是面向對象編程語言？
 
-基本資料型別與變數 (Data Types & Variables), 函式與參數傳遞 (Functions & Parameters), 變數作用域 (Variable Scope)
+實際上，我個人覺得，只要某種編程語言支持類或對象的語法概念，並且以此作為組織代碼的基本單元，那就可以被粗略地認為它就是面向對象編程語言了。至於是否有現成的語法機制，完全地支持了面向對象編程的四大特性、是否對四大特性有所取捨和優化，可以不作為判定的標準。
+
+### 什麼是面向對象分析和面向對象設計？
+
+跟面向對象編程經常放到一塊兒來講的還有另外兩個概念，那就是面向對象分析（OOA）和面向對象設計（OOD）。OOA、OOD、OOP 三個連在一起就是面向對象分析、設計、編程（實現），正好是面向對象軟件開發要經歷的三個階段。
+
+簡單點講，面向對象分析就是要搞清楚做什麼，面向對象設計就是要搞清楚怎麼做，面向對象編程就是將分析和設計的結果翻譯成代碼的過程。分析和設計兩個階段最終的產出是類的設計，包括程序被拆解為哪些類，每個類有哪些屬性方法，類與類之間如何交互等等。
+
+### 什麼是 UML？我們是否需要 UML？
+
+UML（Unified Model Language），統一建模語言，是一種非常複雜的建模工具。它不僅僅包含我們常提到類圖，還有用例圖、順序圖、活動圖、狀態圖、組件圖等。
+
+從我的開發經驗來說，UML 在互聯網公司的項目開發中，用處可能並不大。為了文檔化軟件設計或者方便討論軟件設計，大部分情況下，我們隨手畫個不那麼規範的草圖，能夠達意，方便溝通就夠了。
+
+## Sources
+
+- [[sources/design-patterns/oop-ch1#oop-concepts-overview]]
+- [[sources/design-patterns/oop-ch1#oop-vs-oopl]]
+- [[sources/design-patterns/oop-ch1#ooa-ood]]
+```
