@@ -52,6 +52,9 @@ sources:
   - "[[sources/fixture-subject/book.pdf#Intro]]"
 elements:
   - fixture-subject/n1
+prerequisites:
+  - learn/fixture-subject/elements/n3
+  - learn/fixture-subject/nodes/p2
 created: 2026-08-09
 updated: 2026-08-09
 ---
@@ -145,6 +148,9 @@ updated: 2026-08-09
 ## The idea
 First idea.
 
+## Prerequisites
+- [[learn/fixture-subject/elements/n2|N Two]] — helpful first
+
 ## Connections
 - [[learn/fixture-subject/elements/n2|N Two]] — links to n2
 - [[learn/fixture-subject/elements/n3|N Three]] — links to n3
@@ -194,6 +200,52 @@ Third idea.
 
 ## Connections
 - [[learn/fixture-subject/elements/n1|N One]] — links back
+`;
+
+const NV = `---
+id: nv
+title: N Video
+subject: fixture-subject
+tier: 1
+order: 4
+type: video
+videoUrl: "https://www.youtube.com/embed/abc123"
+nodes: []
+sources: []
+created: 2026-08-09
+updated: 2026-08-09
+---
+
+# N Video
+
+## The idea
+Watch this.
+`;
+
+const NQ = `---
+id: nq
+title: N Question
+subject: fixture-subject
+tier: 1
+order: 5
+type: question
+questions:
+  - question: "Which loop decides when to stop?"
+    options:
+      - "SPAL"
+      - "Task loop"
+      - "Meta loop"
+    answer: 1
+nodes: []
+sources: []
+created: 2026-08-09
+updated: 2026-08-09
+---
+
+# N Question
+
+## The idea
+Answer this.
 `;
 
 const EDGE = `---
@@ -250,6 +302,8 @@ const FILES = {
   "elements/n1.md": N1,
   "elements/n2.md": N2,
   "elements/n3.md": N3,
+  "elements/nv.md": NV,
+  "elements/nq.md": NQ,
   "edges/e1.md": EDGE,
   "prepares/p1.md": PREPARE_P1,
 };
@@ -267,6 +321,8 @@ function build() {
       "elements/n1.md": FILES["elements/n1.md"],
       "elements/n2.md": FILES["elements/n2.md"],
       "elements/n3.md": FILES["elements/n3.md"],
+      "elements/nv.md": FILES["elements/nv.md"],
+      "elements/nq.md": FILES["elements/nq.md"],
     },
     edgeFiles: { "edges/e1.md": FILES["edges/e1.md"] },
     prepareFiles: { "prepares/p1.md": FILES["prepares/p1.md"] },
@@ -290,6 +346,30 @@ describe("parseFrontmatter", () => {
     const { data } = parseFrontmatter(P2);
     expect(data.elements).toEqual([]);
     expect(data.sources).toEqual([]);
+  });
+
+  it("parses element type, videoUrl, and the structured questions block", () => {
+    const { data: video } = parseFrontmatter(NV);
+    expect(video.type).toBe("video");
+    expect(video.videoUrl).toBe("https://www.youtube.com/embed/abc123");
+
+    const { data: question } = parseFrontmatter(NQ);
+    expect(question.type).toBe("question");
+    expect(question.questions).toEqual([
+      {
+        question: "Which loop decides when to stop?",
+        options: ["SPAL", "Task loop", "Meta loop"],
+        answer: 1,
+      },
+    ]);
+  });
+
+  it("parses node prerequisites as a flat id list", () => {
+    const { data } = parseFrontmatter(P1);
+    expect(data.prerequisites).toEqual([
+      "learn/fixture-subject/elements/n3",
+      "learn/fixture-subject/nodes/p2",
+    ]);
   });
 });
 
@@ -417,6 +497,64 @@ describe("buildSubjectGraph", () => {
     expect(n1.connections).toEqual(["n2", "n3"]);
     expect(n1.taughtByNodes).toEqual(["p1"]);
     expect(n1.sources).toEqual(["[[sources/fixture-subject/book.pdf#Intro]]"]);
+  });
+
+  it("defaults an element without a type to article and omits conditional fields", () => {
+    const g = build();
+    const n1 = g.elements.n1;
+    expect(n1.type).toBe("article");
+    expect("videoUrl" in n1).toBe(false);
+    expect("questions" in n1).toBe(false);
+  });
+
+  it("emits videoUrl for a video element and omits questions", () => {
+    const g = build();
+    const nv = g.elements.nv;
+    expect(nv.type).toBe("video");
+    expect(nv.videoUrl).toBe("https://www.youtube.com/embed/abc123");
+    expect("questions" in nv).toBe(false);
+  });
+
+  it("emits structured questions for a question element and omits videoUrl", () => {
+    const g = build();
+    const nq = g.elements.nq;
+    expect(nq.type).toBe("question");
+    expect(nq.questions).toEqual([
+      {
+        question: "Which loop decides when to stop?",
+        options: ["SPAL", "Task loop", "Meta loop"],
+        answer: 1,
+      },
+    ]);
+    expect("videoUrl" in nq).toBe(false);
+  });
+
+  it("derives element prerequisiteIds from the element Prerequisites section links", () => {
+    const g = build();
+    // n1's Prerequisites section links to n2; n3 has no Prerequisites section
+    expect(g.elements.n1.prerequisiteIds).toEqual(["n2"]);
+    expect(g.elements.n3.prerequisiteIds).toEqual([]);
+  });
+
+  it("merges node frontmatter prerequisites with derived relatedElementIds, deduped, with source", () => {
+    const g = build();
+    const p1 = g.nodes.find((n) => n.id === "p1")!;
+    // frontmatter prerequisites: n3 (element), p2 (node)
+    // derived relatedElementIds for p1: n2, n3 (via n1's connections both directions)
+    // merged, deduped, sorted; source records where each id came from
+    expect(p1.prerequisiteIds).toEqual(["n2", "n3", "p2"]);
+    expect(p1.prerequisiteSources).toEqual({
+      n2: "derived",
+      n3: "frontmatter",
+      p2: "frontmatter",
+    });
+  });
+
+  it("keeps node prerequisiteIds empty when neither frontmatter nor connections exist", () => {
+    const g = build();
+    const p2 = g.nodes.find((n) => n.id === "p2")!;
+    expect(p2.prerequisiteIds).toEqual([]);
+    expect(p2.prerequisiteSources).toEqual({});
   });
 
   it("carries a prepare note into the node as rendered prepareHtml + hasPrepare", () => {

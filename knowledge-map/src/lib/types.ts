@@ -5,6 +5,14 @@ export type NodeStatus =
   | "content-written"
   | "edges-written";
 
+export type ElementType = "article" | "video" | "question";
+
+export interface QuizQuestion {
+  question: string;
+  options: string[];
+  answer: number;
+}
+
 export interface Node {
   id: string;
   title: string;
@@ -15,6 +23,8 @@ export interface Node {
   status: NodeStatus;
   taughtElementIds: string[];
   relatedElementIds: string[];
+  prerequisiteIds: string[];
+  prerequisiteSources: Record<string, "frontmatter" | "derived">;
   contentHtml: string;
   fullArticleHtml: string;
   sources: string[];
@@ -27,10 +37,14 @@ export interface Element {
   title: string;
   tier: number;
   order: number;
+  type: ElementType;
   taughtByNodes: string[];
   sources: string[];
   bodyHtml: string;
   connections: string[];
+  prerequisiteIds: string[];
+  videoUrl?: string;
+  questions?: QuizQuestion[];
 }
 
 export type EdgeKind = "spine" | "shared-concept" | "explicit";

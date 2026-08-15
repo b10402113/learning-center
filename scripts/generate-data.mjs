@@ -22,34 +22,150 @@ export function unquote(value) {
   return value;
 }
 
+function indentOf(line) {
+  return line.length - line.trimStart().length;
+}
+
+function nextNonEmptyIndex(lines, from) {
+  for (let i = from; i < lines.length; i++) {
+    if (lines[i].trim()) return i;
+  }
+  return -1;
+}
+
+// Parse the nested block that follows a `key:` / `- key:` line. `keyIndent` is
+// the indentation of that owner line. A list (`- item` lines) may sit at the
+// same indentation (legacy flat style) or deeper; a deeper mapping becomes the
+// value; otherwise the value is an empty list. Returns the parsed value and the
+// next unconsumed index.
+function parseNestedValue(lines, from, keyIndent) {
+  const next = nextNonEmptyIndex(lines, from);
+  if (next !== -1) {
+    const ind = indentOf(lines[next]);
+    if (ind >= keyIndent && lines[next].trim().startsWith("-")) {
+      const list = parseList(lines, next);
+      return { value: list.value, next: list.next };
+    }
+    if (ind > keyIndent) {
+      const mapping = parseMapping(lines, next);
+      return { value: mapping.value, next: mapping.next };
+    }
+  }
+  return { value: [], next: from };
+}
+
+// Parse a sequence of `key: value` / `key:` entries at a fixed indentation
+// level. Nested lists (`- item` lines) and nested mappings (deeper keys) are
+// parsed recursively. Returns the parsed object and the next unconsumed index.
+function parseMapping(lines, start) {
+  const value = {};
+  const baseIndent = indentOf(lines[start]);
+  let i = start;
+  while (i < lines.length) {
+    const line = lines[i].trimEnd();
+    if (!line.trim()) {
+      i++;
+      continue;
+    }
+    const ind = indentOf(line);
+    if (ind < baseIndent || line.trim().startsWith("-")) break;
+    if (ind > baseIndent) {
+      i++;
+      continue;
+    }
+    const kv = line.trim().match(/^([\w-]+):\s*(.*)$/);
+    if (!kv) {
+      i++;
+      continue;
+    }
+    const key = kv[1];
+    const rest = kv[2].trim();
+    if (rest === "") {
+      const nested = parseNestedValue(lines, i + 1, ind);
+      value[key] = nested.value;
+      i = nested.next;
+      continue;
+    }
+    if (rest === "[]") {
+      value[key] = [];
+    } else {
+      value[key] = coerce(unquote(rest));
+    }
+    i++;
+  }
+  return { value, next: i };
+}
+
+// Parse a sequence of `- item` lines at a fixed indentation level. Items may
+// be scalars or objects (`- key: value` with deeper sibling keys / nested
+// lists). Returns the parsed array and the next unconsumed index.
+function parseList(lines, start) {
+  const value = [];
+  const baseIndent = indentOf(lines[start]);
+  let i = start;
+  while (i < lines.length) {
+    const line = lines[i].trimEnd();
+    if (!line.trim()) {
+      i++;
+      continue;
+    }
+    const ind = indentOf(line);
+    if (ind < baseIndent) break;
+    if (ind > baseIndent) {
+      i++;
+      continue;
+    }
+    const item = line.trim().match(/^-\s+(.*)$/);
+    if (!item) break;
+    const content = item[1].trim();
+    const itemKv = content.match(/^([\w-]+):\s*(.*)$/);
+    if (itemKv) {
+      const obj = {};
+      const key = itemKv[1];
+      const rest = itemKv[2].trim();
+      if (rest === "") {
+        const nested = parseNestedValue(lines, i + 1, ind);
+        obj[key] = nested.value;
+        i = nested.next;
+      } else if (rest === "[]") {
+        obj[key] = [];
+        i++;
+      } else {
+        obj[key] = coerce(unquote(rest));
+        i++;
+      }
+      const next = nextNonEmptyIndex(lines, i);
+      if (next !== -1 && indentOf(lines[next]) > baseIndent) {
+        const mapping = parseMapping(lines, next);
+        Object.assign(obj, mapping.value);
+        i = mapping.next;
+      }
+      value.push(obj);
+      continue;
+    }
+    value.push(coerce(unquote(content)));
+    i++;
+  }
+  return { value, next: i };
+}
+
 export function parseFrontmatter(md) {
   const data = {};
   const match = md.match(/^---\n([\s\S]*?)\n---\n?/);
   let body = md;
   if (match) {
     body = md.slice(match[0].length);
-    let current = null;
-    for (const raw of match[1].split("\n")) {
-      const line = raw.trimEnd();
-      if (!line.trim()) continue;
-      const listStart = line.match(/^([\w-]+):\s*$/);
-      if (listStart) {
-        current = listStart[1];
-        data[current] = [];
+    const lines = match[1].split("\n");
+    let idx = 0;
+    while (idx < lines.length) {
+      const line = lines[idx].trimEnd();
+      if (!line.trim() || indentOf(lines[idx]) > 0 || line.trim().startsWith("-")) {
+        idx++;
         continue;
       }
-      const kv = line.match(/^([\w-]+):\s*(.*)$/);
-      if (kv) {
-        current = kv[1];
-        const value = unquote(kv[2].trim());
-        if (value === "[]") data[current] = [];
-        else data[current] = coerce(value);
-        continue;
-      }
-      const item = line.match(/^\s*-\s+(.*)$/);
-      if (item && current) {
-        data[current].push(coerce(unquote(item[1].trim())));
-      }
+      const { value, next } = parseMapping(lines, idx);
+      Object.assign(data, value);
+      idx = next;
     }
   }
   return { data, body };
@@ -197,10 +313,19 @@ function stripSubjectPrefix(value) {
   return String(value).split("/").pop();
 }
 
-function extractNodeLinks(body, subject) {
+function normalizeQuestions(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((q) => ({
+    question: String(q.question ?? ""),
+    options: Array.isArray(q.options) ? q.options.map((o) => String(o)) : [],
+    answer: Number(q.answer) || 0,
+  }));
+}
+
+function extractElementLinks(body, subject) {
   const links = new Set();
   const re = new RegExp(
-    `\\[\\[learn\\/${subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\/nodes\\/([^\\]|]+)`,
+    `\\[\\[learn\\/${subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\/elements\\/([^\\]|]+)`,
     "g",
   );
   let m;
@@ -208,6 +333,24 @@ function extractNodeLinks(body, subject) {
     links.add(m[1]);
   }
   return [...links];
+}
+
+// Extract element links from one named `## Heading` section of a body. `headings`
+// may list localized variants of the same section name; only Connections and
+// Deep dive are guaranteed to stay English, other section names render in the
+// subject's `MEMORY.md` language.
+function extractSectionElementLinks(body, subject, headings) {
+  const names = Array.isArray(headings) ? headings : [headings];
+  const pattern = names
+    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const re = new RegExp(`^##\\s+(?:${pattern})\\s*$`, "m");
+  const match = body.match(re);
+  if (!match) return [];
+  const rest = body.slice(match.index + match[0].length);
+  const nextHeading = rest.match(/^##\s/m);
+  const section = nextHeading ? rest.slice(0, nextHeading.index) : rest;
+  return extractElementLinks(section, subject);
 }
 
 function parseTiers(roadmap) {
@@ -230,10 +373,13 @@ function prepareById(prepareFiles) {
   return map;
 }
 
-export function buildSubjectGraph({ subject, roadmap, pathFiles, nodeFiles, edgeFiles, prepareFiles }) {
+const ELEMENT_TYPES = new Set(["article", "video", "question"]);
+
+export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, edgeFiles, prepareFiles }) {
   const prepares = prepareById(prepareFiles);
-  const paths = [];
-  for (const content of Object.values(pathFiles)) {
+  const nodes = [];
+  const nodePrereqById = new Map();
+  for (const content of Object.values(nodeFiles)) {
     const { data, body } = parseFrontmatter(content);
     if (!data.id) continue;
     const html = renderMarkdown(body);
@@ -241,7 +387,8 @@ export function buildSubjectGraph({ subject, roadmap, pathFiles, nodeFiles, edge
     const sourcesSection = hasSourcesHeading ? "" : renderSourcesSection(data.sources);
     const prepareContent = prepares.get(data.id);
     const prepareHtml = prepareContent ? renderMarkdown(parseFrontmatter(prepareContent).body) : null;
-    paths.push({
+    nodePrereqById.set(data.id, (data.prerequisites ?? []).map(stripSubjectPrefix));
+    nodes.push({
       id: data.id,
       title: data.title ?? data.id,
       tier: Number(data.tier) || 1,
@@ -249,7 +396,7 @@ export function buildSubjectGraph({ subject, roadmap, pathFiles, nodeFiles, edge
       duration: data.duration ?? "",
       goal: data.goal ?? "",
       status: ALLOWED_STATUS.has(data.status) ? data.status : "draft",
-      taughtNodeIds: (data.nodes ?? []).map(stripSubjectPrefix),
+      taughtElementIds: (data.elements ?? []).map(stripSubjectPrefix),
       sources: data.sources ?? [],
       contentHtml: html,
       fullArticleHtml: html + sourcesSection,
@@ -257,43 +404,52 @@ export function buildSubjectGraph({ subject, roadmap, pathFiles, nodeFiles, edge
       hasPrepare: prepareHtml !== null,
     });
   }
-  paths.sort((a, b) => a.tier - b.tier || a.order - b.order);
+  nodes.sort((a, b) => a.tier - b.tier || a.order - b.order);
 
-  const nodes = {};
-  for (const content of Object.values(nodeFiles)) {
+  const elements = {};
+  for (const content of Object.values(elementFiles)) {
     const { data, body } = parseFrontmatter(content);
     if (!data.id) continue;
-    nodes[data.id] = {
+    const type = ELEMENT_TYPES.has(data.type) ? data.type : "article";
+    elements[data.id] = {
       id: data.id,
       title: data.title ?? data.id,
       tier: Number(data.tier) || 1,
       order: Number(data.order) || 0,
-      taughtBy: (data.paths ?? []).map(stripSubjectPrefix),
+      type,
+      taughtByNodes: (data.nodes ?? []).map(stripSubjectPrefix),
       sources: data.sources ?? [],
       bodyHtml: renderMarkdown(body),
-      connections: extractNodeLinks(body, subject),
+      connections: extractElementLinks(body, subject),
+      prerequisiteIds: extractSectionElementLinks(body, subject, [
+        "Prerequisites",
+        "前置知識",
+        "我需要先知道什麼？",
+      ]),
+      ...(type === "video" ? { videoUrl: data.videoUrl ?? "" } : {}),
+      ...(type === "question" ? { questions: normalizeQuestions(data.questions) } : {}),
     };
   }
 
   const tierTitleById = new Map(parseTiers(roadmap).map((t) => [t.tier, t.title]));
   const byTier = new Map();
-  for (const p of paths) {
-    if (!byTier.has(p.tier)) byTier.set(p.tier, []);
-    byTier.get(p.tier).push(p.id);
+  for (const n of nodes) {
+    if (!byTier.has(n.tier)) byTier.set(n.tier, []);
+    byTier.get(n.tier).push(n.id);
   }
   const tiers = [...byTier.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([tier, pathIds]) => ({
+    .map(([tier, nodeIds]) => ({
       tier,
       title: tierTitleById.get(tier) ?? `Tier ${tier}`,
-      pathIds,
+      nodeIds,
     }));
 
-  const nodeToPaths = new Map();
-  for (const p of paths) {
-    for (const nodeId of p.taughtNodeIds) {
-      if (!nodeToPaths.has(nodeId)) nodeToPaths.set(nodeId, []);
-      nodeToPaths.get(nodeId).push(p);
+  const elementToNodes = new Map();
+  for (const n of nodes) {
+    for (const elementId of n.taughtElementIds) {
+      if (!elementToNodes.has(elementId)) elementToNodes.set(elementId, []);
+      elementToNodes.get(elementId).push(n);
     }
   }
 
@@ -307,14 +463,14 @@ export function buildSubjectGraph({ subject, roadmap, pathFiles, nodeFiles, edge
     edges.push(label ? { from, to, kind, label } : { from, to, kind });
   };
 
-  for (let i = 0; i + 1 < paths.length; i++) {
-    pushEdge(paths[i].id, paths[i + 1].id, "spine");
+  for (let i = 0; i + 1 < nodes.length; i++) {
+    pushEdge(nodes[i].id, nodes[i + 1].id, "spine");
   }
 
-  for (const teachingPaths of nodeToPaths.values()) {
-    for (let i = 0; i < teachingPaths.length; i++) {
-      for (let j = i + 1; j < teachingPaths.length; j++) {
-        pushEdge(teachingPaths[i].id, teachingPaths[j].id, "shared-concept");
+  for (const teachingNodes of elementToNodes.values()) {
+    for (let i = 0; i < teachingNodes.length; i++) {
+      for (let j = i + 1; j < teachingNodes.length; j++) {
+        pushEdge(teachingNodes[i].id, teachingNodes[j].id, "shared-concept");
       }
     }
   }
@@ -322,39 +478,49 @@ export function buildSubjectGraph({ subject, roadmap, pathFiles, nodeFiles, edge
   for (const content of Object.values(edgeFiles)) {
     const { data } = parseFrontmatter(content);
     if (!data.from || !data.to) continue;
-    const fromNode = stripSubjectPrefix(data.from);
-    const toNode = stripSubjectPrefix(data.to);
-    const fromPaths = nodeToPaths.get(fromNode) ?? [];
-    const toPaths = nodeToPaths.get(toNode) ?? [];
-    for (const fp of fromPaths) {
-      for (const tp of toPaths) {
-        pushEdge(fp.id, tp.id, "explicit", data.title);
+    const fromElement = stripSubjectPrefix(data.from);
+    const toElement = stripSubjectPrefix(data.to);
+    const fromNodes = elementToNodes.get(fromElement) ?? [];
+    const toNodes = elementToNodes.get(toElement) ?? [];
+    for (const fn of fromNodes) {
+      for (const tn of toNodes) {
+        pushEdge(fn.id, tn.id, "explicit", data.title);
       }
     }
   }
 
   edges.sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to) || a.kind.localeCompare(b.kind));
 
-  const nodesList = Object.values(nodes);
-  for (const p of paths) {
+  const elementsList = Object.values(elements);
+  for (const n of nodes) {
     const related = new Set();
-    for (const nodeId of p.taughtNodeIds) {
-      const node = nodes[nodeId];
-      if (!node) continue;
-      for (const c of node.connections) related.add(c);
-      for (const other of nodesList) {
-        if (other.connections.includes(nodeId)) related.add(other.id);
+    for (const elementId of n.taughtElementIds) {
+      const element = elements[elementId];
+      if (!element) continue;
+      for (const c of element.connections) related.add(c);
+      for (const other of elementsList) {
+        if (other.connections.includes(elementId)) related.add(other.id);
       }
     }
-    for (const nodeId of p.taughtNodeIds) related.delete(nodeId);
-    p.relatedNodeIds = [...related].sort();
+    for (const elementId of n.taughtElementIds) related.delete(elementId);
+    n.relatedElementIds = [...related].sort();
+
+    const frontmatterPrereqs = nodePrereqById.get(n.id) ?? [];
+    const merged = new Map();
+    for (const id of frontmatterPrereqs) merged.set(id, "frontmatter");
+    for (const id of n.relatedElementIds) {
+      if (!merged.has(id)) merged.set(id, "derived");
+    }
+    const sorted = [...merged.entries()].sort(([a], [b]) => a.localeCompare(b));
+    n.prerequisiteIds = sorted.map(([id]) => id);
+    n.prerequisiteSources = Object.fromEntries(sorted);
   }
 
   return {
     subject,
     tiers,
-    paths,
     nodes,
+    elements,
     edges,
   };
 }
@@ -373,8 +539,8 @@ export function scanSubject(subject, learnRoot) {
   };
   return {
     roadmap: read("ROADMAP.md"),
-    pathFiles: list("paths"),
     nodeFiles: list("nodes"),
+    elementFiles: list("elements"),
     edgeFiles: list("edges"),
     prepareFiles: list("prepares"),
   };
@@ -390,8 +556,8 @@ export function loadAllSubjects(learnRoot) {
     return buildSubjectGraph({
       subject,
       roadmap: scanned.roadmap,
-      pathFiles: scanned.pathFiles,
       nodeFiles: scanned.nodeFiles,
+      elementFiles: scanned.elementFiles,
       edgeFiles: scanned.edgeFiles,
       prepareFiles: scanned.prepareFiles,
     });

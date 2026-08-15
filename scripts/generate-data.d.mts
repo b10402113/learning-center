@@ -10,21 +10,12 @@ export interface GraphEdge {
   label?: string;
 }
 
-export interface GraphPath {
-  id: string;
-  title: string;
-  tier: number;
-  order: number;
-  duration: string;
-  goal: string;
-  status: string;
-  taughtNodeIds: string[];
-  relatedNodeIds: string[];
-  contentHtml: string;
-  fullArticleHtml: string;
-  sources: string[];
-  prepareHtml: string | null;
-  hasPrepare: boolean;
+export type ElementType = "article" | "video" | "question";
+
+export interface QuizQuestion {
+  question: string;
+  options: string[];
+  answer: number;
 }
 
 export interface GraphNode {
@@ -32,24 +23,47 @@ export interface GraphNode {
   title: string;
   tier: number;
   order: number;
-  taughtBy: string[];
+  duration: string;
+  goal: string;
+  status: string;
+  taughtElementIds: string[];
+  relatedElementIds: string[];
+  prerequisiteIds: string[];
+  prerequisiteSources: Record<string, "frontmatter" | "derived">;
+  contentHtml: string;
+  fullArticleHtml: string;
+  sources: string[];
+  prepareHtml: string | null;
+  hasPrepare: boolean;
+}
+
+export interface GraphElement {
+  id: string;
+  title: string;
+  tier: number;
+  order: number;
+  type: ElementType;
+  taughtByNodes: string[];
   sources: string[];
   bodyHtml: string;
   connections: string[];
+  prerequisiteIds: string[];
+  videoUrl?: string;
+  questions?: QuizQuestion[];
 }
 
 export interface SubjectGraphData {
   subject: string;
-  tiers: { tier: number; title: string; pathIds: string[] }[];
-  paths: GraphPath[];
-  nodes: Record<string, GraphNode>;
+  tiers: { tier: number; title: string; nodeIds: string[] }[];
+  nodes: GraphNode[];
+  elements: Record<string, GraphElement>;
   edges: GraphEdge[];
 }
 
 export interface ScannedFiles {
   roadmap: string;
-  pathFiles: Record<string, string>;
   nodeFiles: Record<string, string>;
+  elementFiles: Record<string, string>;
   edgeFiles: Record<string, string>;
   prepareFiles: Record<string, string>;
 }
@@ -62,8 +76,8 @@ export function renderMarkdown(md: string): string;
 export function buildSubjectGraph(args: {
   subject: string;
   roadmap: string;
-  pathFiles: Record<string, string>;
   nodeFiles: Record<string, string>;
+  elementFiles: Record<string, string>;
   edgeFiles: Record<string, string>;
   prepareFiles: Record<string, string>;
 }): SubjectGraphData;
