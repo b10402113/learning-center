@@ -25,11 +25,7 @@ export interface Node {
   relatedElementIds: string[];
   prerequisiteIds: string[];
   prerequisiteSources: Record<string, "frontmatter" | "derived">;
-  contentHtml: string;
-  fullArticleHtml: string;
   sources: string[];
-  prepareHtml: string | null;
-  hasPrepare: boolean;
 }
 
 export interface Element {
@@ -40,7 +36,6 @@ export interface Element {
   type: ElementType;
   taughtByNodes: string[];
   sources: string[];
-  bodyHtml: string;
   connections: string[];
   prerequisiteIds: string[];
   videoUrl?: string;

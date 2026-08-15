@@ -1,20 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { toast } from "sonner";
 import { statusLabel } from "../lib/colors";
 import { button } from "../lib/buttonVariants";
 import { cn } from "../lib/cn";
 import { isNodeComplete, nodeItems } from "../lib/completion";
+import { getElementMdx, getNodeMdx } from "../lib/mdxRegistry";
 import type { SubjectGraph, View } from "../lib/types";
 import { Check } from "./icons/Check";
 import { ChevronLeft } from "./icons/ChevronLeft";
 import { Circle } from "./icons/Circle";
 import { Expand } from "./icons/Expand";
 import { X } from "./icons/X";
-import { CompletionToggle } from "./CompletionToggle";
-
-function stripLeadingH1(html: string): string {
-  return html.replace(/^<h1>[\s\S]*?<\/h1>\s*/, "");
-}
+import { ElementMdxView } from "./ElementMdxView";
+import { QuizBlock } from "./QuizBlock";
+import { VideoEmbed } from "./VideoEmbed";
+import { WikiLink } from "./WikiLink";
 
 function parseWikilinkTarget(
   target: string,
@@ -32,6 +32,14 @@ interface DetailPaneProps {
   onClose: () => void;
 }
 
+// The MDX `components` map. `a` renders Obsidian wikilinks (rewritten to `km:`
+// URLs by remark) as in-app navigation or source refs; `h1` is hidden in the
+// narrow pane so the article does not duplicate the header title.
+const MDX_PANE_COMPONENTS: Record<string, ComponentType | string> = {
+  a: WikiLink,
+  h1: () => null,
+};
+
 export function DetailPane({
   graph,
   root,
@@ -44,6 +52,7 @@ export function DetailPane({
   const [stack, setStack] = useState<View[]>([root]);
   const [dir, setDir] = useState<"forward" | "back">("forward");
   const [fullRead, setFullRead] = useState(false);
+  const [quizSolved, setQuizSolved] = useState<Set<string>>(new Set());
 
   // A new selection from the map replaces the whole navigation stack. The
   // state is adjusted during render so the committed frame never flashes the
@@ -80,6 +89,10 @@ export function DetailPane({
     () => nodeChecklist.filter((item) => manualElements.has(item.id)).length,
     [nodeChecklist, manualElements],
   );
+
+  // The compiled MDX article for the current node / element, if any.
+  const NodeMdx = currentNode ? getNodeMdx(graph.subject, currentNode.id) : null;
+  const ElementMdx = currentElement ? getElementMdx(graph.subject, currentElement.id) : null;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -141,6 +154,11 @@ export function DetailPane({
     } else {
       toast.success("元素已學", { description: currentElement.title });
     }
+  }
+
+  function markQuizSolved() {
+    if (!currentElement) return;
+    setQuizSolved((prev) => new Set(prev).add(currentElement.id));
   }
 
   const paneClass = cn(
@@ -258,9 +276,17 @@ export function DetailPane({
                   </>
                 ) : null}
               </>
-            ) : (
-              <span className="font-mono">element</span>
-            )}
+            ) : currentElement ? (
+              <>
+                <span className="font-mono">{currentElement.type}</span>
+                {currentElement.type === "video" && currentElement.videoUrl ? (
+                  <>
+                    <span className="text-border">/</span>
+                    <span className="font-mono">video</span>
+                  </>
+                ) : null}
+              </>
+            ) : null}
           </div>
         </header>
       )}
@@ -285,44 +311,29 @@ export function DetailPane({
                   <p className="text-sm leading-relaxed text-foreground/90">{currentNode.goal}</p>
                 </section>
 
-                {currentNode ? (
-                  <section className="mb-4">
-                    <div
-                      className={cn(
-                        "flex w-full items-center justify-center gap-2 rounded-md border px-3 py-2 font-mono text-xs",
-                        nodeComplete
-                          ? "border-brass-dim/60 bg-brass/10 text-brass"
-                          : "border-input text-faint",
-                      )}
-                    >
-                      {nodeComplete ? <Check size={14} /> : <Circle size={14} />}
-                      {nodeComplete
-                        ? "檢查清單已全數完成"
-                        : `已完成 ${checkedCount} / ${nodeChecklist.length} 項`}
-                    </div>
-                  </section>
-                ) : null}
+                <section className="mb-4">
+                  <div
+                    className={cn(
+                      "flex w-full items-center justify-center gap-2 rounded-md border px-3 py-2 font-mono text-xs",
+                      nodeComplete
+                        ? "border-brass-dim/60 bg-brass/10 text-brass"
+                        : "border-input text-faint",
+                    )}
+                  >
+                    {nodeComplete ? <Check size={14} /> : <Circle size={14} />}
+                    {nodeComplete
+                      ? "檢查清單已全數完成"
+                      : `已完成 ${checkedCount} / ${nodeChecklist.length} 項`}
+                  </div>
+                </section>
 
-                {currentNode.hasPrepare && currentNode.prepareHtml ? (
-                  <section className="mb-4 flex flex-col gap-1">
-                    <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint">
-                      <span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden="true"></span>預習 · 讀文章前
-                    </h3>
-                    <div
-                      className="prose-sm"
-                      dangerouslySetInnerHTML={{ __html: stripLeadingH1(currentNode.prepareHtml) }}
-                    />
+                {NodeMdx ? (
+                  <section className="mb-4 prose-sm">
+                    <NodeMdx components={MDX_PANE_COMPONENTS} />
                   </section>
-                ) : null}
-
-                {currentNode.contentHtml ? (
-                  <section className="mb-4">
-                    <div
-                      className="prose-sm"
-                      dangerouslySetInnerHTML={{ __html: stripLeadingH1(currentNode.contentHtml) }}
-                    />
-                  </section>
-                ) : null}
+                ) : (
+                  <p className="text-xs text-muted-foreground">找不到此內容。</p>
+                )}
 
                 <section className="mb-4 flex flex-col gap-1.5">
                   <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint">
@@ -400,43 +411,14 @@ export function DetailPane({
                 </section>
               </>
             ) : currentElement ? (
-              <div>
-                <section className="mb-4">
-                  <CompletionToggle
-                    active={manualElements.has(currentElement.id)}
-                    onClick={handleToggleElement}
-                    activeLabel="已標記元素完成"
-                    idleLabel="標記元素完成"
-                  />
-                </section>
-                <div
-                  className="prose-sm"
-                  dangerouslySetInnerHTML={{ __html: stripLeadingH1(currentElement.bodyHtml) }}
-                />
-                {currentElement.taughtByNodes.length > 0 ? (
-                  <section className="mt-5 flex flex-col gap-1.5">
-                    <h3 className="font-mono text-[0.6rem] uppercase tracking-[0.18em] text-faint">
-                      <span className="mr-1 inline-block h-1.5 w-1.5 bg-brass/80" aria-hidden="true"></span>教的節點 · {currentElement.taughtByNodes.length}
-                    </h3>
-                    <div className="flex flex-wrap gap-1.5">
-                      {currentElement.taughtByNodes.map((nid) => {
-                        const n = nodeById.get(nid);
-                        return (
-                          <button
-                            key={nid}
-                            type="button"
-                            onClick={() => push({ kind: "node", id: nid })}
-                            className="chip"
-                            title={n?.title ?? nid}
-                          >
-                            {n?.title ?? nid}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </section>
-                ) : null}
-              </div>
+              <ElementMdxView
+                element={currentElement}
+                content={ElementMdx}
+                checked={manualElements.has(currentElement.id)}
+                quizSolved={quizSolved.has(currentElement.id)}
+                onToggle={handleToggleElement}
+                onQuizSolved={markQuizSolved}
+              />
             ) : (
               <p className="text-xs text-muted-foreground">找不到此內容。</p>
             )}
@@ -450,11 +432,26 @@ export function DetailPane({
             onClick={handleContentClick}
           >
             <article className="prose mx-auto max-w-[42rem]">
-              {current.kind === "node" && currentNode ? (
-                <div dangerouslySetInnerHTML={{ __html: currentNode.fullArticleHtml }} />
-              ) : currentElement ? (
-                <div dangerouslySetInnerHTML={{ __html: currentElement.bodyHtml }} />
-              ) : null}
+              {current.kind === "node" && currentNode && NodeMdx ? (
+                <NodeMdx components={{ a: WikiLink }} />
+              ) : currentElement && ElementMdx ? (
+                <ElementMdx
+                  components={{
+                    a: WikiLink,
+                    QuizBlock: () => (
+                      <QuizBlock
+                        questions={currentElement.questions ?? []}
+                        onSolved={markQuizSolved}
+                      />
+                    ),
+                    VideoEmbed: () => (
+                      <VideoEmbed url={currentElement.videoUrl} title={currentElement.title} />
+                    ),
+                  }}
+                />
+              ) : (
+                <p className="text-xs text-muted-foreground">找不到此內容。</p>
+              )}
             </article>
           </div>
         ) : null}

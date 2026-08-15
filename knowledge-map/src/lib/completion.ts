@@ -31,3 +31,16 @@ export function isNodeComplete(
 ): boolean {
   return nodeItems(node).every((item) => manualElements.has(item.id));
 }
+
+/**
+ * A question element's check is locked until the in-app quiz is answered
+ * correctly (self-test, not a gate on the rest of the course). Already-checked
+ * rows stay uncheckable-able; the lock only blocks marking complete.
+ */
+export function isCompletionLocked(
+  elementType: string | undefined,
+  checked: boolean,
+  quizSolved: boolean,
+): boolean {
+  return elementType === "question" && !checked && !quizSolved;
+}

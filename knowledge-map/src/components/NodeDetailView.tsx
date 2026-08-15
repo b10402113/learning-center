@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef } from "react";
 import { cn } from "../lib/cn";
 import { isWritten } from "../lib/colors";
 import { isNodeComplete, nodeItems } from "../lib/completion";
-import type { Element, Node, SubjectGraph } from "../lib/types";
+import type { Element, ElementType, Node, SubjectGraph } from "../lib/types";
 import { Check } from "./icons/Check";
 import { Circle } from "./icons/Circle";
 import { X } from "./icons/X";
 import { Expand } from "./icons/Expand";
+import { PrereqSection } from "./PrereqSection";
 
 interface NodeDetailViewProps {
   graph: SubjectGraph;
@@ -14,6 +15,7 @@ interface NodeDetailViewProps {
   manualElements: Set<string>;
   onToggleCompletion: (id: string) => void;
   onViewElement: (elementId: string) => void;
+  onViewNode: (nodeId: string) => void;
   onViewContent: () => void;
   onClose: () => void;
 }
@@ -28,17 +30,11 @@ export function NodeDetailView({
   manualElements,
   onToggleCompletion,
   onViewElement,
+  onViewNode,
   onViewContent,
   onClose,
 }: NodeDetailViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  // Prerequisites: elements referenced in the node body but not directly taught
-  const prerequisites = useMemo(() => {
-    return node.relatedElementIds
-      .map((id) => graph.elements[id])
-      .filter(Boolean);
-  }, [node, graph]);
 
   // The checklist contract: taught elements in order, then the main row.
   const checklist = useMemo(() => nodeItems(node), [node]);
@@ -167,51 +163,15 @@ export function NodeDetailView({
 
         <div ref={scrollRef} className="path-detail-body">
           {/* Prerequisites */}
-          {prerequisites.length > 0 ? (
-            <section className="path-detail-section">
-              <h3 className="path-detail-section-title">Prerequisites</h3>
-              <div className="path-detail-prereq-grid">
-                {prerequisites.map((element) => (
-                  <button
-                    key={element.id}
-                    type="button"
-                    onClick={() => onViewElement(element.id)}
-                    className={cn(
-                      "path-detail-prereq-card",
-                      manualElements.has(element.id) ? "prereq-done" : "",
-                    )}
-                  >
-                    <div className="prereq-card-top">
-                      <span className="prereq-card-title">{element.title}</span>
-                      <span
-                        className={cn(
-                          "prereq-card-check",
-                          manualElements.has(element.id) ? "check-on" : "",
-                        )}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onToggleCompletion(element.id);
-                        }}
-                        role="checkbox"
-                        aria-checked={manualElements.has(element.id)}
-                      >
-                        {manualElements.has(element.id) ? (
-                          <Check size={14} />
-                        ) : (
-                          <Circle size={14} />
-                        )}
-                      </span>
-                    </div>
-                    <span className="prereq-card-sub">
-                      {element.taughtByNodes.length > 0
-                        ? (graph.nodes.find((n) => n.id === element.taughtByNodes[0])?.title ?? "")
-                        : "Advanced Algorithms"}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </section>
-          ) : null}
+          <PrereqSection
+            graph={graph}
+            prerequisiteIds={node.prerequisiteIds}
+            manualElements={manualElements}
+            onToggleCompletion={onToggleCompletion}
+            onNavigate={(kind, id) =>
+              kind === "element" ? onViewElement(id) : onViewNode(id)
+            }
+          />
 
           {/* Items list */}
           <section className="path-detail-list-section">
@@ -226,6 +186,8 @@ export function NodeDetailView({
               const done = getStatus(item);
               const difficulty = getDifficulty(item);
               const title = item.kind === "element" ? item.element.title : item.node.title;
+              const badgeType: ElementType | "main" =
+                item.kind === "element" ? item.element.type : "main";
 
               return (
                 <div
@@ -248,8 +210,8 @@ export function NodeDetailView({
                     </button>
                   </span>
                   <span className="list-col-type">
-                    <span className={cn("type-badge", item.kind === "content" ? "type-main" : "")}>
-                      {item.kind === "element" ? "element" : "main"}
+                    <span className={cn("type-badge", typeBadgeClass(badgeType))}>
+                      {badgeType}
                     </span>
                   </span>
                   <span className="list-col-title">
@@ -307,4 +269,17 @@ function difficultyColorClass(difficulty: string): string {
   if (difficulty === "Medium") return "diff-medium";
   if (difficulty === "Hard" || difficulty === "Complete") return "diff-hard";
   return "diff-default";
+}
+
+function typeBadgeClass(type: ElementType | "main"): string {
+  switch (type) {
+    case "video":
+      return "type-video";
+    case "question":
+      return "type-question";
+    case "main":
+      return "type-main";
+    default:
+      return "type-article";
+  }
 }

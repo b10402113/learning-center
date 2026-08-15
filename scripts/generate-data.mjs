@@ -8,6 +8,7 @@ const OUT = join(REPO_ROOT, "knowledge-map", "src", "data", "graph.json");
 
 const STATUS_ORDER = ["draft", "confirmed", "nodes-written", "content-written", "edges-written"];
 const ALLOWED_STATUS = new Set(STATUS_ORDER);
+const ELEMENT_TYPES = new Set(["article", "video", "question"]);
 
 export function coerce(value) {
   const trimmed = value.trim();
@@ -171,144 +172,6 @@ export function parseFrontmatter(md) {
   return { data, body };
 }
 
-export function escapeHtml(value) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function renderInline(text) {
-  const tokens = [];
-  let out = text.replace(/`([^`]+)`/g, (_m, code) => {
-    tokens.push(`<code>${escapeHtml(code)}</code>`);
-    return `\u0000${tokens.length - 1}\u0000`;
-  });
-  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, url) => {
-    tokens.push(`<a href="${escapeHtml(url)}">${renderInline(label)}</a>`);
-    return `\u0000${tokens.length - 1}\u0000`;
-  });
-  out = out.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, target, label) => {
-    if (target.startsWith("sources/")) {
-      tokens.push(`<span class="source-ref">${escapeHtml(target)}</span>`);
-    } else {
-      const text = label || target.split("/").pop();
-      tokens.push(
-        `<a class="wikilink" data-target="${escapeHtml(target)}">${renderInline(text)}</a>`,
-      );
-    }
-    return `\u0000${tokens.length - 1}\u0000`;
-  });
-  out = out.replace(/\*\*([^*]+)\*\*/g, (_m, inner) => {
-    tokens.push(`<strong>${renderInline(inner)}</strong>`);
-    return `\u0000${tokens.length - 1}\u0000`;
-  });
-  out = out.replace(/(^|[^*])\*([^*]+)\*/g, (_m, pre, inner) => {
-    tokens.push(`${pre}<em>${renderInline(inner)}</em>`);
-    return `\u0000${tokens.length - 1}\u0000`;
-  });
-  out = escapeHtml(out).replace(/\u0000(\d+)\u0000/g, (_m, i) => tokens[Number(i)]);
-  return out;
-}
-
-export function renderMarkdown(md) {
-  const lines = md.split("\n");
-  const out = [];
-  let para = [];
-  const flushPara = () => {
-    if (para.length) {
-      out.push(`<p>${renderInline(para.join(" "))}</p>`);
-      para = [];
-    }
-  };
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (!line.trim()) {
-      flushPara();
-      i++;
-      continue;
-    }
-    if (line.trim().startsWith("```")) {
-      flushPara();
-      const buf = [];
-      i++;
-      while (i < lines.length && !lines[i].trim().startsWith("```")) {
-        buf.push(lines[i]);
-        i++;
-      }
-      i++;
-      out.push(`<pre class="code-block"><code>${escapeHtml(buf.join("\n"))}</code></pre>`);
-      continue;
-    }
-    const heading = line.match(/^(#{1,6})\s+(.*)$/);
-    if (heading) {
-      flushPara();
-      const level = heading[1].length;
-      out.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
-      i++;
-      continue;
-    }
-    if (line.startsWith("> ")) {
-      flushPara();
-      const buf = [];
-      while (i < lines.length && lines[i].startsWith("> ")) {
-        buf.push(lines[i].slice(2));
-        i++;
-      }
-      out.push(`<blockquote><p>${renderInline(buf.join(" "))}</p></blockquote>`);
-      continue;
-    }
-    const listItem = line.match(/^\s*-\s+(.*)$/);
-    if (listItem) {
-      flushPara();
-      out.push("<ul>");
-      while (i < lines.length) {
-        const m = lines[i].match(/^\s*-\s+(.*)$/);
-        if (!m) break;
-        out.push(`<li>${renderInline(m[1])}</li>`);
-        i++;
-        if (i < lines.length && /^\s+-\s+/.test(lines[i])) {
-          out.push("<ul>");
-          while (i < lines.length && /^\s+-\s+/.test(lines[i])) {
-            const nested = lines[i].match(/^\s*-\s+(.*)$/);
-            out.push(`<li>${renderInline(nested[1])}</li>`);
-            i++;
-          }
-          out.push("</ul>");
-        }
-      }
-      out.push("</ul>");
-      continue;
-    }
-    const orderedItem = line.match(/^\d+\.\s+(.*)$/);
-    if (orderedItem) {
-      flushPara();
-      out.push("<ol>");
-      while (i < lines.length) {
-        const m = lines[i].match(/^\d+\.\s+(.*)$/);
-        if (!m) break;
-        out.push(`<li>${renderInline(m[1])}</li>`);
-        i++;
-      }
-      out.push("</ol>");
-      continue;
-    }
-    para.push(line);
-    i++;
-  }
-  flushPara();
-  return out.join("\n");
-}
-
-export function renderSourcesSection(sources) {
-  if (!sources || sources.length === 0) return "";
-  const items = sources.map((s) => `<li>${renderInline(String(s))}</li>`).join("\n");
-  return `\n<h2>Sources</h2>\n<ul>\n${items}\n</ul>\n`;
-}
-
 function stripSubjectPrefix(value) {
   return String(value).split("/").pop();
 }
@@ -335,16 +198,9 @@ function extractElementLinks(body, subject) {
   return [...links];
 }
 
-// Extract element links from one named `## Heading` section of a body. `headings`
-// may list localized variants of the same section name; only Connections and
-// Deep dive are guaranteed to stay English, other section names render in the
-// subject's `MEMORY.md` language.
-function extractSectionElementLinks(body, subject, headings) {
-  const names = Array.isArray(headings) ? headings : [headings];
-  const pattern = names
-    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-    .join("|");
-  const re = new RegExp(`^##\\s+(?:${pattern})\\s*$`, "m");
+// Extract element links from one named `## Heading` section of a body.
+function extractSectionElementLinks(body, subject, heading) {
+  const re = new RegExp(`^##\\s+${heading}\\s*$`, "m");
   const match = body.match(re);
   if (!match) return [];
   const rest = body.slice(match.index + match[0].length);
@@ -364,29 +220,12 @@ function parseTiers(roadmap) {
   return tiers;
 }
 
-function prepareById(prepareFiles) {
-  const map = new Map();
-  for (const [key, content] of Object.entries(prepareFiles ?? {})) {
-    const m = key.match(/^prepares\/(.+)\.md$/);
-    if (m) map.set(m[1], content);
-  }
-  return map;
-}
-
-const ELEMENT_TYPES = new Set(["article", "video", "question"]);
-
-export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, edgeFiles, prepareFiles }) {
-  const prepares = prepareById(prepareFiles);
+export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, edgeFiles }) {
   const nodes = [];
   const nodePrereqById = new Map();
   for (const content of Object.values(nodeFiles)) {
-    const { data, body } = parseFrontmatter(content);
+    const { data } = parseFrontmatter(content);
     if (!data.id) continue;
-    const html = renderMarkdown(body);
-    const hasSourcesHeading = /^##\s+Sources\s*$/m.test(body);
-    const sourcesSection = hasSourcesHeading ? "" : renderSourcesSection(data.sources);
-    const prepareContent = prepares.get(data.id);
-    const prepareHtml = prepareContent ? renderMarkdown(parseFrontmatter(prepareContent).body) : null;
     nodePrereqById.set(data.id, (data.prerequisites ?? []).map(stripSubjectPrefix));
     nodes.push({
       id: data.id,
@@ -398,10 +237,6 @@ export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, e
       status: ALLOWED_STATUS.has(data.status) ? data.status : "draft",
       taughtElementIds: (data.elements ?? []).map(stripSubjectPrefix),
       sources: data.sources ?? [],
-      contentHtml: html,
-      fullArticleHtml: html + sourcesSection,
-      prepareHtml,
-      hasPrepare: prepareHtml !== null,
     });
   }
   nodes.sort((a, b) => a.tier - b.tier || a.order - b.order);
@@ -419,13 +254,8 @@ export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, e
       type,
       taughtByNodes: (data.nodes ?? []).map(stripSubjectPrefix),
       sources: data.sources ?? [],
-      bodyHtml: renderMarkdown(body),
       connections: extractElementLinks(body, subject),
-      prerequisiteIds: extractSectionElementLinks(body, subject, [
-        "Prerequisites",
-        "前置知識",
-        "我需要先知道什麼？",
-      ]),
+      prerequisiteIds: extractSectionElementLinks(body, subject, "Prerequisites"),
       ...(type === "video" ? { videoUrl: data.videoUrl ?? "" } : {}),
       ...(type === "question" ? { questions: normalizeQuestions(data.questions) } : {}),
     };
@@ -511,9 +341,10 @@ export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, e
     for (const id of n.relatedElementIds) {
       if (!merged.has(id)) merged.set(id, "derived");
     }
-    const sorted = [...merged.entries()].sort(([a], [b]) => a.localeCompare(b));
-    n.prerequisiteIds = sorted.map(([id]) => id);
-    n.prerequisiteSources = Object.fromEntries(sorted);
+    n.prerequisiteIds = [...merged.keys()].sort();
+    n.prerequisiteSources = Object.fromEntries(
+      [...merged.entries()].sort(([a], [b]) => a.localeCompare(b)),
+    );
   }
 
   return {
@@ -533,7 +364,7 @@ export function scanSubject(subject, learnRoot) {
     if (!existsSync(dirPath)) return {};
     return Object.fromEntries(
       readdirSync(dirPath, { withFileTypes: true })
-        .filter((e) => e.isFile() && e.name.endsWith(".md"))
+        .filter((e) => e.isFile() && (e.name.endsWith(".md") || e.name.endsWith(".mdx")))
         .map((e) => [`${dir}/${e.name}`, read(`${dir}/${e.name}`)]),
     );
   };
@@ -542,7 +373,6 @@ export function scanSubject(subject, learnRoot) {
     nodeFiles: list("nodes"),
     elementFiles: list("elements"),
     edgeFiles: list("edges"),
-    prepareFiles: list("prepares"),
   };
 }
 
@@ -559,7 +389,6 @@ export function loadAllSubjects(learnRoot) {
       nodeFiles: scanned.nodeFiles,
       elementFiles: scanned.elementFiles,
       edgeFiles: scanned.edgeFiles,
-      prepareFiles: scanned.prepareFiles,
     });
   });
 }

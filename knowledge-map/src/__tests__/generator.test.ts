@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildSubjectGraph,
   parseFrontmatter,
-  renderMarkdown,
   scanSubject,
 } from "../../../scripts/generate-data.mjs";
 
@@ -272,29 +271,6 @@ Depends.
 Compare them.
 `;
 
-const PREPARE_P1 = `---
-node: fixture-subject/p1
-tier: 1
-duration: 3-5 minutes
-sources:
-  - "[[sources/fixture-subject/book.pdf#Intro]]"
-created: 2026-08-09
-updated: 2026-08-09
----
-
-# P One — 預習
-
-## Key ideas
-1. First plain preview idea.
-2. Second plain preview idea.
-
-## 術語預告
-- **Term A** — one-line gloss
-
-## 已有基礎
-- [[learn/fixture-subject/elements/n1|N One]] — reminder
-`;
-
 const FILES = {
   "nodes/p1.md": P1,
   "nodes/p2.md": P2,
@@ -305,7 +281,6 @@ const FILES = {
   "elements/nv.md": NV,
   "elements/nq.md": NQ,
   "edges/e1.md": EDGE,
-  "prepares/p1.md": PREPARE_P1,
 };
 
 function build() {
@@ -325,7 +300,6 @@ function build() {
       "elements/nq.md": FILES["elements/nq.md"],
     },
     edgeFiles: { "edges/e1.md": FILES["edges/e1.md"] },
-    prepareFiles: { "prepares/p1.md": FILES["prepares/p1.md"] },
   });
 }
 
@@ -373,30 +347,6 @@ describe("parseFrontmatter", () => {
   });
 });
 
-describe("renderMarkdown", () => {
-  it("renders headings, paragraphs, and bold", () => {
-    const html = renderMarkdown("# Hi\n\nWorld **bold** text.");
-    expect(html).toContain("<h1>Hi</h1>");
-    expect(html).toContain("<strong>bold</strong>");
-  });
-
-  it("renders wikilinks as anchors with data-target", () => {
-    const html = renderMarkdown("See [[learn/fixture-subject/elements/n2|N Two]].");
-    expect(html).toContain("data-target=\"learn/fixture-subject/elements/n2\"");
-    expect(html).toContain(">N Two</a>");
-  });
-
-  it("renders source wikilinks as source refs", () => {
-    const html = renderMarkdown("- [[sources/fixture-subject/book.pdf#Intro]]");
-    expect(html).toContain("source-ref");
-  });
-
-  it("renders lists", () => {
-    const html = renderMarkdown("- a\n- b");
-    expect(html).toContain("<li>a</li>");
-  });
-});
-
 describe("buildSubjectGraph", () => {
   it("parses nodes with tier, order, status, sources, and taught elements", () => {
     const g = build();
@@ -413,25 +363,19 @@ describe("buildSubjectGraph", () => {
     });
     expect(p1.sources).toEqual(["[[sources/fixture-subject/book.pdf#Intro]]"]);
     expect(p1.taughtElementIds).toEqual(["n1"]);
-    expect(p1.contentHtml).toContain("<h2>");
-    expect(p1.fullArticleHtml).toContain("<h1>P One</h1>");
   });
 
-  it("appends a Sources section to fullArticleHtml when the body lacks one", () => {
+  it("emits only structural data — no rendered content HTML", () => {
     const g = build();
-    const p3 = g.nodes.find((n) => n.id === "p3")!;
-    expect(p3.contentHtml).not.toContain("<h2>Sources</h2>");
-    expect(p3.fullArticleHtml).toContain("<h2>Sources</h2>");
-    expect(p3.fullArticleHtml).toContain(
-      '<span class="source-ref">sources/fixture-subject/book.pdf#Intro</span>',
-    );
-  });
-
-  it("does not duplicate a Sources section already present in the body", () => {
-    const g = build();
-    const p1 = g.nodes.find((n) => n.id === "p1")!;
-    const count = p1.fullArticleHtml.match(/<h2>Sources<\/h2>/g);
-    expect(count).toHaveLength(1);
+    for (const n of g.nodes) {
+      expect(n).not.toHaveProperty("contentHtml");
+      expect(n).not.toHaveProperty("fullArticleHtml");
+      expect(n).not.toHaveProperty("prepareHtml");
+      expect(n).not.toHaveProperty("hasPrepare");
+    }
+    for (const el of Object.values(g.elements)) {
+      expect(el).not.toHaveProperty("bodyHtml");
+    }
   });
 
   it("treats a skeleton node as empty taught elements", () => {
@@ -489,11 +433,10 @@ describe("buildSubjectGraph", () => {
     expect(p3.relatedElementIds).toEqual(["n3"]);
   });
 
-  it("records an element map with body, connections, and sources", () => {
+  it("records an element map with connections and sources", () => {
     const g = build();
     const n1 = g.elements.n1;
     expect(n1.title).toBe("N One");
-    expect(n1.bodyHtml).toContain("<h2>Connections</h2>");
     expect(n1.connections).toEqual(["n2", "n3"]);
     expect(n1.taughtByNodes).toEqual(["p1"]);
     expect(n1.sources).toEqual(["[[sources/fixture-subject/book.pdf#Intro]]"]);
@@ -557,25 +500,6 @@ describe("buildSubjectGraph", () => {
     expect(p2.prerequisiteSources).toEqual({});
   });
 
-  it("carries a prepare note into the node as rendered prepareHtml + hasPrepare", () => {
-    const g = build();
-    const p1 = g.nodes.find((n) => n.id === "p1")!;
-    expect(p1.hasPrepare).toBe(true);
-    expect(p1.prepareHtml).toContain("First plain preview idea.");
-    expect(p1.prepareHtml).toContain("data-target=\"learn/fixture-subject/elements/n1\"");
-    expect(p1.prepareHtml).not.toContain("node: fixture-subject/p1");
-  });
-
-  it("defaults nodes without a prepare note to null and false", () => {
-    const g = build();
-    const p2 = g.nodes.find((n) => n.id === "p2")!;
-    const p3 = g.nodes.find((n) => n.id === "p3")!;
-    expect(p2.hasPrepare).toBe(false);
-    expect(p2.prepareHtml).toBeNull();
-    expect(p3.hasPrepare).toBe(false);
-    expect(p3.prepareHtml).toBeNull();
-  });
-
   it("is deterministic: two runs produce identical output", () => {
     expect(build()).toEqual(build());
   });
@@ -588,23 +512,18 @@ describe("scanSubject", () => {
       mkdirSync(join(root, "learn", "fixture-subject", "nodes"), { recursive: true });
       mkdirSync(join(root, "learn", "fixture-subject", "elements"), { recursive: true });
       mkdirSync(join(root, "learn", "fixture-subject", "edges"), { recursive: true });
-      mkdirSync(join(root, "learn", "fixture-subject", "prepares"), { recursive: true });
       mkdirSync(join(root, "learn", "fixture-subject", "learn", "fixture-subject", "nodes"), { recursive: true });
       writeFileSync(join(root, "learn", "fixture-subject", "ROADMAP.md"), ROADMAP);
-      writeFileSync(join(root, "learn", "fixture-subject", "nodes", "p1.md"), P1);
+      writeFileSync(join(root, "learn", "fixture-subject", "nodes", "p1.mdx"), P1);
       writeFileSync(
-        join(root, "learn", "fixture-subject", "prepares", "p1.md"),
-        PREPARE_P1,
-      );
-      writeFileSync(
-        join(root, "learn", "fixture-subject", "learn", "fixture-subject", "nodes", "stub.md"),
+        join(root, "learn", "fixture-subject", "learn", "fixture-subject", "nodes", "stub.mdx"),
         "# stub",
       );
       const scanned = scanSubject("fixture-subject", join(root, "learn"));
-      expect(Object.keys(scanned.nodeFiles)).toEqual(["nodes/p1.md"]);
+      expect(Object.keys(scanned.nodeFiles)).toEqual(["nodes/p1.mdx"]);
       expect(scanned.roadmap).toContain("Tier 1");
       expect(scanned.elementFiles).toEqual({});
-      expect(scanned.prepareFiles).toEqual({ "prepares/p1.md": PREPARE_P1 });
+      expect(scanned.edgeFiles).toEqual({});
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

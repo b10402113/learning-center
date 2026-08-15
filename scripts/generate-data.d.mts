@@ -10,14 +10,6 @@ export interface GraphEdge {
   label?: string;
 }
 
-export type ElementType = "article" | "video" | "question";
-
-export interface QuizQuestion {
-  question: string;
-  options: string[];
-  answer: number;
-}
-
 export interface GraphNode {
   id: string;
   title: string;
@@ -27,14 +19,16 @@ export interface GraphNode {
   goal: string;
   status: string;
   taughtElementIds: string[];
-  relatedElementIds: string[];
   prerequisiteIds: string[];
   prerequisiteSources: Record<string, "frontmatter" | "derived">;
-  contentHtml: string;
-  fullArticleHtml: string;
+  relatedElementIds: string[];
   sources: string[];
-  prepareHtml: string | null;
-  hasPrepare: boolean;
+}
+
+export interface QuizQuestion {
+  question: string;
+  options: string[];
+  answer: number;
 }
 
 export interface GraphElement {
@@ -42,10 +36,9 @@ export interface GraphElement {
   title: string;
   tier: number;
   order: number;
-  type: ElementType;
+  type: "article" | "video" | "question";
   taughtByNodes: string[];
   sources: string[];
-  bodyHtml: string;
   connections: string[];
   prerequisiteIds: string[];
   videoUrl?: string;
@@ -65,21 +58,17 @@ export interface ScannedFiles {
   nodeFiles: Record<string, string>;
   elementFiles: Record<string, string>;
   edgeFiles: Record<string, string>;
-  prepareFiles: Record<string, string>;
 }
 
 export function coerce(value: string): string | number;
 export function unquote(value: string): string;
 export function parseFrontmatter(md: string): FrontmatterResult;
-export function escapeHtml(value: string): string;
-export function renderMarkdown(md: string): string;
 export function buildSubjectGraph(args: {
   subject: string;
   roadmap: string;
   nodeFiles: Record<string, string>;
   elementFiles: Record<string, string>;
   edgeFiles: Record<string, string>;
-  prepareFiles: Record<string, string>;
 }): SubjectGraphData;
 export function scanSubject(subject: string, learnRoot: string): ScannedFiles;
 export function loadAllSubjects(learnRoot: string): SubjectGraphData[];

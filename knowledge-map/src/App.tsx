@@ -182,6 +182,15 @@ export default function App() {
     setNodeDetailOpen(false);
   }
 
+  // A node prerequisite in the node detail switches the displayed node while
+  // keeping the checklist modal open.
+  function openNodeFromDetail(nodeId: string) {
+    setSelectedNodeId(nodeId);
+    setSelectedElementId(null);
+    setNodeDetailOpen(true);
+    setFocusRequest({ nodeId, tick: performance.now() });
+  }
+
   function selectElement(id: string) {
     setSelectedElementId(id);
     setSelectedNodeId(null);
@@ -282,6 +291,7 @@ export default function App() {
               manualElements={manualElements}
               onToggleCompletion={toggleCompletion}
               onViewElement={openElementFromDetail}
+              onViewNode={openNodeFromDetail}
               onViewContent={openContentFromDetail}
               onClose={closeNodeDetail}
             />
