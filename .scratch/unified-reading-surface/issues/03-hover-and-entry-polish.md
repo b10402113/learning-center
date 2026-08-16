@@ -1,7 +1,7 @@
 # 03 — 收尾：hover 定位 + 頁內連結行為 + 殘留入口
 
 Type: task
-Status: ready-for-agent
+Status: done
 Parent: `.scratch/unified-reading-surface/spec.md`
 
 ## What to build
@@ -13,12 +13,12 @@ Parent: `.scratch/unified-reading-surface/spec.md`
 
 ## Acceptance criteria
 
-- [ ] hover 卡片（星雲與 Roadmap 共用）顯示於鼠標右下方偏移，不遮擋中心；滑出後消失；Radix tooltip（按鈕提示）維持不變
-- [ ] 元素視窗內點左欄課程 / 右欄元素 / wikilink / 教授卡片 → 切換視窗內容（node↔element 皆可）
-- [ ] 獨立全頁內點同樣連結 → 直接導航到目標全頁（不開視窗）；element 目標帶來源 `?from` 使 breadcrumb 可跳回
-- [ ] 全站掃一遍點擊入口：無遺漏的 node/element 點擊仍走舊路徑（側欄、直接跳頁不一致）
+- [x] hover 卡片（星雲與 Roadmap 共用）顯示於鼠標右下方偏移，不遮擋中心；滑出後消失；Radix tooltip（按鈕提示）維持不變
+- [x] 元素視窗內點左欄課程 / 右欄元素 / wikilink / 教授卡片 → 切換視窗內容（node↔element 皆可）
+- [x] 獨立全頁內點同樣連結 → 直接導航到目標全頁（不開視窗）；element 目標帶來源 `?from` 使 breadcrumb 可跳回
+- [x] 全站掃一遍點擊入口：無遺漏的 node/element 點擊仍走舊路徑（側欄、直接跳頁不一致）
 - [ ] 人工回歸（`npm run dev`）：roadmap/星雲 hover、視窗內走跳、全頁內走跳、清單→視窗→全頁→清單完整往返、`prefers-reduced-motion` 下無動畫
-- [ ] `npm run typecheck` 與 `npm run build` 通過
+- [x] `npm run typecheck` 與 `npm run build` 通過
 
 ## Reference files
 
