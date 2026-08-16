@@ -55,7 +55,7 @@ Each stage is user-invoked. `subject/node-name` is explicit so a node name never
 - `/learn-init <subject>` — ensure the subject's source digests exist (sub-agent path for large sources per `docs/reference/source-reading.md`), interview the learner, and write `learn/<subject>/MEMORY.md` (including language, tune, and tune-scope)
 - `/probe <subject>` — adaptive MCQ from shallow to deep across the whole source scope, binary-searching each strand; writes the per-area mastery report (`unknown | partial | solid`) and never prunes content
 - `/roadmap <subject>` — partition the material into 10–15 minute nodes against the formula baseline, calibrated by probe mastery, propose the full candidate list for learner confirmation, then write `ROADMAP.md` and node containers
-- `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation, then extract or update the node's canonical elements and write each step article
+- `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation (each step's depth calibrated from the mastery report — shallow where `solid`, deep where `unknown`, never pruning), then extract or update the node's canonical elements and write each step article
 - `/edges <subject>/<node-name>` — propose and incrementally write strong edges for the node, including justified cross-node edges
 - `/tackle <step-id>` — runtime adaptive MCQ for one step; passing estimates its concepts at `solid`, marks the step complete, and writes mastery back
 
