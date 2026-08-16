@@ -4,6 +4,7 @@ import { Toaster, toast } from "sonner";
 import graphData from "./data/graph.json";
 import { RoadMap } from "./components/RoadMap";
 import { DetailPane } from "./components/DetailPane";
+import { ElementPage } from "./components/ElementPage";
 import { ForceMap } from "./components/ForceMap";
 import { HoverCard } from "./components/HoverCard";
 import { Legend } from "./components/Legend";
@@ -12,7 +13,7 @@ import { NodeDetailView } from "./components/NodeDetailView";
 import { TopBar } from "./components/TopBar";
 import { isNodeComplete } from "./lib/completion";
 import { isWritten } from "./lib/colors";
-import { buildHash, parseHash } from "./lib/hashlink";
+import { buildElementHash, buildHash, parseHash, type Route } from "./lib/hashlink";
 import {
   emptySubjectProgress,
   loadProgress,
@@ -38,34 +39,38 @@ function defaultSubject(): string {
   return best;
 }
 
-// Resolve a hash to a concrete subject + node. The subject must exist and the
-// node must exist in that subject; anything else falls back to the given
-// subject with no selection.
-function resolveHash(
-  hash: string,
-  fallbackSubject: string,
-): { subject: string; nodeId: string | null } {
-  const { subject, nodeId } = parseHash(hash);
-  const graph = graphs.find((g) => g.subject === subject);
-  const validNode = graph?.nodes.some((n) => n.id === nodeId) ? nodeId : null;
-  return {
-    subject: graph ? graph.subject : fallbackSubject,
-    nodeId: validNode,
-  };
+// Resolve a hash to a concrete route. The element route must name a subject and
+// element that exist; the map route must name a subject and node that exist;
+// anything else falls back to the given subject with no selection.
+function resolveRoute(hash: string, fallbackSubject: string): Route {
+  const route = parseHash(hash);
+  if (route.kind === "element") {
+    const graph = graphs.find((g) => g.subject === route.subject);
+    const element = graph?.elements[route.elementId];
+    if (graph && element) return route;
+    return { kind: "map", subject: graph?.subject ?? fallbackSubject, nodeId: null };
+  }
+  const graph = graphs.find((g) => g.subject === route.subject);
+  const validNode = graph?.nodes.some((n) => n.id === route.nodeId) ? route.nodeId : null;
+  return { kind: "map", subject: graph ? graph.subject : fallbackSubject, nodeId: validNode };
 }
 
+// Resolve the initial deep-link once at module load. The app mounts a single
+// time and reads the URL only on first render; later navigation flows through
+// the hashchange dispatch.
+const initialRoute = resolveRoute(window.location.hash, defaultSubject());
+
 export default function App() {
-  const [subject, setSubject] = useState<string>(() =>
-    resolveHash(window.location.hash, defaultSubject()).subject,
-  );
+  const [route, setRoute] = useState<Route>(initialRoute);
+  const [subject, setSubject] = useState<string>(() => initialRoute.subject ?? defaultSubject());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(() =>
-    resolveHash(window.location.hash, defaultSubject()).nodeId,
+    initialRoute.kind === "element" ? null : initialRoute.nodeId,
   );
-  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
-  const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(() => {
-    const initial = resolveHash(window.location.hash, defaultSubject());
-    return initial.nodeId ? { nodeId: initial.nodeId, tick: 0 } : null;
-  });
+  const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(() =>
+    initialRoute.kind === "map" && initialRoute.nodeId
+      ? { nodeId: initialRoute.nodeId, tick: 0 }
+      : null,
+  );
   const [progress, setProgress] = useState<ProgressRecord>(loadProgress);
   const [quizSolved, setQuizSolved] = useState<Set<string>>(new Set());
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -74,29 +79,40 @@ export default function App() {
   const [nodeDetailOpen, setNodeDetailOpen] = useState(false);
   const mapRef = useRef<MapHandle | null>(null);
 
-  // Mirror subject + selection into the hash so the current view is shareable.
-  // replaceState (not pushState) so the map never floods the history stack.
+  // Mirror subject + selection into the hash so the current map view is
+  // shareable. replaceState (not pushState) so the map never floods the history
+  // stack. Element routes are never overwritten — they are navigated to by
+  // setting location.hash, which adds a history entry for back/forward.
   const firstRenderRef = useRef(true);
   useEffect(() => {
     if (firstRenderRef.current) {
       firstRenderRef.current = false;
       return;
     }
+    if (route.kind !== "map") return;
     const next = buildHash(subject, selectedNodeId);
     if (window.location.hash !== next) {
       window.history.replaceState(null, "", next);
     }
-  }, [subject, selectedNodeId]);
+  }, [route, subject, selectedNodeId]);
 
-  // React to external hash edits (back/forward, pasted links, manual typing).
+  // React to external hash edits (back/forward, pasted links, manual typing,
+  // and our own element/map navigation) and dispatch to the right view.
   useEffect(() => {
     const onHashChange = () => {
-      const next = resolveHash(window.location.hash, subject);
-      setSubject(next.subject);
-      setSelectedNodeId(next.nodeId);
-      setSelectedElementId(null);
-      if (next.nodeId) setFocusRequest({ nodeId: next.nodeId, tick: performance.now() });
-      else setFocusRequest(null);
+      const next = resolveRoute(window.location.hash, subject);
+      setRoute(next);
+      setNodeDetailOpen(false);
+      if (next.kind === "element") {
+        setSubject(next.subject);
+        setSelectedNodeId(null);
+        setFocusRequest(null);
+      } else {
+        setSubject(next.subject ?? subject);
+        setSelectedNodeId(next.nodeId);
+        if (next.nodeId) setFocusRequest({ nodeId: next.nodeId, tick: performance.now() });
+        else setFocusRequest(null);
+      }
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -155,9 +171,18 @@ export default function App() {
     return () => window.removeEventListener("mousemove", onMove);
   }, [hoveredId]);
 
+  // Navigation through the URL hash keeps the browser back/forward button in
+  // sync and keeps element deep-links shareable.
+  function navigateToMap(targetSubject: string, nodeId: string | null) {
+    window.location.hash = buildHash(targetSubject, nodeId);
+  }
+
+  function navigateToElement(targetSubject: string, elementId: string) {
+    window.location.hash = buildElementHash(targetSubject, elementId);
+  }
+
   function selectNode(id: string | null) {
     setSelectedNodeId(id);
-    setSelectedElementId(null);
     if (id && view === "roadmap") {
       setNodeDetailOpen(true);
     }
@@ -168,26 +193,13 @@ export default function App() {
   function closeNodeDetail() {
     setNodeDetailOpen(false);
     setSelectedNodeId(null);
-    setSelectedElementId(null);
     setFocusRequest(null);
-  }
-
-  function openElementFromDetail(elementId: string) {
-    setNodeDetailOpen(false);
-    setSelectedElementId(elementId);
-    setSelectedNodeId(null);
-  }
-
-  function openContentFromDetail() {
-    // Keep the node selected so DetailPane opens with full-read.
-    setNodeDetailOpen(false);
   }
 
   // A node prerequisite in the node detail switches the displayed node while
   // keeping the checklist modal open.
   function openNodeFromDetail(nodeId: string) {
     setSelectedNodeId(nodeId);
-    setSelectedElementId(null);
     setNodeDetailOpen(true);
     setFocusRequest({ nodeId, tick: performance.now() });
   }
@@ -198,37 +210,41 @@ export default function App() {
     setQuizSolved((prev) => (prev.has(elementId) ? prev : new Set(prev).add(elementId)));
   }
 
-  function selectElement(id: string) {
-    setSelectedElementId(id);
-    setSelectedNodeId(null);
-    setFocusRequest(null);
+  // Every element click — map node, checklist row, prerequisite card, chip —
+  // jumps to that element's standalone page.
+  function openElement(subjectKey: string, elementId: string) {
+    navigateToElement(subjectKey, elementId);
   }
 
   function switchSubject(s: string) {
     if (s === subject) return;
-    setSubject(s);
-    setSelectedNodeId(null);
-    setSelectedElementId(null);
-    setNodeDetailOpen(false);
-    setFocusRequest(null);
-    setHoveredId(null);
+    navigateToMap(s, null);
+  }
+
+  function switchView(v: "nebula" | "roadmap") {
+    if (route.kind === "element") {
+      // The view toggle doubles as "back to the map" from an element page.
+      navigateToMap(subject, null);
+      setView(v);
+      return;
+    }
+    setView(v);
   }
 
   const selectedNode = selectedNodeId
     ? (graph.nodes.find((n) => n.id === selectedNodeId) ?? null)
     : null;
-  const selectedElement = selectedElementId ? (graph.elements[selectedElementId] ?? null) : null;
   const root: View | null = nodeDetailOpen
     ? null
-    : selectedElement
-      ? { kind: "element", id: selectedElement.id }
-      : selectedNode
-        ? { kind: "node", id: selectedNode.id }
-        : null;
+    : selectedNode
+      ? { kind: "node", id: selectedNode.id }
+      : null;
   const hoveredNode =
     hoveredId && hoveredId !== selectedNodeId
       ? (graph.nodes.find((n) => n.id === hoveredId) ?? null)
       : null;
+
+  const onElementPage = route.kind === "element";
 
   return (
     <TooltipPrimitive.Provider>
@@ -240,73 +256,88 @@ export default function App() {
           hasProgress={hasProgress}
           onReset={resetProgress}
           onSelect={switchSubject}
-          onViewChange={(v: "nebula" | "roadmap") => setView(v)}
+          onViewChange={switchView}
         />
-        <div className="relative min-h-0 flex-1">
-          {view === "roadmap" ? (
-            <RoadMap
-              ref={mapRef}
-              graph={graph}
-              selectedId={selectedNodeId}
-              focusRequest={focusRequest}
-              completedNodes={completedNodes}
-              onSelect={selectNode}
-              onHover={setHoveredId}
-            />
-          ) : (
-            <ForceMap
-              ref={mapRef}
-              graph={graph}
-              selectedId={selectedNodeId}
-              selectedElementId={selectedElementId}
-              focusRequest={focusRequest}
-              completedNodes={completedNodes}
-              manualElements={manualElements}
-              hoveredId={hoveredId}
-              onSelect={selectNode}
-              onSelectElement={selectElement}
-              onHover={setHoveredId}
-            />
-          )}
-
-          <Legend />
-
-          <MapControls
-            onZoomIn={() => mapRef.current?.zoomBy(1.25)}
-            onZoomOut={() => mapRef.current?.zoomBy(0.8)}
-            onReset={() => mapRef.current?.fit()}
-            onResetProgress={resetProgress}
-            canResetProgress={hasProgress}
+        {onElementPage ? (
+          <ElementPage
+            graph={graph}
+            elementId={route.elementId}
+            manualElements={manualElements}
+            quizSolved={quizSolved}
+            onQuizSolved={markQuizSolved}
+            onToggleCompletion={toggleCompletion}
+            onNavigateElement={openElement}
+            onNavigateNode={(nodeId) => navigateToMap(subject, nodeId)}
+            onBackToMap={() => navigateToMap(subject, null)}
           />
+        ) : (
+          <div className="relative min-h-0 flex-1">
+            {view === "roadmap" ? (
+              <RoadMap
+                ref={mapRef}
+                graph={graph}
+                selectedId={selectedNodeId}
+                focusRequest={focusRequest}
+                completedNodes={completedNodes}
+                onSelect={selectNode}
+                onHover={setHoveredId}
+              />
+            ) : (
+              <ForceMap
+                ref={mapRef}
+                graph={graph}
+                selectedId={selectedNodeId}
+                selectedElementId={null}
+                focusRequest={focusRequest}
+                completedNodes={completedNodes}
+                manualElements={manualElements}
+                hoveredId={hoveredId}
+                onSelect={selectNode}
+                onSelectElement={(elementId) => openElement(subject, elementId)}
+                onHover={setHoveredId}
+              />
+            )}
 
-          {hoveredNode ? <HoverCard node={hoveredNode} x={pointer.x} y={pointer.y} /> : null}
+            <Legend />
 
-          {root ? (
-            <DetailPane
-              graph={graph}
-              root={root}
-              manualElements={manualElements}
-              quizSolved={quizSolved}
-              onQuizSolved={markQuizSolved}
-              onToggleCompletion={toggleCompletion}
-              onClose={() => selectNode(null)}
+            <MapControls
+              onZoomIn={() => mapRef.current?.zoomBy(1.25)}
+              onZoomOut={() => mapRef.current?.zoomBy(0.8)}
+              onReset={() => mapRef.current?.fit()}
+              onResetProgress={resetProgress}
+              canResetProgress={hasProgress}
             />
-          ) : null}
 
-          {nodeDetailOpen && selectedNode ? (
-            <NodeDetailView
-              graph={graph}
-              node={selectedNode}
-              manualElements={manualElements}
-              quizSolved={quizSolved}
-              onToggleCompletion={toggleCompletion}
-              onViewElement={openElementFromDetail}
-              onViewNode={openNodeFromDetail}
-              onViewContent={openContentFromDetail}
-              onClose={closeNodeDetail}
-            />
-          ) : null}
-        </div>
+            {hoveredNode ? <HoverCard node={hoveredNode} x={pointer.x} y={pointer.y} /> : null}
+
+            {root ? (
+              <DetailPane
+                graph={graph}
+                root={root}
+                manualElements={manualElements}
+                quizSolved={quizSolved}
+                onQuizSolved={markQuizSolved}
+                onToggleCompletion={toggleCompletion}
+                onOpenElement={openElement}
+                onClose={() => selectNode(null)}
+              />
+            ) : null}
+
+            {nodeDetailOpen && selectedNode ? (
+              <NodeDetailView
+                graph={graph}
+                node={selectedNode}
+                manualElements={manualElements}
+                quizSolved={quizSolved}
+                onToggleCompletion={toggleCompletion}
+                onViewElement={(elementId) => openElement(graph.subject, elementId)}
+                onViewNode={openNodeFromDetail}
+                onViewContent={() => setNodeDetailOpen(false)}
+                onClose={closeNodeDetail}
+              />
+            ) : null}
+          </div>
+        )}
       </div>
       <Toaster
         theme="dark"

@@ -13,14 +13,7 @@ import { Circle } from "./icons/Circle";
 import { Expand } from "./icons/Expand";
 import { X } from "./icons/X";
 import { ElementMdxView } from "./ElementMdxView";
-
-function parseWikilinkTarget(
-  target: string,
-): { subject: string; kind: "element" | "node"; id: string } | null {
-  const m = target.match(/^learn\/([^/]+)\/(elements|nodes)\/([^#/]+)/);
-  if (!m) return null;
-  return { subject: m[1], kind: m[2] === "elements" ? "element" : "node", id: m[3] };
-}
+import { findWikilinkTarget } from "../lib/wikilink";
 
 interface DetailPaneProps {
   graph: SubjectGraph;
@@ -29,6 +22,7 @@ interface DetailPaneProps {
   quizSolved: Set<string>;
   onQuizSolved: (elementId: string) => void;
   onToggleCompletion: (id: string) => void;
+  onOpenElement: (subject: string, elementId: string) => void;
   onClose: () => void;
 }
 
@@ -43,6 +37,7 @@ export function DetailPane({
   quizSolved,
   onQuizSolved,
   onToggleCompletion,
+  onOpenElement,
   onClose,
 }: DetailPaneProps) {
   const nodeById = useMemo(() => new Map(graph.nodes.map((p) => [p.id, p])), [graph]);
@@ -129,17 +124,14 @@ export function DetailPane({
   }
 
   function handleContentClick(e: React.MouseEvent) {
-    const anchor = (e.target as HTMLElement).closest("a.wikilink");
-    if (!anchor) return;
-    const target = anchor.getAttribute("data-target");
-    if (!target) return;
-    const parsed = parseWikilinkTarget(target);
-    if (!parsed || parsed.subject !== graph.subject) return;
-    push(
-      parsed.kind === "element"
-        ? { kind: "element", id: parsed.id }
-        : { kind: "node", id: parsed.id },
-    );
+    const parsed = findWikilinkTarget(e);
+    if (!parsed) return;
+    if (parsed.kind === "element") {
+      // Element links jump to the standalone element page.
+      onOpenElement(parsed.subject, parsed.id);
+    } else if (parsed.subject === graph.subject) {
+      push({ kind: "node", id: parsed.id });
+    }
   }
 
   function handleToggleElement() {
@@ -344,7 +336,7 @@ export function DetailPane({
                           <button
                             key={id}
                             type="button"
-                            onClick={() => push({ kind: "element", id })}
+                            onClick={() => onOpenElement(graph.subject, id)}
                             className="chip"
                             title={element?.title ?? id}
                           >
@@ -373,7 +365,7 @@ export function DetailPane({
                           <button
                             key={id}
                             type="button"
-                            onClick={() => push({ kind: "element", id })}
+                            onClick={() => onOpenElement(graph.subject, id)}
                             className="chip"
                             title={element?.title ?? id}
                           >
