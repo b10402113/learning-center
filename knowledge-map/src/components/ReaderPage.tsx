@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { button } from "../lib/buttonVariants";
 import { cn } from "../lib/cn";
 import { statusLabel } from "../lib/colors";
 import { isCompletionLocked, isNodeComplete, nodeItems } from "../lib/completion";
 import { resolveElementSource } from "../lib/hashlink";
 import { elementMdxComponents, nodeMdxComponents, type MdxComponents } from "../lib/mdxComponents";
 import { getElementMdx, getNodeMdx } from "../lib/mdxRegistry";
-import type { Node, SubjectGraph } from "../lib/types";
+import type { Node, ReaderModalTarget, SubjectGraph } from "../lib/types";
 import { findWikilinkTarget } from "../lib/wikilink";
 import { CompletionToggle } from "./CompletionToggle";
 import { Expand } from "./icons/Expand";
@@ -29,15 +30,22 @@ type ReaderPageProps = ReaderCommonProps &
   (
     | { mode: "node"; nodeId: string }
     | { mode: "element"; elementId: string; from: string | null }
-  );
+  ) & {
+    // `standalone` (default) is the addressable full page; `readerModal` hosts the
+    // same docs page inside the transient overlay, swapping the focus toggle for
+    // expand/close (ADR-0003).
+    presentation?: "standalone" | "readerModal";
+    onExpand?: (target: ReaderModalTarget) => void;
+    onClose?: () => void;
+  };
 
 /**
  * The shared three-column docs page (ADR-0003). Left course nav (nodes only),
  * central article, right TOC → progress → related list. Renders a node lesson
  * (`mode: "node"`) or an element concept (`mode: "element"`) through the same
  * layout so the two never diverge. Standalone presentation owns a focus mode
- * that collapses the chrome; the reader-modal presentation (ticket 02) reuses
- * this component inside an overlay.
+ * that collapses the chrome; the reader-modal presentation reuses this
+ * component inside an overlay.
  */
 export function ReaderPage({
   graph,
@@ -51,6 +59,7 @@ export function ReaderPage({
   ...props
 }: ReaderPageProps) {
   const mode = props.mode;
+  const readerModal = (props.presentation ?? "standalone") === "readerModal";
   const node = mode === "node" ? graph.nodes.find((n) => n.id === props.nodeId) ?? null : null;
   const element =
     mode === "element" ? (graph.elements[props.elementId] ?? null) : null;
@@ -216,6 +225,23 @@ export function ReaderPage({
   // `?from` never propagates — the breadcrumb source is the real node shown).
   const origin = mode === "node" ? props.nodeId : sourceNodeId;
 
+  // In the reader-modal presentation, "expand" promotes the current content to
+  // its standalone page: elements carry the resolved source so the full page's
+  // breadcrumb can jump straight back.
+  function handleExpand() {
+    if (!props.onExpand) return;
+    if (mode === "node") {
+      props.onExpand({ kind: "node", subject: graph.subject, nodeId: node!.id });
+    } else {
+      props.onExpand({
+        kind: "element",
+        subject: graph.subject,
+        elementId: element!.id,
+        from: sourceNodeId,
+      });
+    }
+  }
+
   function handleContentClick(e: React.MouseEvent) {
     const parsed = findWikilinkTarget(e);
     if (!parsed) return;
@@ -317,15 +343,38 @@ export function ReaderPage({
               {mode === "element" ? <span className="sep">/</span> : null}
               <span className="current">{title}</span>
             </nav>
-            <button
-              type="button"
-              onClick={() => setFocusMode(true)}
-              className="element-focus-toggle"
-              title="聚焦模式 (Esc 離開)"
-            >
-              <Expand size={12} />
-              聚焦
-            </button>
+            {readerModal ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handleExpand}
+                  className="element-focus-toggle"
+                  title="展開為獨立全頁"
+                >
+                  <Expand size={12} />
+                  展開
+                </button>
+                <button
+                  type="button"
+                  onClick={props.onClose}
+                  aria-label="關閉視窗"
+                  title="關閉 (Esc)"
+                  className={cn(button({ variant: "ghost", size: "icon" }), "shrink-0")}
+                >
+                  <X size={16} />
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setFocusMode(true)}
+                className="element-focus-toggle"
+                title="聚焦模式 (Esc 離開)"
+              >
+                <Expand size={12} />
+                聚焦
+              </button>
+            )}
           </div>
         ) : null}
 
@@ -491,15 +540,17 @@ export function ReaderPage({
                 />
               </>
             )}
-            <button
-              type="button"
-              className="toc-focus"
-              onClick={() => setFocusMode(true)}
-              title="聚焦模式 (Esc 離開)"
-            >
-              <Expand size={12} />
-              進入聚焦
-            </button>
+            {!readerModal ? (
+              <button
+                type="button"
+                className="toc-focus"
+                onClick={() => setFocusMode(true)}
+                title="聚焦模式 (Esc 離開)"
+              >
+                <Expand size={12} />
+                進入聚焦
+              </button>
+            ) : null}
           </div>
 
           {mode === "element" ? (

@@ -19,6 +19,8 @@ interface NodeDetailViewProps {
   onViewNode: (nodeId: string) => void;
   onViewContent: () => void;
   onClose: () => void;
+  /** When a reader modal sits on top, Esc belongs to it — not the checklist. */
+  escDisabled?: boolean;
 }
 
 type ListItem =
@@ -35,6 +37,7 @@ export function NodeDetailView({
   onViewNode,
   onViewContent,
   onClose,
+  escDisabled,
 }: NodeDetailViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -68,6 +71,7 @@ export function NodeDetailView({
   );
 
   useEffect(() => {
+    if (escDisabled) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -76,7 +80,7 @@ export function NodeDetailView({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, escDisabled]);
 
   function getStatus(item: ListItem): boolean {
     if (item.kind === "element") return manualElements.has(item.element.id);

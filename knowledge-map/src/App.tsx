@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import graphData from "./data/graph.json";
 import { RoadMap } from "./components/RoadMap";
-import { DetailPane } from "./components/DetailPane";
 import { ElementPage } from "./components/ElementPage";
 import { ForceMap } from "./components/ForceMap";
 import { HoverCard } from "./components/HoverCard";
@@ -11,6 +10,7 @@ import { Legend } from "./components/Legend";
 import { MapControls } from "./components/MapControls";
 import { NodeDetailView } from "./components/NodeDetailView";
 import { NodePage } from "./components/NodePage";
+import { ReaderModal } from "./components/ReaderModal";
 import { TopBar } from "./components/TopBar";
 import { isNodeComplete } from "./lib/completion";
 import { isWritten } from "./lib/colors";
@@ -23,7 +23,7 @@ import {
   type ProgressRecord,
   type SubjectProgress,
 } from "./lib/progress";
-import type { FocusRequest, MapHandle, SubjectGraph, View } from "./lib/types";
+import type { FocusRequest, MapHandle, ReaderModalTarget, SubjectGraph } from "./lib/types";
 
 const graphs = graphData as unknown as SubjectGraph[];
 
@@ -85,6 +85,7 @@ export default function App() {
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const [view, setView] = useState<"nebula" | "roadmap">("nebula");
   const [nodeDetailOpen, setNodeDetailOpen] = useState(false);
+  const [readerModal, setReaderModal] = useState<ReaderModalTarget | null>(null);
   const mapRef = useRef<MapHandle | null>(null);
 
   // Mirror subject + selection into the hash so the current map view is
@@ -105,12 +106,14 @@ export default function App() {
   }, [route, subject, selectedNodeId]);
 
   // React to external hash edits (back/forward, pasted links, manual typing,
-  // and our own element/map navigation) and dispatch to the right view.
+  // and our own element/map navigation) and dispatch to the right view. Any
+  // hash navigation also dismisses the transient reader modal.
   useEffect(() => {
     const onHashChange = () => {
       const next = resolveRoute(window.location.hash, subject);
       setRoute(next);
       setNodeDetailOpen(false);
+      setReaderModal(null);
       if (next.kind === "element" || next.kind === "node") {
         setSubject(next.subject);
         setSelectedNodeId(null);
@@ -131,6 +134,19 @@ export default function App() {
   }, [progress]);
 
   const graph = graphs.find((g) => g.subject === subject) ?? graphs[0];
+
+  // The reader modal can carry a different subject than the map (cross-subject
+  // wikilinks); resolve the graph for whatever it is currently showing.
+  const modalGraph = readerModal
+    ? (graphs.find((g) => g.subject === readerModal.subject) ?? graphs[0])
+    : null;
+
+  // Completion inside the modal must read/write the *modal* subject's record —
+  // never the map subject's — so cross-subject wikilinks can't pollute progress.
+  const modalElements = readerModal && modalGraph
+    ? (progress[modalGraph.subject]?.elements ?? [])
+    : [];
+  const modalManualElements = useMemo(() => new Set(modalElements), [modalElements]);
 
   const subjectProgress = progress[graph.subject] ?? emptySubjectProgress();
 
@@ -193,10 +209,44 @@ export default function App() {
     window.location.hash = buildElementHash(targetSubject, elementId, from);
   }
 
+  // ── Reader modal (ADR-0003) ──
+  // The transient overlay is pure React state — never written to the URL. Map
+  // and checklist clicks open it; links inside it switch its content; expand
+  // navigates to the standalone page (closing the modal); close/Esc dismiss it
+  // back to the surface underneath.
+  function openNodeReader(targetSubject: string, nodeId: string) {
+    setReaderModal({ kind: "node", subject: targetSubject, nodeId });
+  }
+
+  function openElementReader(
+    targetSubject: string,
+    elementId: string,
+    from: string | null = null,
+  ) {
+    setReaderModal({ kind: "element", subject: targetSubject, elementId, from });
+  }
+
+  function closeReaderModal() {
+    setReaderModal(null);
+  }
+
+  function toggleModalCompletion(id: string) {
+    if (!modalGraph) return;
+    updateSubject(modalGraph.subject, (s) => ({ ...s, elements: toggleId(s.elements, id) }));
+  }
+
+  function expandReaderModal(target: ReaderModalTarget) {
+    if (target.kind === "node") navigateToNode(target.subject, target.nodeId);
+    else navigateToElement(target.subject, target.elementId, target.from);
+    setReaderModal(null);
+  }
+
   function selectNode(id: string | null) {
     setSelectedNodeId(id);
     if (id && view === "roadmap") {
       setNodeDetailOpen(true);
+    } else if (id && view === "nebula") {
+      openNodeReader(subject, id);
     }
     if (id) setFocusRequest({ nodeId: id, tick: performance.now() });
     else setFocusRequest(null);
@@ -208,28 +258,17 @@ export default function App() {
     setFocusRequest(null);
   }
 
-  // A node prerequisite in the node detail switches the displayed node while
-  // keeping the checklist modal open.
-  function openNodeFromDetail(nodeId: string) {
-    setSelectedNodeId(nodeId);
-    setNodeDetailOpen(true);
-    setFocusRequest({ nodeId, tick: performance.now() });
-  }
-
   // A question element's in-app quiz unlocks its completion check. Session-only
   // (self-test, not a gate) — the persisted completion is the manual check.
   function markQuizSolved(elementId: string) {
     setQuizSolved((prev) => (prev.has(elementId) ? prev : new Set(prev).add(elementId)));
   }
 
-  // Every element click — map node, checklist row, prerequisite card, chip —
-  // jumps to that element's standalone page, carrying an optional lesson origin.
+  // Standalone pages navigate directly — links inside them never open the modal.
   function openElement(subjectKey: string, elementId: string, from?: string | null) {
     navigateToElement(subjectKey, elementId, from);
   }
 
-  // Inside a standalone page, node clicks navigate directly to that lesson's
-  // full page (never the reader modal).
   function openNode(subjectKey: string, nodeId: string) {
     navigateToNode(subjectKey, nodeId);
   }
@@ -252,11 +291,6 @@ export default function App() {
   const selectedNode = selectedNodeId
     ? (graph.nodes.find((n) => n.id === selectedNodeId) ?? null)
     : null;
-  const root: View | null = nodeDetailOpen
-    ? null
-    : selectedNode
-      ? { kind: "node", id: selectedNode.id }
-      : null;
   const hoveredNode =
     hoveredId && hoveredId !== selectedNodeId
       ? (graph.nodes.find((n) => n.id === hoveredId) ?? null)
@@ -322,7 +356,7 @@ export default function App() {
                 manualElements={manualElements}
                 hoveredId={hoveredId}
                 onSelect={selectNode}
-                onSelectElement={(elementId) => openElement(subject, elementId)}
+                onSelectElement={(elementId) => openElementReader(subject, elementId)}
                 onHover={setHoveredId}
               />
             )}
@@ -339,19 +373,6 @@ export default function App() {
 
             {hoveredNode ? <HoverCard node={hoveredNode} x={pointer.x} y={pointer.y} /> : null}
 
-            {root ? (
-              <DetailPane
-                graph={graph}
-                root={root}
-                manualElements={manualElements}
-                quizSolved={quizSolved}
-                onQuizSolved={markQuizSolved}
-                onToggleCompletion={toggleCompletion}
-                onOpenElement={openElement}
-                onClose={() => selectNode(null)}
-              />
-            ) : null}
-
             {nodeDetailOpen && selectedNode ? (
               <NodeDetailView
                 graph={graph}
@@ -359,10 +380,27 @@ export default function App() {
                 manualElements={manualElements}
                 quizSolved={quizSolved}
                 onToggleCompletion={toggleCompletion}
-                onViewElement={(elementId) => openElement(graph.subject, elementId)}
-                onViewNode={openNodeFromDetail}
-                onViewContent={() => setNodeDetailOpen(false)}
+                onViewElement={(elementId) => openElementReader(graph.subject, elementId, selectedNode.id)}
+                onViewNode={(nodeId) => openNodeReader(graph.subject, nodeId)}
+                onViewContent={() => openNodeReader(graph.subject, selectedNode.id)}
                 onClose={closeNodeDetail}
+                escDisabled={readerModal !== null}
+              />
+            ) : null}
+
+            {readerModal && modalGraph ? (
+              <ReaderModal
+                graph={modalGraph}
+                target={readerModal}
+                manualElements={modalManualElements}
+                quizSolved={quizSolved}
+                onQuizSolved={markQuizSolved}
+                onToggleCompletion={toggleModalCompletion}
+                onNavigateNode={openNodeReader}
+                onNavigateElement={openElementReader}
+                onBackToMap={closeReaderModal}
+                onExpand={expandReaderModal}
+                onClose={closeReaderModal}
               />
             ) : null}
           </div>

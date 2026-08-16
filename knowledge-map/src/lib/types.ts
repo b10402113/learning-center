@@ -80,5 +80,9 @@ export interface MapHandle {
   zoomBy: (factor: number) => void;
 }
 
-// A detail-pane destination: a lesson path or a concept node.
-export type View = { kind: "node"; id: string } | { kind: "element"; id: string };
+// A reader-modal destination (ADR-0003): the transient overlay content, either a
+// lesson or a concept. `from` records the teaching lesson an element came from so
+// the breadcrumb can jump back. Transient — never written to the URL.
+export type ReaderModalTarget =
+  | { kind: "node"; subject: string; nodeId: string }
+  | { kind: "element"; subject: string; elementId: string; from: string | null };

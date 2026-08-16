@@ -1,7 +1,8 @@
 // Client-side wikilink target parser. The MDX `a` override (`WikiLink`) stamps
 // `data-target="learn/<subject>/<kind>/<id>"` on in-app navigation anchors; this
-// turns that back into a structured destination. Shared by DetailPane and the
-// element page so article-internal jumps behave identically everywhere.
+// turns that back into a structured destination. Shared by the reader modal and
+// the standalone docs page so article-internal jumps behave identically
+// everywhere.
 export function parseWikilinkTarget(
   target: string,
 ): { subject: string; kind: "element" | "node"; id: string } | null {
