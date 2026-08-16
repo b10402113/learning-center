@@ -1,195 +1,29 @@
 ---
 name: nodes
-description: Extract canonical elements and write one detailed lesson article for a confirmed node.
+description: Reason out a node's step-DAG, then write each step article and the node container.
 disable-model-invocation: true
 argument-hint: "Which subject/node should be written?"
 ---
 
-Write the canonical concepts and lesson article for one confirmed node. Invoke as `/nodes <subject>/<node-id>`. A node is the 10–15 minute narrative; elements are reusable pages that carry the detailed explanations behind that narrative.
+Turn one confirmed node into a step-DAG of step articles. Invoke as `/nodes <subject>/<node-id>`. A **node** is a container holding a step-DAG (step ids + order + deps), the reading order, and a short main lesson; a **step** is a first-class article file that declares the **elements** it teaches; an **element** is a keyword dictionary page that carries the detailed explanation behind a step's narrative.
 
-Prereqs: `learn/<subject>/MEMORY.md` exists and the node file exists. Invoking `/nodes <subject>/<node-id>` is the learner's confirmation for that node: if its status is `draft`, change it to `confirmed` before starting work. If it is already `confirmed`, continue directly. Existing `nodes-written` or `content-written` nodes are eligible for incremental updates.
+Prereqs: `learn/<subject>/MEMORY.md` exists and the node container exists. Invoking `/nodes <subject>/<node-id>` is the learner's confirmation for that node: if its status is `draft`, set it to `confirmed` before starting work. If already `confirmed` (or further along), continue directly — later steps update incrementally.
 
-1. **Resolve and confirm.** Read `learn/<subject>/ROADMAP.md`, `MEMORY.md`, and `learn/<subject>/nodes/<node-id>.mdx`. Resolve the exact source references in the node. Do not infer the subject from a node name. Once the node exists and its sources are resolvable, set a `draft` node to `confirmed`; the explicit `/nodes` invocation is the confirmation gate.
-2. **Tune.** Read `MEMORY.md` frontmatter and apply the voice per `docs/reference/tune.md`: write prose in `language`, put the `language` term first with the English name glossed in parentheses on first use (the pattern in `examples/ELEMENT.mdx`), and apply the voice to the artifacts listed in `tune-scope` (element prose keeps its section contract; the node `Lesson` is fully voiced). `tune: none`, a missing `tune`, or a missing `tune/<slug>/TUNE.md` means plain tone. Pedagogy, source citations, and the 10–15 minute lesson contract are enforced regardless. Write per `docs/reference/article-writing.md`: phenomenon before the term, a gloss for every non-trivial term on first use within the file, one claim per paragraph with a two-number cap, and no hidden prerequisites.
-3. **Extract.** Follow the shared `docs/reference/source-reading.md` protocol. Read the node's sources via their digests (`learn/<subject>/digests/`) — never raw sources. When the digest detail is insufficient for a concept, dispatch a sub-agent to pull the exact section's original text by locator (one-off, returned in message). Identify only the core concepts that need independent explanation, reuse, or judgment. Ordinary one-off terms do not need element pages. Usually create 3–7 elements, adjusted to the lesson.
-4. **Canonicalize.** Give each concept an immutable kebab-case `id`. Reuse an existing element when the core concept is the same. A node-specific framing belongs in the node article, not in a duplicate element.
-5. **Update elements.** For each selected concept, create or incrementally update `learn/<subject>/elements/<element-id>.mdx`. Preserve useful existing explanations. Add supported depth, examples, connections, source references, and retrieval questions; never replace a useful element with a shallower rewrite. Add the current `<subject>/<node-id>` to `nodes` and deduplicate `sources`.
-6. **Set canonical metadata.** `tier` is the element's subject-level abstraction depth. `order` is its stable canonical display order; neither is the element's order in this lesson. The node's `elements` array is the teaching order.
-7. **Write the prepare note (optional).** Check whether `learn/<subject>/prepares/<node-id>.mdx` exists. When it does not, write a short prepare note following the format below — one page of "before you read" concepts, 3–5 minutes to read, so the learner builds a first-pass mental model before the lesson. It is a preview, not a condensed lesson. Skip it when the node is simple, when the learner prefers to dive straight in, or when this is an incremental update of an already-written lesson. When updating an existing prepare note, preserve useful prior content.
-8. **Write the node article.** After all selected element files exist, update the node file's `elements` array and write a self-contained 10–15 minute `## Lesson` following `docs/reference/article-writing.md`. Link the core concepts at their first useful appearance with stable node-qualified element links. The article teaches the node's main idea without copying every element's deep dive. Write the lesson as a flowing narrative in the register of `examples/NODE.mdx`.
-9. **Verify.** Check that every node element exists, every article element link resolves, every source link points into `sources/<subject>/` and its section locator resolves in the source's digest, every element has at least two meaningful connections, and each element has relationship and value-judgment retrieval questions. When a tune applies, check the prose follows the voice and language from `MEMORY.md`.
-10. **Report.** List created elements, updated elements, the completed node article, any prepare note written, and any unresolved source or link issues. Move the node through `nodes-written` and `content-written` only when those checks pass.
+1. **Resolve.** Read `learn/<subject>/ROADMAP.md`, `MEMORY.md`, and `learn/<subject>/nodes/<node-id>.mdx`. Resolve the node's exact source references. Do not infer the subject from a node name. Set a `draft` node to `confirmed` now — the explicit `/nodes` invocation is the confirmation gate.
+2. **Tune.** Read `MEMORY.md` frontmatter and apply the voice per `docs/reference/tune.md`: write prose in `language`, put the `language` term first with the English name glossed in parentheses on first use (the pattern in `examples/ELEMENT.mdx`). Apply the voice where `tune-scope` says: `steps` voices step articles only (element prose stays neutral); `elements-steps` and `all` also voice element prose (sections kept). `tune: none`, a missing `tune`, or a missing `tune/<slug>/TUNE.md` means plain tone. Pedagogy, source citations, and the 10–15 minute step contract are enforced regardless.
+3. **Read sources via digests.** Follow `docs/reference/source-reading.md`: read the node's sources through `learn/<subject>/digests/` — never raw sources. When a digest's L2 detail is insufficient for a concept, dispatch a sub-agent to pull the exact section text by locator (one-off, returned in message).
+4. **Reason the step-DAG.** Decompose the node into steps before writing anything. Each step is one coherent 10–15 minute teaching unit with its own learner-facing goal. Give each step an immutable kebab-case `id`, a reading `order`, and `deps` naming the earlier steps it builds on; a step may branch from or merge into several. 2–5 steps is typical. The DAG is a deliberate plan reasoned from the digests, never improvised while writing articles.
+5. **Confirm the DAG (checkpoint).** Present the step-DAG — step ids, one-line goals, order, and deps — and ask the learner to confirm before writing any step article or element. Exit options: accept; reorder or rename steps; add, remove, split, or merge steps. Do not write a single step file or element until this checkpoint passes.
+6. **Select concepts.** Identify the core concepts each step needs as elements — concepts that deserve independent explanation, reuse, or judgment. Ordinary one-off terms do not need element pages. Usually 3–7 per node, adjusted to the lesson. Reuse an existing element when the core concept is the same; a step-specific framing belongs in the step article, not in a duplicate element. Never author a `question`-typed element — graded verification lives only in `/tackle`, and an element's `Questions` section is a no-grade self-check.
+7. **Update elements.** For each selected concept, create or incrementally update `learn/<subject>/elements/<element-id>.mdx` as `article` (or `video`). Preserve useful existing explanations; add supported depth, examples, connections, sources, and retrieval questions — never replace a useful element with a shallower rewrite. Add the current `<subject>/<node-id>` to `nodes` and deduplicate `sources`.
+8. **Write step articles.** For each step, write `learn/<subject>/nodes/<node-id>/<step-id>.mdx` as a first-class 10–15 minute article. Frontmatter declares `teaches` — the subject-qualified element ids this step teaches (`<subject>/<element-id>`); deps live in the node's DAG, never in the step file. Write prose in the subject's `language` with the tune applied per `tune-scope`. Link each element at its first useful appearance with a stable node-qualified link; cite sources with locators. Write per `docs/reference/article-writing.md`: phenomenon before the term, a gloss for every non-trivial term on first use within the file, and no hidden prerequisites.
+9. **Write the node container.** Rewrite `learn/<subject>/nodes/<node-id>.mdx` as a container: `steps` frontmatter (id + order + deps), the reading order in `## Steps`, a short `## Lesson` main lesson (the overarching idea that ties the steps together — not a second full article), and `## Sources`. Set `prerequisites` to the elements and nodes the learner should know first. No flat `elements` frontmatter list.
+10. **Verify.** Check every step file exists and matches a `steps` DAG entry (and every DAG entry has a step file); every step's `teaches` element resolves; every element and step link resolves; every source link points into `sources/<subject>/` and its section locator resolves in the digest; every element has at least two meaningful connections and relationship + value-judgment retrieval questions. When a tune applies, check the prose follows the voice and language from `MEMORY.md`.
+11. **Report.** List the confirmed DAG, created and updated elements, the written step articles, the completed node container, and any unresolved source or link issues. Move the node through `nodes-written` (DAG confirmed, elements written) and `content-written` (all step articles and the container written, all checks pass).
 
-Completion: the selected canonical elements exist or are updated without losing prior useful content, the node's `elements` list matches its article links, the node article is complete and readable in 10–15 minutes, all citations resolve, and — when a tune applies — the prose is in the subject's `language` and follows the voice.
+Completion: the step-DAG is confirmed, every step article exists and declares the elements it `teaches`, the node container holds the DAG and the main lesson with no flat `elements` list, every element is an `article`/`video` page with retrieval questions, all citations resolve, and the node is `content-written`.
 
-## Element format
-
-Elements are written as **MDX** files. The frontmatter carries a `type` field that determines the element's interactive shape.
-
-```markdown
----
-id: <immutable-kebab-case-id>
-title: <Title>
-subject: <subject>
-tier: <canonical abstraction depth>
-order: <stable canonical order>
-type: <article | video | question>
-nodes:
-  - <subject>/<node-id>
-sources:
-  - "[[sources/<subject>/<file>#<section>]]"
-created: YYYY-MM-DD
-updated: YYYY-MM-DD
----
-```
-
-### `type` field
-
-| `type` | Default | Conditional fields | Notes |
-|--------|---------|--------------------|-------|
-| `article` | yes (when omitted) | none | Standard concept page with prose sections |
-| `video` | — | `videoUrl: "<embed URL>"` required | Frontmatter must include `videoUrl`; body is optional supplementary notes |
-| `question` | — | `questions:` block required | Each entry: `question` (string), `options` (string array), `answer` (0-indexed number) |
-
-Only one conditional field set appears per element — `video` carries `videoUrl` (not `questions`); `question` carries `questions` (not `videoUrl`); `article` carries neither.
-
-### `article` element body
-
-```markdown
-# <Title>
-
-## Problem Statement
-One or two sentences posing the problem this concept solves, framed as the learner's question.
-
-## Why it matters
-The one-line value judgment: what breaks without it.
-
-## How it works
-The mechanism, taught plain-first. Introduce the mechanism before the term, gloss every non-trivial term on first use within this file per `docs/reference/article-writing.md`, and anchor it to `MEMORY.md` or an earlier concept. The element is self-contained.
-
-## In plain terms
-(Optional; omit when the mechanism is simple) Restate the idea without jargon.
-
-## Analogy
-(Optional; omit when no good metaphor exists) A concrete everyday metaphor for the idea.
-
-## Practical use
-When you actually reach for this at work, tied to `MEMORY.md` anchors where possible.
-
-## Prerequisites
-(Optional; omit the whole section when none) Concepts that make this element easier to learn. Known concepts link to their elements; unknown ones stay plain terms with a one-line reminder.
-- [[learn/<subject>/elements/<element-id>|<Element title>]] — what it gives you
-- <plain term> — one-line reminder
-
-## Connections
-- [[learn/<subject>/elements/<element-id>|<Element title>]] — why it connects
-- [[learn/<subject>/elements/<element-id>|<Element title>]] — why it connects
-
-## Deep dive
-- [[sources/<subject>/<file>#<section>]] — what it adds
-
-## Questions
-### Q1. <relationship question>
-A1. <answer>
-
-### Q2. <value-judgment question>
-A2. <answer>
-
-### Q3. <optional recall or application question>
-A3. <answer>
-```
-
-### `video` element body
-
-```markdown
----
-id: <id>
-title: <Title>
-subject: <subject>
-tier: <tier>
-order: <order>
-type: video
-videoUrl: "https://www.youtube.com/embed/<video-id>"
-nodes:
-  - <subject>/<node-id>
-sources:
-  - "[[sources/<subject>/<file>#<section>]]"
-created: YYYY-MM-DD
-updated: YYYY-MM-DD
----
-
-# <Title>
-
-## Why this video
-One or two sentences on what the learner should notice while watching.
-
-## Key takeaways
-- <takeaway 1>
-- <takeaway 2>
-
-## Connections
-- [[learn/<subject>/elements/<element-id>|<Element title>]] — why it connects
-
-## Deep dive
-- [[sources/<subject>/<file>#<section>]] — what it adds
-
-## Questions
-### Q1. <relationship question>
-A1. <answer>
-
-### Q2. <value-judgment question>
-A2. <answer>
-```
-
-### `question` element body
-
-```markdown
----
-id: <id>
-title: <Title>
-subject: <subject>
-tier: <tier>
-order: <order>
-type: question
-questions:
-  - question: "<question text>"
-    options:
-      - "<option A>"
-      - "<option B>"
-      - "<option C>"
-    answer: 1
-  - question: "<question text>"
-    options:
-      - "<option A>"
-      - "<option B>"
-    answer: 0
-nodes:
-  - <subject>/<node-id>
-sources:
-  - "[[sources/<subject>/<file>#<section>]]"
-created: YYYY-MM-DD
-updated: YYYY-MM-DD
----
-
-# <Title>
-
-## Context
-One or two sentences framing what this question tests and why it matters.
-
-## Connections
-- [[learn/<subject>/elements/<element-id>|<Element title>]] — why it connects
-
-## Deep dive
-- [[sources/<subject>/<file>#<section>]] — what it adds
-```
-
-`answer` is 0-indexed. The renderer presents options as interactive choices; the learner must answer correctly before the element counts as complete (self-test, not a gate).
-
-Rendered section headings follow `MEMORY.md` `language`. `Problem Statement`, `Connections`, `Deep dive`, and `Questions` stay in English; the other headings translate, with the rendered set shown in `examples/ELEMENT.mdx`.
-
-## Node format
-
-Nodes are written as **MDX** files. The frontmatter carries a `prerequisites` list that names the elements or nodes the learner should know before this lesson.
+## Node container format
 
 ```markdown
 ---
@@ -203,8 +37,13 @@ status: <draft | confirmed | nodes-written | content-written | edges-written>
 goal: <learner-facing outcome>
 sources:
   - "[[sources/<subject>/<file>#<section>]]"
-elements:
-  - <subject>/<element-id>
+steps:
+  - id: <step-id>
+    order: 1
+  - id: <step-id>
+    order: 2
+    deps:
+      - <step-id>
 prerequisites:
   - learn/<subject>/elements/<element-id>
   - learn/<subject>/nodes/<node-id>
@@ -217,59 +56,74 @@ updated: YYYY-MM-DD
 ## Learning goal
 <learner-facing outcome>
 
-## Elements
-{/* /nodes fills this list in teaching order. */}
+## Steps
+<Reading order — each step is a 10–15 minute article; deps show what must come first.>
+
+1. [[learn/<subject>/nodes/<node-id>/<step-id>|<Step title>]] — <one-line goal>
+2. [[learn/<subject>/nodes/<node-id>/<step-id>|<Step title>]] — <one-line goal> (after step 1)
+3. [[learn/<subject>/nodes/<node-id>/<step-id>|<Step title>]] — <one-line goal> (after steps 1–2)
 
 ## Lesson
-{/* /nodes writes the 10–15 minute article here. */}
+<The node's main lesson — the overarching idea the steps build toward, a few paragraphs.>
 
 ## Sources
 - [[sources/<subject>/<file>#<section>]]
-- [[sources/<subject>/<file>#<section>]]
 ```
 
-### `prerequisites` field
+`steps` is the step-DAG: every step id with its `order` and `deps`. `order` is the reading order; `deps` name the steps that must come first. A step with no `deps` is an entry point. `prerequisites` is a list of stable IDs (`learn/<subject>/elements/<id>` or `learn/<subject>/nodes/<id>`); omit the field when the node has none.
 
-`prerequisites` is a list of stable IDs. Each entry is either:
-- `learn/<subject>/elements/<element-id>` — an element the learner should complete first
-- `learn/<subject>/nodes/<node-id>` — a node the learner should complete first
-
-The generator parses `prerequisites` from frontmatter and merges them with connections derived from element `Connections` sections. Frontmatter entries are tagged `source: "frontmatter"`; derived entries are tagged `source: "derived"`. The node detail view renders them in different colors so the learner can distinguish explicit prerequisites from inferred ones.
-
-Omit the field (or use `prerequisites: []`) when the node has no prerequisites.
-
-## Prepare note format
-
-An optional short preview for one node: `learn/<subject>/prepares/<node-id>.mdx`. It exists to lower cognitive load before the 10–15 minute lesson — 2–4 key ideas in plain language, a glossary of terms to watch, and links to already-known concepts. Readable in 3–5 minutes. Headings render in the `MEMORY.md` `language`.
+## Step format
 
 ```markdown
 ---
-node: <subject>/<node-id>
-tier: <tier>
-duration: 3-5 minutes
+id: <step-id>
+title: <Step title>
+subject: <subject>
+teaches:
+  - <subject>/<element-id>
 sources:
   - "[[sources/<subject>/<file>#<section>]]"
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
 
-# <Node title> — <預習>
+# <Step title>
 
-## <Key ideas>
-1. <plain-language preview of one key idea the lesson will build>
-2. <...>
-3. <...>
+## Learning goal
+<learner-facing outcome for this step>
 
-## <術語預告 (gloss)>
-- **<term>** — one-line plain gloss
-- **<term>** — one-line plain gloss
+## Lesson
+<The 10–15 minute article — phenomenon before term, gloss first use, in the subject's language and tune.>
 
-## <已有基礎 (related concepts)>
-- [[learn/<subject>/elements/<element-id>|<Element title>]] — one-line reminder
+## Sources
+- [[sources/<subject>/<file>#<section>]]
 ```
 
-The generator picks a prepare note up by matching its filename to the node id (`prepares/<node-id>.mdx`); the `node` frontmatter records the owner for traceability. A prepare note is never created by `/roadmap`.
+`teaches` lists the subject-qualified element ids this step teaches (`<subject>/<element-id>`). Deps are not declared here — they live in the node's `steps` DAG. Omit `order`; the DAG sets it. A step links the elements it teaches at their first useful appearance, so the reader can reach the dictionary page from the article.
+
+## Element format
+
+Elements keep their keyword-dictionary structure. `type` is `article` (default) or `video`; `video` requires `videoUrl`. The `question` type is deprecated and never authored here — graded verification lives only in `/tackle`.
+
+```markdown
+---
+id: <element-id>
+title: <Title>
+subject: <subject>
+tier: <canonical abstraction depth>
+order: <stable canonical order>
+type: <article | video>
+nodes:
+  - <subject>/<node-id>
+sources:
+  - "[[sources/<subject>/<file>#<section>]]"
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+---
+```
+
+The `article` body uses the sections in `examples/ELEMENT.mdx` (`Problem Statement` · `Why it matters` · `How it works` · optional `In plain terms` / `Analogy` · `Practical use` · optional `Prerequisites` · `Connections` · `Deep dive` · `Questions`). A `video` element adds `videoUrl: "<embed URL>"` and uses a shorter body (`Why this video` · `Key takeaways` · `Connections` · `Deep dive` · `Questions`). `tier` is the element's subject-level abstraction depth and `order` its stable canonical display order — neither is the step's teaching order. The `Questions` section is a no-grade preview self-check; it never affects completion. `Connections` and `Deep dive` stay in English; the other headings render per `MEMORY.md` `language`.
 
 ## Examples
 
-Match the worked examples when writing artifacts. `examples/ELEMENT.mdx` shows a finished element page: plain-first prose, the `language` term first with the English name glossed in parentheses, and the rendered section headings. `examples/NODE.mdx` shows the node lesson's narrative register: a flowing essay that teaches, with definitions, recap, and discussion questions. The examples carry the prose and voice; the format above stays the contract — frontmatter, `Connections`, `Deep dive`, and `Questions` still come from the template even where an example omits them.
+Match the worked examples when writing artifacts. `examples/ELEMENT.mdx` shows finished element pages (`article` and `video`): plain-first prose, the `language` term first with the English name glossed in parentheses, and the rendered section headings. `examples/STEP.mdx` shows a finished step article: the 10–15 minute lesson with `teaches` frontmatter and node-qualified element links. `examples/NODE.mdx` shows a finished node container: the `steps` DAG, reading order, and the short main lesson. The examples carry the prose and voice; the formats above stay the contract — frontmatter, `Connections`, `Deep dive`, and `Questions` still come from the template even where an example omits them.
