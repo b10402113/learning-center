@@ -7,10 +7,10 @@ argument-hint: "Which subject/node should have edges written?"
 
 Write high-value relationship pages for one node. Invoke as `/edges <subject>/<node-id>`. Edges are where interleaving happens: the learner compares, contrasts, and judges instead of retrieving in isolation. Less is more.
 
-Prereqs: the selected node has `elements` and its referenced element files exist.
+Prereqs: the selected node's step-DAG and the element files its steps `teach` exist.
 
-1. **Resolve.** Read `ROADMAP.md`, `MEMORY.md`, the selected node, every element in its `elements` array, and any existing edges involving those elements. Source locators come from the digests per the shared `docs/reference/source-reading.md` protocol — never raw sources. Skim other subject elements only to find justified cross-node relationships. When `MEMORY.md` sets `tune-scope: all`, apply the voice to edge prose per `docs/reference/tune.md` (and the subject's `language`); otherwise write edges in plain tone. Write edge prose for a **cold reader** per `docs/reference/article-writing.md`: gloss every non-trivial term on first use within the file and assume no hidden prerequisites.
-2. **Propose.** Generate candidate pairs. Prefer relationships inside the selected node, cross-tier comparisons, conditional choices, and value judgments. A cross-node edge must add a useful connection that the selected lesson cannot get from its own elements.
+1. **Resolve.** Read `ROADMAP.md`, `MEMORY.md`, the selected node, every element its steps `teach`, and any existing edges involving those elements. Source locators come from the digests per the shared `docs/reference/source-reading.md` protocol — never raw sources. Skim other subject elements only to find justified cross-node relationships. When `MEMORY.md` sets `tune-scope: all`, apply the voice to edge prose per `docs/reference/tune.md` (and the subject's `language`); `steps` voices step articles only and `elements-steps` adds element prose; neither voices edges, so under those scopes write edges in plain tone. Write edge prose for a **cold reader** per `docs/reference/article-writing.md`: gloss every non-trivial term on first use within the file and assume no hidden prerequisites.
+2. **Propose.** Generate candidate pairs. Prefer relationships inside the selected node, cross-tier comparisons, conditional choices, and value judgments. A cross-node edge must add a useful connection that the selected node's steps cannot get from the elements they teach.
 3. **Prioritize.** Keep a small set of strong edges. Drop pairs that only restate an element's existing connection or add no decision value.
 4. **Update.** Create or incrementally update one page per selected edge at `learn/<subject>/edges/<edge-id>.mdx`. Preserve useful existing explanations. Use immutable element IDs in `from` and `to`; record every involved node in `nodes`.
 5. **Confirm.** Present the candidate edge set to the learner. Add or remove edges before finalizing. Mark the selected node `edges-written` only after confirmation.
@@ -27,7 +27,7 @@ Completion: the learner confirmed a small, high-value edge set, every edge resol
 
 ## Edge format
 
-Edge files are written as **MDX**. The `from` and `to` fields use stable element IDs (immutable kebab-case), which remain valid regardless of element `type` (`article`, `video`, or `question`). Cross-node edges may also reference node IDs.
+Edge files are written as **MDX**. The `from` and `to` fields use stable element IDs (immutable kebab-case), which remain valid regardless of element `type` (`article` or `video`; `question` is deprecated). Cross-node edges may also reference node IDs.
 
 ```markdown
 ---

@@ -35,7 +35,7 @@ After the profile is settled, ask three output questions and store the answers i
 
 - **Language** — what language every generated article for this subject should be in (e.g. `en`, `zh-Hant`). This is a hard commitment: later nodes, elements, and edges are written in this language.
 - **Tune** — which voice the articles should use. Auto-list the available tunes (folders under `tune/*/` that contain a `TUNE.md`) plus the option **none**. If no tune exists yet, offer none and point the learner to `/tune <author-slug>` first. Profile reading and application rules live in `docs/reference/tune.md`.
-- **Tune scope** — which artifacts get the voice: `nodes` (lesson narratives only), `elements-nodes` (lesson plus element prose, sections kept), or `all` (also edges). Default `elements-nodes`.
+- **Tune scope** — which artifacts get the voice: `steps` (step articles only), `elements-steps` (step plus element prose, sections kept), or `all` (also edges). Default `elements-steps`.
 
 Write `learn/<subject>/MEMORY.md` in the template below, then confirm the profile is accurate before ending the session.
 
@@ -46,7 +46,7 @@ Write `learn/<subject>/MEMORY.md` in the template below, then confirm the profil
 subject: <subject>
 language: <output language for all articles, e.g. en | zh-Hant>
 tune: <author-slug | none>
-tune-scope: <nodes | elements-nodes | all>
+tune-scope: <steps | elements-steps | all>
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
@@ -78,3 +78,5 @@ updated: YYYY-MM-DD
 ```
 
 Completion: every branch has a settled answer, `MEMORY.md` is written, and the learner confirms it's accurate.
+
+Next stage: `/probe <subject>` — the learner runs it next to measure per-area mastery before the roadmap is planned.

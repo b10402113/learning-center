@@ -69,12 +69,12 @@ Writer skills apply a tune through `MEMORY.md` frontmatter:
 
 - `language` — the output language for all prose in this subject.
 - `tune` — the author slug, or `none`.
-- `tune-scope` — `nodes` | `elements-nodes` | `all`; which artifacts get the voice.
+- `tune-scope` — `steps` (step articles only) | `elements-steps` (element prose too, sections kept) | `all` (also edges). Steps are the article carriers, so the teaching voice applies to them; elements stay neutral dictionary prose under `steps`.
 
 Rules:
 
 - `tune: none` (or missing) → plain tone, the current behavior.
 - `tune: <slug>` but `tune/<slug>/TUNE.md` missing → fall back to plain tone and warn that `/tune <slug>` must run first.
-- Voice is a styling layer: pedagogy (`MEMORY.md` "How to teach me"), source citations, and the 10–15 minute lesson contract are enforced regardless of the tune.
+- Voice is a styling layer: pedagogy (`MEMORY.md` "How to teach me"), source citations, and the 10–15 minute step lesson contract are enforced regardless of the tune.
 - Non-English `language`: keep technical terms in English with a parenthetical translation (e.g., `B-tree（B 樹）`). The parenthetical form and gloss requirements are owned by `docs/reference/article-writing.md` (Rule 2) — when a term needs more than a name translation, that protocol governs.
 - Exemplars are references, never copy: articles are written *in the style of*, not verbatim.
