@@ -54,9 +54,29 @@ drawn as navigable connections.
 _Avoid_: tower, map view.
 
 **視圖切換 / View switch**:
-Transitioning between Nebula and Roadmap (and between DetailPane breadcrumb steps)
-via the View Transitions API.
+Transitioning between Nebula and Roadmap via the View Transitions API.
 _Avoid_: page transition (there are no pages).
+
+**Node 頁面 / Node page**:
+The standalone full-page view of one node's lesson (`#/nodes/<subject>/<node-id>`),
+rendered with the same three-column docs layout as element pages. Reading is
+entered either through a transient reader modal or directly by deep-link.
+_Avoid_: lesson view, node content.
+
+**Element 頁面 / Element page**:
+The standalone full-page view of one element
+(`#/elements/<subject>/<element-id>`), carrying an optional `?from=<node-id>`
+origin so the breadcrumb can return to the teaching lesson. Shares the docs
+layout with node pages.
+_Avoid_: concept page, element view.
+
+**元素視窗 / Reader modal**:
+The transient overlay that hosts the same node/element docs page when reading is
+entered from the map, a checklist modal, chips, wikilinks, or search. "Expand"
+navigates to the standalone page; closing returns to the surface underneath
+(nested over the checklist modal). The retired DetailPane side panel is not a
+reader modal.
+_Avoid_: sidebar, popup, panel.
 
 ## Search
 

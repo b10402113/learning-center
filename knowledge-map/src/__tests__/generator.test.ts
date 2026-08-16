@@ -272,15 +272,15 @@ Compare them.
 `;
 
 const FILES = {
-  "nodes/p1.md": P1,
-  "nodes/p2.md": P2,
-  "nodes/p3.md": P3,
-  "elements/n1.md": N1,
-  "elements/n2.md": N2,
-  "elements/n3.md": N3,
-  "elements/nv.md": NV,
-  "elements/nq.md": NQ,
-  "edges/e1.md": EDGE,
+  "nodes/p1.mdx": P1,
+  "nodes/p2.mdx": P2,
+  "nodes/p3.mdx": P3,
+  "elements/n1.mdx": N1,
+  "elements/n2.mdx": N2,
+  "elements/n3.mdx": N3,
+  "elements/nv.mdx": NV,
+  "elements/nq.mdx": NQ,
+  "edges/e1.mdx": EDGE,
 };
 
 function build() {
@@ -288,18 +288,18 @@ function build() {
     subject: "fixture-subject",
     roadmap: ROADMAP,
     nodeFiles: {
-      "nodes/p1.md": FILES["nodes/p1.md"],
-      "nodes/p2.md": FILES["nodes/p2.md"],
-      "nodes/p3.md": FILES["nodes/p3.md"],
+      "nodes/p1.mdx": FILES["nodes/p1.mdx"],
+      "nodes/p2.mdx": FILES["nodes/p2.mdx"],
+      "nodes/p3.mdx": FILES["nodes/p3.mdx"],
     },
     elementFiles: {
-      "elements/n1.md": FILES["elements/n1.md"],
-      "elements/n2.md": FILES["elements/n2.md"],
-      "elements/n3.md": FILES["elements/n3.md"],
-      "elements/nv.md": FILES["elements/nv.md"],
-      "elements/nq.md": FILES["elements/nq.md"],
+      "elements/n1.mdx": FILES["elements/n1.mdx"],
+      "elements/n2.mdx": FILES["elements/n2.mdx"],
+      "elements/n3.mdx": FILES["elements/n3.mdx"],
+      "elements/nv.mdx": FILES["elements/nv.mdx"],
+      "elements/nq.mdx": FILES["elements/nq.mdx"],
     },
-    edgeFiles: { "edges/e1.md": FILES["edges/e1.md"] },
+    edgeFiles: { "edges/e1.mdx": FILES["edges/e1.mdx"] },
   });
 }
 

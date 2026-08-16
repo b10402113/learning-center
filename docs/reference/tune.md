@@ -69,7 +69,7 @@ Writer skills apply a tune through `MEMORY.md` frontmatter:
 
 - `language` — the output language for all prose in this subject.
 - `tune` — the author slug, or `none`.
-- `tune-scope` — `paths` | `nodes-paths` | `all`; which artifacts get the voice.
+- `tune-scope` — `nodes` | `elements-nodes` | `all`; which artifacts get the voice.
 
 Rules:
 

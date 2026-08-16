@@ -16,7 +16,7 @@ Prereqs: `learn/<subject>/MEMORY.md` exists (run `/learn-init` first).
 5. **Propose and confirm (checkpoint).** Present the full candidate partition — tiered node list with titles, one-line goals, durations, and the formula baseline (`target`, and the proposed count) — and ask the learner to confirm before writing anything. Exit options: accept; or give a target count and re-partition once; or manually add/remove specific nodes. Do not write `ROADMAP.md` or skeletons until this checkpoint passes.
 6. **Tier.** Organize nodes from general to specific. Tier 1 establishes the learner's mental model; later tiers add operating rules, mechanisms, implementation order, or practice. Tiers contain nodes, never extracted elements.
 7. **Write the index.** Write `learn/<subject>/ROADMAP.md` with the tiered node index, subject goal, node order, durations, goals, and source references. Do not include a tiered element list.
-8. **Write skeletons.** Create one `learn/<subject>/nodes/<node-id>.md` per node. Include its tier and order, metadata, learning goal, source references, and empty `Elements` and `Lesson` sections. Set each node status to `draft`.
+8. **Write skeletons.** Create one `learn/<subject>/nodes/<node-id>.mdx` per node. Include its tier and order, metadata, learning goal, source references, and empty `Elements` and `Lesson` sections. Set each node status to `draft`.
 9. **Hand off.** Present the tiered node set. The learner confirms an individual node by invoking `/nodes <subject>/<node-id>`; that command changes the node from `draft` to `confirmed` and starts element extraction. Do not require a separate confirmation command.
 
 Completion: `ROADMAP.md` indexes every proposed node, the partition passed the learner checkpoint (count aligned with the formula baseline or deliberately adjusted), every node has one goal and traceable sources, every node skeleton exists, and each node becomes `confirmed` when the learner invokes `/nodes` for it.
@@ -88,10 +88,10 @@ updated: YYYY-MM-DD
 <learner-facing outcome>
 
 ## Elements
-<!-- /nodes fills this list in teaching order. -->
+{/* /nodes fills this list in teaching order. */}
 
 ## Lesson
-<!-- /nodes writes the 10–15 minute article here. -->
+{/* /nodes writes the 10–15 minute article here. */}
 
 ## Sources
 - [[sources/<subject>/<file>#<section>]]

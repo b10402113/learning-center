@@ -51,7 +51,7 @@ whole course that doubles as a reading interface and a progress tracker.
 ### High-level architecture
 
 ```text
-learn/<subject>/*.md  ──scripts/generate-data.mjs──▶  src/data/graph.json
+learn/<subject>/*.md(x)  ──scripts/generate-data.mjs──▶  src/data/graph.json
                                                             │
                     ┌───────────────┬──────────────────────┘
                App.tsx           (subject switch, hash routing, progress)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildElementHash, buildHash, parseHash } from "../lib/hashlink";
+import { buildElementHash, buildHash, buildNodeHash, parseHash } from "../lib/hashlink";
 
 describe("parseHash — map route", () => {
   it("parses subject + node from a hash deep-link", () => {
@@ -37,6 +37,50 @@ describe("parseHash — map route", () => {
   it("returns an empty map route for an empty hash", () => {
     expect(parseHash("")).toEqual({ kind: "map", subject: null, nodeId: null });
     expect(parseHash("#")).toEqual({ kind: "map", subject: null, nodeId: null });
+  });
+});
+
+describe("parseHash — node route", () => {
+  it("parses the path-style lesson deep-link", () => {
+    expect(parseHash("#/nodes/muscle-ladder/lifting-technique")).toEqual({
+      kind: "node",
+      subject: "muscle-ladder",
+      nodeId: "lifting-technique",
+    });
+  });
+
+  it("accepts the node route without a leading slash", () => {
+    expect(parseHash("#nodes/muscle-ladder/lifting-technique")).toEqual({
+      kind: "node",
+      subject: "muscle-ladder",
+      nodeId: "lifting-technique",
+    });
+  });
+
+  it("falls back to the map route when the slug is missing", () => {
+    expect(parseHash("#/nodes/muscle-ladder")).toEqual({
+      kind: "map",
+      subject: null,
+      nodeId: null,
+    });
+    expect(parseHash("#/nodes/")).toEqual({ kind: "map", subject: null, nodeId: null });
+  });
+
+  it("decodes URL-encoded subject and slug characters", () => {
+    expect(parseHash("#/nodes/a%20b/slug%26x")).toEqual({
+      kind: "node",
+      subject: "a b",
+      nodeId: "slug&x",
+    });
+  });
+
+  it("falls back to the map route on malformed percent-encoding instead of throwing", () => {
+    expect(parseHash("#/nodes/%E0%A4%A/foo")).toEqual({
+      kind: "map",
+      subject: null,
+      nodeId: null,
+    });
+    expect(parseHash("#/nodes/%ZZ/foo")).toEqual({ kind: "map", subject: null, nodeId: null });
   });
 });
 
@@ -112,6 +156,32 @@ describe("buildHash", () => {
     const hash = buildHash("a b", "p&x");
     expect(hash).toBe("#s=a+b&p=p%26x");
     expect(parseHash(hash)).toEqual({ kind: "map", subject: "a b", nodeId: "p&x" });
+  });
+});
+
+describe("buildNodeHash", () => {
+  it("builds the canonical #/nodes/<subject>/<slug> deep-link", () => {
+    expect(buildNodeHash("muscle-ladder", "lifting-technique")).toBe(
+      "#/nodes/muscle-ladder/lifting-technique",
+    );
+  });
+
+  it("round-trips through parseHash", () => {
+    expect(parseHash(buildNodeHash("muscle-ladder", "lifting-technique"))).toEqual({
+      kind: "node",
+      subject: "muscle-ladder",
+      nodeId: "lifting-technique",
+    });
+  });
+
+  it("URL-encodes characters that cannot live in a path verbatim", () => {
+    const hash = buildNodeHash("a b", "slug&x");
+    expect(hash).toBe("#/nodes/a%20b/slug%26x");
+    expect(parseHash(hash)).toEqual({
+      kind: "node",
+      subject: "a b",
+      nodeId: "slug&x",
+    });
   });
 });
 

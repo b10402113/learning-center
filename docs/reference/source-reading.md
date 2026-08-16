@@ -16,7 +16,7 @@ A source is **large** when its `pdftotext` output exceeds either bound:
 
 - Location: `learn/<subject>/digests/<source-stem>.md` — one file per source, two-level:
   - **L1 — chapter overview**: a few lines per chapter. Enough for `learn-init` grilling and `roadmap` partitioning without loading detail.
-  - **L2 — section detail**: per-section entry with a summary, key claims, learner-relevant outcomes, and the exact `[[sources/<subject>/<file>#<section>]]` locator. Used by `nodes` for concept extraction.
+  - **L2 — section detail**: per-section entry with a summary, key claims, learner-relevant outcomes, and the exact `[[sources/<subject>/<file>#<section>]]` locator. Used by `nodes` for element extraction.
 - Every source gets a digest, large or small. `nodes` reads digests only — never raw sources.
 - Frontmatter records the source fingerprint for staleness checks:
 
@@ -61,17 +61,17 @@ Sources are immutable, so a digest is stable once written. Rebuild only on misma
 
 ## Lazy detail pulls (`nodes`)
 
-When a path's node extraction needs detail beyond the digest:
+When a node's element extraction needs detail beyond the digest:
 
 1. Locate the section via its L2 locator.
 2. Dispatch one sub-agent to run `pdftotext` and extract that section's original text.
 3. The sub-agent returns the excerpt in its message — one-off reads, no file. Only pull when the digest is genuinely insufficient.
 
-## Path count formula
+## Node count formula
 
 ```text
 lines  = total pdftotext lines across the subject's sources
 target = clamp(round(lines / 1100), 3, 30)
 ```
 
-The formula produces the **baseline** for the roadmap checkpoint — a soft target, not a gate. The learner confirms or adjusts the final partition. Lint warns when the actual path count deviates more than ±40% from the target.
+The formula produces the **baseline** for the roadmap checkpoint — a soft target, not a gate. The learner confirms or adjusts the final partition. Lint warns when the actual node count deviates more than ±40% from the target.

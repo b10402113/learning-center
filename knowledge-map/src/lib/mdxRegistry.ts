@@ -3,8 +3,8 @@ import type { ComponentType } from "react";
 type MdxComponent = ComponentType<{ components?: Record<string, ComponentType | string> }>;
 
 // Vite resolves these at build/dev time. Keys look like
-// `@learn/<subject>/nodes/<id>.mdx` and `@learn/<subject>/elements/<id>.mdx`.
-const modules = import.meta.glob("@learn/*/{nodes,elements}/*.mdx", {
+// `@learn/<subject>/nodes/<id>.md(x)` and `@learn/<subject>/elements/<id>.md(x)`.
+const modules = import.meta.glob("@learn/*/{nodes,elements}/*.{md,mdx}", {
   eager: true,
   import: "default",
 }) as Record<string, MdxComponent>;
@@ -14,7 +14,7 @@ type Kind = "nodes" | "elements";
 function parseKey(key: string): { subject: string; kind: Kind; id: string } | null {
   // Vite resolves the @learn alias before the glob runs, so keys are relative
   // to this module (e.g. `../learn/<subject>/nodes/<id>.mdx`).
-  const m = key.match(/([^/]+)\/(nodes|elements)\/([^/]+)\.mdx$/);
+  const m = key.match(/([^/]+)\/(nodes|elements)\/([^/]+)\.mdx?$/);
   if (!m) return null;
   return { subject: m[1], kind: m[2] as Kind, id: m[3] };
 }
