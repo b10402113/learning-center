@@ -10,10 +10,11 @@ import { HoverCard } from "./components/HoverCard";
 import { Legend } from "./components/Legend";
 import { MapControls } from "./components/MapControls";
 import { NodeDetailView } from "./components/NodeDetailView";
+import { NodePage } from "./components/NodePage";
 import { TopBar } from "./components/TopBar";
 import { isNodeComplete } from "./lib/completion";
 import { isWritten } from "./lib/colors";
-import { buildElementHash, buildHash, parseHash, type Route } from "./lib/hashlink";
+import { buildElementHash, buildHash, buildNodeHash, parseHash, type Route } from "./lib/hashlink";
 import {
   emptySubjectProgress,
   loadProgress,
@@ -39,18 +40,23 @@ function defaultSubject(): string {
   return best;
 }
 
-// Resolve a hash to a concrete route. The element route must name a subject and
-// element that exist; the map route must name a subject and node that exist;
-// anything else falls back to the given subject with no selection.
+// Resolve a hash to a concrete route. The node route must name a subject and
+// lesson that exist; the element route must name a subject and element that
+// exist; the map route must name a subject and node that exist; anything else
+// falls back to the given subject with no selection.
 function resolveRoute(hash: string, fallbackSubject: string): Route {
   const route = parseHash(hash);
+  const graph = graphs.find((g) => g.subject === route.subject);
+  if (route.kind === "node") {
+    const validNode = graph?.nodes.some((n) => n.id === route.nodeId);
+    if (graph && validNode) return route;
+    return { kind: "map", subject: graph?.subject ?? fallbackSubject, nodeId: null };
+  }
   if (route.kind === "element") {
-    const graph = graphs.find((g) => g.subject === route.subject);
     const element = graph?.elements[route.elementId];
     if (graph && element) return route;
     return { kind: "map", subject: graph?.subject ?? fallbackSubject, nodeId: null };
   }
-  const graph = graphs.find((g) => g.subject === route.subject);
   const validNode = graph?.nodes.some((n) => n.id === route.nodeId) ? route.nodeId : null;
   return { kind: "map", subject: graph ? graph.subject : fallbackSubject, nodeId: validNode };
 }
@@ -64,7 +70,9 @@ export default function App() {
   const [route, setRoute] = useState<Route>(initialRoute);
   const [subject, setSubject] = useState<string>(() => initialRoute.subject ?? defaultSubject());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(() =>
-    initialRoute.kind === "element" ? null : initialRoute.nodeId,
+    initialRoute.kind === "element" || initialRoute.kind === "node"
+      ? null
+      : initialRoute.nodeId,
   );
   const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(() =>
     initialRoute.kind === "map" && initialRoute.nodeId
@@ -103,7 +111,7 @@ export default function App() {
       const next = resolveRoute(window.location.hash, subject);
       setRoute(next);
       setNodeDetailOpen(false);
-      if (next.kind === "element") {
+      if (next.kind === "element" || next.kind === "node") {
         setSubject(next.subject);
         setSelectedNodeId(null);
         setFocusRequest(null);
@@ -177,8 +185,12 @@ export default function App() {
     window.location.hash = buildHash(targetSubject, nodeId);
   }
 
-  function navigateToElement(targetSubject: string, elementId: string) {
-    window.location.hash = buildElementHash(targetSubject, elementId);
+  function navigateToNode(targetSubject: string, nodeId: string) {
+    window.location.hash = buildNodeHash(targetSubject, nodeId);
+  }
+
+  function navigateToElement(targetSubject: string, elementId: string, from?: string | null) {
+    window.location.hash = buildElementHash(targetSubject, elementId, from);
   }
 
   function selectNode(id: string | null) {
@@ -211,9 +223,15 @@ export default function App() {
   }
 
   // Every element click — map node, checklist row, prerequisite card, chip —
-  // jumps to that element's standalone page.
-  function openElement(subjectKey: string, elementId: string) {
-    navigateToElement(subjectKey, elementId);
+  // jumps to that element's standalone page, carrying an optional lesson origin.
+  function openElement(subjectKey: string, elementId: string, from?: string | null) {
+    navigateToElement(subjectKey, elementId, from);
+  }
+
+  // Inside a standalone page, node clicks navigate directly to that lesson's
+  // full page (never the reader modal).
+  function openNode(subjectKey: string, nodeId: string) {
+    navigateToNode(subjectKey, nodeId);
   }
 
   function switchSubject(s: string) {
@@ -222,8 +240,8 @@ export default function App() {
   }
 
   function switchView(v: "nebula" | "roadmap") {
-    if (route.kind === "element") {
-      // The view toggle doubles as "back to the map" from an element page.
+    if (route.kind === "element" || route.kind === "node") {
+      // The view toggle doubles as "back to the map" from a standalone page.
       navigateToMap(subject, null);
       setView(v);
       return;
@@ -244,8 +262,6 @@ export default function App() {
       ? (graph.nodes.find((n) => n.id === hoveredId) ?? null)
       : null;
 
-  const onElementPage = route.kind === "element";
-
   return (
     <TooltipPrimitive.Provider>
       <div className="flex h-screen flex-col bg-background text-foreground">
@@ -258,16 +274,29 @@ export default function App() {
           onSelect={switchSubject}
           onViewChange={switchView}
         />
-        {onElementPage ? (
-          <ElementPage
+        {route.kind === "node" ? (
+          <NodePage
             graph={graph}
-            elementId={route.elementId}
+            nodeId={route.nodeId}
             manualElements={manualElements}
             quizSolved={quizSolved}
             onQuizSolved={markQuizSolved}
             onToggleCompletion={toggleCompletion}
+            onNavigateNode={openNode}
             onNavigateElement={openElement}
-            onNavigateNode={(nodeId) => navigateToMap(subject, nodeId)}
+            onBackToMap={() => navigateToMap(subject, null)}
+          />
+        ) : route.kind === "element" ? (
+          <ElementPage
+            graph={graph}
+            elementId={route.elementId}
+            from={route.from}
+            manualElements={manualElements}
+            quizSolved={quizSolved}
+            onQuizSolved={markQuizSolved}
+            onToggleCompletion={toggleCompletion}
+            onNavigateNode={openNode}
+            onNavigateElement={openElement}
             onBackToMap={() => navigateToMap(subject, null)}
           />
         ) : (

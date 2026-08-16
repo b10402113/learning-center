@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildElementHash, buildHash, buildNodeHash, parseHash } from "../lib/hashlink";
+import {
+  buildElementHash,
+  buildHash,
+  buildNodeHash,
+  parseHash,
+  resolveElementSource,
+} from "../lib/hashlink";
 
 describe("parseHash — map route", () => {
   it("parses subject + node from a hash deep-link", () => {
@@ -85,11 +91,12 @@ describe("parseHash — node route", () => {
 });
 
 describe("parseHash — element route", () => {
-  it("parses the path-style element deep-link", () => {
+  it("parses the path-style element deep-link with no origin", () => {
     expect(parseHash("#/elements/muscle-ladder/goal-hierarchy")).toEqual({
       kind: "element",
       subject: "muscle-ladder",
       elementId: "goal-hierarchy",
+      from: null,
     });
   });
 
@@ -98,6 +105,36 @@ describe("parseHash — element route", () => {
       kind: "element",
       subject: "muscle-ladder",
       elementId: "goal-hierarchy",
+      from: null,
+    });
+  });
+
+  it("parses a ?from origin onto the element route", () => {
+    expect(
+      parseHash("#/elements/muscle-ladder/goal-hierarchy?from=muscle-ladder-and-handrails"),
+    ).toEqual({
+      kind: "element",
+      subject: "muscle-ladder",
+      elementId: "goal-hierarchy",
+      from: "muscle-ladder-and-handrails",
+    });
+  });
+
+  it("decodes a URL-encoded ?from origin", () => {
+    expect(parseHash("#/elements/muscle-ladder/goal-hierarchy?from=a%20b")).toEqual({
+      kind: "element",
+      subject: "muscle-ladder",
+      elementId: "goal-hierarchy",
+      from: "a b",
+    });
+  });
+
+  it("ignores an empty ?from and reports no origin", () => {
+    expect(parseHash("#/elements/muscle-ladder/goal-hierarchy?from=")).toEqual({
+      kind: "element",
+      subject: "muscle-ladder",
+      elementId: "goal-hierarchy",
+      from: null,
     });
   });
 
@@ -115,6 +152,7 @@ describe("parseHash — element route", () => {
       kind: "element",
       subject: "a b",
       elementId: "slug&x",
+      from: null,
     });
   });
 
@@ -186,17 +224,41 @@ describe("buildNodeHash", () => {
 });
 
 describe("buildElementHash", () => {
-  it("builds the canonical #/elements/<subject>/<slug> deep-link", () => {
+  it("builds the canonical #/elements/<subject>/<slug> deep-link without an origin", () => {
     expect(buildElementHash("muscle-ladder", "goal-hierarchy")).toBe(
       "#/elements/muscle-ladder/goal-hierarchy",
     );
   });
 
-  it("round-trips through parseHash", () => {
+  it("appends a ?from origin when one is given", () => {
+    expect(buildElementHash("muscle-ladder", "goal-hierarchy", "muscle-ladder-and-handrails")).toBe(
+      "#/elements/muscle-ladder/goal-hierarchy?from=muscle-ladder-and-handrails",
+    );
+  });
+
+  it("omits the query when from is null or empty", () => {
+    expect(buildElementHash("muscle-ladder", "goal-hierarchy", null)).toBe(
+      "#/elements/muscle-ladder/goal-hierarchy",
+    );
+    expect(buildElementHash("muscle-ladder", "goal-hierarchy", "")).toBe(
+      "#/elements/muscle-ladder/goal-hierarchy",
+    );
+  });
+
+  it("round-trips through parseHash with and without an origin", () => {
     expect(parseHash(buildElementHash("muscle-ladder", "goal-hierarchy"))).toEqual({
       kind: "element",
       subject: "muscle-ladder",
       elementId: "goal-hierarchy",
+      from: null,
+    });
+    expect(
+      parseHash(buildElementHash("muscle-ladder", "goal-hierarchy", "muscle-ladder-and-handrails")),
+    ).toEqual({
+      kind: "element",
+      subject: "muscle-ladder",
+      elementId: "goal-hierarchy",
+      from: "muscle-ladder-and-handrails",
     });
   });
 
@@ -207,6 +269,45 @@ describe("buildElementHash", () => {
       kind: "element",
       subject: "a b",
       elementId: "slug&x",
+      from: null,
     });
+  });
+
+  it("URL-encodes a from origin with special characters and round-trips", () => {
+    const hash = buildElementHash("a b", "slug&x", "node y&z");
+    expect(hash).toBe("#/elements/a%20b/slug%26x?from=node%20y%26z");
+    expect(parseHash(hash)).toEqual({
+      kind: "element",
+      subject: "a b",
+      elementId: "slug&x",
+      from: "node y&z",
+    });
+  });
+});
+
+describe("resolveElementSource", () => {
+  const known = new Set(["muscle-ladder-and-handrails", "lifting-technique"]);
+
+  it("prefers the explicit from origin when it names a real node", () => {
+    expect(
+      resolveElementSource("muscle-ladder-and-handrails", ["lifting-technique"], known),
+    ).toBe("muscle-ladder-and-handrails");
+  });
+
+  it("falls back to the first taught-by node when from is absent", () => {
+    expect(resolveElementSource(null, ["muscle-ladder-and-handrails", "lifting-technique"], known)).toBe(
+      "muscle-ladder-and-handrails",
+    );
+  });
+
+  it("falls back to the first taught-by node when from names a missing node", () => {
+    expect(resolveElementSource("ghost-node", ["lifting-technique", "muscle-ladder-and-handrails"], known)).toBe(
+      "lifting-technique",
+    );
+  });
+
+  it("returns null when no taught-by node exists", () => {
+    expect(resolveElementSource(null, ["ghost-a", "ghost-b"], known)).toBeNull();
+    expect(resolveElementSource("ghost-node", [], known)).toBeNull();
   });
 });

@@ -1,21 +1,15 @@
 import type { SubjectGraph } from "../lib/types";
 import { ReaderPage, type ReaderCommonProps } from "./ReaderPage";
 
-type ElementPageProps = ReaderCommonProps & {
+type NodePageProps = ReaderCommonProps & {
   graph: SubjectGraph;
-  elementId: string;
-  from: string | null;
+  nodeId: string;
 };
 
-/**
- * The standalone element page — the shared docs page in element mode. The
- * `?from=<node-id>` origin (ADR-0003) lets the breadcrumb jump back to the
- * teaching lesson; without one it falls back to the first taught-by node.
- */
-export function ElementPage({
+/** The standalone node lesson page — the shared docs page in node mode. */
+export function NodePage({
   graph,
-  elementId,
-  from,
+  nodeId,
   manualElements,
   quizSolved,
   onQuizSolved,
@@ -23,13 +17,12 @@ export function ElementPage({
   onNavigateNode,
   onNavigateElement,
   onBackToMap,
-}: ElementPageProps) {
+}: NodePageProps) {
   return (
     <ReaderPage
       graph={graph}
-      mode="element"
-      elementId={elementId}
-      from={from}
+      mode="node"
+      nodeId={nodeId}
       manualElements={manualElements}
       quizSolved={quizSolved}
       onQuizSolved={onQuizSolved}

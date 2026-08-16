@@ -17,13 +17,13 @@ element 頁 breadcrumb 顯示 `subject / 來源課文 / element 標題`，點課
 
 ## Acceptance criteria
 
-- [ ] `parseHash` 解析 `#/nodes/<subject>/<id>` 回傳 node 路由；`#/elements/<subject>/<id>?from=<node>` 回傳 element 路由與 `from`；無 `from` / 空 hash / 不認識 prefix 一律回退（沿用既有 fallback）；含需 URL-encode 字元時 `buildNodeHash`/`buildElementHash` → `parseHash` 正確 round-trip
-- [ ] 來源解析純函式：`from` 指向真實存在的 node 時採用；否則退回第一個教授該 element 的 node；沒有教授 node 時回退「無來源」
-- [ ] 既有 `hashlink.test.ts`、`completion.test.ts`、`progress.test.ts`、`mdx.test.tsx`、`generator.test.ts` 全數保持綠；`npm run typecheck` 與 `npm run build` 通過
-- [ ] `#/nodes/<subject>/<id>` 落地 node 課文全頁：左課程導覽（只列課程節點）、中央課文（既有 MDX 管線、頁頭擁有標題）、右欄 TOC→進度→該 node 教的與關聯元素；status/duration/goal 依實際資料欄位顯示，缺則優雅省略
-- [ ] element 頁收斂為共享文件頁：左欄移除元素清單（只留課程）；右欄 = 本頁 TOC → 進度卡 → subject 元素索引；點左欄 node 直接跳到該課文全頁、點索引 element 跳到該 element 全頁
-- [ ] element 頁 breadcrumb `subject / 來源課文 / element 標題`：點 subject 回地圖、點課文段跳回該課文全頁；deep-link 帶 `?from` 落地後 breadcrumb 直接可用
-- [ ] 長文可向下捲動（element 與 node 全頁皆然）；既有 element 功能（測驗 gating、video 播放、wikilink、聚焦模式、完成標記與地圖同步）回歸不變
+- [x] `parseHash` 解析 `#/nodes/<subject>/<id>` 回傳 node 路由；`#/elements/<subject>/<id>?from=<node>` 回傳 element 路由與 `from`；無 `from` / 空 hash / 不認識 prefix 一律回退（沿用既有 fallback）；含需 URL-encode 字元時 `buildNodeHash`/`buildElementHash` → `parseHash` 正確 round-trip
+- [x] 來源解析純函式：`from` 指向真實存在的 node 時採用；否則退回第一個教授該 element 的 node；沒有教授 node 時回退「無來源」
+- [x] 既有 `hashlink.test.ts`、`completion.test.ts`、`progress.test.ts`、`mdx.test.tsx`、`generator.test.ts` 全數保持綠；`npm run typecheck` 與 `npm run build` 通過
+- [x] `#/nodes/<subject>/<id>` 落地 node 課文全頁：左課程導覽（只列課程節點）、中央課文（既有 MDX 管線、頁頭擁有標題）、右欄 TOC→進度→該 node 教的與關聯元素；status/duration/goal 依實際資料欄位顯示，缺則優雅省略
+- [x] element 頁收斂為共享文件頁：左欄移除元素清單（只留課程）；右欄 = 本頁 TOC → 進度卡 → subject 元素索引；點左欄 node 直接跳到該課文全頁、點索引 element 跳到該 element 全頁
+- [x] element 頁 breadcrumb `subject / 來源課文 / element 標題`：點 subject 回地圖、點課文段跳回該課文全頁；deep-link 帶 `?from` 落地後 breadcrumb 直接可用
+- [x] 長文可向下捲動（element 與 node 全頁皆然）；既有 element 功能（測驗 gating、video 播放、wikilink、聚焦模式、完成標記與地圖同步）回歸不變
 - [ ] 人工驗證（`npm run dev`）：node/element deep-link 落地、breadcrumb 往返課文、兩頁版面一致
 
 ## Reference files
