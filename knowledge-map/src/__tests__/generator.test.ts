@@ -271,6 +271,92 @@ Depends.
 Compare them.
 `;
 
+const STEP_NODE = `---
+id: s1
+title: "Step Node"
+subject: fixture-subject
+tier: 1
+order: 1
+duration: 10-15 minutes
+status: content-written
+goal: Step lesson goal.
+sources:
+  - "[[sources/fixture-subject/book.pdf#Intro]]"
+steps:
+  - id: warmup
+    order: 1
+  - id: teach
+    order: 2
+    deps:
+      - warmup
+  - id: apply
+    order: 3
+    deps:
+      - warmup
+      - teach
+created: 2026-08-09
+updated: 2026-08-09
+---
+
+# Step Node
+
+## Learning goal
+Step lesson goal.
+
+## Lesson
+Main lesson here.
+
+## Sources
+- [[sources/fixture-subject/book.pdf#Intro]]
+`;
+
+const STEP_WARMUP = `---
+id: warmup
+title: "Warmup"
+subject: fixture-subject
+teaches:
+  - fixture-subject/n1
+sources: []
+created: 2026-08-09
+updated: 2026-08-09
+---
+
+# Warmup
+Warm up concept.
+`;
+
+const STEP_TEACH = `---
+id: teach
+title: "Teach"
+subject: fixture-subject
+teaches:
+  - fixture-subject/n1
+  - fixture-subject/n2
+sources:
+  - "[[sources/fixture-subject/book.pdf#Intro]]"
+created: 2026-08-09
+updated: 2026-08-09
+---
+
+# Teach
+Teach concept.
+`;
+
+const STEP_APPLY = `---
+id: apply
+title: "Apply"
+subject: fixture-subject
+teaches:
+  - fixture-subject/n3
+sources: []
+created: 2026-08-09
+updated: 2026-08-09
+---
+
+# Apply
+Apply concept.
+`;
+
 const FILES = {
   "nodes/p1.mdx": P1,
   "nodes/p2.mdx": P2,
@@ -300,6 +386,25 @@ function build() {
       "elements/nq.mdx": FILES["elements/nq.mdx"],
     },
     edgeFiles: { "edges/e1.mdx": FILES["edges/e1.mdx"] },
+  });
+}
+
+function buildStepDag() {
+  return buildSubjectGraph({
+    subject: "fixture-subject",
+    roadmap: ROADMAP,
+    nodeFiles: { "nodes/s1.mdx": STEP_NODE },
+    elementFiles: {
+      "elements/n1.mdx": FILES["elements/n1.mdx"],
+      "elements/n2.mdx": FILES["elements/n2.mdx"],
+      "elements/n3.mdx": FILES["elements/n3.mdx"],
+    },
+    edgeFiles: {},
+    stepFiles: {
+      "nodes/s1/warmup.mdx": STEP_WARMUP,
+      "nodes/s1/teach.mdx": STEP_TEACH,
+      "nodes/s1/apply.mdx": STEP_APPLY,
+    },
   });
 }
 
@@ -522,6 +627,74 @@ title: ZH
   it("is deterministic: two runs produce identical output", () => {
     expect(build()).toEqual(build());
   });
+
+  it("marks a question-typed element deprecated and leaves others not deprecated", () => {
+    const g = build();
+    expect(g.elements.nq.deprecated).toBe(true);
+    expect(g.elements.n1.deprecated).toBe(false);
+  });
+});
+
+describe("buildSubjectGraph — step-DAG", () => {
+  it("emits steps keyed by node-qualified id with title, order, deps, and teaches", () => {
+    const g = buildStepDag();
+    expect(g.steps).toEqual({
+      "s1/warmup": {
+        id: "s1/warmup",
+        stepId: "warmup",
+        nodeId: "s1",
+        title: "Warmup",
+        order: 1,
+        deps: [],
+        teaches: ["n1"],
+        sources: [],
+      },
+      "s1/teach": {
+        id: "s1/teach",
+        stepId: "teach",
+        nodeId: "s1",
+        title: "Teach",
+        order: 2,
+        deps: ["s1/warmup"],
+        teaches: ["n1", "n2"],
+        sources: ["[[sources/fixture-subject/book.pdf#Intro]]"],
+      },
+      "s1/apply": {
+        id: "s1/apply",
+        stepId: "apply",
+        nodeId: "s1",
+        title: "Apply",
+        order: 3,
+        deps: ["s1/warmup", "s1/teach"],
+        teaches: ["n3"],
+        sources: [],
+      },
+    });
+  });
+
+  it("emits step DAG dependency edges between steps", () => {
+    const g = buildStepDag();
+    const stepEdges = g.edges.filter((e) => e.kind === "step-dep");
+    expect(stepEdges).toHaveLength(3);
+    expect(stepEdges).toContainEqual({ from: "s1/warmup", to: "s1/teach", kind: "step-dep" });
+    expect(stepEdges).toContainEqual({ from: "s1/warmup", to: "s1/apply", kind: "step-dep" });
+    expect(stepEdges).toContainEqual({ from: "s1/teach", to: "s1/apply", kind: "step-dep" });
+  });
+
+  it("resolves step teaches to element links and element to step links", () => {
+    const g = buildStepDag();
+    expect(g.elements.n1.taughtBySteps).toEqual(["s1/warmup", "s1/teach"]);
+    expect(g.elements.n2.taughtBySteps).toEqual(["s1/teach"]);
+    expect(g.elements.n3.taughtBySteps).toEqual(["s1/apply"]);
+  });
+
+  it("keeps a legacy node with no steps unchanged in shape", () => {
+    const g = build();
+    expect(g.steps).toEqual({});
+    for (const n of g.nodes) {
+      expect(n).not.toHaveProperty("steps");
+    }
+  });
 });
 
 describe("scanSubject", () => {
@@ -543,6 +716,23 @@ describe("scanSubject", () => {
       expect(scanned.roadmap).toContain("Tier 1");
       expect(scanned.elementFiles).toEqual({});
       expect(scanned.edgeFiles).toEqual({});
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("collects step files under node directories", () => {
+    const root = mkdtempSync(join(tmpdir(), "km-step-"));
+    try {
+      mkdirSync(join(root, "learn", "fixture-subject", "nodes", "s1"), { recursive: true });
+      mkdirSync(join(root, "learn", "fixture-subject", "elements"), { recursive: true });
+      mkdirSync(join(root, "learn", "fixture-subject", "edges"), { recursive: true });
+      writeFileSync(join(root, "learn", "fixture-subject", "ROADMAP.md"), ROADMAP);
+      writeFileSync(join(root, "learn", "fixture-subject", "nodes", "s1.mdx"), STEP_NODE);
+      writeFileSync(join(root, "learn", "fixture-subject", "nodes", "s1", "warmup.mdx"), STEP_WARMUP);
+      const scanned = scanSubject("fixture-subject", join(root, "learn"));
+      expect(Object.keys(scanned.nodeFiles)).toEqual(["nodes/s1.mdx"]);
+      expect(scanned.stepFiles).toEqual({ "nodes/s1/warmup.mdx": STEP_WARMUP });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

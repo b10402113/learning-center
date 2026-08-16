@@ -227,13 +227,26 @@ function parseTiers(roadmap) {
   return tiers;
 }
 
-export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, edgeFiles }) {
+function normalizeStepDag(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((s) => ({
+      id: String(s?.id ?? ""),
+      order: Number(s?.order) || 0,
+      deps: Array.isArray(s?.deps) ? s.deps.map((d) => String(d)) : [],
+    }))
+    .filter((s) => s.id);
+}
+
+export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, edgeFiles, stepFiles = {} }) {
   const nodes = [];
   const nodePrereqById = new Map();
+  const nodeStepDag = new Map();
   for (const content of Object.values(nodeFiles)) {
     const { data } = parseFrontmatter(content);
     if (!data.id) continue;
     nodePrereqById.set(data.id, (data.prerequisites ?? []).map(stripSubjectPrefix));
+    nodeStepDag.set(data.id, normalizeStepDag(data.steps));
     nodes.push({
       id: data.id,
       title: data.title ?? data.id,
@@ -248,6 +261,36 @@ export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, e
   }
   nodes.sort((a, b) => a.tier - b.tier || a.order - b.order);
 
+  const steps = {};
+  for (const [relPath, content] of Object.entries(stepFiles)) {
+    const { data } = parseFrontmatter(content);
+    const parts = relPath.split("/");
+    const nodeId = parts[1];
+    const fileName = parts[parts.length - 1];
+    const stepId = String(data.id ?? "").trim() || fileName.replace(/\.(md|mdx)$/, "");
+    if (!stepId || !nodeId) continue;
+    const dag = nodeStepDag.get(nodeId)?.find((s) => s.id === stepId);
+    const qualifiedId = `${nodeId}/${stepId}`;
+    steps[qualifiedId] = {
+      id: qualifiedId,
+      stepId,
+      nodeId,
+      title: data.title ?? stepId,
+      order: dag?.order ?? (Number(data.order) || 0),
+      deps: (dag?.deps ?? []).map((d) => `${nodeId}/${d}`),
+      teaches: (data.teaches ?? []).map(stripSubjectPrefix),
+      sources: data.sources ?? [],
+    };
+  }
+
+  const elementToSteps = new Map();
+  for (const step of Object.values(steps)) {
+    for (const elementId of step.teaches) {
+      if (!elementToSteps.has(elementId)) elementToSteps.set(elementId, []);
+      elementToSteps.get(elementId).push(step.id);
+    }
+  }
+
   const elements = {};
   for (const content of Object.values(elementFiles)) {
     const { data, body } = parseFrontmatter(content);
@@ -260,6 +303,8 @@ export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, e
       order: Number(data.order) || 0,
       type,
       taughtByNodes: (data.nodes ?? []).map(stripSubjectPrefix),
+      taughtBySteps: elementToSteps.get(data.id) ?? [],
+      deprecated: type === "question",
       sources: data.sources ?? [],
       connections: extractElementLinks(body, subject),
       prerequisiteIds: extractSectionElementLinks(body, subject, [
@@ -330,6 +375,12 @@ export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, e
     }
   }
 
+  for (const step of Object.values(steps)) {
+    for (const dep of step.deps) {
+      pushEdge(dep, step.id, "step-dep");
+    }
+  }
+
   edges.sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to) || a.kind.localeCompare(b.kind));
 
   const elementsList = Object.values(elements);
@@ -362,6 +413,7 @@ export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, e
     subject,
     tiers,
     nodes,
+    steps,
     elements,
     edges,
   };
@@ -379,11 +431,27 @@ export function scanSubject(subject, learnRoot) {
         .map((e) => [`${dir}/${e.name}`, read(`${dir}/${e.name}`)]),
     );
   };
+  const listSteps = () => {
+    const nodesDir = join(sub, "nodes");
+    if (!existsSync(nodesDir)) return {};
+    const steps = {};
+    for (const nodeEntry of readdirSync(nodesDir, { withFileTypes: true })) {
+      if (!nodeEntry.isDirectory()) continue;
+      const stepDir = join(nodesDir, nodeEntry.name);
+      for (const f of readdirSync(stepDir, { withFileTypes: true })) {
+        if (f.isFile() && (f.name.endsWith(".md") || f.name.endsWith(".mdx"))) {
+          steps[`nodes/${nodeEntry.name}/${f.name}`] = readFileSync(join(stepDir, f.name), "utf8");
+        }
+      }
+    }
+    return steps;
+  };
   return {
     roadmap: read("ROADMAP.md"),
     nodeFiles: list("nodes"),
     elementFiles: list("elements"),
     edgeFiles: list("edges"),
+    stepFiles: listSteps(),
   };
 }
 
@@ -400,6 +468,7 @@ export function loadAllSubjects(learnRoot) {
       nodeFiles: scanned.nodeFiles,
       elementFiles: scanned.elementFiles,
       edgeFiles: scanned.edgeFiles,
+      stepFiles: scanned.stepFiles,
     });
   });
 }
