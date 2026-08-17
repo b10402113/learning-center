@@ -34,7 +34,6 @@ interface ForceMapProps {
   selectedElementId: string | null;
   focusRequest: FocusRequest | null;
   completedNodes: Set<string>;
-  manualElements: Set<string>;
   hoveredId: string | null;
   onSelect: (id: string | null) => void;
   onSelectElement: (id: string) => void;
@@ -48,7 +47,6 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
     selectedElementId,
     focusRequest,
     completedNodes,
-    manualElements,
     hoveredId,
     onSelect,
     onSelectElement,
@@ -98,7 +96,6 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
     selectedElementId,
     written,
     completedNodes,
-    manualElements,
     hoveredId,
     onSelect,
     onSelectElement,
@@ -109,7 +106,6 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
     selectedElementId,
     written,
     completedNodes,
-    manualElements,
     hoveredId,
     onSelect,
     onSelectElement,
@@ -134,7 +130,7 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
     n.kind === "node" ? n.nodeId === id : n.elementId === id;
 
   function drawNode(node: FNode, ctx: CanvasRenderingContext2D, gs: number) {
-    const { selectedId, selectedElementId, written, completedNodes, manualElements } =
+    const { selectedId, selectedElementId, written, completedNodes } =
       liveRef.current;
     const isLesson = node.kind === "node";
     const selected = isLesson
@@ -165,15 +161,14 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
       ctx.fillStyle = selected ? C.foreground : C.faint;
       ctx.fillText(node.title, 0, r + 5 / gs);
     } else {
-      const completed = manualElements.has(node.elementId ?? "");
       const nr = selected ? 7 : 5;
       ctx.beginPath();
       ctx.arc(0, 0, nr, 0, Math.PI * 2);
-      ctx.fillStyle = selected ? C.beacon : completed ? C.brass : C.brassDim;
-      ctx.globalAlpha = selected ? 0.95 : completed ? 0.9 : 0.35;
+      ctx.fillStyle = selected ? C.beacon : C.brassDim;
+      ctx.globalAlpha = selected ? 0.95 : 0.35;
       ctx.fill();
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = selected ? C.beacon : completed ? C.brass : C.brassDim;
+      ctx.strokeStyle = selected ? C.beacon : C.brassDim;
       ctx.lineWidth = selected ? 2 : 1.25;
       ctx.stroke();
       ctx.font = `${9 / gs}px "IBM Plex Mono", ui-monospace, monospace`;

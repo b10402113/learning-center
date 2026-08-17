@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildSubjectGraph,
   parseFrontmatter,
+  parseMastery,
   scanSubject,
 } from "../../../scripts/generate-data.mjs";
 
@@ -408,6 +409,169 @@ function buildStepDag() {
   });
 }
 
+// ── Mastery seeding fixture ────────────────────────────────────────────────
+// Node `seed1` has four steps, each teaching one element whose source points at
+// a distinct book section. The mastery entry pairs each strand positionally
+// with a source: strand-a ↔ SEC_A, strand-b ↔ SEC_B, strand-c ↔ SEC_C.
+const SEED_NODE = `---
+id: seed1
+title: "Seed One"
+subject: fixture-subject
+tier: 1
+order: 1
+duration: 10-15 minutes
+status: content-written
+goal: Seed test goal.
+sources: []
+steps:
+  - id: s-a
+    order: 1
+  - id: s-b
+    order: 2
+  - id: s-c
+    order: 3
+  - id: s-d
+    order: 4
+created: 2026-08-09
+updated: 2026-08-09
+---`;
+
+const SEED_STEPS = {
+  "nodes/seed1/s-a.mdx": `---
+id: s-a
+title: "S A"
+subject: fixture-subject
+teaches:
+  - fixture-subject/ea
+sources: []
+created: 2026-08-09
+updated: 2026-08-09
+---`,
+  "nodes/seed1/s-b.mdx": `---
+id: s-b
+title: "S B"
+subject: fixture-subject
+teaches:
+  - fixture-subject/eb
+sources: []
+created: 2026-08-09
+updated: 2026-08-09
+---`,
+  "nodes/seed1/s-c.mdx": `---
+id: s-c
+title: "S C"
+subject: fixture-subject
+teaches:
+  - fixture-subject/ec
+sources: []
+created: 2026-08-09
+updated: 2026-08-09
+---`,
+  "nodes/seed1/s-d.mdx": `---
+id: s-d
+title: "S D"
+subject: fixture-subject
+teaches:
+  - fixture-subject/ed
+sources: []
+created: 2026-08-09
+updated: 2026-08-09
+---`,
+};
+
+const SEED_ELEMENTS = {
+  "elements/ea.mdx": `---
+id: ea
+title: EA
+sources:
+  - "[[sources/fixture-subject/book.pdf#SEC_A]]"
+created: 2026-08-09
+updated: 2026-08-09
+---`,
+  "elements/eb.mdx": `---
+id: eb
+title: EB
+sources:
+  - "[[sources/fixture-subject/book.pdf#SEC_B]]"
+created: 2026-08-09
+updated: 2026-08-09
+---`,
+  "elements/ec.mdx": `---
+id: ec
+title: EC
+sources:
+  - "[[sources/fixture-subject/book.pdf#SEC_C]]"
+created: 2026-08-09
+updated: 2026-08-09
+---`,
+  "elements/ed.mdx": `---
+id: ed
+title: ED
+sources:
+  - "[[sources/fixture-subject/book.pdf#SEC_D]]"
+created: 2026-08-09
+updated: 2026-08-09
+---`,
+};
+
+const MASTERY_PARTIAL = `---
+subject: fixture-subject
+created: 2026-08-09
+updated: 2026-08-09
+---
+
+# Mastery — fixture-subject
+
+## Nodes
+
+### seed1
+- Status: partial
+- Notes: Only the first strand is solid.
+- Strands:
+  - strand-a — solid
+  - strand-b — partial
+  - strand-c — unknown
+- Sources:
+  - [[sources/fixture-subject/book.pdf#SEC_A]]
+  - [[sources/fixture-subject/book.pdf#SEC_B]]
+  - [[sources/fixture-subject/book.pdf#SEC_C]]
+`;
+
+const MASTERY_ALL_SOLID = `---
+subject: fixture-subject
+created: 2026-08-09
+updated: 2026-08-09
+---
+
+# Mastery — fixture-subject
+
+## Nodes
+
+### seed1
+- Status: solid
+- Notes: Everything solid.
+- Strands:
+  - strand-a — solid
+  - strand-b — solid
+  - strand-c — solid
+- Sources:
+  - [[sources/fixture-subject/book.pdf#SEC_A]]
+  - [[sources/fixture-subject/book.pdf#SEC_B]]
+  - [[sources/fixture-subject/book.pdf#SEC_C]]
+`;
+
+function buildSeedFixture(mastery = "") {
+  return buildSubjectGraph({
+    subject: "fixture-subject",
+    roadmap: ROADMAP,
+    nodeFiles: { "nodes/seed1.mdx": SEED_NODE },
+    elementFiles: SEED_ELEMENTS,
+    edgeFiles: {},
+    stepFiles: SEED_STEPS,
+    mastery,
+  });
+}
+
 describe("parseFrontmatter", () => {
   it("parses scalar, quoted, and list fields", () => {
     const { data, body } = parseFrontmatter(P1);
@@ -717,6 +881,64 @@ describe("buildSubjectGraph — step-DAG", () => {
     for (const n of g.nodes) {
       expect(n).not.toHaveProperty("steps");
     }
+  });
+});
+
+describe("parseMastery", () => {
+  it("parses per-node strands with ratings and source locators", () => {
+    const nodes = parseMastery(MASTERY_PARTIAL);
+    const seed1 = nodes.get("seed1")!;
+    expect(seed1.strands).toEqual([
+      { name: "strand-a", rating: "solid" },
+      { name: "strand-b", rating: "partial" },
+      { name: "strand-c", rating: "unknown" },
+    ]);
+    expect(seed1.sources).toEqual([
+      "[[sources/fixture-subject/book.pdf#SEC_A]]",
+      "[[sources/fixture-subject/book.pdf#SEC_B]]",
+      "[[sources/fixture-subject/book.pdf#SEC_C]]",
+    ]);
+  });
+
+  it("returns an empty map for absent or malformed mastery", () => {
+    expect(parseMastery("").size).toBe(0);
+    expect(parseMastery(null).size).toBe(0);
+    expect(parseMastery("# no node sections").size).toBe(0);
+  });
+});
+
+describe("buildSubjectGraph — mastery seeding", () => {
+  it("seeds no steps when mastery is absent", () => {
+    expect(buildSeedFixture().seededSteps).toEqual([]);
+  });
+
+  it("seeds no steps when the node has no mastery entry", () => {
+    const mastery = `---\nsubject: fixture-subject\n---\n\n# Mastery\n\n### some-other-node\n- Status: solid\n- Strands:\n  - x — solid\n- Sources:\n  - [[sources/fixture-subject/book.pdf#SEC_A]]\n`;
+    expect(buildSeedFixture(mastery).seededSteps).toEqual([]);
+  });
+
+  it("seeds only steps whose referenced strands are all solid (partial mastery)", () => {
+    const g = buildSeedFixture(MASTERY_PARTIAL);
+    // s-a references SEC_A → strand-a (solid) → seeded.
+    // s-b references SEC_B → strand-b (partial) → not seeded.
+    // s-c references SEC_C → strand-c (unknown) → not seeded.
+    // s-d references SEC_D → no intersection with the mastery sources → not seeded.
+    expect(g.seededSteps).toEqual(["seed1/s-a"]);
+  });
+
+  it("seeds every step once every referenced strand is solid", () => {
+    const g = buildSeedFixture(MASTERY_ALL_SOLID);
+    expect(g.seededSteps).toEqual(["seed1/s-a", "seed1/s-b", "seed1/s-c"]);
+  });
+
+  it("seeds no step whose sources do not intersect the mastery sources", () => {
+    const mastery = `---\nsubject: fixture-subject\n---\n\n# Mastery\n\n### seed1\n- Status: solid\n- Strands:\n  - only — solid\n- Sources:\n  - [[sources/fixture-subject/book.pdf#SEC_Z]]\n`;
+    expect(buildSeedFixture(mastery).seededSteps).toEqual([]);
+  });
+
+  it("keeps seededSteps empty for a legacy graph with no steps", () => {
+    const g = build();
+    expect(g.seededSteps).toEqual([]);
   });
 });
 

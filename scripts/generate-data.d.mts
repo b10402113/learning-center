@@ -63,6 +63,7 @@ export interface SubjectGraphData {
   tiers: { tier: number; title: string; nodeIds: string[] }[];
   nodes: GraphNode[];
   steps: Record<string, GraphStep>;
+  seededSteps: string[];
   elements: Record<string, GraphElement>;
   edges: GraphEdge[];
 }
@@ -73,11 +74,23 @@ export interface ScannedFiles {
   elementFiles: Record<string, string>;
   edgeFiles: Record<string, string>;
   stepFiles: Record<string, string>;
+  mastery: string;
+}
+
+export interface MasteryStrand {
+  name: string;
+  rating: "unknown" | "partial" | "solid";
+}
+
+export interface MasteryNode {
+  strands: MasteryStrand[];
+  sources: string[];
 }
 
 export function coerce(value: string): string | number;
 export function unquote(value: string): string;
 export function parseFrontmatter(md: string): FrontmatterResult;
+export function parseMastery(mastery: string | null | undefined): Map<string, MasteryNode>;
 export function buildSubjectGraph(args: {
   subject: string;
   roadmap: string;
@@ -85,6 +98,7 @@ export function buildSubjectGraph(args: {
   elementFiles: Record<string, string>;
   edgeFiles: Record<string, string>;
   stepFiles?: Record<string, string>;
+  mastery?: string;
 }): SubjectGraphData;
 export function scanSubject(subject: string, learnRoot: string): ScannedFiles;
 export function loadAllSubjects(learnRoot: string): SubjectGraphData[];

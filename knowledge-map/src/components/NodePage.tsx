@@ -10,10 +10,8 @@ type NodePageProps = ReaderCommonProps & {
 export function NodePage({
   graph,
   nodeId,
-  manualElements,
-  quizSolved,
-  onQuizSolved,
-  onToggleCompletion,
+  completedSteps,
+  onToggleStep,
   onNavigateNode,
   onNavigateElement,
   onBackToMap,
@@ -23,10 +21,8 @@ export function NodePage({
       graph={graph}
       mode="node"
       nodeId={nodeId}
-      manualElements={manualElements}
-      quizSolved={quizSolved}
-      onQuizSolved={onQuizSolved}
-      onToggleCompletion={onToggleCompletion}
+      completedSteps={completedSteps}
+      onToggleStep={onToggleStep}
       onNavigateNode={onNavigateNode}
       onNavigateElement={onNavigateElement}
       onBackToMap={onBackToMap}

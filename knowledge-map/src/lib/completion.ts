@@ -1,46 +1,40 @@
 /**
- * Checklist completion derivation (ADR 0002). Pure functions only: a node is
- * complete when every checklist item — its taught elements plus the final
- * "main" article — is in the manual completion set. No storage or DOM access.
+ * Step-based completion derivation (ADR-0005). Pure functions only: a step is
+ * complete when it is in the manual completion set or the generate-time seed
+ * set, unless the learner explicitly cleared it (manual override wins over a
+ * seed). A node is complete iff every step in its DAG is complete. Elements
+ * are keywords and never marked complete. No storage or DOM access.
  */
 
-export type CompletionItem =
-  | { kind: "element"; id: string }
-  | { kind: "main"; id: string };
-
-/** The slice of a node the derivation reads. */
-export interface NodeItemsSource {
-  id: string;
-  taughtElementIds: string[];
+export interface CompletionInput {
+  /**
+   * Node-qualified step ids seeded complete from `learn/<subject>/mastery.md`
+   * at generate time (read-only, ships in `graph.json`).
+   */
+  seeded: ReadonlySet<string>;
+  /** Node-qualified step ids the learner manually marked complete. */
+  manual: ReadonlySet<string>;
+  /** Node-qualified step ids the learner manually cleared, overriding a seed. */
+  cleared: ReadonlySet<string>;
 }
 
-export function nodeItems(node: NodeItemsSource): CompletionItem[] {
-  const items: CompletionItem[] = node.taughtElementIds.map((id) => ({
-    kind: "element",
-    id,
-  }));
-  // The main item's completion id is the node's own id — node and element ids
-  // live in disjoint spaces, so they can never collide.
-  items.push({ kind: "main", id: node.id });
-  return items;
-}
-
-export function isNodeComplete(
-  node: NodeItemsSource,
-  manualElements: ReadonlySet<string>,
-): boolean {
-  return nodeItems(node).every((item) => manualElements.has(item.id));
+export function isStepComplete(stepId: string, input: CompletionInput): boolean {
+  // Manual state is authoritative: a manual mark beats a cleared seed, and a
+  // manual clear beats a seed. The seed only fills in steps never touched.
+  if (input.manual.has(stepId)) return true;
+  if (input.cleared.has(stepId)) return false;
+  return input.seeded.has(stepId);
 }
 
 /**
- * A question element's check is locked until the in-app quiz is answered
- * correctly (self-test, not a gate on the rest of the course). Already-checked
- * rows stay uncheckable-able; the lock only blocks marking complete.
+ * A node is complete iff every step in its DAG is complete. A node with no
+ * steps has no completion signal (legacy single-article nodes are unsupported)
+ * and is never complete.
  */
-export function isCompletionLocked(
-  elementType: string | undefined,
-  checked: boolean,
-  quizSolved: boolean,
+export function nodeCompletion(
+  stepIds: readonly string[],
+  input: CompletionInput,
 ): boolean {
-  return elementType === "question" && !checked && !quizSolved;
+  if (stepIds.length === 0) return false;
+  return stepIds.every((id) => isStepComplete(id, input));
 }

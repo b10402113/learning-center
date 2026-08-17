@@ -8,18 +8,16 @@ import { ForceMap } from "./components/ForceMap";
 import { HoverCard } from "./components/HoverCard";
 import { Legend } from "./components/Legend";
 import { MapControls } from "./components/MapControls";
-import { NodeDetailView } from "./components/NodeDetailView";
 import { NodePage } from "./components/NodePage";
 import { ReaderModal } from "./components/ReaderModal";
 import { TopBar } from "./components/TopBar";
-import { isNodeComplete } from "./lib/completion";
+import { isStepComplete, nodeCompletion, type CompletionInput } from "./lib/completion";
 import { isWritten } from "./lib/colors";
-import { buildElementHash, buildHash, buildNodeHash, parseHash, type Route } from "./lib/hashlink";
+import { buildHash, buildElementHash, buildNodeHash, parseHash, type Route } from "./lib/hashlink";
 import {
   emptySubjectProgress,
   loadProgress,
   saveProgress,
-  toggleId,
   type ProgressRecord,
   type SubjectProgress,
 } from "./lib/progress";
@@ -66,6 +64,36 @@ function resolveRoute(hash: string, fallbackSubject: string): Route {
 // the hashchange dispatch.
 const initialRoute = resolveRoute(window.location.hash, defaultSubject());
 
+// Derive the completion state for one subject's graph (ADR-0005): step
+// completion = seed ∪ manual, with manual clears winning over a seed; a node
+// is complete iff every step in its DAG is complete. Pure — never reads
+// storage or the DOM.
+function completionFor(
+  g: SubjectGraph,
+  rec: SubjectProgress | undefined,
+): { state: CompletionInput; completedSteps: Set<string>; completedNodes: Set<string> } {
+  const state: CompletionInput = {
+    seeded: new Set(g.seededSteps),
+    manual: new Set(rec?.steps ?? []),
+    cleared: new Set(rec?.cleared ?? []),
+  };
+  const stepIdsByNode = new Map<string, string[]>();
+  for (const s of Object.values(g.steps)) {
+    const list = stepIdsByNode.get(s.nodeId) ?? [];
+    list.push(s.id);
+    stepIdsByNode.set(s.nodeId, list);
+  }
+  const completedSteps = new Set(
+    Object.keys(g.steps).filter((id) => isStepComplete(id, state)),
+  );
+  const completedNodes = new Set(
+    g.nodes
+      .filter((n) => nodeCompletion(stepIdsByNode.get(n.id) ?? [], state))
+      .map((n) => n.id),
+  );
+  return { state, completedSteps, completedNodes };
+}
+
 export default function App() {
   const [route, setRoute] = useState<Route>(initialRoute);
   const [subject, setSubject] = useState<string>(() => initialRoute.subject ?? defaultSubject());
@@ -80,11 +108,9 @@ export default function App() {
       : null,
   );
   const [progress, setProgress] = useState<ProgressRecord>(loadProgress);
-  const [quizSolved, setQuizSolved] = useState<Set<string>>(new Set());
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const [view, setView] = useState<"nebula" | "roadmap">("nebula");
-  const [nodeDetailOpen, setNodeDetailOpen] = useState(false);
   const [readerModal, setReaderModal] = useState<ReaderModalTarget | null>(null);
   const mapRef = useRef<MapHandle | null>(null);
 
@@ -112,7 +138,6 @@ export default function App() {
     const onHashChange = () => {
       const next = resolveRoute(window.location.hash, subject);
       setRoute(next);
-      setNodeDetailOpen(false);
       setReaderModal(null);
       if (next.kind === "element" || next.kind === "node") {
         setSubject(next.subject);
@@ -141,27 +166,25 @@ export default function App() {
     ? (graphs.find((g) => g.subject === readerModal.subject) ?? graphs[0])
     : null;
 
-  // Completion inside the modal must read/write the *modal* subject's record —
-  // never the map subject's — so cross-subject wikilinks can't pollute progress.
-  const modalElements = readerModal && modalGraph
-    ? (progress[modalGraph.subject]?.elements ?? [])
-    : [];
-  const modalManualElements = useMemo(() => new Set(modalElements), [modalElements]);
-
   const subjectProgress = progress[graph.subject] ?? emptySubjectProgress();
 
-  // The manual completion set holds element ids and a node's own id (its main
-  // article row). Node completion is derived from it — never stored.
-  const manualElements = useMemo(() => new Set(subjectProgress.elements), [subjectProgress]);
-  const completedNodes = useMemo(
-    () =>
-      new Set(
-        graph.nodes.filter((n) => isNodeComplete(n, manualElements)).map((n) => n.id),
-      ),
-    [graph, manualElements],
+  // Step completion is the only completion unit: seeded from mastery at
+  // generate time, overridable by hand in localStorage. Node completion is
+  // derived from its step-DAG — never stored.
+  const completion = useMemo(
+    () => completionFor(graph, progress[graph.subject]),
+    [graph, progress],
   );
 
-  const hasProgress = subjectProgress.elements.length > 0;
+  // Completion inside the modal reads/writes the *modal* subject's record — never
+  // the map subject's — so cross-subject wikilinks can't pollute progress.
+  const modalCompletion = useMemo(
+    () => (modalGraph ? completionFor(modalGraph, progress[modalGraph.subject]) : null),
+    [modalGraph, progress],
+  );
+
+  const hasProgress =
+    subjectProgress.steps.length > 0 || subjectProgress.cleared.length > 0;
 
   // Mutate one subject's progress record inside the shared ProgressRecord.
   function updateSubject(
@@ -172,9 +195,23 @@ export default function App() {
     setProgress({ ...progress, [subjectKey]: update(current) });
   }
 
-  // Toggle one checklist row: an element id, or a node id for its main row.
-  function toggleCompletion(id: string) {
-    updateSubject(graph.subject, (s) => ({ ...s, elements: toggleId(s.elements, id) }));
+  // Toggle one step's completion. Manual state is authoritative over a seed:
+  // un-checking a seeded step records a clear; re-checking records a manual
+  // mark (which beats the clear).
+  function toggleStepCompletion(subjectKey: string, stepId: string) {
+    updateSubject(subjectKey, (s) => {
+      const target = graphs.find((g) => g.subject === subjectKey) ?? graphs[0];
+      const manual = new Set(s.steps);
+      const cleared = new Set(s.cleared);
+      if (isStepComplete(stepId, { seeded: new Set(target.seededSteps), manual, cleared })) {
+        if (manual.has(stepId)) manual.delete(stepId);
+        else cleared.add(stepId);
+      } else {
+        cleared.delete(stepId);
+        manual.add(stepId);
+      }
+      return { steps: [...manual], cleared: [...cleared] };
+    });
   }
 
   function resetProgress() {
@@ -211,9 +248,9 @@ export default function App() {
 
   // ── Reader modal (ADR-0003) ──
   // The transient overlay is pure React state — never written to the URL. Map
-  // and checklist clicks open it; links inside it switch its content; expand
-  // navigates to the standalone page (closing the modal); close/Esc dismiss it
-  // back to the surface underneath.
+  // clicks open it; links inside it switch its content; expand navigates to
+  // the standalone page (closing the modal); close/Esc dismiss it back to the
+  // surface underneath.
   function openNodeReader(targetSubject: string, nodeId: string) {
     setReaderModal({ kind: "node", subject: targetSubject, nodeId });
   }
@@ -230,11 +267,6 @@ export default function App() {
     setReaderModal(null);
   }
 
-  function toggleModalCompletion(id: string) {
-    if (!modalGraph) return;
-    updateSubject(modalGraph.subject, (s) => ({ ...s, elements: toggleId(s.elements, id) }));
-  }
-
   function expandReaderModal(target: ReaderModalTarget) {
     if (target.kind === "node") navigateToNode(target.subject, target.nodeId);
     else navigateToElement(target.subject, target.elementId, target.from);
@@ -243,25 +275,9 @@ export default function App() {
 
   function selectNode(id: string | null) {
     setSelectedNodeId(id);
-    if (id && view === "roadmap") {
-      setNodeDetailOpen(true);
-    } else if (id && view === "nebula") {
-      openNodeReader(subject, id);
-    }
+    if (id) openNodeReader(subject, id);
     if (id) setFocusRequest({ nodeId: id, tick: performance.now() });
     else setFocusRequest(null);
-  }
-
-  function closeNodeDetail() {
-    setNodeDetailOpen(false);
-    setSelectedNodeId(null);
-    setFocusRequest(null);
-  }
-
-  // A question element's in-app quiz unlocks its completion check. Session-only
-  // (self-test, not a gate) — the persisted completion is the manual check.
-  function markQuizSolved(elementId: string) {
-    setQuizSolved((prev) => (prev.has(elementId) ? prev : new Set(prev).add(elementId)));
   }
 
   // Standalone pages navigate directly — links inside them never open the modal.
@@ -288,9 +304,6 @@ export default function App() {
     setView(v);
   }
 
-  const selectedNode = selectedNodeId
-    ? (graph.nodes.find((n) => n.id === selectedNodeId) ?? null)
-    : null;
   const hoveredNode =
     hoveredId && hoveredId !== selectedNodeId
       ? (graph.nodes.find((n) => n.id === hoveredId) ?? null)
@@ -312,10 +325,8 @@ export default function App() {
           <NodePage
             graph={graph}
             nodeId={route.nodeId}
-            manualElements={manualElements}
-            quizSolved={quizSolved}
-            onQuizSolved={markQuizSolved}
-            onToggleCompletion={toggleCompletion}
+            completedSteps={completion.completedSteps}
+            onToggleStep={(id) => toggleStepCompletion(graph.subject, id)}
             onNavigateNode={openNode}
             onNavigateElement={openElement}
             onBackToMap={() => navigateToMap(subject, null)}
@@ -325,10 +336,8 @@ export default function App() {
             graph={graph}
             elementId={route.elementId}
             from={route.from}
-            manualElements={manualElements}
-            quizSolved={quizSolved}
-            onQuizSolved={markQuizSolved}
-            onToggleCompletion={toggleCompletion}
+            completedSteps={completion.completedSteps}
+            onToggleStep={(id) => toggleStepCompletion(graph.subject, id)}
             onNavigateNode={openNode}
             onNavigateElement={openElement}
             onBackToMap={() => navigateToMap(subject, null)}
@@ -341,7 +350,7 @@ export default function App() {
                 graph={graph}
                 selectedId={selectedNodeId}
                 focusRequest={focusRequest}
-                completedNodes={completedNodes}
+                completedNodes={completion.completedNodes}
                 onSelect={selectNode}
                 onHover={setHoveredId}
               />
@@ -352,8 +361,7 @@ export default function App() {
                 selectedId={selectedNodeId}
                 selectedElementId={null}
                 focusRequest={focusRequest}
-                completedNodes={completedNodes}
-                manualElements={manualElements}
+                completedNodes={completion.completedNodes}
                 hoveredId={hoveredId}
                 onSelect={selectNode}
                 onSelectElement={(elementId) => openElementReader(subject, elementId)}
@@ -373,29 +381,12 @@ export default function App() {
 
             {hoveredNode ? <HoverCard node={hoveredNode} x={pointer.x} y={pointer.y} /> : null}
 
-            {nodeDetailOpen && selectedNode ? (
-              <NodeDetailView
-                graph={graph}
-                node={selectedNode}
-                manualElements={manualElements}
-                quizSolved={quizSolved}
-                onToggleCompletion={toggleCompletion}
-                onViewElement={(elementId) => openElementReader(graph.subject, elementId, selectedNode.id)}
-                onViewNode={(nodeId) => openNodeReader(graph.subject, nodeId)}
-                onViewContent={() => openNodeReader(graph.subject, selectedNode.id)}
-                onClose={closeNodeDetail}
-                escDisabled={readerModal !== null}
-              />
-            ) : null}
-
             {readerModal && modalGraph ? (
               <ReaderModal
                 graph={modalGraph}
                 target={readerModal}
-                manualElements={modalManualElements}
-                quizSolved={quizSolved}
-                onQuizSolved={markQuizSolved}
-                onToggleCompletion={toggleModalCompletion}
+                completedSteps={modalCompletion?.completedSteps ?? new Set()}
+                onToggleStep={(id) => toggleStepCompletion(modalGraph.subject, id)}
                 onNavigateNode={openNodeReader}
                 onNavigateElement={openElementReader}
                 onBackToMap={closeReaderModal}

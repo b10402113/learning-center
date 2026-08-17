@@ -1,15 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
 import { button } from "../lib/buttonVariants";
 import { cn } from "../lib/cn";
 import { statusLabel } from "../lib/colors";
-import { isCompletionLocked, isNodeComplete, nodeItems } from "../lib/completion";
 import { resolveElementSource } from "../lib/hashlink";
 import { elementMdxComponents, nodeMdxComponents, type MdxComponents } from "../lib/mdxComponents";
 import { getElementMdx, getNodeMdx } from "../lib/mdxRegistry";
 import type { Node, ReaderModalTarget, SubjectGraph } from "../lib/types";
 import { findWikilinkTarget } from "../lib/wikilink";
-import { CompletionToggle } from "./CompletionToggle";
 import { Expand } from "./icons/Expand";
 import { X } from "./icons/X";
 
@@ -17,10 +14,10 @@ const TIER_ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII"];
 
 export interface ReaderCommonProps {
   graph: SubjectGraph;
-  manualElements: Set<string>;
-  quizSolved: Set<string>;
-  onQuizSolved: (elementId: string) => void;
-  onToggleCompletion: (id: string) => void;
+  /** Node-qualified step ids currently complete for this graph's subject. */
+  completedSteps: Set<string>;
+  /** Toggle one step's completion in this graph's subject record. */
+  onToggleStep: (stepId: string) => void;
   onNavigateNode: (subject: string, nodeId: string) => void;
   onNavigateElement: (subject: string, elementId: string, from?: string | null) => void;
   onBackToMap: () => void;
@@ -41,18 +38,17 @@ type ReaderPageProps = ReaderCommonProps &
 
 /**
  * The shared three-column docs page (ADR-0003). Left course nav (nodes only),
- * central article, right TOC → progress → related list. Renders a node lesson
+ * central article, right TOC → related list. Renders a node lesson
  * (`mode: "node"`) or an element concept (`mode: "element"`) through the same
  * layout so the two never diverge. Standalone presentation owns a focus mode
  * that collapses the chrome; the reader-modal presentation reuses this
- * component inside an overlay.
+ * component inside an overlay. Completion is step-based (ADR-0005) and lives on
+ * the map — this page shows no completion toggles.
  */
 export function ReaderPage({
   graph,
-  manualElements,
-  quizSolved,
-  onQuizSolved,
-  onToggleCompletion,
+  completedSteps,
+  onToggleStep,
   onNavigateNode,
   onNavigateElement,
   onBackToMap,
@@ -105,11 +101,6 @@ export function ReaderPage({
       : null;
   const sourceNode = sourceNodeId ? nodeById.get(sourceNodeId) ?? null : null;
 
-  const checked = element ? manualElements.has(element.id) : false;
-  const locked = element
-    ? isCompletionLocked(element.type, checked, quizSolved.has(element.id))
-    : false;
-
   const Content = mode === "node" ? getNodeMdx(graph.subject, props.nodeId) : getElementMdx(graph.subject, props.elementId);
 
   const components = useMemo<MdxComponents | undefined>(() => {
@@ -119,14 +110,13 @@ export function ReaderPage({
     }
     if (!element) return undefined;
     return {
-      ...elementMdxComponents(
-        element,
-        element.type === "question" ? () => onQuizSolved(element.id) : undefined,
-      ),
+      // Question elements no longer gate anything (ADR-0005) — the QuizBlock
+      // renders as a plain self-check without reporting back.
+      ...elementMdxComponents(element, undefined),
       // The page header owns the title; the article's own h1 would duplicate it.
       h1: () => null,
     };
-  }, [mode, element, onQuizSolved]);
+  }, [mode, element]);
 
   // Reset reading position and drop the transient focus mode when the content
   // changes (navigation keeps this component mounted).
@@ -192,27 +182,6 @@ export function ReaderPage({
 
   const title = mode === "node" ? node!.title : element!.title;
 
-  function handleToggle() {
-    if (mode === "element") {
-      if (locked) return;
-      const wasActive = manualElements.has(element!.id);
-      onToggleCompletion(element!.id);
-      if (wasActive) {
-        toast("已取消標記元素", { description: element!.title });
-      } else {
-        toast.success("元素已學", { description: element!.title });
-      }
-    } else {
-      const wasActive = manualElements.has(node!.id);
-      onToggleCompletion(node!.id);
-      if (wasActive) {
-        toast("已取消標記課文", { description: node!.title });
-      } else {
-        toast.success("課文已讀", { description: node!.title });
-      }
-    }
-  }
-
   function scrollToHeading(index: number) {
     const el = headingRefs.current[index];
     if (!el) return;
@@ -269,9 +238,19 @@ export function ReaderPage({
 
   const activeNodeId = mode === "node" ? node!.id : sourceNodeId;
 
-  const checklist = mode === "node" ? nodeItems(node!) : [];
-  const completedCount = checklist.filter((item) => manualElements.has(item.id)).length;
-  const nodeComplete = mode === "node" ? isNodeComplete(node!, manualElements) : false;
+  // The node's step-DAG in reading order, for the completion checklist
+  // (ADR-0005): steps are the only completion unit and a node is complete iff
+  // every step in its DAG is complete.
+  const nodeSteps = useMemo(
+    () =>
+      mode === "node"
+        ? Object.values(graph.steps)
+            .filter((s) => s.nodeId === node!.id)
+            .sort((a, b) => a.order - b.order)
+        : [],
+    [graph, mode, node],
+  );
+  const nodeComplete = nodeSteps.length > 0 && nodeSteps.every((s) => completedSteps.has(s.id));
 
   // Footer prev/next shares a shape across modes: an element (by element order)
   // or a course-ordered node. `id`/`title` exist on both, so no cast is needed.
@@ -390,9 +369,6 @@ export function ReaderPage({
                     <span className="element-meta-chip">
                       T{element!.tier} · #{element!.order}
                     </span>
-                    {element!.type === "question" && element!.questions?.length ? (
-                      <span className="element-meta-chip">{element!.questions.length} 題測驗</span>
-                    ) : null}
                   </>
                 ) : (
                   <>
@@ -511,47 +487,17 @@ export function ReaderPage({
               {label}
             </button>
           ))}
-          <div className="toc-complete">
-            <div className="lbl">進度</div>
-            {mode === "element" ? (
-              <>
-                <CompletionToggle
-                  active={checked}
-                  disabled={locked}
-                  onClick={handleToggle}
-                  activeLabel="已標記元素完成"
-                  idleLabel={locked ? "先答對測驗即可標記" : "標記元素完成"}
-                />
-                {locked ? (
-                  <p className="toc-hint">這是測驗元素：答對所有題目後才能標記完成。</p>
-                ) : null}
-              </>
-            ) : (
-              <>
-                <p className="toc-progress-text">
-                  檢查清單 {completedCount} / {checklist.length}
-                </p>
-                {nodeComplete ? <span className="toc-complete-badge">檢查清單完成</span> : null}
-                <CompletionToggle
-                  active={manualElements.has(node!.id)}
-                  onClick={handleToggle}
-                  activeLabel="已標記課文完成"
-                  idleLabel="標記課文完成"
-                />
-              </>
-            )}
-            {!readerModal ? (
-              <button
-                type="button"
-                className="toc-focus"
-                onClick={() => setFocusMode(true)}
-                title="聚焦模式 (Esc 離開)"
-              >
-                <Expand size={12} />
-                進入聚焦
-              </button>
-            ) : null}
-          </div>
+          {!readerModal ? (
+            <button
+              type="button"
+              className="toc-focus"
+              onClick={() => setFocusMode(true)}
+              title="聚焦模式 (Esc 離開)"
+            >
+              <Expand size={12} />
+              進入聚焦
+            </button>
+          ) : null}
 
           {mode === "element" ? (
             <div className="toc-index">
@@ -572,29 +518,28 @@ export function ReaderPage({
             </div>
           ) : (
             <>
-              {node!.taughtElementIds.length ? (
-                <div className="toc-index">
-                  <div className="toc-label">教的元素</div>
-                  {node!.taughtElementIds.map((id) => {
-                    const e = graph.elements[id];
-                    if (!e) return null;
-                    const done = manualElements.has(e.id);
+              {nodeSteps.length ? (
+                <div className="toc-complete">
+                  <div className="lbl">進度 · Steps</div>
+                  {nodeSteps.map((s) => {
+                    const done = completedSteps.has(s.id);
                     return (
                       <button
-                        key={id}
+                        key={s.id}
                         type="button"
-                        onClick={() => onNavigateElement(graph.subject, id, node!.id)}
-                        className="toc-link toc-index-item"
-                        title={e.title}
+                        onClick={() => onToggleStep(s.id)}
+                        className={cn("toc-link toc-index-item", done && "on")}
+                        aria-pressed={done}
+                        title={s.title}
                       >
-                        <span
-                          className={cn("toc-index-dot", done && "on")}
-                          aria-hidden="true"
-                        />
-                        <span className="min-w-0 flex-1 truncate text-left">{e.title}</span>
+                        <span className={cn("toc-index-dot", done && "on")} aria-hidden="true" />
+                        <span className="min-w-0 flex-1 truncate text-left">{s.title}</span>
                       </button>
                     );
                   })}
+                  {nodeComplete ? (
+                    <span className="toc-complete-badge">節點完成</span>
+                  ) : null}
                 </div>
               ) : null}
               {node!.relatedElementIds.length ? (

@@ -238,7 +238,78 @@ function normalizeStepDag(raw) {
     .filter((s) => s.id);
 }
 
-export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, edgeFiles, stepFiles = {} }) {
+// Parse `learn/<subject>/mastery.md` (written by /probe and /tackle) into a
+// per-node map: node id -> `{ strands: [{name, rating}], sources: [locator] }`.
+// A strand pairs positionally with the source locator at the same index in the
+// node's Sources list — the convention /probe writes. Malformed sections are
+// skipped; an unreadable or absent file yields an empty map (no seeding).
+export function parseMastery(mastery) {
+  const nodes = new Map();
+  if (!mastery) return nodes;
+  const lines = mastery.split("\n");
+  let current = null;
+  let section = null; // null | "strands" | "sources"
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const h3 = line.match(/^###\s+(\S+)\s*$/);
+    if (h3) {
+      current = { strands: [], sources: [] };
+      nodes.set(h3[1], current);
+      section = null;
+      continue;
+    }
+    if (!current) continue;
+    if (/^#{1,2}\s/.test(trimmed)) {
+      section = null;
+      continue;
+    }
+    if (/^-\s*Strands:?$/i.test(trimmed)) {
+      section = "strands";
+      continue;
+    }
+    if (/^-\s*Sources:?$/i.test(trimmed)) {
+      section = "sources";
+      continue;
+    }
+    if (section === "strands") {
+      const m = trimmed.match(/^-\s+(.+?)\s*[—-]\s*(unknown|partial|solid)\s*$/);
+      if (m) current.strands.push({ name: m[1].trim(), rating: m[2] });
+    } else if (section === "sources") {
+      if (trimmed.startsWith("- [[sources/")) {
+        current.sources.push(trimmed.slice(2).trim());
+      }
+    }
+  }
+  return nodes;
+}
+
+// Seed step completions from mastery (ADR-0005): a step is seeded complete when
+// every strand its taught elements reference (by source-locator intersection)
+// is rated `solid`. No mastery entry, no intersection, or any non-`solid`
+// referenced strand leaves the step unseeded.
+function computeSeededSteps(steps, elements, masteryByNode) {
+  const seeded = [];
+  for (const step of Object.values(steps)) {
+    const entry = masteryByNode.get(step.nodeId);
+    if (!entry || entry.strands.length === 0) continue;
+    const stepSources = new Set();
+    for (const elementId of step.teaches) {
+      const element = elements[elementId];
+      if (element) for (const source of element.sources) stepSources.add(source);
+    }
+    const referenced = [];
+    for (let i = 0; i < entry.strands.length; i++) {
+      const owned = entry.sources[i];
+      if (owned && stepSources.has(owned)) referenced.push(entry.strands[i]);
+    }
+    if (referenced.length === 0) continue;
+    if (referenced.every((s) => s.rating === "solid")) seeded.push(step.id);
+  }
+  return seeded.sort();
+}
+
+export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, edgeFiles, stepFiles = {}, mastery = "" }) {
+  const masteryByNode = parseMastery(mastery);
   const nodes = [];
   const nodePrereqById = new Map();
   const nodeStepDag = new Map();
@@ -414,6 +485,7 @@ export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, e
     tiers,
     nodes,
     steps,
+    seededSteps: computeSeededSteps(steps, elements, masteryByNode),
     elements,
     edges,
   };
@@ -422,6 +494,10 @@ export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, e
 export function scanSubject(subject, learnRoot) {
   const sub = join(learnRoot, subject);
   const read = (rel) => readFileSync(join(sub, rel), "utf8");
+  const readOptional = (rel) => {
+    const path = join(sub, rel);
+    return existsSync(path) ? readFileSync(path, "utf8") : "";
+  };
   const list = (dir) => {
     const dirPath = join(sub, dir);
     if (!existsSync(dirPath)) return {};
@@ -452,6 +528,7 @@ export function scanSubject(subject, learnRoot) {
     elementFiles: list("elements"),
     edgeFiles: list("edges"),
     stepFiles: listSteps(),
+    mastery: readOptional("mastery.md"),
   };
 }
 
@@ -469,6 +546,7 @@ export function loadAllSubjects(learnRoot) {
       elementFiles: scanned.elementFiles,
       edgeFiles: scanned.edgeFiles,
       stepFiles: scanned.stepFiles,
+      mastery: scanned.mastery,
     });
   });
 }

@@ -16,10 +16,8 @@ export function ElementPage({
   graph,
   elementId,
   from,
-  manualElements,
-  quizSolved,
-  onQuizSolved,
-  onToggleCompletion,
+  completedSteps,
+  onToggleStep,
   onNavigateNode,
   onNavigateElement,
   onBackToMap,
@@ -30,10 +28,8 @@ export function ElementPage({
       mode="element"
       elementId={elementId}
       from={from}
-      manualElements={manualElements}
-      quizSolved={quizSolved}
-      onQuizSolved={onQuizSolved}
-      onToggleCompletion={onToggleCompletion}
+      completedSteps={completedSteps}
+      onToggleStep={onToggleStep}
       onNavigateNode={onNavigateNode}
       onNavigateElement={onNavigateElement}
       onBackToMap={onBackToMap}

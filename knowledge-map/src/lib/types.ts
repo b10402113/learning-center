@@ -83,6 +83,10 @@ export interface SubjectGraph {
   // Step articles keyed by node-qualified id (`nodeId/stepId`). Empty for a
   // legacy subject with no steps.
   steps: Record<string, Step>;
+  // Node-qualified step ids seeded complete from `learn/<subject>/mastery.md`
+  // at generate time (ADR-0005). Read-only — the learner's manual progress
+  // overrides a seed in the UI, never this list.
+  seededSteps: string[];
   elements: Record<string, Element>;
   edges: Edge[];
 }

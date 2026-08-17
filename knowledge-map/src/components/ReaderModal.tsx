@@ -19,10 +19,8 @@ interface ReaderModalProps extends ReaderCommonProps {
 export function ReaderModal({
   graph,
   target,
-  manualElements,
-  quizSolved,
-  onQuizSolved,
-  onToggleCompletion,
+  completedSteps,
+  onToggleStep,
   onNavigateNode,
   onNavigateElement,
   onBackToMap,
@@ -58,10 +56,8 @@ export function ReaderModal({
             presentation="readerModal"
             mode="node"
             nodeId={target.nodeId}
-            manualElements={manualElements}
-            quizSolved={quizSolved}
-            onQuizSolved={onQuizSolved}
-            onToggleCompletion={onToggleCompletion}
+            completedSteps={completedSteps}
+            onToggleStep={onToggleStep}
             onNavigateNode={onNavigateNode}
             onNavigateElement={onNavigateElement}
             onBackToMap={onBackToMap}
@@ -75,10 +71,8 @@ export function ReaderModal({
             mode="element"
             elementId={target.elementId}
             from={target.from}
-            manualElements={manualElements}
-            quizSolved={quizSolved}
-            onQuizSolved={onQuizSolved}
-            onToggleCompletion={onToggleCompletion}
+            completedSteps={completedSteps}
+            onToggleStep={onToggleStep}
             onNavigateNode={onNavigateNode}
             onNavigateElement={onNavigateElement}
             onBackToMap={onBackToMap}
