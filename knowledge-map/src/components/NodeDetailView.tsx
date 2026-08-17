@@ -74,6 +74,31 @@ export function NodeDetailView({
               step {completedCount} / {totalCount}
             </p>
           ) : null}
+          {totalCount > 0 ? (
+            <div className="path-detail-progress-ring">
+              <svg viewBox="0 0 36 36">
+                <circle
+                  cx="18"
+                  cy="18"
+                  r="14"
+                  fill="none"
+                  stroke="#2a2a2e"
+                  strokeWidth="3"
+                />
+                <circle
+                  cx="18"
+                  cy="18"
+                  r="14"
+                  fill="none"
+                  stroke="#ff0071"
+                  strokeWidth="3"
+                  strokeDasharray={`${(completedCount / totalCount) * 88} 88`}
+                  strokeLinecap="round"
+                  transform="rotate(-90 18 18)"
+                />
+              </svg>
+            </div>
+          ) : null}
         </div>
 
         <div className="path-detail-body">

@@ -13,9 +13,9 @@ decision there is untouched.
 - **Roadmap**: node cards are fixed-size again. Clicking a card opens the node
   detail overlay. The overlay lists the node's steps in reading order (title,
   completion status, dependencies as small text — no dependency arrows), a
-  `step x / y` counter, and the node's prerequisite cards. A step click opens
-  that step's reader modal on top, leaving the overlay underneath; Esc belongs
-  to the reader modal while it is open.
+  progress ring, a `step x / y` counter, and the node's prerequisite cards. A
+  step click opens that step's reader modal on top, leaving the overlay
+  underneath; Esc belongs to the reader modal while it is open.
 - **Closing**: overlay click / Esc / close button dismiss it, keeping the card
   selected and the map hash retaining the node, so shared deep-links still
   resolve.

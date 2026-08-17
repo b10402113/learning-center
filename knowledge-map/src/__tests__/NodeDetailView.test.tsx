@@ -105,6 +105,14 @@ describe("NodeDetailView", () => {
     expect(screen.getByText("step 1 / 2")).toBeInTheDocument();
   });
 
+  it("shows the progress ring for the node's step completion", () => {
+    renderView();
+    const ring = document.querySelector(".path-detail-progress-ring svg");
+    expect(ring).toBeInTheDocument();
+    const dash = ring!.querySelector("circle:nth-of-type(2)")!;
+    expect(dash).toHaveAttribute("stroke-dasharray", "44 88");
+  });
+
   it("marks completed steps and resolves dependency titles", () => {
     renderView();
     expect(screen.getAllByLabelText("已完成")).toHaveLength(1);

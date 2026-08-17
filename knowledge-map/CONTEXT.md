@@ -60,10 +60,11 @@ _Avoid_: tower, map view.
 
 **節點詳情浮層 / Node detail overlay**:
 The transient overlay a roadmap card opens on click (ADR-0006): the node's
-title, a `step x / y` counter, its prerequisite cards, and a clickable list of
-its steps in reading order (title, completion status, dependencies as small
-text). A step click opens the step's **reader modal** on top; closing returns
-to the map with the card still selected. The card itself never expands.
+title, a progress ring, a `step x / y` counter, its prerequisite cards, and a
+clickable list of its steps in reading order (title, completion status,
+dependencies as small text). A step click opens the step's **reader modal** on
+top; closing returns to the map with the card still selected. The card itself
+never expands.
 _Avoid_: popup, panel, modal, sidebar.
 
 **視圖切換 / View switch**:
