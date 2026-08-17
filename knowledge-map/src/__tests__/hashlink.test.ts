@@ -3,6 +3,7 @@ import {
   buildElementHash,
   buildHash,
   buildNodeHash,
+  buildStepHash,
   parseHash,
   resolveElementSource,
 } from "../lib/hashlink";
@@ -166,6 +167,63 @@ describe("parseHash — element route", () => {
   });
 });
 
+describe("parseHash — step route", () => {
+  it("parses the path-style step deep-link", () => {
+    expect(parseHash("#/steps/muscle-ladder/lifting-technique/grip-variants")).toEqual({
+      kind: "step",
+      subject: "muscle-ladder",
+      nodeId: "lifting-technique",
+      stepId: "grip-variants",
+    });
+  });
+
+  it("accepts the step route without a leading slash", () => {
+    expect(parseHash("#steps/muscle-ladder/lifting-technique/grip-variants")).toEqual({
+      kind: "step",
+      subject: "muscle-ladder",
+      nodeId: "lifting-technique",
+      stepId: "grip-variants",
+    });
+  });
+
+  it("falls back to the map route when any segment is missing", () => {
+    expect(parseHash("#/steps/muscle-ladder/lifting-technique")).toEqual({
+      kind: "map",
+      subject: null,
+      nodeId: null,
+    });
+    expect(parseHash("#/steps/muscle-ladder")).toEqual({
+      kind: "map",
+      subject: null,
+      nodeId: null,
+    });
+    expect(parseHash("#/steps/")).toEqual({ kind: "map", subject: null, nodeId: null });
+    expect(parseHash("#/steps")).toEqual({ kind: "map", subject: null, nodeId: null });
+  });
+
+  it("decodes URL-encoded subject, node, and step characters", () => {
+    expect(parseHash("#/steps/a%20b/slug%26x/step%2Fy")).toEqual({
+      kind: "step",
+      subject: "a b",
+      nodeId: "slug&x",
+      stepId: "step/y",
+    });
+  });
+
+  it("falls back to the map route on malformed percent-encoding instead of throwing", () => {
+    expect(parseHash("#/steps/%E0%A4%A/foo/bar")).toEqual({
+      kind: "map",
+      subject: null,
+      nodeId: null,
+    });
+    expect(parseHash("#/steps/foo/%ZZ/bar")).toEqual({
+      kind: "map",
+      subject: null,
+      nodeId: null,
+    });
+  });
+});
+
 describe("buildHash", () => {
   it("builds the canonical #s=<subject>&p=<node-id> deep-link", () => {
     expect(buildHash("ai-agents-in-action", "what-is-an-agent")).toBe(
@@ -219,6 +277,34 @@ describe("buildNodeHash", () => {
       kind: "node",
       subject: "a b",
       nodeId: "slug&x",
+    });
+  });
+});
+
+describe("buildStepHash", () => {
+  it("builds the canonical #/steps/<subject>/<node>/<step> deep-link", () => {
+    expect(buildStepHash("muscle-ladder", "lifting-technique", "grip-variants")).toBe(
+      "#/steps/muscle-ladder/lifting-technique/grip-variants",
+    );
+  });
+
+  it("round-trips through parseHash", () => {
+    expect(parseHash(buildStepHash("muscle-ladder", "lifting-technique", "grip-variants"))).toEqual({
+      kind: "step",
+      subject: "muscle-ladder",
+      nodeId: "lifting-technique",
+      stepId: "grip-variants",
+    });
+  });
+
+  it("URL-encodes characters that cannot live in a path verbatim", () => {
+    const hash = buildStepHash("a b", "slug&x", "step/y");
+    expect(hash).toBe("#/steps/a%20b/slug%26x/step%2Fy");
+    expect(parseHash(hash)).toEqual({
+      kind: "step",
+      subject: "a b",
+      nodeId: "slug&x",
+      stepId: "step/y",
     });
   });
 });

@@ -5,6 +5,7 @@ import FixtureVideo from "./fixtures/video.mdx";
 import { PrereqSection } from "../components/PrereqSection";
 import { QuizBlock } from "../components/QuizBlock";
 import { VideoEmbed } from "../components/VideoEmbed";
+import { getElementMdx, getNodeMdx, getStepMdx } from "../lib/mdxRegistry";
 import type { SubjectGraph } from "../lib/types";
 
 const QUESTIONS = [
@@ -31,6 +32,29 @@ describe("MDX pipeline", () => {
       />,
     );
     expect(screen.getByTestId("video-embed")).toBeInTheDocument();
+  });
+});
+
+describe("mdx registry — nested step glob (ADR-0004)", () => {
+  it("resolves a real step article nested under a node directory", () => {
+    const Step = getStepMdx("quant-resource", "backtesting-data-platforms", "platform-selection");
+    expect(Step).not.toBeNull();
+    if (!Step) return;
+    render(<Step />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("回測平台怎麼選？");
+  });
+
+  it("resolves node and element articles while treating them separately from steps", () => {
+    const Node = getNodeMdx("quant-resource", "backtesting-data-platforms");
+    expect(Node).not.toBeNull();
+    const Element = getElementMdx("quant-resource", "backtesting-platform-selection");
+    expect(Element).not.toBeNull();
+  });
+
+  it("returns null for a step that does not exist", () => {
+    expect(getStepMdx("quant-resource", "backtesting-data-platforms", "nope")).toBeNull();
+    expect(getStepMdx("quant-resource", "ghost-node", "platform-selection")).toBeNull();
+    expect(getStepMdx("ghost-subject", "backtesting-data-platforms", "platform-selection")).toBeNull();
   });
 });
 

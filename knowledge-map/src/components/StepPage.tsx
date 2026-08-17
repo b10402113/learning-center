@@ -1,34 +1,34 @@
 import type { SubjectGraph } from "../lib/types";
 import { ReaderPage, type ReaderCommonProps } from "./ReaderPage";
 
-type ElementPageProps = ReaderCommonProps & {
+type StepPageProps = ReaderCommonProps & {
   graph: SubjectGraph;
-  elementId: string;
-  from: string | null;
+  nodeId: string;
+  stepId: string;
 };
 
 /**
- * The standalone element page — the shared docs page in element mode. The
- * `?from=<node-id>` origin (ADR-0003) lets the breadcrumb jump back to the
- * teaching lesson; without one it falls back to the first taught-by node.
+ * The standalone step page — the shared docs page in step mode. The step is the
+ * smallest addressable lesson (ADR-0004); its breadcrumb returns to the owning
+ * node, and prev/next walk the node's step-DAG reading order.
  */
-export function ElementPage({
+export function StepPage({
   graph,
-  elementId,
-  from,
+  nodeId,
+  stepId,
   completedSteps,
   onToggleStep,
   onNavigateNode,
   onNavigateStep,
   onNavigateElement,
   onBackToMap,
-}: ElementPageProps) {
+}: StepPageProps) {
   return (
     <ReaderPage
       graph={graph}
-      mode="element"
-      elementId={elementId}
-      from={from}
+      mode="step"
+      nodeId={nodeId}
+      stepId={stepId}
       completedSteps={completedSteps}
       onToggleStep={onToggleStep}
       onNavigateNode={onNavigateNode}

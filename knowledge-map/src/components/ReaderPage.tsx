@@ -2,11 +2,13 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { button } from "../lib/buttonVariants";
 import { cn } from "../lib/cn";
 import { statusLabel } from "../lib/colors";
+import { stepsOfNode } from "../lib/completion";
 import { resolveElementSource } from "../lib/hashlink";
 import { elementMdxComponents, nodeMdxComponents, type MdxComponents } from "../lib/mdxComponents";
-import { getElementMdx, getNodeMdx } from "../lib/mdxRegistry";
-import type { Node, ReaderModalTarget, SubjectGraph } from "../lib/types";
+import { getElementMdx, getStepMdx } from "../lib/mdxRegistry";
+import type { Node, ReaderModalTarget, Step, SubjectGraph } from "../lib/types";
 import { findWikilinkTarget } from "../lib/wikilink";
+import { ChevronRight } from "./icons/ChevronRight";
 import { Expand } from "./icons/Expand";
 import { X } from "./icons/X";
 
@@ -19,6 +21,7 @@ export interface ReaderCommonProps {
   /** Toggle one step's completion in this graph's subject record. */
   onToggleStep: (stepId: string) => void;
   onNavigateNode: (subject: string, nodeId: string) => void;
+  onNavigateStep: (subject: string, nodeId: string, stepId: string) => void;
   onNavigateElement: (subject: string, elementId: string, from?: string | null) => void;
   onBackToMap: () => void;
 }
@@ -27,6 +30,7 @@ type ReaderPageProps = ReaderCommonProps &
   (
     | { mode: "node"; nodeId: string }
     | { mode: "element"; elementId: string; from: string | null }
+    | { mode: "step"; nodeId: string; stepId: string }
   ) & {
     // `standalone` (default) is the addressable full page; `readerModal` hosts the
     // same docs page inside the transient overlay, swapping the focus toggle for
@@ -37,26 +41,33 @@ type ReaderPageProps = ReaderCommonProps &
   };
 
 /**
- * The shared three-column docs page (ADR-0003). Left course nav (nodes only),
- * central article, right TOC → related list. Renders a node lesson
- * (`mode: "node"`) or an element concept (`mode: "element"`) through the same
- * layout so the two never diverge. Standalone presentation owns a focus mode
- * that collapses the chrome; the reader-modal presentation reuses this
- * component inside an overlay. Completion is step-based (ADR-0005) and lives on
- * the map — this page shows no completion toggles.
+ * The shared three-column docs page (ADR-0003). Left course nav, central
+ * article, right TOC → related list. Renders a node container (`mode: "node"`,
+ * the lesson description + step-DAG), a step article (`mode: "step"`), or an
+ * element concept (`mode: "element"`) through the same layout so the three never
+ * diverge. Standalone presentation owns a focus mode that collapses the chrome;
+ * the reader-modal presentation reuses this component inside an overlay.
+ * Completion is step-based (ADR-0005) and lives on the map — a node's steps
+ * toggle here, elements never do.
  */
 export function ReaderPage({
   graph,
   completedSteps,
   onToggleStep,
   onNavigateNode,
+  onNavigateStep,
   onNavigateElement,
   onBackToMap,
   ...props
 }: ReaderPageProps) {
   const mode = props.mode;
   const readerModal = (props.presentation ?? "standalone") === "readerModal";
-  const node = mode === "node" ? graph.nodes.find((n) => n.id === props.nodeId) ?? null : null;
+
+  const node =
+    mode === "node" || mode === "step"
+      ? (graph.nodes.find((n) => n.id === props.nodeId) ?? null)
+      : null;
+  const step = mode === "step" ? (graph.steps[`${props.nodeId}/${props.stepId}`] ?? null) : null;
   const element =
     mode === "element" ? (graph.elements[props.elementId] ?? null) : null;
 
@@ -91,7 +102,23 @@ export function ReaderPage({
     return ordered;
   }, [graph, nodeById]);
 
-  const contentKey = mode === "node" ? props.nodeId : props.elementId;
+  // The node's step-DAG in reading order (ADR-0004): the container's directory,
+  // shared by the node page's DAG section, the step page's prev/next + TOC, and
+  // the completion checklist.
+  const dagNodeId = mode === "node" || mode === "step" ? props.nodeId : null;
+  const nodeSteps = useMemo<Step[]>(() => {
+    if (dagNodeId == null) return [];
+    return stepsOfNode(graph.steps, dagNodeId);
+  }, [graph, dagNodeId]);
+
+  const stepById = graph.steps;
+
+  const contentKey =
+    mode === "element"
+      ? props.elementId
+      : mode === "step"
+        ? `${props.nodeId}/${props.stepId}`
+        : props.nodeId;
 
   // Element breadcrumb source lesson: the explicit ?from origin wins, else the
   // first node that teaches this element, else none (subject / 元素 / title).
@@ -101,10 +128,18 @@ export function ReaderPage({
       : null;
   const sourceNode = sourceNodeId ? nodeById.get(sourceNodeId) ?? null : null;
 
-  const Content = mode === "node" ? getNodeMdx(graph.subject, props.nodeId) : getElementMdx(graph.subject, props.elementId);
+  // The step page renders its own article; the node page renders its step-DAG
+  // directory instead of a node article (the node is a container, ADR-0004).
+  const Content =
+    mode === "step"
+      ? getStepMdx(graph.subject, props.nodeId, props.stepId)
+      : mode === "element"
+        ? getElementMdx(graph.subject, props.elementId)
+        : null;
 
   const components = useMemo<MdxComponents | undefined>(() => {
-    if (mode === "node") {
+    if (mode === "node") return undefined;
+    if (mode === "step") {
       // The page header owns the title; the article's own h1 would duplicate it.
       return { ...nodeMdxComponents, h1: () => null };
     }
@@ -164,10 +199,16 @@ export function ReaderPage({
     return () => window.removeEventListener("keydown", onKey);
   }, [focusMode]);
 
-  const missing = mode === "node" ? node === null : element === null;
+  const missing =
+    mode === "node"
+      ? node === null
+      : mode === "step"
+        ? node === null || step === null
+        : element === null;
 
   if (missing) {
-    const label = mode === "node" ? "找不到此課文。" : "找不到此元素。";
+    const label =
+      mode === "node" ? "找不到此課文。" : mode === "step" ? "找不到此步驟。" : "找不到此元素。";
     return (
       <div className="grid h-full place-items-center bg-background text-muted">
         <div className="flex flex-col items-center gap-3">
@@ -180,7 +221,8 @@ export function ReaderPage({
     );
   }
 
-  const title = mode === "node" ? node!.title : element!.title;
+  const title =
+    mode === "node" ? node!.title : mode === "step" ? step!.title : element!.title;
 
   function scrollToHeading(index: number) {
     const el = headingRefs.current[index];
@@ -190,9 +232,10 @@ export function ReaderPage({
   }
 
   // The lesson origin carried into element navigations: the node being read on
-  // a lesson page, or the element page's *resolved* source lesson (so a ghost
-  // `?from` never propagates — the breadcrumb source is the real node shown).
-  const origin = mode === "node" ? props.nodeId : sourceNodeId;
+  // a node or step page, or the element page's *resolved* source lesson (so a
+  // ghost `?from` never propagates — the breadcrumb source is the real node
+  // shown). A step belongs to its node, so its wikilinks point back at the node.
+  const origin = mode === "step" ? props.nodeId : mode === "node" ? props.nodeId : sourceNodeId;
 
   // In the reader-modal presentation, "expand" promotes the current content to
   // its standalone page: elements carry the resolved source so the full page's
@@ -201,6 +244,13 @@ export function ReaderPage({
     if (!props.onExpand) return;
     if (mode === "node") {
       props.onExpand({ kind: "node", subject: graph.subject, nodeId: node!.id });
+    } else if (mode === "step") {
+      props.onExpand({
+        kind: "step",
+        subject: graph.subject,
+        nodeId: node!.id,
+        stepId: step!.id,
+      });
     } else {
       props.onExpand({
         kind: "element",
@@ -216,49 +266,69 @@ export function ReaderPage({
     if (!parsed) return;
     if (parsed.kind === "element") {
       // A wikilink carries the current lesson origin so the target's breadcrumb
-      // can jump back (from a lesson it is that lesson; from an element page it
-      // keeps the page's resolved source, if any).
+      // can jump back (from a lesson/step it is that node; from an element page
+      // it keeps the page's resolved source, if any).
       onNavigateElement(parsed.subject, parsed.id, origin);
     } else {
       onNavigateNode(parsed.subject, parsed.id);
     }
   }
 
-  // Element prev/next by element order; node prev/next by course order.
+  // Element prev/next by element order; node prev/next by course order; step
+  // prev/next by the owning node's step-DAG reading order (absent at the ends).
   const currentIndex =
     mode === "element"
       ? sortedElements.findIndex((e) => e.id === element!.id)
-      : courseNodes.findIndex((n) => n.id === node!.id);
+      : mode === "step"
+        ? nodeSteps.findIndex((s) => s.stepId === step!.stepId)
+        : courseNodes.findIndex((n) => n.id === node!.id);
   const prev =
-    currentIndex > 0 ? (mode === "element" ? sortedElements[currentIndex - 1] : courseNodes[currentIndex - 1]) : null;
+    mode === "element"
+      ? currentIndex > 0
+        ? sortedElements[currentIndex - 1]
+        : null
+      : mode === "step"
+        ? currentIndex > 0
+          ? nodeSteps[currentIndex - 1]
+          : null
+        : currentIndex > 0
+          ? courseNodes[currentIndex - 1]
+          : null;
   const next =
-    currentIndex >= 0 && currentIndex < (mode === "element" ? sortedElements.length : courseNodes.length) - 1
-      ? (mode === "element" ? sortedElements[currentIndex + 1] : courseNodes[currentIndex + 1])
-      : null;
+    mode === "element"
+      ? currentIndex >= 0 && currentIndex < sortedElements.length - 1
+        ? sortedElements[currentIndex + 1]
+        : null
+      : mode === "step"
+        ? currentIndex >= 0 && currentIndex < nodeSteps.length - 1
+          ? nodeSteps[currentIndex + 1]
+          : null
+        : currentIndex >= 0 && currentIndex < courseNodes.length - 1
+          ? courseNodes[currentIndex + 1]
+          : null;
 
-  const activeNodeId = mode === "node" ? node!.id : sourceNodeId;
+  const activeNodeId = mode === "node" || mode === "step" ? node!.id : sourceNodeId;
 
-  // The node's step-DAG in reading order, for the completion checklist
-  // (ADR-0005): steps are the only completion unit and a node is complete iff
-  // every step in its DAG is complete.
-  const nodeSteps = useMemo(
-    () =>
-      mode === "node"
-        ? Object.values(graph.steps)
-            .filter((s) => s.nodeId === node!.id)
-            .sort((a, b) => a.order - b.order)
-        : [],
-    [graph, mode, node],
-  );
+  // A node is complete iff every step in its DAG is complete (ADR-0005).
   const nodeComplete = nodeSteps.length > 0 && nodeSteps.every((s) => completedSteps.has(s.id));
 
-  // Footer prev/next shares a shape across modes: an element (by element order)
-  // or a course-ordered node. `id`/`title` exist on both, so no cast is needed.
-  const footPrev = prev ? { id: prev.id, title: prev.title } : null;
-  const footNext = next ? { id: next.id, title: next.title } : null;
+  // Footer prev/next shares a shape across modes: an element (by element order),
+  // a course-ordered node, or a node's step (by DAG order). Steps carry their
+  // `stepId` for navigation; nodes/elements carry their `id`.
+  const footPrev = prev
+    ? mode === "step"
+      ? { id: (prev as Step).stepId, title: prev.title }
+      : { id: prev.id, title: prev.title }
+    : null;
+  const footNext = next
+    ? mode === "step"
+      ? { id: (next as Step).stepId, title: next.title }
+      : { id: next.id, title: next.title }
+    : null;
 
   function navigateFoot(target: { id: string }) {
     if (mode === "element") onNavigateElement(graph.subject, target.id, origin);
+    else if (mode === "step") onNavigateStep(graph.subject, props.nodeId, target.id);
     else onNavigateNode(graph.subject, target.id);
   }
 
@@ -305,8 +375,23 @@ export function ReaderPage({
                 {graph.subject}
               </button>
               <span className="sep">/</span>
-              {mode === "element" ? (
-                sourceNode ? (
+              {mode === "node" ? (
+                <span className="current">{title}</span>
+              ) : mode === "step" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onNavigateNode(graph.subject, node!.id)}
+                    className="link"
+                    title={`回到課文：${node!.title}`}
+                  >
+                    {node!.title}
+                  </button>
+                  <span className="sep">/</span>
+                  <span className="current">{title}</span>
+                </>
+              ) : sourceNode ? (
+                <>
                   <button
                     type="button"
                     onClick={() => onNavigateNode(graph.subject, sourceNode!.id)}
@@ -315,12 +400,16 @@ export function ReaderPage({
                   >
                     {sourceNode!.title}
                   </button>
-                ) : (
+                  <span className="sep">/</span>
+                  <span className="current">{title}</span>
+                </>
+              ) : (
+                <>
                   <span className="link-static">元素</span>
-                )
-              ) : null}
-              {mode === "element" ? <span className="sep">/</span> : null}
-              <span className="current">{title}</span>
+                  <span className="sep">/</span>
+                  <span className="current">{title}</span>
+                </>
+              )}
             </nav>
             {readerModal ? (
               <>
@@ -373,6 +462,16 @@ export function ReaderPage({
                       <span className="element-meta-chip">{element!.questions.length} 題測驗</span>
                     ) : null}
                   </>
+                ) : mode === "step" ? (
+                  <>
+                    <span className="element-meta-chip">步驟</span>
+                    <span className="element-meta-chip">
+                      T{node!.tier} · #{step!.order}
+                    </span>
+                    {node!.duration ? (
+                      <span className="element-meta-chip">{node!.duration}</span>
+                    ) : null}
+                  </>
                 ) : (
                   <>
                     <span className="element-meta-chip">課文</span>
@@ -392,7 +491,52 @@ export function ReaderPage({
             </header>
 
             <div className="nb-prose element-prose" onClick={handleContentClick}>
-              {Content && components ? (
+              {mode === "node" ? (
+                <section className="node-dag" aria-label="課程步驟">
+                  <div className="node-dag-head">
+                    <h2>Steps · 課程結構</h2>
+                    <p className="node-dag-hint">
+                      每個 step 是一篇可獨立閱讀的課文；deps 標明閱讀順序。
+                    </p>
+                  </div>
+                  {nodeSteps.length ? (
+                    <div className="node-dag-list">
+                      {nodeSteps.map((s) => {
+                        const done = completedSteps.has(s.id);
+                        const deps = s.deps
+                          .map((id) => stepById[id])
+                          .filter((d): d is Step => Boolean(d));
+                        return (
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => onNavigateStep(graph.subject, node!.id, s.stepId)}
+                            className={cn("node-dag-card", done && "on")}
+                            title={s.title}
+                          >
+                            <span className="n">{String(s.order).padStart(2, "0")}</span>
+                            <span
+                              className={cn("status-dot", done && "on")}
+                              aria-hidden="true"
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="t block truncate text-left">{s.title}</span>
+                              <span className="sub block truncate text-left">
+                                {deps.length
+                                  ? `依賴：${deps.map((d) => d.title).join("、")}`
+                                  : "無前置 step"}
+                              </span>
+                            </span>
+                            <ChevronRight size={14} className="node-dag-chevron" />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="node-dag-empty">此課文沒有 step（舊式單文章 node）。</p>
+                  )}
+                </section>
+              ) : Content && components ? (
                 <Content components={components} />
               ) : (
                 <p>找不到此內容。</p>
@@ -437,7 +581,11 @@ export function ReaderPage({
                     onClick={() => navigateFoot(footPrev!)}
                   >
                     <span className="k">
-                      {mode === "element" ? "← 上一元素" : "← 上一課文"}
+                      {mode === "element"
+                        ? "← 上一元素"
+                        : mode === "step"
+                          ? "← 上一步"
+                          : "← 上一課文"}
                     </span>
                     <span className="min-w-0 truncate">{footPrev.title}</span>
                   </button>
@@ -451,7 +599,11 @@ export function ReaderPage({
                     onClick={() => navigateFoot(footNext!)}
                   >
                     <span className="k">
-                      {mode === "element" ? "下一元素 →" : "下一課文 →"}
+                      {mode === "element"
+                        ? "下一元素 →"
+                        : mode === "step"
+                          ? "下一步 →"
+                          : "下一課文 →"}
                     </span>
                     <span className="min-w-0 truncate">{footNext.title}</span>
                   </button>
@@ -523,16 +675,30 @@ export function ReaderPage({
             <>
               {nodeSteps.length ? (
                 <div className="toc-complete">
-                  <div className="lbl">進度 · Steps</div>
+                  <div className="lbl">
+                    {mode === "step" ? "Steps · 本課目錄" : "進度 · Steps"}
+                  </div>
                   {nodeSteps.map((s) => {
                     const done = completedSteps.has(s.id);
+                    const isCurrent = mode === "step" && s.stepId === step!.stepId;
                     return (
                       <button
                         key={s.id}
                         type="button"
-                        onClick={() => onToggleStep(s.id)}
+                        onClick={() => {
+                          // The step page's TOC is a directory — a sibling step
+                          // navigates there; the current step toggles. The node
+                          // page's TOC keeps the completion checklist (ADR-0005),
+                          // while its central DAG cards handle navigation.
+                          if (mode === "step") {
+                            if (isCurrent) onToggleStep(s.id);
+                            else onNavigateStep(graph.subject, node!.id, s.stepId);
+                          } else {
+                            onToggleStep(s.id);
+                          }
+                        }}
                         className={cn("toc-link toc-index-item", done && "on")}
-                        aria-pressed={done}
+                        aria-current={isCurrent ? "page" : undefined}
                         title={s.title}
                       >
                         <span className={cn("toc-index-dot", done && "on")} aria-hidden="true" />
@@ -545,7 +711,28 @@ export function ReaderPage({
                   ) : null}
                 </div>
               ) : null}
-              {node!.relatedElementIds.length ? (
+              {mode === "step" && step!.teaches.length ? (
+                <div className="toc-index">
+                  <div className="toc-label">此 step 教的元素</div>
+                  {step!.teaches.map((id) => {
+                    const e = graph.elements[id];
+                    if (!e) return null;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => onNavigateElement(graph.subject, id, node!.id)}
+                        className="toc-link toc-index-item"
+                        title={e.title}
+                      >
+                        <span className="toc-index-n">T{e.tier}</span>
+                        <span className="min-w-0 flex-1 truncate text-left">{e.title}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {mode === "node" && node!.relatedElementIds.length ? (
                 <div className="toc-index">
                   <div className="toc-label">關聯元素</div>
                   {node!.relatedElementIds.map((id) => {

@@ -5,7 +5,8 @@
 export type Route =
   | { kind: "map"; subject: string | null; nodeId: string | null }
   | { kind: "node"; subject: string; nodeId: string }
-  | { kind: "element"; subject: string; elementId: string; from: string | null };
+  | { kind: "element"; subject: string; elementId: string; from: string | null }
+  | { kind: "step"; subject: string; nodeId: string; stepId: string };
 
 // Parse a path-style `#/<kind>/<subject>/<id>` hash into its parts.
 function parsePathKind(
@@ -36,9 +37,48 @@ function parsePathKind(
   }
 }
 
+// Parse a step path `#/steps/<subject>/<node-id>/<step-id>` into its parts. The
+// step route is the only three-segment path route (a node owns its steps), so it
+// parses its own shape instead of reusing the two-segment `parsePathKind`.
+function parseStepPath(
+  raw: string,
+): { subject: string; nodeId: string; stepId: string } | null {
+  const prefix = "steps/";
+  if (!raw.startsWith(prefix)) return null;
+  const rest = raw.slice(prefix.length);
+  const parts = rest.split("/");
+  if (parts.length !== 3) return null;
+  const [subjectRaw, nodeRaw, stepRaw] = parts;
+  if (!subjectRaw || !nodeRaw || !stepRaw) return null;
+  // The step segment may carry a trailing `?query=…` — split it off so only the
+  // path participates in the step decode.
+  const qIndex = stepRaw.indexOf("?");
+  const stepId = qIndex >= 0 ? stepRaw.slice(0, qIndex) : stepRaw;
+  if (!stepId) return null;
+  try {
+    return {
+      subject: decodeURIComponent(subjectRaw),
+      nodeId: decodeURIComponent(nodeRaw),
+      stepId: decodeURIComponent(stepId),
+    };
+  } catch {
+    // Malformed percent-encoding — fall back to the map route.
+    return null;
+  }
+}
+
 // Read a hash string (with or without `#`) into a Route.
 export function parseHash(hash: string): Route {
   const raw = hash.replace(/^#/, "").replace(/^\//, "");
+  const stepPath = parseStepPath(raw);
+  if (stepPath) {
+    return {
+      kind: "step",
+      subject: stepPath.subject,
+      nodeId: stepPath.nodeId,
+      stepId: stepPath.stepId,
+    };
+  }
   const nodePath = parsePathKind(raw, "nodes");
   if (nodePath) return { kind: "node", subject: nodePath.subject, nodeId: nodePath.id };
   const elementPath = parsePathKind(raw, "elements");
@@ -80,6 +120,11 @@ export function buildElementHash(
   const base = `#/elements/${encodeURIComponent(subject)}/${encodeURIComponent(elementId)}`;
   if (!from) return base;
   return `${base}?from=${encodeURIComponent(from)}`;
+}
+
+// Build the canonical `#/steps/<subject>/<node-id>/<step-id>` step deep-link.
+export function buildStepHash(subject: string, nodeId: string, stepId: string): string {
+  return `#/steps/${encodeURIComponent(subject)}/${encodeURIComponent(nodeId)}/${encodeURIComponent(stepId)}`;
 }
 
 /**

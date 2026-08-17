@@ -22,6 +22,7 @@ export function ReaderModal({
   completedSteps,
   onToggleStep,
   onNavigateNode,
+  onNavigateStep,
   onNavigateElement,
   onBackToMap,
   onExpand,
@@ -37,6 +38,19 @@ export function ReaderModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const readerProps = {
+    graph,
+    presentation: "readerModal" as const,
+    completedSteps,
+    onToggleStep,
+    onNavigateNode,
+    onNavigateStep,
+    onNavigateElement,
+    onBackToMap,
+    onExpand,
+    onClose,
+  };
+
   return (
     <div
       className="reader-modal-overlay"
@@ -50,34 +64,16 @@ export function ReaderModal({
         aria-modal="true"
         aria-label="內容閱讀視窗"
       >
-        {target.kind === "node" ? (
-          <ReaderPage
-            graph={graph}
-            presentation="readerModal"
-            mode="node"
-            nodeId={target.nodeId}
-            completedSteps={completedSteps}
-            onToggleStep={onToggleStep}
-            onNavigateNode={onNavigateNode}
-            onNavigateElement={onNavigateElement}
-            onBackToMap={onBackToMap}
-            onExpand={onExpand}
-            onClose={onClose}
-          />
+        {target.kind === "step" ? (
+          <ReaderPage {...readerProps} mode="step" nodeId={target.nodeId} stepId={target.stepId} />
+        ) : target.kind === "node" ? (
+          <ReaderPage {...readerProps} mode="node" nodeId={target.nodeId} />
         ) : (
           <ReaderPage
-            graph={graph}
-            presentation="readerModal"
+            {...readerProps}
             mode="element"
             elementId={target.elementId}
             from={target.from}
-            completedSteps={completedSteps}
-            onToggleStep={onToggleStep}
-            onNavigateNode={onNavigateNode}
-            onNavigateElement={onNavigateElement}
-            onBackToMap={onBackToMap}
-            onExpand={onExpand}
-            onClose={onClose}
           />
         )}
       </div>

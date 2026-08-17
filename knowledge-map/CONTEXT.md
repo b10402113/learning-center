@@ -44,13 +44,18 @@ _Avoid_: icon library.
 ## Views
 
 **星雲 / Nebula**:
-The force-directed graph view (`force-graph`). One node per lesson, small circles
-per concept element, links for spine / shared-concept / explicit edges.
+The force-directed graph view (`force-graph`). One node per step, small circles
+per concept element. Links: step dependency edges (`step-dep`) and the
+step→element teach links that pull each element toward the step teaching it.
+Spine / shared-concept / explicit edges are not drawn here — the nebula shows
+the teaching structure only.
 _Avoid_: graph view.
 
 **Roadmap / 路線圖**:
-The structural view (ReactFlow). Each tier is a row, each lesson a card, edges
-drawn as navigable connections.
+The structural view (ReactFlow). Each tier is a row, each node a card; a card
+expands to show its step-DAG (step cards + dependency arrows) and the node's
+lesson description. Element markers scatter irregularly around their tier's
+card row, pulled toward the steps that teach them.
 _Avoid_: tower, map view.
 
 **視圖切換 / View switch**:
@@ -58,24 +63,34 @@ Transitioning between Nebula and Roadmap via the View Transitions API.
 _Avoid_: page transition (there are no pages).
 
 **Node 頁面 / Node page**:
-The standalone full-page view of one node's lesson (`#/nodes/<subject>/<node-id>`),
-rendered with the same three-column docs layout as element pages. Reading is
-entered either through a transient reader modal or directly by deep-link.
+The standalone full-page view of one node's container
+(`#/nodes/<subject>/<node-id>`), rendered with the same three-column docs
+layout as element pages. It shows the node's lesson description plus the
+step-DAG (every step with its deps), each step readable separately. The node
+is a container, not an article — reading a node means walking its steps.
 _Avoid_: lesson view, node content.
+
+**Step 頁面 / Step page**:
+The standalone full-page view of one step's article
+(`#/steps/<subject>/<node-id>/<step-id>`), the smallest addressable lesson.
+Steps are the article carriers now; a step's breadcrumb returns to its owning
+node. Shares the docs layout with node and element pages.
+_Avoid_: lesson view, step content.
 
 **Element 頁面 / Element page**:
 The standalone full-page view of one element
 (`#/elements/<subject>/<element-id>`), carrying an optional `?from=<node-id>`
-origin so the breadcrumb can return to the teaching lesson. Shares the docs
-layout with node pages.
+origin so the breadcrumb can return to the teaching lesson. The "taught by"
+list shows the steps that teach it (with their owning node), not the nodes
+directly. Shares the docs layout with node pages.
 _Avoid_: concept page, element view.
 
 **元素視窗 / Reader modal**:
-The transient overlay that hosts the same node/element docs page when reading is
-entered from the map, a checklist modal, chips, wikilinks, or search. "Expand"
-navigates to the standalone page; closing returns to the surface underneath
-(nested over the checklist modal). The retired DetailPane side panel is not a
-reader modal.
+The transient overlay that hosts the same node/step/element docs page when
+reading is entered from the map, a checklist modal, chips, wikilinks, or
+search. "Expand" navigates to the standalone page; closing returns to the
+surface underneath (nested over the checklist modal). The retired DetailPane
+side panel is not a reader modal.
 _Avoid_: sidebar, popup, panel.
 
 ## Search
@@ -93,9 +108,17 @@ _Avoid_: search.
 ## Content
 
 **課程內容 / Lesson content**:
-The curriculum substance: prose lessons (zh-Hant), plus — planned — fenced code
+The curriculum substance: step articles (zh-Hant), plus — planned — fenced code
 blocks, math, and interactive examples.
 _Avoid_: content, markdown (content is the substance; markdown is its storage format).
+
+**Step / 步驟**:
+The smallest addressable lesson — a first-class article file under
+`learn/<subject>/nodes/<node-id>/<step-id>.mdx`. A node is a container whose
+teaching process is a set of steps that branch and merge through their deps.
+Each step declares the elements it teaches (`teaches`); steps are the article
+carriers.
+_Avoid_: section, sub-lesson (steps are files, not headings).
 
 **互動範例 / Interactive example**:
 A lesson-embedded widget the learner can manipulate, rendered with Sandpack
@@ -105,16 +128,16 @@ _Avoid_: playground.
 ## Progress
 
 **進度 / Progress**:
-Manual element-level completion state, per subject, stored in `localStorage`.
-The learner marks each element complete by hand; node completion is derived
-automatically once every item in its list (taught elements + main article) is
-complete. No tier gates, no unlock thresholds.
+Per-step completion state, per subject. A step is the only completion unit:
+it is complete when its `/tackle` passes (mastery `solid`), seeded at generate
+time from `learn/<subject>/mastery.md` and overridable by hand in
+`localStorage`. A node is complete automatically once every step in its DAG is
+complete. Elements are keywords and are never marked complete.
 _Avoid_: likes, engagement — the blog's MongoDB likes are an engagement signal and
 are out of scope here.
 
 **元素類型 / Element type**:
-Each element is `article` (default), `video`, or `question`. `video` elements
-embed a `videoUrl` for in-app playback. `question` elements render an
-interactive multiple-choice quiz; the learner must answer correctly before the
-element counts as complete (self-test, not a gate).
+Each element is `article` (default) or `video`. `video` elements embed a
+`videoUrl` for in-app playback. The retired `question` type is deprecated —
+graded verification now lives only in `/tackle`.
 _Avoid_: content type.

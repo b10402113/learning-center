@@ -6,13 +6,14 @@ type NodePageProps = ReaderCommonProps & {
   nodeId: string;
 };
 
-/** The standalone node lesson page — the shared docs page in node mode. */
+/** The standalone node container page — the shared docs page in node mode. */
 export function NodePage({
   graph,
   nodeId,
   completedSteps,
   onToggleStep,
   onNavigateNode,
+  onNavigateStep,
   onNavigateElement,
   onBackToMap,
 }: NodePageProps) {
@@ -24,6 +25,7 @@ export function NodePage({
       completedSteps={completedSteps}
       onToggleStep={onToggleStep}
       onNavigateNode={onNavigateNode}
+      onNavigateStep={onNavigateStep}
       onNavigateElement={onNavigateElement}
       onBackToMap={onBackToMap}
     />

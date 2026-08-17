@@ -11,10 +11,11 @@ import { MapControls } from "./components/MapControls";
 import { NodeDetailView } from "./components/NodeDetailView";
 import { NodePage } from "./components/NodePage";
 import { ReaderModal } from "./components/ReaderModal";
+import { StepPage } from "./components/StepPage";
 import { TopBar } from "./components/TopBar";
 import { isStepComplete, nodeCompletion, stepsOfNode, toggleStep, type CompletionInput } from "./lib/completion";
 import { isWritten } from "./lib/colors";
-import { buildHash, buildElementHash, buildNodeHash, parseHash, type Route } from "./lib/hashlink";
+import { buildHash, buildElementHash, buildNodeHash, buildStepHash, parseHash, type Route } from "./lib/hashlink";
 import {
   emptySubjectProgress,
   loadProgress,
@@ -54,6 +55,12 @@ function resolveRoute(hash: string, fallbackSubject: string): Route {
   if (route.kind === "element") {
     const element = graph?.elements[route.elementId];
     if (graph && element) return route;
+    return { kind: "map", subject: graph?.subject ?? fallbackSubject, nodeId: null };
+  }
+  if (route.kind === "step") {
+    const step = graph?.steps[`${route.nodeId}/${route.stepId}`];
+    const validNode = graph?.nodes.some((n) => n.id === route.nodeId);
+    if (graph && validNode && step) return route;
     return { kind: "map", subject: graph?.subject ?? fallbackSubject, nodeId: null };
   }
   const validNode = graph?.nodes.some((n) => n.id === route.nodeId) ? route.nodeId : null;
@@ -98,7 +105,9 @@ export default function App() {
   const [route, setRoute] = useState<Route>(initialRoute);
   const [subject, setSubject] = useState<string>(() => initialRoute.subject ?? defaultSubject());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(() =>
-    initialRoute.kind === "element" || initialRoute.kind === "node"
+    initialRoute.kind === "element" ||
+    initialRoute.kind === "node" ||
+    initialRoute.kind === "step"
       ? null
       : initialRoute.nodeId,
   );
@@ -141,7 +150,7 @@ export default function App() {
       setRoute(next);
       setNodeDetailOpen(false);
       setReaderModal(null);
-      if (next.kind === "element" || next.kind === "node") {
+      if (next.kind === "element" || next.kind === "node" || next.kind === "step") {
         setSubject(next.subject);
         setSelectedNodeId(null);
         setFocusRequest(null);
@@ -243,6 +252,10 @@ export default function App() {
     window.location.hash = buildElementHash(targetSubject, elementId, from);
   }
 
+  function navigateToStep(targetSubject: string, nodeId: string, stepId: string) {
+    window.location.hash = buildStepHash(targetSubject, nodeId, stepId);
+  }
+
   // ── Reader modal (ADR-0003) ──
   // The transient overlay is pure React state — never written to the URL. Map
   // clicks open it; links inside it switch its content; expand navigates to
@@ -250,6 +263,10 @@ export default function App() {
   // surface underneath.
   function openNodeReader(targetSubject: string, nodeId: string) {
     setReaderModal({ kind: "node", subject: targetSubject, nodeId });
+  }
+
+  function openStepReader(targetSubject: string, nodeId: string, stepId: string) {
+    setReaderModal({ kind: "step", subject: targetSubject, nodeId, stepId });
   }
 
   function openElementReader(
@@ -266,6 +283,7 @@ export default function App() {
 
   function expandReaderModal(target: ReaderModalTarget) {
     if (target.kind === "node") navigateToNode(target.subject, target.nodeId);
+    else if (target.kind === "step") navigateToStep(target.subject, target.nodeId, target.stepId);
     else navigateToElement(target.subject, target.elementId, target.from);
     setReaderModal(null);
   }
@@ -296,13 +314,17 @@ export default function App() {
     navigateToNode(subjectKey, nodeId);
   }
 
+  function openStep(subjectKey: string, nodeId: string, stepId: string) {
+    navigateToStep(subjectKey, nodeId, stepId);
+  }
+
   function switchSubject(s: string) {
     if (s === subject) return;
     navigateToMap(s, null);
   }
 
   function switchView(v: "nebula" | "roadmap") {
-    if (route.kind === "element" || route.kind === "node") {
+    if (route.kind === "element" || route.kind === "node" || route.kind === "step") {
       // The view toggle doubles as "back to the map" from a standalone page.
       navigateToMap(subject, null);
       setView(v);
@@ -338,6 +360,7 @@ export default function App() {
             completedSteps={completion.completedSteps}
             onToggleStep={(id) => toggleStepCompletion(graph.subject, id)}
             onNavigateNode={openNode}
+            onNavigateStep={openStep}
             onNavigateElement={openElement}
             onBackToMap={() => navigateToMap(subject, null)}
           />
@@ -349,6 +372,19 @@ export default function App() {
             completedSteps={completion.completedSteps}
             onToggleStep={(id) => toggleStepCompletion(graph.subject, id)}
             onNavigateNode={openNode}
+            onNavigateStep={openStep}
+            onNavigateElement={openElement}
+            onBackToMap={() => navigateToMap(subject, null)}
+          />
+        ) : route.kind === "step" ? (
+          <StepPage
+            graph={graph}
+            nodeId={route.nodeId}
+            stepId={route.stepId}
+            completedSteps={completion.completedSteps}
+            onToggleStep={(id) => toggleStepCompletion(graph.subject, id)}
+            onNavigateNode={openNode}
+            onNavigateStep={openStep}
             onNavigateElement={openElement}
             onBackToMap={() => navigateToMap(subject, null)}
           />
@@ -411,6 +447,7 @@ export default function App() {
                 completedSteps={modalCompletion?.completedSteps ?? new Set()}
                 onToggleStep={(id) => toggleStepCompletion(modalGraph.subject, id)}
                 onNavigateNode={openNodeReader}
+                onNavigateStep={openStepReader}
                 onNavigateElement={openElementReader}
                 onBackToMap={closeReaderModal}
                 onExpand={expandReaderModal}
