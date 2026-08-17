@@ -8,6 +8,7 @@ import { ForceMap } from "./components/ForceMap";
 import { HoverCard } from "./components/HoverCard";
 import { Legend } from "./components/Legend";
 import { MapControls } from "./components/MapControls";
+import { NodeDetailView } from "./components/NodeDetailView";
 import { NodePage } from "./components/NodePage";
 import { ReaderModal } from "./components/ReaderModal";
 import { StepPage } from "./components/StepPage";
@@ -121,8 +122,12 @@ export default function App() {
   // closes so the step stays highlighted (ADR-0004).
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
-  const [view, setView] = useState<"nebula" | "roadmap">("nebula");
-  const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
+  const [view, setView] = useState<"nebula" | "roadmap">(() =>
+    initialRoute.kind === "map" && initialRoute.nodeId != null ? "roadmap" : "nebula",
+  );
+  const [nodeDetailOpen, setNodeDetailOpen] = useState<boolean>(
+    () => initialRoute.kind === "map" && initialRoute.nodeId != null,
+  );
   const [readerModal, setReaderModal] = useState<ReaderModalTarget | null>(null);
   const mapRef = useRef<MapHandle | null>(null);
 
@@ -154,14 +159,14 @@ export default function App() {
       if (next.kind === "element" || next.kind === "node" || next.kind === "step") {
         setSubject(next.subject);
         setSelectedNodeId(null);
-        setExpandedNodeId(null);
+        setNodeDetailOpen(false);
         setFocusRequest(null);
       } else {
         setSubject(next.subject ?? subject);
         setSelectedNodeId(next.nodeId);
-        // A map deep-link to a specific node lands with its DAG expanded
-        // (ADR-0004) so the learner sees how that lesson is taught.
-        setExpandedNodeId(next.nodeId);
+        // A map deep-link to a specific node opens its detail overlay
+        // (ADR-0006) so the learner sees that lesson's steps.
+        setNodeDetailOpen(next.nodeId != null);
         if (next.nodeId) setFocusRequest({ nodeId: next.nodeId, tick: performance.now() });
         else setFocusRequest(null);
       }
@@ -293,15 +298,32 @@ export default function App() {
     setReaderModal(null);
   }
 
-  // A node click on the roadmap toggles that card's step-DAG expansion
-  // (ADR-0004): click to expand, click again to collapse. Selection and focus
-  // follow the card either way.
-  const toggleExpandNode = useCallback((id: string) => {
+  // A node click on the roadmap opens that node's detail overlay (ADR-0006): a
+  // list of its steps, replacing the retired in-place card expansion.
+  // Selection and focus follow the card either way.
+  const openNodeDetail = useCallback((id: string) => {
     setSelectedNodeId(id);
     setSelectedStepId(null);
-    setExpandedNodeId((prev) => (prev === id ? null : id));
+    setNodeDetailOpen(true);
     setFocusRequest({ nodeId: id, tick: performance.now() });
   }, []);
+
+  // Closing keeps the node selected and seated: the map hash retains it, so a
+  // shared deep-link still resolves to the same node (ADR-0006).
+  const closeNodeDetail = useCallback(() => {
+    setNodeDetailOpen(false);
+  }, []);
+
+  // A step click inside the detail overlay opens the step's reader modal while
+  // keeping the overlay and its node selected underneath (ADR-0006).
+  const selectNodeDetailStep = useCallback(
+    (nodeId: string, stepId: string) => {
+      openStepReader(subject, nodeId, stepId);
+      setSelectedNodeId(nodeId);
+      setFocusRequest({ nodeId, tick: performance.now() });
+    },
+    [subject],
+  );
 
   // A step click in the nebula opens the step's reader modal and seats the
   // camera on that step's node. Selection is step-id based on the nebula
@@ -313,15 +335,6 @@ export default function App() {
     setSelectedStepId(`${nodeId}/${stepId}`);
     setFocusRequest({ nodeId: `${nodeId}/${stepId}`, tick: performance.now() });
   }
-
-  // A step click inside a roadmap expansion opens the step's reader modal while
-  // keeping the owning node expanded and seated underneath (ADR-0004).
-  const selectRoadStep = useCallback((nodeId: string, stepId: string) => {
-    openStepReader(subject, nodeId, stepId);
-    setSelectedNodeId(nodeId);
-    setExpandedNodeId(nodeId);
-    setFocusRequest({ nodeId, tick: performance.now() });
-  }, [subject]);
 
   // Standalone pages navigate directly — links inside them never open the modal.
   function openElement(subjectKey: string, elementId: string, from?: string | null) {
@@ -348,12 +361,18 @@ export default function App() {
       setView(v);
       return;
     }
+    if (v !== "roadmap") setNodeDetailOpen(false);
     setView(v);
   }
 
   const hoveredNode =
     hoveredId && hoveredId !== selectedNodeId
       ? (graph.nodes.find((n) => n.id === hoveredId) ?? null)
+      : null;
+
+  const selectedNode =
+    selectedNodeId != null
+      ? (graph.nodes.find((n) => n.id === selectedNodeId) ?? null)
       : null;
 
   return (
@@ -412,10 +431,7 @@ export default function App() {
                 selectedId={selectedNodeId}
                 focusRequest={focusRequest}
                 completedNodes={completion.completedNodes}
-                completedSteps={completion.completedSteps}
-                expandedNodeId={expandedNodeId}
-                onToggleExpand={toggleExpandNode}
-                onSelectStep={selectRoadStep}
+                onSelectNode={openNodeDetail}
                 onHover={setHoveredId}
               />
             ) : (
@@ -444,6 +460,21 @@ export default function App() {
             />
 
             {hoveredNode ? <HoverCard node={hoveredNode} x={pointer.x} y={pointer.y} /> : null}
+
+            {view === "roadmap" && nodeDetailOpen && selectedNode ? (
+              <NodeDetailView
+                graph={graph}
+                node={selectedNode}
+                completedSteps={completion.completedSteps}
+                onSelectStep={selectNodeDetailStep}
+                onNavigateElement={(elementId) =>
+                  openElementReader(graph.subject, elementId, selectedNode.id)
+                }
+                onNavigateNode={(nodeId) => openNodeReader(graph.subject, nodeId)}
+                onClose={closeNodeDetail}
+                escDisabled={readerModal !== null}
+              />
+            ) : null}
 
             {readerModal && modalGraph ? (
               <ReaderModal

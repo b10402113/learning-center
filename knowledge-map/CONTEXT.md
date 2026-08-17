@@ -52,11 +52,19 @@ the teaching structure only.
 _Avoid_: graph view.
 
 **Roadmap / 路線圖**:
-The structural view (ReactFlow). Each tier is a row, each node a card; a card
-expands to show its step-DAG (step cards + dependency arrows) and the node's
-lesson description. Element markers scatter irregularly around their tier's
-card row, pulled toward the steps that teach them.
+The structural view (ReactFlow). Each tier is a row, each node a fixed-size
+card; clicking a card opens its **node detail overlay** listing the node's
+steps. Element markers scatter irregularly around their tier's card row, pulled
+toward the steps that teach them.
 _Avoid_: tower, map view.
+
+**節點詳情浮層 / Node detail overlay**:
+The transient overlay a roadmap card opens on click (ADR-0006): the node's
+title, a `step x / y` counter, its prerequisite cards, and a clickable list of
+its steps in reading order (title, completion status, dependencies as small
+text). A step click opens the step's **reader modal** on top; closing returns
+to the map with the card still selected. The card itself never expands.
+_Avoid_: popup, panel, modal, sidebar.
 
 **視圖切換 / View switch**:
 Transitioning between Nebula and Roadmap via the View Transitions API.
