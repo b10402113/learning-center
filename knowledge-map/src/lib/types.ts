@@ -92,14 +92,18 @@ export interface SubjectGraph {
 }
 
 // A request to seat the camera on one tile, e.g. from a deep-link. `tick` makes
-// each request distinct so focusing the same node again re-seats the camera.
+// each request distinct so focusing the same target again re-seats the camera.
+// `nodeId` carries a node id on the roadmap and a node-qualified step id
+// (`nodeId/stepId`) on the nebula (ADR-0004).
 export interface FocusRequest {
   nodeId: string;
   tick: number;
 }
 
 // Imperative camera surface exposed by the map views to their owner (map
-// controls, subject switches, deep-link seating).
+// controls, subject switches, deep-link seating). `seatOnNode`'s argument is a
+// node id on the roadmap and a node-qualified step id (`nodeId/stepId`) on the
+// nebula.
 export interface MapHandle {
   fit: () => void;
   seatOnNode: (nodeId: string) => void;

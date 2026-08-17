@@ -3,7 +3,6 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
-  useMemo,
   useRef,
 } from "react";
 import ForceGraph, {
@@ -11,31 +10,34 @@ import ForceGraph, {
   type LinkObject,
   type NodeObject,
 } from "force-graph";
-import { isWritten } from "../lib/colors";
 import type { FocusRequest, MapHandle, SubjectGraph } from "../lib/types";
 
 interface FNode extends NodeObject {
   id: string;
-  kind: "node" | "element";
-  nodeId?: string;
+  kind: "step" | "element";
+  /** Node-qualified step id (`nodeId/stepId`) for step nodes. */
+  stepId?: string;
   elementId?: string;
   title: string;
+  /** Owning node's title, shown under a step's label (ADR-0004). */
+  nodeTitle: string;
   tier: number;
 }
 interface FLink extends LinkObject<FNode> {
-  kind: "spine" | "shared" | "explicit" | "teach";
-  label?: string;
+  kind: "step-dep" | "teach";
 }
 type FGraph = ForceGraph<FNode, FLink>;
 
 interface ForceMapProps {
   graph: SubjectGraph;
+  /** The selected step id (`nodeId/stepId`) or element id, for highlight. */
   selectedId: string | null;
   selectedElementId: string | null;
   focusRequest: FocusRequest | null;
-  completedNodes: Set<string>;
+  /** Node-qualified step ids seeded/overridden complete (ADR-0005). */
+  completedSteps: Set<string>;
   hoveredId: string | null;
-  onSelect: (id: string | null) => void;
+  onSelectStep: (nodeId: string, stepId: string) => void;
   onSelectElement: (id: string) => void;
   onHover: (id: string | null) => void;
 }
@@ -46,9 +48,9 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
     selectedId,
     selectedElementId,
     focusRequest,
-    completedNodes,
+    completedSteps,
     hoveredId,
-    onSelect,
+    onSelectStep,
     onSelectElement,
     onHover,
   }: ForceMapProps,
@@ -60,6 +62,27 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
   const pendingSeatRef = useRef<string | null>(null);
   const lastFocusRef = useRef<string | null>(null);
 
+  // Adjacency index over the live graph's links (step-dep + teach), keyed by
+  // full node ids (`p:<stepId>` / `n:<elementId>`). Rebuilt when the graph
+  // rebuilds; drives hover dimming of non-neighbor nodes.
+  const neighborsRef = useRef<ReadonlyMap<string, ReadonlySet<string>>>(new Map());
+
+  const indexNeighbors = useCallback((links: FLink[]) => {
+      const m = new Map<string, Set<string>>();
+      for (const l of links) {
+        const s = typeof l.source === "string" ? l.source : (l.source as FNode)?.id;
+        const t = typeof l.target === "string" ? l.target : (l.target as FNode)?.id;
+        if (!s || !t) continue;
+        const a = m.get(s) ?? new Set<string>();
+        const b = m.get(t) ?? new Set<string>();
+        a.add(t);
+        b.add(s);
+        m.set(s, a);
+        m.set(t, b);
+      }
+      neighborsRef.current = m;
+    }, []);
+
   // Theme tokens (mirrors app.css, drawn directly onto the canvas).
   const C = {
     brass: "#ff0071",
@@ -70,23 +93,19 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
     muted: "#a0a0a5",
     foreground: "#f5f5f5",
     faint: "#8b8b8f",
-    teach: "#2f2f33",
+    teach: "#5f5f66",
   };
 
   const LINK_STYLES: Record<
     FLink["kind"],
     { color: string; width: number; dash?: number[] }
   > = {
-    spine: { color: C.muted, width: 1.6 },
-    shared: { color: C.brassDim, width: 1.1, dash: [4, 5] },
-    explicit: { color: C.beacon, width: 1.9 },
-    teach: { color: C.teach, width: 0.7, dash: [1, 3] },
+    // Dependency edges come from a step's `deps` — dashed to read as "must come
+    // first", with an arrowhead showing the direction of the dependency.
+    "step-dep": { color: C.beacon, width: 1.3, dash: [5, 4] },
+    // Teach links pull each concept element toward the step teaching it.
+    teach: { color: C.teach, width: 0.8, dash: [1, 3] },
   };
-
-  const written = useMemo(
-    () => new Set(graph.nodes.filter((p) => isWritten(p.status)).map((p) => p.id)),
-    [graph],
-  );
 
   // The draw callbacks are registered once with force-graph; the continuous
   // render loop (autoPauseRedraw(false)) re-reads live state every frame, so
@@ -94,20 +113,18 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
   const liveRef = useRef({
     selectedId,
     selectedElementId,
-    written,
-    completedNodes,
+    completedSteps,
     hoveredId,
-    onSelect,
+    onSelectStep,
     onSelectElement,
     onHover,
   });
   liveRef.current = {
     selectedId,
     selectedElementId,
-    written,
-    completedNodes,
+    completedSteps,
     hoveredId,
-    onSelect,
+    onSelectStep,
     onSelectElement,
     onHover,
   };
@@ -117,31 +134,46 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
   }
 
   const radiusOf = (n: FNode): number => {
-    const { selectedId, selectedElementId, written, completedNodes } = liveRef.current;
-    if (n.kind === "node") {
-      if (n.nodeId === selectedId) return 11;
-      if (written.has(n.nodeId!) || completedNodes.has(n.nodeId!)) return 9;
+    const { selectedId, selectedElementId, completedSteps } = liveRef.current;
+    if (n.kind === "step") {
+      if (n.stepId === selectedId) return 11;
+      if (completedSteps.has(n.stepId!)) return 9;
       return 8;
     }
     return n.elementId === selectedElementId ? 7 : 5;
   };
 
   const matches = (n: FNode, id: string) =>
-    n.kind === "node" ? n.nodeId === id : n.elementId === id;
+    n.kind === "step" ? n.stepId === id : n.elementId === id;
+
+  // Whether a node is the hovered node or directly connected to it by a
+  // step-dep or teach link. Drives the hover highlight: neighbors stay lit,
+  // everything else fades.
+  const isHoverNeighbor = (node: FNode, hoveredId: string): boolean => {
+    const myFull = node.kind === "step" ? `p:${node.stepId}` : `n:${node.elementId}`;
+    const hoverFull = `p:${hoveredId}`;
+    const hoverElemFull = `n:${hoveredId}`;
+    if (myFull === hoverFull || myFull === hoverElemFull) return true;
+    const ns = neighborsRef.current.get(hoverFull);
+    if (ns && ns.has(myFull)) return true;
+    const ne = neighborsRef.current.get(hoverElemFull);
+    if (ne && ne.has(myFull)) return true;
+    return false;
+  };
 
   function drawNode(node: FNode, ctx: CanvasRenderingContext2D, gs: number) {
-    const { selectedId, selectedElementId, written, completedNodes } =
-      liveRef.current;
-    const isLesson = node.kind === "node";
-    const selected = isLesson
-      ? node.nodeId === selectedId
+    const { selectedId, selectedElementId, completedSteps, hoveredId } = liveRef.current;
+    const isStep = node.kind === "step";
+    const selected = isStep
+      ? node.stepId === selectedId
       : node.elementId === selectedElementId;
-    const lit =
-      isLesson && (written.has(node.nodeId!) || completedNodes.has(node.nodeId!));
+    const done = isStep && completedSteps.has(node.stepId!);
     const r = radiusOf(node);
+    const dimmed = hoveredId !== null && !isHoverNeighbor(node, hoveredId) ? 0.15 : 1;
     ctx.save();
     ctx.translate(node.x ?? 0, node.y ?? 0);
-    if (isLesson) {
+    if (isStep) {
+      ctx.globalAlpha = dimmed;
       if (selected) {
         ctx.beginPath();
         ctx.arc(0, 0, r + 6, 0, Math.PI * 2);
@@ -150,24 +182,28 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
       }
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
-      ctx.fillStyle = lit ? "#241019" : C.surface2;
+      ctx.fillStyle = done ? "#241019" : C.surface2;
       ctx.fill();
-      ctx.strokeStyle = selected ? C.beacon : lit ? C.brassDim : C.border;
+      ctx.strokeStyle = selected ? C.beacon : done ? C.brassDim : C.border;
       ctx.lineWidth = selected ? 2 : 1;
       ctx.stroke();
+      // Step title below the node; the owning node's label rides under it in a
+      // smaller mono face so the step reads as belonging to its container.
       ctx.font = `${10 / gs}px "IBM Plex Sans", system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       ctx.fillStyle = selected ? C.foreground : C.faint;
-      ctx.fillText(node.title, 0, r + 5 / gs);
+      ctx.fillText(truncate(node.title, 22), 0, r + 5 / gs);
+      ctx.font = `${8 / gs}px "IBM Plex Mono", ui-monospace, monospace`;
+      ctx.fillStyle = C.faint;
+      ctx.fillText(`◂ ${truncate(node.nodeTitle, 18)}`, 0, r + 5 / gs + 12 / gs);
     } else {
       const nr = selected ? 7 : 5;
       ctx.beginPath();
       ctx.arc(0, 0, nr, 0, Math.PI * 2);
       ctx.fillStyle = selected ? C.beacon : C.brassDim;
-      ctx.globalAlpha = selected ? 0.95 : 0.35;
+      ctx.globalAlpha = (selected ? 0.95 : 0.35) * dimmed;
       ctx.fill();
-      ctx.globalAlpha = 1;
       ctx.strokeStyle = selected ? C.beacon : C.brassDim;
       ctx.lineWidth = selected ? 2 : 1.25;
       ctx.stroke();
@@ -201,7 +237,7 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
     const connected = hovered && (matches(s, hoveredId) || matches(t, hoveredId));
     const style = LINK_STYLES[link.kind];
     ctx.save();
-    ctx.globalAlpha = hovered && !connected ? 0.1 : 1;
+    ctx.globalAlpha = hovered && !connected ? 0.08 : 1;
     ctx.strokeStyle = style.color;
     ctx.lineWidth = style.width;
     if (style.dash) ctx.setLineDash(style.dash);
@@ -209,7 +245,9 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
     ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
     ctx.stroke();
-    if (link.kind === "spine" || link.kind === "explicit") {
+    if (link.kind === "step-dep") {
+      // Arrowhead on the step that depends on the source step — the target of
+      // the dependency edge is the dependent step.
       const ang = Math.atan2(y2 - y1, x2 - x1);
       const r = radiusOf(t);
       const tipX = x2 - Math.cos(ang) * r;
@@ -230,38 +268,46 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
     (subject: SubjectGraph): GraphData<FNode, FLink> => {
       const nodes: FNode[] = [];
       const links: FLink[] = [];
-      for (const p of subject.nodes) {
+      const nodeById = new Map(subject.nodes.map((n) => [n.id, n]));
+      // Steps are the nebula's lesson nodes: one node per step, pulled toward
+      // the elements it teaches; step-dep edges wire the node's step-DAG.
+      for (const [id, s] of Object.entries(subject.steps)) {
+        const owning = nodeById.get(s.nodeId);
         nodes.push({
-          id: `p:${p.id}`,
-          kind: "node",
-          nodeId: p.id,
-          title: p.title,
-          tier: p.tier,
+          id: `p:${id}`,
+          kind: "step",
+          stepId: id,
+          title: s.title,
+          nodeTitle: owning?.title ?? s.nodeId,
+          tier: owning?.tier ?? 1,
         });
-        for (const nid of p.taughtElementIds) {
-          links.push({ source: `p:${p.id}`, target: `n:${nid}`, kind: "teach" });
+        for (const depId of s.deps) {
+          links.push({ source: `p:${depId}`, target: `p:${id}`, kind: "step-dep" });
+        }
+        for (const eid of s.teaches) {
+          links.push({ source: `p:${id}`, target: `n:${eid}`, kind: "teach" });
         }
       }
       for (const [nid, n] of Object.entries(subject.elements)) {
-        nodes.push({ id: `n:${nid}`, kind: "element", elementId: nid, title: n.title, tier: n.tier });
-      }
-      for (const e of subject.edges) {
-        // step-dep edges connect steps (nodeId/stepId), which the nebula does
-        // not render as nodes yet — the step-node rework owns those links.
-        if (e.kind === "step-dep") continue;
-        const kind = e.kind === "shared-concept" ? "shared" : e.kind;
-        links.push({ source: `p:${e.from}`, target: `p:${e.to}`, kind, label: e.label });
+        nodes.push({
+          id: `n:${nid}`,
+          kind: "element",
+          elementId: nid,
+          title: n.title,
+          nodeTitle: "",
+          tier: n.tier,
+        });
       }
       return { nodes, links };
     },
     [],
   );
 
-  const seatNow = useCallback((nodeId: string) => {
+  const seatNow = useCallback((stepId: string) => {
     const g = gRef.current;
     if (!g) return;
     const n = g.graphData().nodes.find(
-      (node) => node.kind === "node" && node.nodeId === nodeId,
+      (node) => node.kind === "step" && node.stepId === stepId,
     );
     if (!n) return;
     g.centerAt(n.x ?? 0, n.y ?? 0, 450);
@@ -275,16 +321,20 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
     g.zoom(1.5, 400);
   }, []);
 
-  const requestSeat = useCallback((nodeId: string) => {
-    if (!gRef.current) return;
-    if (engineStoppedRef.current) {
-      seatNow(nodeId);
-    } else {
-      pendingSeatRef.current = nodeId;
-    }
-  }, [seatNow]);
+  const requestSeat = useCallback(
+    (stepId: string) => {
+      if (!gRef.current) return;
+      if (engineStoppedRef.current) {
+        seatNow(stepId);
+      } else {
+        pendingSeatRef.current = stepId;
+      }
+    },
+    [seatNow],
+  );
 
-  // Imperative surface shared with the roadmap view's controls.
+  // Imperative surface shared with the roadmap view's controls. `nodeId` here is
+  // a node-qualified step id (`nodeId/stepId`) in the nebula.
   useImperativeHandle(
     ref,
     () => ({
@@ -296,8 +346,8 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
         if (!g) return;
         g.zoom(g.zoom() * factor, 200);
       },
-      seatOnNode: (nodeId: string) => {
-        requestSeat(nodeId);
+      seatOnNode: (stepId: string) => {
+        requestSeat(stepId);
       },
     }),
     [requestSeat],
@@ -308,14 +358,16 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
     if (!host) return;
     const w = host.clientWidth || 1;
     const h = host.clientHeight || 1;
+    const initial = buildData(graph);
+    indexNeighbors(initial.links);
     const g = new ForceGraph<FNode, FLink>(host)
       .nodeId("id")
       .linkSource("source")
       .linkTarget("target")
-      .graphData(buildData(graph))
+      .graphData(initial)
       .width(w)
       .height(h)
-      .nodeVal((n) => (n.kind === "node" ? 1.6 : 1))
+      .nodeVal((n) => (n.kind === "step" ? 1.6 : 1))
       .cooldownTime(2200)
       .d3VelocityDecay(0.34)
       .autoPauseRedraw(false)
@@ -327,15 +379,21 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
       .linkCanvasObject(drawLink)
       .onNodeClick((node) => {
         const n = node as FNode;
-        if (n.kind === "node") liveRef.current.onSelect(n.nodeId ?? null);
-        else {
+        if (n.kind === "step") {
+          const id = n.stepId!;
+          const slash = id.indexOf("/");
+          if (slash > 0) {
+            liveRef.current.onSelectStep(id.slice(0, slash), id.slice(slash + 1));
+          }
+        } else {
           centerOn(n);
           liveRef.current.onSelectElement(n.elementId ?? "");
         }
       })
       .onNodeHover((node) => {
         const n = node as FNode | null;
-        if (n?.kind === "node") liveRef.current.onHover(n.nodeId ?? null);
+        if (n?.kind === "step") liveRef.current.onHover(n.stepId ?? null);
+        else if (n?.kind === "element") liveRef.current.onHover(n.elementId ?? null);
         else liveRef.current.onHover(null);
       })
       .onEngineStop(() => {
@@ -347,10 +405,10 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
           g.zoomToFit(450, 48);
         }
       });
-    // Tune the default forces: nodes spread more than concept elements, and the
-    // teach-links pull each concept element closer to its nodes.
+    // Tune the default forces: step nodes spread more than concept elements, and
+    // the teach-links pull each concept element closer to the step teaching it.
     const charge = g.d3Force("charge");
-    if (charge) charge.strength((n: FNode) => (n.kind === "node" ? -28 : -16));
+    if (charge) charge.strength((n: FNode) => (n.kind === "step" ? -28 : -16));
     const link = g.d3Force("link");
     if (link) link.distance((l: FLink) => (l.kind === "teach" ? 55 : 80));
     gRef.current = g;
@@ -371,10 +429,12 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
   useEffect(() => {
     const g = gRef.current;
     if (!g) return;
-    g.graphData(buildData(graph));
+    const next = buildData(graph);
+    indexNeighbors(next.links);
+    g.graphData(next);
     engineStoppedRef.current = false;
     pendingSeatRef.current = null;
-  }, [graph, buildData]);
+  }, [graph, buildData, indexNeighbors]);
 
   // A deep-link names a tile to focus: seat the camera on it once per request.
   useEffect(() => {
@@ -407,3 +467,4 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
     </div>
   );
 });
+

@@ -118,6 +118,9 @@ export default function App() {
   );
   const [progress, setProgress] = useState<ProgressRecord>(loadProgress);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // The nebula's selected step (`nodeId/stepId`), kept after the reader modal
+  // closes so the step stays highlighted (ADR-0004).
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const [view, setView] = useState<"nebula" | "roadmap">("nebula");
   const [nodeDetailOpen, setNodeDetailOpen] = useState(false);
@@ -290,13 +293,23 @@ export default function App() {
 
   function selectNode(id: string | null) {
     setSelectedNodeId(id);
+    setSelectedStepId(null);
     if (id && view === "roadmap") {
       setNodeDetailOpen(true);
-    } else if (id && view === "nebula") {
-      openNodeReader(subject, id);
     }
     if (id) setFocusRequest({ nodeId: id, tick: performance.now() });
     else setFocusRequest(null);
+  }
+
+  // A step click in the nebula opens the step's reader modal and seats the
+  // camera on that step's node. Selection is step-id based on the nebula
+  // (ADR-0004); the roadmap's node selection is cleared so the two don't blend.
+  // The step stays highlighted on the nebula after the modal closes.
+  function selectStep(nodeId: string, stepId: string) {
+    openStepReader(subject, nodeId, stepId);
+    setSelectedNodeId(null);
+    setSelectedStepId(`${nodeId}/${stepId}`);
+    setFocusRequest({ nodeId: `${nodeId}/${stepId}`, tick: performance.now() });
   }
 
   function closeNodeDetail() {
@@ -404,12 +417,12 @@ export default function App() {
               <ForceMap
                 ref={mapRef}
                 graph={graph}
-                selectedId={selectedNodeId}
+                selectedId={selectedStepId}
                 selectedElementId={null}
                 focusRequest={focusRequest}
-                completedNodes={completion.completedNodes}
+                completedSteps={completion.completedSteps}
                 hoveredId={hoveredId}
-                onSelect={selectNode}
+                onSelectStep={selectStep}
                 onSelectElement={(elementId) => openElementReader(subject, elementId)}
                 onHover={setHoveredId}
               />
