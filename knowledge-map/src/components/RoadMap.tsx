@@ -21,8 +21,15 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { isWritten } from "../lib/colors";
-import type { FocusRequest, MapHandle, SubjectGraph } from "../lib/types";
-import { RoadNode, ROAD_NODE_WIDTH } from "./RoadNode";
+import { stepsOfNode } from "../lib/completion";
+import type { FocusRequest, MapHandle, Step, SubjectGraph } from "../lib/types";
+import {
+  ROAD_NODE_HEIGHT,
+  ROAD_NODE_WIDTH,
+  RoadNode,
+  expandedCardHeight,
+  type RoadStepData,
+} from "./RoadNode";
 
 const NODE_WIDTH = ROAD_NODE_WIDTH;
 const TIER_GAP_Y = 120;
@@ -35,6 +42,9 @@ function buildRoadData(
   selectedId: string | null,
   written: Set<string>,
   completed: Set<string>,
+  completedSteps: Set<string>,
+  expandedNodeId: string | null,
+  onSelectStep: (nodeId: string, stepId: string) => void,
 ): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -48,17 +58,40 @@ function buildRoadData(
 
   const tierLevels = Array.from(tiersByLevel.keys()).sort((a, b) => a - b);
 
+  const stepById = graph.steps;
+
+  const toRoadStep = (s: Step): RoadStepData => ({
+    id: s.id,
+    stepId: s.stepId,
+    title: s.title,
+    order: s.order,
+    done: completedSteps.has(s.id),
+    depIds: s.deps,
+    depTitles: s.deps
+      .map((d) => stepById[d]?.title)
+      .filter((t): t is string => Boolean(t)),
+    teachesTitles: s.teaches
+      .map((e) => graph.elements[e]?.title)
+      .filter((t): t is string => Boolean(t)),
+  });
+
+  // Walk tiers top-down, pushing later tiers down by however much an expanded
+  // card in the tier above grows past the baseline card height.
+  let yOffset = 0;
   for (const tier of tierLevels) {
     const tierNodes = tiersByLevel.get(tier)!;
-    const tierXStart = PADDING_X;
+    const tierY = TIER_START_Y + (tier - 1) * TIER_GAP_Y + yOffset;
+    let tierExtra = 0;
 
     for (let i = 0; i < tierNodes.length; i++) {
       const p = tierNodes[i];
-      const x = tierXStart + i * (NODE_WIDTH + NODE_GAP_X);
-      const y = TIER_START_Y + (tier - 1) * TIER_GAP_Y;
+      const x = PADDING_X + i * (NODE_WIDTH + NODE_GAP_X);
+      const y = tierY;
       const isWritten = written.has(p.id);
       const isComplete = completed.has(p.id);
       const isSelected = p.id === selectedId;
+      const expanded = p.id === expandedNodeId;
+      const steps = stepsOfNode(graph.steps, p.id);
 
       nodes.push({
         id: p.id,
@@ -71,9 +104,17 @@ function buildRoadData(
           isComplete,
           isSelected,
           nodeId: p.id,
+          expanded,
+          lesson: p.goal,
+          steps: steps.map(toRoadStep),
+          onSelectStep,
         },
         draggable: true,
       });
+
+      if (expanded) {
+        tierExtra = Math.max(tierExtra, expandedCardHeight(steps.length) - ROAD_NODE_HEIGHT);
+      }
     }
 
     // Connect nodes within the same tier horizontally (spine)
@@ -90,6 +131,8 @@ function buildRoadData(
         },
       });
     }
+
+    yOffset += tierExtra;
   }
 
   // Connect last node of each tier to first node of next tier (vertical spine)
@@ -125,7 +168,10 @@ interface RoadMapProps {
   selectedId: string | null;
   focusRequest: FocusRequest | null;
   completedNodes: Set<string>;
-  onSelect: (id: string | null) => void;
+  completedSteps: Set<string>;
+  expandedNodeId: string | null;
+  onToggleExpand: (nodeId: string) => void;
+  onSelectStep: (nodeId: string, stepId: string) => void;
   onHover: (id: string | null) => void;
 }
 
@@ -139,7 +185,10 @@ export const RoadMap = forwardRef<MapHandle, RoadMapProps>(function RoadMap(
     selectedId,
     focusRequest,
     completedNodes,
-    onSelect,
+    completedSteps,
+    expandedNodeId,
+    onToggleExpand,
+    onSelectStep,
     onHover,
   }: RoadMapProps,
   ref,
@@ -152,21 +201,34 @@ export const RoadMap = forwardRef<MapHandle, RoadMapProps>(function RoadMap(
   );
 
   const { nodes: rawNodes, edges: rawEdges } = useMemo(
-    () => buildRoadData(graph, selectedId, written, completedNodes),
-    [graph, selectedId, written, completedNodes],
+    () =>
+      buildRoadData(
+        graph,
+        selectedId,
+        written,
+        completedNodes,
+        completedSteps,
+        expandedNodeId,
+        onSelectStep,
+      ),
+    [graph, selectedId, written, completedNodes, completedSteps, expandedNodeId, onSelectStep],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(rawNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(rawEdges);
 
-  // Sync raw data changes into node state (only updates data, preserves positions if dragged)
+  // Sync raw data + positions into node state. Layout is deterministic in
+  // buildRoadData (expanding a card reflows the tiers below it), so raw wins
+  // wholesale — but only when the memo recomputes (expansion/completion/
+  // selection changes), never on every App render, keeping drags stable between
+  // those events.
   useEffect(() => {
     setNodes((nds) => {
       const rawMap = new Map(rawNodes.map((n) => [n.id, n]));
       return nds.map((nd) => {
         const raw = rawMap.get(nd.id);
         if (raw) {
-          return { ...nd, data: raw.data };
+          return { ...nd, ...raw };
         }
         return nd;
       });
@@ -178,10 +240,10 @@ export const RoadMap = forwardRef<MapHandle, RoadMapProps>(function RoadMap(
     (_: React.MouseEvent, node: Node) => {
       const nodeId = (node.data as { nodeId?: string }).nodeId;
       if (nodeId) {
-        onSelect(nodeId);
+        onToggleExpand(nodeId);
       }
     },
-    [onSelect],
+    [onToggleExpand],
   );
 
   const onNodeMouseEnter = useCallback(

@@ -84,13 +84,13 @@ App 的 `resolveRoute` 分派 step 路由，壞掉的 deep-link 優雅退回地�
 
 **Blocked by:** 票 2（Step 路由 + 閱讀面）— step 卡點擊需經 step 路由落地
 
-- [ ] `RoadNode`：node 卡保留 tier/標題/完成狀態；點擊展開出 step-DAG——每 step 一張小卡（標題、完成狀態、deps 標記）+ 依賴箭頭（smoothstep 或等價），再次點擊收合
-- [ ] 展開區顯示 node 的 lesson 說明（`goal` / lesson 摘要）；element 標記（如有）靠向教它的 step 而非 node
-- [ ] 點擊展開後的 step 卡導航至該 step 閱讀（reader 或 `#/steps/…` 全頁）；node 卡點擊行為與展開共存（點卡展開、點 step 讀文章、再點卡收合）
-- [ ] `NodeDetailView` 依實際需要改寫或退休：不再以 element checklist 為完成來源，其存在與否以展開行為取代為準
-- [ ] `selectedId`/`focusRequest` 對 node 卡與 step 卡皆正確；`MapHandle` 語意與票 3 一致
-- [ ] 回歸錨點：既有測試綠；`npm run typecheck` 與 `npm run build` 通過
-- [ ] 人工驗證（`npm run dev`）：展開 quant-resource 每張 node 卡見 step-DAG 與 lesson；step 卡可讀文章；完成狀態正確反映
+- [x] `RoadNode`：node 卡保留 tier/標題/完成狀態；點擊展開出 step-DAG——每 step 一張小卡（標題、完成狀態、deps 標記）+ 依賴箭頭（smoothstep 或等價），再次點擊收合
+- [x] 展開區顯示 node 的 lesson 說明（`goal` / lesson 摘要）；element 標記（如有）靠向教它的 step 而非 node
+- [x] 點擊展開後的 step 卡導航至該 step 閱讀（reader 或 `#/steps/…` 全頁）；node 卡點擊行為與展開共存（點卡展開、點 step 讀文章、再點卡收合）
+- [x] `NodeDetailView` 依實際需要改寫或退休：不再以 element checklist 為完成來源，其存在與否以展開行為取代為準
+- [x] `selectedId`/`focusRequest` 對 node 卡與 step 卡皆正確；`MapHandle` 語意與票 3 一致
+- [x] 回歸錨點：既有測試綠；`npm run typecheck` 與 `npm run build` 通過
+- [x] 人工驗證（`npm run dev`）：展開 quant-resource 每張 node 卡見 step-DAG 與 lesson；step 卡可讀文章；完成狀態正確反映
 
 ## 5. Element 頁 taught-by steps + question 退休
 
