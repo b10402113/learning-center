@@ -35,14 +35,14 @@ _Avoid_: plan, outline
 A two-level summary of an immutable source (`learn/<subject>/digests/`), written once per source and reused on hash match.
 
 **Probe**:
-The subject-level pre-assessment stage (`/probe`), run after `/learn-init`: adaptive MCQ from shallow to deep across the whole source scope. Outputs a per-area mastery report used to calibrate node and step depth. It never proposes pruning — all content stays complete and readable; mastery only shapes how deep each part is taught.
+The per-node pre-view assessment stage (`/probe <subject>/<node-id>`), run after `/roadmap` and before `/nodes`: adaptive MCQ from shallow to deep across one node's source scope, binary-searching each strand. It is a hard gate — `/nodes` refuses a node that has not been probed. Outputs that node's mastery entry used to calibrate step depth. It never proposes pruning — all content stays complete and readable; mastery only shapes how deep each part is taught.
 _Avoid_: pretest, entrance exam
 
 **Mastery**:
-A per-area, per-concept rating of the learner's current understanding (`unknown | partial | solid`), measured by `/probe` and written back by `/tackle`. Persisted in a per-subject file so roadmap and node authoring can calibrate depth (teach shallow where `solid`, deep where `unknown`). It never prunes content. Step completion is separate UI state and stays client-side.
+A per-node, per-strand rating of the learner's current understanding (`unknown | partial | solid`), measured by `/probe <subject>/<node-id>` and written back by `/tackle`. Persisted in a per-subject file (`learn/<subject>/mastery.md`, keyed by node) so `/nodes` can calibrate step depth (teach shallow where `solid`, deep where `unknown`) and `/tackle` can target the strands the learner is weakest at. It never prunes content. Step completion is separate UI state and stays client-side.
 
 **Tackle**:
-The per-step verification stage (`/tackle <step-id>`): a runtime, adaptive MCQ session. Questions are generated on the fly from the step's elements, anchored to MEMORY for starting level, and adapted in real time to the learner's answers (correct → harder, wrong → easier, probing the edge of understanding). Passing means the system estimates the step's concepts at `solid` mastery — e.g. N consecutive correct at target difficulty — not a fixed score threshold. Passing marks the step complete and writes the mastery back, keeping the system calibrated.
+The per-step verification stage (`/tackle <step-id>`): a runtime, adaptive MCQ session. Questions are generated on the fly from the step's elements, and targeted at the strands the node's probe (`/probe <subject>/<node-id>`) rated `unknown` or `partial` — `solid` strands get a light spot-check or are skipped. Starting level anchors to MEMORY and the probe's strand ratings, and difficulty adapts in real time to the learner's answers (correct → harder, wrong → easier, probing the edge of understanding). Passing means the system estimates the step's concepts at `solid` mastery — e.g. N consecutive correct at target difficulty — not a fixed score threshold. Passing marks the step complete and writes the mastery back, keeping the system calibrated.
 _Avoid_: quiz, test, exam
 
 **Tune**:
@@ -79,4 +79,4 @@ Step completion is the only completion unit: a step is complete when its `/tackl
 _Avoid_: progress %, points
 
 **Progress**:
-Per-subject state split in two: **mastery** (measurement from `/probe` and `/tackle`, persisted in a file so roadmap and node authoring can calibrate) and **step completion** (UI display state kept client-side).
+Per-subject state split in two: **mastery** (measurement from `/probe` and `/tackle`, persisted in a file so `/nodes` calibrates step depth and `/tackle` targets weak strands) and **step completion** (UI display state kept client-side).

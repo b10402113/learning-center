@@ -1,6 +1,6 @@
 # Learning Path Schema
 
-This repo turns raw material into customized, subject-specific lessons. A **node** is a step-DAG — a container whose teaching process is a set of **steps** that branch and merge through their deps. A **step** is a first-class article: a 10–15 minute lesson that references the **elements** it teaches. An **element** is a keyword-style concept page (a dictionary entry) that carries the detailed explanation behind one or more steps. **Edges** connect elements for higher-order comparison and judgment.
+This repo turns raw material into customized, subject-specific lessons. A **node** is a step-DAG — a container whose teaching process is a set of **steps** that branch and merge through their deps. A **step** is a first-class article that references the **elements** it teaches. An **element** is a keyword-style concept page (a dictionary entry) that carries the detailed explanation behind one or more steps. **Edges** connect elements for higher-order comparison and judgment.
 
 ## Architecture
 
@@ -16,7 +16,7 @@ This repo turns raw material into customized, subject-specific lessons. A **node
 │   └── <subject>/
 │       ├── MEMORY.md  ← learner profile from /learn-init (incl. language, tune, tune-scope)
 │       ├── ROADMAP.md ← node index and course plan
-│       ├── mastery.md ← per-area mastery report (unknown | partial | solid) from /probe, written back by /tackle
+│       ├── mastery.md ← per-node mastery report (unknown | partial | solid) from /probe, written back by /tackle
 │       ├── digests/   ← two-level source digests from /learn-init & /roadmap
 │       ├── nodes/     ← one container file per node + a folder of step files per node
 │       ├── elements/  ← keyword-style concept pages (dictionary entries)
@@ -30,19 +30,19 @@ This repo turns raw material into customized, subject-specific lessons. A **node
 ```text
 /tune <author>                ← optional, before /learn-init; produces tune/<author>/TUNE.md
 /learn-init <subject>
-    → /probe <subject>
     → /roadmap <subject>
+    → /probe <subject>/<node-id>   ← per node, before viewing it
     → /nodes <subject>/<node-name>
     → /edges <subject>/<node-name>
 /tackle <step-id>             ← runtime skill, invoked per step at learning time
 ```
 
-Each stage is user-invoked. `subject/node-name` is explicit so a node name never has to be unique across subjects. The probe stage measures per-area mastery; the roadmap stage partitions into nodes and writes node containers; the nodes stage reasons out the node's step-DAG, gets learner confirmation, then writes the step articles; the edges stage adds high-value relationships. `/tackle` verifies one step at learning time. A tune is a styling layer chosen per subject at `/learn-init` and applied by the writer skills.
+Each stage is user-invoked. `subject/node-name` is explicit so a node name never has to be unique across subjects. The roadmap stage partitions into nodes and writes `draft` node containers; the probe stage measures one node's mastery before it is viewed (a hard gate); the nodes stage reasons out the node's step-DAG, gets learner confirmation, then writes the step articles; the edges stage adds high-value relationships. `/tackle` verifies one step at learning time, targeting the strands the probe rated weak. A tune is a styling layer chosen per subject at `/learn-init` and applied by the writer skills.
 
 ## Core Principles
 
 1. **Sources are immutable** — Never modify files in `sources/`. Transcripts in `tune/` are immutable the same way.
-2. **Nodes are step-DAGs** — Each node has one learning goal and decomposes into a set of steps (articles) that branch and merge through their deps. A step is readable as a 10–15 minute lesson and may reference several elements.
+2. **Nodes are step-DAGs** — Each node has one learning goal and decomposes into a set of steps (articles) that branch and merge through their deps. A step is readable as a lesson and may reference several elements.
 3. **Elements crystallize** — An element is a keyword-style concept page (a dictionary entry), self-contained, reusable, and anchored to `MEMORY.md` or an earlier concept. The element carries detail; the step carries the lesson narrative.
 4. **Elements compound** — Reusing a concept updates its canonical element incrementally. Preserve useful existing explanations while adding supported depth, examples, connections, and sources.
 5. **Edges interleave** — Edges make the learner compare, contrast, and judge instead of retrieving in isolation. Prefer a few strong relationships.
@@ -53,11 +53,11 @@ Each stage is user-invoked. `subject/node-name` is explicit so a node name never
 
 - `/tune <author>` — read one YouTuber's transcripts in `tune/<author>/` and write their `TUNE.md` voice profile (merge lifecycle, per `docs/reference/tune.md`)
 - `/learn-init <subject>` — ensure the subject's source digests exist (sub-agent path for large sources per `docs/reference/source-reading.md`), interview the learner, and write `learn/<subject>/MEMORY.md` (including language, tune, and tune-scope)
-- `/probe <subject>` — adaptive MCQ from shallow to deep across the whole source scope, binary-searching each strand; writes the per-area mastery report (`unknown | partial | solid`) and never prunes content
-- `/roadmap <subject>` — partition the material into 10–15 minute nodes against the formula baseline, calibrated by probe mastery, propose the full candidate list for learner confirmation, then write `ROADMAP.md` and node containers
-- `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation (each step's depth calibrated from the mastery report — shallow where `solid`, deep where `unknown`, never pruning), then extract or update the node's canonical elements and write each step article
+- `/probe <subject>/<node-id>` — adaptive MCQ from shallow to deep across one node's source scope, binary-searching each strand; writes that node's mastery entry (`unknown | partial | solid`), moves the node `draft → probed` (a hard gate before `/nodes`), and never prunes content
+- `/roadmap <subject>` — partition the material into nodes against the formula baseline, propose the full candidate list for learner confirmation, then write `ROADMAP.md` and `draft` node containers
+- `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation (each step's depth calibrated from the node's probe mastery — shallow where `solid`, deep where `unknown`, never pruning), then extract or update the node's canonical elements and write each step article
 - `/edges <subject>/<node-name>` — propose and incrementally write strong edges for the node, including justified cross-node edges
-- `/tackle <step-id>` — runtime adaptive MCQ for one step; passing estimates its concepts at `solid`, marks the step complete, and writes mastery back
+- `/tackle <step-id>` — runtime adaptive MCQ for one step, targeting the strands the node's probe rated `unknown`/`partial`; passing estimates its concepts at `solid`, marks the step complete, and writes mastery back
 
 ## Source reading
 
@@ -81,7 +81,7 @@ The writing skills are the single source of truth for generated templates.
 - **Node (container)** — `learn/<subject>/nodes/<node-id>.mdx`. Frontmatter: `id, title, subject, tier, order, duration, status, goal, sources, steps, prerequisites, created, updated`. The node file holds the **step-DAG** — all step ids with their order and deps (`steps`) — plus the reading order and the main lesson. `elements` is no longer a flat node-frontmatter list; each step file declares the elements it teaches. Sections: Learning goal · Steps (the DAG) · Lesson · Sources. Tiers organize nodes from general to specific; they do not enumerate elements. `prerequisites` is a list of `learn/<subject>/elements/<id>` or `learn/<subject>/nodes/<id>` stable IDs; the generator merges these with connections derived from element `Connections` sections.
 - **Step (article)** — `learn/<subject>/nodes/<node-id>/<step-id>.mdx`, a first-class article. Frontmatter: `id, title, subject, teaches, sources, created, updated` (plus `order` when the node's DAG does not set it). `teaches` lists the element IDs the step teaches. Deps are declared centrally in the node file's `steps` DAG, never in the step file. Sections: Learning goal · Lesson · Sources.
 - **Element** — `learn/<subject>/elements/<element-id>.mdx`. Frontmatter: `id, title, subject, tier, order, type, nodes, sources, created, updated`. `type` is `article` (default) or `video`; `video` requires `videoUrl`. The `question` type is deprecated — graded verification lives only in `/tackle`, and a `question`-typed element is marked deprecated in the generated graph. Sections: Problem Statement · Why it matters · How it works · In plain terms (optional) · Analogy (optional) · Practical use · Prerequisites (optional) · Connections · Deep dive · Questions. The `Questions` section is a no-grade preview self-check and never affects completion. `Connections` and `Deep dive` stay in English; other headings render per `MEMORY.md` language.
-- **Mastery** — `learn/<subject>/mastery.md`, the per-subject mastery report. Written by `/probe` and written back by `/tackle`; it never prunes content. Chunked by source area, each area rated `unknown | partial | solid`. It is calibration data only — step completion is separate client-side state.
+- **Mastery** — `learn/<subject>/mastery.md`, the per-subject mastery report. Written by `/probe` and written back by `/tackle`; it never prunes content. Keyed by node, each node's strands rated `unknown | partial | solid`. It is calibration data only — step completion is separate client-side state.
 - **Edge** — `learn/<subject>/edges/<edge-id>.mdx`. Frontmatter: `title, type, from, to, nodes, created, updated`. Sections: The relationship · Why it matters · When each applies · Interleave.
 - **TUNE** — `tune/<author-slug>/TUNE.md`. Frontmatter: `id, title, files, created, updated`. Sections: Voice · Explanation moves · Style habits · Rhetorical devices · Exemplars · Negative list. Format and merge lifecycle per `docs/reference/tune.md`.
 
@@ -114,10 +114,10 @@ Step links use stable, node-qualified step IDs with display aliases:
 The subject roadmap uses `draft → confirmed`. Each node uses:
 
 ```text
-draft → confirmed → nodes-written → content-written → edges-written
+draft → probed → confirmed → nodes-written → content-written → edges-written
 ```
 
-`/roadmap` creates `draft` nodes. Invoking `/nodes <subject>/<node-id>` confirms that node automatically, then moves it through `nodes-written` and `content-written` (writing each step article). `/edges` asks for confirmation of its candidate edge set and only then marks the node `edges-written`.
+`/roadmap` creates `draft` nodes. Invoking `/probe <subject>/<node-id>` measures a node and moves it `draft → probed` — a hard gate, since `/nodes` refuses a `draft` node. Invoking `/nodes <subject>/<node-id>` confirms a probed node and moves it through `nodes-written` and `content-written` (writing each step article). `/edges` asks for confirmation of its candidate edge set and only then marks the node `edges-written`.
 
 Completion is step-based: a step is complete when its `/tackle` passes (mastery reaches `solid`); a node is complete automatically once every step in its DAG is complete; elements are keywords and are never marked complete.
 
@@ -154,7 +154,7 @@ Periodically check `learn/<subject>/` for:
 
 ## Quality Standards
 
-- **Useful** — every node has one learner-facing goal; every step is a readable 10–15 minute lesson
+- **Useful** — every node has one learner-facing goal; every step is a readable lesson
 - **Connected** — every element has at least two meaningful cross-references
 - **Anchored** — every element ties to learner experience or an earlier concept
 - **Checked** — every element ends with retrieval questions, including relationship and value-judgment questions; every step is verified by `/tackle`

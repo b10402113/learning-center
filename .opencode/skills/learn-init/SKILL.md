@@ -79,4 +79,4 @@ updated: YYYY-MM-DD
 
 Completion: every branch has a settled answer, `MEMORY.md` is written, and the learner confirms it's accurate.
 
-Next stage: `/probe <subject>` — the learner runs it next to measure per-area mastery before the roadmap is planned.
+Next stage: `/roadmap <subject>` — the learner runs it next to plan the nodes; each node is then probed via `/probe <subject>/<node-id>` before it is viewed.

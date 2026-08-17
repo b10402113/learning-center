@@ -250,7 +250,7 @@ export function ReaderPage({
         kind: "step",
         subject: graph.subject,
         nodeId: node!.id,
-        stepId: step!.id,
+        stepId: step!.stepId,
       });
     } else {
       props.onExpand({

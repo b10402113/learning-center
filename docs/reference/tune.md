@@ -75,6 +75,6 @@ Rules:
 
 - `tune: none` (or missing) → plain tone, the current behavior.
 - `tune: <slug>` but `tune/<slug>/TUNE.md` missing → fall back to plain tone and warn that `/tune <slug>` must run first.
-- Voice is a styling layer: pedagogy (`MEMORY.md` "How to teach me"), source citations, and the 10–15 minute step lesson contract are enforced regardless of the tune.
+- Voice is a styling layer: pedagogy (`MEMORY.md` "How to teach me"), source citations, and the step lesson contract are enforced regardless of the tune.
 - Non-English `language`: keep technical terms in English with a parenthetical translation (e.g., `B-tree（B 樹）`). The parenthetical form and gloss requirements are owned by `docs/reference/article-writing.md` (Rule 2) — when a term needs more than a name translation, that protocol governs.
 - Exemplars are references, never copy: articles are written *in the style of*, not verbatim.

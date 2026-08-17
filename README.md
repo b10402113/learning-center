@@ -1,6 +1,6 @@
 # Learning Path Notes
 
-> Turn raw learning material into customized 10–15 minute lessons, reusable concept pages, and high-value relationships.
+> Turn raw learning material into customized lessons, reusable concept pages, and high-value relationships.
 
 This repo is a personal learning system. You put raw material in `sources/`; the agent uses your learner profile to plan lesson **nodes**, extract reusable **elements**, and connect them with **edges** that make you compare, contrast, and judge.
 
@@ -11,7 +11,7 @@ This repo is a personal learning system. You put raw material in `sources/`; the
 | `sources/<subject>/` | Raw, immutable learning material. |
 | `learn/<subject>/MEMORY.md` | Learner profile from `/learn-init`. |
 | `learn/<subject>/ROADMAP.md` | Tiered subject-level index of lesson nodes. It does not list elements. |
-| `learn/<subject>/nodes/` | One 10–15 minute lesson article per node. |
+| `learn/<subject>/nodes/` | One node container per node — a step-DAG of step articles. |
 | `learn/<subject>/elements/` | Canonical concept pages with detailed explanations. |
 | `learn/<subject>/edges/` | Relationship pages between elements. |
 | `wiki/` | Legacy, no longer maintained. |
@@ -26,13 +26,13 @@ This repo is a personal learning system. You put raw material in `sources/`; the
 ```
 
 1. **`/learn-init`** — Interview the learner and write `MEMORY.md`.
-2. **`/roadmap`** — Partition the source material into 10–15 minute lessons. Write `ROADMAP.md` and one skeleton in `nodes/` per lesson.
+2. **`/roadmap`** — Partition the source material into nodes (each a step-DAG). Write `ROADMAP.md` and one skeleton in `nodes/` per node.
 3. **`/nodes`** — Invoking `/nodes <subject>/<node-id>` confirms that node and starts work. It extracts core concepts, creates or progressively updates canonical elements, and writes the complete node article with element links.
 4. **`/edges`** — For one node, propose a small set of strong relationships, including justified cross-node edges. Confirm the edge set before finalizing.
 
 ## Node, Element, Edge
 
-- **Node** — A tiered, complete lesson with one learning goal, traceable sources, an ordered element list, and a readable 10–15 minute article.
+- **Node** — A tiered container with one learning goal, traceable sources, and a step-DAG of readable step articles.
 - **Element** — A reusable concept identified by an immutable ID. Its detailed page grows incrementally as later nodes add supported explanations, examples, connections, and sources.
 - **Edge** — A relationship page that makes the learner compare, contrast, or judge two elements. It records every node that uses the relationship.
 
@@ -59,7 +59,7 @@ draft → confirmed → nodes-written → content-written → edges-written
 ## Design Principles
 
 - **Sources are immutable.** Never modify files in `sources/`.
-- **Nodes teach.** A node has one outcome and fits a 10–15 minute lesson.
+- **Nodes teach.** A node has one outcome; each step fits a lesson.
 - **Elements crystallize.** The element carries the detailed, self-contained explanation; the node carries the teaching narrative.
 - **Elements compound.** Later nodes deepen canonical elements without erasing useful earlier material.
 - **Edges interleave.** A few strong comparisons are better than a dense graph.
@@ -85,7 +85,7 @@ draft → confirmed → nodes-written → content-written → edges-written
 | `sources/<subject>/` | 原始且不可修改的学习材料。 |
 | `learn/<subject>/MEMORY.md` | `/learn-init` 生成的学习者档案。 |
 | `learn/<subject>/ROADMAP.md` | 学科级课程索引，不直接列出 elements。 |
-| `learn/<subject>/nodes/` | 每个 node 一篇 10–15 分钟课程文章。 |
+| `learn/<subject>/nodes/` | 每个 node 一个容器，其中每个 step 是一篇 10–15 分钟课程文章。 |
 | `learn/<subject>/elements/` | 可复用、渐进式更新的概念页。 |
 | `learn/<subject>/edges/` | 连接两个 elements 的关系页。 |
 
@@ -102,7 +102,7 @@ draft → confirmed → nodes-written → content-written → edges-written
 
 ### 关键定义
 
-- **Node**：一堂有单一学习目标、约 10–15 分钟可读完的课程。
+- **Node**：一个单一学习目标的容器，其 step 是约 10–15 分钟可读完的课程。
 - **Element**：具有 immutable ID 的可复用概念页，详细内容会随着后续 node 渐进式更新。
 - **Edge**：迫使学习者比较、对比或判断两个 elements 的关系页。
 
