@@ -28,6 +28,20 @@ export interface Node {
   sources: string[];
 }
 
+export interface Step {
+  // Node-qualified id (`nodeId/stepId`), the map's address for a step.
+  id: string;
+  stepId: string;
+  nodeId: string;
+  title: string;
+  order: number;
+  // Node-qualified step ids this step depends on in its node's DAG.
+  deps: string[];
+  // Element ids this step teaches.
+  teaches: string[];
+  sources: string[];
+}
+
 export interface Element {
   id: string;
   title: string;
@@ -35,6 +49,11 @@ export interface Element {
   order: number;
   type: ElementType;
   taughtByNodes: string[];
+  // Step ids (node-qualified) that teach this element.
+  taughtBySteps: string[];
+  // True for retired element types (question) that keep rendering a page but
+  // are no longer part of the active teaching contract.
+  deprecated: boolean;
   sources: string[];
   connections: string[];
   prerequisiteIds: string[];
@@ -42,7 +61,7 @@ export interface Element {
   questions?: QuizQuestion[];
 }
 
-export type EdgeKind = "spine" | "shared-concept" | "explicit";
+export type EdgeKind = "spine" | "shared-concept" | "explicit" | "step-dep";
 
 export interface Edge {
   from: string;
@@ -61,6 +80,9 @@ export interface SubjectGraph {
   subject: string;
   tiers: Tier[];
   nodes: Node[];
+  // Step articles keyed by node-qualified id (`nodeId/stepId`). Empty for a
+  // legacy subject with no steps.
+  steps: Record<string, Step>;
   elements: Record<string, Element>;
   edges: Edge[];
 }

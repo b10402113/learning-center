@@ -544,6 +544,8 @@ describe("buildSubjectGraph", () => {
     expect(n1.title).toBe("N One");
     expect(n1.connections).toEqual(["n2", "n3"]);
     expect(n1.taughtByNodes).toEqual(["p1"]);
+    expect(n1.taughtBySteps).toEqual([]);
+    expect(n1.deprecated).toBe(false);
     expect(n1.sources).toEqual(["[[sources/fixture-subject/book.pdf#Intro]]"]);
   });
 
@@ -679,6 +681,27 @@ describe("buildSubjectGraph — step-DAG", () => {
     expect(stepEdges).toContainEqual({ from: "s1/warmup", to: "s1/teach", kind: "step-dep" });
     expect(stepEdges).toContainEqual({ from: "s1/warmup", to: "s1/apply", kind: "step-dep" });
     expect(stepEdges).toContainEqual({ from: "s1/teach", to: "s1/apply", kind: "step-dep" });
+  });
+
+  it("keeps every step's node-qualified id consistent with its nodeId/stepId", () => {
+    const g = buildStepDag();
+    for (const [qualifiedId, step] of Object.entries(g.steps)) {
+      expect(qualifiedId).toBe(`${step.nodeId}/${step.stepId}`);
+      expect(step.id).toBe(qualifiedId);
+    }
+  });
+
+  it("emits step-dep edges that only reference existing node-qualified steps", () => {
+    const g = buildStepDag();
+    for (const e of g.edges.filter((ed) => ed.kind === "step-dep")) {
+      expect(g.steps[e.from]).toBeDefined();
+      expect(g.steps[e.to]).toBeDefined();
+    }
+    for (const step of Object.values(g.steps)) {
+      for (const dep of step.deps) {
+        expect(g.steps[dep]).toBeDefined();
+      }
+    }
   });
 
   it("resolves step teaches to element links and element to step links", () => {

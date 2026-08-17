@@ -251,6 +251,9 @@ export const ForceMap = forwardRef<MapHandle, ForceMapProps>(function ForceMap(
         nodes.push({ id: `n:${nid}`, kind: "element", elementId: nid, title: n.title, tier: n.tier });
       }
       for (const e of subject.edges) {
+        // step-dep edges connect steps (nodeId/stepId), which the nebula does
+        // not render as nodes yet — the step-node rework owns those links.
+        if (e.kind === "step-dep") continue;
         const kind = e.kind === "shared-concept" ? "shared" : e.kind;
         links.push({ source: `p:${e.from}`, target: `p:${e.to}`, kind, label: e.label });
       }
