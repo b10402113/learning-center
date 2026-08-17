@@ -369,6 +369,9 @@ export function ReaderPage({
                     <span className="element-meta-chip">
                       T{element!.tier} · #{element!.order}
                     </span>
+                    {element!.type === "question" && element!.questions?.length ? (
+                      <span className="element-meta-chip">{element!.questions.length} 題測驗</span>
+                    ) : null}
                   </>
                 ) : (
                   <>

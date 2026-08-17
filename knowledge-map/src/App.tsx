@@ -8,10 +8,11 @@ import { ForceMap } from "./components/ForceMap";
 import { HoverCard } from "./components/HoverCard";
 import { Legend } from "./components/Legend";
 import { MapControls } from "./components/MapControls";
+import { NodeDetailView } from "./components/NodeDetailView";
 import { NodePage } from "./components/NodePage";
 import { ReaderModal } from "./components/ReaderModal";
 import { TopBar } from "./components/TopBar";
-import { isStepComplete, nodeCompletion, type CompletionInput } from "./lib/completion";
+import { isStepComplete, nodeCompletion, stepsOfNode, toggleStep, type CompletionInput } from "./lib/completion";
 import { isWritten } from "./lib/colors";
 import { buildHash, buildElementHash, buildNodeHash, parseHash, type Route } from "./lib/hashlink";
 import {
@@ -71,27 +72,26 @@ const initialRoute = resolveRoute(window.location.hash, defaultSubject());
 function completionFor(
   g: SubjectGraph,
   rec: SubjectProgress | undefined,
-): { state: CompletionInput; completedSteps: Set<string>; completedNodes: Set<string> } {
+): { completedSteps: Set<string>; completedNodes: Set<string> } {
   const state: CompletionInput = {
     seeded: new Set(g.seededSteps),
     manual: new Set(rec?.steps ?? []),
     cleared: new Set(rec?.cleared ?? []),
   };
-  const stepIdsByNode = new Map<string, string[]>();
-  for (const s of Object.values(g.steps)) {
-    const list = stepIdsByNode.get(s.nodeId) ?? [];
-    list.push(s.id);
-    stepIdsByNode.set(s.nodeId, list);
-  }
   const completedSteps = new Set(
     Object.keys(g.steps).filter((id) => isStepComplete(id, state)),
   );
   const completedNodes = new Set(
     g.nodes
-      .filter((n) => nodeCompletion(stepIdsByNode.get(n.id) ?? [], state))
+      .filter((n) =>
+        nodeCompletion(
+          stepsOfNode(g.steps, n.id).map((s) => s.id),
+          state,
+        ),
+      )
       .map((n) => n.id),
   );
-  return { state, completedSteps, completedNodes };
+  return { completedSteps, completedNodes };
 }
 
 export default function App() {
@@ -111,6 +111,7 @@ export default function App() {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const [view, setView] = useState<"nebula" | "roadmap">("nebula");
+  const [nodeDetailOpen, setNodeDetailOpen] = useState(false);
   const [readerModal, setReaderModal] = useState<ReaderModalTarget | null>(null);
   const mapRef = useRef<MapHandle | null>(null);
 
@@ -138,6 +139,7 @@ export default function App() {
     const onHashChange = () => {
       const next = resolveRoute(window.location.hash, subject);
       setRoute(next);
+      setNodeDetailOpen(false);
       setReaderModal(null);
       if (next.kind === "element" || next.kind === "node") {
         setSubject(next.subject);
@@ -197,21 +199,16 @@ export default function App() {
 
   // Toggle one step's completion. Manual state is authoritative over a seed:
   // un-checking a seeded step records a clear; re-checking records a manual
-  // mark (which beats the clear).
+  // mark (which beats the clear). Pure toggle logic lives in lib/completion.
   function toggleStepCompletion(subjectKey: string, stepId: string) {
-    updateSubject(subjectKey, (s) => {
-      const target = graphs.find((g) => g.subject === subjectKey) ?? graphs[0];
-      const manual = new Set(s.steps);
-      const cleared = new Set(s.cleared);
-      if (isStepComplete(stepId, { seeded: new Set(target.seededSteps), manual, cleared })) {
-        if (manual.has(stepId)) manual.delete(stepId);
-        else cleared.add(stepId);
-      } else {
-        cleared.delete(stepId);
-        manual.add(stepId);
-      }
-      return { steps: [...manual], cleared: [...cleared] };
-    });
+    const target = graphs.find((g) => g.subject === subjectKey) ?? graphs[0];
+    updateSubject(subjectKey, (s) =>
+      toggleStep(stepId, {
+        seeded: new Set(target.seededSteps),
+        manual: new Set(s.steps),
+        cleared: new Set(s.cleared),
+      }),
+    );
   }
 
   function resetProgress() {
@@ -275,9 +272,19 @@ export default function App() {
 
   function selectNode(id: string | null) {
     setSelectedNodeId(id);
-    if (id) openNodeReader(subject, id);
+    if (id && view === "roadmap") {
+      setNodeDetailOpen(true);
+    } else if (id && view === "nebula") {
+      openNodeReader(subject, id);
+    }
     if (id) setFocusRequest({ nodeId: id, tick: performance.now() });
     else setFocusRequest(null);
+  }
+
+  function closeNodeDetail() {
+    setNodeDetailOpen(false);
+    setSelectedNodeId(null);
+    setFocusRequest(null);
   }
 
   // Standalone pages navigate directly — links inside them never open the modal.
@@ -304,6 +311,9 @@ export default function App() {
     setView(v);
   }
 
+  const selectedNode = selectedNodeId
+    ? (graph.nodes.find((n) => n.id === selectedNodeId) ?? null)
+    : null;
   const hoveredNode =
     hoveredId && hoveredId !== selectedNodeId
       ? (graph.nodes.find((n) => n.id === hoveredId) ?? null)
@@ -380,6 +390,19 @@ export default function App() {
             />
 
             {hoveredNode ? <HoverCard node={hoveredNode} x={pointer.x} y={pointer.y} /> : null}
+
+            {nodeDetailOpen && selectedNode ? (
+              <NodeDetailView
+                graph={graph}
+                node={selectedNode}
+                completedSteps={completion.completedSteps}
+                onViewElement={(elementId) => openElementReader(graph.subject, elementId, selectedNode.id)}
+                onViewNode={(nodeId) => openNodeReader(graph.subject, nodeId)}
+                onViewContent={() => openNodeReader(graph.subject, selectedNode.id)}
+                onClose={closeNodeDetail}
+                escDisabled={readerModal !== null}
+              />
+            ) : null}
 
             {readerModal && modalGraph ? (
               <ReaderModal

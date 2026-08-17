@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   isStepComplete,
   nodeCompletion,
+  stepsOfNode,
+  toggleStep,
   type CompletionInput,
 } from "../lib/completion";
+import type { Step } from "../lib/types";
 
 function input(
   seeded: string[] = [],
@@ -75,5 +78,51 @@ describe("nodeCompletion", () => {
 
   it("treats step ids by their node-qualified address", () => {
     expect(nodeCompletion(["p1/s1"], input(["p2/s1"]))).toBe(false);
+  });
+});
+
+describe("toggleStep", () => {
+  it("marks an uncompleted step complete (manual wins over nothing)", () => {
+    expect(toggleStep("p1/s1", input())).toEqual({ steps: ["p1/s1"], cleared: [] });
+  });
+
+  it("un-marks a manually marked step", () => {
+    expect(toggleStep("p1/s1", input([], ["p1/s1"]))).toEqual({ steps: [], cleared: [] });
+  });
+
+  it("clears a seeded step instead of leaving it stuck complete", () => {
+    expect(toggleStep("p1/s1", input(["p1/s1"]))).toEqual({ steps: [], cleared: ["p1/s1"] });
+  });
+
+  it("re-marks a cleared seeded step (manual beats the clear)", () => {
+    const first = toggleStep("p1/s1", input(["p1/s1"]));
+    const second = toggleStep(
+      "p1/s1",
+      input(["p1/s1"], [...first.steps], [...first.cleared]),
+    );
+    expect(second).toEqual({ steps: ["p1/s1"], cleared: [] });
+  });
+
+  it("leaves other steps' state untouched", () => {
+    expect(toggleStep("p1/s2", input(["p1/s1"]))).toEqual({
+      steps: ["p1/s2"],
+      cleared: [],
+    });
+  });
+});
+
+describe("stepsOfNode", () => {
+  const steps: Record<string, Step> = {
+    "p1/b": { id: "p1/b", stepId: "b", nodeId: "p1", title: "B", order: 2, deps: [], teaches: [], sources: [] },
+    "p2/a": { id: "p2/a", stepId: "a", nodeId: "p2", title: "A", order: 1, deps: [], teaches: [], sources: [] },
+    "p1/a": { id: "p1/a", stepId: "a", nodeId: "p1", title: "A", order: 1, deps: [], teaches: [], sources: [] },
+  };
+
+  it("returns a node's steps in reading order", () => {
+    expect(stepsOfNode(steps, "p1").map((s) => s.id)).toEqual(["p1/a", "p1/b"]);
+  });
+
+  it("returns [] for a node with no steps", () => {
+    expect(stepsOfNode(steps, "p3")).toEqual([]);
   });
 });
