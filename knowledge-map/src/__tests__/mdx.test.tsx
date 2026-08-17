@@ -3,27 +3,19 @@ import { describe, expect, it } from "vitest";
 import FixtureQuiz from "./fixtures/quiz.mdx";
 import FixtureVideo from "./fixtures/video.mdx";
 import { PrereqSection } from "../components/PrereqSection";
-import { QuizBlock } from "../components/QuizBlock";
 import { VideoEmbed } from "../components/VideoEmbed";
 import { getElementMdx, getNodeMdx, getStepMdx } from "../lib/mdxRegistry";
 import type { SubjectGraph } from "../lib/types";
 
-const QUESTIONS = [
-  { question: "Which loop decides when to stop?", options: ["SPAL", "Task loop"], answer: 0 },
-];
-
 describe("MDX pipeline", () => {
-  it("compiles a fixture .mdx with <QuizBlock>/<VideoEmbed> and renders it", () => {
-    render(
-      <FixtureQuiz
-        components={{
-          QuizBlock: () => <QuizBlock questions={QUESTIONS} />,
-        }}
-      />,
-    );
-    expect(screen.getByText("Which loop decides when to stop?")).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "SPAL" })).toBeInTheDocument();
+  it("compiles a deprecated question-element fixture as a plain article with no quiz", () => {
+    render(<FixtureQuiz components={{}} />);
+    expect(screen.getByText("Answer the question below.")).toBeInTheDocument();
+    expect(screen.queryByTestId("quiz-block")).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+  });
 
+  it("compiles a fixture .mdx with <VideoEmbed> and renders it", () => {
     render(
       <FixtureVideo
         components={{

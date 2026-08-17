@@ -372,28 +372,59 @@ describe("buildElementHash", () => {
 });
 
 describe("resolveElementSource", () => {
-  const known = new Set(["muscle-ladder-and-handrails", "lifting-technique"]);
+  const knownNodes = new Set(["muscle-ladder-and-handrails", "lifting-technique"]);
+  const knownSteps = new Set([
+    "muscle-ladder-and-handrails/muscle-rosettes",
+    "muscle-ladder-and-handrails/barbell-bracing",
+    "lifting-technique/grip-variants",
+  ]);
 
   it("prefers the explicit from origin when it names a real node", () => {
     expect(
-      resolveElementSource("muscle-ladder-and-handrails", ["lifting-technique"], known),
+      resolveElementSource(
+        "muscle-ladder-and-handrails",
+        ["lifting-technique/grip-variants"],
+        knownSteps,
+        knownNodes,
+      ),
     ).toBe("muscle-ladder-and-handrails");
   });
 
-  it("falls back to the first taught-by node when from is absent", () => {
-    expect(resolveElementSource(null, ["muscle-ladder-and-handrails", "lifting-technique"], known)).toBe(
-      "muscle-ladder-and-handrails",
-    );
+  it("falls back to the first teaching step's node when from is absent", () => {
+    expect(
+      resolveElementSource(
+        null,
+        ["muscle-ladder-and-handrails/muscle-rosettes", "lifting-technique/grip-variants"],
+        knownSteps,
+        knownNodes,
+      ),
+    ).toBe("muscle-ladder-and-handrails");
   });
 
-  it("falls back to the first taught-by node when from names a missing node", () => {
-    expect(resolveElementSource("ghost-node", ["lifting-technique", "muscle-ladder-and-handrails"], known)).toBe(
-      "lifting-technique",
-    );
+  it("falls back to the first teaching step's node when from names a missing node", () => {
+    expect(
+      resolveElementSource(
+        "ghost-node",
+        ["lifting-technique/grip-variants", "muscle-ladder-and-handrails/muscle-rosettes"],
+        knownSteps,
+        knownNodes,
+      ),
+    ).toBe("lifting-technique");
   });
 
-  it("returns null when no taught-by node exists", () => {
-    expect(resolveElementSource(null, ["ghost-a", "ghost-b"], known)).toBeNull();
-    expect(resolveElementSource("ghost-node", [], known)).toBeNull();
+  it("skips teaching steps that do not resolve to a known step", () => {
+    expect(
+      resolveElementSource(
+        null,
+        ["ghost-node/ghost-step", "muscle-ladder-and-handrails/barbell-bracing"],
+        knownSteps,
+        knownNodes,
+      ),
+    ).toBe("muscle-ladder-and-handrails");
+  });
+
+  it("returns null when no teaching step's node exists", () => {
+    expect(resolveElementSource(null, ["ghost-a/step-a", "ghost-b/step-b"], knownSteps, knownNodes)).toBeNull();
+    expect(resolveElementSource("ghost-node", [], knownSteps, knownNodes)).toBeNull();
   });
 });

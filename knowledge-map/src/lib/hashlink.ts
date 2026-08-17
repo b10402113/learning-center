@@ -130,14 +130,21 @@ export function buildStepHash(subject: string, nodeId: string, stepId: string): 
 /**
  * Resolve the element page's breadcrumb "source lesson" (ADR-0003). The explicit
  * `?from` origin wins when it names a real node; otherwise the element's first
- * taught-by node is used; with none, the element has no source lesson. Pure —
- * the caller supplies the set of known node ids.
+ * teaching step's node is used (step ids are node-qualified `nodeId/stepId`);
+ * with none, the element has no source lesson. Pure — the caller supplies the
+ * set of known step ids and known node ids.
  */
 export function resolveElementSource(
   from: string | null,
-  taughtByNodes: readonly string[],
+  taughtBySteps: readonly string[],
+  knownStepIds: ReadonlySet<string>,
   knownNodeIds: ReadonlySet<string>,
 ): string | null {
   if (from && knownNodeIds.has(from)) return from;
-  return taughtByNodes.find((id) => knownNodeIds.has(id)) ?? null;
+  for (const stepId of taughtBySteps) {
+    if (!knownStepIds.has(stepId)) continue;
+    const nodeId = stepId.split("/")[0];
+    if (nodeId && knownNodeIds.has(nodeId)) return nodeId;
+  }
+  return null;
 }

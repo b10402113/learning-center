@@ -79,6 +79,7 @@ export function ReaderPage({
 
   const nodeById = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph]);
   const nodeIds = useMemo(() => new Set(graph.nodes.map((n) => n.id)), [graph]);
+  const stepIds = useMemo(() => new Set(Object.keys(graph.steps)), [graph]);
 
   const sortedElements = useMemo(
     () => Object.values(graph.elements).sort((a, b) => a.order - b.order || a.tier - b.tier),
@@ -121,10 +122,10 @@ export function ReaderPage({
         : props.nodeId;
 
   // Element breadcrumb source lesson: the explicit ?from origin wins, else the
-  // first node that teaches this element, else none (subject / 元素 / title).
+  // first teaching step's node, else none (subject / 元素 / title).
   const sourceNodeId =
     mode === "element"
-      ? resolveElementSource(props.from, element?.taughtByNodes ?? [], nodeIds)
+      ? resolveElementSource(props.from, element?.taughtBySteps ?? [], stepIds, nodeIds)
       : null;
   const sourceNode = sourceNodeId ? nodeById.get(sourceNodeId) ?? null : null;
 
@@ -145,9 +146,9 @@ export function ReaderPage({
     }
     if (!element) return undefined;
     return {
-      // Question elements no longer gate anything (ADR-0005) — the QuizBlock
-      // renders as a plain self-check without reporting back.
-      ...elementMdxComponents(element, undefined),
+      // Question elements are deprecated (ADR-0005) — they render as plain
+      // articles with no interactive quiz.
+      ...elementMdxComponents(element),
       // The page header owns the title; the article's own h1 would duplicate it.
       h1: () => null,
     };
@@ -458,9 +459,6 @@ export function ReaderPage({
                     <span className="element-meta-chip">
                       T{element!.tier} · #{element!.order}
                     </span>
-                    {element!.type === "question" && element!.questions?.length ? (
-                      <span className="element-meta-chip">{element!.questions.length} 題測驗</span>
-                    ) : null}
                   </>
                 ) : mode === "step" ? (
                   <>
@@ -543,26 +541,28 @@ export function ReaderPage({
               )}
             </div>
 
-            {mode === "element" && element!.taughtByNodes.length ? (
+            {mode === "element" && element!.taughtBySteps.length ? (
               <section className="element-taught">
                 <h2>由哪堂課教授</h2>
                 <div className="flex flex-col gap-2.5">
-                  {element!.taughtByNodes.map((id) => {
-                    const n = nodeById.get(id);
+                  {element!.taughtBySteps.map((id) => {
+                    const s = stepById[id];
+                    if (!s) return null;
+                    const n = nodeById.get(s.nodeId);
                     if (!n) return null;
                     return (
                       <button
                         key={id}
                         type="button"
-                        onClick={() => onNavigateNode(graph.subject, n.id)}
+                        onClick={() => onNavigateStep(graph.subject, n.id, s.stepId)}
                         className="element-taught-card"
-                        title={`回到課文：${n.title}`}
+                        title={`回到步驟：${s.title}`}
                       >
-                        <span className="n">{String(n.order).padStart(2, "0")}</span>
+                        <span className="n">{String(s.order).padStart(2, "0")}</span>
                         <span className="min-w-0">
-                          <span className="t block truncate text-left">{n.title}</span>
+                          <span className="t block truncate text-left">{s.title}</span>
                           <span className="sub block truncate text-left">
-                            Tier {TIER_ROMAN[n.tier - 1] ?? n.tier} · {n.goal}
+                            {n.title} · Tier {TIER_ROMAN[n.tier - 1] ?? n.tier}
                           </span>
                         </span>
                       </button>
