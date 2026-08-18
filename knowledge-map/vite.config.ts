@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import remarkFrontmatter from "remark-frontmatter";
+import remarkGfm from "remark-gfm";
 import remarkMdxFrontmatter from "remark-mdx-frontmatter";
 import { remarkWikiLinks } from "./src/lib/remark-wikilinks.ts";
 
@@ -12,7 +13,7 @@ const reactJsxRuntime = fileURLToPath(new URL("./node_modules/react/jsx-runtime.
 
 export default defineConfig({
   plugins: [
-    { enforce: "pre", ...mdx({ remarkPlugins: [remarkFrontmatter, remarkMdxFrontmatter, remarkWikiLinks] }) },
+    { enforce: "pre", ...mdx({ remarkPlugins: [remarkFrontmatter, remarkMdxFrontmatter, remarkGfm, remarkWikiLinks] }) },
     react({ include: /\.(jsx|js|mdx|md|tsx|ts)$/ }),
     tailwindcss(),
   ],

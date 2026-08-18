@@ -1,0 +1,192 @@
+---
+id: containerize-with-docker
+title: 容器化：把 agent 塞進行李箱
+subject: ai-agents-in-action
+teaches:
+  - ai-agents-in-action/agent-containerization
+sources:
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2]]"
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2.1]]"
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2.2]]"
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2.3]]"
+created: 2026-08-18
+updated: 2026-08-18
+---
+
+# 容器化：把 agent 塞進行李箱
+
+## Learning goal
+
+能把一個 API agent 容器化——生成/審查 Dockerfile、build、`docker run -p -e` 執行期注入金鑰、用 Docker Compose 編排多 agent 棧，並畫清隧道（開發）與雲端（生產）的邊界。
+
+## Lesson
+
+老王前幾天在筆記本上跑通了一個圖片生成 agent。FastAPI 包著，uvicorn 跑著，curl 一敲，PNG 回來。很有成就感。
+
+然後同事說：給我也跑一個。
+
+老王把資料夾打包傳過去，附上 README。第一行寫著：「先裝 Python 3.11，再 pip install 那九個套件，設好環境變數，最後 uvicorn 起在 8000 埠。」
+
+同事的機器上是 Python 3.9。公司的 proxy 擋 pip。而且他不寫 Python。
+
+那天老王想通了一件事：能跑在你的機器上，跟能跑在別人的機器上，中間隔著一整條鴻溝。跨過這條鴻溝的標準工具，叫容器（container）。
+
+**首先，為什麼 agent 特別適合住容器？**
+
+微服務（microservices）架構的想法很樸素：與其造一台什麼都做的巨獸，不如造一群小而專注的 API 服務，每個只管一件事，各自部署、各自升級。而 agent 剛好就是這種形狀的軟體——它自我包含、隔離良好、專注於單一任務或子目標。一個生成圖片的 agent，全部家當就是：一份 Python 程式碼、一堆依賴套件、一把 API 金鑰、一個埠。
+
+所以 agent 是微服務的理想候選。裝進容器之後，每個 agent 變成一個可以獨立替換、升級、擴充、移除的單元。換掉圖片 agent 的模型，語音 agent 繼續睡覺，完全不受影響。前端網頁可以透過 API 呼叫這些容器化的 agent，也可以把它們當 MCP 伺服器接上來。這套邏輯在 [[learn/ai-agents-in-action/elements/agent-containerization|智能體容器化 (Agent Containerization)]] 這個元素裡有完整整理。
+
+容器的比喻很直白：行李箱。衣服（依賴）、證件（環境變數）、住址（埠號）全部裝箱。這箱行李搬到任何一台裝了 Docker 的機器，打開就能住。同事不用裝 Python 3.11——Python 3.11 就在箱子裡。這套玩法從 Docker Desktop 這種本機工具起步，同一顆映像檔（image）未來可以直接搬上 Kubernetes 或任何雲端；這一課我們先把本機這段走通。
+
+**第二，Dockerfile 從哪來？讓 LLM 寫。**
+
+從前寫 Dockerfile 是門手藝。現在不是了。把 agent 的程式碼丟給一個夠強的 coding LLM，說「給我一份 Dockerfile」，它吐出來的東西大概長這樣：
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY 02_app.py .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "02_app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+逐行看，沒有任何神祕之處：
+
+| 指令 | 它做了什麼 |
+| --- | --- |
+| `FROM python:3.11-slim` | 以官方 Python 3.11 精簡版映像檔為基底——Python 環境直接內建 |
+| `WORKDIR /app` | 容器內的工作目錄 |
+| `COPY requirements.txt` + `RUN pip install` | 先裝依賴。依賴和程式碼分兩層拷貝是刻意的：改程式碼時，依賴層可以吃快取 |
+| `COPY 02_app.py .` | 把 agent 本體放進箱子 |
+| `EXPOSE 8000` | 聲明「這個服務聽 8000 埠」。注意：只是聲明，見下文 |
+| `CMD ["uvicorn", ...]` | 箱子打開時自動執行的命令——uvicorn 起服務 |
+
+但是老王必須把醜話說在前面：**LLM 生成的 Dockerfile，進生產環境之前，必須由人類評估、修剪、修改。**它通常能跑，但常常不夠好——基底映像檔可能太肥、依賴裝太多、以 root 執行。AI 把你從「從零寫」解放到「從草稿審」，不是解放到「免審」。這是工程立場，不是客套話。
+
+**第三，build，然後 run——這一步每面旗標都值得掰開看。**
+
+建置映像檔：
+
+```bash
+docker build -t image-generator:latest .
+```
+
+`-t` 給映像檔取名字加標籤（tag）。那個 `.` 是建置背景（build context）——Docker 從當前目錄找 Dockerfile 和要拷貝的檔案。
+
+跑起來：
+
+```bash
+docker run --rm -p 8000:8000 -e OPENAI_API_KEY=sk-... image-generator:latest
+```
+
+這行命令藏著三個最容易搞錯的點。老王一個一個講。
+
+**`-p 8000:8000`：不打這面旗標，你的 curl 就是在敲空氣。**
+
+容器不是你機器上的一個資料夾，它是一間有自己的網路的獨立小房間。uvicorn 在容器裡確實聽著 8000 埠——但那是「容器自己的 8000」，不是「你機器的 8000」。不加 `-p`，容器外的一切都摸不到它，`curl http://localhost:8000/generate` 只會換來連線被拒。
+
+`-p 8000:8000` 的意思是：把 host（你的機器）的 8000 埠，接到容器的 8000 埠。冒號左邊是外，右邊是內。兩邊可以不同——`-p 9000:8000` 就是你機器的 9000 接容器的 8000。並跑多個版本時這招會用到，下面講。
+
+順帶一提，Dockerfile 裡的 `EXPOSE 8000` 只是文件聲明，告訴讀的人「這服務聽 8000」。它不開門。開門的永遠是 `-p`。
+
+**`-e OPENAI_API_KEY=...`：金鑰在執行期注入，永遠、永遠不烙進映像檔。**
+
+這是老王最想吼的一點。你會想在 Dockerfile 裡寫 `ENV OPENAI_API_KEY=sk-...`——圖方便，一次寫好，之後 run 都不用帶參數。千萬不要。
+
+原因是：Docker 映像檔是一層一層疊出來的。`ENV` 寫進去的值，就凍結在其中一層裡。而映像檔是可以被抽取的——任何拿到這顆映像檔的人都能把每一層翻出來看，`docker history`、`docker save` 解包，條條路通向你的金鑰。把金鑰寫進 Dockerfile，等於把家門鑰匙影印一份，貼在行李箱內殼，然後把行李箱寄給全世界。
+
+正確做法是讓映像檔保持無秘密：Dockerfile 裡不寫任何金鑰，`docker run` 的時候用 `-e OPENAI_API_KEY=sk-...` 注入。金鑰只活在執行期的環境變數裡，映像檔本身乾乾淨淨，推到哪裡都不怕。同一顆映像檔，開發機注入測試金鑰，生產機注入正式金鑰——一箱兩用，這才是行李箱該有的樣子。
+
+**`--rm` 與 `--name`：清屍體，取名字。**
+
+`--rm` 的意思是容器一停就自動清掉。沒有它，你每次 run 完都會留下一具「已退出」的容器屍體。跑個十次，`docker ps -a` 裡一排棺材。開發期無腦加上就對了。
+
+`--name image-gen` 給容器一個人類可讀的名字。有了名字，Docker Desktop 裡可以直接對它啟動、停止、看日誌，不用背雜湊 ID。更實用的是並跑多版本：v1 和 v2 各建一個標籤，一個 `-p 8000:8000`、一個 `-p 8001:8000`，兩個版本同時活著，A/B 對照。這就是左右埠不同的上場時刻。跑起來之後 `docker ps` 看一眼，再 curl 一發 POST，確認行李箱真的會出圖。
+
+**最後，agent 不會只有一個——Docker Compose 上場。**
+
+你的系統總會長成這樣：一個網頁語音前端、一個圖片 agent、一個問答 agent。三個容器，有依賴順序，有環境變數。一個一個 `docker run`？那就回到「先跑 A 再跑 B」的 README 祈禱儀式了。
+
+Docker Compose 用一份 YAML 檔聲明整個 stack：
+
+```yaml
+services:
+  realtime-voice-web:
+    build: ./realtime-voice-web
+    ports:
+      - "8080:8080"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    depends_on:
+      - realtime-image-agent
+      - realtime-web-agent
+
+  realtime-image-agent:
+    build: ./realtime-image-agent
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+  realtime-web-agent:
+    build: ./realtime-web-agent
+    ports:
+      - "8001:8001"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+```
+
+看四個關鍵字。`build` 指向各服務的 Dockerfile 所在目錄。`ports` 就是 `-p` 的 YAML 版。`environment` 裡的 `${OPENAI_API_KEY:-}` 是環境變數佔位符——「從你 shell 的環境變數拿，沒有就用空值」，金鑰同樣不進檔案。`depends_on` 宣告先後：後端起了，前端才起。
+
+然後整個 stack 一條命令：
+
+```bash
+docker compose up --build
+```
+
+建置、依賴順序、埠、環境變數，一次到位。收工 `docker compose down`。三個 agent 像旅行團：團清單一張，誰先上車、誰坐哪個座位，紙上寫得清清楚楚。
+
+不過 Compose 有個誠實的限制要講：**這份 YAML 搬到多數雲端提供商，不自動適配。**它描述的是「在這台機器上跑這幾個容器」，而雲端各家有自己的編排服務。好消息是這種轉換恰好是 AI 擅長的活——把 compose 檔丟給 LLM 問「搬到某朵雲上怎麼跑」，它會幫你找對應方案。
+
+**隧道：把房間臨時租給路人，可以，別長住。**
+
+容器都跑在本機。有一天你要 demo 給外部的人看，或要接一個會打 webhook 的外部服務。你的筆記本在公司 NAT 後面，外界打不進來。
+
+隧道（tunneling）工具解決這件事：ngrok、localtunnel 都行。localtunnel 只要一行：
+
+```bash
+npx localtunnel --port 8000
+```
+
+它給你一個公開 URL。外界的請求穿過隧道，落到你本機的 8000 埠。demo 神器。
+
+但老王要把風險攤開：這一刻起，你的開發機暴露在網際網路上。這個端點公開可達，而防線只剩 agent 自己的認證和限流——沒有雲端供應商的安全邊界，沒有網路隔離，沒有存取控制。更糟的是，如果 agent 後面連著生產資料或金鑰，隧道開著忘關，就是在慢性洩漏。隧道是開發、debug、demo 的工具，不是部署。
+
+那生產怎麼辦？客戶存取、持續流量，屬於雲端部署的事——供應商替你扛安全邊界、網路、擴縮、存取控制。邊界一張表畫清楚：
+
+| 場景 | 隧道（ngrok / localtunnel） | 雲端部署 |
+| --- | --- | --- |
+| 定位 | 開發、debug、demo | 生產、正式對外 |
+| 適合 | POC、demo、小團隊短期試用 | 客戶存取、持續流量 |
+| 安全邊界 | 只剩 agent 自身的認證與限流 | 供應商：網路、擴縮、存取控制 |
+| 機器暴露 | 你的開發機直接面對網際網路 | 隔離的託管環境 |
+| 長期開著 | 洩漏資料與金鑰的定時炸彈 | 正常營運 |
+
+一句話：隧道止於 POC 和 demo，上線上雲。
+
+好，收個尾。這一課的行程是：先把一個 agent 塞進行李箱（Dockerfile → build → `run -p -e`），再讓旅行團出發（compose up --build），最後畫清「隧道是租的，雲端是買的」。老王年輕時也把金鑰寫進過映像檔，然後被前輩按著頭看 `docker history`——那滋味，希望你不要親自體驗。下次同事再說「給我也跑一個」，你把行李箱扔過去，然後回去喝咖啡。
+
+## Sources
+
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2]]
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2.1]]
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2.2]]
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2.3]]

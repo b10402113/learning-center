@@ -1,0 +1,79 @@
+---
+id: agent-containerization
+title: 智能體容器化 (Agent Containerization)
+subject: ai-agents-in-action
+tier: 5
+order: 9
+type: article
+nodes:
+  - ai-agents-in-action/deploying-agents
+sources:
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2]]"
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2.1]]"
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2.2]]"
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2.3]]"
+created: 2026-08-17
+updated: 2026-08-17
+---
+
+# 智能體容器化 (Agent Containerization)
+
+## Problem Statement
+
+Agent 從筆記本搬進生產環境,第一個撞上的問題不是效能,是「怎麼穩定地跑起來」:依賴版本、環境變數、埠號、還有跟其他 agent 的啟動順序。在個人機器上手動 `uvicorn` 啟動,寫進 README 裡的「先跑 A 再跑 B」,不是部署,是祈禱。
+
+## Why it matters
+
+Agent 天生就是微服務的理想候選:它自我包含、隔離良好、專注於單一任務或子目標。容器化之後,每個 agent 變成一個可以獨立替換、升級、擴充、移除的單元——換模型不影響別的 agent,加新 agent 不動舊的。這是[[learn/ai-agents-in-action/elements/agent-consumption-patterns|智能體消費模式 (Agent Consumption Patterns)]]裡 API 微服務模式的標準包裝,也是多智能體系統能像積木一樣拼裝的物質基礎。
+
+## How it works
+
+三層展開:單容器 → 多容器編排 → 對外暴露。
+
+**單容器。**為 agent 的 API 服務寫一份 Dockerfile:Python 基底映像檔、安裝依賴、暴露埠、`uvicorn` 作為 CMD。用 coding LLM 生成這份 Dockerfile 已經是標準做法,但生產映像檔必須人工評估、修剪、修改後才採用。建置與執行:
+
+```bash
+docker build -t image-generator:latest .
+docker run --rm -p 8000:8000 -e OPENAI_API_KEY=sk-... image-generator:latest
+```
+
+兩面旗標各司其職:`-p 8000:8000` 把容器內的 8000 埠映射到 host,否則 curl 根本連不上;`-e OPENAI_API_KEY=...` 在執行期注入金鑰——金鑰永遠不烙進映像檔層,映像檔可以被任何人拉走而不洩密。加上 `--name image-gen` 命名後,Docker Desktop 還能管理啟停、看日誌,甚至並跑多個版本。
+
+**多容器編排。**當系統長成多個 agent(語音前端、圖片後端、問答後端),用一份 `docker-compose.yaml` 聲明整個 stack:每個服務的定義、環境變數佔位符(`${VAR:-default}`)、埠映射、`depends_on` 依賴順序,然後一條命令 `docker compose up --build` 全棧啟停。注意:Compose 檔搬到多數雲端提供商並不自動適配,跨環境要靠 AI 輔助找對應方案。
+
+**對外暴露。**本機容器要給外部世界打到(webhook、demo),靠隧道工具(ngrok、localtunnel,如 `npx localtunnel --port 8000`)。但隧道是開發與 debug 用的,不是部署:它把本機端點變成公開可達,只剩 agent 自身的認證/限流做防線,長期開著會洩漏生產資料、金鑰與敏感資源。客戶存取或持續流量屬於雲端部署的事——供應商負責安全邊界、網路、擴縮與存取控制。隧道止於 POC、demo、小團隊。
+
+## In plain terms
+
+容器是每個 agent 自帶的行李箱:衣服(依賴)、證件(環境變數)、住址(埠)全在箱內,搬到哪台機器打開就能住。Compose 是旅行團的團清單——誰先上車、誰坐哪個座位,一張紙講清楚。隧道則是「把家裡房間臨時租給路人」的 Airbnb:方便展示,不能長住。
+
+## Practical use
+
+把任何 FastAPI/uvicorn agent 產品化的起手式:生成 Dockerfile → 人工審 → build → `docker run -p -e` 起單服務;系統長大後改 compose 檔管理全棧;demo 用隧道,上線上雲。
+
+## Prerequisites
+
+- [[learn/ai-agents-in-action/elements/agent-consumption-patterns|智能體消費模式 (Agent Consumption Patterns)]] — containerization is the packaging answer to the hosted-API pattern
+
+## Connections
+
+- [[learn/ai-agents-in-action/elements/agent-consumption-patterns|智能體消費模式 (Agent Consumption Patterns)]] — agents-as-microservices rationale and the API consumption pattern that containers package
+- [[learn/ai-agents-in-action/elements/runtime-choice|執行環境選擇 (Runtime Choice)]] — containers are the local deployment vehicle; runtime choice decides which topology (edge/API/event-driven) those containers implement
+- [[learn/ai-agents-in-action/elements/front-door-pattern|前門智能體模式 (Front-Door Agent Pattern)]] — compose orchestrating several agent containers is the front-door topology materialized locally
+
+## Deep dive
+
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2.1]] — the generated Dockerfile and docker build/run workflow
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2.2]] — the docker-compose multi-agent stack
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.2.3]] — tunneling vs. cloud deployment boundary
+
+## Questions
+
+### Q1. `-p 8000:8000` 與 `-e OPENAI_API_KEY=...` 各解決什麼問題?為什麼金鑰絕不寫進 Dockerfile?
+A1. `-p` 把容器埠映射到 host 讓外部可達;`-e` 在執行期注入環境變數。金鑰寫進映像檔層等於隨映像檔散播——任何拉走映像檔的人都能抽出來;執行期注入讓映像檔本身無秘密。
+
+### Q2. 為什麼 agent 特別適合當微服務?(關係題)
+A2. 因為 agent 自我包含、隔離良好、單一任務——容器化後可獨立替換、升級、擴充、移除,正好對應微服務「小而專注、各自部署」的單元特性。
+
+### Q3. 隊友說「demo 就用 localtunnel 開著給客戶試用一個月」。你怎麼判斷?(價值判斷題)
+A3. 反對:隧道是開發/debug 工具,端點公開可達、僅剩 agent 自身防線,長期開放等於暴露本機與可能的生產資料。客戶試用應走雲端部署,由供應商承擔安全邊界與存取控制。

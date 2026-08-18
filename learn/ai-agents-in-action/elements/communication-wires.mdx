@@ -1,0 +1,69 @@
+---
+id: communication-wires
+title: 通訊線 (Communication Wires)
+subject: ai-agents-in-action
+tier: 5
+order: 11
+type: article
+nodes:
+  - ai-agents-in-action/deploying-agents
+sources:
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.3.2]]"
+created: 2026-08-17
+updated: 2026-08-17
+---
+
+# 通訊線 (Communication Wires)
+
+## Problem Statement
+
+Agent 跟工具、Agent 跟 agent 之間要傳資料,「傳」的方式不止一種:有人要全雙工的語音流,有人要一次請求一次回應,有人要「你慢慢做,做完再叫我」。選錯線,要嘛延遲白白多一截,要嘛把快樂的同步呼叫卡死在慢工具上。
+
+## Why it matters
+
+線路由延遲與部署需求決定,是[[learn/ai-agents-in-action/elements/runtime-choice|執行環境選擇 (Runtime Choice)]]的直接下游:runtime 定了,線基本上就跟著定了。理解三條線的取捨,才能解釋「為什麼語音走 WebRTC、工具呼叫走 HTTP+SSE、長任務走訊息匯流排」不是偶然,而是延遲檔位使然。
+
+## How it works
+
+三條線,各有延遲代價:
+
+| 線 | 機制 | 擅長 | 代價 |
+| --- | --- | --- | --- |
+| WebRTC / WebSocket | 全雙工持久連線 | 語音 UX:音訊/文字雙向流、可打斷(barge-in)、串流 TTS、逐 token 回應 | 連線管理複雜,不適合簡單請求/回應 |
+| HTTP + SSE(MCP) | 請求/回應 + 串流輸出 | agent 工具呼叫、網頁客戶端要串流文字;容易代理、記錄、快取 | 每次來回都有 HTTP 開銷;仍受逾時約束 |
+| 訊息匯流排(Redis/NATS/Kafka) | 非同步訊息佇列 | 解耦慢工具:使用者繼續講話,結果事後貼回 session | 最終一致;要處理重試、重播、冪等 |
+
+選擇規則一句話:**線由延遲與部署需求決定**。語音要百毫秒級的雙向流,只有第一條線給得起;工具呼叫多數是請求/回應,第二條線最單純且可觀測;工具一慢(生成、批次、爬取),就把執行丟到第三條線後面,讓前端不被堵住。另有彈性:MCP server 也可以不走 HTTP+SSE,而在本機以 STDIO 連線——部署形態可以降級線的選擇。
+
+## In plain terms
+
+WebRTC/WebSocket 是電話——兩邊同時說話、隨時插話;HTTP+SSE 是簡訊——你問我答,我可以邊打字邊發給你看;訊息匯流排是郵局——信丟進去,對方有空再處理,回信晚點到。跟朋友約吃飯用電話,跟客服回報問題用簡訊,寄合約用郵局。
+
+## Practical use
+
+設計系統時逐條連線問兩個問題:延遲要求多少?呼叫是同步還是非同步?語音/即時對話 → WebRTC/WebSocket;一般工具與網頁串流 → HTTP+SSE;超時長任務與背景作業 → 匯流排。MCP 工具在本機可用 STDIO 省掉 HTTP 開銷。
+
+## Prerequisites
+
+- [[learn/ai-agents-in-action/elements/runtime-choice|執行環境選擇 (Runtime Choice)]] — the latency profile picked by runtime choice dictates the wire
+
+## Connections
+
+- [[learn/ai-agents-in-action/elements/runtime-choice|執行環境選擇 (Runtime Choice)]] — edge pairs with WebRTC/WebSocket, synchronous API with HTTP+SSE, event-driven workers with a message bus
+- [[learn/ai-agents-in-action/elements/idempotent-tool-caching|冪等工具快取 (Idempotent Tool Caching)]] — the bus decouples slow execution, and replayed bus messages demand idempotent tools
+- [[learn/ai-agents-in-action/elements/front-door-pattern|前門智能體模式 (Front-Door Agent Pattern)]] — the front-door agent and its workers each pick their own wire by their own latency needs
+
+## Deep dive
+
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.3.2]] — the three wires with latency tradeoffs and the STDIO variant for local MCP
+
+## Questions
+
+### Q1. 三條線各自的「擅長」與「代價」是什麼?
+A1. WebRTC/WebSocket:全雙工語音流、打斷、串流 TTS;代價是連線管理複雜。HTTP+SSE:簡單請求/回應+串流、易代理記錄快取;代價是 HTTP 開銷與逾時。訊息匯流排:解耦慢工具、事後回貼;代價是最終一致與重試/冪等負擔。
+
+### Q2. 為什麼「語音 UX 幾乎必然選 WebRTC/WebSocket」?(關係題)
+A2. 語音體驗的硬要求是全雙工(邊聽邊說)、可打斷、串流 TTS 與逐 token 回應——這些都建立在持久雙向連線上;HTTP+SSE 的每次來回開銷與請求/回應模型給不起百毫秒級的雙向流。
+
+### Q3. 「把所有 agent 通訊統一成一條線,架構更簡單。」你同意嗎?(價值判斷題)
+A3. 表面統一、實際更貴:語音塞進請求/回應會毀掉即時性,簡單工具挂上匯流排會引入不必要的重試與最終一致複雜度。三條線對應三檔延遲需求,讓每條連線按自己的延遲檔位選線,才是真正可控的簡單。

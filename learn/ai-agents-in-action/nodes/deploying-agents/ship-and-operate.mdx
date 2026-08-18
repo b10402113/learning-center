@@ -1,0 +1,117 @@
+---
+id: ship-and-operate
+title: 上線與運維：版本、看見、撐住、省錢
+subject: ai-agents-in-action
+teaches:
+  - ai-agents-in-action/agent-observability
+  - ai-agents-in-action/agent-reliability-patterns
+  - ai-agents-in-action/cost-control-routing
+sources:
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.3.5]]"
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.3.6]]"
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.3.7]]"
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.3.8]]"
+created: 2026-08-18
+updated: 2026-08-18
+---
+
+# 上線與運維：版本、看見、撐住、省錢
+
+## Learning goal
+
+能用工程紀律把 agent 上市並顧好：版本化與晉級閘門（測試 → shadow → canary → 全量 + 自動回滾）、traces/metrics/logs 三件套與三層指標、timeout/fallback/斷路器/優雅降級四板斧，以及 trimming/快取/路由三根成本槓桿的風險排序。
+
+## Lesson
+
+上線第一週，老王半夜被簡訊吵醒：API 帳單是上個月的三倍，而儀表板上一片祥和。他盯著螢幕，第一個念頭不是「哪個模型貴」，而是「我根本看不見這個系統」。白天 demo 好好的，怎麼一上線就變了個人？
+
+這是每個把 agent 推向生產的人都會撞上的牆。在筆記本上，agent 是一支腳本；在生產裡，它是一個有版本、有流量、有失敗、有帳單的分散式系統。你在前面步驟裡已經把 agent 塞進了容器、把工具做成了冪等——現在系統部署出去了，這一課要講的是怎麼「顧」它。四件事，按你會遇到的順序：版本、看見、撐住、省錢。
+
+## 一、版本：agent 是軟體，就用軟體的紀律對待它
+
+先破一個幻覺。很多人覺得 prompt 改幾個字、模型換一個版本，「不算改程式」。錯了。**Agent 就是軟體（agents are software）**——你改 prompt，行為就變；你換模型，輸出就變；你動工具的參數 schema，下游解析可能直接炸。這些全是發布行為，全要版本化。
+
+要版本化的清單，一次列全：
+
+- **Prompts（提示）**——而且可以與程式碼分開版本化：調 prompt 不必發版程式，但每次調整都要留痕跡
+- **Tool schemas（工具的參數定義）**
+- **Tool servers（工具伺服器，包括 MCP server 的版本）**
+- **Safety switches（安全開關）**
+- **Model selections（模型選擇）**
+
+版本化之後，怎麼把新版本推出去？靠閘門，一道一道晉級：
+
+1. **離線測試（offline tests）**——測試集先跑過，行為沒退化才談下一步
+2. **Shadow 流量（shadow traffic）**——新版接真實流量的複本，結果不回給使用者，只比較
+3. **小比例 canary**——放一小搓真實使用者過去，緊盯指標
+4. **全量（full rollout）**——確認沒事才推給所有人；期間 **SLO 惡化就自動回滾（auto-rollback）**，不等人開會
+
+還有一條容易漏的紀律：**pin 每一輪用的確切模型與工具端點**。今天模型供應商默默升級了版本，你昨晚的測試結果就不再可復現。Phoenix 這類 tracing 工具會自動幫你把這些釘在每一輪的紀錄上——事後排查「這輪為什麼答錯」時，你會感謝當初的 pin。
+
+## 二、看見：traces、metrics、logs 三件套
+
+回到老王半夜的那張帳單。問題的根子是「看不見」。**你看不見的東西，就修不了（you can't fix what you can't see）**。
+
+第一件：**traces（追蹤）**。用 OpenTelemetry 標準，配 Phoenix 這類工具，沿整條路徑佈點——**UI → Gateway → Agent → Tools → Model**，五層每一層都要有 span。每一輪對話一個 span，每個工具呼叫一個 span，再用 correlation IDs 串起來：`session_id`（哪場對話）、`turn_id`（哪一輪）、`tool_call_id`（哪次呼叫）。沒有這些 ID，你面對的是幾千段斷裂的日誌；有了它們，你可以從「使用者抱怨的一句話」倒帶回「那輪的第三個工具呼叫多花了 8 秒」。span 上還要掛 user object——誰在用、用量多少，帳單異常時才追得到人。
+
+第二件：**metrics（指標）**，而且分三層，各回答一個問題：
+
+| 層 | 回答的問題 | 例子 |
+| --- | --- | --- |
+| **營運（operational）** | 系統還活著嗎？ | p50/p95 延遲、工具成功率、token 用量、錯誤率、每 session 成本 |
+| **品質（quality）** | 活得好不好？ | grounding 率、幻覺率、評估器通過率、使用者回饋 |
+| **產品（product）** | 活著有意義嗎？ | 任務完成率、升級到人工的比例、轉換/解決率、解決時間、KPI |
+
+這張表的關鍵在倒著讀：**營運指標說系統在跑；品質與產品指標說跑得有沒有價值。**老王那片「祥和的儀表板」只有營運層——延遲正常、錯誤率正常，但沒人看每 session 成本，也沒人看幻覺率。系統健康地燒錢、健康地胡說，儀表板綠得發亮。
+
+第三件：**logs（日誌）**。結構化 JSON，別再 print。而且要 **PII 遮蔽（redaction）**——對話內容裡的使用者個資，落日誌前先塗掉。日誌要給機器讀，也得配得上法遵。
+
+三件套裝上去之後，老王第二天早上重看帳單：某個 session 燒了兩萬 token——trace 倒帶，工具輸出整段塞回 context，每輪重複。看到問題，才談得上修。
+
+## 三、撐住：四板斧——timeout、fallback、斷路器、優雅降級
+
+系統被看見之後，下一課是它在生產裡「一定會壞」。工具會逾時，模型會卡，TTS 服務會掛。差別只在於壞的時候，使用者在哪裡——看不看得到。這裡有四件工具，由小到大：
+
+1. **時間預算（time budgets）**。每條關鍵路徑給一個預算，**由呼叫端強制執行**——這是 SLA，不是期望。參考值：快速回應約 1500ms，工具呼叫 15–60 秒。預算一破就走 fallback，不無限等。
+2. **Fallback（退路）**。失敗時回一個最佳努力（best-effort）的答案、換到小模型、或省略非必要的裝飾——例如那段漂亮的格式化潤色。先讓使用者有東西可用。
+3. **斷路器（circuit breakers）**。同一個工具重複失敗就跳閘，後續呼叫快速失敗、優雅卸載流量。別讓一個壞工具把整條鏈拖垮。
+4. **優雅降級（graceful degradation）**。最高原則：**永遠別讓使用者看到錯誤。**TTS 掛了？繼續用文字。圖片工具慢了？回一個「稍後查看」的連結。條條路通向「還能用的體驗」。
+
+為什麼「別讓使用者看到錯誤」是最高原則，而不只是一條 nice-to-have？因為後果是不對稱的：**在使用者看不見的地方失敗並自行恢復的 agent，建立營運信心；把錯誤甩到使用者臉上的 agent，侵蝕的是信任、使用量與接受度。**使用者不會讀你的 postmortem，他們只會記得「這東西壞了」。
+
+注意這四板斧跟可觀測性互為表裡：預算破了、斷路器跳了、回滾觸發了，全是讀指標決定的。看見撐住觀測，觀測撐住可靠性——這在 [[learn/ai-agents-in-action/elements/agent-reliability-patterns|智能體可靠性模式 (Agent Reliability Patterns)]] 裡展開成完整模式；觀測本身的細節在 [[learn/ai-agents-in-action/elements/agent-observability|智能體可觀測性 (Agent Observability)]]。
+
+## 四、省錢：三根槓桿，按風險排
+
+現在修老王的帳單。但省錢之前先立框架：**成本只有相對於價值才有意義。**你的 agent 取代了一個客服一小時的工作，那一小時的錢就是你的成本天花板。脫離價值談「貴不貴」沒有意義。
+
+而且第一個動作不是省，是量：**先把每 session、每任務、每用戶的成本儀表化。**沒有這個數字，一切優化都是瞎猜——你連省了沒都不知道。
+
+量完之後，三根槓桿。注意，按風險從低到高排：
+
+| 槓桿 | 做法 | 節省 | 風險 |
+| --- | --- | --- | --- |
+| **Context trimming（上下文修剪）** | 壓縮歷史、剝離非必要附件與工具輸出、角色專屬上下文、結構化輸出 | 真實存在 | 摘要壓太緊會打斷多輪連貫性 |
+| **多層快取（multi-layer caching）** | prompt/回應/embedding 快取 | 熱路徑 30–80%；prompt 快取最多省輸入成本 90% | 需要失效策略；過期快取造成陳舊行為 |
+| **模型路由（routing to cheaper models）** | 按意圖把請求導給便宜模型 | 可能最大 | 最危險：路由錯誤，下游再好也白搭 |
+
+**第一根：trimming。**工具輸出別整段塞回 context，摘要；用不到的附件、不相關的工具描述，剝掉；不同角色看不同上下文；能要結構化輸出就別要散文。這正是老王 trace 裡看到的病灶——省的是實實在在的 token。但有底線：摘要把多輪對話的「前面說過什麼」也壓掉了，壓太緊，對話就斷線。
+
+**第二根：快取。**三層：prompt、回應、embedding。Prompt 快取有個重要規矩：**穩定內容放最頂、動態內容放最底**，因為它要求內容逐字匹配（byte-for-byte match）才命中——system prompt 和工具定義釘在頂部，前綴不變才能跨輪命中；對話內容放底部，才不會破壞匹配。通常有約 1024 token 的最低門檻，命中最多省 90% 的輸入成本。更廣的快取判斷：**刻意的快取只給確定性、昂貴、時間窗穩定的操作**——匯率、天氣快照、embedding、冪等工具結果。這裡正好接上你前面做的冪等工具：同樣輸入必同樣結果，才有資格被快取。**絕不快取**使用者特定、依賴授權或狀態的資料。昨天的剩菜，別端給今天的客人。
+
+**第三根：路由。**按意圖把請求導給便宜模型，帳面節省最大，**也最危險**。原因是結構性的：路由這一步錯了，後面每一步都在錯誤的軌道上——下游 agent 再優秀，也救不回一個被錯誤分類的請求。所以鐵律是：**用 frontier 模型做路由**；「換小模型省路由成本」是一個待驗證的優化，不是預設。要驗證？回到第一節的閘門——shadow 流量跑一輪，比對錯路由率。
+
+還有一個順便的紅利：**成本追著 token 跑，token 追著延遲跑**——所以幾乎每次省錢，延遲也一起降。省錢和跑得快，多半是同一件事。三根槓桿的完整判斷展開在 [[learn/ai-agents-in-action/elements/cost-control-routing|成本控制與模型路由 (Cost Control and Model Routing)]]。
+
+## 收尾：四件事其實是一件
+
+回頭看，這一課的四段是同一種紀律的四個切面。版本化告訴你「現在跑的是什麼」；traces/metrics/logs 告訴你「它做得怎麼樣」；四板斧讓它「壞了也撐得住」；三根槓桿讓它「花得起」。老王的帳單，最後是 trimming 加上工具輸出快取解掉的——但真正讓他睡好覺的，是三件套上齊之後，下一張帳單會在變成三倍之前就被看見。
+
+說到底，agent 的運維不是什麼新魔法，就是老老實實的工程：版本、觀測、韌性、成本，一件一件上紀律。你已經把系統部署出去了——現在，把它顧好。這一步走完，你手上的就不再是一個能跑的 demo，而是一個敢讓陌生人用的產品。
+
+## Sources
+
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.3.5]]
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.3.6]]
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.3.7]]
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.3.8]]

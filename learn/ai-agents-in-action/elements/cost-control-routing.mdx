@@ -1,0 +1,74 @@
+---
+id: cost-control-routing
+title: 成本控制與模型路由 (Cost Control and Model Routing)
+subject: ai-agents-in-action
+tier: 5
+order: 15
+type: article
+nodes:
+  - ai-agents-in-action/deploying-agents
+sources:
+  - "[[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.3.8]]"
+created: 2026-08-17
+updated: 2026-08-17
+---
+
+# 成本控制與模型路由 (Cost Control and Model Routing)
+
+## Problem Statement
+
+Agent 每一輪都燒 token。對話一長、工具一多、流量一上,帳單以平方級的氣勢長。直覺的解法是「換小模型」,結果品質崩給使用者看;或者「到處加快取」,結果使用者拿到過期答案。省錢的槓桿有好幾根,但每根都有代價,亂拉的後果比多花錢更糟。
+
+## Why it matters
+
+成本只有相對於價值才有意義——agent 取代或產出了什麼,決定花多少錢算合理。而且成本追著 token 跑、token 追著延遲跑,所以省錢幾乎總是同時降延遲,成本決策與部署決策([[learn/ai-agents-in-action/elements/runtime-choice|執行環境選擇 (Runtime Choice)]])根本分不開。任何優化前先量測:每 session/每任務/每用戶的成本沒有儀表化,一切省錢都是瞎猜。
+
+## How it works
+
+三根槓桿,按風險排序:
+
+| 槓桿 | 做法 | 節省 | 風險 |
+| --- | --- | --- | --- |
+| **Context trimming**(上下文修剪) | 摘要歷史、丟掉不相關的工具描述與附件、角色專屬上下文、結構化輸出 | 真實存在 | 過度摘要會打斷多輪連貫性 |
+| **多層快取**(multi-layer caching) | prompt/回應/embedding 快取;prompt 快取要求內容逐字匹配、穩定內容放頂部動態內容放底部 | 熱路徑 30–80%;prompt 快取最多省輸入成本 90% | 需要失效策略;過期快取造成陳舊行為 |
+| **模型路由**(routing to cheaper models) | 按意圖把請求導給便宜模型 | 可能最大 | 最危險:路由錯誤,下游再好也白搭 |
+
+**Trimming 的判斷**:壓縮歷史、剝離非必要附件與工具輸出、按角色裁上下文、要求結構化輸出——省的是實實在在的 token,但摘要有底線,壓太緊多輪對話就斷線。
+
+**快取的判斷**:prompt 快取的規矩是穩定內容(system prompt、工具定義)放最頂、動態內容放最底,逐字匹配才命中,通常有約 1024 token 的最低門檻,命中最多省 90% 輸入成本。**刻意的快取**只給:確定性、昂貴、時間窗穩定的操作——匯率、天氣快照、embedding、冪等工具結果;絕不快取:使用者特定、依賴授權/狀態的資料。這裡直接復用[[learn/ai-agents-in-action/elements/idempotent-tool-caching|冪等工具快取 (Idempotent Tool Caching)]]的 SHA-256 key 機制。
+
+**路由的判斷**:路由錯誤的代價是災難性的——路由本身錯了,下游 agent 再優秀也救不回來。所以用 frontier 模型做路由,把「換小模型路由」當成待驗證的優化,不是預設。路由器住在[[learn/ai-agents-in-action/elements/front-door-pattern|前門智能體模式 (Front-Door Agent Pattern)]]的前門裡,按意圖分流。
+
+## In plain terms
+
+三根槓桿像三種省錢法:修剪是「出門前把行李裡用不到的東西拿出來」——輕了,但別把護照也扔了;快取是「常做的菜先把料備好」——但昨天的剩菜別端給今天的客人;路由是「總機判斷這通電話轉實習生還是轉專家」——總機判斷錯,轉給誰都沒用,所以總機本人得是最準的那個。
+
+## Practical use
+
+步驟固定:先儀表化每 session/任務/用戶成本([[learn/ai-agents-in-action/elements/agent-observability|智能體可觀測性 (Agent Observability)]]的營運指標)→ 先拉 trimming(風險最低)→ 再上快取(記得失效與 TTL)→ 最後才動路由,且用 frontier 模型路由、小模型方案先用 shadow 驗證。
+
+## Prerequisites
+
+- [[learn/ai-agents-in-action/elements/agent-observability|智能體可觀測性 (Agent Observability)]] — cost per session/task/user must be instrumented before any optimization
+
+## Connections
+
+- [[learn/ai-agents-in-action/elements/agent-observability|智能體可觀測性 (Agent Observability)]] — cost instrumentation is the precondition; every lever's effect is verified through metrics
+- [[learn/ai-agents-in-action/elements/idempotent-tool-caching|冪等工具快取 (Idempotent Tool Caching)]] — deliberate caching of tool results is the idempotency element applied as a cost lever
+- [[learn/ai-agents-in-action/elements/front-door-pattern|前門智能體模式 (Front-Door Agent Pattern)]] — intent routing lives in the front door, so the cost lever has a structural home
+- [[learn/ai-agents-in-action/elements/runtime-choice|執行環境選擇 (Runtime Choice)]] — cost tracks tokens and tokens track latency; cutting cost usually cuts latency too
+
+## Deep dive
+
+- [[sources/ai-agents-in-action/AI Agents in Action, Second Edi - Micheal Lanham.pdf#8.3.8]] — the cost-to-value framing, the three levers with tradeoffs, prompt-cache mechanics, and the deliberate-caching list
+
+## Questions
+
+### Q1. 三根成本槓桿是什麼?按風險怎麼排?
+A1. Context trimming(摘要/剝離上下文)、多層快取(prompt/回應/embedding)、模型路由(按意圖導便宜模型)。風險由低到高:trimming → 快取 → 路由(路由錯誤下游無法補救)。
+
+### Q2. Prompt 快取的「穩定在上、動態在下」規則是為什麼?(關係題)
+A2. Prompt 快取要求內容逐字匹配才命中:穩定內容(system prompt、工具定義)放頂部,前綴不變才能跨輪命中;動態內容放底部,不會破壞前綴匹配。順序顛倒,每輪都 miss。
+
+### Q3. 為什麼「用小模型做路由省路由成本」必須當成待驗證優化而不是預設?(價值判斷題)
+A3. 路由是品質的閘門:路由錯了,下游模型再好也接不到對的請求,省下的路由成本遠抵不上錯誤路由的品質損失;所以預設用 frontier 模型路由,小模型方案要先經 shadow/離線驗證證明錯路由率夠低才能上。
