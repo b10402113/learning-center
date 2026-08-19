@@ -32,7 +32,7 @@ This repo turns raw material into customized, subject-specific lessons. A **node
 /learn-init <subject>
     → /roadmap <subject>
     → /probe <subject>/<node-id>   ← per node, before viewing it
-    → /nodes <subject>/<node-name>
+    → /nodes <subject>/<node-name>   ← or <node-name> skip-probe to skip /probe
     → /edges <subject>/<node-name>
 /tackle <step-id>             ← runtime skill, invoked per step at learning time
 ```
@@ -53,9 +53,9 @@ Each stage is user-invoked. `subject/node-name` is explicit so a node name never
 
 - `/tune <author>` — read one YouTuber's transcripts in `tune/<author>/` and write their `TUNE.md` voice profile (merge lifecycle, per `docs/reference/tune.md`)
 - `/learn-init <subject>` — ensure the subject's source digests exist (sub-agent path for large sources per `docs/reference/source-reading.md`), interview the learner, and write `learn/<subject>/MEMORY.md` (including language, tune, and tune-scope)
-- `/probe <subject>/<node-id>` — adaptive MCQ from shallow to deep across one node's source scope, binary-searching each strand; writes that node's mastery entry (`unknown | partial | solid`), moves the node `draft → probed` (a hard gate before `/nodes`), and never prunes content
+- `/probe <subject>/<node-id>` — adaptive MCQ from shallow to deep across one node's source scope, binary-searching each strand; writes that node's mastery entry (`unknown | partial | solid`), moves the node `draft → probed` (a hard gate before `/nodes`, bypassed by `/nodes … skip-probe`), and never prunes content
 - `/roadmap <subject>` — partition the material into nodes against the formula baseline, propose the full candidate list for learner confirmation, then write `ROADMAP.md` and `draft` node containers
-- `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation (each step's depth calibrated from the node's probe mastery — shallow where `solid`, deep where `unknown`, never pruning), then extract or update the node's canonical elements and write each step article
+- `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation (each step's depth calibrated from the node's probe mastery — shallow where `solid`, deep where `unknown`, never pruning), then extract or update the node's canonical elements and write each step article. `skip-probe` skips the probe: the learner asserts they know nothing, so a `draft` node is accepted and every step is taught deep
 - `/edges <subject>/<node-name>` — propose and incrementally write strong edges for the node, including justified cross-node edges
 - `/tackle <step-id>` — runtime adaptive MCQ for one step, targeting the strands the node's probe rated `unknown`/`partial`; passing estimates its concepts at `solid`, marks the step complete, and writes mastery back
 
@@ -81,7 +81,7 @@ The writing skills are the single source of truth for generated templates.
 - **Node (container)** — `learn/<subject>/nodes/<node-id>.mdx`. Frontmatter: `id, title, subject, tier, order, duration, status, goal, sources, steps, prerequisites, created, updated`. The node file holds the **step-DAG** — all step ids with their order and deps (`steps`) — plus the reading order and the main lesson. `elements` is no longer a flat node-frontmatter list; each step file declares the elements it teaches. Sections: Learning goal · Steps (the DAG) · Lesson · Sources. Tiers organize nodes from general to specific; they do not enumerate elements. `prerequisites` is a list of `learn/<subject>/elements/<id>` or `learn/<subject>/nodes/<id>` stable IDs; the generator merges these with connections derived from element `Connections` sections.
 - **Step (article)** — `learn/<subject>/nodes/<node-id>/<step-id>.mdx`, a first-class article. Frontmatter: `id, title, subject, teaches, sources, created, updated` (plus `order` when the node's DAG does not set it). `teaches` lists the element IDs the step teaches. Deps are declared centrally in the node file's `steps` DAG, never in the step file. Sections: Learning goal · Lesson · Sources.
 - **Element** — `learn/<subject>/elements/<element-id>.mdx`. Frontmatter: `id, title, subject, tier, order, type, nodes, sources, created, updated`. `type` is `article` (default) or `video`; `video` requires `videoUrl`. The `question` type is deprecated — graded verification lives only in `/tackle`, and a `question`-typed element is marked deprecated in the generated graph. Sections: Problem Statement · Why it matters · How it works · In plain terms (optional) · Analogy (optional) · Practical use · Prerequisites (optional) · Connections · Deep dive · Questions. The `Questions` section is a no-grade preview self-check and never affects completion. `Connections` and `Deep dive` stay in English; other headings render per `MEMORY.md` language.
-- **Mastery** — `learn/<subject>/mastery.md`, the per-subject mastery report. Written by `/probe` and written back by `/tackle`; it never prunes content. Keyed by node, each node's strands rated `unknown | partial | solid`. It is calibration data only — step completion is separate client-side state.
+- **Mastery** — `learn/<subject>/mastery.md`, the per-subject mastery report. Written by `/probe` (and seeded as all-`unknown` by `/nodes … skip-probe`), written back by `/tackle`; it never prunes content. Keyed by node, each node's strands rated `unknown | partial | solid`. It is calibration data only — step completion is separate client-side state.
 - **Edge** — `learn/<subject>/edges/<edge-id>.mdx`. Frontmatter: `title, type, from, to, nodes, created, updated`. Sections: The relationship · Why it matters · When each applies · Interleave.
 - **TUNE** — `tune/<author-slug>/TUNE.md`. Frontmatter: `id, title, files, created, updated`. Sections: Voice · Explanation moves · Style habits · Rhetorical devices · Exemplars · Negative list. Format and merge lifecycle per `docs/reference/tune.md`.
 
@@ -117,7 +117,7 @@ The subject roadmap uses `draft → confirmed`. Each node uses:
 draft → probed → confirmed → nodes-written → content-written → edges-written
 ```
 
-`/roadmap` creates `draft` nodes. Invoking `/probe <subject>/<node-id>` measures a node and moves it `draft → probed` — a hard gate, since `/nodes` refuses a `draft` node. Invoking `/nodes <subject>/<node-id>` confirms a probed node and moves it through `nodes-written` and `content-written` (writing each step article). `/edges` asks for confirmation of its candidate edge set and only then marks the node `edges-written`.
+`/roadmap` creates `draft` nodes. Invoking `/probe <subject>/<node-id>` measures a node and moves it `draft → probed` — a hard gate, since `/nodes` refuses a `draft` node. The sole exception is `/nodes <subject>/<node-id> skip-probe`: a learner who asserts they know nothing about the topic skips the probe, so `/nodes` accepts the `draft` node and moves it `draft → confirmed` directly, teaching every step deep. Invoking `/nodes <subject>/<node-id>` confirms a probed node and moves it through `nodes-written` and `content-written` (writing each step article). `/edges` asks for confirmation of its candidate edge set and only then marks the node `edges-written`.
 
 Completion is step-based: a step is complete when its `/tackle` passes (mastery reaches `solid`); a node is complete automatically once every step in its DAG is complete; elements are keywords and are never marked complete.
 

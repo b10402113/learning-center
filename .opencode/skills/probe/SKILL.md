@@ -5,7 +5,7 @@ disable-model-invocation: true
 argument-hint: "Which subject/node should be probed? (e.g. /probe muscle-ladder/choosing-rep-ranges)"
 ---
 
-Measure what the learner already knows about one node before viewing it. Invoke as `/probe <subject>/<node-id>` — probe is node-scoped, not subject-scoped. It runs after `/roadmap` (so the node container exists) and before `/nodes` (so that node's step depth can be calibrated). It quizzes the node's source scope from shallow to deep, binary-searching each strand, and writes that node's mastery entry (`unknown | partial | solid`) into `learn/<subject>/mastery.md`. Probing a node is a **hard gate**: `/nodes` refuses a node that has not been probed.
+Measure what the learner already knows about one node before viewing it. Invoke as `/probe <subject>/<node-id>` — probe is node-scoped, not subject-scoped. It runs after `/roadmap` (so the node container exists) and before `/nodes` (so that node's step depth can be calibrated). It quizzes the node's source scope from shallow to deep, binary-searching each strand, and writes that node's mastery entry (`unknown | partial | solid`) into `learn/<subject>/mastery.md`. Probing a node is a **hard gate**: `/nodes` refuses a node that has not been probed — the sole exception is `/nodes <subject>/<node-id> skip-probe`, where a learner who asserts they know nothing about the topic skips the probe entirely and every step is taught deep.
 
 Prereqs: `learn/<subject>/MEMORY.md` exists (run `/learn-init` first), the node container `learn/<subject>/nodes/<node-id>.mdx` exists (run `/roadmap` first), and `learn/<subject>/digests/` exists. If any is missing, say so and stop. Read the digests only — never raw sources, per `docs/reference/source-reading.md`.
 
