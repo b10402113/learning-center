@@ -1,0 +1,169 @@
+---
+id: state-and-context-cost
+title: Stateless 模型、Session 與 Token 成本
+subject: ai-coding-crash-course
+teaches:
+  - ai-coding-crash-course/state-context-cost
+  - ai-coding-crash-course/token-billing-cache
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ac:284-409]]"
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ac:410-667]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# Stateless 模型、Session 與 Token 成本
+
+## Learning goal
+
+學完這一步，你能從一次實際的 agent request 反推出狀態到底放在哪裡：模型（model）是否保存了什麼、代理外殼（harness）如何維持 Session、環境（environment）如何讓程式碼與文件跨 Session 留存。你也能讀懂 request log 裡的 input tokens、output tokens、cache creation、cache read 和 thinking tokens，估算一次互動為什麼變貴，並在「繼續使用目前 Session」「整理後重開」「把重要資訊寫進檔案」之間做出有理由的選擇。
+
+## Lesson
+
+### 你以為只問一句話，模型其實收到一整包東西
+
+你在終端輸入「把這個測試修好」，畫面上可能只多出十個字左右。代理實際做的事情卻可能包括讀設定檔、搜尋目錄、執行測試、查看錯誤，然後等待你追問「為什麼這樣改」。下一次 request 裡，最新問題通常只是最後一小段，前面還可能接著 system prompt、工具定義、harness 規則、對話歷史、檔案內容和工具結果。
+
+這種差異很快就會反映在工作體驗和帳單上。Session 變長後，代理可能忘記較早的限制，重新搜尋已經看過的檔案；request log 裡的 input tokens 持續增加；你明明只打了幾行字，消耗卻遠高於直覺。真正該問的不是代理是否突然失憶，而是以下三件事。
+
+1. 這份狀態目前在模型、harness，還是環境裡？
+2. 下一次送給 model provider 的 request 會不會再次包含它？
+3. 它會以未快取 input、cached input，還是 output 的形式計入用量？
+
+這三個問題是整篇的追蹤方法。先找到狀態的位置，再看它如何進入 request，最後才判斷成本從哪裡來。
+
+### 先追蹤清除 Session 後留下什麼
+
+做一個很小的實驗。讓代理讀一個檔案，根據內容提出修改方案，但先不要真的寫入磁碟。接著清除 Session，再問新 Session：「剛剛那個方案的限制是什麼？」它通常答不出來，因為限制只存在上一段對話與工具結果裡。
+
+再做一次相同實驗，但要求代理把方案、決策理由和下一步寫入 `notes.md`。清除 Session 後，新代理仍然不會自動知道檔案內容；只要它重新讀取 `notes.md`，就能恢復工作需要的狀態。這裡可以看見一個關鍵邊界：清空對話，不等於清空工作環境。
+
+- 已保存的程式碼仍然在。
+- 已寫入的規格、交接文件和測試結果仍然在。
+- 只在終端說過、沒有落盤的重要決定，會隨 Session 消失。
+
+這裡的核心概念是 [[learn/ai-coding-crash-course/elements/state-context-cost|狀態、上下文與成本 (State, Context, and Cost)]]。它要區分的不是一個神祕的「代理記憶」，而是三種壽命不同的狀態。跨 Session 工作最常見的誤判，就是把這三層混成同一件事。
+
+### 第一層：模型每次都像第一次接電話
+
+模型本身是 stateless，也就是無狀態。一次 model provider request 結束後，模型不會因為剛剛讀過你的 repository，就把 repository 永久放進下一次呼叫可以直接取用的記憶裡。下一次回答之所以可以很連貫，是因為新的 request 又提供了相關材料，不是模型把上一通電話的內容自行帶走。
+
+可以把模型想成一位經驗豐富的專家。每次接電話時，只要你交給他需求、背景和證據，他就能計算一個回答；電話掛斷後，如果下一通沒有重新提供資料，他就不知道上一通做過什麼。模型參數裡原本就有的廣泛知識，稱為 parametric knowledge，仍然存在，但那不是你的專案 Session，也不是它昨天替你做出的決策。
+
+因此，「我昨天已經告訴過它」不能當成可靠的持久化策略。即使模型名稱和介面都相同，新的 provider request 仍要收到足夠上下文。模型沒有一個會替你保存 branch、未完成測試和產品取捨的專案記憶區。
+
+### 第二層：Harness 讓無狀態模型看起來有記憶
+
+同一個 Session 裡，代理為什麼能接著前文工作？答案是 harness，也就是包住模型的代理外殼。它負責管理 Session、保存訊息、呼叫工具、接收工具結果、讀寫檔案、執行命令，並在下一輪把需要的歷史整理進 request。
+
+所以 harness 在 Session 期間是 stateful，也就是有狀態。第一輪你叫代理讀 `package.json`，工具回傳內容；第二輪你問「測試指令是什麼」，harness 可能把前面的使用者訊息、工具呼叫和工具結果一起帶回去，模型才有材料回答。你感受到的「它記得剛剛讀過的檔案」，其實是 harness 重新提供了上下文。
+
+這種設計也直接造成成本。Session 保存的不是最後一句話，而是隨 turns 逐步增加的內容。一個 turn 可能包含使用者訊息、模型輸出、工具呼叫與工具結果。代理每讀一個檔案、搜尋一次目錄或跑一次測試，結果都可能沉積成後續 request 的歷史。若沒有壓縮、移除，或把資訊整理成檔案，下一輪就可能背著更多內容。
+
+因此，「重設 harness」不等於「刪除專案」。它比較像清空暫時工作桌，讓下一次模型少背一部分歷史。真正危險的是清除前沒有保存重要狀態。安全順序是先記下決策、目前進度、已知限制和下一步，再清除或建立新 Session。
+
+### 第三層：環境保存真正能跨越邊界的狀態
+
+環境是 agent 能操作的外部世界，最重要的通常是 repository 和檔案系統。程式碼、規格、測試、設定、交接筆記與版本控制紀錄，都能在 Session 結束後留下。新 Session 不會自動知道它們的內容，但可以探索目錄、讀取入口文件、檢查 Git 狀態，再把需要的部分送回模型。
+
+這就是「my code base is my memory system」的實際含義。它不是說每個檔案都可靠，也不是說模型會自動讀完整個 code base，而是說跨 Session 的穩定狀態應該有一個可檢查、可修改、可版本控制的位置。與其期待代理永久記得一次討論，不如把討論整理成可驗證的決策紀錄，並在新 Session 開始時提供清楚入口。
+
+環境記憶仍有風險。過時文件會延續錯誤，內容混雜的 `notes.md` 會增加尋找成本，未驗證的猜測若被寫成肯定句，後來的代理可能把它誤當成規格。因此，持久化只解決「狀態不隨 Session 消失」，不保證內容永遠正確。關鍵記錄仍要用目前程式碼和測試核對。
+
+### 一次 request 的輸入到底包含什麼
+
+現在把三層狀態連到錢包。每一次送往模型供應商的 request，都可以想成一張完整訂單。輸入側可能包含以下內容。
+
+- system prompt
+- 工具 schema
+- harness 附加指示
+- 目前 Session 歷史
+- 檔案內容
+- 工具結果
+- 最新一輪問題
+
+input tokens 是送給模型處理的輸入 token。Token 是模型切分文字、程式碼和其他輸入時使用的單位，不等於字數，也不等於訊息數。相同字數的自然語言和程式碼，可能切出不同數量的 token；一份很短、但符號密集的工具輸出，也可能比直覺昂貴。
+
+所以即使你這次只輸入「繼續」，只要 Session 已累積大量內容，下一個 request 仍可能重送整個相關歷史。輸入成本隨 Session 沉積，判斷成本時要問「這次送了什麼」，不能只問「我這次打了什麼」。
+
+### Output 與 Thinking 為什麼特別容易拉高成本
+
+output tokens 是模型產生的回應，可能包含可見文字、工具呼叫，以及某些模型使用的 thinking tokens。Thinking tokens 是模型用來推理、規劃和檢查的內部或半隱藏輸出。在部分代理介面中，你看不到完整內容，但它仍可能算在輸出側。
+
+輸入和輸出通常不是同一個單價。課程示範的 Claude Opus 4.5 價格是每一百萬 input tokens 10 美元、每一百萬 output tokens 50 美元。實際價格會依模型、供應商和方案改變，但這個比例足以建立直覺：不能只擔心上下文很長，也要檢查代理是否花了大量 token 思考、反覆驗證或產生不必要的長回答。一次 41k output 的深度推理，可能比數輪短輸入更快消耗預算。
+
+提高 effort 往往會同時提高品質、延遲和成本。更多 reasoning tokens 讓模型探索得更深，但每個 token 都有代價。明確改一個字串的任務，通常不值得用高 effort 長時間分析；跨模組設計或棘手除錯，則可能值得付出較高 output 成本。核心不是永遠選最便宜的設定，而是讓輸出 token 用在真正需要推理的地方。
+
+### Prefix Cache 把穩定的前段變便宜
+
+長 Session 看起來很浪費，因為早期歷史會反覆回到 request。供應商通常會使用 prefix cache，也就是前綴快取，降低穩定輸入重複處理的成本。Session 很適合這種設計：system prompt、工具定義、早期對話和固定專案背景通常在前面，最新問題與工具結果則追加在後面。
+
+第一次送出穩定前綴時，log 可能出現 cache creation input tokens，表示系統正在建立可重用快取。後續 request 如果仍從相同前綴開始，可能出現 cache read input tokens。這不表示 request 沒有帶整個 Session，而是表示前面已處理、沒有變動的部分可以用較低成本重用。最新追加內容仍要處理；前綴一旦改變，後方的匹配範圍也可能失效，快取離開太久也可能過期。
+
+可以把它想成把同一本工作筆記交給助理。前面已掃描、且沒有變動的頁面，可以使用既有掃描紀錄；新補上的頁面仍要重新讀。如果你改了筆記開頭，後面的內容可能全部無法匹配。快取讓重複輸入更便宜，卻不會讓筆記變薄，也不會讓過時內容重新變得相關。
+
+[[learn/ai-coding-crash-course/elements/token-billing-cache|Token 計費與 Prefix Cache (Token Billing and Prefix Cache)]] 正是用來讀這組數字。看到 cached input 很高時，不要立刻當成壞事。先確認穩定 prefix 是否被有效重用，再檢查它是否塞了大量無關歷史，以及代理品質是否已經下降。便宜的沉積物仍然是沉積物。
+
+### 讀 request log 的方法
+
+不要只看介面上最後顯示的回答長度。打開 request logger 或供應商的 usage 欄位，逐次記下至少五個觀察點：未快取 input、cache creation input、cache read input、output，以及 thinking 是否包含在 output 或另有欄位。
+
+用一組數字建立直覺。第一次 request 送出 12k input，系統建立其中 9k 的穩定 prefix，模型產生 2k output。第二次只追加一個短問題，但仍帶著相同的 9k prefix 和 3k 新歷史，log 可能顯示 9k cache read、3k input、1k output。第二次不能看成只花了「一個短問題」的成本，因為它仍涉及約 12k 的輸入處理，只是穩定部分可能享有快取價格。
+
+第三次若再讀入一份 8k token 的測試輸出，後續 output 又產生 4k reasoning，input、未快取內容和 output 都會增加。只盯著 cache read，會漏掉真正推高成本的兩個來源：新的工具輸出和推理 token。
+
+一次 request 的成本可以粗略寫成：
+
+```text
+成本 ≈ 未快取輸入 × input 單價
+      + 快取讀取輸入 × cached input 單價
+      + (output 與 thinking token) × output 單價
+```
+
+這不是取代供應商正式帳單的公式，因為不同方案可能有批次、最小量、工具或模型特定規則。它的用途是提供追查方向。數字變高時，至少要分辨是輸入變厚、快取失效，還是輸出變長。
+
+### 用「狀態位置」決定要不要重開
+
+把三層狀態和成本放在同一張圖裡，就能看見完整因果鏈。模型無狀態，所以 harness 必須在下一輪重新提供 Session 內容；Session 越長，input 越可能增加；prefix cache 可以降低穩定前段的價格，卻不能消除長上下文對注意力的負擔；環境能保存跨 Session 的重要知識，因此你可以清掉暫時工作桌，再讓新 Session 從檔案恢復。
+
+遇到長 Session，不要只問目前有多少 token，還要問三件事。現在仍需要哪些歷史？哪些內容已經落盤？最新任務是否已經和早期任務不同？如果重要資訊大多已寫進規格、進度和決策文件，重開成本通常較低。如果代理正在同一個狹窄問題的最後驗證，保留現場可能更划算。如果 token 持續累積、cached input 很大，而且代理開始遺漏限制，就應該整理，不要因為快取便宜而無限延長 Session。
+
+| 現象 | 主要狀態位置或成本來源 | 合理行動 |
+| --- | --- | --- |
+| 清除後代理完全不知道上一輪決策 | 決策只在 harness Session | 把決策和理由寫入環境，再重新開始 |
+| 新 Session 找不到舊工作入口 | 環境有檔案，但缺乏導航 | 建立短入口文件，列出目標、進度與相關檔案 |
+| 每輪 input 都變大，但回答仍清楚 | harness Session 持續追加 | 查看 request log，按任務邊界整理或切 Session |
+| cache read 很高但代理開始重複 | 快取降低價格，沒有降低注意力負擔 | 移除無關歷史，保留必要 prefix |
+| output 或 thinking 突然暴增 | 推理或產出成本偏高 | 限定輸出格式、縮小任務，必要時降低 effort |
+| 大型工具結果讓上下文跳升 | 新 input 未必可快取 | 聚焦工具輸出，只讀相關片段，保存摘要 |
+
+這張表的核心不是推薦某一個工具，而是先定位問題所在的層次。Session 遺失狀態，就寫檔；上下文太長，就整理；input 太貴，就縮小或利用穩定 prefix；output 太貴，就控制推理與產出。問題定位正確，行動才不會互相抵消。
+
+### 在自己的 Node 專案做一次追蹤練習
+
+在熟悉的 TypeScript 或 Node repository 開一個乾淨 Session。第一步記錄起始狀態，包括工作目錄、Git branch、已載入的工具或技能，以及 status line 顯示的上下文 token。第二步要求代理說明專案用途，但限制它先讀一個入口文件，然後記下 request log 的 input、output 和 cache 欄位。第三步讓它讀一個小型設定檔，觀察增量。第四步執行可能產生大量輸出的測試，看哪個欄位跳升。
+
+接著在對話中做一個決策，例如決定某個測試失敗先不修，改為先確認資料流。不要把決策寫檔，直接清除 Session，再測試新代理是否知道它。你應該看到狀態消失。重做一次，把決策、原因、相關檔案和下一步寫入交接文件；清除後只給新代理文件入口，觀察它能否恢復。這會讓你親自看見 harness 的暫時性與環境的持久性。
+
+最後比較兩種工作方式。第一種是在同一個 Session 持續貼入完整測試輸出，讓歷史不斷增長。第二種把結果濃縮成失敗摘要，保留檔案路徑和可重現指令，再讓代理只讀需要的片段。比較兩者的 input、cache read、output 和回答品質。你不必找出適用所有專案的固定價格，只要建立「哪個動作造成哪種成本」的本地直覺。
+
+### 把這套模型帶回每天的協作
+
+代理在 Session 裡表現良好，不代表模型已經學會你的專案；它可能只是因為 harness 還能送進足夠歷史。代理在新 Session 裡重新探索，也不代表它失去能力；它只是需要從環境取得狀態。request log 顯示 cache read 很高，更不代表你應該繼續保留所有歷史；快取優化的是價格，不是相關性，也不是注意力負擔。
+
+每天可以固定保留四個習慣。
+
+1. 任何跨 Session 仍有價值的決定，都要落盤。
+2. 把對話中的大型輸出視為會進入後續 input 的材料，不要無條件保留。
+3. 閱讀 request log 時分開看 input、cached input 和 output，特別確認 thinking 是否算在 output。
+4. 工作階段切換、代理開始重複，或上下文快速膨脹時，先整理再繼續。
+
+最後，把一次 agent request 想成三個同時運作的系統。模型是每次重新接收材料的計算器；harness 是在 Session 內保存並重送材料的工作外殼；環境是能跨 Session 留下程式碼與文件的持久層。成本沿著 request 流動：Session 狀態形成 input，穩定前綴可能形成 cache read，模型的回答與思考形成 output。
+
+為什麼這個分法很重要？因為它讓失誤和帳單都變得可追查。代理不知道上一輪決策時，你知道該檢查狀態是否只留在 harness；input 變厚時，你知道該看歷史與工具輸出；cached input 很高時，你知道還要檢查相關性；output 暴增時，你知道該檢查 effort、推理和回答格式。只要能追蹤這三層狀態與幾類 token，你就能有理由地決定該保存什麼、刪掉什麼、重開什麼，以及正在為哪一種能力付費。
+
+## Sources
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ac:284-409]]
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ac:410-667]]
+

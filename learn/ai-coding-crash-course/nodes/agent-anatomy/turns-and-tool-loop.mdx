@@ -1,0 +1,288 @@
+---
+id: turns-and-tool-loop
+title: 一次 Turn 如何經過工具迴圈
+subject: ai-coding-crash-course
+teaches:
+  - ai-coding-crash-course/turn-tool-loop
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ab:688-1002]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# 一次 Turn 如何經過工具迴圈
+
+## Learning goal
+
+看懂一次 AI coding agent 工作從使用者訊息開始，如何經過模型供應商請求、工具呼叫、外殼執行與工具結果，再回到模型並產生最後回覆。你也能在 request logger 中分辨 turn、model provider request、tool call 與 tool result，並用這套詞彙排查代理到底有沒有真的修改檔案。
+
+## Lesson
+
+### 📝 你看到一句回覆，系統其實可能已經往返很多次
+
+你對 coding agent 說「請建立一個 `notes.ts`，匯出一個可以新增筆記的函式」，畫面上看起來只發生了一件事。你送出一句話，等了一會兒，代理回答「已完成」，檔案也出現在專案裡。只看這個結果，很容易以為模型收到文字後，就直接改了你的硬碟。
+
+實際流程會經過好幾個不同角色。模型先收到一份請求，裡面有你的要求、目前規則、可用工具，以及先前對話。模型接著輸出一段結構化資料，要求外殼執行寫檔工具。外殼才是能真正接觸檔案系統的部分。寫檔完成後，外殼把成功或失敗的結果交回模型。模型根據這份環境回饋，可能繼續讀檔、執行測試、修正內容，最後才產生給你的自然語言回覆。
+
+先把整條路徑記成一個循環：
+
+```text
+使用者意圖
+  → 模型供應商請求
+  → 模型產生工具呼叫
+  → harness 執行工具
+  → 工具結果回到模型
+  → 模型決定下一步或產生最後回覆
+```
+
+這就是 [[learn/ai-coding-crash-course/elements/turn-tool-loop|Turn、工具呼叫與工具結果 (Turn, Tool Calls, Tool Results)]] 的核心。當代理「思考一下、跑一個命令、回來修改檔案」時，這些往返通常仍然屬於同一個工作單位，不是每次都代表新的使用者指令。
+
+### 🔧 四個名稱，先分清楚再看 log
+
+request logger 裡常會同時出現四個名稱。它們描述的是四個不同層次，不能拿來互相替換。
+
+| 名稱 | 它指的是什麼 | 你在 log 中會看到什麼 |
+| --- | --- | --- |
+| model provider request | harness 傳給模型供應商的一次請求 | system prompt、工具 schema、對話歷史與最新訊息 |
+| turn | 從一次使用者意圖到工作完成的整段活動 | 多個 request 和工具往返組成的工作單位 |
+| tool call | 模型要求 harness 執行工具的結構化輸出 | 工具名稱與參數，例如路徑、內容或命令 |
+| tool result | harness 執行工具後回傳的結果 | 成功、錯誤、輸出內容或退出狀態 |
+
+最常混淆的是 request 和 turn。model provider request 是模型供應商 API 收到的一次請求，turn 則是更大的容器。它從「使用者想完成一件事」開始，到代理完成或放棄這件事為止。一個簡單 turn 可能只有一次 request；複雜工作則可能產生幾十次甚至數百次 request。即使代理花了幾小時反覆探索、執行、檢查和修正，對使用者來說仍可能是同一個 turn。
+
+另一個混淆是 tool call 和 tool result。tool call 只是模型提出的要求，尚未證明工具已經執行。tool result 則是 harness 實際執行後回傳的環境回報，不是模型自己寫出的解釋。模型輸出「我會寫入 `notes.ts`」只代表它有這個意圖。要確認環境真的變了，必須看到對應工具的成功結果。
+
+### 📦 Model provider request 裡面裝了什麼
+
+harness 每次要模型決定下一步時，都會送出一個 model provider request，也就是模型供應商請求。這不只是把你剛才輸入的句子轉寄出去，通常至少包含三類資料。
+
+第一類是 system prompt。它是 harness 放在對話前面的高層指示，說明模型的角色、工作規則、安全限制與環境使用方式。內容可能包括目前專案目錄、先檢查狀態的要求、不可洩漏秘密的限制，或執行危險操作前必須取得許可。
+
+第二類是工具 schema，也就是工具的結構描述。它列出可用工具、工具名稱、接受的欄位，以及每個欄位需要的資料型別。假設 harness 提供 `write_file`，schema 可能要求模型傳入 `path` 和 `content` 兩個字串。模型不是憑空知道函式簽名，而是先讀到這些規則，再依照規則產生輸出。
+
+第三類是 conversation history，也就是完整對話歷史。它包含使用者訊息、模型先前的文字、過去的 tool call，以及每次 tool result。模型不會自動記得上一個 API request 發生過什麼，因此 harness 必須把必要歷史重新送回去。長 session 會逐漸變長，根本原因就在這裡。
+
+可以把簡化的 request 想成下面這樣：
+
+```json
+{
+  "system": "你正在一個 TypeScript 專案中工作，使用可用工具完成任務。",
+  "tools": [
+    {
+      "name": "write_file",
+      "input_schema": {
+        "path": "string",
+        "content": "string"
+      }
+    }
+  ],
+  "messages": [
+    {"role": "user", "content": "建立 notes.ts"}
+  ]
+}
+```
+
+實際欄位會隨供應商和 harness 改變，但結構關係通常相同。system prompt 提供背景與規則，tools schema 劃出能力邊界，messages 保存工作脈絡。三者合在一起，模型才有足夠資訊選擇下一步。
+
+為什麼 request 的完整內容很重要？因為只搜尋使用者輸入，會漏掉真正影響代理行為的大部分資料。代理能不能呼叫 `write_file`，取決於工具是否出現在 schema。代理知不知道上一個命令失敗，取決於 history 裡是否有那個 tool result。代理為什麼遵守某條限制，則通常要回頭看 system prompt。
+
+### ✍️ 寫檔工具迴圈，一步一步展開
+
+假設專案裡沒有 `greeting.ts`，你要求代理建立它，匯出一個回傳問候文字的函式。我們把這個最小任務拆成六步。
+
+#### 第一步，使用者建立一個意圖
+
+你輸入「請建立 `greeting.ts`，匯出 `greet(name)`，讓它回傳 `Hello, name!`」。這是 turn 的起點。此刻還沒有任何檔案被修改，只有一個待完成的意圖。
+
+#### 第二步，harness 建立 provider request
+
+harness 把你的訊息放進 conversation history，再加入 system prompt 和目前可用的工具 schema，最後把完整資料送給模型供應商。模型可能先讀取專案資訊，也可能直接選擇寫檔，這取決於它收到的規則和上下文。
+
+#### 第三步，模型產生 tool call
+
+模型決定使用寫檔工具，輸出類似下面的結構化資料：
+
+```json
+{
+  "name": "write_file",
+  "input": {
+    "path": "greeting.ts",
+    "content": "export function greet(name: string) {\n  return `Hello, ${name}!`;\n}\n"
+  }
+}
+```
+
+這段 JSON 是 tool call。它只描述模型希望 harness 做什麼，還沒有把內容寫入硬碟。`path` 和 `content` 能出現，是因為 schema 先定義了這些欄位。只要輸出符合結構，harness 才能解析並嘗試執行。
+
+#### 第四步，harness 執行工具
+
+harness 收到 tool call 後，會先依照自己的規則處理。有些操作可以直接執行，有些需要使用者允許。若這次寫檔通過檢查，harness 就呼叫本機的寫檔函式，把內容寫入 `greeting.ts`。真正讓檔案出現的，是這個執行步驟，不是模型輸出的文字。
+
+路徑不合法、目錄不存在、權限不足，或使用者拒絕操作時，harness 都不會得到成功結果。模型可能確實想建立檔案，但環境裡仍然沒有檔案。這裡必須把模型意圖和環境狀態分開。
+
+#### 第五步，harness 產生 tool result
+
+工具執行後，harness 把結果整理成 tool result。成功結果可以包含檔案已寫入的訊息；失敗結果則可能包含錯誤類型、錯誤文字或權限拒絕。這份結果會加進對話歷史，準備送回模型。
+
+成功結果可以概念化為：
+
+```text
+Tool: write_file
+Result: Successfully wrote greeting.ts
+```
+
+失敗結果可能是：
+
+```text
+Tool: write_file
+Result: Error: permission denied
+```
+
+對模型而言，這兩份結果代表完全不同的環境證據。成功時，它可以讀回檔案、繼續驗證或直接回覆。失敗時，它可能改用另一個路徑、請你提供權限，或明確說明無法完成。
+
+#### 第六步，模型讀取結果並決定是否繼續
+
+harness 會再送出下一個 model provider request。這次 history 多了一組 tool call 和 tool result。模型看到成功結果後，可能要求讀取檔案確認內容，也可能直接產生 final message。若看到錯誤，它則可能提出下一個 tool call 來修正問題。
+
+因此，實際寫檔流程常常更像下面這樣：
+
+```text
+user message
+  → provider request 1
+  → tool call: write_file
+  → tool result: success
+  → provider request 2
+  → tool call: read_file
+  → tool result: file content
+  → provider request 3
+  → final message
+```
+
+每個箭頭都代表一次不同層次的往返，但整串活動仍然可以只算一個 turn。這個分層正是讀 log 時最重要的起點。
+
+### 🔁 工具迴圈不只會寫檔
+
+寫檔只是最容易觀察的例子。同一套結構也適用於讀檔、搜尋、執行測試、啟動開發伺服器，以及查詢 git 狀態。
+
+例如，你要求代理修正測試失敗，可能會依序發生以下事情：
+
+1. 模型呼叫搜尋工具，找出測試檔案與被測函式。
+2. harness 執行搜尋，回傳匹配到的檔案內容。
+3. 模型呼叫讀檔工具，取得更完整的上下文。
+4. harness 回傳檔案內容。
+5. 模型呼叫寫檔工具，修改實作或測試。
+6. harness 寫入修改後的內容。
+7. 模型呼叫 bash 工具，執行 `npm test`。
+8. harness 回傳測試輸出與退出狀態。
+9. 模型根據輸出判斷是否需要再修改。
+10. 測試通過後，模型產生 final message。
+
+模型在這裡不是一次就知道答案。它先用工具取得環境資訊，再依照結果調整計畫。工具結果是模型對真實環境的觀察，下一個 tool call 是模型對新資料的反應。這個閉迴圈讓代理能在環境中採取多步行動。
+
+為什麼 tool result 很重要？模型的內部知識不知道你的專案目前有哪些檔案，也不知道某個命令在你的電腦上是否成功。只有工具執行後的結果，才把這些具體事實帶回模型。沒有 result，模型只能猜；有 result，模型才可以觀察、修正和驗證。
+
+### 🧭 一個 turn 到底從哪裡開始，到哪裡結束
+
+操作代理時，你可能看到多段模型文字、許多工具操作，甚至等待很久。判斷它們是否屬於同一個 turn，可以先看使用者意圖的邊界。
+
+你輸入一個完整工作要求，代理開始處理，直到交付結果或明確停止，通常就是一個 turn。中間的探索、修改和測試，都是這個 turn 的內部活動。代理讀了一個檔案，不代表產生新的 turn，那只是 turn 裡的一個工具步驟。
+
+代理完成後，如果你再輸入「順便把錯誤訊息改得更清楚」，新的使用者意圖通常會開啟下一個 turn。新的 turn 仍可能共享原本的 session。session 是更大的容器，負責保存多次 turn 累積的上下文。三層關係可以畫成：
+
+```text
+session
+  ├─ turn 1
+  │   ├─ provider request
+  │   ├─ tool call
+  │   ├─ tool result
+  │   └─ final message
+  └─ turn 2
+      ├─ provider request
+      ├─ tool call
+      ├─ tool result
+      └─ final message
+```
+
+同一個 turn 可以有很多 provider request，同一個 session 也可以有很多 turn。把三層混在一起，成本、上下文與錯誤都會變得難以追蹤；分開之後，你就能回答這次工作花了幾次模型請求、哪一步真的碰到檔案，以及哪個結果讓代理改變方向。
+
+### 📊 怎麼讀 request logger
+
+面對 request logger，建議使用由外到內的順序。先找 request 的邊界，再看每個 request 的內容，最後沿著工具往返追查。
+
+第一步是數 provider request。每次送到模型供應商的請求，可能都有自己的時間戳、請求路徑或 request id。不要因為看到兩個 assistant 訊息，就直接假設只有兩次請求；也不要因為只看到一句使用者訊息，就假設只發生一次請求。有些 harness 會在輸入簡短訊息後，為建議模式或介面輔助功能發出隱藏請求。
+
+第二步是查看每個 request 的 system prompt 和工具 schema。這能告訴你模型當時被賦予哪些能力。工具不在 schema 裡，模型通常不能正常使用它；欄位定義和你想像不同，模型產生的 JSON 也可能不符合預期。
+
+第三步是沿著 message history 找 tool call，確認模型提出了什麼要求。寫檔操作要注意檔案路徑和內容，bash 操作則要同時查看命令文字和工作目錄。
+
+第四步是尋找對應的 tool result，並區分成功、失敗、拒絕和部分輸出。模型後面說「已完成」時，向前追查是否真的有成功 result。只有 tool call、沒有成功結果時，不能把模型意圖當成環境事實。
+
+第五步是觀察 result 後面是否出現新的 request。成功結果可能觸發驗證，失敗結果可能觸發重試或改道。這些後續往返，通常比 final message 更能揭示代理真正採用的策略。
+
+| 想回答的問題 | 應該檢查的證據 |
+| --- | --- |
+| 模型知道有哪些工具嗎 | provider request 裡的 tools schema |
+| 模型要求做了什麼嗎 | tool call 的名稱與參數 |
+| 工具真的執行了嗎 | tool result 的狀態與輸出 |
+| 代理為什麼繼續操作 | result 後的下一個 provider request |
+| 長 session 為什麼越來越重 | 每次 request 的 history 長度 |
+| final message 是否可信 | 前面的 call 與 result 是否支持它 |
+
+### ⚡️ 一個 turn 可以很長，成本也會跟著累積
+
+你只輸入一次「幫我完成這個功能」，不代表模型只處理一個小 request。代理可能先搜尋十個檔案，再讀取三個設定，修改兩個檔案，跑四次測試，最後修正一次錯誤。每一個需要模型判斷的節點，都可能形成新的 provider request。
+
+假設一個 turn 有 100 次 provider request。若每次都重新帶上 system prompt、工具 schema 和累積中的 conversation history，送出的輸入內容就會相當可觀。後面的 request 還會包含前面新增的 tool call 和 tool result，所以工作越久，history 通常越長。這說明了一個 turn 可以持續幾小時，卻不等於只有一次 API 呼叫。
+
+成本不能只用最後回覆的字數估算。真正要看的是每次 request 的輸入和輸出。代理最後可能只回兩句話，但前面已經產生大量搜尋結果、檔案內容、命令輸出和推理內容。反過來，最後回覆很長，也不一定代表它使用了很多工具。
+
+上下文大小還會影響品質。歷史訊息、工具結果和 system prompt 都會進入後續 request。資料越多，模型需要追蹤的關係越多，重要細節就可能被雜訊蓋住。request logger 因此不只是成本除錯工具，也是觀察代理注意力負擔的窗口。
+
+為什麼這個觀察很重要？如果代理沒有拿到必要資料，可能需要補上讀檔或搜尋工具。如果代理已經取得大量資料，卻開始忽略關鍵結果，問題可能是上下文太長，而不是缺少工具。沒有 turn 和 request 的分層，就很難判斷應該補資料、修改 prompt，還是清理 session。
+
+### 🛡️ 「模型說做了」不等於「環境真的改了」
+
+最實用的排查習慣，是把 final message 當成報告，而不是證據。代理最後說「我已更新測試並確認通過」，你應該依序確認三件事。
+
+第一，有沒有對應的 tool call？若沒有寫檔、編輯或命令工具的呼叫，代理可能只是描述打算做的事。
+
+第二，tool call 的參數正不正確？代理可能改到相似但錯誤的檔案，使用錯誤路徑，或執行與需求不符的命令。
+
+第三，tool result 是否顯示成功？即使存在 tool call，也可能因權限、語法、路徑或命令退出狀態而失敗。只有成功結果和後續驗證，才足以支持 final message 的結論。
+
+可靠的檢查順序如下：
+
+```text
+final message
+  → 找對應的 tool call
+  → 檢查工具參數
+  → 找 tool result
+  → 確認成功狀態
+  → 查看是否有測試或讀回驗證
+```
+
+這也能解釋代理常見的幻覺式回報。模型可能很有把握地說「測試已通過」，但 bash result 卻顯示命令沒有執行，或測試以錯誤退出。這不一定表示模型故意欺騙，而是它產生了合理文字，卻沒有得到足夠的環境回饋。把 call 和 result 分開追蹤，就能把推測和事實分開。
+
+### 🎯 把工具迴圈用在日常工作
+
+你不必每天手動讀完整 logger，才算理解這套模型。幾個簡單習慣，就能把它轉成日常檢查法。
+
+代理要修改程式時，先確認它是否讀過相關檔案。沒有探索結果就直接寫入，代表它可能是在猜。代理說錯誤已修好時，確認它是否跑過測試，或至少讀回修改後的檔案。沒有驗證結果，final message 只能算未證實的摘要。
+
+代理反覆來回時，也不要立刻把多次 request 當成失控。先看每次操作是否由新的工具結果驅動。如果它根據測試錯誤修正程式，這是正常的閉迴圈；如果它重複讀同一份檔案、忽略相同錯誤，才需要考慮打斷、縮小任務，或重新整理上下文。
+
+成本突然升高時，先區分是輸出太長，還是 request 次數太多。大量工具呼叫會增加 request 數量，大型工具結果會增加後續輸入長度，兩者的處理方式不同。前者可能需要更清楚的任務邊界，後者可能需要限制搜尋範圍，或把工作拆成幾個階段。
+
+如果你設計自己的 harness 或整合工具，也要維持這個分離。工具 schema 要準確描述能力，tool call 要帶有可驗證的參數，tool result 要清楚回報成功與錯誤。result 只寫模糊的「完成」，模型就很難判斷下一步；schema 宣稱工具能做超出實際範圍的事情，模型也會產生不可靠的呼叫。
+
+### ✅ 最後把整個模型縮成一句話
+
+一次 turn 是一段完整的代理工作，不是一次 API request。harness 把 system prompt、工具 schema 和 conversation history 放進 model provider request，模型再產生 tool call。harness 執行工具後回傳 tool result，模型根據結果繼續呼叫工具，或產生 final message。
+
+可以把三個角色想成決策者、執行者和環境回饋。模型是決策者，負責根據上下文選擇下一步；harness 是執行者，負責把結構化要求交給本機工具；tool result 是環境回饋，告訴模型要求到底成功、失敗或只完成了一部分。決策者不能直接改檔案，執行者也不能替決策者理解需求，兩者靠 call 和 result 往返。這個往返，才讓 coding agent 能探索、修改和驗證。
+
+掌握這套分層後，三個判斷會變得清楚。看到多次 API request，你知道它們可能仍然屬於同一個 turn。看到模型宣稱完成，你知道要追查 tool call 和 tool result。看到長 session 變慢或變貴，你知道後續 request 可能都攜帶累積歷史。這三個判斷，就是閱讀 agent log、排查檔案是否真的被修改，以及可靠使用工具迴圈的基本能力。
+
+## Sources
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ab:688-1002]]

@@ -31,11 +31,10 @@ Finding *facts* is your job, never the learner's — check `learn/<subject>/` an
 
 ## Output configuration
 
-After the profile is settled, ask three output questions and store the answers in `MEMORY.md` frontmatter:
+After the profile is settled, ask two output questions and store the answers in `MEMORY.md` frontmatter:
 
 - **Language** — what language every generated article for this subject should be in (e.g. `en`, `zh-Hant`). This is a hard commitment: later nodes, elements, and edges are written in this language.
-- **Tune** — which voice the articles should use. Auto-list the available tunes (folders under `tune/*/` that contain a `TUNE.md`) plus the option **none**. If no tune exists yet, offer none and point the learner to `/tune <author-slug>` first. Profile reading and application rules live in `docs/reference/tune.md`.
-- **Tune scope** — which artifacts get the voice: `steps` (step articles only), `elements-steps` (step plus element prose, sections kept), or `all` (also edges). Default `elements-steps`.
+- **Polish template** — which polish style the step articles should be rewritten into. Auto-list the available templates (folders under `polish/*/` that contain a `polish.md`) plus the option **none**. Articles are always drafted directly in the subject's `language`; the template shapes the polish pass in `/nodes` only. `none` (or a missing `polish/<slug>/polish.md`) skips polishing entirely. If no template exists yet, offer `none` and tell the learner a template is just a hand-written style guide at `polish/<slug>/polish.md` (format and rules in `docs/reference/polish.md`).
 
 Write `learn/<subject>/MEMORY.md` in the template below, then confirm the profile is accurate before ending the session.
 
@@ -45,8 +44,7 @@ Write `learn/<subject>/MEMORY.md` in the template below, then confirm the profil
 ---
 subject: <subject>
 language: <output language for all articles, e.g. en | zh-Hant>
-tune: <author-slug | none>
-tune-scope: <steps | elements-steps | all>
+polish: <author-slug | none>
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---

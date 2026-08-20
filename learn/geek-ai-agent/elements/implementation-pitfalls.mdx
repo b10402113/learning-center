@@ -1,0 +1,96 @@
+---
+id: implementation-pitfalls
+title: 構建陷阱 (Implementation Pitfalls)
+subject: geek-ai-agent
+tier: 3
+order: 9
+type: article
+nodes:
+  - geek-ai-agent/oryxos-build
+sources:
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#key-decisions]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#provider-name-mapping]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#sandbox]]"
+  - "[[sources/geek-ai-agent/19 19. 项目篇 OryxOS：AI 编程指南.html#constitution]]"
+  - "[[sources/geek-ai-agent/19 19. 项目篇 OryxOS：AI 编程指南.html#risks-challenges]]"
+  - "[[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#risks]]"
+created: 2026-08-19
+updated: 2026-08-19
+---
+
+# 構建陷阱 (Implementation Pitfalls)
+
+## Problem Statement
+
+AI 寫代碼的本事越大，寫錯的方式就越隱蔽。OryxOS 這種九模塊、五項能力、一堆技術選型的項目，AI 在構建時有幾個高頻翻車點。它們不是功能沒寫完，而是寫完之後看起來對、跑起來錯，或者結構和方案對不上，事後要花大價錢改。如果不知道坑在哪，你會在構建時反覆踩，還以為是 AI 不行。
+
+## Why it matters
+
+這幾個坑是技術方案和 AI 編程指南反覆點名的位置，也是你審查 AI 產出時要盯的死角。記住它們，你才能在構建時當場攔住錯誤，而不是等 demo 失敗或代碼 review 才發現。它們就是憲法原則存在的理由。
+
+## How it works
+
+最常見的坑有七個，每個都帶機制和防範。
+
+**坑一，Spring AI 自動工具執行沒禁用，工具被調用兩次。** 機制是 Spring AI 有自己的工具調用能力，如果沒關，它和自研的 ReActLoop 會同時執行工具，一次對話裡工具跑兩遍，副作用雙倍，成本雙倍。防範是憲法第四條，Spring AI 只用一半，只做協議轉換和 schema 生成，調度永遠歸 ReActLoop+ToolExecutor。這是整個構建最容易被寫錯的一條。
+
+**坑二，Provider 用類型掃描，多模型下分不清。** 機制是 Spring 裡有多個 ChatModel bean，deepseek 和 kimi 是同一個 bean 類型，靠掃描所有 bean 無法可靠區分誰是誰，bean 名又不等於 provider 名。防範是維護顯式的 provider-name → ChatModel 映射（用 Qualifier 或配置表），Profile 按名字引用 Provider。AI 很容易寫出類型掃描，這是 US-1 任務說明裡專門點名的坑。
+
+**坑三，Memory 塌縮進 Session。** 機制是 Memory 本該是統一的三層門面（會話記憶 + 長期記憶），AI 很容易把它實現成「Session 裡多存點東西」就算完，丟掉長期記憶和 MEMORY.md 的設計。防範是 MemoryService 門面架構，會話走 SessionManager（SQLite），長期走 LongTermMemory（MEMORY.md），一個接口對外。審查生成的 plan.md 時先查這條。
+
+**坑四，Tool 被拆成多個模塊。** 機制是「內建工具、MCP 客戶端、工具註冊表、沙箱檢查」看著像四個東西，AI 容易各開一個模塊。防範是方案明確 oryxos-tool 是一個三合一模塊，拆了就違反九模塊結構。審查 plan.md 時查這條。
+
+**坑五，SkillLoader 被當成 Tool。** 機制是 SKILL.md 看著像工具，但它是提示詞輸入，屬於 ContextLoader，不是 Tool 模塊。AI 把技能載入放進 Tool 模塊就偏了。審查 plan.md 時查這條。
+
+**坑六，審計表漏寫。** 機制是 tool_invocations 和 llm_calls 兩張表需要每次調用都寫，AI 容易覺得「記日誌就夠了」而省略，等要合規審計時才發現數據沒有。防範是憲法第六條，審計數據第一天就寫，把它寫進 US-5 的任務說明，因為審計表就在 US-5 落地。
+
+**坑七，沙箱和安全機制做錯。** 機制有兩個層次。核心階段只用 Path/Pattern 白名單（file.allowed_paths、shell.allowed_commands、http.allowed_domains），不能去用 Java SecurityManager（JDK 17 起棄用，JDK 21 上根本不可用）。SandboxChecker 要能處理文件路徑歸一化、Shell 命令首個 token 校驗、HTTP 域名通配符匹配，任何一項失敗拋出 SandboxViolationException 終止工具。
+
+另外兩個環境層面的坑。MCP 的 Java 生態比 Python 不成熟，stdio 傳輸優先（最常見），SSE 後置，實現前先用一個最小 MCP server 測連通性，避免在 US-4 才踩到進程啟動或編碼問題。Java 基本功（Spring Boot/Maven/JPA）是前提，不熟會拖慢整個節奏，構建前要確認團隊熟練度。
+
+還有構建紀律層面的坑：AI 偏離憲法（每個 implement 後檢查，最常錯的位置就是上面列的前六條）、跨 story 上下文斷裂（每個 story 前讓 AI 重讀 spec.md + plan.md + 最近代碼）、跳過 /speckit.analyze（每個 story 跑一次，防漂移）、Spec-Kit 版本漂移（固定版本、查官方文檔、不碰社區擴展）。
+
+## In plain terms
+
+這些坑可以分成三類。機制類的（雙調用、類型掃描、沙箱）是寫錯邏輯，會跑出錯；結構類的（Memory 塌縮、Tool 拆模塊、SkillLoader 位置、審計表漏寫）是結構和方案對不上，review 時能看出來；紀律類的（不跑 analyze、上下文斷裂、版本漂移）是流程沒守住。記住這三類，審查時按類檢查。
+
+## Analogy
+
+把構建過程想成考駕照。機制類的坑是考試時把油門當剎車（寫錯邏輯，上路就出事）；結構類的坑是練車時把車停在別人的車位上（結構不對，回頭挪車費勁）；紀律類的坑是平時不看後視鏡（流程鬆了，出事才發現）。教練（憲法和方案）把這幾條都寫成了固定規矩，你只要照著檢查，就能在考試當場攔下錯誤。
+
+## Practical use
+
+構建時把這張清單當檢查表。每個 user story 結束，跑完 /speckit.analyze 之後，再人工對一遍這七個坑加兩個環境前提。US-1 結束查 Provider 類型掃描，US-2 結束查自動工具執行，US-4 結束查 MCP 和沙箱，US-5 結束查審計表。全部對完再進下一個 story。
+
+## Prerequisites
+
+- 知道技術方案的七個關鍵決策 — 大部分坑就是決策被違反的表現（見 [[learn/geek-ai-agent/elements/oryxos-architecture|技術方案 (The Technical Solution)]]）
+- 知道 ReAct 循環的機制 — 坑一和坑二都在這個機制上（見 [[learn/geek-ai-agent/elements/react-loop|ReAct 循環 (The ReAct Loop)]]）
+
+## Connections
+
+- [[learn/geek-ai-agent/elements/react-loop|ReAct 循環 (The ReAct Loop)]] — 雙調用坑直接發生在循環與 Spring AI 的邊界上
+- [[learn/geek-ai-agent/elements/oryxos-architecture|技術方案 (The Technical Solution)]] — 結構類的坑全是違反九模塊結構或七個決策的表現
+- [[learn/geek-ai-agent/elements/spec-kit-workflow|Spec-Kit 工作流 (The Spec-Kit Workflow)]] — 憲法原則和協作紀律就是為防這些坑而設的
+
+## Deep dive
+
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#key-decisions]] — decision ② (double-invocation) and decision ⑥ (sandbox whitelist not SecurityManager)
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#provider-name-mapping]] — the explicit provider-name mapping rule
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#sandbox]] — the SandboxChecker whitelist mechanics
+- [[sources/geek-ai-agent/19 19. 项目篇 OryxOS：AI 编程指南.html#constitution]] — principles ④ and ⑥ that guard the top traps
+- [[sources/geek-ai-agent/19 19. 项目篇 OryxOS：AI 编程指南.html#risks-challenges]] — the common implementation challenges and countermeasures
+
+## Questions
+
+### Q1. 列舉三個結構類陷阱，並說明 AI 為什麼容易犯。
+A1. Memory 塌縮進 Session（Memory 本該是三層門面，AI 容易簡化成 Session 多存點）、Tool 被拆成多個模塊（內建/MCP/註冊表/沙箱看著像四個東西）、SkillLoader 被當成 Tool（SKILL.md 是提示詞輸入，屬於 ContextLoader）。AI 容易按表面相似性歸類，所以方案要明確結構。
+
+### Q2. 「Spring AI 自動工具執行沒禁用」會造成什麼後果？怎麼防？
+A2. 工具被調用兩次，副作用和成本雙倍。防範是憲法第四條，Spring AI 只做協議轉換和 schema 生成，調度歸 ReActLoop+ToolExecutor。
+
+### Q3. 為什麼 Provider 不能用類型掃描？正確做法是什麼？
+A3. 多個 ChatModel bean 是同一類型，deepseek 和 kimi 分不清，bean 名不等於 provider 名。正確做法是維護顯式的 provider-name → ChatModel 映射，Profile 按名字引用。
+
+### Q4. MCP 的 stdio 優先策略是什麼？為什麼要在 US-4 之前先測一個最小 MCP server？
+A4. Java 的 MCP 生態比 Python 不成熟，stdio 是最常見的傳輸方式，先實現它，SSE 後置。實現前先測最小 MCP server 的連通性，避免在正式任務裡才踩到進程啟動或編碼問題。

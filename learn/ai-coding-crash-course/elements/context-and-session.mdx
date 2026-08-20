@@ -1,0 +1,120 @@
+---
+id: context-and-session
+title: Context、Context Window 與 Session
+subject: ai-coding-crash-course
+tier: 1
+order: 4
+type: article
+nodes:
+  - ai-coding-crash-course/agent-anatomy
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ab:1003-1128]]"
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ac:1-31]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# Context、Context Window 與 Session
+
+## Problem Statement
+
+AI coding agent 並不是憑空「理解」你的專案。它每一次回應，都只能依賴當下被送進模型的那一包資訊：指示、參數、工具定義、工具呼叫、訊息歷史，以及其他 harness 注入的文字。這整包可用資訊，就是 context。
+
+問題在於，很多人會把對話歷史、工具輸出與系統注入內容視為背景噪音，卻忽略它們其實都會被 token 化並一起送進模型。於是你很容易不知道代理現在到底看到了什麼、為什麼成本越來越高、也不知道一段長對話何時已經變成一個龐大而混亂的 session。
+
+## Why it matters
+
+如果你不理解 context，就很難正確管理 agent。你可能以為自己只是在「補一句話」，實際上卻是在要求模型重新處理整段歷史；你也可能以為新開的對話是從零開始，但 harness 早已先注入 system prompt，讓模型一開始就帶著角色、工具與高階規則工作。
+
+這件事直接影響兩個面向：
+
+- 成本：每個送進模型的 token 都可能被計費，所以不相關的 context 不是免費背景。
+- 品質：context 太多、太雜時，模型會像人一樣分心，難以抓住真正重要的限制與目標。
+
+理解 context、context window 與 session，是後續討論清空 context、compaction、handoff 與 steering 的地基。
+
+## How it works
+
+Context 是模型在做 next-token prediction 前能使用的全部資訊。對 AI coding agent 而言，這通常包含：
+
+- system prompt
+- 你的訊息
+- 先前輪次留下的訊息歷史
+- 工具的定義與參數 schema
+- 工具呼叫與工具結果
+- harness 額外注入的規則或提醒
+
+這些內容會被轉成 tokens，放進一次 model provider request。模型不會直接看到「專案本身」，而是看到 harness 替它整理並送出的文字化脈絡。
+
+Context window 則是這包資訊的最大容量。課程把它描述為一個有些任意、由模型供應商決定的上限；超過這個上限，request 就會失敗。不同模型的上限不同，例如課程舉了約 1M 或 1.1M tokens 的大窗口模型，也提到 128k 這類較小的窗口。重點不是背數字，而是知道：context window 是硬容量限制，不是品質保證。
+
+Session 是多個 turns 累積起來的 context。harness 不會真的從零開始，因為它一開始就會注入 system prompt；之後每多一輪互動，更多訊息、工具呼叫與結果都會被帶進後續 request。久而久之，一段原本簡單的對話就會變成一個有歷史包袱的 session。
+
+相鄰課程片段也補上了操作層面的 vocabulary：你可以清空 context、壓縮 session，或切到另一個獨立 session 後再回來。要做出這些選擇，前提是你先知道自己正在操作的是 context，而不是某種神祕、不可見的「AI 記憶」。
+
+## In plain terms
+
+白話說，context 就是代理這一刻桌上攤開的所有資料；context window 是桌子的大小；session 則是你在同一張桌子上連續工作一整段時間後，桌上慢慢堆出來的那一疊文件。
+
+桌子不是空的開始，因為 harness 先幫代理放上 system prompt。之後每講一句話、每跑一次工具、每拿到一次輸出，桌上都會再多幾張紙。當紙越堆越多，你就要開始在意它到底還值不值得繼續留在桌上。
+
+## Analogy
+
+把 AI coding agent 想成一位坐在會議室裡的工程師。你、harness 與工具系統會不斷把資料遞給他：需求、規則、檔案讀取結果、剛剛做過的操作紀錄。這些資料一起構成他此刻的工作脈絡，也就是 context。
+
+會議桌本身有大小限制，這就是 context window。桌上如果堆不下，新的資料就根本放不上去；而同一場持續數小時的會議，桌上的文件會越來越多，這整段累積過程就是 session。理解 session，不是把它當成聊天室，而是把它當成一段逐步堆積脈絡的工作現場。
+
+## Practical use
+
+- 在 request logs 中實際查看 system prompt，確認 harness 一開始到底注入了哪些角色、工具與規則。
+- 把 context 視為要管理的資產，只保留值得持續送進模型的內容。
+- 當 session 變長時，主動思考是要清空、壓縮，還是切到另一個 session，而不是無限延長同一段對話。
+- 討論問題時使用精確詞彙：context、context window、session、turn、model provider request，這能幫你更準確地定位問題出在哪一層。
+- 比較不同 agent 或 harness 時，不只看模型本身，也看它們各自的 system prompt 與注入方式，因為送進模型的文字會明顯不同。
+
+## Prerequisites
+
+- [[learn/ai-coding-crash-course/elements/state-context-cost|State、Context 與成本]]：理解 agent 的 state 與 context 如何互相區分，以及為什麼每次 request 都會累積成本。
+- 基本了解 turn、tool call 與 tool result，因為它們都會成為 context 的一部分。
+
+## Connections
+
+- [[learn/ai-coding-crash-course/elements/state-context-cost|State、Context 與成本]] — 這個元素定義「代理當下看得到什麼」；state-context-cost 則補上這些內容如何在 session 中累積，並轉成品質與成本壓力。兩者一起建立 context 管理的基本心智模型。
+- [[learn/ai-coding-crash-course/elements/attention-smart-zone|注意力退化與 Smart Zone]] — context-and-session 說明 context 是什麼、session 如何形成；attention-smart-zone 則進一步說明為什麼 context 變大後，模型的注意力與可靠性會逐步下降。
+- [[learn/ai-coding-crash-course/elements/compaction|Compaction 壓縮機制 (Compaction)]] — 只有先理解 session 是累積中的 context，才會知道 compaction 為什麼是在保留關鍵脈絡的同時，把長 session 重新濃縮成新 session 的必要技術。
+- [[learn/ai-coding-crash-course/elements/handoff|Handoff 跨代理交接 (Handoff)]] — handoff 也是在處理 session 的延續問題，但它把脈絡寫成可攜式文件，目的是跨代理、跨目錄或跨人傳遞，而不只是留在同一個 session 內管理。
+
+## Deep dive
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ab:1003-1128]] — 定義 context 是模型可用的全部資訊，說明 system prompt、工具與訊息歷史都會被 token 化送進 request；同段也定義 context window 的上限性質、指出 harness 不會從零 context 開始，以及 session 是多個 turns 累積起來的 context。
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ac:1-31]] — 補足 session navigation 的詞彙與操作面：可以 clear context、compact session，或切到另一個 session，再回來；也提醒讀者去 request logs 觀察 system prompt 與實際送出的內容。
+
+## Questions
+
+### Q1. 什麼是 context？
+
+A1. Context 是模型在產生下一個 token 前可使用的全部資訊，包含 system prompt、訊息歷史、工具定義、工具呼叫、工具結果，以及 harness 注入的其他內容。
+
+### Q2. context window 是什麼？
+
+A2. Context window 是單次 model provider request 可容納的最大 token 容量。超過上限時，request 會失敗；但沒超過上限，也不代表品質一定好。
+
+### Q3. 為什麼說 harness 不會讓 context 從零開始？
+
+A3. 因為在你輸入任何內容前，harness 通常已先注入 system prompt，告訴模型它的角色、可用工具與高階規則，所以新 session 一開始就已經帶有一些 context。
+
+### Q4. session 跟單一 turn 有什麼差別？
+
+A4. Turn 是一次互動循環；session 是多個 turns 累積起來的整段上下文歷史。session 越長，後續 request 攜帶的 context 通常越多。
+
+### Q5. 為什麼理解 context 會影響成本？
+
+A5. 因為每個送進模型的 token 都可能被計費。若你把大量不相關的歷史與輸出留在 context 中，之後每輪 request 都要反覆把它們送出去。
+
+### Q6. 課程為什麼強調查看 request logs 與 system prompt？
+
+A6. 因為那能讓你直接看到代理實際拿到什麼資訊，避免把 agent 的行為想像成黑箱，也能理解不同 harness 為何會產生不同結果。
+
+### Q7. clear context、compact session 與切到另一個 session，處理的是同一個核心問題嗎？
+
+A7. 是。它們都在處理同一件事：當前 session 累積的 context 是否還值得繼續帶進下一輪工作，只是保留脈絡的程度與跨 session 的方式不同。

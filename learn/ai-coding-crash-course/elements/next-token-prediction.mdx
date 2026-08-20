@@ -1,0 +1,106 @@
+---
+id: next-token-prediction
+title: 次一 token 預測與非決定性 (Next-token Prediction and Non-determinism)
+subject: ai-coding-crash-course
+tier: 1
+order: 2
+type: article
+nodes:
+  - ai-coding-crash-course/agent-anatomy
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ab:501-687]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# 次一 token 預測與非決定性 (Next-token Prediction and Non-determinism)
+
+## Problem Statement
+
+AI coding agent 有時會對同一個要求給出不同答案，甚至在看似相同的設定下採取不同操作。若把模型想成一個固定的規則引擎，就會把這些差異誤判成工具故障、設定錯誤，或以為只要把 temperature 調到最低就能完全重現結果。
+
+要理解代理為什麼會變動，必須先掌握模型在做什麼。模型不是先想好一份完整答案再照稿輸出，而是根據目前已經看見的內容，反覆預測下一個 token，再把選出的 token 接回輸入，繼續預測下一步。每一步的選擇都可能改變後續路徑，因此非決定性是這種生成方式內建的特性。
+
+## Why it matters
+
+這個心智模型會改變你對 AI coding agent 的期待。你不應要求它每次都重演同一條路徑，也不應把講師示範成功視為自己的代理必然會得到同樣結果。不同取樣結果可能讓代理探索不同解法，有時反而得到更好的程式碼、解釋或設計。
+
+非決定性也代表代理永遠存在做出奇怪或不理想行動的非零機率。當代理擁有檔案系統、bash 或其他工具權限時，這不只是答案風格不同的問題，也會成為權限與風險管理問題。可靠的工作流程因此不能只依賴模型每次剛好選對，而要搭配清楚的邊界、驗證與適當權限。
+
+## How it works
+
+模型會把目前輸入轉換成 token，然後對可能出現的下一個 token 分配機率。例如在某個上下文中，候選 token 可能是 `red` 28%、`blue` 40%，以及較低機率的 `orange`。這些數字不是模型直接輸出的答案，而是 sampler 用來做選擇的分布。
+
+基本流程可以拆成四步：
+
+1. 模型讀取目前的上下文，包含提示、對話、工具結果與已產生的文字。
+2. 模型為下一個位置的多個候選 token 計算機率。
+3. Sampler 按照這些機率取樣一個 token，而不是永遠選機率最高者。
+4. 被選出的 token 加入上下文，模型再預測下一個 token，直到完成文字或工具呼叫。
+
+Temperature 會影響取樣分布。高 temperature 讓選擇更分散，低 temperature 讓選擇更集中，因此高 temperature 通常更隨機，低 temperature 通常更接近決定性。但「每次都選最可能的 token」並不一定是好事。課程引用的研究指出，過度追求最可能路徑會落入 likelihood trap：輸出雖然看起來更可預測，人的評價卻可能更差，因為語言品質需要一定程度的多樣性。
+
+即使 temperature 設成 0，也不能保證完全可重現。大型語言模型的計算高度平行，底層計算的執行順序可能造成微小差異；這些微小差異在逐 token 生成中可能一路放大，最後變成不同的回答或行動序列。
+
+## In plain terms
+
+模型每次都在回答「接下來最合理的 token 是什麼」，而不是從腦中取出一個已經完成的答案。它會根據機率挑選下一步，挑完後再用新的內容決定下一步。只要某一步不同，後面的整段輸出就可能跟著不同。
+
+Temperature 像是把選擇範圍調窄或調寬的旋鈕。調低可以減少變化，卻不能把模型變成絕對固定的計算器；而且最固定的路徑也不一定是最好的路徑。
+
+## Analogy
+
+把模型想成一位即興作家，每寫一個字，都會看著目前的句子，從幾個可能的下一字中選一個。低 temperature 像是要求他大多選最常見、最保守的字，高 temperature 則允許他選擇較少見但可能更有趣的字。
+
+如果你強迫作家每次都選機率最高的字，文章可能穩定，卻也可能變得平庸。更重要的是，即使你把選擇限制得很窄，幾位作家在非常複雜的平行計算中，仍可能因細微差異走向不同句子。AI coding agent 的輸出差異，就像這位作家每次即興時稍微改變了開頭，最後寫出不同的段落。
+
+## Practical use
+
+- **接受合理的變異**：同一個 prompt 得到不同結果是預期行為，不要把一次成功當成唯一正確路徑。
+- **不要迷信 temperature 0**：低 temperature 能降低隨機性，但不能保證結果完全重現，也不保證品質最佳。
+- **用驗證取代重現幻想**：讓代理執行測試、type-check、lint 或其他可觀察檢查，確認結果是否真的符合要求。
+- **把權限當作風險邊界**：既然代理有非零機率做出奇怪行動，就只授予任務需要的工具與權限，對破壞性操作保留人工確認。
+- **比較多次結果**：遇到重要設計或實作決策，可以用同一要求跑幾次，觀察不同路徑的共同點與差異，再做判斷。
+- **改善上下文與 harness**：結果差異不只來自模型，也取決於送入的上下文、工具與環境；先確認代理得到的資訊與能力是否適合任務。
+- **為不確定性設計流程**：把工作拆成可驗證的小步驟，讓偶發的錯誤較早暴露，而不是等到整個功能完成後才發現路徑走偏。
+
+## Prerequisites
+
+- [[learn/ai-coding-crash-course/elements/model-harness-environment|代理、模型、外殼與環境 (Agent, Model, Harness, Environment)]]：先分清楚模型與 harness，才能理解這裡討論的是模型生成機制，而不是整個 agent 的全部行為。
+- Token 與上下文（context）的基本概念。
+
+## Connections
+
+- [[learn/ai-coding-crash-course/elements/model-harness-environment|代理、模型、外殼與環境 (Agent, Model, Harness, Environment)]] — 次一 token 預測描述的是 model 這個核心引擎；harness 再把它接上工具與 environment，讓生成結果可能轉化為檔案修改或其他操作。
+- [[learn/ai-coding-crash-course/elements/state-context-cost|狀態、上下文與成本 (State, Context, and Cost)]] — 模型每一步都依賴目前送入的上下文，而 session 累積的狀態會改變後續預測；上下文大小也會影響每次請求的成本。
+- [[learn/ai-coding-crash-course/elements/hallucination-diagnosis|Factuality 與 Faithfulness 幻覺]] — 非決定性提高了代理走向不同答案的可能性；當其中一條路徑產生錯誤時，需要區分是缺少事實來源，還是沒有忠實使用已有上下文。
+
+## Deep dive
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ab:501-687]] — 課程說明模型如何為候選 token 分配機率，再由 sampler 按加權隨機性選取；同時解釋 temperature 對隨機性的影響、likelihood trap、temperature 0 仍可能不具可重現性，以及非決定性對代理行為與權限風險的意義。
+
+## Questions
+
+### Q1. 模型的核心工作是什麼？
+
+A1. 模型根據目前上下文，為可能出現的下一個 token 分配機率，再由 sampler 選出一個 token，接著重複這個流程直到完成輸出或工具呼叫。
+
+### Q2. Temperature 改變了什麼？
+
+A2. Temperature 改變取樣分布的集中程度。高 temperature 讓候選選擇更分散、結果更隨機；低 temperature 讓選擇更集中、結果更接近決定性。
+
+### Q3. 為什麼永遠選機率最高的 token 可能是陷阱？
+
+A3. 因為最可能的局部選擇不一定形成品質最好的完整輸出。過度追求最可能路徑可能落入 likelihood trap，讓結果更單調，人的評價反而更差。
+
+### Q4. Temperature 0 是否保證每次輸出完全相同？
+
+A4. 不保證。大型模型的平行計算可能因執行順序造成微小差異，而逐 token 生成會把早期差異放大成不同的後續輸出。
+
+### Q5. 非決定性對 AI coding agent 的實務風險是什麼？
+
+A5. 代理可能在相同要求下採取不同甚至奇怪的行動。若它擁有工具或檔案系統權限，應以最小權限、人工確認與可重複驗證來降低風險。
+
+### Q6. 為什麼非決定性不一定是缺點？
+
+A6. 因為一定程度的多樣性能讓模型探索不同表達與解法；強迫它永遠走最可能路徑，可能得到穩定卻品質較差、過度單調的結果。

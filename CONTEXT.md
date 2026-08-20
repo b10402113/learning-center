@@ -45,8 +45,8 @@ A per-node, per-strand rating of the learner's current understanding (`unknown |
 The per-step verification stage (`/tackle <step-id>`): a runtime, adaptive MCQ session. Questions are generated on the fly from the step's elements, and targeted at the strands the node's probe (`/probe <subject>/<node-id>`) rated `unknown` or `partial` — `solid` strands get a light spot-check or are skipped. Starting level anchors to MEMORY and the probe's strand ratings, and difficulty adapts in real time to the learner's answers (correct → harder, wrong → easier, probing the edge of understanding). Passing means the system estimates the step's concepts at `solid` mastery — e.g. N consecutive correct at target difficulty — not a fixed score threshold. Passing marks the step complete and writes the mastery back, keeping the system calibrated.
 _Avoid_: quiz, test, exam
 
-**Tune**:
-The voice profile of a YouTuber, extracted into `tune/<author-slug>/TUNE.md` and applied through a subject's `MEMORY.md` frontmatter. Scope is `steps` (step articles only), `elements-steps` (element prose too, sections kept), or `all` (also edges). Steps are the article carriers, so teaching voice applies to them; elements stay neutral dictionary prose.
+**Polish template**:
+A hand-written style guide in `polish/<author-slug>/polish.md`, chosen per subject at `/learn-init` and stored in `MEMORY.md` frontmatter (`polish: <slug | none>`). `/nodes` drafts every step article directly in the subject's `language`, then dispatches `polish-agent` with the template to rewrite the `## Lesson` body in plain, easy-to-read language in that style. `polish: none` skips polishing. Applies to step articles only, never elements or edges.
 _Avoid_: tone, style
 
 **Spine**:
@@ -80,3 +80,21 @@ _Avoid_: progress %, points
 
 **Progress**:
 Per-subject state split in two: **mastery** (measurement from `/probe` and `/tackle`, persisted in a file so `/nodes` calibrates step depth and `/tackle` targets weak strands) and **step completion** (UI display state kept client-side).
+
+## Verification
+
+**Deterministic check**:
+A check a script can run mechanically, limited to **format correctness** — required frontmatter, ID/filename match, step↔DAG consistency, `teaches` agreement, link resolution, element section presence, digest `source_hash`, source-locator resolution, node-count baseline, polish-template resolution. It never judges prose quality or content semantics. Runs in the verification script, never by the LLM.
+_Avoid_: lint, mechanical check
+
+**Format check**:
+A deterministic check on an article's structure and links — frontmatter keys, ID/filename match, DAG consistency, reference resolution, section presence. Prose style and content semantics are deliberately out of scope; the script never fails an article over how it is written.
+_Avoid_: prose check, style check
+
+**Judgment check**:
+A check that needs LLM reading — depth-matches-calibration, contradictory or stale claims, polish-style conformance, verb nominalization, jargon. Not a per-node pipeline gate: the verification script checks format only, and the LLM only fixes what the script flags — it never re-reads an article to judge its prose. The learner is the final judge of these qualities.
+_Avoid_: review, audit
+
+**Verification script**:
+The single CLI that runs all deterministic format checks, with two scopes — `--subject` (whole-subject lint, used by the AGENTS.md periodic lint) and `--node <subject>/<node-id>` (per-node gate in `/nodes` step 11). Emits a compact report the LLM reads instead of re-reading every file.
+_Avoid_: linter, checker, test script

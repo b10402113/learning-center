@@ -1,0 +1,99 @@
+---
+id: hallucination-diagnosis
+title: Factuality 與 Faithfulness 幻覺
+subject: ai-coding-crash-course
+tier: 1
+order: 4
+type: article
+nodes:
+  - ai-coding-crash-course/agent-thinking-and-cost
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ac:668-959]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# Factuality 與 Faithfulness 幻覺
+
+## Problem Statement
+
+AI coding agent 說得很有把握，不代表內容是真的。它可能捏造世界上的事實，也可能明明已經拿到正確資料，卻在回答或執行時偏離那些資料。若只把兩種錯誤都叫作「幻覺」，就會用錯修正方法：該補資料時清 session，或該清理上下文時繼續搜尋。
+
+診斷的核心問題是：代理犯錯時，所需資訊是否已經在它的 context window 裡？
+
+## Why it matters
+
+這個區分直接決定修復策略，也決定你是否能信任代理產出的程式碼、API 用法、價格與版本資訊。課程示範中，Opus 4.8 很有自信地提供過時的 X/Twitter API 價格，直到網路搜尋才揭露真實狀況。語氣的確定性不能取代來源。
+
+如果資訊根本不在上下文裡，問題通常是模型的參數知識缺漏或 knowledge cutoff。若資訊已經在上下文裡，卻被模型忽略，則更可能是上下文過長、注意力退化，讓代理落入 dumb zone。兩者需要不同的介入方式。
+
+## How it works
+
+- **Factuality hallucination**：模型捏造或錯誤描述世界上的事實。它依賴訓練時壓縮進參數的 parametric knowledge，而這份知識既不完整，也有固定的 cutoff。參數知識像模糊的 JPEG，不能在對話中直接打補丁；要改變模型本身，通常需要重新訓練。
+- **Faithfulness hallucination**：正確資訊已經存在 context window，模型卻沒有忠實依照它回答或行動。這不是「不知道」，而是「沒有跟著已知資料走」。上下文資訊通常能大幅降低幻覺，但不是永久治癒；當上下文變長、注意力品質下降時，偏離仍可能發生。
+
+可以用一個兩分支決策樹診斷：
+
+1. 先找出代理錯誤所依據的事實，確認它是否明確存在於當前上下文。
+2. 若不在上下文，視為 factuality 問題。載入可靠來源、版本文件或工具結果，不要信任沒有來源的 LLM 回答。
+3. 若已在上下文，視為 faithfulness 問題。縮短或整理 context，重新開始 session，或讓代理離開 dumb zone 後再重試。
+
+## In plain terms
+
+Factuality 是代理沒有這張地圖，卻自信地畫了一張錯地圖。Faithfulness 是地圖已經攤在桌上，代理卻走了另一條路。
+
+## Analogy
+
+把模型想成一位工程師。Factuality hallucination 像工程師沒看過最新 API 文件，卻憑多年以前的記憶報價；解法是把最新文件交給他。Faithfulness hallucination 像文件已經放在桌上，但桌面堆滿舊筆記，他注意力下降而引用了錯誤版本；解法是清桌面、標出關鍵段落，必要時換一張新桌子。
+
+## Practical use
+
+- **先問 context 裡有沒有證據**：不要先猜模型「為什麼變笨」，先定位錯誤主張，再檢查相關資料是否真的被送進請求。
+- **缺資料就補來源**：遇到版本、價格、API schema 或外部世界狀態，載入最新官方文件、搜尋結果或專案內的權威檔案。
+- **有資料卻偏離就清上下文**：移除無關歷史、壓縮 session 或開新 session，讓關鍵資訊重新處於可注意的位置。
+- **要求可驗證輸出**：讓代理列出依據的檔案、版本、URL 或命令結果；沒有來源的答案先當作待驗證假設。
+- **把錯誤類型記錄下來**：標註是缺少上下文，還是忽略既有上下文，避免每次都用相同的修復手段。
+- **在程式碼合併前核對外部事實**：特別檢查第三方 API、價格、權限、deprecated 行為與最新版本差異。
+
+## Prerequisites
+
+- [[learn/ai-coding-crash-course/elements/attention-smart-zone|Attention 與 Smart Zone]]：理解上下文變長後，代理為何可能從 smart zone 退化到 dumb zone。
+- [[learn/ai-coding-crash-course/elements/state-context-cost|State、Context 與成本]]：理解 session 狀態、context window 與上下文內容之間的關係。
+- [[learn/ai-coding-crash-course/elements/compaction|Compaction 壓縮機制 (Compaction)]]：理解如何在保留關鍵脈絡的同時降低上下文負載。
+
+## Connections
+
+- [[learn/ai-coding-crash-course/elements/attention-smart-zone|Attention 與 Smart Zone]] — faithfulness 幻覺常在注意力退化、代理落入 dumb zone 時加劇；辨識 smart zone 邊界有助於判斷何時清理上下文。
+- [[learn/ai-coding-crash-course/elements/state-context-cost|State、Context 與成本]] — state 決定哪些歷史被帶入 context，context 的內容又影響代理是否能忠實使用已知資訊；幻覺診斷因此不能脫離 session 管理。
+- [[learn/ai-coding-crash-course/elements/token-billing-cache|Token Billing 與 Cache]] — 每次請求的上下文都會產生成本，即使快取能降低部分輸入費用；清理無關上下文同時改善 faithfulness 與帳單。
+- [[learn/ai-coding-crash-course/elements/effort-reasoning|Effort、Reasoning Tokens 與 Chain-of-Thought]] — 提高 effort 可能讓代理投入更多推理並發現矛盾，但不能替代缺少的來源；先判斷 factuality 或 faithfulness，再決定是否增加推理成本。
+
+## Deep dive
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ac:668-959]] — hallucination 的 factuality 與 faithfulness 定義、parametric knowledge 的 cutoff 與模糊壓縮、contextual knowledge 的限制、X/Twitter API 價格示範，以及「資訊是否在 context」的兩分支診斷樹。
+
+## Questions
+
+### Q1. Factuality hallucination 與 faithfulness hallucination 的差別是什麼？
+
+A1. Factuality 是代理捏造或錯誤描述世界事實，因為必要資訊不在 context 或模型參數知識已過時；faithfulness 是正確資訊已在 context，代理卻偏離或忽略它。
+
+### Q2. 面對沒有來源的 LLM 回答，最基本的原則是什麼？
+
+A2. 不要把自信語氣當成證據。先載入並核對可靠來源，再接受外部事實、版本、價格或 API 行為的主張。
+
+### Q3. 為什麼 contextual knowledge 能降低幻覺，卻不能完全消除幻覺？
+
+A3. 上下文提供了模型可依據的具體資訊，但模型仍可能因上下文過長與注意力退化而沒有忠實使用它，形成 faithfulness hallucination。
+
+### Q4. 如果錯誤資訊不在 context，應該怎麼修復？
+
+A4. 把可靠的文件、搜尋結果、版本資訊或專案檔案載入 context，並要求代理以這些來源為依據重新回答。
+
+### Q5. 如果正確資訊已經在 context，卻仍然答錯，應該優先做什麼？
+
+A5. 把它當作 faithfulness 問題，先清理無關上下文、壓縮或重開 session，讓代理離開 dumb zone 後再重試。
+
+### Q6. 提高 effort 是否能解決所有 hallucination？
+
+A6. 不能。更多 reasoning tokens 可能改善複雜推理與矛盾檢查，但無法取代缺少的事實來源，也不能保證代理忠實遵守已存在的 context。

@@ -313,6 +313,33 @@ export function ReaderPage({
   // A node is complete iff every step in its DAG is complete (ADR-0005).
   const nodeComplete = nodeSteps.length > 0 && nodeSteps.every((s) => completedSteps.has(s.id));
 
+  const stepDirectory = nodeSteps.length ? (
+    <div className="toc-complete">
+      <div className="lbl">Steps · 本課目錄</div>
+      {nodeSteps.map((s) => {
+        const done = completedSteps.has(s.id);
+        const isCurrent = mode === "step" && s.stepId === step!.stepId;
+        return (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => {
+              if (isCurrent) onToggleStep(s.id);
+              else onNavigateStep(graph.subject, node!.id, s.stepId);
+            }}
+            className={cn("toc-link toc-index-item", done && "on")}
+            aria-current={isCurrent ? "page" : undefined}
+            title={s.title}
+          >
+            <span className={cn("toc-index-dot", done && "on")} aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate text-left">{s.title}</span>
+          </button>
+        );
+      })}
+      {nodeComplete ? <span className="toc-complete-badge">節點完成</span> : null}
+    </div>
+  ) : null;
+
   // Footer prev/next shares a shape across modes: an element (by element order),
   // a course-ordered node, or a node's step (by DAG order). Steps carry their
   // `stepId` for navigation; nodes/elements carry their `id`.
@@ -365,6 +392,7 @@ export function ReaderPage({
               </div>
             ))}
           </div>
+          {mode === "step" && stepDirectory ? <div className="element-leftnav-bottom">{stepDirectory}</div> : null}
         </aside>
       ) : null}
 
@@ -673,32 +701,17 @@ export function ReaderPage({
             </div>
           ) : (
             <>
-              {nodeSteps.length ? (
+              {mode === "node" && nodeSteps.length ? (
                 <div className="toc-complete">
-                  <div className="lbl">
-                    {mode === "step" ? "Steps · 本課目錄" : "進度 · Steps"}
-                  </div>
+                  <div className="lbl">進度 · Steps</div>
                   {nodeSteps.map((s) => {
                     const done = completedSteps.has(s.id);
-                    const isCurrent = mode === "step" && s.stepId === step!.stepId;
                     return (
                       <button
                         key={s.id}
                         type="button"
-                        onClick={() => {
-                          // The step page's TOC is a directory — a sibling step
-                          // navigates there; the current step toggles. The node
-                          // page's TOC keeps the completion checklist (ADR-0005),
-                          // while its central DAG cards handle navigation.
-                          if (mode === "step") {
-                            if (isCurrent) onToggleStep(s.id);
-                            else onNavigateStep(graph.subject, node!.id, s.stepId);
-                          } else {
-                            onToggleStep(s.id);
-                          }
-                        }}
+                        onClick={() => onToggleStep(s.id)}
                         className={cn("toc-link toc-index-item", done && "on")}
-                        aria-current={isCurrent ? "page" : undefined}
                         title={s.title}
                       >
                         <span className={cn("toc-index-dot", done && "on")} aria-hidden="true" />
@@ -706,9 +719,7 @@ export function ReaderPage({
                       </button>
                     );
                   })}
-                  {nodeComplete ? (
-                    <span className="toc-complete-badge">節點完成</span>
-                  ) : null}
+                  {nodeComplete ? <span className="toc-complete-badge">節點完成</span> : null}
                 </div>
               ) : null}
               {mode === "step" && step!.teaches.length ? (

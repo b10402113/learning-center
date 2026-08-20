@@ -1,0 +1,90 @@
+---
+id: profile
+title: Profile（Agent 配置）
+subject: geek-ai-agent
+tier: 2
+order: 5
+type: article
+nodes:
+  - geek-ai-agent/oryxos-build
+sources:
+  - "[[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#terminology]]"
+  - "[[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#profile-config]]"
+  - "[[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#workspace-init]]"
+  - "[[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#config-keys]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#support-modules]]"
+created: 2026-08-19
+updated: 2026-08-19
+---
+
+# Profile（Agent 配置）
+
+## Problem Statement
+
+「Agent 是配置出來的，不是寫出來的」是 Agent OS 的一句口頭禪，但配置到底配什麼？如果沒有定義清楚的配置格式，每個 Agent 的創建過程就會退回成寫代碼，Agent OS 也就退化成了框架。Profile 就是讓這句話成立的載體：一份 YAML 文件，完整描述一個 Agent。
+
+## Why it matters
+
+Profile 是 OryxOS 一切模塊的掛鉤點。Provider 選哪個、Tool 給哪些、走哪個通道、系統提示詞是什麼，全部由 Profile 決定。理解了 Profile，你就理解了「多個 Agent 共存」這個最小「OS」形態在核心階段是怎麼實現的。
+
+## How it works
+
+Profile 是一份 YAML 文件，五組欄位描述一個 Agent 的全部配置：
+
+| 欄位組 | 內容 |
+| --- | --- |
+| identity（身份） | 名稱、描述、persona 提示詞，或引用 SOUL.md |
+| provider（模型） | 供應商、模型、參數，可選 fallback |
+| tools（工具） | 工具清單，可帶參數 |
+| channels（通道） | 這個 Agent 接哪些通道 |
+| bootstrap（引導文件） | 啟動時載入系統提示詞的文件 |
+
+`oryxos init` 會創建 `.oryxos/` 工作區，包含五個子目錄（profiles/、sessions/、skills/、logs/、tools/）、三個 bootstrap 文件（AGENTS.md、SOUL.md、USER.md）和一個開箱即用的默認 Profile（profiles/default.yaml）。bootstrap 文件會自動載入系統提示詞，讓 Agent 知道項目背景、自己的身份和用戶偏好。通過 `oryxos profile create/list/show` 管理 Profile，也可以直接改 YAML。Profile 的修改在下次 Agent 啟動時生效，不需要重啟 OryxOS。
+
+多個 Profile 可以在同一實例上共存，每個 Profile 就是一個 Agent，這是核心階段最小化的「OS」體現。敏感配置（LLM API key、Provider 憑證、MCP 憑證）不寫進 Profile YAML，而是通過環境變量或單獨的本地配置文件載入，Profile 裡用 `${ENV_VAR}` 佔位符引用，這是一天就要做的責任，不散落在各模塊。
+
+技術方案裡，Profile 由 ProfileLoader 解析校驗，ProfileRegistry 做內存索引，格式不合法的 Profile 記日誌但不阻擋啟動。ContextLoader 把 bootstrap 和 SKILL.md 統一載入成系統提示詞上下文，每次組裝提示詞都重新讀取，不緩存。
+
+## In plain terms
+
+Profile 就是一個 Agent 的「簡歷」。一份 YAML 寫清楚這個 Agent 叫什麼、用哪個模型、能碰哪些工具、從哪個門進出、開機時讀哪些說明書。換個簡歷就是換個 Agent，不用重新開發。
+
+## Analogy
+
+Profile 像一台機器的出廠配置單。同一條生產線（OryxOS），換一張配置單就能生產不同產品。機器內部怎麼轉不用管，配置單上寫清楚參數就行。敏感信息（密鑰）不寫在配置單上，存在保險櫃裡，配置單只寫「密鑰在保險櫃的哪一格」這個引用。
+
+## Practical use
+
+在動手階段，你創建第一個 Agent 的實際操作就是寫一份 Profile。先 `oryxos init` 生成工作區和默認 Profile，再編輯 YAML：改 persona 讓 Agent 有人設，選 Provider 讓它能叫模型，列工具讓它能幹活，選通道讓你能跟它說話。改完啟動 `oryxos chat --profile 名字`，這個 Agent 就上線了。
+
+## Prerequisites
+
+- 知道五項核心能力 — Profile 是把五項能力「串」起來的那份清單（見 [[learn/geek-ai-agent/elements/five-capabilities|五項核心能力 (The Five Core Capabilities)]]）
+- 會讀簡單 YAML — Profile 的載體
+
+## Connections
+
+- [[learn/geek-ai-agent/elements/five-capabilities|五項核心能力 (The Five Core Capabilities)]] — Profile 的五組欄位正好是能力的掛鉤點，一份 Profile 就是一個 Agent 的完整配置
+- [[learn/geek-ai-agent/elements/oryxos-architecture|技術方案 (The Technical Solution)]] — ProfileLoader/ProfileRegistry/ContextLoader 在技術方案裡對應支持模塊的具體實現
+- [[learn/geek-ai-agent/elements/react-loop|ReAct 循環 (The ReAct Loop)]] — Profile 載入的系統提示詞和工具清單，是 ReAct 循環每次組裝提示詞的輸入
+
+## Deep dive
+
+- [[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#profile-config]] — the Profile five field groups and lifecycle
+- [[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#workspace-init]] — the `.oryxos/` workspace layout and default Profile
+- [[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#config-keys]] — the env-var/`${ENV_VAR}` key-loading rule
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#support-modules]] — ProfileLoader / ProfileRegistry / ContextLoader implementation
+
+## Questions
+
+### Q1. Profile 有哪五組欄位？分別配置什麼？
+A1. identity（身份與 persona）、provider（模型）、tools（工具清單）、channels（通道）、bootstrap（啟動時載入系統提示詞的引導文件）。
+
+### Q2. 為什麼敏感配置不能寫進 Profile YAML？正確做法是什麼？
+A2. 因為 Profile 是給 Agent 用的配置，寫進去等於把密鑰散佈到各處。正確做法是通過環境變量或單獨的本地配置文件載入，Profile 裡用 `${ENV_VAR}` 佔位符引用，帶基本校驗和清晰的錯誤提示。
+
+### Q3. 「多個 Profile 共存」為什麼是核心階段最小化的 OS 形態？
+A3. 因為 Profile 就是 Agent，同一實例上跑多個 Profile 就是同一底座上跑多個 Agent。這已經體現了「統一底座、Agent 是配置不是代碼」的核心思想，雖然還沒有多租戶、SSO 這些治理能力。
+
+### Q4. Profile 修改何時生效？和「改配置不用重啟 OryxOS」矛盾嗎？
+A4. Profile 修改在下次 Agent 啟動時生效。不矛盾，重啟 OryxOS 指重啟整個服務，而 Profile 是按 Agent 粒度載入的，改一個 Agent 的 Profile 只需要重啟這個 Agent 的會話，整個系統不用動。

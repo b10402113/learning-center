@@ -1,0 +1,90 @@
+---
+id: react-loop
+title: ReAct 循環 (The ReAct Loop)
+subject: geek-ai-agent
+tier: 2
+order: 6
+type: article
+nodes:
+  - geek-ai-agent/oryxos-build
+sources:
+  - "[[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#react-loop]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#react-loop]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#key-decisions]]"
+  - "[[sources/geek-ai-agent/19 19. 项目篇 OryxOS：AI 编程指南.html#constitution]]"
+created: 2026-08-19
+updated: 2026-08-19
+---
+
+# ReAct 循環 (The ReAct Loop)
+
+## Problem Statement
+
+一個聊天機器人和一個 Agent 的差別在哪？聊天機器人答完就結束，Agent 會自己決定「我還要查個東西才能回答你」。這個「思考→行動→看結果→再思考」的循環，就是 Agent 的引擎。如果這個循環寫不清楚，Agent 要麼不調工具（退化回聊天機器人），要麼無限調工具（燒光 token），要麼調了工具卻不會用結果（答非所問）。
+
+## Why it matters
+
+ReAct 循環是整個 OryxOS 最關鍵的代碼，需求文檔和技術方案都強調要自研而不是用 Spring AI 的 Agent 抽象，目的就是讓實現者徹底理解這個機制。理解了它，你才看得懂其他所有模塊（Provider、Memory、Tool、Web Service）為什麼長成那樣，也才寫得出 AI 構建時最容易出錯的那段代碼。
+
+## How it works
+
+ReAct 是 Reason + Act 的縮寫，核心是讓模型交替進行「推理」和「行動」。OryxOS 的循環演算法如下：
+
+1. 把消息追加到 Session 歷史。
+2. 組裝提示詞。
+3. 調用 LLM。
+4. 如果 LLM 沒有要求調用工具，返回最終答案，循環結束。
+5. 否則執行工具，把工具結果作為 tool message 追加回對話。
+6. 回到第 2 步，直到得出最終答案或達到最大迭代次數。
+
+默認最大迭代次數是 10，可以在 Profile 裡覆寫，防止工具調用死循環。整個循環核心只有幾十行 Java 代碼，由三個模塊組成：ReActLoop（引擎本體，控制循環）、PromptBuilder（四段式提示詞組裝）、ToolExecutor（在工具註冊表裡找工具、過沙箱檢查、執行、包裝成 ToolResult 寫入 tool_invocations）。
+
+兩個工程細節決定成敗。一是訊息累積，每一輪的 LLM 響應和工具結果都追加進 Session 消息，整個鏈條可查、可審計，出了問題能回溯是哪一輪哪個工具出的錯。二是上下文截斷，上下文保持在系統提示詞加最近 N 輪（默認 20 輪，Profile 可配），超出的早期輪次直接截掉，防止上下文窗口爆掉。
+
+核心階段故意砍掉三樣東西：並行工具調用、Agent 之間委派、流式輸出。這些都是擴展功能。
+
+技術方案裡有一個最容易寫錯的坑，和 Spring AI 的邊界有關。Spring AI 只被當作協議轉換和 schema 生成的工具，它的自動工具執行必須關閉，否則工具會被調用兩次。用大白話說，Spring AI 負責把 OryxOS 的工具格式翻譯成模型認識的格式，但「要不要調工具、怎麼調」必須由 OryxOS 自己的 ReActLoop 決定，絕不能讓 Spring AI 也插一手。
+
+## In plain terms
+
+ReAct 循環就是「想一步、做一步、看看結果、再想下一步」的循環。你問它今天出門要不要帶傘，它先想「我需要天氣數據」（Reason），調天氣工具（Act），看到結果說「會下雨，帶傘」（看結果再 Reason），結束。循環停下來只有兩種情況，回答完了，或者繞了 10 圈還沒繞出來強制停。
+
+## Analogy
+
+把它想像成一個廚師做一道沒做過的菜。他先看菜譜決定下一步（Reason），動手切菜、開火（Act），嘗一口看味道對不對（看結果），不對就調整再嘗（再循環）。菜譜沒寫的菜他會一直試，所以後廚有條規定，最多試十次，十次不對就叫外賣（返回錯誤或最接近的答案）。
+
+## Practical use
+
+在 OryxOS 的動手階段，US-2 就是實現這個循環，也是整個構建最難的一塊。ReActLoop 主循環雖然只有幾十行，但工程部分（錯誤處理、日誌、訊息累積、迭代控制）要拆成 2–3 個子任務做。寫完之後用 Demo 一驗收：問它「查一下北京天氣並告訴我穿什麼」，它應該先調天氣工具再給建議。真正動筆前要確認 Spring AI 的自動工具執行已關閉，這是憲法第四條。
+
+## Prerequisites
+
+- 知道五項核心能力 — ReAct 是其中一項，也是整個系統的引擎（見 [[learn/geek-ai-agent/elements/five-capabilities|五項核心能力 (The Five Core Capabilities)]]）
+- 對 LLM 的 Function Calling 有基本認識 — 循環靠「模型輸出一個工具調用請求」來驅動
+
+## Connections
+
+- [[learn/geek-ai-agent/elements/five-capabilities|五項核心能力 (The Five Core Capabilities)]] — ReAct 是五項能力中最核心的引擎，其他能力都供養它
+- [[learn/geek-ai-agent/elements/oryxos-architecture|技術方案 (The Technical Solution)]] — 循環由 ReActLoop/PromptBuilder/ToolExecutor 三模塊實現，是九模塊裡 oryxos-core 的核心
+- [[learn/geek-ai-agent/elements/implementation-pitfalls|構建陷阱 (Implementation Pitfalls)]] — 「Spring AI 自動工具執行沒關閉導致雙調用」是這個循環最常見的寫錯方式
+
+## Deep dive
+
+- [[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#react-loop]] — the requirements-level algorithm and the "self-implemented, not Spring AI's Agent abstraction" rule
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#react-loop]] — the module breakdown (ReActLoop / PromptBuilder / ToolExecutor) and defaults
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#key-decisions]] — decision ① (self-implemented loop) and decision ② (Spring AI protocol-only, auto execution disabled)
+- [[sources/geek-ai-agent/19 19. 项目篇 OryxOS：AI 编程指南.html#constitution]] — constitution principle ③ and ④
+
+## Questions
+
+### Q1. 用一句話說清楚 ReAct 循環的演算法。
+A1. 追加消息→組裝提示詞→調 LLM→沒要求調工具就返回，要求了就先執行工具、把結果追加回去、再回到組裝提示詞，直到出最終答案或達到最大迭代次數（默認 10）。
+
+### Q2. 為什麼 OryxOS 要自研 ReAct 循環，不用 Spring AI 現成的 Agent 抽象？
+A2. 因為循環是 Agent 的核心機制，自研才能讓實現者徹底理解它，也只有自研才能完全控制循環行為。Spring AI 只負責協議轉換和 schema 生成，自動工具執行必須關閉，否則工具會被調用兩次。
+
+### Q3. 什麼機制防止工具調用死循環？默認值是多少？
+A3. 最大迭代次數，默認 10，可以在 Profile 裡覆寫。到頂強制結束循環。
+
+### Q4. 上下文截斷是怎麼做的？為什麼核心階段不做動態壓縮？
+A4. 上下文保持在系統提示詞加最近 N 輪（默認 20，Profile 可配），超出直接截掉。動態壓縮、語義召回這些更聰明的手段是擴展功能，核心階段以「能跑、簡單、可預期」優先。

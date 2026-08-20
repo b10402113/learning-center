@@ -8,4 +8,4 @@ Issues and specs live as markdown under `.scratch/<feature-slug>/`. See `docs/ag
 
 ### Domain docs
 
-Single-context. The learning-path vocabulary (node, element, edge, tier, subject, digest, tune) is defined in `AGENTS.md`. See `docs/agents/domain.md`.
+Single-context. The learning-path vocabulary (node, element, edge, tier, subject, digest, polish) is defined in `AGENTS.md`. See `docs/agents/domain.md`.

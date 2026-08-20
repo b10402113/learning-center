@@ -1,0 +1,110 @@
+---
+id: turn-tool-loop
+title: Turn、工具呼叫與工具結果 (Turn, Tool Calls, Tool Results)
+subject: ai-coding-crash-course
+tier: 1
+order: 3
+type: article
+nodes:
+  - ai-coding-crash-course/agent-anatomy
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ab:688-1002]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# Turn、工具呼叫與工具結果 (Turn, Tool Calls, Tool Results)
+
+## Problem Statement
+
+使用 AI coding agent 時，畫面上常常只像是「我下了一句指令，代理回了一段文字」。這個表面流程會掩蓋真正發生的事情：代理可能先向模型供應商發出請求，模型產生工具呼叫，外殼執行工具，再把工具結果送回模型，最後才整理出回覆。
+
+如果把這些不同層次都叫作「一次對話」或「一次 API 呼叫」，就很難讀懂 request logger，也很難判斷時間、token 與工具操作究竟花在什麼地方。課程要建立的精確詞彙是 model provider request、turn、tool call 與 tool result。
+
+## Why it matters
+
+這個循環是 Claude Code、Codex 以及其他 harness 能夠實際做事的基礎。模型本身只產生文字或結構化輸出，真正把輸出變成檔案修改、指令執行或其他環境操作的是 harness。
+
+它也直接影響你對成本與規模的理解。一個 turn 不一定只包含一次模型請求；它可能持續數小時，包含數百次 model provider requests。每一次請求都會帶上完整的 system prompt、工具 schema 與整段 conversation history，因此 session 越長，送出的內容也會越長。
+
+## How it works
+
+可以把一次代理互動拆成四個互相銜接的概念。
+
+- **Model provider request**：harness 傳給模型供應商的一次請求。請求包含 system prompt、可用工具的 schema，以及完整的對話歷史。即使使用者只輸入 `hello`，logger 仍可能記錄多個請求，其中可能包含代理內部的隱藏請求，例如 suggestion mode。
+- **Turn**：從一個使用者意圖開始，到代理完成這次工作並產生結果的整段活動。一個 turn 可以由多個 model provider requests 組成，而不是固定等於一次 API 呼叫。
+- **Tool call**：模型要求 harness 使用某個工具的結構化輸出。以寫檔為例，模型會產生 JSON，指定檔案路徑與內容；這些欄位與型別，早已在請求中的工具 schema 定義。
+- **Tool result**：harness 實際執行工具後，把執行結果回傳給模型。模型可以根據這個結果決定下一步，或在工作完成後產生最後的文字回覆。
+
+寫入檔案時，典型順序如下。
+
+1. 使用者要求代理建立或修改一個檔案。
+2. harness 把 system prompt、工具定義與目前的 conversation history 一起送出，形成 model provider request。
+3. 模型回傳 tool call，例如帶有檔案路徑與內容的 JSON。
+4. harness 依照 tool call 執行寫檔工具。
+5. harness 把成功、失敗或其他執行資訊整理成 tool result，再送回模型。
+6. 模型讀取 tool result，必要時繼續呼叫工具；完成後才產生 final message。
+
+因此，工具 schema 不是模型憑空知道的 API 文件。harness 必須先在請求中告訴模型有哪些工具、工具接受哪些欄位，以及它們的資料格式；模型再依照這個結構產生 tool call。
+
+## In plain terms
+
+代理不是「模型直接改了檔案」。比較準確的說法是：模型提出一個工具呼叫，harness 代它執行，執行結果再回到模型，模型依結果繼續工作或回覆你。
+
+而「一次 turn」也不是「一次 request」。一次 turn 是完整工作流程的容器，裡面可以反覆出現 request、tool call、tool result，直到代理完成任務。
+
+## Analogy
+
+把代理想成一位透過秘書工作的專家。你交代一件事後，專家先告訴秘書「請把這段內容寫入某個檔案」。這是 tool call。秘書真的去寫檔，回來說「完成」或「失敗」，這是 tool result。專家看完結果後，可能再請秘書讀另一個檔案或執行測試，最後才向你報告。
+
+整段從交辦到報告的工作是 turn；專家與秘書之間每一次往返，則是一次 model provider request 及其工具循環的一部分。
+
+## Practical use
+
+- **讀 request logger 時先找層次**：先辨認哪一段是 model provider request，再區分模型文字、tool call 與 tool result，不要把整份 log 當成單一回覆。
+- **追蹤檔案修改**：看到模型輸出的檔案路徑與內容 JSON 後，往後找對應的 tool result，確認 harness 是否真的執行成功。
+- **解釋代理為何多次往返**：代理需要先探索、執行工具，再根據結果決定下一步時，多個 provider requests 是正常流程，不代表每次都是新的使用者 turn。
+- **估算上下文負載**：理解每次請求都帶上 system prompt、工具 schema 與 conversation history，才能看出長 session 為何會持續增加輸入內容。
+- **排查「模型說做了但其實沒做」**：不要只看 final message；檢查是否存在實際 tool call，以及後續 tool result 是否顯示成功。
+
+## Prerequisites
+
+- [[learn/ai-coding-crash-course/elements/model-harness-environment|代理、模型、外殼與環境 (Agent, Model, Harness, Environment)]]：理解 harness 如何把模型接到環境與工具上。
+- [[learn/ai-coding-crash-course/elements/state-context-cost|Stateless Model、Stateful Harness 與環境記憶]]：理解 harness 為何需要保存並重新送出 session 內容。
+
+## Connections
+
+- [[learn/ai-coding-crash-course/elements/model-harness-environment|代理、模型、外殼與環境 (Agent, Model, Harness, Environment)]] — turn-tool loop 展開了 harness 的具體工作：它提供工具、執行 tool call，並把環境中的 tool result 帶回模型。
+- [[learn/ai-coding-crash-course/elements/state-context-cost|Stateless Model、Stateful Harness 與環境記憶]] — 因為模型本身無狀態，後續 provider request 必須重新帶上對話與工具結果；這正是 turn 能延續的機制。
+- [[learn/ai-coding-crash-course/elements/token-billing-cache|Token 計費、快取與 Prefix Cache (Token Billing, Caching & Prefix Cache)]] — 一個 turn 可能包含大量 provider requests，而每次請求都會涉及輸入與輸出 token；理解 loop 才能讀懂成本如何累積。
+- [[learn/ai-coding-crash-course/elements/context-counter|上下文計數器 (Context Counter)]] — system prompt、工具 schema、對話歷史與工具結果都會成為後續請求的上下文，context counter 可用來觀察這些內容如何累積。
+
+## Deep dive
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ab:688-1002]] — 課程透過 request logger 追蹤真實互動，說明 model provider request 會攜帶完整 system prompt、工具 schema 與 conversation history，並以寫檔示範 message → tool use → harness 執行 → tool result → final message 的循環；同時指出一個 turn 可以包含數百次 provider requests，這套 request、tool call、tool result 的往返是各種 agent harness 運作的基礎。
+
+## Questions
+
+### Q1. model provider request 是什麼？
+
+A1. 它是 harness 傳給模型供應商的一次請求，通常包含 system prompt、工具 schema 與完整 conversation history。
+
+### Q2. 一個 turn 是否等於一次 model provider request？
+
+A2. 不等於。一個 turn 是完整工作流程，可能包含數百次 model provider requests，並持續數小時。
+
+### Q3. tool call 與 tool result 分別是什麼？
+
+A3. tool call 是模型要求 harness 執行工具的結構化輸出，例如帶有路徑與內容的寫檔 JSON；tool result 是 harness 執行後回傳的結果。
+
+### Q4. 寫檔時，模型為什麼能產生正確格式的 JSON？
+
+A4. 因為 harness 先在 provider request 中提供工具 schema，定義工具名稱、欄位與資料格式，模型再依照這個結構產生 tool call。
+
+### Q5. 為什麼不能只看代理的 final message 來判斷工作是否完成？
+
+A5. 因為 final message 只是最後的文字回覆。要確認工作真的發生，還要檢查是否有對應的 tool call，以及 tool result 是否顯示工具執行成功。
+
+### Q6. 為什麼長 session 會讓後續請求變長？
+
+A6. 因為每次 model provider request 都會重新攜帶完整的 conversation history，歷史訊息與工具結果會隨 turn 的進展累積。

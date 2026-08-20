@@ -1,0 +1,182 @@
+---
+id: oryxos-architecture
+title: 技術方案 (The Technical Solution)
+subject: geek-ai-agent
+tier: 3
+order: 7
+type: article
+nodes:
+  - geek-ai-agent/oryxos-build
+sources:
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#solution-overview]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#key-decisions]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#architecture]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#project-structure]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#persistence]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#performance]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#rhythm]]"
+created: 2026-08-19
+updated: 2026-08-19
+---
+
+# 技術方案 (The Technical Solution)
+
+## Problem Statement
+
+需求文檔回答了「做什麼」，技術方案要回答「怎麼做」。五項能力用什麼技術棧實現、模塊怎麼切、數據怎麼存、性能指標怎麼達、四週怎麼排，全在這裡定案。如果技術選型拍板拍錯，後面所有構建工作都在錯誤的地基上蓋樓。
+
+## Why it matters
+
+技術方案是需求到代碼之間的橋。理解了七個關鍵決策和九個模塊的劃分，你就能看懂整個項目的骨架，也知道 AI 構建時哪些地方最容易跑偏。方案裡的關鍵決策還會被提煉成 AI 編程指南的憲法原則，約束後續所有代碼。
+
+## How it works
+
+好，需求定好了，五項能力列出來了。接下來問題是：拿什麼蓋？
+
+老王先幫你列一下你可能的第一反應：「用 Spring Boot + Spring AI，讓框架幫我把 Agent 跑起來，多省事。」聽起來很合理對吧？Spring AI 有現成的 Agent 抽象，直接用不就完了？
+
+不行。我們拆開看為什麼。
+
+Spring AI 的 Agent 抽象是個黑盒子。你把工具丟進去，它自己決定什麼時候調、調幾次。聽起來貼心，但你想完全掌控 Agent 的思考過程——每一步怎麼想、什麼時候決定用工具、用了之後怎麼反饋——你就管不了。相當於你請了個廚師，但他不讓你看菜單、不讓你管火候，你只能在門口等著上菜。
+
+所以第一個決策就定了：**ReAct 循環自己寫**。不依賴任何框架的 Agent 抽象。這是整個方案的靈魂。
+
+好，ReAct 循環自己寫，那 Spring AI 完全沒用了？
+
+也不是。Spring AI 有一個很有用的本事：**協議轉換**。不同的模型供應商（DeepSeek、Kimi、OpenAI）接 API 的方式不一樣，Spring AI 幫你把這些差異抹平，還能自動生成工具的 schema 描述。這些瑣碎的活兒，自己寫太累了，交給它正好。
+
+但這裡有一個**超級容易踩的坑**，老王必須點破：Spring AI 有一個「自動工具執行」的功能。你如果忘了關它，Spring AI 會幫你調用一次工具，然後你的 ReAct 循環又調一次——同一個工具被調了兩次，結果全亂了。這條是七個決策裡最容易寫錯的一條，沒有之一。
+
+方案的一句話總結是：**JDK 21 + Spring Boot 3.x + Spring AI Alibaba + 自研 ReAct 循環 + SQLite + Picocli**，打成一個可執行的 JAR 檔。就一個檔案，裝上就跑。
+
+### 七個關鍵決策
+
+好，我們把這七個決策攤開來看。每一個都不是隨便選的，每一個背後都有理由。
+
+**第一，ReAct 循環自己寫。** 理由剛才說了，你要掌控 Agent 的核心思考過程。
+
+**第二，Spring AI 只做翻譯，不做調度。** 它負責跟模型溝通、生成工具描述，但「要不要用工具」這個決定，只能由我們自己的 ReAct 循環來做。自動工具執行必須關掉。
+
+**第三，同步寫法，虛擬線程來扛併發。** 你可能會想，要做高併發是不是得搞一堆非同步、回調、CompletableFuture？不用。JDK 21 有虛擬線程，你寫的代碼還是直直的、從上往下讀的樣子，但底層能同時扛幾千個請求。代碼好讀，性能又好，兩全其美。
+
+**第四，工具的接入要有一層抽象。** 我們用 @Tool 註解加上一層 OryxTool 抽象。ReAct 循環不知道工具從哪裡來、怎麼實現的，它只知道「有個工具叫什麼名字、接收什麼參數、能幹什麼」。這就像餐廳裡服務生不用知道菜是怎麼做的，只要會看菜單就行。
+
+**第五，Web 層用 Spring MVC 加虛擬線程。** 單個節點就能扛上千併發。不需要搞微服務、不需要 Kubernetes。
+
+**第六，沙箱用白名單，不用 SecurityManager。** 為什麼？因為 SecurityManager 在 JDK 17 就被棄用了，JDK 21 上根本跑不了。我們用 Path/Pattern 白名單——只允許訪問明確列出的路徑，其他一律拒絕。簡單粗暴但有效。
+
+**第七，審計表從第一天就寫。** tool_invocations 和 llm_calls 兩張表，核心階段就開始存數據。你可能會想，「以後再補不行嗎？」不行。因為「可審計」是 OryxOS 的差異化賣點，以後再補要回頭解析日誌，又貴又容易漏。
+
+### 架構：一引擎、兩入口、三能力
+
+七個決策定了，我們來看整體長什麼樣。
+
+你先把之前的 [[learn/geek-ai-agent/elements/five-capabilities|五項核心能力 (The Five Core Capabilities)]] 想一下。五項能力，但架構上只有三條路： Provider（接模型）、Memory（管記憶）、Tool（用工具）。另外兩項——Profile 和 Bootstrap——是配置，不算運行時的能力。
+
+所以架構圖是這樣的：**兩個入口**（命令行和 Web），收進**一個引擎**（ReAct 循環），引擎調度**三個能力**（Provider、Memory、Tool），底下是存儲層。
+
+四層從上到下：接入層、引擎層、能力層、基礎層。全部收斂成一個引擎、一份存儲、一個進程。這對應了一開始的設計目標——**單個二進制，裝上就跑**。
+
+### 九個模塊
+
+架構定了，代碼怎麼切？按 Maven 多模塊切成九個：
+
+| 模塊 | 這是在幹嘛 |
+| --- | --- |
+| oryxos-core | 大腦。ReAct 循環、提示詞組裝、工具執行、上下文載入、Session、Profile、OryxTool 抽象。所有其他模塊都依賴它。 |
+| oryxos-provider | 翻譯官。對接各家模型（DeepSeek、Kimi……），做 Function Calling 適配和名稱映射。 |
+| oryxos-memory | 記憶管家。MemoryService 門面、長期記憶、記憶相關工具。 |
+| oryxos-tool | 工具箱。內建工具、MCP Client、工具註冊表、沙箱檢查。 |
+| oryxos-web | Web 門面。伺服器、六個控制器、異常處理、OpenAPI 文件。 |
+| oryxos-channel-cli | 命令行入口。 |
+| oryxos-storage | 資料庫。SQLite 三張表。 |
+| oryxos-cli | Picocli 的 12 個子命令。 |
+| oryxos-boot | Spring Boot 啟動器，負責打 fat JAR。 |
+
+九個模塊之間靠接口對接，以後加新的 Channel 或 Tool，就是加一個新模塊，不碰 core。就像餐廳加一個新檔口，不用重新裝修廚房。
+
+### 持久化：為什麼不用向量資料庫
+
+數據怎麼存？這是一個關鍵問題。你可能聽過 RAG、向量檢索、embedding……是不是得上一個向量資料庫？
+
+老王幫你一個一個排掉：LanceDB 的 Java 本地支持還沒就緒；Qdrant、Chroma、Milvus 都要起一個外部進程；pgvector 要掛 PostgreSQL；JVector 是純 Java 但沒驗證過穩定性。這些全都和「單個二進制、裝上就跑」的定位衝突。
+
+所以核心階段的方案很樸素：**SQLite + Spring Data JPA + MEMORY.md + 關鍵詞召回**。三張核心表：sessions（存會話元數據和 JSON 對話歷史）、tool_invocations（每次工具調用都記一筆）、llm_calls（每次 LLM 調用都記一筆）。
+
+這裡有一個工程上的坑：SQLite 的 ALTER TABLE 能力很弱，Hibernate 的 ddl-auto=update 對 schema 演進靠不住。你得維護手動遷移腳本，或者上 Flyway / Liquibase。
+
+文件系統的數據——Profile YAML、Bootstrap、MEMORY.md、SKILL.md、MCP 配置——留在文件系統。方便人直接改、方便 git 追蹤、方便備份。
+
+### 性能：數字怎麼來的
+
+最後一個問題：性能靠什麼撐？方案裡有兩個硬指標——200ms P99 會話創建，50ms 內部開銷。怎麼做到？
+
+虛擬線程是關鍵。一個 Agent 在記憶裡就是一個小 Profile 對象加上 Session 列表，幾十個 OS 線程就能扛幾千個併發請求。1000 個 Session，每個約 50KB，一共也就 50MB。MEMORY.md 每次組裝提示詞讀一次，只要 1–2ms。JDK 21 上完整啟動 2–4 秒，對常駐服務夠用。CLI 的快路徑命令（init、profile list）跳過 Spring 上下文，瞬間返回。
+
+這些數字不是吹的，是一個一個算出來的。
+
+### 四週節奏
+
+最後，這麼大一個項目，四週怎麼排？原則是：**每一週都有能拿出來演示的東西**。
+
+- **第一週**：搭骨架。Maven 九模塊、init、Profile 解析、ProviderService（DeepSeek/Kimi + 名稱映射）、ReActLoop / PromptBuilder / ToolExecutor、一個 HTTP 工具、CliChannel、內存 Session。
+- **第二週**：加記憶和工具。MemoryService 門面、LongTermMemory、save / recall_memory、File / Shell 工具加白名單、McpClientService、SKILL.md 載入。
+- **第三週**：開 Web。WebServer 十個端點、六個控制器、GlobalExceptionHandler、ConfigLoader。
+- **第四週**：收尾。多 Agent demo、SQLite Session 持久化（含審計表寫入）、Bootstrap 載入、12 個 Picocli 命令、結構化日誌、主頁。
+
+四週下來，你手上有一個能跑的、完整的 Agent OS。
+
+## In plain terms
+
+技術方案就是一份施工圖。用 JDK 21 和 Spring Boot 這套標準建材，核心引擎自己寫，模型接入交給 Spring AI Alibaba 做翻譯，數據存 SQLite 加一個 Markdown 記憶文件，介面是命令行。九個模塊像九個獨立車間，各管一攤，靠接口對接。工期四周，每週交一個能看的成果。
+
+## Analogy
+
+把 OryxOS 想成一家餐廳的後廚。
+
+七個關鍵決策是後廚的規矩：自研 ReAct 循環就是自己培養廚師長，不讓框架替你掌勺；Spring AI 只負責供應商送貨和食材標籤，不能讓他碰鍋鏟，不然食材會被煮兩次（雙調用）；虛擬線程是一個服務生同時盯很多桌，菜照上不誤；白名單沙箱是只有通過安檢的廚具才能進廚房。
+
+九個模塊是九個檔口：採購、冷藏、灶台、外賣窗口……檔口之間只通過菜單溝通——也就是接口。一個檔口出問題，不影響其他檔口開張。
+
+## Practical use
+
+這份方案是你動手蓋房子之前的藍圖，也是你驗收 AI 代碼的對照表。
+
+九個模塊、七個決策、三張表，你得逐項對照。AI 生成的代碼跟方案對不上，就要攔下來。比如 AI 把 Tool 拆成三個模塊、把 SkillLoader 當成 Tool、把 Memory 塌縮進 Session——這些全跟方案衝突，得在構建時當場糾正。
+
+別覺得這是吹毛求疵。方案裡的七個決策，每一條都是有理由的。哪一條被違反了，就是一個潛在的 bug。把方案當成憲法，AI 才不會帶你跑偏。
+
+## Prerequisites
+
+- 知道五項核心能力 — 技術方案就是按五項能力展開的（見 [[learn/geek-ai-agent/elements/five-capabilities|五項核心能力 (The Five Core Capabilities)]]）
+- 知道 ReAct 循環的機制 — 引擎是架構的核心，先懂引擎才懂架構（見 [[learn/geek-ai-agent/elements/react-loop|ReAct 循環 (The ReAct Loop)]]）
+
+## Connections
+
+- [[learn/geek-ai-agent/elements/react-loop|ReAct 循環 (The ReAct Loop)]] — 一引擎架構的核心就是它，九模塊裡 oryxos-core 裝著它
+- [[learn/geek-ai-agent/elements/spec-kit-workflow|Spec-Kit 工作流 (The Spec-Kit Workflow)]] — 技術方案是 /speckit.plan 的輸入，七個決策被提煉進憲法原則
+- [[learn/geek-ai-agent/elements/implementation-pitfalls|構建陷阱 (Implementation Pitfalls)]] — 方案裡點名的坑（雙調用、類型掃描、Tool 拆模塊、審計表漏寫）就是構建時的檢查清單
+- [[learn/geek-ai-agent/elements/design-goals|四大設計目標 (The Four Design Goals)]] — 方案是四大目標在工程層的落地，易接入落成 Spring Boot 標準結構，可觀測落成審計表
+
+## Deep dive
+
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#solution-overview]] — the one-sentence solution
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#key-decisions]] — the seven key technical decisions
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#architecture]] — the one-engine two-entrance three-capability architecture
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#project-structure]] — the 9-module Maven layout
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#persistence]] — SQLite + JPA + MEMORY.md and the no-vector-DB rationale
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#rhythm]] — the 4-week build plan
+
+## Questions
+
+### Q1. 七個關鍵技術決策裡，哪一條最容易寫錯？錯的後果是什麼？
+A1. 第二條，Spring AI 自動工具執行必須關閉。如果沒關，Spring AI 會和自研的 ReActLoop 都去執行工具，工具被調用兩次。
+
+### Q2. 為什麼核心階段不引向量庫？舉出兩個具體理由。
+A2. LanceDB 的 Java 本地嵌入支持還沒就緒，Qdrant/Chroma/Milvus 需要外部進程，pgvector 需要外部 PostgreSQL。這些都和「單個二進制、裝上就跑」的定位衝突，所以先用 SQLite + MEMORY.md + 關鍵詞召回。
+
+### Q3. 審計表為什麼要從第一天就寫，而不是以後補？
+A3. 因為「可審計」是 OryxOS 的差異化賣點，後補要回頭解析日誌，又貴又容易漏。tool_invocations 和 llm_calls 從核心階段就開始寫，等於審計數據的地基第一天就打好。
+
+### Q4. 為什麼 CLI 的快路徑命令（init、profile list）要跳過 Spring 上下文？
+A4. 因為這些命令不碰 LLM，不需要啟動整個 Spring 容器。JDK 21 上完整啟動要 2–4 秒，對交互式 CLI 太慢；跳過上下文讓這些命令瞬間返回，體驗好又省資源。

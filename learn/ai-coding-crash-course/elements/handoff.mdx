@@ -1,0 +1,81 @@
+---
+id: handoff
+title: Handoff 跨代理交接 (Handoff)
+subject: ai-coding-crash-course
+tier: 1
+order: 5
+type: article
+nodes:
+  - ai-coding-crash-course/align-before-build
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_af:971-1128]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# Handoff 跨代理交接 (Handoff)
+
+## Problem Statement
+
+壓縮（compaction）只能在同一個目錄、同一個代理（agent）內部運作：它把目前 session 的對話內容縮成一份摘要，然後用它去種子化一個全新的 session。但這整個過程跟目錄、跟代理是綁死的。假如你用 Claude Code 做完一部分實作，想把工作交給 Codex 來 review，壓縮根本辦不到——那是另一個代理、另一個工作目錄，壓縮的摘要無法跨越這道牆。
+
+## Why it matters
+
+真正的交接（handoff）幾乎總是要跨越邊界：把一段對話的完整脈絡從 Claude Code 交給 Codex、從這個目錄帶到另一個目錄、甚至寄給一個同事。另外還有一個非常常見的場景：你正在做某個 feature，途中突然瞄到一個跟這個 feature 完全不相干的 bug，你不想現在分心，又不想把它忘掉。這些場景壓縮全都處理不了——壓縮只能在原地、在同一個代理身上運作。交接因為產出的是「一個檔案」，所以脈絡可以被自由攜帶，跨代理、跨目錄、跨人、跨時間都行。
+
+## How it works
+
+handoff 的核心想法，是把壓縮的流程搬到 harness 之外：不是像壓縮那樣在 harness 記憶體裡就地濃縮，而是把目前對話寫成一份可攜帶的 markdown 文件 `handoff.md`，總結目前對話的內容，讓一個全新的代理可以接著做下去。因為它是檔案，你可以做任何事：餵給 Codex、交給另一個目錄裡的代理、甚至寄給同事。
+
+這份文件刻意存到作業系統（operating system, OS）的暫時目錄（temp directory）。意思是交接文件生來就是暫時性的（ephemeral）：不存進本機、不存進任何記憶體，只要電腦重開、或 OS 哪天清理暫時目錄，它就被刪掉。設計上是用完即棄，不是長期保存的記憶體。
+
+使用方式跟壓縮很像：執行 `/handoff <purpose>`，把交接的用途傳進去，例如 `/handoff pass to codex to review`。產出的文件讀起來像一份很詳細的壓縮文件（compacted document），包含大量的檔案引用（file references），跟之前看到的 compact 文件很像。要用它時，開一個全新、已清空的 session，用 `@` 符號指向暫時目錄裡的檔案，例如 `@temp/...`，這份文件就會立刻被讀進 context window，新代理馬上可以接手 review。
+
+交接比壓縮更靈活，但也更瑣碎（fiddly），它不算壓縮的完全替代品。想留在同一個目錄、只想保留上一段對話的脈絡時，壓縮仍然很好用，尤其壓縮完可以直接排隊（queue）後續訊息，工作無縫接上；而交接的「連結到下一個對話」要自己接線，比較瑣碎，只有在你真的從中得到好處——跨代理、跨 repo、跨人——才划算。
+
+## In plain terms
+
+壓縮像在同一間會議室，把上一場會議的會議記錄念一遍後繼續開會；交接則是把會議記錄寫成一份文件，你可以把它帶去另一間會議室、交給另一個人，甚至隔天再拿出來處理。前者在原地、在熟人圈裡最順手，後者為的是把話帶到別的地方去。
+
+## Analogy
+
+交接就像下班前寫給接班同事的一張交接單（handover note）：現在做到哪一步、下一步要做什麼、要看哪些檔案，全部清清楚楚寫在一張紙上。這張紙可以留在自己的桌上（同目錄），也可以遞給另一個人（另一個代理、另一個目錄）。但它終究只是一張紙，隨手放著，久了就會被打掃清掉——所以要做就快做，做完就趕快交給該拿的人。
+
+## Practical use
+
+真實工作上，幾個典型用法：
+
+- **跨代理交接**：在 Claude Code 做完一個 feature，想讓 Codex 接著 review，就執行 `/handoff pass to codex to review`，拿到 `handoff.md`，再到 Codex 開一個全新 session，用 `@temp/...` 把檔案帶進 context，讓它直接接手。
+- **跨目錄、跨 repo**：在 A 專案裡遇到屬於 B 專案的 bug，交接一份文件過去，在 B 專案開一個新 session 用 `@temp/...` 帶入即可。
+- **停車（park）不相干的發現**：做 feature 途中瞥見一個無關的 bug，先 `/handoff` 寫成文件，之後再開一個獨立 session 回來修，feature 的進度一點都不受影響。
+- **寄給同事**：交接文件是一份普通 markdown，可以直接轉寄給人，請對方接手或 review。
+
+何時選誰：留在同一個目錄、壓縮後還想排隊訊息繼續做，選壓縮；要跨代理、跨目錄、跨人，選交接。
+
+## Prerequisites
+
+- 壓縮（compaction）——交接是壓縮的姊妹機制，先理解壓縮怎麼把 session 濃縮成 secondary source，才看得懂交接把同一件事搬出 harness 的做法
+- context、session、context window、smart zone 的詞彙——交接和壓縮都是在講怎麼管理 session 的脈絡，保住它待在智能區（smart zone）內
+
+## Connections
+
+- [[learn/ai-coding-crash-course/elements/compaction|Compaction 壓縮機制 (Compaction)]] — 同目錄、同代理的替代方案；留在原地選壓縮，要跨越邊界選交接
+- [[learn/ai-coding-crash-course/elements/grilling|Grilling 對齊法 (Grilling)]] — 一場 grilling 對話累積下來的設計共識，正是最值得交接給另一個代理的共享脈絡
+
+## Deep dive
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_af:971-1128]] — the handoff skill demo, the OS temp-directory/ephemeral design, `@temp/...` seeding, and the compaction-vs-handoff comparison
+
+## Questions
+
+### Q1. 交接（handoff）和壓縮（compaction）最大的差別是什麼？
+A1. 壓縮只能在同一個目錄、同一個代理內部運作，把摘要留在 harness 的記憶體裡；交接則把同樣的總結寫成一份可攜帶的 `handoff.md` 檔案，因此可以跨代理、跨目錄、跨人傳遞，甚至可以先「停車」起來以後再處理。
+
+### Q2. 什麼時候該選交接，而不是壓縮？
+A2. 當你要跨越代理、目錄或人際邊界時——例如把 Claude Code 的工作交給 Codex review、帶去另一個 repo、或寄給同事——就該用交接。留在同一個目錄、只想要保留上一段對話脈絡、且壓縮後還想排隊訊息繼續做時，壓縮依然更好。
+
+### Q3. 為什麼 `handoff.md` 刻意存在作業系統的暫時目錄（temp directory）？
+A3. 因為交接文件生來是暫時性的（ephemeral）：不存進本機、不進任何記憶體，OS 一清暫時目錄或電腦重開就被刪掉。它只是把脈絡從一個 session 搬到另一個 session 的中轉工具，不是要長期保存的記憶體。
+
+### Q4. 拿到 `handoff.md` 之後，怎麼讓新代理接手？
+A4. 開一個全新、清空的 session，用 `@` 符號指向暫時目錄裡的檔案（例如 `@temp/...`），這份文件就會立刻被讀進 context window，新代理等於拿到一份詳細、帶檔案引用的壓縮文件，可以直接接著 review 或修 bug。

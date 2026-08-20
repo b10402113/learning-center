@@ -10,7 +10,7 @@ How the engineering skills should consume this repo's domain documentation when 
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
-Note: this repo's primary domain doc is `AGENTS.md` (learning-path schema and pipeline). Treat it as the de-facto `CONTEXT.md` for the learning-path vocabulary: **node**, **element**, **edge**, **tier**, **subject**, **digest**, **tune**. Use these terms as defined there.
+Note: this repo's primary domain doc is `AGENTS.md` (learning-path schema and pipeline). Treat it as the de-facto `CONTEXT.md` for the learning-path vocabulary: **node**, **element**, **edge**, **tier**, **subject**, **digest**, **polish**. Use these terms as defined there.
 
 ## File structure
 

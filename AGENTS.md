@@ -7,14 +7,17 @@ This repo turns raw material into customized, subject-specific lessons. A **node
 ```text
 ├── AGENTS.md          ← repository schema and workflow
 ├── CLAUDE.md          ← @AGENTS.md
-├── docs/reference/    ← shared skill protocols (e.g. source-reading.md, tune.md)
+├── docs/reference/    ← shared skill protocols (e.g. source-reading.md, polish.md)
 ├── sources/           ← raw, immutable inputs, one folder per subject
 │   └── <subject>/
-├── tune/              ← YouTuber transcripts (immutable) + TUNE.md voice profiles
+├── polish/            ← hand-written polish style templates (tone spec + example articles for polish-agent)
 │   └── <author-slug>/
+│       ├── polish.md
+│       └── examples/
+│           └── <title>.md
 ├── learn/             ← generated learning material, one folder per subject
 │   └── <subject>/
-│       ├── MEMORY.md  ← learner profile from /learn-init (incl. language, tune, tune-scope)
+│       ├── MEMORY.md  ← learner profile from /learn-init (incl. language, polish template)
 │       ├── ROADMAP.md ← node index and course plan
 │       ├── mastery.md ← per-node mastery report (unknown | partial | solid) from /probe, written back by /tackle
 │       ├── digests/   ← two-level source digests from /learn-init & /roadmap
@@ -22,13 +25,13 @@ This repo turns raw material into customized, subject-specific lessons. A **node
 │       ├── elements/  ← keyword-style concept pages (dictionary entries)
 │       └── edges/     ← relationship pages between element pairs
 ├── wiki/              ← legacy, no longer maintained
+├── legacy/            ← archived material (e.g. old tune/ transcripts)
 └── *.md               ← pedagogy references
 ```
 
 ## Pipeline
 
 ```text
-/tune <author>                ← optional, before /learn-init; produces tune/<author>/TUNE.md
 /learn-init <subject>
     → /roadmap <subject>
     → /probe <subject>/<node-id>   ← per node, before viewing it
@@ -37,25 +40,24 @@ This repo turns raw material into customized, subject-specific lessons. A **node
 /tackle <step-id>             ← runtime skill, invoked per step at learning time
 ```
 
-Each stage is user-invoked. `subject/node-name` is explicit so a node name never has to be unique across subjects. The roadmap stage partitions into nodes and writes `draft` node containers; the probe stage measures one node's mastery before it is viewed (a hard gate); the nodes stage reasons out the node's step-DAG, gets learner confirmation, then writes the step articles; the edges stage adds high-value relationships. `/tackle` verifies one step at learning time, targeting the strands the probe rated weak. A tune is a styling layer chosen per subject at `/learn-init` and applied by the writer skills.
+Each stage is user-invoked. `subject/node-name` is explicit so a node name never has to be unique across subjects. The roadmap stage partitions into nodes and writes `draft` node containers; the probe stage measures one node's mastery before it is viewed (a hard gate); the nodes stage reasons out the node's step-DAG, gets learner confirmation, dispatches element sub-agents (step 7) and waits, then dispatches step sub-agents (step 8) to write each step article; the edges stage adds high-value relationships. `/tackle` verifies one step at learning time, targeting the strands the probe rated weak. A polish template is chosen per subject at `/learn-init`; `/nodes` applies it when polishing step articles, never during drafting.
 
 ## Core Principles
 
-1. **Sources are immutable** — Never modify files in `sources/`. Transcripts in `tune/` are immutable the same way.
+1. **Sources are immutable** — Never modify files in `sources/`. Transcripts in `legacy/tune/` are immutable the same way.
 2. **Nodes are step-DAGs** — Each node has one learning goal and decomposes into a set of steps (articles) that branch and merge through their deps. A step is readable as a lesson and may reference several elements.
 3. **Elements crystallize** — An element is a keyword-style concept page (a dictionary entry), self-contained, reusable, and anchored to `MEMORY.md` or an earlier concept. The element carries detail; the step carries the lesson narrative.
 4. **Elements compound** — Reusing a concept updates its canonical element incrementally. Preserve useful existing explanations while adding supported depth, examples, connections, and sources.
 5. **Edges interleave** — Edges make the learner compare, contrast, and judge instead of retrieving in isolation. Prefer a few strong relationships.
 6. **Knowledge stays traceable** — Every claim points to a source, and every step records the elements it teaches; the node records its step-DAG.
-7. **Voice styles, pedagogy decides** — A tune supplies the voice; `MEMORY.md` owns the language and teaching constraints. Writer skills enforce both, and content stays cited to its subject sources.
+7. **Polish styles, pedagogy decides** — A polish template supplies the final style of step articles; `MEMORY.md` owns the language and teaching constraints. Writer skills enforce both, and content stays cited to its subject sources.
 
 ## Skills
 
-- `/tune <author>` — read one YouTuber's transcripts in `tune/<author>/` and write their `TUNE.md` voice profile (merge lifecycle, per `docs/reference/tune.md`)
-- `/learn-init <subject>` — ensure the subject's source digests exist (sub-agent path for large sources per `docs/reference/source-reading.md`), interview the learner, and write `learn/<subject>/MEMORY.md` (including language, tune, and tune-scope)
+- `/learn-init <subject>` — ensure the subject's source digests exist (sub-agent path for large sources per `docs/reference/source-reading.md`), interview the learner, and write `learn/<subject>/MEMORY.md` (including language and the chosen polish template)
 - `/probe <subject>/<node-id>` — adaptive MCQ from shallow to deep across one node's source scope, binary-searching each strand; writes that node's mastery entry (`unknown | partial | solid`), moves the node `draft → probed` (a hard gate before `/nodes`, bypassed by `/nodes … skip-probe`), and never prunes content
 - `/roadmap <subject>` — partition the material into nodes against the formula baseline, propose the full candidate list for learner confirmation, then write `ROADMAP.md` and `draft` node containers
-- `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation (each step's depth calibrated from the node's probe mastery — shallow where `solid`, deep where `unknown`, never pruning), then extract or update the node's canonical elements and write each step article. `skip-probe` skips the probe: the learner asserts they know nothing, so a `draft` node is accepted and every step is taught deep
+- `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation (each step's depth calibrated from the node's probe mastery — shallow where `solid`, deep where `unknown`, never pruning), then dispatch element sub-agents (step 7) and wait for them to complete, then dispatch step sub-agents (step 8) to write each step article. `skip-probe` skips the probe: the learner asserts they know nothing, so a `draft` node is accepted and every step is taught deep
 - `/edges <subject>/<node-name>` — propose and incrementally write strong edges for the node, including justified cross-node edges
 - `/tackle <step-id>` — runtime adaptive MCQ for one step, targeting the strands the node's probe rated `unknown`/`partial`; passing estimates its concepts at `solid`, marks the step complete, and writes mastery back
 
@@ -69,9 +71,9 @@ All stages share `docs/reference/source-reading.md`. Sources are read once into 
 
 **Node count baseline.** `target = clamp(round(total_pdftotext_lines / 1100), 3, 30)`. It is a soft target for the roadmap checkpoint, not a gate — the learner confirms or adjusts the final partition.
 
-## Tune reading
+## Polish reading
 
-`/tune` and the writer skills share `docs/reference/tune.md`. Transcripts in `tune/<author>/` are read once into a `TUNE.md` voice profile (sub-agent per transcript; merged, never overwritten). Writer skills apply the tune through `MEMORY.md` frontmatter — `language`, `tune`, `tune-scope` — with plain tone as the fallback when no tune is set. `tune-scope` is `steps` (step articles only), `elements-steps` (element prose too, sections kept), or `all` (also edges); steps are the article carriers, so the teaching voice applies to them.
+`/learn-init` and `/nodes` share `docs/reference/polish.md`. Templates in `polish/<author>/` are hand-written style guides (never derived from transcripts) — a tone specification in `polish.md` plus example articles in `examples/`. `/nodes` applies the chosen template through `MEMORY.md` frontmatter — `language`, `polish` — by dispatching the polish-agent to read `polish/<slug>/polish.md` and `polish/<slug>/examples/*.md` after drafting; `polish: none` skips polishing entirely and step articles stay as drafted. Polish applies to step articles only, never to elements or edges.
 
 ## Formats
 
@@ -83,7 +85,7 @@ The writing skills are the single source of truth for generated templates.
 - **Element** — `learn/<subject>/elements/<element-id>.mdx`. Frontmatter: `id, title, subject, tier, order, type, nodes, sources, created, updated`. `type` is `article` (default) or `video`; `video` requires `videoUrl`. The `question` type is deprecated — graded verification lives only in `/tackle`, and a `question`-typed element is marked deprecated in the generated graph. Sections: Problem Statement · Why it matters · How it works · In plain terms (optional) · Analogy (optional) · Practical use · Prerequisites (optional) · Connections · Deep dive · Questions. The `Questions` section is a no-grade preview self-check and never affects completion. `Connections` and `Deep dive` stay in English; other headings render per `MEMORY.md` language.
 - **Mastery** — `learn/<subject>/mastery.md`, the per-subject mastery report. Written by `/probe` (and seeded as all-`unknown` by `/nodes … skip-probe`), written back by `/tackle`; it never prunes content. Keyed by node, each node's strands rated `unknown | partial | solid`. It is calibration data only — step completion is separate client-side state.
 - **Edge** — `learn/<subject>/edges/<edge-id>.mdx`. Frontmatter: `title, type, from, to, nodes, created, updated`. Sections: The relationship · Why it matters · When each applies · Interleave.
-- **TUNE** — `tune/<author-slug>/TUNE.md`. Frontmatter: `id, title, files, created, updated`. Sections: Voice · Explanation moves · Style habits · Rhetorical devices · Exemplars · Negative list. Format and merge lifecycle per `docs/reference/tune.md`.
+- **Polish template** — `polish/<author-slug>/polish.md` (tone spec) plus `polish/<author-slug>/examples/*.md` (example articles). Tone-spec frontmatter: `id, title, created, updated`. Sections: Style · Voice · Explanation moves · Style habits · Rhetorical devices · Exemplars · Negative list. Format and consumption rules per `docs/reference/polish.md`.
 
 Element links use stable, node-qualified IDs with display aliases:
 
@@ -133,24 +135,9 @@ When the learner asks a question about a subject:
 
 ### Lint
 
-Periodically check `learn/<subject>/` for:
+Run the verification script: `node scripts/verify.mjs --subject <subject>` (whole-subject) or `node scripts/verify.mjs --node <subject>/<node-id>` (one node). It is the single source of truth for format checks — per `docs/reference/verify.md` — and covers: broken node-qualified element/step/source links, element/step IDs that do not match filenames, `teaches` that disagrees with article links, node `steps` DAG entries whose step file does not exist (and step files with no DAG entry), elements missing two or more connections or retrieval questions, orphan nodes/steps/elements, edges whose `from`/`to`/`nodes` no longer resolve, large sources missing a digest, node count deviating more than ±40% from the formula baseline, digest `source_hash` no longer matching its source file, source locators that cannot be found in the source's digest, and a `polish` in `MEMORY.md` that does not resolve to `polish/<slug>/polish.md`.
 
-- Broken node-qualified element, step, or source links
-- Element IDs that do not match their filenames
-- Step IDs that do not match their filenames
-- Steps whose `teaches` list disagrees with article links
-- Node `steps` DAG entries whose step file does not exist, or step files with no entry in their node's `steps` DAG
-- Elements missing two or more connections or retrieval questions
-- Orphan nodes, steps, elements, or edges
-- Contradictory or stale claims; mark stale claims `[needs update]` instead of deleting them
-- Edges whose `from`, `to`, or `nodes` references no longer resolve
-- Large sources missing a digest in `learn/<subject>/digests/`
-- Node count deviating more than ±40% from the formula baseline
-- Digest `source_hash` that no longer matches its source file
-- Source locators in nodes, steps, or elements that cannot be found in the source's digest
-- A `tune` in `MEMORY.md` that does not resolve to `tune/<slug>/TUNE.md`
-- TUNE `files` hashes that no longer match their transcript files
-- Transcripts in `tune/<author>/` with no `TUNE.md` (cannot be chosen at `/learn-init`)
+The script checks format only. Content judgment — contradictory or stale claims (mark stale ones `[needs update]` instead of deleting), prose style, and semantic quality — is not automated: it is the learner's manual pass, run on request when reviewing a subject or node.
 
 ## Quality Standards
 

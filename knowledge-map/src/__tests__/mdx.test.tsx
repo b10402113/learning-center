@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import FixtureList from "./fixtures/list.mdx";
 import FixtureQuiz from "./fixtures/quiz.mdx";
 import FixtureVideo from "./fixtures/video.mdx";
 import { PrereqSection } from "../components/PrereqSection";
@@ -24,6 +25,18 @@ describe("MDX pipeline", () => {
       />,
     );
     expect(screen.getByTestId("video-embed")).toBeInTheDocument();
+  });
+
+  it("compiles markdown lists into ul and ol structures", () => {
+    const { container } = render(<FixtureList components={{}} />);
+    const unordered = container.querySelector("ul");
+    const ordered = container.querySelector("ol");
+    expect(unordered).not.toBeNull();
+    expect(ordered).not.toBeNull();
+    expect(unordered?.querySelectorAll("li")).toHaveLength(2);
+    expect(ordered?.querySelectorAll("li")).toHaveLength(2);
+    expect(screen.getByText("First item")).toBeInTheDocument();
+    expect(screen.getByText("Ordered one")).toBeInTheDocument();
   });
 });
 

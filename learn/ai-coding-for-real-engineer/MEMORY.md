@@ -1,10 +1,9 @@
 ---
 subject: ai-coding-for-real-engineer
 language: zh-Hant
-tune: none
-tune-scope: all
+polish: none
 created: 2026-08-18
-updated: 2026-08-18
+updated: 2026-08-19
 ---
 
 # MEMORY — ai-coding-for-real-engineer

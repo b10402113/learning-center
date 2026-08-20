@@ -1,0 +1,110 @@
+---
+id: steering-file-pruning
+title: Steering 檔案修剪 (Steering File Pruning)
+subject: ai-coding-crash-course
+tier: 3
+order: 8
+type: article
+nodes:
+  - ai-coding-crash-course/steering-across-sessions
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ah:102-308]]"
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ah:309-490]]"
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ah:491-573]]"
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ah:574-664]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# Steering 檔案修剪 (Steering File Pruning)
+
+## Problem Statement
+
+代理（agent）要跨 session 遵守專案慣例，通常需要依賴 steering 檔案，例如 `agents.md` 或 Claude Code 使用的 `claw.md`。這些檔案很容易只增不減。每加入一條規則，看起來都像是在補上重要保護；刪除時卻像是在否定當初寫下規則的人。久而久之，檔案會混入重複規則、已經失效的舊知識，以及對代理行為沒有實際影響的句子。
+
+這種膨脹會讓 steering 失去焦點。預先載入的內容會在每次 model provider request 中產生 token 與注意力成本。代理還必須在大量規則中判斷哪些與當前工作有關。修剪因此不是把文件寫得更短而已，而是重新確認每一條指示是否值得持續佔用上下文。
+
+## Why it matters
+
+大型 steering 檔案會從「幫助代理找到正確做法」變成新的噪音來源。重複內容需要多處維護，修改一份卻忘記另一份時會製造衝突；同一條資訊反覆出現，也會消耗更多上下文負載（context load），並在注意力競爭中淹沒那些只出現一次、卻更重要的規則。
+
+沉積物（sediment）尤其容易被忽略。某條規則可能曾經正確，但專案已經改變，規則仍留在檔案裡。它不只浪費空間，還可能把代理導向過時流程。另一種問題是無作用指示（no-op instruction）。句子看似相關，也許還寫得很合理，但刪掉後代理的行為完全不變。這類文字沒有為 steering 賺回它所消耗的上下文成本。
+
+## How it works
+
+修剪可以用三個測試逐條檢查 steering 檔案。
+
+1. **單一真實來源（single source of truth）測試**：這條規則是否已經在另一個容易取得的位置存在，例如程式碼、README、文件、技能或另一段 steering？如果答案是肯定的，就不應該在多個地方複製完整內容。保留一個權威來源，其他位置只留必要的指標。
+2. **沉積物（sediment）測試**：這條規則現在是否仍然正確且適用？檢查專案的結構、工具與工作流程是否已經改變。曾經有用不代表現在仍值得載入。過時規則應移除或改寫，不能因為它曾經解決過問題就永久保留。
+3. **無作用（no-op）測試**：刪除這條指示後，代理的行為是否真的改變？可以先記錄一個基準任務，再移除規則並重做相同任務。如果結果沒有可觀察差異，這條指示就沒有賺回自己的位置，應該刪除。
+
+通過三項測試後，才值得保留的內容仍要放在合適的位置。最小的 steering 檔案通常只保留跨任務都適用的規則與導航指標。需要時才讀取的詳細程序，可以移到文件並由短 pointer 指向；可跨 harness 分享的重複程序，可以包裝成 portable skill。對目前不必要、又找不到穩定用途的內容，直接刪除通常是最清楚的選擇。
+
+導航指標也要納入修剪。指標能讓代理避開逐個掃描目錄與檔案的探索成本，直接前往具有非顯而易見依賴的重要位置，例如技能清單、頂層 README、manifest 或 seed script。但指標會過時。過時的指標比沒有指標更糟，因為代理會相信錯誤路線，浪費 token，並被錯誤資訊混淆。因此指標應該少而準，結構改變時要一起檢查。
+
+自動產生的 steering 檔案需要特別警惕。`claude init` 這類流程會掃描 repo，再讓代理自行寫出一份約 172 行、約 4,000 tokens 的 `CLAUDE.md`。這種檔案可能包含大量重複與無作用指示。修剪時先逐行審核，再在刪除、改成 pointer、改成 skill 三種處理方式中選擇。目標不是保留一份完整的 repo 摘要，而是留下真正有用、通常以指標為主的短檔案。
+
+自動記憶（auto-memory）是另一種 steering 來源。Harness 可能把代理收到的修正、偏好與事實寫進本機記憶檔案，之後再載入，例如 Claude Code 的 `memory.md`。這些內容若很少被代理清理，就會形成「自動沉積物」，把過時資訊一層層帶進未來的上下文。若需要保持上下文精簡並由人控制 steering 的建立方式，可以考慮關閉 auto-memory。核心決定應由使用者掌握，而不應讓代理自行無限累積記憶。
+
+## In plain terms
+
+把 steering 檔案想成每天都會放在桌上的工作卡。卡片只應寫今天以及之後大多數工作都需要知道的內容。已經印在手冊上的規則，不必再抄一次；去年用過、今年已不適用的規則，要擦掉；寫了卻不會改變做法的句子，也不值得留在卡片上。詳細手冊可以放在書架，卡片只標示它的位置。
+
+## Analogy
+
+導航指標像城市高速公路。當道路通往真正重要的地點時，它能省下許多探索時間；如果道路早已改道，舊指標就會把所有車輛送往錯誤方向。steering 檔案修剪就是定期拆除重複、失效與沒有實際作用的路牌，只留下能把代理帶到正確資訊的少數路線。
+
+## Practical use
+
+- **先盤點再刪除**：逐條標記規則的權威來源、目前適用性與對代理行為的實際影響。
+- **刪除重複內容**：只保留單一真實來源，其他檔案使用短 pointer，避免多處同步維護。
+- **清除過時沉積物**：檢查規則是否仍符合目前的程式碼、目錄結構、工具與工作流程。
+- **測試 no-op**：移除可疑指示，使用相同任務與基準結果比較；行為沒有變化就不要恢復它。
+- **把條件式細節移出 push**：需要特定情境才使用的完整程序，放進文件或 portable skill，不要固定塞進每個 session。
+- **維護導航指標**：只為代理確實難以發現的檔案建立 pointer，並在依賴或目錄變更後重新驗證。
+- **審核自動產生的檔案**：不要把 `claude init` 產生的長檔案視為完成品，先用刪除、pointer、skill 三種選項逐項瘦身。
+- **控制 auto-memory**：若自動記憶持續累積過時內容，評估關閉它，讓使用者重新掌握記憶與 steering 的生命週期。
+
+## Prerequisites
+
+- [[learn/ai-coding-crash-course/elements/context-load-steering|Context Load 與 Push/Point 引導 (Context Load, Push vs Point)]]：理解固定 push 的 token 與注意力成本，以及何時應改用 point。
+- [[learn/ai-coding-crash-course/elements/portable-skills|可攜式技能 (Portable Skills)]]：理解如何把條件式程序移到可分享、按需載入的 skill。
+
+## Connections
+
+- [[learn/ai-coding-crash-course/elements/context-load-steering|Context Load 與 Push/Point 引導 (Context Load, Push vs Point)]] — 修剪是降低 context load 的維護動作；Push/Point 則提供保留資訊時的配置選擇。重複、過時與 no-op 內容適合刪除，仍有價值但不必每輪載入的內容適合改成 point。
+- [[learn/ai-coding-crash-course/elements/portable-skills|可攜式技能 (Portable Skills)]] — steering 修剪不只是在刪文字，也是在重新分配資訊的位置。可跨專案或 harness 重用的程序可封裝成 portable skill，讓主 steering 檔案只承擔最小的發現入口。
+- [[learn/ai-coding-crash-course/elements/handoff|Handoff 跨代理交接 (Handoff)]] — Handoff 保存一次工作的狀態，steering 檔案保存跨 session 的穩定規則。兩者都依賴文件把資訊帶出當前上下文，但 handoff 是一次性交接，steering 是長期引導，因此後者更需要定期清理沉積物。
+
+## Deep dive
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ah:102-308]] — 導航 pointer 的價值、適用位置與過時 pointer 的風險。
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ah:309-490]] — single source of truth、sediment、no-op 三項修剪測試，以及它們對維護、context load 與資訊權重的影響。
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ah:491-573]] — 審核 `claude init` 產生的大型 steering 檔案，以及刪除、pointer、skill 三種瘦身選項。
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ah:574-664]] — auto-memory 作為 auto-sediment 的問題，以及由使用者控制記憶與 steering 的建議。
+
+## Questions
+
+### Q1. 為什麼 steering 檔案會越寫越大？
+
+A1. 加入規則感覺便宜又安全，刪除規則卻容易被視為否定原本的工作，因此規則通常只進不出，最後累積重複、過時與無作用內容。
+
+### Q2. single source of truth 測試要檢查什麼？
+
+A2. 檢查同一條資訊是否已存在於另一個權威且容易取得的位置。若已存在，steering 檔案不應再複製完整內容，可以刪除重複或改留短 pointer。
+
+### Q3. 如何判斷一條指示是 no-op？
+
+A3. 先記錄移除前的基準行為，再刪除指示並執行相同任務。如果代理行為沒有可觀察改變，這條指示就是 no-op，應該留在檔案外。
+
+### Q4. 為什麼過時的導航 pointer 比沒有 pointer 更糟？
+
+A4. 代理會把 pointer 當成可信路線，沿著錯誤位置探索，浪費 token 並受到錯誤資訊干擾；沒有 pointer 時，代理至少會重新探索目前的結構。
+
+### Q5. 什麼情況應該刪除、改成 pointer，或改成 skill？
+
+A5. 完全沒有價值或是 no-op 的內容應刪除；仍有價值但只在特定任務需要的詳細內容可改成 pointer；需要跨專案或 harness 重用的完整程序可封裝成 portable skill。
+
+### Q6. auto-memory 為什麼被稱為 auto-sediment？
+
+A6. 它會把代理自行記錄的修正、偏好與事實持續帶進後續上下文，而代理很少主動移除已失效內容，結果就像沉積物一樣逐層增加 context load。

@@ -1,0 +1,94 @@
+---
+id: context-load-steering
+title: Context Load 與 Push/Point 引導 (Context Load, Push vs Point)
+subject: ai-coding-crash-course
+tier: 3
+order: 6
+type: article
+nodes:
+  - ai-coding-crash-course/steering-across-sessions
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ag:481-714]]"
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ag:715-940]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# Context Load 與 Push/Point 引導 (Context Load, Push vs Point)
+
+## Problem Statement
+
+代理（agent）的每個 session 都從無狀態開始。你若希望它跨 session 持續遵守專案慣例與非顯而易見的陷阱，就必須把這些知識編碼成引導（steering）。問題在於，任何預先載入的指示都會在每次向模型供應商發出的請求中付出代價，包含 token 成本與注意力（attention）成本。引導因此不是把所有知道的事情都塞進上下文，而是判斷哪些規則值得一直佔用上下文。
+
+這個成本稱為上下文負載（context load）。一份很大的 `agents.md` 或 Claude Code 中的 `claw.md`，若在 session 開始時整份推入上下文，即使當前工作與資料庫、測試或部署無關，這些指示仍會出現在每次請求裡。引導文件就會從幫助代理，變成持續消耗上下文的固定負擔。
+
+## Why it matters
+
+上下文負載會同時影響請求成本與代理分辨重點的能力。被推入的規則不只「存在」，還會與當前任務的其他資訊競爭注意力；規則越多，越難確保代理知道哪些規則在這一輪真的適用。
+
+課程用一個荒謬案例說明這個問題：如果代理被推入 PCI-DSS 規則，它可能在處理巧克力蛋糕食譜時也標記安全含義。這不是規則本身沒有價值，而是規則被無差別地放在每一輪上下文裡，代理又不一定能判斷它何時適用。因此，最小化固定推入的內容，往往比建立一份涵蓋所有情況的巨大引導文件更可靠。
+
+## How it works
+
+引導有兩種交付方式。
+
+- **Push（推入）**：指示在每個 session 一開始就放進上下文，持續處於開啟狀態。`agents.md`，以及 Claude Code 中的 `claw.md`，就是這類固定推入引導的典型機制。
+- **Point（指向）**：上下文只保留一行指標（context pointer），完整指示留在另一份文件裡；代理在判斷當前任務需要時，再把那份文件拉入上下文。
+
+Push 的優點是規則一開始就可見，缺點是無論需不需要都要付出成本。Point 則把固定成本壓到很低：大多數請求只帶著幾乎沒有成本的指標，只有真的需要時才載入完整內容。Matt 的預設選擇是 point，讓代理自行決定何時拉入指示。
+
+實作時，可以把原本放在 `agents.md` 的完整資料庫 migration checklist 移到 `docs/`，並在 `agents.md` 留下指向它的上下文指標。這份 checklist 包含修改 schema、執行 `npm run db generate`、更新 `seed.ts`、重新 seed、type-check 與 failure-mode checks。這些步驟不是每個功能或 QA 請求都需要，因此不應在每次請求中完整 push；文件加指標則讓它在資料庫變更時仍然可被取用。
+
+## In plain terms
+
+Push 像是每天出門都把整本工作手冊背在身上，不管今天是否會用到。Point 像是在口袋裡放一張紙條，寫著工作手冊放在哪裡；需要時再把手冊拿出來。紙條幾乎不佔空間，但資訊仍然可達。
+
+## Analogy
+
+把上下文想成會議桌。Push 是每次開會都把所有規章攤滿桌面，哪怕今天只討論巧克力蛋糕；Point 則只在桌上放一張索引卡，標出相關規章的位置。當議題真的涉及 PCI-DSS 或資料庫 migration 時，再把對應文件拿來。索引卡不能取代規章，但能避免不相關的規章一直佔據桌面。
+
+## Practical use
+
+- **只把跨任務都適用的內容 push**：固定引導應保持最小，因為它會在每次請求中持續產生 token 與注意力成本。
+- **把條件式流程改成 doc + pointer**：將完整程序移到 `docs/`，在 `agents.md` 保留短小的 context pointer，讓代理需要時再讀取。
+- **用實際任務驗證拉取時機**：先確認一般請求不需要完整 migration checklist，再進行 schema change，檢查代理是否在正確時機取用文件並完成相關步驟。
+- **處理非顯而易見的專案慣例**：像 schema 變更必須同步更新 `seed.ts` 並重新 seed，這類無法只從程式碼推導出的知識，適合放在可被指向的引導文件中。
+- **把 skills 視為可攜式的 doc + pointer**：當一套引導需要跨 harness 分享時，可包裝成 skill；其名稱與 description 提供指標，其餘內容在呼叫時才拉入。
+
+## Prerequisites
+
+- [[learn/ai-coding-crash-course/elements/compaction|Compaction 壓縮機制 (Compaction)]]：理解上下文空間、token 成本與上下文噪音為何會影響持續工作。
+- Session、request、token 與上下文（context）的基本概念。
+- [[learn/ai-coding-crash-course/elements/handoff|Handoff 跨代理交接 (Handoff)]]：理解如何把會話狀態移到另一個代理、目錄或人。
+
+## Connections
+
+- [[learn/ai-coding-crash-course/elements/compaction|Compaction 壓縮機制 (Compaction)]] — Compaction 處理的是已經累積過多的會話上下文，將有用知識帶進新 session；Push/Point 處理的是跨 session 的固定引導，決定哪些知識一開始就載入。兩者都在管理上下文負載，但發生時機不同。
+- [[learn/ai-coding-crash-course/elements/handoff|Handoff 跨代理交接 (Handoff)]] — Handoff 把一段工作整理成可攜式文件，以跨代理、跨目錄或跨人傳遞；Point 則在同一套工作環境中以短指標延後載入引導。兩者都用文件保存可按需取用的脈絡，但目的不同。
+
+## Deep dive
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ag:481-714]] — steering 的 context load、Push 與 Point 的差異、`agents.md`/`claw.md` 的固定推入，以及 PCI-DSS 與巧克力蛋糕案例。
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ag:715-940]] — 把 migration checklist 改成 `docs/` 文件加 context pointer 的實作，以及 schema 與 seed 的非顯而易見專案慣例。
+
+## Questions
+
+### Q1. 什麼是 context load？
+
+A1. Context load 是預先載入指示所造成的上下文負載，包含每次請求都要付出的 token 成本與注意力成本。
+
+### Q2. Push 與 Point 的核心差異是什麼？
+
+A2. Push 會在每個 session 一開始把完整指示放進上下文，無論當前是否需要都持續付費；Point 只放短小的 context pointer，讓代理需要時才拉入完整指示。
+
+### Q3. 為什麼把大型 `agents.md` 改成 doc + pointer？
+
+A3. 因為完整 checklist 對不涉及資料庫的功能或 QA 請求沒有用，卻會在每次請求中消耗 token 與注意力；移到 `docs/` 並留下 pointer，可以降低穩態上下文負載，同時保留資訊的可達性。
+
+### Q4. PCI-DSS 與巧克力蛋糕的例子說明了什麼？
+
+A4. 它說明代理不一定能正確判斷被 push 的規則何時適用，因此無差別推入規則可能導致荒謬結果；規則有價值，不代表它應該在每個任務中都固定出現。
+
+### Q5. 什麼類型的知識適合放進可被 point 的文件？
+
+A5. 像資料庫 schema 變更必須同步更新 `seed.ts` 並重新 seed 這種非顯而易見、只在特定任務出現的專案慣例，適合放在文件中，並由短 pointer 導航到它。

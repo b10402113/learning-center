@@ -1,0 +1,96 @@
+---
+id: token-billing-cache
+title: Token 計費與 Prefix Cache
+subject: ai-coding-crash-course
+tier: 1
+order: 3
+type: article
+nodes:
+  - ai-coding-crash-course/agent-thinking-and-cost
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ac:410-667]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# Token 計費與 Prefix Cache
+
+## Problem Statement
+
+AI coding agent 的一次請求，不只包含你剛輸入的問題，也包含整個 session 中已經累積的上下文。模型供應商通常按 token 計費，因此一個看似簡短的追問，背後可能重送大量歷史內容。若只看回應文字，不看 request log，就很難知道費用與上下文大小究竟從哪裡來。
+
+另一個容易混淆的地方是，輸入 token、快取讀取 token、快取建立 token 與輸出 token 會以不同欄位出現。不了解這些數字，就可能把模型「思考很多」誤認成輸入很貴，或以為歷史內容只在第一次請求計費。
+
+## Why it matters
+
+理解 token 計費能讓你同時管理代理的品質與錢包。輸出 token 通常比輸入 token 貴很多，思考 token 也按輸出 token 的方式計費；因此讓代理無限制地反覆推理、驗證或產生冗長結果，成本會快速增加。
+
+Prefix Cache 則解決了長 session 的一部分成本問題。因為 session 通常是把新內容加在尾端，請求前方的穩定 prefix 可以被重複利用，後續請求的 cached input 會比重新處理全部輸入便宜。可是快取不是永久保證，休息一段時間或 prefix 發生變化，都可能使快取失效。即使有快取，過大的上下文仍會增加代理分心與遺漏重點的風險。
+
+## How it works
+
+每次向模型供應商發出 request 時，系統會回傳用量數字。可以先用三個基本類別理解它們：
+
+- **Input tokens**：送給模型的內容，包括目前訊息與整個 session 的歷史上下文。
+- **Output tokens**：模型產生的回應。模型的思考 token 也屬於這一側，通常以較高單價計費。
+- **Cached input tokens**：已在 prefix cache 中處理過、這次可以重用的輸入部分，通常比未快取的輸入便宜。
+
+第一次送出某個穩定 prefix 時，系統可能建立 cache，request log 會顯示 cache creation input tokens。後續請求若仍以相同 prefix 開頭，就可能顯示 cache read input tokens。這些請求仍然帶有整個 session 的輸入，只是穩定的前段不必以完整價格重新處理。
+
+這種機制適合 session 的追加式結構。系統提示、工具定義、早期對話與不變的專案背景通常位於前方，最新問題與工具結果位於後方。只要前方內容保持一致，prefix cache 就能重用它。若修改了前方任何內容，後面的 prefix 也可能不再匹配；若 cache 在一段時間內沒有被使用，也可能過期。
+
+## In plain terms
+
+你每次請代理工作，都像把整本工作筆記重新交給它。Prefix Cache 像圖書館的掃描紀錄：前面那些已經掃描過、而且沒有改動的頁面可以較便宜地重用，但新增或改過的頁面仍要處理。筆記越厚，即使掃描有折扣，代理仍可能更難抓住現在真正要解決的問題。
+
+## Analogy
+
+把一次模型請求想成餐廳接到一張長訂單。每次加點時，廚房仍需要知道原本的訂單，但固定的桌號、套餐與過敏資訊已經登錄在系統裡，不必重新完整核對，這就是 prefix cache。你新加的菜仍要單獨處理；如果改了桌號或套餐，原本的登錄可能不再適用。快取讓核對更便宜，卻不會讓一張塞滿過期菜單的訂單變得清楚。
+
+## Practical use
+
+- **讀 request log**：區分 input、cached input、cache creation 與 output，不要只看單次回應的字數。
+- **先控制輸出**：把任務切小、要求明確的驗證結果，避免不必要的長篇思考與重複輸出。
+- **保持穩定 prefix**：固定的系統指示、工具設定與專案背景盡量放在前方，避免每輪任意改動它們。
+- **不要把快取當成預算**：cached input 較便宜，不代表可以讓 session 無限膨脹；仍要定期清理無關內容或在階段邊界換 session。
+- **比較實際增量**：觀察一次檔案讀取、驗證迴圈或追問讓 input 與 output 增加多少，建立自己的成本直覺。
+- **把品質一起納入判斷**：當 cached input 持續上升、代理開始遺漏上下文或反覆探索時，應縮小上下文，而不是只依賴快取折扣。
+
+## Prerequisites
+
+- [[learn/ai-coding-crash-course/elements/context-counter|上下文計數器 (Context Counter)]]：能觀察 session 的 token 數如何隨互動增長。
+- [[learn/ai-coding-crash-course/elements/context-load-steering|Context Load 與 Push/Point 引導 (Context Load, Push vs Point)]]：理解哪些固定內容會被載入並成為穩定 prefix。
+- Token、輸入、輸出與上下文窗口的基本概念。
+
+## Connections
+
+- [[learn/ai-coding-crash-course/elements/attention-smart-zone|注意力與聰明區 (Attention and Smart Zone)]] — Prefix Cache 降低重複輸入的處理成本，但不會消除長上下文對注意力的負擔；聰明區仍是品質判斷的核心。
+- [[learn/ai-coding-crash-course/elements/state-context-cost|狀態、上下文與成本 (State, Context, and Cost)]] — session 狀態如何累積，直接決定每輪要重送多少 input，以及快取能重用多少 prefix。
+- [[learn/ai-coding-crash-course/elements/hallucination-diagnosis|幻覺診斷 (Hallucination Diagnosis)]] — 成本與 token log 能揭示代理是否陷入過長的反覆推理；診斷幻覺時也要檢查上下文是否塞入過多噪音。
+- [[learn/ai-coding-crash-course/elements/effort-reasoning|努力程度與推理 token (Effort and Reasoning Tokens)]] — reasoning token 屬於輸出側並按輸出方式計費；調整 effort 是控制單次請求成本的重要手段。
+
+## Deep dive
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ac:410-667]] — 課程以 request logger 示範 input、output、cache creation 與 cache read 的用量差異，說明輸出與 thinking token 的計費、prefix cache 如何讓後續請求變便宜，以及長 session 即使有快取仍會累積沉澱成本。
+
+## Questions
+
+### Q1. Input tokens 與 output tokens 分別代表什麼？
+
+A1. Input tokens 是送給模型的內容，包含整個 session 的上下文；output tokens 是模型產生的回應，thinking tokens 也算在輸出側。兩者的單價可能不同，輸出通常更貴。
+
+### Q2. Prefix Cache 重用了什麼？
+
+A2. 它重用請求開頭穩定且曾經處理過的 prefix，例如系統提示、工具定義與不變的專案背景。最新訊息與改變過的內容仍需要處理。
+
+### Q3. 為什麼 cached input 較便宜，仍不能讓 session 無限變大？
+
+A3. 快取只降低部分輸入處理成本，不會消除長上下文對注意力、相關性與錯誤率的影響；session 也可能因 prefix 改變或快取過期而失去重用效果。
+
+### Q4. 看到 cache read input tokens 很高時，應該如何判斷？
+
+A4. 先確認它是否代表穩定 prefix 被有效重用，再同時檢查 session 是否含有大量無關歷史、代理品質是否下降，以及 output 或 reasoning token 是否才是主要成本來源。
+
+### Q5. 為什麼把任務切小通常同時有助於品質與成本？
+
+A5. 較小的任務能減少每次請求攜帶的無關上下文，也能限制代理反覆思考與驗證的範圍。雖然可能增加請求次數，但總 input、output 與錯誤重試成本通常更容易控制。
