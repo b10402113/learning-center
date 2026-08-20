@@ -40,3 +40,10 @@ updated: 2026-08-20
 - **Skills 的封裝、層級與呼叫方式**：unknown
 - **Navigation pointers 與 steering 修剪**：unknown
 - Notes: probe skipped via /nodes ai-coding-crash-course/steering-across-sessions skip-probe on 2026-08-20
+
+## operating-the-agent
+
+- **Bash 模式與命令可見性控制**：unknown
+- **權限模型與 settings 檔案**：unknown
+- **Auto mode 與 LLM 分類器**：unknown
+- Notes: probe skipped via /nodes ai-coding-crash-course/operating-the-agent skip-probe on 2026-08-20

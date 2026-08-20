@@ -1,0 +1,82 @@
+---
+id: auto-mode-classifier
+title: 自動模式與安全分類器 (Auto Mode & LLM Classifier)
+subject: ai-coding-crash-course
+tier: 2
+order: 16
+type: article
+nodes:
+  - ai-coding-crash-course/operating-the-agent
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ae:239-326]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# 自動模式與安全分類器 (Auto Mode & LLM Classifier)
+
+## Problem Statement
+
+每次代理要執行指令時都停下來等人確認，安全但很慢，一趟長任務會被打斷上百次。改用硬編碼規則來放行命令，又太死板，無法根據對話脈絡判斷同一條命令在不同情境下的風險。你想要的是一套幾乎不需要人介入的運作方式，同時仍然擋住真正災難性的動作，例如把整個檔案系統刪掉。
+
+## Why it matters
+
+自動模式（Auto Mode）已經成為多數 coding agent 的預設運作方式，你如果不了解它的判斷機制，就不知道哪些動作其實沒有被確認過。它用一個模型分類器取代人工的 allow/deny 提示，這代表每一次判斷都是機率性的、需要花費 token 與時間，而且分類器會漏放、也會誤擋。知道這個取捨，你才能決定什麼時候放手讓它跑，什麼時候切回手動模式，並用設定檔把常見命令提前放行。
+
+## How it works
+
+Claude Code 用 Shift+Tab 循環切換四種模式，依序是 manual、accept-edits、plan、auto。自動模式是現在的預設。它不放行硬規則，而是把每一條要執行的命令交給一個 LLM 分類器（可能是像 Haiku 這樣的小型快速模型），讓分類器從對話脈絡判斷這條命令安不安全，安全就直接執行，幾乎不需要你介入。
+
+判斷順序上，harness 會先檢查 `settings.json` 裡的規則，再送給分類器。換句話說，你事先放行的命令根本不會進入分類器。要改變預設模式，從 config 裡找「default permission mode」設定即可。
+
+| 分類器的行為 | 例子 |
+| --- | --- |
+| 擋住多數「永遠不該做」的事 | `rm -rf` 整個檔案系統 |
+| 漏放一些你不想要的事 | 資料庫遷移（migration） |
+| 誤擋一些你想要的事 | 建立 GitHub issue |
+
+課程的結論是，分類器落在「on the right side of OK」，也就是擋得住大方向上的災難，但做不到完美。
+
+## In plain terms
+
+自動模式就像是把審核員換成一個讀過整場對話、會自己判斷每個動作合不合理的助理。他反應快、幾乎不問你，但偶爾會放錯東西過去，也偶爾會把明明沒問題的事卡住。
+
+## Analogy
+
+把安全分類器想成機場安檢的機器。大部分行李直接掃過去，只有可疑物品被挑出來。機器速度很快、很少打斷你，但它不是萬能，偶爾放過一把小刀，偶爾因為一把指甲剪卡住一位乘客。你可以用快速通關名單（`settings.json`）讓常客直接通過，不必每次都被掃描。
+
+## Practical use
+
+- **在 `settings.json` 建立 allow-list**：把常見且安全的命令提前放行，它們會跳過分類器，既省 token 也省時間。
+- **留意每次檢查的成本**：每條命令的判斷都會消耗 token 與延遲，命令越頻繁，這筆開銷越明顯。
+- **高風險工作切回手動模式**：涉及刪除、推送、遷移等影響大的操作，用 manual 模式保留最後的確認權。
+- **接受偶爾的誤擋**：遇到「建立 GitHub issue 被卡住」這類假凍結，直接手動放行或改用其他方式完成即可，不值得為它關閉自動模式。
+- **先設好預設再開始**：從 config 的「default permission mode」決定你預設要哪種模式，而不是每次開新 session 重新切。
+
+## Connections
+
+- [[learn/ai-coding-crash-course/elements/permissions-model|代理權限模型 (Agent Permissions Model)]] — auto mode 用分類器取代人工的 allow/deny 提示，但 `settings.json` 裡預先放行的命令仍會被優先檢查。
+- [[learn/ai-coding-crash-course/elements/next-token-prediction|次一 token 預測與非決定性 (Next-token Prediction and Non-determinism)]] — 安全分類器本身也是一個在做次一 token 預測的模型，它的判斷是機率性的，不是硬規則。
+- [[learn/ai-coding-crash-course/elements/token-billing-cache|Token 計費與 Prefix Cache]] — 每條命令的安全檢查都會花費 token 並增加延遲，這是換來幾乎不需介入的代價。
+
+## Deep dive
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ae:239-326]] — 課程客座說明自動模式的判斷機制、四種模式的切換、分類器的實際誤放與誤擋案例，以及 `settings.json` 優先於分類器的檢查順序。
+
+## Questions
+
+### Q1. 自動模式如何決定一條命令是否執行？
+
+A1. 它把每條命令交給一個 LLM 分類器，由分類器從對話脈絡判斷命令的安全性，安全就直接執行，不需要人工確認。
+
+### Q2. `settings.json` 與分類器的檢查順序為何？
+
+A2. Harness 會先檢查 `settings.json` 的規則，再送給分類器，所以預先放行的命令不會經過分類器。
+
+### Q3. 自動模式的主要代價是什麼？
+
+A3. 每條命令的安全檢查會花費 token 並增加時間，整體執行會比直接放行或硬規則慢一些。
+
+### Q4. 分類器有什麼已知缺陷？
+
+A4. 它會漏放一些不想要的操作，例如資料庫遷移，也會誤擋一些想要的操作，例如建立 GitHub issue，但多數「永遠不該做」的事如 `rm -rf` 整個檔案系統會被擋住。

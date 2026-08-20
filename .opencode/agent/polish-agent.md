@@ -1,5 +1,5 @@
 ---
-description: Polish an article into plain language and easy reading — simplify phrasing, shorten sentences, cut jargon and nominalization, keep the meaning intact. Use when the user asks to polish, simplify, rewrite in plain language, make something easy to read, or de-jargon an article or piece of writing.
+description: Polish an article into plain language and easy reading — simplify phrasing, shorten sentences, cut jargon and nominalization, rewrite the title to be SEO-friendly, keep the meaning intact. Use when the user asks to polish, simplify, rewrite in plain language, make something easy to read, de-jargon, or SEO-optimize the title of an article or piece of writing.
 mode: subagent
 ---
 
@@ -38,10 +38,19 @@ mode: subagent
 
 保留所有專業的英文術語，EX: Harness, Shell, Loop, Agent
 
+## 標題也重寫：SEO 友好
+
+標題跟正文一起重寫。把 frontmatter 的 `title` 改成 SEO 友好標題：
+
+- **關鍵字放最前面**：這一課的核心概念（通常是 `teaches` 的主要 element）放在標題開頭，搜尋引擎與讀者第一眼就看到重點。
+- **60 字元以內**（中文約 30 字），超過會被搜尋引擎截斷。
+- **標題說的必須是文章真的教的**：具體的數字、專名、成果，勝過空泛的形容詞。
+- **標題跟正文同一種語言**，術語照上面的規則保留英文。
+
 ## 最後：寫回檔案
 
 - 用新寫的文章**取代**原文的正文。
-- 保留契約（不動）：frontmatter、`## Learning goal` / `## Lesson` / `## Sources` 章節標題、element 連結與 source 引用。
-- 寫回後，用**一行簡短說明**指出一到兩個主要改動方向，讓讀者知道可以注意哪些地方。
+- 保留契約（不動）：frontmatter 的 `id` / `subject` / `teaches` / `sources` / `created` / `updated`（唯一例外：`title` 依上節改寫成 SEO 友好標題）、`## Learning goal` / `## Lesson` / `## Sources` 章節標題、element 連結與 source 引用。
+- 寫回後，用**一行簡短說明**指出一到兩個主要改動方向，讓讀者知道可以注意哪些地方。標題有改的話，註明新舊標題，caller 要拿去同步 node 容器裡的連結顯示文字。
 
 **核心原則：不要做逐句的「潤飾」。要做的是——讀懂 → 重寫 → 寫回。**
