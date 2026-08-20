@@ -51,6 +51,7 @@ export interface GraphElement {
   taughtByNodes: string[];
   taughtBySteps: string[];
   deprecated: boolean;
+  summary: string;
   sources: string[];
   connections: string[];
   prerequisiteIds: string[];

@@ -7,7 +7,7 @@ import { Graph } from "./icons/Graph";
 import { Map } from "./icons/Map";
 import { Reset } from "./icons/Reset";
 import { Tooltip } from "./ui/Tooltip";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface TopBarProps {
   graphs: SubjectGraph[];
@@ -17,6 +17,83 @@ interface TopBarProps {
   onReset: () => void;
   onSelect: (s: string) => void;
   onViewChange: (v: "nebula" | "roadmap") => void;
+}
+
+/** Secondary controls (metadata legend + reset) collapsed behind "⋯ 檢視選項". */
+function ViewOptionsMenu({ hasProgress, onReset }: { hasProgress: boolean; onReset: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="view-options-wrap" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="view-options-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <span aria-hidden="true">⋯</span>
+        <span className="hidden sm:inline">檢視選項</span>
+      </button>
+
+      {open ? (
+        <div className="view-options-menu" role="menu" aria-label="檢視選項">
+          <div className="view-options-label">地圖圖層</div>
+          <div className="view-options-item" title="spine：節點的順序">
+            <span className="view-options-swatch">
+              <span className="h-0.5 w-4 rounded bg-muted" />
+            </span>
+            <span>spine · 順序</span>
+          </div>
+          <div className="view-options-item" title="shared：共享概念">
+            <span className="view-options-swatch">
+              <span className="h-px w-4 border-t border-dashed border-muted" />
+            </span>
+            <span>shared · 共享</span>
+          </div>
+          <div className="view-options-item" title="charted：已寫內容">
+            <span className="view-options-swatch">
+              <span className="size-1.5 rounded-full bg-muted" />
+            </span>
+            <span>charted · 已成文</span>
+          </div>
+
+          <div className="view-options-sep" />
+
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onReset();
+              setOpen(false);
+            }}
+            disabled={!hasProgress}
+            className="view-options-action"
+          >
+            <Reset size={12} />
+            重置進度
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function TopBar({
@@ -94,8 +171,8 @@ export function TopBar({
         </span>
       </label>
 
-      <div className="ml-auto flex items-center gap-4 text-[0.65rem] text-faint">
-        {/* View mode toggle — clearly separated */}
+      <div className="ml-auto flex items-center gap-2 text-[0.65rem] text-faint">
+        {/* Primary layer — view switch + the single primary CTA (share) */}
         <div className="flex items-center gap-0.5 rounded-lg border border-input bg-surface p-0.5">
           <button
             type="button"
@@ -117,61 +194,23 @@ export function TopBar({
           </button>
         </div>
 
-        {/* Separator line between view toggle and status indicators */}
-        <div className="h-4 w-px bg-border" />
-
-        {/* Status indicators — badge style with icon+text */}
-        <div className="hidden items-center gap-2 lg:flex">
-          <span className="inline-flex items-center gap-1 rounded-md border border-input bg-surface px-2 py-0.5" title="spine：節點的順序">
-            <span className="h-0.5 w-3 bg-muted rounded"></span>
-            <span className="font-mono text-[0.62rem]">spine</span>
-          </span>
-          <span className="inline-flex items-center gap-1 rounded-md border border-input bg-surface px-2 py-0.5" title="shared：共享概念">
-            <span className="h-px w-3 border-t border-dashed border-brand-primary-dim"></span>
-            <span className="font-mono text-[0.62rem]">shared</span>
-          </span>
-          <span className="inline-flex items-center gap-1 rounded-md border border-input bg-surface px-2 py-0.5" title="written：已寫內容">
-            <span className="size-1.5 rounded-full bg-brand-primary"></span>
-            <span className="font-mono text-[0.62rem]">charted</span>
-          </span>
-        </div>
-
-        {/* Separator line before buttons */}
-        <div className="h-4 w-px bg-border" />
-
-        {/* Action buttons — clearly styled as clickable */}
         <Tooltip
           trigger={(props) => (
             <button
               {...props}
               type="button"
-              onClick={onReset}
-              disabled={!hasProgress}
-              className={cn(
-                "inline-flex items-center justify-center gap-1.5 font-mono transition-colors",
-                "rounded-md border border-input bg-surface px-2.5 py-1.5",
-                "text-faint hover:border-brand-primary hover:text-brand-primary",
-                "disabled:pointer-events-none disabled:opacity-40",
-              )}
-              aria-label="重置進度"
+              onClick={copyShareLink}
+              className={cn(button({ variant: "primary", size: "md" }), "h-8 px-4 text-[0.72rem]")}
             >
-              <Reset size={12} />
-              <span className="hidden sm:inline">重置進度</span>
+              ⌘ 分享
             </button>
           )}
         >
-          清除手動標記的完成進度（element 與 node 主文；已寫內容的狀態不受影響）
+          複製目前頁面連結
         </Tooltip>
-        <button
-          type="button"
-          onClick={copyShareLink}
-          className={cn(
-            button({ variant: "primary", size: "md" }),
-            "h-8 px-4 text-[0.72rem]",
-          )}
-        >
-          ⌘ 分享
-        </button>
+
+        {/* Secondary layer — metadata toggles + reset, folded behind ⋯ */}
+        <ViewOptionsMenu hasProgress={hasProgress} onReset={onReset} />
       </div>
     </header>
   );

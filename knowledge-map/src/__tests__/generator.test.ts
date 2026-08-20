@@ -713,6 +713,29 @@ describe("buildSubjectGraph", () => {
     expect(n1.sources).toEqual(["[[sources/fixture-subject/book.pdf#Intro]]"]);
   });
 
+  it("extracts a short summary from In plain terms / Problem Statement", () => {
+    const g = build();
+    // n2 has a `## Problem Statement` with `Second idea.`
+    expect(g.elements.n2.summary).toBe("Second idea.");
+    // n1 has neither section — falls back to its first paragraph.
+    expect(g.elements.n1.summary).toBe("First idea.");
+    // empty bodies stay empty
+    const g2 = buildSubjectGraph({
+      subject: "fixture-subject",
+      roadmap: ROADMAP,
+      nodeFiles: {},
+      elementFiles: {
+        "elements/blank.mdx": `---
+id: blank
+title: Blank
+---
+`,
+      },
+      edgeFiles: {},
+    });
+    expect(g2.elements.blank.summary).toBe("");
+  });
+
   it("defaults an element without a type to article and omits conditional fields", () => {
     const g = build();
     const n1 = g.elements.n1;

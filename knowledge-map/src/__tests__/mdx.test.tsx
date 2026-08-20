@@ -121,6 +121,7 @@ describe("PrereqSection colors", () => {
         taughtByNodes: ["p1"],
         taughtBySteps: [],
         deprecated: false,
+        summary: "",
         sources: [],
         connections: [],
         prerequisiteIds: [],

@@ -6,11 +6,12 @@ import { stepsOfNode } from "../lib/completion";
 import { resolveElementSource } from "../lib/hashlink";
 import { elementMdxComponents, nodeMdxComponents, type MdxComponents } from "../lib/mdxComponents";
 import { getElementMdx, getStepMdx } from "../lib/mdxRegistry";
-import type { Node, ReaderModalTarget, Step, SubjectGraph } from "../lib/types";
+import type { Element, Node, ReaderModalTarget, Step, SubjectGraph } from "../lib/types";
 import { findWikilinkTarget } from "../lib/wikilink";
 import { ChevronRight } from "./icons/ChevronRight";
 import { Expand } from "./icons/Expand";
 import { X } from "./icons/X";
+import { Tooltip } from "./ui/Tooltip";
 
 const TIER_ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII"];
 
@@ -74,8 +75,13 @@ export function ReaderPage({
   const [focusMode, setFocusMode] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const headingRefs = useRef<HTMLElement[]>([]);
-  const [toc, setToc] = useState<string[]>([]);
+  const [toc, setToc] = useState<{ label: string; level: 2 | 3 }[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  // Accordion: nodes the learner manually expanded (the active node is always
+  // expanded regardless). Reset on navigation so only "where I am" opens.
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  // Vocab-chip folding: "this STEP teaches" shows 5 by default, "+N 更多" unfolds.
+  const [showAllTeaches, setShowAllTeaches] = useState(false);
 
   const nodeById = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph]);
   const nodeIds = useMemo(() => new Set(graph.nodes.map((n) => n.id)), [graph]);
@@ -159,16 +165,24 @@ export function ReaderPage({
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
     setFocusMode(false);
+    setExpandedNodes(new Set());
+    setShowAllTeaches(false);
   }, [contentKey]);
 
-  // Collect the rendered article's h2 headings into the scroll-spy TOC and keep
-  // the active heading in sync as the learner scrolls.
+  // Collect the rendered article's h2/h3 headings into the scroll-spy TOC (h3
+  // entries nest under their h2) and keep the active heading in sync as the
+  // learner scrolls.
   useLayoutEffect(() => {
     const container = scrollRef.current;
     headingRefs.current = container
-      ? Array.from(container.querySelectorAll<HTMLElement>("h2"))
+      ? Array.from(container.querySelectorAll<HTMLElement>("h2, h3"))
       : [];
-    setToc(headingRefs.current.map((h) => h.textContent ?? ""));
+    setToc(
+      headingRefs.current.map((h) => ({
+        label: h.textContent ?? "",
+        level: h.tagName === "H3" ? 3 : 2,
+      })),
+    );
     setActiveIndex(0);
     if (!container || headingRefs.current.length === 0) return;
     const io = new IntersectionObserver(
@@ -225,11 +239,43 @@ export function ReaderPage({
   const title =
     mode === "node" ? node!.title : mode === "step" ? step!.title : element!.title;
 
+  // "This STEP teaches" vocab chips: the taught elements in teach order,
+  // folded to 5 with a "+N 更多" affordance (ADR chip-fold).
+  const teachesList =
+    mode === "step"
+      ? (step!.teaches.map((id) => graph.elements[id]).filter((e): e is Element => Boolean(e)) ?? [])
+      : [];
+  const teachesShown = showAllTeaches ? teachesList : teachesList.slice(0, 5);
+  const teachesHidden = teachesList.length - teachesShown.length;
+
   function scrollToHeading(index: number) {
     const el = headingRefs.current[index];
     if (!el) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+  }
+
+  // A vocab chip click scrolls to and briefly highlights the first occurrence
+  // of that element in the article (a wikilink, or the Lesson section as a
+  // graceful fallback).
+  function scrollToElement(elementId: string) {
+    const container = scrollRef.current;
+    if (!container) return;
+    const el = container.querySelector<HTMLElement>(
+      `[data-element-id="${CSS.escape(elementId)}"]`,
+    );
+    const target =
+      el ??
+      Array.from(container.querySelectorAll<HTMLElement>("h2")).find(
+        (h) => h.textContent?.trim() === "Lesson",
+      );
+    if (!target) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
+    if (el) {
+      el.classList.add("element-flash");
+      window.setTimeout(() => el.classList.remove("element-flash"), 1900);
+    }
   }
 
   // The lesson origin carried into element navigations: the node being read on
@@ -310,36 +356,6 @@ export function ReaderPage({
 
   const activeNodeId = mode === "node" || mode === "step" ? node!.id : sourceNodeId;
 
-  // A node is complete iff every step in its DAG is complete (ADR-0005).
-  const nodeComplete = nodeSteps.length > 0 && nodeSteps.every((s) => completedSteps.has(s.id));
-
-  const stepDirectory = nodeSteps.length ? (
-    <div className="toc-complete">
-      <div className="lbl">Steps · 本課目錄</div>
-      {nodeSteps.map((s) => {
-        const done = completedSteps.has(s.id);
-        const isCurrent = mode === "step" && s.stepId === step!.stepId;
-        return (
-          <button
-            key={s.id}
-            type="button"
-            onClick={() => {
-              if (isCurrent) onToggleStep(s.id);
-              else onNavigateStep(graph.subject, node!.id, s.stepId);
-            }}
-            className={cn("toc-link toc-index-item", done && "on")}
-            aria-current={isCurrent ? "page" : undefined}
-            title={s.title}
-          >
-            <span className={cn("toc-index-dot", done && "on")} aria-hidden="true" />
-            <span className="min-w-0 flex-1 truncate text-left">{s.title}</span>
-          </button>
-        );
-      })}
-      {nodeComplete ? <span className="toc-complete-badge">節點完成</span> : null}
-    </div>
-  ) : null;
-
   // Footer prev/next shares a shape across modes: an element (by element order),
   // a course-ordered node, or a node's step (by DAG order). Steps carry their
   // `stepId` for navigation; nodes/elements carry their `id`.
@@ -365,34 +381,93 @@ export function ReaderPage({
       {!focusMode ? (
         <aside className="element-leftnav" aria-label="課程導覽">
           <div className="element-nav-label">課程 · {graph.subject}</div>
-          <div className="element-nav-group">
+          <nav className="element-nav-group">
             {graph.tiers.map((tier) => (
-              <div key={tier.tier}>
+              <section key={tier.tier}>
                 <div className="element-nav-tier">
-                  {TIER_ROMAN[tier.tier - 1] ?? tier.tier} · {tier.title}
+                  <span className="roman">{TIER_ROMAN[tier.tier - 1] ?? tier.tier}</span>
+                  <span>{tier.title}</span>
                 </div>
                 {tier.nodeIds.map((id) => {
                   const n = nodeById.get(id);
                   if (!n) return null;
+                  const active = id === activeNodeId;
+                  const expanded = expandedNodes.has(id) || active;
+                  const steps = stepsOfNode(graph.steps, id);
+                  const nodeDone = steps.length > 0 && steps.every((s) => completedSteps.has(s.id));
                   return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => onNavigateNode(graph.subject, id)}
-                      className={cn("element-nav-item", id === activeNodeId && "active")}
-                      aria-current={id === activeNodeId ? "page" : undefined}
-                      title={n.title}
-                    >
-                      <span className="n">{String(n.order).padStart(2, "0")}</span>
-                      <span className="dot" aria-hidden="true" />
-                      <span className="min-w-0 flex-1 truncate text-left">{n.title}</span>
-                    </button>
+                    <div key={id} className="element-nav-node">
+                      <div className="element-nav-row">
+                        <button
+                          type="button"
+                          onClick={() => onNavigateNode(graph.subject, id)}
+                          className={cn("element-nav-item", active && "active")}
+                          aria-current={active ? "page" : undefined}
+                          title={n.title}
+                        >
+                          <span
+                            className={cn("state-dot", nodeDone ? "done" : active ? "active" : "todo")}
+                            aria-hidden="true"
+                          />
+                          <span className="n">{String(n.order).padStart(2, "0")}</span>
+                          <span className="min-w-0 flex-1 truncate text-left">{n.title}</span>
+                        </button>
+                        {steps.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedNodes((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(id)) next.delete(id);
+                                else next.add(id);
+                                return next;
+                              })
+                            }
+                            className={cn("nav-chevron", expanded && "open")}
+                            aria-label={expanded ? `收合 ${n.title} 的步驟` : `展開 ${n.title} 的步驟`}
+                            aria-expanded={expanded}
+                          >
+                            <ChevronRight size={12} />
+                          </button>
+                        ) : null}
+                      </div>
+                      {expanded && steps.length > 0 ? (
+                        <div className="element-nav-children">
+                          {steps.map((s) => {
+                            const done = completedSteps.has(s.id);
+                            const isCurrent = mode === "step" && s.stepId === step!.stepId;
+                            return (
+                              <div
+                                key={s.id}
+                                className={cn("element-nav-child", isCurrent && "active")}
+                                aria-current={isCurrent ? "page" : undefined}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => onToggleStep(s.id)}
+                                  aria-label={done ? `標記 ${s.title} 為未完成` : `標記 ${s.title} 為完成`}
+                                  title={done ? "標記為未完成" : "標記為完成"}
+                                  className={cn("state-dot", done ? "done" : isCurrent ? "active" : "todo")}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => onNavigateStep(graph.subject, n.id, s.stepId)}
+                                  className="label"
+                                  title={s.title}
+                                >
+                                  {s.title}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
                   );
                 })}
-              </div>
+              </section>
             ))}
-          </div>
-          {mode === "step" && stepDirectory ? <div className="element-leftnav-bottom">{stepDirectory}</div> : null}
+          </nav>
         </aside>
       ) : null}
 
@@ -659,31 +734,79 @@ export function ReaderPage({
 
       {!focusMode ? (
         <aside className="element-toc" aria-label="本頁目錄">
-          <div className="toc-label">本頁導覽</div>
-          {toc.map((label, i) => (
-            <button
-              key={`${i}-${label}`}
-              type="button"
-              className={cn("toc-link", i === activeIndex && "on")}
-              onClick={() => scrollToHeading(i)}
-            >
-              {label}
-            </button>
-          ))}
-          {!readerModal ? (
-            <button
-              type="button"
-              className="toc-focus"
-              onClick={() => setFocusMode(true)}
-              title="聚焦模式 (Esc 離開)"
-            >
-              <Expand size={12} />
-              進入聚焦
-            </button>
+          <div className="toc-section">
+            <div className="toc-label">本頁導覽</div>
+            {toc.map(({ label, level }, i) => (
+              <button
+                key={`${i}-${label}`}
+                type="button"
+                className={cn(
+                  "toc-link",
+                  level === 3 && "toc-link-sub",
+                  i === activeIndex && "on",
+                )}
+                onClick={() => scrollToHeading(i)}
+              >
+                {label}
+              </button>
+            ))}
+            {!readerModal ? (
+              <button
+                type="button"
+                className="toc-focus"
+                onClick={() => setFocusMode(true)}
+                title="聚焦模式 (Esc 離開)"
+              >
+                <Expand size={12} />
+                進入聚焦
+              </button>
+            ) : null}
+          </div>
+
+          {mode === "step" && teachesList.length > 0 ? (
+            <div className="toc-section">
+              <div className="toc-label">此 STEP 教的元素</div>
+              <div className="element-chips">
+                {teachesShown.map((e) => (
+                  <Tooltip
+                    key={e.id}
+                    trigger={(props) => (
+                      <button
+                        {...props}
+                        type="button"
+                        className="element-chip"
+                        onClick={() => scrollToElement(e.id)}
+                        title={e.title}
+                      >
+                        <span className="tier">T{e.tier}</span>
+                        {e.title}
+                      </button>
+                    )}
+                  >
+                    <div className="chip-tooltip">
+                      <p className="chip-tooltip-title">{e.title}</p>
+                      <p className="chip-tooltip-def">
+                        {e.summary || "可點擊捲動到內文中第一次出現此詞彙的位置。"}
+                      </p>
+                    </div>
+                  </Tooltip>
+                ))}
+                {teachesHidden > 0 ? (
+                  <button
+                    type="button"
+                    className="element-chip element-chip-more"
+                    onClick={() => setShowAllTeaches(true)}
+                    title="展開全部詞彙"
+                  >
+                    +{teachesHidden} 更多
+                  </button>
+                ) : null}
+              </div>
+            </div>
           ) : null}
 
           {mode === "element" ? (
-            <div className="toc-index">
+            <div className="toc-section toc-index">
               <div className="toc-label">相關元素</div>
               {sortedElements.map((e) => (
                 <button
@@ -699,73 +822,27 @@ export function ReaderPage({
                 </button>
               ))}
             </div>
-          ) : (
-            <>
-              {mode === "node" && nodeSteps.length ? (
-                <div className="toc-complete">
-                  <div className="lbl">進度 · Steps</div>
-                  {nodeSteps.map((s) => {
-                    const done = completedSteps.has(s.id);
-                    return (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => onToggleStep(s.id)}
-                        className={cn("toc-link toc-index-item", done && "on")}
-                        title={s.title}
-                      >
-                        <span className={cn("toc-index-dot", done && "on")} aria-hidden="true" />
-                        <span className="min-w-0 flex-1 truncate text-left">{s.title}</span>
-                      </button>
-                    );
-                  })}
-                  {nodeComplete ? <span className="toc-complete-badge">節點完成</span> : null}
-                </div>
-              ) : null}
-              {mode === "step" && step!.teaches.length ? (
-                <div className="toc-index">
-                  <div className="toc-label">此 STEP 教的元素</div>
-                  {step!.teaches.map((id) => {
-                    const e = graph.elements[id];
-                    if (!e) return null;
-                    return (
-                      <button
-                        key={id}
-                        type="button"
-                        onClick={() => onNavigateElement(graph.subject, id, node!.id)}
-                        className="toc-link toc-index-item"
-                        title={e.title}
-                      >
-                        <span className="toc-index-n">T{e.tier}</span>
-                        <span className="min-w-0 flex-1 truncate text-left">{e.title}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {mode === "node" && node!.relatedElementIds.length ? (
-                <div className="toc-index">
-                  <div className="toc-label">關聯元素</div>
-                  {node!.relatedElementIds.map((id) => {
-                    const e = graph.elements[id];
-                    if (!e) return null;
-                    return (
-                      <button
-                        key={id}
-                        type="button"
-                        onClick={() => onNavigateElement(graph.subject, id, node!.id)}
-                        className="toc-link toc-index-item"
-                        title={e.title}
-                      >
-                        <span className="toc-index-n">T{e.tier}</span>
-                        <span className="min-w-0 flex-1 truncate text-left">{e.title}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </>
-          )}
+          ) : mode === "node" && node!.relatedElementIds.length ? (
+            <div className="toc-section toc-index">
+              <div className="toc-label">關聯元素</div>
+              {node!.relatedElementIds.map((id) => {
+                const e = graph.elements[id];
+                if (!e) return null;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => onNavigateElement(graph.subject, id, node!.id)}
+                    className="toc-link toc-index-item"
+                    title={e.title}
+                  >
+                    <span className="toc-index-n">T{e.tier}</span>
+                    <span className="min-w-0 flex-1 truncate text-left">{e.title}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </aside>
       ) : null}
     </div>

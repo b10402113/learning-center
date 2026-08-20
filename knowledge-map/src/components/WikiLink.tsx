@@ -22,8 +22,12 @@ export function WikiLink({ href, children }: WikiLinkProps) {
   if (parsed.kind === "source") {
     return <span className="source-ref">{parsed.target}</span>;
   }
+  // `target` is `<subject>/<kind>/<id>`; expose the element id so the step
+  // page's vocab chips can scroll to and highlight the first occurrence.
+  const parts = parsed.target.split("/");
+  const elementId = parts[1] === "elements" ? parts[2] : undefined;
   return (
-    <a className="wikilink" data-target={`learn/${parsed.target}`}>
+    <a className="wikilink" data-target={`learn/${parsed.target}`} data-element-id={elementId}>
       {children}
     </a>
   );

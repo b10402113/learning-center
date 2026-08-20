@@ -198,6 +198,53 @@ function extractElementLinks(body, subject) {
   return [...links];
 }
 
+// The "short definition" shown in the step page's vocab-chip tooltip: prefer
+// the element's plain-language or problem statement, else the first paragraph
+// of the body, stripped of markdown and truncated. Section headings may be
+// localized, so accept English and Chinese variants.
+const SUMMARY_HEADINGS = [
+  /^##\s+(In plain terms|白話|白話來說)/i,
+  /^##\s+(Problem Statement|問題|問題陳述)/i,
+];
+
+const MARKDOWN_NOISE = [
+  /\[\[[^\]]+\|([^\]]+)\]\]/g,
+  /\[([^\]]+)\]\([^)]+\)/g,
+  /[*_`#>]/g,
+];
+
+function stripMarkdown(text) {
+  let clean = text;
+  for (const re of MARKDOWN_NOISE) clean = clean.replace(re, "$1");
+  return clean.replace(/\s+/g, " ").trim();
+}
+
+export function extractElementSummary(body) {
+  const lines = String(body ?? "").split("\n");
+  let capture = false;
+  let fallback = "";
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    const isHeading = /^#{1,4}\s/.test(t);
+    if (isHeading) {
+      capture = SUMMARY_HEADINGS.some((re) => re.test(t));
+      continue;
+    }
+    if (!t || t.startsWith("```") || t.startsWith("|") || t.startsWith("![")) continue;
+    const para = [];
+    while (i < lines.length && lines[i].trim() !== "" && !/^#{1,4}\s/.test(lines[i].trim())) {
+      para.push(lines[i].trim());
+      i++;
+    }
+    const clean = stripMarkdown(para.join(" "));
+    if (!clean) continue;
+    if (!fallback) fallback = clean;
+    if (!capture) continue;
+    return clean.length > 200 ? `${clean.slice(0, 197).trimEnd()}…` : clean;
+  }
+  return fallback.length > 200 ? `${fallback.slice(0, 197).trimEnd()}…` : fallback;
+}
+
 // Extract element links from one named `## Heading` section of a body. Node
 // and element templates guarantee "Connections" and "Deep dive" stay in
 // English, but the prerequisites section may use localized headings, so accept
@@ -376,6 +423,7 @@ export function buildSubjectGraph({ subject, roadmap, nodeFiles, elementFiles, e
       taughtByNodes: (data.nodes ?? []).map(stripSubjectPrefix),
       taughtBySteps: elementToSteps.get(data.id) ?? [],
       deprecated: type === "question",
+      summary: extractElementSummary(body),
       sources: data.sources ?? [],
       connections: extractElementLinks(body, subject),
       prerequisiteIds: extractSectionElementLinks(body, subject, [

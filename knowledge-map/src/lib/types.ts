@@ -54,6 +54,9 @@ export interface Element {
   // True for retired element types (question) that keep rendering a page but
   // are no longer part of the active teaching contract.
   deprecated: boolean;
+  // Short plain-language definition extracted at generate time for vocab-chip
+  // tooltips on the step page (empty when the element body has no prose).
+  summary: string;
   sources: string[];
   connections: string[];
   prerequisiteIds: string[];

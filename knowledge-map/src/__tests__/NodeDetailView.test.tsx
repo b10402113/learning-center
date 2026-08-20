@@ -57,6 +57,7 @@ function makeGraph(stepCount: 0 | 2 = 2): { graph: SubjectGraph; node: GraphNode
         taughtByNodes: [],
         taughtBySteps: [],
         deprecated: false,
+        summary: "",
         sources: [],
         connections: [],
         prerequisiteIds: [],
