@@ -510,7 +510,7 @@ export function ReaderPage({
                   </>
                 )}
               </div>
-              <h1>{title}</h1>
+              <h1 className="mt-4">{title}</h1>
               {mode === "node" && node!.goal ? (
                 <p className="element-goal">{node!.goal}</p>
               ) : null}
@@ -659,7 +659,7 @@ export function ReaderPage({
 
       {!focusMode ? (
         <aside className="element-toc" aria-label="本頁目錄">
-          <div className="toc-label">本頁</div>
+          <div className="toc-label">本頁導覽</div>
           {toc.map((label, i) => (
             <button
               key={`${i}-${label}`}
@@ -684,7 +684,7 @@ export function ReaderPage({
 
           {mode === "element" ? (
             <div className="toc-index">
-              <div className="toc-label">元素</div>
+              <div className="toc-label">相關元素</div>
               {sortedElements.map((e) => (
                 <button
                   key={e.id}
@@ -724,7 +724,7 @@ export function ReaderPage({
               ) : null}
               {mode === "step" && step!.teaches.length ? (
                 <div className="toc-index">
-                  <div className="toc-label">此 step 教的元素</div>
+                  <div className="toc-label">此 STEP 教的元素</div>
                   {step!.teaches.map((id) => {
                     const e = graph.elements[id];
                     if (!e) return null;

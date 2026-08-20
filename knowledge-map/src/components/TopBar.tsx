@@ -48,9 +48,9 @@ export function TopBar({
 
   const toggleItem = (active: boolean) =>
     cn(
-      "flex h-7 items-center gap-1 rounded-md px-2.5 font-mono text-[0.7rem] transition-colors",
+      "flex h-8 items-center gap-1.5 rounded-md px-3 font-mono text-[0.72rem] transition-colors",
       active
-        ? "bg-brass/10 text-brass"
+        ? "bg-brand-primary/15 text-brand-primary border border-brand-primary/30"
         : "text-faint hover:text-foreground",
     );
 
@@ -81,7 +81,7 @@ export function TopBar({
           ref={selectRef}
           value={subject}
           onChange={(e) => onSelect(e.currentTarget.value)}
-          className="h-8 min-w-0 max-w-64 flex-1 cursor-pointer appearance-none rounded-lg border border-input bg-surface pl-[4.1rem] pr-8 font-mono text-xs font-medium text-foreground outline-none transition-colors hover:border-steel/70 focus:border-brass"
+          className="h-8 min-w-0 max-w-64 flex-1 cursor-pointer appearance-none rounded-lg border border-input bg-surface pl-[4.1rem] pr-8 font-mono text-xs font-medium text-foreground outline-none transition-colors hover:border-steel/70 focus:border-brand-primary"
         >
           {graphs.map((g) => (
             <option key={g.subject} value={g.subject}>
@@ -95,6 +95,7 @@ export function TopBar({
       </label>
 
       <div className="ml-auto flex items-center gap-4 text-[0.65rem] text-faint">
+        {/* View mode toggle — clearly separated */}
         <div className="flex items-center gap-0.5 rounded-lg border border-input bg-surface p-0.5">
           <button
             type="button"
@@ -116,18 +117,29 @@ export function TopBar({
           </button>
         </div>
 
-        <span className="hidden items-center gap-1.5 lg:flex" title="spine：節點的順序">
-          <span className="h-0.5 w-4 bg-muted"></span>
-          spine
-        </span>
-        <span className="hidden items-center gap-1.5 lg:flex" title="shared：共享概念">
-          <span className="h-px w-4 border-t-2 border-dashed border-brass-dim"></span>
-          shared
-        </span>
-        <span className="hidden items-center gap-1.5 lg:flex" title="written：已寫內容">
-          <span className="size-2 rounded-full bg-brass"></span>
-          charted
-        </span>
+        {/* Separator line between view toggle and status indicators */}
+        <div className="h-4 w-px bg-border" />
+
+        {/* Status indicators — badge style with icon+text */}
+        <div className="hidden items-center gap-2 lg:flex">
+          <span className="inline-flex items-center gap-1 rounded-md border border-input bg-surface px-2 py-0.5" title="spine：節點的順序">
+            <span className="h-0.5 w-3 bg-muted rounded"></span>
+            <span className="font-mono text-[0.62rem]">spine</span>
+          </span>
+          <span className="inline-flex items-center gap-1 rounded-md border border-input bg-surface px-2 py-0.5" title="shared：共享概念">
+            <span className="h-px w-3 border-t border-dashed border-brand-primary-dim"></span>
+            <span className="font-mono text-[0.62rem]">shared</span>
+          </span>
+          <span className="inline-flex items-center gap-1 rounded-md border border-input bg-surface px-2 py-0.5" title="written：已寫內容">
+            <span className="size-1.5 rounded-full bg-brand-primary"></span>
+            <span className="font-mono text-[0.62rem]">charted</span>
+          </span>
+        </div>
+
+        {/* Separator line before buttons */}
+        <div className="h-4 w-px bg-border" />
+
+        {/* Action buttons — clearly styled as clickable */}
         <Tooltip
           trigger={(props) => (
             <button
@@ -135,7 +147,12 @@ export function TopBar({
               type="button"
               onClick={onReset}
               disabled={!hasProgress}
-              className={cn(button({ variant: "outline", size: "sm" }), "h-7 px-2.5")}
+              className={cn(
+                "inline-flex items-center justify-center gap-1.5 font-mono transition-colors",
+                "rounded-md border border-input bg-surface px-2.5 py-1.5",
+                "text-faint hover:border-brand-primary hover:text-brand-primary",
+                "disabled:pointer-events-none disabled:opacity-40",
+              )}
               aria-label="重置進度"
             >
               <Reset size={12} />
@@ -148,7 +165,10 @@ export function TopBar({
         <button
           type="button"
           onClick={copyShareLink}
-          className={cn(button({ variant: "primary", size: "md" }), "h-7 px-3.5 text-[0.7rem]")}
+          className={cn(
+            button({ variant: "primary", size: "md" }),
+            "h-8 px-4 text-[0.72rem]",
+          )}
         >
           ⌘ 分享
         </button>
