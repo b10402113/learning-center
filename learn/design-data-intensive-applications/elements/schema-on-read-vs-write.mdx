@@ -1,0 +1,109 @@
+---
+id: schema-on-read-vs-write
+title: Schema-on-Read vs Schema-on-Write
+subject: design-data-intensive-applications
+tier: 1
+order: 4
+type: article
+nodes:
+  - design-data-intensive-applications/data-models-and-query-languages
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Schema flexibility in the document model]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Data locality for queries]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+# Schema-on-Read vs Schema-on-Write
+
+## Problem Statement
+
+每個資料庫都必須回答一個根本問題：**資料的結構什麼時候定義？** 兩種截然不同的策略長期並存：在寫入時強制定義結構（Schema-on-Write），或在讀取時才解釋結構（Schema-on-Read）。這不只是技術實現的差異，它直接影響了資料模型的選擇、系統演化的彈性，以及團隊協作的方式。
+
+## Why it matters
+
+這個區分是理解「為什麼文件資料庫（Document Database）會與關聯式資料庫（Relational Database）並存至今」的基礎。它決定了你在面對異質資料時的處理策略，也影響了系統隨時間演化的成本。選錯策略，往往會在專案中期付出高昂的遷移代價。
+
+## How it works
+
+### Schema-on-Write（寫入時定義結構）
+
+關聯式資料庫是這個策略的典型代表。在你建立資料表（Table）時，就必須明確定義每一欄位（Column）的名稱與資料型別（Data Type）。寫入資料時，資料庫會**立即驗證**：欄位是否符合型別？NOT NULL 約束是否滿足？外鍵（Foreign Key）是否指向有效的記錄？如果不符合，寫入直接失敗。
+
+這種做法的好處是：
+- **資料完整性（Data Integrity）**：資料庫本身就是驗證的第一道防線，壞資料根本進不來。
+- **查詢最佳化（Query Optimization）**：優化器（Optimizer）知道每個欄位的型別與大小，才能選擇最佳的執行計畫（Execution Plan）。
+- **明確的合約（Contract）**：團隊成員看到 Schema 就知道資料長什麼樣，不需要猜。
+
+代價是：
+- **Schema 遷移（Schema Migration）可以很痛苦**：例如 MySQL 在某些情況下執行 `ALTER TABLE` 需要複製整張表，對大型表來說可能花上數小時。PostgreSQL 11 之後大幅改善了這一點，但遷移仍然是需要謹慎規劃的操作。
+- **異質資料處理困難**：如果同一張表裡，不同來源的記錄結構不一樣，Schema-on-Write 就很難應付。
+
+### Schema-on-Read（讀取時解釋結構）
+
+文件資料庫（如 MongoDB）採用這種策略。寫入時資料庫不檢查結構，資料以原始格式（通常是 JSON 或 BSON）直接存儲。結構的解釋權完全交給應用程式碼——在讀取資料時，程式碼決定怎麼解析每個欄位。
+
+好處是：
+- **異質資料的天然盟友**：不同來源、不同結構的資料可以混在同一個集合（Collection）裡，不需要預先對齊。
+- **Schema 演化無痛**：新增欄位不需要任何資料庫層級的變更，應用程式直接讀寫即可。
+- **快速原型**：開發初期需求不確定時，可以先不花時間在 Schema 設計上。
+
+代價是：
+- **資料庫無法驗證資料**：壞資料會一路穿透到應用層，問題在讀的時候才爆發。
+- **應用程式的負擔加重**：每個讀取路徑都必須處理「這個欄位可能不存在」或「這個欄位可能是不同型別」的情況。
+- **「Schemaless」是誤導的命名**：你的程式碼仍然假設了某種結構——只是那個結構不在資料庫裡定義，而是在程式碼裡隱含。這就像動態型別語言不是「沒有型別」，而是把型別檢查延遲到執行期。
+
+### 靜態型別 vs 動態型別的類比
+
+這個對應非常精準：
+- **Schema-on-Write ≈ 靜態型別檢查（Static Typing）**：在編譯期（寫入時）就驗證結構，及早發現錯誤。
+- **Schema-on-Read ≈ 動態型別檢查（Dynamic Typing）**：在執行期（讀取時）才解釋結構，靈活但風險後移。
+
+兩者各有支持者，且在現代系統中往往共存而非互斥。
+
+### 何時選哪個？
+
+| 場景 | 推薦策略 |
+|------|----------|
+| 所有記錄共享相同結構、強調資料完整性 | Schema-on-Write |
+| 外部來源的異質資料、結構經常變動 | Schema-on-Read |
+| 開發初期需求尚未確定 | Schema-on-Read |
+| 需要複雜的 JOIN 與交易保證 | Schema-on-Write |
+
+### 趨勢：兩者正在融合
+
+現代資料庫正在模糊這條界線。PostgreSQL 的 JSONB 欄位讓關聯式資料庫也能做 Schema-on-Read——你可以把異質資料塞進 JSONB 欄位，同時保留關聯式 Schema 的其他欄位。MongoDB 則加入了 JSON Schema Validation，讓你可以在文件層級定義並強制驗證結構。完美的二分法在實務中越來越少見。
+
+## In plain terms
+
+Schema-on-Write 就像政府的制式表格——每一個欄位都固定好了，申請人只能照著填，填錯了直接退件。Schema-on-Read 則像一本空白筆記本——你愛怎麼寫就怎麼寫，但負責閱讀的人得自己搞清楚你寫的是什麼格式。
+
+## Practical use
+
+你日常使用的 PostgreSQL 就是典型的 Schema-on-Write：建立表時定義好每個欄位的型別與約束，寫入時資料庫嚴格檢查。而 Redis 裡快取的物件，本質上是 Schema-on-Read——資料以序列化的格式存儲，應用程式在讀取時自行反序列化並解釋結構。
+
+值得注意的是，PostgreSQL 的 JSONB 欄位讓你可以在同一個資料庫內同時採用兩種策略：結構化的欄位用傳統的 Schema-on-Write 保護，而異質的、快速變化的資料則塞進 JSONB 以 Schema-on-Read 處理。這是現代系統設計中非常實用的混合模式。
+
+## Connections
+
+- [[learn/design-data-intensive-applications/elements/relational-model|關聯模型 (Relational Model)]] — 關聯模型是 Schema-on-Write 的典範，透過表格、欄位與型別在寫入時定義結構
+- [[learn/design-data-intensive-applications/elements/impedance-mismatch|物件關聯不匹配 (Object-Relational Impedance Mismatch)]] — Schema 的彈性與僵化直接影響物件導向程式碼與關聯式資料庫之間的摩擦程度
+
+## Deep dive
+
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Schema flexibility in the document model]] — 文件模型的 Schema 彈性：結構隱含在程式碼中而非資料庫中
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Data locality for queries]] — 資料局部性：文件以連續字串存儲，讀取整份文件時效率高，但讀取片段時必須載入整份文件
+
+## Questions
+
+### Q1. Schema-on-Read 真的完全沒有 Schema 嗎？
+A1. 不是。「Schemaless」是一個容易誤導的說法。Schema-on-Read 只是把 Schema 的定義從資料庫移到了應用程式碼中。你的程式碼仍然假設資料有某種結構——例如「這個物件一定有 `name` 欄位」——只是資料庫不會在寫入時驗證這個假設。
+
+### Q2. 在什麼場景下，Schema-on-Write 會比 Schema-on-Read 更適合？
+A2. 當所有記錄共享相同的結構、且資料完整性至關重要時（例如金融交易系統、訂單系統），Schema-on-Write 更適合。它能在寫入時就攔截壞資料，而不是等到應用程式讀到壞資料時才崩潰。
+
+### Q3. PostgreSQL 的 JSONB 如何讓兩種策略共存？
+A3. JSONB 是一個可以存儲任意 JSON 文件的欄位型別。你可以在同一張表中，用傳統欄位（有 Schema 約束）存儲結構化的核心資料，再用 JSONB 欄位存儲異質的、結構不固定的附加資料。這樣既保留了關聯式 Schema 的完整性保證，又獲得了文件模型的彈性。
+
+### Q4. 為什麼 Schema-on-Write 的 Schema 遷移有時很昂貴？
+A4. 因為某些資料庫（特別是早期的 MySQL 版本）在執行 `ALTER TABLE` 時需要鎖定整張表並複製全部資料到新的表結構，對於 GB 甚至 TB 級的表來說，這個操作可能耗時數小時，且期間表無法正常讀寫。PostgreSQL 11 之後透過 in-place rewrite 大幅改善了這一點，但 Schema 遷移仍然是需要謹慎規劃的操作。

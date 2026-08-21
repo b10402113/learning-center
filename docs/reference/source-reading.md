@@ -6,11 +6,11 @@ Shared contract for how `learn-init`, `roadmap`, `nodes`, and `edges` read sourc
 
 A source is **large** when its `pdftotext` output exceeds either bound:
 
-| Metric | Threshold | Action |
-|---|---|---|
-| Lines | > 5,000 | sub-agent path |
-| Text size | > ~250 KB | sub-agent path |
-| else | — | main context reads directly, writes the digest itself |
+| Metric    | Threshold | Action                                                |
+| --------- | --------- | ----------------------------------------------------- |
+| Lines     | > 5,000   | sub-agent path                                        |
+| Text size | > ~250 KB | sub-agent path                                        |
+| else      | —         | main context reads directly, writes the digest itself |
 
 ## Digest files
 
@@ -32,10 +32,13 @@ updated: YYYY-MM-DD
 # Digest — <source-stem>
 
 ## Overview (L1)
+
 - <chapter/part> — <2–4 line summary>
 
 ## Sections (L2)
+
 ### <section id>
+
 - Locator: `[[sources/<subject>/<file>#<section>]]`
 - Summary: <what this section explains>
 - Key claims: <claim 1>; <claim 2>
@@ -44,9 +47,8 @@ updated: YYYY-MM-DD
 
 ## Sub-agent workflow (large sources)
 
-1. Compute `pdftotext` output; chunk on section boundaries (book chapters, numbered sections).
-2. Dispatch sub-agents **in parallel**, one per chunk. Each sub-agent reads only `sources/<subject>/`, writes a part digest to `learn/<subject>/digests/<source-stem>.<n>.part.md`, and returns only a compact TOC line for its chunk (chapter ids + one-line summaries).
-3. Merge the part files into `learn/<subject>/digests/<source-stem>.md`, stripping part suffixes, and record the source hash.
+1. Compute `pdftotext` output; chunk on section boundaries (book chapters, numbered sections), each chunk < 2000 lines.
+2. Dispatch sub-agents **in parallel**, one per chunk(<2000 lines). Each sub-agent reads only `sources/<subject>/`, writes a part digest to `learn/<subject>/digests/<source-stem>.<n>.part.md`, and returns only a compact TOC line for its chunk (chapter ids + one-line summaries).
 
 Sub-agents never write anywhere outside `learn/<subject>/digests/`. Their returned message must stay small — the file carries the content, not the message.
 

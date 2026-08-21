@@ -1,0 +1,70 @@
+---
+id: scaling-approaches
+title: 擴展方式：Vertical 與 Horizontal
+subject: design-data-intensive-applications
+tier: 1
+order: 5
+type: article
+nodes:
+  - design-data-intensive-applications/data-system-pillars
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Approaches for Coping with Load]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+## Problem Statement
+當負載增加時，你有什麼選擇？擴展沒有萬靈丹——正確的策略取決於你的負載模式。垂直擴展和水平擴展各有其適用場景和代價，而選錯方向要嘛浪費錢（過度配置），要嘛造成中斷（配置不足）。
+
+## Why it matters
+選擇錯誤的擴展策略，代價是雙重的：垂直擴展過頭代表你一直在買新機器但利用率越來越低；水平擴展過早代表你在還不需要分散式系統的階段就引入了它的全部複雜度。理解這兩種方式的取捨，是負載增長時的**第一個**架構決策——後續所有決定都建立在這個基礎之上。
+
+## How it works
+
+### 兩種根本路徑
+
+**向上擴展（Vertical Scaling）**：把機器換成更大的——更多 CPU、更多 RAM、更快的磁碟。好處是簡單：不需要改代碼、不需要引入分散式系統的複雜度。坏處是有上限：地球上最強的機器也是有限的。當你到達硬體極限，就只能走另一條路。
+
+**向外擴展（Horizontal Scaling / Shared-Nothing）**：加更多機器。理論上沒有上限——你可以一直加。但它引入了分散式系統的全部複雜度：資料複製、分割、一致性、跨節點的容錯。
+
+### 彈性 vs 手動
+
+- **彈性擴展（Elastic）**：根據負載自動新增或移除機器。適合流量波動大的場景——尖峰來了自動擴，尖峰過了自動縮。雲端平台的 auto-scaling 就是這個模式。
+- **手動擴展（Manual）**：預先配置機器。較簡單但需要精確的容量規劃——你得提前猜對需要多少資源。
+
+### 關鍵洞察：不存在通用的可擴展架構
+
+系統在每個數量級都必須重新設計。一個能處理 1,000 QPS 的系統，和一個能處理 1,000,000 QPS 的系統，架構根本不同。常用的智慧是：**先垂直擴展，撐不住再走分散式**——因為分散式系統本質上比單機系統更難。
+
+### Stateless vs Stateful
+
+- **無狀態服務（Stateless）**：不持有資料的服務（例如 API 伺服器、應用層邏輯），很容易水平擴展——在負載均衡器後面加機器就好。每台機器都是獨立的，不需要和其他機器協調。
+- **有狀態服務（Stateful）**：持有資料的服務（資料庫、快取、任何需要記住狀態的東西），擴展困難得多。資料必須在節點間複製並保持一致。這就是為什麼資料庫的擴展比應用層的擴展難得多——不是因為演算法更難，而是因為你需要解決分散式系統的核心問題：一致性、可用性和分割容忍度之間的權衡。
+
+## In plain terms
+擴展有兩條路：把單台機器升級到更強（vertical），或是加更多機器（horizontal）。前者簡單但有上限，後者無上限但複雜度高。最佳策略通常是先 vertical，撐不住再 horizontal。很多時候買一台更大的機器比建一套分散式系統便宜得多。
+
+## Analogy
+Vertical scaling 像是把小貨車換成大卡車——更強但還是單一輛車。Horizontal scaling 像是用車隊代替單輛車——可以無限擴充，但要有人協調哪輛車走哪條路、怎麼避免兩輛車跑到同一個地方。車隊的問題不是車不夠多，而是協調的成本。
+
+## Practical use
+在設計討論中，先問：「這個 service 是 stateless 還是 stateful？」Stateless 可以直接 horizontal scale——加機器 Behind a load balancer 就好；stateful 要先想 replication 和 partitioning 策略。很多時候 vertical scale 是最划算的起點——一台 128 核心、1TB RAM 的機器比搭建一套十節點的叢集便宜得多，而且运维複雜度低一個數量級。
+
+在實務中，擴展決策也受商業模式影響：如果你的負載可預測（例如 B2B SaaS 每天固定高峰期），手動擴展比彈性擴展更經濟；如果負載不可預測（例如突然爆紅的消費應用），彈性擴展的溢價是值得的。
+
+## Connections
+- [[learn/design-data-intensive-applications/elements/load-parameters|Load Parameters 負載參數]] — 負載參數的形狀（讀寫比、請求大小、分佈特性）直接決定你該選垂直還是水平擴展，以及哪種策略最有效
+- [[learn/design-data-intensive-applications/elements/performance-metrics|Performance Metrics 績效指標]] — 擴展策略的成效需要透過延遲、吞吐量等績效指標來驗證
+- [[learn/design-data-intensive-applications/elements/three-pillars-tradeoffs|三大支柱的取捨]] — 擴展決策本質上是在可靠性、可用性、效能之間的權衡；選對策略就是選對了哪個支柱優先
+
+## Deep dive
+Shared-nothing 架構（每個節點有自己獨立的 CPU、記憶體和磁碟——不共享儲存）是現代水平擴展的基礎。它消除了單點故障，允許吞吐量隨節點數量線性增長，但也引入了分散式資料的核心挑戰：怎麼在節點間保持資料一致性？這個問題驅動了 DDIA 後半部的全部內容——複製、分割、交易、共識。
+
+實務上，shared-nothing 架構的擴展不是無限的。以 Amazon 為例，即便是「加一台機器」這樣看似簡單的操作也需要仔細規劃——2015 年 AWS S3 的大規模中斷就是因為在容量擴展過程中輸入了錯誤的指令造成的。這事件的教訓是：擴展不只是技術問題，更是營運問題。你需要的不只是能加機器的架構，還需要能在不中斷服務的情況下安全操作的流程。
+
+另一個深層洞察是：**垂直擴展和水平擴展不是二選一，而是不同層級的組合**。一個成熟的系統可能在應用層做水平擴展（stateless 服務隨便加），在資料層做垂直擴展（用更大的資料庫機器），在快取層做水平擴展（Redis Cluster），在搜尋層做水平擴展（Elasticsearch）。每個層級的擴展策略取決於那個層級的特性和技術選型。
+
+## Questions
+1. 為什麼一家公司即使流量很高，也可能選擇垂直擴展而不是水平擴展？什麼條件會讓這個選擇合理？
+2. Stateless 服務和 Stateful 服務在水平擴展上的差異，根本原因不是技術難度，而是某個更基本的問題。那個問題是什麼？
+3. 為什麼作者說「不存在通用的可擴展架構」？這對系統設計討論意味著什麼？

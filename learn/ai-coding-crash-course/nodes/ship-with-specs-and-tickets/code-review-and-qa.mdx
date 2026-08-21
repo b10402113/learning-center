@@ -1,0 +1,105 @@
+---
+id: code-review-and-qa
+title: 三層 Code Review 流程
+subject: ai-coding-crash-course
+teaches:
+  - ai-coding-crash-course/code-review
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ai:899-1094]]"
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ai:13-672]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+# 三層 Code Review 流程
+
+## Learning goal
+
+用自動 code review 檢驗實作成果，理解 coding-standards 的角色與 QA 流程。
+
+## Lesson
+
+### 📝 三層檢查，由便宜到昂貴
+
+[[learn/ai-coding-crash-course/elements/code-review|Code Review 與 Coding Standards]] 的核心思路很簡單：把檢查分三層，最便宜的先跑，最貴的最後才出動。
+
+#### 🔧 第一層，零成本的自動化關卡
+
+這一層完全不消耗 Token，由 CI Pipeline 自動跑完，不需要任何人或 Agent 參與。它包含三類工具。Linting 負責掃語法風格、命名規範、未使用變數等格式問題，常見工具是 ESLint 和 Ruff。Type Checking 負責攔截型別錯誤、介面不符等靜態分析問題，TypeScript 和 mypy 是典型代表。Unit Tests 則是把已寫好的單元測試跑一遍，確保新實作沒有破壞既有功能。
+
+這三項是最便宜也最可靠的一層，能一次性攔截大量機械性問題。
+
+#### 🤖 第二層，Agent 深度 Review
+
+第一層通過之後，我們把 Diff 和相關上下文送進一個獨立的 Review Sub-Agent。它不做實作，只做檢查。它專門找三類第一層抓不到的問題。
+
+首先是 Spec 偏差。比如 Spec 要求 Server-side Filtering，Agent 卻用了 Client-side Filtering，這在格式和型別上完全合法，但偏离了設計意圖。
+
+其次是隱藏邏輯遺漏。例如「never enrolled」這個 Edge Case 被跳過或壓制了，實作看起來沒問題，但實際上少處理了一個分支。
+
+最後是 Tautological Tests（重言式測試）。測試通過了，卻什麼都沒驗到，等於白寫。
+
+這三類問題都涉及語意理解，不是純粹的格式或型別問題。Review Agent 能找到它們，正是因為它跑在自己的 Context Window 裡，不受實作階段 113k Token 上下文的污染，有足夠空間載入 coding-standards.md 並做深度分析。
+
+**為什麼第二層很重要？** 因為它補上了自動化工具的盲區。格式和型別問題可以機器化攔截，但 Spec 偏差、邏輯遺漏、重言式測試這些問題，需要語意層面的判斷力，只有獨立的 Review Agent 才能有效處理。
+
+#### 👤 第三層，人工 Sanity Check
+
+前兩層已經大幅減輕人工負擔。人類只需要關注三件事。設計決策是否合理。架構是否經得起擴展。以及那些 Agent 可能無法判斷的業務邏輯正確性。
+
+三層各有分工：低成本先跑，高成本最後出動。人工 Sanity Check 是最後一道安全網。
+
+---
+
+### 📋 coding-standards.md，越用越聰明的活文檔
+
+`coding-standards.md` 是放在專案根目錄的文字檔，由團隊維護。Review Agent 會讀取它作為檢查依據。它不是一次性的設定檔，而是會隨專案演進不斷成長的活文檔。
+
+#### 經典 Code Smells 作為起點
+
+預設內容來自 Martin Fowler《Refactoring》的經典 Code Smells。Feature Envy（特徵嫉妒）指的是函式大量使用另一個物件的資料，暗示它應該搬到那個物件裡。Shotgun Surgery（散彈槍手術）指的是改一個功能需要同時修改多個類別，代表職責過度分散。Divergent Change（發散式變化）指的是同一個類別因為多種不同原因而需要修改，違反 Single Responsibility Principle（單一職責原則）。
+
+#### 正向循環機制
+
+關鍵在於：當你注意到 Agent 做了你不喜欢的事，就把這條規則加進 `coding-standards.md`。下次 Review Agent 就會自動抓到它。
+
+舉個實務例子。你發現 Agent 寫的 context-menu items 總是缺少 leading icon，就在 standards 裡加一條：context-menu items 必須有圖示前綴。你發現 Agent 把測試檔案放在 app routes 裡，就加一條：test files 不得在 app routes 內。
+
+規範越豐富，自動化檢查越全面，形成一個正向循環。
+
+---
+
+### ⚡ Review Sub-Agent 的運作機制
+
+Code Review 在自己的「智慧區域」（Smart Zone）sub-agent 中執行，不會被主對話的 context window 污染。這就是它有效的原因。
+
+#### 為什麼獨立 Context 是關鍵
+
+實作過程會累積大量 Context，可能超過 113k Token。在同一個 Context 裡做 Review，模型會難以分辨「已寫的程式碼」和「應該檢查的標準」。獨立的 Sub-Agent 有乾淨的 Context Window，可以完整載入 coding-standards.md 並專注於比對偏差。
+
+#### 兩個 Review 面向
+
+Review 包含 Standards Review 和 Spec Review。Standards Review 檢查程式碼是否符合團隊的 coding standards。Spec Review 檢查實作是否符合原始 spec 的要求。Sub-Agent 輸出一份結構化的 Review Report，列出偏離 Spec 的項目、Code Smells、以及可疑的 Test。你根據 Report 修正問題，必要時將新的規則加進 coding-standards.md。
+
+---
+
+### 🔄 QA 迴圈，從實作到上線的完整閉環
+
+在 [[learn/ai-coding-crash-course/elements/implement-loop|Implement 迴圈]] 的最後一步，每個 ticket 完成後都會自動觸發 code review。完整流程分四步走。
+
+第一步，確保 CI Pipeline 跑過第一層自動化檢查，包含 Lint、Type Check 和 Tests。第二步，呼叫 Review Skill 啟動獨立的 Review Sub-Agent，把 Diff 和 Spec 一起送入。第三步，Review Agent 輸出報告後，你根據報告修正問題，必要時更新 coding-standards.md。第四步，人工 Sanity Check 通過後上線。
+
+#### 規範放在 Review 階段而不是 Implement 階段
+
+這裡有一個容易忽略的重點。Code Review 比 Implement 更不受到限縮。實作階段有探索、有大量變更、有測試，context window 被塞得很滿。但 Code Review 沒有探索需求、變更很少、測試已經寫好了，context window 裡的空間反而很充裕。
+
+這就是為什麼 Review 是載入 coding-standards.md 的最佳時機，而不是要求實作者在第一次寫程式碼時就把它記住。你不需要讓 implementer 把所有規範都記住，你只要確保 reviewer 有讀到這些規範就好。
+
+**為什麼這是流程設計上最聰明的地方？** 它承認了一個現實。Agent 在一次 context window 中很難同時記住大量規範又要產出高品質程式碼。但 reviewer 的 context window 是乾淨的，它可以專注地讀 standards、專注地比對 code，把偏離的項目一一抓出來。
+
+把規範的負擔放在 review 階段，而不是 implement 階段，是這套流程的設計精髓。
+
+## Sources
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ai:899-1094]]
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ai:13-672]]

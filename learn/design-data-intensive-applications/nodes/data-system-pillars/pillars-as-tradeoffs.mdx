@@ -1,0 +1,168 @@
+---
+id: pillars-as-tradeoffs
+title: 資料系統三大支柱的取捨：Reliability、Scalability、Maintainability 的設計框架
+subject: design-data-intensive-applications
+teaches:
+  - design-data-intensive-applications/three-pillars-tradeoffs
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Reliability]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Scalability]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Maintainability]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Summary]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+## Learning goal
+
+用真實案例展示三個支柱之間的取捨關係，作為後續章節的設計框架
+
+## Lesson
+
+到目前為止，我們已經分別拆解了 [[design-data-intensive-applications/fault-vs-failure|Reliability]]、[[design-data-intensive-applications/load-parameters|Scalability]]、[[design-data-intensive-applications/operability|Maintainability]] 三個支柱。你可能已經感覺到一件事——它們之間有張力。強化其中一個，往往會削弱另外兩個。
+
+這不是系統設計的缺陷，而是它的本質。本步我們把這些取捨攤開來看，建立一個你會在整本書反覆使用的分析框架。
+
+### 📝 三個支柱一句話回顧
+
+先快速統整，確保我們在同一页上：
+
+- **Reliability**：系統在硬體故障、軟體缺陷、人為失誤下，仍然能正確運作。
+- **Scalability**：負載增長時，系統仍能維持可接受的效能。
+- **Maintainability**：系統易於運作、易於理解、易於演進。
+
+三者各自解決真實問題，但沒有一個架構決策能讓三者同時變好。這就是為什麼取捨是設計的起點，不是終點。
+
+### ⚡️ 取捨一：Reliability vs Scalability
+
+最經典的張力出現在 [[design-data-intensive-applications/fault-tolerance|fault tolerance]] 的實作方式上。我們用一個具體場景來看。
+
+**場景**：你在設計一個訂單資料庫，有兩台伺服器。
+
+**選項 A——同步複製（Synchronous Replication）**
+
+每筆寫入必須等兩台機器都確認才算成功。如果主機掛了，備機有完整資料，零丟失。但代價是每筆寫入都要多等一次網路來回，write latency 直接翻倍。在寫入密集的工作負載下（例如每秒數萬筆交易），這個延遲會拖慢整個系統的吞吐量。
+
+**選項 B——非同步複製（Asynchronous Replication）**
+
+主機寫入成功就回覆客戶端，複製到備機是背景任務。寫入延遲低、吞吐量高、Scalability 好。但備機的資料永遠落後主機幾毫秒到幾秒。如果主機在這個時間窗口內故障，還沒來得及複製的資料就丟了。
+
+**為什麼這個取捨很重要？**
+
+因為業務場景決定答案：
+
+| 業務場景 | 合理選擇 | 原因 |
+| --- | --- | --- |
+| 金融交易系統 | 同步複製 | 丢一筆交易的代價太高 |
+| 社群媒體按讚計數 | 非同步複製 | 丢幾筆按讚的影響微乎其微 |
+
+一句話總結 [[design-data-intensive-applications/three-pillars-tradeoffs|reliability 與 scalability 的取捨]]：**強一致性換延遲，低延遲換資料風險。** 沒有對錯，只有適不適合你的場景。
+
+### ⚡️ 取捨二：Reliability vs Maintainability
+
+冗餘是提升可靠性的基本手段——多一個副本，少一個單點故障。但每多一個元件，系統的運維複雜度就跟著上升。我們看兩個具體例子。
+
+**例子一：Netflix 的 Chaos Monkey**
+
+這個工具會在生產環境隨機關閉服務實例，強迫工程團隊確認系統能承受故障。從 Reliability 角度，這是非常聰明的投資——團隊在真正故障發生前就驗證過容錯機制。
+
+但從 Maintainability 角度，它引入了：
+
+- 額外的工具鏈（要安裝、要升級）
+- 額外的監控需求（要觀察混沌實驗的影響）
+- 額外的認知負擔（工程師要理解 Chaos Monkey 的行為模式、設定安全的爆炸半徑、每次演練後分析結果）
+
+這些都是真實的運維成本。
+
+**例子二：配置複雜度**
+
+一個具備完整容錯能力的分散式資料庫，可能需要設定：
+
+- 複製因子（replication factor）
+- Quorum 大小
+- 故障偵測超時
+- 自動故障轉移策略
+- 資料再平衡策略
+
+每一個設定項都是一個可能出錯的點。相比之下，一個單節點的 PostgreSQL 只需要 `pg_hba.conf` 和 `postgresql.conf` 少數幾個設定。
+
+**為什麼這個取捨很重要？**
+
+因為可靠性提升的背面，就是一張維護帳單。你在前面加的每一層防護，後面都要有人去維護、去理解、去 debug。
+
+### ⚡️ 取捨三：Scalability vs Maintainability
+
+水平擴展是突破單機瓶頸的標準答案。但 shared-nothing 架構帶來的複雜度，遠超「多開幾台機器」。
+
+**場景**：你的使用者資料原本存在一台 PostgreSQL 上。日活突破五百萬後，你決定做 sharding——把使用者資料按 user ID hash 分散到八台機器上。
+
+**原本**：一個 SQL JOIN 就能完成的查詢。
+
+**現在**：你需要處理這些問題——
+
+1. 資料分割的 key 怎麼選
+2. 跨節點的一致性怎麼保證
+3. 節點之間怎麼同步
+4. Hot spot 怎麼處理
+
+每一個問題都對應一整套技術方案，每一套方案都需要工程時間去實作、測試、和維護。
+
+更現實的是，這些複雜度不是一次性投入：
+
+| 維護場景 | 單機 PostgreSQL | Sharded Cluster |
+| --- | --- | --- |
+| 日常巡檢 | 資深工程師每週約 1 小時 | 可能需要專門 SRE 團隊每天盯著 |
+| 節點上線/下線 | 不需要 | 需要再平衡 |
+| 系統升級 | 直接更新 | 需要小心翼翼地滾動更新 |
+
+**為什麼這個取捨很重要？**
+
+因為 Scalability 的代價不是一次性的架構成本，而是持續性的運維負擔。在你決定拆分之前，先問自己：這個複雜度，我有能力長期承擔嗎？
+
+### 💡 務實原則：先垂直擴展，被迫再轉分散
+
+理解了三個取捨之後，有一個務實的原則值得記在腦子裡：**先垂直擴展，直到被迫才轉向水平。**
+
+垂直擴展的優勢在於它不需要改架構。把 PostgreSQL 從 16GB RAM 升到 64GB，加一顆更快的 NVMe SSD，效能可能就從「快要撐不住」變成「還能再撐一年」。這段時間你不需要學 shard、不需要處理跨節點交易、不需要為分散式系統的 partial failure 寫額外的容錯邏輯。你把時間花在更接近業務價值的事情上。
+
+垂直擴展有硬上限——最快的 CPU 就那個速度，最大的單機記憶體就那張量。到了天花板，你確實得轉向水平擴展。但那個時候，你已經對自己的工作負載有了充分理解：
+
+- 哪些查詢最吃資源
+- 哪些操作是瓶頸
+- 資料的存取模式長什麼樣
+
+這些理解會讓你的 shard 設計更精準，而不是在系統早期就猜一個可能根本不對的分散式架構。
+
+**為什麼這個原則很重要？**
+
+因為它幫你把複雜度的帳單延後到你準備好支付的時候。過早分散式設計，是最常見的架構反模式之一。
+
+### 🔧 取捨與 DDIA 章節的對應
+
+三大支柱的取捨不是抽象概念，它們直接對應 DDIA 後續章節的技術選擇：
+
+| DDIA 章節 | 主題 | 核心取捨 |
+| --- | --- | --- |
+| 第五章 [[design-data-intensive-applications/single-leader-replication\|複製]] | Replication | Reliability vs Scalability：同步還是非同步、單主還是多主、強一致還是最終一致 |
+| 第七章 [[design-data-intensive-applications/partitioning-strategies\|分割]] | Partitioning | Scalability vs Maintainability：sharding 能分散負載，但增加了跨節點查詢和資料再平衡的複雜度 |
+| 第八章 [[design-data-intensive-applications/transactions-and-isolation\|交易與隔離]] | Transactions | Reliability vs Performance：強隔離級別更安全但更慢 |
+| 第九章 [[design-data-intensive-applications/consistency-and-consensus\|共識]] | Consensus | 在不完全犧牲 Scalability 的前提下達成 Reliability |
+| 第十一章 [[design-data-intensive-applications/batch-and-stream-processing\|批次與串流處理]] | Batch & Stream | 兩種範式在三大支柱上做出截然不同的取捨 |
+
+這個表格是你讀後續章節時的地圖。每當你看到一個新技術，先回到這個框架問：它在哪兩個支柱之間做了什麼樣的取捨？
+
+### 📝 框架作為透鏡
+
+在你繼續讀下去之前，值得把這個框架刻在腦子裡：後續每一章介紹的技術——replication、partitioning、transactions、consensus、batch processing——都是在三大支柱的三角形裡找位置。沒有哪個技術是「最好的」，只有在特定場景下最適合的取捨。
+
+當你在設計文件中提出一個方案時，試著用這個框架為它辯護：
+
+> 我選擇 X，因為它在 reliability 和 scalability 之間取得平衡，而我們的業務特性決定 reliability 的權重更高。
+
+這種有根據的判斷，就是架構師的核心能力。你不需要選「完美」的方案，你需要選「能說清楚為什麼」的方案。
+
+## Sources
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Reliability]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Scalability]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Maintainability]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Summary]]

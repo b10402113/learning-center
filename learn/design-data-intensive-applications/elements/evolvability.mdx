@@ -1,0 +1,106 @@
+---
+id: evolvability
+title: Evolvability 可演進性
+subject: design-data-intensive-applications
+tier: 1
+order: 8
+type: article
+nodes:
+  - design-data-intensive-applications/data-system-pillars
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Maintainability]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+## Problem Statement
+需求會變、功能會加、資料模型會演化、新的使用場景會不斷湧現。如果資料系統抵抗變化，每一次修改都變成昂貴、高風險、緩慢的操作。怎麼建立一個「歡迎變化」而不是「抵抗變化」的系統？
+
+## Why it matters
+不能演進的軟體會變成遺留系統（legacy system）——被維護只是因為沒有選擇，被恐懼而不是被信任。可演進性的差異體現在：面對新需求時，一個系統能在幾天內適應，另一個系統需要幾個月小心翼翼的重構。前者讓人有勇氣做正確的事，後者讓人選擇最安全但最不恰當的 workaround。
+
+## How it works
+資料系統層級的可演進性，意味著能在不停機、不大規模重寫的情況下完成 schema 變更、新增資料型別、修改存取模式。
+
+### 1. Schema-on-read 與 schema-on-write
+
+**Schema-on-write**（關聯式資料庫）在寫入時強制結構——加欄位需要 `ALTER TABLE`，但能保證一致性。**Schema-on-read**（文件資料庫）把結構的詮釋延遲到讀取時——對異質資料更靈活，但把複雜度推到應用程式碼中。
+
+兩者各有適用場景：
+
+- Schema-on-write 適合結構穩定、需要跨資料集強制一致性的場景。欄位型別在寫入時就被驗證，壞資料根本進不來。
+- Schema-on-read 適合結構變化快、不同記錄可能有不同欄位的場景。新欄位可以隨意加上去，不需要改動已有資料的結構。
+
+沒有哪一個「更好」——取決於你的資料是否有穩定的結構，還是差異很大。
+
+### 2. 編碼格式的相容性
+
+資料流經資料庫、服務、訊息佇列時，編碼格式必須同時支援：
+
+- **向後相容（backward compatibility）**：新版程式碼能讀舊版資料。
+- **向前相容（forward compatibility）**：舊版程式碼能讀新版資料。
+
+這在滾動部署（rolling deployment）中至關重要——同一時間有多個版本的應用程式碼在執行。Thrift、Protocol Buffers 和 Avro 都提供了明確的 schema 演化規則，讓你能在不同版本的程式碼之間安全地遷移。
+
+Avro 特別值得關注：它用欄位名稱（而非 tag number）來匹配，因此對動態生成的 schema 特別友好。例如，把關聯式資料庫的 schema 自動反射成 Avro schema，不需要手動維護對應關係。
+
+### 3. 資料比程式碼活得久
+
+資料庫內容可能存在數年；應用程式碼幾分鐘就能替換。一個看似簡單的 schema 變更（比如加一個欄位）必須考慮到：舊版應用程式碼在變更後的幾天甚至幾週內仍然在讀取這份資料。如果新欄位在舊版程式碼中被忽略，靜默資料丟失（silent data loss）就會發生——舊版讀了記錄、寫回時把不認識的欄位丟掉，資料就悄悄消失了。
+
+這是最危險的 bug：不會出現在 error log 裡，不會觸發告警，但資料已經壞了。
+
+### 4. 消除偶然複雜度
+
+系統中的偶然複雜度越少，越容易修改。每一個多餘的工具、每一個沒有文件化的設定、每一個 workaround 都會為未來的每一次修改增加阻力。這與 [[learn/design-data-intensive-applications/elements/simplicity-and-abstraction|Simplicity 與 Abstraction]] 緊密相關——簡單性讓可演進性成為可能。
+
+### 實務檢驗標準
+
+可演進性的實用測試：加一個新欄位到你的資料模型，需要改多少個檔案？如果答案是「一個」（schema 定義），系統是可演進的。如果答案是「二十個」（schema、序列化程式碼、API 定義、文件、測試），系統在抵抗變化。
+
+## In plain terms
+可演進性就是「系統能不能優雅地適應變化」。需求會變、資料模型會改、新功能會加——如果每次改動都要大規模重構，系統就會變成包袱。好的系統讓變化變得低成本、低風險。
+
+## Analogy
+樂高積木是可演進的——你可以拆掉一部分，換上新的，整體結構不受影響。相比之下，水泥牆是不可演進的——你要改一個窗戶的位置，就得整面牆打掉重來。好的數據系統設計像樂高，不是水泥。
+
+更進一步的觀察：樂高之所以能隨意組合，是因為積木之間有標準化的接口。資料系統的可演進性同樣依賴標準化的介面——schema 定義、序列化協議、API 契約。如果這些介面不穩定或不透明，每一次變化都像在水泥牆上打洞。
+
+## Practical use
+在選擇技術棧時，問：「如果明天要加一個新欄位，需要改多少地方？」如果答案涉及資料庫 migration、序列化程式碼修改、API 更新、文件重寫——你面對的是一個可演進性差的系統。如果只需要改一個 schema 定義，其他自動更新——那就選對了。
+
+### 具體的判斷標準
+
+- **Schema 變更的成本**：需要多少步驟？需要多少 downtime？新版和舊版的應用程式碼能同時工作嗎？
+- **序列化格式的相容性保證**：選用的格式是否明確定義了向後/向前相容的規則？還是相容性是「看實作」的？
+- **資料模型的靈活性**：新增一種新的資料類型，需要改動多少個系統元件？
+
+### 滾動部署的陷阱
+
+滾動部署期間，新舊版本的程式碼會同時執行一段時間。如果你的編碼格式不支援向後相容，新版寫入的資料會讓舊版崩潰。如果你的格式不支援向前相容，舊版寫入的資料會讓新版產生解析錯誤。靜默資料丟失是最容易被忽視的——新欄位被寫入，舊版程式碼讀到它但不理解，寫回時丟掉，資料就永遠少了一塊。
+
+這也是為什麼 [[learn/design-data-intensive-applications/elements/operability|Operability 可維運性]] 和可演進性密不可分：可演進性讓你能快速適應變化，可維運性確保變化在生產環境中穩定地發生。
+
+## Connections
+- [[learn/design-data-intensive-applications/elements/simplicity-and-abstraction|Simplicity 與 Abstraction]]：減少偶然複雜度是提升可演進性最直接的手段。每多一個工具或概念，每一次未來的修改都多一層阻力。
+- [[learn/design-data-intensive-applications/elements/operability|Operability 可維運性]]：可演進性讓你能改，可維運性讓你敢改。兩者共同決定了系統的長期生命力。
+
+## Deep dive
+可演進性在序列化格式的選擇中體現得最為具體。Thrift、Protocol Buffers、Avro 三者的相容性模型各不相同：
+
+**Protocol Buffers** 用 tag number 匹配欄位。加新欄位時，只要用一個新的 tag number，舊版程式碼會忽略不認識的欄位（向後相容）。但刪除欄位時要小心——如果舊版用 tag 3 寫了資料，新版刪掉 tag 3，資料就丟了。
+
+**Avro** 用欄位名稱匹配，不依賴 tag number。這讓它對 schema 演化更寬容——重命名欄位需要額外處理，但加減欄位非常安全。更關鍵的是，Avro 的 writer schema 和 reader schema 可以不一樣，只要它們之間有足夠的相容性。這使得 Avro 特別適合動態產生 schema 的場景——例如，把關聯式資料庫的 table schema 反射成 Avro schema，每次資料庫 schema 改變時 Avro schema 自動跟著變，不需要手動維護。
+
+**向前相容的含義**常被誤解。向前相容不只是「新欄位能被忽略」——它要求舊版程式碼在遇到不認識的欄位時，仍然能正確地處理它認識的欄位。如果你的反序列化器在遇到未知欄位時拋出異常，你就有向前相容性問題。
+
+**靜默資料丟失**是可演進性缺陷中最危險的一種。場景如下：新版寫入一份記錄，帶有一個新欄位。舊版程式碼讀到這份記錄，不認識新欄位，選擇忽略。但舊版隨後把這份記錄寫回——不帶那個新欄位。從此之後，那個欄位的值就從系統中消失了。沒有任何告警、沒有任何異常、沒有任何痕跡。資料就這樣靜靜地壞了。這也是為什麼在設計 schema 演化策略時，必須考慮完整的讀-寫生命週期，而不僅僅是「能不能讀」的問題。
+
+**意外複雜度的累積**是可演進性的隱形殺手。每一個 workaround、每一個未文件化的設定、每一個「只在特定情況下有效」的配置，都是對未來修改的阻力。這與 [[learn/design-data-intensive-applications/elements/simplicity-and-abstraction|Simplicity 與 Abstraction]] 的核心觀點一致：系統的複雜度不應該超過解決問題所必需的。減少不必要的工具、減少不必要的抽象層、減少不必要的配置選項——每減少一層，後續的修改就少一分阻力。
+
+更深層的思考：可演進性不是一個「功能」，而是一個系統品質。它不會出現在 product spec 裡，不會被 demo 出來，但它決定了系統在三到五年後是「充滿活力的資產」還是「維護的地獄」。選擇一個可演進的架構，就是選擇讓團隊在未來有做正確決定的自由——而不是被過去的決定困住。
+
+## Questions
+1. 為什麼作者說「資料比程式碼活得久」？這對 schema 設計有什麼啟示？（提示：想想滾動部署期間發生了什麼。）
+2. 向後相容（backward compatibility）和向前相容（forward compatibility）的差異是什麼？各解決了什麼問題？（提示：向後相容讓新版讀舊資料；向前相容讓舊版讀新資料。）
+3. 為什麼 schema-on-read 在某些場景下比 schema-on-write 更合適？（提示：考慮資料結構高度異質的情境。）

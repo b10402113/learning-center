@@ -1,0 +1,192 @@
+---
+id: graph-models-and-query-languages
+title: 圖資料模型與查詢語言：Property Graph、Triple-Store、Cypher vs SQL 完整比較
+subject: design-data-intensive-applications
+teaches:
+  - design-data-intensive-applications/graph-data-model
+  - design-data-intensive-applications/data-model-decision-framework
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Graph-Like Data Models]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Property Graphs]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#The Cypher Query Language]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Triple-Stores and SPARQL]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#The Foundation: Datalog]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Relational Versus Document Databases Today]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+# 圖資料模型與查詢語言
+
+## Learning goal
+
+能描述屬性圖模型（Property Graph）與 Triple-Store 的結構差異，用 Cypher 與 SQL 做同一件查詢的對比，並在給定場景中從關聯、文件、圖三種模型中做出有根據的選擇。
+
+## Lesson
+
+### 📝 當關係變成主角
+
+前面我們走過了 [[learn/design-data-intensive-applications/elements/relational-model|關聯模型 (Relational Model)]] 的三十年霸業，也看見了 [[learn/design-data-intensive-applications/elements/nosql-movement|NoSQL 運動 (NoSQL Movement)]] 如何從四個方向同時衝擊這個格局，催生了文件資料庫這條新路。但不管是關聯模型還是文件模型，當我們把目光轉向一種特定的資料形狀時，兩者都會顯得笨拙。
+
+想像一個社交網路。你有五千個好友，每個好友又有自己的好友，好友的好友又可能跟你的其他好友重疊。如果我們要問「我所有朋友的朋友中，誰住在台北？」——在關聯模型裡，你需要做多層 JOIN；在文件模型裡，你要嘛把整棵好友樹複製進每個文件（資料冗餘），要嘛在應用程式裡手動跑迴圈。兩種做法在關係密度升高時都會變得痛苦。
+
+**為什麼這很重要？** 因為當多對多關係（Many-to-Many Relationship）非常普遍，實體之間的連結緊密交織到關聯表的 JOIN 和文件的嵌套都無法自然表達時，你會需要一個完全不同的工具。這就是圖模型登場的時機。
+
+### 📝 屬性圖模型：頂點、邊、屬性
+
+[[learn/design-data-intensive-applications/elements/graph-data-model|圖資料模型 (Graph Data Model)]] 的核心概念極度簡潔。整個結構只有兩種元素：
+
+**頂點（Vertices）**代表實體。一個人、一筆交易、一個路口、一篇文章——都是頂點。每個頂點有唯一 ID，並可以攜帶任意數量的 key-value 屬性（Properties），例如 `{name: "Alice", city: "Taipei"}`。
+
+**邊（Edges）**代表實體之間的關係。每條邊同樣有唯一 ID，記錄著起點（Head Vertex）、終點（Tail Vertex）、一個方向標籤（Label），以及自己的 key-value 屬性，例如 `{since: 2019, weight: 0.8}`。
+
+**跟關聯模型有什麼不同？**
+
+關鍵差異在於：在圖模型中，邊跟頂點一樣是**一等公民（First-Class Citizens）**。你不需要透過 JOIN 才能「追蹤」關係，邊本身就是可以直接遍歷的對象。而且，任何頂點都可以連接到任何其他頂點——不需要預先定義 schema，不需要 ALTER TABLE，隨時可以在兩個毫不相關的節點之間建立一條新邊。
+
+💡 **一個有趣的對比：** 圖資料庫的底層儲存可以用兩張關聯表來模擬：一張存頂點、一張存邊。但「能存」和「適合存」是兩回事。關聯模型的遍歷成本隨 JOIN 層數指數成長，圖模型的遍歷成本則恆定為 O(1)——從一個頂點沿邊走到下一個頂點，就像翻書翻到下一頁一樣自然。
+
+你可能聽過 CODASYL 網路模型——1970 年代的節點加邊結構。現代圖資料庫跟它有根本差異：不需要預先定義紀錄類型之間的導引路徑（No Schema Restrictions），任何頂點可以直接按 ID 存取（不必導引），頂點和邊在邏輯上無序，而且支援聲明式查詢語言（Declarative Query Language）。這是「描述要什麼」，不是「描述怎麼找」。
+
+### 📝 Cypher vs SQL：4 行對 29 行的差距
+
+我們用一個具體問題來感受差距：**「找出所有從美國移居到歐洲的人」。**
+
+假設圖結構如下：每個人是一個頂點，地區也是頂點，邊 `BORN_IN` 表示出生地，邊 `EMIGRATED_TO` 表示移居地。地區之間有 `WITHIN` 邊表示包含關係（例如 Idaho WITHIN USA）。
+
+**Cypher 查詢**（4 行）：
+
+```cypher
+MATCH (person)-[:BORN_IN]->(country)-[:WITHIN*0..]->(continent)
+WHERE continent.name = 'America'
+WITH person
+MATCH (person)-[:EMIGRATED_TO]->(country2)-[:WITHIN*0..]->(continent2)
+WHERE continent2.name = 'Europe'
+RETURN person.name
+```
+
+**SQL 等效查詢**（29 行）：
+
+```sql
+WITH RECURSIVE
+  -- 找出美洲所有地區（含子地區的遞迴展開）
+  america(id) AS (
+    SELECT id FROM regions WHERE name = 'America'
+    UNION
+    SELECT r.id FROM regions r
+    JOIN edges e ON e.tail_vertex = r.id AND e.label = 'WITHIN'
+    JOIN america a ON e.head_vertex = a.id
+  ),
+  -- 找出歐洲所有地區
+  europe(id) AS (
+    SELECT id FROM regions WHERE name = 'Europe'
+    UNION
+    SELECT r.id FROM regions r
+    JOIN edges e ON e.tail_vertex = r.id AND e.label = 'WITHIN'
+    JOIN europe eu ON e.head_vertex = eu.id
+  )
+SELECT DISTINCT p.name
+FROM vertices p
+JOIN edges eb ON eb.head_vertex = p.id AND eb.label = 'BORN_IN'
+JOIN america a ON eb.tail_vertex = a.id
+JOIN edges ee ON ee.head_vertex = p.id AND ee.label = 'EMIGRATED_TO'
+JOIN europe eu ON ee.tail_vertex = eu.id;
+```
+
+**為什麼差距這麼大？**
+
+差距的根源不是 SQL 的能力不足。SQL 透過遞迴公用表表達式（Recursive CTE）完全可以表達圖遍歷，只是語法的抽象層級跟圖模型不對應。SQL 是為二維表格設計的，而圖遍歷天然是「沿著箭頭走」的思維——Cypher 的箭頭語法 `(A)-[:WITHIN]->(B)` 正好匹配這個直覺。29 行對 4 行，不是哪個更好或更差的問題，而是**資料模型與問題域的匹配度**問題。
+
+更進一步，Cypher 支援可變長度路徑遍歷（Variable-Length Path Traversal）。`:WITHIN*0..` 表示「沿著 WITHIN 邊走零步或任意多步」。這種查詢在關聯模型中需要手動管理遞迴深度和已訪問集合（Visited Set），複雜度急劇攀升；在圖模型中只比上面的查詢多一行語法。
+
+### 📝 Triple-Store 與 SPARQL：圖模型的另一個流派
+
+圖模型還有另一個流派：三元組儲存（Triple-Store）。
+
+Triple-Store 把所有資料拆成一個個（主詞，謂詞，受詞）三元組（Subject, Predicate, Object）。例如：
+
+```
+(Alice, knows, Bob)
+(Alice, name, "Alice")
+(Bob, lives_in, Taipei)
+```
+
+受詞（Object）可以是一個純值（表示屬性），也可以是另一個頂點（表示邊）。跟屬性圖的差異在於：Triple-Store 的結構更嚴格——它只能表達三元組，不能像屬性圖那樣在邊上隨意附加任意 key-value 屬性。
+
+Triple-Store 通常搭配 RDF（Resource Description Framework）格式，用 URI 來命名每一個實體和關係，以避免跨組織的命名衝突。這使得 Triple-Store 特別適合語意網（Semantic Web）和跨組織的資料交換場景——不同機構可以用各自的 URI 命名實體，再透過 RDF 串接起來。
+
+#### SPARQL 查詢範例
+
+查詢 Triple-Store 的語言是 SPARQL。它比 Cypher 更簡潔：
+
+```sparql
+SELECT ?person WHERE {
+  ?person :BORN_IN ?country .
+  ?country :WITHIN* ?continent .
+  ?continent name "America" .
+  ?person :EMIGRATED_TO ?country2 .
+  ?country2 :WITHIN* ?continent2 .
+  ?continent2 name "Europe" .
+}
+```
+
+SPARQL 的模式匹配（Pattern Matching）語法直接描述圖結構，讀起來像在畫一張小圖。Cypher 的箭頭語法實際上就是從 SPARQL 借鑑來的。
+
+#### 屬性圖 vs Triple-Store：怎麼選？
+
+在實踐中，屬性圖（Property Graph）和 Triple-Store 之間的界線正在模糊。Neo4j 等系統逐漸支援 RDF 匯入，而一些 Triple-Store 也開始支援屬性。選擇哪個，往往取決於你的生態系需求：
+
+- **需要跟外部組織交換語意資料** → RDF + SPARQL 是標準
+- **內部高效的圖遍歷** → 屬性圖 + Cypher 通常更順手
+
+### 📝 Datalog：查詢語言的祖師爺
+
+1980 年代，學術界發展出了一套名為 Datalog 的語言，它是 Prolog 的子集。Datalog 用**規則（Rules）**來定義新的謂詞（Predicates），規則可以引用其他規則，遞迴地推導出結果。
+
+例如，定義「朋友的朋友也是朋友」這條規則：
+
+```datalog
+friends(X, Y) :- knows(X, Y).
+friends(X, Y) :- knows(X, Z), friends(Z, Y).
+```
+
+第一條規則說「直接認識就是朋友」；第二條規則說「如果 X 認識 Z，且 Z 跟 Y 是朋友，那 X 跟 Y 也是朋友」——遞迴定義。
+
+Datalog 在實務中被 Datomic（Clojure 生態系的資料庫）和 Cascalog（Hadoop 的查詢工具）採用。它比 Cypher 和 SPARQL 更強大，因為規則可以跨查詢複用和組合；但它也需要不同的思維方式，對於一次性查詢（Ad-Hoc Query）不如 Cypher 直覺。
+
+💡 **為什麼了解 Datalog 有幫助？** Datalog 是 Cypher 和 SPARQL 的概念祖先。理解它，你就能看出這幾套語言背後共同的模式匹配（Pattern Matching）和遞迴推導（Recursive Derivation）思想。
+
+### 📝 三種模型怎麼選？五個維度的思考框架
+
+走到這裡，我們已經走完資料模型的完整光譜。[[learn/design-data-intensive-applications/elements/relational-model|關聯模型]]以正規化（Normalization）處理多對多關係，用 JOIN 和聚合（Aggregation）支撐複雜查詢。[[learn/design-data-intensive-applications/elements/schema-on-read-vs-write|Schema-on-Read vs Schema-on-Write]]以自包含的巢狀結構（Nested Structure）換取更好的資料局部性（Locality），適合一對多為主的場景。[[learn/design-data-intensive-applications/elements/graph-data-model|圖模型]]以邊為一等公民，讓遍歷成為 O(1) 操作，適合多對多關係密集的場景。
+
+但真實世界很少是非此即彼的。[[learn/design-data-intensive-applications/elements/data-model-decision-framework|資料模型選擇框架 (Data Model Decision Framework)]] 提供五個維度幫你做出判斷：
+
+| 維度 | 偏向關聯模型 | 偏向文件模型 | 偏向圖模型 |
+| --- | --- | --- | --- |
+| 資料形狀 | 混合型，關係可預測 | 樹狀，一對多為主 | 高度互連，多對多普遍 |
+| 遍歷頻率 | 中等，需要 JOIN 聚合 | 低，主要是單文件查詢 | 高，頻繁跨越多層關係 |
+| Schema 演進 | 穩定，結構明確 | 快速變動，欄位不固定 | 靈活，邊類型持續增加 |
+| 查詢模式 | JOIN + GROUP BY + 聚合 | 鍵值查找，讀多寫少 | 變長路徑遍歷 |
+| 規模需求 | 單機可承載，穩定可靠 | 寫入密集，需水平擴展 | 超大規模圖分析 |
+
+**這不是一張「對照表選答案」的速查卡——它是一套思考框架。** 每當你面對一個具體場景，先問自己：這份資料的形狀是什麼？查詢的主要模式是什麼？關係遍歷的頻率有多高？Schema 會穩定多久？
+
+### 🔧 務實的建議：多語堅持久化
+
+更務實地說，多語堅持久化（Polyglot Persistence）在大型系統中已是常態。訂單服務可能用關聯資料庫（需要交易一致性），商品目錄可能用文件資料庫（需要彈性結構），推薦引擎可能用圖資料庫（需要關係遍歷）。選型的關鍵不是「哪個模型客觀上最強」，而是「哪個模型跟你當前的工作負載最匹配」。
+
+而且，現代資料庫正在互相靠攏。PostgreSQL 加入了 JSONB 欄位，帶來文件模型的彈性；MongoDB 加入了聚合管道（Aggregation Pipeline），逐步補上關聯查詢的能力。邊界在模糊，但核心取捨仍然存在。
+
+### ⚡️ 回顧與下一步
+
+本節點從 [[learn/design-data-intensive-applications/elements/relational-model|關聯模型]] 的歷史主導出發，經過 [[learn/design-data-intensive-applications/elements/nosql-movement|NoSQL 運動]] 的衝擊，走過文件模型的[[learn/design-data-intensive-applications/nodes/data-models-and-query-languages/document-vs-relational|文件模型與關聯模型的對比]]，最後在圖模型這裡完成了整張資料模型的地圖。下一章（Chapter 3）我們會往下走一層：這些資料模型在儲存引擎（Storage Engine）層面是如何被實作的——B-Tree、LSM-Tree、列式儲存，每一種都對應著不同的寫入與讀取取捨。
+
+## Sources
+
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Graph-Like Data Models]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Property Graphs]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#The Cypher Query Language]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Triple-Stores and SPARQL]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#The Foundation: Datalog]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Relational Versus Document Databases Today]]

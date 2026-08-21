@@ -1,0 +1,130 @@
+---
+id: rewind-resume-fork
+title: 會話導航：Rewind、Resume 與 Fork (Session Navigation)
+subject: ai-coding-crash-course
+tier: 2
+order: 4
+type: article
+nodes:
+  - ai-coding-crash-course/claude-code-basics
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ad:922-1044]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# 會話導航：Rewind、Resume 與 Fork (Session Navigation)
+
+## Problem Statement
+
+AI coding agent 的對話是逐步累積的：每一個 turn 都會改變對話歷史，每一次工具呼叫都可能修改檔案系統。當代理做出了你不想要的變更——改錯了檔案、產生了幻覺（hallucination）、或者偏離了原本的意圖——你面對的問題是：怎麼回到過去的狀態？
+
+你不能只說「撤銷」就期待一切復原。對話歷史是單向累積的，模型不會自動「忘掉」已經發生的事；而檔案系統的變更可能是多個步驟的結果，中間穿插著建立、刪除與修改。你需要一套機制，能讓你精確地選擇要回到哪一個時間點，以及要復原哪些東西：是對話本身、是程式碼、還是兩者都復原。
+
+## Why it matters
+
+會話導航（session navigation）解決的是 AI coding agent 最核心的信任問題：如果你不能回退，你就不敢讓代理做太多事。
+
+這件事之所以重要，有三個原因：
+
+1. **容錯成本**：AI agent 會犯錯。它可能誤刪檔案、產生不正確的程式碼、或在錯誤的方向上越走越遠。如果每次犯錯都要手動修復，效率比不用 AI 還低。Rewind 讓你敢讓代理嘗試，因為你知道隨時可以回到某個安全的 checkpoint。
+2. **探索成本**：你想讓代理嘗試不同的實作方向，但又不想每次都從頭開始一場新的對話。Fork 讓你從同一個出發點分岔出多條路線，比較結果後再決定保留哪一條。
+3. **中斷成本**：長時間的開發工作可能跨越多個時段。Resume 讓你關掉終端機、去吃飯、回來後無縫接軌，不用重新建立 context。
+
+如果把 context 管理（context-and-session）比作理解桌上有什麼文件，會話導航就是知道你可以把時鐘轉回哪一個時刻，以及轉回去之後桌上的文件會變成什麼樣子。
+
+## How it works
+
+### Rewind：回到過去的時間點
+
+Rewind 是會話導航的核心機制。你可以透過兩種方式進入 rewind 模式（rewind mode）：
+
+- **對話中直接要求**：對代理說「revert that」（還原那個），代理會嘗試撤銷最近的變更。
+- **快捷鍵進入**：按下 Escape + Escape（連按兩次 Escape），會進入 rewind 模式的選單介面。
+
+進入 rewind 模式後，你會看到一系列的 checkpoint（檢查點）。每個 checkpoint 代表對話歷史中的一個時間點，你可以選擇要回到哪一個。
+
+Rewind 提供三種復原選項：
+
+- **Restore code and conversation**（還原程式碼與對話）：回到該時間點的程式碼狀態與對話歷史，好像後面的一切都沒有發生過。
+- **Restore conversation only**（僅還原對話）：對話歷史回到該時間點，但程式碼保留目前的狀態。這適合你想延續某個對話脈絡、但不想放棄已經做好的程式碼變更。
+- **Restore code only**（僅還原程式碼）：程式碼回到該時間點，但對話歷史保留目前的狀態。這適合你想保留對話脈絡、但撤銷某個不好的檔案變更。
+
+Rewind 模式還會顯示一個「summarize from here」（從這裡摘要）的選項。它會把從某個 checkpoint 到目前為止的對話內容壓縮成一份摘要，然後用這份摘要種子化一個全新的 session，讓你可以在更精簡的 context 下繼續工作。
+
+### Resume：重啟已結束的 session
+
+Claude Code 會把每次 session 持久化（persist）到本地磁碟。這意味著即使你關閉了終端機、甚至重開電腦，session 資料仍然存在。
+
+你有多種方式可以恢復（resume）一個之前的 session：
+
+- **`claude resume <UUID>`**：在終端機直接執行，用 session 的 UUID（唯一識別碼）來恢復。UUID 通常會在上一次 session 結束時顯示在輸出中，或者你可以用其他方式查詢。
+- **`/resume` 指令**：在一個新的 session 中輸入 `/resume`，會列出目前專案中所有可用的歷史 session，你可以搜尋並選擇要恢復哪一個。
+- **`claude --continue`**：直接恢復最近一次的 session，不需要指定 UUID。這是最快的重啟方式，適合你剛關掉終端機、馬上又想繼續同一段工作。
+
+這些機制的關鍵差異在於粒度：`--continue` 是無腦恢復最近的；`resume <UUID>` 是精確恢復特定的；`/resume` 則提供了一個搜尋介面，讓你在大量歷史 session 中找到目標。
+
+### Fork：從某個時間點分岔
+
+Fork 是從一個既有的 checkpoint 建立一個全新的 session，保留該時間點之前的所有對話歷史與程式碼狀態，但從該點開始可以走完全不同的方向。
+
+Fork 的使用場景通常是：你已經在某個方向上工作了一段時間，想嘗試另一個方向，但不想放棄已有的脈絡。Fork 之後，原始 session 仍然存在，你可以隨時回來；新 session 則從 fork 的那個時間點開始，獨立發展。
+
+你可以把 rewind、resume 和 fork 想像成版本控制系統的對應概念：rewind 類似 `git checkout` 回到某個 commit；resume 類似 `git stash pop` 恢復一個暫存的工作狀態；fork 則類似 `git branch` 從某個 commit 分岔出一個新分支。差別在於，這些操作是針對 session（對話歷史）而非純粹的程式碼。
+
+## In plain terms
+
+白話說，rewind 就是「時間機器」：你按 Escape 兩下，選一個時間點，選擇要回溯程式碼、對話、還是兩者，一切就回到那個時刻。resume 就是「接續未完的工作」：你關了終端機去吃飯，回來後打 `claude --continue`，對話就從你離開的地方繼續。fork 就是「從某個過去的時刻開始走另一條路」：你保留原本的路線，但開了一條新的岔路去實驗。
+
+這三個機制一起解决了 AI coding agent 的核心痛點：你不必害怕犯錯、不必害怕中斷、也不必害怕探索。
+
+## Analogy
+
+想像你在寫一本小說。每次你寫完一章，你就把稿子影印一份存檔。
+
+- **Rewind** 就是翻回之前某一份影印稿，把後面的頁全部撕掉重來。你可以選擇只撕掉劇情大綱（對話），只撕掉實際的文字（程式碼），或兩者都撕。
+- **Resume** 就是隔天早上回到書桌前，把昨天最後一次影印的那份稿子攤開，繼續往下寫。
+- **Fork** 就是你把某一份影印稿複印一份，開始在副本上試一個完全不同的劇情走向，原本那份稿子仍然完整保留。
+
+没有這些機制，你就只能一路往前寫、絕不回頭，一旦寫壞了就只能手動比對修改——就像沒有 undo 的文書處理器。
+
+## Practical use
+
+- 在讓代理做大範圍的檔案重構之前，先建立一個明確的 checkpoint（例如用手動 git commit），這樣你有一個清晰的 rewind 目標點。
+- 養成習慣：每次代理完成一個有意義的階段後，記住或標記當前 session 的 UUID，方便之後精確 resume。
+- 當你發現 session 已經偏離方向、context 裡塞滿了不相關的嘗試紀錄，用 rewind 回到分岔前的 checkpoint，比嘗試用對話修正更乾淨。
+- 使用 `/resume` 的搜尋功能時，注意 session 的時間戳與專案目錄，確保你恢復的是正確的那段工作，而不是另一個專案的 session。
+- Fork 適合 A/B 比較：讓兩個 session 從同一個 checkpoint 分別走不同的實作方向，最後比較哪個結果更好。
+
+## Connections
+
+- [[learn/ai-coding-crash-course/elements/context-and-session|Context、Context 與 Session]] — rewind、resume、fork 都是在操作 session 的時間線；要理解這些操作，首先要理解 session 是多個 turns 累積起來的 context。
+- [[learn/ai-coding-crash-course/elements/compaction|Compaction 壓縮機制 (Compaction)]] — rewind 模式中的「summarize from here」選項，本質上是 compaction 的一個入口：把長 session 壓縮成摘要，再種子化新 session。
+- [[learn/ai-coding-crash-course/elements/handoff|Handoff 跨代理交接 (Handoff)]] — resume 處理的是同一個代理的 session 重啟；handoff 則處理跨代理、跨目錄的脈絡轉移，是另一個層次的「延續」。
+- [[learn/ai-coding-crash-course/elements/state-context-cost|State、Context 與成本]] — 每次 rewind 或 resume，都會重新送入 context，因此理解 token 計費模型有助於判斷何時值得 rewind、何時值得直接開新 session。
+
+## Deep dive
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ad:922-1044]] — 課程完整介紹 rewind 模式的三種復原選項（restore code and conversation / conversation only / code only）、「summarize from here」選項，以及 session 持久化後的三種 resume 方式（`claude resume <UUID>`、`/resume` 指令、`claude --continue`），並提及 `/fork` 指令的存在。
+
+## Questions
+
+### Q1. 進入 rewind 模式的兩種方式是什麼？
+
+A1. 第一種是在對話中直接對代理說「revert that」；第二種是連按兩次 Escape 鍵（Escape + Escape），會打開 rewind 模式的選單介面。
+
+### Q2. Rewind 的三種復原選項分別是什麼？它們的差別在哪裡？
+
+A2. 三種選項是：restore code and conversation（同時還原程式碼與對話歷史）、restore conversation only（僅還原對話歷史，保留目前程式碼）、restore code only（僅還原程式碼，保留目前對話）。差別在於你要回溯的範圍是純程式碼、純對話、還是兩者。
+
+### Q3. Resume 的三種方式有什麼差別？
+
+A3. `claude --continue` 是最快的方式，直接恢復最近一次的 session；`claude resume <UUID>` 是精確恢復特定的 session，需要提供 UUID；`/resume` 指令則提供搜尋介面，讓你在所有歷史 session 中找到並選擇要恢復的那個。
+
+### Q4. 為什麼 rewind 模式會提供「summarize from here」選項？
+
+A4. 「summarize from here」把從某個 checkpoint 到目前為止的對話壓縮成摘要，然後用這份摘要建立一個新 session。這結合了 rewind 的回溯能力與 compaction 的壓縮能力，讓你在精簡的 context 下從某個歷史脈絡繼續工作。
+
+### Q5. Fork 與 git branch 有什麼相似之處？
+
+A5. Fork 類似 git branch 的概念：從某個 checkpoint（commit）分岔出一個新的 session（branch），原始 session 仍然保留。你可以在新 session 中嘗試不同的方向，之後可以回來檢查或切換，就像在 git 中切換分支一樣。

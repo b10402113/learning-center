@@ -1,0 +1,115 @@
+---
+id: write-spec-and-split-tickets
+title: 撰寫 Spec 與拆分 Tickets 實戰指南
+subject: ai-coding-crash-course
+teaches:
+  - ai-coding-crash-course/tickets
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ah:950-1128]]"
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ai:1-12]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+# 撰寫 Spec 與拆分 Tickets 實戰指南
+
+## Learning goal
+
+學會撰寫 spec 文件，並將其拆分為 agent 大小的 tickets（垂直切片）。
+
+## Lesson
+
+上一篇文章介紹了五步交付流程的全貌。這篇進入實作層面：你有一份 [[learn/ai-coding-crash-course/elements/spec|Spec 文件]]，怎麼把它變成 Agent 能逐張執行的 [[learn/ai-coding-crash-course/elements/tickets|Tickets]]？整個流程分兩階段，先寫 spec，再拆 tickets。
+
+### 📝 第一階段：撰寫 Spec
+
+Spec 可以手動寫，也可以用 `to-spec` skill 自動產生。無論哪種方式，spec 的結構固定包含三個部分。
+
+**問題陳述（Problem Statement）** 用一兩段話講清楚要解決什麼問題。這不是寫給 PM 看的需求文件，而是寫給 Agent 的任務簡報。例如：「目前的認證系統用 session-based，每次登入需要寫入 Redis，水平擴展時需要 sticky session。我們要改成 JWT-based，讓每次請求自帶認證憑證，不需要 server-side state。」
+
+**解決方案（Solution）** 描述你預期的技術路線。不需要列出每一行實作細節，但要讓 Agent 知道你要走哪條路。例如：「使用 RS256 簽演 JWT，token 存在 httpOnly cookie，refresh token 存在 database，支援 rotation。」
+
+**使用者故事（User Stories）** 用「作為 X，我想要 Y，這樣 Z」的格式列出核心場景。這些故事是驗收的錨點，也是拆 tickets 時的參考維度。
+
+**為什麼這三個部分缺一不可？** 問題陳述讓 Agent 理解背景和動機，解決方案讓 Agent 知道技術方向，使用者故事讓 Agent 掌握驗收標準。三者合在一起，構成一份完整的資訊注入（Information Injection），讓實作的 Agent 拿到足夠的上下文。
+
+**如果用 `to-spec` skill，流程怎麼走？** 先完成一場 grilling session（質詢環節），把所有假設都翻出來。然後 `to-spec` 根據 grill 結果和對 codebase 的理解自動產生 spec。你會拿到一份包含問題陳述、解決方案和使用者故事的文件，內容夠紮實。
+
+Spec 寫好後推上 Issue Tracker，比如一個 GitHub Issue。Issue 是 spec 的家，後面每張 ticket 都會從這個 Issue 派生。
+
+### 🔧 第二階段：拆分 Tickets
+
+拆 tickets 是整套流程中最需要人類判斷的環節。Agent 會自動幫你產生 ticket 列表，但它的拆法幾乎一定是水平切片，數量幾乎一定是過多。你需要在 Agent 拋出候選 tickets 後介入，做兩件事：判斷切法、控制數量。
+
+#### 💡 垂直切片 vs 水平切片
+
+垂直切片是目標，水平切片是陷阱。用一個具體例子來看差別。
+
+假設 spec 是「為電商網站加上留言系統」，你可能得到以下兩種拆法：
+
+**水平切片（❌ 錯誤）：**
+
+| Ticket | 內容 |
+|--------|------|
+| A | 建留言資料模型 |
+| B | 建留言 API 路由 |
+| C | 建留言前端介面 |
+| D | 加上驗證與權限 |
+
+四張 ticket 完成後，你手上只有四塊零散的零件，每一張都離可用的留言系統很遠。更要命的是，這些 ticket 之間幾乎沒有遞進關係，Agent 每次對話都要重新理解其他 ticket 的進度。
+
+**垂直切片（✅ 正確）：**
+
+| Ticket | 內容 |
+|--------|------|
+| 1 | 建資料模型和 migration，加上基本 CRUD API，跑通一個端到端的留言建立流程 |
+| 2 | 在 Ticket 1 的 API 之上建前端留言元件，包含留言列表和表單 |
+| 3 | 加上驗證、權限控制、與編輯刪除功能 |
+
+每一張 ticket 完成後，你都能拿出一個可以跑的東西給下一個 ticket 用。Ticket 2 直接依賴 Ticket 1 的 API，不需要重新摸索。
+
+#### 📊 Token 預算控制
+
+Ticket 數量不是越多越好。一份 spec 被 Agent 拆出 10 張 ticket 是常見的，但 10 張 ticket 的總 token 消耗大約需要 1.5M tokens。如果你的 context window 只能承載約 450k tokens，那大約只能執行 3 張 ticket。
+
+超出預算意味著你要麼合併 ticket，要麼接受後面的 ticket 會在 context window 後半段的品質下降區工作。一般來說，**3 到 5 張 ticket 是一個健康的範圍**。
+
+#### 🧩 阻塞關係（Blocking Relationships）
+
+Ticket 之間可以宣告誰卡住誰。例如 Ticket 3 的描述中寫「blocked by Ticket 1」，表示 Ticket 1 必須先完成。
+
+這種機制的實用價值在於：**沒有互相阻塞的 ticket 可以分配到不同的 context window 平行執行**。像上面的例子，Ticket 1 是 Ticket 2 和 Ticket 3 的前置，但 Ticket 2 和 Ticket 3 互不阻塞。如果你有兩個 context window，可以同時開跑，大幅縮短整體交付時間。
+
+#### ✅ 驗收標準（Acceptance Criteria）
+
+這是 ticket 設計中最關鍵的細節。Ticket 刻意保持輕量，因為 spec 已經承載了全部的技術細節。Ticket 只需要回答兩個問題：做什麼（What），以及什麼時候算完成（Acceptance Criteria）。
+
+驗收標準給 Agent 一個明確的「停下來的地方」。沒有驗收標準，Agent 會一直做下去直到 context window 用完，或者做到一半就停，兩種結果都不好。
+
+例如 Ticket 1 的驗收標準可以寫成：
+
+- 資料模型 migration 可以在本地跑通
+- POST /api/comments 建立留言後回傳 201 和留言 JSON
+- GET /api/comments/:postId 回傳該文章的所有留言
+- 所有既有測試不 broken
+
+Agent 看到這四條，做完就停。不多不少。
+
+### 🔄 從 spec 到 ticket 的完整範例
+
+把上面的流程串起來，完整的步驟是：
+
+1. 完成 grilling session
+2. 呼叫 `to-spec` 產生 spec，確認問題陳述、解決方案、使用者故事都到位
+3. 把 spec 推上 Issue Tracker
+4. 讓 Agent 根據 spec 產生候選 tickets
+5. 介入判斷：把水平切片改為垂直切片、把 10 張合併為 3-5 張、標註阻塞關係、為每張加上驗收標準
+6. 每張 ticket 寫入 Issue Tracker，每張 ticket 是一個獨立 issue
+7. 開始逐張 ticket 執行——每次新對話讀入 spec 和當前 ticket，Agent 在智慧區域內工作
+
+**為什麼改道成本很低？** 如果執行中發現方向不對，ticket 是可拋棄的。保留 spec、刪除未執行的 ticket、重新 grilling、再產生新的 tickets。這種雙文件設計（spec + tickets）的核心優勢在於：spec 代表你的意圖，tickets 只是意圖的執行載體。載體可以換，意圖不需要重來。
+
+## Sources
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ah:950-1128]]
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ai:1-12]]

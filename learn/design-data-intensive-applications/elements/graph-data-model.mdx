@@ -1,0 +1,132 @@
+---
+id: graph-data-model
+title: 圖資料模型 (Graph Data Model)
+subject: design-data-intensive-applications
+tier: 1
+order: 5
+type: article
+nodes:
+  - design-data-intensive-applications/data-models-and-query-languages
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Graph-Like Data Models]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Property Graphs]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Triple-Stores and SPARQL]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#The Foundation: Datalog]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+# 圖資料模型 (Graph Data Model)
+
+## Problem Statement
+
+當資料中存在大量多對多（Many-to-Many）關係，且實體之間的連結極度緊密交織時——例如社交網路的使用者與好友關係、知識圖譜中的概念與關聯、路網中的交叉路口與道路——關聯模型（Relational Model）與文件模型（Document Model）都會變得相當笨拙。關聯模型需要大量 JOIN 操作才能跨越多層關係，每次 JOIN 的計算成本隨深度指數成長；文件模型則通常將關聯嵌入文件內部，導致需要在應用程式層級手動做 JOIN，或產生大量冗餘資料。兩者都無法提供自然的遍歷機制。
+
+## Why it matters
+
+圖模型是資料模型家族中的第三大類，也是高度互聯資料（Highly Interconnected Data）最自然的選擇。掌握圖模型，你對資料模型的工具箱才算完整。它不只是「另一種儲存方式」，而是在特定問題域（社交網路、詐欺偵測、路徑搜尋）中，效能與表達力都遠優於其他模型的關鍵選擇。
+
+## How it works
+
+### 屬性圖模型 (Property Graph Model)
+
+屬性圖模型是最廣泛使用的圖模型，由兩種基本元素組成：
+
+- **頂點（Vertices / Nodes）**：代表實體，例如一個人、一筆交易、一個路口。每個頂點有唯一 ID，可以帶有任意多的 key-value 屬性（Properties），例如 `{name: "Alice", age: 30}`。
+- **邊（Edges / Relationships）**：代表實體之間的關係，例如「Alice 認識 Bob」。每條邊也有唯一 ID，包含起點（Head Vertex）、終點（Tail Vertex）、一個方向標籤（Label），以及自己的 key-value 屬性，例如 `{since: 2019, type: "friend"}`。
+
+關鍵特性：任何頂點都可以連接到任何其他頂點——沒有 schema 限制（No Schema Restrictions）。不像關聯模型必須預先定義 table schema，圖模型中的邊可以自由地在任意節點之間建立。
+
+### 與關聯模型的差異
+
+關聯模型可以透過兩張 table（一張存頂點、一張存邊）來儲存圖，但這只是「能存」，不是「適合存」。差異在於：
+
+1. **關係是第一公民（First-Class Citizens）**：在圖模型中，邊和頂點一樣是主要元素，可以直接遍歷；在關聯模型中，關係只是 foreign key，需要 JOIN 才能追蹤。
+2. **沒有固定的關係結構**：圖模型中你可以隨時新增一種全新的邊類型，不需要 ALTER TABLE；關聯模型的 schema 變更需要謹慎的 migration。
+3. **遍歷成本恆定**：從一個頂點沿邊走到下一個頂點是 O(1) 的操作；關聯模型中每一層 JOIN 都可能掃描整張表。
+
+### 與文件模型的差異
+
+文件模型天然是樹狀結構（Tree），資料嵌套有方向性。圖模型則不同：
+
+- **非樹狀（Non-Tree）**：節點之間可以有環、交叉連線，不需要遵循嚴格的層級結構。
+- **雙向關係**：邊有方向，但可以雙向查詢；文件模型通常只能從父往子查。
+- **無需參考或 JOIN**：邊直接連接頂點，不需要像文件模型那樣用 ObjectId 引用再做額外查詢。
+
+### 查詢語言
+
+圖資料庫有專屬的查詢語言，比 SQL 更適合表達圖遍歷：
+
+**Cypher**（用於 Neo4j）是聲明式查詢語言，用箭頭語法表示邊：
+
+```cypher
+MATCH (p:Person)-[:KNOWS]->(friend:Person)
+WHERE p.name = 'Alice'
+RETURN friend.name
+```
+
+在 SQL 中做同樣的查詢需要遞迴 CTE（Recursive CTE），大約 29 行；Cypher 只要 4 行。更複雜的可變長度路徑查詢（例如找出 Alice 到任意距離的朋友的朋友）在 Cypher 中只比這多一行，SQL 則需要複雜的遞迴語法。
+
+**SPARQL**（用於 Triple-Store）查詢三元組（Triples）：
+
+```sparql
+SELECT ?friend WHERE {
+  ?alice name "Alice" .
+  ?alice knows ?friend .
+}
+```
+
+SPARQL 比 Cypher 更簡潔，特別適合語意網（Semantic Web）與 RDF 資料。
+
+**Datalog**（1980 年代）是圖查詢語言的概念祖先，用規則（Rules）遞迴地定義新謂詞（Predicates），適合複雜的推導查詢。例如定義「朋友的朋友也是朋友」只需一條遞迴規則。
+
+### 與 CODASYL 網路模型的比較
+
+現代圖資料庫常被誤認為是 1970 年代 CODASYL 網路模型的回歸，但兩者有根本差異：
+
+| 特性 | CODASYL (1970s) | 現代圖資料庫 |
+|---|---|---|
+| Schema 限制 | 必須預先定義紀錄類型與導引路徑 | 無 schema 限制，邊可自由建立 |
+| 存取方式 | 必須透過導引（Navigational）才能到達 | 可直接按 ID 存取任一頂點 |
+| 順序 | 紀錄在磁碟上有固定順序 | 頂點與邊無序 |
+| 查詢語言 | 導程式（Navigational），手動 traverse | 聲明式（Declarative），描述「要什麼」 |
+
+## In plain terms
+
+想像你在看地圖。關聯模型就像城市的固定格狀地圖——街道和街區按規則排列，你只能沿著固定的格線走。文件模型像一棵大樹——從樹幹到枝幹到樹葉，結構清晰但只能上下走，枝幹之間不能隨意橫跳。圖模型則像一個真正的路網——任何地點都可以直接連到任何其他地點，地圖上畫著所有道路，你從 A 點出發可以沿著任何一條路到達任何你想去的地方，不限制你走哪條路。
+
+## Practical use
+
+- **Neo4j**：最廣泛使用的屬性圖資料庫，支援 Cypher 查詢語言，適合中大型圖分析場景。
+- **Amazon Neptune**：AWS 的全託管圖資料庫，同時支援 Gremlin（屬性圖）與 SPARQL（RDF）。
+- **JanusGraph**：開源分散式圖資料庫，適合超大規模圖（數十億頂點）。
+- **社交網路好友推薦**：「你可能認識的人」就是基於圖遍歷——找到你朋友的朋友，排除你已經認識的人。
+- **詐欺偵測**：透過圖模型找出異常的交易環路（Cycle Detection），例如同一批帳戶之間的資金循環。
+- **知識圖譜**：Google Knowledge Graph 以圖模型儲存實體與關係，支援搜尋引擎的語意理解。
+
+## Connections
+
+- [[learn/design-data-intensive-applications/elements/relational-model|關聯模型 (Relational Model)]] — 關聯模型可以用兩張 table 儲存圖，但遍歷成本極高
+- [[learn/design-data-intensive-applications/elements/impedance-mismatch|物件關聯不匹配 (Impedance Mismatch)]] — 圖模型天然處理複雜關係，大幅減輕物件關聯不匹配的問題
+- [[learn/design-data-intensive-applications/elements/data-model-decision-framework|資料模型選擇框架 (Data Model Decision Framework)]] — 當資料的關係密度高到一定程度，圖模型是明確的首選
+
+## Deep dive
+
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Graph-Like Data Models]] — 圖模型的整體概覽，包括屬性圖、Triple-Store 與查詢語言的比較
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Property Graphs]] — 屬性圖模型的詳細結構：頂點、邊、屬性的完整說明
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Triple-Stores and SPARQL]] — Triple-Store 模型與 SPARQL 查詢語言，以及與 RDF 的關係
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#The Foundation: Datalog]] — Datalog 作為圖查詢語言的概念祖先，規則與遞迴的說明
+
+## Questions
+
+### Q1. 在什麼情況下應該選擇圖模型而不是關聯模型或文件模型？
+A1. 當資料的關係密度很高（多對多關係非常普遍）、需要頻繁跨越多層關係遍歷（例如朋友的朋友、多步驟的因果鏈）、或關係本身攜帶豐富屬性時，圖模型是最自然的選擇。關聯模型適合結構化、關係可預測的場景；文件模型適合層級分明、讀多寫少的場景。
+
+### Q2. Cypher 和 SQL 在圖查詢上有什麼具體差異？舉例說明。
+A2. Cypher 用箭頭語法 `(A)-[:KNOWS]->(B)` 直接表達邊的遍歷，聲明式地描述「要什麼」。例如查詢 Alice 所有朋友的姓名，Cypher 只需 4 行：`MATCH (p:Person {name:'Alice'})-[:KNOWS]->(f) RETURN f.name`。SQL 則需要 29 行以上的遞迴 CTE，因為 SQL 本身是為表格設計的，遍歷圖需要手動管理遞迴、visited 集合與路徑追蹤，複雜度隨關係深度急劇增加。
+
+### Q3. 為什麼現代圖資料庫不是 CODASYL 網路模型的回歸？
+A3. 兩者表面相似（都是節點加邊的結構），但根本差異有四：現代圖模型不需要預先定義 schema；可以直接按 ID 存取任何頂點而不必導引（Navigational）；頂點和邊在邏輯上是無序的；支援聲明式查詢語言（Cypher、SPARQL）讓使用者描述「要什麼」而不是「怎麼找」。
+
+### Q4. Property Graph 和 Triple-Store 的核心差異是什麼？各自的適用場景是什麼？
+A4. Property Graph 允許頂點和邊帶有任意 key-value 屬性，邊有標籤和方向，適合需要豐富屬性的圖（例如社交網路、詐欺偵測）。Triple-Store 只存 (Subject, Predicate, Object) 三元組，結構更單純但嚴格，適合語意網（Semantic Web）與需要跨組織資料交換（RDF）的場景。SPARQL 查詢比 Cypher 更簡潔，但 Property Graph 的屬性表達力更強。

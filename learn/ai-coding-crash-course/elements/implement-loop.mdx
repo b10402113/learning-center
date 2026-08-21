@@ -1,0 +1,116 @@
+---
+id: implement-loop
+title: Implement 迴圈：逐張 Ticket 實作的完整流程
+subject: ai-coding-crash-course
+tier: 2
+order: 3
+type: article
+nodes:
+  - ai-coding-crash-course/ship-with-specs-and-tickets
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ai:13-672]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+# Implement 迴圈：逐張 Ticket 實作的完整流程
+
+## 問題描述
+
+即使你已經有完整的 Spec（規格書）和 Tickets（工作票），每個 ticket 仍然需要 Agent 在一次對話中完成「從理解需求到交付程式碼」的完整循環。如果沒有一個結構化的實作流程，Agent 可能會跳過探索階段直接寫程式碼，或者在 verification loop 中反覆修正直到 token 爆掉。更關鍵的是：當你要連續實作多張 tickets 時，如何在 ticket 之間保持品質而不讓 context window 被前一張 ticket 的殘留記憶污染？
+
+## 為什麼重要
+
+Implement 迴圈是整個 Spec-Driven 工作流的核心引擎——Spec 定義目的地，Ticket 定義路徑，但 implement 迴圈才是真正把程式碼寫出來的過程。一個設計良好的迴圈能確保每個 ticket 都經過完整的「理解 → 探索 → 實作 → 驗證 → 審查」循環，而自動化的 code review 和 auto mode 則讓你可以放心地把整個 ticket queue 交給 Agent，自己去做別的事。
+
+## 運作方式
+
+### 單張 Ticket 的完整迴圈
+
+每一張 ticket 的實作都遵循一個固定流程：
+
+1. **讀取 Issue（Read Issue）**：Agent 讀取當前 ticket 的 Issue 內容，理解這張 ticket 要做什麼
+2. **探索程式碼（Explore Codebase）**：Agent 讀取相關的程式碼檔案，理解現有架構和需要修改的位置
+3. **撰寫程式碼（Write Code）**：根據 ticket 需求和探索結果，Agent 實際修改或新增程式碼
+4. **執行驗證（Verify）**：跑 type check、lint、測試，確保程式碼通過所有自動化檢查
+5. **自動 Code Review（Auto Review）**：Agent 自動觸發一個獨立的 code review skill，在新開的 sub-agent context window 中執行 standards review + spec review
+
+完成一個 ticket 後，Agent 自動進入下一張 ticket，重複相同的迴圈。
+
+### Auto Mode：讓 Agent 自己跑
+
+Auto mode 是一個開關，啟用後 Agent 會自動處理 permission requests（例如檔案寫入權限），不需要你每次手動確認。搭配一個 classifier（分類器）檢查 Agent 的權限請求，你可以讓 Agent 持續跑完整個 ticket queue，事後再回來檢查成果。
+
+這意味著你可以把 3-5 張 tickets 的實作工作排成一個佇列，啟用 auto mode，然後去做別的事——Agent 會依序讀取每張 ticket、探索程式碼、撰寫程式碼、執行驗證、觸發 code review，直到所有 tickets 完成。
+
+### Code Review 在 Smart Zone Sub-Agent 中執行
+
+Code review 不是在主對話的 context window 中執行的。Agent 會觸發一個獨立的 code review skill，這個 skill 在全新的 sub-agent context window 中運作——也就是說，review 的結果不會被前面對話中累積的 113k tokens 污染。每個 review 都在「智慧區域」（Smart Zone）內完成，確保判斷品質。
+
+Review 包含兩個面向：
+- **Standards Review**：程式碼是否符合團隊的 coding standards
+- **Spec Review**：實作是否符合原始 spec 的要求
+
+### Clear vs Compact：對話記憶的管理
+
+完成一張 ticket 後，你需要決定如何處理對話記憶：
+
+- **Clear（清除）**：完全清空 context window，下一張 ticket 從零開始。成本較低、速度較快，且避免前一張 ticket 的殘留記憶污染下一張 ticket 的判斷
+- **Compact（壓縮）**：把對話內容壓縮成一份摘要，保留部分上下文。花費 output tokens 寫摘要，但帶來的收益很小
+
+作者的實踐是：大部分情況下選擇 clear。當你猶豫不決時，也應該選 clear。原因是 compact 本身消耗 output tokens，而它保留的摘要對下一張 ticket 的幫助有限——因為下一張 ticket 有它自己的 spec 和上下文。
+
+### Token 預算與任務規模控制
+
+每個 ticket 的實作大約消耗 100k–140k output tokens。驗證迴圈（verification loops）是 token 的主要消耗者——Agent 會反覆跑 type check、lint、測試，每次修正後再跑一次，直到全部通過。
+
+這就是為什麼 ticket 的規模必須控制得當：
+
+- **Right-sized ticket**：在一個 context window 內能完成的、範圍明確的小塊工作
+- **Oversized ticket**：範圍太大，token 消耗膨脹到 300k+，被作者視為「學習經驗」，回饋到 skills 的改進中
+- **Large context window 是安全網**：即使 ticket 被錯誤地切太大，大的 context window（例如 200k+ tokens）也能容納整個實作過程，避免 context 不足導致的失敗
+
+## 白話來說
+
+Implement 迴圈就像工廠的流水線。每一張 ticket 就是一個待組裝的零件盒。Agent 拿起一個盒子（讀取 Issue），先看一下工作台上有什麼工具和材料（探索程式碼），然後開始組裝（撰寫程式碼），組裝完後跑一遍品質檢測（執行驗證），確認沒問題後再由另一個檢測員在獨立的檢測站做最終審查（Code Review in sub-agent）。審查通過後，Agent 把這個零件盒放到成品區，拿起下一個盒子繼續。
+
+## 類比
+
+Implement 迴圈就像一位大廚按順序處理一疊訂單（tickets）。每張訂單的流程都是：先讀菜單（讀取 Issue）→ 確認冰箱和調料台上有哪些食材（探索程式碼）→ 開始烹飪（撰寫程式碼）→ 試吃確認味道（執行驗證）→ 由另一位廚師在獨立的試吃間做最終品評（Code Review in sub-agent）。完成一道菜後，把鍋子洗乾淨（clear context window），而不是帶著上一道菜的殘渣繼續煮下一道（compact 會導致的問題）。
+
+## 實際應用
+
+在使用 AI Coding Agent 進行開發時，典型的 implement 迴圈 workflow 是：
+
+1. 把 spec 和 tickets 寫入 GitHub Issues
+2. 啟動新的對話，呼叫 `implement` skill，指定第一張 ticket
+3. Agent 讀取 Issue → 探索程式碼 → 撰寫程式碼 → 跑 type check / lint / tests → 觸發 code review
+4. 完成後清空 context window（clear），進入下一張 ticket
+5. 重複直到所有 tickets 完成
+6. 全部完成後，人類做最終的整體驗收，然後關閉 spec issue
+
+如果在實作過程中發現 spec 不夠清楚（例如 ticket 的需求與 spec 矛盾），Agent 會暫停並提示你——這時候就需要 re-grill（重新質詢），回到 grilling session 補充 spec，然後再繼續。
+
+作者在自己的 repo 中用這套流程累積了超過 1,200 個 closed issues，每次 implement 迴圈的 token 消耗大約是 100k–140k output tokens per ticket。
+
+## Connections
+
+- [[learn/ai-coding-crash-course/elements/spec|Spec 文件：以 Issue Tracker 為家的目的地文件]] — Implement 迴圈的起點是 spec 和 tickets；spec 定義了每張 ticket 的目標
+- [[learn/ai-coding-crash-course/elements/tickets|Tickets：把任務拆進智慧區域的工作票]] — 每張 ticket 是 implement 迴圈的一次完整循環
+- [[learn/ai-coding-crash-course/elements/code-review|Code Review 與 Coding Standards]] — 每個 ticket 完成後自動觸發 code review，是迴圈的最後一道品質關卡
+- [[learn/ai-coding-crash-course/elements/re-grill|Re-grill 與 Spec 存檔：中途改道的正確做法]] — 當 ticket 實作中發現 spec 不夠清楚時，需要回退到 re-grill 補充 spec
+
+## Deep dive
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ai:13-672]] — 完整的 implement 迴圈現場演示：從讀取 issue 到自動觸發 code review 的每一步，以及 auto mode、clear vs compact、token 預算控制的實踐細節
+
+## Questions
+
+### Q1. Implement 迴圈中，Code Review 為什麼要在獨立的 sub-agent context window 中執行？
+A1. 因為主對話的 context window 已經累積了大量 tokens（可能超過 100k），在後段的智慧區域品質會下降。Code review 在獨立的 sub-agent context window 中執行，確保 review 判斷不受前面对話的污染，維持「智慧區域」內的高品質判斷。
+
+### Q2. 完成一張 ticket 後，為什麼作者建議選擇 Clear 而不是 Compact？
+A2. Compact 會花費 output tokens 把對話壓縮成摘要，但保留的上下文對下一張 ticket 的幫助有限——因為下一張 ticket 有它自己的 spec 和上下文。Clear 完全清空 context window，成本較低、速度較快，且避免前一張 ticket 的殘留記憶污染下一張 ticket 的判斷。當你猶豫不決時，也應該選 clear。
+
+### Q3. 為什麼 ticket 的規模控制如此重要？過大的 ticket 會發生什麼事？
+A3. 每個 ticket 的實作大約消耗 100k–140k output tokens，驗證迴圈是主要的 token 消耗者。如果 ticket 範圍太大，token 消耗會膨脹到 300k+，可能超出 context window 的承載上限，導致 Agent 在後段失憶或實作品質下降。Right-sized ticket 應該是在一個 context window 內能完成的、範圍明確的小塊工作。

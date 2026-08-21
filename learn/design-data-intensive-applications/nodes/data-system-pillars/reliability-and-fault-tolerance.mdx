@@ -1,0 +1,147 @@
+---
+id: reliability-and-fault-tolerance
+title: 可靠性與容錯：從硬體、軟體到人為故障的完整拆解
+subject: design-data-intensive-applications
+teaches:
+  - design-data-intensive-applications/fault-vs-failure
+  - design-data-intensive-applications/fault-tolerance
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Reliability]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Hardware Faults]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Software Errors]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Human Errors]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#How Important Is Reliability]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+## Learning goal
+讀完這一步之後，你能用自己的話定義什麼是「可靠性」（reliability），準確區分 fault 和 failure 這兩個概念，解釋三種主要的故障來源（硬體、軟體、人為），並說明為什麼容錯設計的目標是防止故障蔓延成系統性的失效。
+
+## Lesson
+
+### 📝 一萬顆磁碟的啟示：可靠性從何說起
+
+一萬顆磁碟組成的儲存叢集，平均每天壞一顆。這是 Google 在營運規模下觀察到的硬碟故障率。關鍵在於：問題不是「磁碟會不會壞」，而是「今天壞了幾顆」。如果系統沒有為這些每天都在發生的故障做準備，它根本活不下去。
+
+這就是我們需要認真談 [[learn/design-data-intensive-applications/elements/fault-vs-failure|Reliability（可靠性）]] 的原因。
+
+---
+
+### 💡 可靠性到底是什麼？
+
+可靠性的定義很明確：**系統在故障發生時，仍然能夠持續正確地運作。**
+
+注意「正確」這個詞。可靠不代表「還能回應請求」，而是回應的結果必須符合使用者的預期。一個資料庫回傳錯誤的資料，就算它沒有 crash，也不算可靠。
+
+---
+
+### 🔧 Fault vs Failure：一對常被混淆的概念
+
+要理解可靠性的工程含義，第一步是把兩個常被混淆的詞拆開。
+
+| 概念 | 定義 | 範圍 | 舉例 |
+|------|------|------|------|
+| **Fault** | 系統中某個偏離設計規格的元件 | 個別、局部 | 一顆磁碟回傳讀取錯誤、網路連線因封包遺失中斷、軟體 bug 導致節點 crash |
+| **Failure** | 整個系統偏離對外承諾的服務規格 | 全局、使用者可感知 | 使用者打不開頁面、搜尋結果永遠載入中、訂單資料莫名消失 |
+
+**關鍵差異：** Fault 是你每天都在和它打交道的家常便飯——一萬顆磁碟平均每天壞一顆，一千台伺服器每天都有幾台在當機。Failure 則是使用者真正會投訴、真正會讓你的主管收到電話的那種事情。
+
+**一顆磁碟壞了，這是 fault。** 但如果你的 RAID 陣列繼續正常讀寫、服務完全不受影響，那就沒有 failure。fault 發生了，但它沒有蔓延。
+
+**相反的情況：** 2012 年的 Linux kernel leap-second bug 讓全世界同時升級的伺服器在午夜同時當機。fault 是一個 bug，但因為所有節點跑同一份程式碼，bug 同時觸發了所有節點當機，fault 直接升級成了 failure。
+
+---
+
+### ⚡️ 三種故障來源：特性不同，處理方式也不同
+
+故障來源有三種，每一種的特性截然不同，你需要用不同的方式應對。
+
+#### 1. 硬體故障：隨機、不關聯、大規模下成為常態
+
+硬體故障是**隨機的、不關聯的（uncorrelated）**。一顆磁碟壞了不代表隔壁那顆也會壞，一個記憶體位元翻轉不代表同一台機器的其他記憶體也有問題。
+
+- **小規模環境**（十幾台伺服器）：硬體故障是偶發的，跑一整年可能遇不到一次。
+- **大規模環境**（上萬台伺服器）：硬體故障是每天都會發生的常態。Google、Amazon 這些公司的硬碟、CPU、記憶體、網路卡壞掉的頻率，是小公司無法想像的。
+
+**傳統回應：冗餘（redundancy）**
+
+| 故障類型 | 冗餘方案 |
+|----------|----------|
+| 磁碟故障 | RAID |
+| 電源故障 | 雙電源供應器 |
+| 網路故障 | 備援網路路徑 |
+
+邏輯很清楚：硬體會壞是常態，關鍵元件必須有備份。
+
+**但雲端時代帶來了新挑戰。** 整台機器在運行中直接消失（被雲端平台回收、被機房斷電）變得越來越常見。僅靠硬體層級的冗餘已經不夠了，你需要**軟體層級的容錯**。
+
+#### 2. 軟體故障：高度關聯，一個 bug 打垮全部
+
+軟體故障和硬體故障有一個關鍵差異：**關聯性**。硬體故障是不關聯的，一顆磁碟壞了不會導致隔壁那顆也壞。但軟體故障是**高度關聯的（correlated）**——同一個 bug 會同時打垮所有跑同樣程式碼的節點，因為所有節點跑的是同一份二進位碼。
+
+**典型案例：2012 年 Linux kernel leap-second bug**
+
+當 UTC 時間調整 leap second 時，Linux kernel 的時鐘調整程式碼有一個 bug，導致所有跑該版本 kernel 的伺服器**同時** CPU 飆到 100%，整個叢集瞬間癱瘓。
+
+這裡的 fault 是一個 bug，但因為所有節點跑同一份程式碼，fault 的影響範圍瞬間擴展到整個叢集。
+
+**所有節點跑同樣的程式碼，這既是優點也是弱點：**
+
+| 優點 | 弱點 |
+|------|------|
+| 快速部署、一致性高 | 一個 bug 就能同時打垮所有節點 |
+
+軟體故障的回應方式**不在於加副本**（加再多也沒用），而在於：
+
+1. 改寫程式碼
+2. 加監控
+3. 加自動化的回滾機制
+
+#### 3. 人為故障：系統當機的最大來源
+
+人為錯誤是造成系統當機的**最大來源**。統計上，人為操作錯誤導致的 downtime 比硬體故障還多。
+
+常見的人為故障包括：
+
+- 錯誤的配置變更
+- 錯誤的部署流程
+- 不小心刪掉關鍵資料
+- 操作順序搞錯導致的不一致狀態
+
+**處理方式：減少錯誤發生的機會**
+
+| 策略 | 作用 |
+|------|------|
+| 更好的工具 | 減少手動操作的數量 |
+| 沙箱環境測試 | 攔截破壞性的操作 |
+| 完善的測試流程 | 在部署前抓到問題 |
+| 快速可靠的回滾機制 | 即使變更出錯也能立即恢復 |
+
+好的系統設計讓錯誤的變更容易被撤銷。經驗法則是你要能回答：**「這個變更能回滾嗎？」**
+
+---
+
+### 💡 這為什麼重要？
+
+你可能會想，我們只是做一個內部工具，又不是支付系統，可靠性沒那麼重要吧。
+
+答案是：**可靠性比你想像的更重要，而且不只是在攸關生命的場景。**
+
+Amazon 在 2006 年做過一個實驗，把頁面載入速度故意減慢 100 毫秒，結果銷售額下降了 1%。對一個年營收數百億美元的網站來說，1% 就是**數億美元**。你的系統也許不是 Amazon，但每一個使用者的流失、每一次遲疑、每一次重試，都有代價。
+
+---
+
+### 📝 總結：容錯設計的核心哲學
+
+可靠性是一種你必須在**設計初期**就決定要投入多少資源去實現的**非功能需求**。工程師的挑戰在於如何在 fault 發生時攔住它，不讓它蔓延成 failure。這就是 [[learn/design-data-intensive-applications/elements/fault-tolerance|Fault Tolerance（容錯）]] 的核心目標。
+
+你無法阻止每一顆硬碟老化、每一個工程師寫出 bug、每一條光纖被施工斷掉。你能做的是設計一個系統，讓這些**不可避免的事件**不會拖垮整個服務。
+
+在你決定「這個系統需要多少可靠性」之前，你需要先理解什麼是可靠性，什麼是 fault，什麼是 failure，以及容錯設計的核心哲學是什麼。這就是這一步教給你的東西。
+
+## Sources
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Reliability]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Hardware Faults]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Software Errors]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Human Errors]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#How Important Is Reliability]]

@@ -1,0 +1,163 @@
+---
+id: scalability-and-performance
+title: Scalability 與 Performance Metrics
+subject: design-data-intensive-applications
+teaches:
+  - design-data-intensive-applications/load-parameters
+  - design-data-intensive-applications/performance-metrics
+  - design-data-intensive-applications/scaling-approaches
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Scalability]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Describing Load]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Describing Performance]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Approaches for Coping with Load]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+## Learning goal
+
+用 [[design-data-intensive-applications/load-parameters|load parameters]] 和 [[design-data-intensive-applications/performance-metrics|performance metrics]] 描述系統負載，比較 scaling up 與 scaling out 的取捨。
+
+## Lesson
+
+### ⚡️ 起點：「流量翻倍」到底翻倍了什麼？
+
+假設你經營一個社群平台，日活用戶剛突破一百萬。某天回應速度變慢了，值班工程師說「流量翻倍了」。你追問：翻倍的是什麼？是每秒請求數，還是同時連線數，還是寫入量？
+
+如果你連「負載」長什麼樣都說不清楚，後面的 scaling 方案就只是在猜。
+
+這就是討論 [[design-data-intensive-applications/scaling-approaches|scaling approaches]] 的起點。Scalability 永遠是相對於某個特定負載模式而言——一個系統在 Twitter-like 的 fan-out 場景下表現優異，不代表它能同樣應付搜尋引擎那種近乎純讀取的工作量。**定義負載，是一切 scaling 決策的第一步。**
+
+### 📝 用 load parameters 描述負載
+
+每個系統都有自己的 [[design-data-intensive-applications/load-parameters|load parameters]]：
+
+| 系統類型 | 關鍵負載指標 |
+| --- | --- |
+| Web 應用 | 每秒 HTTP 請求數 |
+| 串流服務 | 同時並行的 codec 連線數 |
+| 交易系統 | 寫入吞吐 + 延遲分佈 |
+
+沒有放諸四海皆準的負載定義，只有跟你的工作量最相關的幾個數字。
+
+#### Twitter 案例：fan-out rate 的陷阱
+
+Twitter 的核心操作是 user timeline——某個使用者看到的推文列表。最直覺的實作方式：每位使用者發推時，把這條推文「推」到所有 follower 的 timeline 裡。讀 timeline 就是一次簡單的讀取。
+
+但 fan-out 的規模差異極大：
+
+- 大多數使用者只有幾十個 follower → 寫入 fan-out 很小
+- 某個帳號有數百萬 followers → 一次發推扇出數百萬次寫入
+
+這就是 [[design-data-intensive-applications/load-parameters|load parameters]] 裡的 **fan-out rate**——它不是均勻的，而是取決於使用者的 follower 數量分佈。
+
+#### Twitter 的解法：混合策略
+
+| 使用者類型 | 寫入策略 | 讀取策略 |
+| --- | --- | --- |
+| 一般使用者 | write fan-out（主動寫入各 timeline） | 直接讀取 |
+| 名人 | 不寫入 | read-time merge（讀的時候才合併） |
+
+這個決定直接改變了負載的形態：寫入量降低，讀取量上升，但避免了極端 fan-out 造成的寫入風暴。
+
+**為什麼這很重要？** 負載不是一個靜態的數字，它隨著產品設計和使用者行為動態變化。你選擇的實作方式，本身就在重新塑造負載的形狀。
+
+### 📝 用 performance metrics 描述效能
+
+定義完負載之後，下一個問題是怎麼衡量系統「跑得好不好」。[[design-data-intensive-applications/performance-metrics|Performance metrics]] 在不同場景下的衡量方式差異很大。
+
+#### 批次系統 vs 線上系統
+
+| 系統類型 | 主要衡量指標 | 衡量方式 |
+| --- | --- | --- |
+| 批次系統（batch processing） | 吞吐量（throughput） | 單位時間內處理多少筆資料 |
+| 線上系統（online system） | 回應時間分佈 | percentile，不只是平均值 |
+
+批次系統很直接：一個 ETL pipeline 每小時能處理 500 GB 的原始日誌，這就是它的 throughput。
+
+線上系統則複雜得多。回應時間不是一個固定的數字，它是一個分佈。使用者 A 在 10ms 內拿到結果，使用者 B 等了 200ms，使用者 C 碰上 GC 暫停等了 3 秒。如果你只看平均值——假設 50ms——你會覺得一切正常，但實際上 1% 的使用者正在經歷痛苦的等待。
+
+#### 為什麼 percentile 比 mean 重要？
+
+實務上常看的數字包括：
+
+- **p50**（中位數）：一半的請求在這個時間內完成
+- **p95**：95% 的請求在這個時間內完成
+- **p99**：99% 的請求在這個時間內完成
+- **p999**：99.9% 的請求在這個時間內完成
+
+p99 = 200ms 意味著 99% 的請求在 200ms 內完成，但那 1% 的尾巴可能高達數秒。
+
+#### Tail latency amplification：被忽略的放大器
+
+在大規模系統裡，單一頁面請求可能觸發多個後端呼叫。假設：
+
+- 一個頁面需要**同時呼叫三個服務**
+- 每個服務的 p99 延遲是 **50ms**
+- 你的 SLA 是整體 p99 在 **50ms** 以內
+
+機率上幾乎不可能達成——因為三個獨立呼叫中最慢的那個會主導整體延遲。
+
+這就是 **tail latency amplification**：當多個後端呼叫串聯或並聯時，最慢的那一個會放大整體延遲，你看到的 p99 會比單一服務的 p99 差得多。
+
+**為什麼這很重要？** 如果你只盯著平均值做決策，你會誤以為系統健康，而忽略了那 1% 正在流失的用戶。percentile 才是真正反映使用者體驗的指標。
+
+### ⚙️ Scaling approaches：向上 vs 向外
+
+當負載真的超出系統容量時，你有兩個基本方向。
+
+#### Scaling up（垂直擴展）：讓單台機器更強
+
+更快的 CPU、更多的 RAM、更快的 NVMe SSD。
+
+| 優點 | 缺點 |
+| --- | --- |
+| 程式碼不用改 | 硬上限：最快的商品化 CPU 就那個速度 |
+| 架構不用動 | 最大的單機記憶體就那張量 |
+| 資料庫繼續跑在單機上 | 單點故障：機器掛了就是全部掛了 |
+
+這在早期階段非常有效，也是為什麼 PostgreSQL 或 MySQL 在很多中小型應用裡可以撐很久。
+
+#### Scaling out（水平擴展）：用多台機器分擔工作
+
+通常需要 **shared-nothing architecture**：每台機器有自己的 CPU、記憶體和磁碟，機器之間透過網路協作。
+
+| 優點 | 缺點 |
+| --- | --- |
+| 理論上近乎無限擴展 | 快取要處理一致性 |
+| 加機器就加容量 | 資料庫要處理 sharding |
+| | 寫入要處理複製和同步 |
+
+每一項在單機上理所當然的事情，在分散式環境中都變得複雜。
+
+**為什麼這很重要？** 選擇 scaling up 還是 scaling out，不是技術偏好的問題，而是根據負載模式、成本預算和團隊能力做的工程判斷。
+
+#### Elastic vs Manual scaling
+
+| 策略 | 運作方式 | 優點 | 缺點 |
+| --- | --- | --- | --- |
+| Elastic（彈性擴展） | 雲端根據負載自動增減機器 | 流量高峰擴展、低谷縮減，節省成本 | 冷啟動延遲、規則設定、資源預留都是額外負擔 |
+| Manual（手動擴展） | 預估負載，提前佈署 | 可控性高 | 反應速度慢 |
+
+#### 最容易被忽略的現實：Stateless vs Stateful
+
+**無狀態服務（stateless）** 的 scaling 很簡單——加機器、掛 load balancer，就完成了。
+
+**有狀態服務（stateful）** 則完全不同難度：
+
+- 資料庫：需要跨多台機器維持一致性
+- 串流處理引擎：需要保證 exactly-once 語義
+- 涉及的深層問題：分散式共識、故障恢復、資料再平衡
+
+「horizontal scaling 解決一切」這個說法過於簡化——**對於有狀態的系統，scaling out 往往意味著重新設計，而不只是多開幾台機器。**
+
+### 💡 收束：回到起點
+
+回到最開始的場景：當流量翻倍時，你的第一步不是衝去買更多機器，而是先搞清楚「翻倍的究竟是什麼」。
+
+1. **定義清楚 load parameters** — 知道你在衡量什麼
+2. **用 percentile 而不是 mean 來衡量 performance** — 知道系統真實的使用者體驗
+3. **根據系統特性選擇 scaling 策略** — 沒有萬能方案，只有跟你當前負載模式匹配的解法
+
+## Sources

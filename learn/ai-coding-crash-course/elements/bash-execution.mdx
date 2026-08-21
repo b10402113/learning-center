@@ -1,0 +1,127 @@
+---
+id: bash-execution
+title: Bash 執行 (Bash Execution in Claude Code)
+subject: ai-coding-crash-course
+tier: 2
+order: 5
+type: article
+nodes:
+  - ai-coding-crash-course/claude-code-basics
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ad:1045-1128]]"
+created: 2026-08-20
+updated: 2026-08-20
+---
+
+# Bash 執行 (Bash Execution in Claude Code)
+
+## Problem Statement
+
+AI coding agent 本身是一個文字處理器：它能讀懂你的指令、生成程式碼、修改檔案，但它不能主動跑到你的終端裡去執行一條命令、觀察執行結果、然後根據結果調整下一步的行動。這代表代理只能被動地等你把所有資訊塞進 context 裡，它才能工作。
+
+當專案有編譯錯誤、型別檢查失敗、或 dev server 跑不起來時，你需要的不只是「幫我改這段程式碼」，而是「幫我跑這條命令、看看出了什麼問題、然後修好它」。如果做不到這件事，你每次都得自己跑到另一個終端跑命令、把錯誤訊息複製貼上給代理、等它回應——效率直接腰斬。
+
+Bash 執行（Bash Execution）解決的正是這個問題：它讓代理不只是「打字的程式設計師」，而是一個能主動驗證、主動除錯、主動跑專案的完整開發者。
+
+## Why it matters
+
+Bash 執行之所以重要，是因為它把 AI coding agent 從被動的代碼生成器（code generator）提升為能主動形成回饋迴路（feedback loop）的開發夥伴。具體來說：
+
+1. **回饋迴路是工程品質的核心。** 寫程式碼的人都知道，寫完一行就跑一次、根據結果修正，比一口氣寫五百行再來除錯快十倍。Bash 執行讓代理能做到這件事：它寫完程式碼後能自動跑型別檢查、自動跑 lint、自動跑測試，根據輸出結果自己修正，不用你來當人工轉接器。
+
+2. **代理能看見你的專案狀態。** 當代理不知道你的 `package.json` 裡有哪些 scripts，不知道你的 dev server 用什麼指令啟動，不知道你的專案結構長什麼樣——它就只能猜。Bash 執行讓它能直接去探索、去驗證、去取得真實世界的回饋，而不是在猜測中打轉。
+
+3. **消除上下文切換的成本。** 如果你每次都要切到另一個終端跑命令、再把輸出複製回對話，你的思路會被打斷，context 會被污染。Bash 執行把命令輸出直接推進代理的 context 裡，代理在同一個環境裡完成「執行 → 觀察 → 診斷 → 修正」的完整循環。
+
+## How it works
+
+Bash 執行有兩種觸發方式，差別在於「誰決定要跑什麼命令」。
+
+### 方式一：自然語言指令
+
+你可以用自然語言（natural language）要求代理跑任何命令。例如你說「跑一下型別檢查」或「把 dev server 開起來」，代理會自己去你的 `package.json` 裡找對應的 script，決定用什麼指令執行，然後透過 harness（外殼）呼叫 bash 工具執行它。
+
+這個方式的關鍵在於：代理不是盲目地執行你給的字串，而是會先理解你的專案結構。它會先讀你的 `package.json`、找到 `scripts` 區塊、判斷哪一個 script 對應你說的「型別檢查」或「dev server」，然後用正確的指令執行。這是一個帶有理解力的執行過程。
+
+### 方式二：`!` 前綴的 Bash Mode（bash 模式）
+
+在提示列（prompt line）直接輸入 `!` 加上命令，可以跳過自然語言的翻譯過程，直接在你眼前的互動 shell 裡執行。命令和輸出都會顯示在畫面上，同時進入代理的 context。
+
+`!` bash mode 的核心機制是：它把你直接敲的命令送入 harness 執行，把 stdout 和 stderr（標準輸出和標準錯誤）的完整輸出推進代理的 context。代理拿到輸出後，就能根據輸出內容採取行動。
+
+### 從輸出到診斷：回饋迴路
+
+Bash 執行真正有價值的地方，不在於「能跑命令」，而在於代理能根據輸出做出診斷。
+
+一個實際的例子：你在 `!` bash mode 裡跑 `npm run typecheck`。命令失敗了，輸出裡有一行 `Cannot find module 'zod'`。這段錯誤訊息進入了代理的 context，代理就能診斷出：`zod` 在 `package.json` 的 `dependencies` 裡列出來了，但沒有被安裝到 `node_modules`，所以型別檢查失敗。代理接著推薦你執行 `npm install`。
+
+注意這個過程中的關鍵：代理不是在「猜」問題在哪裡，它是在根據真實的命令輸出做出推論。它看到了具體的錯誤訊息，做出了具體的診斷，提出了具體的修復建議。這就是回饋迴路的運作方式。
+
+### 長時間命令：Ctrl+B 背景執行
+
+不是所有命令都能在幾秒內結束。`npm run dev` 這類 dev server 可能要跑好幾個小時，你不希望它佔據整個終端。
+
+按下 Ctrl+B 可以把目前的命令丟到背景（background）。背景執行的機制如下：
+
+- 命令繼續在背景運行，不會被打斷。
+- 命令的輸出不再直接顯示在終端上，而是寫進一個本機檔案（local file）。
+- 狀態列（status bar）下方會出現一個背景任務指示器（background-task indicator），讓你知道有一個命令在跑。
+- 代理保留了讀取那個輸出檔案的路徑，所以它仍然可以根據輸出來做診斷，只是你不需要一直盯著終端。
+
+這個機制讓你能同時跑一個 dev server 和繼續在終端裡跟代理互動，兩件事互不干擾。
+
+## In plain terms
+
+白話說，Bash 執行就是讓 AI coding agent 能「動手做事」，而不只是「動嘴說事」。它能跑命令、看到結果、根據結果修正。你可以用自然語言叫它跑，也可以自己用 `!` 直接敲命令——不管哪一種，輸出都會進入代理的 context，讓它能真正理解你的專案狀態並採取行動。長時間跑的命令用 Ctrl+B 丟到背景，輸出存進檔案，代理隨時都能讀到。
+
+## Analogy
+
+想像你在教一個學徒做菜。
+
+- **沒有 Bash 執行的學徒**：你把食譜遞給他，他照著寫了一張新的食譜卡給你，但他從來不打開爐子試煮一次。你不知道他寫的步驟到底能不能煮出東西，只能自己先試試看，再把試吃的結果告訴他。
+
+- **有 Bash 執行的學徒**：他寫完食譜後會自己打開爐子煮一次，嚐一口，發現鹽放太少，就自己調整比例再煮一次。你不需要當中間人去試吃再傳話。他甚至可以在煮湯的同時（Ctrl+B 背景），繼續幫你準備下一道菜。
+
+`!` bash mode 就像是你跟學徒說「你自己嚐嚐看」——他嚐了、評估了、修正了。自然語言指令就像是你說「幫我煮一下看看」——他自己決定怎麼煮、煮完自己嚐。Ctrl+B 則是「湯放著慢慢燉，我們先做別的」。
+
+## Practical use
+
+- 跑 `npm run typecheck` 檢查型別錯誤。如果代理看到錯誤輸出，它能診斷出缺少的依賴或寫錯的型別，直接推薦修復方案。
+- 用 `! npm run dev` 啟動 dev server，讓代理同時能看到 server 的即時 log，方便診斷啟動失敗或路由錯誤的問題。
+- 在 `!` bash mode 裡跑 `git status` 或 `git diff`，讓代理理解目前的變更狀態，再決定下一步該怎麼提交或重構。
+- 跑 `npm run test`，把失敗的測試輸出推進 context，讓代理根據失敗原因修復程式碼。
+- 用 Ctrl+B 把 `npm run dev` 丟到背景，繼續在終端裡跟代理互動處理其他任務。
+
+## Connections
+
+- [[learn/ai-coding-crash-course/elements/bash-mode-visibility|Bash 模式與可見性控制 (Bash Mode & Visibility Control)]] — Bash 執行是「能跑什麼命令」；bash 模式與可見性控制是「代理看不看得到輸出」。兩者是不同層次的問題，但實務上密不可分。
+- [[learn/ai-coding-crash-course/elements/turn-tool-loop|Turn、工具呼叫與工具結果 (Turn, Tool Calls, Tool Results)]] — Bash 執行本質上是一個工具呼叫（tool call）的實例：代理決定要執行什麼命令、harness 負責執行、輸出作為工具結果（tool result）回傳給代理。
+- [[learn/ai-coding-crash-course/elements/permissions-model|代理權限模型 (Agent Permissions Model)]] — Bash 執行涉及代理對環境的直接操作，所以需要理解權限模型：哪些命令代理可以直接跑、哪些需要你確認。
+- [[learn/ai-coding-crash-course/elements/model-harness-environment|代理、模型、外殼與環境 (Agent, Model, Harness, Environment)]] — Bash 執行的「執行」部分完全由 harness（外殼）負責，模型透過工具呼叫來驅動它。
+- [[learn/ai-coding-crash-course/elements/context-and-session|Context 與 Session]] — 命令輸出進入代理的 context，因此 Bash 執行會消耗 context 空間，理解 context 的運作方式有助於決定何時該用 `!`、何時該叫代理自己跑。
+
+## Deep dive
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ad:1045-1128]] — 課程完整介紹 Bash 執行的兩種觸發方式（自然語言指令、`!` 前綴 bash mode），以及 `npm run typecheck` 的實際診斷案例（zod 缺少安裝），還有 Ctrl+B 背景執行長時間命令的機制。
+
+## Questions
+
+### Q1. Bash 執行的兩種觸發方式有什麼差別？
+
+A1. 第一種是自然語言指令：你用說話的方式告訴代理要跑什麼，代理會自己去 `package.json` 找 script、決定指令、執行。第二種是 `!` 前綴的 bash mode：你直接在提示列敲命令，跳過自然語言翻譯，命令在互動 shell 裡執行，輸出直接進入代理的 context。
+
+### Q2. 為什麼 Bash 執行比自己切終端跑命令更有效率？
+
+A2. 因為代理拿到命令輸出後能直接據此行動——它不需要你把錯誤訊息複製貼上、不需要你解釋出了什麼問題。它在同一個 context 裡完成「執行 → 觀察 → 診斷 → 修正」的完整循環，消除了上下文切換的成本。
+
+### Q3. 在 `!` bash mode 跑 `npm run typecheck` 失敗時，代理做了什麼？
+
+A3. 代理看到輸出裡的 `Cannot find module 'zod'` 錯誤訊息後，診斷出 `zod` 在 `package.json` 的 `dependencies` 裡有列出來但沒有被安裝到 `node_modules`，因此推薦執行 `npm install` 來安裝缺少的依賴。這是代理根據真實輸出做出的具體推論，不是猜測。
+
+### Q4. Ctrl+B 背景執行後，命令的輸出去了哪裡？
+
+A4. 命令的輸出會被寫進一個本機檔案，而不是直接顯示在終端上。狀態列下方會出現背景任務指示器（background-task indicator）。代理保留了讀取那個輸出檔案的路徑，所以它仍然可以根據輸出來做診斷，你也能在需要時查看。
+
+### Q5. Bash 執行如何形成回饋迴路（feedback loop）？
+
+A5. 代理寫完程式碼後透過 Bash 執行跑型別檢查、lint 或測試，把命令輸出推進 context，根據輸出中的錯誤訊息診斷問題，再修正程式碼，然後再跑一次命令驗證。這個「執行 → 觀察 → 診斷 → 修正 → 再執行」的循環就是回饋迴路，它不需要你來做人工轉接器。

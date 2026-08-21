@@ -1,0 +1,102 @@
+---
+id: document-vs-relational
+title: Document Model vs Relational Model 的核心取捨
+subject: design-data-intensive-applications
+teaches:
+  - design-data-intensive-applications/impedance-mismatch
+  - design-data-intensive-applications/schema-on-read-vs-write
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#The Object-Relational Mismatch]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Schema flexibility in the document model]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Data locality for queries]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Convergence of document and relational databases]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+# Document Model vs Relational Model 的核心取捨
+
+## Learning goal
+
+能解釋文件模型和關聯模型各自的結構優勢與代價，並根據資料的關聯形狀（一對多、多對多、異質性）做出模型選擇。
+
+## Lesson
+
+### 📝 一張履歷表的兩種存法
+
+假設你在設計一個類似 LinkedIn 的個人檔案系統。每個使用者有一份履歷，裡面包含基本資料、多段工作經歷、學歷、聯絡方式。在物件導向的程式碼裡，你會怎麼表達這份履歷？大概是一個巢狀物件（Nested Object）：`User` 裡面包著一個 `positions` 列表、一個 `education` 列表、一個 `contactInfo` 物件。一個物件就能完整描述一個人。
+
+但到了 [[learn/design-data-intensive-applications/elements/relational-model|關聯模型 (Relational Model)]] 裡，你必須把這份巢狀結構「拆散」（Shredding）成多張資料表：一張 `users` 表存基本資料、一張 `positions` 表存工作經歷、一張 `education` 表存學歷，再用外鍵（Foreign Key）把彼此串起來。想查詢一份完整的履歷？你得 JOIN 三張表。
+
+這就是 [[learn/design-data-intensive-applications/elements/impedance-mismatch|物件關聯不匹配 (Object-Relational Impedance Mismatch)]] 的核心現象：物件世界的巢狀結構和關聯世界的扁平表格之間，存在一道天然的摩擦。你大概在用 ORM 的時候已經感受過這道摩擦了——`SELECT` 出來的結果要映射回物件，關聯深了就冒出 N+1 查詢，效能直直落。
+
+文件模型（Document Model）提供了另一條路。把整份履歷存成一個 JSON 文件，工作經歷、學歷、聯絡方式全部嵌套在裡面。查詢時一次讀取，不需要 JOIN。這就是「資料局部性」（Data Locality）的優勢：相關資料在物理上存放在同一個地方，一次 I/O 就能拿到完整的結果。
+
+### ⚡ 局部性優勢的邊界
+
+聽起來文件模型完勝？先別急。局部性有一個重要的前提：你必須一次讀取整份文件。假設你只想取得某個使用者的名字和公司名稱，不需要他的全部學歷和聯絡方式，資料庫仍然得載入整份 JSON 文件才能取出那兩個欄位。更麻煩的是，當你需要更新文件中的某個小片段時，通常得把整份文件重新寫回去——除非新舊文件的大小恰好一致。
+
+局部性也不是文件模型的專利。關聯式系統同樣可以利用 locality grouping 把相關資料放在一起。Spanner 允許交错儲存相關列（Interleaved Tables），Oracle 有索引叢集（Index Cluster），Bigtable 有關聯群組（Column Family）。只是這不是預設行為，你需要額外設定。
+
+所以局部性優勢存在，但有邊界。真正的取捨要放到更廣的資料關係中去看。
+
+### 🔧 多對多的痛點
+
+一對多（One-to-Many）是文件模型的舒適區。一個使用者有多段工作經歷，這天然是樹狀結構，塞進 JSON 文件理所當然。
+
+但資料不會永遠這麼乖。假設你的系統開始做推薦功能——使用者可以收藏其他使用者的履歷，一篇履歷也可以被多人收藏。這就是多對多（Many-to-Many）關係。文件模型怎麼處理？
+
+有兩條路，兩條都有代價：
+
+1. **複製資料（Duplication）**：把被收藏的履歷資料複製進每個收藏者的文件裡。資料冗餘立刻出現，而且一旦被收藏的履歷更新了，你得同步更新所有包含它的文件——一致性（Consistency）由你的應用程式碼來保證，資料庫幫不了你。
+2. **外鍵引用（Reference）**：在文件裡存一個外鍵引用，讀取時再去另一個集合（Collection）查詢。這基本上就是在應用層模擬 JOIN——文件資料庫原本想避開的 JOIN，現在又回來了。
+
+關聯模型在多對多關係上天然流暢。一張 `saved_resumes` 中間表就能優雅地表達「誰收藏了誰」，JOIN 由資料庫的查詢優化器（Query Optimizer）自動處理，你不需要在應用層手動管理引用與一致性。
+
+**為什麼這很重要？** 因為你的資料模型選擇取決於資料的關聯形狀。如果你的資料以一對多的樹狀結構為主，文件模型是自然的選擇。如果資料之間的關聯複雜、交錯、多對多無處不在，關聯模型的正規化（Normalization）和 JOIN 能力會讓你輕鬆很多。
+
+### 📐 Schema 的兩種哲學
+
+除了資料的結構形狀，另一個核心取捨是：**結構什麼時候定義？**
+
+[[learn/design-data-intensive-applications/elements/schema-on-read-vs-write|Schema-on-Read vs Schema-on-Write]] 是理解文件模型和關聯模型差異的第二條軸線。
+
+你在 PostgreSQL 建表的時候，一定寫過 `CREATE TABLE` 語句——定義好每個欄位的名稱、型別、約束。寫入資料時，資料庫立刻驗證：欄位型別對不對？NOT NULL 有沒有滿足？外鍵指向的記錄存不存在？不對就直接拒絕寫入。這就是 Schema-on-Write（寫入時定義結構）。好處很直覺：壞資料根本進不來，查詢優化器知道每個欄位的型別和大小，團隊成員看到 Schema 就知道資料長什麼樣。
+
+代價是 Schema 遷移（Schema Migration）的成本。你在 MySQL 裡跑 `ALTER TABLE` 的時候，某些情況下它需要鎖定整張表、複製全部資料到新的結構，對大型表來說可能要跑好幾個小時。PostgreSQL 11 之後大幅改善了這個問題，但 Schema 遷移仍然是需要謹慎規劃的操作。
+
+文件資料庫（如 MongoDB）走的是另一條路。寫入時資料庫幾乎不檢查結構，資料以 JSON 格式直接存儲。結構的定義權完全交給應用程式碼——讀取的時候，你的程式碼決定怎麼解析每個欄位。這就是 Schema-on-Read（讀取時解釋結構）。
+
+這和靜態型別語言（Static Typing） vs 動態型別語言（Dynamic Typing）的類比非常精準。Schema-on-Write 就像 TypeScript——編譯期驗證結構，及早發現錯誤。Schema-on-Read 就像 JavaScript——執行期才解釋結構，靈活但風險後移。
+
+但有一個常見的誤解需要澄清：「Schemaless」（無綱要）這個說法是誤導的。Schema-on-Read 不代表沒有結構——你的程式碼仍然假設了某種結構，只是那個結構不在資料庫裡定義，而是在程式碼裡隱含。就像動態型別語言不是「沒有型別」，而是把型別檢查延遲到執行期。
+
+**那什麼時候選哪個？** 如果你的資料高度異質（Heterogeneous）——來自不同系統、結構不盡相同——或者需求快速變動、Schema 還沒定型，Schema-on-Read 的彈性很有價值。如果你的資料結構統一、強調資料完整性（Data Integrity），或者需要複雜的 JOIN 和交易保證（Transaction），Schema-on-Write 是更穩健的選擇。
+
+### 🔄 正在發生的融合
+
+你可能已經在實務中用過混合策略了。PostgreSQL 的 JSONB 欄位讓你在同一張表裡，用傳統欄位存結構化的核心資料（Schema-on-Write），再用 JSONB 存異質的附加資料（Schema-on-Read）。MongoDB 也加入了 JSON Schema Validation，讓你在文件層級定義並強制驗證結構。
+
+這不是巧合，而是趨勢。關聯式資料庫正在加上 JSON/XML 支援（PostgreSQL 9.3 之後、MySQL 5.7 之後、DB2 10.5 之後），文件資料庫正在加上 JOIN 能力（RethinkDB 原生支援、MongoDB 的 aggregation pipeline 可以做 reference lookup）。兩種模型正在互相靠攏。
+
+**為什麼要關注這個趨勢？** 因為它意味著「選文件還是選關聯」這道題目正在逐漸過時。真正的問題變成：在你的系統中，哪些資料適合關聯式管理、哪些資料適合文件式存儲？混合持久化（Polyglot Persistence）允許你根據場景選擇最適合的工具，而不是用單一模型解決所有問題。
+
+### 💡 選擇的框架
+
+把前面的分析收攏成一個判斷框架：
+
+| 維度 | 文件模型更適合 | 關聯模型更適合 |
+| --- | --- | --- |
+| 資料關聯形狀 | 一對多為主，樹狀結構 | 多對多普遍，關聯複雜 |
+| Schema 彈性 | 結構異質、需求快速變動 | 結構統一、強調完整性 |
+| 查詢模式 | 整份文件一次讀取為主 | 需要跨表聚合與 JOIN |
+| 一致性要求 | 應用層管理即可 | 資料庫層級的 ACID 保證 |
+
+你對 PostgreSQL、MySQL、Redis 的經驗讓你對關聯模型和快取層已經有直覺。文件模型的思維補上了另一半：它教你用「資料的自然形狀」來思考模型選擇，而不是預設所有東西都進關聯表。兩種模型不是對立的，而是互補的。在現代系統中，大多數成熟的架構會同時用到兩者，各自處理它擅長的場景。
+
+## Sources
+
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#The Object-Relational Mismatch]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Schema flexibility in the document model]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Data locality for queries]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Convergence of document and relational databases]]

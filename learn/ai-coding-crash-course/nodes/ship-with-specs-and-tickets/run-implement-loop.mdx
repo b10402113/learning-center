@@ -1,0 +1,109 @@
+---
+id: run-implement-loop
+title: Implement 迴圈：五步完成 Ticket 實作
+subject: ai-coding-crash-course
+teaches:
+  - ai-coding-crash-course/implement-loop
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ai:13-672]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+# Implement 迴圈：五步完成 Ticket 實作
+
+## Learning goal
+
+理解 implement 迴圈的完整流程：從讀取 Issue 到觸發 Code Review 的每一步，學會使用 auto mode 讓 Agent 自行跑完整個 ticket queue，並掌握 clear vs compact 的選擇、token 預算控制、以及 feedback loops 的設計。
+
+## Lesson
+
+有了 [[learn/ai-coding-crash-course/elements/spec|Spec]] 和 [[learn/ai-coding-crash-course/elements/tickets|Tickets]]，你已經把大型任務拆成了 agent 大小的區塊。接下來的問題很直接：怎麼讓 Agent 把這些 tickets 一張一張做完？答案是 [[learn/ai-coding-crash-course/elements/implement-loop|Implement 迴圈]]，一套結構化的流程，確保每張 ticket 都走完「理解、探索、實作、驗證、審查」的完整循環。
+
+### 📝 單張 Ticket 的五步流程
+
+每張 ticket 的實作分五個固定步驟。順序是固定的，因為它要讓 Agent 在 context window 的智慧區域內最大化輸出品質。
+
+1. **讀取 Issue** — Agent 拉取 ticket 的 Issue 內容，搞清楚這張 ticket 要做什麼。ticket 寫得好的話，你會看到明確的 what 和 acceptance criteria（驗收標準），Agent 讀完就知道什麼時候算「完成」。
+
+2. **探索程式碼** — Agent 讀取相關檔案，理解現有架構、需要改哪裡、有什麼依賴。這個階段會消耗不少 token，但它是避免後續返工的關鍵。如果 ticket 裡放了 navigation pointers（導覽指標），例如指出相關檔案的路徑和行號，就能大幅縮短探索時間，讓 Agent 更快進入實作。
+
+3. **撰寫程式碼** — 根據 ticket 需求和探索結果，Agent 實際修改或新增程式碼。這是整個迴圈中 output tokens 消耗最大的階段。每個 ticket 的實作大約消耗 100k 到 140k output tokens，其中光是 seed scripts（種子腳本）之類的輔助檔案就可能佔 20k 以上。
+
+4. **執行驗證** — Agent 跑 type check、lint、測試，確保程式碼通過所有自動化檢查。這是整個迴圈中 token 消耗最凶的部分，因為 Agent 會反覆跑檢查、修正、再跑，直到全部通過。這個 red-green test loop（紅綠測試迴圈）看似浪費，但它是 deterministic feedback（確定性回饋）的來源。
+
+5. **觸發 Code Review** — 完成後，Agent 自動觸發一個獨立的 code review skill。Review 在全新的 sub-agent context window 中執行，不受主對話中累積的大量 token 污染。它會做兩件事：standards review（檢查是否符合 coding standards）和 spec review（檢查實作是否符合原始 spec）。
+
+完成一個 ticket 後，Agent 自動進入下一張，重複相同的迴圈。
+
+### ⚡️ Auto Mode：讓 Agent 自己跑
+
+不想每張 ticket 都 babysit？可以啟用 auto mode（自動模式）。啟用後，Agent 會自動處理 permission requests，例如檔案寫入權限，不需要你每次手動確認。搭配一個 classifier（分類器）檢查 Agent 的權限請求，你可以把 3 到 5 張 tickets 排成一個佇列，然後去做別的事。
+
+**為什麼 auto mode 很重要？** 因為它把你的角色從逐張票 babysit 的執行者，轉變成批發排程的管理者。
+
+**自動模式的限制是什麼？** 它的判斷邏輯是機率性的。分類器會攔截大多數真正危險的操作（例如 `rm -rf` 整個檔案系統），但偶爾會漏放資料庫遷移，也偶爾會誤擋建立 GitHub issue 之類的無害動作。它落在「on the right side of OK」的範圍內 — 能擋住大方向的災難，但做不到完美。
+
+**實務上怎麼用？** 用 `settings.json` 把常見且安全的命令提前放行，它們會跳過分類器，既省 token 也省時間。遇到涉及刪除、推送、遷移等影響大的操作時，切回手動模式保留最後的確認權。
+
+### 🔄 Clear vs Compact：完成 Ticket 後的選擇
+
+完成一張 ticket 後，你需要決定怎麼處理對話記憶。這個選擇看似微小，影響卻很深遠。
+
+| 選項 | 做什麼 | 優點 | 缺點 |
+|------|--------|------|------|
+| **Clear** | 完全清空 context window | 成本低、速度快、不會污染下一張 ticket 的判斷 | 無法延續前一張的脈絡 |
+| **Compact** | 把對話壓縮成摘要 | 保留部分上下文 | 要花 output tokens 寫摘要，摘要對下一張 ticket 幫助有限 |
+
+**作者的實踐：大部分情況下選 clear。** 當你猶豫不決時也應該選 clear。原因是 compact 本身消耗 output tokens，而它帶來的收益很小。下一張 ticket 有自己的 spec 和上下文，前一張的脈絡很少是必要的。除非 ticket 之間有明確的脈絡需要延續，否則 clear 是更安全的選擇。
+
+### 💡 Token 預算與任務規模
+
+每個 ticket 的實作大約消耗 100k 到 140k output tokens，驗證迴圈是主要的消耗者。這就是為什麼 ticket 的規模必須控制得當。
+
+**Right-sized ticket（大小適中的 ticket）** 是在一個 context window 內能完成的、範圍明確的小塊工作。如果 ticket 範圍太大，token 消耗會膨脹到 300k 以上。作者把這種情況當作學習經驗，回饋到 skills 的改進中，讓未來的 ticket 切分更精準。
+
+**Large context window（大上下文視窗）** 是安全網。即使 ticket 被錯誤地切太大，200k 以上的 context window 也能容納整個實作過程，避免 context 不足導致的失敗。但不要依賴這張安全網，把它當作最後的防線就好。
+
+### 🔍 Feedback Loops 的品質差異
+
+並非所有 feedback loops 都同樣可靠。理解這個差異，直接影響你怎麼切分 tickets。
+
+| Feedback 類型 | 可靠度 | 原因 |
+|--------------|--------|------|
+| Type checking / tests | ⭐⭐⭐ | 結果是明確的通過或失敗，Agent 可以根據回饋反覆修正 |
+| Running UI | ⭐ | 需要 Chrome DevTools MCP 或 agent-browser 才能提取有意義的回饋 |
+| 視覺 UI polish | ⭐ | 缺乏明確的 feedback loop，Agent 沒有可靠的方式自我修正 |
+
+**這給 ticket 切分提供了一個實用的指引：** 有強 feedback loop 的工作（型別、測試、lint）可以放心交給 Agent；缺乏 feedback loop 的工作（視覺調整、動畫、排版細節）要麼人工處理，要麼在 ticket 裡明確標註視覺驗收標準。
+
+### ⚠️ 當 Ticket 爆掉時
+
+實作過程中，有些 tickets 會超出預期，token 消耗膨脹到不可接受的程度。這通常意味著 ticket 的範圍切得太大，或者任務本身比看起來更複雜。
+
+**三個對策：**
+
+1. **記下 token 消耗**，回饋到 ticket 切分的 skill 中，讓未來的切分更精準
+2. **靠大 context window 兜底**，在大多數情況下仍然能完成工作，只是成本更高
+3. **如果發現 spec 不夠清楚**（例如 ticket 的需求與 spec 矛盾），Agent 會暫停並提示你，這時候需要 re-grill（重新質詢），回到 grilling session 補充 spec，然後再繼續
+
+**最後一點很重要：** 這不是流程的失敗，而是流程的正常運作。一個好的流程本身就包含偵測到問題時的修復機制。
+
+### 🏁 實務流程：把全部串起來
+
+把以上全部串起來，一個典型的 implement 迴圈 workflow 是：
+
+1. 把 spec 和 tickets 寫入 Issue Tracker
+2. 啟動新對話
+3. 呼叫 implement 指定第一張 ticket
+4. Agent 依序完成五步
+5. 完成後 clear context window
+6. 進入下一張 ticket，重複
+7. 全部完成後，人類做最終的整體驗收
+8. 關閉 spec issue
+
+作者在自己的 repo 中用這套流程累積了超過 1,200 個 closed issues，每次 implement 迴圈的 token 消耗大約是 100k 到 140k output tokens per ticket。這套流程的核心價值在於**可預測性**：你不是把整個功能丟進 context window 然後祈禱，而是用一張一張 ticket 確保每一步都在可控的範圍內。
+
+## Sources
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ai:13-672]]

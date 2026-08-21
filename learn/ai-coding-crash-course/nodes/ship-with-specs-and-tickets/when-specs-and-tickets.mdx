@@ -1,0 +1,103 @@
+---
+id: when-specs-and-tickets
+title: 五步交付流程：Spec、Tickets 與 Context Window 的正確用法
+subject: ai-coding-crash-course
+teaches:
+  - ai-coding-crash-course/spec
+sources:
+  - "[[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ah]]"
+created: 2026-08-21
+updated: 2026-08-21
+---
+
+# 五步交付流程：Spec、Tickets 與 Context Window 的正確用法
+
+## Learning goal
+
+理解大型任務超出單一 context window 時的五步交付流程，以及 specs 與 tickets 兩份文件的角色。
+
+## Lesson
+
+## 為什麼 Context Window 有極限？
+
+你一定遇過這種情況。Agent 前半段做得很好，後半段開始重複你已經講過的東西，忘記之前的決策，甚至做出跟前面矛盾的實作。這不是 Agent 笨，而是 context window（上下文視窗）有客觀限制。
+
+每個 context window 都有一個「Smart Zone」（智慧區域），通常在對話前段，品質最高。越往後推，資訊密度下降、注意力衰減，Agent 的表現會明顯變差。
+
+把一份跨多個架構層級的重構、一整個新模組的實作、或任何明顯超出單次對話承載量的工作，硬塞進一個 context window，就等於要求 Agent 在後半段失憶的情況下完成高品質的判斷。結果通常是返工、遺漏、或品質不穩定。
+
+**突破這個限制的方法，是把「終點在哪裡」和「每一步怎麼走」拆成兩個獨立的文件。**
+
+## 📄 Spec 與 Tickets 各管什麼？
+
+這套方法的兩份核心文件，各自承擔不同角色：
+
+| 文件 | 定義什麼 | 存在哪裡 |
+| --- | --- | --- |
+| Spec（規格書） | 目的地，做什麼、解決什麼問題、交付物是什麼 | Issue Tracker |
+| Ticket（工作票） | 每一個子步驟，在一個 context window 內能完成的小塊工作 | Issue Tracker（每 ticket 一個 issue） |
+
+Spec 不是需求文件的副本，而是一份精簡的目的地描述。每次新的 context window 開頭，Agent 讀進 spec 和當前的 ticket，就能精準地在智慧區域內工作。
+
+## 🔧 五步交付流程全覽
+
+一個典型的情境：你要重構整個認證系統，從 session-based 換成 JWT。這件事不可能在一次對話中完成。你需要的是一套有紀律的交付流程。
+
+### 第一步：Grill（質詢）
+
+與 Agent 進行深度對話，把需求的每一個角落都問清楚。這個階段的目標不是寫出答案，而是把所有含糊之處攤開。
+
+你問的問題包括：
+- 邊界條件是什麼
+- 哪些舊系統會受影響
+- 使用者說的 X 到底是指 Y 還是 Z
+
+**Grill 的品質直接決定 spec 的品質。** 把這一步省掉，後面每一步的品質都會受影響。
+
+### 第二步：Spec（規格書）
+
+根據 grill 的結果產生一份 spec，寫入 Issue Tracker。Spec 只包含三件事：
+
+1. 問題陳述
+2. 解決方案
+3. 使用者故事
+
+它不描述實作細節，只描述目的地。值得注意的是，[[learn/ai-coding-crash-course/elements/spec|Spec]] 是一份二手來源，會隨著程式碼的演進逐漸過時。完成後要關閉並封存，避免 Agent 探索程式碼時被過時的資訊誤導。
+
+### 第三步：Tickets（工作票）
+
+把 spec 拆成多個 ticket，每個 ticket 是一個 context window 內能完成的明確工作。_ticket 的數量需要人工判斷_。
+
+**為什麼不能完全交給 Agent 拆？** Agent 在拆分時傾向做水平切片（horizontal slicing），產生過多 ticket，總 token 消耗會超出 context window 的承載上限。你需要根據 token 預算合併或重排，確保整體可執行。
+
+### 第四步：Implement（實作）
+
+逐個 ticket 執行。每次新對話開始，Agent 讀入 spec 和當前 ticket，在智慧區域內完成工作。完成一個就 commit，然後進入下一個。
+
+這個階段你不需要 babysit Agent，但需要在每個 ticket 完成後做基本的檢查。
+
+### 第五步：Review（審查）
+
+每個 ticket 完成後做 code review。全部完成後，將 spec issue 關閉並封存（closed + archived）。Review 是品質的最後關卡，確保每個子步驟的結果都符合 spec 的目的地。
+
+## 💡 為什麼一定要存在 Issue Tracker？
+
+一個常見的問題：spec 和 tickets 為什麼要存在 Issue Tracker，而不是本地的 markdown 檔案？
+
+原因有三：
+
+1. **共享工作介面**：Issue tracker 是多人共享的工作介面，Agent 透過 GitHub CLI（`gh`）就能在對話中拉取內容
+2. **不綁定環境**：不綁定任何特定的 working directory 或 laptop
+3. **防止二手來源污染**：如果 spec 放在 repo 裡，Agent 在探索程式碼時會先碰到那份更小、更容易消化的文件，然後信任它，即使它已經過時。存在 issue tracker 的封存 issues 中，Agent 只有在主動探索時才會去讀取
+
+**為什麼這很重要？** 二手來源（如 spec）一旦過時，卻被 Agent 當成事實依據，後果比沒有 spec 更嚴重。放在 Issue Tracker 的封存區，是目前最安全的存放位置。
+
+## 📊 實務數據：這套流程的驗證
+
+作者在自己的 repo 中累積了超過 **1,200 個 closed issues**，其中包含了不少於 **30 個 tickets** 的大型 spec。
+
+五步流程的每個環節都有明確的退出條件和品質關卡，讓大型工作不再是「丟進 context window 然後祈禱」。
+
+## Sources
+
+- [[sources/ai-coding-crash-course/AI Coding Crash Course.srt#part_ah]]
