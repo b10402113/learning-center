@@ -1,0 +1,118 @@
+---
+id: standalone-studio-workspace
+title: Standalone Studio：把管理介面從 App Router 拆出去
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/standalone-studio-workspace
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:3689-4140]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#app-structure]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#tech-stack]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Standalone Studio：把管理介面從 App Router 拆出去
+
+## Learning goal
+
+能說明為什麼嵌入式 Sanity Studio 在 production 經不起考驗，以及如何把 Studio 拆成獨立的 workspace——包括結構、環境變數、和 typegen 的完整流程。
+
+## Lesson
+
+### 📝 一個看似方便的決定，日後代價極高
+
+`npx sanity@latest init` 時，CLI 問你：「要不要 embedded studio？」選 Yes 看起來最方便——一個 `npm run dev` 就能同時跑 Next.js 和 Studio，不需要開兩個終端視窗。
+
+但在 Vertex 的實作過程裡，AI agent 讀了 AGENTS.md 的 app structure 章節後發現了一個衝突：AGENTS.md 明確要求「web app separate from Sanity studio per Sanity best practice」。嵌入式 Studio 違反了這條規則。
+
+**為什麼這很重要？** 因為嵌入式 Studio 的方便只在 prototype 階段有效。當你的專案開始長大——需要跑 typegen、需要獨立部署、需要更新 Sanity 版本——嵌入式 Studio 的限制會一個接一個浮現，而事後拆分的成本比一開始就選對高得多。
+
+### 🔧 嵌入式 Studio 的三大致命問題
+
+| 問題 | 具體症狀 | 影響 |
+|------|---------|------|
+| **版本衝突** | Next.js 和 Sanity 依賴不同版本的 React，嵌入時出現 hydration 錯誤或 build 失敗 | Studio 和 web app 互相干擾 |
+| **依賴污染** | Sanity 的 `node_modules` 混進 Next.js 的 dependency tree，bundle size 暴增 | 構建時間變長，部署變慢 |
+| **功能受限** | Studio 的 auto-updates 和 typegen 在嵌入模式下無法運作 | 無法自動更新 Sanity 版本，無法產生 TypeScript 類型 |
+
+**自動更新（auto-updates）是什麼？** Sanity 的桌面版 Studio 會自動檢查版本更新並套用。嵌入模式下，Studio 的 React 元件被 Next.js 的 bundler 打包，自動更新機制無法運作——你必須手動更新 `package.json` 裡的 Sanity 版本，然後重新 build。
+
+**Typegen 是什麼？** Sanity 的 typegen 會根據你的 schema 自動產生 TypeScript 類型定義——例如 `Course`、`Lesson`、`Instructor` 的 interface。有了這些型別，你在 GROQ 查詢時可以拿到完整的型別提示，不用手動定義每一個 type。但 typegen 需要 Studio 有獨立的依賴管理才能正確運作。
+
+### ⚡️ 獨立 Workspace 的架構
+
+拆分後的專案結構：
+
+```
+vertex/
+├── package.json          ← Next.js web app 的依賴
+├── app/                  ← Next.js pages（server component + client component）
+├── studio/               ← Sanity Studio workspace（獨立）
+│   ├── package.json      ← Studio 自己的依賴
+│   ├── sanity.config.ts  ← Studio 設定（project ID、dataset、plugins）
+│   ├── sanity.cli.ts     ← CLI 設定（deploy studio、管理 dataset）
+│   ├── schemas/          ← 內容 schema
+│   ├── structure.ts      ← Studio 導覽列
+│   └── node_modules/     ← Studio 自己的依賴（與 web app 分開）
+├── .env.local            ← 共用環境變數（project ID、dataset）
+└── ...
+```
+
+### 🔧 每個 Workspace 的職責
+
+| Workspace | 職責 | 執行方式 |
+|-----------|------|---------|
+| **Studio** (`studio/`) | schema 定義、Studio 介面、typegen、資料匯入匯出 | `cd studio && npm run dev`（localhost:3333） |
+| **Web** (`app/`) | Next.js 頁面、搜尋 UI、server-side 整合 | `npm run dev`（localhost:3000） |
+
+**關鍵**：兩個 workspace 各有自己的 `package.json` 和 `node_modules`。它們共享根目錄的 `.env.local`（裡面有 `SANITY_API_PROJECT_ID` 和 `SANITY_API_DATASET`），但依賴完全分開。你可以在 Studio 裡更新 Sanity 版本，而不影響 web app 的 Next.js 版本。
+
+### 🛠️ 從嵌入式遷移到獨立 Workspace 的步驟
+
+如果你已經選了 embedded，要拆分成獨立 workspace：
+
+1. **在 `package.json` 裡加 workspace 設定**：讓 npm/yarn 知道 `studio/` 是獨立的 workspace。
+2. **把 schema 搬到 `studio/`**：連同 `sanity.config.ts`、`sanity.cli.ts`、`structure.ts` 一起搬。
+3. **在 `studio/` 裡跑 `npm install`**：建立獨立的 `node_modules`。
+4. **刪除 `app/studio/` 路由**：不再從 Next.js 入口進入 Studio。
+5. **驗證**：
+   - `cd studio && npm run dev` → Studio 在 localhost:3333 正常運作
+   - `npm run dev` → web app 在 localhost:3000 不受影響
+6. **跑 typegen**：在 `studio/` 裡跑 `npx sanity typegen`，確認產生的類型正確。
+
+**最痛苦的部分**：環境變數的拆分。嵌入式時 `SANITY_API_TOKEN` 和 `NEXT_PUBLIC_SANITY_PROJECT_ID` 都在同一個 `.env.local` 裡。拆分後 Studio 需要自己的 `.env`，而 web 端只能存取 `NEXT_PUBLIC_` 前綴的變數（`SANITY_API_READ_TOKEN` 絕對不能加 `NEXT_PUBLIC_`）。
+
+### 🔍 測試：確認拆分成功
+
+拆分後的驗證清單：
+
+- [ ] `cd studio && npm run dev` → localhost:3333 看到 Studio
+- [ ] `npm run dev` → localhost:3000 看到 Next.js 首頁
+- [ ] 在 Studio 裡建立一筆 course，確認 schema 正確
+- [ ] 在 web app 的 server component 裡用 Sanity client 讀到這筆 course
+- [ ] `npm run build` → web app 構建成功，沒有 Sanity 相關的 build error
+- [ ] `cd studio && npx sanity typegen` → 產生正確的 TypeScript 類型
+
+### 🎯 為什麼「分開」比「合在一起」更好
+
+| 比較項目 | 嵌入式 Studio | 獨立 Workspace |
+|---------|-------------|---------------|
+| 啟動速度 | 一次啟動兩個 app | 各自啟動 |
+| 依賴管理 | 混在一起 | 完全分開 |
+| 版本更新 | 容易衝突 | 各自更新 |
+| Typegen | 無法運作 | 正常運作 |
+| 部署 | 必須一起部署 | 可以分開部署 |
+| Bundle size | Sanity 元件混進 web bundle | 各自獨立 |
+
+**一句話**：獨立 workspace 的唯一「缺點」是要開兩個終端視窗。其他全部是優點。
+
+### 🚀 回到你的專案：第一步是什麼
+
+如果你正在開始一個新的 Sanity + Next.js 專案，第一步就選「No embedded studio」。如果你已經選了 embedded，現在就按上面的步驟拆分——越早拆，成本越低。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:3689-4140]] — AI agent 發現嵌入式 Studio 與 AGENTS.md 衝突的過程，以及遷移到獨立 workspace 的完整實作。
+- [[sources/vertex-learning-platform/AGENTS.md#app-structure]] — AGENTS.md 裡的架構章節：Studio workspace 和 web workspace 的職責分離。
+- [[sources/vertex-learning-platform/AGENTS.md#tech-stack]] — 技術棧裡的負面清單：「no embedded Studio」。

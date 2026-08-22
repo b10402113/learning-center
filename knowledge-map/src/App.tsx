@@ -431,6 +431,7 @@ export default function App() {
                 selectedId={selectedNodeId}
                 focusRequest={focusRequest}
                 completedNodes={completion.completedNodes}
+                completedSteps={completion.completedSteps}
                 onSelectNode={openNodeDetail}
                 onHover={setHoveredId}
               />

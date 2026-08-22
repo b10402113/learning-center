@@ -1,0 +1,182 @@
+---
+id: server-only-read-layer
+title: Server-Only Read Layer：私有資料集的安全讀取與 GROQ
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/server-only-read-layer
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:3689-4140]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#app-structure]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#traps]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Server-Only Read Layer：私有資料集的安全讀取與 GROQ
+
+## Learning goal
+
+能建立 server-only 的 Sanity 讀取層——確保 read token 永遠不出現在瀏覽器端，server component 查好資料後再傳給 client component，並用 GROQ 的 reference 展開來關聯資料。
+
+## Lesson
+
+### 📝 一個 token 的位置，決定你的資料安不安全
+
+Sanity 的資料集預設是公開的。但 Vertex 的資料集是私有的——課程、講師、分類不該對外暴露。要讀取私有資料集，你需要一個 API read token（具有 viewer 角色的 API 金鑰）。
+
+這個 token 放在哪裡，決定了你的資料安不安全：
+
+| Token 放在哪 | 會發生什麼 |
+|------------|----------|
+| `process.env.SANITY_API_READ_TOKEN`（server 端） | 安全——token 永遠不會出現在瀏覽器端 |
+| `process.env.NEXT_PUBLIC_SANITY_API_READ_TOKEN`（client 端） | **災難**——token 會被打包進 JavaScript bundle，任何人都能在 developer tools 裡看到 |
+
+**為什麼這很重要？** 因為 Next.js 的 App Router 裡同時有 server component 和 client component，很容易不小心把 token 傳到 client 端。一個 `NEXT_PUBLIC_` 前綴就足以把你的資料庫門戶大開。
+
+### 🔧 Server-Only 的機制：Next.js 怎麼保護你的 Token
+
+Next.js 的 App Router 有一個架構邊界：**server component 的程式碼永遠不會出現在 client bundle 裡**。這是 Next.js bundler 保證的——你在 server component 裡讀 `process.env.SANITY_API_READ_TOKEN`，這個值只會在 server 端被解析，不會被打包進任何送到瀏覽器的 JavaScript 檔案。
+
+**環境變數的命名規則是關鍵：**
+
+| 環境變數名 | 會被打包進 client bundle？ | 安全用途 |
+|-----------|------------------------|---------|
+| `SANITY_API_READ_TOKEN` | ❌ 不會 | ✅ 可以用來查詢 Sanity |
+| `NEXT_PUBLIC_SANITY_API_READ_TOKEN` | ✅ 會 | ❌ 永遠不要這樣命名 |
+| `SANITY_API_PROJECT_ID` | ❌ 不會 | ✅ 可以用在 server 端 |
+| `NEXT_PUBLIC_SANITY_API_PROJECT_ID` | ✅ 會 | ✅ project ID 公開也沒關係 |
+
+**為什麼 project ID 可以公開？** 因為 project ID 本身不是認證資訊——它只是告訴 Sanity「你要查哪個專案的資料」。真正的認證靠的是 read token，所以 token 絕對不能加 `NEXT_PUBLIC_` 前綴。
+
+### 🛠️ 建立 Server-Only Read Layer：三步驟
+
+**第一步：在 `.env.local` 裡設定 token**
+
+```bash
+SANITY_API_PROJECT_ID=your-project-id
+SANITY_API_DATASET=production
+SANITY_API_READ_TOKEN=sKxxxxxxxxxxxx
+```
+
+**第二步：建立 Sanity client（`lib/sanity.client.ts`）**
+
+```typescript
+import { createClient } from 'next-sanity'
+
+export const client = createClient({
+  projectId: process.env.SANITY_API_PROJECT_ID!,
+  dataset: process.env.SANITY_API_DATASET || 'production',
+  apiVersion: '2024-01-01',
+  token: process.env.SANITY_API_READ_TOKEN,  // 只在 server 端可用
+  useCdn: true,
+})
+```
+
+`token` 欄位從 `process.env` 讀取——因為這個模組只在 server component 裡被引入，token 永遠不會出現在 client bundle 裡。
+
+**第三步：建立 fetch helper（`lib/sanity.fetch.ts`）**
+
+```typescript
+import { client } from './sanity.client'
+import { groq } from 'next-sanity'
+
+export async function sanityFetch<T>({
+  query,
+  params = {},
+  revalidate = 60,
+}: {
+  query: string
+  params?: Record<string, unknown>
+  revalidate?: number
+}): Promise<T> {
+  return client.fetch<T>(query, params, {
+    next: { revalidate },
+  })
+}
+```
+
+`revalidate` 控制 Next.js 的快取時間——設為 60 表示每 60 秒重新從 Sanity 拉一次資料。
+
+### ⚡️ Server Component 怎麼用
+
+在 Next.js 的 server component 裡直接呼叫 `sanityFetch`：
+
+```typescript
+// app/courses/page.tsx（server component）
+import { sanityFetch } from '@/lib/sanity.fetch'
+import { groq } from 'next-sanity'
+
+const coursesQuery = groq`*[_type == "course"]{
+  title,
+  slug,
+  description,
+  "totalLessons": count(modules[].lessons),
+  "totalDuration": sum(modules[].lessons[].duration),
+  instructors[]->{name, image}
+}`
+
+export default async function CoursesPage() {
+  const courses = await sanityFetch<Course[]>({ query: coursesQuery })
+  // courses 只在 server 端存在，永遠不會到達瀏覽器
+  return <CourseGrid courses={courses} />
+}
+```
+
+**關鍵**：`courses` 這個變數在 server component 裡被計算，結果作為 props 傳給 `CourseGrid`（可能是 client component）。瀏覽器拿到的只有最終的 HTML 或 props 資料，拿不到 token。
+
+### 📐 GROQ：Sanity 的查詢語言
+
+GROQ（Graph-Relational Object Queries）是 Sanity 自己的查詢語言，類似 GraphQL 但更靈活。它讓你在一個查詢裡同時做 filtering、projection、和 aggregation。
+
+**GROQ 的核心概念：**
+
+| 概念 | 語法 | 範例 |
+|------|------|------|
+| 過濾 | `*[_type == "course"]` | 查所有 course 文件 |
+| 投影 | `{ title, slug }` | 只取 title 和 slug 欄位 |
+| 計算欄位 | `"totalLessons": count(modules[].lessons)` | 計算每門課的總 lesson 數 |
+| Reference 展開 | `instructors[]->{name, image}` | 把 instructor 的 reference 展開成完整資料 |
+| 嵌入陣列 | `modules[]{title}` | 取 embedded modules 的 title |
+
+**展開 reference 的寫法：** `instructors[]->{name, image}` 裡的 `->` 就是展開運算子。它把每一個 instructor 的 ID 對應到完整的 instructor 文件，投影出 `name` 和 `image` 欄位。這類似 SQL 裡的 JOIN，但 GROQ 的寫法更簡潔。
+
+### 🔍 為什麼不能在 Client Component 裡查詢 Sanity
+
+Client component（`'use client'`）的程式碼會被打包進 JavaScript bundle，瀏覽器會下載並執行它。如果你在 client component 裡用 Sanity client 查詢資料，你需要把 token 傳給 client——這就把你的資料庫門戶大開。
+
+正確的做法是：
+
+```
+Server Component（查資料）→ Props → Client Component（渲染 UI）
+```
+
+Server component 負責查詢和計算，client component 負責互動和渲染。兩者之間的橋樑是 props——只有資料會從 server 傳到 client，token 永遠不會。
+
+### 🛠️ 測試：確認 Token 沒有洩漏
+
+驗證 server-only read layer 是否安全的步驟：
+
+1. **跑 `npm run build`**：Next.js 的 webpack 會檢查環境變數的使用位置。如果你不小心把 `SANITY_API_READ_TOKEN` 用在了 client component 裡，build 會報錯。
+2. **檢查 client bundle**：在 browser 的 developer tools 裡搜尋 `SANITY_API_READ_TOKEN`——如果找到了，代表 token 洩漏了。
+3. **測試查詢**：在 server component 裡跑一個 GROQ 查詢，確認能拿到資料。在 client component 裡試圖存取 token——確認拿不到。
+
+### 🎯 為什麼 Server-Only 是唯一正確的做法
+
+| 做法 | 安全性 | 資料隱私 | 實作複雜度 |
+|------|--------|---------|-----------|
+| Server-only read layer | ✅ 安全 | ✅ 資料不外洩 | 低（只需要把 client 放在 server component 裡） |
+| Client-side Sanity 查詢 | ❌ Token 洩漏 | ❌ 任何人都能讀你的資料 | 高（要處理 token 暴露的問題） |
+
+**一句話**：server-only 不是最佳實踐，而是安全底線。Token 洩漏一次，你的資料就不再隱私。
+
+### 🚀 回到你的專案：三步建立安全讀取層
+
+1. 把 Sanity client 放在 `lib/sanity.client.ts`，token 從 `process.env` 讀取
+2. 建立 `lib/sanity.fetch.ts` 統一處理 GROQ 和快取
+3. 在 server component 裡用 `sanityFetch` 查資料，把結果當 props 傳給 client component
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:3689-4140]] — AI agent 發現嵌入式 Studio 與 AGENTS.md 衝突、建立 server-only read layer 的完整過程。
+- [[sources/vertex-learning-platform/AGENTS.md#app-structure]] — AGENTS.md 裡的架構章節：server/client 和 token 邊界。
+- [[sources/vertex-learning-platform/AGENTS.md#traps]] — 安全陷阱：「dataset private, read token server-only; env for keys with committed .env.example」。

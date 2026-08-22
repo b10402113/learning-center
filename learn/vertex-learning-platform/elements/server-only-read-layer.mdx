@@ -1,0 +1,150 @@
+---
+id: server-only-read-layer
+title: Server-Only Read Layer：私有資料集的安全讀取與 GROQ
+subject: vertex-learning-platform
+tier: 2
+order: 8
+type: article
+nodes:
+  - vertex-learning-platform/sanity-content-model
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:3689-4140]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#app-structure]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#traps]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Server-Only Read Layer：私有資料集的安全讀取與 GROQ
+
+## Problem Statement
+
+Sanity 的資料集預設是公開的——任何人都可以透過 API 讀取你的內容。但 Vertex 的資料集是私有的（private dataset），內容（課程、講師、分類）不該對外暴露。更關鍵的是， Sanity API 的 read token（讀取權限的 API 金鑰）一旦暴露在瀏覽器端，任何人都能用它來讀寫你的資料。問題是：Next.js 裡同時有 server component 和 client component，很容易不小心把 token 傳到 client 端——一個 `process.env.SANITY_API_READ_TOKEN` 放錯位置，就把你的資料庫門戶大開。 server-only read layer 要解決的就是這件事：確保 Sanity 的讀取只發生在 server 端，瀏覽器端永遠拿不到 token。
+
+## Why it matters
+
+AGENTS.md 裡的 traps 章節明確警告：「dataset private, read token server-only」。這不是最佳實踐，而是安全底線。在 Next.js 的 App Router 裡，server component 的程式碼永遠不會出現在 client bundle 裡——這是 Next.js 保証的架構邊界。如果你在 server component 裡讀 `process.env.SANITY_API_READ_TOKEN` 並用它來查詢 Sanity，token 永遠不會到達瀏覽器。但如果你把 Sanity client 放進 client component（例如 `use client` 的 React 元件），token 就會被打包進 JavaScript bundle，任何人都能在瀏覽器的 developer tools 裡看到它。
+
+## How it works
+
+### Server-Only Sanity Client
+
+在 `lib/` 資料夾裡建立一個 Sanity client 模組，它只在 server 端被引入：
+
+```typescript
+// lib/sanity.client.ts
+import { createClient } from 'next-sanity'
+
+export const client = createClient({
+  projectId: process.env.SANITY_API_PROJECT_ID!,
+  dataset: process.env.SANITY_API_DATASET || 'production',
+  apiVersion: '2024-01-01',
+  token: process.env.SANITY_API_READ_TOKEN,  // 只在 server 端可用
+  useCdn: true,
+})
+```
+
+關鍵在 `token` 這個欄位：它從 `process.env` 讀取，而這個環境變數只在 server 端存在（沒有 `NEXT_PUBLIC_` 前綴）。Next.js 的 bundler 會確保帶 `NEXT_PUBLIC_` 前綴的環境變數被打包進 client bundle，沒有的則不會。所以 `SANITY_API_READ_TOKEN` 永遠不會出現在瀏覽器端。
+
+### Sanity Fetch Helper
+
+在 client 外層再包一層 fetch helper，統一處理 GROQ 查詢和快取：
+
+```typescript
+// lib/sanity.fetch.ts
+import { client } from './sanity.client'
+import { groq } from 'next-sanity'
+
+export async function sanityFetch<T>({
+  query,
+  params = {},
+  revalidate = 60,
+}: {
+  query: string
+  params?: Record<string, unknown>
+  revalidate?: number
+}): Promise<T> {
+  return client.fetch<T>(query, params, {
+    next: { revalidate },
+  })
+}
+```
+
+### Server Component 使用方式
+
+在 Next.js 的 server component 裡直接呼叫 `sanityFetch`：
+
+```typescript
+// app/courses/page.tsx (server component)
+import { sanityFetch } from '@/lib/sanity.fetch'
+import { groq } from 'next-sanity'
+
+const coursesQuery = groq`*[_type == "course"]{
+  title, slug, description, 
+  "totalLessons": count(modules[].lessons),
+  "totalDuration": sum(modules[].lessons[].duration)
+}`
+
+export default async function CoursesPage() {
+  const courses = await sanityFetch<Course[]>({ query: coursesQuery })
+  // courses 只在 server 端存在，永遠不會到達瀏覽器
+  return <CourseGrid courses={courses} />
+}
+```
+
+### 為什麼不能在 Client Component 裡查詢 Sanity？
+
+Client component（`'use client'`）的程式碼會被打包進 JavaScript bundle，瀏覽器會下載並執行它。如果你在 client component 裡用 Sanity client 查詢資料，你需要把 token 傳給 client——這就把你的資料庫門戶大開。正確的做法是：server component 查好資料，把結果作為 props 傳給 client component。
+
+### GROQ：Sanity 的查詢語言
+
+GROQ（Graph-Relational Object Queries）是 Sanity 自己的查詢語言，類似 GraphQL 但更靈活。它讓你在一個查詢裡同時做 filtering、projection、和 aggregation：
+
+```groq
+*[_type == "course"]{
+  title,
+  slug,
+  "totalLessons": count(modules[].lessons),
+  "totalDuration": sum(modules[].lessons[].duration),
+  instructors[]->{name, image}
+}
+```
+
+最後一行 `instructors[]->{name, image}` 用了 reference 展開——把 instructor 的 reference 展開成完整的 name 和 image 欄位，這在 GROQ 裡叫 projection。
+
+## In plain terms
+
+Server-only read layer 就像把保險箱的鑰匙只交給銀行行員（server），不交給客戶（browser）。客戶可以看行員遞出來的存款餘額（props），但永遠拿不到保險箱的鑰匙（token）。你不會希望客戶拿著你的鑰匙去開别人的保險箱。
+
+## Practical use
+
+在 Vertex 專案中，server-only read layer 的建立流程：
+
+1. **在 `.env.local` 裡加入 Sanity 讀取權限的 API token**：`SANITY_API_READ_TOKEN=sxxx`（viewer 角色，無過期時間）。
+2. **建立 `lib/sanity.client.ts`**：建立 Sanity client，token 從 `process.env` 讀取。
+3. **建立 `lib/sanity.fetch.ts`**：包一層 fetch helper，統一處理 GROQ 查詢和 Next.js 快取。
+4. **在 server component 裡使用**：`app/courses/page.tsx` 直接呼叫 `sanityFetch`，拿到資料後作為 props 傳給 client component。
+5. **驗證**：跑 `npm run build` 確認沒有把 token 打包進 client bundle（如果有，Next.js 的 webpack 會報錯）。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/sanity-schema|Sanity Schema-Driven 架構]] — schema 定義了「資料長什麼樣」，read layer 決定了「誰可以從哪裡讀取它」。兩者是資料層的兩面。
+- [[learn/vertex-learning-platform/elements/embedded-vs-reference|Embedded vs Reference：資料模型的核心設計決策]] — reference 關聯需要在 GROQ 裡用展開運算子來 join，而 embedded 直接隨父文件回傳，查詢模式不同。
+- [[learn/vertex-learning-platform/elements/scope-boundary|範圍邊界 (Scope Boundary)]] — server-only 邊界是 AGENTS.md 裡的安全底線，也是範圍邊界在資料存取層的具體體現。
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:3689-4140]] — AI agent 發現嵌入式 Studio 與 AGENTS.md 衝突、建立 server-only read layer 的完整過程。
+- [[sources/vertex-learning-platform/AGENTS.md#app-structure]] — AGENTS.md 裡的架構章節：server/client 和 token 邊界。
+- [[sources/vertex-learning-platform/AGENTS.md#traps]] — 安全陷阱：「dataset private, read token server-only; env for keys with committed .env.example」。
+
+## Questions
+
+### Q1. 為什麼 Sanity 的 read token 加了 `NEXT_PUBLIC_` 前綴就很危險？
+A1. 因為 Next.js 的 bundler 會把所有 `NEXT_PUBLIC_` 開頭的環境變數打包進 client bundle——這些值會出現在瀏覽器下載的 JavaScript 裡，任何人都能在 developer tools 裡看到。你的 Sanity read token 一旦暴露在瀏覽器端，任何人都可以用它來查詢你的資料集（雖然只有讀取權限，但資料就不隱私了）。所以 read token 絕對不能加 `NEXT_PUBLIC_` 前綴。
+
+### Q2. Server component 和 client component 在讀取 Sanity 資料時有什麼根本差異？
+A2. Server component 直接在 server 端執行，可以安全地使用 `process.env.SANITY_API_READ_TOKEN` 來查詢 Sanity，查詢結果作為 props 傳給 client component。Client component 在瀏覽器端執行，如果要在裡面查詢 Sanity，就需要把 token 傳到瀏覽器——這是安全災難。正確的做法是：server component 查好資料，client component 只負責渲染。
+
+### Q3. GROQ 的 `instructors[]->{name, image}` 這行在做什麼？為什麼需要展開 reference？
+A3. 在 Sanity 裡，course 文件的 `instructors` 欄位存的是 reference（指向 instructor 文件的 ID），不是完整的 instructor 資料。如果你只查 `instructors`，你只會拿到一組 ID。展開（`->{}`）把每一個 ID 對應的 instructor 文件取回來，投影出 `name` 和 `image` 欄位。這類似 SQL 裡的 JOIN，但 GROQ 的寫法更簡潔——一個 `->` 就完成了 reference 的展開。

@@ -1,0 +1,176 @@
+---
+id: typed-component-library
+title: Tailwind v4 Token 建立 Typed Component Library 完整指南
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/typed-component-library
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:1701-2100]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Tailwind v4 Token 建立 Typed Component Library 完整指南
+
+## Learning goal
+
+能用 Tailwind v4 theme tokens 建立 button、card、badge、input 等可重用元件，確保 TypeScript 型別安全，並遵循「不自行發揮」原則。
+
+## Lesson
+
+### 📝 元件庫的核心價值：token 之外還差一步
+
+Tailwind v4 的主題變數（theme tokens）定義了顏色、字型、間距和陰影等基礎值——但光有這些值還不夠。真正的價值在於把這些值封裝進可重用的元件中。
+
+這一步要建立 [[learn/vertex-learning-platform/elements/typed-component-library|型別化元件庫 (Typed Component Library)]]：一個帶有 TypeScript props 定義的共享元件集合。所有頁面從同一個元件庫匯入 UI 磚塊，確保全站視覺一致。
+
+**為什麼光有 token 還不夠？** 因為 token 只定義了「值」，但沒有定義「怎麼用」。每個開發者可以自行決定按鈕的間距、圓角、字型大小——結果就是全站看起來不一樣。
+
+---
+
+### 🔍 為什麼需要元件庫？先看兩個常見問題
+
+即使 `globals.css` 已經定義了 `--color-primary`、`--text-heading-lg` 等變數，如果每個頁面都自己寫 `<button className="bg-primary text-white rounded-lg px-4 py-2">`，會出現兩個問題：
+
+| 問題 | 表現 | 後果 |
+|------|------|------|
+| **間距不一致** | 有人用 `px-4`，有人用 `px-5`；有人用 `rounded-lg`，有人用 `rounded-md` | 全站按鈕大小不統一 |
+| **更新困難** | primary color 從藍色改為紫色 | 必須逐一修改每個寫死 class 的地方 |
+
+**元件庫怎麼解決？**
+
+Button 元件內部固定引用 `bg-primary`、`text-heading-sm`、`rounded-lg` 等 class。所有使用 Button 的頁面自動獲得相同的視覺規範。修改元件內部的 class，全站跟著變。
+
+**對比一下：**
+
+| 做法 | 視覺一致性 | 設計系統更新時 |
+|------|-----------|---------------|
+| 直接用 Tailwind class | ❌ 各寫各的 | ❌ 逐一修改 |
+| 用元件庫 | ✅ 全站統一 | ✅ 改一個元件就好 |
+
+---
+
+### 🔧 TypeScript 如何強制設計系統規範
+
+型別化元件的核心是 TypeScript props 介面。它不只是幫你自動完成——而是從編譯時就阻擋錯誤的使用方式。
+
+以 Button 為例：
+
+```typescript
+type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+type ButtonSize = "sm" | "md" | "lg";
+
+interface ButtonProps {
+  variant: ButtonVariant;
+  size?: ButtonSize;
+  children: React.ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  className?: string;
+}
+```
+
+`variant` 被限制為四個值：`"primary"`、`"secondary"`、`"ghost"`、`"danger"`。如果有人嘗試 `<Button variant="fancy">`，TypeScript 編譯器會立即報錯，不會讓它通過。
+
+**為什麼這很重要？** 設計系統的規範不是寫在文件裡給人記的，而是由編譯器強制執行的。規範從「建議」升級為「硬性約束」。
+
+元件內部的實作根據 variant 選擇對應的 Tailwind class：
+
+```typescript
+const variantClasses: Record<ButtonVariant, string> = {
+  primary: "bg-primary text-white hover:bg-primary/90 shadow-sm",
+  secondary: "bg-neutral-100 text-neutral-900 hover:bg-neutral-200",
+  ghost: "bg-transparent text-neutral-700 hover:bg-neutral-100",
+  danger: "bg-error text-white hover:bg-error/90",
+};
+```
+
+這些 class 名稱全部來自 Tailwind v4 主題變數——`bg-primary` 對應 `--color-primary`，`text-neutral-700` 對應中性色階。元件裡不會看到 `#3B82F6` 之類的硬編碼色值；所有視覺屬性都追溯到 Token 定義。
+
+---
+
+### 📦 典型設計系統包含哪些元件
+
+一個完整的設計系統元件庫通常包含以下基礎構件，每個都帶有 variants 和 sizes：
+
+| 元件 | Variants | Sizes | 特色功能 |
+|------|----------|-------|---------|
+| **Button** | primary / secondary / ghost / danger | sm / md / lg | 可選 icon prop，支援 loading 狀態（disabled + spinner） |
+| **Card** | — | — | 接受 `padding` 和 `shadow` props，课程卡片、搜索結果卡片都繼承自 Card |
+| **Badge** | 對應不同語義色彩 | — | 小型標籤元件，用於狀態指示（例如「免費」、「進階」、「進行中」） |
+| **Input** | — | — | 帶有 label、placeholder、error message，error state 必須搭配 error message prop |
+| **Status Indicator** | — | — | 用於顯示進度或狀態，例如課程完成比例 |
+
+這些元件的共同特徵是：視覺表現全部來自 Tailwind 主題變數，TypeScript 介面限制了合法的 props 組合，元件實作集中在一個共享目錄中。
+
+---
+
+### ⚡️ 「先重用、再新增」原則
+
+AGENTS.md 明確規定：「Reuse the components and Tailwind patterns already in the project before you add new ones.」
+
+意思是：建立新元件之前，先檢查元件庫裡是否已經有能滿足需求的元件。
+
+**反面教材 vs 正確做法：**
+
+假設你需要一個圓角的卡片，帶有底部操作按鈕：
+
+```typescript
+// ❌ 不要這樣做——從零建立新元件
+function CourseCard(...) { ... }
+
+// ✅ 應該這樣做——組合現有元件
+<Card padding="md" shadow="lg">
+  <h3 className="text-heading-md">{title}</h3>
+  <p className="text-body-sm text-neutral-600">{description}</p>
+  <Button variant="primary" size="sm">開始學習</Button>
+</Card>
+```
+
+**為什麼這條規則這麼重要？** 當設計系統更新 Card 或 Button 的樣式時，所有組合使用的地方自動跟著更新，而自訂的 `CourseCard` 不會被覆蓋。組合勝過繼承，這是元件庫設計的核心哲學。
+
+---
+
+### 🖥️ 從元件庫到 Showcase 路由
+
+在 Vertex 平台的實作中，代理完成元件庫後，還建立了一個包含 **14 個區段**的 showcase 路由（design system page）。
+
+這個路由逐一展示每個元件的所有 variant 和 size，視覺對照設計稿圖片，用 headless Chrome 截圖驗證渲染結果是否正確。
+
+**Showcase 路由是什麼？** 它不是產品功能，而是設計系統的品質保證手段——每次修改元件後，跑一遍 showcase 就能確認所有變體都正確渲染。
+
+| 階段 | 動作 | 產出 |
+|------|------|------|
+| 1. 設計稿 | 拖曳圖片進 AI 代理 prompt | 代理讀取 UI 規則 |
+| 2. 實作 | 代理一次性完成 | 重寫 `globals.css` + 建立元件庫 |
+| 3. 驗證 | showcase 路由 + headless Chrome 截圖 | 比對設計稿，確認渲染正確 |
+
+---
+
+### 🔄 從設計稿到程式碼的完整工作流
+
+整個過程分為幾個階段：
+
+1. **設計稿輸入**：將設計稿圖片拖曳進 AI 代理的 prompt
+2. **規則讀取**：代理讀取 AGENTS.md 中的 UI 規則、檢查現有專案結構
+3. **實作產出**：代理一次性完成三件事
+   - 重寫 `globals.css` 注入完整主題
+   - 建立元件庫的所有元件
+   - 建立 showcase 路由並用 headless Chrome 截圖比對
+4. **品質驗證**：截圖與設計稿比對，確認渲染結果
+
+**為什麼強調「一次性」？** 因為手動逐一實作容易遺漏或出錯。一次性完成加上自動化驗證，確保了設計稿到程式碼的轉換是有品質保障的。
+
+---
+
+### 💡 延伸思考：從「有就好」到「有型別保障」
+
+如果你曾經手動建立過 React 元件，你會發現這個模式並不陌生。差別在於 Tailwind v4 tokens 和 TypeScript 介面讓元件從「有就好」升級為「有型別保障、有設計系統約束」。
+
+元件不再只是 UI 磚塊，而是設計系統的程式碼實作。每一個 prop 都受到編譯器的監督——這就是 typed component library 的核心價值。
+
+**一句話總結：** Token 定義值，TypeScript 定義約束，元件庫把兩者封裝成全站共用的設計系統實作。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:1701-2100]]

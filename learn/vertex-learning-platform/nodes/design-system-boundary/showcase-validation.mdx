@@ -1,0 +1,184 @@
+---
+id: showcase-validation
+title: Design System 截圖驗證：用 Headless Chrome + Visual Diff 自動比對設計稿
+subject: vertex-learning-platform
+teaches: []
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:1701-2100]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#ui-rules]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Design System 截圖驗證：用 Headless Chrome + Visual Diff 自動比對設計稿
+
+## Learning goal
+
+能建立 design-system showcase 路由，用截圖對比參考圖驗證視覺一致性，並整合進 agentic workflow 的 implementation prompt loop。
+
+## Lesson
+
+### 🔢 先算一筆帳：元件變體的數量爆炸
+
+[[learn/vertex-learning-platform/elements/design-system|設計系統 (Design System)]] 建好，[[learn/vertex-learning-platform/elements/tailwind-v4-tokens|Tailwind v4 主題變數 (Tailwind v4 Theme Tokens)]] 定義完成，[[learn/vertex-learning-platform/elements/typed-component-library|型別化元件庫 (Typed Component Library)]] 也從 token 建出來了。到這一步，你有完整的設計契約：顏色在 CSS 變數裡，元件在共用目錄裡，每個頁面都該從同一套東西渲染。
+
+但問題是：**你怎麼知道它們真的對？**
+
+我們來算。按鈕有 primary / secondary / ghost 三種 variant，每種又有 sm / md / lg 三種大小，再加上 hover 和 disabled 兩種狀態。3 × 3 × 2 = **18 種組合**，光按鈕一個元件就十八種。卡片、Badge、輸入框各自再乘一遍，組合數量輕鬆幾十種。用肉眼在瀏覽器裡逐個 scroll 檢查？你會在第三個元件就開始不耐煩，然後跳過後面的二十個。你以為自己驗證了全部，其實只驗證了看得見的那幾個。
+
+**為什麼人眼檢查不夠？** 因為人類的注意力是有限資源，組合數量是數學事實。當變體數量超過你的耐心上限，漏檢就是必然的。
+
+### 💡 Showcase 驗證的核心邏輯：機器逐比對
+
+Showcase 驗證要解決的問題很簡單：把「人眼抽查」升級成「機器逐比對」。
+
+它用自動化截圖搭配視覺 diff，把設計系統的每一個元件、每一個變體、每一個狀態都攤在你面前，和參考圖逐一比對。偏差超過容忍範圍的，它會標記出來——**你只需要審判被標記的那些**。
+
+對比一下：
+
+| 方法 | 做什麼 | 漏檢風險 | 速度 |
+| --- | --- | --- | --- |
+| 人眼抽查 | 開瀏覽器，逐個 scroll 檢查 | 高（組合多，注意力有限） | 慢 |
+| Showcase 驗證 | 機器截圖 + diff 自動比對 | 低（全量覆蓋） | 快 |
+
+這就是為什麼 showcase 驗證不是「額外的測試步驟」，而是設計系統從「文件」變成「可驗證的事實」的最後一哩路。
+
+### 🧩 Showcase 頁面長什麼樣
+
+Showcase 頁面是一條專用路由，通常掛在 `/design-system` 或類似路徑下。它不做任何業務邏輯，唯一的工作是：**把設計系統裡所有元件的所有變體，按順序排列在同一個頁面上**。
+
+以 Vertex 專案為例，showcase 頁面包含 **14 個區段（sections）**，每一個區段對應一類元件或一組 token 的實際展示：
+
+- **Typography 區段**：每一級 heading 的字型、大小、粗細、行高，旁邊標註對應的 token 名。
+- **色彩系統區段**：primary、neutral、語義色的每個色階攤開，一格一格顯示色塊和 hex 值。
+- **間距系統區段**：用水平條展示 spacing scale，從 `---spacing-1` 到 `--spacing-12`，直接看出每一級的視覺差異。
+- **按鈕區段**：primary / secondary / ghost × sm / md / lg × 正常 / hover / disabled，全部排列。
+- **卡片區段**：CourseCard、LessonCard、InstructorCard 等可複用 Pattern 的不同內容長度和狀態。
+- **Badge 區段**：語義色 Badge（免費、付費、進行中）的不同組合。
+- **輸入框區段**：正常、focus、error、disabled 四種狀態。
+- 其餘區段覆蓋其他元件變體和組合 Pattern。
+
+**為什麼要放在同一個頁面上？** 因為兩個目的同時達成：一是**可視化（visualization）**——把抽象的 token 和元件定義轉成瀏覽器裡看得到的東西；二是**可機器化（machine-readable）**——所有元素都在同一個頁面上，一條指令就能截出完整截圖，拿去做自動化比對。
+
+### 🖥️ Headless Chrome 截圖：不需要開瀏覽器
+
+自動化截圖不需要開瀏覽器、手動 scroll、手動按 Print Screen。Headless Chrome（或基於它的 Playwright、Puppeteer）可以在無頭模式下啟動瀏覽器，載入頁面，截取完整畫面的截圖。整個過程不需要顯示器，不需要人介入。
+
+在 Vertex 的 agentic workflow 中，流程是四步：
+
+1. 在本機跑 `npm run dev`，啟動 Next.js 開發伺服器。
+2. 用 headless Chrome 訪問 `http://localhost:3000/design-system`。
+3. 截取完整頁面截圖，存到 `design/` 或 `__screenshots__/` 資料夾。
+4. 把這張截圖和設計稿的參考圖（reference image）放在一起。
+
+**設計稿的參考圖是 source of truth。** 操作手冊裡的規則說得很清楚：AI 不設計 UI，它精確複製設計稿。那設計稿就是判斷「精確複製」是否成功的唯一標準。Showcase 截圖和參考圖的比對，就是在機器層面驗證這句話有沒有被落實。
+
+### ⚡️ 視覺 Diff：自動標記偏差
+
+截圖拿到之後，下一個問題是：**怎麼判斷兩張圖是否「一致」？**
+
+視覺 diff 工具（如 pixelmatch、Looks Same、或 Playwright 內建的 `toHaveScreenshot` 斷言）逐像素比對兩張截圖，標記出差異的區域。你可以設定容忍度（threshold）——輕微的抗鋸齒差異或字型渲染差異通常可以忽略，但色塊偏移、元件缺失、間距異常就不能放過。
+
+diff 工具的輸出通常是一張差異圖（diff image），偏離的區域用紅色高亮標出。你不需要逐像素檢查，只需要看紅色區域出現在哪裡、範圍有多大：
+
+- 紅色集中在字型的抗鋸齒邊緣 → **正常**，抗鋸齒渲染差異不可避免。
+- 紅色是一整塊按鈕的底色偏移 → **異常**，token 沒被正確引用。
+
+把視覺 diff 結合進 showcase 驗證的流程，一共五步：
+
+1. 截取當前 implementation 的 showcase 截圖。
+2. 用 diff 工具和參考圖比對。
+3. 檢查差異報告：哪些區域偏離了？
+4. 修正被標記的問題——通常是 token 名打錯、元件引用了錯誤的 class、或某個 variant 缺少對應的 token。
+5. 重新截圖、重新比對，直到所有偏離區域消失。
+
+這個迴圈一直重複，直到截圖和參考圖在容忍範圍內完全吻合。
+
+### 🔄 四步迭代迴圈：Showcase 驗證的節奏
+
+Showcase 驗證不是跑一次就結束的，它是一個反覆迭代的迴圈。完整流程是四步：
+
+1. **實作（Implement）**：照 AGENTS.md 的規則，用已批准的 implementation prompt 建立或修改元件。
+2. **截圖（Screenshot）**：用 headless Chrome 訪問 showcase 路由，截取完整渲染結果。
+3. **比對（Diff）**：和參考圖做視覺比對，產出差異報告。
+4. **修正（Fix）**：根據差異報告調整 token 或元件，然後回到步驟 2。
+
+每繞一圈，你就離「精確複製」更近一步。直到截圖和參考圖不再有實質差異，showcase 驗證才通過。
+
+在 Vertex 專案中，這個迴圈被嚴格執行。作者在建構 14 區段的 showcase 時，就是不斷截圖、比對、修正，直到每一個區段的渲染都和設計稿一致。Session 保持在大約 **150k token** 以內，每一個功能用一個新的 session，避免 context rot（上下文腐蝕）污染判斷。
+
+### 🔗 整合進 Agentic Workflow 的 Implementation Prompt Loop
+
+Showcase 驗證不是一個獨立的檢查步驟，它被嵌入到[[learn/vertex-learning-platform/elements/implementation-loop|實作迴圈 (Implementation Loop)]]裡。具體來說，它出現在迴圈的第 8 步（執行檢查）。
+
+在 implementation prompt 裡，你會寫明「驗收標準包含 showcase 頁面的視覺截圖通過 diff 檢查」。代理在執行檢查時，不只是跑 type check 和 lint，還要跑 showcase 截圖和 diff。如果 diff 發現偏離，代理必須修正後重新截圖，直到通過。報告裡的「Test」段落會包含 showcase 驗證的結果。
+
+**這意味著 showcase 驗證的責任在代理身上，不在你身上。** 你不需要手動打開瀏覽器、截圖、比對——這些都是代理在 execution prompt 的檢查清單裡自動執行的。你要做的是在 prompt 裡寫清楚「showcase 截圖必須通過視覺 diff」，然後在報告出來時審判結果。
+
+整合的流程完整走一遍：
+
+1. 你決定要做一個新功能（例如新增一組 Badge 變體）。
+2. 代理讀 AGENTS.md，讀設計系統相關的 skill，讀既有的元件庫。
+3. 代理寫 implementation prompt：目標、要動的檔案、驗收標準（含 showcase diff 通過）、要跑的檢查。
+4. 你批准 prompt。
+5. 代理實作——修改 Badge 元件，新增 variant。
+6. 代理跑 showcase 截圖，跑 diff，發現某個新 variant 的底色偏離參考圖。
+7. 代理修正 token 引用，重新截圖，diff 通過。
+8. 代理跑 type check 和 lint，通過。
+9. 代理提交報告：What I did（新增 Badge variant）、Test（showcase diff 通過、type check 通過）、Needs your attention（無）。
+
+Showcase 驗證在第 6 和第 7 步攔住了偏差，讓偏差在代理的 session 裡就被修正，不需要你介入。
+
+### 🧠 Session Budget 紀律：Context Rot 是真的
+
+Showcase 驗證的迭代迴圈有一個隱藏成本：**token**。每跑一次截圖和 diff，代理就要把截圖結果、diff 報告、修正計畫都裝進 context。如果一個 session 裡塞太多功能，context 會膨脹到代理開始「忘記」早期的決定——它可能在修 Badge 時不小心改了 Button 的 token，因為早期的 Button 討論已經被擠出 context window。
+
+**這就是 context rot（上下文腐蝕）。** 在大約 50k token 之後，代理開始出現記憶模糊：它可能重複已經做過的決定，可能忘記某個 token 的具體值，可能在修正 A 時順手改了 B。到了 150k token，判斷品質會明顯下降。
+
+Vertex 專案的應對策略很直接：
+
+| 策略 | 做法 | 為什麼有效 |
+| --- | --- | --- |
+| 每個功能用一個新 session | 不在同一個 session 裡做三個功能 | 控制 context 大小 |
+| Session 上限 ~150k token | 經驗值，不是硬性限制 | 超過這個數字判斷品質不可靠 |
+| AGENTS.md 供應 what 和 how | 每個新 session 的代理先讀操作手冊 | 不需要從上一個 session 帶資料 |
+
+這就是為什麼短 prompt（例如「implement the design system」）在 Vertex 的 workflow 裡有效。你不需要在 prompt 裡寫「用 Tailwind v4 的 @theme 指令定義 token、建 Button / Card / Badge 元件、掛到 globals.css、確保 layout.tsx 的 next/font 橋接正確」——這些資訊全部在 AGENTS.md 裡。短 prompt 只需要說「做什麼」，操作手冊已經提供了「怎麼做」。這兩層的分工讓 prompt 保持精簡，session 保持在預算之內，context 保持乾淨。
+
+### 🔍 如果你做過 Visual Regression Testing，這就是同一件事
+
+如果你有前端測試的經驗，visual regression testing（視覺迴歸測試）這個概念你應該不陌生。它的核心是：截圖 → 和基準圖比對 → 有差異就報錯。Chromatic、Percy、Playwright 的 screenshot testing，都是這套模式的實現。
+
+Showcase 驗證是同一個想法，但應用在不同的時機和目的：
+
+| | Visual Regression Testing | Showcase 驗證 |
+| --- | --- | --- |
+| 時機 | 每次 push 代码都跑 | 設計系統建構階段的一次性驗收 |
+| 目的 | 不要退步（防護網） | 一開始就對（入場門） |
+| 技術基礎 | headless 瀏覽器截圖 + 像素級 diff + 容忍度 | 完全相同 |
+
+**為什麼兩者都要？** 先把 showcase 跑過一次，確保入場時的設計系統是乾淨的；之後再靠 regression test 防止後續功能開發把它弄髒。兩層防護加在一起，設計系統的一致性才有長期保障。
+
+### 🔧 具體操作：從零建立 Showcase 路由（8 步）
+
+把這整套機制落地，步驟很具體：
+
+1. **建一條路由。** 在 Next.js 的 `app/` 目錄下建一個 `design-system/page.tsx`，它只做一件事：渲染所有元件變體。
+2. **分 14 個區段。** 每個區段用一個 section 標籤包起來，區段之間有明確的分隔。Typography、色彩、間距、按鈕、卡片、Badge、輸入框——每一個元件的所有 variant × size × state 組合都排列出來。
+3. **每一個變體都從 token 和元件庫渲染。** 不要手寫 inline style，全部從 `globals.css` 的 token 和共用元件匯入。這樣截圖才能驗證「元件庫 + token 組合起來的渲染結果」，而不是「手寫的 HTML 長什麼樣」。
+4. **用 headless Chrome 截圖。** 在終端裡跑一個腳本，訪問 `localhost:3000/design-system`，等頁面完全載入後截圖，存到 `__screenshots__/design-system.png`。
+5. **放參考圖。** 把設計稿的完整截圖放到 `design/design-system-reference.png`，和 `__screenshots__/` 同級或用另一個目錄管理。
+6. **跑 diff。** 用 pixelmatch 或 Playwright 的 `toHaveScreenshot` 比對兩張圖。差異報告會標記出偏離區域。
+7. **修正再截圖。** 根據差異報告調整 token 或元件，重新截圖，重新 diff，直到通過。
+8. **把截圖腳本和 diff 檢查寫進 AGENTS.md。** 讓代理在每次修改設計系統元件時，自動執行這個流程。
+
+這八步做完，showcase 驗證就成了你 agentic workflow 的一部分，而不是一個手動的、偶爾為之的動作。
+
+### 🎯 核心一句話
+
+**用機器的精確度，檢查機器（AI）的產出是否符合人的設計稿。** 截圖是機器的眼睛，diff 是機器的判斷，迭代迴圈是修正的節奏，session 預算是記憶的保鮮膜。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:1701-2100]]
+- [[sources/vertex-learning-platform/AGENTS.md#ui-rules]]

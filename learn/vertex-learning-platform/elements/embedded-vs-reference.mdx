@@ -1,0 +1,119 @@
+---
+id: embedded-vs-reference
+title: Embedded vs Reference：資料模型的核心設計決策
+subject: vertex-learning-platform
+tier: 2
+order: 6
+type: article
+nodes:
+  - vertex-learning-platform/sanity-content-model
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:3553-3688]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#data-model]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Embedded vs Reference：資料模型的核心設計決策
+
+## Problem Statement
+
+設計 Sanity schema 時，每一種關聯（relationship）都必須在兩種方式中擇一：embedded（把資料直接嵌入父文件）或 reference（用 ID 指向另一份獨立文件）。選錯了，資料會不一致、查詢會變慢、作者的工作流會變複雜。例如 Vertex 裡的 module（模組）到底該不該從 course 裡拆出來成為獨立文件？如果拆了，作者在 course 頁面裡就沒辦法直接拖拉調整模組順序；如果不拆，模組就不能被其他地方引用，但也沒有人會單獨存取一個模組頁面——這正是 embedded 的最佳使用場景。
+
+## Why it matters
+
+這個決定不是純技術問題，而是產品決策。AGENTS.md 裡的資料模型章節已經把 Vertex 的關聯全部定案：course 裡的 modules 是 embedded array（內嵌陣列），lesson 是 reference（引用），instructor 和 category 也是 reference。為什麼？因為模組永遠不會離開課程單獨存在——你不會去逛「某個模組」的頁面，你只會在某門課程裡看到它。把模組嵌入課程，作者在 Studio 裡編輯 course 時就能直接增刪改模組，不需要在兩個文件之間跳轉。反過來，lesson 必須是獨立文件，因為同一個 lesson 理論上可能被多門課程引用，而且 lesson 有自己的 slug、自己的頁面路由（`/courses/[slug]/lessons/[slug]`）。
+
+## How it works
+
+### Embedded（內嵌）
+
+把子資料直接寫在父文件裡。在 Sanity 裡，embedded 是用 `array` 欄位搭配 `fields`（而非 `to`）來定義——這表示 array 裡的每一個項目都是一段「物件」（object），不是一份獨立文件。
+
+**特徵：**
+- 子資料隨父文件一起儲存、一起查詢、一起刪除
+- 父文件編輯時，子資料在同一個表單裡顯示
+- 子資料不能被其他文件 reference
+- 適合：子項目永遠不會離開父項目的關聯（如 course → modules）
+
+### Reference（引用）
+
+用 ID 指向另一份獨立文件。在 Sanity 裡，reference 是用 `array` 欄位搭配 `to`（指向某種 document type）來定義。
+
+**特徵：**
+- 子資料是獨立文件，有自己的 CRUD 生命週期
+- 可以被多個父文件引用（多對多）
+- 子資料可以有自己的頁面路由和 slug
+- 查詢時需要 groq 的 `...`（展開）或 `select()` 來關聯
+- 適合：子項目可能被多處引用，或有自己的獨立路由（如 course → lessons）
+
+### 判斷規則
+
+| 條件 | 用 Embedded | 用 Reference |
+|------|------------|-------------|
+| 子項目會離開父項目嗎？ | 不會 | 會 |
+| 子項目有自己的頁面嗎？ | 沒有 | 有 |
+| 多個父項目會共享同一個子項目嗎？ | 不會 | 可能 |
+| 作者需要在父文件表單裡直接編輯嗎？ | 需要 | 不需要（或用 ref picker） |
+
+### Vertex 的實際決策
+
+| 關聯 | 選擇 | 理由 |
+|------|------|------|
+| Course → Modules | Embedded array | 模組不會離開課程；作者在 course 表單裡直接編輯模組順序和內容 |
+| Module → Lessons | Reference array | lesson 有獨立 slug 和頁面路由；理論上可被多門課程共享 |
+| Course → Instructors | Reference array | 講師是獨立文件，可被多門課程引用 |
+| Course → Categories | Reference array | 分類是獨立文件，可被多門課程引用 |
+
+## In plain terms
+
+Embedded 就像把配件直接焊死在主機上——它們永遠在一起，拆不開也不需要拆。Reference 就像用螺絲把兩個獨立零件鎖在一起——它們可以分開、可以換、可以被其他機器也鎖上去。你選焊死還是螺絲，取決於這兩個零件以後需不需要分開。
+
+## Practical use
+
+在 Vertex 的 schema 裡，embedded 和 reference 的寫法差異很明確：
+
+**Embedded module array（在 course.ts 裡）：**
+```typescript
+defineField({
+  name: 'modules',
+  title: 'Modules',
+  type: 'array',
+  of: [{
+    type: 'object',
+    fields: [
+      defineField({ name: 'title', type: 'string' }),
+      defineField({ name: 'summary', type: 'text' }),
+      defineField({
+        name: 'lessons',
+        type: 'array',
+        of: [{ type: 'reference', to: [{ type: 'lesson' }] }]
+      }),
+    ]
+  }]
+})
+```
+
+**Reference lesson array（在 module 裡）：** lessons 用 `reference` 指向獨立的 lesson 文件，作者在 Studio 裡用 drag-and-drop 選擇和排序 lesson。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/sanity-schema|Sanity Schema-Driven 架構]] — embedded vs reference 是 schema 設計裡最重要的決定，它直接決定了 Studio 的編輯體驗和 API 的查詢結構。
+- [[learn/vertex-learning-platform/elements/server-only-read-layer|Server-Only Read Layer：私有資料集的安全讀取與 GROQ]] — reference 關聯需要在 GROQ 裡用展開運算子來 join，而 embedded 直接隨父文件一起回傳，查詢模式因此不同。
+- [[learn/vertex-learning-platform/elements/scope-boundary|範圍邊界 (Scope Boundary)]] — embedded vs reference 的決定直接反映 AGENTS.md 裡的資料模型章節，是範圍邊界在資料層的具體落地。
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:3553-3688]] — 資料模型的設計過程：為什麼 course 是核心物件、module 為何選 embedded、lesson 為何選 reference。
+- [[sources/vertex-learning-platform/AGENTS.md#data-model]] — AGENTS.md 裡的資料模型定義：每個文件型別的欄位、關聯方式、以及為什麼這樣設計。
+
+## Questions
+
+### Q1. 為什麼 module 被嵌入 course 而不是拆成獨立文件？這對作者的工作流有什麼影響？
+A1. 因為模組永遠不會離開課程——你不會去逛「某個模組」的頁面，模組的意義完全依附在課程上。嵌入後，作者在 Studio 裡編輯 course 時，可以在同一個表單裡直接增刪改模組、調整順序，不需要在 course 文件和 module 文件之間來回跳轉。如果拆成獨立文件，作者就得先存 course、再開 module、再回來 link，工作流中斷三次。
+
+### Q2. 如果 lesson 也被嵌入 module（而非 reference），會發生什麼問題？
+A2. 至少三個問題：（1）lesson 沒有獨立的 slug 和頁面路由，`/courses/[slug]/lessons/[slug]` 這條路由就建不起來；（2）同一個 lesson 理論上可能被多門課程引用，embedded 讓它只能屬於一個 module；（3）在 GROQ 查詢裡，embedded lesson 無法被搜尋系統直接作為獨立文件來全文檢索。
+
+### Q3. 判斷一個關聯該用 embedded 還是 reference 的核心問題是什麼？
+A3. 最核心的問題是：「子項目會離開父項目嗎？」如果子項目永遠不會離開父項目（module 不會離開 course），就用 embedded；如果子項目有自己的生命週期、自己的頁面、可能被共享（lesson 有自己的 slug、自己的路由），就用 reference。次要判斷：作者需不需要在父表單裡直接編輯子項目——需要的話 embedded 較方便，不需要的話 reference 較靈活。

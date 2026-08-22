@@ -1,0 +1,163 @@
+---
+id: embedded-vs-reference
+title: Embedded vs Reference：資料模型的核心設計決策
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/embedded-vs-reference
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:3553-3688]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#data-model]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Embedded vs Reference：資料模型的核心設計決策
+
+## Learning goal
+
+能做出 embedded vs reference 的設計決定——判斷子項目會不會離開父項目、有沒有自己的頁面路由、會不會被共享——並在 Vertex 的 schema 裡正確實作。
+
+## Lesson
+
+### 📝 一組數字：兩個決定，影響整條產品線
+
+Vertex 的資料模型有 5 種主要文件型別：course、module、lesson、instructor、category。它們之間的關聯方式只有兩種——embedded（嵌入）和 reference（引用）。
+
+這兩個關聯方式的決定，影響了：
+
+- **Studio 的編輯體驗**——作者在 course 表單裡能不能直接編輯 modules？
+- **頁面路由**——lesson 有沒有自己的 `/courses/[slug]/lessons/[slug]` 路由？
+- **GROQ 查詢**——搜尋結果能不能直接拿到 lesson 的完整資料？
+- **資料一致性**——修改一個 module，影響範圍是只限一門課程還是全站？
+
+**為什麼這很重要？** 因為一旦 schema 設計完、資料種進去了，事後要改關聯方式的成本極高——你要重寫所有 GROQ 查詢、重做所有頁面路由、重新匯入資料。先想清楚再動手。
+
+### 🔧 Embedded：把子資料焊死在父文件裡
+
+Embedded 是把子資料直接寫在父文件裡。在 Sanity 裡，用 `array` 搭配 `fields`（而不是 `to`）來定義：
+
+```typescript
+// 在 course.ts 裡
+defineField({
+  name: 'modules',
+  title: 'Modules',
+  type: 'array',
+  of: [{
+    type: 'object',
+    fields: [
+      defineField({ name: 'title', type: 'string' }),
+      defineField({ name: 'summary', type: 'text' }),
+      defineField({
+        name: 'lessons',
+        type: 'array',
+        of: [{ type: 'reference', to: [{ type: 'lesson' }] }]
+      }),
+    ]
+  }]
+})
+```
+
+**Embedded 的特徵：**
+- 子資料隨父文件一起儲存、一起查詢、一起刪除
+- 父文件編輯時，子資料在同一個表單裡顯示
+- 子資料不能被其他文件 reference
+- 查詢時不需要 JOIN——直接隨父文件回傳
+
+**適用場景：** 子項目永遠不會離開父項目（module 永遠不會離開 course）
+
+### 🔧 Reference：用 ID 指向另一份獨立文件
+
+Reference 是用 ID 指向另一份獨立文件。在 Sanity 裡，用 `array` 搭配 `to` 來定義：
+
+```typescript
+// 在 course.ts 裡
+defineField({
+  name: 'instructors',
+  title: 'Instructors',
+  type: 'array',
+  of: [{ type: 'reference', to: [{ type: 'instructor' }] }]
+})
+```
+
+**Reference 的特徵：**
+- 子資料是獨立文件，有自己的 CRUD 生命週期
+- 可以被多個父文件引用（多對多）
+- 子資料可以有自己的頁面路由和 slug
+- 查詢時需要 GROQ 的 `->` 展開運算子來 join
+
+**適用場景：** 子項目可能被多處引用，或有自己的獨立路由（lesson、instructor、category）
+
+### ⚡️ 判斷規則：四個問題決定一切
+
+判斷一個關聯該用 embedded 還是 reference，問這四個問題：
+
+| 問題 | 用 Embedded | 用 Reference |
+|------|------------|-------------|
+| 子項目會離開父項目嗎？ | 不會 | 會 |
+| 子項目有自己的頁面嗎？ | 沒有 | 有 |
+| 多個父項目會共享同一個子項目嗎？ | 不會 | 可能 |
+| 作者需要在父表單裡直接編輯嗎？ | 需要 | 不需要 |
+
+### 🎯 Vertex 的實際決策
+
+| 關聯 | 選擇 | 理由 |
+|------|------|------|
+| Course → Modules | **Embedded** | 模組不會離開課程；作者在 course 表單裡直接編輯模組順序和內容 |
+| Module → Lessons | **Reference** | lesson 有獨立 slug 和頁面路由；理論上可被多門課程共享 |
+| Course → Instructors | **Reference** | 講師是獨立文件，可被多門課程引用 |
+| Course → Categories | **Reference** | 分類是獨立文件，可被多門課程引用 |
+
+**為什麼 module 是 embedded 而 lesson 是 reference？**
+
+Module 永遠不會離開 course——你不會去逛「某個模組」的頁面，模組的意義完全依附在課程上。嵌入後，作者在 Studio 裡編輯 course 時，可以在同一個表單裡直接增刪改模組、調整順序，不需要在 course 文件和 module 文件之間來回跳轉。
+
+Lesson 則不同——它有獨立的 slug（例如 `what-is-a-variable`），有獨立的頁面路由（`/courses/javascript-fundamentals/lessons/what-is-a-variable`），理論上可能被多門課程引用。如果 lesson 被嵌入 module，這些獨立的特徵就全部消失了。
+
+### 🛠️ Embedded 和 Reference 在 GROQ 裡的差異
+
+兩種關聯方式在查詢時的差異很明確：
+
+**Embedded 不需要展開：**
+```groq
+*[_type == "course"]{
+  title,
+  modules[]{     // 直接取，不需要 ->
+    title,
+    lessons      // lessons 是 reference，這裡只拿到 ID
+  }
+}
+```
+
+**Reference 需要展開：**
+```groq
+*[_type == "course"]{
+  title,
+  instructors[]->{  // 用 -> 展開 reference
+    name,
+    image
+  }
+}
+```
+
+**這代表什麼？** Embedded 的查詢更簡單、效能更好（不需要額外的 fetch）；Reference 的查詢更靈活、可以拿到完整資料，但多了一次展開的成本。
+
+### 🔍 為什麼 AGENTS.md 裡的資料模型很重要
+
+AGENTS.md 的 data model 章節把 Vertex 的關聯方式全部定案了。這不是建議，而是產品決策——搜尋、頁面、ingestion 全部建立在這些決定之上。如果你在實作時改了其中一個關聯方式（例如把 module 從 embedded 改成 reference），下游的 GROQ 查詢、頁面路由、和搜尋結果都會出錯。
+
+**一句話**：資料模型是整條產品線的地基——地基改了，上面的每一層都要重來。
+
+### 🚀 回到你的專案：怎麼決定
+
+當你設計自己的資料模型時，拿出這個清單：
+
+1. 列出所有關聯（A → B）
+2. 對每個關聯問：B 會離開 A 嗎？A 的編輯頁面裡需要直接編輯 B 嗎？
+3. 如果「不會離開」且「需要直接編輯」→ embedded
+4. 如果「可能離開」或「有獨立路由」→ reference
+5. 把決定寫進 AGENTS.md——之後不要再重開這個討論
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:3553-3688]] — 資料模型的設計過程：為什麼 course 是核心物件、module 為何選 embedded、lesson 為何選 reference。
+- [[sources/vertex-learning-platform/AGENTS.md#data-model]] — AGENTS.md 裡的資料模型定義：每個文件型別的欄位、關聯方式、以及為什麼這樣設計。

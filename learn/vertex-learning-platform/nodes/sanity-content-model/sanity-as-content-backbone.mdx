@@ -1,0 +1,167 @@
+---
+id: sanity-as-content-backbone
+title: Sanity：內容管理的單一真實來源
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/sanity-schema
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_1:321-400]]"
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:3401-3552]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#data-model]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Sanity：內容管理的單一真實來源
+
+## Learning goal
+
+能說明 Sanity 在 Vertex 裡扮演的角色——為什麼它做的工作比任何其他工具都多，以及 schema-driven 的思維如何同時決定 Studio 介面和 API 結構。
+
+## Lesson
+
+### 📝 數字開場：一個工具做三件事
+
+在 Vertex 裡，Sanity 同時扮演三個角色：
+
+1. **內容資料庫**——課程、模組、單元、講師、分類全部存在 Sanity 裡
+2. **Admin Dashboard**——作者進 Studio 就能建立和編輯內容，不需要另外做後台
+3. **API 層**——web 端透過 GROQ 查詢 Sanity 取得資料，不需要另外建 API server
+
+一個工具同時解決三個問題，這就是為什麼 Sanity 做的工作比 Next.js、Clerk、PostHog 加起來都多。
+
+**為什麼這很重要？** 因為如果你把 Sanity 只當成「一個資料庫」來用，你會錯過它最有價值的部分——schema-driven 的 Studio 介面和自動產生的 API。你花在 Sanity 上的每一分鐘都在定義整條資料管線的基礎。
+
+### 🎯 Schema-Driven 的核心思維：定義一次，到處生效
+
+Sanity 的架構建立在一個核心假設上：**你只需要定義一次內容結構，其他一切都會自動產生。**
+
+這個「一次定義」就是 schema。每個 schema 是一個 TypeScript 檔案，定義一種內容型別（document type）的欄位、關聯、和驗證規則。例如：
+
+```typescript
+// sanity/schemas/course.ts
+export default defineType({
+  name: 'course',
+  title: 'Course',
+  type: 'document',
+  fields: [
+    defineField({ name: 'title', type: 'string' }),
+    defineField({ name: 'slug', type: 'slug', options: { source: 'title' } }),
+    defineField({ name: 'description', type: 'text' }),
+    defineField({ name: 'coverImage', type: 'image' }),
+    defineField({ name: 'level', type: 'string', options: { list: ['beginner', 'intermediate', 'advanced'] } }),
+    defineField({ name: 'price', type: 'number' }),
+    defineField({
+      name: 'modules',
+      type: 'array',
+      of: [{ type: 'object', /* embedded modules */ }]
+    }),
+    // ... 更多欄位
+  ]
+})
+```
+
+這一段程式碼同時決定了三件事：
+
+| 它決定了什麼 | 怎麼生效 |
+|------------|---------|
+| **Studio 介面** | 作者在 Studio 裡看到「Course」這個文件型別，表單裡有 title、slug、description 等欄位，按順序排列 |
+| **API 結構** | GROQ 查詢 `*[_type == "course"]` 會回傳符合這個結構的 JSON |
+| **欄位驗證** | 如果 title 是空的，Studio 會即時提示作者；level 只能從下拉選單裡選 |
+
+### 🔧 CLI 初始化：從零到 Studio 的 5 分鐘
+
+建立 Sanity 專案的第一步是 CLI 初始化：
+
+```bash
+npx sanity@latest init
+```
+
+CLI 會問你幾個問題：
+
+1. **TypeScript？** → 選 Yes（Vertex 全部用 TypeScript）
+2. **Project name？** → 用 `JSM_vertex` 或你自己的命名
+3. **Dataset？** → 用 `production`（預設）
+4. **Embedded studio？** → 選 **No**（clean project）——後面會講為什麼
+5. **Schema location？** → 預設 `sanity/schemas/`
+
+完成後，專案裡會多出這些檔案：
+
+```
+vertex/
+├── sanity/
+│   ├── sanity.config.ts   ← 主設定（project ID、dataset、plugins、structure）
+│   ├── sanity.cli.ts      ← CLI 設定（deploy studio、管理 dataset）
+│   ├── schemas/
+│   │   └── schema.ts      ← schema 入口（匯入所有 schema）
+│   └── structure.ts       ← Studio 導覽列設定
+├── .env.local             ← 自動加入 SANITY_API_PROJECT_ID 和 SANITY_API_DATASET
+└── ...
+```
+
+**為什麼這一步很重要？** 因為 `.env.local` 裡的 project ID 和 dataset 是之後所有 Sanity 操作的基礎——client 讀資料、Studio 部署、typegen 產生類型，全部依賴這兩個值。
+
+### 📐 Structure：Studio 的導覽列長什麼樣
+
+`sanity/structure.ts` 決定了 Studio 左側導覽列的樣子。它不影響資料模型，但直接影響作者的工作流：
+
+```typescript
+// sanity/structure.ts
+export const structure = (S) =>
+  S.list()
+    .title('Content')
+    .items([
+      S.documentTypeListItem('course').title('Courses'),
+      S.documentTypeListItem('lesson').title('Lessons'),
+      S.documentTypeListItem('instructor').title('Instructors'),
+      S.documentTypeListItem('category').title('Categories'),
+    ])
+```
+
+把最常用的（courses、lessons）放最上面，設定類的（categories）放下面——這是一個看似微小但影響巨大的決定。作者每天都要在 Studio 裡工作，導覽列的順序直接決定他們找東西的速度。
+
+### 🔒 安全規則：誰可以做什麼
+
+Sanity 的 schema 裡可以定義 role-based 的存取規則。例如：
+
+- **Admin**：可以建立、編輯、刪除任何文件
+- **Editor**：可以編輯 courses 和 lessons，不能刪除 instructors
+- **Viewer**：只能查看，不能修改
+
+這些規則在 `sanity.config.ts` 裡定義，而不是在前端程式碼裡——這表示它們是 server-side enforced 的，瀏覽器端的操控無法繞過。
+
+**為什麼這很重要？** 因為 Vertex 是一個多作者協作的平台——作者建立課程、編輯自己的內容，但不應該能刪除别人的課程或修改系統設定。沒有安全規則，Studio 就是一個沒有門的倉庫。
+
+### ⚡️ 測試：從 schema 到可運作的 Studio
+
+建立 schema 後，跑 `cd studio && npm run dev`，在瀏覽器打開 `localhost:3333`。
+
+你會看到：
+- 左側導覽列有 Courses、Lessons、Instructors、Categories
+- 點進 Courses，按「Create new」，表單裡有 title、slug、description 等欄位
+- 填寫資料後按 Publish，資料就進了 Sanity 的資料庫
+
+這就是 schema-driven 的威力——你定義了結構，Sanity 自動幫你生出了一個完整、可運作的 admin 介面。
+
+### 🎯 為什麼 Sanity 比手寫 admin panel 更好
+
+| 比較項目 | 手寫 Admin Panel | Sanity Studio |
+|---------|-----------------|---------------|
+| 建立時間 | 幾天到幾週 | 5 分鐘（schema 定義） |
+| CRUD 操作 | 自己寫 API + 前端 | 自動產生 |
+| 權限管理 | 自己實作 | schema 裡定義 role |
+| 欄位驗證 | 自己寫 validator | schema 裡定義 rules |
+| 即時協作 | 自己處理衝突 | Sanity 內建 |
+| 內容版本控制 | 自己實作 | Sanity 內建 |
+
+**一句話**：Sanity 讓你花 5 分鐘得到一個需要幾週才能手寫完成的 admin 介面，而且更安全、更穩定。
+
+### 🚀 回到你的專案：下一步是什麼
+
+現在你已經知道 Sanity 在 Vertex 裡扮演什麼角色。下一步是決定資料模型的具體結構——course 裡的 modules 要嵌入還是分開？lesson 要獨立還是附屬在 module 裡？這些決定直接影響之後的頁面、搜尋、和整條產品線。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_1:321-400]] — Sanity 如何用即時 Studio 變成 Vertex 的 admin dashboard。
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:3401-3552]] — CLI 初始化的完整過程和新增的檔案結構。
+- [[sources/vertex-learning-platform/AGENTS.md#data-model]] — Vertex 的完整資料模型定義。

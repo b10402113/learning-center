@@ -1,0 +1,259 @@
+---
+id: tailwind-v4-tokens
+title: Tailwind v4 @theme 設計 Token 實戰：從設計稿到 globals.css
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/tailwind-v4-tokens
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:1701-2100]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Tailwind v4 @theme 設計 Token 實戰：從設計稿到 globals.css
+
+## Learning goal
+
+能從設計參考圖提取 typography scale、color palette、spacing、radius/shadows，寫進 Tailwind v4 的 `globals.css` 作為 theme 變數。
+
+## Lesson
+
+### 🎯 核心問題：為什麼不能各自「猜」顏色？
+
+你拿到一張設計參考圖，上面清楚標示了品牌色、字級、間距、圓角和陰影。現在的問題是：怎麼把這些視覺數值變成程式碼裡可引用的設計 token？
+
+如果沒有統一的 token 機制，每個元件各自「猜」一個看起來差不多的顏色，結果就是：button 用 `bg-blue-500`、card 用 `bg-blue-600`、badge 冒出 `bg-indigo-400`——看起來都是藍色系，但沒有任何機制確保它們是同一個藍。
+
+Tailwind 的 utility class 很方便，但預設的色板、字級和間距並不是你的品牌語言。你需要做的是：把設計稿上的值提取出來，寫進 Tailwind v4 的 `@theme` 區塊，讓整個專案從同一份 CSS 變數讀取所有設計值。
+
+這就是 [[learn/vertex-learning-platform/elements/tailwind-v4-tokens|Tailwind v4 主題變數 (Tailwind v4 Theme Tokens)]] 的核心職責——把設計系統從文件變成可執行的 CSS 變數。
+
+---
+
+### ⚡️ 為什麼 v4 的 @theme 比舊版 config 更好？
+
+如果你之前用過 Tailwind，你一定熟悉 `tailwind.config.js` 裡的 `theme.extend`。在舊版的工作流裡，token 定義在 JavaScript 檔案中，Tailwind 的構建流程再把它們轉譯成 CSS 變數。你改了 config 裡的值，要等構建工具重新處理，瀏覽器才能拿到更新後的變數。
+
+**對比：舊版 vs v4**
+
+| 面向 | 舊版 `tailwind.config.js` | v4 `@theme` |
+|---|---|---|
+| Token 定義位置 | JavaScript 檔案 | CSS 檔案（原生自訂屬性） |
+| 翻譯層 | JS → CSS 變數，需構建工具處理 | 無，直接就是 CSS 變數 |
+| AI 讀取成本 | 需同時理解 JS config 和 CSS 的對應關係 | 讀一個 `globals.css` 就夠 |
+| 更新速度 | 改完要等 build | 改完瀏覽器直接生效 |
+
+對 Vertex 這類由 AI 協助構建的專案來說，這大幅降低了上下文負擔：AI 讀一個檔案就知道全部色彩、字級、間距的定義，不需要跨檔案推論。
+
+v4 的 `@theme` 語法長這樣：
+
+```css
+@theme {
+  --color-primary: #F97316;
+  --color-surface: #FFFFFF;
+  --color-canvas-line: #0F172A;
+
+  --font-display: "Playfair Display", serif;
+  --font-body: "Inter", sans-serif;
+
+  --spacing-1: 4px;
+  --spacing-4: 16px;
+  --spacing-8: 32px;
+
+  --radius-md: 12px;
+  --radius-lg: 16px;
+
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+```
+
+定義了 `--color-primary: #F97316` 之後，Tailwind 的 utility system 會自動讓 `bg-primary`、`text-primary`、`border-primary` 等 class 指向這個值。你不需要手動註冊，也不需要在 config 裡宣告 `colors.primary`——`@theme` 裡的 CSS 變數名直接對應 Tailwind 的 utility 命名空間。
+
+---
+
+### 🔧 第一步：從設計稿提取數值（4 個層次）
+
+設計參考圖通常包含四個視覺層次。提取的過程是機械性的——你不需要「判斷」該用什麼顏色，只需要照著設計稿上的值逐一記錄。
+
+**1. 色彩提取**
+
+用取色工具（瀏覽器開發者工具、Figma 的 eyedropper、或任何 hex 取色器）點擊每個色塊，把 hex 值記錄下來。在 Vertex 專案中，設計稿定義了：
+
+- Primary `#F97316`（橙色系）
+- 中性色從 `#0F172A`（深色文字）到 `#FFFFFF`（白色背景）
+- 語義色：success / warning / error
+
+你不需要從零設計色板——照著設計稿上的色塊逐一取色就是了。
+
+**2. 字級提取**
+
+每個 heading 和 body text 的大小、粗細、行高都是明確的數值。例如 H1 是 48px / bold / line-height 1.2、H2 是 36px / bold / line-height 1.3、body 是 16px / normal / line-height 1.6。
+
+⚠️ **不要只記錄 font-size**——line-height 和 font-weight 同樣是 token 的一部分，遺漏它們會導致元件之間的排版不一致。
+
+**3. 間距提取**
+
+間距通常基於一個 base unit 的倍數。在 Vertex 中，base unit 是 4px，所以 spacing scale 是 4px、8px、12px、16px、24px、32px、48px——分別對應 `--spacing-1` 到 `--spacing-12`。元件的 padding、margin、gap 全部從這個 scale 取值，消除所有 magic number。
+
+如果設計稿上的間距不是 4 的倍數，你仍然要把它們記錄成 token——一致性比數學規則更重要。
+
+**4. 圓角與陰影提取**
+
+按鈕的圓角、卡片的陰影、輸入框的 border，各自對應一個 token。設計稿可能標示 button radius 為 12px、card radius 為 16px、card shadow 為 `0 1px 3px rgba(0,0,0,0.1)`。這些值被寫成 `--radius-md`、`--radius-lg`、`--shadow-card`，元件引用時不需要記住具體數值。
+
+---
+
+### 📋 第二步：把值寫進 globals.css
+
+提取完成後，所有數值被寫進 `app/globals.css`，放在 Tailwind v4 的 `@theme` 區塊裡。這是 token 的 single source of truth——整個專案只從這一個檔案讀取設計值。
+
+在 Vertex 專案中，`globals.css` 的 `@theme` 區塊包含了完整的色彩、字級、間距、圓角和陰影定義：
+
+```css
+@theme {
+  /* 色彩系統 */
+  --color-primary: #F97316;
+  --color-primary-light: #FB923C;
+  --color-primary-dark: #EA580C;
+
+  --color-surface: #FFFFFF;
+  --color-canvas-line: #0F172A;
+  --color-neutral-50: #F8FAFC;
+  --color-neutral-100: #F1F5F9;
+  --color-neutral-200: #E2E8F0;
+  --color-neutral-500: #64748B;
+  --color-neutral-800: #1E293B;
+  --color-neutral-900: #0F172A;
+
+  --color-success: #22C55E;
+  --color-warning: #EAB308;
+  --color-error: #EF4444;
+
+  /* Typography scale */
+  --font-display: "Playfair Display", serif;
+  --font-body: "Inter", sans-serif;
+
+  --font-size-display-1: 3rem;
+  --font-size-display-2: 2.25rem;
+  --font-size-heading-1: 2rem;
+  --font-size-heading-2: 1.5rem;
+  --font-size-heading-3: 1.25rem;
+  --font-size-body: 1rem;
+  --font-size-small: 0.875rem;
+
+  --line-height-tight: 1.2;
+  --line-height-snug: 1.3;
+  --line-height-normal: 1.6;
+
+  /* 間距系統 (base unit = 4px) */
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+  --spacing-10: 40px;
+  --spacing-12: 48px;
+  --spacing-16: 64px;
+
+  /* 圓角 */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+
+  /* 陰影 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.1);
+  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+```
+
+**命名對應規則：** `--color-primary` 對應 `bg-primary`、`text-primary` 等 class；`--font-display` 對應 `font-display` class；`--spacing-4` 對應 `p-4`、`m-4`、`gap-4` 等。Tailwind v4 的 utility class 命名和 CSS 變數名之間有一套明確的對應規則——`@theme` 裡的變數名不需要額外設定就能自動被 Tailwind 的 utility 消費。
+
+**💡 為什麼這很重要？** 這個 `globals.css` 就是 AI 實作任何 UI 功能前唯一需要讀取的設計值來源。AI 不需要去看設計稿、不需要去猜顏色、不需要去 grep 其他元件用了什麼值——它只需要讀 `globals.css` 的 `@theme` 區塊，就能拿到全部設計約束。
+
+---
+
+### 🖋️ 第三步：在 layout.tsx 中引入字型
+
+字型是 token 系統中最特殊的一環，因為它不是純 CSS 值——它需要從字型檔載入。在 Next.js 中，字型透過 `next/font` 機制在 `layout.tsx` 中引入，然後橋接到 CSS 變數。
+
+在 Vertex 專案中，`app/layout.tsx` 的字型設定大致是這樣：
+
+```tsx
+import { Inter, Playfair_Display } from "next/font/google";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-body",
+});
+
+const playfair = Playfair_Display({
+  subsets: ["latin"],
+  variable: "--font-display",
+});
+
+export default function RootLayout({ children }) {
+  return (
+    <html lang="en" className={`${inter.variable} ${playfair.variable}`}>
+      <body className="font-body">{children}</body>
+    </html>
+  );
+}
+```
+
+**字型橋接流程（3 步）：**
+
+1. `next/font/google` 在構建時下載字型檔，產生唯一 class name（例如 `__className_abc123`），加到 `<html>` 的 `className` 上
+2. `variable` 選項把字型名寫進 CSS 變數——`--font-body` 和 `--font-display`
+3. 在 `globals.css` 的 `@theme` 區塊中，這些 CSS 變數被指定為具體的 font-family 值：
+
+```css
+@theme {
+  --font-display: "Playfair Display", serif;
+  --font-body: "Inter", sans-serif;
+}
+```
+
+`next/font` 產生的 CSS 變數會覆蓋 `@theme` 裡的預設值（因為 class name 的優先級更高），所以最終的字型解析是：`next/font` 載入實際字型檔 → 設定 CSS 變數 → `@theme` 宣告 font-family → Tailwind 的 `font-display` / `font-body` class 指向正確的字型。
+
+這個橋接機制讓字型的引入（需要 Next.js 的 font loader）和 token 的定義（需要 CSS-native 的 `@theme`）各司其職，但最終在 Tailwind 的 utility 層面統一。元件裡只需要寫 `font-display` 或 `font-body`，不需要知道字型是從哪裡載入的。
+
+---
+
+### 📝 完整的 8 步 Token 提取流程
+
+把以上三個步驟串起來，從設計稿到 Tailwind v4 token 的完整流程是：
+
+1. **讀取設計參考圖** — 開啟 `design/` 資料夾中的圖片，識別所有色彩、字級、間距、圓角和陰影的具體數值。不要試圖「詮釋」設計——你只是在做數值的搬運工。
+2. **提取色彩值** — 用取色工具取得每個色塊的 hex 值，按用途分類：primary（品牌色）、neutral（中性色）、semantic（語義色）、surface/canvas（背景色）。
+3. **提取字級值** — 記錄每個 heading 級別的 font-size、font-weight、line-height，建立完整的 typography scale。
+4. **提取間距值** — 確認 base unit（在 Vertex 中是 4px），記錄所有間距的像素值，按 scale 編號。
+5. **提取圓角與陰影** — 記錄 button、card、input 等元件的 border-radius 和 box-shadow 值。
+6. **寫進 globals.css** — 把所有數值放進 Tailwind v4 的 `@theme` 區塊，使用 Tailwind 的命名規則（`--color-*`、`--font-*`、`--spacing-*`、`--radius-*`、`--shadow-*`）。
+7. **在 layout.tsx 中引入字型** — 用 `next/font` 載入 Google Fonts，透過 `variable` 選項橋接到 CSS 變數。
+8. **驗證** — 開啟 `npm run dev`，檢查 utility class 是否正確指向 token 值。例如 `bg-primary` 是否顯示你定義的品牌色、`font-display` 是否使用了你引入的字型。
+
+這個流程的核心原則是：設計稿是唯一的數值來源，`globals.css` 是唯一的程式碼來源，兩者之間的對應是機械性的——不需要設計判斷，只需要數值搬運。當 AI 拿到設計稿並被要求「精確複製設計」時，theme tokens 提供了明確的值——它不需要「判斷」該用什麼藍色，只需要查 token 表然後照抄。這也是為什麼 AGENTS.md 裡的 UI 規則能運作的基礎：沒有 tokens，AI 只能猜；有了 tokens，AI 只需要複製。
+
+---
+
+### 💡 為什麼這很重要？
+
+Theme tokens 的價值不只是「方便」——它是確保跨頁一致性的唯一可靠策略。
+
+**對比：有 token vs 沒有 token**
+
+| 情境 | 沒有 token | 有 token |
+|---|---|---|
+| 改品牌色 | 逐頁 grep 和替換，容易遺漏 | 改 `globals.css` 一個值，全站更新 |
+| AI 開發 UI | 需要猜測每個顏色值，容易不一致 | 讀一個檔案拿到所有設計約束 |
+| 新元件上線 | 需要對照設計稿逐一確認數值 | 直接從 token scale 取值 |
+| 跨元件一致性 | 依賴人工審查 | 由同一份 CSS 變數保證 |
+
+對 AI 輔助開發來說，token 的價值更加明顯。AI 的上下文窗口是有限的——它不可能記住每一個元件用了什麼顏色。但如果所有設計值都集中在一個檔案裡，AI 只需要讀那個檔案就能拿到全部約束。這大幅降低了 AI 產生不一致 UI 的風險，也讓 AI 能把更多注意力放在功能邏輯上，而不是視覺細節的「猜測」上。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:1701-2100]]

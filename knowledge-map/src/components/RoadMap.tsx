@@ -9,7 +9,6 @@ import {
 import {
   Background,
   BackgroundVariant,
-  Controls,
   MiniMap,
   ReactFlow,
   useEdgesState,
@@ -21,20 +20,22 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { isWritten } from "../lib/colors";
-import type { FocusRequest, MapHandle, SubjectGraph } from "../lib/types";
+import type { FocusRequest, MapHandle, Step, SubjectGraph } from "../lib/types";
 import { ROAD_NODE_WIDTH, RoadNode } from "./RoadNode";
+import { TierLabel } from "./TierLabel";
 
-const NODE_WIDTH = ROAD_NODE_WIDTH;
-const TIER_GAP_Y = 120;
-const NODE_GAP_X = 40;
+const TIER_GAP_Y = 140;
+const NODE_GAP_X = 20;
 const TIER_START_Y = 40;
-const PADDING_X = 60;
+const PADDING_X = 120;
+const TIER_LABEL_X = 16;
 
 function buildRoadData(
   graph: SubjectGraph,
   selectedId: string | null,
   written: Set<string>,
-  completed: Set<string>,
+  completedNodes: Set<string>,
+  completedSteps: Set<string>,
 ): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -48,16 +49,42 @@ function buildRoadData(
 
   const tierLevels = Array.from(tiersByLevel.keys()).sort((a, b) => a - b);
 
-  // Cards are fixed-size (ADR-0006): the node detail overlay owns the step
-  // list, so the roadmap rows never push each other around.
   for (const tier of tierLevels) {
     const tierNodes = tiersByLevel.get(tier)!;
     const tierY = TIER_START_Y + (tier - 1) * TIER_GAP_Y;
 
+    // Find tier title from graph.tiers
+    const tierMeta = graph.tiers.find((t) => t.tier === tier);
+    const tierTitle = tierMeta?.title ?? `Stage ${tier}`;
+
+    // Tier label node — positioned to the left of the card row
+    nodes.push({
+      id: `tier-label-${tier}`,
+      type: "tierLabel",
+      position: { x: TIER_LABEL_X, y: tierY + 8 },
+      data: {
+        stage: tier,
+        title: tierTitle,
+        nodeCount: tierNodes.length,
+      },
+      draggable: false,
+      selectable: false,
+    });
+
+    // Cards — left-aligned, with step data
     for (let i = 0; i < tierNodes.length; i++) {
       const p = tierNodes[i];
-      const x = PADDING_X + i * (NODE_WIDTH + NODE_GAP_X);
+      const x = PADDING_X + i * (ROAD_NODE_WIDTH + NODE_GAP_X);
       const y = tierY;
+
+      // Compute step completion for this node
+      const nodeSteps: Step[] = Object.values(graph.steps).filter(
+        (s) => s.nodeId === p.id,
+      );
+      const nodeCompletedSteps = nodeSteps.filter((s) =>
+        completedSteps.has(s.id),
+      ).length;
+      const isNodeLocked = !isWritten(p.status);
 
       nodes.push({
         id: p.id,
@@ -67,32 +94,21 @@ function buildRoadData(
           label: p.title,
           tier: p.tier,
           isWritten: written.has(p.id),
-          isComplete: completed.has(p.id),
+          isComplete: completedNodes.has(p.id),
           isSelected: p.id === selectedId,
+          isLocked: isNodeLocked,
           nodeId: p.id,
+          duration: p.duration ?? "",
+          totalSteps: nodeSteps.length,
+          completedSteps: nodeCompletedSteps,
         },
         draggable: true,
       });
     }
+  }
 
-    // Connect nodes within the same tier horizontally (spine)
-    for (let i = 0; i < tierNodes.length - 1; i++) {
-      edges.push({
-        id: `${tierNodes[i].id}-${tierNodes[i + 1].id}`,
-        source: tierNodes[i].id,
-        target: tierNodes[i + 1].id,
-        type: "smoothstep",
-        animated: false,
-        style: {
-          stroke: "#c40058",
-          strokeWidth: 1.5,
-        },
-      });
-    }
-
-    }
-
-  // Connect last node of each tier to first node of next tier (vertical spine)
+  // Vertical spine: connect last node of each tier to first node of next tier
+  // Only draw this teaching-order connection, no horizontal edges within tiers
   for (let t = 0; t < tierLevels.length - 1; t++) {
     const currentTier = tierLevels[t];
     const nextTier = tierLevels[t + 1];
@@ -108,10 +124,17 @@ function buildRoadData(
         source: lastOfCurrent.id,
         target: firstOfNext.id,
         type: "smoothstep",
-        animated: true,
+        animated: false,
+        markerEnd: {
+          type: "arrowclosed",
+          color: "rgba(160, 160, 165, 0.45)",
+          width: 16,
+          height: 16,
+        },
         style: {
-          stroke: "#a0a0a5",
-          strokeWidth: 2,
+          stroke: "rgba(160, 160, 165, 0.3)",
+          strokeWidth: 1.5,
+          strokeDasharray: "6 4",
         },
       });
     }
@@ -125,12 +148,14 @@ interface RoadMapProps {
   selectedId: string | null;
   focusRequest: FocusRequest | null;
   completedNodes: Set<string>;
+  completedSteps: Set<string>;
   onSelectNode: (nodeId: string) => void;
   onHover: (id: string | null) => void;
 }
 
 const nodeTypes: NodeTypes = {
   roadNode: RoadNode,
+  tierLabel: TierLabel,
 };
 
 export const RoadMap = forwardRef<MapHandle, RoadMapProps>(function RoadMap(
@@ -139,6 +164,7 @@ export const RoadMap = forwardRef<MapHandle, RoadMapProps>(function RoadMap(
     selectedId,
     focusRequest,
     completedNodes,
+    completedSteps,
     onSelectNode,
     onHover,
   }: RoadMapProps,
@@ -152,28 +178,15 @@ export const RoadMap = forwardRef<MapHandle, RoadMapProps>(function RoadMap(
   );
 
   const { nodes: rawNodes, edges: rawEdges } = useMemo(
-    () => buildRoadData(graph, selectedId, written, completedNodes),
-    [graph, selectedId, written, completedNodes],
+    () => buildRoadData(graph, selectedId, written, completedNodes, completedSteps),
+    [graph, selectedId, written, completedNodes, completedSteps],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(rawNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(rawEdges);
 
-  // Sync raw data + positions into node state. Layout is deterministic in
-  // buildRoadData (completion/selection changes), so raw wins wholesale — but
-  // only when the memo recomputes, never on every App render, keeping drags
-  // stable between those events.
   useEffect(() => {
-    setNodes((nds) => {
-      const rawMap = new Map(rawNodes.map((n) => [n.id, n]));
-      return nds.map((nd) => {
-        const raw = rawMap.get(nd.id);
-        if (raw) {
-          return { ...nd, ...raw };
-        }
-        return nd;
-      });
-    });
+    setNodes(rawNodes);
     setEdges(rawEdges);
   }, [rawNodes, rawEdges, setNodes, setEdges]);
 
@@ -201,7 +214,6 @@ export const RoadMap = forwardRef<MapHandle, RoadMapProps>(function RoadMap(
     onHover(null);
   }, [onHover]);
 
-  // Fit view on mount and subject change
   const reactFlowInstanceRef = useRef<any>(null);
   useEffect(() => {
     if (reactFlowInstanceRef.current) {
@@ -209,7 +221,6 @@ export const RoadMap = forwardRef<MapHandle, RoadMapProps>(function RoadMap(
     }
   }, [graph]);
 
-  // Focus request: center on specific path node, once per request.
   const lastFocusRef = useRef<string | null>(null);
   useEffect(() => {
     if (!focusRequest || !reactFlowInstanceRef.current) return;
@@ -279,9 +290,8 @@ export const RoadMap = forwardRef<MapHandle, RoadMapProps>(function RoadMap(
           variant={BackgroundVariant.Dots}
           gap={24}
           size={1}
-          color="#2a2a2e"
+          color="#1e1e22"
         />
-        <Controls />
         <MiniMap
           nodeStrokeColor="#3a3a3e"
           nodeColor="#161618"
@@ -289,6 +299,14 @@ export const RoadMap = forwardRef<MapHandle, RoadMapProps>(function RoadMap(
           maskColor="rgba(10, 10, 12, 0.7)"
           pannable
           zoomable
+          style={{
+            position: "absolute",
+            bottom: 16,
+            right: 16,
+            border: "1px solid var(--color-border)",
+            borderRadius: "0.5rem",
+            background: "var(--color-surface)",
+          }}
         />
       </ReactFlow>
     </div>
