@@ -1,0 +1,146 @@
+---
+id: grounding-rule
+title: 搜尋接地規則 (Grounding Rule)
+subject: vertex-learning-platform
+tier: 3
+order: 13
+type: article
+nodes:
+  - vertex-learning-platform/intelligent-search
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_5:6801-7352]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#search-behavior]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#decisions]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#search-config]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 搜尋接地規則 (Grounding Rule)
+
+## Problem Statement
+
+大型語言模型（LLM）有一個內建傾向：它被訓練來生成「合理的」文本，而不是「真實的」資料。在搜尋場景中，這意味著模型可能回傳一個「看起來很像真的」的課程名稱、一個「合理」的時間戳、一段「聽起來很專業」的描述——但這些東西全部是編造的。如果你讓模型直接根據自己的「記憶」生成搜尋結果，使用者會看到一張完美的課程卡片，點進去卻發現那門課根本不存在。這不是偶爾發生的邊緣案例，而是 LLM 的本性：它被訓練來完成句子，不是來查資料庫。
+
+## Why it matters
+
+接地規則（Grounding Rule）是 Vertex 搜尋功能的核心安全機制。它解決的問題是：怎麼讓 LLM「幫你挑選」結果，但不讓它「幫你編造」結果。這兩件事聽起來很像，差別卻是天壤之別。
+
+如果你搜尋「React cache 是什麼」，模型可能回傳「React 內建的快取機制，用 `React.cache()` 包裝函式，讓同一個 request 裡的重複呼叫共用結果」——聽起來完全合理。但如果 Sanity 裡根本沒有這門課，或者這門課的影片是在講別的東西，那這個搜尋結果就是一個漂亮的謊言。使用者點進去，影片開始播放，結果發現內容跟搜尋描述完全不符——這比「搜不到」更糟糕，因為它浪費了使用者的時間和信任。
+
+接地規則的做法是：**模型只負責選擇 ID，Sanity 負責供應事實**。模型回傳的每一個欄位——標題、描述、章節標籤、時間戳——都必須從 Sanity 查詢結果中取得，而不是由模型生成。這樣一來，搜尋結果就不可能被編造。
+
+## How it works
+
+### 模型只選 ID 的機制
+
+接地規則的核心是一條簡單的約束：模型在回傳搜尋結果時，只能提供 **lesson ID**（課程 ID），不能自己生成標題、描述或其他欄位。
+
+```
+使用者查詢: "如何用 React 做快取"
+  ↓
+模型看到 Sanity 裡的課程清單（由 MCP context 注入）
+  ↓
+模型決定: "lesson.react-caching-overview 和 lesson.server-side-rendering 這兩門最相關"
+  ↓
+模型只回傳: { lessonIds: ["lesson.react-caching-overview", "lesson.server-side-rendering"] }
+  ↓
+server route 用 IDs 向 Sanity 查詢真實資料
+  ↓
+Sanity 回傳: 標題、描述、影片 URL、章節、逐字稿區塊
+  ↓
+server route 組裝結果卡片，只用 Sanity 提供的資料
+  ↓
+結果回傳給瀏覽器
+```
+
+這條路徑的關鍵是：**模型的輸出裡沒有任何「事實」——只有 IDs**。所有事實細節都由 Sanity 提供。如果模型選錯了 ID（例如它以為某門課跟 React 快取有關，但其實那門課是在講 Python），結果卡片仍然會正確顯示那門課的真實內容——使用者至少能看到「這不是我要的」，而不是被一段編造的描述誤導。
+
+### 兩階段時間戳解析
+
+當搜尋匹配到影片中的某個時間點時，系統需要決定怎麼展示這個時間點。這個決定分兩階段：
+
+| 階段 | 觸發條件 | 做什麼 | 結果 |
+| --- | --- | --- | --- |
+| **第一階段：章節匹配** | 匹配的秒數落在某個章節的範圍內 | 顯示章節標籤（例如「React Cache 概覽」） | 結果卡片顯示結構化的章節名稱 |
+| **第二階段：逐字稿匹配** | 不在任何章節範圍內 | 顯示對應的逐字稿區塊內容 | 結果卡片顯示具體的內容描述 |
+
+這個兩階段機制確保時間戳的展示既有結構化的章節名稱（如果有的話），又有具體的內容描述（如果不在章節範圍內）。**章節優先（chapters-first）** 是因為章節標籤通常比逐字稿片段更容易理解。
+
+### 影片文件是內部查表
+
+在 Sanity 裡，影片文件（video document）是一個獨立的文件，包含章節列表和逐字稿區塊。但搜尋結果中的「影片結果」永遠不會直接引用影片文件——它引用的是**使用了該影片的課程**。
+
+這意味著搜尋結果卡片的資料流是：
+
+```
+影片文件（內部查表）
+  → 提供章節、逐字稿區塊
+  → 透過影片 URL 連結到使用它的課程
+  → 結果卡片顯示課程資訊 + 匹配的時間點
+```
+
+影片文件就像是一個「內部翻譯器」——它把影片的內容翻譯成可搜尋的結構，但對外永遠是透過課程來呈現。
+
+### 兩種結果類型
+
+搜尋產生兩種結果，各自來自不同的匹配路徑：
+
+| 結果類型 | 匹配來源 | 卡片內容 | 使用者動作 |
+| --- | --- | --- | --- |
+| **影片結果**（video result） | 影片文件中的章節和逐字稿區塊 | 課程/模組/單元標籤、縮圖、影片長度、描述、匹配的秒數 | 點擊後從該秒開始播放 |
+| **影片結果**（lesson result） | 課程的元資料 | 課程主題匹配 | 點擊後打開對應的課程頁面 |
+
+兩種結果會合併、按具體性（specificity）排序。影片結果因為有具體的時間點，通常會排在前面；lesson result 則作為補充。
+
+### 文本匹配是基於 token 的
+
+搜尋不使用整句匹配（phrase match），而是使用 wildcard 關鍵字匹配和 OR 多詞匹配。這意味著：
+
+- 使用者輸入「React 框架」時，系統會同時匹配包含「React」**或**「框架」的文件
+- 不是只匹配包含完整「React 案架」這個詞組的文件
+- Portable Text 格式的內容通過純文本投影（plain-text projection）進行匹配，確保富文本內容也能被搜尋到
+
+這種設計是刻意的——搜尋的目的是「找到相關內容」，不是「精確匹配查詢」。使用者通常不會打出完美的查詢，token-based 匹配能容納更多的表達方式。
+
+## In plain terms
+
+想像你去問一個圖書館員「有沒有講 React 快取的書？」圖書館員不會自己寫一本書給你——它會走到書架前翻目錄，找到三本可能相關的書，然後把書名、封面、和書裡提到「快取」的那一頁拿給你。圖書館員（模型）只負責「挑書」，書的內容（ Sanity 提供的事實）才是你最終看到的東西。
+
+如果圖書館員沒去書架翻，而是憑印象跟你說「有一本《React 快取完全指南》很好看」，你去架上卻找不到——這就是 LLM 的幻覺。接地規則就是強迫圖書館員「先翻書架再回答」。
+
+## Practical use
+
+在實作 `POST /api/search` 時，接地規則的落實方式：
+
+1. **系統提示裡明確寫「不要編造任何欄位」**：模型的回傳格式只能有 `lessonIds`，不能有標題、描述等欄位。
+2. **server route 用 IDs 查詢 Sanity**：收到模型的 IDs 後，用 GROQ 查詢真實資料，組裝結果卡片。
+3. **CodeRabbit review 的「ground video moments」要點**：CodeRabbit 指出，目前的實作信任模型的 `startSeconds`，但 Sanity 查詢只重新載入課程資料（不匹配章節或逐字稿區塊）。修正方式是：載入影片文件，接受結果**只有當**其時間戳確實出現在某個章節或逐字稿區塊中。
+4. **結果不設上限**（no capping）：所有匹配的結果都應該顯示，讓使用者決定哪些有用。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/grounding-search|搜尋接地 (Grounding Search)]] — 概念性的接地機制；接地規則是它的實作細節，專注於「模型只選 ID」的機制。
+- [[learn/vertex-learning-platform/elements/mcp-context|Sanity Context MCP]] — MCP 供給模型可以搜尋的資料範圍；接地規則確保模型只用這些資料的 ID。
+- [[learn/vertex-learning-platform/elements/search-quality-dependency|Search Quality Dependency]] — 搜尋品質依賴底層資料的品質；接地規則確保搜尋結果不超出底層資料的範圍。
+- [[learn/vertex-learning-platform/elements/data-model-as-substrate|資料模型作為基底 (Data Model as Substrate)]] — 影片文件的結構（章節、逐字稿區塊）直接決定了兩階段時間戳解析的實作方式。
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_5:6801-7352]] — Intelligent search backend: 接地機制的實作、CodeRabbit review 的五個要點、結果驗證邏輯。
+- [[sources/vertex-learning-platform/AGENTS.md#search-behavior]] — 搜尋行為規範：兩種結果類型、文本匹配規則、結果排序、空狀態設計。
+- [[sources/vertex-learning-platform/AGENTS.md#decisions]] — 已做決策：搜尋作為結果卡片而非聊天框、影片文件作為內部查表、時間戳兩階段解析。
+
+## Questions
+
+### Q1. 如果模型回傳了一個 Sanity 裡不存在的 lesson ID，系統會怎麼處理？
+
+A1. server route 在用 IDs 查詢 Sanity 時，查不到的 ID 會被過濾掉。結果卡片只會顯示 Sanity 確認存在的課程——模型選錯了也不會讓使用者看到虛假結果。
+
+### Q2. 為什麼文本匹配用 wildcard + OR，而不是用語義搜尋（semantic search）？
+
+A2. 語義搜尋（例如 cosine similarity）需要 embeddings，而 Sanity 的向量搜尋功能在某些版本中可能不穩定。Wildcard + OR 是一個簡單、可控、不需要額外基礎設施的方案，對於小規模的教育內容（120 部影片）來說已經足夠。如果未來需要更精確的語義匹配，可以再升級。
+
+### Q3. 兩階段時間戳解析中，如果匹配的秒數既不在章節範圍內、也沒有對應的逐字稿區塊，系統應該怎麼處理？
+
+A3. 這意味著逐字稿擷取（ingestion）可能漏掉了那個時間點的內容。在正常情況下不會發生——因為離線擷取管線會確保每個 ~45 秒的區間都被覆蓋。但如果真的發生了，系統應該在結果卡片上顯示「在這段影片中提到」但不附具體時間戳，讓使用者知道這是影片中的某個片段，只是無法精確跳轉。

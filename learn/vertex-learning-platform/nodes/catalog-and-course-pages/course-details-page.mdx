@@ -1,0 +1,132 @@
+---
+id: course-details-page
+title: 課程詳情頁：動態路由、GROQ aggregate 與 reverse reference
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/groq-aggregate
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:5101-5216]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 課程詳情頁：動態路由、GROQ aggregate 與 reverse reference
+
+## Learning goal
+
+能建出課程詳情動態路由——從 Sanity 拉 hero、學習目標、課程內容 modules、進度條，用 GROQ aggregate 算統計，並用 reverse reference 找到父課程。
+
+## Lesson
+
+### 📝 起點：首頁卡片點進去之後呢？
+
+首頁的課程卡片點進去之後，學習者會到達課程詳情頁（`/courses/[slug]`）。這是學習者決定「要不要開始學這門課」的關鍵頁面。它需要回答三個問題：這門課是什麼（hero）、會學到什麼（learning objectives）、課程內容長什麼樣（modules 列表）。
+
+### 🔧 動態路由的建立：方括號語法
+
+Next.js App Router 的動態路由用方括號語法：`app/courses/[slug]/page.tsx` 裡的 `slug` 參數對應 URL 裡的課程 slug。頁面元件接收 `params` 物件：
+
+```typescript
+// app/courses/[slug]/page.tsx
+export default async function CoursePage({
+  params,
+}: {
+  params: Promise<{ slug: string }>
+}) {
+  const { slug } = await params
+  // 用 slug 查詢 Sanity
+}
+```
+
+注意 `params` 在 Next.js 15+ 是 Promise——你必須 `await` 它才能拿到 `slug`。這是為了支援 streaming 和 parallel routes 的未來特性。如果你忘了 await，你拿到的是 Promise 物件而不是字串，查詢會失敗。
+
+### 💡 課程詳情的 GROQ 查詢：一次拿完所有資料
+
+詳情頁需要比首頁更豐富的資料。一個完整的課程詳情查詢：
+
+```groq
+*[_type == "course" && slug.current == $slug][0]{
+  title,
+  slug,
+  description,
+  level,
+  "totalLessons": count(modules[].lessons),
+  "totalDuration": sum(modules[].lessons[].duration),
+  "moduleCount": count(modules),
+  modules[]{
+    title,
+    description,
+    "lessons": lessons[]{
+      title,
+      slug,
+      "duration": duration
+    }
+  },
+  instructors[]->{name, image},
+  "studentCount": count(students)
+}
+```
+
+這個查詢做了五件事：
+
+1. **`slug.current == $slug`** — 用 URL 參數過濾特定課程
+2. **`[0]`** — 只取第一筆（slug 是唯一的）
+3. **aggregate** — `count(modules[].lessons)` 計算 lessons 總數，`sum(...)` 計算總時數
+4. **nested projection** — `modules[]{...}` 展開每個 module 的 title、description、lessons
+5. **reference 展開** — `instructors[]->{name, image}` 把 instructor 的 reference 展開成完整資料
+
+**為什麼要用一個查詢而不是多個？** 因為 Sanity API 的每次呼叫都有網路延遲。一個查詢拿到所有資料，比三四個查詢分別拿 course、modules、instructors 快得多。
+
+### ⚡️ Module 展開與 Reverse Reference
+
+Course 的 modules 是 embedded 在 course 文件裡的陣列——每個 module 是一個 inline object，裡面有 title、description、和 lessons 陣列。展開方式是 `modules[]{ title, lessons[]{...} }`。
+
+但有一個問題：lessons 還沒被建好（lesson 頁面在 [[learn/vertex-learning-platform/nodes/lesson-page-and-video|下一課]] 裡建），所以 lessons 的資料是不完整的。作者在 seed 階段就發現了這個問題——lesson 的 notes key 因為截斷而重複（39 節課共用同一個 key），修正後重新 seed 才恢復正常。
+
+更關鍵的是 **reverse reference**：lesson 文件本身不會存「我屬於哪門課」，因為在 Sanity 的資料模型裡，course embed 了 modules，modules embed 了 lessons。要從 lesson 反查父課程，你需要用 reverse reference：
+
+```groq
+*[_type == "lesson" && slug.current == $slug][0]{
+  title,
+  "course": *[_type == "course" && references(^._id)][0]{
+    title, slug
+  }
+}
+```
+
+`^._id` 指向父文件（lesson）的 ID，`*[_type == "course" && references(^._id)]` 找到包含這個 lesson 的 course。這在之後的 lesson 頁面和 breadcrumb 導覽裡會用到。
+
+**為什麼 reverse reference 重要？** 因為 Sanity 的 embedded 關聯是單向的——course 知道它有哪些 lessons，但 lesson 不知道自己屬於哪門課。如果你需要從 lesson 反推 course（例如在 breadcrumb 裡顯示「所有課程 > Python 基礎 > 變數與型別」），reverse reference 是唯一的辦法。
+
+### 🔧 課程詳情頁的 UI 結構
+
+從 reference 設計拆解，詳情頁有這些區塊：
+
+1. **Hero** — title、level badge、duration、studentCount。大標題 + 難度 badge + 時數 + 學生數。
+2. **學習目標** — description。文字描述，讓學習者快速判斷這門課適不適合自己。
+3. **課程內容** — modules[] → lessons[]。可折疊的 module 列表，每個 module 可以展開看到裡面的 lessons。這是典型的「sidebar curriculum」模式。
+4. **進度條** — 計算過的 lessons 數。簡單的進度指示（之後接 Clerk 進度追蹤）。
+
+課程內容區塊是最重要的——學習者在 lesson 頁面的側邊欄看到完整的課程結構，可以快速跳轉到任何一節課。
+
+### 📝 驗證：手動造訪每一門課
+
+完成後的驗證不是只看一門課——你需要手動造訪多門課程的詳情頁，確認：
+
+1. 每門課的 title、description、level 都正確
+2. modules 的展開正確（有幾個 module、每個 module 有幾節課）
+3. instructors 的名稱和頭像正確（reference 展開沒有斷裂）
+4. lessons 的連結可以點擊（即使 lesson 頁面還沒建好，`href` 應該指向正確的路徑）
+5. 頁面的 layout 在不同內容長度下不會崩壞（有些課程有 10 個 modules，有些只有 2 個）
+
+如果 lessons 顯示 404（因為 lesson 頁面還沒建），這是正常的——你只需要確認 `href` 是正確的，例如 `/lessons/python-basics`。
+
+### ⚡️ 在 Branch 上實作與 Seed 缺陷
+
+遵循工程流程：在 `feat/course-details` 分支上實作，完成後開 PR、讓 CodeRabbit 審查、merge。作者在這個 PR 裡還發現了一個 seed 缺陷——key 截斷導致 39 節課共用同一個 notes key——修正後重新 seed 才讓詳情頁正確顯示。
+
+**為什麼這很重要？** 因為資料層的 bug 會在頁面層才被發現。你在 seed 階段覺得「資料進去了」，但到了詳情頁才發現「39 節課的 notes 全部一樣」。這就是為什麼每一層都要驗證——schema、seed、頁面——而不是只驗證最後一層。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:5101-5216]]

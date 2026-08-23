@@ -1,0 +1,126 @@
+---
+id: search-architecture
+title: 智慧搜尋架構：瀏覽器到 Sanity MCP 的完整路徑
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/server-client-boundary
+  - vertex-learning-platform/mcp-context
+  - vertex-learning-platform/grounding-search
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6505-6800]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#search-config]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#search-behavior]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 智慧搜尋架構：瀏覽器到 Sanity MCP 的完整路徑
+
+## Learning goal
+
+能畫出「browser → server route → Sanity Context MCP → LLM → structured results」的完整資料流，說明為什麼 browser 永遠不直接碰 LLM，以及為什麼這個架構能讓搜尋結果不可能造假。
+
+## Lesson
+
+你可能以為搜尋就是「打字 → 系統找資料 → 結果回傳」，簡單三步。但 Vertex 的智慧搜尋跑的是一條更長、更精密的路徑——而且每個轉折都有它非存在不可的理由。
+
+先想一個畫面：你去百貨公司買東西。你不會直接衝進倉庫自己翻箱倒櫃，對吧？你會去服務台（server route）說你要什麼，服務台去查庫存系統（Sanity Context MCP），庫存系統問倉庫主管（LLM）哪個商品最符合你，主管照著庫存清單挑幾個，服務台再把商品搬到你面前（結果卡片）。你從頭到尾沒碰過倉庫鑰匙，也沒看過完整庫存清單。
+
+---
+
+### 為什麼瀏覽器不能直接問 AI
+
+你可能會想：搜尋不就是送一句話出去嗎，為什麼不讓瀏覽器直接問 LLM？原因有三個，每一個都是致命的：
+
+| 問題 | 白話解釋 | 後果 |
+| --- | --- | --- |
+| **token 外洩** | 瀏覽器直接呼叫 MCP，Sanity read token 就得傳到瀏覽器——任何人都能從 developer tools 撿走它 | 你的 Sanity 資料集被看光，未發佈課程、內部設定全部外流 |
+| **LLM 金鑰外洩** | OpenAI API key 也得放瀏覽器——每個人都能用你的 key 呼叫 API | 一晚跑掉幾千塊的帳單 |
+| **資料被竄改** | 瀏覽器端程式碼誰都能改，搜尋結果可以被改成任意內容 | 使用者看到假的課程資訊 |
+
+所以 Vertex 做了一個不可商量的決定：**瀏覽器永遠不直接呼叫 MCP 或 LLM**。所有碰 Sanity 資料和 LLM 的事，都必須在 server route 裡完成。這不是「最佳實踐」，是底線——違反它不是效能變差，是出安全事故。
+
+---
+
+### 完整的搜尋路徑
+
+走一遍「使用者按搜尋」到「結果上螢幕」的完整路徑：
+
+```
+使用者在搜尋欄打「如何用 React 做快取」
+  ↓ 查詢送到 /api/search（server route）
+server route 從 .env.local 讀取 OPENAI_API_KEY
+  ↓ 從 Sanity MCP 取得 context（課程清單 + 搜尋規則）
+server route 建立 MCP 工具迴圈，把 context 注入系統提示
+  ↓ LLM 看到：可搜尋的課程清單 + 查詢 + 搜尋規則
+LLM 決定哪幾個 lesson ID 最相關
+  ↓ 只回傳 IDs，不含任何事實
+server route 用 IDs 向 Sanity GROQ 查詢真實資料
+  ↓ 組裝結果卡片（只用 Sanity 提供的資料）
+結果回傳瀏覽器
+  ↓
+瀏覽器渲染結果卡片
+```
+
+這條路看起來很長，但每一步都有理由：
+
+1. **server route 讀 token**——確保 token 永遠不進瀏覽器
+2. **MCP context 注入**——確保模型只能看到你允許的資料範圍
+3. **LLM 只回傳 IDs**——確保模型只負責「選擇」，不負責「知道」
+4. **Sanity GROQ 查詢**——確保所有事實細節都從 Sanity 來
+5. **server route 組裝**——確保結果卡片完全由你的程式碼控制
+
+---
+
+### Sanity Context 在架構中的角色
+
+[[learn/vertex-learning-platform/elements/mcp-context|Sanity Context MCP]] 是整條路的「資料供應商」——它決定模型能看到什麼、不能看到什麼。它做三件事：
+
+**把 context 注入系統提示。** MCP 把 Sanity 裡的 context 文件（內容範圍過濾器 + 搜尋指令）注入每次請求的系統提示。模型回答前，已經先看到「你可以搜尋的課程清單」和「該怎麼搜尋」的規則。
+
+**限制資料範圍。** content scope filter 告訴模型「只能搜尋 course、module、lesson 文件」——看不到 instructor、category、更看不到 Studio 內部設定。就像服務台的庫存系統只顯示「可販售商品」，不會把員工休息室的冰箱清單也列出來。
+
+**動態調整。** 你可以在不改程式碼的情況下，透過 Sanity Studio 改 context 文件，下一次搜尋就自動用新規則。這就是「config-as-content」——搜尋行為是「文件」，不是「程式碼」。
+
+---
+
+### 為什麼這個架構能防止造假
+
+[[learn/vertex-learning-platform/elements/grounding-search|接地機制]]是這個架構的核心安全特性：
+
+1. **模型的輸出只有 IDs**——LLM 回傳 `lessonIds: ["lesson.react-caching", "lesson.ssr-overview"]`，沒有任何事實。
+2. **server route 用 IDs 查 Sanity**——用 GROQ 查這些 ID 的真實資料：標題、描述、影片 URL、章節、逐字稿區塊。
+3. **結果卡片只用 Sanity 資料**——組裝時每個欄位都來自查詢結果，不是模型生成。
+
+這代表就算模型選錯 ID（它以為某門課在講 React cache，其實在講 Python），結果卡片還是正確顯示那門課的真實內容。使用者至少能看到「這不是我要的」，而不是被編造的描述誤導。如果模型回傳了 Sanity 裡不存在的 ID——直接被過濾掉，不會上卡片。
+
+---
+
+### 為什麼搜尋是結果頁，不是聊天框
+
+AGENTS.md 做了一個明確決策：搜尋是「結果卡片頁面」，不是「聊天框」。差別很大：
+
+| 設計 | 做什麼 | 問題 |
+| --- | --- | --- |
+| **結果卡片頁** | 顯示所有匹配結果，按最相關排序，使用者自己挑 | 使用者有完整控制權，一次比較多個結果 |
+| **聊天框** | 模型一次回傳一個「最佳答案」 | 使用者看不到其他可能結果，容易被一個答案帶偏 |
+
+結果卡片的信念是：搜尋的價值是「讓使用者自己判斷哪個最有用」，不是「替使用者做決定」。聊天框會把使用者困在「模型覺得最有用」的答案裡，但模型可能錯了。
+
+---
+
+### 一個常踩的坑：MCP 需要先部署 Studio
+
+AGENTS.md 的 traps 特別警告：**Context MCP 需要已部署的 Studio 應用**。很多人以為 Web 部署了就夠了，但 MCP 伺服器要能連到 Sanity 資料集，Studio 得先上線。部署順序是：先 `cd studio && sanity deploy`，確認 MCP 正常，再部署 Web。
+
+---
+
+### 總結：三道防線
+
+**第一道是 server-client 邊界**——像大樓的門禁，token 和 MCP 連線永遠鎖在金庫（server），瀏覽器只能在大廳（client）等結果。
+
+**第二道是 Context 的範圍限制**——像圖書館的「可借閱書單」，模型只能看你允許的資料，看不到管理員設定或未發佈內容。
+
+**第三道是接地機制**——像圖書館員翻完書架才回答，不憑印象亂說。模型只挑書（IDs），書的內容（Sanity 供應的事實）才是你看到的東西。
+
+**這三道缺一不可——門禁擋 token 外洩，書單擋越權存取，接地擋虛構結果。**

@@ -1,0 +1,119 @@
+---
+id: lesson-page-layout
+title: 完整 lesson 頁：側邊欄、筆記與導覽
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/portable-text
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6069-6504]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 完整 lesson 頁：側邊欄、筆記與導覽
+
+## Learning goal
+
+能組裝完整的 lesson 頁面——包含側邊欄課程表、Portable Text 筆記、麵包屑導覽與下一課導航。
+
+## Lesson
+
+### 📝 為什麼影片播放器不夠
+
+在 [[learn/vertex-learning-platform/elements/provider-embed|上一步]] 中，你已經有了能播放影片的 `<VideoPlayer>` 組件。但一個學習平台的 lesson 頁不只是「一個播放器」——學習者需要知道「我在哪門課的哪個模組」（導覽）、需要看「這課的重點筆記」（內容）、需要「跳到下一課」（進度推進）。
+
+一個典型的 lesson 頁包含四個核心元件：
+
+| 元件 | 功能 | 資料來源 |
+| --- | --- | --- |
+| 麵包屑 | 讓學習者知道自己在哪 | 父課程 + module + lesson |
+| 影片播放器 | 核心學習內容 | lesson 的 videoUrl |
+| 筆記區塊 | 結構化複習 | lesson 的 notes（Portable Text） |
+| 側邊欄 | 課程導覽跳轉 | 父課程的 modules 陣列 |
+
+影片只是頁面頂部的核心元件，圍繞它的是一整套學習體驗的 UI。
+
+### 🍞 麵包屑：讓學習者知道自己在哪
+
+麵包屑（Breadcrumbs）是一條導覽路徑，通常出現在頁面頂部，格式像：
+
+所有課程 → Advanced React → Module 3 → useState Deep Dive
+
+在 lesson 頁中，麵包屑的每一層都對應一個 Sanity 資料來源：
+
+- **所有課程** → `/courses`（靜態路由）
+- **課程名稱** → 父課程的 `title`（從反向引用取得）
+- **模組名稱** → lesson 所屬的 module `title`（從父課程的 `modules` 展開取得）
+- **課名** → 當前 lesson 的 `title`
+
+這些資料全部來自 [[learn/vertex-learning-platform/elements/reverse-reference|反向引用]] 查詢的結果——一次查詢就拿到了所有導覽所需的資訊。你不需要額外的 API 請求來填補導覽列的內容。
+
+**為什麼麵包屑在教育平台特別重要？** 因為學習者的行為不是 linear 的——他們會在模組之間跳轉、回頭複習前面的課、或直接跳到特定章節。麵包屑提供了「我在哪」的錨點，讓學習者在跳轉後不會迷路。
+
+### 📋 側邊欄課程表：結構化的學習路徑
+
+側邊欄（Sidebar）顯示的是整門課程的模組和課程列表，讓學習者能快速跳轉到任何一課。它的資料來自父課程的 `modules` 陣列。
+
+渲染時需要處理兩個關鍵細節：
+
+1. **當前課高亮**：用 URL 的 `slug` 比對每個 lesson 的 `slug`，高亮當前正在看的課（不同的背景色或粗體）
+2. **已完成標記**：如果平台有進度追蹤，可以用 PostHog 或 Clerk 的使用者資料在每課旁邊加一個綠色勾勾
+
+側邊欄的結構是：外層遍歷 `course.modules`，每個 module 展開它的 `lessons` 列表，每個 lesson 是一個連結。當前 lesson 的連結會被加上高亮樣式。
+
+### 📖 Portable Text 筆記：結構化的學習內容
+
+[[learn/vertex-learning-platform/elements/portable-text|Portable Text]] 是 Sanity 儲存富文字的格式。每份 lesson 的 `notes` 欄位是一個 JSON 陣列，每個元素代表一個區塊（段落、標題、列表、程式碼區塊等）。
+
+渲染方式是使用 `@portabletext/react` 套件提供的 `<PortableText>` 組件。它會根據每個 block 的 `_type` 和 `style` 自動選擇對應的渲染方式。你可以透過 `components` prop 自訂每種 block 的渲染邏輯，例如為程式碼區塊加上語法高亮。
+
+在 lesson 頁中，筆記區塊通常放在影片下方。影片提供直覺理解，筆記提供結構化複習——兩者互補。
+
+**為什麼用 Portable Text 而不是直接存 HTML？** 因為 Portable Text 是純 JSON 結構，你可以從中穩定地取出文字做搜尋、分析、或在非 Web 環境渲染。而且 HTML 有 XSS 攻擊風險——直接儲存並渲染 HTML 需要額外的 sanitization 步驟，Portable Text 天然避免了這個問題。
+
+### ➡️ 下一課導航：推進學習進度
+
+頁面底部需要一個「下一課」按鈕，讓學習者能無縫推進。導航邏輯：
+
+1. 從父課程的 `modules` 陣列中，找到當前 lesson 所在的 module 和位置
+2. 如果當前 lesson 是 module 的最後一課，下一課是下一個 module 的第一課
+3. 如果當前 lesson 是課程的最後一課，顯示「課程完成」而不是導航連結
+
+這需要在 [[learn/vertex-learning-platform/nodes/lesson-page-and-video/sanity-lesson-query|查詢步驟]] 中就拿到完整的模組結構——每個 module 的 lessons 列表必須被展開。反向引用查詢的 `modules[]->lessons[]->` 部分已經提供了這些資料。
+
+### 🏗️ 組裝：把所有元件拼在一起
+
+最終的 lesson 頁面結構：
+
+```
+Breadcrumbs（麵包屑導覽）
+┌─────────────────────────────────────────┐
+│  VideoPlayer（lazy-loading 嵌入）        │
+├─────────────────────┬───────────────────┤
+│  LessonNotes        │  Sidebar          │
+│  （Portable Text）   │  （課程表）         │
+│                     │  Module 1: ...    │
+│                     │  Module 2: ...    │
+│                     │  → Lesson A (當前) │
+│                     │    Lesson B       │
+│                     │  Module 3: ...    │
+├─────────────────────┴───────────────────┤
+│  Next Lesson Button（下一課導航）         │
+└─────────────────────────────────────────┘
+```
+
+左側是主要內容（影片 + 筆記），右側是導覽（側邊欄）。這是教育平台最常見的佈局——影片和筆記佔據大部分視覺空間，側邊欄作為結構化導覽隨時可用。
+
+### 🎯 為什麼這個佈局有效
+
+這個佈局解決了三個學習場景：
+
+1. **專注學習**：影片在頂部，筆記在下方，學習者可以從上到下 linearly 完成一課
+2. **導覽跳轉**：側邊欄讓學習者能快速跳到課程的任何位置，不需要退回首頁再重新進入
+3. **進度推進**：底部的「下一課」按鈕讓完成一課的學習者能立即開始下一課，不需要手動尋找
+
+三個場景覆蓋了學習者在 lesson 頁上的主要行為模式。佈局不是隨意的——它是根據學習者的行為需求反向推導出來的。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6069-6504]]

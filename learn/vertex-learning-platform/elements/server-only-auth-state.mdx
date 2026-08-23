@@ -1,0 +1,151 @@
+---
+id: server-only-auth-state
+title: "Server-Only Auth State：認證狀態的伺服器端邊界"
+subject: vertex-learning-platform
+tier: 2
+order: 14
+type: article
+nodes:
+  - vertex-learning-platform/clerk-auth-and-boundaries
+sources:
+  - "[[sources/vertex-learning-platform/AGENTS.md#app-structure]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#traps]]"
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:2789-3296]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Server-Only Auth State：認證狀態的伺服器端邊界
+
+## Problem Statement
+
+認證完成後，系統必須追蹤「使用者是誰」——這就是 auth state（認證狀態）。在 Next.js 的 App Router 裡，server component 和 client component 並存，而 auth state 的存放位置直接決定安全性。如果 auth state（例如 Clerk 的 session token 或 user id）出現在 client component 裡，它就可能被打包進 JavaScript bundle，暴露在瀏覽器端。更危險的是，如果 client component 持有 auth state，它可能被用來呼叫不該呼叫的 API（例如直接寫入 Sanity 或呼叫 OpenAI）。問題是：怎麼確保 auth state 只在 server 端流動，不洩漏到瀏覽器？
+
+## Why it matters
+
+AGENTS.md 的 app structure 章節把 server/client 邊界稱為整個應用的安全架構（security architecture）。Auth state 是這條邊界上最敏感的資料——它代表「你是誰」以及「你能做什麼」。如果 auth state 洩漏到 client 端，攻擊者可以用它來：
+
+1. **假冒使用者身份**：用洩漏的 session token 存取其他人的資料。
+2. **繞過權限控制**：用 server-only 的 token 執行不該在 client 端執行的操作。
+3. **竄改資料**：如果 write token 洩漏，攻擊者可以直接修改 Sanity 裡的內容。
+
+在 Vertex 的 agentic 工作流中，AI 代理在實作時很容易犯這類錯誤——把 `auth()` 的回傳值傳給 client component、在 `use client` 的元件裡呼叫需要認證的 API。這些「能跑」的程式碼實際上已經破壞了安全邊界。
+
+## How it works
+
+### Auth state 在 Next.js 裡的流動路徑
+
+在 Next.js App Router 中，auth state 的正確流動路徑是：
+
+```
+Clerk middleware (proxy)
+    ↓ 讀取 session cookie，驗證 JWT
+    ↓ 附加 auth state 到請求物件
+Server Component / Route Handler
+    ↓ 呼叫 auth()，取得 userId 和 session
+    ↓ 在 server 端使用（查詢資料、驗證權限）
+    ↓ 把需要的結果作為 props 傳給 client component
+Client Component
+    ↓ 只接收渲染所需的資料（例如使用者名稱、頭像 URL）
+    ↓ 不持有 token、不持有 userId（除非是公開資訊）
+```
+
+**關鍵規則：auth state 從 server 流向 client 的唯一管道是 props。** Client component 從 server component 接收資料，但它拿不到 token 本身——token 始終留在 server 端。
+
+### Clerk 的 `auth()` 函數
+
+Clerk 提供了一個 `auth()` 函數，在 server component 或 route handler 裡呼叫：
+
+```typescript
+// app/my-learning/page.tsx (server component)
+import { auth } from '@clerk/nextjs/server'
+
+export default async function MyLearningPage() {
+  const { userId } = await auth()
+  
+  if (!userId) {
+    redirect('/sign-in')  // 未登入，重導向
+  }
+  
+  // userId 只在 server 端存在，不會到達瀏覽器
+  const progress = await sanityFetch({
+    query: groq`*[_type == "progress" && userId == $userId]{...}`,
+    params: { userId },
+  })
+  
+  return <LearningDashboard progress={progress} />
+}
+```
+
+在這個例子中：
+- `userId` 在 server component 裡取得，用來查詢 Sanity 資料。
+- `progress` 是查詢結果，作為 props 傳給 `LearningDashboard`（可以是 client component）。
+- `userId` 本身從來沒有出現在 client 端——它只在 server 端流動。
+
+### Client component 只拿結果，不拿 token
+
+```typescript
+// components/LearningDashboard.tsx ('use client')
+'use client'
+
+export function LearningDashboard({ progress }) {
+  // progress 是從 server 傳來的資料，不包含 token
+  // 這個元件可以在瀏覽器端渲染，但它拿不到 auth token
+  return (
+    <div>
+      {progress.map(p => (
+        <div key={p.lessonId}>{p.lessonTitle} — {p.completed ? '✅' : '⬜'}</div>
+      ))}
+    </div>
+  )
+}
+```
+
+### Vertex 的 auth state 流動實踐
+
+| 操作 | Auth state 位置 | 說明 |
+|------|----------------|------|
+| Middleware 解析 session | Server (proxy) | 讀取 cookie，驗證 JWT |
+| 首頁渲染 | 無 | 公開頁面，不需要 auth state |
+| 課程頁渲染 | 無 | 公開頁面，不需要 auth state |
+| 我的學習頁 | Server component | `auth()` 取得 userId，查詢進度資料 |
+| 進度寫入 API | Route handler | `auth()` 驗證身份，確認是本人操作 |
+| Header 使用者頭像 | Client component | 從 server props 接收頭像 URL（公開資訊） |
+
+### 驗證：build 時的防線
+
+Next.js 的 bundler 在 `npm run build` 時會檢查 client bundle 裡有沒有不該出現的環境變數。如果你在 client component 裡使用了 `process.env.CLERK_SECRET_KEY`，build 會失敗（因為 secret key 沒有 `NEXT_PUBLIC_` 前綴，bundler 不會把它打包進 client bundle，導致 client component 拿不到值而報錯）。這是一道被動防線——它不是設計來擋安全問題的（它擋的是「拿不到值」的錯誤），但間接防止了 secret key 洩漏。
+
+## In plain terms
+
+想像一家醫院：病人（使用者）走進來，接待處（middleware）幫你登記身份、發一張掛號單（session）。醫生（server component）拿著掛號單去病歷室查你的資料，然後根據資料診斷。護士（client component）只會收到醫生寫的處方箋（props），不會拿到你的掛號單或病歷——掛號單和病歷始終留在醫院內部（server 端）。
+
+## Practical use
+
+在 Vertex 專案中建立 server-only auth state：
+
+1. **所有 `auth()` 呼叫都在 server component 或 route handler 裡**：不要在 `use client` 的元件裡呼叫 `auth()`。
+2. **把需要的資料作為 props 傳給 client component**：client component 只接收渲染所需的資料（例如使用者名稱、進度資料），不接收 token 或 userId。
+3. **在需要保護的 route handler 裡驗證身份**：例如 `/api/progress` 的 POST handler 先呼叫 `auth()`，確認 `userId` 存在才允許寫入。
+4. **透過 `npm run build` 驗證**：確保沒有把 server-only 的環境變數放進 client component。
+5. **要求 AI 代理解釋每一個檔案的資料流動**：確認 auth state 沒有從 server 泄漏到 client。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/server-client-boundary|Server-Client 邊界]] — server-only auth state 是 server-client 邊界在認證層的核心實踐，兩者共同確保「token 永遠不出現在瀏覽器端」
+- [[learn/vertex-learning-platform/elements/token-public-secret-split|Token Public/Secret Split：金鑰可見性分類]] — token 安全分割定義了「什麼金鑰可以出現在哪裡」，server-only auth state 定義了「認證狀態的流動路徑」
+- [[learn/vertex-learning-platform/elements/auth-middleware-resolver|Auth Middleware Resolver：解析不阻擋]] — middleware 解析 auth state 並附加到請求，但 auth state 的後續使用全在 server 端
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/AGENTS.md#app-structure]] — AGENTS.md 的 app structure：「the browser never holds private tokens, never calls MCP/LLM, never writes content/progress」
+- [[sources/vertex-learning-platform/AGENTS.md#traps]] — 陷阱：「Clerk secret server-only, middleware protects routes; write token server-only」——auth state 的 server-only 邊界
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:2789-3296]] — Clerk 的 `auth()` 函數、middleware 的 handshake 機制、以及如何在 server component 裡使用 auth state
+
+## Questions
+
+### Q1. 為什麼在 `use client` 的元件裡不能呼叫 `auth()`？
+A1. 因為 `use client` 的元件會被打包進 JavaScript bundle，在瀏覽器端執行。`auth()` 需要存取 server 端的 session cookie 和 Clerk 的 secret key——這些在瀏覽器端不存在。即使你把 `auth()` 放進 client component，它也會因為缺少 server 端資源而失敗。更重要的是，如果框架允許它在 client 端運行，它就必須把 token 傳到瀏覽器——這是安全災難。
+
+### Q2. Vertex 的 Header 上顯示使用者頭像——這個頭像 URL 是怎麼從 server 傳到 client 的？
+A2. Header 通常是一個 server component，它先呼叫 `auth()` 取得 userId，再用 userId 查詢 Clerk 的使用者資料（包括頭像 URL），然後把頭像 URL 作為 props 傳給 Header 裡的 client component（例如 UserButton）。Client component 只收到一個圖片 URL，不收到 userId 或 session token。頭像 URL 本身是公開的（任何人都可以看），所以出現在 client 端沒有安全風險。

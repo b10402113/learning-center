@@ -1,0 +1,105 @@
+---
+id: decision-architecture
+title: 決策架構 (Decision Architecture)
+subject: vertex-learning-platform
+tier: 2
+order: 8
+type: article
+nodes:
+  - vertex-learning-platform/agents-and-agents-md
+sources:
+  - "[[sources/vertex-learning-platform/AGENTS.md#decisions]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md_GUIDE.pdf#sections]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 決策架構 (Decision Architecture)
+
+## Problem Statement
+
+一個 AI 辅助的專案裡，最大的隱性成本不是寫 code，而是同一個決定被反覆重做。你今天決定搜尋是結果頁面不是聊天框，明天 AI 做新功能時又把搜尋改成聊天框——因為它不知道你已經決定過。更糟的是，你也不知道它已經偷改了，直到功能上線、使用者問「為什麼搜尋變了？」才發現。問題的根源是：決定存在人腦裡，不在系統裡。人腦會忘、會散、會在每次對話裡重新出現，而 AI 每次啟動都是空白紙——它沒有記憶，除非你把記憶寫成文件。決策架構（Decision Architecture）要解決的正是這個缺口：把每一個已經做出的決定，用一份穩定的、可被讀取的文件記錄下來，讓 AI 在每次實作前先讀這份文件，從此不再重新爭論同一個決定。
+
+## Why it matters
+
+搜尋品質和安全性（search quality and safety）依賴決策的穩定性。當「搜尋必須 grounded——絕不編造課程、價格、時長或時間戳」這條規則只存在你的腦中，AI 可能在下一個功能裡就忘了它，或者更危險地，它會發明一個看似合理但不 grounded 的搜尋實作，把不存在的價格或課程推給使用者。反過來說，當這條規則被寫進操作手冊（operational manual），AI 每次讀到它，就等於被提醒一次——不是一次性的提醒，而是永久的、不衰退的提醒。
+
+決策架構的第二個價值是**防止範圍蠕變（scope creep）**。操作手冊裡明確寫了「build only what is listed」，但如果沒有把「已決定的東西」也列進去，AI 會把「不在清單上」的東西當成「還沒決定」，然後自己決定。例如，如果「進度只透過伺服器路由（server route）寫入」沒有被記錄，AI 可能會在新功能裡偷偷讓瀏覽器直接寫進度，打破安全邊界。把決定記錄在操作手冊裡，就是在告訴 AI：這些不是可選項，這些是已經定案的軌道。
+
+第三個價值是**降低協作摩擦**。在一個「人類是產品思考者、AI 是實作代理」的工作流裡，每次對話都會產生新決定。如果這些決定不被收進操作手冊，下一次對話的 AI 就會從零開始，而你得重新解釋一遍所有歷史脈絡。決策架構把每次對話的精華固化成系統的長期記憶，讓下一次對話從上次停下來的地方開始，而不是從頭來過。
+
+## How it works
+
+決策架構由三個層次組成：
+
+### 記錄位置：Decisions already made 章節
+
+操作手冊裡有一個專門的章節叫「Decisions already made」，它的唯一用途就是記錄已經做出的、不應在功能開發中重新討論的決定。每一條決策都是具體的、可執行的規則，不是抽象的靈感或口號。例如：
+
+- 搜尋是 Sanity Context MCP 加 LLM，以結果卡片（result cards）呈現，不是聊天框（chatbox）
+- 搜尋必須 grounded，絕不編造課程、價格、時長或時間戳
+- 影片 intelligence 存在專門的影片文件裡（TOC 加時間戳 transcript chunks），作為內部查詢使用
+- 時間戳解析時章節優先（chapters first），然後才是 transcript
+- 播放留在站內，透過 provider embeds 加 start-seconds 參數
+- 內容用 Portable Text 保持連貫與結構化
+- Clerk 負責認證（auth）
+- 進度以 Clerk user id 為鍵，只透過伺服器路由寫入
+- PostHog 記錄 engagement events
+- 搜尋是完整結果頁面，帶計數與排序
+- 部分介面（My Learning、通知、Notes tab、free-preview badge）是展示用的（presentational only）
+
+這些決定不是寫完就結束。它們的設計目的是在之後每一個功能開發時，AI 讀到操作手冊就等於讀到這些決定，不需要人類再次提醒。
+
+### 記錄原則：具體、可執行、不模糊
+
+決策架構的一條關鍵原則是：**具體打敗靈感（specific beats inspirational）**。最常見的錯誤是把決策寫成模糊的口號——「建出乾淨的 code」、「用最佳實踐」——這些對 AI 來說等於沒有規則，因為 AI 會用它認為「合理」的方式填空，而你永遠不知道它填的是什麼。好的決策是具體的：「進度只透過伺服器路由寫入」比「注意安全性」好一百倍。AI 讀到具體規則就執行具體規則；讀到模糊口號就自己發明。
+
+另一條原則是**負面清單（negative list）**。技術棧（tech stack）章節不只列了「用什麼」，還列了「不用什麼」——不用 `@sanity/context` plugin（如果它落後 Sanity major）、不用 `text::semanticSimilarity()`（除非 embeddings 已啟用）、不用公開 dataset、不用客戶端 token。負面清單之所以重要，是因為 AI 對「看起來合理但實際錯誤」的替代方案特別有親和力。一個正面規則只能阻止「不知道有替代方案」的情況；一個負面規則才能阻止「知道有一個替代方案、覺得它看起來不錯、於是選了它」的情況。
+
+### 維護時機：大決策才更新，小細節留在 prompt 裡
+
+決策架構不是一本無限膨脹的日誌。只有**大決策**才進操作手冊——路由模型改變、認證模型改變、搜尋策略改變、資料模型改變、新 provider 引入、或反覆出現的錯誤。小的、功能特定的細節留在每個功能的 prompt 檔（per-feature prompt file）裡，不在操作手冊中。這樣操作手冊保持精簡，規則不會被淹沒在細節裡。
+
+## Practical use
+
+在 Vertex 裡，決策架構的具體效果可以在幾個地方觀察到：
+
+搜尋行為章節（search behavior section）把「搜尋是結果頁面不是聊天框」這條決策展開成詳細規格：完整結果頁面、按 best-first 排序、帶計數與排序控制、預設「最相關」、兩種結果類型（video result 與 lesson result）、chapters-first 的時間戳解析。每一條都直接對應 Decisions already made 裡的一條記錄。如果這些決定沒被記錄，AI 在做新的搜尋功能時可能會發明一個聊天框、或省略計數、或省略排序控制——因為它不知道這些是已經決定過的。
+
+安全性方面，「進度只透過伺服器路由寫入」這條決策讓伺服器/客戶端邊界（server/client boundary）真正生效。瀏覽器不持有私密 token、不呼叫 MCP 或 LLM、不直接寫入內容或進度——這些全是同一條決定的不同面向。如果沒有把「進度只透過伺服器路由寫入」記錄下來，AI 可能在新功能裡為了「方便」讓客戶端直接寫進度，打破整個安全架構。
+
+另一個實際效果是**展示介面（presentational surfaces）**。My Learning、通知、Notes tab、free-preview badge 這些介面被標記為「展示用的」，意思是它們目前不連接真正的後端邏輯。如果沒有記錄這條決定，AI 可能會為這些介面建出完整的 CRUD 功能——投入大量 effort 卻偏離了產品的優先順序。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/agents-md|AGENTS.md 操作手冊]] — the decision architecture lives inside AGENTS.md; without the manual, there is no stable place to record decisions.
+- [[learn/vertex-learning-platform/elements/scope-boundary|範圍邊界 (Scope Boundary)]] — scope boundary decides what to build; decision architecture records the specifics of those decisions so they are never re-litigated.
+- [[learn/vertex-learning-platform/elements/search-quality-dependency|搜尋品質依賴 (Search Quality Dependency)]] — the grounded rule, the results-page-not-chatbox decision, and the chapters-first timestamp decision are all recorded in the decision architecture to protect search quality.
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/AGENTS.md#decisions]] — the "Decisions already made" section in full: each rule, what it constrains, and why it exists.
+- [[sources/vertex-learning-platform/AGENTS.md_GUIDE.pdf#sections]] — the guide's explanation of why the decisions section exists, how negative instructions work, and how to maintain the manual over time.
+- [[sources/vertex-learning-platform/AGENTS.md#search-behavior]] — how the decisions cascade into detailed search specifications.
+- [[sources/vertex-learning-platform/AGENTS.md#traps]] — the traps section as a companion to decision architecture: practical warnings that look-correct-but-wrong code avoids.
+
+## Questions
+
+### Q1. 為什麼「搜尋必須 grounded」這條決策需要被記錄在操作手冊裡，而不只是在對話中提過一次就好？如果沒有記錄，AI 在下一個搜尋相關功能中可能犯什麼錯？
+
+A1. 因為 AI 每次啟動都是空白紙——它沒有跨對話的記憶，除非你把記憶寫成文件。如果「grounded」只在對話中提過一次，下一個功能的 AI 就不知道這條規則存在，它可能會為了「看起來更完整」而讓搜尋返回不存在的課程名稱、捏造的價格或捏造的時長——這些在技術上完全可行，但對使用者來說是災難。記錄在操作手冊裡，每次 AI 讀手冊就等於被提醒一次，不衰退、不遺忘。
+
+### Q2. 關係題：決策架構與範圍邊界（Scope Boundary）如何協作？範圍邊界負責什麼，決策架構負責什麼？
+
+A2. 範圍邊界負責「做什麼、不做什麼」的上層清單——它定義了專案的形狀。決策架構負責「已決定的東西的具體內容」——它把範圍邊界裡的每一條決定展開成可執行的規則。例如，範圍邊界說「特色功能是智慧搜尋」；決策架構說「搜尋是結果頁面不是聊天框、必須 grounded、時間戳 chapters-first」。範圍邊界是地圖的外框，決策架構是框裡的每一條路。
+
+### Q3. 價值判斷題：操作手冊裡的「負面清單」（negative list）比正面規則更重要嗎？為什麼 AI 特別容易選擇「看起來合理但實際錯誤」的替代方案？
+
+A3. 負面清單之所以比正面規則更關鍵，是因為正面規則只能覆蓋「AI 不知道有替代方案」的情況；負面規則才能覆蓋「AI 知道有一個替代方案、覺得它看起來不錯、於是選了它」的情況。AI 的本質是最大化「看起來合理」的東西，它不會主動去辨別「合理」和「正確」之間的差距。一個負面規則（「不用客戶端 token」）之所以有效，是因為它直接攔截了一個 AI 很可能自己選的路——把 token 放在瀏覽器端很方便，而且看起來沒問題，但實際上洩漏了私密資訊。負面清單就是在 AI 的「合理」路徑上提前放好路障。
+
+## Sources
+
+- [[sources/vertex-learning-platform/AGENTS.md#decisions]]
+- [[sources/vertex-learning-platform/AGENTS.md_GUIDE.pdf#sections]]
+- [[sources/vertex-learning-platform/AGENTS.md#search-behavior]]
+- [[sources/vertex-learning-platform/AGENTS.md#traps]]

@@ -1,0 +1,158 @@
+---
+id: grounding-and-config
+title: 搜尋接地與配置：讓 AI 只能挑選、不能編造
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/grounding-rule
+  - vertex-learning-platform/search-config-document
+  - vertex-learning-platform/grounding-search
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_5:6801-7352]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#search-behavior]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#search-config]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#decisions]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 搜尋接地與配置：讓 AI 只能挑選、不能編造
+
+## Learning goal
+
+能說明「模型只選 ID、Sanity 供事實」的 grounding 機制，以及 config-as-content 如何讓你改行為不改程式碼，並能分辨 Context 文件和 inline system prompt 的差別。
+
+## Lesson
+
+你可能以為搜尋最難的是「怎麼讓 AI 看懂你的問題」。但真正難的是另一件事：**怎麼讓 AI 幫你挑結果，卻不讓它自己編結果**。這兩件事聽起來很像，結果天差地別——就像請朋友推薦餐廳（好事），跟讓朋友憑空捏造一間不存在的餐廳（災難）。
+
+接地（Grounding）就是用來解決這件事的：確保搜尋結果裡每一句話，都能在 Sanity 資料庫裡找到真實出處。而搜尋配置（Search Config）解決另一件事：怎麼不動程式碼就調整搜尋行為。這兩個機制一起決定搜尋的「品質」和「靈活性」。
+
+---
+
+### 接地規則：AI 只選 ID，Sanity 供事實
+
+大型語言模型（LLM）有個天生的毛病：它是被訓練來生成「合理的文本」，不是生成「真實的資料」。在搜尋裡，這代表它可能回你一個「看起來很像真的」課程名、一個「很合理」的時間戳、一段「很專業」的描述——但全是編的。
+
+接地規則的做法就一句話：**模型只負責挑 lesson ID，Sanity 負責供應事實**。
+
+```
+模型的回傳格式（只有 IDs）:
+{
+  lessonIds: ["lesson.react-caching-overview", "lesson.server-side-rendering"]
+}
+
+Sanity 回傳的事實（完整資料）:
+{
+  "lesson.react-caching-overview": {
+    title: "React Cache 概覽",
+    description: "深入了解 React 內建的快取機制...",
+    module: "效能優化",
+    course: "Next.js 深入解析",
+    videoUrl: "https://youtube.com/watch?v=...",
+    chapters: [{startSeconds: 0, label: "前言"}, ...]
+  }
+}
+```
+
+為什麼這樣設計？因為**模型的「選擇能力」遠強過它的「事實能力」**。它能根據查詢語義判斷哪門課相關——這不用它真的「知道」那門課，只要看到課程清單做語義比對就行。但它不該負責「生成」描述、標題、時間戳——它沒有 Sanity 的即時資料，只能靠猜。
+
+就像請朋友幫你從書架挑書：他能憑書名封面判斷你可能喜歡哪幾本（選擇），但你不該讓他猜書裡寫了什麼（事實）——他又沒讀過。
+
+---
+
+### 兩階段時間戳解析
+
+搜尋常常命中影片裡的某一秒，系統得決定怎麼把那個時間點秀出來。接地規則確保時間戳也來自 Sanity，不是模型編的：
+
+| 階段 | 觸發條件 | 做什麼 | 結果 |
+| --- | --- | --- | --- |
+| **第一階段：章節匹配** | 命中秒數落在某個章節範圍內 | 顯示章節標籤（如「React Cache 概覽」） | 卡片顯示結構化章節名 |
+| **第二階段：逐字稿匹配** | 不在任何章節範圍內 | 顯示對應逐字稿區塊內容 | 卡片顯示具體內容描述 |
+
+**章節優先（chapters-first）** 是因為章節名比逐字稿片段好懂——「React Cache 概覽」比「講者提到 React 內建快取機制可以用來避免重複渲染...」清楚得多。
+
+時間戳哪來的？從 Sanity 的影片文件（video document）來。它含章節列表和逐字稿區塊，每塊都有 `startSeconds`。server route 收到模型 ID 後，用 ID 查 Sanity、拿到影片文件、再依命中秒數找對應章節或區塊。
+
+---
+
+### 影片文件是內部查表
+
+AGENTS.md 有個明確決策：影片文件是「內部查表」，不是獨立搜尋實體。搜尋結果的「影片結果」永遠不直接引用影片文件——它引用**用了那支影片的課程**。
+
+```
+影片文件（內部資料）
+  → 含章節列表 + 逐字稿區塊
+  → 透過影片 URL 連結到使用它的課程
+  → 搜尋結果顯示「課程」+ 命中時間點
+```
+
+為什麼？因為使用者想找的是「相關課程」，不是「相關影片文件」。影片文件是「內部翻譯器」——把影片內容翻成可搜尋的結構，對外永遠透過課程呈現。就像圖書館的索引卡（影片文件）幫你找到書（課程），但你拿走的是書，不是索引卡。
+
+---
+
+### 文字匹配：基於 token，不是整句
+
+搜尋用 wildcard 關鍵字匹配 + OR 多詞匹配，不用整句匹配（phrase match）：
+
+- 輸入「React 框架」→ 同時匹配含「React」**或**「框架」的文件
+- 不是只匹配完整「React 框架」這個詞組
+- Portable Text 內容透過純文本投影（plain-text projection）匹配，富文本也搜得到
+
+為什麼不直接用 semantic search？因為 Vertex 規模是 120 部影片——token-based 已夠準，還不需要 embeddings 基礎設施。更重要的是，token-based 行為可預測：你清楚知道它為什麼命中某個結果。
+
+---
+
+### Config-as-content：改行為，不改程式碼
+
+搜尋行為不寫死在程式碼裡，而是由 Sanity 的 Context 文件控制。文件有兩個核心欄位：
+
+| 欄位 | 白話說明 | 例子 |
+| --- | --- | --- |
+| **Content scope filter**（內容範圍過濾器） | 告訴模型「只能搜這些類型的文件」 | "只搜 course、module、lesson 文件" |
+| **Instruction deltas**（指令差異） | 告訴模型「怎麼搜」的行為規則 | "用 wildcard 關鍵字匹配，別用整句匹配" |
+
+改 Context 文件不用改程式碼、不用跑 CI/CD、不用重新部署。你在 Sanity Studio 改完，下次搜尋自動用新規則。這跟改 inline system prompt（寫在程式碼裡的系統提示）完全不同——後者要重啟伺服器才生效。
+
+```
+改 Context 文件：
+  你 → Sanity Studio → 改文件 → 下次請求即生效
+
+改 inline system prompt：
+  你 → 改程式碼 → 重新部署/重啟 → 才生效
+```
+
+---
+
+### 雙重寫入：關鍵規則的雙重保險
+
+你可能會問：「Context 文件這麼方便，幹嘛還要把規則寫進 inline system prompt？」
+
+因為**模型比較聽 inline system prompt 的話**。Context 文件動態可調，但如果你只把規則放 Context，模型偶爾會不鳥它。把關鍵規則同時寫兩處，等於上雙重保險：
+
+- **Context 文件**：方便調整、不影響部署——調搜尋範圍、排序、匹配邏輯
+- **Inline system prompt**：確保底線規則一定被執行——寫「不要編造課程」「結果必須從 Sanity 查詢」這種不能商量的規則
+
+就像餐廳：「每天菜色」寫黑板上（Context），方便天天改；「食品衛生標準」刻在牆上（inline），不會隨便改。
+
+---
+
+### 兩種結果類型
+
+搜尋出兩種結果，來自不同匹配路徑：
+
+| 結果類型 | 匹配來源 | 卡片內容 | 使用者動作 |
+| --- | --- | --- | --- |
+| **影片結果**（video result） | 影片文件的章節和逐字稿區塊 | 課程/模組/單元標籤、縮圖、影片長度、描述、命中秒數 | 點擊後從該秒開始播 |
+| **課程結果**（lesson result） | 課程的元資料 | 主題匹配 | 點擊後開對應課程頁 |
+
+兩種結果合併、按具體性（specificity）排序。影片結果有具體時間點，通常排前面；lesson result 當補充。結果不設上限（no capping），空狀態指到目錄頁（catalog）。
+
+---
+
+### 總結：品質 + 靈活性 = 接地 + 配置
+
+**接地規則確保搜尋結果是「真的」**——AI 只選 ID，Sanity 供事實，你永遠不會在卡片上看到資料庫裡不存在的東西。
+
+**搜尋配置確保搜尋行為是「可調的」**——Context 文件讓你改行為不改程式碼，雙重寫入確保底線不被忽略。
+
+這兩個機制合起來，就是 Vertex 搜尋的核心哲學：**信任但核驗——讓 AI 幫你挑選，但用 Sanity 驗證它挑得對不對。**

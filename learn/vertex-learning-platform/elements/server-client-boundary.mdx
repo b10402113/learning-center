@@ -1,0 +1,106 @@
+---
+id: server-client-boundary
+title: Server-Client 邊界
+subject: vertex-learning-platform
+tier: 2
+order: 10
+type: article
+nodes:
+  - vertex-learning-platform/agents-and-agents-md
+sources:
+  - sources/vertex-learning-platform/AGENTS.md app-structure
+  - sources/vertex-learning-platform/AGENTS.md traps
+  - sources/vertex-learning-platform/AGENTS.md_GUIDE.pdf sections
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Server-Client 邊界
+
+## Problem Statement
+
+一個全端應用（full-stack application）同時有伺服器端程式碼和瀏覽器端程式碼——兩邊都能執行 JavaScript，但能做的事完全不同。伺服器端可以安全地存取資料庫 token、呼叫外部 API、執行背景任務；瀏覽器端會被使用者看到、下載原始碼、在 developer tools 裡檢視任何打包進去的東西。如果不清楚哪段程式碼在哪邊跑，就很容易把不該暴露的東西送到瀏覽器。Vertex 的做法是把這條邊界寫進 AGENTS.md 成為不可違反的規則：瀏覽器端永遠不持有私有 token、永遠不直接呼叫 MCP 或 LLM、永遠不寫入內容或學習進度。任何寫入操作都必須經過伺服器端的 route（路由）。
+
+## Why it matters
+
+AGENTS.md 裡的 app structure 章節把 server/client 邊界稱為整個應用的安全架構（security architecture）。不是「最佳實踐」，而是底線——違反它的後果不是效能變差，而是密鑰外洩、資料被竄改、或學習者行為被第三方追蹤。更實際地說，AI 代理（AI agent）在實作時很容易犯這類錯誤：把 Sanity token 放進 client component、把 OpenAI key 寫進 `NEXT_PUBLIC_` 環境變數、或在瀏覽器端直接呼叫 MCP。這些看起來「能跑」的程式碼實際上已經把私有資源暴露出去。AGENTS.md 把這條邊界刻進操作手冊，就是為了讓 AI 在寫每一行程式碼時都知道「這段在 server 跑，不能把 token 傳出去」。負面指令（negative instructions）在 AI 實作中尤其重要——AI 很容易選出一個看起來合理但實際上錯誤的替代方案，而「絕對不要把 token 放進瀏覽器」這類規則正好擋住那條路。
+
+## How it works
+
+### 兩個獨立 workspace，一個 repo
+
+Vertex 的 repo 裡有兩個互相獨立的 workspace：Studio workspace 和 Web workspace。Studio workspace 只管 schema（資料結構定義）和作者端的內容編輯（authoring），完全不涉及任何伺服器端整合或搜尋功能。Web workspace 是 Next.js 應用，包含頁面、搜尋 UI、伺服器端整合、認證、分析追蹤。兩個 workspace 分開部署、分開維護——Studio 不會跑在 Web 的 server 上，Web 也不會嵌入 Studio。
+
+### 八項職責，各安其位
+
+AGENTS.md 把應用的職責一一列出，每一項都明確標註在哪一端執行：
+
+1. **Pages are read-only（頁面唯讀）**：Next.js 的頁面只負責從 server 端讀取 Sanity 資料並渲染，不寫入任何內容。
+2. **Clerk auth via middleware（Clerk 認證走 middleware）**：Clerk 的認證邏輯在 Next.js middleware 裡執行，middleware 是 server 端程式碼，session token 永遠不會暴露在 client bundle 裡。
+3. **Data access is a server-only Sanity client with token（資料存取是 server-only 的 Sanity client）**：Sanity 的 read token 從 `process.env` 讀取，Next.js 的 bundler 確保它不會被打包進 client bundle。任何 GROQ 查詢都在 server component 或 server route 裡執行。
+4. **Search API is a server route to the MCP（搜尋 API 是 server route）**：瀏覽器不直接呼叫 MCP 或 LLM。搜尋請求從 client component 發出，到 server route，server route 用 token 呼叫 MCP，把結果傳回瀏覽器。
+5. **Search UI is a client component（搜尋 UI 是 client component）**：搜尋的結果頁面在瀏覽器端渲染，但它只接收 server 傳來的結果資料，不持有任何 token。
+6. **PostHog runs in the browser with the public key（PostHog 用 public key 在瀏覽器端執行）**：PostHog 的公開金鑰（publishable key）是安全的——它只能用來發送事件，不能用來讀取資料或篡改分析。
+7. **Video pipeline is offline tooling（影片管線是離線工具）**：影片的轉錄（transcript）、分段（chunking）、章節標記（chapter marking）都在離線環境完成，不經過伺服器端的請求路徑（request path）。
+8. **Search config is a Sanity Context document（搜尋設定是 Sanity Context 文件）**：搜尋的內容範圍與行為指令存在 Sanity 裡的 Context 文件中，不寫死在程式碼裡——改設定不需要重新部署程式碼。
+
+### Client-safe vs not-client-safe：值的分類
+
+AGENTS.md 在 traps 章節把所有環境變數分成兩類：
+
+**Client-safe（瀏覽器端安全）**：Clerk publishable key（`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`）、PostHog public key（`NEXT_PUBLIC_POSTHOG_KEY`）。這些金鑰可以出現在 client bundle 裡——它們的設計就是讓瀏覽器用來做初始化或發送事件，不會洩漏敏感資料。
+
+**NOT client-safe（不能出現在瀏覽器端）**：Clerk secret key、Sanity API read token、Sanity write token、OpenAI API key、PostHog private key。這些金鑰一旦暴露在 client bundle 裡，任何人都能用它們來讀取你的 Sanity 資料、呼叫 OpenAI API、或篡改你的 PostHog 分析資料。
+
+判斷原則很簡單：一個金鑰如果「只能做事、不能被拿來做別的事」（例如 Clerk publishable key 只能初始化 Clerk），它就是 client-safe 的；一個金鑰如果「能做有副作用的操作」（例如 Sanity write token 能寫入資料、OpenAI key 能呼叫 API），它就絕對不能出現在瀏覽器端。
+
+### 陷阱
+
+AGENTS.md 列出的陷阱（traps）裡，與 server-client 邊界直接相關的有：
+
+- **Context MCP needs a deployed Studio app**：Context MCP 伺服器需要 Studio 已經部署才能運作——如果你只部署了 Web 而沒部署 Studio，搜尋會失敗。
+- **Dataset must be private, read token server-only**：Sanity 資料集必須是私有的，read token 只能在 server 端。
+- **Clerk secret server-only, middleware protects routes**：Clerk 的 secret key 只能在 server 端，middleware 保護所有路由。
+- **Write token server-only**：Sanity 的 write token（用於寫入內容）只在 server 端——瀏覽器永遠不能直接寫入 Sanity。
+- **PostHog public key browser-safe, private key server-only**：PostHog 的公開金鑰可以在瀏覽器端，但私有金鑰（用來管理專案或查詢資料）只在 server 端。
+
+## In plain terms
+
+想像一座建築的保全系統：大廳（瀏覽器）是開放空間，任何人都可以走進來看；但保險箱（token、密鑰）一定鎖在金庫裡（server），只有保全人員（server component / server route）拿著鑰匙才能打開。大廳裡的人可以拿到一張收據（props / API response）證明交易完成，但永遠拿不到保險箱的鑰匙。這個建築的保全規則（哪邊放什麼、誰能開什麼門）就是 server-client 邊界。
+
+## Practical use
+
+在 Vertex 專案中建立 server-client 邊界的做法：
+
+1. **在 `.env.example` 裡列出所有環境變數**，並用註解標註哪些可以加 `NEXT_PUBLIC_`、哪些不行。這讓所有協作者（包括 AI 代理）都知道規則。
+2. **建立 server-only 的 Sanity client**（`lib/sanity.client.ts`），確保 read token 只從 `process.env` 讀取、不會出現在 client bundle 裡。
+3. **所有寫入操作走 server route**：例如學習進度（progress）的更新必須透過 `/api/progress` route，route 內部呼叫 Sanity 的 write token。
+4. **搜尋從 client 發起到 server route**：搜尋 UI 是 client component，但搜尋 API 是 server route——client 不直接呼叫 MCP。
+5. **Clerk 在 middleware 裡處理認證**：middleware 是 server 端程式碼，在頁面渲染前檢查 session。
+6. **在 `npm run build` 時驗證**：Next.js 的 bundler 會檢查 client bundle 裡有沒有不該出現的環境變數——如果有，build 會失敗。
+7. **部署 Studio 應用**：Context MCP 需要 Studio 已部署才能運作——在部署 Web 之前先確認 Studio 狀態。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/agents-md|AGENTS.md]] — server-client 邊界是 AGENTS.md 裡 app structure 章節定義的核心架構規則，也是 traps 章節反覆強調的安全底線。
+- [[learn/vertex-learning-platform/elements/data-model-as-substrate|資料模型作為基底 (Data Model as Substrate)]] — 資料模型定義了「資料長什麼樣」，server-client 邊界定義了「誰可以從哪裡存取它」。兩者共同決定了一個安全的全端架構。
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/AGENTS.md#app-structure]] — AGENTS.md 裡的 app structure 章節：兩個 workspace 的職責劃分、八項職責各在哪一端執行、never-cross-boundaries 規則。
+- [[sources/vertex-learning-platform/AGENTS.md#traps]] — 安全陷阱：client-safe vs not-client-safe 值的完整分類、Context MCP 需要已部署的 Studio、dataset private、read/write token server-only。
+- [[sources/vertex-learning-platform/AGENTS.md_GUIDE.pdf#sections]] — guide 裡 app responsibilities 小節的說明：browser never holds private tokens, never calls MCP/LLM, never writes content/progress。
+
+## Questions
+
+### Q1. 為什麼 Sanity 的 write token 絕對不能出現在瀏覽器端，而 read token 雖然也不行，但性質上有什麼差異？
+
+A1. Write token 允許建立、修改、刪除 Sanity 裡的文件——一旦暴露在瀏覽器端，任何人都能竄改你的課程內容或刪除資料。Read token 雖然只允許讀取，但暴露在瀏覽器端仍然會把你的私有資料（例如未發佈的課程）暴露給任何人。兩者的差異在於：write token 暴露會造成破壞性後果（資料被竄改或刪除），read token 暴露會造成隱私洩漏（資料被未授權的人看到）——兩者都不可以，但 write token 的危害更嚴重。
+
+### Q2. Vertex 的搜尋功能從瀏覽器發起，到伺服器端完成，最後回到瀏覽器——這整條路徑為什麼不能讓 client 直接呼叫 MCP？
+
+A2. 因為 MCP（Model Context Protocol）伺服器需要 Sanity 的 token 才能存取資料集。如果 client 直接呼叫 MCP，就必須把 token 傳到瀏覽器——token 暴露了，任何人都能用它來讀你的資料。正確的路徑是：client component 把搜尋關鍵字傳到 server route → server route 用 token 呼叫 MCP → MCP 回傳結果 → server route 把結果傳回 client。client 從頭到尾只拿到搜尋結果，拿不到 token。
+
+### Q3. AGENTS.md 裡把 PostHog 的 public key 標記為 client-safe，private key 標記為 not-client-safe——這兩個金鑰的差異在哪裡？為什麼一個可以在瀏覽器端、一個不行？
+
+A3. PostHog public key 只能用來初始化 PostHog SDK 和發送追蹤事件——它就像一個投幣箱的投幣口，任何人都可以往裡面丟事件，但拿不到裡面的資料。PostHog private key 則允許讀取分析資料、管理專案設定、甚至刪除事件——它就像打開投幣箱的鑰匙。如果 private key 暴露在瀏覽器端，任何人都能用它來查看你的使用者行為資料或篡改分析設定。所以 public key 可以出現在 client bundle，private key 只能在 server 端。

@@ -1,0 +1,76 @@
+---
+id: skills-context-separation
+title: Skills 與 Context 的分層
+subject: vertex-learning-platform
+tier: 1
+order: 5
+type: article
+nodes:
+  - vertex-learning-platform/agents-and-agents-md
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_1:733-1052]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#skills-to-lean-on]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+## 問題陳述
+
+在代理式工程（agentic engineering）的工作流中，AI agent 需要同時理解「工具怎麼用」和「這個專案是什麼」。如果把所有知識——API 細節、框架用法、專案規則、產品決策——全部塞進同一個檔案（例如 AGENTS.md），就會產生兩個嚴重問題。第一，工具知識會過時（go stale）：Sanity 的 API 改了、Clerk 的 SDK 升了版，你寫在 AGENTS.md 裡的筆記不會自動更新，但 agent 每次都會讀到。第二，檔案會被載入到每一個功能的實作迴圈中——即使是純 UI 的頁面，agent 也要載入一整份包含後端 API、資料模型、搜尋邏輯的巨型文件，造成 context 浪費和干擾。
+
+核心矛盾是：工具知識是通用的、可共享的、會隨版本演進的；專案規則是私有的、不變的、只跟你自己有關的。把這兩種截然不同的東西混在一起，是大多數 agentic 工作流失敗的根源。
+
+## 為什麼重要
+
+Skill/Context 的分層不只是檔案組織的偏好，它直接決定了 agent 的輸出品質和可維護性。當 AI agent 拿到正確的工具知識時，它不需要依賴訓練資料中的「舊版記憶」去猜 API 怎麼調用——它直接從 skill 檔案中讀取當前版本的用法，大幅降低「看起來合理但實際上已經不能用」的程式碼。當 AGENTS.md 只承載專案規則時，它的內容保持精簡、穩定，載入成本低，agent 不會被與當前任務無關的 API 細節淹沒。
+
+這種分層還帶來了團隊協作上的好處：skill 可以被多個專案共用（例如 `npx skills add sanity-io/agent-toolkit`），而 AGENTS.md 則是每個專案自己維護的 operating manual。兩者的變更節奏完全不同——skill 跟著工具上游走，AGENTS.md 跟著你的產品決策走。
+
+## 運作方式
+
+在 Vertex 專案中，分層透過兩種機制實現。
+
+**Skill（代理技能）** 是工具供應商提供的知識包，透過 `npx skills add` 安裝到專案中。例如：
+
+- `npx skills add sanity-io/agent-toolkit`： Sanity 的 SDK 用法、schema 定義方式、best practices
+- `npx skills add sanity-io/context-all`： Sanity Context MCP 的整合方式、文件結構、查询模式
+- `npx skills add clerk`： Clerk 認證的 Next.js 整合、session 管理、middleware 設定
+
+安裝後，skill 檔案存放在專案的 `skills/` 目錄中。agent 在實作某個功能之前，會「閱讀」對應的 skill 檔案，取得工具的當前 API 和最佳實踐，然後才開始寫程式碼。這意味著 agent 不需要依賴訓練資料中的知識——它拿到的永遠是最新的。
+
+**AGENTS.md（專案規則）** 則只記載你的專案特有的東西：產品是什麼、架構怎麼分層、資料模型長什麼樣、搜尋行為應該如何、哪些事情永遠不能做。AGENTS.md 不會解釋 Sanity 的 API 怎麼用、Clerk 的 middleware 怎麼寫——那些是 skill 的工作。
+
+一個快速的驗證方法是：向 agent 發出一個「只讀」指令——「閱讀這個專案中已安裝的 sanity 和 sanity context skill，總結每個 skill 負責什麼。不要修改任何檔案。」如果 agent 能正確區分每個 skill 的職責，代表分層已經到位。
+
+## 白話解釋
+
+想像你在蓋一棟房子。你手上有一本「建築手冊」（AGENTS.md），裡面寫著這棟房子的藍圖——幾個房間、動線怎麼走、風格是什麼。另外還有一本「電工操作手冊」（skill），裡面是電線怎麼接、安全規範是什麼。電工操作手冊是每個工地通用的，藍圖是你這棟房子專屬的。你不會把電工規範抄進藍圖裡——因為電工規範會更新，而藍圖一旦定了就不常改。你蓋別墅的時候也可以帶同一本電工手冊，但藍圖一定是新的。
+
+## 實際應用
+
+在 Vertex 的實作中，分層的落地非常具體。當你要求 agent 實作 Sanity 的內容 schema 時，agent 會先閱讀 `sanity-io/agent-toolkit` 這個 skill，取得當前版本的 Sanity SDK 用法和 schema 定義慣例，然後參照 AGENTS.md 中的資料模型章節（course、module、lesson、instructor、category 的關聯方式）來決定具體的 schema 結構。工具知識來自 skill，產品決策來自 AGENTS.md。
+
+當你要求 agent 調整搜尋行為時，agent 會閱讀 `sanity-io/context-all` 這個 skill，了解 Sanity Context MCP 的整合方式，然後參照 AGENTS.md 中「搜尋行為」章節的具體規則（全結果頁面、排序方式、video result vs. lesson result 的差異）。兩者缺一不可：沒有 skill，agent 會用舊版 API；沒有 AGENTS.md，agent 不知道你的搜尋應該長什麼樣。
+
+一個常見的錯誤是把 Sanity 的 API 用法或 Clerk 的 middleware 細節寫進 AGENTS.md。短期看起來沒問題，但一旦 Sanity 發布了新版 SDK，你就必須手動更新 AGENTS.md 中的每一個相關段落——而且如果你忘了更新，agent 會讀到過時的資訊，產出不能用的程式碼。把這些知識留在 skill 裡，上游更新時 skill 自動跟著走，你的 AGENTS.md 永遠不會過時。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/agentic-engineering|代理式工程 (Agentic Engineering)]]：skill/context 分層是代理式工程工作流的核心基礎設施，沒有它，agent 的自主實作能力會大幅下降。
+- [[learn/vertex-learning-platform/elements/implementation-loop|實作迴圈 (Implementation Loop)]]：在迴圈的「閱讀 skill」步驟中，agent 根據當前任務的性質動態載入對應的 skill，這是迴圈能夠正確執行的前提。
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_1:733-1052]]：技能安裝與「sanity check」prompt 的完整流程，包含 `npx skills add` 指令和驗證 prompt 的具體寫法。
+- [[sources/vertex-learning-platform/AGENTS.md#skills-to-lean-on]]：Vertex 專案中已安裝的具體 skill 列表，以及使用 skill 而非記憶的規則。
+
+## Questions
+
+1. 在 agentic 工作流中，為什麼要將工具的 API 知識和專案規則分別存放在不同的檔案裡？
+2. 如果把 Sanity 的 API 用法寫進 AGENTS.md，對 agent 實作 UI 頁面時會產生什麼影響？
+3. 你認為 skill 的「上游更新自動跟隨」和 AGENTS.md 的「手動維護穩定性」哪個比較重要？為什麼？
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_1:733-1052]]
+- [[sources/vertex-learning-platform/AGENTS.md#skills-to-lean-on]]

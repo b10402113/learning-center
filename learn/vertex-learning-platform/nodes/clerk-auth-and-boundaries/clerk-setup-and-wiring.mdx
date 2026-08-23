@@ -1,0 +1,89 @@
+---
+id: clerk-setup-and-wiring
+title: "安裝 Clerk、接上 Next.js、產生認證 UI"
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/clerk-auth-provider
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_1:401-488]]"
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:2789-3296]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 安裝 Clerk、接上 Next.js、產生認證 UI
+
+## Learning goal
+
+能安裝 Clerk、透過 CLI 接入 Next.js、產生 sign-in/up 路由與 header 按鈕，並驗證 `clerk doctor` 通過。
+
+## Lesson
+
+### 為什麼要接認證系統？
+
+Vertex 是一個學習平台——學習者需要登入才能追蹤進度、保存「我的學習」清單。但認證系統是全端應用最複雜的子系統之一：session 管理、密碼流程、OAuth 第三方登入、Email 驗證、JWT 簽發與驗證、middleware 整合、路由保護、使用者檔案管理——這些全部都要從零實作的話，至少要花三週。對一個要上線的產品來說，這三週可以用在更有價值的功能上。
+
+**為什麼 Clerk 是合理的選擇？** 因為它把整個認證 surface area 打包成一套託管服務：免費方案支援最多 50,000 月活用戶，對原型和早期產品綽綽有餘。更關鍵的是，Clerk 的身份系統可以串接後續的功能——例如用 Clerk user id 作為學習進度（progress）的 key。選擇 Clerk 的核心邏輯是：**auth 是一個巨大的 surface area，把時間花在產品上而不是認證基礎設施上**。如果你的目標是學習認證系統本身，自己做一次是值得的——但做完之後回到產品時，還是用託管服務。
+
+### 安裝流程：五個步驟
+
+整個 Clerk 接入只需要幾個步驟：
+
+**步驟 1：建立 Clerk 應用**
+
+在 Clerk Dashboard 建立新應用。Vertex 的命名以 `JSM` 開頭，啟用 email 和 Google 兩種 provider。為什麼要兩種？因為不同使用者有不同的登入偏好——有人習慣 email 密碼，有人習慣 Google 一鍵登入。多一種 provider 就多一種入口。
+
+**步驟 2：安裝 Clerk CLI**
+
+Clerk 提供了一個 CLI 工具，能自動把認證系統接進你的 Next.js 專案。你不需要手動安裝套件、設定環境變數、建立路由——CLI 全部幫你搞定。
+
+**步驟 3：執行 `clerk oauth login`**
+
+這個指令把你剛剛建立的 Clerk 應用與你的開發環境串接。它會在瀏覽器裡打開 Clerk 的授權頁面，你確認授權後，CLI 就拿到了存取權限。
+
+**步驟 4：自動產生檔案**
+
+Clerk CLI 會自動生成以下內容：
+
+| 檔案/設定 | 作用 |
+|-----------|------|
+| `@clerk/nextjs` 相依套件 | Clerk 的 Next.js SDK，提供 hooks 和元件 |
+| 環境變數 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`（client-safe）和 `CLERK_SECRET_KEY`（server-only） |
+| Proxy middleware | 在 Next.js 16 裡稱為 proxy，讀取 session cookie、驗證 JWT |
+| Layout + ClerkProvider | 在整個 app 外層包裹 Clerk 的 context，讓所有頁面都能存取認證功能 |
+| `/sign-in`、`/sign-up` 路由 | 預建的認證頁面，學習者可以直接使用 |
+| Header user button | 顯示使用者頭像和登出選項 |
+
+**步驟 5：執行 `clerk doctor`**
+
+這個指令會診斷你的安裝是否正確——檢查環境變數是否設定完整、middleware 是否正常運作、路由是否正確產生。如果一切正常，它會回傳綠色的通過訊息。
+
+### 為什麼要理解每一個生成的檔案？
+
+你可能會想：「CLI 幫我生成了，我就不用管了。」但在 agentic 工作流中，這是一個危險的心態。AI 代理也可能幫你生成 Clerk 整合的代碼——如果你不知道 middleware 在做什麼、route 怎麼保護頁面、環境變數怎麼分配，你就無法判斷 AI 是否做出了錯誤的決定。
+
+**為什麼這很重要？** 因為 AI 生成的代碼「能跑」不代表你理解它。要求 AI 代理解釋每一個生成或修改的檔案，是保持對 AI 生成代碼掌控的關鍵習慣。具體來說，你應該問：middleware 做了什麼？route 怎麼運作？UI 元件怎麼接？哪些環境變數是 client-safe 的、哪些不是？
+
+### 生成的檔案結構
+
+接入 Clerk 後，你的 Vertex 專案會多出以下檔案：
+
+- **Middleware（proxy）**：在 `proxy.ts`（Next.js 16）或 `middleware.ts`（舊版）裡，Clerk 的 middleware 負責讀取 session cookie、驗證 JWT、執行 handshake。
+- **Layout**：在 `app/layout.tsx` 裡包裹 `ClerkProvider`，讓所有頁面都能存取 Clerk 的 context。
+- **Sign-in/Sign-up 路由**：在 `app/sign-in/[[...sign-in]]/page.tsx` 和 `app/sign-up/[[...sign-up]]/page.tsx` 裡，Clerk 提供了預建的認證頁面。
+- **Header 元件**：在 `components/Header.tsx` 裡，Clerk 的 `UserButton` 元件顯示使用者頭像和登出選項。
+
+### 驗證安裝
+
+完成安裝後，你需要做三件事：
+
+1. **執行 `clerk doctor`**：確認安裝正確。
+2. **瀏覽器開啟 `/sign-in` 和 `/sign-up`**：確認頁面正常顯示。
+3. **測試登入流程**：用 email 註冊一個帳號，登入，確認 header 顯示頭像。
+
+如果一切正常，你的 Vertex 專案就已經接上了認證系統。但這只是第一步——middleware 的行為、token 的安全邊界、以及 server-only auth state 的架構，才是接下來要深入理解的核心。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_1:401-488]] — Clerk 選擇的 reasoning：auth surface area 巨大，託管服務讓你把時間花在產品上
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:2789-3296]] — Clerk 的完整安裝流程、產生的檔案、`clerk doctor` 的使用

@@ -1,0 +1,88 @@
+---
+id: middleware-as-resolver
+title: "Middleware 是 Auth Resolver，不是閘門"
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/auth-middleware-resolver
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:2789-3296]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#app-structure]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#traps]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Middleware 是 Auth Resolver，不是閘門
+
+## Learning goal
+
+能說清「middleware 是 auth resolver 不是閘門」——它讀 JWT、做 handshake、附加 auth state，但不阻擋路由；理解 Next.js 16 proxy 重命名的脈絡。
+
+## Lesson
+
+### 一個反直覺的現象
+
+你在上一步已經安裝了 Clerk，middleware 也接上了。現在你打開瀏覽器，訪問 Vertex 的首頁——它正常顯示，任何人都能瀏覽。你訪問課程總覽頁、課程詳情頁，全部都是公開的。但如果 middleware「保護路由」，為什麼這些頁面沒有被擋住？
+
+這個反直覺的現象，根源在於一個被廣泛誤解的概念：**middleware 是 auth resolver，不是 auth gate**。
+
+### Resolver vs Gate：兩種完全不同的心智模型
+
+**Gate（閘門）模型：** middleware 在每一個請求到達時檢查身份，有身份才放行，沒身份就擋住。如果 middleware 是 gate，那所有路由預設都是受保護的，你必須逐一開放。
+
+**Resolver（解析器）模型：** middleware 在每一個請求到達時「解析」認證狀態——讀取 session cookie、驗證 JWT、執行 handshake——然後把解析後的狀態附加到請求物件上。但它不阻擋任何路由。真正決定「這個頁面要不要擋」的，是頁面本身或它的 layout。
+
+**為什麼 Vertex 用 Resolver 模型？** 因為 Vertex 是一個以內容消費為主的學習平台。首頁、課程總覽、課程頁都是公開的——學習者不需要登入就能瀏覽課程、觀看影片。只有「我的學習」和「進度追蹤」這類個人化功能才需要登入。如果 middleware 是 gate，你要嘛全部放行（那受保護頁面就裸奔了），要嘛全部攔截（那公開頁面就看不到了）。Resolver 模型讓你做到「精準保護」。
+
+AGENTS.md 裡的 app structure 章節明確指出：「browsing stays public per AGENTS.md, and routes are gated only when a feature marks them protected」。這不是一個偏好，而是架構決策。
+
+### Middleware 的真實執行流程
+
+當一個 HTTP 請求到達 Next.js 時，middleware（在 Next.js 16 裡稱為 proxy）的執行流程是：
+
+**第 1 步：讀取 session cookie。** 瀏覽器在每一個 HTTP 請求裡都會自動附上 cookie。Clerk 的 middleware 從 cookie 中取出 session token。
+
+**第 2 步：驗證 JWT。** Middleware 檢查 token 是否有效——未過期、簽章正確、屬於同一個 Clerk 應用。如果 token 無效，Clerk 會知道「這個使用者目前沒有有效的 session」。
+
+**第 3 步：執行 handshake。** 如果 token 缺失、過期、或來自不同實例（instance），Clerk 會自動執行一次 handshake——重新驗證使用者身份。這就是為什麼你在瀏覽器裡重新開啟頁面時，有時候會「自動登入」——因為 Clerk 透過 handshake 重新建立了 session。
+
+**第 4 步：附加 auth state。** 把解析後的認證狀態（`auth()` 回傳值）附加到請求物件上。後續的 server component 或 route handler 可以透過 `auth()` 函數取得這個狀態。
+
+**關鍵：middleware 不會在任何路由上回傳 401 或 302。** 它只是把認證狀態「解析」出來，附加到請求上。就像一個接待處——幫每個客人登記身份，但不會擋人。
+
+### Next.js 16 的 proxy 重命名
+
+Next.js 16 把 `middleware.ts` 重新命名為 `proxy.ts`。這不是功能改變，而是語義更準確。傳統的 middleware 定義是「攔截並修改請求」——它可以在請求到達路由處理器之前改變請求的內容、甚至直接回傳響應。但在 Next.js 裡，middleware 做的不是「攔截」，而是「解析認證狀態並附加到請求」。proxy 的語義更接近它的實際行為：代為處理（proxy）認證的解析工作，讓後續的程式碼可以安心使用。
+
+### 什麼時候才需要保護路由？
+
+在 resolver 模式下，路由保護是**顯式的**——你必須在特定路由上標記「這裡需要登入」。在 Next.js + Clerk 的實作中，這通常透過以下方式達成：
+
+1. **在 layout 或 page 中檢查 `auth()`**：如果回傳的 `userId` 是 null，重導向到 `/sign-in`。
+2. **使用 Clerk 的 `Protect` 元件**：包住需要登入的區塊，未登入時顯示替代內容或重導向。
+3. **在 server route 中檢查**：例如 `/api/progress` route 在寫入學習進度前先驗證 Clerk session。
+
+### Vertex 的路由保護策略
+
+| 路由 | 保護狀態 | 原因 |
+|------|----------|------|
+| `/`（首頁） | 公開 | 學習者的第一印象，不該被擋 |
+| `/courses`（課程總覽） | 公開 | 內容消費是核心，不該強制登入 |
+| `/courses/[slug]`（課程詳情） | 公開 | 課程頁是銷售/展示頁面 |
+| `/courses/[slug]/[lesson]`（課程頁） | 公開（影片播放） | 內容是公開的，進度追蹤才需要登入 |
+| `/my-learning`（我的學習） | 需要登入 | 個人化頁面，需要知道「你是誰」 |
+| `/api/progress`（進度 API） | 需要登入 | 寫入操作必須驗證身份 |
+
+這個策略的邏輯是：**消費公開，管理登入**。大多數頁面是公開的，只有涉及使用者個人狀態的操作才需要認證。
+
+### 為什麼 AI 代理容易搞混？
+
+在 agentic 工作流中，AI 代理在實作時很容易犯一個錯誤：把 middleware 當成 gate，在 middleware 裡加上「未登入就重導向」的邏輯。這會導致所有頁面都變成「必須登入才能看」——首頁、課程總覽、課程詳情全部被擋住。AGENTS.md 把「browsing stays public」寫進操作手冊，就是為了防止 AI 做出這個錯誤。
+
+**為什麼這個錯誤很常見？** 因為「middleware 保護路由」這個說法在社群裡廣為流傳，但它只在某些框架或某些實作中成立。在 Next.js + Clerk 的架構下，middleware 是 resolver 不是 gate——這是 AGENTS.md 裡明確記錄的架構決策，不是你可以自行改變的偏好。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:2789-3296]] — Clerk 接入的完整過程：middleware 產生、handshake 機制、resolver vs gate 的實際行為
+- [[sources/vertex-learning-platform/AGENTS.md#app-structure]] — AGENTS.md 裡的 app structure：「browsing stays public, routes are gated only when a feature marks them protected」
+- [[sources/vertex-learning-platform/AGENTS.md#traps]] — 陷阱：「Clerk secret server-only, middleware protects routes」——保護路由的是 page/route 層級的檢查，不是 middleware 本身

@@ -1,0 +1,82 @@
+---
+id: data-model-as-substrate
+title: 資料模型作為基底 (Data Model as Substrate)
+subject: vertex-learning-platform
+tier: 2
+order: 9
+type: article
+nodes:
+  - vertex-learning-platform/agents-and-agents-md
+sources:
+  - "[[sources/vertex-learning-platform/AGENTS.md#data-model]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md_GUIDE.pdf#sections]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+## Problem Statement
+
+在任何學習平台的架構中，資料模型（data model）決定了所有上游功能的形狀：目錄頁（catalog page）需要聚合課程數與總時數、課程頁需要展開模組與學習成果、搜尋需要精確關聯影片與課程名稱、深層連結（deep link）需要從影片秒數反查到對應的課程。如果資料模型的關聯定義錯誤——例如 Module 被建成獨立文件而非嵌入物件（embedded object），或 Lesson 把 parent course ID 寫死在自己的文件裡——這些下游功能會同時失效，且修正成本極高。
+
+## Why it matters
+
+Vertex 平台的搜尋功能要求在返回結果時同時提供課程名稱、模組名稱、課堂標題與精確秒數。這意味著每一次搜尋查詢都必須沿著資料模型的關聯鏈走一遍：從 video document 找到 lesson，從 lesson 反推出它所屬的 course，再從 course 的 modules 數組中定位到它屬於哪個模組。如果這條關聯鏈的任何一環定義錯誤——例如 lesson 裡沒有 parent course 的關聯、或 module 是獨立文件而非嵌入——搜尋結果就無法正確標註「這堂課屬於哪門課程、哪個模組」，結果卡片的資訊會不完整或根本空白。
+
+更深一層的影響是：進度追蹤（progress tracking）依賴 Clerk user id 作為 key，與內容模型完全分離。這代表進度是應用狀態（app state），不是內容本身——如果把進度混進 content model，就會污染查詢路徑、讓 read-only 的內容文件變成 mutable 的狀態文件，違反了 Sanity 的 read-only 文化。
+
+## How it works
+
+Vertex 的資料模型由八個核心實體組成，它們之間的關聯關係定義了整條功能鏈的走向：
+
+**Course** 是頂層實體。它包含 title、slug、marketing 字段、outcomes（學習成果列表）、instructor 與 category 的 reference（指向 Instructor 和 Category 文件）、以及一個 ordered modules 數組。模組的編號不是手動寫入的，而是根據它在 modules 數組中的順位自動衍生——這確保了當作者在 Studio 裡拖拉重排模組時，編號自動更新，不會出現斷裂的序號。
+
+**Module** 是嵌入物件（embedded object），不是獨立文件。它存在于 Course 文件內部，包含 title、summary 與一個 ordered lesson refs 數組。Module 不是一個可以被單獨查詢的 Sanity document——你不能寫一個 GROQ 查詢去「找所有模組」，因為模組是課程的一部分，不是自己的頂層實體。這個設計決策的關鍵在於：模組的內容（哪些課堂、什麼順序）是課程的組成部分，不需要被單獨索引或搜尋。
+
+**Lesson** 是獨立文件（document），包含 title、slug、video URL、poster image、duration、free-preview flag、student count、Portable Text 格式的 notes、key points、pro tip 與 resources 數組。Lesson 不存儲 parent course ID——要找到一堂課屬於哪門課程，必須反向查詢所有 course 的 modules 數組，看看哪個 course 引用了這堂課的 reference。這是一個有意的反規範化（denormalization）決策：如果 lesson 存了 course ID，當作者在 Studio 裡重排模組時，系統必須同步更新 lesson 的 course 指向，增加了維護負擔。反向查詢（reverse reference）雖然在查詢時多一步，但讓資料模型更乾淨——每個文件只存自己該存的東西。
+
+**Instructor** 和 **Category** 是標準的 reference 目標文件。Instructor 存講師的姓名、頭像、簡介；Category 存課程分類。Course 透過 reference 指向它們，而非把講師或分類的資料直接寫進 course 裡。這讓同一個講師可以出現在多門課程中，同一個分類也可以包含多門課程，不會有資料重複的問題。
+
+**Video document** 是一個特殊的內部文件，不直接對學習者暴露。它包含影片的 id 與 URL、chapters（章節列表，每個章節有 startSeconds 和 label）、以及 chunks（時間戳文字片段，每個有 startSeconds 和 text）。一個關鍵的約束是：影片的完整逐字稿（full transcript）永遠不會出現在單一欄位裡——它被切成短小的 timestamped chunks，讓搜尋可以精確定位到某一秒，同時避免一次載入過多文字導致的效能問題。
+
+**Agent context document** 是一個 Sanity 內容文件，用來控制搜尋代理（search agent）的行為。它包含一個 content scope filter（內容範圍過濾器）和 instruction deltas（指令調整），讓使用者可以在不改動代碼的情況下調整搜尋代理的搜尋範圍和行為模式。
+
+**Progress record** 是進度文件，以 Clerk user id 為 key，記錄學習者的 completed lessons 和 resume position（上次離開的位置）。進度是應用狀態，不是內容——它不會被搜尋索引，也不會出現在目錄頁或課程頁上。這種分離確保了內容查詢路徑保持乾淨，進度更新不會污染 read-only 的 Sanity 文檔。
+
+## Practical use
+
+理解資料模型對開發 Vertex 的每一個頁面都有直接影響：
+
+- **目錄頁（/courses）**需要從所有 Course 文件中聚合模組數、課堂數與總時數。模組的順序由 Course 內部的 modules 數組順位決定，時長是模組下所有課堂 duration 的總和。
+- **課程頁（/courses/[slug]）**需要展開 Course 的 modules 數組，顯示每個模組的標題、摘要與課堂列表。模組的編號來自順位，不是手動欄位。
+- **課堂頁（/courses/[slug]/[lesson]）**需要根據 lesson slug 找到 Lesson 文件，載入其 video URL、Portable Text 格式的 notes、key points、pro tip 與 resources。同時需要反向查詢它所屬的 course 和模組，以顯示導覽資訊（上一堂課、下一堂課）。
+- **搜尋結果頁**需要從 video document 出發，沿著 video → lesson → course → module 的關聯鏈走一遍，把課程名稱、模組名稱、課堂標題與精確秒數組合成結果卡片。如果任何一環的 reference 斷裂，結果卡片就會缺少關鍵資訊。
+- **進度追蹤**不影響頁面渲染（除了個人學習頁面），但它依賴 Clerk user id 的唯一性來確保每個學習者的進度是隔離的。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/agents-md|AGENTS.md：專案 operating manual]] — 資料模型是 AGENTS.md 的第九個核心章節，它定義了其他所有功能的基礎約束。搜尋、時間戳、頁面路由的行為全部建立在這些實體關係之上。
+- [[learn/vertex-learning-platform/elements/grounding-search|Grounding Search：以真實資料為基底的搜尋]] — 搜尋的 grounding 規則要求每一個結果都必須來自真實資料。資料模型的關聯鏈是 grounding 的基礎：如果模型的 reference 斷裂，搜尋代理就無法正確關聯影片與課程，grounding 無法實現。
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/AGENTS.md#data-model]] — Vertex 的完整資料模型定義：Course、Module、Lesson、Instructor、Category、Video、Agent context、Progress 八個實體的欄位與關聯。
+- [[sources/vertex-learning-platform/AGENTS.md_GUIDE.pdf#sections]] — AGENTS.md 的十五節架構解說，其中第九節「Data model」解釋了為什麼資料模型要放在其他決策之後、搜尋之前。
+
+## Questions
+
+**Q1: 為什麼 Module 是嵌入物件（embedded object）而不是獨立文件？**
+
+A: 模組的內容（哪些課堂、什麼順序）是課程的組成部分，不需要被單獨索引或搜尋。把 Module 嵌入 Course 內部，作者在 Studio 裡可以直觀地拖拉重排課堂順序，系統不需要額外處理模組的獨立文件。如果 Module 是獨立文件，查詢一門課程的完整結構就需要額外的 JOIN 查詢，增加複雜度且沒有實際好處。
+
+**Q2: Lesson 不存 parent course ID，搜尋功能如何知道一堂課屬於哪門課程？**
+
+A: 透過反向查詢（reverse reference）：搜尋代理查詢所有 Course 文件的 modules 數組，找到哪個 Course 引用了該 Lesson 的 reference。這雖然比直接讀取 parent course ID 多一步，但讓資料模型更乾淨——每個文件只存自己該存的東西，作者在 Studio 裡重排模組時不需要同步更新 Lesson 的 course 指向。
+
+**Q3: Video document 為什麼不把完整逐字稿放在一個欄位裡？**
+
+A: 兩個原因。第一，搜尋需要精確到秒——把逐字稿切成短小的 timestamped chunks，每個 chunk 有 startSeconds 和 text，搜尋代理可以直接定位到影片的特定時間點。第二，效能考量——如果完整逐字稿在一個欄位裡，每次搜尋查詢都要載入幾千字的文字，而 chunks 讓系統只載入搜尋命中的那一小段文字，大幅減少查詢大小和回應時間。
+
+## Sources
+
+- [[sources/vertex-learning-platform/AGENTS.md#data-model]]
+- [[sources/vertex-learning-platform/AGENTS.md_GUIDE.pdf#sections]]

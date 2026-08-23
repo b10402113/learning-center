@@ -1,0 +1,122 @@
+---
+id: search-config-document
+title: 搜尋設定文件 (Search Config Document)
+subject: vertex-learning-platform
+tier: 3
+order: 14
+type: article
+nodes:
+  - vertex-learning-platform/intelligent-search
+sources:
+  - "[[sources/vertex-learning-platform/AGENTS.md#search-config]]"
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_5:6801-7352]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 搜尋設定文件 (Search Config Document)
+
+## Problem Statement
+
+搜尋行為不是寫死在程式碼裡就能解決的問題。你可能今天希望搜尋只看「已發佈的課程」，明天希望加上「影片逐字稿」的搜尋；今天覺得「最相關」的排序最好，明天可能想加一個「最新」的選項。如果每次調整搜尋行為都要改程式碼、重新部署，你就會陷入「改一行程式碼 → 跑 CI/CD → 等部署 → 看效果 → 不對再改」的無限迴圈。更糟的是，如果你把搜尋指令寫死在程式碼裡，AI 代理在修改搜尋功能時可能會不小心覆蓋掉你的規則。
+
+## Why it matters
+
+搜尋設定文件（Search Config Document）解決的是「怎麼在不改程式碼的情況下調整搜尋行為」的問題。它把搜尋的「行為規則」從程式碼中抽出來，變成 Sanity 裡的一個文件——就像把公司的「營業規則」從程式碼裡抽出來，變成一份可以隨時修改的政策手冊。
+
+這不只是便利性的問題。在 Vertex 的 agentic 工作流中，搜尋設定文件是「config-as-content」模式的具體實踐：你透過 Sanity 的編輯介面（Studio）修改搜尋規則，不需要動程式碼、不需要跑 CI/CD、不需要重新部署。修改之後，下一次搜尋請求就會自動使用新的規則。這讓搜尋行為的調整變成了一個「編輯文件」的操作，而不是一個「改程式碼」的操作。
+
+## How it works
+
+### Context 文件的結構
+
+搜尋設定文件在 Sanity 裡是一個「Agent Context」類型的文件，包含兩個核心欄位：
+
+| 欄位 | 白話說明 | 例子 |
+| --- | --- | --- |
+| **Content scope filter**（內容範圍過濾器） | 告訴模型「只能搜尋這些類型的文件」 | "只搜尋 course、module、lesson 文件；不搜尋 instructor、category" |
+| **Instruction deltas**（指令差異） | 告訴模型「怎麼搜尋」的行為規則 | "用 wildcard 關鍵字匹配，不要用整句匹配；結果按最相關排序" |
+
+這兩個欄位會被注入到 MCP 的系統提示裡，模型在每次搜尋前都會先讀取它們。
+
+### 修改流程
+
+```
+你想要調整搜尋行為（例如：只搜尋已發佈的課程）
+  ↓
+打開 Sanity Studio
+  ↓
+找到「vertex search」context 文件
+  ↓
+修改 content scope filter 或 instruction deltas
+  ↓
+儲存文件
+  ↓
+下一次搜尋請求自動使用新規則
+```
+
+注意：修改 context 文件**不需要**重新部署程式碼。但如果你修改的是 inline system prompt（寫在程式碼裡的系統提示），就需要重新啟動伺服器才能生效。這就是「config-as-content」和「hardcoded in code」的差別。
+
+### 跟 inline system prompt 的關係
+
+搜尋的規則實際上寫在兩個地方：
+
+1. **Context 文件**（Sanity 裡的動態配置）——可以隨時修改，不需要重啟伺服器
+2. **Inline system prompt**（程式碼裡的系統提示）——修改後需要重啟伺服器才能生效
+
+為什麼要寫在兩個地方？因為**模型更傾向遵循 inline system prompt 中的指令**。Context 文件是動態可調的，但如果你只把規則寫在 Context 裡，模型可能偶爾不遵守。把關鍵規則同時寫在兩處，等於上了雙重保險：
+
+- Context 文件：方便調整，不影響部署
+- Inline system prompt：確保底線規則始終被執行
+
+### 修改 Context vs 修改程式碼
+
+| 操作 | 需要改程式碼？ | 需要重啟？ | 生效時間 | 適合場景 |
+| --- | --- | --- | --- | --- |
+| 修改 Context 文件 | 否 | 否 | 下次請求即生效 | 調整搜尋範圍、排序規則、匹配邏輯 |
+| 修改 inline system prompt | 是 | 是 | 重啟後生效 | 修改底線安全規則、固定不變的指令 |
+| 新增/移除搜尋結果欄位 | 是 | 是 | 重啟後生效 | 改變結果卡片的結構 |
+
+## In plain terms
+
+想像你經營一間餐廳，菜單上的菜色（搜尋行為）會隨著季節和顧客喜好調整。你有兩個方式：
+
+1. **把菜色寫在黑板上**（Context 文件）——每天可以擦掉重寫，廚師（模型）看到黑板就知道今天賣什麼。客人改需求時，改黑板就好，不用重裝廚房。
+2. **把菜色刻在菜單上**（inline system prompt）——改起來很麻煩（要重印菜單），但客人就算看不清楚黑板，至少還有刻好的菜單可以參考。
+
+最聰明的做法是兩邊都寫——黑板讓你快速調整，刻好的菜單確保最基本的規則不會被忽略。
+
+## Practical use
+
+在 Vertex 專案中，搜尋設定文件的實作流程：
+
+1. **匯入 Context 文件**：透過 `dial-your-context` skill 或 Sanity MCP 匯入「vertex search」文件。文件包含內容範圍過濾器和搜尋指令。
+2. **透過 Studio 編輯**：在 Sanity Studio 的管理介面中找到 context 文件，直接修改 scope filter 或 instructions。
+3. **關鍵規則雙重寫入**：把「不要編造課程」「結果必須從 Sanity 查詢」等底線規則同時寫在 Context 文件和 inline system prompt 裡。
+4. **測試修改效果**：修改 Context 文件後，直接在搜尋頁面輸入查詢，觀察結果是否反映新規則。不需要重啟伺服器。
+5. **如果是 inline system prompt 改動**：修改程式碼中的系統提示後，需要重啟 dev server（`npm run dev`）才能生效。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/mcp-context|Sanity Context MCP]] — Context 文件透過 MCP 注入系統提示，是 MCP 的「可調配置」。
+- [[learn/vertex-learning-platform/elements/grounding-rule|搜尋接地規則 (Grounding Rule)]] — Context 文件定義了「模型只能看哪些資料」的範圍，接地規則確保模型遵守這個範圍。
+- [[learn/vertex-learning-platform/elements/decision-architecture|Decision Architecture]] — 搜尋配置屬於 AGENTS.md 中「已做決策」的一部分：搜尋行為由 Context 文件控制，不是寫死在程式碼裡。
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/AGENTS.md#search-config]] — 搜尋設定文件的完整規範：context 文件的結構、修改方式、跟 inline system prompt 的關係。
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_5:6801-7352]] — MCP 工具迴圈實作：context 快取、系統提示注入、修改 context 不需要重啟伺服器。
+
+## Questions
+
+### Q1. 如果我只修改了 Context 文件，但模型還是用舊的規則回答，是什麼原因？
+
+A1. 最常見的原因是 context 快取——`POST /api/search` 會在啟動時把 context 內容快取到系統提示裡。如果你修改了 context 文件但沒有重新啟動伺服器，快取不會更新。解決方式是重啟 dev server。另一個原因是模型更傾向遵循 inline system prompt，如果你的關鍵規則只寫在 Context 裡而沒有雙重寫入，模型可能忽略它。
+
+### Q2. 為什麼不能把所有搜尋規則都寫在 Context 文件裡，然後完全不寫 inline system prompt？
+
+A2. 因為模型的行為有隨機性——它不是每次都 100% 遵循同一個指令。把關鍵規則（例如「不要編造課程」）只寫在 Context 裡，模型可能偶爾不遵守。把這些規則同時寫在 inline system prompt 裡，等於上了雙重保險。inline system prompt 是「硬底線」，Context 文件是「軟調整」。
+
+### Q3. 如果我沒有 `dial-your-context` skill，怎麼修改 Context 文件？
+
+A3. 你可以直接透過 Sanity MCP 或 Sanity Studio 的管理介面找到 context 文件並編輯它。文件類型是「Agent Context」，通常有一個可預覽的內容區域。你也可以透過 Sanity CLI 的 `sanity document import` 命令匯入一整個新的 context 文件。

@@ -1,0 +1,115 @@
+---
+id: video-resolution-and-seed-pipeline
+title: 影片解析與 Seed 管線
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/video-resolution
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]]"
+  - "[[sources/vertex-learning-platform/videos.json#schema]]"
+  - "[[sources/vertex-learning-platform/videos.json#coverage]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 影片解析與 Seed 管線
+
+## Learning goal
+
+能說明 videos.json 如何把 lessons 對應到真實 YouTube 影片，以及 seed build pipeline 的完整流程
+
+## Lesson
+
+### 🎯 為什麼 seed 階段就綁定真實影片很重要？
+
+上一步你已經搞清楚了 141 份 NDJSON 文件的內部結構——courses、modules、lessons 各自的欄位和引用關係。但有一個問題始終懸而未決：每一節 lesson 的 `videoUrl` 到底從哪裡來？
+
+Seed 資料裡每筆 lesson 都帶有一個 `videoUrl` 欄位，格式像是 `https://www.youtube.com/watch?v=abc123`。這些 URL 不是隨便填的假連結——它們指向真實存在的 YouTube 影片，有真實的頻道、真實的播放時長、真正的字幕。seed 編譯器（`build-ndjson.mjs`）在產生 NDJSON 的時候，必須知道「這節課該對應到哪一支影片」。這就是 [[learn/vertex-learning-platform/elements/video-resolution|Video Resolution（影片解析）]] 要解決的問題。
+
+### 📄 videos.json 的結構
+
+答案藏在一個叫做 `videos.json` 的靜態檔案裡。一個扁平的 JSON 物件，包含 **120 個 key**，每個 key 對應一節 lesson 的 slug id（跟 `seed.ndjson` 裡的 lesson id 完全一致）。每個 value 是一個物件，帶有五個欄位：
+
+```json
+{
+  "nextjs-app-router-in-depth-file-system-routing": {
+    "id": "dQcFh9Gz3dY",
+    "title": "Next.js App Router in Depth - File System Routing",
+    "channel": "Codevolution",
+    "duration": 720,
+    "query": "nextjs app router file system routing tutorial"
+  }
+}
+```
+
+| 欄位 | 用途 | 影響範圍 |
+|------|------|----------|
+| `id` | YouTube 影片唯一識別碼，即 URL 裡 `v=` 後面的字串 | 組裝可播放 URL |
+| `title` | 影片原始標題 | 顯示與搜尋 |
+| `channel` | 上傳影片的 YouTube 頻道名稱 | 資料完整性 |
+| `duration` | 影片總時長（秒） | module/course 總時長累加 |
+| `query` | 當初在 YouTube 上搜尋到這支影片時使用的搜尋字串 | ingest pipeline 字幕擷取 |
+
+這五個欄位各自承擔不同的職責：`id` 用來組裝出可播放的 URL；`duration` 流入 seed，讓 module 和 course 的總時長能正確累加（前面在 [[learn/vertex-learning-platform/nodes/seeding-content/seed-data-structure|Seed 資料結構]] 裡已經看過這條累加鏈）；`query` 則是這整套機制中最容易被忽略、卻最重要的欄位。
+
+### ⚡ 三個炸掉的原因：為什麼不能亂填 URL
+
+你可能會想：「我隨便填一個 YouTube URL 不就好了？反正 seed 只是要有資料嘛。」但這個做法會在三個地方炸掉：
+
+**1. 播放器直接報錯** — Sanity schema 的 `videoUrl` 欄位只接受 YouTube、Vimeo、Bunny 三種格式的 URL。URL 指向不存在的影片 → 使用者看到一片空白加上紅色錯誤圖示。
+
+**2. 字幕擷取失效** — 後續的 ingestion pipeline（`studio/scripts/ingest/`）會用這些真實 URL 去 YouTube 擷取字幕，建立可搜尋的 `video` 文件。URL 是假的 → ingest 腳本拿到 404 或空回應 → 搜尋功能沒有索引可建。平台的核心價值是「搜尋任何影片，精確跳轉到某一秒」——沒有字幕，這句話就是空話。
+
+**3. 時長不一致** — `duration` 欄位如果是瞎編的，module 的累加時長跟實際影片總長會有出入。前端顯示「這個 module 有 30 分鐘」，但影片播放完只需要 20 分鐘，使用者會馬上察覺不對。
+
+videos.json 的存在不是多此一舉，而是**整條功能鏈的資料真相來源（single source of truth）**。它確保每一節課都綁定到一支真實的、可播放的、有字幕的 YouTube 影片。
+
+### 🔧 resolve-videos.mjs：三步完成串接
+
+有了 videos.json，還需要一支腳本把它跟 seed 資料串起來——`studio/scripts/seed/resolve-videos.mjs`。工作流程拆成三個步驟：
+
+1. **讀取 videos.json** — 120 個 entry 載入記憶體，用 lesson slug 作為 key 建立一個查找表（lookup table）。
+2. **遍歷 seed 規格** — 對每筆 lesson，在查找表裡找到對應的 entry，用它的 YouTube `id` 組裝出完整影片 URL（`https://www.youtube.com/watch?v={id}`），再把 URL 和 `duration` 寫回 seed 記錄。
+3. **確保不重複** — Seed schema 以唯一 URL 為 key——同一支 YouTube 影片不能被兩節不同的 lesson 引用。resolve-videos.mjs 遵守這個約束，確保 120 節課各自對應到不同的真實影片。
+
+整個過程**不依賴 YouTube Data API**。不需要 OAuth，不需要 quota，只需要 videos.json 裡已經填好的 YouTube `id`。這是一個有意的設計選擇——避免在 seed 階段引入外部 API 依賴，降低失敗率。
+
+### 📊 10 個主題 × 12 支影片的覆蓋策略
+
+120 支影片不是隨機挑選的。它們平均分配在**十個課程主題**上：Next.js、React、TypeScript、AI 應用開發、RAG 檢索、Python、系統設計、PostgreSQL、DevOps 與 Web 安全，每個主題恰好 12 支影片。這個覆蓋策略確保每個課程都有足夠的影片來填充四個 module 各三個 lesson。
+
+更關鍵的是**搜尋字串（`query`）的真實性**。videos.json 裡的 query 不是憑空捏造的關鍵字，而是真實的教學搜尋語句，例如 "react server components explained tutorial" 或 "nextjs app router file system routing"。這些查詢保證搜尋結果回來的影片是與課程主題匹配的教學內容，而非隨意的娛樂影片。當 ingest pipeline 後續抓取字幕時，字幕的內容確實跟 lesson 的主題相關，搜尋功能才能回傳有意義的結果。
+
+頻道來源也經過挑選——Codevolution、Web Dev Simplified、ByteByteGo、KodeKloud 這些都是知名的程式教學頻道，影片品質和長度都適合用來建立一個可展示的 demo 平台。總計 **120 支影片加起來大約 22.75 小時**的真實教學內容。
+
+### 🆚 弱做法 vs 強做法
+
+| 做法 | 初始投入 | 播放器 | 字幕擷取 | 搜尋功能 | 時長正確性 | 長期維護 |
+|------|----------|--------|----------|----------|------------|----------|
+| 弱：假造 URL + Lorem Picsum | 低 | ❌ 報錯 | ❌ 404 | ❌ 空的 | ❌ 不一致 | 需回頭清理 |
+| 強：videos.json 真實綁定 | 10–20 分鐘 | ✅ 可播 | ✅ 有字幕 | ✅ 可搜 | ✅ 準確 | 零額外工作 |
+
+一個常見的捷徑是用 Lorem Picsum 圖片搭配假造的影片 URL——反正 seed 只是要有資料，播放器先不接，搜尋先不做。這種做法在第一次 demo 時看起來沒問題，但它隱藏了一個更大的問題：你永遠不知道什麼時候才會去修這些假資料。
+
+強的做法是從一開始就用真實影片。videos.json 的建立過程確實比較費時——作者手動撰寫了 120 條搜尋語句，逐一在 YouTube 上搜尋、確認影片存在、記錄 id 和 duration。這花了 **10 到 20 分鐘**，大約 120 次 YouTube 擷取。但這 20 分鐘的投入換來的是：seed 匯入後，播放器能播、字幕能抓、搜尋能用、時長數字是對的。你不用在未來某個時間點回頭清理一堆假資料。
+
+另一個值得提的弱做法是用 YouTube Data API 來動態解析影片。這聽起來比較「聰明」，但它引入了 OAuth 設定、API quota 管理、rate limiting 等複雜度。在 seed 階段，這些都是不必要的負擔。靜態的 videos.json 加上直接的 ID 組裝，是最簡單也最可靠的方案。
+
+### 🔗 跟 ingestion pipeline 的銜接
+
+videos.json 不只服務於 seed 階段。當 seed 匯入完成、課程頁面能正常渲染之後，下一步是建立搜尋功能。搜尋功能依賴的 `video` 文件來自 ingestion pipeline——`studio/scripts/ingest/` 裡的腳本會讀取每一節 lesson 的真實 YouTube URL，去 YouTube 擷取字幕（captions），然後把字幕內容建立成 Sanity 的 `video` 文件。
+
+這意味著 **videos.json 是整條資料管線的起點**：
+
+- **Seed 階段**：提供真實的 URL 和時長，讓 seed 匯入能正確完成
+- **Ingest 階段**：真實的 URL 被用來抓取字幕，讓搜尋功能真正可用
+
+如果 videos.json 裡有任何一支影片不存在，整條管線就會在 ingest 階段斷掉——seed 看起來沒問題，但搜尋功能是空的。
+
+這個設計也讓你可以安全地重建環境。只要 videos.json 不變，重跑 resolve-videos.mjs 和 seed import 得到的結果永遠一樣。重跑 ingest pipeline 擷取到的字幕也一樣。整個 seed 階段是 **deterministic（確定性的）**——這跟 [[learn/vertex-learning-platform/nodes/seeding-content/deterministic-ids-and-idempotent-import|Deterministic IDs 與冪等匯入]] 的精神完全一致。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]]
+- [[sources/vertex-learning-platform/videos.json#schema]]
+- [[sources/vertex-learning-platform/videos.json#coverage]]

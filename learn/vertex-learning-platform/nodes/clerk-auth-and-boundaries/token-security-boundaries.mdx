@@ -1,0 +1,124 @@
+---
+id: token-security-boundaries
+title: "Token 安全邊界與 Server-Only Auth State"
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/token-public-secret-split
+  - vertex-learning-platform/server-only-auth-state
+sources:
+  - "[[sources/vertex-learning-platform/AGENTS.md#traps]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#app-structure]]"
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:2789-3296]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Token 安全邊界與 Server-Only Auth State
+
+## Learning goal
+
+能建立 public/secret 分割的完整理解：Clerk publishable key vs secret key、NEXT_PUBLIC_ 前綴的意義、.gitignore 排除 env、以及 server-only auth state 的架構——讓 AGENTS.md 的安全規則成為你的底線。
+
+## Lesson
+
+### 一張表看懂所有金鑰
+
+你已經安裝了 Clerk，middleware 也接上了。但現在你的 `.env.local` 裡有一堆環境變數——Clerk 的 publishable key、secret key，Sanity 的 project ID、read token、write token，PostHog 的 public key、private key，OpenAI 的 API key。它們看起來都是字串，但它們的安全性完全不同。
+
+問題是：**你怎麼快速判斷哪個金鑰可以放 `NEXT_PUBLIC_`、哪個不行？**
+
+答案是一個簡單的判斷原則：**一個金鑰如果「只能做事、不能被拿來做別的事」，它就是 client-safe 的；一個金鑰如果「能做有副作用的操作」，它就絕對不能出現在瀏覽器端。**
+
+具體來說：
+
+| 金鑰類型 | Client-safe？ | 原因 |
+|----------|--------------|------|
+| Clerk publishable key | ✅ 是 | 只能初始化 Clerk SDK，不能讀寫資料 |
+| PostHog public key | ✅ 是 | 只能發送追蹤事件，不能讀取分析資料 |
+| Clerk secret key | ❌ 否 | 能管理使用者、存取 session、執行管理操作 |
+| Sanity read token | ❌ 否 | 能讀取私有資料集的完整內容 |
+| Sanity write token | ❌ 否 | 能建立、修改、刪除 Sanity 裡的文件 |
+| OpenAI API key | ❌ 否 | 能呼叫 AI API，費用由金鑰持有者承擔 |
+| PostHog private key | ❌ 否 | 能讀取分析資料、管理專案設定 |
+
+### NEXT_PUBLIC_ 前綴的機制
+
+Next.js 的 bundler（webpack/Turbopack）在 build 時會：
+
+1. **掃描所有 `process.env.NEXT_PUBLIC_*`**：把這些值硬編碼進 client bundle 的 JavaScript 裡。
+2. **忽略所有非 `NEXT_PUBLIC_` 的環境變數**：這些值只在 server 端可用，不會出現在 client bundle 裡。
+
+這意味著：**一個環境變數有沒有 `NEXT_PUBLIC_` 前綴，直接決定它會不會出現在瀏覽器端**。這不是一個配置選項，而是 Next.js 的架構邊界。
+
+**為什麼這個機制很重要？** 因為它提供了一道被動防線——即使你在 client component 裡不小心使用了 `process.env.SANITY_API_READ_TOKEN`，Next.js 的 bundler 也不會把它打包進 client bundle，導致 client component 拿不到值而 build 失敗。但這道防線只在 build 時生效——在 development 模式下，它不會阻止你。所以你不能依賴框架來擋安全問題，你需要在寫代碼時就遵守規則。
+
+### Vertex 的環境變數分佈
+
+| 環境變數 | 前綴 | 出現在 | 用途 |
+|----------|------|--------|------|
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | `NEXT_PUBLIC_` | Client bundle | 初始化 Clerk SDK |
+| `CLERK_SECRET_KEY` | 無 | Server only | Clerk 管理操作 |
+| `NEXT_PUBLIC_SANITY_PROJECT_ID` | `NEXT_PUBLIC_` | Client bundle | Sanity 專案識別（非敏感） |
+| `SANITY_API_READ_TOKEN` | 無 | Server only | 讀取 Sanity 資料集 |
+| `SANITY_API_WRITE_TOKEN` | 無 | Server only | 寫入 Sanity 資料集 |
+| `NEXT_PUBLIC_POSTHOG_KEY` | `NEXT_PUBLIC_` | Client bundle | 初始化 PostHog SDK |
+| `POSTHOG_PRIVATE_KEY` | 無 | Server only | PostHog 管理操作 |
+| `OPENAI_API_KEY` | 無 | Server only | 呼叫 OpenAI API |
+
+### .env.example 的角色
+
+AGENTS.md 的 traps 章節建議：把所有環境變數列出在 `.env.example` 裡，並用註解標註哪些可以加 `NEXT_PUBLIC_`、哪些不行。這讓所有協作者（包括 AI 代理）在第一時間就知道規則，不需要猜測。
+
+### Server-Only Auth State：認證狀態的流動路徑
+
+理解了金鑰的 client-safe 分類之後，下一步是理解 auth state（認證狀態）本身的流動。Auth state 代表「使用者是誰」以及「你能做什麼」——它比單純的金鑰更敏感。
+
+在 Next.js App Router 中，auth state 的正確流動路徑是：
+
+```
+Clerk middleware (proxy)
+    ↓ 讀取 session cookie，驗證 JWT
+    ↓ 附加 auth state 到請求物件
+Server Component / Route Handler
+    ↓ 呼叫 auth()，取得 userId 和 session
+    ↓ 在 server 端使用（查詢資料、驗證權限）
+    ↓ 把需要的結果作為 props 傳給 client component
+Client Component
+    ↓ 只接收渲染所需的資料（例如使用者名稱、頭像 URL）
+    ↓ 不持有 token、不持有 userId（除非是公開資訊）
+```
+
+**關鍵規則：auth state 從 server 流向 client 的唯一管道是 props。** Client component 從 server component 接收資料，但它拿不到 token 本身——token 始終留在 server 端。
+
+### Clerk 的 auth() 函數
+
+Clerk 提供了一個 `auth()` 函數，在 server component 或 route handler 裡呼叫。它回傳的 `userId` 只在 server 端存在——用來查詢資料、驗證權限，但永遠不會到達瀏覽器。
+
+在 Vertex 的實踐中：
+- **我的學習頁**：server component 呼叫 `auth()` 取得 `userId`，用它查詢 Sanity 裡的進度資料，把結果作為 props 傳給 client component。
+- **進度寫入 API**：route handler 呼叫 `auth()` 驗證身份，確認是本人操作才允許寫入。
+- **首頁和課程頁**：不需要 `auth()`，因為這些頁面是公開的。
+
+### 為什麼 AI 代理很容易破壞這條邊界？
+
+在 agentic 工作流中，AI 代理在實作時很容易犯以下錯誤：
+
+1. **在 `use client` 的元件裡呼叫 `auth()`**：`auth()` 需要 server 端的 session cookie 和 Clerk 的 secret key——這些在瀏覽器端不存在。
+2. **把 `auth()` 的回傳值傳給 client component**：userId 不是公開資訊，暴露在瀏覽器端有安全風險。
+3. **在 client component 裡直接呼叫 Sanity API**：需要 token，而 token 不能出現在 client 端。
+
+這些錯誤看起來「能跑」（在 development 模式下），但實際上已經破壞了安全邊界。AGENTS.md 把 server-client 邊界刻進操作手冊，就是為了讓 AI 在寫每一行程式碼時都知道「這段在 server 跑，不能把 token 傳出去」。
+
+### 驗證：三道防線
+
+1. **AGENTS.md 的規則**：寫在操作手冊裡的不可違反規則，AI 代理在實作前會讀取。
+2. **`npm run build` 的被動防線**：Next.js 的 bundler 會在 build 時檢查 client bundle 裡有沒有不該出現的環境變數——如果有，build 會失敗。
+3. **CodeRabbit 的 PR 審查**：在合併前，CodeRabbit 會掃描代碼中有沒有 secret key 洩漏、不安全的 client-side token 使用等問題。
+
+三道防線缺一不可——第一道是預防，第二道是檢測，第三道是兜底。
+
+## Sources
+
+- [[sources/vertex-learning-platform/AGENTS.md#traps]] — traps 章節的完整分類：所有 client-safe vs not-client-safe 的值，以及為什麼不能搞混
+- [[sources/vertex-learning-platform/AGENTS.md#app-structure]] — app structure 的邊界規則：「the browser never holds private tokens, never calls MCP/LLM, never writes content/progress」
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:2789-3296]] — Clerk 安裝時產生的環境變數、`.gitignore` 排除 env 的做法

@@ -1,0 +1,92 @@
+---
+id: reverse-reference
+title: 反向引用 (Reverse Reference)
+subject: vertex-learning-platform
+tier: 2
+order: 1
+type: article
+nodes:
+  - vertex-learning-platform/lesson-page-and-video
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6069-6504]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 反向引用 (Reverse Reference)
+
+## Problem Statement
+
+在一個 headless CMS 資料模型中，子文件（如 lesson）通常不會儲存它所屬的父文件（如 course）的引用。當你在 Next.js 的 `lessons/[slug]` 路由讀取一份 lesson 時，如果 schema 設計上 lesson 沒有 `course` 欄位，你就無法直接從 lesson 查到它屬於哪門課程。這意味著你拿不到父課程的名稱、模組結構、或其他課程層級的資訊——而這些是 lesson 頁上導覽和麵包屑所必需的。
+
+## Why it matters
+
+Headless CMS 的 schema 設計往往偏向「自上而下」的引用：course 持有 lessons 列表。但 lesson 頁的需求恰恰是「自下而上」——從一份 lesson 出發，找出它所屬的課程。如果沒有反向引用機制，你要麼在 lesson 上冗餘儲存 course 引用（違反 single source of truth），要麼就得做額外的 client-side 查詢或 N+1 請求。反向引用讓你用一次 server-side GROQ 查詢就完成這件事，既保持資料模型乾淨，又避免效能問題。
+
+## How it works
+
+Sanity 的 GROQ 查詢語言支援 `*[_type == "course" && references($lessonId)]` 這樣的語法：它在所有 course 文件中找出「引用了指定 lesson ID」的那一份。這就是反向引用的核心機制——不是從 lesson 往 course 查，而是從 course 往回找「誰引用了我」。
+
+具體流程：
+
+1. 先用 `lessons/[slug]` 的 params 取得 lesson 的 `_id`
+2. 在同一個 GROQ 查詢中，用 `*[_type == "course" && references(^._id)]` 找到包含這份 lesson 的父課程
+3. 把父課程的 `title`、`slug`、以及對應的 module 結構一併返回
+
+這個模式的關鍵是 `^` 操作符——它引用外層查詢的結果（即当前 lesson 的 `_id`），讓內層的 course 查詢能「反向」找到包含它的那份課程。
+
+## In plain terms
+
+把 Sanity 想像成一座圖書館。每本書（lesson）上沒有印「你屬於哪個書架（course）」，但圖書館的索引系統（GROQ）可以幫你反查：「哪個書架上摆了這本書？」——這就是反向引用。你不需要在每本書上貼標籤說「我屬於 C 書架」，因為書架的登記簿裡已經記錄了它包含哪些書。
+
+## Analogy
+
+想像你有一個通訊錄 App，裡面有「聯絡人」和「公司」兩個資料表。聯絡人頁面需要顯示「這個人屬於哪家公司」，但聯絡人資料裡只有姓名和電話，沒有公司欄位。反向引用就像是問公司資料表：「哪家公司登記了這個聯絡人？」——從公司往回找，而不是從聯絡人往前找。
+
+## Practical use
+
+在 Vertex 學習平台中，每份 lesson 透過 `module` 的 `lessons` 列表被引用。當你建構 `lessons/[slug]` 路由時， Sanity 的 GROQ 查詢會同時做兩件事：
+
+```groq
+*[_type == "lesson" && slug.current == $slug][0]{
+  _id,
+  title,
+  notes,
+  "course": *[_type == "course" && references(^._id)][0]{
+    title,
+    slug,
+    modules[]->{
+      title,
+      lessons[]->{ title, slug }
+    }
+  }
+}
+```
+
+外層查詢找到 lesson，內層 `*[_type == "course" && references(^._id)]` 反向查出父課程。一次查詢搞定兩件事，不需要 client 端做任何額外請求。
+
+## Prerequisites
+
+- [[learn/vertex-learning-platform/elements/sanity-schema|Sanity schema]] — 了解 Sanity 文件類型與欄位定義
+- [[learn/vertex-learning-platform/elements/embedded-vs-reference|嵌入與引用 (Embedded vs Reference)]] — 理解 Sanity 中 embedded 和 reference 兩種資料組織方式
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/sanity-fetch|sanityFetch]] — 反向引用是 sanityFetch 查詢的一部分，查詢在 server-side 執行
+- [[learn/vertex-learning-platform/elements/groq-aggregate|GROQ 聚合查詢]] — 反向引用使用 GROQ 的 `references()` 函數與 `^` 操作符
+- [[learn/vertex-learning-platform/elements/server-only-read-layer|server-only 讀取層]] — 反向引用查詢跑在 server component，避免 client 端暴露 Sanity 資料
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6069-6504]] — 原始教學中「parent course derived by reverse reference」的完整脈絡
+
+## Questions
+
+### Q1. 為什麼不直接在 lesson schema 加一個 `course` 欄位來記錄父課程？
+A1. 因為 Sanity 的 reference 是單向的——course 已經透過 `modules[].lessons[]` 引用了 lesson。如果 lesson 再加 `course` 欄位，就變成雙向引用，維護時容易不一致（改了 course 的 lessons 列表卻忘了更新 lesson 的 course 欄位）。反向引用讓你從已有的一層引用反向查出關係，不需要冗餘儲存。
+
+### Q2. `^` 操作符在 GROQ 裡代表什麼？
+A2. `^` 引用外層查詢的當前結果。在嵌套查詢中，`^._id` 就是外層找到的那份 lesson 的 `_id`。它讓內層查詢能「看見」外層的結果，實現反向查找。
+
+### Q3. 反向引用會有效能問題嗎？
+A3. 在小規模資料集（幾百到幾千份文件）上幾乎無感。GROQ 的 `references()` 會掃描所有 course 文件，但 Sanity 後端有索引優化。如果資料量達到數萬份以上，可以考慮在 schema 層加一個 denormalized 的 `course` 欄位作為快取。

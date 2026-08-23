@@ -1,0 +1,91 @@
+---
+id: deterministic-ids
+title: Deterministic IDs
+subject: vertex-learning-platform
+tier: 1
+order: 1
+type: article
+nodes:
+  - vertex-learning-platform/seeding-content
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]]"
+  - "[[sources/vertex-learning-platform/seed.ndjson#content-types]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+## 問題陳述
+
+在 Sanity 中，每筆文件都有一個唯一的 `_id`。如果使用自動產生的 `_id`（例如 Sanity 內建的隨機字串），同一份 seed 檔案每執行一次，Sanity 就會把它當成「新文件」插入一次。重新匯入 ten courses、120 lessons 的資料後，資料庫裡會出現兩倍、三倍的重複文件——搜尋結果變得混亂，頁面顯示的資料也不再可信。
+
+這不只是 seed 階段的問題。任何需要「匯入同一份資料多次」的工作流程——從 CI/CD 自動部署、環境重建，到多個開發者各自匯入測試資料——都會遇到同樣的災難。根本原因是：隨機 `_id` 之間沒有穩定的對應關係，系統無法判斷「這筆資料已經存在」。
+
+## 為什麼重要
+
+Deterministic IDs（確定性 ID）是讓 seed 資料可重複執行的基礎建設。它帶來三個直接好處：
+
+**安全重跑**——無論你執行 seed 腳本一次、五次、還是在全新資料庫上執行，結果永遠是相同的資料筆數。不需要手動刪除舊資料再重新匯入。
+
+**可預測的資料結構**——當你知道 `category.web-development` 這個 ID 永遠對應「Web 開發」分類，debug 時可以直接在 Sanity Studio 搜尋該 ID，而不必靠模糊的標題去猜。資料之間的參考關係（course 引用 instructor、lesson 引用 video）也因為 ID 穩定而保持一致。
+
+**與 Content Seeding 和 Idempotent Import 的協同**——Content Seeding 負責產生「要匯入什麼」，Deterministic IDs 確保「匯入多次不重複」，而 Idempotent Import 是把兩者結合的完整策略。沒有確定性 ID，後兩者都無法正確運作。
+
+## 運作機制
+
+Sanity 的 `_id` 是文件的唯一主鍵。 Sanity 提供兩種 `_id` 模式：
+
+| 模式 | 格式 | 特性 |
+|------|------|------|
+| 自動產生 | 隨機字串，如 `aBcDeFgHiJ` | 每次匯入都產生新 ID |
+| 確定性 | 自訂字串，如 `category.web-development` | 每次匯入使用同一個 ID |
+
+當使用確定性 ID 時，Sanity 的 import 行為從「插入」變為「upsert」——如果 `_id` 已存在，就更新該筆文件；如果不存在，才建立新文件。這就是為什麼 seed 可以安全地執行多次。
+
+### 命名慣例：`type.slug` 格式
+
+在 Vertex 平台的 seed 中，確定性 ID 遵循 `type.slug` 的命名慣例：
+
+- `category.web-development`、`category.ai-engineering`（共 6 個分類）
+- `instructor.mira-kovac` 等（共 5 位講師）
+- `course.nextjs-app-router-in-depth`、`course.react-performance-engineering` 等（共 10 門課程）
+- Lesson 的 ID 則以課程為前綴，如 `course.nextjs-app-router-in-depth.lesson-5-1`
+
+這種格式同時滿足兩個需求：一是 human-readable（看到 ID 就知道它代表什麼），二是 machine-unique（`type.` 前綴避免不同類型之間的 slug 衝突）。
+
+### 與 `_key` 的搭配
+
+除了 `_id`，seed 還為陣列中的項目（例如 course 裡的 module 列表）指定了確定性的 `_key`。`_key` 是 Sanity 陣列欄位內的唯一鍵，確保同一個 course 內的 module 順序不會在重複匯入時產生重複的陣列項目。
+
+## 簡單理解
+
+把 Sanity 資料庫想像成一張郵寄地址表。隨機 ID 就像每次寄信都寫一個新的收件人名字——郵局（Sanity）不知道這是同一個人，於是每次都建立新記錄。確定性 ID 則像是用身分證字號作為收件人——同一個字號永遠對應同一個人，郵局看到就知道「這個人已經在系統裡了，更新資料就好」。
+
+## 實際應用
+
+在 Vertex 學習平台的 seed 流程中，確定性 ID 的運用如下：
+
+1. 內容規格（`content.mjs`）由人工編寫，定義了 6 個分類、5 位講師、10 門課程及其模組與 120 節課的結構。
+2. NDJSON 產生器（`build-ndjson.mjs`）將規格轉換為 Sanity 可匯入的格式，為每一筆文件分配 `type.slug` 格式的 `_id`，並為陣列項目分配確定性的 `_key`。
+3. 透過 `sanity CLI import` 匯入時，Sanity 根據 `_id` 判斷：已存在的文件更新，不存在的文件建立。
+4. 結果：141 筆文件（6 categories + 5 instructors + 10 courses + 120 lessons），無論匯入幾次都維持相同的筆數。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/idempotent-import|Idempotent Import]] — 確定性 ID 是實現 Idempotent Import 的必要條件，但 Idempotent Import 還包含匯入工具的選擇、檔案格式（NDJSON）以及匯入順序等額外考量。
+- [[learn/vertex-learning-platform/elements/content-seeding|Content Seeding]] — Content Seeding 產生的資料依賴確定性 ID 才能安全地重複匯入。
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]] — Seed 流程的完整說明：NDJSON 產生器的建構、確定性 ID 的指派、以及匯入至 production 的過程。
+
+## Questions
+
+1. **如果 seed 腳本改用自動產生的 `_id`，執行兩次後資料庫會有幾筆 lesson 文件？**
+   240 筆（120 × 2），因為每一筆都是全新的文件，Sanity 無法辨識它們與第一次匯入的文件是同一份。
+
+2. **`course.nextjs-app-router-in-depth` 這個 ID 遵循什麼命名慣例？它解決了什麼問題？**
+   遵循 `type.slug` 慣例（`course` 是文件類型，`nextjs-app-router-in-depth` 是 slug）。它同時解決了 human-readable（一眼看出代表什麼）和避免跨類型衝突（`course.` 前綴確保不會和 `lesson.nextjs-...` 混淆）兩個問題。
+
+3. **為什麼除了 `_id` 之外，seed 還需要為陣列項目指定 `_key`？**
+   因為 Sanity 陣列欄位（例如 course 裡的 module 列表）需要 `_key` 來區分同一陣列內的不同項目。如果沒有確定性的 `_key`，重複匯入時 Sanity 可能重複建立相同的陣列項目，導致一個 course 內出現兩組完全一樣的 module。
+

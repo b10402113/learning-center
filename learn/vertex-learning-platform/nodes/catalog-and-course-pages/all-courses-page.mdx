@@ -1,0 +1,95 @@
+---
+id: all-courses-page
+title: All-courses 總覽頁：列表複用與 CodeRabbit 審查
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/groq-aggregate
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:5217-5520]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# All-courses 總覽頁：列表複用與 CodeRabbit 審查
+
+## Learning goal
+
+能建出 all-courses 總覽頁——列出全部課程、複用 home grid + course-card 組件、處理 null slug 與空狀態，並理解 CodeRabbit 審查的實際發現。
+
+## Lesson
+
+### 📝 起點：首頁只給你看 3 門課
+
+首頁的 course grid 用 `[0...3]` 只取前 3 門課程，這是設計決策——首頁要精簡。但 Vertex 有 10 門課程，學習者需要一個地方看到全部課程，按難度、時數、或喜好來選擇。All-courses 頁面（`/courses`）就是這個地方。它不做排序和分頁（那是之後的 feature），先專注在「列出全部課程」這件事上。
+
+### 🔧 複用設計系統的組件：不從零開始
+
+Agent 在實作 all-courses 頁面時，沒有新的 design mockup 可以參考。它做了一個合理的決定：複用首頁的 home grid 和 course-card 組件。三個好處：
+
+1. **course-card 組件** — 已經建好的卡片 UI（title、description、level badge、lessons 數、duration），在首頁和 all-courses 共用
+2. **grid layout** — 已經建好的響應式 grid（desktop 3 columns、tablet 2 columns、mobile 1 column）
+3. **設計一致性** — 兩個頁面的課程卡片外觀完全一樣，學習者不需要重新適應
+
+**為什麼這很重要？** 這就是 design system 的價值：它讓 agent 在建新頁面時不需要從零開始設計 UI，直接複用已有的 token 和組件。如果你沒有 design system，agent 會自己「發揮」——每個頁面的卡片長得不一樣，學習者會困惑。
+
+### ⚡️ All-courses 的 GROQ 查詢
+
+All-courses 的查詢比首頁更完整。首頁只取前 3 門課，all-courses 要取全部：
+
+```groq
+{
+  "courses": *[_type == "course"]{
+    title, slug, description, level,
+    "totalLessons": count(modules[].lessons),
+    "totalDuration": sum(modules[].lessons[].duration),
+    "moduleCount": count(modules)
+  },
+  "courseCount": count(*[_type == "course"])
+}
+```
+
+一次查詢拿到兩件事：全部課程的列表（帶個別統計），以及課程總數。`courseCount` 用在頁面的標題或 empty state 裡。
+
+**為什麼不分成兩個查詢？** 因為 Sanity API 的每次呼叫都有延遲。一個查詢拿到兩件事，比兩個查詢快一倍。
+
+### 💡 CodeRabbit 的第一次真實審查：兩個 Edge Case
+
+All-courses 頁面是 CodeRabbit 第一次給出有實際意義的 review comments。之前的設計系統和首頁都是 UI 實作，CodeRabbit 的 review 風險很低。All-courses 頁面涉及到資料查詢和 edge case，CodeRabbit 抓到了兩個問題：
+
+**問題 1：count 包含了 null slug 的課程**
+
+```typescript
+// 問題 code
+const courseCount = courses.length
+```
+
+`courses` 陣列包含了所有 `_type == "course"` 的文件，但其中有些課程的 `slug` 是 null（未發佈或草稿）。course-card 組件會在 `slug` 為 null 時移除這張卡片，所以 `courses.length` 顯示的數字比實際可見的課程數多。
+
+CodeRabbit 建議：在查詢端就過濾掉 null slug 的課程，或者在 count 時只計算 `slug != null` 的課程。
+
+**問題 2：bookmark 按鈕沒有 onClick**
+
+course-card 組件上有一個 bookmark 按鈕，但 bookmarking 功能還沒實作。按鈕存在但點了沒有反應——這是 dead UI。CodeRabbit 建議：把按鈕設成 disabled 狀態，或者加一個 coming soon 的提示，不要暴露一個看起來能用但實際沒功能的按鈕。
+
+這兩個問題都很小，但它們揭示了一個重要的模式：**AI 生成的 code 經常能跑，但會在 edge case 上出錯**。CodeRabbit 的價值就在這裡——它不只看 code 能不能 compile，還看 code 在真實場景下會不會有問題。
+
+### 🔧 Empty State 與 Loading
+
+All-courses 頁面需要處理兩種異常狀態：
+
+1. **空狀態** — Sanity 裡沒有任何課程時，頁面不應該空白，應該顯示「目前沒有課程」的提示
+2. **Loading** — Server Component 本身不需要 loading UI（它在 server 端執行），但如果有 client-side 的互動（例如之後的排序），就需要 loading skeleton
+
+目前的實作不處理 loading（因為是純 server render），但 empty state 需要在 courseCount 為 0 時顯示。
+
+**為什麼 empty state 重要？** 如果你用 `courses.length` 來判斷有沒有課程，但 `courses` 包含了 null slug 的記錄，empty state 永遠不會觸發——即使所有課程的 slug 都是 null。這就是 CodeRabbit 抓到的第一個問題的連鎖效應。
+
+### ⚡️ 在 Branch 上實作與 CodeRabbit 的價值
+
+遵循工程流程：在 `feat/all-courses` 分支上實作，完成後開 PR。CodeRabbit 的 review comments 被修正後 merge。作者提到他為整個團隊購買了 CodeRabbit 席位——即使是 AI 寫的 code，也需要人或工具來審查 edge case。
+
+**為什麼這很重要？** 因為 AI 寫 code 的速度很快，但 AI 不會自動檢查 edge case。CodeRabbit 是你和 AI 之間的安全網——它讓你有時間在 merge 之前修正問題，而不是在 production 才發現。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:5217-5520]]

@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 4 — 智慧搜尋：MCP + Grounding + 兩段式時間戳</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<main>
+
+  <p class="meta">
+    Lesson 4 · 課程系列：<a href="../learn/vertex-learning-platform/nodes/intelligent-search.mdx">智慧搜尋：MCP + grounding + 兩段式時間戳</a>
+  </p>
+
+  <h1>智慧搜尋：MCP + Grounding + 兩段式時間戳</h1>
+
+  <div class="goal">
+    <strong>本課目標</strong>：能畫出搜尋請求從瀏覽器到 MCP 再回到 UI 的完整流程，說清「模型只選 ID、Sanity 供事實」的 grounding 原理，並理解 chapters-first 時間戳解析的兩階段機制。
+  </div>
+
+  <h2>搜尋功能最大的風險：不是「找不到」，而是「編造」</h2>
+
+  <p>Vertex 的招牌功能是智慧搜尋——學習者輸入自然語言，平台從影片逐字稿中找出精確到秒級的片段。但搜尋功能最大的風險不是「找不到」，而是「編造」。</p>
+
+  <p>大型語言模型（LLM）在生成回應時，有能力自行組合看似合理的課程名稱、價格、時長、甚至時間戳——但這些資訊可能根本不存在於 Sanity 資料庫中。如果讓模型直接根據自己的「記憶」回答，使用者會得到完全虛構的搜尋結果。</p>
+
+  <div class="callout warn">
+    <span class="label">核心風險</span>
+    <strong>幻覺（hallucination）是 LLM 的內建傾向</strong>，不是偶爾發生的邊緣案例。它被訓練來生成「合理的」文本，而非「真實的」資料。搜尋功能的可信度完全建立在「結果不可能造假」這件事上。
+  </div>
+
+  <p>（AGENTS.md #7：「Search is grounded. Say only what the data returns. Never invent a course, lesson, price, duration, or timestamp.」）</p>
+
+  <h2>架構：瀏覽器永遠不直接呼叫 MCP 或 LLM</h2>
+
+  <p>搜尋請求的完整流動路徑，和你在 Clerk node 學到的 server-client 邊界完全一致：</p>
+
+  <pre><code>Browser (search UI)
+    ↓ POST /api/search  { query: "如何快取資料" }
+Server Route (Next.js)
+    ↓ 連接 Sanity Context MCP
+    ↓ 注入 schema + system prompt
+    ↓ 呼叫 LLM（OpenAI）
+    ↓ LLM 透過 MCP 工具寫 GROQ 查詢
+    ↓ Sanity 執行查詢，回傳結果
+    ↓ LLM 只返回 lesson IDs + 評分
+    ↓ Server 用 IDs 查 Sanity 取得完整資料
+    ↓ 結構化結果串流回 Browser
+Browser (search UI)
+    ↓ 渲染結果卡片（video result + lesson result）</code></pre>
+
+  <div class="callout tip">
+    <span class="label">關鍵規則</span>
+    <strong>瀏覽器永遠不直接呼叫 MCP、LLM 或任何私有 API。</strong> 搜尋查詢先送到 Next.js 的 server route，再由 server route 連接 MCP。瀏覽器只做渲染，敏感操作全在 server 端。
+  </div>
+
+  <h3>為什麼不能讓瀏覽器直接呼叫？</h3>
+
+  <table>
+    <tr><th>如果瀏覽器直接呼叫</th><th>實際架構（server route）</th></tr>
+    <tr><td class="no">MCP 的 read token 洩漏到 client</td><td class="yes">read token 只在 server 端</td></tr>
+    <tr><td class="no">OpenAI API key 洩漏到 client</td><td class="yes">API key 只在 server 端</td></tr>
+    <tr><td class="no">任何人都能直接查詢 Sanity</td><td class="yes">查詢經過 server route 驗證</td></tr>
+    <tr><td class="no">無法控制查詢範圍</td><td class="yes">server route 注入 content scope filter</td></tr>
+  </table>
+
+  <h2>Grounding：模型只選 ID，Sanity 供事實</h2>
+
+  <p>Grounding 是確保搜尋結果不可能造假的核心機制：</p>
+
+  <div class="callout tip">
+    <span class="label">Grounding 原理</span>
+    <strong>模型不負責「知道」課程內容，模型只負責「選擇」哪個 ID 應該出現在結果中；Sanity 則負責「供應」所有的事實細節。</strong>
+  </div>
+
+  <h3>具體流程</h3>
+
+  <ol>
+    <li><strong>LLM 透過 MCP 工具寫 GROQ 查詢</strong>——它知道 Sanity 的 schema，能寫出正確的 GROQ 查詢語句。</li>
+    <li><strong>Sanity 執行查詢</strong>——回傳匹配的文件。</li>
+    <li><strong>LLM 只返回 lesson IDs</strong>——加上評分（relevance score），但不生成任何內容細節。</li>
+    <li><strong>Server 用 IDs 查 Sanity 取得完整資料</strong>——透過 <code>lesson by ids</code> 查詢，取得標題、描述、縮圖、模組標籤等所有展示欄位。</li>
+    <li><strong>結果卡片的每一個欄位都來自 Sanity</strong>——模型從未生成這些內容。</li>
+  </ol>
+
+  <table>
+    <tr><th>欄位</th><th>來源</th><th>模型有沒有生成？</th></tr>
+    <tr><td>課程名稱</td><td>Sanity 查詢</td><td class="no">否</td></tr>
+    <tr><td>模組標籤</td><td>Sanity 查詢（從 array order 推導）</td><td class="no">否</td></tr>
+    <tr><td>縮圖 URL</td><td>Sanity 查詢</td><td class="no">否</td></tr>
+    <tr><td>時間戳</td><td>影片文件的 chapter 或 chunk</td><td class="no">否</td></tr>
+    <tr><td>Relevance score</td><td>模型生成</td><td class="yes">是</td></tr>
+  </table>
+
+  <p>（影片原話：「It made grounding structural as the model returns only lesson ids and every displayed field is read back from sanity via a new lesson by ids query with the 5.1 label derived from the array order.」）</p>
+
+  <h3>影片文件是內部查表，不是獨立實體</h3>
+
+  <p>影片文件（video document）在 Sanity 中是獨立的文件，包含章節列表和逐字稿區塊，但它<strong>永遠不會直接出現在搜尋結果中</strong>。搜尋結果中的「影片結果」實際上是「使用了某個影片的課程」的引用。影片文件的 id 是內部鍵，用於連結課程與影片內容，但對外展示時永遠透過課程呈現。</p>
+
+  <h2>兩段式時間戳解析：Chapters-First, Transcript Fallback</h2>
+
+  <p>當搜尋匹配到影片中的某個時間點時，系統需要決定如何展示。時間戳不是直接從逐字稿來的——它有兩階段機制：</p>
+
+  <table>
+    <tr><th>階段</th><th>匹配什麼</th><th>結果</th></tr>
+    <tr>
+      <td><strong>第一階段：Chapters</strong></td>
+      <td>影片文件的章節列表（<code>{ startSeconds, label }</code>）</td>
+      <td class="yes">乾淨的章節標籤（如 "Caching Overview"）</td>
+    </tr>
+    <tr>
+      <td><strong>第二階段：Transcript</strong></td>
+      <td>逐字稿區塊（<code>{ startSeconds, text }</code>）</td>
+      <td>較嘈雜的內容描述（章節的後備方案）</td>
+    </tr>
+  </table>
+
+  <div class="callout">
+    <span class="label">為什麼 chapters-first？</span>
+    章節標籤是作者或 YouTube 自動產生的結構化資料，品質高、噪音低。逐字稿是語音辨識的結果，可能有錯字、贅詞、斷句不清。所以先匹配章節（高品質），匹配不到才用逐字稿（低品質但覆蓋率高）。
+  </div>
+
+  <h3>Transcript chunks 的設計</h3>
+
+  <p>逐字稿不是整段儲存的。每部影片的逐字稿被切成短區塊（chunks），每個 chunk 約 45 秒、約 350 個字元，從不中斷句子。每個 chunk 都有自己的 <code>startSeconds</code>，確保每個時間點都是一個可搜尋的、可 seek 的真實時刻。</p>
+
+  <p>（影片原話：「Chunks are about 45 seconds each with about 350 characters. Never split mid Q. So every start seconds is a real seekable moment.」）</p>
+
+  <h3>為什麼不能把整個逐字稿丟給模型？</h3>
+
+  <div class="callout warn">
+    <span class="label">陷阱</span>
+    <strong>Never return a whole transcript or chunks array to the model. It overflows the context window.</strong> Vertex 有 120 部影片、4,000+ 個 chunks。把全部逐字稿丟給模型會超出 context window，而且大多數內容與查詢無關。所以只 fetch filtered matches，每部影片只取幾個 chunks。
+  </div>
+
+  <h2>搜尋設定：Config-as-Content</h2>
+
+  <p>搜尋的行為不是寫死在程式碼中的，而是由 Sanity 中的一個 Context 文件（Context document）控制。這個文件包含：</p>
+
+  <ul>
+    <li><strong>Content scope filter</strong>——限制 AI 只能看到 content 類型（course、lesson、video），看不到 progress、config 等敏感資料。</li>
+    <li><strong>Query instructions</strong>——搜尋行為的指令差異（deltas），例如「不要編造」、「wildcard 匹配」、「chapters-first」。</li>
+  </ul>
+
+  <p>編輯 Context 文件後，下一次搜尋請求就會使用新的配置。但修改內聯系統提示（inline system prompt）則需要重新啟動伺服器。</p>
+
+  <div class="callout">
+    <span class="label">關鍵規則的雙重寫入</span>
+    有些搜尋規則太重要了，不能只寫在一個地方。例如「不要編造課程」這條規則，同時寫在 Context 文件和內聯系統提示中。這是因為模型更傾向於遵循內聯系統提示中的指令，但 Context 文件是動態可調的。將關鍵規則寫在兩處，確保底線規則始終被執行。
+  </div>
+
+  <h2>Search UI：全頁結果，不是聊天框</h2>
+
+  <p>搜尋結果是一個完整的結果頁面，不是 compact widget，不是 chatbox：</p>
+
+  <table>
+    <tr><th>設計決策</th><th>原因</th></tr>
+    <tr><td>全頁結果，不 cap 數量</td><td>返回所有相關結果，按最佳匹配排序</td></tr>
+    <tr><td>兩種結果類型</td><td>Video result（精確到秒）+ Lesson result（主題匹配）</td></tr>
+    <tr><td>顯示總數</td><td>讓使用者知道搜尋的覆蓋範圍</td></tr>
+    <tr><td>排序控制，預設 most relevant</td><td>讓使用者可以切換排序方式</td></tr>
+    <tr><td>空狀態指向目錄頁</td><td>搜尋無結果時引導使用者探索</td></tr>
+  </table>
+
+  <h3>兩種結果類型</h3>
+
+  <table>
+    <tr><th>類型</th><th>包含什麼</th><th>動作</th></tr>
+    <tr>
+      <td><strong>Video result</strong></td>
+      <td>課程名稱、模組標籤、縮圖、影片長度、描述、匹配的秒數</td>
+      <td>導航到 lesson page，從該秒開始播放</td>
+    </tr>
+    <tr>
+      <td><strong>Lesson result</strong></td>
+      <td>課程名稱、模組標籤、key points、描述</td>
+      <td>導航到 lesson page</td>
+    </tr>
+  </table>
+
+  <h2>文本匹配規則</h2>
+
+  <p>搜尋使用 token-based 匹配，不是整句匹配：</p>
+
+  <ul>
+    <li><strong>Wildcard 匹配</strong>——使用者輸入「快取」，匹配包含「快取」的所有文件。</li>
+    <li><strong>OR 多詞匹配</strong>——使用者輸入「React 框架」，同時匹配包含「React」或「框架」的文件。</li>
+    <li><strong>不匹配整句</strong>——使用者輸入「React 框架的效能優化」，不會只匹配包含完整這個詞組的文件。</li>
+    <li><strong>Portable Text 透過純文本投影匹配</strong>——富文本內容先轉成純文本再匹配。</li>
+  </ul>
+
+  <h2>整合：從 Clerk 到 Search 的安全邊界</h2>
+
+  <p>搜尋功能的安全架構和你在 Clerk node 學到的完全一致：</p>
+
+  <table>
+    <tr><th>原則</th><th>Clerk Auth</th><th>Intelligent Search</th></tr>
+    <tr><td>瀏覽器不持有私有 token</td><td class="yes">publishable key only</td><td class="yes">read token / API key 在 server</td></tr>
+    <tr><td>Server route 做敏感操作</td><td class="yes">auth() 在 server component</td><td class="yes">/api/search 在 server route</td></tr>
+    <tr><td>瀏覽器只做渲染</td><td class="yes">props 傳資料</td><td class="yes">結果卡片從 server 取得</td></tr>
+    <tr><td>寫入操作走 server route</td><td class="yes">progress API</td><td class="yes">搜尋 API</td></tr>
+  </table>
+
+  <hr>
+
+  <h2>自我檢查（Retrieval Practice）</h2>
+  <p>先別往回翻，憑記憶作答。點錯可以再試，但答案在你點之前請先在心裡說一遍。</p>
+
+  <div class="quiz"
+       data-question="Q1. 搜尋功能最大的風險是什麼？"
+       data-correct="1"
+       data-explain="LLM 的幻覺傾向讓它有能力編造看似合理但不存在的課程名稱、價格、時間戳。Grounding 機制就是為了從根本上消除這個風險。">
+    <button class="opt">搜尋速度太慢</button>
+    <button class="opt">LLM 編造不存在的搜尋結果</button>
+    <button class="opt">逐字稿資料量太大</button>
+    <button class="opt">瀏覽器無法直接呼叫 MCP</button>
+  </div>
+
+  <div class="quiz"
+       data-question="Q2. Grounding 的核心原則是什麼？"
+       data-correct="0"
+       data-explain="模型只負責選擇哪個 lesson ID 應該出現在結果中；Sanity 負責供應所有的事實細節（標題、描述、縮圖、時間戳）。結果卡片的每一個欄位都來自 Sanity 查詢，模型從未生成這些內容。">
+    <button class="opt">模型只選 ID，Sanity 供事實</button>
+    <button class="opt">模型生成所有展示內容</button>
+    <button class="opt">瀏覽器直接查詢 Sanity</button>
+    <button class="opt">逐字稿直接丟給模型</button>
+  </div>
+
+  <div class="quiz"
+       data-question="Q3. 兩段式時間戳解析的第一階段匹配什麼？"
+       data-correct="2"
+       data-explain="第一階段匹配章節列表（chapters），因為章節標籤是結構化資料，品質高、噪音低。只有在章節匹配不到時，才進入第二階段匹配逐字稿區塊（transcript chunks）。">
+    <button class="opt">逐字稿區塊</button>
+    <button class="opt">課程標題</button>
+    <button class="opt">章節列表</button>
+    <button class="opt">模組摘要</button>
+  </div>
+
+  <div class="quiz"
+       data-question="Q4. 為什麼搜尋 API 必須是 server route 而不是 client-side 呼叫？"
+       data-correct="3"
+       data-explain="Server route 保護 MCP 的 read token、OpenAI 的 API key、以及 Sanity 的 content scope filter。瀏覽器直接呼叫會洩漏所有私有金鑰，違反 server-client 邊界。">
+    <button class="opt">因為 client-side 速度太慢</button>
+    <button class="opt">因為 Next.js 不支援 client-side fetch</button>
+    <button class="opt">因為 LLM 只能在 server 端運行</button>
+    <button class="opt">因為需要保護 read token 和 API key</button>
+  </div>
+
+  <div class="quiz"
+       data-question="Q5. 為什麼不能把整個逐字稿丟給模型？"
+       data-correct="1"
+       data-explain="Vertex 有 120 部影片、4,000+ 個 chunks。全部丟給模型會超出 context window，而且大多數內容與查詢無關。正確做法是只 fetch filtered matches，每部影片只取幾個 chunks。">
+    <button class="opt">因為逐字稿格式不相容</button>
+    <button class="opt">因為會超出 context window</button>
+    <button class="opt">因為逐字稿包含敏感資訊</button>
+    <button class="opt">因為模型不支援文字輸入</button>
+  </div>
+
+  <div class="callout tip">
+    <span class="label">下一步</span>
+    有不懂的地方，隨時問我——我就是你的老師。例如：「Sanity Context MCP 和一般的 REST API 有什麼不同？」或「如果 semantic search 被關掉了，搜尋品質會受什麼影響？」
+  </div>
+
+  <footer>
+    Lesson 4 / 4 · 來源：<a href="../sources/vertex-learning-platform/AGENTS.md#search-behavior">AGENTS.md#search-behavior</a> · <a href="../sources/vertex-learning-platform/AGENTS.md#search-config">AGENTS.md#search-config</a> · <a href="../sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt">vertex-build-tutorial</a>
+  </footer>
+
+</main>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,174 @@
+---
+id: agents-md-decisions
+title: AGENTS.md 決策鎖定、資料模型與安全陷阱
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/decision-architecture
+  - vertex-learning-platform/data-model-as-substrate
+  - vertex-learning-platform/server-client-boundary
+  - vertex-learning-platform/grounding-search
+sources:
+  - sources/vertex-learning-platform/AGENTS.md decisions
+  - sources/vertex-learning-platform/AGENTS.md data-model
+  - sources/vertex-learning-platform/AGENTS.md traps
+  - sources/vertex-learning-platform/AGENTS.md when-in-doubt
+  - sources/vertex-learning-platform/AGENTS.md search-behavior
+  - sources/vertex-learning-platform/AGENTS.md search-config
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# AGENTS.md 決策鎖定、資料模型與安全陷阱
+
+## Learning goal
+
+能列出 decisions、data-model、traps、when-in-doubt 的核心內容，並說明它們如何防止 AI 做出產品或架構錯誤決策。
+
+## Lesson
+
+### 為什麼需要「決策鎖定」？
+
+AI 在實作新功能時，有重新討論已確認架構的傾向。如果不加限制，每次實作都可能推翻之前的決定，產品的一致性就會崩塌。Vertex 的 AGENTS.md 用「Decisions already made」（已做出的決策）章節，把一系列產品判斷寫成不可更改的鎖定條件，讓 AI 只做執行，不做決策。
+
+#### 🔍 搜尋是結果頁面，不是對話框
+
+AI 寫搜尋功能時，不能把搜尋介面做成聊天機器人。使用者輸入一個自然語言問題，系統回傳一組可點擊的結果卡片（result cards）。每張卡片顯示課程名稱、章節標籤、時間戳，點下去直接跳轉到影片的對應秒數。這是一個帶計數和排序的完整結果頁面，不是對話。
+
+#### 🔒 搜尋必須被 Grounding（接地驗證）
+
+這是搜尋功能最關鍵的限制：AI 回傳的每一張結果卡片必須對應到真實存在的課程、真實的章節、真實的價格、真實的時長。系統永遠不能發明（invent）一門課、一節課、一個價格或一個時間戳。如果搜尋結果沒有匹配的內容，它回傳空結果，而不是捏造一個看起來合理的答案。搜尋品質和安全完全依賴這個限制，直接對應 [[learn/vertex-learning-platform/elements/grounding-search|搜尋 Grounding]] 的概念。
+
+#### 🎬 影片文件的結構
+
+影片的目錄結構（TOC, Table of Contents）和逐字稿（transcript）被切成帶時間戳的小塊（timestamped transcript chunks），存在一個獨立的「影片文件」（Video Document）裡。逐字稿永遠不會以完整形式出現在某一個欄位裡——它被拆成多個 chunk，每個 chunk 有 `startSeconds`（起始秒數）和 `text`（文字內容）。
+
+兩個目的：
+1. 避免 API 回傳時產生溢位（overflow）
+2. 讓搜尋引擎能在秒級精準定位
+
+#### ⏱️ 時間戳解析順序：章節優先
+
+當使用者搜尋「如何建立資料模型」時，系統先比對章節標籤（chapter labels），找到最匹配的章節；如果沒有章節匹配，才去比對逐字稿 chunk 的文字。這確保搜尋結果的時間戳指向最精準的位置。
+
+#### 🎥 播放留在站內
+
+影片播放透過嵌入播放器（provider embeds）實現，帶一個 `start-seconds` 參數控制從第幾秒開始播。使用者不需要跳到 YouTube 或 Vimeo 的外部頁面。
+
+#### 📄 內容用 Portable Text 結構化
+
+課程筆記和說明用 Sanity 的 Portable Text 格式存儲，不是純文字。這讓內容保持結構化——可以有標題、段落、程式碼區塊、連結——同時在搜尋時能透過純文字投影（plain-text projection）做比對。
+
+#### 🔐 認證與進度追蹤
+
+進度記錄（Progress record）以 Clerk 的使用者 ID 為鍵值，只能透過伺服器路由（server route）寫入。瀏覽器不能直接寫進度。進度記錄存的是「已完成的課程」和「上次聽到哪裡」——這是應用程式狀態（app state），不是課程內容本身。
+
+PostHog 用來追蹤互動事件。公開金鑰（public key）可以放在瀏覽器端，私密金鑰（private key）只能在伺服器端使用。
+
+#### 💡 為什麼這些決策很重要？
+
+每一條都直接影響搜尋品質和系統安全。如果 AI 在實作新頁面時重新討論「搜尋該不該是聊天機器人」，整個產品的一致性就會崩塌。AGENTS.md 把這些決策寫死，讓 AI 只做執行。
+
+---
+
+### 資料模型作為基底（Data Model as Substrate）
+
+[[learn/vertex-learning-platform/elements/data-model-as-substrate|資料模型作為基底（Data Model as Substrate）]]的意思是：搜尋、頁面渲染、時間戳解析——所有功能都建立在資料模型之上。如果資料模型設計錯誤，上層所有功能都會受到影響。
+
+#### 📚 五個核心文件型態
+
+| 文件型態 | 說明 | 關鍵設計 |
+|---|---|---|
+| **Course（課程）** | 最頂層文件，包含 title、slug、行銷欄位、學習成果、講師和分類的引用，以及一個有序的 modules 陣列 | modules 是嵌入物件（embedded object），不是獨立文件 |
+| **Module（模組）** | 嵌入在 Course 裡，包含 title、summary，以及一個有序的 lesson refs 陣列 | 編號從順序推導（derived from order），不需要單獨的排序欄位 |
+| **Lesson（課程單元）** | 獨立文件，包含 title、slug、video URL、poster、duration、free-preview flag、student count、Portable Text 格式的 notes | 不存「它屬於哪門課程」——要找出一門課的所有單元，需要反向查詢（reverse reference） |
+| **Video Document（影片文件）** | 獨立文件，存 id、url，以及 chapters 陣列和 chunks 陣列 | 逐字稿永遠不會以完整形式存在某一個欄位裡 |
+| **Progress Record（進度記錄）** | 以 Clerk user id 為鍵值，存 completed lessons 和 resume position | 純粹的應用程式狀態，跟課程內容完全分離 |
+
+#### 🔗 資料模型如何影響搜尋
+
+搜尋引擎透過 Sanity Context MCP 查詢課程和影片文件。結果卡片的時間戳從影片文件的 chapters 和 chunks 解析而來。頁面渲染從 Lesson 文件取得內容，從 Course 文件的 modules 陣列取得結構。每一條資料模型的決定都直接影響搜尋結果的準確性和頁面的正確渲染。
+
+#### 💡 為什麼資料模型很重要？
+
+它不只是「資料怎麼存」的問題——它決定了搜尋能做什麼、頁面能顯示什麼、時間戳能多精準。把 Course 設計成嵌入 Module 而不是引用，是為了減少查詢次數；把 Lesson 設計成獨立文件，是為了方便更新和排序。這些選擇都是為了讓上層功能能高效運作。
+
+---
+
+### 安全陷阱：不能從程式碼推斷的東西
+
+[[learn/vertex-learning-platform/elements/server-client-boundary|Server-Client 邊界]]在 AGENTS.md 裡用「Traps」（陷阱）章節強制執行。這些是看起來正確但實際上有問題的做法，AI 不讀這份文件就很容易踩進去。
+
+#### ⚠️ 六個常見陷阱
+
+1. **Context MCP 需要部署過的 Studio 應用。** Sanity Context MCP 不能憑空運作——它需要一個已部署的 Studio 應用作為後端。如果 AI 寫了搜尋程式碼但沒有部署 Studio，MCP 會回傳錯誤。
+
+2. **語義搜尋可能偏移。** 語義搜尋（semantic search）有時不夠精準。當語義搜尋回傳不相關的結果時，系統應該退回關鍵字萬用字元比對（keyword wildcards），而不是假設語義搜尋永遠正確。
+
+3. **模型跟隨內聯系統提示（inline system prompt）更可靠。** 如果有一條關鍵規則只能放在一個地方，放內聯系統提示——因為語言模型跟隨系統提示的可靠度比跟隨外部文件更高。但如果空間允許，兩邊都放。
+
+4. **永遠不要回傳完整逐字稿或 chunk 列表。** 這會導致溢位（overflow）。搜尋 API 的回傳必須是精簡的結果卡片，不是原始資料。
+
+5. **Dataset 是私密的，讀取 token 只能在伺服器端。** Sanity 的 dataset 預設不公開。讀取 token（read token）只能在伺服器端環境變數裡，不能出現在瀏覽器端的任何地方。
+
+6. **Write token 只能在伺服器端。** 寫入 Sanity 的 token 絕對不能暴露給瀏覽器。
+
+#### 🔑 金鑰安全的二分法
+
+| 可安全出現在瀏覽器端 | 不可安全出現在瀏覽器端 |
+|---|---|
+| Clerk publishable key | Clerk secret |
+| PostHog public key | Sanity read token |
+| | Sanity write token |
+| | OpenAI keys |
+| | PostHog private key |
+
+任何把「不可安全出現在瀏覽器端」的金鑰放在前端程式碼裡的做法都會導致金鑰洩漏，即使程式碼看起來「不會被直接存取」。
+
+#### 💡 為什麼這些陷阱很重要？
+
+這些陷阱的核心邏輯是一個簡單的問題：哪些值可以安全地出現在瀏覽器端，哪些不行？如果你能回答這個問題，就能避免大多數安全漏洞。Server-Client 邊界不是技術問題，是安全問題。
+
+---
+
+### When in doubt：最低公分母規則
+
+[[learn/vertex-learning-platform/elements/decision-architecture|決策架構（Decision Architecture）]]的最後一道防線是「When in doubt」（有疑問時）規則。當 AI 不確定該怎麼做時，這些規則提供了重置點。這些是整個操作手冊的最低公分母——回到這些規則而不是自己發明新的做法，就能避免大多數產品或架構錯誤。
+
+#### 📋 八條重置規則
+
+1. **保持小巧（keep it small）。** 不要做大規模重構或超出需求的實作。
+2. **使用對應的 skill。** 有專門的 skill 就用它，不要自己猜。
+3. **守住 server/client 邊界和私密 token 規則。** 這是安全的底線。
+4. **精確匹配提供的 UI。** AI 不是設計師，重現參考圖片的佈局、間距、字型、顏色和狀態。
+5. **從 setup/config 取得具體數值，不要硬編碼。** 需要端口號、API 路徑、環境變數名稱時，從設定檔裡找，不要自己猜。
+6. **儲存 prompt 並取得批准後才寫程式碼。** 這是 plan-before-code 工作流的核心。
+7. **跑過所有檢查。** 不要宣稱檢查通過了卻沒實際跑過。
+8. **分享精確的測試步驟。** 給人工測試的步驟必須具體到可重複執行。
+
+#### 💡 為什麼這些規則很重要？
+
+不確定性是 AI 出錯的最大來源。當 AI 面對模糊的需求時，傾向於自己發明解決方案——這往往偏離產品設計。這些規則把 AI 拉回最安全的做法：保持小、用工具、守住邊界、先批准再寫碼。
+
+---
+
+### 四個章節如何共同防止錯誤決策
+
+把這四個章節放在一起看，它們形成一個完整的防護網路：
+
+| 章節 | 鎖定的問題 | 防護機制 |
+|---|---|---|
+| **Decisions** | 做什麼 | 防止 AI 重新討論已確認的架構 |
+| **Data Model** | 怎麼存 | 確保搜尋、渲染、時間戳解析建立在一致的資料結構上 |
+| **Traps** | 不能做什麼 | 防止 AI 做出看起來正確但實際有害的實作 |
+| **When in doubt** | 不確定時怎麼辦 | 提供最低公分母規則作為最後一道防線 |
+
+四個章節加在一起，確保 AI 在實作 Vertex 的任何功能時，都不會做出偏離產品設計的決策、不安全的架構選擇，或過度膨脹的實作。這就是 AGENTS.md 的核心價值：把人類的產品判斷寫成可執行的規則，讓 AI 只做執行。
+
+## Sources
+
+- sources/vertex-learning-platform/AGENTS.md decisions
+- sources/vertex-learning-platform/AGENTS.md data-model
+- sources/vertex-learning-platform/AGENTS.md traps
+- sources/vertex-learning-platform/AGENTS.md when-in-doubt
+- sources/vertex-learning-platform/AGENTS.md search-behavior
+- sources/vertex-learning-platform/AGENTS.md search-config

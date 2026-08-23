@@ -1,0 +1,110 @@
+---
+id: deterministic-ids-and-idempotent-import
+title: Deterministic IDs 與冪等匯入
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/deterministic-ids
+  - vertex-learning-platform/idempotent-import
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Deterministic IDs 與冪等匯入
+
+## Learning goal
+
+能說出 Sanity 為什麼需要 deterministic IDs 與 idempotent import，以及「重跑不重複」的機制如何運作。
+
+## Lesson
+
+### 📝 一個 seed 跑兩次就爆掉
+
+10 門課程、120 節課、5 位講師、6 個分類——你在 Sanity Studio 裡畫好了 schema，寫了一支 seed 腳本把 141 筆文件匯進去。跑第一次，乾乾淨淨。
+
+改了一個 schema 欄位，想驗證前端顯示。再跑一次。打開 Studio：同一門課程出現兩次，120 節 lesson 變成 240 節。統計數字全部爆掉，搜尋結果重複，你分不清哪些是新的、哪些是舊的。
+
+問題的根源只有一個——[[learn/vertex-learning-platform/elements/deterministic-ids|Deterministic IDs（確定性 ID）]]的缺失。
+
+### 🔍 為什麼隨機 ID 是陷阱？
+
+Sanity 每筆文件都有一個 `_id` 欄位，作為資料庫主鍵。預設行為是 Sanity 自動產生隨機字串，例如 `aBcDeFgHiJ`。看起來沒問題，但把同一份 seed 檔案匯入第二次時，問題就來了。
+
+隨機 ID 之間沒有任何對應關係。系統無法判斷第二次匯入的「這筆資料」跟第一次的「那筆資料」是同一門課程。它只知道 `_id` 不一樣，所以當成新文件插入：
+
+| 匯入次數 | 同一門課程的文件數 |
+| --- | --- |
+| 1 次 | 1 |
+| 2 次 | 2 |
+| 3 次 | 3 |
+
+每一筆都是「合法」的新文件，Sanity 不會有任何警告。
+
+**這個問題在 CI/CD 裡更嚴重。** Production 環境需要重建、teammate 需要匯入同樣的測試資料——每一次都得先手動清掉舊資料，再小心翼翼地匯入。任何一個步驟出錯，資料庫就進入不一致的狀態。
+
+**為什麼這很重要？** Seed 腳本在整個開發生命週期中會被反覆執行——改 schema、驗證前端、重建環境、部署 production。如果每次重跑都產生重複資料，你就永遠無法信任資料庫的狀態。
+
+### ⚡️ Deterministic IDs——直接而有效的解法
+
+[[learn/vertex-learning-platform/elements/deterministic-ids|Deterministic IDs（確定性 ID）]]的做法很直接：不要讓 Sanity 產生隨機 ID，改用你自己定義的字串。
+
+- `course.nextjs-app-router-in-depth`
+- `instructor.mira-kovac`
+- `category.web-development`
+
+每次匯入都使用同一組 ID，系統就能判斷「這筆資料已經存在」，行為從「插入」變成「upsert」（Upsert：已存在就更新，不存在就建立）。跑一次、跑兩次、跑一百次，資料庫裡永遠只有 141 筆文件。
+
+#### 命名慣例：`type.slug` 格式
+
+Vertex 的 seed 使用 `type.slug` 格式，例如 `course.react-performance-engineering` 或 `category.web-development`。這種格式同時滿足兩個需求：
+
+1. **Human-readable**：看到 ID 就知道它代表什麼
+2. **Machine-unique**：`course.` 前綴確保不會跟 `lesson.` 或 `category.` 的 slug 衝突
+
+#### 容易被忽略的 `_key`
+
+除了 `_id`，Sanity 的陣列欄位（例如 course 裡的 module 列表）還需要一個確定性的 `_key`。沒有穩定的 `_key`，重複匯入時同一個 course 內可能會出現兩組完全一樣的 module。這直接影響頁面顯示的正確性。
+
+### 🔄 冪等匯入：從 ID 到完整策略
+
+有了確定性 ID，你解決了「重複文件」的問題。但完整的 [[learn/vertex-learning-platform/elements/idempotent-import|Idempotent Import（冪等匯入）]]還包含匯入工具的選擇。
+
+#### `--replace`：暴力但有風險
+
+Sanity 提供了 `sanity import --replace` 選項：先刪除所有現有文件，再匯入新文件。這聽起來能解決重複問題，但它引入了另一個風險——**刪除和匯入之間的空窗期**，其他服務可能讀到空資料。更何況每次重跑都要先清掉全部資料再重建，效率很低。
+
+#### 冪等匯入：逐筆 upsert
+
+冪等匯入不走這條路。它依賴確定性 ID 做逐筆 upsert——存在的更新，不存在的建立。任何時候資料庫都有合理的狀態，不需要先破壞再重建。這就是「跑兩次的結果跟跑一次完全相同」的含義。
+
+| 做法 | 重複匯入行為 | 空窗期風險 | 效率 |
+| --- | --- | --- | --- |
+| `--replace` | 全删重建 | 有 | 低 |
+| 冪等匯入 | 逐筆 upsert | 無 | 高 |
+
+### 🔧 Vertex 的實際實作流程
+
+整條流程分三步：
+
+1. **人工編寫內容規格**（`content.mjs`）：定義 6 個分類、5 位講師、10 門課程與其下的 120 節課
+2. **NDJSON 產生器**（`build-ndjson.mjs`）：把規格轉換成 Sanity 可匯入的格式，為每筆文件分配 `type.slug` 格式的 `_id`，也為陣列項目分配確定性的 `_key`
+3. **執行 `sanity import seed.ndjson`**：Sanity 根據 `_id` 自動判斷哪些是新建、哪些是更新
+
+這個 NDJSON 產生器本身會重新實作 Sanity Studio 的驗證規則——它要預先解析 YouTube 影片、計算時長（module 時長 = 其下所有 lesson 時長之和，course 時長 = 所有 module 時長之和）、產生 Lorem Picsum 圖片 URL，然後才寫入 NDJSON。因為 seed 腳本不經過 Studio UI，所以必須自行確保欄位格式正確，否則匯入會失敗。
+
+### ⚖️ 弱做法 vs 強做法
+
+**弱做法：** seed 腳本隨便產生一個 NDJSON 檔案，用隨機 ID，跑一次就跑一次。第一次 demo 看起來沒問題，但只要開發過程中需要重跑（改 schema、驗證前端、重建環境），你就會陷入手動清理資料的泥沼。
+
+**強做法：** 從一開始就規劃好確定性 ID 和冪等匯入——內容規格和 NDJSON 產生器分開寫，確定性 ID 有明確的命名慣例，seed 腳本是冪等的。你可以隨時重跑，不用擔心資料庫狀態。
+
+**為什麼值得一開始就投入？** 這不是額外的工程量，而是避免未來更大麻煩的基礎建設。
+
+### 💡 實作細節提醒
+
+Seed NDJSON 是透過 Sanity API 讀取 token（無到期期限的 viewer 權限）匯入私有資料集的。匯入前要執行 `npm update sanity` 確保 CLI 版本相容，匯入後要推 PR。這是第一次 AI 寫入資料庫——不能盲目批准，必須經過審查。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]]

@@ -1,0 +1,135 @@
+---
+id: lesson-video-player
+title: Lazy-loading 視頻 embed 與深連結起播
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/provider-embed
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6069-6504]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Lazy-loading 視頻 embed 與深連結起播
+
+## Learning goal
+
+能實作「先顯示 poster、點擊後才載入 iframe」的影片播放器，並支援 `?t=` 參數從特定秒數起播。
+
+## Lesson
+
+### 📝 為什麼不能直接放一個 iframe
+
+在 [[learn/vertex-learning-platform/nodes/lesson-page-and-video/sanity-lesson-query|上一步]] 中，你已經從 Sanity 拿到了 lesson 的完整資料，包括 `videoUrl` 和 `coverImage`。最直覺的做法是直接在頁面上放一個 iframe——影片馬上就能播。
+
+但問題馬上來了：
+
+| 問題 | 影響 |
+| --- | --- |
+| 效能 | YouTube iframe 帶來 1MB+ JavaScript 和多個追蹤請求 |
+| 體驗失控 | 你無法控制影片載入前顯示什麼（推薦影片？廣告？） |
+| 初始播放 | 你希望影片在點擊前**完全不載入**，而不是載入後暫停 |
+
+一個 YouTube iframe 可能帶來 1MB+ 的額外下載。如果你的平台有 10 個 lesson 同時載入，效能會急劇惡化。更關鍵的是：你希望在影片「尚未播放」時完全掌控視覺體驗，但在「需要播放」時又能無縫切換到 provider 的原生播放器。
+
+**為什麼這件事很重要？** 因為影片是 lesson 頁的核心，但它也是最重的第三方資源。懶載入模式就是為了解決這個「掌控 vs 便利」的矛盾。
+
+### 🔧 兩階段渲染模式
+
+[[learn/vertex-learning-platform/elements/provider-embed|Provider Embed 懶載入模式]] 的核心是「先靜態、後動態」：
+
+**階段一：頁面載入時（Static）**
+- 渲染一個靜態的 poster 圖片（從 Sanity 的 `coverImage` 取得）
+- 在 poster 上疊加一個自訂的 play button
+- 此時 **沒有任何 iframe**，第三方 JS 完全不載入
+
+**階段二：使用者點擊 play 按鈕後（Dynamic）**
+- 移除 poster + play button
+- 動態插入 `<iframe>`，`src` 指向影片的 embed URL
+- Provider 的播放器接管控制
+
+在 React / Next.js 中，用 `useState` 控制這個切換：
+
+```tsx
+'use client';
+import { useState } from 'react';
+
+export function VideoPlayer({ videoUrl, posterUrl, startTime }) {
+  const [playing, setPlaying] = useState(false);
+
+  if (!playing) {
+    return (
+      <div className="relative cursor-pointer" onClick={() => setPlaying(true)}>
+        <img src={posterUrl} alt="Lesson video" className="w-full" />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <PlayButton />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <iframe
+      src={`${videoUrl}?start=${startTime || 0}&autoplay=1`}
+      className="w-full aspect-video"
+      allow="autoplay; encrypted-media"
+    />
+  );
+}
+```
+
+`useState(false)` 確保初始狀態不載入任何第三方資源。只有當 `setPlaying(true)` 被呼叫（使用者點擊）時，iframe 才被渲染進 DOM。
+
+### 🔗 `?t=` 深連結：連結到特定時刻
+
+深連結（Deep Link）是讓其他頁面或搜尋結果能直接連結到影片的特定時刻。機制分三步：
+
+1. URL 帶有 `?t=` 參數（如 `/lessons/my-lesson?t=120` 表示從 120 秒處開始）
+2. 頁面從 `searchParams` 讀取這個值
+3. 點擊 play 按鈕時，把 `?t=` 的值轉換成 YouTube embed 的 `?start=` 參數
+
+```tsx
+import { useSearchParams } from 'next/navigation';
+
+export function VideoPlayer({ videoUrl, posterUrl }) {
+  const searchParams = useSearchParams();
+  const startTime = searchParams.get('t');
+  const [playing, setPlaying] = useState(false);
+
+  // 在 iframe src 中使用 startTime
+  // src={`${videoUrl}?start=${startTime || 0}&autoplay=1`}
+}
+```
+
+| URL 參數 | 作用層級 | 用途 |
+| --- | --- | --- |
+| `?t=120` | 你的 App | 搜尋結果、社交分享、進度追蹤 |
+| `?start=120` | YouTube embed API | 告知播放器從哪一秒開始 |
+
+兩者數值相同，但作用於不同層級。你的 App 負責把 `?t=` 轉換成 `?start=`。
+
+**為什麼要從一開始就設計深連結？** 因為深連結涉及到 URL 的設計、路由的 params 處理、以及 iframe src 的參數拼接。如果一開始沒有把這些考量進去，之後改動的成本會高很多。從一開始就把 `?t=` 納入設計，等於在路由層級就為「精確時間戳連結」預留了空間。
+
+### 🔌 parse-video-URL helper
+
+不同的影片 provider（YouTube、Vimeo、自架的 video server）有不同的 embed URL 格式。你不能把所有 `videoUrl` 都當作 YouTube URL 處理。所以你需要一個 `parse-video-URL` helper：
+
+1. 從 `videoUrl` 中解析出 provider 類型（YouTube、Vimeo 等）
+2. 根據 provider 類型生成對應的 embed URL
+3. 處理不同 provider 的參數格式差異
+
+這個 helper 是頁面上的「翻譯官」——它把 Sanity 儲存的統一格式（`videoUrl`）轉換成各 provider 能理解的 embed 格式。
+
+### 🎯 為什麼深連結不只服務於搜尋
+
+深連結的第一個使用者是搜尋系統——在搜尋結果頁點進來時，影片自動從特定時刻開始播。但它的價值不止於此：
+
+- **進度追蹤**：記錄上次看到哪一秒，回來時從同一秒繼續
+- **社交分享**：分享特定段落的連結，對方直接跳到那個位置
+- **課程內部導航**：側邊欄的某課可以連結到特定章節的起點
+
+從一開始就設計深連結，等於為這些後續功能打下基礎。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6069-6504]]

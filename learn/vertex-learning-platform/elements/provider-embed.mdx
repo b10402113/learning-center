@@ -1,0 +1,114 @@
+---
+id: provider-embed
+title: Provider Embed 懶載入模式 (Provider Embed Lazy-Load)
+subject: vertex-learning-platform
+tier: 2
+order: 2
+type: article
+nodes:
+  - vertex-learning-platform/lesson-page-and-video
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6069-6504]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Provider Embed 懶載入模式 (Provider Embed Lazy-Load)
+
+## Problem Statement
+
+一個學習平台的 lesson 頁需要播放影片。如果一打開頁面就載入 YouTube 或其他 provider 的完整 iframe 播放器，使用者會同時收到：第三方 JavaScript 的下載、追蹤腳本、預設的推薦影片列表，以及可能的廣告。這不只拖慢頁面載入速度，也讓你對影片播放前的體驗完全失控——你無法控制 poster 顯示什麼、播放按鈕的樣式，甚至無法保證影片在點擊前不會開始播放。
+
+## Why it matters
+
+影片是 lesson 頁的核心，但它也是最重的第三方資源。一個 YouTube iframe 可能帶來 1MB+ 的額外下載和多個追蹤請求。如果你的平台有 10 個 lesson 同時載入，效能會急劇惡化。更關鍵的是：你希望在影片「尚未播放」時完全掌控視覺體驗（自訂 poster、play button），但在「需要播放」時又能無縫切換到 provider 的原生播放器。懶載入模式就是為了解決這個「掌控 vs 便利」的矛盾。
+
+## How it works
+
+核心機制是「先靜態、後動態」的兩階段渲染：
+
+**階段一：頁面載入時（Static）**
+- 渲染一個 `<div>` 或 `<img>` 顯示影片的 poster 圖片（從 Sanity 的 `coverImage` 欄位取得）
+- 在 poster 上疊加一個自訂的 play button（通常是三角形圖標）
+- 此時 **沒有任何 iframe**，第三方 JS 完全不載入
+
+**階段二：使用者點擊 play 按鈕後（Dynamic）**
+- 移除 poster + play button
+- 動態插入 `<iframe>`，`src` 指向 provider 的 embed URL（如 `https://www.youtube.com/embed/<videoId>`）
+- Provider 的播放器接管控制
+
+**深連結（Deep Link）支援：**
+- URL 的 `?t=` 參數指定起播秒數（如 `?t=120` 從 2 分鐘處開始）
+- 點擊 play 按鈕時，將 `?t=` 值附加到 iframe 的 `src` 參數（如 `?start=120`）
+- 這讓其他 lesson 頁或搜尋結果能直接連結到影片的特定時刻
+
+**實作模式（React / Next.js）：**
+
+```tsx
+const [playing, setPlaying] = useState(false);
+const startTime = searchParams.get('t'); // ?t=120
+
+if (!playing) {
+  return (
+    <div onClick={() => setPlaying(true)}>
+      <img src={posterUrl} alt="Lesson video" />
+      <PlayButton />
+    </div>
+  );
+}
+
+return (
+  <iframe
+    src={`https://www.youtube.com/embed/${videoId}?start=${startTime || 0}&autoplay=1`}
+    allow="autoplay; encrypted-media"
+  />
+);
+```
+
+`useState(false)` 確保初始狀態不載入任何第三方資源。只有當 `setPlaying(true)` 被呼叫（使用者點擊）時，iframe 才被渲染進 DOM。
+
+## In plain terms
+
+想像你在餐廳點餐。菜單（poster）讓你決定要不要吃這道菜，你翻開菜單看到照片和描述（靜態體驗）。只有當你決定「就是這道了」（點擊 play），廚房（provider）才開始動手做（載入 iframe）。你不會在還沒決定之前就讓廚房佔著爐灶。
+
+## Analogy
+
+懶載入就像圖書館的「預約取書」機制。書架上放的是書的封面影本（poster），你先決定要不要借。只有當你真正走到櫃台說「我要借這本」（點擊 play），圖書館才把實體書從庫房調出來（載入 iframe）。這樣一來，書架（頁面）永遠保持輕量，不會堆滿沉重的實體書。
+
+## Practical use
+
+在 Vertex 學習平台中，每份 lesson 的 Sanity 文件包含 `videoUrl`（影片 embed URL）和 `coverImage`（poster 圖片）。頁面組件的邏輯：
+
+1. 從 Sanity 讀取 lesson 的 `videoUrl`，解析出 provider 的 video ID
+2. 用 `coverImage` 渲染靜態 poster + play button
+3. 使用 `useState` 控制 `playing` 狀態
+4. 點擊 play 按鈕時，`setPlaying(true)` 觸發 iframe 渲染
+5. `?t=` 參數從 URL searchParams 讀取，附加到 iframe 的 `start` 參數
+
+這種模式也自然支援 `?t=` 深連結：當使用者從搜尋結果點進來時，URL 帶有 `?t=45`，頁面自動在 play 按鈕上顯示「從 0:45 開始播放」的提示，點擊後 iframe 從第 45 秒開始播。
+
+## Prerequisites
+
+- [[learn/vertex-learning-platform/elements/sanity-fetch|sanityFetch]] — 從 Sanity 讀取 lesson 的 videoUrl 和 coverImage
+- [[learn/vertex-learning-platform/elements/sanity-schema|Sanity schema]] — 了解 lesson 文件的 videoUrl 和 coverImage 欄位結構
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/portable-text|Portable Text]] — lesson 頁的筆記內容使用 Portable Text 渲染，與影片 embed 共存於同一頁面
+- [[learn/vertex-learning-platform/elements/reverse-reference|反向引用 (Reverse Reference)]] — lesson 頁需要反向查出父課程以建立導覽，影片 embed 是頁面頂部的核心元件
+- [[learn/vertex-learning-platform/elements/server-only-read-layer|server-only 讀取層]] — poster URL 和 video ID 在 server-side 讀取，但 iframe 渲染在 client-side 發生
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6069-6504]] — 原始教學中「parse-video-URL helper showing the Sanity poster + play button, mounting nothing third-party until pressed」的完整實作
+
+## Questions
+
+### Q1. 為什麼不直接用 Next.js 的 `<Image>` 優化 poster 圖片？
+A1. poster 圖片本身可以用 `<Image>` 優化（自動 webp 轉換、lazy loading、srcset），但核心問題不在圖片優化，而在於「不載入 iframe」。`<Image>` 解決的是靜態資源的效能，懶載入解決的是第三方 JS 的延遲載入。兩者可以同時使用。
+
+### Q2. `?t=` 參數和 YouTube 的 `?start=` 參數有什麼不同？
+A2. `?t=` 是你自己 App 的 URL 參數（如 `/lessons/my-lesson?t=120`），用於 App 內部的深連結和搜尋結果。`?start=120` 是 YouTube embed API 的參數，用於告知播放器從哪一秒開始。兩者數值相同，但作用於不同層級——你的 App 負責把 `?t=` 轉換成 `?start=`。
+
+### Q3. 如果影片不是 YouTube 而是其他 provider 怎麼辦？
+A3. `parse-video-URL` helper 的設計就是為了處理不同 provider。它解析 `videoUrl` 的域名，判斷是 YouTube、Vimeo 還是其他服務，然後生成對應的 embed URL 和參數格式。這種抽象層讓你在更換 provider 時不需要改動頁面組件。

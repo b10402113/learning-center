@@ -1,0 +1,108 @@
+---
+id: skills-vs-context
+title: Skills vs AGENTS.md：AI 工具知識與專案規則的分層策略
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/skills-context-separation
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_1:733-1052]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#skills-to-lean-on]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Skills vs AGENTS.md：AI 工具知識與專案規則的分層策略
+
+## Learning goal
+
+能說出「工具知識放 skills、專案規則放 AGENTS.md」的分層理由，並在實作前安裝與驗證 agent skills。
+
+## Lesson
+
+### 📝 為什麼 AI 會猜錯 API？
+
+你在 Vertex 專案裡用 AI 建第一個功能時，很可能遇到這種情況：AI 直接猜 Sanity 的 API 長什麼樣子、Clerk 的 middleware 怎麼接、next-sanity 的 client 怎麼建立。猜對了省時間，猜錯了你得花兩倍時間 debug——而且錯誤通常不是語法問題，而是「用了過時的版本」或「根本沒有這個 API」。
+
+根本原因是 [[learn/vertex-learning-platform/elements/skills-context-separation|Skills 與 Context 的分層]] 要解決的核心問題：AI 的訓練資料有截止日，它不知道你專案今天用的是 Sanity v4 還是 v6，不知道你的 Clerk 設定了哪些 provider，不知道專案的 Search Context 文件在哪。你不主動給它正確知識，它就只能靠有限的記憶填空。
+
+### 💡 Skill 是什麼：一份 AI 事前讀的知識文件
+
+**Skill（技能）** 就是一份 AI 在實作前先讀的知識文件。它描述某個工具的正確用法：Sanity 的 schema 怎麼定義、Clerk 的 auth middleware 怎麼設定、next-sanity 的 client 怎麼建立。
+
+AI 收到任務指令後，會先掃描專案中有哪些 Skill，然後把相關的那份讀進 prompt context（提示上下文）——也就是 AI 的短期記憶。
+
+為什麼這樣做有好處？三個核心原因：
+
+1. **Prompt 保持簡短**：你不用每次手動附上「請用 Sanity v4 的 createClient，token 從環境變數讀」這類細節，Skill 已經替你講了。
+2. **知識保持最新**：Skill 文件跟著專案走。Sanity 升版了你更新 Skill，AI 下次讀到的就是新版，不會被訓練資料裡的舊版記憶誤導。
+3. **不會猜錯 API pattern（API 使用模式）**：Skill 裡列的是專案實際使用的 pattern，AI 照著做，不用自己推斷。
+
+### 🔧 怎麼安裝：三條指令搞定
+
+Vertex 專案需要三個主要的 Skill：
+
+```bash
+npx skills add sanity-io/agent-toolkit
+npx skills add sanity-io/context-all
+npx skills add clerk
+```
+
+最後一個 `clerk` 會問你要選哪些子 Skill。選 **core** 和 **clerk-nextjs**——前者是 Clerk 的基礎知識，後者是針對 Next.js 整合的具體做法。
+
+這些指令會在專案根目錄建立 `.skills/` 資料夾，裡面放著各 Skill 的 Markdown 文件。AI agent（你用的 Claude Code、Cursor 等工具）會自動掃描這個資料夾。
+
+### ✅ 驗證安裝：一個 prompt 就夠
+
+裝完之後，不要急著開始寫功能。先跑一個 **sanity check（健全性檢查）** prompt：
+
+> "Read the installed sanity and sanity context skills in this project and summarize what each skill is responsible for. Do not change any files."
+
+這段 prompt 要求 AI 做兩件事：讀已安裝的 Skill，然後用自然語言解釋每個 Skill 負責什麼。關鍵是「do not change any files」——你只是在驗證 AI 有沒有正確讀取 Skill，不是在叫它實作任何東西。
+
+如果 AI 正確唸出了「sanity-io/agent-toolkit 負責 schema 定義和 studio 設定」「sanity-io/context-all 負責 Sanity Context MCP 的串接」，代表 Skill 安裝成功且 AI 能正確載入。如果 AI 說「我找不到這些 Skill」或答得牛頭不對馬嘴，代表安裝有問題或 Skill 路徑不對，先修好再往下走。
+
+### ⚡️ Skill 和 AGENTS.md 的分工
+
+這裡是整個工作流最關鍵的設計決策，也是 [[learn/vertex-learning-platform/elements/skills-context-separation|Skills 與 Context 的分層]] 的核心：**工具知識放 Skill，專案規則放 AGENTS.md，不要混在一起。**
+
+為什麼？因為它們的**生命週期**和**載入時機**完全不同：
+
+- **Skill 是工具特定的**：它講的是「Sanity 怎麼用」「Clerk 怎麼接」。這些知識跟你的專案長什麼樣無關——任何用 Sanity 的專案都適用同一份 Skill。Sanity 出新版，你更新 Skill 文件，所有專案都受益。
+- **AGENTS.md 是專案特定的**：它講的是「Vertex 是什麼」「搜尋功能的行為是 result cards 不是 chat box」「永遠不要把 Sanity token 放到瀏覽器端」。這些決定只有你的專案在乎，而且每次 AI 收到任務都會讀——不管那個任務是純 UI 還是涉及 Sanity。
+
+把 Sanity 的 API 細節塞進 AGENTS.md 會怎樣？**它會過時。** Sanity 升版了，你要改的不是 Skill 而是 AGENTS.md——但你可能忘了改，因為 AGENTS.md 是你寫的「大規則」，你不會每次 Sanity 升版都想到去更新它。更糟的是，每次 AI 收到任何任務（包括純 Tailwind 排版），都要載入那份巨大的 AGENTS.md，而裡面一半的內容跟當前任務無關。
+
+所以分層的邏輯是：
+
+| 放在哪 | 放什麼 | 載入時機 | 更新時機 |
+|--------|--------|----------|----------|
+| Skill（`.skills/`） | 工具 API 用法、SDK 慣用模式、版本特定的寫法 | AI 判斷任務需要時才讀 | 工具出新版時 |
+| AGENTS.md | 產品描述、架構決策、never-do 規則、工作流程、資料模型 | 每次任務都讀 | 專案決策改變時 |
+
+AGENTS.md 裡有一個 **Skills to lean on** 區塊，列出了專案用到的所有 Skill 名稱（例如 `sanity-best-practices`、`sanity-migration`、`create-agent-with-sanity-context`、`dial-your-context`、`shape-your-agent`）。它的作用是告訴 AI「遇到這些工具問題時，去對應的 Skill 裡找答案，不要自己猜」。這是兩個系統的橋接點：AGENTS.md 說「你有這些 Skill 可以用」，Skill 本身說「工具的正確用法是這樣」。
+
+### 🔍 分層為什麼是 crux
+
+在這個工作流裡，你是產品思考者，AI 是實作代理人。你給 AI 兩類輸入：「做什麼」（AGENTS.md 裡的產品描述和決策）和「怎麼做」（Skill 裡的工具知識）。如果兩者混在一起，AI 就無法分辨「這是永遠不變的專案規則」和「這是特定工具版本的用法」。前者每一個任務都要遵守，後者只在碰那個工具時才需要。
+
+分層之後，AI 的決策變得清晰：
+
+- 收到「幫我排好搜尋結果頁的 UI」這種純前端任務 → 讀 AGENTS.md 知道「結果要用 result cards 不是 chat box」，不需要讀 Sanity Skill，因為根本沒碰到 Sanity。
+- 收到「建立 Sanity schema 的 course document」→ 先讀 AGENTS.md 知道 course 的欄位有哪些，再讀 Sanity Skill 知道 schema 該用什麼語法寫。
+
+兩邊各司其職，不互相干擾。
+
+### 🏁 行動清單：開始前先完成這些
+
+在你開始建任何功能之前，按順序完成：
+
+1. 安裝三個 Skill（`sanity-io/agent-toolkit`、`sanity-io/context-all`、`clerk`）
+2. 跑 sanity check prompt 驗證 Skill 有被正確載入
+3. 確認 AGENTS.md 裡有 Skills to lean on 區塊，且列出了專案用到的 Skill 名稱
+
+這就是 [[learn/vertex-learning-platform/elements/skills-context-separation|Skills 與 Context 的分層]] 的實踐意義：**把對的知識在對的時機交給 AI，而不是把所有知識塞進一個巨大的檔案裡期待 AI 自己會篩選。** 這個分層是整個 agentic 工作流的地基。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_1:733-1052]]
+- [[sources/vertex-learning-platform/AGENTS.md#skills-to-lean-on]]

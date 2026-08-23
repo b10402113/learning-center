@@ -1,0 +1,75 @@
+---
+id: grounding-search
+title: 搜尋 Grounding
+subject: vertex-learning-platform
+tier: 3
+order: 11
+type: article
+nodes:
+  - vertex-learning-platform/agents-and-agents-md
+sources:
+  - sources/vertex-learning-platform/AGENTS.md search-behavior
+  - sources/vertex-learning-platform/AGENTS.md search-config
+  - sources/vertex-learning-platform/AGENTS.md decisions
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+## 為什麼這是個問題
+
+搜尋功能的表面上需求很簡單：使用者輸入自然語言，系統回傳相關的課程結果卡片。但在實際實作中，最大的風險不是「找不到」，而是「編造」。大型語言模型（Large Language Model, LLM）在生成回應時，有能力自行組合看似合理的課程名稱、價格、時長、甚至時間戳（timestamp），但這些資訊可能根本不存在於 Sanity 資料庫中。如果讓模型直接根據自己的「記憶」回答，使用者會得到完全虛構的搜尋結果——一門不存在的課程、一個錯誤的價格、一段錯誤的時間戳。這種幻覺（hallucination）不是偶爾發生的邊緣案例，而是 LLM 的內建傾向：它被訓練來生成「合理的」文本，而非「真實的」資料。
+
+## 為什麼這件事重要
+
+搜尋品質的核心不是演算法的複雜度，而是結果的可信度。一個學習平台如果在搜尋結果中展示虛構的課程價格或時長，使用者會立刻失去信任。更嚴重的是，如果模型編造了一個不存在的課程名稱，使用者點進去卻找不到內容，這不只是體驗問題，而是整個搜尋功能的信譽崩塌。
+
+在 Vertex 的架構中，搜尋結果被展示為帶有摘要（summary）和時間戳的結果卡片（result card），使用者可以直接從搜尋結果頁面（results page）點擊播放影片。這意味著每一個搜尋結果都帶有可驗證的動作——播放、導航、購買。如果這些動作的目標是虛構的，整個使用者旅程就會斷裂。
+
+Grounding（接地）機制就是為了從根本上解決這個問題：確保搜尋結果中的每一個資訊片段都能追溯到 Sanity 資料庫中的真實資料。模型不負責「知道」課程內容，模型只負責「選擇」哪個 ID 應該出現在結果中； Sanity 則負責「供應」所有的事實細節。這樣一來，搜尋結果就不可能被編造。
+
+## 它是怎麼運作的
+
+Grounding 的實作分為幾個層面：
+
+**搜尋結果的結構**。搜尋會產生兩種結果類型（result kind）：影片結果（video result）和課程結果（lesson result）。影片結果包含課程名稱、模組名稱、課程名稱、縮圖、影片長度、描述、以及匹配的秒數（matched second），使用者點擊後會在站內從該秒開始播放。課程結果則是主題匹配，點擊後打開對應的課程頁面。兩種結果來自不同的匹配路徑——影片結果基於影片文件（video document）中的章節（chapter）和逐字稿區塊（transcript chunk），課程結果基於課程的元資料——然後合併、按具體性（specificity）排序。
+
+**影片文件是內部查表，不是獨立實體**。影片文件（video document）在 Sanity 中是一個獨立的文件，包含章節列表和逐字稿區塊，但它永遠不會直接出現在搜尋結果中。搜尋結果中的「影片結果」實際上是「使用了某個影片的課程」的引用。這意味著影片文件的 id 是一個內部鍵（internal key），用於連結課程與影片內容，但對外展示時，永遠是透過課程來呈現。
+
+**兩階段時間戳解析**（two-stage timestamp resolution）。當搜尋匹配到影片中的某個時間點時，系統需要決定如何展示這個時間點。第一階段：檢查章節列表（chapter list），如果匹配的秒數落在某個章節的範圍內，就顯示該章節的標籤。第二階段：如果不在任何章節範圍內，就使用逐字稿區塊（transcript chunk）的內容作為描述。這個兩階段機制確保了時間戳的展示既有結構化的章節名稱，又有具體的內容描述。
+
+**文本匹配是基於 token 的**（token-based）。搜尋不使用整句匹配（phrase match），而是使用 wildcard 關鍵字匹配和 OR 多詞匹配。這意味著使用者輸入「React 框架」時，系統會同時匹配包含「React」或「框架」的文件，而不是只匹配包含完整「React 框架」這個詞組的文件。Portable Text 格式的內容通過純文本投影（plain-text projection）進行匹配，確保富文本內容也能被搜尋到。
+
+**Config-as-content**。搜尋的行為不是寫死在程式碼中的，而是由 Sanity 中的一個 Context 文件（Context document）控制。這個文件包含內容範圍過濾器（content scope filter）和指令差異（instruction deltas），讓使用者可以在不修改程式碼的情況下調整搜尋行為。編輯 Context 文件後，下一次搜尋請求就會使用新的配置；而修改內聯系統提示（inline system prompt）則需要重新啟動伺服器才能生效。
+
+**關鍵規則的雙重寫入**。有些搜尋規則太重要了，不能只寫在一個地方。例如「不要編造課程」這條規則，同時寫在 Context 文件和內聯系統提示中。這是因為模型更傾向於遵循內聯系統提示（inline system prompt）中的指令，但 Context 文件是動態可調的。將關鍵規則寫在兩處，確保了無論配置如何調整，底線規則始終被執行。
+
+## 實際怎麼用
+
+在實作中，Grounding 的核心實踐是：永遠不要在搜尋回應中出現任何 Sanity 資料庫中不存在的資訊。這包括：不要編造課程名稱、不要編造價格、不要編造時長、不要編造時間戳。每一個出現在搜尋結果卡片中的欄位——標題、描述、時長、章節標籤——都必須從 Sanity 查詢結果中取得，而不是由模型生成。
+
+搜尋結果頁面（results page）的設計也體現了 Grounding 原則：結果按最佳匹配排序（ranked best-first），顯示總數（count），並提供排序控制項（sort control），預設為「最相關」（most relevant）。結果沒有上限（no capping），空狀態（empty state）會指向目錄頁（catalog），引導使用者探索更多內容。這種設計確保了結果的完整性——不會因為人為限制而丟失真實結果。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/data-model-as-substrate|Data Model as Substrate]] — 搜尋 Grounding 依賴資料模型的結構設計：影片文件是內部查表、課程不存儲父級模組、逐字稿以短區塊儲存。這些資料模型決策直接決定了 Grounding 的實作方式。
+- [[learn/vertex-learning-platform/elements/decision-architecture|Decision Architecture]] — Grounding 規則屬於 AGENTS.md 中的「已做決策」（decisions already made）：搜尋必須接地、影片文件是內部查表、時間戳兩階段解析。這些決策一旦寫入，就不在每個功能開發時重新討論。
+
+## Deep dive
+
+Source locators for further reading:
+
+- `[[sources/vertex-learning-platform/AGENTS.md#search-behavior]]` — 搜尋結果頁面的結構、兩種結果類型、文本匹配規則、空狀態設計
+- `[[sources/vertex-learning-platform/AGENTS.md#search-config]]` — Context 文件作為搜尋配置、config-as-content 模型、關鍵規則雙重寫入
+- `[[sources/vertex-learning-platform/AGENTS.md#decisions]]` — 搜尋作為結果卡片而非聊天框、Grounding 規則、影片文件作為內部查表、時間戳兩階段解析
+
+## Questions
+
+1. 為什麼搜尋結果中的影片結果永遠不會直接引用影片文件，而是引用使用該影片的課程？
+2. 模型遵循內聯系統提示（inline system prompt）的傾向比遵循 Context 文件更強，這對搜尋規則的寫入位置有什麼影響？
+3. 兩階段時間戳解析中，如果匹配的秒數既不在任何章節範圍內，也沒有對應的逐字稿區塊，系統應該如何處理？
+
+## Sources
+
+- sources/vertex-learning-platform/AGENTS.md — search-behavior section
+- sources/vertex-learning-platform/AGENTS.md — search-config section
+- sources/vertex-learning-platform/AGENTS.md — decisions section

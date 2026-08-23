@@ -1,0 +1,109 @@
+---
+id: content-seeding
+title: Content Seeding
+subject: vertex-learning-platform
+tier: 2
+order: 3
+type: article
+nodes:
+  - vertex-learning-platform/seeding-content
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]]"
+  - "[[sources/vertex-learning-platform/seed.ndjson#content-types]]"
+  - "[[sources/vertex-learning-platform/seed.ndjson#course-shape]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+## Problem Statement
+
+Content Seeding（內容種子填充）解決的問題很直接：一個 Sanity 資料庫 schema 已經就緒，結構定義完成、typegen 跑過、studio 能打開，但裡頭沒有任何一筆真實資料。沒有資料，課程頁面什麼都渲染不出來，搜尋功能沒有東西可以排序或索引，前端的 UI 元件（課表手風琴、進度列、分類篩選）全部形同虛設。
+
+空 schema 不是 bug，而是建構順序的自然結果——你必須先決定資料怎麼長，才有東西可以填進去。但資料一旦進去，就要足夠真實、內部一致，才能讓你在後續開發搜尋、推薦、進度追蹤等功能時，不是在跟假資料搏鬥。
+
+## Why it matters
+
+對一個學習平台而言，沒有課程資料就等於沒有產品。頁面上只有空的 UI 骨架，搜尋框輸入任何字都回傳零結果——這讓你無法驗證搜尋品質、無法測試分頁邏輯、無法確認課程詳情頁是否正確地把模組和課節展開。
+
+Content Seeding（內容種子填充）在整個開發流程中佔據一個關鍵轉折點：它是你第一次「真的把資料寫進資料庫」的時刻。在此之前，所有工作都是結構性的（schema、typegen、read layer）；在此之後，工作轉向功能性的（渲染、搜尋、互動）。種子資料的品質直接決定你能不能信任搜尋結果、能不能展示真實的課程結構、能不能發現資料模型中隱藏的不一致。
+
+## How it works
+
+Content Seeding（內容種子填充）有兩條路徑，對應不同的需求場景：
+
+### 路徑一：使用提供的精確種子（recommended）
+
+平台提供了一組預先產生的 `seed.ndjson` 和 `videos.json`。`seed.ndjson` 是 141 筆 NDJSON 文件，每一筆都帶有穩定的 `_id` 和 `_key`，使得重複匯入不會產生重複文件（幂等匯入）。`videos.json` 記錄了 120 個真實 YouTube 影片的中繼資料（id、標題、頻道、時長、搜尋查詢）。
+
+匯入流程：
+
+1. 執行 `sanity CLI import` 把 `seed.ndjson` 注入 Sanity dataset
+2. Seed 編譯腳本（`build-ndjson.mjs`）在匯入前會從內容規格（content spec）產生 NDJSON，過程中重新實作 studio 的驗證規則，確保每一筆文件都通過 schema 校驗
+3. 每個課節（lesson）映射到一個真實的 YouTube 影片 URL，Schema 僅接受 YouTube、Vimeo、Bunny 三種 URL 格式
+
+### 路徑二：讓 AI 產生新內容
+
+你可以指示 AI 產生一組全新的講師、分類、10 門課程，每門課包含模組和課節，主題涵蓋程式設計、開發、AI。但這條路徑有一個核心限制：AI 寫入資料庫這件事本身不可被信任。永遠不要盲批（approve blindly）AI 的資料庫寫入操作——每一筆 AI 產生的內容都需要經過審查，確認時長一致（module 時長等於其子 lesson 時長之和、course 時長等於其子 module 時長之和）、影片 URL 合法、資料引用正確。
+
+### 資料結構與 seed 的對應關係
+
+Seed 的 141 筆文件精確反映了 AGENTS.md 中的資料模型決策：
+
+| 類型 | 數量 | 說明 |
+|------|------|------|
+| Category（分類） | 6 | web-development, ai-engineering, backend-infrastructure, data, languages, security |
+| Instructor（講師） | 5 | 虛構講師，各有 name, slug, expertise, bio |
+| Course（課程） | 10 | 每門課 4 個 embedded module，各有行銷欄位、講師引用、分類引用、學習成果 |
+| Lesson（課節） | 120 | 每個 module 3 個 lesson，各帶真實 YouTube 影片 URL、時長、重點、Portable Text 筆記 |
+
+Module 是嵌入在 Course 內的 document array（不是頂層文件），因為使用者永遠不會單獨造訪一個 module 頁面。Lesson 是獨立文件，由 module 透過引用指向。Lesson 的編號（如 5.1）是衍生出來的（derived），不儲存在資料庫中——這正是 seed 所驗證的資料模型決策。
+
+### 讀取權限
+
+資料匯入需要一個 Sanity API read token（viewer 等級、無過期時間），加到 `.env.local` 的 `SANITY_API_READ_TOKEN`。因為 dataset 是 private 的，read token 必須留在 server-side，不暴露給前端。
+
+## In plain terms
+
+把 Content Seeding（內容種子填充）想像成開一家新書店：貨架（schema）已經裝好了，分類標籤（schema definitions）也貼好了，但架上空空如也。Content Seeding 就是把第一批書放上貨架的過程——你決定放哪些書（categories）、每本書放哪個貨架（course → module → lesson 的層級），確保每本書都有 ISBN（deterministic ID）而且不會因為重新進貨而多出重複的書（idempotent import）。
+
+## Practical use
+
+在 Vertex 學習平台的實作中，Content Seeding（內容種子填充）的具體流程如下：
+
+**內容規格（Content Spec）** 是手寫的，在 `studio/scripts/seed/content.mjs` 中定義。作者親自撰寫了 10 門課程的主題（Next.js App Router、React 效能工程、TypeScript、LLM 應用、RAG、Python、系統設計、PostgreSQL、DevOps、Web 安全），每門課的模組結構，以及每個課節要對應哪一個真實 YouTube 影片。
+
+**NDJSON 編譯器（`build-ndjson.mjs`）** 讀取內容規格，重新實作 Sanity studio 的驗證規則，產出 141 筆 NDJSON 文件。每一筆文件都有穩定的 `_id`（如 `category.web-development`、`course.nextjs-app-router-in-depth`、`instructor.mira-kovac`），使得匯入是冪等的。
+
+**影片解析（Video Resolution）** 是 seed 流程中最耗時的步驟：120 個課節各需要一個真實 YouTube 影片。作者透過搜尋查詢找到影片（沒有使用 YouTube Data API），整個過程約 10-20 分鐘（~120 次 YouTube 抓取）。每個影片的中繼資料（id、標題、頻道、時長）記錄在 `videos.json` 中。
+
+**匯入執行** 透過 `sanity CLI import` 完成，把 NDJSON 注入 Sanity dataset。匯入前需執行 `npm update sanity` 確保 CLI 版本最新。匯入後，141 筆文件就成為了整個平台的內容基礎——課程頁面從這裡讀取資料渲染，搜尋功能從這裡索引和排序。
+
+**這是 AI 第一次寫入資料庫**，所以作者明確審查了 AI 產生的 seed prompt，確認它符合 AGENTS.md 的資料模型決策（modules embedded、lessons standalone、numbers derived、courses own the ordering），然後才批准寫入。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/deterministic-ids|Deterministic IDs]] — Seed 中的每一筆文件都使用穩定的 slug-based ID（如 `category.web-development`），確保重複匯入不會產生重複資料
+- [[learn/vertex-learning-platform/elements/idempotent-import|Idempotent Import]] — NDJSON 編譯器產生的 `_id` 和 `_key` 使得匯入操作是冪等的
+- [[learn/vertex-learning-platform/elements/video-resolution|Video Resolution]] — 每個課節的影片 URL 需要通過搜尋查詢解析真實 YouTube 影片，這是 seed 流程中最耗時的步驟
+- [[learn/vertex-learning-platform/elements/search-quality-dependency|Search Quality Dependency]] — 種子資料的內容品質（真實影片、連貫主題）直接決定搜尋功能能回傳什麼結果
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]] — 完整的 seeding 流程：兩條路徑、seed 編譯器、AI 寫入資料庫的審查、Sanity API read token 設定
+- [[sources/vertex-learning-platform/seed.ndjson#content-types]] — 141 筆文件的類型和數量：6 categories, 5 instructors, 10 courses, 120 lessons
+- [[sources/vertex-learning-platform/seed.ndjson#course-shape]] — Course/Module/Lesson 的資料結構：module 嵌入、lesson 獨立、numbering 衍生
+- [[sources/vertex-learning-platform/seed.ndjson#video-mapping]] — 每個課節對應一個真實 YouTube 影片，跨 10 個主題
+
+## Questions
+
+**Q1：為什麼 Content Seeding（內容種子填充）被視為整個開發流程中的關鍵轉折點？**
+
+因為它是從「結構性工作」（schema 定義、typegen、read layer）轉向「功能性工作」（頁面渲染、搜尋、互動）的分界線。在此之前，資料庫是空的，所有前端元件都無法真正工作；在此之後，你可以開始驗證搜尋品質、測試 UI 互動、發現資料模型中的不一致。種子資料的品質也直接決定搜尋結果的可信度——如果課程主題不連貫或影片不真實，搜尋功能的 demo 就沒有意義。
+
+**Q2：Seed 中 Module 為什麼是 embedded 而不是獨立文件？在 seed 資料中如何體現？**
+
+因為使用者永遠不會單獨造訪一個 module 頁面——module 只是課程內部的一個組織區塊。在 seed 資料中，每個 Course 文件內嵌一個包含 4 個 module 的 array，每個 module 自帶 title、summary 和 lesson references。與此對比，Lesson 是獨立的頂層文件，因為 Lesson 頁面是使用者實際觀看影片的頁面，需要獨立的 URL 和渲染邏輯。
+
+**Q3：如果讓 AI 自行產生 seed 資料，最大的風險是什麼？**
+
+最大的風險是 AI 不會自動遵守資料模型的約束條件：時長不一致（module 的 duration 不等於其子 lesson 之和）、影片 URL 不合法（Schema 僅接受 YouTube/Vimeo/Bunny）、引用斷裂（lesson 指向不存在的 course）、以及內容不連貫（搜尋某個主題回傳不相關的結果）。因此 AI 寫入資料庫需要逐筆審查，而不能盲批。

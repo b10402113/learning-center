@@ -1,0 +1,138 @@
+---
+id: portable-text
+title: Portable Text 結構化富文字 (Portable Text Structured Rich Text)
+subject: vertex-learning-platform
+tier: 2
+order: 3
+type: article
+nodes:
+  - vertex-learning-platform/lesson-page-and-video
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6069-6504]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Portable Text 結構化富文字 (Portable Text Structured Rich Text)
+
+## Problem Statement
+
+學習平台的 lesson 頁除了影片之外，還需要呈現筆記（notes）和資源連結（resources）這些富文字內容。如果用傳統的 HTML 字串儲存富文字，你會遇到幾個問題：HTML 是為了呈現而設計的，不是為了結構——你很難從一段 `<p><strong>重要的概念</strong></p>` 中穩定地取出「重要的概念」這幾個字做搜尋或分析；HTML 的跨平台渲染不一致（不同瀏覽器、不同框架可能解析出不同結果）；而且在非 Web 環境（如 mobile app、RSS feed）中使用 HTML 會很痛苦。
+
+## Why it matters
+
+Sanity 選擇了 Portable Text 作為富文字的儲存格式，而不是直接存 HTML。這意味著你在 client 端渲染筆記時，必須理解 Portable Text 的結構——它是一個 JSON 陣列，每個元素代表一個區塊（段落、標題、列表、程式碼區塊等）。如果你把 Portable Text 當作 HTML 來處理，你會丟失結構資訊、無法正確渲染巢狀列表、也沒辦法做 Content Security Policy（CSP）的 sanitization。理解 Portable Text 的格式是正確渲染 lesson 筆記的前提。
+
+## How it works
+
+Portable Text 把富文字儲存為一個 JSON 陣列，每個元素是一個「block」。最常見的 block 類型：
+
+**段落（Paragraph）：**
+```json
+{
+  "_type": "block",
+  "style": "normal",
+  "children": [
+    { "_type": "span", "text": "這是一段" },
+    { "_type": "span", "marks": ["strong"], "text": "重要" },
+    { "_type": "span", "text": "的文字" }
+  ]
+}
+```
+
+**標題（Heading）：**
+```json
+{
+  "_type": "block",
+  "style": "h2",
+  "children": [{ "_type": "span", "text": "章節標題" }]
+}
+```
+
+**列表（List）：**
+```json
+{
+  "_type": "block",
+  "style": "normal",
+  "listItem": "bullet",
+  "children": [{ "_type": "span", "text": "列表項目" }]
+}
+```
+
+**程式碼區塊（Code）：**
+```json
+{
+  "_type": "code",
+  "language": "typescript",
+  "code": "const x = 42;"
+}
+```
+
+**渲染流程：**
+1. Sanity 查詢返回 JSON 格式的 Portable Text 陣列
+2. 在 Next.js 中，使用 `@portabletext/react` 套件提供的 `<PortableText>` 組件
+3. `<PortableText>` 會根據每個 block 的 `_type` 和 `style` 自動選擇對應的渲染方式
+4. 你可以透過 `components` prop 自訂每種 block 的渲染邏輯
+
+**實作範例：**
+
+```tsx
+import { PortableText } from '@portabletext/react';
+
+<PortableText
+  value={lesson.notes}
+  components={{
+    types: {
+      code: ({ value }) => (
+        <pre><code className={`language-${value.language}`}>
+          {value.code}
+        </code></pre>
+      ),
+    },
+  }}
+/>
+```
+
+## In plain terms
+
+把 Portable Text 想像成一份「食材清單」，而不是「煮好的菜」。你拿到的是結構化的原料（這是一段文字、這是一個標題、這是一個列表），而不是一盤已經擺好盤的菜（HTML）。好處是你可以在任何廚房（Web、App、print）用這些原料煮出同樣味道的菜，而不用擔心別人的廚房不認得你的擺盤方式。
+
+## Analogy
+
+Portable Text 就像樂譜。五線譜上的音符（JSON 結構）描述了「這裡是 Do、這裡是 Re、這裡要漸強」，而不是直接錄一段音頻（HTML）。不同的樂團（渲染框架）拿到同一份樂譜，可以各自用不同的樂器（HTML、React Native、Flutter）演奏出同樣的旋律。如果只有音頻（HTML），你就沒辦法讓鋼琴家只彈旋律部分、讓小提琴家只拉和聲部分。
+
+## Practical use
+
+在 Vertex 學習平台中，每份 lesson 的 Sanity 文件包含 `notes` 欄位（Portable Text 格式）。頁面組件的渲染邏輯：
+
+1. 從 Sanity 讀取 lesson 的 `notes` 欄位（JSON 陣列）
+2. 使用 `<PortableText value={lesson.notes}>` 渲染
+3. 自訂 `components` 處理特殊區塊（如程式碼區塊的語法高亮）
+4. 筆記與影片 embed 共存於同一頁面——影片在上方，筆記在下方
+
+Portable Text 的結構化特性讓你之後可以輕鬆加入「搜尋筆記」功能——因為每個文字片段都是可遍歷的 JSON 結構，而不是一整坨 HTML 字串。
+
+## Prerequisites
+
+- [[learn/vertex-learning-platform/elements/sanity-fetch|sanityFetch]] — 從 Sanity 讀取 lesson 的 notes 欄位
+- [[learn/vertex-learning-platform/elements/sanity-schema|Sanity schema]] — 了解 Sanity 中 Portable Text 欄位的定義方式
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/provider-embed|Provider Embed 懶載入模式]] — lesson 頁的影片 embed 與 Portable Text 筆記共存於同一頁面，兩者是 lesson 頁的核心內容區塊
+- [[learn/vertex-learning-platform/elements/server-only-read-layer|server-only 讀取層]] — Portable Text 的 JSON 數據在 server-side 讀取，渲染在 client-side（或 server component）執行
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6069-6504]] — 原始教學中「notes and resources」的完整實作脈絡
+
+## Questions
+
+### Q1. 為什麼 Sanity 不直接儲存 HTML 而要用 Portable Text？
+A1. HTML 是為了呈現設計的，不是為了結構。Portable Text 是純 JSON，你可以從中穩定地取出文字做搜尋、分析、或在非 Web 環境渲染。而且 HTML 有 XSS 攻擊風險——直接儲存並渲染 HTML 需要額外的 sanitization 步驟，Portable Text 天然避免了這個問題。
+
+### Q2. `<PortableText>` 組件需要額外安裝嗎？
+A2. 需要。`@portabletext/react` 是 Sanity 官方維護的套件，透過 `npm install @portabletext/react` 安裝。它是渲染 Portable Text 的標準工具，大多數 Sanity + Next.js 專案都會使用它。
+
+### Q3. Portable Text 能處理圖片嗎？
+A3. 能，但圖片通常不直接嵌入 Portable Text 的 block 中。Sanity 的做法是：在 Portable Text 的 block 中插入一個自訂 type（如 `_type: "image"`），然後在 `<PortableText>` 的 `components.types` 中提供對應的渲染組件。更常見的做法是把圖片作為獨立的 Sanity 欄位（如 `coverImage`），而不是塞進富文字裡。

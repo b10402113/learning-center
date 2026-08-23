@@ -1,0 +1,133 @@
+---
+id: groq-aggregate
+title: GROQ 聚合查詢
+subject: vertex-learning-platform
+tier: 2
+order: 13
+type: article
+nodes:
+  - vertex-learning-platform/catalog-and-course-pages
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:5101-5216]]"
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:5217-5520]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#data-model]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# GROQ 聚合查詢
+
+## Problem Statement
+
+課程卡片上需要顯示「這門課有幾節課、總時數多少分鐘、難度是什麼」。這些數字不是單一欄位——它們散落在 course → modules → lessons 的嵌套結構裡。如果在 JavaScript 端算，你要先拿到完整資料再 iterate，資料量大時效能差。GROQ 的 aggregate 功能讓你在查詢端就把這些數字算好，回傳的結果直接帶有 `totalLessons` 和 `totalDuration` 欄位，前端只需要渲染。
+
+## Why it matters
+
+GROQ aggregate 是 Vertex 頁面層的基礎能力。首頁的課程卡片要顯示「12 lessons · 4.5 hours」、all-courses 頁面要顯示「10 courses · 120 lessons total」、課程詳情頁要顯示「Module 1: 5 lessons」——全部都依賴 aggregate 在查詢端計算。如果不用 aggregate，你要在 JavaScript 端遍歷 `modules[].lessons[]` 來手動計數，不僅效能差，而且每一個頁面都要重複這段邏輯。GROQ aggregate 讓計算發生在 Sanity 端，回傳的結果已經是前端需要的數字。
+
+## How it works
+
+### 基本 aggregate 函式
+
+GROQ 提供兩個核心 aggregate 函式：
+
+**`count()`** — 計算陣列長度：
+```groq
+"totalLessons": count(modules[].lessons)
+```
+`modules[].lessons` 是展開路徑：先從 `modules` 陣列展開，再從每個 module 的 `lessons` 陣列展開，最後 `count()` 計算展開後的總數。
+
+**`sum()`** — 加總數值：
+```groq
+"totalDuration": sum(modules[].lessons[].duration)
+```
+把每一節課的 `duration`（分鐘）加總。
+
+### 完整查詢範例
+
+```groq
+*[_type == "course"]{
+  title,
+  slug,
+  description,
+  level,
+  "totalLessons": count(modules[].lessons),
+  "totalDuration": sum(modules[].lessons[].duration)
+}
+```
+
+這個查詢回傳的每一筆 course 物件會多出 `totalLessons` 和 `totalDuration` 兩個計算欄位——它們不在 schema 裡，是查詢時即時算出來的。
+
+### Conditional Aggregate
+
+有時你需要帶條件的計數。例如「只算已發佈的 lessons」：
+
+```groq
+"publishedLessons": count(modules[].lessons[_type == "lesson"])
+```
+
+或「只算特定難度的課程」：
+
+```groq
+"beginnerCount": count(*[_type == "course" && level == "beginner"])
+```
+
+### 在 all-courses 頁面的應用
+
+all-courses 頁面需要在一個查詢裡拿到所有課程的統計：
+
+```groq
+{
+  "courses": *[_type == "course"]{
+    title, slug, description, level,
+    "totalLessons": count(modules[].lessons),
+    "totalDuration": sum(modules[].lessons[].duration),
+    "moduleCount": count(modules)
+  },
+  "courseCount": count(*[_type == "course"]),
+  "totalLessonsAll": count(*[_type == "course"].modules[].lessons)
+}
+```
+
+一次查詢拿到三件事：課程列表（帶個別統計）、課程總數、全部課程的 lessons 總數。
+
+### 與 SQL GROUP BY 的差異
+
+GROQ aggregate 不需要 `GROUP BY`——它在陣列展開（`[]`）時自動 grouping。`modules[].lessons` 展開的是全部 lessons，`count()` 直接算總數。如果你需要按欄位分組，GROQ 會用不同的查詢結構（例如先 filter 再 count）。
+
+## In plain terms
+
+GROQ aggregate 就像超市的結帳機。你把一籃子商品（courses）放上去，機器自動掃描每個商品的明細（modules → lessons），幫你算出「總共幾件商品」（count）和「總共多少錢」（sum）。你不需要自己一件一件數，也不需要拿計算機按——機器（Sanity）已經幫你算好了，你只看螢幕上的數字。
+
+## Practical use
+
+在 Vertex 的三種頁面裡，aggregate 的使用方式：
+
+| 頁面 | Aggregate 用途 | 範例 |
+| --- | --- | --- |
+| 首頁 `/` | 前 3 門課的 lessons + duration | 「12 lessons · 4.5 hours」 |
+| All-courses `/courses` | 全部課程的 aggregate + 個別統計 | 「10 courses · 120 lessons」 |
+| 課程詳情 `/courses/[slug]` | 單門課每個 module 的 lesson 數 | 「Module 1: 5 lessons」 |
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/sanity-fetch|sanityFetch 資料讀取函式]] — `sanityFetch` 是執行 GROQ aggregate 的管道，兩者在每一個頁面裡一起出現。
+- [[learn/vertex-learning-platform/elements/server-only-read-layer|Server-Only Read Layer：私有資料集的安全讀取與 GROQ]] — aggregate 計算發生在 Sanity 端，結果透過 server-only read layer 回傳到前端。
+- [[learn/vertex-learning-platform/elements/sanity-schema|Sanity Schema-Driven 架構]] — aggregate 的展開路徑（`modules[].lessons[]`）直接反映 schema 裡的 embedded/reference 結構。
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:5101-5216]] — 首頁從靜態 mockup 改接真實 Sanity 資料時，GROQ query 裡用了 `count(modules[].lessons)` 來計算每門課的 lessons 數。
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:5217-5520]] — all-courses 頁面的 aggregate 查詢：課程列表、課程總數、全部 lessons 總數。
+- [[sources/vertex-learning-platform/AGENTS.md#data-model]] — Vertex 的資料模型：course → modules → lessons 的嵌套結構，是 aggregate 展開路徑的基礎。
+
+## Questions
+
+### Q1. `count(modules[].lessons)` 裡的 `[]` 代表什麼？
+A1. `[]` 是 GROQ 的陣列展開運算子。`modules[]` 把 course 文件裡的 `modules` 陣列展開成個別的 module 物件，`.lessons` 從每個 module 取出 `lessons` 欄位（也是一個陣列），最後 `lessons` 再被展開成個別的 lesson 物件。`count()` 計算展開後的總數。如果不用 `[]`，你只會拿到「有幾個 module」，不是「有幾個 lesson」。
+
+### Q2. Aggregate 計算發生在哪裡——server 端還是 client 端？
+A2. 完全在 Sanity server 端。GROQ 查詢被送到 Sanity API，Sanity 在 server 端展開陣列、執行 count/sum，回傳的結果已經是計算好的數字。前端拿到的 JSON 裡直接有 `totalLessons: 12` 這樣的值，不需要再做任何計算。
+
+### Q3. 為什麼 all-courses 頁面要在一个查詢裡拿到 `courseCount` 和 `totalLessonsAll`？
+A3. 因為頁面需要顯示 aggregate 資訊（「10 courses · 120 lessons total」），而這些數字需要從全部課程計算。如果分開查詢，要打兩次 Sanity API；合併成一個 GROQ 查詢，一次就拿到所有需要的資料。GROQ 的 `{}` projection 語法讓你把多個查詢結果打包成一個物件回傳。

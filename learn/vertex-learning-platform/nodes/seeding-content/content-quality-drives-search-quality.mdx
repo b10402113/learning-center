@@ -1,0 +1,131 @@
+---
+id: content-quality-drives-search-quality
+title: 內容品質決定搜尋品質
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/search-quality-dependency
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]]"
+  - "[[sources/vertex-learning-platform/seed.ndjson#content-types]]"
+  - "[[sources/vertex-learning-platform/videos.json#coverage]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 內容品質決定搜尋品質
+
+## Learning goal
+
+能解釋為什麼 seed 內容的連貫性與真實性直接決定搜尋品質，以及這對「第一個 AI 寫入 DB」的審查有什麼意涵
+
+## Lesson
+
+### 📝 前情提要：資料庫是空的
+
+前三個步驟完成了從無到有的基建：把 Sanity 接進 Next.js、設計好資料模型、把 read token 安全地藏在 server 端。但到目前為止，資料庫裡一個文件都沒有。一個空的學習平台和一個沒有書的圖書館一樣——建築蓋得再漂亮也沒用。
+
+**為什麼資料庫為空是個問題？** 因為 Vertex 平台的核心功能是智慧搜尋——使用者輸入查詢，系統從影片逐字稿（transcript）中找出最相關的片段，精確到秒級。沒有內容，搜尋功能就是一個空轉的引擎。
+
+這一步，你要把書放進去。但資料不是隨便填的。
+
+---
+
+### 🔢 數據開場：120 個單元，10 個主題
+
+先看作者最終建立的內容規模：
+
+| 維度 | 數量 |
+| --- | --- |
+| 課程數 | 10 門 |
+| 每門課模組數 | 4 個 |
+| 每個模組單元數 | 3 個 |
+| **總單元數** | **120 個** |
+| 分類數 | 6 個 |
+| 講師數 | 5 位 |
+| NDJSON 文件總數 | 141 份 |
+
+十門課程涵蓋 Next.js App Router、React 效能工程、TypeScript、LLM 應用建構、RAG、Python、系統設計、PostgreSQL、DevOps、網頁安全。每門課恰好 12 部影片，均勻分布在十個主題中。這種均勻性不是偶然——它確保搜尋功能在任何主題上都能示範出有意義的結果，而不是某些主題豐富、某些主題空洞。
+
+**為什麼 120 個單元很重要？** 因為它定義了搜尋功能的測試邊界：每個單元對應一部真實 YouTube 影片，搜尋查詢是作者手工擬定的（例如 "react server components explained tutorial"），確保搜尋到的影片確實在教那個主題。這不是隨機填充，而是人工驗證過的主題—影片映射。
+
+---
+
+### ❌ vs ✅ 弱的做法 vs 強的做法
+
+最容易踩的坑，是覺得「反正只是 demo，隨便塞點假資料就好」。你可能想：叫 AI 生成十門課程的標題和描述，再隨便搜一個 "programming tutorial" 抓幾部影片配上。
+
+**這個想法會讓搜尋功能崩潰。**
+
+原因很直覺：搜尋引擎本身沒有能力把劣質內容變成優質結果，它只能在已有的內容中排序。這就是 Garbage In, Garbage Out（垃圾進，垃圾出）的原理，也是 [[learn/vertex-learning-platform/elements/search-quality-dependency|Search Quality Dependency（搜尋品質依賴）]] 的核心命題。
+
+| | 弱的做法（AI 自由生成） | 強的做法（作者手工規格） |
+| --- | --- | --- |
+| 課程主題 | AI 隨機組合，可能在 PostgreSQL 課程混入無關內容 | 作者刻意選定 10 個主題，每門課有明確範圍 |
+| 影片來源 | 搜 "programming tutorial"，抓到的可能在教不同語言 | 搜 "react server components explained tutorial"，精準匹配 |
+| 主題重疊 | TypeScript 和 Next.js 課程之間大量重疊 | 各課程主題互不衝突 |
+| 搜尋結果 | 搜 "React 效能優化" 回傳教 Python 的影片片段 | 每個搜尋查詢都能找到真正相關的影片片段 |
+| 使用者感受 | 一看就知道平台是假的 | 「真的可以運作」的產品體驗 |
+
+**為什麼人工規格勝過 AI 生成？** 因為搜尋品質的前提是內容的連貫性與真實吻合。人工規格確保了兩件事：模組之間有邏輯遞進，影片內容與課程主題精確匹配。
+
+---
+
+### 🔍 為什麼不用 AI 生成內容
+
+你可能會問：作者花了 10 到 20 分鐘做 120 次 YouTube 取得，為什麼不直接叫 AI 一次生成？
+
+**三大關鍵原因：**
+
+1. **連貫性（Coherence）**：一個課程的十二個單元必須在主題上自上而下保持連貫。當使用者搜尋 "file system routing" 時，搜尋系統能從這批一致的內容中找到真正相關的影片片段。AI 隨機生成的內容，模組之間可能缺乏邏輯遞進，單元之間可能重複或跳躍，導致搜尋結果散亂無章。
+
+2. **真實吻合（Fidelity）**：AI 可能為 "PostgreSQL indexing" 這個單元找到一部影片，但那部影片實際上在講 MySQL 的索引。主題看似正確但搜尋查詢不匹配——人工驗證能確保影片內容與課程主題的真實吻合。
+
+3. **可預測性（Predictability）**：120 次手工取得，每次的搜尋查詢、影片 URL、逐字稿都是確定的。AI 生成的內容每次跑出來都不一樣，搜尋功能的示範效果無法穩定重現。
+
+**時間成本的真相：** 10 到 20 分鐘完成 120 次 YouTube 影片取得，平均每次不到 10 秒。這是極低的時間投入，換來的是搜尋功能在所有主題上都能穩定展示有意義的結果。
+
+---
+
+### ⚡️ 第一次 AI 寫入 DB 的意義
+
+這裡有一個容易被忽略的重點：**這是 AI 第一次被允許寫入生產資料庫。**
+
+無論你使用的是作者預製的種子資料（`seed.ndjson` 加 `videos.json`，透過 `sanity CLI import` 匯入），還是讓 AI 自己生成新內容，都不能盲目批准。原因是：
+
+- 資料庫一旦寫入，後續所有的搜尋、渲染、使用者體驗都建立在這些資料之上
+- 一個錯誤的影片 URL、一個錯誤的課程主題對應，都會在搜尋結果中被放大
+- 搜尋系統無法自我修正：它只能排序，不能糾錯
+
+**預製種子資料如何解決這個問題？**
+
+它使用穩定的 `_id`（例如 `course.nextjs-app-router-in-depth`）和 `_key`，支援重複匯入而不產生重複文件。這種確定性（deterministic）的匯入機制，是把 AI 寫入 DB 從「危險操作」變成「可控操作」的關鍵：
+
+1. 匯入 1 次 → 資料庫有 120 個單元
+2. 匯入 100 次 → 資料庫仍然只有 120 個單元
+3. 搜尋系統不會因為重複文件而產生重複或衝突的結果
+
+---
+
+### 🏗️ 從空資料庫到可搜尋的平台
+
+把前面的步驟串起來：
+
+| 步驟 | 產出 | 作用 |
+| --- | --- | --- |
+| Sanity schema | 資料的骨架 | 定義課程、單元、影片的結構 |
+| Read token | 安全的讀取通道 | 確保伺服器端才能存取 API |
+| Seed 內容 | 資料的靈魂 | 141 份 NDJSON 文件：6 個分類、5 位講師、10 門課程、120 個單元 |
+
+導入 Sanity 之後，空的資料庫立刻變成一個有真實內容的學習平台：
+
+- 搜尋功能能找到有意義的逐字稿片段
+- 課程頁面能渲染出完整的學習路徑
+- 使用者能體驗到一個「真的可以運作」的產品
+
+**為什麼這一步是整個平台的轉捩點？** 內容品質不是搜尋功能的附加條件，而是它的前提。沒有好的種子資料，搜尋功能只是一個空轉的引擎。有了好的種子資料，搜尋功能才能展現出它真正的價值——從海量逐字稿中精準定位到使用者需要的那一秒。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]]
+- [[sources/vertex-learning-platform/seed.ndjson#content-types]]
+- [[sources/vertex-learning-platform/videos.json#coverage]]

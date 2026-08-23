@@ -1,0 +1,88 @@
+---
+id: idempotent-import
+title: Idempotent Import
+subject: vertex-learning-platform
+tier: 1
+order: 2
+type: article
+nodes:
+  - vertex-learning-platform/seeding-content
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+## 問題陳述
+
+在建立學習平台的過程中，開發者需要將大量的範例課程、模組、講師和分類資料匯入 Sanity 資料庫。如果每次執行 seed 腳本都產生新文件，同一份資料會被重複寫入，導致：
+
+- **文件複製**：同一門課程出現兩次、同一個講師被建立多筆
+- **參照腐壞**：模組引用的 lesson ID 與實際文件不符，頁面顯示空白或 404
+- **數據不一致**：重複文件讓統計（課程數量、學生數）失真
+
+每次 seed 都要手動刪除舊資料再重新匯入，不僅耗時，還容易出錯。
+
+## 為什麼重要
+
+開發過程中，seed 腳本會被反覆執行——換了一個 schema 欄位要重跑、修了一個 bug 要驗證、甚至只是想確認前端頁面有正確顯示。如果每次重跑都疊加一份新資料，開發體驗會變得極差。
+
+Idempotent Import（冪等匯入）的核心價值在於：**跑兩次的結果跟跑一次完全相同**。這讓開發者可以放心地反覆執行 seed 腳本，不必擔心資料庫狀態失控。
+
+## 運作原理
+
+冪等匯入的關鍵機制是**穩定的文件 ID**（`_id`）。Sanity 的 `sanity import` 命令在匯入 NDJSON 時會檢查每個文件的 `_id`：
+
+- 如果該 `_id` 已存在，執行 **upsert**（更新而非插入）
+- 如果該 `_id` 不存在，執行正常插入
+
+這跟 `sanity import --replace` 的差異在於：
+
+| 策略 | 行為 | 安全性 |
+|------|------|--------|
+| `--replace` | 先刪除所有現有文件，再匯入新文件 | 危險：中間狀態為空，其他服務可能讀到空資料 |
+| 冪等匯入（靠 `_id`） | 逐一 upsert，存在的更新、不存在的建立 | 安全：非破壞性，任何時候資料庫都有合理狀態 |
+
+在 Vertex 平台的 seed 腳本中，這個機制的實現方式是：
+
+1. **NDJSON 生成器為每個文件指定確定性的 `_id`**——例如 `course-001`、`lesson-video-xyz`
+2. **`_key` 也使用穩定值**——陣列項（如模組內的 lesson 列表）用 `_key` 識別順序，避免每次匯入都重新排序
+3. **執行 `sanity import seed.ndjson`**——Sanity 自動判斷哪些文件是新建、哪些是更新
+
+這也意味著 seed 腳本本身是一個**重新實作了 Sanity Studio 驗證規則**的 NDJSON 生成器——它預先解析 YouTube 影片、計算時長（模組時長 = 其下所有 lesson 時長之和、課程時長 = 所有模組時長之和）、產生 Lorem Picsum 圖片 URL，然後才寫入 NDJSON。整個過程生成約 120 筆 lesson 文件、10 門課程、5 位講師和 6 個分類。
+
+## 通俗類比
+
+想像你在白板上貼便利貼。冪等匯入就像「如果你已經貼了一張寫著『微積分入門』的便利貼在同一個位置，就直接覆蓋它；如果那個位置是空的，就貼上去」。跑兩次不會出現兩張「微積分入門」，因為你每次都檢查同一個位置。
+
+## 實際應用
+
+在 Vertex 學習平台的開發流程中，冪等匯入的具體用法是：
+
+1. **初次 seed**：執行 `sanity import seed.ndjson`，建立所有範例資料。這是 AI 第一次寫入資料庫——必須經過審查，不能盲目批准。
+2. **Schema 變更後重跑**：修改了 `course` 或 `lesson` 的欄位定義後，重新執行 seed 腳本。因為 `_id` 穩定，已有文件被更新而非複製。
+3. **AI 生成內容的重跑**：如果讓 AI 重新產生課程內容（例如換一批 YouTube 影片），重跑 seed 也不會產生重複文件。
+
+值得注意的是，seed NDJSON 是透過 Sanity API 讀取 token（無到期期限的 viewer 權限）匯入私有資料集的。匯入前需要執行 `npm update sanity` 確保 CLI 版本相容，匯入後推 PR——CodeRabbit 會跳過純資料變更的程式碼審查，符合預期。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/deterministic-ids|Deterministic IDs]]——冪等匯入的前提條件：每個文件的 `_id` 必須是確定性的、可預測的
+- [[learn/vertex-learning-platform/elements/content-seeding|Content Seeding]]——冪等匯入是 seed 流程的安全保障，讓 seed 可以反覆執行
+
+## Deep dive
+
+原始素材中關於 seed 的完整段落：
+
+[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]]
+
+## Questions
+
+1. **如果 seed 腳本使用隨機 ID 而非確定性 ID，重跑會發生什麼？**
+   每次執行都會建立全新的文件副本，導致資料庫中出現大量重複的課程和 lesson 文件。
+
+2. **`sanity import --replace` 與冪等匯入（靠穩定 `_id`）的主要差異是什麼？**
+   `--replace` 先刪除所有現有文件再匯入，是破壞性操作；冪等匯入逐筆 upsert，非破壞性，資料庫在任何時候都有合理狀態。
+
+3. **為什麼 Vertex 平台的 NDJSON 生成器需要重新實作 Sanity Studio 的驗證規則？**
+   因為 seed 腳本不經過 Studio UI 直接產生 NDJSON，必須自行確保欄位格式正確（例如影片 URL 只接受 YouTube/Vimeo/Bunny，模組時長等於其下 lesson 時長之和），否則匯入會失敗或產生不符合 schema 的資料。

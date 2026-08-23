@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 2 — Tailwind v4 @theme 設計 Token 實戰</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<main>
+
+  <p class="meta">
+    Lesson 2 / 4 · 課程系列：<a href="../learn/vertex-learning-platform/nodes/design-system-boundary.mdx">設計系統：把 AI 的 UI 自由度關進盒子</a> · 上一課：<a href="0001-why-design-system-for-ai.html">為什麼 AI 需要 Design System？</a>
+  </p>
+
+  <h1>Tailwind v4 @theme 設計 Token 實戰：從設計稿到 globals.css</h1>
+
+  <div class="goal">
+    <strong>本課目標</strong>：能從設計參考圖提取 typography、色彩、間距、圓角/陰影四層數值，寫進 Tailwind v4 的 <code>globals.css</code> 當成 theme 變數——讓 AI（和你）不再「猜」任何設計值。
+  </div>
+
+  <h2>回顧：上課講的「規格」現在要變成程式碼</h2>
+
+  <p>上一課講了兩道鎖：<strong>設計稿</strong>（source of truth）＋ <strong>AGENTS.md 規則</strong>（不設計、只複製）。但光有這兩樣，AI 還是不知道「該複製什麼」。本課就是把設計稿上「<em>看起來好看</em>」的視覺，變成「<em>可以被程式碼引用</em>」的具體數值——這就是 <a href="../learn/vertex-learning-platform/elements/tailwind-v4-tokens.mdx">Tailwind v4 主題變數（Theme Tokens）</a> 的職責。</p>
+
+  <h2>先看問題：為什麼不能各自「猜」顏色？</h2>
+
+  <p>你拿到一張設計參考圖，上面清楚標示了品牌色、字級、間距、圓角和陰影。如果沒有統一的 token 機制，每個元件各自「猜」一個看起來差不多的值，結果就是：button 用 <code>bg-blue-500</code>、card 用 <code>bg-blue-600</code>、badge 冒出 <code>bg-indigo-400</code>——看起來都是藍色系，但<strong>沒有任何機制確保它們是同一個藍</strong>。間距更糟：<code>p-4</code>、<code>p-5</code>、<code>p-6</code> 這些 magic number 之間沒有統一的 scale。</p>
+
+  <p>Tailwind 預設色板、字級、間距很方便，但它們<strong>不是你的品牌語言</strong>。你要做的，是把設計稿上的值提取出來、寫進 <code>@theme</code> 區塊，讓整個專案從同一份 CSS 變數讀取所有設計值。</p>
+
+  <h2>為什麼 v4 的 @theme 比舊版 config 好？</h2>
+
+  <p>如果你用過 Tailwind，一定熟悉 <code>tailwind.config.js</code> 的 <code>theme.extend</code>。在舊版，token 定義在 JavaScript 檔案裡，Tailwind 構建流程再把它們轉譯成 CSS 變數——多一層翻譯，改完還要等 build。</p>
+
+  <table>
+    <tr><th>面向</th><th>舊版 tailwind.config.js</th><th>v4 @theme</th></tr>
+    <tr><td>Token 定義位置</td><td>JavaScript 檔案</td><td>CSS 檔案（原生 CSS 變數）</td></tr>
+    <tr><td>翻譯層</td><td>JS → CSS 變數，需構建處理</td><td>無，直接就是 CSS 變數</td></tr>
+    <tr><td>AI 讀取成本</td><td>要同時理解 JS config 和 CSS 的對應</td><td>讀一個 globals.css 就夠</td></tr>
+    <tr><td>更新速度</td><td>改完等 build</td><td>改完瀏覽器直接生效</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <span class="label">為什麼對 AI 協作特別重要</span>
+    AI 的上下文窗口有限。token 全集中在一份 <code>globals.css</code>，AI 做任何 UI 前只需要讀那一個檔案，就拿到全部設計約束——不需要跨檔案推論，也不需要猜。
+  </div>
+
+  <h2>第一步：從設計稿提取數值（4 個層次）</h2>
+
+  <p>提取是<strong>機械性的</strong>——你不需要「判斷」該用什麼顏色，只需要照著設計稿上的值逐一記錄。設計稿通常有四個層次：</p>
+
+  <h3>① 色彩</h3>
+  <p>用取色工具（瀏覽器 devtools、Figma eyedropper、任何 hex 取色器）點每個色塊，記下 hex 值。Vertex 設計稿定義了：</p>
+  <ul>
+    <li>Primary <code>#F97316</code>（橙色系）</li>
+    <li>中性色從 <code>#0F172A</code>（深色文字）到 <code>#FFFFFF</code>（白色背景）</li>
+    <li>語義色：success / warning / error</li>
+  </ul>
+
+  <h3>② 字級（Typography Scale）</h3>
+  <p>每級 heading 和 body 的 font-size、font-weight、line-height 都是明確數值。例如 H1 = 48px / bold / line-height 1.2、body = 16px / normal / 1.6。</p>
+
+  <div class="callout warn">
+    <span class="label">陷阱</span>
+    不要只記錄 font-size——<strong>line-height 和 font-weight 同樣是 token</strong>。只記 size 會讓元件之間的排版不一致。
+  </div>
+
+  <h3>③ 間距（Base Unit）</h3>
+  <p>間距通常基於一個 base unit 的倍數。Vertex 的 base unit 是 <strong>4px</strong>，所以 scale 是 4 / 8 / 12 / 16 / 24 / 32 / 48px，對應 <code>--spacing-1</code> 到 <code>--spacing-12</code>。元件的 padding、margin、gap 全部從這個 scale 取值，消滅 magic number。</p>
+  <p><small>如果設計稿的間距不是 4 的倍數，仍然要記錄成 token——一致性比數學規則更重要。</small></p>
+
+  <h3>④ 圓角與陰影</h3>
+  <p>按鈕圓角、卡片陰影、輸入框 border 各自對應一個 token。例如 button radius 12px → <code>--radius-md</code>、card radius 16px → <code>--radius-lg</code>、card shadow <code>0 1px 3px rgba(0,0,0,0.1)</code> → <code>--shadow-card</code>。</p>
+
+  <h2>第二步：把值寫進 globals.css 的 @theme</h2>
+
+  <p>提取完成後，所有數值集中寫進 <code>app/globals.css</code> 的 <code>@theme</code> 區塊——這是 token 的 <strong>single source of truth</strong>。Vertex 專案的完整範例：</p>
+
+<pre><code>@theme {
+  /* 色彩系統 */
+  --color-primary: #F97316;
+  --color-primary-light: #FB923C;
+  --color-primary-dark: #EA580C;
+
+  --color-surface: #FFFFFF;
+  --color-canvas-line: #0F172A;
+  --color-neutral-50: #F8FAFC;
+  --color-neutral-100: #F1F5F9;
+  --color-neutral-200: #E2E8F0;
+  --color-neutral-500: #64748B;
+  --color-neutral-800: #1E293B;
+  --color-neutral-900: #0F172A;
+
+  --color-success: #22C55E;
+  --color-warning: #EAB308;
+  --color-error: #EF4444;
+
+  /* Typography scale */
+  --font-display: "Playfair Display", serif;
+  --font-body: "Inter", sans-serif;
+
+  --font-size-display-1: 3rem;
+  --font-size-heading-1: 2rem;
+  --font-size-heading-2: 1.5rem;
+  --font-size-heading-3: 1.25rem;
+  --font-size-body: 1rem;
+  --font-size-small: 0.875rem;
+
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.6;
+
+  /* 間距系統 (base unit = 4px) */
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+  --spacing-12: 48px;
+
+  /* 圓角 */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+
+  /* 陰影 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.1);
+  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.15);
+}</code></pre>
+
+  <h3>命名對應規則：CSS 變數 → utility class</h3>
+  <p>這是你最需要記住的一張表。@theme 裡的變數名<strong>自動</strong>對應到 Tailwind 的 utility class，不需要額外註冊：</p>
+
+  <table>
+    <tr><th>CSS 變數</th><th>可用的 utility class</th></tr>
+    <tr><td><code>--color-primary</code></td><td><code>bg-primary</code>、<code>text-primary</code>、<code>border-primary</code>…</td></tr>
+    <tr><td><code>--font-display</code></td><td><code>font-display</code></td></tr>
+    <tr><td><code>--spacing-4</code></td><td><code>p-4</code>、<code>m-4</code>、<code>gap-4</code>…</td></tr>
+    <tr><td><code>--radius-md</code></td><td><code>rounded-md</code></td></tr>
+    <tr><td><code>--shadow-card</code></td><td><code>shadow-card</code></td></tr>
+  </table>
+
+  <h2>第三步：在 layout.tsx 引入字型（next/font 橋接）</h2>
+
+  <p>字型是 token 裡最特殊的一環：它不是純 CSS 值，需要從字型檔載入。Next.js 用 <code>next/font</code> 在 <code>layout.tsx</code> 載入，再橋接到 CSS 變數：</p>
+
+<pre><code>import { Inter, Playfair_Display } from "next/font/google";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-body",
+});
+
+const playfair = Playfair_Display({
+  subsets: ["latin"],
+  variable: "--font-display",
+});
+
+export default function RootLayout({ children }) {
+  return (
+    &lt;html lang="en" className={`${inter.variable} ${playfair.variable}`}&gt;
+      &lt;body className="font-body"&gt;{children}&lt;/body&gt;
+    &lt;/html&gt;
+  );
+}</code></pre>
+
+  <p><strong>橋接流程（3 步）</strong>：① <code>next/font</code> 在構建時下載字型檔，產生唯一 class name 加到 <code>&lt;html&gt;</code>；② <code>variable</code> 選項把字型名寫進 CSS 變數（<code>--font-body</code>、<code>--font-display</code>）；③ 這個變數覆蓋 <code>@theme</code> 裡的預設值（class 優先級更高）。元件裡只需寫 <code>font-display</code> / <code>font-body</code>，不必知道字型從哪載入。</p>
+
+  <h2>完整的 8 步提取流程</h2>
+  <ol>
+    <li><strong>讀設計稿</strong> — 識別色彩、字級、間距、圓角、陰影的具體數值。你是數值的搬運工，不是詮釋者。</li>
+    <li><strong>提取色彩</strong> — 取色工具記 hex，按 primary / neutral / semantic / surface 分類。</li>
+    <li><strong>提取字級</strong> — 每級 heading 的 size + weight + line-height。</li>
+    <li><strong>提取間距</strong> — 確認 base unit（Vertex 是 4px），按 scale 編號。</li>
+    <li><strong>提取圓角陰影</strong> — button / card / input 的 radius 與 shadow。</li>
+    <li><strong>寫進 globals.css</strong> — 放進 <code>@theme</code>，用 Tailwind 命名（<code>--color-*</code>、<code>--font-*</code>、<code>--spacing-*</code>、<code>--radius-*</code>、<code>--shadow-*</code>）。</li>
+    <li><strong>layout.tsx 引入字型</strong> — <code>next/font</code> + <code>variable</code> 橋接。</li>
+    <li><strong>驗證</strong> — 跑 <code>npm run dev</code>，確認 <code>bg-primary</code> 顯示品牌色、<code>font-display</code> 用對字型。</li>
+  </ol>
+
+  <div class="callout tip">
+    <span class="label">核心原則</span>
+    設計稿是唯一的數值來源，globals.css 是唯一的程式碼來源，兩者對應是機械性的——不需要設計判斷，只需要數值搬運。這正是 AGENTS.md「reproduce the design exactly」能運作的基礎：<strong>沒有 token，AI 只能猜；有了 token，AI 只需要複製。</strong>
+  </div>
+
+  <h2>動手做：把你的設計稿變成一張 Button</h2>
+  <p>假設設計稿上有一個「Primary Button」，規格如下：</p>
+  <ul>
+    <li>背景 <code>#F97316</code>、文字白色</li>
+    <li>圓角 <code>12px</code>、內距 <code>16px × 24px</code></li>
+    <li>字體 Inter <code>16px</code>、字重 <code>600</code></li>
+  </ul>
+  <p>先把你的答案寫下來（能寫幾個寫幾個），再往下對答案：</p>
+<pre><code>@theme {
+  --color-primary: #F97316;          /* 背景 */
+  --radius-md: 12px;                 /* 圓角 */
+  --spacing-4: 16px;                 /* 垂直內距 */
+  --spacing-6: 24px;                 /* 水平內距 */
+  --font-body: "Inter", sans-serif;  /* 字體 */
+  --font-size-body: 1rem;            /* 16px */
+}
+
+/* 使用： */
+&lt;button className="bg-primary text-white rounded-md px-6 py-4 font-body"&gt;…&lt;/button&gt;</code></pre>
+  <p>注意：內距的 16px 和 24px 剛好落在 4px 的 base scale 上（<code>spacing-4</code> / <code>spacing-6</code>），所以直接引用 token，而不是寫 magic number。</p>
+
+  <h2>你的下一步（真的能跑的事）</h2>
+  <ol>
+    <li>在你自己的 Next.js 專案開 <code>app/globals.css</code>，把「你的品牌色」用取色工具抓出來，寫成 <code>--color-primary</code> 及 3–4 個中性色階。</li>
+    <li>跑 <code>npm run dev</code>，在任意元件用 <code>bg-primary</code> 測試，確認渲染出你的品牌色。</li>
+    <li>把字型用 <code>next/font</code> 載入並橋接（若已有字型系統可略過）。</li>
+    <li>把 <code>globals.css</code> 的 <code>@theme</code> 區塊放進你的 AGENTS.md 提示，告訴 AI「設計值全部在 globals.css」。</li>
+  </ol>
+
+  <h2>建議閱讀的第一手來源</h2>
+  <div class="callout source-box">
+    <ul>
+      <li><a href="../sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt">影片逐字稿 part_2:1701–2100</a>——agent 重寫 globals.css 主題、在 layout 引入字型的完整過程。</li>
+      <li><a href="../reference/design-system-glossary.md">Design System 名詞參考</a>——本課用到的 <code>@theme</code>、CSS 變數、base unit、next/font 橋接等定義。</li>
+    </ul>
+  </div>
+
+  <hr>
+
+  <h2>自我檢查（Retrieval Practice）</h2>
+
+  <div class="quiz"
+       data-question="Q1. 定義了 --color-primary 之後，哪個 utility class 會自動指向這個值？"
+       data-correct="0"
+       data-explain="@theme 裡的 CSS 變數自動對應 utility 命名空間：--color-primary 讓 bg-primary、text-primary、border-primary 都指向該值，不需額外註冊。">
+    <button class="opt">bg-primary</button>
+    <button class="opt">color-primary</button>
+    <button class="opt">primary-500</button>
+    <button class="opt">text-primary-500</button>
+  </div>
+
+  <div class="quiz"
+       data-question="Q2. 為什麼 v4 的 @theme 比舊版 tailwind.config.js 更適合 AI 協作專案？"
+       data-correct="0"
+       data-explain="token 直接就是原生 CSS 變數，沒有 JS→CSS 的翻譯層，AI 讀一份 globals.css 就拿到全部設計值，不需要跨檔案推論。">
+    <button class="opt">token 即 CSS 變數，AI 讀一個檔案就夠</button>
+    <button class="opt">舊版完全不能定義顏色與字級</button>
+    <button class="opt">v4 能讓 AI 自動生成設計稿</button>
+    <button class="opt">舊版會讓瀏覽器載入明顯變慢</button>
+  </div>
+
+  <div class="quiz"
+       data-question="Q3. 間距 base unit 是 4px，要表達 16px 的 padding 該用哪個 class？"
+       data-correct="0"
+       data-explain="--spacing-4: 16px，所以 p-4 就是 16px。p-16 是 64px（16×4），p-1 是 4px，p-md 不是有效的 spacing 語法。">
+    <button class="opt">p-4</button>
+    <button class="opt">p-16</button>
+    <button class="opt">p-1</button>
+    <button class="opt">p-md</button>
+  </div>
+
+  <div class="quiz"
+       data-question="Q4. layout.tsx 裡 next/font 的 variable 選項，作用是什麼？"
+       data-correct="0"
+       data-explain="variable 把載入的字型名寫進 CSS 變數（如 --font-body），讓 @theme 宣告的 font-family 被實際字型覆蓋，元件只要用 font-body 即可。">
+    <button class="opt">把字型寫進 CSS 變數，橋接給 @theme 消費</button>
+    <button class="opt">讓字型在伺服器端預先渲染成圖片</button>
+    <button class="opt">自動壓縮字型檔以加快頁面載入</button>
+    <button class="opt">為每個頁面產生不同的字型變體</button>
+  </div>
+
+  <div class="quiz"
+       data-question="Q5. 設計稿上按鈕圓角 12px、卡片圓角 16px，正確的做法是？"
+       data-correct="0"
+       data-explain="建 --radius-md: 12px 與 --radius-lg: 16px 兩個 token，元件引用 rounded-md / rounded-lg。寫死數字或讓 AI 自行決定都會回到不一致。">
+    <button class="opt">建 radius token，元件引用 rounded-md / rounded-lg</button>
+    <button class="opt">在每個元件裡直接寫死 12px 與 16px</button>
+    <button class="opt">讓兩者共用同一個圓角數值</button>
+    <button class="opt">讓 AI 依當下版面自行決定圓角</button>
+  </div>
+
+  <div class="callout tip">
+    <span class="label">下一步</span>
+    有不懂的地方隨時問我。例如：「@theme 裡沒宣告的 --color-x 為什麼用不了？」或「這跟 CSS 的 CSS variables / custom properties 差在哪？」
+  </div>
+
+  <footer>
+    Lesson 2 / 4 · 來源：<a href="../sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt">vertex-build-tutorial part_2:1701–2100</a> · 名詞見 <a href="../reference/design-system-glossary.md">Glossary</a>
+  </footer>
+
+</main>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

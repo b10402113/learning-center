@@ -1,0 +1,123 @@
+---
+id: server-component-homepage
+title: 用 Server Component + sanityFetch 串接首頁真實資料
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/sanity-fetch
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:2249-2788]]"
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:5101-5216]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 用 Server Component + sanityFetch 串接首頁真實資料
+
+## Learning goal
+
+能用 Next.js Server Component + `sanityFetch` 從 Sanity 讀取真實資料，渲染首頁的 nav、hero、課程卡片 grid，並理解 server-only 讀取的安全邊界。
+
+## Lesson
+
+### 📝 首頁的起點：靜態 mockup 還是空殼
+
+Design system 建好之後，首頁的 UI 骨架已經有了——nav bar、hero section（含搜尋列）、課程卡片 grid、footer——但卡片上的資料全是 hard-coded。這一課要把靜態 mockup 換成從 Sanity 讀出來的真實資料，而且整個過程只在 server 端完成。
+
+### 🔧 從 Prompt 到 Implementation Prompt 的循環
+
+在代理式工程的工作流裡，你不會自己一行一行寫首頁。流程是：
+
+1. 給 AI agent 一個簡短 prompt：「implement the vertex homepage from the attached UI」
+2. Agent 讀 AGENTS.md、inspect 現有的 design system 和檔案結構
+3. Agent 寫出一份 implementation prompt——結構化的實作規格書——放在 `prompts/homepage.md`
+4. **你批准**這份 prompt，agent 才開始寫 code
+
+Implementation prompt 裡會列出：首頁有哪些區塊、每個區塊的資料來源、技術限制（例如不能把 Sanity token 暴露在 client 端）、驗收標準（在不同螢幕尺寸下截圖比對 reference）。這就是「先寫 prompt → 人工批准 → 才寫 code」的核心循環。
+
+**為什麼這很重要？** 因為 implementation prompt 是你對 AI 的控制點。沒有它，AI 會自己決定怎麼實作——可能用 client component、可能把 token 暴露在前端、可能忽略 design system 的 token。有了它，你在批准的那一刻就知道 AI 會做什麼、不會做什麼。
+
+### 💡 Server Component 為什麼是正確的選擇
+
+Next.js App Router 的 Server Component 只在 server 端執行。三大好處：
+
+1. **可直接執行 async 函式** — 不需要 `useEffect` 或 `useState`，直接 `await` 資料庫查詢
+2. **程式碼不出現在 client bundle** — 打包器不會把程式碼放進瀏覽器下載的 JavaScript 裡
+3. **可安全存取環境變數** — `process.env.SANITY_API_READ_TOKEN` 永遠不會到達瀏覽器
+
+首頁（`app/page.tsx`）預設就是 Server Component。你不需要加 `'use client'`，反而要確保你**不加**它。
+
+**為什麼這很重要？** 如果你加了 `'use client'`，Next.js 會把整個元件的程式碼打包進 client bundle——包括裡面引用的 `sanity.client.ts` 裡的 token。瀏覽器端的任何人都能在 developer tools 裡看到你的 Sanity read token。
+
+### ⚡️ 用 sanityFetch 讀取 Sanity：三行搞定
+
+`sanityFetch` 是封裝好的 Sanity 資料讀取函式（在 [[learn/vertex-learning-platform/elements/sanity-fetch|sanityFetch 資料讀取函式]] 裡有完整說明）。首頁的使用方式：
+
+```typescript
+// app/page.tsx
+import { sanityFetch } from '@/lib/sanity.fetch'
+import { groq } from 'next-sanity'
+
+const homeQuery = groq`{
+  "courses": *[_type == "course"][0...3]{
+    title, slug, description, level,
+    "totalLessons": count(modules[].lessons),
+    "totalDuration": sum(modules[].lessons[].duration)
+  },
+  "courseCount": count(*[_type == "course"])
+}`
+
+export default async function HomePage() {
+  const data = await sanityFetch<{ courses: Course[]; courseCount: number }>({
+    query: homeQuery,
+  })
+  return <HomeView courses={data.courses} courseCount={data.courseCount} />
+}
+```
+
+三個關鍵設計決策：
+
+- **`[0...3]`** — 只取前 3 門課程。首頁不需要全部課程，精簡是設計選擇。
+- **`count(modules[].lessons)`** — GROQ aggregate，計算每門課有幾節課（在 [[learn/vertex-learning-platform/elements/groq-aggregate|GROQ 聚合查詢]] 裡展開）。
+- **`sanityFetch<{ courses: Course[]; courseCount: number }>`** — 泛型宣告回傳結構，TypeScript 在編譯時就能抓到欄位名稱打錯的問題。
+
+### 🔧 首頁的三個資料區塊
+
+從設計稿拆解，首頁有三個需要真實資料的區塊：
+
+1. **Nav bar** — 顯示 logo 和用戶頭像（Clerk 接入後會有 sign-in 狀態）。目前是純展示，不需要 Sanity 資料。
+2. **Hero section** — 搜尋列是首頁的核心功能（在 [[learn/vertex-learning-platform/nodes/intelligent-search|智慧搜尋]] 裡實作），但目前只需要顯示標題和搜尋列的 UI。
+3. **Course grid** — 顯示前 3 門課程的卡片。每張卡片需要：課程標題、slug（用來建連結）、描述、難度、lessons 數、總時數。全部從 Sanity 查詢。
+
+### ⚡️ 從靜態到動態的替換過程
+
+作者的流程是：截圖首頁的課程卡片區段，拖進 agent 視窗，然後要求 agent 把靜態資料換成從 Sanity 讀取的真實資料。Agent 讀 AGENTS.md、inspect 現有的 sanityFetch 和 GROQ 查詢，然後修改 `app/page.tsx`——把 hard-coded 的 courses 陣列換成 `sanityFetch` 的結果。
+
+替換完成後，手動造訪首頁驗證三件事：
+
+1. 課程卡片顯示的是 Sanity 裡的真實資料（不是寫死的）
+2. 每張卡片的標題、描述、難度都正確
+3. layout 沒有因為資料結構改變而崩壞
+
+### 📝 內容寬度的調整：先跑起來再微調
+
+在實作過程中，作者發現首頁的內容寬度太窄（960px），和 reference 設計不一致。他要求 agent 把主要內容寬度從 960px 調到 ~1440px。這是一個典型的「先實作、再微調」的迭代：不要在 prompt 裡預設所有數值，而是先跑起來看效果，再根據實際結果調整。
+
+**為什麼這很重要？** 因為在 prompt 裡預設精確的 CSS 數值是浪費 token——你不知道實際渲染效果，猜對的機率很低。先讓 agent 建出功能，再根據截圖微調，效率更高。
+
+### 🔧 驗證方式：截圖比對 + Branch 工作流
+
+首頁完成後的驗證流程：
+
+1. `npm run dev` 啟動本地伺服器
+2. 造訪 `localhost:3000` 看首頁
+3. 截圖不同螢幕尺寸（desktop、tablet、mobile）
+4. 用 Playwright 截圖比對 reference 設計
+5. 確認 horizontal overflow——用 Playwright 測量卡片寬度，診斷有沒有超出視窗
+6. Push 到 `feat/home` 分支，開 PR，讓 CodeRabbit 審查
+
+整個過程——從 prompt 到首頁可以跑——大約在一個 agent session 裡完成。Context window 保持在 ~135k tokens 以內，避免 context rot（在 200k token window 裡，~50k 開始就可能出現 degradation）。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:2249-2788]]
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:5101-5216]]

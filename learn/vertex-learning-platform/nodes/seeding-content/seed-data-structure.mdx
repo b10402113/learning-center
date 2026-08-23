@@ -1,0 +1,159 @@
+---
+id: seed-data-structure
+title: Seed 資料結構：141 份文件的內容地圖
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/content-seeding
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]]"
+  - "[[sources/vertex-learning-platform/seed.ndjson#content-types]]"
+  - "[[sources/vertex-learning-platform/seed.ndjson#course-shape]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Seed 資料結構：141 份文件的內容地圖
+
+## Learning goal
+
+能描述 141 份 NDJSON 文件的內容結構（categories → instructors → courses → lessons）以及 modules 為什麼用 embedded array
+
+## Lesson
+
+### 📊 141 份文件的數量地圖
+
+在動手匯入種子資料（seed data）之前，你得先搞清楚這 141 份 NDJSON 文件到底長什麼樣——它們之間的引用關係、嵌套方式、哪些欄位是衍生的（derived）、哪些是儲存的（persisted）。搞不清楚這些，匯入就會出錯，頁面渲染也會出問題。
+
+**141 = 6 + 5 + 10 + 120**，分為四種 Sanity document type（文件類型）：
+
+| Document Type | 數量 | 內容 |
+|---|---|---|
+| Category（分類） | 6 | web-development、ai-engineering、backend-infrastructure、data、languages、security |
+| Instructor（講師） | 5 | 各有虛構姓名、slug、專業領域、自我介紹 |
+| Course（課程） | 10 | 從 Next.js App Router 到 Practical Web Security，每門覆蓋一個完整學習主題 |
+| Lesson（課節） | 120 | 每門課 4 個 module × 3 個 lesson = 120 |
+
+**為什麼數量對得上很重要？**
+這是整個 seed 的一致性基準。Course、Module、Lesson 的乘積關係必須在匯入前就成立，否則後端搜尋索引和前端課表渲染都會產生斷裂。
+
+### 🏗️ Course 是核心物件，Module 嵌入
+
+這裡有一個關鍵的結構性決策值得你反覆咀嚼。Course 是整個內容模型的核心物件（central object），它同時承擔行銷和結構兩種職責：
+
+- **行銷欄位**：summary、cover image、level、price
+- **引用**：一個 Instructor（`_ref: "instructor.mira-kovac"`）和一個 Category（`_ref: "category.web-development"`）
+- **learning outcomes**：列出學習成果
+- **module array**：最重要的——內嵌（embedded）一個 module array
+
+Module 不是頂層文件（top-level document），它們被塞在 Course 文件裡面。
+
+**Module 為什麼用 embedded array 而不是獨立文件？**
+因為使用者永遠不會「只看一個 module」。想像使用者在瀏覽器裡的操作路徑：他打開一門課程的詳情頁，看到四個 module，每個 module 展開後列出三個 lesson。Module 只是課程內部的一個組織區塊，用來把 lesson 分組並決定呈現順序。把 module 設成頂層文件會多出一個不必要的查詢層級——每個 module 都需要自己的 `_id`、自己的 reference、自己的 read query——但實際上你從來不會單獨讀取它。Embedded array（嵌入式陣列）是 Sanity 官方推薦的 pattern。
+
+**Module 嵌入 vs Lesson 獨立——混合結構是骨架**
+
+與 Module 對比，Lesson 是獨立的頂層文件。因為 Lesson 頁面是使用者實際觀看影片的地方——它需要獨立的 URL、獨立的渲染邏輯、Portable Text notes 和影片播放器。Module 透過引用（reference）指向 Lesson，而不是把 Lesson 嵌入 module 內。
+
+```
+Course (top-level)
+  └── modules[] (embedded array)
+        └── lessons[] (_ref → Lesson top-level)
+```
+
+這種「module 嵌入、lesson 獨立」的混合結構是整個 seed 的骨架。
+
+### 📐 Course 的具體資料形狀
+
+每個 Course 文件的欄位大致長這樣：
+
+```json
+{
+  "_id": "course.nextjs-app-router-in-depth",
+  "title": "Next.js App Router in Depth",
+  "slug": { "current": "nextjs-app-router-in-depth" },
+  "summary": "...",
+  "cover": "https://picsum.photos/...",
+  "level": "intermediate",
+  "price": 49,
+  "instructor": { "_ref": "instructor.mira-kovac" },
+  "category": { "_ref": "category.web-development" },
+  "learningOutcomes": ["...", "..."],
+  "modules": [
+    {
+      "_key": "module-1",
+      "title": "App Router Fundamentals",
+      "summary": "...",
+      "lessons": [
+        { "_ref": "lesson.nextjs-app-router-in-depth.1.1", "_key": "lesson-1.1" },
+        { "_ref": "lesson.nextjs-app-router-in-depth.1.2", "_key": "lesson-1.2" },
+        { "_ref": "lesson.nextjs-app-router-in-depth.1.3", "_key": "lesson-1.3" }
+      ]
+    }
+  ]
+}
+```
+
+**兩個重要的內部機制：**
+
+- `_key`：Sanity 用來區分 array 內每一筆記錄的內部識別碼，seed 編譯器會生成穩定的 `_key`（例如 `module-1`、`lesson-1.1`）
+- `_ref`：指向另一份文件的 `_id`，例如 instructor reference 指向 `instructor.mira-kovac`，lesson reference 指向 `lesson.nextjs-app-router-in-depth.1.1`
+
+這些 ID 全部是穩定的 slug-based ID，不會因為重新匯入而改變。
+
+### 🔢 Lesson 編號是衍生資料，不儲存
+
+Lesson 編號（1.1、1.2、2.1…）是衍生的（derived），**不儲存在資料庫中**。Module 的順序由它在 Course 的 `modules` array 中的位置決定，Lesson 的順序由它在 Module 的 `lessons` array 中的位置決定。前端渲染時，只需要遍歷 array 的 index 就能算出「1.1」「1.2」這樣的編號。
+
+**為什麼不把編號存進資料庫？**
+把編號存進資料庫是多餘的，而且一旦你決定重新排序 module，你還得同步更新所有相關的編號——這正是衍生資料（derived data）的經典反模式。資料庫只存「事實」，不存「從事實算出來的東西」。
+
+### 🎬 Lesson 文件的結構
+
+每個 Lesson 文件也有自己的結構：
+
+```json
+{
+  "_id": "lesson.nextjs-app-router-in-depth.1.1",
+  "title": "Understanding the App Router",
+  "slug": { "current": "understanding-the-app-router" },
+  "videoUrl": "https://www.youtube.com/watch?v=...",
+  "duration": 600,
+  "keyPoints": ["...", "..."],
+  "notes": [/* Portable Text blocks */],
+  "resources": [{ "title": "...", "url": "..." }]
+}
+```
+
+**三個需要注意的細節：**
+
+1. **`videoUrl` 驗證**：Sanity schema 只接受 YouTube、Vimeo、Bunny 三種格式。Seed 編譯器（`build-ndjson.mjs`）會在產生 NDJSON 的時候重新實作這條驗證規則，確保每一筆 lesson 的影片 URL 都合法。
+2. **`duration` 單位是秒**，module 的 duration 是其子 lesson duration 之和，course 的 duration 是其子 module duration 之和。
+3. **時長一致性（consistency）需要在 seed 階段就驗證**——否則你在前端顯示「這門課 4 小時」但實際影片總長只有 2 小時，使用者會立刻發現不對。
+
+### 🔑 Deterministic IDs = 冪等匯入
+
+141 份文件的 ID 全部是 deterministic（確定性）的：
+
+```
+category.web-development
+course.nextjs-app-router-in-depth
+instructor.mira-kovac
+lesson.nextjs-app-router-in-depth.1.1
+```
+
+這使得匯入操作是 idempotent（冪等的）——跑兩次 `sanity import` 不會多出重複文件，只會覆蓋。這一點在 [[learn/vertex-learning-platform/elements/deterministic-ids|Deterministic IDs]] 和 [[learn/vertex-learning-platform/elements/idempotent-import|Idempotent Import]] 中有更深入的討論。
+
+**為什麼冪等匯入很重要？**
+在開發過程中你會反覆跑 seed 腳本。如果每次跑都產生新文件，資料庫會快速膨脹、引用開始重複、頁面渲染出錯。Deterministic ID 確保每次匯入的結果完全一致，無論你跑一次還是十次。
+
+### 🌱 回到 Content Seeding 的全貌
+
+回到整體 [[learn/vertex-learning-platform/elements/content-seeding|Content Seeding（內容種子填充）]] 的脈絡，這 141 份文件就是 Sanity schema 從「結構完備但空無一物」變成「有真實內容可渲染」的那一批資料。Course 頁面從這裡讀取資料來渲染課表手風琴，搜尋功能從這裡索引和排序課程，分類頁面從這裡列出每種主題有多少門課。
+
+種子資料的內部一致性——時長對得上、影片真實存在、引用沒有斷裂——直接決定你的搜尋結果和頁面渲染能不能信任。這 141 份文件不是隨便塞進去的假資料，它們是整座平台的內容地圖。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_3:4141-4868]]
+- [[sources/vertex-learning-platform/seed.ndjson#content-types]]
+- [[sources/vertex-learning-platform/seed.ndjson#course-shape]]

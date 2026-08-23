@@ -1,0 +1,130 @@
+---
+id: search-api-implementation
+title: 實作 POST /api/search：五道檢查的搜尋閘門
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/mcp-context
+  - vertex-learning-platform/grounding-rule
+  - vertex-learning-platform/search-config-document
+  - vertex-learning-platform/server-client-boundary
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_5:6801-7352]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#search-config]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#search-behavior]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 實作 POST /api/search：五道檢查的搜尋閘門
+
+## Learning goal
+
+能實作 `POST /api/search`——把查詢變成 MCP 工具迴圈、驗證輸出、回傳結構化結果，並解釋 CodeRabbit review 的五個要點。
+
+## Lesson
+
+你可能以為寫搜尋 API 就是「收查詢、找資料、回結果」。但 Vertex 的搜尋 API 其實是一道安全閘門——它不只是一個 endpoint，而是確保每次搜尋都不外洩 token、不回假結果、不被惡意利用的完整關卡。
+
+先想一個畫面：機場安檢。每個旅客（查詢）都要過 X 光機（MCP context 驗證）、刷登機證（模型只選 ID）、通過金屬探測器（結果 Sanity 驗證），才能上飛機。每個步驟都有存在理由，少一個就可能出事。
+
+---
+
+### API 的整體架構
+
+`POST /api/search` 是 Next.js server route——跑在伺服器端，不在瀏覽器端。所以它能安全存取 `OPENAI_API_KEY` 和 Sanity MCP 連線，這些東西永遠不會進 client bundle。
+
+```
+瀏覽器送出 POST /api/search { query: "React cache 是什麼" }
+  ↓ server route 從 .env.local 讀取 OPENAI_API_KEY
+server route 從 Sanity MCP 取得 context（課程清單 + 搜尋規則）
+  ↓ 建立 MCP 工具迴圈
+LLM 看到：context + 查詢 + 搜尋規則
+  ↓ 回傳 lessonIds（只有 IDs）
+server route 用 IDs 向 Sanity GROQ 查詢真實資料
+  ↓ 組裝結果卡片（只用 Sanity 的資料）
+回傳 JSON 給瀏覽器
+```
+
+整條路都在伺服器端完成，瀏覽器只負責發查詢、收結果。這就是 [[learn/vertex-learning-platform/elements/server-client-boundary|Server-Client 邊界]] 的核心實踐。
+
+---
+
+### MCP 工具迴圈怎麼運作
+
+MCP 工具迴圈是搜尋 API 的心臟——它讓 LLM 在 [[learn/vertex-learning-platform/elements/mcp-context|Sanity Context]] 的約束下，依查詢語義挑最相關的 lesson IDs。五個步驟：
+
+1. **快取 context**：啟動時把 context 文件內容注入系統提示，不用每次請求都重新載入。改 context 後要重啟伺服器才更新快取。
+2. **建立 MCP client**：用 OpenAI provider 建立 MCP 連線，接到 Sanity Context MCP 伺服器。
+3. **注入系統提示**：把 context（課程清單 + 搜尋規則）和 [[learn/vertex-learning-platform/elements/grounding-rule|接地規則]]（「不要編造任何欄位，只回傳 IDs」）注入。
+4. **執行迴圈**：LLM 看到查詢和 context，挑最相關的 lesson IDs，回傳 `lessonIds`。
+5. **驗證輸出**：用 Zod 驗證模型輸出格式——確保只有 IDs，沒有未定義欄位。
+
+為什麼要驗證？因為 LLM 輸出是「有機的」——它可能偶爾在 IDs 旁多加一個標題或描述。Zod 驗證確保不管模型怎麼答，server route 只拿得到它需要的 IDs。
+
+---
+
+### 結果的 Sanity 驗證
+
+拿到 IDs 後，server route 用 GROQ 查 Sanity 真實資料。這是接地機制的最後一道防線：
+
+```
+模型回傳: ["lesson.react-caching", "lesson.ssr-overview"]
+  ↓ 用 IDs 查詢 Sanity
+Sanity 回傳:
+  - lesson.react-caching → { title: "React Cache 概覽", ... }
+  - lesson.ssr-overview → { title: "Server-Side Rendering", ... }
+  ↓ 只保留 Sanity 確認存在的 ID
+組裝結果卡片（每個欄位都來自 Sanity）
+```
+
+模型若回傳不存在的 ID——被過濾掉。Sanity 回傳的資料若跟模型「以為的」不一樣——結果卡片照樣用 Sanity 資料，不用模型記憶。
+
+---
+
+### CodeRabbit review 的五個要點
+
+這個 PR 做完，CodeRabbit 給了五個意見，每個都指向真實問題：
+
+| # | 嚴重程度 | 問題 | 為什麼重要 | 修正方式 |
+| --- | --- | --- | --- | --- |
+| 1 | 中 | 沒在建立 MCP client 前驗證 OpenAI API key | key 無效會讓 MCP client 迴圈中途才失敗，白花 API 呼叫 | 建立 client 前先驗證 key |
+| 2 | 輕 | 點已活躍的 tab 時觸發 PostHog 事件 | 不必要的事件污染分析資料，誤判使用者行為 | 判斷 tab 已活躍就不發事件 |
+| 3 | **嚴重** | **沒 ground video moments** | 模型的 `startSeconds` 可能是編的——它選了真 lesson ID，但時間戳可能是假的 | 載入影片文件，**只有**時間戳出現在章節或逐字稿區塊中才接受結果 |
+| 4 | 輕 | URL code fence 缺語言標註 | 不影響功能，但讓程式碼塊語法高亮失效 | 加上語言標註 |
+| 5 | **嚴重** | **MCP URL 沒要求 HTTPS** | MCP URL 帶 token——用 HTTP 傳輸，token 能被中間人截走 | 強制 HTTPS |
+
+第三點最關鍵：它指出接地機制的漏洞——模型選了真 lesson ID，卻可能在 `startSeconds` 造假。CodeRabbit 的建議：載入影片文件，**只有**時間戳真出現在章節或逐字稿區塊才接受。這是 [[learn/vertex-learning-platform/elements/grounding-rule|接地規則]] 的延伸——不只 ID 要接地，時間戳也要接地。
+
+---
+
+### 為什麼這五個問題在 AI 程式碼裡特別常見
+
+CodeRabbit 抓得到，是因為它「完全理解這個 app 在做什麼」。但你如果自己 review AI 生成的程式碼，這五個問題有什麼共通點？
+
+| 問題類型 | AI 為什麼容易犯 | 人該怎麼擋 |
+| --- | --- | --- |
+| **缺少驗證**（#1） | AI 假設「key 一定有效」，開發環境通常有效 | 每次涉及 API key，都問「key 無效會怎樣？」 |
+| **不必要副作用**（#2） | AI 只顧「功能能跑」，不管副作用 | 每次涉及事件追蹤，都問「這事件何時不該觸發？」 |
+| **接地不完整**（#3） | AI 假設「模型輸出都是對的」 | 每次涉及 LLM 輸出，都問「模型在此欄位造假怎麼辦？」 |
+| **格式問題**（#4） | AI 不在乎語法高亮，它不用讀 | 每次生成文件，檢查 code 區塊格式 |
+| **安全問題**（#5） | AI 假設「內部 URL 用 HTTP 沒關係」 | 每次涉及 token 傳輸，都問「這段加密了嗎？」 |
+
+這就是為什麼 AI 程式碼需要人+工具雙重 review——AI 能寫出功能正確的程式碼，但安全與接地的細節，需要另一雙眼睛。
+
+---
+
+### 總結：五道檢查
+
+`POST /api/search` 的安全機制總結成五道檢查：
+
+**第一道：key 驗證**——先確認有合法 API key 才啟動 MCP 迴圈。像進實驗室前先刷卡，刷不過不開門。
+
+**第二道：context 快取**——把搜尋規則快取在系統提示，每次搜尋都用同一套規則。像實驗室的標準作業流程（SOP），誰來做都一樣。
+
+**第三道：Zod 驗證**——確保模型輸出格式正確、只有 IDs。像實驗室品管，不接受不合規格的樣本。
+
+**第四道：Sanity 驗證**——用 IDs 查真實資料，只保留確認存在的結果。像實驗室交叉驗證，用另一數據源確認。
+
+**第五道：HTTPS 傳輸**——所有敏感資料走加密連線。像實驗室的保密協議，數據不外流。
+
+**五道缺一不可——key 驗證擋無效存取，context 快取擋規則漂移，Zod 擋格式異常，Sanity 擋虛構結果，HTTPS 擋中間人攻擊。**

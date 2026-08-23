@@ -1,0 +1,108 @@
+---
+id: sanity-lesson-query
+title: 用 reverse reference 建立 lesson 資料查詢
+subject: vertex-learning-platform
+teaches:
+  - vertex-learning-platform/reverse-reference
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6069-6504]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# 用 reverse reference 建立 lesson 資料查詢
+
+## Learning goal
+
+能從 Sanity 讀取一份 lesson 的完整資料——包含它所屬的父課程與模組結構——並建立 `lessons/[slug]` 路由。
+
+## Lesson
+
+### 📝 為什麼 lesson 頁的資料查詢比較複雜
+
+在 [[learn/vertex-learning-platform/elements/sanity-fetch|sanityFetch]] 裡，你已經學會用 GROQ 從 Sanity 抓資料。但 lesson 頁面有一個不一樣的地方：它不只要讀一份 lesson 的內容，還要知道這份 lesson 屬於哪門課程、在哪個模組裡、前後還有哪些課。
+
+這在 [[learn/vertex-learning-platform/elements/sanity-schema|Sanity schema]] 設計上有一個關鍵差異：course 透過 `modules[].lessons[]` 引用了 lesson，但 lesson 本身**不會**儲存它屬於哪門課程。這是 headless CMS 的常見做法——保持單一資料來源（single source of truth），避免冗餘引用導致資料不一致。
+
+| 方案 | 優點 | 缺點 |
+| --- | --- | --- |
+| lesson 上加 `course` 欄位 | 查詢簡單 | 雙向引用，改一邊容易忘另一邊 |
+| 用反向引用從 course 查 | 資料乾淨，不冗餘 | 需要學 GROQ 的 `references()` 語法 |
+
+lesson 頁面偏偏需要「從 lesson 往上找 course」。怎麼辦？
+
+### 🔧 反向引用：從 course 往回找
+
+答案是 [[learn/vertex-learning-platform/elements/reverse-reference|反向引用 (Reverse Reference)]]。GROQ 語言提供了一個 `references()` 函數，讓你從 course 的角度反向查詢：「哪份 course 引用了這份 lesson？」
+
+具體的 GROQ 查詢拆解如下：
+
+1. **外層**：`*[_type == "lesson" && slug.current == $slug][0]` — 用 URL 的 `slug` 參數找到那份 lesson
+2. **內層**：`*[_type == "course" && references(^._id)]` — 從所有 course 中，找出「引用了外層 lesson 的那一份」
+3. **`^` 操作符**：引用外層查詢的當前結果（即那份 lesson 的 `_id`），讓內層查詢能「看見」外層的結果
+4. **`modules[]->`**：展開 course 的 modules，每個 module 再展開它的 lessons 列表
+
+```groq
+*[_type == "lesson" && slug.current == $slug][0]{
+  _id,
+  title,
+  level,
+  coverImage,
+  durationInSeconds,
+  notes,
+  "course": *[_type == "course" && references(^._id)][0]{
+    title,
+    slug,
+    modules[]->{
+      title,
+      lessons[]->{ title, slug }
+    }
+  }
+}
+```
+
+**為什麼 `^` 操作符是關鍵？** 因為它讓內層查詢能「反向」引用外層的結果。沒有 `^`，你就沒辦法在一次查詢中同時拿到 lesson 和它的父課程——只能拆成兩次查詢，效能和程式碼複雜度都會上升。
+
+### 🔗 建立 `lessons/[slug]` 路由
+
+有了查詢之後，下一步是把它接入 Next.js 的 App Router。在 `app/lessons/[slug]/page.tsx` 中，流程是：
+
+1. 從 `params.slug` 取得 URL 參數
+2. 把 `slug` 傳給 `sanityFetch` 的 `params` 物件
+3. Sanity 返回包含 lesson 內容和父課程結構的完整資料
+4. 組件用這些資料渲染頁面
+
+```typescript
+// app/lessons/[slug]/page.tsx
+import { sanityFetch } from '@/sanity/lib/fetch';
+import { lessonQuery } from '@/sanity/lib/queries';
+
+export default async function LessonPage({ params }: { params: { slug: string } }) {
+  const lesson = await sanityFetch({
+    query: lessonQuery,
+    params: { slug: params.slug },
+  });
+
+  return <LessonContent lesson={lesson} />;
+}
+```
+
+**為什麼要先做這一步？** 因為資料查詢是整個 lesson 頁的基礎。影片播放、筆記渲染、課程導覽——所有功能都需要從 Sanity 讀取資料。如果查詢不完整，你就會在後續步驟中不斷回來補查詢。
+
+### ⚠️ Sanity types 重新生成
+
+當你修改了 GROQ 查詢（特別是加入了反向引用的內層查詢），你需要重新生成 Sanity 的 TypeScript 類型。因為查詢結果的結構已經改變——原本只有 lesson 的欄位，現在多了一個 `course` 物件，裡面包含 `title`、`slug`、`modules` 陣列。
+
+重新生成的指令是 `npx sanity codegen`，它會根據你的 schema 和查詢自動產生對應的 TypeScript 介面。如果跳過這一步，TypeScript 會在 `lesson.course` 上報錯——因為舊的類型定義裡沒有這個欄位。
+
+### 🐛 一個 seed defect 的教訓
+
+在實作過程中，你可能會遇到一個問題：Sanity 的 seed 資料中，key 截斷（key truncation）導致 39 筆 lesson 擁有相同的 `notes` key。這意味著這 39 筆 lesson 的筆記內容會互相覆蓋——你在 lesson A 修改了筆記，結果 lesson B 的筆記也跟著變。
+
+修正方法是用 `studio run seed import` 重新匯入 seed 資料，確保每筆 lesson 的 key 都是唯一的。這個 defect 也提醒了一件事：在 Sanity 中，`_key` 是用來區分同一父文件下多個子文件的唯一標識。如果 key 重複，Sanity 會把它們當作同一份文件處理。
+
+**為什麼這件事很重要？** 因為 seed 資料的品質直接決定你在開發過程中看到的內容是否正確。如果 seed 有 bug，你會花大量時間在「為什麼我的筆記不對？」的排查上，而問題根本不在你的程式碼。
+
+## Sources
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6069-6504]]

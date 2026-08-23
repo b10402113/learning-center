@@ -1,0 +1,131 @@
+---
+id: sanity-fetch
+title: sanityFetch 資料讀取函式
+subject: vertex-learning-platform
+tier: 2
+order: 12
+type: article
+nodes:
+  - vertex-learning-platform/catalog-and-course-pages
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:2249-2788]]"
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:5101-5216]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#app-structure]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# sanityFetch 資料讀取函式
+
+## Problem Statement
+
+在 Next.js App Router 裡，Server Component 可以直接執行 async 函式來取資料，但每一個頁面如果都自己建立 Sanity client、自己寫 fetch 邏輯，程式碼會重複、快取策略會分散、而且很容易在某個頁面忘記設定 revalidation 導致資料過時。更危險的是，如果某個頁面不小心把 Sanity client 引進了 client component，read token 就會暴露在瀏覽器端。`sanityFetch` 的目的就是把「從 Sanity 讀資料」這件事收斂成一個統一的入口：所有頁面透過同一個函式查詢，快取策略集中管理，token 永遠只在 server 端。
+
+## Why it matters
+
+`sanityFetch` 是 Vertex 資料層的核心 API。首頁的課程卡片、all-courses 的完整列表、課程詳情頁的模組展開——所有頁面的 Sanity 讀取都走這一個函式。它做了三件事：（1）封裝 Sanity client 的建立與 token 注入，確保 never 洩漏到 client 端；（2）統一 GROQ 查詢的型別安全——泛型 `<T>` 讓你宣告回傳結構，TypeScript 在編譯時就能抓到欄位名稱打錯的問題；（3）用 Next.js 的 `revalidate` 參數控制 ISR（Incremental Static Regeneration）間隔，讓你決定每筆資料多久重新验证一次。
+
+## How it works
+
+### 函式簽名
+
+```typescript
+// lib/sanity.fetch.ts
+import { client } from './sanity.client'
+import { groq } from 'next-sanity'
+
+export async function sanityFetch<T>({
+  query,
+  params = {},
+  revalidate = 60,
+}: {
+  query: string
+  params?: Record<string, unknown>
+  revalidate?: number
+}): Promise<T> {
+  return client.fetch<T>(query, params, {
+    next: { revalidate },
+  })
+}
+```
+
+三個參數：
+- `query`：GROQ 字串，用 `groq` tag 編寫以獲得語法高亮
+- `params`：GROQ 參數（例如 `[slug]`），防止 GROQ injection
+- `revalidate`：快取秒數，60 表示每分鐘重新验证一次（ISR）
+
+### 使用方式
+
+在 Server Component 裡直接呼叫：
+
+```typescript
+// app/page.tsx
+import { sanityFetch } from '@/lib/sanity.fetch'
+import { groq } from 'next-sanity'
+
+const homeQuery = groq`{
+  "courses": *[_type == "course"][0...3]{
+    title, slug, description, level,
+    "totalLessons": count(modules[].lessons),
+    "totalDuration": sum(modules[].lessons[].duration)
+  },
+  "courseCount": count(*[_type == "course"])
+}`
+
+export default async function HomePage() {
+  const data = await sanityFetch<{ courses: Course[]; courseCount: number }>({
+    query: homeQuery,
+  })
+  return <HomeView courses={data.courses} courseCount={data.courseCount} />
+}
+```
+
+### 為什麼不直接用 `client.fetch`？
+
+`sanityFetch` 在 `client.fetch` 之上包了一層，好處是：
+1. **快取策略集中**——改一個地方就改了所有頁面的 revalidation 行為
+2. **型別安全**——泛型 `<T>` 在呼叫端就能驗證回傳結構
+3. **未來可擴充**——要加 logging、error handling、或 metrics，只改一個函式
+
+### Server Component vs Client Component 的邊界
+
+`sanityFetch` 只能在 Server Component 裡呼叫。如果你在 Client Component（`'use client'`）裡用它，Next.js 的 bundler 會把 `sanity.client.ts` 裡的 `process.env.SANITY_API_READ_TOKEN` 打包進 client bundle——token 就暴露了。正確做法是：Server Component 透過 `sanityFetch` 拿到資料，再把結果作為 props 傳給 Client Component。
+
+## In plain terms
+
+`sanityFetch` 就像一個只在後廚工作的服務生。客人（瀏覽器）不能自己走進廚房拿菜，必須透過前廳的服務生（Server Component）點餐。服務生拿著菜單（GROQ query）走進廚房（Sanity API），把菜端出來給客人。廚房的鑰匙（token）只在服務生手上，客人永遠拿不到。
+
+## Practical use
+
+在 Vertex 的三種頁面裡，`sanityFetch` 的使用模式完全一致：
+
+| 頁面 | GROQ 查詢重點 | revalidate |
+| --- | --- | --- |
+| 首頁 `/` | 前 3 門課程 + 總課程數 | 60 秒 |
+| All-courses `/courses` | 全部課程 + aggregate 統計 | 60 秒 |
+| 課程詳情 `/courses/[slug]` | 單門課程的完整 modules/lessons | 60 秒 |
+
+每個頁面的查詢不同，但呼叫 `sanityFetch` 的方式完全一樣——改 query、改 type、傳入 params。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/server-only-read-layer|Server-Only Read Layer：私有資料集的安全讀取與 GROQ]] — `sanityFetch` 是 server-only read layer 的具體實作，兩者是同一個安全模式的不同抽象層。
+- [[learn/vertex-learning-platform/elements/groq-aggregate|GROQ 聚合查詢]] — `sanityFetch` 傳入的 GROQ query 經常包含 aggregate（count、sum），兩者在頁面裡一起出現。
+- [[learn/vertex-learning-platform/elements/sanity-schema|Sanity Schema-Driven 架構]] — schema 定義了查詢的目標結構，`sanityFetch` 是讀取這個結構的統一管道。
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_2:2249-2788]] — 首頁從靜態 mockup 改接真實 Sanity 資料的過程：給 agent 一個 prompt，agent 讀 AGENTS.md、寫 homepage.md prompt、呼叫 sanityFetch。
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:5101-5216]] — 把首頁的靜態課程卡片換成從 Sanity 動態查詢的真實資料，驗證 course details 頁面。
+- [[sources/vertex-learning-platform/AGENTS.md#app-structure]] — AGENTS.md 裡的架構章節：server/client 和 token 邊界定義。
+
+## Questions
+
+### Q1. `sanityFetch` 裡的 `revalidate` 參數控制什麼？如果設成 0 會怎樣？
+A1. `revalidate` 控制 Next.js ISR 的重新验证間隔（秒）。設成 60 表示這筆資料在快取中保留 60 秒，之後下一個請求會觸發背景重新验证。如果設成 0，表示每次請求都重新查詢 Sanity——資料永遠最新，但回應速度會變慢，因為每次都要等 Sanity API 回傳。
+
+### Q2. 如果忘了在 `.env.local` 設定 `SANITY_API_READ_TOKEN`，`sanityFetch` 會怎樣？
+A2. `sanity.client.ts` 裡的 `token` 會是 `undefined`。如果 Sanity 資料集是 private 的（Vertex 就是），API 會回傳 401 錯誤。如果資料集是 public 的，查詢仍然可以執行，但你就失去了 token 保護的意義——任何人都可以用 API 讀你的資料。
+
+### Q3. 為什麼 `sanityFetch` 用泛型 `<T>` 而不是直接回傳 `any`？
+A3. 因為 GROQ 查詢的結果結構是你自己定義的——你在 query 裡寫了 `title, slug, description`，回傳的物件就會有這些欄位。用泛型 `<T>` 讓你在呼叫端宣告預期的型別（例如 `Course[]`），TypeScript 就能在編譯時檢查你有沒有打錯欄位名稱，而不是等到 runtime 才發現 `course.title` 是 `undefined`。

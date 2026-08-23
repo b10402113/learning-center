@@ -1,0 +1,116 @@
+---
+id: mcp-context
+title: Sanity Context MCP
+subject: vertex-learning-platform
+tier: 2
+order: 12
+type: article
+nodes:
+  - vertex-learning-platform/intelligent-search
+sources:
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6505-6800]]"
+  - "[[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_5:6801-7352]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#search-config]]"
+  - "[[sources/vertex-learning-platform/AGENTS.md#app-structure]]"
+created: 2026-08-22
+updated: 2026-08-22
+---
+
+# Sanity Context MCP
+
+## Problem Statement
+
+大型語言模型（Large Language Model, LLM）本身不認識你的 Sanity 資料集——它不知道你的課程叫什麼、有哪些單元、影片的逐字稿內容是什麼。如果讓模型直接「靠記憶」回答搜尋查詢，它會根據訓練資料憑空生成看似合理的課程名稱和描述，但這些東西可能根本不存在。你需要一種方式，讓模型在回答之前先「看到」你 Sanity 裡的真實資料，但又不能把整批資料全部丟進 prompt（那會太貴、太慢、而且會讓模型迷失在雜訊裡）。
+
+## Why it matters
+
+ Sanity Context MCP 是 Vertex 搜尋功能的「資料供應鏈」——它決定模型能看到什麼、不能看到什麼。如果這條鏈斷了，模型就只能靠猜，搜尋結果就會變成虛構的課程卡片。更嚴重的是，如果把整批 Sanity 資料直接塞進 prompt，不但成本暴增（每次搜尋都花一大筆 API 費用），模型還會因為資訊過載而回答品質下降。 Sanity Context 解決的是「精準供給」的問題：只給模型它需要的、能合法存取的、結構化的 Sanity 子集。
+
+## How it works
+
+### 什麼是 Sanity Context
+
+你可以把 Sanity Context 想成一家餐廳的「食材供應商配送系統」。廚房（LLM）需要食材（Sanity 資料）才能做菜（回答搜尋），但廚房不會自己跑去農場搬菜——它需要一條固定、可控的配送管線。這條管線就是 Model Context Protocol（MCP，模型上下文協議）。
+
+MCP 是一套開放標準，讓 AI 代理（AI agent）能透過 HTTP 連接到外部系統，取得結構化的資料。在 Vertex 的架構裡，Sanity Context MCP 伺服器做了這件事：
+
+```
+瀏覽器送出查詢 "React cache 是什麼"
+  ↓ 查詢到達 server route
+server route 啟動 MCP 工具迴圈
+  ↓ MCP 伺服器把 Sanity 資料的「允許範圍」注入系統提示
+LLM 看到：「你可以搜尋的課程清單」+ 查詢
+  ↓ LLM 根據實際資料回傳結果
+server route 驗證結果
+  ↓ 只保留 Sanity 裡真實存在的 ID
+結構化結果回傳給瀏覽器
+```
+
+### MCP 的幾個關鍵設計
+
+| 機制 | 白話說明 | 為什麼要這樣做 |
+| --- | --- | --- |
+| **Content scope filter**（內容範圍過濾器） | 告訴 MCP 伺服器「只能給模型看這些資料」——例如只看課程和單元，不看管理員設定 | 防止模型看到不該看到的資料（例如未發佈的課程、內部設定） |
+| **Query instructions**（查詢指令） | 告訴模型「拿到資料之後該怎麼搜尋」——例如用 wildcard 關鍵字匹配、不要用整句匹配 | 確保搜尋行為一致，不會因為模型不同而結果不同 |
+| **System prompt injection**（系統提示注入） | MCP 把 context 文件的內容注入到每次請求的系統提示裡 | 模型在回答之前先看到規則，不需要在每次搜尋時重新解釋 |
+| **Server-side only**（只在伺服器端） | MCP 連線只從 server route 發起，瀏覽器永遠不直接呼叫 MCP | 防止 token 和資料暴露在瀏覽器端 |
+
+### 為什麼 Sanity Context 比直接用 Sanity API 更好
+
+你可能會想：「為什麼不直接用 Sanity 的 GROQ 查詢，把結果丟給模型？」原因是：
+
+1. **GROQ 是「你問什麼就拿什麼」**，但搜尋的需求是「模型自己決定哪些內容跟查詢相關」。如果把所有可能的課程全部查出來塞進 prompt，效率太低。
+2. **MCP 讓模型自己決定查什麼**——模型可以根據查詢的語義，決定要「看」哪些 Sanity 文件，而不是你預先寫好一個固定的查詢。
+3. **Context 文件可以動態調整**——你改了 context 文件，下一次搜尋就自動用新規則，不需要改程式碼、不需要重新部署。
+
+### 陷阱
+
+AGENTS.md 記錄了幾個跟 Sanity Context 直接相關的陷阱：
+
+- **Context MCP needs a deployed Studio app**：MCP 伺服器需要 Studio 已經部署才能運作。如果只部署了 Web 而沒部署 Studio，搜尋會失敗。
+- **Model follows inline system prompt more reliably**：模型更傾向遵循內聯系統提示（inline system prompt）中的指令，而不是 Context 文件。所以關鍵規則要同時寫在兩處。
+- **Cache initial context**：搜尋 API 應該把 context 快取在系統提示裡，避免每次請求都重新載入。修改 context 文件需要重新啟動伺服器才能生效。
+
+## In plain terms
+
+想像你在圖書館找書。圖書館員（server route）手裡有一份「可借閱書單」（context 文件），它定義了你能借哪些書。當你跟圖書館員說「我要找一本講 React 的書」（搜尋查詢），圖書館員不會把整個圖書館的書搬過來讓你翻——它會根據書單，把最相關的幾本書拿給你。而這份書單是館長（你）事先定好的，館長改了書單，你下次來找書時就會自動看到新的書單。
+
+MCP 就是那個「圖書館員」——它負責把你的查詢翻譯成「在 Sanity 裡該看哪些資料」，然後把結果整理好交給模型。
+
+## Practical use
+
+在 Vertex 專案中，Sanity Context MCP 的實作流程：
+
+1. **部署 Sanity Studio**：`cd studio && sanity deploy`——MCP 伺服器需要 Studio 已部署才能存取資料集。
+2. **匯入 Context 文件**：透過 Sanity MCP 或 `dial-your-context` skill 匯入「vertex search」文件，裡面有內容範圍過濾器和搜尋指令。
+3. **設定 `OPENAI_API_KEY`**：MCP 透過 OpenAI 的 API 呼叫 LLM，所以需要一組 key 放在 `.env.local`。
+4. **在 server route 裡建立 MCP client**：`POST /api/search` 接收查詢後，建立 MCP 工具迴圈，讓模型在 context 的約束下搜尋。
+5. **快取 context**：把 context 文件的內容注入系統提示，避免每次請求都重新載入。
+6. **驗證模型輸出**：模型回傳的結果必須經過 Sanity 驗證——只保留真實存在的 ID。
+
+## Connections
+
+- [[learn/vertex-learning-platform/elements/server-client-boundary|Server-Client 邊界]] — MCP 連線只從 server route 發起，瀏覽器永遠不直接呼叫 MCP，這是 server-client 邊界的安全規則之一。
+- [[learn/vertex-learning-platform/elements/grounding-rule|搜尋接地規則 (Grounding Rule)]] — MCP 供給資料，Grounding 規則確保模型只用這些資料的 ID，兩者共同防止搜尋結果造假。
+- [[learn/vertex-learning-platform/elements/grounding-search|搜尋 Grounding]] — 概念性的接地機制；MCP Context 是它的具體實作載體。
+- [[learn/vertex-learning-platform/elements/search-config-document|搜尋設定文件 (Search Config Document)]] — Context 文件就是搜尋配置的實體形式，透過 MCP 注入系統提示。
+
+## Deep dive
+
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_4:6505-6800]] — Scoping intelligent search: Sanity Context MCP 的架構設計、browser→server route→MCP 的路徑、為什麼 browser 永遠不碰 LLM。
+- [[sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt#part_5:6801-7352]] — Intelligent search backend: MCP 工具迴圈的實作、context 快取、結果驗證、CodeRabbit review 的五個要點。
+- [[sources/vertex-learning-platform/AGENTS.md#search-config]] — 搜尋設定文件的機制：config-as-content、dial-your-context skill、修改 context vs 修改 inline system prompt 的差異。
+
+## Questions
+
+### Q1. 如果 Sanity Studio 沒有部署，MCP 會發生什麼事？
+
+A1. MCP 伺服器無法連接到 Sanity 資料集，搜尋請求會失敗。這是 AGENTS.md traps 章節特別警告的——很多人以為只要 Web 部署了就夠了，但 MCP 需要 Studio 已經部署才能運作。
+
+### Q2. 為什麼關鍵規則要同時寫在 Context 文件和內聯系統提示裡？
+
+A2. 因為模型更傾向遵循內聯系統提示中的指令。Context 文件是動態可調的（改了不用改程式碼），但如果你只把規則寫在 Context 裡，模型可能偶爾不遵守。把規則寫在兩處，等於上了雙重保險。
+
+### Q3. MCP 和一般的 REST API 有什麼差別？
+
+A3. REST API 是「你問什麼就拿什麼」——你必須預先知道要問什麼。MCP 則是「模型自己決定要拿什麼」——它根據查詢的語義，動態決定要從 Sanity 裡取哪些資料。這讓搜尋從「關鍵字匹配」升級到「語義理解」。

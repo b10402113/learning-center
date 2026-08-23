@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 3 — Clerk 認證與安全邊界</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<main>
+
+  <p class="meta">
+    Lesson 3 · 課程系列：<a href="../learn/vertex-learning-platform/nodes/clerk-auth-and-boundaries.mdx">Clerk 認證與安全邊界</a>
+  </p>
+
+  <h1>Clerk 認證與安全邊界</h1>
+
+  <div class="goal">
+    <strong>本課目標</strong>：能接上 Clerk（sign-in/up、middleware）並說清「middleware 是 auth resolver 不是閘門」，以及 token 的 public/secret 分割與 server-only 邊界。
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- STEP 1: 安裝 Clerk、接上 Next.js、產生認證 UI -->
+  <!-- ============================================================ -->
+
+  <h2>Step 1：安裝 Clerk、接上 Next.js、產生認證 UI</h2>
+
+  <h3>為什麼要接認證系統？</h3>
+
+  <p>Vertex 是一個學習平台——學習者需要登入才能追蹤進度、保存「我的學習」清單。但認證系統是全端應用最複雜的子系統之一：session 管理、密碼流程、OAuth 第三方登入、Email 驗證、JWT 簽發與驗證、middleware 整合、路由保護、使用者檔案管理——全部從零實作，至少三週。</p>
+
+  <p>選擇 Clerk 的核心邏輯是：<strong>auth 是一個巨大的 surface area，把時間花在產品上而不是認證基礎設施上</strong>。免費方案支援最多 50,000 月活用戶，對原型和早期產品綽綽有餘。更關鍵的是，Clerk 的身份系統可以串接後續功能——例如用 Clerk user id 作為學習進度（progress）的 key。</p>
+
+  <h3>五步接入</h3>
+
+  <table>
+    <tr><th>步驟</th><th>動作</th><th>為什麼</th></tr>
+    <tr><td>1</td><td>Clerk Dashboard 建立新應用，啟用 Email + Google</td><td>兩種 provider = 兩種入口，覆蓋不同登入偏好</td></tr>
+    <tr><td>2</td><td>安裝 Clerk CLI</td><td>CLI 自動把認證系統接進 Next.js 專案</td></tr>
+    <tr><td>3</td><td>執行 <code>clerk oauth login</code></td><td>把 Clerk 應用與開發環境串接</td></tr>
+    <tr><td>4</td><td>自動產生檔案（SDK、env、proxy、routes、UI）</td><td>你不需要手動安裝套件或建立路由</td></tr>
+    <tr><td>5</td><td>執行 <code>clerk doctor</code></td><td>診斷安裝是否正確</td></tr>
+  </table>
+
+  <h3>CLI 會自動產生什麼？</h3>
+
+  <table>
+    <tr><th>檔案/設定</th><th>作用</th></tr>
+    <tr><td><code>@clerk/nextjs</code></td><td>Clerk 的 Next.js SDK，提供 hooks 和元件</td></tr>
+    <tr><td><code>NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY</code></td><td>client-safe，用來初始化 Clerk SDK</td></tr>
+    <tr><td><code>CLERK_SECRET_KEY</code></td><td>server-only，用來做管理操作</td></tr>
+    <tr><td>Proxy middleware</td><td>Next.js 16 裡稱為 proxy，讀取 session cookie、驗證 JWT</td></tr>
+    <tr><td>Layout + ClerkProvider</td><td>在整個 app 外層包裹 Clerk context</td></tr>
+    <tr><td><code>/sign-in</code>、<code>/sign-up</code> 路由</td><td>預建的認證頁面</td></tr>
+    <tr><td>Header UserButton</td><td>顯示使用者頭像和登出選項</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <span class="label">驗證安裝</span>
+    跑 <code>clerk doctor</code> → 綠色通過。瀏覽器開 <code>/sign-in</code> 和 <code>/sign-up</code> → 頁面正常。用 email 註冊一個帳號、登入 → header 顯示頭像。三步全過，Clerk 就接好了。
+  </div>
+
+  <p>但接上 Clerk 只是起點。你可能覺得「CLI 幫我生成了，我就不用管了」——在 agentic 工作流中，這是一個危險的心態。AI 代理也可能幫你生成 Clerk 整合的代碼，如果你不知道 middleware 在做什麼、環境變數怎麼分配，你就無法判斷 AI 是否做出了錯誤的決定。</p>
+
+  <!-- ============================================================ -->
+  <!-- STEP 2: Middleware 是 Auth Resolver，不是閘門 -->
+  <!-- ============================================================ -->
+
+  <h2>Step 2：Middleware 是 Auth Resolver，不是閘門</h2>
+
+  <h3>一個反直覺的現象</h3>
+
+  <p>你已經安裝了 Clerk，middleware 也接上了。現在你打開瀏覽器，訪問 Vertex 的首頁——它正常顯示，任何人都能瀏覽。課程總覽頁、課程詳情頁，全部都是公開的。但如果 middleware「保護路由」，為什麼這些頁面沒有被擋住？</p>
+
+  <div class="callout warn">
+    <span class="label">關鍵概念</span>
+    <strong>Middleware 是 auth resolver，不是 auth gate。</strong> 它「解析」認證狀態——讀取 session cookie、驗證 JWT、執行 handshake——然後把解析後的狀態附加到請求物件上。但它不阻擋任何路由。
+  </div>
+
+  <h3>Resolver vs Gate：兩種完全不同的心智模型</h3>
+
+  <table>
+    <tr><th>模型</th><th>行為</th><th>預設</th></tr>
+    <tr>
+      <td><strong>Gate（閘門）</strong></td>
+      <td>每個請求到達時檢查身份，有身份才放行，沒身份就擋住</td>
+      <td class="no">所有路由預設受保護，必須逐一開放</td>
+    </tr>
+    <tr>
+      <td><strong>Resolver（解析器）</strong></td>
+      <td>解析認證狀態，附加到請求上，不阻擋路由</td>
+      <td class="yes">所有路由預設公開，保護是顯式的</td>
+    </tr>
+  </table>
+
+  <p><strong>為什麼 Vertex 用 Resolver 模型？</strong> 因為 Vertex 是以內容消費為主的學習平台。首頁、課程總覽、課程頁都是公開的——學習者不需要登入就能瀏覽。只有「我的學習」和「進度追蹤」才需要登入。如果 middleware 是 gate，你要嘛全部放行（受保護頁面裸奔），要嘛全部攔截（公開頁面看不到）。Resolver 模型讓你做到「精準保護」。</p>
+
+  <h3>Middleware 的真實執行流程</h3>
+
+  <p>當一個 HTTP 請求到達 Next.js 時，middleware 的執行流程是：</p>
+
+  <ol>
+    <li><strong>讀取 session cookie</strong> — 瀏覽器在每個 HTTP 請求裡自動附上 cookie，Clerk 從中取出 session token。</li>
+    <li><strong>驗證 JWT</strong> — 檢查 token 是否有效：未過期、簽章正確、屬於同一個 Clerk 應用。</li>
+    <li><strong>執行 handshake</strong> — 如果 token 缺失、過期、或來自不同實例，Clerk 自動重新驗證身份。這就是為什麼你重新開啟頁面時有時候會「自動登入」。</li>
+    <li><strong>附加 auth state</strong> — 把解析後的認證狀態（<code>auth()</code> 回傳值）附加到請求物件上，供後續 server component 或 route handler 使用。</li>
+  </ol>
+
+  <p><strong>關鍵：middleware 不會在任何路由上回傳 401 或 302。</strong> 它只是把認證狀態「解析」出來，附加到請求上。就像一個接待處——幫每個客人登記身份，但不會擋人。</p>
+
+  <h3>Next.js 16 的 proxy 重命名</h3>
+
+  <p>Next.js 16 把 <code>middleware.ts</code> 重新命名為 <code>proxy.ts</code>。這不是功能改變，而是語義更準確。傳統 middleware 定義是「攔截並修改請求」——但在 Next.js 裡，middleware 做的是「解析認證狀態並附加到請求」。proxy 的語義更接近它的實際行為。</p>
+
+  <h3>什麼時候才需要保護路由？</h3>
+
+  <p>在 resolver 模式下，路由保護是<strong>顯式的</strong>——你必須在特定路由上標記「這裡需要登入」：</p>
+
+  <table>
+    <tr><th>路由</th><th>保護狀態</th><th>原因</th></tr>
+    <tr><td><code>/</code>（首頁）</td><td class="yes">公開</td><td>學習者的第一印象</td></tr>
+    <tr><td><code>/courses</code>（課程總覽）</td><td class="yes">公開</td><td>內容消費是核心</td></tr>
+    <tr><td><code>/courses/[slug]</code>（課程詳情）</td><td class="yes">公開</td><td>銷售/展示頁面</td></tr>
+    <tr><td><code>/my-learning</code>（我的學習）</td><td class="no">需要登入</td><td>個人化頁面</td></tr>
+    <tr><td><code>/api/progress</code>（進度 API）</td><td class="no">需要登入</td><td>寫入操作必須驗證身份</td></tr>
+  </table>
+
+  <div class="callout">
+    <span class="label">AGENTS.md 的規則</span>
+    「browsing stays public per AGENTS.md, and routes are gated only when a feature marks them protected」——這不是偏好，而是架構決策。AI 代理容易犯的錯誤就是在 middleware 裡加上「未登入就重導向」，導致所有頁面都變成必須登入才能看。
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- STEP 3: Token 安全邊界與 Server-Only Auth State -->
+  <!-- ============================================================ -->
+
+  <h2>Step 3：Token 安全邊界與 Server-Only Auth State</h2>
+
+  <h3>一張表看懂所有金鑰</h3>
+
+  <p>你的 <code>.env.local</code> 裡有一堆環境變數——它們看起來都是字串，但安全性完全不同。判斷原則：<strong>一個金鑰如果「只能做事、不能被拿來做別的事」，它就是 client-safe 的；如果「能做有副作用的操作」，它就絕對不能出現在瀏覽器端。</strong></p>
+
+  <table>
+    <tr><th>金鑰類型</th><th>Client-safe？</th><th>原因</th></tr>
+    <tr><td>Clerk publishable key</td><td class="yes">是</td><td>只能初始化 Clerk SDK，不能讀寫資料</td></tr>
+    <tr><td>PostHog public key</td><td class="yes">是</td><td>只能發送追蹤事件，不能讀取分析資料</td></tr>
+    <tr><td>Clerk secret key</td><td class="no">否</td><td>能管理使用者、存取 session、執行管理操作</td></tr>
+    <tr><td>Sanity read token</td><td class="no">否</td><td>能讀取私有資料集的完整內容</td></tr>
+    <tr><td>Sanity write token</td><td class="no">否</td><td>能建立、修改、刪除 Sanity 裡的文件</td></tr>
+    <tr><td>OpenAI API key</td><td class="no">否</td><td>能呼叫 AI API，費用由金鑰持有者承擔</td></tr>
+  </table>
+
+  <h3>NEXT_PUBLIC_ 前綴的機制</h3>
+
+  <p>Next.js 的 bundler（webpack/Turbopack）在 build 時會：</p>
+
+  <ol>
+    <li><strong>掃描所有 <code>process.env.NEXT_PUBLIC_*</code></strong>：把這些值硬編碼進 client bundle 的 JavaScript 裡。</li>
+    <li><strong>忽略所有非 <code>NEXT_PUBLIC_</code> 的環境變數</strong>：這些值只在 server 端可用，不會出現在 client bundle 裡。</li>
+  </ol>
+
+  <p>這意味著：<strong>一個環境變數有沒有 <code>NEXT_PUBLIC_</code> 前綴，直接決定它會不會出現在瀏覽器端。</strong> 這不是配置選項，而是 Next.js 的架構邊界。</p>
+
+  <div class="callout warn">
+    <span class="label">被動防線的限制</span>
+    這道防線只在 build 時生效——在 development 模式下，它不會阻止你。所以你不能依賴框架來擋安全問題，你需要在寫代碼時就遵守規則。
+  </div>
+
+  <h3>Vertex 的環境變數分佈</h3>
+
+  <table>
+    <tr><th>環境變數</th><th>前綴</th><th>出現在</th><th>用途</th></tr>
+    <tr><td><code>NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY</code></td><td><code>NEXT_PUBLIC_</code></td><td>Client bundle</td><td>初始化 Clerk SDK</td></tr>
+    <tr><td><code>CLERK_SECRET_KEY</code></td><td>無</td><td>Server only</td><td>Clerk 管理操作</td></tr>
+    <tr><td><code>NEXT_PUBLIC_SANITY_PROJECT_ID</code></td><td><code>NEXT_PUBLIC_</code></td><td>Client bundle</td><td>Sanity 專案識別（非敏感）</td></tr>
+    <tr><td><code>SANITY_API_READ_TOKEN</code></td><td>無</td><td>Server only</td><td>讀取 Sanity 資料集</td></tr>
+    <tr><td><code>SANITY_API_WRITE_TOKEN</code></td><td>無</td><td>Server only</td><td>寫入 Sanity 資料集</td></tr>
+    <tr><td><code>OPENAI_API_KEY</code></td><td>無</td><td>Server only</td><td>呼叫 OpenAI API</td></tr>
+  </table>
+
+  <h3>Server-Only Auth State：認證狀態的流動路徑</h3>
+
+  <p>理解了金鑰的 client-safe 分類後，下一步是理解 auth state（認證狀態）本身的流動。在 Next.js App Router 中，auth state 的正確流動路徑是：</p>
+
+  <pre><code>Clerk middleware (proxy)
+    ↓ 讀取 session cookie，驗證 JWT
+    ↓ 附加 auth state 到請求物件
+Server Component / Route Handler
+    ↓ 呼叫 auth()，取得 userId 和 session
+    ↓ 在 server 端使用（查詢資料、驗證權限）
+    ↓ 把需要的結果作為 props 傳給 client component
+Client Component
+    ↓ 只接收渲染所需的資料（例如使用者名稱、頭像 URL）
+    ↓ 不持有 token、不持有 userId（除非是公開資訊）</code></pre>
+
+  <div class="callout tip">
+    <span class="label">關鍵規則</span>
+    <strong>auth state 從 server 流向 client 的唯一管道是 props。</strong> Client component 從 server component 接收資料，但它拿不到 token 本身——token 始終留在 server 端。
+  </div>
+
+  <h3>三道防線</h3>
+
+  <table>
+    <tr><th>防線</th><th>角色</th><th>時機</th></tr>
+    <tr><td>AGENTS.md 的規則</td><td class="yes">預防</td><td>AI 代理實作前讀取</td></tr>
+    <tr><td><code>npm run build</code> 的被動防線</td><td>檢測</td><td>build 時檢查 client bundle 裡有沒有不該出現的 env</td></tr>
+    <tr><td>CodeRabbit 的 PR 審查</td><td>兜底</td><td>合併前掃描 secret key 洩漏</td></tr>
+  </table>
+
+  <p>三道防線缺一不可——第一道是預防，第二道是檢測，第三道是兜底。</p>
+
+  <!-- ============================================================ -->
+  <!-- QUIZ -->
+  <!-- ============================================================ -->
+
+  <hr>
+
+  <h2>自我檢查（Retrieval Practice）</h2>
+  <p>先別往回翻，憑記憶作答。點錯可以再試，但答案在你點之前請先在心裡說一遍。</p>
+
+  <div class="quiz"
+       data-question="Q1. Clerk middleware 的核心職責是什麼？"
+       data-correct="1"
+       data-explain="Middleware 是 auth resolver：它讀取 session cookie、驗證 JWT、附加 auth state 到請求物件上，但不阻擋任何路由。保護路由是 page/layout 層級的顯式檢查。">
+    <button class="opt">攔截所有未登入的請求並回傳 401</button>
+    <button class="opt">解析認證狀態並附加到請求上</button>
+    <button class="opt">在 build 時檢查環境變數是否安全</button>
+    <button class="opt">自動為所有路由加上登入保護</button>
+  </div>
+
+  <div class="quiz"
+       data-question="Q2. 下列哪個環境變數可以安全地出現在 client bundle？"
+       data-correct="0"
+       data-explain="NEXT_PUBLIC_ 前綴的變數會被 Next.js bundler 打包進 client bundle。Clerk publishable key 只能初始化 SDK，不能做有副作用的操作，所以是 client-safe 的。Secret key、read token、write token 都能執行敏感操作，絕對不能出現在瀏覽器端。">
+    <button class="opt">NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY</button>
+    <button class="opt">CLERK_SECRET_KEY</button>
+    <button class="opt">SANITY_API_READ_TOKEN</button>
+    <button class="opt">OPENAI_API_KEY</button>
+  </div>
+
+  <div class="quiz"
+       data-question="Q3. Vertex 為什麼選擇 Resolver 模型而不是 Gate 模型？"
+       data-correct="2"
+       data-explain="Vertex 是以內容消費為主的學習平台——首頁、課程頁都是公開的。Resolver 模型讓你精準保護：只有 /my-learning 和 /api/progress 需要登入，其他全部公開。Gate 模型要嘛全部放行（受保護頁面裸奔），要嘛全部攔截（公開頁面看不到）。">
+    <button class="opt">因為 Gate 模型太複雜</button>
+    <button class="opt">因為 Vertex 不需要任何路由保護</button>
+    <button class="opt">因為內容消費是核心，需要精準保護</button>
+    <button class="opt">因為 Clerk 只支援 Resolver 模式</button>
+  </div>
+
+  <div class="quiz"
+       data-question="Q4. Auth state 從 server 流向 client 的唯一管道是什麼？"
+       data-correct="1"
+       data-explain="Auth state（userId、session）始終留在 server 端。Client component 只透過 props 接收渲染所需的資料（如使用者名稱、頭像 URL），拿不到 token 本身。直接把 auth() 的回傳值傳給 client component 是安全邊界破壞。">
+    <button class="opt">localStorage</button>
+    <button class="opt">Server Component 的 props</button>
+    <button class="opt">Cookie 直接傳遞</button>
+    <button class="opt">全局 state manager</button>
+  </div>
+
+  <div class="quiz"
+       data-question="Q5. AI 代理最容易犯的認證錯誤是什麼？"
+       data-correct="3"
+       data-explain="AI 代理容易把 middleware 當成 gate，在裡面加上「未登入就重導向」的邏輯，導致所有頁面都變成必須登入才能看。AGENTS.md 把「browsing stays public」寫進操作手冊，就是為了防止這個錯誤。">
+    <button class="opt">忘記安裝 Clerk SDK</button>
+    <button class="opt">把 publishable key 放在 server 端</button>
+    <button class="opt">忘記跑 clerk doctor</button>
+    <button class="opt">把 middleware 當成 gate 來阻擋路由</button>
+  </div>
+
+  <div class="callout tip">
+    <span class="label">下一步</span>
+    有不懂的地方，隨時問我——我就是你的老師。例如：「middleware 的 handshake 是怎麼自動重新建立 session 的？」或「如果 AI 在 client component 裡直接呼叫 Sanity API 會怎樣？」
+  </div>
+
+  <footer>
+    Lesson 3 / 3 · 來源：<a href="../sources/vertex-learning-platform/AGENTS.md#traps">AGENTS.md#traps</a> · <a href="../sources/vertex-learning-platform/AGENTS.md#app-structure">AGENTS.md#app-structure</a> · <a href="../sources/vertex-learning-platform/Build and Deploy a Full Stack Learning Platform _ Search Any Video, Jump to the Exact Second.srt">vertex-build-tutorial</a>
+  </footer>
+
+</main>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
