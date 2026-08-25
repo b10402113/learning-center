@@ -7,11 +7,21 @@ argument-hint: "What subject are you starting to learn? (e.g. /learn-init vibe-e
 
 Start a new learning subject. The subject **comes from the argument** — `sources/<subject>/` must exist. If no argument is given, ask for it. Before any roadmap can be built you must know the learner — every element anchors to their experience, so the profile is the foundation.
 
+## Archive source files
+
+Before reading, move each source file into an archival folder so the active `sources/<subject>/` stays clean:
+
+1. Create `sources/<subject>/completed/` if it does not exist.
+2. For every file in `sources/<subject>/` (skip subdirectories, `.DS_Store`, and the `completed/` folder itself), move it to `sources/<subject>/completed/YYYYMMDD_<original-filename>`. Use today's date and the exact original filename (including extension). Example: `20260825_AI Agents in Action, Second Edi - Micheal Lanham.pdf`.
+3. After moving, `sources/<subject>/` contains only subdirectories (like `completed/`).
+
+Skip this step entirely if `sources/<subject>/completed/` already exists and every non-directory file has already been moved (i.e. no loose files remain in `sources/<subject>/`).
+
 ## Read the material first
 
 Follow the shared `docs/reference/source-reading.md` protocol — never read a PDF directly and never load a large source into the main context wholesale. Concretely:
 
-1. **Ensure digests.** For each file in `sources/<subject>/` (that folder only — do not browse `sources/` or `wiki/` or any other subject's folder), check `learn/<subject>/digests/<source-stem>.md`. Reuse it if the stored `source_hash` matches; build it via the sub-agent workflow if it is missing, stale, or the source is large. Small sources: read directly in the main context and write the digest yourself.
+1. **Ensure digests.** For each file in `sources/<subject>/completed/` (that folder only — do not browse `sources/` or `wiki/` or any other subject's folder), check `learn/<subject>/digests/<source-stem>.md`. Reuse it if the stored `source_hash` matches; build it via the sub-agent workflow if it is missing, stale, or the source is large. Small sources: read directly in the main context and write the digest yourself. The `source-stem` is derived from the archived filename **without** the `YYYYMMDD_` prefix.
 2. **Load L1 + TOC.** Read only the L1 overviews (and the sub-agents' compact TOC lines), not the L2 section detail. This is the ground truth your grilling questions will probe and your MEMORY will anchor to.
 3. **Pull detail lazily.** If a grilling question needs a specific section, dispatch a sub-agent to extract it — one-off, returned in message.
 
@@ -31,10 +41,9 @@ Finding *facts* is your job, never the learner's — check `learn/<subject>/` an
 
 ## Output configuration
 
-After the profile is settled, ask two output questions and store the answers in `MEMORY.md` frontmatter:
+After the profile is settled, ask one output question and store the answer in `MEMORY.md` frontmatter:
 
 - **Language** — what language every generated article for this subject should be in (e.g. `en`, `zh-Hant`). This is a hard commitment: later nodes, elements, and edges are written in this language.
-- **Polish template** — which polish style the step articles should be rewritten into. Auto-list the available templates (folders under `polish/*/` that contain a `polish.md`) plus the option **none**. Articles are always drafted directly in the subject's `language`; the template shapes the polish pass in `/nodes` only. `none` (or a missing `polish/<slug>/polish.md`) skips polishing entirely. If no template exists yet, offer `none` and tell the learner a template is just a hand-written style guide at `polish/<slug>/polish.md` (format and rules in `docs/reference/polish.md`).
 
 Write `learn/<subject>/MEMORY.md` in the template below, then confirm the profile is accurate before ending the session.
 
@@ -44,7 +53,6 @@ Write `learn/<subject>/MEMORY.md` in the template below, then confirm the profil
 ---
 subject: <subject>
 language: <output language for all articles, e.g. en | zh-Hant>
-polish: <author-slug | none>
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---

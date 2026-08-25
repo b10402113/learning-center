@@ -1,0 +1,190 @@
+---
+id: deep-copy-traps
+title: 深拷贝与浅拷贝的陷阱
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/design_pattern.pdf#原型模式]]"
+created: 2026-08-25
+updated: 2026-08-25
+---
+
+# 深拷贝与浅拷贝的陷阱
+
+## Learning goal
+
+掌握深拷贝与浅拷贝的区别，理解集合字段必须深拷贝的陷阱以及 CircularReference 的处理难点。
+
+## Lesson
+
+### 一个类比：笔记本的故事
+
+想象你和同事各拿了一本笔记本去开会。如果你们共享同一本笔记本，任何一个人写了笔记，另一个人翻到那页也会看到——这就是浅拷贝。如果你们各自拿着内容完全独立的笔记本副本，你写你的，我写我的，互不影响——这就是深拷贝。
+
+Java 的 `clone()` 就像"复印"——它帮你在桌上放一本新的笔记本。但关键问题是：笔记本里的内页是不是也复印了？
+
+### 浅拷贝的陷阱：一个真实的例子
+
+假设我们有一个题库对象，包含两个 `ArrayList` 字段——选择题和问答题：
+
+```java
+public class QuestionBank implements Cloneable {
+    private String name;
+    private ArrayList<String> choiceQuestions;
+    private ArrayList<String> answerQuestions;
+
+    public QuestionBank(String name, ArrayList<String> choiceQuestions,
+                        ArrayList<String> answerQuestions) {
+        this.name = name;
+        this.choiceQuestions = new ArrayList<>(choiceQuestions);
+        this.answerQuestions = new ArrayList<>(answerQuestions);
+    }
+
+    @Override
+    public QuestionBank clone() {
+        try {
+            return (QuestionBank) super.clone();
+        } catch (CloneNotSupportedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public ArrayList<String> getChoiceQuestions() { return choiceQuestions; }
+    public ArrayList<String> getAnswerQuestions() { return answerQuestions; }
+}
+```
+
+看起来没问题。调用 `clone()` 之后我们得到一个"新"对象。但跑一下：
+
+```java
+public static void main(String[] args) {
+    ArrayList<String> choices = new ArrayList<>();
+    choices.add("A. 单例");
+    choices.add("B. 工厂方法");
+    choices.add("C. 原型");
+
+    ArrayList<String> answers = new ArrayList<>();
+    answers.add("请解释原型模式");
+
+    QuestionBank template = new QuestionBank("期末题库", choices, answers);
+    QuestionBank copy = template.clone();
+
+    // 试探：给克隆体加一道选择题
+    copy.getChoiceQuestions().add("D. 建造者");
+
+    System.out.println("模板的选择题: " + template.getChoiceQuestions());
+    System.out.println("克隆的选择题: " + copy.getChoiceQuestions());
+}
+```
+
+输出：
+
+```
+模板的选择题: [A. 单例, B. 工厂方法, C. 原型, D. 建造者]
+克隆的选择题: [A. 单例, B. 工厂方法, C. 原型, D. 建造者]
+```
+
+我们只改了克隆体的列表，但模板对象的列表也被污染了。原因是 `super.clone()` 做的是浅拷贝——它复制了 `choiceQuestions` 这个引用字段，但引用指向的是同一个 ArrayList 对象。画成图更直观：
+
+```
+template ──┬── name = "期末题库"
+           ├── choiceQuestions ──→ [A, B, C, D]  ← 共享!
+           └── answerQuestions ──→ [请解释原型]
+
+copy     ──┬── name = "期末题库"
+           ├── choiceQuestions ──→ ──────────┘  ← 同一个对象!
+           └── answerQuestions ──→ ──────────┘
+```
+
+`super.clone()` 只把引用值复制了一份，两个变量指向同一个堆上的 ArrayList 实例。任何一方调用 `add()`、`remove()`、`shuffle()`，另一方都看得到。
+
+### 深拷贝：正确的做法
+
+深拷贝的核心思路：递归地把所有引用字段也 clone 一份。对于 ArrayList，我们需要手动创建新列表并复制每个元素：
+
+```java
+@Override
+public QuestionBank clone() {
+    try {
+        QuestionBank cloned = (QuestionBank) super.clone();
+        // 手动深拷贝每个集合
+        cloned.choiceQuestions = new ArrayList<>(this.choiceQuestions);
+        cloned.answerQuestions = new ArrayList<>(this.answerQuestions);
+        return cloned;
+    } catch (CloneNotSupportedException e) {
+        throw new RuntimeException(e);
+    }
+}
+```
+
+再跑一次同样的测试，模板和克隆体各自独立。`new ArrayList<>(this.choiceQuestions)` 创建了一个新的 ArrayList，它只是从原列表读取元素来填充。因为里面的 `String` 是不可变的，所以不需要再 clone 每个元素。如果元素是可变对象（比如自定义的 `Question` 类），那还得对每个元素也做 clone——这就是深拷贝"递归"的含义。
+
+### 如果元素也是可变对象？
+
+假设选择题不是 `String`，而是自定义的 `ChoiceQuestion` 对象，clone 的代码就得层层递归：
+
+```java
+@Override
+public QuestionBank clone() {
+    try {
+        QuestionBank cloned = (QuestionBank) super.clone();
+        cloned.choiceQuestions = new ArrayList<>();
+        for (ChoiceQuestion q : this.choiceQuestions) {
+            cloned.choiceQuestions.add(q.clone());
+        }
+        cloned.answerQuestions = new ArrayList<>();
+        for (AnswerQuestion q : this.answerQuestions) {
+            cloned.answerQuestions.add(q.clone());
+        }
+        return cloned;
+    } catch (CloneNotSupportedException e) {
+        throw new RuntimeException(e);
+    }
+}
+```
+
+每个 `ChoiceQuestion` 也得实现 `Cloneable`，层层递归。这就是深拷贝在 Java 里的痛点——对象图越深，clone 越痛苦。
+
+### 替代方案：序列化深拷贝
+
+当对象图很深或存在循环引用时，手写 clone 会很痛苦。一个偷懒但有效的方式是用序列化/反序列化来做深拷贝：
+
+```java
+public QuestionBank deepCopy() {
+    try {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        ObjectOutputStream oos = new ObjectOutputStream(bos);
+        oos.writeObject(this);
+        oos.flush();
+
+        ByteArrayInputStream bis = new ByteArrayInputStream(bos.toByteArray());
+        ObjectInputStream ois = new ObjectInputStream(bis);
+        return (QuestionBank) ois.readObject();
+    } catch (Exception e) {
+        throw new RuntimeException(e);
+    }
+}
+```
+
+序列化会把整个对象图（包括所有嵌套引用）完整地写入字节流，再从字节流重建——天然就是深拷贝。但代价是：所有类都必须实现 `Serializable`，性能比 clone 慢不少，某些字段如果标记了 `transient` 则拷贝后会丢失。
+
+### CircularReference：深拷贝的终极噩梦
+
+如果对象之间有循环引用——A 持有 B，B 又持有 A——手写 clone 就会陷入无限递归：`A.clone()` → clone B → `B.clone()` → clone A → 无限循环。
+
+要解决循环引用的深拷贝，你需要在 clone 过程中维护一个已拷贝对象的映射表（identity map）。遇到已经拷贝过的对象就直接返回映射表中的副本，而不是再次 clone。这也是为什么很多项目宁愿用序列化做深拷贝——它内部天然处理了循环引用（通过对象序列化中的引用回溯机制）。而手写 clone 必须自己维护这个映射表，代码复杂度显著上升。
+
+### 什么时候该担心深拷贝？
+
+- `String`、`Integer`、`LocalDate` 等不可变对象：不需要深拷贝，共享安全。
+- `ArrayList`、`HashMap` 等可变集合：必须深拷贝，共享会互相污染。
+- 自定义可变对象：必须深拷贝，字段修改会双向传播。
+- 只包含不可变字段的自定义对象：不需要深拷贝，和 String 同理。
+- 有循环引用的对象图：需要，但很麻烦，推荐用序列化或维护 identity map。
+
+### 实战建议
+
+原型模式的 clone 机制在 Java 里是低频使用的。过度使用会导致过度设计。实际项目中：如果只是需要"配置相似"的对象，Builder 模式通常更清晰；如果确实需要大量克隆同一模板，优先考虑构造函数拷贝（copy constructor）而非 `clone()`；如果对象图很深，用序列化深拷贝或第三方库。永远记住：`super.clone()` 是浅拷贝，集合字段必须手动处理。
+
+## Sources
+
+- [[sources/design-pattern/design_pattern.pdf#原型模式]]

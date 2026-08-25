@@ -1,34 +1,40 @@
-# Mission — 智慧搜尋：MCP + Grounding + 兩段式時間戳
+# Mission — OryxOS：從 0 寫一個 Agent OS
 
 ## Why
 
-「如果 AI 寫程式讓你覺得危險，很好——你才是工程師。」Vertex 的招牌功能是智慧搜尋——學習者輸入自然語言，平台從影片逐字稿中找出精確到秒級的片段。但搜尋功能最大的風險不是「找不到」，而是「編造」。LLM 有能力自行組合看似合理的課程名稱、價格、時間戳，但這些資訊可能根本不存在。你需要理解 grounding 機制（模型只選 ID、Sanity 供事實）、兩段式時間戳解析（chapters-first, transcript fallback）、以及 server-only 的搜尋 API 架構——讓 AI 代理不會做出「能跑但危險」的決定。
+學會用 AI coding agent 把企業級真實項目「做成」。先建立一套能落地的 AI 編程工作流（SDD + Harness），再真動手從 0 寫出一個 Agent OS（OryxOS：JDK 21 + Spring Boot + 自研 ReAct loop），把「用 AI 把一件事做成」變成肌肉記憶。
 
 ## The goal
 
-完成這一系列課程後，你能：架 Sanity Context MCP + server 端 search API；說清「模型只選 ID、Sanity 供事實」的 grounding 原理；理解 chapters-first 時間戳解析；以及建立完整的 search UI 架構認知。每課結束後都落在一件「真的能跑或真的能決定」的事上。
+完成 OryxOS 節點的五個步驟後，你能：
+
+1. 說清楚 Agent OS 的定義、五項能力、與編排平台/框架/SaaS 的邊界
+2. 掌握 Spec-Kit 驅動的 AI 編程全流程（constitution → specify → plan → tasks → implement）
+3. 理解七條憲法原則和九模塊技術架構
+4. 說明 Provider 抽象層為什麼要用顯式名稱映射而不是類型掃描
+5. 描述自研 ReAct 循環引擎的演算法和 Spring AI 的邊界
 
 ## How this node fits
 
-智慧搜尋是 Vertex 的核心差異化功能，四層理解一層疊一層：
+OryxOS 是本課程唯一真動手的項目（Tier 3），五個步驟按依賴鏈推進：
 
-1. **架構** — 瀏覽器 → server route → MCP → LLM → Sanity → 回傳結果（本課）
-2. **Grounding** — 模型只選 ID，Sanity 供事實，結果不可能造假
-3. **時間戳** — chapters-first 兩段式解析，45 秒 transcript chunks
-4. **Search UI** — 全頁結果、兩種結果類型、排序控制
-
-它們共同確保：瀏覽器永遠不直接呼叫 MCP 或 LLM，搜尋結果永遠基於真實資料，時間戳永遠可驗證。
+1. **Agent OS 概念與 OryxOS 定位** — 理解 Agent OS 的定義、五項能力、選 Java 的理由（本課）
+2. **Spec-Kit 工作流與七條憲法** — 掌握雙階段策略和憲法原則（after step 1）
+3. **Provider 抽象層與 LLM 對接** — 實作 provider-name→ChatModel 映射（after step 2）
+4. **ReAct 循環引擎** — 實作自研循環引擎，核心 ~數十行 Java（after step 3）
+5. **Memory、Tool 與 Web Service** — 完成三層記憶、三級工具、10 個 Endpoint（after step 4）
 
 ## Success looks like
 
-- 能畫出搜尋請求從瀏覽器到 MCP 再回到 UI 的完整流程
-- 能說出「為什麼模型只能返回 ID 而不是完整內容」
-- 能解釋 chapters-first 時間戳解析的兩階段機制
-- 能判斷哪個金鑰可以放 `NEXT_PUBLIC_`、哪個不行（沿用 Clerk node 的邊界認知）
+- 能用四個詞（統一、私有、易接入、可觀測）判斷任何新功能進不進核心範圍
+- 能畫出 Agent OS 的五項能力清單並對應五個 user story
+- 能解釋為什麼 OryxOS 選 Java 而不是 Node.js/Python
+- 能區分 Agent OS、編排平台、框架和大廠 SaaS
 
 ## Current status
 
-- [x] Design System node（Lesson 1–2 已完成）
-- [x] Clerk Auth node（Lesson 3 已完成）
-- [ ] Lesson 4 — 智慧搜尋架構（本課）
-- [ ] 後續 node 待規劃
+- [ ] Step 1 — Agent OS 概念與 OryxOS 定位（本課）
+- [ ] Step 2 — Spec-Kit 工作流與七條憲法
+- [ ] Step 3 — Provider 抽象層與 LLM 對接
+- [ ] Step 4 — ReAct 循環引擎
+- [ ] Step 5 — Memory、Tool 與 Web Service

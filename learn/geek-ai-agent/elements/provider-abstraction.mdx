@@ -1,0 +1,84 @@
+---
+id: provider-abstraction
+title: Provider 抽象層 (Provider Abstraction)
+subject: geek-ai-agent
+tier: 2
+order: 10
+type: article
+nodes:
+  - geek-ai-agent/oryxos-build
+sources:
+  - "[[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#provider-abstraction]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#provider]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#provider-name-mapping]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#tech-stack]]"
+created: 2026-08-23
+updated: 2026-08-23
+---
+
+# Provider 抽象層 (Provider Abstraction)
+
+## Problem Statement
+
+一個 Agent 要跟大模型溝通，但市面上的 LLM 供應商（DeepSeek、Kimi、OpenAI、通義……）各自的 API 格式不同、SDK 不同、錯誤碼不同。如果 Agent 的代碼直接寫死調 DeepSeek，想換 Kimi 就得改代碼。更麻煩的是，一個 Spring 應用裡放多個 ChatModel bean 時，靠「掃描所有 bean 類型」根本分不清誰是 DeepSeek 誰是 Kimi——它們是同一個類型。Provider 抽象層就是為了把「跟模型溝通」這件事和「跟哪個供應商溝通」分開，讓 ReAct 循環完全不知道自己在跟誰說話。
+
+## Why it matters
+
+Provider 抽象層是 OryxOS 對接 LLM 的唯一入口。理解了它，你才知道為什麼 ReAct 循環不用改代碼就能換模型、為什麼 Provider 的名字比 bean 類型重要、以及為什麼 Spring AI 只能當翻譯官不能當調度員。US-1 的核心任務就是實現這一層。
+
+## How it works
+
+OryxOS 的 Provider 抽象層建在 Spring AI Alibaba 的 ChatClient 之上，但只借了它的協議轉換能力。核心機制分三塊：
+
+**ProviderService 門面。** ReAct 循環不直接調 ChatClient，而是通過 ProviderService 發出 LLM 請求。ProviderService 根據 Profile 裡指定的 provider 名字，找到對應的 ChatModel 實例，把 OryxOS 的內部消息格式翻譯成模型能懂的格式，再把模型的回應翻譯回來。ReAct 循環全程不知道自己在跟 DeepSeek 還是 Kimi 說話。
+
+**顯式名稱映射。** 這是整個 Provider 層最容易寫錯的地方。一個 Spring 應用裡可以配多個 ChatModel bean（一個給 DeepSeek，一個給 Kimi），但它們是同一個 Java 類型。Spring 的類型掃描（type scanning）無法可靠區分它們——bean 名不等於 Provider 名，而且你不能假設 bean 名是固定的。正確做法是維護一個顯式的 provider-name → ChatModel 映射表（用 Spring Qualifier 或配置表），Profile 按名字引用 Provider。AI 生成代碼時很容易寫成「掃描所有 ChatModel bean 然後按類型找」，這是 US-1 的頭號陷阱。
+
+**Function Calling 適配器。** OryxOS 的工具統一用 OryxTool 接口定義，但不同的模型供應商對 Function Calling 的格式要求不同（OpenAI 格式、Anthropic 格式、Gemini 格式）。Function Calling 適配器負責把 OryxTool 的描述翻譯成當前 Provider 能懂的格式。Spring AI 內建了這項能力，OryxOS 直接複用，不需要自己寫轉換邏輯。
+
+核心階段不做 Provider Fallback（主 Provider 掛了就報錯）和 Adaptive Routing（按任務類型選模型），這些是擴展功能。每次 LLM 調用會把 Provider 名、模型名、token 用量寫進 llm_calls 實現基本的成本透明。
+
+## In plain terms
+
+Provider 抽象層就是一個翻譯官。Agent 用統一的語言跟它說話，它負責翻譯成各家模型聽得懂的方言。換模型只用改 Profile 裡的一個名字，代碼一行不動。
+
+## Analogy
+
+把它想像成一家跨國公司的前台。前台只看「你要找哪個部門」（provider name），然後幫你轉接。你不需要知道法國分部說法語、日本分部說日語——前台負責翻譯。如果前台用「公司通訊錄裡所有人的姓氏」來找人（類型掃描），遇到兩個都姓李的就會分不清。正確做法是通訊錄上每個人有工號（顯式名稱映射），你報工號，前台精準轉接。
+
+## Practical use
+
+在 US-1 實作時，你做的第一件事就是在 application.yaml 裡配至少一個 Provider（DeepSeek 或 Kimi），然後實現 ProviderService。寫完之後用「查天氣」的 demo 驗證：問 Agent 一個需要調工具的問題，它應該通過 ProviderService 調 LLM，LLM 返回工具調用請求，Tool 執行後把結果送回 LLM。整個過程你不需要改任何 Provider 相關代碼就能換模型。
+
+## Prerequisites
+
+- 知道 ReAct 循環的機制 — Provider 是循環每次推理的外部依賴（見 [[learn/geek-ai-agent/elements/react-loop|ReAct 循環 (The ReAct Loop)]]）
+- 知道 Profile 的結構 — Provider 配置在 Profile 的 provider 欄位裡（見 [[learn/geek-ai-agent/elements/profile|Profile（Agent 配置）]]）
+
+## Connections
+
+- [[learn/geek-ai-agent/elements/react-loop|ReAct 循環 (The ReAct Loop)]] — ReAct 每輪推理都通過 ProviderService 調 LLM，Provider 是循環的唯一外部模型入口
+- [[learn/geek-ai-agent/elements/profile|Profile（Agent 配置）]] — Profile 按名字引用 Provider，ProviderService 按名字查找 ChatModel
+- [[learn/geek-ai-agent/elements/implementation-pitfalls|構建陷阱 (Implementation Pitfalls)]] — 「Provider 用類型掃描」是坑二，Provider 抽象層的頭號陷阱
+- [[learn/geek-ai-agent/elements/oryxos-architecture|技術方案 (The Technical Solution)]] — 七個關鍵決策中的第二條（Spring AI 只做翻譯）直接約束 Provider 的邊界
+
+## Deep dive
+
+- [[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#provider-abstraction]] — requirements-level Provider scope and boundary
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#provider]] — ProviderService wrapping ChatClient and Function Calling adapter
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#provider-name-mapping]] — the explicit-name-over-type-scanning rule
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#tech-stack]] — Spring AI Alibaba as the LLM protocol layer
+
+## Questions
+
+### Q1. 為什麼 Provider 不能用 Spring 的類型掃描來區分多個模型？
+A1. 多個 ChatModel bean 是同一個 Java 類型，deepseek 和 kimi 無法通過類型區分。bean 名也不等於 Provider 名。必須維護顯式的 provider-name → ChatModel 映射。
+
+### Q2. Spring AI 在 Provider 抽象層裡扮演什麼角色？它的邊界在哪？
+A2. Spring AI 負責協議轉換（把不同模型供應商的 API 格式抹平）和 Function Calling schema 生成。邊界是它不能做自動工具執行——「要不要調工具」只能由 OryxOS 自己的 ReAct 循環決定。
+
+### Q3. 核心階段的 Provider 有哪些不做的事？為什麼？
+A3. 不做 Fallback（主 Provider 掛了直接報錯）和 Adaptive Routing（按任務選模型）。因為核心階段的目標是「跑通」，不是「完美」，可靠性功能留到擴展階段。
+
+### Q4. 換模型時需要改什麼？代碼要動嗎？
+A4. 只改 Profile 裡 provider 欄位的名字（比如把 deepseek 換成 kimi），代碼完全不動。這就是 Provider 抽象層的價值——模型切換零代碼。

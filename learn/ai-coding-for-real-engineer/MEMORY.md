@@ -1,7 +1,6 @@
 ---
 subject: ai-coding-for-real-engineer
 language: zh-Hant
-polish: none
 created: 2026-08-18
 updated: 2026-08-19
 ---

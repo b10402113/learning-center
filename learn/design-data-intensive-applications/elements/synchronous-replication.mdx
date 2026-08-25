@@ -1,0 +1,72 @@
+---
+id: synchronous-replication
+title: 同步複製 (Synchronous Replication)
+subject: design-data-intensive-applications
+tier: 3
+order: 1
+type: article
+nodes:
+  - design-data-intensive-applications/single-leader-replication
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Synchronous Versus Asynchronous Replication]]"
+created: 2026-08-23
+updated: 2026-08-23
+---
+
+## Problem Statement
+
+一個寫入操作在 leader 節點完成後，如果 follower 節點尚未確認收到資料，leader 就回傳成功——這時若 leader 突然崩潰，那筆「已確認」的寫入可能已經不存在於任何節點上。分散式複製系統必須決定：寫入什麼時候才算「真正完成」？這個選擇直接影響資料安全和系統回應速度。
+
+## Why it matters
+
+這個問題之所以重要，是因為它決定了一個根本性的取捨：你要資料的完整性，還是要回應速度？如果選錯了，要嘛你的使用者在每次寫入時感受到不必要的延遲，要嘛你的系統在災難中悄悄丟掉資料。理解同步與非同步複製的差異，是設計任何需要可靠儲存的分散式系統的基礎。
+
+## How it works
+
+**同步複製（Synchronous Replication）** 的機制是：leader 節點收到寫入請求後，會把資料轉發給 follower 節點，然後「等待」follower 回傳確認（acknowledgment）。只有當至少一個 follower 確認寫入成功，leader 才向客戶端回傳「寫入完成」。
+
+換句話說，寫入流程是：
+
+1. 客戶端向 leader 發送寫入請求
+2. leader 將寫入寫入本地儲存，同時轉發給 follower
+3. follower 寫入本地儲存後回傳確認
+4. leader 收到確認後，向客戶端回傳成功
+
+**為什麼這樣能防止資料丟失？** 因為資料在回傳成功之前，已經存在於兩個（或多個）獨立節點上。即使 leader 立即崩潰，至少還有一個 follower 擁有完整的資料。
+
+**代價是什麼？** 每一次寫入都必須等待網路來回（round-trip）和 follower 的磁碟寫入時間。如果 follower 距離很遠（例如跨資料中心）、磁碟速度慢、或網路擁塞，這個等待時間會直接加到每一次寫入的延遲上。更嚴重的是，如果 follower 宕機或無法回應，leader 會「卡住」——它不知道該繼續等待還是放棄，整個寫入操作會被阻塞。
+
+**完全非同步複製（Fully Asynchronous Replication）** 是另一個極端：leader 收到寫入請求後，寫入本地儲存就立刻回傳成功，完全不等待 follower 確認。這讓寫入延遲降到最低，但如果 leader 在 follower 收到資料之前崩潰，那些寫入就永遠丟失了。
+
+**半同步（Semi-synchronous）** 是務實的折衷：至少確保一個 follower 是同步的，其餘 follower 可以是非同步的。這樣既保留了基本的資料安全性，又不會因為所有 follower 的延遲而拖慢系統。
+
+## In plain terms
+
+你可以把同步複製想成是「雙人驗收」：一個人說「我記好了」還不算數，必須另一個人也說「我也記好了」，才算真正完成。這樣就算一個人出了問題，另一個人手裡還有完整的紀錄。
+
+## Practical use
+
+在實務上，同步複製通常用在對資料完整性要求極高的場景：
+
+- **金融交易系統**：轉帳紀錄不能丟失。使用同步複製確保每筆交易至少存在於兩個節點上，即使機房起火，帳目依然完整。
+- **分散式資料庫的關鍵寫入路徑**：例如 PostgreSQL 的 `synchronous_standby_names` 設定，可以指定哪些 follower 必須同步確認。
+- **跨資料中心的災難恢復**：某些架構會要求至少一個遠端資料中心的節點同步確認，確保即使整個本機資料中心毀損，資料也不會遺失。
+
+但大多數生產系統不會把「所有」寫入都設為同步——延遲成本太高。常見做法是根據業務重要性分級：重要的寫入走同步，不重要的走非同步。例如，訂單確認用同步，日誌記錄用非同步。
+
+另一個實務考量是 ** follower 故障時的處理策略**：leader 會暫時退化為非同步模式（因為沒有可用的同步 follower），等 follower 恢復後再切回同步。這讓系統不會因為單一 follower 故障就完全停止服務。
+
+## Connections
+
+- [[learn/design-data-intensive-applications/elements/asynchronous-replication|非同步複製]]：同步複製的對立面。理解兩者的差異，是掌握分散式系統資料安全設計的起點——你選擇哪一個，取決於你能承受多少延遲，以及你不能承受多少資料丟失。
+- [[learn/design-data-intensive-applications/elements/eventual-consistency|最終一致性]]：非同步複製自然導向最終一致性——寫入在不同節點上的可見性有時間差。同步複製則避免了這個時間差，但以延遲為代價。兩者的取捨是分散式系統設計的核心議題。
+
+## Deep dive
+
+同步與非同步複製之間的取捨，本質上是 **一致性（consistency）** 與 **可用性（availability）** 的拉鋸。
+
+**同步複製的延遲來源**：不只是網路傳輸時間，還包括 follower 的磁碟寫入時間。如果 follower 使用的是旋轉硬碟（HDD）而非固態硬碟（SSD），磁碟寫入的延遲可能是毫秒級別，這在高吞吐場景下會嚴重拖慢整體效能。更極端的情況下，如果 follower 位於另一個地理位置（例如跨洲），光速本身就帶來數十毫秒的延遲。
+
+**半同步的務實選擇**：大多數實際部署的分散式資料庫採用半同步策略。MySQL 的 `rpl_semi_sync_master_wait_for_slave_count` 讓你設定需要多少個 follower 確認才算完成；PostgreSQL 的同步複製允許指定 `ANY` 或 `FIRST` 等模式，在安全性和效能之間提供彈性。這些設定反映了工程上的務實態度：不要求完美的同步，但確保至少有一個安全網。
+
+**CAP 定理的視角**：同步複製在網路分割（partition）發生時，面臨艱難選擇。如果 follower 因為網路問題無法回應，leader 必須決定是「繼續等待」（犧牲可用性）還是「放棄等待」（犧牲同步保證）。這正是 CAP 定理在實務中的體現：當網路不可靠時，你只能在一致性與可用性之間二選一。大多數系統選擇在正常情況下維持同步，在異常時降級為非同步，以此在兩者之間取得動態平衡。

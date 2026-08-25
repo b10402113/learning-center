@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>流式 Builder 重构 — 装修报价的 fluent API</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+  <style>
+    :root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --accent: #b45309; --accent-light: #fef3c7; --border: #e7e5e4; --card-bg: #ffffff; --code-bg: #f5f5f4; --success: #16a34a; --error: #dc2626; --radius: 8px; --max-w: 680px; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Georgia', 'Noto Serif SC', serif; background: var(--bg); color: var(--fg); line-height: 1.8; font-size: 17px; padding: 2rem 1rem; }
+    .container { max-width: var(--max-w); margin: 0 auto; }
+    .lesson-header { border-bottom: 2px solid var(--fg); padding-bottom: 1.5rem; margin-bottom: 2.5rem; }
+    .lesson-number { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.8rem; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem; }
+    h1 { font-size: 1.8rem; font-weight: 700; line-height: 1.3; margin-bottom: 0.5rem; }
+    .lesson-meta { font-size: 0.85rem; color: var(--muted); }
+    .learning-goal { background: var(--accent-light); border-left: 3px solid var(--accent); padding: 1rem 1.25rem; margin-bottom: 2rem; border-radius: 0 var(--radius) var(--radius) 0; }
+    .learning-goal h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 0.5rem; }
+    .learning-goal p { font-size: 0.95rem; line-height: 1.6; }
+    section { margin-bottom: 2.5rem; }
+    h2 { font-size: 1.2rem; font-weight: 700; margin-bottom: 1rem; padding-top: 1rem; }
+    h3 { font-size: 1.05rem; font-weight: 600; margin: 1.5rem 0 0.75rem; }
+    p { margin-bottom: 1rem; }
+    .key-insight { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin: 1.5rem 0; }
+    .key-insight::before { content: '💡'; margin-right: 0.5rem; }
+    .code-block { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin: 1.5rem 0; overflow-x: auto; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85rem; line-height: 1.6; }
+    .code-block .comment { color: var(--muted); }
+    .code-block .keyword { color: #7c3aed; }
+    .code-block .string { color: var(--success); }
+    .quiz { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.5rem; margin: 2rem 0; }
+    .quiz h3 { margin-top: 0; color: var(--accent); }
+    .quiz-questionuestion { margin: 1rem 0; }
+    .quiz-questionuestion p { font-weight: 600; margin-bottom: 0.75rem; }
+    .quiz-options { list-style: none; }
+    .quiz-options li { padding: 0.6rem 1rem; margin: 0.4rem 0; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; transition: all 0.2s; font-size: 0.9rem; }
+    .quiz-options li:hover { border-color: var(--accent); background: var(--accent-light); }
+    .quiz-options li.correct { border-color: var(--success); background: #f0fdf4; color: var(--success); }
+    .quiz-options li.incorrect { border-color: var(--error); background: #fef2f2; color: var(--error); }
+    .quiz-feedback { display: none; margin-top: 0.75rem; padding: 0.75rem; border-radius: var(--radius); font-size: 0.9rem; }
+    .quiz-feedback.show { display: block; }
+    .quiz-feedback.correct { background: #f0fdf4; color: var(--success); }
+    .quiz-feedback.incorrect { background: #fef2f2; color: var(--error); }
+    .source { border-top: 1px solid var(--border); padding-top: 1rem; margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }
+    .follow-up { background: var(--accent-light); border-radius: var(--radius); padding: 1.25rem; margin-top: 2rem; text-align: center; }
+    .follow-up p { margin-bottom: 0.5rem; font-size: 0.95rem; }
+    .follow-up .cta { color: var(--accent); font-weight: 600; }
+    .nav { display: flex; justify-content: space-between; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.85rem; }
+    .nav a { color: var(--accent); text-decoration: none; }
+    .nav a:hover { text-decoration: underline; }
+    @media print { body { padding: 0; font-size: 12pt; } .quiz, .follow-up, .nav { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="lesson-number">Step 2 · 建造者模式</div>
+      <h1>流式 Builder 重构</h1>
+      <div class="lesson-meta">Node: builder-prototype · Step 2/5</div>
+    </header>
+
+    <div class="learning-goal">
+      <h2>学习目标</h2>
+      <p>实现流式 Builder 重构：定义 IMenu 接口、DecorationPackageMenu 实现类和 Builder 工厂，完成从 ifelse 到 fluent API 的转变。</p>
+    </div>
+
+  <!-- 1. Recap -->
+  <section>
+    <h2>1. 回顾：上一步的痛点</h2>
+    <p>在 step 1 里，我们用一个巨大的 <code>if-else</code> 根据装修等级硬编码材料组合。问题很明显：</p>
+    <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+      <li>新增一个套餐 → 改 if-else，违反<strong>开闭原则</strong></li>
+      <li>每种材料的单价计算散落在分支里，改一处可能漏另一处</li>
+      <li>调用方没法灵活组装，只能传一个等级数字</li>
+    </ul>
+    <p>核心矛盾：复杂对象的<strong>组装过程</strong>和<strong>最终表示</strong>耦合在一起了。Builder 模式就是要把这两件事拆开。</p>
+  </section>
+
+  <!-- 2. IMenu Interface -->
+  <section>
+    <h2>2. IMenu 接口：流式链的骨架</h2>
+    <p>先定义接口。注意每个 append 方法都返回 <code>this</code>——这就是 fluent API 的关键：</p>
+<pre><code>public interface IMenu {
+    IMenu appendCeiling();   // 吊顶
+    IMenu appendCoat();      // 涂料
+    IMenu appendFloor();     // 地板
+    IMenu appendTile();      // 瓷砖
+    String getDetail();      // 最终报价单
+}</code></pre>
+    <p>返回 <code>IMenu</code>（而不是 <code>void</code>），调用方就能把多个 append 串成一条链：</p>
+<pre><code>menu.appendCeiling().appendCoat().appendFloor().appendTile();</code></pre>
+    <p>这不是语法糖，而是设计意图的表达——<strong>组装是分步的、可选的、顺序自由的</strong>。</p>
+  </section>
+
+  <!-- 3. DecorationPackageMenu -->
+  <section>
+    <h2>3. DecorationPackageMenu：组装 + 计价</h2>
+    <p>这是 IMenu 的唯一实现类。它内部维护一个材料列表和累计价格，每调一次 append 就加入一种材料并计算面积单价：</p>
+<pre><code>public class DecorationPackageMenu implements IMenu {
+    private final int area;                          // 房屋面积
+    private final List&lt;String&gt; materials = new ArrayList&lt;&gt;();
+    private BigDecimal price = BigDecimal.ZERO;
+
+    public DecorationPackageMenu(int area) {
+        this.area = area;
+    }
+
+    @Override
+    public IMenu appendCeiling() {
+        // 二级顶 — 多乐士，单价 26 元/m²
+        materials.add("二级顶 + 多乐士");
+        price = price.add(new BigDecimal(area * 26));
+        return this;  // ← 返回 this，支持链式调用
+    }
+
+    @Override
+    public IMenu appendCoat() {
+        // 乳胶漆 — 立邦，单价 18 元/m²
+        materials.add("立邦乳胶漆");
+        price = price.add(new BigDecimal(area * 18));
+        return this;
+    }
+
+    @Override
+    public IMenu appendFloor() {
+        // 地板 — 圣象，单价 120 元/m²
+        materials.add("圣象地板");
+        price = price.add(new BigDecimal(area * 120));
+        return this;
+    }
+
+    @Override
+    public IMenu appendTile() {
+        // 瓷砖 — 马可波罗，单价 150 元/m²
+        materials.add("马可波罗瓷砖");
+        price = price.add(new BigDecimal(area * 150));
+        return this;
+    }
+
+    @Override
+    public String getDetail() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("装修方案：面积 ").append(area).append(" m²\n");
+        sb.append("材料清单：\n");
+        materials.forEach(m -> sb.append("  · ").append(m).append("\n"));
+        sb.append("总价：").append(price).append(" 元");
+        return sb.toString();
+    }
+}</code></pre>
+    <p>关键设计点：</p>
+    <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+      <li><strong>不写死套餐组合</strong>——它只知道自己能装什么，不决定什么时候装</li>
+      <li><strong>计价和组装在同一个 append 里完成</strong>——单一职责：一个 append 就是一步施工</li>
+      <li><strong>getDetail() 渲染最终报价</strong>——组装完成后再输出，符合"先构建后使用"</li>
+    </ul>
+  </section>
+
+  <!-- 4. Builder Factory -->
+  <section>
+    <h2>4. Builder：工厂化的套餐预设</h2>
+    <p>Builder 是个静态工厂，封装三种预设套餐的组装步骤。调用方只需一行就能拿到一个"半成品菜单"，再按需追加：</p>
+<pre><code>public class Builder {
+    public static IMenu levelOne(int area) {
+        // 轻奢田园：一级顶 + 立邦 + 德尔地板 + 东鹏瓷砖
+        return new DecorationPackageMenu(area)
+                .appendCeiling()
+                .appendCoat()
+                .appendFloor()
+                .appendTile();
+    }
+
+    public static IMenu levelTwo(int area) {
+        // 豪华欧式：二级顶 + 多乐士 + 圣象地板 + 马可波罗瓷砖
+        return new DecorationPackageMenu(area)
+                .appendCeiling()
+                .appendCoat()
+                .appendFloor()
+                .appendTile();
+    }
+
+    public static IMenu levelThree(int area) {
+        // 现代简约：一级顶 + 多乐士 + 德尔地板 + 东鹏瓷砖
+        return new DecorationPackageMenu(area)
+                .appendCeiling()
+                .appendCoat()
+                .appendFloor()
+                .appendTile();
+    }
+}</code></pre>
+    <p>三个方法的链式调用一目了然。调用方不再需要知道内部逻辑：</p>
+<pre><code>// 一行搞定
+IMenu menu = Builder.levelTwo(99);
+System.out.println(menu.getDetail());
+
+// 也可以在 Builder 的基础上自定义追加
+IMenu custom = Builder.levelOne(120);
+custom.appendTile();  // 额外加瓷砖</code></pre>
+
+    <div style="background: var(--code-bg); border-radius: 8px; padding: 1.25rem; margin: 1rem 0;">
+      <strong style="color: var(--accent);">💡 对比 ifelse</strong>
+      <table style="width:100%; margin-top: 0.75rem;">
+        <tr><th style="width:45%">ifelse 版本</th><th style="width:45%">Builder 版本</th></tr>
+        <tr><td>新增套餐 → 改 ifelse</td><td>新增套餐 → 加一个 Builder 方法</td></tr>
+        <tr><td>材料和计价散在分支里</td><td>材料和计价封装在 append 方法里</td></tr>
+        <tr><td>调用方只能传等级数字</td><td>调用方可链式自由组装</td></tr>
+        <tr><td>违反开闭原则</td><td>对扩展开放、对修改关闭</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- 5. Why fluent API -->
+  <section>
+    <h2>5. 为什么 fluent API 重要？</h2>
+    <p>fluent API 不是炫技。它的核心价值是<strong>可读性</strong>——把"做什么"按步骤线性展开：</p>
+<pre><code>// 不用 fluent：嵌套参数，看不出每步做什么
+IMenu menu = new DecorationPackageMenu(area);
+menu.appendCeiling();
+menu.appendCoat();
+menu.appendFloor();
+menu.appendTile();
+
+// 用 fluent：链式表达，像在读施工流程
+new DecorationPackageMenu(area)
+    .appendCeiling()
+    .appendCoat()
+    .appendFloor()
+    .appendTile();</code></pre>
+    <p>更关键的是，fluent API 让 Builder 的<strong>工厂方法</strong>变得自然——每个 level 方法就是一个"标准施工流程"，读代码就像读菜单。</p>
+  </section>
+
+  <!-- 6. Takeaway -->
+  <section>
+    <h2>6. 核心收获</h2>
+    <blockquote>
+      <strong>同一个输出，不同的结构。</strong><br>
+      ifelse 和 Builder 产出的报价单完全一样，但 Builder 把组装过程变成了可复用、可扩展的接口。这就是<strong>单一职责 + 开闭原则</strong>的实践：材料怎么装是一个职责，装哪些材料是另一个职责，两者分离后各自独立变化。
+    </blockquote>
+  </section>
+
+  <!-- Quiz -->
+  <section class="quiz">
+    <h3>自我检测</h3>
+
+    <div class="quiz-question">
+      <p>Q1. IMenu 的 append 方法为什么返回 this 而不是 void？</p>
+      <ul class="quiz-options" data-correct="1">
+        <li data-idx="0">为了让编译器优化性能</li>
+        <li data-idx="1">为了支持链式调用（fluent API）</li>
+        <li data-idx="2">为了让子类能覆写返回类型</li>
+        <li data-idx="3">没有特殊原因，只是习惯写法</li>
+      </ul>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question">
+      <p>Q2. 相比 ifelse 版本，Builder 模式在新增套餐时主要解决了什么问题？</p>
+      <ul class="quiz-options" data-correct="2">
+        <li data-idx="0">运行速度更快</li>
+        <li data-idx="1">减少了类的数量</li>
+        <li data-idx="2">新增套餐不需要修改已有代码（开闭原则）</li>
+        <li data-idx="3">不需要再传面积参数</li>
+      </ul>
+      <div class="quiz-feedback"></div>
+    </div>
+
+    <div class="quiz-question">
+      <p>Q3. Builder.levelTwo(area) 返回的是什么？</p>
+      <ul class="quiz-options" data-correct="0">
+        <li data-idx="0">一个已按豪华欧式套餐组装好的 DecorationPackageMenu 实例</li>
+        <li data-idx="1">一个空的 IMenu 接口</li>
+        <li>一个 Builder 对象，需要再调用 build()</li>
+        <li data-idx="3">一个字符串形式的报价单</li>
+      </ul>
+      <div class="quiz-feedback"></div>
+    </div>
+  </section>
+
+  <!-- Follow-up -->
+  <div class="follow-up">
+    <p>有不清楚的地方？随时问你的老师！</p>
+    <p class="cta">下一步：原型模式与 clone 机制 →</p>
+  </div>
+
+  <!-- Source -->
+  <div class="source">
+    <strong>主要来源：</strong>建造者模式章节 — 设计模式 PDF
+  </div>
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <a href="builder-problem.html">← 上一步：装修报价的 ifelse 堆砌</a>
+    <a href="prototype-clone.html">下一步：原型模式与 clone 机制 →</a>
+  </nav>
+  </div>
+
+  <script>
+    document.querySelectorAll('.quiz-options').forEach(ul => {
+      const correctIdx = parseInt(ul.dataset.correct);
+      const feedback = ul.nextElementSibling;
+      ul.querySelectorAll('li').forEach(li => {
+        li.addEventListener('click', () => {
+          ul.querySelectorAll('li').forEach(l => {
+            l.classList.remove('correct', 'incorrect');
+            l.style.pointerEvents = 'none';
+          });
+          const idx = parseInt(li.dataset.idx);
+          if (idx === correctIdx) {
+            li.classList.add('correct');
+            feedback.textContent = '✓ 正确！';
+            feedback.className = 'quiz-feedback show correct';
+          } else {
+            li.classList.add('incorrect');
+            ul.children[correctIdx].classList.add('correct');
+            feedback.textContent = '✗ 不对。正确答案已标示。';
+            feedback.className = 'quiz-feedback show incorrect';
+          }
+        });
+      });
+    });
+  </script>
+</body>
+</html>

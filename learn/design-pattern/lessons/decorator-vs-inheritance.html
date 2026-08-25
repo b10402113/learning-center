@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>为什么不用继承而用装饰器</title>
+<link rel="stylesheet" href="../assets/shared.css">
+<style>
+  .compare-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    margin: 1.2rem 0;
+  }
+  .compare-grid .side {
+    border-radius: 6px;
+    padding: 0.75rem;
+    font-size: 0.88rem;
+  }
+  .compare-grid .side.bad { background: #fef2f2; border: 1px solid #fca5a5; }
+  .compare-grid .side.good { background: #f0fdf4; border: 1px solid #86efac; }
+  .compare-grid .side strong { display: block; margin-bottom: 0.3rem; }
+  .quiz-result { margin-top: 0.75rem; font-weight: 600; }
+  .quiz-result.pass { color: var(--success); }
+  .quiz-result.fail { color: var(--danger); }
+</style>
+</head>
+<body>
+
+<p class="meta">设计模式 · 装饰器与代理 · 第 2/5 课</p>
+
+<h1>为什么不用继承而用装饰器</h1>
+
+<p><span class="tag tag-structural">结构型</span></p>
+
+<div class="goal">
+  <strong>本课目标</strong><br>
+  对比继承扩展与装饰器扩展的取舍，理解开闭原则在运行时的体现。
+</div>
+
+<h2>回到 SSO 拦截器的场景</h2>
+
+<p>上一课我们用装饰器给 SSO 拦截器加了方法级权限。但如果用继承呢？</p>
+
+<div class="compare-grid">
+  <div class="side bad">
+    <strong style="color: var(--danger);">继承方案</strong>
+    <code>LoginSsoInterceptor extends SsoInterceptor</code><br><br>
+    问题：每加一个功能就要一个子类。<br>
+    权限检查 → 1 个子类<br>
+    日志审计 → 又 1 个子类<br>
+    限流 → 再 1 个子类<br>
+    权限+日志+限流 → 又 1 个子类<br>
+    <strong style="color: var(--danger);">子类爆炸！</strong>
+  </div>
+  <div class="side good">
+    <strong style="color: var(--success);">装饰器方案</strong>
+    <code>LoginSsoDecorator wraps SsoInterceptor</code><br><br>
+    每个功能是一个独立的装饰器，自由组合：<br>
+    权限 → 1 个装饰器<br>
+    日志 → 1 个装饰器<br>
+    限流 → 1 个装饰器<br>
+    权限+日志+限流 → 套娃组合<br>
+    <strong style="color: var(--success);">按需组合，不爆炸</strong>
+  </div>
+</div>
+
+<h2>继承的三个致命问题</h2>
+
+<h3>1. 编译时固定，运行时不能改</h3>
+
+<pre><code>// 继承：编译时就决定了行为
+SsoInterceptor sso = new LoginSsoInterceptor();  // 永远是登录+权限
+// 想加日志？对不起，换一个子类重新 new
+SsoInterceptor sso2 = new LoginAuditSsoInterceptor();</code></pre>
+
+<p>继承在<strong>编译时</strong>就锁定了功能组合。运行时想换组合？做不到。</p>
+
+<h3>2. 子类爆炸（组合爆炸）</h3>
+
+<p>如果有 M 个功能要扩展，用继承需要多少个子类？</p>
+
+<table>
+  <thead>
+    <tr><th>功能组合</th><th>需要的子类数</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>权限</td><td>1</td></tr>
+    <tr><td>日志</td><td>1</td></tr>
+    <tr><td>限流</td><td>1</td></tr>
+    <tr><td>权限 + 日志</td><td>1</td></tr>
+    <tr><td>权限 + 限流</td><td>1</td></tr>
+    <tr><td>日志 + 限流</td><td>1</td></tr>
+    <tr><td>权限 + 日志 + 限流</td><td>1</td></tr>
+    <tr><td><strong>合计</strong></td><td><strong>7 = 2³ - 1</strong></td></tr>
+  </tbody>
+</table>
+
+<p>M 个功能需要 2<sup>M</sup> - 1 个子类。3 个功能就要 7 个类，5 个功能就要 31 个——典型的组合爆炸。</p>
+
+<h3>3. 违反开闭原则</h3>
+
+<p>开闭原则说：对扩展开放，对修改关闭。继承扩展看似满足，但每加一个功能就要创建新子类，而且子类之间可能有重复代码（每个子类都要重写 preHandle）。更麻烦的是，如果父类改了签名，所有子类都要改。</p>
+
+<h2>装饰器的三个优势</h2>
+
+<h3>1. 运行时动态组合</h3>
+
+<pre><code>// 装饰器：运行时自由组合
+SsoInterceptor sso = new SsoInterceptor();              // 原始
+sso = new LoginSsoDecorator(sso);                       // 加权限
+sso = new AuditSsoDecorator(sso);                       // 再加日志
+sso = new RateLimitSsoDecorator(sso);                   // 再加限流
+
+// 运行时根据配置决定组合
+if (config.isAuditEnabled()) {
+    sso = new AuditSsoDecorator(sso);
+}</code></pre>
+
+<p>装饰器在<strong>运行时</strong>通过构造函数组合，想加就加，想换就换。</p>
+
+<h3>2. 每个功能一个类，线性增长</h3>
+
+<table>
+  <thead>
+    <tr><th>功能</th><th>需要的装饰器数</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>权限</td><td>1</td></tr>
+    <tr><td>日志</td><td>1</td></tr>
+    <tr><td>限流</td><td>1</td></tr>
+    <tr><td><strong>合计</strong></td><td><strong>3 = M</strong></td></tr>
+  </tbody>
+</table>
+
+<p>M 个功能只需要 M 个装饰器类。线性增长，不爆炸。</p>
+
+<h3>3. 完美满足开闭原则</h3>
+
+<p>加新功能？写一个新的 ConcreteDecorator，不改原始类，不改已有装饰器。调用方按需组合。对扩展开放（新装饰器），对修改关闭（原始类不动）。</p>
+
+<h2>什么时候继承比装饰器好？</h2>
+
+<div class="callout">
+  <span class="label">取舍判断</span>
+  如果功能扩展是<strong>固定的、不会变的</strong>，用继承更简单直接。比如一个 abstract class 定义骨架，子类只实现固定数量的变体——这是模板方法模式的场景。<br><br>
+  如果功能扩展是<strong>动态的、需要运行时组合的</strong>，用装饰器。比如 JDK I/O 的流组合、SSO 拦截器的多层扩展。
+</div>
+
+<h2>关键洞察</h2>
+
+<div class="callout tip">
+  <span class="label">核心对比</span>
+  继承是<strong>编译时</strong>的功能绑定，装饰器是<strong>运行时</strong>的功能组合。继承适合固定变体，装饰器适合动态组合。子类爆炸是继承扩展的信号——看到这个信号，考虑装饰器。
+</div>
+
+<h2>本课小结</h2>
+
+<ol>
+  <li>继承的三个问题：编译时固定、子类爆炸（2<sup>M</sup>-1）、违反开闭原则</li>
+  <li>装饰器的三个优势：运行时动态组合、线性增长（M 个类）、完美满足开闭原则</li>
+  <li>取舍：固定变体用继承，动态组合用装饰器</li>
+  <li>看到子类爆炸的信号，考虑装饰器</li>
+</ol>
+
+<h2>推荐阅读</h2>
+<p>📖 <a href="https://refactoring.guru/design-patterns/decorator">Refactoring.Guru — Decorator vs Inheritance</a>（含对比类图）</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" id="q1">
+  <p><strong>1. 继承扩展的主要问题是什么？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">运行时不能改变行为</button>
+  <button class="quiz-option" onclick="check(this, false)">不能重写父类方法</button>
+  <button class="quiz-option" onclick="check(this, true)">子类爆炸——M 个功能需要 2<sup>M</sup>-1 个子类</button>
+  <button class="quiz-option" onclick="check(this, false)">违反里氏替换原则</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q2" style="margin-top: 1rem;">
+  <p><strong>2. 装饰器为什么能避免子类爆炸？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">因为装饰器可以多重继承</button>
+  <button class="quiz-option" onclick="check(this, true)">每个功能一个装饰器类，运行时通过套娃组合</button>
+  <button class="quiz-option" onclick="check(this, false)">因为装饰器不需要实现接口</button>
+  <button class="quiz-option" onclick="check(this, false)">因为装饰器在编译时就确定了组合</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q3" style="margin-top: 1rem;">
+  <p><strong>3. 什么时候应该用继承而不是装饰器？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">当功能需要运行时动态组合时</button>
+  <button class="quiz-option" onclick="check(this, true)">当功能扩展是固定的、不会变的变体时</button>
+  <button class="quiz-option" onclick="check(this, false)">当需要加很多横切关注点时</button>
+  <button class="quiz-option" onclick="check(this, false)">当有超过 5 个功能要扩展时</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q4" style="margin-top: 1rem;">
+  <p><strong>4. 装饰器如何满足开闭原则？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">通过修改原始类来添加新功能</button>
+  <button class="quiz-option" onclick="check(this, false)">通过继承原始类来扩展</button>
+  <button class="quiz-option" onclick="check(this, true)">新功能写新的装饰器类，不改原始类和已有装饰器</button>
+  <button class="quiz-option" onclick="check(this, false)">通过反射动态修改类的行为</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q5" style="margin-top: 1rem;">
+  <p><strong>5. 你看到一个类有 8 个子类，每个子类都在父类基础上加不同的日志/审计/限流逻辑。这暗示什么？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">设计得很好，职责清晰</button>
+  <button class="quiz-option" onclick="check(this, true)">子类爆炸信号——应该考虑用装饰器替代继承</button>
+  <button class="quiz-option" onclick="check(this, false)">应该用策略模式</button>
+  <button class="quiz-option" onclick="check(this, false)">应该用桥接模式</button>
+  <div class="quiz-result"></div>
+</div>
+
+<script>
+function check(btn, correct) {
+  const quiz = btn.closest('.quiz');
+  const result = quiz.querySelector('.quiz-result');
+  quiz.querySelectorAll('.quiz-option').forEach(b => { b.disabled = true; });
+  if (correct) {
+    btn.classList.add('correct');
+    result.textContent = '✓ 正确';
+    result.className = 'quiz-result pass';
+  } else {
+    btn.classList.add('wrong');
+    quiz.querySelectorAll('.quiz-option').forEach(b => {
+      if (!b.classList.contains('wrong')) b.style.opacity = '0.5';
+    });
+    result.textContent = '✗ 再想想，复习一下上面的内容';
+    result.className = 'quiz-result fail';
+  }
+}
+</script>
+
+<div class="footer">
+  <p><a href="decorator-essence.html">← 上一课：装饰器的本质</a> · <a href="proxy-pattern.html">下一课：代理模式 →</a></p>
+  <p>💡 有任何不清楚的地方？随时问你的 AI 老师。</p>
+</div>
+
+</body>
+</html>

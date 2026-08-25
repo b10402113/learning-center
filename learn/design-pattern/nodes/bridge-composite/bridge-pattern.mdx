@@ -1,0 +1,35 @@
+---
+id: bridge-pattern
+title: 桥接模式：用组合拆掉双维度的笛卡尔积 ifelse
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/design_pattern.pdf#桥接模式]]"
+created: 2026-08-25
+updated: 2026-08-25
+---
+
+# 桥接模式：用组合拆掉双维度的笛卡尔积 ifelse
+
+## Learning goal
+
+用支付聚合场景把 channelType × modeType 的嵌套 ifelse 拆成桥接结构，理解"抽象持有实现引用"的构造函数注入方式。
+
+## Lesson
+
+第三方支付聚合平台要对接多个支付渠道（微信、支付宝）和多种支付方式（密码、人脸、指纹）。每个渠道 × 每种方式的组合都得写一个分支——渠道从 2 个变 3 个，方式从 3 个变 5 个，矩阵从 6 个膨胀到 15 个。ifelse 变成一个巨大的矩阵，改一个地方要在 N 个分支里找。
+
+坏代码的做法是一个 `PayController.doPay()` 方法，用 `channelType` 嵌套 `modeType` 的 ifelse 来分发。每个分支的逻辑大部分是重复的——校验安全、调用支付、返回结果。真正不同的只有两件事：用哪个渠道的 SDK，用哪种方式做安全校验。
+
+桥接模式的重构分三步。第一步，抽象出支付渠道类 `Pay`，它持有一个 `IPayMode` 字段——这就是"桥"。第二步，定义支付方式接口 `IPayMode`，实现类包括 `PayCypher`（密码）、`PayFaceMode`（人脸）、`PayFingerprintMode`（指纹）。第三步，`WxPay` 和 `ZfbPay` 继承 `Pay`，通过构造函数接收 `IPayMode` 实现。
+
+调用方自由组合：`new WxPay(new PayFaceMode())` 就是"微信 + 人脸"，`new ZfbPay(new PayCypher())` 就是"支付宝 + 密码"。M×N 个分支变成了 M+N 个类。构造函数注入不只是传参，它在编译期就锁定了组合关系——高层模块（Pay）不依赖低层模块（具体的支付方式），两者都依赖抽象（IPayMode 接口），满足依赖倒置原则。真实世界中 JDBC 驱动（DriverManager 持有 Driver 接口）、品牌×产品线（联想持有笔记本/台式机接口）都是桥接的应用。
+
+## Lesson body 2
+
+桥接的识别信号很简单：看到 channelType × modeType 这种双维度嵌套 ifelse，就该想到桥接。关键判断是两个维度是否独立——如果维度 A 的变化不影响维度 B 的逻辑，它们就是独立的，适合桥接。如果维度之间有层级关系（一个维度是另一个的子条件），那更适合组合模式。
+
+桥接与适配器的区别在于意图：适配器翻译的是已有接口的形态（让不兼容的接口变得统一），桥接是在设计阶段就把两个独立维度拆开（用组合连接两个维度的抽象）。桥接与策略的区别也在于意图：策略替换的是同一行为的不同算法，桥接组合的是两个正交维度。如果你发现重构后代码里只有一个维度在变化，那可能更适合策略而不是桥接。
+
+## Sources
+
+- [[sources/design-pattern/design_pattern.pdf#桥接模式]]

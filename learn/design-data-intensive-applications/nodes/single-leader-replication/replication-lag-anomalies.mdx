@@ -1,0 +1,135 @@
+---
+id: replication-lag-anomalies
+title: 複製延遲導致的三種異常
+subject: design-data-intensive-applications
+teaches:
+  - design-data-intensive-applications/reading-your-own-writes
+  - design-data-intensive-applications/monotonic-reads
+  - design-data-intensive-applications/consistent-prefix-reads
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Problems with Replication Lag]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Reading Your Own Writes]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Monotonic Reads]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Consistent Prefix Reads]]"
+created: 2026-08-23
+updated: 2026-08-23
+---
+
+# 複製延遲導致的三種異常
+
+## Learning goal
+
+能列舉非同步複製延遲導致的三種一致性異常（reading your own writes, monotonic reads, consistent prefix reads），並為每種異常提出具體解法。
+
+## Lesson
+
+### 一封寄出去卻查不到的信
+
+假設你在手機上打開一個社群 App，寫了一篇「今天午餐吃拉麵」，按下送出。畫面閃了一下，跳出確認。你順手按下重新整理——結果畫面上顯示的是昨天的動態，你剛發的那篇貼文不見了。你慌了，以為資料丟了，反覆重新整理了五次。第三次的時候，貼文突然出現了。
+
+你沒有做錯任何事。系統也沒有壞。問題出在一個叫作「複製延遲」（Replication Lag）的東西。
+
+在 [[learn/design-data-intensive-applications/elements/asynchronous-replication|非同步複製 (Asynchronous Replication)]] 的架構中，寫入請求到達 leader 節點後，leader 立刻回傳「寫入成功」，然後才慢慢把資料複製到其他 follower 節點。從 leader 寫入成功到 follower 收到資料之間，存在一個時間差。在這個時間差內，如果你的讀取請求恰好被路由到一個還沒收到最新資料的 follower，你就會看到舊資料。
+
+這個問題的根源在 [[learn/design-data-intensive-applications/elements/eventual-consistency|最終一致性 (Eventual Consistency)]]。最終一致性是一個故意模糊的承諾：它說「最終所有副本會一致」，但不告訴你「最終」是什麼時候。可能是一毫秒，可能是一秒，也可能是一分鐘。在這段不確定的延遲窗口內，系統允許暫時的不一致。而這種暫時的不一致，會以三種具體的異常形式浮現在使用者面前。
+
+### 異常一：讀不到自己剛寫的資料
+
+你發了一篇貼文，馬上去查看——看不到。這就是 [[learn/design-data-intensive-applications/elements/reading-your-own-writes|讀自己寫的內容 (Reading Your Own Writes)]] 的異常。
+
+現象很直覺：使用者寫入了某筆資料，隨後立刻讀取，卻沒有看到自己剛寫入的內容。在社群媒體上，這意味著你發文後看不到自己的貼文；在電子商務上，這意味著你下單後查不到訂單；在聊天 App 中，這意味著你發出的訊息在對話中消失了幾秒鐘。
+
+<WarningBox>
+一個常見的誤解是「資料丟了」。資料沒有丟，它已經安全地寫在 leader 上了。問題只是 follower 還沒收到而已。但如果系統不做任何處理，使用者會以為資料丟了——這種信任崩塌比資料真正丟失更具破壞性，因為它不可預測。
+</WarningBox>
+
+**為什麼這是個問題？** 因為使用者的合理預期是：我寫了什麼，我就能看到什麼。這不是一個技術上的要求，而是一個基本的使用者體驗需求。如果系統打破了這個預期，使用者會做出次優決策——重複發文、重複下單、重複送出表單，結果反而製造了更多問題。
+
+**解法一：近期寫入從 leader 讀。** 最直接的方案是：在寫入後的短時間內（例如 5 秒），把該使用者的讀取請求導向 leader，而不是 follower。這個方案簡單粗暴，但有效。代價是 leader 的負載增加——原本所有讀取都可以分散到 follower，現在有一部分要回到 leader。對於大多數應用來說，這個「保護期」內的讀取量是可控的。
+
+**解法二：追蹤寫入時間戳。** 另一種方案是在寫入時記錄一個時間戳（Timestamp），讀取時比較 follower 的最新時間戳和寫入時間戳。如果 follower 還沒追上，就等一下或切換到 leader。但這裡有一個陷阱：分散式系統中的時鐘偏移（Clock Skew）讓「精確比較時間戳」變得困難。不同機器的系統時鐘可能差了幾百毫秒，你以為 follower 已經追上了，其實它只是時鐘快了一點。
+
+**解法三：等待追上。** 寫入後，leader 等待所有 follower 至少追到這次寫入的 offset，然後才回傳成功。這本質上是把非同步複製降級為同步複製（Synchronous Replication），會增加寫入延遲。大多數系統不願意付出這個代價，但在某些關鍵場景（例如金融轉帳）中，這可能是唯一的選擇。
+
+跨裝置（Cross-Device）場景會讓問題更複雜。你在手機上發了一篇貼文，切到筆電上查看——如果手機走的是 A 資料中心的 follower，筆電走的是 B 資料中心的 follower，兩個副本的複製進度不同，你可能在筆電上看不到手機發的內容。這時候需要一個集中式的元資料服務（Centralized Metadata Store）來追蹤每個使用者的「已確認寫入位置」，才能做出正確的路由決策。
+
+### 異常二：資料在時間中倒退
+
+你剛才重新整理了五次，第三次才看到貼文。這說明在某些重新整理之間，你從不同的 follower 讀取了資料——有的 follower 已經收到你的貼文，有的還沒有。如果你第一次看到了新資料，第二次卻回到了舊資料，這就是 [[learn/design-data-intensive-applications/elements/monotonic-reads|單調讀取 (Monotonic Reads)]] 的異常。
+
+現象是：使用者頻繁讀取時，可能先看到較新的資料，然後再看到較舊的資料。彷彿資料在「倒退」。在技術上，這發生在：第一次讀取被路由到一個已同步的 follower，第二次讀取被路由到一個尚未同步的 follower。
+
+**為什麼比讀不到自己寫的資料更嚴重？** 讀不到自己寫的資料只是「暫時看不到新資料」，而單調讀取是「看到了又消失了」。後者對使用者信任的破壞更強烈——你明明確認過了，現在卻被「打臉」。在金融或醫療場景中，這種倒退可能導致使用者基於過時資料做出錯誤決策。
+
+更隱蔽的危險在應用程式邏輯。許多業務邏輯假設「資料只會前進」——例如，一個 conditional update（基於當前版本的條件寫入）如果基於倒退的資料執行，可能覆蓋掉正確的值，造成資料損壞。這不只是使用者體驗問題，而是正確性問題。
+
+<Analogy>
+想像你在追劇。你看到了第五集，然後因為訊號問題，播放器跳回了第三集。你不只困惑——你還可能在不知情的情況下，誤以為第四集的情節已經發生過了。單調讀取就是確保：你看到的集數只會往前，不會倒退。你不需要一次看完所有集數，但你絕對不想在看完第五集之後被拉回第三集。
+</Analogy>
+
+**解法：固定路由。** 單調讀取的核心機制是確保同一個使用者的所有讀取請求，始終被路由到同一個副本（Replica）。最常見的實現方式是基於使用者 ID 的哈希路由（Hash Routing by User ID）：
+
+```
+副本選擇 = hash(使用者 ID) % 副本數量
+```
+
+只要副本的複製是單調前進的（即新資料按到達順序被應用），而同一個使用者的所有讀取都命中同一個副本，那麼這個使用者看到的資料就不會倒退。
+
+這個方案的代價是負載不均（Load Imbalance）。某些熱門使用者的讀取量可能遠高於其他使用者，導致被分配到的副本過載。系統通常需要用一致性哈希（Consistent Hashing）而非簡單的模運算來平滑分配。此外，當被指定的副本故障時，系統必須將讀取轉移到其他副本，此時單調讀的保證會暫時中斷。
+
+值得注意的是，如果系統已經採用「每個使用者固定一個 leader」的寫入策略（例如按使用者 ID 分片），那麼單調讀通常自然而然地得到滿足——因為使用者的寫入和讀取都路由到同一個分片的同一個副本。這是一個額外的好處。
+
+### 異常三：因果倒置
+
+第三種異常最抽象，也最反直覺。假設一個聊天系統中，使用者 A 先發了一則留言（寫入 X），然後在另一則留言下方回覆（寫入 Y）。但使用者 B 從副本讀取時，先看到了回覆 Y，卻還沒有看到原始留言 X。這就是 [[learn/design-data-intensive-applications/elements/consistent-prefix-reads|一致前綴讀取 (Consistent Prefix Reads)]] 的異常——因果關係被違反了。
+
+造成這個問題的根源在於：當資料庫被分成多個分區（Partition）運作時，每個分區各自擁有獨立的寫入順序，但跨分區之間並沒有一個全域的寫入排序（Global Write Ordering）。兩個有因果關係的寫入如果落在不同分區，讀者可能從不同副本以任意順序看到它們。
+
+<Analogy>
+想像你和朋友在通訊軟體上對話。你先問：「你明天有空嗎？」朋友回：「有空啊！」但另一個朋友只偷看了中間的片段，他先看到「有空啊！」，後才看到「你明天有空嗎？」——他一頭霧水，完全不知道在回答什麼問題。一致前綴讀取就是確保：至少你自己看到的訊息，永遠按照「先問後答」的順序排列。回答不會出現在問題之前。
+</Analogy>
+
+**為什麼前兩種異常的解法不夠？** 讀自己寫的內容的解法（從 leader 讀近期寫入）和單調讀取的解法（固定路由到同一個副本）都不能解決一致前綴讀取的問題。因為一致前綴讀取的根源不是單個副本的延遲，而是跨分區之間缺乏全域排序。即使你每次都從同一個副本讀取，如果這個副本上 X 和 Y 的到達順序和原始寫入順序不同，因果關係仍然會被違反。
+
+**解法一：因果相關寫入路由到同一分區。** 最直覺的方案是確保有因果關係的寫入始終路由到同一個分區。只要 X 和 Y 都在分區 A 上，分區 A 的 leader 會按照收到的順序排列它們，因果關係自然得到保留。代價是限制了分區策略的靈活性——你不能自由地把寫入分散到所有分區來最大化平行度。
+
+**解法二：因果追蹤機制。** 使用向量時鐘（Vector Clocks）或類似的因果追蹤機制，在每筆寫入上附帶因果關係的元資料（Metadata）。副本在排序時能辨識因果依賴，保證按因果順序呈現。這保留了分區的獨立性，但增加了元資料的開銷和系統的複雜度。
+
+有些系統採用混合策略：對於明確有因果關係的寫入（例如對同一記錄的後續操作）自動路由到同一分區，而對無因果關係的寫入則自由分散。這是在效能和正確性之間的一個務實平衡。
+
+### 三種異常的全景對比
+
+三種異常都源自 [[learn/design-data-intensive-applications/elements/eventual-consistency|最終一致性]]，但它們觸發的條件、造成的後果、需要的解法截然不同。
+
+<DecisionTable>
+| 異常 | 觸發條件 | 使用者看到的錯覺 | 核心解法 | 解法的代價 |
+|------|---------|----------------|---------|-----------|
+| 讀自己寫的內容 | 寫入後從 lagging 的 follower 讀取 | 自己的寫入「消失」了 | 近期寫入從 leader 讀 | leader 負載增加 |
+| 單調讀取 | 從不同 follower 讀取，先新後舊 | 資料在「倒退」 | 固定路由到同一個副本 | 負載不均 |
+| 一致前綴讀取 | 跨分區因果相關寫入被任意排序 | 因果倒置（答案出現在問題之前） | 因果路由或因果追蹤 | 分區策略受限或元資料開銷 |
+</DecisionTable>
+
+<KeyInsight>
+三種異常構成一個逐步深化的一致性光譜。讀自己寫的內容解決的是「我」和「我的寫入」之間的不一致——最基礎，最容易觸發。單調讀取解決的是「我」的多次讀取之間的不一致——要求時間單調性。一致前綴讀取解決的是跨分區的因果關係不一致——最複雜，也最難以完美解決。在設計系統時，先判斷你需要哪一級的保證，再決定在效能和正確性之間做出什麼取捨。
+</KeyInsight>
+
+### 實務中的取捨框架
+
+在實際系統設計中，你不會同時對所有場景施加最強的一致性保證。那樣做的效能代價太高。正確的做法是根據場景的需求，分層施加保證：
+
+- **寫後讀場景**（使用者寫入後立刻查看）：施加讀自己寫的內容的保證。這是使用者最容易感知到的異常，也是最容易修復的（近期寫入從 leader 讀即可）。
+- **頻繁讀取場景**（使用者反覆查看同一份資料）：施加單調讀取的保證。確保使用者不會在多次刷新之間看到資料倒退。
+- **跨分區因果場景**（例如聊天、協作文件）：施加一致前綴讀取的保證。確保因果關係不被違反。
+
+<WarningBox>
+一個常見的錯誤是混淆三種異常。讀自己寫的內容不等於單調讀取——你可能看不到自己剛寫的資料（讀自己寫的內容的問題），但你的多次讀取仍然是單調前進的（單調讀取沒問題）。反之亦然。在排查問題時，先判斷具體觸發的是哪一種異常，再對症下藥，而不是一股腦地施加最強保證。
+</WarningBox>
+
+一個務實的經驗法則是：如果你的系統已經按使用者 ID 分片（Shard），那麼讀自己寫的內容和單調讀取通常會自然滿足——因為使用者的寫入和讀取都路由到同一個分片。但一致前綴讀取仍然需要額外處理，因為跨分區的因果關係不是分片策略能自動解決的。
+
+## Sources
+
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Problems with Replication Lag]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Reading Your Own Writes]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Monotonic Reads]]
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Consistent Prefix Reads]]

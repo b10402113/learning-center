@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>開啟 S3 公開存取</title>
+<link rel="stylesheet" href="../../../assets/styles.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · S3 static hosting · Step 2/4</p>
+
+<h1>開啟 S3 公開存取</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：關閉 S3 的公開存取封鎖，並用 bucket policy 授予公開讀取權限，避開「上傳後 403」的常見陷阱。
+</div>
+
+<h2>上傳了卻看到 403？</h2>
+
+<p>你已經把 <code>dist/</code> 的檔案上傳到 S3 了，但在瀏覽器打開 URL 卻看到 <strong>403 Forbidden</strong>。這幾乎是每個新手都會遇到的第一個坑。原因很簡單：<strong>S3 bucket 預設是完全私有的</strong>。</p>
+
+<p>AWS 這樣的設計是有道理的——預設封鎖公開存取可以防止你不小心把敏感檔案暴露出去。但這也意味著，要讓網站公開可見，你需要做兩件事：</p>
+
+<ol>
+  <li><strong>關閉公開存取封鎖</strong>（Public access block）</li>
+  <li><strong>加上 bucket policy</strong>，授予公開讀取權限</li>
+</ol>
+
+<h2>第一步：關閉公開存取封鎖</h2>
+
+<p>進入 S3 console → 你的 bucket → <strong>Permissions</strong> → <strong>Block public access (bucket settings)</strong> → 按 <strong>Edit</strong>：</p>
+
+<pre><code>Block all public access:  Uncheck ✗
+  ├─ Block public access to buckets and objects granted through new ACLs
+  ├─ Block public access to buckets and objects granted through any ACLs
+  ├─ Block public access to buckets and objects granted through new public bucket policies
+  └─ Block public access to buckets and objects granted through any public bucket policies</code></pre>
+
+<p>全部取消勾選，然後按 <strong>Save changes</strong>。AWS 會要求你輸入 bucket 名稱來確認——這是一個安全機制，確保你真的知道自己在做什麼。</p>
+
+<div class="callout tip">
+<span class="label">核心概念</span>
+「Public access block」是 S3 的一層安全閘門。即使你的 bucket policy 說了「公開讀取」，如果這個封鎖還開著，S3 會無視那個 policy——檔案照樣 403。
+</div>
+
+<h2>第二步：加上 Bucket Policy</h2>
+
+<p>關掉封鎖只是第一步。你還需要一個 policy 明確說：「這個 bucket 裡的所有物件，允許任何人讀取。」</p>
+
+<p>在 <strong>Permissions</strong> → <strong>Bucket policy</strong> → <strong>Edit</strong>，貼上：</p>
+
+<pre><code>{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "PublicReadGetObject",
+            "Effect": "Allow",
+            "Principal": "*",
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::你的-bucket名稱/*"
+        }
+    ]
+}</code></pre>
+
+<p>逐行解釋：</p>
+
+<table>
+  <thead>
+    <tr><th>欄位</th><th>意思是</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Principal: "*"</code></td><td>「任何人」——不設限</td></tr>
+    <tr><td><code>Action: s3:GetObject</code></td><td>允許「讀取物件」這個動作</td></tr>
+    <tr><td><code>Resource: .../*</code></td><td>適用範圍：這個 bucket 裡的所有物件</td></tr>
+  </tbody>
+</table>
+
+<h2>兩步的順序很重要</h2>
+
+<p>如果你只加了 bucket policy 但沒關掉 public access block——S3 會無視你的 policy，檔案照樣 403。如果你關了 block 但沒加 policy——bucket 還是「沒有明確允許公開」，一樣 403。</p>
+
+<p>兩步都要做，缺一不可：</p>
+
+<pre><code>❌ 只加 policy，沒關 block  → 403（policy 被 block 覆蓋）
+❌ 只關 block，沒加 policy  → 403（沒有允許公開的 rule）
+✅ 關 block + 加 policy      → 公開可讀 ✓</code></pre>
+
+<div class="callout">
+<span class="label">面試要點</span>
+「S3 bucket 預設完全封鎖公開存取。要託管公開網站，我需要先關閉 Public access block，然後附上 bucket policy 允許 s3:GetObject 給 Principal *。兩步缺一不可——只做一步不會生效。」
+</div>
+
+<hr>
+
+<div class="quiz" data-question="為什麼上傳檔案到 S3 後打開 URL 會看到 403？" data-correct="0" data-explain="S3 bucket 預設完全封鎖公開存取。即使你加了 bucket policy，如果沒關掉 Public access block，policy 會被覆蓋，檔案仍然不可見。">
+  <button class="opt">因為 bucket 預設完全封鎖公開存取</button>
+  <button class="opt">因為檔案格式不對</button>
+  <button class="opt">因為 bucket 在錯誤的 region</button>
+  <button class="opt">因為 S3 需要時間生效</button>
+</div>
+
+<div class="quiz" data-question="Bucket policy 裡的 Principal: '*' 代表什麼？" data-correct="2" data-explain="星號（*）代表「所有人」——不設限，任何 anonymous 使用者都能存取。">
+  <button class="opt">只有 root user 能存取</button>
+  <button class="opt">只有同 account 的 IAM 能存取</button>
+  <button class="opt">任何人——不設限</button>
+  <button class="opt">只有 CloudFront 能存取</button>
+</div>
+
+<hr>
+
+<footer>
+<p>下一步：<a href="enable-static-website-hosting.html">開啟靜態網站託管</a></p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

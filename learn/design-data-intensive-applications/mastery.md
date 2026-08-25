@@ -35,3 +35,16 @@ Notes: probe skipped via /nodes design-data-intensive-applications/data-system-p
 | query language expressiveness (Cypher vs SPARQL vs Datalog) | unknown |
 
 Notes: probe skipped via /nodes design-data-intensive-applications/data-models-and-query-languages skip-probe on 2026-08-21
+
+## single-leader-replication
+
+| Strand | Rating |
+| --- | --- |
+| synchronous vs asynchronous vs semi-sync replication trade-offs | unknown |
+| eventual consistency as a design choice | unknown |
+| replication lag anomalies (reading your own writes) | unknown |
+| replication lag anomalies (monotonic reads) | unknown |
+| replication lag anomalies (consistent prefix reads) | unknown |
+| replication log implementation mechanisms | unknown |
+
+Notes: probe skipped via /nodes design-data-intensive-applications/single-leader-replication skip-probe on 2026-08-23

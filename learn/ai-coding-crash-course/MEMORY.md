@@ -1,7 +1,6 @@
 ---
 subject: ai-coding-crash-course
 language: zh-Hant
-polish: default
 created: 2026-08-19
 updated: 2026-08-19
 ---

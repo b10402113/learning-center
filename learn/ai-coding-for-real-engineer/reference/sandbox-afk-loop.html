@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sandbox 與 AFK Loop — Quick Reference</title>
+  <style>
+    :root {
+      --bg: #fafaf9;
+      --fg: #1c1917;
+      --muted: #78716c;
+      --accent: #b45309;
+      --accent-light: #fef3c7;
+      --border: #e7e5e4;
+      --code-bg: #f5f5f4;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans TC', sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+      font-size: 14px;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+    }
+
+    h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+    .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem; }
+
+    h2 {
+      font-size: 1rem;
+      margin-top: 1.5rem;
+      margin-bottom: 0.5rem;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.5rem 0 1rem;
+      font-size: 0.85rem;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 0.4rem 0.6rem;
+      border: 1px solid var(--border);
+    }
+
+    th { background: var(--accent-light); font-weight: 600; }
+
+    code {
+      font-family: 'SF Mono', monospace;
+      background: var(--code-bg);
+      padding: 0.1em 0.3em;
+      border-radius: 3px;
+      font-size: 0.9em;
+    }
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.75rem;
+      margin: 0.5rem 0;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      overflow-x: auto;
+    }
+
+    pre code { background: none; padding: 0; }
+
+    ul { margin: 0.25rem 0 0.75rem 1.25rem; font-size: 0.85rem; }
+    li { margin-bottom: 0.2rem; }
+
+    .col2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .col2 > div {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.75rem;
+    }
+
+    .col2 h3 { font-size: 0.85rem; margin-bottom: 0.25rem; }
+
+    .danger { border-color: #dc2626 !important; background: #fef2f2; }
+    .success { border-color: #16a34a !important; background: #f0fdf4; }
+
+    @media print {
+      body { font-size: 11pt; max-width: 100%; padding: 1cm; }
+      h2 { page-break-after: avoid; }
+    }
+  </style>
+</head>
+<body>
+
+<h1>Sandbox 與 AFK Loop</h1>
+<p class="subtitle">Node afk-loop-sandbox · Quick Reference · Print-friendly</p>
+
+<h2>YOLO 模式三危險</h2>
+<table>
+  <tr><th>危險</th><th>機制</th><th>防禦</th></tr>
+  <tr><td>刪除主機檔案</td><td><code>rm -rf ~</code> 等破壞性指令</td><td>Docker 隔離：指令只影響容器內部</td></tr>
+  <tr><td>外洩機敏程式碼</td><td><code>curl</code> POST codebase 到外部</td><td>容器網路隔離：禁止出站流量</td></tr>
+  <tr><td>Prompt injection</td><td>檔案中埋入惡意指令被 agent 執行</td><td>容器限制影響範圍 + 最小權限 token</td></tr>
+</table>
+
+<h2>Docker 沙盒設定步驟</h2>
+<ol style="margin-left:1.25rem; font-size:0.85rem;">
+  <li>安裝 Docker Desktop 或 Podman</li>
+  <li>從 <code>.env.example</code> 複製並填入 <code>ANTHROPIC_API_KEY</code></li>
+  <li><code>pnpm sandcastle docker build image</code></li>
+  <li>冒煙測試：<code>npx tsx sandcastle/test.ts</code>（prompt: "hello"）</li>
+</ol>
+
+<h2>AFK 迴圈結構</h2>
+<pre><code>// 核心邏輯
+while (iterations < maxIterations) {
+  run_sandcastle(prd_path, plan_path);
+  iterations++;
+  if (agent_emitted("no more tasks")) break;
+}</code></pre>
+
+<div class="col2">
+  <div>
+    <h3>maxIterations</h3>
+    <ul>
+      <li>安全上限（10–50）</li>
+      <li>信任完成訊號，但保留防線</li>
+    </ul>
+  </div>
+  <div>
+    <h3>完成訊號</h3>
+    <ul>
+      <li>Agent 輸出 <code>"no more tasks"</code></li>
+      <li>比 maxIterations 更精準</li>
+    </ul>
+  </div>
+</div>
+
+<h2>互動 vs AFK 比較</h2>
+<table>
+  <tr><th></th><th>互動模式</th><th>AFK 迴圈</th></tr>
+  <tr><td>執行模式</td><td><code>interactive</code></td><td><code>run</code></td></tr>
+  <tr><td>PRD/plan</td><td>prompt.md shell 展開</td><td>CLI 位置參數</td></tr>
+  <tr><td>終止條件</td><td>單一 phase 完成</td><td>maxIterations 或完成訊號</td></tr>
+  <tr><td>Context</td><td>持續一條</td><td>每圈全新</td></tr>
+  <tr><td>人在場</td><td>是</td><td>否</td></tr>
+</table>
+
+<h2>適合 AFK 的條件</h2>
+<div class="col2">
+  <div class="success">
+    <h3>✅ 適合 AFK</h3>
+    <ul>
+      <li>測試能自動驗證</li>
+      <li>typecheck 能抓到錯誤</li>
+      <li>完成標準可程式化判斷</li>
+      <li>垂直切片任務（tracer bullet）</li>
+    </ul>
+  </div>
+  <div class="danger">
+    <h3>❌ 需要 HITL</h3>
+    <ul>
+      <li>UI 「好看不好看」</li>
+      <li>需求只有人看得出對錯</li>
+      <li>一次性決策（不可逆）</li>
+      <li>架構設計</li>
+    </ul>
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,176 @@
+---
+id: builder-fluent-api
+title: 流式 Builder 重构
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/design_pattern.pdf#建造者模式]]"
+created: 2026-08-25
+updated: 2026-08-25
+---
+
+# 流式 Builder 重构
+
+## Learning goal
+
+实现流式 Builder 重构：定义 IMenu 接口、DecorationPackageMenu 实现类和 Builder 工厂，完成从 ifelse 到 fluent API 的转变。
+
+## Lesson
+
+上一步我们用 if-else 堆砌了装修报价逻辑——一个等级对应一套材料组合，新增套餐就要加分支，计价散落各处。核心问题很清楚：复杂对象的**组装过程**和**最终表示**耦合在一起了。Builder 模式就是要把这两件事拆开。
+
+### IMenu 接口：流式链的骨架
+
+先定义接口。每个 append 方法都返回 `this`，这就是 fluent API 的关键：
+
+```java
+public interface IMenu {
+    IMenu appendCeiling();   // 吊顶
+    IMenu appendCoat();      // 涂料
+    IMenu appendFloor();     // 地板
+    IMenu appendTile();      // 瓷砖
+    String getDetail();      // 最终报价单
+}
+```
+
+返回 `IMenu` 而不是 `void`，调用方就能把多个 append 串成一条链：
+
+```java
+menu.appendCeiling().appendCoat().appendFloor().appendTile();
+```
+
+这不是语法糖，而是设计意图的表达——组装是**分步的、可选的、顺序自由的**。接口只声明能力，不决定组合方式。
+
+### DecorationPackageMenu：组装 + 计价
+
+这是 IMenu 的唯一实现类。内部维护材料列表和累计价格，每调一次 append 就加入一种材料并按面积计算单价：
+
+```java
+public class DecorationPackageMenu implements IMenu {
+    private final int area;
+    private final List<String> materials = new ArrayList<>();
+    private BigDecimal price = BigDecimal.ZERO;
+
+    public DecorationPackageMenu(int area) {
+        this.area = area;
+    }
+
+    @Override
+    public IMenu appendCeiling() {
+        materials.add("二级顶 + 多乐士");
+        price = price.add(new BigDecimal(area * 26));
+        return this;  // 返回 this，支持链式调用
+    }
+
+    @Override
+    public IMenu appendCoat() {
+        materials.add("立邦乳胶漆");
+        price = price.add(new BigDecimal(area * 18));
+        return this;
+    }
+
+    @Override
+    public IMenu appendFloor() {
+        materials.add("圣象地板");
+        price = price.add(new BigDecimal(area * 120));
+        return this;
+    }
+
+    @Override
+    public IMenu appendTile() {
+        materials.add("马可波罗瓷砖");
+        price = price.add(new BigDecimal(area * 150));
+        return this;
+    }
+
+    @Override
+    public String getDetail() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("装修方案：面积 ").append(area).append(" m²\n");
+        sb.append("材料清单：\n");
+        materials.forEach(m -> sb.append("  · ").append(m).append("\n"));
+        sb.append("总价：").append(price).append(" 元");
+        return sb.toString();
+    }
+}
+```
+
+关键设计点：它**不写死套餐组合**——它只知道自己能装什么，不决定什么时候装。计价和组装在同一个 append 里完成，单一职责：一个 append 就是一步施工。`getDetail()` 在组装完成后渲染报价，符合"先构建后使用"。
+
+### Builder：工厂化的套餐预设
+
+Builder 是个静态工厂，封装三种预设套餐的组装步骤。调用方只需一行就能拿到一个"半成品菜单"：
+
+```java
+public class Builder {
+    public static IMenu levelOne(int area) {
+        // 轻奢田园：一级顶 + 立邦 + 德尔地板 + 东鹏瓷砖
+        return new DecorationPackageMenu(area)
+                .appendCeiling()
+                .appendCoat()
+                .appendFloor()
+                .appendTile();
+    }
+
+    public static IMenu levelTwo(int area) {
+        // 豪华欧式：二级顶 + 多乐士 + 圣象地板 + 马可波罗瓷砖
+        return new DecorationPackageMenu(area)
+                .appendCeiling()
+                .appendCoat()
+                .appendFloor()
+                .appendTile();
+    }
+
+    public static IMenu levelThree(int area) {
+        // 现代简约：一级顶 + 多乐士 + 德尔地板 + 东鹏瓷砖
+        return new DecorationPackageMenu(area)
+                .appendCeiling()
+                .appendCoat()
+                .appendFloor()
+                .appendTile();
+    }
+}
+```
+
+链式调用一目了然。调用方不再需要知道内部逻辑：
+
+```java
+// 一行搞定
+IMenu menu = Builder.levelTwo(99);
+System.out.println(menu.getDetail());
+
+// 也可以在 Builder 的基础上自定义追加
+IMenu custom = Builder.levelOne(120);
+custom.appendTile();  // 额外加瓷砖
+```
+
+和 ifelse 版本对比：新增套餐时 ifelse 要改已有分支，Builder 只需加一个方法；ifelse 里材料和计价散落各处，Builder 封装在 append 里；ifelse 调用方只能传等级数字，Builder 允许链式自由组装。
+
+### 为什么 fluent API 重要
+
+fluent API 的核心价值是可读性——把"做什么"按步骤线性展开：
+
+```java
+// 不用 fluent：嵌套参数，看不出每步做什么
+IMenu menu = new DecorationPackageMenu(area);
+menu.appendCeiling();
+menu.appendCoat();
+menu.appendFloor();
+menu.appendTile();
+
+// 用 fluent：链式表达，像在读施工流程
+new DecorationPackageMenu(area)
+    .appendCeiling()
+    .appendCoat()
+    .appendFloor()
+    .appendTile();
+```
+
+更关键的是，fluent API 让 Builder 的工厂方法变得自然——每个 level 方法就是一个"标准施工流程"，读代码就像读菜单。
+
+### 核心收获
+
+同一个输出，不同的结构。ifelse 和 Builder 产出的报价单完全一样，但 Builder 把组装过程变成了可复用、可扩展的接口。这就是**单一职责 + 开闭原则**的实践：材料怎么装是一个职责，装哪些材料是另一个职责，两者分离后各自独立变化。Builder 分离复杂构建与表示，使得同样的构建过程可以创建不同的表示。
+
+## Sources
+
+- [[sources/design-pattern/design_pattern.pdf#建造者模式]]

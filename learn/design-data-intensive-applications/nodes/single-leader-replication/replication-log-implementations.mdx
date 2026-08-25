@@ -1,0 +1,247 @@
+---
+id: replication-log-implementations
+title: 複製日誌的四種實現方式
+subject: design-data-intensive-applications
+teaches: []
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Implementation of Replication Logs]]"
+created: 2026-08-23
+updated: 2026-08-23
+---
+
+# 複製日誌的四種實現方式
+
+<LearningGoal>
+比較四種複製日誌實現方式（statement-based、WAL shipping、logical log、trigger-based）的機制與取捨，理解邏輯日誌為何能將複製與存儲引擎解耦。
+</LearningGoal>
+
+## Lesson
+
+### 複製的核心問題：寫入怎麼傳到 follower？
+
+在 [[learn/design-data-intensive-applications/nodes/single-leader-replication|單 leader 複製]] 的架構下，所有寫入都先到 leader，leader 再把變更「傳遞」給一個或多個 follower。這裡的「傳遞」不是把整張表的資料全部重傳一遍——那樣的成本太高了。真實系統的做法是：**只傳「變更」本身**。
+
+問題來了：「變更」要以什麼格式表達？
+
+假設你在 [[learn/design-data-intensive-applications/nodes/storage-engines-write-path|存儲引擎：寫路徑]] 中已經理解，一個寫入操作會在存儲引擎內部產生一系列底層動作——更新索引頁、修改資料頁、寫入校驗碼。這些動作的順序和格式與特定的存儲引擎實現高度綁定。如果你把這些底層動作原封不動地搬到 follower 上重放，follower 確實能複製出一模一樣的狀態——但代價是你必須用完全相同的存儲引擎版本、完全相同的作業系統、甚至完全相同的硬體。
+
+這就是複製日誌（Replication Log）的核心取捨：**日誌越底層，複製越精確，但耦合越深；日誌越抽象，複製越靈活，但資訊損失越大。**
+
+實務上，資料庫系統演化出了四種主要的複製日誌實現方式。每一種都在「精確性」與「解耦程度」之間做了不同的權衡。
+
+### Statement-based Replication：直接複製 SQL
+
+最直覺的做法：把 leader 上執行的寫入 SQL 語句（INSERT、UPDATE、DELETE）原封不動地記錄下來，傳給 follower，讓 follower 重新執行一遍。
+
+舉個例子。Leader 上執行了：
+
+```sql
+UPDATE users SET balance = balance * 1.1 WHERE region = 'asia';
+```
+
+這條語句被寫入複製日誌，傳到 follower。Follower 收到後，在自己的資料副本上跑同樣的 `UPDATE` 語句。如果兩邊的初始狀態一致，結果也會一致。
+
+聽起來很簡單。但魔鬼在細節裡。
+
+**非確定性函數的陷阱。** 如果 SQL 語句裡包含了非確定性函數（Non-deterministic Function），leader 和 follower 的結果可能不同。例如：
+
+```sql
+INSERT INTO logs (message, created_at) VALUES ('hello', NOW());
+```
+
+`NOW()` 在 leader 和 follower 上執行的時間點不同，寫入的時間戳就不一樣。再看一個更經典的例子：
+
+```sql
+UPDATE products SET price = price * (1 + RAND() * 0.1);
+```
+
+`RAND()` 在兩邊產生的隨機數完全不同，結果天差地遠。這還不只是時間函數的問題——`AUTO_INCREMENT` 欄位、`UUID()` 函數、甚至某些依賴環境變數的 UDF（User-Defined Function，使用者自定義函數）都會觸發同樣的非確定性問題。
+
+<WarningBox>
+Statement-based 複製最大的陷阱是非確定性寫入。`NOW()`、`RAND()`、`AUTO_INCREMENT`、`UUID()` 等函數在 leader 和 follower 上會產生不同結果。實務中，資料庫通常會在日誌裡附帶「上下文資訊」（Context）——例如 session 變數、隨機種子——試圖讓 follower 重放時產生相同的結果，但這不是萬無一失的。某些 MySQL 版本的 statement-based 複製在遇到 `LOAD DATA INFILE` 時甚至需要額外的日誌條目來保證一致性。
+</WarningBox>
+
+**觸發器的副作用。** 如果 leader 上有觸發器（Trigger），觸發器產生的副作用（例如寫入另一張表、發送通知）會不會也被複製？這取決於觸發器是在「語句執行前」還是「語句執行後」觸發。如果觸發器在執行 SQL 語句的過程中被觸發，而這條 SQL 本身又被記錄在複製日誌裡，那 follower 重放時會再次觸發觸發器——導致重複執行副作用。
+
+**效能問題。** Statement-based 的另一個隱憂是效能。某些 SQL 語句在 follower 上重放時可能非常耗時——例如一個 `DELETE FROM orders WHERE created_at < '2020-01-01'` 可能需要刪除數百萬筆記錄。這段時間 follower 的複製會落後（Replication Lag），而如果你在 follower 上做讀寫分離（Read/Write Splitting），使用者可能讀到過期的資料。
+
+儘管有這些問題，statement-based 複製仍然是某些系統的預設選項，因為它的日誌量最小——你只記錄 SQL 語句本身，而不是每筆資料的變更。在大多數 OLTP 場景下，這些語句的執行成本不高，非確定性問題也有對策（例如 MySQL 的 `ROW` 格式日誌就是為了解決這些問題而誕生的）。
+
+### WAL Shipping：複製存儲引擎的日誌
+
+另一種思路是：不記錄「要做什麼」，而是記錄「已經做了什麼」——直接複製存儲引擎的 WAL（Write-Ahead Logging，預寫日誌）。
+
+WAL 是 [[learn/design-data-intensive-applications/nodes/storage-engines-write-path|存儲引擎：寫路徑]] 中每個寫入操作的第一步。每一筆變更在寫入記憶體的 Buffer Pool 之前，都會先追加寫入 WAL 檔案。WAL 裡記錄的是底層的位元組級別變更：哪個頁（Page）的哪個位移（Offset）寫入了什麼資料。
+
+複製時，leader 只要把 WAL 檔案的內容按順序傳給 follower， follower 重放到自己的存儲引擎裡就行了。這叫 WAL Shipping（WAL 傳輸）。
+
+這個方式的優點是**零資訊損失**。WAL 裡包含了所有的寫入操作，複製結果與 leader 完全一致。PostgreSQL 的 Streaming Replication 就是基於 WAL Shipping 實現的——leader 透過一個叫做 WAL Sender 的背景程序，把 WAL 記錄串流傳給 follower 上的 WAL Receiver。
+
+但問題也很明顯：**WAL 的格式是存儲引擎的內部實現細節**。
+
+這意味著 follower 必須使用與 leader 完全相同的存儲引擎版本。如果 leader 從 PostgreSQL 14 升級到 15， WAL 格式可能改變，你就不能讓 14 版本的 follower 去接收 15 版本的 WAL。你甚至不能用不同版本的 PostgreSQL 做複製——即使是 minor version 升級也要謹慎。
+
+更進一步，WAL 裡可能包含裸指標（Raw Pointer）或記憶體地址，這些在 follower 上根本沒有意義。WAL 的位元組級別格式意味著它與特定的硬體架構、作業系統、甚至編譯器版本綁定。想做跨資料中心的異地複製（Geo-Replication）？你得確保兩邊的環境完全一致。
+
+<DecisionTable>
+
+| 實現方式 | 日誌內容 | 耦合程度 | 跨版本相容 | 非確定性風險 |
+|---|---|---|---|---|
+| **Statement-based** | SQL 語句 | 低 | 高 | 高（NOW()、RAND()） |
+| **WAL Shipping** | 存儲引擎位元組級變更 | 極高 | 極低 | 無 |
+| **Logical Log** | 行級別變更（Row-based） | 低 | 高 | 無 |
+| **Trigger-based** | 應用層捕獲的變更 | 最低 | 最高 | 低 |
+
+</DecisionTable>
+
+### Logical Log：行級別的抽象
+
+第三種方式在 statement-based 和 WAL shipping 之間找到了一個精準的平衡點：**logical log（邏輯日誌）**。
+
+邏輯日誌記錄的不是 SQL 語句，也不是存儲引擎的底層位元組變更，而是**資料行（Row）級別的變更**。具體來說：
+
+- 對於 INSERT，記錄新插入的行資料。
+- 對於 DELETE，記錄被刪除的行的主鍵。
+- 對於 UPDATE，記錄被修改的行的主鍵，以及變更前後的欄位值。
+
+以 MySQL 為例，InnoDB 的 binary log 在 `ROW` 格式下就是一種邏輯日誌。一條 UPDATE 語句的邏輯日誌可能長這樣（以 JSON 結構簡化表達）：
+
+```json
+{
+  "type": "update",
+  "table": "users",
+  "before": { "id": 42, "name": "Alice", "balance": 1000 },
+  "after":  { "id": 42, "name": "Alice", "balance": 1100 }
+}
+```
+
+Follower 收到這條日誌後，根據主鍵找到 `id = 42` 的記錄，把 `balance` 從 1000 改成 1100。無論 leader 用什麼存儲引擎、什麼 SQL 語句來產生這個變更，邏輯日誌的格式都是一樣的。
+
+<KeyInsight>
+邏輯日誌是複製與存儲引擎之間的「緩衝層」。它把存儲引擎的內部格式（WAL 的位元組級別操作）轉譯成與引擎無關的行級別變更。這意味著你可以用 MySQL 的 InnoDB 作為 leader，用另一個不同版本的 MySQL 作為 follower；甚至可以用不同的存儲引擎——只要 follower 能理解邏輯日誌的格式就行。MySQL 的 Replication API 就是基於邏輯日誌，讓你能夠把變更串流到外部系統（例如 Elasticsearch、Apache Kafka），而不只是複製到另一個 MySQL 實例。
+</KeyInsight>
+
+**邏輯日誌的具體優勢：**
+
+1. **版本相容。** 你可以在 leader 和 follower 上跑不同版本的資料庫。只要邏輯日誌的格式保持向後相容（Backward Compatible），升級就是一件低風險的事。MySQL 從 5.x 升級到 8.0 的過程中，邏輯日誌的格式變化很小，這讓跨版本複製成為可能。
+
+2. **異質系統整合。** 你可以在 MySQL 的邏輯日誌上接一個消費者（Consumer），把變更串流到一個完全不同的系統——例如 Apache Cassandra、Redis、或者一個資料倉儲（Data Warehouse）。這就是 Change Data Capture（CDC，變更資料捕獲）的基礎架構。
+
+3. **解析性。** 邏輯日誌是可讀的。相對於 WAL 的裸位元組，邏輯日誌的 JSON 或文本格式讓除錯和審計變得容易。你可以直接閱讀日誌來理解「系統發生了什麼」，不需要具備存儲引擎的內部知識。
+
+但邏輯日誌也不是完美的。它比 WAL 更大（因為你必須額外記錄行的主鍵和欄位值，而不只是差異），重放時需要解析日誌格式再執行寫入（比 WAL 的直接寫入慢），而且某種程度上，它仍然假設了 follower 使用的是「相容的」存儲引擎——只是相容的定義從「完全相同的版本」放寬到「相同的行格式」。
+
+### Trigger-based Replication：應用層的萬能鑰匙
+
+最後一種方式把日誌的控制權完全交給了應用程式碼。
+
+Trigger-based Replication 的核心思路是：在資料庫裡定義觸發器（Trigger），當特定的寫入操作發生時，觸發器自動把變更的資訊寫入一張「複製日誌表」（Replication Log Table）。一個外部的讀取程序（Tail Process）持續掃描這張表，把新的日誌條目取出並傳遞給 follower。
+
+具體流程：
+
+1. Leader 上的 `users` 表定義了一個 `AFTER INSERT` 觸發器和 `AFTER UPDATE` 觸發器。
+2. 當有新使用者註冊或資料更新時，觸發器把變更的資料（例如 `{ user_id, changed_fields, timestamp }`）寫入另一張表 `replication_log`。
+3. 一個獨立的 Tail 程序持續輪詢 `replication_log`，把新條目取出、序列化、傳給 follower。
+4. Follower 收到後，根據日誌內容重建變更。
+
+這種方式的**靈活性無與倫比**。因為觸發器是應用層的程式碼，你可以：
+- 自定義哪些欄位被複製（不是所有欄位都需要複製到所有 follower）。
+- 在觸發器裡做資料轉換（例如脫敏、聚合、篩選）。
+- 把變更推送到任何地方——另一個資料庫、訊息佇列（Message Queue）、外部 API。
+
+MySQL 的 `pt-table-sync` 和 `symmetricds` 就是基於類似機制的工具。
+
+但靈活的代價是**高昂的效能開銷**。每一次寫入都會額外觸發觸發器、寫入日誌表、讓 Tail 程序讀取、再傳遞出去。在高吞吐量的系統中，這些額外步驟會嚴重拖慢寫入延遲（Write Latency）。更糟的是，觸發器的執行是同步的——觸發器完成之前，原始的寫入操作不會結束。如果觸發器裡有 bug 或者日誌表的寫入被鎖定，整個系統的寫入都會被阻塞。
+
+觸發器的維護也是一大痛點。當你修改 `users` 表的 Schema（例如新增一個欄位），你必須同步更新觸發器的邏輯。Schema 遷移（Schema Migration）的成本因為觸發器的存在而倍增。
+
+### 四種方式的全景比較
+
+理解了每種機制的原理後，讓我們用一個結構化的比較來收攏它們的差異。在實務中，選擇哪種複製日誌取決於幾個關鍵維度：你的系統是否需要跨版本相容？是否需要異質系統整合？寫入延遲的容忍度多高？維護成本的預算多少？
+
+<DecisionTable>
+
+| 維度 | Statement-based | WAL Shipping | Logical Log | Trigger-based |
+|---|---|---|---|---|
+| **日誌格式** | SQL 語句 | 存儲引擎的位元組級 WAL | 行級別變更（Row-based） | 應用層自定義的變更記錄 |
+| **與存儲引擎的耦合** | 低（SQL 是標準的） | 極高（WAL 格式隨引擎版本變化） | 中（假設行格式相容） | 最低（完全在應用層） |
+| **跨版本複製** | 高（SQL 語句穩定） | 極低（不同版本的 WAL 可能不相容） | 高（邏輯日誌格式通常向後相容） | 最高（完全不依賴引擎格式） |
+| **非確定性風險** | 高（NOW()、RAND() 等） | 無（記錄的是已執行的結果） | 無（記錄的是行的前後狀態） | 低（取決於觸發器實現） |
+| **日誌大小** | 小（只記錄 SQL 語句） | 小（差異壓縮後很小） | 中（每筆變更記錄主鍵+完整欄位） | 中到大（取決於自定義格式） |
+| **重放成本** | 高（需重新執行 SQL） | 低（直接寫入底層頁） | 中（解析日誌+按主鍵更新） | 高（需解析+重建+寫入） |
+| **異質系統整合** | 低 | 極低 | 高（CDC 的基礎） | 最高（可推送到任意系統） |
+| **維護成本** | 中 | 高（引擎升級需同步） | 低 | 高（觸發器+Schema 遷移） |
+| **典型系統** | MySQL（預設早期版本） | PostgreSQL Streaming Replication | MySQL binary log (ROW format) | symmetricds, pt-table-sync |
+
+</DecisionTable>
+
+### 邏輯日誌為什麼是分水嶺？
+
+如果你只能從四種方式裡記住一個，記住邏輯日誌。
+
+Statement-based 的非確定性問題讓它在嚴謹的生產環境中越來越少被使用。WAL Shipping 的存儲引擎耦合讓它在升級和異質整合時寸步難行。Trigger-based 雖然靈活，但效能和維護成本讓它更像是一個「最後手段」而非預設選項。
+
+邏輯日誌正好落在中間：它比 SQL 語句更底層（避免了非確定性問題），比 WAL 更抽象（避免了引擎耦合），又不像 Trigger 那樣需要你在應用層維護額外的程式碼。
+
+這就是為什麼 MySQL 在 5.0 之後把 `ROW` 格式的 binary log 作為預設選項，PostgreSQL 也透過 logical decoding（邏輯解碼）提供了類似的能力。CDC 工具（如 Debezium、Maxwell）的核心工作就是把資料庫的邏輯日誌解析成結構化的事件，串流到 Kafka 或其他訊息系統。
+
+<Analogy>
+四種複製日誌就像四種翻譯方式。Statement-based 像是直接複製原文——如果原文有雙關語（非確定性函數），翻譯就會出錯。WAL Shipping 像是把整本書的印刷底片複製過去——精確但只能用同一台印刷機。Logical Log 像是把原文的意思用標準化的語言重新表達——保留了語義但丟失了文體細節。Trigger-based 像是找一個口譯員——最靈活但最貴、最慢。
+</Analogy>
+
+### 選擇的框架
+
+回到實務。你在做架構決策時，可以按照以下順序思考：
+
+1. **如果 follower 必須與 leader 完全一致（例如金融系統的熱備援）**——用 WAL Shipping。精確性是第一優先，你願意為此承受升級的痛苦。
+2. **如果系統可能升級、需要異質整合、或你要做 CDC**——用 Logical Log。它是現代資料庫的主流選擇，平衡了精確性與靈活性。
+3. **如果寫入量極低、SQL 語句簡單、日誌量要最小化**——Statement-based 在特定場景下仍然有效，但要確保你的 SQL 語句沒有非確定性函數。
+4. **如果需要在應用層做高度客製化的複製邏輯（例如只複製部分欄位、做資料脫敏）**——Trigger-based 是唯一的選擇，但要為效能和維護成本做好準備。
+
+大多數現代系統的預設選擇是邏輯日誌。它不是最精確的，也不是最靈活的，但它是在實際工程中最容易維護、最容易整合、最容易升級的那一個。
+
+<Quiz>
+
+```json
+[
+  {
+    "q": "在 statement-based 複製中，以下哪個 SQL 語句會導致 leader 和 follower 的結果不一致？",
+    "options": [
+      "INSERT INTO orders (id, amount) VALUES (1, 100);",
+      "UPDATE users SET last_login = NOW() WHERE id = 42;",
+      "DELETE FROM logs WHERE id < 1000;",
+      "SELECT * FROM products WHERE price > 50;（SELECT 不會被複製）"
+    ],
+    "correct": 1,
+    "explanation": "NOW() 是非確定性函數，在 leader 和 follower 上執行的時間點不同，產生的結果也不同。"
+  },
+  {
+    "q": "Logical log 比 WAL Shipping 更適合跨版本複製，最主要的原因是？",
+    "options": [
+      "Logical log 的日誌量更小",
+      "Logical log 的格式與存儲引擎的內部實現解耦",
+      "Logical log 的重放速度更快",
+      "Logical log 不需要 follower 在線上"
+    ],
+    "correct": 1,
+    "explanation": "邏輯日誌記錄行級別變更而非存儲引擎的位元組級 WAL，因此不受引擎版本限制。"
+  },
+  {
+    "q": "Trigger-based replication 最大的代價是？",
+    "options": [
+      "日誌格式不可讀",
+      "觸發器與原始寫入同步執行，拖慢寫入延遲，且 Schema 遷移成本倍增",
+      "無法複製 DELETE 操作",
+      "follower 必須使用相同的存儲引擎"
+    ],
+    "correct": 1,
+    "explanation": "觸發器同步執行會阻塞原始寫入，增加延遲；每次 Schema 變更都需同步更新觸發器。"
+  }
+]
+```
+
+</Quiz>
+
+## Sources
+
+- [[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Implementation of Replication Logs]]

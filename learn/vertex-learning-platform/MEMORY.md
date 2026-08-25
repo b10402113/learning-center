@@ -1,7 +1,6 @@
 ---
 subject: vertex-learning-platform
 language: zh-Hant
-polish: default
 created: 2026-08-22
 updated: 2026-08-22
 ---

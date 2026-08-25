@@ -1,0 +1,84 @@
+---
+id: memory-three-tier
+title: Memory 三層記憶 (Three-Tier Memory)
+subject: geek-ai-agent
+tier: 2
+order: 11
+type: article
+nodes:
+  - geek-ai-agent/oryxos-build
+sources:
+  - "[[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#memory]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#memory]]"
+  - "[[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#memory-vs-user]]"
+created: 2026-08-23
+updated: 2026-08-23
+---
+
+# Memory 三層記憶 (Three-Tier Memory)
+
+## Problem Statement
+
+一個聊天機器人每次對話都從零開始，上一分鐘還記得你的偏好，下一分鐘就忘了。一個 Agent 應該能跨對話記住事情——你的工作習慣、你的項目細節、你上次提過的要求。但記憶不是簡單地「多存點東西」，它有三種截然不同的用途：當前對話的上下文（會話記憶）、跨對話的持久經驗（長期記憶）、以及未來才做的事件型記憶（情節記憶）。把這三種混在一起，系統會變得混亂且不可維護。Memory 三層架構就是為了把「Agent 記住什麼、怎麼記、怎麼找回來」這件事拆清楚。
+
+## Why it matters
+
+Memory 是 Agent OS 區別於聊天機器人的核心能力。理解三層記憶的分工，你才知道為什麼不能把記憶塞進 Session、為什麼 MEMORY.md 要在每次提示詞組裝時重新讀取、以及為什麼核心階段只做兩層而把情節記憶留到擴展。US-3 的核心任務就是實現 MemoryService 門面和長期記憶。
+
+## How it works
+
+OryxOS 的記憶系統用一個統一的 MemoryService 門面對外暴露，內部按用途分成三層：
+
+**會話記憶（Session Memory）。** 由 SessionManager 管理，數據存在 SQLite 的 sessions 表裡。每次對話的消息歷史、上下文狀態、臨時變量都在這裡。會話記憶的生命週期跟隨 Session——Session 結束，記憶歸檔。超過上下文窗口的早期輪次直接截斷（保留最近 N 輪，默认 20），不做動態壓縮。Session 重啟後可以從 SQLite 恢復，所以「重啟不丟上下文」。
+
+**長期記憶（Long-Term Memory）。** 存在單個文件 `.oryxos/memory/MEMORY.md` 裡，是一個 append-only 的 Markdown 列表，按日期標題組織。長期記憶的寫入由 Agent 自己決定——它通過兩個內建 Tool（save_memory 和 recall_memory）來操作。save_memory 把重要信息追加到 MEMORY.md，recall_memory 用關鍵詞匹配找回相關記憶。每次組裝提示詞時，MEMORY.md 的完整內容被注入系統提示詞（截斷到約 4000 字符），所以剛保存的記憶下一轮就能看到。格式故意保持寬鬆——不做向量嵌入、不做語義檢索、不做自動抽取，這些是擴展功能。
+
+**情節記憶（Episodic Memory）。** 按時間線記錄「發生了什麼事」的記憶，類似人的日記。核心階段不做情節記憶，留到擴展階段。擴展時會加入自動事實抽取、語義召回（通過 pgvector 或 Milvus）、矛盾檢測和新鮮度管理。
+
+**MEMORY.md vs USER.md。** 這兩個文件容易搞混。USER.md 是 Bootstrap 文件，用戶手動寫、OryxOS 只讀——它是「用戶給 Agent 的初始設定」。MEMORY.md 是長期記憶文件，Agent 通過 save_memory 自己寫——它是「Agent 的成長記錄」。兩者都進入系統提示詞，但來源和生命週期完全不同。
+
+MemoryService 門面的設計是技術方案的一個關鍵調整。原始方案裡 Memory 沒有統一入口，容易造成「Memory 塌縮進 Session」的陷阱（坑三）。門面模式讓 ReAct 循環只跟一個接口打交道，內部按存儲類型分派，升級時改內部實現不改外部接口。
+
+## In plain terms
+
+三層記憶就像人的三種記憶。會話記憶是「你正在跟人聊天時腦子裡記得的前幾句話」——聊完就忘了。長期記憶是「你記在筆記本裡的東西」——隨時翻出來看，但只能靠關鍵詞找。情節記憶是「日記本裡按日期記的事件」——核心階段還沒做，以後再說。
+
+## Analogy
+
+把 Agent 的記憶想成一家公司的知識管理。會話記憶是前台接待員手裡的那張便利貼——客戶走了就扔。長期記憶是公司的共享文件夾——裡面有客戶偏好、歷史訂單，所有員工都能看。情節記憶是公司的事件日誌——記錄了「某月某日發生了什麼」，是擴展功能。MEMORY.md 就是那個共享文件夾，每次開會（組裝提示詞）都把文件夾攤在桌上，大家都能看到。
+
+## Practical use
+
+在 US-3 實作時，你實現的核心是 MemoryService 門面、LongTermMemory（MEMORY.md 的讀寫和截斷）、以及 save_memory 和 recall_memory 兩個內建 Tool。寫完之後用 Demo 二驗證：先跟 Agent 聊天並讓它記住你的偏好（比如「我喜歡喝美式」），重啟 Agent 後再問它，它應該能從 MEMORY.md 裡找回來。整個過程不需要向量庫、不需要語義檢索，純靠文件讀寫和關鍵詞匹配。
+
+## Prerequisites
+
+- 知道 ReAct 循環的機制 — Memory 在每次提示詞組裝時被注入循環（見 [[learn/geek-ai-agent/elements/react-loop|ReAct 循環 (The ReAct Loop)]]）
+- 知道 Profile 的結構 — bootstrap 文件在 Profile 裡配置，MEMORY.md 的注入由 ContextLoader 處理（見 [[learn/geek-ai-agent/elements/profile|Profile（Agent 配置）]]）
+
+## Connections
+
+- [[learn/geek-ai-agent/elements/react-loop|ReAct 循環 (The ReAct Loop)]] — PromptBuilder 在每次循環開始時注入 MEMORY.md 的內容到系統提示詞
+- [[learn/geek-ai-agent/elements/profile|Profile（Agent 配置）]] — bootstrap 文件（含 MEMORY.md 注入邏輯）通過 Profile 的 bootstrap 欄位配置
+- [[learn/geek-ai-agent/elements/implementation-pitfalls|構建陷阱 (Implementation Pitfalls)]] — 「Memory 塌縮進 Session」是坑三，MemoryService 門面就是為防這個坑
+- [[learn/geek-ai-agent/elements/oryxos-architecture|技術方案 (The Technical Solution)]] — 持久化方案（SQLite + MEMORY.md）和「為什麼不用向量庫」的決策
+
+## Deep dive
+
+- [[sources/geek-ai-agent/17 17. 项目篇 OryxOS：需求文档.html#memory]] — requirements-level three-tier memory and the core-stage minimalism
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#memory]] — MemoryService facade design and the LONG-TERM memory interface
+- [[sources/geek-ai-agent/18 18. 项目篇 OryxOS：技术方案文档.html#memory-vs-user]] — USER.md vs MEMORY.md role distinction
+
+## Questions
+
+### Q1. 三層記憶分別是什麼？核心階段做了哪兩層？
+A1. 會話記憶（Session Memory，存在 SQLite）、長期記憶（Long-Term Memory，存在 MEMORY.md）、情節記憶（Episodic Memory）。核心階段做前兩層，情節記憶留到擴展。
+
+### Q2. 為什麼 MEMORY.md 每次組裝提示詞都要重新讀取，不能緩存？
+A2. 因為 Agent 可能在上一輪對話中通過 save_memory 寫入了新內容，重新讀取確保剛保存的記憶下一轮就能被看到。緩存會導致新記憶延遲生效。
+
+### Q3. MEMORY.md 和 USER.md 有什麼差別？為什麼不能互相替代？
+A3. USER.md 是用戶手動寫的初始設定（只讀），MEMORY.md 是 Agent 自己寫的長期記憶（可讀寫）。兩者生命週期不同：USER.md 基本不變，MEMORY.md 持續增長。
+
+### Q4. MemoryService 門面解決了什麼問題？
+A4. 解決了「Memory 塌縮進 Session」的陷阱。門面讓 ReAct 循環只跟一個接口打交道，內部按存儲類型分派（會話→SessionManager，長期→LongTermMemory），升級時改內部實現不改外部接口。

@@ -28,8 +28,8 @@ Coverage for cognition-essence-value and oryxos-build so far. Probe skipped: the
   - [[sources/geek-ai-agent/08 8. 認知篇收尾：從看清楚到做出來.html#一、7 份材料一起講了什麼]]
 
 ### oryxos-build
-- Status: unknown
-- Notes: probe skipped via /nodes geek-ai-agent/oryxos-build skip-probe on 2026-08-19. All strands unknown; /nodes teaches every step deep and /tackle targets everything.
+- Status: confirmed
+- Notes: probe skipped via /nodes geek-ai-agent/oryxos-build skip-probe on 2026-08-19. All strands unknown; /nodes teaches every step deep and /tackle targets everything. Confirmed via /nodes on 2026-08-23.
 - Strands:
   - agent-os-concept — unknown
   - enterprise-need-java — unknown

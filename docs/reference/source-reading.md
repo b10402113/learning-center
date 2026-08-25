@@ -14,9 +14,9 @@ A source is **large** when its `pdftotext` output exceeds either bound:
 
 ## Digest files
 
-- Location: `learn/<subject>/digests/<source-stem>.md` — one file per source, two-level:
+- Location: `learn/<subject>/digests/<source-stem>.md` — one file per source (the stem is the original filename without the `YYYYMMDD_` archive prefix), two-level:
   - **L1 — chapter overview**: a few lines per chapter. Enough for `learn-init` grilling and `roadmap` partitioning without loading detail.
-  - **L2 — section detail**: per-section entry with a summary, key claims, learner-relevant outcomes, and the exact `[[sources/<subject>/<file>#<section>]]` locator. Used by `nodes` for element extraction.
+  - **L2 — section detail**: per-section entry with a summary, key claims, learner-relevant outcomes, and the exact `[[sources/<subject>/completed/<file>#<section>]]` locator. Used by `nodes` for element extraction.
 - Every source gets a digest, large or small. `nodes` reads digests only — never raw sources.
 - Frontmatter records the source fingerprint for staleness checks:
 
@@ -39,7 +39,7 @@ updated: YYYY-MM-DD
 
 ### <section id>
 
-- Locator: `[[sources/<subject>/<file>#<section>]]`
+- Locator: `[[sources/<subject>/completed/<file>#<section>]]`
 - Summary: <what this section explains>
 - Key claims: <claim 1>; <claim 2>
 - Learner-relevant: <outcome or anchor this section can support>
@@ -48,7 +48,7 @@ updated: YYYY-MM-DD
 ## Sub-agent workflow (large sources)
 
 1. Compute `pdftotext` output; chunk on section boundaries (book chapters, numbered sections), each chunk < 2000 lines.
-2. Dispatch sub-agents **in parallel**, one per chunk(<2000 lines). Each sub-agent reads only `sources/<subject>/`, writes a part digest to `learn/<subject>/digests/<source-stem>.<n>.part.md`, and returns only a compact TOC line for its chunk (chapter ids + one-line summaries).
+2. Dispatch sub-agents **in parallel**, one per chunk(<2000 lines). Each sub-agent reads only `sources/<subject>/completed/`, writes a part digest to `learn/<subject>/digests/<source-stem>.<n>.part.md`, and returns only a compact TOC line for its chunk (chapter ids + one-line summaries).
 
 Sub-agents never write anywhere outside `learn/<subject>/digests/`. Their returned message must stay small — the file carries the content, not the message.
 

@@ -1,0 +1,78 @@
+---
+id: reading-your-own-writes
+title: 讀自己寫的內容 (Reading Your Own Writes)
+subject: design-data-intensive-applications
+tier: 3
+order: 4
+type: article
+nodes:
+  - design-data-intensive-applications/single-leader-replication
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Problems with Replication Lag]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Reading Your Own Writes]]"
+created: 2026-08-23
+updated: 2026-08-23
+---
+
+## Problem Statement
+
+你在社群媒體上發了一篇貼文，送出之後馬上重新整理頁面，結果——貼文不見了。你發的是「嗨大家好」，頁面上顯示的卻還是上一篇「今天天氣不錯」。你沒有做錯任何事，系統也沒有壞掉，只是你剛剛寫入的內容還沒有到達你正在讀取的副本（replica）。這個令人困惑的瞬間背後，是一個分散式系統中常見的一致性問題：在非同步複製（Asynchronous Replication）的架構下，使用者可能讀不到自己剛寫入的資料。
+
+## Why it matters
+
+如果使用者不能在寫入後立刻看到自己的更新，他們會覺得系統不可靠——甚至懷疑資料是不是丟了。在電子商務場景下，使用者下單後看不到訂單，可能重複下單；在聊天應用中，訊息發出去卻在對話中消失，使用者會不斷重發。這不只是「不方便」，它會直接侵蝕使用者對系統的信任。理解讀自己寫的內容這個問題，能幫你在設計資料系統時做出正確的取捨：什麼時候必須犧牲效能來保一致性，什麼時候可以容忍短暫的不一致。
+
+## How it works
+
+問題的根源在於非同步複製。在單 leader 複製（Single-Leader Replication）架構中，寫入請求到達 leader 節點後立即返回成功，但資料傳到 follower（副本）需要時間——這個時間差叫做複製延遲（Replication Lag）。如果使用者寫入之後立刻讀取，而讀取請求被路由到一個尚未收到最新資料的 follower，他就會看到「舊」的資料。
+
+具體來說，系統有三種常見的解法：
+
+1. **從 leader 讀取近期寫入（Read from Leader for Recent Writes）**：如果使用者在寫入後的短時間內（例如幾秒內）再次讀取，直接把讀取請求導向 leader，而不是 follower。這是最直接的方案，但增加了 leader 的負擔，而且需要額外的邏輯來判斷「什麼算近期」。
+
+2. **追蹤最後更新時間戳（Track Last-Update Timestamp）**：在寫入時記錄一個時間戳，讀取時比較 follower 的最新時間戳與寫入時間戳。如果 follower 還沒追上，就等一下或切換到 leader。這需要一個全局可比對的時鐘——在分散式系統中這本身就是一個難題（需要考量時鐘偏移 Clock Skew）。
+
+3. **等待副本追上（Wait for Replica to Catch Up）**：寫入後，leader 等待所有 follower 至少追到這次寫入的 offset，然後才回傳成功給使用者。這本質上是把非同步複製降級為同步複製（Synchronous Replication），會增加寫入延遲。
+
+跨裝置（Cross-Device）場景會讓問題更複雜。你在手機上發了一篇貼文，然後切到筆電上查看——如果手機走的是 A 資料中心的 follower，筆電走的是 B 資料中心的 follower，兩個副本的複製進度不同，你可能在筆電上看不到手機發的內容。這時候需要一個集中式的元資料服務（Centralized Metadata Store）來追蹤每個使用者的「已確認寫入位置」，才能做出正確的路由決策。
+
+## In plain terms
+
+白話講，你把一封信投進郵筒，然後立刻去隔壁的郵局查詢——郵局的人還沒收到你的信，所以告訴你「沒有這封信」。不是信丟了，是資訊還在路上。讀自己寫的內容就是確保：你投了信之後，查到的一定是你投的那封，而不是「查無此信」。
+
+## Analogy
+
+想像一家連鎖餐廳有中央廚房（leader）和三個分店（follower）。你點了一份牛排，中央廚房做好了，但還在往分店送。你走到分店說「我的牛排好了嗎？」分店的廚房裡還沒有你的訂單，所以說「沒收到你的訂單」。讀自己寫的內容就是確保：你點完餐後，無論去哪個分店，都能看到你點的那道菜。
+
+## Practical use
+
+在設計需要即時一致性的功能時，讀自己寫的內容是一個必須正面處理的問題。最常見的應用場景包括：
+
+- **社群媒體的個人頁面**：使用者發文後立即查看自己的頁面，一定要看到剛發的內容，否則會懷疑資料丟了。
+- **電子商務的訂單確認**：使用者下單後跳轉到訂單頁面，必須看到剛下的訂單。
+- **聊天訊息**：訊息發出後立刻出現在對話中，這是使用者的基本預期。
+
+實作上，最簡單的策略是在寫入後的幾秒內（例如 5 秒），把該使用者的讀取請求導向 leader。代價是 leader 的負載增加，但對於大多數應用來說，這段「保護期」內的讀取量相對可控。如果需要跨裝置一致性，就需要額外的基礎設施來追蹤使用者的最新寫入位置——例如用一個單獨的追蹤服務記錄每個使用者的「最後已確認 offset」。
+
+## Connections
+
+- [[learn/design-data-intensive-applications/elements/eventual-consistency|最終一致性 (Eventual Consistency)]] — 讀自己寫的內容是 eventual consistency 在寫後讀場景下的具體體現：如果 follower 還沒追上，系統面臨的是一致性取捨
+- [[learn/design-data-intensive-applications/elements/monotonic-reads|單調讀取 (Monotonic Reads)]] — 同為複製延遲導致的一致性異常，但 monotonic reads 關注的是「讀取不會倒退」，而讀自己寫的內容關注的是「寫後讀一定看到自己的寫入」
+- [[learn/design-data-intensive-applications/elements/consistent-prefix-reads|一致前綴讀取 (Consistent Prefix Reads)]] — 三種複製延遲異常之一：確保讀取順序與寫入順序一致，避免因果倒置
+- [[learn/design-data-intensive-applications/elements/asynchronous-replication|非同步複製 (Asynchronous Replication)]] — 讀自己寫的內容問題的根源：非同步複製天然存在延遲，使得 follower 可能暫時讀不到最新資料
+
+## Deep dive
+
+讀自己寫的內容（Reading Your Own Writes），又稱為寫後讀一致性（Read-After-Write Consistency）或讀寫一致性（Read-Write Consistency），是分散式系統中三種關鍵一致性模型之一。這三種模型（讀自己寫的內容、單調讀取、一致前綴讀取）都是在 eventual consistency 的框架下，為特定場景提供的強化保證。
+
+最終一致性（Eventual Consistency）本身是一個故意模糊的說法——它不承諾延遲的上界。你不知道 follower 什麼時候會追上 leader，可能是一毫秒，也可能是一秒，甚至是幾分鐘。在這段不確定的延遲窗口內，系統面臨的取捨是：要不要為了一致性犧牲效能？
+
+實務上，讀自己寫的內容的實作難度取決於應用的部署架構。如果所有使用者都連到同一個資料中心，問題相對簡單——在寫入後的保護期內把讀取導向 leader 即可。但如果系統是多活架構（Multi-Datacenter），不同資料中心的副本進度不同，就需要一個全局的「寫入位置追蹤器」來做精確的路由。這個追蹤器本身也是一個單點依賴（Single Point of Dependency），需要仔細設計它的可用性與容錯能力。
+
+值得注意的是，讀自己寫的內容只保證「你自己」能看到「你自己」的寫入——它不保證其他人也能立刻看到。這是一個有意為之的設計：用較低的成本解決了最令人困惑的使用者體驗問題（自己看不到自己寫的），同時允許其他使用者在短暂的延遲後才看到更新。在大多數應用場景下，這已經足夠了。
+
+## Questions
+
+1. 在一個跨三個資料中心部署的社交應用中，使用者在資料中心 A 發了一篇貼文，然後切換到資料中心 B 查看。系統需要做什麼才能確保使用者在 B 能看到剛發的貼文？
+2. 讀自己寫的內容與單調讀取的差異在哪裡？請各舉一個會觸發該問題的場景。
+3. 為什麼「從 leader 讀取近期寫入」是最常見的解法，但不是完美的解法？它引入了什麼新的取捨？

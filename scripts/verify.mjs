@@ -6,7 +6,7 @@
 // prose quality or content semantics — that is deliberately out of scope.
 //
 // Usage:
-//   node scripts/verify.mjs --node <subject>/<node-id>   # per-node gate (/nodes step 11)
+//   node scripts/verify.mjs --node <subject>/<node-id>   # per-node gate (/nodes step 8)
 //   node scripts/verify.mjs --subject <subject>          # whole-subject lint (AGENTS.md)
 //   node scripts/verify.mjs --subject <subject> --json   # machine-readable report
 //
@@ -30,11 +30,9 @@ const ALLOWED_STATUS = new Set([
   "content-written",
   "edges-written",
 ]);
-const ELEMENT_TYPES = new Set(["article", "video", "question"]);
 
 const NODE_FM = ["id", "title", "subject", "tier", "order", "status", "goal", "sources", "steps", "created", "updated"];
-const STEP_FM = ["id", "title", "subject", "teaches", "sources", "created", "updated"];
-const ELEMENT_FM = ["id", "title", "subject", "tier", "order", "type", "nodes", "sources", "created", "updated"];
+const STEP_FM = ["id", "title", "subject", "sources", "created", "updated"];
 const EDGE_FM = ["title", "type", "from", "to", "nodes", "created", "updated"];
 
 function sha256(buf) {
@@ -73,7 +71,6 @@ function readFiles(dir, exts = [".md", ".mdx"]) {
 function scanSubjectDir(subject) {
   const sub = join(LEARN_ROOT, subject);
   const nodesDir = join(sub, "nodes");
-  const elementsDir = join(sub, "elements");
   const edgesDir = join(sub, "edges");
   const digestsDir = join(sub, "digests");
 
@@ -97,14 +94,10 @@ function scanSubjectDir(subject) {
     }
   }
 
-  const elements = readFiles(elementsDir).map((f) => ({
-    ...f,
-    id: f.name.replace(/\.(mdx|md)$/, ""),
-  }));
   const edges = readFiles(edgesDir).map((f) => ({ ...f, name: f.name }));
   const digests = readFiles(digestsDir, [".md"]);
 
-  return { sub, nodes, steps, elements, edges, digests };
+  return { sub, nodes, steps, edges, digests };
 }
 
 function readSubjectDoc(subject, file) {
@@ -235,7 +228,7 @@ function checkDag(report, path, nodeId, fm, stepFiles, stepIdsByNode) {
   }
 }
 
-function checkReferences(report, path, text, subject, elementIds, nodeIds, stepKeys) {
+function checkReferences(report, path, text, subject, nodeIds, stepKeys) {
   const rel = path.replace(REPO_ROOT + "/", "");
   const links = extractLinks(text, subject);
   for (const target of links) {
@@ -243,12 +236,7 @@ function checkReferences(report, path, text, subject, elementIds, nodeIds, stepK
     // learn/<subject>/<kind>/...
     if (parts[0] !== "learn" || parts[1] !== subject) continue;
     const kind = parts[2];
-    if (kind === "elements") {
-      const id = parts[3];
-      if (!elementIds.has(id)) {
-        report.fail(rel, 0, "link-element", `element link to missing element "${id}"`);
-      }
-    } else if (kind === "nodes") {
+    if (kind === "nodes") {
       const nodeId = parts[3];
       if (parts.length === 4) {
         if (!nodeIds.has(nodeId)) {
@@ -277,7 +265,7 @@ function checkSourceLinks(report, path, text, subject, sourceNames) {
     const fileName = parts.slice(1).join("/");
     if (srcSubject !== subject) {
       report.fail(rel, 0, "src-path", `source link subject "${srcSubject}" does not match "${subject}"`);
-    } else if (!sourceNames.has(fileName)) {
+    } else if (!sourceNames.has(fileName) && !sourceNames.has(fileName + ".md")) {
       report.fail(rel, 0, "src-path", `source file "${fileName}" not found under sources/${subject}/`);
     } else if (locator) {
       checkLocator(report, rel, locator);
@@ -307,38 +295,9 @@ function checkLocator(report, rel, locator) {
   }
 }
 
-function checkElementPresence(report, path, subject, fm, body, elementIds) {
-  const rel = path.replace(REPO_ROOT + "/", "");
-  const connectionsSection = findHeadingSection(body, "Connections");
-  if (connectionsSection === null) {
-    report.fail(rel, 0, "elem-questions", "missing Connections section");
-  } else {
-    const links = extractLinks(connectionsSection, subject).filter((l) => l.startsWith(`learn/${subject}/elements/`));
-    if (links.length < 2) {
-      report.fail(rel, 0, "elem-connections", `Connections has ${links.length} element link(s); expected at least 2`);
-    }
-  }
-  if (findHeadingSection(body, "Questions") === null) {
-    report.fail(rel, 0, "elem-questions", "missing Questions section");
-  }
-}
-
-function checkElementType(report, path, fm) {
-  const rel = path.replace(REPO_ROOT + "/", "");
-  if (fm.type !== undefined && !ELEMENT_TYPES.has(String(fm.type))) {
-    report.fail(rel, 1, "fm-type", `invalid element type: ${fm.type}`);
-  }
-  if (String(fm.type) === "video" && !fm.videoUrl) {
-    report.fail(rel, 1, "fm-type", "video element requires videoUrl");
-  }
-  if (fm.type === undefined) {
-    report.fail(rel, 1, "fm-type", "element missing type (article | video)");
-  }
-}
-
 // --- scope runners ---------------------------------------------------------
 
-function runNodeChecks(report, subject, nodeId, scan, digestIdx, sourceNames, elementIds, nodeIds, stepKeys) {
+function runNodeChecks(report, subject, nodeId, scan, digestIdx, sourceNames, nodeIds, stepKeys) {
   const nodeFile = scan.nodes.find((n) => n.id === nodeId);
   if (!nodeFile) {
     report.fail("", 0, "dag-step-exists", `node "${nodeId}" not found under nodes/`);
@@ -356,7 +315,7 @@ function runNodeChecks(report, subject, nodeId, scan, digestIdx, sourceNames, el
   checkFrontmatter(report, nodeFile.path, nodeFm, NODE_FM);
   checkIdFilename(report, nodeFile.path, nodeFm.id, nodeFile.id);
   checkDag(report, nodeFile.path, nodeId, nodeFm, stepFiles, stepIdsByNode);
-  checkReferences(report, nodeFile.path, nodeBody, subject, elementIds, nodeIds, stepKeys);
+  checkReferences(report, nodeFile.path, nodeBody, subject, nodeIds, stepKeys);
   checkSourceLinks(report, nodeFile.path, nodeBody, subject, sourceNames);
 
   const nodeSteps = scan.steps.filter((s) => s.nodeId === nodeId);
@@ -364,31 +323,19 @@ function runNodeChecks(report, subject, nodeId, scan, digestIdx, sourceNames, el
     const { data: fm, body } = parse(step.path);
     checkFrontmatter(report, step.path, fm, STEP_FM);
     checkIdFilename(report, step.path, fm.id, step.id);
-    if (Array.isArray(fm.teaches)) {
-      for (const t of fm.teaches) {
-        const id = String(t).split("/").pop();
-        if (!elementIds.has(id)) {
-          report.fail(step.path.replace(REPO_ROOT + "/", ""), 1, "teaches-resolves", `teaches element "${id}" not found`);
-        }
-      }
-    }
-    checkReferences(report, step.path, body, subject, elementIds, nodeIds, stepKeys);
+    checkReferences(report, step.path, body, subject, nodeIds, stepKeys);
     checkSourceLinks(report, step.path, body, subject, sourceNames);
   }
 
-  checkPolishResolve(report, subject);
   checkDigestHash(report, subject, sourceNames, digestIdx);
 }
 
-function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, elementIds, nodeIds, stepKeys) {
+function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, nodeIds, stepKeys) {
   for (const node of scan.nodes) {
     const { data: fm, body } = parse(node.path);
     checkFrontmatter(report, node.path, fm, NODE_FM);
     checkIdFilename(report, node.path, fm.id, node.id);
-    if (Array.isArray(fm.elements) && fm.elements.length > 0) {
-      report.fail(node.path.replace(REPO_ROOT + "/", ""), 1, "fm-nodes-no-elements", "node container must not carry a flat elements list");
-    }
-    checkReferences(report, node.path, body, subject, elementIds, nodeIds, stepKeys);
+    checkReferences(report, node.path, body, subject, nodeIds, stepKeys);
     checkSourceLinks(report, node.path, body, subject, sourceNames);
   }
 
@@ -403,15 +350,7 @@ function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, element
     const { data: fm, body } = parse(step.path);
     checkFrontmatter(report, step.path, fm, STEP_FM);
     checkIdFilename(report, step.path, fm.id, step.id);
-    if (Array.isArray(fm.teaches)) {
-      for (const t of fm.teaches) {
-        const id = String(t).split("/").pop();
-        if (!elementIds.has(id)) {
-          report.fail(step.path.replace(REPO_ROOT + "/", ""), 1, "teaches-resolves", `teaches element "${id}" not found`);
-        }
-      }
-    }
-    checkReferences(report, step.path, body, subject, elementIds, nodeIds, stepKeys);
+    checkReferences(report, step.path, body, subject, nodeIds, stepKeys);
     checkSourceLinks(report, step.path, body, subject, sourceNames);
   }
 
@@ -420,33 +359,9 @@ function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, element
     checkDag(report, node.path, node.id, fm, stepFiles, stepIdsByNode);
   }
 
-  for (const element of scan.elements) {
-    const { data: fm, body } = parse(element.path);
-    checkFrontmatter(report, element.path, fm, ELEMENT_FM);
-    checkIdFilename(report, element.path, fm.id, element.id);
-    checkElementType(report, element.path, fm);
-    checkElementPresence(report, element.path, subject, fm, body, elementIds);
-    if (Array.isArray(fm.nodes)) {
-      for (const n of fm.nodes) {
-        const id = String(n).split("/").pop();
-        if (!nodeIds.has(id)) {
-          report.fail(element.path.replace(REPO_ROOT + "/", ""), 1, "elem-nodes-ref", `nodes reference missing node "${id}"`);
-        }
-      }
-    }
-    checkReferences(report, element.path, body, subject, elementIds, nodeIds, stepKeys);
-    checkSourceLinks(report, element.path, body, subject, sourceNames);
-  }
-
   for (const edge of scan.edges) {
     const { data: fm, body } = parse(edge.path);
     checkFrontmatter(report, edge.path, fm, EDGE_FM);
-    for (const key of ["from", "to"]) {
-      const id = String(fm[key] ?? "").split("/").pop();
-      if (id && !elementIds.has(id)) {
-        report.fail(edge.path.replace(REPO_ROOT + "/", ""), 1, "lint-edge-refs", `edge ${key} element "${id}" not found`);
-      }
-    }
     if (Array.isArray(fm.nodes)) {
       for (const n of fm.nodes) {
         const id = String(n).split("/").pop();
@@ -455,23 +370,12 @@ function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, element
         }
       }
     }
-    checkReferences(report, edge.path, body, subject, elementIds, nodeIds, stepKeys);
+    checkReferences(report, edge.path, body, subject, nodeIds, stepKeys);
   }
 
-  checkOrphans(report, subject, scan, elementIds, nodeIds, stepKeys);
+  checkOrphans(report, subject, scan, nodeIds, stepKeys);
   checkNodeCount(report, subject, scan, digestIdx);
-  checkPolishResolve(report, subject);
   checkDigestHash(report, subject, sourceNames, digestIdx);
-}
-
-function checkPolishResolve(report, subject) {
-  const mem = readSubjectDoc(subject, "MEMORY.md");
-  const { data } = parseFrontmatter(mem);
-  const slug = data.polish;
-  const rel = `learn/${subject}/MEMORY.md`;
-  if (slug && slug !== "none" && !existsSync(join(REPO_ROOT, "polish", slug, "polish.md"))) {
-    report.fail(rel, 0, "polish-resolve", `polish template "${slug}" does not resolve to polish/${slug}/polish.md`);
-  }
 }
 
 function checkDigestHash(report, subject, sourceNames, digestIdx) {
@@ -500,23 +404,20 @@ function checkNodeCount(report, subject, scan, digestIdx) {
   }
 }
 
-function checkOrphans(report, subject, scan, elementIds, nodeIds, stepKeys) {
+function checkOrphans(report, subject, scan, nodeIds, stepKeys) {
   const allLinks = new Set();
-  const refs = [];
   const collect = (text) => {
     for (const l of extractLinks(text, subject)) {
-      refs.push(l);
       const parts = l.split("/");
       if (parts[0] === "learn" && parts[1] === subject) {
-        if (parts[2] === "elements") allLinks.add(parts[3]);
-        else if (parts[2] === "nodes") {
+        if (parts[2] === "nodes") {
           if (parts.length === 4) allLinks.add(parts[3]);
           else if (parts.length === 5) allLinks.add(`${parts[3]}/${parts[4]}`);
         }
       }
     }
   };
-  for (const f of [...scan.nodes, ...scan.steps, ...scan.elements, ...scan.edges]) {
+  for (const f of [...scan.nodes, ...scan.steps, ...scan.edges]) {
     collect(readFileSync(f.path, "utf8"));
   }
   const roadmap = readSubjectDoc(subject, "ROADMAP.md");
@@ -524,9 +425,6 @@ function checkOrphans(report, subject, scan, elementIds, nodeIds, stepKeys) {
   const mastery = readSubjectDoc(subject, "mastery.md");
   collect(mastery);
 
-  for (const el of scan.elements) {
-    if (!allLinks.has(el.id)) report.flag(`learn/${subject}/elements/${el.name}`, "lint-orphan", "element is not referenced by any link");
-  }
   for (const n of scan.nodes) {
     if (!allLinks.has(n.id)) report.flag(`learn/${subject}/nodes/${n.name}`, "lint-orphan", "node is not referenced by any link");
   }
@@ -576,7 +474,6 @@ function main(argv) {
   const scan = scanSubjectDir(subject);
   const digestIdx = buildDigestIndex(subject);
   const sourceNames = new Set(sourceFilesFor(subject).map((s) => s.name));
-  const elementIds = new Set(scan.elements.map((e) => e.id));
   const nodeIds = new Set(scan.nodes.map((n) => n.id));
   const stepKeys = new Set(scan.steps.map((s) => `${s.nodeId}/${s.id}`));
 
@@ -584,9 +481,9 @@ function main(argv) {
   digestLocatorsCache = null;
 
   if (nodeTarget) {
-    runNodeChecks(report, subject, nodeTarget, scan, digestIdx, sourceNames, elementIds, nodeIds, stepKeys);
+    runNodeChecks(report, subject, nodeTarget, scan, digestIdx, sourceNames, nodeIds, stepKeys);
   } else {
-    runSubjectChecks(report, subject, scan, digestIdx, sourceNames, elementIds, nodeIds, stepKeys);
+    runSubjectChecks(report, subject, scan, digestIdx, sourceNames, nodeIds, stepKeys);
   }
 
   if (json) {
@@ -609,7 +506,7 @@ function main(argv) {
   const files = new Set(report.failures.map((f) => f.file).filter(Boolean));
   const flagFiles = new Set(report.flags.map((f) => f.file).filter(Boolean));
   console.log(
-    `SUMMARY: ${scan.nodes.length} node(s), ${scan.steps.length} step(s), ${scan.elements.length} element(s), ${scan.edges.length} edge(s) checked; ${report.failures.length} failure(s) in ${files.size} file(s), ${report.flags.length} flag(s) in ${flagFiles.size} file(s); exit ${report.hasFailures ? 1 : 0}`,
+    `SUMMARY: ${scan.nodes.length} node(s), ${scan.steps.length} step(s), ${scan.edges.length} edge(s) checked; ${report.failures.length} failure(s) in ${files.size} file(s), ${report.flags.length} flag(s) in ${flagFiles.size} file(s); exit ${report.hasFailures ? 1 : 0}`,
   );
 
   if (report.failures.length > 0) {

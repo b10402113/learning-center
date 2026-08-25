@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>框架里的装饰与代理</title>
+<link rel="stylesheet" href="../assets/shared.css">
+<style>
+  .fw-card {
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    margin: 1rem 0;
+  }
+  .fw-card .tag-row { margin-bottom: 0.5rem; }
+  .fw-card h4 { margin: 0 0 0.4rem; font-size: 1rem; }
+  .fw-card p { margin: 0.3rem 0; font-size: 0.92rem; }
+  .quiz-result { margin-top: 0.75rem; font-weight: 600; }
+  .quiz-result.pass { color: var(--success); }
+  .quiz-result.fail { color: var(--danger); }
+</style>
+</head>
+<body>
+
+<p class="meta">设计模式 · 装饰器与代理 · 第 5/5 课</p>
+
+<h1>框架里的装饰与代理</h1>
+
+<p><span class="tag tag-structural">结构型</span></p>
+
+<div class="goal">
+  <strong>本课目标</strong><br>
+  认出 Spring、MyBatis、JDK I/O 里的装饰器和代理结构，并说明它们解决了什么问题。
+</div>
+
+<h2>JDK I/O 流：最经典的装饰器</h2>
+
+<div class="fw-card">
+  <div class="tag-row"><span class="tag tag-structural">装饰器</span></div>
+  <h4>JDK I/O 流</h4>
+  <p><strong>你已经用过无数次了：</strong></p>
+  <pre><code>// FileReader 是 ConcreteComponent
+// BufferedReader 是 ConcreteDecorator
+BufferedReader reader = new BufferedReader(new FileReader("data.txt"));
+
+// FileInputStream 是 ConcreteComponent
+// InputStreamReader 是 ConcreteDecorator（加了字符编码转换）
+// BufferedReader 再套一层（加缓冲）
+InputStreamReader isr = new InputStreamReader(
+    new FileInputStream("data.txt"), "UTF-8");
+BufferedReader br = new BufferedReader(isr);</code></pre>
+  <p><strong>角色映射：</strong>Component = Reader/InputStream 接口，ConcreteComponent = FileReader/FileInputStream，Decorator = ReaderInputStream/BufferedReader，ConcreteDecorator = 带具体功能的子类。</p>
+  <p><strong>为什么用装饰器：</strong>I/O 需要灵活组合功能（缓冲 + 编码转换 + 行读取），用继承会爆炸。装饰器让你像搭积木一样组合。</p>
+</div>
+
+<h2>MyBatis Mapper：JDK 动态代理</h2>
+
+<div class="fw-card">
+  <div class="tag-row"><span class="tag tag-structural">代理</span></div>
+  <h4>MyBatis Mapper bean</h4>
+  <p><strong>核心机制：</strong>定义接口 + @Select/@Insert 注解 → JDK 动态代理 → 读注解执行 SQL → 返回结果。</p>
+  <pre><code>// 你写的：只有接口
+@Mapper
+public interface UserDao {
+    @Select("select userName from user where id = #{uId}")
+    String queryUserName(String uId);
+}
+
+// MyBatis 做的（简化）：
+// MapperFactoryBean.getObject()
+//   → Proxy.newProxyInstance(classLoader, new Class[]{UserDao.class}, handler)
+//   → handler.invoke(): 读 @Select 注解 → 执行 SQL → 返回结果</code></pre>
+  <p><strong>角色映射：</strong>Component = UserDao 接口，InvocationHandler = JdkInvocationHandler（读注解+执行SQL），Proxy = JDK 动态代理生成的代理对象。</p>
+  <p><strong>为什么用代理：</strong>控制数据库访问——屏蔽连接获取、SQL 解析、结果映射等细节，调用方只看到接口。</p>
+</div>
+
+<h2>Spring AOP：代理 + 注解</h2>
+
+<div class="fw-card">
+  <div class="tag-row"><span class="tag tag-structural">代理</span></div>
+  <h4>Spring AOP 切面</h4>
+  <p><strong>你写过这样的代码：</strong></p>
+  <pre><code>@Aspect
+@Component
+public class LogAspect {
+    @Around("execution(* com.example.service.*.*(..))")
+    public Object around(ProceedingJoinPoint point) throws Throwable {
+        long start = System.currentTimeMillis();
+        Object result = point.proceed();  // 调用目标方法
+        long cost = System.currentTimeMillis() - start;
+        log.info("方法 {} 耗时 {}ms", point.getSignature().getName(), cost);
+        return result;
+    }
+}</code></pre>
+  <p><strong>背后发生了什么：</strong>Spring 为被切面覆盖的 Bean 生成代理对象（JDK 动态代理或 CGLIB）。调用方拿到的是代理，每次调用方法都经过 AOP 切面链。</p>
+  <p><strong>为什么用代理：</strong>控制方法调用——在不修改业务代码的前提下，织入日志、事务、权限等横切逻辑。</p>
+</div>
+
+<h2>Spring Security：过滤器链（装饰器风格）</h2>
+
+<div class="fw-card">
+  <div class="tag-row"><span class="tag tag-structural">装饰器 / 责任链</span></div>
+  <h4>Spring Security FilterChain</h4>
+  <p><strong>结构：</strong>多个 SecurityFilter 依次处理请求，每个 filter 可以在转发前后加逻辑（认证、授权、CSRF 检查）。</p>
+  <pre><code>// 每个 filter 包裹下一个
+public class OncePerRequestFilter implements Filter {
+    protected void doFilterInternal(request, response, chain) {
+        // 前置逻辑（认证）
+        if (!isAuthenticated(request)) { /* 拒绝 */ return; }
+        chain.doFilter(request, response);  // 转发给下一个 filter
+        // 后置逻辑（审计）
+    }
+}</code></pre>
+  <p><strong>判断：</strong>每个 filter 给请求加了新功能（认证、授权、CSRF），是装饰器风格。但整体是责任链模式——每个 filter 决定是否继续传递。</p>
+</div>
+
+<h2>识别框架模式的技巧</h2>
+
+<table>
+  <thead>
+    <tr><th>看到什么</th><th>想什么模式</th><th>问自己</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>new A(new B(...))</code> 套娃</td>
+      <td>装饰器</td>
+      <td>是给 B 加功能吗？</td>
+    </tr>
+    <tr>
+      <td>接口 + @Select/@Insert，没有实现类</td>
+      <td>JDK 动态代理</td>
+      <td>是在控制数据库访问吗？</td>
+    </tr>
+    <tr>
+      <td>@Aspect + @Around/@Before</td>
+      <td>代理</td>
+      <td>是在拦截方法调用织入逻辑吗？</td>
+    </tr>
+    <tr>
+      <td>Filter + chain.doFilter()</td>
+      <td>装饰器 / 责任链</td>
+      <td>是加功能还是传递请求？</td>
+    </tr>
+    <tr>
+      <td>FactoryBean + getObject()</td>
+      <td>可能是代理</td>
+      <td>getObject() 返回的是代理对象吗？</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>关键洞察</h2>
+
+<div class="callout tip">
+  <span class="label">框架 = 模式的容器</span>
+  你每天用的框架里到处是设计模式。JDK I/O 是装饰器，MyBatis 是代理，Spring AOP 是代理，Spring Security 是装饰器/责任链。认出这些结构，读源码就不再是"看天书"——你知道它在做什么，只是不知道细节。
+</div>
+
+<h2>本课小结</h2>
+
+<ol>
+  <li>JDK I/O 流是最经典的装饰器——BufferedReader 装饰 FileReader，加缓冲功能</li>
+  <li>MyBatis Mapper 是 JDK 动态代理——接口 + @Select 注解 → 代理执行 SQL</li>
+  <li>Spring AOP 是代理——为 Bean 生成代理对象，拦截方法调用织入切面</li>
+  <li>Spring Security FilterChain 是装饰器/责任链风格——每个 filter 给请求加功能</li>
+  <li>识别技巧：看到套娃想装饰器，看到无实现类的接口想代理，看到 @Aspect 想代理</li>
+</ol>
+
+<h2>推荐阅读</h2>
+<p>📖 <a href="https://refactoring.guru/design-patterns/decorator">Refactoring.Guru — Decorator</a> · <a href="https://refactoring.guru/design-patterns/proxy">Refactoring.Guru — Proxy</a>（框架实例对照阅读）</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" id="q1">
+  <p><strong>1. <code>new BufferedReader(new FileReader(...))</code> 是什么模式？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">代理模式</button>
+  <button class="quiz-option" onclick="check(this, true)">装饰器模式——BufferedReader 给 FileReader 加了缓冲功能</button>
+  <button class="quiz-option" onclick="check(this, false)">适配器模式</button>
+  <button class="quiz-option" onclick="check(this, false)">外观模式</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q2" style="margin-top: 1rem;">
+  <p><strong>2. MyBatis Mapper 只有接口没有实现类，这靠什么实现？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">装饰器模式</button>
+  <button class="quiz-option" onclick="check(this, false)">工厂模式</button>
+  <button class="quiz-option" onclick="check(this, true)">JDK 动态代理——Proxy.newProxyInstance 生成代理类</button>
+  <button class="quiz-option" onclick="check(this, false)">模板方法模式</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q3" style="margin-top: 1rem;">
+  <p><strong>3. Spring AOP 为 Bean 生成代理对象，这属于什么模式？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">装饰器模式</button>
+  <button class="quiz-option" onclick="check(this, true)">代理模式——控制方法调用，织入切面逻辑</button>
+  <button class="quiz-option" onclick="check(this, false)">观察者模式</button>
+  <button class="quiz-option" onclick="check(this, false)">策略模式</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q4" style="margin-top: 1rem;">
+  <p><strong>4. 看到 <code>new A(new B(new C(...)))</code> 这种套娃结构，首先想到什么模式？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">代理模式</button>
+  <button class="quiz-option" onclick="check(this, true)">装饰器模式——层层包裹给原始对象加功能</button>
+  <button class="quiz-option" onclick="check(this, false)">组合模式</button>
+  <button class="quiz-option" onclick="check(this, false)">责任链模式</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q5" style="margin-top: 1rem;">
+  <p><strong>5. Spring Security 的 FilterChain 是什么模式？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">纯代理模式</button>
+  <button class="quiz-option" onclick="check(this, false)">纯装饰器模式</button>
+  <button class="quiz-option" onclick="check(this, true)">装饰器/责任链——每个 filter 给请求加功能并决定是否传递</button>
+  <button class="quiz-option" onclick="check(this, false)">外观模式</button>
+  <div class="quiz-result"></div>
+</div>
+
+<script>
+function check(btn, correct) {
+  const quiz = btn.closest('.quiz');
+  const result = quiz.querySelector('.quiz-result');
+  quiz.querySelectorAll('.quiz-option').forEach(b => { b.disabled = true; });
+  if (correct) {
+    btn.classList.add('correct');
+    result.textContent = '✓ 正确';
+    result.className = 'quiz-result pass';
+  } else {
+    btn.classList.add('wrong');
+    quiz.querySelectorAll('.quiz-option').forEach(b => {
+      if (!b.classList.contains('wrong')) b.style.opacity = '0.5';
+    });
+    result.textContent = '✗ 再想想，复习一下上面的内容';
+    result.className = 'quiz-result fail';
+  }
+}
+</script>
+
+<div class="footer">
+  <p><a href="decorator-vs-proxy.html">← 上一课：装饰器 vs 代理</a></p>
+  <p>🎉 装饰器与代理节点全部完成！建议运行 <code>/tackle decorator-essence</code> 等步骤进行掌握度验证。</p>
+  <p>💡 有任何不清楚的地方？随时问你的 AI 老师。</p>
+</div>
+
+</body>
+</html>

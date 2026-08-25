@@ -7,17 +7,12 @@ This repo turns raw material into customized, subject-specific lessons. A **node
 ```text
 ├── AGENTS.md          ← repository schema and workflow
 ├── CLAUDE.md          ← @AGENTS.md
-├── docs/reference/    ← shared skill protocols (e.g. source-reading.md, polish.md)
+├── docs/reference/    ← shared skill protocols (e.g. source-reading.md)
 ├── sources/           ← raw, immutable inputs, one folder per subject
 │   └── <subject>/
-├── polish/            ← hand-written polish style templates (tone spec + example articles for polish-agent)
-│   └── <author-slug>/
-│       ├── polish.md
-│       └── examples/
-│           └── <title>.md
 ├── learn/             ← generated learning material, one folder per subject
 │   └── <subject>/
-│       ├── MEMORY.md  ← learner profile from /learn-init (incl. language, polish template)
+│       ├── MEMORY.md  ← learner profile from /learn-init (incl. language)
 │       ├── ROADMAP.md ← node index and course plan
 │       ├── mastery.md ← per-node mastery report (unknown | partial | solid) from /probe, written back by /tackle
 │       ├── digests/   ← two-level source digests from /learn-init & /roadmap
@@ -36,11 +31,12 @@ This repo turns raw material into customized, subject-specific lessons. A **node
     → /roadmap <subject>
     → /probe <subject>/<node-id>   ← per node, before viewing it
     → /nodes <subject>/<node-name>   ← or <node-name> skip-probe to skip /probe
+    → /teach <subject>/<node-name>   ← interactive step-by-step teaching, writes content to step files
     → /edges <subject>/<node-name>
 /tackle <step-id>             ← runtime skill, invoked per step at learning time
 ```
 
-Each stage is user-invoked. `subject/node-name` is explicit so a node name never has to be unique across subjects. The roadmap stage partitions into nodes and writes `draft` node containers; the probe stage measures one node's mastery before it is viewed (a hard gate); the nodes stage reasons out the node's step-DAG, gets learner confirmation, dispatches element sub-agents (step 7) and waits, then dispatches step sub-agents (step 8) to write each step article; the edges stage adds high-value relationships. `/tackle` verifies one step at learning time, targeting the strands the probe rated weak. A polish template is chosen per subject at `/learn-init`; `/nodes` applies it when polishing step articles, never during drafting.
+Each stage is user-invoked. `subject/node-name` is explicit so a node name never has to be unique across subjects. The roadmap stage partitions into nodes and writes `draft` node containers; the probe stage measures one node's mastery before it is viewed (a hard gate); the nodes stage reasons out the node's step-DAG, gets learner confirmation, dispatches element sub-agents (step 7) and waits, then creates skeleton step files (step 8) and the node container; the teach stage fills step content interactively via step-by-step teaching; the edges stage adds high-value relationships. `/tackle` verifies one step at learning time, targeting the strands the probe rated weak.
 
 ## Core Principles
 
@@ -50,14 +46,15 @@ Each stage is user-invoked. `subject/node-name` is explicit so a node name never
 4. **Elements compound** — Reusing a concept updates its canonical element incrementally. Preserve useful existing explanations while adding supported depth, examples, connections, and sources.
 5. **Edges interleave** — Edges make the learner compare, contrast, and judge instead of retrieving in isolation. Prefer a few strong relationships.
 6. **Knowledge stays traceable** — Every claim points to a source, and every step records the elements it teaches; the node records its step-DAG.
-7. **Polish styles, pedagogy decides** — A polish template supplies the final style of step articles; `MEMORY.md` owns the language and teaching constraints. Writer skills enforce both, and content stays cited to its subject sources.
+7. **Teach-node style, pedagogy decides** — Step articles follow the teach-node writing standard with MDX components; `MEMORY.md` owns the language and teaching constraints. Writer skills enforce both, and content stays cited to its subject sources.
 
 ## Skills
 
-- `/learn-init <subject>` — ensure the subject's source digests exist (sub-agent path for large sources per `docs/reference/source-reading.md`), interview the learner, and write `learn/<subject>/MEMORY.md` (including language and the chosen polish template)
+- `/learn-init <subject>` — ensure the subject's source digests exist (sub-agent path for large sources per `docs/reference/source-reading.md`), interview the learner, and write `learn/<subject>/MEMORY.md` (including language)
 - `/probe <subject>/<node-id>` — adaptive MCQ from shallow to deep across one node's source scope, binary-searching each strand; writes that node's mastery entry (`unknown | partial | solid`), moves the node `draft → probed` (a hard gate before `/nodes`, bypassed by `/nodes … skip-probe`), and never prunes content
 - `/roadmap <subject>` — partition the material into nodes against the formula baseline, propose the full candidate list for learner confirmation, then write `ROADMAP.md` and `draft` node containers
-- `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation (each step's depth calibrated from the node's probe mastery — shallow where `solid`, deep where `unknown`, never pruning), then dispatch element sub-agents (step 7) and wait for them to complete, then dispatch step sub-agents (step 8) to write each step article. `skip-probe` skips the probe: the learner asserts they know nothing, so a `draft` node is accepted and every step is taught deep
+- `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation (each step's depth calibrated from the node's probe mastery — shallow where `solid`, deep where `unknown`, never pruning), then dispatch element sub-agents (step 7) and wait for them to complete, then create skeleton step files (step 8) and the node container. `skip-probe` skips the probe: the learner asserts they know nothing, so a `draft` node is accepted and every step is taught deep
+- `/teach <subject>/<node-name>` — interactive step-by-step teaching following the node's step-DAG; for each step, teaches concepts, checks understanding, and writes the lesson content to the skeleton step file created by `/nodes`. `skip-task` skips the check questions and writes HTML + MDX directly for each step without user confirmation
 - `/edges <subject>/<node-name>` — propose and incrementally write strong edges for the node, including justified cross-node edges
 - `/tackle <step-id>` — runtime adaptive MCQ for one step, targeting the strands the node's probe rated `unknown`/`partial`; passing estimates its concepts at `solid`, marks the step complete, and writes mastery back
 
@@ -71,10 +68,6 @@ All stages share `docs/reference/source-reading.md`. Sources are read once into 
 
 **Node count baseline.** `target = clamp(round(total_pdftotext_lines / 1100), 3, 30)`. It is a soft target for the roadmap checkpoint, not a gate — the learner confirms or adjusts the final partition.
 
-## Polish reading
-
-`/learn-init` and `/nodes` share `docs/reference/polish.md`. Templates in `polish/<author>/` are hand-written style guides (never derived from transcripts) — a tone specification in `polish.md` plus example articles in `examples/`. `/nodes` applies the chosen template through `MEMORY.md` frontmatter — `language`, `polish` — by dispatching the polish-agent to read `polish/<slug>/polish.md` and `polish/<slug>/examples/*.md` after drafting; `polish: none` skips polishing entirely and step articles stay as drafted. Polish applies to step articles only, never to elements or edges.
-
 ## Formats
 
 The writing skills are the single source of truth for generated templates.
@@ -85,7 +78,6 @@ The writing skills are the single source of truth for generated templates.
 - **Element** — `learn/<subject>/elements/<element-id>.mdx`. Frontmatter: `id, title, subject, tier, order, type, nodes, sources, created, updated`. `type` is `article` (default) or `video`; `video` requires `videoUrl`. The `question` type is deprecated — graded verification lives only in `/tackle`, and a `question`-typed element is marked deprecated in the generated graph. Sections: Problem Statement · Why it matters · How it works · In plain terms (optional) · Analogy (optional) · Practical use · Prerequisites (optional) · Connections · Deep dive · Questions. The `Questions` section is a no-grade preview self-check and never affects completion. `Connections` and `Deep dive` stay in English; other headings render per `MEMORY.md` language.
 - **Mastery** — `learn/<subject>/mastery.md`, the per-subject mastery report. Written by `/probe` (and seeded as all-`unknown` by `/nodes … skip-probe`), written back by `/tackle`; it never prunes content. Keyed by node, each node's strands rated `unknown | partial | solid`. It is calibration data only — step completion is separate client-side state.
 - **Edge** — `learn/<subject>/edges/<edge-id>.mdx`. Frontmatter: `title, type, from, to, nodes, created, updated`. Sections: The relationship · Why it matters · When each applies · Interleave.
-- **Polish template** — `polish/<author-slug>/polish.md` (tone spec) plus `polish/<author-slug>/examples/*.md` (example articles). Tone-spec frontmatter: `id, title, created, updated`. Sections: Style · Voice · Explanation moves · Style habits · Rhetorical devices · Exemplars · Negative list. Format and consumption rules per `docs/reference/polish.md`.
 
 Element links use stable, node-qualified IDs with display aliases:
 
@@ -119,7 +111,7 @@ The subject roadmap uses `draft → confirmed`. Each node uses:
 draft → probed → confirmed → nodes-written → content-written → edges-written
 ```
 
-`/roadmap` creates `draft` nodes. Invoking `/probe <subject>/<node-id>` measures a node and moves it `draft → probed` — a hard gate, since `/nodes` refuses a `draft` node. The sole exception is `/nodes <subject>/<node-id> skip-probe`: a learner who asserts they know nothing about the topic skips the probe, so `/nodes` accepts the `draft` node and moves it `draft → confirmed` directly, teaching every step deep. Invoking `/nodes <subject>/<node-id>` confirms a probed node and moves it through `nodes-written` and `content-written` (writing each step article). `/edges` asks for confirmation of its candidate edge set and only then marks the node `edges-written`.
+`/roadmap` creates `draft` nodes. Invoking `/probe <subject>/<node-id>` measures a node and moves it `draft → probed` — a hard gate, since `/nodes` refuses a `draft` node. The sole exception is `/nodes <subject>/<node-id> skip-probe`: a learner who asserts they know nothing about the topic skips the probe, so `/nodes` accepts the `draft` node and moves it `draft → confirmed` directly, teaching every step deep. Invoking `/nodes <subject>/<node-id>` confirms a probed node and moves it through `nodes-written` (skeleton step files created, no content). Invoking `/teach <subject>/<node-id>` fills step content interactively and moves the node to `content-written`. `/edges` asks for confirmation of its candidate edge set and only then marks the node `edges-written`.
 
 Completion is step-based: a step is complete when its `/tackle` passes (mastery reaches `solid`); a node is complete automatically once every step in its DAG is complete; elements are keywords and are never marked complete.
 
@@ -135,7 +127,7 @@ When the learner asks a question about a subject:
 
 ### Lint
 
-Run the verification script: `node scripts/verify.mjs --subject <subject>` (whole-subject) or `node scripts/verify.mjs --node <subject>/<node-id>` (one node). It is the single source of truth for format checks — per `docs/reference/verify.md` — and covers: broken node-qualified element/step/source links, element/step IDs that do not match filenames, `teaches` that disagrees with article links, node `steps` DAG entries whose step file does not exist (and step files with no DAG entry), elements missing two or more connections or retrieval questions, orphan nodes/steps/elements, edges whose `from`/`to`/`nodes` no longer resolve, large sources missing a digest, node count deviating more than ±40% from the formula baseline, digest `source_hash` no longer matching its source file, source locators that cannot be found in the source's digest, and a `polish` in `MEMORY.md` that does not resolve to `polish/<slug>/polish.md`.
+Run the verification script: `node scripts/verify.mjs --subject <subject>` (whole-subject) or `node scripts/verify.mjs --node <subject>/<node-id>` (one node). It is the single source of truth for format checks — per `docs/reference/verify.md` — and covers: broken node-qualified element/step/source links, element/step IDs that do not match filenames, `teaches` that disagrees with article links, node `steps` DAG entries whose step file does not exist (and step files with no DAG entry), elements missing two or more connections or retrieval questions, orphan nodes/steps/elements, edges whose `from`/`to`/`nodes` no longer resolve, large sources missing a digest, node count deviating more than ±40% from the formula baseline, digest `source_hash` no longer matching its source file, and source locators that cannot be found in the source's digest.
 
 The script checks format only. Content judgment — contradictory or stale claims (mark stale ones `[needs update]` instead of deleting), prose style, and semantic quality — is not automated: it is the learner's manual pass, run on request when reviewing a subject or node.
 

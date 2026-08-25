@@ -1,0 +1,72 @@
+---
+id: consistent-prefix-reads
+title: 一致前綴讀取 (Consistent Prefix Reads)
+subject: design-data-intensive-applications
+tier: 3
+order: 6
+type: article
+nodes:
+  - design-data-intensive-applications/single-leader-replication
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Problems with Replication Lag]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Consistent Prefix Reads]]"
+created: 2026-08-23
+updated: 2026-08-23
+---
+
+## Problem Statement
+
+非同步複製（Asynchronous Replication）會產生複製延遲，而其中一個最反直覺的異常是：讀者可能看到「答案出現在問題之前」的錯亂順序。例如，在某個社群平台上，使用者 A 先發了一則留言（寫入 X），接著在另一則留言下方回覆（寫入 Y）。但另一位使用者 B 從副本讀取時，先看到了回覆 Y，卻還沒有看到原始留言 X。這就是因果關係（Causality）被違反的現象。
+
+造成這類問題的根源在於：當資料庫被分成多個分區（Partition）運作時，每個分區各自擁有獨立的寫入順序，但跨分區之間並沒有一個全域的寫入排序。兩個有因果關係的寫入如果落在不同分區，讀者可能從不同副本以任意順序看到它們。
+
+## Why it matters
+
+一致前綴讀取（Consistent Prefix Reads）之所以重要，是因為它直接關係到系統的因果一致性（Causal Consistency）。如果使用者看到的資料順序違反了寫入的因果關係，那麼應用程式的邏輯就可能出錯。這不只是理論上的異常——在聊天系統、協作文件、版本控制等場景中，使用者會因為看到了「倒果為因」的資料而產生困惑，甚至做出基於錯誤前提的操作。對於需要跨分區保證因果順序的系統而言，一致前綴讀取是不可或缺的保障。
+
+## How it works
+
+一致前綴讀取的保證機制是：如果一系列寫入 X、Y、Z 按這個順序發生，那麼任何讀者都不會在看到 Y 之前先看到 Z，也不會在看到 X 之前先看到 Y。讀者看到的資料永遠是寫入順序的一個前綴（Prefix），不會跳過前面的寫入直接看到後面的。
+
+在單分區或單一領袖複製（Single-Leader Replication）的架構中，因為所有寫入都經過一個領袖節點，天然存在一個全域寫入順序，所以一致前綴讀取比較容易實現。但在多數位元組庫或分區架構中，每個分區的領袖各自排序，跨分區的寫入之間沒有全局順序。要實現一致前綴讀取，系統必須額外引入協調機制，例如：
+
+- **確保有因果關係的寫入路由到同一個分區**——藉由將因果相關的寫入分配到同一個分區的同一個領袖，利用該分區的寫入順序來保持因果。
+- **使用向量時鐘（Vector Clocks）或類似的因果追蹤機制**——在每筆寫入上附帶因果關係的元資料，讓副本在排序時能辨識因果依賴，保證按因果順序呈現。
+
+如果系統不做這些額外處理，讀者就可能從不同分區的副本中看到順序不一致的資料。
+
+## In plain terms
+
+想像你和朋友在對話。你先問了一個問題，朋友接著回答了。但如果有人只偷看了中間的片段，他可能先看到回答、後才看到問題——這就是因果倒置。一致前綴讀取的意義在於：系統保證你至少會按照「先問後答」的順序看到這些訊息，不會出現先看到答案、卻還不知道問題是什麼的情況。
+
+## Practical use
+
+- **聊天系統**：保證訊息按發送順序顯示，不會看到回覆但還看不到原始訊息。
+- **協作文件**：多個編輯者對同一份文件進行修改時，確保編輯順序的因果關係不被違反。
+- **版本控制**：在分散式版本控制中，保證 commit 的因果依賴順序正確呈現。
+- **事件溯源（Event Sourcing）**：事件必須按照因果順序被重放，否則重建的狀態會出錯。
+
+## Connections
+
+- [[learn/design-data-intensive-applications/elements/eventual-consistency|最終一致性 (Eventual Consistency)]]
+- [[learn/design-data-intensive-applications/elements/reading-your-own-writes|讀回自己的寫入 (Reading Your Own Writes)]]
+- [[learn/design-data-intensive-applications/elements/monotonic-reads|單調讀取 (Monotonic Reads)]]
+
+## Deep dive
+
+一致前綴讀取的核心挑戰出現在分區式資料庫（Partitioned Database）中。當多個分區各自有獨立的領袖時，跨分區的寫入之間不存在一個全域排序。假設寫入 A（分區 1）和寫入 B（分區 2）有因果關係（A 是 B 的前提），但兩者分散在不同分區。如果讀者從分區 1 的副本讀取時看到 A，從分區 2 的副本讀取時看到 B，但 B 到達分區 2 副本的時間早於 A 到達分區 1 副本的時間，讀者就可能先看到 B 再看到 A，造成因果倒置。
+
+解決方案的代價各有不同。將因果相關寫入路由到同一分區是最簡單的方法，但它限制了分區策略的靈活性。使用向量時鐘等因果追蹤機制雖然保留了分區的獨立性，但增加了元資料的開銷。有些系統採用混合策略：對於明確有因果關係的寫入（如對同一記錄的後續操作）自動路由到同一分區，而對無因果關係的寫入則自由分散。
+
+值得注意的是，一致前綴讀取並不等於強一致性（Strong Consistency）。它只保證因果關係被尊重，而不要求所有讀者在同一時刻看到完全相同的快照。這是一種較弱但更實際的保證，在效能和正確性之間取得了平衡。
+
+## Questions
+
+1. **問題**：在什麼架構下，一致前綴讀取最難以實現？為什麼？
+   **答案**：在分區式資料庫（Partitioned Database）中，因為不同分區各自有獨立的寫入順序，跨分區的因果關係沒有全域排序來保證。
+
+2. **問題**：一致前綴讀取與單調讀取（Monotonic Reads）之間的差異是什麼？
+   **答案**：單調讀取保證讀者不會看到「回退」（即不會先看到較新的資料再看到較舊的資料）；一致前綴讀取則保證因果順序不被違反，即使所有讀者各自都滿足單調性，仍可能因為分區差異而出現因果倒置。
+
+3. **問題**：如果系統不做任何特殊處理，一個被分區的聊天系統中，使用者可能遇到什麼問題？
+   **答案**：使用者可能先看到回覆訊息，但還沒有看到原始訊息，造成因果關係的混亂，無法理解對話的脈絡。

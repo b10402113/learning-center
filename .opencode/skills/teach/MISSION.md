@@ -1,20 +1,21 @@
-# Mission: 跨階段引導：指標、文件與技能
+# Mission: 掌握设计模式——从 ifelse 重构到框架源码识别
 
 ## Why
-學會在 AI 輔助開發的多個 session 之間有效引導代理，讓它持續照你的意圖做事，而不會在 session 切換時丟失脈絡或讓上下文失控。
+
+面对一坨 ifelse 堆出来的业务代码，能认出该用哪个设计模式并完成重构；读 Spring / MyBatis / 中间件源码时，能认出里面用到的模式。
 
 ## Success looks like
-- 能在 phase boundary 主動判斷該繼續、清空、壓縮、交接或派子代理
-- 能用 Push vs Point 策略管理 steering 檔案，讓規則在需要時出現、不需要時不佔位
-- 能把穩定流程封裝成可攜式 skill，並在不同專案間重用
-- 能定期修剪 steering，移除沉積物和 no-op
+- 看到 switch/ifelse 按 type 字段分发的代码，能判断该用工厂、策略、状态还是责任链，并动手重构
+- 读到 Spring AOP、MyBatis Mapper 等框架代码时，能认出代理、模板方法、中介者等模式结构
+- 22 个模式都能说出动机、角色、适用场景和取舍
 
 ## Constraints
-- 以繁體中文教學
-- 課程需可獨立完成，每課短小精悍
-- 以實作為導向，每個概念都要有可操作的練習
+- 以中文教学
+- JDK 8 + IDEA + Maven 环境，可直接跑代码
+- 每周 3-5 小时，集中在周末
+- 动手写代码为主，先看烂代码再做重构
 
 ## Out of scope
-- 模型底層原理（next token prediction 等）
-- 特定 harness 的深入操作細節
-- 純理論的 token 計費分析
+- 纯 UML 建模语法
+- 模式的历史学术源流（Alexander、GoF 原著逐章精读）
+- 非 Java 语言的模式实现

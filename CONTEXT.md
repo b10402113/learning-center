@@ -46,8 +46,16 @@ The per-step verification stage (`/tackle <step-id>`): a runtime, adaptive MCQ s
 _Avoid_: quiz, test, exam
 
 **Polish template**:
-A hand-written style guide in `polish/<author-slug>/polish.md`, chosen per subject at `/learn-init` and stored in `MEMORY.md` frontmatter (`polish: <slug | none>`). `/nodes` drafts every step article directly in the subject's `language`, then dispatches `polish-agent` with the template to rewrite the `## Lesson` body in plain, easy-to-read language in that style. `polish: none` skips polishing. Applies to step articles only, never elements or edges.
+Deprecated. Previously a hand-written style guide in `polish/<author-slug>/polish.md`, chosen per subject at `/learn-init` and stored in `MEMORY.md` frontmatter (`polish: <slug | none>`). The polish-agent would rewrite step article bodies in that style. Superseded by **teach-node** — step articles are now written directly in the teach-node writing standard; no separate polish pass. Existing `polish/` directories are retained for reference but no longer referenced by the pipeline.
 _Avoid_: tone, style
+
+**Teach-node**:
+The writing standard for step articles — defines MDX component usage, section structure, and prose style. Replaces the polish-agent pipeline: sub-agents write step articles directly in teach-node style (one pass, no rewrite). Does not manage teaching design (ZPD, mission, resources) — that stays in the `teach` skill. Lives in `.opencode/skills/teach-node/`.
+_Avoid_: teach-style, node-writing, polish-replacement
+
+**MDX component**:
+A reusable React component provided by the rendering framework (`knowledge-map/src/components/teach-node/`). Step articles use these to render structured content: `<KeyInsight>`, `<DecisionTable>`, `<DecisionTree>`, `<WarningBox>`, `<Analogy>`, `<Quiz>`, `<LearningGoal>`. Components are compiled by the MDX pipeline; they do not affect format checks.
+_Avoid_: HTML component, UI component, widget
 
 **Spine**:
 The sequential reading order of a subject's nodes, chained by `spine` edges.
@@ -71,7 +79,7 @@ An element, step, or node that makes a given node or step easier to learn, liste
 _Avoid_: dependency, requirement
 
 **Lesson content**:
-Node and element files are authored in MDX — Markdown with embedded JSX for interactive components (quizzes, video embeds). MDX is compiled to React components in the frontend bundle; the generated `graph.json` carries graph structure only, not rendered content. Obsidian rendering of these files degrades (JSX shows as raw text).
+Node and element files are authored in MDX — Markdown with embedded JSX for interactive components. Step articles use globally shared MDX components (`components/`) for structured content: learning goals, key insights, decision tables, decision trees, warnings, analogies, and quizzes. MDX is compiled to React components in the frontend bundle; the generated `graph.json` carries graph structure only, not rendered content. Obsidian rendering of these files degrades (JSX shows as raw text).
 _Avoid_: markdown pages, rendered HTML
 
 **Completion**:
@@ -84,7 +92,7 @@ Per-subject state split in two: **mastery** (measurement from `/probe` and `/tac
 ## Verification
 
 **Deterministic check**:
-A check a script can run mechanically, limited to **format correctness** — required frontmatter, ID/filename match, step↔DAG consistency, `teaches` agreement, link resolution, element section presence, digest `source_hash`, source-locator resolution, node-count baseline, polish-template resolution. It never judges prose quality or content semantics. Runs in the verification script, never by the LLM.
+A check a script can run mechanically, limited to **format correctness** — required frontmatter, ID/filename match, step↔DAG consistency, `teaches` agreement, link resolution, element section presence, digest `source_hash`, source-locator resolution, node-count baseline. It never judges prose quality or content semantics. Runs in the verification script, never by the LLM.
 _Avoid_: lint, mechanical check
 
 **Format check**:
@@ -92,7 +100,7 @@ A deterministic check on an article's structure and links — frontmatter keys, 
 _Avoid_: prose check, style check
 
 **Judgment check**:
-A check that needs LLM reading — depth-matches-calibration, contradictory or stale claims, polish-style conformance, verb nominalization, jargon. Not a per-node pipeline gate: the verification script checks format only, and the LLM only fixes what the script flags — it never re-reads an article to judge its prose. The learner is the final judge of these qualities.
+A check that needs LLM reading — depth-matches-calibration, contradictory or stale claims, verb nominalization, jargon. Not a per-node pipeline gate: the verification script checks format only, and the LLM only fixes what the script flags — it never re-reads an article to judge its prose. The learner is the final judge of these qualities.
 _Avoid_: review, audit
 
 **Verification script**:

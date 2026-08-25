@@ -45,7 +45,6 @@ Exit code: `0` = no failures, `1` = at least one failure. A non-zero exit is a h
 | `digest-hash` | digest `source_hash` matches a source file |
 | `elem-connections` | Connections section present with ≥2 element links |
 | `elem-questions` | Questions section present |
-| `polish-resolve` | `MEMORY.md` polish resolves to `polish/<slug>/polish.md` |
 
 Section-heading checks (`elem-connections`, `elem-questions`) are **localization-aware**: they match either the bare English heading (`## Connections`) or a localized heading carrying the English token in parentheses or full-width parens (e.g. `## 自檢問題 (Questions)`).
 

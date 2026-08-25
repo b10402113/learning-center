@@ -1,6 +1,6 @@
 # Node Container Format
 
-`learn/<subject>/nodes/<node-id>.mdx` — a step-DAG container with reading order, short main lesson, and no flat `elements` list.
+`learn/<subject>/nodes/<node-id>.mdx` — a step-DAG container with reading order and short main lesson.
 
 ```markdown
 ---
@@ -21,7 +21,6 @@ steps:
     deps:
       - <step-id>
 prerequisites:
-  - learn/<subject>/elements/<element-id>
   - learn/<subject>/nodes/<node-id>
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
@@ -53,5 +52,4 @@ updated: YYYY-MM-DD
 ## Rules
 
 - `steps` is the step-DAG: every step id with its `order` and `deps`. `order` is reading order; `deps` name the steps that must come first. A step with no `deps` is an entry point.
-- `prerequisites` is a list of stable IDs (`learn/<subject>/elements/<id>` or `learn/<subject>/nodes/<id>`); omit when the node has none.
-- No flat `elements` frontmatter list — elements are declared per-step in their `teaches` field.
+- `prerequisites` is a list of stable node IDs (`learn/<subject>/nodes/<id>`); omit when the node has none.

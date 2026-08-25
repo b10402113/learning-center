@@ -1,0 +1,95 @@
+---
+id: eventual-consistency
+title: 最終一致性 (Eventual Consistency)
+subject: design-data-intensive-applications
+tier: 3
+order: 3
+type: article
+nodes:
+  - design-data-intensive-applications/single-leader-replication
+sources:
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Synchronous Versus Asynchronous Replication]]"
+  - "[[sources/design-data-intensive-applications/Designing Data-Intensive Applications.pdf#Chapter 5: Replication > Problems with Replication Lag]]"
+created: 2026-08-23
+updated: 2026-08-23
+---
+
+## Problem Statement
+
+在非同步複製（Asynchronous Replication）的架構中，領導者（Leader）寫入資料後不等待跟隨者（Follower）確認就立刻回傳成功。這意味著：當使用者在某個節點寫入資料後，立即從另一個節點讀取時，可能讀到舊的資料——因為新資料還沒複製過去。系統沒有對「多久之後所有副本會一致」做出任何承諾，只是保證「 eventually（最終）會一致」。問題是：這種模糊的保證，到底算不算一種一致性？它能用在哪些場景？又會在哪些場景中造成災難？
+
+## Why it matters
+
+最終一致性（Eventual Consistency）是大多數高吞吐量分散式系統的預設行為，因為它是非同步複製的自然結果。理解它之所以重要，有三個原因：
+
+1. **它是非同步複製的直接後果**：選擇非同步複製就是選擇了最終一致性。不理解最終一致性，就無法真正理解你在做什麼取捨。
+2. **它引發三種可觀測的異常**：讀回自己的寫入（Reading Your Own Writes）、單調讀取（Monotonic Reads）、一致前綴讀取（Consistent Prefix Reads）。這些不是理論問題——它們會讓使用者看到不合邏輯的結果。
+3. **它沒有時間上限**：「最終」是一句空話。系統沒有保證一秒、一分鐘、還是一小時內會一致。如果複製中斷了三天，使用者就可能三天看到舊資料。這讓它成為一個「語義模糊」的保證——你必須自己在上層建立更強的一致性模型。
+
+## How it works
+
+最終一致性是一個「之後的承諾」：如果不再有新的寫入，經過一段未定義的時間後，所有副本最終會達到相同的狀態。但在達到一致之前的過渡期中，系統允許暫時的不一致。
+
+在非同步複製模型中，流程如下：
+
+1. 客戶端向領導者發送寫入請求。
+2. 領導者將變更寫入本地儲存。
+3. 領導者立即回傳成功，不等待任何跟隨者確認。
+4. 領導者在背景持續將變更傳送到跟隨者。
+5. 跟隨者收到變更後寫入本地，但在收到之前，它持有的是舊資料。
+
+在步驟 3 和步驟 5 之間，不同節點上的資料不一致。這個時間窗口就是「複製延遲（Replication Lag）」。最終一致性的意思是：我們接受這個窗口的存在，但相信它「最終」會關閉。
+
+**與同步複製的對比**：同步複製（Synchronous Replication）不允許這個窗口——寫入在至少一個跟隨者確認後才算完成，確保了強一致性（Strong Consistency），但代價是每次寫入都要等待網路來回。最終一致性則犧牲了這種即時保證，換取更低的延遲和更高的可用性。
+
+## In plain terms
+
+想像你和朋友各自記帳。你記了一筆「午餐 120 元」，然後立刻問朋友：「我今天花了多少？」朋友手上的帳本還沒更新，所以回答：「0 元。」過了幾分鐘，你的帳本複製到朋友那裡，朋友才看到正確的答案。在那之前，你和朋友手上的帳本是不一致的。最終一致性就是——只要你不一直寫新資料，兩本帳本「最終」會一模一樣。
+
+## Analogy
+
+假設你是一個部落格作者，你在網站上發布了一篇文章，然後立刻把網址分享給朋友。朋友打開後看到的是「找不到頁面」——因為你的文章還沒從主伺服器同步到朋友訪問的那個 CDN 節點。幾秒鐘後，CDN 節點拿到最新資料，朋友才看到你的文章。
+
+在這幾秒鐘內，你和朋友看到的東西不同。這就是最終一致性在現實中的樣子：你寫入了，但世界還沒追上你。系統沒有保證什麼時候追上——它只是說「最終會」。
+
+## Practical use
+
+最終一致性在以下場景中被廣泛採用：
+
+- **社群媒體動態**：使用者發文後，不同朋友可能在不同時間看到。不需要強一致性——延遲幾秒鐘看到新動態是可以接受的。
+- **DNS 解析**：域名記錄更新後，全球各地的 DNS 節點需要時間同步。在同步完成前，不同使用者可能解析到不同的 IP 位址。
+- **電商庫存顯示**：庫存數量在多個倉庫之間同步時，偶爾顯示 slightly outdated 的數量通常不會造成嚴重後果。
+
+**不適合的場景**：
+
+- **金融轉帳**：A 帳戶扣款和 B 帳戶入帳必須在時間上緊密一致，否則可能出現「錢消失了」的中間狀態。
+- **排隊系統**：如果使用者看到的順序不一致，排隊的公平性就會被破壞。
+- **寫後讀（Read-after-write）**：使用者寫入設定後期望立刻看到生效，如果讀到舊設定會造成困惑。
+
+對於不適合的場景，系統需要在上層建立更強的一致性保證，例如寫後讀一致性（Read-your-writes Consistency）或單調讀取（Monotonic Reads）。
+
+## Connections
+
+- [[learn/design-data-intensive-applications/elements/synchronous-replication|同步複製 (Synchronous Replication)]]：同步複製是避免最終一致性的手段——用延遲換取即時一致性。兩者的取捨是分散式複製設計的核心。
+- [[learn/design-data-intensive-applications/elements/asynchronous-replication|非同步複製 (Asynchronous Replication)]]：最終一致性是非同步複製的自然結果。理解非同步複製的機制，才能理解為什麼最終一致性會出現。
+- [[learn/design-data-intensive-applications/elements/reading-your-own-writes|讀回自己的寫入 (Reading Your Own Writes)]]：最終一致性下最常見的使用者異常——寫入後立刻讀取卻看到舊資料。這是上層系統必須額外處理的問題。
+- [[learn/design-data-intensive-applications/elements/monotonic-reads|單調讀取 (Monotonic Reads)]]：最終一致性下，讀者可能從不同副本讀取，導致看到的資料「倒退」。單調讀取是防止這種異常的保證。
+- [[learn/design-data-intensive-applications/elements/consistent-prefix-reads|一致前綴讀取 (Consistent Prefix Reads)]]：最終一致性下，跨分區的寫入可能以因果倒置的順序呈現。一致前綴讀取是防止因果關係被違反的保證。
+
+## Deep dive
+
+最終一致性的核心問題在於「最終」沒有時間上限。這不是一個可有可無的細節——它影響系統行為的可預測性。
+
+**「最終」的模糊性**：在正常運作的網路中，複製延遲可能只有幾毫秒。但在網路中斷、機房切換、或跟隨者重啟後重建的場景中，「最終」可能意味著分鐘甚至小時級別的延遲。在這段期間，讀者看到的資料可能是嚴重過時的。系統設計者必須決定：在複製追上之前，你願意讓使用者看到多舊的資料？
+
+**三種異常的根源**：最終一致性允許不同節點在同一時刻持有不同版本的資料。當讀者從不同節點讀取時，就可能遇到三種異常。讀回自己的寫入（Reading Your Own Writes）發生在寫入者從跟隨者讀取時；單調讀取（Monotonic Reads）發生在讀者兩次讀取之間複製追上又落後時；一致前綴讀取（Consistent Prefix Reads）發生在跨分區寫入的因果順序未被保留時。這三種異常不是最終一致性的 bug，而是它被允許存在的後果。
+
+**CRDTs 與收斂保證**：某些資料結構——例如無衝突複製資料類型（Conflict-free Replicated Data Types, CRDTs）——可以在非同步複製下保證所有副本「最終」收斂到相同的狀態，即使中間有任意延遲。CRDTs 透過數學上的交換律和結合律，讓合併操作的順序不影響結果，從而讓最終一致性在這些特定資料結構上變得更加可靠。
+
+**營運中的實際挑戰**：在大規模系統中，複製延遲的分佈往往不是常態分佈——大多數複製在幾毫秒內完成，但有少量「長尾」延遲可能達到秒級甚至更長。這些長尾延遲對使用者體驗的影響取決於你的上層一致性保證。如果你的系統僅依賴最終一致性，這些長尾就是使用者可能遇到的「不一致窗口」。
+
+## Questions
+
+1. 為什麼「最終」（eventually）是一個模糊的保證？它缺乏了哪個關鍵資訊，使得系統設計者必須自己做出額外假設？
+2. 在什麼條件下，最終一致性會從「偶爾的小問題」變成「嚴重的系統風險」？（提示：想想複製延遲在不同場景下的實際範圍。）
+3. 如果你的系統需要保證「使用者寫入後立刻能看到自己的寫入」，但仍然使用非同步複製，你該如何在上層建立這個保證？這會帶來什麼額外複雜度？

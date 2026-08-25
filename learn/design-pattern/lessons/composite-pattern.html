@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>组合模式：用递归树结构替代深层 ifelse 嵌套</title>
+<link rel="stylesheet" href="../assets/shared.css">
+<style>
+  .scenario-box {
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin: 1.25rem 0;
+  }
+  .scenario-box strong { color: #9a3412; }
+  .code-compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 1.25rem 0;
+  }
+  .code-panel {
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .code-panel h4 {
+    padding: 0.5rem 1rem;
+    font-size: 0.88rem;
+    margin: 0;
+  }
+  .code-panel.bad h4 { background: #fef2f2; color: #991b1b; }
+  .code-panel.good h4 { background: #f0fdf4; color: #166534; }
+  .code-panel pre { margin: 0; border-radius: 0; }
+  .quiz-result { margin-top: 0.75rem; font-weight: 600; }
+  .quiz-result.pass { color: var(--success); }
+  .quiz-result.fail { color: var(--danger); }
+  .structure-diagram {
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 1.25rem 0;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+  }
+</style>
+</head>
+<body>
+
+<p class="meta">设计模式 · 桥接与组合 · 第 3/4 课</p>
+
+<h1>组合模式：用递归树结构替代深层 ifelse 嵌套</h1>
+
+<h2>这一课的目标</h2>
+<p>读完之后，你能：</p>
+<ul>
+  <li>识别"条件判断形成 if-else 树"的坏味道</li>
+  <li>用叶子/组合节点统一接口的递归树重构嵌套 ifelse</li>
+  <li>理解递归遍历在组合模式中的作用</li>
+</ul>
+
+<h2>真实场景</h2>
+
+<div class="scenario-box">
+  <strong>🎯 场景：营销优惠券决策引擎</strong><br>
+  一个优惠券发放系统要按多级条件过滤用户：<br>
+  先看性别 → 再看年龄 → 再看消费金额 → 最终决定发哪种券。<br><br>
+  每加一级过滤，ifelse 就多嵌一层。5 级条件就是 5 层嵌套。<br>
+  改一个条件要在整棵树里找对应的分支。<br><br>
+  <strong>问题是：</strong>这些条件判断的逻辑是相似的——都是"检查某个属性，通过则继续，不通过则拒绝"。<br>
+  真正不同的是：检查什么属性、用什么阈值。
+</div>
+
+<h2>坏代码：if-else 树</h2>
+
+<div class="code-compare">
+  <div class="code-panel bad">
+    <h4>❌ 嵌套 ifelse 树</h4>
+<pre><code>public class EngineController {
+    public String doFilter(UserInfo user) {
+        if ("male".equals(user.getGender())) {
+            if (user.getAge() > 25) {
+                if (user.getConsume() > 5000) {
+                    return "发放 VIP 券";
+                } else {
+                    return "发放普通券";
+                }
+            } else {
+                if (user.getConsume() > 3000) {
+                    return "发放新人券";
+                } else {
+                    return "不发券";
+                }
+            }
+        } else {
+            if (user.getAge() > 25) {
+                // ... 还有更多嵌套
+            }
+        }
+        // 每加一级条件，这里就多嵌一层
+        return "不发券";
+    }
+}</code></pre>
+  </div>
+  <div class="code-panel good">
+    <h4>✅ 组合模式重构</h4>
+<pre><code>// 统一接口
+public interface LogicFilter {
+    Object filter(Object obj);
+    String getKey();
+}
+
+// 叶子节点：具体过滤器
+public class UserAgeFilter implements LogicFilter {
+    public Object filter(Object obj) {
+        // 只负责年龄判断
+        return checkAge(obj);
+    }
+    public String getKey() { return "age"; }
+}
+
+// 组合节点：引擎遍历树
+public class EngineBase implements IEngine {
+    public EngineResult process(long treeId, UserInfo user) {
+        TreeNode root = treeMap.get(treeId);
+        return walk(root, user); // 递归遍历
+    }
+}
+
+// 调用方：组装树（可配置化）
+TreeRich rich = new TreeRich(root, nodeMap);
+engine.process(treeId, user);</code></pre>
+  </div>
+</div>
+
+<h2>组合模式的核心结构</h2>
+
+<div class="structure-diagram">
+             统一接口 LogicFilter
+            ┌──────────────────┐
+            │  filter(Object)  │
+            │  getKey()        │
+            └──────────────────┘
+                    │
+          ┌─────────┴─────────┐
+          │                   │
+   ┌──────────────┐  ┌──────────────────┐
+   │  叶子节点    │  │  组合节点        │
+   │  UserAge     │  │  EngineBase      │
+   │  UserGender  │  │  (持有子节点列表) │
+   │  UserConsume │  │  递归调用子节点   │
+   └──────────────┘  └──────────────────┘
+
+树结构：
+     根过滤器（组合）
+    /        \
+性别过滤    年龄过滤
+(叶子)      (叶子)
+             |
+          消费过滤
+          (叶子)</div>
+
+<p>关键洞察：<strong>叶子和组合实现同一个接口</strong>。客户端不区分"这是一个单独的过滤器"还是"这是一个过滤器树"——调用方式完全一样。这就是组合模式的威力。</p>
+
+<h2>递归遍历的工作方式</h2>
+
+<p>组合节点（引擎）遍历树的过程是递归的：</p>
+
+<ol>
+  <li>从根节点开始</li>
+  <li>如果是叶子节点 → 执行过滤逻辑，返回结果</li>
+  <li>如果是组合节点 → 遍历所有子节点，递归调用</li>
+  <li>根据子节点的结果决定下一步（通过/拒绝/继续）</li>
+</ol>
+
+<p>这个递归过程和你写 ifelse 的逻辑是一样的，但结构完全不同——ifelse 是硬编码在代码里的，树是数据结构，可以动态组装。</p>
+
+<h2>透明方式 vs 安全方式</h2>
+
+<table>
+  <thead>
+    <tr><th></th><th>透明方式</th><th>安全方式</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>接口定义</strong></td><td>叶子和组合有完全相同的方法</td><td>叶子和组合有不同的方法</td></tr>
+    <tr><td><strong>客户端体验</strong></td><td>统一调用，不区分类型</td><td>需要判断节点类型</td></tr>
+    <tr><td><strong>安全性</strong></td><td>叶子可能有不该有的方法</td><td>编译期防止非法操作</td></tr>
+    <tr><td><strong>推荐场景</strong></td><td>叶子和组合行为一致时</td><td>叶子和组合行为差异大时</td></tr>
+  </tbody>
+</table>
+
+<blockquote>
+  <strong>一句话区分：</strong>透明方式让客户端"不操心"（统一接口），安全方式让编译器"帮你管"（类型区分）。
+</blockquote>
+
+<h2>日常类比</h2>
+
+<ul>
+  <li><strong>文件系统</strong>：文件和文件夹都实现 FileSystem 接口，文件夹可以包含文件或其他文件夹</li>
+  <li><strong>UI 组件树</strong>：Button 和 Panel 都实现 Component 接口，Panel 可以包含 Button 或其他 Panel</li>
+  <li><strong>公司组织架构</strong>：员工和部门都实现 Entity 接口，部门可以包含员工或其他部门</li>
+</ul>
+
+<hr>
+
+<h2>本课小结</h2>
+
+<ol>
+  <li>条件判断形成 if-else 树的信号：多级过滤嵌套越来越深</li>
+  <li>组合 = 叶子/组合节点统一接口 + 递归遍历</li>
+  <li>核心手法：用递归树替代嵌套 ifelse，数据结构可配置化</li>
+  <li>透明方式（统一接口）vs 安全方式（类型区分）的选择</li>
+</ol>
+
+<h2>推荐阅读</h2>
+<p>📖 <a href="https://refactoring.guru/design-patterns/composite">Refactoring.Guru — Composite Pattern</a>（英文，有清晰的类图和 Java 示例）</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" id="quiz1">
+  <p><strong>1. 组合模式中，叶子节点和组合节点的共同点是什么？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">它们继承同一个抽象类</button>
+  <button class="quiz-option" onclick="check(this, false)">它们实现不同的接口</button>
+  <button class="quiz-option" onclick="check(this, true)">它们实现同一个接口，客户端可以统一调用</button>
+  <button class="quiz-option" onclick="check(this, false)">它们没有共同点</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="quiz2" style="margin-top: 1rem;">
+  <p><strong>2. 组合模式中，递归遍历的作用是什么？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">翻译不兼容的接口</button>
+  <button class="quiz-option" onclick="check(this, true)">组合节点遍历子节点，统一执行过滤逻辑</button>
+  <button class="quiz-option" onclick="check(this, false)">替换 ifelse 的算法分支</button>
+  <button class="quiz-option" onclick="check(this, false)">缓存共享数据</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="quiz3" style="margin-top: 1rem;">
+  <p><strong>3. 透明方式和安全方式的区别是什么？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">透明方式更安全</button>
+  <button class="quiz-option" onclick="check(this, true)">透明方式叶子和组合有相同接口，安全方式有不同的接口</button>
+  <button class="quiz-option" onclick="check(this, false)">安全方式不支持递归</button>
+  <button class="quiz-option" onclick="check(this, false)">透明方式不支持组合节点</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="quiz4" style="margin-top: 1rem;">
+  <p><strong>4. 文件系统中，文件和文件夹都实现 FileSystem 接口。这属于什么模式？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">桥接模式</button>
+  <button class="quiz-option" onclick="check(this, false)">适配器模式</button>
+  <button class="quiz-option" onclick="check(this, true)">组合模式</button>
+  <button class="quiz-option" onclick="check(this, false)">装饰器模式</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="quiz5" style="margin-top: 1rem;">
+  <p><strong>5. 组合模式相比嵌套 ifelse 的最大优势是什么？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">运行速度更快</button>
+  <button class="quiz-option" onclick="check(this, false)">代码行数更少</button>
+  <button class="quiz-option" onclick="check(this, true)">新增条件不需要改已有代码（开闭原则）</button>
+  <button class="quiz-option" onclick="check(this, false)">不需要接口或抽象类</button>
+  <div class="quiz-result"></div>
+</div>
+
+<script>
+function check(btn, correct) {
+  const quiz = btn.closest('.quiz');
+  const result = quiz.querySelector('.quiz-result');
+  quiz.querySelectorAll('.quiz-option').forEach(b => { b.disabled = true; });
+  if (correct) {
+    btn.classList.add('correct');
+    result.textContent = '✓ 正确';
+    result.className = 'quiz-result pass';
+  } else {
+    btn.classList.add('wrong');
+    quiz.querySelectorAll('.quiz-option').forEach(b => {
+      if (!b.classList.contains('wrong')) b.style.opacity = '0.5';
+    });
+    result.textContent = '✗ 再想想，复习一下上面的内容';
+    result.className = 'quiz-result fail';
+  }
+}
+</script>
+
+<div class="footer">
+  <p>💡 有任何不清楚的地方？随时问你的 AI 老师。接下来：<a href="bridge-vs-composite-comparison.html">桥接还是组合：拆双维度还是建树 →</a></p>
+</div>
+
+</body>
+</html>

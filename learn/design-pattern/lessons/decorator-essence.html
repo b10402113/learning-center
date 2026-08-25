@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>装饰器模式的本质与结构</title>
+<link rel="stylesheet" href="../assets/shared.css">
+<style>
+  .role-card {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    margin: 1.2rem 0;
+  }
+  .role-card .card {
+    background: var(--code-bg);
+    border-radius: 6px;
+    padding: 0.75rem;
+    font-size: 0.88rem;
+  }
+  .role-card .card strong {
+    display: block;
+    margin-bottom: 0.3rem;
+    color: var(--accent);
+  }
+  .arch-flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin: 1.5rem 0;
+    font-size: 0.88rem;
+    flex-wrap: wrap;
+  }
+  .arch-box {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    text-align: center;
+    min-width: 100px;
+  }
+  .arch-box.wrap { background: #dbeafe; border-color: #93c5fd; font-weight: 600; }
+  .arch-arrow { color: var(--muted); font-size: 1.2rem; }
+  .quiz-result { margin-top: 0.75rem; font-weight: 600; }
+  .quiz-result.pass { color: var(--success); }
+  .quiz-result.fail { color: var(--danger); }
+</style>
+</head>
+<body>
+
+<p class="meta">设计模式 · 装饰器与代理 · 第 1/5 课</p>
+
+<h1>装饰器模式的本质与结构</h1>
+
+<p><span class="tag tag-structural">结构型</span></p>
+
+<div class="goal">
+  <strong>本课目标</strong><br>
+  说清装饰器模式的四个角色，以及"构造函数注入 + 接口转发"的包裹机制。
+</div>
+
+<h2>场景：SSO 拦截器要加方法级权限</h2>
+
+<p>你有一个 Spring SSO 登录拦截器 <code>SsoInterceptor</code>，负责检查用户是否已登录。现在新需求来了：除了登录检查，还要加<strong>方法级权限控制</strong>——某些接口只允许特定用户访问。</p>
+
+<p>直觉做法：写一个子类继承 <code>SsoInterceptor</code>，在 <code>preHandle</code> 里加上权限逻辑。</p>
+
+<blockquote class="bad-code">
+<p>问题：如果以后还要加日志、审计、限流……每个都继承一次，子类会爆炸。</p>
+</blockquote>
+
+<h2>装饰器的核心思路</h2>
+
+<p>装饰器的解法：不继承，而是<strong>包一层</strong>。用构造函数注入原始对象，调用时转发给它，转发前后可以加任意逻辑。</p>
+
+<div class="arch-flow">
+  <div class="arch-box">调用方</div>
+  <span class="arch-arrow">→</span>
+  <div class="arch-box wrap">装饰器<br><span style="font-size:0.78rem;">转发前/后加逻辑</span></div>
+  <span class="arch-arrow">→</span>
+  <div class="arch-box">原始对象</div>
+</div>
+
+<p>这就是装饰器的全部秘密：<strong>构造函数注入 + 接口转发</strong>。</p>
+
+<h2>四个角色</h2>
+
+<div class="role-card">
+  <div class="card">
+    <strong>Component（抽象组件）</strong>
+    定义接口，所有角色都实现它。原始对象和装饰器都实现同一个接口。<br>
+    <code>interface SsoInterceptor { boolean preHandle(...); }</code>
+  </div>
+  <div class="card">
+    <strong>ConcreteComponent（具体组件）</strong>
+    被装饰的原始对象，实现 Component 接口。<br>
+    <code>class SsoInterceptor implements SsoInterceptor { ... }</code>
+  </div>
+  <div class="card">
+    <strong>Decorator（抽象装饰器）</strong>
+    实现 Component，构造函数接收一个 Component 实例，调用时转发给它。<br>
+    <code>abstract class SsoDecorator implements SsoInterceptor { wrapped.preHandle(...); }</code>
+  </div>
+  <div class="card">
+    <strong>ConcreteDecorator（具体装饰器）</strong>
+    继承 Decorator，在转发前后加自己的逻辑。<br>
+    <code>LoginSsoDecorator</code> 加权限检查
+  </div>
+</div>
+
+<h2>代码：SsoDecorator 实战</h2>
+
+<blockquote class="good-code">
+<p>核心：Decorator 持有 wrapped 对象，转发调用；ConcreteDecorator 在转发前后加逻辑。</p>
+</blockquote>
+
+<pre><code>// Component — 所有拦截器都实现这个接口
+public interface SsoInterceptor {
+    boolean preHandle(HttpServletRequest request,
+                      HttpServletResponse response,
+                      Object handler);
+}
+
+// ConcreteComponent — 原始的 SSO 登录拦截器
+public class SsoInterceptor implements SsoInterceptor {
+    @Override
+    public boolean preHandle(HttpServletRequest request,
+                             HttpServletResponse response,
+                             Object handler) {
+        // 检查用户是否已登录
+        String token = request.getHeader("token");
+        return token != null &amp;&amp; validateToken(token);
+    }
+}
+
+// Decorator — 抽象装饰器，持有被装饰对象
+public abstract class SsoDecorator implements SsoInterceptor {
+    protected SsoInterceptor wrapped;
+
+    public SsoDecorator(SsoInterceptor wrapped) {
+        this.wrapped = wrapped;  // 构造函数注入
+    }
+
+    @Override
+    public boolean preHandle(HttpServletRequest request,
+                             HttpServletResponse response,
+                             Object handler) {
+        return wrapped.preHandle(request, response, handler);  // 转发
+    }
+}
+
+// ConcreteDecorator — 加方法级权限控制
+public class LoginSsoDecorator extends SsoDecorator {
+
+    public LoginSsoDecorator(SsoDecorator ssoDecorator) {
+        super(ssoDecorator);
+    }
+
+    @Override
+    public boolean preHandle(HttpServletRequest request,
+                             HttpServletResponse response,
+                             Object handler) {
+        // ① 先调用被装饰对象（登录检查）
+        boolean success = wrapped.preHandle(request, response, handler);
+        if (!success) return false;
+
+        // ② 转发后加自己的逻辑（方法级权限）
+        String method = request.getMethod();
+        String uri = request.getRequestURI();
+        return checkMethodPermission(method, uri);
+    }
+}</code></pre>
+
+<p>使用时像套娃一样组装：</p>
+
+<pre><code>// 原始拦截器
+SsoInterceptor sso = new SsoInterceptor();
+// 加一层权限装饰
+SsoInterceptor auth = new LoginSsoDecorator(sso);
+// 再加一层审计装饰（假设以后有）
+SsoInterceptor audited = new AuditDecorator(auth);</code></pre>
+
+<h2>你已经用过装饰器了</h2>
+
+<p>JDK I/O 流就是最经典的装饰器：</p>
+
+<pre><code>// BufferedReader 装饰 FileReader
+BufferedReader reader = new BufferedReader(new FileReader("data.txt"));
+// InputStreamReader 装饰 FileInputStream
+InputStreamReader isr = new InputStreamReader(new FileInputStream("data.txt"), "UTF-8");</code></pre>
+
+<p><code>FileReader</code> 是 ConcreteComponent，<code>BufferedReader</code> 是 ConcreteDecorator——构造函数注入，转发 <code>read()</code> 调用，同时加了缓冲功能。</p>
+
+<h2>关键洞察</h2>
+
+<div class="callout tip">
+  <span class="label">核心机制</span>
+  装饰器的秘密只有两步：<strong>构造函数注入</strong>被装饰对象 + <strong>接口转发</strong>调用。转发前后可以加任意逻辑。多个装饰器可以像套娃一样层层包裹。
+</div>
+
+<h2>本课小结</h2>
+
+<ol>
+  <li>装饰器的四个角色：Component、ConcreteComponent、Decorator、ConcreteDecorator</li>
+  <li>核心机制：构造函数注入 + 接口转发</li>
+  <li>装饰器和原始对象实现同一个接口，调用方感知不到区别</li>
+  <li>多个装饰器可以层层嵌套（套娃），像 <code>new BufferedReader(new FileReader(...))</code></li>
+  <li>装饰器用于<strong>动态添加功能</strong>，不修改原始类</li>
+</ol>
+
+<h2>推荐阅读</h2>
+<p>📖 <a href="https://refactoring.guru/design-patterns/decorator">Refactoring.Guru — Decorator Pattern</a>（含类图和 Java 示例）</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" id="q1">
+  <p><strong>1. 装饰器模式的核心机制是什么？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">继承原始类并重写方法</button>
+  <button class="quiz-option" onclick="check(this, true)">构造函数注入 + 接口转发</button>
+  <button class="quiz-option" onclick="check(this, false)">创建新接口替代旧接口</button>
+  <button class="quiz-option" onclick="check(this, false)">使用反射动态调用方法</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q2" style="margin-top: 1rem;">
+  <p><strong>2. Decorator（抽象装饰器）的作用是什么？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">实现具体的业务逻辑</button>
+  <button class="quiz-option" onclick="check(this, true)">持有被装饰对象的引用，转发调用</button>
+  <button class="quiz-option" onclick="check(this, false)">创建新的 Component 实例</button>
+  <button class="quiz-option" onclick="check(this, false)">管理装饰器的生命周期</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q3" style="margin-top: 1rem;">
+  <p><strong>3. <code>new BufferedReader(new FileReader("data.txt"))</code> 是什么模式？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">代理模式</button>
+  <button class="quiz-option" onclick="check(this, false)">适配器模式</button>
+  <button class="quiz-option" onclick="check(this, true)">装饰器模式——BufferedReader 给 FileReader 加了缓冲功能</button>
+  <button class="quiz-option" onclick="check(this, false)">外观模式</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q4" style="margin-top: 1rem;">
+  <p><strong>4. 为什么 ConcreteDecorator 要继承 Decorator 而不是直接实现 Component？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">Java 语法要求必须继承</button>
+  <button class="quiz-option" onclick="check(this, true)">Decorator 已经实现了转发逻辑，子类只需要加自己的扩展</button>
+  <button class="quiz-option" onclick="check(this, false)">为了能调用父类的构造函数</button>
+  <button class="quiz-option" onclick="check(this, false)">为了支持多重继承</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q5" style="margin-top: 1rem;">
+  <p><strong>5. 装饰器模式解决的核心问题是什么？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">让不兼容的接口协同工作</button>
+  <button class="quiz-option" onclick="check(this, false)">简化子系统的调用路径</button>
+  <button class="quiz-option" onclick="check(this, true)">在不修改原始类的前提下动态添加功能</button>
+  <button class="quiz-option" onclick="check(this, false)">控制对对象的访问权限</button>
+  <div class="quiz-result"></div>
+</div>
+
+<script>
+function check(btn, correct) {
+  const quiz = btn.closest('.quiz');
+  const result = quiz.querySelector('.quiz-result');
+  quiz.querySelectorAll('.quiz-option').forEach(b => { b.disabled = true; });
+  if (correct) {
+    btn.classList.add('correct');
+    result.textContent = '✓ 正确';
+    result.className = 'quiz-result pass';
+  } else {
+    btn.classList.add('wrong');
+    quiz.querySelectorAll('.quiz-option').forEach(b => {
+      if (!b.classList.contains('wrong')) b.style.opacity = '0.5';
+    });
+    result.textContent = '✗ 再想想，复习一下上面的内容';
+    result.className = 'quiz-result fail';
+  }
+}
+</script>
+
+<div class="footer">
+  <p><a href="simple-variants.html">← 上一课</a> · <a href="decorator-vs-inheritance.html">下一课：为什么不用继承 →</a></p>
+  <p>💡 有任何不清楚的地方？随时问你的 AI 老师。</p>
+</div>
+
+</body>
+</html>

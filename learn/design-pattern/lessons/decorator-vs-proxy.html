@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>装饰器 vs 代理：什么时候用哪个</title>
+<link rel="stylesheet" href="../assets/shared.css">
+<style>
+  .compare-table td:first-child { font-weight: 600; white-space: nowrap; }
+  .scenario-card {
+    background: var(--code-bg);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin: 0.75rem 0;
+    font-size: 0.9rem;
+  }
+  .scenario-card strong { color: var(--accent); }
+  .quiz-result { margin-top: 0.75rem; font-weight: 600; }
+  .quiz-result.pass { color: var(--success); }
+  .quiz-result.fail { color: var(--danger); }
+</style>
+</head>
+<body>
+
+<p class="meta">设计模式 · 装饰器与代理 · 第 4/5 课</p>
+
+<h1>装饰器 vs 代理：什么时候用哪个</h1>
+
+<p><span class="tag tag-structural">结构型</span></p>
+
+<div class="goal">
+  <strong>本课目标</strong><br>
+  从动机、意图、实现三方面区分装饰器和代理，并判断框架里的包裹结构属于哪一类。
+</div>
+
+<h2>它们长得一模一样</h2>
+
+<p>装饰器和代理的代码结构几乎相同——都是构造函数注入 + 接口转发：</p>
+
+<pre><code>// 装饰器
+public class LoginSsoDecorator extends SsoDecorator {
+    public LoginSsoDecorator(SsoDecorator wrapped) { super(wrapped); }
+    @Override
+    public boolean preHandle(...) {
+        boolean ok = wrapped.preHandle(...);  // 转发
+        if (ok) checkPermission(...);          // 加功能
+        return ok;
+    }
+}
+
+// 代理
+public class JdkInvocationHandler implements InvocationHandler {
+    private Object target;
+    public JdkInvocationHandler(Object target) { this.target = target; }
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args)
+            throws Throwable {
+        // 前置逻辑
+        Object result = method.invoke(target, args);  // 转发
+        // 后置逻辑
+        return result;
+    }
+}</code></pre>
+
+<p>代码结构一样，但<strong>动机完全不同</strong>。</p>
+
+<h2>核心区别：动机决定一切</h2>
+
+<table class="compare-table">
+  <thead>
+    <tr><th></th><th>装饰器</th><th>代理</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>动机</strong></td>
+      <td>给对象<strong>加功能</strong></td>
+      <td><strong>控制访问</strong>对象</td>
+    </tr>
+    <tr>
+      <td><strong>意图</strong></td>
+      <td>透明地扩展行为，调用方不关心</td>
+      <td>在调用方和真实对象之间加控制层</td>
+    </tr>
+    <tr>
+      <td><strong>关注点</strong></td>
+      <td>"我能做什么"</td>
+      <td>"我怎么访问它"</td>
+    </tr>
+    <tr>
+      <td><strong>典型场景</strong></td>
+      <td>I/O 流加缓冲、拦截器加权限</td>
+      <td>MyBatis DAO、Spring AOP、RPC</td>
+    </tr>
+    <tr>
+      <td><strong>调用方感知</strong></td>
+      <td>不知道被装饰了</td>
+      <td>可能知道是代理（如 Spring AOP）</td>
+    </tr>
+    <tr>
+      <td><strong>嵌套方式</strong></td>
+      <td>多层套娃，自由组合</td>
+      <td>通常只有一层代理</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>场景判断：三个问题</h2>
+
+<div class="scenario-card">
+  <strong>问题 1：你的动机是加功能还是控访问？</strong><br>
+  加功能（缓冲、加密、压缩、权限增强）→ 装饰器<br>
+  控访问（权限检查、日志审计、缓存拦截、远程调用）→ 代理
+</div>
+
+<div class="scenario-card">
+  <strong>问题 2：调用方需要知道中间层的存在吗？</strong><br>
+  不需要，完全透明 → 装饰器<br>
+  可能需要知道（比如 Spring AOP 的 @Aspect 切面）→ 代理
+</div>
+
+<div class="scenario-card">
+  <strong>问题 3：会不会多层嵌套组合？</strong><br>
+  会，像 JDK I/O 那样层层套娃 → 装饰器<br>
+  通常只有一层 → 代理
+</div>
+
+<h2>框架里的判断练习</h2>
+
+<table>
+  <thead>
+    <tr><th>场景</th><th>装饰器还是代理？</th><th>理由</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>new BufferedReader(new FileReader(...))</code></td>
+      <td><strong>装饰器</strong></td>
+      <td>给 FileReader 加缓冲功能</td>
+    </tr>
+    <tr>
+      <td>MyBatis Mapper bean</td>
+      <td><strong>代理</strong></td>
+      <td>控制数据库访问，屏蔽 SQL 执行细节</td>
+    </tr>
+    <tr>
+      <td>Spring AOP 切面</td>
+      <td><strong>代理</strong></td>
+      <td>控制方法调用，织入切面逻辑</td>
+    </tr>
+    <tr>
+      <td>LoginSsoDecorator</td>
+      <td><strong>装饰器</strong></td>
+      <td>给 SSO 拦截器加方法级权限功能</td>
+    </tr>
+    <tr>
+      <td>RPC 框架的 Stub</td>
+      <td><strong>代理</strong></td>
+      <td>控制网络访问，屏蔽远程调用细节</td>
+    </tr>
+    <tr>
+      <td>BufferedInputStream</td>
+      <td><strong>装饰器</strong></td>
+      <td>给 InputStream 加缓冲功能</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>一个灰色地带</h2>
+
+<div class="callout warn">
+  <span class="label">注意</span>
+  有些结构既是装饰器又是代理。比如 LoginSsoDecorator——它给 SSO 拦截器加了权限功能（装饰器），同时也控制了对原始拦截器的访问（代理）。判断标准是<strong>主要动机</strong>：如果主要目的是加功能，归为装饰器；如果主要目的是控制访问，归为代理。
+</div>
+
+<h2>关键洞察</h2>
+
+<div class="callout tip">
+  <span class="label">一句话区分</span>
+  装饰器说："我给你加个能力。" 代理说："我替你去访问。" 代码结构一样，动机决定归属。框架里看到"包一层再转发"的结构，先问动机。
+</div>
+
+<h2>本课小结</h2>
+
+<ol>
+  <li>装饰器和代理代码结构一样（构造函数注入 + 接口转发），但动机不同</li>
+  <li>装饰器动机：加功能（缓冲、加密、权限增强）</li>
+  <li>代理动机：控制访问（权限检查、日志审计、远程调用）</li>
+  <li>判断三个问题：动机是什么？调用方知不知道？会不会多层嵌套？</li>
+  <li>灰色地带看主要动机：加功能归装饰器，控访问归代理</li>
+</ol>
+
+<h2>推荐阅读</h2>
+<p>📖 <a href="https://refactoring.guru/design-patterns/decorator">Refactoring.Guru — Decorator</a> · <a href="https://refactoring.guru/design-patterns/proxy">Refactoring.Guru — Proxy</a>（对比阅读）</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" id="q1">
+  <p><strong>1. 装饰器和代理的核心区别是什么？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">代码结构不同</button>
+  <button class="quiz-option" onclick="check(this, false)">使用的语言不同</button>
+  <button class="quiz-option" onclick="check(this, true)">动机不同——装饰器加功能，代理控访问</button>
+  <button class="quiz-option" onclick="check(this, false)">继承关系不同</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q2" style="margin-top: 1rem;">
+  <p><strong>2. <code>new BufferedReader(new FileReader(...))</code> 是装饰器还是代理？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">代理——控制了对 FileReader 的访问</button>
+  <button class="quiz-option" onclick="check(this, true)">装饰器——给 FileReader 加了缓冲功能</button>
+  <button class="quiz-option" onclick="check(this, false)">既是装饰器又是代理</button>
+  <button class="quiz-option" onclick="check(this, false)">适配器——转换了接口</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q3" style="margin-top: 1rem;">
+  <p><strong>3. MyBatis Mapper bean 是装饰器还是代理？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">装饰器——给接口加了 SQL 执行功能</button>
+  <button class="quiz-option" onclick="check(this, true)">代理——控制数据库访问，屏蔽连接/SQL 细节</button>
+  <button class="quiz-option" onclick="check(this, false)">外观——简化了 JDBC 调用路径</button>
+  <button class="quiz-option" onclick="check(this, false)">适配器——统一了接口</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q4" style="margin-top: 1rem;">
+  <p><strong>4. 什么信号表明应该用装饰器而不是代理？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">需要控制访问权限</button>
+  <button class="quiz-option" onclick="check(this, true)">需要像套娃一样多层嵌套组合功能</button>
+  <button class="quiz-option" onclick="check(this, false)">需要屏蔽远程调用细节</button>
+  <button class="quiz-option" onclick="check(this, false)">需要日志审计</button>
+  <div class="quiz-result"></div>
+</div>
+
+<div class="quiz" id="q5" style="margin-top: 1rem;">
+  <p><strong>5. Spring AOP 用的是什么模式？</strong></p>
+  <button class="quiz-option" onclick="check(this, false)">装饰器——给 Bean 加了切面功能</button>
+  <button class="quiz-option" onclick="check(this, true)">代理——控制方法调用，织入切面逻辑</button>
+  <button class="quiz-option" onclick="check(this, false)">观察者——监听方法调用事件</button>
+  <button class="quiz-option" onclick="check(this, false)">策略——动态选择切面逻辑</button>
+  <div class="quiz-result"></div>
+</div>
+
+<script>
+function check(btn, correct) {
+  const quiz = btn.closest('.quiz');
+  const result = quiz.querySelector('.quiz-result');
+  quiz.querySelectorAll('.quiz-option').forEach(b => { b.disabled = true; });
+  if (correct) {
+    btn.classList.add('correct');
+    result.textContent = '✓ 正确';
+    result.className = 'quiz-result pass';
+  } else {
+    btn.classList.add('wrong');
+    quiz.querySelectorAll('.quiz-option').forEach(b => {
+      if (!b.classList.contains('wrong')) b.style.opacity = '0.5';
+    });
+    result.textContent = '✗ 再想想，复习一下上面的内容';
+    result.className = 'quiz-result fail';
+  }
+}
+</script>
+
+<div class="footer">
+  <p><a href="proxy-pattern.html">← 上一课：代理模式</a> · <a href="framework-recognition.html">下一课：框架里的装饰与代理 →</a></p>
+  <p>💡 有任何不清楚的地方？随时问你的 AI 老师。</p>
+</div>
+
+</body>
+</html>

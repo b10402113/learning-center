@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 5 — 單一領導者複製：Leader-Follower 的角色分工</title>
+  <link rel="stylesheet" href="../assets/styles.css">
+  <style>
+    /* Lesson-specific styles */
+    .arch-diagram {
+      background: var(--paper-shade);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 1.5em;
+      margin: 1.5em 0;
+      font-family: "SF Mono", "Menlo", "Consolas", monospace;
+      font-size: 0.82em;
+      line-height: 1.8;
+      overflow-x: auto;
+      white-space: pre;
+    }
+    .arch-diagram .leader { color: var(--accent); font-weight: 700; }
+    .arch-diagram .follower { color: var(--ink-soft); }
+    .arch-diagram .arrow { color: var(--good); }
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.2em;
+      margin: 1.2em 0;
+    }
+    @media (max-width: 600px) {
+      .two-col { grid-template-columns: 1fr; }
+    }
+    .two-col .col {
+      background: var(--paper-shade);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0.9em 1.1em;
+    }
+    .two-col .col h4 {
+      margin-top: 0;
+      font-size: 0.95rem;
+    }
+    .term {
+      border-bottom: 2px solid var(--accent);
+      cursor: help;
+    }
+    .comparison {
+      border-left: 4px solid var(--accent);
+      padding-left: 1em;
+      margin: 1em 0;
+      font-style: italic;
+      color: var(--ink-soft);
+    }
+  </style>
+</head>
+<body>
+<main>
+
+<div class="meta">DDIA 第五章 · Lesson 1 / 4 · 資料複製系列</div>
+
+<h1>單一領導者複製：Leader-Follower 的角色分工</h1>
+
+<div class="goal">
+  <strong>本課目標</strong>：畫出「client → leader → follower」的完整寫入與讀取流程圖，並說出三個使用複製的理由。
+</div>
+
+<h2>為什麼需要複製？</h2>
+
+<p>你有一個 PostgreSQL 資料庫跑在一台機器上。某天硬碟壞了。資料全沒了。</p>
+
+<p>這不是假設性的風險。Martin Kleppmann 在 <em>Designing Data-Intensive Applications</em> 中列出了複製的三個理由：</p>
+
+<ol>
+  <li><strong>提高可用性</strong>（Availability）— 如果一個 node 掛了，另一個可以接手服務</li>
+  <li><strong>降低延遲</strong>（Latency）— 讓使用者就近讀取最近的副本，而不是每次都跨洲連線</li>
+  <li><strong>擴大讀取吞吐量</strong>（Read Throughput）— 多個副本分擔讀取壓力</li>
+</ol>
+
+<p>注意：這三個理由都跟<strong>讀取</strong>有關。寫入的情況完全不同——稍後會看到。</p>
+
+<h2>基本架構：誰負責什麼？</h2>
+
+<p>單一領導者複製的核心想法極其簡單：</p>
+
+<div class="arch-diagram"><span class="arrow">      ┌──────────┐</span>
+<span class="arrow">      │  Client  │</span>
+<span class="arrow">      └────┬─────┘</span>
+<span class="arrow">           │</span>
+<span class="arrow">           │  ① 寫入</span>
+<span class="arrow">           ▼</span>
+<span class="arrow">    ┌──────────────┐</span>
+<span class="leader">    │    Leader     │</span>  <span class="leader">← 唯一接受寫入的 node</span>
+<span class="arrow">    └──┬────┬───┬───┘</span>
+<span class="arrow">       │    │   │</span>
+<span class="arrow">       │    │   │  ② 複製變更日誌</span>
+<span class="arrow">       ▼    ▼   ▼</span>
+<span class="follower">    ┌─────┐┌─────┐┌─────┐</span>
+<span class="follower">    │Foll ││Foll ││Foll │</span>  <span class="follower">← 只接受複製，不接受寫入</span>
+<span class="follower">    │ ow1 ││ ow2 ││ ow3 │</span>
+<span class="follower">    └─────┘└─────┘└─────┘</span></div>
+
+<p>三個角色：</p>
+
+<div class="two-col">
+  <div class="col">
+    <h4>Leader（领导者）</h4>
+    <ul>
+      <li>接受所有寫入請求</li>
+      <li>將變更寫入本地儲存</li>
+      <li>將變更日誌推送到所有 follower</li>
+    </ul>
+  </div>
+  <div class="col">
+    <h4>Follower（追隨者）</h4>
+    <ul>
+      <li>只接受來自 leader 的複製資料</li>
+      <li>保持與 leader 相同的資料副本</li>
+      <li>可以（但不一定）接受讀取請求</li>
+    </ul>
+  </div>
+</div>
+
+<p>這個模式也叫 <strong>leader-follower</strong>、<strong>master-slave</strong>、<strong>primary-backup</strong>。名字不同，機制相同。DBA 現在傾向用 leader-follower，因為 master-slave 有歷史包袱。</p>
+
+<h2>寫入流程：一步步拆解</h2>
+
+<p>當 client 發出一個 <code>INSERT</code> 或 <code>UPDATE</code> 指令時：</p>
+
+<ol>
+  <li>Client 連到 <strong>leader</strong>（不是 follower）</li>
+  <li>Leader 將變更寫入本地的寫入日誌（write-ahead log, WAL）</li>
+  <li>Leader 將日誌條目推送到所有 <strong>follower</strong></li>
+  <li>每個 follower 收到日誌後，按照相同順序套用自己的本地副本</li>
+</ol>
+
+<p>關鍵：<strong>寫入順序在所有 node 上完全一致</strong>。這確保了即使各 node 的處理速度不同，最終狀態也會收斂到相同結果。這跟「亂序寫入會造成不一致」是同一種防護模式——你之前在 design-system node 學到的「規則限制自由度」，在這裡變成了「順序限制一致性」。</p>
+
+<div class="callout">
+  <span class="label">常見誤解</span>
+  Follower 不是「備份」。備份是離線的、低頻的、用來災難恢復的。Follower 是<strong>即時的、持續複製的、可以立即接管服務的</strong>。備份可以在任何時候取回；follower 如果 lag 太久，可能已經丟失了資料。
+</div>
+
+<h2>讀取流程：不一定只能從 Leader 讀</h2>
+
+<p>這裡有一個反直覺的選擇：</p>
+
+<div class="two-col">
+  <div class="col">
+    <h4>方案 A：只從 Leader 讀</h4>
+    <ul>
+      <li>保證讀取到最新的資料</li>
+      <li>但所有讀取壓力集中在 leader</li>
+      <li>適合寫多讀少的場景</li>
+    </ul>
+  </div>
+  <div class="col">
+    <h4>方案 B：從 Follower 讀</h4>
+    <ul>
+      <li>讀取壓力分散到多個 node</li>
+      <li>但可能讀到<strong>過時</strong>的資料（replication lag）</li>
+      <li>適合讀多寫少的場景</li>
+    </ul>
+  </div>
+</div>
+
+<p>大多數系統選擇方案 B，但需要處理 lag 帶來的問題。這就是 <strong>replication lag</strong> 的核心矛盾：你想要低延遲（就近讀取），但低延遲可能犧牲了一致性（讀到舊資料）。</p>
+
+<div class="callout tip">
+  <span class="label">實務連結</span>
+  PostgreSQL 的 streaming replication 就是這個模型。Promotion of a standby 是 failover 的核心操作——standby 就是 follower，被 promote 後變成新的 leader。你可以在 <a href="https://www.postgresql.org/docs/current/different-rep-solutions.html">PostgreSQL 官方文件</a> 中對照本課的概念。
+</div>
+
+<h2>Quiz</h2>
+
+<div class="quiz"
+     data-question="單一領導者複製中，哪個角色負責接受寫入？"
+     data-correct="0"
+     data-explain="Leader 是唯一接受寫入的 node。Follower 只接受來自 leader 的複製資料。這是單一領導者模式的核心約束——如果多個 node 同時接受寫入，就變成了多領導者複製（multi-leader replication），那會帶來衝突解決的複雜問題。">
+  <button class="opt">Leader</button>
+  <button class="opt">Follower</button>
+  <button class="opt">Client</button>
+  <button class="opt">Backup</button>
+</div>
+
+<div class="quiz"
+     data-question="複製的三個理由中，哪一個跟寫入直接相關？"
+     data-correct="3"
+     data-explain="三個理由（提高可用性、降低延遲、擴大讀取吞吐量）都跟讀取有關。寫入在單一領導者模型中始終通過 leader 串行化，目的是確保一致性。這也是為什麼這個模型叫「單一領導者」——寫入的單一入口點是它的核心特徵。">
+  <button class="opt">提高可用性</button>
+  <button class="opt">降低延遲</button>
+  <button class="opt">擴大讀取吞吐量</button>
+  <button class="opt">以上皆非</button>
+</div>
+
+<div class="quiz"
+     data-question="如果 follower 比 leader 慢，client 從 follower 讀取時會發生什麼？"
+     data-correct="1"
+     data-explain="這就是 replication lag 的核心問題：client 可能讀到過時的資料。例如你剛更新了個人資料，立刻重新整理頁面，但負責讀取的 follower 還沒收到更新——你會看到舊版本。這不是 bug，而是非同步複製的設計取捨。">
+  <button class="opt">寫入失敗</button>
+  <button class="opt">可能讀到舊資料</button>
+  <button class="opt">自動從 leader 讀取</button>
+  <button class="opt">leader 會重試</button>
+</div>
+
+<h2>總結</h2>
+
+<ul>
+  <li>複製的三個理由：可用性、延遲、吞吐量——全部跟讀取有關</li>
+  <li>Leader 負責所有寫入， follower 只做複製</li>
+  <li>寫入順序在所有 node 上一致，確保最終收斂</li>
+  <li>從 follower 讀取可以分散壓力，但要處理 replication lag</li>
+</ul>
+
+<hr>
+
+<div class="next-box">
+  <strong>下一步</strong>：本課建立了基本架構。下一課（<a href="0006-replication-mechanisms.html">Lesson 6 — 複製機制</a>）會深入問：leader 的變更日誌到底是什麼格式？Statement-based、WAL、Logical Log、Trigger-based 有什麼差別？哪個最常用？
+</div>
+
+<div class="callout">
+  <span class="label">問老師</span>
+  有任何不清楚的地方？問你的 AI 老師——它可以幫你畫圖、舉例、或深入任何細節。
+</div>
+
+<hr>
+
+<div class="source-box">
+  <strong>主要來源</strong><br>
+  Martin Kleppmann, <em>Designing Data-Intensive Applications</em>, Chapter 5: Replication, Section 5.1<br>
+  <a href="https://www.postgresql.org/docs/current/different-rep-solutions.html">PostgreSQL — Different Solutions</a>
+</div>
+
+<footer>
+  <a href="../MISSION.md">Mission</a> · <a href="../RESOURCES.md">Resources</a> · <a href="0005-single-leader-replication-basics.html">本課</a> · <a href="0006-replication-mechanisms.html">下一課</a>
+</footer>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
