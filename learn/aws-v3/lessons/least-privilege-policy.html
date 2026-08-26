@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>實作最小權限 Policy</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · S3 policies and security · Step 3/4</p>
+
+<h1>實作最小權限 Policy</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：寫出一個只開放必要操作的 bucket policy，理解為什麼最小權限原則能降低爆炸半徑。
+</div>
+
+<h2>為什麼不要用 <code>"*": "*"</code>？</h2>
+
+<p>最省事的 policy 長這樣：</p>
+
+<pre><code>{
+  "Effect": "Allow",
+  "Principal": "*",
+  "Action": "s3:*",
+  "Resource": "arn:aws:s3:::my-bucket/*"
+}</code></pre>
+
+<p>「允許所有人對我的 bucket 做任何事。」這能用，但有嚴重問題：</p>
+
+<ul>
+  <li>任何人可以<strong>上傳任意檔案</strong>（包括惡意軟體）</li>
+  <li>任何人可以<strong>刪除你的檔案</strong></li>
+  <li>任何人可以<strong>列出你的 bucket 內容</strong>（洩漏目錄結構）</li>
+</ul>
+
+<p>如果你的 API key 洩漏了，攻擊者能用它做什麼？——任何事。這就是「爆炸半徑」。</p>
+
+<h2>最小權限原則</h2>
+
+<p>最小權限原則（Principle of Least Privilege）的核心想法很簡單：<strong>只給必要權限，不多給</strong>。</p>
+
+<p>對於一個公開靜態網站，訪客只需要做一件事：讀取檔案。他們不需要上傳、刪除或列出。所以 policy 應該只開 <code>s3:GetObject</code>。</p>
+
+<h2>逐步建構 Policy</h2>
+
+<h3>場景：公開靜態網站</h3>
+
+<p>需求：任何人都能讀取網站的所有檔案，但不能寫入、刪除或列出。</p>
+
+<pre><code>{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "PublicReadGetObject",
+            "Effect": "Allow",
+            "Principal": "*",
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::my-portfolio-site/*"
+        }
+    ]
+}</code></pre>
+
+<p>逐欄位拆解：</p>
+
+<table>
+  <thead>
+    <tr><th>欄位</th><th>值</th><th>為什麼是這個值？</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Effect</td><td>Allow</td><td>授予讀取權限</td></tr>
+    <tr><td>Principal</td><td>*</td><td>任何訪客都能讀取</td></tr>
+    <tr><td>Action</td><td>s3:GetObject</td><td>只開放「讀取」，不給 PutObject、DeleteObject</td></tr>
+    <tr><td>Resource</td><td>arn:aws:s3:::my-portfolio-site/*</td><td>只作用在 bucket 裡的物件，不作用在 bucket 本身</td></tr>
+  </tbody>
+</table>
+
+<h3>場景：只允許特定 IAM user 上傳</h3>
+
+<p>需求：只有你的部署帳號能上傳檔案，其他人不能。</p>
+
+<pre><code>{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AllowDeployUserUpload",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::123456789012:user/deploy-user"
+            },
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::my-portfolio-site/*"
+        }
+    ]
+}</code></pre>
+
+<p>注意 Principal 不再是 <code>*</code>，而是特定的 IAM user ARN。只有這個 user 能上傳，其他人連寫入的資格都沒有。</p>
+
+<h2>爆炸半徑是什麼？</h2>
+
+<p>爆炸半徑（blast radius）是一個安全概念：當你的系統被入侵時，損害的範圍有多大。</p>
+
+<table>
+  <thead>
+    <tr><th>Policy</th><th>爆炸半徑</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>s3:*</code> 給所有人</td><td>整個 bucket 的所有操作——任何檔案都能被讀、寫、刪</td></tr>
+    <tr><td><code>s3:GetObject</code> 給所有人</td><td>只有讀取——檔案被看到，但不會被改或刪</td></tr>
+    <tr><td><code>s3:GetObject</code> 只給 CloudFront</td><td>只有 CloudFront 能讀——連 anonymous 使用者都不行</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+<span class="label">核心概念</span>
+最小權限不只是「比較安全」——它限制了意外和入侵的影響範圍。即使 API key 洩漏，攻擊者也只能做你授權的那件事，而不是所有事。
+</div>
+
+<h2>實戰建議</h2>
+
+<ol>
+  <li><strong>先想需求，再寫 policy</strong>——誰需要做什麼操作？不需要的就不開。</li>
+  <li><strong>用具體的 ARN</strong>，不用 <code>*</code> 萬用字元——除非你真的需要涵蓋所有資源。</li>
+  <li><strong>先 Deny 再 Allow</strong>——在大型組織裡，用 Deny 關掉高風險操作，再用 Allow 開放必要的。</li>
+  <li><strong>定期審計</strong>——用 AWS IAM Access Analyzer 檢查哪些權限從未被使用。</li>
+</ol>
+
+<div class="callout">
+<span class="label">面試要點</span>
+「最小權限原則是安全設計的基礎——只授予完成任務所需的最低權限。在 S3 裡，這意味著只開必要操作（如 s3:GetObject），限制 Resource 到特定 bucket，而不是用 s3:* 給所有人。這樣即使憑證洩漏，爆炸半徑也最小。」
+</div>
+
+<hr>
+
+<div class="quiz" data-question="為什麼不應該用 s3:* 作為 Action？" data-correct="2" data-explain="s3:* 授予所有 S3 操作權限，包括寫入、刪除和列出。這遠超公開網站所需，大幅增加爆炸半徑。">
+  <button class="opt">因為 s3:* 不是合法的 Action</button>
+  <button class="opt">因為會讓網站變慢</button>
+  <button class="opt">因為授予了所有操作，爆炸半徑太大</button>
+  <button class="opt">因為 AWS 不允許這種寫法</button>
+</div>
+
+<div class="quiz" data-question="對於公開靜態網站，最低限度需要開放哪個 Action？" data-correct="1" data-explain="公開網站的訪客只需要讀取檔案，所以只需要 s3:GetObject。不需要上傳、刪除或列出。">
+  <button class="opt">s3:PutObject</button>
+  <button class="opt">s3:GetObject</button>
+  <button class="opt">s3:ListBucket</button>
+  <button class="opt">s3:DeleteObject</button>
+</div>
+
+<div class="quiz" data-question="「爆炸半徑」這個安全概念指的是什麼？" data-correct="0" data-explain="爆炸半徑是入侵或事故發生時，損害的範圍有多大。最小權限的目標就是縮小爆炸半徑。">
+  <button class="opt">系統被入侵時損害的範圍</button>
+  <button class="opt">伺服器的物理位置</button>
+  <button class="opt">資料傳輸的速度</button>
+  <button class="opt">AWS 收費的範圍</button>
+</div>
+
+<hr>
+
+<footer>
+<p>上一步：<a href="bucket-policy-structure.html">Bucket Policy 的四個欄位</a> · 下一步：<a href="encryption-and-versioning.html">加密、版本控制與存取日誌</a></p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

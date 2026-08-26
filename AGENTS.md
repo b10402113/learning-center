@@ -21,6 +21,8 @@ This repo turns raw material into customized, subject-specific lessons. A **node
 │       └── edges/     ← relationship pages between element pairs
 ├── wiki/              ← legacy, no longer maintained
 ├── legacy/            ← archived material (e.g. old tune/ transcripts)
+├── course-app/        ← React (Vite + Tailwind) course viewer; `npm run dev` regenerates its data from learn/ via scripts/build-data.mjs
+├── previews/          ← static HTML design previews for the course viewer
 └── *.md               ← pedagogy references
 ```
 

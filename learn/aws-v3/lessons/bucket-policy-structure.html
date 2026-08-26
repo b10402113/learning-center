@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bucket Policy 的四個欄位</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · S3 policies and security · Step 2/4</p>
+
+<h1>Bucket Policy 的四個欄位</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：能讀寫 S3 bucket policy，掌握 Effect / Principal / Action / Resource 四欄位的意義與互動方式。
+</div>
+
+<h2>Policy 是什麼？</h2>
+
+<p>上一步你學了 ARN——AWS 資源的「地址」。這一步要學的是怎麼用 ARN 寫出一份 <strong>bucket policy</strong>，告訴 S3：「誰能做什麼、作用在哪些資源上。」</p>
+
+<p>Bucket policy 就是一份 JSON 文件，貼在 S3 bucket 的 Permissions → Bucket policy 裡。它的核心結構只有四個欄位。</p>
+
+<h2>四個核心欄位</h2>
+
+<pre><code>{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "示範聲明",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::my-bucket/*"
+    }
+  ]
+}</code></pre>
+
+<h3>1. Effect — 允許還是拒絕？</h3>
+
+<p><code>Effect</code> 只有兩個值：<code>Allow</code> 或 <code>Deny</code>。它決定這個 statement 是「放行」還是「拒絕」。</p>
+
+<table>
+  <thead>
+    <tr><th>值</th><th>意思</th><th>例子</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Allow</code></td><td>授予權限</td><td>允許任何人讀取物件</td></tr>
+    <tr><td><code>Deny</code></td><td>明確拒絕（即使其他 rule 說了 Allow）</td><td>拒絕特定 IP 的存取</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+<span class="label">核心概念</span>
+在 AWS 裡，<strong>Deny 永遠優先於 Allow</strong>。如果你有一條 Allow 說「允許讀取」，又有一條 Deny 說「拒絕讀取」，結果是拒絕。這是 S3 安全模型的基石。
+</div>
+
+<h3>2. Principal — 誰？</h3>
+
+<p><code>Principal</code> 指定「這個 rule 適用在誰身上」。</p>
+
+<table>
+  <thead>
+    <tr><th>值</th><th>意思</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>"*"</code></td><td>所有人（anonymous 使用者也包含在內）</td></tr>
+    <tr><td><code>"AWS": "arn:aws:iam::123456789012:root"</code></td><td>特定 AWS 帳號下的所有人</td></tr>
+    <tr><td><code>"Service": "cloudfront.amazonaws.com"</code></td><td>特定 AWS 服務（如 CloudFront）</td></tr>
+  </tbody>
+</table>
+
+<p>要託管公開網站，你會設 <code>"*"</code>——讓任何人都能讀取。但如果是 private bucket，你會指定特定的 IAM user 或 role。</p>
+
+<h3>3. Action — 做什麼？</h3>
+
+<p><code>Action</code> 指定「允許或拒絕哪個 S3 操作」。S3 的 action 都以 <code>s3:</code> 開頭。</p>
+
+<table>
+  <thead>
+    <tr><th>Action</th><th>用途</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>s3:GetObject</code></td><td>讀取物件（下載檔案）</td></tr>
+    <tr><td><code>s3:PutObject</code></td><td>寫入物件（上傳檔案）</td></tr>
+    <tr><td><code>s3:DeleteObject</code></td><td>刪除物件</td></tr>
+    <tr><td><code>s3:ListBucket</code></td><td>列出 bucket 裡的物件</td></tr>
+  </tbody>
+</table>
+
+<p>公開網站只需要 <code>s3:GetObject</code>——訪客只能讀，不能寫、不能刪。</p>
+
+<h3>4. Resource — 作用在哪些資源上？</h3>
+
+<p><code>Resource</code> 用 ARN 指定「這個 rule 作用在哪些資源上」。</p>
+
+<pre><code>"Resource": "arn:aws:s3:::my-bucket/*"    ← 所有物件
+"Resource": "arn:aws:s3:::my-bucket"      ← bucket 本身
+"Resource": "arn:aws:s3:::my-bucket/img/*" ← 特定路徑下的物件</code></pre>
+
+<p>大多數 policy 都用 <code>/*</code> 萬用字元來涵蓋所有物件。</p>
+
+<h2>四個欄位的組合邏輯</h2>
+
+<p>把四個欄位串起來，一句話就能描述 policy 的意思：</p>
+
+<pre><code>Effect (Allow/Deny) + Principal (誰) + Action (做什麼) + Resource (在哪裡)
+= 一句完整的權限聲明</code></pre>
+
+<p>例如：</p>
+
+<pre><code>"Allow" + "*" + "s3:GetObject" + "arn:aws:s3:::my-bucket/*"
+= 「允許所有人讀取 my-bucket 裡的所有物件」</code></pre>
+
+<div class="callout">
+<span class="label">面試要點</span>
+「S3 bucket policy 有四個核心欄位：Effect（Allow 或 Deny）、Principal（誰）、Action（做什麼操作）、Resource（作用在哪個 ARN 上）。Deny 永遠優先於 Allow，這是 AWS 安全模型的基本原則。」
+</div>
+
+<hr>
+
+<div class="quiz" data-question="在 S3 policy 裡，如果有一條 Allow 和一條 Deny 同時作用在同一個 action 上，結果是什麼？" data-correct="2" data-explain="AWS 的安全模型是 Deny 永遠優先於 Allow。即使有 Allow 說可以存取，只要有一條 Deny，最終結果就是拒絕。">
+  <button class="opt">Allow 優先</button>
+  <button class="opt">看誰先被處理</button>
+  <button class="opt">Deny 永遠優先</button>
+  <button class="opt">兩者抵消，變成中立</button>
+</div>
+
+<div class="quiz" data-question="要讓公開網站的訪客能讀取所有檔案，Action 應該設什麼？" data-correct="1" data-explain="s3:GetObject 是讀取物件的權限。公開網站只需要讀取權限，不需要 PutObject（寫入）或 DeleteObject（刪除）。">
+  <button class="opt">s3:PutObject</button>
+  <button class="opt">s3:GetObject</button>
+  <button class="opt">s3:*（所有操作）</button>
+  <button class="opt">s3:ListBucket</button>
+</div>
+
+<div class="quiz" data-question="policy 裡的 Principal: '*' 代表什麼意思？" data-correct="0" data-explain="星號代表「所有人」——不限定特定 IAM user、role 或帳號，任何 anonymous 使用者都包含在內。">
+  <button class="opt">所有人</button>
+  <button class="opt">只有 root user</button>
+  <button class="opt">只有同帳號的 IAM</button>
+  <button class="opt">只有 AWS 服務</button>
+</div>
+
+<hr>
+
+<footer>
+<p>上一步：<a href="arn-format.html">ARN 的格式與用途</a> · 下一步：<a href="least-privilege-policy.html">實作最小權限 Policy</a></p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

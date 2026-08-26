@@ -162,9 +162,21 @@ function buildDigestIndex(subject) {
 function sourceFilesFor(subject) {
   const dir = join(SOURCES_ROOT, subject);
   if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isFile() && !e.name.startsWith("."))
-    .map((e) => ({ name: e.name, hash: sha256(readFileSync(join(dir, e.name))) }));
+  const out = [];
+  function walk(d, rel) {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (e.name.startsWith(".")) continue;
+      const full = join(d, e.name);
+      const name = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        walk(full, name);
+      } else if (e.isFile()) {
+        out.push({ name, hash: sha256(readFileSync(full)) });
+      }
+    }
+  }
+  walk(dir, "");
+  return out;
 }
 
 function baselineNodeCount(totalLines) {

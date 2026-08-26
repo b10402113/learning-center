@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>加密、版本控制與存取日誌</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · S3 policies and security · Step 4/4</p>
+
+<h1>加密、版本控制與存取日誌</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：了解 S3 伺服器端加密、版本控制與存取日誌的用途與開啟方式，判斷何時需要啟用。
+</div>
+
+<h2>你的靜態網站需要這些嗎？</h2>
+
+<p>對於一個公開的靜態網站，加密、版本控制和存取日誌不是必要功能——但它們是<strong>生產環境的標準配置</strong>。即使你現在不需要，面試官會問你「在生產環境中你會怎麼保護 S3 資料？」，了解這些選項能讓你的回答更有深度。</p>
+
+<h2>1. 伺服器端加密 (Server-Side Encryption)</h2>
+
+<p>加密保護的是<strong>靜態資料</strong>（data at rest）。當你把檔案上傳到 S3，S3 可以自動在儲存時加密檔案，讀取時自動解密——對你的應用完全透明。</p>
+
+<h3>三種加密選項</h3>
+
+<table>
+  <thead>
+    <tr><th>加密方式</th><th>金鑰管理</th><th>適用場景</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>SSE-S3</code></td><td>AWS 完全管理（S3 自己的金鑰）</td><td>簡單、零配置、一般用途</td></tr>
+    <tr><td><code>SSE-KMS</code></td><td>AWS KMS 管理（你可以控制金鑰存取）</td><td>需要稽核金鑰使用紀錄</td></tr>
+    <tr><td><code>SSE-C</code></td><td>你自己提供金鑰</td><td>你管理金鑰，AWS 只做加解密</td></tr>
+  </tbody>
+</table>
+
+<p>對於靜態網站，<strong>SSE-S3</strong> 就夠了。開啟方式：</p>
+
+<ol>
+  <li>S3 console → 你的 bucket → <strong>Properties</strong></li>
+  <li>找到 <strong>Default encryption</strong> → 按 <strong>Edit</strong></li>
+  <li>選擇 <strong>Server-side encryption with Amazon S3 managed keys (SSE-S3)</strong></li>
+  <li>按 <strong>Save changes</strong></li>
+</ol>
+
+<p>或者用 CLI：</p>
+
+<pre><code>aws s3api put-bucket-encryption \
+  --bucket my-portfolio-site \
+  --server-side-encryption-configuration '{
+    "Rules": [{
+      "ApplyServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+      }
+    }]
+  }'</code></pre>
+
+<div class="callout">
+<span class="label">核心概念</span>
+伺服器端加密對你的應用是透明的——S3 在儲存時加密、讀取時自動解密。你不需要改任何代碼，只需要在 bucket 設定裡開啟。
+</div>
+
+<h2>2. 版本控制 (Versioning)</h2>
+
+<p>版本控制讓 S3 保留每一個物件的每一個版本。這意味著：</p>
+
+<ul>
+  <li><strong>誤刪可以復原</strong>——刪除只是加了一個 "delete marker"，真實資料還在</li>
+  <li><strong>誤覆可以回退</strong>——上傳新版本不會覆蓋舊版本，舊版本依然保留</li>
+  <li><strong>可以搭配 MFA Delete</strong>——需要多因素認證才能永久刪除版本</li>
+</ul>
+
+<h3>開啟版本控制</h3>
+
+<ol>
+  <li>S3 console → 你的 bucket → <strong>Properties</strong></li>
+  <li>找到 <strong>Versioning</strong> → 按 <strong>Edit</strong></li>
+  <li>選擇 <strong>Enable</strong></li>
+  <li>按 <strong>Save changes</strong></li>
+</ol>
+
+<p>或者用 CLI：</p>
+
+<pre><code>aws s3api put-bucket-versioning \
+  --bucket my-portfolio-site \
+  --versioning-configuration Status=Enabled</code></pre>
+
+<div class="callout">
+<span class="label">面試要點</span>
+「版本控制是防止資料意外遺失的安全網。誤刪檔案時，只是加了一個 delete marker，真實資料還在，可以輕鬆復原。在生產環境中幾乎所有 bucket 都應該開啟版本控制。」
+</div>
+
+<h2>3. 存取日誌 (Access Logging)</h2>
+
+<p>存取日誌記錄了「誰在什麼時候對什麼資源做了什麼操作」。這是安全稽核的基礎——當異常發生時，日誌能幫你還原事件經過。</p>
+
+<h3>開啟存取日誌</h3>
+
+<ol>
+  <li>先建立一個「日誌 bucket」（專門存放日誌的 bucket）</li>
+  <li>在來源 bucket → <strong>Properties</strong> → <strong>Server access logging</strong> → <strong>Edit</strong></li>
+  <li>開啟 logging，選擇目標 bucket</li>
+  <li>按 <strong>Save changes</strong></li>
+</ol>
+
+<div class="callout">
+<span class="label">核心概念</span>
+存取日誌需要一個專門的日誌 bucket。不要把日誌和網站檔案放在同一個 bucket——這會造成循環依賴（日誌寫入觸發更多日誌）。
+</div>
+
+<h2>三個功能的比較</h2>
+
+<table>
+  <thead>
+    <tr><th>功能</th><th>保護什麼</th><th>免費？</th><th>必要性</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>加密</td><td>靜態資料不被未授權讀取</td><td>SSE-S3 免費</td><td>生產環境必備</td></tr>
+    <tr><td>版本控制</td><td>資料不被意外覆蓋或刪除</td><td>免費（但多版本佔儲存空間）</td><td>生產環境強烈建議</td></tr>
+    <tr><td>存取日誌</td><td>提供安全事件的稽核軌跡</td><td>日誌寫入的 S3 費用</td><td>合規要求時必備</td></tr>
+  </tbody>
+</table>
+
+<h2>什麼時候開啟什麼？</h2>
+
+<pre><code>個人專案 / 試驗性部署
+  → SSE-S3 加密（零成本，一鍵開啟）
+  → 版本控制（防止誤刪）
+
+正式上線的網站
+  → SSE-S3 或 SSE-KMS 加密
+  → 版本控制
+  → 存取日誌（導到專門的 log bucket）
+
+處理敏感資料（用戶個資、金融資料）
+  → SSE-KMS（可追蹤金鑰使用）
+  → 版本控制 + MFA Delete
+  → 存取日誌 + CloudTrail</code></pre>
+
+<div class="callout">
+<span class="label">面試要點</span>
+「生產環境的 S3 應該預設開啟伺服器端加密（SSE-S3）和版本控制。加密保護靜態資料不被未授權讀取，版本控制防止資料意外遺失。如果需要安全稽核，再加上存取日誌。這些功能免費或低成本，沒有理由不開。」
+</div>
+
+<hr>
+
+<div class="quiz" data-question="S3 伺服器端加密對你的應用程式有什麼影響？" data-correct="1" data-explain="伺服器端加密是透明的——S3 在儲存時加密、讀取時自動解密。你不需要改任何應用程式代碼。">
+  <button class="opt">需要在代碼裡加解密邏輯</button>
+  <button class="opt">完全透明，不需要改代碼</button>
+  <button class="opt">會讓讀取速度變慢 50%</button>
+  <button class="opt">只在特定 region 可用</button>
+</div>
+
+<div class="quiz" data-question="S3 版本控制開啟後，刪除一個檔案會發生什麼？" data-correct="2" data-explain="刪除只是加了一個 delete marker，真實資料（所有歷史版本）依然保留在 S3 裡，可以輕鬆復原。">
+  <button class="opt">檔案永久消失</button>
+  <button class="opt">檔案移到回收桶</button>
+  <button class="opt">加了一個 delete marker，資料還在</button>
+  <button class="opt">S3 會先詢問是否確認刪除</button>
+</div>
+
+<div class="quiz" data-question="為什麼存取日誌不應該寫到同一個 bucket 裡？" data-correct="0" data-explain="日誌寫入會觸發更多日誌，造成無限循環。AWS 建議使用獨立的日誌 bucket。">
+  <button class="opt">會造成循環依賴</button>
+  <button class="opt">日誌格式不相容</button>
+  <button class="opt">會增加存取延遲</button>
+  <button class="opt">AWS 不允許這種設定</button>
+</div>
+
+<hr>
+
+<footer>
+<p>上一步：<a href="least-privilege-policy.html">實作最小權限 Policy</a></p>
+<p>恭喜完成整個 S3 安全模組！<a href="arn-format.html">從頭複習</a></p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>
