@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>自訂網域與 HTTPS</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · CloudFront CDN setup · Step 4/4</p>
+
+<h1>自訂網域與 HTTPS</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：用 Alternate domain name (CNAME) 綁定自有網域，並用 ACM 憑證開啟 HTTPS。
+</div>
+
+<h2>兩件事要解決</h2>
+
+<p>distribution 預設給你的網址是 <code>xxxxx.cloudfront.net</code>——能用，但你想要自己的網域。這需要兩個設定：</p>
+
+<ol>
+  <li><strong>Alternate domain name（CNAME）</strong>——告訴 CloudFront「這個自有網域歸我管」</li>
+  <li><strong>ACM 憑證</strong>——讓 CloudFront 用你自己的網域提供 HTTPS</li>
+</ol>
+
+<h2>Step 1：設定 Alternate domain name + Default root object</h2>
+
+<p>進 CloudFront → 你的 distribution → <strong>Settings</strong> → Edit：</p>
+
+<ol>
+  <li><strong>Alternate domain name (CNAME)</strong>：填入你的網域，例如 <code>www.example.com</code>。這讓 CloudFront 接受來自這個網域的請求。</li>
+  <li><strong>Default root object</strong>：填 <code>index.html</code>。這樣訪客直接打根網址（<code>/</code>）就能看到首頁，不用自己輸入 <code>index.html</code>——這正是上一步「根路徑看到錯誤」的解藥（<code>custom-domains</code>）。</li>
+  <li>其他可以順手設定的：<strong>Price class</strong>（全部 edge locations 或只限某些區域）、HTTP/3 支援。對靜態網站，Steve 建議用全部 edge locations。</li>
+</ol>
+
+<div class="callout tip">
+<span class="label">CNAME 是什麼</span>
+CNAME（Canonical Name）是一條 DNS 記錄，把 <code>www.example.com</code> 指向 CloudFront 的 <code>xxxxx.cloudfront.net</code>。訪問者打你的網域 → DNS 導到 CloudFront → CloudFront 看 Alternate domain name 認出這是他管的網域 → 服務內容。
+</div>
+
+<h2>Step 2：用 ACM 發免費憑證</h2>
+
+<p>HTTPS 需要 SSL/TLS 憑證。AWS Certificate Manager（ACM）可以免費發——對 CloudFront 來說，<strong>憑證必須在 us-east-1 區域</strong>，這是 AWS 的慣例：全域服務的資源放在 us-east-1（<code>ssl-tls</code>）。</p>
+
+<ol>
+  <li>切到 <strong>us-east-1</strong> → ACM → Request certificate</li>
+  <li>輸入你的網域（<code>www.example.com</code>，可加 <code>example.com</code> 一起發）</li>
+  <li>選 DNS validation，ACM 會給你一組 CNAME 驗證記錄</li>
+  <li>把驗證記錄加到你的 DNS（Route 53 或任何 DNS 服務商）</li>
+  <li>等驗證通過（狀態變 <code>Issued</code>），把憑證 ARN 掛到 distribution 的 <strong>Custom SSL certificate</strong></li>
+</ol>
+
+<div class="callout">
+<span class="label">不用買網域的替代方案</span>
+如果你用預設的 <code>*.cloudfront.net</code> 網域，SSL/TLS 憑證是 <strong>自動的</strong>——CloudFront 免費送。只有用自訂網域時才需要自己向 ACM 申請。
+</div>
+
+<h2>Step 3：把網域指到 CloudFront</h2>
+
+<p>在你的 DNS 服務商（Route 53 或其他）加一條 CNAME：</p>
+
+<pre><code>www.example.com  →  xxxxx.cloudfront.net</code></pre>
+
+<p>如果想讓 apex 網域（<code>example.com</code>，不帶 www）也工作，需要 Route 53 的 Alias record（用 <code>aws:cloudfront:distribution</code> 當目標）。</p>
+
+<h2>Console vs CLI</h2>
+
+<p>這份配置實際上是一份 JSON——distribution 的完整設定。Console 的每一顆按鈕都有 CLI 對應（例如 <code>aws cloudfront get-distribution</code> 查狀態、<code>aws cloudfront update-distribution</code> 改設定）。你以後可以把它寫成 infrastructure-as-code，部署變成可重複的指令，不用手點（<code>console-vs-cli</code>）。</p>
+
+<div class="callout">
+<span class="label">面試要點</span>
+「我綁定自有網域時做三件事：在 distribution 的 Alternate domain name 填 CNAME、設定 Default root object 為 index.html、用 ACM（憑證需在 us-east-1）申請免費憑證並掛到 Custom SSL certificate。最後在 DNS 加 CNAME 記錄指向 cloudfront.net 網址。如果只是用預設網域，SSL 是自動的。」
+</div>
+
+<hr>
+
+<div class="quiz" data-question="ACM 憑證對 CloudFront 必須在哪個區域申請？" data-correct="3" data-explain="CloudFront 是全域服務，憑證必須在 us-east-1 申請才能用——這是 AWS 的慣例。">
+  <button class="opt">和 bucket 相同的區域</button>
+  <button class="opt">任何區域都可以</button>
+  <button class="opt">離使用者最近的區域</button>
+  <button class="opt">us-east-1</button>
+</div>
+
+<div class="quiz" data-question="Default root object 設為 index.html 的效果是什麼？" data-correct="1" data-explain="訪客直接打根網址 (/) 就能看到 index.html，不用自己輸入完整檔名。">
+  <button class="opt">所有請求都回傳 index.html</button>
+  <button class="opt">打根網址時自動顯示 index.html</button>
+  <button class="opt">禁止直接訪問其他檔案</button>
+  <button class="opt">把 index.html 設成 error page</button>
+</div>
+
+<div class="quiz" data-question="用預設 cloudfront.net 網域時的 SSL/TLS 憑證從哪來？" data-correct="2" data-explain="用預設網域時 SSL/TLS 是自動的，CloudFront 免費提供；只有自訂網域才需要自己向 ACM 申請。">
+  <button class="opt">需要自己買第三方憑證</button>
+  <button class="opt">用 S3 的憑證</button>
+  <button class="opt">CloudFront 自動提供</button>
+  <button class="opt">不需要憑證</button>
+</div>
+
+<hr>
+
+<footer>
+<p>上一步：<a href="create-cloudfront-distribution.html">建立 CloudFront Distribution</a> · 回到節點：<a href="../../nodes/cloudfront-cdn-setup.html">CloudFront CDN setup</a></p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

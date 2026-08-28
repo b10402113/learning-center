@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>為什麼 S3 單獨不夠：三個硬限制</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · CloudFront CDN setup · Step 1/4</p>
+
+<h1>為什麼 S3 單獨不夠：三個硬限制</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：說出 S3 靜態網站託管的三個硬限制，並解釋為何正式上線需要 CDN。
+</div>
+
+<h2>回顧：S3 靜態託管「能看」但「不能上線」</h2>
+
+<p>上一節你完成了第一次部署——打開 website endpoint，網站能跑。Steve 的總結很直接：<em>S3 靜態網站託管的唯一賣點是「簡單」，一顆按鈕就上線。</em> 但除此之外，它是所有選項裡最差的那個（<a href="https://www.udemy.com/" target="_blank">AWS 課程 12</a>，<code>s3-hosting-limitations</code>）。</p>
+
+<p>問題不是「你設定錯了」，而是<strong>功能根本不提供</strong>。這三個限制是硬性的，不是任何配置選項能繞過的。</p>
+
+<h2>限制一：自訂網域沒有 HTTPS</h2>
+
+<p>S3 的 website endpoint 只支援 HTTP。瀏覽器現在對非 HTTPS 網站會直接警告，而且許多現代瀏覽器 API——<code>navigator.clipboard</code>、geolocation——<strong>只有在 HTTPS 下才能用</strong>。</p>
+
+<div class="callout warn">
+<span class="label">面試要點</span>
+「S3 靜態網站託管只提供 HTTP endpoint，無法在自訂網域上直接啟用 HTTPS。而瀏覽器對非 HTTPS 的限制越來越嚴格，所以這對正式產品是硬傷。」
+</div>
+
+<h2>限制二：不能設定 cache-control 標頭</h2>
+
+<p>你用過 Vercel 或 Netlify——部署完圖片秒開，重複訪問幾乎零延遲。這背後是 CDN 的快取。但 S3 靜態託管<strong>沒有讓你設定 cache-control 的介面</strong>，瀏覽器每次都要重新抓取檔案。</p>
+
+<p>沒有快取意味著：每一次請求都打到 origin、每一次都重新下載。對靜態資產來說，這既慢又貴。</p>
+
+<h2>限制三：內容只從單一區域送出</h2>
+
+<p>你的 bucket 放在美東（如 <code>us-east-1</code>）。一個在台北的使用者打開網站，請求要穿越整個太平洋。Steve 用 CDN Perf 測過：從美東 ping 到澳洲要 253ms，而這還只是 ping——連第一個 byte 都還沒傳（<code>transition-to-cloudfront</code>）。</p>
+
+<p>所有使用者都被迫走到同一個數據中心，距離問題完全沒被解決。</p>
+
+<div class="callout">
+<span class="label">核心概念</span>
+CDN 要解決的就是這三個問題：HTTPS、可設定的快取、全球邊緣分發。而 CloudFront 正是 AWS 的 CDN——坐在 S3 前面，把這三件事一次補齊。
+</div>
+
+<h2>所以下一步：CloudFront</h2>
+
+<p>接下來的四步你將：建立 CloudFront distribution、把 S3 bucket 設為 origin、綁定自訂網域、用 ACM 開啟 HTTPS。最後再把 S3 的靜態網站託管關掉，避免兩套入口打架（<code>disabling-s3-website-hosting</code>）。</p>
+
+<p>一個關鍵的心理準備：<strong>CloudFront 不是選配，是正式上線的必要下一步。</strong> 這也正是面試時「為什麼用 S3 + CloudFront 而不是只用 S3」的標準答案起點。</p>
+
+<div class="callout tip">
+<span class="label">動手前想一想</span>
+你可能會想：「那把 bucket 放在離使用者最近的區域就好了？」——但使用者分佈在全球，不可能每個區域都放一份。CDN 用「一份 origin + 全球快取副本」解決，這正是下一課的主題。
+</div>
+
+<hr>
+
+<div class="quiz" data-question="哪一項是 S3 靜態網站託管的硬限制之一？" data-correct="1" data-explain="自訂網域上沒有 HTTPS 是 S3 靜態託管的硬限制之一；另外兩個是無法設定 cache-control 與單一區域分發。">
+  <button class="opt">無法支援多個 bucket</button>
+  <button class="opt">自訂網域上沒有 HTTPS</button>
+  <button class="opt">無法上傳二進位檔案</button>
+  <button class="opt">不能設定 error page</button>
+</div>
+
+<div class="quiz" data-question="為什麼沒有 cache-control 會是個問題？" data-correct="0" data-explain="沒有 cache-control，瀏覽器每次都要重新抓取檔案，請求每次都打到 origin，既慢又貴。">
+  <button class="opt">瀏覽器每次都要重新抓取檔案</button>
+  <button class="opt">檔案會被永久刪除</button>
+  <button class="opt">網域無法綁定</button>
+  <button class="opt">HTTPS 憑證會失效</button>
+</div>
+
+<div class="quiz" data-question="單一區域分發造成的核心問題是什麼？" data-correct="3" data-explain="內容只從一個區域送出，遠端使用者必須穿越長距離連到 origin，延遲隨距離增加。">
+  <button class="opt">S3 只能放靜態檔案</button>
+  <button class="opt">所有區域都要付費</button>
+  <button class="opt">無法使用自訂網域</button>
+  <button class="opt">遠端使用者的延遲很高</button>
+</div>
+
+<hr>
+
+<footer>
+<p>下一步：<a href="cdn-concept-and-caching-tiers.html">CDN 是什麼：邊緣節點與快取階層</a></p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

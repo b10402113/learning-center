@@ -53,3 +53,17 @@
 | access-logging | unknown |
 
 > probe skipped via /nodes aws-v3/s3-policies-and-security skip-probe on 2026-08-25
+
+## cloudfront-cdn-setup
+
+| Strand | Status |
+| --- | --- |
+| s3-hosting-limitations | unknown |
+| transition-to-cloudfront | unknown |
+| cdn-concept | unknown |
+| caching-tiers | unknown |
+| distribution-creation | unknown |
+| custom-domains | unknown |
+| ssl-tls | unknown |
+
+> probe skipped via /nodes aws-v3/cloudfront-cdn-setup skip-probe on 2026-08-28

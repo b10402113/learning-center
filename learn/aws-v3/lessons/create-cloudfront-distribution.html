@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>建立 CloudFront Distribution</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · CloudFront CDN setup · Step 3/4</p>
+
+<h1>建立 CloudFront Distribution</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：在 Console 建立 CloudFront distribution、把 S3 bucket 設為 origin，並理解它自動更新 bucket policy 的機制。
+</div>
+
+<h2>前置：關掉 S3 靜態網站託管</h2>
+
+<p>在設定 CloudFront 之前，先把 S3 的靜態網站託管<strong>關閉</strong>（Properties → Static website hosting → Disable）。原因：S3 靜態託管和 CloudFront 用的是<strong>不同的存取入口</strong>——website endpoint 走的是網站端點，CloudFront 走的是 S3 的 REST API endpoint。兩個入口同時開著會造成混亂；S3 靜態託管是階梯，不是目的地（<code>disabling-s3-website-hosting</code>）。</p>
+
+<div class="callout warn">
+<span class="label">重點</span>
+CloudFront 從 origin 抓檔時用的是 S3 的 <strong>REST API endpoint</strong>（object URL），不是 website endpoint。所以就算關掉靜態託管，CloudFront 依然能正常取檔。
+</div>
+
+<h2>建立 Distribution</h2>
+
+<ol>
+  <li>CloudFront console → <strong>Create distribution</strong></li>
+  <li><strong>Origin</strong>：選你的 S3 bucket。名稱隨意（Steve 統一用同一個名字避免記錯）。</li>
+  <li><strong>Origin access</strong>：選「Origin access control settings (recommended)」——這會產生一個 OAC 身分，讓 CloudFront 用它存取 bucket</li>
+  <li><strong>Cache behavior</strong>：用推薦的 S3 快取設定</li>
+  <li><strong>Web Application Firewall (WAF)</strong>：可選。Steve 建議用 CloudFront 內建的 general 設定即可，可擋 DDoS 與惡意請求，成本約 $14 / 每 1 千萬次請求</li>
+  <li>按 <strong>Create distribution</strong></li>
+</ol>
+
+<h2>它會自動幫你補 bucket policy</h2>
+
+<p>建立時 CloudFront 會要求你更新 bucket 的 policy。記得嗎？你之前把 `"Principal": "*"` 撤掉了——現在 CloudFront 幫你補一個<strong>更精確</strong>的版本：</p>
+
+<pre><code>{
+  "Version": "2008-10-17",
+  "Id": "PolicyForCloudFrontPrivateContent",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {
+      "Service": "cloudfront.amazonaws.com"
+    },
+    "Action": "s3:GetObject",
+    "Resource": "arn:aws:s3:::你的-bucket/*",
+    "Condition": {
+      "StringEquals": {
+        "AWS:SourceArn": "arn:aws:cloudfront::你的帳號:distribution/你的-ID"
+      }
+    }
+  }]
+}</code></pre>
+
+<div class="callout tip">
+<span class="label">最小權限的實踐</span>
+原本的 `Principal: "*"` 是「全世界都能讀」。現在改成：<strong>只有「你的這個 CloudFront distribution」能讀</strong>。條件用 `AWS:SourceArn` 精確鎖定到單一 distribution——這正是你學過的最小權限原則，由 AWS 幫你套用。公有網路不能直接讀 bucket，只能透過 CloudFront。
+</div>
+
+<h2>部署需要時間</h2>
+
+<p>distribution 要花約 5–15 分鐘才會 global deploy——因為它要把節點鋪到全球各地。Console 裡的狀態會從 <code>In Progress</code> 變成 <code>Deployed</code>。</p>
+
+<p>驗證：訪問它給你的 <code>xxxxx.cloudfront.net</code> 網址。<strong>根路徑會先看到錯誤</strong>——這是預期的，因為還沒設定 default root object（下一步處理）。加上 <code>/index.html</code> 就能看到你的網站了，而且內容確實是「從 S3 來、由 CloudFront 快取」。</p>
+
+<div class="callout">
+<span class="label">面試要點</span>
+「建立 CloudFront distribution 時，我選擇 OAC（Origin Access Control）作為 origin 存取方式。CloudFront 自動更新 bucket policy，把 principal 從 `*` 改成只有該 distribution 能讀——用 `AWS:SourceArn` 條件精確鎖定，體現最小權限。這讓公有網路只能透過 CloudFront 存取，不能直接連 bucket。」
+</div>
+
+<hr>
+
+<div class="quiz" data-question="為什麼建立 CloudFront 前要關閉 S3 靜態網站託管？" data-correct="0" data-explain="S3 靜態託管與 CloudFront 用不同的存取入口（website endpoint vs REST API endpoint），同時開著會造成衝突。">
+  <button class="opt">避免兩個入口衝突</button>
+  <button class="opt">關閉後才能付費</button>
+  <button class="opt">靜態託管會刪除檔案</button>
+  <button class="opt">CloudFront 不能讀啟用託管的 bucket</button>
+</div>
+
+<div class="quiz" data-question="CloudFront 從 S3 取檔時走的是哪個入口？" data-correct="2" data-explain="CloudFront 走 S3 的 REST API endpoint（object URL），不是 website endpoint。">
+  <button class="opt">Website endpoint</button>
+  <button class="opt">靜態網站託管的 URL</button>
+  <button class="opt">S3 的 REST API endpoint</button>
+  <button class="opt">自訂的 CNAME</button>
+</div>
+
+<div class="quiz" data-question="CloudFront 自動補上的 bucket policy 中，principal 是什麼？" data-correct="1" data-explain="principal 是 cloudfront.amazonaws.com 這個服務，並用 AWS:SourceArn 條件鎖定到特定 distribution。">
+  <button class="opt">`*` 所有人</button>
+  <button class="opt">`cloudfront.amazonaws.com` 服務</button>
+  <button class="opt">只有 admin 使用者</button>
+  <button class="opt">S3 本身</button>
+</div>
+
+<hr>
+
+<footer>
+<p>上一步：<a href="cdn-concept-and-caching-tiers.html">CDN 是什麼</a> · 下一步：<a href="custom-domain-and-https.html">自訂網域與 HTTPS</a></p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

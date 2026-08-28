@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CDN 是什麼：邊緣節點與快取階層</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · CloudFront CDN setup · Step 2/4</p>
+
+<h1>CDN 是什麼：邊緣節點與快取階層</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：說出邊緣節點 / 區域邊緣快取 / origin 的分層架構，以及首次請求 vs 後續請求的延遲差異。
+</div>
+
+<h2>心智模型：一份 origin，全球快取副本</h2>
+
+<p>上一步我們說「把 bucket 放到每個區域」不現實。CDN 的做法是反過來：<strong>內容只有一份放在 origin，但在全球各地放快取副本</strong>。</p>
+
+<p>Steve 的說法很直白：不要只有一個 bucket、一個地方，而是在全世界放<strong>很小的基礎設施</strong>。第一個使用者付費，之後所有人都受益（<a href="https://www.udemy.com/" target="_blank">AWS 課程 13</a>，<code>cdn-concept</code>）。</p>
+
+<h2>三層快取階層</h2>
+
+<table>
+  <thead>
+    <tr><th>層級</th><th>位置</th><th>角色</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Edge location（邊緣節點）</td><td>離使用者最近</td><td>第一線快取，回答「有沒有快取」</td></tr>
+    <tr><td>Regional edge cache（區域邊緣快取）</td><td>地理區域層級</td><td>彙整一個區域的請求，減少打回 origin</td></tr>
+    <tr><td>Origin（origin 伺服器）</td><td>S3 bucket（美東）</td><td>唯一權威內容來源</td></tr>
+  </tbody>
+</table>
+
+<p>請求流程：使用者連到<strong>最近的邊緣節點</strong> → 有快取就回傳 → 沒有就往區域邊緣快取找 → 再沒有才打到 origin（<code>caching-tiers</code>）。</p>
+
+<h2>首次請求 vs 後續請求</h2>
+
+<div class="callout tip">
+<span class="label">核心概念</span>
+<strong>第一個使用者付冷啟動成本。</strong> 澳洲西岸第一個使用者要一路打到美東 origin；但只要澳洲東岸有人先訪問過，區域邊緣快取就填滿了，西岸使用者只要到東岸拿快取即可——差距是幾毫秒對上約 200ms。
+</div>
+
+<p>Steve 用真實數據證明：CDN Perf 測試中，距離 origin 越近的地方延遲越低，越遠越糟；掛上 CDN 後，從墨爾本訪問的延遲大幅下降——「請求幾乎像是從屋子裡發出的」。</p>
+
+<h2>額外紅利：可靠性</h2>
+
+<p>就算 S3 出了狀況，每個還有快取的區域節點依然能正常供服務——那一刻根本沒在讀 bucket。S3 的 SLA 是 99.9%（目標 99.99%），但「用不到的保護」讓日常體驗更好，也多了幾層緩衝。</p>
+
+<h2>代價：複雜度</h2>
+
+<p>多一層基礎設施，就多一點可以壞掉的東西。緩解冷啟動的手段（例如用 Pingdom 定期 ping 自己的 CDN 來 <strong>warm up cache</strong>）也是額外基礎設施。Steve 的建議：<strong>先測量，再決定</strong>——如果你的使用者就在附近，這層優化未必值得。</p>
+
+<div class="callout">
+<span class="label">面試要點</span>
+「CloudFront 是 AWS 的 CDN，採用三層快取：邊緣節點最靠近使用者，區域邊緣快取彙整地理區域，origin 是權威內容來源。第一個請求打到 origin 付冷啟動成本，之後的使用者從最近的快取層取資料。」
+</div>
+
+<hr>
+
+<div class="quiz" data-question="CloudFront 的三層快取階層由外到內是什麼？" data-correct="2" data-explain="最外層是離使用者最近的 edge location，中間是 regional edge cache，最後才是 origin（S3 bucket）。">
+  <button class="opt">Origin → 邊緣節點 → 區域快取</button>
+  <button class="opt">區域快取 → Origin → 邊緣節點</button>
+  <button class="opt">邊緣節點 → 區域邊緣快取 → Origin</button>
+  <button class="opt">Origin → 區域快取 → 邊緣節點</button>
+</div>
+
+<div class="quiz" data-question="誰付出冷啟動（cold cache）成本？" data-correct="1" data-explain="第一個在該區域請求的使用者要一路打到 origin，之後的人從區域快取取資料。">
+  <button class="opt">永遠沒有人</button>
+  <button class="opt">第一個請求的使用者</button>
+  <button class="opt">每個使用者平均分擔</button>
+  <button class="opt">只有 origin 的主人</button>
+</div>
+
+<div class="quiz" data-question="澳洲西岸使用者為什麼不需要打到美東的 origin？" data-correct="3" data-explain="只要澳洲東岸有人先訪問過，regional edge cache 就有內容，西岸使用者從東岸取快取即可。">
+  <button class="opt">因為西岸也有自己的 bucket</button>
+  <button class="opt">因為 S3 會自動複製到全球</button>
+  <button class="opt">因為 CloudFront 不收澳洲的請求</button>
+  <button class="opt">因為區域邊緣快取已填滿該內容</button>
+</div>
+
+<hr>
+
+<footer>
+<p>上一步：<a href="why-s3-is-not-enough.html">為什麼 S3 單獨不夠</a> · 下一步：<a href="create-cloudfront-distribution.html">建立 CloudFront Distribution</a></p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>
