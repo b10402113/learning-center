@@ -1,0 +1,63 @@
+---
+id: lambda-at-edge
+title: Lambda@Edge：在邊緣執行的進階路由邏輯
+subject: aws-v3
+sources:
+  - "[[sources/aws-v3/17#lambda-at-edge]]"
+created: 2026-08-28
+updated: 2026-08-28
+---
+
+<LearningGoal>
+能說明 Lambda@Edge 是什麼、在 CloudFront 邊緣能做哪些事，以及它與自訂錯誤頁面方案的取捨。
+</LearningGoal>
+
+## Lesson
+
+### 當「假的 200」不夠用的時候
+
+自訂錯誤頁面能解決大部分 SPA 問題，但有瑕疵：不存在的路徑也回 200，而且它不能「看懂」URL，只會盲目把所有錯誤導到 `index.html`。如果需求更複雜——「只有 `/notes/*` 導到 index.html，其餘真的 404」、「把舊網址重新導向」、「某些路徑要先登入」——你需要真正的邏輯，而不只是靜態設定。這就是 **Lambda@Edge** 出場的時機。
+
+**Lambda@Edge = 在 CloudFront 邊緣節點執行 Lambda 函式**。它讓你在請求「到達 origin 之前」和「從 origin 回來之後」的路上，用 JavaScript 插手處理請求與回應。
+
+### 它是怎麼運作的
+
+請求的路徑是：使用者 → CloudFront 邊緣節點 → origin（S3）→ 回傳。Lambda@Edge 就在邊緣節點這個位置插入執行 JS 的鉤子：請求進來先跑一段程式，再決定要不要送 origin；回應出來再跑一段程式，改寫後回傳。
+
+一個具體例子：收到請求 `/notes/123`。錯誤頁面只會「找不到就給 index.html」；Lambda@Edge 可以在請求到達 origin 之前，把這個 URL 改寫成 `/index.html`（URL rewriting），甚至先查「這個使用者是不是被封鎖的」，是的話直接改寫回應狀態碼，連 origin 都不用去。
+
+| 能力 | 怎麼用 |
+| --- | --- |
+| URL 改寫 | 把 /notes/123 改寫成 /index.html 再送 origin |
+| 請求攔截與驗證 | 查封鎖名單，決定放行或直接拒絕 |
+| A/B 測試 | 依條件把部分流量導向不同版本 |
+| 動態內容 | 在邊緣讀 Redis、資料庫，改寫回應 |
+| 精確狀態碼 | 真的不存在的頁面回真正的 404，而不是假的 200 |
+
+### 為什麼「因為它是 Lambda」很重要
+
+Lambda@Edge 裡跑的是完整的 Lambda 函式，用 JavaScript。這代表它能做的事跟你在伺服器上寫的任何程式一樣多：讀環境變數（environment variables）來設定行為而不改程式碼、連接 Redis 或資料庫做判斷（例如查「使用者是否被封鎖」）、在回應路徑上改寫任何東西。
+
+這開啟了「邊緣運算（edge computing）」的概念：把計算帶到離使用者最近的節點，而不是集中在一台伺服器。你的 CDN 從「靜態快取」升級成**可程式化（programmable）的 CDN**。
+
+### 什麼時候用哪個
+
+| 方案 | 複雜度 | 適合 |
+| --- | --- | --- |
+| Custom error responses | 純設定，零程式碼 | 標準 SPA：讓所有路由落到 index.html |
+| Lambda@Edge | 要寫與維護函式 | 需要判斷、改寫、驗證、精確狀態碼 |
+
+兩個方案是階梯不是競爭：開關能解決一般 SPA；要更聰明、更精確，就寫程式。
+
+### 自檢
+
+- Lambda@Edge 在哪裡執行程式？它與錯誤頁面的本質差別？
+- URL rewriting 在 SPA 場景指什麼？
+- 為什麼 Lambda@Edge 能做「查封鎖名單」這種判斷？
+- 給定需求，你會選錯誤頁面還是 Lambda@Edge？判斷依據是什麼？
+
+## Course
+
+[↗ 課程頁面](../../lessons/lambda-at-edge.html)
+
+## Sources

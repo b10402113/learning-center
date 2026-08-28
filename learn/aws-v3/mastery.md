@@ -67,3 +67,29 @@
 | ssl-tls | unknown |
 
 > probe skipped via /nodes aws-v3/cloudfront-cdn-setup skip-probe on 2026-08-28
+
+## cloudfront-caching
+
+| Strand | Status |
+| --- | --- |
+| cache-invalidation | unknown |
+| ttl | unknown |
+| invalidation-costs | unknown |
+| behavior-settings | unknown |
+
+> probe skipped via /nodes aws-v3/cloudfront-caching skip-probe on 2026-08-28
+
+## deployment-workflow-and-spa-routing
+
+| Strand | Status |
+| --- | --- |
+| new-deployment | unknown |
+| cache-persistence | unknown |
+| deployment-workflow | unknown |
+| client-side-routing-problem | unknown |
+| custom-error-pages | unknown |
+| lambda-at-edge | unknown |
+| goal-achieved | unknown |
+| future-topics | unknown |
+
+> probe skipped via /nodes aws-v3/deployment-workflow-and-spa-routing skip-probe on 2026-08-28

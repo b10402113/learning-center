@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPA 用戶端路由的 404 問題</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · Deployment workflow and SPA routing · Step 2/5</p>
+
+<h1>SPA 用戶端路由的 404 問題</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：能解釋為什麼 SPA 的深層連結（如 /about、/notes/123）在 CloudFront 上回傳 404，以及這如何破壞深層連結與重新整理頁面。
+</div>
+
+<h2>先回到一個老問題：URL 是真的檔案嗎？</h2>
+
+<p>在傳統的多頁網站裡，每個 URL 對應一個真實存在的 HTML 檔案：<code>/about</code> 就是 <code>about.html</code>，<code>/notes/123</code> 就是某個資料夾裡真的存在的頁面。伺服器照著 URL 找檔案，找到就回傳。</p>
+
+<p>但你的 React app 是<strong>單頁應用（SPA，Single-Page Application）</strong>。S3 裡其實只有少數幾個真實檔案：<code>index.html</code>、一個帶 hash 的 <code>index-xxxx.js</code>、一個 <code>index-xxxx.css</code>。剩下的路由，例如 <code>/about</code>、<code>/notes/123</code>，都是由瀏覽器端的<strong>用戶端路由（client-side router）</strong>虛擬出來的——URL 看起來很漂亮，但 S3 裡根本沒有這些檔案。</p>
+
+<div class="callout">
+<span class="label">核心概念</span>
+<strong>SPA 路由是虛擬路徑，不是檔案。</strong> 用戶端 router 在瀏覽器裡把 URL 對應到不同的畫面（view），但不會在伺服器上產生對應的檔案。
+</div>
+
+<h2>現象：直接訪問深層連結 → 404</h2>
+
+<p>假設你在瀏覽器網址列直接輸入 <code>https://your-site/notes/123</code>，或是在這個頁面按 F5 重新整理。瀏覽器會把請求送到 CloudFront，CloudFront 照著 URL 去 S3 找一個叫 <code>notes/123</code> 的物件——當然找不到，因為它根本不存在。</p>
+
+<p>於是 CloudFront 回傳 <strong>404 Not Found</strong>。更糟的是，你的 SPA 根本沒機會載入——因為沒有 <code>index.html</code> 被回傳，瀏覽器就沒東西可跑，user router 根本沒上場。</p>
+
+<table>
+<tr><th>場景</th><th>發生什麼</th></tr>
+<tr><td>使用者從首頁點連結進入 /notes/123</td><td>Router 在瀏覽器內切換畫面，一切正常</td></tr>
+<tr><td>直接輸入 /notes/123 或按 F5</td><td>瀏覽器把請求送給 CloudFront → S3 找不到檔案 → 404</td></tr>
+</table>
+
+<p>這叫<strong>深層連結（deep link）被破壞</strong>：任何「直接訪問某個路由」或「重新整理頁面」的使用者，都會撞上 404。對一個把連結分享出去的 SPA 來說，這是致命的——別人收到你分享的 <code>/notes/123</code> 連結，點開卻是錯誤頁面。</p>
+
+<h2>為什麼「使用者端 route」不行，得靠伺服器</h2>
+
+<p>關鍵在於誰來「解釋」這個 URL。在 SPA 裡，解釋 URL 的是瀏覽器裡的 JavaScript；但瀏覽器只有在拿到 <code>index.html</code> 並執行完 JS 之後，才知道該顯示哪個畫面。伺服器端（這裡是 CloudFront / S3）對這些虛擬路由一無所知——它的工作只是「給定路徑，找檔案」。</p>
+
+<p>所以解法必須在伺服器這一側動手腳：讓 CloudFront 遇到「找不到的路徑」時，別回 404，而是把 <code>index.html</code> 交給瀏覽器，讓 router 接手。這就是下一課的<strong>自訂錯誤頁面</strong>。</p>
+
+<div class="callout tip">
+<span class="label">一句話記法</span>
+<strong>SPA 把「URL 對應畫面」的工作放在瀏覽器，伺服器不知道你的路由。</strong> 所以任何直接訪問深層連結的請求，伺服器都只能聳肩說 404。
+</div>
+
+<h2>回到面試語言</h2>
+
+<p>把問題收成一句話：「SPA 的路由是客戶端虛擬出來的，不是 S3 裡的真實檔案。因此直接訪問深層連結或重新整理時，CloudFront 找不到對應物件而回傳 404，破壞了深層連結。解法是在伺服器端把這些路徑導回 index.html，讓 router 接管。」</p>
+
+<p>下一步，我們就用 CloudFront 的自訂錯誤頁面把這個問題修掉。</p>
+
+<hr>
+
+<div class="quiz" data-question="SPA 的 /notes/123 這個路徑，在 S3 裡是？" data-correct="3" data-explain="路由由瀏覽器端 router 虛擬出來，S3 只有 index.html 等少數真實檔案。">
+  <button class="opt">一個真實的 HTML 檔案</button>
+  <button class="opt">一個資料夾</button>
+  <button class="opt">一份 JSON 資料</button>
+  <button class="opt">不存在，只是虛擬路徑</button>
+</div>
+
+<div class="quiz" data-question="直接訪問 /notes/123 時，CloudFront 會怎麼做？" data-correct="1" data-explain="CloudFront 照 URL 去 S3 找物件，找不到就回傳 404。">
+  <button class="opt">自動執行 SPA router</button>
+  <button class="opt">去 S3 找物件，找不到回傳 404</button>
+  <button class="opt">回傳 index.html 並執行 JS</button>
+  <button class="opt">重新導向到首頁</button>
+</div>
+
+<div class="quiz" data-question="為什麼 SPA 的 deep link（深層連結）會被破壞？" data-correct="0" data-explain="直接訪問時伺服器找不到對應檔案而回傳 404，瀏覽器拿不到 index.html，router 無法啟動。">
+  <button class="opt">直接訪問時伺服器回 404，router 無法啟動</button>
+  <button class="opt">因為 JS 無法在瀏覽器執行</button>
+  <button class="opt">因為 S3 不支援 https</button>
+  <button class="opt">因為 CloudFront 不支援 SPA</button>
+</div>
+
+<div class="quiz" data-question="誰負責把 URL 對應到 SPA 的畫面？" data-correct="2" data-explain="瀏覽器端的 client-side router 負責 URL 與畫面的對應，伺服器不曉得。">
+  <button class="opt">S3 bucket</button>
+  <button class="opt">CloudFront distribution</button>
+  <button class="opt">瀏覽器端的 client-side router</button>
+  <button class="opt">AWS 的 DNS 服務</button>
+</div>
+
+<div class="quiz" data-question="「從首頁點連結進入」與「直接輸入 URL」的主要差別是？" data-correct="1" data-explain="前者 router 已在瀏覽器內，切換畫面即可；後者是全新請求，伺服器找不到檔案。">
+  <button class="opt">沒有差別，都走伺服器</button>
+  <button class="opt">前者靠瀏覽器 router 切換，後者觸發伺服器請求</button>
+  <button class="opt">前者會 404，後者正常</button>
+  <button class="opt">後者不需要 index.html</button>
+</div>
+
+<hr>
+
+<footer>
+<p>下一步：<a href="./custom-error-pages.html">自訂錯誤頁面：把 404/403 導回 index.html</a>。</p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

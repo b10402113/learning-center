@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>部署工作流：build → S3 → invalidate</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · Deployment workflow and SPA routing · Step 1/5</p>
+
+<h1>部署工作流：build → S3 → invalidate</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：能說出並執行 build → S3 上傳 → CloudFront invalidation 的完整部署流程，並解釋為什麼只上傳 S3，使用者仍然會看到舊版。
+</div>
+
+<h2>先看一個現象：上傳了，但什麼都沒變</h2>
+
+<p>你已經把 React app 建置成靜態檔案、上傳到 S3、接上了 CloudFront，一切看起來都運作正常。現在你修好一個 bug，重新 <code>npm run build</code>，把新的 <code>dist/</code> 同步上 S3。結果你重新整理網頁——<strong>使用者還是看到舊版</strong>。</p>
+
+<p>問題出在哪？S3 的確已經更新了，檔案是最新的。但使用者根本沒從 S3 拿檔案——他們是從 CloudFront 的<strong>邊緣節點（edge location）</strong>拿的，而邊緣節點還留著舊的快取。</p>
+
+<div class="callout">
+<span class="label">核心概念</span>
+<strong>邊緣快取獨立於 origin。</strong> S3 更新不會通知 CloudFront，邊緣節點也不會自己知道 origin 變了。除非 TTL 到期去重新檢查，或有人主動觸發失效（invalidation），否則舊版會一直撐在那裡。
+</div>
+
+<h2>為什麼「上傳完成」不等於「部署完成」</h2>
+
+<p>回到前面節點學過的心智模型：你的架構是 <strong>S3（origin，原始來源）→ CloudFront（快取層）→ 使用者</strong>。上傳只更新了 origin 這一層，而使用者看到的快取層完全沒動。</p>
+
+<p>這帶來一個實際的困擾：在「S3 已是新版」但「邊緣仍是舊版」的這段視窗裡，不同的使用者可能看到不同版本——有人命中已更新的節點拿到新版，有人命中舊節點拿到舊版。對你自己測試很迷惑，對使用者就是 bug。</p>
+
+<p>所以部署有三個步驟，<strong>缺一不可，而且順序很重要</strong>：</p>
+
+<table>
+<tr><th>步驟</th><th>做什麼</th><th>如果漏掉會怎樣</th></tr>
+<tr><td>1. build</td><td>產生新的靜態產物（<code>dist/</code>）</td><td>沒有新檔案可傳</td></tr>
+<tr><td>2. 上傳 S3</td><td>讓 origin 擁有權威版本</td><td>origin 還是舊的，之後一切白做</td></tr>
+<tr><td>3. invalidate CloudFront</td><td>拋棄舊的邊緣快取</td><td>使用者繼續看舊版——上傳形同沒發生</td></tr>
+</table>
+
+<p>前兩個步驟你應該很熟了。第三步是這節課的重點：<strong>invalidation（快取失效）</strong>——告訴 CloudFront「這些路徑的舊快取不要再用了」，它就會讓所有邊緣節點拋棄舊檔，使用者下一次請求回到 origin 拿最新內容。</p>
+
+<h2>把流程變成可重複的腳本</h2>
+
+<p>每次部署都手動跑三個步驟很煩，而且第二步上傳後很容易忘了第三步。正確的做法是把它寫成一條指令，例如：</p>
+
+<pre><code>aws s3 sync dist/ s3://your-bucket --delete
+aws cloudfront create-invalidation \
+  --distribution-id YOUR_DIST_ID \
+  --paths "/index.html"</code></pre>
+
+<p>這正是你在 GitHub Actions 或任何 CI/CD 工具裡會寫的內容：同步資產上 S3，全部上傳成功之後，再執行 invalidation。把「順序」寫死進 pipeline，就不會再發生「上傳了卻忘了失效」的慘劇。</p>
+
+<p>一個細節：失效的路徑要列得精準。帶 hash 的資產（如 <code>index-8f3c9a.js</code>）內容變了檔名就變，舊檔名沒人請求，不需要失效；真正要失效的通常是 <code>index.html</code> 這類檔名不變、內容會變的入口檔案。</p>
+
+<div class="callout tip">
+<span class="label">一句話記法</span>
+<strong>S3 是你的倉庫，CloudFront 是你的店面。換了倉庫的貨，不叫店面，店裡還擺著舊貨。</strong> 部署 = build → 上貨 → 清貨架。
+</div>
+
+<h2>回到面試語言</h2>
+
+<p>把這節課收成一句能說出口的話：「部署靜態站到 S3 + CloudFront，不能只上傳 S3——因為邊緣快取獨立於 origin，必須再對 CloudFront 執行 invalidation，才能讓使用者拿到新版。整個流程是 build → upload → invalidate，並把它自動化。」</p>
+
+<p>下一步，我們要處理 SPA 特有的問題：為什麼部署完，直接訪問 /about 或 /notes/123 會回傳 404。</p>
+
+<hr>
+
+<div class="quiz" data-question="上傳新版到 S3 後，使用者仍看到舊版，最直接的原因是？" data-correct="2" data-explain="使用者從 CloudFront 邊緣節點拿內容，邊緣快取還留著舊版，且獨立於 origin。">
+  <button class="opt">S3 上傳失敗了</button>
+  <button class="opt">CloudFront 忘了同步 S3 的檔案</button>
+  <button class="opt">邊緣節點仍快取著舊版</button>
+  <button class="opt">使用者瀏覽器有快取</button>
+</div>
+
+<div class="quiz" data-question="完整部署流程的三個步驟，依正確順序是？" data-correct="1" data-explain="build 產生產物、上傳 S3 更新 origin、invalidate CloudFront 拋棄舊快取，順序缺一不可。">
+  <button class="opt">上傳 → build → invalidate</button>
+  <button class="opt">build → 上傳 S3 → invalidate</button>
+  <button class="opt">invalidate → build → 上傳</button>
+  <button class="opt">build → invalidate → 上傳</button>
+</div>
+
+<div class="quiz" data-question="「上傳完成」與「部署完成」的差別在於？" data-correct="0" data-explain="上傳只更新 origin，使用者看的是快取層；沒失效就等於沒部署。">
+  <button class="opt">上傳只更新 origin，還需要失效快取</button>
+  <button class="opt">兩者完全一樣</button>
+  <button class="opt">上傳比失效重要得多</button>
+  <button class="opt">部署只需要上傳即可</button>
+</div>
+
+<div class="quiz" data-question="為什麼流程可以被腳本或 CI/CD 自動化？" data-correct="3" data-explain="三個步驟都是 CLI 可執行的指令，寫進 pipeline 就能固定順序、避免漏步驟。">
+  <button class="opt">因為 S3 沒有圖形介面</button>
+  <button class="opt">因為 CloudFront 不開放手動操作</button>
+  <button class="opt">因為 build 一定要在 CI 執行</button>
+  <button class="opt">因為每一步都能用 CLI 指令表示並排程</button>
+</div>
+
+<div class="quiz" data-question="帶 hash 的資產（index-8f3c9a.js）需要失效嗎？" data-correct="1" data-explain="內容變了檔名就變，舊檔名沒人請求，不需要失效；要失效的是檔名不變的 index.html。">
+  <button class="opt">需要，每次部署都要失效全部</button>
+  <button class="opt">不需要，檔名變了舊檔就沒人用</button>
+  <button class="opt">需要，因為 hash 會過期</button>
+  <button class="opt">不需要，但 index.html 也不該失效</button>
+</div>
+
+<hr>
+
+<footer>
+<p>下一步：<a href="./client-side-routing-problem.html">SPA 用戶端路由的 404 問題</a>。</p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

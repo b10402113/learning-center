@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Invalidation 的計費：前 1,000 次免費與 wildcard 代價</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · CloudFront caching · Step 4/5</p>
+
+<h1>Invalidation 的計費：前 1,000 次免費與 wildcard 代價</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：說出 invalidation 的計費規則（每月前 1,000 次免費、wildcard 計多次），並據此設計部署流程。
+</div>
+
+<h2>失效是要錢的</h2>
+
+<p>上一課你學會了 invalidation 怎麼用。但它不是免費的——AWS 按失效請求計費。好消息是，門檻很高，對你這種規模幾乎不會碰到。但知道了規則，你才不會在某一天收到意外的帳單。</p>
+
+<div class="callout">
+<span class="label">計費規則</span>
+<strong>每個月前 1,000 次 invalidation 免費</strong>；超過之後，每一次失效請求收 <code>$0.005</code>（約新台幣 0.16 元）。
+</div>
+
+<h2>Wildcard 的代價</h2>
+
+<p>這裡有個容易踩的坑：用 <code>/*</code> 這種 wildcard（萬用字元）路徑失效時，<strong>不是算一次，而是按它涵蓋的路徑數量計費</strong>。也就是說，一個 <code>/*</code> 失效請求，會按你 distribution 裡實際存在的路徑數去拆算多次請求。資料量大的網站，一次 <code>/*</code> 就可能吃掉你整月的免費額度。</p>
+
+<p>所以「省事、清光光」的 <code>/*</code>，在有大量路徑時反而最貴。這正是為什麼前一課要強調：<strong>失效清單要精準——列 index.html 和幾個 public 檔案就好，不要動不動就失效全部。</strong></p>
+
+<h2>別為了「聰明」而過度失效</h2>
+
+<p>Steve 在課程裡給了一個很實際的提醒：不要寫一個 script，故意「為每個變更的檔案都做一次失效」。這種自作聰明的做法只會讓你的失效次數暴增、費用上升、部署流程變慢——而它買來的「好處」幾乎沒有。</p>
+
+<div class="callout tip">
+<span class="label">一句話記法</span>
+有時「簡單、甚至有點笨」的版本才是更好的版本。<strong>與其細緻地逐檔失效，不如把帶 hash 的資產處理好，讓失效清單永遠只有寥寥幾個檔案。</strong>
+</div>
+
+<p>回想第一課的架構：如果你的建置工具把每個檔案都加上 hash，那唯一需要失效的永遠只有 <code>index.html</code> 這類沒 hash 的入口檔案。用「hash 替身」來避免失效，才是從源頭省錢的做法——這比任何失效優化都有效。</p>
+
+<h2>把規則套回你的部署</h2>
+
+<p>把前兩課學的合起來，一個合理的部署流程是：</p>
+
+<ol>
+<li>建置出帶 hash 的資產 + index.html</li>
+<li>同步所有檔案上 S3</li>
+<li>只失效 <code>/index.html</code>（加上變動的 public 檔案）</li>
+</ol>
+
+<p>以你目前每月幾次部署的頻率，失效次數離 1,000 的免費門檻非常遠。真的有一天你一個月失效超過 1,000 次——那你每天部署 30 次以上，那時「失效費」會是你最不煩惱的問題。</p>
+
+<hr>
+
+<div class="quiz" data-question="CloudFront 每個月前幾次 invalidation 免費？" data-correct="2" data-explain="每個月前 1,000 次失效請求免費，之後每次 $0.005。">
+  <button class="opt">100 次</button>
+  <button class="opt">500 次</button>
+  <button class="opt">1,000 次</button>
+  <button class="opt">10,000 次</button>
+</div>
+
+<div class="quiz" data-question="失效超過免費額度後，每一次的價格約是？" data-correct="1" data-explain="超過後每次失效請求 $0.005，大約新台幣 0.16 元。">
+  <button class="opt">$0.05</button>
+  <button class="opt">$0.005</button>
+  <button class="opt">$0.50</button>
+  <button class="opt">免費</button>
+</div>
+
+<div class="quiz" data-question="為什麼失效 /* 可能很貴？" data-correct="0" data-explain="wildcard 失效按它涵蓋的路徑數量計費，路徑多時一次 /* 就會吃掉大量免費額度。">
+  <button class="opt">它按涵蓋的路徑數量計費</button>
+  <button class="opt">/* 每次收費較高</button>
+  <button class="opt">wildcard 會刪掉 S3 檔案</button>
+  <button class="opt">/* 不受免費額度保護</button>
+</div>
+
+<div class="quiz" data-question="「為每個變更的檔案都做一次失效」為什麼是壞主意？" data-correct="3" data-explain="這會讓失效次數暴增、費用上升，而帶 hash 的資產根本不需要失效。">
+  <button class="opt">因為失效不會生效</button>
+  <button class="opt">因為會刪掉 origin 檔案</button>
+  <button class="opt">因為一次只能失效一個路徑</button>
+  <button class="opt">失效次數暴增、費用上升，且多半沒必要</button>
+</div>
+
+<div class="quiz" data-question="從源頭減少失效次數最有效的做法是？" data-correct="2" data-explain="建置時把每個檔案加上 hash，內容變了檔名就變，唯一需要失效的只剩 index.html 這類入口。">
+  <button class="opt">把 TTL 全部設成 0</button>
+  <button class="opt">關閉 CloudFront 快取</button>
+  <button class="opt">建置產出帶 hash 的資產</button>
+  <button class="opt">改用其他 CDN</button>
+</div>
+
+<hr>
+
+<footer>
+<p>下一步：<a href="behavior-settings.html">Behavior 設定：依內容類型調校快取</a></p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

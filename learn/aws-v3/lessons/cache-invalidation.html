@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>快取失效（Invalidation）：強制拋棄邊緣快取</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · CloudFront caching · Step 3/5</p>
+
+<h1>快取失效（Invalidation）：強制拋棄邊緣快取</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：說明 invalidation 做什麼、如何在全球邊緣節點傳播，並在部署後正確執行 invalidate。
+</div>
+
+<h2>TTL 太慢的時候</h2>
+
+<p>上一課的 TTL 是「等它自己到期」——但有些情境你不想等。你剛修好一個嚴重的 bug，或改了 favicon，或上線一個安全更新，你希望<strong>現在、立刻</strong>讓所有使用者拿到新版，而不是等某個 TTL 過期。這就是 invalidation 出場的時機。</p>
+
+<div class="callout">
+<span class="label">核心概念</span>
+<strong>Invalidation（快取失效）就是把某個檔案從 CloudFront 的邊緣快取裡強制踢出去。</strong> 它的效果是全球的——所有邊緣節點都會丟掉這份舊快取，使用者下一次請求就會回 origin 拿新內容。
+</div>
+
+<h2>它怎麼運作：全球踢除</h2>
+
+<p>invalidation 不是只清掉某一個邊緣節點。你提交一個失效請求後，CloudFront 會把這個指令<strong>傳播到所有邊緣節點</strong>，每個節點都會丟掉指定的快取。下一次有人請求該路徑，最近的邊緣節點沒有快取，就會回到 origin 抓最新版本，再重新快取。</p>
+
+<p>把它想成總公司的「緊急召回令」：通知發到全世界所有分店，說「某期的月刊全部下架」。分店下架後，客人再來拿，分店就得向總公司要新的。注意：召回令的費用和範圍，正是下一課要講的計費問題。</p>
+
+<h2>該失效哪些路徑？</h2>
+
+<p>回到第一課的結論：帶 hash 的資產（<code>index-8f3c9a.js</code>、<code>style-4b2d7e.css</code>）內容變了檔名就變，舊檔名根本沒人請求——<strong>它們不需要失效</strong>。真正需要失效的，是那些檔名不變、內容會變的檔案：最主要的就是 <code>index.html</code>。</p>
+
+<p>Steve 的做法很清楚：Vite/webpack 這類工具會產出帶 hash 的 CSS 和 JS，但 <code>index.html</code> 沒有自己的 hash，永遠指向最新的資產名。所以一次典型的部署是：</p>
+
+<ol>
+<li>把所有新資產同步上 S3</li>
+<li>等全部上傳完成</li>
+<li>失效 <code>index.html</code>（或連同 <code>public/</code> 裡那些沒 hash 的檔案，例如 favicon）</li>
+</ol>
+
+<p>你也可以在 CloudFront 控制台的 invalidation 頁面，列出<strong>多個路徑</strong>一起失效；或者更簡單粗暴——失效 <code>/*</code>，把整個 distribution 的快取全部清掉。用「一定要 index.html，外加可能變動的 public 檔案」這個準則決定要列哪些。</p>
+
+<div class="callout tip">
+<span class="label">一句話記法</span>
+<strong>帶 hash 的不失效，沒 hash 的才失效</strong>——大部分時候你的失效清單就是 index.html 加上幾個 public 檔案。
+</div>
+
+<h2>手動 vs 自動</h2>
+
+<p>你在 CloudFront 控制台可以手動提交失效請求——Steve 在課程裡示範的就是這個「小盒子」，可以填任意多個路徑。但每次部署都手動點一次很煩，而且容易忘。真正的做法是把它寫進自動化：</p>
+
+<pre><code># 部署流程示意
+aws s3 sync dist/ s3://your-bucket --delete
+aws cloudfront create-invalidation \
+  --distribution-id YOUR_DIST_ID \
+  --paths "/index.html"</code></pre>
+
+<p>一次完成的 GitHub Action 大概是：同步資產上 S3 → 全部上傳成功後 → 執行 invalidation。等動作執行完，快取失效開始在全球傳播，使用者很快就會看到新版本。</p>
+
+<hr>
+
+<div class="quiz" data-question="Invalidation 的定義是？" data-correct="1" data-explain="Invalidation 就是強制把指定檔案從 CloudFront 的邊緣快取裡踢出去，讓使用者下次請求回到 origin 拿新內容。">
+  <button class="opt">把 S3 上的檔案刪掉</button>
+  <button class="opt">強制把檔案從邊緣快取踢出去</button>
+  <button class="opt">關閉 CloudFront distribution</button>
+  <button class="opt">更新 DNS 記錄</button>
+</div>
+
+<div class="quiz" data-question="invalidation 的效果範圍是？" data-correct="0" data-explain="失效指令會傳播到所有邊緣節點，是全球性的。">
+  <button class="opt">所有邊緣節點，全球生效</button>
+  <button class="opt">只有最近的那個邊緣節點</button>
+  <button class="opt">只有 origin 所在的區域</button>
+  <button class="opt">只影響使用者自己的瀏覽器快取</button>
+</div>
+
+<div class="quiz" data-question="下列哪個檔案「通常不需要」失效？" data-correct="2" data-explain="帶 hash 的資產內容變了檔名就變，舊檔名不再被請求，不需要失效。">
+  <button class="opt">index.html</button>
+  <button class="opt">favicon.ico</button>
+  <button class="opt">index-8f3c9a.js</button>
+  <button class="opt">public 裡的未 hash 檔案</button>
+</div>
+
+<div class="quiz" data-question="一次典型的部署後失效流程是？" data-correct="3" data-explain="先同步資產上 S3，等全部上傳完成，再失效（通常是 index.html）。">
+  <button class="opt">先失效快取，再同步資產</button>
+  <button class="opt">同步資產後什麼都不用做</button>
+  <button class="opt">只失效帶 hash 的檔案</button>
+  <button class="opt">先同步資產，等上傳完成再失效</button>
+</div>
+
+<div class="quiz" data-question="在控制台失效哪個路徑會清掉整個 distribution 的快取？" data-correct="0" data-explain="失效 /* 代表所有路徑，等於把整個 distribution 的快取全部清掉。">
+  <button class="opt">/*</button>
+  <button class="opt">/index.html</button>
+  <button class="opt">/assets/</button>
+  <button class="opt">/favicon.ico</button>
+</div>
+
+<hr>
+
+<footer>
+<p>下一步：<a href="invalidation-costs.html">Invalidation 的計費：前 1,000 次免費與 wildcard 代價</a></p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

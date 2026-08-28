@@ -1,0 +1,75 @@
+---
+id: ttl-and-cache-control
+title: TTL 與 Cache-Control：新鮮度與效能的取捨
+subject: aws-v3
+sources:
+  - "[[sources/aws-v3/15#ttl]]"
+  - "[[sources/aws-v3/15#behavior-settings]]"
+created: 2026-08-28
+updated: 2026-08-28
+---
+
+# TTL 與 Cache-Control：新鮮度與效能的取捨
+
+<LearningGoal>
+能說明 TTL 的預設來源、origin 的 Cache-Control 標頭如何覆寫 TTL，以及新鮮度與效能的取捨。
+</LearningGoal>
+
+## Lesson
+
+### 先複習：TTL 是「多久回去問一次」
+
+上一課的核心：TTL（Time To Live，存活時間）決定一份快取在邊緣節點能存活多久。沒過期，CloudFront 直接回傳快取；過期了，才回 origin 檢查新版。現在的問題變成：這個「多久」到底是誰決定的？
+
+### TTL 的預設來源：Behavior 設定
+
+TTL 的預設值來自 CloudFront 的 behavior 設定——也就是建立 distribution 時那些快取行為（cache behavior）的設定。每個 distribution 有一個預設 cache behavior，涵蓋所有沒有另外指定的路徑，裏面就帶著 TTL 的預設值。
+
+「behavior」這個詞之後還會出現很多次，先記住一句話：behavior 就是「針對某一類路徑，決定 CloudFront 怎麼快取、怎麼回應」的一組設定。TTL 預設值是其中一項。
+
+CloudFront 的 TTL 是分層的：behavior 設定給的是「預設 TTL」；而 origin 回傳的 `Cache-Control` 標頭可以在單次回應上覆寫這個預設值。也就是說，預設值管全局，標頭管個案。
+
+### Origin 的 Cache-Control 可以覆寫
+
+你的 S3 bucket（origin）可以在每個檔案上附帶 HTTP 回應標頭，其中最關鍵的就是 `Cache-Control`。當 CloudFront 回 origin 抓一個檔案，會看到這個標頭，並用它來決定「這份該快取多久」——覆寫掉 behavior 的預設。
+
+所以你有兩種控制方式疊在一起：
+
+| 層級 | 誰決定 | 範圍 |
+| --- | --- | --- |
+| 預設 TTL | CloudFront behavior 設定 | 該行為涵蓋的所有路徑 |
+| Cache-Control | origin 回傳的回應標頭 | 單一檔案、單次回應 |
+
+實務上，你常常會用 `Cache-Control` 標頭在檔案層級做精細控制：例如帶 hash 的靜態資產設很長、`index.html` 設很短或不快取。之後用 S3 上傳物件時就能帶上這些標頭。
+
+### 取捨：新鮮度 vs 效能
+
+TTL 沒有「正確答案」，只有「你的內容特性決定的答案」。把兩個極端擺出來看：
+
+| 面向 | 短 TTL | 長 TTL |
+| --- | --- | --- |
+| 內容新鮮度 | 高——很快回去問 origin | 低——舊內容存活久 |
+| 回應速度 | 低——邊緣節點常要打回 origin | 高——邊緣直接回傳 |
+| 對 origin 的請求量 | 多 | 少 |
+| 適合對象 | index.html、動態頁面 | 帶 hash 的靜態資產 |
+
+把這張表套回你的專案：帶 hash 的 CSS/JS 用長 TTL 最合理——內容變了檔名就變，舊檔名根本沒人請求，快取久一點完全沒風險。反觀 `index.html`，它是入口，永遠指向最新的資產，你希望它一更新就被看到，所以 TTL 要短、甚至不要快取。這就是「依內容類型調校」的起點——本節點的第五步會把這件事做得更細。
+
+### 別為了顯聰明而過度調校
+
+快取策略也是如此：先用「長 TTL 給帶 hash 資產、短 TTL 給入口檔案」這種簡單粗暴的規則跑起來，真的有瓶頸再去微調。過早優化只會讓你的設定難以維護。把複雜度留到真的需要的地方。
+
+當 TTL 太慢、你又希望立刻讓使用者拿到新版時，就要用到強制手段：invalidation——下一課的主角。
+
+### 自檢
+
+- 一份檔案的 TTL 可以由哪兩個層級決定？各自管多大的範圍？
+- 為什麼帶 hash 的資產配長 TTL「完全沒有變舊風險」？
+- 短 TTL 與長 TTL 各自的代價是什麼？
+- 為你的專案各挑一個適合短 TTL 與長 TTL 的檔案。
+
+## Course
+
+[↗ 課程頁面](../../lessons/ttl-and-cache-control.html)
+
+## Sources

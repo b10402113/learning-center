@@ -1,0 +1,65 @@
+---
+id: deployment-workflow
+title: 部署工作流：build → S3 → invalidate
+subject: aws-v3
+sources:
+  - "[[sources/aws-v3/16#new-deployment]]"
+  - "[[sources/aws-v3/16#cache-persistence]]"
+  - "[[sources/aws-v3/16#deployment-workflow]]"
+created: 2026-08-28
+updated: 2026-08-28
+---
+
+<LearningGoal>
+能說出並執行 build → S3 上傳 → CloudFront invalidation 的完整部署流程，並解釋為什麼只上傳 S3，使用者仍然會看到舊版。
+</LearningGoal>
+
+## Lesson
+
+### 上傳了，但使用者還是看到舊版
+
+假設你的 React app 已經部署在 S3 + CloudFront 上，一切正常。今天你修好一個 bug，重新 `npm run build`，把新的 `dist/` 同步上 S3。你重新整理網頁——使用者還是看到舊版。問題出在哪？
+
+S3 確實已經更新了，但使用者根本不從 S3 拿檔案——他們從 CloudFront 的**邊緣節點（edge location）**拿，而邊緣節點還留著舊的快取。關鍵是：**邊緣快取獨立於 origin（原始來源）**。S3 更新不會通知 CloudFront，邊緣節點也不會自己知道 origin 變了，除非 TTL 到期重新檢查，或有人主動觸發失效（invalidation），否則舊版一直撐在那裡。
+
+這也帶來一段混亂的視窗期：在「S3 已是新版、邊緣仍是舊版」的期間，不同使用者可能命中不同節點，看到不同版本。對你就是 bug。
+
+### 部署的三個步驟
+
+所以部署不是「上傳」一件事，而是三個步驟，缺一不可、順序重要：
+
+| 步驟 | 做什麼 | 漏掉的後果 |
+| --- | --- | --- |
+| build | 產生新的靜態產物（`dist/`） | 沒有新檔案可傳 |
+| 上傳 S3 | 讓 origin 擁有權威版本 | origin 還是舊的，後面白做 |
+| invalidate CloudFront | 拋棄舊的邊緣快取 | 使用者繼續看舊版，上傳形同沒發生 |
+
+前兩步你已經很熟。第三步是重點：**invalidation**——告訴 CloudFront「這些路徑的舊快取不要再用了」，它會讓所有邊緣節點拋棄舊檔，下一次請求回到 origin 拿最新內容。
+
+### 把流程寫成可重複的腳本
+
+每次部署都手動跑三步很煩，而且上傳後容易忘了失效。正確做法是寫成一條指令：
+
+```bash
+aws s3 sync dist/ s3://your-bucket --delete
+aws cloudfront create-invalidation \
+  --distribution-id YOUR_DIST_ID \
+  --paths "/index.html"
+```
+
+這正是 GitHub Actions 或任何 CI/CD 會寫的內容：同步資產上 S3，全部成功後再 invalidate。把順序寫死進 pipeline，就不會再發生「上傳了卻忘了失效」。
+
+失效的路徑要列得精準：帶 hash 的資產（`index-8f3c9a.js`）內容變了檔名就變，舊檔名沒人請求，不需要失效；真正要失效的是 `index.html` 這類檔名不變、內容會變的入口檔案。
+
+### 自檢
+
+- 為什麼只上傳 S3，使用者還是看到舊版？
+- 部署三步驟依序是什麼？各負責哪一層？
+- 帶 hash 的資產為什麼不需要失效？
+- 寫出部署後失效的 CLI 指令流程。
+
+## Course
+
+[↗ 課程頁面](../../lessons/deployment-workflow.html)
+
+## Sources

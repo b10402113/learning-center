@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>快取如何運作：為什麼部署後使用者還看到舊內容</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · CloudFront caching · Step 1/5</p>
+
+<h1>快取如何運作：為什麼部署後使用者還看到舊內容</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：說出邊緣快取與 origin 的關係，並解釋部署後為何使用者仍可能看到舊內容。
+</div>
+
+<h2>先看現象：部署完了，使用者卻還在用舊版</h2>
+
+<p>假設你剛把網站的新版本推到 S3，打開 CloudFront 的網址確認——哇，是新版。但你的朋友在別的城市打開，看到的還是舊的。不是你沒部署好，而是<strong>快取在作怪</strong>。</p>
+
+<p>上一節你建立了 CloudFront distribution，知道內容會被複製到全球的<strong>邊緣節點</strong>（edge location）——離使用者最近的快取伺服器。使用者的請求打到最近的邊緣節點，如果那裏有快取，就直接回傳，根本不會問 origin（你的 S3 bucket）。</p>
+
+<p>問題就在這：<strong>CloudFront 不知道你的 origin 已經更新了。</strong>它只知道「我手上的這份快取還沒過期，照舊服務就好」。於是舊版本繼續被服務，直到某個機制告訴它「該回去看看了」。</p>
+
+<h2>核心概念：TTL 決定「多久回去問一次」</h2>
+
+<p>那個機制就是 <strong>TTL（Time To Live，存活時間）</strong>——一份快取在邊緣節點上可以存活的時間。TTL 沒過期，CloudFront 就直接回傳快取；TTL 過期了，它才回到 origin 檢查有沒有新版。</p>
+
+<p>用快遞來想：你公司每個月送一次月刊到各分店。分店把月刊放櫃檯，客人來就拿走。TTL 就是「這期月刊可以放多久」。只要期限沒到，分店不會打回總公司問「有沒有新的一期？」——這樣又快又省。但代價是：總公司換了新封面，分店櫃檯還是舊的那期，直到期限到、重新進貨為止。</p>
+
+<div class="callout">
+<span class="label">核心概念</span>
+CDN 的取捨本質是「快」與「新」的對抗：<strong>快取越久，回應越快，但內容越容易變舊</strong>；<strong>快取越短，內容越新鮮，但每次都要打回 origin，更慢也更貴</strong>。TTL 就是這把旋鈕。
+</div>
+
+<h2>為什麼有些檔案「永遠」不會舊，有些卻會</h2>
+
+<p>這裡有個很關鍵的細節，跟你的前端工具鏈有關。Vite 或 webpack 這類建置工具，會把 CSS 和 JavaScript 產出成<strong>帶指紋（fingerprinted）</strong>的檔名，像是 <code>index-8f3c9a.js</code>——檔名裡有內容的 hash。</p>
+
+<p>內容一變，檔名就變。所以舊的 <code>index-8f3c9a.js</code> 再也沒人會去請求——瀏覽器要的是新的 <code>index-4b2d7e.js</code>。這類資產就算快取設很久也沒問題，因為<strong>根本不會被重複用到舊版本</strong>。</p>
+
+<p>但 <code>index.html</code> 不一樣：它<strong>沒有 hash</strong>，檔名永遠不變，而且它永遠指向最新的帶 hash 資產。你的部署流程通常是「把一堆新資產同步上 S3 + 更新 index.html」——偏偏 index.html 這份快取最有可能在邊緣節點上存留，導致使用者開啟舊網頁、再引用到舊的 JS。所以 index.html 是整個系統裡「最容易變舊、最需要處理」的那一個。</p>
+
+<div class="callout tip">
+<span class="label">一句話記法</span>
+帶 hash 的資產靠「改名」解決變舊問題；<strong>不帶 hash 的檔案（尤其 index.html）只能靠 TTL 到期或主動失效來解決</strong>——後者就是下一課的 invalidation。
+</div>
+
+<h2>那部署的正確姿勢是什麼？</h2>
+
+<p>所以完整的部署不該只是「把檔案丟上 S3」就結束。標準流程是：<strong>先同步資產上 S3 → 等全部上傳完 → 再想辦法讓舊快取失效 → 使用者下次請求就拿新內容</strong>。你可以在 CloudFront 控制台手動做這件事，也可以寫成 script 或 GitHub Action，讓它在每次部署後自動執行。</p>
+
+<p>Steve 在課程裡還點了一個經典梗：電腦科學的兩大難題是「命名、快取失效，和 off-by-one 錯誤」——第三個是笑點，但也說明快取失效（cache invalidation）在業界有多麻煩。你現在會親手處理它，很好。</p>
+
+<p>先別急著動手失效，下一課會教 TTL 這把旋鈕的細節；再下一課才是 invalidation 本身。</p>
+
+<hr>
+
+<div class="quiz" data-question="部署新版後使用者還看到舊內容，最根本的原因是？" data-correct="2" data-explain="CloudFront 不知道 origin 已更新，只要快取未過期就會繼續服務舊版本。">
+  <button class="opt">S3 檔案沒上傳成功</button>
+  <button class="opt">DNS 還沒生效</button>
+  <button class="opt">邊緣節點還握著舊快取</button>
+  <button class="opt">HTTPS 憑證失效</button>
+</div>
+
+<div class="quiz" data-question="TTL 的定義是？" data-correct="1" data-explain="TTL（Time To Live）決定一份快取可以在邊緣節點存活多久，過期後 CloudFront 才回 origin 檢查新版。">
+  <button class="opt">檔案在 S3 上的保存期限</button>
+  <button class="opt">快取在邊緣節點上存活的時間</button>
+  <button class="opt">DNS 記錄的更新頻率</button>
+  <button class="opt">HTTP 請求的超時時間</button>
+</div>
+
+<div class="quiz" data-question="為什麼帶 hash 指紋的靜態資產很少需要處理快取？" data-correct="0" data-explain="內容一變檔名就變，舊檔名不再被請求，瀏覽器永遠會抓新的 URL。">
+  <button class="opt">內容改變時檔名也改變，舊檔名不再被請求</button>
+  <button class="opt">它們不會被快取</button>
+  <button class="opt">CloudFront 會自動為它們失效</button>
+  <button class="opt">它們只存留在瀏覽器端</button>
+</div>
+
+<div class="quiz" data-question="哪一個檔案最容易在邊緣節點上「變舊」？" data-correct="3" data-explain="index.html 沒有 hash，檔名永遠不變，快取最可能存留舊版本。">
+  <button class="opt">index-8f3c9a.js</button>
+  <button class="opt">style-4b2d7e.css</button>
+  <button class="opt">favicon-9a1c2b.ico</button>
+  <button class="opt">index.html</button>
+</div>
+
+<div class="quiz" data-question="部署新版本的正確順序是？" data-correct="1" data-explain="先同步資產上 S3，全部上傳完成後再讓舊快取失效，使用者下次請求就拿新內容。">
+  <button class="opt">先失效快取，再同步資產</button>
+  <button class="opt">先同步資產，再失效快取</button>
+  <button class="opt">失效快取後什麼都不用做</button>
+  <button class="opt">同步資產即可，快取會自己更新</button>
+</div>
+
+<hr>
+
+<footer>
+<p>下一步：<a href="ttl-and-cache-control.html">TTL 與 Cache-Control：新鮮度與效能的取捨</a></p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

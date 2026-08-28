@@ -1,0 +1,67 @@
+---
+id: cache-invalidation
+title: 快取失效（Invalidation）：強制拋棄邊緣快取
+subject: aws-v3
+sources:
+  - "[[sources/aws-v3/15#cache-invalidation]]"
+created: 2026-08-28
+updated: 2026-08-28
+---
+
+# 快取失效（Invalidation）：強制拋棄邊緣快取
+
+<LearningGoal>
+能說明 invalidation 做什麼、如何在全球邊緣節點傳播，並在部署後正確執行 invalidate。
+</LearningGoal>
+
+## Lesson
+
+### TTL 太慢的時候
+
+上一課的 TTL 是「等它自己到期」——但有些情境你不想等。你剛修好一個嚴重的 bug，或改了 favicon，或上線一個安全更新，你希望現在、立刻讓所有使用者拿到新版，而不是等某個 TTL 過期。這就是 invalidation 出場的時機。
+
+Invalidation（快取失效）就是把某個檔案從 CloudFront 的邊緣快取裡強制踢出去。它的效果是全球的——所有邊緣節點都會丟掉這份舊快取，使用者下一次請求就會回 origin 拿新內容。
+
+### 它怎麼運作：全球踢除
+
+invalidation 不是只清掉某一個邊緣節點。你提交一個失效請求後，CloudFront 會把這個指令傳播到所有邊緣節點，每個節點都會丟掉指定的快取。下一次有人請求該路徑，最近的邊緣節點沒有快取，就會回到 origin 抓最新版本，再重新快取。
+
+把它想成總公司的「緊急召回令」：通知發到全世界所有分店，說「某期的月刊全部下架」。分店下架後，客人再來拿，分店就得向總公司要新的。注意：召回令的費用和範圍，正是本節點下一步要講的計費問題。
+
+### 該失效哪些路徑？
+
+回到第一課的結論：帶 hash 的資產（`index-8f3c9a.js`、`style-4b2d7e.css`）內容變了檔名就變，舊檔名根本沒人請求——它們不需要失效。真正需要失效的，是那些檔名不變、內容會變的檔案：最主要的就是 `index.html`。
+
+帶 hash 的 CSS 和 JS 靠工具產出，但 `index.html` 沒有自己的 hash，永遠指向最新的資產名。所以一次典型的部署是：
+
+1. 把所有新資產同步上 S3
+2. 等全部上傳完成
+3. 失效 `index.html`（或連同 `public/` 裡那些沒 hash 的檔案，例如 favicon）
+
+你也可以在 CloudFront 控制台的 invalidation 頁面，列出多個路徑一起失效；或者更簡單粗暴——失效 `/*`，把整個 distribution 的快取全部清掉。用「一定要 index.html，外加可能變動的 public 檔案」這個準則決定要列哪些。帶 hash 的不失效，沒 hash 的才失效——大部分時候你的失效清單就是 index.html 加上幾個 public 檔案。
+
+### 手動 vs 自動
+
+你在 CloudFront 控制台可以手動提交失效請求，可以填任意多個路徑。但每次部署都手動點一次很煩，而且容易忘。真正的做法是把它寫進自動化：
+
+```bash
+aws s3 sync dist/ s3://your-bucket --delete
+aws cloudfront create-invalidation \
+  --distribution-id YOUR_DIST_ID \
+  --paths "/index.html"
+```
+
+一次完成的 GitHub Action 大概是：同步資產上 S3 → 全部上傳成功後 → 執行 invalidation。等動作執行完，快取失效開始在全球傳播，使用者很快就會看到新版本。
+
+### 自檢
+
+- invalidation 和「等 TTL 到期」差在哪？各自什麼時候該用？
+- 為什麼失效請求的影響是全球性的？
+- 帶 hash 的資產為什麼不需要失效？
+- 寫出一次部署後失效的 CLI 指令流程。
+
+## Course
+
+[↗ 課程頁面](../../lessons/cache-invalidation.html)
+
+## Sources

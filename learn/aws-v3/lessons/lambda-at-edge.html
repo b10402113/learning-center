@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lambda@Edge：在邊緣執行的進階路由邏輯</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · Deployment workflow and SPA routing · Step 4/5</p>
+
+<h1>Lambda@Edge：在邊緣執行的進階路由邏輯</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：能說明 Lambda@Edge 是什麼、在 CloudFront 邊緣能做哪些事，以及它與自訂錯誤頁面方案的取捨。
+</div>
+
+<h2>當「假的 200」不夠用的時候</h2>
+
+<p>上一課的自訂錯誤頁面能解決 90% 的 SPA 問題，但它有一個瑕疵：不存在的路徑也回 200，而且它不能「看懂」URL 內容，只會盲目地把所有錯誤導到 <code>index.html</code>。</p>
+
+<p>如果你的需求更複雜——例如「只有 <code>/notes/*</code> 導到 index.html，其餘真的 404」、或「把舊網址重新導向到新網址」、或「要求某些路徑先登入」——你需要真正的邏輯，而不只是靜態設定。這就是 <strong>Lambda@Edge</strong> 出場的時機。</p>
+
+<div class="callout">
+<span class="label">核心概念</span>
+<strong>Lambda@Edge = 在 CloudFront 邊緣節點執行 Lambda 函式。</strong> 它讓你在請求「到達 origin 之前」和「從 origin 回來之後」的路上，用 JavaScript 插手處理請求與回應。
+</div>
+
+<h2>它是怎麼運作的</h2>
+
+<p>還記得第一課的架構嗎？請求的路徑是：使用者 → CloudFront 邊緣節點 → origin（S3）→ 回傳給使用者。</p>
+
+<p>Lambda@Edge 就是在邊緣節點這個位置上，插入了執行 JavaScript 的鉤子。請求進來時可以先跑一段程式，再決定要不要送給 origin；回應出來時也可以再跑一段程式，改寫之後再回傳給使用者。</p>
+
+<p>一個具體例子：你收到一個請求 <code>/notes/123</code>。普通的錯誤頁面設定只會「找不到就給 index.html」。Lambda@Edge 可以做到——在請求到達 origin 之前，就把這個 URL 改寫成 <code>/index.html</code>（URL rewriting），甚至先查一下「這個使用者是不是被封鎖的」，是的話直接改寫回應狀態碼、連 origin 都不用去。</p>
+
+<table>
+<tr><th>能力</th><th>怎麼用</th></tr>
+<tr><td>URL 改寫（URL rewriting）</td><td>把 /notes/123 改寫成 /index.html 再送 origin</td></tr>
+<tr><td>請求攔截與驗證</td><td>查封鎖名單，決定放行或直接拒絕</td></tr>
+<tr><td>A/B 測試</td><td>依條件把部分流量導向不同版本</td></tr>
+<tr><td>動態內容</td><td>在邊緣讀 Redis、資料庫，改寫回應</td></tr>
+<tr><td>精確狀態碼</td><td>真的不存在的頁面回真正的 404，而不是假的 200</td></tr>
+</table>
+
+<h2>為什麼「因為它是 Lambda」很重要</h2>
+
+<p>Lambda@Edge 裡跑的是完整的 Lambda 函式，用的是 JavaScript。這意味著它可以做的事，跟你在伺服器上寫的任何程式一樣多——它不是一個被侷限的設定值。你可以讀環境變數（environment variables）來設定行為而不改程式碼，可以連接 Redis 或資料庫來做判斷（例如查「這個使用者是否被封鎖」），可以在回應路徑上改寫任何東西。</p>
+
+<p>這就開啟了「邊緣運算（edge computing）」的概念：把計算帶到離使用者最近的節點，而不是集中在一台伺服器。你的 CDN 從「靜態快取」升級成「可程式化（programmable）的 CDN」。</p>
+
+<h2>什麼時候用哪個？</h2>
+
+<p>兩個方案不是競爭，而是階梯：</p>
+
+<table>
+<tr><th>方案</th><th>複雜度</th><th>適合</th></tr>
+<tr><td>Custom error responses</td><td>純設定，零程式碼</td><td>標準 SPA：讓所有路由落到 index.html</td></tr>
+<tr><td>Lambda@Edge</td><td>要寫與維護函式</td><td>需要判斷、改寫、驗證、精確狀態碼</td></tr>
+</table>
+
+<div class="callout tip">
+<span class="label">一句話記法</span>
+<strong>錯誤頁面是「開關」，Lambda@Edge 是「程式」。</strong> 開關能解決一般 SPA；要更聰明、更精確，就寫程式。
+</div>
+
+<h2>回到面試語言</h2>
+
+<p>「Custom error responses 能把 404/403 導回 index.html，但無法分辨『真 404』和『SPA 路由』，也回不了精確的狀態碼。Lambda@Edge 讓我在 CloudFront 邊緣執行 Lambda——可以做 URL 改寫、驗證、A/B 測試，還能在請求到達 origin 前直接決定回應。代價是要寫函式、更複雜。它是把 CDN 變成 programmable 的關鍵一步。」</p>
+
+<p>最後一課，我們把整條部署鏈路收攏成一套心智模型，並看看接下來值得探索的方向。</p>
+
+<hr>
+
+<div class="quiz" data-question="Lambda@Edge 是在哪裡執行程式？" data-correct="2" data-explain="Lambda@Edge 在 CloudFront 的邊緣節點執行，而非集中在一台伺服器。">
+  <button class="opt">在 S3 bucket 內</button>
+  <button class="opt">在使用者的瀏覽器</button>
+  <button class="opt">在 CloudFront 的邊緣節點</button>
+  <button class="opt">在 AWS 總部的資料中心</button>
+</div>
+
+<div class="quiz" data-question="自訂錯誤頁面做不到、Lambda@Edge 做得到的是？" data-correct="1" data-explain="Lambda@Edge 能改寫 URL、驗證、回精確狀態碼；錯誤頁面只能盲目導到 index.html。">
+  <button class="opt">把所有路徑導到 index.html</button>
+  <button class="opt">依條件改寫 URL 並回精確狀態碼</button>
+  <button class="opt">讓 S3 變成公開可讀</button>
+  <button class="opt">加快 DNS 解析</button>
+</div>
+
+<div class="quiz" data-question="「URL rewriting」在 SPA 場景是指？" data-correct="0" data-explain="在請求到達 origin 前，把 /notes/123 改寫成 /index.html 再送過去。">
+  <button class="opt">把 /notes/123 改寫成 /index.html 再送 origin</button>
+  <button class="opt">把網址縮短</button>
+  <button class="opt">把 http 升級成 https</button>
+  <button class="opt">把相對路徑改成絕對路徑</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Lambda@Edge 可以做「查封鎖名單」這種事？" data-correct="3" data-explain="它是完整的 Lambda，能讀 Redis、資料庫與環境變數，做出比設定更複雜的判斷。">
+  <button class="opt">因為 S3 支援即時查詢</button>
+  <button class="opt">因為 CloudFront 內建使用者資料庫</button>
+  <button class="opt">因為瀏覽器會主動回報</button>
+  <button class="opt">因為它是完整函式，能連資料庫與讀設定</button>
+</div>
+
+<div class="quiz" data-question="「標準 SPA、不需要精確 404」該選哪個方案？" data-correct="2" data-explain="標準 SPA 用純設定的 custom error responses 就夠，不必為它寫函式。">
+  <button class="opt">Lambda@Edge</button>
+  <button class="opt">兩個都要，缺一不可</button>
+  <button class="opt">Custom error responses</button>
+  <button class="opt">都不需要</button>
+</div>
+
+<hr>
+
+<footer>
+<p>下一步：<a href="./course-wrapup.html">課程收尾：可程式化的 CDN 與下一步</a>。</p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

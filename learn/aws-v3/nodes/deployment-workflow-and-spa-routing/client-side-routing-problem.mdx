@@ -1,0 +1,51 @@
+---
+id: client-side-routing-problem
+title: SPA 用戶端路由的 404 問題
+subject: aws-v3
+sources:
+  - "[[sources/aws-v3/17#client-side-routing-problem]]"
+created: 2026-08-28
+updated: 2026-08-28
+---
+
+<LearningGoal>
+能解釋為什麼 SPA 的深層連結（如 /about、/notes/123）在 CloudFront 上回傳 404，以及這如何破壞深層連結與重新整理頁面。
+</LearningGoal>
+
+## Lesson
+
+### URL 是真的檔案嗎？
+
+在傳統多頁網站裡，每個 URL 對應一個真實存在的 HTML 檔案：`/about` 就是 `about.html`。伺服器照 URL 找檔案，找到就回傳。但你的 React app 是**單頁應用（SPA，Single-Page Application）**——S3 裡其實只有少數真實檔案：`index.html`、一個帶 hash 的 `index-xxxx.js`、一個 `index-xxxx.css`。剩下的路由，例如 `/about`、`/notes/123`，都是由瀏覽器端的**用戶端路由（client-side router）**虛擬出來的——URL 看起來很漂亮，但 S3 裡根本沒有這些檔案。
+
+所以「URL 對應畫面」的工作落在瀏覽器裡的 JavaScript，而不是伺服器。伺服器的工作只是「給定路徑，找檔案」。
+
+### 現象：直接訪問深層連結 → 404
+
+假設你在網址列直接輸入 `https://your-site/notes/123`，或是在該頁面按 F5 重新整理。瀏覽器把請求送到 CloudFront，CloudFront 照著 URL 去 S3 找 `notes/123` 這個物件——當然找不到，因為它根本不存在。於是回傳 **404 Not Found**。
+
+更糟的是，SPA 根本沒機會載入：因為沒有 `index.html` 被回傳，瀏覽器就沒東西可跑，router 沒上場。結果：
+
+| 場景 | 發生什麼 |
+| --- | --- |
+| 從首頁點連結進入 /notes/123 | Router 在瀏覽器內切換畫面，一切正常 |
+| 直接輸入 /notes/123 或按 F5 | 瀏覽器送請求給 CloudFront → S3 找不到檔案 → 404 |
+
+這叫**深層連結（deep link）被破壞**。任何「直接訪問某個路由」或「重新整理頁面」的使用者都會撞上 404——別人收到你分享的 `/notes/123` 連結，點開卻是錯誤頁面，對 SPA 是致命的。
+
+### 解法為什麼得在伺服器端
+
+關鍵在於誰來「解釋」這個 URL。瀏覽器只有在拿到 `index.html`、執行完 JS 之後，才知道該顯示哪個畫面；而 CloudFront / S3 對虛擬路由一無所知。所以解法必須在伺服器這側動手腳：遇到「找不到的路徑」時，別回 404，而是把 `index.html` 交給瀏覽器，讓 router 接手。這就是下一課的**自訂錯誤頁面**。
+
+### 自檢
+
+- SPA 的路由在 S3 裡是「真實檔案」還是「虛擬路徑」？
+- 直接訪問深層連結時，CloudFront 為什麼回 404？
+- deep link 被破壞對使用者意味著什麼？
+- 解法為什麼必須在伺服器端，而不是瀏覽器端？
+
+## Course
+
+[↗ 課程頁面](../../lessons/client-side-routing-problem.html)
+
+## Sources

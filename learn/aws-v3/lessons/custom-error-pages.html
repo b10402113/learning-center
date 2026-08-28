@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>自訂錯誤頁面：把 404/403 導回 index.html</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · Deployment workflow and SPA routing · Step 3/5</p>
+
+<h1>自訂錯誤頁面：把 404/403 導回 index.html</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：能設定 CloudFront 自訂錯誤頁面，把 404 與 403 回應對應到 /index.html 並以 200 狀態碼回傳，讓 SPA router 接管路由。
+</div>
+
+<h2>好消息：這是設定，不是寫程式</h2>
+
+<p>上一課我們診斷出問題：直接訪問 <code>/notes/123</code> 時，CloudFront 去 S3 找不到檔案，回傳 404，router 沒機會上場。好消息是——這個問題不需要改任何程式碼，改 CloudFront 的<strong>設定</strong>就能修好。</p>
+
+<p>CloudFront 有一個功能叫<strong>自訂錯誤回應（custom error responses）</strong>，或稱自訂錯誤頁面。它的概念是：「當 origin 回傳某個錯誤碼時，不要照著回傳給使用者，而是改用我指定的替代方案。」</p>
+
+<div class="callout">
+<span class="label">核心概念</span>
+<strong>把「找不到」轉譯成「給 index.html」。</strong> 對 SPA 來說，任何路徑都該得到 index.html，讓 router 決定顯示什麼。錯誤頁面設定做的就是這件事。
+</div>
+
+<h2>具體怎麼設：404 → /index.html，狀態碼 200</h2>
+
+<p>我們需要兩條規則：</p>
+
+<table>
+<tr><th>origin 回傳</th><th>CloudFront 改成</th></tr>
+<tr><td>404 Not Found</td><td>回傳 <code>/index.html</code>，狀態碼 <code>200 OK</code></td></tr>
+<tr><td>403 Forbidden</td><td>回傳 <code>/index.html</code>，狀態碼 <code>200 OK</code></td></tr>
+</table>
+
+<p>在 CloudFront 控制台的 distribution 設定裡，有個「Error Pages」分頁，你可以新增錯誤回應：設定「錯誤碼 = 404」「回應頁面路徑 = <code>/index.html</code>」「HTTP 回應碼 = 200」。403 也做一組一模一樣的。為什麼 403 也要？因為當 S3 bucket 設定成不允許公開存取某些路徑時，origin 會回傳 403 而不是 404——兩種都可能出現，乾脆一起處理。</p>
+
+<h2>這樣一來，發生了什麼？</h2>
+
+<p>使用者訪問 <code>/notes/123</code> → CloudFront 去 S3 找不到 → 原本要回 404 → 依設定改回傳 <code>index.html</code> 並標成 200 → 瀏覽器載入 <code>index.html</code>，執行 JS → router 啟動 → router 看到目前 URL 是 <code>/notes/123</code>，顯示對應的筆記畫面。整個鏈路就通了。</p>
+
+<p>換句話說：<strong>錯誤頁面設定把「伺服器決定回什麼」改成了「把決定權交還給 SPA」</strong>。伺服器不知道 <code>/notes/123</code> 是什麼，但它知道把 <code>index.html</code> 給你，你自己想辦法。</p>
+
+<h2>一個誠實的瑕疵：假的 200</h2>
+
+<p>這個解法有個被許多人接受的瑕疵：當使用者訪問一個<strong>真的不存在</strong>的路徑（例如 <code>/totally-bogus</code>）時，伺服器也會回傳 <code>index.html</code> 並標成 200。你的 app 內部可能顯示「404 頁面」，但 HTTP 狀態碼是 200——對瀏覽器、對 SEO、對監控工具來說，這看起來像「一切正常」。</p>
+
+<p>對大部分應用這無傷大雅，業界也普遍這麼做。但如果你的需求是「真的讓不存在的頁面回傳真正的 404」，就需要更聰明的方案——那正是下一課 <strong>Lambda@Edge</strong> 的用武之地。</p>
+
+<div class="callout tip">
+<span class="label">一句話記法</span>
+<strong>錯誤頁面設定 = 伺服器的「全都要 index.html」開關。</strong> 一行設定，讓深層連結與重新整理都能正常工作。
+</div>
+
+<h2>回到面試語言</h2>
+
+<p>「SPA 部署到 CloudFront 後，要設定 custom error responses：把 404 與 403 對應到 /index.html、回應碼設成 200。這樣深層連結和重新整理時，CloudFront 一律把 index.html 交給瀏覽器，由 client-side router 接手。代價是真正不存在的頁面也會回 200——要更精確的話，改用 Lambda@Edge。」</p>
+
+<p>下一步，我們看 Lambda@Edge 能做到哪些錯誤頁面做不到的事。</p>
+
+<hr>
+
+<div class="quiz" data-question="修復 SPA 深層連結 404 的核心手段是？" data-correct="2" data-explain="在 CloudFront 設定 custom error responses，把 404/403 導到 index.html。">
+  <button class="opt">改 React router 的程式碼</button>
+  <button class="opt">在 S3 建立所有路由的資料夾</button>
+  <button class="opt">設定 CloudFront 的 custom error responses</button>
+  <button class="opt">把 S3 改成公開可讀</button>
+</div>
+
+<div class="quiz" data-question="404 要對應到哪個檔案、回傳什麼狀態碼？" data-correct="0" data-explain="404 → /index.html，HTTP 回應碼設為 200，讓 router 接管。">
+  <button class="opt">/index.html，狀態碼 200</button>
+  <button class="opt">/404.html，狀態碼 404</button>
+  <button class="opt">/index.html，狀態碼 404</button>
+  <button class="opt">/error.html，狀態碼 500</button>
+</div>
+
+<div class="quiz" data-question="為什麼 403 也要一起處理？" data-correct="3" data-explain="S3 對某些未公開路徑回傳 403 而非 404，兩種錯誤碼都要導到 index.html。">
+  <button class="opt">因為 403 比較常見</button>
+  <button class="opt">因為 403 是 SPA 專用錯誤</button>
+  <button class="opt">因為 403 會快取很久</button>
+  <button class="opt">因為 S3 有時對未公開路徑回傳 403 而非 404</button>
+</div>
+
+<div class="quiz" data-question="使用者訪問 /notes/123 時，設定生效後的流程是？" data-correct="1" data-explain="S3 找不到 → 依設定回 index.html 標 200 → 瀏覽器執行 JS → router 顯示對應畫面。">
+  <button class="opt">CloudFront 直接顯示 404 頁面</button>
+  <button class="opt">回傳 index.html，router 接手顯示畫面</button>
+  <button class="opt">重新導向到首頁並登出</button>
+  <button class="opt">回傳空的 JS 檔案</button>
+</div>
+
+<div class="quiz" data-question="訪問真的不存在的 /totally-bogus 時會怎樣？" data-correct="2" data-explain="一樣回傳 index.html 並標 200；app 內部可顯示 404 頁面，但 HTTP 狀態碼是 200。">
+  <button class="opt">回傳真正的 404 狀態碼</button>
+  <button class="opt">被 DNS 擋下</button>
+  <button class="opt">也回 index.html，HTTP 狀態碼為 200</button>
+  <button class="opt">回傳空白頁</button>
+</div>
+
+<hr>
+
+<footer>
+<p>下一步：<a href="./lambda-at-edge.html">Lambda@Edge：在邊緣執行的進階路由邏輯</a>。</p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+---
+id: custom-error-pages
+title: 自訂錯誤頁面：把 404/403 導回 index.html
+subject: aws-v3
+sources:
+  - "[[sources/aws-v3/17#custom-error-pages]]"
+created: 2026-08-28
+updated: 2026-08-28
+---
+
+<LearningGoal>
+能設定 CloudFront 自訂錯誤頁面，把 404 與 403 回應對應到 /index.html 並以 200 狀態碼回傳，讓 SPA router 接管路由。
+</LearningGoal>
+
+## Lesson
+
+### 這是設定，不是寫程式
+
+上一課診斷出問題：直接訪問 `/notes/123` 時，CloudFront 去 S3 找不到檔案、回傳 404，router 沒機會上場。好消息是——這不需要改任何程式碼，改 CloudFront 的**設定**就能修好。
+
+CloudFront 有一個功能叫**自訂錯誤回應（custom error responses）**：當 origin 回傳某個錯誤碼時，不要照著回傳給使用者，改用你指定的替代方案。對 SPA 來說，任何路徑都該得到 `index.html`，讓 router 決定顯示什麼——錯誤頁面設定做的就是這件事。
+
+### 具體怎麼設：404 → /index.html，狀態碼 200
+
+我們需要兩條規則：
+
+| origin 回傳 | CloudFront 改成 |
+| --- | --- |
+| 404 Not Found | 回傳 `/index.html`，狀態碼 `200 OK` |
+| 403 Forbidden | 回傳 `/index.html`，狀態碼 `200 OK` |
+
+在 CloudFront 控制台的 distribution 設定裡，Error Pages 分頁可以新增錯誤回應：錯誤碼 = 404、回應頁面路徑 = `/index.html`、HTTP 回應碼 = 200；403 也做一組一模一樣的。為什麼 403 也要？因為當 S3 對某些未公開路徑回應時，origin 會回傳 403 而不是 404——兩種都可能出現，乾脆一起處理。
+
+### 這樣一來，發生了什麼？
+
+使用者訪問 `/notes/123` → CloudFront 去 S3 找不到 → 原本要回 404 → 依設定改回傳 `index.html` 並標成 200 → 瀏覽器載入並執行 JS → router 啟動 → router 看到 URL 是 `/notes/123`，顯示對應畫面。整個鏈路就通了。
+
+換句話說：錯誤頁面設定把「伺服器決定回什麼」改成「把決定權交還給 SPA」。伺服器不知道 `/notes/123` 是什麼，但它知道把 `index.html` 給你，你自己想辦法。
+
+### 一個誠實的瑕疵：假的 200
+
+這個解法有個被普遍接受的瑕疵：訪問**真的不存在**的路徑（例如 `/totally-bogus`）時，伺服器也會回傳 `index.html` 並標成 200。你的 app 內部可能顯示「404 頁面」，但 HTTP 狀態碼是 200——對瀏覽器、SEO、監控工具來說，這看起來像「一切正常」。對大部分應用這無傷大雅。但若需求是「不存在的頁面回真正的 404」，就需要更聰明的方案——那正是下一課 **Lambda@Edge** 的用武之地。
+
+### 自檢
+
+- 修復深層連結 404 的核心手段是什麼？在哪裡設定？
+- 404 與 403 各對應到哪個檔案、什麼狀態碼？為什麼 403 也要設？
+- 設定生效後，訪問 /notes/123 的完整流程是？
+- 這個解法的「假的 200」瑕疵是什麼？何時會變成問題？
+
+## Course
+
+[↗ 課程頁面](../../lessons/custom-error-pages.html)
+
+## Sources

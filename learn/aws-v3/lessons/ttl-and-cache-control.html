@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TTL 與 Cache-Control：新鮮度與效能的取捨</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · CloudFront caching · Step 2/5</p>
+
+<h1>TTL 與 Cache-Control：新鮮度與效能的取捨</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：說明 TTL 的預設來源、origin 的 Cache-Control 標頭如何覆寫 TTL，以及新鮮度與效能的取捨。
+</div>
+
+<h2>先複習：TTL 是「多久回去問一次」</h2>
+
+<p>上一課的核心：TTL（Time To Live，存活時間）決定一份快取在邊緣節點能存活多久。沒過期，CloudFront 直接回傳快取；過期了，才回 origin 檢查新版。現在的問題變成：<strong>這個「多久」到底是誰決定的？</strong></p>
+
+<h2>TTL 的預設來源：Behavior 設定</h2>
+
+<p>TTL 的預設值來自 CloudFront 的 <strong>behavior 設定</strong>——也就是你在建立 distribution 時那些快取行為（cache behavior）的設定。CloudFront 每個 distribution 有一個<strong>預設 cache behavior</strong>，涵蓋所有沒有另外指定的路徑，裏面就帶著 TTL 的預設值。</p>
+
+<p>「behavior」這個詞之後還會出現很多次，先記住一句話：<strong>behavior 就是「針對某一類路徑，決定 CloudFront 怎麼快取、怎麼回應」的一組設定。</strong> TTL 預設值是其中一項。</p>
+
+<div class="callout">
+<span class="label">核心概念</span>
+CloudFront 的 TTL 是<strong>分層</strong>的：behavior 設定給的是「預設 TTL」；而 origin 回傳的 <code>Cache-Control</code> 標頭可以在單次回應上<strong>覆寫</strong>這個預設值。也就是說，預設值管全局，標頭管個案。
+</div>
+
+<h2>Origin 的 Cache-Control 可以覆寫</h2>
+
+<p>你的 S3 bucket（origin）可以在每個檔案上附帶 HTTP 回應標頭，其中最關鍵的就是 <code>Cache-Control</code>。當 CloudFront 回 origin 抓一個檔案，會看到這個標頭，並用它來決定「這份該快取多久」——覆寫掉 behavior 的預設。</p>
+
+<p>所以你可以有兩種控制方式疊在一起：</p>
+
+<table>
+<tr><th>層級</th><th>誰決定</th><th>範圍</th></tr>
+<tr><td>預設 TTL</td><td>CloudFront behavior 設定</td><td>該行為涵蓋的所有路徑</td></tr>
+<tr><td>Cache-Control</td><td>origin 回傳的回應標頭</td><td>單一檔案、單次回應</td></tr>
+</table>
+
+<p>實務上，你常常會用 <code>Cache-Control</code> 標頭在檔案層級做精細控制：例如帶 hash 的靜態資產設很長、<code>index.html</code> 設很短或不快取。之後用 S3 上傳物件時就能帶上這些標頭。</p>
+
+<h2>取捨：新鮮度 vs 效能</h2>
+
+<p>TTL 沒有「正確答案」，只有「你的內容特性決定的答案」。把兩個極端擺出來看：</p>
+
+<table>
+<tr><th></th><th>短 TTL</th><th>長 TTL</th></tr>
+<tr><td>內容新鮮度</td><td>高——很快回去問 origin</td><td>低——舊內容存活久</td></tr>
+<tr><td>回應速度</td><td>低——邊緣節點常要打回 origin</td><td>高——邊緣直接回傳</td></tr>
+<tr><td>對 origin 的請求量</td><td>多</td><td>少</td></tr>
+<tr><td>適合對象</td><td>index.html、動態頁面</td><td>帶 hash 的靜態資產</td></tr>
+</table>
+
+<p>把這張表套回你的專案：帶 hash 的 CSS/JS 用長 TTL 最合理——內容變了檔名就變，舊檔名根本沒人請求，快取久一點完全沒風險。反觀 <code>index.html</code>，它是入口，永遠指向最新的資產，你希望它一更新就被看到，所以 TTL 要短、甚至不要快取。這就是「依內容類型調校」的起點——第五課會把這件事做得更細。</p>
+
+<div class="callout tip">
+<span class="label">一句話記法</span>
+TTL 是「快」與「新」之間的旋鈕。<strong>內容不變（帶 hash）就轉到最長；內容要新（index.html）就轉到最短。</strong>
+</div>
+
+<h2>「改太細」的提醒</h2>
+
+<p>Steve 在課程裡反覆強調一件事：<strong>別為了顯聰明而把東西調得太精細。</strong> 快取策略也是——先用「長 TTL 給帶 hash 資產、短 TTL 給入口檔案」這種簡單粗暴的規則跑起來，真的有瓶頸再去微調。過早優化只會讓你的設定難以維護。</p>
+
+<p>下一課，當 TTL 太慢、你又希望立刻讓使用者拿到新版時，就要用到強制手段：invalidation。</p>
+
+<hr>
+
+<div class="quiz" data-question="CloudFront 的 TTL 預設值從哪裡來？" data-correct="3" data-explain="TTL 預設值來自 CloudFront 的 behavior 設定，每個 distribution 有涵蓋所有路徑的預設 cache behavior。">
+  <button class="opt">S3 bucket 的設定</button>
+  <button class="opt">DNS 記錄</button>
+  <button class="opt">瀏覽器設定</button>
+  <button class="opt">CloudFront 的 behavior 設定</button>
+</div>
+
+<div class="quiz" data-question="origin 的哪個回應標頭可以覆寫 CloudFront 的預設 TTL？" data-correct="1" data-explain="origin 回傳的 Cache-Control 標頭可以在單次回應上覆寫 behavior 的預設 TTL。">
+  <button class="opt">Content-Type</button>
+  <button class="opt">Cache-Control</button>
+  <button class="opt">Server</button>
+  <button class="opt">ETag</button>
+</div>
+
+<div class="quiz" data-question="帶 hash 指紋的靜態資產適合哪種 TTL？" data-correct="0" data-explain="內容變了檔名就變，舊檔名不再被請求，所以長 TTL 完全沒有變舊風險。">
+  <button class="opt">長 TTL</button>
+  <button class="opt">短 TTL</button>
+  <button class="opt">不快取</button>
+  <button class="opt">TTL 對它們無效</button>
+</div>
+
+<div class="quiz" data-question="index.html 為什麼適合短 TTL？" data-correct="2" data-explain="index.html 是入口、沒有 hash，永遠指向最新資產，你希望它一更新就被看到。">
+  <button class="opt">它是帶 hash 的檔案</button>
+  <button class="opt">它很小，快取沒意義</button>
+  <button class="opt">它是入口，更新後要儘快被看到</button>
+  <button class="opt">CloudFront 規定它必須短</button>
+</div>
+
+<div class="quiz" data-question="短 TTL 的代價是什麼？" data-correct="3" data-explain="TTL 短表示邊緣節點常常要打回 origin 檢查，回應較慢且 origin 請求量變多。">
+  <button class="opt">內容更容易變舊</button>
+  <button class="opt">靜態資產下載變慢</button>
+  <button class="opt">HTTPS 憑證會失效</button>
+  <button class="opt">邊緣節點常打回 origin，回應較慢</button>
+</div>
+
+<hr>
+
+<footer>
+<p>下一步：<a href="cache-invalidation.html">快取失效（Invalidation）：強制拋棄邊緣快取</a></p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

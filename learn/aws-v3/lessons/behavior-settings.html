@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Behavior 設定：依內容類型調校快取</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">aws-v3 · CloudFront caching · Step 5/5</p>
+
+<h1>Behavior 設定：依內容類型調校快取</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：依 path pattern 設定 behavior，並理解轉發 header/cookie 對 cache key 與命中率的影響。
+</div>
+
+<h2>把前四課串起來</h2>
+
+<p>你現在有四塊拼圖：快取機制（TTL）、TTL 的預設與覆寫、強制失效（invalidation）、失效計費。最後一課把它們收攏成一套工具：<strong>behavior 設定</strong>——也就是「為不同類型的內容，分別配置快取行為」的方法。</p>
+
+<h2>Behavior 是什麼</h2>
+
+<p>還記得第二課嗎？每個 distribution 有一個<strong>預設 cache behavior</strong>，涵蓋所有沒有另外指定的路徑。行為（cache behavior）是一組完整的設定：對應哪個 origin、允許哪些 HTTP method、快取多久（TTL）、轉發哪些 header 或 cookie……等。</p>
+
+<p>關鍵在於：<strong>你可以加第二個、第三個 behavior，每個綁定一個 path pattern</strong>，CloudFront 會把請求路由到第一個符合 pattern 的 behavior。這就讓你「一刀切」變成「依內容分治」。</p>
+
+<div class="callout">
+<span class="label">核心概念</span>
+<strong>path pattern 決定請求走哪個 behavior。</strong> 預設 behavior（通常是 <code>*</code>）當兜底；你可以為 <code>/images/*.png</code>、<code>/api/*</code> 這類路徑各設一個專屬 behavior，給它們不同的 TTL、不同的 method 與 header 策略。
+</div>
+
+<h2>常見的調校組合</h2>
+
+<p>以你部署的靜態網站為例，你可以把 behavior 拆成兩類：</p>
+
+<table>
+<tr><th>路徑</th><th>策略</th><th>理由</th></tr>
+<tr><td>預設（<code>*</code>）</td><td>只允許 GET/HEAD，快取較短</td><td>涵蓋 index.html 等入口檔案</td></tr>
+<tr><td><code>/assets/*</code> 或 <code>*.js</code>/<code>*.css</code></td><td>長 TTL</td><td>帶 hash 的靜態資產，內容變了檔名就變</td></tr>
+<tr><td><code>/images/*.png</code></td><td>中等 TTL</td><td>圖片不常變，但也要能更新</td></tr>
+</table>
+
+<p>Steve 的示範正是這樣：在 distribution config 裡看到預設 cache behavior，然後想「對 <code>/images/*.png</code> 這類路徑，我是不是該改一下 TTL？」——這就是用 behavior 對不同內容類型做調校的起點。你在建立 distribution 時用的「預設設定」會自動帶出這些 behavior，之後隨時能在設定裡微調。</p>
+
+<h2>轉發 header / cookie 的陷阱</h2>
+
+<p>behavior 裡還有一個容易誤用的設定：<strong>forwarded headers（轉發標頭）與 cookies</strong>。CloudFront 預設不會轉發，但如果你的應用需要（例如依 User-Agent 或語言給不同內容），你可以開啟。</p>
+
+<p>代價是：<strong>cache key 會變複雜</strong>。CloudFront 用請求的一部分（通常是 URL，加上你轉發的 header/cookie）當作快取的鑰匙。你每多轉發一個 header，就有更多種組合、每一種都要單獨快取一份——命中率（hit rate）下降，回 origin 的請求變多，快取的價值被削弱。</p>
+
+<div class="callout tip">
+<span class="label">一句話記法</span>
+<strong>轉發越少，cache key 越單純，命中率越高。</strong> 除非你真的需要依 header/cookie 區分內容，否則不要開。
+</div>
+
+<p>對你的靜態網站來說，每個使用者看到的內容都一樣，沒有理由轉發任何 header——關掉它，讓 cache key 就只有 URL，這是最單純、也最高命中率的配置。</p>
+
+<h2>收尾：把旋鈕組合起來</h2>
+
+<p>現在你有一整套快取工具箱了。把五課串成一份心智圖：</p>
+
+<ol>
+<li><strong>TTL</strong> 決定「多久回去問一次」——用 behavior 預設，用 Cache-Control 覆寫</li>
+<li><strong>invalidation</strong> 決定「現在就強制更新」——精準列路徑，少用 <code>/*</code></li>
+<li><strong>計費</strong> 提醒你別過度失效——用 hash 資產從源頭省事</li>
+<li><strong>behavior</strong> 把以上全部按 path pattern 分配給不同內容類型</li>
+</ol>
+
+<p>整套邏輯能幫你回答面試題「怎麼處理 CDN 的舊內容」：帶 hash 的資產靠改名、index.html 靠短 TTL 或失效、不同路徑用不同 behavior 調校、失效清單保持精準。下一步，你會把這套流程接到真正的部署 pipeline 上。</p>
+
+<hr>
+
+<div class="quiz" data-question="CloudFront 如何決定請求走哪個 behavior？" data-correct="1" data-explain="CloudFront 用 path pattern 比對請求路徑，第一個符合的 behavior 勝出。">
+  <button class="opt">依請求的網域</button>
+  <button class="opt">依 path pattern 比對路徑</button>
+  <button class="opt">依 S3 bucket 名稱</button>
+  <button class="opt">依使用者所在國家</button>
+</div>
+
+<div class="quiz" data-question="帶 hash 的靜態資產（/assets/*）適合哪種 behavior 設定？" data-correct="0" data-explain="帶 hash 的資產內容變了檔名就變，給長 TTL 完全沒有風險。">
+  <button class="opt">長 TTL</button>
+  <button class="opt">短 TTL</button>
+  <button class="opt">不快取</button>
+  <button class="opt">關閉 GET</button>
+</div>
+
+<div class="quiz" data-question="多轉發一個 header 對快取的影響是？" data-correct="2" data-explain="每個轉發的 header 都會擴張 cache key，產生更多快取組合，命中率下降。">
+  <button class="opt">命中率提高</button>
+  <button class="opt">TTL 變長</button>
+  <button class="opt">cache key 變複雜、命中率下降</button>
+  <button class="opt">失效次數減少</button>
+</div>
+
+<div class="quiz" data-question="對「所有使用者內容相同」的靜態網站，轉發 header/cookie 該怎麼設？" data-correct="3" data-explain="沒有理由依 header/cookie 區分內容，保持 cache key 單純（只有 URL）命中率最高。">
+  <button class="opt">全部轉發以備不時之需</button>
+  <button class="opt">只轉發 User-Agent</button>
+  <button class="opt">轉發所有 cookie</button>
+  <button class="opt">關閉轉發，讓 cache key 只有 URL</button>
+</div>
+
+<div class="quiz" data-question="「依內容類型調校快取」的具體手段是什麼？" data-correct="1" data-explain="為不同 path pattern 建立各自的 behavior，各自設定 TTL 與 method/header 策略。">
+  <button class="opt">統一把所有路徑設成同一個 TTL</button>
+  <button class="opt">為不同 path pattern 建立各自 behavior 並設定不同 TTL</button>
+  <button class="opt">全部改用 invalidation 解決</button>
+  <button class="opt">把所有檔案加上 hash</button>
+</div>
+
+<hr>
+
+<footer>
+<p>下一步：把整套快取流程接到部署 pipeline（見 ROADMAP 節點 8「Deployment workflow and SPA routing」）。</p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

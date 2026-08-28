@@ -1,0 +1,75 @@
+---
+id: behavior-settings
+title: Behavior 設定：依內容類型調校快取
+subject: aws-v3
+sources:
+  - "[[sources/aws-v3/15#behavior-settings]]"
+created: 2026-08-28
+updated: 2026-08-28
+---
+
+# Behavior 設定：依內容類型調校快取
+
+<LearningGoal>
+能依 path pattern 設定 behavior，並理解轉發 header/cookie 對 cache key 與命中率的影響。
+</LearningGoal>
+
+## Lesson
+
+### 把前四課串起來
+
+你現在有四塊拼圖：快取機制（TTL）、TTL 的預設與覆寫、強制失效（invalidation）、失效計費。最後一課把它們收攏成一套工具：behavior 設定——也就是「為不同類型的內容，分別配置快取行為」的方法。
+
+### Behavior 是什麼
+
+每個 distribution 有一個預設 cache behavior，涵蓋所有沒有另外指定的路徑。行為（cache behavior）是一組完整的設定：對應哪個 origin、允許哪些 HTTP method、快取多久（TTL）、轉發哪些 header 或 cookie……等。
+
+關鍵在於：你可以加第二個、第三個 behavior，每個綁定一個 path pattern，CloudFront 會把請求路由到第一個符合 pattern 的 behavior。這就讓你從「一刀切」變成「依內容分治」。
+
+path pattern 決定請求走哪個 behavior。預設 behavior（通常是 `*`）當兜底；你可以為 `/images/*.png`、`/api/*` 這類路徑各設一個專屬 behavior，給它們不同的 TTL、不同的 method 與 header 策略。
+
+### 常見的調校組合
+
+以你部署的靜態網站為例，你可以把 behavior 拆成兩類：
+
+| 路徑 | 策略 | 理由 |
+| --- | --- | --- |
+| 預設（`*`） | 只允許 GET/HEAD，快取較短 | 涵蓋 index.html 等入口檔案 |
+| `/assets/*` 或 `*.js` / `*.css` | 長 TTL | 帶 hash 的靜態資產，內容變了檔名就變 |
+| `/images/*.png` | 中等 TTL | 圖片不常變，但也要能更新 |
+
+在 distribution config 裡，你會看到預設 cache behavior，然後想「對 `/images/*.png` 這類路徑，我是不是該改一下 TTL？」——這就是用 behavior 對不同內容類型做調校的起點。你在建立 distribution 時用的「預設設定」會自動帶出這些 behavior，之後隨時能在設定裡微調。
+
+### 轉發 header / cookie 的陷阱
+
+behavior 裡還有一個容易誤用的設定：forwarded headers（轉發標頭）與 cookies。CloudFront 預設不會轉發，但如果你的應用需要（例如依 User-Agent 或語言給不同內容），你可以開啟。
+
+代價是：cache key 會變複雜。CloudFront 用請求的一部分（通常是 URL，加上你轉發的 header/cookie）當作快取的鑰匙。你每多轉發一個 header，就有更多種組合、每一種都要單獨快取一份——命中率（hit rate）下降，回 origin 的請求變多，快取的價值被削弱。
+
+轉發越少，cache key 越單純，命中率越高。除非你真的需要依 header/cookie 區分內容，否則不要開。
+
+對你的靜態網站來說，每個使用者看到的內容都一樣，沒有理由轉發任何 header——關掉它，讓 cache key 就只有 URL，這是最單純、也最高命中率的配置。
+
+### 收尾：把旋鈕組合起來
+
+現在你有一整套快取工具箱了。把五課串成一份心智圖：
+
+1. TTL 決定「多久回去問一次」——用 behavior 預設，用 Cache-Control 覆寫
+2. invalidation 決定「現在就強制更新」——精準列路徑，少用 `/*`
+3. 計費提醒你別過度失效——用 hash 資產從源頭省事
+4. behavior 把以上全部按 path pattern 分配給不同內容類型
+
+整套邏輯能幫你回答面試題「怎麼處理 CDN 的舊內容」：帶 hash 的資產靠改名、index.html 靠短 TTL 或失效、不同路徑用不同 behavior 調校、失效清單保持精準。下一步，你會把這套流程接到真正的部署 pipeline 上。
+
+### 自檢
+
+- CloudFront 怎麼決定請求走哪個 behavior？
+- 為你的專案畫一份 behavior 分配表（預設、assets、images）。
+- 轉發一個 header，為什麼會降低命中率？
+- 靜態網站應該轉發 header/cookie 嗎？為什麼？
+
+## Course
+
+[↗ 課程頁面](../../lessons/behavior-settings.html)
+
+## Sources
