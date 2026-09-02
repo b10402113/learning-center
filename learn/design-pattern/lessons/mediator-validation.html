@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>驗證中介者架構的收益與設計原則</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>驗證中介者架構的收益與設計原則</h1>
+<p class="meta">design-pattern › mediator › mediator-validation</p>
+
+<blockquote>
+  <strong>學習目標</strong>：能用測試結果證明中介者屏蔽了 JDBC 複雜度，並說出它滿足的三個設計原則（單一職責、開閉、迪米特）。
+</blockquote>
+
+<h2>用測試驗證：手寫 ORM 跑通了</h2>
+
+<p>上一課我們把五個組件串了起來。現在用兩條查詢驗證它真的能跑：</p>
+
+<h3>測試 1：selectOne — 查單條記錄</h3>
+
+<pre><code>User user = session.selectOne(
+    "org.itstack.demo.design.dao.IUserDao.queryUserInfoById", 1L);
+// 輸出：User{id=1, name='水水', age=18}</code></pre>
+
+<p>業務方只傳了一個 statement 字符串和一個 ID，框架內部自動完成：解析 XML → 準備 SQL → 執行查詢 → 反射映射成 <code>User</code> 對象。跟用 Mybatis 的體驗<strong>完全一致</strong>。</p>
+
+<h3>測試 2：selectList — 查集合</h3>
+
+<pre><code>List&lt;User&gt; users = session.selectList(
+    "org.itstack.demo.design.dao.IUserDao.queryUserInfoById", req);
+// 輸出：[User{id=1, name='豆豆', age=18}, User{id=2, name='水水', age=18}]</code></pre>
+
+<p>帶參數的集合查詢也跑通了。說明 <code>#{id}</code> 占位符替換、參數綁定、結果集遍歷全部正常。</p>
+
+<h2>對比一把梭的收益</h2>
+
+<table>
+  <thead>
+    <tr><th></th><th>一把梭 JDBC</th><th>中介者 ORM</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>業務代碼</strong></td><td>四步 JDBC 全寫</td><td>一行 selectOne/selectList</td></tr>
+    <tr><td><strong>連接管理</strong></td><td>自己寫 Class.forName + getConnection</td><td>Builder 啟動時處理，業務方無感</td></tr>
+    <tr><td><strong>SQL 定義</strong></td><td>硬編碼在 Java 裡</td><td>XML 配置文件，改 SQL 不改 Java</td></tr>
+    <tr><td><strong>結果映射</strong></td><td>while(resultSet.next()) 手動取值</td><td>反射自動映射成 POJO</td></tr>
+    <tr><td><strong>擴展性</strong></td><td>改一個查詢動整個類</td><td>加一個 XML + POJO 就行</td></tr>
+  </tbody>
+</table>
+
+<h2>它滿足了哪些設計原則？</h2>
+
+<h3>1. 單一職責原則（SRP）</h3>
+
+<p>每個組件只做一件事：</p>
+
+<ul>
+  <li>SqlSession → 只管查詢和結果返回</li>
+  <li>SqlSessionFactory → 只管打開會話</li>
+  <li>SqlSessionFactoryBuilder → 只管啟動構建</li>
+  <li>Configuration → 只管存配置</li>
+</ul>
+
+<p>改 XML 解析邏輯？只動 Builder。改結果映射？只動 DefaultSqlSession。互不干擾。</p>
+
+<h3>2. 開閉原則（OCP）</h3>
+
+<p>新增一種查詢（比如 <code>School</code>）不需要改任何中介者組件的代碼：</p>
+
+<ol>
+  <li>加一個 <code>School</code> POJO</li>
+  <li>加一個 <code>School_Mapper.xml</code>（定義 SQL 和映射）</li>
+  <li>在 <code>mybatis-config-datasource.xml</code> 的 mappers 裡加一行引用</li>
+</ol>
+
+<p>對擴展開放（加 XML + POJO），對修改封閉（不改 Java 類）。</p>
+
+<h3>3. 迪米特原則（LoD）</h3>
+
+<p>「越少人知道越好」——業務方只需要知道 <code>SqlSession</code> 的 <code>selectOne</code> / <code>selectList</code>，不需要知道：</p>
+
+<ul>
+  <li>連接怎麼建立的</li>
+  <li>SQL 占位符怎麼替換的</li>
+  <li>ResultSet 怎麼映射成對象的</li>
+</ul>
+
+<p>這些細節全部由中介者組件「合作服務平台」處理。業務方跟 JDBC 的距離被拉到了最遠。</p>
+
+<h2>不只是 ORM——中介者的更廣場景</h2>
+
+<p>中介者模式不只用在 ORM。想想公司裡的「獎品中心中台」：</p>
+
+<ul>
+  <li>公司有 10 種獎品服務（金幣、優惠券、實物、積分……）</li>
+  <li>如果每個業務方都直接對接 10 個服務，依賴就是 10×N 的網狀</li>
+  <li>把 10 個服務統一收進「獎品中心」，業務方只跟獎品中心通信</li>
+  <li>獎品中心就是中介者——屏蔽底層差異，對外提供統一接口</li>
+</ul>
+
+<p>判斷標準：<strong>對象交互複雜、重複調用多、需要統一入口</strong>——就該考慮中介者。</p>
+
+<h2>小結</h2>
+
+<p>手寫 ORM 跑通查詢，證明中介者模式真的屏蔽了 JDBC 複雜度。從設計原則看，它滿足單一職責、開閉原則、迪米特原則。從場景看，中介者不只用在 ORM，任何「N 個服務需要統一包裝」的地方都適用。面試遇到「中介者模式」，你現在能講出意圖（集中協調）、場景（ORM / 中台）、結構（五個組件）和原則（SRP + OCP + LoD）了。</p>
+
+<div class="quiz" data-step="mediator-validation">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 中介者模式滿足了哪些設計原則？</strong></p>
+  <button class="quiz-option" data-correct="false">單一職責、里氏替換、接口隔離</button>
+  <button class="quiz-option" data-correct="true">單一職責、開閉原則、迪米特原則</button>
+  <button class="quiz-option" data-correct="false">開閉原則、依賴反轉、組合優於繼承</button>
+  <button class="quiz-option" data-correct="false">迪米特原則、接口隔離、依賴倒置</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 新增一種查詢（如 School），需要改哪些中介者組件？</strong></p>
+  <button class="quiz-option" data-correct="false">要改 SqlSession 和 Configuration</button>
+  <button class="quiz-option" data-correct="false">要改 DefaultSqlSession 的結果映射邏輯</button>
+  <button class="quiz-option" data-correct="true">不需要改任何 Java 組件，只加 XML + POJO</button>
+  <button class="quiz-option" data-correct="false">要改 SqlSessionFactoryBuilder 的解析邏輯</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 「獎品中心中台」是什麼設計模式的應用？</strong></p>
+  <button class="quiz-option" data-correct="false">觀察者模式</button>
+  <button class="quiz-option" data-correct="false">適配器模式</button>
+  <button class="quiz-option" data-correct="true">中介者模式</button>
+  <button class="quiz-option" data-correct="false">策略模式</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 迪米特原則在 ORM 中介者中的體現是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">所有類都知道彼此的接口</button>
+  <button class="quiz-option" data-correct="true">業務方只跟 SqlSession 打交道，不知道 JDBC 細節</button>
+  <button class="quiz-option" data-correct="false">每個組件都持有所有其他組件的引用</button>
+  <button class="quiz-option" data-correct="false">配置文件要包含所有類的信息</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 判斷「何時該引入中介者」的判據是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">系統 QPS 超過 1000</button>
+  <button class="quiz-option" data-correct="false">代碼行數超過 1000</button>
+  <button class="quiz-option" data-correct="true">對象交互複雜、重複調用多、需要統一入口</button>
+  <button class="quiz-option" data-correct="false">團隊人數超過 10 人</button>
+</div>
+</div>
+
+<div class="lesson-nav">
+  <a href="./mediator-components.html">← 上一篇：中介者核心組件的分工與協作</a>
+  <span></span>
+</div>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+</body>
+</html>

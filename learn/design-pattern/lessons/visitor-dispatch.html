@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>雙分派機制：visitor.visit(this) 怎麼運作</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="lesson-number">Lesson 2/4 · 訪問者模式</div>
+      <h1>雙分派機制：visitor.visit(this) 怎麼運作</h1>
+      <div class="lesson-meta">Node: visitor · Step 2/4 · <span class="tag tag-behavioral">行為模式</span></div>
+    </header>
+
+    <div class="learning-goal">
+      <h2>學習目標</h2>
+      <p>理解雙分派（double dispatch）的運作過程，能拆解 <code>visitor.visit(this)</code> 一行代碼如何同時牽動 User 與 Visitor 兩個繼承體系。</p>
+    </div>
+
+    <section>
+      <h2>一行代碼，兩次分派</h2>
+      <p>訪問者模式最核心的一行代碼是：</p>
+<pre><code>visitor.visit(this);</code></pre>
+      <p>這行代碼出現在每個數據結構類的 <code>accept</code> 方法裡。看起來很簡單，但它其實觸發了<strong>兩次方法分派</strong>——一次決定調用哪個 <code>visit</code> 重載，一次決定 <code>this</code> 是哪種類型。這就是「雙分派」。</p>
+    </section>
+
+    <section>
+      <h2>先看單分派：Java 多態的默認行為</h2>
+      <p>Java 的方法調用是<strong>單分派</strong>（single dispatch）：運行時根據<strong>接收者（receiver）的實際類型</strong>決定調用哪個方法。</p>
+<pre><code>Animal animal = new Cat();
+animal.speak();  // 運行時 animal 是 Cat，調用 Cat.speak()</code></pre>
+      <p>參數的類型在編譯時就確定了——如果 <code>speak()</code> 有重載，Java 會選編譯時類型匹配的那個，不看運行時參數實際是什麼。</p>
+      <p>但訪問者模式需要的恰恰是：<strong>既看接收者的類型，又看參數的類型</strong>。單分派做不到，所以需要雙分派。</p>
+    </section>
+
+    <section>
+      <h2>雙分派的兩步拆解</h2>
+      <p>假設我們有 Student 類和 Principal 訪問者。調用：</p>
+<pre><code>// student 是 Student 實例，principal 是 Principal 實例
+student.accept(principal);</code></pre>
+      <p><strong>第一次分派</strong>：Java 運行時看 <code>student</code> 的實際類型，找到 <code>Student.accept(Visitor visitor)</code>。這一步和普通多態一樣。</p>
+      <p><strong>第二次分派</strong>：<code>accept</code> 方法內部執行 <code>visitor.visit(this)</code>。這裡有兩個關鍵點：</p>
+      <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li><code>this</code> 是 Student 類型（編譯時已知）</li>
+        <li><code>visitor</code> 的實際類型是 Principal（運行時確定）</li>
+      </ul>
+      <p>Java 根據 <code>visitor</code> 的實際類型（Principal）和 <code>this</code> 的編譯時類型（Student），匹配到 <code>Visitor.visit(Student student)</code> 這個重載。如果 <code>this</code> 是 Teacher，就會匹配到 <code>Visitor.visit(Teacher teacher)</code>。</p>
+    </section>
+
+    <section>
+      <h2>完整的分派鏈</h2>
+      <table>
+        <thead>
+          <tr><th>步驟</th><th>分派依據</th><th>結果</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1. <code>student.accept(principal)</code></td><td><code>student</code> 的實際類型 → Student</td><td>調用 <code>Student.accept()</code></td></tr>
+          <tr><td>2. <code>visitor.visit(this)</code></td><td><code>visitor</code> 的實際類型 → Principal，<code>this</code> 的類型 → Student</td><td>調用 <code>Principal.visit(Student)</code></td></tr>
+        </tbody>
+      </table>
+      <p>如果把 <code>principal</code> 換成 <code>parent</code>（Parent 類型），第二步就會調用 <code>Parent.visit(Student)</code>——同一份 Student 數據，不同訪問者走不同的 visit 重載。</p>
+    </section>
+
+    <section>
+      <h2>為什麼叫「雙分派」</h2>
+      <p>因為最終調用哪個方法取決於<strong>兩個變量</strong>的運行時類型：</p>
+      <ol style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li><strong>接收者</strong>（<code>this</code>）的具體類型 —— Student 還是 Teacher？</li>
+        <li><strong>參數</strong>（<code>visitor</code>）的具體類型 —— Principal 還是 Parent？</li>
+      </ol>
+      <p>單分派只看一個（接收者），雙分派兩個都看。這讓訪問者模式能在運行時根據「誰被訪問」×「誰來訪問」的組合，精確路由到對應的處理邏輯。</p>
+    </section>
+
+    <section>
+      <h2>代碼結構：兩層繼承體系</h2>
+      <p>雙分派的結構前提是存在兩個獨立的繼承體系：</p>
+      <table>
+        <thead>
+          <tr><th>體系</th><th>抽象</th><th>實現</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>數據結構</td><td>User（抽象類）</td><td>Student、Teacher</td></tr>
+          <tr><td>訪問者</td><td>Visitor（接口）</td><td>Principal、Parent</td></tr>
+        </tbody>
+      </table>
+      <p>User 提供 <code>accept(Visitor)</code>，Visitor 提供 <code>visit(Student)</code> 和 <code>visit(Teacher)</code>。雙方互相引用，通過 <code>visitor.visit(this)</code> 連接。</p>
+      <p>這就是訪問者模式被認為「燒腦」的原因——你需要同時理解兩個繼承體系的交互，而不是一個。</p>
+    </section>
+
+    <section>
+      <h2>一句話記住</h2>
+      <blockquote>雙分派 = <code>visitor.visit(this)</code>：第一次看 this 是誰（Student/Teacher），第二次看 visitor 是誰（Principal/Parent），兩次分派精確路由到對應的處理方法。</blockquote>
+    </section>
+
+    <!-- Quiz -->
+    <section class="quiz">
+      <h3>自我檢測</h3>
+      <div class="quiz-question">
+        <p>Q1. <code>visitor.visit(this)</code> 觸發了幾次方法分派？</p>
+        <ul class="quiz-options" data-correct="1">
+          <li data-index="0">一次</li>
+          <li data-index="1">兩次</li>
+          <li data-index="2">三次</li>
+          <li data-index="3">零次，是靜態調用</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q2. 第二次分派的依據是什麼？</p>
+        <ul class="quiz-options" data-correct="0">
+          <li data-index="0">visitor 的實際類型和 this 的編譯時類型</li>
+          <li data-index="1">只看 this 的運行時類型</li>
+          <li data-index="2">只看方法參數的編譯時類型</li>
+          <li data-index="3">看方法返回值的類型</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q3. 為什麼 Java 的普通多態是「單分派」？</p>
+        <ul class="quiz-options" data-correct="2">
+          <li data-index="0">Java 不支持多態</li>
+          <li data-index="1">Java 只看參數類型</li>
+          <li data-index="2">Java 只根據接收者的實際類型分派，不看參數的運行時類型</li>
+          <li data-index="3">Java 的多態是靜態的</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q4. 雙分派的前提結構是什麼？</p>
+        <ul class="quiz-options" data-correct="1">
+          <li data-index="0">一個類實現多個接口</li>
+          <li data-index="1">兩個獨立的繼承體系互相引用</li>
+          <li data-index="2">使用反射機制</li>
+          <li data-index="3">使用泛型</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q5. 如果 <code>this</code> 是 Teacher、visitor 是 Parent，最終會調用哪個方法？</p>
+        <ul class="quiz-options" data-correct="3">
+          <li data-index="0"><code>Principal.visit(Student)</code></li>
+          <li data-index="1"><code>Parent.visit(Student)</code></li>
+          <li data-index="2"><code>Principal.visit(Teacher)</code></li>
+          <li data-index="3"><code>Parent.visit(Teacher)</code></li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+    </section>
+
+    <div class="source">
+      <strong>主要來源：</strong>訪問者模式模型結構——<code>visitor.visit(this)</code> 雙分派機制
+    </div>
+
+    <div class="follow-up">
+      <p>有任何不清楚的地方？問你的老師！</p>
+      <p class="cta">下一步：走通校園場景的完整五類實現 →</p>
+    </div>
+
+    <nav class="nav">
+      <a href="visitor-intent.html">← 上一課：訪問者意圖</a>
+      <a href="visitor-implementation.html">下一課：校園場景實現 →</a>
+    </nav>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

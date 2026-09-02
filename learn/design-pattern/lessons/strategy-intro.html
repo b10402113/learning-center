@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>策略模式的意圖與痛點</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>策略模式的意圖與痛點</h1>
+<p class="meta">design-pattern › strategy › strategy-intro</p>
+
+<blockquote>
+  <strong>學習目標</strong>：能說出策略模式「定義一系列算法、封裝、可互換」的意圖，並用優惠券計算的 ifelse 爆炸場景說出為什麼需要這個模式。
+</blockquote>
+
+<h2>先從一個真實場景說起</h2>
+
+<p>你在電商平台做後端，產品經理跑過來說：「我們要上優惠券功能。」需求很直白：用戶買了一件 100 元的商品，手上有張券，結帳時要算出折後價。</p>
+
+<p>第一版很簡單，一種券，一個方法搞定：</p>
+
+<pre><code>public double discountAmount(double skuPrice, double couponValue) {
+    return skuPrice - couponValue;
+}</code></pre>
+
+<p>沒問題。但產品第二週又加了「滿 200 減 50」、第三週加了「8 折」、第四週加了「19.9 元購」……</p>
+
+<h2>ifelse 地獄長什麼樣</h2>
+
+<p>你開始在方法裡堆 if：</p>
+
+<pre><code>public double discountAmount(int type, double couponValue, double skuPrice, double typeExt) {
+    if (type == 1) {
+        // 直減
+        return skuPrice - couponValue;
+    } else if (type == 2) {
+        // 滿減
+        if (skuPrice < typeExt) return skuPrice;
+        return skuPrice - couponValue;
+    } else if (type == 3) {
+        // 折扣
+        return skuPrice * couponValue;
+    } else if (type == 4) {
+        // n 元購
+        return couponValue;
+    }
+    return 0D;
+}</code></pre>
+
+<blockquote class="bad-code">
+  <strong>壞味道</strong>：每加一種券，就要改這個方法。type 參數從哪來？怎麼知道 1 代表直減？如果有 20 種券呢？
+</blockquote>
+
+<p>幾個問題馬上浮現：</p>
+
+<ul>
+  <li><strong>修改成本高</strong>：加一種新券，就要在方法裡加 else if 分支，動到已有邏輯</li>
+  <li><strong>參數污染</strong>：為了滿減加了 typeExt，但直減和折扣根本用不到它——一個方法被所有券型的參數塞滿</li>
+  <li><strong>難以測試</strong>：想單獨測折扣邏輯？不好意思，得先走完所有 if 分支才能到那一行</li>
+  <li><strong>重複理解</strong>：新來的同事看這段代碼，要把所有 if 全讀一遍才知道「折扣是怎麼算的」</li>
+</ul>
+
+<p>核心問題是：多種算法（券型）塞在同一個方法裡，它們之間互相干擾。</p>
+
+<h2>策略模式怎麼解決這個問題</h2>
+
+<p>策略模式的意圖一句話：<strong>定義一系列算法，把它們一個個封裝起來，使它們可以互相替換</strong>。</p>
+
+<p>回到優惠券場景。四種券的計算邏輯，其實是四個獨立的算法。如果我們把每個算法包成一個獨立的類，再讓它們共享同一個接口，會發生什麼？</p>
+
+<ul>
+  <li><strong>加新券？</strong>寫一個新實現類，不動任何已有代碼</li>
+  <li><strong>改折扣邏輯？</strong>只改折扣那一個類，其他券型完全不受影響</li>
+  <li><strong>測試？</strong>每個券型的類可以獨立單測</li>
+  <li><strong>看代碼？</strong>想知道「折扣怎麼算」？打開 Discount 類就行了，不用在 ifelse 裡找</li>
+</ul>
+
+<p>用一個類比來說：三國時期諸葛亮給劉關張三個錦囊。每個錦囊裡裝的是一套應對特定情境的策略，到了對應的關口就拆開執行。你不需要在一個超大的「如果遇到什麼就怎麼辦」清單裡翻找，而是按需取用、即拆即走。</p>
+
+<h2>關鍵概念：行為型模式</h2>
+
+<p>策略模式是 GoF（Gang of Four，四人幫）23 種設計模式中的<strong>行為型模式</strong>（Behavioral Pattern）。行為型模式關注的是「對象之間怎麼協作、算法怎麼分配」，而不是「對象怎麼創建」或「類怎麼組織」。</p>
+
+<p>策略模式特別適合的場景是：<strong>同一個動作有多種算法實現，而且未來可能還會加新的</strong>。典型的例子包括：</p>
+
+<table>
+  <thead>
+    <tr><th>場景</th><th>動作</th><th>可替換的算法</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>支付</td><td>付款</td><td>信用卡、支付寶、微信</td></tr>
+    <tr><td>排序</td><td>排數據</td><td>快速排序、歸併排序、插入排序</td></tr>
+    <tr><td>優惠券</td><td>算折扣</td><td>直減、滿減、折扣、n 元購</td></tr>
+    <tr><td>ID 生成</td><td>生唯一 ID</td><td>UUID、DB 自增、雪花算法</td></tr>
+  </tbody>
+</table>
+
+<p>這些場景的共同點是：算法可以互換，而且客戶端不想知道具體的算法實現。</p>
+
+<h2>小結</h2>
+
+<p>策略模式的核心動機是<strong>消除 ifelse 分支堆砌</strong>。當一個方法因為不同算法而不斷膨脹時，策略模式讓每種算法獨立成類、通過統一接口互換。下一步我們會把那個 ifelse 的優惠券代碼，用策略模式完整重構一遍。</p>
+
+<div class="quiz" data-step="strategy-intro">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 策略模式的核心意圖是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">把多個 if 分支合併成一個方法</button>
+  <button class="quiz-option" data-correct="true">定義一系列算法，封裝起來，使它們可以互相替換</button>
+  <button class="quiz-option" data-correct="false">讓客戶端選擇具體的類來實例化</button>
+  <button class="quiz-option" data-correct="false">在運行時動態改變對象的狀態</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 優惠券 ifelse 代碼的「參數污染」指的是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">每個券型都需要不同的返回值類型</button>
+  <button class="quiz-option" data-correct="true">為了滿足某一種券的需求新增參數，導致其他券型被塞入用不到的參數</button>
+  <button class="quiz-option" data-correct="false">方法的參數個數超過了 Java 規範建議的上限</button>
+  <button class="quiz-option" data-correct="false">type 參數的類型應該用 enum 而不是 int</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 策略模式屬於 GoF 23 種模式中的哪一類？</strong></p  >
+  <button class="quiz-option" data-correct="false">創建型模式（Creational）</button>
+  <button class="quiz-option" data-correct="false">結構型模式（Structural）</button>
+  <button class="quiz-option" data-correct="true">行為型模式（Behavioral）</button>
+  <button class="quiz-option" data-correct="false">架構型模式（Architectural）</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 以下哪個場景最適合用策略模式？</strong></p>
+  <button class="quiz-option" data-correct="false">需要根據用戶權限動態改變頁面佈局</button>
+  <button class="quiz-option" data-correct="false">需要在對象創建時控制實例數量</button>
+  <button class="quiz-option" data-correct="true">同一個動作（如算折扣）有多種算法，未來還會加新的</button>
+  <button class="quiz-option" data-correct="false">需要把一個複雜對象的構建過程分離出來</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 把算法封裝成獨立類而非堆在 ifelse 裡，最大的好處是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">代碼行數一定會減少</button>
+  <button class="quiz-option" data-correct="true">加新算法時不動已有代碼，改一個算法時不影響其他算法</button>
+  <button class="quiz-option" data-correct="false">運行時性能一定會提升</button>
+  <button class="quiz-option" data-correct="false">不需要再寫單元測試</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

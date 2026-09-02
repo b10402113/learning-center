@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>發獎場景的 ifelse 壞味道</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>發獎場景的 ifelse 壞味道</h1>
+<p class="meta">design-pattern › factory-method › bad-smell-ifelse</p>
+
+<blockquote>
+  <strong>學習目標</strong>：能從三種異構商品接口（優惠券/實物/兌換卡）的 ifelse 一把梭中，說出為什麼需要工廠方法模式來統一創建入口、屏蔽實現。
+</blockquote>
+
+<h2>先從一個真實場景說起</h2>
+
+<p>你在電商平台做後端，公司搞了個營銷活動：用戶打卡、分享、邀請註冊都能賺積分，積分可以兌換商品。商品有三種：</p>
+
+<table>
+  <thead>
+    <tr><th>商品類型</th><th>接口方法</th><th>返回值</th><th>特殊參數</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>優惠券</td><td><code>sendCoupon(uId, couponNumber, uuid)</code></td><td><code>CouponResult</code>（對象）</td><td>防重 uuid</td></tr>
+    <tr><td>實物商品</td><td><code>deliverGoods(DeliverReq req)</code></td><td><code>Boolean</code>（布爾）</td><td>收貨地址</td></tr>
+    <tr><td>第三方兌換卡</td><td><code>grantToken(bindMobileNumber, cardId)</code></td><td><code>void</code>（空）</td><td>手機號、卡 ID</td></tr>
+  </tbody>
+</table>
+
+<p>三個接口，返回類型不一樣，入參也不一樣。營銷場景的特點是「多變、臨時」——今天加個視頻會員，明天加個實物周邊，產品經理隨時會跑過來說「再加一種」。</p>
+
+<h2>ifelse 一把梭長什麼樣</h2>
+
+<p>最直覺的做法：一個 Controller 裡搞定所有邏輯，按類型分發。</p>
+
+<pre><code>public AwardRes awardToUser(AwardReq req) {
+    if (req.getAwardType() == 1) {
+        // 優惠券
+        CouponService couponService = new CouponService();
+        CouponResult result = couponService.sendCoupon(
+            req.getuId(), req.getAwardNumber(), req.getUuid());
+        if (!"0000".equals(result.getCode())) {
+            return new AwardRes("0001", "發放失敗");
+        }
+    } else if (req.getAwardType() == 2) {
+        // 實物商品
+        GoodsService goodsService = new GoodsService();
+        DeliverReq deliverReq = new DeliverReq();
+        deliverReq.setuId(req.getuId());
+        deliverReq.setGoodsId(req.getAwardNumber());
+        // ... 拼裝收貨地址等
+        Boolean success = goodsService.deliverGoods(deliverReq);
+        if (!success) {
+            return new AwardRes("0001", "發放失敗");
+        }
+    } else if (req.getAwardType() == 3) {
+        // 第三方兌換卡
+        CardService cardService = new CardService();
+        String phone = queryUserPhoneNumber(req.getuId());
+        cardService.grantToken(phone, req.getAwardNumber());
+    }
+    return new AwardRes("0000", "發放成功");
+}</code></pre>
+
+<blockquote class="bad-code">
+  <strong>壞味道</strong>：一個方法裡塞了三種完全不同的業務邏輯，每加一種商品就要改這個方法。如果明天加一個「視頻會員」，你得在這裡再加一個 else if 分支。
+</blockquote>
+
+<h2>這個代碼的四個問題</h2>
+
+<ol>
+  <li><strong>修改成本高</strong>：加一種新商品，就要在方法裡加 else if 分支，動到已有邏輯。即使你覺得「只是加一個分支」，但每次修改都要回歸測試所有已有的分支——改了優惠券的邏輯，實物商品會不會受影響？</li>
+  <li><strong>參數污染</strong>：實物商品需要收貨地址，所以 req 裡加了 extMap。但優惠券和兌換卡根本用不到 extMap——一個方法被所有商品類型的參數塞滿。</li>
+  <li><strong>難以測試</strong>：想單獨測兌換卡的邏輯？得先走完前面兩個 if 分支才能到那一行。三種業務邏輯耦合在一起，無法獨立單測。</li>
+  <li><strong>接手痛苦</strong>：新同事接手這段代碼，要把所有 if 全讀一遍才知道「實物商品怎麼發放」。代碼沒有分層，沒有結構，可讀性極差。</li>
+</ol>
+
+<h2>問題的根源是什麼</h2>
+
+<p>把三種商品的發放邏輯塞在一個方法裡，本質是把<strong>「根據類型選擇哪個服務」和「執行服務」</strong>這兩件事混在一起了。</p>
+
+<p>更深一層看：三個服務的接口完全不一樣——方法名不同、參數不同、返回值不同。這意味著你在 if 裡做分發時，每個分支的代碼結構都不一樣，沒法抽成一個統一的調用。</p>
+
+<p>工廠方法模式要解決的核心問題就是：<strong>把「根據類型決定實例化哪個類」的邏輯，從調用方抽離出來，統一到一個地方</strong>。讓調用方不再關心「具體 new 哪個類」，而是說「我要的是某種商品的發放服務」，工廠幫你拿。</p>
+
+<p>用一個類比：你開了一家餐廳，菜單上有川菜、粵菜、日料。如果每道菜你都要自己判斷「這是川菜師傅做的還是粵菜師傅做的」，那每加一道菜你就要改菜單系統。但如果你有一個前台，你只說「我要水煮魚」，前台幫你分配到川菜廚房——這個前台就是工廠。</p>
+
+<h2>工廠方法模式的意圖</h2>
+
+<p>工廠方法模式（Factory Method Pattern）是一種<strong>創建型設計模式</strong>（Creational Pattern）。創建型模式關注的是「對象怎麼創建」，而不是「對象之間怎麼協作」或「類怎麼組織」。</p>
+
+<p>它的意圖一句話：<strong>定義一個創建對象的接口，讓子類決定實例化哪一個工廠類。工廠方法使一個類的實例化延遲到子類進行。</strong></p>
+
+<p>翻譯成白話：你給我一個「要什麼」，我幫你「造出來」。具體怎麼造，是哪個工廠造，調用方不需要知道。回到發獎場景——調用方只說「我要發一種商品」，工廠幫你判斷是優惠券、實物還是兌換卡，然後返回對應的發放服務。</p>
+
+<p>這個模式特別適合的場景是：</p>
+
+<table>
+  <thead>
+    <tr><th>場景</th><th>「要什麼」</th><th>工廠分發到</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>發獎</td><td>商品類型 ID</td><td>對應的發放服務</td></tr>
+    <tr><td>日誌</td><td>日誌級別</td><td>文件/數據庫/控制台 Logger</td></tr>
+    <tr><td>連接</td><td>數據庫類型</td><td>MySQL/PostgreSQL/Oracle Connection</td></tr>
+    <tr><td>通知</td><td>通知渠道</td><td>短信/郵件/推送 Service</td></tr>
+  </tbody>
+</table>
+
+<p>這些場景的共同點：同一個動作有多種具體實現，而且未來可能還會加新的。</p>
+
+<h2>小結</h2>
+
+<p>發獎場景的 ifelse 代碼把三種異構接口塞在同一個方法裡，每次加新商品都要改已有代碼——這是「發散分支」的壞味道。工廠方法模式的核心是<strong>把「根據類型選擇實例」的邏輯從調用方抽離到工廠類</strong>，讓新增商品不需要動已有代碼。下一課我們會用這個模式完整重構發獎代碼。</p>
+
+<div class="quiz" data-step="bad-smell-ifelse">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 發獎場景的 ifelse 代碼最核心的問題是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">代碼行數太多，難以閱讀</button>
+  <button class="quiz-option" data-correct="true">多種異構接口的業務邏輯耦合在一個方法裡，加新商品要改已有代碼</button>
+  <button class="quiz-option" data-correct="false">沒有使用注解和反射</button>
+  <button class="quiz-option" data-correct="false">返回值類型不統一</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 三種商品的接口「異構」具體體現在哪裡？</strong></p>
+  <button class="quiz-option" data-correct="false">它們分佈在不同的微服務裡</button>
+  <button class="quiz-option" data-correct="true">方法名不同、參數不同、返回值類型不同</button>
+  <button class="quiz-option" data-correct="false">使用了不同的通信協議</button>
+  <button class="quiz-option" data-correct="false">由不同的團隊維護</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 工廠方法模式屬於 GoF 23 種模式中的哪一類？</strong></p>
+  <button class="quiz-option" data-correct="true">創建型模式（Creational）</button>
+  <button class="quiz-option" data-correct="false">結構型模式（Structural）</button>
+  <button class="quiz-option" data-correct="false">行為型模式（Behavioral）</button>
+  <button class="quiz-option" data-correct="false">架構型模式（Architectural）</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 工廠方法模式的核心意圖是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">把多個 if 分支合併成一個方法</button>
+  <button class="quiz-option" data-correct="false">讓客戶端直接選擇具體的類來實例化</button>
+  <button class="quiz-option" data-correct="true">定義一個創建對象的接口，讓子類決定實例化哪一個工廠類</button>
+  <button class="quiz-option" data-correct="false">在運行時動態改變對象的行為</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 以下哪個場景最適合用工廠方法模式？</strong></p>
+  <button class="quiz-option" data-correct="false">需要在對象創建時控制實例數量（只允許一個）</button>
+  <button class="quiz-option" data-correct="true">同一個動作有多種具體實現，未來可能加新的，調用方不想知道具體實例化哪個類</button>
+  <button class="quiz-option" data-correct="false">需要把一個複雜對象的構建過程分步驟進行</button>
+  <button class="quiz-option" data-correct="false">需要克隆一個已有的對象來避免重複創建</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

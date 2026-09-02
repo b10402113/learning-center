@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>原型模式重構：Cloneable + clone() 實現試卷亂序</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>原型模式重構：Cloneable + clone() 實現試卷亂序</h1>
+<p class="meta">design-pattern › prototype › clone-in-practice</p>
+
+<blockquote>
+  <strong>學習目標</strong>：掌握原型模式的 Java 實現方式——實現 Cloneable 接口、重寫 clone()、在克隆後做差異化處理，理解「模板初始化一次、每份從原型克隆」的效率模型。
+</blockquote>
+
+<h2>重構思路：把「建題」和「組卷」分開</h2>
+
+<p>上一課的一把梭實現有兩個問題：每次調用都重新構造所有題目（浪費），以及順序固定無法亂序（功能缺失）。重構的核心思路：</p>
+
+<ol>
+  <li><strong>題庫只初始化一次</strong>：在控制器的構造器裡建好所有題目，作為「原型」</li>
+  <li><strong>每位考生從原型克隆</strong>：調用 <code>clone()</code> 複製出一份專屬副本</li>
+  <li><strong>在副本上做亂序</strong>：對克隆出來的副本做題目順序 + 選項順序的隨機化</li>
+</ol>
+
+<p>這樣，題庫構造的開銷只有一次，後續 1000 個考生也只是 1000 次淺拷貝 + shuffle，比 1000 次 new + DB 查詢便宜得多。</p>
+
+<h2>Java 落點：Cloneable + Object.clone()</h2>
+
+<p>Java 的原型模式依賴兩個機制：</p>
+
+<ul>
+  <li><strong><code>Cloneable</code> 接口</strong>：一個標記接口（marker interface），沒有任何方法。它的作用是告訴 JVM：「這個類允許被克隆」。如果沒有實現這個接口就調用 <code>clone()</code>，會拋 <code>CloneNotSupportedException</code>。</li>
+  <li><strong><code>Object.clone()</code> 方法</strong>：protected 方法，返回當前對象的一個副本。子類需要重寫它並改為 public 才能對外暴露。</li>
+</ul>
+
+<h2>四個類的分工</h2>
+
+<p>重構後的工程結構：</p>
+
+<table>
+  <tr><th>類</th><th>職責</th></tr>
+  <tr><td><code>Topic</code></td><td>題目載體：選項 Map + 正確答案 key</td></tr>
+  <tr><td><code>TopicRandomUtil</code></td><td>亂序工具包：對選項做隨機重排，同步重定位答案 key</td></tr>
+  <tr><td><code>QuestionBank</code></td><td>題庫原型：持有題目集合，實現 <code>Cloneable</code>，重寫 <code>clone()</code></td></tr>
+  <tr><td><code>QuestionBankController</code></td><td>對外接口：構造器初始化題庫模板，<code>createPaper()</code> 從原型克隆</td></tr>
+</table>
+
+<h2>核心：QuestionBank 的 clone()</h2>
+
+<p>這是整個模式的落地關鍵：</p>
+
+<pre><code>public class QuestionBank implements Cloneable {
+    private String candidate;  // 考生
+    private String number;     // 考號
+    private List&lt;ChoiceQuestion&gt; choiceQuestionList = new ArrayList&lt;&gt;();
+    private List&lt;AnswerQuestion&gt; answerQuestionList = new ArrayList&lt;&gt;();
+
+    @Override
+    public Object clone() throws CloneNotSupportedException {
+        QuestionBank questionBank = (QuestionBank) super.clone();
+
+        // 關鍵：分別克隆兩個集合，否則副本和原型共享同一個 List
+        questionBank.choiceQuestionList = new ArrayList&lt;&gt;(this.choiceQuestionList);
+        questionBank.answerQuestionList = new ArrayList&lt;&gt;(this.answerQuestionList);
+
+        // 亂序：打亂題目順序
+        Collections.shuffle(questionBank.choiceQuestionList);
+        Collections.shuffle(questionBank.answerQuestionList);
+
+        // 對每道選擇題做選項亂序
+        questionBank.choiceQuestionList = questionBank.choiceQuestionList.stream()
+            .map(q -&gt; {
+                Topic topic = TopicRandomUtil.random(q.getOption(), q.getKey());
+                q.setOption(topic.getOption());
+                q.setKey(topic.getKey());
+                return q;
+            }).collect(Collectors.toList());
+
+        return questionBank;
+    }
+}</code></pre>
+
+<blockquote class="good-code">
+  <strong>關鍵點</strong>：clone() 不只複製對象本身，還必須同時複製兩個集合。如果直接把原型的 List 引用賦給副本，後續 shuffle 會把原型的順序也打亂——這就是淺拷貝的陷阱，下一課會深入講。
+</blockquote>
+
+<h2>TopicRandomUtil：選項亂序 + 答案重定位</h2>
+
+<p>亂序不只是打亂選項，還要同步更新答案的位置：</p>
+
+<pre><code>public static Topic random(Map&lt;String, String&gt; option, String key) {
+    // 收集所有 key（A, B, C, D）
+    List&lt;String&gt; keyList = new ArrayList&lt;&gt;(option.keySet());
+    Collections.shuffle(keyList);  // 打亂順序
+
+    // 按新順序重建選項 Map
+    Map&lt;String, String&gt; optionNew = new LinkedHashMap&lt;&gt;();
+    String keyNew = null;
+    int index = 0;
+    for (String k : keyList) {
+        String newKey = String.valueOf((char) ('A' + index));
+        optionNew.put(newKey, option.get(k));
+        if (k.equals(key)) {
+            keyNew = newKey;  // 記錄正確答案的新位置
+        }
+        index++;
+    }
+    return new Topic(optionNew, keyNew);
+}</code></pre>
+
+<p>假設原始選項是 A→java.lang, B→java.util, C→java.io, D→java.net，答案是 B。shuffle 後可能變成 C→java.lang, A→java.util, D→java.io, B→java.net。此時答案從「B」變成了「A」（因為 java.util 現在在 A 位置）。<code>TopicRandomUtil</code> 自動追蹤了這個變化。</p>
+
+<h2>QuestionBankController：模板初始化一次</h2>
+
+<pre><code>public class QuestionBankController {
+    private QuestionBank questionBank;
+
+    public QuestionBankController() {
+        // 模板只初始化一次
+        questionBank = new QuestionBank();
+        questionBank.append(new ChoiceQuestion("Java 版本定義", Map.of("A","java.lang","B","java.util"), "B"));
+        questionBank.append(new ChoiceQuestion("main 方法", Map.of("A","main","B","start"), "A"));
+        // ... 5 道選擇題 + 4 道問答題
+    }
+
+    public String createPaper(String candidate, int number) throws CloneNotSupportedException {
+        // 每位考生從原型克隆
+        QuestionBank clone = (QuestionBank) questionBank.clone();
+        clone.setCandidate(candidate);
+        clone.setNumber(number);
+        return clone.toString();
+    }
+}</code></pre>
+
+<p>三位考生的測試結果：花花的第 1 題可能是問答題，豆豆的第 1 題可能是選擇題，大寶的選項順序又完全不同。題庫內容一樣，但每份試卷都是獨一無二的亂序版本——這就是原型模式的核心收益。</p>
+
+<h2>流程總結</h2>
+
+<blockquote>
+  <strong>原型模式落地流程</strong>：構造原型（一次性） → clone() 複製（每位考生一次） → 差異化處理（亂序） → 輸出副本
+</blockquote>
+
+<p>你已經看到了 clone() 的完整落地。但有個問題一直在暗處：ArrayList.clone() 複製了容器，但容器裡的元素是同一個引用——這就是淺拷貝。如果題目對象裡還有嵌套的引用類型，會發生什麼？下一課揭開這個陷阱。</p>
+
+<div class="lesson-nav">
+  <a href="./naive-implementation.html">← 上一篇：一把梭實現</a>
+  <a href="./shallow-deep-copy.html">下一篇：淺拷貝 vs 深拷貝 →</a>
+</div>
+
+<div class="footer">
+  <p>design-pattern › prototype › clone-in-practice</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

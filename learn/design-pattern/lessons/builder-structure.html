@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>建造者模式的三層結構</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>建造者模式的三層結構</h1>
+<div class="meta">設計模式 · 建造者模式 · Step 3/4</div>
+
+<blockquote>
+<strong>學習目標：</strong>掌握建造者模式的三層結構——IMenu 接口定義填充契約、DecorationPackageMenu 承載物料與價格計算、Builder 集中建造過程。
+</blockquote>
+
+<h2>重構思路：三層分離</h2>
+
+<p>ifelse 版本的問題在於「一個方法幹三件事」。建造者模式的重構思路是把這三件事拆到三個角色：</p>
+
+<table>
+  <tr><th>角色</th><th>職責</th><th>對應類</th></tr>
+  <tr><td>填充契約</td><td>定義「能往套餐裡加什麼物料」</td><td>IMenu 接口</td></tr>
+  <tr><td>填充器</td><td>承載物料清單、按係數計算價格</td><td>DecorationPackageMenu</td></tr>
+  <tr><td>建造者</td><td>集中所有套餐的建造過程</td><td>Builder</td></tr>
+</table>
+
+<h2>第一層：IMenu 接口</h2>
+
+<p>接口定義了五個方法：</p>
+
+<pre><code>public interface IMenu {
+    IMenu appendCeiling(Matter matter);  // 加吊頂
+    IMenu appendCoat(Matter matter);     // 加塗料
+    IMenu appendFloor(Matter matter);    // 加地板
+    IMenu appendTile(Matter matter);     // 加地磚
+    String getDetail();                  // 獲取明細
+}</code></pre>
+
+<p>注意返回值是 <code>IMenu</code> 本身——這是為了支持<strong>鏈式調用</strong>。每個 append 方法把物料加入清單後返回 <code>this</code>，讓你可以寫成：</p>
+
+<pre><code>menu.appendCeiling(ceiling)
+    .appendCoat(coat)
+    .appendFloor(floor)
+    .getDetail();</code></pre>
+
+<p>接口把「逐項填充物料」和「輸出明細」抽象為統一契約。具體怎麼算價格、怎麼拼清單，接口不關心——這就是「構建與表示分離」的體現。</p>
+
+<h2>第二層：DecorationPackageMenu 實現</h2>
+
+<p>實現類持有一個裝修清單（<code>list</code>）和價格（<code>price</code>），構造函數接收面積和套餐等級：</p>
+
+<pre><code>public class DecorationPackageMenu implements IMenu {
+    private List&lt;Matter&gt; list = new ArrayList&lt;&gt;();
+    private BigDecimal price = BigDecimal.ZERO;
+    private BigDecimal area;
+    private String grade;
+
+    public DecorationPackageMenu(Double area, String grade) {
+        this.area = new BigDecimal(area);
+        this.grade = grade;
+    }
+    // ...
+}</code></pre>
+
+<p>每個 append 方法做兩件事：把物料加入清單 + 按面積係數累加價格。</p>
+
+<pre><code>@Override
+public IMenu appendCeiling(Matter matter) {
+    list.add(matter);
+    price = price.add(matter.price().multiply(new BigDecimal("0.2")).multiply(area));
+    return this;
+}
+
+@Override
+public IMenu appendCoat(Matter matter) {
+    list.add(matter);
+    price = price.add(matter.price().multiply(new BigDecimal("1.4")).multiply(area));
+    return this;
+}
+
+@Override
+public IMenu appendFloor(Matter matter) {
+    list.add(matter);
+    price = price.add(matter.price().multiply(area));
+    return this;
+}
+
+@Override
+public IMenu appendTile(Matter matter) {
+    list.add(matter);
+    price = price.add(matter.price().multiply(area));
+    return this;
+}</code></pre>
+
+<p>每個方法都返回 <code>this</code>，實現鏈式調用。<code>getDetail()</code> 拼接完整的裝修清單文本。</p>
+
+<h2>第三層：Builder 建造者</h2>
+
+<p>Builder 是整個模式的收口——把每種套餐的建造過程集中到一個方法：</p>
+
+<pre><code>public class Builder {
+    public IMenu levelOne(Double area) {
+        return new DecorationPackageMenu(area, "豪華歐式")
+            .appendCeiling(new LevelTwoCeiling())   // 二級頂
+            .appendCoat(new DuluxCoat())             // 多樂士
+            .appendFloor(new ShengXiangFloor());     // 聖象
+    }
+
+    public IMenu levelTwo(Double area) {
+        return new DecorationPackageMenu(area, "輕奢田園")
+            .appendCeiling(new LevelTwoCeiling())
+            .appendCoat(new LiBangCoat())            // 立邦
+            .appendTile(new MarcoPoloTile());        // 馬可波羅
+    }
+
+    public IMenu levelThree(Double area) {
+        return new DecorationPackageMenu(area, "現代簡約")
+            .appendCeiling(new LevelOneCeiling())    // 一級頂
+            .appendCoat(new LiBangCoat())
+            .appendTile(new DongPengTile());         // 東鵬
+    }
+}</code></pre>
+
+<p>每個方法的結構一模一樣：new 裝修包 → 按順序 append 物料。差別只在於選了哪些具體物料。新增套餐？只需加一個方法，指定新的物料組合。不用動 IMenu，不用動 DecorationPackageMenu。</p>
+
+<h2>調用方式的變化</h2>
+
+<p>ifelse 版本：傳入 <code>level=1</code>，返回一堆物料讓你自己處理。</p>
+
+<p>建造者版本：</p>
+
+<pre><code>Builder builder = new Builder();
+String detail = builder.levelOne(132.52D).getDetail();
+// 一步到位：建造 + 獲取明細</code></pre>
+
+<p>語義從「按數字選套餐」變成「按名字鏈式組裝」，代碼可讀性大幅提升。</p>
+
+<h2>測試驗證：結果完全一致</h2>
+
+<table>
+  <tr><th>套餐</th><th>ifelse 版</th><th>建造者版</th></tr>
+  <tr><td>豪華歐式</td><td>198,064.39</td><td>198,064.39</td></tr>
+  <tr><td>輕奢田園</td><td>119,865.00</td><td>119,865.00</td></tr>
+  <tr><td>現代簡約</td><td>90,897.52</td><td>90,897.52</td></tr>
+</table>
+
+<p>重構前後輸出完全一致——模式重構保持行為等價。但建造者版本的調用方式更清晰、擴展更容易。</p>
+
+<h2>小結：三層各自的價值</h2>
+
+<table>
+  <tr><th>角色</th><th>解決的問題</th></tr>
+  <tr><td>IMenu 接口</td><td>統一契約，讓填充過程可替換</td></tr>
+  <tr><td>DecorationPackageMenu</td><td>承載物料清單和價格計算，隱藏計算細節</td></tr>
+  <tr><td>Builder</td><td>集中建造過程，新增套餐只需加方法</td></tr>
+</table>
+
+<h2>自我檢測</h2>
+<div id="quiz" data-quiz="builder-structure">
+  <p><strong>1. IMenu 接口的 append 方法為什麼返回 IMenu 而不是 void？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 為了支持多態</button>
+  <button class="quiz-option" data-correct="true">B. 為了支持鏈式調用</button>
+  <button class="quiz-option" data-correct="false">C. 為了返回物料清單</button>
+  <button class="quiz-option" data-correct="false">D. 為了實現工廠方法</button>
+
+  <p><strong>2. DecorationPackageMenu 中，吊頂的價格計算係數是多少？</strong></p>
+  <button class="quiz-option" data-correct="false">A. ×1.0（按面積直接乘）</button>
+  <button class="quiz-option" data-correct="false">B. ×1.4</button>
+  <button class="quiz-option" data-correct="true">C. ×0.2</button>
+  <button class="quiz-option" data-correct="false">D. ×2.0</button>
+
+  <p><strong>3. Builder 類中，新增一個套餐需要怎麼做？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 修改 IMenu 接口</button>
+  <button class="quiz-option" data-correct="false">B. 修改 DecorationPackageMenu</button>
+  <button class="quiz-option" data-correct="true">C. 在 Builder 裡加一個新方法</button>
+  <button class="quiz-option" data-correct="false">D. 重寫整個類</button>
+
+  <p><strong>4. 建造者模式的三層結構分別是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">A. Controller + Service + Repository</button>
+  <button class="quiz-option" data-correct="true">B. 接口（契約）+ 實現（填充器）+ 建造者（組裝過程）</button>
+  <button class="quiz-option" data-correct="false">C. Entity + DTO + VO</button>
+  <button class="quiz-option" data-correct="false">D. Factory + Product + Client</button>
+
+  <p><strong>5. 建造者版本和 ifelse 版本的測試結果有什麼區別？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 建造者版本價格更便宜</button>
+  <button class="quiz-option" data-correct="false">B. 建造者版本多了一種套餐</button>
+  <button class="quiz-option" data-correct="true">C. 輸出完全一致，只是代碼結構不同</button>
+  <button class="quiz-option" data-correct="false">D. 建造者版本缺少某些物料</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="builder-bad-smell.html">← ifelse 實現的維護災難</a>
+  <a href="builder-summary.html">下一步：選用時機與權衡 →</a>
+</div>
+
+<div class="footer">
+  設計模式學習路徑 · 建造者模式 · Step 3/4
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+---
+id: bridge-refactor
+title: 支付場景重構實戰
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#场景模拟工程]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#代码实现]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#测试验证]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+# 支付場景重構實戰
+
+<LearningGoal>
+透過支付渠道×支付模式的完整重構過程，體會從 ifelse 到橋接模式的轉變，掌握抽象類組合介面、構造注入的標準寫法。
+</LearningGoal>
+
+## Lesson
+
+回顧一下重構前的 PayController：所有支付渠道和支付模式的組合邏輯，全部堆在一個 doPay 方法裡。兩個 int 參數（channelType、modeType）控制一切，雙層 ifelse 嵌套。新增一個渠道或模式，就要在所有分支裡加代碼。
+
+重構思路是把兩個維度拆成兩棵樹。抽象部分（渠道）是 Pay 抽象類，下面掛 WxPay、ZfbPay；實現部分（模式）是 IPayMode 介面，下面掛 PayCypher、PayFaceMode、PayFingerprintMode。
+
+第一步是定義實現介面 IPayMode。它只有一個方法 `security(String uId)`，返回風控校驗結果。PayCypher 返回「密碼校驗通過」，PayFaceMode 返回「刷臉校驗通過」，PayFingerprintMode 返回「指紋校驗通過」。每個模式實現自己的校驗邏輯，彼此無關。
+
+第二步是建立抽象類 Pay，這是整個橋接的核心。Pay 持有一個 `protected IPayMode payMode` 字段——這就是橋。構造函數接收一個 IPayMode 的實現，存到 payMode 字段。Pay 聲明一個抽象方法 `transfer(String uId, String tradeId, int amount)`，由子類實現具體渠道的轉賬邏輯。
+
+第三步是實現具體渠道。WxPay 繼承 Pay，構造函數把 payMode 傳給父類。transfer 方法內部先呼叫 `payMode.security(uId)` 做風控（橋對面的邏輯），再做微信自己的轉賬。ZfbPay 同理，只是轉賬邏輯換成支付寶。每個渠道只管自己的轉賬實現，風控完全交給橋對面。
+
+第四步是客戶端組合。不需要關心具體實現，只需要「new 一個渠道 + 塞一個模式進去」：`new WxPay(new PayFaceMode())` 就是微信+刷臉，`new ZfbPay(new PayFingerprintMode())` 就是支付寶+指紋。調用方式從傳數字 type 變成了語意化的 new + 傳入模式，意圖一目了然。
+
+重構前後的對比很鮮明。文件數從 1 個 PayController 變成 7 個（1 抽象類 + 1 介面 + 5 實現）。新增渠道只加一個 Pay 子類，新增模式只加一個 IPayMode 實現，兩邊互不影響。測試從 2 × 3 = 6 組全測，變成各維度獨立測 + 少量組合驗證。客戶端從傳數字 type 變成語意化調用。
+
+測試驗證表明：兩側測試結果功能一致（支付都能完成），但橋接版調用方式更整潔、乾淨。正如原書所說：「內容一樣，但實現方式有了很大變化，不能只看結果還要看過程。」重構的本質是不改外部可觀察結果，只改善內部結構。橋接模式讓渠道和模式各歸各位，組合關係從「代碼裡的 ifelse」變成「客戶端的 new + 傳參」。
+
+## Sources
+
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#场景模拟工程]]
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#代码实现]]
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#测试验证]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/bridge-refactor.html)

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>評估與選型</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>評估與選型</h1>
+<p class="meta">design-pattern › abstract-factory › abstract-factory-summary</p>
+
+<blockquote>
+  <strong>學習目標</strong>：說出抽象工廠滿足的設計原則、代價與選型邊界，能判斷「何時該用、何時不必」。
+</blockquote>
+
+<h2>滿足了哪些設計原則</h2>
+
+<p>回頭看 Redis 雙集群重構，它同時滿足了幾條重要的設計原則：</p>
+
+<table>
+  <thead>
+    <tr><th>原則</th><th>在重構中的體現</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>單一職責（SRP）</td><td>每個適配器只負責翻譯一套集群的方法名，不做其他事</td></tr>
+    <tr><td>開閉原則（OCP）</td><td>新增集群只需加適配器類，不動已有代碼</td></tr>
+    <tr><td>依賴倒置（DIP）</td><td>業務代碼依賴 <code>ICacheAdapter</code> 介面，不依賴具體集群</td></tr>
+    <tr><td>里氏替換（LSP）</td><td>任何適配器都可以替換另一個，不影響調用方</td></tr>
+    <tr><td>接口隔離（ISP）</td><td><code>ICacheAdapter</code> 只定義集群操作需要的方法</td></tr>
+  </tbody>
+</table>
+
+<p>其中開閉原則是最直接的收益——抽象工廠的核心價值就是「加新實現不用改老代碼」。</p>
+
+<h2>代價是什麼</h2>
+
+<p>抽象工廠不是免費的午餐。它帶來了幾個需要掂量的代價：</p>
+
+<ul>
+  <li><strong>類數量增多</strong>：每加一套集群，就要多一個適配器類。兩套集群就要兩個適配器，三套就要三個。加上代理類、介面，類的總數比 ifelse 方案多不少</li>
+  <li><strong>間接層增加</strong>：調用鏈從 <code>CacheServiceImpl → RedisUtils</code> 變成了 <code>代理 → 適配器 → EGM/IIR</code>，多了兩層轉發。IDE 跳轉和調試時要多追幾層</li>
+  <li><strong>理解成本</strong>：新同事看到 JDKProxy、InvocationHandler、ICacheAdapter 一堆抽象，可能一開始會懵——比看到 ifelse 更需要動腦</li>
+</ul>
+
+<p>但要注意：這些代價是<strong>可被緩解的</strong>。類數量增多？可以用代理類自動生成、配置化加載。間接層增加？調試工具追蹤並不困難。理解成本？團隊統一規範和文檔可以解決。相比之下，ifelse 方案的膨脹和耦合是<strong>不可緩解的</strong>——越往後改越痛。</p>
+
+<h2>何時該用、何時不必</h2>
+
+<p>抽象工廠的典型適用判據：</p>
+
+<ol>
+  <li><strong>一個產品族有多套實現</strong>：不只是一個產品有差異，而是一整套相關操作都要兼容</li>
+  <li><strong>成套切換是常態</strong>：不是偶爾切換一次，而是可能需要在多套實現之間反覆切換</li>
+  <li><strong>調用方不想關心實現細節</strong>：業務代碼只面向介面編程，不需要知道背後是哪套</li>
+</ol>
+
+<p>以下場景<strong>不必用</strong>抽象工廠：</p>
+
+<ul>
+  <li><strong>只有一個產品的多種實現</strong>：比如「發獎」有金幣、優惠券、實物——這是工廠方法的場景</li>
+  <li><strong>實現很穩定，不會新增</strong>：如果只有兩套集群且永遠不會加第三套，直接 ifelse 也不算太壞</li>
+  <li><strong>簡單工廠就能搞定</strong>：如果只是根據一個參數 new 不同的類，簡單工廠比抽象工廠輕量得多</li>
+</ul>
+
+<h2>和其他創建型模式的關係</h2>
+
+<p>抽象工廠不是孤立存在的。它和本章其他幾個創建型模式有清晰的分工：</p>
+
+<table>
+  <thead>
+    <tr><th>模式</th><th>核心問題</th><th>Redis 雙集群場景中的角色</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>單例</td><td>確保一個類只有一個實例</td><td>適配器不需要多例，可以是單例</td></tr>
+    <tr><td>工廠方法</td><td>一個工廠創建一個產品</td><td>每個適配器就是一個工廠方法的實例</td></tr>
+    <tr><td>抽象工廠</td><td>一個工廠創建一組產品</td><td>JDKProxy 就是「工廠中的工廠」，管理一族適配器</td></tr>
+    <tr><td>建造者</td><td>複雜對象分步構建</td><td>本場景不涉及</td></tr>
+    <tr><td>原型</td><td>通過克隆創建對象</td><td>本場景不涉及</td></tr>
+  </tbody>
+</table>
+
+<p>記住一個簡單的判斷：一個產品有多實現 → 工廠方法；一整套產品族有多實現 → 抽象工廠。</p>
+
+<h2>小結</h2>
+
+<p>抽象工廠的代價是類數量增多和間接層增加，但這些都是可被緩解的代價。真正要警惕的是 ifelse 方案帶來的不可緩解的耦合與膨脹。判斷標準：你的場景是不是「一整套產品族有多套實現」？如果是，抽象工廠值得投入；如果不是，工廠方法或簡單工廠可能更合適。</p>
+
+<div class="quiz" data-step="abstract-factory-summary">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 抽象工廠最直接滿足的設計原則是哪一條？</strong></p>
+  <button class="quiz-option" data-correct="false">單一職責原則</button>
+  <button class="quiz-option" data-correct="true">開閉原則——加新實現不動老代碼</button>
+  <button class="quiz-option" data-correct="false">迪米特法則</button>
+  <button class="quiz-option" data-correct="false">合成優於繼承</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 抽象工廠的主要代價是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">運行時性能顯著下降</button>
+  <button class="quiz-option" data-correct="true">類數量增多、間接層增加、理解成本上升</button>
+  <button class="quiz-option" data-correct="false">無法支持新增集群</button>
+  <button class="quiz-option" data-correct="false">違反了依賴倒置原則</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 以下哪個場景不應該用抽象工廠？</strong></p>
+  <button class="quiz-option" data-correct="false">需要同時兼容兩套 Redis 集群</button>
+  <button class="quiz-option" data-correct="true">只有一個產品有多種實現（如「發獎」有金幣、優惠券、實物）</button>
+  <button class="quiz-option" data-correct="false">需要兼容不同作業系統的文件操作</button>
+  <button class="quiz-option" data-correct="false">需要在多套支付渠道之間切換</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. ifelse 方案的耦合與膨脹為什麼「不可緩解」？</strong></p>
+  <button class="quiz-option" data-correct="false">因為 Java 語言不支持</button>
+  <button class="quiz-option" data-correct="true">因為每加一套實現就要改所有已有方法，而且調用方也要跟著改</button>
+  <button class="quiz-option" data-correct="false">因為代碼行數太多</button>
+  <button class="quiz-option" data-correct="false">因為無法單元測試</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 如何快速判斷「該用工廠方法還是抽象工廠」？</strong></p>
+  <button class="quiz-option" data-correct="false">看代碼行數多少</button>
+  <button class="quiz-option" data-correct="false">看團隊裡有多少人</button>
+  <button class="quiz-option" data-correct="true">一個產品有多實現 → 工廠方法；一整套產品族有多實現 → 抽象工廠</button>
+  <button class="quiz-option" data-correct="false">看性能要求高不高</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

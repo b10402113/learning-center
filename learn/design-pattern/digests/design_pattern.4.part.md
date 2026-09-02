@@ -1,57 +1,76 @@
 ---
 source: design_pattern
+source_hash: 7e40d1038887e21ab701140c74eefca654c937c34abb056d68d40a32386b5b09
+source_lines: 24398
 part: 4
-created: 2026-08-24
-updated: 2026-08-24
+created: 2026-09-01
+updated: 2026-09-01
 ---
 
-# Part digest 4 — 责任链, 命令, 迭代器, 中介者, 备忘录
+# Digest — design_pattern (part 4)
 
 ## Overview (L1)
 
-- Opens the behavioral-pattern group (行为模式) with five chapters, each following the same arc: a real internet business scenario, a "one class of ifelse" baseline (Maven project `*-01`), a pattern refactor (`*-02`), test output comparison, and a summary of pros/cons. Scenarios: 618 promotion release approval flow (chain of responsibility), an upscale restaurant's waiter/cook ordering (command), a company org-tree deep traversal (iterator), a hand-written MyBatis-style ORM over JDBC (mediator), and online-config rollback during release (memento). Recurring themes: patterns decouple callers from implementations, satisfy single-responsibility and open-closed, but add classes and must be chosen by scenario — never forced, and often combined with other patterns.
+本节是《重学 Java 设计模式》第 4 节「原型模式」的前半部分：先铺垫模式动机（创建重复对象、对象生成耗时、用克隆节省时间，类比 Ctrl+C/V、`Object.clone()`、细胞有丝分裂），再引入「上机考试抽题混排」业务场景，给出场景模拟工程的两个物料类 `ChoiceQuestion`（选择题）与 `AnswerQuestion`（问答题）。随后展示「一把梭」实现 `QuestionBankController`：硬编码 5 道选择题 + 4 道问答题、拼装输出字符串，测试结果显示三位考生（花花/豆豆/大宝）题目与选项顺序完全一致，未实现乱序，暴露难以扩展的问题。最后是原型模式重构的引入与工程结构（`Topic`、`TopicRandomUtil`、`QuestionBank`、`QuestionBankController`），具体 `clone()` 重构代码留待本部分之后。
 
 ## Sections (L2)
 
-### chain-of-responsibility (责任链模式)
+### ch4-intro
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#ch4-intro]]`
+- Summary: 开篇作者论学习态度（成就感、方向不对努力白费、先做 Demo 再谈理论），说明本书以贴近实际场景的案例讲解设计模式，并列出开发环境（JDK 1.8、Idea + Maven）与本节涉及的三个工程：4-00 场景模拟工程、4-01 一坨代码实现、4-02 设计模式优化。
+- Key claims: 设计模式学而无效的原因往往是「案例太空太虚，不贴近实际场景」；本节通过三个工程的对比来学习（场景 → 一把梭 → 模式重构）。
+- Learner-relevant: 明确本节三个工程各自的职责，为后面对比「一把梭 vs clone() 重构」建立骨架。
 
-- Locator: `[[sources/design-pattern/design_pattern#责任链模式]]`
-- Summary: Simulates the multi-level approval flow for system releases during the 618 promotion. Normally a release needs only the third-level owner's approval; during 618 the second- and first-level owners join in, and which levels apply depends on date windows. The bad way is one `AuthController.doAuth()` with stacked `if` blocks that hard-code each level's date window and approver (three-level 王工, two-level 张经理, one-level 段总) — works but is dead code, hard to extend or re-arrange. The refactor defines an abstract `AuthLink` holding shared `levelUserId`/`levelUserName` plus a `next` node and `appendNext()`; `Level1AuthLink`/`Level2AuthLink`/`Level3AuthLink` extend it and each `doAuth()` checks whether that level has approved, else passes to `next.doAuth(...)` (recursive forwarding), with `Level2`/`Level3` also gating by their own date windows. Callers build the chain once (`new Level3AuthLink(...).appendNext(new Level2AuthLink(...).appendNext(new Level1AuthLink(...)))`), and the `AuthInfo` object packages the chain's return info.
-- Key claims: intent is arranging a set of services into an ordered sequential-processing relationship (analogues: drum-passing the bomb, family expense approvals by amount, job-switch sign-off by successive leaders); dynamic responsibility ordering lets the chain be config-driven (XML or DB) when the business changes often; removes the ifelse smell, respects single responsibility and open-closed, and outsiders need not know the chain internals; caveats — if is still fine for pure judgment/behavior, chain should be combined with composite-tree style decision flows, and over-use risks performance cost plus messy orchestration/debugging.
-- Learner-relevant: supports a lesson on replacing stacked if/else flow decisions with a linked chain; anchor point comparing chain of responsibility (sequential hand-off, ordered) vs composite/tree decisions and vs strategy; and a note that chain assembly itself can be packaged for reuse and configured externally.
+### ch4-prototype-intro
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#ch4-prototype-intro]]`
+- Summary: 介绍原型模式要解决的核心问题：创建重复对象，且对象内容复杂、生成过程耗时长（可能从数据库或 RPC 接口获取数据），因此用克隆的方式节省时间。列举生活/编程中的原型场景：Ctrl+C/V 复制粘贴代码、Java 多数类提供 `Object clone()` API、细胞的有丝分裂。
+- Key claims: 原型模式适用于「重复创建且生成成本高」的对象；克隆代替重复创建是核心手段。
+- Learner-relevant: 记住「创建重复对象 + 耗时」是使用原型模式的两大触发条件；`Object.clone()` 是 Java 层面的落点。
 
-### command (命令模式)
+### ch4-scenario
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#ch4-scenario]]`
+- Summary: 业务场景设定——从纸质考卷（大家同一套题、可互抄）演进到上机考试后，为保证公平性，同样题目下题目混排、甚至答案选项混排，增加抄袭成本。需求是实现上机考试抽题服务，先建造题库题目场景类：选择题、问答题。给出场景模拟工程 itstack-demo-design-4-00 的结构。
+- Key claims: 上机考试的公平性靠「题目乱序 + 选项乱序」实现；场景需要两类题目物料：选择题、问答题。
+- Learner-relevant: 明确需求核心是「每人题目和答案乱序」，这是后续 clone() 重构要达成、而一把梭实现没有达成的目标。
 
-- Locator: `[[sources/design-pattern/design_pattern#命令模式]]`
-- Summary: Simulates an upscale restaurant: customers order dishes across eight cuisines (鲁/川/苏/粤/闽/浙/湘/徽), the waiter (小二) relays orders to the right cooks, and neither side cares about the other. The bad way is one `XiaoEr` class whose `order(int cuisine)` uses `if` blocks to map a cuisine number to a canned description string — one class holds everything and every new dish/cook couples into it. The refactor splits into three blocks: abstract command `ICuisine.cook()` with four concrete cuisines (`GuangDoneCuisine` etc., each wrapping an `ICook`), abstract implementor `ICook.doCooking()` with four cooks (`GuangDongCook` etc., each just logging its dish), and the invoker `XiaoEr` which holds a `List<ICuisine>` with `order(ICuisine)` and synchronized `placeOrder()` that calls `cook()` on each then clears. Test composes commands as `new GuangDoneCuisine(new GuangDongCook())` and hands them to `XiaoEr`. The everyday analogue is Ctrl+C/Ctrl+V, and desktop apps.
-- Key claims: command separates logic implementation from operation request to lower coupling; four structural roles — abstract command interface, concrete command classes, implementors (the ones doing the work), and the caller/invoker that exposes the command service; command objects are data-driven and passed to the caller via constructors; each class gains single responsibility so dishes and cooks extend independently; cons — the combinations of commands × implementations multiply classes that must be managed; the invoker can also support delete/undo (customer canceling a dish).
-- Learner-relevant: anchors the "split into command / implementor / invoker" refactor for request-decoupled scenarios; comparison node vs strategy (both wrap behavior, but command couples a receiver and can be queued/undone) and vs observer (event notification vs explicit invocation).
+### ch4-scene-choice-question
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#ch4-scene-choice-question]]`
+- Summary: 选择题类 `ChoiceQuestion` 的字段与构造：`name`（题目）、`option`（Map<String,String> 选项 A/B/C/D）、`key`（答案），提供无参与全参构造和 get/set。
+- Key claims: 选择题由题目文本、选项 Map、答案键三部分组成。
+- Learner-relevant: 物料类字段是后续 `clone()` 浅拷贝时需注意的引用类型（Map option）所在。
 
-### iterator (迭代器模式)
+### ch4-scene-answer-question
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#ch4-scene-answer-question]]`
+- Summary: 问答题类 `AnswerQuestion` 的字段与构造：`name`（问题）、`key`（答案），提供无参与全参构造和 get/set。作者提示可自行扩充更多题目类型作为学习扩展。
+- Key claims: 问答题由问题文本与答案字符串组成，相对简单。
+- Learner-relevant: 两个物料类都是值字段为主，可自行添加其他题目类型加深练习。
 
-- Locator: `[[sources/design-pattern/design_pattern#迭代器模式]]`
-- Summary: Simulates deep traversal of a company's tree-shaped org structure to list all employees. Since this is business-specific tree data, JDK list iteration does not apply, so the chapter hand-builds an iterator. It first recaps the JDK iterator trio: `Collection` (add/remove/iterator), `Iterable` (extends Collection, provides `iterator()`), and `Iterator` (`hasNext()`, `next()`). The refactor (single project `itstack-demo-design-15-00`) mirrors that trio as interfaces `Iterator<E>`, `Iterable<E>`, and `Collection<E, L>` (the two generics handle both employees and node links), plus entities `Employee` (uId/name/desc), `Link` (fromId/toId edge), and the core `GroupStructure implements Collection<Employee, Link>` backed by maps (employeeMap, linkMap id→children, invertedMap toId→fromId). Its anonymous `Iterator` walks depth-first: descend to the deepest node, scan its siblings, then ascend via the inverted map and continue until `totalIdx` reaches employee count, tracking per-level cursor indexes.
-- Key claims: intent is letting one uniform way traverse different data structures (array, linked list, tree) while the caller ignores each structure's traversal logic; enhanced-for is not the iterator pattern — iterators implement `Iterable` and can delete elements; implementation is comparatively complex, adds classes and separates traversal from the data structure (satisfies single responsibility and open-closed); iteration strategy can be swapped from depth-first to breadth-first later; hard spots for learners are the three interfaces, the tree data relationships, and the depth-traversal algorithm — practice repeatedly.
-- Learner-relevant: supports a JDK internals lesson (how `Iterator`/`Iterable`/`Collection` really work, e.g. `ArrayList.Itr`) and a data-structure lesson on depth-first vs breadth-first traversal over a graph/tree built from node + link records.
+### ch4-simple-project-structure
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#ch4-simple-project-structure]]`
+- Summary: 一把梭实现工程的目录结构 itstack-demo-design-4-01，只有单个类 `QuestionBankController`。作者预告：一个类几千行代码也见过，这是有「这种潜质」的类。
+- Key claims: 一把梭实现集中在一个类里，面向过程、不考虑扩展性。
+- Learner-relevant: 该类的规模与职责混乱程度是后续重构的对比基线。
 
-### mediator (中介者模式)
+### ch4-simple-implementation
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#ch4-simple-implementation]]`
+- Summary: `QuestionBankController.createPaper(candidate, number)` 的实现：硬编码构造 5 道 Java 选择题（JAVA 版本定义、main 方法、变量命名、标识符、表达式求值）与 4 道脑筋急转弯式问答题，存入两个 List；再遍历拼装出含「考生/考号/选择题/问答题」的格式化字符串返回。作者点评：这类代码易理解但不面向对象、不考虑扩展性；代码分三部分——建题入集合、定义详情字符串包装结果、返回结果；且没有实现乱序，若要加乱序复杂度还会增加，此处不展开，只为后文对比重构。
+- Key claims: 一把梭实现无法乱序，所有人的试卷顺序完全一样，达不到公平性需求；代码难扩展，题目增多与乱序功能会让它越来越混乱。
+- Learner-relevant: 记住问题点：①顺序固定不满足乱序需求；②扩展性差；这两点正是原型模式重构要解决的。
 
-- Locator: `[[sources/design-pattern/design_pattern#中介者模式]]`
-- Summary: Simulates writing a MyBatis-style ORM over raw JDBC to learn mediator packaging. The bad way is direct `JDBCUtil` JDBC code — `Class.forName(driver)`, `DriverManager.getConnection`, `Statement`, `ResultSet` while-loop — fine for one-off demos but every business would repeat the boilerplate. The refactor (`itstack-demo-design-16-02`) packages the whole database layer behind a mediator: `SqlSession` interface (`selectOne`/`selectList` with/without parameter, `close`) implemented by `DefaultSqlSession` (prepares statements from parsed `XNode` mapper elements and reflects `ResultSet` columns back into POJOs via `setXxx` methods); `SqlSessionFactory.openSession()` with `DefaultSqlSessionFactory` (holds `Configuration` carrying connection + mapperElement); and `SqlSessionFactoryBuilder.build(Reader)` which uses SAXReader (with `XMLMapperEntityResolver` so parsing works offline) to parse `mybatis-config-datasource.xml` — dataSource properties, JDBC connection, and `<select>` statements in `User_Mapper.xml`/`School_Mapper.xml`, mapping `#{...}` placeholders to `?` via regex into namespace+id-keyed `XNode`s. Usage mirrors real MyBatis: `new SqlSessionFactoryBuilder().build(reader)`, `openSession()`, `session.selectOne("...IUserDao.queryUserInfoById", 1L)`.
-- Key claims: intent is inserting a mediator layer that wraps repeated calls among complex components and exposes a simple, generic, extensible service (analogues: airport tower talking planes down, bus-station platforms, a 中台 that wraps all interfaces, middleware hiding DB differences); the same idea applies to aggregating N external prize/interface providers into one prize-center service; benefits — callers don't know JDBC internals, multi-datasource extension is easy at the connection builder, satisfies single responsibility, open-closed, and the Law of Demeter (the fewer people who know the internals, the better); this hand-written ORM is a prototype of the real MyBatis and doubles as a source-code reading exercise.
-- Learner-relevant: anchors a hands-on "how MyBatis actually works" lesson (SqlSession → factory → builder → XML parsing) and a mediator vs facade/façade comparison (both wrap subsystems; mediator coordinates peers, facade simplifies one interface) plus the 中台/aggregation-service design idea.
+### ch4-simple-test
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#ch4-simple-test]]`
+- Summary: 用 junit 单元测试验证 `createPaper`，为花花、豆豆、大宝三位考生各打印一份试卷。结果三份试卷题目与选项顺序完全一致，印证「没有达到乱序要求」；作者强调日常编写单测能提高系统健壮度。
+- Key claims: 三位考生的试卷内容相同、顺序也相同，验证了一把梭实现未实现乱序；单测是验证接口服务的标准手段。
+- Learner-relevant: 测试结果 = 一把梭实现的缺陷实锤，可直接对照重构后版本看差异。
 
-### memento (备忘录模式)
+### ch4-refactor
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#ch4-refactor]]`
+- Summary: 进入原型模式重构小节：要解决的问题是创建大量重复的类——不同用户需要相同试卷，但题目不便每次都从库中获取（有时来自远程 RPC），创建对象非常耗时，且对象增多会严重影响效率。指出原型模式非常重要的手段是克隆：需要用克隆的类都要 `implements Cloneable` 接口。
+- Key claims: 原型模式的必要前提是对象实现 `Cloneable`；克隆用于避免每次从库/RPC 重复获取并构造对象。
+- Learner-relevant: 记住 Java 原型模式的两个关键点：`Cloneable` 接口 + 重写 `clone()`；并注意此处引出了克隆（后续必涉及浅拷贝/深拷贝）。
 
-- Locator: `[[sources/design-pattern/design_pattern#备忘录模式]]`
-- Summary: Simulates recording online configuration files during system release so they can be rolled back on an emergency. Real systems keep each change's version number, time, MD5, content, and operator, and often store history in DB; the demo keeps it in memory. The pattern adds three classes on top of the original `ConfigFile` (versionNo/content/dateTime/operator) without modifying it: `ConfigMemento` (a thin wrapper holding a `ConfigFile` — the extension of the original object), `ConfigOriginator` (get/set `ConfigFile` plus `saveMemento()` returning a new memento and `getMemento(memento)` which writes the memento's content back into the current `ConfigFile`), and `Admin` (the manager keeping a `List<ConfigMemento>` plus a versionNo→memento map, exposing `append`, `undo` (roll back one step), `redo` (move forward), and `get(versionNo)` for targeted retrieval). The test saves four config versions then exercises undo twice, redo once, and get by version.
-- Key claims: intent is enabling restore/rollback — of configs, versions, or regret moves (undo medicine, IDEA undo/redo, console save-games, Photoshop history) — built on not breaking the original object and adding a memento class that records its state; the restore method `getMemento` assigns the remembered `ConfigFile` into the current object rather than returning it directly; storing in memory suits ephemeral scenarios (Photoshop history, ERP activity editing by operators) but risks data loss on shutdown and heavy memory use — store in DB for durable cases; good for maintainability, but the whole point is experienced via the test/history-operations rather than fancy classes.
-- Learner-relevant: anchors an undo/redo/versioning implementation lesson (cursor-based list + version map, save/undo/redo/get) and a state-restoration pattern-recognition exercise; comparison node vs state pattern (memento snapshots state, state switches behavior) and vs prototype (snapshot copying).
-
-## Source links
-
-- [[sources/design-pattern/design_pattern#责任链模式]]
-- [[sources/design-pattern/design_pattern#命令模式]]
-- [[sources/design-pattern/design_pattern#迭代器模式]]
-- [[sources/design-pattern/design_pattern#中介者模式]]
-- [[sources/design-pattern/design_pattern#备忘录模式]]
+### ch4-refactor-structure
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#ch4-refactor-structure]]`
+- Summary: 重构工程 itstack-demo-design-4-02 的目录结构，比一把梭版本多了几个类：`Topic`（题目/选项/答案载体）、`TopicRandomUtil`（乱序工具）、`QuestionBank`（题库，重点的 clone 载体）、`QuestionBankController`（对外接口），末尾标注「原型模式模型结构」。具体的类实现代码在本部分之后的篇幅中。
+- Key claims: 重构工程用 `Topic` + `TopicRandomUtil` + `QuestionBank` 分担职责；`QuestionBank` 承担题库原型，通过 clone 产出各考生乱序试卷。
+- Learner-relevant: 记住四个类的分工，尤其 `QuestionBank.clone()` 将是下一部分的核心，届时重点看乱序与浅/深拷贝处理。

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>繼承方式擴展 SSO 的子類膨脹困境</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>繼承方式擴展 SSO 的子類膨脹困境</h1>
+<p class="meta">設計模式 · 節點 16 · 步驟 2/3</p>
+
+<h2>這節課你要學會什麼</h2>
+<p>讀完這篇文章，你能說出 SSO 校驗場景中「用繼承重寫擴展功能」的壞味道：子類膨脹、功能耦合、靈活度低。</p>
+
+<h2>場景：ERP 單點登录要擴充</h2>
+<p>一個 ERP 系統的早期版本只需要做一件事：<strong>用戶帶上 SSO 票據（ticket）就能訪問全部資源</strong>。所有接口的校驗邏輯就一句——從 request 裡取 ticket，比對成功就放行。</p>
+<p>業務發展後，出現了運營、營銷、數據等不同角色，各角色對 ERP 的訪問需求不同——有些角色只能查，不能改；有些角色只能看自己的數據。又要保證數據安全，不能把最高權限給所有人。</p>
+
+<h2>第一反應：用繼承重寫</h2>
+<p>大多數人在這個場景下的第一反應是：<strong>繼承 SSO 攔截器，重寫校驗方法，把自己額外的邏輯塞進去</strong>。代碼長這樣：</p>
+<pre><code>public class LoginSsoDecorator extends SsoInterceptor {
+
+    // 記錄每個用戶可訪問的方法
+    private static final Map&lt;String, String&gt; authMap = new HashMap&lt;&gt;();
+    static {
+        authMap.put("huahua", "queryUserInfo");
+        authMap.put("doudou", "queryUserInfo");
+    }
+
+    @Override
+    public boolean preHandle(String request, String response, Object handler) {
+        // 第一步：執行原始的 SSO 票據校驗
+        boolean success = super.preHandle(request, response, handler);
+        if (!success) return false;
+
+        // 第二步：從 request 中取出 userId，查 authMap 做方法級校驗
+        String userId = request.substring(8, request.indexOf("success") + 7);
+        String method = authMap.get(userId);
+        if (method == null) {
+            System.out.println("攔截：" + userId + " 無權訪問");
+            return false;
+        }
+        return true;
+    }
+}</code></pre>
+<p>一段代碼、一個子類、一個覆寫。看上去挺乾淨，不是嗎？</p>
+
+<h2>問題在哪裡</h2>
+<p>當你需要的擴展<strong>只有一個</strong>時，繼承方式確實沒毛病。但 SSO 場景的現實是：</p>
+
+<h3>痛點一：子類膨脹</h3>
+<p>運營角色要「方法級校驗」，數據角色要「接口級限流」，營銷角色要「資料夾級數據隔離」，審計角色要「操作日誌記錄」。每加一種校驗需求，就多一個子類。四種需求就四個子類，八種需求就八個。子類數量隨需求線性增長，維護成本呈超線性增長。</p>
+
+<h3>痛點二：功能耦合</h3>
+<p>如果某個角色既要「方法級校驗」又要「操作日誌」，怎麼辦？Java 不支持多重繼承。你要麼寫一個「既校驗又記日誌」的新子類（職責混合），要麼讓一個子類繼承另一個子類（繼承鏈過長）。無論哪種，代碼都會變得混亂。</p>
+
+<h3>痛點三：無法運行時增減</h3>
+<p>你不能在程式運行時「脫掉一層校驗」。繼承的結構在編譯時就寫死了。如果某個版本不需要方法級校驗了，你得改程式碼、重新編譯、重新部署。裝飾器可以<strong>在程式運行時隨意包裹或拆卸</strong>。</p>
+
+<h2>壞味道的根源</h2>
+<p>這些痛點的根源是同一件事：<strong>用「類的繼承」去解決「功能的組合」</strong>。繼承是「is-a」關係——子類是父類的一種。但「帶日誌的 SSO」不是 SSO 的一種，而是「SSO + 日誌」的功能組合。把「is-a」用在「has-a」的場景上，代價就是上面的三個痛點。</p>
+
+<blockquote class="bad-code">
+  <strong>繼承 ≠ 功能組合。</strong>如果新功能是「在原功能上面疊一層」而不是「對原功能做一種新的變體」，那用繼承就是在走彎路。
+</blockquote>
+
+<h2>這段代碼的「好」與「壞」</h2>
+<p>回到上面那段 <code>LoginSsoDecorator</code> 代碼。它好在哪裡？——<strong>思路上沒錯</strong>：先調 <code>super.preHandle()</code> 執行原始校驗，再加自己的邏輯。這其實已經是裝飾器的雛形了。壞在哪裡？——<strong>形式上走錯了路</strong>：用繼承而非組合。如果把 <code>extends SsoInterceptor</code> 改成「實現接口 + 持有 <code>SsoInterceptor</code> 實例」，你就從繼承走到了裝飾器。下一個步驟會完成這個重構。</p>
+
+<h2>小結</h2>
+<p>用繼承方式擴展 SSO 校驗服務，會遇到三個核心痛點：子類數量隨需求膨脹、功能無法靈活組合、運行時無法增減。這些痛點的根源是「用 is-a 關係解決 has-a 問題」。下一個步驟會用裝飾器模式的四角色模型完成重構，展示怎麼「不改原類、隨穿隨脫」地疊加功能。</p>
+
+<h2>自測題</h2>
+<div class="quiz" data-quiz="problem">
+  <p><strong>Q1</strong>：SSO 場景中用繼承重寫的核心痛點是什麼？</p>
+  <button class="quiz-option" data-correct="false">執行效率低</button>
+  <button class="quiz-option" data-correct="false">代碼可讀性差</button>
+  <button class="quiz-option" data-correct="true">子類數量隨需求膨脹，功能無法靈活組合</button>
+  <button class="quiz-option" data-correct="false">無法支持多線程</button>
+
+  <p style="margin-top:1rem"><strong>Q2</strong>：「帶日誌的 SSO」和「SSO」之間是什麼關係？</p>
+  <button class="quiz-option" data-correct="false">is-a（繼承關係）</button>
+  <button class="quiz-option" data-correct="true">has-a（功能組合關係）</button>
+  <button class="quiz-option" data-correct="false">use-a（使用關係）</button>
+  <button class="quiz-option" data-correct="false">implement-a（實現關係）</button>
+
+  <p style="margin-top:1rem"><strong>Q3</strong>：如果某角色既需要方法級校驗又需要操作日誌，用繼承方式會遇到什麼問題？</p>
+  <button class="quiz-option" data-correct="false">編譯錯誤</button>
+  <button class="quiz-option" data-correct="false">運行時異常</button>
+  <button class="quiz-option" data-correct="true">Java 不支持多重繼承，要麼混合職責要麼繼承鏈過長</button>
+  <button class="quiz-option" data-correct="false">性能下降</button>
+
+  <p style="margin-top:1rem"><strong>Q4</strong>：<code>LoginSsoDecorator</code> 裡 <code>super.preHandle()</code> 調用的意義是什麼？</p>
+  <button class="quiz-option" data-correct="false">跳過原始校驗</button>
+  <button class="quiz-option" data-correct="true">先執行原始 SSO 票據校驗，再疊加自己的邏輯</button>
+  <button class="quiz-option" data-correct="false">重置所有校驗狀態</button>
+  <button class="quiz-option" data-correct="false">調用父類構造函數</button>
+
+  <p style="margin-top:1rem"><strong>Q5</strong>：壞味道的根源是什麼？</p>
+  <button class="quiz-option" data-correct="false">代碼行數太多</button>
+  <button class="quiz-option" data-correct="true">用「類的繼承」解決「功能的組合」——把 is-a 用在 has-a 場景</button>
+  <button class="quiz-option" data-correct="false">命名不規範</button>
+  <button class="quiz-option" data-correct="false">缺少註釋</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./decorator-intro.html">← 上一步：裝飾器的概念與四角色結構</a>
+  <a href="./decorator-refactor.html">下一步：裝飾器模式重構與適用邊界 →</a>
+</div>
+
+<div class="footer">
+  設計模式 · 裝飾器模式 · 節點 16 · 步驟 2/3
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

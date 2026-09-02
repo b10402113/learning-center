@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>動態編排與邊界 — 責任鏈模式</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<p class="meta">設計模式 · 責任鏈模式 · Step 4/4</p>
+
+<h1>動態編排與邊界</h1>
+
+<h2>學習目標</h2>
+<p>學會用 appendNext 動態組裝審批鏈，理解時間範圍如何決定鏈長度，並說出責任鏈的適用邊界與代價。</p>
+
+<h2>動態組裝：一行代碼搞定一條鏈</h2>
+<p>責任鏈最強大的地方在於<strong>編排過程可以與節點實現分離</strong>。看看怎麼組裝這條審批鏈：</p>
+<pre><code>// 鏈式編排：三級 → 二級 → 一級
+AuthLink authLink = new Level3AuthLink("1000013", "王工")
+    .appendNext(new Level2AuthLink("1000012", "張經理",
+        date("2020-06-01"), date("2020-06-25"))
+    .appendNext(new Level1AuthLink("1000011", "段總",
+        date("2020-06-11"), date("2020-06-20"))));
+
+// 執行審批
+AuthInfo result = authLink.doAuth(uId, orderId, authDate);</code></pre>
+<p>注意幾個要點：</p>
+<ul>
+  <li><strong>編排代碼只出現一次</strong>：在控制層（或配置類）中組裝，業務代碼不需要知道鏈的存在</li>
+  <li><strong>節點順序可以隨時調整</strong>：交換 appendNext 的順序就行，不需要改任何節點類</li>
+  <li><strong>可以動態增刪節點</strong>：加一個 Level0AuthLink 就多一級審批，刪掉就不審</li>
+</ul>
+
+<h2>配置化：從硬編碼到可配置</h2>
+<p>上例中鏈的編排還是在代碼裡寫死的。在實際業務中，責任鏈可以進一步配置化：</p>
+<table>
+  <tr><th>方式</th><th>適用場景</th><th>優缺點</th></tr>
+  <tr><td>代碼寫死</td><td>鏈結構固定，很少變化</td><td>簡單直接，但改動需要重新部署</td></tr>
+  <tr><td>XML 配置</td><td>鏈結構偶爾調整</td><td>改配置不用改代碼，但解析有開銷</td></tr>
+  <tr><td>數據庫/配置中心</td><td>鏈結構經常變化（如審批流引擎）</td><td>最靈活，但複雜度最高</td></tr>
+</table>
+<p>核心思路：把「鏈上有誰、順序如何」從代碼中抽離出來，放到配置裡。這樣業務人員改個配置就能調整審批流，不需要開發介入。</p>
+
+<h2>收益：從 if-else 到責任鏈</h2>
+<p>對比重構前後：</p>
+<blockquote class="good-code">
+  <strong>結構清晰</strong>：每個審批級別是獨立的類，職責單一，一看就知道「王工負責三級」。<br>
+  <strong>符合單一職責原則</strong>：每個類只管自己的審批邏輯，不混入其他級別的判斷。<br>
+  <strong>符合開閉原則</strong>：加新審批級別只需加新類，不改動已有代碼。<br>
+  <strong>外部調用方無感</strong>：控制層只需組裝鏈並調用 doAuth，不需要關心鏈內部怎麼運作。
+</blockquote>
+<p>總結來說：責任鏈把「流程編排」和「節點實現」分開了，就像把一坨 if-else 拆成了可插拔的模塊。</p>
+
+<h2>邊界：什麼時候不该用？</h2>
+<p>責任鏈不是萬能的。它有明確的適用邊界：</p>
+<blockquote class="bad-code">
+  <strong>不適合簡單條件判斷</strong><br>
+  如果只是 A 或 B 或 C 三選一，用 if-else 或 switch 就夠了。責任鏈的價值在於「多個節點可能都要處理、處理順序可變、鏈可動態調整」的場景。
+</blockquote>
+<blockquote class="bad-code">
+  <strong>性能開銷</strong><br>
+  每個請求都要沿鏈傳遞，節點越多開銷越大。如果鏈上有十幾個節點，每個請求都要走一遍判斷邏輯——在高併發場景下可能成為瓶頸。
+</blockquote>
+<blockquote class="bad-code">
+  <strong>調試複雜度</strong><br>
+  請求在鏈上跳轉，出問題時你不知道是哪個節點的責任。不像 if-else 一眼能看到完整的判斷邏輯，責任鏈的執行路徑是動態的。
+</blockquote>
+<p>一句話總結：<strong>if 適合判斷，不適合做系統流程設計</strong>。在做判斷和行為邏輯處理中 if-else 非常可用，但當流程需要「順序傳遞、動態編排、節點可增刪」時，責任鏈才是正確的選擇。</p>
+
+<h2>Quiz</h2>
+<div class="quiz" data-question="責任鏈最大的優勢是什麼？">
+  <button class="quiz-option" data-correct="false">性能比 if-else 好</button>
+  <button class="quiz-option" data-correct="true">編排過程與節點實現分離，鏈可以動態調整</button>
+  <button class="quiz-option" data-correct="false">代碼行數更少</button>
+  <button class="quiz-option" data-correct="false">不需要抽象類</button>
+</div>
+
+<div class="quiz" data-question="以下哪種情況不適合用責任鏈？">
+  <button class="quiz-option" data-correct="false">多級審批流</button>
+  <button class="quiz-option" data-correct="false">Servlet Filter 鏈</button>
+  <button class="quiz-option" data-correct="true">簡單的三選一條件判斷</button>
+  <button class="quiz-option" data-correct="false">事件冒泡機制</button>
+</div>
+
+<div class="quiz" data-question="責任鏈的代價包括什麼？">
+  <button class="quiz-option" data-correct="false">無法實現多級處理</button>
+  <button class="quiz-option" data-correct="true">性能開銷（節點越多開銷越大）和調試複雜度（執行路徑動態）</button>
+  <button class="quiz-option" data-correct="false">只能用 Java 實現</button>
+  <button class="quiz-option" data-correct="false">不支持配置化</button>
+</div>
+
+<div class="quiz" data-question="「if 適合判斷，不適合做系統流程設計」這句話意味著什麼？">
+  <button class="quiz-option" data-correct="false">永遠不要用 if-else</button>
+  <button class="quiz-option" data-correct="false">if-else 只能用於測試代碼</button>
+  <button class="quiz-option" data-correct="true">if-else 適合簡單條件分支，但系統級流程應該用責任鏈等模式組織</button>
+  <button class="quiz-option" data-correct="false">流程設計只能用多態</button>
+</div>
+
+<div class="quiz" data-question="責任鏈符合哪些設計原則？">
+  <button class="quiz-option" data-correct="false">只有里氏替換原則</button>
+  <button class="quiz-option" data-correct="true">單一職責原則和開閉原則</button>
+  <button class="quiz-option" data-correct="false">只有依賴反轉原則</button>
+  <button class="quiz-option" data-correct="false">不符合任何設計原則</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="chain-skeleton.html">← 上一篇：責任鏈骨架</a>
+  <span></span>
+</div>
+
+<div class="footer">
+  <p>設計模式 · 責任鏈模式 · Step 4/4（最後一篇）</p>
+</div>
+
+<script>
+document.querySelectorAll('.quiz').forEach(quiz => {
+  quiz.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      quiz.querySelectorAll('.quiz-option').forEach(b => b.classList.remove('correct','wrong'));
+      btn.classList.add(btn.dataset.correct === 'true' ? 'correct' : 'wrong');
+    });
+  });
+});
+</script>
+
+</body>
+</html>

@@ -1,0 +1,41 @@
+---
+id: clone-in-practice
+title: 原型模式重構：Cloneable + clone() 實現試卷亂序
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#ch4-refactor]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#ch4-refactor-structure]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#原型模式模型结构]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#代码实现-题目选项乱序操作工具包]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#代码实现-克隆对象处理类]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#代码实现-初始化试卷数据]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#测试验证]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+# 原型模式重構：Cloneable + clone() 實現試卷亂序
+
+## Learning goal
+
+掌握原型模式的 Java 實現方式：實現 Cloneable 接口、重寫 clone()、在克隆後做差異化處理，並理解「模板初始化一次、每份從原型克隆」的效率模型。
+
+## Lesson
+
+重構的核心思路是把「建題」和「組卷」分開：題庫只初始化一次作為「原型」，每位考生從原型克隆出專屬副本，在副本上做題目順序和選項順序的隨機化。這樣題庫構造的開銷只有一次，後續 1000 個考生也只是 1000 次淺拷貝 + shuffle，比 1000 次 new + DB 查詢便宜得多。
+
+Java 的原型模式依賴兩個機制：`Cloneable` 接口是一個標記接口（marker interface），沒有任何方法，作用是告訴 JVM「這個類允許被克隆」，如果沒有實現這個接口就調用 `clone()` 會拋 `CloneNotSupportedException`；`Object.clone()` 是 protected 方法，返回當前對象的一個副本，子類需要重寫它並改為 public 才能對外暴露。
+
+重構後分為四個類：`Topic` 是題目載體（選項 Map + 正確答案 key）；`TopicRandomUtil` 是亂序工具包，對選項做隨機重排並同步重定位答案 key；`QuestionBank` 是題庫原型，持有題目集合，實現 `Cloneable`，重寫 `clone()`；`QuestionBankController` 是對外接口，構造器初始化題庫模板，`createPaper()` 從原型克隆。
+
+`QuestionBank.clone()` 是整個模式的落地關鍵：先調用 `super.clone()` 複製對象本身，然後分別克隆兩個集合（`choiceQuestionList` 和 `answerQuestionList`），否則副本和原型共享同一個 List，後續 shuffle 會把原型的順序也打亂。克隆後對題目集合做 `Collections.shuffle` 打亂順序，再逐題用 `TopicRandomUtil` 亂序選項、回寫新 option 與新 key。`TopicRandomUtil.random()` 的邏輯是：收集選項 Map 的所有 key，shuffle 打亂，按新順序重建 Map，同時追蹤正確答案在新位置上的 key。
+
+`QuestionBankController` 的構造器只初始化一次題庫模板（5 道選擇題 + 4 道問答題），`createPaper()` 方法通過 `(QuestionBank) questionBank.clone()` 複製出考生專屬問卷，設置考生與考號後返回。測試結果顯示花花、豆豆、大寶的試卷題目順序、選項順序、答案位置都各自亂序——題庫內容一樣，但每份試卷都是獨一無二的。原型模式落地流程：構造原型（一次性） → clone() 複製（每位考生一次） → 差異化處理（亂序） → 輸出副本。
+
+但有個問題一直在暗處：`ArrayList.clone()` 複製了容器，但容器裡的元素是同一個引用——這就是淺拷貝。如果題目對象裡還有嵌套的引用類型，會發生什麼？下一課揭開這個陷阱。
+
+## Course
+
+[↗ 課程頁面](../../lessons/clone-in-practice.html)
+
+## Sources

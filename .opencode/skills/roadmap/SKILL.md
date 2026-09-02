@@ -1,6 +1,6 @@
 ---
 name: roadmap
-description: Partition one subject's source material into confirmed lesson nodes.
+description: Partition one subject's source material into confirmed lesson nodes along a learner-chosen learning path.
 disable-model-invocation: true
 argument-hint: "Which subject needs a roadmap?"
 ---
@@ -12,15 +12,16 @@ Prereqs: `learn/<subject>/MEMORY.md` exists (run `/learn-init` first). The probe
 1. **Inventory.** Follow the shared `docs/reference/source-reading.md` protocol. Ensure `learn/<subject>/digests/` exists for the subject's material in `sources/<subject>/` — that folder only. Reuse digests whose `source_hash` matches; rebuild via parallel sub-agents for large sources (each chunk sub-agent reads `sources/<subject>/` only and does not write outside the digests folder). Small sources: read directly, write the digest yourself. Never re-read a source whose digest is current.
 2. **Read digests.** Read the L1 overviews (and compact TOC lines) for all sources. Pull L2 section detail lazily when a proposed node needs confirmation that it has enough source support.
 3. **No depth calibration here.** Depth is deferred: `/probe <subject>/<node-id>` runs after the roadmap, per node, and `/nodes` reads that node's mastery entry to calibrate step depth. The roadmap proposes uniform depth — it does not annotate per-node depth and it never prunes content.
-4. **Partition.** Group the material into nodes. Each node must have one learning goal and enough source support for a complete lesson. A node may later use several elements across its steps. Do not turn every keyword into a roadmap element.
-5. **Compute the baseline.** `target = clamp(round(total_lines / 1100), 3, 30)` where `total_lines` is the pdftotext line count across the subject's sources. Use this as the proposal's starting point, not a gate.
-6. **Propose and confirm (checkpoint).** Present the full candidate partition — tiered node list with titles, one-line goals, and the formula baseline (`target`, and the proposed count) — and ask the learner to confirm before writing anything. Exit options: accept; or give a target count and re-partition once; or manually add/remove specific nodes. Do not write `ROADMAP.md` or containers until this checkpoint passes.
-7. **Tier.** Organize nodes from general to specific. Tier 1 establishes the learner's mental model; later tiers add operating rules, mechanisms, implementation order, or practice. Tiers contain nodes, never extracted elements.
-8. **Write the index.** Write `learn/<subject>/ROADMAP.md` with the tiered node index, subject goal, node order, goals, and source references. Do not include a tiered element list or per-node depth.
-9. **Write node containers.** Create one `learn/<subject>/nodes/<node-id>.mdx` per node. Include its tier and order, metadata, learning goal, source references, and empty `Steps` (step-DAG) and `Lesson` sections. Set each node status to `draft`.
-10. **Hand off.** Present the tiered node set. For each node, the learner first runs `/probe <subject>/<node-id>` (measures that node's mastery — a hard gate) and then `/nodes <subject>/<node-id>`, which confirms the node and reasons out its step-DAG before writing step articles. Do not require a separate confirmation command.
+4. **Propose learning paths (checkpoint).** From the digests' shape, draft **at least 5 distinct learning paths** through the material, each from a different angle. A path is a lens on the same material — a different front-load, tiering, and ordering — never a renamed copy of one order. Angles to start from: **concept-first** (mental model → rules → practice), **practice-first** (build first, pull concepts on demand), **problem-driven** (organize around questions a learner actually hits), **systems** (organize around how the pieces fit together), **historical** (organize by how ideas emerged), **depth-first** (one thread taken deep at a time). For each path, state the angle, what it optimizes for, and the learner it suits. Ask the learner to pick one before partitioning. Exit options: pick a proposed path; or name a different angle and re-propose once. Do not partition until a path is chosen.
+5. **Partition.** Group the material into nodes, organized along the chosen path's angle. Each node must have one learning goal and enough source support for a complete lesson. A node may later use several elements across its steps. Do not turn every keyword into a roadmap element.
+6. **Compute the baseline.** `target = clamp(round(total_lines / 1100), 3, 30)` where `total_lines` is the pdftotext line count across the subject's sources. Use this as the proposal's starting point, not a gate.
+7. **Propose and confirm (checkpoint).** Present the full candidate partition — tiered node list with titles, one-line goals, and the formula baseline (`target`, and the proposed count) — and ask the learner to confirm before writing anything. Exit options: accept; or give a target count and re-partition once; or manually add/remove specific nodes. Do not write `ROADMAP.md` or containers until this checkpoint passes.
+8. **Tier.** Organize nodes from general to specific along the chosen path. Tier 1 establishes the learner's mental model; later tiers add operating rules, mechanisms, implementation order, or practice. Tiers contain nodes, never extracted elements.
+9. **Write the index.** Write `learn/<subject>/ROADMAP.md` with the tiered node index, subject goal, node order, goals, source references, and the chosen path. Do not include a tiered element list or per-node depth.
+10. **Write node containers.** Create one `learn/<subject>/nodes/<node-id>.mdx` per node. Include its tier and order, metadata, learning goal, source references, and empty `Steps` (step-DAG) and `Lesson` sections. Set each node status to `draft`.
+11. **Hand off.** Present the tiered node set. For each node, the learner first runs `/probe <subject>/<node-id>` (measures that node's mastery — a hard gate) and then `/nodes <subject>/<node-id>`, which confirms the node and reasons out its step-DAG before writing step articles. Do not require a separate confirmation command.
 
-Completion: `ROADMAP.md` indexes every proposed node (with no per-node depth — that is determined at `/nodes` time from each node's probe), the partition passed the learner checkpoint (count aligned with the formula baseline or deliberately adjusted), every node has one goal and traceable sources, every node container exists as `draft`, and each node becomes `probed` via `/probe` then `confirmed` via `/nodes`. No node or area was pruned.
+Completion: the learner picked one of at least 5 proposed learning paths before partitioning; `ROADMAP.md` indexes every proposed node (with no per-node depth — that is determined at `/nodes` time from each node's probe) and records the chosen path; the partition passed the learner checkpoint (count aligned with the formula baseline or deliberately adjusted); every node has one goal and traceable sources; every node container exists as `draft`; and each node becomes `probed` via `/probe` then `confirmed` via `/nodes`. No node or area was pruned.
 
 ## ROADMAP.md
 
@@ -28,6 +29,7 @@ Completion: `ROADMAP.md` indexes every proposed node (with no per-node depth —
 ---
 subject: <subject>
 status: draft            # draft → confirmed
+path: <chosen learning path, e.g. concept-first>
 created: YYYY-MM-DD
 ---
 
@@ -35,6 +37,9 @@ created: YYYY-MM-DD
 
 ## Goal
 <from MEMORY.md>
+
+## Learning path
+<the chosen path: its angle, what it optimizes for, and how it orders the tiers>
 
 ## How to use
 Read the nodes in order. Each node is a step-DAG. Run `/probe <subject>/<node-id>` to measure a node, then `/nodes <subject>/<node-id>` to confirm and start work on it.

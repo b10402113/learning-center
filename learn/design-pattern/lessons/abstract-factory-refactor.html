@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>適配介面 + 動態代理重構</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>適配介面 + 動態代理重構</h1>
+<p class="meta">design-pattern › abstract-factory › abstract-factory-refactor</p>
+
+<blockquote>
+  <strong>學習目標</strong>：看懂 ICacheAdapter 適配介面 + JDK 動態代理的重構方案，理解「原類零修改接入兩套集群」的實現思路。
+</blockquote>
+
+<h2>重構的核心思路</h2>
+
+<p>上一節的痛點是：選擇集群的邏輯和具體操作混在一起。重構的目標很明確——<strong>讓 <code>CacheServiceImpl</code> 不改一行代碼，就能接入 EGM 和 IIR 兩套集群</strong>。</p>
+
+<p>實現這個目標需要兩步：</p>
+
+<ol>
+  <li><strong>適配</strong>：把兩套集群的異名方法統一到一個介面上</li>
+  <li><strong>代理</strong>：用 JDK 動態代理在運行時把調用轉發到具體集群</li>
+</ol>
+
+<p>這兩步合在一起，就是抽象工廠的一種落地形態。</p>
+
+<h2>第一步：定義統一適配介面</h2>
+
+<p>先抽出一個 <code>ICacheAdapter</code> 介面，把所有集群都必須支持的操作定義成統一的方法名：</p>
+
+<pre><code>public interface ICacheAdapter {
+    String get(String key);
+    void set(String key, String value);
+    void set(String key, String value, long timeout);
+    void del(String key);
+}</code></pre>
+
+<p>注意這個介面的方法名和原來的 <code>CacheService</code> 完全一致——業務代碼不需要做任何調整。</p>
+
+<h2>第二步：為每套集群寫適配實現</h2>
+
+<p>EGM 集群的適配器，把 <code>gain → get</code>、<code>delete → del</code>、<code>setEx → set-with-timeout</code> 映射過來：</p>
+
+<pre><code>public class EGMCacheAdapter implements ICacheAdapter {
+    private EGM egm = new EGM();
+
+    public String get(String key) {
+        return egm.gain(key);      // gain → get
+    }
+    public void set(String key, String value) {
+        egm.setEx(key, value, 0);  // setEx → set
+    }
+    public void set(String key, String value, long timeout) {
+        egm.setEx(key, value, timeout); // setEx → set-with-timeout
+    }
+    public void del(String key) {
+        egm.delete(key);           // delete → del
+    }
+}</code></pre>
+
+<p>IIR 集群同理：</p>
+
+<pre><code>public class IIRCacheAdapter implements ICacheAdapter {
+    private IIR iir = new IIR();
+
+    public String get(String key) {
+        return iir.get(key);       // 方法名一致
+    }
+    public void set(String key, String value) {
+        iir.set(key, value);       // 方法名一致
+    }
+    public void set(String key, String value, long timeout) {
+        iir.setExpire(key, value, timeout); // setExpire → set-with-timeout
+    }
+    public void del(String key) {
+        iir.set(key, null);        // 沒有 delete，用 set(null) 替代
+    }
+}</code></pre>
+
+<p>兩個適配器做的事一樣：把各自集群的「方言」翻譯成統一的「普通話」。業務方只跟 <code>ICacheAdapter</code> 打交道，不需要知道 EGM 和 IIR 的方法名差異。</p>
+
+<h2>第三步：JDK 動態代理連接一切</h2>
+
+<p>關鍵來了。我們不直接改 <code>CacheServiceImpl</code>，而是用 JDK 動態代理在運行時「攔截」方法調用，轉發到對應的適配器：</p>
+
+<pre><code>public class JDKProxy {
+    public static &lt;T&gt; T getProxy(Class&lt;T&gt; clazz, ICacheAdapter adapter) {
+        return (T) Proxy.newProxyInstance(
+            clazz.getClassLoader(),
+            clazz.getInterfaces(),
+            new JDKInvocationHandler(adapter)
+        );
+    }
+}
+
+public class JDKInvocationHandler implements InvocationHandler {
+    private ICacheAdapter cacheAdapter;
+
+    public JDKInvocationHandler(ICacheAdapter cacheAdapter) {
+        this.cacheAdapter = cacheAdapter;
+    }
+
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        // 通過方法名反射調用適配器的對應方法
+        return MethodUtils.invoke(cacheAdapter, method.getName(), args);
+    }
+}</code></pre>
+
+<p>使用方式：</p>
+
+<pre><code>// 要用 EGM 集群？
+CacheService cacheService = JDKProxy.getProxy(
+    CacheServiceImpl.class, new EGMCacheAdapter());
+
+// 要切到 IIR 集群？
+CacheService cacheService = JDKProxy.getProxy(
+    CacheServiceImpl.class, new IIRCacheAdapter());
+
+// 業務代碼完全不變！
+cacheService.set("user_name_01", "小傅哥", 60);
+String value = cacheService.get("user_name_01");</code></pre>
+
+<h2>重構前後對比</h2>
+
+<table>
+  <thead>
+    <tr><th>維度</th><th>ifelse 方案</th><th>抽象工廠方案</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>原類 <code>CacheServiceImpl</code></td><td>大改：每個方法加 ifelse</td><td>零修改</td></tr>
+    <tr><td>方法簽名</td><td>加了 redisType 參數</td><td>保持不變</td></tr>
+    <tr><td>新增第三套集群</td><td>每個方法加 else if 分支</td><td>寫一個新適配器類</td></tr>
+    <tr><td>調用方</td><td>要傳 type 參數</td><td>只差傳哪個適配器</td></tr>
+    <tr><td>測試</td><td>耦合所有集群</td><td>每個適配器獨立測試</td></tr>
+  </tbody>
+</table>
+
+<p>核心差異：ifelse 方案把「選擇」和「執行」綁在一起，每次調用都要判斷；抽象工廠方案把「選擇」提前到創建代理時一次性決定，之後的調用完全透明。</p>
+
+<h2>小結</h2>
+
+<p>重構方案的核心是「適配介面 + JDK 動態代理」。適配器抹平了兩套集群的方法名差異，代理類在運行時把調用轉發到對應的適配器。原類零修改，新增集群只需要加一個適配器。這就是抽象工廠「管理一整套兼容實現」的具體落地。下一節我們會總結這個模式的設計原則和選型邊界。</p>
+
+<div class="quiz" data-step="abstract-factory-refactor">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. ICacheAdapter 介面的作用是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">直接操作 Redis 連接</button>
+  <button class="quiz-option" data-correct="true">把兩套集群的異名方法統一到一個介面上</button>
+  <button class="quiz-option" data-correct="false">替代原有的 CacheService 接口</button>
+  <button class="quiz-option" data-correct="false">管理 Redis 連接池</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. EGMCacheAdapter 做了什麼映射？</strong></p>
+  <button class="quiz-option" data-correct="false">get → gain、set → delete</button>
+  <button class="quiz-option" data-correct="true">gain → get、delete → del、setEx → set-with-timeout</button>
+  <button class="quiz-option" data-correct="false">把所有方法都改成和 IIR 一樣</button>
+  <button class="quiz-option" data-correct="false">沒有做任何映射，直接調用 EGM</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. JDK 動態代理在重構方案中的角色是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">替 CacheServiceImpl 創建新的子類</button>
+  <button class="quiz-option" data-correct="false">在編譯時生成新的 class 文件</button>
+  <button class="quiz-option" data-correct="true">在運行時攔截方法調用，轉發到對應的適配器</button>
+  <button class="quiz-option" data-correct="false">直接替換 Redis 客戶端庫</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 新增第三套集群時需要做什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">改 CacheServiceImpl 加新的 ifelse 分支</button>
+  <button class="quiz-option" data-correct="false">改 ICacheAdapter 介面加新方法</button>
+  <button class="quiz-option" data-correct="true">寫一個新的適配器類實現 ICacheAdapter</button>
+  <button class="quiz-option" data-correct="false">改所有調用方的代碼</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 重構方案讓原類 CacheServiceImpl 做了什麼改動？</strong></p>
+  <button class="quiz-option" data-correct="false">加了 ifelse 分支</button>
+  <button class="quiz-option" data-correct="false">加了 redisType 參數</button>
+  <button class="quiz-option" data-correct="true">零修改，完全不動</button>
+  <button class="quiz-option" data-correct="false">改了方法的訪問修飾符</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

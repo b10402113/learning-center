@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>橋接模式的結構與核心機制</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="meta">橋接模式 · Step 2/4 · 約 10 分鐘</div>
+
+  <h1>橋接模式的結構與核心機制</h1>
+
+  <h2>學習目標</h2>
+  <p>掌握橋接模式「抽象類 × 介面、構造注入」的結構，理解「橋」是什麼、為什麼能讓兩個維度獨立變化。</p>
+
+  <h2>從上一節的問題出發</h2>
+  <p>上一節看到，微信/支付寶 × 密碼/刷臉/指紋的組合用 ifelse 寫，分支數是維度的乘積。解決思路是把兩個維度「拆開」——但怎麼拆？</p>
+
+  <h2>兩棵繼承樹</h2>
+  <p>橋接模式的核心思路是：把系統中兩個獨立變化的維度，拆成兩棵平行的繼承樹，然後用「組合」把它們連起來。</p>
+
+  <p>在我們的支付場景中：</p>
+
+  <table>
+    <thead>
+      <tr><th>維度</th><th>角色</th><th>結構</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>支付渠道（抽象部分）</td><td>Pay 抽象類</td><td>WxPay、ZfbPay 繼承 Pay</td></tr>
+      <tr><td>支付模式（實現部分）</td><td>IPayMode 介面</td><td>PayCypher、PayFaceMode、PayFingerprintMode 實作 IPayMode</td></tr>
+    </tbody>
+  </table>
+
+  <h2>「橋」是什麼？</h2>
+  <p>關鍵在於：Pay 抽象類裡面持有一個 IPayMode 的引用，並且通過構造函數傳入。</p>
+
+  <pre><code>public abstract class Pay {
+    // 這就是「橋」——抽象類持有實現介面的引用
+    protected IPayMode payMode;
+
+    public Pay(IPayMode payMode) {
+        this.payMode = payMode;
+    }
+
+    // 抽象方法：由子類實現具體渠道的轉賬邏輯
+    public abstract String transfer(String uId, String tradeId, int amount);
+}</code></pre>
+
+  <p>這行 <code>protected IPayMode payMode</code> 就是整個模式的核心——它是一座「橋」，連接了抽象部分（支付渠道）和實現部分（支付模式）。</p>
+
+  <blockquote>
+    <strong>橋的本質</strong>：抽象類 A 中持有一個介面 B 的引用，通過構造函數注入 B 的實現。A 的子類負責「渠道」邏輯，B 的實現類負責「模式」邏輯。兩者各自變化，互不干擾。
+  </blockquote>
+
+  <h2>為什麼叫「橋接」？</h2>
+  <p>想像兩座獨立的大樓：左邊是「支付渠道大樓」（微信、支付寶），右邊是「支付模式大樓」（密碼、刷臉、指紋）。兩座大樓之間有一座橋——就是那個 <code>IPayMode payMode</code> 字段。</p>
+
+  <p>從渠道大樓出發，過橋，就能到達任何一個模式房間。從模式大樓出發，也能被任何一個渠道房間呼叫。兩邊各自蓋新樓（新增渠道或模式），橋不需要改。</p>
+
+  <h2>目錄結構對比</h2>
+  <p>橋接模式重構前後，工程的目錄結構會發生明顯變化：</p>
+
+  <table>
+    <thead>
+      <tr><th>重構前（7-01）</th><th>重構後（7-02）</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>
+          <code>PayController.java</code><br>
+          所有邏輯堆在一個類
+        </td>
+        <td>
+          <code>channel/Pay.java</code>（抽象類）<br>
+          <code>channel/WxPay.java</code><br>
+          <code>channel/ZfbPay.java</code><br>
+          <code>mode/IPayMode.java</code>（介面）<br>
+          <code>mode/PayCypher.java</code><br>
+          <code>mode/PayFaceMode.java</code><br>
+          <code>mode/PayFingerprintMode.java</code>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>從一個類變成兩個包、七個文件。看似「變複雜了」，但每個文件只負責一件事。新增渠道？只動 <code>channel/</code>。新增模式？只動 <code>mode/</code>。互不影響。</p>
+
+  <h2>核心機制回顧</h2>
+  <ul>
+    <li><strong>抽象類 A</strong>（Pay）：定義抽象的業務行為（transfer），持有介面 B 的引用</li>
+    <li><strong>介面 B</strong>（IPayMode）：定義實現維度的行為（security）</li>
+    <li><strong>橋</strong>：A 中的 <code>protected B b</code> 字段 + 構造函數注入</li>
+    <li><strong>擴展方式</strong>：A 的子類只管渠道邏輯，B 的實現只管模式邏輯，組合在客戶端完成</li>
+  </ul>
+
+  <blockquote>
+    <strong>一句話記法</strong>：橋接 = 抽象類裡放一個介面字段，構造函數傳進來，兩棵樹各長各的，橋不動。
+  </blockquote>
+
+  <h2>適用場景的一般化</h2>
+  <p>橋接模式不限於支付場景。凡是存在「兩個獨立維度需要自由組合」的場景，都可以用橋接：</p>
+  <ul>
+    <li>JDBC：驅動程式（Driver）是抽象，數據庫（MySQL/Oracle）是實現</li>
+    <li>同品牌產品線：台式機 vs 筆記本（產品類型）× 高端 vs 低端（市場定位）</li>
+    <li>消息推送：推送渠道（App/短信/郵件）× 消息格式（文本/圖片/富文本）</li>
+  </ul>
+  <p>如果組合中每個類都各自實現所有服務，就會出現笛卡爾積；用橋接模式，就只需要各自擴展再「橋接」。</p>
+
+  <div class="quiz" data-quiz="bridge-structure">
+    <h2>自我檢測</h2>
+    <div class="quiz-question" data-answer="2">
+      <p><strong>1.</strong> 橋接模式中「橋」的本質是？</p>
+      <button class="quiz-option" data-value="1">一個抽象方法</button>
+      <button class="quiz-option" data-value="2">抽象類中持有的介面引用（構造注入）</button>
+      <button class="quiz-option" data-value="3">一個工廠方法</button>
+      <button class="quiz-option" data-value="4">一個策略類</button>
+    </div>
+    <div class="quiz-question" data-answer="3">
+      <p><strong>2.</strong> 支付渠道×支付模式場景中，IPayMode 屬於哪一邊？</p>
+      <button class="quiz-option" data-value="1">抽象部分</button>
+      <button class="quiz-option" data-value="2">客戶端</button>
+      <button class="quiz-option" data-value="3">實現部分</button>
+      <button class="quiz-option" data-value="4">構造器</button>
+    </div>
+    <div class="quiz-question" data-answer="1">
+      <p><strong>3.</strong> 橋接模式重構後，新增一種支付模式需要改哪些文件？</p>
+      <button class="quiz-option" data-value="1">只動 mode/ 包</button>
+      <button class="quiz-option" data-value="2">只動 channel/ 包</button>
+      <button class="quiz-option" data-value="3">兩個包都要改</button>
+      <button class="quiz-option" data-value="4">要改客戶端代碼</button>
+    </div>
+    <div class="quiz-question" data-answer="4">
+      <p><strong>4.</strong> 以下哪個不屬於橋接模式的典型適用場景？</p>
+      <button class="quiz-option" data-value="1">JDBC 多種驅動</button>
+      <button class="quiz-option" data-value="2">產品線 × 市場定位</button>
+      <button class="quiz-option" data-value="3">推送渠道 × 消息格式</button>
+      <button class="quiz-option" data-value="4">單一算法的多種實現（無維度交叉）</button>
+    </div>
+    <div class="quiz-question" data-answer="2">
+      <p><strong>5.</strong> 橋接模式讓兩個維度「獨立變化」的關鍵機制是？</p>
+      <button class="quiz-option" data-value="1">繼承</button>
+      <button class="quiz-option" data-value="2">組合（持有引用）</button>
+      <button class="quiz-option" data-value="3">反射</button>
+      <button class="quiz-option" data-value="4">依賴注入容器</button>
+    </div>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="combinatorial-explosion.html">← 上一節：笛卡爾積膨脹</a>
+    <a href="bridge-refactor.html">下一節：支付場景重構實戰 →</a>
+  </div>
+
+  <div class="footer">
+    橋接模式 · 結構與核心機制 · design-pattern
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>秒殺場景重構：享元工廠 + Redis + 控制類的完整實現</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>秒殺場景重構：享元工廠 + Redis + 控制類的完整實現</h1>
+<p class="meta">design-pattern › flyweight › flyweight-implementation</p>
+
+<blockquote>
+  <strong>學習目標</strong>：掌握享元模式在秒殺場景的完整重構：ActivityFactory（Map 緩存內部狀態）、RedisUtils（外部狀態）、ActivityController（組裝返回）的職責分離與協作。
+</blockquote>
+
+<h2>重構前的工程結構</h2>
+
+<p>重構前只有一個類——<code>ActivityController</code>，所有查詢邏輯都塞在裡面：</p>
+
+<pre><code>itstack-demo-design-11-01/
+└── org.itstack.demo.design/
+    └── ActivityController.java  ← 全部邏輯在這裡</code></pre>
+
+<blockquote class="bad-code">
+  <strong>壞味道</strong>：一個類承擔全部職責——數據構建、查詢、返回，所有事情都在一個方法裡完成。
+</blockquote>
+
+<h2>重構後的工程結構</h2>
+
+<p>享元模式重構後，職責開始分離：</p>
+
+<pre><code>itstack-demo-design-11-02/
+├── util/
+│   └── RedisUtils.java          ← 模擬 Redis（外部狀態來源）
+└── org.itstack.demo.design/
+    ├── Activity.java            ← 活動實體（內部狀態載體）
+    ├── ActivityController.java  ← 控制類（組裝返回）
+    ├── ActivityFactory.java     ← 享元工廠（緩存內部狀態）
+    └── Stock.java               ← 庫存實體（外部狀態載體）</code></pre>
+
+<p>從單類到多類，每個類的職責清晰分離。</p>
+
+<h2>逐個拆解</h2>
+
+<h3>1. 活動實體——內部狀態的載體</h3>
+
+<p><code>Activity</code> 類承載活動的基礎信息：id、name、desc、startTime、stopTime、stock。這是享元要共享的「固定內容」載體。</p>
+
+<pre><code>public class Activity {
+    private Long id;
+    private String name;
+    private String desc;
+    private String startTime;
+    private String stopTime;
+    private Stock stock;
+    // getter/setter ...
+}</code></pre>
+
+<h3>2. 庫存實體——外部狀態的載體</h3>
+
+<p><code>Stock</code> 單獨成類，保存會變化的庫存數據：</p>
+
+<pre><code>public class Stock {
+    private int total;   // 總量
+    private int used;    // 已用
+    // getter/setter ...
+}</code></pre>
+
+<p>把變化數據從固定數據中剝離出來——這是享元建模的第一步。</p>
+
+<h3>3. 享元工廠——核心機制</h3>
+
+<p><code>ActivityFactory</code> 是享元模式的靈魂：</p>
+
+<pre><code>public class ActivityFactory {
+    private static Map&lt;Long, Activity&gt; activityMap = new HashMap&lt;&gt;();
+
+    public static Activity getActivity(Long id) {
+        Activity activity = activityMap.get(id);
+        if (activity == null) {
+            activity = new Activity();
+            activity.setId(10001L);
+            activity.setName("圖書嗨樂");
+            activity.setDesc("圖書優惠券分享激勵分享活動第二期");
+            activity.setStartTime("2024-06-01");
+            activity.setStopTime("2024-06-30");
+            activityMap.put(id, activity);
+        }
+        return activity;
+    }
+}</code></pre>
+
+<p>核心機制一句話：<strong>用一個固定 id 存放和獲取對象</strong>。第一次查詢創建並緩存，第二次及以後直接從 Map 取。在分佈式場景下，這個 Map 可以替換為 Redis——數據放 Redis 中，按需選擇。</p>
+
+<h3>4. 模擬 Redis——外部狀態來源</h3>
+
+<p><code>RedisUtils</code> 用定時任務模擬庫存消耗：</p>
+
+<pre><code>public class RedisUtils {
+    private AtomicInteger stock = new AtomicInteger(0);
+    private ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+
+    public RedisUtils() {
+        // 每 100000 微秒（0.1 秒）庫存 +1，模擬消耗
+        scheduler.scheduleAtFixedRate(() -> stock.addAndGet(1), 0, 100000, TimeUnit.MICROSECONDS);
+    }
+
+    public int getStockUsed() {
+        return stock.get();
+    }
+}</code></pre>
+
+<p><code>AtomicInteger</code> 保證並發自增安全，定時任務讓庫存在使用中持續變化。</p>
+
+<h3>5. 控制類——組裝內部 + 外部</h3>
+
+<p><code>ActivityController</code> 是最終的入口：</p>
+
+<pre><code>public class ActivityController {
+    private RedisUtils redisUtils = new RedisUtils();
+
+    public Activity queryActivityInfo(Long id) {
+        // 內部狀態：從享元工廠取（不變）
+        Activity activity = ActivityFactory.getActivity(id);
+        // 外部狀態：從 Redis 取（會變）
+        activity.setStock(new Stock(1000, redisUtils.getStockUsed()));
+        return activity;
+    }
+}</code></pre>
+
+<p>控制類的職責：工廠負責內部狀態複用，控制類負責疊加外部狀態。固定信息從工廠拿、變化信息從 Redis 拿，最後組裝返回。</p>
+
+<h2>測試驗證</h2>
+
+<p>循環查詢同一個活動十次，每次間隔 1.2 秒：</p>
+
+<pre><code>for (int i = 0; i &lt; 10; i++) {
+    Activity activity = controller.queryActivityInfo(10001L);
+    System.out.println(JSON.toJSONString(activity));
+    Thread.sleep(1200);
+}</code></pre>
+
+<p>輸出結果：</p>
+
+<table>
+  <thead>
+    <tr><th>次數</th><th>name</th><th>desc</th><th>stock.used</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td>圖書嗨樂</td><td>第二期</td><td>1</td></tr>
+    <tr><td>2</td><td>圖書嗨樂</td><td>第二期</td><td>18</td></tr>
+    <tr><td>3</td><td>圖書嗨樂</td><td>第二期</td><td>30</td></tr>
+    <tr><td>...</td><td>圖書嗨樂</td><td>第二期</td><td>... 遞增</td></tr>
+    <tr><td>10</td><td>圖書嗨樂</td><td>第二期</td><td>114</td></tr>
+  </tbody>
+</table>
+
+<blockquote class="good-code">
+  <strong>關鍵觀察</strong>：固定信息（name、desc、startTime）十次完全相同，印證享元緩存複用；庫存 used 從 1 到 114 持續遞增，印證變化狀態單獨獲取。
+</blockquote>
+
+<h2>整體協作流程</h2>
+
+<p>把整個流程串起來：</p>
+
+<ol>
+  <li>調用方查詢 <code>queryActivityInfo(10001L)</code></li>
+  <li>ActivityFactory.getActivity(10001L)：查 Map，未命中則創建並緩存（內部狀態）</li>
+  <li>RedisUtils.getStockUsed()：從模擬 Redis 獲取當前已用庫存（外部狀態）</li>
+  <li>ActivityController 將庫存回填到 Activity，返回完整的活動信息</li>
+</ol>
+
+<p>對比重構前：重構前每次查詢都從零構建 Activity；重構後，ActivityFactory 只在第一次創建，後續九次直接複用。固定信息零冗餘，變化信息實時獲取。</p>
+
+<h2>小結</h2>
+
+<p>享元模式的完整實現包含四個角色：Activity（內部狀態載體）、Stock（外部狀態載體）、ActivityFactory（享元工廠，Map 緩存）、ActivityController（控制類，組裝返回）。核心機制是「Map + 固定 id 存取對象」。下一課我們會分析這個模式的適用邊界與局限。</p>
+
+<div class="quiz" data-step="flyweight-implementation">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 享元工廠 ActivityFactory 用什麼數據結構緩存共享對象？</strong></p>
+  <button class="quiz-option" data-correct="false">ArrayList</button>
+  <button class="quiz-option" data-correct="true">Map（以固定 id 為 key）</button>
+  <button class="quiz-option" data-correct="false">Set</button>
+  <button class="quiz-option" data-correct="false">Queue</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 在重構後的代碼中，ActivityController 的職責是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">創建 Activity 對象並緩存到 Map</button>
+  <button class="quiz-option" data-correct="false">從數據庫查詢活動信息</button>
+  <button class="quiz-option" data-correct="true">從工廠取內部狀態、從 Redis 取外部狀態，組裝後返回</button>
+  <button class="quiz-option" data-correct="false">管理 Redis 連接池</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 為什麼庫存要用單獨的 Stock 類而不是直接放在 Activity 裡？</strong></p>
+  <button class="quiz-option" data-correct="false">為了減少 Activity 的代碼行數</button>
+  <button class="quiz-option" data-correct="true">因為庫存是變化數據（外部狀態），需要與不變的內部狀態分離</button>
+  <button class="quiz-option" data-correct="false">因為 Stock 需要被序列化到 Redis</button>
+  <button class="quiz-option" data-correct="false">因為 Java 不允許在一個類裡放多個字段</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 測試中 for 循環查詢十次，name 和 desc 的值有什麼特點？</strong></p>
+  <button class="quiz-option" data-correct="false">每次都不同</button>
+  <button class="quiz-option" data-correct="false">前五次相同，後五次不同</button>
+  <button class="quiz-option" data-correct="true">十次完全相同</button>
+  <button class="quiz-option" data-correct="false">第一次為空，後續才有值</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. RedisUtils 中為什麼用 AtomicInteger 而不是普通 int？</strong></p>
+  <button class="quiz-option" data-correct="false">因為 AtomicInteger 支持浮點數運算</button>
+  <button class="quiz-option" data-correct="true">因為定時任務在單獨線程中修改 stock，需要保證並發安全</button>
+  <button class="quiz-option" data-correct="false">因為 Redis 要求值必須是原子類型</button>
+  <button class="quiz-option" data-correct="false">因為 int 在 Java 中不能被 static 方法訪問</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

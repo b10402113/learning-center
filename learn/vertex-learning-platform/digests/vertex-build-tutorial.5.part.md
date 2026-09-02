@@ -1,5 +1,7 @@
 ---
 source: vertex-build-tutorial
+source_hash: 163e22ff380334aae232a942c21a2cb3ee3f7d0cf5f2518fac0e0e5a6f261bc2
+source_lines: 9438
 part: 5
 created: 2026-08-22
 updated: 2026-08-22

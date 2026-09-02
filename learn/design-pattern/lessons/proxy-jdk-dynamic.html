@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JDK 動態代理：無實現類也能調用 — 代理模式</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<p class="meta">設計模式 · 代理模式 · Step 2/3</p>
+
+<h1>JDK 動態代理：無實現類也能調用</h1>
+
+<h2>學習目標</h2>
+<p>理解 JDK 動態代理機制（InvocationHandler + Proxy.newProxyInstance），看懂 MyBatis 為什麼「只定義接口、不寫實現類」就能跑。</p>
+
+<h2>從接口到實例：空缺在哪裡？</h2>
+<p>上一篇我們知道 MyBatis 的魔法是「只定義接口，不寫實現類」。但 Java 是一門強類型語言——你調用一個方法，JVM 必須找到一個具體的類來執行這個方法體。</p>
+<p>問題來了：接口 <code>IUserDao</code> 只有方法簽名，沒有方法體。JVM 是怎麼找到「<code>queryUserInfo</code> 該幹嘛」的？</p>
+
+<h2>答案：JDK 動態代理</h2>
+<p>JDK 在 1.3 版本就提供了動態代理機制，它讓你<strong>在運行時為一個接口生成一個實現類</strong>——你不需要手寫這個實現類，JVM 幫你生成。</p>
+<p>整個機制由兩個核心角色組成：</p>
+
+<table>
+  <tr><th>角色</th><th>是什麼</th><th>職責</th></tr>
+  <tr>
+    <td><strong>InvocationHandler</strong></td>
+    <td>一個接口，你提供實現</td>
+    <td>定義「方法被調用時幹嘛」——攔截所有方法調用，決定返回什麼</td>
+  </tr>
+  <tr>
+    <td><strong>Proxy.newProxyInstance()</strong></td>
+    <td>JDK 提供的靜態工廠方法</td>
+    <td>為指定接口生成一個代理對象（實現類實例），把方法調用轉發給 InvocationHandler</td>
+  </tr>
+</table>
+
+<p>一句話記：</p>
+<blockquote>
+  <strong>InvocationHandler 是「攔截器」，Proxy.newProxyInstance() 是「生成器」。</strong><br>
+  攔截器告訴系統「方法調用時做什麼」，生成器幫你造出那個「看起來像實現類的代理對象」。
+</blockquote>
+
+<h2>代碼走讀：代理怎麼工作的</h2>
+<p>讓我們看一下 MyBatis 風格的代理類定義：</p>
+
+<pre><code>public class MapperFactoryBean&lt;T&gt; implements FactoryBean&lt;T&gt; {
+
+    private Class&lt;T&gt; mapperInterface;
+
+    // 構造函數：接收要代理的接口類型
+    public MapperFactoryBean(Class&lt;T&gt; mapperInterface) {
+        this.mapperInterface = mapperInterface;
+    }
+
+    @Override
+    public T getObject() throws Exception {
+        // 1. 定義攔截器：方法被調用時做什麼
+        InvocationHandler handler = (proxy, method, args) -> {
+            // 從方法的 @Select 注解取 SQL
+            Select select = method.getAnnotation(Select.class);
+            String sql = select.value().replace("#{uId}", args[0].toString());
+            System.out.println("SQL: " + sql);
+            // 模擬查詢結果
+            return args[0] + ",小傅哥,bugstack.cn...";
+        };
+
+        // 2. 生成代理對象
+        ClassLoader classLoader = mapperInterface.getClassLoader();
+        return (T) Proxy.newProxyInstance(
+            classLoader,
+            new Class[]{mapperInterface},  // 要代理的接口
+            handler                        // 攔截器
+        );
+    }
+
+    @Override
+    public Class&lt;T&gt; getObjectType() {
+        return mapperInterface;
+    }
+
+    @Override
+    public boolean isSingleton() {
+        return true;
+    }
+}</code></pre>
+
+<h2>拆解核心流程</h2>
+<p>整個代理過程分三步：</p>
+
+<h3>第一步：定義攔截器（InvocationHandler）</h3>
+<p>你告訴系統：「當有人調用 <code>queryUserInfo</code> 時，幫我做這幾件事」：</p>
+<ol>
+  <li>從方法的 <code>@Select</code> 注解取出 SQL 語句</li>
+  <li>把 SQL 裡的佔位符 <code>#{uId}</code> 替換成實際參數</li>
+  <li>打印 SQL（模擬執行）</li>
+  <li>返回一個模擬的查詢結果</li>
+</ol>
+
+<h3>第二步：生成代理對象（Proxy.newProxyInstance）</h3>
+<p>調用 <code>Proxy.newProxyInstance</code>，傳入三個參數：</p>
+<ul>
+  <li><strong>ClassLoader</strong>：用接口的類加載器，確保代理類和接口在同一個類加載體系</li>
+  <li><strong>Class[]</strong>：要代理的接口列表（這裡只有一個 <code>IUserDao</code>）</li>
+  <li><strong>InvocationHandler</strong>：你的攔截器</li>
+</ul>
+<p>返回值就是一個 <code>IUserDao</code> 類型的對象——但它不是你手寫的實現類，而是 JVM 在運行時動態生成的。</p>
+
+<h3>第三步：調用代理</h3>
+<p>當你調用 <code>userDao.queryUserInfo("100001")</code> 時：</p>
+<ol>
+  <li>JVM 把調用轉發給 InvocationHandler 的 <code>invoke</code> 方法</li>
+  <li>invoke 方法取出注解裡的 SQL，替換參數，打印日誌</li>
+  <li>返回模擬結果 <code>"100001,小傅哥,bugstack.cn..."</code></li>
+</ol>
+<p>從使用者的角度，你看到的就是「接口有實現」——完全不知道背後是代理在工作。</p>
+
+<h2>關鍵理解：接口 vs 實現類</h2>
+<blockquote class="good-code">
+  <strong>傳統方式</strong>：你手寫 <code>UserDaoImpl implements IUserDao</code>，JVM 直接調用你的實現。<br>
+  <strong>動態代理</strong>：你什麼都不寫，JVM 在運行時生成一個隱藏的實現類，把方法調用轉發給你的 InvocationHandler。
+</blockquote>
+<p>動態代理的「動態」就體現在：實現類不是編譯時就存在的，而是運行時按需生成的。這也是為什麼你找不到 <code>IUserDaoImpl</code> 這個類——它根本不存在於你的源碼中。</p>
+
+<h2>Quiz</h2>
+<div class="quiz" data-question="JDK 動態代理的兩個核心角色是什麼？">
+  <button class="quiz-option" data-correct="false">AbstractFactory 和 ConcreteFactory</button>
+  <button class="quiz-option" data-correct="true">InvocationHandler 和 Proxy.newProxyInstance()</button>
+  <button class="quiz-option" data-correct="false">BeanFactory 和 ApplicationContext</button>
+  <button class="quiz-option" data-correct="false">ClassLoader 和 Method</button>
+</div>
+
+<div class="quiz" data-question="Proxy.newProxyInstance() 的第一個參數 ClassLoader 的作用是什麼？">
+  <button class="quiz-option" data-correct="false">加載 Spring 配置文件</button>
+  <button class="quiz-option" data-correct="true">確保代理類和接口在同一個類加載體系</button>
+  <button class="quiz-option" data-correct="false">創建新的類加載器</button>
+  <button class="quiz-option" data-correct="false">銷毀舊的類加載器</button>
+</div>
+
+<div class="quiz" data-question="JDK 動態代理的「動態」體現在哪裡？">
+  <button class="quiz-option" data-correct="false">代理類在編譯時就已經生成</button>
+  <button class="quiz-option" data-correct="true">實現類在運行時按需生成，不存在於源碼中</button>
+  <button class="quiz-option" data-correct="false">代理類可以被多個 JVM 共享</button>
+  <button class="quiz-option" data-correct="false">代理類的代碼可以動態修改</button>
+</div>
+
+<div class="quiz" data-question="在 MapperFactoryBean 中，getObject() 返回的是什麼？">
+  <button class="quiz-option" data-correct="false">一個空的 null 對象</button>
+  <button class="quiz-option" data-correct="false">MapperFactoryBean 自己</button>
+  <button class="quiz-option" data-correct="true">一個由 JDK 動態代理生成的接口代理對象</button>
+  <button class="quiz-option" data-correct="false">一個 Spring AOP 代理對象</button>
+</div>
+
+<div class="quiz" data-question="當你調用 userDao.queryUserInfo(\"100001\") 時，JVM 首先做什麼？">
+  <button class="quiz-option" data-correct="false">直接執行 SQL</button>
+  <button class="quiz-option" data-correct="true">把調用轉發給 InvocationHandler 的 invoke 方法</button>
+  <button class="quiz-option" data-correct="false">查找 IUserDao 的實現類</button>
+  <button class="quiz-option" data-correct="false">創建一個新的 IUserDao 實例</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="proxy-concept.html">← 上一篇：什麼是代理模式？</a>
+  <a href="proxy-spring-middleware.html">下一篇：Spring 中間件 →</a>
+</div>
+
+<div class="footer">
+  <p>設計模式 · 代理模式 · Step 2/3</p>
+</div>
+
+<script>
+document.querySelectorAll('.quiz').forEach(quiz => {
+  quiz.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      quiz.querySelectorAll('.quiz-option').forEach(b => b.classList.remove('correct','wrong'));
+      btn.classList.add(btn.dataset.correct === 'true' ? 'correct' : 'wrong');
+    });
+  });
+});
+</script>
+
+</body>
+</html>

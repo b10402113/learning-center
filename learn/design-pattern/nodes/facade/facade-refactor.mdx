@@ -1,0 +1,39 @@
+---
+id: facade-refactor
+title: 用門面中間件重構白名單
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#facade-refactor]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#facade-refactor-structure]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#facade-refactor-config]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#facade-refactor-annotation]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#facade-refactor-test]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+# 用門面中間件重構白名單
+
+## Learning goal
+
+<理解外觀模式如何落地為 SpringBoot starter 中間件，用 @DoDoor 注解 + AOP 切面統一治理白名單>
+
+## Lesson
+
+上一節我們看到了白名單的 ifelse 版本——每個接口方法裡都塞一段 <code>userList.contains(userId)</code> 的判斷，改一個地方就要改全部。現在我們用外觀模式把它重構成一個 SpringBoot starter 中間件。重構的核心思路：把白名單邏輯從業務方法裡抽出來，放到一個獨立的中間件 jar 包裡。業務方只需要兩步——引入依賴、加一個注解——白名單就生效了。業務代碼零改動。
+
+重構後的中間件分兩條線，各管各的。配置側負責從 <code>application.yml</code> 讀白名單配置，核心類是 <code>StarterServiceProperties</code>（用 <code>@ConfigurationProperties("itstack.door")</code> 綁定配置）和 <code>StarterAutoConfigure</code>（用 <code>@Configuration</code>、<code>@ConditionalOnClass</code>、<code>@ConditionalOnProperty</code> 等條件注解控制中間件是否生效）。白名單的用戶列表不硬編碼在代碼裡，而是放在 yml 中：<code>itstack.door.userStr: "1001,aaaa,ccc"</code>。條件注解 <code>@ConditionalOnProperty(prefix = "itstack.door", name = "enabled", havingValue = "true")</code> 控制中間件是否生效——配置 <code>enabled: false</code> 就關掉，不用改任何代碼。
+
+切面側是「門面」的核心——它定義了「攔截到加了注解的方法後做什麼」。先定義一個自定義注解 <code>@DoDoor</code>，兩個屬性：<code>key</code>（要從方法參數中取哪個字段的值做白名單比對，如 <code>"userId"</code>）和 <code>returnJson</code>（攔截後返回的 JSON 信息）。業務方法只要加上這個注解，就被「掛」上了白名單治理——方法體裡沒有一行白名單邏輯，全靠注解聲明。
+
+切面 <code>DoJoinPoint</code> 用 <code>@Aspect</code> + <code>@Component</code> 標記，通過 <code>@Around("@annotation(doDoor)")</code> 切中所有加了 @DoDoor 的方法。核心方法 <code>doRouter(ProceedingJoinPoint jp, DoDoor doDoor)</code> 的流程很清晰：第一步從注解拿到要校驗的字段名（如 userId），第二步從方法參數中取值，空值直接放行（防禦性編程），第三步從 StarterService 拿到配置的白名單列表做比對，命中就調 <code>jp.proceed()</code> 放行，不命中就返回 <code>returnJson</code> 指定的攔截信息。
+
+測試驗證：在業務工程引入中間件 jar，配置好白名單，啟動 SpringBoot。userId=1001（在白名單中）返回正常用戶信息（code 0000），userId=小團團（不在白名單）返回攔截信息（code 1111）。整個過程業務方法沒有任何改動。
+
+整個重構路徑：配置側讀取白名單 → 自定義注解聲明治理需求 → AOP 切面統一攔截校驗。三步走完，白名單邏輯從業務方法裡完全抽離，變成一個可複用的中間件。新增橫切需求（比如簽名校驗、限流）？再加一個注解 + 一個切面就行，不動任何已有代碼。這就是外觀模式在 Spring 生態中的落地方式。
+
+## Course
+
+[↗ 課程頁面](../../lessons/facade-refactor.html)
+
+## Sources

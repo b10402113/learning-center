@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>中介者模式的意圖與 ORM 場景定位</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>中介者模式的意圖與 ORM 場景定位</h1>
+<p class="meta">design-pattern › mediator › mediator-concept</p>
+
+<blockquote>
+  <strong>學習目標</strong>：能說出中介者模式「集中協調、解耦網狀依賴」的意圖，並用 ORM / 中台場景解釋它解決什麼問題。
+</blockquote>
+
+<h2>先看生活中的例子</h2>
+
+<p>機場塔台（Air Traffic Controller）是一個經典的中介者：</p>
+
+<ul>
+  <li>飛機 A 要降落，飛機 B 要起飛，飛機 C 在滑行——如果三架飛機自己互相喊話協調，場面會很混亂</li>
+  <li>塔台作為中介者，所有飛機只跟塔台通信，塔台統一協調誰先降落、誰等待、誰滑行</li>
+  <li>每架飛機不需要知道其他飛機的存在，只需要聽塔台的指令</li>
+</ul>
+
+<p>工程世界也一樣：當多個模塊之間的調用關係變成<strong>網狀</strong>（A 調 B、B 調 C、C 又調 A），每個人都要依賴其他人的接口——改一個就要改一圈。這時候就需要一個「塔台」。</p>
+
+<h2>中介者模式的定義</h2>
+
+<blockquote>
+  用一個中介者對象封裝一系列對象交互，使各對象不需要顯式相互引用，從而耦合鬆散且可獨立改變它們之間的交互。
+</blockquote>
+
+<p>白話翻譯：<strong>把「誰跟誰打招呼」這件事收進一個中間人，所有人只跟中間人說話。</strong></p>
+
+<p>這個模式要解決的具體問題：</p>
+
+<table>
+  <thead>
+    <tr><th>沒有中介者</th><th>有中介者</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>A 知道 B、C、D 的接口</td><td>A 只知道 M（中介者）</td></tr>
+    <tr><td>改 B 的接口 → A、C、D 都要改</td><td>改 B 的接口 → 只有 M 要改</td></tr>
+    <tr><td>N 個對象的交互 = N² 量級的依賴</td><td>N 個對象的交互 = N 量級的依賴</td></tr>
+  </tbody>
+</table>
+
+<h2>工程中的典型應用</h2>
+
+<p>中介者在後端開發中隨處可見：</p>
+
+<ul>
+  <li><strong>ORM 中間件</strong>（Mybatis、Hibernate）：封裝連接、SQL 解析、結果映射，業務方只寫 SQL 和 POJO</li>
+  <li><strong>公司中台</strong>：把 N 種獎品服務的接口統一收到一個獎品中心，對外只暴露一個通用接口</li>
+  <li><strong>API 網關</strong>：所有微服務的路由、鑑權、限流收進網關，客戶端只跟網關通信</li>
+  <li><strong>消息中間件</strong>（Kafka、RabbitMQ）：生產者和消費者不直接對話，通過 Broker 中轉</li>
+</ul>
+
+<h2>本節的場景：手寫 ORM 框架</h2>
+
+<p>我們用「模仿 Mybatis 手寫 ORM 框架」來體現中介者模式。思路很直接：</p>
+
+<ol>
+  <li><strong>先把痛點看清</strong>（上一課）：一把梭 JDBC 把連接、驅動、SQL 執行、結果映射全部暴露給業務方</li>
+  <li><strong>用中介者包裝</strong>：把這些細節收進 SqlSession / Factory / Builder / Configuration 四層組件</li>
+  <li><strong>外部只按「statement + 參數」調用</strong>：跟用 Mybatis 一樣簡單</li>
+</ol>
+
+<p>對照工程：</p>
+
+<table>
+  <thead>
+    <tr><th>工程</th><th>做法</th><th>代表</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>itstack-demo-design-16-01</code></td><td>JDBCUtil 直連資料庫</td><td>一把梭</td></tr>
+    <tr><td><code>itstack-demo-design-16-02</code></td><td>手寫 ORM 框架包裝 JDBC</td><td>中介者</td></tr>
+  </tbody>
+</table>
+
+<h2>模型結構預覽</h2>
+
+<p>中介者的整體分工分三大塊：</p>
+
+<ul>
+  <li><strong>查詢側</strong>：<code>SqlSession</code>（接口）定義 <code>selectOne</code> / <code>selectList</code>，<code>DefaultSqlSession</code> 實現具體的 JDBC 調用和結果映射</li>
+  <li><strong>工廠側</strong>：<code>SqlSessionFactory</code>（接口）定義 <code>openSession()</code>，<code>DefaultSqlSessionFactory</code> 持有 Configuration 並創建 Session</li>
+  <li><strong>装配側</strong>：<code>SqlSessionFactoryBuilder</code> 是啟動入口——解析 XML 配置、建立連接、構建 Configuration</li>
+</ul>
+
+<p>下一課我們逐個拆解這些組件，看它們怎麼協作把 JDBC 細節藏起來。</p>
+
+<h2>小結</h2>
+
+<p>中介者模式的核心動機是<strong>把網狀依賴收成星型依賴</strong>——所有人只跟中介者說話。在 ORM 場景裡，中介者就是把 JDBC 的四步瑣事封裝起來，讓業務方只做「寫 SQL + 定義 POJO」兩件事。判斷「何時該引入中介者」的判據：對象交互複雜、重複調用多、需要統一入口。</p>
+
+<div class="quiz" data-step="mediator-concept">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 中介者模式要解決的核心問題是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">加快系統運行速度</button>
+  <button class="quiz-option" data-correct="true">把多個對象之間的網狀依賴收成星型依賴</button>
+  <button class="quiz-option" data-correct="false">減少類的數量</button>
+  <button class="quiz-option" data-correct="false">自動生成代碼</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 機場塔台是什麼設計模式的典型例子？</strong></p>
+  <button class="quiz-option" data-correct="false">觀察者模式</button>
+  <button class="quiz-option" data-correct="false">策略模式</button>
+  <button class="quiz-option" data-correct="true">中介者模式</button>
+  <button class="quiz-option" data-correct="false">代理模式</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 在手寫 ORM 的場景裡，中介者封裝了什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">業務邏輯和數據校驗</button>
+  <button class="quiz-option" data-correct="false">前端頁面和 API 路由</button>
+  <button class="quiz-option" data-correct="true">連接、SQL 解析、結果映射等 JDBC 細節</button>
+  <button class="quiz-option" data-correct="false">資料庫表結構設計</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 判斷「何時該引入中介者」的判據是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">系統響應時間超過 100ms</button>
+  <button class="quiz-option" data-correct="false">代碼行數超過 500 行</button>
+  <button class="quiz-option" data-correct="true">對象交互複雜、重複調用多、需要統一入口</button>
+  <button class="quiz-option" data-correct="false">團隊人數超過 5 人</button>
+</div>
+</div>
+
+<div class="lesson-nav">
+  <a href="./jdbc-pain.html">← 上一篇：一把梭 JDBC 直連的痛點</a>
+  <a href="./mediator-components.html">下一篇：中介者核心組件的分工與協作 →</a>
+</div>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+</body>
+</html>

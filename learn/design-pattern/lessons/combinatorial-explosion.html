@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>笛卡爾積膨脹：ifelse 的壞味道</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="meta">橋接模式 · Step 1/4 · 約 8 分鐘</div>
+
+  <h1>笛卡爾積膨脹：ifelse 的壞味道</h1>
+
+  <h2>學習目標</h2>
+  <p>理解「多支付渠道 × 多支付模式」的笛卡爾積膨脹問題，體會 ifelse 雙層嵌套的壞味道，並能說出這種結構為什麼不可維護。</p>
+
+  <h2>一個真實的聚合支付場景</h2>
+  <p>想像你是一家第三方聚合支付平台的後端工程師。商家不想讓用戶改變支付習慣，所以平台需要同時支援微信支付、支付寶等多個支付渠道。同時，每個渠道又要支援刷臉、指紋、密碼等多種支付方式。</p>
+  <p>業務需求很直觀：用戶選擇一個支付渠道（微信或支付寶），再選一種支付方式（刷臉、指紋或密碼），系統完成支付。</p>
+
+  <h2>先看「一把梭」的寫法</h2>
+  <p>如果你用最直覺的方式寫，大概會這樣：</p>
+
+  <blockquote class="bad-code">
+    <strong>PayController.doPay</strong>（壞味道版本）
+  </blockquote>
+
+  <pre><code>public String doPay(String uId, String tradeId, int amount,
+                     int channelType, int modeType) {
+    // 第一層：判斷支付渠道
+    if (1 == channelType) {
+        // 微信支付
+        if (1 == modeType) {
+            // 微信 + 密碼
+            return "微信支付 + 密碼校驗：" + uId;
+        } else if (2 == modeType) {
+            // 微信 + 刷臉
+            return "微信支付 + 刷臉校驗：" + uId;
+        } else if (3 == modeType) {
+            // 微信 + 指紋
+            return "微信支付 + 指紋校驗：" + uId;
+        }
+    } else if (2 == channelType) {
+        // 支付寶
+        if (1 == modeType) {
+            return "支付寶 + 密碼校驗：" + uId;
+        } else if (2 == modeType) {
+            return "支付寶 + 刷臉校驗：" + uId;
+        } else if (3 == modeType) {
+            return "支付寶 + 指紋校驗：" + uId;
+        }
+    }
+    return "支付失敗";
+}</code></pre>
+
+  <h2>問題在哪裡？笛卡爾積爆炸</h2>
+  <p>現在只有 2 個渠道 × 3 種模式 = 6 個分支，還能勉強維護。但仔細算一筆帳：</p>
+
+  <table>
+    <thead>
+      <tr><th>維度</th><th>目前數量</th><th>如果增加…</th><th>分支變化</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>支付渠道</td><td>2（微信、支付寶）</td><td>+ 京東支付、雲閃付</td><td>2 → 4</td></tr>
+      <tr><td>支付模式</td><td>3（密碼、刷臉、指紋）</td><td>+ 指紋2.0、聲紋</td><td>3 → 5</td></tr>
+      <tr><td>ifelse 分支</td><td>6</td><td>4 × 5</td><td>→ 20</td></tr>
+    </tbody>
+  </table>
+
+  <p>每增加一個渠道，所有模式都要再寫一遍；每增加一種模式，所有渠道也要再寫一遍。分支數是兩個維度的<strong>乘積</strong>——這就是「笛卡爾積膨脹」。</p>
+
+  <h2>更深一層的壞味道</h2>
+  <p>ifelse 膨脹不只是代碼量的問題。它還帶來三個更深的麻煩：</p>
+
+  <h3>1. 違反單一職責</h3>
+  <p>一個方法同時承擔了「判斷渠道」和「判斷模式」兩件事。任何一邊的變更都要動這個方法。</p>
+
+  <h3>2. 違反開閉原則</h3>
+  <p>新增一種支付模式（比如聲紋），你需要修改所有渠道的 ifelse 分支——這是對「已有代碼」的修改，不是「擴展」。</p>
+
+  <h3>3. 測試組合爆炸</h3>
+  <p>2 × 3 = 6 組測試用例。如果變成 4 × 5 = 20，測試成本直線上升，而且每組之間高度重複。</p>
+
+  <blockquote>
+    <strong>核心洞察</strong>：當你發現代碼裡出現「if A then if B then …」的雙層嵌套，而且 A 和 B 是兩個獨立維度——這就是在警告你：這兩個維度不該攪在一起。
+  </blockquote>
+
+  <h2>那該怎麼辦？</h2>
+  <p>問題的根源是：<strong>渠道</strong>和<strong>模式</strong>是兩個獨立變化的維度，但它被塞進了同一個方法。解決思路是把它們「拆開」——讓渠道歸渠道、模式歸模式，需要組合的時候再「接」起來。</p>
+  <p>這正是橋接模式（Bridge Pattern）的核心思路：把「抽象部分」和「實現部分」分離，讓它們各自獨立變化。下一節我們會看到這個結構具體長什麼樣。</p>
+
+  <h2>小結</h2>
+  <ul>
+    <li>多維度組合如果用 ifelse 實現，分支數是維度的乘積——笛卡爾積膨脹</li>
+    <li>壞味道不只是代碼量，更在於違反單一職責和開閉原則</li>
+    <li>信號：看到「if A then if B」且 A、B 是獨立維度，就該警覺</li>
+  </ul>
+
+  <div class="quiz" data-quiz="combinatorial-explosion">
+    <h2>自我檢測</h2>
+    <div class="quiz-question" data-answer="2">
+      <p><strong>1.</strong> 3 個支付渠道 × 4 種支付模式，ifelse 雙層嵌套需要多少個分支？</p>
+      <button class="quiz-option" data-value="7">7（相加）</button>
+      <button class="quiz-option" data-value="12">12（相乘）</button>
+      <button class="quiz-option" data-value="3">3</button>
+      <button class="quiz-option" data-value="4">4</button>
+    </div>
+    <div class="quiz-question" data-answer="3">
+      <p><strong>2.</strong> ifelse 雙層嵌套最核心違反的設計原則是？</p>
+      <button class="quiz-option" data-value="1">里氏替換</button>
+      <button class="quiz-option" data-value="2">依賴倒置</button>
+      <button class="quiz-option" data-value="3">開閉原則</button>
+      <button class="quiz-option" data-value="4">接口隔離</button>
+    </div>
+    <div class="quiz-question" data-answer="1">
+      <p><strong>3.</strong> 「if A then if B」中 A 和 B 是獨立維度時，最準確的壞味道描述是？</p>
+      <button class="quiz-option" data-value="1">笛卡爾積膨脹</button>
+      <button class="quiz-option" data-value="2">遞歸過深</button>
+      <button class="quiz-option" data-value="3"> God Class</button>
+      <button class="quiz-option" data-value="4">引入耦合</button>
+    </div>
+    <div class="quiz-question" data-answer="4">
+      <p><strong>4.</strong> 以下哪種新增操作對 ifelse 版本的改動最大？</p>
+      <button class="quiz-option" data-value="1">新增一個工具方法</button>
+      <button class="quiz-option" data-value="2">新增一個常量</button>
+      <button class="quiz-option" data-value="3">新增一個配置項</button>
+      <button class="quiz-option" data-value="4">新增一種支付模式</button>
+    </div>
+    <div class="quiz-question" data-answer="2">
+      <p><strong>5.</strong> 橋接模式要解決的核心問題是？</p>
+      <button class="quiz-option" data-value="1">單一職責過重</button>
+      <button class="quiz-option" data-value="2">多維度獨立變化導致的類爆炸</button>
+      <button class="quiz-option" data-value="3">遞迴呼叫過深</button>
+      <button class="quiz-option" data-value="4">介面過多</button>
+    </div>
+  </div>
+
+  <div class="lesson-nav">
+    <span></span>
+    <a href="bridge-structure.html">下一節：橋接模式的結構與核心機制 →</a>
+  </div>
+
+  <div class="footer">
+    橋接模式 · 笛卡爾積膨脹 · design-pattern
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

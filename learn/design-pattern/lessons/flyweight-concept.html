@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>享元模式核心概念：內部狀態、外部狀態與享元工廠</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>享元模式核心概念：內部狀態、外部狀態與享元工廠</h1>
+<p class="meta">design-pattern › flyweight › flyweight-concept</p>
+
+<blockquote>
+  <strong>學習目標</strong>：理解享元模式「共享內部狀態、外部狀態分離」的意圖，以及享元工廠在服務端與客戶端兩種形態中的角色。
+</blockquote>
+
+<h2>什麼是享元模式</h2>
+
+<p>享元模式（Flyweight Pattern）的核心意圖一句話：<strong>共享通用對象，減少內存使用、提升系統訪問效率</strong>。</p>
+
+<p>「享元」這個名字來自 flyweight——拳擊裡的「蠅量級」，體重最輕的量級。模式的核心就是把對象做到「盡量輕」：不變的部分只保留一份，讓多個地方共用；會變的部分從外部傳入，不佔共享對象的空間。</p>
+
+<h2>三個核心概念</h2>
+
+<h3>內部狀態（Intrinsic State）</h3>
+
+<p>內部狀態是<strong>不隨環境改變的、可共享的</strong>數據。回到秒殺場景：活動名稱「圖書嗨樂」、活動描述「第二期」、起止時間——這些信息從活動上線到結束不會變，所有用戶看到的都一樣。</p>
+
+<p>內部狀態的關鍵特徵：</p>
+<ul>
+  <li>與具體使用場景無關——不管是誰查詢，都返回相同的值</li>
+  <li>可以安全地被多個地方共享</li>
+  <li>存儲在享元對象內部</li>
+</ul>
+
+<h3>外部狀態（Extrinsic State）</h3>
+
+<p>外部狀態是<strong>隨環境改變的、不能共享的</strong>數據。秒殺場景中，庫存（已售數量）每個時刻都在變化，每個用戶查詢到的值可能不同。</p>
+
+<p>外部狀態的關鍵特徵：</p>
+<ul>
+  <li>與具體使用場景相關——不同的調用方可能拿到不同的值</li>
+  <li>不能被共享，必須由調用方在使用時傳入或單獨獲取</li>
+  <li>存儲在享元對象外部（比如 Redis 裡）</li>
+</ul>
+
+<h3>享元工廠（Flyweight Factory）</h3>
+
+<p>享元工廠是管理共享對象的核心組件。它用一個 Map 結構，以固定 id 為 key，緩存已經創建過的享元對象。查詢時先查 Map，命中直接返回，未命中才創建新的並放入 Map。</p>
+
+<pre><code>public class ActivityFactory {
+    private static Map&lt;Long, Activity&gt; activityMap = new HashMap&lt;&gt;();
+
+    public static Activity getActivity(Long id) {
+        Activity activity = activityMap.get(id);
+        if (activity == null) {
+            // 首次查詢：創建固定信息並緩存
+            activity = new Activity();
+            activity.setId(10001L);
+            activity.setName("圖書嗨樂");
+            activity.setDesc("圖書優惠券分享激勵分享活動第二期");
+            activity.setStartTime("2024-06-01");
+            activity.setStopTime("2024-06-30");
+            activityMap.put(id, activity);
+        }
+        return activity;  // 第二次及以後直接返回緩存
+    }
+}</code></pre>
+
+<p>享元工廠的職責：</p>
+<ul>
+  <li><strong>管理共享</strong>：確保同一個 id 的對象只創建一次</li>
+  <li><strong>規避線程安全</strong>：在多線程環境下，工廠需要保證 Map 操作的原子性（可以使用 <code>ConcurrentHashMap</code> 或 synchronized）</li>
+  <li><strong>提供統一入口</strong>：調用方不需要知道對象是新建的還是緩存的</li>
+</ul>
+
+<h2>兩種使用形態</h2>
+
+<p>享元模式在實際開發中有兩種典型的使用形態：</p>
+
+<table>
+  <thead>
+    <tr><th>形態</th><th>場景</th><th>共享什麼</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>服務端共享</strong></td><td>數據庫連接池、線程池</td><td>連接/線程對象本身</td></tr>
+    <tr><td><strong>客戶端共享</strong></td><td>遊戲地圖渲染（樹木、花草）</td><td>渲染素材（減少內存佔用）</td></tr>
+  </tbody>
+</table>
+
+<p>服務端場景：數據庫連接池就是典型的享元——連接對象是昂貴的（TCP 握手、認證），不可能每次查詢都新建。連接池用 Map 管理一批連接，用完歸還、下次複用。</p>
+
+<p>客戶端場景：遊戲地圖上有幾千棵樹，每棵樹的模型是一樣的（內部狀態），但位置不同（外部狀態）。如果每棵樹都存一份完整模型，內存很快就爆了。享元模式讓所有樹共用一個模型對象，位置信息在渲染時傳入。</p>
+
+<h2>享元 vs 緩存：有什麼不同？</h2>
+
+<p>你可能覺得「這不就是緩存嗎？」確實很像，但有一個關鍵區別：</p>
+
+<ul>
+  <li><strong>通用緩存</strong>（如 Redis）：緩存什麼都行，鍵值對任意組合，目標是減少 IO</li>
+  <li><strong>享元模式</strong>：從設計層面把「共享」和「分離」明確分開，工廠是模式的核心組件，目標是減少對象創建和內存佔用</li>
+</ul>
+
+<p>在實踐中，享元模式的 Map 可以是內存 Map，也可以是 Redis——取決於對象是否需要跨進程共享。但不管存儲在哪裡，核心思想是一樣的：<strong>用固定 id 存放和獲取對象，避免重複構建</strong>。</p>
+
+<h2>小結</h2>
+
+<p>享元模式的三個核心概念：內部狀態（可共享的不變數據）、外部狀態（不能共享的變化數據）、享元工廠（管理共享的 Map + id 存取機制）。下一課我們會用秒殺場景，把這三個概念落地到完整的重構代碼中。</p>
+
+<div class="quiz" data-step="flyweight-concept">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 享元模式的核心意圖是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">減少 ifelse 分支數量</button>
+  <button class="quiz-option" data-correct="true">共享通用對象，減少內存使用、提升訪問效率</button>
+  <button class="quiz-option" data-correct="false">實現對象的延遲加載</button>
+  <button class="quiz-option" data-correct="false">把複雜對象的創建過程分離</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 以下哪個屬於享元模式的「內部狀態」？</strong></p>
+  <button class="quiz-option" data-correct="false">數據庫連接的當前使用狀態</button>
+  <button class="quiz-option" data-correct="false">遊戲角色的實時座標</button>
+  <button class="quiz-option" data-correct="true">數據庫連接的 URL 和認證信息</button>
+  <button class="quiz-option" data-correct="false">用戶的購買數量</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 享元工廠的核心機制是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">用反射創建對象實例</button>
+  <button class="quiz-option" data-correct="true">用 Map 結構以固定 id 緩存共享對象，查詢時先查 Map 再決定是否新建</button>
+  <button class="quiz-option" data-correct="false">用工廠方法根據參數返回不同子類</button>
+  <button class="quiz-option" data-correct="false">用單例模式確保只有一個實例</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 數據庫連接池為什麼是享元模式的典型場景？</strong></p>
+  <button class="quiz-option" data-correct="false">因為連接池使用了 Map 數據結構</button>
+  <button class="quiz-option" data-correct="true">因為連接對象創建成本高（TCP + 認證），複用比新建划算</button>
+  <button class="quiz-option" data-correct="false">因為連接池減少了 SQL 查詢的次數</button>
+  <button class="quiz-option" data-correct="false">因為連接池可以自動重連</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 享元模式和通用緩存（如 Redis）的主要區別是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">享元模式只能在單機使用</button>
+  <button class="quiz-option" data-correct="false">Redis 不支持 Map 結構</button>
+  <button class="quiz-option" data-correct="true">享元從設計層面明確分離共享和變化，工廠是模式的核心組件</button>
+  <button class="quiz-option" data-correct="false">Redis 的性能比享元工廠差</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

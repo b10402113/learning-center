@@ -1,0 +1,34 @@
+---
+id: abstract-factory-scenario
+title: Redis 雙集群升級場景
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#三、案例场景模拟]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#四、用一坨代码实现]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+<LearningGoal>
+理解 Redis 單機升級為雙集群的業務場景，看清「類型欄位 + ifelse」壞味道的痛點，為重構做鋪墊。
+</LearningGoal>
+
+## Lesson
+
+系統早期 QPS 低、並發小，一台 Redis 機器綽綽有餘。`RedisUtils` 工具類封裝了 `get`、`set`、`set-with-timeout`、`del` 四個方法，各業務系統都依賴它。簡單、乾淨、夠用。
+
+但用戶量暴漲後，單機扛不住了。架構組決定升級為 Redis 集群，而且是兩套：EGM 集群做主、IIR 集群做備，災備切換時需要無感切到另一套。問題在於這兩套集群的方法名各異——EGM 用 `gain`、`delete`、`setEx`，IIR 用 `get`、`set`、`setExpire`。做的事完全一樣，但接口不同。而你的業務系統已經寫死了 `RedisUtils.get()`、`RedisUtils.set()`……數十個服務都依賴這些方法名，不可能全部改一遍。
+
+最直覺的做法是在接口裡加 `redisType` 參數，實現類裡用 if 判斷走哪套集群：`if (1 == redisType) return egm.gain(key); else if (2 == redisType) return iir.get(key);`。JUnit 測試跑得通，功能完全正確。但幾個致命問題馬上浮現。
+
+方法簽名被汙染——原本 `get(String key)` 變成 `get(String key, int redisType)`，數十個服務全部要改。每個方法都有一坨 ifelse，新增第三套集群時每個方法都要加分支。EGM、IIR、RedisUtils 三個對象全部塞在 `CacheServiceImpl` 裡，不管你用哪套集群，另外兩套的依賴都編譯進來了。測試也困難——想單獨測 IIR 的 set，得先傳對 type 值。
+
+這些問題的根因是：**把「選擇哪套集群」的邏輯和「具體操作」的邏輯混在了一起**。選擇應該是一次性的（在啟動或注入時決定），而不是每次調用都判斷。下一節會用抽象工廠的思路，把這個選擇抽出去，讓原類零修改就能接入兩套集群。
+
+## Sources
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#三、案例场景模拟]]
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#四、用一坨代码实现]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/abstract-factory-scenario.html)

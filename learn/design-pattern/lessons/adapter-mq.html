@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MQ 消息體適配 — 設計模式：適配器模式</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>MQ 消息體適配：同值異名怎麼辦</h1>
+<p class="meta">設計模式 · 適配器模式 · Step 2/4</p>
+
+<h2>學習目標</h2>
+<p>能用字段映射 + 反射的機制，把三種結構不同的 MQ 消息體適配到統一的 RebateInfo，並說出這比「每個 MQ 建一個消費類」好在哪。</p>
+
+<h2>統一的目標結構</h2>
+
+<p>適配器的第一步是定義「你想要什麼」。在行銷系統中，不管你收到哪種 MQ 消息，最終關心的都是四個欄位：</p>
+
+<table>
+  <tr><th>欄位</th><th>含義</th><th>例子</th></tr>
+  <tr><td><code>userId</code></td><td>用戶 ID</td><td>100001</td></tr>
+  <tr><td><code>bizId</code></td><td>業務 ID（訂單號/開戶號）</td><td>ORDER_001</td></tr>
+  <tr><td><code>bizTime</code></td><td>業務時間</td><td>2026-09-02</td></tr>
+  <tr><td><code>desc</code></td><td>業務描述</td><td>開戶獎勵</td></tr>
+</table>
+
+<p>我們把這個統一結構叫做 <code>RebateInfo</code>（返利信息）。不管外面的 MQ 欄位叫 <code>number</code>、<code>uid</code> 還是 <code>uId</code>，適配器負責把它們全部映射到 <code>RebateInfo</code> 的四個欄位。</p>
+
+<h2>壞味道：每個 MQ 一個手工類</h2>
+
+<pre><code>// 為 create_account 寫一個類
+public class create_accountMqService {
+    public void onMessage(String msg) {
+        JSONObject json = JSON.parseObject(msg);
+        RebateInfo info = new RebateInfo();
+        info.setUserId(json.getString("number"));   // number → userId
+        info.setBizId(json.getString("number"));     // number → bizId
+        info.setBizTime(json.getString("accountDate")); // accountDate → bizTime
+        info.setDesc(json.getString("desc"));
+        // ... 業務處理
+    }
+}
+
+// 為 OrderMq 寫另一個類
+public class OrderMqService {
+    public void onMessage(String msg) {
+        JSONObject json = JSON.parseObject(msg);
+        RebateInfo info = new RebateInfo();
+        info.setUserId(json.getString("uid"));        // uid → userId
+        info.setBizId(json.getString("orderId"));     // orderId → bizId
+        info.setBizTime(json.getString("createOrderTime")); // createOrderTime → bizTime
+        // ... 業務處理
+    }
+}</code></pre>
+
+<blockquote class="bad-code">
+  壞味道：每個 MQ 一個類，每個類做的事情幾乎一樣——解析 JSON、取出欄位、映射到 RebateInfo。差別只在欄位名不同。新增一個 MQ 就要複製貼上改欄位名，代碼量線性增長。
+</blockquote>
+
+<h2>適配器的做法：映射表 + 反射</h2>
+
+<p>核心思路：把「哪個源欄位對應哪個目標欄位」抽成一張映射表（link），讓適配器根據這張表自動完成翻譯。</p>
+
+<h3>第一步：定義映射表</h3>
+
+<p>對 <code>create_account</code> 消息，映射表是：</p>
+
+<pre><code>// link: 源欄位名 → 目標欄位名
+Map&lt;String, String&gt; link = new HashMap&lt;&gt;();
+link.put("number", "userId");      // number → userId
+link.put("number", "bizId");       // number → bizId（同源欄位映射到不同目標）
+link.put("accountDate", "bizTime");// accountDate → bizTime
+link.put("desc", "desc");          // desc → desc（名字相同也要映射）</code></pre>
+
+<p>對 <code>OrderMq</code> 消息：</p>
+
+<pre><code>Map&lt;String, String&gt; link = new HashMap&lt;&gt;();
+link.put("uid", "userId");         // uid → userId
+link.put("orderId", "bizId");      // orderId → bizId
+link.put("createOrderTime", "bizTime"); // createOrderTime → bizTime</code></pre>
+
+<h3>第二步：MQAdapter 用反射自動映射</h3>
+
+<p><code>MQAdapter.filter</code> 方法接收原始消息（JSON 字符串或 Map）和映射表，用 Java 反射自動把值塞進 <code>RebateInfo</code>：</p>
+
+<pre><code>public class MQAdapter {
+    // 接收 JSON 字符串
+    public static RebateInfo filter(String strJson, Map&lt;String, String&gt; link) {
+        Map&lt;String, String&gt; map = JSON.parseObject(strJson, Map.class);
+        return filter(map, link);
+    }
+
+    // 接收 Map（核心邏輯）
+    public static RebateInfo filter(Map&lt;String, String&gt; map, Map&lt;String, String&gt; link) {
+        RebateInfo info = new RebateInfo();
+        // 遍歷映射表
+        for (Map.Entry&lt;String, String&gt; entry : link.entrySet()) {
+            String srcField = entry.getKey();   // 源欄位名（如 "uid"）
+            String dstField = entry.getValue(); // 目標欄位名（如 "userId"）
+            // 從原始 Map 取值
+            String value = map.get(srcField);
+            // 用反射調用 set 方法
+            Method method = RebateInfo.class.getMethod(
+                "set" + dstField.substring(0, 1).toUpperCase() + dstField.substring(1),
+                String.class
+            );
+            method.invoke(info, value);
+        }
+        return info;
+    }
+}</code></pre>
+
+<blockquote>
+  核心機制：映射表描述「源叫什麼、目標叫什麼」，反射負責自動調用 set 方法。新增一種 MQ？只需要定義一張新的映射表，不需要寫新的消費類。
+</blockquote>
+
+<h3>第三步：測試驗證</h3>
+
+<pre><code>// 測試 create_account 消息
+String json = "{\"number\":\"100001\",\"address\":\"北京\",\"accountDate\":\"2026-09-02\",\"desc\":\"開戶\"}";
+Map&lt;String, String&gt; link = new HashMap&lt;&gt;();
+link.put("number", "userId");
+link.put("number", "bizId");
+link.put("accountDate", "bizTime");
+link.put("desc", "desc");
+RebateInfo info = MQAdapter.filter(json, link);
+// info.userId = "100001", info.bizId = "100001", info.bizTime = "2026-09-02"
+
+// 測試 OrderMq 消息
+String json2 = "{\"uid\":\"100002\",\"sku\":\"商品A\",\"orderId\":\"ORDER_001\",\"createOrderTime\":\"2026-09-02\"}";
+Map&lt;String, String&gt; link2 = new HashMap&lt;&gt;();
+link2.put("uid", "userId");
+link2.put("orderId", "bizId");
+link2.put("createOrderTime", "bizTime");
+RebateInfo info2 = MQAdapter.filter(json2, link2);
+// info2.userId = "100002", info2.bizId = "ORDER_001", info2.bizTime = "2026-09-02"</code></pre>
+
+<p>同樣的 <code>MQAdapter.filter</code> 方法，傳入不同的映射表，就能處理不同的 MQ。業務代碼始終只面對 <code>RebateInfo</code>，不關心外面的 MQ 長什麼樣。</p>
+
+<h2>好處對比</h2>
+
+<table>
+  <tr><th></th><th>不使用適配器</th><th>使用適配器</th></tr>
+  <tr><td>新增一個 MQ</td><td>新增一個消費類（複製貼上改欄位名）</td><td>新增一張映射表</td></tr>
+  <tr><td>業務代碼</td><td>每個消費類裡都有解析邏輯</td><td>只面對 RebateInfo</td></tr>
+  <tr><td>欄位名變更</td><td>要改消費類的代碼</td><td>改映射表配置</td></tr>
+  <tr><td>可維護性</td><td>類數量線性增長，難以維護</td><td>映射表可配置化，容易管理</td></tr>
+</table>
+
+<h2>配置化的進一步演進</h2>
+
+<p>在實際業務中，映射表不需要寫死在代碼裡。可以放到配置文件或資料庫中，實現<strong>零代碼接入新 MQ</strong>：配好映射關係，適配器自動完成翻譯。這也是為什麼適配器常和代理模式搭配使用——代理類根據配置自動路由到正確的映射表。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+  MQ 消息體適配的核心 = 映射表描述欄位對應關係 + 反射自動調用 set 方法。新增 MQ 只需新增映射表，業務代碼零修改。
+</blockquote>
+
+<h2>自測題</h2>
+
+<div class="quiz" data-step="adapter-mq">
+  <p><strong>1. MQAdapter.filter 的核心機制是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 用 switch-case 判斷消息類型再分別處理</button>
+  <button class="quiz-option" data-correct="false">B. 用繼承讓每種 MQ 繼承一個基類</button>
+  <button class="quiz-option" data-correct="true">C. 遍歷映射表，用反射把源欄位的值賦給目標屬性</button>
+  <button class="quiz-option" data-correct="false">D. 用 XML 配置文件定義消息格式</button>
+
+  <p><strong>2. 統一消息體 RebateInfo 包含哪些欄位？</strong></p>
+  <button class="quiz-option" data-correct="false">A. userId, orderId, amount, status</button>
+  <button class="quiz-option" data-correct="true">B. userId, bizId, bizTime, desc</button>
+  <button class="quiz-option" data-correct="false">C. uid, number, uId, sku</button>
+  <button class="quiz-option" data-correct="false">D. message, timestamp, source, type</button>
+
+  <p><strong>3. 為什麼映射表可以放到配置文件或資料庫而不是寫死在代碼裡？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 因為 Java 反射不支持硬編碼</button>
+  <button class="quiz-option" data-correct="false">B. 因為配置文件性能更好</button>
+  <button class="quiz-option" data-correct="true">C. 因為映射關係是數據不是邏輯，配置化後新增 MQ 不需要改代碼</button>
+  <button class="quiz-option" data-correct="false">D. 因為配置文件可以被多個微服務共享</button>
+
+  <p><strong>4. 在 create_account 消息中，欄位 <code>number</code> 同時映射到了 RebateInfo 的哪兩個欄位？</strong></p>
+  <button class="quiz-option" data-correct="false">A. userId 和 bizTime</button>
+  <button class="quiz-option" data-correct="true">B. userId 和 bizId</button>
+  <button class="quiz-option" data-correct="false">C. bizId 和 desc</button>
+  <button class="quiz-option" data-correct="false">D. userId 和 desc</button>
+
+  <p><strong>5. 適配器模式常和代理模式搭配使用，原因是？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 代理模式可以提升適配器的性能</button>
+  <button class="quiz-option" data-correct="true">B. 代理類可以根據配置自動路由到正確的映射表，實現零代碼接入</button>
+  <button class="quiz-option" data-correct="false">C. 代理模式可以防止適配器被多次實例化</button>
+  <button class="quiz-option" data-correct="false">D. 代理模式可以把映射表緩存到內存中</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./adapter-concept.html">← 上一步：適配器的直覺</a>
+  <a href="./adapter-interface.html">下一步：接口適配 →</a>
+</div>
+
+<div class="footer">
+  設計模式 · 適配器模式 · Step 2/4
+</div>
+
+<script>
+document.querySelectorAll('.quiz').forEach(quiz => {
+  quiz.querySelectorAll('button.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        setTimeout(() => btn.classList.remove('wrong'), 800);
+      }
+    });
+  });
+});
+</script>
+
+</body>
+</html>

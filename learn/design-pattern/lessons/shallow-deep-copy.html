@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>淺拷貝 vs 深拷貝：clone() 的隱藏陷阱與選型邊界</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>淺拷貝 vs 深拷貝：clone() 的隱藏陷阱與選型邊界</h1>
+<p class="meta">design-pattern › prototype › shallow-deep-copy</p>
+
+<blockquote>
+  <strong>學習目標</strong>：理解 Object.clone() 預設的淺拷貝行為，能分辨淺拷貝與深拷貝的差異和風險，並說出原型模式的優缺點與何時不該用。
+</blockquote>
+
+<h2>淺拷貝：看起來複製了，其實沒有</h2>
+
+<p>回顧上一課的 <code>clone()</code>：</p>
+
+<pre><code>QuestionBank questionBank = (QuestionBank) super.clone();
+questionBank.choiceQuestionList = new ArrayList&lt;&gt;(this.choiceQuestionList);</code></pre>
+
+<p>注意第二行：我們手動把 <code>choiceQuestionList</code> 重新包了一個 <code>new ArrayList</code>。如果去掉這行會怎樣？</p>
+
+<p><code>super.clone()</code> 做的是<strong>淺拷貝（shallow copy）</strong>：它複製了對象本身的所有基本類型字段（String candidate、String number），但對於引用類型字段（List），它只複製了「引用」，不複製「引用指向的對象」。也就是說：</p>
+
+<pre><code>QuestionBank clone = (QuestionBank) super.clone();
+// clone.choiceQuestionList == this.choiceQuestionList  →  true！
+// 它們指向同一個 List 對象</code></pre>
+
+<p>如果你對 <code>clone.choiceQuestionList</code> 做 shuffle，原型的 <code>choiceQuestionList</code> 也會被打亂——因為它們是同一個 List。更嚴重的情況：如果題目對象裡有嵌套的引用類型（比如選項 Map），淺拷貝意味著克隆體和原型共享這些嵌套對象。修改一個的選項，另一個也跟著變。</p>
+
+<h2>深拷貝：完全獨立的副本</h2>
+
+<p><strong>深拷貝（deep copy）</strong>不只複製對象本身，還遞迴複製所有引用指向的對象，直到遇到基本類型為止。深拷貝後，克隆體和原型完全獨立——修改任何一方都不會影響另一方。</p>
+
+<p>實現深拷貝的常見方式：</p>
+
+<table>
+  <tr><th>方式</th><th>做法</th><th>適用場景</th></tr>
+  <tr><td>手動克隆</td><td>在 clone() 裡逐個字段手動 new + 賦值</td><td>字段少、結構簡單</td></tr>
+  <tr><td>序列化/反序列化</td><td>將對象序列化為 byte[] 再反序列化回新對象</td><td>結構複雜、不想手動寫 clone 邏輯</td></tr>
+  <tr><td>JSON 轉換</td><td>toJSON() → fromJSON()</td><td>已有 JSON 工具鏈時最方便</td></tr>
+</table>
+
+<p>回看我們的試卷場景：<code>ArrayList.clone()</code> 複製了容器（新 List），但元素（ChoiceQuestion 對象）仍是同一批引用。ChoiceQuestion 裡的 <code>Map&lt;String,String&gt; option</code> 也共享同一個引用。如果只是 shuffle 和重建 Map（像 TopicRandomUtil 那樣替換引用），問題不大；但如果要直接修改已有的 Map 內容，就會波及原型。</p>
+
+<h2>循環引用：深拷貝的噩夢</h2>
+
+<p>如果對象圖中存在循環引用（A 持有 B 的引用，B 又持有 A 的引用），深拷貝會陷入無限遞迴。處理循環引用需要額外的 visited 機制或特殊序列化支持，這正是原型模式「深度使用時會變得異常麻煩」的原因。</p>
+
+<h2>原型模式的優缺點</h2>
+
+<h3>優點</h3>
+
+<ul>
+  <li><strong>便於克隆創建複雜對象</strong>：不需要從零構造，一次 clone 搞定</li>
+  <li><strong>避免重複初始化</strong>：I/O、RPC、DB 查詢只做一次，後續全是內存操作</li>
+  <li><strong>解耦</strong>：不需要與類中所屬的其他類耦合——克隆只關心自身</li>
+</ul>
+
+<h3>缺點</h3>
+
+<ul>
+  <li><strong>循環引用麻煩</strong>：對象圖有循環時，深拷貝的實現複雜度飆升</li>
+  <li><strong>深度克隆複雜</strong>：對象層次深、嵌套多時，手動實現 clone() 容易出錯</li>
+  <li><strong>使用頻率不高</strong>：日常業務中真正需要克隆複雜對象的場景並不常見</li>
+</ul>
+
+<h2>何時用、何時不用</h2>
+
+<blockquote class="good-code">
+  <strong>適用</strong>：對象創建成本高（涉及 I/O / RPC）+ 需要多份內容相似但有差異的副本 + 對象結構相對扁平（沒有深層嵌套或循環引用）。
+</blockquote>
+
+<blockquote class="bad-code">
+  <strong>慎用/不用</strong>：對象結構複雜且有循環引用；需要完全獨立的深拷貝但不願意承擔序列化開銷；只是為了「少寫一個 new」而克隆簡單對象——此時 new 的成本比實現 Cloneable 的維護成本低得多。
+</blockquote>
+
+<p>設計模式是整套思想，合理運用能提升架構質量。永遠不要硬湊設計模式，否則造成過渡設計與浪費的開發和維護成本。</p>
+
+<div class="lesson-nav">
+  <a href="./clone-in-practice.html">← 上一篇：原型模式重構</a>
+</div>
+
+<div class="footer">
+  <p>design-pattern › prototype › shallow-deep-copy</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+---
+id: mediator-components
+title: 中介者核心組件的分工與協作
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#代码实现]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#中介者模式模型结构]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+# 中介者核心組件的分工與協作
+
+## Learning goal
+
+<能畫出 SqlSession / DefaultSqlSession / SqlSessionFactory / SqlSessionFactoryBuilder / Configuration 五個組件的協作關係，並說出每個組件的職責。>
+
+## Lesson
+
+中介者由五個核心組件組成，各司其職。`SqlSession` 是業務方直接使用的接口，定義了 `selectOne`、`selectList`、`close` 三個方法——業務方只需要知道用 statement 字符串（命名空間 + 方法名）加參數來查詢，不需要知道連接怎麼來、SQL 怎麼執行、結果怎麼映射。
+
+`DefaultSqlSession` 是中介者的「心臟」，持有 `Connection` 和 `Map<String, XNode> mapperElement`，把 JDBC 細節全部藏在裡面。`selectOne` 按 statement 字符串從 mapperElement 取出對應的 XNode（包含 SQL 和映射信息），用 `prepareStatement` 執行查詢，再用 `resultSet2Obj` 把結果行轉成 Java 對象。結果映射的關鍵技術是 `ResultSetMetaData` 取列名，反射調用 setter——業務方完全不碰 Connection、PreparedStatement、ResultSet。statement 字符串的格式是 `namespace.id`（如 `org.itstack.demo.design.dao.IUserDao.queryUserInfoById`），對應 XML 裡的 SQL 定義。
+
+`SqlSessionFactory` 是工廠接口，`openSession()` 返回一個新的 `DefaultSqlSession`。`DefaultSqlSessionFactory` 持有 Configuration，每次 `openSession` 時從 Configuration 取出 connection 和 mapperElement 傳給 DefaultSqlSession。Configuration 在啟動時就已經構建好，工廠只是在每次查詢時「打開一個會話」。
+
+`SqlSessionFactoryBuilder` 是**最先被調用**的組件，負責三件事：解析 XML 配置（用 SAXReader 讀取 `mybatis-config-datasource.xml`，提取 dataSource 和 mappers）、建立連接（`Class.forName(driver) + DriverManager.getConnection`）、構建 Configuration（把 Connection 和 mapperElement 打包存進 Configuration）。mapperElement 的構建過程：解析每個 Mapper XML（如 `User_Mapper.xml`），用正則 `#{(.*?)}` 把佔位符替換成 `?`，把解析結果（namespace、id、sql、parameterType、resultType）按 `namespace.id` 格式存進 Map。
+
+串起來的完整啟動鏈路：`Resources.getResourceAsReader` 加載配置 → `new SqlSessionFactoryBuilder().build(reader)` 構建工廠（解析 XML + 建連接 + 構建 Configuration）→ `sqlMapper.openSession()` 開啟會話 → `session.selectOne(statement, param)` 查詢 → finally 中 close。這跟用 Mybatis 的寫法完全一樣。一句話記法：Builder 解析配置 → 工廠打開 Session → Session 屏蔽 JDBC → 業務方只傳 statement + 參數。
+
+## Course
+
+[↗ 課程頁面](../../lessons/mediator-components.html)
+
+## Sources
+
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#代码实现]]
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#中介者模式模型结构]]

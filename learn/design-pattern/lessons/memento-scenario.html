@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>配置回滾場景：從一坨代碼到模式重構</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>配置回滾場景：從一坨代碼到模式重構</h1>
+<p class="meta">design-pattern › memento › memento-scenario</p>
+
+<blockquote>
+  <strong>學習目標</strong>：用系統上線配置回滾的真實場景，體驗「一坨代碼 → 備忘錄模式重構」的完整過程，理解重構前後結構差異。
+</blockquote>
+
+<h2>場景：系統上線，配置改錯了</h2>
+
+<p>你在一個大廠做後端，系統要上線了。上線前要改配置文件——IP 地址、端口號、連接池大小，改完部署。結果配置改錯了，線上服務起不來。你需要緊急把配置退回上一次正常的版本。</p>
+
+<p>這個需求聽起來很簡單：記錄每次改過的配置，需要的時候拿回來就行。但怎麼「記錄」和「拿回來」，正是備忘錄模式要解決的問題。</p>
+
+<h2>場景細節</h2>
+
+<p>大廠的配置管理通常要求：</p>
+
+<ul>
+  <li><strong>線上與本地隔離</strong>：配置文件不跟代碼一起提交到 Git，而是存在線上配置中心</li>
+  <li><strong>每次變更都記錄</strong>：版本號、時間、MD5、內容、操作人，五要素缺一不可</li>
+  <li><strong>緊急回滾</strong>：線上出問題時，能一鍵退回到某個歷史版本</li>
+  <li><strong>系統隨配置一起回滾</strong>：回滾不只是改文件，有時還要重啟服務讓新配置生效</li>
+</ul>
+
+<p>我們聚焦在「記錄版本 + 支持回滾」這件事上。每次配置變更，我們把當前的完整配置狀態存一份快照；需要回滾時，從快照列表裡取出某個版本的配置，覆蓋當前配置。</p>
+
+<h2>一把梭實現：把所有邏輯塞進一個方法</h2>
+
+<p>最直接的寫法是怎樣的？在方法裡順序處理：存配置、查歷史、回滾配置。</p>
+
+<pre><code>public class ConfigManager {
+    private ConfigFile currentConfig;
+    private List&lt;ConfigFile&gt; history = new ArrayList&lt;&gt;();
+
+    // 保存配置
+    public void save(ConfigFile config) {
+        currentConfig = config;
+        history.add(config);
+    }
+
+    // 回滾到上一個版本
+    public ConfigFile undo() {
+        if (history.size() &gt; 1) {
+            history.remove(history.size() - 1);
+            return history.get(history.size() - 1);
+        }
+        return currentConfig;
+    }
+
+    // 按版本號取
+    public ConfigFile getVersion(String versionNo) {
+        for (ConfigFile c : history) {
+            if (versionNo.equals(c.getVersionNo())) return c;
+        }
+        return null;
+    }
+}</code></pre>
+
+<blockquote class="bad-code">
+  <strong>壞味道</strong>：ConfigManager 同時做了三件事——管理當前配置、管理歷史列表、處理回滾邏輯。如果未來要加 redo（前進）、按時間範圍查詢、導出歷史，全都要往這個類裡塞。
+</blockquote>
+
+<p>幾個問題：</p>
+
+<ul>
+  <li><strong>職責混雜</strong>：存配置、查歷史、回滾，三件事都混在一個方法裡</li>
+  <li><strong>回滾邏輯暴露</strong>：undo 方法直接操作 list，如果換一種存儲結構（比如 Map），undo 邏輯要重寫</li>
+  <li><strong>配置物件被直接暴露</strong>：history 直接存 ConfigFile，ConfigFile 的內部結構完全暴露在外面</li>
+  <li><strong>難以擴展</strong>：加 redo？加版本合併？每加一個功能就要改 ConfigManager</li>
+</ul>
+
+<h2>備忘錄模式重構：四個角色各司其職</h2>
+
+<p>備忘錄模式把這件事拆成四個角色：</p>
+
+<table>
+  <thead>
+    <tr><th>角色</th><th>職責</th><th>類比</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>ConfigFile</td><td>被保存的狀態（原物件）</td><td>遊戲角色</td></tr>
+    <tr><td>ConfigMemento</td><td>快照（備忘錄）</td><td>存檔檔</td></tr>
+    <tr><td>ConfigOriginator</td><td>生成快照、還原快照（記錄者）</td><td>遊戲存檔系統</td></tr>
+    <tr><td>Admin</td><td>保存多個快照、提供 undo/redo/get（管理者）</td><td>存檔管理器</td></tr>
+  </tbody>
+</table>
+
+<p>重構後的結構：</p>
+
+<ul>
+  <li><strong>ConfigFile 不動</strong>：它還是那個配置類，不暴露任何內部狀態</li>
+  <li><strong>ConfigMemento 包裝 ConfigFile</strong>：備忘錄把原物件包起來，作為快照的載體</li>
+  <li><strong>ConfigOriginator 負責存檔和讀檔</strong>：<code>saveMemento()</code> 把當前狀態包成快照交出去；<code>getMemento(memento)</code> 把快照裡的狀態還原回來</li>
+  <li><strong>Admin 負責管理歷史</strong>：用 List + Map 存多個快照，提供 undo（回滾）、redo（前進）、get（按版本取）</li>
+</ul>
+
+<p>對比一把梭版本：</p>
+
+<ul>
+  <li>一把梭：ConfigManager 同時管配置、管歷史、管回滾，三件事混在一起</li>
+  <li>重構後：ConfigFile 管狀態、ConfigMemento 管快照、ConfigOriginator 管存取、Admin 管歷史——每個類只做一件事</li>
+</ul>
+
+<h2>測試驗證</h2>
+
+<p>測試類連續保存四份配置（1000001 到 1000004，內容各不相同），然後執行：</p>
+
+<ol>
+  <li>undo 一次 → 回到 1000003</li>
+  <li>再 undo 一次 → 回到 1000002</li>
+  <li>redo 一次 → 前進到 1000003</li>
+  <li>get("1000002") → 定向取回 1000002</li>
+</ol>
+
+<p>每一步都返回正確的 ConfigFile 物件，exit code 0。回滾、前進、定向取都符合預期。</p>
+
+<h2>小結</h2>
+
+<p>配置回滾場景展示了一個典型的備忘錄需求：保存歷史狀態、支持回滾和恢復。一把梭的寫法把所有邏輯塞在一起，難以維護和擴展；備忘錄模式把這件事拆成四個角色，每個角色只做一件事。下一課我們會詳細拆解這四個角色的分工邏輯。</p>
+
+<div class="quiz" data-step="memento-scenario">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 配置回滾場景中，「五要素」指的是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">文件名、文件大小、MD5、路徑、權限</button>
+  <button class="quiz-option" data-correct="true">版本號、時間、MD5、內容、操作人</button>
+  <button class="quiz-option" data-correct="false">IP 地址、端口號、連接池大小、超時時間、重試次數</button>
+  <button class="quiz-option" data-correct="false">備份路徑、備份頻率、備份大小、備份狀態、備份人</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 一把梭 ConfigManager 的「壞味道」是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">代碼行數太少，不夠靈活</button>
+  <button class="quiz-option" data-correct="true">三件事（存配置、管歷史、回滾邏輯）混在一個類裡</button>
+  <button class="quiz-option" data-correct="false">用了 ArrayList 而不是 LinkedList</button>
+  <button class="quiz-option" data-correct="false">undo 方法沒有處理空指標異常</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 備忘錄模式中，誰負責「生成快照」？</strong></p>
+  <button class="quiz-option" data-correct="false">ConfigFile（原物件自己）</button>
+  <button class="quiz-option" data-correct="true">ConfigOriginator（記錄者）</button>
+  <button class="quiz-option" data-correct="false">Admin（管理者）</button>
+  <button class="quiz-option" data-correct="false">ConfigMemento（備忘錄）</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 重構後 ConfigFile 為什麼不用改動？</strong></p>
+  <button class="quiz-option" data-correct="false">因為它已經是完美設計</button>
+  <button class="quiz-option" data-correct="true">因為備忘錄模式的核心就是在不改原物件的前提下保存狀態</button>
+  <button class="quiz-option" data-correct="false">因為 ConfigFile 沒有內部狀態需要保存</button>
+  <button class="quiz-option" data-correct="false">因為 Java 的 class 不允許被繼承</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 測試中 undo → undo → redo → get("1000002") 的結果是？</strong></p>
+  <button class="quiz-option" data-correct="false">回到 1000004（redo 覆蓋了 undo）</button>
+  <button class="quiz-option" data-correct="true">得到 ConfigFile 版本 1000002</button>
+  <button class="quiz-option" data-correct="false">返回 null（get 找不到）</button>
+  <button class="quiz-option" data-correct="false">拋出 IndexOutOfBoundsException</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

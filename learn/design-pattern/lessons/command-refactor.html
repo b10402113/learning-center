@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>三層重構：命令、實現者、調用者 — 命令模式</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="lesson-number">Lesson 3/3 · 命令模式</div>
+      <h1>三層重構：命令、實現者、調用者</h1>
+      <div class="lesson-meta">Node: command · Step 3/3</div>
+    </header>
+
+    <div class="learning-goal">
+      <h2>學習目標</h2>
+      <p>掌握命令模式五要素的 Java 落地寫法，能說出命令/實現者/調用者三層各自的職責邊界，並用測試輸出印證「請求與實現解耦」的收益。</p>
+    </div>
+
+    <section>
+      <h2>工程結構：三大塊</h2>
+      <p>重構後的工程按三大塊組織：</p>
+      <table>
+        <thead>
+          <tr><th>包</th><th>放什麼</th><th>對應角色</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>cook</code></td><td>實現者接口 + 四個廚師實現</td><td>廚師（ Receiver）</td></tr>
+          <tr><td><code>cuisine</code></td><td>命令接口 + 四個菜品命令</td><td>菜品（Command）</td></tr>
+          <tr><td>外層</td><td>調用者 <code>XiaoEr</code></td><td>小二（Invoker）</td></tr>
+        </tbody>
+      </table>
+      <p>拆解後可非常方便地擴展菜品與廚師，對調用者保持鬆耦合。</p>
+    </section>
+
+    <section>
+      <h2>第一步：抽象命令 ICuisine</h2>
+      <p>抽象命令只聲明一個接口方法——<code>cook()</code>：</p>
+      <pre><code>public interface ICuisine {
+    void cook();
+}</code></pre>
+      <p>這是「菜品」的公共接口。所有具體菜品都實現這個接口，承諾「我能烹飪」。</p>
+    </section>
+
+    <section>
+      <h2>第二步：具體菜品命令</h2>
+      <p>每個具體菜品在構造時注入對應的廚師（實現者），在 <code>cook()</code> 中調用廚師的烹飪方法：</p>
+      <pre><code>public class GuangDongCuisine implements ICuisine {
+    private ICook cook;
+
+    public GuangDongCuisine(ICook cook) {
+        this.cook = cook;
+    }
+
+    @Override
+    public void cook() {
+        cook.doCooking();
+    }
+}</code></pre>
+      <p>四個菜品（廣東、四川、江蘇、山東）結構相同，只是注入的廚師不同。這就是「命令實現 + 實現者」兩兩組合形成具體命令對象。</p>
+    </section>
+
+    <section>
+      <h2>第三步：抽象實現者 ICook</h2>
+      <pre><code>public interface ICook {
+    void doCooking();
+}</code></pre>
+      <p>這是「廚師」的公共接口。每個具體廚師知道自己怎麼烹飪。</p>
+    </section>
+
+    <section>
+      <h2>第四步：具體廚師</h2>
+      <pre><code>public class GuangDongCook implements ICook {
+    @Override
+    public void doCooking() {
+        System.out.println("廣東菜廚師，烹飪粵菜");
+    }
+}</code></pre>
+      <p>四個廚師（廣東、四川、江蘇、山東）各自實現 <code>doCooking()</code>，打印烹飪日誌。擴展新廚師只需加一個新類，不用動其他代碼。</p>
+    </section>
+
+    <section>
+      <h2>第五步：調用者 XiaoEr</h2>
+      <pre><code>public class XiaoEr {
+    private List&lt;ICuisine&gt; cuisineList = new ArrayList&lt;&gt;();
+
+    public void order(ICuisine cuisine) {
+        cuisineList.add(cuisine);
+    }
+
+    public synchronized void placeOrder() {
+        for (ICuisine cuisine : cuisineList) {
+            cuisine.cook();
+        }
+        cuisineList.clear();
+    }
+}</code></pre>
+      <p>小二持有 <code>List&lt;ICuisine&gt;</code>，<code>order()</code> 添加菜品、<code>placeOrder()</code> 遍歷逐個執行後清空。調用者完全不關心具體是哪個廚師在做——它只持有命令對象。</p>
+    </section>
+
+    <section>
+      <h2>測試驗證</h2>
+      <p>測試類以「菜系 + 廚師」組合創建四個命令對象，再依次點單、下單：</p>
+      <pre><code>XiaoEr xiaoEr = new XiaoEr();
+xiaoEr.order(new GuangDongCuisine(new GuangDongCook()));
+xiaoEr.order(new SiChuanCuisine(new SiChuanCook()));
+xiaoEr.order(new JiangSuCuisine(new JiangSuCook()));
+xiaoEr.order(new ShanDongCuisine(new ShanDongCook()));
+xiaoEr.placeOrder();</code></pre>
+      <p>輸出：</p>
+      <pre><code>廣東菜廚師，烹飪粵菜
+四川菜廚師，烹飪川菜
+江蘇菜廚師，烹飪蘇菜
+山東菜廚師，烹飪魯菜</code></pre>
+      <p>每個具體命令都擁有一個對應實現類，可自由組合。點單把四種菜品對象添加給小二，下單等於把菜單傳遞給廚師。</p>
+    </section>
+
+    <section>
+      <h2>收益 vs 代價</h2>
+      <table>
+        <thead>
+          <tr><th>維度</th><th>命令模式</th><th>一把梭</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>加新菜</td><td>加一個類，不動其他代碼</td><td>改 order() 加 else if</td></tr>
+          <tr><td>換廚師</td><td>加一個廚師類，菜品類不變</td><td>改 order() 裡的描述</td></tr>
+          <tr><td>撤銷</td><td>命令加 undo() 方法</td><td>很難實現</td></tr>
+          <tr><td>類數量</td><td>很多（每個菜 + 每個廚師各一個類）</td><td>只有一個類</td></tr>
+        </tbody>
+      </table>
+      <p>代價是在各種命令與實現組合下會擴展出很多實現類，需要專門管理。但對於菜品穩定、需要靈活組合的場景，命令模式的收益遠大於代價。</p>
+    </section>
+
+    <section>
+      <h2>一句話記住</h2>
+      <blockquote>命令模式的三層拆分讓邏輯具備單一職責、便於擴展，代價是實現類膨脹。</blockquote>
+    </section>
+
+    <!-- Quiz -->
+    <section class="quiz">
+      <h3>自我檢測</h3>
+      <div class="quiz-question">
+        <p>Q1. 命令模式的五要素中，「調用者」的職責是？</p>
+        <ul class="quiz-options" data-correct="2">
+          <li data-index="0">聲明執行命令的接口方法</li>
+          <li data-index="1">實現具體的烹飪邏輯</li>
+          <li data-index="2">持有命令列表，統一觸發執行</li>
+          <li data-index="3">定義菜品的公共接口</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q2. 重構後要加一道新菜（比如湘菜），需要改哪些文件？</p>
+        <ul class="quiz-options" data-correct="1">
+          <li data-index="0">改 XiaoEr 類</li>
+          <li data-index="1">只加一個新的湘菜菜品类和一個新的湘菜廚師類</li>
+          <li data-index="2">改 ICuisine 接口</li>
+          <li data-index="3">改所有已有的菜品類</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q3. 命令模式的主要代價是什麼？</p>
+        <ul class="quiz-options" data-correct="0">
+          <li data-index="0">命令與實現組合多導致實現類膨脹</li>
+          <li data-index="1">運行速度比 ifelse 慢</li>
+          <li data-index="2">不支持多線程</li>
+          <li data-index="3">無法實現撤銷功能</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+    </section>
+
+    <div class="source">
+      <strong>主要來源：</strong>設計模式 — 命令模式模型結構、代碼實現、測試驗證、總結
+    </div>
+
+    <div class="follow-up">
+      <p>有任何不清楚的地方？問你的老師！</p>
+      <p class="cta">恭喜完成命令模式三步學習！建議跑 /tackle command-concept 來驗證掌握程度。</p>
+    </div>
+
+    <nav class="nav">
+      <a href="command-monolith.html">← 上一課：一把梭實現</a>
+      <span></span>
+    </nav>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

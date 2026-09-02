@@ -1,0 +1,93 @@
+---
+id: template-method-structure
+title: 抽象類與子類實現
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#定义执行顺序的抽象类]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#模板模式测试验证]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+# 抽象類與子類實現
+
+## Learning goal
+
+說出 NetMall 抽象類的骨架方法與三個抽象方法如何控制執行順序，並對比三個電商子類的差異實現。
+
+## Lesson
+
+NetMall 是整個結構的核心——它不是一個「能用的類」，而是一個骨架定義者。它的職責只有一個：把「生成推廣海報」的三步執行順序釘死。
+
+### NetMall 抽象類
+
+```java
+public abstract class NetMall {
+    protected String uId;
+    protected String uPwd;
+
+    public NetMall(String uId, String uPwd) {
+        this.uId = uId;
+        this.uPwd = uPwd;
+    }
+
+    // 模板方法 —— 固定三步執行順序
+    public String generateGoodsPoster(String skuUrl) {
+        if (!login(uId, uPwd)) {
+            return null;  // 登錄失敗，直接返回
+        }
+        Map<String, String> goodsInfo = reptile(skuUrl);
+        return createBase64(goodsInfo);
+    }
+
+    // 三個抽象方法 —— 由子類實現
+    protected abstract boolean login(String uId, String uPwd);
+    protected abstract Map<String, String> reptile(String skuUrl);
+    protected abstract String createBase64(Map<String, String> goodsInfo);
+}
+```
+
+注意三件事：
+
+1. **模板方法 `generateGoodsPoster` 是 `public` 的**——客戶端只調用這一個方法，它內部按順序調用三步
+2. **三個抽象方法是 `protected abstract` 的**——不暴露給外部，只讓子類實現
+3. **骨架裡有控制流**——`if (!login(...)) return null`，登錄失敗就終止流程，這是骨架自帶的防禦邏輯
+
+客戶端的調用路徑：`generateGoodsPoster()` → `login()` → `reptile()` → `createBase64()`，三步的先後順序由父類的骨架方法控制，子類完全無法改變。
+
+### 三個子類的差異
+
+三個電商子類都繼承 NetMall，各自實現三個抽象方法。差異體現在：
+
+| | JDNetMall（京東） | TaoBaoNetMall（淘寶） | DangDangNetMall（當當） |
+| --- | --- | --- | --- |
+| login() | 模擬京東登錄 | 模擬淘寶登錄 | 模擬當當登錄 |
+| reptile() | 正則解析京東頁面 | 正則解析淘寶頁面 | 正則解析當當頁面 |
+| createBase64() | 京東商品 JSON → base64 | 淘寶商品 JSON → base64 | 當當商品 JSON → base64 |
+| 商品價格 | 5999.00 | 4799.00 | 4548.00 |
+
+以京東子類為例：`login()` 模擬京東登錄返回 true；`reptile()` 用 HttpClient 抓取頁面、正則 `(?<=title>).*(?=</title)` 提取商品名、固定價格 5999.00 存入 ConcurrentHashMap；`createBase64()` 用 Base64Encoder 對 JSON 編碼生成海報。淘寶和當當的實現結構完全一樣，差異只在價格和日誌文字。
+
+每個子類只關心自己的業務邏輯，不用管「登錄完再爬取、爬取完再生成」的順序——那是父類的事。
+
+### 靈魂：抽象方法不設獨立訪問
+
+三個抽象方法的修飾符是 `protected abstract`，這不是隨意選的：
+
+- **不能被外部直接調用**——客戶端無法繞過模板方法，直接去調 `login()` 或 `reptile()`
+- **只能被子類覆寫**——子類實現自己的版本，父類的骨架方法統一調用
+
+這就是「把你安排得明明白白」——你不僅不能改順序，連單獨調用某一步都不行。你只能按照父類規定的流程走。
+
+### 測試驗證：骨架固定、站點可插拔
+
+測試時只需替換實例化的子類：`new JDNetMall("1000001", "*******")` 調用 `generateGoodsPoster()`，日誌依次輸出模擬京東用戶登錄、模擬京東商品爬取解析（Apple iPhone 11 5999.00 元）、模擬生成京東商品 base64 海報。更換電商只需把 `JDNetMall` 換成 `TaoBaoNetMall` 或 `DangDangNetMall`——客戶端代碼完全一樣，都是 `generateGoodsPoster(url)`。
+
+## Course
+
+[↗ 課程頁面](../../lessons/template-method-structure.html)
+
+## Sources
+
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#定义执行顺序的抽象类]]
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#模板模式测试验证]]

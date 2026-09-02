@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>7 種單例實現逐一拆解</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>7 種單例實現逐一拆解</h1>
+<p class="meta">design-pattern › singleton › seven-implementations</p>
+
+<blockquote>
+  <strong>學習目標</strong>：逐一拆解 7 種單例寫法的線程安全機制與懶載入取捨，能說出每種的優缺點與適用場景。
+</blockquote>
+
+<h2>兩維度一張地圖</h2>
+
+<p>七種寫法聽起來多，但分野集中在兩個維度：<strong>懶不懶加載</strong>（用到時才建 vs 啟動就建）和<strong>線不線程安全</strong>（多線程同時獲取會不會建出多個）。先記住這張地圖，後面七個寫法只是在不同格子裡落位：</p>
+
+<table>
+  <thead>
+    <tr><th></th><th>線程不安全</th><th>線程安全</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>非懶加載</strong></td><td>—</td><td>靜態類（第 0 種）、餓漢（第 3 種）</td></tr>
+    <tr><td><strong>懶加載</strong></td><td>懶漢（第 1 種）</td><td>懶漢 synchronized（第 2 種）、靜態內部類（第 4 種）、DCL（第 5 種）、CAS（第 6 種）、枚舉（第 7 種）</td></tr>
+  </tbody>
+</table>
+
+<p>下面逐個拆解。每個寫法我會給出：代碼骨架、線程安全怎麼保證的、懶不懶加載、核心優缺點。</p>
+
+<h2>第 0 種：靜態類</h2>
+
+<p>最樸素的做法——不需要實例化，直接用 static 成員：</p>
+
+<pre><code>public class Singleton_00 {
+    public static Map&lt;String, String&gt; cache = new HashMap&lt;&gt;();
+    static {
+        cache.put("key1", "value1");
+    }
+}</code></pre>
+
+<p>啟動時就把數據塞好，外面直接 <code>Singleton_00.cache.get("key1")</code> 就行。</p>
+
+<table>
+  <thead><tr><th>維度</th><th>評價</th></tr></thead>
+  <tbody>
+    <tr><td>線程安全</td><td>✅ 天然安全（類加載機制保證）</td></tr>
+    <tr><td>懶加載</td><td>❌ 類加載時就初始化</td></tr>
+    <tr><td>繼承/多態</td><td>❌ static 方法不能被重寫</td></tr>
+  </tbody>
+</table>
+
+<blockquote>
+  <strong>適用場景</strong>：不需要維持狀態、純全局訪問的工具。如果你的「單例」只是個 Map 或工具方法集合，用靜態類就夠了，不需要單例模式。
+</blockquote>
+
+<h2>第 1 種：懶漢模式（線程不安全）</h2>
+
+<p>終於進入正題。私有構造方法禁止外部 new，<code>getInstance</code> 裡判空後才創建：</p>
+
+<pre><code>public class Singleton_01 {
+    private static Singleton_01 instance;
+    private Singleton_01() {}
+    public static Singleton_01 getInstance() {
+        if (instance == null) {
+            instance = new Singleton_01();
+        }
+        return instance;
+    }
+}</code></pre>
+
+<p>用到時才建，完美懶加載。但問題來了：</p>
+
+<blockquote class="bad-code">
+  <strong>線程隐患</strong>：線程 A 判到 <code>instance == null</code>，還沒來得及 new，線程 B 也判到 null，也進去了。結果：兩個實例。就像一群人同時衝進廁所，發現門沒鎖，結果進了兩個人。
+</blockquote>
+
+<table>
+  <thead><tr><th>維度</th><th>評價</th></tr></thead>
+  <tbody>
+    <tr><td>線程安全</td><td>❌ 多線程下會創建多個實例</td></tr>
+    <tr><td>懶加載</td><td>✅ 用到時才建</td></tr>
+  </tbody>
+</table>
+
+<h2>第 2 種：懶漢模式（線程安全）</h2>
+
+<p>最直接的修復：在 <code>getInstance</code> 方法上加 <code>synchronized</code>：</p>
+
+<pre><code>public class Singleton_02 {
+    private static Singleton_02 instance;
+    private Singleton_02() {}
+    public static synchronized Singleton_02 getInstance() {
+        if (instance == null) {
+            instance = new Singleton_02();
+        }
+        return instance;
+    }
+}</code></pre>
+
+<p>加了鎖，線程安全了。代價呢？</p>
+
+<blockquote class="bad-code">
+  <strong>性能問題</strong>：每次獲取實例都要走 synchronized，哪怕實例早就創建好了。鎖的粒度太粗——好比為了防一個人遲到，把整棟大樓的門都鎖了。
+</blockquote>
+
+<table>
+  <thead><tr><th>維度</th><th>評價</th></tr></thead>
+  <tbody>
+    <tr><td>線程安全</td><td>✅ synchronized 保證</td></tr>
+    <tr><td>懶加載</td><td>✅</td></tr>
+    <tr><td>性能</td><td>❌ 方法級鎖，所有訪問都排隊</td></tr>
+  </tbody>
+</table>
+
+<h2>第 3 種：餓漢模式（線程安全）</h2>
+
+<p>反其道而行：不等你用，類加載時就直接建好：</p>
+
+<pre><code>public class Singleton_03 {
+    private static final Singleton_03 instance = new Singleton_03();
+    private Singleton_03() {}
+    public static Singleton_03 getInstance() {
+        return instance;
+    }
+}</code></pre>
+
+<p>JVM 保證類加載時 <code>static final</code> 字段只初始化一次，天然線程安全，不需要任何鎖。</p>
+
+<blockquote class="bad-code">
+  <strong>代價</strong>：不是懶加載。類一加載就建好，不管用不用。就像遊戲啟動就把全部地圖實例化，手機直接爆內存。
+</blockquote>
+
+<table>
+  <thead><tr><th>維度</th><th>評價</th></tr></thead>
+  <tbody>
+    <tr><td>線程安全</td><td>✅ JVM 類加載機制保證</td></tr>
+    <tr><td>懶加載</td><td>❌ 啟動即建</td></tr>
+    <tr><td>性能</td><td>✅ 無鎖，直接返回</td></tr>
+  </tbody>
+</table>
+
+<h2>第 4 種：靜態內部類（線程安全）</h2>
+
+<p>一個巧妙的折中：用靜態內部類持有實例，既懶加載又線程安全：</p>
+
+<pre><code>public class Singleton_04 {
+    private Singleton_04() {}
+    private static class SingletonHolder {
+        private static final Singleton_04 INSTANCE = new Singleton_04();
+    }
+    public static Singleton_04 getInstance() {
+        return SingletonHolder.INSTANCE;
+    }
+}</code></pre>
+
+<p>關鍵在於 JVM 的類加載機制：<code>SingletonHolder</code> 只有在 <code>getInstance()</code> 被調用時才會被加載，加載時才創建 INSTANCE。而 JVM 保證類的靜態初始化在多線程環境下是安全的——只會執行一次。</p>
+
+<blockquote class="good-code">
+  <strong>推薦</strong>：既懶加載又線程安全，不加鎖，性能好。是大多數場景下的最佳手動實現。
+</blockquote>
+
+<table>
+  <thead><tr><th>維度</th><th>評價</th></tr></thead>
+  <tbody>
+    <tr><td>線程安全</td><td>✅ JVM 類加載機制保證</td></tr>
+    <tr><td>懶加載</td><td>✅ 第一次調用時才加載內部類</td></tr>
+    <tr><td>性能</td><td>✅ 無鎖</td></tr>
+  </tbody>
+</table>
+
+<h2>第 5 種：雙重鎖校驗 DCL（線程安全）</h2>
+
+<p>方法級鎖太粗？那就把鎖縮到最小——只在第一次創建時加鎖：</p>
+
+<pre><code>public class Singleton_05 {
+    private static volatile Singleton_05 instance;
+    private Singleton_05() {}
+    public static Singleton_05 getInstance() {
+        if (instance == null) {           // 第一重：避免不必要的同步
+            synchronized (Singleton_05.class) {
+                if (instance == null) {   // 第二重：防止重複創建
+                    instance = new Singleton_05();
+                }
+            }
+        }
+        return instance;
+    }
+}</code></pre>
+
+<p>兩重判空 + 類鎖。第一重判空讓大部分調用直接返回已有實例，不進 synchronized 塊。第二重判空在鎖裡面，防止多個線程同時通過第一重後重複創建。</p>
+
+<blockquote>
+  <strong>volatile 的必要性</strong>：<code>new Singleton_05()</code> 在 JVM 裡不是原子操作——它分三步：分配內存、初始化對象、引用指向內存。JVM 可能做指令重排，把第三步排到第二步前面。如果不加 volatile，線程 B 可能拿到一個「引用已指向但還沒初始化完」的半成品對象。volatile 禁止了這種重排序。
+</blockquote>
+
+<table>
+  <thead><tr><th>維度</th><th>評價</th></tr></thead>
+  <tbody>
+    <tr><td>線程安全</td><td>✅ synchronized + volatile</td></tr>
+    <tr><td>懶加載</td><td>✅</td></tr>
+    <tr><td>性能</td><td>✅ 只在第一次加鎖，後續無鎖</td></tr>
+    <tr><td>複雜度</td><td>⚠️ volatile + 雙重判空，容易寫錯</td></tr>
+  </tbody>
+</table>
+
+<h2>第 6 種：CAS AtomicReference（線程安全）</h2>
+
+<p>Java 並發庫提供了一組原子類（AtomicInteger、AtomicBoolean、AtomicLong、AtomicReference），可以用 CAS（Compare-And-Swap）實現無鎖單例：</p>
+
+<pre><code>public class Singleton_06 {
+    private static final AtomicReference&lt;Singleton_06&gt; INSTANCE = new AtomicReference&lt;&gt;();
+    private Singleton_06() {}
+    public static Singleton_06 getInstance() {
+        for (;;) {  // 自旋
+            Singleton_06 current = INSTANCE.get();
+            if (current != null) return current;
+            if (INSTANCE.compareAndSet(null, new Singleton_06())) {
+                return INSTANCE.get();
+            }
+        }
+    }
+}</code></pre>
+
+<p>CAS 不依賴傳統加鎖，靠忙等算法與底層硬件保證線程安全。沒有線程切換和阻塞開銷，可支持較大並發。</p>
+
+<blockquote class="bad-code">
+  <strong>缺點</strong>：忙等——如果一直獲不到鎖就陷入死循環（自旋），消耗 CPU。高並發下 CAS 競爭激烈時性能反而可能不如 DCL。
+</blockquote>
+
+<table>
+  <thead><tr><th>維度</th><th>評價</th></tr></thead>
+  <tbody>
+    <tr><td>線程安全</td><td>✅ CAS 原子操作</td></tr>
+    <tr><td>懶加載</td><td>✅</td></tr>
+    <tr><td>性能</td><td>⚠️ 無鎖但有自旋開銷，高競爭時可能退化</td></tr>
+  </tbody>
+</table>
+
+<h2>第 7 種：枚舉單例（Effective Java 推薦）</h2>
+
+<p>Joshua Bloch（約書亞·布洛克），《Effective Java》作者、前 Google 首席 Java 架構師，推薦的終極方案：</p>
+
+<pre><code>public enum Singleton_07 {
+    INSTANCE;
+    public void test() {
+        System.out.println("枚舉單例");
+    }
+}</code></pre>
+
+<p>調用方式：<code>Singleton_07.INSTANCE.test()</code>。就這麼簡單。但為什麼它是「最佳方法」？</p>
+
+<ul>
+  <li><strong>線程安全</strong>：JVM 保證 enum 的 <code>values()</code> 只返回定義好的實例</li>
+  <li><strong>防反射</strong>：Java 語言規範禁止通過反射創建 enum 實例——反射攻擊直接報錯</li>
+  <li><strong>防序列化</strong>：enum 天然支持序列化/反序列化，不會像普通類那樣通過反序列化創建新實例</li>
+  <li><strong>代碼量</strong>：一行搞定，不需要 private 構造、static 字段、getInstance 方法</li>
+</ul>
+
+<blockquote class="good-code">
+  <strong>最佳實踐</strong>：線程安全、防反射、防序列化、代碼最簡。唯一限制：enum 不能被繼承。如果你的單例不需要被繼承，這就是首選。
+</blockquote>
+
+<h2>七種總覽對比</h2>
+
+<table>
+  <thead>
+    <tr><th>#</th><th>寫法</th><th>線程安全</th><th>懶加載</th><th>防反射</th><th>防序列化</th><th>可繼承</th><th>推薦度</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>0</td><td>靜態類</td><td>✅</td><td>❌</td><td>—</td><td>—</td><td>❌</td><td>工具類可用</td></tr>
+    <tr><td>1</td><td>懶漢（不安全）</td><td>❌</td><td>✅</td><td>❌</td><td>❌</td><td>✅</td><td>❌ 別用</td></tr>
+    <tr><td>2</td><td>懒漢 synchronized</td><td>✅</td><td>✅</td><td>❌</td><td>❌</td><td>✅</td><td>⚠️ 性能差</td></tr>
+    <tr><td>3</td><td>餓漢</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>✅</td><td>啟動即用可用</td></tr>
+    <tr><td>4</td><td>靜態內部類</td><td>✅</td><td>✅</td><td>❌</td><td>❌</td><td>✅</td><td>⭐ 手動首選</td></tr>
+    <tr><td>5</td><td>DCL</td><td>✅</td><td>✅</td><td>❌</td><td>❌</td><td>✅</td><td>⭐ 面試常考</td></tr>
+    <tr><td>6</td><td>CAS</td><td>✅</td><td>✅</td><td>❌</td><td>❌</td><td>✅</td><td>⚠️ 自旋開銷</td></tr>
+    <tr><td>7</td><td>枚舉</td><td>✅</td><td>❌</td><td>✅</td><td>✅</td><td>❌</td><td>⭐⭐ 最佳實踐</td></tr>
+  </tbody>
+</table>
+
+<h2>小結</h2>
+
+<p>七種寫法的核心分野是「懶不懶加載」×「線不線程安全」。實戰中記住三個結論就够了：**靜態內部類**是手動實現的首選（懶加載 + 無鎖 + 線程安全），**DCL**是面試常考的經典（volatile + 雙重判空），**枚舉**是 Effective Java 推薦的最佳實踐（防反射 + 防序列化 + 代碼最簡）。下一課我們會回答一個更實際的問題：什麼場景下根本不該用單例。</p>
+
+<div class="quiz" data-step="seven-implementations">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. DCL（雙重鎖校驗）為什麼需要 volatile？</strong></p>
+  <button class="quiz-option" data-correct="false">為了讓 synchronized 更快</button>
+  <button class="quiz-option" data-correct="true">為了防止 JVM 指令重排序導致其他線程拿到半初始化的對象</button>
+  <button class="quiz-option" data-correct="false">為了讓實例在多個線程間可見</button>
+  <button class="quiz-option" data-correct="false">為了避免內存洩漏</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 靜態內部類為什麼能同時實現懶加載和線程安全？</strong></p>
+  <button class="quiz-option" data-correct="false">因為它用了 synchronized</button>
+  <button class="quiz-option" data-correct="false">因為 Java 的 enum 天然支持</button>
+  <button class="quiz-option" data-correct="true">因為 JVM 保證類的靜態初始化在多線程下只執行一次，且內部類只在首次調用時加載</button>
+  <button class="quiz-option" data-correct="false">因為 static final 字段是不可變的</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 枚舉單例為什麼能防反射攻擊？</strong></p>
+  <button class="quiz-option" data-correct="false">因為枚舉類不能被實例化</button>
+  <button class="quiz-option" data-correct="true">因為 Java 語言規範禁止通過反射創建 enum 實例</button>
+  <button class="quiz-option" data-correct="false">因為枚舉的構造方法是 public 的</button>
+  <button class="quiz-option" data-correct="false">因為 JVM 對 enum 做了特殊優化</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. CAS 單例的缺點是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">不支持懶加載</button>
+  <button class="quiz-option" data-correct="false">代碼太複雜</button>
+  <button class="quiz-option" data-correct="true">自旋忙等消耗 CPU，高競爭時性能可能退化</button>
+  <button class="quiz-option" data-correct="false">不能防序列化攻擊</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 如果你需要一個單例，不需要被繼承，面試官問你最佳實踐，你應該回答哪種？</strong></p>
+  <button class="quiz-option" data-correct="false">懶漢 synchronized（第 2 種）</button>
+  <button class="quiz-option" data-correct="false">餓漢（第 3 種）</button>
+  <button class="quiz-option" data-correct="false">DCL（第 5 種）</button>
+  <button class="quiz-option" data-correct="true">枚舉單例（第 7 種）——Effective Java 推薦</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

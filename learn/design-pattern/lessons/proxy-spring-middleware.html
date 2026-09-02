@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spring 中間件：代理對象進容器 — 代理模式</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<p class="meta">設計模式 · 代理模式 · Step 3/3</p>
+
+<h1>Spring 中間件：代理對象進容器</h1>
+
+<h2>學習目標</h2>
+<p>掌握 Spring bean 註冊套路（BeanDefinitionRegistryPostProcessor + FactoryBean），完成「代理生成 → 容器管理 → 使用者注入」的完整閉環。</p>
+
+<h2>代理生成了，然後呢？</h2>
+<p>上一篇我們用 <code>Proxy.newProxyInstance</code> 生成了一個代理對象。但這個對象還只是一個普通的 Java 對象——它不在 Spring 容器裡，業務代碼拿不到它。</p>
+<p>問題是：怎麼把這個「運行時生成的代理對象」註冊進 Spring 容器，讓業務代碼可以通過 <code>@Autowired</code> 或 <code>getBean</code> 直接使用？</p>
+
+<h2>三個前置知識</h2>
+<p>在看代碼之前，先搞懂 Spring 中間件開發的三件套：</p>
+
+<table>
+  <tr><th>概念</th><th>是什麼</th><th>作用</th></tr>
+  <tr>
+    <td><strong>BeanDefinitionRegistryPostProcessor</strong></td>
+    <td>Spring 提供的接口，用於在 bean 定義註冊階段做手腳</td>
+    <td>在所有 bean 定義加載完畢後、bean 實例化之前，修改或新增 bean 定義</td>
+  </tr>
+  <tr>
+    <td><strong>GenericBeanDefinition</strong></td>
+    <td>用於定義一個 bean 的基本信息（類型、作用域、構造函數參數等）</td>
+    <td>告訴 Spring「這個 bean 長什麼樣、怎麼創建」</td>
+  </tr>
+  <tr>
+    <td><strong>FactoryBean</strong></td>
+    <td>一個特殊的 bean，它本身是一個工廠</td>
+    <td>當 Spring 要創建這個 bean 時，實際調用的是 <code>getObject()</code>，返回你自定義的對象</td>
+  </tr>
+</table>
+
+<p>一句話記：</p>
+<blockquote>
+  <strong>BeanDefinitionRegistryPostProcessor 是「註冊員」，GenericBeanDefinition 是「登記表」，FactoryBean 是「工廠」。</strong><br>
+  註冊員在 Spring 啟動時填好登記表，告訴工廠「你要負責生產這個 bean」。
+</blockquote>
+
+<h2>代碼走讀：註冊進容器</h2>
+
+<h3>第一步：自定義注解 @Select</h3>
+<pre><code>@Documented
+@Retention(RetentionPolicy.RUNTIME)  // 必須 RUNTIME 才能被反射讀取
+@Target({ElementType.METHOD})        // 只能用在方法上
+public @interface Select {
+    String value() default "";       // 存放 SQL 語句
+}</code></pre>
+<p>這就是 MyBatis <code>@Select</code> 的簡化版。方法上標註 <code>@Select("select ...")</code>，運行時通過反射讀取。</p>
+
+<h3>第二步：Dao 層接口</h3>
+<pre><code>public interface IUserDao {
+    @Select("select userName from user where id = #{uId}")
+    String queryUserInfo(String uId);
+}</code></pre>
+<p>只有接口、沒有實現類——這正是 MyBatis 用戶的日常寫法。</p>
+
+<h3>第三步：代理類（MapperFactoryBean）</h3>
+<p>上一篇已經看過，<code>MapperFactoryBean</code> 實現了 <code>FactoryBean</code>，在 <code>getObject()</code> 中用 JDK 動態代理生成接口實現。</p>
+
+<h3>第四步：將 Bean 定義註冊到 Spring 容器</h3>
+<pre><code>public class RegisterBeanFactory 
+    implements BeanDefinitionRegistryPostProcessor {
+
+    @Override
+    public void postProcessBeanDefinitionRegistry(
+            BeanDefinitionRegistry registry) {
+
+        // 1. 創建 bean 定義信息
+        GenericBeanDefinition beanDefinition = new GenericBeanDefinition();
+        beanDefinition.setBeanClass(MapperFactoryBean.class);
+        beanDefinition.setScope("singleton");
+
+        // 2. 透傳構造函數參數（IUserDao.class）
+        beanDefinition.addGenericArgumentValue(IUserDao.class);
+
+        // 3. 包裝成 BeanDefinitionHolder，取名 "userDao"
+        BeanDefinitionHolder holder = new BeanDefinitionHolder(
+            beanDefinition, "userDao");
+
+        // 4. 註冊到 Spring 容器
+        BeanDefinitionReaderUtils.registerBeanDefinition(
+            holder, registry);
+    }
+
+    @Override
+    public void postProcessBeanFactory(
+            ConfigurableListableBeanFactory beanFactory) {
+        // 留空
+    }
+}</code></pre>
+
+<p>拆解關鍵步驟：</p>
+<ol>
+  <li><code>setBeanClass(MapperFactoryBean.class)</code>：告訴 Spring，這個 bean 的類型是 MapperFactoryBean</li>
+  <li><code>addGenericArgumentValue(IUserDao.class)</code>：MapperFactoryBean 的構造函數需要一個 <code>Class&lt;T&gt;</code> 參數，這裡把 IUserDao 傳進去</li>
+  <li><code>registerBeanDefinition</code>：把定義好的 bean 註冊進 Spring 的 bean 工廠</li>
+</ol>
+
+<h3>第五步：配置文件觸發</h3>
+<pre><code>&lt;!-- spring-config.xml --&gt;
+&lt;beans default-autowire="byName"&gt;
+    &lt;bean id="userDao"
+          class="org.itstack.demo.design.agent.RegisterBeanFactory"/&gt;
+&lt;/beans&gt;</code></pre>
+<p>只需在配置文件中註冊 <code>RegisterBeanFactory</code> 這個 bean，Spring 啟動時就會自動調用它的 <code>postProcessBeanDefinitionRegistry</code> 方法，把代理 bean 注冊進容器。</p>
+
+<h2>完整流程圖</h2>
+<p>把五步串起來，整個流程是：</p>
+<ol>
+  <li>Spring 啟動，加載 <code>spring-config.xml</code></li>
+  <li>發現 <code>RegisterBeanFactory</code> bean，實例化並調用後置處理器</li>
+  <li>後置處理器創建 <code>GenericBeanDefinition</code>，把 <code>MapperFactoryBean</code> 註冊為 "userDao"</li>
+  <li>業務代碼調用 <code>getBean("userDao", IUserDao.class)</code></li>
+  <li>Spring 發現 "userDao" 是一個 FactoryBean，調用它的 <code>getObject()</code></li>
+  <li>getObject() 用 JDK 動態代理生成 IUserDao 的代理對象並返回</li>
+  <li>業務代碼拿到代理對象，直接調用方法，代理攔截並執行 SQL</li>
+</ol>
+
+<h2>閉環：從接口到結果</h2>
+<p>最終的測試驗證：</p>
+<pre><code>ClassPathXmlApplicationContext context = 
+    new ClassPathXmlApplicationContext("spring-config.xml");
+IUserDao userDao = context.getBean("userDao", IUserDao.class);
+String result = userDao.queryUserInfo("100001");
+// 輸出: SQL: select userName from user where id = 100001
+// 返回: 100001,小傅哥,bugstack.cn...</code></pre>
+
+<blockquote class="good-code">
+  <strong>全程沒有寫 IUserDao 的實現類</strong>，卻成功調用並返回結果。代理給接口生成了實現，Spring 容器管理了代理的生命周期，使用者完全無感。
+</blockquote>
+
+<h2>代理模式的代價與收益</h2>
+<table>
+  <tr><th>代價</th><th>收益</th></tr>
+  <tr>
+    <td>額外增加很多類（代理類、工廠類、註冊類）</td>
+    <td>中間件複用性極高，可方便擴展到各個服務應用中</td>
+  </tr>
+  <tr>
+    <td>需要自己處理 bean 註冊的細節</td>
+    <td>代碼更整潔乾淨，易於維護</td>
+  </tr>
+  <tr>
+    <td>調試時代理類是隱藏的，排錯有學習成本</td>
+    <td>複雜服務變為輕量級調用，如同開關控制 220V 電線</td>
+  </tr>
+</table>
+
+<h2>Quiz</h2>
+<div class="quiz" data-question="BeanDefinitionRegistryPostProcessor 的作用是什麼？">
+  <button class="quiz-option" data-correct="false">實例化 bean</button>
+  <button class="quiz-option" data-correct="true">在 bean 定義註冊階段修改或新增 bean 定義</button>
+  <button class="quiz-option" data-correct="false">銷毀 bean</button>
+  <button class="quiz-option" data-correct="false">執行 AOP 切面</button>
+</div>
+
+<div class="quiz" data-question="FactoryBean 和普通 Bean 有什麼區別？">
+  <button class="quiz-option" data-correct="false">沒有區別</button>
+  <button class="quiz-option" data-correct="false">FactoryBean 只能創建單例 bean</button>
+  <button class="quiz-option" data-correct="true">Spring 會調用 FactoryBean 的 getObject() 而不是直接實例化它</button>
+  <button class="quiz-option" data-correct="false">FactoryBean 必須是抽象類</button>
+</div>
+
+<div class="quiz" data-question="在 RegisterBeanFactory 中，addGenericArgumentValue(IUserDao.class) 的作用是什麼？">
+  <button class="quiz-option" data-correct="false">創建 IUserDao 的實例</button>
+  <button class="quiz-option" data-correct="true">把 IUserDao.class 作為構造函數參數傳給 MapperFactoryBean</button>
+  <button class="quiz-option" data-correct="false">註冊 IUserDao 作為獨立的 bean</button>
+  <button class="quiz-option" data-correct="false">為 IUserDao 生成代理</button>
+</div>
+
+<div class="quiz" data-question="業務代碼調用 getBean(\"userDao\", IUserDao.class) 時，Spring 實際返回的是什麼？">
+  <button class="quiz-option" data-correct="false">MapperFactoryBean 的實例</button>
+  <button class="quiz-option" data-correct="false">一個 null 對象</button>
+  <button class="quiz-option" data-correct="true">MapperFactoryBean.getObject() 返回的 JDK 動態代理對象</button>
+  <button class="quiz-option" data-correct="false">RegisterBeanFactory 的實例</button>
+</div>
+
+<div class="quiz" data-question="代理模式的代價是什麼？">
+  <button class="quiz-option" data-correct="false">代碼執行速度變慢</button>
+  <button class="quiz-option" data-correct="false">不支持多線程</button>
+  <button class="quiz-option" data-correct="true">額外增加很多類，需要自己處理 bean 註冊細節</button>
+  <button class="quiz-option" data-correct="false">只能用於 MyBatis</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="proxy-jdk-dynamic.html">← 上一篇：JDK 動態代理</a>
+  <span></span>
+</div>
+
+<div class="footer">
+  <p>設計模式 · 代理模式 · Step 3/3</p>
+</div>
+
+<script>
+document.querySelectorAll('.quiz').forEach(quiz => {
+  quiz.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      quiz.querySelectorAll('.quiz-option').forEach(b => b.classList.remove('correct','wrong'));
+      btn.classList.add(btn.dataset.correct === 'true' ? 'correct' : 'wrong');
+    });
+  });
+});
+</script>
+
+</body>
+</html>

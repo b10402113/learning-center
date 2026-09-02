@@ -1,0 +1,39 @@
+---
+id: adapter-mq
+title: MQ 消息體適配：同值異名怎麼辦
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#Adapter: 案例场景模拟]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#Adapter: 用一坨代码实现]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#Adapter: 适配器模式重构代码]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#Adapter: 统一的MQ消息体]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#Adapter: MQ消息体适配类]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+# MQ 消息體適配：同值異名怎麼辦
+
+## Learning goal
+
+能用字段映射 + 反射的機制，把三種結構不同的 MQ 消息體適配到統一的 RebateInfo，並說出這比「每個 MQ 建一個消費類」好在哪。
+
+## Lesson
+
+行銷系統要接收三種不同的 MQ 消息——`create_account`（開戶）、`OrderMq`（內部訂單）、`POPOrderDelivered`（第三方訂單）。它們傳遞的都是同一個意思：「某個用戶在某個時間做了某件事」，但欄位名各不相同。用戶 ID 分別叫 `number`、`uid`、`uId`；時間分別叫 `accountDate`、`createOrderTime`、`orderTime`。業務代碼不可能為每種 MQ 寫一套解析邏輯，那樣每新增一個 MQ 就要複製貼上改欄位名，類數量線性增長。
+
+適配器的做法分兩步。第一步，定義一個統一的目標結構 `RebateInfo`（返利信息），包含四個欄位：`userId`（用戶 ID）、`bizId`（業務 ID）、`bizTime`（業務時間）、`desc`（業務描述）。不管外面的 MQ 欄位叫什麼，最終都要映射到這四個欄位。
+
+第二步，用一張映射表（link）描述「源欄位名 → 目標欄位名」的對應關係，再用 Java 反射（Reflection）自動完成賦值。以 `create_account` 為例，映射表是：`number → userId`、`number → bizId`、`accountDate → bizTime`、`desc → desc`。以 `OrderMq` 為例：`uid → userId`、`orderId → bizId`、`createOrderTime → bizTime`。
+
+`MQAdapter.filter` 方法接收原始消息（JSON 字符串或 Map）和映射表，核心邏輯是遍歷映射表，從原始消息中按源欄位名取值，再用反射調用 `RebateInfo` 的 set 方法賦值。一行代碼搞定：`Method method = RebateInfo.class.getMethod("set" + dstField..., String.class); method.invoke(info, value);`。新增一種 MQ 只需要定義一張新的映射表，不需要寫新的消費類。
+
+在實際業務中，映射表不需要寫死在代碼裡。可以放到配置文件或資料庫中，實現零代碼接入新 MQ——配好映射關係，適配器自動完成翻譯。這也是為什麼適配器常和代理模式（Proxy Pattern）搭配使用：代理類根據配置自動路由到正確的映射表。
+
+對比不使用適配器的做法：每新增一個 MQ 就新增一個消費類，每個類裡都有解析 JSON 和逐欄位取出的重複代碼。使用適配器後：映射表可配置化，業務代碼只面對統一的 `RebateInfo`，不再關心外面的 MQ 長什麼樣。這就是「把差異隔離在映射表裡」的價值。
+
+## Sources
+
+## Course
+
+[↗ 課程頁面](../../lessons/adapter-mq.html)

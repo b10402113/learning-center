@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>單例的適用邊界與決策清單</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>單例的適用邊界與決策清單</h1>
+<p class="meta">design-pattern › singleton › singleton-boundaries</p>
+
+<blockquote>
+  <strong>學習目標</strong>：歸納何時該用、何時不該用單例，給出決策清單，並說出單例與靜態類的適用邊界。
+</blockquote>
+
+<h2>什麼時候「不該」用單例</h2>
+
+<p>前面兩課我們一直在說單例的好處。但面試官問「何時不該用單例」時，才是真正的分水嶺。單例有幾個被低估的缺點：</p>
+
+<h3>1. 隱式依賴，難以測試</h3>
+
+<p>單例是全局可見的。任何類都可以直接訪問它，不需要聲明依賴關係。這意味著：</p>
+
+<ul>
+  <li>你想單測一個依賴單例的類？你沒法 mock 掉那個單例——因為它是直接靜態調用的</li>
+  <li>測試之間會互相干擾——上一個測試改了單例的狀態，下一個測試讀到的就是髒數據</li>
+</ul>
+
+<blockquote class="bad-code">
+  <strong>經典反模式</strong>：一個 <code>ConfigManager.getInstance().get("key")</code> 散落在二十個類裡，你想改配置來源？二十個類全部要動。
+</blockquote>
+
+<h3>2. 狀態共享帶來的耦合</h3>
+
+<p>單例實例在整個應用裡只有一個。如果它維持了狀態，任何修改這個狀態的代碼都會影響所有使用方。模塊 A 改了單例裡的某個值，模塊 B 立刻受到影響——但它們之間可能根本沒有任何依賴聲明。</p>
+
+<p>這就是為什麼 Spring 裡很多人避免用 Singleton Bean 維持有狀態的數據：作用域太廣，出問題時很難追蹤是誰改的。</p>
+
+<h3>3. 分佈式環境的天然缺陷</h3>
+
+<p>單例的「一個實例」是在一個 JVM 裡的。如果你的應用部署了十台機器，每台機器裡都有一個單例——那就是十個實例。它們之間的狀態怎麼同步？單例模式本身解決不了這個問題，你需要 Redis、ZooKeeper 之類的分佈式協調。</p>
+
+<h3>4. 繼承和多態的限制</h3>
+
+<p>枚舉單例不能被繼承。其他幾種手動實現的單例雖然可以被繼承，但繼承單例本身就違反了「只有一個實例」的語義——子類也是一種類型，如果子類也能被實例化，單例的保證就被打破了。</p>
+
+<h2>什麼時候「該」用單例</h2>
+
+<p>說了這麼多壞處，單例什麼時候值得用？</p>
+
+<table>
+  <thead>
+    <tr><th>場景</th><th>為什麼適合</th><th>典型例子</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>資源池/緩存</td><td>創建成本高、需要統一管理</td><td>資料庫連線池、線程池、本地緩存</td></tr>
+    <tr><td>全局配置</td><td>啟動時加載一次、全局讀不寫</td><td>配置中心拉取的配置對象</td></tr>
+    <tr><td>日誌記錄器</td><td>單一入口、避免多個 logger 混亂</td><td>Log4j Logger</td></tr>
+    <tr><td>框架核心組件</td><td>容器/引擎只應有一個</td><td>Spring ApplicationContext</td></tr>
+  </tbody>
+</table>
+
+<h2>決策清單：五問判斷法</h2>
+
+<p>拿到一個「要不要用單例」的需求時，問自己五個問題：</p>
+
+<ol>
+  <li><strong>這個類全局只會有一個嗎？</strong>如果不是，不要用。比如「每個用戶的購物車」——多個實例才對</li>
+  <li><strong>它需要維持狀態嗎？</strong>如果不需要（純工具），用靜態類更簡單，不需要單例模式</li>
+  <li><strong>它需要被繼承或多態嗎？</strong>如果需要，單例的語義會被打破，考慮工廠方法或依賴注入</li>
+  <li><strong>它的創建成本高嗎？</strong>如果不高（幾微秒），每次 new 也沒問題，不需要單例</li>
+  <li><strong>它在分佈式環境嗎？</strong>如果是，單例只在一個 JVM 裡生效，需要分佈式方案</li>
+</ol>
+
+<p>五個問題都過了，單例才是合適的選擇。哪怕只有一個不過，就應該重新評估。</p>
+
+<h2>面試怎麼答</h2>
+
+<p>面試官問「單例的缺點」時，不要只說「全局狀態」。一個完整的回答結構：</p>
+
+<ol>
+  <li><strong>隱式依賴，難以測試</strong>——無法 mock、測試間狀態污染</li>
+  <li><strong>狀態共享耦合</strong>——修改影響範圍不可控</li>
+  <li><strong>分佈式失效</strong>——一個 JVM 一個實例，多機部署需要額外方案</li>
+  <li><strong>違反單一職責</strong>——一個類既要管業務邏輯，又要管自己的實例化</li>
+</ol>
+
+<p>然後補一句：「所以現代框架更推薦用依賴注入（DI）來控制對象的作用域，而不是讓類自己管自己。Spring 的 Bean 默認 singleton 作用域就是這個思路——容器管實例化，類只管業務。」</p>
+
+<h2>小結</h2>
+
+<p>單例模式不是萬能的。它適合「全局唯一、創建成本高、不需要被繼承」的場景（連線池、配置、日誌）。它不適合「多個實例才合理、需要容易測試、分佈式環境」的場景。記住五問判斷法，拿到需求時逐條過濾。面試答缺點時，從「隱式依賴→狀態耦合→分佈式失效→違反單一職責」四個角度展開，再用 DI 收束，就是一個完整的回答。</p>
+
+<div class="quiz" data-step="singleton-boundaries">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 單例模式對單元測試最大的影響是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">單例的代碼太多，測試跑得慢</button>
+  <button class="quiz-option" data-correct="true">隱式依賴導致無法 mock，測試間狀態污染</button>
+  <button class="quiz-option" data-correct="false">單例不支持 JUnit 框架</button>
+  <button class="quiz-option" data-correct="false">每個測試都需要重新啟動 JVM</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 以下哪個場景最不適合用單例？</strong></p>
+  <button class="quiz-option" data-correct="false">資料庫連線池</button>
+  <button class="quiz-option" data-correct="false">全局配置讀取器</button>
+  <button class="quiz-option" data-correct="true">每個用戶的購物車對象</button>
+  <button class="quiz-option" data-correct="false">日誌記錄器</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 單例模式在分佈式環境下的問題是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">單例的代碼不能在 Linux 上跑</button>
+  <button class="quiz-option" data-correct="true">一個 JVM 一個實例，多台機器各有自己的單例，狀態無法同步</button>
+  <button class="quiz-option" data-correct="false">分佈式環境下 synchronized 會失效</button>
+  <button class="quiz-option" data-correct="false">Spring Cloud 不支持單例 Bean</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 「五問判斷法」中，如果一個類不需要維持狀態，你應該用什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">枚舉單例</button>
+  <button class="quiz-option" data-correct="true">靜態類（不需要單例模式）</button>
+  <button class="quiz-option" data-correct="false">DCL 雙重鎖校驗</button>
+  <button class="quiz-option" data-correct="false">Spring Bean</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 面試官問「單例有什麼缺點」，以下哪個回答最完整？</strong></p>
+  <button class="quiz-option" data-correct="false">單例性能差，因為每次都要 synchronized</button>
+  <button class="quiz-option" data-correct="false">單例不支持多線程</button>
+  <button class="quiz-option" data-correct="true">隱式依賴難以測試、狀態共享耦合、分佈式失效、違反單一職責</button>
+  <button class="quiz-option" data-correct="false">單例的代碼太長，不好維護</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

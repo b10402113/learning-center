@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>一把梭的耦合代價</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="lesson-number">Lesson 2/3 · 觀察者模式</div>
+      <h1>一把梭的耦合代價</h1>
+      <div class="lesson-meta">Node: observer · Step 2/3 · <span class="tag tag-behavioral">行為模式</span></div>
+    </header>
+
+    <div class="learning-goal">
+      <h2>學習目標</h2>
+      <p>認知「一把梭」把輔助流程（簡訊/MQ）塞進核心方法的耦合代價，作為觀察者模式重構的動機。</p>
+    </div>
+
+    <section>
+      <h2>什麼是「一把梭」？</h2>
+      <p>「一把梭」是開發者對最粗暴實現方式的俗稱——把所有功能按順序寫在一個方法裡，不做任何分層或解耦。需求來了就加代碼，像梭子一樣直来直去。</p>
+      <p>在搖號場景中，一把梭的意思是：搖號、發簡訊、發 MQ，三件事全塞進一個 <code>doDraw</code> 方法裡。</p>
+    </section>
+
+    <section>
+      <h2>一把梭的代碼長什麼樣？</h2>
+      <p>搖號服務接口 <code>MinibusTargetService.lottery(uId)</code> 用 uId 的 hashCode 取絕對值後對 2 取模，偶數為中簽，返回拼接好的文案。這是被觀察的「事件源」。</p>
+      <p>一把梭的實現把三件事全塞進 <code>doDraw</code> 方法：</p>
+      <pre><code>public LotteryResult doDraw(String uId) {
+    // 1. 核心流程：搖號
+    String lottery = minibusTargetService.lottery(uId);
+
+    // 2. 輔助流程：發簡訊
+    logger.info("給用戶 {} 發送簡訊通知：{}", uId, lottery);
+
+    // 3. 輔助流程：發 MQ
+    logger.info("記錄用戶 {} 搖號結果(MQ)：{}", uId, lottery);
+
+    return new LotteryResult(uId, lottery, new Date());
+}</code></pre>
+      <p>三件事按順序執行，看起來沒什麼問題——測試也能跑通。</p>
+    </section>
+
+    <section>
+      <h2>壞味道在哪？</h2>
+      <p>代碼能跑不代表設計好。一把梭的問題在於：</p>
+      <blockquote class="bad-code">
+        <strong>輔助流程與核心流程耦合</strong>——簡訊和 MQ 的邏輯直接寫在核心方法裡，每加一種通知就要改這個方法。
+      </blockquote>
+      <p>具體來說有三個痛點：</p>
+      <table>
+        <thead>
+          <tr><th>痛點</th><th>具體表現</th><th>後果</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>修改風險</strong></td><td>改簡訊邏輯可能影響搖號結果</td><td>不敢改、改了怕出事</td></tr>
+          <tr><td><strong>擴展困難</strong></td><td>加一種通知就要改 doDraw</td><td>方法越來越長、分支越來越多</td></tr>
+          <tr><td><strong>職責不清</strong></td><td>一個方法做三件事</td><td>後人看不懂、不知道該改哪裡</td></tr>
+        </tbody>
+      </table>
+      <p>你可能見過更極端的情況：一個類幾千行，if-else 分支堆出來的業務大類型。一把梭就是這種「一坨代碼」的起點——從一個方法開始，慢慢長成一坨。</p>
+    </section>
+
+    <section>
+      <h2>用生活類比理解耦合</h2>
+      <p>想像你開了一家餐廳，廚師做完菜後，你親自跑去：</p>
+      <ol style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li>給每桌客人端菜</li>
+        <li>結算每桌的帳單</li>
+        <li>登記每個客人的會員積分</li>
+        <li>給外賣平台同步訂單狀態</li>
+      </ol>
+      <p>你是廚師（核心流程），但你同時在做傳菜、結帳、積分、同步四件輔助的事。每來一個新需求（比如加一個「掃碼點評」），你就多一件事，廚房就沒人管了。</p>
+      <p>觀察者模式的做法是：廚師只管做菜，傳菜員、收銀員、積分系統、外賣平台各自訂閱「菜做好了」這個事件——你做你的菜，他們做他們的事。</p>
+    </section>
+
+    <section>
+      <h2>一把梭 vs 觀察者——對比一覽</h2>
+      <table>
+        <thead>
+          <tr><th></th><th>一把梭</th><th>觀察者模式</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>核心流程</strong></td><td>與輔助流程混在一起</td><td>只處理核心邏輯</td></tr>
+          <tr><td><strong>輔助流程</strong></td><td>直接寫在核心方法裡</td><td>各自獨立的監聽器</td></tr>
+          <tr><td><strong>加新通知</strong></td><td>改核心方法</td><td>新增監聽器類</td></tr>
+          <tr><td><strong>風險</strong></td><td>改輔助可能影響核心</td><td>互不影響</td></tr>
+          <tr><td><strong>可讀性</strong></td><td>方法越來越長</td><td>每個類只做一件事</td></tr>
+        </tbody>
+      </table>
+      <p>這就是觀察者模式重構的動機：把輔助流程從核心方法裡「搬出來」，讓它們各自獨立。</p>
+    </section>
+
+    <section>
+      <h2>一句話記住</h2>
+      <blockquote>一把梭 = 把所有事塞進一個方法，改一個怕動另一個；觀察者 = 各做各的，互不干擾。</blockquote>
+    </section>
+
+    <!-- Quiz -->
+    <section class="quiz">
+      <h3>自我檢測</h3>
+      <div class="quiz-question">
+        <p>Q1. 一把梭實現的搖號服務有什麼核心問題？</p>
+        <ul class="quiz-options" data-correct="0">
+          <li data-index="0">輔助流程（簡訊/MQ）與核心流程耦合</li>
+          <li data-index="1">搖號算法不夠公平</li>
+          <li data-index="2">返回值類型定義錯誤</li>
+          <li data-index="3">沒有使用多線程</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q2. 在一把梭代碼中，如果要新加一個「郵件通知」功能，你必須改哪裡？</p>
+        <ul class="quiz-options" data-correct="1">
+          <li data-index="0">新增一個郵件類就好</li>
+          <li data-index="1">修改 doDraw 方法，加一段郵件邏輯</li>
+          <li data-index="2">修改 MinibusTargetService</li>
+          <li data-index="3">重寫整個搖號算法</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q3. 為什麼說「輔助流程經常變化」是壞味道的根源？</p>
+        <ul class="quiz-options" data-correct="2">
+          <li data-index="0">因為輔助流程更複雜</li>
+          <li data-index="1">因為輔助流程需要更多測試</li>
+          <li data-index="2">因為變化頻率高，耦合在核心方法裡會不斷增加修改風險</li>
+          <li data-index="3">因為輔助流程不應該存在</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+    </section>
+
+    <div class="source">
+      <strong>主要來源：</strong>一把梭實現需求——代碼實現、案例場景模擬——搖號通知
+    </div>
+
+    <div class="follow-up">
+      <p>有任何不清楚的地方？問你的老師！</p>
+      <p class="cta">下一步：看看觀察者模式如何把輔助流程「搬出來」→</p>
+    </div>
+
+    <nav class="nav">
+      <a href="observer-intent.html">← 上一課：觀察者的意圖</a>
+      <a href="observer-structure.html">下一課：觀察者模式的三層結構 →</a>
+    </nav>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

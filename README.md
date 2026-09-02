@@ -26,7 +26,7 @@ This repo is a personal learning system. You put raw material in `sources/`; the
 ```
 
 1. **`/learn-init`** — Interview the learner and write `MEMORY.md`.
-2. **`/roadmap`** — Partition the source material into nodes (each a step-DAG). Write `ROADMAP.md` and one skeleton in `nodes/` per node.
+2. **`/roadmap`** — Propose ≥5 learning paths for you to pick one, then partition the source material into nodes (each a step-DAG) along it. Write `ROADMAP.md` and one skeleton in `nodes/` per node.
 3. **`/nodes`** — Invoking `/nodes <subject>/<node-id>` confirms that node and starts work. It extracts core concepts, creates or progressively updates canonical elements, and writes the complete node article with element links.
 4. **`/edges`** — For one node, propose a small set of strong relationships, including justified cross-node edges. Confirm the edge set before finalizing.
 

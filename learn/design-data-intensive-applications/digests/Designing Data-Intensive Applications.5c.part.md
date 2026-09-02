@@ -1,3 +1,12 @@
+---
+source: Designing Data-Intensive Applications
+source_hash: 1186eaa1d12ade984f9007f4eba19c6f3a64ba19cd34fee710a04265e0129944
+source_lines: 26464
+part: 5c
+created: 2026-08-24
+updated: 2026-08-24
+---
+
 ## Sections (L2)
 
 ### ch12-data-integration

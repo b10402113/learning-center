@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>四角色分工：原物件、備忘錄、記錄者、管理者</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>四角色分工：原物件、備忘錄、記錄者、管理者</h1>
+<p class="meta">design-pattern › memento › memento-structure</p>
+
+<blockquote>
+  <strong>學習目標</strong>：記住四個角色的名稱與職責分工，形成理解任何備忘錄實現的結構地圖。
+</blockquote>
+
+<h2>為什麼需要四個角色？</h2>
+
+<p>上一課我們看到了一把梭 ConfigManager 的問題：存配置、管歷史、回滾邏輯全混在一起。備忘錄模式的核心設計思路是<strong>把這些職責分離到不同的角色</strong>，每個角色只做一件事。</p>
+
+<p>你可能想：「不就是存個快照嗎，至於拆成四個類？」拆開的好處是：每一層都可以獨立變化。存儲結構想從 List 換成 Map？只改 Admin。快照格式想加壓縮？只改 ConfigMemento。回滾邏輯想加日誌？只改 ConfigOriginator。原物件 ConfigFile 完全不用動。</p>
+
+<h2>四個角色一覽</h2>
+
+<table>
+  <thead>
+    <tr><th>角色</th><th>Java 類</th><th>核心職責</th><th>遊戲類比</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>原物件</td><td>ConfigFile</td><td>承載被保存的狀態（版本號、內容、時間、操作人）</td><td>遊戲角色（血量、裝備、經驗值）</td></tr>
+    <tr><td>備忘錄</td><td>ConfigMemento</td><td>快照的載體，把原物件包起來</td><td>存檔檔（二進位格式，玩家不需要懂）</td></tr>
+    <tr><td>記錄者</td><td>ConfigOriginator</td><td>生成快照（saveMemento）和還原快照（getMemento）</td><td>遊戲存檔系統（按按鈕就存/讀）</td></tr>
+    <tr><td>管理者</td><td>Admin</td><td>保存多個快照，提供 undo/redo/get 操作</td><td>存檔管理器（存檔槽、歷史記錄列表）</td></tr>
+  </tbody>
+</table>
+
+<h2>角色之間的關係</h2>
+
+<p>四個角色的互動流程：</p>
+
+<pre><code>ConfigFile（當前狀態）
+    ↓ saveMemento()
+ConfigOriginator（記錄者）
+    ↓ 生成
+ConfigMemento（快照）
+    ↓ 交給
+Admin（管理者）← 保存多個快照
+    ↓ undo/redo/get
+ConfigOriginator（還原）
+    ↓ getMemento()
+ConfigFile（回到某個歷史狀態）</code></pre>
+
+<p>關鍵洞察：<strong>ConfigFile 從頭到尾不知道有人在存它的狀態</strong>。它不需要加任何方法、不需要暴露任何欄位。快照的生成和還原都在 ConfigOriginator 裡完成，ConfigFile 是被動的。</p>
+
+<h2>每個角色的「邊界」</h2>
+
+<h3>ConfigFile（原物件）</h3>
+
+<ul>
+  <li>只管自己的業務邏輯（配置內容的讀寫）</li>
+  <li>不知道備忘錄的存在</li>
+  <li>不暴露內部狀態給外部（封裝性完好）</li>
+</ul>
+
+<h3>ConfigMemento（備忘錄）</h3>
+
+<ul>
+  <li>只管包裝原物件的狀態</li>
+  <li>不知道誰會存它、誰會讀它</li>
+  <li>相當於一個「密封的盒子」，裡面裝著某一時刻的 ConfigFile</li>
+</ul>
+
+<h3>ConfigOriginator（記錄者）</h3>
+
+<ul>
+  <li>知道 ConfigFile 的內部結構（它是唯一知道怎麼讀寫 ConfigFile 的角色）</li>
+  <li><code>saveMemento()</code>：把當前 ConfigFile 的狀態包成一個新的 ConfigMemento</li>
+  <li><code>getMemento(memento)</code>：把快照裡的狀態寫回當前的 ConfigFile</li>
+</ul>
+
+<h3>Admin（管理者）</h3>
+
+<ul>
+  <li>不知道 ConfigFile 的內部結構（它只操作 ConfigMemento）</li>
+  <li>用 List 保序 + Map 按版本號索引，雙結構存放快照</li>
+  <li>提供 undo（回滾）、redo（前進）、get（按版本號取）</li>
+</ul>
+
+<h2>「誰知道什麼」的封裝邊界</h2>
+
+<p>備忘錄模式最精妙的地方在於<strong>資訊的不對稱</strong>：</p>
+
+<table>
+  <thead>
+    <tr><th>角色</th><th>知道 ConfigFile 的內部結構？</th><th>知道 ConfigMemento 的內部結構？</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>ConfigFile</td><td>是（它自己）</td><td>否</td></tr>
+    <tr><td>ConfigMemento</td><td>是（包裝了 ConfigFile）</td><td>是（它自己）</td></tr>
+    <tr><td>ConfigOriginator</td><td>是（讀寫 ConfigFile）</td><td>是（創建和還原 ConfigMemento）</td></tr>
+    <tr><td>Admin</td><td><strong>否</strong></td><td>是（存取 ConfigMemento）</td></tr>
+  </tbody>
+</table>
+
+<p>Admin 是管理者，它只跟 ConfigMemento 打交道，完全不知道 ConfigFile 長什麼樣。這意味著：就算 ConfigFile 的內部結構改了，Admin 也不用動。這就是封裝性帶來的好處。</p>
+
+<h2>小結</h2>
+
+<p>備忘錄模式的四個角色：<strong>原物件</strong>（承載狀態）、<strong>備忘錄</strong>（快照載體）、<strong>記錄者</strong>（生成/還原快照）、<strong>管理者</strong>（保存歷史 + 提供 undo/redo/get）。核心設計是資訊不對稱——Admin 不知道 ConfigFile 的內部結構，ConfigFile 不知道有人在存自己的狀態。記住這張結構地圖，下一課我們用 Java 代碼逐類走讀，把每個角色落到真實程式碼上。</p>
+
+<div class="quiz" data-step="memento-structure">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 備忘錄模式中，誰負責「生成快照」和「還原快照」？</strong></p>
+  <button class="quiz-option" data-correct="false">Admin（管理者）</button>
+  <button class="quiz-option" data-correct="true">ConfigOriginator（記錄者）</button>
+  <button class="quiz-option" data-correct="false">ConfigFile（原物件）</button>
+  <button class="quiz-option" data-correct="false">ConfigMemento（備忘錄）</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. Admin（管理者）知道 ConfigFile 的內部結構嗎？</strong></p>
+  <button class="quiz-option" data-correct="false">知道，因為它要讀 ConfigFile 的版本號</button>
+  <button class="quiz-option" data-correct="true">不知道，它只操作 ConfigMemento</button>
+  <button class="quiz-option" data-correct="false">部分知道，只知道 ConfigFile 的 get 方法</button>
+  <button class="quiz-option" data-correct="false">看 ConfigFile 是否聲明為 public</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. ConfigMemento 的作用是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">管理歷史列表，提供 undo/redo</button>
+  <button class="quiz-option" data-correct="false">讀取 ConfigFile 的內部欄位</button>
+  <button class="quiz-option" data-correct="true">作為快照的載體，把原物件的狀態包起來</button>
+  <button class="quiz-option" data-correct="false">定義配置文件的業務邏輯</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. ConfigFile 為什麼不需要知道備忘錄的存在？</strong></p>
+  <button class="quiz-option" data-correct="false">因為 ConfigFile 沒有內部狀態</button>
+  <button class="quiz-option" data-correct="true">因為備忘錄模式的核心就是在不改原物件的前提下保存狀態</button>
+  <button class="quiz-option" data-correct="false">因為 Java 的 class 不能同時實現兩個接口</button>
+  <button class="quiz-option" data-correct="false">因為 ConfigFile 被聲明為 final</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 如果 ConfigFile 改了內部結構（比如新增了一個欄位），哪個角色需要跟著改？</strong></p>
+  <button class="quiz-option" data-correct="false">Admin（管理者）</button>
+  <button class="quiz-option" data-correct="false">ConfigMemento（備忘錄）</button>
+  <button class="quiz-option" data-correct="false">所有四個角色都要改</button>
+  <button class="quiz-option" data-correct="true">ConfigOriginator（記錄者）——因為它負責讀寫 ConfigFile</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

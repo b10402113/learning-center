@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>外觀模式的意圖與白名單痛點</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>外觀模式的意圖與白名單痛點</h1>
+<p class="meta">design-pattern › facade › facade-intro</p>
+
+<blockquote>
+  <strong>學習目標</strong>：能說出外觀模式「降低調用方複雜度」的意圖，並用白名單 ifelse 場景說出為什麼需要這個模式。
+</blockquote>
+
+<h2>你感受到的容易，一定有人在背後扛</h2>
+
+<p>用戶登錄一個網站，現在只要一鍵微信登錄。但在早期，註冊一個賬號要填姓名、昵稱、手機號、QQ、郵箱、住址……一大堆信息。從用戶的角度看，操作變簡單了；從服務端的角度看，是有人把「從各渠道獲取用戶信息、獲取不到就引導補全、補全後發獎勵拉活躍」這些複雜邏輯包了起來，對前端只暴露一個簡單的接口。</p>
+
+<p>這就是外觀模式（Facade Pattern）的核心直覺：<strong>在調用方與複雜子系統之間加一個統一的包裝層，讓調用方只關心「用什麼」，不關心「怎麼做」</strong>。</p>
+
+<h2>一個真實場景：白名單過濾</h2>
+
+<p>你在一個電商平台做後端，有一個查詢用戶信息的接口：</p>
+
+<pre><code>@RestController
+public class HelloWorldController {
+    @RequestMapping("/api/queryUserInfo")
+    public UserInfo queryUserInfo(@RequestParam String userId) {
+        return new UserInfo("蟲蟲:" + userId, 19, "天津市南開區旮旯胡同100號");
+    }
+}</code></pre>
+
+<p>很乾淨。但產品說：「上線前要先開白名單測試，只有白名單裡的用戶才能訪問。」</p>
+
+<p>最直覺的做法——直接在方法裡加 if：</p>
+
+<pre><code>@RequestMapping("/api/queryUserInfo")
+public UserInfo queryUserInfo(@RequestParam String userId) {
+    // 白名單校驗
+    List&lt;String&gt; userList = Arrays.asList("1001", "aaaa", "ccc");
+    if (!userList.contains(userId)) {
+        return new UserInfo("1111", "非白名單可訪問用戶攔截！");
+    }
+    // 正常業務
+    return new UserInfo("蟲蟲:" + userId, 19, "天津市南開區旮旯胡同100號");
+}</code></pre>
+
+<blockquote class="bad-code">
+  <strong>壞味道</strong>：白名單代碼佔了一大塊，但它不是業務邏輯。而且——你有多少個接口？
+</blockquote>
+
+<h2>問題在哪裡</h2>
+
+<p>一個接口加一段 if，看起來很快。但想想實際的項目：</p>
+
+<ul>
+  <li><strong>接口不止一個</strong>：查詢用戶、查詢訂單、查詢商品……每個接口都要加白名單</li>
+  <li><strong>改一處就要改全部</strong>：白名單邏輯變了（比如從 userId 改成 userName），你要改多少個方法？</li>
+  <li><strong>白名單只是開始</strong>：將來可能還要加簽名校驗、限流、日誌審計——每種橫切需求都重複一遍？</li>
+  <li><strong>業務代碼被污染</strong>：原本乾淨的業務方法裡塞滿了「跟業務無關」的判斷，讀代碼的人要分清哪些是核心邏輯、哪些是輔助邏輯</li>
+</ul>
+
+<p>核心問題是：<strong>橫切關注點（cross-cutting concern）——像白名單、簽名校驗、限流這類「所有接口都要做的事」——直接塞進每個接口方法裡，會導致大量重複、難以維護</strong>。</p>
+
+<h2>外觀模式怎麼解決</h2>
+
+<p>外觀模式的思路是：把這類通用邏輯從業務方法裡抽出來，放到一個<strong>統一的包裝層</strong>（facade）裡。業務方法不變，包裝層在外面攔截和處理。</p>
+
+<p>一個生活類比：你去銀行辦業務，不用分別找櫃員、風控、會計、清算——大堂經理就是「外觀」，他幫你把複雜的內部流程包裝成「取號→辦理→走人」的簡單步驟。</p>
+
+<table>
+  <thead>
+    <tr><th>沒有外觀</th><th>有外觀</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>每個方法自己處理白名單</td><td>白名單邏輯集中在一個包裝層</td></tr>
+    <tr><td>改白名單要改 N 個方法</td><td>改包裝層一處即可</td></tr>
+    <tr><td>業務邏輯與橫切邏輯混在一起</td><td>業務方法保持純淨</td></tr>
+    <tr><td>加新橫切需求（限流等）再重複一遍</td><td>新需求加一個新的包裝層</td></tr>
+  </tbody>
+</table>
+
+<p>在 Spring 生態中，這種包裝層最常見的落地形態就是<strong>自定義 starter 中間件</strong>——把通用邏輯封裝成一個 jar 包，業務方引入依賴、加一個注解就生效，完全不用改業務代碼。</p>
+
+<h2>關鍵概念：結構型模式</h2>
+
+<p>外觀模式是 GoF 23 種設計模式中的<strong>結構型模式</strong>（Structural Pattern）。結構型模式關注的是「類和對象怎麼組合、怎麼形成更大的結構」。外觀模式通過加一個包裝層來簡化調用方對子系統的訪問，是結構型模式中最直覺的一個。</p>
+
+<p>它特別適合的場景是：</p>
+
+<table>
+  <thead>
+    <tr><th>場景</th><th>子系統</th><th>外觀做什麼</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>白名單過濾</td><td>多個 API 接口</td><td>統一攔截、統一配置</td></tr>
+    <tr><td>第三方 SDK</td><td>支付、短信、OSS</td><td>封裝成一個方法調用</td></tr>
+    <tr><td>微服務網關</td><td>多個下游服務</td><td>統一入口、統一鑑權</td></tr>
+    <tr><td>ORM 框架</td><td>JDBC 連接、SQL 解析、結果映射</td><td>一個 selectOne 搞定</td></tr>
+  </tbody>
+</table>
+
+<p>這些場景的共同點是：子系統內部很複雜，但調用方只想用一個簡單的入口。</p>
+
+<h2>小結</h2>
+
+<p>外觀模式的核心動機是<strong>降低調用方的複雜度</strong>。當多個接口都要做同一件「跟業務無關」的事情（白名單、簽名校驗、限流），與其在每個方法裡重複一遍，不如抽成一個統一的包裝層。下一步我們會把那個白名單的 ifelse 代碼，用外觀模式 + SpringBoot starter 中間件完整重構一遍。</p>
+
+<div class="quiz" data-step="facade-intro">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 外觀模式的核心意圖是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">把多個類合併成一個類</button>
+  <button class="quiz-option" data-correct="true">在調用方與複雜子系統之間加統一包裝層，降低使用複雜度</button>
+  <button class="quiz-option" data-correct="false">讓子系統之間互相調用更方便</button>
+  <button class="quiz-option" data-correct="false">在運行時動態替換子系統的實現</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 白名單 ifelse 代碼的核心問題是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">if 判斷的性能太差</button>
+  <button class="quiz-option" data-correct="true">橫切關注點重複散落在每個接口方法裡，改一處要改全部</button>
+  <button class="quiz-option" data-correct="false">List.contains 方法不適合做白名單</button>
+  <button class="quiz-option" data-correct="false">白名單功能本身就不應該實現</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 外觀模式屬於 GoF 23 種模式中的哪一類？</strong></p>
+  <button class="quiz-option" data-correct="false">創建型模式（Creational）</button>
+  <button class="quiz-option" data-correct="true">結構型模式（Structural）</button>
+  <button class="quiz-option" data-correct="false">行為型模式（Behavioral）</button>
+  <button class="quiz-option" data-correct="false">架構型模式（Architectural）</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 在 Spring 生態中，外觀模式最常見的落地形態是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">一個 @Service 注解的 Bean</button>
+  <button class="quiz-option" data-correct="true">自定義 starter 中間件——封裝成 jar，業務方引入即生效</button>
+  <button class="quiz-option" data-correct="false">一個 Servlet Filter</button>
+  <button class="quiz-option" data-correct="false">一個 XML 配置文件</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 以下哪個場景最不適合用外觀模式？</strong></p>
+  <button class="quiz-option" data-correct="false">多個 API 接口都需要白名單過濾</button>
+  <button class="quiz-option" data-correct="false">第三方 SDK 封裝（支付、短信等）</button>
+  <button class="quiz-option" data-correct="true">一個簡單的 CRUD 接口，只有一個實現</button>
+  <button class="quiz-option" data-correct="false">微服務網關統一入口</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

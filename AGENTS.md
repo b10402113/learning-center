@@ -38,7 +38,7 @@ This repo turns raw material into customized, subject-specific lessons. A **node
 /tackle <step-id>             ← runtime skill, invoked per step at learning time
 ```
 
-Each stage is user-invoked. `subject/node-name` is explicit so a node name never has to be unique across subjects. The roadmap stage partitions into nodes and writes `draft` node containers; the probe stage measures one node's mastery before it is viewed (a hard gate); the nodes stage reasons out the node's step-DAG, gets learner confirmation, dispatches element sub-agents (step 7) and waits, then creates skeleton step files (step 8) and the node container; the teach stage fills step content interactively via step-by-step teaching; the edges stage adds high-value relationships. `/tackle` verifies one step at learning time, targeting the strands the probe rated weak.
+Each stage is user-invoked. `subject/node-name` is explicit so a node name never has to be unique across subjects. The roadmap stage proposes ≥5 learning paths for the learner to pick one, partitions into nodes along the chosen path, and writes `draft` node containers; the probe stage measures one node's mastery before it is viewed (a hard gate); the nodes stage reasons out the node's step-DAG, gets learner confirmation, dispatches element sub-agents (step 7) and waits, then creates skeleton step files (step 8) and the node container; the teach stage fills step content interactively via step-by-step teaching; the edges stage adds high-value relationships. `/tackle` verifies one step at learning time, targeting the strands the probe rated weak.
 
 ## Core Principles
 
@@ -54,7 +54,7 @@ Each stage is user-invoked. `subject/node-name` is explicit so a node name never
 
 - `/learn-init <subject>` — ensure the subject's source digests exist (sub-agent path for large sources per `docs/reference/source-reading.md`), interview the learner, and write `learn/<subject>/MEMORY.md` (including language)
 - `/probe <subject>/<node-id>` — adaptive MCQ from shallow to deep across one node's source scope, binary-searching each strand; writes that node's mastery entry (`unknown | partial | solid`), moves the node `draft → probed` (a hard gate before `/nodes`, bypassed by `/nodes … skip-probe`), and never prunes content
-- `/roadmap <subject>` — partition the material into nodes against the formula baseline, propose the full candidate list for learner confirmation, then write `ROADMAP.md` and `draft` node containers
+- `/roadmap <subject>` — partition the material into nodes against the formula baseline, first proposing ≥5 distinct learning paths (different angles) for the learner to pick one, then the full candidate node list for confirmation, then write `ROADMAP.md` and `draft` node containers
 - `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation (each step's depth calibrated from the node's probe mastery — shallow where `solid`, deep where `unknown`, never pruning), then dispatch element sub-agents (step 7) and wait for them to complete, then create skeleton step files (step 8) and the node container. `skip-probe` skips the probe: the learner asserts they know nothing, so a `draft` node is accepted and every step is taught deep
 - `/teach <subject>/<node-name>` — interactive step-by-step teaching following the node's step-DAG; for each step, teaches concepts, checks understanding, and writes the lesson content to the skeleton step file created by `/nodes`. `skip-task` skips the check questions and writes HTML + MDX directly for each step without user confirmation
 - `/edges <subject>/<node-name>` — propose and incrementally write strong edges for the node, including justified cross-node edges
@@ -64,7 +64,7 @@ Each stage is user-invoked. `subject/node-name` is explicit so a node name never
 
 All stages share `docs/reference/source-reading.md`. Sources are read once into two-level digests (`learn/<subject>/digests/`) — L1 chapter overviews for `learn-init`/`roadmap`, L2 section detail with `[[sources/<subject>/<file>#<section>]]` locators for `nodes`. Raw text never enters the main context wholesale:
 
-- Large source (> 5,000 `pdftotext` lines or > ~250 KB): parallel sub-agents write part digests, merged after.
+- Large source (> 5,000 `pdftotext` lines or > ~250 KB): parallel sub-agents write part digests.
 - Small source: the main context reads it directly and writes the digest itself.
 - Digest lifecycle: compare the stored `source_hash`; reuse on match, rebuild on missing/mismatch. Sources are immutable, so digests are stable.
 

@@ -1,3 +1,12 @@
+---
+source: Designing Data-Intensive Applications
+source_hash: 1186eaa1d12ade984f9007f4eba19c6f3a64ba19cd34fee710a04265e0129944
+source_lines: 26464
+part: 2
+created: 2026-08-24
+updated: 2026-08-24
+---
+
 Ch 3: Storage and Retrieval — How database storage engines (LSM-trees, B-trees, column stores) work under the hood and why OLTP vs OLAP demand different designs
 Ch 4: Encoding and Evolution — How data is serialized across processes (Thrift, Protobuf, Avro) and the compatibility rules that make schema evolution safe
 

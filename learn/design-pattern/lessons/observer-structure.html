@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>觀察者模式的三層結構</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="lesson-number">Lesson 3/3 · 觀察者模式</div>
+      <h1>觀察者模式的三層結構</h1>
+      <div class="lesson-meta">Node: observer · Step 3/3 · <span class="tag tag-behavioral">行為模式</span></div>
+    </header>
+
+    <div class="learning-goal">
+      <h2>學習目標</h2>
+      <p>掌握 EventListener + EventManager + 業務抽象類的三層結構，能對比前後代碼說出解耦收益與使用邊界。</p>
+    </div>
+
+    <section>
+      <h2>重構後的地圖</h2>
+      <p>上一課看到一把梭把簡訊和 MQ 全塞進 doDraw 方法。現在用觀察者模式重構，代碼分成三層：</p>
+      <table>
+        <thead>
+          <tr><th>層</th><th>組件</th><th>職責</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>第一層：事件監聽</strong></td><td>EventListener 接口 + 具體監聽器</td><td>定義「收到通知後做什麼」</td></tr>
+          <tr><td><strong>第二層：事件管理</strong></td><td>EventManager</td><td>管理訂閱/取消/通知，按事件類型分組</td></tr>
+          <tr><td><strong>第三層：業務流程</strong></td><td>LotteryService 抽象類 + LotteryServiceImpl</td><td>核心業務邏輯，通知細節對調用方隱藏</td></tr>
+        </tbody>
+      </table>
+      <p>這三層各司其職，下面逐層拆解。</p>
+    </section>
+
+    <section>
+      <h2>第一層：EventListener 接口</h2>
+      <p>觀察者的統一契約：所有監聽器都實現同一個接口。</p>
+      <pre><code>public interface EventListener {
+    void doEvent(LotteryResult result);
+}</code></pre>
+      <p>一個方法、一個參數、一個返回值。任何想「聽」搖號結果的輔助流程，只需實現這個接口。</p>
+      <p>具體實現很簡單：</p>
+      <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li><strong>MessageEventListener</strong>：收到結果後打印「給用戶 uId 發送簡訊通知」</li>
+        <li><strong>MQEventListener</strong>：收到結果後打印「記錄用戶 uId 搖號結果(MQ)」</li>
+      </ul>
+      <p>每個監聽器只做一件事，職責單一。真實場景會調用外部接口（簡訊 SDK、MQ Producer），這裡用 logger 模擬。</p>
+    </section>
+
+    <section>
+      <h2>第二層：EventManager 事件管理器</h2>
+      <p>事件管理器是一對多通知的中樞。它用 <code>Map&lt;Enum&lt;EventType&gt;, List&lt;EventListener&gt;&gt;</code> 按事件類型分組存放監聽器，提供三個方法：</p>
+      <table>
+        <thead>
+          <tr><th>方法</th><th>作用</th><th>類比</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>subscribe(type, listener)</code></td><td>把監聽器加入對應類型的列表</td><td>信號兵報到</td></tr>
+          <tr><td><code>unsubscribe(type, listener)</code></td><td>從列表移除監聽器</td><td>信號兵退伍</td></tr>
+          <tr><td><code>notify(type, result)</code></td><td>遍歷該類型的所有監聽器，逐個調用 doEvent</td><td>槍聲響了，所有人都聽到</td></tr>
+        </tbody>
+      </table>
+      <p>用枚舉 <code>EventType.MQ</code> 和 <code>EventType.Message</code> 限定事件類型，防止外部亂傳。新增事件類型只需在枚舉裡加一個值。</p>
+    </section>
+
+    <section>
+      <h2>第三層：業務抽象類 LotteryService</h2>
+      <p>這是解耦的關鍵。把 LotteryService 改成抽象類，用模板方法（Template Method）的思想編排流程：</p>
+      <pre><code>public abstract class LotteryService {
+    private final EventManager eventManager;
+
+    protected LotteryService(EventManager eventManager) {
+        this.eventManager = eventManager;
+    }
+
+    // 對外暴露的統一入口
+    public LotteryResult draw(String uId) {
+        // 1. 子類實現核心流程
+        LotteryResult result = doDraw(uId);
+        // 2. 基類統一觸發通知
+        eventManager.notify(EventType.MQ, result);
+        eventManager.notify(EventType.Message, result);
+        return result;
+    }
+
+    // 子類只實現核心邏輯
+    protected abstract LotteryResult doDraw(String uId);
+}</code></pre>
+      <p><code>draw</code> 是公開方法，先調子類的 <code>doDraw</code> 拿結果，再觸發通知。<code>doDraw</code> 是抽象方法，由繼承者實現核心搖號邏輯。</p>
+      <p>業務實現類 <code>LotteryServiceImpl</code> 只需重寫 doDraw：</p>
+      <pre><code>public class LotteryServiceImpl extends LotteryService {
+    private final MinibusTargetService minibusTargetService;
+
+    @Override
+    protected LotteryResult doDraw(String uId) {
+        String lottery = minibusTargetService.lottery(uId);
+        return new LotteryResult(uId, lottery, new Date());
+    }
+}</code></pre>
+      <p>核心方法裡<strong>已經沒有任何簡訊或 MQ 的代碼</strong>——輔助流程全部交給事件管理器處理。</p>
+    </section>
+
+    <section>
+      <h2>重構後的對比</h2>
+      <p>測試用相同的 uId 調用 <code>draw</code>，輸出結果跟一把梭完全一致——簡訊通知照發、MQ 記錄照寫。但代碼結構天差地別：</p>
+      <table>
+        <thead>
+          <tr><th></th><th>一把梭</th><th>觀察者模式</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>doDraw / draw 方法</strong></td><td>三段邏輯混在一起</td><td>只有一行核心調用</td></tr>
+          <tr><td><strong>新增通知</strong></td><td>改核心方法</td><td>新增監聽器類 + subscribe</td></tr>
+          <tr><td><strong>刪除通知</strong></td><td>從核心方法刪代碼</td><td>移除 subscribe 調用</td></tr>
+          <tr><td><strong>核心方法行數</strong></td><td>5+ 行（含輔助邏輯）</td><td>1-2 行（純核心）</td></tr>
+          <tr><td><strong>調用方感知</strong></td><td>知道所有輔助流程</td><td>只看到 draw，不知道通知存在</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>開閉原則的實踐</h2>
+      <p>觀察者模式結構上滿足<strong>開閉原則</strong>（Open/Closed Principle）：對擴展開放、對修改封閉。</p>
+      <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li><strong>擴展</strong>：新增一種通知（比如郵件），只需新增一個 EventListener 實現類，在 EventManager 裡 subscribe 即可</li>
+        <li><strong>封閉</strong>：不需要修改 LotteryService、LotteryServiceImpl、EventManager 的任何現有代碼</li>
+      </ul>
+      <p>這就是觀察者模式的價值：輔助流程的增減，完全不影響核心業務。</p>
+    </section>
+
+    <section>
+      <h2>使用邊界——什麼時候不該用？</h2>
+      <p>觀察者模式不是萬能的，有兩個已知的限制：</p>
+      <table>
+        <thead>
+          <tr><th>限制</th><th>具體表現</th><th>應對</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>難控調用順序</strong></td><td>多個監聽器的通知順序取決於 subscribe 的先後，不保證業務需要的順序</td><td>用優先級或有序列表控制</td></tr>
+          <tr><td><strong>結果回傳受限</strong></td><td>通知是單向的，觀察者處理完後很難把結果回傳給被觀察者</td><td>如果需要回傳，考慮回調或 Promise</td></tr>
+        </tbody>
+      </table>
+      <p>任何設計模式都不是單獨使用的，需要結合其他模式共同建設。引入模式是為了更易擴展和維護，不能反而把結構搞複雜、難維護。</p>
+    </section>
+
+    <section>
+      <h2>一句話記住</h2>
+      <blockquote>觀察者模式 = EventListener（做什麼） + EventManager（怎麼通知） + 業務抽象類（只管核心）。</blockquote>
+    </section>
+
+    <!-- Quiz -->
+    <section class="quiz">
+      <h3>自我檢測</h3>
+      <div class="quiz-question">
+        <p>Q1. 觀察者模式的三層結構分別是什麼？</p>
+        <ul class="quiz-options" data-correct="0">
+          <li data-index="0">EventListener + EventManager + 業務抽象類</li>
+          <li data-index="1">Subject + Observer + Publisher</li>
+          <li data-index="2">Strategy + Context + Factory</li>
+          <li data-index="3">Command + Invoker + Receiver</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q2. 在 LotteryService 抽象類中，draw 方法做了什麼？</p>
+        <ul class="quiz-options" data-correct="2">
+          <li data-index="0">直接實現搖號算法</li>
+          <li data-index="1">管理所有監聽器的訂閱</li>
+          <li data-index="2">調用子類的 doDraw 拿結果，再觸發事件通知</li>
+          <li data-index="3">發送簡訊和 MQ 消息</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q3. 新增一種「郵件通知」，在觀察者模式下需要改哪裡？</p>
+        <ul class="quiz-options" data-correct="1">
+          <li data-index="0">修改 LotteryServiceImpl 的 doDraw 方法</li>
+          <li data-index="1">新增一個 EventListener 實現類 + 在構造器裡 subscribe</li>
+          <li data-index="2">修改 EventManager 的 notify 方法</li>
+          <li data-index="3">重寫整個 LotteryService 抽象類</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q4. 觀察者模式满足哪個設計原則？</p>
+        <ul class="quiz-options" data-correct="0">
+          <li data-index="0">開閉原則——對擴展開放、對修改封閉</li>
+          <li data-index="1">單一職責——一個類只做一件事</li>
+          <li data-index="2">里氏替換——子類可以替換父類</li>
+          <li data-index="3">接口隔離——接口要小而專</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q5. 觀察者模式的已知限制是什麼？</p>
+        <ul class="quiz-options" data-correct="2">
+          <li data-index="0">性能太差，不適合高併發</li>
+          <li data-index="1">只能用在單機環境</li>
+          <li data-index="2">難控通知順序、結果回傳受限</li>
+          <li data-index="3">不支持泛型</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+    </section>
+
+    <div class="source">
+      <strong>主要來源：</strong>觀察者模式模型結構、代碼實現（事件監聽/事件處理/業務抽象類/業務實現類）、測試驗證、總結——觀察者
+    </div>
+
+    <div class="follow-up">
+      <p>有任何不清楚的地方？問你的老師！</p>
+      <p class="cta">恭喜完成觀察者模式三步學習！可以運行 /tackle 驗證掌握程度。</p>
+    </div>
+
+    <nav class="nav">
+      <a href="observer-monolith.html">← 上一課：一把梭的耦合代價</a>
+      <span></span>
+    </nav>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

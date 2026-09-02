@@ -1,0 +1,35 @@
+---
+id: proxy-spring-middleware
+title: Spring 中間件：代理對象進容器
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#四、代理类模式实现过程]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#五、总结]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+# Spring 中間件：代理對象進容器
+
+<LearningGoal>
+掌握 Spring bean 註冊套路（BeanDefinitionRegistryPostProcessor + FactoryBean），完成「代理生成 → 容器管理 → 使用者注入」的完整閉環。
+</LearningGoal>
+
+## Lesson
+
+上一篇用 <code>Proxy.newProxyInstance</code> 生成了一個代理對象，但這個對象還只是一個普通的 Java 對象——它不在 Spring 容器裡，業務代碼拿不到它。問題是：怎麼把這個「運行時生成的代理對象」註冊進 Spring 容器，讓業務代碼可以通過 <code>getBean</code> 直接使用？
+
+Spring 中間件開發有三件套。<strong>BeanDefinitionRegistryPostProcessor</strong> 是 Spring 提供的接口，用於在 bean 定義註冊階段做手腳——在所有 bean 定義加載完畢後、bean 實例化之前，修改或新增 bean 定義。<strong>GenericBeanDefinition</strong> 用於定義一個 bean 的基本信息（類型、作用域、構造函數參數等），告訴 Spring「這個 bean 長什麼樣、怎麼創建」。<strong>FactoryBean</strong> 是一個特殊的 bean，它本身是一個工廠——當 Spring 要創建這個 bean 時，實際調用的是 <code>getObject()</code>，返回你自定義的對象。一句話記：**BeanDefinitionRegistryPostProcessor 是「註冊員」，GenericBeanDefinition 是「登記表」，FactoryBean 是「工廠」**。
+
+具體實現中，<code>RegisterBeanFactory</code> 類實現了 <code>BeanDefinitionRegistryPostProcessor</code>，在 <code>postProcessBeanDefinitionRegistry</code> 方法中完成四步操作：先 <code>new GenericBeanDefinition()</code> 創建 bean 定義信息，再 <code>setBeanClass(MapperFactoryBean.class)</code> 告訴 Spring 這個 bean 的類型，然後 <code>addGenericArgumentValue(IUserDao.class)</code> 把 IUserDao.class 作為構造函數參數透傳給 MapperFactoryBean，最後用 <code>BeanDefinitionReaderUtils.registerBeanDefinition</code> 把定義好的 bean 註冊進 Spring 容器。配置文件只需註冊 <code>RegisterBeanFactory</code> 一個 bean，Spring 啟動時就會自動調用後置處理器完成整個註冊流程。
+
+完整流程串起來是：Spring 啟動加載 <code>spring-config.xml</code> → 發現 RegisterBeanFactory bean 並實例化 → 調用後置處理器創建 GenericBeanDefinition 註冊 "userDao" → 業務代碼 <code>getBean("userDao", IUserDao.class)</code> → Spring 發現 "userDao" 是 FactoryBean，調用 getObject() → getObject() 用 JDK 動態代理生成 IUserDao 的代理對象並返回 → 業務代碼拿到代理對象直接調用方法。全程沒有寫 IUserDao 的實現類，卻成功調用並返回結果。代價是額外增加很多類（代理類、工廠類、註冊類），需要自己處理 bean 註冊細節；收益是中間件複用性極高，可方便擴展到各個服務應用中，如同開關控制 220V 電線。
+
+## Course
+
+[↗ 課程頁面](../../lessons/proxy-spring-middleware.html)
+
+## Sources
+
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#四、代理类模式实现过程]]
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#五、总结]]

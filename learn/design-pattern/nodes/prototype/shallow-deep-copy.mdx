@@ -1,0 +1,34 @@
+---
+id: shallow-deep-copy
+title: 淺拷貝 vs 深拷貝：clone() 的隱藏陷阱與選型邊界
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#代码实现-克隆对象处理类]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#总结]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+# 淺拷貝 vs 深拷貝：clone() 的隱藏陷阱與選型邊界
+
+## Learning goal
+
+理解 Object.clone() 預設的淺拷貝行為，能分辨淺拷貝與深拷貝的差異和風險，並說出原型模式的優缺點與何時不該用。
+
+## Lesson
+
+回顧上一課的 `clone()`：`super.clone()` 做的是淺拷貝（shallow copy），它複製了對象本身的所有基本類型字段（String candidate、String number），但對於引用類型字段（List），它只複製了「引用」，不複製「引用指向的對象」。也就是說 `clone.choiceQuestionList == this.choiceQuestionList` 為 true，它們指向同一個 List 對象。如果你對 clone 的 choiceQuestionList 做 shuffle，原型的 choiceQuestionList 也會被打亂——因為它們是同一個 List。更嚴重的情況：如果題目對象裡有嵌套的引用類型（比如選項 Map），淺拷貝意味著克隆體和原型共享這些嵌套對象，修改一個的選項另一個也跟著變。
+
+深拷貝（deep copy）不只複製對象本身，還遞迴複製所有引用指向的對象，直到遇到基本類型為止。深拷貝後克隆體和原型完全獨立，修改任何一方都不會影響另一方。實現深拷貝的常見方式有三種：手動克隆（在 clone() 裡逐個字段手動 new + 賦值，適用於字段少結構簡單的場景）；序列化/反序列化（將對象序列化為 byte[] 再反序列化回新對象，適用於結構複雜不想手動寫 clone 邏輯的場景）；JSON 轉換（toJSON → fromJSON，已有 JSON 工具鏈時最方便）。
+
+回看試卷場景：`ArrayList.clone()` 複製了容器（新 List），但元素（ChoiceQuestion 對象）仍是同一批引用。ChoiceQuestion 裡的 `Map<String,String> option` 也共享同一個引用。如果只是 shuffle 和重建 Map（像 TopicRandomUtil 那樣替換引用）問題不大，但如果要直接修改已有的 Map 內容就會波及原型。如果對象圖中存在循環引用（A 持有 B 的引用，B 又持有 A 的引用），深拷貝會陷入無限遞迴，需要額外的 visited 機制或特殊序列化支持，這正是原型模式「深度使用時會變得異常麻煩」的原因。
+
+原型模式的優點：便於克隆創建複雜對象，不需要從零構造；避免重複初始化，I/O、RPC、DB 查詢只做一次後續全是內存操作；解耦，不需要與類中所屬的其他類耦合。缺點：循環引用麻煩，對象圖有循環時深拷貝的實現複雜度飆升；深度克隆複雜，對象層次深嵌套多時手動實現 clone() 容易出錯；使用頻率不高，日常業務中真正需要克隆複雜對象的場景並不常見。
+
+選型邊界：適用於對象創建成本高（涉及 I/O / RPC）、需要多份內容相似但有差異的副本、對象結構相對扁平（沒有深層嵌套或循環引用）的場景。慎用或不用於對象結構複雜且有循環引用、需要完全獨立的深拷貝但不願意承擔序列化開銷、只是為了「少寫一個 new」而克隆簡單對象（此時 new 的成本比實現 Cloneable 的維護成本低得多）的場景。設計模式是整套思想，合理運用能提升架構質量，永遠不要硬湊設計模式，否則造成過渡設計與浪費的開發和維護成本。
+
+## Course
+
+[↗ 課程頁面](../../lessons/shallow-deep-copy.html)
+
+## Sources

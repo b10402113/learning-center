@@ -1,0 +1,30 @@
+---
+id: abstract-factory-refactor
+title: 適配介面 + 動態代理重構
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#五、抽象工厂模式重构代码]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+<LearningGoal>
+看懂 ICacheAdapter 適配介面 + JDK 動態代理的重構方案，理解「原類零修改接入兩套集群」的實現思路。
+</LearningGoal>
+
+## Lesson
+
+重構的核心目標是讓 `CacheServiceImpl` 不改一行代碼就能接入 EGM 和 IIR 兩套集群。實現分三步：適配、代理、使用。
+
+首先抽出 `ICacheAdapter` 介面，把所有集群都支持的操作定義成統一方法名（`get`、`set`、`del`），和原來的 `CacheService` 完全一致，業務代碼不需要調整。然後為每套集群寫適配實現：`EGMCacheAdapter` 把 `gain → get`、`delete → del`、`setEx → set-with-timeout` 映射過來；`IIRCacheAdapter` 同理把 `get`、`set`、`setExpire` 映射到統一介面。兩個適配器做的事一樣——把各自集群的「方言」翻譯成統一的「普通話」。
+
+關鍵一步是 JDK 動態代理。`JDKProxy.getProxy` 接收接口類和適配器，通過 `Proxy.newProxyInstance` 生成代理對象。`JDKInvocationHandler` 持有適配器，在 `invoke` 裡通過方法名反射調用適配器的對應方法。使用時只需 `CacheService cs = JDKProxy.getProxy(CacheServiceImpl.class, new EGMCacheAdapter());`，之後業務代碼完全不變——`cs.set("key", "value", 60)` 和 `cs.get("key")` 和以前一模一樣。
+
+重構前後的核心差異：ifelse 方案把「選擇」和「執行」綁在一起，每次調用都要判斷；抽象工廠方案把「選擇」提前到創建代理時一次性決定，之後的調用完全透明。原類零修改，新增集群只需加一個適配器類，調用方不改，測試也可以按適配器獨立進行。
+
+## Sources
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#五、抽象工厂模式重构代码]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/abstract-factory-refactor.html)

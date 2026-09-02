@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>狀態模式三件套重構 — State + 具體狀態類 + Handler</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="lesson-number">Lesson 4/5 · 狀態模式</div>
+      <h1>狀態模式三件套重構</h1>
+      <div class="lesson-meta">Node: state · Step 4/5</div>
+    </header>
+
+    <div class="learning-goal">
+      <h2>學習目標</h2>
+      <p>能說出狀態模式三件套（State 抽象類、具體狀態類、StateHandler）各自的職責，並解釋為什麼每個狀態類的方法內不再需要 if 判斷。</p>
+    </div>
+
+    <section>
+      <h2>三件套骨架</h2>
+      <p>狀態模式把一把梭的 ifelse 拆成三個角色：</p>
+      <table>
+        <thead>
+          <tr><th>角色</th><th>職責</th><th>類比</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>State 抽象類</strong></td><td>定義所有操作的接口（提審、通過、拒絕、撤審、關閉、開啟、執行）</td><td>磁帶機的按鈕面板——所有按鈕都在這裡定義</td></tr>
+          <tr><td><strong>具體狀態類</strong>（7 個）</td><td>每個狀態實現自己的行為：哪些操作允許、執行後切換到哪個狀態</td><td>每個狀態是一張「操作指南」——只有這個狀態下能做的事</td></tr>
+          <tr><td><strong>StateHandler</strong></td><td>用 Map 把狀態枚舉映射到對應的 State 實現，對外提供統一接口</td><td>前台接待——你告訴它你要做什麼，它找到對應狀態的指南去執行</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>State 抽象類：7 個操作接口</h2>
+      <p>State 抽象類定義了 7 個方法，對應活動可能執行的全部操作：</p>
+      <pre><code>abstract class State {
+  void arraignment(ActivityInfo info);  // 提審
+  void checkPass(ActivityInfo info);    // 審核通過
+  void checkRefuse(ActivityInfo info);  // 審核拒絕
+  void checkRevoke(ActivityInfo info);  // 撤審
+  void close(ActivityInfo info);        // 關閉
+  void open(ActivityInfo info);         // 開啟
+  void doing(ActivityInfo info);        // 活動執行
+}</code></pre>
+      <p>注意：每個方法都接受 <code>ActivityInfo</code>，這樣具體狀態類就能修改活動的狀態。</p>
+    </section>
+
+    <section>
+      <h2>具體狀態類：每個狀態自己管自己</h2>
+      <p>關鍵在於：每個具體狀態類只實現它<strong>在當前狀態下允許的操作</strong>，不允許的直接拋異常或忽略。</p>
+      <p>以 <code>EditingState</code>（編輯中）為例：</p>
+      <pre><code>class EditingState extends State {
+  void arraignment(ActivityInfo info) {
+    // 編輯中 → 提審：合法，切換到 Check
+    info.setStatus(Status.Check);
+  }
+
+  void checkPass(ActivityInfo info) {
+    // 編輯中不能直接通過：非法操作
+    throw new RuntimeException("當前狀態不允許此操作");
+  }
+
+  void close(ActivityInfo info) {
+    // 編輯中 → 關閉：合法
+    info.setStatus(Status.Close);
+  }
+
+  // 其餘方法...同理
+}</code></pre>
+      <p>每個方法的邏輯非常直觀：<strong>這個操作在當前狀態下合法嗎？合法就切換狀態，不合法就拒絕。</strong>不需要再問「beforeStatus 是什麼」——因為 <code>EditingState</code> 本身就是「編輯中」的行為指南。</p>
+    </section>
+
+    <section>
+      <h2>StateHandler：統一入口</h2>
+      <p>StateHandler 用 <code>Map&lt;Enum&lt;Status&gt;, State&gt;</code> 把 7 個狀態枚舉映射到 7 個實現類，對外提供同名接口：</p>
+      <pre><code>class StateHandler {
+  private Map&lt;Status, State&gt; stateMap = new HashMap&lt;&gt;();
+
+  StateHandler() {
+    stateMap.put(Status.Editing, new EditingState());
+    stateMap.put(Status.Check, new CheckState());
+    stateMap.put(Status.Pass, new PassState());
+    // ... 其餘狀態
+  }
+
+  void arraignment(ActivityInfo info) {
+    stateMap.get(info.getStatus()).arraignment(info);
+  }
+
+  void checkPass(ActivityInfo info) {
+    stateMap.get(info.getStatus()).checkPass(info);
+  }
+
+  // ... 其餘方法
+}</code></pre>
+      <p>調用方不需要知道當前是什麼狀態，只需要調用 <code>handler.arraignment(info)</code>，Handler 會自動找到對應狀態的實現去執行。</p>
+    </section>
+
+    <section>
+      <h2>對比：ifelse vs 狀態模式</h2>
+      <table>
+        <thead>
+          <tr><th>維度</th><th>ifelse 實現</th><th>狀態模式</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>加新狀態</td><td>所有分支都要改</td><td>加一個新類即可</td></tr>
+          <tr><td>改某個狀態的行為</td><td>在巨方法裡找對應分支</td><td>只改對應的狀態類</td></tr>
+          <tr><td>測試某個狀態</td><td>很難單獨測試</td><td>每個狀態類可獨立測試</td></tr>
+          <tr><td>代碼結構</td><td>一坨一坨</td><td>每個狀態一個文件</td></tr>
+          <tr><td>新人理解</td><td>看半天不敢動</td><td>看一個文件就知道一個狀態的行為</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>一句話記住</h2>
+      <blockquote>狀態模式三件套 = 抽象類定義接口 + 每個狀態一個實現類 + Handler 做映射。狀態自己管自己的行為，不需要外部分支判斷。</blockquote>
+    </section>
+
+    <section class="quiz">
+      <h3>自我檢測</h3>
+      <div class="quiz-question">
+        <p>Q1. StateHandler 的核心職責是什麼？</p>
+        <ul class="quiz-options" data-correct="2">
+          <li data-index="0">定義所有操作的接口</li>
+          <li data-index="1">實現每個狀態的具體行為</li>
+          <li data-index="2">把狀態枚舉映射到對應的 State 實現，提供統一入口</li>
+          <li data-index="3">存儲活動的狀態信息</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q2. EditingState 的 arraignment() 方法做了什麼？</p>
+        <ul class="quiz-options" data-correct="1">
+          <li data-index="0">拋異常，因為編輯中不能提審</li>
+          <li data-index="1">把狀態切換到 Check（待審核）</li>
+          <li data-index="2">把狀態切換到 Pass（審核通過）</li>
+          <li data-index="3">不做任何事情</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q3. 加一個新狀態時，狀態模式需要改哪些地方？</p>
+        <ul class="quiz-options" data-correct="0">
+          <li data-index="0">加一個新的狀態類，並在 Handler 的 Map 裡註冊</li>
+          <li data-index="1">修改所有已有的狀態類</li>
+          <li data-index="2">修改 State 抽象類的所有方法</li>
+          <li data-index="3">重寫 StateHandler 的全部接口</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+    </section>
+
+    <div class="source">
+      <strong>主要來源：</strong>設計模式 — 狀態模式重構代碼
+    </div>
+
+    <div class="follow-up">
+      <p>有任何不清楚的地方？問你的老師！</p>
+      <p class="cta">下一步：學會判斷何時值得引入狀態模式 →</p>
+    </div>
+
+    <nav class="nav">
+      <a href="state-antipattern.html">← 上一課：一把梭 ifelse 的痛</a>
+      <a href="state-tradeoff.html">下一課：何時值得用？ →</a>
+    </nav>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

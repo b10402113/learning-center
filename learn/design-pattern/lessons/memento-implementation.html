@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Java 實現走讀：逐類對照四角色職責</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Java 實現走讀：逐類對照四角色職責</h1>
+<p class="meta">design-pattern › memento › memento-implementation</p>
+
+<blockquote>
+  <strong>學習目標</strong>：逐類走讀配置回滾的 Java 實現，把四角色從抽象概念落到真實程式碼。
+</blockquote>
+
+<h2>ConfigFile——承載配置狀態的 POJO</h2>
+
+<pre><code>public class ConfigFile {
+    private String versionNo;
+    private String content;
+    private String dateTime;
+    private String operator;
+
+    // getter / setter 省略
+}</code></pre>
+
+<p>四個欄位對應場景中的五要素（版本號、時間、內容、操作人）。ConfigFile 是一個純 POJO（Plain Old Java Object），不知道有人在存它的狀態。它就是被保存的「內容」本身。</p>
+
+<h2>ConfigMemento——快照的載體</h2>
+
+<pre><code>public class ConfigMemento {
+    private ConfigFile configFile;
+
+    public ConfigMemento(ConfigFile configFile) {
+        this.configFile = configFile;
+    }
+
+    public ConfigFile getConfigFile() {
+        return configFile;
+    }
+
+    public void setConfigFile(ConfigFile configFile) {
+        this.configFile = configFile;
+    }
+}</code></pre>
+
+<p>ConfigMemento 的全部工作就是<strong>把 ConfigFile 包起來</strong>。它不讀 ConfigFile 的內部欄位，不調用 ConfigFile 的業務方法，只是拿著一個 ConfigFile 的引用。你可以把它理解為一個「密封的快遞盒」：盒子外面看不到裡面裝了什麼，打開盒子才能看到。</p>
+
+<blockquote>
+  <strong>設計要點</strong>：備忘錄（Memento）是原物件的「包裝引用」，不是複製。在這個例子裡，ConfigMemento 持有的是 ConfigFile 的引用。如果需要真正的深拷貝（Deep Copy），可以在建構器裡複製 ConfigFile 的所有欄位——這取決於你需不需要快照之間的狀態隔離。
+</blockquote>
+
+<h2>ConfigOriginator——記錄者，存檔和還原的執行者</h2>
+
+<pre><code>public class ConfigOriginator {
+    private ConfigFile configFile;
+
+    public ConfigFile getConfigFile() {
+        return configFile;
+    }
+
+    public void setConfigFile(ConfigFile configFile) {
+        this.configFile = configFile;
+    }
+
+    // 存檔：把當前狀態包成快照
+    public ConfigMemento saveMemento() {
+        return new ConfigMemento(this.configFile);
+    }
+
+    // 讀檔：把快照的狀態還原到當前物件
+    public void getMemento(ConfigMemento memento) {
+        this.configFile = memento.getConfigFile();
+    }
+}</code></pre>
+
+<p>ConfigOriginator 有兩個關鍵方法：</p>
+
+<ul>
+  <li><code>saveMemento()</code>：拿當前的 ConfigFile 建構一個新的 ConfigMemento 返回出去。注意它是<strong>返回新物件</strong>，不修改當前狀態。</li>
+  <li><code>getMemento(memento)</code>：從 ConfigMemento 裡取出 ConfigFile，<strong>直接寫給當前的 this.configFile</strong>——不是返回一個新的 ConfigFile，而是把快照內容覆蓋到當前物件上。這就是「還原」的實現位置。</li>
+</ul>
+
+<p>ConfigOriginator 是唯一知道 ConfigFile 內部結構的角色。如果 ConfigFile 加了新欄位，只需要在 ConfigOriginator 的 saveMemento/getMemento 裡處理。</p>
+
+<h2>Admin——管理者，多版本歷史的容器</h2>
+
+<pre><code>public class Admin {
+    private List&lt;ConfigMemento&gt; mementoList = new ArrayList&lt;&gt;();
+    private Map&lt;String, ConfigMemento&gt; mementoMap = new ConcurrentHashMap&lt;&gt;();
+    private int cursorIdx = 0;
+
+    // 存放快照
+    public void append(ConfigMemento memento) {
+        mementoList.add(memento);
+        mementoMap.put(
+            memento.getConfigFile().getVersionNo(),
+            memento
+        );
+        cursorIdx++;
+    }
+
+    // 回滾：指針前移
+    public ConfigMemento undo() {
+        if (cursorIdx &gt; 0) {
+            cursorIdx--;
+        }
+        return mementoList.get(cursorIdx);
+    }
+
+    // 前進：指針後移
+    public ConfigMemento redo() {
+        if (cursorIdx &lt; mementoList.size() - 1) {
+            cursorIdx++;
+        }
+        return mementoList.get(cursorIdx);
+    }
+
+    // 按版本號定向取
+    public ConfigMemento get(String versionNo) {
+        return mementoMap.get(versionNo);
+    }
+}</code></pre>
+
+<p>Admin 的設計要點：</p>
+
+<ul>
+  <li><strong>雙結構存儲</strong>：List 保序（按時間順序），Map 按版本號索引（支持 O(1) 定向查詢）</li>
+  <li><strong>游標 cursorIdx</strong>：記錄當前位置，undo 前移、redo 後移，邊界保護（不會越界）</li>
+  <li><strong>append 裡同時寫 List 和 Map</strong>：存一份快照，兩個結構各存一次</li>
+  <li><strong>不知道 ConfigFile</strong>：Admin 只操作 ConfigMemento，不讀 ConfigFile 的任何欄位</li>
+</ul>
+
+<h2>測試類：完整流程走讀</h2>
+
+<pre><code>@Test
+public void test_memento() {
+    ConfigOriginator originator = new ConfigOriginator();
+    Admin admin = new Admin();
+
+    // 保存四份配置
+    originator.setConfigFile(new ConfigFile("1000001", "哈哈", "2026-09-01", "管理員A"));
+    admin.append(originator.saveMemento());
+
+    originator.setConfigFile(new ConfigFile("1000002", "嘻嘻", "2026-09-01", "管理員A"));
+    admin.append(originator.saveMemento());
+
+    originator.setConfigFile(new ConfigFile("1000003", "么么", "2026-09-01", "管理員A"));
+    admin.append(originator.saveMemento());
+
+    originator.setConfigFile(new ConfigFile("1000004", "嘿嘿", "2026-09-01", "管理員A"));
+    admin.append(originator.saveMemento());
+
+    // 回滾一次 → 1000003
+    originator.getMemento(admin.undo());
+    assertEquals("1000003", originator.getConfigFile().getVersionNo());
+
+    // 再回滾一次 → 1000002
+    originator.getMemento(admin.undo());
+    assertEquals("1000002", originator.getConfigFile().getVersionNo());
+
+    // 前進一次 → 1000003
+    originator.getMemento(admin.redo());
+    assertEquals("1000003", originator.getConfigFile().getVersionNo());
+
+    // 定向取 → 1000002
+    originator.getMemento(admin.get("1000002"));
+    assertEquals("1000002", originator.getConfigFile().getVersionNo());
+}</code></pre>
+
+<p>測試的每次操作都是：先從 Admin 取出快照，再交給 Originator 還原到當前物件。四次操作全部符合預期。</p>
+
+<h2>小結</h2>
+
+<p>逐類走讀的結果：<strong>ConfigFile</strong> 是純 POJO、<strong>ConfigMemento</strong> 是包裝引用、<strong>ConfigOriginator</strong> 是存檔/還原的執行者、<strong>Admin</strong> 是多版本歷史的容器。每個類的職責清晰、邊界明確。如果未來 ConfigFile 加了新欄位，只有 ConfigOriginator 需要改；如果想把存儲從內存換成資料庫，只有 Admin 需要改。這就是四角色分離帶來的好處。</p>
+
+<div class="quiz" data-step="memento-implementation">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. ConfigOriginator 的 saveMemento() 做了什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">從 ConfigMemento 裡取出 ConfigFile</button>
+  <button class="quiz-option" data-correct="true">把當前 ConfigFile 建構成一個新的 ConfigMemento 返回</button>
+  <button class="quiz-option" data-correct="false">把 ConfigFile 複製一份存到 Admin 裡</button>
+  <button class="quiz-option" data-correct="false">清空當前 ConfigFile 的所有欄位</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. Admin 為什麼要用 List + Map 雙結構？</strong></p>
+  <button class="quiz-option" data-correct="false">因為 Java 不支持單一集合同時保序和索引</button>
+  <button class="quiz-option" data-correct="true">List 保序支持 undo/redo 的游標移動，Map 支持按版本號 O(1) 定向查詢</button>
+  <button class="quiz-option" data-correct="false">因為 ConcurrentHashMap 的性能比 ArrayList 好</button>
+  <button class="quiz-option" data-correct="false">因為快照的數量必須是 2 的冪次</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. getMemento(memento) 的實現方式是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">返回一個新的 ConfigFile 物件</button>
+  <button class="quiz-option" data-correct="true">把快照裡的 ConfigFile 寫給當前的 this.configFile</button>
+  <button class="quiz-option" data-correct="false">把 ConfigMemento 設為 null 來觸發垃圾回收</button>
+  <button class="quiz-option" data-correct="false">從 Admin 的 List 中移除該快照</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. Admin 的 undo 方法在 cursorIdx 已經是 0 時會做什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">拋出 IndexOutOfBoundsException</button>
+  <button class="quiz-option" data-correct="false">返回 null</button>
+  <button class="quiz-option" data-correct="true">不做任何移動，返回第一個快照（邊界保護）</button>
+  <button class="quiz-option" data-correct="false">自動創建一個新的空快照</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 如果 ConfigFile 新增了一個欄位 origin（來源），以下哪個類需要改動？</strong></p>
+  <button class="quiz-option" data-correct="false">ConfigFile、ConfigMemento、Admin 都要改</button>
+  <button class="quiz-option" data-correct="false">只有 Admin 需要改</button>
+  <button class="quiz-option" data-correct="true">只有 ConfigOriginator 需要改（因為它負責讀寫 ConfigFile）</button>
+  <button class="quiz-option" data-correct="false">四個類都不需要改</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

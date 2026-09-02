@@ -28,7 +28,7 @@ A level in a subject's roadmap that groups nodes from general to specific. Tier 
 _Avoid_: floor, chapter
 
 **Roadmap**:
-The subject-level index (`ROADMAP.md`) that partitions the material into tiers and ordered nodes. It never lists elements.
+The subject-level index (`ROADMAP.md`) that partitions the material into tiers and ordered nodes along the learner-chosen learning path. It never lists elements.
 _Avoid_: plan, outline
 
 **Digest**:

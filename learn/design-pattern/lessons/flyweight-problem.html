@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>秒殺場景痛點：固定信息為什麼每次都在重建？</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>秒殺場景痛點：固定信息為什麼每次都在重建？</h1>
+<p class="meta">design-pattern › flyweight › flyweight-problem</p>
+
+<blockquote>
+  <strong>學習目標</strong>：識別秒殺活動查詢中「固定信息」與「變化信息」的分界，理解每次全量查詢帶來的冗餘浪費。
+</blockquote>
+
+<h2>從一個秒殺系統說起</h2>
+
+<p>你在電商平台做後端，公司剛上線了一個圖書秒殺活動——「圖書嗨樂：圖書優惠券分享激勵分享活動第二期」。一開始日均十幾單，系統跑得很順。但隨著活動推廣，每個時段的秒殺量衝破十萬。</p>
+
+<p>这时候問題來了：每次用戶打開秒殺頁面，後端都要查詢一次活動信息。</p>
+
+<pre><code>public Activity queryActivityInfo(Long id) {
+    // 每次查詢都從數據庫/接口取全量數據
+    Activity activity = new Activity();
+    activity.setId(10001L);
+    activity.setName("圖書嗨樂");
+    activity.setDesc("圖書優惠券分享激勵分享活動第二期");
+    activity.setStartTime("2024-06-01");
+    activity.setStopTime("2024-06-30");
+    activity.setStock(new Stock(1000, 1));  // 總量 1000，已用 1
+    return activity;
+}</code></pre>
+
+<p>看起來很乾淨對吧？但仔細想想：這個活動的名稱、描述、開始結束時間，從活動上線到結束，<strong>一個字都沒變過</strong>。變化的只有庫存數字。然而每次查詢，都在重新創建這些一模一樣的對象。</p>
+
+<h2>固定信息 vs 變化信息</h2>
+
+<p>把活動數據拆開看，很自然地分成兩類：</p>
+
+<table>
+  <thead>
+    <tr><th>分類</th><th>字段</th><th>特徵</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>固定信息</strong>（內部狀態）</td><td>活動名稱、描述、起止時間</td><td>活動期間不變，所有用戶看到的都一樣</td></tr>
+    <tr><td><strong>變化信息</strong>（外部狀態）</td><td>庫存（已售數量）</td><td>隨交易實時變化，每個時刻不同</td></tr>
+  </tbody>
+</table>
+
+<p>這就是享元模式（Flyweight Pattern）的核心切入點：<strong>把不變的抽出來共享，把會變的分離出去單獨獲取</strong>。</p>
+
+<h2>全量查詢的代價</h2>
+
+<p>你可能會說：「new 一個對象能有多大開銷？」在日均十幾單的時候確實無感。但想像一下：</p>
+
+<ul>
+  <li>每個時段十萬次查詢</li>
+  <li>每次查詢都構建完整的 Activity 對象（含固定字段的字符串賦值）</li>
+  <li>如果活動信息來自數據庫，就是十萬次相同的 SQL 查詢</li>
+  <li>如果活動信息來自遠端接口，就是十萬次相同的 RPC 調用</li>
+</ul>
+
+<p>十萬次重複構建完全相同的數據——這就是冗餘。</p>
+
+<blockquote class="bad-code">
+  <strong>壞味道</strong>：每次查詢都「從零開始」構建不變的數據，就像每次做飯都重新買米、重新裝米缸，做完又倒掉。
+</blockquote>
+
+<h2>一個直覺：緩存能解決嗎？</h2>
+
+<p>你的第一反應可能是「加個緩存」。沒錯，享元模式的本質就是一種<strong>針對性緩存</strong>——但不是把所有東西都丟進 Redis 那種通用緩存，而是從設計層面把「共享對象」和「外部狀態」的職責分清楚，用一個專門的工廠來管理共享。</p>
+
+<p>用一個類比：你在公司印名片。名片上的公司名、地址、電話這些固定信息，不需要每次都重新排版——存一個模板就行。但每個人的姓名和職位是變化的，得臨時填進去。享元工廠就是那個「模板庫」。</p>
+
+<h2>小結</h2>
+
+<p>秒殺場景暴露的核心問題是：<strong>固定信息與變化信息混在一起查詢，導致不變的數據被反覆構建</strong>。這是享元模式要解決的起點。下一課我們會正式拆解享元模式的三個核心概念：內部狀態、外部狀態、享元工廠。</p>
+
+<div class="quiz" data-step="flyweight-problem">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 在秒殺活動場景中，以下哪個屬於「內部狀態」（不變的信息）？</strong></p>
+  <button class="quiz-option" data-correct="false">庫存已售數量</button>
+  <button class="quiz-option" data-correct="true">活動名稱和描述</button>
+  <button class="quiz-option" data-correct="false">當前用戶的購買數量</button>
+  <button class="quiz-option" data-correct="false">活動的實時訪問量</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 全量查詢的核心問題是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">數據庫連接數不夠</button>
+  <button class="quiz-option" data-correct="true">不變的數據被反覆構建，造成冗餘</button>
+  <button class="quiz-option" data-correct="false">Redis 緩存沒有命中</button>
+  <button class="quiz-option" data-correct="false">活動信息每次都在變化</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 享元模式解決的核心問題是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">如何加快數據庫查詢速度</button>
+  <button class="quiz-option" data-correct="false">如何減少 ifelse 分支</button>
+  <button class="quiz-option" data-correct="true">把不變的對象共享複用，變化的需求分離出去</button>
+  <button class="quiz-option" data-correct="false">如何實現對象的延遲加載</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 活動信息中的庫存（已售數量）屬於什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">內部狀態</button>
+  <button class="quiz-option" data-correct="true">外部狀態</button>
+  <button class="quiz-option" data-correct="false">靜態信息</button>
+  <button class="quiz-option" data-correct="false">共享對象</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 文中用什麼類比來解釋享元模式的核心思想？</strong></p>
+  <button class="quiz-option" data-correct="false">三個錦囊的策略</button>
+  <button class="quiz-option" data-correct="true">名片模板——固定信息存模板，個人信息臨時填入</button>
+  <button class="quiz-option" data-correct="false">電燈開關——隱藏複雜細節</button>
+  <button class="quiz-option" data-correct="false">裝修套餐——分步構建</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>優惠券場景的策略模式重構</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>優惠券場景的策略模式重構</h1>
+<p class="meta">design-pattern › strategy › strategy-refactor</p>
+
+<blockquote>
+  <strong>學習目標</strong>：能走完「接口 → 四種券實現 → Context 控制類」的完整重構路徑，說出每個組件的職責。
+</blockquote>
+
+<h2>回顧：那一坨 ifelse 代碼</h2>
+
+<p>上一節我們看到了優惠券計算的 ifelse 版本——一個方法裡塞了四種券的邏輯，參數髒、難擴展、難測試。現在，我們用策略模式把它重構一遍。</p>
+
+<p>重構的核心思路：把每種券的計算邏輯抽成獨立的類，通過一個統一的接口讓它們互換。結構分三層：</p>
+
+<table>
+  <thead>
+    <tr><th>組件</th><th>角色</th><th>類比</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>策略接口</td><td>定義「算優惠」的統一契約</td><td>錦囊的封面：寫著「拆開就能算折扣」</td></tr>
+    <tr><td>具體策略實現</td><td>每種券一個類，各自封裝計算規則</td><td>四個錦囊，各自裝不同的計算法</td></tr>
+    <tr><td>上下文控制類</td><td>持有策略、統一入口</td><td>錦囊的持有者：按需取出、統一調用</td></tr>
+  </tbody>
+</table>
+
+<h2>第一步：定義策略接口 ICouponDiscount</h2>
+
+<p>先抽一個泛型接口，聲明唯一的計算方法：</p>
+
+<pre><code>public interface ICouponDiscount&lt;T&gt; {
+    /**
+     * 計算折扣後的金額
+     * @param couponInfo 券的折扣信息（不同券型結構不同）
+     * @param skuPrice  商品原價
+     * @return 折扣後金額
+     */
+    BigDecimal discountAmount(T couponInfo, BigDecimal skuPrice);
+}</code></pre>
+
+<p>為什麼用泛型？因為不同券型的參數結構完全不同：</p>
+
+<ul>
+  <li>直減、折扣、n 元購：券參數就是一個數字（<code>Double</code>）</li>
+  <li>滿減：券參數是一個 Map，包含「滿多少」和「減多少」兩個值</li>
+</ul>
+
+<p>泛型讓接口保持一個方法的簡潔，同時允許每種券用自己的參數類型。這是策略模式的關鍵一步：<strong>把可變的算法固定為統一接口，客戶端面向接口編程</strong>。</p>
+
+<h2>第二步：四種券各自的策略實現</h2>
+
+<p>每個券型一個類，各自實現自己的計算邏輯：</p>
+
+<h3>直減 ZJCouponDiscount</h3>
+
+<pre><code>public class ZJCouponDiscount implements ICouponDiscount&lt;Double&gt; {
+    @Override
+    public BigDecimal discountAmount(Double couponInfo, BigDecimal skuPrice) {
+        // 商品價 - 優惠價，最低支付 1 元
+        BigDecimal subtract = skuPrice.subtract(new BigDecimal(couponInfo));
+        return subtract.compareTo(BigDecimal.ONE) &lt; 0 ? BigDecimal.ONE : subtract;
+    }
+}</code></pre>
+
+<h3>滿減 MJCouponDiscount</h3>
+
+<pre><code>public class MJCouponDiscount implements ICouponDiscount&lt;Map&lt;String, String&gt;&gt; {
+    @Override
+    public BigDecimal discountAmount(Map&lt;String, String&gt; couponInfo, BigDecimal skuPrice) {
+        BigDecimal x = new BigDecimal(couponInfo.get("x"));  // 滿多少
+        BigDecimal n = new BigDecimal(couponInfo.get("n"));  // 減多少
+        if (skuPrice.compareTo(x) &lt; 0) return skuPrice;    // 未達門檻，原價
+        BigDecimal subtract = skuPrice.subtract(n);
+        return subtract.compareTo(BigDecimal.ONE) &lt; 0 ? BigDecimal.ONE : subtract;
+    }
+}</code></pre>
+
+<h3>折扣 ZKCouponDiscount</h3>
+
+<pre><code>public class ZKCouponDiscount implements ICouponDiscount&lt;Double&gt; {
+    @Override
+    public BigDecimal discountAmount(Double couponInfo, BigDecimal skuPrice) {
+        // skuPrice × 折扣比例，保留兩位小數
+        BigDecimal discount = skuPrice.multiply(new BigDecimal(couponInfo))
+            .setScale(2, RoundingMode.HALF_UP);
+        return discount.compareTo(BigDecimal.ONE) &lt; 0 ? BigDecimal.ONE : discount;
+    }
+}</code></pre>
+
+<h3>n 元購 NYGCouponDiscount</h3>
+
+<pre><code>public class NYGCouponDiscount implements ICouponDiscount&lt;Double&gt; {
+    @Override
+    public BigDecimal discountAmount(Double couponInfo, BigDecimal skuPrice) {
+        // 無論原價多少，都按固定金額購買
+        return new BigDecimal(couponInfo);
+    }
+}</code></pre>
+
+<blockquote class="good-code">
+  <strong>好處</strong>：每個類只關心自己的計算邏輯。滿減不用知道折扣的存在，n 元購不用理解「滿多少」的門檻。加新券型？新增一個類就行，不動任何已有代碼。
+</blockquote>
+
+<h2>第三步：策略控制類 Context</h2>
+
+<p>客戶端不想直接面對四個具體策略類。我們需要一個統一入口：</p>
+
+<pre><code>public class Context&lt;T&gt; {
+    private ICouponDiscount&lt;T&gt; couponDiscount;
+
+    // 構造器注入：傳入哪個策略，就用哪個算法
+    public Context(ICouponDiscount&lt;T&gt; couponDiscount) {
+        this.couponDiscount = couponDiscount;
+    }
+
+    public BigDecimal discountAmount(T couponInfo, BigDecimal skuPrice) {
+        return couponDiscount.discountAmount(couponInfo, skuPrice);
+    }
+}</code></pre>
+
+<p>Context 的設計要點：</p>
+
+<ul>
+  <li><strong>構造器注入</strong>：傳入哪個策略實現，Context 就用哪個算法——「可替換」從這裡來</li>
+  <li><strong>統一入口</strong>：客戶端只調 <code>context.discountAmount()</code>，不關心具體是哪種券</li>
+  <li><strong>可配置化</strong>：可以把各策略包裝成 Map 結構，按券型名稱取用，實現「服務配置化」</li>
+</ul>
+
+<h2>測試驗證：結果等價嗎？</h2>
+
+<p>重構的黃金標準：功能不變。用四組測試驗證——原價 100 元的四種券，折後都應該是 90 元：</p>
+
+<table>
+  <thead>
+    <tr><th>券型</th><th>券參數</th><th>商品原價</th><th>折後金額</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>直減</td><td>10（減 10 元）</td><td>100</td><td>90</td></tr>
+    <tr><td>滿減</td><td>滿 100 減 10</td><td>100</td><td>90</td></tr>
+    <tr><td>折扣</td><td>0.9（9 折）</td><td>100</td><td>90.00</td></tr>
+    <tr><td>n 元購</td><td>90（90 元購）</td><td>100</td><td>90</td></tr>
+  </tbody>
+</table>
+
+<p>四種券在原價 100 元上折扣 10 元，最終支付 90 元——和 ifelse 版本的結果完全一致。重構沒有破壞任何功能，但代碼結構已經從「一個方法塞四種邏輯」變成「四個獨立類 + 一個統一入口」。</p>
+
+<h2>小結</h2>
+
+<p>整個重構路徑：接口定義契約 → 每種券一個實現類 → Context 控制類統一入口。三步走完，ifelse 被拆乾淨了。新增券型？寫一個新實現類，注入 Context 就行——不動已有代碼，不動已有測試。這就是策略模式「算法可互換」的落地方式。</p>
+
+<div class="quiz" data-step="strategy-refactor">
+<h2>自測</h2>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 策略接口 ICouponDiscount 為什麼要用泛型？</strong></p>
+  <button class="quiz-option" data-correct="false">因為 Java 接口必須用泛型</button>
+  <button class="quiz-option" data-correct="true">不同券型的參數結構不同（Double vs Map），泛型讓接口保持一個方法的簡潔</button>
+  <button class="quiz-option" data-correct="false">為了支持多線程並發訪問</button>
+  <button class="quiz-option" data-correct="false">為了在運行時做類型檢查</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. Context 類的構造器注入有什麼作用？</strong></p>
+  <button class="quiz-option" data-correct="false">防止外部直接 new 具體策略類</button>
+  <button class="quiz-option" data-correct="true">傳入哪個策略實現，Context 就用哪個算法——實現「可替換」</button>
+  <button class="quiz-option" data-correct="false">讓 Context 可以同時持有多個策略</button>
+  <button class="quiz-option" data-correct="false">為了在構造時做參數校驗</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 為什麼所有券型都用 BigDecimal 而不是 double？</strong></p>
+  <button class="quiz-option" data-correct="false">BigDecimal 的計算速度更快</button>
+  <button class="quiz-option" data-correct="true">金額計算需要精確到分，double 有浮點精度問題</button>
+  <button class="quiz-option" data-correct="false">Java 官方要求所有金融場景必須用 BigDecimal</button>
+  <button class="quiz-option" data-correct="false">BigDecimal 支持更多的數學運算</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 重構後，如果要新增一種「買一送一」的券型，需要改哪些地方？</strong></p>
+  <button class="quiz-option" data-correct="false">修改 ICouponDiscount 接口加新方法</button>
+  <button class="quiz-option" data-correct="false">修改 Context 類加新的判斷分支</button>
+  <button class="quiz-option" data-correct="true">只新增一個實現類，不動任何已有代碼</button>
+  <button class="quiz-option" data-correct="false">修改四個已有實現類加送一邏輯</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 重構的「黃金標準」是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">代碼行數必須減少一半以上</button>
+  <button class="quiz-option" data-correct="true">功能不變——相同的輸入產生相同的輸出</button>
+  <button class="quiz-option" data-correct="false">所有測試都要重寫</button>
+  <button class="quiz-option" data-correct="false">性能指標不能下降</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

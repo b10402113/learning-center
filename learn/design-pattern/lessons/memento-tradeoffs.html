@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>適用邊界與存儲選型</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>適用邊界與存儲選型</h1>
+<p class="meta">design-pattern › memento › memento-tradeoffs</p>
+
+<blockquote>
+  <strong>學習目標</strong>：掌握備忘錄模式的適用邊界——何時該用、何時不該用、內存 vs 資庫的存儲取捨。
+</blockquote>
+
+<h2>備忘錄模式的優勢</h2>
+
+<p>前面四課我們從意圖、場景、結構、代碼四個角度理解了備忘錄模式。它最大的優勢是<strong>在不破壞封裝性的前提下提供回滾能力</strong>。具體來說：</p>
+
+<ul>
+  <li><strong>職責分離</strong>：原物件不管存儲、管理者不管內部結構，每個角色只做一件事</li>
+  <li><strong>易於擴展</strong>：加 redo？只改 Admin。加壓縮？只改 ConfigMemento。加日誌？只改 ConfigOriginator</li>
+  <li><strong>原物件零侵入</strong>：ConfigFile 不需要加任何方法、暴露任何欄位</li>
+</ul>
+
+<h2>什麼時候該用備忘錄模式？</h2>
+
+<p>判斷標準很簡單：<strong>你需要保存物件的歷史狀態，並且支持回滾或恢復</strong>。具體場景：</p>
+
+<table>
+  <thead>
+    <tr><th>場景</th><th>保存什麼</th><th>回滾到什麼</th><th>典型特徵</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>IDE 撤銷（Undo/Redo）</td><td>文件內容 + 光標位置</td><td>某次操作前的狀態</td><td>用戶可見的操作歷史</td></tr>
+    <tr><td>遊戲存檔</td><td>角色狀態 + 場景</td><td>存檔時的狀態</td><td>即時保存、即時恢復</td></tr>
+    <tr><td>線上配置回滾</td><td>配置文件版本</td><td>某個歷史版本的配置</td><td>版本化管理、緊急回滾</td></tr>
+    <tr><td>交易系統回滾</td><td>交易狀態</td><td>交易前的狀態</td><td>事務一致性要求</td></tr>
+    <tr><td>設計工具的歷史記錄</td><td>畫布狀態</td><td>某次操作前的畫布</td><td>大量快照、高頻保存</td></tr>
+  </tbody>
+</table>
+
+<p>共同特徵：<strong>需要「時間旅行」能力——回到過去的某個狀態</strong>。</p>
+
+<h2>什麼時候不該用？</h2>
+
+<p>備忘錄不是萬能的。以下場景不適合：</p>
+
+<ul>
+  <li><strong>不需要回滾</strong>：如果系統只需要「當前狀態」，不需要歷史版本，備忘錄是多餘的複雜度</li>
+  <li><strong>狀態太大</strong>：如果每次快照都要保存幾個 GB 的數據（比如視頻文件的完整像素），內存和存儲成本會爆炸</li>
+  <li><strong>狀態是共享的</strong>：如果多個物件共享同一份狀態，快照的邊界不好定義（A 和 B 共享一個 Map，存 A 的快照時要不要把 Map 複製一份？）</li>
+  <li><strong>狀態頻繁變更</strong>：如果每秒鐘狀態變更幾百次，存快照的開銷可能比業務本身還大</li>
+</ul>
+
+<h2>內存 vs 資庫：存儲選型</h2>
+
+<p>備忘錄模式本身不決定存儲方式——Admin 可以把快照存在任何地方。選擇存哪裡，取決於兩個維度：</p>
+
+<table>
+  <thead>
+    <tr><th>維度</th><th>內存存儲</th><th>資料庫存儲</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>速度</td><td>極快（納秒級）</td><td>較慢（毫秒級）</td></tr>
+    <tr><td>持久性</td><td>進程重啟就丟</td><td>持久保存</td></tr>
+    <tr><td>成本</td><td>佔用 RAM</td><td>佔用磁盤，成本更低</td></tr>
+    <tr><td>適用場景</td><td>即時性場景（IDE 撤銷、遊戲存檔、Photoshop 歷史）</td><td>需要持久化的場景（配置回滾、交易回滾、版本管理）</td></tr>
+  </tbody>
+</table>
+
+<p>案例中的配置回滾場景：在線上環境，配置改錯了需要回滾，但如果服務重啟了，內存裡的快照就丟了。所以<strong>真實場景通常會把快照存到資料庫</strong>。但如果是 IDE 的撤銷功能，進程關了就不需要歷史了，內存就夠了。</p>
+
+<h2>內存存儲的風險</h2>
+
+<p>如果選擇內存存快照，要注意<strong>內存消耗</strong>。假設一份 ConfigFile 是 1 KB，存 1000 個版本就是 1 MB，還算可控。但如果快照對象是整個數據庫的狀態（幾百 MB），存 100 個版本就是幾十 GB——這會直接撐爆內存。</p>
+
+<p>常見的應對策略：</p>
+
+<ul>
+  <li><strong>限制歷史數量</strong>：Admin 只保留最近 N 個快照，超出的自動刪除</li>
+  <li><strong>壓縮快照</strong>：ConfigMemento 在存儲時壓縮 ConfigFile 的內容</li>
+  <li><strong>增量快照</strong>：不存完整的 ConfigFile，只存與上一版本的差異（delta）</li>
+  <li><strong>混合存儲</strong>：最近的快照放內存，歷史快照存資料庫</li>
+</ul>
+
+<h2>與其他模式的邊界</h2>
+
+<p>備忘錄模式容易跟幾個模式混淆：</p>
+
+<table>
+  <thead>
+    <tr><th>模式</th><th>解決什麼</th><th>與備忘錄的區別</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>策略模式</td><td>算法互換</td><td>策略是「選哪個算法」，備忘錄是「回到過去的狀態」</td></tr>
+    <tr><td>狀態模式</td><td>狀態驅動行為</td><td>狀態模式是「當前狀態決定行為」，備忘錄是「保存和恢復歷史狀態」</td></tr>
+    <tr><td>命令模式</td><td>請求封裝成對象</td><td>命令模式可以配合備忘錄做撤銷（命令對象保存 undo 快照），但它們解決的是不同的問題</td></tr>
+  </tbody>
+</table>
+
+<h2>小結</h2>
+
+<p>備忘錄模式的適用邊界：<strong>需要保存歷史狀態、支持回滾或恢復</strong>。不適合不需要回滾、狀態太大、狀態共享、或狀態頻繁變更的場景。存儲選型取決於是否需要持久化——即時性場景用內存（IDE 撤銷、遊戲存檔），需要持久化的場景用資料庫（配置回滾、交易回滾）。內存存儲要注意消耗，限制歷史數量或使用增量快照。記住：任何設計模式都不是萬能的，引入模式是為了更易擴展和維護，不能反而把結構搞複雜。</p>
+
+<div class="quiz" data-step="memento-tradeoffs">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 以下哪個場景最適合用備忘錄模式？</strong></p>
+  <button class="quiz-option" data-correct="false">需要根據用戶權限動態改變頁面佈局</button>
+  <button class="quiz-option" data-correct="true">線上配置改錯了需要退回到上個版本</button>
+  <button class="quiz-option" data-correct="false">需要把一個複雜物件的構建過程分離出來</button>
+  <button class="quiz-option" data-correct="false">需要在同一個方法裡處理多種支付方式</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. IDE 的撤銷功能通常把快照存在哪裡？</strong></p>
+  <button class="quiz-option" data-correct="false">資料庫</button>
+  <button class="quiz-option" data-correct="true">內存</button>
+  <button class="quiz-option" data-correct="false">Git 倉庫</button>
+  <button class="quiz-option" data-correct="false">雲端存儲</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 如果快照對象是整個數據庫的狀態（幾百 MB），存 100 個版本，最大的風險是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">磁盤空間不足</button>
+  <button class="quiz-option" data-correct="true">內存消耗過大，可能撐爆 RAM</button>
+  <button class="quiz-option" data-correct="false">CPU 運算量過大</button>
+  <button class="quiz-option" data-correct="false">網路帶寬不足</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 備忘錄模式和命令模式的關係是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">它們是同一個模式的不同叫法</button>
+  <button class="quiz-option" data-correct="true">命令模式可以配合備忘錄做撤銷，但它們解決的是不同的問題</button>
+  <button class="quiz-option" data-correct="false">備忘錄模式是命令模式的子類</button>
+  <button class="quiz-option" data-correct="false">它們完全互斥，不能一起使用</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 以下哪個不是備忘錄模式的優勢？</strong></p>
+  <button class="quiz-option" data-correct="false">在不破壞封裝性的前提下提供回滾能力</button>
+  <button class="quiz-option" data-correct="false">原物件零侵入，不需要加任何方法</button>
+  <button class="quiz-option" data-correct="false">易於擴展，加功能只需改一個角色</button>
+  <button class="quiz-option" data-correct="true">完全消除內存消耗，不需要任何存儲成本</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>校園場景完整實現：五類走通</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="lesson-number">Lesson 3/4 · 訪問者模式</div>
+      <h1>校園場景完整實現：五類走通</h1>
+      <div class="lesson-meta">Node: visitor · Step 3/4 · <span class="tag tag-behavioral">行為模式</span></div>
+    </header>
+
+    <div class="learning-goal">
+      <h2>學習目標</h2>
+      <p>走通訪問者模式在校園場景中的完整實現：User 抽象類 + Student/Teacher 數據結構 + Visitor 接口 + Principal/Parent 訪問者 + DataView 數據看板，理解每一層的職責。</p>
+    </div>
+
+    <section>
+      <h2>場景回顧：校園裡的兩種視角</h2>
+      <p>學校裡有學生和老師兩種身份，信息是固定的：</p>
+      <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li><strong>學生</strong>：姓名、班級、身份（重點班/普通班）</li>
+        <li><strong>老師</strong>：姓名、班級、身份（特級/普通/實習）</li>
+      </ul>
+      <p>兩個角色想從中看到不同的東西：</p>
+      <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li><strong>家長</strong>：學生的成績排名 + 老師的教學水平</li>
+        <li><strong>校長</strong>：班級的學生分佈 + 老師的升學率</li>
+      </ul>
+      <p>接下來我們用五個類（加一個數據看板）把整個模式走通。</p>
+    </section>
+
+    <section>
+      <h2>第一層：數據結構（User → Student / Teacher）</h2>
+      <p>先定義數據結構的骨架。User 是抽象類，持有基礎屬性，並聲明一個讓訪問者進來的方法：</p>
+<pre><code>public abstract class User {
+    protected String name;      // 姓名
+    protected String identity;  // 身份
+    protected String clazz;     // 班級
+
+    public User(String name, String identity, String clazz) {
+        this.name = name;
+        this.identity = identity;
+        this.clazz = clazz;
+    }
+
+    // 關鍵：讓訪問者進來的入口
+    public abstract void accept(Visitor visitor);
+}</code></pre>
+      <p>學生和老師各自繼承 User，實現 <code>accept</code>，並提供自己的業務特性方法：</p>
+<pre><code>public class Student extends User {
+    private int ranking; // 排名（隨機生成）
+
+    public Student(String name, String identity, String clazz) {
+        super(name, identity, clazz);
+        this.ranking = new Random().nextInt(100);
+    }
+
+    @Override
+    public void accept(Visitor visitor) {
+        visitor.visit(this);  // ← 雙分派的起點
+    }
+
+    public int getRanking() { return ranking; }
+}
+
+public class Teacher extends User {
+    private BigDecimal entranceRatio; // 升學率（隨機計算）
+
+    public Teacher(String name, String identity, String clazz) {
+        super(name, identity, clazz);
+        this.entranceRatio = BigDecimal.valueOf(
+            new Random().nextDouble() * 100
+        ).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    @Override
+    public void accept(Visitor visitor) {
+        visitor.visit(this);  // ← 雙分派的起點
+    }
+
+    public BigDecimal getEntranceRatio() { return entranceRatio; }
+}</code></pre>
+      <p>關鍵設計：業務數據（排名、升學率）掛在數據結構類上，訪問邏輯留在訪問者裡。數據類只負責「接受訪問者」。</p>
+    </section>
+
+    <section>
+      <h2>第二層：訪問者（Visitor → Principal / Parent）</h2>
+      <p>訪問者接口定義兩個同名方法，靠參數類型區分：</p>
+<pre><code>public interface Visitor {
+    void visit(Student student);
+    void visit(Teacher teacher);
+}</code></pre>
+      <p>兩個具體訪問者各自實現自己關心的字段組合：</p>
+<pre><code>public class Principal implements Visitor {
+    @Override
+    public void visit(Student student) {
+        System.out.println("校長視角 - 學生姓名：" + student.name
+            + "，班級：" + student.clazz);
+    }
+
+    @Override
+    public void visit(Teacher teacher) {
+        System.out.println("校長視角 - 老師姓名：" + teacher.name
+            + "，班級：" + teacher.clazz
+            + "，升學率：" + teacher.getEntranceRatio());
+    }
+}
+
+public class Parent implements Visitor {
+    @Override
+    public void visit(Student student) {
+        System.out.println("家長視角 - 學生姓名：" + student.name
+            + "，班級：" + student.clazz
+            + "，排名：" + student.getRanking());
+    }
+
+    @Override
+    public void visit(Teacher teacher) {
+        System.out.println("家長視角 - 老師姓名：" + teacher.name
+            + "，班級：" + teacher.clazz
+            + "，級別：" + teacher.identity);
+    }
+}</code></pre>
+      <p>校長關注升學率，家長關注排名——同一批數據，不同訪問者輸出完全不同。</p>
+    </section>
+
+    <section>
+      <h2>第三層：數據看板（DataView）</h2>
+      <p>DataView 負責初始化數據並提供展示方法：</p>
+<pre><code>public class DataView {
+    private List&lt;User&gt; userList = new ArrayList&lt;&gt;();
+
+    public DataView() {
+        // 學生
+        userList.add(new Student("謝飛機", "重點班", "C1班"));
+        userList.add(new Student("windy", "普通班", "C2班"));
+        userList.add(new Student("大毛", "重點班", "C1班"));
+        userList.add(new Student("Shing", "普通班", "C2班"));
+        // 老師
+        userList.add(new Teacher("BK", "特級教師", "C1班"));
+        userList.add(new Teacher("娜娜", "特級教師", "C1班"));
+        userList.add(new Teacher("dangdang", "普通教師", "C2班"));
+        userList.add(new Teacher("澤東", "實習教師", "C2班"));
+    }
+
+    // 核心：傳入不同訪問者，輸出不同視角
+    public void show(Visitor visitor) {
+        for (User user : userList) {
+            user.accept(visitor);  // 雙分派觸發點
+        }
+    }
+}</code></pre>
+      <p>DataView 是「數據結構不動、接入不同訪問者即換輸出」的調度層——最直觀理解解耦的入口。</p>
+    </section>
+
+    <section>
+      <h2>測試：同一份數據，兩種輸出</h2>
+<pre><code>public class ApiTest {
+    @Test
+    public void test() {
+        DataView dataView = new DataView();
+        System.out.println("\n--- 家長視角 ---");
+        dataView.show(new Parent());
+        System.out.println("\n--- 校長視角 ---");
+        dataView.show(new Principal());
+    }
+}</code></pre>
+      <p>家長視角：看到學生排名（如 62、51、16、98）和老師級別（特級/普通/實習）。</p>
+      <p>校長視角：看到老師升學率（如 70.62、23.15、70.98、90.14）。</p>
+      <p>同一份數據，雙分派生效——這就是訪問者模式的完整運作。</p>
+    </section>
+
+    <section>
+      <h2>五類的職責一覽</h2>
+      <table>
+        <thead>
+          <tr><th>類</th><th>體系</th><th>職責</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>User</td><td>數據結構</td><td>抽象類，持有基礎屬性 + <code>accept(Visitor)</code></td></tr>
+          <tr><td>Student / Teacher</td><td>數據結構</td><td>實現 accept，提供業務特性方法（排名/升學率）</td></tr>
+          <tr><td>Visitor</td><td>訪問者</td><td>接口，定義 <code>visit(Student)</code> 和 <code>visit(Teacher)</code></td></tr>
+          <tr><td>Principal / Parent</td><td>訪問者</td><td>實現各自視角的訪問邏輯</td></tr>
+          <tr><td>DataView</td><td>調度層</td><td>初始化數據 + <code>show(Visitor)</code> 遍歷觸發雙分派</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Quiz -->
+    <section class="quiz">
+      <h3>自我檢測</h3>
+      <div class="quiz-question">
+        <p>Q1. 在訪問者模式中，<code>accept</code> 方法定義在哪裡？</p>
+        <ul class="quiz-options" data-correct="1">
+          <li data-index="0">訪問者接口裡</li>
+          <li data-index="1">數據結構的抽象類裡</li>
+          <li data-index="2">數據看板裡</li>
+          <li data-index="3">具體訪問者裡</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q2. Student 類的 <code>accept</code> 方法內部做了什麼？</p>
+        <ul class="quiz-options" data-correct="2">
+          <li data-index="0">直接打印學生信息</li>
+          <li data-index="1">調用 <code>super.accept()</code></li>
+          <li data-index="2">調用 <code>visitor.visit(this)</code></li>
+          <li data-index="3">返回學生的排名</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q3. DataView 的 <code>show(Visitor)</code> 方法的作用是？</p>
+        <ul class="quiz-options" data-correct="0">
+          <li data-index="0">遍歷用戶列表，對每個用戶調用 <code>accept(visitor)</code> 觸發雙分派</li>
+          <li data-index="1">直接打印所有用戶信息</li>
+          <li data-index="2">過濾出特定角色的用戶</li>
+          <li data-index="3">創建新的訪問者實例</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q4. 家長和校長在同一個 Student 上看到的字段有什麼不同？</p>
+        <ul class="quiz-options" data-correct="3">
+          <li data-index="0">完全相同</li>
+          <li data-index="1">家長看到升學率，校長看到排名</li>
+          <li data-index="2">家長看到姓名，校長看不到</li>
+          <li data-index="3">家長看到排名，校長看到班級信息</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q5. 數據結構類（Student/Teacher）的職責是什麼？</p>
+        <ul class="quiz-options" data-correct="1">
+          <li data-index="0">實現所有視角的訪問邏輯</li>
+          <li data-index="1">持有數據 + 提供 accept 入口，不承擔業務邏輯</li>
+          <li data-index="2">初始化所有用戶數據</li>
+          <li data-index="3">決定打印哪些字段</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+    </section>
+
+    <div class="source">
+      <strong>主要來源：</strong>場景簡述、代碼實現——用戶抽象類、老師學生、訪問接口、校長家長、數據看板、測試驗證
+    </div>
+
+    <div class="follow-up">
+      <p>有任何不清楚的地方？問你的老師！</p>
+      <p class="cta">下一步：訪問者模式的優缺點與適用邊界 →</p>
+    </div>
+
+    <nav class="nav">
+      <a href="visitor-dispatch.html">← 上一課：雙分派機制</a>
+      <a href="visitor-tradeoffs.html">下一課：優缺點與適用邊界 →</a>
+    </nav>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

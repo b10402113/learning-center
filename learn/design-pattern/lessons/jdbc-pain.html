@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>一把梭 JDBC 直連的痛點</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>一把梭 JDBC 直連的痛點</h1>
+<p class="meta">design-pattern › mediator › jdbc-pain</p>
+
+<blockquote>
+  <strong>學習目標</strong>：看到一把梭 JDBC 直連的四步流程，並說出它在業務擴展時的具體痛點。
+</blockquote>
+
+<h2>場景：直接用 JDBC 查資料庫</h2>
+
+<p>假設你有一個簡單需求：從 MySQL 查出使用者列表並打印。最直覺的寫法就是寫一個 <code>JDBCUtil</code> 類，main 方法裡直接走完 JDBC 四步：</p>
+
+<pre><code>public class JDBCUtil {
+    public static void main(String[] args) throws Exception {
+        // 第一步：載入驅動
+        Class.forName("com.mysql.jdbc.Driver");
+
+        // 第二步：取得連接
+        Connection connection = DriverManager.getConnection(
+            "jdbc:mysql://localhost:3306/itstack_demo_design",
+            "root", "root");
+
+        // 第三步：建立 Statement 並查詢
+        Statement statement = connection.createStatement();
+        ResultSet resultSet = statement.executeQuery(
+            "SELECT id, name, age, createTime, updateTime FROM user");
+
+        // 第四步：遍歷結果
+        while (resultSet.next()) {
+            System.out.println(resultSet.getString("name")
+                + "，年齡：" + resultSet.getInt("age"));
+        }
+    }
+}</code></pre>
+
+<p>跑起來沒問題，輸出：</p>
+
+<pre><code>水水，年齡：18
+豆豆，年齡：18
+花，年齡：19</code></pre>
+
+<h2>痛點在哪？</h2>
+
+<p>這段代碼「能跑」，但問題藏在它<strong>把所有東西都暴露給業務方</strong>：</p>
+
+<table>
+  <thead>
+    <tr><th>暴露的細節</th><th>為什麼是痛點</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>驅動類名 <code>com.mysql.jdbc.Driver</code></td><td>換 Oracle 或 PostgreSQL 要改業務代碼</td></tr>
+    <tr><td>連接字串、帳號密碼</td><td>不同環境（dev/staging/prod）要硬切配置</td></tr>
+    <tr><td>SQL 字符串直接寫死</td><td>改查詢就要改業務類，沒有複用空間</td></tr>
+    <tr><td><code>ResultSet</code> 逐行手動取值</td><td>每個查詢都要寫一遍 while loop，N 個查詢就是 N 個 while</td></tr>
+  </tbody>
+</table>
+
+<p>一句話：<strong>業務代碼跟 JDBC 細節強耦合</strong>。一個查詢這樣寫還好，十個查詢、三種資料庫、五套環境呢？每個查詢都 copy 一遍這四步？</p>
+
+<h2>更深一層：無法複用</h2>
+
+<p>假設公司有三種獎品服務（金幣、優惠券、實物），每種都要查資料庫。如果每個服務都自己寫 JDBC 四步，你會得到：</p>
+
+<ul>
+  <li>三份幾乎一樣的驅動/連接代碼</li>
+  <li>三份不同的 SQL，但結果處理邏輯（列名→字段映射）完全重複</li>
+  <li>連接池管理分散在各處，沒法統一控管</li>
+</ul>
+
+<p>這就是「一把梭」的代價：<strong>重複、分散、難改</strong>。要消除這些痛點，就需要一層「中介者」把 JDBC 細節封裝起來，讓業務方只關心「查什麼、用什麼參數」。</p>
+
+<h2>小結</h2>
+
+<p>一把梭 JDBC 直連的本質問題：業務邏輯和基礎設施細節攪在一起。每多一個查詢，重複就多一份。下一課我們看看中介者模式怎麼把這些細節收進一個統一的包裝層。</p>
+
+<div class="quiz" data-step="jdbc-pain">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 一把梭 JDBC 直連最大的痛點是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">執行速度太慢</button>
+  <button class="quiz-option" data-correct="false">不支持事務</button>
+  <button class="quiz-option" data-correct="true">業務代碼與 JDBC 細節強耦合，無法複用</button>
+  <button class="quiz-option" data-correct="false">不支持批量操作</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 如果要換資料庫驅動（MySQL → PostgreSQL），一把梭代碼需要改哪裡？</strong></p>
+  <button class="quiz-option" data-correct="false">只改 SQL 語句</button>
+  <button class="quiz-option" data-correct="true">驅動類名、連接字串、甚至帳號密碼都要改</button>
+  <button class="quiz-option" data-correct="false">不需要改，JDBC 會自動適配</button>
+  <button class="quiz-option" data-correct="false">只改 ResultSet 的取值方式</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 三種獎品服務各自寫 JDBC 直連會導致什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">代碼會自動合併</button>
+  <button class="quiz-option" data-correct="false">只有金幣服務會出問題</button>
+  <button class="quiz-option" data-correct="true">三份重複的連接/驅動代碼，維護成本翻倍</button>
+  <button class="quiz-option" data-correct="false">資料庫性能會下降</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 中介者模式要解決的核心問題是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">加快資料庫查詢速度</button>
+  <button class="quiz-option" data-correct="false">減少資料庫表的數量</button>
+  <button class="quiz-option" data-correct="true">把分散的 JDBC 細節收進統一包裝層</button>
+  <button class="quiz-option" data-correct="false">自動生成 SQL 語句</button>
+</div>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./mediator-concept.html">下一篇：中介者模式的意圖與 ORM 場景 →</a>
+</div>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>工廠方法模式重構發獎代碼</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>工廠方法模式重構發獎代碼</h1>
+<p class="meta">design-pattern › factory-method › factory-refactor</p>
+
+<blockquote>
+  <strong>學習目標</strong>：能用統一的 ICommodity 接口 + 三種實現類 + StoreFactory 工廠，替代發散的 ifelse 發獎分支，說清每一層的職責。
+</blockquote>
+
+<h2>重構的第一步：統一接口</h2>
+
+<p>上一課看到的 ifelse 代碼，核心問題是三個服務的接口不一樣——方法名不同、參數不同、返回值不同。要消除分支發散，第一步是讓它們「看起來一樣」。</p>
+
+<p>定義一個統一的發獎接口：</p>
+
+<pre><code>public interface ICommodity {
+    void sendCommodity(String uId, String commodityId,
+                       String bizId, Map&lt;String, String&gt; extMap) throws Exception;
+}</code></pre>
+
+<p>所有商品都實現這個接口：方法名統一、入參統一（用戶 ID、商品 ID、業務 ID、擴展字段）、返回值統一為 void。異常直接拋出，讓調用方統一處理。實物商品的收貨地址放在 extMap 裡傳入，不再需要為它單獨加參數。</p>
+
+<blockquote class="good-code">
+  <strong>關鍵</strong>：接口統一之後，調用方不需要知道具體是哪種商品——只要拿到一個 ICommodity 實例，就能用同樣的方式調用 sendCommodity。
+</blockquote>
+
+<h2>三種實現類：各管各的</h2>
+
+<p>每種商品在自己的實現類裡完成業務邏輯，互不干擾：</p>
+
+<h3>優惠券實現</h3>
+<pre><code>public class CouponCommodityService implements ICommodity {
+    @Override
+    public void sendCommodity(String uId, String commodityId,
+                              String bizId, Map&lt;String, String&gt; extMap) throws Exception {
+        CouponService couponService = new CouponService();
+        CouponResult result = couponService.sendCoupon(uId, commodityId, bizId);
+        if (!"0000".equals(result.getCode())) {
+            throw new RuntimeException("優惠券發放失敗");
+        }
+    }
+}</code></pre>
+
+<h3>實物商品實現</h3>
+<pre><code>public class GoodsCommodityService implements ICommodity {
+    @Override
+    public void sendCommodity(String uId, String commodityId,
+                              String bizId, Map&lt;String, String&gt; extMap) throws Exception {
+        GoodsService goodsService = new GoodsService();
+        DeliverReq req = new DeliverReq();
+        req.setuId(uId);
+        req.setGoodsId(commodityId);
+        req.setBusinessId(bizId);
+        req.setExtMap(extMap);
+        Boolean success = goodsService.deliverGoods(req);
+        if (!success) {
+            throw new RuntimeException("實物商品發放失敗");
+        }
+    }
+}</code></pre>
+
+<h3>第三方兌換卡實現</h3>
+<pre><code>public class CardCommodityService implements ICommodity {
+    @Override
+    public void sendCommodity(String uId, String commodityId,
+                              String bizId, Map&lt;String, String&gt; extMap) throws Exception {
+        CardService cardService = new CardService();
+        String phone = queryUserPhoneNumber(uId);
+        cardService.grantToken(phone, commodityId);
+    }
+}</code></pre>
+
+<p>三個類各自管各自的：優惠券調優惠券的接口、實物商品拼裝 DeliverReq、兌換卡查手機號。新增商品？加一個新的實現類就行，不動任何已有代碼。</p>
+
+<h2>工廠類：把分發邏輯收到一處</h2>
+
+<p>調用方不需要知道有幾種實現類。工廠類負責按類型返回對應的 ICommodity：</p>
+
+<pre><code>public class StoreFactory {
+    public static ICommodity getCommodityService(Integer commodityType) {
+        if (commodityType == 1) {
+            return new CouponCommodityService();
+        } else if (commodityType == 2) {
+            return new GoodsCommodityService();
+        } else if (commodityType == 3) {
+            return new CardCommodityService();
+        }
+        throw new RuntimeException("不存在的商品服務類型");
+    }
+}</code></pre>
+
+<blockquote>
+  <strong>注意</strong>：ifelse 沒有消失，但它從調用方收斂到了工廠類這一個地方。以前每加一種商品要改 Controller，現在只需要在工廠裡加一行，再寫一個實現類。
+</blockquote>
+
+<p>調用方的代碼變得非常乾淨：</p>
+
+<pre><code>ICommodity commodityService = StoreFactory.getCommodityService(req.getAwardType());
+commodityService.sendCommodity(req.getuId(), req.getAwardNumber(),
+                                req.getBizId(), req.getExtMap());</code></pre>
+
+<p>兩行代碼：拿到服務、調用發放。不需要知道具體是哪種商品，不需要拼裝不同的參數，不需要判斷返回值類型。</p>
+
+<h2>對比：ifelse vs 工廠方法</h2>
+
+<table>
+  <thead>
+    <tr><th>維度</th><th>ifelse 一把梭</th><th>工廠方法模式</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>新增商品</td><td>改 Controller 加分支，動已有代碼</td><td>加一個實現類 + 工廠加一行</td></tr>
+    <tr><td>修改某種商品</td><td>在大方法裡找到對應分支，怕影響其他分支</td><td>只改對應的實現類</td></tr>
+    <tr><td>單元測試</td><td>三種邏輯耦合，無法獨立測試</td><td>每個實現類可以獨立單測</td></tr>
+    <tr><td>可讀性</td><td>新同事要把所有 if 全讀一遍</td><td>想知道哪種商品？打開對應的實現類</td></tr>
+    <tr><td>參數</td><td>所有商品的參數混在一個方法裡</td><td>extMap 統一處理，各實現類按需取用</td></tr>
+  </tbody>
+</table>
+
+<h2>小結</h2>
+
+<p>工廠方法模式的重構分三層：<strong>接口層</strong>統一調用約定（ICommodity），<strong>實現層</strong>各管各的業務邏輯，<strong>工廠層</strong>按類型分發實例。ifelse 沒有消失，但從散落在業務代碼裡收斂到了工廠這一個地方——新增商品只需要「加實現類 + 加工廠分支」，不動任何已有代碼。下一課我們會討論這個模式的收益和局限。</p>
+
+<div class="quiz" data-step="factory-refactor">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. ICommodity 接口統一了什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">只統一了返回值類型</button>
+  <button class="quiz-option" data-correct="true">統一了方法名、入參結構和返回值</button>
+  <button class="quiz-option" data-correct="false">統一了三種商品的業務邏輯</button>
+  <button class="quiz-option" data-correct="false">統一了異常處理方式</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. StoreFactory 的職責是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">執行具體的發獎業務邏輯</button>
+  <button class="quiz-option" data-correct="false">定義發獎接口</button>
+  <button class="quiz-option" data-correct="true">按類型返回對應的 ICommodity 實現</button>
+  <button class="quiz-option" data-correct="false">管理商品的數據庫存儲</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 實物商品的收貨地址放在哪裡傳入？</strong></p>
+  <button class="quiz-option" data-correct="false">在 ICommodity 接口中增加專門的地址參數</button>
+  <button class="quiz-option" data-correct="true">通過 extMap 擴展字段傳入</button>
+  <button class="quiz-option" data-correct="false">在實現類的構造函數中傳入</button>
+  <button class="quiz-option" data-correct="false">通過全局配置讀取</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 工廠方法模式下，新增一種商品需要改哪些地方？</strong></p>
+  <button class="quiz-option" data-correct="false">改 ICommodity 接口，加新方法</button>
+  <button class="quiz-option" data-correct="false">改 Controller 的 ifelse 分支</button>
+  <button class="quiz-option" data-correct="true">加一個新的實現類 + 在 StoreFactory 裡加一行分發</button>
+  <button class="quiz-option" data-correct="false">改所有已有的實現類</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 調用方拿到 ICommodity 實例後，能區分具體是哪種商品嗎？</strong></p>
+  <button class="quiz-option" data-correct="true">不需要區分，按統一方式調用 sendCommodity 即可</button>
+  <button class="quiz-option" data-correct="false">需要用 instanceof 判斷具體類型</button>
+  <button class="quiz-option" data-correct="false">需要通過反射獲取類名</button>
+  <button class="quiz-option" data-correct="false">需要用工廠再判斷一次</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

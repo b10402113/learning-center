@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>適配器的直覺 — 設計模式：適配器模式</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>適配器的直覺：把不兼容的「口」統一起來</h1>
+<p class="meta">設計模式 · 適配器模式 · Step 1/4</p>
+
+<h2>學習目標</h2>
+<p>能說出適配器模式的核心意圖——把原本不兼容的接口通過適配修改做到統一——並用生活直覺和業務場景說出「為什麼需要它」。</p>
+
+<h2>生活中的適配器</h2>
+
+<p>你到美國出差，帶了台灣的三孔插頭，發現旅館牆上只有兩孔扁插座。你不可能改旅館的牆，也不可能把自己的插頭鋸掉——你買了一個轉接頭。</p>
+
+<p>轉接頭做的事情很簡單：<strong>把一個「口」翻譯成另一個「口」</strong>。兩邊的電都是一樣的，只是形狀不同，轉接頭讓它們能接上。</p>
+
+<p>適配器模式（Adapter Pattern）就是程式世界裡的這個轉接頭。當你的系統想統一調用，但外來的接口各有各的命名、各有各的返回值，適配器在中間做一層翻譯，讓調用方只面對一個統一的口。</p>
+
+<h2>為什麼框架裡滿滿都是適配器</h2>
+
+<p>如果你去 Spring 的原始碼裡搜 <code>Adapter</code>，會跳出一堆實現類：`UserCredentialsDataSourceAdapter`、`HttpRequestHandlerAdapter`、`MessageListenerAdapter`……為什麼框架這麼愛用這個模式？</p>
+
+<p>因為框架要整合各種第三⽅，每個第三⽅都有自己的 API 風格。Spring 的做法不是要第三⽅改接口，而是在中間加一層適配器，把差異抹平。就像你家的插座不用管你帶的是哪國的插頭——轉接頭負責翻譯。</p>
+
+<blockquote>
+  適配器模式的核心：不改兩頭，改中間。不改你的系統，也不改第三方的接口，而是加一層翻譯。
+</blockquote>
+
+<h2>業務場景：行銷系統的 MQ 困境</h2>
+
+<p>假設你負責一個行銷系統，需要接收各種 MQ（消息隊列）消息來觸發獎勵發放：</p>
+
+<table>
+  <tr>
+    <th>MQ 消息</th>
+    <th>用戶 ID 欄位</th>
+    <th>時間欄位</th>
+    <th>業務 ID 欄位</th>
+  </tr>
+  <tr>
+    <td><code>create_account</code>（開戶）</td>
+    <td><code>number</code></td>
+    <td><code>accountDate</code></td>
+    <td><code>number</code></td>
+  </tr>
+  <tr>
+    <td><code>OrderMq</code>（內部訂單）</td>
+    <td><code>uid</code></td>
+    <td><code>createOrderTime</code></td>
+    <td><code>orderId</code></td>
+  </tr>
+  <tr>
+    <td><code>POPOrderDelivered</code>（第三方訂單）</td>
+    <td><code>uId</code></td>
+    <td><code>orderTime</code></td>
+    <td><code>orderId</code></td>
+  </tr>
+</table>
+
+<p>三個 MQ 傳遞的都是同一個意思：「某個用戶在某個時間做了某件事」。但欄位名完全不一樣——用戶 ID 分別叫 <code>number</code>、<code>uid</code>、<code>uId</code>。</p>
+
+<p>你的系統不可能為每種 MQ 寫一套處理邏輯——那樣新增一個 MQ 就要改一次代碼，改到天荒地老。你需要的是一個轉接頭：不管外面傳進來的欄位叫什麼名字，進了系統之後全部映射到統一的結構。</p>
+
+<h2>不使用模式的壞味道</h2>
+
+<p>最直覺的做法：為每種 MQ 建一個消費類。</p>
+
+<pre><code>// 為 create_account 建一個類
+public class create_accountMqService {
+    public void onMessage(String msg) {
+        JSONObject json = JSON.parseObject(msg);
+        String number = json.getString("number");
+        String address = json.getString("address");
+        // ... 逐欄位取出處理
+    }
+}
+
+// 為 OrderMq 建一個類
+public class OrderMqService {
+    public void onMessage(String msg) {
+        JSONObject json = JSON.parseObject(msg);
+        String uid = json.getString("uid");
+        String sku = json.getString("sku");
+        // ... 逐欄位取出處理
+    }
+}</code></pre>
+
+<blockquote class="bad-code">
+  壞味道：每新增一個 MQ，就新增一個手工類。MQ 少的時候還能忍受，一旦消息種類來到幾十個，這些類就會爆炸——每個類做的事情幾乎一樣（解析 JSON、取出欄位、轉成統一格式），差別只在欄位名不同。
+</blockquote>
+
+<p>這正是適配器要消滅的重複。</p>
+
+<h2>適配器的直覺</h2>
+
+<p>適配器做的事情可以用一句話概括：</p>
+
+<blockquote>
+  把原本不兼容的接口，通過適配修改，做到統一輸出。
+</blockquote>
+
+<p>對應到 MQ 場景：不管外面的 MQ 欄位叫 <code>number</code>、<code>uid</code> 還是 <code>uId</code>，適配器把它們全部映射成統一的 <code>userId</code>。你的業務代碼只面對 <code>userId</code>，不再關心外面叫什麼。</p>
+
+<p>下一個步驟我們會看到具體怎麼實現：用一張「映射表」加上 Java 反射，讓適配器自動完成欄位翻譯。</p>
+
+<h2>小結</h2>
+
+<table>
+  <tr>
+    <th>問題</th>
+    <th>適配器的回答</th>
+  </tr>
+  <tr>
+    <td>多個第三方接口格式不同</td>
+    <td>不改第三方，加一層翻譯</td>
+  </tr>
+  <tr>
+    <td>新增一個接口就要改一次代碼</td>
+    <td>適配器把差異隔離在映射表裡</td>
+  </tr>
+  <tr>
+    <td>業務代碼和第三方接口耦合</td>
+    <td>業務只面對統一接口</td>
+  </tr>
+</table>
+
+<h2>自測題</h2>
+
+<div class="quiz" data-step="adapter-concept">
+  <p><strong>1. 適配器模式解決的核心問題是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 把多個類的行為封裝成一個算法族</button>
+  <button class="quiz-option" data-correct="true">B. 把原本不兼容的接口通過適配修改做到統一</button>
+  <button class="quiz-option" data-correct="false">C. 把請求封裝成對象以實現延遲執行</button>
+  <button class="quiz-option" data-correct="false">D. 把複雜對象的創建過程與表示分離</button>
+
+  <p><strong>2. 在 MQ 消息體場景中，三種 MQ 的欄位名不一致，適配器的做法是？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 要求所有 MQ 發送方統一欄位名</button>
+  <button class="quiz-option" data-correct="true">B. 在中間加一層映射，把不同欄位名對應到統一結構</button>
+  <button class="quiz-option" data-correct="false">C. 為每種 MQ 寫一套完整的業務邏輯</button>
+  <button class="quiz-option" data-correct="false">D. 直接用反射讀取所有欄位名</button>
+
+  <p><strong>3. 為什麼 Spring 框架中大量使用適配器？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 因為 Spring 需要支持多種編程語言</button>
+  <button class="quiz-option" data-correct="true">B. 因為要整合各種第三方庫，每個的 API 風格不同</button>
+  <button class="quiz-option" data-correct="false">C. 因為適配器可以提升程序性能</button>
+  <button class="quiz-option" data-correct="false">D. 因為適配器可以減少內存佔用</button>
+
+  <p><strong>4. 「不改兩頭，改中間」這句話對應適配器的哪個特徵？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 適配器繼承了兩端的接口</button>
+  <button class="quiz-option" data-correct="false">B. 適配器修改了第三方的源碼</button>
+  <button class="quiz-option" data-correct="true">C. 適配器不改調用方也不改被調用方，而是加一層翻譯</button>
+  <button class="quiz-option" data-correct="false">D. 適配器把兩端的代碼合併成一個類</button>
+
+  <p><strong>5. 不使用適配器時，每新增一種 MQ 就要新增一個消費類，這種問題被稱為？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 設計模式過度使用</button>
+  <button class="quiz-option" data-correct="true">B. 壞味道——重複的類結構、難以擴展</button>
+  <button class="quiz-option" data-correct="false">C. 單一職責原則違反</button>
+  <button class="quiz-option" data-correct="false">D. 依賴反轉原則違反</button>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./adapter-mq.html">下一步：MQ 消息體適配 →</a>
+</div>
+
+<div class="footer">
+  設計模式 · 適配器模式 · Step 1/4
+</div>
+
+<script>
+document.querySelectorAll('.quiz').forEach(quiz => {
+  const questions = quiz.querySelectorAll('p strong');
+  let current = 0;
+  function showQuestion(idx) {
+    quiz.querySelectorAll('.quiz-option').forEach(btn => {
+      btn.style.display = 'none';
+      btn.classList.remove('correct', 'wrong');
+    });
+    if (idx >= questions.length) {
+      quiz.innerHTML += '<p style="color:var(--success);font-weight:600;margin-top:1rem;">🎉 全部答對！</p>';
+      return;
+    }
+    let btn = questions[idx];
+    let next = questions[idx + 1];
+    let el = btn.parentElement;
+    let siblings = [];
+    let sib = el.nextElementSibling;
+    while (sib && sib.tagName === 'BUTTON') {
+      siblings.push(sib);
+      sib = sib.nextElementSibling;
+    }
+  }
+  quiz.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+        setTimeout(() => {
+          current++;
+          let p = btn.closest('.quiz');
+          let allBtns = Array.from(p.querySelectorAll('button.quiz-option'));
+          let idx = allBtns.indexOf(btn);
+          // Find question number by counting <p><strong> before this button's parent
+          let qNum = 0;
+          let el = btn;
+          while (el.previousElementSibling) {
+            el = el.previousElementSibling;
+            if (el.tagName === 'P' && el.querySelector('strong')) qNum++;
+          }
+          // Move to next question
+          let nextQ = btn.parentElement.nextElementSibling;
+          while (nextQ && !(nextQ.tagName === 'P' && nextQ.querySelector('strong'))) {
+            nextQ = nextQ.nextElementSibling;
+          }
+          // Hide current question and its options
+          let hide = btn.parentElement;
+          while (hide && hide.tagName === 'BUTTON') hide = hide.previousElementSibling;
+          if (hide) {
+            let toHide = [hide];
+            let sib = hide.nextElementSibling;
+            while (sib && (sib.tagName === 'BUTTON' || sib.classList.contains('quiz-option'))) {
+              toHide.push(sib);
+              sib = sib.nextElementSibling;
+            }
+            toHide.forEach(h => h.style.display = 'none');
+          }
+        }, 600);
+      } else {
+        btn.classList.add('wrong');
+        setTimeout(() => btn.classList.remove('wrong'), 800);
+      }
+    });
+  });
+});
+</script>
+
+</body>
+</html>

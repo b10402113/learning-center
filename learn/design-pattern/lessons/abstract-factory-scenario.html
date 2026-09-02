@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Redis 雙集群升級場景</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Redis 雙集群升級場景</h1>
+<p class="meta">design-pattern › abstract-factory › abstract-factory-scenario</p>
+
+<blockquote>
+  <strong>學習目標</strong>：理解 Redis 單機升級為雙集群的業務場景，看清「類型欄位 + ifelse」壞味道的痛點，為重構做鋪墊。
+</blockquote>
+
+<h2>業務背景：從單機到集群</h2>
+
+<p>系統早期 QPS 低、並發小，一台 Redis 機器綽綽有餘。你和團隊用 <code>RedisUtils</code> 這個工具類封裝了所有 Redis 操作，各業務系統都依賴它：</p>
+
+<pre><code>public class RedisUtils {
+    public String get(String key) { ... }
+    public void set(String key, String value) { ... }
+    public void set(String key, String value, long timeout) { ... }
+    public void del(String key) { ... }
+}</code></pre>
+
+<p>簡單、乾淨、夠用。業務跑了一年多，沒出過問題。</p>
+
+<p>但隨著用戶量暴漲，單機扛不住了。架構組決定升級為 Redis 集群，而且不是一套——是<strong>兩套</strong>：EGM 集群和 IIR 集群。原因是：一套集群做主、一套做備，災備切換時需要無感切到另一套。</p>
+
+<h2>問題來了：兩套集群的方法名不一樣</h2>
+
+<p>EGM 集群的方法長這樣：</p>
+
+<pre><code>public class EGM {
+    public String gain(String key) { ... }
+    public void delete(String key) { ... }
+    public void setEx(String key, String value, long timeout) { ... }
+}</code></pre>
+
+<p>IIR 集群的方法長這樣：</p>
+
+<pre><code>public class IIR {
+    public String get(String key) { ... }
+    public void set(String key, String value) { ... }
+    public void setExpire(String key, String value, long timeout) { ... }
+}</code></pre>
+
+<p>注意到了嗎？做的事完全一樣——get、set、set-with-timeout、del——但方法名各異。就像你 mac 用 Finder、我用資源管理器，做一樣的事但操作方式不同。</p>
+
+<p>而你的業務系統已經寫死了 <code>RedisUtils.get()</code>、<code>RedisUtils.set()</code>……數十個服務都依賴這些方法名。你不可能把所有調用方都改一遍——那等於停擺整個系統。</p>
+
+<h2>第一反應：加個 type 參數走 ifelse</h2>
+
+<p>最直覺的做法是在 <code>CacheService</code> 接口裡加一個 <code>redisType</code> 參數，然後在實現類裡用 if 判斷走哪套集群：</p>
+
+<pre><code>public interface CacheService {
+    String get(String key, int redisType);
+    void set(String key, String value, int redisType);
+    void set(String key, String value, long timeout, int redisType);
+    void del(String key, int redisType);
+}
+
+public class CacheServiceImpl implements CacheService {
+    private RedisUtils redisUtils = new RedisUtils();
+    private EGM egm = new EGM();
+    private IIR iir = new IIR();
+
+    public String get(String key, int redisType) {
+        if (1 == redisType) {
+            return egm.gain(key);
+        } else if (2 == redisType) {
+            return iir.get(key);
+        }
+        return redisUtils.get(key);
+    }
+    // set、del 同理...
+}</code></pre>
+
+<blockquote class="bad-code">
+  <strong>壞味道</strong>：每個方法都要加 redisType 參數，每個方法裡都有一坨 ifelse。調用方被迫攜帶 type 參數，新增集群時每個方法都要改。
+</blockquote>
+
+<h2>這個方案有什麼問題</h2>
+
+<p>看起來能跑，但幾個致命問題馬上浮現：</p>
+
+<ul>
+  <li><strong>方法簽名被汙染</strong>：原本 <code>get(String key)</code> 變成了 <code>get(String key, int redisType)</code>，所有調用方都要傳 type——數十個服務全部要改</li>
+  <li><strong>線性膨脹</strong>：現在只有 EGM 和 IIR 兩套集群。如果以後加第三套呢？每個方法裡再加一個 <code>else if</code> 分支，每個方法都要改</li>
+  <li><strong>所有集群耦合在一起</strong>：EGM、IIR、RedisUtils 三個對象全部塞在 <code>CacheServiceImpl</code> 裡，不管你用哪套集群，另外兩套的依賴都編譯進來了</li>
+  <li><strong>測試噩夢</strong>：想單獨測 IIR 的 set 邏輯？得先傳對 type 值，走完 if 分支判斷才能到那一行</li>
+</ul>
+
+<p>最要命的是：這個方案<strong>功能上完全正確</strong>——JUnit 測試跑得通，<code>set("user_name_01", "小傅哥", 1)</code> 寫入 EGM，取回來也是「小傅哥」。但功能正確不等於結構良好，一旦上線運行，之後再想改就真的難了。</p>
+
+<h2>核心痛點總結</h2>
+
+<table>
+  <thead>
+    <tr><th>問題</th><th>根因</th><th>後果</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>方法簽名加了 type</td><td>調用方需要知道集群類型</td><td>數十個服務全部要改</td></tr>
+    <tr><td>每個方法都有 ifelse</td><td>多套實現塞在一個類裡</td><td>新集群要改每個方法</td></tr>
+    <tr><td>三個集群依賴共存</td><td>沒有按集群隔離</td><td>編譯耦合、測試困難</td></tr>
+  </tbody>
+</table>
+
+<p>這些問題的根因是：<strong>把「選擇哪套集群」的邏輯和「具體操作」的邏輯混在了一起</strong>。選擇應該是一次性的（在啟動或注入時決定），而不是每次調用都判斷。下一節我們會用抽象工廠的思路，把這個選擇抽出去，讓原類零修改就能接入兩套集群。</p>
+
+<div class="quiz" data-step="abstract-factory-scenario">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 為什麼系統需要同時兼容兩套 Redis 集群？</strong></p>
+  <button class="quiz-option" data-correct="false">為了提升讀寫性能</button>
+  <button class="quiz-option" data-correct="true">為了災備切換，一套做主、一套做備</button>
+  <button class="quiz-option" data-correct="false">為了對比兩套集群的性能數據</button>
+  <button class="quiz-option" data-correct="false">因為公司同時使用了兩家雲服務商</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. EGM 和 IIR 兩套集群的核心差異是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">它們支持的數據類型不同</button>
+  <button class="quiz-option" data-correct="false">它們的底層協議不同</button>
+  <button class="quiz-option" data-correct="true">做的事一樣但方法名各異</button>
+  <button class="quiz-option" data-correct="false">一個支持集群、一個只支持單機</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. ifelse 方案中「方法簽名被汙染」指的是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">方法名稱變得不規範</button>
+  <button class="quiz-option" data-correct="true">原本的 get(key) 被迫變成 get(key, redisType)，所有調用方都要改</button>
+  <button class="quiz-option" data-correct="false">方法返回值類型變了</button>
+  <button class="quiz-option" data-correct="false">方法的訪問修飾符被改了</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 如果再加第三套 Redis 集群，ifelse 方案需要改什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">只需要加一個新的 if 分支</button>
+  <button class="quiz-option" data-correct="true">每個方法都要加新的 else if 分支，每個方法的簽名也可能要改</button>
+  <button class="quiz-option" data-correct="false">只需要新建一個類，其他不用動</button>
+  <button class="quiz-option" data-correct="false">只需要改配置文件</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 這些問題的根因是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">Redis 客戶端不支持集群模式</button>
+  <button class="quiz-option" data-correct="false">Java 語言的限制</button>
+  <button class="quiz-option" data-correct="true">把「選擇哪套集群」的邏輯和「具體操作」的邏輯混在了一起</button>
+  <button class="quiz-option" data-correct="false">缺少單元測試</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

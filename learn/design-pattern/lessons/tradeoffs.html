@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>工廠方法的收益與類爆炸風險</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>工廠方法的收益與類爆炸風險</h1>
+<p class="meta">design-pattern › factory-method › tradeoffs</p>
+
+<blockquote>
+  <strong>學習目標</strong>：能說出工廠方法模式的開閉原則收益和類擴張代價，理解它與抽象工廠模式的銜接關係。
+</blockquote>
+
+<h2>重構帶來的三個收益</h2>
+
+<p>回頭看上一課的重構——從一個大方法拆成「接口 + 三個實現 + 工廠」——我們獲得了什麼？</p>
+
+<h3>1. 避免創建者與具體產品邏輯耦合</h3>
+
+<p>以前在 Controller 裡直接 new 具體的 Service 類，Controller 既要知道「有幾種商品」，又要了解「每種商品怎麼發放」。現在調用方只依賴 ICommodity 接口和 StoreFactory，不依賴任何具體的實現類。要換一種優惠券的發放邏輯？換實現類就行，Controller 完全不用改。</p>
+
+<h3>2. 滿足單一職責原則</h3>
+
+<p>每個實現類只管自己的業務邏輯——`CouponCommodityService` 只關心優惠券，`GoodsCommodityService` 只關心實物發貨。想改兌換卡的邏輯？打開 `CardCommodityService`，不影響其他任何商品。代碼的職責邊界清晰，修改範圍可控。</p>
+
+<h3>3. 滿足開閉原則</h3>
+
+<p>開閉原則（Open-Closed Principle）說的是：對擴展開放，對修改關閉。工廠方法完美體現了這一點——新增一種商品（比如視頻會員），只需要：加一個 `VideoCommodityService` 實現類，在 `StoreFactory` 裡加一行分發。不動 ICommodity 接口，不動任何已有的實現類，不動調用方的代碼。</p>
+
+<blockquote class="good-code">
+  <strong>這就是開閉原則的實踐</strong>：代碼的「擴展點」是工廠裡的分發和新的實現類，「穩定部分」是接口和已有的實現。加新功能不改已有代碼。
+</blockquote>
+
+<h2>代價：類數量膨脹</h2>
+
+<p>工廠方法的缺點也很明顯：<strong>每新增一種商品，就要新增一個實現類</strong>。三種商品就是三個類，十種商品就是十個類。如果商品類型非常多（比如一個大型電商平台有幾十種虛擬商品），實現類的數量會急速擴張——有人稱之為「類爆炸」（Class Explosion）。</p>
+
+<p>在發獎場景中，如果未來要支持：優惠券、實物商品、兌換卡、視頻會員、音樂會員、遊戲道具、紅包、積分、實物周邊……光實現類就有 9 個，加上接口和工廠就是 11 個類。而且每種商品的業務邏輯複雜度不同——有的需要防重，有的需要查手機號，有的需要拼裝快遞單——維護成本會隨著類數量線性增長。</p>
+
+<table>
+  <thead>
+    <tr><th>商品類型</th><th>實現類</th><th>特殊邏輯</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>優惠券</td><td>CouponCommodityService</td><td>防重 uuid</td></tr>
+    <tr><td>實物商品</td><td>GoodsCommodityService</td><td>拼裝 DeliverReq</td></tr>
+    <tr><td>兌換卡</td><td>CardCommodityService</td><td>查手機號</td></tr>
+    <tr><td>視頻會員</td><td>VideoCommodityService</td><td>調第三方 API</td></tr>
+    <tr><td>音樂會員</td><td>MusicCommodityService</td><td>調第三方 API</td></tr>
+    <tr><td>遊戲道具</td><td>GameCommodityService</td><td>調遊戲服務</td></tr>
+    <tr><td>紅包</td><td>RedPacketCommodityService</td><td>調支付系統</td></tr>
+    <tr><td>積分</td><td>PointsCommodityService</td><td>調積分系統</td></tr>
+    <tr><td>實物周邊</td><td>MerchCommodityService</td><td>拼裝快遞單</td></tr>
+  </tbody>
+</table>
+
+<p>9 個實現類，每加一種就要新增一個文件。這是工廠方法模式的結構性代價。</p>
+
+<h2>怎麼降低類爆炸的影響？</h2>
+
+<p>工廠方法本身不解決類爆炸，但有幾種方式可以緩解：</p>
+
+<ol>
+  <li><strong>用 Map 替代 ifelse</strong>：工廠內部可以維護一個 <code>Map&lt;Integer, ICommodity&gt;</code>，通過配置或掃描自動註冊，不需要每個類型寫一個 if 分支。這不減少實現類數量，但讓工廠本身更乾淨。</li>
+  <li><strong>用反射或 Spring DI</strong>：在 Spring 環境中，可以用 <code>@Autowired Map&lt;String, ICommodity&gt;</code> 自動注入所有實現，工廠類甚至可以省掉。這是 Java 生態中工廠方法的常見落地形態。</li>
+  <li><strong>結合其他模式</strong>：當商品類型非常多且有分組規律時，可以用抽象工廠（Abstract Factory）把一組相關的商品放在一起創建；或者用建造者模式（Builder）處理構建步驟複雜的商品。</li>
+</ol>
+
+<h2>與抽象工廠的銜接</h2>
+
+<p>抽象工廠模式（Abstract Factory Pattern）是工廠方法的「升級版」。如果說工廠方法是「一個工廠生產一種產品」，抽象工廠就是「一個工廠生產一族產品」。</p>
+
+<p>回到發獎場景：假設未來不僅要支持發獎，還要支持「退款」——每種商品既有發放邏輯，又有退款邏輯。這時候如果繼續用工廠方法，你會有「發獎工廠 + 退款工廠」兩個工廠，每個都要維護一套 ifelse。抽象工廠的做法是：一個「商品工廠」接口同時定義 `getCommodityService` 和 `getRefundService`，優惠券工廠同時返回優惠券的發放和退款服務，實物工廠同時返回實物的發放和退款服務。</p>
+
+<p>工廠方法是起點，不是終點。理解了它的意圖（統一創建入口、屏蔽實現）和代價（類數量膨脹），你才能在場景複雜時判斷：什麼時候繼續用工廠方法，什麼時候升級到抽象工廠。</p>
+
+<h2>小結</h2>
+
+<p>工廠方法模式帶來三個核心收益：避免創建者與具體產品耦合、滿足單一職責、滿足開閉原則。代價是實現類數量隨商品類型膨脹。緩解方式包括用 Map/Spring DI 簡化工廠內部、結合抽象工廠或建造者模式處理更複雜的場景。工廠方法是創建型模式的基礎，理解了它才能理解抽象工廠等後續模式。</p>
+
+<div class="quiz" data-step="tradeoffs">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 工廠方法模式最大的收益是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">代碼行數一定會減少</button>
+  <button class="quiz-option" data-correct="true">新增產品類型不需要修改已有代碼（開閉原則）</button>
+  <button class="quiz-option" data-correct="false">運行時性能一定會提升</button>
+  <button class="quiz-option" data-correct="false">不需要再寫單元測試</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 「類爆炸」指的是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">類的編譯速度變慢</button>
+  <button class="quiz-option" data-correct="true">每新增一種商品就要新增一個實現類，導致類數量急速膨脹</button>
+  <button class="quiz-option" data-correct="false">工廠類的 ifelse 分支太多</button>
+  <button class="quiz-option" data-correct="false">接口方法數量太多</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. 工廠方法模式滿足的「開閉原則」具體是什麼意思？</strong></p>
+  <button class="quiz-option" data-correct="false">所有的類都不能被修改</button>
+  <button class="quiz-option" data-correct="true">新增產品類型時只加新代碼，不改已有代碼</button>
+  <button class="quiz-option" data-correct="false">接口不能被修改，但實現類可以</button>
+  <button class="quiz-option" data-correct="false">代碼不需要測試就能上線</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 在 Spring 環境中，可以用什麼方式簡化工廠類？</strong></p>
+  <button class="quiz-option" data-correct="false">用 @Configuration 創建多個 Bean</button>
+  <button class="quiz-option" data-correct="true">用 Map&lt;String, ICommodity&gt; 自動注入所有實現，省掉手動 ifelse</button>
+  <button class="quiz-option" data-correct="false">用 @Lazy 延遲加載所有實現類</button>
+  <button class="quiz-option" data-correct="false">用 @Scope("prototype") 創建多例</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 抽象工廠和工廠方法的核心區別是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">抽象工廠比工廠方法性能更好</button>
+  <button class="quiz-option" data-correct="false">抽象工廠不需要接口</button>
+  <button class="quiz-option" data-correct="true">工廠方法生產一種產品，抽象工廠生產一族相關產品</button>
+  <button class="quiz-option" data-correct="false">抽象工廠是用反射實現的工廠方法</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>中介者核心組件的分工與協作</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>中介者核心組件的分工與協作</h1>
+<p class="meta">design-pattern › mediator › mediator-components</p>
+
+<blockquote>
+  <strong>學習目標</strong>：能畫出 SqlSession / DefaultSqlSession / SqlSessionFactory / SqlSessionFactoryBuilder / Configuration 五個組件的協作關係，並說出每個組件的職責。
+</blockquote>
+
+<h2>整體分工圖</h2>
+
+<p>中介者由五個核心組件組成，各司其職：</p>
+
+<table>
+  <thead>
+    <tr><th>組件</th><th>類型</th><th>職責</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>SqlSession</code></td><td>接口</td><td>定義查詢方法：<code>selectOne</code>、<code>selectList</code>、<code>close</code></td></tr>
+    <tr><td><code>DefaultSqlSession</code></td><td>實現類</td><td>持有 Connection，執行 JDBC 查詢，結果映射成對象</td></tr>
+    <tr><td><code>SqlSessionFactory</code></td><td>接口</td><td>定義 <code>openSession()</code>，負責打開會話</td></tr>
+    <tr><td><code>DefaultSqlSessionFactory</code></td><td>實現類</td><td>持有 Configuration，<code>openSession</code> 時創建 DefaultSqlSession</td></tr>
+    <tr><td><code>SqlSessionFactoryBuilder</code></td><td>構建器</td><td>啟動入口：解析 XML 配置、建立連接、構建 Configuration</td></tr>
+  </tbody>
+</table>
+
+<p>還有一個輔助角色 <code>Configuration</code>，它是所有配置的載體——連接信息、SQL 映射表（<code>mapperElement</code>）都存在這裡。</p>
+
+<h2>組件 1：SqlSession（查詢接口）</h2>
+
+<p><code>SqlSession</code> 是業務方直接使用的接口，定義了三個方法：</p>
+
+<pre><code>public interface SqlSession {
+    &lt;T&gt; T selectOne(String statement, Object parameter);
+    &lt;T&gt; List&lt;T&gt; selectList(String statement, Object parameter);
+    void close();
+}</code></pre>
+
+<p>業務方只需要知道：<strong>用 statement 字符串（命名空間 + 方法名）+ 參數來查詢</strong>，不需要知道連接怎麼來、SQL 怎麼執行、結果怎麼映射。</p>
+
+<h2>組件 2：DefaultSqlSession（核心實現）</h2>
+
+<p>這是中介者的「心臟」，把 JDBC 細節全部藏在裡面：</p>
+
+<pre><code>public class DefaultSqlSession implements SqlSession {
+    private Connection connection;
+    private Map&lt;String, XNode&gt; mapperElement;
+
+    // selectOne：按 statement 取 SQL，執行查詢，返回第一條
+    public &lt;T&gt; T selectOne(String statement, Object parameter) {
+        XNode xNode = mapperElement.get(statement);
+        // ... prepareStatement + executeQuery ...
+        return (T) resultSet2Obj(resultSet, xNode.resultType);
+    }
+
+    // resultSet2Obj：用 ResultSetMetaData + 反射自動映射
+    private Object resultSet2Obj(ResultSet rs, String resultType) {
+        // 取列名 → 反射 setter → 返回 POJO
+        // 特殊處理：Timestamp → Date
+    }
+}</code></pre>
+
+<p>關鍵設計：</p>
+
+<ul>
+  <li><strong>statement 字符串</strong>是 <code>namespace.id</code>（如 <code>org.itstack.demo.design.dao.IUserDao.queryUserInfoById</code>），對應 XML 裡的 SQL 定義</li>
+  <li><strong>結果映射</strong>用 <code>ResultSetMetaData</code> 取列名，反射調用 setter，自動把結果行轉成 Java 對象</li>
+  <li>業務方完全不碰 Connection、PreparedStatement、ResultSet</li>
+</ul>
+
+<h2>組件 3：SqlSessionFactory（會話工廠）</h2>
+
+<p>工廠模式的典型應用——<code>openSession()</code> 返回一個新的 <code>DefaultSqlSession</code>：</p>
+
+<pre><code>public interface SqlSessionFactory {
+    SqlSession openSession();
+}
+
+public class DefaultSqlSessionFactory implements SqlSessionFactory {
+    private Configuration configuration;
+
+    public SqlSession openSession() {
+        return new DefaultSqlSession(
+            configuration.connection,
+            configuration.mapperElement);
+    }
+}</code></pre>
+
+<p>Configuration 在啟動時就已經構建好，工廠只是在每次查詢時「打開一個會話」。</p>
+
+<h2>組件 4：SqlSessionFactoryBuilder（啟動入口）</h2>
+
+<p>這是<strong>最先被調用</strong>的組件，負責三件事：</p>
+
+<ol>
+  <li><strong>解析 XML 配置</strong>：用 SAXReader 讀取 <code>mybatis-config-datasource.xml</code>，提取 dataSource 和 mappers</li>
+  <li><strong>建立連接</strong>：<code>Class.forName(driver) + DriverManager.getConnection(url, user, password)</code></li>
+  <li><strong>構建 Configuration</strong>：把 Connection 和 <code>mapperElement</code>（SQL 映射表）打包存進 Configuration</li>
+</ol>
+
+<p>Configuration 裡的 <code>mapperElement</code> 是怎麼來的？ Builder 會解析每個 Mapper XML（如 <code>User_Mapper.xml</code>），用正則 <code>#{(.*?)}</code> 把佔位符替換成 <code>?</code>，然後把解析結果（namespace、id、sql、parameterType、resultType）存進 Map：</p>
+
+<pre><code>// mapperElement 的 key 是 "namespace.id"
+// 例如 "org.itstack.demo.design.dao.IUserDao.queryUserInfoById"
+mapperElement.put(namespace + "." + id, xnode);</code></pre>
+
+<h2>完整啟動鏈路</h2>
+
+<p>把所有組件串起來，一次查詢的完整鏈路：</p>
+
+<pre><code>// 1. 加載配置
+Reader reader = Resources.getResourceAsReader("mybatis-config-datasource.xml");
+
+// 2. 構建工廠（解析 XML + 建連接 + 構建 Configuration）
+SqlSessionFactory sqlMapper = new SqlSessionFactoryBuilder().build(reader);
+
+// 3. 打開會話
+SqlSession session = sqlMapper.openSession();
+
+// 4. 查詢——業務方只需要 statement + 參數
+try {
+    User user = session.selectOne(
+        "org.itstack.demo.design.dao.IUserDao.queryUserInfoById", 1L);
+    System.out.println(user);
+} finally {
+    session.close();
+    reader.close();
+}</code></pre>
+
+<p>注意：這跟用 Mybatis 的寫法<strong>完全一樣</strong>。啟動 → 建工廠 → 開 Session → 查詢 → 關閉。中介者把 JDBC 的四步瑣事藏在了 <code>build()</code> 裡面。</p>
+
+<h2>小結</h2>
+
+<p>五個組件的協作可以記成一句話：<strong>Builder 解析配置 → 工廠打開 Session → Session 屏蔽 JDBC → 業務方只傳 statement + 參數</strong>。這就是 Mybatis 的原型，也是中介者模式在 ORM 場景的完整落地。</p>
+
+<div class="quiz" data-step="mediator-components">
+<h2>自測</h2>
+<p>試著回答下面的問題，鞏固剛學到的內容：</p>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. 五個核心組件中，哪個是業務方直接使用的接口？</strong></p>
+  <button class="quiz-option" data-correct="false">SqlSessionFactory</button>
+  <button class="quiz-option" data-correct="false">SqlSessionFactoryBuilder</button>
+  <button class="quiz-option" data-correct="true">SqlSession</button>
+  <button class="quiz-option" data-correct="false">Configuration</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. SqlSessionFactoryBuilder 在啟動時做了哪三件事？</strong></p>
+  <button class="quiz-option" data-correct="false">解析 SQL、執行查詢、映射結果</button>
+  <button class="quiz-option" data-correct="false">創建連接池、管理事務、釋放資源</button>
+  <button class="quiz-option" data-correct="true">解析 XML 配置、建立連接、構建 Configuration</button>
+  <button class="quiz-option" data-correct="false">加載驅動、開啟 Session、返回結果</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. DefaultSqlSession 的結果映射（resultSet2Obj）用了什麼技術？</strong></p>
+  <button class="quiz-option" data-correct="false">JPA 注解自動映射</button>
+  <button class="quiz-option" data-correct="false">XML 手動定義字段對應</button>
+  <button class="quiz-option" data-correct="true">ResultSetMetaData 取列名 + 反射 setter</button>
+  <button class="quiz-option" data-correct="false">JSON 序列化反序列化</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. mapperElement 的 Map key 格式是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">方法名（如 queryUserInfoById）</button>
+  <button class="quiz-option" data-correct="false">XML 文件名（如 User_Mapper.xml）</button>
+  <button class="quiz-option" data-correct="true">namespace + "." + id（如 org.itstack...IUserDao.queryUserInfoById）</button>
+  <button class="quiz-option" data-correct="false">SQL 語句本身</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 中介者組件的啟動順序是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">Session → Builder → Factory → Configuration</button>
+  <button class="quiz-option" data-correct="false">Factory → Builder → Session → Configuration</button>
+  <button class="quiz-option" data-correct="true">Builder → Configuration → Factory → Session</button>
+  <button class="quiz-option" data-correct="false">Configuration → Session → Factory → Builder</button>
+</div>
+</div>
+
+<div class="lesson-nav">
+  <a href="./mediator-concept.html">← 上一篇：中介者模式的意圖與 ORM 場景定位</a>
+  <a href="./mediator-validation.html">下一篇：驗證中介者架構的收益與設計原則 →</a>
+</div>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+</body>
+</html>

@@ -148,10 +148,14 @@ function buildDigestIndex(subject) {
   const hashToDigest = new Map();
   const allLocators = new Set();
   const totalLines = { value: 0 };
+  const countedHashes = new Set();
   for (const d of digests) {
     const { data, body } = parseFrontmatter(readFileSync(d.path, "utf8"));
     if (data.source_hash) hashToDigest.set(data.source_hash, d.name);
-    if (typeof data.source_lines === "number") totalLines.value += data.source_lines;
+    if (typeof data.source_lines === "number" && data.source_hash && !countedHashes.has(data.source_hash)) {
+      countedHashes.add(data.source_hash);
+      totalLines.value += data.source_lines;
+    }
     const re = /Locator:\s*`?\[\[\s*sources\/[^\]]*?#([^\]]+)\s*\]\]`?/g;
     let m;
     while ((m = re.exec(body)) !== null) allLocators.add(m[1].trim());

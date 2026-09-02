@@ -1,0 +1,60 @@
+---
+id: decorator-refactor
+title: 裝飾器模式重構與適用邊界
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#decorator-refactor]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#decorator-summary]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+# 裝飾器模式重構與適用邊界
+
+## Learning goal
+
+<能用四角色模型重構 SSO 場景，並在繼承、裝飾器、AOP 之間做出適用判斷。>
+
+## Lesson
+
+上一節看到用繼承擴展 SSO 的三個痛點。裝飾器模式的重構思路很直接：**把「繼承 SsoInterceptor」改為「實現接口 + 持有 SsoInterceptor 實例」**。拆成兩個類。
+
+### 抽象裝飾角色 SsoDecorator
+
+`SsoDecorator` 是一個抽象類，做了三件事：（1）實現 `HandlerInterceptor` 接口——保證與被裝飾對象的類型一致，可以互相替換；（2）通過構造函數注入被裝飾對象——把被裝飾對象作為參數傳入，存在自己的成員變量裡，這是「組合」的落點；（3）覆蓋 `preHandle` 做轉調——默認行為就是「原封不動轉給被裝飾對象」，具體裝飾類只需要重寫需要擴展的部分。
+
+### 具體裝飾角色 LoginSsoDecorator
+
+`LoginSsoDecorator extends SsoDecorator`，構造函數透傳被裝飾對象，重寫 `preHandle` 時先 `super.preHandle` 執行被裝飾對象的原有校驗，失敗即返回；成功後再取 userId 查 `authMap` 做方法級訪問校驗。`super.preHandle(request, response, handler)` 不是「調用父類構造函數」，而是**調用被裝飾對象的原有校驗邏輯**。這是裝飾器疊加職責的模板——先執行裡面那層，再執行自己的。
+
+### 使用方式
+
+```java
+HandlerInterceptor sso = new SsoInterceptor();
+HandlerInterceptor loginCheck = new LoginSsoDecorator(sso);
+// 如果還有日誌裝飾器：HandlerInterceptor withLog = new LogDecorator(loginCheck);
+loginCheck.preHandle("1successhuahua", response, handler);
+// 輸出：模擬單點登錄方法訪問攔截校驗：huahua queryUserInfo
+// 輸出：放行：huahua 訪問 queryUserInfo
+```
+
+每包一層就多一個功能，想去掉某個功能不包就行。運行時隨意增減，不需要改編譯。
+
+### 選型判斷
+
+裝飾器 vs 繼承的判斷維度：擴展需求只有 1–2 種且固定時選繼承；3 種以上或可能繼續增長時選裝飾器。不需要排列組合時選繼承；需要靈活搭配時選裝飾器。不需要運行時增減時選繼承；需要動態開啟/關閉時選裝飾器。**一句話判斷：新功能是原功能的「一種新變體」→ 繼承；新功能是「在原功能上面疊一層」→ 裝飾器。**
+
+裝飾器 vs AOP 的判斷：兩者都能「不改原類、動態增強」，但裝飾器是純 Java 物件組合，適合少量功能的靈活組合、不依賴框架的純 Java 專案；AOP 依賴 Spring 容器和動態代理，適合大批量統一切面治理（日誌、權限、事務）。簡單場景（SSO 加一層校驗）用裝飾器乾淨直覺；複雜場景（整個專案所有接口統一加白名單）用 AOP 或外觀模式中間件更合適。
+
+### 生活類比
+
+夏天穿短褲、冬天穿棉褲、雨天穿雨衣——你的身體（原類）從來沒被改過，穿上不同衣服（裝飾器）就適應不同場景。衣服之間可以任意搭配（組合），穿脫自如（運行時增減），不需要開一個「防水型身體」的子類（避免子類膨脹）。
+
+## Sources
+
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#decorator-refactor]]
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#decorator-summary]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/decorator-refactor.html)

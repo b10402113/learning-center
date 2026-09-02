@@ -1,121 +1,268 @@
 ---
 subject: design-pattern
-created: 2026-08-24
-updated: 2026-08-24
+created: 2026-09-01
+updated: 2026-09-02
 ---
 
 # Mastery — design-pattern
 
-## patterns-foundation
+## design-pattern-basics — 設計模式與六大原則
 
-| Strand | Rating |
-| --- | --- |
-| design-patterns purpose and origin (recurring design problems; Alexander → GoF; communication language) | unknown |
-| code smell recognition: type-field ifelse/switch dispatch growing unmaintainable | unknown |
-| 单一职责 principle (single responsibility) | unknown |
-| 里氏替换 principle (Liskov substitution) | unknown |
-| 依赖倒置 principle (dependency inversion) | unknown |
-| 接口隔离 principle (interface segregation) | unknown |
-| 迪米特原则 (Law of Demeter) | unknown |
-| 开闭原则 (open-closed) | unknown |
-| 高内聚/低耦合/可扩展/可复用 as the convergence goal | unknown |
-| pattern reading loop (场景模拟 → 一坨代码 → 模式重构 → 总结) | unknown |
-| recurring structural toolkit (enum + Map dispatch, abstract sealed entry, per-variant classes) | unknown |
-| pattern trade-offs and ROI judgment (extensibility at cost of classes; avoid over-application) | unknown |
+- what-design-patterns-solve: unknown
+- six-principles: unknown
+- pattern-taxonomy: unknown
+- when-to-use: unknown
 
-Notes: probe skipped via /nodes design-pattern/patterns-foundation skip-probe on 2026-08-24
+> probe skipped via /nodes design-pattern/design-pattern-basics skip-probe on 2026-09-01
 
-## factory-methods
+## command — 命令模式
 
-| Strand | Rating |
-| --- | --- |
-| ifelse type 分发的坏味道识别与重构动机 | unknown |
-| 工厂方法模式：创建接口 + 子类决定实例化哪个产品 | unknown |
-| 工厂方法重构路径：PrizeController → ICommodity + StoreFactory | unknown |
-| 工厂方法满足的六大原则（开闭原则、单一职责） | unknown |
-| 抽象工厂模式：产品族（多个不兼容接口）的统一创建 | unknown |
-| 抽象工厂与 JDK 动态代理的结合（ICacheAdapter + JDKProxy） | unknown |
-| 工厂方法（单产品层级）vs 抽象工厂（产品族）的辨析 | unknown |
-| 工厂方法 vs 抽象工厂的适用场景判断与取舍 | unknown |
+- command-concept: unknown
+- command-scenario-roles: unknown
+- command-monolith-pain: unknown
+- command-three-layer-arch: unknown
+- command-code-implementation: unknown
+- command-tradeoffs: unknown
 
-Notes: probe skipped via /nodes design-pattern/factory-methods skip-probe on 2026-08-25
+> probe skipped via /nodes design-pattern/command skip-probe on 2026-09-01
 
-## builder-prototype
+## strategy — 策略模式
 
-| Strand | Rating |
-| --- | --- |
-| 建造者模式的动机：复杂对象的分步组装 vs 工厂的一次性创建 | unknown |
-| 建造者模式的角色与结构：IMenu（Builder）、DecorationPackageMenu、Builder | unknown |
-| 流式 API（fluent chaining）的实现方式与优势 | unknown |
-| 建造者模式满足单一职责原则、易扩展、控制构建细节风险 | unknown |
-| 原型模式的动机：避免重复构建开销大的对象 | unknown |
-| Cloneable 接口与 clone() 的实现机制 | unknown |
-| 深拷贝 vs 浅拷贝的区别与陷阱（集合字段必须深拷贝） | unknown |
-| 创建型模式对比：Builder（分步组装）vs Prototype（克隆模板）vs Factory（类型分发） | unknown |
+- strategy-intent: unknown
+- coupon-scenario: unknown
+- ifelse-pain: unknown
+- strategy-structure: unknown
+- pattern-comparison: unknown
 
-Notes: probe skipped via /nodes design-pattern/builder-prototype skip-probe on 2026-08-25
+> probe skipped via /nodes design-pattern/strategy skip-probe on 2026-09-02
 
-## singleton
+## template-method — 模板方法模式
 
-| Strand | Rating |
-| --- | --- |
-| 单例模式的动机：为什么全局只要一个实例 + 多线程访问挑战 | unknown |
-| 基础实现：静态类/ConcurrentHashMap缓存、懒汉非线程安全、synchronized方法、饿汉静态字段 | unknown |
-| 静态内部类/Holder 模式：JVM 类加载保证线程安全+懒加载+无锁 | unknown |
-| 双重检查锁（DCL）：synchronized块 + volatile + null检查的原理与坑 | unknown |
-| CAS + AtomicReference：无锁自旋实现、高并发场景与无限自旋风险 | unknown |
-| 枚举单例（Effective Java）：免费序列化保护+反射攻击防御、不可继承的取舍 | unknown |
-| 7种实现的决策树：什么场景该用哪种、懒加载 vs 饿汉 vs 枚举的取舍 | unknown |
+- template-method-intent: unknown
+- template-method-scenario: unknown
+- template-method-structure: unknown
+- template-method-tradeoffs: unknown
 
-Notes: probe skipped via /nodes design-pattern/singleton skip-probe on 2026-08-25
+> probe skipped via /nodes design-pattern/template-method skip-probe on 2026-09-02
 
-## adapter-facade
+## chain-of-responsibility — 責任鏈模式
 
-| Strand | Rating |
-| --- | --- |
-| 适配器模式的动机：不兼容接口统一给调用方，硬件万能充/转接头类比 | unknown |
-| MQ 消息适配场景：RebateInfo 统一消息体 + MQAdapter.filter() 反射映射 | unknown |
-| OrderAdapterService 接口抽象：InsideOrderService vs POPOrderAdapterServiceImpl | unknown |
-| 适配器 vs 桥接 vs 策略的辨析（都涉及接口/行为封装，意图不同） | unknown |
-| 外观/门面模式的动机：降低调用方复杂度，中间层包装统一 API | unknown |
-| SpringBoot starter 中间件实现：注解 + AOP + 自动配置 + 外部化配置 | unknown |
-| 外观模式适用场景：跨切面关注点（白名单/切量/灰度）的可复用组件 | unknown |
-| 适配器（让已有接口兼容）vs 外观（简化子系统入口）的决策判断 | unknown |
+- chain-concept: unknown
+- bad-smell-ifelse: unknown
+- chain-skeleton: unknown
+- dynamic-assembly: unknown
+- boundary-and-cost: unknown
 
-Notes: probe skipped via /nodes design-pattern/adapter-facade skip-probe on 2026-08-25
+> probe skipped via /nodes design-pattern/chain-of-responsibility skip-probe on 2026-09-02
 
-## bridge-composite
+## state — 狀態模式
 
-| Strand | Rating |
-| --- | --- |
-| 双维度嵌套 ifelse 的坏味道（channelType × modeType 笛卡尔积爆炸） | unknown |
-| 桥接模式的结构：抽象（Abstraction）持有实现（Implementation）的引用，通过构造函数注入 | unknown |
-| 组合优于继承：用字段持有另一维度的接口，而非子类化笛卡尔积 | unknown |
-| 桥接的真实类比：JDBC 驱动、品牌×产品线、多接口过滤服务 | unknown |
-| 桥接 vs 适配器 vs 策略的辨析（结构相似，意图不同） | unknown |
-| 组合模式的动机：树结构组织部分-整体关系，替代深层 ifelse 嵌套 | unknown |
-| 组合模式的角色：叶子节点（Leaf）与组合节点（Composite）统一接口 | unknown |
-| 透明方式 vs 安全方式的组合模式选择 | unknown |
-| 递归遍历：组合节点遍历子节点的递归调用机制 | unknown |
-| 组合 vs 责任链 vs 策略的辨析（树决策 vs 链式传递 vs 算法替换） | unknown |
+- state-intent: unknown
+- state-scenario: unknown
+- state-antipattern: unknown
+- state-structure: unknown
+- state-tradeoff: unknown
 
-Notes: probe skipped via /nodes design-pattern/bridge-composite skip-probe on 2026-08-25
+> probe skipped via /nodes design-pattern/state skip-probe on 2026-09-02
 
-## decorator-proxy
+## factory-method — 工廠方法模式
 
-| Strand | Rating |
-| --- | --- |
-| 装饰器模式的动机：不修改原类的前提下动态添加功能，避免继承子类爆炸 | unknown |
-| 装饰器模式的四个角色：Component、ConcreteComponent、Decorator、ConcreteDecorator | unknown |
-| 装饰器的核心机制：构造函数注入 + 接口转发（forward）| unknown |
-| 装饰器 vs 继承：运行时动态组合 vs 编译时固定，开闭原则的运行时体现 | unknown |
-| 装饰器在 JDK I/O 中的体现：BufferedReader(new FileReader(...)) | unknown |
-| SsoDecorator 装饰器实战：SSO 拦截器 + 方法级权限控制 | unknown |
-| 代理模式的动机：控制对资源/对象的访问，中间层屏蔽细节 | unknown |
-| JDK 动态代理机制：Proxy.newProxyInstance + InvocationHandler | unknown |
-| MyBatis DAO 代理实战：无实现类的 Mapper bean 注册原理 | unknown |
-| Spring BeanFactory + BeanDefinitionRegistryPostProcessor 的代理注册 | unknown |
-| 装饰器 vs 代理的辨析：意图不同（加功能 vs 控访问），结构相似 | unknown |
-| 框架中的装饰/代理识别：Spring AOP、MyBatis、JDK I/O | unknown |
+- factory-method-intent: unknown
+- heterogeneous-interface-pain: unknown
+- ifelse-monolith-smell: unknown
+- icommodity-unified-interface: unknown
+- factory-dispatch-pattern: unknown
+- open-close-principle: unknown
+- class-explosion-tradeoff: unknown
 
-Notes: probe skipped via /nodes design-pattern/decorator-proxy skip-probe on 2026-08-25
+> probe skipped via /nodes design-pattern/factory-method skip-probe on 2026-09-02
+
+## builder — 建造者模式
+
+- builder-intent: unknown
+- builder-decoration-scenario: unknown
+- builder-materials-library: unknown
+- builder-ifelse-pain: unknown
+- builder-three-layer-structure: unknown
+- builder-usage-boundary: unknown
+
+> probe skipped via /nodes design-pattern/builder skip-probe on 2026-09-02
+
+## prototype — 原型模式
+
+- prototype-motivation: unknown
+- prototype-scenario: unknown
+- prototype-clone-implementation: unknown
+- prototype-shallow-deep-copy: unknown
+- prototype-tradeoffs: unknown
+
+> probe skipped via /nodes design-pattern/prototype skip-probe on 2026-09-02
+
+## singleton — 單例模式
+
+- singleton-concept: unknown
+- singleton-scenarios: unknown
+- seven-implementations: unknown
+- thread-safety-vs-lazy: unknown
+- enum-singleton-best: unknown
+- when-not-to-use: unknown
+
+> probe skipped via /nodes design-pattern/singleton skip-probe on 2026-09-02
+
+## proxy — 代理模式
+
+- proxy-intent: unknown
+- proxy-three-scenarios: unknown
+- jdk-dynamic-proxy-mechanism: unknown
+- factorybean-pattern: unknown
+- spring-bean-registration: unknown
+- proxy-vs-decorator-vs-adapter: unknown
+
+> probe skipped via /nodes design-pattern/proxy skip-probe on 2026-09-02
+
+## abstract-factory — 抽象工廠模式
+
+- abstract-factory-concept: unknown
+- factory-vs-factory-method: unknown
+- redis-cluster-scenario: unknown
+- ifelse-pain: unknown
+- adapter-plus-proxy-refactor: unknown
+- design-principles-and-tradeoffs: unknown
+
+> probe skipped via /nodes design-pattern/abstract-factory skip-probe on 2026-09-02
+
+## facade — 外觀模式
+
+- facade-intent: unknown
+- facade-scenario-whitelist: unknown
+- facade-antipattern-ifelse: unknown
+- facade-starter-middleware: unknown
+- facade-aop-annotation: unknown
+- facade-tradeoffs: unknown
+
+> probe skipped via /nodes design-pattern/facade skip-probe on 2026-09-02
+
+## bridge — 橋接模式
+
+- bridge-concept: unknown
+- cartesian-explosion: unknown
+- abstraction-implementation-separation: unknown
+- bridge-composition-mechanism: unknown
+- payment-scenario-refactor: unknown
+- bridge-tradeoffs: unknown
+- bridge-vs-similar-patterns: unknown
+
+> probe skipped via /nodes design-pattern/bridge skip-probe on 2026-09-02
+
+## decorator — 裝飾器模式
+
+- decorator-intent: unknown
+- decorator-scenario: unknown
+- decorator-inheritance-pain: unknown
+- decorator-four-roles: unknown
+- decorator-tradeoffs: unknown
+
+> probe skipped via /nodes design-pattern/decorator skip-probe on 2026-09-02
+
+## adapter — 適配器模式
+
+- adapter-intent: unknown
+- heterogeneous-interface-pain: unknown
+- mq-adapter-mechanism: unknown
+- interface-adapter-mechanism: unknown
+- adapter-tradeoffs: unknown
+- adapter-in-frameworks: unknown
+
+> probe skipped via /nodes design-pattern/adapter skip-probe on 2026-09-02
+
+## mediator — 中介者模式
+
+- mediator-intent: unknown
+- mediator-scenario-orm: unknown
+- mediator-pain-jdbc: unknown
+- mediator-five-components: unknown
+- mediator-component-collaboration: unknown
+- mediator-test-validation: unknown
+- mediator-design-principles: unknown
+
+> probe skipped via /nodes design-pattern/mediator skip-probe on 2026-09-02
+
+## memento — 備忘錄模式
+
+- memento-intent: unknown
+- memento-scenario: unknown
+- memento-structure: unknown
+- memento-implementation: unknown
+- memento-tradeoffs: unknown
+
+> probe skipped via /nodes design-pattern/memento skip-probe on 2026-09-02
+
+## observer — 觀察者模式
+
+- observer-concept: unknown
+- observer-scenario-lottery: unknown
+- core-vs-auxiliary-flow: unknown
+- monolith-coupling-pain: unknown
+- event-listener-interface: unknown
+- event-manager-subscribe-notify: unknown
+- abstract-class-template-method: unknown
+- observer-tradeoffs: unknown
+
+> probe skipped via /nodes design-pattern/observer skip-probe on 2026-09-02
+
+## flyweight — 享元模式
+
+- flyweight-intent: unknown
+- flyweight-scenario: unknown
+- flyweight-internal-external-state: unknown
+- flyweight-factory-mechanism: unknown
+- flyweight-code-structure: unknown
+- flyweight-tradeoffs: unknown
+
+> probe skipped via /nodes design-pattern/flyweight skip-probe on 2026-09-02
+
+## composite — 組合模式
+
+- composite-concept: unknown
+- composite-tree-structure: unknown
+- composite-decision-tree-scenario: unknown
+- composite-ifelse-pain: unknown
+- composite-four-roles: unknown
+- composite-engine-traversal: unknown
+- composite-open-close-principle: unknown
+- composite-usage-boundary: unknown
+
+> probe skipped via /nodes design-pattern/composite skip-probe on 2026-09-02
+
+## pattern-selection — 相似模式選型對比
+
+- behavioral-quartet-comparison: unknown
+- proxy-decorator-adapter-comparison: unknown
+- factory-builder-comparison: unknown
+- observer-mediator-comparison: unknown
+- selection-speed-judgment: unknown
+
+> probe skipped via /nodes design-pattern/pattern-selection skip-probe on 2026-09-02
+
+## iterator — 迭代器模式
+
+- iterator-intent: unknown
+- enhanced-for-misconception: unknown
+- three-interface-roles: unknown
+- jdk-collection-iterable-iterator: unknown
+- org-tree-scenario: unknown
+- deep-traversal-algorithm: unknown
+- linkmap-invertedmap-cursor: unknown
+- iterator-tradeoffs: unknown
+
+> probe skipped via /nodes design-pattern/iterator skip-probe on 2026-09-02
+
+## visitor — 訪問者模式
+
+- visitor-intent: unknown
+- double-dispatch-mechanism: unknown
+- visitor-class-structure: unknown
+- campus-scenario-walkthrough: unknown
+- visitor-tradeoffs: unknown
+
+> probe skipped via /nodes design-pattern/visitor skip-probe on 2026-09-02

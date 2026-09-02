@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>支付場景重構實戰</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="meta">橋接模式 · Step 3/4 · 約 12 分鐘</div>
+
+  <h1>支付場景重構實戰</h1>
+
+  <h2>學習目標</h2>
+  <p>透過支付渠道×支付模式的完整重構過程，體會從 ifelse 到橋接模式的轉變，掌握抽象類組合介面、構造注入的標準寫法。</p>
+
+  <h2>重構前：一個方法搞定所有</h2>
+  <p>回顧一下重構前的 PayController：所有支付渠道和支付模式的組合邏輯，全部堆在一個 <code>doPay</code> 方法裡。兩個 int 參數（channelType、modeType）控制一切，雙層 ifelse 嵌套。</p>
+
+  <blockquote class="bad-code">
+    <strong>重構前</strong>：PayController 一個類承擔所有支付邏輯
+  </blockquote>
+
+  <pre><code>public class PayController {
+    public String doPay(String uId, String tradeId, int amount,
+                         int channelType, int modeType) {
+        if (1 == channelType) {
+            if (1 == modeType) return "微信+密碼：" + uId;
+            if (2 == modeType) return "微信+刷臉：" + uId;
+            if (3 == modeType) return "微信+指紋：" + uId;
+        } else if (2 == channelType) {
+            if (1 == modeType) return "支付寶+密碼：" + uId;
+            if (2 == modeType) return "支付寶+刷臉：" + uId;
+            if (3 == modeType) return "支付寶+指紋：" + uId;
+        }
+        return "支付失敗";
+    }
+}</code></pre>
+
+  <h2>重構思路：拆成兩棵樹</h2>
+  <p>橋接模式要求我們把兩個維度分開：</p>
+  <ul>
+    <li><strong>抽象部分</strong>（渠道）：Pay 抽象類 → WxPay、ZfbPay</li>
+    <li><strong>實現部分</strong>（模式）：IPayMode 介面 → PayCypher、PayFaceMode、PayFingerprintMode</li>
+  </ul>
+
+  <h2>第一步：定義實現介面 IPayMode</h2>
+  <p>先把「支付模式」抽成一個介面：</p>
+
+  <pre><code>public interface IPayMode {
+    String security(String uId);
+}</code></pre>
+
+  <p>每個模式實現自己的風控校驗邏輯：</p>
+
+  <pre><code>// 密碼校驗
+public class PayCypher implements IPayMode {
+    public String security(String uId) {
+        // 模擬密碼校驗
+        return "密碼校驗通過";
+    }
+}
+
+// 刷臉校驗
+public class PayFaceMode implements IPayMode {
+    public String security(String uId) {
+        return "刷臉校驗通過";
+    }
+}
+
+// 指紋校驗
+public class PayFingerprintMode implements IPayMode {
+    public String security(String uId) {
+        return "指紋校驗通過";
+    }
+}</code></pre>
+
+  <h2>第二步：建立抽象類 Pay（橋的載體）</h2>
+  <p>Pay 抽象類是整個橋接的核心——它持有 IPayMode 的引用：</p>
+
+  <pre><code>public abstract class Pay {
+    protected IPayMode payMode;  // 橋！
+
+    public Pay(IPayMode payMode) {
+        this.payMode = payMode;
+    }
+
+    public abstract String transfer(String uId, String tradeId, int amount);
+}</code></pre>
+
+  <p>注意 <code>protected IPayMode payMode</code> 這行。這就是橋。構造函數接收一個 IPayMode 的實現，存到 <code>payMode</code> 字段。子類在 <code>transfer</code> 中可以隨時呼叫 <code>payMode.security(uId)</code> 做風控。</p>
+
+  <h2>第三步：實現具體渠道</h2>
+  <p>WxPay 和 ZfbPay 各自實現自己的 transfer 邏輯，但風控校驗交給橋對面的 payMode：</p>
+
+  <pre><code>public class WxPay extends Pay {
+    public WxPay(IPayMode payMode) {
+        super(payMode);
+    }
+
+    public String transfer(String uId, String tradeId, int amount) {
+        // 1. 先走橋對面的風控
+        String check = payMode.security(uId);
+        // 2. 再做微信自己的轉賬邏輯
+        return "微信支付成功。金額：" + amount + "，校驗：" + check;
+    }
+}
+
+public class ZfbPay extends Pay {
+    public ZfbPay(IPayMode payMode) {
+        super(payMode);
+    }
+
+    public String transfer(String uId, String tradeId, int amount) {
+        String check = payMode.security(uId);
+        return "支付寶支付成功。金額：" + amount + "，校驗：" + check;
+    }
+}</code></pre>
+
+  <h2>第四步：客戶端組合</h2>
+  <p>客戶端不需要關心具體實現，只需要「new 一個渠道 + 塞一個模式進去」：</p>
+
+  <pre><code>// 微信 + 刷臉
+Pay wxPay = new WxPay(new PayFaceMode());
+System.out.println(wxPay.transfer("user001", "trade001", 100));
+
+// 支付寶 + 指紋
+Pay zfbPay = new ZfbPay(new PayFingerprintMode());
+System.out.println(zfbPay.transfer("user002", "trade002", 200));</code></pre>
+
+  <p>調用方式從 <code>doPay("user001", ..., 1, 2)</code> 變成了 <code>new WxPay(new PayFaceMode()).transfer(...)</code>。不再需要記住數字型的 type 參數，意圖一目了然。</p>
+
+  <h2>重構前後對比</h2>
+
+  <table>
+    <thead>
+      <tr><th>維度</th><th>重構前</th><th>重構後</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>文件數</td><td>1 個 PayController</td><td>7 個（1 抽象類 + 1 介面 + 5 實現）</td></tr>
+      <tr><td>新增渠道</td><td>改 PayController 的 ifelse</td><td>加一個 Pay 子類</td></tr>
+      <tr><td>新增模式</td><td>改所有渠道的 ifelse</td><td>加一個 IPayMode 實現</td></tr>
+      <tr><td>組合測試</td><td>2 × 3 = 6 組全測</td><td>各維度獨立測 + 少量組合驗證</td></tr>
+      <tr><td>客戶端調用</td><td>傳數字 type</td><td>語意化 new + 傳入模式</td></tr>
+    </tbody>
+  </table>
+
+  <h2>測試驗證</h2>
+  <p>橋接版的測試覆蓋兩個典型組合：微信+刷臉、支付寶+指紋。兩側測試結果功能一致（支付都能完成），但橋接版調用方式更整潔、乾淨。正如原書所說：「內容一樣，但實現方式有了很大變化，不能只看結果還要看過程。」</p>
+
+  <blockquote>
+    <strong>重構的本質</strong>：不改外部可觀察結果，只改善內部結構。橋接模式讓渠道和模式各歸各位，組合關係從「代碼裡的 ifelse」變成「客戶端的 new + 傳參」。
+  </blockquote>
+
+  <div class="quiz" data-quiz="bridge-refactor">
+    <h2>自我檢測</h2>
+    <div class="quiz-question" data-answer="2">
+      <p><strong>1.</strong> 橋接模式重構後，WxPay 的 transfer 方法中風控校驗怎麼做的？</p>
+      <button class="quiz-option" data-value="1">自己實現刷臉/指紋邏輯</button>
+      <button class="quiz-option" data-value="2">呼叫 payMode.security(uId)</button>
+      <button class="quiz-option" data-value="3">呼叫父類的 security</button>
+      <button class="quiz-option" data-value="4">用反射調用模式類</button>
+    </div>
+    <div class="quiz-question" data-answer="3">
+      <p><strong>2.</strong> 客戶端 <code>new WxPay(new PayFaceMode())</code> 中，PayFaceMode 通過什麼方式傳入？</p>
+      <button class="quiz-option" data-value="1">setter 注入</button>
+      <button class="quiz-option" data-value="2">全域變量</button>
+      <button class="quiz-option" data-value="3">構造函數注入</button>
+      <button class="quiz-option" data-value="4">Spring 容器</button>
+    </div>
+    <div class="quiz-question" data-answer="1">
+      <p><strong>3.</strong> 重構後新增一個「雲閃付」渠道，需要改哪些文件？</p>
+      <button class="quiz-option" data-value="1">只加一個雲閃付.java</button>
+      <button class="quiz-option" data-value="2">改 Pay 抽象類</button>
+      <button class="quiz-option" data-value="3">改所有 IPayMode 實現</button>
+      <button class="quiz-option" data-value="4">改客戶端代碼</button>
+    </div>
+    <div class="quiz-question" data-answer="4">
+      <p><strong>4.</strong> 重構前 <code>doPay(..., 1, 2)</code> 中的數字 1 和 2 分別代表什麼？</p>
+      <button class="quiz-option" data-value="1">金額和用戶ID</button>
+      <button class="quiz-option" data-value="2">模式和渠道</button>
+      <button class="quiz-option" data-value="3">交易ID和金額</button>
+      <button class="quiz-option" data-value="4">渠道和模式</button>
+    </div>
+    <div class="quiz-question" data-answer="2">
+      <p><strong>5.</strong> 橋接模式重構的核心收益是？</p>
+      <button class="quiz-option" data-value="1">代碼行數減少</button>
+      <button class="quiz-option" data-value="2">兩個維度可以獨立擴展</button>
+      <button class="quiz-option" data-value="3">執行速度提升</button>
+      <button class="quiz-option" data-value="4">不需要測試</button>
+    </div>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="bridge-structure.html">← 上一節：橋接模式的結構</a>
+    <a href="bridge-tradeoffs.html">下一節：適用邊界與模式選型 →</a>
+  </div>
+
+  <div class="footer">
+    橋接模式 · 支付場景重構實戰 · design-pattern
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>組合模式的四角色與引擎遍歷</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>組合模式的四角色與引擎遍歷</h1>
+<p class="meta">設計模式 · 節點 17 · 步驟 2/3</p>
+
+<h2>這節課你要學會什麼</h2>
+<p>讀完這篇文章，你能說出組合模式的四個角色——節點、鏈路、果實、過濾器——各自的職責，以及引擎從樹根遍歷到果實的完整流程。</p>
+
+<h2>從上一節的痛到這節的解法</h2>
+<p>上一節看到：ifelse 直寫把所有判斷邏輯堆在一個方法裡，每加一個維度就指數膨脹。組合模式的解法是把判斷邏輯拆成獨立的「節點」，按樹形結構組織，由「引擎」統一執行。</p>
+<p>但「組合成樹」聽起來很抽象。這節會拆解出四個具體角色，用營銷決策樹的場景逐一套上，最後看引擎是怎麼從根走到果實的。</p>
+
+<h2>四個角色</h2>
+
+<table>
+  <thead>
+    <tr><th>角色</th><th>它做什麼</th><th>決策樹場景的對應</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>樹節點（TreeNode）</strong></td>
+      <td>樹的基本單位。每個節點有 <code>nodeType</code> 區分「子葉」（需要繼續判斷）和「果實」（最終結果）</td>
+      <td>nodeType=1 是子葉（性別判斷、年齡判斷），nodeType=2 是果實（發券結果 A/B/C/D）</td>
+    </tr>
+    <tr>
+      <td><strong>節點鏈路（TreeNodeLink）</strong></td>
+      <td>連接兩個節點的邊。定義「從節點 A 到節點 B 的條件」</td>
+      <td>從根節點（性別）到子節點（年齡）的鏈路：「性別=男 → 走左邊」</td>
+    </tr>
+    <tr>
+      <td><strong>過濾器（LogicFilter）</strong></td>
+      <td>具體的判斷邏輯。接口定義 <code>filter</code>（做判斷）和 <code>matterValue</code>（取決策值）</td>
+      <td><code>UserGenderFilter</code> 取性別，<code>UserAgeFilter</code> 取年齡，各自實現判斷邏輯</td>
+    </tr>
+    <tr>
+      <td><strong>引擎（Engine）</strong></td>
+      <td>統一入口。從樹根出發，循環遍歷子葉節點，直到落到果實</td>
+      <td><code>TreeEngineHandle</code> 接收用戶信息，沿著決策樹走到最終發券結果</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>模型結構一覽</h2>
+<p>用一張圖來看整棵決策樹的組織方式：</p>
+
+<pre><code>                    ┌──────────┐
+                    │  樹根 1   │  nodeType=1（子葉）ruleKey=userGender
+                    └────┬─────┘
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+        ┌─────┴─────┐         ┌─────┴─────┐
+        │  節點 11   │         │  節點 12   │  nodeType=1（子葉）ruleKey=userAge
+        │ (男→左)   │         │ (女→右)   │
+        └─────┬─────┘         └─────┬─────┘
+              │                     │
+       ┌──────┴──────┐       ┌──────┴──────┐
+       │             │       │             │
+  ┌────┴────┐  ┌────┴────┐ ┌┴────────┐ ┌┴────────┐
+  │果實 111 │  │果實 112 │ │果實 121 │ │果實 122 │  nodeType=2（果實）
+  │ 果實 A  │  │ 果實 B  │ │ 果實 C  │ │ 果實 D  │
+  └─────────┘  └─────────┘ └─────────┘ └─────────┘
+  男+&lt;25     男+≥25      女+&lt;25     女+≥25</code></pre>
+
+<p>每個子葉節點的 <code>ruleKey</code> 對應一個過濾器（userGender → UserGenderFilter，userAge → UserAgeFilter）。過濾器從用戶信息中取出對應值，和鏈路上的規則比較，決定下一步走哪個子節點。</p>
+
+<h2>過濾器的判斷邏輯</h2>
+<p>抽象類 <code>BaseLogic</code> 實現了 <code>LogicFilter</code> 接口，提供通用的判斷方法 <code>filter</code>。它支持五種規則類型：</p>
+
+<table>
+  <thead>
+    <tr><th>ruleLimitType</th><th>含義</th><th>決策樹場景</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td>等於</td><td>性別等於 "man" → 走左邊</td></tr>
+    <tr><td>2</td><td>大於</td><td>年齡 ≥ 25 → 走右邊</td></tr>
+    <tr><td>3</td><td>小於</td><td>年齡 &lt; 25 → 走左邊</td></tr>
+    <tr><td>4</td><td>小於等於</td><td>—</td></tr>
+    <tr><td>5</td><td>大於等於</td><td>—</td></tr>
+  </tbody>
+</table>
+
+<p><code>filter</code> 方法的邏輯很簡單：取出用戶的決策值（<code>matterValue</code>），和鏈路上的 <code>ruleLimitValue</code> 比較。匹配就返回下一個子節點的 ID，不匹配就返回 <code>-1</code>（表示沒有匹配的路徑）。</p>
+
+<h2>引擎遍歷流程</h2>
+<p>引擎的核心方法是 <code>engineDecisionMaker</code>，從樹根出發，用 while 循環往下走：</p>
+
+<pre><code>while (nodeType == 1) {           // 還是子葉節點
+    LogicFilter filter = config.get(ruleKey);   // 取出對應的過濾器
+    String value = filter.matterValue(info);    // 從用戶信息取值
+    Long nextNodeId = filter.filter(value, links);  // 判斷，得到下一個節點 ID
+    node = treeMap.get(nextNodeId);  // 移動到下一個節點
+    nodeType = node.getNodeType();
+}
+// 出循環時，nodeType == 2，到達果實節點
+return new EngineResult(node.getValue());  // 返回結果</code></pre>
+
+<p>整個流程就是：<strong>從根出發 → 查過濾器 → 取值判斷 → 移動到子節點 → 重複 → 直到果實</strong>。日誌會逐節點打印「決策樹引擎=> treeNode：11 ruleKey：userGender」，讓你看到整條決策路徑。</p>
+
+<h2>配置可抽離</h2>
+<p>一個關鍵設計：<code>EngineConfig</code> 用一個 map 靜態註冊過濾器（key=ruleKey，value=過濾器實例）。這個 map 完全可以抽到資料庫：</p>
+<ul>
+  <li>新增一個判斷維度（比如「地區」）：只需要寫一個 <code>UserRegionFilter</code> 類，然後在配置裡加一行 <code>userRegion → new UserRegionFilter()</code></li>
+  <li>改判斷規則：只改配置參數，不動引擎代碼</li>
+  <li>不同場景用不同樹：用不同 <code>treeId</code> 查出不同的樹結構，引擎代碼完全不變</li>
+</ul>
+
+<h2>完整流程圖</h2>
+<p>把所有角色串起來，一次決策的完整流程：</p>
+<ol>
+  <li>調用方傳入 <code>userId</code>、<code>userSex</code>、<code>userAge</code></li>
+  <li>引擎從 <code>treeMap</code> 取出樹根節點（nodeType=1，子葉）</li>
+  <li>讀取根節點的 <code>ruleKey</code>（userGender），從配置中取出 <code>UserGenderFilter</code></li>
+  <li>過濾器取用戶性別，和鏈路上的規則比較，返回下一個子節點 ID</li>
+  <li>引擎移動到下一個子節點（userAge 判斷）</li>
+  <li>重複步驟 3-4，直到 nodeType=2（果實節點）</li>
+  <li>返回果實節點的值（果實 A/B/C/D）</li>
+</ol>
+
+<h2>小結</h2>
+<p>組合模式的四個角色是：樹節點（TreeNode）定義「是判斷還是結果」、節點鏈路（TreeNodeLink）定義「判斷後走哪條路」、過濾器（LogicFilter）實現「具體怎麼判斷」、引擎（Engine）負責「從根走到果實」。配置可抽到資料庫，新增維度只需加過濾器不改引擎。下一節會講：組合模式什麼時候該用、什麼時候不該用，以及和裝飾器、代理的區別。</p>
+
+<h2>自測題</h2>
+<div class="quiz" data-quiz="roles">
+  <p><strong>Q1</strong>：在組合模式中，TreeNode 的 <code>nodeType=1</code> 表示什麼？</p>
+  <button class="quiz-option" data-correct="false">果實節點（最終結果）</button>
+  <button class="quiz-option" data-correct="true">子葉節點（需要繼續判斷）</button>
+  <button class="quiz-option" data-correct="false">樹根節點（唯一入口）</button>
+  <button class="quiz-option" data-correct="false">配置節點（存儲參數）</button>
+
+  <p style="margin-top:1rem"><strong>Q2</strong>：過濾器的 <code>filter</code> 方法返回什麼？</p>
+  <button class="quiz-option" data-correct="false">布林值（true/false）</button>
+  <button class="quiz-option" data-correct="false">最終結果字串</button>
+  <button class="quiz-option" data-correct="true">下一個子節點的 ID</button>
+  <button class="quiz-option" data-correct="false">當前節點的值</button>
+
+  <p style="margin-top:1rem"><strong>Q3</strong>：引擎 <code>engineDecisionMaker</code> 的 while 循環條件是什麼？</p>
+  <button class="quiz-option" data-correct="false">nodeType == 2</button>
+  <button class="quiz-option" data-correct="true">nodeType == 1（還是子葉節點）</button>
+  <button class="quiz-option" data-correct="false">nextNodeId != null</button>
+  <button class="quiz-option" data-correct="false">treeMap 還有未訪問的節點</button>
+
+  <p style="margin-top:1rem"><strong>Q4</strong>：新增一個「地區判斷」維度，需要做什麼？</p>
+  <button class="quiz-option" data-correct="false">修改引擎的 while 循環邏輯</button>
+  <button class="quiz-option" data-correct="false">在 TreeEngineHandle 裡加 ifelse</button>
+  <button class="quiz-option" data-correct="true">寫一個 UserRegionFilter，在配置 map 裡加一行</button>
+  <button class="quiz-option" data-correct="false">重新設計整棵決策樹的結構</button>
+
+  <p style="margin-top:1rem"><strong>Q5</strong>：<code>EngineConfig</code> 的 map 結構有什麼好處？</p>
+  <button class="quiz-option" data-correct="false">讓代碼行數更少</button>
+  <button class="quiz-option" data-correct="true">過濾器可以抽到資料庫，實現動態配置</button>
+  <button class="quiz-option" data-correct="false">讓引擎的執行速度更快</button>
+  <button class="quiz-option" data-correct="false">讓樹節點的數量不受限制</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./composite-concept-and-scenario.html">← 上一步：組合模式的思路與決策樹場景</a>
+  <a href="./composite-boundary-and-comparison.html">下一步：組合模式的適用邊界 →</a>
+</div>
+
+<div class="footer">
+  設計模式 · 組合模式 · 節點 17 · 步驟 2/3
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

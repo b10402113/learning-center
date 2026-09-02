@@ -1,0 +1,35 @@
+---
+id: flyweight-implementation
+title: 秒殺場景重構：享元工廠 + Redis + 控制類的完整實現
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#五、享元模式重构代码]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+# 秒殺場景重構：享元工廠 + Redis + 控制類的完整實現
+
+## Learning goal
+
+掌握享元模式在秒殺場景的完整重構：ActivityFactory（Map 緩存內部狀態）、RedisUtils（外部狀態）、ActivityController（組裝返回）的職責分離與協作。
+
+## Lesson
+
+重構前只有一個類——`ActivityController`，所有查詢邏輯都塞在裡面。重構後的工程結構職責分離：`Activity.java`（活動實體，內部狀態載體）、`Stock.java`（庫存實體，外部狀態載體）、`ActivityFactory.java`（享元工廠，Map 緩存）、`ActivityController.java`（控制類，組裝返回）、`RedisUtils.java`（模擬 Redis，外部狀態來源）。從單類到多類，每個類的職責清晰分離。
+
+Activity 類承載活動的基礎信息：id、name、desc、startTime、stopTime、stock。這是享元要共享的「固定內容」載體。Stock 單獨成類，保存會變化的庫存數據（total 總量、used 已用）。把變化數據從固定數據中剝離出來，是享元建模的第一步。
+
+ActivityFactory 是享元模式的靈魂：用一個 `static Map<Long, Activity>` 緩存已查詢過的活動信息。`getActivity(Long id)` 先查 Map，命中直接返回，未命中則 new Activity 設置固定信息後 put 進 Map 再返回。核心機制一句話：**用一個固定 id 存放和獲取對象**。在分佈式場景下，這個 Map 可以替換為 Redis——數據放 Redis 中，按需選擇。
+
+RedisUtils 用 `ScheduledExecutorService`（單線程調度）與 `AtomicInteger stock` 模擬 Redis 操作：構造器中 `scheduleAtFixedRate` 每 100000 微秒讓庫存 `addAndGet(1)` 模擬消耗。`AtomicInteger` 保證並發自增安全，定時任務讓庫存在使用中持續變化。ActivityController 是最終入口：先通過 `ActivityFactory.getActivity(id)` 獲取享元緩存的固定活動信息，再從 Redis 取已用庫存回填到 activity，最終返回包裝完整的活動信息。工廠負責內部狀態複用，控制類負責疊加外部狀態。
+
+測試驗證：循環查詢同一個活動十次，每次間隔 1.2 秒。輸出結果顯示 name、desc、startTime 等固定字段十次完全相同，印證享元緩存複用；庫存 used 從 1 到 114 持續遞增，印證變化狀態單獨獲取。重構前每次查詢都從零構建 Activity；重構後 ActivityFactory 只在第一次創建，後續九次直接複用。固定信息零冗餘，變化信息實時獲取。
+
+## Course
+
+[↗ 課程頁面](../../lessons/flyweight-implementation.html)
+
+## Sources
+
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#五、享元模式重构代码]]

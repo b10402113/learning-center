@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ifelse 實現的維護災難</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>ifelse 實現的維護災難</h1>
+<div class="meta">設計模式 · 建造者模式 · Step 2/4</div>
+
+<blockquote>
+<strong>學習目標：</strong>識別 ifelse 實現套餐選擇的代碼壞味道，理解「一個類幾千行」的維護代價。
+</blockquote>
+
+<h2>先用最直覺的方式寫</h2>
+
+<p>回到裝修套餐場景。你有四種物料、三種套餐，最直覺的寫法是什麼？——一個方法，裡面用 if 判斷等級，然後 <code>new</code> 出對應的物料組合。</p>
+
+<pre><code>public List&lt;Matter&gt; getMatterList(BigDecimal area, Integer level) {
+    List&lt;Matter&gt; list = new ArrayList&lt;&gt;();
+    if (1 == level) {  // 豪華歐式
+        list.add(new LevelTwoCeiling());   // 二級頂 850
+        list.add(new DuluxCoat());         // 多樂士 719
+        list.add(new ShengXiangFloor());   // 聖象 318
+    } else if (2 == level) {  // 輕奢田園
+        list.add(new LevelTwoCeiling());
+        list.add(new LiBangCoat());        // 立邦 650
+        list.add(new MarcoPoloTile());     // 馬可波羅 140
+    } else if (3 == level) {  // 現代簡約
+        list.add(new LevelOneCeiling());   // 一級頂 260
+        list.add(new LiBangCoat());
+        list.add(new DongPengTile());      // 東鵬 102
+    }
+    // ... 然後計算價格、拼接清單文本
+    return list;
+}</code></pre>
+
+<p>看著還行？問題在後面。</p>
+
+<h2>壞味道一：重複邏輯</h2>
+
+<p>每個 if 分支裡做三件事：new 物料、加入清單、按面積乘以係數算價格。吊頂 ×0.2、塗料 ×1.4、地板和地磚 ×面積。這段價格計算邏輯在三個分支裡<strong>完全重複</strong>。</p>
+
+<p>改一個計算係數？三個分支都要改。漏改一個？三種套餐的價格就不一致了。</p>
+
+<h2>壞味道二：清單拼接和業務邏輯混在一起</h2>
+
+<p>除了選料和算價格，這個方法還要拼接裝修清單的文本——把品牌、型號、單價、面積、總價串成一段可讀的字符串。業務邏輯（選什麼料）和展示邏輯（怎麼顯示）混在同一個方法裡，改顯示格式會影響業務計算。</p>
+
+<h2>壞味道三：一個類扛所有</h2>
+
+<p>整個工程只有一個核心類 <code>DecorationPackageController</code>。三種套餐的選擇、計算、展示全在一個類裡。作者說這就是「一個類幾千行代碼」的潛質——先能跑，再慢慢堆，堆到不可維護。</p>
+
+<h2>老闆說要加套餐</h2>
+
+<p>幾個月後，老闆說：「加一個『輕奢北歐』套餐！」你需要：</p>
+<ol>
+  <li>在 ifelse 裡加一個 <code>else if (4 == level)</code> 分支</li>
+  <li>複製一套物料 new + 價格計算 + 清單拼接的代碼</li>
+  <li>確認計算係數沒抄錯</li>
+  <li>確認清單格式沒漏改</li>
+</ol>
+
+<p>十種套餐？二十種？每個套餐都要加一段幾乎相同的代碼。像膏藥一樣一塊塊貼上去，維護成本呈線性增長。</p>
+
+<h2>測試結果（功能是對的）</h2>
+
+<p>用單測跑三檔套餐：</p>
+<table>
+  <tr><th>套餐</th><th>面積</th><th>報價</th></tr>
+  <tr><td>豪華歐式</td><td>132.52 m²</td><td>198,064.39 元</td></tr>
+  <tr><td>輕奢田園</td><td>98.25 m²</td><td>119,865.00 元</td></tr>
+  <tr><td>現代簡約</td><td>85.43 m²</td><td>90,897.52 元</td></tr>
+</table>
+
+<p>功能完全正確。但代碼結構已經埋下了維護地雷。<strong>功能對不等於結構好</strong>——這是判斷代碼質量的第一課。</p>
+
+<h2>小結：ifelse 的代價</h2>
+
+<table>
+  <tr><th>問題</th><th>具體表現</th></tr>
+  <tr><td>重複邏輯</td><td>價格計算在每個分支裡複製粘貼</td></tr>
+  <tr><td>職責混雜</td><td>選料、計算、展示全塞一個方法</td></tr>
+  <tr><td>擴展困難</td><td>加一個套餐 = 加一段複製代碼</td></tr>
+  <tr><td>單類膨脹</td><td>一個類扛所有，朝幾千行發展</td></tr>
+</table>
+
+<p>接下來看看建造者模式如何把这些問題逐個拆解。</p>
+
+<h2>自我檢測</h2>
+<div id="quiz" data-quiz="builder-bad-smell">
+  <p><strong>1. ifelse 版本中，「重複邏輯」指的是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 三次 new 物料的代碼</button>
+  <button class="quiz-option" data-correct="true">B. 價格計算邏輯在每個分支裡完全相同</button>
+  <button class="quiz-option" data-correct="false">C. 套餐名稱的判斷條件</button>
+  <button class="quiz-option" data-correct="false">D. 測試用例的寫法</button>
+
+  <p><strong>2. 為什麼說「功能對不等於結構好」？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 因為測試沒覆蓋所有場景</button>
+  <button class="quiz-option" data-correct="true">B. 因為代碼能跑但維護和擴展成本很高</button>
+  <button class="quiz-option" data-correct="false">C. 因為計算結果有精度問題</button>
+  <button class="quiz-option" data-correct="false">D. 因為沒有用設計模式</button>
+
+  <p><strong>3. 如果要加第十種套餐，ifelse 版本需要怎麼做？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 修改已有的 ifelse 分支</button>
+  <button class="quiz-option" data-correct="false">B. 重寫整個方法</button>
+  <button class="quiz-option" data-correct="true">C. 新增一個 else if 分支，複製一套選料+計算+展示代碼</button>
+  <button class="quiz-option" data-correct="false">D. 刪除舊套餐再重建</button>
+
+  <p><strong>4. ifelse 版本的「職責混雜」具體是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 多個類之間的耦合</button>
+  <button class="quiz-option" data-correct="true">B. 選料、計算、展示全塞在一個方法裡</button>
+  <button class="quiz-option" data-correct="false">C. 沒有使用接口</button>
+  <button class="quiz-option" data-correct="false">D. 變量命名不規範</button>
+
+  <p><strong>5. 三檔套餐的報價分別是多少？</strong></p>
+  <button class="quiz-option" data-correct="false">A. 198,064 / 119,865 / 90,897 元（大約）</button>
+  <button class="quiz-option" data-correct="true">B. 198,064.39 / 119,865.00 / 90,897.52 元</button>
+  <button class="quiz-option" data-correct="false">C. 200,000 / 120,000 / 90,000 元</button>
+  <button class="quiz-option" data-correct="false">D. 150,000 / 100,000 / 75,000 元</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="builder-concept.html">← 建造者模式的意圖與場景</a>
+  <a href="builder-structure.html">下一步：建造者模式的三層結構 →</a>
+</div>
+
+<div class="footer">
+  設計模式學習路徑 · 建造者模式 · Step 2/4
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

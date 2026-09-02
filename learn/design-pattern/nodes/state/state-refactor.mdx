@@ -1,0 +1,111 @@
+---
+id: state-refactor
+title: 狀態模式三件套重構
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#五、状态模式重构代码]]"
+created: 2026-09-02
+updated: 2026-09-02
+---
+
+<LearningGoal>
+能說出狀態模式三件套（State 抽象類、具體狀態類、StateHandler）各自的職責，並解釋為什麼每個狀態類的方法內不再需要 if 判斷。
+</LearningGoal>
+
+## Lesson
+
+狀態模式把一把梭的 ifelse 拆成三個角色，各自有清晰的職責。
+
+### 三件套骨架
+
+| 角色 | 職責 | 類比 |
+| --- | --- | --- |
+| **State 抽象類** | 定義所有操作的接口（提審、通過、拒絕、撤審、關閉、開啟、執行） | 磁帶機的按鈕面板——所有按鈕都在這裡定義 |
+| **具體狀態類**（7 個） | 每個狀態實現自己的行為：哪些操作允許、執行後切換到哪個狀態 | 每個狀態是一張「操作指南」——只有這個狀態下能做的事 |
+| **StateHandler** | 用 Map 把狀態枚舉映射到對應的 State 實現，對外提供統一接口 | 前台接待——你告訴它你要做什麼，它找到對應狀態的指南去執行 |
+
+### State 抽象類：7 個操作接口
+
+State 抽象類定義了 7 個方法，對應活動可能執行的全部操作：
+
+<pre><code>abstract class State {
+  void arraignment(ActivityInfo info);  // 提審
+  void checkPass(ActivityInfo info);    // 審核通過
+  void checkRefuse(ActivityInfo info);  // 審核拒絕
+  void checkRevoke(ActivityInfo info);  // 撤審
+  void close(ActivityInfo info);        // 關閉
+  void open(ActivityInfo info);         // 開啟
+  void doing(ActivityInfo info);        // 活動執行
+}</code></pre>
+
+每個方法都接受 <code>ActivityInfo</code>，這樣具體狀態類就能修改活動的狀態。
+
+### 具體狀態類：每個狀態自己管自己
+
+關鍵在於：每個具體狀態類只實現它**在當前狀態下允許的操作**，不允許的直接拋異常或忽略。
+
+以 <code>EditingState</code>（編輯中）為例：
+
+<pre><code>class EditingState extends State {
+  void arraignment(ActivityInfo info) {
+    // 編輯中 → 提審：合法，切換到 Check
+    info.setStatus(Status.Check);
+  }
+
+  void checkPass(ActivityInfo info) {
+    // 編輯中不能直接通過：非法操作
+    throw new RuntimeException("當前狀態不允許此操作");
+  }
+
+  void close(ActivityInfo info) {
+    // 編輯中 → 關閉：合法
+    info.setStatus(Status.Close);
+  }
+}</code></pre>
+
+每個方法的邏輯非常直觀：<strong>這個操作在當前狀態下合法嗎？合法就切換狀態，不合法就拒絕。</strong>不需要再問「beforeStatus 是什麼」——因為 <code>EditingState</code> 本身就是「編輯中」的行為指南。
+
+其餘 6 個狀態類（CheckState、PassState、RefuseState、DoingState、CloseState、OpenState）同理：每個類只實現當前狀態下合法的操作。
+
+### StateHandler：統一入口
+
+StateHandler 用 <code>Map&lt;Enum&lt;Status&gt;, State&gt;</code> 把 7 個狀態枚舉映射到 7 個實現類，對外提供同名接口：
+
+<pre><code>class StateHandler {
+  private Map&lt;Status, State&gt; stateMap = new HashMap&lt;&gt;();
+
+  StateHandler() {
+    stateMap.put(Status.Editing, new EditingState());
+    stateMap.put(Status.Check, new CheckState());
+    stateMap.put(Status.Pass, new PassState());
+    // ... 其餘狀態
+  }
+
+  void arraignment(ActivityInfo info) {
+    stateMap.get(info.getStatus()).arraignment(info);
+  }
+
+  void checkPass(ActivityInfo info) {
+    stateMap.get(info.getStatus()).checkPass(info);
+  }
+}</code></pre>
+
+調用方不需要知道當前是什麼狀態，只需要調用 <code>handler.arraignment(info)</code>，Handler 會自動找到對應狀態的實現去執行。
+
+### 對比：ifelse vs 狀態模式
+
+| 維度 | ifelse 實現 | 狀態模式 |
+| --- | --- | --- |
+| 加新狀態 | 所有分支都要改 | 加一個新類即可 |
+| 改某個狀態的行為 | 在巨方法裡找對應分支 | 只改對應的狀態類 |
+| 測試某個狀態 | 很難單獨測試 | 每個狀態類可獨立測試 |
+| 代碼結構 | 一坨一坨 | 每個狀態一個文件 |
+| 新人理解 | 看半天不敢動 | 看一個文件就知道一個狀態的行為 |
+
+### 一句話記住
+
+狀態模式三件套 = 抽象類定義接口 + 每個狀態一個實現類 + Handler 做映射。狀態自己管自己的行為，不需要外部分支判斷。
+
+## Course
+
+[↗ 課程頁面](../../lessons/state-refactor.html)

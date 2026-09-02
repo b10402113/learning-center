@@ -1,0 +1,135 @@
+---
+id: command-refactor
+title: 三層重構：命令、實現者、調用者
+subject: design-pattern
+sources:
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#命令模式-工程结构]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#命令模式模型结构]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#命令模式-代码实现]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#命令模式-测试验证]]"
+  - "[[sources/design-pattern/completed/20260901_design_pattern.pdf#命令模式-总结]]"
+created: 2026-09-01
+updated: 2026-09-01
+---
+
+# 三層重構：命令、實現者、調用者
+
+<LearningGoal>
+掌握命令模式五要素的 Java 落地寫法，能說出命令/實現者/調用者三層各自的職責邊界，並用測試輸出印證「請求與實現解耦」的收益。
+</LearningGoal>
+
+## Lesson
+
+重構後的工程按三大塊組織：`cook` 包放實現者（`ICook` 接口 + 四個具體廚師），`cuisine` 包放命令（`ICuisine` 接口 + 四個具體菜品），外加調用者 `XiaoEr`。整體分為三大塊——命令實現（菜品）、邏輯實現（廚師）、調用者（小二），這就是命令模式的核心內容。拆解後可非常方便地擴展菜品與廚師，對調用者保持鬆耦合。
+
+### 模型結構
+
+模型結構圖直觀展示命令模式的三層骨架：
+
+1. `ICuisine`（抽象命令，聲明 `cook()` 烹飪方法）→ 四個具體菜品命令（構造時注入 `ICook`）
+2. `ICook`（抽象實現者，聲明 `doCooking()`）→ 四個具體廚師實現
+3. `XiaoEr`（調用者，持有 `List<ICuisine>` 並統一執行）
+
+每個具體命令都持有一個對應實現者對象，通過 `cook.doCooking()` 觸發實現。這是命令/實現者/調用者三層的核心組合方式。
+
+### 五要素 Java 落地
+
+分五步落地：
+
+**1) 抽象命令 `ICuisine`**——只聲明 `void cook()`：
+
+```java
+public interface ICuisine {
+    void cook();
+}
+```
+
+**2) 具體命令 `XxxCuisine`**——實現 `ICuisine`，構造器注入 `ICook`，在 `cook()` 中調用 `cook.doCooking()`：
+
+```java
+public class GuangDongCuisine implements ICuisine {
+    private ICook cook;
+
+    public GuangDongCuisine(ICook cook) {
+        this.cook = cook;
+    }
+
+    @Override
+    public void cook() {
+        cook.doCooking();
+    }
+}
+```
+
+四個菜品（廣東、四川、江蘇、山東）結構相同，只是注入的廚師不同。這就是「命令實現 + 實現者」兩兩組合形成具體命令對象。
+
+**3) 抽象實現者 `ICook`**——聲明 `void doCooking()`：
+
+```java
+public interface ICook {
+    void doCooking();
+}
+```
+
+**4) 具體實現者 `XxxCook`**——實現 `ICook`，在 `doCooking()` 打日誌模擬通知廚房烹飪：
+
+```java
+public class GuangDongCook implements ICook {
+    @Override
+    public void doCooking() {
+        System.out.println("廣東菜廚師，烹飪粵菜");
+    }
+}
+```
+
+**5) 調用者 `XiaoEr`**——持 `List<ICuisine> cuisineList`，`order(ICuisine)` 添加菜品、`synchronized placeOrder()` 遍歷逐個 `cuisine.cook()` 後清空列表：
+
+```java
+public class XiaoEr {
+    private List<ICuisine> cuisineList = new ArrayList<>();
+
+    public void order(ICuisine cuisine) {
+        cuisineList.add(cuisine);
+    }
+
+    public synchronized void placeOrder() {
+        for (ICuisine cuisine : cuisineList) {
+            cuisine.cook();
+        }
+        cuisineList.clear();
+    }
+}
+```
+
+擴展時每個類都具備單一職責，只需新增類即可。
+
+### 測試驗證
+
+測試類先以「菜系 + 廚師」組合創建四個命令對象（`new GuangDongCuisine(new GuangDongCook())` 等），再依次 `xiaoEr.order(...)` 點單四道菜，最後 `xiaoEr.placeOrder()` 下單。運行輸出顯示四位廚師各自打印烹飪日誌：
+
+```
+廣東菜廚師，烹飪粵菜
+四川菜廚師，烹飪川菜
+江蘇菜廚師，烹飪蘇菜
+山東菜廚師，烹飪魯菜
+```
+
+每個具體命令都擁有一個對應實現類可自由組合；點單把四種菜品對象添加給小二，下單等於把菜單傳遞給廚師。輸出驗證了「交給調用者的點單由不同廚師具體實現（烹飪）」。實現還支持擴展刪除/撤銷（客戶取消某菜品）。
+
+### 收益與代價
+
+命令模式的使用場景需要分為命令、實現、調用者三大塊，三塊內容的拆分是選對場景的關鍵因素。拆分後邏輯具備單一職責、便於擴展。與 if 語句實現相比降低耦合、方便其他命令與實現擴展，但代價是在各種命令與實現組合下會擴展出很多實現類，需要專門管理。
+
+一句話選型判據：**三層拆分讓邏輯具備單一職責、便於擴展，代價是實現類膨脹需要管理**。對於菜品穩定、需要靈活組合的場景，收益大於代價。
+
+## Course
+
+[↗ 課程頁面](../../lessons/command-refactor.html)
+
+## Sources
+
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#命令模式-工程结构]]
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#命令模式模型结构]]
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#命令模式-代码实现]]
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#命令模式-测试验证]]
+- [[sources/design-pattern/completed/20260901_design_pattern.pdf#命令模式-总结]]

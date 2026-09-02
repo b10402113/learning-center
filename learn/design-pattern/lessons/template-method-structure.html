@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>抽象類與子類實現</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>抽象類與子類實現</h1>
+<p class="meta">Step 3/4 · 模板方法模式</p>
+
+<div class="learning-goal">
+<strong>學習目標：</strong>說出 NetMall 抽象類的骨架方法與三個抽象方法如何控制執行順序，並對比三個電商子類的差異實現。
+</div>
+
+<h2>NetMall 抽象類：模板方法的本體</h2>
+
+<p>NetMall 是整個結構的核心——它不是一個「能用的類」，而是一個<strong>骨架定義者</strong>。它的職責只有一個：把「生成推廣海報」的三步執行順序釘死。</p>
+
+<pre><code>public abstract class NetMall {
+    protected String uId;
+    protected String uPwd;
+
+    public NetMall(String uId, String uPwd) {
+        this.uId = uId;
+        this.uPwd = uPwd;
+    }
+
+    // 模板方法 —— 固定三步執行順序
+    public String generateGoodsPoster(String skuUrl) {
+        if (!login(uId, uPwd)) {
+            return null;  // 登錄失敗，直接返回
+        }
+        Map&lt;String, String&gt; goodsInfo = reptile(skuUrl);
+        return createBase64(goodsInfo);
+    }
+
+    // 三個抽象方法 —— 由子類實現
+    protected abstract boolean login(String uId, String uPwd);
+    protected abstract Map&lt;String, String&gt; reptile(String skuUrl);
+    protected abstract String createBase64(Map&lt;String, String&gt; goodsInfo);
+}</code></pre>
+
+<p>注意三件事：</p>
+
+<ol>
+  <li><strong>模板方法 <code>generateGoodsPoster</code> 是 <code>public</code> 的</strong>——客戶端只調用這一個方法，它內部按順序調用三步</li>
+  <li><strong>三個抽象方法是 <code>protected abstract</code> 的</strong>——不暴露給外部，只讓子類實現</li>
+  <li><strong>骨架裡有控制流</strong>——<code>if (!login(...)) return null</code>，登錄失敗就終止流程，這是骨架自帶的防禦邏輯</li>
+</ol>
+
+<p>用圖表示：</p>
+
+<pre><code>客戶端調用 generateGoodsPoster(url)
+         │
+         ▼
+  ┌──────────────────────────────────────────┐
+  │  NetMall.generateGoodsPoster()  (模板方法) │
+  │  ┌─────────┐  ┌─────────┐  ┌──────────┐  │
+  │  │ login() │→│reptile()│→│createBase64│  │
+  │  │ (抽象)  │  │ (抽象)  │  │  (抽象)   │  │
+  │  └────┬────┘  └────┬────┘  └─────┬────┘  │
+  └───────┼────────────┼─────────────┼────────┘
+          │            │             │
+     ┌────┴────┐  ┌────┴────┐  ┌────┴────┐
+     │JDNetMall│  │TaoBao   │  │DangDang │
+     └─────────┘  └─────────┘  └─────────┘</code></pre>
+
+<p>骨架方法掌控全局，子類只填自己那塊。</p>
+
+<h2>三個子類的差異</h2>
+
+<p>三個電商子類都繼承 NetMall，各自實現三個抽象方法。差異在哪？</p>
+
+<table>
+  <tr><th></th><th>JDNetMall（京東）</th><th>TaoBaoNetMall（淘寶）</th><th>DangDangNetMall（當當）</th></tr>
+  <tr><td>login()</td><td>模擬京東登錄</td><td>模擬淘寶登錄</td><td>模擬當當登錄</td></tr>
+  <tr><td>reptile()</td><td>正則解析京東頁面</td><td>正則解析淘寶頁面</td><td>正則解析當當頁面</td></tr>
+  <tr><td>createBase64()</td><td>京東商品 JSON → base64</td><td>淘寶商品 JSON → base64</td><td>當當商品 JSON → base64</td></tr>
+  <tr><td>商品價格</td><td>5999.00</td><td>4799.00</td><td>4548.00</td></tr>
+</table>
+
+<p>以京東子類為例：</p>
+
+<pre><code>public class JDNetMall extends NetMall {
+
+    public JDNetMall(String uId, String uPwd) {
+        super(uId, uPwd);
+    }
+
+    @Override
+    protected boolean login(String uId, String uPwd) {
+        System.out.println("模擬京東用戶登錄：" + uId);
+        return true;
+    }
+
+    @Override
+    protected Map&lt;String, String&gt; reptile(String skuUrl) {
+        // 用 HttpClient 抓頁面，正則提取商品名
+        String title = "Apple iPhone 11";
+        Map&lt;String, String&gt; info = new ConcurrentHashMap&lt;&gt;();
+        info.put("title", title);
+        info.put("price", "5999.00");
+        return info;
+    }
+
+    @Override
+    protected String createBase64(Map&lt;String, String&gt; goodsInfo) {
+        String json = JSON.toJSONString(goodsInfo);
+        return Base64.getEncoder().encodeToString(json.getBytes());
+    }
+}</code></pre>
+
+<p>淘寶和當當的實現結構完全一樣，差異只在價格和日誌文字。<strong>每個子類只關心自己的業務邏輯</strong>，不用管「登錄完再爬取、爬取完再生成」的順序——那是父類的事。</p>
+
+<h2>模板方法的靈魂：抽象方法不設獨立訪問</h2>
+
+<p>注意三個抽象方法的修飾符是 <code>protected abstract</code>。這不是隨意選的：</p>
+
+<ul>
+  <li><strong>不能被外部直接調用</strong>——客戶端無法繞過模板方法，直接去調 <code>login()</code> 或 <code>reptile()</code></li>
+  <li><strong>只能被子類覆寫</strong>——子類實現自己的版本，父類的骨架方法統一調用</li>
+</ul>
+
+<p>這就是「把你安排得明明白白」——<strong>你不僅不能改順序，連單獨調用某一步都不行</strong>。你只能按照父類規定的流程走。</p>
+
+<h2>測試驗證：骨架固定、站點可插拔</h2>
+
+<p>測試時只需替換實例化的子類：</p>
+
+<pre><code>// 京東
+NetMall jd = new JDNetMall("1000001", "*******");
+String poster = jd.generateGoodsPoster("https://item.jd.com/xxx.html");
+// 輸出：模擬京東用戶登錄 → 爬取商品 → 生成 base64 海報
+
+// 淘寶（只需換子類，調用方零改動）
+NetMall tb = new TaoBaoNetMall("2000002", "*******");
+String poster2 = tb.generateGoodsPoster("https://item.taobao.com/xxx.html");</code></pre>
+
+<p>客戶端代碼<strong>完全一樣</strong>，都是 <code>generateGoodsPoster(url)</code>。更換電商只需要 <code>new</code> 不同的子類——這就是模板模式的「統一調用、差異化實現」。</p>
+
+<div class="quiz" data-question="NetMall 的模板方法 generateGoodsPoster 的修飾符是？" data-correct="1" data-explain="public 方法，客戶端只調用這一個方法，內部按順序調用三步。">
+  <button class="quiz-option opt">private</button>
+  <button class="quiz-option opt">public</button>
+  <button class="quiz-option opt">protected</button>
+  <button class="quiz-option opt">default（包訪問）</button>
+</div>
+
+<div class="quiz" data-question="三個抽象方法 login/reptile/createBase64 為什麼是 protected 而不是 public？" data-correct="2" data-explain="不暴露給外部客戶端，只讓子類覆寫。客戶端只能通過模板方法間接調用。">
+  <button class="quiz-option opt">為了性能更好</button>
+  <button class="quiz-option opt">Java 語法要求</button>
+  <button class="quiz-option opt">不暴露給外部，只讓子類實現</button>
+  <button class="quiz-option opt">方便測試</button>
+</div>
+
+<div class="quiz" data-question="京東和淘寶子類的主要差異體現在？" data-correct="0" data-explain="每個子類實現三個抽象方法，差異在登錄方式、爬取解析邏輯和商品價格。">
+  <button class="quiz-option opt">login/reptile/createBase64 的具體實現</button>
+  <button class="quiz-option opt">模板方法的執行順序</button>
+  <button class="quiz-option opt">父類 NetMall 的構造器</button>
+  <button class="quiz-option opt">generateGoodsPoster 的實現</button>
+</div>
+
+<div class="quiz" data-question="客戶端更換電商站時，需要改什麼？" data-correct="3" data-explain="只需換 new 的子類實例，調用方式完全一樣。">
+  <button class="quiz-option opt">修改模板方法的順序</button>
+  <button class="quiz-option opt">修改所有子類的代碼</button>
+  <button class="quiz-option opt">重新設計 NetMall 抽象類</button>
+  <button class="quiz-option opt">只需換 new 的子類實例</button>
+</div>
+
+<div class="quiz" data-question="如果客戶端能直接調用 login() 方法，會破壞模板模式的哪個特性？" data-correct="1" data-explain="模板模式要求客戶端不能跳過骨架，直接調用某一步。protected 抽象方法確保了這一點。">
+  <button class="quiz-option opt">代碼性能</button>
+  <button class="quiz-option opt">流程控制的完整性</button>
+  <button class="quiz-option opt">代碼可讀性</button>
+  <button class="quiz-option opt">測試覆蓋率</button>
+</div>
+
+<h2>延伸閱讀</h2>
+<p>最後我們收一下——模板方法模式的收益和邊界在哪裡？什麼時候該用、什麼時候不該用？</p>
+
+<div class="lesson-nav">
+  <a href="template-method-scenario.html">← 上一課：爬蟲海報場景</a>
+  <a href="template-method-tradeoffs.html">下一課：模板方法的收益與邊界 →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

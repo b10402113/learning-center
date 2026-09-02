@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用門面中間件重構白名單</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>用門面中間件重構白名單</h1>
+<p class="meta">design-pattern › facade › facade-refactor</p>
+
+<blockquote>
+  <strong>學習目標</strong>：理解外觀模式如何落地為 SpringBoot starter 中間件，用 @DoDoor 注解 + AOP 切面統一治理白名單。
+</blockquote>
+
+<h2>回顧：那一坨 ifelse 代碼</h2>
+
+<p>上一節我們看到了白名單的 ifelse 版本——每個接口方法裡都塞一段 <code>userList.contains(userId)</code> 的判斷，改一個地方就要改全部。現在我們用外觀模式把它重構成一個 SpringBoot starter 中間件。</p>
+
+<p>重構的核心思路：把白名單邏輯從業務方法裡抽出來，放到一個獨立的中間件 jar 包裡。業務方只需要兩步——引入依賴、加一個注解——白名單就生效了。業務代碼零改動。</p>
+
+<h2>整體結構：兩條線</h2>
+
+<p>重構後的中間件分兩條線，各管各的：</p>
+
+<table>
+  <thead>
+    <tr><th>線</th><th>負責什麼</th><th>核心類</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>配置側</td><td>從 application.yml 讀白名單配置</td><td>StarterServiceProperties、StarterAutoConfigure</td></tr>
+    <tr><td>切面側</td><td>攔截加了注解的方法，做白名單校驗</td><td>@DoDoor 注解、DoJoinPoint 切面</td></tr>
+  </tbody>
+</table>
+
+<h2>第一步：配置側——讀配置</h2>
+
+<p>白名單的用戶列表不應該硬編碼在代碼裡，而是放在 <code>application.yml</code> 中：</p>
+
+<pre><code>itstack:
+  door:
+    enabled: true
+    userStr: "1001,aaaa,ccc"</code></pre>
+
+<p>對應的配置類用 SpringBoot 的 <code>@ConfigurationProperties</code> 綁定：</p>
+
+<pre><code>@ConfigurationProperties("itstack.door")
+public class StarterServiceProperties {
+    private String userStr;
+    // getter/setter
+}</code></pre>
+
+<p>再用一個 <code>StarterService</code> 把配置值包裝一下：</p>
+
+<pre><code>public class StarterService {
+    private String userStr;
+    public List&lt;String&gt; split(String separator) {
+        return Arrays.asList(userStr.split(separator));
+    }
+}</code></pre>
+
+<p>最後通過 <code>StarterAutoConfigure</code> 把 Bean 注冊到 Spring 容器：</p>
+
+<pre><code>@Configuration
+@ConditionalOnClass(StarterService.class)
+@EnableConfigurationProperties(StarterServiceProperties.class)
+public class StarterAutoConfigure {
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "itstack.door", name = "enabled", havingValue = "true")
+    public StarterService starterService(StarterServiceProperties properties) {
+        StarterService service = new StarterService();
+        service.setUserStr(properties.getUserStr());
+        return service;
+    }
+}</code></pre>
+
+<blockquote class="good-code">
+  <strong>要點</strong>：條件注解（<code>@ConditionalOnProperty</code>）控制中間件是否生效。配置 <code>enabled: false</code> 就關掉，不用改任何代碼。
+</blockquote>
+
+<h2>第二步：切面側——攔截與校驗</h2>
+
+<p>配置有了，怎麼讓白名單自動生效？答案是自定義注解 + AOP 切面（Aspect-Oriented Programming，面向切面編程）。</p>
+
+<h3>自定義注解 @DoDoor</h3>
+
+<pre><code>@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)
+public @interface DoDoor {
+    String key();           // 要校驗的入參字段名，如 "userId"
+    String returnJson();    // 攔截後返回的 JSON
+}</code></pre>
+
+<p>業務方法只要加上這個注解，就被「掛」上了白名單治理：</p>
+
+<pre><code>@DoDoor(key = "userId", returnJson = "{\"code\":\"1111\",\"info\":\"非白名單可訪問用戶攔截！\"}")
+@RequestMapping("/api/queryUserInfo")
+public UserInfo queryUserInfo(@RequestParam String userId) {
+    return new UserInfo("蟲蟲:" + userId, 19, "天津市南開區旮旯胡同100號");
+}</code></pre>
+
+<blockquote class="good-code">
+  <strong>業務代碼完全不變</strong>：方法體裡沒有一行白名單邏輯，全靠注解聲明。
+</blockquote>
+
+<h3>切面 DoJoinPoint</h3>
+
+<p>切面是「門面」的核心——它定義了「攔截到加了 @DoDoor 的方法後做什麼」：</p>
+
+<pre><code>@Aspect
+@Component
+public class DoJoinPoint {
+    @Autowired
+    private StarterService starterService;
+
+    @Around("@annotation(doDoor)")
+    public Object doRouter(ProceedingJoinPoint jp, DoDoor doDoor) throws Throwable {
+        // 1. 從注解拿到要校驗的字段名（如 userId）
+        String fieldValue = getFiledValue(doDoor.key(), jp.getArgs());
+
+        // 2. 空值直接放行
+        if (fieldValue == null || fieldValue.isEmpty()) {
+            return jp.proceed();
+        }
+
+        // 3. 從配置拿到白名單，做比對
+        List&lt;String&gt; allowedUsers = starterService.split(",");
+        if (allowedUsers.contains(fieldValue)) {
+            return jp.proceed();  // 命中白名單，放行
+        }
+
+        // 4. 未命中，返回攔截信息
+        return returnObject(doDoor.returnJson());
+    }
+}</code></pre>
+
+<p>流程很清晰：</p>
+
+<ol>
+  <li>取方法參數中的 userId 值</li>
+  <li>空值放行（防禦性編程）</li>
+  <li>跟配置的白名單比對</li>
+  <li>命中就放行（<code>jp.proceed()</code>），不命中就返回攔截信息</li>
+</ol>
+
+<h2>第三步：測試驗證</h2>
+
+<p>在業務工程引入中間件 jar，配置好白名單，啟動 SpringBoot：</p>
+
+<table>
+  <thead>
+    <tr><th>請求</th><th>userId</th><th>結果</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>GET /api/queryUserInfo?userId=1001</td><td>1001（在白名單中）</td><td>返回正常用戶信息（code 0000）</td></tr>
+    <tr><td>GET /api/queryUserInfo?userId=小團團</td><td>小團團（不在白名單）</td><td>返回攔截信息（code 1111）</td></tr>
+  </tbody>
+</table>
+
+<p>白名單用戶正常訪問，非白名單用戶被攔截——整個過程業務方法沒有任何改動。</p>
+
+<h2>小結</h2>
+
+<p>整個重構路徑：配置側讀取白名單 → 自定義注解聲明治理需求 → AOP 切面統一攔截校驗。三步走完，白名單邏輯從業務方法裡完全抽離，變成一個可複用的中間件。新增橫切需求（比如簽名校驗、限流）？再加一個注解 + 一個切面就行，不動任何已有代碼。這就是外觀模式在 Spring 生態中的落地方式。</p>
+
+<div class="quiz" data-step="facade-refactor">
+<h2>自測</h2>
+
+<div class="quiz-question" data-q="1">
+  <p><strong>Q1. @DoDoor 注解的 key 屬性的作用是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">指定白名單配置的 key</button>
+  <button class="quiz-option" data-correct="true">指定要從方法參數中取哪個字段的值做白名單比對</button>
+  <button class="quiz-option" data-correct="false">指定返回的 JSON 的 key</button>
+  <button class="quiz-option" data-correct="false">指定切面的切入點表達式</button>
+</div>
+
+<div class="quiz-question" data-q="2">
+  <p><strong>Q2. 為什麼用 @ConditionalOnProperty 控制中間件是否生效？</strong></p>
+  <button class="quiz-option" data-correct="false">為了讓編譯器在編譯時檢查配置</button>
+  <button class="quiz-option" data-correct="true">配置 enabled: false 就關掉，不用改代碼也不用刪依賴</button>
+  <button class="quiz-option" data-correct="false">為了防止多個中間件衝突</button>
+  <button class="quiz-option" data-correct="false">為了讓 Spring 自動生成配置文檔</button>
+</div>
+
+<div class="quiz-question" data-q="3">
+  <p><strong>Q3. DoJoinPoint 切面中，jp.proceed() 代表什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">終止方法執行</button>
+  <button class="quiz-option" data-correct="true">放行——繼續執行被攔截的業務方法</button>
+  <button class="quiz-option" data-correct="false">拋出一個異常</button>
+  <button class="quiz-option" data-correct="false">返回 null</button>
+</div>
+
+<div class="quiz-question" data-q="4">
+  <p><strong>Q4. 外觀模式中間件化的最大收益是什麼？</strong></p>
+  <button class="quiz-option" data-correct="false">減少 JVM 內存佔用</button>
+  <button class="quiz-option" data-correct="true">業務代碼零改動，橫切邏輯集中在中間件裡統一治理</button>
+  <button class="quiz-option" data-correct="false">提升接口的響應速度</button>
+  <button class="quiz-option" data-correct="false">自動生成 API 文檔</button>
+</div>
+
+<div class="quiz-question" data-q="5">
+  <p><strong>Q5. 如果要在白名單之外再加一個「簽名校驗」的橫切需求，外觀模式怎麼做？</strong></p>
+  <button class="quiz-option" data-correct="false">在現有 DoJoinPoint 裡加 if-else</button>
+  <button class="quiz-option" data-correct="true">新增一個注解 + 一個切面，各自獨立，不動已有代碼</button>
+  <button class="quiz-option" data-correct="false">修改所有業務方法加簽名校驗邏輯</button>
+  <button class="quiz-option" data-correct="false">重新開發一個新的中間件工程</button>
+</div>
+</div>
+
+<script>
+document.querySelectorAll('.quiz-question').forEach(q => {
+  q.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      q.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+      if (btn.dataset.correct === 'true') {
+        btn.classList.add('correct');
+      } else {
+        btn.classList.add('wrong');
+        q.querySelector('[data-correct="true"]').classList.add('correct');
+      }
+    });
+  });
+});
+</script>
+
+<div class="footer">
+  <p>有疑問？問你的 AI 老師，他可以幫你解釋任何不清楚的地方。</p>
+</div>
+
+</body>
+</html>

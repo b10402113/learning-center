@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>組織樹深度遍歷實現</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="lesson-number">Lesson 3/3 · 迭代器模式</div>
+      <h1>組織樹深度遍歷實現</h1>
+      <div class="lesson-meta">Node: iterator · Step 3/3 · <span class="tag tag-behavioral">行為模式</span></div>
+    </header>
+
+    <div class="learning-goal">
+      <h2>學習目標</h2>
+      <p>用組織樹場景實現一個深度優先迭代器，掌握 linkMap、invertedMap、cursorIdx 三者如何配合完成樹形遍歷，並能說出迭代器模式的收益與代價。</p>
+    </div>
+
+    <section>
+      <h2>場景：遍歷公司組織架構</h2>
+      <p>大部分公司的組織架構是金字塔式的樹形結構：</p>
+<pre><code>        小傅哥（1）
+       /          \
+    花花（2）    豆包（3）
+    /      \
+  蹦蹦（4） 大燒（5）
+            /  |  \
+         虎哥  玲姐  秋雅
+        （6） （7） （8）</code></pre>
+      <p>你需要遍歷這棵樹，把所有員工按<strong>深度優先</strong>的順序輸出來：</p>
+      <p>花花 → 蹦蹦 → 大燒 → 虎哥 → 玲姐 → 秋雅 → 豆包</p>
+      <p>注意：不是按編號順序（1,2,3…），而是順著左子樹一路走到最深，再回溯走右子樹。</p>
+      <p>JDK 的 List 迭代器幫不了你——這不是一個線性列表。你需要自己實現一個迭代器。</p>
+    </section>
+
+    <section>
+      <h2>數據怎麼存？兩張 Map</h2>
+      <p>組織架構的本質是「節點」和「節點間的關係」。我們用兩個實體來表達：</p>
+      <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li><strong>Employee</strong>（雇員）：uId、name、desc</li>
+        <li><strong>Link</strong>（鏈路）：fromId、toId——描述「誰是誰的上級」</li>
+      </ul>
+      <p>在 <code>GroupStructure</code> 裡，這些數據被存成兩張 Map：</p>
+      <table>
+        <thead>
+          <tr><th>Map</th><th>key</th><th>value</th><th>用途</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>linkMap</code></td>
+            <td>上級節點 ID</td>
+            <td><code>List&lt;Link&gt;</code></td>
+            <td>正向關係：從某個節點出發，能找到它的所有子節點</td>
+          </tr>
+          <tr>
+            <td><code>invertedMap</code></td>
+            <td>子節點 ID</td>
+            <td><code>List&lt;Link&gt;</code></td>
+            <td>反向關係：從某個子節點出發，能找到它的上級</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>為什麼要兩張 Map？因為深度優先遍歷需要<strong>回溯</strong>——走到葉子節點後要「往上找」看還有沒有兄弟節點，這時候就需要反向關係。</p>
+    </section>
+
+    <section>
+      <h2>深度優先遍歷的三步節奏</h2>
+      <p>深度優先（DFS, Depth-First Search）遍歷樹的核心節奏：</p>
+      <ol style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li><strong>一路往下</strong>：從根節點開始，沿著左子樹一路走到最深的葉子節點</li>
+        <li><strong>回溯找兄弟</strong>：走到葉子後，往上返回一層，看看同一層還有沒有沒走過的兄弟</li>
+        <li><strong>重複直到走完</strong>：如果沒有兄弟了，再往上返回一層；直到所有節點都被訪問</li>
+      </ol>
+      <p>用我們的組織架構來走一遍：</p>
+      <table>
+        <thead>
+          <tr><th>步驟</th><th>當前位置</th><th>動作</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>小傅哥（1）</td><td>往下走，訪問左子樹：花花（2）</td></tr>
+          <tr><td>2</td><td>花花（2）</td><td>往下走，訪問左子樹：蹦蹦（4）</td></tr>
+          <tr><td>3</td><td>蹦蹦（4）</td><td>葉子節點，輸出 4。回溯到花花</td></tr>
+          <tr><td>4</td><td>花花（2）</td><td>還有右子樹：大燒（5）</td></tr>
+          <tr><td>5</td><td>大燒（5）</td><td>往下走，訪問第一個子：虎哥（6）</td></tr>
+          <tr><td>6</td><td>虎哥（6）</td><td>葉子，輸出 6。回溯到大燒</td></tr>
+          <tr><td>7</td><td>大燒（5）</td><td>訪問第二個子：玲姐（7）</td></tr>
+          <tr><td>8</td><td>玲姐（7）</td><td>葉子，輸出 7。回溯到大燒</td></tr>
+          <tr><td>9</td><td>大燒（5）</td><td>訪問第三個子：秋雅（8）</td></tr>
+          <tr><td>10</td><td>秋雅（8）</td><td>葉子，輸出 8。回溯到大燒→花花→小傅哥</td></tr>
+          <tr><td>11</td><td>小傅哥（1）</td><td>訪問右子樹：豆包（3）</td></tr>
+          <tr><td>12</td><td>豆包（3）</td><td>葉子，輸出 3。結束</td></tr>
+        </tbody>
+      </table>
+      <p>最終順序：2, 4, 5, 6, 7, 8, 3——和我們預期的深度優先完全一致。</p>
+    </section>
+
+    <section>
+      <h2>cursorIdx：記錄每一層走到哪了</h2>
+      <p>深度優先回溯的時候，你需要知道「這一層的子節點我走到了第幾個」。這就是 <code>cursorIdx</code> 的作用：</p>
+      <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li><code>cursorIdx</code> 是一個 Map，key 是父節點 ID，value 是「下一個要走的子節點索引」</li>
+        <li>每次從某個節點的子節點列表裡取下一個時，把 cursor +1</li>
+        <li>回溯到父節點時，看父節點的 cursor 是否還有下一個子節點</li>
+      </ul>
+      <p>它就像你在每一個路口都放了一個小紙條：「我上次走到第幾個了」。回溯的時候撿起紙條，就知道下一步該往哪裡走。</p>
+    </section>
+
+    <section>
+      <h2>核心實現：iterator() 返回匿名迭代器</h2>
+      <p><code>GroupStructure</code> 的 <code>iterator()</code> 方法返回一個匿名內部類，實現了 <code>Iterator&lt;Employee&gt;</code>：</p>
+<pre><code>public Iterator&lt;Employee&gt; iterator() {
+    return new Iterator&lt;Employee&gt;() {
+        // 從根節點開始
+        // hasNext(): 從 invertedMap 追溯到根，判斷是否還有未訪問的節點
+        // next(): 沿 linkMap 往下走，用 cursorIdx 記錄進度
+    };
+}</code></pre>
+      <p>整個遍歷邏輯被封裝在這個匿名類裡——調用方完全不需要知道 <code>linkMap</code>、<code>invertedMap</code>、<code>cursorIdx</code> 的存在。它只需要：</p>
+<pre><code>Iterator&lt;Employee&gt; iterator = groupStructure.iterator();
+while (iterator.hasNext()) {
+    Employee emp = iterator.next();
+    System.out.println(emp.getName());
+}</code></pre>
+      <p>這就是迭代器模式的精髓：<strong>遍歷邏輯和數據結構分離</strong>。數據結構管「數據怎麼存」，迭代器管「數據怎麼走」。</p>
+    </section>
+
+    <section>
+      <h2>收益與代價</h2>
+      <table>
+        <thead>
+          <tr><th>收益</th><th>代價</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>滿足<strong>單一職責</strong>和<strong>開閉原則</strong></td>
+            <td>實現<strong>相對複雜</strong>，需要額外定義接口和類</td></tr>
+          <tr>
+            <td>調用方不需要知道內部結構</td>
+            <td>遍歷與數據結構分離，新人不易理解</td>
+          </tr>
+          <tr>
+            <td>方便擴展（換一種遍歷方式只需換 Iterator）</td>
+            <td>樹形結構的深度遍歷算法需要反覆練習</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>用源碼的話說：「雖然麻煩，但使用 JDK 時迭代器模式很好用，方便擴展與升級。」</p>
+    </section>
+
+    <section>
+      <h2>一句話記住</h2>
+      <blockquote>組織樹迭代器 = linkMap（正向關係）+ invertedMap（反向回溯）+ cursorIdx（每層進度），三者配合完成深度優先遍歷。調用方只管 hasNext/next。</blockquote>
+    </section>
+
+    <!-- Quiz -->
+    <section class="quiz">
+      <h3>自我檢測</h3>
+      <div class="quiz-question">
+        <p>Q1. 組織樹迭代器為什麼需要兩張 Map（linkMap 和 invertedMap）？</p>
+        <ul class="quiz-options" data-correct="2">
+          <li data-index="0">一張存員工，一張存部門</li>
+          <li data-index="1">一張存姓名，一張存 ID</li>
+          <li data-index="2">正向關係用於往下走，反向關係用於回溯找兄弟</li>
+          <li data-index="3">兩張 Map 是重複的，只需要一張</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q2. cursorIdx 的作用是什麼？</p>
+        <ul class="quiz-options" data-correct="1">
+          <li data-index="0">記錄員工的工號</li>
+          <li data-index="1">記錄每一層的子節點遍歷進度，回溯時知道走到第幾個了</li>
+          <li data-index="2">記錄樹的深度</li>
+          <li data-index="3">記錄總共有多少員工</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q3. 深度優先遍歷組織樹時，2 號員工（花花）的子節點 4（蹦蹦）遍歷完後，下一步會去哪？</p>
+        <ul class="quiz-options" data-correct="0">
+          <li data-index="0">回溯到花花，訪問另一個子節點 5（大燒）</li>
+          <li data-index="1">直接去 3 號員工（豆包）</li>
+          <li data-index="2">跳過大燒，去大燒的子節點</li>
+          <li data-index="3">從頭重新遍歷</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q4. 迭代器模式的主要代價是什麼？</p>
+        <ul class="quiz-options" data-correct="2">
+          <li data-index="0">遍歷速度變慢</li>
+          <li data-index="1">佔用更多內存</li>
+          <li data-index="2">實現較複雜，需要額外定義接口和類，新人不易理解</li>
+          <li data-index="3">不支持併發訪問</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q5. 以下關於迭代器模式的說法，哪個是正確的？</p>
+        <ul class="quiz-options" data-correct="1">
+          <li data-index="0">迭代器模式只適用於 List</li>
+          <li data-index="1">遍歷邏輯和數據結構分離，數據結構管「怎麼存」，迭代器管「怎麼走」</li>
+          <li data-index="2">迭代器必須是雙向的</li>
+          <li data-index="3">自定義迭代器不需要實現 JDK 的接口</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+    </section>
+
+    <div class="source">
+      <strong>主要來源：</strong>迭代器模式-代碼實現、測試驗證、總結
+    </div>
+
+    <div class="follow-up">
+      <p>有任何不清楚的地方？問你的老師！</p>
+      <p class="cta">迭代器模式三步走完。建議用 /tackle 驗證掌握程度。</p>
+    </div>
+
+    <nav class="nav">
+      <a href="three-interface-skeleton.html">← 上一課：JDK 三接口骨架</a>
+      <span></span>
+    </nav>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

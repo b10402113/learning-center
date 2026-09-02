@@ -1,55 +1,51 @@
 ---
 source: design_pattern
+source_hash: 7e40d1038887e21ab701140c74eefca654c937c34abb056d68d40a32386b5b09
+source_lines: 24398
 part: 5
-created: 2026-08-24
-updated: 2026-08-24
+created: 2026-09-01
+updated: 2026-09-01
 ---
 
-# Part digest 5 — 观察者, 状态, 策略, 模板, 访问者
+# Digest — design_pattern (part 5)
 
 ## Overview (L1)
-
-- 第6-10节 (观察者, 状态, 策略, 模板, 访问者) — Five behavioral patterns taught through real internet business scenarios, each chapter contrasting a crude ifelse/"一坨代码" implementation with a pattern-based refactor in Java Maven projects (itstack-demo-design-18 to 22). The recurring lesson: patterns replace ifelse with interface/abstract-class polymorphism so core business flows separate from auxiliary/variable logic. Scenarios: lottery draw notifications, marketing activity state approval, coupon discount calculation, e-commerce poster crawlers, and campus user-data access from different perspectives. Chapter structure per pattern: 场景模拟 (interfaces/roles), 一坨代码实现 (the smell), 设计模式实现 (工程结构/类图/代码), 总结 (trade-offs and when to apply).
+本部分完成第 4 节原型模式的重构实现与收尾：以试卷克隆（QuestionBank implements Cloneable + TopicRandomUtil 乱序工具包 + QuestionBankController 初始化模板）为例演示 clone() 的完整落地，并用三名考生试卷测试验证了"同题库、异序题"的效果，随后对原型模式做优缺点总结。此 chunk 不含第 5 节单例模式的引入内容。
 
 ## Sections (L2)
 
-### observer
+### 原型模式模型结构
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#原型模式模型结构]]`
+- Summary: 展示重构后工程结构：核心题库类 `QuestionBank` 负责将各题组装并最终输出试卷；针对每一份试卷都用克隆方式复制，复制完成后对试卷中题目以及每个题目的答案进行乱序处理，为此提供工具包 `TopicRandomUtil`。
+- Key claims: 试卷生成流程 = 克隆原型 → 题目乱序 → 答案乱序；`TopicRandomUtil` 是乱序复用的工具包。
+- Learner-relevant: 建立原型模式重构的整体骨架，先明确"谁是被克隆的原型、clone 后做什么"再进入代码。
 
-- Locator: `[[sources/design-pattern/design_pattern#观察者模式]]`
-- Summary: Observer (观察者模式) is a behavioral pattern where one behavior emits information to other recipients that react independently, with no direct coupling between them. Scenario: a 小客车指标摇号 lottery service must notify users via SMS and push a result to MQ after each draw. The bad way inlines both calls sequentially inside `LotteryServiceImpl.doDraw`, mixing auxiliary flow into the core path so every new notification changes core code. The refactor adds an `EventListener` interface (`doEvent(LotteryResult)`), `MessageEventListener`/`MQEventListener` implementations, and an `EventManager` holding `Map<EventType, List<EventListener>>` with subscribe/unsubscribe/notify methods keyed by an `EventType` enum (MQ, Message). `LotteryService` becomes an abstract class whose `draw()` runs the template flow and fires notifications, exposing a `protected abstract doDraw()` for subclasses so callers only see the plain core result.
-- Key claims: observer decouples core flow from auxiliary flow (marketing, 裂变, 促活), which changes far more often than core logic; the structure satisfies the open-closed principle — adding listeners or changing notification logic requires no edits to the event manager or business flow; listener interfaces can use generics `<T>` when event payload types vary; trade-offs are that call ordering cannot be controlled and chaining results back from events is awkward, so the scenario must justify its use; MQ services and event-listener buses are cited as everyday observer-style designs.
-- Learner-relevant: A reusable template for converting sequential inline side-effects into subscribable events; supports explaining open-closed principle and the core-vs-auxiliary flow split that recurs in later patterns.
+### 代码实现-题目选项乱序操作工具包
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#代码实现-题目选项乱序操作工具包]]`
+- Summary: `TopicRandomUtil.random(Map<String,String> option, String key)` 先把 option 的 key 收集进 List，用 `Collections.shuffle` 打乱，再按新 key 重排选项内容到新 Map，同时记录正确答案在新位置上的 key，最后返回新的 `Topic(optionNew, keyNew)`。
+- Key claims: 乱序操作就是把 A 的选项内容给 B、B 的可能给 C，同时记录正确答案处理后的位置；Map 的 key 属性存放答案。
+- Learner-relevant: 理解"选项乱序 + 答案 key 同步重定位"的实现要点，为 QuestionBank.clone() 的答案乱序做准备。
 
-### state
+### 代码实现-克隆对象处理类
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#代码实现-克隆对象处理类]]`
+- Summary: `QuestionBank implements Cloneable`，持有 candidate（考生）、number（考号）及两个题目集合；两个 `append()` 链式添加题目，风格类似建造者模式加物料；重写 `clone()`：`super.clone()` 后对 `choiceQuestionList`、`answerQuestionList` 两个 ArrayList 也各自 `clone()`，再对题目集合 `Collections.shuffle` 乱序，并逐题用 TopicRandomUtil 乱序选项、回写新 option 与新 key。
+- Key claims: clone() 不只复制对象本身，还必须同时复制两个集合，才能保证操作克隆对象时不影响原对象；`Collections.shuffle` 可打乱集合产生新顺序。
+- Learner-relevant: 体会原型模式"复制 + 差异化处理"的写法，及此处浅拷贝集合（ArrayList.clone() 复制容器、元素仍是同一批引用）对后续深拷贝/循环引用问题的伏笔。
 
-- Locator: `[[sources/design-pattern/design_pattern#状态模式]]`
-- Summary: State (状态模式) models one behavior's multiple state transitions, where different states allow different next actions. Scenario: a marketing activity (营销活动) goes through 编辑中 → 待审核 → 审核通过/拒绝 → 活动中/关闭/开启, with only legal transitions allowed (e.g. 编辑中 cannot jump directly to 拒绝). The bad way is a single `ActivityExecStatusController.execStatus` built from nested if/else blocks testing every from-state and allowed to-state combination — correct but a wall of procedural branching that invites future developers to stuff more flows in. The refactor defines an abstract `State` class with 7 operations (arraignment, checkPass, checkRefuse, checkRevoke, close, open, doing), one concrete state class per status (EditingState, CheckState, CloseState, DoingState, OpenState, PassState, RefuseState) where each method enforces exactly what that state permits (returning an "0001" refusal otherwise), and a `StateHandler` that maps each `Status` enum to its `State` via a ConcurrentHashMap and dispatches — eliminating ifelse entirely.
-- Key claims: each state → next-state rule is distributed into each state's own methods, removing conditional branching; the design satisfies single-responsibility and open-closed principles and shifts code from procedural to object-oriented; the cost is a larger number of implementation classes, so ROI should be evaluated — use it when states are frequently modified, can be componentized, or business vs non-business logic can be pulled apart; refactoring ifelse generally hinges on interfaces/abstract classes plus restructuring.
-- Learner-relevant: The canonical pattern for multi-stage approval/workflow engines (审核流, 审批流); anchors how enum + map dispatch replaces branching and why too many classes may be over-engineering.
+### 代码实现-初始化试卷数据
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#代码实现-初始化试卷数据]]`
+- Summary: `QuestionBankController` 构造器初始化模板：5 道选择题（JAVA 版本、main 方法、变量命名等）+ 4 道脑筋急转弯式问答题；`createPaper(candidate, number)` 通过 `questionBank.clone()` 复制出考生专属问卷，设置考生与考号后 `toString()` 返回试卷。
+- Key claims: 所有考生试卷题目一样、题目顺序不一致；创建过程使用的是克隆方式 `(QuestionBank) questionBank.clone()`。
+- Learner-relevant: 理解"模板只初始化一次、每份试卷从原型克隆"的高效出卷模型，是原型模式的核心收益点。
 
-### strategy
+### 测试验证
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#测试验证]]`
+- Summary: 编写 `test_QuestionBank`，对花花、豆豆、大宝三名考生各调用一次 `createPaper` 并打印；输出显示每人选择题序号、选项顺序、答案位置及问答题顺序都各自乱序。
+- Key claims: 每人题目和答案都是差异化的乱序（花花、豆豆、大宝的试卷都存在着题目和选项的混乱排序），运行以 exit code 0 正常结束。
+- Learner-relevant: 以三份真实输出印证原型模式"同一原型、多份差异化副本"，可作为 /tackle 判断"clone 后互不影响"的实证锚点。
 
-- Locator: `[[sources/design-pattern/design_pattern#策略模式]]`
-- Summary: Strategy (策略模式) is a behavioral pattern and a "利器" for replacing large ifelse blocks over same-kind replaceable algorithms. Scenario: computing discounted amounts for coupon types — 直减 (direct subtraction), 满减 (threshold-based), 折扣 (percentage), n元购 (fixed price). The bad way is a single `CouponDiscountService.discountAmount(int type, ...)` with one if-branch per coupon type and a growing, non-extensible parameter list. The refactor defines `ICouponDiscount<T>` with `BigDecimal discountAmount(T couponInfo, BigDecimal skuPrice)`, four implementations (ZJCouponDiscount, MJCouponDiscount, ZKCouponDiscount, NYGCouponDiscount) each encapsulating one formula with a 1-yuan minimum-pay rule, and a generic `Context<T>` that holds an `ICouponDiscount<T>` and delegates — it may also be wrapped as a map so callers pick a strategy by type. BigDecimal is used throughout for money math.
-- Key claims: strategy cleanly isolates each coupon algorithm, meeting isolation and extensibility needs and easily absorbing new coupon types; the approach suits scenarios with interchangeable behavior logic such as payment types (credit card/alipay/wechat) and unique-ID generation (UUID, DB auto-increment, DB+Redis, snowflake, Leaf); structurally similar to command and adapter patterns but with a different intent, so choosing among them needs practice-based experience.
-- Learner-relevant: A concrete, immediately transferable ifelse-replacement technique for pricing/rule engines; the Context-wrapper shape recurs and can be compared against command/adapter/combination patterns.
-
-### template-method
-
-- Locator: `[[sources/design-pattern/design_pattern#模板模式]]`
-- Summary: Template method (模板模式) fixes the execution order of abstract methods in an abstract class so subclasses implement steps without a separate public entry point — "you arrange it clearly, implementers just fill in their part" (the 西游记 81-tribulations analogy). Scenario: a crawler (模拟爬取) for e-commerce goods that generates promotional posters (海报 with personal invite codes) for JD, Taobao, and DangDang. The abstract `NetMall` holds a concrete `generateGoodsPoster(skuUrl)` that runs three steps in order — `login(uId,uPwd)`, `reptile(skuUrl)`, `createBase64(goodsInfo)` — declared as `protected abstract` methods; subclasses `JDNetMall`, `TaoBaoNetMall`, `DangDangNetMall` implement each step (mock login, regex-extract product title, encode poster as base64). The fixed steps exist because some goods are only crawlable when logged in (logged-in prices differ) and each site parses differently, while poster generation is nearly identical except for a source marker.
-- Key claims: template method gives unified control over execution order and common input/output while letting implementers focus on their own business logic; it is an optimization for moving common subclass methods up to the parent and extracting reusable code, with the parent managing behavior and subclasses extending the variable parts; its typical usage is lighter-weight than a full algorithm skeleton; every pattern fits its own scenarios and should not be force-applied, otherwise maintainers lose the reason the structure exists.
-- Learner-relevant: The pattern behind "skeleton + hooks" frameworks and any fixed pipeline (login → crawl → render); reusable for describing abstract-class design and when not to over-apply it.
-
-### visitor
-
-- Locator: `[[sources/design-pattern/design_pattern#访问者模式]]`
-- Summary: Visitor (访问者模式) adds changeable access logic on top of a stable data structure (user/employee info), decoupling the two — "the same thing looks different from different perspectives" (a girl holding an ice-cream: kids watch the ice-cream, friends scout the scene). Scenario: campus users 学生/老师 form a fixed dataset; 家长 cares about student ranking and teacher skill, 校长 cares about teacher class size and entrance rates (升学率). Structure: abstract `User` (name, identity, clazz) with the core `abstract void accept(Visitor)`, subclasses `Student` (exposes `ranking()`) and `Teacher` (exposes `entranceRatio()`) whose `accept` calls `visitor.visit(this)`; a `Visitor` interface with overloaded `visit(Student)`/`visit(Teacher)`; implementations `Parent` and `Principal` print only what their role cares about; `DataView.show(Visitor)` iterates the user list calling `accept`, so passing a different visitor produces different output without if/cast branching.
-- Key claims: the keystone is `visitor.visit(this)` in each user class — the double dispatch that routes each concrete element to the matching visitor overload; the pattern decouples entities from access business logic and avoids extra if-checks or class casts when adding view points; trade-offs are that it complicates structure (User must wait for the Visitor interface to be defined) and violates the Law of Demeter (最少知道原则), so it must be applied only where the scenario fits; the book notes observer-style decoupling could be an alternative but the visitor class structure is heavier.
-- Learner-relevant: Demonstrates double dispatch and how to separate a stable data model from varying views/reports — applicable to reporting dashboards, exports, and role-based rendering.
-
-## Cross-cutting lessons
-
-- Each chapter follows 场景模拟 → 一坨代码实现 → 设计模式实现 (工程结构 + 类图 + 代码) → 总结; all five refactors eliminate ifelse in favor of interface/abstract-class polymorphism.
-- Recurring structural toolkit: enum + Map dispatch (state's StateHandler, observer's EventType, strategy's Context), abstract class as a sealed entry point (observer's draw(), template's generateGoodsPoster), and per-variant classes implementing one role.
-- Recurring trade-off framing: patterns satisfy open-closed/single-responsibility, buy extensibility at the cost of more classes and sometimes indirect structure (visitor's Law-of-Demeter violation); the book repeatedly urges judging ROI per scenario and gaining judgment through hands-on practice.
+### 总结
+- Locator: `[[sources/design-pattern/completed/20260901_design_pattern.pdf#总结]]`
+- Summary: 原型模式实际使用频率不高，仅特殊场景需要时可按此模式优化。优点：便于通过克隆创建复杂对象、可避免重复初始化操作、不需要与类中所属的其他类耦合；缺点：若对象包含循环引用的克隆、或类中深度使用对象克隆，都会使模式变得异常麻烦。设计模式是整套思想，合理运用能提升架构质量，永远不要硬凑设计模式，否则造成过渡设计与浪费的开发和维护成本。学习阶段：初期做代码优化、中期用设计模式、后期把控全局服务搭建。
+- Key claims: 优点＝克隆建复杂对象/免重复初始化/解耦；缺点＝循环引用与深度对象克隆会异常麻烦；切忌硬凑模式导致过渡设计。
+- Learner-relevant: 为原型模式的选型边界划清"适用/慎用"判据，是本章收尾的价值判断要点。

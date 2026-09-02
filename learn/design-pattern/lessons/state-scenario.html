@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>審核狀態流轉場景 — 7 個狀態與流轉規則</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="lesson-number">Lesson 2/5 · 狀態模式</div>
+      <h1>審核狀態流轉場景</h1>
+      <div class="lesson-meta">Node: state · Step 2/5</div>
+    </header>
+
+    <div class="learning-goal">
+      <h2>學習目標</h2>
+      <p>能畫出營銷活動審核的 7 個狀態與流轉規則，說清哪些操作在哪些狀態下合法、哪些會被拒絕。</p>
+    </div>
+
+    <section>
+      <h2>真實場景：營銷活動審核</h2>
+      <p>幾乎所有公司都有類似的審批流程：你建了一個營銷活動，不能直接上線——它需要經過層層審核，審核通過後才能真正對用戶展示。</p>
+      <p>假設你在做一個營銷活動管理系統。一個活動從創建到上線，要經歷以下階段：</p>
+      <ol style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li><strong>編輯中</strong>：你剛建好活動，還在改文案、配圖、設時間</li>
+        <li><strong>待審核</strong>：你點了「提交審核」，活動進入審核隊列</li>
+        <li><strong>審核通過</strong>：審核員通過了，但還不會立刻上線，需要定時任務掃描後才進入「活動中」</li>
+        <li><strong>審核拒絕</strong>：審核員打回了，你可以撤審回到編輯中，或關閉活動</li>
+        <li><strong>活動中</strong>：活動正式上線，用戶可見</li>
+        <li><strong>活動關閉</strong>：你手動關閉或時間到了自動關閉</li>
+        <li><strong>活動開啟</strong>：關閉後重新開啟，同樣需要定時任務掃描才進入「活動中」</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>7 個狀態枚舉</h2>
+      <table>
+        <thead>
+          <tr><th>編號</th><th>狀態</th><th>代號</th><th>說明</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>創建編輯</td><td>Editing</td><td>活動在編輯中，可提審或關閉</td></tr>
+          <tr><td>2</td><td>待審核</td><td>Check</td><td>已提交審核，等待審核結果</td></tr>
+          <tr><td>3</td><td>審核通過</td><td>Pass</td><td>審核通過，等待定時任務掃描後進入活動中</td></tr>
+          <tr><td>4</td><td>審核拒絕</td><td>Refuse</td><td>審核被拒，可撤審回到編輯或關閉</td></tr>
+          <tr><td>5</td><td>活動中</td><td>Doing</td><td>活動上線，用戶可見</td></tr>
+          <tr><td>6</td><td>活動關閉</td><td>Close</td><td>活動已關閉</td></tr>
+          <tr><td>7</td><td>活動開啟</td><td>Open</td><td>關閉後重新開啟，等待定時任務掃描</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>流轉規則：誰能去哪裡</h2>
+      <p>關鍵問題：每個狀態下，哪些操作是允許的？哪些會被拒絕？</p>
+      <table>
+        <thead>
+          <tr><th>當前狀態</th><th>允許的操作</th><th>被拒絕的</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1 編輯中</td><td>提審、關閉</td><td>開啟、活動執行</td></tr>
+          <tr><td>2 待審核</td><td>審核通過、審核拒絕、關閉</td><td>提審（已提審）</td></tr>
+          <tr><td>3 審核通過</td><td>（等定時任務掃描→活動中）</td><td>直接操作（需等掃描）</td></tr>
+          <tr><td>4 審核拒絕</td><td>撤審、關閉</td><td>提審、活動執行</td></tr>
+          <tr><td>5 活動中</td><td>關閉</td><td>提審、審核</td></tr>
+          <tr><td>6 活動關閉</td><td>開啟</td><td>提審、審核</td></tr>
+          <tr><td>7 活動開啟</td><td>（等定時任務掃描→活動中）</td><td>直接操作（需等掃描）</td></tr>
+        </tbody>
+      </table>
+      <p>注意：「審核通過」和「活動開啟」不會直接跳到「活動中」，而是等定時任務（scheduler）掃描後才變更。這在實際系統中很常見——狀態轉換有時不完全是即時的。</p>
+    </section>
+
+    <section>
+      <h2>實現思路：ActivityService</h2>
+      <p>狀態存儲用 <code>ConcurrentHashMap&lt;String, ActivityInfo&gt;</code>，key 是活動 ID，value 包含狀態信息。每次變更狀態前，用 <code>synchronized</code> 加鎖，並校驗 <code>beforeStatus</code>（當前狀態）——只有當前狀態和預期一致時才允許變更，否則返回拒絕。</p>
+      <p>這就是一個典型的「狀態機」模式：<strong>狀態 + 轉換規則 + 校驗</strong>。問題在於，如果所有轉換規則都堆在一個方法裡，代碼很快就會失控。</p>
+    </section>
+
+    <section class="quiz">
+      <h3>自我檢測</h3>
+      <div class="quiz-question">
+        <p>Q1. 營銷活動有幾個狀態？</p>
+        <ul class="quiz-options" data-correct="1">
+          <li data-index="0">5 個</li>
+          <li data-index="1">7 個</li>
+          <li data-index="2">3 個</li>
+          <li data-index="3">4 個</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q2. 審核通過後，活動會立刻進入「活動中」嗎？</p>
+        <ul class="quiz-options" data-correct="2">
+          <li data-index="0">是，立即切換</li>
+          <li data-index="1">不，需要手動確認</li>
+          <li data-index="2">不，需要定時任務掃描後才變更</li>
+          <li data-index="3">不，需要再次提交審核</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+      <div class="quiz-question">
+        <p>Q3. 活動在「編輯中」狀態時，哪個操作會被拒絕？</p>
+        <ul class="quiz-options" data-correct="1">
+          <li data-index="0">提審</li>
+          <li data-index="1">直接開啟活動</li>
+          <li data-index="2">關閉</li>
+          <li data-index="3">修改文案</li>
+        </ul>
+        <div class="quiz-feedback"></div>
+      </div>
+    </section>
+
+    <div class="source">
+      <strong>主要來源：</strong>設計模式 — 案例場景模擬
+    </div>
+
+    <div class="follow-up">
+      <p>有任何不清楚的地方？問你的老師！</p>
+      <p class="cta">下一步：看一把梭 ifelse 的實現有多痛 →</p>
+    </div>
+
+    <nav class="nav">
+      <a href="state-concept.html">← 上一課：狀態模式是什麼？</a>
+      <a href="state-antipattern.html">下一課：一把梭 ifelse 的痛 →</a>
+    </nav>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

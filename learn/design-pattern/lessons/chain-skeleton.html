@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>責任鏈骨架：抽象類 + next 指針 — 責任鏈模式</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<p class="meta">設計模式 · 責任鏈模式 · Step 3/4</p>
+
+<h1>責任鏈骨架：抽象類 + next 指針</h1>
+
+<h2>學習目標</h2>
+<p>掌握責任鏈「統一抽象類 + next 指針 + appendNext 鏈式編排 + 抽象 doAuth」的核心結構。</p>
+
+<h2>重構思路：把 if 拆成鏈</h2>
+<p>上一步我們看到了 if-else 審批流的痛點：所有邏輯堆在一個方法裡。責任鏈的重構思路很直接——<strong>把每個審批級別變成一個獨立的類，它們通過一個 next 指針串成一條鏈</strong>。</p>
+<p>核心機制有三個零件：</p>
+<table>
+  <tr><th>零件</th><th>職責</th><th>關鍵設計</th></tr>
+  <tr><td><strong>抽象類 AuthLink</strong></td><td>統一所有審批節點的接口</td><td>持有 next 指針 + 聲明抽象 doAuth</td></tr>
+  <tr><td><strong>next 指針</strong></td><td>指向鏈上的下一個節點</td><td>next == null 表示鏈尾</td></tr>
+  <tr><td><strong>appendNext()</strong></td><td>追加下一個節點並返回 this</td><td>支持鏈式編排</td></tr>
+</table>
+
+<h2>抽象類 AuthLink</h2>
+<pre><code>public abstract class AuthLink {
+    protected String levelUserId;    // 審批人 ID
+    protected String levelUserName;  // 審批人姓名
+    private AuthLink next;           // 下一個節點
+
+    public AuthLink(String levelUserId, String levelUserName) {
+        this.levelUserId = levelUserId;
+        this.levelUserName = levelUserName;
+    }
+
+    // 追加下一個節點，返回 this 支持鏈式調用
+    public AuthLink appendNext(AuthLink next) {
+        this.next = next;
+        return this;
+    }
+
+    // 獲取下一個節點
+    public AuthLink next() {
+        return this.next;
+    }
+
+    // 抽象方法：每個審批級別實現自己的業務邏輯
+    public abstract AuthInfo doAuth(String uId, String orderId, Date authDate);
+}</code></pre>
+<p>注意幾個關鍵設計：</p>
+<ul>
+  <li><strong>next 是 private</strong>：外部不能直接修改鏈結構，只能通過 appendNext</li>
+  <li><strong>appendNext 返回 this</strong>：這讓你可以寫出 <code>a.appendNext(b).appendNext(c)</code> 這樣的鏈式調用，把編排過程壓縮成一行</li>
+  <li><strong>doAuth 是抽象方法</strong>：每個審批級別自己決定「怎麼審」，抽象類只管「怎麼傳」</li>
+</ul>
+
+<h2>三個實現類</h2>
+<p>每個審批級別是一個獨立的類，繼承 AuthLink，實現 doAuth：</p>
+<pre><code>// 三級審批：王工
+public class Level3AuthLink extends AuthLink {
+    public Level3AuthLink(String levelUserId, String levelUserName) {
+        super(levelUserId, levelUserName);
+    }
+
+    @Override
+    public AuthInfo doAuth(String uId, String orderId, Date authDate) {
+        // 1. 先查自己是否已審
+        Date authInfo = AuthService.queryAuthInfo(levelUserId, orderId);
+        if (authInfo != null) {
+            return new AuthInfo("00000", "三級審批完成");
+        }
+        // 2. 未審 → 返回待審結果（不再往下傳）
+        return new AuthInfo("10003", "待三級審批負責人：" + levelUserName);
+    }
+}</code></pre>
+<pre><code>// 二級審批：張經理（僅 618 期間參與）
+public class Level2AuthLink extends AuthLink {
+    private Date beginDate;
+    private Date endDate;
+
+    public Level2AuthLink(String levelUserId, String levelUserName,
+                          Date beginDate, Date endDate) {
+        super(levelUserId, levelUserName);
+        this.beginDate = beginDate;
+        this.endDate = endDate;
+    }
+
+    @Override
+    public AuthInfo doAuth(String uId, String orderId, Date authDate) {
+        // 1. 判斷時間範圍：不在範圍內 → 直接傳給下一個
+        if (authDate.before(beginDate) || authDate.after(endDate)) {
+            return next().doAuth(uId, orderId, authDate);
+        }
+        // 2. 在範圍內 → 查自己是否已審
+        Date authInfo = AuthService.queryAuthInfo(levelUserId, orderId);
+        if (authInfo != null) {
+            return new AuthInfo("00000", "二級審批完成");
+        }
+        return new AuthInfo("10002", "待二級審批負責人：" + levelUserName);
+    }
+}</code></pre>
+<p>關鍵模式：每個節點做三件事——<strong>判斷時間範圍</strong>（該不該由我審）、<strong>查自身審核狀態</strong>（審了沒有）、<strong>決定傳遞</strong>（已審就傳給 next，未審就返回待審）。時間範圍為何可以動態決定鏈的長度？因為不在範圍內的節點直接跳過，請求跳到下一個——鏈的「有效長度」隨時間自動變化。</p>
+
+<h2>Quiz</h2>
+<div class="quiz" data-question="appendNext() 返回 this 的目的是什麼？">
+  <button class="quiz-option" data-correct="false">為了節省內存</button>
+  <button class="quiz-option" data-correct="true">支持鏈式編排，讓多個節點的串聯壓縮成一行代碼</button>
+  <button class="quiz-option" data-correct="false">為了實現多態</button>
+  <button class="quiz-option" data-correct="false">為了讓 next 指針可以為 null</button>
+</div>
+
+<div class="quiz" data-question="在責任鏈中，next == null 代表什麼？">
+  <button class="quiz-option" data-correct="false">鏈出錯了</button>
+  <button class="quiz-option" data-correct="false">請求被丟棄</button>
+  <button class="quiz-option" data-correct="true">這是鏈尾，沒有下一個處理節點</button>
+  <button class="quiz-option" data-correct="false">需要重新從頭開始</button>
+</div>
+
+<div class="quiz" data-question="每個實現類的 doAuth 方法做幾件事？">
+  <button class="quiz-option" data-correct="false">只做判斷</button>
+  <button class="quiz-option" data-correct="false">只做傳遞</button>
+  <button class="quiz-option" data-correct="true">三件：判斷時間範圍、查自身審核狀態、決定傳遞或返回</button>
+  <button class="quiz-option" data-correct="false">只做審批</button>
+</div>
+
+<div class="quiz" data-question="為什麼 next 指針是 private 而不是 public？">
+  <button class="quiz-option" data-correct="false">Java 語法要求</button>
+  <button class="quiz-option" data-correct="true">外部不能直接修改鏈結構，只能通過 appendNext 操作</button>
+  <button class="quiz-option" data-correct="false">為了性能優化</button>
+  <button class="quiz-option" data-correct="false">沒有特殊原因，只是個人習慣</button>
+</div>
+
+<div class="quiz" data-question="時間範圍如何動態決定鏈的長度？">
+  <button class="quiz-option" data-correct="false">修改鏈的結構</button>
+  <button class="quiz-option" data-correct="false">刪除不在範圍內的節點</button>
+  <button class="quiz-option" data-correct="true">不在範圍內的節點直接跳過，請求跳到下一個</button>
+  <button class="quiz-option" data-correct="false">在運行時重新編譯鏈</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="bad-smell-ifelse.html">← 上一篇：618 審批的痛</a>
+  <a href="dynamic-assembly.html">下一篇：動態編排與邊界 →</a>
+</div>
+
+<div class="footer">
+  <p>設計模式 · 責任鏈模式 · Step 3/4</p>
+</div>
+
+<script>
+document.querySelectorAll('.quiz').forEach(quiz => {
+  quiz.querySelectorAll('.quiz-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      quiz.querySelectorAll('.quiz-option').forEach(b => b.classList.remove('correct','wrong'));
+      btn.classList.add(btn.dataset.correct === 'true' ? 'correct' : 'wrong');
+    });
+  });
+});
+</script>
+
+</body>
+</html>

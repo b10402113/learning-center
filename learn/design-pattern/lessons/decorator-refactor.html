@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>裝飾器模式重構與適用邊界</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>裝飾器模式重構與適用邊界</h1>
+<p class="meta">設計模式 · 節點 16 · 步驟 3/3</p>
+
+<h2>這節課你要學會什麼</h2>
+<p>讀完這篇文章，你能用四角色模型重構 SSO 場景，並在繼承、裝飾器、AOP 之間做出適用判斷。</p>
+
+<h2>重構：從繼承到組合</h2>
+<p>上一節我們看到了用繼承擴展 SSO 的三個痛點。裝飾器模式的重構思路很直接：<strong>把「繼承 SsoInterceptor」改為「實現接口 + 持有 SsoInterceptor 實例」</strong>。拆成兩個類。</p>
+
+<h3>第一個類：抽象裝飾角色 SsoDecorator</h3>
+<pre><code>public abstract class SsoDecorator implements HandlerInterceptor {
+
+    // 持有被裝飾對象的引用——這是組合取代繼承的關鍵
+    private final HandlerInterceptor handlerInterceptor;
+
+    // 構造函數注入被裝飾對象
+    public SsoDecorator(HandlerInterceptor handlerInterceptor) {
+        this.handlerInterceptor = handlerInterceptor;
+    }
+
+    // 覆蓋接口方法，默認轉調被裝飾對象
+    @Override
+    public boolean preHandle(String request, String response, Object handler) {
+        return handlerInterceptor.preHandle(request, response, handler);
+    }
+}</code></pre>
+
+<p>三個重點：</p>
+<ol>
+  <li><strong>繼承接口</strong>（<code>implements HandlerInterceptor</code>）——保證與被裝飾對象的類型一致，可以互相替換</li>
+  <li><strong>構造函數注入</strong>——把被裝飾對象作為參數傳入，存在自己的成員變量裡。這是「組合」的落點</li>
+  <li><strong>覆蓋方法做轉調</strong>——默認行為就是「原封不動轉給被裝飾對象」。具體裝飾類只需要重寫需要擴展的部分</li>
+</ol>
+
+<h3>第二個類：具體裝飾角色 LoginSsoDecorator</h3>
+<pre><code>public class LoginSsoDecorator extends SsoDecorator {
+
+    private static final Map&lt;String, String&gt; authMap = new HashMap&lt;&gt;();
+    static {
+        authMap.put("huahua", "queryUserInfo");
+        authMap.put("doudou", "queryUserInfo");
+    }
+
+    public LoginSsoDecorator(HandlerInterceptor handlerInterceptor) {
+        super(handlerInterceptor);
+    }
+
+    @Override
+    public boolean preHandle(String request, String response, Object handler) {
+        // 第一步：先執行被裝飾對象的原有校驗
+        boolean success = super.preHandle(request, response, handler);
+        if (!success) return false;
+
+        // 第二步：疊加自己的方法級訪問校驗
+        String userId = request.substring(8, request.indexOf("success") + 7);
+        String method = authMap.get(userId);
+        if (method == null) {
+            System.out.println("攔截：" + userId + " 無權訪問");
+            return false;
+        }
+        System.out.println("放行：" + userId + " 訪問 " + method);
+        return true;
+    }
+}</code></pre>
+
+<p>注意 <code>super.preHandle(request, response, handler)</code> 這行：它不是在「調用父類構造函數」，而是在<strong>調用被裝飾對象的原有校驗邏輯</strong>。這是裝飾器疊加職責的模板——先執行裡面那層，再執行自己的。</p>
+
+<h3>使用方式</h3>
+<pre><code>// 原始的 SSO 校驗
+HandlerInterceptor sso = new SsoInterceptor();
+
+// 包一層：加上方法級訪問校驗
+HandlerInterceptor loginCheck = new LoginSsoDecorator(sso);
+
+// 再包一層（假設還有日誌裝飾器）
+// HandlerInterceptor withLog = new LogDecorator(loginCheck);
+
+loginCheck.preHandle("1successhuahua", response, handler);
+// 輸出：模擬單點登錄方法訪問攔截校驗：huahua queryUserInfo
+// 輸出：放行：huahua 訪問 queryUserInfo</code></pre>
+
+<p>每包一層，就多一個功能。想去掉某個功能，不包就行。<strong>運行時隨意增減</strong>，不需要改編譯。</p>
+
+<h2>四角色 vs SSO 場景對照表</h2>
+<table>
+  <thead>
+    <tr><th>角色</th><th>SSO 對應</th><th>職責</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>抽象构件 Component</td><td><code>HandlerInterceptor</code></td><td>定義統一接口</td></tr>
+    <tr><td>具體构件 ConcreteComponent</td><td><code>SsoInterceptor</code></td><td>基礎功能：ticket 校驗</td></tr>
+    <tr><td>裝飾角色 Decorator</td><td><code>SsoDecorator</code></td><td>持有被裝飾對象 + 轉調</td></tr>
+    <tr><td>具體裝飾角色 ConcreteDecorator</td><td><code>LoginSsoDecorator</code></td><td>疊加：方法級訪問校驗</td></tr>
+  </tbody>
+</table>
+
+<h2>裝飾器 vs 繼承：什麼時候選哪個</h2>
+<table>
+  <thead>
+    <tr><th>判斷維度</th><th>選繼承</th><th>選裝飾器</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>擴展需求數量</td><td>只有 1–2 種，且固定</td><td>3 種以上，或可能繼續增長</td></tr>
+    <tr><td>功能組合</td><td>不需要排列組合</td><td>需要「A + B」或「A + C」靈活搭配</td></tr>
+    <tr><td>運行時增減</td><td>不需要</td><td>需要在運行時動態開啟/關閉某功能</td></tr>
+    <tr><td>子類管理成本</td><td>子類少、維護簡單</td><td>子類多到難以維護</td></tr>
+  </tbody>
+</table>
+
+<blockquote class="good-code">
+  <strong>一句話判斷：</strong>如果新功能是原功能的「一種新變體」→ 繼承；如果新功能是「在原功能上面疊一層」→ 裝飾器。
+</blockquote>
+
+<h2>裝飾器 vs AOP</h2>
+<p>兩者都能做到「不改原類、動態增強」，但它們的適用場景不同：</p>
+<table>
+  <thead>
+    <tr><th>維度</th><th>裝飾器</th><th>AOP</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>實現層級</td><td>純 Java 物件組合</td><td>依賴 Spring 容器 + 動態代理</td></tr>
+    <tr><td>粒度</td><td>方法級（你要包哪個方法就包哪個）</td><td>切面表達式控制（可以按包/類/方法/註解）</td></tr>
+    <tr><td>適用場景</td><td>少量功能的靈活組合、不依賴框架的純 Java 專案</td><td>大批量統一切面治理（日誌、權限、事務）</td></tr>
+    <tr><td>複雜度</td><td>低——純物件組合</td><td>中——需要理解代理機制和切面表達式</td></tr>
+  </tbody>
+</table>
+
+<p><strong>簡單場景</strong>（SSO 加一層校驗）→ 用裝飾器，乾淨直覺。<br>
+<strong>複雜場景</strong>（整個專案所有接口統一加白名單、日誌、限流）→ 用 AOP 或外觀模式中間件更合適，因為切面表達式可以「一行配置管所有接口」。</p>
+
+<h2>生活類比</h2>
+<blockquote class="good-code">
+  <strong>夏天穿短褲、冬天穿棉褲、雨天穿雨衣</strong>——你的身體（原類）從來沒被改過，穿上不同衣服（裝飾器）就適應不同場景。衣服之間可以任意搭配（組合），穿脫自如（運行時增減），不需要開一個「防水型身體」的子類（避免子類膨脹）。
+</blockquote>
+
+<h2>小結</h2>
+<p>裝飾器模式通過「組合取代繼承」，在不改原類的前提下動態疊加功能。四角色模型（抽象构件、具體构件、裝飾角色、具體裝飾角色）是它的骨架。選型判斷：少量固定功能用繼承就夠了，頻繁橫向擴展或需要運行時增減就選裝飾器；純物件組合能搞定的小場景用裝飾器，大批量統一切面治理用 AOP。</p>
+
+<h2>自測題</h2>
+<div class="quiz" data-quiz="refactor">
+  <p><strong>Q1</strong>：裝飾器模式中，「組合取代繼承」的關鍵落點是什麼？</p>
+  <button class="quiz-option" data-correct="false">覆蓋父類方法</button>
+  <button class="quiz-option" data-correct="false">實現接口</button>
+  <button class="quiz-option" data-correct="true">通過構造函數注入被裝飾對象的實例</button>
+  <button class="quiz-option" data-correct="false">調用 super 構造函數</button>
+
+  <p style="margin-top:1rem"><strong>Q2</strong>：<code>SsoDecorator</code> 的 <code>preHandle</code> 默認實現做了什麼？</p>
+  <button class="quiz-option" data-correct="false">拋出異常</button>
+  <button class="quiz-option" data-correct="true">原封不動轉調被裝飾對象的 preHandle</button>
+  <button class="quiz-option" data-correct="false">返回 true</button>
+  <button class="quiz-option" data-correct="false">記錄日誌</button>
+
+  <p style="margin-top:1rem"><strong>Q3</strong>：<code>new LoginSsoDecorator(new SsoInterceptor())</code> 建立了什麼關係？</p>
+  <button class="quiz-option" data-correct="false">繼承關係：LoginSsoDecorator 是 SsoInterceptor 的子類</button>
+  <button class="quiz-option" data-correct="true">組合關係：LoginSsoDecorator 持有 SsoInterceptor 實例並在其上疊加功能</button>
+  <button class="quiz-option" data-correct="false">代理關係：LoginSsoInterceptor 拦截了 SsoInterceptor 的所有方法</button>
+  <button class="quiz-option" data-correct="false">適配關係：LoginSsoDecorator 轉換了 SsoInterceptor 的接口</button>
+
+  <p style="margin-top:1rem"><strong>Q4</strong>：什麼場景下應該選裝飾器而不是 AOP？</p>
+  <button class="quiz-option" data-correct="false">整個專案所有接口統一加日誌</button>
+  <button class="quiz-option" data-correct="false">需要按包路徑做切面控制</button>
+  <button class="quiz-option" data-correct="true">少量功能的靈活組合、不依賴框架的純 Java 專案</button>
+  <button class="quiz-option" data-correct="false">需要動態代理的場景</button>
+
+  <p style="margin-top:1rem"><strong>Q5</strong>：用一句話總結裝飾器模式的選型判斷。</p>
+  <button class="quiz-option" data-correct="false">所有場景都用裝飾器比繼承好</button>
+  <button class="quiz-option" data-correct="false">裝飾器只適合 GUI 場景</button>
+  <button class="quiz-option" data-correct="true">新功能是原功能的「一種變體」→ 繼承；是「疊一層」→ 裝飾器</button>
+  <button class="quiz-option" data-correct="false">裝飾器和繼承沒有本質區別</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./decorator-problem.html">← 上一步：繼承方式擴展 SSO 的子類膨脹困境</a>
+  <span>下一步：無（最後一步）</span>
+</div>
+
+<div class="footer">
+  設計模式 · 裝飾器模式 · 節點 16 · 步驟 3/3
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>
