@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQLite 與 Drizzle：資料庫如何與 code 同步</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>SQLite 與 Drizzle：資料庫如何與 code 同步</h1>
+<p class="meta">Node 1 · db-sync · schema 不會自動生效，你要親自把它推上去</p>
+
+<h2>Learning goal</h2>
+<p>解釋為什麼 schema 改了不會自動生效，用 generate → migrate 讓 migration 檔案與資料庫跟上 schema，並用刪 data.db + reseed 重置資料庫。</p>
+
+<h2>SQLite：一個檔案就是一個資料庫</h2>
+<p>Playground 用的是 SQLite，不是架在主機上的 Postgres。SQLite 把整個資料庫存在本地檔案裡（<code>data.db</code>，加上 <code>data.db-shm</code> 與 <code>data.db-wal</code> 這兩個配套檔）。這帶來一個好處：<strong>重置超容易</strong>——刪掉 <code>data.db</code> 再 seed 一次就好，因為全部都是假資料。</p>
+
+<h2>Drizzle：schema.ts 是 source of truth，但改它不會自動生效</h2>
+<p>課程用 Drizzle ORM 管資料庫。真正的 source of truth 是 <code>schema.ts</code>——你定義資料表的地方。但這裡有個反直覺的陷阱：</p>
+<blockquote class="bad-code">
+<p><strong>改了 schema.ts，資料庫不會自動跟上。</strong> 沒有什麼魔法同步。你要親手把變更推下去，而推下去需要兩步。</p>
+</blockquote>
+
+<h2>兩步：generate → migrate</h2>
+<table>
+  <tr><th>步驟</th><th>命令</th><th>做什麼</th><th>改了什麼</th></tr>
+  <tr><td>1. generate</td><td><code>db generate</code></td><td>從 schema 產出 migration 檔案</td><td>新增 migration 檔（程式碼世界）</td></tr>
+  <tr><td>2. migrate</td><td><code>db migrate</code></td><td>把 pending migration 套到資料庫</td><td>真的動到 data.db（資料庫世界）</td></tr>
+</table>
+<p>generate 產生的是「migration 檔案」——記錄 schema 變更的指令集；migrate 才把這些指令套進實際的資料庫檔案。跳過 migrate，你的 schema 和資料庫就處於不同步狀態。</p>
+
+<h2>為什麼這對 agent 特別重要</h2>
+<p>課程的實戰觀察：<strong>agent 通常會自己想到要 generate，但常常漏掉 migrate。</strong> 於是你會看到「agent 以為自己動了資料庫，其實沒有」的假象——schema 檔改了、migration 產了，但資料庫裡什麼都沒發生。所以當 agent 在碰資料庫時，你要主動確認 migrate 有沒有跑。這是你在 HITL 模式要盯的第一個點。</p>
+
+<h2>重置：刪 data.db + reseed</h2>
+<p>任何時候想把資料庫退回乾淨狀態：</p>
+<pre><code>rm data.db        # 刪掉 SQLite 檔案
+pnpm db:seed      # 重新種假資料</code></pre>
+<p>因為都是 dummy data，刪掉重來完全沒有損失。這也意味著你不需要「逆向」改資料庫——搞砸了就直接重置。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="SQLite 的資料庫本體存在哪裡？" data-correct="0" data-explain="SQLite 把整個資料庫存在本地檔案 data.db（加 shm/wal 配套檔），不像 hosted Postgres 架在主機上。">
+  <button class="opt">本地檔案 data.db</button>
+  <button class="opt">遠端 Postgres 主機</button>
+  <button class="opt">記憶體快取</button>
+  <button class="opt">Docker volume</button>
+</div>
+
+<div class="quiz" data-question="Drizzle 的 source of truth 是哪個檔案？" data-correct="3" data-explain="schema.ts 是定義資料表的地方，是 Drizzle 的 source of truth。">
+  <button class="opt">data.db</button>
+  <button class="opt">drizzle.config.ts</button>
+  <button class="opt">migrations/ 資料夾</button>
+  <button class="opt">schema.ts</button>
+</div>
+
+<div class="quiz" data-question="改了 schema.ts 之後，為什麼資料庫沒變？" data-correct="1" data-explain="schema 不會自動同步——你得先 generate 再 migrate，把變更親手推下去。">
+  <button class="opt">SQLite 不支援自動同步</button>
+  <button class="opt">schema 不會自動同步，必須 generate → migrate</button>
+  <button class="opt">因為 dev server 沒重啟</button>
+  <button class="opt">因為沒有 commit</button>
+</div>
+
+<div class="quiz" data-question="generate 和 migrate 分別在改哪個世界？" data-correct="2" data-explain="generate 產出 migration 檔（程式碼世界）；migrate 才把變更套進 data.db（資料庫世界）。">
+  <button class="opt">migrate 產 migration 檔，generate 套進資料庫</button>
+  <button class="opt">兩者都只改 schema.ts</button>
+  <button class="opt">generate 產 migration 檔，migrate 套進資料庫</button>
+  <button class="opt">兩者都只改 data.db</button>
+</div>
+
+<div class="quiz" data-question="課程觀察到 agent 處理 migration 時的典型盲點是？" data-correct="0" data-explain="agent 常想到 generate，但漏掉 migrate——所以 schema 改了、migration 產了，資料庫卻沒動。">
+  <button class="opt">會 generate 但漏掉 migrate</button>
+  <button class="opt">完全不知道要 generate</button>
+  <button class="opt">會擅自刪掉 data.db</button>
+  <button class="opt">不敢碰 migration</button>
+</div>
+
+<div class="quiz" data-question="想把資料庫重置回乾淨狀態，標準做法是？" data-correct="3" data-explain="刪掉 data.db 再 pnpm db:seed——全是假資料，刪掉重來零損失。">
+  <button class="opt">寫逆向 migration 還原</button>
+  <button class="opt">git checkout 舊的 data.db</button>
+  <button class="opt">只重跑 pnpm db:seed</button>
+  <button class="opt">刪 data.db 再 pnpm db:seed</button>
+</div>
+
+<h2>下一步</h2>
+<p>資料庫狀態搞定了，接著學 <a href="./git-state.html">用 reset / cherry-pick / pull 控制 git 狀態</a>——讓 repo 對齊每一支錄影的程式碼狀態。有任何不清楚的地方，隨時問你的 agent 老師。</p>
+
+<p class="footer">來源：lesson4.en.srt（資料庫與 migration 怎麼運作）</p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

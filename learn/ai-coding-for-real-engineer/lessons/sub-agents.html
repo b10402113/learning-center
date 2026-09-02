@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用 sub-agent 把探索成本外包</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>用 sub-agent 把探索成本外包</h1>
+<p class="meta">Node 6 · context-economy · Step 2/4 · 把會燒 token 的活交給新的 context window</p>
+
+<h2>Learning goal</h2>
+<p>說明 orchestrator 為何把任務委派給帶全新 context window 的 sub-agent，並指出它如何保住主 agent 的 smart zone。</p>
+
+<h2>困境：探索跟實作搶同一塊 context</h2>
+<p>agent 每次進到一個 repo 都是「零記憶」——它得先探索才知道要幹嘛，然後才實作。兩件事共用同一個 context window：<strong>探索花的 token 越多，留在 smart zone 給實作的 token 就越少</strong>。</p>
+<p>但矛盾的是，探索偷工減料也不行——花太少力氣探索，agent 對 repo 的 context 就少，實作品質跟著爛。要嘛 explore 少一點（實作變笨）、要嘛 explore 多一點（smart zone 被吃光）。</p>
+
+<h2>解法：sub-agent 是新開一間辦公室</h2>
+<p>Claude Code 的回答是<strong>委派</strong>。跟你對話的那個 agent 叫做 orchestrator（主控者），它會 spawn 出一個 sub-agent——本質上是<strong>新建一個全新的 context window</strong>，用這個新 window 去執行任務。</p>
+<p>sub-agent 可以在<strong>它自己的 smart zone</strong> 裡盡情燒 token 做探索，做完只回傳一份摘要給 orchestrator。就像主開發把活丟給實習生：「去把這個 repo 摸清楚，回來報告你的發現」，實習生燒的是他的腦力，主開發的桌面保持乾淨。</p>
+
+<blockquote>
+<p><strong>本質：</strong>sub-agent 是 orchestrator 的 context-saving 機制。探索的 token 成本被轉嫁到一個全新的 context window，主 agent 的 smart zone 保住，給真正的實作用。</p>
+</blockquote>
+
+<h2>它還能平行、還能換模型</h2>
+<p>orchestrator 可以同時 spawn 多個 sub-agent 平行做事，全部做完再各自回報。而且 sub-agent 可以用<strong>不同的 system prompt 和不同的模型</strong>——像是探索這種相對簡單的任務，常見做法是用便宜又快的 Haiku，一樣高品質。</p>
+<p>Claude Code 對這招用得極其積極——你在它的 UI 裡會隨處看到 sub-agent。它就是這個工具能撐起長 session 的核心把戲。</p>
+
+<h2>實戰線索：用「Explore」動詞觸發</h2>
+<p>課程稍早的練習證實：純技術棧 prompt 只讀 6 個檔案、不 spawn 任何 sub-agent；加上「Explore」這個動詞，就會觸發一個帶客製 system prompt 的 Explore sub-agent——花了約 60 秒、燒了 ~64k token（其 window 的 32%）、做了 25 次 tool call，換回深度好幾倍的探索結果。用字有差：動詞「Explore」正好對上模型潛在空間裡的 Explore sub-agent。</p>
+
+<h2>跟 monitor-context 的關係</h2>
+<p>上一步裝好 status-line 之後，你隨時看得到主 agent 的 token 數。sub-agent 就是保持那個數字低的手段之一——把最燒 token 的探索，整個移到你自己的 context window 外面去。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="跟用戶對話的那個 agent 叫做什麼？" data-correct="1" data-explain="跟你對話的是 orchestrator agent，它負責 spawn sub-agent。">
+  <button class="opt">sub-agent</button>
+  <button class="opt">orchestrator agent</button>
+  <button class="opt">plan agent</button>
+  <button class="opt">explore agent</button>
+</div>
+
+<div class="quiz" data-question="sub-agent 的核心機制是什麼？" data-correct="3" data-explain="spawn sub-agent 就是新建一個全新的 context window，讓任務在自己的空間裡跑。">
+  <button class="opt">複製主 agent 的 context</button>
+  <button class="opt">暫停主 agent 的工作</button>
+  <button class="opt">把摘要寫進主 agent 的記憶</button>
+  <button class="opt">新建一個全新的 context window</button>
+</div>
+
+<div class="quiz" data-question="sub-agent 做完任務後回傳什麼？" data-correct="0" data-explain="它只回傳一份摘要給 orchestrator，不會把整個探索過程塞回主 context。">
+  <button class="opt">一份結果摘要</button>
+  <button class="opt">完整的 tool call 紀錄</button>
+  <button class="opt">全部讀過的檔案內容</button>
+  <button class="opt">一份新的 context window</button>
+</div>
+
+<div class="quiz" data-question="sub-agent 如何保住主 agent 的 smart zone？" data-correct="2" data-explain="探索的 token 成本被轉嫁到 sub-agent 自己的 context window，主 agent 的空間留給實作。">
+  <button class="opt">它讓主 agent 停止工作</button>
+  <button class="opt">它壓縮主 agent 的 context</button>
+  <button class="opt">它把探索成本轉嫁到自己的 window</button>
+  <button class="opt">它讓主 agent 用更便宜的模型</button>
+</div>
+
+<div class="quiz" data-question="為什麼探索偷工減料也不行？" data-correct="3" data-explain="探索太少，agent 對 repo 的 context 就少，實作品質跟著爛。">
+  <button class="opt">因為探索不花 token</button>
+  <button class="opt">因為 agent 不能選擇探索</button>
+  <button class="opt">因為探索不影響品質</button>
+  <button class="opt">context 少 → 實作品質差</button>
+</div>
+
+<div class="quiz" data-question="探索這種相對簡單的任務，常見用哪個模型？" data-correct="1" data-explain="常用便宜又快的 Haiku 跑探索，一樣高品質又省錢。">
+  <button class="opt">最大的旗艦模型</button>
+  <button class="opt">便宜又快的 Haiku</button>
+  <button class="opt">永遠跟主 agent 同一個模型</button>
+  <button class="opt">影片用的 Opus 4.6</button>
+</div>
+
+<h2>下一步</h2>
+<p>sub-agent 把探索搬出去之後，下一個問題是：context 還是慢慢滿了怎麼辦？去學 <a href="./compact-vs-clear.html">compact 與 clear：sediment 問題</a>。有任何不清楚的地方，隨時問你的 agent 老師。</p>
+
+<p class="footer">來源：lesson16.en.srt（sub-agent 作為 context-saving 委派機制）</p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

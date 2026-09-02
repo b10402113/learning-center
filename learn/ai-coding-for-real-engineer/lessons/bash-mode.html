@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 bash 模式控制 agent 看得到的輸出</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">ai-coding-for-real-engineer · agent-control · Step 3/4</p>
+
+<h1>用 bash 模式控制 agent 看得到的輸出</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：用 <code>!</code> 進入 bash mode、Ctrl-B 背景化長命令、Ctrl-Z 掛起 Claude 執行隱藏命令、<code>fg</code> 恢復，並依決策樹決定該讓 agent 看到哪些輸出，讓它有能力閉合與專案的 feedback loop。
+</div>
+
+<h2>bash 命令 = 讓 agent 閉合 feedback loop</h2>
+
+<p>只會寫程式的 agent 是「被動的碼農」：你叫它改、它改完就停。但 bash 命令讓它變成<strong>能跟專案互動的夥伴</strong>——它可以跑 typecheck、跑測試、起 dev server、curl 一下 API，然後<strong>看到結果、自己修問題</strong>。這就是閉合 feedback loop 的能力。</p>
+
+<p>舉例：跑一次 <code>npm run typecheck</code>，錯誤訊息進入 Claude 的 context，它就能診斷「Zod 在 package.json 裡但沒裝」並幫你 <code>npm install</code>。你不必逐字複製錯誤給它看——它自己看到了。</p>
+
+<h2>三種跑命令的方式</h2>
+
+<h3>1. Bash mode：輸出給 agent 看（<code>!</code>）</h3>
+
+<p>在輸入列開頭打一個 <code>!</code>，就進入 bash mode。接下來輸入的命令會被執行，<strong>輸出直接進到 Claude 的 context</strong>。</p>
+
+<pre><code>! npm run typecheck</code></pre>
+
+<p>適合「有開始有結束」的命令：typecheck、test、build、git status 這類一次跑完、輸出有意義的。</p>
+
+<h3>2. 背景化：長命令掛在背景（Ctrl-B）</h3>
+
+<p>dev server 這種<strong>永遠不會結束</strong>的命令，直接跑會卡住對話。解法是在命令執行中按 <code>Ctrl-B</code> 把它丟到背景：</p>
+
+<ul>
+  <li>輸出會寫到一個本機檔案，狀態列上會出現一個背景任務</li>
+  <li>用方向鍵往下捲、Enter，就能打開這個 shell 看它目前的輸出</li>
+  <li>不需要時可以按 <code>X</code> 停止</li>
+</ul>
+
+<p>這對<strong>除錯 dev server</strong> 特別有用：Claude 可以看到 server 的 log、去 UI 試一下、發個 curl，再回來看 server 印了什麼。整個循環在它眼前閉合。</p>
+
+<h3>3. 掛起：完全不讓 agent 看到（Ctrl-Z / <code>fg</code>）</h3>
+
+<p>有些命令你不想讓 Claude 看到輸出（或純粹想自己跑一下）。按 <code>Ctrl-Z</code> 會<strong>掛起 Claude Code</strong>，回到一般 shell；你在這裡跑任何命令都不會進 Claude 的 context。跑完輸入 <code>fg</code>，Claude 就恢復，狀態完好。</p>
+
+<div class="callout">
+<span class="label">注意</span>
+課程用的是 Windows 快捷鍵（Ctrl-B / Ctrl-Z）。在 Mac 上快捷鍵可能不同——用之前先查一下你平台的對應按鍵。
+</div>
+
+<h2>決策樹：該讓 agent 看到什麼？</h2>
+
+<table>
+  <thead>
+    <tr><th>情境</th><th>做法</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>想讓 Claude 看到命令輸出</td><td><code>!</code> bash mode</td></tr>
+    <tr><td>同上，但命令很長、不想卡住</td><td><code>!</code> 之後按 Ctrl-B 背景化</td></tr>
+    <tr><td>不想讓 Claude 看到輸出</td><td>Ctrl-Z 掛起 → 跑命令 → <code>fg</code></td></tr>
+  </tbody>
+</table>
+
+<p>這個決策樹的深層意義是<strong>你控制 context 裡裝什麼</strong>。agent 看到的輸出就是它 context 的一部分——你想讓它「看到問題並自己修」，就把輸出餵給它；你想自己私下確認，就掛起。這預告了後面「context 是稀缺資源」的整個管理哲學。</p>
+
+<h2>小結</h2>
+
+<ul>
+  <li>bash 讓 agent 從被動寫碼變成能閉合 feedback loop 的夥伴</li>
+  <li><code>!</code> 進入 bash mode，輸出進 Claude context（適合 typecheck/test）</li>
+  <li>Ctrl-B 背景化長命令（dev server），log 可隨時查看</li>
+  <li>Ctrl-Z 掛起跑隱藏命令，<code>fg</code> 恢復；Mac 快捷鍵可能不同</li>
+  <li>核心：你決定 agent 的 context 裡看得到什麼</li>
+</ul>
+
+<hr>
+
+<h2>自測</h2>
+<p>回答下面問題，確認你掌握了這堂課的重點：</p>
+
+<div class="quiz" data-question="在 Claude Code 中，哪個符號會進入 bash mode？" data-correct="3" data-explain="輸入列開頭打 ! 就進入 bash mode，命令輸出會進到 Claude 的 context。">
+  <button class="opt">#</button>
+  <button class="opt">$</button>
+  <button class="opt">@</button>
+  <button class="opt">!</button>
+</div>
+
+<div class="quiz" data-question="跑 npm run typecheck 這種命令，為什麼不該用 Ctrl-Z 掛起？" data-correct="1" data-explain="你希望 Claude 看到錯誤輸出、自己診斷修復，所以要用 bash mode 把輸出餵進它的 context。">
+  <button class="opt">因為 typecheck 會一直跑不完</button>
+  <button class="opt">因為你希望 Claude 看到錯誤並自己修</button>
+  <button class="opt">因為 typecheck 不是 bash 命令</button>
+  <button class="opt">因為掛起會刪掉 Claude 的狀態</button>
+</div>
+
+<div class="quiz" data-question="dev server 這種永遠不會結束的命令，該怎麼處理？" data-correct="2" data-explain="在 bash mode 執行中用 Ctrl-B 背景化，輸出寫入檔案，可隨時查看。">
+  <button class="opt">用 Ctrl-Z 掛起後就不管它</button>
+  <button class="opt">不跑，因為會卡住對話</button>
+  <button class="opt">用 Ctrl-B 背景化</button>
+  <button class="opt">用 ! 跑完它</button>
+</div>
+
+<div class="quiz" data-question="想私下跑一個不讓 Claude 看到的命令，正確步驟是？" data-correct="0" data-explain="Ctrl-Z 掛起 Claude → 在 shell 跑命令 → fg 恢復。">
+  <button class="opt">Ctrl-Z 掛起 → 跑命令 → fg</button>
+  <button class="opt">! 跑命令 → 忽略輸出</button>
+  <button class="opt">Ctrl-B 背景化 → 跑命令</button>
+  <button class="opt">關掉 Claude 再重開</button>
+</div>
+
+<div class="quiz" data-question="背景化命令的輸出存在哪裡？" data-correct="3" data-explain="輸出寫到一個本機檔案，狀態列會顯示背景任務，可打開查看。">
+  <button class="opt">只存在 Claude 的記憶體</button>
+  <button class="opt">直接刪除</button>
+  <button class="opt">存在雲端</button>
+  <button class="opt">寫到一個本機檔案</button>
+</div>
+
+<div class="quiz" data-question="「控制 agent 看得到什麼」為什麼重要？" data-correct="1" data-explain="因為你決定 context 裡裝什麼——想讓它自己修就餵輸出，想私下確認就掛起。">
+  <button class="opt">因為 agent 的輸出越多越好</button>
+  <button class="opt">因為你控制 agent 的 context 裡裝什麼</button>
+  <button class="opt">因為 bash 模式比 IDE 快</button>
+  <button class="opt">因為掛起能省 token</button>
+</div>
+
+<footer>
+<p>有問題？隨時問你的 AI 老師——它可以解釋任何不清楚的地方。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

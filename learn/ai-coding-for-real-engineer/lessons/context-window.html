@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Context Window 與二次方擴張</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">ai-coding-for-real-engineer · why-agent-fails · Step 1/5</p>
+
+<h1>Context Window 與二次方擴張</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：說出 context window 是什麼、token 之間注意力怎麼二次方成長，並理解為什麼把越多內容塞進 context 會讓模型越吃力。
+</div>
+
+<h2>「agent 為什麼變笨」的第一塊拼圖</h2>
+
+<p>你可能遇過這種情況：agent 開頭很聰明，愈聊愈笨；或者你把整份 repo 丟給它，它反而開始答非所問。這不是它偷懶，而是它被四條硬性約束綁住——而第一條、也是最根本的一條，就是 <strong>context window</strong>。這一課先把這條約束講清楚，後面的課再補上另外三條。</p>
+
+<h2>Context Window 是什麼</h2>
+
+<p>Context window（上下文窗口）是模型在<strong>單一次 request 裡看得到的所有內容</strong>：你的 prompt、系統提示、被 <code>@</code> 參照讀進來的檔案、agent 執行工具（跑測試、讀檔）的回傳結果、整段對話歷史。這些全部擠在同一個窗口裡，模型只能憑這個窗口裡的東西作答。</p>
+
+<div class="callout">
+<span class="label">核心概念</span>
+<strong>Context window 是工作記憶，不是長期記憶。</strong> 窗口外的一切對模型而言不存在；它不像你有硬碟或記憶庫，可以「回想」上一次 session 聊過什麼。
+</div>
+
+<p>這也解釋了為什麼 <code>@</code> 參照檔案要「花成本」：每個被參照的檔案都會被讀進 context window，佔掉珍貴的空間。工具輸出、bash 回傳的日誌也一樣，全部落進同一個窗口。</p>
+
+<h2>注意力為什麼二次方成長</h2>
+
+<p>現代 LLM 的核心機制是 <strong>attention（注意力）</strong>：讓每個 token 都去「看」其他每個 token，找出彼此的關係。注意力的成本不是線性成長，而是<strong>兩兩配對</strong>——有 n 個 token，就要處理大約 n×(n−1)/2 組關係。</p>
+
+<table>
+<tr><th>Token 數（n）</th><th>兩兩關係數</th><th>成長率</th></tr>
+<tr><td>4</td><td>6</td><td>—</td></tr>
+<tr><td>8</td><td>28</td><td>約 ×4.7</td></tr>
+<tr><td>16</td><td>120</td><td>約 ×4.3</td></tr>
+<tr><td>100</td><td>4,950（約 5,000）</td><td>—</td></tr>
+<tr><td>200,000</td><td>約 200 億</td><td>天文數字</td></tr>
+</table>
+
+<p>看清楚這個成長的形狀：token 數翻倍，關係數暴增四倍左右。你多塞一個 token，它要跟<strong>所有既有的 token</strong>建立關係；而既有每個 token 也要跟它建立關係。所以「再加一行說明」的成本，遠比你想的貴。</p>
+
+<div class="callout tip">
+<span class="label">一句話記法</span>
+<strong>Context 越大，注意力越貴。</strong> 關係數約是 token 數的二次方，塞越多越吃力——這不是玄學，是數學。
+</div>
+
+<h2>這對實務代表什麼</h2>
+
+<p>把這個機制接回你手上的工具：<code>/context</code> 顯示的就是你現在塞了多少 token、燒掉了窗口多少空間。每個被 <code>@</code> 參照的檔案、每次工具輸出，都是往這個二次方成本裡加燃料。</p>
+
+<p>所以第一條實務鐵律是：<strong>只把必要的東西放進 context。</strong> 不需要的檔案別 <code>@</code>、跑完的長日誌該清就清、無關的對話歷史該斷就斷。因為下一課會看到：當你把它塞到某個量級，模型的推理品質會開始崩壞——那就是「dumb zone」。</p>
+
+<hr>
+
+<div class="quiz" data-question="Context window 指的是什麼？" data-correct="1" data-explain="它包含 prompt、被參照的檔案、工具輸出與對話歷史，是模型單一 request 內看得到的全部內容。">
+  <button class="opt">模型訓練資料的完整副本</button>
+  <button class="opt">模型在單一 request 內看得到的所有內容</button>
+  <button class="opt">模型跨 session 保存的長期記憶</button>
+  <button class="opt">使用者的硬碟空間</button>
+</div>
+
+<div class="quiz" data-question="4 個 token 之間有幾組兩兩關係？" data-correct="1" data-explain="n×(n−1)/2 = 6 組兩兩配對。">
+  <button class="opt">4</button>
+  <button class="opt">6</button>
+  <button class="opt">8</button>
+  <button class="opt">16</button>
+</div>
+
+<div class="quiz" data-question="注意力的成本隨 token 數怎麼成長？" data-correct="2" data-explain="每個新 token 要跟所有既有 token 建立關係，關係數約為 n²/2，是二次方成長。">
+  <button class="opt">線性成長</button>
+  <button class="opt">對數成長</button>
+  <button class="opt">二次方成長</button>
+  <button class="opt">完全不成長</button>
+</div>
+
+<div class="quiz" data-question="約 100 個 token 會產生多少組兩兩關係？" data-correct="2" data-explain="100×99/2 = 4,950，約 5,000 組。">
+  <button class="opt">約 100</button>
+  <button class="opt">約 500</button>
+  <button class="opt">約 5,000</button>
+  <button class="opt">約 100,000</button>
+</div>
+
+<div class="quiz" data-question="針對二次方擴張，使用 agent 時最該養成的習慣是？" data-correct="1" data-explain="每個 @ 參照和工具輸出都進入 context，context 越精簡，注意力成本越低。">
+  <button class="opt">把整份 repo 塞進 context，讓它什麼都知道</button>
+  <button class="opt">只放必要內容進 context，保持精簡</button>
+  <button class="opt">盡量塞滿 context，反正注意力免費</button>
+  <button class="opt">每次對話都重新貼一遍全部需求</button>
+</div>
+
+<hr>
+
+<footer>
+<p>下一步：context 塞滿後會發生什麼——進入「Smart Zone 與 Dumb Zone」。</p>
+<p>有問題？隨時問你的 Agent — TA 什麼都能解釋。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

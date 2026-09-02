@@ -25,6 +25,8 @@ Create the step-DAG and skeleton step files for one node. Node: <SUBJECT>/<NODE-
 
 Load the /nodes skill via the skill tool (name: "nodes"). Follow it for node <NODE-ID> with skip-probe. This creates the step-DAG, skeleton step files, and node container. The skip-probe flag accepts draft nodes directly and teaches every step deep.
 
+Decide everything autonomously — do not ask questions or wait for confirmation. You own the step-DAG design: choose step count, ids, order, deps, and calibrated depth based on the digests. The /nodes skill's step 5 checkpoint (confirm the DAG with the learner) is skipped: when invoked from batch-nodes the subagent decides autonomously and proceeds directly to step 6.
+
 Do not teach content or write lesson bodies — that is a separate phase. Stop after the node container is written and verified.
 
 Workspace context:

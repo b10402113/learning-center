@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 permissions 設定管住風險</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<p class="meta">ai-coding-for-real-engineer · agent-control · Step 4/4</p>
+
+<h1>用 permissions 設定管住風險</h1>
+
+<div class="goal">
+<strong>學習目標</strong>：理解 risk/reward 權衡，用 <code>.claude/settings.local.json</code> 的 <code>permissions.allow</code>/<code>deny</code>（含 wildcard）與 <code>settings.json</code> 預授權命令，並管控 web 存取等風險，避免 agent 造成災難性動作。
+</div>
+
+<h2>風險 vs 報酬：給 agent 多少權力？</h2>
+
+<p>跟 agent 合作的第一個問題不是「它多聰明」，而是<strong>你願意讓它有多大權力</strong>。如果你把無限權力交給 Claude（很多人真的這麼做），你就會合理地緊張——怕它不小心把整個檔案系統刪掉。這是 risk/reward 的權衡：權力越大、能交付的越多，但出事的後果也越大。</p>
+
+<p>Claude Code 的解法是一套<strong>很詳細的 permissions 模型</strong>，預設對自己非常嚴格，避免災難性動作。</p>
+
+<h2>核准流程長什麼樣</h2>
+
+<p>當 Claude 想跑一個命令（例如 typecheck），它不會直接跑，而是先<strong>請求核准</strong>。請求裡會顯示：</p>
+
+<ul>
+  <li>要執行的<strong>確切命令</strong>（例如 <code>pnpm typecheck</code>）</li>
+  <li>它想跑的<strong>原因</strong></li>
+</ul>
+
+<p>然後你有幾個選項：</p>
+
+<ol>
+  <li><strong>允許這次</strong>（yes，只允許一次）</li>
+  <li><strong>以後都允許</strong>（yes，這個專案內以後跑同樣命令不用再問）</li>
+  <li><strong>否決</strong>，或按 Tab 建議<strong>另一個命令</strong>（例如叫它用 <code>npx tsc</code> 代替 <code>pnpm typecheck</code>）</li>
+</ol>
+
+<p>注意有些命令（例如 <code>echo hello</code>）被認定極度安全，會直接跑，連問都不問。</p>
+
+<h2>你的選擇被記在哪裡</h2>
+
+<p>你的核准會被記錄到一個檔案：</p>
+
+<pre><code>.claude/settings.local.json</code></pre>
+
+<p>裡面有 <code>permissions.allow</code>（允許的清單）和 <code>permissions.deny</code>（禁止的清單）兩個陣列。你也可以<strong>自己手動編輯</strong>這個檔，預先授權：</p>
+
+<pre><code>{
+  "permissions": {
+    "allow": ["Bash(pnpm typecheck)"],
+    "deny": ["Bash(git push:*)"]
+  }
+}</code></pre>
+
+<h2>Wildcard：一次授權一整類</h2>
+
+<p>如果你想允許「所有 pnpm 命令」，不必逐條列出，用 wildcard：</p>
+
+<pre><code>"allow": ["Bash(pnpm:*)"]</code></pre>
+
+<p>同理，deny 也可以加 wildcard——例如絕對不讓它 <code>git push</code>，就寫 <code>Bash(git push:*)</code>。</p>
+
+<div class="callout">
+<span class="label">語法關鍵</span>
+<code>allow</code> / <code>deny</code> 陣列裡的規則用「命令 + wildcard」描述，自己編輯檔案就能提前放行或封鎖整個類別。
+</div>
+
+<h2>不只是 bash：web 存取也被管控</h2>
+
+<p>Claude Code 不只跑命令要權限，<strong>搜尋網路、抓取網頁</strong>也一樣受控。例如要它上網查 react-router-typegen 的文件，它會先請求做一次 web search；你核准後，它才真的去抓文件、回報摘要。</p>
+
+<p>這代表「agent 上網」也是你該管的風險面——不是只有刪檔才算危險。</p>
+
+<h2>個人設定 vs 團隊共用</h2>
+
+<p>預設的 <code>settings.local.json</code> 通常在 .gitignore 裡，只對你個人有效。如果你想讓團隊共用一套「這個 repo 固定允許的命令」，只要把它<strong>改名成 <code>settings.json</code></strong>：</p>
+
+<ul>
+  <li>任何在這個 repo 上跑的 Claude 實例都會自動吃到這套規則</li>
+  <li>新人第一次進 repo 就跑得起來，不用每次手動核准</li>
+</ul>
+
+<p>這就是 repo 層級的 agent 設定種子——預授權一套已知安全的命令，省去每次跟安全提示搏鬥。</p>
+
+<h2>小結</h2>
+
+<ul>
+  <li>風險 vs 報酬：給 agent 的權力越大，能交付越多但風險越大</li>
+  <li>Claude Code 預設嚴格，跑命令前請求核准（顯示命令 + 原因）</li>
+  <li>核准記錄在 <code>.claude/settings.local.json</code> 的 allow/deny，支援 wildcard</li>
+  <li>Web search/fetch 同樣受控</li>
+  <li>改名 <code>settings.json</code> 即可讓團隊共用規則</li>
+</ul>
+
+<hr>
+
+<h2>自測</h2>
+<p>回答下面問題，確認你掌握了這堂課的重點：</p>
+
+<div class="quiz" data-question="Claude Code 的 permissions 模型預設是嚴格還是寬鬆？" data-correct="0" data-explain="預設非常嚴格，避免 agent 做出刪除檔案系統之類的災難性動作。">
+  <button class="opt">嚴格</button>
+  <button class="opt">寬鬆</button>
+  <button class="opt">預設全部直接執行</button>
+  <button class="opt">預設全部禁止</button>
+</div>
+
+<div class="quiz" data-question="你的核准選擇被記錄在哪個檔案？" data-correct="3" data-explain="記錄在 .claude/settings.local.json 的 permissions.allow/deny 陣列。">
+  <button class="opt">package.json</button>
+  <button class="opt">.gitignore</button>
+  <button class="opt">claude.json</button>
+  <button class="opt">.claude/settings.local.json</button>
+</div>
+
+<div class="quiz" data-question="想允許所有 pnpm 命令，該怎麼寫 allow 規則？" data-correct="1" data-explain="用 wildcard：Bash(pnpm:*) 一次授權所有 pnpm 命令。">
+  <button class="opt">"allow": ["Bash(pnpm typecheck)"]</button>
+  <button class="opt">"allow": ["Bash(pnpm:*)"]</button>
+  <button class="opt">"allow": ["pnpm"]</button>
+  <button class="opt">"allow": ["*"]</button>
+</div>
+
+<div class="quiz" data-question="想把規則跟團隊共用，該怎麼做？" data-correct="2" data-explain="把 settings.local.json 改名成 settings.json，repo 上所有 Claude 實例都會讀取。">
+  <button class="opt">把檔案 commit 進 git</button>
+  <button class="opt">複製到每個人的家目錄</button>
+  <button class="opt">改名成 settings.json</button>
+  <button class="opt">發到 Discord 分享</button>
+</div>
+
+<div class="quiz" data-question="除了 bash 命令，還有什麼也需要權限？" data-correct="0" data-explain="Web search / web fetch 也受控——agent 上網也是要管的風險面。">
+  <button class="opt">Web search / fetch</button>
+  <button class="opt">讀取檔案</button>
+  <button class="opt">編輯檔案</button>
+  <button class="opt">顯示訊息</button>
+</div>
+
+<div class="quiz" data-question="Claude 請求核准時，畫面上會顯示什麼？" data-correct="3" data-explain="顯示確切命令 + 它想跑的原因，讓你判斷要不要放行。">
+  <button class="opt">只有一條簡短的警告</button>
+  <button class="opt">程式碼 diff</button>
+  <button class="opt">Token 用量</button>
+  <button class="opt">確切命令 + 原因</button>
+</div>
+
+<footer>
+<p>有問題？隨時問你的 AI 老師——它可以解釋任何不清楚的地方。</p>
+</footer>
+
+</main>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

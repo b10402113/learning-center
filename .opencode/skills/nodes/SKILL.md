@@ -19,7 +19,7 @@ Invoke as `/nodes <subject>/<node-id>`, or `/nodes <subject>/<node-id> skip-prob
 
 4. **Reason the step-DAG.** Decompose the node into steps before writing anything. Each step is one coherent teaching unit with its own learner-facing goal. Give each step an immutable kebab-case `id`, a reading `order`, and `deps` naming the earlier steps it builds on; a step may branch from or merge into several. 2–5 steps is typical. The DAG is a deliberate plan reasoned from the digests, never improvised while writing articles.
 
-5. **Confirm the DAG (checkpoint).** Present the step-DAG — step ids, one-line goals, order, deps, and each step's calibrated depth (shallow | mixed | deep) — and ask the learner to confirm. Exit options: accept; reorder or rename steps; add, remove, split, or merge steps. Do not write a single step file until this checkpoint passes.
+5. **Confirm the DAG (checkpoint).** Present the step-DAG — step ids, one-line goals, order, deps, and each step's calibrated depth (shallow | mixed | deep) — and ask the learner to confirm. Exit options: accept; reorder or rename steps; add, remove, split, or merge steps. Do not write a single step file until this checkpoint passes. Skip this checkpoint when `skip-probe` is active — the learner has asserted they know nothing, so proceed directly to step 6.
 
 6. **Create skeleton step files.** Each step gets a skeleton at `learn/<subject>/nodes/<node-id>/<step-id>.mdx` — frontmatter (`id`, `title`, `subject`, `sources`, `created`, `updated`), `<LearningGoal>` with the one-sentence goal, `## Lesson` heading only (empty body), and `## Sources` heading only. No lesson content. No sub-agents.
 

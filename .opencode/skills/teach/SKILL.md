@@ -109,6 +109,24 @@ Each of these should be based on a **feedback loop**, where the user receives fe
 
 For quizzes, each answer should be exactly the same number of words (and characters, if possible). Don't give the user any clues about the answer through formatting.
 
+### Quiz format
+
+Every in-lesson quiz uses this HTML structure, powered by `./assets/quiz.js`:
+
+```html
+<div class="quiz" data-question="問題文字" data-correct="2" data-explain="解說">
+  <button class="opt">選項一</button>
+  <button class="opt">選項二</button>
+  <button class="opt">選項三</button>
+  <button class="opt">選項四</button>
+</div>
+```
+
+- `data-correct` is the **0-based index** of the correct option.
+- `data-explain` is shown after a correct answer; keep it to one sentence.
+- All `<button class="opt">` elements are siblings inside the `<div class="quiz">`.
+- Every lesson HTML must include `<script src="./assets/quiz.js"></script>` before `</body>` for quizzes to work.
+
 ## Acquiring Wisdom
 
 Wisdom comes from true real-world interaction - testing your skills outside the learning environment.

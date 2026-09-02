@@ -151,10 +151,16 @@ function buildDigestIndex(subject) {
   const countedHashes = new Set();
   for (const d of digests) {
     const { data, body } = parseFrontmatter(readFileSync(d.path, "utf8"));
-    if (data.source_hash) hashToDigest.set(data.source_hash, d.name);
-    if (typeof data.source_lines === "number" && data.source_hash && !countedHashes.has(data.source_hash)) {
-      countedHashes.add(data.source_hash);
-      totalLines.value += data.source_lines;
+    const hashes = Array.isArray(data.source_hash) ? data.source_hash : data.source_hash ? [data.source_hash] : [];
+    for (const h of hashes) hashToDigest.set(h, d.name);
+    if (typeof data.source_lines === "number" && hashes.length > 0) {
+      const linesPerHash = Math.round(data.source_lines / hashes.length);
+      for (const h of hashes) {
+        if (!countedHashes.has(h)) {
+          countedHashes.add(h);
+          totalLines.value += linesPerHash;
+        }
+      }
     }
     const re = /Locator:\s*`?\[\[\s*sources\/[^\]]*?#([^\]]+)\s*\]\]`?/g;
     let m;
