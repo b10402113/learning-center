@@ -1,0 +1,65 @@
+---
+id: wire-models
+title: 把 SQLModel 接上 API
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_29.md#wiring-projectread-into-the-api]]"
+  - "[[sources/pro-python/completed/20260903_27-datalayer.md#sqlmodel-orm]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+# 把 SQLModel 接上 API
+
+## Learning goal
+
+把原本寫在路由檔裡的 Pydantic `ProjectRead` 換成從 `models.py` 匯入的 SQLModel，讓 API 真的從 Postgres 回傳資料，而不是模擬資料。
+
+## Lesson
+
+在之前的課程裡，你的 API 可能是回傳寫死的模擬資料（mock data），或者用一個手寫的 Pydantic `ProjectRead` 來定義回傳格式。這樣雖然能快速看到 API 的行為，但資料不會真的寫入資料庫，重啟就消失。
+
+現在你已經有了真正的 Postgres 資料庫，也已經用 SQLModel 定義了表格模型。下一步就是把 API 跟真正的資料庫接起來，讓 `GET /projects` 真的去 Postgres 查詢資料，而不是回傳一個寫死的列表。
+
+SQLModel 的每個類別都同時是 Pydantic 模型和 SQLAlchemy 表格定義。你不需要在路由檔裡重新定義一個 `ProjectRead`，而是直接從 `models.py` 匯入你已經定義好的模型：
+
+```python
+from models import Project
+```
+
+這樣你的 API 回傳的 JSON 就會完全對應到資料庫的欄位，不需要維護兩份定義。
+
+要從資料庫取得資料，你需要一個 SQLModel 的 `Session`。FastAPI 的依賴注入（dependency injection）可以幫你管理 session 的生命週期：
+
+```python
+from sqlmodel import Session, select
+
+@app.get("/projects", response_model=list[Project])
+def get_projects(session: Session = Depends(get_session)):
+    statement = select(Project)
+    projects = session.exec(statement).all()
+    return projects
+```
+
+`select(Project)` 會轉換成 `SELECT * FROM projects`，`session.exec()` 執行查詢，`.all()` 取得所有結果。
+
+如果你只需要取得特定的一筆資料（例如用 ID 查），可以用 `session.get()`，它會產生 `SELECT ... WHERE id = ?`：
+
+```python
+@app.get("/projects/{project_id}", response_model=Project)
+def get_project(project_id: int, session: Session = Depends(get_session)):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+```
+
+`session.get()` 會回傳一個 `Project` 實例，如果找不到就回傳 `None`。
+
+把路由檔裡的模擬資料列表（例如 `MOCK_PROJECTS = [...]`）移除，確保所有的端點都是從資料庫查詢。如果你的 API 之前有 `POST /projects` 端點，現在也可以改成用 `session.add()` 和 `session.commit()` 把資料真的寫入資料庫。
+
+## Sources
+
+## Course
+
+[↗ 課程頁面](../../lessons/wire-models.html)

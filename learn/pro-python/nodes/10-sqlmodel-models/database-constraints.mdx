@@ -1,0 +1,69 @@
+---
+id: database-constraints
+title: 資料庫層級約束與應用程式驗證
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_28.md#field-definitions-and-constraints]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+<LearningGoal>
+理解資料庫層級約束（unique=True）與 Pydantic 應用程式驗證的差異，以及兩者如何共同保障資料完整性。
+</LearningGoal>
+
+## Lesson
+
+資料驗證不是「有做就好」——它分兩層，而且發生在完全不同的時間點。
+
+| 層級 | 誰執行？ | 什麼時候？ | 失敗會怎樣？ |
+| --- | --- | --- | --- |
+| 應用層驗證 | Pydantic | 請求進來、Python 收到 JSON 時 | 回 422 Validation Error |
+| 資料庫約束 | PostgreSQL | SQL 寫入資料庫時 | 拋 IntegrityError |
+
+當前端送來一筆資料，FastAPI 會先用 Pydantic 模型檢查：型別對不對、長度有沒有超標、格式合不合格。如果不合格，請求根本不會到達你的函式——直接回 422。
+
+```python
+from pydantic import BaseModel
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+```
+
+但 Pydantic 的驗證只能保證「格式正確」，不能保證「不重複」。假設兩個請求同時送出相同的 `name`，Pydantic 都過了，但資料庫裡就會出現兩筆重複資料。
+
+這時候就要靠資料庫約束：`unique=True`。
+
+```python
+from sqlmodel import SQLModel, Field
+
+class Project(SQLModel, table=True):
+    name: str = Field(min_length=1, max_length=100, unique=True)
+```
+
+`unique=True` 會在資料庫裡建立一個 unique index。如果有任何 SQL 嘗試寫入重複的 `name`，PostgreSQL 會拒絕並拋出 `IntegrityError`。
+
+在 FastAPI 裡，要捕捉 `IntegrityError` 並轉成有意義的 HTTP 錯誤（如 409 Conflict）。
+
+```python
+from sqlalchemy.exc import IntegrityError
+
+@app.post("/projects")
+def create_project(project: ProjectCreate, session: Session):
+    db_project = Project(**project.model_dump())
+    session.add(db_project)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="專案名稱已存在")
+    return db_project
+```
+
+應用層驗證給使用者即時的錯誤回饋；資料庫約束保證資料絕對正確，即使有程式繞過應用層驗證，資料庫還是能守住底線。
+
+## Course
+
+[↗ 課程頁面](../../lessons/database-constraints.html)
+
+## Sources

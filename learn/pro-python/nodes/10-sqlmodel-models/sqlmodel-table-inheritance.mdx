@@ -1,0 +1,60 @@
+---
+id: sqlmodel-table-inheritance
+title: SQLModel 表格繼承與 base/table 分離
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_28.md#sqlmodel-table-inheritance]]"
+  - "[[sources/pro-python/completed/20260903_27-datalayer.md#sqlmodel-orm]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+<LearningGoal>
+理解 SQLModel 如何同時作為 Pydantic 驗證模型與 SQLAlchemy 表格，並掌握 base/table 分離的設計模式。
+</LearningGoal>
+
+## Lesson
+
+提到資料驗證，很多人直覺想到 Pydantic 的 `BaseModel`——它很擅長檢查進來的 JSON 對不對、能不能轉成 Python 型別。但 Pydantic 完全不知道資料庫長什麼樣子，驗證通過的資料要自己寫 SQL 才能存進 Postgres。
+
+SQLModel 的出現，就是為了黏合這個斷層。它由 FastAPI 的同一位作者打造，把 Pydantic 的驗證能力和 SQLAlchemy 的資料庫對應（ORM，Object-Relational Mapping）放進同一個類別裡。
+
+要讓一個 SQLModel 類別變成真正的資料庫表格，只需要多做一件事：在類別設定裡加上 `table=True`。
+
+```python
+from sqlmodel import SQLModel, Field
+
+class ProjectBase(SQLModel):
+    name: str
+    description: str | None = None
+
+class Project(ProjectBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+```
+
+`ProjectBase` 繼承 `SQLModel`，但沒有 `table=True`，所以它只是一個單純的 Pydantic 驗證模型。`Project` 繼承 `ProjectBase`，加上 `table=True`，SQLModel 就會為它在資料庫裡建一張真正的表格。
+
+這種 base/table 分離的設計模式，是 SQLModel 最核心的設計。base 類別放共享欄位，table 類別加上 `table=True` 和資料庫專用欄位（如 `id`、`created_at`）。請求模型、回應模型、資料庫模型可以全部繼承同一個 base，欄位改一次就全部生效。
+
+```python
+from sqlmodel import SQLModel, Field
+from datetime import datetime, timezone
+
+class ProjectBase(SQLModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = None
+    slug: str = Field(min_length=1)
+
+class Project(ProjectBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+```
+
+把範式和語言分開看，你才會避開一個常見誤區：把「換了一門 ORM」當成「寫出了能跟資料庫溝通的代碼」。下一課會用這個區分，回答「怎麼讓欄位定義可以跨模型重用」。
+
+## Course
+
+[↗ 課程頁面](../../lessons/sqlmodel-table-inheritance.html)
+
+## Sources

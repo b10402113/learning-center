@@ -1,0 +1,108 @@
+---
+id: simplify-routes
+title: 用 Annotated 依賴簡化路由
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_35.md#creating-the-projectdep-dependency]]"
+  - "[[sources/pro-python/completed/20260903_35.md#annotated-type-alias]]"
+  - "[[sources/pro-python/completed/20260903_35.md#simplified-route-handlers]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+<LearningGoal>
+用 ProjectDep 和 Annotated 型別別名消除每個路由重複的查詢與 404 樣板碼。
+</LearningGoal>
+
+## Lesson
+
+把資料庫操作抽到 `crud.py` 之後，`main.py` 裡的路線還是有一個問題：每個需要取得專案的路由，都在做一樣的事——用 `project_id` 查資料庫，如果找不到就回傳 404。
+
+**每個路由都在寫一樣的樣板碼**
+
+```python
+@app.get("/projects/{project_id}")
+def get_project(project_id: int, session: Session = Depends(get_session)):
+    project = crud.get_project(session, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+@app.put("/projects/{project_id}")
+def update_project(project_id: int, project: ProjectUpdate, session: Session = Depends(get_session)):
+    existing = crud.get_project(session, project_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Project not found")
+    # ... 更新邏輯
+
+@app.delete("/projects/{project_id}")
+def delete_project(project_id: int, session: Session = Depends(get_session)):
+    project = crud.get_project(session, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    # ... 刪除邏輯
+```
+
+這三段路由的前兩行幾乎一模一樣。如果你有十個路由需要取得專案，這段「查不到就 404」的樣板碼就會重複十次。這就是 DRY 原則最典型的違反。
+
+**把「查詢或 404」封裝成依賴**
+
+FastAPI 的依賴注入系統可以幫我們把這段邏輯抽出來。我們寫一個函式，專門負責「用 project_id 查資料庫，找不到就拋 404」：
+
+```python
+# dependencies.py
+from fastapi import Depends, HTTPException
+from sqlmodel import Session
+from . import crud
+from .database import get_session
+
+def get_project_or_404(project_id: int, session: Session = Depends(get_session)):
+    project = crud.get_project(session, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+```
+
+這個函式本身就是一個依賴。它接收 `project_id`（從路徑參數來）和 `session`（從 `get_session` 依賴來），回傳一個驗證過的 `Project` 物件。
+
+**用 Annotated 建立型別別名**
+
+有了 `get_project_or_404`，我們可以用 `Annotated` 建立一個型別別名，把「型別」和「依賴」綁在一起：
+
+```python
+# dependencies.py
+from typing import Annotated
+from fastapi import Depends
+
+ProjectDep = Annotated[Project, Depends(get_project_or_404)]
+```
+
+這行的意思是：`ProjectDep` 是一個 `Project` 型別，但它的值是由 `get_project_or_404` 這個依賴提供的。FastAPI 看到 `ProjectDep`，就會自動去跑 `get_project_or_404`，把回傳的 `Project` 注入給路由。
+
+**路由變得極簡**
+
+有了 `ProjectDep`，每個路由的簽章變得乾淨到不可思議：
+
+```python
+@app.get("/projects/{project_id}")
+def get_project(project: ProjectDep):
+    return project
+
+@app.put("/projects/{project_id}")
+def update_project(project: ProjectDep, update: ProjectUpdate):
+    # ... 更新邏輯
+
+@app.delete("/projects/{project_id}")
+def delete_project(project: ProjectDep):
+    # ... 刪除邏輯
+```
+
+注意：路由裡完全沒有 `if not project` 的判斷，沒有 `HTTPException(404)`，沒有 `session` 參數。FastAPI 在呼叫路由之前，會先跑 `get_project_or_404`，如果找不到專案，直接回傳 404；如果找到，把 `Project` 物件注入給路由。
+
+路由現在只關心它自己的核心邏輯：回傳、更新、刪除。查詢和 404 的責任完全交給了依賴。
+
+## Course
+
+[↗ 課程頁面](../../lessons/simplify-routes.html)
+
+## Sources

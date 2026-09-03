@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Update endpoint (PATCH) — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Update endpoint (PATCH)</h1>
+<p class="meta">Node 13 · Step 3 of 4</p>
+
+<h2>Learning goal</h2>
+<p>Implement a PATCH endpoint that partially updates an existing record, regenerates the slug when the name changes, and returns the updated object.</p>
+
+<h2>Why PATCH, not PUT</h2>
+<p>REST offers two ways to update a resource. <code>PUT</code> replaces the entire resource — the client sends every field, even the ones that haven't changed. <code>PATCH</code> applies a partial update — the client sends only the fields they want to change.</p>
+
+<p>For a project with five fields, a PUT request looks like this:</p>
+
+<pre><code>PUT /projects/1
+{
+  "name": "New Name",
+  "description": "Old description",
+  "version": "0.1.0",
+  "slug": "old-slug",
+  "created_at": "2025-01-01T00:00:00"
+}</code></pre>
+
+<p>The client had to fetch the existing record first, then resend everything. If they forgot a field, it gets overwritten with a default. That's fragile.</p>
+
+<p>A PATCH request is simpler:</p>
+
+<pre><code>PATCH /projects/1
+{
+  "name": "New Name"
+}</code></pre>
+
+<p>Only <code>name</code> changes. Everything else stays as-is. This is the pattern most real APIs use.</p>
+
+<h2>Designing the update schema</h2>
+<p>The update schema looks like the create schema, but every field is optional — the client can send any subset:</p>
+
+<pre><code>class ProjectUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    version: str | None = None</code></pre>
+
+<p>Using <code>str | None = None</code> means "if the client omits this field, it stays <code>None</code> in the schema, and we skip updating it." This is the key difference from <code>ProjectCreate</code>, where <code>name</code> was required.</p>
+
+<h2>Writing the endpoint</h2>
+<p>The update endpoint has three stages: fetch the existing record, apply only the provided fields, then commit:</p>
+
+<pre><code>@app.patch("/projects/{project_id}", response_model=ProjectRead)
+def update_project(
+    project_id: int,
+    project_in: ProjectUpdate,
+    session: Session = Depends(session_dep),
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    data = project_in.model_dump(exclude_unset=True)
+    for key, value in data.items():
+        setattr(project, key, value)
+
+    if "name" in data:
+        project.slug = slugify(data["name"])
+
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project</code></pre>
+
+<h2>The magic of exclude_unset=True</h2>
+<p><code>project_in.model_dump()</code> would return <code>{"name": "New Name", "description": None, "version": None}</code>. If you applied that directly, you'd overwrite <code>description</code> and <code>version</code> with <code>None</code> — destroying data the client never intended to change.</p>
+
+<p><code>exclude_unset=True</code> tells Pydantic to only include fields the client actually sent. If the request was just <code>{"name": "New Name"}</code>, the dump returns <code>{"name": "New Name"}</code>. The other fields are excluded from the dictionary entirely.</p>
+
+<p>This is the single most important detail when implementing PATCH. Forget it, and your endpoint silently nullifies fields.</p>
+
+<h2>Applying changes with setattr</h2>
+<p>The loop <code>for key, value in data.items(): setattr(project, key, value)</code> iterates over the provided fields and updates the SQLModel object in memory. <code>setattr(project, "name", "New Name")</code> is equivalent to <code>project.name = "New Name"</code>, but it works for dynamic keys.</p>
+
+<p>After the loop, the object in memory reflects the partial update. <code>session.add(project)</code> stages it, <code>session.commit()</code> writes the <code>UPDATE</code> statement, and <code>session.refresh()</code> pulls back any database-side changes (like an <code>updated_at</code> timestamp managed by a trigger).</p>
+
+<h2>Regenerating the slug</h2>
+<p>When the name changes, the slug should change with it. The check <code>if "name" in data</code> detects whether the client sent a new name. If they did, regenerate the slug from the new name.</p>
+
+<p>If the client didn't send <code>name</code>, the slug stays as-is. This is correct — you don't want to regenerate a slug that's already stable just because the description changed.</p>
+
+<h2>Handling the 404 case</h2>
+<p><code>session.get(Project, project_id)</code> returns <code>None</code> if no row matches the ID. The endpoint raises <code>HTTPException(status_code=404)</code> to signal "not found." FastAPI converts that into a proper 404 response with the detail message.</p>
+
+<p>This is the same pattern used in the read endpoint. Consistency matters — clients learn your error format once and apply it everywhere.</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="在 REST API 中，PATCH 和 PUT 的主要差異是什麼？" data-correct="1" data-explain="PATCH 只更新客戶端提供的欄位，PUT 則替換整個資源。">
+  <button class="opt">PATCH 只能更新數字欄位，PUT 可以更新所有欄位</button>
+  <button class="opt">PATCH 做部分更新，PUT 做完整替換</button>
+  <button class="opt">PATCH 需要認證，PUT 不需要</button>
+  <button class="opt">PATCH 回傳 201，PUT 回傳 200</button>
+</div>
+
+<div class="quiz" data-question="ProjectUpdate schema 中，欄位型別使用「str | None = None」的目的是什麼？" data-correct="0" data-explain="這樣客戶端可以省略任何欄位，沒提供的欄位會保持 None，端點就知道要跳過它。">
+  <button class="opt">讓客戶端可以省略該欄位，不更新它</button>
+  <button class="opt">強制客戶端必須傳入 None</button>
+  <button class="opt">讓資料庫自動填入預設值</button>
+  <button class="opt">允許欄位接受空字串</button>
+</div>
+
+<div class="quiz" data-question="model_dump(exclude_unset=True) 的作用是什麼？" data-correct="2" data-explain="exclude_unset=True 只包含客戶端實際傳入的欄位，避免把未提供欄位覆寫成 None。">
+  <button class="opt">移除所有 None 值的欄位</button>
+  <button class="opt">把物件序列化成 JSON</button>
+  <button class="opt">只包含客戶端實際傳入的欄位</button>
+  <button class="opt">驗證欄位型別是否正確</button>
+</div>
+
+<div class="quiz" data-question="為什麼更新名稱時需要重新產生 slug？" data-correct="3" data-explain="slug 是從名稱推導出來的，名稱變了 slug 也應該跟著變，才能保持 URL 的一致性。">
+  <button class="opt">因為 slug 是主鍵，不能重複</button>
+  <button class="opt">因為 FastAPI 要求 slug 必須唯一</button>
+  <button class="opt">因為 session.commit() 會清除 slug</button>
+  <button class="opt">因為 slug 是從名稱推導的，名稱變了 slug 也該變</button>
+</div>
+
+<div class="quiz" data-question="setattr(project, key, value) 做什麼事？" data-correct="0" data-explain="setattr 動態設定物件的屬性，等同於 project.key = value，但 key 可以是變數。">
+  <button class="opt">動態設定物件的屬性值</button>
+  <button class="opt">從物件讀取屬性值</button>
+  <button class="opt">刪除物件的屬性</button>
+  <button class="opt">檢查屬性是否存在</button>
+</div>
+
+<div class="quiz" data-question="如果 session.get() 找不到對應的專案，端點應該回傳什麼狀態碼？" data-correct="1" data-explain="資源不存在時應回傳 404 Not Found。">
+  <button class="opt">200</button>
+  <button class="opt">404</button>
+  <button class="opt">422</button>
+  <button class="opt">500</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./create-endpoint.html">← 上一步：Create endpoint (POST)</a>
+  <a href="./delete-endpoints.html">下一步：Delete endpoints (soft vs hard) →</a>
+</div>
+
+<div class="footer">
+  pro-python · Node 13: Write endpoints and slug generation
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

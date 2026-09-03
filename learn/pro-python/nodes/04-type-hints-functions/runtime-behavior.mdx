@@ -1,0 +1,96 @@
+---
+id: runtime-behavior
+title: Runtime behavior — hints don't validate
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_09-type-hints.md#type-hints-syntax]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+# Runtime behavior — hints don't validate
+
+## Learning goal
+
+理解 type hint 在 Python 執行時不會被驗證，以及為什麼傳錯型別時你看到的是 `AttributeError` 而不是 `TypeError`。
+
+## Lesson
+
+一個實驗：故意傳錯型別。我們有這個函式：
+
+```python
+def slugify(name: str, separator: str) -> str:
+    return name.strip().lower().replace(" ", separator)
+```
+
+如果我們故意傳一個整數進去，會發生什麼事？
+
+```python
+result = slugify(123, "-")
+print(result)
+```
+
+執行這段程式碼，你不會看到 `TypeError: name must be str`。你看到的是：
+
+```
+AttributeError: 'int' object has no attribute 'strip'
+```
+
+這就是關鍵：Python 完全忽略了 `name: str` 這個 hint。它直接執行 `name.strip()`，而整數沒有 `.strip()` 方法，所以丟出 `AttributeError`。
+
+Type hint 的命名很容易讓人誤解。你以為「type hint = 型別提示 = 會檢查型別」，但實際上「hint」這個字就是「提示、建議」的意思。Python 直譯器在執行時**完全不會檢查**這些 hint。
+
+所以當你傳錯型別時，錯誤會在「實際使用該值的那一刻」才發生，而不是在「函式被呼叫的那一刻」。如果一個物件剛好有同名的方法或屬性，甚至不會出錯——只是結果可能不是你要的。
+
+有些語言（像 Java、C++）在呼叫函式前就會檢查引數的型別，型別不對直接拒絕。Python 不是這樣。Python 的 type hint 是給**外部工具**看的，不是給直譯器看的。
+
+這張表整理了三種型別檢查的時機：
+
+| 檢查時機 | 誰來檢查 | 沒過會怎樣 |
+| --- | --- | --- |
+| 靜態檢查（執行前） | mypy、IDE | 工具報錯，程式還能跑 |
+| 執行時（呼叫時） | 無（Python 不檢查） | 不會發生 |
+| 執行時（使用時） | Python 直譯器 | AttributeError 或 TypeError |
+
+有時候傳錯型別不會立刻出錯，因為不同型別可能有同名的方法。例如：
+
+```python
+def get_length(obj: list) -> int:
+    return len(obj)
+```
+
+如果你傳入一個字串 `"hello"`，`len("hello")` 會回傳 `5`，完全正常。但你的意圖應該是傳 list。這種 bug 比 AttributeError 更難抓，因為它不會報錯——只是結果錯了。
+
+既然執行時不檢查，為什麼要寫 type hint？三個原因：**靜態分析工具**：`mypy` 可以在執行前掃描你的程式碼，發現型別不一致的地方。它才是真正「檢查」type hint 的東西。**IDE 支援**：VS Code、PyCharm 會根據 type hint 提供自動完成、重構、跳轉定義。沒寫 hint 的時候，IDE 不知道參數型別，提示就弱很多。**可讀性**：type hint 就是一種文件。一個有 hint 的函式簽名，比沒有的更容易理解。
+
+一個實際的 mypy 例子。假設你有這段程式碼：
+
+```python
+def add(x: int, y: int) -> int:
+    return x + y
+
+result = add("hello", "world")
+print(result)
+```
+
+Python 執行時不會報錯——`"hello" + "world"` 是合法的字串拼接，結果是 `"helloworld"`。但如果你用 `mypy` 檢查：
+
+```bash
+mypy main.py
+```
+
+mypy 會告訴你：
+
+```
+error: Argument 1 to "add" has incompatible type "str"; expected "int"
+```
+
+這就是 type hint 真正發揮作用的地方：它在執行前幫你抓到「你以為自己在做數學加法，其實在做字串拼接」這種邏輯錯誤。
+
+## Sources
+
+- [[sources/pro-python/completed/20260903_09-type-hints.md#type-hints-syntax]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/runtime-behavior.html)

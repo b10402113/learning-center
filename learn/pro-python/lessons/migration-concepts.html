@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>遷移修訂的運作方式 — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <main class="lesson">
+    <header class="lesson-header">
+      <span class="subject-badge">pro-python</span>
+      <h1>遷移修訂的運作方式</h1>
+      <p class="learning-goal">理解遷移檔的結構：<code>upgrade()</code> 如何把資料庫往前推進、<code>downgrade()</code> 如何回溯，以及為什麼每次遷移都是一個獨立的 Python 檔案。</p>
+    </header>
+
+    <section class="concept">
+      <h2>遷移檔是什麼？</h2>
+      <p>當你修改 SQLModel 定義（例如新增一個欄位、修改索引、甚至刪除表格）時，資料庫本身不會自動知道這些變更。你需要一個「遷移檔」（migration revision）來描述<strong>如何從舊的資料庫狀態走到新的狀態</strong>。</p>
+      <p>每個遷移檔都是一個獨立的 Python 檔案，放在 <code>alembic/versions/</code> 目錄下。它包含一個唯一的 revision ID（像是 <code>a1b2c3d4e5f6</code>），以及兩個核心函式：<code>upgrade()</code> 和 <code>downgrade()</code>。</p>
+    </section>
+
+    <section class="concept">
+      <h2><code>upgrade()</code>：往前走</h2>
+      <p><code>upgrade()</code> 描述的是<strong>如何從上一個版本走到這個版本</strong>。例如你新增了一個 <code>email</code> 欄位，<code>upgrade()</code> 裡面就會有 <code>op.add_column()</code> 相對應的 SQL 操作。</p>
+      <p>當你執行 <code>alembic upgrade head</code> 時，Alembic 會按照遷移檔的順序，逐一執行每個還沒套用過的 <code>upgrade()</code>。<code>head</code> 代表最新的那個版本。</p>
+    </section>
+
+    <section class="concept">
+      <h2><code>downgrade()</code>：走回去</h2>
+      <p><code>downgrade()</code> 描述的是<strong>如何從這個版本退回到上一個版本</strong>。它是 <code>upgrade()</code> 的逆向操作。如果 <code>upgrade()</code> 新增了欄位，<code>downgrade()</code> 就要刪除那個欄位。</p>
+      <p>為什麼需要回溯？因為在生產環境中，如果發現新的遷移檔有問題（例如資料遺失、效能下降），你需要能夠安全地回到上一個穩定的版本，而不是只能砍掉重練。</p>
+    </section>
+
+    <section class="concept">
+      <h2>遷移鏈</h2>
+      <p>遷移檔不是獨立的，它們形成一條鏈。每個遷移檔都會記錄它的 <code>down_revision</code>（上一個版本的 revision ID）。這讓 Alembic 知道遷移的順序，也能從任何一個版本開始往前或往後走。</p>
+      <pre><code>revision: a1b2c3d4e5f6
+down_revision: 9f8e7d6c5b4a  # 指向上一份遷移檔</code></pre>
+      <p>當你想回溯到特定版本時，可以執行 <code>alembic downgrade &lt;revision_id&gt;</code>，Alembic 會從目前位置開始，逐一執行 <code>downgrade()</code> 直到到達目標版本。</p>
+    </section>
+
+    <section class="concept">
+      <h2> autogenerate 的運作</h2>
+      <p>手動寫遷移檔很花時間，所以 Alembic 提供了 <code>--autogenerate</code> 選項。它會比對 SQLModel 的 metadata 與資料庫現狀，自動產生對應的 <code>upgrade()</code> 和 <code>downgrade()</code> 程式碼。</p>
+      <p>但 autogenerate 不是萬能的：它能偵測到欄位的新增、刪除、型別變更，但對於重新命名、複雜的資料轉換、或自訂的 SQL 操作，通常還是需要手動調整產生的遷移檔。</p>
+    </section>
+
+    <section class="summary">
+      <h2>重點整理</h2>
+      <ul>
+        <li>每個遷移檔是一個獨立 Python 檔案，包含 <code>upgrade()</code> 和 <code>downgrade()</code></li>
+        <li><code>upgrade()</code> 往前走，<code>downgrade()</code> 回溯到上一個版本</li>
+        <li>遷移檔透過 <code>down_revision</code> 形成一條鏈，讓 Alembic 知道順序</li>
+        <li><code>--autogenerate</code> 可以自動比對模型與資料庫，產生遷移檔</li>
+        <li>在生產環境中，<code>downgrade()</code> 是你出錯時的安全網</li>
+      </ul>
+    </section>
+
+    <section class="quiz-section">
+      <h2>自我檢測</h2>
+      <div class="quiz" data-question="遷移檔中的 upgrade() 函式負責什麼？" data-correct="0" data-explain="upgrade() 描述如何從上一個版本走到這個版本，是往前推進的操作。">
+        <button class="opt">描述如何從上一個版本走到這個版本</button>
+        <button class="opt">描述如何從這個版本退回到上一個版本</button>
+        <button class="opt">刪除所有資料表</button>
+        <button class="opt">建立資料庫連線</button>
+      </div>
+
+      <div class="quiz" data-question="downgrade() 的主要用途是什麼？" data-correct="2" data-explain="downgrade() 是 upgrade() 的逆向操作，讓你在出錯時能安全回溯到上一個版本。">
+        <button class="opt">加速資料庫查詢</button>
+        <button class="opt">建立新的資料表</button>
+        <button class="opt">回溯到上一個版本，作為出錯時的安全網</button>
+        <button class="opt">驗證資料模型</button>
+      </div>
+
+      <div class="quiz" data-question="alembic upgrade head 中的 head 代表什麼？" data-correct="1" data-explain="head 代表遷移鏈中最新的那個版本，執行後會將所有未套用的遷移檔依序執行。">
+        <button class="opt">資料庫的第一個表格</button>
+        <button class="opt">遷移鏈中最新的版本</button>
+        <button class="opt">env.py 的設定</button>
+        <button class="opt">SQLModel 的 metadata</button>
+      </div>
+
+      <div class="quiz" data-question="down_revision 在遷移檔中的作用是什麼？" data-correct="3" data-explain="down_revision 記錄上一個版本的 revision ID，讓 Alembic 知道遷移的順序。">
+        <button class="opt">記錄目前版本號</button>
+        <button class="opt">記錄資料庫密碼</button>
+        <button class="opt">記錄升級指令</button>
+        <button class="opt">記錄上一個版本的 revision ID，形成遷移鏈</button>
+      </div>
+
+      <div class="quiz" data-question="關於 --autogenerate，下列哪個敘述是正確的？" data-correct="0" data-explain="autogenerate 會比對 SQLModel metadata 與資料庫現狀，自動產生遷移檔，但複雜操作仍需手動調整。">
+        <button class="opt">會比對模型與資料庫現狀，自動產生遷移檔</button>
+        <button class="opt">會自動執行所有遷移檔</button>
+        <button class="opt">會刪除舊的遷移檔</button>
+        <button class="opt">會建立新的資料庫</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <div class="nav-left"><a href="./alembic-setup.html">← 上一步：安裝與設定 Alembic</a></div>
+      <div class="nav-right"><a href="./generate-and-apply.html">下一步：產生並套用第一次遷移 →</a></div>
+    </div>
+  </main>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

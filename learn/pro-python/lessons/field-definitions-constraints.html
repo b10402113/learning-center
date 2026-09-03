@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>欄位定義與 Annotated 可重用約束</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>欄位定義與 Annotated 可重用約束</h1>
+  <p class="meta">學習目標：使用 Annotated 與 StringConstraints 定義可重用的欄位型別，並區分 SQLModel Field 與 Pydantic Field 的差異。</p>
+
+  <h2>重複的驗證規則，怎麼不寫死？</h2>
+  <p>假設你的系統裡有十個模型都需要「名稱」欄位：不能為空、長度 1-100。最笨的方法是在每個模型都寫一次 <code>Field(min_length=1, max_length=100)</code>。但這樣改規則的時候，你要改十個地方。</p>
+  <p>Python 的 <code>Annotated</code> 型別提示，搭配 SQLModel 的 <code>StringConstraints</code>，可以讓我們把這段驗證規則「打包」成一個型別，到時候直接重用。</p>
+
+  <h2>Annotated 是什麼？</h2>
+  <p><code>Annotated[str, StringConstraints(min_length=1, max_length=100)]</code> 的意思是：這個欄位的基本型別是 <code>str</code>，但身上還附加了 <code>StringConstraints</code> 這組驗證規則。</p>
+  <pre><code>from typing import Annotated
+from sqlmodel import StringConstraints
+
+# 把驗證規則打包成一個型別別名
+NameType = Annotated[str, StringConstraints(min_length=1, max_length=100)]
+
+class Project(SQLModel, table=True):
+    name: NameType</code></pre>
+  <p>這樣一來，<code>name</code> 欄位就自動擁有「不能為空、最長 100 字」的驗證，而且其他模型也可以直接重用 <code>NameType</code>。</p>
+
+  <h2>SQLModel Field vs Pydantic Field</h2>
+  <p>這裡有個容易踩坑的地方：SQLModel 的 <code>Field</code> 和 Pydantic 的 <code>Field</code> 雖然名字一樣，但功能不同。</p>
+  <table>
+    <thead>
+      <tr>
+        <th>來源</th>
+        <th>主要用途</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>pydantic.Field</code></td>
+        <td>設定驗證規則（min_length、max_length、regex）</td>
+      </tr>
+      <tr>
+        <td><code>sqlmodel.Field</code></td>
+        <td>設定資料庫層級設定（primary_key、unique、index、sa_column）</td>
+      </tr>
+    </tbody>
+  </table>
+  <pre><code>from sqlmodel import SQLModel, Field, StringConstraints
+from typing import Annotated
+
+# 用 Annotated + StringConstraints 做應用層驗證
+NameType = Annotated[str, StringConstraints(min_length=1, max_length=100)]
+
+class Project(SQLModel, table=True):
+    # SQLModel 的 Field 負責資料庫設定
+    id: int | None = Field(default=None, primary_key=True)
+    name: NameType = Field(unique=True)  # unique 是資料庫約束</code></pre>
+
+  <h2>實際案例：可重用的 constrained 型別</h2>
+  <pre><code>from typing import Annotated
+from sqlmodel import StringConstraints
+
+# 定義可重用的欄位型別
+NameType = Annotated[str, StringConstraints(min_length=1, max_length=100)]
+SlugType = Annotated[str, StringConstraints(min_length=1, max_length=50, pattern=r"^[a-z0-9-]+$")]
+DescriptionType = Annotated[str, StringConstraints(max_length=500)]
+
+class Project(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: NameType
+    slug: SlugType
+    description: DescriptionType | None = None</code></pre>
+  <p>這樣做的好處是：驗證規則集中管理，模型定義乾淨可讀，資料庫約束和應用驗證各司其職。</p>
+
+  <h2>重點整理</h2>
+  <ul>
+    <li><code>Annotated[str, StringConstraints(...)]</code> 把驗證規則打包成可重用的型別。</li>
+    <li>SQLModel 的 <code>Field</code> 主要負責資料庫設定（如 <code>primary_key</code>、<code>unique</code>）。</li>
+    <li>Pydantic 的 <code>Field</code> 主要負責應用層驗證（如 <code>min_length</code>）。</li>
+    <li>把常用約束抽成型別別名，可以讓多個模型共用同一套規則。</li>
+  </ul>
+
+  <h2>隨堂測驗</h2>
+
+  <div class="quiz" data-question="Annotated[str, StringConstraints(min_length=1)] 的作用是什麼？" data-correct="1" data-explain="Annotated 把驗證規則附加到型別上，讓這段 str + 約束可以隨處重用。">
+    <button class="opt">把字串轉換成註解</button>
+    <button class="opt">把驗證規則附加到型別上，形成可重用的 constrained 型別</button>
+    <button class="opt">建立一個新的 Annotated 類別</button>
+    <button class="opt">把欄位標記為自動生成</button>
+  </div>
+
+  <div class="quiz" data-question="SQLModel 的 Field 和 Pydantic 的 Field 有什麼不同？" data-correct="0" data-explain="SQLModel Field 主要管資料庫設定（primary_key、unique），Pydantic Field 管應用層驗證。">
+    <button class="opt">SQLModel Field 主要管資料庫設定，Pydantic Field 主要管應用層驗證</button>
+    <button class="opt">兩者完全相同，可以互換</button>
+    <button class="opt">SQLModel Field 只能用於整數欄位</button>
+    <button class="opt">Pydantic Field 不能用於 SQLModel 模型</button>
+  </div>
+
+  <div class="quiz" data-question="如果多個模型都需要「名稱」欄位（1-100 字），最佳做法是什麼？" data-correct="2" data-explain="用 Annotated 打包成 NameType，所有模型直接重用，改規則只需改一次。">
+    <button class="opt">在每個模型重複寫 Field(min_length=1, max_length=100)</button>
+    <button class="opt">把名稱寫死在一個函式裡</button>
+    <button class="opt">用 Annotated 定義 NameType，所有模型重用</button>
+    <button class="opt">在資料庫裡設定 CHECK 約束就好</button>
+  </div>
+
+  <div class="quiz" data-question="StringConstraints 可以設定以下哪個條件？" data-correct="3" data-explain="StringConstraints 支援 min_length、max_length、pattern 等字串驗證條件。">
+    <button class="opt">min_length 和 max_length</button>
+    <button class="opt">pattern（正則表達式）</button>
+    <button class="opt">min_length、max_length、pattern 都可以</button>
+    <button class="opt">只能設定 max_length</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼不乾脆把所有驗證都寫在 SQLModel Field 裡就好？" data-correct="1" data-explain="把驗證規則抽成 Annotated 型別，可以跨模型重用，修改時只需改一個地方。">
+    <button class="opt">因為 SQLModel Field 不支援任何驗證</button>
+    <button class="opt">因為用 Annotated 打包才能跨模型重用，避免重複定義</button>
+    <button class="opt">因為 Pydantic 會忽略 SQLModel Field 的驗證</button>
+    <button class="opt">因為 SQLModel Field 只能用於 primary key</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./sqlmodel-table-inheritance.html">← 上一步：SQLModel 表格繼承與 base/table 分離</a>
+    <a href="./database-constraints.html">下一步：資料庫層級約束與應用程式驗證 →</a>
+  </div>
+
+  <div class="footer">SQLModel — defining models · Step 2/4</div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

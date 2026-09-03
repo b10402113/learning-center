@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用 session.get() 查詢單筆資料</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 12 — Step 2/4 · Database-backed read endpoints</p>
+  <h1>用 session.get() 查詢單筆資料</h1>
+
+  <h2>學習目標</h2>
+  <p>用 <code>session.get(Model, id)</code> 從 Postgres 抓回一筆 Project，並在 API 路由中回傳。</p>
+
+  <h2>從 dictionary 到資料庫</h2>
+  <p>之前的課程用 Python dictionary 模擬資料：</p>
+
+  <pre><code>PROJECTS = {
+    1: {"id": 1, "name": "Project Alpha", "slug": "project-alpha"},
+}
+
+@app.get("/projects/{project_id}")
+def get_project(project_id: int):
+    return PROJECTS[project_id]  # 找不到會噴 KeyError</code></pre>
+
+  <p>問題是：dictionary 不是執行緒安全的、關掉伺服器資料就沒了、找不到會噴 <code>KeyError</code> 而不是 404。</p>
+
+  <h2>session.get() 的用法</h2>
+  <p><code>session.get(Model, primary_key)</code> 是 SQLModel / SQLAlchemy 最基本的查詢方法。給它模型和主鍵，它回傳那筆記錄，找不到就回傳 <code>None</code>：</p>
+
+  <pre><code>from sqlmodel import SQLModel, Field
+
+class Project(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+    name: str
+    slug: str
+
+@app.get("/projects/{project_id}")
+def get_project(project_id: int, session: Session = Depends(get_session)):
+    project = session.get(Project, project_id)
+    return project</code></pre>
+
+  <p><code>session.get()</code> 會根據主鍵產生 <code>SELECT * FROM project WHERE id = ?</code>。因為用主鍵查，SQLAlchemy 內部會先檢查快取（identity map），如果這筆記錄已經在 session 裡，就不會真的去資料庫查。</p>
+
+  <h2>回傳 SQLModel 實例</h2>
+  <p><code>session.get()</code> 回傳的是一個 <code>Project</code> 實例。FastAPI 搭配 response model 宣告，會自動把它序列化成 JSON：</p>
+
+  <pre><code>@app.get("/projects/{project_id}", response_model=Project)
+def get_project(project_id: int, session: Session = Depends(get_session)):
+    project = session.get(Project, project_id)
+    return project</code></pre>
+
+  <p><code>response_model=Project</code> 做兩件事：驗證回傳資料符合 Project 結構、在 API 文件裡顯示回應格式。</p>
+
+  <h2>找不到會怎樣？</h2>
+  <p><code>session.get()</code> 找不到時回傳 <code>None</code>，不是拋例外。如果直接回傳 <code>None</code>，FastAPI 會回 <code>null</code> 而不是 404——這通常不是你要的。下一步課會教你怎麼處理。</p>
+
+  <h2>小結</h2>
+  <p><code>session.get(Model, id)</code> 是用主鍵查單筆記錄的標準方法。找不到回傳 <code>None</code>，需要自己決定怎麼處理。</p>
+
+  <div class="lesson-nav">
+    <a href="dependency-injection.html">← 上一步：用 Depends 注入資料庫 session</a>
+    <a href="list-all.html">下一步：用 session.exec() 列出所有資料 →</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="session.get(Project, 1) 會執行什麼 SQL？" data-correct="1" data-explain="session.get() 用主鍵查，產生 SELECT ... WHERE id = ?。">
+    <button class="opt">SELECT * FROM project</button>
+    <button class="opt">SELECT * FROM project WHERE id = ?</button>
+    <button class="opt">SELECT * FROM project WHERE slug = ?</button>
+    <button class="opt">INSERT INTO project ...</button>
+  </div>
+
+  <div class="quiz" data-question="session.get() 找不到記錄時回傳什麼？" data-correct="2" data-explain="找不到時回傳 None，不是拋例外。">
+    <button class="opt">空字典</button>
+    <button class="opt">例外</button>
+    <button class="opt">None</button>
+    <button class="opt">空字串</button>
+  </div>
+
+  <div class="quiz" data-question="response_model=Project 做什麼？" data-correct="0" data-explain="response_model 驗證回傳資料結構並在文件顯示格式。">
+    <button class="opt">驗證回傳資料結構並在 API 文件顯示回應格式</button>
+    <button class="opt">建立資料庫表格</button>
+    <button class="opt">自動產生 SQL 查詢</button>
+    <button class="opt">注入 session</button>
+  </div>
+
+  <div class="quiz" data-question="爲什麼用 session.get() 而不是自己寫 SQL？" data-correct="3" data-explain="session.get() 用主鍵查，簡潔且善用 SQLAlchemy 快取。">
+    <button class="opt">比較快</button>
+    <button class="opt">比較安全</button>
+    <button class="opt">比較短</button>
+    <button class="opt">用主鍵查最簡潔，且善用 SQLAlchemy 快取</button>
+  </div>
+
+  <div class="quiz" data-question="如果 session.get() 回傳 None 就直接 return，API 會回應什麼？" data-correct="1" data-explain="回傳 None 會被序列化成 null，不是 404。">
+    <button class="opt">404 Not Found</button>
+    <button class="opt">null</button>
+    <button class="opt">500 Internal Server Error</button>
+    <button class="opt">空陣列</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 12: Database-backed read endpoints · Step 2</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

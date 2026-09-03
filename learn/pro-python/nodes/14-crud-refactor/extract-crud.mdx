@@ -1,0 +1,70 @@
+---
+id: extract-crud
+title: 把資料庫操作抽到 crud.py
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_33.md#refactoring-to-crudpy]]"
+  - "[[sources/pro-python/completed/20260903_33.md#guidelines-for-the-refactor]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+<LearningGoal>
+把 main.py 裡的資料庫操作抽到獨立的 crud.py 模組，理解為什麼 HTTP 路由和資料庫交易應該分開。
+</LearningGoal>
+
+## Lesson
+
+提到重構，很多人第一個念頭是「加新功能」或「修 bug」。但有一種重構叫做「分離關注點」——不動任何外在行為，只把程式碼重新組織，讓每一種邏輯都有自己該待的地方。
+
+**為什麼 main.py 不該直接講資料庫？**
+
+FastAPI 的 `main.py` 像餐廳的服務生：它該接待客人（接收 HTTP 請求）、寫單（決定狀態碼）、上菜（回傳 JSON）。而資料庫操作——`session.add()`、`session.commit()`、`session.refresh()`——是廚房裡的事，是廚師的工作。如果服務生自己跑進廚房炒菜，整個餐廳就會大亂：服務生得同時懂點單系統和烹飪，任何一邊出錯都要找他，改動一邊也可能意外弄壞另一邊。
+
+當 HTTP 路由和資料庫邏輯混在同一個檔案，`main.py` 就得同時懂 HTTP 和交易邊界。分離之後，`main.py` 只關心 HTTP 層面的事，`crud.py` 只關心資料庫操作。兩邊各自有自己的理由需要修改，但不會互相牽連。
+
+**分離之後，誰做什麼？**
+
+`crud.py` 負責所有跟資料庫直接打交道的工作：查詢、新增、更新、刪除，以及最重要的——交易邊界。
+
+```python
+# crud.py
+from sqlmodel import Session, select
+from .models import Project
+
+def get_project(session: Session, project_id: int) -> Project | None:
+    return session.get(Project, project_id)
+
+def create_project(session: Session, project: Project) -> Project:
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project
+```
+
+`main.py` 只負責 HTTP 層面的事：接收請求、呼叫 `crud.py` 的函式、決定狀態碼、處理例外。
+
+```python
+# main.py
+from fastapi import FastAPI, HTTPException
+from . import crud
+
+@app.post("/projects/", status_code=201)
+def create_project(project: ProjectCreate, session: Session = Depends(get_session)):
+    db_project = crud.create_project(session, project)
+    return db_project
+```
+
+注意：`main.py` 裡完全沒有 `session.add()`、`session.commit()`、`session.refresh()`。交易邊界被完整封裝在 `crud.py` 裡。
+
+**重構不改行為**
+
+這次重構最重要的規矩是：**API 行為完全不變**。路由回傳什麼、狀態碼是什麼、錯誤怎麼回傳，全部跟重構前一樣。我們只是把「怎麼跟資料庫講話」這件事搬到另一個檔案，不是加新功能。
+
+這表示重構前後，你可以跑同一套測試，結果應該完全一樣。如果測試通過，代表我們成功地把程式碼搬動了，同時沒有弄壞任何東西。
+
+## Course
+
+[↗ 課程頁面](../../lessons/extract-crud.html)
+
+## Sources

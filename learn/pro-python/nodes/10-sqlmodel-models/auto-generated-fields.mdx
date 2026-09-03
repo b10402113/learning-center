@@ -1,0 +1,65 @@
+---
+id: auto-generated-fields
+title: 自動生成欄位：ID、時間戳與 slug
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_28.md#auto-generated-fields]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+<LearningGoal>
+定義自動生成的 primary key、UTC 時間戳與 URL 安全的 slug 欄位，掌握資料庫慣用的 boilerplate 簡化方式。
+</LearningGoal>
+
+## Lesson
+
+如果你看過夠多的資料庫表格，會發現它們幾乎都有這三個欄位：`id`、`created_at`、`updated_at`。它們不是業務邏輯需要的，而是資料庫管理的「後勤」。
+
+| 欄位 | 用途 | 誰產生？ |
+| --- | --- | --- |
+| `id` | 唯一識別每一筆記錄 | 資料庫（自動遞增） |
+| `created_at` | 記錄建立時間 | Python / 資料庫 |
+| `updated_at` | 記錄最後修改時間 | Python / 資料庫 |
+
+在 SQLModel 裡，只要把 `id` 欄位設為 `int | None`，並用 `Field(default=None, primary_key=True)`，資料庫就會自動幫你產生遞增的 ID。
+
+```python
+from sqlmodel import SQLModel, Field
+
+class Project(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+```
+
+為什麼型別是 `int | None`？因為新增記錄時，你不會知道 ID 是多少——資料庫會幫你填。所以 Python 端在 `session.commit()` 之前，`id` 是 `None`；commit 之後，SQLModel 會自動把資料庫產生的 ID 寫回物件。
+
+時間戳記有一個常見的坑：用伺服器本地時間。這在開發者本機沒問題，但一旦部署到不同時區的伺服器，資料庫裡的時間就會亂掉。正確做法是用 UTC（世界標準時間），並且明確標註 timezone aware。
+
+```python
+from datetime import datetime, timezone
+
+class Project(SQLModel, table=True):
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+```
+
+`timezone.utc` 是 Python 3.11+ 推薦的用法，它比 `datetime.utcnow()` 更安全——因為 `utcnow()` 回傳的是 naive datetime（沒有時區資訊），而 `datetime.now(timezone.utc)` 回傳的是 aware datetime。
+
+在 REST API 裡，用數字 ID 當識別碼雖然可行，但不够友善。`slug` 是一個 URL 安全的字串，通常從名稱衍生而來。
+
+```python
+import re
+
+def generate_slug(name: str) -> str:
+    slug = name.lower().strip()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    return slug.strip("-")
+```
+
+例如 `"My Cool Project"` 會變成 `"my-cool-project"`。這樣 API 網址可以從 `/projects/123` 變成 `/projects/my-cool-project`，對開發者和 SEO 都更友善。
+
+## Course
+
+[↗ 課程頁面](../../lessons/auto-generated-fields.html)
+
+## Sources

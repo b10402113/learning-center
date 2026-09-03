@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>把 SQLModel 接上 API — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <main class="lesson">
+    <header class="lesson-header">
+      <span class="subject-badge">pro-python</span>
+      <h1>把 SQLModel 接上 API</h1>
+      <p class="learning-goal">把原本寫在路由檔裡的 Pydantic <code>ProjectRead</code> 換成從 <code>models.py</code> 匯入的 SQLModel，讓 API 真的從 Postgres 回傳資料，而不是模擬資料。</p>
+    </header>
+
+    <section class="concept">
+      <h2>為什麼要換？</h2>
+      <p>在之前的課程裡，你的 API 可能是回傳寫死的模擬資料（mock data），或者用一個手寫的 Pydantic <code>ProjectRead</code> 來定義回傳格式。這樣雖然能快速看到 API 的行為，但資料不會真的寫入資料庫，重啟就消失。</p>
+      <p>現在你已經有了真正的 Postgres 資料庫，也已經用 SQLModel 定義了表格模型。下一步就是把 API 跟真正的資料庫接起來，讓 <code>GET /projects</code> 真的去 Postgres 查詢資料，而不是回傳一個寫死的列表。</p>
+    </section>
+
+    <section class="concept">
+      <h2>從 models.py 匯入</h2>
+      <p>SQLModel 的每個類別都同時是 Pydantic 模型和 SQLAlchemy 表格定義。你不需要在路由檔裡重新定義一個 <code>ProjectRead</code>，而是直接從 <code>models.py</code> 匯入你已經定義好的模型：</p>
+      <pre><code class="language-python">from models import Project</code></pre>
+      <p>這樣你的 API 回傳的 JSON 就會完全對應到資料庫的欄位，不需要維護兩份定義。</p>
+    </section>
+
+    <section class="concept">
+      <h2>查詢資料庫</h2>
+      <p>要從資料庫取得資料，你需要一個 SQLModel 的 <code>Session</code>。FastAPI 的依賴注入（dependency injection）可以幫你管理 session 的生命週期：</p>
+      <pre><code class="language-python">from sqlmodel import Session, select
+
+@app.get("/projects", response_model=list[Project])
+def get_projects(session: Session = Depends(get_session)):
+    statement = select(Project)
+    projects = session.exec(statement).all()
+    return projects</code></pre>
+      <p><code>select(Project)</code> 會轉換成 <code>SELECT * FROM projects</code>，<code>session.exec()</code> 執行查詢，<code>.all()</code> 取得所有結果。</p>
+    </section>
+
+    <section class="concept">
+      <h2>用 session.get() 取得單筆資料</h2>
+      <p>如果你只需要取得特定的一筆資料（例如用 ID 查），可以用 <code>session.get()</code>，它會產生 <code>SELECT ... WHERE id = ?</code>：</p>
+      <pre><code class="language-python">@app.get("/projects/{project_id}", response_model=Project)
+def get_project(project_id: int, session: Session = Depends(get_session)):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project</code></pre>
+      <p><code>session.get()</code> 會回傳一個 <code>Project</code> 實例，如果找不到就回傳 <code>None</code>。</p>
+    </section>
+
+    <section class="concept">
+      <h2>移除模擬資料</h2>
+      <p>把路由檔裡的模擬資料列表（例如 <code>MOCK_PROJECTS = [...]</code>）移除，確保所有的端點都是從資料庫查詢。如果你的 API 之前有 <code>POST /projects</code> 端點，現在也可以改成用 <code>session.add()</code> 和 <code>session.commit()</code> 把資料真的寫入資料庫。</p>
+    </section>
+
+    <section class="summary">
+      <h2>重點整理</h2>
+      <ul>
+        <li>直接從 <code>models.py</code> 匯入 SQLModel 定義，不需要在路由檔重複定義</li>
+        <li>用 <code>Session</code> 搭配 <code>select()</code> 查詢多筆資料</li>
+        <li>用 <code>session.get(Model, id)</code> 查詢單筆資料</li>
+        <li>移除所有模擬資料，讓 API 真的從 Postgres 回傳資料</li>
+        <li>SQLModel 同時是 Pydantic 模型，可以直接當作 <code>response_model</code></li>
+      </ul>
+    </section>
+
+    <section class="quiz-section">
+      <h2>自我檢測</h2>
+      <div class="quiz" data-question="為什麼不應該在路由檔裡重複定義 ProjectRead？" data-correct="2" data-explain="SQLModel 已經同時定義了資料庫結構與驗證邏輯，重複定義會導致維護負擔與不一致。">
+        <button class="opt">因為 Pydantic 不能用了</button>
+        <button class="opt">因為路由檔不能放類別定義</button>
+        <button class="opt">因為 SQLModel 已經同時定義了資料庫結構與驗證邏輯</button>
+        <button class="opt">因為 FastAPI 不支援 Pydantic</button>
+      </div>
+
+      <div class="quiz" data-question="session.get(Project, 1) 會產生什麼 SQL？" data-correct="0" data-explain="session.get() 會用主鍵查詢，產生 SELECT ... WHERE id = ? 的 SQL。">
+        <button class="opt">SELECT * FROM projects WHERE id = 1</button>
+        <button class="opt">SELECT * FROM projects</button>
+        <button class="opt">INSERT INTO projects ...</button>
+        <button class="opt">UPDATE projects SET ...</button>
+      </div>
+
+      <div class="quiz" data-question="response_model=list[Project] 的作用是什麼？" data-correct="1" data-explain="response_model 會驗證並序列化回傳資料，確保輸出符合定義的格式。">
+        <button class="opt">建立資料庫表格</button>
+        <button class="opt">驗證並序列化回傳資料</button>
+        <button class="opt">建立資料庫連線</button>
+        <button class="opt">執行遷移檔</button>
+      </div>
+
+      <div class="quiz" data-question="如果 session.get() 找不到資料，它會回傳什麼？" data-correct="3" data-explain="session.get() 找不到資料時會回傳 None，你可以用這個來判斷是否要丟出 404。">
+        <button class="opt">空的列表</button>
+        <button class="opt">空的字典</button>
+        <button class="opt">拋出例外</button>
+        <button class="opt">None</button>
+      </div>
+
+      <div class="quiz" data-question="SQLModel 的雙重身份帶來什麼好處？" data-correct="0" data-explain="SQLModel 同時是 Pydantic 模型和 SQLAlchemy 表格，所以不需要維護兩份定義。">
+        <button class="opt">不需要在 API 與資料庫之間維護兩份模型定義</button>
+        <button class="opt">查詢速度更快</button>
+        <button class="opt">自動產生遷移檔</button>
+        <button class="opt">不需要資料庫連線</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <div class="nav-left"><a href="./generate-and-apply.html">← 上一步：產生並套用第一次遷移</a></div>
+      <div class="nav-right"></div>
+    </div>
+  </main>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

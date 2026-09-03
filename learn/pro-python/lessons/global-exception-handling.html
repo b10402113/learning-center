@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>全域例外處理：把 IntegrityError 變成 409 — CRUD refactoring</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>全域例外處理：把 IntegrityError 變成 409</h1>
+<p class="meta">學習目標：用 FastAPI 的 exception_handler 全域捕捉 IntegrityError，把 500 錯誤換成有意義的 409 Conflict。</p>
+
+<h2>500 錯誤對使用者來說是什麼？</h2>
+
+<p>當使用者送出一個專案名稱，而這個名稱已經在資料庫裡了，你的 API 會發生什麼事？如果沒有特別處理，SQLAlchemy 會丟出一個 <code>IntegrityError</code>，FastAPI 會把它變成 500 Internal Server Error 回傳給客戶端。</p>
+
+<p>500 錯誤的意思是「伺服器內部出問題了」。但實際上，伺服器沒有壞掉——只是資料庫的 unique 約束被違反了。對客戶端來說，500 是一個完全沒有意義的回應：它不知道是名稱重複、是資料庫斷線、還是伺服器程式有 bug。</p>
+
+<p>正確的回應應該是 <strong>409 Conflict</strong>：代表「這個請求跟資料庫現有的資料衝突了」。客戶端一看到 409，就知道是名稱重複，可以明確告訴使用者「這個名稱已經有人用了」。</p>
+
+<h2>用 exception_handler 全域捕捉</h2>
+
+<p>FastAPI 提供一個裝飾器 <code>@app.exception_handler()</code>，可以讓你註冊一個全域的例外處理器。當指定的例外在任何路由裡被丟出時，FastAPI 會呼叫你的處理器，而不是直接回傳 500。</p>
+
+<pre><code># main.py
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
+
+app = FastAPI()
+
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(request: Request, exc: IntegrityError):
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "data conflict occurred"},
+    )</code></pre>
+
+<p>這段程式碼的意思是：在整個應用程式裡，只要任何地方丟出 <code>IntegrityError</code>，FastAPI 就會回傳一個 409 狀態碼，以及 <code>{"detail": "data conflict occurred"}</code> 的 JSON 回應。</p>
+
+<p>注意：這個處理器是<strong>全域的</strong>。你不需要在每個路由裡寫 try/except，不需要在每個寫入操作前手動檢查名稱是否重複。只要資料庫丟出 <code>IntegrityError</code>，這個處理器就會自動接手。</p>
+
+<h2>為什麼是 409，不是 400 或 404？</h2>
+
+<p>HTTP 狀態碼是有語義的，選對狀態碼才能正確傳達意圖：</p>
+
+<ul>
+  <li><strong>400 Bad Request</strong>：客戶端送來的資料格式不對，例如缺少必要欄位、型別錯誤。</li>
+  <li><strong>404 Not Found</strong>：資源不存在，例如用一個不存在的 project_id 查詢。</li>
+  <li><strong>409 Conflict</strong>：請求跟現有資源衝突，例如名稱重複。</li>
+</ul>
+
+<p>名稱重複不是「資料格式不對」（400），也不是「資源不存在」（404）。它是「這個名稱已經有人用了，跟現有資料衝突」。409 才是正確的語義。</p>
+
+<h2>測試你的處理器</h2>
+
+<p>寫好處理器之後，你應該寫一個測試來驗證它的行為：</p>
+
+<pre><code>def test_create_duplicate_project_returns_409(client):
+    # 先建立一個專案
+    client.post("/projects/", json={"name": "existing"})
+    # 再建立同名專案，應該拿到 409
+    response = client.post("/projects/", json={"name": "existing"})
+    assert response.status_code == 409
+    assert response.json()["detail"] == "data conflict occurred"</code></pre>
+
+<p>這個測試確保了兩件事：第一，重複名稱確實會觸發 <code>IntegrityError</code>；第二，你的處理器確實把它轉換成了 409。如果以後有人不小心把處理器拿掉，這個測試就會失敗。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="如果沒寫 exception_handler，IntegrityError 會變成什麼回應？" data-correct="1" data-explain="未處理的例外會變成 500 Internal Server Error。">
+  <button class="opt">400 Bad Request</button>
+  <button class="opt">500 Internal Server Error</button>
+  <button class="opt">409 Conflict</button>
+  <button class="opt">200 OK</button>
+</div>
+
+<div class="quiz" data-question="為什麼 409 比 500 更適合處理名稱重複？" data-correct="0" data-explain="409 明確告訴客戶端「資料衝突」，而不是模糊的「伺服器內部錯誤」。">
+  <button class="opt">409 明確告訴客戶端這是資料衝突，500 只代表伺服器內部錯誤</button>
+  <button class="opt">409 比 500 更容易被瀏覽器快取</button>
+  <button class="opt">409 可以讓客戶端自動重試請求</button>
+  <button class="opt">409 可以讓伺服器記錄更多資訊</button>
+</div>
+
+<div class="quiz" data-question="@app.exception_handler(IntegrityError) 的作用範圍是什麼？" data-correct="2" data-explain="exception_handler 是全域的，整個應用程式裡的 IntegrityError 都會被它捕捉。">
+  <button class="opt">只有下一個定義的路由</button>
+  <button class="opt">只有 GET 路由</button>
+  <button class="opt">整個應用程式的所有路由</button>
+  <button class="opt">只有 POST 路由</button>
+</div>
+
+<div class="quiz" data-question="以下哪個情境應該回傳 409 Conflict？" data-correct="3" data-explain="名稱重複是典型的資料衝突，應該用 409。">
+  <button class="opt">請求缺少必要欄位</button>
+  <button class="opt">用不存在的 ID 查詢資源</button>
+  <button class="opt">使用者未登入就存取需要權限的端點</button>
+  <button class="opt">新增一筆資料時違反了 unique 約束</button>
+</div>
+
+<div class="quiz" data-question="使用 exception_handler 之後，每個路由還需要自己處理 IntegrityError 嗎？" data-correct="1" data-explain="全域處理器會自動捕捉所有 IntegrityError，路由不需要自己處理。">
+  <button class="opt">需要，否則錯誤還是會變成 500</button>
+  <button class="opt">不需要，全域處理器會自動捕捉</button>
+  <button class="opt">需要，否則測試會失敗</button>
+  <button class="opt">不需要，但每個路由還是要手動回傳 409</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./simplify-routes.html">← 上一步：用 Annotated 依賴簡化路由</a>
+  <span></span>
+</div>
+
+<footer class="footer">遇到問題？問你的 agent，他們可以幫你釐清任何不清楚的地方。</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

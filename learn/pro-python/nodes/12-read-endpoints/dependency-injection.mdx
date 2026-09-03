@@ -1,0 +1,57 @@
+---
+id: dependency-injection
+title: 用 Depends 注入資料庫 session
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_31.md#dependency-injection-with-depends]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+# 用 Depends 注入資料庫 session
+
+## Learning goal
+
+理解 FastAPI 如何用 Depends 把資料庫 session 自動注入路由，不需要自己手動開啟和關閉連線。
+
+## Lesson
+
+每個路由函式都需要一個資料庫 session 來執行查詢。如果自己手動管理，每個函式裡都要重複寫開啟、提交、關閉的樣板程式碼——十個路由就寫十次。FastAPI 的依賴注入（dependency injection）把這段樣板集中到一個地方：寫一次，每個路由宣告「我需要 session」就自動拿到。
+
+先寫一個產生器（generator）函式，負責產生和歸還 session。產生器用 `yield` 而不是 `return`，是關鍵設計：`yield` 之前的程式碼是「啟動」（setup），之後的是「清理」（teardown）。路由執行前拿到 session，結束後自動關閉。
+
+```python
+from sqlalchemy.orm import Session
+from sqlmodel import create_engine
+
+engine = create_engine("postgresql://user:pass@localhost/db")
+
+def get_session():
+    with Session(engine) as session:
+        yield session
+```
+
+在路由參數列用 `Depends(get_session)` 宣告需求。FastAPI 看到 `Depends(get_session)`，在呼叫路由前執行 `get_session()`，拿到 `yield` 出來的 session，塞進參數。路由執行完畢後，FastAPI 回到產生器繼續執行——也就是 `yield` 之後的程式碼，session 自動關閉。
+
+```python
+from fastapi import Depends, FastAPI
+
+app = FastAPI()
+
+@app.get("/projects")
+def list_projects(session: Session = Depends(get_session)):
+    # session 已經準備好了，直接用
+    ...
+```
+
+一個請求拿到自己的 session，請求結束就關掉。不要在 session 裡做跨請求的快取——session 不是執行一次就永遠活著的，它是「一次請求一個」的生命週期。
+
+`Depends(get_session)` 中的 `get_session` 是依賴工廠函式。FastAPI 會呼叫它來取得依賴的值，自動處理啟動和清理，路由函式只需要宣告「我需要 session」就能拿到可用的 session。
+
+## Course
+
+[↗ 課程頁面](../../lessons/dependency-injection.html)
+
+## Sources
+
+- [[sources/pro-python/completed/20260903_31.md#dependency-injection-with-depends]]

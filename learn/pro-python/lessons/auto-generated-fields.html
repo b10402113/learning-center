@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>自動生成欄位：ID、時間戳與 slug</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>自動生成欄位：ID、時間戳與 slug</h1>
+  <p class="meta">學習目標：定義自動生成的 primary key、UTC 時間戳與 URL 安全的 slug 欄位，掌握資料庫慣用的 boilerplate 簡化方式。</p>
+
+  <h2>每個表格都有的「标配欄位」</h2>
+  <p>如果你看過夠多的資料庫表格，會發現它們幾乎都有這三個欄位：<code>id</code>、<code>created_at</code>、<code>updated_at</code>。它們不是業務邏輯需要的，而是資料庫管理的「後勤」。</p>
+  <table>
+    <thead>
+      <tr>
+        <th>欄位</th>
+        <th>用途</th>
+        <th>誰產生？</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>id</code></td>
+        <td>唯一識別每一筆記錄</td>
+        <td>資料庫（自動遞增）</td>
+      </tr>
+      <tr>
+        <td><code>created_at</code></td>
+        <td>記錄建立時間</td>
+        <td>Python / 資料庫</td>
+      </tr>
+      <tr>
+        <td><code>updated_at</code></td>
+        <td>記錄最後修改時間</td>
+        <td>Python / 資料庫</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>自動遞增的 primary key</h2>
+  <p>在 SQLModel 裡，只要把 <code>id</code> 欄位設為 <code>int | None</code>，並用 <code>Field(default=None, primary_key=True)</code>，資料庫就會自動幫你產生遞增的 ID。</p>
+  <pre><code>from sqlmodel import SQLModel, Field
+
+class Project(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)</code></pre>
+  <p>為什麼型別是 <code>int | None</code>？因為新增記錄時，你不會知道 ID 是多少——資料庫會幫你填。所以 Python 端在 <code>session.commit()</code> 之前，<code>id</code> 是 <code>None</code>；commit 之後，SQLModel 會自動把資料庫產生的 ID 寫回物件。</p>
+
+  <h2>UTC 時間戳：別再用 local time</h2>
+  <p>時間戳記有一個常見的坑：用伺服器本地時間。這在開發者本機沒問題，但一旦部署到不同時區的伺服器，資料庫裡的時間就會亂掉。</p>
+  <p>正確做法是用 UTC（世界標準時間），並且明確標註 timezone aware。</p>
+  <pre><code>from datetime import datetime, timezone
+
+class Project(SQLModel, table=True):
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))</code></pre>
+  <p><code>timezone.utc</code> 是 Python 3.11+ 推薦的用法，它比 <code>datetime.utcnow()</code> 更安全——因為 <code>utcnow()</code> 回傳的是 naive datetime（沒有時區資訊），而 <code>datetime.now(timezone.utc)</code> 回傳的是 aware datetime。</p>
+
+  <h2>slug：URL 安全的識別碼</h2>
+  <p>在 REST API 裡，用數字 ID 當識別碼雖然可行，但不够友善。<code>slug</code> 是一個 URL 安全的字串，通常從名稱衍生而來。</p>
+  <pre><code>import re
+
+def generate_slug(name: str) -> str:
+    slug = name.lower().strip()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    return slug.strip("-")
+
+class Project(SQLModel, table=True):
+    name: str = Field(min_length=1, max_length=100)
+    slug: str = Field(min_length=1, max_length=50)</code></pre>
+  <p>例如 <code>"My Cool Project"</code> 會變成 <code>"my-cool-project"</code>。這樣 API 網址可以從 <code>/projects/123</code> 變成 <code>/projects/my-cool-project</code>，對開發者和 SEO 都更友善。</p>
+
+  <h2>完整模型範例</h2>
+  <pre><code>from datetime import datetime, timezone
+from typing import Annotated
+from sqlmodel import SQLModel, Field, StringConstraints
+
+NameType = Annotated[str, StringConstraints(min_length=1, max_length=100)]
+SlugType = Annotated[str, StringConstraints(min_length=1, max_length=50, pattern=r"^[a-z0-9-]+$")]
+
+class ProjectBase(SQLModel):
+    name: NameType
+    slug: SlugType
+    description: str | None = None
+
+class Project(ProjectBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))</code></pre>
+
+  <h2>重點整理</h2>
+  <ul>
+    <li><code>id: int | None = Field(default=None, primary_key=True)</code> 讓資料庫自動產生遞增 ID。</li>
+    <li>時間戳記用 <code>datetime.now(timezone.utc)</code> 確保是 UTC 且 timezone aware。</li>
+    <li><code>slug</code> 是 URL 安全的字串，通常從名稱衍生，讓 API 網址可讀。</li>
+    <li>這些欄位是資料庫表格的「标配」，每個模型幾乎都會有。</li>
+  </ul>
+
+  <h2>隨堂測驗</h2>
+
+  <div class="quiz" data-question="SQLModel 中，如何讓 id 欄位自動遞增？" data-correct="0" data-explain="設為 int | None 並用 Field(default=None, primary_key=True)，資料庫會自動產生遞增 ID。">
+    <button class="opt">id: int | None = Field(default=None, primary_key=True)</button>
+    <button class="opt">id: int = Field(auto_increment=True)</button>
+    <button class="opt">id: int = Field(primary_key=True, auto=True)</button>
+    <button class="opt">id: int = Field(default=0, primary_key=True)</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼時間戳記建議用 datetime.now(timezone.utc) 而不是 datetime.utcnow()？" data-correct="1" data-explain="utcnow() 回傳 naive datetime（無時區資訊），datetime.now(timezone.utc) 回傳 aware datetime，比較安全明確。">
+    <button class="opt">因為 utcnow() 比較慢</button>
+    <button class="opt">因為 utcnow() 回傳 naive datetime，沒有時區資訊</button>
+    <button class="opt">因為 datetime.now() 不能用在 SQLModel</button>
+    <button class="opt">因為 timezone.utc 是 UTC+8</button>
+  </div>
+
+  <div class="quiz" data-question="slug 的主要用途是什麼？" data-correct="2" data-explain="slug 是 URL 安全的字串，讓 API 網址從 /projects/123 變成 /projects/my-project，更友善可讀。">
+    <button class="opt">作為資料庫的 primary key</button>
+    <button class="opt">用來加密敏感資料</button>
+    <button class="opt">作為 URL 安全的識別碼，讓網址可讀</button>
+    <button class="opt">用來記錄修改時間</button>
+  </div>
+
+  <div class="quiz" data-question="新增記錄後，id 欄位什麼時候會有值？" data-correct="0" data-explain="session.commit() 之後，SQLModel 會自動把資料庫產生的 ID 寫回物件。">
+    <button class="opt">session.commit() 之後</button>
+    <button class="opt">session.add() 之後</button>
+    <button class="opt">物件建立時</button>
+    <button class="opt">呼叫 model_dump() 時</button>
+  </div>
+
+  <div class="quiz" data-question="下列哪個 slug 格式是正確的？" data-correct="1" data-explaint="slug 通常只包含小寫字母、數字和連字號，且不能以連字號開頭或結尾。">
+    <button class="opt">My_Project</button>
+    <button class="opt">my-cool-project</button>
+    <button class="opt">my cool project</button>
+    <button class="opt">My-Cool-Project</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./database-constraints.html">← 上一步：資料庫層級約束與應用程式驗證</a>
+    <span></span>
+  </div>
+
+  <div class="footer">SQLModel — defining models · Step 4/4</div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,108 @@
+---
+id: update-endpoint
+title: Update endpoint (PATCH)
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_32.md#write-endpoint-implementation]]"
+  - "[[sources/pro-python/completed/20260903_31.md#crud-operations]]"
+  - "[[sources/pro-python/completed/20260903_31.md#session-refresh-usage]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+# Update endpoint (PATCH)
+
+## Learning goal
+
+Implement a PATCH endpoint that partially updates an existing record, regenerates the slug when the name changes, and returns the updated object.
+
+## Lesson
+
+REST 提供了兩種更新資源的方式。`PUT` 替換整個資源 — 客戶端傳送每個欄位，包含沒變的那些。`PATCH` 則套用部分更新 — 客戶端只傳送它們想變更的欄位。
+
+對於一個有五個欄位的專案來說，PUT 請求長這樣：
+
+```http
+PUT /projects/1
+{
+  "name": "New Name",
+  "description": "Old description",
+  "version": "0.1.0",
+  "slug": "old-slug",
+  "created_at": "2025-01-01T00:00:00"
+}
+```
+
+客戶端必須先取得現有紀錄，然後重傳所有東西。如果它們忘了某個欄位，就會被預設值覆寫。這很脆弱。
+
+PATCH 請求就簡單多了：
+
+```http
+PATCH /projects/1
+{
+  "name": "New Name"
+}
+```
+
+只有 `name` 會變。其他所有東西都保持原狀。這是大多數真實 API 使用的模式。
+
+更新 schema 看起來像建立 schema，但每個欄位都是可選的 — 客戶端可以傳送任意子集：
+
+```python
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    version: str | None = None
+```
+
+使用 `str | None = None` 的意思是「如果客戶端省略了這個欄位，它在 schema 裡會保持 `None`，我們就跳過不更新它。」這就是和 `ProjectCreate` 的關鍵差異，後者的 `name` 是必填的。
+
+更新端點有三個階段：取得現有紀錄、只套用提供的欄位、然後提交：
+
+```python
+@app.patch("/projects/{project_id}", response_model=ProjectRead)
+def update_project(
+    project_id: int,
+    project_in: ProjectUpdate,
+    session: Session = Depends(session_dep),
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    data = project_in.model_dump(exclude_unset=True)
+    for key, value in data.items():
+        setattr(project, key, value)
+
+    if "name" in data:
+        project.slug = slugify(data["name"])
+
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project
+```
+
+`project_in.model_dump()` 會回傳 `{"name": "New Name", "description": None, "version": None}`。如果你直接套用這個，你會把 `description` 和 `version` 覆寫成 `None` — 摧毀了客戶端從未打算變更的資料。
+
+`exclude_unset=True` 告訴 Pydantic 只包含客戶端實際傳入的欄位。如果請求只有 `{"name": "New Name"}`，dump 就回傳 `{"name": "New Name"}`。其他欄位會完全被排除在字典之外。
+
+這是實作 PATCH 時最重要的一個細節。忘了它，你的端點就會靜默地把欄位清空。
+
+這個迴圈 `for key, value in data.items(): setattr(project, key, value)` 遍歷提供的欄位，並在記憶體中更新 SQLModel 物件。`setattr(project, "name", "New Name")` 等同於 `project.name = "New Name"`，但它可以用動態的鍵運作。
+
+迴圈之後，記憶體中的物件反映了部分更新。`session.add(project)` 把它排入佇列，`session.commit()` 寫入 `UPDATE` 陳述式，而 `session.refresh()` 拉回任何資料庫端的變更（像是觸發器管理的 `updated_at` 時間戳）。
+
+當名字變了，slug 也應該跟著變。檢查 `if "name" in data` 可以偵測客戶端是否傳了新名字。如果有，就從新名字重新產生 slug。
+
+如果客戶端沒傳 `name`，slug 就保持原狀。這是對的 — 你不會只是因為描述變了，就想重新產生一個已經穩定的 slug。
+
+`session.get(Project, project_id)` 在沒有資料列符合 ID 時會回傳 `None`。端點會拋出 `HTTPException(status_code=404)` 來表示「找不到」。FastAPI 會把它轉換成一個包含詳細訊息的 404 回應。
+
+這跟讀取端點使用的模式一樣。一致性很重要 — 客戶端只要學一次你的錯誤格式，就能套用到所有地方。
+
+## Course
+
+[↗ 課程頁面](../../lessons/update-endpoint.html)
+
+## Sources

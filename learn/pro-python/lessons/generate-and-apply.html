@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>產生並套用第一次遷移 — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <main class="lesson">
+    <header class="lesson-header">
+      <span class="subject-badge">pro-python</span>
+      <h1>產生並套用第一次遷移</h1>
+      <p class="learning-goal">用 <code>alembic revision --autogenerate</code> 偵測 SQLModel 定義並產生遷移檔，再執行 <code>alembic upgrade head</code> 把變更套用到資料庫，最後在 Postgres 裡確認表格確實被建立。</p>
+    </header>
+
+    <section class="concept">
+      <h2>前置準備</h2>
+      <p>在產生遷移之前，確認幾件事都已經完成：</p>
+      <ul>
+        <li>Alembic 已經初始化（<code>alembic init</code> 跑過了）</li>
+        <li><code>env.py</code> 已經設定好，能正確匯入 SQLModel metadata 與資料庫 URL</li>
+        <li>SQLModel 已經定義好表格模型（<code>table=True</code>）</li>
+        <li>Postgres 正在 Docker 中運行，且資料庫連線正常</li>
+      </ul>
+    </section>
+
+    <section class="concept">
+      <h2>產生遷移檔</h2>
+      <p>執行以下指令，讓 Alembic 比對你的 SQLModel 定義與資料庫現狀：</p>
+      <pre><code class="language-bash">alembic revision --autogenerate -m "create projects table"</code></pre>
+      <p>其中 <code>-m</code> 後面的是這次遷移的訊息，用來提醒你這次遷移做了什麼事。執行後，Alembic 會在 <code>alembic/versions/</code> 目錄下產生一個新的 Python 檔。</p>
+      <p>打開產生的遷移檔，你會看到 <code>upgrade()</code> 裡有 <code>op.create_table()</code> 或 <code>op.add_column()</code> 之類的操作。如果發現 autogenerate 沒偵測到你的變更，或是產生了不對的 SQL，你可以手動修改這個檔案。</p>
+    </section>
+
+    <section class="concept">
+      <h2>套用遷移</h2>
+      <p>產生遷移檔之後，資料庫本身還沒有任何變動。你需要執行：</p>
+      <pre><code class="language-bash">alembic upgrade head</code></pre>
+      <p>這會把所有還沒套用過的遷移檔，按照順序逐一執行它們的 <code>upgrade()</code>。<code>head</code> 代表最新的版本。</p>
+      <p>執行成功後，Alembic 會在資料庫裡建立一個 <code>alembic_version</code> 表格，用來記錄目前已經套用到哪個版本。這樣下次再執行 <code>upgrade head</code> 時，它只會跑新的遷移檔，不會重複執行。</p>
+    </section>
+
+    <section class="concept">
+      <h2>確認表格已建立</h2>
+      <p>遷移套用後，你可以用 <code>docker exec</code> 進到 Postgres 容器裡，用 <code>psql</code> 確認表格確實被建立了：</p>
+      <pre><code class="language-bash">docker compose exec db psql -U postgres -c "\dt"</code></pre>
+      <p>你應該能看到你的 <code>projects</code> 表格（以及 <code>alembic_version</code> 表格）。如果看到表格，代表你的第一次遷移成功了。</p>
+    </section>
+
+    <section class="concept">
+      <h2>常見問題</h2>
+      <ul>
+        <li><strong>autogenerate 沒產生任何內容：</strong>通常是 <code>env.py</code> 沒有正確匯入 SQLModel metadata，或是資料庫已經和模型同步。</li>
+        <li><strong>升級失敗：</strong>檢查遷移檔裡的 SQL 是否正確，是否有手動修改過但沒寫好 <code>downgrade()</code>。</li>
+        <li><strong>想要重來：</strong>可以 <code>alembic downgrade base</code> 回到最初狀態，或是直接砍掉 Docker volume 重新開始。</li>
+      </ul>
+    </section>
+
+    <section class="summary">
+      <h2>重點整理</h2>
+      <ul>
+        <li><code>alembic revision --autogenerate</code> 會比對模型與資料庫，自動產生遷移檔</li>
+        <li><code>alembic upgrade head</code> 會把所有未套用的遷移檔按順序執行</li>
+        <li>資料庫裡的 <code>alembic_version</code> 表格記錄了目前版本，避免重複執行</li>
+        <li>遷移後可以用 <code>psql \dt</code> 確認表格已建立</li>
+        <li>如果出問題，<code>alembic downgrade</code> 可以回溯</li>
+      </ul>
+    </section>
+
+    <section class="quiz-section">
+      <h2>自我檢測</h2>
+      <div class="quiz" data-question="alembic revision --autogenerate 的作用是什麼？" data-correct="1" data-explain="autogenerate 會比對 SQLModel 定義與資料庫現狀，自動產生遷移檔。">
+        <button class="opt">直接修改資料庫結構</button>
+        <button class="opt">比對模型與資料庫，自動產生遷移檔</button>
+        <button class="opt">刪除所有遷移檔</button>
+        <button class="opt">建立新的資料庫</button>
+      </div>
+
+      <div class="quiz" data-question="alembic upgrade head 執行後會發生什麼事？" data-correct="2" data-explain="upgrade head 會把所有還沒套用過的遷移檔，按照順序逐一執行它們的 upgrade()。">
+        <button class="opt">只執行最新的一份遷移檔</button>
+        <button class="opt">刪除所有遷移檔</button>
+        <button class="opt">把所有未套用的遷移檔按順序執行 upgrade()</button>
+        <button class="opt">建立新的資料庫連線</button>
+      </div>
+
+      <div class="quiz" data-question="資料庫裡的 alembic_version 表格記錄了什麼？" data-correct="0" data-explain="alembic_version 記錄了目前已經套用到哪個版本，這樣下次 upgrade 時只會跑新的遷移檔。">
+        <button class="opt">目前已經套用到的遷移版本</button>
+        <button class="opt">所有遷移檔的內容</button>
+        <button class="opt">資料庫密碼</button>
+        <button class="opt">SQLModel 定義</button>
+      </div>
+
+      <div class="quiz" data-question="如何用 psql 確認表格已經建立？" data-correct="3" data-explain="\dt 是 psql 的指令，用來列出目前資料庫中的所有表格。">
+        <button class="opt">\d</button>
+        <button class="opt">SHOW TABLES</button>
+        <button class="opt">SELECT * FROM tables</button>
+        <button class="opt">\dt</button>
+      </div>
+
+      <div class="quiz" data-question="如果 autogenerate 沒有產生任何內容，最可能的原因是什麼？" data-correct="1" data-explain="最常見的原因是 env.py 沒有正確匯入 SQLModel metadata，導致 Alembic 不知道要偵測哪些模型。">
+        <button class="opt">資料庫已經刪除</button>
+        <button class="opt">env.py 沒有正確匯入 SQLModel metadata</button>
+        <button class="opt">Docker 沒有運行</button>
+        <button class="opt">SQLModel 沒有定義 table=True</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <div class="nav-left"><a href="./migration-concepts.html">← 上一步：遷移修訂的運作方式</a></div>
+      <div class="nav-right"><a href="./wire-models.html">下一步：把 SQLModel 接上 API →</a></div>
+    </div>
+  </main>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

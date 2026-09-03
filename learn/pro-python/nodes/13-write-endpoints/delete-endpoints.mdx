@@ -1,0 +1,106 @@
+---
+id: delete-endpoints
+title: Delete endpoints (soft vs hard)
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_32.md#write-endpoint-implementation]]"
+  - "[[sources/pro-python/completed/20260903_32.md#soft-vs-hard-deletion]]"
+  - "[[sources/pro-python/completed/20260903_31.md#crud-operations]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+# Delete endpoints (soft vs hard)
+
+## Learning goal
+
+Implement a DELETE endpoint that supports both hard deletion (permanently removing a record) and soft deletion (hiding it behind a flag), and understand when to use each in production.
+
+## Lesson
+
+當使用者在專案上點擊「刪除」時，應該發生什麼事？有兩個答案，它們會導致截然不同的實作。
+
+| 類型 | 發生什麼事 | 可復原？ |
+| --- | --- | --- |
+| 硬刪除（Hard delete） | 資料列被永久從資料庫移除 | 否 |
+| 軟刪除（Soft delete） | 資料列保留，但加上已封存標記 | 是 |
+
+硬刪除很簡單 — `session.delete(obj)` 之後接 `session.commit()`。資料列永遠消失了。如果有人不小心刪除了專案，唯一的復原方式是透過備份。
+
+軟刪除在模型上新增一個 `archived` 布林欄位。「刪除」一個專案時，設定 `archived = True`。資料列留在資料庫裡，但預設每個查詢都會過濾掉已封存的紀錄。專案會從 API 和前端消失，但它仍然在那裡，供稽核、分析或復原使用。
+
+硬刪除端點是你會寫過最簡單的寫入端點：
+
+```python
+@app.delete("/projects/{project_id}", status_code=204)
+def delete_project(
+    project_id: int,
+    session: Session = Depends(session_dep),
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    session.delete(project)
+    session.commit()
+```
+
+注意 `status_code=204`。成功的刪除會回傳 `204 No Content` — 資源已經沒了，所以沒什麼好回傳的。客戶端不需要被刪除物件的副本；它們只需要確認它不再存在。
+
+`session.delete(project)` 把物件排入刪除佇列。`session.commit()` 執行 `DELETE` 陳述式。之後，資料列會從表格中被物理移除。
+
+軟刪除需要在模型上多一個欄位：
+
+```python
+class Project(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    description: str = ""
+    version: str = "0.1.0"
+    slug: str
+    archived: bool = False
+```
+
+端點設定標記，而不是移除資料列：
+
+```python
+@app.delete("/projects/{project_id}", status_code=204)
+def archive_project(
+    project_id: int,
+    session: Session = Depends(session_dep),
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project.archived = True
+    session.add(project)
+    session.commit()
+```
+
+看起來幾乎和更新端點一模一樣 — 因為它確實就是。唯一的差別是你設定了哪個欄位。
+
+設定標記只是解決方案的一半。你應用程式裡的每個查詢都必須排除已封存的紀錄，否則它們會繼續出現在 API 裡：
+
+```python
+@app.get("/projects", response_model=list[ProjectRead])
+def list_projects(session: Session = Depends(session_dep)):
+    statement = select(Project).where(Project.archived == False)
+    return session.exec(statement).all()
+```
+
+`Project.archived == False`（或反轉用 `~Project.archived`）是隱藏已軟刪除紀錄的過濾器。它應該出現在每個 `SELECT`、每個 `GET /projects/{id}` 查詢，以及每個 join 查詢裡。
+
+這就是軟刪除的隱藏成本：你新增了一個欄位，然後在每個查詢裡加上 `WHERE` 子句。漏了一個，已封存的紀錄就會洩漏出來。
+
+**使用硬刪除**的情況：資料沒有法規或稽核價值、儲存成本很重要且紀錄快速累積，或者使用者明確預期永久移除（例如 GDPR 「被遺忘權」）。
+
+**使用軟刪除**的情況：你需要稽核軌跡以符合法規、使用者預期有「復原」選項、其他紀錄透過外鍵參考這一筆，或者你之後想分析刪除模式。
+
+在實務上，大多數正式系統預設使用軟刪除。它比較安全 — 你之後隨時可以透過清理工作來硬刪除，但硬刪除的資料列沒有備份就無法復原。
+
+## Course
+
+[↗ 課程頁面](../../lessons/delete-endpoints.html)
+
+## Sources

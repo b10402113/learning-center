@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQLModel 表格繼承與 base/table 分離</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>SQLModel 表格繼承與 base/table 分離</h1>
+  <p class="meta">學習目標：理解 SQLModel 如何同時作為 Pydantic 驗證模型與 SQLAlchemy 表格，並掌握 base/table 分離的設計模式。</p>
+
+  <h2>從 Pydantic 到 SQLModel</h2>
+  <p>在之前的課程裡，我們用 Pydantic 的 <code>BaseModel</code> 來驗證請求資料。Pydantic 很擅長一件事：檢查進來的 JSON 對不對、能不能轉成 Python 型別。但它完全不知道資料庫長什麼樣子。</p>
+  <p>SQLModel 的出現，就是為了解決這個斷層。它由 FastAPI 的同一位作者打造，把 Pydantic 的驗證能力和 SQLAlchemy 的資料庫對應（ORM）黏在同一個模型裡。</p>
+
+  <h2>table=True 的魔法</h2>
+  <p>要讓一個 SQLModel 類別變成真正的資料庫表格，只需要多做一件事：在類別設定裡加上 <code>table=True</code>。</p>
+  <pre><code>from sqlmodel import SQLModel, Field
+
+class ProjectBase(SQLModel):
+    name: str
+    description: str | None = None
+
+class Project(ProjectBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)</code></pre>
+  <p>看到差別了嗎？<code>ProjectBase</code> 繼承 <code>SQLModel</code>，但它沒有 <code>table=True</code>，所以它只是一個單純的 Pydantic 驗證模型。<code>Project</code> 繼承 <code>ProjectBase</code>，加上 <code>table=True</code>，SQLModel 就會為它在資料庫裡建一張真正的表格。</p>
+
+  <h2>為什麼要拆成兩層？</h2>
+  <p>這是 SQLModel 最核心的設計模式：把「欄位定義」和「資料庫表格」分開。</p>
+  <table>
+    <thead>
+      <tr>
+        <th>角色</th>
+        <th>用途</th>
+        <th>有 table=True？</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>ProjectBase</td>
+        <td>定義共享欄位，給請求/回應模型重用</td>
+        <td>沒有</td>
+      </tr>
+      <tr>
+        <td>Project</td>
+        <td>對應資料庫表格，產生 SQL</td>
+        <td>有</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>這樣拆的好處是：你可以讓 <code>ProjectCreate</code>（給 POST 請求用）、<code>ProjectRead</code>（給回應用）、<code>Project</code>（給資料庫用）全部繼承同一個 <code>ProjectBase</code>，欄位改一次就全部生效。</p>
+
+  <h2>實際程式碼長這樣</h2>
+  <pre><code>from sqlmodel import SQLModel, Field
+from datetime import datetime, timezone
+
+# 純驗證模型，不建表格
+class ProjectBase(SQLModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = None
+    slug: str = Field(min_length=1)
+
+# 資料庫表格，會自動生成 CREATE TABLE
+class Project(ProjectBase, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))</code></pre>
+
+  <h2>重點整理</h2>
+  <ul>
+    <li><code>SQLModel</code> 同時繼承 Pydantic 和 SQLAlchemy，一個類別兩用。</li>
+    <li><code>table=True</code> 是告訴 SQLModel「請為我建表格」的開關。</li>
+    <li>base 類別放共享欄位，table 類別加上 <code>table=True</code> 和資料庫專用欄位（如 <code>id</code>、<code>created_at</code>）。</li>
+    <li>這種分離讓請求模型、回應模型、資料庫模型可以共用欄位定義，減少重複。</li>
+  </ul>
+
+  <h2>隨堂測驗</h2>
+
+  <div class="quiz" data-question="SQLModel 中，如何讓一個類別變成真正的資料庫表格？" data-correct="1" data-explain="table=True 是 SQLModel 的開關，告訴它這個類別要對應到資料庫表格。">
+    <button class="opt">加上 @table 裝飾器</button>
+    <button class="opt">在類別設定中寫 table=True</button>
+    <button class="opt">繼承 SQLAlchemy 的 Base 類別</button>
+    <button class="opt">在欄位上使用 Column 物件</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼 SQLModel 要拆成 ProjectBase 和 Project 兩個類別？" data-correct="2" data-explain="base 類別放共享欄位，table 類別負責建表格，請求/回應模型可以繼承 base 而不建表。">
+    <button class="opt">因為 Python 不支援多重繼承</button>
+    <button class="opt">因為 Pydantic 和 SQLAlchemy 不能混用</button>
+    <button class="opt">為了分離欄位定義與資料庫表格，讓請求/回應模型可以共用欄位</button>
+    <button class="opt">因為 SQLModel 只能有一個 table 類別</button>
+  </div>
+
+  <div class="quiz" data-question="下列哪個類別會真的在資料庫裡產生表格？" data-correct="0" data-explain="Project 有 table=True，所以 SQLModel 會為它建立資料庫表格。">
+    <button class="opt">class Project(ProjectBase, table=True)</button>
+    <button class="opt">class ProjectCreate(ProjectBase)</button>
+    <button class="opt">class ProjectRead(ProjectBase)</button>
+    <button class="opt">class ProjectBase(SQLModel)</button>
+  </div>
+
+  <div class="quiz" data-question="SQLModel 是由誰打造的？" data-correct="1" data-explain="SQLModel 由 FastAPI 的同一位作者 Sebastián Ramírez 開發，所以兩者整合度極高。">
+    <button class="opt">SQLAlchemy 核心團隊</button>
+    <button class="opt">FastAPI 的同一位作者</button>
+    <button class="opt">Django 軟體基金會</button>
+    <button class="opt">Pydantic 開發者</button>
+  </div>
+
+  <div class="quiz" data-question="如果 ProjectBase 定義了 name 欄位，Project 繼承後會發生什麼事？" data-correct="0" data-explain">子類別會繼承父類別的所有欄位，再加上自己的欄位，一起成為表格的欄位。</button>
+    <button class="opt">Project 也會有 name 欄位，並加入資料庫表格</button>
+    <button class="opt">Project 不會繼承 name，必須重新定義</button>
+    <button class="opt">name 欄位只會留在 ProjectBase，不會進資料庫</button>
+    <button class="opt">會產生錯誤，因為欄位不能跨類別繼承</button>
+  </div>
+
+  <div class="lesson-nav">
+    <span></span>
+    <a href="./field-definitions-constraints.html">下一步：欄位定義與 Annotated 可重用約束 →</a>
+  </div>
+
+  <div class="footer">SQLModel — defining models · Step 1/4</div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Slug generation — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Slug generation</h1>
+<p class="meta">Node 13 · Step 1 of 4</p>
+
+<h2>Learning goal</h2>
+<p>Write a <code>slugify</code> helper that converts arbitrary project names into URL-friendly slugs, and understand when to hand-roll versus reach for a library.</p>
+
+<h2>Why slugs matter</h2>
+<p>Imagine you're building a release tracker. A project called <code>"My Cool App!"</code> needs a clean URL — something like <code>/projects/my-cool-app</code>. Humans can read it, search engines can index it, and it won't break when someone copies the link into an email. That transformation from a display name to a URL-safe identifier is called <strong>slug generation</strong>（slug 產生）。</p>
+
+<p>The rules are simple: lowercase, no punctuation, spaces become dashes. But the edge cases are where the bugs hide — multiple spaces, leading/trailing whitespace, non-ASCII characters, and names that are already mostly clean.</p>
+
+<h2>Building slugify from scratch</h2>
+<p>Start with the core idea: iterate over every character, keep only what's safe, then join the survivors with dashes.</p>
+
+<pre><code>def slugify(value: str) -> str:
+    cleaned = " ".join(
+        c for c in value.lower()
+        if c.isalnum() or c == " "
+    )
+    return "-".join(cleaned.split())</code></pre>
+
+<p>Walk through what happens with <code>"My Cool App!"</code>:</p>
+
+<table>
+  <tr><th>Step</th><th>Result</th></tr>
+  <tr><td><code>value.lower()</code></td><td><code>"my cool app!"</code></td></tr>
+  <tr><td>Generator filter</td><td><code>"my cool app"</code>（驚號被剔除）</td></tr>
+  <tr><td><code>" ".join(...)</code></td><td><code>"my cool app"</code></td></tr>
+  <tr><td><code>.split()</code></td><td><code>["my", "cool", "app"]</code></td></tr>
+  <tr><td><code>"-".join(...)</code></td><td><code>"my-cool-app"</code></td></tr>
+</table>
+
+<p>The generator expression <code>c for c in value.lower() if c.isalnum() or c == " "</code> is the heart of the function. It walks the string once, keeping only letters, numbers, and spaces. Everything else — punctuation, emoji, symbols — gets silently dropped.</p>
+
+<p>Notice the two-step join/split pattern: <code>" ".join(...).split()</code>. The <code>split()</code> with no arguments collapses consecutive whitespace, so <code>"my   cool"</code> becomes <code>["my", "cool"]</code> instead of <code>["my", "", "", "cool"]</code>. That prevents double dashes in the final slug.</p>
+
+<h2>Adding a default value</h2>
+<p>What if someone passes an empty string? The function would return <code>""</code>, which is a terrible slug. Add a fallback:</p>
+
+<pre><code>def slugify(value: str) -> str:
+    cleaned = " ".join(
+        c for c in value.lower()
+        if c.isalnum() or c == " "
+    )
+    slug = "-".join(cleaned.split())
+    return slug or "project"</code></pre>
+
+<p><code>slug or "project"</code> returns <code>"project"</code> when <code>slug</code> is empty. It's a small touch, but it keeps your URLs predictable even when the input is garbage.</p>
+
+<h2>When to stop hand-rolling</h2>
+<p>This implementation works for ASCII names, but it falls apart the moment you need to handle real-world text:</p>
+
+<ul>
+  <li><code>"Über Project"</code> → <code>"ber-project"</code>（德語母音變音被剔除）</li>
+  <li><code>"我的專案"</code> → <code>""</code>（中文字元全部消失）</li>
+  <li><code>"100% Pure"</code> → <code>"100-pure"</code>（百分號被剔除，但數字保留）</li>
+</ul>
+
+<p>In production, reach for a library like <code>python-slugify</code>. It handles Unicode normalization, transliteration, and edge cases you haven't thought of yet. The hand-rolled version is a great learning exercise — and a great interview answer — but don't ship it to users.</p>
+
+<h2>Using slugify in a FastAPI endpoint</h2>
+<p>Once you have the helper, generating a slug inside a POST endpoint is a one-liner:</p>
+
+<pre><code>@app.post("/projects", response_model=ProjectRead)
+def create_project(project_in: ProjectCreate, session: Session = Depends(session_dep)):
+    slug = slugify(project_in.name)
+    project = Project(**project_in.model_dump(), slug=slug)
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project</code></pre>
+
+<p>The slug is derived from the name, not accepted from the client. That's the key insight: slugs are a server-side concern. Letting clients choose their own slugs invites collisions, injection, and inconsistency.</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="slugify 函式的主要用途是什麼？" data-correct="1" data-explain="Slug 產生器把人類可讀的名稱轉換為 URL 安全的識別碼。">
+  <button class="opt">驗證使用者輸入的格式是否正確</button>
+  <button class="opt">將任意字串轉換為 URL 友好的格式</button>
+  <button class="opt">為每個新專案產生獨一無二的 ID</button>
+  <button class="opt">加密敏感資料後存入資料庫</button>
+</div>
+
+<div class="quiz" data-question="在 slugify 的生成器表達式中，條件「c.isalnum() or c == \" \"」的作用是什麼？" data-correct="0" data-explain="這個條件只保留字母、數字和空格，其他字元全部丟棄。">
+  <button class="opt">只保留字母、數字和空格</button>
+  <button class="opt">把所有字元轉換成小寫</button>
+  <button class="opt">移除所有的空白字元</button>
+  <button class="opt">檢查字串是否為空</button>
+</div>
+
+<div class="quiz" data-question="為什麼 slugify 最後要執行「\" \".join(...).split()」兩步驟？" data-correct="2" data-explain="split() 會自動合併連續空白，避免產生雙破折號。">
+  <button class="opt">為了把字串全部大寫</button>
+  <button class="opt">為了計算字串長度</button>
+  <button class="opt">為了合併連續空白，避免雙破折號</button>
+  <button class="opt">為了移除所有的破折號</button>
+</div>
+
+<div class="quiz" data-question="當 slugify 收到空字串時，加入「return slug or \"project\"」會返回什麼？" data-correct="3" data-explain="空字串是 falsy，所以 or 會返回預設值 \"project\"。">
+  <button class="opt">拋出 ValueError 例外</button>
+  <button class="opt">返回空字串</button>
+  <button class="opt">返回 None</button>
+  <button class="opt">返回 \"project\"</button>
+</div>
+
+<div class="quiz" data-question="在正式生產環境中，為什麼不建議自己寫 slugify？" data-correct="1" data-explain="手刻版本無法正確處理 Unicode、音譯和各種邊界情況，程式庫已經解決了這些問題。">
+  <button class="opt">手刻版本執行速度太慢</button>
+  <button class="opt">手刻版本無法正確處理 Unicode 和音譯</button>
+  <button class="opt">FastAPI 內建了 slugify 不能覆蓋</button>
+  <button class="opt">手刻版本無法通過型別檢查</button>
+</div>
+
+<div class="quiz" data-question="在 FastAPI 端點中，slug 應該從哪裡產生？" data-correct="0" data-explain="slug 是伺服器端從 name 推導出來的，不應該由客戶端直接提供。">
+  <button class="opt">從伺服器端根據專案名稱推導</button>
+  <button class="opt">由客戶端在請求中直接提供</button>
+  <button class="opt">從資料庫自動遞增的 ID 產生</button>
+  <button class="opt">由前端 JavaScript 計算後傳入</button>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./create-endpoint.html">下一步：Create endpoint (POST) →</a>
+</div>
+
+<div class="footer">
+  pro-python · Node 13: Write endpoints and slug generation
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

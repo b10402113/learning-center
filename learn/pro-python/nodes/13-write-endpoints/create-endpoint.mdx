@@ -1,0 +1,90 @@
+---
+id: create-endpoint
+title: Create endpoint (POST)
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_32.md#write-endpoint-implementation]]"
+  - "[[sources/pro-python/completed/20260903_31.md#crud-operations]]"
+  - "[[sources/pro-python/completed/20260903_31.md#session-refresh-usage]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+# Create endpoint (POST)
+
+## Learning goal
+
+Implement a POST endpoint that validates incoming JSON, generates a slug, writes to the database inside a transaction, and returns the complete created record.
+
+## Lesson
+
+讀取端點（read endpoint）獲取資料，寫入端點（write endpoint）改變資料。在 REST 中，建立新資源對應到 `POST`。請求攜帶一個 JSON 主體 — 專案的名字、描述和版本 — 而回應則回傳剛建立好的紀錄，包含伺服器自動產生的欄位如 `id` 和 `created_at`。
+
+每個寫入端點都遵循相同的節奏：
+
+| 階段 | 發生什麼事 |
+| --- | --- |
+| 驗證（Validate） | FastAPI 把 JSON 解析成 Pydantic schema |
+| 轉換（Transform） | 推導客戶端沒傳的欄位（slug、時間戳） |
+| 持久化（Persist） | `session.add()` → `session.commit()` |
+| 重新整理（Refresh） | `session.refresh()` 拉回伺服器自動產生的值 |
+| 回應（Respond） | 把完整的物件回傳給客戶端 |
+
+客戶端只傳它們知道的東西 — 名字、描述、版本。它們不會傳 `id`、`slug` 或 `created_at`，因為那些是伺服器端該管的事。一個獨立的 `ProjectCreate` schema 精確捕捉了客戶端被允許提供的東西：
+
+```python
+class ProjectCreate(BaseModel):
+    name: str
+    description: str = ""
+    version: str = "0.1.0"
+```
+
+注意這裡沒有 `id` 欄位。如果客戶端試圖傳入一個，Pydantic 會靜默丟棄它（或者根據設定拋出錯誤）。這就是客戶端輸入和伺服器權威之間的邊界。
+
+schema 準備好之後，端點本身很簡潔：
+
+```python
+@app.post("/projects", response_model=ProjectRead)
+def create_project(
+    project_in: ProjectCreate,
+    session: Session = Depends(session_dep),
+):
+    slug = slugify(project_in.name)
+    project = Project(**project_in.model_dump(), slug=slug)
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project
+```
+
+在 `session.add()` 和 `return project` 之間發生了三件事：
+
+1. `session.add(project)` 把物件排入插入佇列 — 它排隊了但還沒寫入。
+2. `session.commit()` 對資料庫執行 `INSERT` 並結束交易。
+3. `session.refresh(project)` 從資料庫重新讀取該行，以填入自動產生的欄位。
+
+`session.commit()` 之後，`project` 物件在 Python 記憶體中仍然有 `id=None` 和 `created_at=None`。那些值是資料庫產生的 — 自動遞增序列、預設時間戳 — 而 SQLAlchemy 不會自動把它們推回物件裡。
+
+如果你跳過 `session.refresh()`，客戶端會收到一個包含 `"id": null` 的回應。這是一個在測試中很容易錯過的 bug（物件「看起來」是對的），但會破壞每個需要新紀錄 ID 的下游消費者。
+
+`session.refresh(project)` 發出一個 `SELECT` 來取得最新狀態。它多花了一次查詢，但保證了回應是完整且準確的。
+
+`project_in.model_dump()` 把 Pydantic schema 轉換成字典：`{"name": "...", "description": "...", "version": "..."}`。`**` 運算子把它解構成關鍵字參數傳入 `Project` 建構式：
+
+```python
+Project(**project_in.model_dump(), slug=slug)
+# 等同於：
+Project(name="...", description="...", version="...", slug="...")
+```
+
+這個模式讓端點保持乾淨 — 你不用手動指派每個欄位 — 同時仍然讓你注入像 `slug` 這樣的伺服器端值。
+
+如果客戶端傳入 `{"name": 123}`（數字而不是字串），FastAPI 會在端點主體執行之前就回傳 `422 Unprocessable Entity` 回應。Pydantic schema 是第一道防線 — 它會自動拒絕格式錯誤的主體。
+
+如果客戶端傳入重複的名字，而你的資料庫有唯一性約束，`session.commit()` 會拋出 `IntegrityError`。除非你捕捉它，否則這就是一個伺服器錯誤（`500`）。稍後在這個節點裡，你會學到如何優雅地處理它。
+
+## Course
+
+[↗ 課程頁面](../../lessons/create-endpoint.html)
+
+## Sources

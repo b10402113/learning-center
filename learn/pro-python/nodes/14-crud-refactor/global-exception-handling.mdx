@@ -1,0 +1,81 @@
+---
+id: global-exception-handling
+title: 全域例外處理：把 IntegrityError 變成 409
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_36.md#testing-duplicate-project-creation]]"
+  - "[[sources/pro-python/completed/20260903_36.md#fastapi-exception-handler]]"
+  - "[[sources/pro-python/completed/20260903_36.md#why-409-conflict]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+<LearningGoal>
+用 FastAPI 的 exception_handler 全域捕捉 IntegrityError，把 500 錯誤換成有意義的 409 Conflict。
+</LearningGoal>
+
+## Lesson
+
+把資料庫操作抽到 `crud.py`、用 `ProjectDep` 簡化路由之後，還有一個問題沒處理：當使用者送出一個已經存在的專案名稱，API 會回傳 500 Internal Server Error。這對客戶端來說完全沒有意義——它不知道是名稱重複、是資料庫斷線、還是伺服器壞了。
+
+**500 錯誤為什麼不好？**
+
+當資料庫的 unique 約束被違反時，SQLAlchemy 會丟出 `IntegrityError`。如果我們沒有特別處理，FastAPI 會把這個未捕捉的例外變成 500 錯誤回傳給客戶端。
+
+500 的意思是「伺服器內部出問題了」。但實際上，伺服器沒有壞掉——只是名稱重複了。客戶端收到 500，不知道該怎麼處理：要重試嗎？要告訴使用者什麼？500 是一個完全模糊的回應。
+
+**用 exception_handler 全域捕捉**
+
+FastAPI 提供 `@app.exception_handler()` 裝飾器，可以註冊一個全域的例外處理器。當指定的例外在任何路由裡被丟出時，FastAPI 會呼叫你的處理器，而不是直接回傳 500：
+
+```python
+# main.py
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
+
+app = FastAPI()
+
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(request: Request, exc: IntegrityError):
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "data conflict occurred"},
+    )
+```
+
+這段程式碼的意思是：在整個應用程式裡，只要任何地方丟出 `IntegrityError`，FastAPI 就會回傳 409 狀態碼，以及 `{"detail": "data conflict occurred"}` 的 JSON 回應。
+
+注意：這個處理器是**全域的**。你不需要在每個路由裡寫 try/except，不需要在每個寫入操作前手動檢查名稱是否重複。只要資料庫丟出 `IntegrityError`，這個處理器就會自動接手。
+
+**為什麼是 409，不是 400 或 404？**
+
+HTTP 狀態碼是有語義的，選對狀態碼才能正確傳達意圖：
+
+- **400 Bad Request**：客戶端送來的資料格式不對，例如缺少必要欄位、型別錯誤。
+- **404 Not Found**：資源不存在，例如用一個不存在的 project_id 查詢。
+- **409 Conflict**：請求跟現有資源衝突，例如名稱重複。
+
+名稱重複不是「資料格式不對」（400），也不是「資源不存在」（404）。它是「這個名稱已經有人用了，跟現有資料衝突」。409 才是正確的語義。
+
+**測試你的處理器**
+
+寫好處理器之後，你應該寫一個測試來驗證它的行為：
+
+```python
+def test_create_duplicate_project_returns_409(client):
+    # 先建立一個專案
+    client.post("/projects/", json={"name": "existing"})
+    # 再建立同名專案，應該拿到 409
+    response = client.post("/projects/", json={"name": "existing"})
+    assert response.status_code == 409
+    assert response.json()["detail"] == "data conflict occurred"
+```
+
+這個測試確保了兩件事：第一，重複名稱確實會觸發 `IntegrityError`；第二，你的處理器確實把它轉換成了 409。如果以後有人不小心把處理器拿掉，這個測試就會失敗。
+
+## Course
+
+[↗ 課程頁面](../../lessons/global-exception-handling.html)
+
+## Sources

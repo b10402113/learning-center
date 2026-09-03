@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>把資料庫操作抽到 crud.py — CRUD refactoring</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>把資料庫操作抽到 crud.py</h1>
+<p class="meta">學習目標：理解為什麼 HTTP 路由和資料庫交易應該分開，並把 main.py 裡的資料庫操作抽到獨立的 crud.py 模組。</p>
+
+<h2>為什麼要分離？</h2>
+
+<p>想像你走進一家餐廳。服務生負責接待客人、寫單、上菜；廚師負責炒菜、控制火候。如果服務生自己跑進廚房炒菜，整個餐廳就會大亂——服務生得同時懂點單系統和烹飪，任何一邊出錯都要找服務生。</p>
+
+<p>FastAPI 的 <code>main.py</code> 就像服務生：它該處理 HTTP 請求、決定狀態碼、回應 JSON。而資料庫操作——<code>session.add()</code>、<code>session.commit()</code>、<code>session.refresh()</code>——就像炒菜，是廚房裡的事。當這兩種邏輯混在同一個檔案，<code>main.py</code> 就得同時懂 HTTP 和交易邊界，任何一邊改動都可能破壞另一邊。</p>
+
+<h2>分離之後，誰做什麼？</h2>
+
+<p>分離的原則是：<strong>HTTP 歸 HTTP，資料庫歸資料庫</strong>。</p>
+
+<p><code>crud.py</code> 負責所有跟資料庫直接打交道的工作：</p>
+
+<pre><code># crud.py
+from sqlmodel import Session, select
+from .models import Project
+
+def get_project(session: Session, project_id: int) -> Project | None:
+    return session.get(Project, project_id)
+
+def create_project(session: Session, project: Project) -> Project:
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project</code></pre>
+
+<p><code>main.py</code> 只負責 HTTP 層面的事：接收請求、呼叫 <code>crud.py</code> 的函式、決定狀態碼、處理例外。</p>
+
+<pre><code># main.py
+from fastapi import FastAPI, HTTPException
+from . import crud
+
+@app.post("/projects/", status_code=201)
+def create_project(project: ProjectCreate, session: Session = Depends(get_session)):
+    db_project = crud.create_project(session, project)
+    return db_project</code></pre>
+
+<p>注意：<code>main.py</code> 裡完全沒有 <code>session.add()</code>、<code>session.commit()</code>、<code>session.refresh()</code>。交易邊界被完整封裝在 <code>crud.py</code> 裡。</p>
+
+<h2>重構不改行為</h2>
+
+<p>這次重構最重要的規矩是：<strong>API 行為完全不變</strong>。路由回傳什麼、狀態碼是什麼、錯誤怎麼回傳，全部跟重構前一樣。我們只是把「怎麼跟資料庫講話」這件事搬到另一個檔案，不是加新功能。</p>
+
+<p>這表示重構前後，你可以跑同一套測試，結果應該完全一樣。如果測試通過，代表我們成功地把程式碼搬動了，同時沒有弄壞任何東西。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="分離 HTTP 和資料庫邏輯的主要原因是什麼？" data-correct="1" data-explain="分離讓兩邊各自關注自己的職責，不會因為一邊改動而破壞另一邊。">
+  <button class="opt">讓程式碼跑得更快</button>
+  <button class="opt">讓兩邊各自關注自己的職責，降低耦合</button>
+  <button class="opt">讓 main.py 可以完全不用 import 任何東西</button>
+  <button class="opt">讓資料庫可以換成 SQLite</button>
+</div>
+
+<div class="quiz" data-question="以下哪個操作應該放在 crud.py，而不是 main.py？" data-correct="2" data-explain="session.commit() 是交易邊界操作，應該放在 crud.py。">
+  <button class="opt">回傳 HTTP 201 狀態碼</button>
+  <button class="opt">處理 HTTPException</button>
+  <button class="opt">呼叫 session.commit()</button>
+  <button class="opt">定義路由路徑</button>
+</div>
+
+<div class="quiz" data-question="重構時，API 行為應該如何？" data-correct="0" data-explain="重構不改行為，只改結構。測試用來驗證這件事。">
+  <button class="opt">完全不變，只改程式碼結構</button>
+  <button class="opt">可以微調，只要測試能過就好</button>
+  <button class="opt">應該顺便修掉已知的 bug</button>
+  <button class="opt">應該改用非同步寫法</button>
+</div>
+
+<div class="quiz" data-question="如果 main.py 直接呼叫 session.add()，會違反什麼原則？" data-correct="3" data-explain="session.add() 是資料庫操作，應該封裝在 crud.py，main.py 只負責 HTTP。">
+  <button class="opt">DRY 原則</button>
+  <button class="opt">開閉原則</button>
+  <button class="opt">里氏替換原則</button>
+  <button class="opt">關注點分離</button>
+</div>
+
+<div class="quiz" data-question="crud.py 裡的 create_project 為什麼要呼叫 session.refresh(project)？" data-correct="1" data-explain="session.refresh() 會從資料庫重新載入物件，確保我們拿到自動產生的 id 和時間戳。">
+  <button class="opt">為了檢查資料庫連線是否正常</button>
+  <button class="opt">為了拿到資料庫自動產生的欄位值，例如 id</button>
+  <button class="opt">為了把物件從 session 移除</button>
+  <button class="opt">為了觸發資料庫的 unique 檢查</button>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./verify-with-tests.html">下一步：用既有測試驗證重構 →</a>
+</div>
+
+<footer class="footer">遇到問題？問你的 agent，他們可以幫你釐清任何不清楚的地方。</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

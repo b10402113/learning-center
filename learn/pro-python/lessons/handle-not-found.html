@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>查詢不到資料時回傳 404</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 12 — Step 4/4 · Database-backed read endpoints</p>
+  <h1>查詢不到資料時回傳 404</h1>
+
+  <h2>學習目標</h2>
+  <p>當 <code>session.get()</code> 回傳 <code>None</code> 時，拋出 <code>HTTPException(status_code=404)</code> 回傳標準 REST 錯誤。</p>
+
+  <h2>為什麼不能直接回傳 None？</h2>
+  <p>如果 <code>session.get()</code> 找不到記錄，直接回傳 <code>None</code>：</p>
+
+  <pre><code>@app.get("/projects/{project_id}")
+def get_project(project_id: int, session: Session = Depends(get_session)):
+    project = session.get(Project, project_id)
+    return project  # 找不到時回傳 null</code></pre>
+
+  <p>API 會回應 <code>200 OK</code> 加上 body <code>null</code>。客戶端不知道是「找到了但值是空」還是「根本不存在」——這違反 REST 語義。</p>
+
+  <h2>用 HTTPException 回 404</h2>
+  <p>FastAPI 提供 <code>HTTPException</code>，直接對應 HTTP 狀態碼：</p>
+
+  <pre><code>from fastapi import HTTPException
+
+@app.get("/projects/{project_id}")
+def get_project(project_id: int, session: Session = Depends(get_session)):
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project</code></pre>
+
+  <p><code>raise HTTPException(...)</code> 會立即停止路由執行，FastAPI 把它轉成對應的 HTTP 回應：</p>
+
+  <pre><code>HTTP/1.1 404 Not Found
+Content-Type: application/json
+
+{"detail": "Project not found"}</code></pre>
+
+  <h2>用 is None 而不是 == None</h2>
+  <p>Python 慣例用 <code>is None</code> 判斷空值，因為 <code>is</code> 比較物件身份（identity），比 <code>==</code> 更精確。</p>
+
+  <h2>detail 可以帶任何 JSON 資料</h2>
+  <p><code>detail</code> 不只能是字串，任何 JSON 可序列化的資料都可以：</p>
+
+  <pre><code>raise HTTPException(
+    status_code=404,
+    detail={"message": "Project not found", "project_id": project_id},
+)</code></pre>
+
+  <h2>常見狀態碼速查</h2>
+  <table>
+    <tr><th>狀態碼</th><th>什麼時候用</th></tr>
+    <tr><td>200</td><td>成功讀取或回傳</td></tr>
+    <tr><td>201</td><td>成功建立新記錄</td></tr>
+    <tr><td>204</td><td>成功但不需要回傳 body</td></tr>
+    <tr><td>400</td><td>請求格式錯誤</td></tr>
+    <tr><td>404</td><td>資源不存在</td></tr>
+    <tr><td>409</td><td>資料衝突（例如重複的唯一值）</td></tr>
+    <tr><td>422</td><td>驗證錯誤（FastAPI 自動處理）</td></tr>
+    <tr><td>500</td><td>伺服器內部錯誤</td></tr>
+  </table>
+
+  <h2>小結</h2>
+  <p><code>session.get()</code> 找不到時回傳 <code>None</code>，你要自己判斷並拋 <code>HTTPException(status_code=404)</code>。這是 REST API 的標準寫法——資源不存在就用 404，不要回 <code>null</code>。</p>
+
+  <div class="lesson-nav">
+    <a href="list-all.html">← 上一步：用 session.exec() 列出所有資料</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="session.get() 找不到記錄時，API 直接回傳 None 會變成什麼回應？" data-correct="1" data-explain="None 被序列化成 null，狀態碼是 200，客戶端無法區分「空值」和「不存在」。">
+    <button class="opt">404 Not Found</button>
+    <button class="opt">200 OK，body 是 null</button>
+    <button class="opt">500 Internal Server Error</button>
+    <button class="opt">204 No Content</button>
+  </div>
+
+  <div class="quiz" data-question="要回傳 404，應該怎麼做？" data-correct="2" data-explain="raise HTTPException(status_code=404) 會立即停止路由並回 404。">
+    <button class="opt">return None</button>
+    <button class="opt">return {"error": "not found"}</button>
+    <button class="opt">raise HTTPException(status_code=404)</button>
+    <button class="opt">raise ValueError("not found")</button>
+  </div>
+
+  <div class="quiz" data-question="HTTPException 的 detail 參數可以放什麼？" data-correct="3" data-explain="detail 可以是任何 JSON 可序列化的資料，不只是字串。">
+    <button class="opt">只能是字串</button>
+    <button class="opt">只能是數字</button>
+    <button class="opt">只能是字典</button>
+    <button class="opt">任何 JSON 可序列化的資料</button>
+  </div>
+
+  <div class="quiz" data-question="判斷 project 是否為 None，Python 慣例用什麼寫法？" data-correct="0" data-explain="is None 比較物件身份，比 == None 更精確，是 Python 慣例。">
+    <button class="opt">project is None</button>
+    <button class="opt">project == None</button>
+    <button class="opt">project = None</button>
+    <button class="opt">None is project</button>
+  </div>
+
+  <div class="quiz" data-question="REST API 中，404 代表什麼意思？" data-correct="1" data-explain="404 代表請求的資源不存在。">
+    <button class="opt">伺服器錯誤</button>
+    <button class="opt">資源不存在</button>
+    <button class="opt">請求格式錯誤</button>
+    <button class="opt">沒有權限</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 12: Database-backed read endpoints · Step 4</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

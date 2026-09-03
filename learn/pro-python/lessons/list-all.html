@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用 session.exec() 列出所有資料</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 12 — Step 3/4 · Database-backed read endpoints</p>
+  <h1>用 session.exec() 列出所有資料</h1>
+
+  <h2>學習目標</h2>
+  <p>用 <code>session.exec(select(Model))</code> 抓回全部 Project，組成 JSON 陣列回傳。</p>
+
+  <h2>從單筆到全部</h2>
+  <p><code>session.get()</code> 只能查主鍵。要拿全部記錄，需要用 <code>select()</code> 建構查詢，再用 <code>session.exec()</code> 執行：</p>
+
+  <pre><code>from sqlmodel import select
+
+@app.get("/projects")
+def list_projects(session: Session = Depends(get_session)):
+    statement = select(Project)
+    projects = session.exec(statement).all()
+    return projects</code></pre>
+
+  <p><code>select(Project)</code> 產生 <code>SELECT * FROM project</code>。<code>session.exec(statement)</code> 回傳一個 <code>Result</code> 物件，呼叫 <code>.all()</code> 把所有記錄放進一個 list。</p>
+
+  <h2>加上過濾條件</h2>
+  <p><code>select()</code> 後面可以串 <code>.where()</code> 加條件：</p>
+
+  <pre><code>statement = select(Project).where(Project.slug == "project-alpha")
+project = session.exec(statement).first()</code></pre>
+
+  <p><code>.first()</code> 回傳第一筆或 <code>None</code>，<code>.one()</code> 強制要求只能有一筆（否則拋例外）。</p>
+
+  <h2>分頁：不要一次吐全部</h2>
+  <p>如果表格有十萬筆記錄，<code>.all()</code> 會全部載進記憶體。實務上用 <code>.offset()</code> 和 <code>.limit()</code> 做分頁：</p>
+
+  <pre><code>statement = select(Project).offset(0).limit(10)
+projects = session.exec(statement).all()</code></pre>
+
+  <p>前端傳 <code>?skip=0&limit=10</code>，路由參數接起來：</p>
+
+  <pre><code>@app.get("/projects")
+def list_projects(
+    skip: int = 0,
+    limit: int = 10,
+    session: Session = Depends(get_session),
+):
+    statement = select(Project).offset(skip).limit(limit)
+    return session.exec(statement).all()</code></pre>
+
+  <h2>排序</h2>
+  <p>用 <code>.order_by()</code> 指定順序：</p>
+
+  <pre><code>from sqlmodel import col
+
+statement = select(Project).order_by(col(Project.name).asc())</code></pre>
+
+  <p>沒有加 <code>order_by</code> 時，資料庫不保證回傳順序——每次查詢可能不同。</p>
+
+  <h2>小結</h2>
+  <p><code>session.exec(select(Model))</code> 是列出全部記錄的標準模式。加上 <code>.where()</code> 過濾、<code>.offset()</code>/<code>.limit()</code> 分頁、<code>.order_by()</code> 排序，就能應付大多數列表需求。</p>
+
+  <div class="lesson-nav">
+    <a href="get-by-id.html">← 上一步：用 session.get() 查詢單筆資料</a>
+    <a href="handle-not-found.html">下一步：查詢不到資料時回傳 404 →</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="session.exec(select(Project)).all() 會執行什麼 SQL？" data-correct="0" data-explain="select(Project) 產生 SELECT * FROM project，.all() 全部抓回。">
+    <button class="opt">SELECT * FROM project</button>
+    <button class="opt">SELECT * FROM project WHERE id = ?</button>
+    <button class="opt">SELECT COUNT(*) FROM project</button>
+    <button class="opt">INSERT INTO project ...</button>
+  </div>
+
+  <div class="quiz" data-question="session.exec(statement) 回傳什麼？" data-correct="2" data-explain="exec() 回傳 Result 物件，要呼叫 .all() 或 .first() 才能拿到資料。">
+    <button class="opt">一個 list</button>
+    <button class="opt">一個 Project 實例</button>
+    <button class="opt">一個 Result 物件</button>
+    <button class="opt">一個 session</button>
+  </div>
+
+  <div class="quiz" data-question="要過濾 slug 等於 'foo' 的 Project，應該用？" data-correct="1" data-explain="用 .where(Project.slug == 'foo') 加入過濾條件。">
+    <button class="opt">select(Project).filter(slug='foo')</button>
+    <button class="opt">select(Project).where(Project.slug == 'foo')</button>
+    <button class="opt">select(Project).by_slug('foo')</button>
+    <button class="opt">select(Project).having(slug='foo')</button>
+  </div>
+
+  <div class="quiz" data-question="沒有加 order_by 時，資料庫回傳順序是？" data-correct="3" data-explain="沒有 order_by 時，順序由資料庫決定，不保證一致。">
+    <button class="opt">依照主鍵遞增</button>
+    <button class="opt">依照主鍵遞減</button>
+    <button class="opt">依照建立時間</button>
+    <button class="opt">不保證順序</button>
+  </div>
+
+  <div class="quiz" data-question="分頁時，offset(20).limit(10) 代表？" data-correct="0" data-explain="offset 跳過前 20 筆，limit 回傳最多 10 筆，也就是第三頁。">
+    <button class="opt">跳過前 20 筆，回傳最多 10 筆</button>
+    <button class="opt">回傳前 20 筆中的 10 筆</button>
+    <button class="opt">總共回傳 30 筆</button>
+    <button class="opt">從第 10 筆開始回傳 20 筆</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 12: Database-backed read endpoints · Step 3</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

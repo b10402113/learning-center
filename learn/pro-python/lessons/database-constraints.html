@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>資料庫層級約束與應用程式驗證</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>資料庫層級約束與應用程式驗證</h1>
+  <p class="meta">學習目標：理解資料庫層級約束（unique=True）與 Pydantic 應用程式驗證的差異，以及兩者如何共同保障資料完整性。</p>
+
+  <h2>兩層防線，兩種時機</h2>
+  <p>資料驗證不是「有做就好」——它分兩層，而且發生在完全不同的時間點。</p>
+  <table>
+    <thead>
+      <tr>
+        <th>層級</th>
+        <th>誰執行？</th>
+        <th>什麼時候？</th>
+        <th>失敗會怎樣？</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>應用層驗證</td>
+        <td>Pydantic</td>
+        <td>請求進來、Python 收到 JSON 時</td>
+        <td>回 422 Validation Error</td>
+      </tr>
+      <tr>
+        <td>資料庫約束</td>
+        <td>PostgreSQL</td>
+        <td>SQL 寫入資料庫時</td>
+        <td>拋 IntegrityError</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>應用層驗證：Pydantic 的守備範圍</h2>
+  <p>當前端送來一筆資料，FastAPI 會先用 Pydantic 模型檢查：型別對不對、長度有沒有超標、格式合不合格。如果不合格，請求根本不會到達你的函式——直接回 422。</p>
+  <pre><code>from pydantic import BaseModel
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+# 如果送進來的 name 是空字串，Pydantic 會擋掉，回 422</code></pre>
+
+  <h2>資料庫約束：最後一道防線</h2>
+  <p>但 Pydantic 的驗證只能保證「格式正確」，不能保證「不重複」。假設兩個請求同時送出相同的 <code>name</code>，Pydantic 都過了，但資料庫裡就會出現兩筆重複資料。</p>
+  <p>這時候就要靠資料庫約束：<code>unique=True</code>。</p>
+  <pre><code>from sqlmodel import SQLModel, Field
+
+class Project(SQLModel, table=True):
+    name: str = Field(min_length=1, max_length=100, unique=True)</code></pre>
+  <p><code>unique=True</code> 會在資料庫裡建立一個 unique index。如果有任何 SQL 嘗試寫入重複的 <code>name</code>，PostgreSQL 會拒絕並拋出 <code>IntegrityError</code>。</p>
+
+  <h2>為什麼需要兩層？</h2>
+  <p>因為它們解決不同的問題：</p>
+  <ul>
+    <li><strong>應用層驗證</strong>：給使用者即時的錯誤回饋（「名字不能空白」），不用等到資料庫才知道錯。</li>
+    <li><strong>資料庫約束</strong>：保證資料絕對正確，即使有程式繞過應用層驗證（例如直接下 SQL、或多個請求同時寫入），資料庫還是能守住底線。</li>
+  </ul>
+
+  <h2>實際會遇到的場景</h2>
+  <pre><code># 請求 A：name="my-project" → Pydantic 通過 → 寫入成功
+# 請求 B：name="my-project" → Pydantic 通過 → 資料庫拒絕 → IntegrityError
+
+# 在 FastAPI 裡，你要用 try/except 捕捉 IntegrityError
+from sqlalchemy.exc import IntegrityError
+
+@app.post("/projects")
+def create_project(project: ProjectCreate, session: Session):
+    db_project = Project(**project.model_dump())
+    session.add(db_project)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="專案名稱已存在")
+    return db_project</code></pre>
+
+  <h2>重點整理</h2>
+  <ul>
+    <li>應用層驗證（Pydantic）負責格式檢查，失敗回 422。</li>
+    <li>資料庫約束（unique=True）負責資料完整性，失敗拋 IntegrityError。</li>
+    <li>兩者是互補關係，不是擇一就好。</li>
+    <li>在 FastAPI 裡，要捕捉 <code>IntegrityError</code> 並轉成有意義的 HTTP 錯誤（如 409 Conflict）。</li>
+  </ul>
+
+  <h2>隨堂測驗</h2>
+
+  <div class="quiz" data-question="Pydantic 應用層驗證失敗時，FastAPI 會回什麼狀態碼？" data-correct="1" data-explain="Pydantic 驗證失敗會回 422 Unprocessable Entity，表示請求格式正確但內容不符合規則。">
+    <button class="opt">200 OK</button>
+    <button class="opt">422 Unprocessable Entity</button>
+    <button class="opt">500 Internal Server Error</button>
+    <button class="opt">409 Conflict</button>
+  </div>
+
+  <div class="quiz" data-question="資料庫 unique 約束被違反時，SQLAlchemy 會拋出什麼例外？" data-correct="2" data-explain="unique 約束被違反時，SQLAlchemy 會拋出 IntegrityError，表示資料完整性出現問題。">
+    <button class="opt">ValidationError</button>
+    <button class="opt">ValueError</button>
+    <button class="opt">IntegrityError</button>
+    <button class="opt">DuplicateError</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼只有 Pydantic 驗證不夠，還需要資料庫約束？" data-correct="0" data-explain="因為多個請求可能同時通過 Pydantic 驗證，但寫入時發生衝突；資料庫約束是最後防線。">
+    <button class="opt">因為多個請求可能同時通過驗證，但寫入時發生衝突</button>
+    <button class="opt">因為 Pydantic 不能驗證字串長度</button>
+    <button class="opt">因為資料庫約束比較快</button>
+    <button class="opt">因為 Pydantic 只支援數字型別</button>
+  </div>
+
+  <div class="quiz" data-question="在 FastAPI 中，如何正確處理 IntegrityError？" data-correct="1" data-explain="捕捉 IntegrityError 後 rollback，再回 409 Conflict，告訴使用者資源已存在。">
+    <button class="opt">忽略它，讓使用者看到 500 錯誤</button>
+    <button class="opt">捕捉它，rollback，回 409 Conflict</button>
+    <button class="opt">在 Pydantic 模型裡重複檢查一次</button>
+    <button class="opt">把 unique=True 從模型拿掉</button>
+  </div>
+
+  <div class="quiz" data-question="下列哪個是應用層驗證的例子？" data-correct="0" data-explain="min_length=1 是 Pydantic 在請求進來時檢查的規則，屬於應用層驗證。">
+    <button class="opt">Field(min_length=1)</button>
+    <button class="opt">Field(unique=True)</button>
+    <button class="opt">Field(primary_key=True)</button>
+    <button class="opt">Field(index=True)</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./field-definitions-constraints.html">← 上一步：欄位定義與 Annotated 可重用約束</a>
+    <a href="./auto-generated-fields.html">下一步：自動生成欄位：ID、時間戳與 slug →</a>
+  </div>
+
+  <div class="footer">SQLModel — defining models · Step 3/4</div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

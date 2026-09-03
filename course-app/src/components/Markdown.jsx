@@ -24,7 +24,7 @@ export default function Markdown({ children, className = "" }) {
         prose-a:text-accent prose-a:font-medium hover:prose-a:underline
         prose-code:rounded prose-code:bg-mist prose-code:px-1.5 prose-code:py-0.5
         prose-code:font-normal prose-code:text-[0.85em] prose-code:before:content-none prose-code:after:content-none
-        prose-pre:bg-mist prose-pre:border prose-pre:border-line prose-pre:rounded-lg prose-pre:text-sm
+        prose-pre:bg-mist prose-pre:border prose-pre:border-line prose-pre:rounded-lg prose-pre:text-sm prose-pre:text-ink
         prose-blockquote:border-l-accent prose-blockquote:bg-accent-soft/40
         prose-blockquote:py-0.5 prose-blockquote:not-italic prose-blockquote:text-ink/80
         prose-th:bg-shade prose-th:border prose-th:border-line prose-th:px-3 prose-th:py-1.5

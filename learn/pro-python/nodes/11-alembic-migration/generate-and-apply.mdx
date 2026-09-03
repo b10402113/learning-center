@@ -1,0 +1,52 @@
+---
+id: generate-and-apply
+title: 產生並套用第一次遷移
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_29.md#migration-revisions]]"
+  - "[[sources/pro-python/completed/20260903_27-datalayer.md#alembic-migrations]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+# 產生並套用第一次遷移
+
+## Learning goal
+
+用 `alembic revision --autogenerate` 偵測 SQLModel 定義並產生遷移檔，再執行 `alembic upgrade head` 把變更套用到資料庫，最後在 Postgres 裡確認表格確實被建立。
+
+## Lesson
+
+在產生遷移之前，確認幾件事都已經完成：Alembic 已經初始化（`alembic init` 跑過了）、`env.py` 已經設定好能正確匯入 SQLModel metadata 與資料庫 URL、SQLModel 已經定義好表格模型（`table=True`）、Postgres 正在 Docker 中運行且資料庫連線正常。
+
+執行以下指令，讓 Alembic 比對你的 SQLModel 定義與資料庫現狀：
+
+```bash
+alembic revision --autogenerate -m "create projects table"
+```
+
+其中 `-m` 後面的是這次遷移的訊息，用來提醒你這次遷移做了什麼事。執行後，Alembic 會在 `alembic/versions/` 目錄下產生一個新的 Python 檔。打開產生的遷移檔，你會看到 `upgrade()` 裡有 `op.create_table()` 或 `op.add_column()` 之類的操作。如果發現 autogenerate 沒偵測到你的變更，或是產生了不對的 SQL，你可以手動修改這個檔案。
+
+產生遷移檔之後，資料庫本身還沒有任何變動。你需要執行：
+
+```bash
+alembic upgrade head
+```
+
+這會把所有還沒套用過的遷移檔，按照順序逐一執行它們的 `upgrade()`。`head` 代表最新的版本。執行成功後，Alembic 會在資料庫裡建立一個 `alembic_version` 表格，用來記錄目前已經套用到哪個版本。這樣下次再執行 `upgrade head` 時，它只會跑新的遷移檔，不會重複執行。
+
+遷移套用後，你可以用 `docker exec` 進到 Postgres 容器裡，用 `psql` 確認表格確實被建立了：
+
+```bash
+docker compose exec db psql -U postgres -c "\dt"
+```
+
+你應該能看到你的 `projects` 表格（以及 `alembic_version` 表格）。如果看到表格，代表你的第一次遷移成功了。
+
+常見問題：autogenerate 沒產生任何內容，通常是 `env.py` 沒有正確匯入 SQLModel metadata，或是資料庫已經和模型同步。升級失敗時，檢查遷移檔裡的 SQL 是否正確，是否有手動修改過但沒寫好 `downgrade()`。想要重來時，可以 `alembic downgrade base` 回到最初狀態，或是直接砍掉 Docker volume 重新開始。
+
+## Sources
+
+## Course
+
+[↗ 課程頁面](../../lessons/generate-and-apply.html)

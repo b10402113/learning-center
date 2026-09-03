@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Delete endpoints (soft vs hard) — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Delete endpoints (soft vs hard)</h1>
+<p class="meta">Node 13 · Step 4 of 4</p>
+
+<h2>Learning goal</h2>
+<p>Implement a DELETE endpoint that supports both hard deletion (permanently removing a record) and soft deletion (hiding it behind a flag), and understand when to use each in production.</p>
+
+<h2>The two ways to delete</h2>
+<p>When a user clicks "delete" on a project, what should happen? There are two answers, and they lead to very different implementations.</p>
+
+<table>
+  <tr><th>Type</th><th>What happens</th><th>Reversible?</th></tr>
+  <tr><td>Hard delete</td><td>Row is permanently removed from the database</td><td>No</td></tr>
+  <tr><td>Soft delete</td><td>Row stays, but gets flagged as archived</td><td>Yes</td></tr>
+</table>
+
+<p>Hard deletion is simple — <code>session.delete(obj)</code> followed by <code>session.commit()</code>. The row is gone forever. If someone accidentally deletes a project, the only way to recover it is from a backup.</p>
+
+<p>Soft deletion adds an <code>archived</code> boolean column to the model. "Deleting" a project sets <code>archived = True</code>. The row remains in the database, but every query filters out archived records by default. The project disappears from the API and the frontend, but it's still there for audit, analytics, or recovery.</p>
+
+<h2>Hard delete implementation</h2>
+<p>The hard delete endpoint is the simplest write endpoint you'll ever write:</p>
+
+<pre><code>@app.delete("/projects/{project_id}", status_code=204)
+def delete_project(
+    project_id: int,
+    session: Session = Depends(session_dep),
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    session.delete(project)
+    session.commit()</code></pre>
+
+<p>Notice the <code>status_code=204</code>. A successful delete returns <code>204 No Content</code> — the resource is gone, so there's nothing to return. The client doesn't need a copy of the deleted object; they just need confirmation it's no longer there.</p>
+
+<p><code>session.delete(project)</code> stages the object for deletion. <code>session.commit()</code> executes the <code>DELETE</code> statement. After that, the row is physically removed from the table.</p>
+
+<h2>Soft delete implementation</h2>
+<p>Soft delete requires an extra column on the model:</p>
+
+<pre><code>class Project(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    description: str = ""
+    version: str = "0.1.0"
+    slug: str
+    archived: bool = False</code></pre>
+
+<p>The endpoint sets the flag instead of removing the row:</p>
+
+<pre><code>@app.delete("/projects/{project_id}", status_code=204)
+def archive_project(
+    project_id: int,
+    session: Session = Depends(session_dep),
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project.archived = True
+    session.add(project)
+    session.commit()</code></pre>
+
+<p>It looks almost identical to an update endpoint — because that's what it is. The only difference is which field you're setting.</p>
+
+<h2>Filtering out archived records</h2>
+<p>Setting the flag is only half the solution. Every query in your application must exclude archived records, or they'll keep showing up in the API:</p>
+
+<pre><code>@app.get("/projects", response_model=list[ProjectRead])
+def list_projects(session: Session = Depends(session_dep)):
+    statement = select(Project).where(Project.archived == False)
+    return session.exec(statement).all()</code></pre>
+
+<p><code>Project.archived == False</code> (or <code>~Project.archived</code> for the inverse) is the filter that hides soft-deleted records. It belongs in every <code>SELECT</code>, every <code>GET /projects/{id}</code> lookup, and every join query.</p>
+
+<p>This is the hidden cost of soft deletion: you add a column, and then you add a <code>WHERE</code> clause to every query. Miss one, and archived records leak through.</p>
+
+<h2>When to use each</h2>
+<p><strong>Use hard deletion</strong> when:</p>
+<ul>
+  <li>The data has no regulatory or audit value</li>
+  <li>Storage costs matter and records accumulate fast</li>
+  <li>The user explicitly expects permanent removal (e.g., GDPR "right to be forgotten")</li>
+</ul>
+
+<p><strong>Use soft deletion</strong> when:</p>
+<ul>
+  <li>You need an audit trail for compliance</li>
+  <li>Users expect an "undo" option</li>
+  <li>Other records reference this one via foreign keys</li>
+  <li>You want to analyze deletion patterns later</li>
+</ul>
+
+<p>In practice, most production systems default to soft deletion. It's safer — you can always hard-delete later in a cleanup job, but you can't recover a hard-deleted row without a backup.</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="硬刪除（hard delete）和軟刪除（soft delete）的主要差異是什麼？" data-correct="0" data-explain="硬刪除會永久移除資料列，軟刪除則是用標記隱藏資料列。">
+  <button class="opt">硬刪除永久移除資料列，軟刪除用標記隱藏</button>
+  <button class="opt">硬刪除需要認證，軟刪除不需要</button>
+  <button class="opt">硬刪除回傳 200，軟刪除回傳 204</button>
+  <button class="opt">硬刪除只能刪除空資料列，軟刪除可以刪除有資料的</button>
+</div>
+
+<div class="quiz" data-question="成功刪除資源後，通常應該回傳哪個狀態碼？" data-correct="2" data-explain="204 No Content 表示成功且不需要回傳主體。">
+  <button class="opt">200</button>
+  <button class="opt">201</button>
+  <button class="opt">204</button>
+  <button class="opt">404</button>
+</div>
+
+<div class="quiz" data-question="軟刪除後，為什麼每個查詢都要加上「archived == False」的過濾條件？" data-correct="1" data-explain="軟刪除的資料列還在資料庫裡，如果不過濾就會繼續出現在 API 回應中。">
+  <button class="opt">為了提升查詢效能</button>
+  <button class="opt">為了避免已刪除的資料列出現在結果中</button>
+  <button class="opt">為了確保資料能正確排序</button>
+  <button class="opt">為了符合 REST 規範</button>
+</div>
+
+<div class="quiz" data-question="下列哪個情境最適合使用軟刪除？" data-correct="1" data-explain="需要稽核軌跡、復原選項或保留外鍵參考時，軟刪除是較安全的選擇。">
+  <button class="opt">暫存資料表中的臨時記錄</button>
+  <button class="opt">需要稽核軌跡的合規系統</button>
+  <button class="opt">快取資料過期時</button>
+  <button class="opt">測試資料庫中的假資料</button>
+</div>
+
+<div class="quiz" data-question="session.delete(project) 之後，什麼動作會真正從資料庫移除資料？" data-correct="3" data-explain="delete() 只是排隊，commit() 才會執行 DELETE 陳述式。">
+  <button class="opt">session.get()</button>
+  <button class="opt">session.add()</button>
+  <button class="opt">session.refresh()</button>
+  <button class="opt">session.commit()</button>
+</div>
+
+<div class="quiz" data-question="在生產環境中，為什麼多數系統預設使用軟刪除？" data-correct="0" data-explain="軟刪除比較安全，之後可以透過清理工作硬刪除，但硬刪除的資料無法輕易復原。">
+  <button class="opt">軟刪除比較安全，之後可以隨時硬刪除</button>
+  <button class="opt">軟刪除執行速度比較快</button>
+  <button class="opt">軟刪除不需要修改資料庫結構</button>
+  <button class="opt">軟刪除能自動建立索引</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./update-endpoint.html">← 上一步：Update endpoint (PATCH)</a>
+  <span></span>
+</div>
+
+<div class="footer">
+  pro-python · Node 13: Write endpoints and slug generation
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

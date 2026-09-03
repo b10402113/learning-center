@@ -1,0 +1,89 @@
+---
+id: slug-generation
+title: Slug generation
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_32.md#slug-generation]]"
+created: 2026-09-03
+updated: 2026-09-03
+---
+
+# Slug generation
+
+## Learning goal
+
+Write a `slugify` helper that converts arbitrary project names into URL-friendly slugs, and understand when to hand-roll versus reach for a library.
+
+## Lesson
+
+你在建立一個專案追蹤系統，其中一個專案叫做 `"My Cool App!"`，它需要一個乾淨的 URL — 像是 `/projects/my-cool-app`。人類可以讀懂它，搜尋引擎可以索引它，複製到電子郵件裡也不會斷掉。這種把顯示名稱轉換成 URL 安全識別碼的過程，就叫做 **slug 產生（slug generation）**。
+
+規則很簡單：全部小寫、去除標點符號、空格換成破折號。但邊界情況才是 bug 藏身的地方 — 連續空格、前後空白、非 ASCII 字元，還有那些看起來已經很乾淨的名字。
+
+先從核心想法開始：遍歷每個字元，只保留安全的，然後用破折號把存活者連起來。
+
+```python
+def slugify(value: str) -> str:
+    cleaned = " ".join(
+        c for c in value.lower()
+        if c.isalnum() or c == " "
+    )
+    return "-".join(cleaned.split())
+```
+
+用 `"My Cool App!"` 逐步追蹤會發生什麼事：
+
+| 步驟 | 結果 |
+| --- | --- |
+| `value.lower()` | `"my cool app!"` |
+| 生成器過濾 | `"my cool app"`（驚號被剔除） |
+| `" ".join(...)` | `"my cool app"` |
+| `.split()` | `["my", "cool", "app"]` |
+| `"-".join(...)` | `"my-cool-app"` |
+
+生成器表達式 `c for c in value.lower() if c.isalnum() or c == " "` 是這個函式的核心。它只遍歷字串一次，保留字母、數字和空格。其他所有東西 — 標點符號、表情符號、特殊符號 — 都會被靜默丟棄。
+
+注意這個兩段式的 join/split 模式：`" ".join(...).split()`。`split()` 在沒有引數的時候會合併連續空白，所以 `"my   cool"` 會變成 `["my", "cool"]` 而不是 `["my", "", "", "cool"]`。這可以避免最後出現雙破折號。
+
+如果有人傳入空字串呢？函式會回傳 `""`，這是一個很糟糕的 slug。加上一個 fallback：
+
+```python
+def slugify(value: str) -> str:
+    cleaned = " ".join(
+        c for c in value.lower()
+        if c.isalnum() or c == " "
+    )
+    slug = "-".join(cleaned.split())
+    return slug or "project"
+```
+
+`slug or "project"` 在 `slug` 為空的時候會回傳 `"project"``。這是一個小細節，但即使輸入是垃圾，它也能讓你的 URL 保持可預測。
+
+這個實作對 ASCII 名字很管用，但一旦需要處理真實世界的文字，它就會崩潰：
+
+- `"Über Project"` → `"ber-project"`（德語母音變音被剔除）
+- `"我的專案"` → `""`（中文字元全部消失）
+- `"100% Pure"` → `"100-pure"`（百分號被剔除，但數字保留）
+
+在正式環境中，請使用 `python-slugify` 這類程式庫。它處理了 Unicode 正規化、音譯，以及你還沒想到的邊界情況。手刻版本是很好的學習練習 — 也是很好的面試答案 — 但不要把它交付給使用者。
+
+一旦你有了這個輔助函式，在 POST 端點裡產生 slug 只要一行：
+
+```python
+@app.post("/projects", response_model=ProjectRead)
+def create_project(project_in: ProjectCreate, session: Session = Depends(session_dep)):
+    slug = slugify(project_in.name)
+    project = Project(**project_in.model_dump(), slug=slug)
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project
+```
+
+slug 是從 name 推導出來的，不是由客戶端提供的。這是關鍵洞察：slug 是伺服器端該管的事。讓客戶端自己選 slug 會引發碰撞、注入攻擊，以及不一致的問題。
+
+## Course
+
+[↗ 課程頁面](../../lessons/slug-generation.html)
+
+## Sources

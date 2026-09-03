@@ -17,6 +17,69 @@ updated: 2026-09-03
 
 ## Lesson
 
+到目前為止，我們的路由直接回傳 dictionary。這能運作，但有兩個問題：**沒有合約**——呼叫者不知道回應裡有哪些欄位，只能猜；**沒有過濾**——如果 dictionary 裡有不想暴露的欄位（例如 `internal_notes`），它們會全部回傳。
+
+我們需要一個方式來定義「API 回應應該長什麼樣」。Pydantic 的 `BaseModel` 就是答案：
+
+```python
+from pydantic import BaseModel
+
+class ProjectRead(BaseModel):
+    id: int
+    name: str
+    slug: str
+```
+
+這個類別定義了三件事：回應必須有 `id`（整數）、`name`（字串）、`slug`（字串）。其他欄位？不會出現在回應裡。`ProjectRead` 就像一個模板——只有模板上有的欄位才會被保留。
+
+命名慣例：`Read` 後綴表示「讀取/回應」模型。之後你會看到 `Create`（建立請求）、`Update`（更新請求）等。這種命名讓模型的角色一目了然。
+
+定義好模型後，用 `response_model` 參數把它掛到路由裝飾器上：
+
+```python
+@app.get("/projects/{project_id}", response_model=ProjectRead)
+def get_project(project_id: int):
+    project = PROJECTS.get(project_id)
+    return project
+```
+
+現在 FastAPI 做了三件事：**過濾**——只回傳 `ProjectRead` 定義的欄位（`id`、`name`、`slug`），其他欄位被移除；**序列化**——把 Pydantic 模型轉成 JSON；**文件**——在 Swagger UI 裡顯示回應的結構。
+
+假設 mock 資料裡多了一個不想暴露的欄位：
+
+```python
+PROJECTS = {
+    1: {
+        "id": 1,
+        "name": "Project Alpha",
+        "slug": "project-alpha",
+        "internal_notes": "客戶要求延後交付"
+    },
+}
+```
+
+沒有 `response_model`：`internal_notes` 會出現在 API 回應裡。有 `response_model=ProjectRead`：回應只有 `id`、`name`、`slug`，`internal_notes` 被過濾掉。這就是 `response_model` 的防火牆效果。
+
+對於列表路由，可以用 `list[ProjectRead]` 表示「回應是一個 `ProjectRead` 物件的陣列」：
+
+```python
+@app.get("/projects", response_model=list[ProjectRead])
+def list_projects():
+    return list(PROJECTS.values())
+```
+
+Python 3.9+ 支援這個語法，不需要從 `typing` 匯入 `List`。
+
+為什麼要分離內部資料和 API 輸出？在真實應用程式裡，資料庫的模型通常比 API 回應包含更多欄位。例如 `created_at`、`internal_notes`、`owner_password_hash`——這些不應該暴露給外部。用 `response_model` 做一道防火牆：資料庫模型管儲存，Pydantic 模型管輸出。兩者分離，各管各的。
+
+到這裡，你已經有一個完整的 FastAPI 應用程式：路由、路徑參數、型別驗證、Pydantic 回應模型。資料還存在 dictionary 裡，但核心機制都到位了。之後的課程會逐步引入真正的資料庫、測試、部署。
+
+
+
+## Course
+
+[↗ 課程頁面](../../lessons/pydantic-response.html)
+
 ## Sources
 
 - [[sources/pro-python/completed/20260903_24-fastapi.md#pydantic-model-for-projectread]]

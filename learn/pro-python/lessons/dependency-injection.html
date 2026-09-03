@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用 Depends 注入資料庫 session</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 12 — Step 1/4 · Database-backed read endpoints</p>
+  <h1>用 Depends 注入資料庫 session</h1>
+
+  <h2>學習目標</h2>
+  <p>理解 FastAPI 如何用 Depends 把資料庫 session 自動注入路由，不需要自己手動開啟和關閉連線。</p>
+
+  <h2>為什麼需要依賴注入？</h2>
+  <p>每個路由函式都需要一個資料庫 session 來執行查詢。如果自己手動管理，每個函式裡都要重複寫：</p>
+
+  <pre><code>session = Session(engine)
+try:
+    # 做事
+    session.commit()
+finally:
+session.close()</code></pre>
+
+  <p>十個路由就寫十次。FastAPI 的依賴注入（dependency injection）把這段樣板集中到一個地方——寫一次，每個路由宣告「我需要 session」就自動拿到。</p>
+
+  <h2>get_session 依賴</h2>
+  <p>先寫一個產生器（generator）函式，負責產生和歸還 session：</p>
+
+  <pre><code>from sqlalchemy.orm import Session
+from sqlmodel import SQLModel, create_engine
+
+engine = create_engine("postgresql://user:pass@localhost/db")
+
+def get_session():
+    with Session(engine) as session:
+        yield session</code></pre>
+
+  <p><code>yield</code> 是關鍵。FastAPI 看到 <code>yield</code> 就知道這是依賴：<code>yield</code> 之前的程式碼是「啟動」（setup），之後的是「清理」（teardown）。路由執行前拿到 session，結束後自動關閉。</p>
+
+  <h2>在路由裡注入</h2>
+  <p>在路由參數列用 <code>Depends(get_session)</code> 宣告需求：</p>
+
+  <pre><code>from fastapi import Depends, FastAPI
+
+app = FastAPI()
+
+@app.get("/projects")
+def list_projects(session: Session = Depends(get_session)):
+    # session 已經準備好了，直接用
+    ...</code></pre>
+
+  <p>FastAPI 看到 <code>Depends(get_session)</code>，在呼叫路由前執行 <code>get_session()</code>，拿到 <code>yield</code> 出來的 session，塞進參數。路由執行完畢後，FastAPI 回到產生器繼續執行——也就是 <code>yield</code> 之後的程式碼，session 自動關閉。</p>
+
+  <h2>一個 session 管一件事</h2>
+  <p>每個請求拿到自己的 session，請求結束就關掉。不要在 session 裡做跨請求的快取——session 不是執行一次就永遠活著的，它是「一次請求一個」的生命週期。</p>
+
+  <h2>小結</h2>
+  <p><code>get_session</code> 是依賴工廠，<code>Depends(get_session)</code> 是注入點。FastAPI 自動處理啟動和清理，路由函式只需要宣告「我需要 session」就能拿到可用的 session。</p>
+
+  <div class="lesson-nav">
+    <a href="get-by-id.html">下一步：用 session.get() 查詢單筆資料 →</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="FastAPI 的 Depends 機制主要解決什麼問題？" data-correct="1" data-explain="Depends 把資源的啟動和清理集中管理，避免在每個路由重複寫樣的板程式碼。">
+    <button class="opt">讓路由跑得更快</button>
+    <button class="opt">統一管理資源的啟動和清理，避免重複程式碼</button>
+    <button class="opt">自動產生 API 文件</button>
+    <button class="opt">驗證請求參數的型別</button>
+  </div>
+
+  <div class="quiz" data-question="get_session 函式裡為什麼用 yield 而不是 return？" data-correct="2" data-explain="yield 讓 FastAPI 在路由結束後能回到函式繼續執行清理程式碼，return 做不到。">
+    <button class="opt">yield 比 return 快</button>
+    <button class="opt">yield 可以回傳多個值</button>
+    <button class="opt">yield 讓 FastAPI 能在路由執行後繼續做清理（teardown）</button>
+    <button class="opt">yield 是 Python 的規定</button>
+  </div>
+
+  <div class="quiz" data-question="一個 session 的生命週期是多久？" data-correct="0" data-explain="每個請求拿到自己的 session，請求結束就關閉，不跨請求共享。">
+    <button class="opt">一次請求</button>
+    <button class="opt">應用程式整個生命週期</button>
+    <button class="opt">十分鐘</button>
+    <button class="opt">直到手動關閉</button>
+  </div>
+
+  <div class="quiz" data-question="Depends(get_session) 中的 get_session 是什麼？" data-correct="3" data-explain="get_session 是一個依賴工廠函式，FastAPI 會呼叫它來取得依賴的值。">
+    <button class="opt">一個 session 物件</button>
+    <button class="opt">一個資料庫連線</button>
+    <button class="opt">一個路由函式</button>
+    <button class="opt">一個依賴工廠函式</button>
+  </div>
+
+  <div class="quiz" data-question="如果路由裡需要 session，應該怎麼宣告？" data-correct="1" data-explain="用 session: Session = Depends(get_session) 在參數列宣告。">
+    <button class="opt">session = get_session()</button>
+    <button class="opt">session: Session = Depends(get_session)</button>
+    <button class="opt">session = Session(engine)</button>
+    <button class="opt">session = Depends(Session)</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 12: Database-backed read endpoints · Step 1</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

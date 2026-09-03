@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Runtime behavior — hints don't validate</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 04 — Step 2/3 · Type hints for functions</p>
+  <h1>Runtime behavior — hints don't validate</h1>
+
+  <h2>學習目標</h2>
+  <p>理解 type hint 在 Python 執行時不會被驗證，以及為什麼傳錯型別時你看到的是 <code>AttributeError</code> 而不是 <code>TypeError</code>。</p>
+
+  <h2>一個實驗：故意傳錯型別</h2>
+  <p>我們有這個函式：</p>
+
+  <pre><code>def slugify(name: str, separator: str) -> str:
+    return name.strip().lower().replace(" ", separator)</code></pre>
+
+  <p>如果我們故意傳一個整數進去，會發生什麼事？</p>
+
+  <pre><code>result = slugify(123, "-")
+print(result)</code></pre>
+
+  <p>執行這段程式碼，你不會看到 <code>TypeError: name must be str</code>。你看到的是：</p>
+
+  <pre><code>AttributeError: 'int' object has no attribute 'strip'</code></pre>
+
+  <p>這就是關鍵：Python 完全忽略了 <code>name: str</code> 這個 hint。它直接執行 <code>name.strip()</code>，而整數沒有 <code>.strip()</code> 方法，所以丟出 <code>AttributeError</code>。</p>
+
+  <h2>為什麼是 AttributeError 而不是 TypeError？</h2>
+  <p>Type hint 的命名很容易讓人誤解。你以為「type hint = 型別提示 = 會檢查型別」，但實際上「hint」這個字就是「提示、建議」的意思。Python 直譯器在執行時**完全不會檢查**這些 hint。</p>
+
+  <p>所以當你傳錯型別時，錯誤會在「實際使用該值的那一刻」才發生，而不是在「函式被呼叫的那一刻」。如果一個物件剛好有同名的方法或屬性，甚至不會出錯——只是結果可能不是你要的。</p>
+
+  <h2>對比：真正的型別檢查</h2>
+  <p>有些語言（像 Java、C++）在呼叫函式前就會檢查引數的型別，型別不對直接拒絕。Python 不是這樣。Python 的 type hint 是給**外部工具**看的，不是給直譯器看的。</p>
+
+  <p>這張表整理了三種型別檢查的時機：</p>
+
+  <table>
+    <tr>
+      <th>檢查時機</th>
+      <th>誰來檢查</th>
+      <th>沒過會怎樣</th>
+    </tr>
+    <tr>
+      <td>靜態檢查（執行前）</td>
+      <td>mypy、IDE</td>
+      <td>工具報錯，程式還能跑</td>
+    </tr>
+    <tr>
+      <td>執行時（呼叫時）</td>
+      <td>無（Python 不檢查）</td>
+      <td>不會發生</td>
+    </tr>
+    <tr>
+      <td>執行時（使用時）</td>
+      <td>Python 直譯器</td>
+      <td>AttributeError 或 TypeError</td>
+    </tr>
+  </table>
+
+  <h2>一個更隱蔽的陷阱</h2>
+  <p>有時候傳錯型別不會立刻出錯，因為不同型別可能有同名的方法。例如：</p>
+
+  <pre><code>def get_length(obj: list) -> int:
+    return len(obj)</code></pre>
+
+  <p>如果你傳入一個字串 <code>"hello"</code>，<code>len("hello")</code> 會回傳 <code>5</code>，完全正常。但你的意圖應該是傳 list。這種 bug 比 AttributeError 更難抓，因為它不會報錯——只是結果錯了。</p>
+
+  <h2>所以 type hint 到底有什麼用？</h2>
+  <p>既然執行時不檢查，為什麼要寫 type hint？三個原因：</p>
+
+  <ol>
+    <li><strong>靜態分析工具</strong>：<code>mypy</code> 可以在執行前掃描你的程式碼，發現型別不一致的地方。它才是真正「檢查」type hint 的東西。</li>
+    <li><strong>IDE 支援</strong>：VS Code、PyCharm 會根據 type hint 提供自動完成、重構、跳轉定義。沒寫 hint 的時候，IDE 不知道參數型別，提示就弱很多。</li>
+    <li><strong>可讀性</strong>：type hint 就是一種文件。一個有 hint 的函式簽名，比沒有的更容易理解。</li>
+  </ol>
+
+  <h2>一個實際的 mypy 例子</h2>
+  <p>假設你有這段程式碼：</p>
+
+  <pre><code>def add(x: int, y: int) -> int:
+    return x + y
+
+result = add("hello", "world")
+print(result)</code></pre>
+
+  <p>Python 執行時不會報錯——<code>"hello" + "world"</code> 是合法的字串拼接，結果是 <code>"helloworld"</code>。但如果你用 <code>mypy</code> 檢查：</p>
+
+  <pre><code>mypy main.py</code></pre>
+
+  <p>mypy 會告訴你：</p>
+
+  <pre><code>error: Argument 1 to "add" has incompatible type "str"; expected "int"</code></pre>
+
+  <p>這就是 type hint 真正發揮作用的地方：它在執行前幫你抓到「你以為自己在做數學加法，其實在做字串拼接」這種邏輯錯誤。</p>
+
+  <h2>小結</h2>
+  <p>Type hint 在 Python 執行時不會被驗證。傳錯型別不會在函式入口被擋下來，而是在實際使用該值時才以 <code>AttributeError</code> 或 <code>TypeError</code> 的形式爆出來。要讓 type hint 真正起到「檢查」的作用，你需要用 <code>mypy</code> 這類靜態分析工具。下一步，我們會學到一個跟 type hint 無關、但經常一起出現的語法：用 <code>*</code> 強制關鍵字參數。</p>
+
+  <div class="lesson-nav">
+    <a href="hint-syntax.html">← 上一步：Type hint syntax for parameters and return types</a>
+    <a href="keyword-only-args.html">下一步：Keyword-only arguments via `*` separator →</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="當一個整數被傳入參數 hint 為 str 的函式時，Python 直譯器會怎麼做？" data-correct="1" data-explain="Python 執行時忽略 type hint，直接執行函式內部的程式碼。">
+    <button class="opt">在函式入口丟出 TypeError</button>
+    <button class="opt">忽略 hint，直接執行函式內部的程式碼</button>
+    <button class="opt">自動把整數轉換成字串</button>
+    <button class="opt">拒絕執行並提示型別錯誤</button>
+  </div>
+
+  <div class="quiz" data-question="def slugify(name: str) -> str: 被傳入整數 123 時，最可能出現什麼錯誤？" data-correct="2" data-explain="整數沒有 .strip() 方法，所以會出現 AttributeError。">
+    <button class="opt">TypeError</button>
+    <button class="opt">ValueError</button>
+    <button class="opt">AttributeError</button>
+    <button class="opt">NameError</button>
+  </div>
+
+  <div class="quiz" data-question="type hint 在何時會真正被「檢查」？" data-correct="0" data-explain="mypy 等靜態分析工具會在執行前檢查 type hint 是否被遵守。">
+    <button class="opt">mypy 靜態檢查時</button>
+    <button class="opt">Python 直譯器執行時</button>
+    <button class="opt">程式部署到伺服器時</button>
+    <button class="opt">使用者操作瀏覽器時</button>
+  </div>
+
+  <div class="quiz" data-question="以下哪個不是寫 type hint 的好處？" data-correct="3" data-explain="type hint 不會讓程式執行得更快，它只影響開發時的可讀性和靜態分析。">
+    <button class="opt">讓 IDE 提供更好的自動完成</button>
+    <button class="opt">讓 mypy 在執行前抓到型別錯誤</button>
+    <button class="opt">提升程式碼可讀性</button>
+    <button class="opt">讓程式執行得更快</button>
+  </div>
+
+  <div class="quiz" data-question="如果一個函式期望 list 但傳入 str，為什麼可能不會立刻出錯？" data-correct="1" data-explain="str 和 list 都有 len() 等方法，所以某些操作不會立刻報錯，但結果可能不是預期的。">
+    <button class="opt">Python 會自動把 str 轉換成 list</button>
+    <button class="opt">str 和 list 可能有同名的方法，導致操作合法但結果錯誤</button>
+    <button class="opt">type hint 會自動修正錯誤</button>
+    <button class="opt">str 是 list 的子類別</button>
+  </div>
+
+  <div class="quiz" data-question="mypy 的主要作用是什麼？" data-correct="0" data-explain="mypy 是靜態型別檢查工具，在執行前掃描程式碼，發現型別不一致。">
+    <button class="opt">在執行前檢查型別錯誤</button>
+    <button class="opt">在執行時驗證 type hint</button>
+    <button class="opt">自動修正型別錯誤</button>
+    <button class="opt">把 Python 編譯成機器碼</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 04: Type hints for functions · Step 2</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>
