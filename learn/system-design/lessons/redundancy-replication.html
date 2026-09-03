@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>冗餘與複製基礎</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>冗餘與複製基礎</h1>
+<p class="meta">system-design · proxy-redundancy · Step 3/4</p>
+
+<h2>學習目標</h2>
+<p>解釋冗餘（Redundancy）與複製（Replication）的概念，說明它們如何透過消除單點故障來提升系統可靠度。</p>
+
+<h2>從備份講起：為什麼需要冗餘？</h2>
+
+<p>想像你把所有重要文件都存在一台筆電裡。某天筆電壞了，所有資料全沒了。如果你同時把文件備份到外接硬碟，即使筆電壞了，你還有備份可以用。</p>
+
+<p>這就是<strong>冗餘</strong>（Redundancy）的核心思想：把關鍵元件<strong>多準備一份</strong>，這樣即使其中一個壞了，另一個能接手。在系統設計中，冗餘是消除<strong>單點故障</strong>（Single Point of Failure，SPOF）最直接的手段。</p>
+
+<h2>什麼是單點故障？</h2>
+
+<p>單點故障是指系統中只有一個的元件——它掛了，整個系統就跟著掛。</p>
+
+<pre><code>用戶端 ──→ 反向代理（只有一台！）──→ 伺服器</code></pre>
+
+<p>上面這個架構，如果反向代理掛了，所有用戶都連不上來。不管後面有幾台伺服器都沒用，因為流量根本過不去。</p>
+
+<p>冗餘的做法很直覺：多加一台反向代理。</p>
+
+<pre><code>用戶端 ──→ 反向代理 A ──→ 伺服器群
+       ──→ 反向代理 B ──→ 伺服器群</code></pre>
+
+<p>現在任何一台代理掛了，另一台能接手。單點故障消除了。</p>
+
+<h2>冗餘 vs 複製：有什麼不同？</h2>
+
+<p>這兩個詞經常被混用，但它們有不同的側重：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>概念</th>
+      <th>定義</th>
+      <th>重點</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>冗餘（Redundancy）</strong></td>
+      <td>重複部署關鍵元件，提供備援</td>
+      <td>可靠性——壞了一個還有另一個</td>
+    </tr>
+    <tr>
+      <td><strong>複製（Replication）</strong></td>
+      <td>將一份資料同步到多個位置</td>
+      <td>資料可用性——多個地方有同一份資料</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>冗餘是概念，複製是實作。你可以冗餘一台伺服器（硬體層面），也可以複製資料庫裡的資料（資料層面）。兩者通常一起使用。</p>
+
+<h2>資料庫複製</h2>
+
+<p>資料庫複製是分散式系統中最常見的複製形式。基本做法：有一台<strong>主資料庫</strong>（Primary）負責寫入，一台或多台<strong>副本資料庫</strong>（Replica）同步資料，負責讀取。</p>
+
+<pre><code>寫入 → 主資料庫 → 複製到 → 副本 A
+                        → 副本 B
+讀取 ← 用戶端 ← 從副本讀取</code></pre>
+
+<p>好處：</p>
+<ul>
+  <li><strong>讀取擴展</strong>：多個副本分擔讀取壓力</li>
+  <li><strong>故障轉移</strong>：主資料庫掛了，可以從副本中選一個升格為新主庫</li>
+  <li><strong>地理就近</strong>：在不同地區部署副本，讓用戶就近讀取，減少延遲</li>
+</ul>
+
+<p>但複製也帶來新的挑戰：</p>
+<ul>
+  <li><strong>一致性</strong>：副本之間的資料什麼時候同步？有延遲怎麼辦？</li>
+  <li><strong>衝突處理</strong>：如果兩個地方同時修改同一筆資料怎麼辦？</li>
+</ul>
+
+<p>這些挑戰會在後續的共識定理（CAP/PACELC）和一致性模型課程中深入討論。</p>
+
+<h2>冗餘的層次</h2>
+
+<p>冗餘不只存在於伺服器層。在一個完整的系統中，冗餘幾乎出現在每一層：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>層次</th>
+      <th>冗餘方式</th>
+      <th>保護什麼</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>硬體</td>
+      <td>多台伺服器、 RAID 磁碟陣列</td>
+      <td>伺服器故障、磁碟故障</td>
+    </tr>
+    <tr>
+      <td>服務</td>
+      <td>多個服務實例 + 負載均衡</td>
+      <td>單一服務實例故障</td>
+    </tr>
+    <tr>
+      <td>資料</td>
+      <td>資料庫複製、跨區域備份</td>
+      <td>資料遺失、資料庫故障</td>
+    </tr>
+    <tr>
+      <td>網路</td>
+      <td>多條網路路徑、多個 DNS 記錄</td>
+      <td>網路中斷</td>
+    </tr>
+    <tr>
+      <td>電力</td>
+      <td>UPS、備用發電機、多供電商</td>
+      <td>停電</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>系統設計的原則是：任何只有一份的東西，都可能成為單點故障。</p>
+
+<h2>面試中的關鍵點</h2>
+
+<p>在系統設計面試中，冗餘與複製是討論「可靠性」時必提的工具。面試官期望你能：</p>
+
+<ul>
+  <li><strong>定義單點故障</strong>，並舉例說明</li>
+  <li><strong>區分冗餘和複製</strong>（概念 vs 實作）</li>
+  <li>解釋<strong>資料庫複製</strong>的基本模式（主從複製）及其好處與挑戰</li>
+  <li>知道冗餘存在於<strong>多個層次</strong>（硬體、服務、資料、網路、電力）</li>
+</ul>
+
+<p>冗餘和複製是「讓系統不會因為一個元件壞掉就全倒」的基礎手段。下一課會把这些概念應用到 Proxy 架構上——怎麼設計一個不會因為一台代理掛掉就中斷的架構。</p>
+
+<h2>小結</h2>
+
+<p>冗餘是重複部署關鍵元件以消除單點故障；複製是將資料同步到多個位置以確保可用性。兩者通常一起使用。資料庫複製是分散式系統中最常見的複製形式，它帶來讀取擴展、故障轉移和地理就近的好處，但也引入一致性和衝突處理的挑戰。系統設計的原則是：任何只有一份的東西，都可能成為單點故障。</p>
+
+<div class="quiz" data-question="冗餘（Redundancy）最核心的目的是什麼？" data-correct="1" data-explain="冗餘是重複部署關鍵元件，確保一個壞了另一個能接手，消除單點故障。">
+  <button class="opt">提升系統效能</button>
+  <button class="opt">消除單點故障，提供備援</button>
+  <button class="opt">減少部署成本</button>
+  <button class="opt">簡化系統架構</button>
+</div>
+
+<div class="quiz" data-question="單點故障（Single Point of Failure）是指什麼？" data-correct="2" data-explain="系統中只有一個的元件，它掛了整個系統就跟著掛。">
+  <button class="opt">系統中最快的元件</button>
+  <button class="opt">系統中最貴的元件</button>
+  <button class="opt">系統中只有一個的元件，掛了全倒</button>
+  <button class="opt">系統中最常被存取的元件</button>
+</div>
+
+<div class="quiz" data-question="冗餘和複製的核心差異是什麼？" data-correct="0" data-explain="冗餘是概念（多準備一份），複製是實作（將資料同步到多個位置）。">
+  <button class="opt">冗餘是概念，複製是實作</button>
+  <button class="opt">冗餘是硬體，複製是軟體</button>
+  <button class="opt">兩者完全相同</button>
+  <button class="opt">冗餘是資料層，複製是服務層</button>
+</div>
+
+<div class="quiz" data-question="資料庫複製帶來的最大好處之一是什麼？" data-correct="3" data-explain="主資料庫掛了，可以從副本中選一個升格為新主庫，實現故障轉移。">
+  <button class="opt">減少儲存成本</button>
+  <button class="opt">簡化 SQL 語法</button>
+  <button class="opt">自動備份交易記錄</button>
+  <button class="opt">主資料庫故障時可從副本轉移</button>
+</div>
+
+<div class="quiz" data-question="冗餘出現在系統的哪些層次？" data-correct="2" data-explain="從硬體、服務、資料、網路到電力，每一層都可能需要冗餘。"):
+  <button class="opt">只有硬體層</button>
+  <button class="opt">只有資料庫層</button>
+  <button class="opt">硬體、服務、資料、網路、電力等多層</button>
+  <button class="opt">只有應用程式層</button>
+</div>
+
+<div class="quiz" data-question="系統設計中「任何只有一份的東西」代表什麼？" data-correct="1" data-explain="只有一份就意味著沒有備援，壞了就全沒了——它就是潛在的單點故障。">
+  <button class="opt">是最安全的設計</button>
+  <button class="opt">可能是單點故障</button>
+  <button class="opt">效能一定最好</button>
+  <button class="opt">成本一定最低</button>
+</div>
+
+<p class="footer">上一步：<a href="reverse-proxy.html">反向代理（Reverse Proxy）</a> · 下一步：<a href="redundant-proxy-architecture.html">冗餘 Proxy 架構設計</a></p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

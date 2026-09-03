@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>高層架構設計</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>高層架構設計</h1>
+<div class="meta">YouTube/Netflix · Step 3/6</div>
+
+<div class="learning-goal">
+  <h2>學習目標</h2>
+  <p>設計系統整體高層架構，定義核心元件與它們之間的交互關係。</p>
+</div>
+
+<section>
+  <h2>從需求到架構</h2>
+  <p>有了需求分析和容量估算，現在可以開始畫架構圖了。高層架構（High Level Design）的目標是把系統拆成幾個<strong>核心元件（Components）</strong>，並說明它們之間如何互動。面試中這部分通常佔 10-15 分鐘，你需要在白板上畫出一個清晰的架構圖。</p>
+  <p>YouTube 的高層架構可以分成兩條主要的資料流：<strong>上傳流程</strong>（Write Path）和<strong>觀看流程</strong>（Read Path）。這兩條流程的設計完全不同——上傳是寫入密集的非同步流程，觀看是讀取密集的同步流程。</p>
+</section>
+
+<section>
+  <h2>上傳流程（Write Path）</h2>
+  <p>當使用者上傳一部影片，資料會經過以下步驟：</p>
+  <p><strong>1. API 層</strong>——使用者透過 API 上傳影片。API 伺服器負責驗證、限流、並把影片推送到處理佇列。API 層不直接處理影片檔案，而是把大檔案的處理交給後端。</p>
+  <p><strong>2. 處理佇列（Processing Queue）</strong>——每部上傳的影片會被推送到一個訊息佇列（如 Kafka）。佇列的作用是<strong>解耦</strong>：上傳和處理可以獨立擴展，即使處理叢集暫時過載，影片也不會丟失。</p>
+  <p><strong>3. 轉碼器（Encoder）</strong>——從佇列中取出影片，轉成多種解析度和格式（4K、1080p、720p、480p，以及 H.264、H.265 等編碼格式）。轉碼是 CPU 密集型工作，需要專門的轉碼叢集。</p>
+  <p><strong>4. 縮圖生成器（Thumbnail Generator）</strong>——自動為每部影片生成幾張縮圖。縮圖是使用者決定是否點擊觀看的關鍵。</p>
+  <p><strong>5. 儲存</strong>——轉碼後的影片和縮圖被儲存到分散式檔案系統（如 HDFS 或物件儲存 S3）。</p>
+</section>
+
+<section>
+  <h2>觀看流程（Read Path）</h2>
+  <p>當使用者點擊播放一部影片，資料會經過以下步驟：</p>
+  <p><strong>1. API 層</strong>——使用者發送播放請求。API 伺服器先從元資料庫中查詢影片資訊（標題、描述、觀看次數等），同時把請求導向正確的影片來源。</p>
+  <p><strong>2. 快取層</strong>——熱門影片的元資料和影片片段會被快取。快取的命中率直接影響播放延遲。YouTube 的快取策略是多層的：記憶體快取 → SSD 快取 → CDN 邊緣節點 → 源頭儲存。</p>
+  <p><strong>3. CDN</strong>——影片檔案透過 CDN 分發到全球各地。使用者從最近的 CDN 節點取得影片串流，而不是直接從源頭伺服器下載。這大幅降低了延遲和源頭伺服器的壓力。</p>
+  <p><strong>4. 負載均衡器</strong>——把使用者的請求分散到多台伺服器。一致性雜湊（Consistent Hashing）可以確保同一部影片的請求導向同一個快取節點，提高快取命中率。</p>
+</section>
+
+<section>
+  <h2>API 設計</h2>
+  <p>在高層架構中，你需要定義幾個核心 API。YouTube 的 API 通常使用 REST 風格：</p>
+  <p><strong>上傳影片</strong>——<code>uploadVideo(api_dev_key, video_title, video_description, tags[], category_id, video_contents)</code>。參數包含 API 開發者金鑰（用於認證）、影片元資料、以及影片內容。</p>
+  <p><strong>搜尋影片</strong>——<code>searchVideo(api_dev_key, search_query, page_size, page_token)</code>。支援分頁搜尋，避免一次回傳太多結果。</p>
+  <p><strong>觀看影片</strong>——<code>getVideo(api_dev_key, video_id)</code>。回傳影片的元資料和播放串流的 URL。</p>
+  <p>這些 API 的設計要考慮<strong>認證</strong>（限制濫用）、<strong>限流</strong>（防止 DDoS）、以及<strong>版本控制</strong>（未來功能擴展）。</p>
+</section>
+
+<section>
+  <h2>關鍵設計決策</h2>
+  <p>在高層架構中有幾個重要的設計決策：</p>
+  <p><strong>上傳與處理分離</strong>——上傳 API 不直接處理影片轉碼，而是推送到佇列。這讓上傳流程快速回應使用者，轉碼在後端慢慢做。</p>
+  <p><strong>元資料與影片分離</strong>——影片檔案存在物件儲存，元資料存在關聯式資料庫。兩者用不同的技術和擴展策略。</p>
+  <p><strong>讀取走快取和 CDN</strong>——讀取密集的系統，快取是核心。幾乎所有讀取請求都應該先命中快取，只有快取miss才回源。</p>
+  <p><strong>寫入走佇列</strong>——寫入操作（上傳、評論、統計更新）先進佇列，再由後端工作者處理。這提高了系統的彈性和可靠性。</p>
+</section>
+
+<section>
+  <h2>你的經驗怎麼連結？</h2>
+  <p>你做過 REST API，這些 API 設計你應該很熟悉。YouTube 的 API 本質上就是你做過的 API 的放大版。差別在於：你需要加上佇列來處理非同步工作（你之前可能是同步處理），加上快取來應對讀取壓力（你之前可能不需要），加上 CDN 來分發大檔案（你之前可能只處理小檔案）。</p>
+</section>
+
+<section>
+  <h2>自我檢測</h2>
+
+  <div class="quiz" data-question="YouTube 上傳流程中，影片為什麼要先推送到佇列？" data-correct="1" data-explain="佇列的作用是解耦上傳和處理，讓上傳快速回應使用者，轉碼在後端非同步處理。">
+    <button class="opt">為了加密影片</button>
+    <button class="opt">為了解耦上傳和處理，讓上傳快速回應</button>
+    <button class="opt">為了節省儲存空間</button>
+    <button class="opt">為了減少 API 請求</button>
+  </div>
+
+  <div class="quiz" data-question="YouTube 觀看流程中，使用者從哪裡取得影片？" data-correct="2" data-explain="使用者從最近的 CDN 節點取得影片串流，而不是直接從源頭伺服器。">
+    <button class="opt">直接從源頭伺服器下載</button>
+    <button class="opt">從 API 伺服器下載</button>
+    <button class="opt">從最近的 CDN 節點取得</button>
+    <button class="opt">從資料庫讀取</button>
+  </div>
+
+  <div class="quiz" data-question="YouTube 的元資料和影片檔案為什麼要分開儲存？" data-correct="0" data-explain="影片是大檔案，適合物件儲存；元資料是結構化資料，適合關聯式資料庫。兩者用不同的技術和擴展策略。">
+    <button class="opt">因為兩者性質不同，需要不同的儲存技術</button>
+    <button class="opt">因為這樣比較安全</button>
+    <button class="opt">因為這樣比較便宜</button>
+    <button class="opt">因為這是業界標準</button>
+  </div>
+
+  <div class="quiz" data-question="YouTube 的轉碼器要做什麼？" data-correct="3" data-explain="轉碼器把原始影片轉成多種解析度和編碼格式，以適配不同裝置和網路條件。">
+    <button class="opt">壓縮影片到 1MB 以下</button>
+    <button class="opt">刪除重複的影片</button>
+    <button class="opt">加密影片內容</button>
+    <button class="opt">轉成多種解析度和編碼格式</button>
+  </div>
+
+  <div class="quiz" data-question="一致性雜湊（Consistent Hashing）在 YouTube 架構中的作用是什麼？" data-correct="1" data-explain="一致性雜湊確保同一部影片的請求導向同一個快取節點，提高快取命中率。">
+    <button class="opt">加密影片傳輸</button>
+    <button class="opt">確保同一部影片的請求導向同一個快取節點</button>
+    <button class="opt">壓縮影片檔案</button>
+    <button class="opt">負載均衡所有請求</button>
+  </div>
+</section>
+
+<div class="source">
+  <strong>延伸閱讀：</strong>DesignGuru — Designing YouTube or Netflix § High Level Design
+</div>
+
+<div class="footer">
+  <p>有不清楚的地方？問你的老師！</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="capacity-estimation.html">← 上一步：容量估算與約束條件</a>
+  <a href="data-modeling.html">下一步：資料建模與元數據分片 →</a>
+</nav>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

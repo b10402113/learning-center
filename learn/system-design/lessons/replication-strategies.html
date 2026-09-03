@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>複製策略：主從與對等</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>複製策略：主從與對等</h1>
+<p class="meta">system-design · data-strategies · Step 3/5</p>
+
+<h2>學習目標</h2>
+<p>理解主從複製與對等複製兩種架構的差異，並能依場景選擇適合的複製策略。</p>
+
+<h2>為什麼需要資料複製？</h2>
+
+<p>假設你的系統只有一個資料庫。當使用者量暴增時，所有讀取和寫入都擠在一台機器上，很快就會過載。更糟的是，如果這台機器硬碟壞了，所有資料就消失了。</p>
+
+<p>資料複製（Replication）就是把同一份資料複製到多台機器上。好處有二：一是<strong>讀取擴展</strong>——多台機器分攤讀取壓力；二是<strong>容錯</strong>——一台掛了，其他的還能提供服務。</p>
+
+<p>但「怎麼複製」有兩種根本不同的架構：主從複製和對等複製。</p>
+
+<h2>主從複製（Primary-Replica）</h2>
+
+<p>主從複製也叫 Master-Slave Replication。核心邏輯：<strong>一個主節點負責所有寫入，多個從節點負責讀取</strong>。</p>
+
+<pre><code>寫入 → [Primary] → 同步 → [Replica 1]
+                      → [Replica 2]
+                      → [Replica 3]
+讀取 ← [Replica 1/2/3]</code></pre>
+
+<p>用一個具體場景：你的電商網站有一個商品資料庫。所有商品資料的更新（新增商品、修改價格）都寫入 Primary。三台 Replica 從 Primary 同步資料。用戶查詢商品時，從任意一台 Replica 讀取。這樣讀取壓力分散到三台機器，寫入仍然集中在一台。</p>
+
+<p>主從複製的關鍵特點：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>特點</th>
+      <th>說明</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>單向資料流</strong></td>
+      <td>資料只從 Primary 流向 Replica，反向不行</td>
+    </tr>
+    <tr>
+      <td><strong>讀寫分離</strong></td>
+      <td>Primary 處理寫入，Replica 處理讀取</td>
+    </tr>
+    <tr>
+      <td><strong>中心化控制</strong></td>
+      <td>Primary 是單點， Replica 的數量可水平擴展</td>
+    </tr>
+    <tr>
+      <td><strong>同步/異步</strong></td>
+      <td>同步複製強一致但慢，異步複製快但可能丟資料</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>你在用過的 Postgres/MySQL 就支援主從複製。多數 Web 應用都採用這種架構——寫入主庫，讀取從庫。</p>
+
+<h3>主從複製的問題</h3>
+
+<p>最大問題是 <strong>Primary 是單點故障</strong>。如果 Primary 掛了，整個系統無法寫入。解決方案是「故障轉移」（Failover）：從多個 Replica 中選一個升級為新的 Primary。但這個過程可能造成短暫的寫入中斷，而且如果異步複製有延遲，新 Primary 可能缺少部分資料。</p>
+
+<h2>對等複製（Peer-to-Peer）</h2>
+
+<p>對等複製的核心邏輯：<strong>每個節點都是平等的，任何節點都能讀和寫</strong>。</p>
+
+<pre><code>[Node A] ←→ [Node B]
+  ↕            ↕
+[Node C] ←→ [Node D]</code></pre>
+
+<p>沒有主從之分，每個節點維護自己的一份資料副本，資料在所有節點之間雙向同步。任何節點的寫入都會同步到其他節點。</p>
+
+<p>對等複製的關鍵特點：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>特點</th>
+      <th>說明</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>多向資料流</strong></td>
+      <td>任何節點都能向其他節點同步資料</td>
+    </tr>
+    <tr>
+      <td><strong>無中心化</strong></td>
+      <td>沒有單一的控制點，每個節點自治</td>
+    </tr>
+    <tr>
+      <td><strong>高可用</strong></td>
+      <td>任何節點掛了，其他節點繼續服務</td>
+    </tr>
+    <tr>
+      <td><strong>衝突處理</strong></td>
+      <td>多個節點同時修改同一筆資料時需要解決衝突</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Cassandra、CouchDB 是典型的對等複製資料庫。當你需要「任何地理位置的用戶都能就近寫入」時，對等架構很合適——例如全球分佈的社交網路。</p>
+
+<h3>對等複製的問題</h3>
+
+<p>最大問題是<strong>衝突處理</strong>。當兩個節點同時修改同一筆資料時，誰的版本算「正確」？常見策略有：最後寫入勝出（Last Write Wins）、應用層合併、向量時鐘（Vector Clock）。每種策略都有取捨，這也是為什麼多數中小規模系統寧願選主從架構——簡單可控。</p>
+
+<h2>兩種架構的選擇</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>維度</th>
+      <th>主從複製</th>
+      <th>對等複製</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>控制模式</strong></td>
+      <td>中心化（Primary 控制）</td>
+      <td>去中心化（每個節點自治）</td>
+    </tr>
+    <tr>
+      <td><strong>資料流</strong></td>
+      <td>單向（Primary → Replica）</td>
+      <td>多向（任何節點 ↔ 任何節點）</td>
+    </tr>
+    <tr>
+      <td><strong>讀取擴展</strong></td>
+      <td>容易（加 Replica）</td>
+      <td>容易（加節點）</td>
+    </tr>
+    <tr>
+      <td><strong>寫入擴展</strong></td>
+      <td>困難（只有 Primary 能寫）</td>
+      <td>容易（任何節點能寫）</td>
+    </tr>
+    <tr>
+      <td><strong>故障處理</strong></td>
+      <td>需要 Failover 機制</td>
+      <td>天然容錯（掛一個不影響）</td>
+    </tr>
+    <tr>
+      <td><strong>複雜度</strong></td>
+      <td>低</td>
+      <td>高（衝突處理）</td>
+    </tr>
+    <tr>
+      <td><strong>適用場景</strong></td>
+      <td>傳統 Web 應用、讀多寫少</td>
+      <td>全球分佈系統、高可用需求</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>面試中的關鍵點</h2>
+
+<ul>
+  <li>能清楚解釋主從和對等的資料流動方向差異</li>
+  <li>能說明主從架構的單點故障問題和 Failover 方案</li>
+  <li>能解釋對等架構的衝突處理挑戰</li>
+  <li>能根據讀取/寫入比例和可用性需求選擇架構</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>主從複製簡單可控，適合讀多寫少的傳統 Web 應用；對等複製高可用但複雜，適合全球分佈系統。選擇時要權衡讀取擴展、寫入擴展、故障處理和衝突處理的取捨。</p>
+
+<div class="quiz" data-question="主從複製中，資料流動的方向是？" data-correct="1" data-explain="主從複製是單向的：資料只從 Primary 流向 Replica，Replica 不能向 Primary 寫入。">
+  <button class="opt">雙向：Primary 和 Replica 互相同步</button>
+  <button class="opt">單向：從 Primary 流向 Replica</button>
+  <button class="opt">單向：從 Replica 流向 Primary</button>
+  <button class="opt">任意方向：任何節點都能向其他節點同步</button>
+</div>
+
+<div class="quiz" data-question="主從架構最大的風險是什麼？" data-correct="2" data-explain="Primary 是單點故障——如果 Primary 掛了，整個系統無法寫入，需要 Failover 機制來選出新的 Primary。">
+  <button class="opt">讀取速度太慢</button>
+  <button class="opt">Replica 之間資料不一致</button>
+  <button class="opt">Primary 是單點故障，掛了就無法寫入</button>
+  <button class="opt">無法水平擴展</button>
+</div>
+
+<div class="quiz" data-question="對等複製中，多個節點同時修改同一筆資料時會發生什麼？" data-correct="3" data-explain="對等架構需要衝突處理機制（如 Last Write Wins、向量時鐘）來決定哪個版本是正確的，這是對等複製的主要複雜度來源。">
+  <button class="opt">自動合併，不需要任何處理</button>
+  <button class="opt">系統會阻止第二個寫入</button>
+  <button class="opt">資料會損壞</button>
+  <button class="opt">需要衝突處理機制來決定正確版本</button>
+</div>
+
+<div class="quiz" data-question="Cassandra 採用哪種複製架構？" data-correct="0" data-explain="Cassandra 是典型的對等複製資料庫，任何節點都能讀寫，沒有中心化的 Primary。">
+  <button class="opt">對等複製（Peer-to-Peer）</button>
+  <button class="opt">主從複製（Primary-Replica）</button>
+  <button class="opt">無複製（單節點）</button>
+  <button class="opt">混合架構</button>
+</div>
+
+<div class="quiz" data-question="如果一個系統的寫入量遠大於讀取量，哪種架構更容易擴展寫入？" data-correct="1" data-explain="對等架構中任何節點都能寫入，加節點就能分散寫入壓力；主從架構只有 Primary 能寫，寫入擴展困難。">
+  <button class="opt">主從複製</button>
+  <button class="opt">對等複製</button>
+  <button class="opt">兩者一樣容易</button>
+  <button class="opt">兩者都不適合</button>
+</div>
+
+<div class="quiz" data-question="異步主從複製可能導致什麼問題？" data-correct="2" data-explain="異步複製在 Primary 寫入成功後不等 Replica 同步就返回，如果 Primary 在同步前崩潰，部分資料會丟失。">
+  <button class="opt">讀取速度變慢</button>
+  <button class="opt">寫入速度變慢</button>
+  <button class="opt">Primary 崩潰時可能丟失尚未同步的資料</button>
+  <button class="opt">Replica 無法讀取資料</button>
+</div>
+
+<p class="footer">上一步：<a href="compression-deduplication.html">資料最佳化</a> · 下一步：<a href="batch-vs-stream.html">處理模式：批次與串流</a></p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Leader-Follower 選舉模式 — 共識與容錯</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Leader-Follower 選舉模式</h1>
+<p class="meta">系統設計面試 · 共識與容錯 · 步驟 5/5</p>
+
+<blockquote>
+<strong>學習目標</strong>：理解 Leader-Follower 架構如何簡化副本協調，以及故障轉移的處理方式。
+</blockquote>
+
+<h2>Quorum 的痛點</h2>
+
+<p>上一課我們學了 Quorum：讀取和寫入都要跟多台伺服器溝通。這在寫入頻繁的系統中會造成一個問題——如果多個節點同時收到寫入請求，怎麼確保它們的順序一致？怎麼避免衝突？</p>
+
+<p>這就是 Leader-Follower（領導者-追隨者）模式要解決的問題：<strong>用一個「老大」來統一管理寫入順序，其他節點只負責追隨</strong>。</p>
+
+<h2>Leader-Follower 的運作方式</h2>
+
+<h3>基本角色</h3>
+
+<table>
+<thead>
+<tr><th>角色</th><th>職責</th><th>數量</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Leader（領導者）</strong></td>
+<td>接收所有寫入請求，負責資料複製和協調</td>
+<td>1 個</td>
+</tr>
+<tr>
+<td><strong>Follower（追隨者）</strong></td>
+<td>接收 Leader 的複製資料，可處理讀取請求</td>
+<td>多個</td>
+</tr>
+</tbody>
+</table>
+
+<h3>運作流程</h3>
+
+<ol>
+<li>所有<strong>寫入</strong>請求都導向 Leader</li>
+<li>Leader 將寫入操作<strong>複製</strong>到所有 Follower</li>
+<li>Follower 確認接收後，Leader 才回應客戶端「寫入成功」</li>
+<li>讀取請求可以導向 Leader 或 Follower（取決於一致性需求）</li>
+</ol>
+
+<h2>故障轉移（Failover）</h2>
+
+<p>Leader 是單點，如果它掛了怎麼辦？系統需要自動選出新的 Leader，這就是<strong>故障轉移</strong>。</p>
+
+<h3>選舉流程</h3>
+
+<ol>
+<li>Follower 偵測到 Leader 沒有回應（透過 Heartbeat 心跳機制）</li>
+<li>多個 Follower 競爭成為新 Leader（透過選舉演算法，如 Raft）</li>
+<li>選出新 Leader 後，其他 Follower 切換到新 Leader</li>
+<li>新 Leader 確認所有 Follower 的資料狀態，決定是否需要補齊缺失的寫入</li>
+</ol>
+
+<h3>常見問題</h3>
+
+<table>
+<thead>
+<tr><th>問題</th><th>原因</th><th>解決方案</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>腦裂（Split Brain）</strong></td>
+<td>舊 Leader 沒真的掛，只是網路延遲，兩個 Leader 同時存在</td>
+<td>使用 Quorum 或 Fence �制制確保只有一個 Leader</td>
+</tr>
+<tr>
+<td><strong>資料不一致</strong></td>
+<td>故障轉移前，部分 Follower 可能沒收到最後幾筆寫入</td>
+<td>新 Leader 選出後，讓落後的 Follower 從新 Leader 同步</td>
+</tr>
+<tr>
+<td><strong>選舉時間過長</strong></td>
+<td>節點數量多時，選舉協商耗時</td>
+<td>限制候選人數量，使用優先順序或租約機制</td>
+</tr>
+</tbody>
+</table>
+
+<h2>同步 vs 非同步複製</h2>
+
+<table>
+<thead>
+<tr><th>方式</th><th>一致性</th><th>延遲</th><th>容錯</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>同步複製</strong></td>
+<td>強一致</td>
+<td>高（等所有 Follower 確認）</td>
+<td>低（任一 Follower 掛就卡住）</td>
+</tr>
+<tr>
+<td><strong>非同步複製</strong></td>
+<td>最終一致</td>
+<td>低（不用等 Follower）</td>
+<td>高（Follower 故障不影響寫入）</td>
+</tr>
+<tr>
+<td><strong>半同步複製</strong></td>
+<td>介於兩者之間</td>
+<td>中</td>
+<td>中（只需部分 Follower 確認）</td>
+</tr>
+</tbody>
+</table>
+
+<h2>面試中的應用</h2>
+
+<p>Leader-Follower 模式是大多數分散式資料庫的核心架構：MySQL Replication、PostgreSQL Streaming Replication、MongoDB Replica Set、Kafka Partition 的 ISR。在面試中，當你設計任何需要「多副本」的系統時，Leader-Follower 都是標準答案。</p>
+
+<div class="quiz" data-question="在 Leader-Follower 架構中，所有寫入請求都導向哪個角色？" data-correct="0" data-explain="Leader 負責接收所有寫入，確保寫入順序一致，然後複製到 Follower。">
+<button class="opt">Leader</button>
+<button class="opt">Follower</button>
+<button class="opt">任意節點</button>
+<button class="opt">客戶端自行決定</button>
+</div>
+
+<div class="quiz" data-question="當 Leader 節點故障時，系統需要執行什麼操作？" data-correct="2" data-explain="故障轉移（Failover）是從現有 Follower 中選出新 Leader 的過程。">
+<button class="opt">系統關閉直到修復</button>
+<button class="opt">所有 Follower 停止服務</button>
+<button class="opt">故障轉移（Failover）</button>
+<button class="opt">客戶端直接連接資料庫</button>
+</div>
+
+<div class="quiz" data-question="「腦裂（Split Brain）」問題是什麼？" data-correct="1" data-explain="腦裂是舊 Leader 沒真的掛掉（只是網路延遲），導致系統中同時存在兩個 Leader，可能造成資料衝突。">
+<button class="opt">所有節點同時故障</button>
+<button class="opt">兩個 Leader 同時存在，資料衝突</button>
+<button class="opt">Follower 之間無法通訊</button>
+<button class="opt">客戶端無法連接任何節點</button>
+</div>
+
+<div class="quiz" data-question="非同步複製的主要優勢是什麼？" data-explain="非同步複製不需要等 Follower 確認就能回應，延遲低且 Follower 故障不影響寫入。">
+<button class="opt">提供強一致性</button>
+<button class="opt">低延遲且高容錯</button>
+<button class="opt">不需要 Leader</button>
+<button class="opt">不需要網路連線</button>
+</div>
+
+<div class="quiz" data-question="MySQL Replication 使用的是哪種架構模式？" data-explain="MySQL 預設使用非同步的 Leader-Follower 架構，一個主庫（Leader）負責寫入，多個從庫（Follower）複製資料。">
+<button class="opt">對等式（Peer-to-Peer）</button>
+<button class="opt">Leader-Follower</button>
+<button class="opt">無主架構</button>
+<button class="opt">單機模式</button>
+</div>
+
+<div class="quiz" data-question="為了避免故障轉移後的資料不一致，新 Leader 通常會怎麼做？" data-explain="新 Leader 會讓落後的 Follower 從自己這裡同步缺失的寫入，確保所有節點最終一致。">
+<button class="opt">丟棄所有未同步的資料</button>
+<button class="opt">拒絕服務直到手動修復</button>
+<button class="opt">讓落後的 Follower 從新 Leader 同步</button>
+<button class="opt">從備份恢復資料</button>
+</div>
+
+<p class="footer">上一步：<a href="./quorum.html">Quorum 共識</a> · 回到節點概覽：<a href="./consensus.mdx">共識與容錯</a></p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

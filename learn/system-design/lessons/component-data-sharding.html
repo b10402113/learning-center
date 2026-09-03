@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>元件設計與資料分片</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>元件設計與資料分片</h1>
+<div class="meta">Instagram · Step 5/7</div>
+
+<div class="learning-goal">
+  <h2>學習目標</h2>
+  <p>能夠解讀讀寫分離的設計考量，並比較不同資料分片策略的優缺點，選擇適合 Instagram 場景的分片方式。</p>
+</div>
+
+<section>
+  <h2>讀寫分離的核心問題</h2>
+  <p>Instagram 的照片上傳（寫入）和照片瀏覽（讀取）有截然不同的特性。上傳是慢操作——照片要從使用者裝置傳到伺服器，再寫入磁碟。讀取是快操作——尤其是從快取中讀取時，延遲可以低到毫秒級。</p>
+  <p>問題在於：Web 伺服器有連線數上限。如果所有連線都被上傳請求佔滿，瀏覽請求就無法被服務。這就像一條高速公路，如果所有車道都被慢車佔滿，快車就過不去。</p>
+  <p>解決方案是<strong>讀寫分離</strong>：用一組伺服器專門處理寫入（上傳），另一組專門處理讀取（瀏覽）。兩組伺服器各自擴展，互不干擾。</p>
+</section>
+
+<section>
+  <h2>讀寫分離的架構</h2>
+  <p>具體做法：</p>
+  <ol>
+    <li><strong>寫入路徑</strong>：上傳請求到達寫入負載均衡器 → 分發到寫入應用伺服器 → 照片寫入物件儲存，元數據寫入主資料庫（Primary DB）</li>
+    <li><strong>讀取路徑</strong>：瀏覽請求到達讀取負載均衡器 → 分發到讀取應用伺服器 → 先查快取（Redis），快取未命中再查從資料庫（Replica DB）</li>
+  </ol>
+  <p>主資料庫（Primary）負責處理所有寫入，從資料庫（Replica）從主資料庫同步資料，專門服務讀取。這是<strong>主從複製（Primary-Replica）</strong>模式。</p>
+</section>
+
+<section>
+  <h2>資料分片策略</h2>
+  <p>當元數據量成長到單台資料庫無法承載時，就需要<strong>分片（Sharding）</strong>——把資料分散到多台資料庫伺服器上。Instagram 有三種主要的分片策略：</p>
+
+  <h3>策略一：按 UserID 分片</h3>
+  <p>把同一個使用者的所有照片存在同一個分片上。分片號 = UserID % 分片數。</p>
+  <p><strong>優點</strong>：查詢「某個使用者的所有照片」只需要訪問一個分片，延遲低。</p>
+  <p><strong>缺點</strong>：熱門使用者（如明星）的照片集中在一個分片，造成<strong>熱點（hotspot）</strong>問題。</p>
+
+  <h3>策略二：按 PhotoID 分片</h3>
+  <p>把照片分散到各個分片，不考慮使用者。分片號 = PhotoID % 分片數。</p>
+  <p><strong>優點</strong>：資料均勻分散，沒有熱點問題。</p>
+  <p><strong>缺點</strong>：查詢「某個使用者的所有照片」需要掃描所有分片，延遲高。</p>
+
+  <h3>策略三：按 PhotoID 的時間部分分片</h3>
+  <p>把 PhotoID 的建立時間作為分片依據。新照片自動進入新分片，舊分片不會有新資料寫入。</p>
+  <p><strong>優點</strong>：動態消息需要查最新照片，這種分片讓查詢集中在少數幾個分片上，延遲低。</p>
+  <p><strong>缺點</strong>：需要額外的機制來保證 PhotoID 的唯一性。</p>
+</section>
+
+<section>
+  <h2>Instagram 的選擇</h3>
+  <p>Instagram 選擇<strong>按 PhotoID 分片</strong>，原因是：</p>
+  <p>Instagram 的核心查詢是「產生動態消息」——需要取得追蹤對象的最新照片。如果按 UserID 分片，產生一個動態消息需要查詢數百個使用者的照片，分散在不同分片上。如果按 PhotoID 分片，每個分片都有一部分最新照片，查詢可以並行化。</p>
+  <p>至於熱點問題，可以用<strong>一致性雜湊（Consistent Hashing）</strong>來動態調整分片映射，把熱點分散到多個分片上。</p>
+</section>
+
+<section>
+  <h2>你的經驗怎麼連結？</h2>
+  <p>你用過 Redis 和 MongoDB，可能已經接觸過分片的概念。Instagram 的分片策略選擇展示了一個重要的設計取捨：沒有完美的分片方式，只有最適合你的查詢模式的方式。你之前可能根據「直覺」來選擇分片鍵，但面試中考的是你能不能分析不同方案的優缺點，並根據系統特性做出合理的選擇。</p>
+</section>
+
+<section>
+  <h2>自我檢測</h2>
+
+  <div class="quiz" data-question="為什麼 Instagram 需要把讀寫分離？" data-correct="1" data-explain="上傳是慢操作，會佔滿連線數。分離後讀取不會被寫入阻塞。">
+    <button class="opt">為了降低成本</button>
+    <button class="opt">因為上傳是慢操作，會佔滿連線數，阻塞讀取</button>
+    <button class="opt">因為讀取和寫入需要用不同的程式語言</button>
+    <button class="opt">因為面試官要求這樣做</button>
+  </div>
+
+  <div class="quiz" data-question="按 UserID 分片的主要缺點是什麼？" data-correct="2" data-explain="熱門使用者（如明星）的照片集中在一個分片，造成熱點問題。">
+    <button class="opt">查詢速度太慢</button>
+    <button class="opt">資料不一致</button>
+    <button class="opt">熱門使用者造成熱點問題</button>
+    <button class="opt">不支持水平擴展</button>
+  </div>
+
+  <div class="quiz" data-question="主從複製（Primary-Replica）模式中，誰負責處理寫入？" data-correct="0" data-explain="Primary 負責寫入，Replica 從 Primary 同步資料，專門服務讀取。">
+    <button class="opt">Primary（主資料庫）</button>
+    <button class="opt">Replica（從資料庫）</button>
+    <button class="opt">兩者都可以</button>
+    <button class="opt">負載均衡器</button>
+  </div>
+
+  <div class="quiz" data-question="Instagram 選擇按 PhotoID 分片的主要原因是什麼？" data-correct="3" data-explain="動態消息需要查最新照片，按 PhotoID 分片讓查詢可以並行化，集中在少數分片上。">
+    <button class="opt">因為 PhotoID 最容易生成</button>
+    <button class="opt">因為這樣資料最均勻</button>
+    <button class="opt">因為這樣不需要快取</button>
+    <button class="opt">因為動態消息需要查最新照片，這種分片讓查詢可以並行化</button>
+  </div>
+
+  <div class="quiz" data-question="什麼是一致性雜湊（Consistent Hashing）在分片中的作用？" data-correct="1" data-explain="一致性雜湊可以動態調整分片映射，把熱點分散到多個分片上。">
+    <button class="opt">加速資料庫查詢</button>
+    <button class="opt">動態調整分片映射，分散熱點</button>
+    <button class="opt">減少資料庫連線數</button>
+    <button class="opt">壓縮資料大小</button>
+  </div>
+
+  <div class="quiz" data-question="快取在 Instagram 讀取路徑中的位置是？" data-correct="2" data-explain="讀取請求先查快取（如 Redis），快取未命中才查從資料庫。">
+    <button class="opt">在負載均衡器之前</button>
+    <button class="opt">在從資料庫之後</button>
+    <button class="opt">在應用伺服器和從資料庫之間</button>
+    <button class="opt">在物件儲存之前</button>
+  </div>
+</section>
+
+<div class="source">
+  <strong>延伸閱讀：</strong>DesignGuru — Designing Instagram § Component Design & Data Sharding
+</div>
+
+<div class="footer">
+  <p>有不清楚的地方？問你的老師！</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="data-modeling.html">← 上一步：資料庫建模與 Schema 設計</a>
+  <a href="newsfeed-design.html">下一步：動態消息生成設計 →</a>
+</nav>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

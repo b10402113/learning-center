@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Uber 即時位置與配對設計 — Newsfeed & Yelp/Uber</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<p class="meta">Newsfeed &amp; Yelp/Uber · 第 4 步（共 5 步）</p>
+
+<h1>Uber 即時位置與配對設計</h1>
+
+<h2>學習目標</h2>
+<p>了解如何修改 Yelp 的靜態鄰近搜尋架構來支援 Uber 場景中駕駛位置的頻繁更新，以及如何實現即時乘客-駕駛配對。</p>
+
+<hr>
+
+<section>
+<h2>1. 從 Yelp 到 Uber：核心差異</h2>
+<p>Yelp 的 QuadTree 建立在一個假設上：地點的位置幾乎不變。但 Uber 的駕駛位置每 3 秒更新一次——50 萬名活躍駕駛每秒產生約 167K 次位置更新。</p>
+<p>這帶來兩個核心問題：</p>
+<ul>
+<li><strong>QuadTree 更新成本高</strong>：每次位置更新都需要找到舊節點、刪除、計算新節點、插入——時間複雜度 O(log n)，但每秒 167K 次就成為瓶頸</li>
+<li><strong>通知問題</strong>：當駕駛進入乘客的搜尋半徑時，需要即時通知乘客</li>
+</ul>
+</section>
+
+<section>
+<h2>2. 修改後的架構</h2>
+
+<h3>記憶體中的 QuadTree</h3>
+<p>將 QuadTree 放在記憶體中（而非磁碟），減少每次更新的 I/O 成本。駕駛的最新位置存儲在記憶體的 QuadTree 葉節點中。</p>
+
+<h3>持久化存儲</h3>
+<p>為了防止伺服器崩潰導致位置資料遺失，將駕駛位置同步寫入 SSD（固態硬碟）作為持久化存儲。SSD 提供快速的讀寫能力，可以在主從伺服器都宕機時恢復資料。</p>
+
+<h3>增量更新</h3>
+<p>與 Yelp 的全量重建不同，Uber 使用增量更新：當駕駛報告新位置時，系統只需從 QuadTree 的舊位置中刪除該駕駛，再插入到新位置的節點中。不需要重建整個 QuadTree。</p>
+</section>
+
+<section>
+<h2>3. 叫車流程</h2>
+<p>當乘客發出叫車請求時：</p>
+<ol>
+<li><strong>搜尋附近可用駕駛</strong>：以乘客位置為中心，搜尋指定半徑內的所有可用駕駛</li>
+<li><strong>排名與篩選</strong>：按距離和評分對附近的駕駛排名，選擇最佳匹配</li>
+<li><strong>發送請求</strong>：向選中的駕駛發送叫車請求</li>
+<li><strong>等待回應</strong>：如果駕駛在一定時間內未回應，自動嘗試下一個最佳匹配</li>
+<li><strong>確認配對</strong>：駕駛接受後，乘客收到駕駛資訊（姓名、車型、車牌、預計到達時間）</li>
+</ol>
+
+<h3>即時位置追蹤</h3>
+<p>配對成功後，駕駛的位置更新會即時推送到乘客的 App 中，讓乘客可以看到駕駛的實時位置和預計到達時間。</p>
+</section>
+
+<section>
+<h2>4. 排名機制</h2>
+<p>搜尋結果不只是按距離排序。Uber 的排名會考慮多個因素：</p>
+<table>
+<tr><th>因素</th><th>說明</th></tr>
+<tr><td>距離</td><td>離乘客越近的駕駛排名越高</td></tr>
+<tr><td>評分</td><td>乘客評分高的駕駛排名越高</td></tr>
+<tr><td>歷史表現</td><td>完成率、取消率等</td></tr>
+<tr><td>預估到達時間</td><td>考慮路況和交通狀況</td></tr>
+</table>
+<p>面試中你可以簡化排名邏輯，但要能解釋：純距離排名可能不夠好，因為高評分駕駛即使稍遠也可能提供更好的服務體驗。</p>
+</section>
+
+<section>
+<h2>5. 進階問題</h2>
+
+<h3>網路斷線處理</h3>
+<p>駕駛在行駛中可能遇到網路不穩定的區域。系統需要處理以下場景：</p>
+<ul>
+<li>駕駛斷線後重新連接——需要重新同步位置</li>
+<li>乘客在行程中斷線——計費和位置追蹤如何持續？</li>
+<li>伺服器宕機——如何從備份中恢復？</li>
+</ul>
+
+<h3>推播 vs 拉取</h2>
+<p>在叫車場景中，駕駛的位置更新是推播模式（駕駛主動推送），而乘客查看附近駕駛是拉取模式（乘客主動查詢）。這種混合模式平衡了即時性和資源消耗。</p>
+
+<h3>地理位置通知</h3>
+<p>除了搜尋，Uber 還需要在駕駛進入某個區域時觸發通知（如「附近有新訂單」）。這需要在 QuadTree 上建立地理圍欄（Geofence），當駕駛位置跨越圍欄邊界時觸發事件。</p>
+</section>
+
+<hr>
+
+<div class="lesson-nav">
+<span><a href="./proximity-search-design.html">← 上一步：Yelp 鄰近搜尋設計</a></span>
+<span><a href="./reliability-optimization.html">下一步：快取、複製與容錯設計 →</a></span>
+</div>
+
+<div class="footer">
+<p>系統設計面試 · Newsfeed &amp; Yelp/Uber</p>
+</div>
+
+<div class="quiz" data-question="Uber 的 QuadTree 需要頻繁更新，與 Yelp 的靜態 QuadTree 最大的差別是什麼？" data-correct="2" data-exify="Uber 每秒有 ~167K 次位置更新，每次都需要從 QuadTree 中刪除舊位置並插入新位置。">
+<button class="opt">Uber 的地點更多</button>
+<button class="opt">Uber 的搜尋範圍更小</button>
+<button class="opt">駕駛位置每 3 秒更新一次，QuadTree 需要頻繁更新</button>
+<button class="opt">Uber 不需要 QuadTree</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Uber 將駕駛位置存儲在 SSD 上？" data-correct="1" data-explain="SSD 作為持久化存儲，在主從伺服器都宕機時可以從 SSD 恢復位置資料。">
+<button class="opt">SSD 比記憶體更快</button>
+<button class="opt">防止伺服器宕機導致資料遺失</button>
+<button class="opt">節省記憶體成本</button>
+<button class="opt">方便資料分析</button>
+</div>
+
+<div class="quiz" data-question="Uber 的增量更新與 Yelp 的全量重建有什麼不同？" data-correct="0" data-explain="增量更新只需從 QuadTree 的舊位置刪除駕駛並插入新位置，不需要重建整個結構。">
+<button class="opt">只需刪除舊位置並插入新位置</button>
+<button class="opt">每次更新都重建整個 QuadTree</button>
+<button class="opt">不需要更新 QuadTree</button>
+<button class="opt">每次更新都重新分片</button>
+</div>
+
+<div class="quiz" data-question="乘客發出叫車請求後，如果選中的駕駛在一定時間內未回應，系統會怎麼做？" data-correct="3" data-exify="系統會自動嘗試下一個最佳匹配的駕駛，確保乘客能盡快叫到車。">
+<button class="opt">終止叫車請求</button>
+<button class="opt">要求乘客重新輸入位置</button>
+<button class="opt">向所有附近駕駛廣播</button>
+<button class="opt">自動嘗試下一個最佳匹配</button>
+</div>
+
+<div class="quiz" data-question="Uber 的排名機制中，為什麼不只按距離排序？" data-correct="1" data-explain="高評分駕駛即使稍遠也可能提供更好的服務體驗，排名需要綜合多個因素。">
+<button class="opt">距離計算太慢</button>
+<button class="opt">高評分駕駛可能提供更好的服務</button>
+<button class="opt">距離不重要</button>
+<button class="opt">所有駕駛距離一樣</button>
+</div>
+
+<div class="quiz" data-question="地理圍欄（Geofence）在 Uber 中的主要用途是什麼？" data-correct="2" data-explain="當駕駛位置跨越圍欄邊界時觸發事件，如「附近有新訂單」通知。">
+<button class="opt">儲存駕駛位置</button>
+<button class="opt">計算路徑</button>
+<button class="opt">在駕駛進入某區域時觸發通知</button>
+<button class="opt">限制搜尋範圍</button>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

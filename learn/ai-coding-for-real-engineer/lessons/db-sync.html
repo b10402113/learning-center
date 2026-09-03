@@ -1,93 +1,185 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SQLite 與 Drizzle：資料庫如何與 code 同步</title>
-  <link rel="stylesheet" href="./assets/shared.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SQLite 與 Drizzle：資料庫如何與 code 同步</title>
+<link rel="stylesheet" href="./assets/shared.css">
 </head>
 <body>
 
 <h1>SQLite 與 Drizzle：資料庫如何與 code 同步</h1>
-<p class="meta">Node 1 · db-sync · schema 不會自動生效，你要親自把它推上去</p>
+<p class="meta">Step 2/3 · 把環境跑起來</p>
 
-<h2>Learning goal</h2>
-<p>解釋為什麼 schema 改了不會自動生效，用 generate → migrate 讓 migration 檔案與資料庫跟上 schema，並用刪 data.db + reseed 重置資料庫。</p>
+<div class="learning-goal">
+<strong>學習目標：</strong>解釋為什麼 schema 改了不會自動生效，用 generate → migrate 讓 migration 檔案與資料庫跟上 schema，並用刪 data.db + reseed 重置資料庫。
+</div>
 
-<h2>SQLite：一個檔案就是一個資料庫</h2>
-<p>Playground 用的是 SQLite，不是架在主機上的 Postgres。SQLite 把整個資料庫存在本地檔案裡（<code>data.db</code>，加上 <code>data.db-shm</code> 與 <code>data.db-wal</code> 這兩個配套檔）。這帶來一個好處：<strong>重置超容易</strong>——刪掉 <code>data.db</code> 再 seed 一次就好，因為全部都是假資料。</p>
+<h2>SQLite 是什麼</h2>
 
-<h2>Drizzle：schema.ts 是 source of truth，但改它不會自動生效</h2>
-<p>課程用 Drizzle ORM 管資料庫。真正的 source of truth 是 <code>schema.ts</code>——你定義資料表的地方。但這裡有個反直覺的陷阱：</p>
-<blockquote class="bad-code">
-<p><strong>改了 schema.ts，資料庫不會自動跟上。</strong> 沒有什麼魔法同步。你要親手把變更推下去，而推下去需要兩步。</p>
-</blockquote>
+<p>Playground 用的資料庫是 <strong>SQLite</strong>——一個「一個檔案就是一個資料庫」的輕量資料庫。在你的專案目錄裡，它由三個檔案組成：</p>
 
-<h2>兩步：generate → migrate</h2>
 <table>
-  <tr><th>步驟</th><th>命令</th><th>做什麼</th><th>改了什麼</th></tr>
-  <tr><td>1. generate</td><td><code>db generate</code></td><td>從 schema 產出 migration 檔案</td><td>新增 migration 檔（程式碼世界）</td></tr>
-  <tr><td>2. migrate</td><td><code>db migrate</code></td><td>把 pending migration 套到資料庫</td><td>真的動到 data.db（資料庫世界）</td></tr>
+  <thead>
+    <tr>
+      <th>檔案</th>
+      <th>作用</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>data.db</code></td>
+      <td>主資料庫檔案</td>
+    </tr>
+    <tr>
+      <td><code>data.db-shm</code></td>
+      <td>共享記憶體（SQLite 併發用）</td>
+    </tr>
+    <tr>
+      <td><code>data.db-wal</code></td>
+      <td>預寫式日誌（Write-Ahead Logging）</td>
+    </tr>
+  </tbody>
 </table>
-<p>generate 產生的是「migration 檔案」——記錄 schema 變更的指令集；migrate 才把這些指令套進實際的資料庫檔案。跳過 migrate，你的 schema 和資料庫就處於不同步狀態。</p>
 
-<h2>為什麼這對 agent 特別重要</h2>
-<p>課程的實戰觀察：<strong>agent 通常會自己想到要 generate，但常常漏掉 migrate。</strong> 於是你會看到「agent 以為自己動了資料庫，其實沒有」的假象——schema 檔改了、migration 產了，但資料庫裡什麼都沒發生。所以當 agent 在碰資料庫時，你要主動確認 migrate 有沒有跑。這是你在 HITL 模式要盯的第一個點。</p>
+<p>跟 Postgres 或 MySQL 不同，SQLite 不需要跑一個伺服器。它就是一個檔案，讀寫都在本地。這讓重置超級容易——刪掉 <code>data.db</code> 再 seed 一次就好。</p>
 
-<h2>重置：刪 data.db + reseed</h2>
-<p>任何時候想把資料庫退回乾淨狀態：</p>
-<pre><code>rm data.db        # 刪掉 SQLite 檔案
-pnpm db:seed      # 重新種假資料</code></pre>
-<p>因為都是 dummy data，刪掉重來完全沒有損失。這也意味著你不需要「逆向」改資料庫——搞砸了就直接重置。</p>
+<h2>Drizzle ORM 與 schema.ts</h2>
+
+<p>這門課不用裸 SQL，而是用 <strong>Drizzle ORM</strong>（Object-Relational Mapping）來定義資料庫結構。你在 <code>schema.ts</code> 裡用 TypeScript 定義資料表和欄位，Drizzle 把它們翻譯成 SQL。</p>
+
+<p><code>schema.ts</code> 是整個資料庫的 <strong>source of truth</strong>（唯一真相來源）。你想改資料庫結構，改的是這個檔案。</p>
+
+<div class="bad-code">
+<strong>反模式：</strong>直接手動改 <code>data.db</code> 或手動跑 SQL。你的改動會在下次 seed 時被覆蓋，而且 schema.ts 跟資料庫會永遠不同步。
+</div>
+
+<h2>核心陷阱：改了不會自動生效</h2>
+
+<p>這是整堂課最重要的反直覺點：你改了 <code>schema.ts</code>，<strong>資料庫不會自動跟上</strong>。</p>
+
+<p>為什麼？因為 Drizzle 採用的是「先產 migration，再套 migration」的兩步流程。它不會在你存檔時自動偵測 schema 變更並同步——你必須手動推兩步：</p>
+
+<h3>Step 1：Generate migration</h3>
+
+<pre><code>pnpm db generate</code></pre>
+
+<p>這一步從 <code>schema.ts</code> 產出 migration 檔案（SQL 腳本），放在 migrations 目錄裡。這是<strong>程式碼世界</strong>的產物——一個描述「資料庫該長什麼樣」的檔案。</p>
+
+<h3>Step 2：Apply migration</h3>
+
+<pre><code>pnpm db migrate</code></pre>
+
+<p>這一步把 pending migration 套進實際的資料庫。這是<strong>資料庫世界</strong>的動作——真正的 <code>data.db</code> 被改寫。</p>
+
+<div class="analogy">
+<strong>類比：</strong>Generate 是畫建築圖、Migrate 是照圖施工。你畫了圖不代表牆會自己長出來——你得叫工人進場。跳過 migrate，就像畫了圖但沒施工，schema 和資料庫永遠不同步。
+</div>
+
+<h2>Agent 的常見錯誤</h2>
+
+<p>在實戰中，agent 通常<strong>自己會想到跑 generate</strong>，但常常<strong>漏掉 migrate</strong>。結果就是你會看到「agent 以為自己動了資料庫其實沒有」的假象——它跑完了 generate，覺得 schema 已經更新了，但資料庫還停留在舊版。</p>
+
+<p>這是你在 HITL（Human-In-The-Loop）模式要盯的第一個點。每次 agent 改了 schema，你都要確認它跑了 migrate。</p>
+
+<h2>搞砸了怎麼辦：刪 data.db + reseed</h2>
+
+<p>不需要逆向 migration。因為全部都是假資料，最簡單的重置方式：</p>
+
+<pre><code># 刪掉資料庫
+rm data.db data.db-shm data.db-wal
+
+# 重新 seed
+pnpm db:seed</code></pre>
+
+<p>乾淨俐落，零損失。你在練習環境裡不需要擔心「資料備份」的問題。</p>
+
+<h2>決策樹</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>情況</th>
+      <th>做法</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>改了 schema.ts</td>
+      <td><code>db generate</code> → <code>db migrate</code></td>
+    </tr>
+    <tr>
+      <td>Agent 改了 schema 但沒 migrate</td>
+      <td>手動跑 <code>db migrate</code></td>
+    </tr>
+    <tr>
+      <td>資料庫壞了 / 想全部重來</td>
+      <td>刪 <code>data.db</code> + <code>pnpm db:seed</code></td>
+    </tr>
+    <tr>
+      <td>不確定要不要重置</td>
+      <td>先 seed 看看，不行就刪重來</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>小結</h2>
+
+<blockquote>
+<strong>資料庫同步流程</strong>：schema.ts 是 source of truth，改了要手動 generate → migrate。搞砸就刪 data.db + reseed。Agent 常漏 migrate，你在 HITL 模式要盯。
+</blockquote>
 
 <h2>Quiz</h2>
 
-<div class="quiz" data-question="SQLite 的資料庫本體存在哪裡？" data-correct="0" data-explain="SQLite 把整個資料庫存在本地檔案 data.db（加 shm/wal 配套檔），不像 hosted Postgres 架在主機上。">
-  <button class="opt">本地檔案 data.db</button>
-  <button class="opt">遠端 Postgres 主機</button>
-  <button class="opt">記憶體快取</button>
-  <button class="opt">Docker volume</button>
+<div class="quiz" data-question="schema.ts 的角色是什麼？" data-correct="0" data-explain="schema.ts 是整個資料庫的 source of truth——你想改資料庫結構，改的是這個檔案。">
+  <button class="opt">資料庫的唯一真相來源</button>
+  <button class="opt">一個備份檔案</button>
+  <button class="opt">migration 的執行腳本</button>
+  <button class="opt">seed 資料的定義檔</button>
 </div>
 
-<div class="quiz" data-question="Drizzle 的 source of truth 是哪個檔案？" data-correct="3" data-explain="schema.ts 是定義資料表的地方，是 Drizzle 的 source of truth。">
-  <button class="opt">data.db</button>
-  <button class="opt">drizzle.config.ts</button>
-  <button class="opt">migrations/ 資料夾</button>
-  <button class="opt">schema.ts</button>
+<div class="quiz" data-question="db generate 做了什麼？" data-correct="2" data-explain="它從 schema.ts 產出 migration 檔案（SQL 腳本），放在 migrations 目錄裡。">
+  <button class="opt">把 migration 套進資料庫</button>
+  <button class="opt">重置資料庫</button>
+  <button class="opt">從 schema.ts 產出 migration 檔案</button>
+  <button class="opt">安裝 Drizzle ORM</button>
 </div>
 
-<div class="quiz" data-question="改了 schema.ts 之後，為什麼資料庫沒變？" data-correct="1" data-explain="schema 不會自動同步——你得先 generate 再 migrate，把變更親手推下去。">
-  <button class="opt">SQLite 不支援自動同步</button>
-  <button class="opt">schema 不會自動同步，必須 generate → migrate</button>
-  <button class="opt">因為 dev server 沒重啟</button>
-  <button class="opt">因為沒有 commit</button>
+<div class="quiz" data-question="為什麼改了 schema.ts 後資料庫不會自動更新？" data-correct="1" data-explain="Drizzle 採用兩步流程：先產 migration 檔案，再手動套用。它不會在存檔時自動同步。">
+  <button class="opt">因為 SQLite 不支援自動更新</button>
+  <button class="opt">因為 Drizzle 需要手動 generate + migrate 兩步</button>
+  <button class="opt">因為 schema.ts 只是註解</button>
+  <button class="opt">因為 agent 沒有權限改資料庫</button>
 </div>
 
-<div class="quiz" data-question="generate 和 migrate 分別在改哪個世界？" data-correct="2" data-explain="generate 產出 migration 檔（程式碼世界）；migrate 才把變更套進 data.db（資料庫世界）。">
-  <button class="opt">migrate 產 migration 檔，generate 套進資料庫</button>
-  <button class="opt">兩者都只改 schema.ts</button>
-  <button class="opt">generate 產 migration 檔，migrate 套進資料庫</button>
-  <button class="opt">兩者都只改 data.db</button>
+<div class="quiz" data-question="重置資料庫最簡單的方法是什麼？" data-correct="3" data-explain="刪掉 data.db（和配套檔）再跑一次 pnpm db:seed，乾淨俐落零損失。">
+  <button class="opt">跑 db migrate --reset</button>
+  <button class="opt">手動刪除所有資料表</button>
+  <button class="opt">重新 clone repo</button>
+  <button class="opt">刪 data.db + pnpm db:seed</button>
 </div>
 
-<div class="quiz" data-question="課程觀察到 agent 處理 migration 時的典型盲點是？" data-correct="0" data-explain="agent 常想到 generate，但漏掉 migrate——所以 schema 改了、migration 產了，資料庫卻沒動。">
-  <button class="opt">會 generate 但漏掉 migrate</button>
-  <button class="opt">完全不知道要 generate</button>
-  <button class="opt">會擅自刪掉 data.db</button>
-  <button class="opt">不敢碰 migration</button>
+<div class="quiz" data-question="Agent 在改 schema 時最常漏掉什麼？" data-correct="1" data-explain="Agent 通常會想到跑 generate，但常常漏掉 migrate——結果 schema 和資料庫不同步。">
+  <button class="opt">跑 generate</button>
+  <button class="opt">跑 migrate</button>
+  <button class="opt">修改 schema.ts</button>
+  <button class="opt">備份資料庫</button>
 </div>
 
-<div class="quiz" data-question="想把資料庫重置回乾淨狀態，標準做法是？" data-correct="3" data-explain="刪掉 data.db 再 pnpm db:seed——全是假資料，刪掉重來零損失。">
-  <button class="opt">寫逆向 migration 還原</button>
-  <button class="opt">git checkout 舊的 data.db</button>
-  <button class="opt">只重跑 pnpm db:seed</button>
-  <button class="opt">刪 data.db 再 pnpm db:seed</button>
+<div class="quiz" data-question="data.db-shm 和 data.db-wal 是什麼？" data-correct="2" data-explain="它們是 SQLite 的配套檔案：共享記憶體（SHM）和預寫式日誌（WAL），用於併發控制。">
+  <button class="opt">備份檔案</button>
+  <button class="opt">migration 檔案</button>
+  <button class="opt">SQLite 的配套檔案（SHM + WAL）</button>
+  <button class="opt">Drizzle 的快取</button>
 </div>
 
-<h2>下一步</h2>
-<p>資料庫狀態搞定了，接著學 <a href="./git-state.html">用 reset / cherry-pick / pull 控制 git 狀態</a>——讓 repo 對齊每一支錄影的程式碼狀態。有任何不清楚的地方，隨時問你的 agent 老師。</p>
+<h2>延伸閱讀</h2>
+<p>主要來源：<a href="https://www.youtube.com/watch?v=lesson4" target="_blank">Lesson 4 — How Databases and Migrations Work</a>（Matt Pocock 的 AI Coding for Real Engineers 課程）。解釋 SQLite + Drizzle 的 schema → generate → migrate 流程，以及重置資料庫的方法。</p>
 
-<p class="footer">來源：lesson4.en.srt（資料庫與 migration 怎麼運作）</p>
+<div class="lesson-nav">
+  <a href="setup-playground.html">← 上一課：把 playground 跑起來</a>
+  <a href="git-state.html">下一課：用 reset / cherry-pick / pull 控制 git 狀態 →</a>
+</div>
 
 <script src="./assets/quiz.js"></script>
 </body>

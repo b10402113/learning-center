@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>核心元件詳細設計 — Ticketmaster 系統設計</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>核心元件詳細設計</h1>
+<p class="meta">Step 5/6 · Ticketmaster 系統設計 · 約 15 分鐘</p>
+
+<h2>學習目標</h2>
+<p>設計 Ticketmaster 的核心元件：ActiveReservationsService 與 WaitingUsersService，理解訂票流程與等待隊列的實作方式。</p>
+
+<h2>先從單機場景開始</h2>
+<p>理解複雜系統的最好方法是先假設它跑在一台上伺服器上。等你把單機邏輯想清楚了，再考慮分散式場景的挑戰。</p>
+<p>一個完整的訂票流程是這樣的：</p>
+
+<pre><code>1. 用戶搜尋電影（SearchMovies）
+2. 用戶選擇電影 → 系統顯示場次（SearchShows）
+3. 用戶選擇場次 → 系統顯示座位圖
+4. 用戶選擇座位 → 系統暫時鎖定（ReserveSeats）
+5. 用戶確認付款 → 系統完成訂單（MakeBooking）
+6. 座位狀態更新為「已訂」
+</code></pre>
+
+<p>其中第 4 步「暫時鎖定」和第 5 步「確認付款」之間有一個時間窗口（15 分鐘）。在這段時間裡，被鎖定的座位不能被其他人選走，但如果用戶放棄了，座位需要自動釋放。這就需要一個專門的服務來管理這些「進行中」的狀態。</p>
+
+<h2>ActiveReservationsService</h2>
+<p>這個服務管理所有「正在進行中」的預訂。核心數據結構是一個 <strong>Linked HashMap</strong>（鏈結哈希映射）或 <strong>TreeMap</strong>（樹狀映射）：</p>
+
+<pre><code>// 簡化版資料結構
+class ActiveReservationsService {
+  // key: reservationID, value: { userID, showID, seatIDs, expiryTime }
+  Map&lt;String, Reservation&gt; reservations;
+
+  // 頭部指向最早建立的預訂（用於自動過期清理）
+  // 尾部指向最新建立的預訂
+}
+</code></pre>
+
+<p>為什麼用 LinkedHashMap？因為它支持兩個關鍵操作：</p>
+<ul>
+  <li><strong>O(1) 跳轉</strong>——根據 reservationID 直接找到預訂（哈希表特性）</li>
+  <li><strong>按時間順序遍歷</strong>——頭部永遠是最早建立的預訂，方便清理過期預訂（鏈表特性）</li>
+</ul>
+
+<p>當用戶付款完成後，根據 reservationID 從 LinkedHashMap 中移除對應條目，同時更新資料庫中的座位狀態為「已訂」。</p>
+
+<h2>WaitingUsersService</h2>
+<p>當所有座位都被佔滿時，新用戶怎麼辦？系統不能直接報錯，而是應該把用戶加入等待隊列。</p>
+
+<pre><code>// 簡化版資料結構
+class WaitingUsersService {
+  // key: userID, value: { showID, timestamp, requestedSeats }
+  LinkedHashMap&lt;String, WaitingUser&gt; waitingQueue;
+}
+</code></pre>
+
+<p>同樣使用 LinkedHashMap，因為：</p>
+<ul>
+  <li><strong>先到先得</strong>——鏈表頭部永遠是最早的等待者</li>
+  <li><strong>支援取消</strong>——用戶可以取消等待，根據 userID 直接刪除（O(1)）</li>
+</ul>
+
+<p>當有人取消訂單或付款超時釋放座位時，系統從 WaitingUsersService 的頭部取出最早的等待者，通知他們可以訂購。</p>
+
+<h2>完整訂票流程（含等待隊列）</h2>
+
+<pre><code>用戶選座
+  ↓
+有空位？
+  ├─ 是 → ReserveSeats：建立預訂，座位鎖定 15 分鐘
+  │        用戶付款？ → 成功：更新座位為「已訂」，移除預訂
+  │                   → 超時：釋放座位，檢查等待隊列
+  │
+  └─ 否 → 加入 WaitingUsersService 等待隊列
+           有人取消/超時？ → 通知最早的等待者
+</code></pre>
+
+<h2>快取的配合</h2>
+<p>ActiveReservationsService 和 WaitingUsersService 的數據放在快取（Redis）中，因為：</p>
+<ul>
+  <li>它們是<strong>熱數據</strong>——每個用戶的選座操作都會讀寫</li>
+  <li>它們有<strong>過期時間</strong>——15 分鐘自動過期，Redis 的 TTL（Time To Live）天然支持</li>
+  <li>它們需要<strong>原子操作</strong>——Redis 的 MULTI/EXEC 事務能保證</li>
+</ul>
+<p>資料庫是<strong>持久化備份</strong>——預訂和等待狀態的最終來源。快取掛了可以從資料庫重建。</p>
+
+<h2>面試技巧</h2>
+<p>詳細設計是面試中最能展示深度的環節。重點講清楚：</p>
+<ul>
+  <li>數據結構的選擇理由（LinkedHashMap 的兩個特性）</li>
+  <li>暫時鎖定的時間窗口機制（15 分鐘過期）</li>
+  <li>等待隊列的先到先得邏輯</li>
+  <li>快取與資料庫的配合關係</li>
+</ul>
+
+<h2>複習測驗</h2>
+
+<div class="quiz" data-question="ActiveReservationsService 為什麼使用 LinkedHashMap 而不是普通 HashMap？" data-correct="2" data-explain="LinkedHashMap 同時支持 O(1) 哈希查找和按時間順序遍歷，既能快速找到特定預訂，又能按順序清理過期預訂。">
+  <button class="opt">因為 LinkedHashMap 更快</button>
+  <button class="opt">因為需要排序功能</button>
+  <button class="opt">因為需要 O(1) 查找和按時間順序遍歷</button>
+  <button class="opt">因為 LinkedHashMap 記憶體更省</button>
+</div>
+
+<div class="quiz" data-question="ReserveSeats 的 15 分鐘過期機制有什麼作用？" data-correct="0" data-explain="過期機制確保被鎖定的座位不會永遠佔用——如果用戶放棄付款，座位會自動釋放給其他人。">
+  <button class="opt">確保被鎖定的座位不會永遠佔用</button>
+  <button class="opt">減少資料庫查詢次數</button>
+  <button class="opt">提高系統安全性</button>
+  <button class="opt">簡化座位分配演算法</button>
+</div>
+
+<div class="quiz" data-question="WaitingUsersService 的核心原則是什麼？" data-correct="1" data-explain="等待隊列按照先到先得（FIFO）原則運作，鏈表頭部永遠是最早的等待者。">
+  <button class="opt">VIP 優先</button>
+  <button class="opt">先到先得（FIFO）</button>
+  <button class="opt">隨機分配</button>
+  <button class="opt">按訂購數量排序</button>
+</div>
+
+<div class="quiz" data-question="ActiveReservationsService 的數據為什麼要放在快取（Redis）中？" data-correct="3" data-explain="這些數據是熱數據（讀寫頻繁）、有過期時間（TTL 天然支持）、需要原子操作（MULTI/EXEC 事務），Redis 的特性恰好匹配。">
+  <button class="opt">因為 Redis 永遠不會掛</button>
+  <button class="opt">因為資料庫不支持過期時間</button>
+  <button class="opt">因為需要圖形化介面</button>
+  <button class="opt">因為是熱數據、需要 TTL、需要原子操作</button>
+</div>
+
+<div class="quiz" data-question="當 ReservationService 的快取掛了，怎麼恢復？" data-correct="1" data-explain="資料庫是持久化備份，所有預訂狀態都有資料庫記錄，快取掛了可以從資料庫重建。">
+  <button class="opt">所有座位自動釋放</button>
+  <button class="opt">從資料庫重建快取</button>
+  <button class="opt">系統停止服務</button>
+  <button class="opt">用戶需要重新選座</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./ticketmaster-high-level-architecture.html">← 上一步：高層架構設計</a>
+  <a href="./concurrency-fault-tolerance.html">下一步：併發控制與容錯 →</a>
+</div>
+
+<div class="footer">Ticketmaster 系統設計 · Step 5/6</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

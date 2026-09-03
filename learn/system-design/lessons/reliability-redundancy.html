@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>可靠性與冗餘設計</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>可靠性與冗餘設計</h1>
+<div class="meta">Instagram · Step 7/7</div>
+
+<div class="learning-goal">
+  <h2>學習目標</h2>
+  <p>能夠說明為什麼資料可靠性對 Instagram 至關重要，並解釋如何透過多副本設計實現高可用性與容錯能力。</p>
+</div>
+
+<section>
+  <h2>為什麼不能丟資料？</h2>
+  <p>對 Instagram 來說，丟失使用者的照片是不可接受的。照片是使用者的回憶，丟失意味著失去信任。系統設計的第一個原則是：<strong>資料可靠性（Reliability）是底線</strong>。</p>
+  <p>但硬碟會壞、伺服器會宕機、資料中心會斷電。硬體故障是常態，不是例外。所以系統必須假設故障一定會發生，並提前做好準備。</p>
+</section>
+
+<section>
+  <h2>多副本策略</h2>
+  <p>確保資料不遺失的核心策略是<strong>多副本（Replication）</strong>：每份資料至少存在兩個不同的地方。如果一台伺服器壞了，資料可以从另一台取回。</p>
+  <p>對 Instagram 來說，需要在兩個層面做多副本：</p>
+
+  <h3>物件儲存的多副本</h3>
+  <p>照片檔案存在物件儲存（如 S3）中。物件儲存本身已經內建了多副本機制——通常會把每個檔案存三份，分散在不同的物理伺服器上。即使一台伺服器壞了，另外兩份還在。</p>
+
+  <h3>資料庫的多副本</h3>
+  <p>元數據需要透過主從複製（Primary-Replica）來做多副本。主資料庫（Primary）處理寫入，從資料庫（Replica）複製主資料庫的資料，專門服務讀取。如果主資料庫壞了，可以從從資料庫中選一個提升為新的主資料庫。</p>
+</section>
+
+<section>
+  <h2>高可用性</h2>
+  <p>多副本不只保護資料，也提升<strong>可用性（Availability）</strong>。系統的可用性通常用「幾個九」來衡量：</p>
+  <table>
+    <tr><th>等級</th><th>年停機時間</th><th>含義</th></tr>
+    <tr><td>99.9%（三個九）</td><td>~8.7 小時</td><td>每年允許停機不到 9 小時</td></tr>
+    <tr><td>99.99%（四個九）</td><td>~52 分鐘</td><td>每年允許停機不到 1 小時</td></tr>
+    <tr><td>99.999%（五個九）</td><td>~5 分鐘</td><td>每年允許停機不到 5 分鐘</td></tr>
+  </table>
+  <p>Instagram 這樣的社交平台通常追求四個九以上的可用性。要達到這個目標，系統中的每個元件都必須有冗餘——不只是資料庫，連負載均衡器、應用伺服器、快取伺服器都要有多個實例。</p>
+</section>
+
+<section>
+  <h2>故障轉移</h2>
+  <p>當某個元件故障時，系統需要自動切換到備份元件，這個過程叫<strong>故障轉移（Failover）</strong>。</p>
+  <p>以資料庫為例：</p>
+  <ol>
+    <li>系統持續監控主資料庫的健康狀態（Heartbeat）</li>
+    <li>如果主資料庫在一定時間內沒有回應，判定為故障</li>
+    <li>從從資料庫中選出數據最新的一個，提升為新的主資料庫</li>
+    <li>更新 DNS 或負載均衡器的配置，把寫入請求導向新主資料庫</li>
+  </ol>
+  <p>整個過程需要在秒級完成，使用者幾乎無感知。</p>
+</section>
+
+<section>
+  <h2>資料中心冗餘</h2>
+  <p>更進一步，Instagram 的資料不止存在一個資料中心。多個地理位置的資料中心可以：</p>
+  <p><strong>容災</strong>——如果一個資料中心因為天災或斷電而完全癱瘓，其他資料中心可以繼續服務。</p>
+  <p><strong>就近存取</strong>——把資料複製到離使用者最近的資料中心，減少延遲。</p>
+  <p>這就是<strong>地理冗餘（Geo-Redundancy）</strong>。代價是跨資料中心的同步延遲和帶寬成本。</p>
+</section>
+
+<section>
+  <h2>你的經驗怎麼連結？</h2>
+  <p>你可能在個人專案中只用過單一資料庫，沒有考慮過冗餘。Instagram 的可靠性設計展示了一個重要的思維轉變：<strong>假設故障一定會發生</strong>，然後設計系統來應對它。這跟你之前「寫完就不管」的心態不同，但這是生產環境系統設計的核心。你用過的 Postgres 支援主從複製，Redis 支援哨兵模式，這些都是冗餘機制的具體實現。</p>
+</section>
+
+<section>
+  <h2>自我檢測</h2>
+
+  <div class="quiz" data-question="Instagram 確保照片不遺失的核心策略是什麼？" data-correct="2" data-explain="多副本（Replication）：每份資料至少存在兩個不同的地方，一台壞了可以從另一台取回。">
+    <button class="opt">定期備份</button>
+    <button class="opt">使用 RAID 磁碟</button>
+    <button class="opt">多副本（Replication）</button>
+    <button class="opt">壓縮資料</button>
+  </div>
+
+  <div class="quiz" data-question="「四個九」的可用性意味著每年允許多少停機時間？" data-correct="1" data-excribe="99.99% 的可用性大約等於每年 ~52 分鐘的停機時間。">
+    <button class="opt">~8.7 小時</button>
+    <button class="opt">~52 分鐘</button>
+    <button class="opt">~5 分鐘</button>
+    <button class="opt">~8.7 分鐘</button>
+  </div>
+
+  <div class="quiz" data-question="故障轉移（Failover）的第一步是什麼？" data-correct="0" data-explain="系統需要先持續監控主資料庫的健康狀態，才能在故障時及時切換。">
+    <button class="opt">持續監控主資料庫的健康狀態</button>
+    <button class="opt">直接關閉主資料庫</button>
+    <button class="opt">從從資料庫讀取資料</button>
+    <button class="opt">通知使用者系統故障</button>
+  </div>
+
+  <div class="quiz" data-question="地理冗餘（Geo-Redundancy）的主要好處是什麼？" data-correct="3" data-explain="多個地理位置的資料中心可以容災（一個掛了其他繼續服務）和就近存取（減少延遲）。">
+    <button class="opt">降低成本</button>
+    <button class="opt">簡化程式碼</button>
+    <button class="opt">減少開發時間</button>
+    <button class="opt">容災和就近存取</button>
+  </div>
+
+  <div class="quiz" data-question="Instagram 的元數據多副本是用什麼機制實現的？" data-correct="1" data-explain="主從複製（Primary-Replica）：Primary 處理寫入，Replica 複製資料並服務讀取。">
+    <button class="opt">物件儲存</button>
+    <button class="opt">主從複製（Primary-Replica）</button>
+    <button class="opt">一致性雜湊</button>
+    <button class="opt">快取</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼硬體故障是「常態」而不是「例外」？" data-correct="2" data-explain="在大規模系統中，數千台伺服器同時運作，硬碟損壞、伺服器宕機、斷電等故障幾乎每天都在發生。">
+    <button class="opt">因為硬體品質不好</button>
+    <button class="opt">因為系統設計有缺陷</button>
+    <button class="opt">因為大規模系統中故障幾乎每天都在發生</button>
+    <button class="opt">因為沒有做維護</button>
+  </div>
+</section>
+
+<div class="source">
+  <strong>延伸閱讀：</strong>DesignGuru — Designing Instagram § Reliability and Redundancy
+</div>
+
+<div class="footer">
+  <p>有不清楚的地方？問你的老師！</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="newsfeed-design.html">← 上一步：動態消息生成設計</a>
+  <span></span>
+</nav>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

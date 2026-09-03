@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API 限流演算法與系統架構</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>API 限流演算法與系統架構</h1>
+<p class="meta">system-design · typeahead-ratelimit · Step 4/4</p>
+
+<h2>學習目標</h2>
+<p>學習常見的限流演算法（固定窗口、滑動窗口等），以及分散式環境下的限流系統高層設計、資料分片和最佳實踐。</p>
+
+<h2>演算法一：固定窗口計數器</h2>
+
+<p>最簡單的限流演算法。把時間切成固定大小的窗口（如每秒），為每個用戶維護一個計數器。每次請求來了，計數器 +1；如果計數器超過上限，拒絕請求。窗口結束時歸零重來。</p>
+
+<pre><code>// 固定窗口邏輯
+key = "rate_limit:" + userID + ":" + currentWindow
+count = redis.incr(key)
+if count == 1:
+    redis.expire(key, windowSize)  // 首次設定過期時間
+if count > limit:
+    return 429  // Too Many Requests</code></pre>
+
+<p>優點：實作極簡單，記憶體效率高（每個用戶每個窗口只存一個整數）。缺點：**窗口邊界問題**。假設限制每分鐘 100 次，用戶在第 59 秒發了 100 個請求，第 60 秒（新窗口）又發 100 個——瞬間 200 個請求，遠超限流意圖。</p>
+
+<h2>演算法二：滑動窗口計數器</h2>
+
+<p>改進固定窗口的邊界問題。核心思想：不用固定窗口，而是用一個「滑動的時間範圍」。每次請求來了，計算從「現在往前推窗口大小」的時間範圍內有多少請求。</p>
+
+<p>實作方式：用 Redis 的 Sorted Set，每個請求存一個 timestamp 作為 score。收到新請求時：</p>
+
+<ol>
+  <li>移除 Sorted Set 中所有早於「現在 - 窗口大小」的 timestamp</li>
+  <li>計算 Sorted Set 中還剩多少個 timestamp</li>
+  <li>如果數量 < 上限，加入新請求的 timestamp，允許通過</li>
+  <li>如果數量 ≥ 上限，拒絕</li>
+</ol>
+
+<pre><code>// 滑動窗口邏輯
+key = "rate_limit:" + userID
+now = currentTimeMillis()
+windowStart = now - windowSize
+
+// 移除過期的 timestamp
+redis.zremrangebyscore(key, 0, windowStart)
+
+// 計算當前窗口內的請求數
+count = redis.zcard(key)
+
+if count < limit:
+    redis.zadd(key, now, now)  // 加入新請求
+    redis.expire(key, windowSize)
+else:
+    return 429</code></pre>
+
+<p>優點：精確解決窗口邊界問題。缺點：**記憶體消耗大**——每個請求都存一個 timestamp，如果限制每秒 10,000 次，每個用戶每秒要存 10,000 個 timestamp。</p>
+
+<h2>演算法三：滑動窗口計數器（混合版）</h2>
+
+<p>結合固定窗口的低記憶體和滑動窗口的精確度。做法：把大窗口（如 1 小時）切成多個小窗口（如每分鐘），為每個小窗口維護一個計數器。</p>
+
+<p>假設限制每小時 500 次請求。當新請求在 10:35 到達時：</p>
+
+<ol>
+  <li>計算過去一小時內所有小窗口的計數器總和（10:00-10:34 的所有計數器 + 10:35 當前窗口的部分計數）</li>
+  <li>如果總和 < 500，允許通過，當前窗口計數器 +1</li>
+  <li>如果總和 ≥ 500，拒絕</li>
+</ol>
+
+<p>優點：比純滑動窗口節省大量記憶體（只存 60 個計數器而不是每秒的 timestamp），精度也夠用。這是生產環境中最常用的限流演算法。</p>
+
+<h2>高層系統設計</h2>
+
+<p>Rate Limiter 在系統中的位置和互動流程：</p>
+
+<pre><code>用戶請求 → Web Server → 詢問 Rate Limiter
+                         → [允許] → 轉發到 API Server
+                         → [拒絕] → 返回 429</code></pre>
+
+<p>Rate Limiter 通常作為一個獨立服務部署，Web Server 收到請求後先詢問 Rate Limiter「這個用戶能不能發這個請求」，根據結果決定放行或拒絕。Rate Limiter 的狀態存在 Redis 等共享儲存中，確保多台 Web Server 看到一致的限流狀態。</p>
+
+<h2>資料分片與快取</h2>
+
+<p>當用戶量很大時，限流資料也需要分片。最常見的做法是<strong>按 UserID 做一致性雜湊分片</strong>：每個 Redis 節點負責一段 UserID 範圍，請求根據 UserID 路由到對應的節點。</p>
+
+<p>如果不同 API 需要不同的限流規則（如 URL Shortener 的 createURL 和 deleteURL 限制不同），可以<strong>按 UserID + API Name 做分片</strong>。一致性雜湊確保在增減節點時，只有少量 key 需要重新分配。</p>
+
+<h2>IP vs 用戶限流</h2>
+
+<p>限流要按 IP 還是按用戶？兩種各有取捨：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>維度</th>
+      <th>優點</th>
+      <th>缺點</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>按 IP</strong></td>
+      <td>不需要登入就能限流，擋機器人效果好</td>
+      <td>共享 IP（如網咖、手機網路）會誤傷正常用戶</td>
+    </tr>
+    <tr>
+      <td><strong>按用戶</strong></td>
+      <td>精確控制每個用戶的配額，不會誤傷</td>
+      <td>需要用戶登入，匿名用戶無法限流</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>最佳實踐是<strong>兩者結合</strong>：按 IP 做粗粒度的全局限流（擋 DDoS），按用戶做細粒度的 API 配額管理。兩層防線互相補充。</p>
+
+<h2>面試中的關鍵點</h2>
+
+<ul>
+  <li>能解釋固定窗口的邊界問題以及滑動窗口如何解決</li>
+  <li>能比較三種演算法的記憶體和精度取捨</li>
+  <li>能畫出 Rate Limiter 的高層架構（Web Server → Rate Limiter → Redis → API Server）</li>
+  <li>能說明為什麼用一致性雜湊做限流資料分片</li>
+  <li>能比較 IP 限流和用戶限流的取捨，以及為什麼要兩者結合</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>三種限流演算法各有取捨：固定窗口最簡單但有邊界問題，滑動窗口精確但記憶體消耗大，混合版（滑動窗口計數器）在精度和記憶體之間取得平衡，是生產環境首選。Rate Limiter 作為獨立服務部署在 Web Server 前面，狀態存在 Redis 中。限流資料按 UserID 做一致性雜湊分片。IP 限流和用戶限流結合使用，粗粒度擋 DDoS，細粒度管配額。</p>
+
+<div class="quiz" data-question="固定窗口計數器的主要問題是什麼？" data-correct="2" data-explain="窗口邊界可能出現雙倍突發：限制每分鐘 100 次，用戶在第 59 秒發 100 個，第 60 秒又發 100 個，瞬間 200 個。">
+  <button class="opt">實作太複雜</button>
+  <button class="opt">無法控制突發流量</button>
+  <button class="opt">窗口邊界可能出現雙倍突發</button>
+  <button class="opt">只適用於讀密集系統</button>
+</div>
+
+<div class="quiz" data-question="滑動窗口計數器（Sorted Set 版）的主要缺點是什麼？" data-correct="0" data-explain="每個請求都存一個 timestamp，記憶體消耗大——限制每秒 10,000 次時每個用戶每秒要存 10,000 個 timestamp。">
+  <button class="opt">記憶體消耗大</button>
+  <button class="opt">無法處理高併發</button>
+  <button class="opt">不支援分布式</button>
+  <button class="opt">精度太差</button>
+</div>
+
+<div class="quiz" data-question="混合版滑動窗口為什麼是生產環境首選？" data-correct="3" data-explain="它結合了固定窗口的低記憶體（只存小窗口計數器）和滑動窗口的高精度（解決邊界問題），在兩者之間取得最佳平衡。">
+  <button class="opt">實作最簡單</button>
+  <button class="opt">記憶體消耗最低</button>
+  <button class="opt">精度最高</button>
+  <button class="opt">在精度和記憶體之間取得最佳平衡</button>
+</div>
+
+<div class="quiz" data-question="限流資料為什麼用一致性雜湊分片？" data-correct="1" data-explain="一致性雜湊在增減節點時只有少量 key 需要重新分配，避免大量資料遷移導致限流失效。">
+  <button class="opt">因為 Redis 原生支援</button>
+  <button class="opt">增減節點時只有少量 key 需要重新分配</button>
+  <button class="opt">比範圍分片更安全</button>
+  <button class="opt">不需要任何額外設定</button>
+</div>
+
+<div class="quiz" data-question="按 IP 限流的最大問題是什麼？" data-correct="2" data-explain="共享 IP（如網咖、手機網路）會讓多個用戶被當成同一個實體，導致正常用戶被誤傷。">
+  <button class="opt">無法擋 DDoS</button>
+  <button class="opt">需要用戶登入</button>
+  <button class="opt">共享 IP 會誤傷正常用戶</button>
+  <button class="opt">記憶體消耗太大</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="ratelimit-fundamentals.html">← 上一步：API 限流基礎概念與需求</a></div>
+  <div></div>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

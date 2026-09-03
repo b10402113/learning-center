@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>訊息傳遞模型 — Facebook Messenger 系統設計</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<h1>訊息傳遞模型</h1>
+<p class="meta">Facebook Messenger 系統設計 · Step 3/6</p>
+
+<section>
+<h2>學習目標</h2>
+<p>比較 Pull 與 Push 模型的優缺點，選擇適合即時通訊的傳遞方式。</p>
+</section>
+
+<section>
+<h2>核心問題：訊息怎麼送到？</h2>
+<p>用戶 A 發了一條訊息給用戶 B，但 B 的設備怎麼知道有新訊息？這裡有兩種根本不同的思路：Pull（拉）和 Push（推）。選擇哪一種，直接決定了整個系統的延遲、資源消耗和複雜度。</p>
+</section>
+
+<section>
+<h2>Pull 模型（輪詢）</h2>
+<p>最直覺的做法：用戶的設備每隔幾秒就問一次伺服器「有沒有新訊息？」。這叫<strong>輪詢（Polling）</strong>。</p>
+
+<h3>優點</h3>
+<ul>
+<li>實現簡單，就是一個定時 HTTP 請求</li>
+<li>不需要維持持久連線</li>
+<li>對伺服器來說，處理請求的邏輯很直覺</li>
+</ul>
+
+<h3>缺點</h3>
+<ul>
+<li><strong>延遲高</strong>：如果輪詢間隔是 5 秒，那訊息最壞情況要等 5 秒才收到</li>
+<li><strong>資源浪費</strong>：大部分輪詢返回的結果是「沒有新訊息」，白白消耗頻寬和伺服器資源</li>
+<li><strong>规模化困難</strong>：5 億用戶每 5 秒輪詢一次，每秒就是 1 億個請求——即使 99% 是空的</li>
+</ul>
+</section>
+
+<section>
+<h2>Push 模型（伺服器推送）</h2>
+<p>更好的做法：用戶的設備和伺服器之間維持一條<strong>持久連線</strong>，當有新訊息時，伺服器主動把訊息推送到用戶設備。</p>
+
+<h3>實現方式</h3>
+<ul>
+<li><strong>WebSocket</strong>：最常用的選擇。建立一條全雙工連線，伺服器和客戶端可以隨時互相發送數據</li>
+<li><strong>Server-Sent Events（SSE）</strong>：伺服器單向推送，適合只需要伺服器→客戶端的場景</li>
+<li><strong>Long Polling</strong>：折衷方案。客戶端發請求，伺服器hold住不立刻回覆，有新訊息時才回應</li>
+</ul>
+
+<h3>優點</h3>
+<ul>
+<li><strong>低延遲</strong>：訊息一到伺服器就推送，幾乎即時</li>
+<li><strong>資源高效</strong>：不需要空輪詢，只在有新訊息時才傳輸數據</li>
+<li><strong>用戶體驗好</strong>：真正的「即時」感</li>
+</ul>
+
+<h3>缺點</h3>
+<ul>
+<li><strong>連線管理複雜</strong>：要處理連線斷開、重連、負載均衡等問題</li>
+<li><strong>伺服器資源消耗</strong>：每條持久連線都佔用一個伺服器連線槽</li>
+</ul>
+</section>
+
+<section>
+<h2>實際系統怎麼選？</h2>
+<p>Facebook Messenger 使用 <strong>Push 模型</strong>。在面試中，你也應該選 Push——即時通訊的核心價值就在於「即時」，Pull 的延遲是不可接受的。</p>
+<p>具體實現上，通常採用 WebSocket。一個典型的架構是：</p>
+<ul>
+<li>用戶打開 App，和 Chat Server 建立 WebSocket 連線</li>
+<li>連線建立後，用戶發訊息走這條連線</li>
+<li>收到訊息時，伺服器也走這條連線推送</li>
+<li>連線斷開時，客戶端自動重連</li>
+</ul>
+</section>
+
+<section>
+<h2>訊息序號與離線</h2>
+<p>Push 模型還需要處理兩個問題：</p>
+<ul>
+<li><strong>訊息序號</strong>：多條訊息同時到達，如何保證顯示順序？每條訊息分配一個遞增的 Sequence ID，客戶端按序號排序</li>
+<li><strong>離線處理</strong>：用戶離線時，新訊息存到資料庫。用戶上線後，從上次的位置開始拉取 missed messages</li>
+</ul>
+</section>
+
+<section class="quiz-section">
+<h2>自我檢測</h2>
+
+<div class="quiz" data-question="5 億用戶每 5 秒輪詢一次，每秒大約產生多少個請求？" data-correct="1" data-explain="5億 ÷ 5秒 = 1億個請求/秒，即使大部分返回空結果。">
+<button class="opt">1000 萬個/秒</button>
+<button class="opt">1 億個/秒</button>
+<button class="opt">5 億個/秒</button>
+<button class="opt">25 億個/秒</button>
+</div>
+
+<div class="quiz" data-question="即時通訊系統應該選 Pull 還是 Push 模型？" data-correct="2" data-explain="即時通訊的核心價值是「即時」，Push 模型的延遲遠低於 Pull。">
+<button class="opt">Pull，實現更簡單</button>
+<button class="opt">Pull，伺服器負擔更輕</button>
+<button class="opt">Push，延遲更低</button>
+<button class="opt">兩者混合使用</button>
+</div>
+
+<div class="quiz" data-question="WebSocket 相比 HTTP 輪詢的最大優勢是什麼？" data-correct="0" data-explain="WebSocket 是全雙工持久連線，伺服器可以主動推送，不需要客戶端反覆請求。">
+<button class="opt">全雙工、低延遲</button>
+<button class="opt">更安全</button>
+<button class="opt">實現更簡單</button>
+<button class="opt">相容性更好</button>
+</div>
+
+<div class="quiz" data-question="用戶離線時收到的新訊息怎麼處理？" data-correct="3" data-explain="訊息先存到資料庫，等用戶上線後從上次的位置開始拉取 missed messages。">
+<button class="opt">直接丟棄</button>
+<button class="opt">存在快取中等用戶上線</button>
+<button class="opt">推送到用戶的其他設備</button>
+<button class="opt">存到資料庫，用戶上線後拉取</button>
+</div>
+
+<div class="quiz" data-question="如何保證多條訊息的顯示順序？" data-correct="1" data-explain="每條訊息分配一個遞增的 Sequence ID，客戶端按序號排序顯示。">
+<button class="opt">按到達時間排序</button>
+<button class="opt">分配遞增的 Sequence ID</button>
+<button class="opt">按訊息大小排序</button>
+<button class="opt">不需要排序</button>
+</div>
+
+</section>
+
+<div class="lesson-nav">
+<a href="./high-level-architecture.html">← 上一步：高層架構設計</a>
+<a href="./message-storage.html">下一步：訊息儲存與檢索 →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

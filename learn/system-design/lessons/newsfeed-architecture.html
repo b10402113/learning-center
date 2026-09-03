@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Facebook Newsfeed 架構設計 — Newsfeed & Yelp/Uber</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<p class="meta">Newsfeed &amp; Yelp/Uber · 第 2 步（共 5 步）</p>
+
+<h1>Facebook Newsfeed 架構設計</h1>
+
+<h2>學習目標</h2>
+<p>掌握 Newsfeed 系統的整體架構，了解推播（push）與拉播（pull）模式的取捨，以及動態消息生成、排名和資料分片的設計。</p>
+
+<hr>
+
+<section>
+<h2>1. Newsfeed 的核心挑戰</h2>
+<p>Facebook 的動態消息（Newsfeed）是使用者打開 Facebook 首先看到的內容——它是一個不斷更新的列表，包含來自追蹤者、粉專和社團的貼文、照片、影片和連結。</p>
+<p>設計 Newsfeed 的核心挑戰是：<strong>如何在數百萬來源中快速聚合最新內容，並以低延遲遞送給數億使用者？</strong></p>
+<p>要回答這個問題，我們先從資料模型開始。</p>
+</section>
+
+<section>
+<h2>2. 資料模型</h2>
+<p>Newsfeed 涉及三個核心實體：</p>
+<table>
+<tr><th>實體</th><th>說明</th></tr>
+<tr><td>User（使用者）</td><td>可以追蹤其他使用者和實體，可以發布貼文</td></tr>
+<tr><td>Entity（實體）</td><td>粉專、社團等，可以發布貼文</td></tr>
+<tr><td>FeedItem（貼文）</td><td>包含文字、圖片或影片，由使用者或實體發布</td></tr>
+</table>
+<p>關鍵關係：每個使用者都有一個「追蹤清單」（UserFollow），記錄他追蹤了哪些使用者和實體。每個 FeedItem 都有一個 UserID 指向發布者。</p>
+</section>
+
+<section>
+<h2>3. 推播（Push）vs 拉播（Pull）</h2>
+<p>Newsfeed 的架構設計有兩種基本策略：</p>
+
+<h3>拉播模型（Pull Model）</h3>
+<p>使用者打開 Newsfeed 時，系統才即時從資料庫拉取追蹤者的最新貼文，合併後返回。</p>
+<ul>
+<li>優點：資料永遠最新，不需要預計算</li>
+<li>缺點：每次都要查詢所有追蹤者的貼文，延遲高</li>
+</ul>
+
+<h3>推播模型（Push Model）</h3>
+<p>當使用者 A 發布貼文時，系統將這篇貼文推送到所有追蹤者 A 的 feed 快取中。使用者打開 Newsfeed 時，直接從快取讀取。</p>
+<ul>
+<li>優點：讀取延遲極低（直接查快取）</li>
+<li>缺點：寫入成本高——一篇貼文可能要推送到數千人的 feed 中</li>
+</ul>
+
+<h3>混合模型（Hybrid）</h3>
+<p>實際的 Facebook Newsfeed 使用混合模型：</p>
+<ul>
+<li><strong>大部分使用者</strong>：使用推播模型（write fan-out），貼文發布時預先計算並寫入追蹤者的 feed 快取</li>
+<li><strong>追蹤者極多的帳號</strong>（如名人、大型粉專）：不預先推送，改為使用者查詢時即時拉取（on-read pull），再與快取中的預計算結果合併</li>
+</ul>
+
+<blockquote>
+<strong>面試技巧：</strong>推播/拉播的選擇是 Newsfeed 設計的核心取捨。面試中你要能清楚解釋：推播以寫入成本換取讀取低延遲，拉播以讀取延遲換取即時性。混合模型是折衷方案。
+</blockquote>
+</section>
+
+<section>
+<h2>4. Feed 生成流程</h2>
+<p>當使用者打開 Newsfeed 時，系統執行以下步驟：</p>
+<ol>
+<li><strong>取得追蹤清單</strong>：查詢使用者追蹤的所有使用者和實體 ID</li>
+<li><strong>取得最新貼文</strong>：從快取或資料庫中取得這些追蹤者的最新貼文</li>
+<li><strong>合併與排序</strong>：將所有貼文合併，根據排名演算法排序</li>
+<li><strong>過濾與分頁</strong>：返回最前面的 N 條，支援分頁載入</li>
+</ol>
+
+<h3>Pre-computed Feed（預計算 feed）</h3>
+<p>在推播模型下，系統在貼文發布時就將 FeedItem 的 ID 寫入追蹤者的 feed 快取（一個 sorted set，以時間或排名分數為 score）。查詢時直接從快取中取出前 N 條，再批量查詢貼文詳細資料。</p>
+
+<h3>混合 Feed</h3>
+<p>對於追蹤了大量名人或大型粉專的使用者，系統需要額外執行 on-demand 的拉取：從這些高流量來源即時取得最新貼文，與預計算的 feed 合併後排序。</p>
+</section>
+
+<section>
+<h2>5. Feed 排名</h2>
+<p>最簡單的排序方式是按時間順序（最新的排最前面）。但現代的排名演算法更複雜——它需要確保「重要的」貼文排在最前面。</p>
+<p>排名的核心思路是：先選出影響貼文重要性的<strong>訊號（signals）</strong>，再找出如何組合這些訊號計算最終分數。常見的訊號包括：</p>
+<table>
+<tr><th>訊號</th><th>說明</th></tr>
+<tr><td>親密度（Affinity）</td><td>使用者與發布者的互動程度（留言、按讚、瀏覽頻率）</td></tr>
+<tr><td>內容類型</td><td>影片、圖片通常比純文字貼文獲得更多互動</td></tr>
+<tr><td>時間衰減</td><td>越新的貼文通常越重要</td></tr>
+<tr><td>互動率</td><td>該貼文獲得的按讚、留言、分享數量</td></tr>
+</table>
+<p>這些訊號會透過一個機器學習模型（或簡單的加權公式）組合成一個排名分數。面試中你不需要深入機器學習，但要能解釋排名的取捨：精準排名需要更多計算資源和延遲。</p>
+</section>
+
+<section>
+<h2>6. 資料分片</h2>
+<p>Facebook 每天新增數億條貼文，讀取負載極高，單機無法承擔。</p>
+
+<h3>貼文和元資料的分片</h3>
+<p>貼文可以按 UserID 進行水平分片（hash partitioning）。同一個使用者的貼文在同一個分片上，寫入和查詢同一個使用者的貼文都只需要訪問一個分片。</p>
+
+<h3>Feed 資料的分片</h3>
+<p>Feed 快取（每個使用者的預計算 feed）也可以按 UserID 分片。查詢時只需訪問對應的分片。</p>
+
+<h3>挑戰</h3>
+<ul>
+<li><strong>熱點使用者</strong>：某些使用者（如名人）有數千萬追蹤者，一篇貼文的 fan-out 寫入量巨大</li>
+<li><strong>快取大小</strong>：每個使用者的 feed 快取可能包含 500+ 條貼文 ID，總快取量巨大</li>
+<li><strong>一致性</strong>：推播模型中，寫入快取和寫入資料庫的時間差可能導致短暫不一致</li>
+</ul>
+</section>
+
+<hr>
+
+<div class="lesson-nav">
+<span><a href="./requirements-capacity.html">← 上一步：需求分析與容量估算</a></span>
+<span><a href="./proximity-search-design.html">下一步：Yelp 鄰近搜尋設計 →</a></span>
+</div>
+
+<div class="footer">
+<p>系統設計面試 · Newsfeed &amp; Yelp/Uber</p>
+</div>
+
+<div class="quiz" data-question="推播模型（Push Model）的核心取捨是什麼？" data-correct="1" data-explain="推播模型以寫入成本換取讀取低延遲——貼文發布時要推送給所有追蹤者的快取。">
+<button class="opt">以讀取延遲換取資料即時性</button>
+<button class="opt">以寫入成本換取讀取低延遲</button>
+<button class="opt">以儲存空間換取計算效率</button>
+<button class="opt">以可用性換取一致性</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Facebook 的混合模型要對名人帳號使用 on-demand 拉取？" data-correct="2" data-explain="名人可能有數千萬追蹤者，一篇貼文的 fan-out 寫入量太大，預計算不划算。">
+<button class="opt">名人不常發文</button>
+<button class="opt">名人的貼文不需要排名</button>
+<button class="opt">fan-out 寫入量太大</button>
+<button class="opt">名人沒有追蹤者</button>
+</div>
+
+<div class="quiz" data-question="Feed 排名中，「親密度（Affinity）」衡量的是什麼？" data-correct="0" data-explain="親密度反映使用者與發布者的互動程度，包括留言、按讚、瀏覽頻率等。">
+<button class="opt">使用者與發布者的互動程度</button>
+<button class="opt">貼文發布的時間</button>
+<button class="opt">貼文的內容品質</button>
+<button class="opt">發布者的追蹤人數</button>
+</div>
+
+<div class="quiz" data-question="Newsfeed 的 Feed 快取通常使用什麼資料結構？" data-correct="3" data-explain="Sorted set 以時間或排名分數為 score，可以高效取得前 N 條。">
+<button class="opt">Hash Map</button>
+<button class="opt">Linked List</button>
+<button class="opt">B-Tree</button>
+<button class="opt">Sorted Set（以分數為 key）</button>
+</div>
+
+<div class="quiz" data-question="貼文分片時，按 UserID 進行 hash partitioning 的主要好處是什麼？" data-correct="1" data-explain="同一個使用者的貼文在同一個分片上，查詢和寫入都只需訪問一個分片。">
+<button class="opt">減少儲存空間</button>
+<button class="opt">同一使用者的資料在同一分片</button>
+<button class="opt">提高寫入速度</button>
+<button class="opt">簡化備份流程</button>
+</div>
+
+<div class="quiz" data-question="混合 Feed 生成中，on-demand 拉取與預計算 feed 合併後需要做什麼？" data-correct="2" data-explain="合併後需要重新排序，確保返回的結果是最相關的。">
+<button class="opt">直接返回預計算結果</button>
+<button class="opt">過濾重複貼文</button>
+<button class="opt">合併後重新排序</button>
+<button class="opt">寫回快取</button>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

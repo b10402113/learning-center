@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>進階擴展與優化 — URL Shortener & Pastebin</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<p class="meta">URL Shortener & Pastebin · 第 4 步（共 4 步）</p>
+
+<h1>進階擴展與優化</h1>
+
+<h2>這個步驟的目標</h2>
+<p>你能解釋資料分片、複製、快取、負載均衡和清理機制，並說明它們如何讓系統從「能用」成長到「能撐住大流量」。</p>
+
+<hr>
+
+<h2>1. 資料分片（Partitioning）</h2>
+<p>當單台資料庫無法承受所有資料時，就需要把資料分散到多台機器上。</p>
+
+<h3>按金鑰範圍分片</h3>
+<p>把金鑰按字母順序分成若干範圍，每個範圍存到不同的節點。例如 A-F 在節點 1，G-M 在節點 2。優點是範圍查詢效率高；缺點是某些範圍可能特別熱（熱點問題）。</p>
+
+<h3>按金鑰雜湊分片</h3>
+<p>對金鑰做雜湊運算，根據雜湊值分配到不同節點。分佈均勻，避免熱點。短網址只根據單一金鑰查詢，雜湊分片更合適。</p>
+
+<blockquote>
+<strong>選擇建議：</strong>短網址用雜湊分片（均勻分佈、避免熱點）；Pastebin 的元資料用雜湊分片，內容由 S3 自己管理分片。
+</blockquote>
+
+<h2>2. 資料複製（Replication）</h2>
+
+<h3>主從複製（Primary-Replica）</h3>
+<p>一台主節點負責寫入，多台從節點負責讀取。主節點把寫入同步或非同步複製到從節點。讀寫分離，讀取效能大幅提升。</p>
+
+<h3>多主複製（Multi-Primary）</h3>
+<p>多台主節點都能寫入，互相複製。適合地理分散場景，但引入衝突解決的複雜性。</p>
+
+<blockquote>
+<strong>短網址和 Pastebin 的選擇：</strong>讀多寫少的場景，主從複製是最佳選擇。讀取分散到多台從節點，大幅降低單台壓力。
+</blockquote>
+
+<h2>3. 快取（Caching）</h2>
+<p>根據 80/20 法則，80% 的請求集中在 20% 的資料上。把熱門資料放進記憶體快取（如 Redis），大部分請求就不經過資料庫。</p>
+
+<table>
+<tr><th>策略</th><th>做法</th><th>優點</th><th>缺點</th></tr>
+<tr><td>Write-Through</td><td>寫入時同時寫快取和 DB</td><td>一致性好</td><td>寫入延遲增加</td></tr>
+<tr><td>Write-Behind</td><td>先寫快取，非同步寫 DB</td><td>寫入快</td><td>一致性風險</td></tr>
+<tr><td>Read-Through</td><td>先查快取，miss 再查 DB 回填</td><td>透明</td><td>首次查詢慢</td></tr>
+<tr><td>Cache-Aside</td><td>應用程式自己管理</td><td>最靈活</td><td>最複雜</td></tr>
+</table>
+
+<blockquote>
+<strong>短網址快取：</strong>新短網址先不進快取，存取量超過閾值（如 1000 次/小時）再放進快取（hot key detection）。<br>
+<strong>Pastebin 快取：</strong>熱門 paste 內容不變，非常適合快取元資料和內容本身。
+</blockquote>
+
+<h2>4. 負載均衡（Load Balancer）</h2>
+<table>
+<tr><th>策略</th><th>說明</th><th>適用場景</th></tr>
+<tr><td>輪詢（Round Robin）</td><td>依序分配給每台伺服器</td><td>伺服器規格相同</td></tr>
+<tr><td>最少連接</td><td>分配給連接數最少的伺服器</td><td>伺服器負載差異大</td></tr>
+<tr><td>IP Hash</td><td>根據客戶端 IP 雜湊</td><td>需要 session 粘性</td></tr>
+</table>
+<p>短網址完全無狀態，輪詢就夠了。</p>
+
+<h2>5. 資料清理（DB Cleanup）</h2>
+<p>過期資料不能一直佔儲存空間。兩種策略結合使用效果最好：</p>
+<ul>
+<li><strong>被動清理：</strong>讀取時檢查過期，過期就回傳 404 並刪除。第一道防線。</li>
+<li><strong>主動清理：</strong>背景工作定期掃描，刪除過期記錄。處理沒人存取的過期資料。</li>
+</ul>
+
+<h2>6. 速率限制（Rate Limiting）</h2>
+<p>防止濫用的最後一道防線。常見策略：</p>
+<ul>
+<li><strong>令牌桶（Token Bucket）：</strong>允許突發流量，桶內有令牌就能發</li>
+<li><strong>漏桶（Leaky Bucket）：</strong>嚴格限制速率，突發流量會被排隊</li>
+</ul>
+<p>短網址可限制單個 IP 或 API Key 每分鐘的建立次數，防止惡意大量建立。</p>
+
+<hr>
+
+<div class="lesson-nav">
+<a href="./high-level-architecture.html">← 上一步：高層級架構設計</a>
+<span></span>
+</div>
+
+<div class="footer">
+<p>系統設計面試 · URL Shortener & Pastebin</p>
+</div>
+
+<div class="quiz" data-question="對於短網址這種只根據單一金鑰查詢的場景，哪種分片策略更合適？" data-correct="2" data-explain="雜湊分片能均勻分佈資料，避免範圍分片的熱點問題。">
+  <button class="opt">按金鑰範圍分片</button>
+  <button class="opt">按地理位置分片</button>
+  <button class="opt">按金鑰雜湊分片</button>
+  <button class="opt">不分片</button>
+</div>
+
+<div class="quiz" data-question="主從複製（Primary-Replica）的主要優勢是什麼？" data-correct="1" data-explain="讀寫分離讓讀取請求分散到多台從節點，讀取效能大幅提升。">
+  <button class="opt">寫入更快</button>
+  <button class="opt">讀取分散到多台從節點，讀取效能提升</button>
+  <button class="opt">資料更安全</button>
+  <button class="opt">不需要負載均衡</button>
+</div>
+
+<div class="quiz" data-question="根據 80/20 法則，快取的價值在於什麼？" data-correct="0" data-explain="80% 的請求集中在 20% 的資料上，把這 20% 放進快取就能覆蓋大部分請求。">
+  <button class="opt">80% 的請求集中在 20% 的資料上</button>
+  <button class="opt">80% 的伺服器是閒置的</button>
+  <button class="opt">20% 的資料特別大</button>
+  <button class="opt">80% 的寫入可以省略</button>
+</div>
+
+<div class="quiz" data-question="「被動清理」和「主動清理」結合使用的最佳實踐是什麼？" data-correct="3" data-explain="被動清理處理使用者存取到的過期資料（第一道防線），主動清理定期掃描處理沒人存取的過期資料。">
+  <button class="opt">只用主動清理</button>
+  <button class="opt">只用被動清理</button>
+  <button class="opt">兩者擇一使用</button>
+  <button class="opt">被動清理做第一道防線，主動清理定期掃描</button>
+</div>
+
+<div class="quiz" data-question="令牌桶（Token Bucket）和漏桶（Leaky Bucket）的核心差異是什麼？" data-correct="1" data-explain="令牌桶允許突發流量（桶內有令牌就能發），漏桶嚴格限制速率（突發會被排隊）。">
+  <button class="opt">令牌桶更便宜</button>
+  <button class="opt">令牌桶允許突發，漏桶嚴格限速</button>
+  <button class="opt">漏桶不消耗記憶體</button>
+  <button class="opt">兩者完全相同</button>
+</div>
+
+<div class="quiz" data-question="短網址的快取策略中，什麼時候應該把短網址放進快取？" data-explain="先不進快取，存取量超過閾值（如 1000 次/小時）再放進快取，這叫 hot key detection。" data-correct="2">
+  <button class="opt">每次建立時</button>
+  <button class="opt">從不進快取</button>
+  <button class="opt">存取量超過閾值時</button>
+  <button class="opt">每小時批量進快取</button>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>在線狀態管理 — Facebook Messenger 系統設計</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<h1>在線狀態管理</h1>
+<p class="meta">Facebook Messenger 系統設計 · Step 5/6</p>
+
+<section>
+<h2>學習目標</h2>
+<p>設計能夠追蹤大量使用者在線狀態並即時通知相關使用者的機制。</p>
+</section>
+
+<section>
+<h2>為什麼需要在線狀態？</h2>
+<p>你打開 Messenger，看到朋友名字旁邊有一個綠色圓點——這就是「在線」標記。這個看似簡單的功能，背後的挑戰比你想像的大：5 億日活用戶，每個人上線/下線都要追蹤，而且每次狀態變化都要通知相關的人。</p>
+</section>
+
+<section>
+<h2>基本實現</h2>
+<p>由於我們的 Chat Server 維護了每個用戶的持久連線，判斷用戶是否在線其實很直接：</p>
+<ul>
+<li><strong>在線</strong>：用戶和某台 Chat Server 之間有一條活躍的連線</li>
+<li><strong>離線</strong>：連線已斷開，且超過一定時間（如 30 秒）未重連</li>
+</ul>
+<p>每台 Chat Server 都維護一個本地映射：<code>user_id → connection</code>。要查某個用戶是否在線，問一下哪台 Server 持有他的連線即可。</p>
+</section>
+
+<section>
+<h2>狀態廣播的挑戰</h2>
+<p>問題在於<strong>通知</strong>。當用戶 A 上線時，A 的所有好友中正在線的人要看到「A 上線了」的提示。如果有 500 萬用戶同時在線，每次狀態變化都廣播給所有相關用戶，流量會爆炸。</p>
+
+<h3>優化策略</h3>
+<ul>
+<li><strong>只通知好友</strong>：不是廣播給所有人，只通知 A 的好友列表中正在線的人。假設平均每人有 500 個好友，其中 10% 在線，就是 50 個通知</li>
+<li><strong>可見性窗口</strong>：只通知當前在螢幕上看到好友列表的用戶。如果用戶沒打開對話列表，就不推送狀態更新</li>
+<li><strong>批量推送</strong>：把短時間內的多次狀態變化合併成一次推送，減少通知數量</li>
+</ul>
+</section>
+
+<section>
+<h2>心跳機制</h2>
+<p>怎麼判斷用戶真的離線了？不能只依賴 TCP 連線斷開——有時候用戶的網路只是暫時中斷，TCP 連線還沒來得及超時。</p>
+<p>解決方案是<strong>心跳（Heartbeat）</strong>：</p>
+<ul>
+<li>客戶端每隔幾秒發送一個微小的心跳包到伺服器</li>
+<li>伺服器收到心跳，確認用戶還活著</li>
+<li>如果超過一定時間（如 30 秒）沒收到心跳，判定用戶離線</li>
+</ul>
+<p>心跳間隔是一個取捨：太短浪費頻寬，太長判斷離線的延遲太高。30 秒是一個常見的折衷值。</p>
+</section>
+
+<section>
+<h2>多設備場景</h2>
+<p>一個用戶可能同時在手機和電腦上登入。狀態管理需要處理：</p>
+<ul>
+<li><strong>只要有一個設備在線，用戶就是「在線」</strong>：狀態是用戶級別的，不是設備級別的</li>
+<li><strong>每個設備維護獨立連線</strong>：手機和電腦各有一條到 Chat Server 的連線</li>
+<li><strong>訊息同步</strong>：用戶在一台設備上發的訊息，另一台設備也要能看到（透過推送或拉取）</li>
+</ul>
+</section>
+
+<section class="quiz-section">
+<h2>自我檢測</h2>
+
+<div class="quiz" data-question="判斷用戶是否在線的最基本方法是什麼？" data-correct="0" data-explain="Chat Server 維護用戶的持久連線映射，有活躍連線就是在線。">
+<button class="opt">檢查是否有活躍的持久連線</button>
+<button class="opt">每秒問一次用戶是否在線</button>
+<button class="opt">查看用戶最後一次操作時間</button>
+<button class="opt">用戶自己報告狀態</button>
+</div>
+
+<div class="quiz" data-question="狀態廣播時，應該通知哪些用戶？" data-correct="2" data-explain="只通知好友列表中正在線且在看對話列表的用戶，大幅減少通知量。">
+<button class="opt">所有在線用戶</button>
+<button class="opt">所有好友</button>
+<button class="opt">好友中正在線且在看對話列表的</button>
+<button class="opt">最近聊過天的人</button>
+</div>
+
+<div class="quiz" data-question="心跳間隔 30 秒意味著什麼？" data-correct="1" data-explain="用戶斷線後，最壞情況要等 30 秒系統才判定離線，這是延遲和頻寬的折衷。">
+<button class="opt">用戶每 30 秒發一次大量數據</button>
+<button class="opt">判斷離線的最壞延遲是 30 秒</button>
+<button class="opt">伺服器每 30 秒才處理一次請求</button>
+<button class="opt">訊息延遲至少 30 秒</button>
+</div>
+
+<div class="quiz" data-question="多設備場景下，用戶狀態應該怎麼判定？" data-correct="3" data-explain="狀態是用戶級別的，只要有一個設備在線，用戶就顯示為在線。">
+<button class="opt">每個設備獨立判定</button>
+<button class="opt">只看手機狀態</button>
+<button class="opt">只看最後登入的設備</button>
+<button class="opt">只要有一個設備在線就顯示在線</button>
+</div>
+
+<div class="quiz" data-question="什麼是「可見性窗口」優化？" data-correct="0" data-explain="只向當前在螢幕上看到好友列表的用戶推送狀態更新，沒看到的不推。">
+<button class="opt">只推送給正在看對話列表的用戶</button>
+<button class="opt">限制每次推送的訊息數量</button>
+<button class="opt">壓縮推送的數據大小</button>
+<button class="opt">限制每個用戶的好友數量</button>
+</div>
+
+</section>
+
+<div class="lesson-nav">
+<a href="./message-storage.html">← 上一步：訊息儲存與檢索</a>
+<a href="./scaling-fault-tolerance.html">下一步：擴展與容錯設計 →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Heartbeat 存活偵測機制 — 通訊與可靠度</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Heartbeat 存活偵測機制</h1>
+<p class="meta">系統設計面試 · 通訊與可靠度 · 步驟 2/3</p>
+
+<blockquote>
+<strong>學習目標</strong>：理解 Heartbeat 機制如何檢測節點存活、維護連線狀態，並認識常見實作考量。
+</blockquote>
+
+<h2>問題背景</h2>
+
+<p>你的系統有 100 台伺服器，某天其中一台掛了。問題是：系統怎麼「知道」它掛了？如果不知道，請求還會繼續往那台送，使用者就會看到錯誤。</p>
+
+<p>在分散式系統中，工作和資料分散在多台伺服器上。為了有效地路由請求，伺服器需要知道<strong>哪些伺服器還活著</strong>。更關鍵的是，當某台伺服器掛掉時，系統要能<strong>快速偵測到</strong>並把它的負載轉移給其他伺服器。</p>
+
+<h2>什麼是 Heartbeat？</h2>
+
+<p>Heartbeat（心跳）是一種<strong>定期發送的短訊息</strong>，用來告知其他節點「我還活著」。就像你每分鐘拍一下胸口說「我還在呼吸」——如果某次沒拍了，就知道出事了。</p>
+
+<p>具體來說，每台伺服器會<strong>定期</strong>（例如每 5 秒）向以下其中一方發送 heartbeat 訊息：</p>
+
+<table>
+<thead>
+<tr><th>架構</th><th>Heartbeat 發送對象</th><th>偵測方式</th></tr>
+</thead>
+<tbody>
+<tr><td>有中心節點</td><td>中心監控伺服器</td><td>中心伺服器追蹤所有節點的 heartbeat，超時未收到就判定為故障</td></tr>
+<tr><td>無中心節點（去中心化）</td><td>隨機選擇的一組節點</td><td>每個節點追蹤它負責的節點，超時未收到就判定為故障</td></tr>
+</tbody>
+</table>
+
+<h2>Heartbeat 的運作流程</h2>
+
+<p>以有中心節點的架構為例：</p>
+
+<ol>
+<li><strong>正常運作</strong>：每台伺服器每 5 秒向中心伺服器發送一次 heartbeat。中心伺服器記錄「上一次收到 Server A 的 heartbeat 是 10:00:30」。</li>
+<li><strong>故障偵測</strong>：如果中心伺服器在 15 秒內沒有收到 Server A 的 heartbeat，就判定 Server A 可能掛了。</li>
+<li><strong>故障處理</strong>：中心伺服器把 Server A 從可用列表中移除，將原本送往 Server A 的請求轉發給其他伺服器。</li>
+<li><strong>恢復處理</strong>：如果 Server A 重新啟動，它會再次發送 heartbeat，中心伺服器會把它加回可用列表。</li>
+</ol>
+
+<h2>關鍵設計參數</h2>
+
+<h3>Heartbeat 間隔</h3>
+
+<p>間隔太短（如 100ms）會消耗大量頻寬和 CPU；間隔太長（如 60 秒）會導致故障偵測延遲。常見的選擇是<strong>1~10 秒</strong>，具體取決於系統對故障偵測速度的要求。</p>
+
+<h3>超時閾值</h3>
+
+<p>超時閾值通常是 heartbeat 間隔的 3~5 倍。例如 heartbeat 每 5 秒發一次，超時閾值可以設為 15~25 秒。太短會造成誤判（網路暫時延遲被當成故障），太長會延遲故障偵測。</p>
+
+<h3>心跳內容</h3>
+
+<p>Heartbeat 訊息通常很短，只包含節點 ID 和時間戳。但也可以捎帶（piggyback）一些輕量資訊，如：</p>
+<ul>
+<li>節點的負載狀態（CPU 使用率、記憶體使用量）</li>
+<li>節點的角色（是 Leader 還是 Follower）</li>
+<li>節點的健康指標</li>
+</ul>
+
+<h2>Heartbeat vs Ping</h2>
+
+<table>
+<thead>
+<tr><th>比較</th><th>Heartbeat</th><th>Ping</th></tr>
+</thead>
+<tbody>
+<tr><td>目的</td><td>告知「我活著」</td><td>確認「你活著嗎？」</td></tr>
+<tr><td>方向</td><td>由被監控節點主動發送</td><td>由監控方主動詢問</td></tr>
+<tr><td>頻率</td><td>高頻定期發送</td><td>按需發送或低頻</td></tr>
+<tr><td>資訊量</td><td>可捎帶狀態資訊</td><td>通常只有 ping/pong</td></tr>
+</tbody>
+</table>
+
+<p>實務上，很多系統會<strong>兩者並用</strong>：Heartbeat 用於日常存活偵測，Ping 用於深入的健康檢查（如測試資料庫連線是否正常）。</p>
+
+<h2>常見應用場景</h2>
+
+<ul>
+<li><strong>負載均衡器</strong>：透過 heartbeat 偵測後端伺服器是否存活，自動移除故障節點。</li>
+<li><strong>叢集管理</strong>：如 Kubernetes 的 kubelet 定期向 API server 發送 heartbeat（ lease ），告知節點狀態。</li>
+<li><strong>分布式快取</strong>：如 Redis Cluster 節點之間透過 gossip 協議交換心跳，偵測故障節點。</li>
+<li><strong>微服務</strong>：服務之間透過 heartbeat 確認彼此可用，避免向已死掉的服務發請求。</li>
+</ul>
+
+<h2>在面試中怎麼用？</h2>
+
+<p>當你被問到「怎麼偵測伺服器故障」或「負載均衡器怎麼知道後端掛了」，你可以：</p>
+<ol>
+<li><strong>先說問題</strong>：分散式系統中，節點故障是常態，系統需要快速偵測並處理。</li>
+<li><strong>引入 Heartbeat</strong>：定期發送存活訊息，超時未收到就判定為故障。</li>
+<li><strong>討論參數</strong>：heartbeat 間隔和超時閾值的取捨——太快浪費資源，太慢延遲偵測。</li>
+<li><strong>延伸</strong>：提到可以捎帶負載資訊，為後續的負載均衡討論鋪路。</li>
+</ol>
+
+<div class="quiz" data-question="Heartbeat 的主要目的是什麼？" data-correct="0" data-explain="Heartbeat 是一種定期發送的短訊息，用來告知其他節點「我還活著」，讓系統能偵測到故障節點。">
+<button class="opt">告知其他節點「我還活著」</button>
+<button class="opt">測量網路延遲</button>
+<button class="opt">壓縮傳輸資料</button>
+<button class="opt">加密通訊內容</button>
+</div>
+
+<div class="quiz" data-question="Heartbeat 間隔設為 100ms 會有什麼問題？" data-correct="2" data-explain="間隔太短會消耗大量頻寬和 CPU 資源，對系統造成不必要的負擔。">
+<button class="opt">無法偵測故障</button>
+<button class="opt">延遲太高</button>
+<button class="opt">消耗大量頻寬和 CPU</button>
+<button class="opt">無法支援去中心化架構</button>
+</div>
+
+<div class="quiz" data-question="在無中心節點的架構中，Heartbeat 如何運作？" data-correct="1" data-explain="每個節點隨機選擇一组其他節點發送 heartbeat，每個節點追蹤它負責的節點，超時未收到就判定為故障。">
+<button class="opt">不需要 Heartbeat</button>
+<button class="opt">每個節點隨機向一組節點發送</button>
+<button class="opt">只向鄰近節點發送</button>
+<button class="opt">使用 multicast 廣播</button>
+</div>
+
+<div class="quiz" data-question="Heartbeat 訊息通常包含什麼？" data-correct="3" data-explain="Heartbeat 訊息通常很短，包含節點 ID 和時間戳，但也可以捎帶輕量的狀態資訊如負載狀態。">
+<button class="opt">完整的系統日誌</button>
+<button class="opt">所有節點的列表</button>
+<button class="opt">加密的資料摘要</button>
+<button class="opt">節點 ID、時間戳，可捎帶負載狀態</button>
+</div>
+
+<div class="quiz" data-question="Heartbeat 與 Ping 的主要區別是什麼？" data-correct="2" data-explain="Heartbeat 是由被監控節點主動發送「我活著」，而 Ping 是由監控方主動詢問「你活著嗎？」">
+<button class="opt">Heartbeat 更慢</button>
+<button class="opt">Ping 使用 UDP</button>
+<button class="opt">Heartbeat 由被監控節點主動發送，Ping 由監控方詢問</button>
+<button class="opt">Ping 可以捎帶更多資訊</button>
+</div>
+
+<div class="quiz" data-question="超時閾值通常設為 heartbeat 間隔的幾倍？" data-correct="1" data-explain="超時閾值通常是 heartbeat 間隔的 3~5 倍，太短會造成誤判，太長會延遲故障偵測。">
+<button class="opt">1 倍</button>
+<button class="opt">3~5 倍</button>
+<button class="opt">10~20 倍</button>
+<button class="opt">不需要設置</button>
+</div>
+
+<p class="footer">下一步：<a href="./checksum-error-detection.html">Checksum 錯誤偵測</a> — 確保資料傳輸正確性的機制</p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

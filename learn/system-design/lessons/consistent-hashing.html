@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一致性雜湊 — 共識與容錯</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>一致性雜湊</h1>
+<p class="meta">系統設計面試 · 共識與容錯 · 步驟 3/5</p>
+
+<blockquote>
+<strong>學習目標</strong>：掌握一致性雜湊的原理、虛擬節點優勢，以及如何解決動態節點增減時的資料移動問題。
+</blockquote>
+
+<h2>問題：資料該放哪台機器？</h2>
+
+<p>假設你有一個快取系統，100 萬個使用者的資料要分散在 3 台伺服器上。最直覺的做法是用雜湊取餘數：對使用者 ID 做 hash，再除以 3 取餘數。0 號放第一台，1 號放第二台，2 號放第三台。</p>
+
+<p>看起來很完美——直到有一天，你要加一台伺服器。從 3 台變 4 台，除數從 3 變 4。結果是：<strong>幾乎每一筆資料的放置位置都變了</strong>。100 萬筆資料中，大約 75% 要重新搬遷。如果用快取系統，這意味著大量快取失效，所有請求瞬間打到後端資料庫——這就是「雷群效應（thundering herd）」。</p>
+
+<h2>一致性雜湊的解法</h2>
+
+<p>一致性雜湊（Consistent Hashing）的思路是：把雜湊值空間想像成一個<strong>環</strong>（從 0 到 2³²-1 的環狀結構）。</p>
+
+<p>首先，對每台伺服器做雜湊，把它們映射到環上的某個位置。然後，對每筆資料做雜湊，沿著環<strong>順時針</strong>找到第一台伺服器，這筆資料就歸那台伺服器管。</p>
+
+<h3>為什麼叫「一致性」？</h3>
+
+<p>當你新增或移除一台伺服器時，只有<strong>環上相鄰</strong>的那段資料需要搬遷，其他資料的位置完全不受影響。從「幾乎全部搬」變成「只搬一小部分」——這就是「一致性」的含義。</p>
+
+<table>
+<thead>
+<tr><th>方法</th><th>新增 1 台伺服器（從 3 到 4）</th><th>搬遷比例</th></tr>
+</thead>
+<tbody>
+<tr>
+<td>雜湊取餘數</td>
+<td>幾乎所有資料都移動</td>
+<td>~75%</td>
+</tr>
+<tr>
+<td>一致性雜湊</td>
+<td>只移動環上相鄰段的資料</td>
+<td>~25%（1/N）</td>
+</tr>
+</tbody>
+</table>
+
+<h2>虛擬節點（Virtual Nodes）</h2>
+
+<p>基本的一致性雜湊有一個問題：如果伺服器數量少，資料分佈可能很不均勻。比如 3 台伺服器，某台可能佔了環上 50% 的範圍，另一台只有 10%。</p>
+
+<p>解決方案是<strong>虛擬節點（Vnodes）</strong>：每台實體伺服器在環上放多個位置，而不是只有一個。比如每台放 100 個虛擬節點。這樣資料會更均勻地分散在所有伺服器上。</p>
+
+<p>虛擬節點的優勢：</p>
+<ul>
+<li><strong>負載均衡</strong>：資料更均勻分佈，避免某台過載</li>
+<li><strong>快速再平衡</strong>：新增伺服器時，從多個現有節點各拿一些虛擬節點，搬遷量更小</li>
+<li><strong>容錯更平滑</strong>：某台伺服器故障時，它的虛擬節點分散在環上各處，負載由多台伺服器分擔</li>
+</ul>
+
+<h2>資料複製</h2>
+
+<p>為了高可用，一致性雜湊通常設定一個<strong>複製因子 N</strong>（replication factor），每筆資料沿著環順時針存放到 N 台不同的伺服器上。這確保即使某台機器故障，資料仍有其他副本。</p>
+
+<p>例如，N=2 表示每筆資料有 2 份副本，分別存放在環上相鄰的兩台伺服器。</p>
+
+<h2>面試中的應用</h2>
+
+<p>在系統設計面試中，任何需要「高效能地動態分佈資料」的場景都適合用一致性雜湊：</p>
+<ul>
+<li>分散式快取（如 Memcached、Redis Cluster）</li>
+<li>分散式資料庫的分片（如 DynamoDB、Cassandra）</li>
+<li>CDN 的節點選擇</li>
+<li>負載均衡器的分流</li>
+</ul>
+
+<div class="quiz" data-question="用雜湊取餘數分配資料，從 3 台伺服器擴展到 4 台時，大約有多少比例的資料需要搬遷？" data-correct="1" data-explain="雜湊取餘數的除數從 3 變 4，幾乎所有資料的放置位置都會改變，約 75% 需要搬遷。">
+<button class="opt">約 25%</button>
+<button class="opt">約 75%</button>
+<button class="opt">約 50%</button>
+<button class="opt">0%（不需要搬遷）</button>
+</div>
+
+<div class="quiz" data-question="一致性雜湊中，新增一台伺服器時需要搬遷多少資料？" data-correct="2" data-explain="一致性雜湊只搬遷環上相鄰段的資料，約 1/N（N 為節點數）。">
+<button class="opt">所有資料</button>
+<button class="opt">一半的資料</button>
+<button class="opt">約 1/N 的資料</button>
+<button class="opt">完全不需要搬遷</button>
+</div>
+
+<div class="quiz" data-question="虛擬節點（Vnodes）解決了什麼問題？" data-correct="0" data-explain="虛擬節點讓每台實體伺服器在環上佔多個位置，使資料分佈更均勻。">
+<button class="opt">資料分佈不均勻的問題</button>
+<button class="opt">網路分區的問題</button>
+<button class="opt">資料加密的問題</button>
+<button class="opt">伺服器成本的問題</button>
+</div>
+
+<div class="quiz" data-question="在一致性雜湊環中，資料是順時針找到第一台伺服器來存放。這個「順時針」規則的作用是什麼？" data-correct="3" data-explain="順時針規則確保所有節點對同一筆資料的位置有共識，不需要中央協調。">
+<button class="opt">加快查找速度</button>
+<button class="opt">減少雜湊碰撞</button>
+<button class="opt">讓資料更均勻</button>
+<button class="opt">讓所有節點對資料位置有共識</button>
+</div>
+
+<div class="quiz" data-question="每筆資料沿著環順時針存放到 N 台不同的伺服器上，這個 N 叫什麼？" data-correct="1" data-explain="N 是複製因子（replication factor），決定每筆資料有多少份副本。">
+<button class="opt">節點數</button>
+<button class="opt">複製因子</button>
+<button class="opt">虛擬節點數</button>
+<button class="opt">雜湊值</button>
+</div>
+
+<div class="quiz" data-question="以下哪個系統使用一致性雜湊來分佈資料？" data-correct="2" data-explain="Amazon Dynamo 和 Apache Cassandra 都使用一致性雜湊來分佈和複製資料。">
+<button class="opt">MySQL（單機模式）</button>
+<button class="opt">Nginx（負載均衡）</button>
+<button class="opt">Amazon Dynamo</button>
+<button class="opt">Redis（單機模式）</button>
+</div>
+
+<p class="footer">上一步：<a href="./pacelc-theorem.html">PACELC 定理</a> · 下一步：<a href="./quorum.html">Quorum 共識</a></p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

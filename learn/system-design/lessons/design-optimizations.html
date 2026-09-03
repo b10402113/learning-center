@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>設計優化與考量 — Dropbox 系統設計</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<h1>設計優化與考量</h1>
+<p class="subtitle">Dropbox 系統設計 · Step 5/5</p>
+
+<section>
+<h2>學習目標</h2>
+<p>掌握關鍵優化技術，如檔案分塊、重複數據刪除，並理解如何處理失敗與提高可擴展性。</p>
+</section>
+
+<section>
+<h2>優化一：檔案分塊（File Chunking）</h2>
+<p>我們已經知道檔案要切成 4 MB 的分塊。但這裡有一個更深的問題：<strong>分塊的邊界怎麼定？</strong></p>
+
+<h3>固定大小 vs 內容感知</h3>
+<table>
+<thead><tr><th>方式</th><th>做法</th><th>優點</th><th>缺點</th></tr></thead>
+<tbody>
+<tr><td>固定大小</td><td>每 4 MB 切一塊</td><td>實作簡單</td><td>檔案中間插入一個位元組，後面所有分塊都要重傳</td></tr>
+<tr><td>內容感知（Rabin Fingerprint）</td><td>用滑動視窗雜湊找自然邊界</td><td>插入一位元組只影響一個分塊</td><td>實作複雜，分塊大小不固定</td></tr>
+</tbody>
+</table>
+<p>Dropbox 使用<strong>內容感知分塊</strong>（類似 Rabin Fingerprint），這樣即使檔案中間插入一個位元組，也只有包含該位元組的分塊需要重傳，其他分塊的雜湊值不變，可以直接重用。</p>
+</section>
+
+<section>
+<h2>優化二：重複數據刪除（Deduplication）</h2>
+<p>想象一下：1000 個用戶都上傳了同一個 Windows 安裝檔（4 GB）。如果每個用戶都存一份，就是 4 TB。但如果用雜湊值比對，這個檔案只需要存一份，1000 個用戶的元數據都指向同一組分塊。</p>
+
+<h3>兩個層級的去重</h3>
+<ul>
+<li><strong>跨用戶去重</strong>：不同用戶上傳相同內容的分塊，只存一份。需要一個全局的「分塊→儲存位置」對照表</li>
+<li><strong>用戶內去重</strong>：同一用戶修改檔案後，未變更的分塊直接重用，不重新上傳</li>
+</ul>
+<p>去重的代價是：需要維護一個全局的分塊索引，而且不能直接刪除分塊（可能其他用戶還在引用）。需要引入<strong>引用計數（Reference Count）</strong>：每個分塊記錄有多少用戶引用它，只有引用計數歸零時才真正刪除。</p>
+</section>
+
+<section>
+<h2>優化三：傳輸層壓縮</h2>
+<p>在網路傳輸時，分塊可以進一步壓縮：</p>
+<ul>
+<li><strong>文字檔案</strong>：壓縮率很高（如 gzip、zstd），100 MB 的文字檔壓縮後可能只有 10 MB</li>
+<li><strong>已壓縮格式</strong>（JPEG、MP4、ZIP）：壓縮幾乎沒效果，反而浪費 CPU</li>
+</ul>
+<p>聰明的做法是：根據檔案類型決定是否壓縮。文字檔壓縮後再傳輸，媒體檔直接傳輸原始分塊。</p>
+</section>
+
+<section>
+<h2>優化四：資料一致性與可用性取捨</h2>
+<p>在分散式系統中，CAP 定理告訴我們：一致性（Consistency）、可用性（Availability）、分区容錯（Partition Tolerance）三者最多只能滿足兩個。雲端儲存系統通常選擇<strong>AP</strong>（可用性 + 分区容錯），接受最終一致性。</p>
+
+<h3>實際影響</h3>
+<ul>
+<li>用戶 A 修改檔案後，用戶 B 可能有幾秒延遲才看到更新</li>
+<li>但系統永遠可用——即使部分伺服器掛了，用戶仍能上傳/下載</li>
+<li>這在雲端儲存場景下是合理的：幾秒的延遲用戶通常感知不到</li>
+</ul>
+</section>
+
+<section>
+<h2>優化五：容錯與高可用</h2>
+<p>雲端儲存系統不能因為單點故障就掛掉。幾個關鍵的容錯機制：</p>
+
+<h3>數據冗餘</h3>
+<p>每個分塊至少儲存在三個不同的資料中心。即使一個資料中心整個掛掉，數據仍然可用。這就是為什麼 S3 的持久性可以達到 99.999999999%（11 個 9）。</p>
+
+<h3>服務冗餘</h3>
+<p>同步服務、元數據資料庫都需要主從複製。主節點掛了，從節點自動接管。消息隊列本身也需要多副本。</p>
+
+<h3>優雅降級</h3>
+<p>如果同步服務暫時不可用，客戶端不應該崩潰。它應該：</p>
+<ul>
+<li>繼續允許用戶在本地編輯檔案</li>
+<li>將變更記錄在本地隊列</li>
+<li>等同步服務恢復後再重播所有變更</li>
+</ul>
+</section>
+
+<section>
+<h2>優化六：擴展性設計</h2>
+<p>當用戶從 100 萬增長到 1 億時，系統如何擴展？</p>
+
+<h3>水平擴展</h3>
+<ul>
+<li><strong>客戶端</strong>：無狀態，天然可擴展</li>
+<li><strong>同步服務</strong>：無狀態（狀態在元數據資料庫中），可以水平擴展多個實例</li>
+<li><strong>消息隊列</strong>：可以分片（partition），不同用戶的隊列在不同節點上</li>
+<li><strong>元數據資料庫</strong>：可以按用戶 ID 分片，不同分片在不同伺服器上</li>
+<li><strong>雲端儲存</strong>：物件儲存天然支持水平擴展</li>
+</ul>
+
+<h3>按用戶分片</h3>
+<p>最自然的分片策略是按用戶 ID 分片。同一用戶的所有檔案和元數據在同一個分片上，避免跨分片查詢。但要注意<strong>熱點問題</strong>：如果某個用戶有超多檔案或超多共享，可能需要進一步拆分。</p>
+</section>
+
+<section class="quiz-section">
+<h2>自我檢測</h2>
+
+<div class="quiz" data-question="Dropbox 使用什麼方式進行檔案分塊？" data-correct="2" data-explain="內容感知分塊（類似 Rabin Fingerprint）用滑動視窗雜湊找自然邊界，插入一個位元組只影響一個分塊。">
+<button class="opt">固定大小每 4MB 切一塊</button>
+<button class="opt">按行分割</button>
+<button class="opt">內容感知分塊（Rabin Fingerprint）</button>
+<button class="opt">按檔案類型決定</button>
+</div>
+
+<div class="quiz" data-question="重複數據刪除如何防止誤刪其他用戶引用的分塊？" data-correct="1" data-explain="引用計數記錄每個分塊被多少用戶引用，只有歸零時才真正刪除。">
+<button class="opt">禁止刪除任何分塊</button>
+<button class="opt">引用計數，歸零才刪除</button>
+<li class="opt">定期全量掃描</button>
+<li class="opt">由管理員手動確認</button>
+</div>
+
+<div class="quiz" data-question="雲端儲存系統在 CAP 定理中通常選擇哪種組合？" data-correct="0" data-explain="AP（可用性 + 分区容錯），接受最終一致性。幾秒延遲用戶通常感知不到，但系統永遠可用。">
+<button class="opt">AP（可用性 + 分区容錯）</button>
+<button class="opt">CP（一致性 + 分区容錯）</button>
+<li class="opt">CA（一致性 + 可用性）</button>
+<li class="opt">三者都要</button>
+</div>
+
+<div class="quiz" data-question="如果同步服務暫時不可用，客戶端應該怎麼做？" data-correct="3" data-explain="繼續允許本地編輯，將變更記錄在本地隊列，等服務恢復後再重播。">
+<button class="opt">立即崩潰並通知用戶</button>
+<li class="opt">禁止所有檔案操作</button>
+<button class="opt">自動切換到另一個同步服務</button>
+<button class="opt">繼續本地編輯，記錄在本地隊列，服務恢復後重播</button>
+</div>
+
+<div class="quiz" data-question="文字檔案和媒體檔在傳輸時有什麼不同處理？" data-correct="1" data-explain="文字檔壓縮率高，壓縮後再傳輸；已壓縮的媒體檔（JPEG、MP4）壓縮沒效果，直接傳輸原始分塊。">
+<button class="opt">都壓縮後再傳輸</button>
+<button class="opt">文字檔壓縮，媒體檔直接傳輸</button>
+<li class="opt">都直接傳輸</button>
+<li class="opt">媒體檔壓縮，文字檔直接傳輸</button>
+</div>
+
+</section>
+
+<div class="lesson-nav">
+<a href="./file-sync-workflow.html">← 上一步：檔案同步工作流程</a>
+<span></span>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

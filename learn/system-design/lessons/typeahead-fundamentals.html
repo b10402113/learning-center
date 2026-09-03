@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Typeahead 基礎設計與核心演算法</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Typeahead 基礎設計與核心演算法</h1>
+<p class="meta">system-design · typeahead-ratelimit · Step 1/4</p>
+
+<h2>學習目標</h2>
+<p>理解 Typeahead 搜尋建議的基本概念、功能需求，以及核心的 Trie 資料結構設計與永久儲存方式。</p>
+
+<h2>你在哪裡見過它</h2>
+
+<p>你打開 Google 搜尋框，輸入「系」，瞬間彈出「系統設計面試」「系統分析」等建議。你在淘寶搜尋商品，打一個字就有一列候選。這就是 Typeahead Suggestion——搜尋自動完成。</p>
+
+<p>它的核心價值不是「加速搜尋」，而是<strong>引導用戶表達意圖</strong>。很多用戶其實不知道該搜什麼關鍵詞，好的建議能幫他們更快找到想要的東西。</p>
+
+<h2>需求分析</h2>
+
+<p>設計任何系統都要從需求開始。Typeahead 的需求分為功能和非功能兩塊：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>類型</th>
+      <th>需求</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>功能需求</strong></td>
+      <td>用戶每輸入一個字元，系統返回 top 10 個以該字元開頭的搜尋建議</td>
+    </tr>
+    <tr>
+      <td><strong>非功能需求</strong></td>
+      <td>建議在 <strong>200ms 以內</strong>顯示（real-time）</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>200ms 是什麼概念？人眼感知到延遲的閾值大約是 300ms。如果超過 200ms 用戶就會覺得「慢」，所以他打下一個字的時候你還沒返回結果——體驗就崩了。</p>
+
+<h2>核心資料結構：Trie</h2>
+
+<p>問題可以這樣抽象：我們有一堆字串，要支援「前綴查詢」——給定前綴，找出所有匹配的字串。</p>
+
+<p>如果你用 Array + 線性掃描，每個前綴查詢都要遍歷整個詞典，時間複雜度 O(n × L)，n 是詞數，L 是字串長度。詞典有 100 萬個詞？太慢了。</p>
+
+<p><strong>Trie（字典樹）</strong>是專門解決前綴查詢的資料結構。它的核心思想：把字串的每個字元存為一個節點，共同的前綴共享路徑。</p>
+
+<p>舉個例子。假設詞典有 <code>cap</code>、<code>cat</code>、<code>captain</code>、<code>capital</code> 這四個詞，Trie 的結構長這樣：</p>
+
+<pre><code>        root
+        |
+        c
+        |
+        a
+       / \
+      p   t
+     / \   \
+    ✓   i    ✓
+   /     \
+  t       n
+ / \       \
+a   l        ✓
+|   |
+✓   ✓</code></pre>
+
+<p>從 <code>c → a → p</code> 這條路往下走，遇到 <code>✓</code> 的節點就是一個完整詞。所以搜 <code>cap</code> 的前綴，系統從 root 出發沿 <code>c → a → p</code> 走，收集所有帶 <code>✓</code> 的子樹節點，就得到 <code>cap</code>、<code>captain</code>、<code>capital</code>。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>操作</th>
+      <th>時間複雜度</th>
+      <th>線性掃描</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>前綴查詢</td>
+      <td>O(L)，L = 前綴長度</td>
+      <td>O(n × L)</td>
+    </tr>
+    <tr>
+      <td>插入新詞</td>
+      <td>O(L)，L = 詞長度</td>
+      <td>O(1) 或 O(n)</td>
+    </tr>
+    <tr>
+      <td>空間</td>
+      <td>較大（每個字元一個節點）</td>
+      <td>較小</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Trie 的取捨很明確：<strong>用空間換時間</strong>。每個字元都是一個節點，空間開銷比純字串陣列大得多，但查詢速度快了一個數量級。在 Typeahead 這種 read-heavy（讀取密集）的場景下，這個取捨完全值得。</p>
+
+<h2>Trie 的持久化儲存</h2>
+
+<p>記憶體中的 Trie 很快，但伺服器重啟資料就沒了。怎麼把 Trie 存到磁碟上？</p>
+
+<p>做法是<strong>定期對 Trie 做快照（snapshot）</strong>，存到檔案中。重建時從 root 開始，一層一層往下讀：每個節點存它包含的字元，以及有多少個子節點。伺服器掛了？從最新的快照重建 Trie，幾秒鐘就能恢復服務。</p>
+
+<pre><code>// 快照寫入示意
+function snapshot(node, file) {
+  file.write(node.char);
+  file.write(node.children.length);
+  if (node.isEndOfWord) file.write(1);
+  else file.write(0);
+  for (child of node.children) {
+    snapshot(child, file);
+  }
+}</code></pre>
+
+<p>快照的頻率取決於資料更新的頻率。Typeahead 的詞典更新通常來自離線分析（定期從搜尋日誌中統計熱門詞），所以一天做一次快照就夠了。</p>
+
+<h2>面試中的關鍵點</h2>
+
+<ul>
+  <li>能解釋 Typeahead 的核心價值：引導用戶表達意圖，不是加速搜尋</li>
+  <li>能說出功能需求（top 10 建議）和非功能需求（200ms 延遲）</li>
+  <li>能畫出 Trie 的基本結構，解釋前綴查詢為什麼是 O(L)</li>
+  <li>能說明 Trie 的空間換時間取捨，以及為什麼在 Typeahead 場景下值得</li>
+  <li>能解釋快照機制如何讓 Trie 在伺服器重啟後恢復</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>Typeahead 的核心是用 Trie 支援前綴查詢，以空間換時間，達到 O(L) 的查詢速度。Trie 透過定期快照實現持久化，伺服器重啟後可從快照重建。下一步要面對的問題是：當詞典有數十億條、每秒有數萬次查詢時，怎麼把這個 Trie 擴展到多台機器上。</p>
+
+<div class="quiz" data-question="Typeahead 的核心價值是什麼？" data-correct="2" data-explain="Typeahead 的核心是引導用戶表達意圖——很多用戶不知道該搜什麼關鍵詞，好的建議能幫他們更快找到想要的東西。">
+  <button class="opt">加速搜尋引擎的查詢速度</button>
+  <button class="opt">引導用戶表達搜尋意圖</button>
+  <button class="opt">減少資料庫的查詢壓力</button>
+  <button class="opt">提升搜尋結果的相關性</button>
+</div>
+
+<div class="quiz" data-question="用 Trie 做前綴查詢的時間複雜度是什麼？" data-correct="1" data-explain="Trie 前綴查詢只跟前綴長度 L 有關，時間複雜度是 O(L)，跟詞典大小無關。">
+  <button class="opt">O(n)，n 是詞典大小</button>
+  <button class="opt">O(L)，L 是前綴長度</button>
+  <button class="opt">O(n × L)</button>
+  <button class="opt">O(log n)</button>
+</div>
+
+<div class="quiz" data-question="Trie 相比線性掃描的主要取捨是什麼？" data-correct="0" data-explain="Trie 用空間換時間：每個字元都是一個節點，空間開銷更大，但查詢速度快了一個數量級。">
+  <button class="opt">用空間換時間</button>
+  <button class="opt">用時間換空間</button>
+  <button class="opt">用複雜度換可讀性</button>
+  <button class="opt">用延遲換吞吐量</button>
+</div>
+
+<div class="quiz" data-question="Typeahead 的非功能需求要求延遲在多少 ms 以內？" data-correct="3" data-explain="200ms 是人眼感知延遲的閾值（約 300ms）之內，超過這個時間用戶就會覺得「慢」。">
+  <button class="opt">50ms</button>
+  <button class="opt">100ms</button>
+  <button class="opt">500ms</button>
+  <button class="opt">200ms</button>
+</div>
+
+<div class="quiz" data-question="Trie 的持久化儲存通常怎麼做？" data-correct="1" data-explain="定期對 Trie 做快照存到磁碟，伺服器重啟後從最新快照重建 Trie。">
+  <button class="opt">每次寫入都同步寫磁碟</button>
+  <button class="opt">定期做快照存到磁碟</button>
+  <button class="opt">使用資料庫的 WAL 機制</button>
+  <button class="opt">把 Trie 序列化到 Redis</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Typeahead 適合用 Trie 而不是 B-Tree？" data-correct="2" data-explain="Typeahead 的核心操作是前綴查詢，Trie 天然支援前綴匹配且時間複雜度是 O(L)，而 B-Tree 適合範圍查詢但不適合前綴查詢。">
+  <button class="opt">Trie 的空間效率更高</button>
+  <button class="opt">Trie 支援更快的隨機存取</button>
+  <button class="opt">Trie 天然支援前綴匹配，查詢只跟前綴長度有關</button>
+  <button class="opt">B-Tree 無法支援字串查詢</button>
+</div>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="typeahead-scaling-optimizations.html">下一步：Typeahead 擴展與用戶體驗優化 →</a></div>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

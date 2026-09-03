@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API 限流基礎概念與需求</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>API 限流基礎概念與需求</h1>
+<p class="meta">system-design · typeahead-ratelimit · Step 3/4</p>
+
+<h2>學習目標</h2>
+<p>理解 API 限流的作用、為什麼需要限流，以及系統設計的功能與非功能需求，認識不同類型的限流策略。</p>
+
+<h2>從一個真實的崩潰說起</h2>
+
+<p>想像你經營一個電商網站，平時每秒處理 500 個請求。某天辦了一場限時搶購活動，流量瞬間湧入，每秒湧進 50,000 個請求。你的伺服器瞬間過載，CPU 跑滿、記憶體爆掉，結果所有用戶——包括那些正常瀏覽的人——全都看到 503 錯誤頁面。</p>
+
+<p>這個問題的根源是：<strong>系統沒有機制控制進入的流量。</strong>不管後端能消化多少，所有請求一股腦湧進去，最終把整台機器壓垮。</p>
+
+<p>限流（Rate Limiting）就是解決這個問題的機制：它在請求進入後端之前設一道閘門，按照某種規則允許或拒絕請求，確保系統永遠不會被超出處理能力的流量打垮。</p>
+
+<h2>Rate Limiter 是什麼</h2>
+
+<p>從高層來看，Rate Limiter 控制<strong>一個實體（用戶、設備、IP 或 API Key）在一定時間窗口內能發送多少請求</strong>。超過上限的請求會被拒絕，返回 HTTP 狀態碼 <code>429 Too Many Requests</code>。</p>
+
+<p>這裡有兩個關鍵概念：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>概念</th>
+      <th>含義</th>
+      <th>類比</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Rate（速率）</strong></td>
+      <td>單位時間內允許通過的請求數</td>
+      <td>高速公路每個小時允許通過多少輛車</td>
+    </tr>
+    <tr>
+      <td><strong>Burst（突發容量）</strong></td>
+      <td>系統短時間內能承受的最大超出量</td>
+      <td>匝道 Metering 燈：短時間內可以放行一批車，但不能一直放</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>為什麼需要限流</h2>
+
+<p>限流不只是「防止伺服器崩潰」這麼簡單，它在系統設計中有四個關鍵作用：</p>
+
+<h3>1. 保護後端資源</h3>
+
+<p>每個請求都消耗 CPU、記憶體、網路頻寬或資料庫連線。如果不限流，一波突發流量可能瞬間耗盡所有資源，導致所有用戶都無法使用。限流確保後端永遠在安全的負載範圍內運作。</p>
+
+<h3>2. 防止惡意攻擊</h3>
+
+<p>DDoS 攻擊的本質就是用大量請求癱瘓目標系統。限流是第一道防線：不管攻擊者從多少個 IP 發起請求，限流器都會按照規則拒絕超量的流量。暴力破解密碼、大量註冊假帳號等惡意行為，也可以透過限流來控制——例如同一個 IP 每分鐘最多嘗試 5 次登入。</p>
+
+<h3>3. 控制成本</h3>
+
+<p>在雲端環境中，每一個請求都代表真金白銀的運算資源。如果沒有限流，一波異常流量可能讓你的帳單暴增十倍。限流等於給你的預算裝了保險絲。</p>
+
+<h3>4. 確保公平性</h3>
+
+<p>多租戶系統中，不同用戶或客戶端共用同一套後端資源。限流確保每個租戶都拿到公平的配額。GitHub API、Twitter API 的 rate limit 就是這個道理——每個用戶每小時有固定配額，不會被某個用戶的大量請求影響。</p>
+
+<h2>系統需求</h2>
+
+<p>設計限流器時要考慮的功能與非功能需求：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>類型</th>
+      <th>需求</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>功能需求</strong></td>
+      <td>限制每個實體在時間窗口內的請求數（如每秒 15 次）</td>
+    </tr>
+    <tr>
+      <td><strong>功能需求</strong></td>
+      <td>限流應跨叢集生效（多台 API Server 共享限流狀態）</td>
+    </tr>
+    <tr>
+      <td><strong>功能需求</strong></td>
+      <td>超限時返回清晰的錯誤訊息</td>
+    </tr>
+    <tr>
+      <td><strong>非功能需求</strong></td>
+      <td>低延遲（不應明顯增加請求處理時間）</td>
+    </tr>
+    <tr>
+      <td><strong>非功能需求</strong></td>
+      <td>高記憶體效率（不能因為限流本身耗盡記憶體）</td>
+    </tr>
+    <tr>
+      <td><strong>非功能需求</strong></td>
+      <td>容錯（限流器本身掛了不應阻斷正常請求）</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>第三個需求「跨叢集生效」特別重要：如果限流狀態只存在一台機器上，用戶的請求可能被路由到不同機器，導致限流失效。這就是為什麼限流狀態通常存在共享儲存（如 Redis）中。</p>
+
+<h2>限流的節流類型</h2>
+
+<p>根據寬鬆程度，限流有三種節流（Throttling）類型：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>類型</th>
+      <th>行為</th>
+      <th>適用場景</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Hard Throttling</strong></td>
+      <td>請求數絕對不能超過上限</td>
+      <td>嚴格的 API 配額限制</td>
+    </tr>
+    <tr>
+      <td><strong>Soft Throttling</strong></td>
+      <td>允許超過上限一定百分比（如 10%）</td>
+      <td>需要彈性的場景</td>
+    </tr>
+    <tr>
+      <td><strong>Elastic Throttling</strong></td>
+      <td>在高需求時放寬限制，低需求時恢復</td>
+      <td>流量波動大的場景</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>選擇哪種取決於你的容忍度：金融系統通常用 Hard Throttling（絕對不允許超量），一般 API 服務可能用 Soft Throttling（允許一點彈性），而 Elastic Throttling 適合流量波動大的場景。</p>
+
+<h2>限流在哪裡發生</h2>
+
+<p>限流可以部署在系統的不同層級：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>位置</th>
+      <th>說明</th>
+      <th>優缺點</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>用戶端</strong></td>
+      <td>在 App 或瀏覽器端限制發送頻率</td>
+      <td>減少網路請求，但用戶可以繞過</td>
+    </tr>
+    <tr>
+      <td><strong>API Gateway</strong></td>
+      <td>在統一入口處攔截，最早擋住超量請求</td>
+      <td>集中管理，但需要額外基礎設施</td>
+    </tr>
+    <tr>
+      <td><strong>負載均衡器</strong></td>
+      <td>在 LB 層做限流，分散式部署</td>
+      <td>能分散限流壓力，但設定較複雜</td>
+    </tr>
+    <tr>
+      <td><strong>個別服務</strong></td>
+      <td>在每個微服務自己的入口做限流</td>
+      <td>粒度最細，但管理成本高</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>實際生產環境中，最常見的做法是<strong>在 API Gateway 層做粗粒度的全局限流，再在個別服務做細粒度的限流</strong>。兩層防線互相補充。</p>
+
+<h2>面試中的關鍵點</h2>
+
+<ul>
+  <li>能解釋為什麼需要限流（保護後端、防攻擊、控成本、保公平）</li>
+  <li>能說明 Rate（長期速率）和 Burst（短期突發容量）的區別</li>
+  <li>能說出三種節流類型（Hard、Soft、Elastic）的差異</li>
+  <li>能解釋為什麼限流狀態需要存在共享儲存中（跨叢集生效）</li>
+  <li>能描述限流的部署位置及其取捨</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>Rate Limiter 控制實體在時間窗口內的請求數，保護後端、防攻擊、控成本、保公平。核心概念是 Rate（長期速率）和 Burst（短期突發容量）的平衡。三種節流類型（Hard、Soft、Elastic）適合不同場景。限流可以部署在 Client、API Gateway、LB 或個別服務的不同層級，最常見做法是 API Gateway 粗粒度 + 個別服務細粒度。下一步要深入限流的具體演算法。</p>
+
+<div class="quiz" data-question="限流最核心的作用是什麼？" data-correct="1" data-explain="限流的核心是控制進入後端的請求速率，確保系統永遠不會被超出處理能力的流量打垮。">
+  <button class="opt">加速系統響應速度</button>
+  <button class="opt">確保系統永遠不會被超出處理能力的流量打垮</button>
+  <button class="opt">減少資料庫查詢次數</button>
+  <button class="opt">提升用戶體驗</button>
+</div>
+
+<div class="quiz" data-question="Rate 和 Burst 有什麼區別？" data-correct="2" data-explain="Rate 是長期平均速率（單位時間內允許的請求數），Burst 是短期內能承受的超出量。兩者需要平衡。">
+  <button class="opt">Rate 是最大連線數，Burst 是最小連線數</button>
+  <button class="opt">Rate 和 Burst 是同一個概念的不同叫法</button>
+  <button class="opt">Rate 是長期平均速率，Burst 是短期超出量</button>
+  <button class="opt">Rate 控制寫入，Burst 控制讀取</button>
+</div>
+
+<div class="quiz" data-question="Soft Throttling 與 Hard Throttling 的區別是什麼？" data-correct="3" data-explain="Hard Throttling 絕對不允許超過上限，Soft Throttling 允許超過一定百分比（如 10%），提供彈性。">
+  <button class="opt">Soft Throttling 更嚴格</button>
+  <button class="opt">Soft Throttling 只用於讀取</button>
+  <button class="opt">Soft Throttling 不需要計數器</button>
+  <button class="opt">Soft Throttling 允許超過上限一定百分比</button>
+</div>
+
+<div class="quiz" data-question="為什麼限流狀態需要存在共享儲存中？" data-correct="0" data-explain="如果限流狀態只存在一台機器上，用戶的請求可能被路由到不同機器，導致限流失效。共享儲存讓多台 API Server 共享限流狀態。">
+  <button class="opt">因為多台 API Server 需要共享限流狀態</button>
+  <button class="opt">因為記憶體不夠存</button>
+  <button class="opt">因為要持久化到磁碟</button>
+  <button class="opt">因為需要跨地區同步</button>
+</div>
+
+<div class="quiz" data-question="限流最常部署在哪一層？" data-correct="1" data-explain="API Gateway 是最常見的限流部署位置，因為它是所有請求的統一入口，可以最早擋住超量流量。">
+  <button class="opt">資料庫層</button>
+  <button class="opt">API Gateway 層</button>
+  <button class="opt">用戶端瀏覽器</button>
+  <button class="opt">DNS 層</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="typeahead-scaling-optimizations.html">← 上一步：Typeahead 擴展與用戶體驗優化</a></div>
+  <div><a href="ratelimit-design.html">下一步：API 限流演算法與系統架構 →</a></div>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

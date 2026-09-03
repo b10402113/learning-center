@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>併發控制與容錯 — Ticketmaster 系統設計</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>併發控制與容錯</h1>
+<p class="meta">Step 6/6 · Ticketmaster 系統設計 · 約 15 分鐘</p>
+
+<h2>學習目標</h2>
+<p>解決高併發場景下的座位重複訂購問題，保證訂票公平性，並設計容錯機制應對服務崩潰。</p>
+
+<h2>核心問題：兩個人同時搶一個座位</h2>
+<p>假設場次 A 的座位 10 號還剩一個。用戶甲和用戶乙同時點了「預訂」。如果系統沒有做好併發控制，兩個人都會看到「預訂成功」——但實際上只有一個座位。這就是<strong>超賣（Overselling）</strong>問題。</p>
+
+<h2>Solution 1：資料庫事務鎖定</h2>
+<p>最直接的方法是用 SQL 資料庫的事務隔離級別。在 SQL Server 中：</p>
+
+<pre><code>SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+BEGIN TRANSACTION;
+
+-- 檢查座位狀態
+SELECT Status FROM Seat
+WHERE ShowID = 123 AND SeatNumber = 'A10';
+
+-- 如果可用，更新為 Reserved
+UPDATE Seat SET Status = 'Reserved'
+WHERE ShowID = 123 AND SeatNumber = 'A10'
+  AND Status = 'Available';
+
+COMMIT;
+</code></pre>
+
+<p><strong>SERIALIZABLE</strong> 是最高的事務隔離級別。它確保在事務執行期間，其他事務無法修改被讀取的數據。這就解決了超賣問題——如果甲正在預訂座位 A10，乙的 SELECT 會被阻塞，直到甲的事務完成。</p>
+
+<p>但 SERIALIZABLE 有代價：<strong>鎖定範圍大、併發度低</strong>。每個預訂操作都要鎖住相關行，高併發時會導致大量等待。這在流量尖峰時可能成為瓶頸。</p>
+
+<h2>Solution 2：使用 Redis 原子操作</h2>
+<p>另一個方案是利用 Redis 的原子操作來做座位鎖定：</p>
+
+<pre><code>-- 使用 Redis SET NX（Not Exists）原子操作
+SETNX seat:show123:A10 "reserved" EX 900
+
+-- 如果返回 1，表示鎖定成功
+-- 如果返回 0，表示已被別人鎖定
+</code></pre>
+
+<p><code>SETNX</code>（Set if Not Exists）是一個原子操作：如果 key 不存在，就設置它並返回成功；如果 key 已存在，直接返回失敗。整個操作在 Redis 中是原子的，不會有併發問題。</p>
+
+<p>加上 <code>EX 900</code>（900 秒 = 15 分鐘），鎖定會自動過期。這就實現了「暫時鎖定 + 自動過期」的機制。</p>
+
+<h3>兩種方案的比較</h3>
+<table>
+  <thead><tr><th>特性</th><th>SQL SERIALIZABLE</th><th>Redis SETNX</th></tr></thead>
+  <tbody>
+    <tr><td>併發度</td><td>低（鎖定行級）</td><td>高（無鎖等待）</td></tr>
+    <tr><td>一致性</td><td>強（ACID）</td><td>最終一致</td></tr>
+    <tr><td>過期機制</td><td>需要手動實現</td><td>內建 TTL</td></tr>
+    <tr><td>適用場景</td><td>低併發、強一致性</td><td>高併發、可接受最終一致</td></tr>
+  </tbody>
+</table>
+<p>實際系統中通常<strong>混合使用</strong>：Redis 做第一層快速鎖定（擋住 99% 的併發），SQL 事務做第二層持久化確認。</p>
+
+<h2>容錯：服務崩潰怎麼辦？</h2>
+<h3>ActiveReservationsService 崩潰</h3>
+<p>如果管理預訂的服務掛了：</p>
+<ul>
+  <li><strong>方案 A：從資料庫重建</strong>——讀取 Booking 表中所有 Status = 'Reserved' 的記錄，重建預訂狀態</li>
+  <li><strong>方案 B：主從複製</strong>——ActiveReservationsService 部署為主從配置，主節點掛了從節點接管</li>
+</ul>
+
+<h3>WaitingUsersService 崩潰</h3>
+<p>等待隊列的容錯相對簡單：</p>
+<ul>
+  <li>等待隊列是<strong>可重建的</strong>——用戶可以重新提交等待請求</li>
+  <li>可以從 Booking 表的時間戳重建等待順序</li>
+  <li>隊列丟失不會造成數據不一致（不像座位鎖定那麼關鍵）</li>
+</ul>
+
+<h2>面試技巧</h2>
+<p>併發控制和容錯是系統設計面試的「壓軸題」。講清楚：</p>
+<ul>
+  <li>超賣問題的本質（兩個用戶同時讀到「可用」狀態）</li>
+  <li>SQL SERIALIZABLE 的原理和代價</li>
+  <li>Redis SETNX 的原子操作機制</li>
+  <li>兩種方案的比較和混合使用</li>
+  <li>各服務崩潰後的恢復策略</li>
+</ul>
+
+<h2>複習測驗</h2>
+
+<div class="quiz" data-question="SQL SERIALIZABLE 隔離級別的主要代價是什麼？" data-correct="2" data-explain="SERIALIZABLE 鎖定範圍大、併發度低，每個預訂操作都要鎖住相關行，高併發時會導致大量等待。">
+  <button class="opt">記憶體消耗大</button>
+  <button class="opt">資料庫容量受限</button>
+  <button class="opt">併發度低、鎖定等待多</button>
+  <button class="opt">不支援 ACID</button>
+</div>
+
+<div class="quiz" data-question="Redis SETNX 原子操作的作用是什麼？" data-correct="1" data-explain="SETNX 保證如果 key 不存在才設置，已存在則失敗。整個操作是原子的，不會有併發問題。">
+  <button class="opt">壓縮資料庫存儲</button>
+  <button class="opt">原子地檢查並鎖定座位</button>
+  <button class="opt">自動備份資料庫</button>
+  <button class="opt">加密用戶數據</button>
+</div>
+
+<div class="quiz" data-question="實際訂票系統通常如何處理併發？" data-correct="3" data-explain="混合使用：Redis 做第一層快速鎖定（擋住 99% 的併發），SQL 事務做第二層持久化確認。">
+  <button class="opt">只用 SQL 事務</button>
+  <button class="opt">只用 Redis</button>
+  <button class="opt">不處理併發</button>
+  <button class="opt">Redis 快速鎖定 + SQL 事務持久化</button>
+</div>
+
+<div class="quiz" data-question="ActiveReservationsService 崩潰後如何恢復？" data-correct="0" data-explain="從 Booking 表中讀取所有 Status = 'Reserved' 的記錄，重建預訂狀態。也可以用主從複製實現自動切換。">
+  <button class="opt">從資料庫的 Booking 表重建</button>
+  <button class="opt">讓用戶重新訂購</button>
+  <button class="opt">等待手動修復</button>
+  <button class="opt">清除所有座位狀態</button>
+</div>
+
+<div class="quiz" data-question="WaitingUsersService 崩潰的影響為什麼比 ActiveReservationsService 小？" data-correct="1" data-explain="等待隊列是可重建的（用戶可重新提交），且不會造成數據不一致。不像座位鎖定那樣關鍵。">
+  <button class="opt">因為等待隊列使用更快的資料庫</button>
+  <button class="opt">因為隊列可重建且不會造成數據不一致</button>
+  <button class="opt">因為用戶不會注意到</button>
+  <button class="opt">因為有自動備份機制</button>
+</div>
+
+<div class="quiz" data-question="Redis SETNX + EX 900 實現了什麼功能？" data-correct="2" data-explain="SETNX 原子鎖定 + EX 900（15 分鐘）自動過期，實現了「暫時鎖定 + 自動釋放」的機制。">
+  <button class="opt">永久鎖定座位</button>
+  <button class="opt">壓縮座位數據</button>
+  <button class="opt">暫時鎖定座位 15 分鐘後自動過期</button>
+  <button class="opt">加密座位資訊</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./detailed-component-design.html">← 上一步：核心元件詳細設計</a>
+  <span></span>
+</div>
+
+<div class="footer">Ticketmaster 系統設計 · Step 6/6</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

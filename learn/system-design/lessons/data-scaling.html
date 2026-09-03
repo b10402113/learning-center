@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>資料擴展：分片與快取 — Twitter</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<p class="meta">Twitter · 第 3 步（共 5 步）</p>
+
+<h1>資料擴展：分片與快取</h1>
+
+<h2>學習目標</h2>
+<p>理解如何對 Twitter 的海量推文與用戶資料進行分片，並選擇適當的快取策略來提升讀取效能。</p>
+
+<hr>
+
+<section>
+<h2>1. 為什麼需要分片？</h2>
+<p>每天 1 億條新推文、每秒 325,000 次讀取——任何單台資料庫都無法承受這種規模。分片（Sharding）是將資料分散到多台機器上的策略，讓每台機器只負責一部分資料。</p>
+<p>分片的核心問題是：按什麼規則把資料分到哪台機器？不同的分片策略會帶來完全不同的效能特徵。</p>
+</section>
+
+<section>
+<h2>2. 分片策略比較</h2>
+
+<h3>策略一：按 UserID 分片</h3>
+<p>將同一使用者的所有資料（推文、最愛、追蹤關係）放在同一台機器上。</p>
+<table>
+<tr><th>優點</th><th>缺點</th></tr>
+<tr><td>查詢某個使用者的所有推文只需訪問一台機器</td><td>熱門使用者（如名人）造成熱點（hot spot）</td></tr>
+<tr><td>追蹤關係查詢高效</td><td>某些機器承載的負載遠超其他機器</td></tr>
+</table>
+
+<h3>策略二：按 TweetID 分片</h3>
+<p>每條推文按 tweet_id 的雜湊值分散到不同機器。</p>
+<table>
+<tr><th>優點</th><th>缺點</th></tr>
+<tr><td>推文均勻分散，沒有熱點</td><td>查詢某個使用者的所有推文需要跨多台機器</td></tr>
+<tr><td>寫入負載均勻</td><td>時間軸生成需要聚合多台機器的資料</td></tr>
+</table>
+
+<h3>策略三：按追蹤關係分片</h3>
+<p>將追蹤關係圖進行圖形分片，相關聯的使用者盡量在同一分片。</p>
+<table>
+<tr><th>優點</th><th>缺點</th></tr>
+<tr><td>追蹤者的推文查詢高效</td><td>圖形分片演算法複雜</td></tr>
+<tr><td>時間軸生成優化</td><td>跨分片查詢仍然存在</td></tr>
+</table>
+
+<blockquote>
+<strong>實務選擇：</strong>大多數系統採用<strong>按 UserID 分片 + 熱點處理</strong>的混合策略。對於 Twitter 這種讀取密集型系統，先確保讀取路徑高效，再處理寫入的熱點問題。
+</blockquote>
+</section>
+
+<section>
+<h2>3. 熱點問題與解法</h2>
+<p>按 UserID 分片最大的風險是<strong>熱點</strong>：某個超級使用者（如全球名人）的推文被大量讀取，導致其所在分片過載。</p>
+
+<h3>解法一：熱點推文快取</h3>
+<p>將熱門推文放入快取（如 Memcache），讀取請求先打到快取而非資料庫。80/20 法則告诉我们：20% 的推文產生 80% 的讀取流量。</p>
+
+<h3>解法二：推文複製</h3>
+<p>熱門推文被複製到多個分片，讀取時可以從任意副本取得。</p>
+
+<h3>解法三：混合分片</h3>
+<p>普通使用者按 UserID 分片，超級使用者的推文按 TweetID 分片，避免單一分片過載。</p>
+</section>
+
+<section>
+<h2>4. 快取策略</h2>
+<p>快取是 Twitter 架構中<strong>最關鍵的效能優化</strong>。讀取量是寫入的 280 倍，如果不做快取，資料庫扛不住。</p>
+
+<h3>快取什麼？</h3>
+<table>
+<tr><th>快取對象</th><th>快取內容</th><th>失效時機</th></tr>
+<tr><td>熱門推文</td><td>推文內容、讚數、轉推數</td><td>推文被更新時</td></tr>
+<tr><td>使用者資料</td><td>使用者名稱、頭像、追蹤數</td><td>使用者更新資料時</td></tr>
+<tr><td>時間軸</td><td>預生成的個人化時間軸</td><td>新推文發布時部分失效</td></tr>
+</table>
+
+<h3>快取淘汰策略</h3>
+<p><strong>LRU（Least Recently Used）</strong>是最常用的策略：當快取空間不足時，淘汰最久沒被存取的資料。Twitter 的使用模式非常適合 LRU——熱門推文會被反覆存取，冷門推文自然被淘汰。</p>
+
+<h3>快取一致性</h3>
+<p>快取和資料庫之間的一致性是經典難題。Twitter 採用的策略：</p>
+<ul>
+<li><strong>Cache-Aside</strong>（旁路快取）：應用程式先查快取，未命中再查資料庫，然後寫入快取</li>
+<li><strong>失效策略</strong>：推文更新時，主動使對應的快取失效（invalidate），下次讀取時重新從資料庫載入</li>
+</ul>
+
+<blockquote>
+<strong>面試重點：</strong>快取不是萬靈丹。你必須能說清楚：快取什麼、用什麼淘汰策略、如何處理一致性問題。這三個問題是快取設計的核心。
+</blockquote>
+</section>
+
+<section>
+<h2>5. 設計決策總結</h2>
+<p>Twitter 的資料擴展策略可以總結為：</p>
+<ul>
+<li><strong>分片：</strong>主要按 UserID 分片，處理熱門使用者的特殊策略</li>
+<li><strong>快取：</strong>多層快取（應用層 + 資料庫層），LRU 淘汰，Cache-Aside 一致性</li>
+<li><strong>讀取優化：</strong>因為讀取量遠大於寫入，所有優化都以讀取路徑為優先</li>
+</ul>
+</section>
+
+<hr>
+
+<div class="lesson-nav">
+<span><a href="./core-design.html">← 上一步：核心系統設計與資料庫綱要</a></span>
+<span><a href="./timeline-optimization.html">下一步：動態時間軸生成優化 →</a></span>
+</div>
+
+<div class="footer">
+<p>系統設計面試 · Twitter</p>
+</div>
+
+<div class="quiz" data-question="按 UserID 分片最大的風險是什麼？" data-correct="2" data-explain="超級使用者的大量讀取會導致其所在分片過載，形成熱點。">
+<button class="opt">資料不一致</button>
+<button class="opt">寫入速度太慢</button>
+<button class="opt">熱門使用者造成熱點</button>
+<button class="opt">快取命中率太低</button>
+</div>
+
+<div class="quiz" data-question="80/20 法則在 Twitter 快取中的應用是什麼？" data-correct="0" data-explain="20% 的推文產生 80% 的讀取流量，所以快取這 20% 的熱門推文就能覆蓋大部分讀取需求。">
+<button class="opt">20% 的推文產生 80% 的讀取流量</button>
+<button class="opt">20% 的使用者產生 80% 的推文</button>
+<button class="opt">20% 的快取空間處理 80% 的請求</button>
+<button class="opt">20% 的伺服器處理 80% 的流量</button>
+</div>
+
+<div class="quiz" data-question="Cache-Aside（旁路快取）模式的讀取流程是什麼？" data-correct="1" data-explain="應用程式先查快取，快取未命中再查資料庫，然後將結果寫入快取。">
+<button class="opt">先寫資料庫，再更新快取</button>
+<button class="opt">先查快取，未命中再查資料庫</button>
+<button class="opt">同時查快取和資料庫</button>
+<button class="opt">只查快取，不查資料庫</button>
+</div>
+
+<div class="quiz" data-question="Twitter 為什麼選擇 LRU 作為快取淘汰策略？" data-correct="3" data-explain="Twitter 的使用模式是熱門推文被反覆存取，冷門推文自然被淘汰，LRU 非常適合這種模式。">
+<button class="opt">因為 LRU 實現最簡單</button>
+<button class="opt">因為 LRU 佔用記憶體最少</button>
+<button class="opt">因為 LRU 不需要額外設定</button>
+<button class="opt">因為熱門資料被反覆存取，冷門自然淘汰</button>
+</div>
+
+<div class="quiz" data-question="推文更新時，快取的一致性如何處理？" data-correct="0" data-explain="更新推文時主動使快取失效，下次讀取時從資料庫重新載入。">
+<button class="opt">主動使快取失效，下次重新載入</button>
+<button class="opt">同時更新資料庫和快取</button>
+<button class="opt">等快自然過期</button>
+<button class="opt">不需要處理，快取會自動更新</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Twitter 的所有優化都以讀取路徑為優先？" data-correct="1" data-explain="因為讀取量是寫入的 280 倍，讀取路徑的瓶頸遠大於寫入。">
+<button class="opt">因為寫入不需要優化</button>
+<button class="opt">因為讀取量是寫入的 280 倍</button>
+<button class="opt">因為讀取比寫入更重要</button>
+<button class="opt">因為快取只能優化讀取</button>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

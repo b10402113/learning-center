@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>分片標準</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>分片標準</h1>
+<p class="meta">system-design · data-partitioning · Step 2/3</p>
+
+<h2>學習目標</h2>
+<p>掌握常見的資料分片標準，包括雜湊、範圍與列表分片的原理與取捨。</p>
+
+<h2>從分片方法到分片標準</h2>
+
+<p>上一課介紹了水平分片、垂直分片和混合分片三種分片方法。但「怎麼切」只是第一步，接下來要回答一個更關鍵的問題：<strong>依照什麼規則把資料分配到不同分片？</strong>這就是分片標準（Partitioning Criteria）。</p>
+
+<p>不同的分片標準對資料分布、擴展難易度、查詢性能都有很大影響。選錯標準，可能導致某些分片負載過高（hotspot），查詢效率反而下降。選對標準，資料均勻分布，系統自然高效。</p>
+
+<h2>五種主要分片標準</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>標準</th>
+      <th>原理</th>
+      <th>優點</th>
+      <th>缺點</th>
+      <th>適用場景</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>雜湊分片</strong></td>
+      <td>對分片鍵計算雜湊值，對分片數取模</td>
+      <td>資料均勻分布，實現簡單</td>
+      <td>擴展困難，新增分片需重新計算</td>
+      <td>不需要範圍查詢的均勻分布場景</td>
+    </tr>
+    <tr>
+      <td><strong>範圍分片</strong></td>
+      <td>按分片鍵的連續範圍切分</td>
+      <td>擴展容易，範圍查詢方便</td>
+      <td>容易出現熱分片</td>
+      <td>時間序列、ID 連續遞增的場景</td>
+    </tr>
+    <tr>
+      <td><strong>列表分片</strong></td>
+      <td>用離散的值來劃分，每片分配一組值</td>
+      <td>按業務分類靈活度高</td>
+      <td>需預先知道所有值，分布可能不均</td>
+      <td>地理區域、語言分類等離散值場景</td>
+    </tr>
+    <tr>
+      <td><strong>輪詢分片</strong></td>
+      <td>按順序一筆筆輪流分配</td>
+      <td>一定能均勻分布</td>
+      <td>查詢特定資料很難找到分片</td>
+      <td>實務上很少使用</td>
+    </tr>
+    <tr>
+      <td><strong>複合分片</strong></td>
+      <td>結合多種分片標準</td>
+      <td>取各自優點</td>
+      <td>架構複雜</td>
+      <td>複雜業務場景</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>雜湊分片（Hash-based Partitioning）</h2>
+
+<p>雜湊分片是最常用的分片標準之一。它的原理很簡單：對分片鍵（例如使用者 ID）計算一個雜湊值，然後對分片數量取模，得到的結果就是資料應該去的分片編號。</p>
+
+<p>舉個例子：假設你有 4 個分片，使用者 ID 為 12345。計算 <code>hash(12345) % 4 = 2</code>，所以這筆資料存到分片 2。因為雜湊函數的特性，不同 ID 會被均勻地分配到各分片，不容易出現某些分片特別多、某些特別少的情況。</p>
+
+<p>但雜湊分片有一個嚴重的限制：<strong>擴展困難</strong>。如果你把分片數從 4 增加到 5，大部分資料的 <code>hash % 5</code> 結果都會改變，意味著需要重新搬移大量資料。在實務中，這可能導致長時間的停機。如果系統需要頻繁擴展，可以改用<strong>一致性雜湊</strong>（Consistent Hashing）來改善這個問題——它在新增或移除分片時，只需要搬移少量資料。</p>
+
+<h2>範圍分片（Range-based Partitioning）</h2>
+
+<p>範圍分片依照分片鍵的連續範圍來切分。例如，ID 1~10000 放分片 A，ID 10001~20000 放分片 B，以此類推。這種方式特別適合像時間戳、連續 ID 這種有自然順序的鍵。</p>
+
+<p>範圍分片的優點是<strong>擴展容易</strong>：新增範圍只需要加新分片，不需要搬移舊資料。而且範圍查詢（例如「查詢 2024 年 1 月的所有訂單」）非常高效，因為相關資料都在同一個分片。</p>
+
+<p>但範圍分片容易出現<strong>熱分片</strong>（hotspot）問題。例如按照時間分片，最新的分片會不斷接收新資料的讀寫，而舊分片幾乎沒有流量。這會導致單一節點過載，其他節點閒置。</p>
+
+<h2>列表分片（List-based Partitioning）</h2>
+
+<p>列表分片類似範圍分片，但用離散的值來劃分，每個分片分配一組值。例如，你可以按地理區域分片：台灣的資料放分片 A，日本的資料放分片 B，美國的資料放分片 C。</p>
+
+<p>列表分片的優點是<strong>按業務分類靈活度很高</strong>。如果查詢也常常按照這個分類（例如「查詢所有台灣使用者」），性能會很好。但缺點是你需要<strong>預先知道所有值</strong>，新增值需要修改分片規則。而且如果不同列表的資料量差異大（例如台灣資料 100 萬筆，美國資料 10 萬筆），容易分布不均。</p>
+
+<h2>輪詢分片（Round-robin Partitioning）</h2>
+
+<p>輪詢分片是最簡單的：按順序一筆筆輪流分配到分片。第一筆放分片 A，第二筆放分片 B，第三筆放分片 C，第四筆放分片 D，第五筆又回到分片 A。因為是輪流分配，一定能均勻分布。</p>
+
+<p>但輪詢分片的致命缺點是<strong>查詢特定資料很難找到分片</strong>。你不知道某筆資料在哪個分片，必須掃描所有分片才能找到。實務上幾乎不會使用這種方法。</p>
+
+<h2>面試中的關鍵點</h2>
+
+<p>在系統設計面試中，分片標準的選擇是必考的。面試官想聽到的是：</p>
+
+<ul>
+  <li>你能解釋<strong>雜湊分片</strong>的均勻分布優勢和擴展困難的取捨</li>
+  <li>你能指出<strong>範圍分片</strong>的熱分片問題，以及什麼時候範圍分片反而是最佳選擇</li>
+  <li>你能討論<strong>一致性雜湊</strong>如何解決雜湊分片的擴展問題</li>
+  <li>你能根據業務場景選擇合適的分片標準，而不是死記硬背</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>雜湊分片均勻分布但擴展困難，範圍分片擴展容易但容易有熱分片，列表分片靈活但需預先定義值。選擇哪種標準，取決於你的查詢模式、擴展需求和資料分布特性。在面試中，能清楚說明為什麼選這個標準、它有什麼取捨，才是得分關鍵。</p>
+
+<div class="quiz" data-question="雜湊分片的主要優點是什麼？" data-correct="0" data-explain="雜湊函數的特性保證資料能均勻地分配到各分片，不會出現某些分片特別多的情況。">
+  <button class="opt">資料均勻分布，實現簡單</button>
+  <button class="opt">擴展非常容易</button>
+  <button class="opt">範圍查詢效率高</button>
+  <button class="opt">按業務分類靈活度高</button>
+</div>
+
+<div class="quiz" data-question="範圍分片最容易出現什麼問題？" data-correct="2" data-explain="例如按時間分片，最新的分片會不斷接收新資料的讀寫，導致單一節點過載，這就是熱分片問題。">
+  <button class="opt">資料無法均勻分布</button>
+  <button class="opt">查詢特定資料需要掃描所有分片</button>
+  <button class="opt">最新分片接收大量讀寫，導致熱分片</button>
+  <button class="opt">新增分片需要重新計算所有資料位置</button>
+</div>
+
+<div class="quiz" data-question="如果你的系統需要按地理區域（台灣、日本、美國）分片，最適合用哪種分片標準？" data-correct="1" data-explain="地理區域是離散的值，用列表分片按區域分配分片是最自然的選擇。">
+  <button class="opt">雜湊分片：對地理區域計算雜湊值</button>
+  <button class="opt">列表分片：每個區域分配一個分片</button>
+  <button class="opt">範圍分片：按區域的字典序排列</button>
+  <button class="opt">輪詢分片：輪流分配到各分片</button>
+</div>
+
+<div class="quiz" data-question="雜湊分片從4個分片擴展到5個分片時，會發生什麼？" data-correct="3" data-explain="因為 hash % 4 和 hash % 5 的結果大部分不同，幾乎所有資料都需要重新搬移到新分片。">
+  <button class="opt">只有新進資料需要重新分配</button>
+  <button class="opt">完全不需要搬移資料</button>
+  <button class="opt">只需要搬移10%的資料</button>
+  <button class="opt">幾乎所有資料都需要重新搬移</button>
+</div>
+
+<div class="quiz" data-question="輪詢分片在實務上為什麼很少使用？" data-correct="1" data-explain="輪詢分片把資料隨機分配到各分片，你無法預知某筆資料在哪個分片，查詢時必須掃描所有分片，效率極低。">
+  <button class="opt">無法均勻分布資料</button>
+  <button class="opt">查詢特定資料很難找到分片，必須掃描所有分片</button>
+  <button class="opt">無法處理大量資料</button>
+  <button class="opt">只適用於關聯式資料庫</button>
+</div>
+
+<div class="quiz" data-question="在系統設計面試中，選擇分片標準時應該討論哪些面向？" data-correct="2" data-explain="面試官想聽到你根據查詢模式、擴展需求和資料分布特性來選擇標準，而不是死記硬背某種方法。">
+  <button class="opt">只討論哪種方法實現最簡單</button>
+  <button class="opt">只討論哪種方法擴展最容易</button>
+  <button class="opt">查詢模式、擴展需求、資料分布特性的取捨</button>
+  <button class="opt">比較各種方法的程式碼量</button>
+</div>
+
+<p class="footer">上一步：<a href="partitioning-methods.html">分片方法</a> · 下一步：<a href="partitioning-challenges.html">分片常見挑戰</a></p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

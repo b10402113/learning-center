@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>生產環境就緒：複製、容錯、負載均衡與監控 — Twitter</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<p class="meta">Twitter · 第 5 步（共 5 步）</p>
+
+<h1>生產環境就緒：複製、容錯、負載均衡與監控</h1>
+
+<h2>學習目標</h2>
+<p>能夠為 Twitter 生產環境設計複製架構、容錯機制、多層次負載均衡與關鍵指標監控。</p>
+
+<hr>
+
+<section>
+<h2>1. 複製與容錯</h2>
+<p>單點故障（Single Point of Failure）是生產環境的大忌。Twitter 是全球性服務，任何一台機器故障都不能影響使用者體驗。</p>
+
+<h3>資料庫複製</h3>
+<p>由於系統是讀取密集型，每個資料庫分片配置<strong>一個主節點（primary）和多個從節點（secondary）</strong>：</p>
+<ul>
+<li><strong>寫入</strong>——所有寫入先到主節點</li>
+<li><strong>讀取</strong>——讀取請求分散到從節點</li>
+<li><strong>容錯</strong>——主節點故障時，從節點可以提升為新的主節點（failover）</li>
+</ul>
+
+<h3>複製模式</h3>
+<p>主從複製（Primary-Secondary）是 Twitter 的主要模式。從節點異步複製主節點的資料，可能有短暂延遲。在讀取密集型系統中，這種短暂不一致是可接受的——使用者看到的推文可能晚幾秒出現，但不影響整體體驗。</p>
+
+<blockquote>
+<strong>容錯原則：</strong>系統中任何單點故障都不能導致服務中斷。每個關鍵組件都要有冗餘——資料庫有從節點、應用伺服器有多實例、負載均衡器有備份。
+</blockquote>
+</section>
+
+<section>
+<h2>2. 多層次負載均衡</h2>
+<p>負載均衡（Load Balancing）在 Twitter 架構中出現在<strong>三個層級</strong>：</p>
+
+<h3>第一層：客戶端到應用伺服器</h3>
+<p>使用者請求先到負載均衡器，再分配到多個應用伺服器。初期可以用簡單的 Round Robin（輪詢）——每個伺服器依次接收請求。</p>
+<table>
+<tr><th>演算法</th><th>適用場景</th></tr>
+<tr><td>Round Robin</td><td>伺服器規格相同，請求處理時間相近</td></tr>
+<tr><td>Least Connections</td><td>請求處理時間差異大</td></tr>
+<tr><td>IP Hash</td><td>需要 session 親和性（同一使用者的請求到同一伺服器）</td></tr>
+</table>
+
+<h3>第二層：應用伺服器到資料庫</h3>
+<p>應用伺服器讀取資料時，需要在多個從節點之間分配讀取負載。這一層的負載均衡確保沒有單一從節點過載。</p>
+
+<h3>第三層：聚合伺服器到快取</h3>
+<p>快取層也需要負載均衡，確保快取請求分散到多個快取伺服器。</p>
+
+<h3>負載均衡器本身也要冗餘</h3>
+<p>負載均衡器本身不能是單點故障。通常部署兩個負載均衡器，一個為主、一個為備，用 VIP（Virtual IP）或 DNS 輪詢實現切換。</p>
+</section>
+
+<section>
+<h2>3. 監控與指標</h2>
+<p>「你無法改善你無法衡量的東西。」監控（Monitoring）是生產環境的眼睛——讓你知道系統在做什麼、哪裡有問題。</p>
+
+<h3>關鍵監控指標</h3>
+<table>
+<tr><th>指標</th><th>說明</th><th>警示閾值建議</th></tr>
+<tr><td>每日/每秒新推文數</td><td>寫入負載</td><td>偏離平均值 50% 以上</td></tr>
+<tr><td>時間軸遞送統計</td><td>每秒遞送多少條推文</td><td>遞送延遲超過 5 秒</td></tr>
+<tr><td>推文延遲</td><td>從發布到追蹤者可見的時間</td><td>P99 延遲超過 10 秒</td></tr>
+<tr><td>快取命中率</td><td>快取請求中有多少成功命中</td><td>低於 80%</td></tr>
+<tr><td>錯誤率</td><td>失敗請求佔總請求的比例</td><td>超過 1%</td></tr>
+<tr><td>伺服器健康度</td><td>CPU、記憶體、磁碟使用率</td><td>任一超過 85%</td></tr>
+</table>
+
+<h3>監控工具</h3>
+<p>常用的監控棧包括：</p>
+<ul>
+<li><strong>Prometheus</strong>——收集和儲存指標時間序列</li>
+<li><strong>Grafana</strong>——視覺化儀表板</li>
+<li><strong>ELK Stack</strong>——日誌收集與分析</li>
+<li><strong>AlertManager</strong>——根據指標閾值發送警報</li>
+</ul>
+</section>
+
+<section>
+<h2>4. 完整架構回顧</h2>
+<p>經過五個步驟，我們從需求開始，一步步構建出 Twitter 的完整架構：</p>
+<table>
+<tr><th>步驟</th><th>核心決策</th></tr>
+<tr><td>需求分析</td><td>讀取密集型系統，280 倍讀寫比</td></tr>
+<tr><td>核心設計</td><td>分層架構 + SQL/NoSQL 混合方案</td></tr>
+<tr><td>資料擴展</td><td>按 UserID 分片 + LRU 快取</td></tr>
+<tr><td>時間軸</td><td>混合模型（推取 + 拉取）</td></tr>
+<tr><td>生產環境</td><td>主從複製 + 三層負載均衡 + 監控</td></tr>
+</table>
+
+<blockquote>
+<strong>面試收尾：</strong>系統設計面試的最後，面試官通常會問「還有哪些進階議題？」你可以提：一致性與可用性的取捨（CAP 定理）、機器學習推薦、A/B 測試框架、CDN 策略等。這展示了你對系統的全面思考。
+</blockquote>
+</section>
+
+<hr>
+
+<div class="lesson-nav">
+<span><a href="./timeline-optimization.html">← 上一步：動態時間軸生成優化</a></span>
+<span></span>
+</div>
+
+<div class="footer">
+<p>系統設計面試 · Twitter · 全部完成！</p>
+</div>
+
+<div class="quiz" data-question="Twitter 的資料庫複製中，讀取請求應該分配到哪裡？" data-correct="1" data-explain="讀取請求分散到從節點，寫入先到主節點，這是主從複製的標準做法。">
+<button class="opt">全部打到主節點</button>
+<button class="opt">分散到從節點</button>
+<button class="opt">隨機分配到任意節點</button>
+<button class="opt">只打到第一個從節點</button>
+</div>
+
+<div class="quiz" data-question="負載均衡在 Twitter 架構中出現在幾個層級？" data-correct="2" data-explain="三個層級：客戶端→應用伺服器、應用伺服器→資料庫、聚合伺服器→快取。">
+<button class="opt">1 個</button>
+<button class="opt">2 個</button>
+<button class="opt">3 個</button>
+<button class="opt">4 個</button>
+</div>
+
+<div class="quiz" data-question="快取命中率低於多少時應該發出警示？" data-correct="0" data-explain="快取命中率低於 80% 意味著太多請求打到了資料庫，需要檢查快取策略。">
+<button class="opt">80%</button>
+<button class="opt">50%</button>
+<button class="opt">30%</button>
+<button class="opt">95%</button>
+</div>
+
+<div class="quiz" data-question="主從複製中，主節點故障時的標準處理方式是什麼？" data-correct="3" data-explain="從節點提升為新的主節點（failover），確保服務不中斷。">
+<button class="opt">等主節點修復</button>
+<button class="opt">停止所有服務</button>
+<button class="opt">切換到備份資料庫</button>
+<button class="opt">從節點提升為新主節點</button>
+</div>
+
+<div class="quiz" data-question="負載均衡器本身如何避免成為單點故障？" data-correct="1" data-explain="部署兩個負載均衡器，一主一備，用 VIP 或 DNS 輪詢實現切換。">
+<button class="opt">使用更快的硬體</button>
+<button class="opt">部署主備兩個負載均衡器</button>
+<button class="opt">只用一個但加強監控</button>
+<button class="opt">不需要處理，負載均衡器不會故障</button>
+</div>
+
+<div class="quiz" data-question="系統設計面試最後，面試官問「還有哪些進階議題」時，最好的回答策略是什麼？" data-correct="2" data-excript="展示對系統的全面思考，提到 CAP 定理、ML 推薦、CDN 等進階議題。">
+<button class="opt">說「沒有進階議題了」</button>
+<button class="opt">開始重新解釋已有設計</button>
+<button class="opt">提到 CAP 定理、ML 推薦等進階議題</button>
+<button class="opt">反問面試官想聽什麼</button>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

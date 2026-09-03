@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>冗餘負載均衡設計</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>冗餘負載均衡設計</h1>
+<p class="meta">system-design · load-balancing · Step 4/4</p>
+
+<h2>學習目標</h2>
+<p>理解如何解決負載均衡器本身的單點故障問題，掌握冗餘叢集的設計方法。</p>
+
+<h2>問題：負載均衡器本身就是單點故障</h2>
+
+<p>負載均衡器解決了後端伺服器的單點故障問題，但它自己也是一個伺服器——如果它掛了，所有流量都進不來，整個系統就會對外中斷。這就像餐廳領班請假了，新客人進來沒人接待，所有服務生都閒著也沒用。</p>
+
+<p>這就是<strong>單點故障（Single Point of Failure，SPOF）</strong>：系統中有一個元件，一旦它故障，整個系統就無法運作。負載均衡器位於流量入口，它的單點故障影響範圍最大。</p>
+
+<h2>三種冗餘設計模式</h2>
+
+<h3>主-備架構（Active-Standby）</h3>
+
+<p>最簡單的冗餘方式：準備两台負載均衡器，一台是主（Active），負責處理所有流量；另一台是備（Standby），平時閒著，但持續監控主 LB 的健康狀態。一旦主 LB 掛了，備 LB 自動接管。</p>
+
+<pre><code>正常狀態：
+  用戶端 → 主 LB → 後端伺服器
+          備 LB（待命，監控主 LB）
+
+故障轉移：
+  用戶端 → 備 LB → 後端伺服器
+          主 LB（故障）</code></pre>
+
+<p><strong>優點</strong>：實現簡單，容易理解，故障轉移邏輯清晰。</p>
+<p><strong>缺點</strong>：備 LB 平時閒著，資源利用率低（50% 的硬體在睡覺）。而且故障轉移時可能有短暫的服務中斷。</p>
+
+<h3>主-主架構（Active-Active）</h3>
+
+<p>两台 LB 同時處理流量，各自分擔一部分。每台都監控對方的健康狀態，一旦某台掛了，另一台自動接管所有流量。</p>
+
+<pre><code>正常狀態：
+  用戶端 → LB-1 → 後端伺服器（一半流量）
+  用戶端 → LB-2 → 後端伺服器（一半流量）
+
+故障轉移：
+  用戶端 → LB-1 → 後端伺服器（全部流量）
+          LB-2（故障）</code></pre>
+
+<p><strong>優點</strong>：資源利用率高（两台都在工作），故障轉移更無縫（因為本来就在處理流量）。</p>
+<p><strong>缺點</strong>：架構複雜，需要處理两台 LB 之間的<strong>會話同步</strong>（例如用戶的 session 資料要同步），否則故障轉移時用戶會被登出。</p>
+
+<h3>Anycast 路由</h3>
+
+<p>Anycast 是一種網路路由技術：让多台 LB 宣告同一個 IP 位址，BGP 路由協定會自動把用戶端導到網路距離最近的 LB。如果某台 LB 故障，BGP 會自動重新路由到下一個最近的 LB。</p>
+
+<pre><code>台北用戶 → Anycast IP → 台北 LB
+東京用戶 → Anycast IP → 東京 LB
+倫敦用戶 → Anycast IP → 倫敦 LB</code></pre>
+
+<p><strong>優點</strong>：自動容錯（BGP 自動重新路由）、就近服務使用者（降低延遲）、不需要額外的故障偵測機制。</p>
+<p><strong>缺點</strong>：需要大型網路基礎設施，通常只有大型廠商（如 Google、Cloudflare）才用得起。</p>
+
+<h2>冗餘設計的注意事項</h2>
+
+<p>不管選哪種模式，設計冗餘架構時需要注意三個關鍵問題：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>問題</th>
+      <th>什麼是它</th>
+      <th>怎麼解決</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>會話一致性</strong></td>
+      <td>用戶的 session 資料在多台 LB 之間同步</td>
+      <td>Session affinity 或外部 Session Store（如 Redis）</td>
+    </tr>
+    <tr>
+      <td><strong>節點健康檢查</strong></td>
+      <td>LB 之間互相偵測對方是否正常</td>
+      <td>Heartbeat（心跳）機制，定期交換健康狀態</td>
+    </tr>
+    <tr>
+      <td><strong>配置同步</strong></td>
+      <td>多台 LB 的路由規則保持一致</td>
+      <td>共享配置儲存或自動同步機制</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>實際案例</h2>
+
+<p>大型系統通常會組合使用多種冗餘模式。例如：</p>
+
+<ul>
+  <li><strong>Cloudflare</strong>：使用 Anycast 在全球多個資料中心部署 LB，每個資料中心內部再用主-主架構</li>
+  <li><strong>大型電商</strong>：通常使用主-主架構，因為流量大、不能有任何中斷</li>
+  <li><strong>中小型服務</strong>：主-備架構通常就夠了，簡單且成本低</li>
+</ul>
+
+<h2>面試中的關鍵</h2>
+
+<p>在面試中，當你提到負載均衡時，面試官很可能會追問：「那負載均衡器 itself 掛了怎麼辦？」這時候你需要能解釋：</p>
+
+<ul>
+  <li>負載均衡器本身也是單點故障</li>
+  <li>解決方案是冗餘叢集（主-備、主-主、Anycast）</li>
+  <li>不同方案的取捨（簡單 vs 效率 vs 成本）</li>
+</ul>
+
+<p>這展示了你不只會加 LB，還會考慮 LB 本身的可靠性——這是系統設計面試中加分的關鍵思維。</p>
+
+<h2>小結</h2>
+
+<p>負載均衡器本身也是單點故障，需要透過冗餘設計來解決。三種常見模式：主-備架構簡單但資源利用率低；主-主架構效率高但複雜；Anycast 適合大型廠商。設計時要注意會話一致性、健康檢查和配置同步。面試中要能主動指出 LB 的單點故障問題並提出解法。</p>
+
+<div class="quiz" data-question="負載均衡器本身是什麼問題？" data-correct="0" data-explain="負載均衡器自己也是一台伺服器，如果它掛了，所有流量都進不來，整個系統中斷——這就是單點故障。">
+  <button class="opt">單點故障，一旦掛掉整個系統中斷</button>
+  <button class="opt">效能瓶頸，處理速度不夠快</button>
+  <button class="opt">成本太高，需要大量硬體</button>
+  <button class="opt">安全漏洞，容易被攻擊</button>
+</div>
+
+<div class="quiz" data-question="主-備架構（Active-Standby）的缺點是什麼？" data-correct="2" data-explain="備 LB 平時閒著，資源利用率低（50% 的硬體在睡覺），而且故障轉移時可能有短暫服務中斷。">
+  <button class="opt">實現太複雜</button>
+  <button class="opt">需要太多伺服器</button>
+  <button class="opt">備 LB 資源利用率低，故障轉移時可能有短暫中斷</button>
+  <button class="opt">無法處理大流量</button>
+</div>
+
+<div class="quiz" data-question="主-主架構（Active-Active）需要特別處理什麼問題？" data-correct="1" data-explain="两台 LB 同時工作，需要同步用戶的 session 資料，否則故障轉移時用戶會被登出。">
+  <button class="opt">DNS 快取問題</button>
+  <button class="opt">兩台 LB 之間的會話同步</button>
+  <button class="opt">SSL 憑證管理</button>
+  <button class="opt">頻寬限制</button>
+</div>
+
+<div class="quiz" data-question="Anycast 路由的優勢是什麼？" data-correct="3" data-explain="Anycast 讓 BGP 自動把用戶導到最近的 LB，故障時自動重新路由，不需要額外的故障偵測機制。">
+  <button class="opt">實現最簡單</button>
+  <button class="opt">成本最低</button>
+  <button class="opt">不需要任何網路基礎設施</button>
+  <button class="opt">自動容錯、就近服務、不需要額外故障偵測</button>
+</div>
+
+<div class="quiz" data-question="設計冗餘 LB 叢集時，「配置同步」要解決什麼問題？" data-correct="0" data-explain="多台 LB 的路由規則必須保持一致，否則不同 LB 可能把流量導到不同的後端，導致不一致的行為。">
+  <button class="opt">多台 LB 的路由規則保持一致</button>
+  <button class="opt">所有 LB 使用相同的 IP 位址</button>
+  <button class="opt">所有 LB 的硬體規格相同</button>
+  <button class="opt">所有 LB 連線到同一個資料庫</button>
+</div>
+
+<div class="quiz" data-question="在面試中，面試官追問「LB 掛了怎麼辦？」時，你應該展示什麼思維？" data-correct="2" data-explain="這是在考你是否能主動識別單點故障問題並提出冗餘解法，而不只是被動回答。">
+  <button class="opt">LB 不會掛，不用擔心</button>
+  <button class="opt">換一台新的 LB 就好</button>
+  <button class="opt">主動指出單點故障問題並提出冗餘解法</button>
+  <button class="opt">把所有流量導到備用伺服器</button>
+</div>
+
+<p class="footer">上一步：<a href="deployment-layers.html">負載均衡部署位置</a> · 回到節點：<a href="../load-balancing.mdx">負載均衡</a></p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

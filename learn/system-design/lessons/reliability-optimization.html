@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>快取、複製與容錯設計 — Newsfeed & Yelp/Uber</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<p class="meta">Newsfeed &amp; Yelp/Uber · 第 5 步（共 5 步）</p>
+
+<h1>快取、複製與容錯設計</h1>
+
+<h2>學習目標</h2>
+<p>整合三個系統的優化設計，包括快取策略、資料複製與容錯，確保系統能在高流量下保持可用性和性能。</p>
+
+<hr>
+
+<section>
+<h2>1. 為什麼可靠性是最後一步？</h2>
+<p>前四步我們完成了三個系統的需求分析、架構設計和核心演算法。但一個真正可用的系統還需要在高流量下保持穩定、在伺服器故障時快速恢復。快取、複製和容錯是三個系統共通的優化策略，但在不同場景下的應用方式各不相同。</p>
+</section>
+
+<section>
+<h2>2. 快取策略</h2>
+
+<h3>Newsfeed 的快取</h3>
+<p>Newsfeed 使用預計算的 feed 快取（如 Memcache 或 Redis），將每個使用者的 feed 結果（FeedItem ID 列表）存儲在記憶體中。查詢時直接從快取讀取，避免每次都要查詢資料庫。快取的淘汰策略通常使用 TTL（Time-To-Live），確保過期的 feed 不會被返回。</p>
+
+<h3>Yelp 的快取</h3>
+<p>Yelp 的快取用於緩解熱門地點的查詢壓力。知名餐廳、地標等「熱點」會被大量搜尋。系統在資料庫前加一層 Memcache，使用 LRU（Least Recently Used）淘汰策略：當快取空間不足時，優先淘汰最近最少使用的地點。應用伺服器在查詢資料庫前先檢查快取，命中時直接返回，未命中時才查詢資料庫並回填快取。</p>
+
+<h3>Uber 的快取</h3>
+<p>Uber 的快取主要用於熱門區域的駕駛位置。高需求區域（如機場、市中心）的駕駛位置可以緩存在記憶體中，減少對 QuadTree 的查詢壓力。但由於位置每 3 秒更新，快取的 TTL 必須很短（幾秒級），否則會返回過時的位置。</p>
+
+<h3>快取策略對比</h3>
+<table>
+<tr><th>系統</th><th>快取內容</th><th>淘汰策略</th><th>TTL</th></tr>
+<tr><td>Newsfeed</td><td>Feed 結果（ID 列表）</td><td>TTL（幾分鐘）</td><td>1-5 分鐘</td></tr>
+<tr><td>Yelp</td><td>熱門地點資料</td><td>LRU</td><td>較長（小時級）</td></tr>
+<tr><td>Uber</td><td>熱門區域駕駛位置</td><td>LRU + 短 TTL</td><td>幾秒</td></tr>
+</table>
+</section>
+
+<section>
+<h2>3. 資料複製</h2>
+
+<h3>主從複製（Primary-Secondary）</h3>
+<p>三個系統都使用主從複製來提高讀取吞吐量和容錯能力：</p>
+<ul>
+<li><strong>主伺服器（Primary）</strong>：處理所有寫入操作</li>
+<li><strong>從伺服器（Secondary）</strong>：處理讀取操作，從主伺服器同步資料</li>
+</ul>
+<p>從伺服器可能有輕微的資料延遲（最近的寫入尚未同步），但搜尋和讀取場景通常可以接受這種最終一致性。</p>
+
+<h3>Newsfeed 的複製</h3>
+<p>Feed 快取伺服器使用多副本，分散在多台機器上。讀取流量分散到多個從伺服器，提高吞吐量。</p>
+
+<h3>Yelp 的 QuadTree 複製</h3>
+<p>QuadTree 伺服器使用主從複製：從伺服器只處理讀取流量。由於地點資料很少變動，從伺服器的資料與主伺服器幾乎同步。</p>
+
+<h3>Uber 的複製</h3>
+<p>駕駛位置伺服器和通知伺服器都需要複製。如果主伺服器宕機，從伺服器可以接管。同時將位置資料同步到 SSD 作為持久化存儲，確保即使主從伺服器都宕機也能從磁碟恢復。</p>
+</section>
+
+<section>
+<h2>4. 容錯設計</h2>
+
+<h3>伺服器故障恢復</h3>
+<p>每個系統都需要考慮伺服器故障的場景：</p>
+<ul>
+<li><strong>健康檢查（Heartbeat）</strong>：從伺服器定期向主伺服器發送心跳信號，確認存活狀態</li>
+<li><strong>自動故障轉移（Failover）</strong>：主伺服器宕機時，從伺服器自動提升為新的主伺服器</li>
+<li><strong>資料恢復</strong>：從備份（SSD、資料庫副本）恢復資料</li>
+</ul>
+
+<h3>Newsfeed 的容錯</h3>
+<p>Feed 快取伺服器宕機時，系統可以退回到即時查詢資料庫（on-demand pull），保證服務可用但延遲增加。這是混合架構的額外好處——推播失敗時可以退回到拉播模式。</p>
+
+<h3>Uber 的容錯</h3>
+<p>Uber 的容錯要求最高，因為位置資料的即時性直接影響叫車服務：</p>
+<ul>
+<li>駕駛位置伺服器和通知伺服器都需要複製</li>
+<li>位置資料同步到 SSD 確保持久化</li>
+<li>如果主從伺服器都宕機，可以從 SSD 恢復最近的位置資料</li>
+</ul>
+
+<h3>網路斷線處理</h3>
+<p>駕駛在行駛中可能遇到網路不穩定的區域。系統需要處理：</p>
+<ul>
+<li>駕駛斷線後重新連接——重新同步位置</li>
+<li>乘客在行程中斷線——計費和位置追蹤的持續方案</li>
+<li>訊息遺失——使用訊息佇列確保至少一次投遞</li>
+</ul>
+</section>
+
+<section>
+<h2>5. 整合：三個系統的可靠性比較</h2>
+<table>
+<tr><th>維度</th><th>Newsfeed</th><th>Yelp</th><th>Uber</th></tr>
+<tr><td>快取重點</td><td>Feed 結果快取</td><td>熱門地點快取</td><td>熱門區域位置快取</td></tr>
+<tr><td>複製模式</td><td>快取多副本</td><td>QuadTree 主從</td><td>位置伺服器 + SSD 持久化</td></tr>
+<tr><td>故障退化</td><td>推播 → 拉播</td><td>從伺服器延遲</td><td>從 SSD 恢復位置</td></tr>
+<tr><td>一致性要求</td><td>最終一致</td><td>近似強一致</td><td>最終一致（秒級）</td></tr>
+</table>
+<p>三個系統的可靠性設計都遵循同一原則：<strong>讀取密集型系統優化快取和複製，寫入密集型系統優化持久化和故障恢復</strong>。</p>
+</section>
+
+<hr>
+
+<div class="lesson-nav">
+<span><a href="./uber-realtime.html">← 上一步：Uber 即時位置與配對設計</a></span>
+<span></span>
+</div>
+
+<div class="footer">
+<p>系統設計面試 · Newsfeed &amp; Yelp/Uber</p>
+</div>
+
+<div class="quiz" data-question="Newsfeed 的推播模型在快取伺服器宕機時可以退化為什麼模式？" data-correct="2" data-explain="混合架構中，推播失敗時可以退回到拉播模式（on-demand pull），從資料庫即時查詢。">
+<button class="opt">完全停止服務</button>
+<button class="opt">寫入磁碟備份</button>
+<button class="opt">退回拉播模式</button>
+<button class="opt">返回空結果</button>
+</div>
+
+<div class="quiz" data-question="Yelp 的快取使用 LRU 淘汰策略，意味著什麼？" data-correct="0" data-explain="當快取空間不足時，優先淘汰最近最少使用的地點資料。">
+<button class="opt">優先淘汰最近最少使用的資料</button>
+<button class="opt">優先淘汰最大的資料</button>
+<button class="opt">優先淘汰最早的資料</button>
+<button class="opt">隨機淘汰資料</button>
+</div>
+
+<div class="quiz" data-question="Uber 為什麼需要將駕駛位置同步到 SSD？" data-correct="3" data-exify="SSD 作為持久化存儲，確保主從伺服器都宕機時能從磁碟恢復位置資料。">
+<button class="opt">減少記憶體使用</button>
+<button class="opt">提高查詢速度</button>
+<button class="opt">方便資料分析</button>
+<button class="opt">防止主從伺服器都宕機時資料遺失</button>
+</div>
+
+<div class="quiz" data-question="主從複製中，從伺服器可能有什麼問題？" data-correct="1" data-explain="寫入先到主伺服器再同步到從伺服器，從伺服器可能有輕微的資料延遲。">
+<button class="opt">無法處理讀取</button>
+<button class="opt">資料可能有輕微延遲</button>
+<button class="opt">資料會遺失</button>
+<button class="opt">只能處理寫入</button>
+</div>
+
+<div class="quiz" data-question="三個系統的可靠性設計遵循什麼共同原則？" data-correct="2" data-explain="讀取密集型系統優化快取和複製，寫入密集型系統優化持久化和故障恢復。">
+<button class="opt">所有系統都用相同的快取策略</button>
+<button class="opt">寫入比讀取更重要</button>
+<button class="opt">讀取密集型優化快取和複製，寫入密集型優化持久化和故障恢復</button>
+<button class="opt">快取是唯一重要的優化</button>
+</div>
+
+<div class="quiz" data-question="Uber 的快取 TTL 為什麼必須很短（幾秒級）？" data-correct="1" data-exify="駕駛位置每 3 秒更新，TTL 太長會返回過時的位置資訊，影響叫車匹配的準確性。">
+<button class="opt">節省記憶體空間</button>
+<button class="opt">位置更新頻繁，避免返回過時資料</button>
+<button class="opt">減少網路流量</button>
+<button class="opt">簡化快取管理</button>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

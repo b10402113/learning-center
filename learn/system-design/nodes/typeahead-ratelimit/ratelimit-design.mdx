@@ -23,4 +23,40 @@ updated: 2026-09-02
 
 ## Lesson
 
+上一課理解了限流的概念和需求，這一步深入具體演算法和分散式架構。
+
+### 固定窗口計數器
+
+最簡單的限流演算法：把時間切成固定大小的窗口（如每秒），為每個用戶維護一個計數器。每次請求 +1，超過上限就拒絕，窗口結束時歸零。實作極簡單，記憶體效率高（每個用戶每個窗口只存一個整數）。但有**窗口邊界問題**：限制每分鐘 100 次，用戶在第 59 秒發 100 個，第 60 秒又發 100 個，瞬間 200 個請求，遠超限流意圖。
+
+### 滑動窗口計數器
+
+用 Redis Sorted Set 解決邊界問題：每個請求存 timestamp 作為 score，收到新請求時先移除過期 timestamp，計算剩餘數量是否超限。精確但**記憶體消耗大**——每個請求都存一個 timestamp，限制每秒 10,000 次時每個用戶每秒要存 10,000 個 timestamp。
+
+### 混合版滑動窗口（生產首選）
+
+結合固定窗口的低記憶體和滑動窗口的精確度：把大窗口（如 1 小時）切成多個小窗口（如每分鐘），為每個小窗口維護計數器。收到新請求時計算過去一小時內所有小窗口的計數器總和。只存 60 個計數器而不是每秒的 timestamp，精度也夠用。這是生產環境最常用的限流演算法。
+
+### 高層系統設計
+
+Rate Limiter 作為獨立服務部署：Web Server 收到請求後先詢問 Rate Limiter，根據結果放行或返回 429。狀態存在 Redis 中確保多台 Web Server 看到一致的限流狀態。
+
+### 資料分片與 IP vs 用戶限流
+
+限流資料按 UserID 做一致性雜湊分片（增減節點時只有少量 key 需要重新分配）。如果不同 API 限制不同，按 UserID + API Name 分片。限流維度上，IP 限流（不需登入但共享 IP 會誤傷）和用戶限流（精確但需登入）結合使用：IP 做粗粒度全局限流擋 DDoS，用戶做細粒度 API 配額管理。
+
+三種演算法各有取捨：固定窗口最簡單但有邊界問題，滑動窗口精確但記憶體大，混合版在兩者之間取得平衡是首選。
+
 ## Sources
+
+- [[sources/system-design/completed/20260825_056 Designing an API Rate Limiter.html#h2-6-what-are-different-types-of-algorithms-used-for-rate-limiting]]
+- [[sources/system-design/completed/20260825_056 Designing an API Rate Limiter.html#h2-7-high-level-design-for-rate-limiter]]
+- [[sources/system-design/completed/20260825_056 Designing an API Rate Limiter.html#h2-8-basic-system-design-and-algorithm]]
+- [[sources/system-design/completed/20260825_056 Designing an API Rate Limiter.html#h2-9-sliding-window-algorithm]]
+- [[sources/system-design/completed/20260825_056 Designing an API Rate Limiter.html#h2-10-sliding-window-with-counters]]
+- [[sources/system-design/completed/20260825_056 Designing an API Rate Limiter.html#h2-11-data-sharding-and-caching]]
+- [[sources/system-design/completed/20260825_056 Designing an API Rate Limiter.html#h2-12-should-we-rate-limit-by-ip-or-by-user]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/ratelimit-design.html)

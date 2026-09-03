@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IP Hash — 會話持久化負載均衡</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>IP Hash：用雜湊實現會話持久化</h1>
+<p class="meta">system-design · lb-algorithms · Step 5/6</p>
+
+<p>前面介紹的演算法（Round Robin、Least Connections 等）都有一個前提：每次請求可以被任意分配到任何伺服器。但有些場景需要「同一個用戶的請求始終打到同一台伺服器」。這就是會話持久化（Session Persistence）的需求。</p>
+
+<h2>為什麼需要會話持久化？</h2>
+<p>典型的例子是購物車。用戶把商品加入購物車後，購物車資料可能暫存在伺服器的記憶體裡。如果下一個請求被分到了另一台伺服器，新伺服器找不到購物車資料——用戶的購物車「消失」了。會話持久化透過確保同一客戶端的請求總是路由到同一台伺服器，避免了這類問題。</p>
+<p>其他需要會話持久化的場景：</p>
+<ul>
+  <li>登入態依賴伺服器端 Session</li>
+  <li>用戶的配置或臨時狀態存在伺服器記憶體</li>
+  <li>速率限制需要追蹤單一用戶的請求</li>
+</ul>
+
+<h2>IP Hash 的工作原理</h2>
+<p>IP Hash 是最簡單的會話持久化實現方式。步驟如下：</p>
+<ol>
+  <li>負載均衡器取得客戶端的 IP 地址</li>
+  <li>用雜湊函數（hash function）把 IP 地址轉換成雜湊值</li>
+  <li>用雜湊值對伺服器數量取模，決定路由到哪台伺服器</li>
+</ol>
+<p>假設三台伺服器 S0、S1、S2，客戶端 IP 是 192.168.1.10：</p>
+<pre><code>hash("192.168.1.10") % 3 = 2  →  路由到 S2</code></pre>
+<p>因為同一個 IP 產生同一個雜湊值，同一客戶端的每次請求都路由到同一台伺服器。</p>
+
+<h2>優缺點</h2>
+<table>
+  <tr><th></th><th>說明</th></tr>
+  <tr><td>✅ 實作簡單</td><td>只需要一個雜湊函數，無需額外狀態管理</td></tr>
+  <tr><td>✅ 無需額外儲存</td><td>不需要像 Session Stickiness 那樣在負載均衡器上維護 session 表</td></tr>
+  <tr><td>✅ 天然持久化</td><td>同一 IP 自動路由到同一伺服器</td></tr>
+  <tr><td>❌ 負載不均</td><td>公司出口 IP 背後有大量用戶時，對應伺服器會過載</td></tr>
+  <tr><td>❌ IP 變化</td><td>手機切換 WiFi/4G、NAT 後方的用戶 IP 會變，session 中斷</td></tr>
+  <tr><td>❌ 不考慮負載</td><td>不管伺服器忙不忙，同 IP 永遠導到同一台</td></tr>
+</table>
+
+<h2>一個具體例子</h2>
+<p>假設公司有 200 名員工，所有人的流量都從同一個出口 IP（203.0.113.50）出去。負載均衡器用 IP Hash 會把這 200 人的所有請求全部導到同一台伺服器——嚴重的負載不均。這就是 IP Hash 最大的風險：多個客戶端共用一個 IP 時，hash 會產生「熱點」。</p>
+
+<h2>更好的替代方案</h2>
+<p>因為 IP Hash 的局限性，現代架構通常使用更精確的會話持久化方式：</p>
+<ul>
+  <li><strong>基於 Cookie 的持久化</strong>：負載均衡器在第一次回應中寫入 cookie，後續請求根據 cookie 路由</li>
+  <li><strong>基於 Session ID 的持久化</strong>：在 URL 或 header 中攜帶 session ID</li>
+  <li><strong>外部 Session Store</strong>：把 session 存在 Redis 等共享儲存中，任何伺服器都能取到</li>
+</ul>
+<p>其中外部 Session Store 是最推薦的做法：它不綁定任何一台伺服器，任何伺服器都能處理任何用戶的請求，既实现了持久化又不影响负载均衡的灵活性。</p>
+
+<h2>適用場景</h2>
+<ul>
+  <li><strong>需要簡單持久化且不想引入外部儲存</strong>的場景</li>
+  <li><strong>用戶的 IP 分散且穩定</strong>（例如面向終端用戶而非企業出口的服務）</li>
+</ul>
+
+<h2>面試提示</h2>
+<p>在面試中提到 IP Hash 時，要同時指出它的局限性。更好的做法是：先說明為什麼需要會話持久化（購物車、登入態），再提到 IP Hash 是最簡單的實現方式，最後補充「但在生產環境中，更推薦用 Redis 等外部 Session Store 配合任何一種負載均衡演算法」。這能展現你不只停留在理論，還了解實踐中的最佳做法。</p>
+
+<section class="quiz" data-question="IP Hash 如何實現會話持久化？" data-correct="2" data-explain="雜湊函數對同一個 IP 產生同一個值，取模後永遠路由到同一台伺服器。">
+  <button class="opt">記錄每個用戶的 session ID</button>
+  <button class="opt">在伺服器上保存用戶資料</button>
+  <button class="opt">用 IP 的雜湊值取模決定伺服器</button>
+  <button class="opt">根據用戶地理位置分配</button>
+</section>
+
+<section class="quiz" data-question="IP Hash 最大的風險是什麼？" data-explain="多個客戶端共用一個出口 IP 時，所有流量會被導到同一台伺服器，造成嚴重負載不均。" data-correct="1">
+  <button class="opt">實作太複雜</button>
+  <button class="opt">多個用戶共用同一個 IP 導致負載不均</button>
+  <button class="opt">需要額外的儲存空間</button>
+  <button class="opt">無法支援 IPv6</button>
+</section>
+
+<section class="quiz" data-question="以下哪種方式是生產環境中更推薦的會話持久化實現？" data-correct="3" data-explain="外部 Session Store（如 Redis）不綁定任何伺服器，既實現持久化又保持負載均衡的靈活性。">
+  <button class="opt">IP Hash</button>
+  <button class="opt">Round Robin</button>
+  <button class="opt">伺服器端 Session Stickiness</button>
+  <button class="opt">外部 Session Store（如 Redis）</button>
+</section>
+
+<section class="quiz" data-question="手機用戶從 WiFi 切換到 4G 時，IP Hash 會有什麼問題？" data-correct="0" data-explain="IP 變了，雜湊值改變，路由到不同的伺服器，原本的 session 會中斷。">
+  <button class="opt">session 中斷，因為 IP 變了</button>
+  <button class="opt">沒有任何影響</button>
+  <button class="opt">自動遷移到新伺服器</button>
+  <button class="opt">負載會自動均衡</button>
+</section>
+
+<section class="quiz" data-question="在面試中提到 IP Hash 時，最能展現深度的回答是？" data-correct="1" data-explain="先說為什麼需要持久化，再說 IP Hash 的實現，最後補充生產環境更好的做法。">
+  <button class="opt">「IP Hash 是最好的負載均衡演算法」</button>
+  <button class="opt">「IP Hash 最簡單，但生產環境更推薦用 Redis 等外部 Session Store」</button>
+  <button class="opt">「IP Hash 不需要考慮任何缺點」</button>
+  <button class="opt">「IP Hash 只適用於 IPv4 網路」</button>
+</section>
+
+<div class="footer">
+  <p>💡 有任何不清楚的地方？問你的老師！</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

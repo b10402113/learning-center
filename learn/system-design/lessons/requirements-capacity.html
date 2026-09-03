@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>需求分析與容量估算 — Newsfeed & Yelp/Uber</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<p class="meta">Newsfeed &amp; Yelp/Uber · 第 1 步（共 5 步）</p>
+
+<h1>需求分析與容量估算</h1>
+
+<h2>學習目標</h2>
+<p>釐清 Facebook Newsfeed、Yelp 鄰近搜尋與 Uber 叫車三個系統的功能與非功能需求，並針對不同場景完成容量估算，為後續架構決策提供量化依據。</p>
+
+<hr>
+
+<section>
+<h2>1. 為什麼要從需求開始？</h2>
+<p>系統設計面試的第一步永遠是釐清需求。拿到「設計 Newsfeed」「設計 Yelp」或「設計 Uber」這類題目，別急著畫架構圖——先搞清楚要設計什麼範圍。</p>
+<p>需求分析同時也是向面試官展示你有系統感的方式：你能從模糊的題目中提煉出具體的限制條件，後續的架構決策才有依據。本節點一次對比三個真實系統，它們的核心差異從需求階段就開始分化。</p>
+</section>
+
+<section>
+<h2>2. 三個系統的功能性需求</h2>
+
+<h3>Facebook Newsfeed</h3>
+<p>Newsfeed（動態消息）是 Facebook 主頁中間不斷更新的內容列表，包含狀態更新、照片、影片、連結和「讚」等內容。</p>
+<table>
+<tr><th>功能</th><th>說明</th></tr>
+<tr><td>動態產生</td><td>根據使用者追蹤的使用者、粉專和社團產生個人化的動態時間軸</td></tr>
+<tr><td>支援多媒體</td><td>Feed 可包含文字、圖片、影片</td></tr>
+<tr><td>新增貼文</td><td>使用者和粉專都可以發布新貼文</td></tr>
+<tr><td>動態排序</td><td>最相關的貼文排在最前面（不只是時間順序）</td></tr>
+</table>
+
+<h3>Yelp（鄰近地點搜尋）</h3>
+<p>Yelp 是一個幫助使用者發現周邊餐廳、商店、景點等位置的服務。</p>
+<table>
+<tr><th>功能</th><th>說明</th></tr>
+<tr><td>搜尋附近地點</td><td>根據使用者當前位置（經緯度）搜尋指定半徑內的地點</td></tr>
+<tr><td>CRUD 地點</td><td>可以新增、刪除、更新地點資訊</td></tr>
+<tr><td>評論系統</td><td>使用者可以對地點發表評論和評分</td></tr>
+<tr><td>類別篩選</td><td>可按類別（咖啡店、餐廳、劇院等）過濾結果</td></tr>
+</table>
+
+<h3>Uber（叫車服務）</h3>
+<p>Uber 讓乘客透過 App 叫車，駕駛使用自己的車載客，雙方透過智慧型手機溝通。</p>
+<table>
+<tr><th>功能</th><th>說明</th></tr>
+<tr><td>叫車</td><td>乘客發送叫車請求，系統匹配附近可用駕駛</td></tr>
+<tr><td>位置更新</td><td>駕駛定期報告當前位置和是否可載客</td></tr>
+<tr><td>附近駕駛</td><td>乘客可以看到周圍可用的駕駛</td></tr>
+<tr><td>行程追蹤</td><td>乘客可以即時追蹤駕駛位置</td></tr>
+</table>
+
+<blockquote>
+<strong>面試技巧：</strong>三個系統都涉及「搜尋」，但搜尋的對象截然不同：Newsfeed 搜尋的是「追蹤者的最新內容」，Yelp 搜尋的是「附近的靜態地點」，Uber 搜尋的是「附近的動態駕駛」。這决定了完全不同的架構設計。
+</blockquote>
+</section>
+
+<section>
+<h2>3. 非功能性需求對比</h2>
+<table>
+<tr><th>需求</th><th>Newsfeed</th><th>Yelp</th><th>Uber</th></tr>
+<tr><td>讀取延遲</td><td>低（滑動要流暢）</td><td>低（搜尋要快速）</td><td>中（叫車可以等 1-2 秒）</td></tr>
+<tr><td>寫入頻率</td><td>中（使用者發貼文）</td><td>低（地點很少變動）</td><td><strong>極高</strong>（駕駛每 3 秒更新位置）</td></tr>
+<tr><td>一致性</td><td>最終一致（延遲幾秒可接受）</td><td>強一致（搜尋結果要準確）</td><td>最終一致（位置有延遲可接受）</td></tr>
+<tr><td>可用性</td><td>高（全球服務）</td><td>高</td><td><strong>極高</strong>（影響即時安全）</td></tr>
+</table>
+<p>注意 Uber 的寫入頻率遠高於其他兩個系統——這是後續架構設計最大的差異點。</p>
+</section>
+
+<section>
+<h2>4. 容量估算</h2>
+
+<h3>Facebook Newsfeed</h3>
+<p>假設 3 億每日活躍使用者（DAU），每人平均有 300 個好友並追蹤 200 個粉專/社團。每人每天查看 feed 5 次：</p>
+<pre><code>300M × 5 = 1.5B 次/天
+1.5B ÷ 86,400 ≈ 17,500 次/秒（讀取 QPS）</code></pre>
+<p>每個使用者的 feed 大約需要準備 500 條貼文的元資料，儲存需求：</p>
+<pre><code>300M × 500 條 × 50 bytes/條 = 7.5TB（feed 快取）</code></pre>
+
+<h3>Yelp</h3>
+<p>假設有 5 億個地點，每秒 10 萬次搜尋（100K QPS），每年增長 20%：</p>
+<pre><code>每個地點：8 + 256 + 8 + 8 + 512 + 1 ≈ 800 bytes
+500M × 800 bytes = 400GB（純地點資料）
+加上評論、評分等元資料，總儲存約數 TB</code></pre>
+
+<h3>Uber</h3>
+<p>假設 3 億註冊乘客、100 萬名駕駛，每日活躍乘客 100 萬、活躍駕駛 50 萬。每日 100 萬次叫車：</p>
+<pre><code>位置更新：500K 駕駛 × 每 3 秒一次 = ~167K 次/秒（寫入 QPS）
+叫車請求：1M/天 ≈ 12 次/秒</code></pre>
+<p><strong>Uber 的寫入 QPS 達到 167K</strong>，是 Newsfeed 讀取 QPS 的近 10 倍。這是三個系統中最高頻的寫入場景。</p>
+
+<h3>關鍵對比</h3>
+<table>
+<tr><th>指標</th><th>Newsfeed</th><th>Yelp</th><th>Uber</th></tr>
+<tr><td>讀取 QPS</td><td>~17,500</td><td>~100,000</td><td>~5,000</td></tr>
+<tr><td>寫入 QPS</td><td>~1,000</td><td>~10</td><td><strong>~167,000</strong></td></tr>
+<tr><td>讀寫比</td><td>17:1（讀密集）</td><td>10,000:1（極度讀密集）</td><td>1:33（<strong>寫密集</strong>）</td></tr>
+<tr><td>主要挑戰</td><td>低延遲聚合大量來源</td><td>高效地理空間查詢</td><td>高頻位置更新</td></tr>
+</table>
+</section>
+
+<section>
+<h2>5. 從數字到架構決策</h2>
+<p>容量估算的結果直接影響後續設計：</p>
+<ul>
+<li><strong>Newsfeed</strong> 讀寫比 17:1，需要快取層和推送/拉取混合架構</li>
+<li><strong>Yelp</strong> 讀寫比 10,000:1，地點資料幾乎不變，可以建立高效的靜態索引（QuadTree）</li>
+<li><strong>Uber</strong> 讀寫比 1:33，需要能頻繁更新的動態索引，靜態 QuadTree 不夠用</li>
+</ul>
+<blockquote>
+<strong>面試技巧：</strong>容量估算不是數學考試。面試官看的是你能否從數字推導出架構決策。例如：「因為 Uber 每秒有 167K 次位置更新，QuadTree 需要頻繁重建，我們必須改用增量更新的方案」——這種從數字到決策的推理過程才是重點。
+</blockquote>
+</section>
+
+<hr>
+
+<div class="lesson-nav">
+<span></span>
+<span><a href="./newsfeed-architecture.html">下一步：Facebook Newsfeed 架構設計 →</a></span>
+</div>
+
+<div class="footer">
+<p>系統設計面試 · Newsfeed &amp; Yelp/Uber</p>
+</div>
+
+<div class="quiz" data-question="Facebook Newsfeed 的讀取 QPS 大約是多少？" data-correct="1" data-explain="300M DAU × 5 次/天 ÷ 86,400 ≈ 17,500 次/秒。">
+<button class="opt">1,750</button>
+<button class="opt">17,500</button>
+<button class="opt">175,000</button>
+<button class="opt">1,750,000</button>
+</div>
+
+<div class="quiz" data-question="Uber 的寫入 QPS 遠高於其他系統的主要原因是什麼？" data-correct="2" data-exify="每 50 萬名活躍駕駛每 3 秒報告一次位置，產生 ~167K 次/秒的寫入。">
+<button class="opt">乘客叫車頻率高</button>
+<button class="opt">每筆交易需要寫入多張表</button>
+<button class="opt">駕駛每 3 秒更新一次位置</button>
+<button class="opt">系統需要即時計費</button>
+</div>
+
+<div class="quiz" data-question="Yelp 的讀寫比為什麼遠高於其他系統？" data-correct="0" data-explain="地點資料幾乎不變，搜尋 QPS 達 100K 而寫入 QPS 僅約 10。">
+<button class="opt">地點資訊很少變動</button>
+<button class="opt">使用者很少搜尋</button>
+<button class="opt">地點資料很小</button>
+<button class="opt">搜尋不需要資料庫</button>
+</div>
+
+<div class="quiz" data-question="三個系統中，哪個系統的一致性要求最高？" data-correct="2" data-explain="Yelp 的搜尋結果需要準確反映真實地點，而 Newsfeed 和 Uber 都可以接受輕微延遲。">
+<button class="opt">Facebook Newsfeed</button>
+<button class="opt">Uber</button>
+<button class="opt">Yelp</button>
+<button class="opt">三者一樣</button>
+</div>
+
+<div class="quiz" data-question="Newsfeed 的 feed 快取大約需要多少儲存空間？" data-correct="3" data-explain="300M 使用者 × 500 條 × 50 bytes ≈ 7.5TB。">
+<button class="opt">750GB</button>
+<button class="opt">75GB</button>
+<button class="opt">75TB</button>
+<button class="opt">7.5TB</button>
+</div>
+
+<div class="quiz" data-question="系統設計面試中，容量估算的核心目的是什麼？" data-correct="1" data-explain="從數字推導出架構決策才是重點，而非精確計算。">
+<button class="opt">證明數學能力</button>
+<button class="opt">從數字推導出合理的架構決策</button>
+<button class="opt">填滿面試前 5 分鐘</button>
+<button class="opt">讓面試官覺得你認真</button>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

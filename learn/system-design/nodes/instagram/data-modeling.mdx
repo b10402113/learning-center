@@ -18,4 +18,71 @@ updated: 2026-09-02
 
 ## Lesson
 
+在面試的早期階段就定義好資料庫 Schema，有兩個好處：第一，它幫助你**理清資料流**——哪些元件會讀寫哪些表格；第二，它為後面的**資料分片**提供依據——你知道資料量有多大、查詢模式是什麼，才能選對分片策略。
+
+Schema 設計不需要完美，但要能覆蓋核心場景。面試官看重的是你**思考資料的方式**，而不是背诵某個標準答案。
+
+### 三張核心表格
+
+Instagram 需要三張主要的資料表：
+
+**User 表**
+
+| 欄位 | 類型 | 說明 |
+| --- | --- | --- |
+| `UserID` | int (4 bytes) | 使用者唯一識別碼 |
+| `Name` | varchar(20) | 使用者名稱 |
+| `Email` | varchar(32) | 電子郵件 |
+| `DateOfBirth` | int (4 bytes) | 出生日期 |
+| `CreationDate` | int (4 bytes) | 帳號建立時間 |
+| `LastLogin` | int (4 bytes) | 最後登入時間 |
+
+每行約 68 bytes。5 億使用者 × 68 bytes ≈ **34 GB**。這是元數據的量級，遠小於照片本體。
+
+**Photo 表**
+
+| 欄位 | 類型 | 說明 |
+| --- | --- | --- |
+| `PhotoID` | int (4 bytes) | 照片唯一識別碼 |
+| `UserID` | int (4 bytes) | 上傳者 ID（外鍵） |
+| `PhotoLink` | varchar(255) | 物件儲存中的照片路徑 |
+| `CreationDate` | int (4 bytes) | 上傳時間 |
+
+每行約 271 bytes（含 varchar 預分配空間）。每天 200 萬張照片 × 271 bytes ≈ **542 MB/天**。10 年約 **2 TB**。
+
+**UserFollow 表**
+
+| 欄位 | 類型 | 說明 |
+| --- | --- | --- |
+| `FollowerID` | int (4 bytes) | 追蹤者 ID |
+| `FolloweeID` | int (4 bytes) | 被追蹤者 ID |
+| `CreationDate` | int (4 bytes) | 追蹤建立時間 |
+
+假設每個使用者平均追蹤 200 人，5 億使用者 × 200 × 12 bytes ≈ **1.2 TB**。
+
+### 索引設計
+
+索引（Index）是加速查詢的關鍵。Photo 表需要一個複合索引在 `(PhotoID, CreationDate)` 上——因為動態消息需要按時間順序查詢最新的照片。UserFollow 表需要索引在 `FollowerID` 上——因為查詢「某人追蹤了誰」是最頻繁的操作。
+
+索引的取捨：索引加速讀取，但減慢寫入。每次新增照片或追蹤關係時，索引也需要更新。對 Instagram 來說，讀取遠多於寫入，所以多建索引是值得的。
+
+### 總存儲估算
+
+把三張表加起來：
+
+| 表格 | 10 年存儲 |
+| --- | --- |
+| User | ~34 GB |
+| Photo（元數據） | ~2 TB |
+| UserFollow | ~1.2 TB |
+| **元數據合計** | **~3.2 TB** |
+
+加上照片本體（每天 400 GB × 365 天 × 10 年 ≈ 1.4 PB），總存儲需求在 **PB 級別**。這意味著必須使用分散式儲存方案，不可能靠單台伺服器。
+
+你用過 Postgres，知道怎麼建表和加索引。Instagram 的 Schema 設計其實很直覺——User、Photo、Follow 三張表，跟你之前做 REST API 時的資料庫設計差不多。差別在於規模：你之前可能只有幾千筆資料，這裡要處理數十億筆。但設計思路是一樣的：先想清楚要存什麼、怎麼查詢，再決定索引和分片策略。
+
+## Course
+
+[↗ 課程頁面](../../lessons/data-modeling.html)
+
 ## Sources

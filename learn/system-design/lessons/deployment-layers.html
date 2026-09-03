@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>負載均衡部署位置</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>負載均衡部署位置</h1>
+<p class="meta">system-design · load-balancing · Step 3/4</p>
+
+<h2>學習目標</h2>
+<p>認識負載均衡可以在系統的哪些不同層級部署，以及各層級的作用與適用場景。</p>
+
+<h2>四個部署層級</h2>
+
+<p>負載均衡不是只有一種部署方式。根據系統的規模和需求，負載均衡器可以出現在四個不同的層級，從外到內依次是：DNS 層級、第 4 層（傳輸層）、第 7 層（應用層）、容器/服務層級。每個層級有不同的能力和限制，大型生產環境通常會結合多層級使用。</p>
+
+<h3>DNS 層級</h3>
+
+<p>最外層的負載均衡發生在 DNS 解析階段。當用戶端查詢域名時，DNS 伺服器可以回傳多個 IP 位址，用戶端會從中選一個連線。透過控制 DNS 回傳的 IP 順序，可以實現最基本的流量分配。</p>
+
+<pre><code>用戶端 → DNS 查詢 → 返回多個 IP → 用戶端選擇最近的 IP 連線</code></pre>
+
+<p>DNS 層級負載均衡最常用於<strong>異地多活</strong>：把不同地理位置的使用者分配到最近的資料中心，降低延遲。但它的限制也很明顯：DNS 快取會讓流量分配不夠即時，而且你沒辦法精確控制每一個請求的分配。</p>
+
+<h3>第 4 層（傳輸層，L4）</h3>
+
+<p>L4 負載均衡工作在 TCP/UDP 傳輸層。它只看 IP 位址和連接埠號碼，不解析應用層內容（例如 HTTP Header）。因為不解析應用層資料，L4 的處理速度非常快、開銷很低。</p>
+
+<pre><code>用戶端 → L4 LB（看 IP:Port）→ 後端伺服器</code></pre>
+
+<p>L4 適合處理<strong>大流量、低延遲</strong>的場景，例如：</p>
+<ul>
+  <li>遊戲伺服器：需要極低延遲，不關心 HTTP 內容</li>
+  <li>資料庫叢集：只需要根據連接埠分配到不同的資料庫節點</li>
+  <li>影片串流：大流量、不需要解析 HTTP Header</li>
+</ul>
+
+<h3>第 7 層（應用層，L7）</h3>
+
+<p>L7 負載均衡工作在 HTTP 應用層。它可以解析完整的 HTTP 請求，包括 URL 路徑、Header、Cookie 等，據此做更細緻的流量分配。</p>
+
+<pre><code>用戶端 → L7 LB（看 URL/Header/Cookie）→ 後端伺服器</code></pre>
+
+<p>L7 的彈性比 L4 大得多，例如：</p>
+<ul>
+  <li><strong>基於路徑的路由</strong>：把 <code>/api/*</code> 導到 API 伺服器，把 <code>/static/*</code> 導到靜態資源伺服器</li>
+  <li><strong>基於 Header 的路由</strong>：根據 User-Agent 把行動裝置導到行動版伺服器</li>
+  <li><strong>基於 Cookie 的路由</strong>：實現 session affinity（會話親和性），確保同一使用者的請求都導到同一台伺服器</li>
+</ul>
+
+<p>L7 的代價是需要解析完整的 HTTP 請求，處理速度比 L4 慢、開銷比 L4 高。所以通常在 L4 之上再加一層 L7，先用 L4 做快速分流，再用 L7 做細緻路由。</p>
+
+<h3>容器/服務層級</h3>
+
+<p>在微服務架構中，服務之間的通訊也需要負載均衡。當一個服務要呼叫另一個服務時，目標服務可能有多個實例在運行，需要一個負載均衡器來分配請求。</p>
+
+<pre><code>服務 A → 服務層級 LB → 服務 B 的多個實例</code></pre>
+
+<p>常見的實作包括：</p>
+<ul>
+  <li>Kubernetes 內建的 Service 負載均衡</li>
+  <li>服務網格（Service Mesh）如 Istio 的 sidecar 代理</li>
+  <li>客戶端負載均衡（Client-Side Load Balancing）如 gRPC 內建的 LB</li>
+</ul>
+
+<h2>多層級組合</h2>
+
+<p>實際的大型生產環境通常從外到內一層一層分配流量：</p>
+
+<pre><code>用戶端
+  → DNS LB（異地分流）
+    → L4 LB（快速分流）
+      → L7 LB（精緻路由）
+        → 服務層級 LB（微服務間通訊）
+          → 後端伺服器</code></pre>
+
+<p>每一層都有自己的職責：DNS 負責跨地域分流，L4 負責快速分流，L7 負責精緻路由，服務層級負責微服務間的流量分配。這種分層設計讓每個層級專注於自己最擅長的事，整體系統既高效又靈活。</p>
+
+<h2>面試中的關鍵</h2>
+
+<p>在面試中，面試官可能會問「你會把負載均衡放在哪裡？」你不應該只回答「伺服器前面」，而要能解釋：</p>
+
+<ul>
+  <li>為什麼選這個層級（L4 vs L7 的取捨）</li>
+  <li>是否需要多層級組合</li>
+  <li>每層級的流量分配策略是什麼</li>
+</ul>
+
+<p>這展示了你不只知道 LB 的存在，還理解它在系統中的實際部署邏輯。</p>
+
+<h2>小結</h2>
+
+<p>負載均衡可以部署在四個層級：DNS（異地分流）、L4（快速分流）、L7（精緻路由）、容器/服務層級（微服務間通訊）。大型系統通常結合多層級，每層專注自己的職責。面試中要能解釋為什麼選這個層級以及各層級的取捨。</p>
+
+<div class="quiz" data-question="DNS 層級負載均衡最常用於什麼場景？" data-correct="2" data-explain="DNS 層級最常用於異地多活，把不同地理位置的使用者分配到最近的資料中心。">
+  <button class="opt">處理單一伺服器的過載</button>
+  <button class="opt">微服務之間的流量分配</button>
+  <button class="opt">異地多活，把使用者導到最近的資料中心</button>
+  <button class="opt">加密用戶端與伺服器之間的通訊</button>
+</div>
+
+<div class="quiz" data-question="第 4 層（L4）負載均衡比第 7 層（L7）快的原因是什麼？" data-correct="1" data-explain="L4 只看 IP 和連接埠號碼，不解析 HTTP 內容，處理開銷更低、速度更快。">
+  <button class="opt">L4 使用更快的網路協定</button>
+  <button class="opt">L4 不解析應用層內容，處理開銷更低</button>
+  <button class="opt">L4 有硬體加速</button>
+  <button class="opt">L4 的演算法更簡單</button>
+</div>
+
+<div class="quiz" data-question="L7 負載均衡的「基於路徑的路由」是什麼意思？" data-correct="0" data-explain="L7 可以解析 HTTP URL 路徑，把不同的路徑導到不同的後端伺服器。">
+  <button class="opt">根據 URL 路徑把請求導到不同的伺服器</button>
+  <button class="opt">根據 IP 位址把請求導到不同的伺服器</button>
+  <button class="opt">根據連接埠號碼把請求導到不同的伺服器</button>
+  <button class="opt">根據 TCP 連線狀態把請求導到不同的伺服器</button>
+</div>
+
+<div class="quiz" data-question="在微服務架構中，服務之間的負載均衡通常怎麼實現？" data-correct="3" data-explain="微服務架構中，服務之間的負載均衡透過 Kubernetes Service、服務網格（Service Mesh）或客戶端負載均衡實現。">
+  <button class="opt">只靠 DNS 解析</button>
+  <button class="opt">只靠 L4 負載均衡器</button>
+  <button class="opt">只靠硬體負載均衡器</button>
+  <button class="opt">Kubernetes Service、服務網格或客戶端負載均衡</button>
+</div>
+
+<div class="quiz" data-question="大型生產環境為什麼要使用多層級負載均衡？" data-correct="1" data-explain="每層級專注於自己最擅長的事：DNS 跨地域分流、L4 快速分流、L7 精緻路由，整體既高效又靈活。">
+  <button class="opt">因為單層級不夠安全</button>
+  <button class="opt">因為每層級有不同職責，組合起來更高效靈活</button>
+  <button class="opt">因為需要更多伺服器來分擔流量</button>
+  <button class="opt">因為硬體限制需要分散處理</button>
+</div>
+
+<div class="quiz" data-question="L7 負載均衡的「會話親和性（Session Affinity）」是什麼？" data-correct="2" data-explain="會話親和性確保同一使用者的請求都導到同一台伺服器，通常透過 Cookie 實現。">
+  <button class="opt">把所有使用者導到同一台伺服器</button>
+  <button class="opt">自動備份所有使用者的 session 資料</button>
+  <button class="opt">確保同一使用者的請求都導到同一台伺服器</button>
+  <button class="opt">加密使用者的 session 資料</button>
+</div>
+
+<p class="footer">上一步：<a href="benefits-of-load-balancing.html">負載均衡的優點</a> · 下一步：<a href="redundant-design.html">冗餘負載均衡設計</a></p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

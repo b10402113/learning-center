@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>高層架構設計 — Facebook Messenger 系統設計</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<h1>高層架構設計</h1>
+<p class="meta">Facebook Messenger 系統設計 · Step 2/6</p>
+
+<section>
+<h2>學習目標</h2>
+<p>理解即時通訊系統的核心元件與其分工，繪製高層架構圖。</p>
+</section>
+
+<section>
+<h2>Chat Server：系統的心臟</h2>
+<p>整個即時通訊系統的核心是一個或多個 <strong>Chat Server（聊天伺服器）</strong>。所有用戶的訊息都經過它：用戶發訊息時連線到 Chat Server，Chat Server 把訊息轉發給對方，同時寫入資料庫。</p>
+<p>為什麼需要一個中央伺服器？因為即時通訊要求低延遲、高可靠。如果讓用戶之間直接 P2P 連線，你得處理 NAT 穿透、用戶離線、訊息亂序等一堆問題。Chat Server 作為中間人，簡化了整個模型。</p>
+</section>
+
+<section>
+<h2>高層架構</h2>
+<p>整個系統由四個核心區塊組成：</p>
+
+<h3>1. 用戶設備（Client）</h3>
+<p>手機 App 或網頁。用戶透過它發送和接收訊息，查看在線狀態。客戶端和 Chat Server 之間維持一個持久連線（Persistent Connection），這樣伺服器才能主動推送新訊息。</p>
+
+<h3>2. 聊天伺服器（Chat Server）</h3>
+<p>系統的核心。它的職責是：</p>
+<ul>
+<li>接收用戶發來的訊息</li>
+<li>將訊息轉發給目標用戶</li>
+<li>將訊息寫入資料庫（通常異步寫入）</li>
+<li>維護用戶的在線狀態</li>
+<li>處理用戶的連線生命週期（連線、斷線、重連）</li>
+</ul>
+
+<h3>3. 資料庫（Database）</h3>
+<p>儲存所有聊天記錄。因為五年要存 3.6 PB 的數據，所以不能用單一資料庫，需要分片。具體怎麼分，後面的步驟會詳談。</p>
+
+<h3>4. 快取（Cache）</h3>
+<p>緩存最近的訊息和用戶狀態。用戶打開對話時，最近的訊息從快取讀取，不用每次都查資料庫——這大幅降低了延遲。</p>
+</section>
+
+<section>
+<h2>詳細工作流程</h2>
+<p>當用戶 A 發訊息給用戶 B 時，具體發生了什麼？</p>
+<ol>
+<li><strong>A 連線到 Chat Server</strong>：A 的設備和 Chat Server 之間有一條持久連線（WebSocket 或 long polling）</li>
+<li><strong>A 發送訊息</strong>：A 把訊息發到 Chat Server</li>
+<li><strong>Chat Server 處理訊息</strong>：
+   <ul>
+   <li>把訊息寫入資料庫（異步，不阻塞）</li>
+   <li>查找 B 的連線所在在哪台 Chat Server</li>
+   <li>把訊息轉發給 B</li>
+   </ul>
+</li>
+<li><strong>B 收到訊息</strong>：B 的設備收到推送，顯示新訊息</li>
+</ol>
+<p>整個過程要在幾百毫秒內完成。如果 B 不在線，訊息先存到資料庫，等 B 上線時再拉取。</p>
+</section>
+
+<section>
+<h2>為什麼這樣設計？</h2>
+<p>這個架構有一個關鍵設計決策：<strong>Chat Server 是無狀態的還是有狀態的？</strong></p>
+<ul>
+<li><strong>有狀態</strong>：Chat Server 記住每個用戶的連線。這讓訊息轉發很快（直接查本地映射），但伺服器掛掉時需要處理連線遷移</li>
+<li><strong>無狀態</strong>：Chat Server 不記住任何用戶狀態。這讓伺服器更容易擴展和替換，但每次轉發訊息都要查一次狀態儲存</li>
+</ul>
+<p>實際系統（如 Facebook Messenger）通常選擇<strong>有狀態</strong>，因為即時通訊對延遲極度敏感。具體的容錯機制會在後面的步驟中討論。</p>
+</section>
+
+<section class="quiz-section">
+<h2>自我檢測</h2>
+
+<div class="quiz" data-question="即時通訊系統的核心元件是什麼？" data-correct="1" data-explain="Chat Server 是整個系統的心臟，所有訊息都經過它轉發和協調。">
+<button class="opt">資料庫</button>
+<button class="opt">Chat Server</button>
+<button class="opt">快取</button>
+<button class="opt">負載均衡器</button>
+</div>
+
+<div class="quiz" data-question="客戶端和 Chat Server 之間應該維持什麼樣的連線？" data-correct="2" data-explain="持久連線（如 WebSocket）讓伺服器能主動推送新訊息，不用用戶不斷輪詢。">
+<button class="opt">每次請求都新建連線</button>
+<button class="opt">HTTP 長輪詢</button>
+<button class="opt">持久連線（如 WebSocket）</button>
+<button class="opt">UDP 連線</button>
+</div>
+
+<div class="quiz" data-question="訊息寫入資料庫應該同步還是異步？" data-correct="1" data-explain="異步寫入不阻塞訊息轉發，用戶體驗更好。訊息先推給對方，再慢慢寫入資料庫。">
+<button class="opt">同步寫入，確保不丟</button>
+<button class="opt">異步寫入，不阻塞轉發</button>
+<button class="opt">完全不寫入資料庫</button>
+<button class="opt">只在用戶離線時寫入</button>
+</div>
+
+<div class="quiz" data-question="Chat Server 記住用戶連線狀態有什麼好處？" data-correct="0" data-explain="有狀態的 Chat Server 可以直接從本地映射找到目標用戶的連線，訊息轉發延遲更低。">
+<button class="opt">訊息轉發更快，延遲更低</button>
+<button class="opt">更容易擴展</button>
+<button class="opt">不需要資料庫</button>
+<button class="opt">更容易替換故障節點</button>
+</div>
+
+<div class="quiz" data-question="快取在即時通訊系統中的主要作用是什麼？" data-correct="2" data-explain="快取緩存最近的訊息和用戶狀態，用戶打開對話時從快取讀取，避免每次都查資料庫。">
+<button class="opt">儲存所有聊天記錄</button>
+<button class="opt">處理用戶認證</button>
+<button class="opt">緩存最近訊息，降低讀取延遲</button>
+<button class="opt">壓縮訊息大小</button>
+</div>
+
+</section>
+
+<div class="lesson-nav">
+<a href="./requirements-estimation.html">← 上一步：需求分析與容量估算</a>
+<a href="./message-delivery.html">下一步：訊息傳遞模型 →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

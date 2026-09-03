@@ -262,6 +262,14 @@ updated: 2026-09-02
 | adr-and-glossary | unknown | probe skipped via /nodes ai-coding-for-real-engineer/greenfield-ax skip-probe on 2026-09-02 |
 | greenfield-start-sequence | unknown | probe skipped via /nodes ai-coding-for-real-engineer/greenfield-ax skip-probe on 2026-09-02 |
 
+## playground-setup
+
+| Strand | Rating | Notes |
+| --- | --- | --- |
+| clone-install-seed-dev | unknown | probe skipped via /nodes ai-coding-for-real-engineer/playground-setup skip-probe on 2026-09-02 |
+| db-sync-workflow | unknown | probe skipped via /nodes ai-coding-for-real-engineer/playground-setup skip-probe on 2026-09-02 |
+| git-state-control | unknown | probe skipped via /nodes ai-coding-for-real-engineer/playground-setup skip-probe on 2026-09-02 |
+
 ## prevent-bad-arch
 
 | Strand | Rating | Notes |

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>快取失效機制</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>快取失效機制</h1>
+<p class="meta">system-design · caching · Step 3/4</p>
+
+<h2>學習目標</h2>
+<p>理解快取失效的問題為什麼困難，並掌握常見的快取失效方法。</p>
+
+<h2>計算機科學的兩大難題</h2>
+
+<p>業界常說「計算機科學有兩大難題：快取失效和命名事物」（Cache invalidation and naming things）。這不是開玩笑——快取失效之所以難，是因為它要在「正確的時間」讓「正確的快取」失效。</p>
+
+<p>太早失效 → 增加不必要的快取未命中，浪費效能優勢。<br>
+太晚失效 → 用戶看到過時的髒數據。</p>
+
+<p>在分散式環境中，多個節點同時讀寫時，一致性問題更加複雜。</p>
+
+<h2>三種常見的失效方法</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>方法</th>
+      <th>原理</th>
+      <th>優點</th>
+      <th>缺點</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>清除（Purge）</strong></td>
+      <td>數據更新時，立刻刪除對應的舊快取</td>
+      <td>一致性好</td>
+      <td>需要額外操作，失敗了會有髒數據</td>
+    </tr>
+    <tr>
+      <td><strong>過期（TTL）</strong></td>
+      <td>每個快取設定存活時間，到期自動失效</td>
+      <td>實作簡單</td>
+      <td>過期前仍是舊數據</td>
+    </tr>
+    <tr>
+      <td><strong>寫入更新（Write-update）</strong></td>
+      <td>數據更新時，同時更新快取</td>
+      <td>不會增加未命中</td>
+      <td>併發下容易有競爭條件</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>清除（Purge）</h3>
+
+<p>最直接的方法：數據更新時，立刻把對應的舊快取刪除。下次有人請求這筆數據時，會發生快取未命中，從數據源取回最新版本。</p>
+
+<p>用書店比喻：作者出了修訂版，你立刻把陳列架上的舊版撤走。下一個客人來問時，你會去倉庫拿修訂版。</p>
+
+<p>優點是一致性好——數據更新後，快取中不會有舊版本。缺點是需要額外執行一次失效操作，如果這個操作失敗了（網路斷了、快取服務暫時不可用），髒數據就會長期留存。</p>
+
+<h3>過期（TTL，Time-To-Live）</h3>
+
+<p>最簡單的方法：每個快取數據都設定一個存活時間，到期自動失效。</p>
+
+<p>用書店比喻：你在每本書上貼一個日期標籤，到期了就自動下架。不需要有人專門去檢查和撤換。</p>
+
+<p>優點是實作簡單——不需要在數據更新時做任何額外操作。缺點是在過期時間到達之前，用戶看到的依舊是舊數據。TTL 設太短會增加未命中率，設太長會讓髒數據留存更久。</p>
+
+<h3>寫入更新（Write-update）</h3>
+
+<p>最積極的方法：數據更新時，同時更新快取中的對應數據。</p>
+
+<p>用書店比喻：修訂版一到，你立刻把陳列架上的舊版換成新版，客人永遠看到最新的。</p>
+
+<p>優點是快取永遠是新的，不會增加後續的未命中。缺點是在併發場景下容易出現競爭條件——兩個同時的更新操作可能互相覆蓋。而且如果更新快取成功但更新數據源失敗（或反之），兩邊會不一致。</p>
+
+<h2>最佳實踐：清除 + TTL</h2>
+
+<p>實際生產環境中，絕大部分場景會採用<strong>「清除 + TTL」的組合策略</strong>：</p>
+
+<ol>
+  <li>數據更新時正常執行清除操作</li>
+  <li>同時給每個快取設定過期時間作為安全網</li>
+</ol>
+
+<p>邏輯是：正常情況下清除操作會讓快取及時更新；萬一清除失敗，最迟到 TTL 到期也會自動更新。這平衡了一致性、系統複雜度和可用性。</p>
+
+<p>對一致性要求不高的場景（例如社群媒體的按讚數、文章瀏覽量），可以單純使用 TTL，開發最簡單。對一致性要求高的場景（例如金融交易、庫存管理），可能需要更複雜的策略，例如 write-through 或 subscribe-based invalidation。</p>
+
+<h2>面試中的關鍵點</h2>
+
+<ul>
+  <li>能解釋為什麼快取失效是難題（時機把握、分散式一致性）</li>
+  <li>能比較三種失效方法的優缺點</li>
+  <li>能說明為什麼「清除 + TTL」是常見的組合策略</li>
+  <li>能根據一致性需求選擇合適的策略</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>快取失效確保數據新鮮度，三種主要方法各有優缺點。生產環境中最常用「清除 + TTL」的組合，平衡一致性與可用性。選擇策略時要考慮系統對一致性的要求。</p>
+
+<div class="quiz" data-question="為什麼快取失效被認為是計算機科學的難題之一？" data-correct="2" data-explain="快取失效要在正確的時間讓正確的快取失效，太早增加未命中，太晚返回髒數據，分散式環境下更複雜。">
+  <button class="opt">因為快取容量有限</button>
+  <button class="opt">因為快取讀取速度太慢</button>
+  <button class="opt">因為要在正確的時間讓正確的快取失效，時機難把握</button>
+  <button class="opt">因為快取只適用於靜態數據</button>
+</div>
+
+<div class="quiz" data-question="TTL（Time-To-Live）策略的優點是什麼？" data-correct="1" data-explain="TTL 實作最簡單，不需要在數據更新時做額外操作，快取會自動過期。">
+  <button class="opt">一致性最好</button>
+  <button class="opt">實作簡單，不需要額外的失效操作</button>
+  <button class="opt">不會有髒數據</button>
+  <button class="opt">適合所有場景</button>
+</div>
+
+<div class="quiz" data-question="Purge（清除）策略的主要缺點是什麼？" data-correct="3" data-explain="Purge 需要額外執行一次失效操作，如果這個操作失敗，髒數據會長期留存。">
+  <button class="opt">實作太複雜</button>
+  <button class="opt">會增加快取未命中率</button>
+  <button class="opt">不適用於分散式系統</button>
+  <button class="opt">需要額外操作，失敗了會有髒數據長期留存</button>
+</div>
+
+<div class="quiz" data-question="為什麼生產環境常用「清除 + TTL」的組合？" data-correct="0" data-explain="正常情況下清除操作讓快取及時更新；萬一清除失敗，TTL 作為安全網自動過期，平衡了一致性與可用性。">
+  <button class="opt">正常靠清除保持一致，TTL 作為清除失敗時的安全網</button>
+  <button class="opt">因為兩種方法加在一起速度更快</button>
+  <button class="opt">因為單獨使用任何一種都不夠快</button>
+  <button class="opt">因為面試官喜歡這種答案</button>
+</div>
+
+<div class="quiz" data-question="Write-update 策略在什麼場景下容易出問題？" data-correct="2" data-explain="併發更新時，兩個操作可能互相覆蓋，而且快取和數據源的更新不是原子操作，容易不一致。">
+  <button class="opt">只有一個用戶訪問時</button>
+  <button class="opt">數據很少變化時</button>
+  <button class="opt">多個操作同時更新同一筆數據時（併發場景）</button>
+  <button class="opt">快取空間很大時</button>
+</div>
+
+<div class="quiz" data-question="對一致性要求不高的場景（如按讚數），最簡單的失效策略是？" data-correct="1" data-explain="純 TTL 開發最簡單，不需要額外的失效邏輯，對按讚數這種稍有延遲也不影響用戶體驗的場景足夠使用。">
+  <button class="opt">Write-update 立即同步</button>
+  <button class="opt">單純使用 TTL</button>
+  <button class="opt">Purge 立即清除</button>
+  <button class="opt">不使用任何快取</button>
+</div>
+
+<p class="footer">上一步：<a href="caching-types.html">快取的常見類型</a> · 下一步：<a href="cache-read-strategies.html">快取讀取策略</a></p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

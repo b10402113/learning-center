@@ -23,4 +23,44 @@ updated: 2026-09-02
 
 ## Lesson
 
+上一課建立了 Trie 的核心設計，但單台機器扛不住 60K QPS 的查詢壓力。這一步處理擴展：容量估算、資料分片、快取、複製、容錯，以及用戶端優化。
+
+### 容量估算
+
+假設服務規模跟 Google 差不多：每天 50 億次搜尋（~60K QPS），唯一搜尋詞佔 20%，只索引 top 50% 熱門詞，約 10 億個唯一詞。每個詞平均 15 個字元，Trie 節點大約 10 bytes（字元 + 指標 + 標記），整個 Trie 約 150GB——單台伺服器放得下，但 60K QPS 不是一台扛得住的。
+
+### 資料分片
+
+兩種分片策略。**按首字元分片**：A 開頭的詞放機器 1，B 開頭的放機器 2，但 S、C、T 開頭的詞遠多於 X、Z，導致負載不均。**按字元範圍分片**：把字元空間切成多個範圍（A-G、H-N 等），根據負載動態調整邊界。不管哪種，都需要負載均衡器追蹤分片方案，根據前綴路由請求。
+
+### 快取擋住 80% 查詢
+
+搜尋行為遵循冪律分佈：top 1% 的熱門詞佔 80% 的查詢。在 Trie 伺服器前放一層快取（如 Redis），存最熱門詞的建議結果。查詢先查快取，命中直接返回，未命中才查 Trie 並回填快取。這個架構把 Trie 伺服器的壓力降到原來的 1/5。
+
+### 複製與容錯
+
+每台 Trie 伺服器配 primary-secondary：primary 處理寫入，secondary 同步資料。伺服器掛掉時 secondary 自動接管，新啟動的伺服器從最新快照重建 Trie。Typeahead 對資料一致性要求不高——建議過時幾秒完全可以接受。
+
+### 用戶端優化
+
+三個關鍵手段：**50ms 防抖**（用戶停頓 50ms 後才發查詢，持續打字時取消前一個請求，減少無效查詢）；**延遲打字**（至少輸入 2-3 個字元才開始查詢，避免太短前綴的海量結果）；**預取**（輸入「sys」時同時預取所有可能的下一個字元結果，用戶再打一個字時結果已緩存，近乎零延遲）。
+
+### 個人化
+
+在伺服器端為每個用戶維護搜尋歷史，用戶端也緩存。伺服器收到查詢時先從用戶歷史找匹配的詞放在建議最前面，再加上全域熱門詞。個人化建議永遠優先於通用建議。
+
+整個架構遵循「容量估算 → 分片 → 快取 → 複製 → 用戶端優化」的設計流程。
+
 ## Sources
+
+- [[sources/system-design/completed/20260825_055 Designing Typeahead Suggestion.html#h2-5-scale-estimation]]
+- [[sources/system-design/completed/20260825_055 Designing Typeahead Suggestion.html#h2-6-data-partition]]
+- [[sources/system-design/completed/20260825_055 Designing Typeahead Suggestion.html#h2-7-cache]]
+- [[sources/system-design/completed/20260825_055 Designing Typeahead Suggestion.html#h2-8-replication-and-load-balancer]]
+- [[sources/system-design/completed/20260825_055 Designing Typeahead Suggestion.html#h2-9-fault-tolerance]]
+- [[sources/system-design/completed/20260825_055 Designing Typeahead Suggestion.html#h2-10-typeahead-client]]
+- [[sources/system-design/completed/20260825_055 Designing Typeahead Suggestion.html#h2-11-personalization]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/typeahead-scaling-optimizations.html)

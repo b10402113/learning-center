@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>網路爬蟲關鍵挑戰與解決方案</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>網路爬蟲關鍵挑戰與解決方案</h1>
+<p class="meta">Step 4/4 · Twitter Search &amp; Web Crawler</p>
+
+<h2>學習目標</h2>
+<p>掌握大規模爬蟲面臨的重複 URL 移除、爬蟲陷阱、容錯處理與資料分區四大核心挑戰，並理解對應的解決方案。</p>
+
+<h2>挑戰一：URL 去重</h2>
+<p>同一個網頁可能從不同的連結被發現多次。如果不做去重，爬蟲會浪費大量資源重複爬取相同的頁面。</p>
+
+<h3>雙重 checksum 策略</h3>
+<p>大規模爬蟲通常用兩種 checksum 來去重：</p>
+<ul>
+<li><strong>URL Checksum</strong>：對 URL 本身做 hash（如 MD5）。用來判斷「這個 URL 有沒有爬過」</li>
+<li><strong>文件 Checksum</strong>：對下載的文件內容做 hash。用來判斷「這個頁面的內容有沒有變過」</li>
+</ul>
+
+<p>為什麼需要兩個？因為 URL 不變但內容可能變（網頁更新了），URL 變了但內容可能不變（同一個頁面有不同 URL 指向）。</p>
+
+<p>儲存空間的估算：假設 150 億個 URL，每個 checksum 16 bytes（MD5），加上 document checksum 16 bytes：</p>
+<pre><code>150 億 × 32 bytes ≈ 480 GB</code></pre>
+<p>這在現代分散式儲存系統（如 Bigtable、DynamoDB）中是完全可行的。</p>
+
+<h3>Bloom Filter</h3>
+<p>Bloom Filter 是一種空間效率極高的概率資料結構，用來快速判斷「某個 URL 是否已爬過」。它的特點是：</p>
+<ul>
+<li><strong>可能誤報（false positive）</strong>：說「有爬過」但實際沒有——這只是多爬一次，不影響正確性</li>
+<li><strong>不會漏報（false negative）</strong>：說「沒爬過」就一定沒爬過</li>
+<li>空間效率遠優於 Hash Set：150 億個 URL 只需約 18 GB（1% 誤報率）</li>
+</ul>
+
+<blockquote>
+Bloom Filter 非常適合爬蟲場景：偶爾多爬一次沒關係，但絕不能漏爬。它的空間效率比 Hash Set 好一個數量級，是大規模爬蟲的標配。
+</blockquote>
+
+<h2>挑戰二：爬蟲陷阱</h2>
+<p>爬蟲陷阱（Crawler Trap）是一組會讓爬蟲無限迴圈的 URL。陷阱有兩種：</p>
+
+<h3>無意的陷阱</h3>
+<ul>
+<li>檔案系統中的符號連結形成迴圈（A → B → A）</li>
+<li>動態生成的 URL 帶有遞迴參數（如 <code>/page?page=1&amp;ref=2&amp;page=2</code>）</li>
+</ul>
+
+<h3>有意的陷阱</h3>
+<ul>
+<li>垃圾網站故意生成無限頁面來消耗爬蟲資源</li>
+<li>動態產生無限文件的爬蟲陷阱（crawler trap pages）</li>
+</ul>
+
+<h3>解決方案</h3>
+<ul>
+<li><strong>設定最大深度</strong>：限制從種子 URL 開始的爬取深度（如最多 15 層）</li>
+<li><strong>設定最大頁數</strong>：對每個域名設定爬取頁面上限</li>
+<li><strong>URL 正規化</strong>：移除重複參數、統一排序查詢參數</li>
+<li><strong>模式偵測</strong>：偵測 URL 中的遞迴模式（如重複的路徑片段）</li>
+<li><strong>設定逾時</strong>：對單個域名設定整體爬取時間上限</li>
+</ul>
+
+<h2>挑戰三：容錯處理</h2>
+<p>大規模爬蟲系統中，機器故障是常態而非例外。容錯設計需要覆蓋：</p>
+
+<h3>Checkpoint 機制</h3>
+<p>每台爬蟲機器定期將 FIFO 佇列的狀態 checkpoint 到磁碟：</p>
+<ul>
+<li>記錄目前爬到哪個 URL</li>
+<li>記錄已爬 URL 的 checksum 狀態</li>
+<li>故障後從最近的 checkpoint 恢復，而非從頭開始</li>
+</ul>
+
+<h3>一致性雜湊 Failover</h3>
+<p>使用一致性雜湊（Consistent Hashing）分配 URL 到爬蟲機器。當一台機器故障：</p>
+<ol>
+<li>一致性雜湊自動將故障機器的 key 範圍重新分配到其他機器</li>
+<li>其他機器接管後，從 checkpoint 恢復狀態繼續爬取</li>
+<li>不需要中央協調器手動介入</li>
+</ol>
+
+<h3>Index Server 重建</h3>
+<p>如果存儲索引的伺服器故障且無副本：</p>
+<ul>
+<li>回放所有推文/網頁的寫入日誌（write-ahead log）重建索引</li>
+<li>這就是為什麼原始資料（raw content）不能丟——它是索引重建的唯一來源</li>
+</ul>
+
+<h2>挑戰四：資料分區</h2>
+<p>爬蟲系統處理三種主要資料：</p>
+<ol>
+<li><strong>URLs to visit</strong>：待爬取的 URL 佇列</li>
+<li><strong>URL checksums</strong>：已爬 URL 的 checksum（用於去重）</li>
+<li><strong>Document checksums</strong>：已下載文件的 checksum（用於內容去重）</li>
+</ol>
+
+<p>關鍵洞察：因為我們按 hostname 做一致性雜湊來分配 URL，所以這三種資料可以存放在同一台機器上。每台機器負責一組 hostname，並同時存放這些 hostname 對應的 URL 佇列、URL checksum 和 document checksum。</p>
+
+<p>這樣做的好處：</p>
+<ul>
+<li>URL 去重查詢不需要跨機器通訊</li>
+<li>Politeness 策略在同一台機器上就能實現</li>
+<li>Checkpoint 和恢復邏輯更簡單</li>
+</ul>
+
+<h2>面試總結</h2>
+<blockquote>
+爬蟲設計的面試重點是「你知不知道大規模下的 trick」：用 Bloom Filter 做高效去重、用一致性雜湊做分散式分配和 failover、用 checkpoint 做容錯恢復。這些不是教科書知識，而是生產環境的實務經驗。
+</blockquote>
+
+<div class="lesson-nav">
+<div><a href="./web-crawler-architecture.html">← 上一步：網路爬蟲架構設計</a></div>
+<div></div>
+</div>
+
+<h2>複習測驗</h2>
+
+<div class="quiz" data-question="為什麼爬蟲需要同時使用 URL Checksum 和文件 Checksum？" data-correct="2" data-explain="URL 不變但內容可能變（網頁更新），URL 變了但內容可能不變（不同 URL 指向同一頁面）。">
+<button class="opt">因為 MD5 比 SHA-256 更快</button>
+<button class="opt">因為需要壓縮儲存空間</button>
+<button class="opt">因為 URL 和內容可能各自獨立變化</button>
+<button class="opt">因為需要支援不同格式的 URL</button>
+</div>
+
+<div class="quiz" data-question="Bloom Filter 在爬蟲場景中的核心優勢是什麼？" data-correct="1" data-explain="Bloom Filter 的可能誤報只是多爬一次，但空間效率遠優於 Hash Set——150 億個 URL 只需約 18 GB。">
+<button class="opt">查詢速度比 Hash Set 快</button>
+<button class="opt">空間效率遠優於 Hash Set</button>
+<button class="opt">支援並發寫入</button>
+<button class="opt">能儲存完整的 URL 列表</button>
+</div>
+
+<div class="quiz" data-question="以下哪個不是防止爬蟲陷阱的有效策略？" data-correct="3" data-explain="使用更多爬蟲機器不能解決爬蟲陷阱問題——陷阱會讓更多機器陷入無限迴圈。">
+<button class="opt">設定最大爬取深度</button>
+<button class="opt">偵測 URL 中的遞迴模式</button>
+<button class="opt">對每個域名設定爬取頁面上限</button>
+<button class="opt">使用更多爬蟲機器</button>
+</div>
+
+<div class="quiz" data-question="為什麼三種爬蟲資料（URLs、URL checksums、document checksums）可以存放在同一台機器上？" data-correct="0" data-explain="因為按 hostname 做一致性雜湊分配 URL，三種資料都以 hostname 為 key，自然在同一台機器上。">
+<button class="opt">因為按 hostname 分配，三種資料共享同一個 key</button>
+<button class="opt">因為它們的大小相同</button>
+<button class="opt">因為它們需要同時更新</button>
+<button class="opt">因為它們的存取模式相同</button>
+</div>
+
+<div class="quiz" data-question="爬蟲機器故障後，Checkpoint 機制的作用是什麼？" data-correct="1" data-explain="Checkpoint 定期將佇列狀態存到磁碟，故障後從最近的 checkpoint 恢復，避免從頭開始。">
+<button class="opt">自動分配新的爬取任務</button>
+<button class="opt">從最近的狀態恢復而非從頭開始</button>
+<button class="opt">通知其他機器接管</button>
+<button class="opt">重建已下載文件的索引</button>
+</div>
+
+<div class="quiz" data-question="150 億個 URL 的 Bloom Filter（1% 誤報率）大約需要多少儲存空間？" data-correct="2" data-explain="Bloom Filter 的空間效率極高，150 億個元素在 1% 誤報率下約需 18 GB。">
+<button class="opt">180 GB</button>
+<button class="opt">480 GB</button>
+<button class="opt">18 GB</button>
+<button class="opt">1.8 GB</button>
+</div>
+
+<div class="footer">
+<p>學習路徑：系統設計面試 · Step 4/4</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

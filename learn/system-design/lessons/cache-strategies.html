@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>快取策略：讀寫模式與快取位置</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>快取策略：讀寫模式與快取位置</h1>
+<p class="meta">system-design · data-strategies · Step 1/5</p>
+
+<h2>學習目標</h2>
+<p>理解不同快取讀寫模式（Read-Through、Write-Through、Write-Behind）以及伺服器端與用戶端快取的差異與適用場景。</p>
+
+<h2>從你用過的 Redis 開始</h2>
+
+<p>你用過 Redis 做快取，但有沒有想過：當你的程式碼寫入資料時，資料是先寫到 Redis 還是先寫到資料庫？當你的程式碼讀取資料時，是先查 Redis 還是直接查資料庫？這些「先後順序」的不同，就是快取讀寫模式的核心差別。</p>
+
+<p>快取讀寫模式回答一個問題：<strong>資料在快取和底層數據源之間，以什麼順序流動？</strong>不同的順序帶來不同的一致性、效能和複雜度取捨。</p>
+
+<h2>三種讀寫模式</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>模式</th>
+      <th>讀取流程</th>
+      <th>寫入流程</th>
+      <th>一致性</th>
+      <th>讀取效能</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Read-Through</strong></td>
+      <td>應用 → 快取 → 命中返回；未命中則快取自己去數據源取回</td>
+      <td>應用直接寫數據源</td>
+      <td>可能暫時不一致</td>
+      <td>極快（命中時）</td>
+    </tr>
+    <tr>
+      <td><strong>Write-Through</strong></td>
+      <td>應用 → 快取 → 命中返回；未命中則快取去數據源取回</td>
+      <td>同時寫快取和數據源（同步）</td>
+      <td>強一致性</td>
+      <td>寫入較慢</td>
+    </tr>
+    <tr>
+      <td><strong>Write-Behind</strong></td>
+      <td>應用 → 快取 → 命中返回；未命中則快取去數據源取回</td>
+      <td>只寫快取，稍後異步批量寫入數據源</td>
+      <td>最終一致性</td>
+      <td>寫入極快</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Read-Through：懶加載模式</h3>
+
+<p>想像你在一家電商網站搜尋商品。第一次搜的時候，資料庫裡有這筆資料，但快取裡沒有（cache miss）。Read-Through 的做法是：快取系統自動去資料庫把資料取回來，存進快取，然後返回給你。下次再搜同一個商品，直接從快取返回（cache hit），非常快。</p>
+
+<p>關鍵特點：<strong>數據的加載是由快取層自動處理的</strong>，應用程式不需要知道資料是從快取還是數據源來的。這簡化了應用程式碼。</p>
+
+<p>適用場景：讀取頻繁、資料更新不頻繁的場景。例如電商商品目錄、新聞文章、使用者個人資料。這些資料被無數人反覆讀取，但很少變更。</p>
+
+<h3>Write-Through：同步雙寫</h3>
+
+<p>想像你在銀行轉帳。轉帳發生時，系統會同時更新快取和資料庫——兩個地方的資料永遠同步。你不會看到「轉帳成功但餘額顯示錯誤」的情況。</p>
+
+<p>Write-Through 的核心是：<strong>每次寫入都同時更新快取和底層數據源</strong>，而且是同步的。寫入完成時，快取和數據源一定是一致的。</p>
+
+<p>優點是強一致性——任何時候從快取讀取的資料都是最新的。缺點是寫入效能較差——每次寫入都要等兩個地方都寫完才返回。</p>
+
+<p>適用場景：資料一致性要求極高的場景。例如金融交易、庫存管理、訂單系統。這些場景不能容忍短暫的不一致。</p>
+
+<h3>Write-Behind：異步回寫</h3>
+
+<p>Write-Behind 是 Write-Through 的「偷懶版」：寫入時只更新快取，不立刻寫數據源。快取層會在背景把變更異步、批量地寫回數據源。</p>
+
+<p>好處是寫入速度極快——應用程式只等快取寫完（微秒級），不用等資料庫（毫秒級）。壞處是在快取寫完到數據源更新之間的窗口期，如果快取節點崩潰，那些還沒寫回的資料就會丟失。</p>
+
+<p>適用場景：寫入量極大、能容忍短暫不一致的場景。例如社群媒體的按讚計數、頁面瀏覽量統計、日誌收集。這些資料偶爾丟一點點不影響核心功能。</p>
+
+<h2>伺服器端快取 vs 用戶端快取</h2>
+
+<p>除了讀寫模式，另一個重要的維度是<strong>快取放在哪裡</strong>。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>維度</th>
+      <th>伺服器端快取</th>
+      <th>用戶端快取</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>位置</strong></td>
+      <td>伺服器記憶體（如 Redis、Memcached）</td>
+      <td>用戶裝置（瀏覽器快取、App 本地存儲）</td>
+    </tr>
+    <tr>
+      <td><strong>控制權</strong></td>
+      <td>伺服器完全控制</td>
+      <td>用戶端控制，伺服器只能透過 HTTP header 引導</td>
+    </tr>
+    <tr>
+      <td><strong>受益範圍</strong></td>
+      <td>所有用戶共享</td>
+      <td>僅限該用戶的裝置</td>
+    </tr>
+    <tr>
+      <td><strong>資料新鮮度</strong></td>
+      <td>集中管理，容易保證</td>
+      <td>較難控制，可能展示過時資料</td>
+    </tr>
+    <tr>
+      <td><strong>適用場景</strong></td>
+      <td>降低伺服器負載、加速資料傳遞</td>
+      <td>提升個別用戶體驗、支援離線存取</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>你在用過的 Redis 就是典型的伺服器端快取——資料存在伺服器的記憶體中，所有用戶共享同一份快取。而瀏覽器的 HTTP 快取（例如 Cache-Control header 控制的快取）就是用戶端快取——資料存在你的瀏覽器裡，只有你能用。</p>
+
+<p>實際系統通常會<strong>兩者並用</strong>：伺服器端快取減少資料庫壓力，用戶端快取減少網路請求次數。例如你的 REST API 返回的 response 帶上 <code>Cache-Control: max-age=3600</code>，瀏覽器會在一小時內直接用本地快取而不發請求。同時，伺服器端用 Redis 快取熱門資料，減少資料庫查詢。</p>
+
+<h2>面試中的關鍵點</h2>
+
+<ul>
+  <li>能清楚解釋 Read-Through、Write-Through、Write-Behind 的資料流動順序</li>
+  <li>能根據一致性需求和讀寫比例選擇合適的模式</li>
+  <li>能比較伺服器端和用戶端快取的控制權、受益範圍、新鮮度差異</li>
+  <li>能說明為什麼生產系統通常同時使用兩種快取位置</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>快取讀寫模式決定了資料在快取和數據源之間的流動方式：Read-Through 適合讀多寫少、Write-Through 適合一致性要求高、Write-Behind 適合寫入量大。快取位置則影響受益範圍和控制力：伺服器端快取降低伺服器負載、用戶端快取提升個別體驗。面試中要能根據場景需求做出選擇並解釋 trade-off。</p>
+
+<div class="quiz" data-question="Read-Through 快取的核心特點是什麼？" data-correct="1" data-explain="Read-Through 中，快取層自動處理數據加載——未命中時快取自己去數據源取回，應用程式不需要知道資料來源。">
+  <button class="opt">每次讀取都直接從數據源取</button>
+  <button class="opt">快取未命中時，快取自動從數據源取回數據</button>
+  <button class="opt">寫入時同時更新快取和數據源</button>
+  <button class="opt">只在背景異步更新數據源</button>
+</div>
+
+<div class="quiz" data-question="Write-Through 適合什麼場景？" data-correct="2" data-explain="Write-Through 每次寫入同步更新快取和數據源，保證強一致性，適合金融交易、庫存管理等不能容忍不一致的場景。">
+  <button class="opt">寫入量極大的日誌系統</button>
+  <button class="opt">讀多寫少的新聞網站</button>
+  <button class="opt">需要強一致性的金融交易系統</button>
+  <button class="opt">只需要最終一致性的社群媒體按讚數</button>
+</div>
+
+<div class="quiz" data-question="Write-Behind 的主要風險是什麼？" data-correct="3" data-explain="Write-Behind 只寫快取、異步寫回數據源，如果快取節點在異步寫回之前崩潰，未寫回的資料就會丟失。">
+  <button class="opt">寫入速度太慢</button>
+  <button class="opt">快取空間不足</button>
+  <button class="opt">讀取延遲太高</button>
+  <button class="opt">快取節點崩潰時，尚未異步寫回的資料會丟失</button>
+</div>
+
+<div class="quiz" data-question="伺服器端快取相比用戶端快取，最大的優勢是什麼？" data-correct="0" data-explain="伺服器端快取由伺服器集中控制，所有用戶共享，能統一管理資料新鮮度和快取策略。">
+  <button class="opt">由伺服器集中控制，所有用戶共享，便於統一管理</button>
+  <button class="opt">不需要網路傳輸</button>
+  <button class="opt">用戶可以離線使用</button>
+  <button class="opt">不需要任何配置</button>
+</div>
+
+<div class="quiz" data-question="你在 REST API 中設定 Cache-Control header，這屬於哪種快取？" data-correct="1" data-explain="Cache-Control header 控制的是瀏覽器（用戶端）的快取行為，資料存在用戶裝置上，只有該用戶能使用。">
+  <button class="opt">伺服器端快取</button>
+  <button class="opt">用戶端快取</button>
+  <button class="opt">資料庫快取</button>
+  <button class="opt">CDN 快取</button>
+</div>
+
+<div class="quiz" data-question="如果系統需要同時降低伺服器負載和減少用戶端網路請求，應該怎麼做？" data-correct="2" data-explain="生產系統通常同時使用伺服器端快取（如 Redis）降低資料庫壓力，和用戶端快取（如 HTTP Cache-Control）減少網路請求，兩者互補。">
+  <button class="opt">只用伺服器端快取</button>
+  <button class="opt">只用用戶端快取</button>
+  <button class="opt">同時使用伺服器端快取和用戶端快取</button>
+  <button class="opt">不用快取，直接優化資料庫</button>
+</div>
+
+<p class="footer">下一步：<a href="compression-deduplication.html">資料最佳化：壓縮與去重</a></p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

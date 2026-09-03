@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>冗餘 Proxy 架構設計</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>冗餘 Proxy 架構設計</h1>
+<p class="meta">system-design · proxy-redundancy · Step 4/4</p>
+
+<h2>學習目標</h2>
+<p>將冗餘與複製概念應用到 Proxy 設計，認識常見的冗餘 Proxy 架構模式與故障處理方式。</p>
+
+<h2>把零件組裝起來</h2>
+
+<p>前三課分別介紹了：正向代理（代表用戶端）、反向代理（代表伺服器）、冗餘與複製（消除單點故障）。這一課把這三個概念組裝在一起，設計一個<strong>不會因為一台代理掛掉就中斷的架構</strong>。</p>
+
+<h2>問題：反向代理本身也是單點故障</h2>
+
+<p>在前面的課程中，我們設計了這樣的架構：</p>
+
+<pre><code>用戶端 ──→ 反向代理（一台）──→ 伺服器 A
+                           ├→ 伺服器 B
+                           └→ 伺服器 C</code></pre>
+
+<p>後端伺服器有冗餘，但反向代理只有一台。如果它掛了，所有用戶都連不上來。反向代理本身變成了系統的單點故障。</p>
+
+<p>解法很直覺：多加幾台反向代理。但「多加幾台」這四個字背後有很多細節需要回答。</p>
+
+<h2>模式一：主動-被動（Active-Passive）</h2>
+
+<pre><code>用戶端 ──→ 虛擬 IP (VIP)
+              │
+         主動代理 ──→ 伺服器群
+         被動代理（備援）</code></pre>
+
+<p>兩台代理，一台負責處理所有流量（主動），另一台待命（被動）。被動代理定期<strong>心跳檢測</strong>主動代理是否健康。如果主動代理掛了，被動代理接管虛擬 IP（VIP），用戶端無感知。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>優點</th>
+      <th>缺點</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>架構簡單，容易理解</td>
+      <td>被動代理閒置，資源浪費</td>
+    </tr>
+    <tr>
+      <td>切換時沒有流量分散的複雜度</td>
+      <td>故障轉移有短暫中斷（VIP 切換需要時間）</td>
+    </tr>
+    <tr>
+      <td>資料一致性容易處理</td>
+      <td>被動代理長期不處理流量，切換時可能有問題</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>模式二：主動-主動（Active-Active）</h2>
+
+<pre><code>              ┌──→ 反向代理 A ──→ 伺服器群
+用戶端 ──→ LB ─┤
+              └──→ 反向代理 B ──→ 伺服器群</code></pre>
+
+<p>多台代理<strong>同時處理流量</strong>。用戶端的請求先到一層負載均衡器（可以是 DNS 輪詢、專用 LB、或 Keepalived VIP），再分發到各台反向代理。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>優點</th>
+      <th>缺點</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>資源利用率高，兩台都在工作</td>
+      <td>架構更複雜，需要額外的負載均衡層</td>
+    </tr>
+    <tr>
+      <td>一台掛了，另一台繼續服務</td>
+      <td>如果代理有狀態（快取），切換時可能丟失</td>
+    </tr>
+    <tr>
+      <td>天然支援水平擴展</td>
+      <td>需要確保所有代理的設定一致</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>常見的冗餘代理實作</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>工具</th>
+      <th>模式</th>
+      <th>特點</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Keepalived + Nginx</strong></td>
+      <td>Active-Passive</td>
+      <td>VIP 漂移，故障轉移秒級，最常見的組合</td>
+    </tr>
+    <tr>
+      <td><strong>HAProxy</strong></td>
+      <td>Active-Active</td>
+      <td>高性能 L4/L7 負載均衡，適合大流量場景</td>
+    </tr>
+    <tr>
+      <td><strong>DNS 輪詢</strong></td>
+      <td>Active-Active</td>
+      <td>多個 A 記錄指向不同代理 IP，最簡單但最粗糙</td>
+    </tr>
+    <tr>
+      <td><strong>雲端 LB</strong></td>
+      <td>Active-Active</td>
+      <td>AWS ALB/NLB、GCP Cloud Load Balancing，免運維</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>故障轉移的關鍵：心跳與健康檢查</h2>
+
+<p>不管是 Active-Passive 還是 Active-Active，代理之間都需要知道彼此的健康狀態。這靠<strong>心跳</strong>（Heartbeat）機制實現：</p>
+
+<ul>
+  <li>每台代理定期（例如每秒）向其他代理發送心跳包</li>
+  <li>如果一段時間沒收到心跳，判定對方故障</li>
+  <li>Active-Passive：故障時觸發 VIP 切換</li>
+  <li>Active-Active：故障時從負載均衡器的後端列表中移除</li>
+</ul>
+
+<p>心跳的頻率和超時設定是一個取捨：太頻繁浪費資源，太稀疏故障偵測太慢。</p>
+
+<h2>架構選型：什麼時候用哪種？</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>場景</th>
+      <th>推薦模式</th>
+      <th>原因</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>流量不大，預算有限</td>
+      <td>Active-Passive</td>
+      <td>兩台伺服器，一台閒置但架構簡單</td>
+    </tr>
+    <tr>
+      <td>高流量，需要水平擴展</td>
+      <td>Active-Active</td>
+      <td>所有代理都在工作，天然可擴展</td>
+    </tr>
+    <tr>
+      <td>代理有狀態（快取、session）</td>
+      <td>Active-Passive + 共享狀態</td>
+      <td>避免狀態不一致，切換時需要狀態遷移</td>
+    </tr>
+    <tr>
+      <td>雲端部署</td>
+      <td>Active-Active + 雲端 LB</td>
+      <td>雲端 LB 已經處理了冗餘和故障轉移</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>面試中的關鍵點</h2>
+
+<p>冗餘 Proxy 架構是面試中討論「高可用性」時的經典話題。面試官期望你能：</p>
+
+<ul>
+  <li><strong>指出反向代理本身也是單點故障</strong>——很多人會設計後端冗餘但忘記代理層</li>
+  <li><strong>描述 Active-Passive 和 Active-Active 兩種模式</strong>，並說出各自的取捨</li>
+  <li>提到<strong>心跳和健康檢查</strong>機制</li>
+  <li>能根據場景<strong>推薦適合的模式</strong></li>
+  <li>知道常見的<strong>實作工具</strong>（Keepalived、HAProxy、雲端 LB）</li>
+</ul>
+
+<p>這就是「冗餘」在系統設計中的實際應用：不只是多加一台機器，而是要思考故障怎麼偵測、流量怎麼切換、狀態怎麼遷移。</p>
+
+<h2>小結</h2>
+
+<p>反向代理本身也是單點故障，需要冗餘設計。Active-Passive 模式用 VIP 漂移實現故障轉移，簡單但資源浪費；Active-Active 模式讓多台代理同時工作，高效但架構更複雜。心跳和健康檢查是故障偵測的基礎。在面試中，能指出代理層的單點故障並描述故障轉移機制，是展示系統設計能力的關鍵。</p>
+
+<div class="quiz" data-question="為什麼反向代理需要冗餘設計？" data-correct="2" data-explain="反向代理如果只有一台，它本身就是單點故障——掛了所有用戶都連不上來。">
+  <button class="opt">為了提升代理的處理速度</button>
+  <button class="opt">為了減少代理的記憶體使用</button>
+  <button class="opt">因為反向代理本身也是單點故障</button>
+  <button class="opt">為了支援更多協議</button>
+</div>
+
+<div class="quiz" data-question="Active-Passive 模式的最大缺點是什麼？" data-correct="1" data-explain="被動代理閒置不用，資源利用率低，這在成本敏感的環境中是主要考量。">
+  <button class="opt">架構太複雜</button>
+  <button class="opt">被動代理閒置，資源浪費</button>
+  <button class="opt">無法支援 SSL 終止</button>
+  <button class="opt">不支援心跳檢測</button>
+</div>
+
+<div class="quiz" data-question="Active-Active 模式中，用戶端的請求通常先到什麼？" data-correct="3" data-explain="Active-Active 需要一層額外的負載均衡器（LB）來分發流量到各台代理。">
+  <button class="opt">直接到其中一台代理</button>
+  <button class="opt">到 DNS 伺服器</button>
+  <button class="opt">到後端伺服器</button>
+  <button class="opt">到一層負載均衡器</button>
+</div>
+
+<div class="quiz" data-question="心跳（Heartbeat）機制在冗餘代理中扮演什麼角色？" data-correct="0" data-explain="心跳是故障偵測的基礎——代理之間定期發送心跳包，超時未收到就判定對方故障。">
+  <button class="opt">故障偵測——確認其他代理是否健康</button>
+  <button class="opt">加密通訊內容</button>
+  <button class="opt">快取靜態資源</button>
+  <button class="opt">分配後端伺服器</button>
+</div>
+
+<div class="quiz" data-question="高流量場景下，哪種冗餘模式更適合？" data-correct="2" data-explain="Active-Active 讓所有代理同時工作，天然支援水平擴展，適合高流量場景。">
+  <button class="opt">Active-Passive</button>
+  <button class="opt">單一代理</button>
+  <button class="opt">Active-Active</button>
+  <button class="opt">無需冗餘</button>
+</div>
+
+<div class="quiz" data-question="在面試中討論冗餘代理架構時，最關鍵的一點是什麼？" data-correct="1" data-explain="指出代理層的單點故障並描述故障轉移機制，是展示系統設計深度的關鍵——很多人會設計後端冗餘但忘記代理層。">
+  <button class="opt">只列出使用的工具</button>
+  <button class="opt">指出代理層的單點故障並描述故障轉移機制</button>
+  <button class="opt">只比較 Active-Passive 和 Active-Active</button>
+  <button class="opt">只討論心跳頻率</button>
+</div>
+
+<p class="footer">上一步：<a href="redundancy-replication.html">冗餘與複製基礎</a> · 回到<a href="proxy-fundamentals.html">Proxy 基礎概念</a>複習</p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

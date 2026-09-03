@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>讀寫效能取捨 — 索引</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>讀寫效能取捨</h1>
+<p class="meta">system-design · indexes · Step 3/4</p>
+
+<blockquote>
+<strong>學習目標</strong>：理解索引為什麼加速讀取但會降低寫入效能，以及空間額外負荷的取捨。
+</blockquote>
+
+<h2>一個真實場景</h2>
+
+<p>你的電商系統上線了，查詢速度飛快——因為你為 <code>product_name</code>、<code>category</code>、<code>price</code> 等十幾個欄位都建了索引。但很快，負責寫入的工程師抱怨：<strong>每筆訂單的插入時間從 5ms 變成了 50ms</strong>。</p>
+
+<p>問題出在哪裡？</p>
+
+<h2>寫入時索引在做什麼</h2>
+
+<p>當你執行 <code>INSERT INTO orders (product_id, quantity, price) VALUES (1, 2, 99.9)</code> 時，資料庫不只需要把這一筆資料寫入表中——它還要做額外的工作：</p>
+
+<ol>
+  <li>把資料寫入<strong>資料表</strong>（heap 或 clustered index）</li>
+  <li>更新每一個相關的<strong>二級索引</strong>（secondary index）</li>
+  <li>確保 B+ 樹保持<strong>平衡</strong>（可能需要分裂節點）</li>
+</ol>
+
+<p>如果你有 10 個索引，一次插入就要寫 10 次索引 + 1 次資料表 = <strong>11 次寫入操作</strong>。這就是為什麼索引會拖慢寫入。</p>
+
+<h2>讀寫取捨的本質</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>面向</th>
+      <th>有索引</th>
+      <th>無索引</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>讀取（SELECT）</strong></td>
+      <td>極快（O(log n)）</td>
+      <td>慢（O(n)）</td>
+    </tr>
+    <tr>
+      <td><strong>寫入（INSERT/UPDATE/DELETE）</strong></td>
+      <td>慢（需更新每個索引）</td>
+      <td>快（只寫資料表）</td>
+    </tr>
+    <tr>
+      <td><strong>磁碟空間</strong></td>
+      <td>額外佔用（索引本身也是一張表）</td>
+      <td>最小化</td>
+    </tr>
+    <tr>
+      <td><strong>維護成本</strong></td>
+      <td>索引可能碎片化，需定期重建</td>
+      <td>無額外維護</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>這就像你在圖書館的書上貼了十幾種標籤（按顏色、按主題、按作者、按出版年⋯⋯）。每次進一本新書，管理員要貼十幾張標籤；每次挪動一本书，十幾張標籤的位置都要更新。圖書館找書變得超快，但管理員累得要死。</p>
+
+<h2>寫入放大（Write Amplification）</h2>
+
+<p>工程上用「寫入放大」來量化這個問題：<strong>實際寫入磁碟的資料量 / 邏輯上需要寫入的資料量</strong>。</p>
+
+<p>假設你只插入 1KB 的資料，但因為 5 個索引各佔 10KB，你實際要寫入 51KB——寫入放大倍數是 51 倍。這在寫入密集型系統（如日誌系統、事件流）中是致命的。</p>
+
+<h2>索引碎片化</h2>
+
+<p>除了寫入變慢，索引還會隨時間<strong>碎片化</strong>。當你反覆插入和刪除資料時，B+ 樹的葉子節點會出現很多空洞（就像一本書被撕掉了好幾頁）。碎片化會導致：</p>
+
+<ul>
+  <li>查詢需要掃描更多節點（效能下降）</li>
+  <li>索引佔用的磁碟空間比實際需要的更多</li>
+</ul>
+
+<p>解決方案是定期<strong>重建索引（REINDEX）</strong>或<strong>重组索引（REBUILD）</strong>，但這本身也是一個昂貴的操作。</p>
+
+<h2>什麼時候該加索引？什麼時候不該？</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>場景</th>
+      <th>建議</th>
+      <th>原因</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>讀取遠多於寫入（OLAP、報表）</td>
+      <td>多建索引</td>
+      <td>讀取收益遠大於寫入代價</td>
+    </tr>
+    <tr>
+      <td>寫入遠多於讀取（日誌、事件流）</td>
+      <td>少建索引</td>
+      <td>寫入代價太高，拖慢整個系統</td>
+    </tr>
+    <tr>
+      <td>讀寫均衡（一般 OLTP）</td>
+      <td>精準建索引</td>
+      <td>只為高頻查詢的 WHERE/JOIN/ORDER BY 欄位建</td>
+    </tr>
+    <tr>
+      <td>資料很少（< 10,000 筆）</td>
+      <td>不需要索引</td>
+      <td>全表掃描已經夠快</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>面試中的關鍵點</h2>
+
+<p>在面試中談到索引時，你必須主動提到<strong>取捨</strong>，而不只是「索引加速查詢」。面試官想聽到的是：</p>
+
+<ul>
+  <li>你理解<strong>寫入放大</strong>的概念</li>
+  <li>你知道索引不是越多越好，要根據<strong>讀寫比例</strong>決定</li>
+  <li>你能討論<strong>索引碎片化</strong>和維護成本</li>
+</ul>
+
+<p>這些是你從「知道索引」到「能設計索引策略」的關鍵跳躍。</p>
+
+<h2>小結</h2>
+
+<p>索引是一把雙面刃：加速讀取的同時，拖慢寫入、增加空間佔用、帶來碎片化維護成本。好的索引策略不是「多建」，而是「在對的地方建對的數量」。下一步，我們看看常見的索引類型以及系統設計中的最佳實踐。</p>
+
+<div class="quiz" data-question="為什麼索引會降低寫入效能？" data-correct="2" data-explain="每次插入或更新資料時，資料庫需要同步更新所有相關索引，索引越多寫入越慢。">
+  <button class="opt">索引會鎖定整張表</button>
+  <button class="opt">索引會讓 CPU 變慢</button>
+  <button class="opt">每次寫入都要同步更新所有相關索引</button>
+  <button class="opt">索引會增加網路延遲</button>
+</div>
+
+<div class="quiz" data-question="「寫入放大」的定義是什麼？" data-correct="1" data-explain="寫入放大是實際寫入磁碟的資料量除以邏輯上需要寫入的資料量，衡量索引帶來的額外寫入開銷。">
+  <button class="opt">寫入速度被放大的倍數</button>
+  <button class="opt">實際寫入磁碟量 / 邏輯寫入量</button>
+  <button class="opt">寫入次數乘以索引數量</button>
+  <button class="opt">寫入時 CPU 的使用率</button>
+</div>
+
+<div class="quiz" data-question="以下哪種系統最不適合大量建索引？" data-correct="0" data-explain="日誌系統以寫入為主，大量索引會嚴重拖慢寫入效能，得不償失。">
+  <button class="opt">即時日誌收集系統</button>
+  <button class="opt">電商商品搜索系統</button>
+  <button class="opt">財務報表查詢系統</button>
+  <button class="opt">使用者資料查詢 API</button>
+</div>
+
+<div class="quiz" data-question="索引碎片化會導致什麼問題？" data-correct="3" data-explain="碎片化讓查詢需要掃描更多節點，效能下降，且索引佔用的空間比實際需要的更多。">
+  <button class="opt">資料自動刪除</button>
+  <button class="opt">查詢速度變快</button>
+  <button class="opt">資料庫自動重建索引</button>
+  <button class="opt">查詢效能下降，空間使用增加</button>
+</div>
+
+<div class="quiz" data-question="什麼時候「不需要」建索引？" data-correct="2" data-explain="資料量很小時（< 10,000 筆），全表掃描已經很快，索引的維護代價反而更高。">
+  <button class="opt">查詢涉及多個 JOIN</button>
+  <button class="opt">WHERE 條件經常使用</button>
+  <button class="opt">資料量很小（< 10,000 筆）</button>
+  <button class="opt">ORDER BY 頻繁使用</button>
+</div>
+
+<div class="quiz" data-question="在系統設計面試中，談到索引時面試官最想聽到什麼？" data-correct="1" data-explain="面試官想聽到你理解索引的取捨——不只是加速查詢，還包括寫入放大、空間成本和維護需求。">
+  <button class="opt">索引越多越好</button>
+  <button class="opt">索引的取捨——寫入放大、空間成本和維護需求</button>
+  <button class="opt">索引是自動管理的</button>
+  <button class="opt">只討論 B+ 樹的結構</button>
+</div>
+
+<p class="footer">下一步：<a href="index-types-best-practices.html">索引類型與最佳實踐</a> — 認識不同索引類型，學習正確使用索引的原則</p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Weighted Round Robin — 加權靜態負載均衡</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Weighted Round Robin：考慮伺服器容量差異</h1>
+<p class="meta">system-design · lb-algorithms · Step 2/6</p>
+
+<p>Round Robin 的一個明顯問題：它假設每台伺服器處理能力相同。但現實中，伺服器可能有不同的 CPU 核心數、記憶體大小、甚至是不同代的處理器。給 8 核和 2 核的伺服器分配同樣數量的請求，會導致資源浪費或過載。</p>
+
+<h2>Weighted Round Robin 是什麼？</h2>
+<p>Weighted Round Robin（加權循環分配）在 Round Robin 的基礎上加入了<strong>權重（weight）</strong>。權重越高的伺服器，分配到的請求越多。例如三台伺服器 S0（權重 5）、S1（權重 3）、S2（權重 2），總權重是 10。10 個請求的分配結果是：</p>
+<table>
+  <tr><th>伺服器</th><th>權重</th><th>分配到的請求數</th></tr>
+  <tr><td>S0</td><td>5</td><td>5 個（佔 50%）</td></tr>
+  <tr><td>S1</td><td>3</td><td>3 個（佔 30%）</td></tr>
+  <tr><td>S2</td><td>2</td><td>2 個（佔 20%）</td></tr>
+</table>
+<p>性能越好的伺服器承擔越多請求，集群整體資源利用率更高。</p>
+
+<h2>兩種實作方式</h2>
+<h3>順序輪詢（Sequential Round Robin）</h3>
+<p>最直覺的實作：按照權重比例重複列出伺服器順序，然後循環。例如上面的例子生成序列 [S0, S0, S0, S0, S0, S1, S1, S1, S2, S2]，然後按順序分配。這種方式簡單，但分配不夠平滑——可能連續 5 個請求都打到 S0。</p>
+<h3>平滑加權輪詢（Smooth Weighted Round Robin）</h3>
+<p>Nginx 使用的演算法。每次分配後更新權重，讓分配更均勻。S0 的 5 個請求不會連續打到 S0，而是分散在整個序列中。實測效果明顯優於順序輪詢。</p>
+
+<h2>優缺點</h2>
+<table>
+  <tr><th></th><th>說明</th></tr>
+  <tr><td>✅ 保留 Round Robin 的簡單性</td><td>不需要收集伺服器即時狀態</td></tr>
+  <tr><td>✅ 按容量分配</td><td>性能好的伺服器承擔更多請求</td></tr>
+  <tr><td>✅ 靈活可調整</td><td>新增或移除伺服器只需更新權重</td></tr>
+  <tr><td>❌ 不考慮即時負載</td><td>伺服器當下忙不忙，它不知道</td></tr>
+  <tr><td>❌ 權重需要手動維護</td><td>伺服器性能變化時需要更新權重</td></tr>
+</table>
+
+<h2>適用場景</h2>
+<ul>
+  <li><strong>異質伺服器集群</strong>：新舊伺服器混用、不同規格的伺服器</li>
+  <li><strong>可預測的負載模式</strong>：伺服器性能差異穩定，不需要即時調整</li>
+  <li><strong>資料庫集群</strong>：不同節點有不同的處理能力，但查詢負載相對穩定</li>
+</ul>
+
+<h2>與 Round Robin 的核心差別</h2>
+<p>一句話記住：Round Robin 是「平均分配」，Weighted Round Robin 是「按比例分配」。如果你在面試中回答了 Round Robin，記得追問一句：「伺服器是同質的嗎？」如果不同質，就該切換到 Weighted Round Robin。</p>
+
+<h2>面試提示</h2>
+<p>Weighted Round Robin 是從 Round Robin 自然延伸的討論。當面試官問「如果伺服器性能不同怎麼辦？」時，回答 Weighted Round Robin 就是標準答案。然後再追問：「但如果有即時負載波動，該怎麼辦？」——這就自然過渡到 Least Connections 或 Weighted Least Connections。</p>
+
+<section class="quiz" data-question="Weighted Round Robin 解決了 Round Robin 的什麼問題？" data-correct="2" data-explain="Weighted Round Robin 透過權重解決了伺服器性能差異的問題，但仍然不考慮即時負載。">
+  <button class="opt">請求分配不均</button>
+  <button class="opt">實作複雜度</button>
+  <button class="opt">伺服器性能差異</button>
+  <button class="opt">即時負載波動</button>
+</section>
+
+<section class="quiz" data-question="三台伺服器權重分別為 6、3、1，10 個請求會如何分配？" data-correct="1" data-explain="6:3:1 的比例意味著 S0 得到 6 個、S1 得到 3 個、S2 得到 1 個。">
+  <button class="opt">每台各 3-4 個</button>
+  <button class="opt">S0 六個、S1 三個、S2 一個</button>
+  <button class="opt">S0 三個、S1 三個、S2 四個</button>
+  <button class="opt">根據伺服器名稱順序分配</button>
+</section>
+
+<section class="quiz" data-question="平滑加權輪詢（Smooth Weighted Round Robin）相比順序輪詢的優勢是？" data-correct="0" data-explain="平滑加權輪詢讓分配更均勻，避免連續多個請求打到同一台伺服器。">
+  <button class="opt">分配更均勻，避免集中分配</button>
+  <button class="opt">不需要設定權重</button>
+  <button class="opt">能考慮伺服器即時負載</button>
+  <button class="opt">實作更簡單</button>
+</section>
+
+<section class="quiz" data-question="Weighted Round Robin 仍然存在的根本缺點是？" data-correct="3" data-explain="它只看靜態權重，不收集伺服器的即時連接數或負載資訊。">
+  <button class="opt">實作太複雜</button>
+  <button class="opt">不支援異質伺服器</button>
+  <button class="opt">需要外部 Session Store</button>
+  <button class="opt">不考慮伺服器的即時負載</button>
+</section>
+
+<section class="quiz" data-question="面試中回答 Round Robin 後，面試官問「如果伺服器性能不同怎麼辦」，最佳回答是？" data-correct="1" data-explain="從靜態的 Round Robin 過渡到 Weighted Round Robin，再引出動態演算法的討論。">
+  <button class="opt">「還是用 Round Robin，伺服器會自己調整」</button>
+  <button class="opt">「切換到 Weighted Round Robin，按性能設定權重」</button>
+  <button class="opt">「改用 IP Hash 路由」</button>
+  <button class="opt">「增加伺服器數量來分擔」</button>
+</section>
+
+<div class="footer">
+  <p>💡 有任何不清楚的地方？問你的老師！</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

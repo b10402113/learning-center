@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>通訊模式比較：Polling vs LongPolling vs WebSockets vs Webhooks</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>通訊模式比較：Polling vs LongPolling vs WebSockets vs Webhooks</h1>
+<p class="meta">system-design · arch-patterns · Step 5/5</p>
+
+<h2>學習目標</h2>
+<p>比較不同的客户端-服務器通訊模式，理解各自的延遲、資源消耗和適用場景。</p>
+
+<h2>四種「問答」方式</h2>
+
+<p>想像你要知道某個網站有沒有新文章：</p>
+<ul>
+  <li><strong>Polling</strong>：你每 5 分鐘刷新一次頁面，看有沒有新文章。</li>
+  <li><strong>Long-Polling</strong>：你發送一個請求，如果沒有新文章，伺服器不回覆，一直等到有新文章才回覆。</li>
+  <li><strong>WebSockets</strong>：你跟網站建立一條「專線」，有新文章時網站主動推給你，不用你問。</li>
+  <li><strong>Webhooks</strong>：你告訴網站「有新文章時打電話給我」，網站有新文章時主動通知你的伺服器。</li>
+</ul>
+
+<p>四種模式的核心差異在於：<strong>誰主動問</strong>、<strong>多久問一次</strong>、<strong>能不能即時收到</strong>。</p>
+
+<h2>Polling（輪詢）</h2>
+
+<p><strong>Polling</strong> 是最簡單的方式：客戶端<strong>定期</strong>向伺服器發送 HTTP 請求，問「有新資料嗎？」伺服器立即回覆，不管有沒有新資料。</p>
+
+<pre><code>客戶端 ──每5秒──→ 伺服器：「有新資料嗎？」
+客戶端 ←──立即──── 伺服器：「沒有」或「有，資料在這裡」</code></pre>
+
+<table>
+  <thead>
+    <tr>
+      <th>面向</th>
+      <th>Polling</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>連線方式</strong></td>
+      <td>重複的短 HTTP 請求，固定間隔</td>
+    </tr>
+    <tr>
+      <td><strong>資料傳遞</strong></td>
+      <td>延遲——新資料在下次請求時才收到（拉取模式）</td>
+    </tr>
+    <tr>
+      <td><strong>資源消耗</strong></td>
+      <td>高——即使沒有新資料，也要不斷發送請求</td>
+    </tr>
+    <tr>
+      <td><strong>適合場景</strong></td>
+      <td>更新不頻繁、不需要即時性的應用</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>舉例：一個天氣應用每 10 分鐘 Polling 一次天氣資料。雖然不即時，但天氣本來就不會每秒鐘變化，所以夠用。</p>
+
+<h2>Long-Polling（長輪詢）</h2>
+
+<p><strong>Long-Polling</strong> 是 Polling 的聰明改良版：客戶端發送請求後，如果伺服器沒有新資料，不立即回覆，而是<strong>hold 住連線</strong>直到有新資料或超時。收到回覆後，客戶端再發送下一個請求。</p>
+
+<pre><code>客戶端 ──→ 伺服器：「有新資料嗎？」
+           （連線 hold 住... 等待中...）
+客戶端 ←── 伺服器：「有了！資料在這裡」
+客戶端 ──→ 伺服器：「又有新資料嗎？」（重新 hold）</code></pre>
+
+<table>
+  <thead>
+    <tr>
+      <th>面向</th>
+      <th>Long-Polling</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>連線方式</strong></td>
+      <td>客戶端發送請求，伺服器 hold 住直到有資料</td>
+    </tr>
+    <tr>
+      <td><strong>資料傳遞</strong></td>
+      <td>比 Polling 快——有新資料就立即回覆</td>
+    </tr>
+    <tr>
+      <td><strong>資源消耗</strong></td>
+      <td>中等——比 Polling 少，但每次收到資料後要重新建立連線</td>
+    </tr>
+    <tr>
+      <td><strong>適合場景</strong></td>
+      <td>更新較頻繁但不需要完全即時的應用</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>舉例：一個聊天應用用 Long-Polling。用戶發送請求後，如果有新訊息就立即收到；如果沒有，伺服器會 hold 住幾秒鐘再回覆「沒有」，然後用戶再問一次。比純 Polling 省了很多無意義的請求。</p>
+
+<h2>WebSockets</h2>
+
+<p><strong>WebSockets</strong> 完全不同：它在客戶端和伺服器之間建立一條<strong>持久的雙向連線</strong>。連線建立後，雙方可以隨時互相傳送資料，不需要重複建立 HTTP 請求。</p>
+
+<pre><code>客戶端 ←──────持久雙向連線──────→ 伺服器
+        「推送新訊息」 ←              → 「推送新訊息」</code></pre>
+
+<table>
+  <thead>
+    <tr>
+      <th>面向</th>
+      <th>WebSockets</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>連線方式</strong></td>
+      <td>一條持久的 TCP 連線，雙向通訊</td>
+    </tr>
+    <tr>
+      <td><strong>資料傳遞</strong></td>
+      <td>即時——伺服器可以主動推送，不需要客戶端問</td>
+    </tr>
+    <tr>
+      <td><strong>資源消耗</strong></td>
+      <td>低——連線建立後，後續通訊幾乎零開銷</td>
+    </tr>
+    <tr>
+      <td><strong>適合場景</strong></td>
+      <td>聊天、即時遊戲、股票行情、協作編輯</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>舉例：一個即時聊天應用。用戶 A 發送訊息時，伺服器透過 WebSocket 連線立即推送到用戶 B 的設備，不需要用戶 B 的客戶端去問。延遲極低，體驗最好。</p>
+
+<h2>Webhooks</h2>
+
+<p><strong>Webhooks</strong> 是完全不同的模式——它是<strong>伺服器對伺服器</strong>的事件驅動通訊。一個系統定義一個 URL（endpoint），當某個事件發生時，另一個系統會主動打這個 URL 通知。</p>
+
+<pre><code>系統 A（訂閱者）設定 Webhook URL → 系統 B（發布者）
+當系統 B 發生事件 → 主動 POST 到系統 A 的 URL</code></pre>
+
+<table>
+  <thead>
+    <tr>
+      <th>面向</th>
+      <th>Webhooks</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>連線方式</strong></td>
+      <td>事件驅動——事件發生時主動 HTTP POST 到訂閱者的 URL</td>
+    </tr>
+    <tr>
+      <td><strong>資料傳遞</strong></td>
+      <td>即時——事件發生就通知，不需要等待</td>
+    </tr>
+    <tr>
+      <td><strong>資源消耗</strong></td>
+      <td>低——只有事件發生時才有流量</td>
+    </tr>
+    <tr>
+      <td><strong>適合場景</strong></td>
+      <td>伺服器間事件通知（支付完成、訂單狀態更新）</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>舉例：你在電商平台下單付款後，付款系統會透過 Webhook 通知訂單系統「付款成功」，訂單系統再通知倉庫系統「可以出貨了」。不需要輪詢，有事件就通知。</p>
+
+<h2>四種模式對照</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>模式</th>
+      <th>連線方式</th>
+      <th>資料傳遞</th>
+      <th>資源消耗</th>
+      <th>典型場景</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Polling</strong></td>
+      <td>固定間隔 HTTP 請求</td>
+      <td>延遲（下次請求時）</td>
+      <td>高（無用請求多）</td>
+      <td>天氣、新聞（低頻更新）</td>
+    </tr>
+    <tr>
+      <td><strong>Long-Polling</strong></td>
+      <td>伺服器 hold 連線直到有資料</td>
+      <td>較快（有資料就回）</td>
+      <td>中等</td>
+      <td>聊天（中頻更新）</td>
+    </tr>
+    <tr>
+      <td><strong>WebSockets</strong></td>
+      <td>持久雙向連線</td>
+      <td>即時（主動推送）</td>
+      <td>低</td>
+      <td>即時聊天、遊戲、股票</td>
+    </tr>
+    <tr>
+      <td><strong>Webhooks</strong></td>
+      <td>事件驅動 HTTP POST</td>
+      <td>即時（事件觸發）</td>
+      <td>低</td>
+      <td>伺服器間事件通知</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>如何選擇？</h2>
+
+<ul>
+  <li><strong>更新不頻繁、不需要即時</strong> → Polling（最簡單）</li>
+  <li><strong>更新較頻繁但不需要完全即時</strong> → Long-Polling（比 Polling 省資源）</li>
+  <li><strong>需要雙向即時通訊</strong> → WebSockets（體驗最好）</li>
+  <li><strong>伺服器間事件通知</strong> → Webhooks（事件驅動，無需輪詢）</li>
+</ul>
+
+<h2>面試中的關鍵點</h2>
+
+<ul>
+  <li>Polling 是「拉」（pull），WebSockets 和 Webhooks 是「推」（push）</li>
+  <li>Polling 資源消耗最高（大量無用請求），WebSockets 和 Webhooks 最低</li>
+  <li>WebSockets 是<strong>客戶端-伺服器</strong>的雙向連線；Webhooks 是<strong>伺服器-伺服器</strong>的事件通知</li>
+  <li>面試時被問「該用哪個」，先問清楚是<strong>哪種場景</strong>（用戶端即時、伺服器間通知、低頻更新）</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>四種通訊模式的核心差異在於：Polling 是定期問、Long-Polling 是問了等著、WebSockets 是建一條專線雙向通訊、Webhooks 是有事主動通知。選擇哪種取決於更新頻率、即時性需求和通訊方向。理解這些差異後，你就掌握了系統設計中最常見的通訊模式選擇框架。</p>
+
+<div class="quiz" data-question="Polling 最大的缺點是什麼？" data-correct="2" data-explain="Polling 不斷發送請求，即使沒有新資料，造成大量無用請求，資源消耗高。">
+  <button class="opt">無法支援 HTTPS</button>
+  <button class="opt">只能用在伺服器端</button>
+  <button class="opt">即使沒有新資料也不斷發送請求，浪費資源</button>
+  <button class="opt">只能支援單向通訊</button>
+</div>
+
+<div class="quiz" data-question="Long-Polling 比 Polling 好在哪裡？" data-correct="1" data-explain="Long-Polling 在伺服器沒有新資料時 hold 住連線，有新資料就立即回覆，減少了無意義的請求。">
+  <button class="opt">連線速度更快</button>
+  <button class="opt">伺服器有新資料才回覆，減少無用請求</button>
+  <button class="opt">支援雙向通訊</button>
+  <button class="opt">不需要 HTTP 協議</button>
+</div>
+
+<div class="quiz" data-question="WebSockets 的核心特點是什麼？" data-correct="3" data-explain="WebSockets 建立一條持久的雙向連線，雙方可以隨時互相傳送資料。">
+  <button class="opt">定期發送 HTTP 請求</button>
+  <button class="opt">伺服器 hold 連線等待</button>
+  <button class="opt">事件驅動的 HTTP POST</button>
+  <button class="opt">持久的雙向連線，雙方隨時傳資料</button>
+</div>
+
+<div class="quiz" data-question="Webhooks 適用於哪種場景？" data-correct="1" data-explain="Webhooks 是伺服器對伺服器的事件驅動通訊，適合支付完成、訂單狀態更新等事件通知。">
+  <button class="opt">用戶端即時聊天</button>
+  <button class="opt">伺服器間的事件通知</button>
+  <button class="opt">低頻的天氣資料查詢</button>
+  <button class="opt">雙向的即時遊戲</button>
+</div>
+
+<div class="quiz" data-question="以下哪種模式的資源消耗最低？" data-correct="2" data-explain="WebSockets 連線建立後幾乎零開銷，Webhooks 只在事件發生時才有流量，兩者都遠比 Polling 省資源。">
+  <button class="opt">Polling</button>
+  <button class="opt">Long-Polling</button>
+  <button class="opt">WebSockets 和 Webhooks</button>
+  <button class="opt">四種都一樣</button>
+</div>
+
+<div class="quiz" data-question="在系統設計面試中，被問「該用哪種通訊模式」，第一步應該確認什麼？" data-correct="3" data-explain="先問清楚是哪種場景：用戶端即時、伺服器間通知、還是低頻更新，不同場景適合不同模式。">
+  <button class="opt">選擇最便宜的方案</button>
+  <button class="opt">選擇最流行的方案</button>
+  <button class="opt">選擇技術團隊最熟悉的方案</button>
+  <button class="opt">確認場景：用戶端即時、伺服器間通知、還是低頻更新</button>
+</div>
+
+<p class="footer">恭喜完成架構模式所有步驟！</p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

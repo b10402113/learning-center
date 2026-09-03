@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>資料最佳化：壓縮與去重</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>資料最佳化：壓縮與去重</h1>
+<p class="meta">system-design · data-strategies · Step 2/5</p>
+
+<h2>學習目標</h2>
+<p>比較資料壓縮與重複數據刪除的差異，理解兩種技術各自適用的場景與優缺點。</p>
+
+<h2>一個簡單的問題</h2>
+
+<p>假設你有一個 10 GB 的資料備份。每週備份一次，一年下來就是 520 GB。但實際上，每週只有不到 1% 的資料發生了變化——剩下的 99% 都是重複的。有沒有辦法不浪費這 99% 的空間？</p>
+
+<p>壓縮和去重是兩種不同的解決思路，它們都在減少儲存空間，但方法完全不同。</p>
+
+<h2>資料壓縮：讓檔案變小</h2>
+
+<p><strong>資料壓縮（Data Compression）</strong>是用更少的位元來表示同樣的資訊。核心原理是找出資料中的冗餘模式，用更簡潔的方式重新編碼。</p>
+
+<p>壓縮分兩種：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>類型</th>
+      <th>原理</th>
+      <th>範例</th>
+      <th>特點</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>無損壓縮（Lossless）</strong></td>
+      <td>壓縮後可以完全還原為原始資料</td>
+      <td>ZIP、Gzip、Brotli</td>
+      <td>適用於文字、程式碼、資料庫備份</td>
+    </tr>
+    <tr>
+      <td><strong>有損壓縮（Lossy）</strong></td>
+      <td>壓縮後會丟失部分資訊，無法完全還原</td>
+      <td>JPEG、MP3、H.264</td>
+      <td>適用於圖片、音訊、影片</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>你在做 REST API 時可能見過 Gzip 壓縮——伺服器把 response body 壓縮後傳給瀏覽器，瀏覽器收到後解壓縮。這就是無損壓縮的典型應用：文字（JSON、HTML）的壓縮比很高，壓縮後體積大幅縮小，但解壓縮後和原始資料完全一樣。</p>
+
+<p>壓縮的工作範圍是<strong>單一檔案或資料流</strong>。它看的是「這份資料內部有什麼冗餘可以消除」，不關心其他檔案。</p>
+
+<h2>資料去重：消除重複的區塊</h2>
+
+<p><strong>資料去重（Data Deduplication）</strong>是找出系統中重複的資料區塊，只保留一份，其他用指標（pointer）替代。</p>
+
+<p>運作流程：</p>
+
+<ol>
+  <li>系統把資料切成固定大小的區塊（chunk）</li>
+  <li>為每個區塊計算指紋（hash）</li>
+  <li>如果兩個區塊的指紋相同，只保留一份，另一份用指標替代</li>
+</ol>
+
+<p>用備份的例子：你有 52 個週備份，每個 10 GB。去重後，只有一週的資料是完整儲存的，其餘 51 週中與之前重複的區塊全部用指標替代。實際儲存空間可能只需要 15-20 GB，而不是 520 GB。</p>
+
+<p>去重的工作範圍是<strong>整個儲存系統</strong>。它看的是「跨多份資料之間有什麼重複可以消除」。</p>
+
+<h2>關鍵差異</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>維度</th>
+      <th>資料壓縮</th>
+      <th>資料去重</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>作用範圍</strong></td>
+      <td>單一檔案或資料流</td>
+      <td>跨整個儲存系統</td>
+    </tr>
+    <tr>
+      <td><strong>消除對象</strong></td>
+      <td>檔案內部的冗餘</td>
+      <td>跨檔案的重複區塊</td>
+    </tr>
+    <tr>
+      <td><strong>還原方式</strong></td>
+      <td>解壓縮（lossless 可完全還原）</td>
+      <td>透過指標重新組裝</td>
+    </tr>
+    <tr>
+      <td><strong>適用場景</strong></td>
+      <td>減少單一檔案大小、加速傳輸</td>
+      <td>大規模儲存系統的空間優化</td>
+    </tr>
+    <tr>
+      <td><strong>計算開銷</strong></td>
+      <td>壓縮/解壓縮即時運算</td>
+      <td>需要額外的 hash 計算和索引管理</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>什麼時候用什麼？</h2>
+
+<p><strong>用壓縮</strong>：你需要減少單一檔案的大小，或加速網路傳輸。例如：API response 用 Gzip 壓縮、靜態資源用 Brotli 壓縮、資料庫備份用 ZIP 壓縮後上傳到雲端。</p>
+
+<p><strong>用去重</strong>：你在管理大規模儲存系統，同一份資料會被儲存多次。例如：備份系統（每週備份大部分內容重複）、虛擬機映像（多個 VM 共享相同的 OS 区塊）、文件版本控制系統（Git 的 packfile 就是一種去重）。</p>
+
+<p><strong>兩者並用</strong>：很多系統會同時使用兩種技術。例如：先壓縮每個檔案，再去重跨檔案的重複區塊。這在備份和災難恢復系統中很常見。</p>
+
+<h2>面試中的關鍵點</h2>
+
+<ul>
+  <li>能區分壓縮（檔案內部優化）和去重（跨檔案優化）的作用範圍</li>
+  <li>能解釋無損壓縮和有損壓縮的差異與適用場景</li>
+  <li>能說明去重的指紋比對機制</li>
+  <li>能根據場景選擇合適的優化策略</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>壓縮減少單一檔案的大小（內部冗餘），去重消除跨檔案的重複區塊。壓縮適合加速傳輸和減少單檔空間，去重適合大規模儲存的空間優化。兩者互補，常在備份系統中並用。</p>
+
+<div class="quiz" data-question="資料壓縮的核心工作範圍是什麼？" data-correct="2" data-explain="壓縮作用於單一檔案或資料流，找出內部的冗餘模式用更簡潔的方式編碼。">
+  <button class="opt">跨多個檔案消除重複</button>
+  <button class="opt">整個儲存系統的空間優化</button>
+  <button class="opt">單一檔案或資料流內部的冗餘</button>
+  <button class="opt">網路傳輸的加密</button>
+</div>
+
+<div class="quiz" data-question="無損壓縮和有損壓縮的關鍵區別是什麼？" data-correct="1" data-explain="無損壓縮可以完全還原原始資料，適合文字和程式碼；有損壓縮會丟失部分資訊，適合圖片、音訊、影片。">
+  <button class="opt">無損壓縮速度更快</button>
+  <button class="opt">無損壓縮可完全還原，有損壓縮會丟失部分資訊</button>
+  <button class="opt">有損壓縮的壓縮比更低</button>
+  <button class="opt">無損壓縮只適用於圖片</button>
+</div>
+
+<div class="quiz" data-question="資料去重為什麼特別適合備份系統？" data-correct="0" data-explain="備份系統中每週備份大部分內容重複，去重只保留一份、其餘用指標替代，能節省大量空間。">
+  <button class="opt">因為備份中大量區塊重複，去重能節省大量空間</button>
+  <button class="opt">因為備份不需要壓縮</button>
+  <button class="opt">因為去重的速度比壓縮快</button>
+  <button class="opt">因為備份系統不需要還原資料</button>
+</div>
+
+<div class="quiz" data-question="你在 REST API 中使用 Gzip 壓縮 response body，這屬於哪種優化？" data-correct="3" data-explain="Gzip 壓縮作用於單一 response body（單一資料流），減少傳輸大小，屬於壓縮而非去重。">
+  <button class="opt">資料去重</button>
+  <button class="opt">有損壓縮</button>
+  <button class="opt">快取策略</button>
+  <button class="opt">無損壓縮（減少單一檔案/資料流的大小）</button>
+</div>
+
+<div class="quiz" data-question="去重系統如何判斷兩個區塊是否重複？" data-correct="1" data-explain="系統為每個區塊計算 hash 指紋，如果兩個區塊的 hash 相同，就認為是重複的，只保留一份。">
+  <button class="opt">逐位元比較兩個區塊</button>
+  <button class="opt">計算區塊的 hash 指紋進行比對</button>
+  <button class="opt">比較檔案名稱</button>
+  <button class="opt">比較檔案大小</button>
+</div>
+
+<div class="quiz" data-question="如果要優化一個有 100 個虛擬機映像的儲存系統，最有效的策略是？" data-correct="2" data-explain="虛擬機映像共享相同的 OS 區塊，去重能消除跨映像的重複區塊，節省大量空間。單純壓縮每個映像效果有限。">
+  <button class="opt">只用壓縮</button>
+  <button class="opt">只用加密</button>
+  <button class="opt">先壓縮再去重</button>
+  <button class="opt">不需要優化</button>
+</div>
+
+<p class="footer">上一步：<a href="cache-strategies.html">快取策略</a> · 下一步：<a href="replication-strategies.html">複製策略</a></p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

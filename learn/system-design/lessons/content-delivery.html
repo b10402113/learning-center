@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>負載均衡與內容分發</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>負載均衡與內容分發</h1>
+<div class="meta">YouTube/Netflix · Step 6/6</div>
+
+<div class="learning-goal">
+  <h2>學習目標</h2>
+  <p>設計適合影片串流的負載均衡策略、快取機制與 CDN 內容分發架構，提升全球使用者的觀看體驗。</p>
+</div>
+
+<section>
+  <h2>最後一哩路：讓影片送到使用者面前</h2>
+  <p>前面五課我們已經設計了需求、估算了容量、畫了架構、建了資料模型、建了處理管線。但系統還差最後一塊拼圖：<strong>如何把影片高效地送到全球數億使用者面前</strong>。</p>
+  <p>YouTube 的讀取流量是 TB 級的——每秒 1.38 TB 的資料要從伺服器送到使用者的裝置上。這不是單台伺服器能承擔的，必須依賴<strong>負載均衡</strong>、<strong>快取</strong>和<strong>CDN</strong>三層機制。</p>
+</section>
+
+<section>
+  <h2>負載均衡（Load Balancing）</h2>
+  <p>負載均衡器（Load Balancer）負責把使用者的請求分散到多台伺服器上。在 YouTube 的架構中，負載均衡出現在兩個層面：</p>
+  <p><strong>API 層的負載均衡</strong>——把搜尋、評論、統計查詢等 API 請求分散到多台 API 伺服器。這裡可以使用<strong>一致性雜湊（Consistent Hashing）</strong>，根據影片 ID 把請求導向特定的快取節點，提高快取命中率。</p>
+  <p><strong>影片串流的負載均衡</strong>——把影片播放請求分散到多個 CDN 節點或快取伺服器。這裡的挑戰是：不同影片的熱度差異很大。一部熱門影片可能每秒有數萬次觀看，而一部冷門影片可能一天只有幾次觀看。</p>
+  <p>一致性雜湊的問題在於：如果某部影片突然爆紅，對應的邏輯副本會承受巨大壓力。解決方案是<strong>複製熱門影片</strong>——把熱門影片複製到多個物理節點，分散壓力。</p>
+</section>
+
+<section>
+  <h2>快取策略</h2>
+  <p>快取（Cache）是 YouTube 讀取效能的核心。快取出現在多個層面：</p>
+  <p><strong>元資料快取</strong>——把熱門影片的標題、描述、觀看次數等元資料快取到 Redis 或 Memcached 中。元資料的讀取頻率極高（每次播放都要讀取），但資料量小，適合放在記憶體快取中。</p>
+  <p><strong>影片快取</strong>——把熱門影片的影片片段快取到邊緣節點。影片檔案很大，不可能全部快取，所以只快取最熱門的那 20%——它們通常貢獻了 80% 的流量（帕累托法則）。</p>
+  <p><strong>縮圖快取</strong>——縮圖是每次搜尋結果頁面都需要載入的，必須快取到 CDN。縮圖很小（100-200 KB），快取成本低但效果顯著。</p>
+  <p>快取的關鍵挑戰是<strong>快取失效（Cache Invalidation）</strong>——當影片被刪除或元資料更新時，快取中的舊資料需要被清除。常見策略是 TTL（Time To Live，存活時間）：快取資料在一段時間後自動過期。</p>
+</section>
+
+<section>
+  <h2>CDN（Content Delivery Network）</h2>
+  <p>CDN 是 YouTube 全球內容分發的核心。CDN 是一個由全球數千個節點組成的網路，每個節點都快取了部分熱門內容。</p>
+  <p>CDN 的工作原理：</p>
+  <p><strong>1. DNS 導向</strong>——當使用者請求一部影片時，CDN 的 DNS 伺服器會根據使用者的地理位置，把他導向最近的邊緣節點。</p>
+  <p><strong>2. 邊緣節點服務</strong>——如果邊緣節點有這部影片的快取，直接回傳給使用者，延遲很低。如果沒有（cache miss），邊緣節點會向上一層的區域伺服器或源頭伺服器請求，然後快取起來供後續請求使用。</p>
+  <p><strong>3. 內容推送</strong>——YouTube 會主動把熱門影片推送到 CDN 的邊緣節點，而不是等使用者請求後才快取。這叫做<strong>預推送（Pre-fetching）</strong>，確保熱門內容隨時可用。</p>
+  <p>CDN 帶來的好處：</p>
+  <p><strong>低延遲</strong>——使用者從最近的節點取得影片，延遲大幅降低。</p>
+  <p><strong>減少源頭壓力</strong>——大部分請求都被邊緣節點消化，源頭伺服器只需要處理少量的 cache miss。</p>
+  <p><strong>高可用</strong>——即使某個 CDN 節點故障，請求會被導向其他節點。</p>
+</section>
+
+<section>
+  <h2>讀取流程的完整路徑</h2>
+  <p>把負載均衡、快取、CDN 串起來，一個完整的影片讀取流程是：</p>
+  <p>1. 使用者點擊播放 → 2. DNS 導向最近的 CDN 節點 → 3. CDN 節點檢查快取 → 4. 命中：直接回傳影片串流；未命中：向上游請求 → 5. 同時，元資料從 Redis 快取中取得 → 6. 使用者開始播放</p>
+  <p>整個流程的延遲目標是<strong>200 毫秒以內</strong>開始播放。這需要每一層都足夠快：DNS 解析、CDN 快取命中、影片串流的前幾個片段的傳輸。</p>
+</section>
+
+<section>
+  <h2>你的經驗怎麼連結？</h2>
+  <p>你用過 Redis 做快取，YouTube 的快取策略本質上就是你熟悉的 Redis 快取的放大版。差別在於：YouTube 的快取是<strong>多層的</strong>（記憶體 → SSD → CDN 邊緣 → 源頭），而且需要處理<strong>全球分發</strong>的問題。一致性雜蹐你在前面的課中學過，這裡直接用上了——它解決了快取節點之間的負載均衡問題。</p>
+</section>
+
+<section>
+  <h2>自我檢測</h2>
+
+  <div class="quiz" data-question="YouTube 的影片快取為什麼只快取最熱門的 20%？" data-correct="1" data-explain="帕累托法則：最熱門的 20% 影片貢獻了 80% 的流量，快取它們的效益最高。">
+    <button class="opt">因為快取容量有限</button>
+    <button class="opt">因為最熱門的 20% 影片貢獻了 80% 的流量</button>
+    <button class="opt">因為冷門影片不需要快取</button>
+    <button class="opt">因為快取只支援 20% 的容量</button>
+  </div>
+
+  <div class="quiz" data-question="CDN 如何決定把使用者導向哪個節點？" data-correct="2" data-explain="CDN 的 DNS 伺服器根據使用者的地理位置，把他導向最近的邊緣節點。">
+    <button class="opt">隨機選擇</button>
+    <button class="opt">根據使用者的訂閱數</button>
+    <button class="opt">根據使用者的地理位置</button>
+    <button class="opt">根據影片的熱度</button>
+  </div>
+
+  <div class="quiz" data-question="一致性雜湊在 YouTube 架構中解決什麼問題？" data-correct="0" data-explain="一致性雜﨑確保同一部影片的請求導向同一個快取節點，提高快取命中率，同時在節點增減時最小化資料遷移。">
+    <button class="opt">快取節點之間的負載均衡和資料分布</button>
+    <button class="opt">影片加密</button>
+    <button class="opt">縮圖生成</button>
+    <button class="opt">使用者認證</button>
+  </div>
+
+  <div class="quiz" data-question="什麼是快取失效（Cache Invalidation）？" data-correct="3" data-explain="當源資料更新或刪除時，快取中的舊資料需要被清除或更新，這是快取系統最難處理的問題之一。">
+    <button class="opt">快取容量滿了需要清理</button>
+    <button class="opt">快取伺服器當機了</button>
+    <button class="opt">使用者清除了瀏覽器快取</button>
+    <button class="opt">源資料更新時，快取中的舊資料需要被清除或更新</button>
+  </div>
+
+  <div class="quiz" data-question="YouTube 讀取流程的延遲目標大約是多少？" data-correct="1" data-explain="使用者點擊播放後，200 毫秒以內應該開始播放，這需要每一層都足夠快。">
+    <button class="opt">20 毫秒</button>
+    <button class="opt">200 毫秒</button>
+    <button class="opt">2 秒</button>
+    <button class="opt">20 秒</button>
+  </div>
+</section>
+
+<div class="source">
+  <strong>延伸閱讀：</strong>DesignGuru — Designing YouTube or Netflix § Load Balancing · Cache · CDN
+</div>
+
+<div class="footer">
+  <p>有不清楚的地方？問你的老師！</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="video-processing.html">← 上一步：影片處理與去重</a>
+  <span></span>
+</nav>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

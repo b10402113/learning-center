@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>即時通訊模式比較 — 通訊與可靠度</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>即時通訊模式比較</h1>
+<p class="meta">系統設計面試 · 通訊與可靠度 · 步驟 1/3</p>
+
+<blockquote>
+<strong>學習目標</strong>：理解並比較 Polling、Long Polling、Server-Sent Events (SSE) 與 WebSocket 這幾種常見即時通訊模式的運作原理、優缺點與適用場景。
+</blockquote>
+
+<h2>問題背景</h2>
+
+<p>你做了一個聊天 App，使用者 A 發了一條訊息給使用者 B。問題是：B 的手機怎麼「即時」收到這條訊息？最直覺的做法是 B 的手機每隔幾秒問一次伺服器「有新訊息嗎？」——這就是 Polling。但這真的好嗎？</p>
+
+<p>在分散式系統中，客戶端與伺服器之間的通訊模式選擇，直接影響延遲、資源消耗和使用者體驗。面試中，當你被問到「怎麼設計一個即時通知系統」或「怎麼讓多個客戶端同步更新」，你需要在幾種通訊模式之間做出正確的取捨。</p>
+
+<h2>四種通訊模式</h2>
+
+<h3>1. Ajax Polling（輪詢）</h3>
+
+<p>最基本的方式。客戶端每隔一段固定時間就向伺服器發一次 HTTP 請求，問「有新資料嗎？」伺服器如果有新資料就回傳，沒有就回傳空的響應。</p>
+
+<table>
+<thead>
+<tr><th>特點</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td>運作方式</td><td>客戶端定期發送 HTTP 請求，伺服器立即回應</td></tr>
+<tr><td>優點</td><td>實現簡單，所有瀏覽器都支援</td></tr>
+<tr><td>缺點</td><td>大量空請求造成 HTTP 開銷；延遲等於輪詢間隔</td></tr>
+<tr><td>適用場景</td><td>對即時性要求不高的場景，如定期刷新的儀表板</td></tr>
+</tbody>
+</table>
+
+<p><strong>類比</strong>：像是每 5 分鐘打電話到快遞站問「我的包裹到了嗎？」——大部分時候答案是「還沒有」，但你不得不打。</p>
+
+<h3>2. HTTP Long Polling（長輪詢）</h3>
+
+<p>Polling 的改良版。客戶端發出請求後，如果伺服器沒有新資料，不會立即回應空的，而是<strong>hold 住這個連線</strong>，等到有新資料時才回應。回應後，客戶端再發一個新請求，重複這個過程。</p>
+
+<table>
+<thead>
+<tr><th>特點</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td>運作方式</td><td>伺服器 hold 住請求直到有新資料才回應，客戶端收到後立即發新請求</td></tr>
+<tr><td>優點</td><td>比 Polling 減少空請求；伺服器主動推送資料</td></tr>
+<tr><td>缺點</td><td>每個客戶端都佔用一個持久連線；伺服器資源消耗大</td></tr>
+<tr><td>適用場景</td><td>中等即時性需求，如通知系統、Facebook 即時留言</td></tr>
+</tbody>
+</table>
+
+<p><strong>類比</strong>：打電話到快遞站，「你先別掛，我幫你查」——一直hold著線，直到包裹到了才告訴你。掛掉後你再打一次，重複這個過程。</p>
+
+<h3>3. Server-Sent Events (SSE，伺服器推送事件)</h3>
+
+<p>SSE 是一種伺服器<strong>單向推送</strong>的機制。客戶端與伺服器建立一個持久的 HTTP 連線，伺服器可以主動把新資料推給客戶端，但客戶端不能透過這條連線向伺服器發資料（如果需要上傳，要用另一條連線）。</p>
+
+<table>
+<thead>
+<tr><th>特點</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td>運作方式</td><td>客戶端建立持久 HTTP 連線，伺服器主動推送資料</td></tr>
+<tr><td>優點</td><td>伺服器主動推送，延遲低；基於 HTTP，易於穿越防火牆；自動重連</td></tr>
+<tr><td>缺點</td><td>只能伺服器→客戶端單向；連線數量受限（HTTP/1.1 下瀏覽器限制）</td></tr>
+<tr><td>適用場景</td><td>單向即時推送，如股票行情、新聞推送、活動日誌</td></tr>
+</tbody>
+</table>
+
+<p><strong>類比</strong>：訂閱了新聞推送服務——有新消息時記者會主動寄給你，但你不能透過這條通道回覆記者。</p>
+
+<h3>4. WebSocket</h3>
+
+<p>WebSocket 提供<strong>全雙工（Full Duplex）</strong>通訊。客戶端透過一個「握手」過程將 HTTP 連線升級為 WebSocket 連線，之後雙方都可以隨時主動發送資料，不受「誰先請求」的限制。</p>
+
+<table>
+<thead>
+<tr><th>特點</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td>運作方式</td><td>透過 HTTP 握手升級為 WebSocket 連線，之後全雙工通訊</td></tr>
+<tr><td>優點</td><td>雙向即時通訊；延遲最低；連線 overhead 低（無重複 HTTP header）</td></tr>
+<tr><td>缺點</td><td>實現複雜度高；需要處理連線管理、斷線重連；某些代理/防火牆可能阻擋</td></tr>
+<tr><td>適用場景</td><td>雙向即時通訊，如聊天室、多人遊戲、協作編輯</td></tr>
+</tbody>
+</table>
+
+<p><strong>類比</strong>：兩人之間拉了一條專屬電話線——隨時可以互相打過去，不用等對方先打來。</p>
+
+<h2>比較總覽</h2>
+
+<table>
+<thead>
+<tr><th>模式</th><th>方向</th><th>即時性</th><th>資源消耗</th><th>實現難度</th></tr>
+</thead>
+<tbody>
+<tr><td>Polling</td><td>客戶端→伺服器</td><td>低（等於輪詢間隔）</td><td>高（大量空請求）</td><td>低</td></tr>
+<tr><td>Long Polling</td><td>伺服器→客戶端</td><td>中</td><td>中（每客戶端一條持久連線）</td><td>中</td></tr>
+<tr><td>SSE</td><td>伺服器→客戶端</td><td>高</td><td>低</td><td>中</td></tr>
+<tr><td>WebSocket</td><td>雙向</td><td>最高</td><td>低</td><td>高</td></tr>
+</tbody>
+</table>
+
+<h2>如何選擇？</h2>
+
+<p>選擇哪種模式取決於三個問題：</p>
+<ol>
+<li><strong>需要雙向通訊嗎？</strong> 如果只需要伺服器推資料給客戶端，SSE 就夠了；如果需要雙向，選 WebSocket。</li>
+<li><strong>對延遲的容忍度？</strong> 延遲敏感（如遊戲、聊天）用 WebSocket；延遲不敏感可以用 Long Polling。</li>
+<li><strong>客戶端數量和伺服器資源？</strong> 大量客戶端用 SSE 或 WebSocket（連線數少）；少量客戶端 Long Polling 也可以接受。</li>
+</ol>
+
+<h2>在面試中怎麼用？</h2>
+
+<p>當你被問到即時通訊相關的系統設計題（如設計 Facebook Messenger、設計即時通知系統），你可以按照這個思路：</p>
+<ol>
+<li><strong>先確認需求</strong>：是單向推送還是雙向通訊？即時性要求多高？</li>
+<li><strong>選擇模式</strong>：根據上面的比較表做出選擇，並解釋取捨。</li>
+<li><strong>考慮退化</strong>：WebSocket 不支援的客戶端退化為 Long Polling；SSE 不支援時退化為 Polling。</li>
+</ol>
+
+<div class="quiz" data-question="Polling 最大的問題是什麼？" data-correct="2" data-explain="Polling 的核心問題是大量空請求——客戶端反覆詢問，但大部分時候伺服器沒有新資料，這些空回應造成 HTTP 開銷。">
+<button class="opt">延遲太高</button>
+<button class="opt">實現太複雜</button>
+<button class="opt">大量空請求造成 HTTP 開銷</button>
+<button class="opt">只支援單向通訊</button>
+</div>
+
+<div class="quiz" data-question="Long Polling 比 Polling 好在哪裡？" data-correct="1" data-explain="Long Polling 讓伺服器 hold 住請求直到有新資料才回應，避免了 Polling 的大量空請求問題。">
+<button class="opt">延遲更低</button>
+<button class="opt">減少空請求</button>
+<button class="opt">支援雙向通訊</button>
+<button class="opt">實現更簡單</button>
+</div>
+
+<div class="quiz" data-question="SSE（Server-Sent Events）的主要限制是什麼？" data-correct="3" data-explain="SSE 只能伺服器向客戶端單向推送資料，客戶端不能透過同條連線向伺服器發送資料。">
+<button class="opt">延遲太高</button>
+<button class="opt">需要特殊協議</button>
+<button class="opt">無法穿越防火牆</button>
+<button class="opt">只能單向通訊（伺服器→客戶端）</button>
+</div>
+
+<div class="quiz" data-question="WebSocket 為什麼能提供最低延遲？" data-correct="0" data-explain="WebSocket 透過握手將 HTTP 連線升級為全雙工連線，之後雙方隨時可以發送資料，無需每次請求都帶完整 HTTP header。">
+<button class="opt">全雙工連線，雙方可隨時發送資料</button>
+<button class="opt">使用 UDP 協議</button>
+<button class="opt">壓縮了所有資料</button>
+<button class="opt">快取了所有回應</button>
+</div>
+
+<div class="quiz" data-question="設計一個股票行情系統，最適合用哪種通訊模式？" data-correct="2" data-explain="股票行情是單向推送（伺服器→客戶端），且需要高即時性，SSE 是最合適的選擇。">
+<button class="opt">Polling</button>
+<button class="opt">Long Polling</button>
+<button class="opt">SSE</button>
+<button class="opt">WebSocket</button>
+</div>
+
+<div class="quiz" data-question="WebSocket 連線是如何建立的？" data-correct="1" data-explain="WebSocket 透過一個 HTTP 握手過程將已有的 HTTP 連線升級為 WebSocket 連線。">
+<button class="opt">直接建立 TCP 連線</button>
+<button class="opt">透過 HTTP 握手升級連線</button>
+<button class="opt">使用 UDP 協議</button>
+<button class="opt">透過 SMTP 協議</button>
+</div>
+
+<p class="footer">下一步：<a href="./heartbeat-mechanism.html">Heartbeat 存活偵測機制</a> — 確保連線依然存活的機制</p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

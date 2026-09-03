@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>核心元件設計 — Dropbox 系統設計</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<h1>核心元件設計</h1>
+<p class="subtitle">Dropbox 系統設計 · Step 3/5</p>
+
+<section>
+<h2>學習目標</h2>
+<p>詳細設計每個核心元件，說明其職責、互動方式與設計選擇取捨。</p>
+</section>
+
+<section>
+<h2>元件一：客戶端（Client）</h2>
+<p>客戶端是安裝在用戶設備上的應用程式，它是整個系統的入口。客戶端做三件事：</p>
+<ul>
+<li><strong>監控工作區</strong>：持續監聽用戶指定的資料夾，偵測檔案的新增、修改、刪除事件</li>
+<li><strong>分塊上傳</strong>：將變更的檔案切成 4 MB 的分塊（chunk），逐塊上傳到雲端儲存</li>
+<li><strong>本地資料庫</strong>：維護一份本地的檔案元數據副本，用於快速比對哪些分塊需要同步</li>
+</ul>
+<p>本地資料庫的存在有一個關鍵好處：<strong>增量同步</strong>。當用戶修改一個 100 MB 的檔案時，客戶端可以比對本地資料庫，發現只有第 3 個分塊變了，於是只上傳這一個分塊——而不是重新上傳整個檔案。</p>
+
+<h3>客戶端的狀態機</h3>
+<p>客戶端有三種狀態：</p>
+<table>
+<thead><tr><th>狀態</th><th>行為</th></tr></thead>
+<tbody>
+<tr><td>上線（Online）</td><td>即時同步變更到雲端</td></tr>
+<tr><td>離線（Offline）</td><td>將變更記錄在本地隊列，等待上線後重播</td></tr>
+<tr><td>同步中（Syncing）</td><td>正在上傳/下載分塊，使用者看到進度條</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2>元件二：元數據資料庫（Metadata Database）</h2>
+<p>元數據資料庫儲存所有檔案的描述資訊。它的設計選擇直接影响系統的查詢效能和一致性。</p>
+
+<h3>儲存什麼？</h3>
+<ul>
+<li><strong>檔案資訊</strong>：檔名、路徑、大小、建立/修改時間、 MIME 類型</li>
+<li><strong>版本歷史</strong>：每個檔案的版本鏈，每個版本對應一組分塊 ID</li>
+<li><strong>分塊索引</strong>：檔案由哪些分塊組成、每個分塊的雜湊值和儲存位置</li>
+<li><strong>用戶資訊</strong>：帳號、設備列表、工作區設定</li>
+<li><strong>共享與權限</strong>：誰可以存取哪些檔案/資料夾</li>
+</ul>
+
+<h3>資料庫選型</h3>
+<p>可以用關聯式資料庫（MySQL、PostgreSQL）或 NoSQL（DynamoDB）。關鍵考量：</p>
+<ul>
+<li><strong>關聯式</strong>：適合複雜查詢（如「列出某用戶所有共享檔案」）、強一致性</li>
+<li><strong>NoSQL</strong>：適合高寫入吞吐、水平擴展</li>
+</ul>
+<p>實際系統中，Dropbox 可能混合使用：核心元數據走 MySQL（需要 ACID），分享/評論等社交功能走 NoSQL。</p>
+</section>
+
+<section>
+<h2>元件三：同步服務（Synchronization Service）</h2>
+<p>同步服務是整個架構最核心的元件。它做三件事：</p>
+<ol>
+<li><strong>接收更新</strong>：從消息隊列的請求隊列中拉取客戶端的變更通知</li>
+<li><strong>更新元數據</strong>：將變更寫入元數據資料庫（新版本、新分塊索引）</li>
+<li><strong>通知訂閱者</strong>：將更新推送到響應隊列，讓其他設備拉取</li>
+</ol>
+
+<h3>長輪詢（Long Polling）</h3>
+<p>客戶端如何知道有新更新？同步服務使用<strong>長輪詢</strong>：客戶端發送一個 HTTP 請求，服務端不會立即回應，而是等到有新更新時才返回。如果一段時間沒有更新，服務端返回空回應，客戶端再發新請求。這比傳統輪詢更高效——不需要每秒打一次伺服器。</p>
+</section>
+
+<section>
+<h2>元件四：消息隊列（Message Queuing Service）</h2>
+<p>消息隊列是同步服務和客戶端之間的橋樑。它有兩個通道：</p>
+
+<h3>請求隊列（Request Queue）</h3>
+<p>全局共享。所有客戶端往裡面寫更新通知（「用戶 A 的檔案 X 的第 3 個分塊更新了」）。同步服務從這裡拉取所有更新。</p>
+
+<h3>響應隊列（Response Queue）</h3>
+<p>每個客戶端各一個。同步服務把屬於該客戶端的更新推送到這裡。客戶端上線後，從自己的響應隊列中拉取所有待處理的更新。</p>
+
+<h3>為什麼用消息隊列？</h3>
+<ul>
+<li><strong>解耦</strong>：客戶端不需要直接連線同步服務</li>
+<li><strong>可靠性</strong>：設備離線時更新不會丟失</li>
+<li><strong>擴展性</strong>：可以水平擴展消息隊列來處理更多客戶端</li>
+</ul>
+</section>
+
+<section>
+<h2>元件五：雲端/區塊儲存（Cloud/Block Storage）</h2>
+<p>儲存實際的檔案分塊。客戶端直接與雲端儲存互動上傳和下載，不需要經過同步服務。</p>
+
+<h3>為什麼要分塊？</h3>
+<ul>
+<li><strong>增量同步</strong>：只傳輸變更的分塊，不是整個檔案</li>
+<li><strong>並行傳輸</strong>：多個分塊可以同時上傳/下載</li>
+<li><strong>容錯</strong>：傳輸失敗只需重傳一個分塊</li>
+<li><strong>去重</strong>：相同內容的分塊只存一份（用雜湊值比對）</li>
+</ul>
+
+<h3>儲存選型</h3>
+<p>物件儲存（如 Amazon S3、Google Cloud Storage）是首選：幾乎無限擴展、低成本、高持久性（99.999999999%）。也可以用自建的區塊儲存伺服器。</p>
+</section>
+
+<section class="quiz-section">
+<h2>自我檢測</h2>
+
+<div class="quiz" data-question="客戶端的本地資料庫有什麼關鍵好處？" data-correct="1" data-explain="本地資料庫讓客戶端可以比對哪些分塊實際變了，只上傳變更的分塊——實現增量同步。">
+<button class="opt">加速檔案搜尋</button>
+<button class="opt">實現增量同步，只上傳變更的分塊</button>
+<button class="opt">減少雲端儲存成本</button>
+<button class="opt">支援更多檔案格式</button>
+</div>
+
+<div class="quiz" data-question="同步服務使用什麼機制讓客戶端得知有新更新？" data-correct="2" data-explain="長輪詢比傳統輪詢更高效：客戶端發請求後，服務端等到有更新才回應，而不是每秒輪詢一次。">
+<button class="opt">WebSocket 連線</button>
+<button class="opt">傳統輪詢（每秒打一次）</button>
+<button class="opt">長輪詢（等到有更新才回應）</button>
+<button class="opt">伺服器推送（Server Push）</button>
+</div>
+
+<div class="quiz" data-question="消息隊列的「響應隊列」有什麼特點？" data-correct="0" data-explain="每個客戶端各有一個響應隊列，用來接收專屬於自己的更新通知。">
+<button class="opt">每個客戶端各一個，接收專屬更新</button>
+<button class="opt">全局共享，所有客戶端共用</button>
+<button class="opt">只有同步服務能寫入</button>
+<button class="opt">用來儲存檔案內容</button>
+</div>
+
+<div class="quiz" data-question="為什麼檔案要分成 4 MB 的分塊？" data-correct="3" data-explain="分塊後可以只傳輸變更的部分、支援並行傳輸、失敗只需重傳一小塊、相同分塊可以去重。">
+<button class="opt">為了加密更方便</button>
+<li class="opt">為了減少總儲存空間</li>
+<button class="opt">為了支援更多檔案格式</button>
+<button class="opt">增量同步、並行傳輸、容錯、去重</button>
+</div>
+
+<div class="quiz" data-question="元數據資料庫可以用什麼類型的資料庫？" data-correct="1" data-explain="關聯式資料庫（MySQL/PostgreSQL）適合複雜查詢和強一致性；NoSQL（DynamoDB）適合高寫入吞吐和水平擴展。實際系統可能混合使用。">
+<button class="opt">只能用 SQLite</button>
+<button class="opt">關聯式或 NoSQL，視需求選擇</button>
+<button class="opt">只能用 MongoDB</button>
+<button class="opt">只能用 Redis</button>
+</div>
+
+</section>
+
+<div class="lesson-nav">
+<a href="./high-level-architecture.html">← 上一步：高層次系統架構</a>
+<a href="./file-sync-workflow.html">下一步：檔案同步工作流程 →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

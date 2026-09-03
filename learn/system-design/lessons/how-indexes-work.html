@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>索引如何運作 — 索引</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>索引如何運作</h1>
+<p class="meta">system-design · indexes · Step 2/4</p>
+
+<blockquote>
+<strong>學習目標</strong>：理解索引背後常見的資料結構（B-tree、雜湊索引）以及它們如何實現快速查找。
+</blockquote>
+
+<h2>為什麼不是簡單的排序陣列？</h2>
+
+<p>最直覺的索引方式是把資料排好序存在陣列裡，然後用二分查找（Binary Search）找目標——時間複雜度 O(log n)。看起來很快，但有一個致命問題：<strong>插入和刪除太慢</strong>。</p>
+
+<p>在有序陣列中插入一個新元素，你需要把後面所有元素往後移動一位，時間複雜度 O(n)。如果你的資料表每天有幾百萬筆寫入，這種方案根本不可行。</p>
+
+<p>資料庫需要一種既能快速查找，又能高效插入刪除的資料結構——這就是 B 樹（B-tree）被選為預設索引結構的原因。</p>
+
+<h2>B 樹與 B+ 樹</h2>
+
+<h3>B 樹（B-tree）</h3>
+
+<p>B 樹是一種<strong>平衡多路搜索樹</strong>。關鍵詞是「平衡」和「多路」：</p>
+
+<ul>
+  <li><strong>平衡</strong>：所有葉子節點在同一層，查找路徑長度一致，不會有最壞情況</li>
+  <li><strong>多路</strong>：每個節點可以有多個子節點（不只是二元樹的左右兩個），所以樹的高度很低</li>
+</ul>
+
+<p>為什麼樹的高度很重要？因為資料庫的索引通常存在磁碟上，<strong>每一層節點對應一次磁碟讀取</strong>。一棵 3 層的 B 樹，查找時最多只需 3 次磁碟讀取——哪怕底下有幾億筆資料。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>資料量</th>
+      <th>B 樹高度（每節點 1000 個鍵）</th>
+      <th>磁碟讀取次數</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>1,000 筆</td><td>1 層</td><td>1 次</td></tr>
+    <tr><td>1,000,000 筆</td><td>2 層</td><td>2 次</td></tr>
+    <tr><td>1,000,000,000 筆</td><td>3 層</td><td>3 次</td></tr>
+  </tbody>
+</table>
+
+<h3>B+ 樹（B+ tree）——實際的王者</h3>
+
+<p>B+ 樹是 B 樹的改進版，也是絕大多數關聯式資料庫（MySQL InnoDB、PostgreSQL）<strong>實際使用的索引結構</strong>。它做了兩個關鍵改進：</p>
+
+<ol>
+  <li><strong>資料只存葉子節點</strong>：非葉子節點只存索引鍵（作為導航路標），不存實際資料。這讓每個非葉子節點能塞更多鍵，樹更矮，查找更快。</li>
+  <li><strong>葉子節點用鏈表串聯</strong>：所有葉子節點串成一個有序鏈表。這意味著<strong>範圍查詢</strong>（如 <code>WHERE age BETWEEN 20 AND 30</code>）可以直接沿著鏈表掃描，不用回到樹的上層。</li>
+</ol>
+
+<p>用一個類比：B 樹像是一本書的正文——每一頁都有內容。B+ 樹像是一本書的目錄 + 正文——目錄只有標題和頁碼（導航），正文全在最後的頁面裡，而且頁面之間有裝訂線可以順序翻閱。</p>
+
+<h2>雜湊索引（Hash Index）</h2>
+
+<p>雜湊索引用完全不同的思路：它對索引鍵做<strong>雜湊運算</strong>（Hash Function），直接算出資料的存放位置。等值查詢（<code>WHERE id = 42</code>）的時間複雜度可以達到 O(1)——比 B+ 樹的 O(log n) 更快。</p>
+
+<p>但雜湊索引有嚴重的限制：</p>
+
+<ul>
+  <li><strong>不支援範圍查詢</strong>——<code>WHERE age > 20</code> 沒法用雜湊索引，因為雜湊值不保留原始順序</li>
+  <li><strong>不支援排序</strong>——<code>ORDER BY</code> 無法利用雜湊索引</li>
+  <li><strong>可能發生碰撞</strong>——不同的鍵可能雜湊到同一個位置，需要額外處理</li>
+</ul>
+
+<p>所以雜湊索引只適用於<strong>純等值查詢</strong>的場景，例如 Redis 這類記憶體資料庫。</p>
+
+<h2>查找過程對比</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>操作</th>
+      <th>全表掃描</th>
+      <th>B+ 樹索引</th>
+      <th>雜湊索引</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>等值查詢</td>
+      <td>O(n)</td>
+      <td>O(log n)</td>
+      <td>O(1)</td>
+    </tr>
+    <tr>
+      <td>範圍查詢</td>
+      <td>O(n)</td>
+      <td>O(log n + k)</td>
+      <td>不支援</td>
+    </tr>
+    <tr>
+      <td>排序</td>
+      <td>O(n log n)</td>
+      <td>已排序，直接讀</td>
+      <td>不支援</td>
+    </tr>
+    <tr>
+      <td>磁碟讀取</td>
+      <td>全表掃過</td>
+      <td>3-4 次</td>
+      <td>1 次（記憶體中）</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>面試中的關鍵點</h2>
+
+<p>在面試中談到索引時，你需要能解釋：</p>
+
+<ul>
+  <li>為什麼 B+ 樹是預設選擇（平衡查找和寫入、支援範圍查詢）</li>
+  <li>雜湊索引什麼時候有用（純等值查詢、記憶體資料庫）</li>
+  <li>樹的高度為什麼重要（每一層 = 一次磁碟讀取）</li>
+</ul>
+
+<p>這些是你從「用過索引」到「理解索引」的分水嶺。</p>
+
+<h2>小結</h2>
+
+<p>索引的快速查找來自底層資料結構的精心設計。B+ 樹用平衡多路搜索樹實現 O(log n) 的查找和高效的範圍查詢，雜湊索引用哈希表實現 O(1) 的等值查找。理解這些結構，你才能在面試中解釋為什麼某些查詢快、某些慢。下一步，我們看看索引帶來的寫入效能取捨。</p>
+
+<div class="quiz" data-question="為什麼資料庫選擇 B+ 樹而不是簡單的排序陣列作為索引？" data-correct="2" data-explain="排序陣列的插入和刪除需要移動元素，時間複雜度 O(n)，對高寫入場景不可行。">
+  <button class="opt">排序陣列佔用更多磁碟空間</button>
+  <button class="opt">排序陣列不支援查找</button>
+  <button class="opt">排序陣列的插入和刪除效率太差</button>
+  <button class="opt">排序陣列不支援二分查找</button>
+</div>
+
+<div class="quiz" data-question="B+ 樹相比 B 樹的關鍵改進是什麼？" data-correct="1" data-explain="B+ 樹把資料全部存到葉子節點，非葉子節點只做導航，讓樹更矮；葉子節點用鏈表串聯，支援範圍查詢。">
+  <button class="opt">B+ 樹的高度更高</button>
+  <button class="opt">資料只存葉子節點，葉子用鏈表串聯</button>
+  <button class="opt">B+ 樹不支援範圍查詢</button>
+  <button class="opt">B+ 樹每個節點只存一個鍵</button>
+</div>
+
+<div class="quiz" data-question="雜湊索引的最大限制是什麼？" data-correct="0" data-explain="雜湊值不保留原始順序，所以範圍查詢和排序無法利用雜湊索引。">
+  <button class="opt">不支援範圍查詢和排序</button>
+  <button class="opt">查找速度比 B+ 樹慢</button>
+  <button class="opt">不支援等值查詢</button>
+  <button class="opt">佔用太多磁碟空間</button>
+</div>
+
+<div class="quiz" data-question="一棵 B+ 樹索引有 10 億筆資料，大約需要幾次磁碟讀取？" data-correct="2" data-explain="每個節點存幾百到上千個鍵，10 億筆資料的 B+ 樹高度大約 3-4 層，每次讀取一層。">
+  <button class="opt">10 次</button>
+  <button class="opt">100 次</button>
+  <button class="opt">3-4 次</button>
+  <button class="opt">1000 次</button>
+</div>
+
+<div class="quiz" data-question="B+ 樹的葉子節點用鏈表串聯有什麼好處？" data-correct="3" data-explain="範圍查詢可以直接沿著鏈表順序掃描，不用回到樹的上層反覆查找。">
+  <button class="opt">加快等值查詢速度</button>
+  <button class="opt">減少磁碟空間使用</button>
+  <button class="opt">讓樹更平衡</button>
+  <button class="opt">範圍查詢可以直接沿鏈表掃描</button>
+</div>
+
+<div class="quiz" data-question="雜湊索引最適合用在什麼場景？" data-correct="1" data-explain="純等值查詢且不需要範圍或排序的場景，例如記憶體資料庫中的鍵值查找。">
+  <button class="opt">需要範圍查詢的 OLAP 系統</button>
+  <button class="opt">純等值查詢的記憶體資料庫</button>
+  <button class="opt">需要排序的報表系統</button>
+  <button class="opt">需要全文搜索的文字資料庫</button>
+</div>
+
+<p class="footer">下一步：<a href="trade-offs-read-write.html">讀寫效能取捨</a> — 理解索引的代價</p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

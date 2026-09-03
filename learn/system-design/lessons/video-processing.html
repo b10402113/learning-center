@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>影片處理與去重</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>影片處理與去重</h1>
+<div class="meta">YouTube/Netflix · Step 5/6</div>
+
+<div class="learning-goal">
+  <h2>學習目標</h2>
+  <p>設計上傳影片的後續處理流程，包括轉碼、縮圖生成，並解決影片重複的問題。</p>
+</div>
+
+<section>
+  <h2>影片上傳後發生什麼？</h2>
+  <p>上一課提到，使用者上傳影片後，影片會被推送到處理佇列。但從「一部原始影片」到「使用者可以流暢播放的多種版本」，中間還有很多工作。這個過程就是<strong>影片處理管線（Video Processing Pipeline）</strong>。</p>
+  <p>影片處理是 CPU 密集型工作，一部 10 分鐘的 1080p 影片可能需要幾十分鐘的轉碼時間。所以 YouTube 必須建立一個<strong>非同步、可擴展的處理叢集</strong>，讓數千部影片同時被處理。</p>
+</section>
+
+<section>
+  <h2>轉碼（Encoding）</h2>
+  <p>轉碼是影片處理的核心。原始影片通常只有一種格式和解析度，但使用者的裝置和網路條件千差萬別：有人用 4K 電視，有人用 3G 手機。所以同一部影片需要轉成<strong>多種版本</strong>：</p>
+  <p><strong>解析度</strong>——4K（2160p）、1080p、720p、480p、360p。高解析度適合大螢幕和高速網路，低解析度適合小螢幕和慢速網路。</p>
+  <p><strong>編碼格式</strong>——H.264（相容性最廣）、H.265（壓縮效率更高，但支援度較低）、VP9（YouTube 自家格式）。不同格式有不同的壓縮效率和裝置相容性。</p>
+  <p><strong>位元率（Bitrate）</strong>——同一解析度下，高畫質影片需要更高的位元率。系統需要根據網路條件動態調整位元率，這就是<strong>自適應串流（Adaptive Streaming）</strong>的基礎。</p>
+  <p>一部原始影片可能需要轉成 10-20 個版本。這也是為什麼儲存需求會比原始檔案大好幾倍。</p>
+</section>
+
+<section>
+  <h2>縮圖生成（Thumbnail Generation）</h2>
+  <p>縮圖是使用者決定是否點擊觀看的關鍵。系統需要為每部影片自動生成幾張候選縮圖：</p>
+  <p><strong>自動截取</strong>——從影片中均勻取幾個時間點的畫面（如 25%、50%、75% 處），作為候選縮圖。</p>
+  <p><strong>創作者上傳</strong>——允許創作者上傳自訂縮圖。這是最常見的方式，因為創作者最了解哪個畫面最能吸引觀眾。</p>
+  <p>縮圖通常儲存為 JPEG 或 WebP 格式，大小在 100-200 KB 之間。縮圖會被快取到 CDN，確保載入速度夠快。</p>
+</section>
+
+<section>
+  <h2>影片去重（Video Deduplication）</h2>
+  <p>在一個有數億使用者的平台上，影片重複是一個嚴重的問題。重複影片的來源很多：</p>
+  <p><strong>完全相同</strong>——同一部影片被不同使用者多次上傳。可能是盗版，也可能是使用者不小心重複上傳。</p>
+  <p><strong>近似相同</strong>——同一部影片的不同版本，比如不同的解析度、編碼格式、或加了水印/邊框。</p>
+  <p><strong>部分相同</strong>——一部長影片的片段被單獨上傳，或者不同影片中包含相同的片段。</p>
+  <p>重複影片的影響有三方面：</p>
+  <p><strong>儲存浪費</strong>——完全相同的影片不需要儲存多份。YouTube 每天上傳數百萬部影片，即使只有 5% 是重複的，也浪費了大量儲存空間。</p>
+  <p><strong>搜尋體驗</strong>——搜尋結果中出現大量重複內容，使用者體驗很差。</p>
+  <p><strong>推薦品質</strong>——推薦系統如果把重複影片推薦給使用者，會降低推薦品質。</p>
+</section>
+
+<section>
+  <h2>去重的方法</h2>
+  <p><strong>指紋比對（Fingerprinting）</strong>——為每部影片生成一個「指紋」——一組代表影片內容的數學特徵。上傳新影片時，先與現有影片的指紋比對。如果指紋高度相似，就判定為重複。YouTube 使用的 Content ID 系統就是基於這種技術。</p>
+  <p><strong>雜湊比對</strong>——計算影片檔案的雜湊值（如 MD5 或 SHA-256）。完全相同的檔案會有相同的雜湊值。但這種方法只能檢測完全相同的檔案，無法處理近似重複。</p>
+  <p><strong>感知雜湊（Perceptual Hashing）</strong>——更進階的方法，能檢測視覺上相似的影片，即使編碼不同或經過裁剪。pHash（Perceptual Hash）是常用的一種。</p>
+  <p>實際系統通常<strong>組合使用</strong>多種方法：先用快速的雜湊過濾完全相同的檔案，再用指紋比對檢測近似重複。</p>
+</section>
+
+<section>
+  <h2>處理管線的架構</h2>
+  <p>整個影片處理管線可以拆成幾個獨立的服務：</p>
+  <p><strong>上傳服務</strong>——接收使用者上傳的影片，驗證格式，推送到佇列。</p>
+  <p><strong>轉碼服務</strong>——從佇列取出影片，並行轉成多種版本。轉碼服務需要能<strong>水平擴展</strong>——新增機器就能處理更多影片。</p>
+  <p><strong>縮圖服務</strong>——生成影片縮圖。</p>
+  <p><strong>去重服務</strong>——在轉碼前或轉碼後，比對影片指紋，決定是否跳過儲存。</p>
+  <p><strong>儲存服務</strong>——把處理後的影片和縮圖寫入物件儲存。</p>
+  <p>這些服務之間透過<strong>訊息佇列</strong>（如 Kafka）連接，確保每個服務可以獨立擴展，不會互相阻塞。</p>
+</section>
+
+<section>
+  <h2>你的經驗怎麼連結？</h2>
+  <p>你用過 Redis 和 Postgres，但可能沒處理過大檔案的非同步處理。YouTube 的影片處理管線本質上是一個<strong>工作管線（Job Pipeline）</strong>：接收任務 → 排隊 → 處理 → 儲存。這跟你之前用過的 Background Job 概念一樣，只是 YouTube 要同時處理數千個「任務」，每個任務需要幾十分鐘的 CPU 時間。</p>
+</section>
+
+<section>
+  <h2>自我檢測</h2>
+
+  <div class="quiz" data-question="為什麼同一部影片需要轉成多種版本？" data-correct="1" data-explain="不同使用者的裝置和網路條件不同，需要不同解析度和編碼格式來適配。">
+    <button class="opt">為了節省儲存空間</button>
+    <button class="opt">為了適配不同裝置和網路條件</button>
+    <button class="opt">為了加密影片</button>
+    <button class="opt">為了增加觀看次數</button>
+  </div>
+
+  <div class="quiz" data-question="影片去重的主要方法是什麼？" data-correct="2" data-explain="為每部影片生成數學指紋，上傳新影片時比對指紋，高度相似就判定為重複。">
+    <button class="opt">比較檔案名稱</button>
+    <button class="opt">由人工審核</button>
+    <button class="opt">指紋比對（Fingerprinting）</button>
+    <button class="opt">比較上傳時間</button>
+  </div>
+
+  <div class="quiz" data-question="影片處理管線為什麼要使用訊息佇列？" data-correct="0" data-explain="佇列讓上傳和處理解耦，每個服務可以獨立擴展，不會互相阻塞。">
+    <button class="opt">讓各服務解耦，可以獨立擴展</button>
+    <button class="opt">為了加密影片</button>
+    <button class="opt">為了節省網路頻寬</button>
+    <button class="opt">為了減少伺服器數量</button>
+  </div>
+
+  <div class="quiz" data-question="一部原始影片轉碼後通常會產生多少個版本？" data-correct="3" data-explain="同一部影片需要轉成 10-20 個版本（不同解析度、編碼格式、位元率）。">
+    <button class="opt">1-2 個版本</button>
+    <button class="opt">3-5 個版本</button>
+    <button class="opt">5-8 個版本</button>
+    <button class="opt">10-20 個版本</button>
+  </div>
+
+  <div class="quiz" data-question="Content ID 系統的核心技術是什麼？" data-correct="1" data-explain="Content ID 基於影片指紋比對技術，能檢測重複或侵權內容。">
+    <button class="opt">人工審核</button>
+    <button class="opt">影片指紋比對</button>
+    <button class="opt">文字搜尋</button>
+    <button class="opt">使用者檢舉</button>
+  </div>
+</section>
+
+<div class="source">
+  <strong>延伸閱讀：</strong>DesignGuru — Designing YouTube or Netflix § Detailed Component Design · Video Deduplication
+</div>
+
+<div class="footer">
+  <p>有不清楚的地方？問你的老師！</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="data-modeling.html">← 上一步：資料建模與元數據分片</a>
+  <a href="content-delivery.html">下一步：負載均衡與內容分發 →</a>
+</nav>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

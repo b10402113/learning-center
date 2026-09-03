@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Twitter Search 系統設計</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Twitter Search 系統設計</h1>
+<p class="meta">Step 1/4 · Twitter Search &amp; Web Crawler</p>
+
+<h2>學習目標</h2>
+<p>掌握 Twitter Search 系統的需求分析、容量估算、倒排索引設計、儲存分區、快取與負載均衡策略，並能在面試中從零畫出完整架構圖。</p>
+
+<h2>問題定義</h2>
+<p>Twitter 使用者可以隨時發推文（tweet），每條推文是一段純文字。我們的目標是設計一個系統，讓使用者能在所有推文中快速搜尋關鍵字。</p>
+
+<p>跟一般的 NoSQL CRUD 不同，搜尋的本質是「找出包含特定詞的所有推文」，這需要一個完全不同的資料結構——倒排索引（Inverted Index）。</p>
+
+<h2>需求與目標</h2>
+<table>
+<tr><th>指標</th><th>數值</th></tr>
+<tr><td>總使用者數</td><td>15 億</td></tr>
+<tr><td>日活躍使用者（DAU）</td><td>8 億</td></tr>
+<tr><td>每日新推文數</td><td>4 億條</td></tr>
+<tr><td>平均每條推文大小</td><td>300 bytes</td></tr>
+<tr><td>每日搜尋次數</td><td>5 億次</td></tr>
+<tr><td>搜尋查詢格式</td><td>多個詞，以 AND/OR 組合</td></tr>
+</table>
+
+<p>核心需求：系統要能高效地儲存推文，並支援快速查詢。搜尋延遲目標在數百毫秒內。</p>
+
+<h2>容量估算</h2>
+<h3>儲存容量</h3>
+<p>每天新增推文的原始儲存量：</p>
+<pre><code>4 億條 × 300 bytes = 120 GB/天</code></pre>
+<p>換算成每秒的寫入速率：</p>
+<pre><code>120 GB ÷ 24 ÷ 3600 ≈ 1.38 MB/秒</code></pre>
+<p>如果規劃五年儲存，考慮 80% 磁碟使用率上限：</p>
+<pre><code>120 GB × 365 天 × 5 年 ≈ 200 TB
+200 TB ÷ 0.8 ≈ 250 TB</code></pre>
+
+<h3>搜尋流量</h3>
+<p>每天 5 億次搜尋，假設均勻分佈：</p>
+<pre><code>5 億 ÷ 86400 ≈ 5,800 QPS（查詢/秒）</code></pre>
+<p>尖峰時段取 2 倍，約 11,600 QPS。</p>
+
+<h2>系統 API</h2>
+<p>搜尋 API 的基本介面：</p>
+<pre><code>search(api_dev_key, search_terms, max_results, sort, page_token)</code></pre>
+<p>參數說明：</p>
+<ul>
+<li><code>api_dev_key</code>：開發者金鑰，用於限流與配額管理</li>
+<li><code>search_terms</code>：搜尋關鍵字，多個詞以 AND/OR 連接</li>
+<li><code>max_results</code>：單頁回傳的最大結果數</li>
+<li><code>sort</code>：排序方式（時間、相關性、熱門度）</li>
+<li><code>page_token</code>：分頁用的 token</li>
+</ul>
+
+<h2>高層次架構</h2>
+<p>系統有兩個核心資料流：</p>
+<ol>
+<li><strong>寫入路徑</strong>：推文產生 → 寫入儲存 → 建立/更新索引</li>
+<li><strong>讀取路徑</strong>：搜尋請求 → 查詢索引 → 回傳結果</li>
+</ol>
+<p>高層次架構圖：</p>
+<pre><code>使用者 → 負載均衡 → 應用伺服器 → 索引伺服器 → 儲存層
+                          ↓
+                       快取層（Memcached）</code></pre>
+<p>關鍵洞察：我們需要一個倒排索引，記錄每個詞出現在哪些推文中。這是搜尋系統的核心資料結構。</p>
+
+<h2>細部元件設計：儲存與倒排索引</h2>
+<h3>倒排索引的結構</h3>
+<p>倒排索引是搜尋引擎的靈魂。它的邏輯是：正向索引是「推文 → 包含哪些詞」，而倒排索引反過來，是「詞 → 出現在哪些推文」。</p>
+
+<p>例如，假設有三條推文：</p>
+<table>
+<tr><th>推文 ID</th><th>內容</th></tr>
+<tr><td>T1</td><td>我愛台北的天氣</td></tr>
+<tr><td>T2</td><td>台北今天下雨</td></tr>
+<tr><td>T3</td><td>我喜歡晴天</td></tr>
+</table>
+
+<p>建立倒排索引後：</p>
+<table>
+<tr><th>詞</th><th>出現的推文 ID 列表</th></tr>
+<tr><td>我</td><td>[T1, T3]</td></tr>
+<tr><td>愛</td><td>[T1]</td></tr>
+<tr><td>台北</td><td>[T1, T2]</td></tr>
+<tr><td>天氣</td><td>[T1]</td></tr>
+<tr><td>今天</td><td>[T2]</td></tr>
+<tr><td>下雨</td><td>[T2]</td></tr>
+<tr><td>喜歡</td><td>[T3]</td></tr>
+<tr><td>晴天</td><td>[T3]</td></tr>
+</table>
+
+<p>搜尋「台北」時，直接查索引表拿到 [T1, T2]，再從推文儲存中取出完整內容。搜尋「我 AND 台北」則取交集：[T1, T3] ∩ [T1, T2] = [T1]。</p>
+
+<h3>儲存分區策略</h3>
+<p>250 TB 的索引不可能放在單台機器上。按推文 ID 分區（Hash 分區）是最直觀的方式：</p>
+<ul>
+<li>每台機器負責一部分推文 ID 範圍</li>
+<li>搜尋時必須查詢所有分區，再合併結果</li>
+<li>也可以按時間分區：最近的推文在 SSD，較舊的在 HDD</li>
+</ul>
+
+<p>另一種策略是按詞分區（Partition by term）：把不同詞的倒排索引放在不同機器。搜尋時只需查詢相關詞所在的分區。缺點是熱門詞（如「的」）會造成熱點。</p>
+
+<p>實務上常見的混合策略是：先按推文 ID 分區建立索引，搜詢時並行查詢所有分區，再在應用層合併排序。</p>
+
+<h2>快取策略</h2>
+<p>搜尋結果有明顯的時間局部性（temporal locality）：熱門話題在短時間內會被大量搜尋。</p>
+<ul>
+<li><strong>快取什麼</strong>：熱門搜尋的結果集</li>
+<li><strong>快取在哪</strong>：應用伺服器前方的 Memcached / Redis 集群</li>
+<li><strong>淘汰策略</strong>：LRU（Least Recently Used）最適合搜尋場景</li>
+<li><strong>快取失效</strong>：新推文寫入時，相關搜尋的快取需要失效（invalidate）</li>
+</ul>
+
+<blockquote>
+快取不是萬靈丹。搜尋查詢的組合是天文數字，命中率通常只有 20-30%。快取的價值在於降低那 20-30% 熱門查詢的延遲，而非減少整體後端壓力。
+</blockquote>
+
+<h2>負載均衡</h2>
+<p>系統有兩個負載均衡層：</p>
+<ol>
+<li><strong>使用者 → 應用伺服器</strong>：Round Robin 分配請求，簡單有效</li>
+<li><strong>應用伺服器 → 索引伺服器</strong>：需要根據分區策略路由，確保查詢到正確的分區</li>
+</ol>
+
+<h2>排名機制</h2>
+<p>搜尋結果的排序直接影響使用者體驗。常見的排名因子：</p>
+<ul>
+<li><strong>相關性</strong>：關鍵字在推文中的出現頻率（TF-IDF 思路）</li>
+<li><strong>熱門度</strong>：按讚數、轉推數、回覆數的綜合分數</li>
+<li><strong>時效性</strong>：越新的推文排名越靠前</li>
+<li><strong>社交關係</strong>：使用者關注的人發的推文加分</li>
+</ul>
+
+<p>排名計算可以在查詢時即時做（query-time ranking），也可以預先計算好（pre-computed ranking）存到索引中。預先計算能加速查詢，但需要額外的儲存和更新成本。</p>
+
+<h2>容錯設計</h2>
+<p>索引伺服器故障時：</p>
+<ul>
+<li>每台索引伺服器都有 secondary 副本（replica）</li>
+<li>Primary 故障後，secondary 自動接管（failover）</li>
+<li>如果 primary 和 secondary 同時故障，需要從頭重建索引</li>
+</ul>
+
+<p>重建索引的方法：回放所有推文的寫入日誌（write-ahead log），從頭建立倒排索引。這就是為什麼推文的原始儲存不能丟——它是索引重建的唯一來源。</p>
+
+<h2>面試要點</h2>
+<blockquote>
+在面試中，Twitter Search 的關鍵是先討論倒排索引的設計，再討論分區策略。很多候選人會跳過倒排索引直接談架構，這是本末倒置——沒有索引設計，架構無從談起。
+</blockquote>
+
+<div class="lesson-nav">
+<div></div>
+<div><a href="./web-crawler-overview.html">下一步：網路爬蟲基礎與需求分析 →</a></div>
+</div>
+
+<h2>複習測驗</h2>
+
+<div class="quiz" data-question="搜尋系統的核心資料結構是什麼？" data-correct="1" data-explain="倒排索引記錄每個詞出現在哪些文件中，是搜尋引擎的基礎。">
+<button class="opt">正向索引（Forward Index）</button>
+<button class="opt">倒排索引（Inverted Index）</button>
+<button class="opt">B+ 樹（B+ Tree）</button>
+<button class="opt">雜湊表（Hash Table）</button>
+</div>
+
+<div class="quiz" data-question="Twitter Search 每天新增推文的原始儲存量約是多少？" data-correct="2" data-explain="4 億條 × 300 bytes = 120 GB/天。">
+<button class="opt">12 GB/天</button>
+<button class="opt">1.2 GB/天</button>
+<button class="opt">120 GB/天</button>
+<button class="opt">1.2 TB/天</button>
+</div>
+
+<div class="quiz" data-question="搜尋「台北 OR 下雨」時，倒排索引的查詢操作是什麼？" data-correct="0" data-explain="OR 查詢是取兩個詞的 posting list 的聯集（union）。">
+<button class="opt">取聯集（Union）</button>
+<button class="opt">取交集（Intersection）</button>
+<button class="opt">取差集（Difference）</button>
+<button class="opt">取補集（Complement）</button>
+</div>
+
+<div class="quiz" data-question="搜尋快取的淘汰策略為什麼選 LRU？" data-correct="2" data-explain="搜尋查詢有時間局部性：最近被搜尋的關鍵字很可能短期內再次被搜尋。">
+<button class="opt">因為 LRU 實作最簡單</button>
+<button class="opt">因為 LRU 不需要額外記憶體</button>
+<button class="opt">因為搜尋查詢有時間局部性</button>
+<button class="opt">因為 LRU 能保證命中率 100%</button>
+</div>
+
+<div class="quiz" data-question="索引伺服器的 primary 和 secondary 同時故障時，重建索引的資料來源是什麼？" data-correct="1" data-explain="原始推文的儲存（write-ahead log）是索引重建的唯一來源，這就是為什麼原始資料不能丟。">
+<button class="opt">從其他分區的索引複製</button>
+<button class="opt">回放推文的寫入日誌</button>
+<button class="opt">從快取中恢復</button>
+<button class="opt">重新爬取所有推文</button>
+</div>
+
+<div class="quiz" data-question="搜尋系統的儲存分區策略，按推文 ID 分區的主要缺點是什麼？" data-correct="3" data-explain="搜尋特定詞時必須查詢所有分區再合併，因為同一個詞的推文分散在不同分區。">
+<button class="opt">無法支援時間範圍查詢</button>
+<button class="opt">分區數量有上限</button>
+<button class="opt">寫入速度太慢</button>
+<button class="opt">搜尋時必須查詢所有分區</button>
+</div>
+
+<div class="footer">
+<p>學習路徑：系統設計面試 · Step 1/4</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>延遲 vs 吞吐量 — 一致性與效能</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>延遲 vs 吞吐量</h1>
+<p class="meta">系統設計面試 · 一致性與效能 · 步驟 3/4</p>
+
+<blockquote>
+<strong>學習目標</strong>：理解延遲與吞吐量的定義、差異，以及兩者之間的取捨關係與優化策略。
+</blockquote>
+
+<h2>兩種完全不同的「快」</h2>
+
+<p>在系統設計中，「快」這個字其實有兩種完全不同的含義。你說「這個系統很快」，可能是在說「使用者按下按鈕後很快就看到回應」（延遲低），也可能是在說「這個系統每秒能處理一百萬筆訂單」（吞吐量高）。這兩件事看起來都是「快」，但它們的衡量方式、優化手段和適用場景完全不同。</p>
+
+<p>搞混這兩個概念是系統設計面試中最常見的錯誤之一。面試官問你「如何提升系統效能」，如果你只回答其中一個，就暴露了你對效能問題的理解不夠全面。</p>
+
+<h2>延遲（Latency）</h2>
+
+<p><strong>延遲</strong>衡量的是<strong>延遲時間</strong>——一個請求從發出到收到回應要多久。用速食店來類比：延遲就是你從排隊點餐到拿到漢堡要等多久。不管有多少人在排隊，你關心的是「我的那一份要等多久」。</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>衡量單位</strong></td><td>毫秒（ms）、秒（s）——時間單位</td></tr>
+<tr><td><strong>核心問題</strong></td><td>一個請求要等多久？</td></tr>
+<tr><td><strong>影響</strong></td><td>延遲越高，使用者體驗越差——頁面載入慢、按鈕回應遲鈍</td></tr>
+<tr><td><strong>典型場景</strong></td><td>搜尋引擎（<100ms）、遊戲（<50ms）、即時通訊</td></tr>
+</tbody>
+</table>
+
+<p>在分散式系統中，延遲不只是網路傳輸的時間，還包括：DNS 解析時間、TCP 握手時間、SSL/TLS 交握時間、伺服器處理時間、資料庫查詢時間、序列化/反序列化時間。每一個環節都可能成為延遲的瓶頸。</p>
+
+<h2>吞吐量（Throughput）</h2>
+
+<p><strong>吞吐量</strong>衡量的是<strong>單位時間內能處理多少工作</strong>。同樣用速食店類比：吞吐量就是這家店每小時能賣出多少個漢堡。你不在意個別客人等多久，你在意的是整體的產出量。</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>衡量單位</strong></td><td>每秒請求數（RPS）、每秒位元組數（Mbps）——數量/時間單位</td></tr>
+<tr><td><strong>核心問題</strong></td><td>系統每秒能處理多少請求？</td></tr>
+<tr><td><strong>影響</strong></td><td>吞吐量不足會導致請求排隊、系統過載、回應變慢</td></tr>
+<tr><td><strong>典型場景</strong></td><td>批次處理、資料備份、圖片轉碼、資料管線</td></tr>
+</tbody>
+</table>
+
+<h2>核心差異</h2>
+
+<table>
+<thead>
+<tr><th>面向</th><th>延遲</th><th>吞吐量</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>關注點</strong></td><td>速度——單個請求的等待時間</td><td>容量——整體處理能力</td></tr>
+<tr><td><strong>使用者感受</strong></td><td>「這個 App 好慢」</td><td><strong>「這個系統處理不了我的大量資料」</strong></td></tr>
+<tr><td><strong>優化方向</strong></td><td>減少每個請求的處理時間</td><td>增加同時處理的請求數量</td></tr>
+<tr><td><strong>類比</strong></td><td>高速公路的限速</td><td>高速公路的車道數量</td></tr>
+</tbody>
+</table>
+
+<p>一個直觀的類比：高速公路。延遲是「從 A 城到 B 城要開多久」（限速決定），吞吐量是「每小時能通過多少輛車」（車道數決定）。你可以提高限速（降低延遲），也可以增加車道（提高吞吐量），但兩者的優化手段完全不同。</p>
+
+<h2>兩者之間的取捨</h2>
+
+<p>延遲和吞吐量並非總是矛盾的，但它們有時會互相影響：</p>
+
+<ul>
+<li><strong>批次處理提高吞吐量但增加延遲</strong>：把多個請求打包一起處理，整體吞吐量提升，但每個請求的等待時間增加了。例如：資料庫的 batch insert 比逐條 insert 快很多，但每筆資料要等批次完成才能確認。</li>
+<li><strong>並行處理降低延遲但可能降低吞吐量</strong>：把一個大任務拆成多個小任務同時處理，單個任務的完成時間縮短，但整體的資源使用效率可能下降（context switching 的開銷）。</li>
+<li><strong>快取可以同時改善兩者</strong>：把熱資料放在記憶體中，讀取延遲降低，同時減輕後端壓力，吞吐量也提升。這是少數能「兩全其美」的優化手段。</li>
+</ul>
+
+<h2>怎麼提升延遲？</h2>
+
+<ol>
+<li><strong>CDN（內容分發網路）</strong>：把靜態資源放到離使用者最近的節點，減少網路傳輸時間。</li>
+<li><strong>快取</strong>：把頻繁存取的資料放在記憶體中，避免每次都去資料庫查詢。</li>
+<li><strong>非同步處理</strong>：把不影響使用者體驗的操作（如發送通知、記錄日誌）放到背景執行，讓主請求快速返回。</li>
+<li><strong>優化資料庫查詢</strong>：建立索引、避免 N+1 查詢、使用連線池減少連線建立的開銷。</li>
+</ol>
+
+<h2>怎麼提升吞吐量？</h2>
+
+<ol>
+<li><strong>水平擴展</strong>：增加更多伺服器來分擔負載，比升級單台伺服器的硬體更有效。</li>
+<li><strong>平行處理</strong>：把大任務拆成多個小任務同時處理，充分利用多核心和多機器。</li>
+<li><strong>快取</strong>：減少重複計算和查詢，讓伺服器能處理更多有效請求。</li>
+<li><strong>訊息佇列</strong>：把突發流量暫存在佇列中，讓後端按自己的節奏處理，避免瞬間過載。</li>
+</ol>
+
+<h2>面試中的應用</h2>
+
+<p>面試官問「如何提升系統效能」時，一個好的回答應該同時涵蓋延遲和吞吐量兩個維度，並說明你為什麼選擇優化哪一個。例如：</p>
+
+<blockquote>
+「這個系統的主要瓶頸是延遲——使用者等待搜尋結果的時間超過了 2 秒。我會先用 CDN 和快取降低延遲。與此同時，我會監控吞吐量，確保系統在流量高峰期不會因為優化延遲而犧牲了整體處理能力。」
+</blockquote>
+
+<div class="quiz" data-question="延遲和吞吐量最根本的區別是什麼？" data-correct="2" data-explain="延遲關注的是單個請求的等待時間（速度），吞吐量關注的是整體處理能力（容量）。">
+<button class="opt">延遲衡量的是資料量，吞吐量衡量的是時間</button>
+<button class="opt">延遲只適用於網路系統，吞吐量只適用於資料庫</button>
+<button class="opt">延遲是單個請求的等待時間，吞吐量是整體處理能力</button>
+<button class="opt">延遲和吞吐量是同一件事的不同說法</button>
+</div>
+
+<div class="quiz" data-question="為什麼快取能同時改善延遲和吞吐量？" data-correct="1" data-explain="快取讓讀取延遲降低（不用查資料庫），同時減輕後端壓力讓伺服器能處理更多請求。">
+<button class="opt">因為快取增加了伺服器數量</button>
+<button class="opt">因為快取降低讀取延遲同時減輕後端壓力</button>
+<button class="opt">因為快取減少了網路頻寬的使用</button>
+<button class="opt">因為快取消除了所有資料庫查詢</button>
+</div>
+
+<div class="quiz" data-question="批次處理（batch processing）對延遲和吞吐量的影響分別是什麼？" data-correct="3" data-explain="批次處理把多個請求打包處理，整體吞吐量提升，但每個請求要等批次完成，延遲增加。">
+<button class="opt">延遲降低，吞吐量降低</button>
+<button class="opt">延遲降低，吞吐量提高</button>
+<button class="opt">延遲不變，吞吐量提高</button>
+<button class="opt">延遲增加，吞吐量提高</button>
+</div>
+
+<div class="quiz" data-question="以下哪個場景最需要關注延遲而非吞吐量？" data-correct="0" data-explain="即時遊戲對延遲極度敏感，延遲超過 50ms 就會影響遊戲體驗，而吞吐量（同時在線人數）相對次要。">
+<button class="opt">多人線上遊戲的即時互動</button>
+<button class="opt">每日凌晨的資料庫備份任務</button>
+<button class="opt">圖片轉碼管線</button>
+<button class="opt">月度報表的批次生成</button>
+</div>
+
+<div class="quiz" data-question="高速公路的「限速」和「車道數量」分別類比什麼？" data-correct="2" data-explain="限速決定單輛車從 A 到 B 要多久（延遲），車道數量決定每小時能通過多少輛車（吞吐量）。">
+<button class="opt">延遲和延遲</button>
+<button class="opt">吞吐量和吞吐量</button>
+<button class="opt">延遲和吞吐量</button>
+<button class="opt">吞吐量和延遲</button>
+</div>
+
+<div class="quiz" data-question="在分散式系統中，延遲的組成部分包括哪些？" data-correct="1" data-explain="延遲不只是網路傳輸時間，還包括 DNS 解析、TCP 握手、SSL 交握、伺服器處理、資料庫查詢、序列化等多個環節。">
+<button class="opt">只有網路傳輸時間</button>
+<button class="opt">DNS、TCP 握手、伺服器處理、資料庫查詢等多個環節</button>
+<button class="opt">只有伺服器的 CPU 處理時間</button>
+<button class="opt">只有資料庫的查詢時間</button>
+</div>
+
+<p class="footer">下一步：<a href="./acid-vs-base.html">ACID vs BASE</a> — 比較兩種資料庫一致性設計哲學</p>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

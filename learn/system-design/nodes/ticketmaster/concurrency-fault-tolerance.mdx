@@ -19,4 +19,18 @@ updated: 2026-09-02
 
 ## Lesson
 
+核心問題是：兩個用戶同時搶同一個座位怎麼辦？如果系統沒有做好併發控制，兩人都會看到「預訂成功」，但實際只有一個座位。這就是超賣（Overselling）問題。
+
+**Solution 1：SQL SERIALIZABLE 事務**。用最高的事務隔離級別，確保在事務執行期間其他事務無法修改被讀取的數據。SELECT 檢查座位狀態 → UPDATE 鎖定為 Reserved → COMMIT。但 SERIALIZABLE 的代價是鎖定範圍大、併發度低，高併發時會導致大量等待，可能成為瓶頸。
+
+**Solution 2：Redis SETNX 原子操作**。利用 `SETNX seat:show123:A10 "reserved" EX 900`，如果 key 不存在就設置（鎖定成功），已存在則失敗（已被別人鎖定）。SETNX 是原子操作，加上 EX 900（15 分鐘）自動過期，實現了「暫時鎖定 + 自動釋放」的機制。併發度高但只提供最終一致性。
+
+實際系統通常混合使用：Redis 做第一層快速鎖定（擋住 99% 的併發），SQL 事務做第二層持久化確認。
+
+容錯方面，ActiveReservationsService 崩潰後從 Booking 表中所有 Status = 'Reserved' 的記錄重建，或用主從複製自動切換。WaitingUsersService 崩潰的影響較小，因為等待隊列可重建（用戶可重新提交）且不會造成數據不一致。面試中重點講清楚超賣問題的本質、兩種方案的原理和比較、以及各服務的恢復策略。
+
+## Course
+
+[↗ 課程頁面](../../lessons/concurrency-fault-tolerance.html)
+
 ## Sources

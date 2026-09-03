@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>資料建模與元數據分片</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>資料建模與元數據分片</h1>
+<div class="meta">YouTube/Netflix · Step 4/6</div>
+
+<div class="learning-goal">
+  <h2>學習目標</h2>
+  <p>設計影片與使用者資料的數據庫 Schema，並選擇合適的元數據分片策略處理大規模數據。</p>
+</div>
+
+<section>
+  <h2>資料建模的重要性</h2>
+  <p>高層架構告訴你「系統由什麼組成」，資料建模告訴你「資料怎麼組織」。在 YouTube 這種規模的系統中，資料庫的設計直接影響查詢效能、擴展能力和維護成本。一個設計不好的 Schema，在小規模時看不出問題，但一旦資料量膨脹到十億級別，整個系統就會崩潰。</p>
+  <p>YouTube 的資料可以分成兩大類：<strong>影片元資料（Video Metadata）</strong>和<strong>使用者資料（User Data）</strong>。這兩類資料的存取模式不同，需要不同的儲存策略。</p>
+</section>
+
+<section>
+  <h2>影片元資料 Schema</h2>
+  <p>每部影片需要儲存以下元資料：</p>
+  <table>
+    <tr><th>欄位</th><th>類型</th><th>說明</th></tr>
+    <tr><td>VideoID</td><td>BIGINT / VARCHAR</td><td>影片的唯一識別碼</td></tr>
+    <tr><td>Title</td><td>VARCHAR</td><td>影片標題</td></tr>
+    <tr><td>Description</td><td>TEXT</td><td>影片描述</td></tr>
+    <tr><td>Size</td><td>BIGINT</td><td>影片檔案大小（位元組）</td></tr>
+    <tr><td>Thumbnail</td><td>VARCHAR</td><td>縮圖的 URL</td></tr>
+    <tr><td>Uploader</td><td>BIGINT</td><td>上傳者的 UserID</td></tr>
+    <tr><td>TotalLikes</td><td>BIGINT</td><td>總按讚數</td></tr>
+    <tr><td>TotalDislikes</td><td>BIGINT</td><td>總按踩數</td></tr>
+    <tr><td>TotalViews</td><td>BIGINT</td><td>總觀看次數</td></tr>
+  </table>
+  <p>評論（Comment）也需要獨立的 Schema：</p>
+  <table>
+    <tr><th>欄位</th><th>類型</th><th>說明</th></tr>
+    <tr><td>CommentID</td><td>BIGINT</td><td>評論的唯一識別碼</td></tr>
+    <tr><td>VideoID</td><td>BIGINT</td><td>所屬影片的 ID</td></tr>
+    <tr><td>UserID</td><td>BIGINT</td><td>留言者的 UserID</td></tr>
+    <tr><td>Content</td><td>TEXT</td><td>評論內容</td></tr>
+    <tr><td>CreatedAt</td><td>DATETIME</td><td>建立時間</td></tr>
+  </table>
+  <p>這些元資料通常存在關聯式資料庫（如 MySQL）中，因為它們是結構化資料，需要 ACID（Atomicity, Consistency, Isolation, Durability）保證。</p>
+</section>
+
+<section>
+  <h2>使用者資料 Schema</h2>
+  <p>使用者資料相對簡單：</p>
+  <table>
+    <tr><th>欄位</th><th>類型</th><th>說明</th></tr>
+    <tr><td>UserID</td><td>BIGINT</td><td>使用者的唯一識別碼</td></tr>
+    <tr><td>Name</td><td>VARCHAR</td><td>使用者名稱</td></tr>
+    <tr><td>Email</td><td>VARCHAR</td><td>電子郵件</td></tr>
+    <tr><td>RegistrationDate</td><td>DATETIME</td><td>註冊日期</td></tr>
+  </table>
+  <p>使用者資料的量遠小於影片資料，通常不需要分片。但當使用者達到數億級別時，仍然需要考慮分片策略。</p>
+</section>
+
+<section>
+  <h2>元數據分片策略</h2>
+  <p>當影片數量達到數十億，單台資料庫伺服器無法承擔讀取和寫入壓力，就需要<strong>分片（Sharding）</strong>——把資料分散到多台伺服器上。YouTube 的元資料分片有幾個常見策略：</p>
+  <p><strong>按 UserID 分片</strong>——把同一個使用者的所有影片和評論放在同一台伺服器。優點是「我的頁面」查詢很快（所有資料都在同一台機器）。缺點是熱門使用者（如擁有一億追蹤者的創作者）會造成<strong>熱點問題（Hotspot）</strong>——某台伺服器承擔過多壓力。</p>
+  <p><strong>按 VideoID 分片</strong>——把影片分散到不同伺服器，與使用者無關。優點是資料分布均勻。缺點是查詢「某個使用者的所有影片」需要跨多台伺服器聚合。</p>
+  <p><strong>按使用者地理位置分片</strong>——把不同地區的使用者資料放在就近的伺服器。優點是減少延遲。缺點是跨區查詢複雜。</p>
+  <p>實際上，YouTube 可能會<strong>混合使用</strong>多種策略：影片元資料按 VideoID 分片（保證均勻），使用者資料按地理位置分片（減少延遲），評論按 VideoID 分片（查詢某部影片的所有評論）。</p>
+</section>
+
+<section>
+  <h2>選擇分片鍵的原則</h2>
+  <p>分片鍵（Shard Key）的選擇是分片策略中最關鍵的決策。好壞標準：</p>
+  <p><strong>均勻性</strong>——資料要均勻分布在各分片上，避免某個分片承擔過多壓力。VideoID 比 UserID 更均勻，因為影片數量分佈比使用者活躍度分佈更平。</p>
+  <p><strong>查詢效率</strong>——常見的查詢要能高效執行。如果查詢「某個使用者的所有影片」很頻繁，按 UserID 分片更好；如果查詢「某部影片的評論」很頻繁，按 VideoID 分片更好。</p>
+  <p><strong>擴展性</strong>——新增分片時，資料遷移的成本要低。一致性雜湊可以減少資料遷移量。</p>
+</section>
+
+<section>
+  <h2>你的經驗怎麼連結？</h2>
+  <p>你用過 MySQL 和 Redis。YouTube 的元資料庫本質上就是你熟悉的 MySQL 的放大版。差別在於：你需要決定怎麼把一個巨大的 MySQL 表拆到多台機器上（分片），以及哪些資料放 MySQL（元資料）、哪些放物件儲存（影片檔案）、哪些放 Redis（熱門影片的快取）。這些你都用過，只是 YouTube 要求你在更大規模上思考。</p>
+</section>
+
+<section>
+  <h2>自我檢測</h2>
+
+  <div class="quiz" data-question="YouTube 影片元資料最適合存在哪種資料庫中？" data-correct="0" data-explain="影片元資料是結構化資料，需要 ACID 保證，適合關聯式資料庫如 MySQL。">
+    <button class="opt">關聯式資料庫（MySQL）</button>
+    <button class="opt">物件儲存（S3）</button>
+    <button class="opt">文件資料庫（MongoDB）</button>
+    <button class="opt">圖資料庫（Neo4j）</button>
+  </div>
+
+  <div class="quiz" data-question="按 UserID 分片的主要缺點是什麼？" data-correct="2" data-explain="熱門使用者（如擁有大量追蹤者的創作者）會造成熱點問題，某台伺服器承擔過多壓力。">
+    <button class="opt">查詢速度慢</button>
+    <button class="opt">儲存成本高</button>
+    <button class="opt">熱門使用者造成熱點問題</button>
+    <button class="opt">無法支援評論功能</button>
+  </div>
+
+  <div class="quiz" data-question="分片鍵的選擇最重要的標準是什麼？" data-correct="1" data-explain="資料要均勻分布在各分片上，避免某個分片承擔過多壓力，這是分片鍵選擇的首要原則。">
+    <button class="opt">查詢速度最快</button>
+    <button class="opt">資料分布均勻</button>
+    <button class="opt">最容易實作</button>
+    <button class="opt">最省儲存空間</button>
+  </div>
+
+  <div class="quiz" data-question="YouTube 的評論資料最適合按什麼分片？" data-correct="1" data-explain="評論的常見查詢是「查看某部影片的所有評論」，按 VideoID 分片可以讓這個查詢在同一台伺服器上完成。">
+    <button class="opt">按 UserID 分片</button>
+    <button class="opt">按 VideoID 分片</button>
+    <button class="opt">按時間分片</button>
+    <button class="opt">不需分片</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼影片檔案不適合存在關聯式資料庫中？" data-correct="3" data-explain="影片檔案很大（數十 MB 到數 GB），關聯式資料庫不適合存放大二進位物件，物件儲存才是正確選擇。">
+    <button class="opt">因為關聯式資料庫不支援文字</button>
+    <button class="opt">因為關聯式資料庫太慢</button>
+    <button class="opt">因為關聯式資料庫不夠安全</button>
+    <button class="opt">因為影片是大檔案，關聯式資料庫不適合存放大二進位物件</button>
+  </div>
+</section>
+
+<div class="source">
+  <strong>延伸閱讀：</strong>DesignGuru — Designing YouTube or Netflix § Database Schema · Metadata Sharding
+</div>
+
+<div class="footer">
+  <p>有不清楚的地方？問你的老師！</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="high-level-arch.html">← 上一步：高層架構設計</a>
+  <a href="video-processing.html">下一步：影片處理與去重 →</a>
+</nav>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -7,130 +7,133 @@
 <link rel="stylesheet" href="./assets/shared.css">
 </head>
 <body>
-<main>
-
-<p class="meta">ai-coding-for-real-engineer · agent-control · Step 3/4</p>
 
 <h1>用 bash 模式控制 agent 看得到的輸出</h1>
+<p class="meta">Step 3/4 · review diff、bash、風險控管</p>
 
-<div class="goal">
-<strong>學習目標</strong>：用 <code>!</code> 進入 bash mode、Ctrl-B 背景化長命令、Ctrl-Z 掛起 Claude 執行隱藏命令、<code>fg</code> 恢復，並依決策樹決定該讓 agent 看到哪些輸出，讓它有能力閉合與專案的 feedback loop。
+<div class="learning-goal">
+<strong>學習目標：</strong>用 <code>!</code> 進入 bash mode、Ctrl-B 背景化長命令、Ctrl-Z 掛起 Claude 執行隱藏命令、<code>fg</code> 恢復，並依決策樹決定該讓 agent 看到哪些輸出。
 </div>
 
-<h2>bash 命令 = 讓 agent 閉合 feedback loop</h2>
+<h2>從被動碼農到能互動的夥伴</h2>
 
-<p>只會寫程式的 agent 是「被動的碼農」：你叫它改、它改完就停。但 bash 命令讓它變成<strong>能跟專案互動的夥伴</strong>——它可以跑 typecheck、跑測試、起 dev server、curl 一下 API，然後<strong>看到結果、自己修問題</strong>。這就是閉合 feedback loop 的能力。</p>
+<p>如果 agent 只能寫代碼不能跑命令，它就像一個只會畫藍圖但不能試裝的建築師。Bash 模式讓 agent 從「被動的碼農」變成「<strong>能跟專案互動的夥伴</strong>」——它可以跑 typecheck、跑測試、起 dev server、curl API，然後看到結果、自己修問題。</p>
 
-<p>舉例：跑一次 <code>npm run typecheck</code>，錯誤訊息進入 Claude 的 context，它就能診斷「Zod 在 package.json 裡但沒裝」並幫你 <code>npm install</code>。你不必逐字複製錯誤給它看——它自己看到了。</p>
+<p>實際場景：跑一次 <code>npm run typecheck</code>，錯誤訊息進入 Claude 的 context，它就能診斷出「Zod 在 package.json 裡但沒裝」並幫你 <code>npm install</code>，不必你逐字複製錯誤給它。這就是<strong>閉合 feedback loop</strong>——agent 看到自己的輸出，自己修正，不需要人做中間人。</p>
 
 <h2>三種跑命令的方式</h2>
 
-<h3>1. Bash mode：輸出給 agent 看（<code>!</code>）</h3>
-
-<p>在輸入列開頭打一個 <code>!</code>，就進入 bash mode。接下來輸入的命令會被執行，<strong>輸出直接進到 Claude 的 context</strong>。</p>
-
-<pre><code>! npm run typecheck</code></pre>
-
-<p>適合「有開始有結束」的命令：typecheck、test、build、git status 這類一次跑完、輸出有意義的。</p>
-
-<h3>2. 背景化：長命令掛在背景（Ctrl-B）</h3>
-
-<p>dev server 這種<strong>永遠不會結束</strong>的命令，直接跑會卡住對話。解法是在命令執行中按 <code>Ctrl-B</code> 把它丟到背景：</p>
-
-<ul>
-  <li>輸出會寫到一個本機檔案，狀態列上會出現一個背景任務</li>
-  <li>用方向鍵往下捲、Enter，就能打開這個 shell 看它目前的輸出</li>
-  <li>不需要時可以按 <code>X</code> 停止</li>
-</ul>
-
-<p>這對<strong>除錯 dev server</strong> 特別有用：Claude 可以看到 server 的 log、去 UI 試一下、發個 curl，再回來看 server 印了什麼。整個循環在它眼前閉合。</p>
-
-<h3>3. 掛起：完全不讓 agent 看到（Ctrl-Z / <code>fg</code>）</h3>
-
-<p>有些命令你不想讓 Claude 看到輸出（或純粹想自己跑一下）。按 <code>Ctrl-Z</code> 會<strong>掛起 Claude Code</strong>，回到一般 shell；你在這裡跑任何命令都不會進 Claude 的 context。跑完輸入 <code>fg</code>，Claude 就恢復，狀態完好。</p>
-
-<div class="callout">
-<span class="label">注意</span>
-課程用的是 Windows 快捷鍵（Ctrl-B / Ctrl-Z）。在 Mac 上快捷鍵可能不同——用之前先查一下你平台的對應按鍵。
-</div>
-
-<h2>決策樹：該讓 agent 看到什麼？</h2>
+<p>差別在「<strong>誰看得到輸出</strong>」：</p>
 
 <table>
   <thead>
-    <tr><th>情境</th><th>做法</th></tr>
+    <tr>
+      <th>方式</th>
+      <th>操作</th>
+      <th>輸出去向</th>
+      <th>適合場景</th>
+    </tr>
   </thead>
   <tbody>
-    <tr><td>想讓 Claude 看到命令輸出</td><td><code>!</code> bash mode</td></tr>
-    <tr><td>同上，但命令很長、不想卡住</td><td><code>!</code> 之後按 Ctrl-B 背景化</td></tr>
-    <tr><td>不想讓 Claude 看到輸出</td><td>Ctrl-Z 掛起 → 跑命令 → <code>fg</code></td></tr>
+    <tr>
+      <td><strong>Bash mode（<code>!</code>）</strong></td>
+      <td>輸入列開頭打 <code>!</code>，接命令</td>
+      <td>直接進 Claude 的 context</td>
+      <td>typecheck / test / build（有開始有結束）</td>
+    </tr>
+    <tr>
+      <td><strong>背景化（Ctrl-B）</strong></td>
+      <td>執行中按 Ctrl-B</td>
+      <td>寫入本機檔案，狀態列可查看</td>
+      <td>dev server（永遠不會結束的命令）</td>
+    </tr>
+    <tr>
+      <td><strong>掛起（Ctrl-Z / <code>fg</code>）</strong></td>
+      <td>按 Ctrl-Z 掛起，跑完 <code>fg</code> 恢復</td>
+      <td>不進 Claude 的 context</td>
+      <td>你想私下確認的事</td>
+    </tr>
   </tbody>
 </table>
 
-<p>這個決策樹的深層意義是<strong>你控制 context 裡裝什麼</strong>。agent 看到的輸出就是它 context 的一部分——你想讓它「看到問題並自己修」，就把輸出餵給它；你想自己私下確認，就掛起。這預告了後面「context 是稀缺資源」的整個管理哲學。</p>
+<p><strong>Bash mode（<code>!</code>）</strong>是最常用的：打 <code>!</code> 接 <code>npm run typecheck</code>，typecheck 的輸出直接進入 Claude 的 context。它看到錯誤就能自己修。這是讓 agent 閉合 feedback loop 的核心工具。</p>
 
-<h2>小結</h2>
+<p><strong>背景化（Ctrl-B）</strong>是給「永遠不會結束的命令」用的，最典型的就是 dev server。執行中按 Ctrl-B，命令丟到背景，輸出寫入本機檔案——你從狀態列打開就能看 log。Claude 能看 log、去 UI 試、發 curl，再回來看 server 印了什麼。對除錯 dev server 特別有用。</p>
 
-<ul>
-  <li>bash 讓 agent 從被動寫碼變成能閉合 feedback loop 的夥伴</li>
-  <li><code>!</code> 進入 bash mode，輸出進 Claude context（適合 typecheck/test）</li>
-  <li>Ctrl-B 背景化長命令（dev server），log 可隨時查看</li>
-  <li>Ctrl-Z 掛起跑隱藏命令，<code>fg</code> 恢復；Mac 快捷鍵可能不同</li>
-  <li>核心：你決定 agent 的 context 裡看得到什麼</li>
-</ul>
+<p><strong>掛起（Ctrl-Z）</strong>是「不想讓它看到」的答案。按 Ctrl-Z 掛起 Claude Code 回到一般 shell，你在這裡跑的任何命令都不會進 Claude 的 context。跑完 <code>fg</code> 恢復原狀。注意課程用的是 Windows 快捷鍵，Mac 上可能不同。</p>
 
-<hr>
+<h2>決策樹</h2>
 
-<h2>自測</h2>
-<p>回答下面問題，確認你掌握了這堂課的重點：</p>
-
-<div class="quiz" data-question="在 Claude Code 中，哪個符號會進入 bash mode？" data-correct="3" data-explain="輸入列開頭打 ! 就進入 bash mode，命令輸出會進到 Claude 的 context。">
-  <button class="opt">#</button>
-  <button class="opt">$</button>
-  <button class="opt">@</button>
-  <button class="opt">!</button>
+<div class="analogy">
+<strong>決策樹：</strong><br>
+想讓 Claude 看到輸出？ → <code>!</code> bash mode（長命令再加 Ctrl-B 背景化）<br>
+不想讓它看到？ → Ctrl-Z 掛起
 </div>
 
-<div class="quiz" data-question="跑 npm run typecheck 這種命令，為什麼不該用 Ctrl-Z 掛起？" data-correct="1" data-explain="你希望 Claude 看到錯誤輸出、自己診斷修復，所以要用 bash mode 把輸出餵進它的 context。">
-  <button class="opt">因為 typecheck 會一直跑不完</button>
-  <button class="opt">因為你希望 Claude 看到錯誤並自己修</button>
-  <button class="opt">因為 typecheck 不是 bash 命令</button>
-  <button class="opt">因為掛起會刪掉 Claude 的狀態</button>
+<p>背後的深層意義是<strong>你控制 context 裡裝什麼</strong>。你想讓它「看到問題並自己修」，就把輸出餵給它；你想私下確認，就掛起。Context 不是垃圾桶——你餵什麼進去，它就會用什麼來推理。</p>
+
+<h2>閉合 Feedback Loop 的意義</h2>
+
+<p>Bash 模式真正的價值不是「能在終端跑命令」，而是讓 agent <strong>閉合 feedback loop</strong>：寫代碼 → 跑 typecheck → 看到錯誤 → 自己修 → 再跑 → 通過。沒有 bash mode，agent 每次寫完代碼都得等你手動跑命令、手動複製錯誤訊息、手動貼給它——feedback loop 是斷裂的，效率低落。</p>
+
+<p>這也預告了下一課 permissions 的邏輯：你知道它在看什麼、跑什麼，才談得上放權。Bash mode 讓你控制「它看得到什麼」，permissions 讓你控制「它能跑什麼」——兩者加起來，才是完整的 agent 控制。</p>
+
+<blockquote>
+<strong>口訣：! 跑給它看，Ctrl-Z 掛起不給看。</strong>Context 是 agent 的推理素材——你決定裝什麼，它就用什麼來思考。
+</blockquote>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="在 Claude Code 裡，什麼命令讓 agent 看到命令輸出？" data-correct="2" data-explain="! bash mode：輸入列開頭打 ! 接命令，輸出直接進 Claude 的 context。">
+  <button class="quiz-option opt">/run</button>
+  <button class="quiz-option opt">/exec</button>
+  <button class="quiz-option opt">! bash mode</button>
+  <button class="quiz-option opt">/terminal</button>
 </div>
 
-<div class="quiz" data-question="dev server 這種永遠不會結束的命令，該怎麼處理？" data-correct="2" data-explain="在 bash mode 執行中用 Ctrl-B 背景化，輸出寫入檔案，可隨時查看。">
-  <button class="opt">用 Ctrl-Z 掛起後就不管它</button>
-  <button class="opt">不跑，因為會卡住對話</button>
-  <button class="opt">用 Ctrl-B 背景化</button>
-  <button class="opt">用 ! 跑完它</button>
+<div class="quiz" data-question="dev server（永遠不會結束的命令）適合用什麼方式跑？" data-correct="1" data-explain="Ctrl-B 背景化：命令丟到背景，輸出寫入本機檔案，狀態列可查看。">
+  <button class="quiz-option opt">! bash mode</button>
+  <button class="quiz-option opt">Ctrl-B 背景化</button>
+  <button class="quiz-option opt">Ctrl-Z 掛起</button>
+  <button class="quiz-option opt">直接在另一個終端跑</button>
 </div>
 
-<div class="quiz" data-question="想私下跑一個不讓 Claude 看到的命令，正確步驟是？" data-correct="0" data-explain="Ctrl-Z 掛起 Claude → 在 shell 跑命令 → fg 恢復。">
-  <button class="opt">Ctrl-Z 掛起 → 跑命令 → fg</button>
-  <button class="opt">! 跑命令 → 忽略輸出</button>
-  <button class="opt">Ctrl-B 背景化 → 跑命令</button>
-  <button class="opt">關掉 Claude 再重開</button>
+<div class="quiz" data-question="如果你不想讓 agent 看到某個命令的輸出，該怎麼做？" data-correct="3" data-explain="Ctrl-Z 掛起 Claude Code，回到一般 shell 跑命令，輸出不會進 context，跑完 fg 恢復。">
+  <button class="quiz-option opt">用 /hide 命令</button>
+  <button class="quiz-option opt">打 ! 然後加 --no-context</button>
+  <button class="quiz-option opt">用 /private 命令</button>
+  <button class="quiz-option opt">Ctrl-Z 掛起 Claude，跑完 fg 恢復</button>
 </div>
 
-<div class="quiz" data-question="背景化命令的輸出存在哪裡？" data-correct="3" data-explain="輸出寫到一個本機檔案，狀態列會顯示背景任務，可打開查看。">
-  <button class="opt">只存在 Claude 的記憶體</button>
-  <button class="opt">直接刪除</button>
-  <button class="opt">存在雲端</button>
-  <button class="opt">寫到一個本機檔案</button>
+<div class="quiz" data-question="「閉合 feedback loop」是什麼意思？" data-correct="0" data-explain="agent 寫代碼 → 跑 typecheck → 看到錯誤 → 自己修 → 再跑 → 通過。整個過程不需要人做中間人。">
+  <button class="quiz-option opt">agent 寫代碼、自己跑命令看結果、自己修正</button>
+  <button class="quiz-option opt">人手動跑命令然後把錯誤貼給 agent</button>
+  <button class="quiz-option opt">agent 把代碼寫完就交給 review</button>
+  <button class="quiz-option opt">用 pre-commit hook 自動跑測試</button>
 </div>
 
-<div class="quiz" data-question="「控制 agent 看得到什麼」為什麼重要？" data-correct="1" data-explain="因為你決定 context 裡裝什麼——想讓它自己修就餵輸出，想私下確認就掛起。">
-  <button class="opt">因為 agent 的輸出越多越好</button>
-  <button class="opt">因為你控制 agent 的 context 裡裝什麼</button>
-  <button class="opt">因為 bash 模式比 IDE 快</button>
-  <button class="opt">因為掛起能省 token</button>
+<div class="quiz" data-question="Bash mode 和 Permissions 分別控制什麼？" data-correct="2" data-explain="Bash mode 控制「agent 看得到什麼輸出」，Permissions 控制「agent 能跑什麼命令」。">
+  <button class="quiz-option opt">兩者控制的是同一件事</button>
+  <button class="quiz-option opt">Bash mode 控制速度，Permissions 控制安全</button>
+  <button class="quiz-option opt">Bash mode 控制看得見什麼，Permissions 控制能跑什麼</button>
+  <button class="quiz-option opt">Bash mode 控制 context 大小，Permissions 控制 token 用量</button>
 </div>
 
-<footer>
-<p>有問題？隨時問你的 AI 老師——它可以解釋任何不清楚的地方。</p>
-</footer>
+<div class="quiz" data-question="Context 在 bash mode 中扮演什麼角色？" data-correct="1" data-explain="Context 是 agent 的推理素材——你決定裝什麼進去，它就用什麼來思考和修正。">
+  <button class="quiz-option opt">Context 只是歷史記錄，不影響推理</button>
+  <button class="quiz-option opt">Context 是 agent 的推理素材，你決定裝什麼</button>
+  <button class="quiz-option opt">Context 越大 agent 越聰明</button>
+  <button class="quiz-option opt">Context 和 bash mode 沒有關係</button>
+</div>
 
-</main>
+<h2>延伸閱讀</h2>
+<p>主要來源：<a href="https://www.youtube.com/watch?v=lesson13" target="_blank">Lesson 13 — Bash Command Management</a>（Matt Pocock 的 AI Coding for Real Engineers 課程）。講解 bash mode、Ctrl-B 背景化、Ctrl-Z 掛起、以及 feedback loop 的概念。</p>
+
+<div class="lesson-nav">
+  <a href="rewind-and-resume.html">← 上一課：用 rewind / resume 回放 session</a>
+  <a href="permissions-model.html">下一課：用 permissions 設定管住風險 →</a>
+</div>
+
 <script src="./assets/quiz.js"></script>
 </body>
 </html>

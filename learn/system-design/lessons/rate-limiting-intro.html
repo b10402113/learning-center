@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>什麼是限流，為什麼需要限流</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>什麼是限流，為什麼需要限流</h1>
+<p class="meta">system-design · rate-readwrite · Step 1/4</p>
+
+<h2>學習目標</h2>
+<p>理解限流的基本概念、應用場景與為什麼它是高併發系統設計不可或缺的機制。</p>
+
+<h2>從一個真實的崩潰說起</h2>
+
+<p>想像你經營一個電商網站，平時每秒處理 500 個請求。某天辦了一場限時搶購活動，流量瞬間湧入，每秒湧進 50,000 個請求。你的伺服器瞬間過載，CPU 跑滿、記憶體爆掉，結果所有用戶——包括那些正常瀏覽的人——全都看到 503 錯誤頁面。</p>
+
+<p>這個問題的根源是：<strong>系統沒有機制控制進入的流量。</strong>不管後端能消化多少，所有請求一股腦湧進去，最終把整台機器壓垮。</p>
+
+<p>限流（Rate Limiting）就是解決這個問題的機制：它在請求進入後端之前設一道閘門，按照某種規則允許或拒絕請求，確保系統永遠不會被超出處理能力的流量打垮。</p>
+
+<h2>限流的核心思想</h2>
+
+<p>限流的本質很簡單：<strong>限制在一個時間窗口內，系統能處理的請求數量。</strong>超過上限的請求會被拒絕（返回 429 Too Many Requests）或排隊等待。</p>
+
+<p>這裡有兩個關鍵概念：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>概念</th>
+      <th>含義</th>
+      <th>類比</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Rate（速率）</strong></td>
+      <td>單位時間內允許通過的請求數</td>
+      <td>高速公路每個小時允許通過多少輛車</td>
+    </tr>
+    <tr>
+      <td><strong>Burst（突發容量）</strong></td>
+      <td>系統短時間內能承受的最大超出量</td>
+      <td>高速公路的匝道Metering燈：短時間內可以放行一批車，但不能一直放</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>一個好的限流策略需要在兩者之間取得平衡：太嚴格，正常流量也被擋掉；太寬鬆，突發流量還是會壓垮系統。</p>
+
+<h2>為什麼需要限流</h2>
+
+<p>限流不只是「防止伺服器崩潰」這麼簡單，它在系統設計中有四個關鍵作用：</p>
+
+<h3>1. 保護後端資源</h3>
+
+<p>這是最直覺的作用。每個請求都消耗 CPU、記憶體、網路頻寬或資料庫連線。如果不限流，一波突發流量可能瞬間耗盡所有資源，導致所有用戶都無法使用。限流確保後端永遠在安全的負載範圍內運作。</p>
+
+<h3>2. 防止惡意攻擊</h3>
+
+<p>DDoS 攻擊（分散式阻斷服務攻擊）的本質就是用大量請求癱瘓目標系統。限流是第一道防線：不管攻擊者從多少個 IP 發起請求，限流器都會按照規則拒絕超量的流量。</p>
+
+<p>同樣地，暴力破解登入密碼、大量註冊假帳號等惡意行為，也可以透過限流來控制——例如同一個 IP 每分鐘最多嘗試 5 次登入。</p>
+
+<h3>3. 控制成本</h3>
+
+<p>在雲端環境中，每一個請求都代表真金白銀的運算資源。如果沒有限流，一波異常流量可能讓你的帳單暴增十倍。限流等於給你的預算裝了保險絲。</p>
+
+<h3>4. 確保公平性</h3>
+
+<p>多租戶（Multi-tenant）系統中，不同用戶或客戶端可能共用同一套後端資源。限流可以確保每個租戶都拿到公平的配額，不會因為某個租戶的異常行為影響其他人。你用過的雲端 API 服務（如 GitHub API、Twitter API）都有 rate limit 就是這個道理。</p>
+
+<h2>限流在哪裡發生</h2>
+
+<p>限流可以部署在系統的不同層級：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>位置</th>
+      <th>說明</th>
+      <th>優缺點</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>用戶端</strong></td>
+      <td>在 App 或瀏覽器端限制發送頻率</td>
+      <td>減少網路請求，但用戶可以繞過</td>
+    </tr>
+    <tr>
+      <td><strong>API Gateway</strong></td>
+      <td>在統一入口處攔截，最早擋住超量請求</td>
+      <td>集中管理，但需要額外基礎設施</td>
+    </tr>
+    <tr>
+      <td><strong>負載均衡器</strong></td>
+      <td>在 LB 層做限流，分散式部署</td>
+      <td>能分散限流壓力，但設定較複雜</td>
+    </tr>
+    <tr>
+      <td><strong>個別服務</strong></td>
+      <td>在每個微服務自己的入口做限流</td>
+      <td>粒度最細，但管理成本高</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>實際生產環境中，最常見的做法是<strong>在 API Gateway 層做粗粒度的全局限流，再在個別服務做細粒度的限流</strong>。兩層防線互相補充。</p>
+
+<h2>限流的常見策略</h2>
+
+<p>限流有很多種具體的演算法，不同的演算法適合不同的場景：</p>
+
+<ul>
+  <li><strong>固定窗口計數器（Fixed Window Counter）</strong>：最簡單——在固定時間窗口（如每秒）內計數，超過上限就拒絕。問題是窗口邊界可能出現雙倍突發。</li>
+  <li><strong>滑動窗口計數器（Sliding Window Counter）</strong>：改進版——用滑動時間窗口避免邊界問題。</li>
+  <li><strong>漏桶（Leaky Bucket）</strong>：請求進入一個桶，以固定速率流出。適合需要平滑流量的場景。</li>
+  <li><strong>令牌桶（Token Bucket）</strong>：系統以固定速率生成令牌，請求需要取得令牌才能通過。適合允許突發但需要控制長期速率的場景。</li>
+</ul>
+
+<p>下一課會深入比較 Token Bucket 和 Leaky Bucket 這兩種最經典的限流演算法。</p>
+
+<h2>面試中的關鍵點</h2>
+
+<ul>
+  <li>能解釋為什麼需要限流（保護後端、防攻擊、控成本、保公平）</li>
+  <li>能說明限流的發生位置（Client → API Gateway → LB → Service）</li>
+  <li>能區分 Rate（長期速率）和 Burst（短期突發）這兩個概念</li>
+  <li>能列出至少三種限流演算法的名稱與一句話特點</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>限流是高併發系統的保險絲：它控制進入後端的請求速率，保護系統不被流量壓垮。核心概念是 Rate（長期速率）和 Burst（短期突發容量）的平衡。限流可以部署在 Client、API Gateway、負載均衡器或個別服務的不同層級。常見演算法包括固定窗口、滑動窗口、漏桶和令牌桶。</p>
+
+<div class="quiz" data-question="限流最核心的作用是什麼？" data-correct="1" data-explain="限流的核心是控制進入後端的請求速率，確保系統永遠不會被超出處理能力的流量打垮。">
+  <button class="opt">加速系統響應速度</button>
+  <button class="opt">確保系統永遠不會被超出處理能力的流量打垮</button>
+  <button class="opt">減少資料庫查詢次數</button>
+  <button class="opt">提升用戶體驗</button>
+</div>
+
+<div class="quiz" data-question="Rate 和 Burst 有什麼區別？" data-correct="2" data-explain="Rate 是長期平均速率（單位時間內允許的請求數），Burst 是短期內能承受的超出量。兩者需要平衡。">
+  <button class="opt">Rate 是最大連線數，Burst 是最小連線數</button>
+  <button class="opt">Rate 和 Burst 是同一個概念的不同叫法</button>
+  <button class="opt">Rate 是長期平均速率，Burst 是短期超出量</button>
+  <button class="opt">Rate 控制寫入，Burst 控制讀取</button>
+</div>
+
+<div class="quiz" data-question="以下哪個不是限流的常見作用？" data-correct="3" data-explain="限流用於保護後端、防攻擊、控成本、保公平，但「加速系統響應速度」不是限流的作用——限流反而可能增加等待時間。">
+  <button class="opt">保護後端資源</button>
+  <button class="opt">防止惡意攻擊</button>
+  <button class="opt">控制雲端成本</button>
+  <button class="opt">加速系統響應速度</button>
+</div>
+
+<div class="quiz" data-question="限流最常部署在哪一層？" data-correct="1" data-explain="API Gateway 是最常見的限流部署位置，因為它是所有請求的統一入口，可以最早擋住超量流量。">
+  <button class="opt">資料庫層</button>
+  <button class="opt">API Gateway 層</button>
+  <button class="opt">用戶端瀏覽器</button>
+  <button class="opt">DNS 層</button>
+</div>
+
+<div class="quiz" data-question="固定窗口計數器的主要問題是什麼？" data-correct="2" data-explain="固定窗口計數器在窗口邊界可能出現雙倍突發：例如限制每秒 100 個請求，用戶可以在第 1 秒末發 100 個，第 2 秒初又發 100 個，瞬間 200 個請求。">
+  <button class="opt">實作太複雜</button>
+  <button class="opt">無法控制突發流量</button>
+  <button class="opt">窗口邊界可能出現雙倍突發</button>
+  <button class="opt">只適用於讀密集系統</button>
+</div>
+
+<div class="quiz" data-question="GitHub API 的 rate limit 屬於限流的哪個作用？" data-correct="3" data-explain="GitHub API 限制每個用戶每小時的請求數，目的是確保公平性——每個用戶都拿到合理的配額，不會被某個用戶的大量請求影響其他人。">
+  <button class="opt">保護後端資源</button>
+  <button class="opt">防止惡意攻擊</button>
+  <button class="opt">控制成本</button>
+  <button class="opt">確保多租戶之間的公平性</button>
+</div>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="token-leaky-comparison.html">下一步：Token Bucket 與 Leaky Bucket 演算法比較 →</a></div>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

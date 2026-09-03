@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>擴展與容錯設計 — Facebook Messenger 系統設計</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<h1>擴展與容錯設計</h1>
+<p class="meta">Facebook Messenger 系統設計 · Step 6/6</p>
+
+<section>
+<h2>學習目標</h2>
+<p>掌握即時通訊系統如何透過資料分片、快取、負載均衡與複製來實現擴展與容錯。</p>
+</section>
+
+<section>
+<h2>三大擴展策略</h2>
+<p>前面的設計可以撐住幾百萬用戶。但要撐住 5 億日活用戶，你需要三把利器：<strong>分片（Partitioning）、快取（Caching）、負載均衡（Load Balancing）</strong>。</p>
+</section>
+
+<section>
+<h2>資料分片</h2>
+<p>5 億用戶、每人 40 則訊息、五年 3.6 PB——一台資料庫根本扛不住。你需要把數據分散到多台機器上。</p>
+
+<h3>按 UserID 分片</h3>
+<p>最直覺的做法：對 UserID 做 hash，hash 值決定數據在哪台機器上。好處是同一個用戶的所有訊息都在同一台機器上，查詢兩個人的聊天記錄只需要訪問一台機器。</p>
+
+<h3>分片數量估算</h3>
+<p>假設每台資料庫分片承載 4 TB：</p>
+<table>
+<thead><tr><th>指標</th><th>數值</th></tr></thead>
+<tbody>
+<tr><td>五年總儲存</td><td>3.6 PB</td></tr>
+<tr><td>每分片容量</td><td>4 TB</td></tr>
+<tr><td>需要的分片數</td><td>3.6 PB ÷ 4 TB ≈ 900 個</td></tr>
+</tbody>
+</table>
+<p>900 個分片聽起來很多，但這是五年增长的終態。初期可以少一些，隨增長逐步增加。</p>
+
+<h3>分片的挑戰</h3>
+<ul>
+<li><strong>熱點</strong>：某些用戶訊息量特別大（如名人），導致某個分片負載過高</li>
+<li><strong>跨分片查詢</strong>：查詢兩個不在同一分片的用戶的聊天記錄，需要跨機器</li>
+<li><strong>再平衡</strong>：新增或移除分片時，數據遷移的開銷</li>
+</ul>
+</section>
+
+<section>
+<h2>快取</h2>
+<p>快取的目標：讓用戶打開對話時，最近的訊息從記憶體讀取，延遲從百毫秒降到個位數毫秒。</p>
+
+<h3>快取策略</h3>
+<ul>
+<li><strong>快取最近 15 條訊息</strong>：對每個活躍對話，快取最近 15 條訊息</li>
+<li><strong>快取最近 5 個對話</strong>：對每個用戶，快取最近 5 個對話的最近 15 條訊息</li>
+<li><strong>按 UserID 分佈</strong>：因為數據按 UserID 分片，每個用戶的快取也應該在同一台快取伺服器上</li>
+</ul>
+
+<h3>快取失效</h3>
+<p>新訊息到達時，怎麼更新快取？有兩種策略：</p>
+<ul>
+<li><strong>Write-through</strong>：寫入資料庫的同時更新快取。一致性好，但寫入延遲增加</li>
+<li><strong>Write-behind</strong>：先更新快取，資料庫在背景異步更新。寫入快，但有短暫不一致</li>
+</ul>
+<p>即時通訊通常選 Write-behind——先讓用戶看到新訊息，資料庫慢慢跟上。</p>
+</section>
+
+<section>
+<h2>負載均衡</h2>
+<p>系統中有兩層負載均衡：</p>
+
+<h3>Chat Server 負載均衡</h3>
+<p>用戶的連線請求先到負載均衡器，由它決定分配給哪台 Chat Server。關鍵要求：<strong>同一個用戶的請求必須落到同一台 Server</strong>（因為 Server 記住了用戶的連線）。這需要一致性雜湊（Consistent Hashing）或類似的有狀態負載均衡。</p>
+
+<h3>資料庫負載均衡</h3>
+<p>資料庫層的負載均衡相對簡單——根據 UserID 的 hash 決定路由到哪個分片。這是確定性的，不需要動態分配。</p>
+</section>
+
+<section>
+<h2>容錯設計</h2>
+<p>硬碟壞了、伺服器掛了、機房斷電——這些在大規模系統中不是「萬一」，而是「一定會發生」。</p>
+
+<h3>Chat Server 宕機</h3>
+<p>如果一台 Chat Server 掛了，上面所有用戶的連線都會斷開。怎麼辦？</p>
+<ul>
+<li><strong>客戶端自動重連</strong>：偵測到連線斷開後，自動嘗試連線到其他可用的 Chat Server</li>
+<li><strong>不要嘗試遷移連線</strong>：TCP 連線遷移到其他伺服器極其複雜，不如讓客戶端重連</li>
+</ul>
+
+<h3>資料庫故障</h3>
+<ul>
+<li><strong>主從複製</strong>：每個分片有主從副本。主節點故障時，從節點提升為主節點</li>
+<li><strong>讀寫分離</strong>：寫入走主節點，讀取走從節點。這也分散了負載</li>
+</ul>
+
+<h3>訊息可靠性</h3>
+<ul>
+<li><strong>端到端確認</strong>：A 發訊息給 B，B 收到後回一個 ACK。A 沒收到 ACK 就重發</li>
+<li><strong>客戶端重試</strong>：訊息發送失敗時，客戶端自動重試</li>
+<li><strong>持久化保障</strong>：訊息先寫入資料庫（或 WAL），再推送給用戶。確保不丟</li>
+</ul>
+</section>
+
+<section class="quiz-section">
+<h2>自我檢測</h2>
+
+<div class="quiz" data-question="按 UserID hash 分片，900 個分片每個要存多少數據？" data-correct="1" data-explain="3.6 PB ÷ 4 TB ≈ 900 個分片，每個約 4 TB。">
+<button class="opt">400 GB</button>
+<button class="opt">4 TB</button>
+<button class="opt">40 TB</button>
+<button class="opt">400 TB</button>
+</div>
+
+<div class="quiz" data-question="快取最近 15 條訊息的策略有什麼好處？" data-correct="2" data-explain="用戶打開對話時，最近的訊息從快取讀取，延遲從百毫秒降到個位數毫秒。">
+<button class="opt">減少資料庫儲存空間</button>
+<button class="opt">提高訊息安全性</button>
+<button class="opt">降低讀取延遲到個位數毫秒</button>
+<button class="opt">減少網路頻寬消耗</button>
+</div>
+
+<div class="quiz" data-question="Chat Server 的負載均衡為什麼需要一致性雜湊？" data-correct="0" data-explain="Chat Server 記住了用戶連線，同一用戶的請求必須落到同一台 Server。一致性雜湊在節點增減時只影響少量映射。">
+<button class="opt">同一用戶的請求必須落到同一台 Server</button>
+<button class="opt">減少網路延遲</button>
+<button class="opt">加密用戶數據</button>
+<button class="opt">壓縮訊息大小</button>
+</div>
+
+<div class="quiz" data-question="Chat Server 宕機時，應該怎麼處理？" data-correct="3" data-explain="TCP 連線遷移極其複雜，最務實的做法是讓客戶端自動重連到其他可用 Server。">
+<button class="opt">嘗試遷移連線到其他 Server</button>
+<button class="opt">等待原 Server 恢復</button>
+<button class="opt">丟棄所有用戶連線</button>
+<button class="opt">客戶端自動重連到其他 Server</button>
+</div>
+
+<div class="quiz" data-question="訊息的端到端確認機制是什麼？" data-correct="1" data-explain="B 收到訊息後回 ACK，A 沒收到 ACK 就重發，確保訊息不丟。">
+<button class="opt">A 發訊息後等 B 讀取</button>
+<button class="opt">B 收到後回 ACK，A 未收到就重發</button>
+<button class="opt">伺服器定期檢查訊息是否到達</button>
+<button class="opt">用戶手動確認收到</button>
+</div>
+
+</section>
+
+<div class="lesson-nav">
+<a href="./user-status.html">← 上一步：在線狀態管理</a>
+<span></span>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

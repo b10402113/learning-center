@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>容量估算與約束條件</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>容量估算與約束條件</h1>
+<div class="meta">YouTube/Netflix · Step 2/6</div>
+
+<div class="learning-goal">
+  <h2>學習目標</h2>
+  <p>依據使用者規模估算系統流量、儲存容量與頻寬需求，建立設計約束條件。</p>
+</div>
+
+<section>
+  <h2>為什麼要估算？</h2>
+  <p>需求分析告訴你系統「做什麼」，容量估算告訴你系統「要承擔多少」。在面試中，容量估算（Capacity Estimation）不是要你算出精確數字，而是要展示你能<strong>從使用者規模推導出系統的技術約束</strong>。這些約束直接影響你的架構決策：用什麼資料庫、要不要分片、快取要多大、CDN 要覆蓋多廣。</p>
+  <p>Back-of-the-envelope（信封背面）估算法的核心是：用<strong>粗略但合理的數字</strong>快速建立直覺，而不是追求精確。面試官想看到的是你的思考過程，不是計算結果。</p>
+</section>
+
+<section>
+  <h2>從使用者規模開始</h2>
+  <p>假設我們的 YouTube 有 <strong>15 億註冊使用者</strong>，其中 <strong>8 億是日活躍使用者（DAU, Daily Active Users）</strong>。這個數字來自現實世界——YouTube 確實有這種規模。</p>
+  <p>接下來問自己：一個典型的日活躍使用者每天做什麼？假設平均每個使用者每天觀看 <strong>5 部影片</strong>。</p>
+  <p>那麼每秒的影片觀看次數（video views per second）就是：</p>
+  <pre><code>800M × 5 / 86400 秒 ≈ 46,000 次/秒</code></pre>
+  <p>也就是大約每秒 <strong>4.6 萬次</strong>影片觀看請求。這就是你的讀取流量。</p>
+</section>
+
+<section>
+  <h2>上傳流量估算</h2>
+  <p>讀取流量有了，接下來看寫入流量。假設讀寫比（read:write ratio）是 <strong>200:1</strong>——每上傳一部影片，就有 200 次觀看。</p>
+  <pre><code>46,000 / 200 ≈ 230 部影片/秒</code></pre>
+  <p>每秒大約有 <strong>230 部新影片上傳</strong>。這個數字看起來不大，但影片檔案很大——假設平均一部影片 <strong>300 MB</strong>——所以寫入頻寬需求是：</p>
+  <pre><code>230 × 300 MB ≈ 69 GB/秒</code></pre>
+  <p>每秒 69 GB 的寫入頻寬，這是相當可觀的數字，也是為什麼 YouTube 需要分散式儲存系統。</p>
+</section>
+
+<section>
+  <h2>儲存容量估算</h2>
+  <p>除了即時流量，還需要估算長期儲存需求。假設每天有 230 部/秒 × 86400 秒 ≈ <strong>2,000 萬部</strong>新影片上傳，每部 300 MB：</p>
+  <pre><code>20M × 300 MB = 6 TB/天</code></pre>
+  <p>每天 <strong>6 TB</strong> 的新儲存。一年就是大約 <strong>2.2 PB</strong>（petabytes）。這還不包括同一部影片的多種解析度版本——實際上一部 1080p 影片可能同時儲存 4K、1080p、720p、480p 等多個版本，儲存需求會乘以 3-5 倍。</p>
+  <p>這也是為什麼影片平台需要物件儲存（如 Amazon S3）而不是傳統的檔案系統——物件儲存能以低成本擴展到 PB 級別。</p>
+</section>
+
+<section>
+  <h2>頻寬需求</h2>
+  <p>讀取頻寬是更大的挑戰。假設每部影片的平均大小是 300 MB（未壓縮的原始版本），但使用者實際觀看的通常是編碼後的版本，平均大約 <strong>30 MB</strong>（以 720p 為例）。</p>
+  <pre><code>46,000 × 30 MB ≈ 1.38 TB/秒</code></pre>
+  <p>每秒 <strong>1.38 TB</strong> 的讀取頻寬。這個數字大到單台伺服器根本無法承擔，必須依賴 CDN（Content Delivery Network，內容分發網路）將影片快取到離使用者最近的節點。</p>
+  <p>面試中，你不需要記住這些精確數字。重要的是<strong>推導過程</strong>：從使用者數量 → 使用頻率 → 每秒請求數 → 頻寬需求，一步步建立直覺。</p>
+</section>
+
+<section>
+  <h2>約束條件的意義</h2>
+  <p>容量估算不只是算數字，它的真正價值在於幫你建立<strong>設計約束條件（Constraints）</strong>：</p>
+  <p><strong>讀取延遲</strong>——4.6 萬次/秒的讀取，意味著每台伺服器要能處理大量並發請求。快取和負載均衡是必需品。</p>
+  <p><strong>儲存成本</strong>——每天 6 TB 的寫入，一年 PB 級的儲存，需要低成本的分散式儲存方案。</p>
+  <p><strong>頻寬成本</strong>——TB 級的讀取頻寬，需要 CDN 將內容推到邊緣，減少源頭伺服器的壓力。</p>
+  <p><strong>編碼成本</strong>——每部影片需要轉成多種解析度和格式，轉碼是 CPU 密集型工作，需要專門的處理叢集。</p>
+</section>
+
+<section>
+  <h2>你的經驗怎麼連結？</h2>
+  <p>你做過 REST API，可能處理過幾百個用戶的請求。YouTube 的估算邏輯是一樣的：先算每秒有多少請求，再算每台伺服器能處理多少。差別在於規模差了六個數量級。但推導方法完全相同——從使用者行為出發，一步步算出技術需求。</p>
+</section>
+
+<section>
+  <h2>自我檢測</h2>
+
+  <div class="quiz" data-question="YouTube 每秒的影片觀看次數大約是多少？" data-correct="1" data-explain="8 億 DAU × 5 部/天 / 86400 秒 ≈ 46,000 次/秒。">
+    <button class="opt">4,600 次/秒</button>
+    <button class="opt">46,000 次/秒</button>
+    <button class="opt">460,000 次/秒</button>
+    <button class="opt">4,600,000 次/秒</button>
+  </div>
+
+  <div class="quiz" data-question="讀寫比 200:1 意味著什麼？" data-correct="2" data-explain="每上傳一部影片，就有 200 次觀看。讀取佔絕大多數。">
+    <button class="opt">每觀看 200 次，上傳 1 部</button>
+    <button class="opt">系統只有 200 個使用者</button>
+    <button class="opt">每上傳 1 部影片，就有 200 次觀看</button>
+    <button class="opt">影片最多觀看 200 次</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼影片平台需要物件儲存（如 S3）而不是傳統檔案系統？" data-correct="0" data-explain="影片儲存需求達 PB 級，物件儲存能以低成本水平擴展到這種規模。">
+    <button class="opt">物件儲存能以低成本擴展到 PB 級別</button>
+    <button class="opt">物件儲存速度更快</button>
+    <button class="opt">物件儲存更安全</button>
+    <button class="opt">物件儲存支援 SQL 查詢</button>
+  </div>
+
+  <div class="quiz" data-question="容量估算在面試中的主要目的是什麼？" data-correct="3" data-explain="容量估算的價值在於建立設計約束——從數字推導出架構決策需要什麼條件。">
+    <button class="opt">得到精確的成本數字</button>
+    <button class="opt">證明你數學好</button>
+    <button class="opt">決定使用哪種程式語言</button>
+    <button class="opt">從使用者規模推導出技術約束</button>
+  </div>
+
+  <div class="quiz" data-question="YouTube 每天大約新增多少儲存？" data-correct="1" data-explain="每天約 2,000 萬部影片 × 300 MB = 6 TB/天。">
+    <button class="opt">600 GB/天</button>
+    <button class="opt">6 TB/天</button>
+    <button class="opt">60 TB/天</button>
+    <button class="opt">600 TB/天</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼讀取頻寬比寫入頻寬更大？" data-correct="2" data-explain="讀寫比 200:1，讀取次數遠多於寫入，所以讀取頻寬需求更大。">
+    <button class="opt">因為影片上傳很慢</button>
+    <button class="opt">因為寫入不需要頻寬</button>
+    <button class="opt">因為讀取次數是寫入的 200 倍</button>
+    <button class="opt">因為讀取和寫入頻寬相同</button>
+  </div>
+</section>
+
+<div class="source">
+  <strong>延伸閱讀：</strong>DesignGuru — Designing YouTube or Netflix § Capacity Estimation and Constraints
+</div>
+
+<div class="footer">
+  <p>有不清楚的地方？問你的老師！</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="requirements-analysis.html">← 上一步：需求分析與範圍定義</a>
+  <a href="high-level-arch.html">下一步：高層架構設計 →</a>
+</nav>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

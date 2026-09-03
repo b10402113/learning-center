@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>高層架構設計 — Ticketmaster 系統設計</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>高層架構設計</h1>
+<p class="meta">Step 4/6 · Ticketmaster 系統設計 · 約 12 分鐘</p>
+
+<h2>學習目標</h2>
+<p>設計 Ticketmaster 的高層系統架構，定義 Web Server、Application Server、Database 和 Cache 各層的職責，並設計系統 API。</p>
+
+<h2>從用戶請求開始</h2>
+<p>當用戶打開訂票網站，他們的請求會經過哪些層？從最外面到最裡面，依次是：</p>
+
+<pre><code>用戶
+  ↓
+Load Balancer（負載均衡器）
+  ↓
+Web Server（網頁伺服器）— 管理 session、處理靜態資源
+  ↓
+Application Server（應用伺服器）— 處理業務邏輯、訂票流程
+  ↓
+Database + Cache（資料庫 + 快取）
+</code></pre>
+
+<p>這是一個經典的三層架構。每一層都有明確的職責，互不干擾。</p>
+
+<h2>各層職責</h2>
+
+<h3>Load Balancer</h3>
+<p>在最外面，負載均衡器把用戶請求分散到多個 Web Server。這樣單一台伺服器掛了，其他伺服器還能繼續服務。常用的演算法有 Round Robin（輪詢）或 Least Connections（最少連接）。</p>
+
+<h3>Web Server</h3>
+<p>Web Server 負責兩件事：一是管理用戶的 session（登入狀態、購物車），二是提供靜態資源（圖片、CSS、JavaScript）。它不做業務邏輯，只做「門面」。</p>
+
+<h3>Application Server</h3>
+<p>這是系統的大腦。所有業務邏輯都在這裡：搜尋電影、查詢場次、檢查座位可用性、處理訂單。Application Server 是<strong>無狀態的</strong>——它不存任何數據，所有狀態都存在資料庫或快取中。這樣就能輕鬆水平擴展：需要更多處理能力？加機器就行。</p>
+
+<h3>Database + Cache</h3>
+<p>資料庫存所有持久化數據（城市、影院、電影、場次、座位、訂單）。快取（通常是 Redis）存熱數據：熱門場次的座位狀態、搜尋結果。快取能大幅減少資料庫壓力——讀取操作大部分走快取，只有寫入才打到資料庫。</p>
+
+<h2>系統 API</h2>
+<p>API 是 Application Server 對外的接口。一個訂票系統至少需要這些 API：</p>
+
+<table>
+  <thead><tr><th>API</th><th>參數</th><th>說明</th></tr></thead>
+  <tbody>
+    <tr><td><code>SearchMovies</code></td><td>city, keyword, datetime</td><td>搜尋電影（按城市、關鍵字、時間）</td></tr>
+    <tr><td><code>SearchShows</code></td><td>movieID, city, datetime</td><td>搜尋場次（按電影、城市、時間）</td></tr>
+    <tr><td><code>ReserveSeats</code></td><td>showID, seatIDs</td><td>暫時鎖定座位（15 分鐘有效期）</td></tr>
+    <tr><td><code>MakeBooking</code></td><td>reservationID, paymentInfo</td><td>確認訂單並付款</td></tr>
+    <tr><td><code>CancelReservation</code></td><td>reservationID</td><td>取消預訂</td></tr>
+  </tbody>
+</table>
+
+<p>關鍵設計：ReserveSeats 是一個<strong>暫時鎖定</strong>操作，不是最終訂購。用戶選座後，座位被暫時鎖定 15 分鐘。在這段時間內，其他用戶無法選這些座位。如果 15 分鐘內沒有完成付款，座位自動釋放。</p>
+
+<h2>快取策略</h2>
+<p>哪些數據適合放快取？</p>
+<ul>
+  <li><strong>電影列表</strong>（按城市）——變化不頻繁，快取命中率高</li>
+  <li><strong>場次資訊</strong>（按場次 ID）——讀取頻率遠高於寫入</li>
+  <li><strong>座位狀態</strong>（按場次 ID）——讀取最頻繁，但變化也最頻繁，需要精細的失效策略</li>
+</ul>
+<p>座位狀態的快取是最棘手的——它讀取量大（每個用戶都在看），但寫入也頻繁（每次訂購都要更新）。這裡的取捨在後面的步驟會詳細討論。</p>
+
+<h2>面試技巧</h2>
+<p>畫高層架構圖時，從外到內：Load Balancer → Web Server → Application Server → Database + Cache。每一層標註職責和關鍵技術選型。記住：<strong>Application Server 是無狀態的，狀態存在 Database 和 Cache 中</strong>。</p>
+
+<h2>複習測驗</h2>
+
+<div class="quiz" data-question="Application Server 為什麼設計為無狀態的？" data-correct="1" data-explain="無狀態意味著不存任何數據，所有狀態存在資料庫或快取中。這樣就能輕鬆水平擴展——需要更多處理能力時直接加機器。">
+  <button class="opt">為了簡化程式碼</button>
+  <button class="opt">為了能輕鬆水平擴展</button>
+  <button class="opt">為了減少記憶體使用</button>
+  <button class="opt">為了支援 WebSocket</button>
+</div>
+
+<div class="quiz" data-question="ReserveSeats API 的作用是什麼？" data-correct="2" data-explain="ReserveSeats 是暫時鎖定操作，座位被鎖定 15 分鐘。在這段時間內其他用戶無法選這些座位。15 分鐘內未完成付款則自動釋放。">
+  <button class="opt">直接完成訂購</button>
+  <button class="opt">查詢座位價格</button>
+  <button class="opt">暫時鎖定座位 15 分鐘</button>
+  <button class="opt">取消已訂座位</button>
+</div>
+
+<div class="quiz" data-question="Web Server 的主要職責是？" data-correct="0" data-explain="Web Server 負責管理 session 和提供靜態資源，不做業務邏輯。">
+  <button class="opt">管理 session 和提供靜態資源</button>
+  <button class="opt">處理訂票業務邏輯</button>
+  <button class="opt">存儲訂單數據</button>
+  <button class="opt">執行資料庫查詢</button>
+</div>
+
+<div class="quiz" data-question="以下哪項最適合放在快取中？" data-correct="3" data-explain="電影列表按城市查詢，變化不頻繁，快取命中率高。座位狀態變化太頻繁，快取策略更複雜。">
+  <button class="opt">歷史訂單記錄</button>
+  <button class="opt">用戶密碼雜湊</button>
+  <button class="opt">過期的場次資訊</button>
+  <button class="opt">電影列表（按城市）</button>
+</div>
+
+<div class="quiz" data-question="負載均衡器（Load Balancer）的主要功能是？" data-correct="1" data-explain="負載均衡器把用戶請求分散到多台伺服器，避免單點過載，提高系統可用性。">
+  <button class="opt">加密用戶數據</button>
+  <button class="opt">把請求分散到多台伺服器</button>
+  <button class="opt">壓縮回應內容</button>
+  <button class="opt">記錄用戶行為日誌</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./database-design.html">← 上一步：資料庫設計</a>
+  <a href="./ticketmaster-detailed-component-design.html">下一步：核心元件詳細設計 →</a>
+</div>
+
+<div class="footer">Ticketmaster 系統設計 · Step 4/6</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

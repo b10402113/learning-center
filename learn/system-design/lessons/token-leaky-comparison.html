@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Token Bucket 與 Leaky Bucket 演算法比較</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Token Bucket 與 Leaky Bucket 演算法比較</h1>
+<p class="meta">system-design · rate-readwrite · Step 2/4</p>
+
+<h2>學習目標</h2>
+<p>掌握 Token Bucket 與 Leaky Bucket 兩種限流演算法的運作原理、差異與適用場景。</p>
+
+<h2>為什麼要比較這兩種</h2>
+
+<p>上一課提到限流有好幾種演算法，其中<strong>Token Bucket（令牌桶）</strong>和<strong>Leaky Bucket（漏桶）</strong>是最經典、最常被面試問到的兩種。它們解決同一個問題——控制流量速率——但用完全不同的思維方式，適用不同的場景。</p>
+
+<p>把它們搞清楚，你在面試中面對「怎麼設計限流器」這類問題時，就能清楚解釋為什麼選某一種而不是另一種。</p>
+
+<h2>Token Bucket：令牌桶</h2>
+
+<h3>工作原理</h3>
+
+<p>想像一個桶子，裡面裝著一些「令牌（token）」。系統以固定速率（如每秒 10 個）往桶裡放令牌，桶有容量上限（如 100 個）。每來一個請求，必須從桶裡拿走一個令牌才能通過；如果桶裡沒令牌了，請求就被拒絕。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>組件</th>
+      <th>行為</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>令牌生成器</strong></td>
+      <td>以固定速率（如 R 個/秒）往桶裡放令牌</td>
+    </tr>
+    <tr>
+      <td><strong>桶容量（B）</strong></td>
+      <td>桶最多能存 B 個令牌，超出的令牌會被丟棄</td>
+    </tr>
+    <tr>
+      <td><strong>請求</strong></td>
+      <td>每來一個請求，取走一個令牌；有令牌→通過，沒令牌→拒絕</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>一個具體例子</h3>
+
+<p>假設桶容量 B = 10，令牌生成速率 R = 2 個/秒。</p>
+
+<ul>
+  <li>系統空閒 5 秒後，桶裡累積了 10 個令牌（滿了）。</li>
+  <li>突然湧入 10 個請求，一次性全部通過（消耗 10 個令牌）。</li>
+  <li>接下來 2 秒內，桶裡只有 4 個令牌（2×2），所以只能通過 4 個請求。</li>
+</ul>
+
+<p>這就是 Token Bucket 的核心特點：<strong>允許突發流量</strong>。只要桶裡有令牌，短時間內可以通過大量請求。但長期來看，平均速率不超過 R。</p>
+
+<h3>關鍵特性</h3>
+
+<ul>
+  <li><strong>允許突發（Burst）</strong>：桶可以累積令牌，短時間內放行大量請求</li>
+  <li><strong>長期速率可控</strong>：令牌以固定速率補充，長期平均速率不超過 R</li>
+  <li><strong>實作簡單</strong>：只需一個計數器和一個計時器</li>
+</ul>
+
+<h2>Leaky Bucket：漏桶</h2>
+
+<h3>工作原理</h3>
+
+<p>想像一個底部有小孔的桶子。請求像水一樣倒入桶中，桶以固定速率從底部「漏出」請求。桶滿了，新進來的水（請求）就溢出（被拒絕）。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>組件</th>
+      <th>行為</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>桶（Queue）</strong></td>
+      <td>緩衝區，存放等待處理的請求</td>
+    </tr>
+    <tr>
+      <td><strong>漏出速率</strong></td>
+      <td>固定速率（如每秒 R 個）從桶底處理請求</td>
+    </tr>
+    <tr>
+      <td><strong>溢出</strong></td>
+      <td>桶滿時，新請求被拒絕或丟棄</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>一個具體例子</h3>
+
+<p>同樣假設桶容量 B = 10，漏出速率 R = 2 個/秒。</p>
+
+<ul>
+  <li>突然湧入 10 個請求，全部進入桶中排隊。</li>
+  <li>系統以每秒 2 個的速率穩定處理，5 秒後全部處理完畢。</li>
+  <li>期間如果有第 11 個請求進來，桶已滿，直接被拒絕。</li>
+</ul>
+
+<p>Leaky Bucket 的核心特點是：<strong>輸出永遠是平滑的</strong>。不管輸入多麼波動，輸出速率始終是 R。</p>
+
+<h3>關鍵特性</h3>
+
+<ul>
+  <li><strong>輸出平滑</strong>：不管輸入多不穩定，輸出速率恆定</li>
+  <li><strong>排隊機制</strong>：超量請求在桶中排隊等待，不會立刻被拒絕（除非桶滿）</li>
+  <li><strong>無突發</strong>：即使系統有空閒能力，也不能一次性處理大量請求</li>
+</ul>
+
+<h2>核心差異對比</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>維度</th>
+      <th>Token Bucket</th>
+      <th>Leaky Bucket</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>突發處理</strong></td>
+      <td>✅ 允許突發（桶有令牌就放行）</td>
+      <td>❌ 不允許突發（輸出恆定）</td>
+    </tr>
+    <tr>
+      <td><strong>輸出模式</strong></td>
+      <td>可能波動（取決於桶裡剩餘令牌）</td>
+      <td>永遠平滑（固定漏出速率）</td>
+    </tr>
+    <tr>
+      <td><strong>排隊</strong></td>
+      <td>不排隊——有令牌就過，沒有就拒絕</td>
+      <td>有排隊——超量請求在桶中等待</td>
+    </tr>
+    <tr>
+      <td><strong>適合場景</strong></td>
+      <td>允許突發的應用（API、影片串流）</td>
+      <td>需要平滑流量的場景（網路流量整形）</td>
+    </tr>
+    <tr>
+      <td><strong>複雜度</strong></td>
+      <td>較簡單（計數器 + 補充邏輯）</td>
+      <td>較簡單（佇列 + 定時處理）</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>面試中怎麼選</h2>
+
+<p>面試官問你「怎麼設計限流器」時，選哪種取決於需求：</p>
+
+<ul>
+  <li><strong>選 Token Bucket</strong>：當系統需要允許突發流量。例如 API 服務器——用戶偶爾發一波請求是正常的，你不希望因為限流太嚴格而影響正常體驗。大部分 API 限流器（如 AWS API Gateway、Nginx）都用 Token Bucket。</li>
+  <li><strong>選 Leaky Bucket</strong>：當系統需要嚴格的流量整形（traffic shaping）。例如網路設備要確保輸出流量恆定，不影響下游服務。或者你需要把不穩定的輸入轉換成穩定的輸出。</li>
+</ul>
+
+<p>一個常見的面試回答模板：</p>
+
+<blockquote>
+  「我會選擇 Token Bucket，因為我們的場景允許短時間的突發——例如用戶打開 App 時會同時發多個 API 請求。Token Bucket 可以在長期控制速率的同時，容忍這種合理的突發。」
+</blockquote>
+
+<h2>小結</h2>
+
+<p>Token Bucket 用令牌控制速率，允許桶累積令牌以支持突發；Leaky Bucket 用佇列排隊，以固定速率漏出，輸出永遠平滑。面試中根據是否需要支持突發來選擇：API 服務通常選 Token Bucket，流量整形通常選 Leaky Bucket。</p>
+
+<div class="quiz" data-question="Token Bucket 最大的特點是什麼？" data-correct="0" data-explain="Token Bucket 允許突發流量：只要桶裡有令牌，短時間內可以通過大量請求。這也是它在 API 限流中最常被選用的原因。">
+  <button class="opt">允許突發流量</button>
+  <button class="opt">輸出永遠平滑</button>
+  <button class="opt">會自動排隊等待</button>
+  <button class="opt">不允許任何超量請求</button>
+</div>
+
+<div class="quiz" data-question="Leaky Bucket 為什麼不能支持突發？" data-correct="2" data-explain="Leaky Bucket 以固定速率從桶底處理請求，不管輸入多快，輸出永遠是恆定的漏出速率。桶滿時新請求直接被拒絕，不會加速處理。">
+  <button class="opt">因為桶容量太小</button>
+  <button class="opt">因為令牌生成太慢</button>
+  <button class="opt">因為輸出速率是固定的，不論輸入多快</button>
+  <button class="opt">因為排隊機制太慢</button>
+</div>
+
+<div class="quiz" data-question="以下哪個場景最適合用 Token Bucket？" data-correct="1" data-explain="API 服務器需要容忍用戶打開 App 時的並發請求突發，同時控制長期速率。Token Bucket 的突發支持正好適合這個場景。">
+  <button class="opt">網路設備要確保輸出流量恆定</button>
+  <button class="opt">API 服務器需要容忍用戶端的合理突發</button>
+  <button class="opt">日誌系統要平滑寫入磁碟</button>
+  <button class="opt">即時通訊要確保訊息順序</button>
+</div>
+
+<div class="quiz" data-question="Token Bucket 和 Leaky Bucket 在排隊行為上有什麼差異？" data-correct="3" data-explain="Token Bucket 不排隊——有令牌就通過，沒有就拒絕。Leaky Bucket 有排隊機制——超量請求進入桶中排隊等待，直到桶滿才被拒絕。">
+  <button class="opt">兩者都會排隊</button>
+  <button class="opt">兩者都不排隊</button>
+  <button class="opt">Token Bucket 排隊，Leaky Bucket 不排隊</button>
+  <button class="opt">Token Bucket 不排隊（拒絕超量），Leaky Bucket 排隊（超量等待）</button>
+</div>
+
+<div class="quiz" data-question="AWS API Gateway 的限流器最可能使用哪種演算法？" data-correct="0" data-explain="AWS API Gateway 使用 Token Bucket 作為限流演算法，因為 API 場景需要支持合理的突發流量（如用戶同時發多個並發請求）。">
+  <button class="opt">Token Bucket</button>
+  <button class="opt">Leaky Bucket</button>
+  <button class="opt">固定窗口計數器</button>
+  <button class="opt">滑動窗口計數器</button>
+</div>
+
+<div class="quiz" data-question="一個 Token Bucket 的容量為 50，令牌生成速率為 10/秒。系統空閒 10 秒後，突然湧入 60 個請求，有多少個會被拒絕？" data-correct="2" data-explain="空閒 10 秒，桶累積了 min(10×10, 50) = 50 個令牌（桶滿）。60 個請求只有 50 個能拿到令牌，10 個被拒絕。">
+  <button class="opt">0 個</button>
+  <button class="opt">5 個</button>
+  <button class="opt">10 個</button>
+  <button class="opt">50 個</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="rate-limiting-intro.html">← 上一步：什麼是限流，為什麼需要限流</a></div>
+  <div><a href="read-write-workloads.html">下一步：讀寫密集型工作負載的特徵 →</a></div>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

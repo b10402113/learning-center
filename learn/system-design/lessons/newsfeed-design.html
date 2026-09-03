@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>動態消息生成設計</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>動態消息生成設計</h1>
+<div class="meta">Instagram · Step 6/7</div>
+
+<div class="learning-goal">
+  <h2>學習目標</h2>
+  <p>能夠設計分片資料上的動態消息生成流程，說明如何高效獲取並排序追蹤使用者的最新照片。</p>
+</div>
+
+<section>
+  <h2>動態消息的核心挑戰</h2>
+  <p>Instagram 的動態消息（News Feed）是整個系統最複雜的功能。它的目標是：給定一個使用者，快速產生一頁包含追蹤對象最新、最熱門照片的列表。</p>
+  <p>假設要顯示 100 張照片。系統需要：</p>
+  <ol>
+    <li>查出這個使用者追蹤了哪些人</li>
+    <li>對每個被追蹤的人，查出最新的 100 張照片</li>
+    <li>把所有照片合併，按時間或熱門度排序，取前 100 張</li>
+  </ol>
+  <p>如果一個使用者追蹤了 500 人，系統就要做 500 次查詢，每次拿 100 張照片，然後從 50,000 張中選出前 100 張。這在分片架構下尤其困難，因為這些照片分散在不同的資料庫分片上。</p>
+</section>
+
+<section>
+  <h2>方案一：產生時計算（On-Read）</h2>
+  <p>最直覺的做法是<strong>在讀取時即時計算</strong>。每次使用者打開動態消息，系統就即時查詢所有追蹤對象的最新照片，排序後呈現。</p>
+  <p><strong>優點</strong>：實現簡單，資料永遠最新。</p>
+  <p><strong>缺點</strong>：延遲高。每次載入都要查詢數百個使用者的照片，在分片架構下需要跨分片查詢，速度很慢。如果追蹤了 500 人，就要做 500 次查詢。</p>
+</section>
+
+<section>
+  <h2>方案二：寫入時計算（On-Write）</h2>
+  <p>另一種做法是<strong>在寫入時預先計算</strong>。每次使用者上傳一張新照片，系統就把這張照片推送到所有追蹤者的動態消息快取中。</p>
+  <p><strong>優點</strong>：讀取時只需要從快取中取出預計算好的結果，延遲極低。</p>
+  <p><strong>缺點</strong>：寫入時的計算量大。如果一個帳號有 1000 萬追蹤者，上傳一張照片就要更新 1000 萬個人的動態消息快取。這是<strong>寫入放大</strong>問題。</p>
+</section>
+
+<section>
+  <h2>方案三：混合方案</h2>
+  <p>實際的 Instagram 採用混合方案：對<strong>大部分使用者</strong>使用寫入時計算（預計算），對<strong>追蹤者極多的帳號</strong>（如明星）使用讀取時計算（即時查詢）。</p>
+  <p>具體做法：</p>
+  <ol>
+    <li>普通使用者上傳照片時，把照片 ID 推送到追蹤者的動態消息快取（一個 Sorted Set）</li>
+    <li>明星帳號上傳照片時，不預計算——因為追蹤者太多，寫入放大不可接受</li>
+    <li>載入動態消息時，先從快取取出預計算的結果，再即時查詢明星帳號的最新照片，合併排序</li>
+  </ol>
+  <p>這種方案在延遲和寫入成本之間取得了平衡。</p>
+</section>
+
+<section>
+  <h2>PhotoID 的巧妙設計</h2>
+  <p>為了高效查詢「最新照片」，Instagram 把<strong>建立時間嵌入 PhotoID</strong>。PhotoID 是一個 64-bit 的整數，高位是時間戳，低位是序列號。</p>
+  <p>這樣做的好處是：PhotoID 本身就包含了時間順序。查詢「最新照片」只需要找出最大的 PhotoID，不需要額外的時間欄位查詢。在分片架構下，這讓排序變得非常高效。</p>
+</section>
+
+<section>
+  <h2>你的經驗怎麼連結？</h2>
+  <p>你之前做 REST API 時，可能每次請求都從資料庫即時查詢。Instagram 的動態消息設計展示了一個重要的模式：<strong>預計算</strong>。把昂貴的查詢在寫入時做完，讀取時只需要從快取取結果。這跟你之前用 Redis 做快取的經驗類似，但 Instagram 把這個模式推到了極致——快取本身就是預計算的結果。</p>
+</section>
+
+<section>
+  <h2>自我檢測</h2>
+
+  <div class="quiz" data-question="「產生時計算（On-Read）」的主要缺點是什麼？" data-correct="2" data-explain="每次載入動態消息都要即時查詢數百個使用者的照片，延遲高。">
+    <button class="opt">資料不一致</button>
+    <button class="opt">寫入速度慢</button>
+    <button class="opt">延遲高，每次都要跨分片查詢</button>
+    <button class="opt">需要太多儲存空間</button>
+  </div>
+
+  <div class="quiz" data-question="「寫入時計算（On-Write）」的主要缺點是什麼？" data-correct="1" data-explain="明星帳號有千萬追蹤者，上傳一張照片就要更新千萬人的快取，寫入放大不可接受。">
+    <button class="opt">讀取延遲高</button>
+    <button class="opt">寫入放大問題</button>
+    <button class="opt">資料不一致</button>
+    <button class="opt">需要複雜的索引</button>
+  </div>
+
+  <div class="quiz" data-question="Instagram 為什麼要把建立時間嵌入 PhotoID？" data-correct="3" data-explain="PhotoID 包含時間戳，查詢最新照片只需找最大 PhotoID，不需要額外排序。">
+    <button class="opt">為了節省儲存空間</button>
+    <button class="opt">為了避免使用索引</button>
+    <button class="opt">為了支援地理查詢</button>
+    <button class="opt">為了讓 PhotoID 本身包含時間順序，簡化排序查詢</button>
+  </div>
+
+  <div class="quiz" data-question="Instagram 對明星帳號的動態消息採用什麼策略？" data-correct="0" data-explain="明星追蹤者太多，預計算的寫入放大不可接受，改用讀取時即時查詢。">
+    <button class="opt">讀取時即時查詢</button>
+    <button class="opt">寫入時預計算</button>
+    <button class="opt">完全不顯示</button>
+    <button class="opt">使用獨立的資料庫</button>
+  </div>
+
+  <div class="quiz" data-question="混合方案的核心思路是什麼？" data-correct="2" data-explain="大部分使用者用預計算（低延遲），追蹤者極多的帳號用即時查詢（避免寫入放大）。">
+    <button class="opt">所有使用者都用預計算</button>
+    <button class="opt">所有使用者都用即時查詢</button>
+    <button class="opt">普通使用者預計算，明星帳號即時查詢</button>
+    <button class="opt">根據時間段切換策略</button>
+  </div>
+
+  <div class="quiz" data-question="如果一個使用者追蹤了 500 人，On-Read 方案需要做幾次查詢？" data-correct="1" data-explain="每個被追蹤的人都要查一次最新照片，所以是 500 次查詢。">
+    <button class="opt">1 次</button>
+    <button class="opt">500 次</button>
+    <button class="opt">100 次</button>
+    <button class="opt">50 次</button>
+  </div>
+</section>
+
+<div class="source">
+  <strong>延伸閱讀：</strong>DesignGuru — Designing Instagram § Ranking and News Feed Generation & News Feed Creation with Sharded Data
+</div>
+
+<div class="footer">
+  <p>有不清楚的地方？問你的老師！</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="component-data-sharding.html">← 上一步：元件設計與資料分片</a>
+  <a href="reliability-redundancy.html">下一步：可靠性與冗餘設計 →</a>
+</nav>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>讀寫密集型工作負載的特徵</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>讀寫密集型工作負載的特徵</h1>
+<p class="meta">system-design · rate-readwrite · Step 3/4</p>
+
+<h2>學習目標</h2>
+<p>區分讀密集型與寫密集型系統的特徵、常見場景與核心挑戰。</p>
+
+<h2>先問一個問題：你的系統每天在做什麼？</h2>
+
+<p>假設你正在設計一個系統。在動手畫架構圖之前，你得先回答一個根本問題：<strong>這個系統的請求，大部分是讀還是寫？</strong></p>
+
+<p>這聽起來很簡單，但很多系統設計面試的候選人忽略了這一步。讀和寫的比例不只是統計數字——它決定了你該用什麼資料庫、該不該加快取、該怎麼設計副本策略。選錯了，效能問題會在流量一上來時立刻暴露。</p>
+
+<h2>什麼是讀密集型系統（Read-Heavy）</h2>
+
+<p>讀密集型系統的特徵是<strong>讀取操作遠多於寫入操作</strong>。典型的讀寫比例可能是 10:1 甚至 100:1——也就是說，每寫一次資料，會被讀取十次到一百次。</p>
+
+<h3>典型場景</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>系統</th>
+      <th>為什麼是讀密集</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>新聞網站 / 部落格</strong></td>
+      <td>文章寫一次，被 millions 的人閱讀</td>
+    </tr>
+    <tr>
+      <td><strong>CDN（內容分發網路）</strong></td>
+      <td>靜態資源（圖片、影片）被反覆請求</td>
+    </tr>
+    <tr>
+      <td><strong>電商商品頁</strong></td>
+      <td>商品資訊偶爾更新，但被大量用戶瀏覽</td>
+    </tr>
+    <tr>
+      <td><strong>報表系統</strong></td>
+      <td>資料寫入一次，被反覆查詢和分析</td>
+    </tr>
+    <tr>
+      <td><strong>社交媒體的 Feed</strong></td>
+      <td>發文是偶爾的，但刷 Feed 是頻繁的</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>核心挑戰</h3>
+
+<p>讀密集型系統的主要挑戰不在寫入效能，而在<strong>如何讓大量的讀取請求快速返回</strong>。具體來說：</p>
+
+<ul>
+  <li><strong>資料庫負載過高</strong>：每個讀取都要查資料庫，如果查詢慢或資料量大，資料庫很快成為瓶頸。</li>
+  <li><strong>快取命中率</strong>：如果快取設計不當，大量請求穿透到資料庫，快取形同虛設。</li>
+  <li><strong>一致性與效能的取捨</strong>：多個副本可能返回不同版本的資料，你需要決定是接受最終一致性（ eventual consistency）還是付出代價維護強一致性。</li>
+</ul>
+
+<h2>什麼是寫密集型系統（Write-Heavy）</h2>
+
+<p>寫密集型系統的特徵是<strong>寫入操作遠多於讀取操作</strong>。每秒可能有數千甚至數萬筆資料寫入。</p>
+
+<h3>典型場景</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>系統</th>
+      <th>為什麼是寫密集</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>日誌系統</strong></td>
+      <td>每台伺服器持續寫入日誌，讀取通常是事後分析</td>
+    </tr>
+    <tr>
+      <td><strong>即時數據收集</strong></td>
+      <td>IoT 設備、感測器持續產生數據</td>
+    </tr>
+    <tr>
+      <td><strong>訊息系統（IM）</strong></td>
+      <td>每條訊息都是寫入，群聊中寫入量暴增</td>
+    </tr>
+    <tr>
+      <td><strong>交易資料庫</strong></td>
+      <td>金融系統中每筆交易都是寫入操作</td>
+    </tr>
+    <tr>
+      <td><strong>點擊流分析</strong></td>
+      <td>用戶的每個點擊、滑動都被記錄</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>核心挑戰</h3>
+
+<p>寫密集型系統的挑戰在於<strong>如何在高吞吐量下保證寫入的可靠性與效能</strong>：</p>
+
+<ul>
+  <li><strong>資料庫寫入瓶頸</strong>：傳統關聯式資料庫的寫入有鎖機制（transaction lock），高併發寫入會導致鎖競爭，效能急劇下降。</li>
+  <li><strong>磁碟 I/O</strong>：每次寫入最終都要落到磁碟。如果寫入模式不佳（如隨機寫入），磁碟 I/O 會成為瓶頸。</li>
+  <li><strong>資料分佈</strong>：單台機器的寫入能力有上限，需要將寫入分散到多台機器。</li>
+  <li><strong>可靠性</strong>：寫入量大不代表可以丟資料。分散式環境中，如何確保資料不丟是一個核心問題。</li>
+</ul>
+
+<h2>讀寫比例決定架構選擇</h2>
+
+<p>理解讀寫比例的重要性在於：<strong>不同的比例需要完全不同的架構策略</strong>。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>維度</th>
+      <th>讀密集型</th>
+      <th>寫密集型</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>資料庫選擇</strong></td>
+      <td>關聯式資料庫（讀取效能好，支援複雜查詢）</td>
+      <td>NoSQL（如 Cassandra、MongoDB，寫入吞吐量高）</td>
+    </tr>
+    <tr>
+      <td><strong>快取策略</strong></td>
+      <td>重度依賴快取（Redis / Memcached），減輕資料庫壓力</td>
+      <td>快取作用有限（資料不斷變化，快取容易過期）</td>
+    </tr>
+    <tr>
+      <td><strong>副本策略</strong></td>
+      <td>多個讀取副本（read replica），分散讀取壓力</td>
+      <td>寫入分散（partitioning / sharding），單點寫入會是瓶頸</td>
+    </tr>
+    <tr>
+      <td><strong>索引策略</strong></td>
+      <td>建立豐富索引加速查詢（索引佔空間但讀取快）</td>
+      <td>減少索引（索引會拖慢寫入速度）</td>
+    </tr>
+    <tr>
+      <td><strong>一致性要求</strong></td>
+      <td>可接受最終一致性（讀到幾秒前的資料通常 OK）</td>
+      <td>可能需要更強的一致性（如金融交易不能丟）</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>真實世界的判斷方法</h2>
+
+<p>面試中，面試官不會直接告訴你「這是讀密集型系統」。你需要自己判斷。方法很簡單：</p>
+
+<ol>
+  <li><strong>問用戶量和操作頻率</strong>：100 萬用戶每天讀 10 次 vs 寫 1 次 → 讀密集。</li>
+  <li><strong>問資料的寫入模式</strong>：資料是「寫一次讀多次」還是「持續更新」？前者是讀密集，後者可能偏寫密集。</li>
+  <li><strong>問延遲要求</strong>：讀取要求低延遲（如 Feed 頁面要秒開）通常意味著讀密集。</li>
+  <li><strong>問一致性要求</strong>：如果可以接受 eventual consistency，通常偏向讀密集；如果需要 strong consistency，可能是寫密集。</li>
+</ol>
+
+<h2>面試中的關鍵點</h2>
+
+<ul>
+  <li>能判斷一個系統是讀密集還是寫密集（從用戶量、操作頻率、資料模式入手）</li>
+  <li>能說出讀密集系統的核心挑戰（資料庫負載、快取設計、一致性取捨）</li>
+  <li>能說出寫密集系統的核心挑戰（寫入瓶頸、磁碟 I/O、資料分佈、可靠性）</li>
+  <li>能根據讀寫比例選擇合適的資料庫、快取、副本策略</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>讀密集型系統的挑戰在於「如何讓大量讀取快速返回」，核心策略是快取和讀取副本。寫密集型系統的挑戰在於「如何在高吞吐量下保證寫入可靠性」，核心策略是分散寫入和選擇適合高寫入的資料庫。面試中，先判斷讀寫比例，再決定架構方向。</p>
+
+<div class="quiz" data-question="以下哪個系統最可能是讀密集型？" data-correct="2" data-explain="新聞網站的文章寫一次，被 millions 的人閱讀。典型的讀寫比可能達到 100:1 以上。">
+  <button class="opt">金融交易系統</button>
+  <button class="opt">IoT 感測器數據收集</button>
+  <button class="opt">新聞網站</button>
+  <button class="opt">即時通訊系統</button>
+</div>
+
+<div class="quiz" data-question="讀密集型系統最大的挑戰是什麼？" data-correct="1" data-explain="讀密集型系統的讀取請求遠多於寫入，主要挑戰在於如何讓大量的讀取快速返回，而不是資料庫的寫入效能。">
+  <button class="opt">資料寫入可靠性</button>
+  <button class="opt">讓大量讀取請求快速返回</button>
+  <button class="opt">資料庫鎖競爭</button>
+  <button class="opt">磁碟 I/O 瓶頸</button>
+</div>
+
+<div class="quiz" data-question="寫密集型系統選擇 NoSQL（如 Cassandra）的主要原因是什麼？" data-correct="0" data-explain="Cassandra 的分散式架構針對高寫入吞吐量設計，避免了傳統關聯式資料庫的鎖機制瓶頸，能高效處理大量並發寫入。">
+  <button class="opt">Cassandra 支援高寫入吞吐量</button>
+  <button class="opt">Cassandra 的 SQL 查詢語法更靈活</button>
+  <button class="opt">Cassandra 的快取效能更好</button>
+  <button class="opt">Cassandra 的索引更豐富</button>
+</div>
+
+<div class="quiz" data-question="讀取副本（Read Replica）主要解決什麼問題？" data-correct="3" data-explain="讀取副本是資料庫的複本，專門用來處理讀取請求，分散主資料庫的讀取壓力。這是讀密集型系統的典型策略。">
+  <button class="opt">分散寫入壓力</button>
+  <button class="opt">提升資料一致性</button>
+  <button class="opt">減少磁碟 I/O</button>
+  <button class="opt">分散讀取壓力</button>
+</div>
+
+<div class="quiz" data-question="面試中如何判斷一個系統是讀密集還是寫密集？" data-correct="1" data-explain="問用戶量和操作頻率是最直接的方法：100 萬用戶每天讀 10 次 vs 寫 1 次 → 讀密集。操作頻率直接決定了讀寫比例。">
+  <button class="opt">看系統用了什麼資料庫</button>
+  <button class="opt">問用戶量和操作頻率</button>
+  <button class="opt">問系統的延遲要求</button>
+  <button class="opt">問系統的部署位置</button>
+</div>
+
+<div class="quiz" data-question="寫密集型系統中，減少索引數量的原因是什麼？" data-correct="2" data-explain="每一個索引都需要在寫入時同步更新。索引越多，寫入時要更新的結構越多，寫入速度就越慢。寫密集型系統需要在查詢效能和寫入效能之間取捨。">
+  <button class="opt">索引佔用太多記憶體</button>
+  <button class="opt">索引會導致資料不一致</button>
+  <button class="opt">索引會拖慢寫入速度</button>
+  <button class="opt">索引只對讀取有用</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="token-leaky-comparison.html">← 上一步：Token Bucket 與 Leaky Bucket 演算法比較</a></div>
+  <div><a href="read-write-strategies.html">下一步：讀寫密集系統的設計策略 →</a></div>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

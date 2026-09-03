@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Weighted Least Connections — 加權最小連接數</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Weighted Least Connections：容量與負載的雙重平衡</h1>
+<p class="meta">system-design · lb-algorithms · Step 4/6</p>
+
+<p>Round Robin 不看伺服器差異也不看即時負載。Weighted Round Robin 看伺服器差異但不看即時負載。Least Connections 看即時負載但不看伺服器差異。有沒有一種演算法能同時看兩者？有，就是 Weighted Least Connections。</p>
+
+<h2>Weighted Least Connections 的工作原理</h2>
+<p>它在 Least Connections 的基礎上引入了權重。分配時，計算每台伺服器的一個比值：</p>
+<pre><code>比值 = 當前活躍連接數 / 權重</code></pre>
+<p>新請求分配給<strong>比值最小</strong>的伺服器。這個公式同時反映了兩件事：</p>
+<ul>
+  <li>連接數越少 → 比值越小 → 越容易被選中</li>
+  <li>權重越高 → 比值越小 → 性能好的伺服器更容易被選中</li>
+</ul>
+
+<h2>一個具體例子</h2>
+<p>兩台伺服器 S0（權重 5）和 S1（權重 3）。當 S0 有 10 個連接、S1 有 6 個連接時：</p>
+<table>
+  <tr><th>伺服器</th><th>連接數</th><th>權重</th><th>比值</th></tr>
+  <tr><td>S0</td><td>10</td><td>5</td><td>10/5 = 2.0</td></tr>
+  <tr><td>S1</td><td>6</td><td>3</td><td>6/3 = 2.0</td></tr>
+</table>
+<p>兩者比值相同，新請求會隨機分配。如果 S0 再來 3 個連接（變成 13），S0 的比值變為 2.6，S1 仍然是 2.0，新請求就會分到 S1。整個過程完全自動，不需要手動調整。</p>
+
+<h2>優缺點分析</h2>
+<table>
+  <tr><th></th><th>說明</th></tr>
+  <tr><td>✅ 動態負載感知</td><td>自動根據連接數調整</td></tr>
+  <tr><td>✅ 容量感知</td><td>高性能伺服器承擔更多請求</td></tr>
+  <tr><td>✅ 靈活適應</td><td>異質伺服器 + 變動負載都能處理</td></tr>
+  <tr><td>❌ 實作較複雜</td><td>需要同時維護連接數和權重</td></tr>
+  <tr><td>❌ 依賴連接數反映負載</td><td>如果連接數不能準確反映負載（例如慢查詢），可能不準確</td></tr>
+</table>
+
+<h2>與前面演算法的對比</h2>
+<table>
+  <tr><th>演算法</th><th>伺服器差異</th><th>即時負載</th><th>實作複雜度</th></tr>
+  <tr><td>Round Robin</td><td>❌</td><td>❌</td><td>極低</td></tr>
+  <tr><td>Weighted Round Robin</td><td>✅</td><td>❌</td><td>低</td></tr>
+  <tr><td>Least Connections</td><td>❌</td><td>✅</td><td>中</td></tr>
+  <tr><td>Weighted Least Connections</td><td>✅</td><td>✅</td><td>中高</td></tr>
+</table>
+
+<h2>適用場景</h2>
+<ul>
+  <li><strong>幾乎所有生產環境</strong>：異質伺服器 + 動態負載是多數生產環境的現狀</li>
+  <li><strong>高流量 Web 應用</strong>：流量模式變化大，需要即時調整</li>
+  <li><strong>資料庫集群</strong>：不同節點有不同的查詢處理能力</li>
+  <li><strong>微服務架構</strong>：各服務實例的性能可能不同，且負載波動大</li>
+</ul>
+
+<h2>面試提示</h2>
+<p>Weighted Least Connections 是「最穩妥的預設選擇」。在面試中，如果你不確定該選什麼演算法，選 Weighted Least Connections 通常不會出錯。它同時解決了伺服器差異和負載波動兩個問題，且幾乎所有現代負載均衡器（Nginx、HAProxy、AWS ALB）都原生支援。</p>
+<p>在面試中可以這樣展示思考過程：「我選 Weighted Least Connections，因為它能自動兼顧伺服器容量差異和即時負載波動，不需要手動調整。唯一的限制是連接數可能不能完美反映負載，但在多數場景下已經足夠。」</p>
+
+<section class="quiz" data-question="Weighted Least Connections 的分配公式是？" data-correct="1" data-explain="比值 = 當前連接數 / 權重，選比值最小的伺服器。">
+  <button class="opt">權重 × 連接數，選最大值</button>
+  <button class="opt">連接數 / 權重，選最小值</button>
+  <button class="opt">連接數 - 權重，選最小值</button>
+  <button class="opt">權重 / 連接數，選最大值</button>
+</section>
+
+<section class="quiz" data-question="Weighted Least Connections 解決了哪些問題？" data-correct="2" data-explain="它同時解決了伺服器性能差異（透過權重）和即時負載波動（透過連接數）兩個問題。">
+  <button class="opt">只解決伺服器性能差異</button>
+  <button class="opt">只解決即時負載波動</button>
+  <button class="opt">同時解決伺服器差異和負載波動</button>
+  <button class="opt">解決會話持久化問題</button>
+</section>
+
+<section class="quiz" data-question="Weighted Least Connections 的少數缺點之一是？" data-correct="3" data-explain="連接數不能完美反映負載，例如一個慢查詢和一個快查詢佔用同樣的連接數。">
+  <button class="opt">不能支援異質伺服器</button>
+  <button class="opt">需要手動調整權重</button>
+  <button class="opt">不考慮伺服器差異</button>
+  <button class="opt">依賴連接數反映負載，但有時不準確</button>
+</section>
+
+<section class="quiz" data-question="在面試中不確定該選什麼演算法時，最穩妥的預設選擇是？" data-correct="0" data-explain="Weighted Least Connections 同時解決了伺服器差異和負載波動問題，且被大多數負載均衡器原生支援。">
+  <button class="opt">Weighted Least Connections</button>
+  <button class="opt">Round Robin</button>
+  <button class="opt">IP Hash</button>
+  <button class="opt">Least Connections</button>
+</section>
+
+<section class="quiz" data-question="四種演算法中，哪一個實作複雜度最高？" data-correct="2" data-explain="Weighted Least Connections 需要同時維護連接數計數器和伺服器權重，實作最複雜。">
+  <button class="opt">Round Robin</button>
+  <button class="opt">Weighted Round Robin</button>
+  <button class="opt">Weighted Least Connections</button>
+  <button class="opt">Least Connections</button>
+</section>
+
+<div class="footer">
+  <p>💡 有任何不清楚的地方？問你的老師！</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

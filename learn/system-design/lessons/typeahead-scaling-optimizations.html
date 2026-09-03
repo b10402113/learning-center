@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Typeahead 擴展與用戶體驗優化</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Typeahead 擴展與用戶體驗優化</h1>
+<p class="meta">system-design · typeahead-ratelimit · Step 2/4</p>
+
+<h2>學習目標</h2>
+<p>學習如何大規模擴展 Typeahead 服務，包括容量估算、資料分片、快取、複製、容錯，以及用戶端優化和個人化功能設計。</p>
+
+<h2>容量估算：你的 Trie 到底有多大</h2>
+
+<p>設計系統前先算數。假設你的服務規模跟 Google 差不多：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>指標</th>
+      <th>數值</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>每天搜尋量</td>
+      <td>50 億次</td>
+    </tr>
+    <tr>
+      <td>每秒查詢（QPS）</td>
+      <td>~60,000</td>
+    </tr>
+    <tr>
+      <td>唯一搜尋詞比例</td>
+      <td>~20%（大量重複搜尋）</td>
+    </tr>
+    <tr>
+      <td>只索引 top 50% 熱門詞</td>
+      <td>~10 億個唯一詞</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>10 億個詞，每個詞平均 15 個字元，每個 Trie 節點大約 10 bytes（字元 + 指標 + 標記），整個 Trie 大約 <strong>150 GB</strong>。一台現代伺服器的記憶體輕鬆到 256GB，所以單台機器放得下——但別高興太早，60K QPS 的查詢量可不是一台機器扛得住的。</p>
+
+<h2>資料分片：把 Trie 拆到多台機器</h2>
+
+<p>要把 Trie 分散到多台機器上，有兩種分片策略：</p>
+
+<h3>按首字元分片</h3>
+
+<p>把以 A 開頭的詞放在一台機器，以 B 開頭的放在另一台。問題是<strong>分佈不均</strong>——以 S、C、T 開頭的詞遠多於以 X、Z 開頭的。某些機器會成為熱點。</p>
+
+<h3>按字元範圍分片</h3>
+
+<p>更靈活的做法是把字元空間切分成多個範圍（如 A-G 一組、H-N 一組），根據負載動態調整分片邊界。每台機器負責一個字元範圍的 Trie，負載均衡器根據用戶輸入的前綴，把請求路由到對應的分片。</p>
+
+<p>不管哪種分片，都需要一台<strong>負載均衡器</strong>來追蹤分片方案（哪些字元範圍在哪台機器），根據用戶輸入的前綴把請求路由到正確的伺服器。</p>
+
+<h2>快取：擋住 80% 的查詢</h2>
+
+<p>搜尋行為遵循<strong>冪律分佈（Power Law）</strong>：少數熱門搜尋詞佔了大部分流量。你可能有 10 億個詞，但每天被搜的可能只有幾百萬個，其中 top 1% 的詞就佔了 80% 的查詢。</p>
+
+<p>這就是快取的黃金機會。在 Trie 伺服器前面放一層<strong>快取伺服器</strong>（如 Redis），存最熱門的搜尋詞及其建議結果。應用伺服器收到查詢時先查快取，命中就直接返回，不命中才去查 Trie。</p>
+
+<pre><code>用戶查詢 → 快取伺服器 → [命中] → 直接返回建議
+                       → [未命中] → Trie 伺服器 → 寫入快取 → 返回建議</code></pre>
+
+<p>這個架構能擋掉 80% 的查詢，把 Trie 伺服器的壓力降到原來的 1/5。</p>
+
+<h2>複製與負載均衡</h2>
+
+<p>即使有了快取，Trie 伺服器也需要<strong>多副本</strong>——既能分擔查詢負載，也能在某台機器掛掉時快速切換。每台 Trie 伺服器可以有 primary-secondary 配置：primary 處理寫入（詞典更新），secondary 跟 primary 同步資料。</p>
+
+<p>負載均衡器不僅要做路由（按前綴分片），還要做<strong>健康檢查</strong>：偵測到某台 Trie 伺服器掛了，就把它從路由表中移除，把流量轉到健康的副本。</p>
+
+<h2>容錯：伺服器掛了怎麼辦</h2>
+
+<p>Trie 伺服器掛掉時，系統需要快速恢復：</p>
+
+<ul>
+  <li><strong>Primary-Secondary 切換</strong>：secondary 偵測到 primary 死了，自動接管服務</li>
+  <li><strong>從快照重建</strong>：任何新啟動的伺服器都可以從最新的 Trie 快照重建記憶體中的 Trie</li>
+  <li><strong>資料一致性</strong>：secondary 可能丟失最後幾秒的更新（primary 在同步前掛了），但對 Typeahead 來說這是可以接受的——建議稍微過時幾秒沒關係</li>
+</ul>
+
+<h2>用戶端優化：把延遲壓到最低</h2>
+
+<p>伺服器端做得再好，如果用戶端不配合，延遲還是會很高。幾個關鍵的用戶端優化：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>優化手段</th>
+      <th>原理</th>
+      <th>效果</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>50ms 防抖</strong></td>
+      <td>用戶停頓 50ms 後才發送查詢，持續打字時取消前一個請求</td>
+      <td>減少無效查詢，降低伺服器壓力</td>
+    </tr>
+    <tr>
+      <td><strong>延遲打字</strong></td>
+      <td>用戶至少輸入 2-3 個字元後才開始查詢</td>
+      <td>避免「a」「ab」這類太短的前綴產生海量結果</td>
+    </tr>
+    <tr>
+      <td><strong>預取（Pre-fetch）</strong></td>
+      <td>用戶輸入「sys」時，同時預取「sys+所有可能的下一個字元」的結果</td>
+      <td>用戶再打一個字時結果已緩存，實現近乎零延遲</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>個人化</h2>
+
+<p>每個人的搜尋習慣不同。熱愛烹飪的人搜「烤」可能想要「烤箱食譜」，攝影愛好者可能想要「烤肉滤镜」。</p>
+
+<p>實現方式：在伺服器端為每個用戶維護一份<strong>個人化搜尋歷史</strong>，同時在用戶端也緩存。伺服器收到查詢時，先從用戶的歷史中找匹配的詞，放在建議列表的最前面，然後再加上全域熱門詞。個人化建議永遠優先於通用建議。</p>
+
+<h2>面試中的關鍵點</h2>
+
+<ul>
+  <li>能做容量估算：50 億次/天 → 60K QPS → Trie 約 150GB</li>
+  <li>能解釋兩種分片策略的取捨（按首字元 vs 按字元範圍）</li>
+  <li>能說明冪律分佈如何驅動快取策略，以及快取能擋掉多少查詢</li>
+  <li>能描述 Primary-Secondary 複製 + 快照重建的容錯機制</li>
+  <li>能說出三個以上的用戶端優化手段及其原理</li>
+  <li>能解釋個人化如何在全域建議之上疊加用戶歷史</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>Typeahead 的擴展核心是：用分片分散 Trie 到多台機器，用快取擋住 80% 的查詢，用複製和快照實現容錯，用用戶端優化（防抖、延遲、預取）把延遲壓到最低。個人化在全域建議之上疊加用戶歷史，讓建議更貼近個人意圖。整個架構遵循「容量估算 → 分片 → 快取 → 複製 → 用戶端優化」的設計流程。</p>
+
+<div class="quiz" data-question="Typeahead 服務的冪律分佈意味著什麼？" data-correct="1" data-explain="冪律分佈意味著少數熱門搜尋詞佔了大部分流量——top 1% 的詞可能佔 80% 的查詢，這是快取策略的基礎。">
+  <button class="opt">所有搜尋詞的查詢量均勻分佈</button>
+  <button class="opt">少數熱門詞佔了大部分流量</button>
+  <button class="opt">長尾搜尋詞的查詢量更多</button>
+  <button class="opt">搜尋詞的查詢量隨時間線性增長</button>
+</div>
+
+<div class="quiz" data-question="按首字元分片的主要問題是什麼？" data-correct="2" data-explain="以 S、C、T 開頭的詞遠多於 X、Z，導致某些機器成為熱點，負載不均。">
+  <button class="opt">實現太複雜</button>
+  <button class="opt">無法支援前綴查詢</button>
+  <button class="opt">分佈不均，某些機器成為熱點</button>
+  <button class="opt">快取命中率太低</button>
+</div>
+
+<div class="quiz" data-question="用戶端 50ms 防抖的作用是什麼？" data-correct="0" data-explain="用戶停頓 50ms 後才發送查詢，持續打字時取消前一個請求，減少無效查詢，降低伺服器壓力。">
+  <button class="opt">用戶停頓後才發送查詢，減少無效請求</button>
+  <button class="opt">延遲 50ms 後才顯示結果</button>
+  <button class="opt">讓伺服器有更多時間處理</button>
+  <button class="opt">增加快取命中率</button>
+</div>
+
+<div class="quiz" data-question="Typeahead 的個人化建議如何排列？" data-correct="3" data-explain="個人化建議永遠優先於通用建議：先從用戶歷史中找匹配的詞放在最前面，再加上全域熱門詞。">
+  <button class="opt">完全取代全域熱門詞</button>
+  <button class="opt">隨機穿插在全域熱門詞之間</button>
+  <button class="opt">放在全域熱門詞之後</button>
+  <button class="opt">個人化建議優先，全域熱門詞在後</button>
+</div>
+
+<div class="quiz" data-question="Typeahead Trie 伺服器的容錯機制包括什麼？" data-correct="2" data-explain="Primary-Secondary 切換讓 secondary 接管，從快照重建讓新伺服器快速恢復服務，兩者結合實現高可用。">
+  <button class="opt">只靠負載均衡器自動重試</button>
+  <button class="opt">使用資料庫的故障轉移</button>
+  <button class="opt">Primary-Secondary 切換 + 從快照重建</button>
+  <button class="opt">多寫入幾個副本就夠了</button>
+</div>
+
+<div class="quiz" data-question="預取（Pre-fetch）優化的核心思路是什麼？" data-correct="1" data-explain="用戶輸入「sys」時同時預取所有可能的下一個字元結果，用戶再打一個字時結果已緩存，實現近乎零延遲。">
+  <button class="opt">提前載入整個 Trie 到記憶體</button>
+  <button class="opt">提前預取可能的下一個字元結果</button>
+  <button class="opt">把搜尋結果存到用戶端 localStorage</button>
+  <button class="opt">壓縮 Trie 以減少網路傳輸</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="typeahead-fundamentals.html">← 上一步：Typeahead 基礎設計與核心演算法</a></div>
+  <div><a href="ratelimit-fundamentals.html">下一步：API 限流基礎概念與需求 →</a></div>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

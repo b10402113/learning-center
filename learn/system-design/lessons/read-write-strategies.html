@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>讀寫密集系統的設計策略</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>讀寫密集系統的設計策略</h1>
+<p class="meta">system-design · rate-readwrite · Step 4/4</p>
+
+<h2>學習目標</h2>
+<p>掌握針對讀密集與寫密集系統分別適用的設計優化策略。</p>
+
+<h2>從上一課的問題出發</h2>
+
+<p>上一課我們學會了區分讀密集和寫密集系統。知道了系統的類型之後，下一步就是：<strong>怎麼設計才能讓它跑得好？</strong></p>
+
+<p>不同的工作負載需要不同的設計策略。硬把讀密集的策略套在寫密集系統上，或者反過來，只會讓問題更嚴重。這一課整理兩套完整的設計武器庫。</p>
+
+<h2>讀密集型系統的設計策略</h2>
+
+<h3>策略一：重度快取</h3>
+
+<p>讀密集型系統最有效的武器就是<strong>快取（Caching）</strong>。核心思路：把熱門資料從資料庫搬到更快的存取層（如 Redis、Memcached），讓大部分讀取請求根本不碰資料庫。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>快取層級</th>
+      <th>位置</th>
+      <th>特點</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>應用層快取</strong></td>
+      <td>應用伺服器記憶體</td>
+      <td>速度最快，但每個實例各存一份，一致性難保證</td>
+    </tr>
+    <tr>
+      <td><strong>分散式快取</strong></td>
+      <td>Redis / Memcached 集群</td>
+      <td>所有實例共用，易擴展，最常見的選擇</td>
+    </tr>
+    <tr>
+      <td><strong>資料庫層快取</strong></td>
+      <td>資料庫內建緩衝池</td>
+      <td>對應用透明，但容量受限於資料庫配置</td>
+    </tr>
+    <tr>
+      <td><strong>CDN 快取</strong></td>
+      <td>邊緣節點</td>
+      <td>適合靜態資源，距離用戶最近，延遲最低</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>一個新聞網站的例子：文章發布後，快取層存儲文章內容和熱門文章列表。95% 的讀取請求從 Redis 返回，只有 5% 的冷門請求穿透到資料庫。資料庫壓力直接降到原來的 1/20。</p>
+
+<h3>策略二：讀取副本</h3>
+
+<p>當快取無法覆蓋所有讀取場景（如需要複雜查詢或資料即時性要求高），可以用<strong>讀取副本（Read Replica）</strong>。</p>
+
+<p>原理：主資料庫（Primary）負責寫入，多個從資料庫（Replica）負責讀取。讀取請求被分散到多個副本，每個副本只需要承擔一小部分壓力。</p>
+
+<p>適用場景：需要即時查詢最新資料的報表系統、搜尋引擎等。</p>
+
+<h3>策略三：資料庫優化</h3>
+
+<p>即使有了快取和副本，資料庫本身的查詢效能仍然重要：</p>
+
+<ul>
+  <li><strong>建立合適的索引</strong>：讀密集系統可以建立更多索引——索引佔空間，但換來查詢速度的大幅提升。</li>
+  <li><strong>優化查詢語句</strong>：避免 SELECT *，只查詢需要的欄位；使用 JOIN 而非多次單獨查詢。</li>
+  <li><strong>選擇適合的資料模型</strong>：反規範化（denormalization）在讀密集場景中很常見——用空間換時間，把常用資訊冗餘存儲以避免 JOIN。</li>
+</ul>
+
+<h3>策略四：CDN 分發</h3>
+
+<p>對於靜態內容（圖片、影片、CSS、JS），使用 <strong>CDN（Content Delivery Network）</strong>將內容分發到全球邊緣節點。用戶從最近的節點取得內容，不僅速度更快，還大幅減輕了源站的壓力。</p>
+
+<h2>寫密集型系統的設計策略</h2>
+
+<h3>策略一：選擇高寫入吞吐量的資料庫</h3>
+
+<p>寫密集型系統的第一步是<strong>選對資料庫</strong>。傳統關聯式資料庫（如 MySQL、PostgreSQL）的 ACID 事務機制在高併發寫入下容易成為瓶頸。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>資料庫</th>
+      <th>適合場景</th>
+      <th>寫入優勢</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Cassandra</strong></td>
+      <td>日誌、時序數據、IoT</td>
+      <td>分散式架構，寫入吞吐量可線性擴展</td>
+    </tr>
+    <tr>
+      <td><strong>MongoDB</strong></td>
+      <td>內容管理、即時數據</td>
+      <td>文檔模型，寫入不需要固定 schema</td>
+    </tr>
+    <tr>
+      <td><strong>Redis（AOF 持久化）</strong></td>
+      <td>即時數據、計數器</td>
+      <td>記憶體寫入，延遲極低</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>策略二：寫入分散（Sharding）</h3>
+
+<p>單台機器的寫入能力有上限。<strong>分片（Sharding）</strong>將資料分散到多台機器，每台機器只承擔一部分寫入壓力。</p>
+
+<p>例如：按照用戶 ID 取模分片——用戶 A 的資料在 Shard 1，用戶 B 的資料在 Shard 2。每個 Shard 獨立處理寫入，整體寫入吞吐量等於所有 Shard 的總和。</p>
+
+<p>分片的關鍵挑戰：選擇合適的分片鍵（shard key），避免熱點（hotspot）。如果所有寫入都集中在同一個 Shard，分片就失去了意義。</p>
+
+<h3>策略三：非同步處理（Async Processing）</h3>
+
+<p>寫密集型系統中，很多操作不需要即時完成。利用<strong>訊息佇列（Message Queue）</strong>將非關鍵路徑的寫入延遲處理：</p>
+
+<ol>
+  <li>用戶發送訊息 → 立即返回「已發送」→ 訊息進入 Kafka / RabbitMQ</li>
+  <li>後台消費者（Consumer）從佇列中取出訊息，異步寫入資料庫</li>
+  <li>如果消費者暫時處理不過來，訊息在佇列中排隊，不會丟失</li>
+</ol>
+
+<p>好處：使用者感知到的延遲降低了（不用等資料庫寫入完成），系統的寫入吞吐量由消費者的處理能力決定，可以水平擴展。</p>
+
+<h3>策略四：批量寫入（Batch Write）</h3>
+
+<p>與其每筆資料都單獨寫入資料庫，不如<strong>累積一批後一次性寫入</strong>。例如：</p>
+
+<ul>
+  <li>日誌系統：每 5 秒批量 flush 一次日誌到磁碟，而不是每條日誌都寫一次。</li>
+  <li>數據收集：感測器數據每 10 秒批量上傳，而不是逐條寫入。</li>
+</ul>
+
+<p>批量寫入減少了磁碟 I/O 次數和資料庫連線開銷，大幅提升寫入效能。代價是增加了少量延遲（最多等一個 batch 週期）。</p>
+
+<h3>策略五：資料庫寫入優化</h3>
+
+<ul>
+  <li><strong>減少索引</strong>：每個索引都會拖慢寫入速度，寫密集場景中只保留必要的索引。</li>
+  <li><strong>使用 append-only 模型</strong>：像 Cassandra 一樣，資料只追加不修改，避免隨機寫入。</li>
+  <li><strong>調整批次大小</strong>：增大寫入批次（batch size），減少磁碟尋道次數。</li>
+</ul>
+
+<h2>策略總覽</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>策略類型</th>
+      <th>讀密集型</th>
+      <th>寫密集型</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>資料庫</strong></td>
+      <td>關聯式 + 豐富索引</td>
+      <td>NoSQL（Cassandra / MongoDB）</td>
+    </tr>
+    <tr>
+      <td><strong>快取</strong></td>
+      <td>Redis / Memcached + CDN</td>
+      <td>作用有限（資料頻繁變動）</td>
+    </tr>
+    <tr>
+      <td><strong>擴展方式</strong></td>
+      <td>讀取副本（Read Replica）</td>
+      <td>分片（Sharding）</td>
+    </tr>
+    <tr>
+      <td><strong>處理模式</strong></td>
+      <td>同步讀取（要求低延遲）</td>
+      <td>非同步寫入（訊息佇列 + 批量）</td>
+    </tr>
+    <tr>
+      <td><strong>索引</strong></td>
+      <td>多建索引加速查詢</td>
+      <td>少建索引提升寫入速度</td>
+    </tr>
+    <tr>
+      <td><strong>一致性</strong></td>
+      <td>可接受最終一致性</td>
+      <td>依場景（金融需強一致性）</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>面試中怎麼回答</h2>
+
+<p>當面試官問你「怎麼設計一個 XX 系統」時，先判斷讀寫比例，再針對性地選擇策略：</p>
+
+<blockquote>
+  「這是一個讀密集型系統——預估讀寫比 10:1。我的策略是：第一層用 CDN 分發靜態資源；第二層用 Redis 快取熱門資料；資料庫層使用讀取副本分散讀取壓力；索引建立在最常用的查詢欄位上。」
+</blockquote>
+
+<blockquote>
+  「這是一個寫密集型系統——每秒寫入量達到 10,000 筆。我的策略是：使用 Cassandra 作為主資料庫（高寫入吞吐量）；按用戶 ID 分片分散寫入壓力；非關鍵路徑的日誌通過 Kafka 異步寫入；減少索引數量以提升寫入速度。」
+</blockquote>
+
+<h2>面試中的關鍵點</h2>
+
+<ul>
+  <li>能說出讀密集型的四大策略：快取、讀取副本、資料庫優化、CDN</li>
+  <li>能說出寫密集型的五大策略：選對資料庫、分片、非同步處理、批量寫入、寫入優化</li>
+  <li>能根據讀寫比例，組合多種策略回答設計方案</li>
+  <li>能解釋每種策略的取捨（如快取增加一致性難度、分片增加複雜度）</li>
+</ul>
+
+<h2>小結</h2>
+
+<p>讀密集型系統用快取 + 讀取副本 + CDN 讓讀取更快；寫密集型系統用 NoSQL + 分片 + 非同步寫入 + 批量處理讓寫入更高效。面試中先判斷讀寫比例，再組合策略回答，並解釋每個選擇的取捨。</p>
+
+<div class="quiz" data-question="讀密集型系統最有效的優化策略是什麼？" data-correct="0" data-explain="快取是讀密集型系統最有效的武器——把熱門資料從資料庫搬到更快的存取層，讓大部分讀取請求根本不碰資料庫。">
+  <button class="opt">重度快取</button>
+  <button class="opt">資料庫分片</button>
+  <button class="opt">非同步寫入</button>
+  <button class="opt">減少索引</button>
+</div>
+
+<div class="quiz" data-question="為什麼寫密集型系統通常選擇 Cassandra 而不是 MySQL？" data-correct="2" data-explain="Cassandra 的分散式架構針對高寫入吞吐量設計，避免了 MySQL 的 ACID 事務鎖機制在高併發下的瓶頸。">
+  <button class="opt">Cassandra 支援更複雜的 SQL 查詢</button>
+  <button class="opt">Cassandra 的快取能力更強</button>
+  <button class="opt">Cassandra 的分散式架構支持高寫入吞吐量</button>
+  <button class="opt">Cassandra 的資料一致性更強</button>
+</div>
+
+<div class="quiz" data-question="分片（Sharding）的主要挑戰是什麼？" data-correct="1" data-explain="分片的關鍵挑戰是選擇合適的分片鍵（shard key）。如果分片鍵選擇不當，所有寫入集中在同一個 Shard，其他 Shard 閒置，分片就失去了意義。">
+  <button class="opt">增加讀取延遲</button>
+  <button class="opt">選擇合適的分片鍵避免熱點</button>
+  <button class="opt">增加資料一致性</button>
+  <button class="opt">減少快取命中率</button>
+</div>
+
+<div class="quiz" data-question="非同步寫入（Async Processing）的核心優勢是什麼？" data-correct="3" data-explain="非同步寫入讓使用者感知到的延遲降低（不用等資料庫寫入完成），同時系統的寫入吞吐量由消費者的處理能力決定，可以水平擴展。">
+  <button class="opt">提升資料一致性</button>
+  <button class="opt">減少磁碟 I/O</button>
+  <button class="opt">降低快取失效頻率</button>
+  <button class="opt">降低使用者感知延遲，提升寫入吞吐量</button>
+</div>
+
+<div class="quiz" data-question="寫密集型系統減少索引數量的原因是什麼？" data-correct="2" data-explain="每一個索引都需要在寫入時同步更新。索引越多，寫入時要維護的結構越多，寫入速度就越慢。寫密集型系統需要在查詢效能和寫入效能之間取捨。">
+  <button class="opt">索引佔用太多記憶體</button>
+  <button class="opt">索引會導致資料不一致</button>
+  <button class="opt">每個索引都會拖慢寫入速度</button>
+  <button class="opt">索引對寫密集系統沒有用</button>
+</div>
+
+<div class="quiz" data-question="批量寫入（Batch Write）的代價是什麼？" data-correct="1" data-explain="批量寫入需要累積一批資料後才寫入，這增加了延遲——最多等一個 batch 週期（如 5 秒）。但換來的是大幅減少磁碟 I/O 次數。">
+  <button class="opt">增加資料不一致風險</button>
+  <button class="opt">增加延遲（需等待 batch 週期）</button>
+  <button class="opt">增加記憶體使用量</button>
+  <button class="opt">減少寫入吞吐量</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="read-write-workloads.html">← 上一步：讀寫密集型工作負載的特徵</a></div>
+  <div></div>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

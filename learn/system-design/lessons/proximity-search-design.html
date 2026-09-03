@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Yelp 鄰近搜尋設計 — Newsfeed & Yelp/Uber</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<p class="meta">Newsfeed &amp; Yelp/Uber · 第 3 步（共 5 步）</p>
+
+<h1>Yelp 鄰近搜尋設計</h1>
+
+<h2>學習目標</h2>
+<p>掌握地理位置鄰近搜尋的核心演算法，包括 SQL 查詢、網格分割、QuadTree 與動態網格等方法，以及如何進行資料分片。</p>
+
+<hr>
+
+<section>
+<h2>1. 問題定義</h2>
+<p>Yelp 的核心功能是：使用者給出自己的位置（經緯度），系統返回指定半徑內的所有地點（餐廳、商店、景點等）。這是一個經典的<strong>地理空間鄰近搜尋（Proximity Search）</strong>問題。</p>
+<p>關鍵約束：地點的位置幾乎不變（餐廳不會搬遷），所以資料是<strong>靜態的</strong>。這意味著我們可以建立高效的靜態索引，而不用擔心頻繁更新。</p>
+</section>
+
+<section>
+<h2>2. 資料庫綱要</h2>
+<p>每個地點（Place）可以有以下欄位：</p>
+<table>
+<tr><th>欄位</th><th>大小</th><th>說明</th></tr>
+<tr><td>LocationID</td><td>8 bytes</td><td>唯一識別碼</td></tr>
+<tr><td>Name</td><td>256 bytes</td><td>地點名稱</td></tr>
+<tr><td>Latitude</td><td>8 bytes</td><td>緯度</td></tr>
+<tr><td>Longitude</td><td>8 bytes</td><td>經度</td></tr>
+<tr><td>Description</td><td>512 bytes</td><td>描述</td></tr>
+<tr><td>Category</td><td>1 byte</td><td>類別（咖啡店、餐廳、劇院等）</td></tr>
+</table>
+<p>每個地點約 800 bytes。5 億個地點的純地點資料約 400GB。</p>
+</section>
+
+<section>
+<h2>3. 方案一：SQL 查詢</h2>
+<p>最直覺的做法是把所有地點存入 MySQL，在經緯度欄位上建立索引。搜尋指定位置 (X, Y) 半徑 D 內的地點：</p>
+<pre><code>SELECT * FROM Places
+WHERE Latitude BETWEEN X-D AND X+D
+  AND Longitude BETWEEN Y-D AND Y+D;</code></pre>
+<p>這個查詢利用索引先過濾出一個方形範圍，再在結果中計算實際距離（排除方形四角超出圓形範圍的地點）。</p>
+
+<h3>問題</h3>
+<p>當 5 億個地點都存儲在一個資料庫中時，即使有索引，每個查詢仍需要掃描大量資料。100K QPS 的查詢壓力下，單一資料庫無法承受。</p>
+</section>
+
+<section>
+<h2>4. 方案二：網格分割（Grids）</h2>
+<p>把整個地圖分割成固定大小的網格，每個網格存儲落在其範圍內的所有地點。搜尋時，先根據使用者位置和搜尋半徑找到相鄰的網格，再只查詢這些網格中的地點。</p>
+
+<h3>運作方式</h3>
+<p>假設每個網格覆蓋 1° × 1° 的範圍（約 111km × 111km）。當使用者在位置 (X, Y) 搜尋半徑 D 內的地點時：</p>
+<ol>
+<li>計算哪些網格落在搜尋範圍內（通常是 1-4 個相鄰網格）</li>
+<li>只從這些網格中查詢地點</li>
+<li>過濾掉實際距離超出 D 的地點</li>
+</ol>
+<p>搜尋範圍從全球 5 億個地點縮小到幾個網格中的數千個地點——查詢效率大幅提升。</p>
+
+<h3>問題</h3>
+<p>固定大小的網格有「分佈不均」問題：市中心的網格可能包含數千個地點，而郊區的網格可能只有幾個地點。查詢市中心時仍然很慢。</p>
+</section>
+
+<section>
+<h2>5. 方案三：動態網格（QuadTree）</h2>
+<p>為了應對分佈不均的問題，我們使用<strong>動態大小的網格</strong>——當一個網格中的地點數量超過閾值（如 500 個）時，將它分割成四個等大的子網格。這就是 <strong>QuadTree（四元樹）</strong>資料結構。</p>
+
+<h3>運作方式</h3>
+<ul>
+<li>根節點代表整個地圖</li>
+<li>當某個節點的地點數超過 500 個，分割為四個子節點</li>
+<li>市中心（如舊金山市中心）會有大量小網格，郊區（如太平洋）會有少量大網格</li>
+<li>搜尋時從根節點開始，遞迴進入包含搜尋範圍的子節點</li>
+</ul>
+
+<h3>優勢</h3>
+<ul>
+<li>自動適應地點密度——市中心和郊區的查詢效率一致</li>
+<li>查詢時只需遍歷少數節點，效率遠高於全表掃描</li>
+</ul>
+
+<h3>結構示意</h3>
+<pre><code>整個地圖 (1 節點)
+├── 東北 (4 個子網格)
+│   ├── 東北-1 (200 個地點) ← 葉節點
+│   ├── 東北-2 (150 個地點) ← 葉節點
+│   ├── 東北-3 (600 個地點 → 再分割)
+│   │   ├── 東北-3a (150 個地點)
+│   │   ├── 東北-3b (160 個地點)
+│   │   ├── 東北-3c (140 個地點)
+│   │   └── 東北-3d (150 個地點)
+│   └── 東北-4 (80 個地點) ← 葉節點
+├── 東南 ...
+├── 西北 ...
+└── 西南 ...</code></pre>
+</section>
+
+<section>
+<h2>6. QuadTree 的資料分片</h2>
+<p>當 QuadTree 太大無法放在單機記憶體中時，需要進行分片。有兩種主要策略：</p>
+
+<h3>水平分片（Hash-based）</h3>
+<p>使用一致性雜湊（Consistent Hashing）將 QuadTree 的葉節點分散到多台機器上。每台機器負責一段雜湊環上的節點。</p>
+
+<h3>地理分片（Geographic Hashing）</h3>
+<p>把 QuadTree 分成多個矩形區域，每個區域由不同的伺服器負責。例如：美國西岸的伺服器負責西部地點，東岸伺服器負責東部地點。</p>
+
+<h3>容錯</h3>
+<p>QuadTree 伺服器使用主從複製（Primary-Secondary）：從伺服器只處理讀取流量，寫入流量先到主伺服器再同步到從伺服器。從伺服器可能有輕微的資料延遲（最近新增的地點尚未同步），但搜尋場景可以接受。</p>
+</section>
+
+<section>
+<h2>7. 快取策略</h2>
+<p>熱門地點（如知名餐廳）會被大量搜尋。可以在資料庫前加一層快取（如 Memcache），使用 LRU（Least Recently Used）淘汰策略。應用伺服器在查詢資料庫前先檢查快取。</p>
+</section>
+
+<hr>
+
+<div class="lesson-nav">
+<span><a href="./newsfeed-architecture.html">← 上一步：Facebook Newsfeed 架構設計</a></span>
+<span><a href="./uber-realtime.html">下一步：Uber 即時位置與配對設計 →</a></span>
+</div>
+
+<div class="footer">
+<p>系統設計面試 · Newsfeed &amp; Yelp/Uber</p>
+</div>
+
+<div class="quiz" data-question="QuadTree 解決了固定大小網格的什麼問題？" data-correct="2" data-explain="QuadTree 透過動態分割適應地點密度，市中心有小網格、郊區有大網格，查詢效率一致。">
+<button class="opt">減少儲存空間</button>
+<button class="opt">簡化程式碼</button>
+<button class="opt">適應地點密度不均的問題</button>
+<button class="opt">提高寫入速度</button>
+</div>
+
+<div class="quiz" data-question="SQL 方案搜尋鄰近地點時，為什麼先用 BETWEEN 查詢方形範圍？" data-correct="0" data-explain="利用索引先過濾出方形範圍，再在結果中計算實際距離，避免全表掃描。">
+<button class="opt">利用索引過濾範圍，減少掃描量</button>
+<button class="opt">方形查詢比圓形查詢更準確</button>
+<button class="opt">資料庫不支援圓形查詢</button>
+<button class="opt">這是 SQL 的標準寫法</button>
+</div>
+
+<div class="quiz" data-question="QuadTree 中，當一個節點的地點數超過閾值時會發生什麼？" data-correct="1" data-explain="節點會被分割成四個等大的子節點，地點會被重新分配到子節點中。">
+<button class="opt">節點被刪除</button>
+<button class="opt">分割成四個子節點</button>
+<button class="opt">合併到相鄰節點</button>
+<button class="opt">建立新的二級索引</button>
+</div>
+
+<div class="quiz" data-question="QuadTree 使用主從複製時，從伺服器可能有什麼問題？" data-correct="3" data-explain="寫入先到主伺服器再同步到從伺服器，從伺服器可能有輕微的資料延遲。">
+<button class="opt">無法處理讀取請求</button>
+<button class="opt">資料會遺失</button>
+<button class="opt">記憶體不足</button>
+<button class="opt">最近新增的地點可能尚未同步</button>
+</div>
+
+<div class="quiz" data-question="Yelp 的地點資料為什麼適合建立靜態索引？" data-correct="1" data-explain="餐廳、商店等位置幾乎不變，不需要頻繁更新索引。">
+<button class="opt">地點數量很少</button>
+<button class="opt">地點位置幾乎不變</button>
+<button class="opt">搜尋不重要</button>
+<button class="opt">資料庫很舊</button>
+</div>
+
+<div class="quiz" data-question="在 QuadTree 的地理分片中，美國西岸和東岸由不同伺服器負責，這屬於哪種分片策略？" data-correct="2" data-explain="按地理區域分割，每個區域由不同伺服器負責，這就是地理雜湊分片。">
+<button class="opt">Hash-based 分片</button>
+<button class="opt">Range-based 分片</button>
+<button class="opt">Geographic Hashing 分片</button>
+<button class="opt">Round-robin 分片</button>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>檔案同步工作流程 — Dropbox 系統設計</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<main>
+
+<h1>檔案同步工作流程</h1>
+<p class="subtitle">Dropbox 系統設計 · Step 4/5</p>
+
+<section>
+<h2>學習目標</h2>
+<p>說明當用戶更新檔案後，同步機制如何將變更傳播到所有訂閱設備，處理離線情況與衝突。</p>
+</section>
+
+<section>
+<h2>場景：用戶 A 更新了一個共享檔案</h2>
+<p>假設用戶 A、B、C 共享一個資料夾。用戶 A 在筆電上修改了其中一個檔案。讓我們追蹤整個同步流程：</p>
+
+<ol>
+<li><strong>A 的客戶端偵測變更</strong>：客戶端監控程式發現工作區中有一個檔案被修改了</li>
+<li><strong>分塊並上傳</strong>：客戶端將檔案切成 4 MB 的分塊，比對本地元數據庫，找出哪些分塊實際變了，只上傳這些分塊到雲端儲存</li>
+<li><strong>更新元數據</strong>：客戶端透過消息隊列的請求隊列，向同步服務發送更新通知（包含新版本號、變更的分塊 ID）</li>
+<li><strong>同步服務處理</strong>：同步服務從請求隊列拉取通知，更新元數據資料庫（新版本、新分塊索引）</li>
+<li><strong>通知 B 和 C</strong>：同步服務將更新推送到 B 和 C 的響應隊列</li>
+<li><strong>B 和 C 拉取更新</strong>：B 和 C 的客戶端從各自的響應隊列中拉取更新，下載新的分塊，套用到本地檔案</li>
+</ol>
+</section>
+
+<section>
+<h2>離線處理</h2>
+<p>如果 B 和 C 在 A 更新時不在线怎麼辦？</p>
+<ul>
+<li><strong>B 離線</strong>：更新通知留在 B 的響應隊列中。當 B 上線後，客戶端自動從響應隊列拉取所有待處理的更新，下載新分塊，套用到本地檔案</li>
+<li><strong>C 也離線</strong>：同理，C 的響應隊列保留所有待處理更新</li>
+<li><strong>A 在 B/C 離線期間又修改了</strong>：每次修改都產生新的版本，所有版本都記錄在元數據資料庫中。B/C 上線後會拉取所有中間版本</li>
+</ul>
+<p>這就是為什麼需要消息隊列：它充當了離線設備的「收件匣」，確保更新不會丟失。</p>
+</section>
+
+<section>
+<h2>衝突解決</h2>
+<p>衝突發生在兩個用戶同時修改同一個檔案時。例如：A 和 B 都在離線狀態下修改了同一個檔案，然後同時上線。</p>
+
+<h3>Dropbox 的衝突解決策略</h3>
+<p>Dropbox 採用<strong>「最後寫入者勝（Last-Writer-Wins）」</strong>加上<strong>保留衝突副本</strong>的策略：</p>
+<ol>
+<li>兩個版本都上傳到雲端</li>
+<li>系統保留兩個版本：一個是「衝突副本」（通常加上用戶名或時間戳作為檔名後綴）</li>
+<li>原始檔案保留最後一個成功上傳的版本</li>
+<li>用戶手動決定保留哪個版本，或合併兩個版本</li>
+</ol>
+
+<h3>為什麼不自動合併？</h3>
+<p>因為檔案內容的合併很難自動化。文字檔案可以做行級合併（類似 Git），但圖片、影片、二進位檔根本無法自動合併。所以 Dropbox 選擇保留兩個版本，讓用戶自己決定。</p>
+</section>
+
+<section>
+<h2>版本控制</h2>
+<p>每次檔案修改都會產生一個新版本。元數據資料庫記錄了完整的版本鏈：</p>
+<ul>
+<li>版本 1：初始上傳</li>
+<li>版本 2：第一次修改（分塊 A、B、C → 分塊 A、D、C）</li>
+<li>版本 3：第二次修改（分塊 A、D、C → 分塊 A、D、E）</li>
+</ul>
+<p>用戶可以回滾到任何歷史版本。這也是元數據資料庫必須支援強一致性的原因之一——版本鏈不能出錯。</p>
+</section>
+
+<section>
+<h2>完整流程圖</h2>
+<p>把所有步驟串起來：</p>
+<pre>
+用戶 A 修改檔案
+    ↓
+客戶端偵測變更 → 分塊 → 上傳到雲端儲存
+    ↓
+透過請求隊列 → 同步服務
+    ↓
+同步服務更新元數據資料庫
+    ↓
+推送到 B、C 的響應隊列
+    ↓
+B、C 客戶端拉取更新 → 下載新分塊 → 套用到本地
+</pre>
+<p>如果 B/C 離線，更新留在響應隊列，等他們上線後再拉取。</p>
+</section>
+
+<section class="quiz-section">
+<h2>自我檢測</h2>
+
+<div class="quiz" data-question="當用戶 A 更新檔案後，B 和 C 如何得知？" data-correct="2" data-explain="同步服務將更新推送到 B 和 C 的響應隊列，他們的客戶端從中拉取更新。">
+<button class="opt">A 直接發送給 B 和 C</button>
+<button class="opt">B 和 C 每秒輪詢雲端儲存</button>
+<button class="opt">同步服務推送到 B、C 的響應隊列</button>
+<button class="opt">B 和 C 查詢元數據資料庫</button>
+</div>
+
+<div class="quiz" data-question="如果 B 在 A 更新時離線，更新會怎樣？" data-correct="1" data-explain="更新通知留在 B 的響應隊列中，等 B 上線後自動拉取。">
+<button class="opt">更新丟失，B 永遠看不到</button>
+<button class="opt">更新留在響應隊列，B 上線後拉取</button>
+<li class="opt">A 必須重新發送</button>
+<li class="opt">同步服務會重試直到成功</button>
+</div>
+
+<div class="quiz" data-question="A 和 B 同時離線修改同一個檔案，上線後會發生什麼？" data-correct="0" data-explain="Dropbox 保留兩個版本：原始檔案保留最後上傳的版本，另一個作為衝突副本，用戶手動決定。">
+<button class="opt">保留兩個版本，用戶手動選擇</button>
+<button class="opt">自動合併兩個版本</button>
+<li class="opt">後上傳的覆蓋先上傳的</button>
+<li class="opt">系統要求用戶重傳</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Dropbox 不自動合併衝突的檔案？" data-correct="3" data-explain="只有文字檔案可以做行級合併，圖片、影片、二進位檔無法自動合併，所以保留兩個版本讓用戶決定。">
+<button class="opt">因為效能考量</button>
+<button class="opt">因為版權問題</button>
+<button class="opt">因為用戶隱私</button>
+<button class="opt">因為非文字檔案無法自動合併</button>
+</div>
+
+<div class="quiz" data-question="版本控制在元數據資料庫中記錄什麼？" data-correct="1" data-explain="每個版本對應一組分塊 ID，形成版本鏈，用戶可以回滾到任何歷史版本。">
+<button class="opt">只記錄最新版本</button>
+<button class="opt">完整的版本鏈，每個版本對應一組分塊 ID</button>
+<li class="opt">只記錄檔案大小</button>
+<li class="opt">只記錄修改時間</button>
+</div>
+
+</section>
+
+<div class="lesson-nav">
+<a href="./core-components.html">← 上一步：核心元件設計</a>
+<a href="./design-optimizations.html">下一步：設計優化與考量 →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

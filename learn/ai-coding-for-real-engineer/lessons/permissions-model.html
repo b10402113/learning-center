@@ -7,148 +7,169 @@
 <link rel="stylesheet" href="./assets/shared.css">
 </head>
 <body>
-<main>
-
-<p class="meta">ai-coding-for-real-engineer · agent-control · Step 4/4</p>
 
 <h1>用 permissions 設定管住風險</h1>
+<p class="meta">Step 4/4 · review diff、bash、風險控管</p>
 
-<div class="goal">
-<strong>學習目標</strong>：理解 risk/reward 權衡，用 <code>.claude/settings.local.json</code> 的 <code>permissions.allow</code>/<code>deny</code>（含 wildcard）與 <code>settings.json</code> 預授權命令，並管控 web 存取等風險，避免 agent 造成災難性動作。
+<div class="learning-goal">
+<strong>學習目標：</strong>理解 risk/reward 權衡，用 <code>.claude/settings.local.json</code> 的 <code>permissions.allow</code>/<code>deny</code>（含 wildcard）與 <code>settings.json</code> 預授權命令，並管控 web 存取等風險。
 </div>
 
-<h2>風險 vs 報酬：給 agent 多少權力？</h2>
+<h2>你願意讓它有多大權力？</h2>
 
-<p>跟 agent 合作的第一個問題不是「它多聰明」，而是<strong>你願意讓它有多大權力</strong>。如果你把無限權力交給 Claude（很多人真的這麼做），你就會合理地緊張——怕它不小心把整個檔案系統刪掉。這是 risk/reward 的權衡：權力越大、能交付的越多，但出事的後果也越大。</p>
+<p>跟 agent 合作的第一個問題是<strong>你願意讓它有多大權力</strong>。權力越大、能交付越多，但出事的後果也越大。最極端的例子：agent 有完全的 shell 權限，它可以 <code>rm -rf /</code> 刪掉整個檔案系統。你不會給一個實習生這個權力，你也不會給 agent。</p>
 
-<p>Claude Code 的解法是一套<strong>很詳細的 permissions 模型</strong>，預設對自己非常嚴格，避免災難性動作。</p>
+<p>Claude Code 的解法是一套<strong>詳細的 permissions 模型</strong>，預設非常嚴格。它不信任 agent——每次想跑命令，都先問你。</p>
 
-<h2>核准流程長什麼樣</h2>
+<h2>核准流程</h2>
 
-<p>當 Claude 想跑一個命令（例如 typecheck），它不會直接跑，而是先<strong>請求核准</strong>。請求裡會顯示：</p>
+<p>當 Claude 想跑一個命令（例如 typecheck），它會先請求核准，畫面上顯示確切命令和原因，然後你有幾個選項：</p>
 
-<ul>
-  <li>要執行的<strong>確切命令</strong>（例如 <code>pnpm typecheck</code>）</li>
-  <li>它想跑的<strong>原因</strong></li>
-</ul>
+<table>
+  <thead>
+    <tr>
+      <th>選項</th>
+      <th>效果</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>允許這次</td>
+      <td>只這次放行，下次再問</td>
+    </tr>
+    <tr>
+      <td>以後都允許</td>
+      <td>這個專案內以後都放行，不再問</td>
+    </tr>
+    <tr>
+      <td>否決</td>
+      <td>不讓它跑這個命令</td>
+    </tr>
+    <tr>
+      <td>Tab 建議另一個命令</td>
+      <td>例如叫它用 <code>npx tsc</code> 代替 <code>pnpm typecheck</code></td>
+    </tr>
+  </tbody>
+</table>
 
-<p>然後你有幾個選項：</p>
+<p>極度安全的命令（如 <code>echo hello</code>）則直接跑不問。</p>
 
-<ol>
-  <li><strong>允許這次</strong>（yes，只允許一次）</li>
-  <li><strong>以後都允許</strong>（yes，這個專案內以後跑同樣命令不用再問）</li>
-  <li><strong>否決</strong>，或按 Tab 建議<strong>另一個命令</strong>（例如叫它用 <code>npx tsc</code> 代替 <code>pnpm typecheck</code>）</li>
-</ol>
+<h2>Settings 文件：預授權的紀錄</h2>
 
-<p>注意有些命令（例如 <code>echo hello</code>）被認定極度安全，會直接跑，連問都不問。</p>
+<p>你的核准會被記錄到 <code>.claude/settings.local.json</code> 的 <code>permissions.allow</code> / <code>permissions.deny</code> 陣列。你也可以自己手動編輯來預先授權。</p>
 
-<h2>你的選擇被記在哪裡</h2>
-
-<p>你的核准會被記錄到一個檔案：</p>
-
-<pre><code>.claude/settings.local.json</code></pre>
-
-<p>裡面有 <code>permissions.allow</code>（允許的清單）和 <code>permissions.deny</code>（禁止的清單）兩個陣列。你也可以<strong>自己手動編輯</strong>這個檔，預先授權：</p>
+<p>規則支援 <strong>wildcard</strong>：</p>
 
 <pre><code>{
   "permissions": {
-    "allow": ["Bash(pnpm typecheck)"],
+    "allow": ["Bash(pnpm:*)"],
     "deny": ["Bash(git push:*)"]
   }
 }</code></pre>
 
-<h2>Wildcard：一次授權一整類</h2>
+<p><code>"Bash(pnpm:*)"</code> 一次允許所有 pnpm 開頭的命令——<code>pnpm dev</code>、<code>pnpm test</code>、<code>pnpm build</code> 都不用再問。這才是實際可用的粒度：你不會想每次 <code>pnpm dev</code> 都按一次核准。</p>
 
-<p>如果你想允許「所有 pnpm 命令」，不必逐條列出，用 wildcard：</p>
+<h2>Local vs Shared 設定</h2>
 
-<pre><code>"allow": ["Bash(pnpm:*)"]</code></pre>
+<table>
+  <thead>
+    <tr>
+      <th>文件名</th>
+      <th>作用範圍</th>
+      <th>在 .gitignore 裡？</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>.claude/settings.local.json</code></td>
+      <td>只對你個人有效</td>
+      <td>是（不進 repo）</td>
+    </tr>
+    <tr>
+      <td><code>.claude/settings.json</code></td>
+      <td>整個 repo 的 Claude 實例共用</td>
+      <td>否（跟著 repo 走）</td>
+    </tr>
+  </tbody>
+</table>
 
-<p>同理，deny 也可以加 wildcard——例如絕對不讓它 <code>git push</code>，就寫 <code>Bash(git push:*)</code>。</p>
+<p>把 <code>settings.local.json</code> 改名成 <code>settings.json</code>，就能讓整個團隊共享同一套規則。新人第一次進 repo 就跑得起來——不用每次 session 都跟安全提示搏鬥。這就是<strong>repo 層級 agent 配置的種子</strong>。</p>
 
-<div class="callout">
-<span class="label">語法關鍵</span>
-<code>allow</code> / <code>deny</code> 陣列裡的規則用「命令 + wildcard」描述，自己編輯檔案就能提前放行或封鎖整個類別。
-</div>
+<h2>Web 存取也是風險面</h2>
 
-<h2>不只是 bash：web 存取也被管控</h2>
+<p>不只 bash 命令——<strong>web search / web fetch 也一樣受控</strong>。Agent 上網搜尋、抓取網頁，也是要管的風險面。它可能搜到惡意網站、抓到有毒內容、或洩漏你的專案資訊。Permissions 模型把 web 存取也納入管控。</p>
 
-<p>Claude Code 不只跑命令要權限，<strong>搜尋網路、抓取網頁</strong>也一樣受控。例如要它上網查 react-router-typegen 的文件，它會先請求做一次 web search；你核准後，它才真的去抓文件、回報摘要。</p>
+<h2>Risk vs Reward 的平衡</h2>
 
-<p>這代表「agent 上網」也是你該管的風險面——不是只有刪檔才算危險。</p>
-
-<h2>個人設定 vs 團隊共用</h2>
-
-<p>預設的 <code>settings.local.json</code> 通常在 .gitignore 裡，只對你個人有效。如果你想讓團隊共用一套「這個 repo 固定允許的命令」，只要把它<strong>改名成 <code>settings.json</code></strong>：</p>
+<p>Permissions 的本質是 <strong>risk/reward 權衡</strong>：</p>
 
 <ul>
-  <li>任何在這個 repo 上跑的 Claude 實例都會自動吃到這套規則</li>
-  <li>新人第一次進 repo 就跑得起來，不用每次手動核准</li>
+  <li>權限越寬 → agent 能交付越多（reward 高）→ 但出事的後果越大（risk 高）</li>
+  <li>權限越嚴 → agent 被卡住的次數越多（reward 低）→ 但出事的機率越低（risk 低）</li>
 </ul>
 
-<p>這就是 repo 層級的 agent 設定種子——預授權一套已知安全的命令，省去每次跟安全提示搏鬥。</p>
+<p>最佳策略不是「全部開放」或「全部封鎖」，而是<strong>預授權一套已知安全的命令</strong>——把 risk 降到可控，同時讓 reward 最大化。這就是 <code>settings.json</code> 的用途：提前把安全的命令放進白名單，省去每次 session 都跟提示搏鬥。</p>
 
-<h2>小結</h2>
-
-<ul>
-  <li>風險 vs 報酬：給 agent 的權力越大，能交付越多但風險越大</li>
-  <li>Claude Code 預設嚴格，跑命令前請求核准（顯示命令 + 原因）</li>
-  <li>核准記錄在 <code>.claude/settings.local.json</code> 的 allow/deny，支援 wildcard</li>
-  <li>Web search/fetch 同樣受控</li>
-  <li>改名 <code>settings.json</code> 即可讓團隊共用規則</li>
-</ul>
-
-<hr>
-
-<h2>自測</h2>
-<p>回答下面問題，確認你掌握了這堂課的重點：</p>
-
-<div class="quiz" data-question="Claude Code 的 permissions 模型預設是嚴格還是寬鬆？" data-correct="0" data-explain="預設非常嚴格，避免 agent 做出刪除檔案系統之類的災難性動作。">
-  <button class="opt">嚴格</button>
-  <button class="opt">寬鬆</button>
-  <button class="opt">預設全部直接執行</button>
-  <button class="opt">預設全部禁止</button>
+<div class="analogy">
+<strong>類比：</strong>你請了一個管家（agent）幫你打理家務。你不會把所有鑰匙都給他（全部開放），也不會把他鎖在門外（全部封鎖）。你會給他大門和客廳的鑰匙（預授權），但保險箱的鑰匙你自己留著（deny）。Permissions 就是這套鑰匙系統。
 </div>
 
-<div class="quiz" data-question="你的核准選擇被記錄在哪個檔案？" data-correct="3" data-explain="記錄在 .claude/settings.local.json 的 permissions.allow/deny 陣列。">
-  <button class="opt">package.json</button>
-  <button class="opt">.gitignore</button>
-  <button class="opt">claude.json</button>
-  <button class="opt">.claude/settings.local.json</button>
+<blockquote>
+<strong>口訣：預授權安全命令，其餘每次問。</strong>用 settings.json 管住 repo 層級的權限，用 settings.local.json 管你個人的偏好。風險面不只 bash——web 存取也要管。
+</blockquote>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="Claude Code 的 permissions 預設行為是什麼？" data-correct="1" data-explain="預設非常嚴格——每次想跑命令都先問你，極度安全的命令才直接跑。">
+  <button class="quiz-option opt">預設全部放行</button>
+  <button class="quiz-option opt">預設非常嚴格，每次問</button>
+  <button class="quiz-option opt">預設只問 bash 命令</button>
+  <button class="quiz-option opt">預設不問任何命令</button>
 </div>
 
-<div class="quiz" data-question="想允許所有 pnpm 命令，該怎麼寫 allow 規則？" data-correct="1" data-explain="用 wildcard：Bash(pnpm:*) 一次授權所有 pnpm 命令。">
-  <button class="opt">"allow": ["Bash(pnpm typecheck)"]</button>
-  <button class="opt">"allow": ["Bash(pnpm:*)"]</button>
-  <button class="opt">"allow": ["pnpm"]</button>
-  <button class="opt">"allow": ["*"]</button>
+<div class="quiz" data-question="在 settings.json 裡，什麼規則能一次允許所有 pnpm 命令？" data-correct="2" data-explain="Bash(pnpm:*) 用 wildcard 一次允許所有 pnpm 開頭的命令。">
+  <button class="quiz-option opt">"allow": ["pnpm"]</button>
+  <button class="quiz-option opt">"allow": ["Bash(pnpm)"]</button>
+  <button class="quiz-option opt">"allow": ["Bash(pnpm:*)"]</button>
+  <button class="quiz-option opt">"allow": ["Bash(*pnpm*)"]</button>
 </div>
 
-<div class="quiz" data-question="想把規則跟團隊共用，該怎麼做？" data-correct="2" data-explain="把 settings.local.json 改名成 settings.json，repo 上所有 Claude 實例都會讀取。">
-  <button class="opt">把檔案 commit 進 git</button>
-  <button class="opt">複製到每個人的家目錄</button>
-  <button class="opt">改名成 settings.json</button>
-  <button class="opt">發到 Discord 分享</button>
+<div class="quiz" data-question="settings.local.json 和 settings.json 的差別是什麼？" data-correct="0" data-explain="local 只對你個人有效（在 .gitignore 裡），settings.json 整個 repo 共用。">
+  <button class="quiz-option opt">local 是個人的，settings.json 是團隊共用的</button>
+  <button class="quiz-option opt">兩者功能完全一樣</button>
+  <button class="quiz-option opt">local 是舊版格式，settings.json 是新版</button>
+  <button class="quiz-option opt">local 只管 bash，settings.json 管所有東西</button>
 </div>
 
-<div class="quiz" data-question="除了 bash 命令，還有什麼也需要權限？" data-correct="0" data-explain="Web search / web fetch 也受控——agent 上網也是要管的風險面。">
-  <button class="opt">Web search / fetch</button>
-  <button class="opt">讀取檔案</button>
-  <button class="opt">編輯檔案</button>
-  <button class="opt">顯示訊息</button>
+<div class="quiz" data-question="把 settings.local.json 改名成 settings.json 有什麼效果？" data-correct="3" data-explain="規則從「只對你有效」變成「整個 repo 的 Claude 實例共用」，新人進 repo 就跑得起來。">
+  <button class="quiz-option opt">規則會被刪除</button>
+  <button class="quiz-option opt">規則會被加密</button>
+  <button class="quiz-option opt">規則會失效</button>
+  <button class="quiz-option opt">規則變成 repo 層級共用</button>
 </div>
 
-<div class="quiz" data-question="Claude 請求核准時，畫面上會顯示什麼？" data-correct="3" data-explain="顯示確切命令 + 它想跑的原因，讓你判斷要不要放行。">
-  <button class="opt">只有一條簡短的警告</button>
-  <button class="opt">程式碼 diff</button>
-  <button class="opt">Token 用量</button>
-  <button class="opt">確切命令 + 原因</button>
+<div class="quiz" data-question="除了 bash 命令，什麼也是 permissions 管控的風險面？" data-correct="1" data-explain="Web search / web fetch 也受控——agent 上網搜尋和抓取網頁也是要管的風險面。">
+  <button class="quiz-option opt">檔案讀取</button>
+  <button class="quiz-option opt">Web 存取（search / fetch）</button>
+  <button class="quiz-option opt">Git commit</button>
+  <button class="quiz-option opt">Context window 大小</button>
 </div>
 
-<footer>
-<p>有問題？隨時問你的 AI 老師——它可以解釋任何不清楚的地方。</p>
-</footer>
+<div class="quiz" data-question="Permissions 的本質是什麼權衡？" data-correct="2" data-explain="Risk vs Reward：權限越寬交付越多但風險越高，權限越嚴風險越低但 agent 被卡住的次數越多。">
+  <button class="quiz-option opt">速度 vs 品質</button>
+  <button class="quiz-option opt">成本 vs 效能</button>
+  <button class="quiz-option opt">Risk vs Reward（風險 vs 回報）</button>
+  <button class="quiz-option opt">隱私 vs 便利</button>
+</div>
 
-</main>
+<h2>延伸閱讀</h2>
+<p>主要來源：<a href="https://www.youtube.com/watch?v=lesson14" target="_blank">Lesson 14 — Risk vs Reward and the Permissions Model</a>（Matt Pocock 的 AI Coding for Real Engineers 課程）。講解 permissions 模型、wildcard 規則、settings 文件的差異、以及 risk/reward 平衡。</p>
+
+<div class="lesson-nav">
+  <a href="bash-mode.html">← 上一課：用 bash 模式控制 agent 看得到的輸出</a>
+  <span>本節點課程結束</span>
+</div>
+
 <script src="./assets/quiz.js"></script>
 </body>
 </html>
