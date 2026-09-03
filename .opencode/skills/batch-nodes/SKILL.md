@@ -1,15 +1,26 @@
 ---
 name: batch-nodes
-description: Batch-create step-DAGs and teach content for all nodes in a subject via parallel subagents.
+description: Batch-create step-DAGs and teach content for nodes in a subject via parallel subagents. Supports all nodes, a single tier, or explicit node slugs.
 disable-model-invocation: true
-argument-hint: "/batch-nodes <subject> [-max-subagents N] [node-slug ...]"
+argument-hint: "/batch-nodes <subject> [tier<N> | node-slug ...] [-max-subagents N]"
 ---
 
-Bulk-process every node in a subject through `/nodes -skip-probe` then `/teach -skip-task`, dispatching parallel subagents in **batches**. Each subagent handles both structure and content for its node — `/nodes` first, then `/teach`, sequentially within the same subagent. Invoke as `/batch-nodes <subject>` or `/batch-nodes <subject> -max-subagents 5`. Optionally pass specific node slugs to process a subset.
+Bulk-process nodes in a subject through `/nodes -skip-probe` then `/teach -skip-task`, dispatching parallel subagents in **batches**. Each subagent handles both structure and content for its node — `/nodes` first, then `/teach`, sequentially within the same subagent.
+
+**Invocation modes:**
+- `/batch-nodes <subject>` — all nodes in the roadmap.
+- `/batch-nodes <subject> tier<N>` — all nodes under `### Tier <N>` in the roadmap (e.g. `tier1`, `tier3`).
+- `/batch-nodes <subject> <slug> [<slug> ...]` — only the listed nodes.
+- Append `-max-subagents N` (default 3) to any mode to control batch width.
 
 Prereqs: `learn/<subject>/MEMORY.md` exists, `learn/<subject>/ROADMAP.md` exists, `learn/<subject>/digests/` exists. If any is missing, say so and stop.
 
-1. **Resolve.** Parse arguments: extract `subject` (first positional arg), `-max-subagents N` (default 3), and optional node slugs. When no slugs given, read `learn/<subject>/ROADMAP.md` and extract every node id from `[[learn/<subject>/nodes/<node-id>|...]]` links in tier order. Validate each slug has a container at `learn/<subject>/nodes/<slug>.mdx`. Skip nodes whose status is already `content-written` or `edges-written` — report them as skipped.
+1. **Resolve.** Parse arguments: extract `subject` (first positional arg), `-max-subagents N` (default 3), and the **scope** — one of:
+   - **tier** — an arg matching `tier<N>` (e.g. `tier1`, `tier3`). Read `learn/<subject>/ROADMAP.md`, locate the `### Tier <N> — ...` heading, and extract node ids from `[[learn/<subject>/nodes/<node-id>|...]]` links under that heading until the next `### Tier` heading or end of file.
+   - **explicit slugs** — one or more args that are not `tier<N>` and not `-max-subagents`. Use them as-is.
+   - **all** — no scope args. Read `learn/<subject>/ROADMAP.md` and extract every node id from `[[learn/<subject>/nodes/<node-id>|...]]` links in tier order.
+
+   Validate each resolved slug has a container at `learn/<subject>/nodes/<slug>.mdx`. Skip nodes whose status is already `content-written` or `edges-written` — report them as skipped.
 2. **Process.** Partition the resolved node list into batches of size `max-subagents`. Process batches sequentially; nodes within a batch run in parallel. For each batch, launch one subagent per node via the `task` tool — all calls in a single message. Each subagent receives [NODES-AND-TEACH-PROMPT](#nodes-and-teach-prompt) with `<NODE-ID>` and `<SUBJECT>` filled in. The subagent runs `/nodes` then `/teach` sequentially for its node. Wait for every subagent to return. Record each node's outcome: succeeded (both structure and content written, asset verification passed) or failed. Show a progress line after each batch.
 3. **Report.** Summarise: total completed, total failed, total skipped. List any failed nodes with their errors and which part failed (structure or content). Suggest re-running `/batch-nodes <subject> <failed-slug>` for failures, or running `/edges <subject>/<node-id>` on completed nodes.
 

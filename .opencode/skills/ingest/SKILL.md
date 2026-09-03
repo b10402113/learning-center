@@ -15,15 +15,15 @@ Prereqs: `learn/<subject>/MEMORY.md` exists, `learn/<subject>/ROADMAP.md` exists
 
 Inventory `sources/<subject>/`. Collect every **file** at the top level (skip subdirectories, `.DS_Store`). These are the candidates. Then filter out any that have already been processed:
 
-1. Create `sources/<subject>/completed/` if missing.
-2. For each candidate file, check if `sources/<subject>/completed/YYYYMMDD_<filename>` already exists (any date prefix). If it does, skip it — it was ingested in a prior run.
-3. Move the remaining (unprocessed) files to `sources/<subject>/completed/YYYYMMDD_<original-filename>` (today's date, exact original name including extension). Use `mv`, not copy.
+1. Create `sources/<subject>/YYYYMMDD/` (today's date) if missing.
+2. For each candidate file, check if `sources/<subject>/<any-date-folder>/<filename>` already exists in any dated subfolder. If it does, skip it — it was ingested in a prior run.
+3. Move the remaining (unprocessed) files into `sources/<subject>/YYYYMMDD/` keeping the original filename unchanged. Use `mv`, not copy.
 
-If no files needed moving (all were already in `completed/`), say so and stop.
+If no files needed moving (all were already in dated subfolders), say so and stop.
 
 ## Step 2 — Digest the newly archived sources
 
-For each file that was **just moved** in step 1 (not files that were already in `completed/` before step 1), compute the digest stem — the archived filename **without** the `YYYYMMDD_` prefix and **without** extension.
+For each file that was **just moved** in step 1 (not files that were already in dated subfolders before step 1), compute the digest stem — the original filename **without** extension.
 
 Check `learn/<subject>/digests/<stem>.md`: reuse it if the stored `source_hash` matches the archived file's sha256; rebuild if missing or stale.
 
@@ -111,4 +111,4 @@ Summarize:
 - The verify result (exit status, surviving failures).
 - Next steps for new nodes: tell the learner to run `/probe <subject>/<node-id>` then `/nodes <subject>/<node-id>` then `/teach <subject>/<node-id>` for each new node.
 
-Completion: every new source has a digest with a matching hash, every concept from the new material is mapped (supplemented into an element, added as a step, or landed as a new node), all processed sources are in `sources/<subject>/completed/`, verify passes (or surviving failures are listed), and the learner knows the next stage for each new node.
+Completion: every new source has a digest with a matching hash, every concept from the new material is mapped (supplemented into an element, added as a step, or landed as a new node), all processed sources are in a dated subfolder under `sources/<subject>/`, verify passes (or surviving failures are listed), and the learner knows the next stage for each new node.

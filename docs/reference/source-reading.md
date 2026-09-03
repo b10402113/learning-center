@@ -14,9 +14,9 @@ A source is **large** when its `pdftotext` output exceeds either bound:
 
 ## Digest files
 
-- Location: `learn/<subject>/digests/<source-stem>.md` — one file per source for small sources (the stem is the original filename without the `YYYYMMDD_` archive prefix). Large sources are split into one **part file per chunk**, named `<source-stem>.<n>.part.md`; each part is a self-contained digest carrying the full source fingerprint. Digests are two-level:
+- Location: `learn/<subject>/digests/<source-stem>.md` — one file per source for small sources (the stem is the original filename without extension). Large sources are split into one **part file per chunk**, named `<source-stem>.<n>.part.md`; each part is a self-contained digest carrying the full source fingerprint. Digests are two-level:
   - **L1 — chapter overview**: a few lines per chapter. Enough for `learn-init` grilling and `roadmap` partitioning without loading detail.
-  - **L2 — section detail**: per-section entry with a summary, key claims, learner-relevant outcomes, and the exact `[[sources/<subject>/completed/<file>#<section>]]` locator. Used by `nodes` for element extraction.
+  - **L2 — section detail**: per-section entry with a summary, key claims, learner-relevant outcomes, and the exact `[[sources/<subject>/<YYYYMMDD>/<file>#<section>]]` locator. Used by `nodes` for element extraction.
 - Every source gets a digest, large or small (parts included). `nodes` reads digests only — never raw sources.
 - Frontmatter records the source fingerprint for staleness checks. A small source uses a single file; each part of a large source repeats the same `source_hash`/`source_lines`:
 
@@ -40,7 +40,7 @@ updated: YYYY-MM-DD
 
 ### <section id>
 
-- Locator: `[[sources/<subject>/completed/<file>#<section>]]`
+- Locator: `[[sources/<subject>/<YYYYMMDD>/<file>#<section>]]`
 - Summary: <what this section explains>
 - Key claims: <claim 1>; <claim 2>
 - Learner-relevant: <outcome or anchor this section can support>
@@ -49,7 +49,7 @@ updated: YYYY-MM-DD
 ## Sub-agent workflow (large sources)
 
 1. Compute `pdftotext` output and the source fingerprint (`sha256` hash + line count) in the main context; chunk on section boundaries (book chapters, numbered sections), each chunk < 2000 lines.
-2. Dispatch sub-agents **in parallel**, one per chunk(<2000 lines). Each sub-agent reads only `sources/<subject>/completed/`, writes a self-contained part digest to `learn/<subject>/digests/<source-stem>.<n>.part.md` with the full `source_hash`/`source_lines` in its frontmatter, and returns only a compact TOC line for its chunk (chapter ids + one-line summaries).
+2. Dispatch sub-agents **in parallel**, one per chunk(<2000 lines). Each sub-agent reads only the relevant `sources/<subject>/<YYYYMMDD>/` subfolder, writes a self-contained part digest to `learn/<subject>/digests/<source-stem>.<n>.part.md` with the full `source_hash`/`source_lines` in its frontmatter, and returns only a compact TOC line for its chunk (chapter ids + one-line summaries).
 
 Sub-agents never write anywhere outside `learn/<subject>/digests/`. Their returned message must stay small — the file carries the content, not the message. There is no merge step: the part files together are the digest.
 

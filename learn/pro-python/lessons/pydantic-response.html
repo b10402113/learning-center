@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用 Pydantic 模型塑形回應</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 03 — Step 4/4 · First FastAPI app</p>
+  <h1>用 Pydantic 模型塑形回應</h1>
+
+  <h2>學習目標</h2>
+  <p>定義 Pydantic BaseModel 來規範 API 回應的結構，理解 response_model 的作用。</p>
+
+  <h2>問題：回傳的資料長什麼樣？</h2>
+  <p>到目前為止，我們的路由直接回傳 dictionary：</p>
+
+  <pre><code>@app.get("/projects/{project_id}")
+def get_project(project_id: int):
+    project = PROJECTS.get(project_id)
+    if project is None:
+        return {"error": "Project not found"}, 404
+    return project</code></pre>
+
+  <p>這能運作，但有兩個問題：</p>
+  <ol>
+    <li><strong>沒有合約</strong>：呼叫者不知道回應裡有哪些欄位，只能猜</li>
+    <li><strong>沒有過濾</strong>：如果 dictionary 裡有不想暴露的欄位（例如 <code>internal_notes</code>），它們會全部回傳</li>
+  </ol>
+
+  <p>我們需要一個方式來定義「API 回應應該長什麼樣」。</p>
+
+  <h2>Pydantic BaseModel</h2>
+  <p>Pydantic 是一個資料驗證庫。它的核心是 <code>BaseModel</code> 類別——你用它定義資料的結構：</p>
+
+  <pre><code>from pydantic import BaseModel
+
+class ProjectRead(BaseModel):
+    id: int
+    name: str
+    slug: str</code></pre>
+
+  <p>這個 <code>ProjectRead</code> 類別定義了三件事：</p>
+  <ul>
+    <li>回應必須有 <code>id</code>（整數）</li>
+    <li>回應必須有 <code>name</code>（字串）</li>
+    <li>回應必須有 <code>slug</code>（字串）</li>
+  </ul>
+  <p>其他欄位？不會出現在回應裡。<code>ProjectRead</code> 就像一個模板——只有模板上有的欄位才會被保留。</p>
+
+  <blockquote>
+  <p><strong>命名慣例：</strong><code>Read</code> 後綴表示「讀取/回應」模型。之後你會看到 <code>Create</code>（建立請求）、<code>Update</code>（更新請求）等。這種命名讓模型的角色一目了然。</p>
+</blockquote>
+
+  <h2>response_model：把模型掛到路由上</h2>
+  <p>定義好模型後，用 <code>response_model</code> 參數把它掛到路由裝飾器上：</p>
+
+  <pre><code>@app.get("/projects/{project_id}", response_model=ProjectRead)
+def get_project(project_id: int):
+    project = PROJECTS.get(project_id)
+    return project</code></pre>
+
+  <p>現在 FastAPI 做了三件事：</p>
+  <ol>
+    <li><strong>過濾</strong>：只回傳 <code>ProjectRead</code> 定義的欄位（id、name、slug），其他欄位被移除</li>
+    <li><strong>序列化</strong>：把 Pydantic 模型轉成 JSON</li>
+    <li><strong>文件</strong>：在 Swagger UI 裡顯示回應的結構</li>
+  </ol>
+
+  <h2>實際效果</h2>
+  <p>假設 mock 資料裡多了一個不想暴露的欄位：</p>
+
+  <pre><code>PROJECTS = {
+    1: {
+        "id": 1,
+        "name": "Project Alpha",
+        "slug": "project-alpha",
+        "internal_notes": "客戶要求延後交付"  # 敏感資料
+    },
+}</code></pre>
+
+  <p>沒有 <code>response_model</code>：<code>internal_notes</code> 會出現在 API 回應裡。</p>
+  <p>有 <code>response_model=ProjectRead</code>：回應只有 <code>id</code>、<code>name</code>、<code>slug</code>，<code>internal_notes</code> 被過濾掉。</p>
+
+  <h2>完整範例</h2>
+  <p>把所有東西組合起來：</p>
+
+  <pre><code>from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class ProjectRead(BaseModel):
+    id: int
+    name: str
+    slug: str
+
+PROJECTS = {
+    1: {"id": 1, "name": "Project Alpha", "slug": "project-alpha"},
+    2: {"id": 2, "name": "Project Beta", "slug": "project-beta"},
+    3: {"id": 3, "name": "Project Gamma", "slug": "project-gamma"},
+}
+
+@app.get("/projects", response_model=list[ProjectRead])
+def list_projects():
+    return list(PROJECTS.values())
+
+@app.get("/projects/{project_id}", response_model=ProjectRead)
+def get_project(project_id: int):
+    project = PROJECTS.get(project_id)
+    if project is None:
+        return {"error": "Project not found"}, 404
+    return project</code></pre>
+
+  <p>注意 <code>list[ProjectRead]</code>——這告訴 FastAPI 回應是一個 <code>ProjectRead</code> 的陣列。Python 3.9+ 支援這個語法。</p>
+
+  <h2>為什麼要分離內部資料和 API 輸出？</h2>
+  <p>在真實的應用程式裡，資料庫的模型（之後會用 SQLModel 定義）通常比 API 回應包含更多欄位。例如：</p>
+
+  <table>
+    <thead>
+      <tr><th>資料庫欄位</th><th>API 回應？</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>id</td><td>✅ 需要</td></tr>
+      <tr><td>name</td><td>✅ 需要</td></tr>
+      <tr><td>slug</td><td>✅ 需要</td></tr>
+      <tr><td>created_at</td><td>看情況</td></tr>
+      <tr><td>internal_notes</td><td>❌ 不暴露</td></tr>
+      <tr><td>owner_password_hash</td><td>❌ 絕對不暴露</td></tr>
+    </tbody>
+  </table>
+
+  <p>用 <code>response_model</code> 做一道防火牆：資料庫模型管儲存，Pydantic 模型管輸出。兩者分離，各管各的。</p>
+
+  <h2>小結</h2>
+  <p>Pydantic <code>BaseModel</code> 定義資料結構。<code>response_model</code> 把模型掛到路由上，自動過濾、序列化、生成文件。這種分離讓你的 API 有明確的合約——呼叫者知道會收到什麼，你也能控制哪些資料不該暴露。</p>
+  <p>到這裡，你已經有一個完整的 FastAPI 應用程式：路由、路徑參數、型別驗證、Pydantic 回應模型。資料還存在 dictionary 裡，但核心機制都到位了。之後的課程會逐步引入真正的資料庫、測試、部署。</p>
+
+  <div class="lesson-nav">
+    <a href="path-parameters.html">← 上一步：路徑參數與自動型別驗證</a>
+    <span></span>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="Pydantic BaseModel 的主要用途是？" data-correct="0" data-explain="BaseModel 用來定義資料的結構和型別，作為驗證和序列化的基礎。">
+    <button class="opt">定義資料結構和驗證規則</button>
+    <button class="opt">連線資料庫</button>
+    <button class="opt">處理 HTTP 請求</button>
+    <button class="opt">生成 HTML 頁面</button>
+  </div>
+
+  <div class="quiz" data-question="response_model=ProjectRead 掛在路由上時，FastAPI 不會做以下哪件事？" data-correct="3" data-explain="response_model 負責過濾、序列化、文件生成，但不負責資料庫查詢。">
+    <button class="opt">過濾不在模型中的欄位</button>
+    <button class="opt">把模型序列化成 JSON</button>
+    <button class="opt">在 Swagger UI 顯示回應結構</button>
+    <button class="opt">自動查詢資料庫</button>
+  </div>
+
+  <div class="quiz" data-question="如果資料庫記錄有 5 個欄位，但 ProjectRead 只定義了 3 個，API 回應會有幾個欄位？" data-correct="1" data-explain="response_model 會過濾掉不在模型中的欄位，只保留模型定義的 3 個。">
+    <button class="opt">5 個，全部回傳</button>
+    <button class="opt">3 個，只回傳模型定義的欄位</button>
+    <button class="opt">0 個，會報錯</button>
+    <button class="opt">2 個，自動過濾敏感欄位</button>
+  </div>
+
+  <div class="quiz" data-question="在路由裝飾器裡，list[ProjectRead] 表示什麼？" data-correct="2" data-explain="list[ProjectRead] 表示回應是一個 ProjectRead 物件的陣列。">
+    <button class="opt">單一 ProjectRead 物件</button>
+    <button class="opt">Python list 的原始資料</button>
+    <button class="opt">回應是一個 ProjectRead 的陣列</button>
+    <button class="opt">ProjectRead 的清單文件</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼 API 回應模型要跟資料庫模型分離？" data-correct="0" data-explain="分離讓你能控制哪些欄位暴露給外部，避免洩漏敏感資料。">
+    <button class="opt">控制暴露哪些欄位，避免洩漏敏感資料</button>
+    <button class="opt">因為 Pydantic 不能處理資料庫資料</button>
+    <button class="opt">因為 FastAPI 要求這樣做</button>
+    <button class="opt">為了增進效能</button>
+  </div>
+
+  <div class="quiz" data-question="ProjectRead 的 'Read' 後綴代表什麼？" data-correct="1" data-explain="Read 是命名慣例，表示這個模型用於 API 回應（讀取操作）。">
+    <button class="opt">Pydantic 的關鍵字</button>
+    <button class="opt">命名慣例，表示用於 API 回應</button>
+    <button class="opt">FastAPI 的保留字</button>
+    <button class="opt">Python 的內建型別</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 03: First FastAPI app · Step 4</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

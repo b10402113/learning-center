@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>路徑參數與自動型別驗證</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 03 — Step 3/4 · First FastAPI app</p>
+  <h1>路徑參數與自動型別驗證</h1>
+
+  <h2>學習目標</h2>
+  <p>在路由裡用 <code>{param}</code> 語法定義路徑參數，並觀察 FastAPI 如何自動驗證型別。</p>
+
+  <h2>從靜態路由到動態路由</h2>
+  <p>上一步的路由 <code>/projects</code> 回傳所有專案。但如果我只想查一筆呢？RESTful API 的做法是把 ID 放進 URL：</p>
+
+  <pre><code>/projects/1    → 回傳 id=1 的專案
+/projects/2    → 回傳 id=2 的專案</code></pre>
+
+  <p>在 FastAPI 裡，你用花括號 <code>{}</code> 在路由字串中宣告一個「路徑參數（path parameter）」：</p>
+
+  <pre><code>@app.get("/projects/{project_id}")
+def get_project(project_id: int):
+    project = PROJECTS.get(project_id)
+    if project is None:
+        return {"error": "Project not found"}, 404
+    return project</code></pre>
+
+  <p>兩件重要的事：</p>
+  <ol>
+    <li>路由字串裡的 <code>{project_id}</code> 宣告了一個參數佔位符</li>
+    <li>函式參數 <code>project_id: int</code> 用型別提示告訴 FastAPI 這個參數必須是整數</li>
+  </ol>
+
+  <h2>自動型別驗證</h2>
+  <p>FastAPI 最強大的地方在於：它會根據型別提示自動驗證路徑參數。</p>
+
+  <p>正常請求：</p>
+  <pre><code>GET /projects/1
+→ {"id": 1, "name": "Project Alpha", "slug": "project-alpha"}</code></pre>
+
+  <p>傳了字串而不是整數：</p>
+  <pre><code>GET /projects/hello
+→ {
+    "detail": [{
+        "loc": ["path", "project_id"],
+        "msg": "value is not a valid integer",
+        "type": "type_error.integer"
+    }]
+}
+→ HTTP 422 Unprocessable Entity</code></pre>
+
+  <p>你沒有寫任何驗證邏輯。FastAPI 看到 <code>project_id: int</code>，就知道要把 URL 裡的值轉成整數。轉不了？直接回 422 錯誤，告訴呼叫者哪裡出了問題。</p>
+
+  <blockquote>
+  <p><strong>關鍵洞察：</strong>在 Flask 裡，你需要手動寫 <code>int(project_id)</code> 和 <code>try/except</code>。在 FastAPI 裡，型別提示就是驗證規則——寫一次，到处生效。</p>
+</blockquote>
+
+  <h2>用 .get() 安全地查詢</h2>
+  <p>注意程式碼裡用的是 <code>PROJECTS.get(project_id)</code>，不是 <code>PROJECTS[project_id]</code>。</p>
+
+  <table>
+    <thead>
+      <tr><th>寫法</th><th>找不到時</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>PROJECTS[project_id]</code></td>
+        <td>拋出 <code>KeyError</code>，伺服器回 500 內部錯誤</td>
+      </tr>
+      <tr>
+        <td><code>PROJECTS.get(project_id)</code></td>
+        <td>回傳 <code>None</code>，你可以優雅地處理</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>用 <code>.get()</code> 讓你檢查回傳值是不是 <code>None</code>，然後回傳一個有意義的 404 回應，而不是讓伺服器崩潰。</p>
+
+  <h2>完整範例</h2>
+  <p>把前面的程式碼組合起來：</p>
+
+  <pre><code>from fastapi import FastAPI
+
+app = FastAPI()
+
+PROJECTS = {
+    1: {"id": 1, "name": "Project Alpha", "slug": "project-alpha"},
+    2: {"id": 2, "name": "Project Beta", "slug": "project-beta"},
+    3: {"id": 3, "name": "Project Gamma", "slug": "project-gamma"},
+}
+
+@app.get("/projects")
+def list_projects():
+    return list(PROJECTS.values())
+
+@app.get("/projects/{project_id}")
+def get_project(project_id: int):
+    project = PROJECTS.get(project_id)
+    if project is None:
+        return {"error": "Project not found"}, 404
+    return project</code></pre>
+
+  <p>現在你有兩個路由：</p>
+  <ul>
+    <li><code>GET /projects</code> — 列出所有專案</li>
+    <li><code>GET /projects/{project_id}</code> — 根據 ID 取得單一專案</li>
+  </ul>
+
+  <p>打開 <code>/docs</code>，你會看到 Swagger UI 自動更新了——新的路由帶了一個 <code>project_id</code> 參數欄位，你可以輸入數字測試。</p>
+
+  <h2>路徑參數的順序</h2>
+  <p>路由字串裡的參數名稱必須跟函式參數名稱一致：</p>
+
+  <pre><code># ✅ 正確：名稱一致
+@app.get("/projects/{project_id}")
+def get_project(project_id: int): ...
+
+# ❌ 錯誤：名稱不一致，會報錯
+@app.get("/projects/{project_id}")
+def get_project(pid: int): ...</code></pre>
+
+  <p>FastAPI 用名稱來匹配路由參數和函式參數。名字不同，它不知道哪個對應哪個。</p>
+
+  <h2>小結</h2>
+  <p>路徑參數用 <code>{name}</code> 語法宣告在路由字串裡，用型別提示在函式參數上驗證。FastAPI 自動處理型別轉換和錯誤回應——你只需要寫 <code>project_id: int</code>。用 <code>.get()</code> 安全查詢，避免 KeyError。下一步，我們用 Pydantic 模型來規範回應的結構。</p>
+
+  <div class="lesson-nav">
+    <a href="first-route.html">← 上一步：寫出第一個路由，跑起 dev server</a>
+    <a href="pydantic-response.html">下一步：用 Pydantic 模型塑形回應 →</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="在 FastAPI 路由中，{project_id} 的語法代表什麼？" data-correct="0" data-explain="花括號語法宣告一個路徑參數，URL 中對應位置的值會被傳入函式。">
+    <button class="opt">路徑參數佔位符</button>
+    <button class="opt">Python f-string</button>
+    <button class="opt">正規表達式</button>
+    <button class="opt">HTTP 標頭</button>
+  </div>
+
+  <div class="quiz" data-question="如果路由是 /projects/{project_id}，函式參數是 project_id: int，訪問 /projects/hello 會發生什麼？" data-correct="1" data-explain="FastAPI 無法把 'hello' 轉成 int，回傳 422 Unprocessable Entity。">
+    <button class="opt">回傳 200，project_id 的值是 'hello'</button>
+    <button class="opt">回傳 422 型別驗證錯誤</button>
+    <button class="opt">回傳 500 內部錯誤</button>
+    <button class="opt">回傳 404 找不到</button>
+  </div>
+
+  <div class="quiz" data-question="PROJECTS.get(key) 和 PROJECTS[key] 的差別是？" data-correct="2" data-explain=".get() 找不到時回傳 None，[] 語法找不到時拋出 KeyError。">
+    <button class="opt">沒有差別</button>
+    <button class="opt">.get() 比較慢</button>
+    <button class="opt">.get() 找不到回傳 None，[] 找不到拋出 KeyError</button>
+    <button class="opt">[] 找不到回傳 None，.get() 找不到拋出 KeyError</button>
+  </div>
+
+  <div class="quiz" data-question="路由字串裡的 {project_id} 和函式參數 project_id 的關係是？" data-correct="0" data-explain="FastAPI 用名稱匹配，兩者必須同名。">
+    <button class="opt">名稱必須一致，FastAPI 用名稱匹配</button>
+    <button class="opt">名稱可以不同，FastAPI 按位置匹配</button>
+    <button class="opt">函式參數可以省略，FastAPI 自動注入</button>
+    <button class="opt">路由字串只是裝飾，跟函式參數無關</button>
+  </div>
+
+  <div class="quiz" data-question="FastAPI 的型別驗證錯誤回傳的 HTTP 狀態碼是？" data-correct="3" data-explain="型別驗證失敗時，FastAPI 回傳 422 Unprocessable Entity。">
+    <button class="opt">400 Bad Request</button>
+    <button class="opt">404 Not Found</button>
+    <button class="opt">500 Internal Server Error</button>
+    <button class="opt">422 Unprocessable Entity</button>
+  </div>
+
+  <div class="quiz" data-question="在 Flask 裡要達到跟 FastAPI 型別提示同樣的驗證效果，你需要？" data-correct="1" data-explain="Flask 需要手動轉型和 try/except，FastAPI 用型別提示自動處理。">
+    <button class="opt">什麼都不用，Flask 也自動驗證</button>
+    <button class="opt">手動 int() 轉型和 try/except 錯誤處理</button>
+    <button class="opt">安裝額外的驗證套件</button>
+    <button class="opt">寫正則表達式</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 03: First FastAPI app · Step 3</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>
