@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用記憶體 SQLite 建立隔離測試資料庫</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 25 — Step 2/4 · Database fixtures with pytest</p>
+  <h1>用記憶體 SQLite 建立隔離測試資料庫</h1>
+
+  <h2>學習目標</h2>
+  <p>掌握如何在 pytest fixture 中建立記憶體 SQLite 資料庫，並用 override_dependency 替換生產 session，讓每個測試跑在隔離環境裡。</p>
+
+  <h2>為什麼用 SQLite 而不用 Postgres？</h2>
+  <p>測試需要速度。跑一次完整測試套件如果等 30 秒，開發者就不會頻繁跑；如果 0.5 秒就跑完，開發者每次存檔都會跑。SQLite 跑在記憶體裡，不需要網路協定、不需要背景程序、不需要磁碟 I/O，啟動一個全新資料庫只要幾毫秒。</p>
+
+  <p>但這不是免費的。SQLite 和 Postgres 是兩個不同的資料庫引擎，語意並不完全相容。Postgres 原生的 enum 型別、部分 CHECK constraint、以及某些進階 SQL 語法，SQLite 要嘛不支援、要不行為略有不同。所以 SQLite 測試跑過全部綠燈，不代表 Postgres 上一定正常。這是一個取捨：日常開發用 SQLite 跑快速回饋，正式上線前用 Postgres 跑一次整合測試確認。</p>
+
+  <h2>核心機制：override_dependency</h2>
+  <p>FastAPI 的依賴注入系統提供了一個關鍵方法：<code>app.dependency_overrides</code>。它能讓你在測試時把某個依賴的「真實實作」替換成「測試版實作」，路由完全不需要知道差異。</p>
+
+  <p>我們的應用在 <code>database.py</code> 裡定義了 <code>get_session</code>，生產環境會連線到 Postgres：</p>
+
+  <pre><code># database.py
+from sqlmodel import Session, create_engine
+
+engine = create_engine("postgresql://...")
+
+def get_session():
+    with Session(engine) as session:
+        yield session</code></pre>
+
+  <p>測試時，我們要把它換成指向記憶体内 SQLite 的版本：</p>
+
+  <pre><code># conftest.py
+import pytest
+from sqlmodel import Session, SQLModel, create_engine
+from fastapi.testclient import TestClient
+
+from app.main import app
+from app.database import get_session
+
+@pytest.fixture(name="session")
+def session_fixture():
+    engine = create_engine("sqlite:///:memory:")
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        yield session
+
+@pytest.fixture(name="client")
+def client_fixture(session: Session):
+    def override_get_session():
+        yield session
+
+    app.dependency_overrides[get_session] = override_get_session
+    yield TestClient(app)
+    app.dependency_overrides.clear()</code></pre>
+
+  <p>這段程式碼做了四件事：建立一個記憶體 SQLite 引擎；用 <code>create_all</code> 建立所有表格結構；用 <code>dependency_overrides</code> 把 <code>get_session</code> 換成測試版本；測試結束後清空覆蓋，讓其他測試不受影響。</p>
+
+  <p>每個拿到 <code>client</code> fixture 的測試，都擁有一個全新的、隔離的 SQLite 資料庫。測試跑完，記憶體釋放，資料庫跟著消失。</p>
+
+  <h2>session fixture 與 client fixture 的分工</h2>
+  <p><code>session</code> fixture 負責建立資料庫連線與表格。<code>client</code> fixture 則基於 <code>session</code>，把它注入 FastAPI 的依賴系統，並建立 <code>TestClient</code>。兩個 fixture 分開的原因：有些測試需要直接操作資料庫（驗證 CRUD 結果），不需要經過 HTTP；有些測試要走完整 HTTP 管線（驗證路由、狀態碼、回應格式），才需要 <code>client</code>。</p>
+
+  <h2>TestClient 不是真的在跑伺服器</h2>
+  <p><code>TestClient</code> 底層直接用 <code>httpx</code> 對 FastAPI app 發送請求，不需要啟動真正的 HTTP 伺服器、不需要開port、不需要網路。請求直接進入 ASGI 管線，經過 middleware、路由、依賴注入、例外處理，最後產生回應。這讓測試在毫秒級完成，同時又驗證了完整的請求處理流程。</p>
+
+  <div class="lesson-nav">
+    <a href="why-fixtures.html">← 上一步：為什麼測試需要隔離的資料庫？</a>
+    <a href="fixture-chain.html">下一步：靜態連線池與 fixture 鏈 →</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="為什麼測試通常使用記憶體 SQLite 而不是 Postgres？" data-correct="1" data-explain="SQLite 跑在記憶體裡不需要網路、背景程序、磁碟 I/O，啟動只要幾毫秒，大幅縮短測試時間。">
+    <button class="opt">SQLite 比 Postgres 更穩定</button>
+    <button class="opt">SQLite 跑在記憶體裡，啟動只要幾毫秒，大幅縮短測試時間</button>
+    <button class="opt">SQLite 支援更多進階 SQL 語法</button>
+    <button class="opt">SQLite 能完全模擬 Postgres 行為</button>
+  </div>
+
+  <div class="quiz" data-question="override_dependency 的作用是什麼？" data-correct="2" data-explain="dependency_overrides 把依賴的「生產實作」替換成「測試實作」，讓路由在不知不覺中使用測試專用的 session。">
+    <button class="opt">加速依賴的執行速度</button>
+    <button class="opt">自動驗證依賴是否正確</button>
+    <button class="opt">把依賴的「生產實作」替換成「測試實作」</button>
+    <button class="opt">為依賴加入型別檢查</button>
+  </div>
+
+  <div class="quiz" data-question="session fixture 和 client fixture 的關係是什麼？" data-correct="0" data-explain="session fixture 建立資料庫連線，client fixture 基於 session 把它注入依賴系統並建立 TestClient。">
+    <button class="opt">client fixture 依賴 session fixture，後者建立資料庫、前者建立 TestClient</button>
+    <button class="opt">兩個 fixture 互相獨立，沒有關係</button>
+    <button class="opt">session fixture 依賴 client fixture，後者先啟動 TestClient</button>
+    <button class="opt">兩個 fixture 是一樣的東西，只是名字不同</button>
+  </div>
+
+  <div class="quiz" data-question="SQLite 測試的局限性是什麼？" data-correct="3" data-explain="SQLite 不支援 Postgres 原生 enum、部分 constraint 和一些進階語法，測試全過不代表 Postgres 一定正常。">
+    <button class="opt">SQLite 測試無法建立表格</button>
+    <button class="opt">SQLite 測試無法使用 fixture</button>
+    <button class="opt">SQLite 測試無法跑平行測試</button>
+    <button class="opt">SQLite 測試無法完全模擬 Postgres 行為</button>
+  </div>
+
+  <div class="quiz" data-question="TestClient 的特點是什麼？" data-correct="1" data-explain="TestClient 直接用 httpx 對 FastAPI app 發送請求，不需要啟動真正的 HTTP 伺服器，但完整經過 ASGI 管線。">
+    <button class="opt">TestClient 必須啟動真正的 HTTP 伺服器</button>
+    <button class="opt">TestClient 不需要啟動伺服器，但完整經過 ASGI 管線</button>
+    <button class="opt">TestClient 只能測 GET 請求</button>
+    <button class="opt">TestClient 不支援依賴注入</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 25: Database fixtures with pytest · Step 2</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

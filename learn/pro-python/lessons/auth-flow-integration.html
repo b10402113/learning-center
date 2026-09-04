@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>完整認證流程與常見錯誤</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 23 — Step 4/4 · Protecting endpoints</p>
+  <h1>完整認證流程與常見錯誤</h1>
+
+  <h2>學習目標</h2>
+  <p>把註冊、登入、受保護請求三步串成一個完整的認證流程，並排除 JWT 密鑰未設、create_user 參數錯誤、非 JSON body 等常見陷阱。</p>
+
+  <h2>三步認證流程</h2>
+  <p>一個完整的密碼認證系統，客戶端和伺服器之間通常會跑過三個步驟：</p>
+
+  <h3>第一步：註冊（Register）</h3>
+  <p>客戶端把 email 和密碼送到 <code>/auth/register</code>。伺服器用 Argon2id 把密碼雜湊後存進資料庫，回傳建立好的使用者資料（不包含密碼雜湊）。</p>
+  <pre><code>POST /auth/register
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "secret123"
+}</code></pre>
+
+  <h3>第二步：登入（Login）</h3>
+  <p>客戶端把同樣的 email 和密碼送到 <code>/auth/token</code>。伺服器用 <code>pwdlib</code> 驗證密碼，通過後產生一個 JWT 權杖回傳。</p>
+  <pre><code>POST /auth/token
+Content-Type: application/x-www-form-urlencoded
+
+username=user@example.com&amp;password=secret123</code></pre>
+  <p>注意：OAuth2 的登入端點預設接受的是 <strong>form data</strong>，不是 JSON。這是 OAuth2 規格的規定，FastAPI 的 <code>OAuth2PasswordBearer</code> 也是這樣配合的。</p>
+
+  <p>回應：</p>
+  <pre><code>{
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "bearer"
+}</code></pre>
+
+  <h3>第三步：受保護請求（Authenticated Request）</h3>
+  <p>客戶端把拿到的權杖放在 Authorization header 裡，打到任何受保護的端點。</p>
+  <pre><code>GET /projects/me
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...</code></pre>
+
+  <p>伺服器用 <code>get_current_user</code> 驗證權杖，通過後回傳資料。</p>
+
+  <h2>常見錯誤：JWT 密鑰未設</h2>
+  <p>最常見的錯誤之一是 <code>SECRET_KEY</code> 沒有在環境變數裡正確設定。JWT 的密鑰至少要 32 個字元，否則 <code>jwt.encode</code> 或 <code>jwt.decode</code> 會直接失敗。</p>
+
+  <p>解法：在 <code>.env</code> 裡設定一個夠長的隨機字串：</p>
+  <pre><code>SECRET_KEY=a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6</code></pre>
+  <p>在開發環境可以用 <code>python -c "import secrets; print(secrets.token_hex(32))"</code> 產生。</p>
+
+  <h2>常見錯誤：create_user 參數錯誤（500）</h2>
+  <p>註冊端點通常會呼叫 <code>crud.create_user</code> 來建立使用者。如果呼叫時參數順序或名稱打錯，SQLAlchemy 會拋出例外，FastAPI 會回傳 500。</p>
+
+  <p>解法：使用關鍵字參數明確指定：</p>
+  <pre><code>crud.create_user(session=session, email=email, password=password)</code></pre>
+
+  <h2>常見錯誤：非 JSON body（422）</h2>
+  <p>如果註冊端點的 Pydantic 模型預期收到 JSON，但客戶端送了 form data，FastAPI 會回傳 422 Unprocessable Entity。這通常發生在測試時忘記設 <code>Content-Type: application/json</code>，或者把登入端點的 form data 習慣帶到註冊端點。</p>
+
+  <p>解法：確認每個端點接受的內容類型。註冊用 JSON，登入用 form data。</p>
+
+  <h2>在 Swagger Docs UI 測試</h2>
+  <p>FastAPI 自動產生的 <code>/docs</code> 頁面不只能看文件，還能直接測試整個認證流程：</p>
+  <ol>
+    <li>用 <code>Authorize</code> 按鈕登入（Swagger UI 會幫你去 <code>/auth/token</code> 拿權杖）。</li>
+    <li>打開受保護的端點，點 <code>Try it out</code>，再點 <code>Execute</code>。</li>
+    <li>Swagger UI 會自動在請求裡帶上權杖，你會看到 200 回應。</li>
+    <li>點 <code>Authorize</code> 再點 <code>Logout</code>，重覆剛才的請求，應該會看到 401。</li>
+  </ol>
+
+  <h2>總結</h2>
+  <p>三步認證流程（註冊 → 登入 → 受保護請求）是密碼認證的標準模式。實作時有三個常見陷阱要避開：JWT 密鑰要夠長且正確載入、<code>create_user</code> 用關鍵字參數呼叫、註冊端點收 JSON 而不是 form data。Swagger Docs UI 的 Authorize 按鈕讓你可以不寫任何前端程式就完成端到端測試。到這裡，你的 API 已經從全面開放變成只有合法使用者才能操作。</p>
+
+  <h2>隨堂測驗</h2>
+
+  <div class="quiz" data-question="註冊端點通常接受什麼格式？" data-correct="1" data-explain="註冊端點通常用 Pydantic 模型驗證，接受 JSON。">
+    <button class="opt">form data</button>
+    <button class="opt">JSON</button>
+    <button class="opt">XML</button>
+    <button class="opt">純文字</button>
+  </div>
+
+  <div class="quiz" data-question="登入端點 /auth/token 接受什麼格式？" data-correct="0" data-explain="OAuth2 規格規定登入端點接受 form data。">
+    <button class="opt">form data</button>
+    <button class="opt">JSON</button>
+    <button class="opt">XML</button>
+    <button class="opt">純文字</button>
+  </div>
+
+  <div class="quiz" data-question="JWT 密鑰至少需要幾個字元？" data-correct="2" data-explain="SECRET_KEY 至少要 32 個字元，否則 jwt 會失敗。">
+    <button class="opt">8</button>
+    <button class="opt">16</button>
+    <button class="opt">32</button>
+    <button class="opt">64</button>
+  </div>
+
+  <div class="quiz" data-question="如果 create_user 參數打錯，FastAPI 會回傳什麼狀態碼？" data-correct="1" data-explain="伺服器端未處理的例外會變成 500 Internal Server Error。">
+    <button class="opt">400</button>
+    <button class="opt">500</button>
+    <button class="opt">422</button>
+    <button class="opt">401</button>
+  </div>
+
+  <div class="quiz" data-question="Swagger Docs UI 的 Authorize 按鈕可以做什麼？" data-correct="3" data-explain="它會去 /auth/token 拿權杖，之後的請求自動帶上。">
+    <button class="opt">直接修改資料庫</button>
+    <button class="opt">產生新的 SECRET_KEY</button>
+    <button class="opt">建立新的使用者</button>
+    <button class="opt">去 /auth/token 拿權杖，之後的請求自動帶上</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./protect-routes.html" class="prev">← 上一步：用依賴注入保護路由</a>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 23: Protecting endpoints · Step 4</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

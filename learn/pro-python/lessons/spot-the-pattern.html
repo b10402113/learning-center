@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>找出重複的 lookup-or-404 模式</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <header>
+    <h1>找出重複的 lookup-or-404 模式</h1>
+    <p class="subtitle">DRY dependencies with ProjectDep · Step 1/4</p>
+  </header>
+
+  <main>
+    <section class="learning-goal">
+      <h2>Learning Goal</h2>
+      <p>能辨認 FastAPI 路由裡重複出現的「查不到就 404」樣板，並說出為什麼它需要被抽出來。</p>
+    </section>
+
+    <section class="lesson">
+      <h2>Lesson</h2>
+
+      <p>假設你在維護一個專案管理 API，有三個路由都需要載入 Project：</p>
+
+      <pre><code>@app.get("/projects/{project_id}")
+async def get_project(project_id: int, session: SessionDep):
+    project = crud.get_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+@app.put("/projects/{project_id}")
+async def update_project(project_id: int, data: ProjectUpdate, session: SessionDep):
+    project = crud.get_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    # 更新邏輯...
+
+@app.delete("/projects/{project_id}")
+async def delete_project(project_id: int, session: SessionDep):
+    project = crud.get_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    # 刪除邏輯...</code></pre>
+
+      <p>一眼看上去，每個路由的前兩行幾乎一樣：<code>crud.get_project()</code> 查詢，結果是 <code>None</code> 就丟 <code>HTTPException(404)</code>。這段邏輯本身不描述任何商業規則，它只是在做「確保這個 Project 存在」。</p>
+
+      <p>這種重複帶來三個問題：</p>
+
+      <ul>
+        <li><strong>容易遺漏</strong>：忘記加 404 判斷，路由會在 <code>None</code> 上呼叫屬性，回傳 500。</li>
+        <li><strong>修改成本高</strong>：如果錯誤訊息要改（例如改成中文），得同步改四、五個地方。</li>
+        <li><strong>路由噪音</strong>：真正的業務邏輯被埋在重複的樣板裡，可讀性下降。</li>
+      </ul>
+
+      <p>當你在一個專案裡看到同一段邏輯出現三次以上，就該考慮把它抽出來。在 FastAPI 的世界裡，「抽出來」的意思就是寫成一個<strong>依賴（dependency）</strong>。接下來的步驟會教你如何把這段樣板變成一個可複用的依賴函式。</p>
+    </section>
+
+    <div class="lesson-nav">
+      <span></span>
+      <a href="./build-get-project-or-404.html">下一步：實作 get_project_or_404 依賴函式 →</a>
+    </div>
+
+    <section class="quiz-section">
+      <h2>Quiz</h2>
+
+      <div class="quiz" data-question="在 FastAPI 路由裡，重複的「查不到就 404」樣板最主要帶來什麼問題？" data-correct="2" data-explain="樣板重複本身不一定是效能問題，而是維護與正確性風險。">
+        <button class="opt">每次呼叫都多查一次資料庫</button>
+        <button class="opt">FastAPI 無法自動序列化回應</button>
+        <button class="opt">容易遺漏 404 判斷，且修改要同步多處</button>
+        <button class="opt">会让 session 永遠不關閉</button>
+      </div>
+
+      <div class="quiz" data-question="crud.get_project(session, project_id) 回傳 None 時，代表什麼？" data-correct="1" data-explain="None 表示查詢沒有命中任何列。">
+        <button class="opt">資料庫連線失敗</button>
+        <button class="opt">該 ID 對應的 Project 不存在</button>
+        <button class="opt">session 已經被關閉</button>
+        <button class="opt">Project 的 id 是 0</button>
+      </div>
+
+      <div class="quiz" data-question="如果你有 6 個路由都需要載入同一個 Project，忘記加 404 判斷會發生什麼？" data-correct="3" data-explain="在 None 上呼叫屬性會產生 AttributeError，FastAPI 將其視為伺服器錯誤。">
+        <button class="opt">回傳 200 但 body 為空</button>
+        <button class="opt">FastAPI 自動補上 404</button>
+        <button class="opt">回傳 422 Validation Error</button>
+        <button class="opt">回傳 500 Internal Server Error</button>
+      </div>
+
+      <div class="quiz" data-question="以下哪個不是重複 lookup-or-404 樣板帶來的問題？" data-correct="0" data-explain="Docker 是容器化工具，跟路由樣板重複無關。">
+        <button class="opt">Docker 容器無法正確映射 port</button>
+        <button class="opt">修改錯誤訊息要同步多處</button>
+        <button class="opt">遺漏 404 判斷會導致 500 錯誤</button>
+        <button class="opt">路由可讀性下降</button>
+      </div>
+
+      <div class="quiz" data-question="當你在專案裡看到同一段邏輯出現三次以上，FastAPI 推薦的處理方式是？" data-correct="2" data-explain="FastAPI 的依賴注入系統正是為了抽取這類重複邏輯而設計的。">
+        <button class="opt">用全域變數儲存查詢結果</button>
+        <button class="opt">寫一個輔助函式在路由裡呼叫</button>
+        <button class="opt">寫成一個可複用的依賴（dependency）</button>
+        <button class="opt">把它搬到 middleware 裡處理</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

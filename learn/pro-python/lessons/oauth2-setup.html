@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OAuth2PasswordBearer 設定與權杖提取</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 23 — Step 1/4 · Protecting endpoints</p>
+  <h1>OAuth2PasswordBearer 設定與權杖提取</h1>
+
+  <h2>學習目標</h2>
+  <p>設定 <code>OAuth2PasswordBearer</code>，讓 FastAPI 能從請求的 Authorization header 自動提取權杖，並自動在 Swagger UI 加上 Authorize 按鈕。</p>
+
+  <h2>現在的 API 出了什麼問題？</h2>
+  <p>前面的課程已經把密碼雜湊和 JWT 權杖的產生做好了。但這些權杖目前只是被製造出來，卻沒有一個標準的方法讓客戶端把它送到伺服器，也沒有機制在客戶端忘了帶權杖的時候擋下請求。現在的 API 是全面開放的：任何人拿到 URL，都能建立專案、修改任務狀態、刪除資料。</p>
+
+  <h2>權杖應該放在哪裡？</h2>
+  <p>在 JWT 權杖的實務裡，客戶端通常會把權杖放在 HTTP 請求的 <code>Authorization</code> header 裡面，格式長這樣：</p>
+  <pre><code>Authorization: Bearer eyJhbGciOiJIUzI1NiIs...</code></pre>
+  <p>前面的 <code>Bearer</code> 是固定的協議前缀，後面那串才是伺服器簽發的 JWT。伺服器的責任就是從這個 header 把權杖挖出來。</p>
+
+  <h2>FastAPI 的標準工具：OAuth2PasswordBearer</h2>
+  <p>FastAPI 提供了一個現成的類別 <code>OAuth2PasswordBearer</code>，專門做這件事。它的全名來自 OAuth2 的 Password Grant 流程，但這裡我們只用它來「讀取權杖」，不需要搞懂 OAuth2 的全部細節。</p>
+
+  <p>使用時要建立一個實例，傳入 <code>tokenUrl</code>：</p>
+  <pre><code>from fastapi.security import OAuth2PasswordBearer
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")</code></pre>
+
+  <p><code>tokenUrl="/auth/token"</code> 告訴 FastAPI：「客戶端如果要拿權杖，可以去 <code>/auth/token</code> 這個位址。」這個資訊會讓 Swagger UI 的畫面右上角自動多出一個綠色的 <strong>Authorize</strong> 按鈕，點了之後會出現對話框讓你輸入 email 和 password，Swagger UI 就會自動去 <code>/auth/token</code> 換取權杖，之後的請求都會幫你帶上。</p>
+
+  <h2>缺少權杖時會發生什麼？</h2>
+  <p>如果在一個路由上宣告了 <code>oauth2_scheme</code> 作為依賴，但客戶端發出的請求沒有帶 <code>Authorization</code> header，FastAPI 會自動回傳 <strong>401 Unauthorized</strong>，不需要你手動檢查。</p>
+
+  <p>錯誤回應大概長這樣：</p>
+  <pre><code>{
+  "detail": "Not authenticated"
+}</code></pre>
+
+  <h2>OAuth2PasswordBearer 到底做了什麼？</h2>
+  <p>把它拆開看，這個類別只做了三件事：</p>
+  <table>
+    <tr><th>步驟</th><th>動作</th></tr>
+    <tr><td>1</td><td>檢查請求的 Authorization header 是否存在</td></tr>
+    <tr><td>2</td><td>檢查值是否以 Bearer 開頭</td></tr>
+    <tr><td>3</td><td>把後面的 token 字串抽出來回傳</td></tr>
+  </table>
+  <p>如果 header 不存在，就依照設定回傳 401。它<strong>不會</strong>驗證權杖的真偽——驗證是下一課 <code>get_current_user</code> 的工作。</p>
+
+  <h2>總結</h2>
+  <p><code>OAuth2PasswordBearer(tokenUrl="/auth/token")</code> 是 FastAPI 處理權杖提取的標準入口。它在 Swagger UI 上幫你加上 Authorize 按鈕，在請求沒帶權杖時自動回傳 401，把權杖從 Authorization header 裡挖出來交給下游的依賴處理。下一步，你要實作 <code>get_current_user</code> 來驗證這串權杖。</p>
+
+  <h2>隨堂測驗</h2>
+
+  <div class="quiz" data-question="OAuth2PasswordBearer 通常從哪裡讀取權杖？" data-correct="1" data-explain="權杖標準放在 Authorization header，格式為 Bearer &lt;token&gt;。">
+    <button class="opt">URL 查詢字串的 token 參數</button>
+    <button class="opt">Authorization header</button>
+    <button class="opt">Cookie 裡面的 jwt 欄位</button>
+    <button class="opt">請求 body 的 access_token 欄位</button>
+  </div>
+
+  <div class="quiz" data-question="tokenUrl=&quot;/auth/token&quot; 的作用是什麼？" data-correct="2" data-explain="tokenUrl 告訴 Swagger UI 去哪裡拿權杖，Authorize 按鈕才會自動出現。">
+    <button class="opt">限制只有 /auth/token 才能使用 GET 方法</button>
+    <button class="opt">自動建立 /auth/token 端點</button>
+    <button class="opt">告訴 Swagger UI 去哪裡拿權杖，Authorize 按鈕才會自動出現</button>
+    <button class="opt">把權杖儲存在 /auth/token 路徑下</button>
+  </div>
+
+  <div class="quiz" data-question="如果請求沒有帶 Authorization header，FastAPI 會如何回應？" data-correct="0" data-explain="缺少權杖時，FastAPI 自動回傳 401 Unauthorized。">
+    <button class="opt">回傳 401 Unauthorized</button>
+    <button class="opt">回傳 403 Forbidden</button>
+    <button class="opt">回傳 200 但 body 是空的</button>
+    <button class="opt">直接忽略，讓路由繼續執行</button>
+  </div>
+
+  <div class="quiz" data-question="OAuth2PasswordBearer 會不會驗證權杖的真偽？" data-correct="3" data-explain="它只負責提取權杖，驗證是 get_current_user 的工作。">
+    <button class="opt">會，它會檢查 JWT 簽名</button>
+    <button class="opt">會，它會檢查權杖是否過期</button>
+    <button class="opt">會，它會查詢資料庫確認使用者存在</button>
+    <button class="opt">不會，它只負責提取權杖</button>
+  </div>
+
+  <div class="quiz" data-question="Swagger UI 的 Authorize 按鈕為什麼會自動出現？" data-correct="1" data-explain="因為 OAuth2PasswordBearer 的 tokenUrl 告訴 Swagger UI 去哪裡換取權杖。">
+    <button class="opt">因為 FastAPI 預設會顯示所有按鈕</button>
+    <button class="opt">因為 OAuth2PasswordBearer 的 tokenUrl 告訴 Swagger UI 去哪裡換取權杖</button>
+    <button class="opt">因為你在路由上標註了 @app.auth_required</button>
+    <button class="opt">因為你在 .env 設定了 SWAGGER_AUTH=true</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./get-current-user.html" class="next">下一步：get_current_user 依賴注入 →</a>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 23: Protecting endpoints · Step 1</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

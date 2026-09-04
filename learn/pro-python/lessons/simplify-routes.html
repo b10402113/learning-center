@@ -3,135 +3,135 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>用 Annotated 依賴簡化路由 — CRUD refactoring</title>
+  <title>用 ProjectDep 簡化路由處理器</title>
   <link rel="stylesheet" href="./assets/shared.css">
 </head>
 <body>
+  <header>
+    <h1>用 ProjectDep 簡化路由處理器</h1>
+    <p class="subtitle">DRY dependencies with ProjectDep · Step 4/4</p>
+  </header>
 
-<h1>用 Annotated 依賴簡化路由</h1>
-<p class="meta">學習目標：用 ProjectDep 和 Annotated 型別別名消除每個路由重複的查詢與 404 樣板碼。</p>
+  <main>
+    <section class="learning-goal">
+      <h2>Learning Goal</h2>
+      <p>能把原本重複的 lookup-or-404 路由重構成只接收 `ProjectDep` 的簡潔版本。</p>
+    </section>
 
-<h2>每個路由都在寫一樣的樣板碼</h2>
+    <section class="lesson">
+      <h2>Lesson</h2>
 
-<p>把資料庫操作抽到 <code>crud.py</code> 之後，<code>main.py</code> 裡的路線還是有一個問題：每個需要取得專案的路由，都在做一樣的事——用 <code>project_id</code> 查資料庫，如果找不到就回傳 404。</p>
+      <p>前兩課我們建立了 `get_project_or_404` 和 `ProjectDep`。現在來看看路由能簡化到什麼程度。</p>
 
-<pre><code>@app.get("/projects/{project_id}")
-def get_project(project_id: int, session: Session = Depends(get_session)):
+      <p>重構前，每個路由都長這樣：</p>
+
+      <pre><code>@app.get("/projects/{project_id}")
+async def get_project(project_id: int, session: SessionDep):
     project = crud.get_project(session, project_id)
-    if not project:
+    if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 
 @app.put("/projects/{project_id}")
-def update_project(project_id: int, project: ProjectUpdate, session: Session = Depends(get_session)):
-    existing = crud.get_project(session, project_id)
-    if not existing:
+async def update_project(
+    project_id: int,
+    data: ProjectUpdate,
+    session: SessionDep,
+):
+    project = crud.get_project(session, project_id)
+    if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    # ... 更新邏輯
+    project.name = data.name
+    project.description = data.description
+    session.commit()
+    return project
 
 @app.delete("/projects/{project_id}")
-def delete_project(project_id: int, session: Session = Depends(get_session)):
+async def delete_project(project_id: int, session: SessionDep):
     project = crud.get_project(session, project_id)
-    if not project:
+    if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    # ... 刪除邏輯</code></pre>
+    session.delete(project)
+    session.commit()
+    return {"ok": True}</code></pre>
 
-<p>這三段路由的前兩行幾乎一模一樣。如果你有十個路由需要取得專案，這段「查不到就 404」的樣板碼就會重複十次。這就是 DRY 原則最典型的違反。</p>
+      <p>重構後，每個路由只剩核心邏輯：</p>
 
-<h2>把「查詢或 404」封裝成依賴</h2>
-
-<p>FastAPI 的依賴注入（dependency injection）系統可以幫我們把這段邏輯抽出來。我們寫一個函式，專門負責「用 project_id 查資料庫，找不到就拋 404」：</p>
-
-<pre><code># dependencies.py
-from fastapi import Depends, HTTPException
-from sqlmodel import Session
-from . import crud
-from .database import get_session
-
-def get_project_or_404(project_id: int, session: Session = Depends(get_session)):
-    project = crud.get_project(session, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return project</code></pre>
-
-<p>這個函式本身就是一個依賴。它接收 <code>project_id</code>（從路徑參數來）和 <code>session</code>（從 <code>get_session</code> 依賴來），回傳一個驗證過的 <code>Project</code> 物件。</p>
-
-<h2>用 Annotated 建立型別別名</h2>
-
-<p>有了 <code>get_project_or_404</code>，我們可以用 <code>Annotated</code> 建立一個型別別名，把「型別」和「依賴」綁在一起：</p>
-
-<pre><code># dependencies.py
-from typing import Annotated
-from fastapi import Depends
-
-ProjectDep = Annotated[Project, Depends(get_project_or_404)]</code></pre>
-
-<p>這行的意思是：<code>ProjectDep</code> 是一個 <code>Project</code> 型別，但它的值是由 <code>get_project_or_404</code> 這個依賴提供的。FastAPI 看到 <code>ProjectDep</code>，就會自動去跑 <code>get_project_or_404</code>，把回傳的 <code>Project</code> 注入給路由。</p>
-
-<h2>路由變得極簡</h2>
-
-<p>有了 <code>ProjectDep</code>，每個路由的簽章變得乾淨到不可思議：</p>
-
-<pre><code>@app.get("/projects/{project_id}")
-def get_project(project: ProjectDep):
+      <pre><code>@app.get("/projects/{project_id}")
+async def get_project(project: ProjectDep):
     return project
 
 @app.put("/projects/{project_id}")
-def update_project(project: ProjectDep, update: ProjectUpdate):
-    # ... 更新邏輯
+async def update_project(project: ProjectDep, data: ProjectUpdate, session: SessionDep):
+    project.name = data.name
+    project.description = data.description
+    session.commit()
+    return project
 
 @app.delete("/projects/{project_id}")
-def delete_project(project: ProjectDep):
-    # ... 刪除邏輯</code></pre>
+async def delete_project(project: ProjectDep, session: SessionDep):
+    session.delete(project)
+    session.commit()
+    return {"ok": True}</code></pre>
 
-<p>注意：路由裡完全沒有 <code>if not project</code> 的判斷，沒有 <code>HTTPException(404)</code>，沒有 <code>session</code> 參數。FastAPI 在呼叫路由之前，會先跑 <code>get_project_or_404</code>，如果找不到專案，直接回傳 404；如果找到，把 <code>Project</code> 物件注入給路由。</p>
+      <p>比較一下：</p>
 
-<p>路由現在只關心它自己的核心邏輯：回傳、更新、刪除。查詢和 404 的責任完全交給了依賴。</p>
+      <ul>
+        <li><strong>get_project</strong>：從 6 行變成 2 行。</li>
+        <li><strong>update_project</strong>：從 10 行變成 5 行。</li>
+        <li><strong>delete_project</strong>：從 7 行變成 4 行。</li>
+      </ul>
 
-<h2>Quiz</h2>
+      <p>每個路由拿到的是已經驗證存在的 <code>Project</code> 物件。如果 <code>project_id</code> 查不到東西，FastAPI 會在進路由之前就回傳 404，路由本身完全不需要處理這個狀況。</p>
 
-<div class="quiz" data-question="在分離 crud.py 之前，每個路由重複的樣板碼是什麼？" data-correct="2" data-explain="每個路由都在做「查資料庫，找不到就 404」的重複邏輯。">
-  <button class="opt">session.add() 和 session.commit()</button>
-  <button class="opt">驗證請求 body 的邏輯</button>
-  <button class="opt">用 project_id 查資料庫，找不到就回傳 404</button>
-  <button class="opt">處理 IntegrityError 的 try/except</button>
-</div>
+      <p>這就是 DRY（Don't Repeat Yourself）在 FastAPI 依賴注入裡的實際應用：把跨路由的重複邏輯抽成依賴，讓每個路由專注在它真正該做的事。</p>
+    </section>
 
-<div class="quiz" data-question="get_project_or_404 這個依賴的作用是什麼？" data-correct="0" data-explain="這個依賴封裝了「查詢或 404」的邏輯，找不到就拋 HTTPException。">
-  <button class="opt">查詢專案，找不到就拋 404，找到了就回傳 Project</button>
-  <button class="opt">建立一個新的專案並寫入資料庫</button>
-  <button class="opt">驗證使用者是否有權限存取專案</button>
-  <button class="opt">把專案的資料轉換成 JSON 格式</button>
-</div>
+    <div class="lesson-nav">
+      <a href="./annotated-type-alias.html">← 上一步：用 Annotated 建立可複用的型別別名</a>
+      <span></span>
+    </div>
 
-<div class="quiz" data-question="ProjectDep = Annotated[Project, Depends(get_project_or_404)] 這行做了什麼？" data-correct="1" data-explain="Annotated 把型別和依賴綁在一起，FastAPI 看到 ProjectDep 就會自動跑依賴。">
-  <button class="opt">定義一個新的 Pydantic 模型</button>
-  <button class="opt">建立一個型別別名，把 Project 型別和 get_project_or_404 依賴綁在一起</button>
-  <button class="opt">建立一個新的 FastAPI 路由</button>
-  <button class="opt">定義一個資料庫查詢函式</button>
-</div>
+    <section class="quiz-section">
+      <h2>Quiz</h2>
 
-<div class="quiz" data-question="使用 ProjectDep 之後，路由裡可以拿掉什麼？" data-correct="3" data-explain="查詢和 404 的邏輯被封裝在依賴裡，路由不需要自己處理。">
-  <button class="opt">路由路徑定義</button>
-  <button class="opt">請求參數的型別提示</button>
-  <button class="opt">回應的 JSON 結構</button>
-  <button class="opt">if not project: raise HTTPException(404)</button>
-</div>
+      <div class="quiz" data-question="重構後的 get_project 路由，總共幾行？" data-correct="1" data-explain="重構後只剩裝飾器、簽章和 return 一行。">
+        <button class="opt">1 行</button>
+        <button class="opt">2 行</button>
+        <button class="opt">3 行</button>
+        <button class="opt">4 行</button>
+      </div>
 
-<div class="quiz" data-question="為什麼要把依賴封裝成 ProjectDep，而不是在每個路由裡直接寫 Depends(get_project_or_404)？" data-correct="0" data-explain="型別別名讓路由簽章更乾淨，也更容易重複使用和維護。">
-  <button class="opt">讓路由簽章更乾淨，也更容易重複使用和維護</button>
-  <button class="opt">讓依賴可以跑得更快</button>
-  <button class="opt">讓 FastAPI 可以自動產生 OpenAPI 文件</button>
-  <button class="opt">讓依賴可以被其他框架使用</button>
-</div>
+      <div class="quiz" data-question="如果 project_id 查不到 Project，FastAPI 會在什麼時候回傳 404？" data-correct="3" data-explain="依賴在路由執行前就被解析，查不到就直接拋 404。">
+        <button class="opt">路由執行到一半時</button>
+        <button class="opt">session.commit() 時</button>
+        <button class="opt">回應序列化時</button>
+        <button class="opt">在進入路由之前（依賴解析階段）</button>
+      </div>
 
-<div class="lesson-nav">
-  <a href="./verify-with-tests.html">← 上一步：用既有測試驗證重構</a>
-  <a href="./global-exception-handling.html">下一步：全域例外處理：把 IntegrityError 變成 409 →</a>
-</div>
+      <div class="quiz" data-question="重構後，update_project 路由不再需要處理什麼？" data-correct="0" data-explain="404 判斷已經交給 ProjectDep 處理。">
+        <button class="opt">404 判斷</button>
+        <button class="opt">資料驗證</button>
+        <button class="opt">session.commit()</button>
+        <button class="opt">JSON 序列化</button>
+      </div>
 
-<footer class="footer">遇到問題？問你的 agent，他們可以幫你釐清任何不清楚的地方。</footer>
+      <div class="quiz" data-question="DRY 原則是什麼的縮寫？" data-correct="2" data-explain="DRY = Don't Repeat Yourself。">
+        <button class="opt">Do Repeat Yourself</button>
+        <button class="opt">Don't Return Yet</button>
+        <button class="opt">Don't Repeat Yourself</button>
+        <button class="opt">Do Return Yourself</button>
+      </div>
 
-<script src="./assets/quiz.js"></script>
+      <div class="quiz" data-question="重構後，每個路由拿到的是什麼？" data-correct="1" data-explain="路由拿到的是已經驗證存在的 Project 物件。">
+        <button class="opt">一個 project_id 整數</button>
+        <button class="opt">一個已經驗證存在的 Project 物件</button>
+        <button class="opt">一個 Session 物件</button>
+        <button class="opt">一個 HTTPException</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="./assets/quiz.js"></script>
 </body>
 </html>

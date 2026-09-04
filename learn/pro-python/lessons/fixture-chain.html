@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>靜態連線池與 fixture 鏈</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 25 — Step 3/4 · Database fixtures with pytest</p>
+  <h1>靜態連線池與 fixture 鏈</h1>
+
+  <h2>學習目標</h2>
+  <p>理解靜態連線池如何避免重複建立連線，以及 fixture 鏈如何自動填充測試資料，讓每個測試不需要手動建資料。</p>
+
+  <h2>記憶體 SQLite 的速度陷阱</h2>
+  <p>上一課說記憶體 SQLite 很快，但這有一個但書：`:memory:` 資料庫在連線關閉就消失了。預設情況下，SQLAlchemy 每個 `Session` 就是一個獨立連線。如果你在 fixture 裡建了一個 engine，然後每次開啟新 Session 都重新建立表格，測試速度會掉下來。更糟的是，SQLModel/SQLAlchemy 的 engine 預設用「連線池（connection pool）」管理連線，但 `:memory:` 資料庫的連線池行為特殊——預設池會讓不同 Session 看到不同的資料庫。</p>
+
+  <p>解法是用<strong>靜態池（StaticPool）</strong>：一個池只持有單一連線，所有 Session 都共用這條連線，資料才能跨 Session 存在。</p>
+
+  <pre><code># conftest.py
+from sqlalchemy.pool import StaticPool
+
+engine = create_engine(
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)</code></pre>
+
+  <p>`check_same_thread: False` 是為了讓不同執行緒可以共用這條連線（FastAPI 內部會跑在不同 thread）。`StaticPool` 保證所有 Session 都是同一條連線，表格建好後不會消失。</p>
+
+  <h2>Fixture 鏈：建立測試資料</h2>
+  <p>光有空的測試資料庫還不夠。大多數測試需要一些預設資料：一個專案、幾個 Task、一個使用者。每個測試都手動 INSERT 這些資料，會讓測試本體淹沒在建資料的噪音裡。fixture 鏈（fixture chain）把「建立資料」也抽象成 fixture，測試只關心它需要的資料層級。</p>
+
+  <pre><code># conftest.py
+from sqlmodel import insert
+
+@pytest.fixture(name="projects")
+def projects_fixture(session: Session):
+    project_1 = Project(id=1, name="Project Alpha", description="...")
+    project_2 = Project(id=2, name="Project Beta", description="...")
+    session.add(project_1)
+    session.add(project_2)
+    session.commit()
+    return [project_1, project_2]
+
+@pytest.fixture(name="tasks")
+def tasks_fixture(session: Session, projects: list[Project]):
+    task_1 = Task(id=1, title="Task One", project_id=projects[0].id)
+    task_2 = Task(id=2, title="Task Two", project_id=projects[0].id)
+    task_3 = Task(id=3, title="Task Three", project_id=projects[1].id)
+    session.add(task_1)
+    session.add(task_2)
+    session.add(task_3)
+    session.commit()
+    return [task_1, task_2, task_3]</code></pre>
+
+  <p>這裡的依赖關係是：<code>tasks</code> 依賴 <code>projects</code>，<code>projects</code> 依賴 <code>session</code>。pytest 在跑一個需要 <code>tasks</code> 的測試時，會先跑 <code>session</code> fixture，再跑 <code>projects</code>，最後跑 <code>tasks</code>。每個 fixture 跑完之後都 commit 進資料庫，下一層的 fixture 就能查到前一層建立的資料。</p>
+
+  <p>測試直接宣告它需要的層級：</p>
+
+  <pre><code>def test_list_tasks_for_project(client: TestClient, projects: list[Project], tasks: list[Task]):
+    response = client.get(f"/projects/{projects[0].id}/tasks")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2  # 這個 project 有兩個 task
+
+def test_get_project_not_found(client: TestClient, projects: list[Project]):
+    # 這個測試只拿到 projects，不會觸發 tasks fixture
+    response = client.get("/projects/999")
+    assert response.status_code == 404</code></pre>
+
+  <p>這種「宣告式資料依賴」讓測試意圖一目了然。看測試函式的參數，就知道它需要什麼資料環境，不需要去翻 INSERT 語法。</p>
+
+  <h2>Commit 還是 rollback？</h2>
+  <p>你可能會問：fixture 跑完之後，資料要清除嗎？答案是「不需要手動清除」。因為每個測試都拿到一個全新的 <code>session</code> fixture（來自全新的記憶體 SQLite），測試結束整個資料庫就消失了。資料不需要 rollback，不需要 TRUNCATE，不需要清理。</p>
+
+  <p>只有在極少數跨 fixture 共用的情境下，才需要考慮 commit/rollback 的邊界。以這節課的 fixture 設計來說，fixture 裡面 commit 是為了讓後續 fixture 可以查到前一層建立的資料；測試本身如果也做了修改，跑完就跟著資料庫一起銷毀，不需要特別處理。</p>
+
+  <div class="lesson-nav">
+    <a href="sqlite-test-db.html">← 上一步：用記憶體 SQLite 建立隔離測試資料庫</a>
+    <a href="write-endpoint-tests.html">下一步：用 fixture 資料寫端點測試 →</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="為什麼記憶體 SQLite 需要搭配 StaticPool？" data-correct="2" data-explain="StaticPool 保證所有 Session 共用同一條連線，資料才能跨 Session 存在。預設池會讓不同 Session 看到不同的資料庫。">
+    <button class="opt">StaticPool 讓 SQLite 跑得更快</button>
+    <button class="opt">StaticPool 讓 SQLite 支援多執行緒</button>
+    <button class="opt">StaticPool 保證所有 Session 共用同一條連線，資料才能跨 Session 存在</button>
+    <button class="opt">StaticPool 讓 SQLite 支援 transaction</button>
+  </div>
+
+  <div class="quiz" data-question="fixture 鏈的核心概念是什麼？" data-correct="1" data-explain="fixture 之間可以宣告依賴，pytest 按照依賴順序執行，讓測試資料一層一層建立起來。">
+    <button class="opt">每個 fixture 必須獨立運作，不能依賴其他 fixture</button>
+    <button class="opt">fixture 之間可以宣告依賴，pytest 按照依賴順序執行</button>
+    <button class="opt">fixture 只能回傳資料庫連線，不能回傳資料</button>
+    <button class="opt">fixture 必須全部放在測試函式裡面</button>
+  </div>
+
+  <div class="quiz" data-question="fixture 裡面為什麼要 commit？" data-correct="0" data-explain="fixture 裡面 commit 是為了讓後續 fixture 可以查到前一層建立的資料。測試結束後整個記憶體資料庫會消失，不需要手動清除。">
+    <button class="opt">為了給後續 fixture 查詢；測試結束資料庫會自動消失，不需要手動清除</button>
+    <button class="opt">為了加快測試速度</button>
+    <button class="opt">為了避免資料被其他測試修改</button>
+    <button class="opt">pytest 要求 fixture 一定要 commit</button>
+  </div>
+
+  <div class="quiz" data-question="宣告式資料依賴的好處是什麼？" data-correct="3" data-explain="看測試函式的參數，就知道它需要什麼資料環境，測試意圖一目了然。">
+    <button class="opt">讓測試跑得更快</button>
+    <button class="opt">讓測試更難寫錯</button>
+    <button class="opt">讓測試可以平行執行</button>
+    <button class="opt">看測試函式的參數，就知道它需要什麼資料環境</button>
+  </div>
+
+  <div class="quiz" data-question="check_same_thread: False 的作用是什麼？" data-correct="1" data-explain="讓不同執行緒可以共用同一條 SQLite 連線，因為 FastAPI 內部會跑在不同 thread。">
+    <button class="opt">讓 SQLite 支援寫入操作</button>
+    <button class="opt">讓不同執行緒可以共用同一條 SQLite 連線</button>
+    <button class="opt">讓 SQLite 支援 transaction</button>
+    <button class="opt">讓 SQLite 支援平行測試</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 25: Database fixtures with pytest · Step 3</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

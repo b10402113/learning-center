@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JWT 的結構：header、payload、signature</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 22 — Step 2/3 · JWT tokens</p>
+  <h1>JWT 的結構：header、payload、signature</h1>
+
+  <h2>學習目標</h2>
+  <p>能拆解 JWT 的三個部分，區分「編碼」與「加密」，並解釋常見 claims 的用途。</p>
+
+  <h2>把 JWT 拆開來看</h2>
+  <p>一個 JWT 長得像這樣：</p>
+
+  <blockquote><code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZSIsImV4cCI6MTczNjAwMDAwMH0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c</code></blockquote>
+
+  <p>看起來是一串亂碼，但它其實由三個 base64 編碼（Base64URL）的部分組成，用句點 <code>.</code> 分隔：</p>
+
+  <table>
+    <thead>
+      <tr><th>部分</th><th>內容</th><th>用途</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Header（標頭）</td><td>演算法與 token 類型</td><td>告訴伺服器「用哪種演算法驗證簽章」</td></tr>
+      <tr><td>Payload（載荷）</td><td>Claims（關於使用者的聲明）</td><td>攜帶使用者身份與過期時間等資訊</td></tr>
+      <tr><td>Signature（簽章）</td><td>Header + Payload 的雜湊</td><td>防止內容被竄改</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Header：用哪種演算法？</h2>
+  <p>Header 通常只有兩個欄位：<code>alg</code>（演算法）和 <code>typ</code>（類型，固定是 <code>"JWT"</code>）。例如：</p>
+
+  <pre><code>{
+  "alg": "HS256",
+  "typ": "JWT"
+}</code></pre>
+
+  <p>這串 JSON 經過 Base64URL 編碼後，就變成 JWT 第一段 <code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9</code>。任何人都可以解碼它——Header 不是秘密，它只是告訴伺服器「驗證我請用 HMAC SHA-256」。</p>
+
+  <h2>Payload：攜帶聲明（Claims）</h2>
+  <p>Payload 是 JWT 真正放資料的地方。這裡面的 JSON 物件稱為 <strong>Claims（聲明）</strong>——就是「關於這個 token 的一件事」。</p>
+
+  <p>常見的標準 claims：</p>
+
+  <table>
+    <thead>
+      <tr><th>Claim</th><th>全稱</th><th>用途</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>sub</code></td><td>Subject</td><td>token 的主人是誰（通常是使用者名稱或 ID）</td></tr>
+      <tr><td><code>exp</code></td><td>Expiration</td><td>token 的過期時間（Unix timestamp）</td></tr>
+      <tr><td><code>iat</code></td><td>Issued At</td><td>token 何時發行</td></tr>
+      <tr><td><code>iss</code></td><td>Issuer</td><td>誰發行了這個 token</td></tr>
+    </tbody>
+  </table>
+
+  <p>一個實際的 payload 可能長這樣：</p>
+
+  <pre><code>{
+  "sub": "alice",
+  "exp": 1736000000
+}</code></pre>
+
+  <p>跟 Header 一樣，Payload 也是 Base64URL 編碼，不是加密。任何人拿到 token 都能解碼看到 <code>sub</code> 和 <code>exp</code>。所以<strong>絕對不要在 Payload 裡放密碼或敏感資訊</strong>——它只是「可閱讀但不可竄改」。</p>
+
+  <h2>Signature：防偽簽章</h2>
+  <p>Signature 是 JWT 安全的核心。它的產生方式：</p>
+
+  <ol>
+    <li>把編碼後的 Header 和 Payload 用句點連起來：<code>header.payload</code></li>
+    <li>用 Header 指定的演算法（例如 HS256）加上伺服器密鑰（secret key）去算雜湊</li>
+    <li>把雜湊結果 Base64URL 編碼，變成第三段</li>
+  </ol>
+
+  <p>當伺服器收到 token 時，它會用同樣的密鑰和演算法重新算一次雜湊，跟 token 裡的 Signature 比對。如果吻合，代表：</p>
+
+  <ul>
+    <li>Header 和 Payload 沒有被竄改（一改，雜湊就變了）</li>
+    <li>token 一定是持有密鑰的人發出的（沒有密鑰算不出對的雜湊）</li>
+  </ul>
+
+  <blockquote>編碼（Encoding）≠ 加密（Encryption）。Base64 是為了傳輸方便，不是為了保密。JWT 的保全靠的是 Signature，不是靠隱藏內容。</blockquote>
+
+  <div class="lesson-nav">
+    <a href="jwt-identity.html">← 上一步：為什麼 JWT 能解決 HTTP 的身份識別問題</a>
+    <a href="jwt-generate-verify.html">下一步：產生與驗證 JWT token →</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="JWT 的三個部分依序是什麼？" data-correct="0" data-explain="JWT 依序為 Header（標頭）、Payload（載荷）、Signature（簽章），以句點分隔。">
+    <button class="opt">Header、Payload、Signature</button>
+    <button class="opt">Payload、Header、Signature</button>
+    <button class="opt">Signature、Header、Payload</button>
+    <button class="opt">Header、Signature、Payload</button>
+  </div>
+
+  <div class="quiz" data-question="JWT 的 Header 通常包含哪些欄位？" data-correct="1" data-explain="Header 包含 alg（演算法）和 typ（類型，固定為 JWT），用來指定驗證簽章的方式。">
+    <button class="opt">sub 和 exp</button>
+    <button class="opt">alg 和 typ</button>
+    <button class="opt">iss 和 iat</button>
+    <button class="opt">user 和 password</button>
+  </div>
+
+  <div class="quiz" data-question="JWT 的 Payload 為什麼不適合放密碼？" data-correct="2" data-explain="Payload 是 Base64URL 編碼而非加密，任何人都能解碼看到內容，所以不適合放敏感資訊。">
+    <button class="opt">因為 Payload 有長度限制</button>
+    <button class="opt">因為 Payload 會被加密</button>
+    <button class="opt">因為 Payload 是編碼而非加密，任何人都能解碼</button>
+    <button class="opt">因為 Payload 會被簽名</button>
+  </div>
+
+  <div class="quiz" data-question="JWT 的 Signature 如何防止內容被竄改？" data-correct="0" data-explain="Signature 是 Header+Payload 的雜湊，內容一變雜湊就變，驗證就會失敗。">
+    <button class="opt">Signature 是 Header+Payload 的雜湊，內容一變驗證就失敗</button>
+    <button class="opt">Signature 是加密過的內容</button>
+    <button class="opt">Signature 是壓縮過的內容</button>
+    <button class="opt">Signature 是編碼過的內容</button>
+  </div>
+
+  <div class="quiz" data-question="Base64URL 編碼的主要目的是什麼？" data-correct="3" data-explain="Base64URL 是為了讓二進位資料能安全地在 URL 中傳輸，不是為了加密。">
+    <button class="opt">加密資料</button>
+    <button class="opt">壓縮資料</button>
+    <button class="opt">簽署資料</button>
+    <button class="opt">讓二進位資料能安全地在 URL 中傳輸</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 22: JWT tokens · Step 2</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

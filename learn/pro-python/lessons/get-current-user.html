@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>get_current_user 依賴注入</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 23 — Step 2/4 · Protecting endpoints</p>
+  <h1>get_current_user 依賴注入</h1>
+
+  <h2>學習目標</h2>
+  <p>實作一個依賴函式 <code>get_current_user</code>，讓它接收權杖、驗證 JWT 簽名、查詢資料庫，最後回傳當前使用者。</p>
+
+  <h2>權杖拿到了，然後呢？</h2>
+  <p>上一課的 <code>OAuth2PasswordBearer</code> 已經能從請求裡把 JWT 字串挖出來。但字串本身只是一堆文字，伺服器還不知道它是誰、是不是偽造的、對應到哪個使用者。這些驗證工作要交給一個依賴函式來做，FastAPI 社群習慣把它命名為 <code>get_current_user</code>。</p>
+
+  <h2>依賴函式的角色</h2>
+  <p><code>get_current_user</code> 是一個普通的 Python 函式，但它同時也會被 FastAPI 當作依賴來呼叫。它的輸入是權杖字串（由 <code>oauth2_scheme</code> 注入），輸出是一個 <code>User</code> 物件。如果權杖無效或使用者不存在，就拋出 <code>HTTPException</code> 回傳 401。</p>
+
+  <h2>三步驗證</h2>
+  <p>一個可靠的權杖驗證流程通常包含三個步驟：</p>
+  <table>
+    <tr><th>步驟</th><th>做什麼</th><th>為什麼</th></tr>
+    <tr><td>1. Decode with key</td><td>用簽發時的同一把密鑰解碼 JWT</td><td>確認權杖確實是這台伺服器簽發的</td></tr>
+    <tr><td>2. Check signature</td><td>驗證 JWT 的 signature 沒被竄改</td><td>防止有人改寫 payload 後重新編碼</td></tr>
+    <tr><td>3. Lookup user</td><td>用 payload 裡的使用者 ID 去資料庫查</td><td>確認使用者仍然存在、沒有被刪除或停用</td></tr>
+  </table>
+
+  <p>任何一步失敗，都應該回傳 401。</p>
+
+  <h2>實作 get_current_user</h2>
+  <p>下面是一個典型的實作。注意它怎麼宣告 <code>token: str = Depends(oauth2_scheme)</code>——FastAPI 會自動把 <code>oauth2_scheme</code> 提取的權杖字串注入進來：</p>
+
+  <pre><code>from fastapi import Depends, HTTPException
+from jose import jwt, JWTError
+
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    session: Session = Depends(get_session),
+) -> User:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: int = payload.get("sub")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="無效的權杖")
+
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="找不到使用者")
+    return user</code></pre>
+
+  <p>這裡的 <code>SECRET_KEY</code> 和 <code>ALGORITHM</code> 必須和簽發權杖時用的是同一組，否則 <code>jwt.decode</code> 會拋出 <code>JWTError</code>。<code>sub</code> 是 JWT 標準的 payload 欄位，存放「這個權杖屬於誰」——我們在登入時把 <code>user.id</code> 放進了 <code>sub</code>。</p>
+
+  <h2>用別名讓路由更簡潔</h2>
+  <p>每次在路由寫 <code>current_user: User = Depends(get_current_user)</code> 會有點長。FastAPI 社群常見的慣例是建立一個型別別名：</p>
+
+  <pre><code>current_user_dep = Depends(get_current_user)</code></pre>
+
+  <p>這樣路由裡就可以直接寫 <code>current_user: User = current_user_dep</code>，看起來像一個單純的型別註記，但實際上 FastAPI 會執行整個驗證流程。</p>
+
+  <h2>依賴鏈的組合</h2>
+  <p>注意 <code>get_current_user</code> 自己也是依賴的組合：它需要 <code>token</code>（來自 <code>oauth2_scheme</code>）和 <code>session</code>（來自 <code>get_session</code>）。FastAPI 會自動按照依賴關係的順序解析——先產生 session，再提取權杖，最後一起傳進 <code>get_current_user</code>。這就是依賴鏈的威力：每一層只需要關心自己的輸入和輸出。</p>
+
+  <h2>總結</h2>
+  <p><code>get_current_user</code> 是保護端點的核心。它接收權杖，用三步驗證（解碼、檢查簽名、查詢使用者）確認身份，回傳 <code>User</code> 物件。驗證失敗就拋 401。用 <code>current_user_dep = Depends(get_current_user)</code> 這個別名，可以讓路由的簽名保持乾淨。下一課，你會看到保護一個路由實際上只需要加一個參數。</p>
+
+  <h2>隨堂測驗</h2>
+
+  <div class="quiz" data-question="get_current_user 的輸入通常是什麼？" data-correct="1" data-explain="它接收 oauth2_scheme 從 Authorization header 提取的權杖字串。">
+    <button class="opt">整個 HTTP 請求物件</button>
+    <button class="opt">權杖字串和資料庫 session</button>
+    <button class="opt">使用者的 email 和 password</button>
+    <button class="opt">JWT 的 payload 字典</button>
+  </div>
+
+  <div class="quiz" data-question="JWT 驗證的三步流程，哪個順序才合理？" data-correct="2" data-explain="先解碼，再檢查簽名，最後查使用者。">
+    <button class="opt">查使用者 → 解碼 → 檢查簽名</button>
+    <button class="opt">檢查簽名 → 查使用者 → 解碼</button>
+    <button class="opt">解碼 → 檢查簽名 → 查使用者</button>
+    <button class="opt">解碼 → 查使用者 → 檢查簽名</button>
+  </div>
+
+  <div class="quiz" data-question="jwt.decode 失敗時應該回傳什麼狀態碼？" data-correct="0" data-explain="權杖無效或簽名錯誤都屬於認證失敗，應回傳 401。">
+    <button class="opt">401</button>
+    <button class="opt">403</button>
+    <button class="opt">400</button>
+    <button class="opt">500</button>
+  </div>
+
+  <div class="quiz" data-question="current_user_dep = Depends(get_current_user) 的作用是什麼？" data-correct="3" data-explain="建立一個 Depends 別名，讓路由簽名更簡潔。">
+    <button class="opt">建立一個新的 FastAPI 應用程式</button>
+    <button class="opt">建立一個新的資料庫 session</button>
+    <button class="opt">建立一個新的 JWT 權杖</button>
+    <button class="opt">建立一個 Depends 別名，讓路由簽名更簡潔</button>
+  </div>
+
+  <div class="quiz" data-question="如果權杖解碼成功，但資料庫查不到對應的使用者，應該如何處理？" data-correct="1" data-explain="使用者可能已被刪除，應回傳 401 表示認證失敗。">
+    <button class="opt">自動建立一個新使用者</button>
+    <button class="opt">回傳 401</button>
+    <button class="opt">回傳 404</button>
+    <button class="opt">回傳 200 但 body 是空的</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./oauth2-setup.html" class="prev">← 上一步：OAuth2PasswordBearer 設定與權杖提取</a>
+    <a href="./protect-routes.html" class="next">下一步：用依賴注入保護路由 →</a>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 23: Protecting endpoints · Step 2</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

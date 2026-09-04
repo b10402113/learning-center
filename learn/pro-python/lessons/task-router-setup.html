@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Task router setup and imports</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Task router setup and imports</h1>
+<p class="meta">學習目標：Set up the task router with absolute imports and the three dependencies (project, session, task)</p>
+
+<h2>Why this step matters</h2>
+<p>在之前的節點你已經建好 project router 和 CRUD 模組。Task router 看起來幾乎一樣，但多了對 <code>Project</code> 的關聯，還有 <code>task_dep</code> 這組依賴。這一節先把骨架搭好——導入風格、依賴宣告、APIRouter 初始化——讓後續的 CRUD 和查詢邏輯可以疊上去。</p>
+
+<h2>Absolute vs relative imports</h2>
+<p>Python 兩種導入寫法等價，但可讀性和重構難易不同：</p>
+<pre><code># Relative import
+from .dependencies import project_dep, session_dep
+
+# Absolute import
+from release_tracker.dependencies import project_dep, session_dep</code></pre>
+<p>講師偏好絕對導入，原因有二：重構時搜尋檔名更容易，移動檔案時不易出錯。不管選哪種，團隊風格統一才是重點。</p>
+
+<h2>Dependencies for task router</h2>
+<p>Task router 需要三個依賴一起運作：</p>
+<ul>
+  <li><code>project_dep</code> — 透過 project_id 或 slug 查一筆專案，找不到就 404</li>
+  <li><code>session_dep</code> — 注入資料庫 session，結束時自動關閉</li>
+  <li><code>task_dep</code> — 查一筆 task，找不到就 404（跟 project_dep 同一種 pattern）</li>
+</ul>
+<p>三個依賴各自用 <code>Annotated[..., Depends(...)]</code> 宣告，再在每個 endpoint 的 function signature 裡組合。</p>
+
+<h2>Refactoring signal: long imports</h2>
+<p>import 一行塞了十幾個名字，通常暗示該模組該拆了。例如 <code>from release_tracker.models import TaskCreate, TaskPriority, TaskRead, TaskStatus, TaskUpdate</code> 可以考慮拆成 <code>release_tracker.models.task_models</code>。這不是硬性規則，但是一個值得留意的程式碼氣味（code smell）。</p>
+
+<h2>Putting it together</h2>
+<p>一個最小的 task router 骨架長這樣：</p>
+<pre><code>from fastapi import APIRouter, status
+from typing import Annotated, Any
+
+from release_tracker.dependencies import (
+    project_dep,
+    session_dep,
+    task_dep,
+)
+
+from release_tracker import crud
+from release_tracker.models import (
+    TaskCreate,
+    TaskPriority,
+    TaskRead,
+    TaskStatus,
+    TaskUpdate,
+)
+
+router = APIRouter()</code></pre>
+<p>注意 <code>router = APIRouter()</code> 在 import 宣告之後才建立。順序是：外部套件 → 內部依賴 → CRUD → 模型 → 建立 router。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="絕對導入與相對導入的主要差異是什麼？" data-correct="0" data-explain="絕對導入讓重構時搜尋和移動檔案更容易，但兩者在執行期等價。">
+  <button class="opt">絕對導入讓重構更容易，執行期等價</button>
+  <button class="opt">絕對導入效能更好</button>
+  <button class="opt">相對導入不能在 package 內使用</button>
+  <button class="opt">絕對導入只能用標準庫模組</button>
+</div>
+
+<div class="quiz" data-question="Task router 需要哪三個依賴？" data-correct="2" data-explain="project_dep（查專案）、session_dep（注入 session）、task_dep（查 task）。">
+  <button class="opt">project_dep, task_dep, db_dep</button>
+  <button class="opt">session_dep, user_dep, project_dep</button>
+  <button class="opt">project_dep, session_dep, task_dep</button>
+  <button class="opt">task_dep, slug_dep, auth_dep</button>
+</div>
+
+<div class="quiz" data-question="import 一行塞了十幾個名字代表什麼？" data-correct="1" data-explain="這是一個 refactoring signal：該模組可能該拆成 sub-modules。">
+  <button class="opt">這是 Python 的最佳實踐</button>
+  <button class="opt">這是 refactoring signal，該模組可能該拆了</button>
+  <button class="opt">這代表模組耦合度過低</button>
+  <button class="opt">這一行正常，不需要理會</button>
+</div>
+
+<div class="quiz" data-question="建立 APIRouter 的正確位置是？" data-correct="0" data-explain="router 必須在 import 宣告之後才建立，順序才正確。">
+  <button class="opt">在 import 宣告之後</button>
+  <button class="opt">在 import 宣告之前</button>
+  <button class="opt">在函數內部</button>
+  <button class="opt">在檔案最開頭</button>
+</div>
+
+<div class="quiz" data-question="為什麼講師偏好絕對導入？" data-correct="0" data-explain="重構時搜尋檔名更容易，移動檔案時不易出錯。">
+  <button class="opt">重構更容易，搜尋實例也更容易</button>
+  <button class="opt">相對導入在 FastAPI 裡不能使用</button>
+  <button class="opt">絕對導入才能用 Annotated</button>
+  <button class="opt">絕對導入執行比較快</button>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./crud-endpoint-mapping.html">下一步：CRUD methods and endpoint mapping →</a>
+</div>
+
+<div class="footer">有問題？直接問你的 agent，它可以幫你釐清任何不清楚的地方。</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

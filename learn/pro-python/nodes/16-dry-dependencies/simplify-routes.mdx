@@ -1,0 +1,85 @@
+---
+id: simplify-routes
+title: 用 ProjectDep 簡化路由處理器
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_34-dependency-injection-with-annotated.md#extracting-lookup-or-404]]"
+  - "[[sources/pro-python/completed/20260903_35.md#simplified-route-handlers]]"
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+# 用 ProjectDep 簡化路由處理器
+
+## Learning goal
+
+能把原本重複的 lookup-or-404 路由重構成只接收 `ProjectDep` 的簡潔版本。
+
+## Lesson
+
+前兩課我們建立了 `get_project_or_404` 和 `ProjectDep`。現在來看看路由能簡化到什麼程度。
+
+重構前，每個路由都長這樣：
+
+```python
+@app.get("/projects/{project_id}")
+async def get_project(project_id: int, session: SessionDep):
+    project = crud.get_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+@app.put("/projects/{project_id}")
+async def update_project(
+    project_id: int,
+    data: ProjectUpdate,
+    session: SessionDep,
+):
+    project = crud.get_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project.name = data.name
+    project.description = data.description
+    session.commit()
+    return project
+
+@app.delete("/projects/{project_id}")
+async def delete_project(project_id: int, session: SessionDep):
+    project = crud.get_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    session.delete(project)
+    session.commit()
+    return {"ok": True}
+```
+
+重構後，每個路由只剩核心邏輯：
+
+```python
+@app.get("/projects/{project_id}")
+async def get_project(project: ProjectDep):
+    return project
+
+@app.put("/projects/{project_id}")
+async def update_project(project: ProjectDep, data: ProjectUpdate, session: SessionDep):
+    project.name = data.name
+    project.description = data.description
+    session.commit()
+    return project
+
+@app.delete("/projects/{project_id}")
+async def delete_project(project: ProjectDep, session: SessionDep):
+    session.delete(project)
+    session.commit()
+    return {"ok": True}
+```
+
+每個路由拿到的是已經驗證存在的 `Project` 物件。如果 `project_id` 查不到東西，FastAPI 會在進路由之前就回傳 404，路由本身完全不需要處理這個狀況。
+
+這就是 DRY（Don't Repeat Yourself）在 FastAPI 依賴注入裡的實際應用：把跨路由的重複邏輯抽成依賴，讓每個路由專注在它真正該做的事。
+
+## Course
+
+[↗ 課程頁面](../../lessons/simplify-routes.html)
+
+## Sources

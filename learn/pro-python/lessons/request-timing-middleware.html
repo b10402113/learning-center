@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>請求計時 middleware</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <main>
+    <h1>請求計時 middleware</h1>
+    <p class="subtitle">在 middleware 裡為每個請求計時，並輸出結構化 log 行</p>
+
+    <section>
+      <h2>目標</h2>
+      <p>建立一個 FastAPI middleware，記錄每個請求的方法、路徑、狀態碼和花費時間（毫秒）。這些 log 行可以讓你掌握 API 的效能，並在出問題時快速定位。</p>
+    </section>
+
+    <section>
+      <h2>完整程式碼</h2>
+      <pre><code>import time
+import logging
+from fastapi import Request
+
+logger = logging.getLogger(__name__)
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start_time) * 1000
+    logger.info(
+        "%s %s → %s (%.2f ms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response</code></pre>
+    </section>
+
+    <section>
+      <h2>逐步拆解</h2>
+      <ol>
+        <li><strong>記錄開始時間</strong>：<code>time.perf_counter()</code> 是高解析度計時器，適合測量短時間間隔。</li>
+        <li><strong>呼叫端點</strong>：<code>await call_next(request)</code> 把請求傳給路由端點，等它跑完拿到 <code>response</code>。</li>
+        <li><strong>計算耗時</strong>：用結束時間減去開始時間，乘以 1000 轉換成毫秒。</li>
+        <li><strong>輸出 log</strong>：用 <code>logger.info()</code> 搭配格式化字串，把方法、路徑、狀態碼、耗時寫進 log。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>為什麼用 <code>time.perf_counter()</code>？</h2>
+      <p><code>time.time()</code> 會受系統時鐘調整影響（例如 NTP 同步），可能導致測量不準確。<code>time.perf_counter()</strong> 是單調遞增（monotonic）的計時器，專門用來測量時間間隔，不會往回跳。</p>
+    </section>
+
+    <section>
+      <h2>預期的 log 輸出</h2>
+      <pre><code>INFO __main__: GET /projects/1 → 200 (12.34 ms)
+INFO __main__: POST /projects → 201 (45.67 ms)
+INFO __main__: DELETE /projects/1 → 204 (8.90 ms)</code></pre>
+    </section>
+
+    <section>
+      <h2>Middleware vs Exception Handler</h2>
+      <table>
+        <thead>
+          <tr><th></th><th>Middleware</th><th>Exception Handler</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>執行時機</td><td>每個請求前後</td><td>只有抛出例外時</td></tr>
+          <tr><td>適用場景</td><td>記錄時間、修改標頭、驗證</td><td>捕捉 IntegrityError 回傳 409</td></tr>
+          <tr><td>能拿到 response 嗎？</td><td>能</td><td>不能，只有 request</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <div class="quiz" data-question="time.perf_counter() 和 time.time() 的差別是什麼？" data-correct="0" data-explain="perf_counter 是單調遞增的，適合測量時間間隔；time() 會受系統時鐘影響。">
+      <button class="opt">perf_counter 是單調遞增，適合測量時間間隔</button>
+      <button class="opt">time() 精度更高</button>
+      <button class="opt">perf_counter 只能用在 Windows</button>
+      <button class="opt">兩者完全相同</button>
+    </div>
+
+    <div class="quiz" data-question="request timing middleware 的 post-route 工作是什麼？" data-correct="1" data-explain="post-route 在 call_next 之後，計算耗時並輸出 log。">
+      <button class="opt">驗證使用者身分</button>
+      <button class="opt">計算請求耗時並輸出 log</button>
+      <button class="opt">修改請求標頭</button>
+      <button class="opt">回傳 404 回應</button>
+    </div>
+
+    <div class="quiz" data-question="middleware 和 exception handler 的主要差別是？" data-correct="2" data-explain="middleware 處理每個請求，exception handler 只處理例外。">
+      <button class="opt">middleware 只能修改請求</button>
+      <button class="opt">middleware 只能修改回應</button>
+      <button class="opt">middleware 處理每個請求，exception handler 只處理例外</button>
+      <button class="opt">middleware 只能在開發環境使用</button>
+    </div>
+
+    <div class="quiz" data-question="log 行裡為什麼用 %.2f 格式化 duration_ms？" data-correct="0" data-explain="%.2f 讓毫秒數固定顯示兩位小數，log 更易讀。">
+      <button class="opt">讓毫秒數固定顯示兩位小數</button>
+      <button class="opt">把毫秒轉換成秒</button>
+      <button class="opt">四捨五入到整數</button>
+      <button class="opt">補齊欄位寬度</button>
+    </div>
+
+    <div class="quiz" data-question="為什麼 middleware 比 print() 更適合記錄請求？" data-correct="0" data-explain="middleware 可以用 log 等級、格式、環境變數控制，print 做不到。">
+      <button class="opt">middleware 支援 log 等級和結構化格式</button>
+      <button class="opt">print 不能輸出文字</button>
+      <button class="opt">middleware 執行速度更快</button>
+      <button class="opt">print 只能用在腳本</button>
+    </div>
+
+    <div class="lesson-nav">
+      <a href="./middleware-basics.html" class="prev">← 上一步：Middleware 基礎與執行順序</a>
+      <a href="./structured-logging-config.html" class="next">下一步：結構化 logging 設定 →</a>
+    </div>
+  </main>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

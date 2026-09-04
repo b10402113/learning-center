@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>List tasks with conditional filters</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>List tasks with conditional filters</h1>
+<p class="meta">學習目標：Build dynamic queries with keyword-only filter parameters and immutable where-clauses</p>
+
+<h2>Why this step matters</h2>
+<p>真實世界的 API 幾乎不會只用固定條件查詢。Task list 端點要讓呼叫方自己決定要按什麼篩選：專案、狀態、優先級、逾期與否，全部可選。這一節教你用「條件式 where-clause 堆疊」在 SQLModel 裡動態組裝查詢。</p>
+
+<h2>The method signature</h2>
+<p><code>list_tasks</code> 的第一個參數是 <code>session</code>，後面的篩選條件全部用 <code>*</code> 隔開，強制變成 keyword-only 參數。每個參數預設都是 <code>None</code>，代表「不套用這個篩選」。</p>
+<pre><code>def list_tasks(
+    session: Session,
+    *,
+    project_id: int | None = None,
+    project_slug: str | None = None,
+    status: TaskStatus | None = None,
+    priority: TaskPriority | None = None,
+    overdue_only: bool = False,
+) -> list[Task]:
+    ...</code></pre>
+<p>這種簽章讓呼叫方可以只傳需要的篩選，不需要把每個條件都填滿。</p>
+
+<h2>Conditional where-clause stacking</h2>
+<p>核心 pattern 是「先建基底查詢，再按需堆疊 <code>where</code>」：</p>
+<pre><code>statement = select(Task)
+
+if project_id is not None:
+    statement = statement.where(Task.project_id == project_id)
+
+if project_slug is not None:
+    statement = statement.join(Project).where(Project.slug == project_slug)
+
+if status is not None:
+    statement = statement.where(Task.status == status)
+
+if priority is not None:
+    statement = statement.where(Task.priority == priority)
+
+if overdue_only:
+    statement = statement.where(Task.due_date != None)
+    statement = statement.where(Task.due_date &lt; date.today())
+    statement = statement.where(Task.status != TaskStatus.done)</code></pre>
+<p>每次 <code>where</code> 都回傳新 statement，舊的保持不動。這種 immutable 寫法讓邏輯清晰又好測試。</p>
+
+<h2>Why keyword-only matters</h2>
+<p><code>*</code> 之後的參數「必須」用關鍵字指定，不能按位置傳。這避免了一長串 positional arguments 難以閱讀的問題，也讓未來新增篩選條件不會破壞現有呼叫。</p>
+
+<h2>The overdue filter pattern</h2>
+<p>「逾期」本質上是三個條件的組合：due_date 不是空值、due_date 早於今天、狀態不是已完成。全部用 <code>AND</code> 串起來，一次查詢解決。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="list_tasks 的篩選參數要用什麼語法強制 keyword-only？" data-correct="0" data-explain="在參數列用 * 隔開，後面的參數就變成 keyword-only。">
+  <button class="opt">在 session 參數後面放 *</button>
+  <button class="opt">在每個參數前面放 *</button>
+  <button class="opt">用 / 隔開 positional-only 和 keyword-only</button>
+  <button class="opt">在函數上標註 @keyword_only</button>
+</div>
+
+<div class="quiz" data-question="條件式 where-clause 的核心原則是？" data-correct="2" data-explain="先建基底查詢，再按需堆疊 where。">
+  <button class="opt">把所有條件寫在一個 where 裡</button>
+  <button class="opt">用 if/else 切換不同查詢</button>
+  <button class="opt">先建基底查詢，再按需堆疊 where</button>
+  <button class="opt">用原生 SQL 字串拼接</button>
+</div>
+
+<div class="quiz" data-question="overdue filter 包含幾個條件？" data-correct="1" data-explain="due_date 不是空值、早於今天、狀態不是已完成，共三個。">
+  <button class="opt">1 個：due_date &lt; today</button>
+  <button class="opt">3 個：due_date != None、due_date &lt; today、status != done</button>
+  <button class="opt">2 個：due_date != None、due_date &lt; today</button>
+  <button class="opt">4 個：加上 priority 條件</button>
+</div>
+
+<div class="quiz" data-question="為什麼每個篩選參數預設都是 None？" data-correct="0" data-explain="None 代表不套用這個篩選，讓呼叫方只傳需要的條件。">
+  <button class="opt">None 代表不套用這個篩選</button>
+  <button class="opt">None 代表查全部資料</button>
+  <button class="opt">None 代表該參數必填</button>
+  <button class="opt">None 代表清除之前的篩選</button>
+</div>
+
+<div class="quiz" data-question="多個 where 之間的關係是？" data-correct="3" data-explain="用 AND 串起來，全部條件都要成立。">
+  <button class="opt">OR 關係</button>
+  <button class="opt">順序關係</button>
+  <button class="opt">互斥關係</button>
+  <button class="opt">AND 關係</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./sql-query-patterns.html">← 上一步：SQL query patterns — where, join, selectinload</a>
+  <a href="./database-fixtures.html">下一步：Database fixtures with pytest →</a>
+</div>
+
+<div class="footer">有問題？直接問你的 agent，它可以幫你釐清任何不清楚的地方。</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

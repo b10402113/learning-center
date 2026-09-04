@@ -1,0 +1,59 @@
+---
+id: oauth2-setup
+title: OAuth2PasswordBearer 設定與權杖提取
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_53.md#oauth2-setup]]"
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+# OAuth2PasswordBearer 設定與權杖提取
+
+## Learning goal
+
+設定 OAuth2PasswordBearer，讓 FastAPI 能從請求的 Authorization header 自動提取權杖，並自動在 Swagger UI 加上 Authorize 按鈕。
+
+## Lesson
+
+前面的課程已經把密碼雜湊和 JWT 權杖的產生做好了。但這些權杖目前只是被製造出來，卻沒有一個標準的方法讓客戶端把它送到伺服器，也沒有機制在客戶端忘了帶權杖的時候擋下請求。現在的 API 是全面開放的：任何人拿到 URL，都能建立專案、修改任務狀態、刪除資料。
+
+在 JWT 權杖的實務裡，客戶端通常會把權杖放在 HTTP 請求的 `Authorization` header 裡面，格式長這樣：
+
+```
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+```
+
+前面的 `Bearer` 是固定的協議前缀，後面那串才是伺服器簽發的 JWT。伺服器的責任就是從這個 header 把權杖挖出來。
+
+FastAPI 提供了一個現成的類別 `OAuth2PasswordBearer`，專門做這件事。它的全名來自 OAuth2 的 Password Grant 流程，但這裡我們只用它來「讀取權杖」，不需要搞懂 OAuth2 的全部細節。使用時要建立一個實例，傳入 `tokenUrl`：
+
+```python
+from fastapi.security import OAuth2PasswordBearer
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
+```
+
+`tokenUrl="/auth/token"` 告訴 FastAPI：「客戶端如果要拿權杖，可以去 `/auth/token` 這個位址。」這個資訊會讓 Swagger UI 的畫面右上角自動多出一個綠色的 **Authorize** 按鈕，點了之後會出現對話框讓你輸入 email 和 password，Swagger UI 就會自動去 `/auth/token` 換取權杖，之後的請求都會幫你帶上。
+
+如果在一個路由上宣告了 `oauth2_scheme` 作為依賴，但客戶端發出的請求沒有帶 `Authorization` header，FastAPI 會自動回傳 **401 Unauthorized**，不需要你手動檢查。錯誤回應大概長這樣：
+
+```json
+{
+  "detail": "Not authenticated"
+}
+```
+
+把它拆開看，這個類別只做了三件事：
+
+1. 檢查請求的 Authorization header 是否存在
+2. 檢查值是否以 Bearer 開頭
+3. 把後面的 token 字串抽出來回傳
+
+如果 header 不存在，就依照設定回傳 401。它**不會**驗證權杖的真偽——驗證是下一課 `get_current_user` 的工作。
+
+`OAuth2PasswordBearer(tokenUrl="/auth/token")` 是 FastAPI 處理權杖提取的標準入口。它在 Swagger UI 上幫你加上 Authorize 按鈕，在請求沒帶權杖時自動回傳 401，把權杖從 Authorization header 裡挖出來交給下游的依賴處理。下一步，你要實作 `get_current_user` 來驗證這串權杖。
+
+## Sources
+
+[↗ 課程頁面](../../lessons/oauth2-setup.html)

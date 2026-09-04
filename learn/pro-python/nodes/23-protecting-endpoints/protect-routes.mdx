@@ -1,0 +1,85 @@
+---
+id: protect-routes
+title: 用依賴注入保護路由
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_53.md#protected-routes]]"
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+# 用依賴注入保護路由
+
+## Learning goal
+
+在路由處理器的函式簽名裡加入 `current_user` 依賴參數，讓 FastAPI 自動完成權杖提取與驗證，只有認證通過的請求才能進入處理器。
+
+## Lesson
+
+有了 `oauth2_scheme` 和 `get_current_user` 之後，保護一個路由只要在處理器函式的參數列多加一行。FastAPI 會自動處理權杖提取、驗證、查詢使用者，全部跑完之後才把 `User` 物件交給你。
+
+來看看一個受保護的 GET 端點：
+
+```python
+@app.get("/projects/me")
+async def read_my_projects(
+    current_user: User = current_user_dep,
+    session: Session = SessionDep,
+):
+    ...
+```
+
+就這麼簡單。`current_user: User = current_user_dep` 這個參數一出現，FastAPI 就知道這個端點需要認證。
+
+當請求打到 `/projects/me` 時，FastAPI 在呼叫處理器之前會跑過整個依賴鏈：
+
+1. 用 `oauth2_scheme` 檢查 Authorization header，提取權杖。
+2. 如果 header 不存在，直接回傳 401，處理器完全不會被執行。
+3. 把權杖傳進 `get_current_user`，用 `jwt.decode` 解碼並檢查簽名。
+4. 用 payload 裡的 `sub` 去資料庫查使用者。
+5. 如果使用者不存在，回傳 401。
+6. 全部通過之後，把 `User` 物件注入給 `current_user` 參數。
+
+處理器從頭到尾不需要自己寫任何認證檢查。
+
+一個端點有沒有被保護，取決於它的函式簽名裡有沒有出現 `current_user_dep`。同一個應用程式裡可以同時混合兩種：
+
+```python
+# 任何人都能存取
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+# 需要登入才能存取
+@app.get("/projects/me")
+async def read_my_projects(
+    current_user: User = current_user_dep,
+):
+    ...
+```
+
+這種「宣告式」的保護方式讓路由的意圖一目了然：看簽名就知道這個端點需不需要登入。
+
+一旦進入處理器，`current_user` 就是一個已經驗證過的 `User` 物件。常見的用法包括：用它來過濾查詢（只回傳屬於這個使用者的資料）、用它來記錄稽核日誌（記錄「誰」做了什麼操作）、用它來檢查權限（確認使用者是否有權修改某筆特定資料）。
+
+例如，只回傳當前使用者擁有的專案：
+
+```python
+@app.get("/projects/me")
+async def read_my_projects(
+    current_user: User = current_user_dep,
+    session: Session = SessionDep,
+):
+    projects = session.exec(
+        select(Project).where(Project.owner_id == current_user.id)
+    ).all()
+    return projects
+```
+
+你可能會想：「能不能用 middleware 統一檢查認證？」技術上可以，但 middleware 會讓「哪些端點需要認證」變得隱晦——你得去看 middleware 的邏輯才知道。依賴注入把保護宣告放在路由簽名裡，讀路由就能理解它的存取規則。而且有些端點（比如註冊、登入、健康檢查）本來就應該開放，用依賴注入才能精確控制。
+
+保護一個路由只需要在處理器函式簽名裡多加一個參數：`current_user: User = current_user_dep`。FastAPI 會自動跑過整個依賴鏈——提取權杖、驗證 JWT、查詢使用者——任何一步失敗都回傳 401，全部通過才把 `User` 物件注入給處理器。這種宣告式風格讓路由的存取規則一目了然。下一課，你會把註冊、登入、受保護請求三步串成一個完整的認證流程。
+
+## Sources
+
+[↗ 課程頁面](../../lessons/protect-routes.html)

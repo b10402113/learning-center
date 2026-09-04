@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>註冊與登入的實作</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 21 — Step 4/4 · Password hashing</p>
+  <h1>註冊與登入的實作</h1>
+
+  <h2>學習目標</h2>
+  <p>能在註冊端點將密碼雜湊後存入資料庫，並在登入端點用 <code>verify()</code> 比對使用者輸入的密碼是否正確。</p>
+
+  <h2>核心原則</h2>
+  <p>前面三步分別講了風險、原理和工具，這一步把全部知識串成一個完整的使用者認證流程。核心原則只有一個：<strong>伺服器永遠不碰明文密碼</strong>。註冊時把密碼轉成雜湊值才存進資料庫；登入時把使用者輸入的密碼跟資料庫的雜湊值拿去比對，而不是把雜湊值還原成密碼。</p>
+
+  <h2>註冊端點</h2>
+  <p>使用者提交帳號和密碼，你的端點拿到密碼後，第一步是雜湊，第二步是把使用者名稱和雜湊值寫入資料庫。注意：你存的是 <code>hasher.hash(password)</code> 回傳的那一整串，不是密碼本身。</p>
+
+  <pre><code>from fastapi import FastAPI, HTTPException
+from pwdlib import Argon2Hasher
+from sqlmodel import Session, SQLModel, Field
+
+hasher = Argon2Hasher()
+
+class User(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    username: str = Field(unique=True)
+    password_hash: str
+
+@app.post("/register")
+def register(user_data: UserCreate, session: SessionDep):
+    # 1. 把密碼轉成雜湊值
+    hashed = hasher.hash(user_data.password)
+
+    # 2. 存使用者名稱 + 雜湊值（不存密碼）
+    user = User(
+        username=user_data.username,
+        password_hash=hashed
+    )
+    session.add(user)
+    session.commit()
+
+    return {"message": "註冊成功"}</code></pre>
+
+  <h2>註冊端點的三個細節</h2>
+  <table>
+    <thead>
+      <tr><th>細節</th><th>原因</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>User</code> 模型只有 <code>password_hash</code>，沒有 <code>password</code></td><td>從資料模型層面杜絕明文密碼被存進資料庫的可能</td></tr>
+      <tr><td>雜湊在伺服器端完成</td><td>不要信賴前端傳來的已經雜湊過的值</td></tr>
+      <tr><td>使用者名稱已存在時回傳 409</td><td>不要讓資料庫例外直接暴露給客戶端</td></tr>
+    </tbody>
+  </table>
+
+  <h2>登入端點</h2>
+  <p>使用者提交帳號和密碼，你的端點拿到後，第一步是用使用者名稱去資料庫查 <code>User</code> 物件，第二步是拿 <code>User.password_hash</code> 和使用者輸入的密碼一起丟進 <code>hasher.verify()</code>。</p>
+
+  <pre><code>@app.post("/login")
+def login(credentials: LoginRequest, session: SessionDep):
+    # 1. 用使用者名稱查詢使用者
+    user = session.exec(
+        select(User).where(User.username == credentials.username)
+    ).first()
+
+    if user is None:
+        raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
+
+    # 2. 驗證密碼
+    if not hasher.verify(credentials.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
+
+    # 3. 驗證成功，回傳 token 或 session
+    return {"message": "登入成功"}</code></pre>
+
+  <h2>為什麼錯誤訊息要一模一樣？</h2>
+  <p>不管「使用者不存在」還是「密碼錯誤」，你回傳的錯誤訊息都一模一樣——「帳號或密碼錯誤」。如果你在「使用者不存在」時回傳「找不到使用者」，在「密碼錯誤」時回傳「密碼錯誤」，攻擊者就可以用這個差異來列舉哪些帳號已經註冊。</p>
+
+  <h2>verify() 的內部流程</h2>
+  <p><code>hasher.verify()</code> 的內部流程是：先解析 <code>user.password_hash</code> 字串，拿出鹽值和 Argon2id 參數，然後用這些設定對 <code>credentials.password</code> 做一次雜湊，最後比對兩個雜湊值是否相同。整個過程中，明文密碼只存在於這一次函式呼叫的記憶體裡，函式結束之後就被垃圾回收了。</p>
+
+  <blockquote>雜湊的真正價值：把「一次外洩」的損害限制在單一站點，而不是讓使用者的整個數位身份一起陪葬。</blockquote>
+
+  <div class="lesson-nav">
+    <a href="pwdlib-argon2id.html">← 上一步：使用 pwdlib 與 Argon2id</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="註冊端點應該存什麼進資料庫？" data-correct="1" data-explain="只存雜湊值，不存明文密碼。">
+    <button class="opt">明文密碼</button>
+    <button class="opt">雜湊值</button>
+    <button class="opt">加密後的密碼</button>
+    <button class="opt">密碼的長度</button>
+  </div>
+
+  <div class="quiz" data-question="登入端點為什麼不管使用者不存在還是密碼錯誤，都回傳一樣的錯誤訊息？" data-correct="2" data-explain="避免攻擊者用錯誤訊息的差異來列舉哪些帳號已經註冊。">
+    <button class="opt">因為這樣寫起來比較簡單</button>
+    <button class="opt">因為 FastAPI 的規定</button>
+    <button class="opt">避免攻擊者用錯誤訊息差異來列舉已註冊帳號</button>
+    <button class="opt">因為資料庫查詢很慢</button>
+  </div>
+
+  <div class="quiz" data-question="verify() 的比對方式是什麼？" data-correct="0" data-explain="verify() 會先解析雜湊字串裡面的參數和鹽值，然後用完全相同的設定去跑輸入密碼，再比對結果。">
+    <button class="opt">用雜湊字串裡的鹽值和參數，對輸入密碼做相同計算後比對</button>
+    <button class="opt">把雜湊值解密後比對</button>
+    <button class="opt">把輸入密碼加密後比對</button>
+    <button class="opt">直接拿輸入密碼重新雜湊一次再比對</button>
+  </div>
+
+  <div class="quiz" data-question="User 模型為什麼不應該有 password 欄位？" data-correct="3" data-explain="從資料模型層面杜絕明文密碼被存進資料庫的可能。">
+    <button class="opt">因為 password 欄位太長</button>
+    <button class="opt">因為 password 欄位太短</button>
+    <button class="opt">因為 password 欄位不能索引</button>
+    <button class="opt">從資料模型層面杜絕明文密碼被存進資料庫</button>
+  </div>
+
+  <div class="quiz" data-question="雜湊的真正價值是什麼？" data-correct="1" data-explain="把「一次外洩」的損害限制在單一站點，而不是讓使用者的整個數位身份一起陪葬。">
+    <button class="opt">讓密碼變長</button>
+    <button class="opt">把「一次外洩」的損害限制在單一站點</button>
+    <button class="opt">讓登入速度變快</button>
+    <button class="opt">讓資料庫變小</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 21: Password hashing · Step 4</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

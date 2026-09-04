@@ -1,0 +1,88 @@
+---
+id: register-verify-flow
+title: 註冊與登入的實作
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_50.md#pwdlib-argon2id]]"
+  - "[[sources/pro-python/completed/20260903_49-Authentication.md#chapter-roadmap]]"
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+<LearningGoal>
+能在註冊端點將密碼雜湊後存入資料庫，並在登入端點用 `verify()` 比對使用者輸入的密碼是否正確。
+</LearningGoal>
+
+## Lesson
+
+前面三步分別講了風險、原理和工具，這一步把全部知識串成一個完整的使用者認證流程。核心原則只有一個：**伺服器永遠不碰明文密碼**。註冊時把密碼轉成雜湊值才存進資料庫；登入時把使用者輸入的密碼跟資料庫的雜湊值拿去比對，而不是把雜湊值還原成密碼。
+
+先看註冊端點。使用者提交帳號和密碼，你的端點拿到密碼後，第一步是雜湊，第二步是把使用者名稱和雜湊值寫入資料庫。注意：你存的是 `hasher.hash(password)` 回傳的那一整串，不是密碼本身。
+
+```python
+from fastapi import FastAPI, HTTPException
+from pwdlib import Argon2Hasher
+from sqlmodel import Session, SQLModel, Field
+
+hasher = Argon2Hasher()
+
+class User(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    username: str = Field(unique=True)
+    password_hash: str
+
+@app.post("/register")
+def register(user_data: UserCreate, session: SessionDep):
+    # 1. 把密碼轉成雜湊值
+    hashed = hasher.hash(user_data.password)
+
+    # 2. 存使用者名稱 + 雜湊值（不存密碼）
+    user = User(
+        username=user_data.username,
+        password_hash=hashed
+    )
+    session.add(user)
+    session.commit()
+
+    return {"message": "註冊成功"}
+```
+
+有幾個細節要注意。第一，`password` 這個欄位不應該存進資料庫——你的 `User` 模型不應該有 `password` 欄位，只有 `password_hash`。第二，雜湊動作要在伺服器端完成，不要信賴前端傳來的已經雜湊過的值。第三，如果使用者名稱已經存在，你應該回傳 409 Conflict，而不是讓資料庫丟出例外。
+
+再看登入端點。使用者提交帳號和密碼，你的端點拿到後，第一步是用使用者名稱去資料庫查 `User` 物件，第二步是拿 `User.password_hash` 和使用者輸入的密碼一起丟進 `hasher.verify()`。
+
+```python
+@app.post("/login")
+def login(credentials: LoginRequest, session: SessionDep):
+    # 1. 用使用者名稱查詢使用者
+    user = session.exec(
+        select(User).where(User.username == credentials.username)
+    ).first()
+
+    if user is None:
+        raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
+
+    # 2. 驗證密碼
+    if not hasher.verify(credentials.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
+
+    # 3. 驗證成功，回傳 token 或 session
+    return {"message": "登入成功"}
+```
+
+這裡有一個重要的安全細節：不管「使用者不存在」還是「密碼錯誤」，你回傳的錯誤訊息都一模一樣——「帳號或密碼錯誤」。如果你在「使用者不存在」時回傳「找不到使用者」，在「密碼錯誤」時回傳「密碼錯誤」，攻擊者就可以用這個差異來列舉哪些帳號已經註冊。
+
+`hasher.verify()` 的內部流程是：先解析 `user.password_hash` 字串，拿出鹽值和 Argon2id 參數，然後用這些設定對 `credentials.password` 做一次雜湊，最後比對兩個雜湊值是否相同。整個過程中，`credentials.password` 這個明文密碼只存在於這一次函式呼叫的記憶體裡，函式結束之後就被垃圾回收了。
+
+最後把整個流程走一遍。註冊時，使用者送出 `"mypassword123"`，伺服器雜湊後存入資料庫。登入時，使用者再送出 `"mypassword123"`，伺服器從資料庫拿出雜湊值，用 `verify()` 比對，回傳 True。如果使用者在另一個網站也用 `"mypassword123"`，而那個網站的資料庫被偷了——你的資料庫裡只有雜湊值，攻擊者拿不到 `"mypassword123"`，也無法用這組密碼去攻擊其他服務。
+
+這就是雜湊的真正價值：**把「一次外洩」的損害限制在單一站點，而不是讓使用者的整個數位身份一起陪葬**。
+
+## Course
+
+[↗ 課程頁面](../../lessons/register-verify-flow.html)
+
+## Sources
+
+- [[sources/pro-python/completed/20260903_50.md#pwdlib-argon2id]]
+- [[sources/pro-python/completed/20260903_49-Authentication.md#chapter-roadmap]]

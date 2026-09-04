@@ -1,0 +1,97 @@
+---
+id: write-endpoint-tests
+title: 用 fixture 資料寫端點測試
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_48.md]]"
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+<LearningGoal>
+能利用 fixture 提供的隔離資料庫與預設資料，撰寫端點層級的測試，驗證篩選邏輯在 API 端的行為是否正確。
+</LearningGoal>
+
+## Lesson
+
+一個完整的後端測試策略通常分三層：單元測試——測試純函式邏輯，不需要資料庫，例如 `slugify("Hello World")` 應該回傳 `"hello-world"`；CRUD 測試——直接操作 session，測試資料庫查詢是否正確，這一層需要 `session` fixture，但不需要經過 HTTP；端點測試——透過 `TestClient` 發送 HTTP 請求，驗證路由、狀態碼、回應格式，這一層需要 `client` fixture 加上所有資料 fixture。
+
+端點測試是最接近「真實使用情境」的測試。它驗證的是：當一個 HTTP 請求進來，經過中介層、路由、依賴注入、資料庫查詢、回應序列化，最終吐出的 JSON 是不是對的。這一層過了，你的 API 在消費者眼裡就是對的（雖然底層邏輯可能有 bug，但消費者體驗是對的）。
+
+假設你的 Task API 支援 `overdue_only` 篩選參數，回傳所有逾期未完成的 Task。fixture 裡面已經建好了 3 個 Task：Task One 已逾期、Task Two 未逾期、Task Three 已完成但逾期。測試可以這樣寫：
+
+```python
+def test_list_tasks_overdue_only(
+    client: TestClient,
+    projects: list[Project],
+    tasks: list[Task],
+):
+    project_id = projects[0].id
+    response = client.get(f"/projects/{project_id}/tasks?overdue_only=true")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "Task One"
+
+def test_list_tasks_all(
+    client: TestClient,
+    projects: list[Project],
+    tasks: list[Task],
+):
+    project_id = projects[0].id
+    response = client.get(f"/projects/{project_id}/tasks")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2  # 這個 project 有兩個 task
+
+def test_list_tasks_empty_project(
+    client: TestClient,
+    projects: list[Project],
+    tasks: list[Task],
+):
+    # 第二個 project 只有一個 task
+    project_id = projects[1].id
+    response = client.get(f"/projects/{project_id}/tasks?overdue_only=true")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 0  # 已完成的 task 不算 overdue
+```
+
+三個測試分別驗證：只拿 overdue 的、拿全部、以及空結果。fixture 提供的 `projects` 和 `tasks` 讓測試資料的來源清晰可見——所有測試共用的預設資料都定義在 fixture 裡，測試本體只關心「我呼叫了什麼端點、預期得到什麼結果」。
+
+除了快樂路徑，端點測試也要涵蓋邊界：查詢不存在的資源、分頁超出範圍、缺少必要參數。這些情境往往藏著最多 bug：
+
+```python
+def test_project_not_found(client: TestClient, projects: list[Project]):
+    response = client.get("/projects/9999/tasks")
+    assert response.status_code == 404
+
+def test_pagination_out_of_range(
+    client: TestClient,
+    projects: list[Project],
+    tasks: list[Task],
+):
+    project_id = projects[0].id
+    # offset 超過總數，應該回傳空陣列
+    response = client.get(f"/projects/{project_id}/tasks?offset=100")
+    assert response.status_code == 200
+    assert response.json() == []
+```
+
+邊界測試不需要額外 fixture，因為 `projects` 和 `tasks` 已經提供了足夠的基準資料。分頁超出範圍的測試，就是用 `projects[0]` 下的 2 個 Task 搭配 `offset=100`，預期回傳空陣列。
+
+pytest 在斷言失敗時會顯示運算子的兩邊。善用這一點，在斷言加上「訊息」讓失敗可讀：
+
+```python
+assert len(data) == 1, f"Expected 1 overdue task, got {len(data)}: {data}"
+```
+
+更進階的做法是用 `pytest.raises` 驗證例外行為。FastAPI 的路徑參數 `project_id: int` 會自動驗證型別，`"abc"` 不是整數，FastAPI 在進路由之前就回傳 422。端點測試可以一併驗證這層自動驗證。
+
+把前面三課的 fixture 組合起來，一個完整的 `conftest.py` 會包含 `engine` fixture（用 `scope="session"` 讓整個測試行程共用同一個 engine，避免重複建表格）、`session` fixture、`projects` fixture、`tasks` fixture、`client` fixture。`engine` fixture 用 `scope="session"` 是在效能與隔離之間取得的平衡——整個行程共用 engine 避免重複建表，但每個 `session` fixture 仍會開啟新 Session，保證測試隔離。
+
+## Course
+
+[↗ 課程頁面](../../lessons/write-endpoint-tests.html)
+
+## Sources

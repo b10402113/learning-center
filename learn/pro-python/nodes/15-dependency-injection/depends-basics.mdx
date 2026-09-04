@@ -1,0 +1,41 @@
+---
+id: depends-basics
+title: Depends() 如何運作？
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_31.md]]"
+  - "[[sources/pro-python/completed/20260903_34-dependency-injection-with-annotated.md]]"
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+<LearningGoal>
+理解 FastAPI 的 Depends() 機制：它在路由函式執行前呼叫指定函式，把回傳值注入參數，並自動管理 session 的開啟、提交與關閉。
+</LearningGoal>
+
+## Lesson
+
+Depends() 是 FastAPI 依賴注入的核心機制。它的運作方式很直白：你在端點函式的參數列寫 `Depends(some_function)`，FastAPI 就會在執行端點之前先呼叫 `some_function()`，把回傳值塞進那個參數。
+
+這個機制為什麼重要？因為它把「準備工作」從端點裡面搬走了。以前你要自己寫 `session = Session(engine)`，現在你寫 `session: Session = Depends(get_session)`，FastAPI 會幫你呼叫 `get_session`，拿到 session 之後再執行端點。
+
+`get_session` 通常是一個產生器（generator）。它建立 session、yield 給端點使用、然後在請求結束後關閉 session。FastAPI 知道怎麼處理 yield：它會拿到 yield 的值注入端點，等端點執行完畢，再回到產生器執行 yield 之後的清理程式碼。
+
+```python
+def get_session():
+    with Session(engine) as session:
+        yield session
+    # 端點跑完之後，session 會在 with 區塊結束時自動 close
+```
+
+這等於是把 try/finally 樣板交給框架。端點裡面不會出現 `session.close()`，因為 `get_session` 裡面的 `with` 區塊已經保證會清理。
+
+Depends() 的第二個重點是：它可以巢狀。一個依賴可以引用另一個依賴，FastAPI 會按照正確的順序解析。比如 `get_project_or_404` 需要 session，它就在自己的參數列寫 `session: Session = Depends(get_session)`，FastAPI 就會先拿到 session，再把它傳進 `get_project_or_404`。
+
+這種巢狀能力讓你可以把複雜的驗證邏輯拆成好幾層小依賴，每一層只做一件事。端點最後拿到的是所有依賴都處理好的結果，不需要知道中間經過了哪些步驟。
+
+## Course
+
+[↗ 課程頁面](../../lessons/depends-basics.html)
+
+## Sources

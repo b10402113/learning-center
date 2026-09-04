@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用依賴注入保護路由</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 23 — Step 3/4 · Protecting endpoints</p>
+  <h1>用依賴注入保護路由</h1>
+
+  <h2>學習目標</h2>
+  <p>在路由處理器的函式簽名裡加入 <code>current_user</code> 依賴參數，讓 FastAPI 自動完成權杖提取與驗證，只有認證通過的請求才能進入處理器。</p>
+
+  <h2>保護一個路由有多簡單？</h2>
+  <p>有了 <code>oauth2_scheme</code> 和 <code>get_current_user</code> 之後，保護一個路由只要在處理器函式的參數列多加一行。FastAPI 會自動處理權杖提取、驗證、查詢使用者，全部跑完之後才把 <code>User</code> 物件交給你。</p>
+
+  <p>來看看一個受保護的 GET 端點：</p>
+  <pre><code>@app.get("/projects/me")
+async def read_my_projects(
+    current_user: User = current_user_dep,
+    session: Session = SessionDep,
+):
+    ...</code></pre>
+
+  <p>就這麼簡單。<code>current_user: User = current_user_dep</code> 這個參數一出現，FastAPI 就知道這個端點需要認證。</p>
+
+  <h2>FastAPI 幫你做了什麼？</h2>
+  <p>當請求打到 <code>/projects/me</code> 時，FastAPI 在呼叫處理器之前會跑過整個依賴鏈：</p>
+  <ol>
+    <li>用 <code>oauth2_scheme</code> 檢查 Authorization header，提取權杖。</li>
+    <li>如果 header 不存在，直接回傳 401，處理器完全不會被執行。</li>
+    <li>把權杖傳進 <code>get_current_user</code>，用 <code>jwt.decode</code> 解碼並檢查簽名。</li>
+    <li>用 payload 裡的 <code>sub</code> 去資料庫查使用者。</li>
+    <li>如果使用者不存在，回傳 401。</li>
+    <li>全部通過之後，把 <code>User</code> 物件注入給 <code>current_user</code> 參數。</li>
+  </ol>
+
+  <p>處理器從頭到尾不需要自己寫任何認證檢查。</p>
+
+  <h2>受保護 vs 未受保護</h2>
+  <p>一個端點有沒有被保護，取決於它的函式簽名裡有沒有出現 <code>current_user_dep</code>。同一個應用程式裡可以同時混合兩種：</p>
+
+  <pre><code># 任何人都能存取
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+# 需要登入才能存取
+@app.get("/projects/me")
+async def read_my_projects(
+    current_user: User = current_user_dep,
+):
+    ...</code></pre>
+
+  <p>這種「宣告式」的保護方式讓路由的意圖一目了然：看簽名就知道這個端點需不需要登入。</p>
+
+  <h2>拿到 current_user 之後可以做什麼？</h2>
+  <p>一旦進入處理器，<code>current_user</code> 就是一個已經驗證過的 <code>User</code> 物件。常見的用法包括：</p>
+  <ul>
+    <li>用它來過濾查詢：只回傳屬於這個使用者的資料。</li>
+    <li>用它來記錄稽核日誌：記錄「誰」做了什麼操作。</li>
+    <li>用它來檢查權限：確認使用者是否有權修改某筆特定資料。</li>
+  </ul>
+
+  <p>例如，只回傳當前使用者擁有的專案：</p>
+  <pre><code>@app.get("/projects/me")
+async def read_my_projects(
+    current_user: User = current_user_dep,
+    session: Session = SessionDep,
+):
+    projects = session.exec(
+        select(Project).where(Project.owner_id == current_user.id)
+    ).all()
+    return projects</code></pre>
+
+  <h2>為什麼不寫在中間件裡？</h2>
+  <p>你可能會想：「能不能用 middleware 統一檢查認證？」技術上可以，但 middleware 會讓「哪些端點需要認證」變得隱晦——你得去看 middleware 的邏輯才知道。依賴注入把保護宣告放在路由簽名裡，讀路由就能理解它的存取規則。而且有些端點（比如註冊、登入、健康檢查）本來就應該開放，用依賴注入才能精確控制。</p>
+
+  <h2>總結</h2>
+  <p>保護一個路由只需要在處理器函式簽名裡多加一個參數：<code>current_user: User = current_user_dep</code>。FastAPI 會自動跑過整個依賴鏈——提取權杖、驗證 JWT、查詢使用者——任何一步失敗都回傳 401，全部通過才把 <code>User</code> 物件注入給處理器。這種宣告式風格讓路由的存取規則一目了然。下一課，你會把註冊、登入、受保護請求三步串成一個完整的認證流程。</p>
+
+  <h2>隨堂測驗</h2>
+
+  <div class="quiz" data-question="要保護一個路由，應該在處理器函式簽名裡加入什麼？" data-correct="2" data-explain="加入 current_user: User = current_user_dep 即可宣告這個端點需要認證。">
+    <button class="opt">@app.require_auth()</button>
+    <button class="opt">在路由上方加上 @auth_required</button>
+    <button class="opt">current_user: User = current_user_dep</button>
+    <button class="opt">在 middleware 檢查 Authorization header</button>
+  </div>
+
+  <div class="quiz" data-question="如果請求打到受保護路由但權杖無效，處理器會被執行嗎？" data-correct="0" data-explain="FastAPI 在呼叫處理器前會先跑依賴鏈，驗證失敗就直接回傳 401，處理器不會被執行。">
+    <button class="opt">不會，FastAPI 會先跑依賴鏈，驗證失敗就直接回傳 401</button>
+    <button class="opt">會，處理器自己要檢查權杖</button>
+    <button class="opt">會，但 current_user 會是 None</button>
+    <button class="opt">不會，但會回傳 500</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼依賴注入比 middleware 更適合處理認證？" data-correct="1" data-explain="依賴注入把保護宣告放在路由簽名裡，讀路由就能理解存取規則。">
+    <button class="opt">因為 middleware 不能存取資料庫</button>
+    <button class="opt">因為依賴注入把保護宣告放在路由簽名裡，讀路由就能理解存取規則</button>
+    <button class="opt">因為 middleware 執行速度比較慢</button>
+    <button class="opt">因為 middleware 不能回傳 401</button>
+  </div>
+
+  <div class="quiz" data-question="一個應用程式可以同時有受保護和未受保護的端點嗎？" data-correct="3" data-explain="端點有沒有被保護取決於簽名，可以混合。">
+    <button class="opt">不行，要嘛全部保護，要嘛全部開放</button>
+    <button class="opt">不行，middleware 會統一擋下</button>
+    <button class="opt">可以，但只能透過 middleware 設定</button>
+    <button class="opt">可以，端點有沒有被保護取決於簽名</button>
+  </div>
+
+  <div class="quiz" data-question="拿到 current_user 之後，最常見的用途是什麼？" data-correct="0" data-explain="用它來過濾查詢，只回傳屬於這個使用者的資料。">
+    <button class="opt">用它來過濾查詢，只回傳屬於這個使用者的資料</button>
+    <button class="opt">用它來建立新的 JWT 權杖</button>
+    <button class="opt">用它來更新資料庫 session</button>
+    <button class="opt">用它來驗證 email 格式</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./get-current-user.html" class="prev">← 上一步：get_current_user 依賴注入</a>
+    <a href="./auth-flow-integration.html" class="next">下一步：完整認證流程與常見錯誤 →</a>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 23: Protecting endpoints · Step 3</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

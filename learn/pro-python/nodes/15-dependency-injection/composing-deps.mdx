@@ -1,0 +1,47 @@
+---
+id: composing-deps
+title: 組合依賴與 session 深度
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_34-dependency-injection-with-annotated.md]]"
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+<LearningGoal>
+理解依賴鏈的組合方式：上層依賴可以引用下層依賴的結果，形成 session 深度，讓複雜邏輯也能保持路由簡潔。
+</LearningGoal>
+
+## Lesson
+
+依賴鏈是 FastAPI DI 最強大的能力。當端點需要一個物件，而這個物件又依賴其他物件時，FastAPI 會自動按照依賴關係的順序解析，把最終結果注入端點。
+
+來看看一個實際場景：每個端點都要拿到一個專案，如果專案不存在就回傳 404。這個模式在 CRUD 裡面重複出現很多次。依賴注入可以把這個「查詢或 404」的邏輯抽成一個獨立的依賴。
+
+```python
+def get_project_or_404(project_id: int, session: SessionDep):
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404)
+    return project
+```
+
+`get_project_or_404` 自己也是依賴。它需要 `project_id`（來自路徑參數）和 `session`（來自 `SessionDep`）。FastAPI 會自動把 `Depends(get_session)` 解析成 session，再把它傳進來。
+
+然後你用 `Annotated` 把它包裝成一個可重用的型別：
+
+```python
+ProjectDep = Annotated[Project, Depends(get_project_or_404)]
+```
+
+現在任何端點只要寫 `project: ProjectDep`，就能拿到一個已經驗證過的 `Project` 物件。如果找不到，FastAPI 會自動回傳 404，端點裡面不需要寫任何判斷。
+
+這種組合能力讓你可以把複雜的業務邏輯拆成好幾層小依賴：最底層是 session，上一層是查詢加上 404 處理，再上一層可能是權限檢查。每一層只需要關心自己的輸入和輸出，端點拿到的是所有層都處理好的最終結果。
+
+當路由變多、變參變複雜，這種「組合式依賴」的價值會越來越明顯：修改一個依賴，所有用到它的端點都會自動更新，不需要一個一個改。
+
+## Course
+
+[↗ 課程頁面](../../lessons/composing-deps.html)
+
+## Sources

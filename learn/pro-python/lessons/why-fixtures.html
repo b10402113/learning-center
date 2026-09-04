@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>為什麼測試需要隔離的資料庫？</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 25 — Step 1/4 · Database fixtures with pytest</p>
+  <h1>為什麼測試需要隔離的資料庫？</h1>
+
+  <h2>學習目標</h2>
+  <p>理解測試共用資料庫時產生的狀態污染問題，以及為什麼每個測試需要獨立、隔離的資料庫實例。</p>
+
+  <h2>測試危索共用資料庫的風險</h2>
+  <p>你的 API 測試正在跑，一切看起來沒問題。但你發現只要調換兩個測試的執行順序，其中一個就會失敗。更詭異的是，单独跑每個測試都通過，合在一起就跑不這種「測試危索（test interference）」的罪魁禍首就是<strong>共用狀態（shared state）</strong>——多個測試寫入同一張表、讀取同一個資料庫。</p>
+
+  <p>具體來想一個情境：測試 A 建立了一個專案，測試 B 查詢所有專案並斷言數量。如果測試 A 先跑，測試 B 會看到這筆資料，數量斷言就錯了。資料庫是測試之間溝通的暗通道，你以為在測 B，其實在測 A+B 的組合。</p>
+
+  <h2>清理不是好辦法</h2>
+  <p>最直覺的解法是「每個測試跑完就刪除資料」。聽起來可行，但實務上問題很多：</p>
+
+  <ul>
+    <li>忘記清理：一個測試失敗、拋出例外，清理程式碼沒執行，汙染後續測試。</li>
+    <li>清理本身也是測試：你還得測試「清理有沒有成功」，巢狀驗證沒完沒了。</li>
+    <li>平行測試衝突：如果兩個測試同時跑，一個在刪資料、一個在讀，race condition 就出現了。</li>
+  </ul>
+
+  <p>清理是把「維持公共空間整潔」的責任塞給每個測試。隔離則是「每個測試有自己的房間」，從根本上消除干擾。</p>
+
+  <h2>隔離資料庫的原則</h2>
+  <p>每個測試擁有獨立的資料庫實例，跑完就拋棄。因為互不共用，所以：</p>
+
+  <ul>
+    <li><strong>執行順序不相關</strong>：測試 A 怎麼跑都不會影響測試 B。</li>
+    <li><strong>失敗不擴散</strong>：一個測試弄髒自己的資料庫，其他測試完全不受影響。</li>
+    <li><strong>可以平行執行</strong>：每個測試跑在自己的資料庫裡，不需要互相等待。</li>
+  </ul>
+
+  <p>pytest 的 fixture 系統正是為了這種「每個測試一套環境」的需求設計的。下一課會教你怎麼用 in-memory SQLite 搭配 fixture 在幾毫秒內建立一個全新的資料庫給每個測試用。</p>
+
+  <div class="lesson-nav">
+    <a href="sqlite-test-db.html">下一步：用記憶體 SQLite 建立隔離測試資料庫 →</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="測試危索（test interference）的主要原因是什麼？" data-correct="1" data-explain="多個測試共用同一個資料庫，一個測試寫入的資料會被另一個測試讀到，導致執行順序影響結果。">
+    <button class="opt">測試跑得太慢</button>
+    <button class="opt">多個測試共用同一個資料庫，彼此干擾</button>
+    <button class="opt">測試用了太多記憶體</button>
+    <button class="opt">pytest 版本太舊</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼「每個測試跑完刪除資料」不是好解法？" data-correct="2" data-explain="測試失敗時清理可能沒執行，會汙染後續測試；清理本身也需要測試，還會引發平行測試的 race condition。">
+    <button class="opt">刪除資料太慢</button>
+    <button class="opt">Postgres 不支援刪除</button>
+    <button class="opt">測試失敗時清理可能沒執行，且清理本身也是測試，還會引發 race condition</button>
+    <button class="opt">刪除資料會損壞 migration</button>
+  </div>
+
+  <div class="quiz" data-question="隔離資料庫「每個測試一套環境」的好處不包含哪個？" data-correct="3" data-explain="隔離資料庫讓執行順序不相關、失敗不擴散、可以平行執行，但不會自動修正測試斷言——寫錯的斷言還是錯的。">
+    <button class="opt">執行順序不會影響測試結果</button>
+    <button class="opt">一個測試失敗不會汙染其他測試</button>
+    <button class="opt">測試可以安全地平行執行</button>
+    <button class="opt">測試斷言會自動修正</button>
+  </div>
+
+  <div class="quiz" data-question="以下哪一個不是共用資料庫狀態會產生的問題？" data-correct="0" data-explain="執行速度變快不是共用資料庫的問題，反而可能因為鎖競爭而變慢。其他三項都是共用狀態的典型症狀。">
+    <button class="opt">執行速度變快</button>
+    <button class="opt">調換測試順序導致失敗</button>
+    <button class="opt">單獨跑測試都通過，合在一起就失敗</button>
+    <button class="opt">測試失敗時汙染後續測試</button>
+  </div>
+
+  <div class="quiz" data-question="pytest fixture 在隔離資料庫中扮演什麼角色？" data-correct="1" data-explain="fixture 負責在每個測試執行前建立獨立的資料庫環境，測試結束後自動清理，讓隔離自動化。">
+    <button class="opt">fixture 負責加速測試執行</button>
+    <button class="opt">fixture 負責在每個測試前建立獨立的資料庫環境</button>
+    <button class="opt">fixture 負責驗證測試斷言</button>
+    <button class="opt">fixture 負責建立 migration</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 25: Database fixtures with pytest · Step 1</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

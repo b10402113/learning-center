@@ -1,0 +1,78 @@
+---
+id: auth-flow-integration
+title: 完整認證流程與常見錯誤
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_54.md#auth-flow]]"
+  - "[[sources/pro-python/completed/20260903_54.md#common-errors]]"
+  - "[[sources/pro-python/completed/20260903_54.md#exercise-steps]]"
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+# 完整認證流程與常見錯誤
+
+## Learning goal
+
+把註冊、登入、受保護請求三步串成一個完整的認證流程，並排除 JWT 密鑰未設、create_user 參數錯誤、非 JSON body 等常見陷阱。
+
+## Lesson
+
+一個完整的密碼認證系統，客戶端和伺服器之間通常會跑過三個步驟。
+
+**第一步：註冊（Register）**。客戶端把 email 和密碼送到 `/auth/register`。伺服器用 Argon2id 把密碼雜湊後存進資料庫，回傳建立好的使用者資料（不包含密碼雜湊）。
+
+```
+POST /auth/register
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "secret123"
+}
+```
+
+**第二步：登入（Login）**。客戶端把同樣的 email 和密碼送到 `/auth/token`。伺服器用 `pwdlib` 驗證密碼，通過後產生一個 JWT 權杖回傳。
+
+```
+POST /auth/token
+Content-Type: application/x-www-form-urlencoded
+
+username=user@example.com&password=secret123
+```
+
+注意：OAuth2 的登入端點預設接受的是 **form data**，不是 JSON。這是 OAuth2 規格的規定，FastAPI 的 `OAuth2PasswordBearer` 也是這樣配合的。
+
+回應：
+
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "bearer"
+}
+```
+
+**第三步：受保護請求（Authenticated Request）**。客戶端把拿到的權杖放在 Authorization header 裡，打到任何受保護的端點。
+
+```
+GET /projects/me
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+```
+
+伺服器用 `get_current_user` 驗證權杖，通過後回傳資料。
+
+實作時有三個常見陷阱要避開。
+
+**常見錯誤：JWT 密鑰未設**。最常見的錯誤之一是 `SECRET_KEY` 沒有在環境變數裡正確設定。JWT 的密鑰至少要 32 個字元，否則 `jwt.encode` 或 `jwt.decode` 會直接失敗。解法：在 `.env` 裡設定一個夠長的隨機字串，在開發環境可以用 `python -c "import secrets; print(secrets.token_hex(32))"` 產生。
+
+**常見錯誤：create_user 參數錯誤（500）**。註冊端點通常會呼叫 `crud.create_user` 來建立使用者。如果呼叫時參數順序或名稱打錯，SQLAlchemy 會拋出例外，FastAPI 會回傳 500。解法：使用關鍵字參數明確指定 `crud.create_user(session=session, email=email, password=password)`。
+
+**常見錯誤：非 JSON body（422）**。如果註冊端點的 Pydantic 模型預期收到 JSON，但客戶端送了 form data，FastAPI 會回傳 422 Unprocessable Entity。這通常發生在測試時忘記設 `Content-Type: application/json`，或者把登入端點的 form data 習慣帶到註冊端點。解法：確認每個端點接受的內容類型。註冊用 JSON，登入用 form data。
+
+FastAPI 自動產生的 `/docs` 頁面不只能看文件，還能直接測試整個認證流程：用 `Authorize` 按鈕登入（Swagger UI 會幫你去 `/auth/token` 拿權杖）、打開受保護的端點，點 `Try it out` 再點 `Execute`（Swagger UI 會自動在請求裡帶上權杖，你會看到 200 回應）、點 `Authorize` 再點 `Logout`，重覆剛才的請求，應該會看到 401。
+
+三步認證流程（註冊 → 登入 → 受保護請求）是密碼認證的標準模式。實作時有三個常見陷阱要避開：JWT 密鑰要夠長且正確載入、`create_user` 用關鍵字參數呼叫、註冊端點收 JSON 而不是 form data。Swagger Docs UI 的 Authorize 按鈕讓你可以不寫任何前端程式就完成端到端測試。到這裡，你的 API 已經從全面開放變成只有合法使用者才能操作。
+
+## Sources
+
+[↗ 課程頁面](../../lessons/auth-flow-integration.html)

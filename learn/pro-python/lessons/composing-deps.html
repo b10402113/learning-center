@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>組合依賴與 session 深度</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 15 — Step 4/4 · Dependency injection with Annotated</p>
+  <h1>組合依賴與 session 深度</h1>
+
+  <h2>學習目標</h2>
+  <p>理解依賴鏈的組合方式：上層依賴可以引用下層依賴的結果，形成 session 深度，讓複雜邏輯也能保持路由簡潔。</p>
+
+  <h2>依賴鏈的組合</h2>
+  <p>依賴鏈是 FastAPI DI 最強大的能力。當端點需要一個物件，而這個物件又依賴其他物件時，FastAPI 會自動按照依賴關係的順序解析，把最終結果注入端點。</p>
+
+  <p>來看看一個實際場景：每個端點都要拿到一個專案，如果專案不存在就回傳 404。這個模式在 CRUD 裡面重複出現很多次。依賴注入可以把這個「查詢或 404」的邏輯抽成一個獨立的依賴。</p>
+
+  <h2>抽出 get_project_or_404</h2>
+  <p>把「查詢或 404」的邏輯抽成一個獨立的依賴：</p>
+
+  <pre><code>def get_project_or_404(project_id: int, session: SessionDep):
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404)
+    return project</code></pre>
+
+  <p><code>get_project_or_404</code> 自己也是依賴。它需要 <code>project_id</code>（來自路徑參數）和 <code>session</code>（來自 <code>SessionDep</code>）。FastAPI 會自動把 <code>Depends(get_session)</code> 解析成 session，再把它傳進來。</p>
+
+  <h2>用 Annotated 包裝成可重用型別</h2>
+  <p>然後你用 <code>Annotated</code> 把它包裝成一個可重用的型別：</p>
+
+  <pre><code>ProjectDep = Annotated[Project, Depends(get_project_or_404)]</code></pre>
+
+  <p>現在任何端點只要寫 <code>project: ProjectDep</code>，就能拿到一個已經驗證過的 <code>Project</code> 物件。如果找不到，FastAPI 會自動回傳 404，端點裡面不需要寫任何判斷。</p>
+
+  <h2>多層依賴的價值</h2>
+  <p>這種組合能力讓你可以把複雜的業務邏輯拆成好幾層小依賴：最底層是 session，上一層是查詢加上 404 處理，再上一層可能是權限檢查。每一層只需要關心自己的輸入和輸出，端點拿到的是所有層都處理好的最終結果。</p>
+
+  <p>當路由變多、變參變複雜，這種「組合式依賴」的價值會越來越明顯：修改一個依賴，所有用到它的端點都會自動更新，不需要一個一個改。</p>
+
+  <div class="lesson-nav">
+    <a href="annotated-syntax.html">← 上一步：Annotated 語法與型別組合</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="依賴鏈的組合方式是什麼？" data-correct="1" data-explain="上層依賴可以引用下層依賴的結果，FastAPI 會自動按照依賴關係的順序解析。">
+    <button class="opt">所有依賴都必須放在端點裡面</button>
+    <button class="opt">上層依賴可以引用下層依賴的結果，FastAPI 會自動按照順序解析</button>
+    <button class="opt">依賴只能有一層，不能巢狀</button>
+    <button class="opt">依賴必須全部放在一個檔案裡</button>
+  </div>
+
+  <div class="quiz" data-question="get_project_or_404 需要哪些參數？" data-correct="2" data-explain="它需要 project_id（來自路徑參數）和 session（來自 SessionDep）。">
+    <button class="opt">只需要 project_id</button>
+    <button class="opt">只需要 session</button>
+    <button class="opt">需要 project_id 和 session</button>
+    <button class="opt">不需要任何參數</button>
+  </div>
+
+  <div class="quiz" data-question="ProjectDep = Annotated[Project, Depends(get_project_or_404)] 的作用是什麼？" data-correct="0" data-explain="任何端點只要寫 project: ProjectDep，就能拿到已經驗證過的 Project 物件，找不到就自動回傳 404。">
+    <button class="opt">讓端點拿到已經驗證過的 Project 物件，找不到就自動回傳 404</button>
+    <button class="opt">讓端點自己寫 404 判斷</button>
+    <button class="opt">讓端點自己查詢資料庫</button>
+    <button class="opt">讓端點自己管理 session</button>
+  </div>
+
+  <div class="quiz" data-question="多層依賴的價值是什麼？" data-correct="3" data-explain="修改一個依賴，所有用到它的端點都會自動更新，不需要一個一個改。">
+    <button class="opt">讓執行速度變快</button>
+    <button class="opt">讓 IDE 看不到型別提示</button>
+    <button class="opt">讓路由自動產生 API 文件</button>
+    <button class="opt">修改一個依賴，所有用到它的端點都會自動更新</button>
+  </div>
+
+  <div class="quiz" data-question="爲什麼組合式依賴在路由變多時特別有用？" data-correct="1" data-explain="因為修改一個依賴，所有用到它的端點都會自動更新，不需要一個一個改。">
+    <button class="opt">因為執行速度會變快</button>
+    <button class="opt">因為修改一個依賴，所有用到它的端點都會自動更新</button>
+    <button class="opt">因為 IDE 會自動補全</button>
+    <button class="opt">因為 API 文件會自動產生</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 15: Dependency injection with Annotated · Step 4</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

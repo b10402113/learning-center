@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用集中式例外處理器攔截 IntegrityError</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <header>
+    <h1>用集中式例外處理器攔截 IntegrityError</h1>
+    <p class="subtitle">Centralized exception handling · Step 2</p>
+  </header>
+
+  <main>
+    <section class="goal">
+      <h2>學習目標</h2>
+      <p>能使用 FastAPI 的 <code>@app.exception_handler</code> 裝飾器，建立一個全域的 <code>IntegrityError</code> 處理器，將資料庫衝突轉換為清晰的 JSON 回應。</p>
+    </section>
+
+    <section>
+      <h2>集中式例外處理器的位置</h2>
+      <p>在 FastAPI 裡，你可以在應用程式層級註冊一個處理器（exception handler），它會捕捉<strong>整個應用程式</strong>裡未被處理的特定例外。寫一次，所有路由都適用。</p>
+    </section>
+
+    <section>
+      <h2>註冊處理器：@app.exception_handler</h2>
+      <p>使用 <code>@app.exception_handler(IntegrityError)</code> 裝飾一個函式，FastAPI 就會在 <code>IntegrityError</code> 往上傳播時呼叫它，而不是讓它變成 500。</p>
+      <pre><code>from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
+
+app = FastAPI()
+
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(request: Request, exc: IntegrityError):
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "資料衝突：這筆資料已經存在。"},
+    )</code></pre>
+      <div class="note">
+        <p>處理器函式接收兩個參數：<code>request</code>（當下的請求）和 <code>exc</code>（被拋出的例外）。你可以從它們身上取得足夠的資訊來建構回應。</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>另一個寫法：add_exception_handler</h2>
+      <p>除了裝飾器，你也可以用 <code>app.add_exception_handler(IntegrityError, handler)</code> 註冊。兩種方式效果完全相同，裝飾器只是比較常見。</p>
+    </section>
+
+    <section>
+      <h2>處理器何時生效？</h2>
+      <p>處理器會在例外<strong>往上傳播到 FastAPI 層</strong>時介入。如果某個路由裡面已經用 <code>try/except</code> 把 <code>IntegrityError</code> 吞掉了，處理器就不會收到它。所以最好的做法是：讓例外自然傳播，由處理器統一處理。</p>
+    </section>
+
+    <section>
+      <h2>回應的內容</h2>
+      <p>處理器回傳一個 <code>JSONResponse</code>，狀態碼設為 409，body 裡面放一個 <code>detail</code> 欄位說明原因。呼叫端可以讀取這個欄位，決定如何提示使用者。</p>
+      <pre><code>{
+  "detail": "資料衝突：這筆資料已經存在。"
+}</code></pre>
+    </section>
+
+    <section class="summary">
+      <h2>總結</h2>
+      <p>用 <code>@app.exception_handler(IntegrityError)</code> 註冊一個回傳 409 的處理器，就能把原本會變成 500 的資料庫約束違反，轉換成對呼叫端有意義的回應。寫一次，全部路由受益。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+      <div class="quiz" data-question="要註冊一個集中式例外處理器，應該使用哪個裝飾器？" data-correct="1" data-explain="@app.exception_handler 是 FastAPI 註冊例外處理器的標準方式。">
+        <button class="opt">@app.error_handler</button>
+        <button class="opt">@app.exception_handler</button>
+        <button class="opt">@app.catch_exception</button>
+        <button class="opt">@app.handle_error</button>
+      </div>
+      <div class="quiz" data-question="處理器函式通常回傳什麼？" data-correct="2" data-explain="處理器回傳一個 JSONResponse，包含狀態碼和 detail 訊息。">
+        <button class="opt">一個字串</button>
+        <button class="opt">一個字典</button>
+        <button class="opt">一個 JSONResponse</button>
+        <button class="opt">一個 HTML 頁面</button>
+      </div>
+      <div class="quiz" data-question="如果某個路由裡面已經用 try/except 把 IntegrityError 吞掉了，集中式處理器會收到它嗎？" data-correct="0" data-explain="被 try/except 吞掉的例外不會往上傳播，處理器就不會收到。">
+        <button class="opt">不會，例外已經被處理了</button>
+        <button class="opt">會，處理器永遠會收到</button>
+        <button class="opt">只有加上 @app.propagate_exceptions 才會</button>
+        <button class="opt">只有 GET 請求才會</button>
+      </div>
+      <div class="quiz" data-question="以下哪個是 add_exception_handler 和 @app.exception_handler 的差異？" data-correct="3" data-explain="兩者效果完全相同，只是語法不同。">
+        <button class="opt">add_exception_handler 只能處理 500 錯誤</button>
+        <button class="opt">@app.exception_handler 只能處理 404 錯誤</button>
+        <button class="opt">add_exception_handler 需要額外的 middleware</button>
+        <button class="opt">兩者效果相同，只是語法不同</button>
+      </div>
+      <div class="quiz" data-question="處理器回傳的 JSONResponse 中，status_code 應該設為多少？" data-correct="1" data-explain="資料衝突應該用 409 Conflict 回應。">
+        <button class="opt">400</button>
+        <button class="opt">409</button>
+        <button class="opt">500</button>
+        <button class="opt">503</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="lesson-nav">
+    <a href="./integrity-error-problem.html" class="prev">← 上一步：當唯一約束被違反時會發生什麼？</a>
+    <a href="./http-409-semantics.html" class="next">下一步：為什麼 409 Conflict 是對的狀態碼？ →</a>
+  </div>
+
+  <footer>
+    <p>有問題？隨時向你的老師提問。</p>
+  </footer>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

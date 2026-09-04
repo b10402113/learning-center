@@ -1,0 +1,81 @@
+---
+id: pwdlib-argon2id
+title: 使用 pwdlib 與 Argon2id
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_50.md#pwdlib-argon2id]]"
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+<LearningGoal>
+能在 Python 專案中安裝 `pwdlib[argon2]`，並使用 Argon2Hasher 的 `hash()` 與 `verify()` 方法進行密碼雜湊與驗證。
+</LearningGoal>
+
+## Lesson
+
+前面兩步講了「為什麼」和「是什麼」，這一步進入實作。Python 社群目前推薦的密碼雜湊方案是 `pwdlib`——一個現代、持續維護、API 簡潔的密碼雜湊庫，原生支援 Argon2id。
+
+第一步是安裝。`pwdlib` 把 Argon2 演算法拆成額外的依賴，所以裝的時候要指定 `[argon2]`：
+
+```bash
+uv add "pwdlib[argon2]"
+```
+
+裝完之後，`pwdlib` 提供了 `Argon2Hasher` 這個核心類別。它封裝了 Argon2id 演算法的所有參數設定，你不需要自己去記記憶體消耗、迭代次數、平行度這些數值——預設值就已經是 OWASP 建議的安全下限。
+
+使用流程只需要兩個動作：**雜湊**和**驗證**。
+
+**雜湊**：把明文密碼丟進 `hash()`，回傳的是一個完整字串，裡面包含了演算法識別碼、參數、鹽值、雜湊值，全部打包在一起。你只需要把這一整個字串存進資料庫就行。
+
+```python
+from pwdlib import Argon2Hasher
+
+hasher = Argon2Hasher()
+
+# 註冊時：把密碼轉成雜湊值
+hashed = hasher.hash("mypassword123")
+# 結果長這樣：$argon2id$v=19$m=65536,t=3,p$4$salt$hash
+
+# 把 hashed 存進資料庫的 password 欄位
+```
+
+**驗證**：登入時從資料庫拿出之前存的雜湊值，跟使用者輸入的密碼一起丟進 `verify()`。它會拿雜湊字串裡记录的鹽值和參數，對輸入密碼做一次相同計算，然後比對結果。
+
+```python
+# 登入時：驗證密碼是否正確
+is_valid = hasher.verify("mypassword123", hashed)
+# 如果密碼正確，is_valid 是 True；錯誤則是 False
+```
+
+`verify()` 不是直接拿輸入密碼重新雜湊一次再比對——它會先解析 `hashed` 字串裡面的參數（記憶體大小、迭代次數、平行度、鹽值），然後用完全相同的設定去跑輸入密碼。這確保了即使之後你調整了 Argon2id 參數，舊的雜湊值仍然可以用新參數驗證。
+
+這裡有一個很多人會問的問題：`hash()` 每次回傳的雜湊值都一樣嗎？答案是「不一樣」。因為 `hash()` 每次都會產生新的隨機鹽值，所以同樣密碼連續雜湊兩次，結果會不同。但 `verify()` 仍然能正確比對，因為鹽值就內嵌在雜湊字串裡。
+
+```python
+hasher.hash("mypassword123")  # 第一次
+hasher.hash("mypassword123")  # 第二次，結果不同
+
+# 但兩個都能用 verify() 驗證成功
+hasher.verify("mypassword123", hash1)  # True
+hasher.verify("mypassword123", hash2)  # True
+```
+
+最後提醒一個實作細節：不要把 `Argon2Hasher` 的實例當成區域變數在每次請求時建立。它沒有狀態，建立成本極低，但也不需要在每個端點都 `Argon2Hasher()` 一次。常見做法是在模組頂端建立一個全域實例，整個應用程式共用：
+
+```python
+# security.py
+from pwdlib import Argon2Hasher
+
+hasher = Argon2Hasher()
+```
+
+之後在需要雜湊或驗證的地方匯入這個 `hasher` 就好。
+
+## Course
+
+[↗ 課程頁面](../../lessons/pwdlib-argon2id.html)
+
+## Sources
+
+- [[sources/pro-python/completed/20260903_50.md#pwdlib-argon2id]]

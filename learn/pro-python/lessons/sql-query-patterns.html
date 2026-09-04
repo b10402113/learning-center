@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL query patterns — where, join, selectinload</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>SQL query patterns — where, join, selectinload</h1>
+<p class="meta">學習目標：Master the three core operations for efficient relational queries</p>
+
+<h2>Why this step matters</h2>
+<p>Task 和 Project 有關聯，查詢時必須處理「跨表」和「關聯載入」這兩個問題。這一節介紹的三個工具——<code>where</code>、<code>join</code>、<code>selectinload</code>——是 SQLModel / SQLAlchemy 裡最重要的 relational query 基礎元件。</p>
+
+<h2>Where: conditional predicates</h2>
+<p><code>where</code> 在查詢裡加入篩選條件，相當於 SQL 的 <code>WHERE</code> 子句。每次呼叫會回傳一個新的 statement 物件（immutable pattern），不會修改原本的查詢。</p>
+<pre><code>statement = select(Task)
+statement = statement.where(Task.status == "pending")
+statement = statement.where(Task.priority == "high")</code></pre>
+<p>多個 <code>where</code> 會用 <code>AND</code> 串起來。</p>
+
+<h2>Join: filter by related table columns</h2>
+<p>當你想用「關聯表」的欄位來篩選，就需要 <code>join</code>。例如：列出所有屬於「專案 X」的 tasks，但 task 表裡只有 <code>project_id</code>，而你想用專案的 <code>slug</code> 來篩選。</p>
+<pre><code>statement = select(Task).join(Project)
+statement = statement.where(Project.slug == "my-project")</code></pre>
+<p><code>join(Project)</code> 會自動用外鍵關聯找出對應的 project。篩選條件仍然用 <code>where</code> 加上去。</p>
+
+<h2>Selectinload: avoid N+1 queries</h2>
+<p>N+1 問題是 ORM 最常見的效能陷阱：先查一次拿到 N 筆 tasks，然後每筆 task 要存取關聯的 project 時又各自多查一次，總共 1 + N 次查詢。<code>selectinload</code> 在一次查詢裡就把關聯資料全部撈回來。</p>
+<pre><code>from sqlalchemy.orm import selectinload
+
+statement = select(Task).options(selectinload(Task.project))</code></pre>
+<p>這会让 SQLAlchemy 用第二條 <code>IN</code> 查詢把相關 projects 一次抓回記憶體，之後存取 <code>task.project</code> 就不會再打資料庫。</p>
+
+<h2>When to use which</h2>
+<table>
+  <tr><th>Tool</th><th>用途</th></tr>
+  <tr><td>where</td><td>篩選目前表的欄位</td></tr>
+  <tr><td>join</td><td>用關聯表的欄位篩選</td></tr>
+  <tr><td>selectinload</td><td>讀取關聯資料時避免 N+1</td></tr>
+</table>
+
+<h2>Putting them together</h2>
+<p>三者經常出現在同一條查詢裡：用 <code>join</code> 切到關聯表，用 <code>where</code> 下條件，用 <code>selectinload</code> 讓後續讀取關聯物件不爆量查詢。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="where 每次呼叫會回傳什麼？" data-correct="1" data-explain="where 是 immutable pattern，每次回傳一個新的 statement。">
+  <button class="opt">修改原本的 statement</button>
+  <button class="opt">回傳一個新的 statement</button>
+  <button class="opt">回傳 None</button>
+  <button class="opt">回傳一個 list</button>
+</div>
+
+<div class="quiz" data-question="join 的主要用途是？" data-correct="2" data-explain="用關聯表的欄位來篩選資料。">
+  <button class="opt">合併兩個表的內容成一張表</button>
+  <button class="opt">把兩張表的資料垂直疊加</button>
+  <button class="opt">用關聯表的欄位篩選</button>
+  <button class="opt">自動建立外鍵關聯</button>
+</div>
+
+<div class="quiz" data-question="selectinload 解決什麼問題？" data-correct="0" data-explain="在一次查詢裡就把關聯資料全部撈回來，避免 N+1 查詢。">
+  <button class="opt">避免 N+1 查詢</button>
+  <button class="opt">加速單筆查詢</button>
+  <button class="opt">建立資料庫索引</button>
+  <button class="opt">驗證關聯資料</button>
+</div>
+
+<div class="quiz" data-question="N+1 問題是指？" data-correct="3" data-explain="先查一次拿 N 筆，每筆存取關聯物件又多查一次，總共 1+N 次查詢。">
+  <button class="opt">查 N 筆資料需要 N 秒</button>
+  <button class="opt">N 筆資料佔用 N GB 記憶體</button>
+  <button class="opt">N 筆資料需要 N 個索引</button>
+  <button class="opt">1 次主查詢 + N 次關聯查詢</button>
+</div>
+
+<div class="quiz" data-question="多個 where 之間預設用什麼邏輯串接？" data-correct="0" data-explain="多個 where 用 AND 串起來。">
+  <button class="opt">AND</button>
+  <button class="opt">OR</button>
+  <button class="opt">XOR</button>
+  <button class="opt">順序執行</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./crud-endpoint-mapping.html">← 上一步：CRUD methods and endpoint mapping</a>
+  <a href="./list-tasks-filters.html">下一步：List tasks with conditional filters →</a>
+</div>
+
+<div class="footer">有問題？直接問你的 agent，它可以幫你釐清任何不清楚的地方。</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

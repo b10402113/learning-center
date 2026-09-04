@@ -1,0 +1,69 @@
+---
+id: get-current-user
+title: get_current_user 依賴注入
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_53.md#get-current-user]]"
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+# get_current_user 依賴注入
+
+## Learning goal
+
+實作一個依賴函式 `get_current_user`，讓它接收權杖、驗證 JWT 簽名、查詢資料庫，最後回傳當前使用者。
+
+## Lesson
+
+上一課的 `OAuth2PasswordBearer` 已經能從請求裡把 JWT 字串挖出來。但字串本身只是一堆文字，伺服器還不知道它是誰、是不是偽造的、對應到哪個使用者。這些驗證工作要交給一個依賴函式來做，FastAPI 社群習慣把它命名為 `get_current_user`。
+
+`get_current_user` 是一個普通的 Python 函式，但它同時也會被 FastAPI 當作依賴來呼叫。它的輸入是權杖字串（由 `oauth2_scheme` 注入），輸出是一個 `User` 物件。如果權杖無效或使用者不存在，就拋出 `HTTPException` 回傳 401。
+
+一個可靠的權杖驗證流程通常包含三個步驟：
+
+1. **Decode with key**：用簽發時的同一把密鑰解碼 JWT，確認權杖確實是這台伺服器簽發的
+2. **Check signature**：驗證 JWT 的 signature 沒被竄改，防止有人改寫 payload 後重新編碼
+3. **Lookup user**：用 payload 裡的使用者 ID 去資料庫查，確認使用者仍然存在、沒有被刪除或停用
+
+任何一步失敗，都應該回傳 401。
+
+下面是一個典型的實作。注意它怎麼宣告 `token: str = Depends(oauth2_scheme)`——FastAPI 會自動把 `oauth2_scheme` 提取的權杖字串注入進來：
+
+```python
+from fastapi import Depends, HTTPException
+from jose import jwt, JWTError
+
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    session: Session = Depends(get_session),
+) -> User:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: int = payload.get("sub")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="無效的權杖")
+
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="找不到使用者")
+    return user
+```
+
+這裡的 `SECRET_KEY` 和 `ALGORITHM` 必須和簽發權杖時用的是同一組，否則 `jwt.decode` 會拋出 `JWTError`。`sub` 是 JWT 標準的 payload 欄位，存放「這個權杖屬於誰」——我們在登入時把 `user.id` 放進了 `sub`。
+
+每次在路由寫 `current_user: User = Depends(get_current_user)` 會有點長。FastAPI 社群常見的慣例是建立一個型別別名：
+
+```python
+current_user_dep = Depends(get_current_user)
+```
+
+這樣路由裡就可以直接寫 `current_user: User = current_user_dep`，看起來像一個單純的型別註記，但實際上 FastAPI 會執行整個驗證流程。
+
+注意 `get_current_user` 自己也是依賴的組合：它需要 `token`（來自 `oauth2_scheme`）和 `session`（來自 `get_session`）。FastAPI 會自動按照依賴關係的順序解析——先產生 session，再提取權杖，最後一起傳進 `get_current_user`。這就是依賴鏈的威力：每一層只需要關心自己的輸入和輸出。
+
+`get_current_user` 是保護端點的核心。它接收權杖，用三步驗證（解碼、檢查簽名、查詢使用者）確認身份，回傳 `User` 物件。驗證失敗就拋 401。用 `current_user_dep = Depends(get_current_user)` 這個別名，可以讓路由的簽名保持乾淨。下一課，你會看到保護一個路由實際上只需要加一個參數。
+
+## Sources
+
+[↗ 課程頁面](../../lessons/get-current-user.html)

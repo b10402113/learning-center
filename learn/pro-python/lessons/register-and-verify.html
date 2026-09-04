@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>註冊路由器並驗證重構 — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <main class="lesson">
+    <header class="lesson-header">
+      <h1>註冊路由器並驗證重構</h1>
+      <p class="learning-goal">用 include_router 接回 main.py 並跑測試確認行為不變</p>
+    </header>
+
+    <section class="content">
+      <h2>在 main.py 註冊路由器</h2>
+      <p>端點搬完之後，<code>main.py</code> 會變得乾淨許多。原本塞滿端點的位置，現在只剩下幾行 <code>include_router</code> 呼叫：</p>
+      <pre><code>from fastapi import FastAPI
+from routers.projects import router as projects_router
+
+app = FastAPI()
+
+app.include_router(projects_router)</code></pre>
+
+      <p>這幾行就是所謂的「組合根（composition root）」——一眼就能看出這個 API 有哪些功能模組，但不用逐行閱讀端點實作。</p>
+
+      <h2>include_router 的運作方式</h2>
+      <p><code>app.include_router(router)</code> 會把路由器裡的所有路由合併到主應用程式。合併時會保留：</p>
+      <ul>
+        <li>路由的路徑（含 prefix）</li>
+        <li>HTTP 方法（GET、POST、PATCH、DELETE）</li>
+        <li>依賴注入設定</li>
+        <li>請求/回應模型</li>
+        <li>標籤與說明文件</li>
+      </ul>
+
+      <p>也就是說，對外部呼叫者而言，這次重構完全是無感的——URL 沒變、行為沒變、文件位置也沒變。</p>
+
+      <h2>用測試驗證行為不變</h2>
+      <p>重構最重要的一步是「確認行為沒變」。FastAPI 的 <code>TestClient</code> 搭配 pytest 是驗證的好工具。如果之前的測試有寫好，重構後跑一次 <code>uv run pytest</code>，全部綠燈就代表這次重構是安全的：</p>
+      <pre><code>$ uv run pytest
+====== test session starts ======
+collected 12 items
+
+test_main.py ............    [100%]
+
+====== 12 passed in 0.45s ======</code></pre>
+
+      <div class="analogy">
+        <p><strong>比喻：</strong>測試就像是搬家時的裝箱清單。搬完之後逐項核對，確認所有東西都還在、都能正常運作。</p>
+      </div>
+
+      <h2>main.py 的新角色</h2>
+      <p>重構之後，<code>main.py</code> 不再負責端點實作，而是專注於：</p>
+      <table>
+        <thead>
+          <tr>
+            <th>責任</th>
+            <th>說明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>建立 FastAPI 實例</td>
+            <td><code>app = FastAPI()</code></td>
+          </tr>
+          <tr>
+            <td>註冊路由器</td>
+            <td><code>app.include_router(...)</code></td>
+          </tr>
+          <tr>
+            <td>掛中介軟體</td>
+            <td><code>app.add_middleware(...)</code></td>
+          </tr>
+          <tr>
+            <td>註冊例外處理常式</td>
+            <td><code>app.add_exception_handler(...)</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>官方文件參考</h2>
+      <p>FastAPI 官方文件有一篇「Bigger Applications」教學，專門講解多檔案專案結構與 <code>APIRouter</code> 的使用方式。這篇教學是免費的，也是目前最推薦的參考資料。當你的專案成長到一個檔案塞不下的時候，可以先翻這篇。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+
+      <div class="quiz" data-question="app.include_router(router) 的作用是什麼？" data-correct="2" data-explain="include_router 會把路由器裡的所有路由合併到主應用程式。">
+        <button class="opt">建立一個新的 FastAPI 應用程式</button>
+        <button class="opt">把主應用程式的路由複製到路由器</button>
+        <button class="opt">把路由器裡的所有路由合併到主應用程式</button>
+        <button class="opt">把路由器註冊到資料庫</button>
+      </div>
+
+      <div class="quiz" data-question="重構之後，對外部呼叫者而言，API 會發生什麼變化？" data-correct="0" data-explain="URL、行為、文件位置全部不變，外部呼叫者完全無感。">
+        <button class="opt">URL、行為、文件位置全部不變</button>
+        <button class="opt">URL 會自動加上 /api 前綴</button>
+        <button class="opt">所有端點會變成唯讀</button>
+        <button class="opt">需要重新申請 API 金鑰</button>
+      </div>
+
+      <div class="quiz" data-question="重構之後，main.py 的主要責任是什麼？" data-correct="3" data-explain="main.py 變成組合根，負責建立 app、註冊路由器、掛中介軟體、註冊例外處理。">
+        <button class="opt">實作所有端點邏輯</button>
+        <button class="opt">管理資料庫連線</button>
+        <button class="opt">處理所有例外狀況</button>
+        <button class="opt">建立 app、註冊路由器、掛中介軟體</button>
+      </div>
+
+      <div class="quiz" data-question="為什麼重構後跑測試可以驗證行為不變？" data-correct="1" data-explain="測試直接打 API 端點，如果 URL 和行為都沒變，測試應該全部通過。">
+        <button class="opt">測試會自動更新成新的路由結構</button>
+        <button class="opt">測試直接打 API 端點，行為不變就應該通過</button>
+        <button class="opt">測試會檢查程式碼結構是否正確</button>
+        <button class="opt">測試會自動修正路由路徑</button>
+      </div>
+
+      <div class="quiz" data-question="FastAPI 官方文件的「Bigger Applications」教學主要講解什麼？" data-correct="2" data-explain="這篇教學專門講解多檔案專案結構與 APIRouter 的使用方式。">
+        <button class="opt">如何部署 FastAPI 到正式環境</button>
+        <button class="opt">如何寫 FastAPI 的單元測試</button>
+        <button class="opt">多檔案專案結構與 APIRouter 的使用方式</button>
+        <button class="opt">如何整合 FastAPI 與資料庫</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <a href="./create-router.html" class="prev">← 上一步：建立 routers 套件與移動端點</a>
+      <span></span>
+    </div>
+  </main>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,74 @@
+---
+id: sqlite-test-db
+title: 用記憶體 SQLite 建立隔離測試資料庫
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_47.md]]"
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+<LearningGoal>
+掌握如何在 pytest fixture 中建立記憶體 SQLite 資料庫，並用 override_dependency 替換生產 session，讓每個測試跑在隔離環境裡。
+</LearningGoal>
+
+## Lesson
+
+測試需要速度。跑一次完整測試套件如果等 30 秒，開發者就不會頻繁跑；如果 0.5 秒就跑完，開發者每次存檔都會跑。SQLite 跑在記憶體裡，不需要網路協定、不需要背景程序、不需要磁碟 I/O，啟動一個全新資料庫只要幾毫秒。
+
+但這不是免費的。SQLite 和 Postgres 是兩個不同的資料庫引擎，語意並不完全相容。Postgres 原生的 enum 型別、部分 CHECK constraint、以及某些進階 SQL 語法，SQLite 要嘛不支援、要不行為略有不同。所以 SQLite 測試跑過全部綠燈，不代表 Postgres 上一定正常。這是一個取捨：日常開發用 SQLite 跑快速回饋，正式上線前用 Postgres 跑一次整合測試確認。
+
+FastAPI 的依賴注入系統提供了一個關鍵方法：`app.dependency_overrides`。它能讓你在測試時把某個依賴的「真實實作」替換成「測試版實作」，路由完全不需要知道差異。
+
+我們的應用在 `database.py` 裡定義了 `get_session`，生產環境會連線到 Postgres：
+
+```python
+# database.py
+from sqlmodel import Session, create_engine
+
+engine = create_engine("postgresql://...")
+
+def get_session():
+    with Session(engine) as session:
+        yield session
+```
+
+測試時，我們要把它換成指向記憶體 SQLite 的版本：
+
+```python
+# conftest.py
+import pytest
+from sqlmodel import Session, SQLModel, create_engine
+from fastapi.testclient import TestClient
+
+from app.main import app
+from app.database import get_session
+
+@pytest.fixture(name="session")
+def session_fixture():
+    engine = create_engine("sqlite:///:memory:")
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        yield session
+
+@pytest.fixture(name="client")
+def client_fixture(session: Session):
+    def override_get_session():
+        yield session
+
+    app.dependency_overrides[get_session] = override_get_session
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+```
+
+這段程式碼做了四件事：建立一個記憶體 SQLite 引擎；用 `create_all` 建立所有表格結構；用 `dependency_overrides` 把 `get_session` 換成測試版本；測試結束後清空覆蓋，讓其他測試不受影響。每個拿到 `client` fixture 的測試，都擁有一個全新的、隔離的 SQLite 資料庫。測試跑完，記憶體釋放，資料庫跟著消失。
+
+`session` fixture 負責建立資料庫連線與表格。`client` fixture 則基於 `session`，把它注入 FastAPI 的依賴系統，並建立 `TestClient`。兩個 fixture 分開的原因：有些測試需要直接操作資料庫（驗證 CRUD 結果），不需要經過 HTTP；有些測試要走完整 HTTP 管線（驗證路由、狀態碼、回應格式），才需要 `client`。
+
+`TestClient` 底層直接用 `httpx` 對 FastAPI app 發送請求，不需要啟動真正的 HTTP 伺服器、不需要開 port、不需要網路。請求直接進入 ASGI 管線，經過 middleware、路由、依賴注入、例外處理，最後產生回應。這讓測試在毫秒級完成，同時又驗證了完整的請求處理流程。
+
+## Course
+
+[↗ 課程頁面](../../lessons/sqlite-test-db.html)
+
+## Sources

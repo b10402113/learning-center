@@ -1,0 +1,86 @@
+---
+id: fixture-chain
+title: 靜態連線池與 fixture 鏈
+subject: pro-python
+sources:
+  - "[[sources/pro-python/completed/20260903_47.md]]"
+created: 2026-09-04
+updated: 2026-09-04
+---
+
+<LearningGoal>
+理解靜態連線池如何避免重複建立連線，以及 fixture 鏈如何自動填充測試資料，讓每個測試不需要手動建資料。
+</LearningGoal>
+
+## Lesson
+
+上一課說記憶體 SQLite 很快，但這有一個但書：`:memory:` 資料庫在連線關閉就消失了。預設情況下，SQLAlchemy 每個 `Session` 就是一個獨立連線。如果你在 fixture 裡建了一個 engine，然後每次開啟新 Session 都重新建立表格，測試速度會掉下來。更糟的是，SQLModel/SQLAlchemy 的 engine 預設用「連線池（connection pool）」管理連線，但 `:memory:` 資料庫的連線池行為特殊——預設池會讓不同 Session 看到不同的資料庫。
+
+解法是用**靜態池（StaticPool）**：一個池只持有單一連線，所有 Session 都共用這條連線，資料才能跨 Session 存在。
+
+```python
+# conftest.py
+from sqlalchemy.pool import StaticPool
+
+engine = create_engine(
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+```
+
+`check_same_thread: False` 是為了讓不同執行緒可以共用這條連線（FastAPI 內部會跑在不同 thread）。`StaticPool` 保證所有 Session 都是同一條連線，表格建好後不會消失。
+
+光有空的測試資料庫還不夠。大多數測試需要一些預設資料：一個專案、幾個 Task、一個使用者。每個測試都手動 INSERT 這些資料，會讓測試本體淹沒在建資料的噪音裡。fixture 鏈（fixture chain）把「建立資料」也抽象成 fixture，測試只關心它需要的資料層級。
+
+```python
+# conftest.py
+from sqlmodel import insert
+
+@pytest.fixture(name="projects")
+def projects_fixture(session: Session):
+    project_1 = Project(id=1, name="Project Alpha", description="...")
+    project_2 = Project(id=2, name="Project Beta", description="...")
+    session.add(project_1)
+    session.add(project_2)
+    session.commit()
+    return [project_1, project_2]
+
+@pytest.fixture(name="tasks")
+def tasks_fixture(session: Session, projects: list[Project]):
+    task_1 = Task(id=1, title="Task One", project_id=projects[0].id)
+    task_2 = Task(id=2, title="Task Two", project_id=projects[0].id)
+    task_3 = Task(id=3, title="Task Three", project_id=projects[1].id)
+    session.add(task_1)
+    session.add(task_2)
+    session.add(task_3)
+    session.commit()
+    return [task_1, task_2, task_3]
+```
+
+這裡的依賴關係是：`tasks` 依賴 `projects`，`projects` 依賴 `session`。pytest 在跑一個需要 `tasks` 的測試時，會先跑 `session` fixture，再跑 `projects`，最後跑 `tasks`。每個 fixture 跑完之後都 commit 進資料庫，下一層的 fixture 就能查到前一層建立的資料。
+
+測試直接宣告它需要的層級：
+
+```python
+def test_list_tasks_for_project(client: TestClient, projects: list[Project], tasks: list[Task]):
+    response = client.get(f"/projects/{projects[0].id}/tasks")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2  # 這個 project 有兩個 task
+
+def test_get_project_not_found(client: TestClient, projects: list[Project]):
+    # 這個測試只拿到 projects，不會觸發 tasks fixture
+    response = client.get("/projects/999")
+    assert response.status_code == 404
+```
+
+這種「宣告式資料依賴」讓測試意圖一目了然。看測試函式的參數，就知道它需要什麼資料環境，不需要去翻 INSERT 語法。
+
+你可能會問：fixture 跑完之後，資料要清除嗎？答案是「不需要手動清除」。因為每個測試都拿到一個全新的 `session` fixture（來自全新的記憶體 SQLite），測試結束整個資料庫就消失了。資料不需要 rollback，不需要 TRUNCATE，不需要清理。只有在極少數跨 fixture 共用的情境下，才需要考慮 commit/rollback 的邊界。以這節課的 fixture 設計來說，fixture 裡面 commit 是為了讓後續 fixture 可以查到前一層建立的資料；測試本身如果也做了修改，跑完就跟著資料庫一起銷毀，不需要特別處理。
+
+## Course
+
+[↗ 課程頁面](../../lessons/fixture-chain.html)
+
+## Sources

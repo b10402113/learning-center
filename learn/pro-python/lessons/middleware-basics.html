@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Middleware 基礎與執行順序</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <main>
+    <h1>Middleware 基礎與執行順序</h1>
+    <p class="subtitle">請求進來、回應出去之間，程式碼怎麼攔截每一條路徑</p>
+
+    <section>
+      <h2>Middleware 是什麼？</h2>
+      <p>Middleware（中介層）是一段在「每個請求進來之前」和「每個回應出去之前」都會執行的程式碼。它像一個檢查站，站進去之前能改請求、站出來之後能改回應。</p>
+      <p>在 FastAPI 裡，你不用自己刻一個框架，只要用 <code>@app.middleware("http")</code> 裝飾一個 async 函式，FastAPI 就會在每個 HTTP 請求通過時呼叫它。</p>
+    </section>
+
+    <section>
+      <h2>最簡 Middleware 骨架</h2>
+      <pre><code>@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    # 這裡是 pre-route 工作（端點執行前）
+    response = await call_next(request)
+    # 這裡是 post-route 工作（端點執行後）
+    return response</code></pre>
+      <p><code>call_next</code> 是 middleware 的核心：呼叫它會把請求往下傳給路由端點（或下一個 middleware），等端點跑完再回傳 <code>response</code>。這讓你在「端點之前」和「端點之後」都能插入自訂邏輯。</p>
+    </section>
+
+    <section>
+      <h2>Pre-route vs Post-route</h2>
+      <table>
+        <thead>
+          <tr><th>位置</th><th>可以做什麼</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>call_next(request)</code> 之前</td><td>記錄請求開始時間、驗證 token、修改請求標頭</td></tr>
+          <tr><td><code>call_next(request)</code> 之後</td><td>記錄回應時間、加上自訂標頭、修改回應內容</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>多個 Middleware 的執行順序</h2>
+      <p>一個 FastAPI app 可以註冊多個 middleware，它們會像俄羅斯娃娃一樣層層包覆。重點是：<strong>註冊順序和執行順序相反</strong>。</p>
+      <pre><code>app.add_middleware(LastMiddleware)
+app.add_middleware(MiddleMiddleware)
+app.add_middleware(FirstMiddleware)</code></pre>
+      <p>請求進來時的執行順序（由外到內）：</p>
+      <ol>
+        <li><code>LastMiddleware</code>（最先接觸請求）</li>
+        <li><code>MiddleMiddleware</code></li>
+        <li><code>FirstMiddleware</code></li>
+        <li>路由端點（route handler）</li>
+      </ol>
+      <p>回應出去時的順序則反過來（由內到外）：</p>
+      <ol>
+        <li>路由端點回傳</li>
+        <li><code>FirstMiddleware</code></li>
+        <li><code>MiddleMiddleware</code></li>
+        <li><code>LastMiddleware</code>（最後接觸回應）</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>為什麼順序重要？</h2>
+      <p>如果 middleware A 負責「驗證使用者身分」、middleware B 負責「記錄請求時間」，你會希望 B 在 A 的外層，這樣即使驗證失敗，時間還是會被記錄。搞錯順序會讓某些請求跳過驗證，或記錄不到完整資訊。</p>
+    </section>
+
+    <div class="quiz" data-question="middleware 的 call_next(request) 會做什麼？" data-correct="0" data-explain="call_next 把請求往下傳給路由端點，等端點跑完再回傳 response。">
+      <button class="opt">把請求傳給路由端點，回傳 response</button>
+      <button class="opt">直接回傳 404 回應</button>
+      <button class="opt">終止請求並拋出例外</button>
+      <button class="opt">重新導向到其他網址</button>
+    </div>
+
+    <div class="quiz" data-question="pre-route 工作應該放在哪個位置？" data-correct="1" data-explain="pre-route 在 call_next 之前執行，能處理請求和驗證。">
+      <button class="opt">call_next(request) 之後</button>
+      <button class="opt">call_next(request) 之前</button>
+      <button class="opt">return response 之後</button>
+      <button class="opt">@app.middleware 裝飾器內部</button>
+    </div>
+
+    <div class="quiz" data-question="多個 middleware 的請求執行順序是？" data-correct="2" data-explain="最後一個註冊的 middleware 最先接觸請求，第一個註冊的最後接觸請求。">
+      <button class="opt">跟註冊順序相同</button>
+      <button class="opt">隨機決定</button>
+      <button class="opt">跟註冊順序相反</button>
+      <button class="opt">只有一個會執行</button>
+    </div>
+
+    <div class="quiz" data-question="為什麼要把「記錄請求」放在驗證 middleware 的外層？" data-correct="0" data-explain="放外層才能記錄到所有請求，包含驗證失敗的那些。">
+      <button class="opt">這樣驗證失敗的請求也會被記錄</button>
+      <button class="opt">這樣驗證速度會更快</button>
+      <button class="opt">這樣記錄格式會更漂亮</button>
+      <button class="opt">這樣驗證會自動通過</button>
+    </div>
+
+    <div class="quiz" data-question="post-route 工作可以修改什麼？" data-correct="1" data-explain="post-route 在 call_next 之後，能修改回應標頭或內容。">
+      <button class="opt">請求的 URL 參數</button>
+      <button class="opt">回應的標頭和內容</button>
+      <button class="opt">資料庫連線設定</button>
+      <button class="opt">路由表本身</button>
+    </div>
+
+    <div class="lesson-nav">
+      <span></span>
+      <a href="./request-timing-middleware.html" class="next">下一步：請求計時 middleware →</a>
+    </div>
+  </main>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>使用 pwdlib 與 Argon2id</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 21 — Step 3/4 · Password hashing</p>
+  <h1>使用 pwdlib 與 Argon2id</h1>
+
+  <h2>學習目標</h2>
+  <p>能在 Python 專案中安裝 <code>pwdlib[argon2]</code>，並使用 Argon2Hasher 的 <code>hash()</code> 與 <code>verify()</code> 方法進行密碼雜湊與驗證。</p>
+
+  <h2>安裝 pwdlib</h2>
+  <p>Python 社群目前推薦的密碼雜湊方案是 <code>pwdlib</code>——一個現代、持續維護、API 簡潔的密碼雜湊庫，原生支援 Argon2id。把 Argon2 演算法拆成額外的依賴，所以裝的時候要指定 <code>[argon2]</code>：</p>
+
+  <pre><code>uv add "pwdlib[argon2]"</code></pre>
+
+  <h2>Argon2Hasher 的核心 API</h2>
+  <p><code>Argon2Hasher</code> 封裝了 Argon2id 演算法的所有參數設定，你不需要自己去記記憶體消耗、迭代次數、平行度這些數值——預設值就已經是 OWASP 建議的安全下限。</p>
+
+  <pre><code>from pwdlib import Argon2Hasher
+
+hasher = Argon2Hasher()</code></pre>
+
+  <h2>雜湊：hash()</h2>
+  <p>把明文密碼丟進 <code>hash()</code>，回傳的是一個完整字串，裡面包含了演算法識別碼、參數、鹽值、雜湊值，全部打包在一起。你只需要把這一整個字串存進資料庫就行。</p>
+
+  <pre><code># 註冊時：把密碼轉成雜湊值
+hashed = hasher.hash("mypassword123")
+# 結果長這樣：$argon2id$v=19$m=65536,t=3,p$4$salt$hash
+
+# 把 hashed 存進資料庫的 password 欄位</code></pre>
+
+  <h2>驗證：verify()</h2>
+  <p>登入時從資料庫拿出之前存的雜湊值，跟使用者輸入的密碼一起丟進 <code>verify()</code>。它會拿雜湊字串裡記錄的鹽值和參數，對輸入密碼做一次相同計算，然後比對結果。</p>
+
+  <pre><code># 登入時：驗證密碼是否正確
+is_valid = hasher.verify("mypassword123", hashed)
+# 如果密碼正確，is_valid 是 True；錯誤則是 False</code></pre>
+
+  <h2>為什麼每次 hash() 結果都不同？</h2>
+  <p>很多人會問：<code>hash()</code> 每次回傳的雜湊值都一樣嗎？答案是「不一樣」。因為 <code>hash()</code> 每次都會產生新的隨機鹽值，所以同樣密碼連續雜湊兩次，結果會不同。但 <code>verify()</code> 仍然能正確比對，因為鹽值就內嵌在雜湊字串裡。</p>
+
+  <pre><code>hasher.hash("mypassword123")  # 第一次
+hasher.hash("mypassword123")  # 第二次，結果不同
+
+# 但兩個都能用 verify() 驗證成功
+hasher.verify("mypassword123", hash1)  # True
+hasher.verify("mypassword123", hash2)  # True</code></pre>
+
+  <h2>實作建議：共用一個 hasher 實例</h2>
+  <p>不要把 <code>Argon2Hasher</code> 的實例當成區域變數在每次請求時建立。常見做法是在模組頂端建立一個全域實例，整個應用程式共用：</p>
+
+  <pre><code># security.py
+from pwdlib import Argon2Hasher
+
+hasher = Argon2Hasher()</code></pre>
+
+  <div class="lesson-nav">
+    <a href="hashing-basics.html">← 上一步：雜湊與加鹽如何運作？</a>
+    <a href="register-verify-flow.html">下一步：註冊與登入的實作 →</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="安裝 pwdlib 的 Argon2 支援時，正確的指令是什麼？" data-correct="1" data-explain="Argon2 是額外依賴，要寫成 uv add \"pwdlib[argon2]\"。">
+    <button class="opt">uv add pwdlib</button>
+    <button class="opt">uv add "pwdlib[argon2]"</button>
+    <button class="opt">uv add argon2</button>
+    <button class="opt">uv add pwdlib-argon2</button>
+  </div>
+
+  <div class="quiz" data-question="hash() 回傳的雜湊字串裡包含了什麼？" data-correct="2" data-explain="hash() 回傳的完整字串包含了演算法識別碼、參數、鹽值、雜湊值，全部打包在一起。">
+    <button class="opt">只有雜湊值</button>
+    <button class="opt">只有鹽值和雜湊值</button>
+    <button class="opt">演算法識別碼、參數、鹽值、雜湊值</button>
+    <button class="opt">只有密碼</button>
+  </div>
+
+  <div class="quiz" data-question="verify() 如何比對密碼？" data-correct="0" data-explain="verify() 會先解析雜湊字串裡面的參數和鹽值，然後用完全相同的設定去跑輸入密碼，再比對結果。">
+    <button class="opt">用雜湊字串裡記錄的鹽值和參數，對輸入密碼做相同計算後比對</button>
+    <button class="opt">直接拿輸入密碼重新雜湊一次再比對</button>
+    <button class="opt">把雜湊值解密後比對</button>
+    <button class="opt">把輸入密碼加密後比對</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼 hash() 每次回傳的結果都不同？" data-correct="3" data-explain="因為 hash() 每次都會產生新的隨機鹽值，所以同樣密碼連續雜湊兩次，結果會不同。">
+    <button class="opt">因為 Argon2id 有 bug</button>
+    <button class="opt">因為密碼每次都不一樣</button>
+    <button class="opt">因為資料庫每次都不一樣</button>
+    <button class="opt">因為 hash() 每次都會產生新的隨機鹽值</button>
+  </div>
+
+  <div class="quiz" data-question="Argon2Hasher 實例應該如何管理？" data-correct="1" data-explain="在模組頂端建立一個全域實例，整個應用程式共用，不需要在每個端點都建立一次。">
+    <button class="opt">在每個端點裡建立一個新的實例</button>
+    <button class="opt">在模組頂端建立一個全域實例，整個應用程式共用</button>
+    <button class="opt">在每個請求裡建立一個新的實例</button>
+    <button class="opt">在資料庫裡建立一個實例</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 21: Password hashing · Step 3</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

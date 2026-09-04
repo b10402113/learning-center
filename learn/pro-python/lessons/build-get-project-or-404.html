@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>實作 get_project_or_404 依賴函式</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <header>
+    <h1>實作 get_project_or_404 依賴函式</h1>
+    <p class="subtitle">DRY dependencies with ProjectDep · Step 2/4</p>
+  </header>
+
+  <main>
+    <section class="learning-goal">
+      <h2>Learning Goal</h2>
+      <p>能寫出 `get_project_or_404` 依賴函式，讓查詢與 404 判斷集中在一處。</p>
+    </section>
+
+    <section class="lesson">
+      <h2>Lesson</h2>
+
+      <p>上一課我們看到了三個路由各自重複的 404 判斷。現在來把那段邏輯搬到一個獨立的函式裡。</p>
+
+      <pre><code># dependencies.py
+from fastapi import Depends, HTTPException
+from sqlmodel import Session
+
+def get_project_or_404(project_id: int, session: SessionDep) -> Project:
+    project = crud.get_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project</code></pre>
+
+      <p>這個函式做了三件事：</p>
+
+      <ol>
+        <li>接收 <code>project_id</code> 和 <code>session</code> 兩個參數。</li>
+        <li>用 <code>crud.get_project()</code> 查詢資料庫。</li>
+        <li>找不到就丟 <code>HTTPException(404)</code>，找到了就回傳 <code>Project</code>。</li>
+      </ol>
+
+      <p>FastAPI 在呼叫這個函式時，會從路由的參數裡自動解出 <code>project_id</code>（路徑參數），並從依賴注入系統解出 <code>session</code>（你在 node 15 定義的 <code>SessionDep</code>）。這種「依賴依賴另一個依賴」的連鎖，就是 FastAPI 依賴注入最有力的地方。</p>
+
+      <p>把這段邏輯集中到一個函式之後，你要修改錯誤訊息、更換查詢條件、甚至加上權限檢查，都只需要改一個地方。每個路由再也不需要自己處理 404，它們只管接收一個確定存在的 <code>Project</code> 物件。</p>
+
+      <p>下一課會教你如何把這個函式包裝成一個 <code>Annotated</code> 型別別名，讓路由簽章變得更乾淨。</p>
+    </section>
+
+    <div class="lesson-nav">
+      <a href="./spot-the-pattern.html">← 上一步：找出重複的 lookup-or-404 模式</a>
+      <a href="./annotated-type-alias.html">下一步：用 Annotated 建立可複用的型別別名 →</a>
+    </div>
+
+    <section class="quiz-section">
+      <h2>Quiz</h2>
+
+      <div class="quiz" data-question="get_project_or_404 函式裡，找不到 Project 時應該回傳什麼？" data-correct="1" data-explain="找不到實體時應拋出 404，而不是回傳 None 或空字串。">
+        <button class="opt">回傳 None</button>
+        <button class="opt">拋出 HTTPException(status_code=404)</button>
+        <button class="opt">回傳空字串</button>
+        <button class="opt">重新查詢一次</button>
+      </div>
+
+      <div class="quiz" data-question="FastAPI 怎麼知道要把路由的 project_id 參數傳進 get_project_or_404？" data-correct="3" data-explain="FastAPI 會對照函式參數名稱與路由中的參數名稱來注入。">
+        <button class="opt">用 @app.inject 裝飾器</button>
+        <button class="opt">用特殊的 ProjectId 型別</button>
+        <button class="opt">用 session.get() 自動綁定</button>
+        <button class="opt">透過參數名稱自動匹配（project_id 對應）</button>
+      </div>
+
+      <div class="quiz" data-question="為什麼把 404 邏輯集中到一個函式比在各路由裡重複寫好？" data-correct="2" data-explain="集中邏輯後，修改錯誤訊息或條件只需改一個地方。">
+        <button class="opt">能減少資料庫連線數</button>
+        <button class="opt">能讓查詢自動被索引</button>
+        <button class="opt">修改錯誤訊息或邏輯時只需改一個地方</button>
+        <button class="opt">能讓路由自動變成 async</button>
+      </div>
+
+      <div class="quiz" data-question="get_project_or_404 的 session 參數依賴於哪個前面定義的依賴？" data-correct="0" data-explain="session 來自前面定義的 SessionDep。">
+        <button class="opt">SessionDep</button>
+        <button class="opt">ProjectDep</button>
+        <button class="opt">CrudDep</button>
+        <button class="opt">EngineDep</button>
+      </div>
+
+      <div class="quiz" data-question="crud.get_project(session, project_id) 的第二個參數是什麼？" data-correct="1" data-explain="第二個參數是主鍵 ID。">
+        <button class="opt">session</button>
+        <button class="opt">project_id</button>
+        <button class="opt">Project model</button>
+        <button class="opt">detail 字串</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>當唯一約束被違反時會發生什麼？</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <header>
+    <h1>當唯一約束被違反時會發生什麼？</h1>
+    <p class="subtitle">Centralized exception handling · Step 1</p>
+  </header>
+
+  <main>
+    <section class="goal">
+      <h2>學習目標</h2>
+      <p>理解當資料庫的唯一約束被違反時，SQLAlchemy 如何拋出 IntegrityError，以及 FastAPI 預設如何將它變成 500 Internal Server Error。</p>
+    </section>
+
+    <section>
+      <h2>從使用者按下送出開始</h2>
+      <p>假設你的 API 允許建立專案，而 <code>name</code> 欄位有唯一約束（unique constraint）——不允許兩個同名專案。當使用者送出一個已經存在的名稱時，資料庫會拒絕這筆寫入，因為違反了約束。</p>
+    </section>
+
+    <section>
+      <h2>SQLAlchemy 的反應：拋出 IntegrityError</h2>
+      <p>當底層資料庫回傳約束違反錯誤時，SQLAlchemy 會把它包裝成一個 <code>IntegrityError</code>（IntegrityError，完整性錯誤）。這個例外的名字來自資料庫術語：資料完整性（data integrity）被破壞了——現有的規則被違反了。</p>
+      <div class="note">
+        <p><code>IntegrityError</code> 是 SQLAlchemy 的例外，不是 FastAPI 的。它可能來自唯一約束違反、外鍵約束違反、或者 NOT NULL 欄位收到 None 等情境。</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>FastAPI 的預設回應：500 Internal Server Error</h2>
+      <p>如果你沒有特別處理 <code>IntegrityError</code>，它會一路往上傳播（propagate），FastAPI 最終把它變成 HTTP 500 Internal Server Error。對呼叫端來說，500 代表「伺服器內部出了某種問題」——但它完全沒有說明 <em>什麼</em> 出了問題。</p>
+      <p>這會導致兩種困擾：</p>
+      <ul>
+        <li>開發者除錯時不知道是資料衝突還是真正的伺服器臭蟲。</li>
+        <li>呼叫端無法區分「名稱已經存在」跟「伺服器壞掉了」，所以無法給使用者正確的提示。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>問題的根源：例外沒有被處理</h2>
+      <p>在每個路由裡面寫 <code>try/except IntegrityError</code> 當然可行，但這会产生嚴重的重複——每個寫入路由都要複製一段相同的錯誤處理邏輯。只要漏改一個地方，又會回到 500。</p>
+      <p>更好的方式是在一個地方統一攔截：FastAPI 的<strong>集中式例外處理器</strong>（centralized exception handler）。</p>
+    </section>
+
+    <section class="summary">
+      <h2>總結</h2>
+      <p>資料庫約束違反 → SQLAlchemy 拋出 <code>IntegrityError</code> → FastAPI 預設回應 500。我們要做的，是在一個統一的位置把這個例外轉換成對呼叫端有意義的狀態碼。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+      <div class="quiz" data-question="當資料庫的唯一約束被違反時，SQLAlchemy 會拋出什麼例外？" data-correct="1" data-explain="SQLAlchemy 把約束違反包裝成 IntegrityError。">
+        <button class="opt">ValidationError</button>
+        <button class="opt">IntegrityError</button>
+        <button class="opt">ConstraintError</button>
+        <button class="opt">DatabaseError</button>
+      </div>
+      <div class="quiz" data-question="如果沒有特別處理 IntegrityError，FastAPI 預設會回應哪個狀態碼？" data-correct="2" data-explain="未處理的例外會變成 500 Internal Server Error。">
+        <button class="opt">400 Bad Request</button>
+        <button class="opt">409 Conflict</button>
+        <button class="opt">500 Internal Server Error</button>
+        <button class="opt">503 Service Unavailable</button>
+      </div>
+      <div class="quiz" data-question="為什麼在每个路由裡面寫 try/except IntegrityError 不是最佳做法？" data-correct="0" data-explain="重複的 try/except 容易漏改，且違反 DRY 原則。">
+        <button class="opt">會產生大量重複的錯誤處理邏輯，容易漏改</button>
+        <button class="opt">FastAPI 不支援在路由裡面使用 try/except</button>
+        <button class="opt">IntegrityError 只能在模組頂層被捕捉</button>
+        <button class="opt">try/except 會讓請求變慢</button>
+      </div>
+      <div class="quiz" data-question="IntegrityError 可能由以下哪種情況觸發？" data-correct="3" data-explain="唯一約束、外鍵約束、NOT NULL 違反都會觸發 IntegrityError。">
+        <button class="opt">只有唯一約束違反</button>
+        <button class="opt">只有外鍵約束違反</button>
+        <button class="opt">只有 NOT NULL 欄位收到 None</button>
+        <button class="opt">以上所有情況都可能</button>
+      </div>
+      <div class="quiz" data-question="對 API 呼叫端來說，500 狀態碼代表什麼？" data-correct="1" data-explain="500 代表伺服器內部錯誤，呼叫端無法判斷具體原因。">
+        <button class="opt">請求格式錯誤</button>
+        <button class="opt">伺服器內部出了某種問題</button>
+        <button class="opt">資源不存在</button>
+        <button class="opt">資料衝突</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="lesson-nav">
+    <span></span>
+    <a href="./centralized-handler.html" class="next">下一步：用集中式例外處理器攔截 IntegrityError →</a>
+  </div>
+
+  <footer>
+    <p>有問題？隨時向你的老師提問。</p>
+  </footer>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

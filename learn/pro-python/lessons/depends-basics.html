@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Depends() 如何運作？</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 15 — Step 2/4 · Dependency injection with Annotated</p>
+  <h1>Depends() 如何運作？</h1>
+
+  <h2>學習目標</h2>
+  <p>理解 FastAPI 的 Depends() 機制：它在路由函式執行前呼叫指定函式，把回傳值注入參數，並自動管理 session 的開啟、提交與關閉。</p>
+
+  <h2>Depends() 的基本原理</h2>
+  <p>Depends() 是 FastAPI 依賴注入的核心機制。它的運作方式很直白：你在端點函式的參數列寫 <code>Depends(some_function)</code>，FastAPI 就會在執行端點之前先呼叫 <code>some_function()</code>，把回傳值塞進那個參數。</p>
+
+  <p>這個機制為什麼重要？因為它把「準備工作」從端點裡面搬走了。以前你要自己寫 <code>session = Session(engine)</code>，現在你寫 <code>session: Session = Depends(get_session)</code>，FastAPI 會幫你呼叫 <code>get_session</code>，拿到 session 之後再執行端點。</p>
+
+  <h2>用 yield 管理生命週期</h2>
+  <p><code>get_session</code> 通常是一個產生器（generator）。它建立 session、yield 給端點使用、然後在請求結束後關閉 session。FastAPI 知道怎麼處理 yield：它會拿到 yield 的值注入端點，等端點執行完畢，再回到產生器執行 yield 之後的清理程式碼。</p>
+
+  <pre><code>def get_session():
+    with Session(engine) as session:
+        yield session
+    # 端點跑完之後，session 會在 with 區塊結束時自動 close</code></pre>
+
+  <p>這等於是把 try/finally 樣板交給框架。端點裡面不會出現 <code>session.close()</code>，因為 <code>get_session</code> 裡面的 <code>with</code> 區塊已經保證會清理。</p>
+
+  <h2>在路由裡注入</h2>
+  <p>在路由參數列用 <code>Depends(get_session)</code> 宣告需求：</p>
+
+  <pre><code>from fastapi import Depends, FastAPI
+
+app = FastAPI()
+
+@app.get("/projects")
+def list_projects(session: Session = Depends(get_session)):
+    # session 已經準備好了，直接用
+    ...</code></pre>
+
+  <p>FastAPI 看到 <code>Depends(get_session)</code>，在呼叫路由前執行 <code>get_session()</code>，拿到 <code>yield</code> 出來的 session，塞進參數。路由執行完畢後，FastAPI 回到產生器繼續執行——也就是 <code>yield</code> 之後的程式碼，session 自動關閉。</p>
+
+  <h2>巢狀依賴</h2>
+  <p>Depends() 的第二個重點是：它可以巢狀。一個依賴可以引用另一個依賴，FastAPI 會按照正確的順序解析。比如 <code>get_project_or_404</code> 需要 session，它就在自己的參數列寫 <code>session: Session = Depends(get_session)</code>，FastAPI 就會先拿到 session，再把它傳進 <code>get_project_or_404</code>。</p>
+
+  <p>這種巢狀能力讓你可以把複雜的驗證邏輯拆成好幾層小依賴，每一層只做一件事。端點最後拿到的是所有依賴都處理好的結果，不需要知道中間經過了哪些步驟。</p>
+
+  <div class="lesson-nav">
+    <a href="why-di.html">← 上一步：為什麼需要依賴注入？</a>
+    <a href="annotated-syntax.html">下一步：Annotated 語法與型別組合 →</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="Depends() 的運作方式是什麼？" data-correct="1" data-explain="Depends() 在路由執行前呼叫指定函式，把回傳值注入參數。">
+    <button class="opt">在路由執行後呼叫指定函式</button>
+    <button class="opt">在路由執行前呼叫指定函式，把回傳值注入參數</button>
+    <button class="opt">在路由執行中呼叫指定函式</button>
+    <button class="opt">在路由執行後把回傳值注入參數</button>
+  </div>
+
+  <div class="quiz" data-question="get_session 為什麼用 yield 而不是 return？" data-correct="2" data-explain="yield 讓 FastAPI 在路由結束後能回到函式繼續執行清理程式碼，return 做不到。">
+    <button class="opt">yield 比 return 快</button>
+    <button class="opt">yield 可以回傳多個值</button>
+    <button class="opt">yield 讓 FastAPI 能在路由執行後繼續做清理（teardown）</button>
+    <button class="opt">yield 是 Python 的規定</button>
+  </div>
+
+  <div class="quiz" data-question="一個 session 的生命週期是多久？" data-correct="0" data-explain="每個請求拿到自己的 session，請求結束就關閉，不跨請求共享。">
+    <button class="opt">一次請求</button>
+    <button class="opt">應用程式整個生命週期</button>
+    <button class="opt">十分鐘</button>
+    <button class="opt">直到手動關閉</button>
+  </div>
+
+  <div class="quiz" data-question="Depends(get_session) 中的 get_session 是什麼？" data-correct="3" data-explain="get_session 是一個依賴工廠函式，FastAPI 會呼叫它來取得依賴的值。">
+    <button class="opt">一個 session 物件</button>
+    <button class="opt">一個資料庫連線</button>
+    <button class="opt">一個路由函式</button>
+    <button class="opt">一個依賴工廠函式</button>
+  </div>
+
+  <div class="quiz" data-question="爲什麼 Depends() 可以巢狀？" data-correct="1" data-explain="一個依賴可以引用另一個依賴，FastAPI 會按照正確的順序解析，先拿到內層依賴再傳給外層。">
+    <button class="opt">因為 Python 支援函式巢狀</button>
+    <button class="opt">因為一個依賴可以引用另一個依賴，FastAPI 會按照正確的順序解析</button>
+    <button class="opt">因為 FastAPI 會自動平行處理所有依賴</button>
+    <button class="opt">因為 Depends() 只能用在最外層</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 15: Dependency injection with Annotated · Step 2</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

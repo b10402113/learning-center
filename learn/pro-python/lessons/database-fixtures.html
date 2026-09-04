@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Database fixtures with pytest</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Database fixtures with pytest</h1>
+<p class="meta">學習目標：Use in-memory SQLite and fixture chains for isolated, repeatable testing</p>
+
+<h2>Why this step matters</h2>
+<p>之前的測試都只驗證 Pydantic 模型或工具函式，沒碰到資料庫。Task API 有真實的資料庫操作，測試必須在隔離的環境裡跑，才不會污染彼此的狀態。這一節教你用 pytest fixtures 自動建好測試資料庫，並在每次測試結束後自動清除。</p>
+
+<h2>In-memory SQLite</h2>
+<p>SQLite 的 in-memory 模式把整個資料庫放在 RAM 裡，速度快，測試跑完就消失，不留殘留。SQLModel 可以直接用 <code>sqlite:///:memory:</code> 連線字串建立。</p>
+<pre><code>engine = create_engine("sqlite:///:memory:")</code></pre>
+<p>但 SQLite 跟 Postgres 仍有差異：enum 型別、部分 constraint 行為不同。所以測試能過不代表正式環境一定沒問題，但涵蓋多數邏輯已經足夠。</p>
+
+<h2>Static pool pattern</h2>
+<p>In-memory SQLite 資料庫在連線關閉後資料就消失了。為了讓同一個 engine 的多條連線都能存取同一份資料，SQLModel 建議用 <code>StaticPool</code>：</p>
+<pre><code>from sqlalchemy.pool import StaticPool
+
+engine = create_engine(
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)</code></pre>
+<p>這樣所有連線都共享同一個 in-memory 資料庫。</p>
+
+<h2>Fixture chain</h2>
+<p>pytest fixtures 可以相依成鏈。先建 engine，再建 session，再在 session 裡塞 sample data。每個測試只拿到最後一層的 fixture，但底層會自動跑好。</p>
+<pre><code>@pytest.fixture
+def engine():
+    engine = create_engine("sqlite:///:memory:", ...)
+    SQLModel.metadata.create_all(engine)
+    yield engine
+    SQLModel.metadata.drop_all(engine)
+
+@pytest.fixture
+def session(engine):
+    with Session(engine) as session:
+        yield session
+
+@pytest.fixture
+def sample_data(session):
+    project = Project(name="Demo", slug="demo")
+    session.add(project)
+    session.commit()
+    task = Task(title="Task 1", project_id=project.id)
+    session.add(task)
+    session.commit()
+    return {"project": project, "task": task}</code></pre>
+<p>這樣每個測試都會拿到乾淨的 database、session、以及一份 sample data。</p>
+
+<h2>Why this isolation matters</h2>
+<p>測試隔離確保 A 測試新增的一筆 task 不會污染到 B 測試的查詢結果。如果每一輪測試都重新建資料庫，執行順序就不會影響結果，測試就是可重複的（repeatable）。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="In-memory SQLite 測試有什麼優點？" data-correct="1" data-explain="速度快，測試跑完不留殘留。">
+  <button class="opt">完全相容於 Postgres</button>
+  <button class="opt">速度快，不留殘留</button>
+  <button class="opt">可以跨測試共享資料</button>
+  <button class="opt">不需要 create_all</button>
+</div>
+
+<div class="quiz" data-question="StaticPool 的作用是？" data-correct="0" data-explain="讓所有連線共享同一個 in-memory 資料庫，關閉後資料不會消失。">
+  <button class="opt">讓所有連線共享同一個 in-memory 資料庫</button>
+  <button class="opt">加速查詢</button>
+  <button class="opt">自動建立索引</button>
+  <button class="opt">限制連線數量</button>
+</div>
+
+<div class="quiz" data-question="pytest fixture chain 的設計精神是？" data-correct="2" data-explain="底層自動跑好，測試只拿到最後一層的 fixture。">
+  <button class="opt">每個測試自己建 engine</button>
+  <button class="opt">所有 fixture 必須手動呼叫</button>
+  <button class="opt">底層自動跑好，測試只拿到最後一層</button>
+  <button class="opt">fixture 之間不能相依</button>
+</div>
+
+<div class="quiz" data-question="SQLite 和 Postgres 的差異可能導致什麼問題？" data-correct="3" data-explain="enum 型別、constraint 行為不同，測試能過不代表正式環境一定沒問題。">
+  <button class="opt">SQLite 不能跑測試</button>
+  <button class="opt">SQLite 速度太慢</button>
+  <button class="opt">SQLite 不能建立關聯</button>
+  <button class="opt">enum 和 constraint 行為不同</button>
+</div>
+
+<div class="quiz" data-question="測試隔離（isolation）為什麼重要？" data-correct="0" data-explain="確保 A 測試新增的資料不會污染 B 測試。">
+  <button class="opt">確保 A 測試的資料不會污染 B 測試</button>
+  <button class="opt">讓測試跑得更快</button>
+  <button class="opt">讓測試可以跳著跑</button>
+  <button class="opt">讓測試可以共用變數</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./list-tasks-filters.html">← 上一步：List tasks with conditional filters</a>
+  <span></span>
+</div>
+
+<div class="footer">有問題？直接問你的 agent，它可以幫你釐清任何不清楚的地方。</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

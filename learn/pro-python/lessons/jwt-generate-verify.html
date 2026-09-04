@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>產生與驗證 JWT token</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 22 — Step 3/3 · JWT tokens</p>
+  <h1>產生與驗證 JWT token</h1>
+
+  <h2>學習目標</h2>
+  <p>能用 Python 套件產生 JWT、設定過期時間，並用伺服器端的密鑰驗證 token 是否合法。</p>
+
+  <h2>用 PyJWT 產生 token</h2>
+  <p>在 Python 上，最常見的 JWT 套件是 <strong>PyJWT</strong>。安裝：</p>
+
+  <pre><code>uv add pyjwt</code></pre>
+
+  <p>產生一個 token 只需要三件事：payload（要放的 claims）、secret key（伺服器密鑰）、演算法。</p>
+
+  <pre><code>import jwt
+from datetime import datetime, timedelta, timezone
+
+SECRET_KEY = "your-256-bit-secret"
+ALGORITHM = "HS256"
+
+payload = {
+    "sub": "alice",
+    "exp": datetime.now(timezone.utc) + timedelta(hours=24),
+}
+
+token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+print(token)
+# eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</code></pre>
+
+  <p><code>exp</code> 是 JWT 標準 claim，PyJWT 會自動把它轉成 Unix timestamp。一旦 token 過期，驗證就會失敗——你不需要自己寫過期檢查。</p>
+
+  <h2>驗證 token</h2>
+  <p>收到 token 後，用同一個 secret key 解碼：</p>
+
+  <pre><code>try:
+    decoded = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    print(decoded["sub"])  # alice
+except jwt.ExpiredSignatureError:
+    print("Token 已過期")
+except jwt.InvalidTokenError:
+    print("Token 無效")</code></pre>
+
+  <p><code>jwt.decode</code> 會自動驗證 Signature 和 <code>exp</code>。如果 token 被竄改、過期、或簽章不對，就會拋出例外。</p>
+
+  <h2>密鑰就是一切</h2>
+  <p>JWT 的安全性完全取決於 secret key。如果攻擊者拿到你的 key，他就能簽發任何 token、冒充任何人。所以：</p>
+
+  <ul>
+    <li>不要把 key 寫死在程式碼裡——用環境變數或 .env 管理</li>
+    <li>用足夠長的隨機字串（至少 256 位元）</li>
+    <li>如果 key 外洩，立刻輪換——但輪換會讓所有已發出的 token 失效</li>
+  </ul>
+
+  <blockquote>JWT 的「難以偽造」不是魔法，是數學：沒有 key 就無法產生對的雜湊。保護 key 就是保護整個認證系統。</blockquote>
+
+  <h2>在 FastAPI 裡的典型用法</h2>
+  <p>登入成功後，伺服器產生 token 並回傳給客戶端：</p>
+
+  <pre><code>@app.post("/login")
+def login(form: OAuth2PasswordRequestForm = Depends()):
+    user = authenticate(form.username, form.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="登入失敗")
+    token = jwt.encode(
+        {"sub": user.username, "exp": datetime.now(timezone.utc) + timedelta(hours=24)},
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+    return {"access_token": token, "token_type": "bearer"}</code></pre>
+
+  <p>之後客戶端在 <code>Authorization</code> 帶上 <code>Bearer &lt;token&gt;</code>，伺服器用 <code>jwt.decode</code> 驗證——不需要查 session 資料庫。</p>
+
+  <div class="lesson-nav">
+    <a href="jwt-structure.html">← 上一步：JWT 的結構：header、payload、signature</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="PyJWT 的 jwt.encode 需要哪些參數？" data-correct="0" data-explain="jwt.encode 需要 payload（claims）、secret key 和 algorithm 三個參數。">
+    <button class="opt">payload、secret key、algorithm</button>
+    <button class="opt">payload、header、signature</button>
+    <button class="opt">username、password、algorithm</button>
+    <button class="opt">token、secret key、algorithm</button>
+  </div>
+
+  <div class="quiz" data-question="JWT 的 exp claim 的作用是什麼？" data-correct="1" data-explain="exp 是過期時間，PyJWT 會自動驗證，過期的 token 無法通過 decode。">
+    <button class="opt">指定 token 的發行者</button>
+    <button class="opt">指定 token 的過期時間</button>
+    <button class="opt">指定 token 的主人</button>
+    <button class="opt">指定 token 的演算法</button>
+  </div>
+
+  <div class="quiz" data-question="如果 JWT 的 secret key 外洩，會發生什麼事？" data-correct="0" data-explain="攻擊者拿到 key 就能簽發任何 token、冒充任何人，整個認證系統就破了。">
+    <button class="opt">攻擊者可以簽發任何 token、冒充任何人</button>
+    <button class="opt">攻擊者可以解密所有 token</button>
+    <button class="opt">攻擊者可以刪除所有 token</button>
+    <button class="opt">攻擊者可以修改所有 token</button>
+  </div>
+
+  <div class="quiz" data-question="jwt.decode 驗證了哪些東西？" data-correct="2" data-explain="jwt.decode 會自動驗證 Signature（防竄改）和 exp（過期時間）。">
+    <button class="opt">只驗證 Signature</button>
+    <button class="opt">只驗證 exp</button>
+    <button class="opt">驗證 Signature 和 exp</button>
+    <button class="opt">驗證 Header 和 Payload</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼不該把 secret key 寫死在程式碼裡？" data-correct="3" data-explain="寫死的 key 容易隨程式碼外洩（例如放上 GitHub），應該用環境變數或 .env 管理。">
+    <button class="opt">因為 key 會過期</button>
+    <button class="opt">因為 key 會變長</button>
+    <button class="opt">因為 key 會變短</button>
+    <button class="opt">因為寫死的 key 容易隨程式碼外洩</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 22: JWT tokens · Step 3</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

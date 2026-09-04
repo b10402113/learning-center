@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>建立 routers 套件與移動端點 — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <main class="lesson">
+    <header class="lesson-header">
+      <h1>建立 routers 套件與移動端點</h1>
+      <p class="learning-goal">建立 routers 套件、實作 projects 路由器</p>
+    </header>
+
+    <section class="content">
+      <h2>建立 routers 套件</h2>
+      <p>第一步是在專案根目錄建立一個 <code>routers/</code> 資料夾，並加上 <code>__init__.py</code> 讓它變成 Python 套件。這一步看起來沒什麼作用，但它是後續所有匯入的基礎：</p>
+      <pre><code>routers/
+  __init__.py
+  projects.py</code></pre>
+
+      <h2>在 projects.py 定義路由器</h2>
+      <p>建立 <code>routers/projects.py</code>，並在檔案開頭建立 <code>APIRouter</code> 實例。這裡的 <code>prefix="/projects"</code> 表示底下所有端點都會掛在 <code>/projects</code> 路徑下；<code>tags=["projects"]</code> 則讓 Swagger UI 把它們歸在同一區：</p>
+      <pre><code>from fastapi import APIRouter
+
+router = APIRouter(prefix="/projects", tags=["projects"])</code></pre>
+
+      <h2>從 main.py 搬移端點</h2>
+      <p>把原本寫在 <code>main.py</code> 的專案相關端點全部移到 <code>routers/projects.py</code>。移動時只需要把 <code>@app.get</code>、<code>@router.post</code> 等裝飾器從 <code>app</code> 改成 <code>router</code>，函式本體完全不用改：</p>
+      <pre><code># 原本在 main.py
+@app.get("/projects")
+def list_projects(session: Session = Depends(get_session)):
+    ...
+
+# 搬到 routers/projects.py 之後
+@router.get("")
+def list_projects(session: Session = Depends(get_session)):
+    ...</code></pre>
+
+      <p>注意路徑從 <code>"/projects"</code> 變成 <code>""</code>，因為 <code>prefix</code> 已經幫我們加上了。</p>
+
+      <h2>相對匯入</h2>
+      <p>因為路由器現在位於 <code>routers/</code> 子資料夾，匯入上層模組時要使用相對匯入（relative import）。例如要匯入 <code>models.py</code> 或 <code>dependencies.py</code>：</p>
+      <pre><code>from ..models import Project
+from ..dependencies import get_session, get_project_or_404</code></pre>
+
+      <p>兩個點 <code>..</code> 代表「往上一層目錄」。如果專案結構更深，就繼續加點。</p>
+
+      <div class="warning">
+        <p><strong>注意：</strong>相對匯入必須在套件內部使用。如果直接執行 <code>routers/projects.py</code> 會報錯，但透過 <code>uv run</code> 或 <code>app.include_router()</code> 匯入就沒問題。</p>
+      </div>
+
+      <h2>完整路由器範例</h2>
+      <p>把列表、讀取、更新、刪除全部移過來之後，<code>routers/projects.py</code> 會長這樣：</p>
+      <pre><code>from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from ..models import Project
+from ..dependencies import get_session, get_project_or_404
+
+router = APIRouter(prefix="/projects", tags=["projects"])
+
+@router.get("")
+def list_projects(session: Session = Depends(get_session)):
+    return crud.list_projects(session)
+
+@router.get("/{project_id}")
+def get_project(project: Project = Depends(get_project_or_404)):
+    return project
+
+@router.patch("/{project_id}")
+def update_project(
+    project_update: ProjectUpdate,
+    project: Project = Depends(get_project_or_404),
+    session: Session = Depends(get_session),
+):
+    ...
+
+@router.delete("/{project_id}")
+def delete_project(
+    project: Project = Depends(get_project_or_404),
+    session: Session = Depends(get_session),
+):
+    ...</code></pre>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+
+      <div class="quiz" data-question="建立 routers 資料夾時，為什麼需要放 __init__.py？" data-correct="1" data-explain="__init__.py 讓資料夾變成 Python 套件，才能使用相對匯入。">
+        <button class="opt">讓資料夾可以被作業系統識別</button>
+        <button class="opt">讓資料夾變成 Python 套件，才能使用相對匯入</button>
+        <button class="opt">讓 FastAPI 自動掃描底下的路由檔案</button>
+        <button class="opt">讓 uv 知道這是一個 Python 專案</button>
+      </div>
+
+      <div class="quiz" data-question="APIRouter(prefix="/projects") 底下定義 @router.get("/{project_id}")，實際路徑會是什麼？" data-correct="2" data-explain="prefix 加上路由路徑，實際路徑為 /projects/{project_id}。">
+        <button class="opt">/{project_id}</button>
+        <button class="opt">/projects</button>
+        <button class="opt">/projects/{project_id}</button>
+        <button class="opt">/prefix/projects/{project_id}</button>
+      </div>
+
+      <div class="quiz" data-question="從 main.py 搬端點到路由器時，需要改什麼？" data-correct="0" data-explain="只需要把裝飾器從 app 改成 router，函式本體完全不用改。">
+        <button class="opt">把裝飾器從 app 改成 router，函式本體不用改</button>
+        <button class="opt">重寫所有函式本體</button>
+        <button class="opt">把所有 Depends() 改成 Annotated</button>
+        <button class="opt">把所有路徑改成小寫</button>
+      </div>
+
+      <div class="quiz" data-question="在 routers/projects.py 中要匯入上層的 models.py，應該怎麼寫？" data-correct="3" data-explain="兩個點代表往上一層目錄，正確寫法是 from ..models import Project。">
+        <button class="opt">from models import Project</button>
+        <button class="opt">from .models import Project</button>
+        <button class="opt">from routers.models import Project</button>
+        <button class="opt">from ..models import Project</button>
+      </div>
+
+      <div class="quiz" data-question="相對匯入的兩個點（..）代表什麼意思？" data-correct="1" data-explain="兩個點代表往上一層目錄，一個點代表目前目錄。">
+        <button class="opt">往下一層目錄</button>
+        <button class="opt">往上一層目錄</button>
+        <button class="opt">目前目錄</button>
+        <button class="opt">專案根目錄</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <a href="./why-apirouter.html" class="prev">← 上一步：為什麼需要 APIRouter？</a>
+      <a href="./register-and-verify.html" class="next">下一步：註冊路由器並驗證重構 →</a>
+    </div>
+  </main>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

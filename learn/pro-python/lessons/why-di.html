@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>為什麼需要依賴注入？</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <p class="meta">Node 15 — Step 1/4 · Dependency injection with Annotated</p>
+  <h1>為什麼需要依賴注入？</h1>
+
+  <h2>學習目標</h2>
+  <p>理解依賴注入解決了什麼問題：手動管理資料庫 session 的生命週期容易遺漏 commit 或 close，導致連線洩漏與資料不一致。</p>
+
+  <h2>手動管理 session 的風險</h2>
+  <p>現在你已經會寫 CRUD 端點了，但每次都要自己手動拿到 session、手動 commit、手動 close。看起來還行，但只要一個端點忘了 close，資料庫連線就會洩漏；忘了 commit，資料就沒寫進去。當端點變多，這些生命週期的細節會變成隱藏的炸彈。</p>
+
+  <p>先看看沒有 DI 的時候，一個典型的端點長什麼樣子：</p>
+
+  <pre><code>@app.get("/projects/{project_id}")
+def get_project(project_id: int):
+    session = Session(engine)
+    try:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404)
+        return project
+    finally:
+        session.close()</code></pre>
+
+  <p>你拿到 session 之後，必須確保不管發生什麼事，session 都要被關掉。如果中間出了例外，你還得決定要不要 rollback。這些邏輯跟真正的業務無關，但每一行都在分散注意力。</p>
+
+  <h2>把生命週期交給框架</h2>
+  <p>依賴注入（Dependency Injection，DI）把「資源怎麼來、怎麼結束」這件事從端點裡面抽出來，交給框架管理。FastAPI 的 DI 系統讓你在端點函式上宣告「我需要一個資料庫 session」，框架就會在請求進來時自動建立 session、在請求結束時自動清理，你不需要自己寫 try/finally。</p>
+
+  <p>現在把 session 的建立和關閉交給 FastAPI：</p>
+
+  <pre><code>@app.get("/projects/{project_id}")
+def get_project(project: ProjectDep):
+    return project</code></pre>
+
+  <p>端點裡面只剩下真正的業務邏輯：查詢、判斷、回傳。</p>
+
+  <h2>DI 帶來的好處</h2>
+  <p>DI 不只是少寫幾行 code。它改變了端點的責任邊界：端點只負責「拿到資源之後要做什麼」，資源的生命週期交給框架。這樣一來：</p>
+
+  <ul>
+    <li>測試的時候你可以注入假資源，不需要真的連資料庫</li>
+    <li>部署的時候你可以換成連線池，端點本身都不用改</li>
+    <li>生命週期邏輯集中管理，不會遺漏 commit 或 close</li>
+  </ul>
+
+  <div class="lesson-nav">
+    <a href="depends-basics.html">下一步：Depends() 如何運作？ →</a>
+  </div>
+
+  <h2>自我測驗</h2>
+
+  <div class="quiz" data-question="依賴注入主要解決什麼問題？" data-correct="1" data-explain="DI 把資源的生命週期從端點中抽出來，交給框架統一管理，避免手動管理遺漏 commit 或 close。">
+    <button class="opt">讓路由跑得更快</button>
+    <button class="opt">統一管理資源生命週期，避免手動管理遺漏</button>
+    <button class="opt">自動產生 API 文件</button>
+    <button class="opt">驗證請求參數的型別</button>
+  </div>
+
+  <div class="quiz" data-question="沒有 DI 時，手動管理 session 最大的風險是什麼？" data-correct="2" data-explain="手動管理時只要一個端點忘了 close，資料庫連線就會洩漏；忘了 commit，資料就沒寫進去。">
+    <button class="opt">路由會跑得很慢</button>
+    <button class="opt">API 文件無法自動產生</button>
+    <button class="opt">容易遺漏 commit 或 close，導致連線洩漏或資料不一致</button>
+    <button class="opt">請求參數無法驗證</button>
+  </div>
+
+  <div class="quiz" data-question="DI 改變了端點的什麼責任邊界？" data-correct="0" data-explain="端點只負責「拿到資源之後要做什麼」，資源的生命週期交給框架處理。">
+    <button class="opt">端點只管拿到資源之後要做什麼，生命週期交給框架</button>
+    <button class="opt">端點必須自己管理資源的建立和關閉</button>
+    <button class="opt">端點不再需要處理業務邏輯</button>
+    <button class="opt">端點必須自己寫 try/finally</button>
+  </div>
+
+  <div class="quiz" data-question="爲什麼測試時 DI 很有用？" data-correct="3" data-explain="測試時可以注入假資源，不需要真的連資料庫，讓測試更快速、更穩定。">
+    <button class="opt">測試時路由會自動變快</button>
+    <button class="opt">測試時 API 文件會自動產生</button>
+    <button class="opt">測試時請求參數會自動驗證</button>
+    <button class="opt">測試時可以注入假資源，不需要真的連資料庫</button>
+  </div>
+
+  <div class="quiz" data-question="DI 對部署有什麼好處？" data-correct="1" data-explain">部署時可以換成連線池，端點本身都不用改，因為資源管理已經交給框架。">
+    <button class="opt">部署時路由會自動擴展</button>
+    <button class="opt">部署時可以換成連線池，端點本身都不用改</button>
+    <button class="opt">部署時會自動產生 API 文件</button>
+    <button class="opt">部署時會自動驗證請求參數</button>
+  </div>
+
+  <div class="footer">
+    <p>Pro Python · Node 15: Dependency injection with Annotated · Step 1</p>
+    <p>有問題？隨時問你的 AI 助教。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>
