@@ -2,7 +2,7 @@
 name: teach
 description: Teach the user a new skill or concept, within this workspace.
 disable-model-invocation: true
-argument-hint: "What would you like to learn about? Or: /teach <subject>/<node-id> [skip-task]"
+argument-hint: "What would you like to learn about? Or: /teach <subject>/<node-id> [skip-task] | /teach -step <step-id>"
 ---
 
 The user has asked you to teach them something. This is a stateful request - they intend to learn the topic over multiple sessions.
@@ -190,6 +190,14 @@ When `-skip-task` appears in the invocation (e.g. `/teach <subject>/<node-id> sk
 5. **Progress.** Show completion status (e.g., "Step 2/5 done"). Move directly to the next step without waiting for user confirmation.
 
 Skip-task mode assumes the learner will review the content offline or has already studied the material and needs the articles generated. No check questions are asked, no mastery is written back, and the learner is not prompted to confirm before moving to the next step.
+
+### Step Q&A
+
+`/teach -step <step-id>` enters step-level Q&A mode. Locate the step file first:
+
+1. **Verify existence.** Run `grep -rl "id: <step-id>" learn/ --include="*.mdx"` (or search by filename pattern `learn/*/nodes/*/<step-id>.mdx`) to confirm the step exists. If nothing matches, report "step not found" and stop. If multiple steps share the slug, ask the user to disambiguate with `<subject>/<node-id>/<step-id>`.
+2. **Read the step.** Only after confirming existence, load the step MDX, its taught elements, and relevant source material from the subject's digests.
+3. **Q&A loop.** Same behavior as a content-written node: skip the teach cycle, ask what to clarify, answer on demand. No HTML lesson is generated and no mastery is written back.
 
 ### Completion
 

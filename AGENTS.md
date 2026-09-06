@@ -33,7 +33,7 @@ This repo turns raw material into customized, subject-specific lessons. A **node
     → /roadmap <subject>
     → /probe <subject>/<node-id>   ← per node, before viewing it
     → /nodes <subject>/<node-name>   ← or <node-name> skip-probe to skip /probe
-    → /teach <subject>/<node-name>   ← interactive step-by-step teaching, writes content to step files
+    → /teach <subject>/<node-name>   ← interactive step-by-step teaching, writes content to step files; -step <id> for Q&A
     → /edges <subject>/<node-name>
 /tackle <step-id>             ← runtime skill, invoked per step at learning time
 ```
@@ -56,7 +56,7 @@ Each stage is user-invoked. `subject/node-name` is explicit so a node name never
 - `/probe <subject>/<node-id>` — adaptive MCQ from shallow to deep across one node's source scope, binary-searching each strand; writes that node's mastery entry (`unknown | partial | solid`), moves the node `draft → probed` (a hard gate before `/nodes`, bypassed by `/nodes … skip-probe`), and never prunes content
 - `/roadmap <subject>` — partition the material into nodes against the formula baseline, first proposing ≥5 distinct learning paths (different angles) for the learner to pick one, then the full candidate node list for confirmation, then write `ROADMAP.md` and `draft` node containers
 - `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation (each step's depth calibrated from the node's probe mastery — shallow where `solid`, deep where `unknown`, never pruning), then dispatch element sub-agents (step 7) and wait for them to complete, then create skeleton step files (step 8) and the node container. `skip-probe` skips the probe: the learner asserts they know nothing, so a `draft` node is accepted and every step is taught deep
-- `/teach <subject>/<node-name>` — interactive step-by-step teaching following the node's step-DAG; for each step, teaches concepts, checks understanding, and writes the lesson content to the skeleton step file created by `/nodes`. `skip-task` skips the check questions and writes HTML + MDX directly for each step without user confirmation
+- `/teach <subject>/<node-name>` — interactive step-by-step teaching following the node's step-DAG; for each step, teaches concepts, checks understanding, and writes the lesson content to the skeleton step file created by `/nodes`. `skip-task` skips the check questions and writes HTML + MDX directly for each step without user confirmation. `/teach -step <step-id>` enters step-level Q&A mode — verify step existence with grep first, then if found, load and teach that step interactively with Q&A on demand, no HTML or mastery write-back
 - `/edges <subject>/<node-name>` — propose and incrementally write strong edges for the node, including justified cross-node edges
 - `/tackle <step-id>` — runtime adaptive MCQ for one step, targeting the strands the node's probe rated `unknown`/`partial`; passing estimates its concepts at `solid`, marks the step complete, and writes mastery back
 

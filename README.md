@@ -21,14 +21,18 @@ This repo is a personal learning system. You put raw material in `sources/`; the
 ```text
 /learn-init <subject>
     → /roadmap <subject>
+    → /probe <subject>/<node-id>
     → /nodes <subject>/<node-id>
+    → /teach <subject>/<node-id>
     → /edges <subject>/<node-id>
 ```
 
 1. **`/learn-init`** — Interview the learner and write `MEMORY.md`.
 2. **`/roadmap`** — Propose ≥5 learning paths for you to pick one, then partition the source material into nodes (each a step-DAG) along it. Write `ROADMAP.md` and one skeleton in `nodes/` per node.
-3. **`/nodes`** — Invoking `/nodes <subject>/<node-id>` confirms that node and starts work. It extracts core concepts, creates or progressively updates canonical elements, and writes the complete node article with element links.
-4. **`/edges`** — For one node, propose a small set of strong relationships, including justified cross-node edges. Confirm the edge set before finalizing.
+3. **`/probe`** — Measure mastery for one node before viewing it (a hard gate).
+4. **`/nodes`** — Invoking `/nodes <subject>/<node-id>` confirms that node and starts work. It extracts core concepts, creates or progressively updates canonical elements, and writes the complete node article with element links.
+5. **`/teach`** — Interactive step-by-step teaching following the node's step-DAG. For each step, teaches concepts, checks understanding, and writes the lesson content. `skip-task` skips check questions and writes HTML + MDX directly. `/teach -step <step-id>` enters step-level Q&A mode for a single step.
+6. **`/edges`** — For one node, propose a small set of strong relationships, including justified cross-node edges. Confirm the edge set before finalizing.
 
 ## Node, Element, Edge
 
@@ -53,7 +57,7 @@ Source links include the subject and, when available, a section or page locator:
 The subject roadmap uses `draft → confirmed`. Each node uses:
 
 ```text
-draft → confirmed → nodes-written → content-written → edges-written
+draft → probed → confirmed → nodes-written → content-written → edges-written
 ```
 
 ## Design Principles
@@ -70,9 +74,11 @@ draft → confirmed → nodes-written → content-written → edges-written
 1. Put material in `sources/<subject>/`.
 2. Run `/learn-init <subject>` and complete the learner interview.
 3. Run `/roadmap <subject>` and review the proposed nodes.
-4. Run `/nodes <subject>/<node-id>` to confirm and process each node.
-5. Run `/edges <subject>/<node-id>` for each node whose elements are ready.
-6. Read the node article first, then open its element pages for depth and answer their retrieval questions.
+4. Run `/probe <subject>/<node-id>` to measure mastery before viewing a node (hard gate).
+5. Run `/nodes <subject>/<node-id>` to confirm and process each node.
+6. Run `/teach <subject>/<node-id>` for interactive step-by-step teaching, or `/teach -step <step-id>` for single-step Q&A.
+7. Run `/edges <subject>/<node-id>` for each node whose elements are ready.
+8. Read the node article first, then open its element pages for depth and answer their retrieval questions.
 
 ## 学习路径笔记
 
@@ -94,11 +100,13 @@ draft → confirmed → nodes-written → content-written → edges-written
 ```text
 /learn-init <subject>
     → /roadmap <subject>
+    → /probe <subject>/<node-id>
     → /nodes <subject>/<node-id>
+    → /teach <subject>/<node-id>
     → /edges <subject>/<node-id>
 ```
 
-`/roadmap` 只负责拆分课程目标、顺序和来源；`/nodes` 才负责从指定 node 萃取关键词概念、更新 canonical elements，并写出完整白话文章；`/edges` 负责生成少量高价值的关系页。
+`/roadmap` 只负责拆分课程目标、顺序和来源；`/nodes` 才负责从指定 node 萃取关键词概念、更新 canonical elements，并写出完整白话文章；`/teach` 负责逐步教学，交互式填充每个 step 的课程内容。`/teach -step <step-id>` 可针对单个 step 进行问答。`/edges` 负责生成少量高价值的关系页。
 
 ### 关键定义
 
