@@ -1,0 +1,37 @@
+---
+id: session-login-flow
+title: 模拟登录流程：从登录接口拿到 Cookie
+subject: js-reverse
+sources:
+  - "[[sources/js-reverse/js逆向课件/day06/requests高级.md#模拟登录]]"
+created: 2026-09-06
+updated: 2026-09-06
+---
+
+# 模拟登录流程：从登录接口拿到 Cookie
+
+## Learning goal
+
+理解模拟登录的两次请求模型：先用 Session.post 提交登录表单并捕获服务器下发的 Cookie，再用该 Session 请求受保护接口拿到登录后数据，并能独立用 requests 重现「登录拿 Cookie、带 Cookie 访问动态接口」的标准流程。
+
+## Lesson
+
+模擬登入的核心是讓 Python 程式重現瀏覽器登入的過程：伺服器給一個 Set-Cookie，之後每次請求自動帶上它。在 Python requests 裡，這件事靠 Session 物件自動完成。整個流程只需要兩次 HTTP 呼叫，中間你完全不用手動碰 Cookie。
+
+瀏覽器打開登入頁，填入帳密，按下送出。DevTools 的 Network 面板會看到一個 POST 請求帶著 <code>loginName</code> 和 <code>password</code> 欄位到伺服器，伺服器驗證成功後回傳一個 302 重定向和 <code>Set-Cookie</code> 標頭。之後瀏覽器每次訪問同域名都自動帶上 <code>Cookie</code> 標頭，伺服器就知道你是誰了。模擬登入就是把這個過程翻譯成 Python 程式碼。
+
+第一步是找到登入介面。打開 DevTools → Network，手動登入一次，在請求列表裡篩選 POST 方法，找到目標 URL（例如 <code>https://passport.17k.com/ck/user/login</code>），再看它的 Form Data 有哪些欄位（例如 <code>loginName</code> 和 <code>password</code>）。這些欄位名稱必須完全一致，大小寫都一樣，伺服器才認得。
+
+第二步用 Session 物件發送 POST 請求。<code>requests.Session()</code> 建立一個空白會話，<code>session.post(login_url, data=login_data)</code> 把表單資料送到登入介面。伺服器回傳的 Set-Cookie 被 Session 自動提取、存入內部的 cookie jar。你不需要自己解析 Set-Cookie 字串，不需要手動設定 Cookie 標頭。
+
+第三步是同一個 Session 發送第二次請求去抓受保護的資料。<code>session.get(protected_url)</code> 自動帶上 Session 存的所有 Cookie，伺服器讀到 Cookie 知道你是誰，就把資料回傳給你。17k 小說的書架介面回傳的是 Ajax 動態載入的 JSON，所以用 <code>.json()</code> 解析；如果回傳的是 HTML 頁面，就用 <code>.text</code> 拿字串再交給 XPath 解析。
+
+常見的錯誤是第二次請求回傳 401 或導向登入頁。這代表 Session 沒拿到有效的 Cookie，通常是第一次 POST 的表單欄位名稱和伺服器期望的不一致（比如伺服器要 <code>username</code> 你寫了 <code>loginName</code>）。解法是打開 DevTools 比對 Request Payload 裡的 key，逐字確認。另一個坑是有些登入頁在表單裡埋了 CSRF Token 隱藏欄位，這種情況要先 GET 一次登入頁，用正則從 HTML 裡把 token 擷取出來，再和帳密一起 POST。第三個坑是驗證碼，後面會教到。
+
+## Sources
+
+- [[sources/js-reverse/js逆向课件/day06/requests高级.md#模拟登录]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/session-login-flow.html)

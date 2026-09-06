@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>代理伺服器、匿名度與代理池 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>代理伺服器、匿名度與代理池</h1>
+<div class="meta">js-reverse · Step 3/4 · 約 15 分鐘</div>
+
+<h2>這節課你會學到什麼</h2>
+<p>理解代理伺服器在爬蟲中的定位（隱藏真實 IP、對抗 IP 黑名單），區分透明/匿名/高匿三種匿名度，並能用 requests 的 <code>proxies</code> 參數寫出帶代理池、隨機選擇代理、間隔睡眠的批量爬蟲。</p>
+
+<h2>情境：為什麼爬蟲需要代理？</h2>
+<p>你在雪球網一次抓 500 篇熱帖，每篇都從同一個 IP 發出。網站後台發現這 500 個請求都來自同一個地方，幾分鐘內就觸發了反爬機制——把你這個 IP 加入黑名單。之後你再發請求，伺服器直接拒絕，爬蟲就停了。</p>
+
+<p>解決方案很直覺：如果每次請求來自不同的 IP，伺服器就沒辦法用「同一個 IP 短時間內請求太多」來封鎖你。代理伺服器（Proxy Server）就是做這件事的中間人。</p>
+
+<h2>代理的運作原理</h2>
+
+<pre><code>你 ──→ 代理伺服器 ──→ 目標網站
+  ←── 代理伺服器 ←── 目標網站
+
+真實流程：
+你發出請求（帶你的 IP）
+    ↓
+代理伺服器收到，改寫請求的來源 IP 為代理的 IP，轉發給目標
+    ↓
+目標看到的來源是代理的 IP（不是你的 IP），回傳資料給代理
+    ↓
+代理把資料轉傳給你</code></pre>
+
+<p>關鍵點：伺服器收到的請求裡，來源 IP 是代理的 IP，不是你的。這就是代理能隱藏你真實位置的原理。</p>
+
+<h2>匿名度三等級</h2>
+<p>不同代理提供的隱蔽程度不同，按匿名度分三等級：</p>
+
+<table>
+  <tr><th>匿名度</th><th>伺服器知道什麼</th><th>適用場景</th></tr>
+  <tr>
+    <td><strong>透明代理</strong></td>
+    <td>知道你用代理，也知道你的真實 IP</td>
+    <td>不適合爬蟲（毫無隱蔽性）</td>
+  </tr>
+  <tr>
+    <td><strong>匿名代理</strong></td>
+    <td>知道你用代理，但不知道你的真實 IP</td>
+    <td>基本夠用，但有些網站會專門過濾「用了代理」的請求</td>
+  </tr>
+  <tr>
+    <td><strong>高匿代理</strong>（推薦）</td>
+    <td>都不知道，伺服器完全看不出有人在用代理</td>
+    <td>爬蟲首選</td>
+  </tr>
+</table>
+
+<blockquote class="good-code">
+<strong>買代理要點：</strong>認準「高匿」兩個字。透明和匿名代理在爬蟲場景裡形同虛設。
+</blockquote>
+
+<h2>協議類型：HTTP vs HTTPS</h2>
+<p>代理也分協議類型：</p>
+<ul>
+  <li><strong>HTTP 代理</strong>：只能轉發 HTTP 請求（明文傳輸）</li>
+  <li><strong>HTTPS 代理</strong>：能轉發 HTTPS 請求（加密傳輸）</li>
+</ul>
+<p>大多數網站都用 HTTPS，所以你需要的是支援 HTTPS 的代理。有些免費代理只支援 HTTP，遇到 HTTPS 目標網站就沒用了。</p>
+
+<h2>實戰：單代理測試</h2>
+<p>拿到一個代理 IP:port 之後，先測試它能不能用：</p>
+
+<pre><code>import requests
+
+# 你的代理伺服器
+proxies = {
+    "http": "http://123.45.67.89:8080",
+    "https": "http://123.45.67.89:8080"   # 注意：值也是 http:// 開頭
+}
+
+# 先用 cip.cc 確認你的代理 IP
+resp = requests.get("http://cip.cc", proxies=proxies)
+print(resp.text)
+# 如果輸出的是代理的 IP 而不是你的真實 IP，說明代理生效</code></pre>
+
+<blockquote>
+<strong>常見錯誤：</strong><code>proxies</code> 字典的值要以 <code>http://</code> 開頭，即使 key 是 <code>"https"</code>。不要寫成 <code>https://123.45.67.89:8080</code>。
+</blockquote>
+
+<h2>實戰：代理池批量爬取</h2>
+<p>單代理有壽命（很快就會被封），所以大規模爬取要用代理池：把多個代理 IP:port 存在一個列表裡，每次隨機選一個，配合延遲避免被封。</p>
+
+<pre><code>import requests
+import random
+import time
+
+# 代理池：至少準備 3-5 個不同的代理
+proxy_pool = [
+    "http://123.45.67.89:8080",
+    "http://98.76.54.32:3128",
+    "http://55.66.77.88:8888",
+    "http://11.22.33.44:9090",
+]
+
+for page in range(1, 11):
+    # 每次隨機選一個代理
+    proxy = random.choice(proxy_pool)
+    proxies = {"http": proxy, "https": proxy}
+
+    try:
+        resp = requests.get(
+            f"https://target.com/api/data?page={page}",
+            proxies=proxies,
+            timeout=5
+        )
+        print(f"Page {page}: {resp.status_code}")
+    except Exception as e:
+        print(f"Page {page}: 代理 {proxy} 失敗 - {e}")
+        continue
+
+    # 每次請求後休息一下，避免被封
+    time.sleep(random.uniform(1, 3))</code></pre>
+
+<p>這段程式碼做了三件關鍵的事：</p>
+<ol>
+  <li><strong>隨機選擇代理</strong>：<code>random.choice(proxy_pool)</code>，讓每次請求來自不同的 IP</li>
+  <li><strong>間隔睡眠</strong>：<code>time.sleep(random.uniform(1, 3))</code>，在 1-3 秒之間隨機等待，不讓請求太規律</li>
+  <li><strong>錯誤處理</strong>：<code>try/except</code> 包住，單個代理失敗不影響整個爬蟲</li>
+</ol>
+
+<h2>代理從哪裡來？</h2>
+<p>代理 IP 的來源分兩大類：</p>
+
+<table>
+  <tr><th>來源</th><th>優點</th><th>缺點</th></tr>
+  <tr>
+    <td>免費代理網站</td>
+    <td>免費</td>
+    <td>品質差、速度慢、很多根本不能用、很快就會被封</td>
+  </tr>
+  <tr>
+    <td>付費代理服務（芝麻代理等）</td>
+    <td>品質穩定、速度快、支援高匿</td>
+    <td>有成本，按量計費</td>
+  </tr>
+</table>
+
+<blockquote>
+<strong>建議：</strong>學習階段用免費代理練手，正式爬取用付費代理。免費代理勝在能理解代理池的邏輯，但真要穩定爬取得靠付費服務。
+</blockquote>
+
+<h2>小結</h2>
+<p>代理伺服器是爬蟲對抗 IP 黑名單的核心武器。代理按匿名度分三等級（推薦高匿），按協議分 HTTP/HTTPS 兩種。在 requests 裡用 <code>proxies</code> 字典設定代理，大規模爬取時建立代理池隨機選擇、配合延遲避免被封。</p>
+
+<div class="lesson-nav">
+  <div><a href="./session-login-flow.html">← 上一步：模擬登入流程</a></div>
+  <div><a href="./captcha-recognition.html">下一步：驗證碼識別與打碼平台接入 →</a></div>
+</div>
+
+<div class="quiz" data-question="匿名度三等級中，哪一級最適合爬蟲使用？" data-correct="2" data-explain="高匿代理完全不暴露你在用代理這件事，伺服器完全看不出異常。">
+  <button class="opt">透明代理</button>
+  <button class="opt">匿名代理</button>
+  <button class="opt">高匿代理</button>
+  <button class="opt">三種都一樣</button>
+</div>
+
+<div class="quiz" data-question="在 requests 的 proxies 字典裡，https 代理的值應該用什麼協議前綴？" data-correct="0" data-explain="proxies 字典的值永遠以 http:// 開頭，即使是 https key。">
+  <button class="opt">http://</button>
+  <button class="opt">https://</button>
+  <button class="opt">socks://</button>
+  <button class="opt">直接寫 IP:port 不加前綴</button>
+</div>
+
+<div class="quiz" data-question="代理池爬取時，隨機選擇代理的主要目的是什麼？" data-correct="1" data-explain="讓每次請求來自不同 IP，避免同一個 IP 短時間內請求太多被封鎖。">
+  <button class="opt">提高爬取速度</button>
+  <button class="opt">讓每次請求來自不同 IP</button>
+  <button class="opt">節省記憶體</button>
+  <button class="opt">隱藏 User-Agent</button>
+</div>
+
+<div class="quiz" data-question="代理伺服器在請求流程中扮演什麼角色？" data-correct="3" data-explain="代理改寫請求的來源 IP 為自己的 IP，轉發給目標，再把回傳資料轉傳給你。">
+  <button class="opt">儲存 Cookie</button>
+  <button class="opt">解析 HTML</button>
+  <button class="opt">加密帳密</button>
+  <button class="opt">改寫請求的來源 IP，轉發給目標</button>
+</div>
+
+<div class="quiz" data-question="免費代理的致命問題是什麼？" data-correct="2" data-explain="免費代理品質差、速度慢，很多根本不能用，而且很快就會被目標網站封鎖。">
+  <button class="opt">速度太快了</button>
+  <button class="opt">只支援 HTTPS</button>
+  <button class="opt">品質差、速度慢、很快被封</button>
+  <button class="opt">不能用 requests</button>
+</div>
+
+<div class="footer">
+  js-reverse · Session、登入與代理 · Step 3/4
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

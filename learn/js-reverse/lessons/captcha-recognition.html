@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>驗證碼識別與打碼平台接入 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>驗證碼識別與打碼平台接入</h1>
+<div class="meta">js-reverse · Step 4/4 · 約 12 分鐘</div>
+
+<h2>這節課你會學到什麼</h2>
+<p>理解工程上驗證碼識別的標準做法：把驗證碼圖片 base64 編碼後 POST 到打碼平台（如圖鑒），按 <code>typeid</code> 區分不同驗證碼類型，並將識別流程封裝為可復用模組。</p>
+
+<h2>情境：為什麼爬蟲過不了驗證碼？</h2>
+<p>當你模擬登入、用代理池繞過 IP 封鎖之後，下一關往往是驗證碼——伺服器彈出一張扭曲的圖片，要求你輸入裡面的數字或字母，或者滑動一個方塊對齊缺口。對瀏覽器前的人類來說這幾秒鐘的事，對純 Python 爬蟲來說是斷崖。</p>
+<p>純爬蟲做法（OCR 自己辨識）只對簡單的文字驗證碼有效，遇到計算題、座標點選、滑動驗證就徹底沒用。工程上的標準解法是<strong>買別人的辨識服務</strong>：把驗證碼圖片傳給打碼平台，平台回傳辨識結果（文字或座標），你再繼續下一步。</p>
+
+<h2>打碼平台長什麼樣？</h2>
+<p>以圖鑒平台（<a href="http://www.ttshitu.com/" target="_blank">ttshitu.com</a>）為例，它提供一個 HTTP API：你 POST 一張驗證碼圖片給它，它回傳辨識結果。概念上就像在程式裡接一個「幫你念出圖片裡文字」的遠端函式。</p>
+
+<p>一個打碼平台的生命週期通常是：</p>
+<ol>
+  <li>註冊帳號，儲值（按辨識次數計費）</li>
+  <li>閱讀開發文件，找到 API 位址和參數</li>
+  <li>封裝成 Python 函式，你的爬蟲每次遇到驗證碼就呼叫它</li>
+</ol>
+
+<h2>打碼 API 的標準流程</h2>
+<p>打碼平台的 API 合約大同小異，核心是這三個欄位：</p>
+
+<table>
+  <tr><th>欄位</th><th>說明</th></tr>
+  <tr>
+    <td><code>username</code></td>
+    <td>你的打碼平台帳號</td>
+  </tr>
+  <tr>
+    <td><code>password</code></td>
+    <td>你的打碼平台密碼</td>
+  </tr>
+  <tr>
+    <td><code>typeid</code></td>
+    <td>告訴平台這是哪種驗證碼（純數字、計算題、座標點選…）</td>
+  </tr>
+  <tr>
+    <td><code>image</code></td>
+    <td>驗證碼圖片（base64 編碼後的字串）</td>
+  </tr>
+</table>
+
+<pre><code>import requests
+import base64
+
+def captcha_recognize(image_path):
+    """把驗證碼圖片送到打碼平台，回傳辨識結果"""
+    # 讀取圖片 → base64 編碼
+    with open(image_path, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    # POST 到打碼平台
+    resp = requests.post(
+        "http://api.ttshitu.com/predict",
+        json={
+            "username": "your_username",
+            "password": "your_password",
+            "typeid": 1,          # 純數字驗證碼
+            "image": img_b64
+        }
+    )
+    result = resp.json()
+    return result["result"]   # 辨識出的文字</code></pre>
+
+<p>一次呼叫就把「圖片 → 文字」這件事做完了。後續流程是把辨識結果填入登入表單，再送出 POST 請求，照樣用 Session 物件帶著 Cookie 去完成剩下的模擬登入。</p>
+
+<h2>typeid 對照表：平台能處理哪些驗證碼？</h2>
+<p>不同打碼平台支援的驗證碼類型不同，以圖鑒為例，常見的 <code>typeid</code> 對照：</p>
+
+<table>
+  <tr><th>typeid</th><th>驗證碼類型</th></tr>
+  <tr><td>1</td><td>純數字 (1111)</td></tr>
+  <tr><td>2</td><td>純英文 (abcd)</td></tr>
+  <tr><td>3</td><td>數字英文混合 (1a2b)</td></tr>
+  <tr><td>4</td><td>閃動 GIF</td></tr>
+  <tr><td>5</td><td>計算題 (1+2=?)</td></tr>
+  <tr><td>6</td><td>漢字</td></tr>
+  <tr><td>10</td><td>通用文字</td></tr>
+  <tr><td>20</td><td>問答題</td></tr>
+  <tr><td>30</td><td>Recaptcha</td></tr>
+  <tr><td>40</td><td>旋轉角度</td></tr>
+  <tr><td>50</td><td>座標點選（回傳 1~8 個座標）</td></tr>
+  <tr><td>60</td><td>缺口辨識（回傳 X 軸座標）</td></tr>
+  <tr><td>70</td><td>拼圖辨識</td></tr>
+</table>
+
+<blockquote class="good-code">
+<strong>核心概念：</strong>打碼平台幫你做一件最難的事——「看懂圖片裡在問什麼」。你只要選對 typeid、把圖片丟過去、拿結果填入表單。
+</blockquote>
+
+<h2>滑動驗證 vs 打碼平台</h2>
+<p>有些網站的驗證碼不只是「輸入圖片上的文字」，而是要你拖曳一個滑塊去對齊缺口（缺口辨識，<code>typeid=60</code>）。打碼平台能幫你算出缺口在圖片的哪個 X 軸座標，但<strong>你還是要模擬滑鼠拖曳</strong>——用 Selenium 或 Pyppeteer 控制瀏覽器，按計算出的座標拖過去。</p>
+<p>這也是為什麼打碼平台的認知是後續學習滑動驗證逆向前的先修：先知道「平台能算出座標」，再學「怎麼用瀏覽器模擬滑鼠去拖」。</p>
+
+<h2>封裝成可復用模組</h2>
+<p>在爬蟲專案裡，通常會把打碼邏輯獨立成一個 <code>tujian.py</code> 模組：</p>
+
+<pre><code># tujian.py
+import requests
+import base64
+
+def recognize(image_path, typeid=1):
+    with open(image_path, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    resp = requests.post(
+        "http://api.ttshitu.com/predict",
+        json={
+            "username": "your_username",
+            "password": "your_password",
+            "typeid": typeid,
+            "image": img_b64
+        }
+    )
+    data = resp.json()
+    if data.get("success"):
+        return data["result"]
+    else:
+        raise Exception(f"打碼失敗: {data.get('message')}")</code></pre>
+
+<p>爬蟲主程式只要一行：</p>
+<pre><code>from tujian import recognize
+
+code = recognize("captcha.png", typeid=1)
+login_data["captcha"] = code
+session.post(login_url, data=login_data)</code></pre>
+
+<h2>小結</h2>
+<p>遇到驗證碼，工程上的標準解法是接打碼平台，不是自己寫 OCR。把驗證碼圖片 base64 編碼後 POST 到平台，按 <code>typeid</code> 告訴平台這是哪種類型（純數字、計算題、座標點選、缺口辨識），平台回傳文字或座標你再用。這不是逆向工程，但它是滑動驗證、缺口辨識等進階主題前必須先有的認知。</p>
+
+<div class="lesson-nav">
+  <div><a href="./proxy-crawl.html">← 上一步：代理伺服器、匿名度與代理池</a></div>
+  <div></div>
+</div>
+
+<div class="quiz" data-question="工程上遇到驗證碼時，標準解法是什麼？" data-correct="1" data-explain="把驗證碼圖片送到打碼平台，平台回傳辨識結果，你填入表單繼續流程。">
+  <button class="opt">自己寫 OCR 辨識</button>
+  <button class="opt">接打碼平台 API</button>
+  <button class="opt">用 Selenium 按坐標點擊</button>
+  <button class="opt">直接跳過驗證碼</button>
+</div>
+
+<div class="quiz" data-question="打碼平台 API 中，哪個欄位用來告訴平台「這是哪種驗證碼」？" data-correct="2" data-explain="typeid 欄位對應平台的辨識算法，不同類型用不同的演算法處理。">
+  <button class="opt">username</button>
+  <button class="opt">image</button>
+  <button class="opt">typeid</button>
+  <button class="opt">captcha</button>
+</div>
+
+<div class="quiz" data-question="圖片在 POST 之前為什麼要先 base64 編碼？" data-correct="0" data-explain="HTTP POST 傳輸的是文字或二進制，base64 把圖片轉成安全文字，方便放在 JSON 欄位裡傳輸。">
+  <button class="opt">HTTP POST 傳輸文字或二進制，base64 把圖片轉成安全文字</button>
+  <button class="opt">壓縮圖片大小</button>
+  <button class="opt">加密圖片內容</button>
+  <button class="opt">讓圖片可以被 JSON 解析</button>
+</div>
+
+<div class="quiz" data-question="缺口辨識（滑動驗證）打碼平台通常回傳什麼？" data-correct="1" data-explain="缺口辨識回傳缺口在圖片的 X 軸座標，你再用 Selenium 模擬滑鼠拖過去。">
+  <button class="opt">一張新的圖片</button>
+  <button class="opt">缺口的 X 軸座標</button>
+  <button class="opt">驗證碼文字</button>
+  <button class="opt">一個布林值</button>
+</div>
+
+<div class="quiz" data-question="下面哪一種驗證碼最難靠「純打碼平台」解決？" data-correct="3" data-explain="Recaptcha v2/v3 是 Google 的行為分析驗證，打碼平台通常也無法完全自動化通過。">
+  <button class="opt">純數字</button>
+  <button class="opt">計算題</button>
+  <button class="opt">缺口辨識</button>
+  <button class="opt">Recaptcha</button>
+</div>
+
+<div class="footer">
+  js-reverse · Session、登入與代理 · Step 4/4
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

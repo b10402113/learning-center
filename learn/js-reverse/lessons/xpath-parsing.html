@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>xpath 解析：环境安装、两步流程与核心表达式 — requests 与 xpath 解析</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>xpath 解析：环境安装、两步流程与核心表达式</h1>
+<p class="meta">js-reverse · 03-requests-xpath · Step 4/5</p>
+
+<h2>学习 goal</h2>
+<p>理解聚焦爬虫的五步编码流程，掌握 xpath 的两步流程（创建 etree 对象加载源码 → 调用 xpath 函数），并能运用层级定位、索引定位、属性定位以及 text()、//text()、/@attr 等核心表达式提取数据。</p>
+
+<h2>为什么需要 xpath？</h2>
+<p>HTML 文档的本质是一棵树。<code>&lt;html&gt;</code> 是根节点，<code>&lt;head&gt;</code> 和 <code>&lt;body&gt;</code> 是它的子节点，<code>&lt;div&gt;</code>、<code>&lt;a&gt;</code>、<code>&lt;img&gt;</code> 是更深层的子节点。每个节点还可以有属性（比如 <code>class="song"</code>、<code>href="https://example.com"</code>）。</p>
+<p>如果你想拿到「页面里 class 为 song 的 div 下面所有 a 标签的文字」，用字符串搜索或正则表达式不是不行，但写起来极其脆弱——HTML 裡多一个空格、换行位置变一下，正则就废了。xpath 提供了一套专门描述「在树状结构裡怎么走」的语法，让你可以直接说「从根走到 html/body/div」或「不管在哪裡，找到 class 为 song 的 div」，而不需要关心中间有多少层、格式怎么排版。</p>
+
+<h2>环境安装</h2>
+<p>Python 裡用 xpath 解析 HTML，需要借助 <code>lxml</code> 库。安装方式是 <code>pip install lxml</code>。</p>
+
+<h2>xpath 的两步编码流程</h2>
+<p>整个流程就两步：</p>
+<ol>
+  <li><strong>创建 etree 对象加载页面源码</strong>——如果是本地 HTML 文件，用 <code>etree.parse('file.html')</code>；如果是网络页面，用 <code>etree.HTML(response.text)</code>。加载之后，你就得到一个可以在上面执行 xpath 查询的文档对象。</li>
+  <li><strong>调用 <code>xpath()</code> 函数</strong>——传入 xpath 表达式，返回一个列表，裡面是所有匹配到的节点或提取出来的字串。</li>
+</ol>
+
+<pre><code>from lxml import etree
+import requests
+
+response = requests.get('https://example.com')
+tree = etree.HTML(response.text)
+titles = tree.xpath('//div[@class="song"]//a/text()')</code></pre>
+
+<h2>核心 xpath 表达式全家桶</h2>
+
+<h3>层级定位：/ 与 //</h3>
+<table>
+  <tr><th>表达式</th><th>含义</th></tr>
+  <tr><td><code>/html/head/meta</code></td><td>绝对路径，从根节点 html 出发，经过 head，找到 meta</td></tr>
+  <tr><td><code>//meta</code></td><td>相对路径，不管 meta 在文档的哪个位置，全部找到</td></tr>
+  <tr><td><code>/html/body/div[1]</code></td><td>索引定位，xpath 的索引从 1 开始（不是从 0），<code>div[1]</code> 表示 body 下的第一个 div</td></tr>
+</table>
+
+<h3>属性定位：[@属性名="值"]</h3>
+<table>
+  <tr><th>表达式</th><th>含义</th></tr>
+  <tr><td><code>//div[@class="song"]</code></td><td>找到所有 class 属性为 song 的 div</td></tr>
+  <tr><td><code>//a[@href="https://example.com"]</code></td><td>找到 href 为指定值的 a 标签</td></tr>
+  <tr><td><code>//div[@class="tang"]/ul/li/a</code></td><td>层级 + 组合，定位 class 为 tang 的 div 下的 ul 下的 li 下的 a</td></tr>
+  <tr><td><code>//div[@class="tang"]//a</code></td><td>跨层级定位，<code>//a</code> 表示「在 div 的任意深层后代裡找 a」</td></tr>
+</table>
+
+<h3>提取数据：text() 与 /@属性名</h3>
+<table>
+  <tr><th>表达式</th><th>含义</th></tr>
+  <tr><td><code>/text()</code></td><td>取节点的直系文本，不包括子标签裡的文字</td></tr>
+  <tr><td><code>//text()</code></td><td>取节点及其所有后代节点的全部文本</td></tr>
+  <tr><td><code>/@属性名</code></td><td>取属性值，比如 <code>//img/@src</code> 拿到图片地址，<code>//a/@href</code> 拿到链接</td></tr>
+</table>
+
+<h2>一个直观的例子</h2>
+<p>假设 HTML 裡有这样一段：</p>
+<pre><code>&lt;div class="tang"&gt;
+  &lt;ul&gt;
+    &lt;li&gt;&lt;a href="/song/1.html"&gt;静夜思&lt;/a&gt;&lt;/li&gt;
+    &lt;li&gt;&lt;a href="/song/2.html"&gt;春晓&lt;/a&gt;&lt;/li&gt;
+  &lt;/ul&gt;
+&lt;/div&gt;</code></pre>
+<p>要拿到所有古诗标题，表达式是 <code>//div[@class="tang"]//a/text()</code>，返回 <code>['静夜思', '春晓']</code>。要拿到所有链接，表达式是 <code>//div[@class="tang"]//a/@href</code>，返回 <code>['/song/1.html', '/song/2.html']</code>。</p>
+
+<h2>聚焦爬虫的五步流程</h2>
+<p>把 requests 和 xpath 组合起来，就是聚焦爬虫的标准流程：指定 url → 发起请求 → 获取响应数据 → 数据解析 → 持久化存储。比通用爬虫多了第四步「数据解析」，也就是用 xpath 把 response.text 裡的目标内容抠出来。这个流程是后续所有爬虫代码的骨架。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="xpath 的两步编码流程，第一步是什么？" data-correct="1" data-explain="第一步是创建 etree 对象加载页面源码，本地文件用 etree.parse()，网络页面用 etree.HTML()。">
+  <button class="opt">直接调用 xpath() 函数</button>
+  <button class="opt">创建 etree 对象加载源码</button>
+  <button class="opt">安装 requests 库</button>
+  <button class="opt">持久化存储数据</button>
+</div>
+
+<div class="quiz" data-question="xpath 中，//div[1] 的索引 1 表示什么？" data-correct="2" data-explain="xpath 的索引从 1 开始，div[1] 表示第一个 div，不是从 0 开始。">
+  <button class="opt">第 0 个 div</button>
+  <button class="opt">任意一个 div</button>
+  <button class="opt">第一个 div</button>
+  <button class="opt">最后一个 div</button>
+</div>
+
+<div class="quiz" data-question="要提取所有 img 标签的 src 属性值，表达式应该怎么写？" data-correct="0" data-explain="//img/@src 表示找到所有 img 标签并提取其 src 属性值。">
+  <button class="opt">//img/@src</button>
+  <button class="opt">//img/src</button>
+  <button class="opt">//img.text()</button>
+  <button class="opt">//img//src</button>
+</div>
+
+<div class="quiz" data-question="//div[@class='song']//a/text() 和 //div[@class='song']/a/text() 的区别是什么？" data-correct="3" data-explain="// 表示跨层级任意深层，/ 表示直接子节点，后者只能匹配直接嵌套的 a。">
+  <button class="opt">没有区别</button>
+  <button class="opt">前者匹配直接子节点，后者匹配任意后代</button>
+  <button class="opt">后者能匹配更多节点</button>
+  <button class="opt">前者跨层级匹配，后者只匹配直接子节点</button>
+</div>
+
+<div class="quiz" data-question="etree.HTML() 通常用来加载什么数据？" data-correct="1" data-explain="etree.HTML() 用来加载字符串形式的 HTML 源码，比如 response.text。">
+  <button class="opt">本地 HTML 文件</button>
+  <button class="opt">字符串形式的 HTML 源码</button>
+  <button class="opt">JSON 数据</button>
+  <button class="opt">二进制文件</button>
+</div>
+
+<div class="quiz" data-question="聚焦爬虫相比通用爬虫，多出了哪一步？" data-correct="2" data-explain="聚焦爬虫在获取响应数据后增加了「数据解析」步骤，用 xpath 等工具提取目标内容。">
+  <button class="opt">发起请求</button>
+  <button class="opt">持久化存储</button>
+  <button class="opt">数据解析</button>
+  <button class="opt">指定 url</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./image-crawl.html">← 上一步：图片爬取：content 二进制与 urlretrieve 直存</a>
+  <a href="./xpath-advanced.html">下一步：xpath 进阶：局部解析、多页翻页、防盗链与图片懒加载 →</a>
+</div>
+
+<div class="footer">js-reverse · 03-requests-xpath · xpath 解析：环境安装、两步流程与核心表达式</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

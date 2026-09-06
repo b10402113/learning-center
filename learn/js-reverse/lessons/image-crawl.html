@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>图片爬取：content 二进制与 urlretrieve 直存 — requests 与 xpath 解析</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>图片爬取：content 二进制与 urlretrieve 直存</h1>
+<p class="meta">js-reverse · 03-requests-xpath · Step 3/5</p>
+
+<h2>学习 goal</h2>
+<p>掌握两种图片爬取方式——用 response.content 写二进制文件（需要 UA 伪装时）和用 urllib.request.urlretrieve 直接按地址存储（无需 UA 时更简洁），并能根据实际场景选择合适方案。</p>
+
+<h2>为什么不能用 text？</h2>
+<p><code>response.text</code> 返回的是字符串，它会把服务器返回的原始字节按某种编码（比如 UTF-8）解码成文字。这对 HTML、JSON 这类文本数据没问题，但对图片、影片这些二进制文件，强行解码只会得到一堆乱码，写进文件后图片就打不开了。</p>
+<p><code>response.content</code> 返回的是未经解码的原始字节（<code>bytes</code> 类型），也就是服务器发回来的 0101 原样。把原样字节写进文件，文件就是完整的、可打开的。这是二进制文件和文本文件在爬虫处理上的根本差异：<strong>文本用 text，二进制用 content</strong>。</p>
+
+<h2>方式一：response.content 写文件</h2>
+<p>最通用的图片爬取方式，是用 <code>requests.get(img_url)</code> 拿到 response，再用 <code>response.content</code> 拿到二进制数据，最后用 <code>open()</code> 以 <code>wb</code>（write binary，二进制写入）模式写进文件：</p>
+
+<pre><code>img_url = 'https://example.com/image.jpg'
+response = requests.get(img_url)
+with open('image.jpg', 'wb') as f:
+    f.write(response.content)</code></pre>
+
+<p>这四行代码就是图片爬取的最小可行版本。它的优点在于灵活——你可以在发请求前加上 <code>headers=</code> 做 UA 伪装，或者用 <code>requests.Session()</code> 保持 Cookie，处理需要登入才能看的图片。</p>
+
+<h2>方式二：urlretrieve 直接存储</h2>
+<p>Python 标准库 <code>urllib.request</code> 提供了一个更简洁的函数 <code>urlretrieve</code>，可以直接按 url 把文件下载到本地：</p>
+
+<pre><code>from urllib.request import urlretrieve
+img_url = 'https://example.com/image.jpg'
+urlretrieve(img_url, 'image.jpg')</code></pre>
+
+<p>这行代码的效果和上面四行等价，但更短、更直觉。它的缺点是灵活性差——不能自定义 headers、不能处理 Cookie、不能应对需要 UA 伪装或登入的场景。实际选型时遵循一个简单原则：<strong>需要 UA 伪装或登入时用 response.content，不需要时用 urlretrieve</strong>。</p>
+
+<h2>实战中的两种坑</h2>
+<p>真实爬取图片时，常会遇到两种坑。</p>
+
+<h3>防盗链（Referer 限制）</h3>
+<p>服务器检查请求头里的 <code>Referer</code> 字段，如果发现请求不是从自己的网站跳转过来的，就拒绝返回图片。破解方法是在请求头里带上正确的 <code>Referer</code>（通常是图片所在页面的 url）。这种情况只能用 <code>requests.get()</code> + <code>headers=</code> 的方式，因为 <code>urlretrieve</code> 不支持自定义 headers。</p>
+
+<h3>图片懒加载</h3>
+<p>网页为了加速加载，会把 <code>&lt;img&gt;</code> 标签的 <code>src</code> 属性设成一张占位图或空字串，真正的图片地址藏在 <code>data-src</code>、<code>src2</code> 这类自定义属性（伪属性）里。只有当图片滚到浏览器可视区域时，JavaScript 才会把伪属性的值写进 <code>src</code>，触发真正的图片下载。如果你直接解析 <code>src</code>，拿到的就是占位图。破解方法是直接解析伪属性的值——比如 <code>//img/@data-src</code> 或 <code>//img/@src2</code>——拿到真实地址后再用 <code>requests.get()</code> 下载。</p>
+
+<p>这两种坑都指向同一个心法：<strong>爬不到图片时，先看请求头（Referer），再看属性（src 是否被替换）</strong>。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="下载二进制文件（如图片）时，应该使用 response 的哪个属性？" data-correct="1" data-explain="二进制文件用 response.content 拿到原始字节，避免强制解码产生乱码。">
+  <button class="opt">response.text</button>
+  <button class="opt">response.content</button>
+  <button class="opt">response.json()</button>
+  <button class="opt">response.data</button>
+</div>
+
+<div class="quiz" data-question="urlretrieve 属于 Python 的哪个标准库？" data-correct="0" data-explain="urlretrieve 属于 urllib.request 模块，可以直接按 url 下载文件到本地。">
+  <button class="opt">urllib.request</button>
+  <button class="opt">http.client</button>
+  <button class="opt">requests</button>
+  <button class="opt">socket</button>
+</div>
+
+<div class="quiz" data-question="urlretrieve 相比 requests.get() 最大的缺点是什么？" data-correct="2" data-explain="urlretrieve 不能自定义 headers、Cookie，无法处理需要 UA 伪装或登入的场景。">
+  <button class="opt">下载速度慢</button>
+  <button class="opt">不支持大文件</button>
+  <button class="opt">不能自定义请求头</button>
+  <button class="opt">只能下载文本</button>
+</div>
+
+<div class="quiz" data-question="防盗链（Hotlink Protection）是通过检查哪个请求头来判断的？" data-correct="3" data-explain="防盗链通过检查 Referer 请求头判断请求是否来自允许的域名。">
+  <button class="opt">User-Agent</button>
+  <button class="opt">Cookie</button>
+  <button class="opt">Content-Type</button>
+  <button class="opt">Referer</button>
+</div>
+
+<div class="quiz" data-question="图片懒加载通常把真正的图片地址藏在 img 标签的哪里？" data-correct="1" data-explanation="懒加载把真实地址放在 data-src、src2 等自定义伪属性里，进入可视区后才写入 src。">
+  <button class="opt">src 属性</button>
+  <button class="opt">data-src 等伪属性</button>
+  <button class="opt">href 属性</button>
+  <button class="opt">title 属性</button>
+</div>
+
+<div class="quiz" data-question="以下哪种场景最适合使用 urlretrieve？" data-correct="0" data-explain="urlretrieve 适合无需 UA 伪装、无需登入的公开资源下载，代码最简洁。">
+  <button class="opt">下载公开图片，无需 UA</button>
+  <button class="opt">下载需要登入的图片</button>
+  <button class="opt">下载需要携带 Referer 的图片</button>
+  <button class="opt">下载需要代理的图片</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./params-post-ua.html">← 上一步：GET 与 POST 参数、UA 伪装与动态加载定位</a>
+  <a href="./xpath-parsing.html">下一步：xpath 解析：环境安装、两步流程与核心表达式 →</a>
+</div>
+
+<div class="footer">js-reverse · 03-requests-xpath · 图片爬取：content 二进制与 urlretrieve 直存</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

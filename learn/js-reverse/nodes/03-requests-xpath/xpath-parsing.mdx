@@ -1,0 +1,85 @@
+---
+id: xpath-parsing
+title: xpath 解析：环境安装、两步流程与核心表达式
+subject: js-reverse
+sources:
+  - "[[sources/js-reverse/js逆向课件/day05/数据解析.md#何为数据解析]]"
+  - "[[sources/js-reverse/js逆向课件/day05/数据解析.md#数据解析的主流策略]]"
+created: 2026-09-06
+updated: 2026-09-07
+---
+
+<LearningGoal>
+理解聚焦爬虫的五步编码流程，掌握 xpath 的两步流程（创建 etree 对象加载源码 → 调用 xpath 函数），并能运用层级定位、索引定位、属性定位以及 text()、//text()、/@attr 等核心表达式提取数据。
+</LearningGoal>
+
+## Lesson
+
+上一课学会了用 requests 把网页搬回来，但搬回来的是密密麻麻的 HTML 源码。要从里面精准地抽出标题、价格、链接，而不是在一堆字符串里盲目搜索，就需要一种专门在 HTML/XML 文档里定位节点的查询语言——xpath（XML Path Language）。
+
+**为什么需要 xpath？**
+
+HTML 文档的本质是一棵树。`<html>` 是根节点，`<head>` 和 `<body>` 是它的子节点，`<div>`、`<a>`、`<img>` 是更深层的子节点。每个节点还可以有属性（比如 `class="song"`、`href="https://example.com"`）。
+
+如果你想拿到「页面里 class 为 song 的 div 下面所有 a 标签的文字」，用字符串搜索或正则表达式不是不行，但写起来极其脆弱——HTML 裡多一个空格、换行位置变一下，正则就废了。xpath 提供了一套专门描述「在树状结构裡怎么走」的语法，让你可以直接说「从根走到 html/body/div」或「不管在哪裡，找到 class 为 song 的 div」，而不需要关心中间有多少层、格式怎么排版。
+
+**xpath 的两步编码流程**
+
+Python 裡用 xpath 解析 HTML，需要借助 `lxml` 库。整个流程就两步：
+
+第一步，创建 etree 对象加载页面源码。如果是本地 HTML 文件，用 `etree.parse('file.html')`；如果是网络页面，用 `etree.HTML(response.text)`。加载之后，你就得到一个可以在上面执行 xpath 查询的文档对象。
+
+第二步，调用 `xpath()` 函数，传入 xpath 表达式。这个函数返回一个列表，裡面是所有匹配到的节点或提取出来的字串。
+
+**核心 xpath 表达式全家桶**
+
+xpath 表达式可以分成两大类：定位节点和提取数据。
+
+*层级定位*：用 `/` 和 `//` 描述节点之间的层级关系。
+
+- `/html/head/meta`：绝对路径，从根节点 html 出发，经过 head，找到 meta。这种写法写起来长，但意图最清晰。
+- `//meta`：相对路径，不管 meta 在文档的哪个位置，全部找到。`//` 表示「在任意层级搜索」，是最常用的定位前缀。
+- `/html/body/div[1]`：索引定位。xpath 的索引从 1 开始（不是从 0），`div[1]` 表示 body 下的第一个 div。
+
+*属性定位*：用 `[@属性名="值"]` 来筛选具有特定属性的节点。
+
+- `//div[@class="song"]`：找到所有 class 属性为 song 的 div。这是最常用的属性定位，因为网页设计师经常用 class 来分组元素。
+- `//a[@href="https://example.com"]`：找到 href 为指定值的 a 标签。
+- `//div[@class="tang"]/ul/li/a`：层级 + 组合，定位 class 为 tang 的 div 下的 ul 下的 li 下的 a。
+- `//div[@class="tang"]//a`：跨层级定位。`//a` 前面的 `//` 表示「在 div 的任意深层后代裡找 a」，不需要指定中间有几层 ul、li。
+
+*提取数据*：定位到节点后，还要把内容取出来。
+
+- `/text()`：取节点的直系文本。比如 `//div[@class="song"]/text()` 拿到的是 div 里面直接包裹的文字，不包括子标签裡的文字。
+- `//text()`：取节点及其所有后代节点的全部文本。比如 `//div[@class="song"]//text()` 会把 div 裡所有层的文字都返回。
+- `/@属性名`：取属性值。比如 `//img/@src` 拿到所有 img 标签的 src 属性值（图片地址），`//a/@href` 拿到所有超链接的 href。
+
+**一个直观的例子**
+
+假设 HTML 裡有这样一段：
+
+```html
+<div class="tang">
+  <ul>
+    <li><a href="/song/1.html">静夜思</a></li>
+    <li><a href="/song/2.html">春晓</a></li>
+  </ul>
+</div>
+```
+
+要拿到所有古诗标题，表达式是 `//div[@class="tang"]//a/text()`，返回 `['静夜思', '春晓']`。要拿到所有链接，表达式是 `//div[@class="tang"]//a/@href`，返回 `['/song/1.html', '/song/2.html']`。
+
+**聚焦爬虫的五步流程**
+
+把 requests 和 xpath 组合起来，就是聚焦爬虫的标准流程：指定 url → 发起请求 → 获取响应数据 → 数据解析 → 持久化存储。比通用爬虫多了第四步「数据解析」，也就是用 xpath 把 response.text 裡的目标内容抠出来。
+
+这个流程是后续所有爬虫代码的骨架。后面学到的 Session 保持、非同步请求、Scrapy 框架，本质上都是在「发起请求」和「数据解析」这两个环节上做强化。
+
+## Sources
+
+- [[sources/js-reverse/js逆向课件/day05/数据解析.md#何为数据解析]]
+- [[sources/js-reverse/js逆向课件/day05/数据解析.md#数据解析的主流策略]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/xpath-parsing.html)

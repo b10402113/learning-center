@@ -1,0 +1,66 @@
+---
+id: image-crawl
+title: 图片爬取：content 二进制与 urlretrieve 直存
+subject: js-reverse
+sources:
+  - "[[sources/js-reverse/js逆向课件/day04/requests基础.md#requests基础操作(代码实操重点！！！)]]"
+created: 2026-09-06
+updated: 2026-09-06
+---
+
+<LearningGoal>
+掌握两种图片爬取方式——用 response.content 写二进制文件（需要 UA 伪装时）和用 urllib.request.urlretrieve 直接按地址存储（无需 UA 时更简洁），并能根据实际场景选择合适方案。
+</LearningGoal>
+
+## Lesson
+
+上一课学会了用 `requests.get(url)` 拿到网页源码。但爬虫要抓的不只是文字——图片、PDF、影片这些二进制文件，同样需要搬回本地。requests 处理二进制数据的核心，是 response 对象的 `content` 属性。
+
+**为什么不能用 text？**
+
+`response.text` 返回的是字符串，它会把服务器返回的原始字节按某种编码（比如 UTF-8）解码成文字。这对 HTML、JSON 这类文本数据没问题，但对图片、影片这些二进制文件，强行解码只会得到一堆乱码，写进文件后图片就打不开了。
+
+`response.content` 返回的是未经解码的原始字节（`bytes` 类型），也就是服务器发回来的 0101 原样。把原样字节写进文件，文件就是完整的、可打开的。这是二进制文件和文本文件在爬虫处理上的根本差异：**文本用 text，二进制用 content**。
+
+**方式一：response.content 写文件**
+
+最通用的图片爬取方式，是用 `requests.get(img_url)` 拿到 response，再用 `response.content` 拿到二进制数据，最后用 `open()` 以 `wb`（write binary，二进制写入）模式写进文件：
+
+```python
+img_url = 'https://example.com/image.jpg'
+response = requests.get(img_url)
+with open('image.jpg', 'wb') as f:
+    f.write(response.content)
+```
+
+这四行代码就是图片爬取的最小可行版本。它的优点在于灵活——你可以在发请求前加上 `headers=` 做 UA 伪装，或者用 `requests.Session()` 保持 Cookie，处理需要登入才能看的图片。
+
+**方式二：urlretrieve 直接存储**
+
+Python 标准库 `urllib.request` 提供了一个更简洁的函数 `urlretrieve`，可以直接按 url 把文件下载到本地，不需要手动打开文件、写入内容：
+
+```python
+from urllib.request import urlretrieve
+img_url = 'https://example.com/image.jpg'
+urlretrieve(img_url, 'image.jpg')
+```
+
+这行代码的效果和上面四行等价，但更短、更直觉。它的缺点是灵活性差——不能自定义 headers、不能处理 Cookie、不能应对需要 UA 伪装或登入的场景。所以实际选型时遵循一个简单原则：**需要 UA 伪装或登入时用 response.content，不需要时用 urlretrieve**。
+
+**实战注意：图片 url 的两种坑**
+
+真实爬取图片时，你常会遇到两种坑。
+
+第一种是**防盗链**（Referer 限制）：服务器检查请求头里的 `Referer` 字段，如果发现请求不是从自己的网站跳转过来的，就拒绝返回图片。破解方法是在请求头里带上正确的 `Referer`（通常是图片所在页面的 url）。这种情况只能用 `requests.get()` + `headers=` 的方式，因为 `urlretrieve` 不支持自定义 headers。
+
+第二种是**图片懒加载**：网页为了加速加载，会把 `<img>` 标签的 `src` 属性设成一张占位图或空字串，真正的图片地址藏在 `data-src`、`src2` 这类自定义属性（伪属性）里。只有当图片滚到浏览器可视区域时，JavaScript 才会把伪属性的值写进 `src`，触发真正的图片下载。如果你直接解析 `src`，拿到的就是占位图。破解方法是直接解析伪属性的值——比如 `//img/@data-src` 或 `//img/@src2`——拿到真实地址后再用 `requests.get()` 下载。
+
+这两种坑都指向同一个心法：**爬不到图片时，先看请求头（Referer），再看属性（src 是否被替换）**。后面 xpath 进阶课会详细演示这两种场景的破解流程。
+
+## Sources
+
+- [[sources/js-reverse/js逆向课件/day04/requests基础.md#requests基础操作(代码实操重点！！！)]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/image-crawl.html)

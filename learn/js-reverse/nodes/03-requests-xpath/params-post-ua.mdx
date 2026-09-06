@@ -1,0 +1,84 @@
+---
+id: params-post-ua
+title: GET 与 POST 参数、UA 伪装与动态加载定位
+subject: js-reverse
+sources:
+  - "[[sources/js-reverse/js逆向课件/day04/requests基础.md#requests基础操作(代码实操重点！！！)]]"
+created: 2026-09-06
+updated: 2026-09-07
+---
+
+<LearningGoal>
+学会用 params 字典封装 GET 参数、用 data 字典携带 POST 参数，理解 UA 伪装如何破解 User-Agent 检测，并掌握动态加载数据的全局搜索定位技巧。
+</LearningGoal>
+
+## Lesson
+
+上一课的 `requests.get(url)` 能应付最直觉的场景——直接打开一个网址看内容。但真实上网时，你常常需要提交筛选条件、搜索关键字，甚至模拟登入。这些动作在 HTTP 协议里对应两种最主要的请求方式：GET 和 POST，以及藏在请求头里的身份标识 User-Agent。
+
+**GET 参数：地址栏里的筛选条件**
+
+很多网址的地址栏会带上一串 `?keyword=Python&page=2` 这样的尾巴，这叫 GET 参数。它的作用是告诉服务器「我要看的是第 2 页、关键字为 Python 的结果」。参数本身直接暴露在 url 里，所以适合传递筛选、翻页这类非敏感信息。
+
+用 requests 发 GET 请求时，最直觉的做法是手工拼字符串：`requests.get('https://example.com/search?keyword=Python&page=2')`。但一旦参数多、值里带中文或特殊字符，手工拼接就容易出错。requests 提供了 `params` 字典来解决这个问题——把参数放进一个字典里，传给 `requests.get()` 的 `params=` 参数：
+
+```python
+url = 'https://example.com/search'
+params = {'keyword': 'Python', 'page': 2}
+response = requests.get(url, params=params)
+```
+
+requests 会自动把字典编码成 `?keyword=Python&page=2` 拼到 url 后面，并且处理特殊字符的转义。这是写爬虫时最常见的参数封装方式。
+
+**POST 参数：表单提交**
+
+POST 请求对应的是「我把这些资料打包寄给你」的动作，最常见于登入表单、搜索框。和 GET 不同，POST 的参数不会出现在地址栏，而是放在 HTTP 请求的 body（请求体）里。这意味著 POST 适合传递密码、个人资讯这类敏感内容，或者数据量很大的表单。
+
+用 requests 发 POST 请求时，把参数放进一个字典，传给 `requests.post()` 的 `data=` 参数：
+
+```python
+url = 'https://example.com/login'
+data = {'username': 'alice', 'password': 'secret123'}
+response = requests.post(url, data=data)
+```
+
+requests 会自动把字典编码成表单格式放进请求体。有些网站（尤其是后端是 JSON API 的）要求请求体是 JSON 字符串，这时改用 `json=` 参数：`requests.post(url, json=data)`，requests 会帮你序列化并加上正确的 `Content-Type: application/json` 头。
+
+**UA 伪装：破解 User-Agent 检测**
+
+浏览器每次发请求，都会在请求头里带一个 `User-Agent`（UA）字段，用来告诉服务器「我是 Chrome 在 Windows 上」「我是 Safari 在 iPhone 上」。很多网站会检查这个字段——如果发现 UA 是 `python-requests/2.28.0`，就直接拒绝服务，因为正常的浏览器不会用这个 UA。这就是最简单的反爬机制：User-Agent 检测。
+
+破解方法就是 UA 伪装：手动把 UA 改成常见浏览器的 UA 字符串。UA 字符串可以在网上搜到一大把，比如 Chrome 的 UA 长这样：
+
+```
+Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+```
+
+用 requests 发请求时，通过 `headers=` 参数传入：
+
+```python
+headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ...'}
+response = requests.get(url, headers=headers)
+```
+
+requests 发出去时，就会用你提供的 UA 而不是默认的 `python-requests/...`。UA 伪装是爬虫第一课的反反爬技巧，几乎所有需要破解反爬的场景都会用到。
+
+**动态加载数据：抓包定位真正请求**
+
+现代网页大量使用 Ajax（Asynchronous JavaScript and XML，异步 JavaScript 和 XML）技术。正常网页每換一個頁面，就像餐廳整個桌子翻掉重來；Ajax 則像是桌紋絲不動，服務員只把新菜端上來——頁面先載入一個空殼，然後用 JavaScript 在背景偷偷發請求拿到資料，再區域更新到頁面上。這種透過 JS 非同步請求拿到的內容，就叫動態載入資料。它的特徵是：你在瀏覽器網址欄看到的 url，和實際返回資料的 url 不是同一個。
+
+舉個例子：一個翻頁的資訊列表，網址欄永遠是 `https://example.com/news`，但翻頁時頁面並沒有跳轉，而是 JS 悄悄發了 `https://example.com/api/news?page=3` 這個請求拿到第 3 頁的資料。如果你直接 `requests.get('https://example.com/news')`，拿到的只是空殼，沒有資訊內容。
+
+對爬蟲來說，這意味著：網頁原始碼裡找不到你要的資訊，不要硬摳 HTML，去找 AJAX 那個 API 地址，直接打 API。API 回的是乾淨的 JSON，反而比 HTML 更好處理。
+
+破解动态加载的核心思路是**抓包**：打开浏览器的开发者工具（F12），切到 Network（网络）面板，筛选 XHR/Fetch 请求，翻页或触发动作后，看面板里多出了哪个请求。找到真正的数据请求后，用 Ctrl+F 全局搜索关键字（比如页面上显示的某条资讯标题），定位到返回数据的那个请求。然后把这个请求的 url、请求参数、headers（常常需要带 `Referer` 头，说明请求是从哪个页面跳转过来的）全部复制到 requests 里，重新发一遍，就能拿到同样的数据。
+
+这条心法很重要：**爬不到想要的数据，唯一原因是「程序模拟浏览器的力度不够」**。动态加载只是其中一种「力度不够」——你以为在请求 A，实际上数据在 B。后面学到的登入、加密、验证码，本质上都是不同力度的「模拟不足」。
+
+## Sources
+
+- [[sources/js-reverse/js逆向课件/day04/requests基础.md#requests基础操作(代码实操重点！！！)]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/params-post-ua.html)

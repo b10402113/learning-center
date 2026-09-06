@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>模擬登入流程：從登入介面拿到 Cookie — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>模擬登入流程：從登入介面拿到 Cookie</h1>
+<div class="meta">js-reverse · Step 2/4 · 約 15 分鐘</div>
+
+<h2>這節課你會學到什麼</h2>
+<p>模擬登入的核心是「用 Session 物件先 POST 帳號密碼，拿到伺服器給你的 Cookie，再用同一個 Session 去抓登入後的資料」。學完這節課，你能獨立重現「登入→拿 Cookie→帶 Cookie 訪問受保護介面」的完整流程。</p>
+
+<h2>情境：為什麼需要模擬登入？</h2>
+<p>很多網站的內容只有登入後才看得到——你的書架、付費課程字幕、個人收藏。手動打開瀏覽器登入再複製 Cookie 能用，但自動化爬蟲做不到「假裝是人類手動登入」。模擬登入就是讓 Python 程式自己完成登入動作，拿到伺服器認證後自動抓取資料。</p>
+<p>關鍵觀察：瀏覽器登入就是表單送出一個 POST 請求，伺服器回傳 Set-Cookie，瀏覽器之後自動帶上它。我們只要用 Session 物件重現這個過程。</p>
+
+<h2>模擬登入的兩次請求模型</h2>
+<p>整個流程只需要兩次 HTTP 呼叫，中間靠 Session 物件自動橋接 Cookie：</p>
+
+<table>
+  <tr><th>順序</th><th>請求</th><th>發生什麼</th></tr>
+  <tr>
+    <td>第一次</td>
+    <td><code>session.post(login_url, data=form)</code></td>
+    <td>POST 帳號密碼到登入介面，伺服器回傳 Set-Cookie，Session 自動存下</td>
+  </tr>
+  <tr>
+    <td>第二次</td>
+    <td><code>session.get(protected_url)</code></td>
+    <td>Session 自動攜帶 Cookie，伺服器讀取 Cookie 知道你是誰，回傳受保護資料</td>
+  </tr>
+</table>
+
+<p>中間你完全不用碰 Cookie——Session 幫你做完了。這兩次請求的順序不能顛倒，因為第一次拿不到 Cookie，第二次就會被擋在門外。</p>
+
+<h2>實戰案例：17k 小說書架</h2>
+<p>17k 小說網站的書架資料是登入後才看得到的動態載入介面。我們用 Python 重現整個流程：</p>
+
+<h3>步驟 1：找到登入介面</h3>
+<p>打開瀏覽器的 DevTools → Network，手動登入一次。在請求列表裡找到 POST 請求：</p>
+<pre><code>Request URL: https://passport.17k.com/ck/user/login
+Request Method: POST</code></pre>
+<p>在 Payload 或 Form Data 裡找到伺服器期望的表單欄位名稱：</p>
+<pre><code>loginName: your_username
+password: your_password</code></pre>
+
+<h3>步驟 2：用 Session 發送登入請求</h3>
+<pre><code>import requests
+
+session = requests.Session()
+
+login_url = "https://passport.17k.com/ck/user/login"
+login_data = {
+    "loginName": "your_username",
+    "password": "your_password"
+}
+
+# 第一次請求：POST 帳號密碼，Session 自動存 Cookie
+resp = session.post(login_url, data=login_data)
+print(resp.status_code)  # 200 表示成功</code></pre>
+
+<blockquote>
+<strong>為什麼用 POST 而不是 GET？</strong>帳密不該出現在 URL 裡（GET 會把它們拼在網址列上），POST 放在請求體裡，伺服器用 <code>request.form</code> 或 <code>request.body</code> 讀取。
+</blockquote>
+
+<h3>步驟 3：用同一個 Session 請求受保護介面</h3>
+<pre><code># 第二次請求：Session 自動攜帶 Cookie
+shelf_url = "https://user.17k.com/ck/author/shelf"
+resp = session.get(shelf_url)
+
+data = resp.json()  # 這是動態載入的 JSON 資料
+print(data)</code></pre>
+<p>這一步的關鍵：你在程式碼裡完全看不到「Cookie」三個字。Session 已經自動從第一次請求的回應裡提取了 Cookie，並在第二次請求時自動帶上。伺服器讀到 Cookie 知道你是誰，就把書架資料回傳給你。</p>
+
+<h3>完整程式碼</h3>
+<pre><code>import requests
+
+session = requests.Session()
+session.headers.update({"User-Agent": "Mozilla/5.0 ..."})
+
+# 第一次：登入拿 Cookie
+login_resp = session.post(
+    "https://passport.17k.com/ck/user/login",
+    data={"loginName": "your_username", "password": "your_password"}
+)
+
+# 第二次：帶 Cookie 抓書架
+shelf_resp = session.get("https://user.17k.com/ck/author/shelf")
+books = shelf_resp.json()
+print(books)</code></pre>
+
+<h2>常見踩雷</h2>
+<table>
+  <tr><th>問題</th><th>原因</th><th>解法</th></tr>
+  <tr>
+    <td>第二次請求回傳 401 或導向登入頁</td>
+    <td>Session 沒拿到 Cookie，通常是第一次 POST 的表單欄位名稱錯了</td>
+    <td>檢查 DevTools 裡的 Form Data，確認 key 完全一致</td>
+  </tr>
+  <tr>
+    <td>被 CSRF Token 擋住</td>
+    <td>有些登入頁在表單裡埋了隱藏的 token，POST 要一起帶上</td>
+    <td>先用 GET 請求登入頁，用正則或 lxml 從 HTML 裡擷取 token，再 POST</td>
+  </tr>
+  <tr>
+    <td>被驗證碼擋住</td>
+    <td>連續登入錯誤太多次，伺服器開始彈驗證碼</td>
+    <td>接打碼平台（後面會教）或降低登入頻率</td>
+  </tr>
+</table>
+
+<blockquote class="good-code">
+<strong>口訣：</strong>模擬登入 = session.post 拿 Cookie + session.get 拿資料。中間 Cookie 由 Session 自動管。
+</blockquote>
+
+<h2>延伸：不是每個網站都用 JSON</h2>
+<p>17k 的書架是 Ajax 動態載入，回應格式是 JSON，所以可以用 <code>.json()</code> 解析。但有些網站登入後回傳的是 HTML 頁面，這時要用 <code>.text</code> 拿到 HTML 字串，再用 lxml 或 XPath 解析。兩種情境的 Session 用法完全一樣，差別只在回應的解析方式。</p>
+
+<h2>小結</h2>
+<p>模擬登入是「會抓公開網頁」升級成「能進入登入後世界」的關鍵技能。核心就兩步：<code>session.post</code> 提交帳密、Session 自動存 Cookie；<code>session.get</code> 訪問受保護介面、Session 自動帶 Cookie。中間你完全不用手動碰 Cookie。</p>
+<p>下一步我們要學代理伺服器——當你的爬蟲發出太多請求被封鎖 IP 時，怎麼用代理池來對抗。</p>
+
+<div class="lesson-nav">
+  <div><a href="./cookie-session-basics.html">← 上一步：Cookie 本質與 Session 自動管理</a></div>
+  <div><a href="./proxy-crawl.html">下一步：代理伺服器、匿名度與代理池 →</a></div>
+</div>
+
+<div class="quiz" data-question="模擬登入的「兩次請求模型」中，第一次請求的目的是什麼？" data-correct="2" data-explain="第一次 POST 帳密，伺服器回傳 Set-Cookie，Session 自動存入 Cookie。">
+  <button class="opt">抓取受保護頁面的資料</button>
+  <button class="opt">建立空的 Session 物件</button>
+  <button class="opt">POST 帳號密碼以拿到 Cookie</button>
+  <button class="opt">設定 User-Agent</button>
+</div>
+
+<div class="quiz" data-question="在 Python requests 裡，模擬登入第二次請求應該用哪個物件？" data-correct="1" data-explain="必須用同一個 Session 物件，它才能自動攜帶第一次拿到的 Cookie。">
+  <button class="opt">requests.get(protected_url)</button>
+  <button class="opt">session.get(protected_url)</button>
+  <button class="opt">requests.Session(protected_url)</button>
+  <button class="opt">session.post(protected_url)</button>
+</div>
+
+<div class="quiz" data-question="為什麼模擬登入第一次請求通常用 POST 而不是 GET？" data-correct="0" data-explain="帳密不該出現在 URL 上（GET 會把它們拼在網址列），POST 放在請求體裡。">
+  <button class="opt">帳密不該出現在 URL 裡</button>
+  <button class="opt">POST 比 GET 快</button>
+  <button class="opt">GET 不能帶資料</button>
+  <button class="opt">伺服器不接受 GET</button>
+</div>
+
+<div class="quiz" data-question="如果模擬登入第二次請求回傳 401 或導向登入頁，最可能的原因是？" data-correct="2" data-explain="Session 沒拿到 Cookie，通常是第一次 POST 的表單欄位名稱和伺服器期望的不一致。">
+  <button class="opt">Session 物件建立失敗</button>
+  <button class="opt">伺服器不支援 JSON</button>
+  <button class="opt">第一次請求的表單欄位名稱錯了</button>
+  <button class="opt">User-Agent 設定錯誤</button>
+</div>
+
+<div class="quiz" data-question="下面哪個 HTTP 標頭負責讓伺服器下發 Cookie？" data-correct="3" data-explain="伺服器用 Set-Cookie 標頭把 Cookie 下發給瀏覽器或 Session 物件。">
+  <button class="opt">Cookie</button>
+  <button class="opt">Set-Header</button>
+  <button class="opt">Content-Type</button>
+  <button class="opt">Set-Cookie</button>
+</div>
+
+<div class="quiz" data-question="17k 小說書架的動態載入介面回傳的是什麼格式？" data-correct="1" data-explain="書架是 Ajax 動態載入，回傳 JSON，可以用 resp.json() 解析。">
+  <button class="opt">HTML</button>
+  <button class="opt">JSON</button>
+  <button class="opt">XML</button>
+  <button class="opt">純文字</button>
+</div>
+
+<div class="footer">
+  js-reverse · Session、登入與代理 · Step 2/4
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

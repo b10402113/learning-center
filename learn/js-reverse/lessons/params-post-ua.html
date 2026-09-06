@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GET 与 POST 参数、UA 伪装与动态加载定位 — requests 与 xpath 解析</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>GET 与 POST 参数、UA 伪装与动态加载定位</h1>
+<p class="meta">js-reverse · 03-requests-xpath · Step 2/5</p>
+
+<h2>学习 goal</h2>
+<p>学会用 params 字典封装 GET 参数、用 data 字典携带 POST 参数，理解 UA 伪装如何破解 User-Agent 检测，并掌握动态加载数据的全局搜索定位技巧。</p>
+
+<h2>GET 参数：地址栏里的筛选条件</h2>
+<p>很多网址的地址栏会带上一串 <code>?keyword=Python&amp;page=2</code> 这样的尾巴，这叫 GET 参数。它的作用是告诉服务器「我要看的是第 2 页、关键字为 Python 的结果」。参数直接暴露在 url 里，适合传递筛选、翻页这类非敏感信息。</p>
+<p>最直觉的做法是手工拼字符串，但一旦参数多、值里带中文或特殊字符，手工拼接就容易出错。requests 提供了 <code>params</code> 字典来解决这个问题：</p>
+
+<pre><code>url = 'https://example.com/search'
+params = {'keyword': 'Python', 'page': 2}
+response = requests.get(url, params=params)
+# 实际请求的 url 会自动变成：
+# https://example.com/search?keyword=Python&amp;page=2</code></pre>
+
+<p>requests 会自动把字典编码成查询字符串拼到 url 后面，并且处理特殊字符的转义。</p>
+
+<h2>POST 参数：表单提交</h2>
+<p>POST 请求对应的是「我把这些资料打包寄给你」的动作，最常见于登入表单、搜索框。和 GET 不同，POST 的参数不会出现在地址栏，而是放在 HTTP 请求的 body（请求体）里。</p>
+<p>用 requests 发 POST 请求时，把参数放进一个字典，传给 <code>requests.post()</code> 的 <code>data=</code> 参数：</p>
+
+<pre><code>url = 'https://example.com/login'
+data = {'username': 'alice', 'password': 'secret123'}
+response = requests.post(url, data=data)</code></pre>
+
+<p>requests 会自动把字典编码成表单格式放进请求体。如果后端是 JSON API，改用 <code>json=</code> 参数：<code>requests.post(url, json=data)</code>，requests 会帮你序列化并加上正确的 <code>Content-Type: application/json</code> 头。</p>
+
+<h2>UA 伪装：破解 User-Agent 检测</h2>
+<p>浏览器每次发请求，都会在请求头里带一个 <code>User-Agent</code>（UA）字段，用来告诉服务器「我是 Chrome 在 Windows 上」「我是 Safari 在 iPhone 上」。很多网站会检查这个字段——如果发现 UA 是 <code>python-requests/2.28.0</code>，就直接拒绝服务。这就是最简单的反爬机制：User-Agent 检测。</p>
+<p>破解方法就是 UA 伪装：手动把 UA 改成常见浏览器的 UA 字符串：</p>
+
+<pre><code>headers = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                  'AppleWebKit/537.36 (KHTML, like Gecko) '
+                  'Chrome/120.0.0.0 Safari/537.36'
+}
+response = requests.get(url, headers=headers)</code></pre>
+
+<p>requests 发出去时，就会用你提供的 UA 而不是默认的 <code>python-requests/...</code>。UA 伪装是爬虫第一课的反反爬技巧。</p>
+
+<h2>动态加载数据：抓包定位真正请求</h2>
+<p>现代网页大量使用 Ajax 技术。正常网页每換一個頁面，就像餐廳整個桌子翻掉重來；Ajax 則像是桌紋絲不動，服務員只把新菜端上來——頁面先載入一個空殼，然後用 JavaScript 在背景偷偷發請求拿到資料，再區域更新到頁面上。這種透過 JS 非同步請求拿到的內容，就叫動態載入資料。它的特徵是：你在瀏覽器網址欄看到的 url，和實際返回資料的 url 不是同一個。</p>
+<p>對爬蟲來說，這意味著：網頁原始碼裡找不到你要的資訊，不要硬摳 HTML，去找 AJAX 那個 API 地址，直接打 API。API 回的是乾淨的 JSON，反而比 HTML 更好處理。</p>
+<p>破解動態載入的核心思路是<strong>抓包</strong>：打開瀏覽器的開發者工具（F12），切到 Network（網路）面板，篩選 XHR/Fetch 請求，翻頁或觸發動作後，看面板裡多出了哪個請求。找到真正的資料請求後，用 Ctrl+F 全域搜尋關鍵字（比如頁面上顯示的某條資訊標題），定位到返回資料的那個請求。然後把這個請求的 url、請求參數、headers（常常需要帶 <code>Referer</code> 頭）全部複製到 requests 裡，重新發一遍，就能拿到同樣的資料。</p><p>這條心法很重要：<strong>爬不到想要的資料，唯一原因是「程式模擬瀏覽器的力度不夠」</strong>。動態載入只是其中一種「力度不夠」——你以為在請求 A，實際上資料在 B。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="GET 参数应该通过 requests.get() 的哪个参数传递？" data-correct="1" data-explain="GET 参数用 params 字典传递，requests 会自动编码并拼接到 url 后面。">
+  <button class="opt">data</button>
+  <button class="opt">params</button>
+  <button class="opt">headers</button>
+  <button class="opt">cookies</button>
+</div>
+
+<div class="quiz" data-question="POST 请求的参数应该放在请求的哪个部分？" data-correct="2" data-explain="POST 参数放在请求体（body）里，不会出现在地址栏。">
+  <button class="opt">URL 查询字符串</button>
+  <button class="opt">请求头（headers）</button>
+  <button class="opt">请求体（body）</button>
+  <button class="opt">URL 路径</button>
+</div>
+
+<div class="quiz" data-question="UA 伪装是为了绕过哪种反爬机制？" data-correct="0" data-explain="UA 伪装用于绕过 User-Agent 检测，让服务器以为请求来自正常浏览器。">
+  <button class="opt">User-Agent 检测</button>
+  <button class="opt">IP 封禁</button>
+  <button class="opt">验证码</button>
+  <button class="opt">加密签名</button>
+</div>
+
+<div class="quiz" data-question="动态加载数据的 url 和地址栏 url 的关系通常是？" data-correct="3" data-explain="动态加载数据通过 JS 异步请求获取，实际数据请求的 url 往往和地址栏 url 不同。">
+  <button class="opt">完全相同</button>
+  <button class="opt">完全不同</button>
+  <button class="opt">只有协议不同</button>
+  <button class="opt">可能不同，需要抓包定位</button>
+</div>
+
+<div class="quiz" data-question="破解动态加载数据的关键步骤是什么？" data-correct="2" data-explain="通过抓包工具找到真正的数据请求，再提取 url、参数、headers 重新发送。">
+  <button class="opt">增加请求延迟</button>
+  <button class="opt">使用代理 IP</button>
+  <button class="opt">抓包定位真正请求</button>
+  <button class="opt">修改请求方法</button>
+</div>
+
+<div class="quiz" data-question="requests 默认的 User-Agent 通常包含什么关键字？" data-correct="1" data-explain="requests 默认 UA 包含 'python-requests' 和版本号，网站据此识别爬虫。">
+  <button class="opt">Chrome</button>
+  <button class="opt">python-requests</button>
+  <button class="opt">Mozilla</button>
+  <button class="opt">Safari</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./requests-basics.html">← 上一步：requests 入门：编码四流程与响应处理</a>
+  <a href="./image-crawl.html">下一步：图片爬取：content 二进制与 urlretrieve 直存 →</a>
+</div>
+
+<div class="footer">js-reverse · 03-requests-xpath · GET 与 POST 参数、UA 伪装与动态加载定位</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

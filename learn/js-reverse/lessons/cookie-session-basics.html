@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cookie 本質與 Session 自動管理 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Cookie 本質與 Session 自動管理</h1>
+<div class="meta">js-reverse · Step 1/4 · 約 12 分鐘</div>
+
+<h2>這節課你會學到什麼</h2>
+<p> Cookie 是伺服器在你瀏覽器裡留下的「身分證」。掌握 Cookie 的運作原理之後，你就能理解為什麼手動複製 Cookie 那麼麻煩、為什麼 Session 物件是更好的解法，以及 <code>requests.Session()</code> 的標準用法。</p>
+
+<h2>情境：為什麼伺服器需要 Cookie？</h2>
+<p>你打開瀏覽器登入微博，伺服器驗證帳號密碼後回傳了一頁內容。但 HTTP 協議本身是<strong>無狀態的</strong>——每一次請求對伺服器來說都是陌生人。如果沒有機制記住「你是誰」，你每按一個連結都要重新輸入帳號密碼。</p>
+<p>Cookie 就是解法：伺服器在第一次回應裡放一小段資料（Cookie），瀏覽器下次自動帶上它，伺服器就認得你了。它本質上就是一組<strong>鍵值對</strong>（key-value pairs）。</p>
+
+<h2>Cookie 的生命週期</h2>
+<table>
+  <tr><th>階段</th><th>發生什麼</th><th>你在 DevTools 裡看到什麼</th></tr>
+  <tr>
+    <td>伺服器下發</td>
+    <td>伺服器在 HTTP 回應頭裡帶 <code>Set-Cookie</code></td>
+    <td>Response Headers → Set-Cookie: <code>session_id=abc123</code></td>
+  </tr>
+  <tr>
+    <td>瀏覽器存儲</td>
+    <td>瀏覽器把 Cookie 存起來，綁定到該域名</td>
+    <td>Application → Cookies → 該網站的 domain</td>
+  </tr>
+  <tr>
+    <td>自動攜帶</td>
+    <td>同域名的後續請求，瀏覽器自動帶上 <code>Cookie</code> 請求頭</td>
+    <td>Request Headers → Cookie: <code>session_id=abc123</code></td>
+  </tr>
+</table>
+<p>用 Python 寫爬蟲時，<code>requests</code> 不會幫你做這件事——你需要自己管理 Cookie 的存取。</p>
+
+<h2>方式一：手動處理 Cookie</h2>
+<p>最直覺的做法：打開 DevTools，找到目標請求的 Cookie 欄位，整段複製下來，貼到你的 Python 程式碼的 headers 裡：</p>
+
+<pre><code>import requests
+
+headers = {
+    "User-Agent": "Mozilla/5.0 ...",
+    "Cookie": "session_id=abc123; username=test; token=xyz"
+}
+resp = requests.get("https://target.com/api/data", headers=headers)
+print(resp.json())</code></pre>
+
+<p>這種做法<strong>馬上能跑通</strong>，但有三個致命缺點：</p>
+<table>
+  <tr><th>缺點</th><th>說明</th></tr>
+  <tr><td>有時效性</td><td>Cookie 過期後你要重新抓、重新貼</td></tr>
+  <tr><td>手動複製很煩</td><td>每次請求都要去 DevTools 裡翻</td></tr>
+  <tr><td>動態資料抓不到</td><td>有些 Cookie 裡的值每次登入都不一樣，你根本無法預先寫死</td></tr>
+</table>
+<blockquote class="good-code">
+<strong>白話：</strong>手動處理就像每次都去櫃台拿一張新的訪客證再進門——能用，但很累。Session 自動管理就像刷臉進門：伺服器認得你，自動幫你通行。
+</blockquote>
+
+<h2>方式二：Session 自動管理（推薦）</h2>
+<p><code>requests.Session()</code> 是一個持久化的 HTTP 會話物件。它做的事很簡單：</p>
+<ol>
+  <li><strong>你先用 Session 發一次請求</strong>——伺服器回傳的 Cookie 被 Session 自動存起來。</li>
+  <li><strong>你再用同一個 Session 發後續請求</strong>——Session 自動把存好的 Cookie 帶上去，伺服器就認得你了。</li>
+</ol>
+
+<pre><code>import requests
+
+# 1. 建立空白 Session
+session = requests.Session()
+
+# 2. 用 Session 發請求（伺服器下發的 Cookie 被自動存入）
+resp = session.get("https://target.com/api/data")
+
+# 3. 後續請求自動攜帶 Cookie
+data = session.get("https://target.com/api/data").json()
+print(data)</code></pre>
+
+<p>對比手動方式，Session 的優勢：</p>
+<table>
+  <tr><th>比較項目</th><th>手動複製 Cookie</th><th>Session 自動管理</th></tr>
+  <tr><td>易用性</td><td>每次都要手動貼</td><td>自動存取</td></tr>
+  <tr><td>時效問題</td><td>過期要重新抓</td><td>伺服器刷新時自動更新</td></tr>
+  <tr><td>動態 Cookie</td><td>抓不到</td><td>自動捕獲</td></tr>
+  <tr><td>最少請求數</td><td>1 次（第一次就得有）</td><td>2 次（先拿 Cookie，再用它）</td></tr>
+</table>
+
+<blockquote>
+<strong>關鍵差異：</strong>Session 方式至少需要兩次請求——第一次拿 Cookie，第二次才真正拿資料。這就是為什麼你之前在雪球網只帶了 User-Agent 拿不到資料：模擬力度不夠，需要先讓伺服器「認得」你。
+</blockquote>
+
+<h2>實戰對比：雪球網熱帖</h2>
+<p>雪球網的熱帖資料是 Ajax 動態載入的。如果只帶 User-Agent 發請求：</p>
+<pre><code># ❌ 失敗：伺服器不認得你
+headers = {"User-Agent": "Mozilla/5.0 ..."}
+resp = requests.get("https://xueqiu.com/statuses/hot/listV2.json", headers=headers)
+print(resp.status_code)  # 401 或空資料</code></pre>
+
+<p>用 Session 自動管理：</p>
+<pre><code># ✅ 成功：先讓伺服器認得你
+session = requests.Session()
+session.headers.update({"User-Agent": "Mozilla/5.0 ..."})
+
+# 第一次請求：觸發伺服器下發 Cookie
+session.get("https://xueqiu.com/")
+
+# 第二次請求：Session 自動攜帶 Cookie，拿到資料
+resp = session.get("https://xueqiu.com/statuses/hot/listV2.json")
+data = resp.json()
+print(data)</code></pre>
+
+<blockquote class="good-code">
+<strong>核心思路：</strong>拿不到資料，先查 Cookie。這是 Python 爬蟲的排錯第一步。
+</blockquote>
+
+<h2>Session 物件的完整 API</h2>
+<p><code>requests.Session()</code> 的 API 和 <code>requests.get/post</code> 幾乎一樣，差別在它是「綁在一個物件上」：</p>
+<table>
+  <tr><th>操作</th><th>一般 requests</th><th>Session</th></tr>
+  <tr><td>GET 請求</td><td><code>requests.get(url)</code></td><td><code>session.get(url)</code></td></tr>
+  <tr><td>POST 請求</td><td><code>requests.post(url, data=...)</code></td><td><code>session.post(url, data=...)</code></td></tr>
+  <tr><td>設定 Headers</td><td><code>headers={}</code>（每次都傳）</td><td><code>session.headers.update({})</code>（設一次）</td></tr>
+  <tr><td>設定 Cookie</td><td><code>cookies={}</code>（手動）</td><td>自動（伺服器下發的）</td></tr>
+  <tr><td>使用代理</td><td><code>proxies={}</code>（每次都傳）</td><td><code>session.proxies = {}</code>（設一次）</td></tr>
+</table>
+
+<h2>小結</h2>
+<p>Cookie 本質上就是伺服器在你瀏覽器裡放的鍵值對，用來記住「你是誰」。在 Python 爬蟲裡，<code>requests.Session()</code> 自動管理這些鍵值對——你不用手動複製，不用擔心過期，不用預先寫死。這是處理需要登入狀態的網站的第一步。</p>
+<p>接下來我們會用 Session 來做真正的模擬登入：先 POST 帳號密碼，再用同一個 Session 去抓登入後的資料。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./session-login-flow.html">下一步：模擬登入流程 →</a></div>
+</div>
+
+<div class="quiz" data-question="在 Python requests 裡，Session 物件自動管理的是什麼？" data-correct="2" data-explain="Session 會自動儲存伺服器下發的 Cookie，並在後續請求時自動攜帶。">
+  <button class="opt">User-Agent 請求頭</button>
+  <button class="opt">URL 的查詢參數</button>
+  <button class="opt">Cookie 鍵值對</button>
+  <button class="opt">HTTP 回應的 Content-Type</button>
+</div>
+
+<div class="quiz" data-question="用 Session 發出一個請求至少需要幾次 HTTP 呼叫才能拿到受保護的資料？" data-correct="1" data-explain="第一次請求讓伺服器下發 Cookie，第二次才用那個 Cookie 去拿資料。">
+  <button class="opt">1 次</button>
+  <button class="opt">2 次</button>
+  <button class="opt">3 次</button>
+  <button class="opt">次數不固定</button>
+</div>
+
+<div class="quiz" data-question="手動複製 Cookie 到 headers 的做法，最致命的問題是什麼？" data-correct="3" data-explain="動態 Cookie（每次登入都會變化的值）無法預先寫死，手動方式根本抓不到。">
+  <button class="opt">寫起來比較慢</button>
+  <button class="opt">每次都得手動貼</button>
+  <button class="opt">Cookie 有時效性</button>
+  <button class="opt">無法處理動態 Cookie</button>
+</div>
+
+<div class="quiz" data-question="在雪球網案例中，只帶 User-Agent 拿不到資料的根本原因是什麼？" data-correct="0" data-explain="模擬力度不夠，伺服器要求請求頭裡有有效的 Cookie。">
+  <button class="opt">模擬力度不夠，缺少 Cookie</button>
+  <button class="opt">User-Agent 寫錯了</button>
+  <button class="opt">伺服器封鎖了爬蟲</button>
+  <button class="opt">URL 格式錯誤</button>
+</div>
+
+<div class="quiz" data-question="伺服器在 HTTP 回應裡用什麼標頭把 Cookie 下發給瀏覽器？" data-correct="2" data-explain="Set-Cookie 是伺服器用來設定 Cookie 的回應標頭。">
+  <button class="opt">Cookie</button>
+  <button class="opt">Session</button>
+  <button class="opt">Set-Cookie</button>
+  <button class="opt">Authorization</button>
+</div>
+
+<div class="quiz" data-question="如果一個 Session 物件已經存了伺服器的 Cookie，下面哪一行會自動帶上這個 Cookie？" data-correct="1" data-explain="用同一個 Session 物件發出的所有請求都會自動攜帶它已存的 Cookie。">
+  <button class="opt">requests.get(url)</button>
+  <button class="opt">session.get(url)</button>
+  <button class="opt">session.post(url, headers={})</button>
+  <button class="opt">requests.Session(url)</button>
+</div>
+
+<div class="footer">
+  js-reverse · Session、登入與代理 · Step 1/4
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>
