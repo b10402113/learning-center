@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>frozen=True 與不可變值物件 — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>frozen=True 與不可變值物件</h1>
+  <p class="meta">學習目標：能解釋 frozen=True 如何讓 dataclass 實體變成不可變物件，以及這種不可變性在設計值物件時為什麼有用。</p>
+
+  <h2>預設情況下，dataclass 是可變的</h2>
+  <p>目前為止，我們寫的 <code>@dataclass</code> 實體都可以事後修改屬性：<code>p.name = new_name</code> 完全合法。大多數時候這很方便的，但有時候這會帶來麻煩。</p>
+
+  <p>舉例來說，你把一個實體放進 <code>set</code> 裡，或者當作 <code>dict</code> 的 key，事後又改了其中一個欄位，會發生什麼事？雜湊值（hash value）變了，但容器不知道，結果就是找不到那個物件，或者出現不一致的狀態。</p>
+
+  <h2>frozen=True 的意思</h2>
+  <p>在 <code>@dataclass</code> 裝飾器加上 <code>frozen=True</code>，就會讓這個類別的實體在建構之後變成不可變（immutable）：任何試圖修改屬性的動作都會直接拋出 <code>FrozenInstanceError</code>。</p>
+
+  <pre><code>from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Coordinate:
+    x: float
+    y: float</code></pre>
+
+  <pre><code>>> c = Coordinate(1.0, 2.0)
+>>> c.x = 3.0
+dataclasses.FrozenInstanceError: cannot assign to field 'x'</code></pre>
+
+  <p>這就像 Python 的內建型別 <code>tuple</code> 或 <code>frozenset</code> 一樣，一旦建立就不能更動。任何你以為在修改它的動作，其實都是在建立一個全新的實體。</p>
+
+  <h2>什麼是不可變性帶來的好處</h2>
+  <p>不可變物件最大的價值是**安全**：你不用擔心某個函式偷偷改了你的資料，也不用擔心多執行緒環境下同時修改造成競爭條件（race condition）。只要物件被建立，它的狀態就永遠固定了。</p>
+
+  <p>第二個好處是可當**值物件（Value Object）**使用。所謂值物件，就是它的身份（identity）是由它的值來決定的，不是由它在記憶體的位置決定。兩個 <code>Coordinate(1.0, 2.0)</code> 應該被視為相同的東西，就像兩個整數 <code>5</code> 相等一樣。<code>frozen=True</code> 的 dataclass 正好符合這個語意：值一樣就是一樣，而且你不會意外動到它。</p>
+
+  <h2>frozen 實體可以當 dict key 或放進 set</h2>
+  <p>Python 要讓一個物件能放進 <code>set</code> 或當 <code>dict</code> key，它必須是 hashable 的。一般的 dataclass 實體是 unhashable 的，但 <code>frozen=True</code> 的實體會自動產生 <code>__hash__</code> 方法，讓它變成 hashable。</p>
+
+  <pre><code>@dataclass(frozen=True)
+class Coordinate:
+    x: float
+    y: float
+
+points = {Coordinate(1.0, 2.0), Coordinate(3.0, 4.0)}</code></pre>
+
+  <blockquote class="good-code">
+    <strong>重點：</strong><code>frozen=True</code> 不只是防止修改，它還讓你的值物件可以安全地用在需要雜湊的容器裡。
+  </blockquote>
+
+  <h2>如果需要「修改」frozen 實體呢？</h2>
+  <p>既然不能修改，那如果真的要得到一個狀態不同的實體，該怎麼辦？dataclass 提供了一個函式 <code>dataclasses.replace()</code>，它會建立一個新實體，並允許你覆蓋部分欄位：</p>
+
+  <pre><code>from dataclasses import replace
+
+c1 = Coordinate(1.0, 2.0)
+c2 = replace(c1, x=3.0)  # 建立一個新實體，x 改了，y 不變</code></pre>
+
+  <p>這就像 <code>tuple</code> 沒有 <code>append</code> 一樣，你要嘛建一個新的，嘛就用 <code>replace</code> 這種顯式的「建立副本再改」的方式。</p>
+
+  <h2>什麼時候該用 frozen</h2>
+  <table>
+    <thead>
+      <tr><th>情境</th><th>建議</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>座標、貨幣金額、日期範圍等值物件</td><td>用 <code>frozen=True</code></td></tr>
+      <tr><td>主要承載資料，但經常需要修改欄位</td><td>不用 <code>frozen</code></td></tr>
+      <tr><td>物件會被放進 set 或當 dict key</td><td>用 <code>frozen=True</code></td></tr>
+      <tr><td>多執行緒下共用的資料</td><td>優先考慮 <code>frozen=True</code></td></tr>
+    </tbody>
+  </table>
+
+  <blockquote class="bad-code">
+    <strong>注意：</strong><code>frozen=True</code> 是淺層的不可變。如果你的欄位是一個 mutable 物件（例如 list），那個 list 裡面的內容仍然可以被修改。frozen 只限制屬性本身不能重新指派。
+  </blockquote>
+
+  <h2>隨堂測驗</h2>
+
+  <div class="quiz" data-question="下面哪一個是 @dataclass(frozen=True) 的效果？" data-correct="0" data-explain="frozen=True 會讓實體在建構之後變成不可變，任何修改屬性的動作都會拋出 FrozenInstanceError。">
+    <button class="opt">實體在建構後就不能修改屬性</button>
+    <button class="opt">實體不能再被建立</button>
+    <button class="opt">欄位全部都會變成私有</button>
+    <button class="opt">實體自動變成執行緒安全</button>
+  </div>
+
+  <div class="quiz" data-question="frozen dataclass 可以拿來做什麼？" data-correct="2" data-explain="frozen dataclass 會自動產生 __hash__，所以可以放進 set 或當 dict key。">
+    <button class="opt">只能當作一般的資料容器</button>
+    <button class="opt">不能有其他方法</button>
+    <button class="opt">可以放進 set 或當 dict 的 key</button>
+    <button class="opt">只能在建構時賦值，但事後可以 modify</button>
+  </div>
+
+  <div class="quiz" data-question="下面關於 frozen=True 的敘述，哪個是正確的？" data-correct="1" data-explain="frozen=True 讓值相等的物件可以被安全地比較和雜湊，適合物件的身份由值決定。">
+    <button class="opt">frozen 實體之間不能用 == 比較</button>
+    <button class="opt">frozen 適合用來設計值物件</button>
+    <button class="opt">frozen 會讓執行速度變慢十倍</button>
+    <button class="opt">frozen 實體不能夠被繼承</button>
+  </div>
+
+  <div class="quiz" data-question="如果想要得到一個欄位不同的 frozen 實體，應該怎麼做？" data-correct="3" data-explain="dataclasses.replace() 會建立一個新實體，並允許覆蓋部分欄位。">
+    <button class="opt">直接修改屬性</button>
+    <button class="opt">呼叫 p.update(x=3.0)</button>
+    <button class="opt">把 frozen 關掉再改</button>
+    <button class="opt">用 dataclasses.replace(p, x=3.0)</button>
+  </div>
+
+  <div class="quiz" data-question="下面哪一種型別最適合宣告成 frozen dataclass？" data-correct="0" data-explain="座標是典型的值物件：兩個座標值一樣就是一樣，而且不應該被事後修改。">
+    <button class="opt">Coordinate（座標）</button>
+    <button class="opt">UserSession（使用者連線狀態）</button>
+    <button class="opt">ShoppingCart（購物車）</button>
+    <button class="opt">Counter（計數器）</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./post-init-validation.html">← 上一步：__post_init__ 與可變預設值</a>
+    <a href="./dataclass-vs-full-class.html">下一步：什麼時候該用完整類別？ →</a>
+  </div>
+
+  <div class="footer">
+    <p>有問題？隨時問你的 agent，它可以幫你澄清任何不清楚的地方。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

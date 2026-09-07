@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>__post_init__ 與可變預設值 — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>__post_init__ 與可變預設值</h1>
+  <p class="meta">學習目標：能使用 __post_init__ 在建構後執行驗證，並用 field(default_factory=...) 避開可變預設值的共享陷阱。</p>
+
+  <h2>建構之後還想做點事</h2>
+  <p><code>@dataclass</code> 幫我們產生了 <code>__init__</code>，但有時候我們不只想把參數塞進屬性，還想在建構之後多做一步。例如，自動根據 <code>name</code> 產生 <code>slug</code>，或者檢查欄位值是否合法。</p>
+
+  <p>dataclass 留了一個掛鉤（hook）：如果你的類別裡定義了 <code>__post_init__</code>，它會在 <code>__init__</code> 執行完之後立刻被呼叫。<code>post init</code> 的字面意思就是「初始化之後」，這個時機點非常適合做驗證或衍生計算。</p>
+
+  <pre><code>@dataclass
+class Project:
+    name: str
+    slug: str
+    archived: bool = False
+
+    def __post_init__(self):
+        if not self.slug:
+            raise ValueError("slug 不能是空字串")</code></pre>
+
+  <p>現在如果有人試圖建立 <code>Project(name="demo", slug="")</code>，就會立刻得到一個 <code>ValueError</code>。這種驗證邏輯放在 <code>__post_init__</code> 裡，而不是另外寫一個「建立之後記得呼叫 validate」的方法，因為後者很容易忘記。</p>
+
+  <h2>可變預設值的陷阱</h2>
+  <p>如果你在類別的欄位上寫 <code>tags: list = []</code>，會發生什麼事？Python 函數的預設值只會求值一次，所以所有沒有傳 <code>tags</code> 的實體會共用同一個列表。修改其中一個，另一個跟著變。</p>
+
+  <pre><code>@dataclass
+class Project:
+    name: str
+    tags: list = []  # 危險！所有實體共用同一個 list</code></pre>
+
+  <blockquote class="bad-code">
+    <strong>共用陷阱：</strong>當你寫 <code>p1.tags.append("a")</code>，結果 <code>p2.tags</code> 也多了 <code>"a"</code>，這種 bug 非常難抓，因為看起來是兩個不相干的物件。
+  </blockquote>
+
+  <p>這個陷阱不是 dataclass 獨有，Python 所有函數都有這個問題。但 dataclass 提供了一個專門的解法：<code>field(default_factory=...)</code>。</p>
+
+  <h2>用 default_factory 每次產生新的</h2>
+  <p><code>default_factory</code> 接收一個「零參數函數」，每次建立實體時都會被呼叫一次，產生一個全新的預設值。這樣每個實體就有自己獨立的列表。</p>
+
+  <pre><code>from dataclasses import dataclass, field
+
+@dataclass
+class Project:
+    name: str
+    tags: list = field(default_factory=list)</code></pre>
+
+  <p>現在 <code>Project("a")</code> 和 <code>Project("b")</code> 各自擁有自己的 <code>tags</code> 列表，互不干擾。同樣的原理適用於任何可變物件，例如 <code>dict</code>、<code>set</code>、或者其他自訂的可變實例。</p>
+
+  <h2>常見的 factory 選擇</h2>
+  <table>
+    <thead>
+      <tr><th>你想預設成</th><th>用這個 factory</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>空列表 <code>[]</code></td><td><code>default_factory=list</code></td></tr>
+      <tr><td>空字典 <code>{}</code></td><td><code>default_factory=dict</code></td></tr>
+      <tr><td>空集合 <code>set()</code></td><td><code>default_factory=set</code></td></tr>
+      <tr><td>其他可變物件</td><td><code>default_factory=你的工廠函數</code></td></tr>
+    </tbody>
+  </table>
+
+  <blockquote class="good-code">
+    <strong>記住：</strong>欄位的可變預設值永遠用 <code>field(default_factory=...)</code>，不可變預設值（數字、字串、<code>None</code>、布林）直接寫就好。
+  </blockquote>
+
+  <h2>__post_init__ + default_factory 合併使用</h2>
+  <p>這兩個功能經常一起出現。例如，建立專案時如果沒給 tags，預設是空列表；同時我們希望 tags 裡面不要有重複值：</p>
+
+  <pre><code>@dataclass
+class Project:
+    name: str
+    tags: list = field(default_factory=list)
+
+    def __post_init__(self):
+        self.tags = list(set(self.tags))  # 去重</code></pre>
+
+  <p>這樣就把「給預設值」和「清理資料」兩件事分開處理，各自都有明確的位置。</p>
+
+  <h2>隨堂測驗</h2>
+
+  <div class="quiz" data-question="__post_init__ 會在什麼時候被呼叫？" data-correct="1" data-explain="__post_init__ 會在 __init__ 執行完之後立刻被呼叫，適合做驗證或衍生計算。">
+    <button class="opt">__init__ 執行之前</button>
+    <button class="opt">__init__ 執行完之後</button>
+    <button class="opt">物件被建立之前</button>
+    <button class="opt">物件被垃圾回收時</button>
+  </div>
+
+  <div class="quiz" data-question="寫 tags: list = [] 在 dataclass 裡為什麼危險？" data-correct="0" data-explain="Python 的函式預設值只會求值一次，所以所有沒傳 tags 的實體會共用同一個列表。">
+    <button class="opt">所有實體會共用同一個列表</button>
+    <button class="opt">list 不能當作預設值</button>
+    <button class="opt">tags 會自動變成 None</button>
+    <button class="opt">這其實很安全，不會有問題</button>
+  </div>
+
+  <div class="quiz" data-question="下面哪一個是正確的欄位預設值寫法？" data-correct="2" data-explain="可變預設值應該用 field(default_factory=...) 來產生全新的物件。">
+    <button class="opt">tags: list = []</button>
+    <button class="opt">tags: list = list()</button>
+    <button class="opt">tags: list = field(default_factory=list)</button>
+    <button class="opt">tags: list = field(default=[])</button>
+  </div>
+
+  <div class="quiz" data-question="下面關於 __post_init__ 的敘述，哪個是正確的？" data-correct="3" data-explain="__post_init__ 可以存取 self，因為這時候實體已經建立好了，屬性也已經設定完成。">
+    <button class="opt">__post_init__ 不能存取 self</button>
+    <button class="opt">__post_init__ 只能用在我自己寫的類別，dataclass 不能用</button>
+    <button class="opt">__post_init__ 只會在手動被呼叫時執行</button>
+    <button class="opt">__post_init__ 裡可以修改 self 的屬性</button>
+  </div>
+
+  <div class="quiz" data-question="如果今天有一個欄位型別是 dict，預設要是空字典，怎麼寫才安全？" data-correct="1" data-explain="可變預設值要使用 default_factory，這樣每次都會產生新的字典。">
+    <button class="opt">metadata: dict = {}</button>
+    <button class="opt">metadata: dict = field(default_factory=dict)</button>
+    <button class="opt">metadata: dict = field(default={})</button>
+    <button class="opt">metadata: dict = new dict()</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./why-dataclasses.html">← 上一步：為什麼需要 @dataclass？</a>
+    <a href="./frozen-instances.html">下一步：frozen=True 與不可變值物件 →</a>
+  </div>
+
+  <div class="footer">
+    <p>有問題？隨時問你的 agent，它可以幫你澄清任何不清楚的地方。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

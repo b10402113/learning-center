@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Comprehensions：一行完成轉換與過濾</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Comprehensions：一行完成轉換與過濾</h1>
+<p class="meta">學習目標：能把簡單的 for 迴圈改寫成帶過濾條件的 list comprehension，認識 dict/set comprehension、generator 與 zip，並判斷何時該退回普通迴圈。</p>
+
+<h2>Why this step matters</h2>
+<p>Comprehension（推導式）是 Python 最招牌的功能之一：把「簡單、重複」的迴圈收進一行，從既有的集合建成新的集合。你在 crud 層會天天看到 <code>[t["title"] for t in tasks if not t["done"]]</code> 這種一行——讀不懂它，讀 codebase 就會處處卡住；會寫它，很多函式瞬間變短。這一步從你已經會的 for 迴圈出發，一行一行把它變過去。</p>
+
+<h2>從 for 迴圈到一行</h2>
+<p>任務：把一排專案名稱轉成 URL slug（還記得 <code>slugify</code> 嗎）。用 for 迴圈是這樣：</p>
+<pre><code>project_names = ["Payments API", "Ops Console", "Portal"]
+slugs = []
+for name in project_names:
+    slugs.append(name.lower().replace(" ", "-"))</code></pre>
+<p>Comprehension 把整個「建 list → 迴圈 → append」收成一行：</p>
+<pre><code>slugs = [name.lower().replace(" ", "-") for name in project_names]
+# → ['payments-api', 'ops-console', 'portal']</code></pre>
+<p>讀法是固定的：<strong>左邊是輸出元素的長相</strong>（每個元素經過什麼轉換），<strong>右邊是來源迴圈</strong>（從哪個集合、用什麼變數名拿出來）。左邊的邏輯可以相當複雜——但先記住這個骨架：<code>[轉換 for 變數 in 集合]</code>。</p>
+
+<h2>過濾：把 if 放到最後</h2>
+<p>第二個任務：從任務清單裡抓出「還沒做完」的標題。先看一個<strong>錯的</strong>版本——它其實沒有過濾：</p>
+<pre><code>tasks = [
+    {"title": "Write docs", "done": True},
+    {"title": "Fix login bug", "done": False},
+    {"title": "Deploy API", "done": False},
+]
+
+[t["title"] for t in tasks]              # 沒有過濾：三個標題全進來
+[t["title"] for t in tasks if not t["done"]]
+# → ['Fix login bug', 'Deploy API']      # 過濾：只要未完成的</code></pre>
+<p>條件放在<strong>整個推導式的最後</strong>：<code>[轉換 for 變數 in 集合 if 條件]</code>。條件不成立的元素直接被跳過。順帶複習 dict 存取：<code>t["title"]</code> 是中括號存取——key 一定存在時用它；key 可能缺失時，換上一步學的 <code>t.get("title")</code>。</p>
+
+<h2>拿 comprehension 算數</h2>
+<p>「未完成的任務有幾個？」——每個未完成任務貢獻一個 1，通通加起來：</p>
+<pre><code>sum(1 for t in tasks if not t["done"])
+# → 2</code></pre>
+<p>注意這裡連方括號都省了：comprehension 直接當參數傳進 <code>sum()</code>。同一家族還有兩個常用的內建：<code>any()</code> 檢查「是不是至少一個符合」、<code>all()</code> 檢查「是不是全部符合」：</p>
+<pre><code>any(not t["done"] for t in tasks)   # 還有未完成的嗎？→ True
+all(t["done"] for t in tasks)       # 全部都完成了嗎？→ False</code></pre>
+
+<h2>Generator comprehension：懶惰版本</h2>
+<p>方括號版會<strong>一次把整個 list 建在記憶體裡</strong>。資料小的時候無所謂；資料大的時候，把方括號換成括號，就得到 generator comprehension：</p>
+<pre><code>gen = (1 for t in tasks if not t["done"])
+print(gen)        # &lt;generator object ...&gt;——看不到內容！
+
+sum(1 for t in tasks if not t["done"])   # 餵給 sum() 照常工作</code></pre>
+<p>generator 不預先建表，而是<strong>被要求的當下才產生下一個值</strong>，值用完就結束——所以你沒辦法像 list 那樣把它印出來、索引它。它適合「值只需要走一遍」的場景：<code>sum()</code>、<code>any()</code>、<code>all()</code>、只跑一次的 for 迴圈。要走多遍、要保留結果，就用回 list comprehension。原則很簡單：<strong>一次性消費用 generator（省記憶體），要留下來用就 list</strong>。</p>
+
+<h2>dict comprehension、set comprehension 與 zip</h2>
+<p>Comprehension 不是 list 的專利——換括號就換容器，只是各自的語法略有出入：</p>
+<pre><code>{name.lower() for name in project_names}          # set comprehension：去重的轉換結果
+{t["title"]: t["done"] for t in tasks}            # dict comprehension：key: value 的轉換結果</code></pre>
+<p>最後一個好用的配角是 <code>zip</code>：把兩個 list <strong>依位置配對</strong>（第 0 個對第 0 個、第 1 個對第 1 個……），配好的東西餵給 <code>dict()</code> 就快速變出一個字典：</p>
+<pre><code>keys = ["name", "slug"]
+values = ["Payments API", "payments-api"]
+dict(zip(keys, values))   # → {"name": "Payments API", "slug": "payments-api"}</code></pre>
+
+<h2>何時不要用</h2>
+<p>Comprehension 的適用條件，一次列清楚：</p>
+<ul>
+  <li>你在<strong>轉換</strong>資料（每個元素經過同樣的處理）</li>
+  <li>邏輯<strong>短</strong>——可能加一個 <code>if</code> 過濾</li>
+  <li>一行讀起來<strong>清楚</strong></li>
+</ul>
+<p>經驗法則：<strong>超過兩行就退回普通 for 迴圈</strong>。Comprehension 是讓短邏輯變清晰的工具，不是把長邏輯硬塞成一行的方法——可讀性輸了，它就失去了存在意義。</p>
+
+<h2>練習驗收</h2>
+<p>拿出紙筆或開個 REPL，用這一步的東西做兩件事（這正是課程練習的前兩題）：</p>
+<ol>
+  <li>把一個「for 迴圈 + append」的轉換，改寫成一行 comprehension。</li>
+  <li>從 tasks 這個 list of dicts 裡，抓出所有未完成任務的標題。</li>
+</ol>
+<p>寫完對照：<code>[name.lower().replace(" ", "-") for name in project_names]</code> 與 <code>[t["title"] for t in tasks if not t["done"]]</code>。兩行都讀得順、寫得出，這個節點的目標就達成了。（練習的另外兩題——raise/except 與 dataclass——屬於各自的節點。）</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="[x*2 for x in [1,2,3]] 的結果是什麼？" data-correct="0" data-explain="list comprehension 對每個元素做同樣的轉換——1→2、2→4、3→6。">
+  <button class="opt">[2, 4, 6]</button>
+  <button class="opt">[1, 2, 3]</button>
+  <button class="opt">[1, 4, 9]</button>
+  <button class="opt">6</button>
+</div>
+
+<div class="quiz" data-question="要過濾出偶數，comprehension 的條件要放在哪裡？" data-correct="0" data-explain="條件放在整個 comprehension 的最後：[expr for x in collection if condition]。">
+  <button class="opt">整個 comprehension 的最後</button>
+  <button class="opt">for 的前面</button>
+  <button class="opt">expr 的前面</button>
+  <button class="opt">中括號外面</button>
+</div>
+
+<div class="quiz" data-question="list comprehension 和 generator comprehension 的差別是什麼？" data-correct="0" data-explain="方括號版一次建好整個 list；圓括號版（generator）惰性產生值，一次一個，省記憶體。">
+  <button class="opt">方括號一次建好 list；圓括號惰性產生</button>
+  <button class="opt">方括號只能轉換；圓括號只能過濾</button>
+  <button class="opt">方括號比較快；圓括號比較慢</button>
+  <button class="opt">兩者完全相同</button>
+</div>
+
+<div class="quiz" data-question="zip([1,2], [3,4]) 回傳什麼？" data-correct="0" data-explain="zip 依位置配對——第 0 對第 0、第 1 對第 1，產生 (1,3) 和 (2,4)。">
+  <button class="opt">[(1,3), (2,4)]</button>
+  <button class="opt">[1, 2, 3, 4]</button>
+  <button class="opt">[(1,2), (3,4)]</button>
+  <button class="opt">[(1,4), (2,3)]</button>
+</div>
+
+<div class="quiz" data-question="什麼時候不該用 comprehension？" data-correct="0" data-explain="邏輯太長、超過兩行時，用普通 for 迴圈可讀性更好——comprehension 是工具，不是目的。">
+  <button class="opt">邏輯太長、超過兩行</button>
+  <button class="opt">需要過濾的時候</button>
+  <button class="opt">需要轉換的時候</button>
+  <button class="opt">永遠都該用 comprehension</button>
+</div>
+
+<div class="quiz" data-question="sum(1 for t in tasks if not t[&quot;done&quot;]) 的作用是？" data-correct="0" data-explain="generator 對每個未完成任務貢獻 1，sum 加起來就是未完成任務的數量。">
+  <button class="opt">計算未完成任務的數量</button>
+  <button class="opt">把所有 done 改成 False</button>
+  <button class="opt">回傳一個新的 list</button>
+  <button class="opt">檢查是否有未完成任務</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./for-loops.html">← 上一步：for 迴圈與 dict 迭代</a>
+</div>
+
+<div class="footer">有問題？直接問你的 agent，它可以幫你釐清任何不清楚的地方。</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

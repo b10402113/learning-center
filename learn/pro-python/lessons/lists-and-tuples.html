@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lists 與 tuples：可變與不可變的有序容器</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Lists 與 tuples：可變與不可變的有序容器</h1>
+<p class="meta">學習目標：能依「資料該不該被改動」選擇 list 或 tuple，並避開 in-place 方法不回傳新值這個經典陷阱。</p>
+
+<h2>Why this step matters</h2>
+<p>打開任何一支 Python 服務，最常看到的就是一對方括號和一對小括號。專案 API 回傳的是一排專案（<code>list</code>），版本號、座標、RGB 色值是固定綁在一起的一組值（<code>tuple</code>）。讀 code 的第一個判斷永遠是：這坨資料會不會被改？這一步把 list 和 tuple 分清楚，順便拆掉一個幾乎每個 Python 學習者都踩過的炸彈——以為方法會回傳新值，結果它回傳 <code>None</code>。</p>
+
+<h2>先看一眼四種容器</h2>
+<table>
+  <tr><th>容器</th><th>字面語法</th><th>一句話定位</th></tr>
+  <tr><td><code>list</code></td><td><code>[]</code></td><td>有序、可變——最常用的序列</td></tr>
+  <tr><td><code>tuple</code></td><td><code>()</code></td><td>有序、不可變——固定綁在一起的一組值</td></tr>
+  <tr><td><code>set</code></td><td><code>{}</code></td><td>無序、自動去重</td></tr>
+  <tr><td><code>dict</code></td><td><code>{key: value}</code></td><td>鍵值對應——JSON 的形狀</td></tr>
+</table>
+<p>用 <code>type(...)</code> 可以隨時確認手上的東西是哪一種。另外一個立刻要記的規矩：不要把變數取名成 <code>list</code>、<code>dict</code>、<code>set</code>——這會遮蔽（shadow）內建名稱，之後到處出現難查的怪事。set 和 dict 下一步細講，這一步先攻 list 和 tuple。</p>
+
+<h2>List：會長大的序列</h2>
+<pre><code>food = ["payments-api", "ops-console"]
+food.append("portal")        # 加一個元素
+food.extend(["analytics"])   # 一次接上多個元素
+food.pop()                   # 移除並回傳最後一個</code></pre>
+<p><code>append</code> 有個關鍵行為：它<strong>不回傳任何東西</strong>（回傳 <code>None</code>），而是就地（in place）修改 <code>food</code> 本身。用 <code>+</code> 也可以把兩個 list 串起來，但這個寫法不明確、難除錯，正規作法是 <code>extend</code>。list 裡技術上可以混不同型別，但消費這個 list 的人會很痛苦——理論上可以，實務上別做。</p>
+
+<h2>最大的坑：就地修改 vs 回傳新值</h2>
+<pre><code>names = ["carol", "alice", "bob"]
+result = names.sort()
+print(result)   # None！
+print(names)    # ['alice', 'bob', 'carol'] ← 原本的被改掉了</code></pre>
+<p><code>names.sort()</code> 和 <code>names.reverse()</code> 都是就地修改、回傳 <code>None</code>。想要「拿到排好序的新 list、原本的不動」，改用內建函式：</p>
+<pre><code>letters = ["d", "a", "c"]
+sorted_letters = sorted(letters)   # 回傳新的排好序 list
+# letters 本身保持不變</code></pre>
+<p>判斷的經驗法則：<strong>方法呼叫在實例上</strong>（<code>names.sort()</code>）→ 傾向就地修改；<strong>內建函式把資料當參數傳入</strong>（<code>sorted(names)</code>）→ 傾向回傳新值、不動原本。<code>result = names.sort()</code> 這一行是經典 bug：看起來很合理，<code>result</code> 卻是 <code>None</code>，而且原本的資料還被偷偷改了。</p>
+
+<h2>字串與 list 互相轉換</h2>
+<pre><code>len(names)               # list 的長度
+len("hello")             # 字串的長度——同一個內建函式
+
+"A,B,C,D,E".split(",")        # → ["A", "B", "C", "D", "E"]
+" ".join(["alice", "bob"])    # → "alice bob"
+",".join(["alice", "bob"])    # → "alice,bob"（結尾不會多一個逗號）</code></pre>
+<p><code>split</code> 建議永遠明確指定分隔符——預設會吃空白、換行等多種字元，容易出現非預期結果。CSV 之類的資料進出 Python 就靠這一對方法。注意 <code>join</code> 是呼叫在「連接字串」身上、list 放參數——語法有點 funky，但到處都看得到。</p>
+
+<h2>Tuple：生下來就不改</h2>
+<pre><code>version = ("alpha", 0, 0, 2)
+version.append(3)
+# AttributeError: 'tuple' object has no attribute 'append'</code></pre>
+<p>tuple 是<strong>不可變（immutable）</strong>的有序容器。不可變不代表變數不能重新指派——<code>version = ("beta", 1, 0, 0)</code> 是建立一個<strong>新的</strong> tuple 再把名字指過去，原本那個 tuple 一個位元都沒變。你沒有任何方法就地改掉 tuple 裡的某個值。</p>
+<ul>
+  <li>適用場景：座標 <code>(x, y)</code>、配對 <code>(key, value)</code>、RGB 色值——三個 0–255 的數字綁死一組</li>
+  <li>單元素 tuple 一定要有尾逗號：<code>(1,)</code> 才是 tuple，<code>(1)</code> 只是一個整數</li>
+  <li>解包（unpacking）：<code>a, b = (1, 2)</code> 一次把兩個值拆給兩個變數</li>
+</ul>
+
+<h2>何時選誰</h2>
+<table>
+  <tr><th>問題</th><th>答案</th></tr>
+  <tr><td>這串資料會新增、刪除、排序？</td><td><code>list</code></td></tr>
+  <tr><td>這組值生下來就固定、要綁在一起？</td><td><code>tuple</code></td></tr>
+  <tr><td>需要唯一值？</td><td><code>set</code>（下一步）</td></tr>
+  <tr><td>需要 key → value 查找？</td><td><code>dict</code>（下一步）</td></tr>
+</table>
+<p>還有一個伏筆：tuple 因為不可變，<strong>可以當 dict 的 key</strong>——list 不行。這個限制下一步會再看到它發威。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="food.append(&quot;portal&quot;) 的回傳值是什麼？" data-correct="0" data-explain="append 就地修改 list 本身，回傳 None——不是新的 list。">
+  <button class="opt">None</button>
+  <button class="opt">附加後的新 list</button>
+  <button class="opt">剛加進去的那個元素</button>
+  <button class="opt">被修改後的 food 本身</button>
+</div>
+
+<div class="quiz" data-question="想拿到排好序的新 list、又不動原本的資料，該用哪個？" data-correct="1" data-explain="sorted(letters) 是內建函式，回傳新 list；letters.sort() 是就地修改且回傳 None。">
+  <button class="opt">names.sort()</button>
+  <button class="opt">sorted(names)</button>
+  <button class="opt">names.sorted()</button>
+  <button class="opt">sort(names, new=True)</button>
+</div>
+
+<div class="quiz" data-question="哪一個寫法是單元素的 tuple？" data-correct="1" data-explain="(1) 只是整數 1 加上括號；(1,) 的尾逗號才是 tuple 的記號。">
+  <button class="opt">(1)</button>
+  <button class="opt">(1,)</button>
+  <button class="opt">[1]</button>
+  <button class="opt">{1}</button>
+</div>
+
+<div class="quiz" data-question="對 tuple 呼叫 version.append(3) 會發生什麼？" data-correct="0" data-explain="tuple 沒有 append——不可變的容器不提供任何就地修改的方法，直接 AttributeError。">
+  <button class="opt">AttributeError：tuple 沒有 append</button>
+  <button class="opt">靜靜地把 3 加到最後</button>
+  <button class="opt">回傳一個新的 tuple</button>
+  <button class="opt">TypeError：參數型別錯誤</button>
+</div>
+
+<div class="quiz" data-question="判斷一個操作會不會就地修改的經驗法則是？" data-correct="0" data-explain="方法呼叫在實例上（names.sort()）傾向就地修改；內建函式把資料當參數（sorted(names)）傾向回傳新值。">
+  <button class="opt">方法呼叫在實例上，就地修改</button>
+  <button class="opt">回傳值不是 None 就一定安全</button>
+  <button class="opt">內建函式全都會就地修改</button>
+  <button class="opt">看方法名稱的長短來決定</button>
+</div>
+
+<div class="quiz" data-question="要把 &quot;A,B,C&quot; 依逗號拆成 list，正確寫法是？" data-correct="0" data-explain="split 拆字串成 list；join 是反方向——把 list 接回字串。">
+  <button class="opt">"A,B,C".split(",")</button>
+  <button class="opt">"A,B,C".join(",")</button>
+  <button class="opt">split("A,B,C", ",")</button>
+  <button class="opt">",".join("A,B,C")</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./sets-and-dicts.html">下一步：Sets 與 dicts：唯一值與鍵值對應 →</a>
+</div>
+
+<div class="footer">有問題？直接問你的 agent，它可以幫你釐清任何不清楚的地方。</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

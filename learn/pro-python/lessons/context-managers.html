@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Context Managers — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Context Managers</h1>
+<p class="meta">Node 34 · Step 4 / 4 · pro-python</p>
+
+<h2>Learning goal</h2>
+<p>Use <code>with</code> statements to manage resources that need guaranteed cleanup, even when exceptions occur.</p>
+
+<h2>The problem: cleanup is easy to forget</h2>
+<p>When you open a file, you must close it. When you acquire a lock, you must release it. When you open a database connection, you must return it to the pool. If you forget — or if an exception occurs before your cleanup code runs — you leak resources.</p>
+
+<pre><code># Buggy — if process() raises, the file is never closed
+f = open("data.txt")
+process(f)
+f.close()</code></pre>
+
+<p>The fix is <code>with</code>. A context manager wraps a block of code and guarantees that cleanup happens — no matter how the block exits.</p>
+
+<h2>The <code>with</code> statement</h2>
+
+<pre><code>with open("data.txt") as f:
+    process(f)
+# f is closed here, even if process() raised</code></pre>
+
+<p><code>open()</code> returns a context manager. When the <code>with</code> block ends — normally or via exception — the manager's <code>__exit__</code> method runs and closes the file.</p>
+
+<h2>How context managers work</h2>
+<p>Any object can be a context manager if it implements two methods:</p>
+<ul>
+  <li><code>__enter__</code> — runs before the block; returns the resource (or <code>self</code>)</li>
+  <li><code>__exit__</code> — runs after the block; handles cleanup and optionally suppresses exceptions</li>
+</ul>
+
+<pre><code>class DatabaseSession:
+    def __enter__(self):
+        self.connection = pool.acquire()
+        return self.connection
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.connection.close()
+        # Return False (or None) to let any exception propagate
+        return False
+
+with DatabaseSession() as conn:
+    conn.execute("SELECT ...")
+# connection is closed here, even on exception</code></pre>
+
+<h2>Suppressing exceptions</h2>
+<p>If <code>__exit__</code> returns <code>True</code>, the exception is suppressed. Use this sparingly — usually only when you genuinely want to ignore a specific, expected failure.</p>
+
+<pre><code>class suppress:
+    def __init__(self, *exceptions):
+        self.exceptions = exceptions
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return isinstance(exc_val, self.exceptions)
+
+with suppress(FileNotFoundError):
+    os.remove("maybe_missing.txt")
+# No error if the file doesn't exist</code></pre>
+
+<h2><code>contextlib.contextmanager</code></h2>
+<p>You don't always need a class. The <code>@contextmanager</code> decorator turns a generator function into a context manager. Code before <code>yield</code> is <code>__enter__</code>; code after is <code>__exit__</code>.</p>
+
+<pre><code>from contextlib import contextmanager
+
+@contextmanager
+def timed(label: str):
+    start = time.perf_counter()
+    yield
+    elapsed = time.perf_counter() - start
+    logger.info("%s took %.3f seconds", label, elapsed)
+
+with timed("database query"):
+    session.execute("SELECT ...")
+# Logs the elapsed time, even if execute() raised</code></pre>
+
+<h2>Nesting and multiple managers</h2>
+<p>You can open several managers in one <code>with</code> statement — Python closes them in reverse order.</p>
+
+<pre><code>with open("input.txt") as src, open("output.txt", "w") as dst:
+    dst.write(src.read())
+# Both files are closed here</code></pre>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-qu="What does the with statement guarantee?" data-correct="2" data-explanation="with guarantees that __exit__ runs no matter how the block exits — normally, via return, or via exception.">
+  <button class="opt">The block will never raise an exception</button>
+  <button class="opt">The block runs faster than without with</button>
+  <button class="opt">Cleanup code runs even if an exception occurs</button>
+  <button class="opt">The resource is automatically created</button>
+</div>
+
+<div class="quiz" data-qu="What two methods must a context manager implement?" data-correct="0" data-explain="__enter__ runs before the block and returns the resource. __exit__ runs after and handles cleanup.">
+  <button class="opt">__enter__ and __exit__</button>
+  <button class="opt">__init__ and __del__</button>
+  <button class="opt">__open__ and __close__</button>
+  <button class="opt">__start__ and __stop__</button>
+</div>
+
+<div class="quiz" data-qu="What happens if __exit__ returns True?" data-correct="1" data-explain="Returning True from __exit__ suppresses the exception. Use this only when you genuinely want to ignore a specific failure.">
+  <button class="opt">The exception is re-raised</button>
+  <button class="opt">The exception is suppressed</button>
+  <button class="opt">The program crashes</button>
+  <button class="opt">The __exit__ method runs again</button>
+</div>
+
+<div class="quiz" data-qu="What does @contextmanager from contextlib do?" data-correct="3" data-explain="@contextmanager turns a generator function into a context manager. Code before yield is __enter__; code after is __exit__.">
+  <button class="opt">Creates a class-based context manager</button>
+  <button class="opt">Automatically suppresses all exceptions</button>
+  <button class="opt">Runs the function in a separate thread</button>
+  <button class="opt">Converts a generator function into a context manager</button>
+</div>
+
+<div class="quiz" data-qu="In `with open('a') as a, open('b') as b:`, which file is closed first?" data-correct="0" data-explain="Context managers are closed in reverse order of opening. b is closed first, then a.">
+  <button class="opt">b is closed first, then a</button>
+  <button class="opt">a is closed first, then b</button>
+  <button class="opt">Both are closed simultaneously</button>
+  <button class="opt">The order is random</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./custom-exceptions.html">← 上一步：Custom Exceptions</a>
+  <span></span>
+</div>
+
+<div class="footer">
+  <p>有問題？問你的 agent，它可以幫你釐清任何不清楚的地方。</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,9 +1,8 @@
 ---
 subject: pro-python
 created: 2026-09-03
-updated: 2026-09-03
+updated: 2026-09-07
 ---
-
 # Mastery — pro-python
 
 ## 03-first-fastapi
@@ -245,6 +244,60 @@ probe skipped via /nodes pro-python/25-db-fixtures skip-probe on 2026-09-04
 | Fixture chain to pre-populate sample data | unknown |
 | Writing endpoint tests against fixture data | unknown |
 
+## 30-enums
+
+probe skipped via /nodes pro-python/30-enums skip-probe on 2026-09-07
+
+| Strand | Mastery |
+| --- | --- |
+| Magic strings and the fixed-set-of-values problem | unknown |
+| StrEnum definition and member syntax | unknown |
+| auto() for generating sequential values | unknown |
+| IntEnum for numeric statuses | unknown |
+| Enum type safety and rejecting invalid states (database column validation) | unknown |
+| REPL inspection and match/case branching on enums | unknown |
+
+## 31-functions-conditionals
+
+probe skipped via /nodes pro-python/31-functions-conditionals skip-probe on 2026-09-07
+
+| Strand | Mastery |
+| --- | --- |
+| Function definition with def, parameters, indentation | unknown |
+| Return values vs printing; implicit None return | unknown |
+| Default parameter values and evaluation timing | unknown |
+| Mutable default argument bug and the None idiom | unknown |
+| Keyword-only arguments via `*` separator | unknown |
+| if/elif/else syntax and indentation errors | unknown |
+| Truthiness — falsy values and bool() | unknown |
+| Truthiness shortcuts (if due_date vs is None) | unknown |
+
+## 29-variables-types
+
+probe skipped via /nodes pro-python/29-variables-types skip-probe on 2026-09-07
+
+| Strand | Mastery |
+| --- | --- |
+| Variables, running Python, and print | unknown |
+| Dynamic typing and reassignment | unknown |
+| Built-in type conversion constructors | unknown |
+| Strings, f-strings, and comparisons | unknown |
+| Naming conventions and None | unknown |
+
+## 33-collections-loops
+
+probe skipped via /nodes pro-python/33-collections-loops skip-probe on 2026-09-07
+
+| Strand | Mastery |
+| --- | --- |
+| Lists and tuples — mutability, append/extend, in-place vs returning methods | unknown |
+| Sets — uniqueness, unordered iteration, set operations | unknown |
+| Dicts — key-value access, .get() defaults, keys/values/items | unknown |
+| for loops and dict iteration with tuple unpacking | unknown |
+| List/dict/set comprehensions — transform and filter | unknown |
+| Generator comprehensions and lazy evaluation (sum/any/all) | unknown |
+| zip — pairing two lists into a dict | unknown |
+
 ## 22-jwt-tokens
 
 probe skipped via /nodes pro-python/22-jwt-tokens skip-probe on 2026-09-04
@@ -256,3 +309,26 @@ probe skipped via /nodes pro-python/22-jwt-tokens skip-probe on 2026-09-04
 | Common claims (sub, exp) and encoded vs encrypted | unknown |
 | Token generation and verification | unknown |
 | Secret key security | unknown |
+
+## 32-dataclasses
+
+probe skipped via /nodes pro-python/32-dataclasses skip-probe on 2026-09-07
+
+| Strand | Mastery |
+| --- | --- |
+| @dataclass auto-generates __init__, __repr__, __eq__ | unknown |
+| __post_init__ for validation after initialization | unknown |
+| field(default_factory=...) for mutable defaults | unknown |
+| frozen=True for immutable instances | unknown |
+| When to choose dataclass vs full class | unknown |
+
+## 34-error-handling
+
+probe skipped via /nodes pro-python/34-error-handling skip-probe on 2026-09-07
+
+| Strand | Mastery |
+| --- | --- |
+| Raising exceptions with raise and ValueError for validation | unknown |
+| Catching specific exceptions with try/except and avoiding bare except | unknown |
+| Creating custom exceptions by subclassing Exception | unknown |
+| Adding context when catching exceptions instead of ignoring them | unknown |

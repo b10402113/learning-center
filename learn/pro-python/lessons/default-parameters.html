@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Default parameters, keyword-only args, and the mutable default trap</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Default parameters, keyword-only args, and the mutable default trap</h1>
+<p class="meta">學習目標：為函式加上預設參數值、用 <code>*</code> 強制關鍵字傳參，並避開「可變預設值」這個經典難查 bug。</p>
+
+<h2>Why this step matters</h2>
+<p>打開任何 Python API 或框架的原始碼，你都會看到滿滿的預設參數和 keyword-only 參數——FastAPI 的路由裝飾器、SQLModel 的 <code>Field()</code>、你公司 codebase 裡的每一個工具函式。這一步教你讀懂它們，也教你避開其中最陰險的一個陷阱。</p>
+
+<h2>預設參數值：最常見的 API 人體工學</h2>
+<p>回顧上一課的 <code>slugify</code>。假設有時你想要不同的分隔符號，與其開兩個函式，不如給參數一個預設值：</p>
+<pre><code>def slugify(name, separator="-"):
+    cleaned = name.strip().lower()
+    return cleaned.replace(" ", separator)
+
+print(slugify("Payments API"))
+# payments-api（用預設的 "-"）
+
+print(slugify("Payments API", separator="_"))
+# payments_api（覆蓋預設值）</code></pre>
+<p>不傳 <code>separator</code>，就用預設的 <code>"-"</code>；要客製，明確傳進去覆蓋。一個簽名同時服務兩種使用情境，這就是預設參數讓 API 更好用的方式。</p>
+
+<h2>關鍵事實：預設值在函式定義時評估，而且只評估一次</h2>
+<p>這句話是本課的地基。<code>separator="-"</code> 的 <code>"-"</code> 不是「每次呼叫時新造一個」，而是 Python 執行到 <code>def</code> 那一行時算好、然後<strong>記住的那一個值</strong>。之後每次呼叫，用的都是同一份。</p>
+<p>對字串、數字這種不可變（immutable）值，這完全沒問題——反正誰也改不了它。但對 list、dict 這種可變（mutable）物件，故事就完全不同了。</p>
+
+<h2>陷阱：可變預設值</h2>
+<p>先看一個看似無害的寫法——把空 list 當預設值：</p>
+<pre><code>def add_tag(name, tags=[]):        # 危險！
+    tags.append(name)
+    return tags
+
+print(add_tag("python"))
+# ['python']
+
+print(add_tag("fastapi"))
+# ['python', 'fastapi']  ← 為什麼 python 還在？！
+
+print(add_tag("docker"))
+# ['python', 'fastapi', 'docker']  ← 越積越多</code></pre>
+<p>第二次呼叫沒有傳 <code>tags</code>，直覺上應該拿到一個新的空 list，結果卻拿到上一次的舊 list。原因正是剛才那句話：<strong>預設值只評估一次</strong>。那個 <code>[]</code> 在函式定義時就誕生了，之後每次呼叫共用同一個 list。你在其中一次呼叫 append 的東西，會一直留到下一次。</p>
+<p>這類 bug 特別難查，因為它不會報錯——程式照常執行，只是結果慢慢變得不對勁。你會浪費很多時間懷疑呼叫方、懷疑資料來源，最後才發現問題出在定義那一行。</p>
+
+<h2>正解：None 慣用語（the None idiom）</h2>
+<p>標準解法是把預設值設為 <code>None</code>，在函式裡檢查後再新建 list：</p>
+<pre><code>def add_tag(name, tags=None):     # 正確
+    if tags is None:
+        tags = []
+    tags.append(name)
+    return tags
+
+print(add_tag("python"))
+# ['python']
+
+print(add_tag("fastapi"))
+# ['fastapi']  ← 每次都是新的 list</code></pre>
+<p><code>None</code> 是不可變的，所以共用它沒有副作用；<code>if tags is None: tags = []</code> 保證每次呼叫都拿到新造的 list。這個 pattern 你會在 Python codebase 裡不斷看到，看到就應該立刻認出來。</p>
+
+<h2>Keyword-only 參數：用 * 畫一條線</h2>
+<p>參數列表裡一個單獨的 <code>*</code> 是分隔符：它之前的參數可以照位置傳，它之後的參數<strong>必須</strong>用關鍵字傳：</p>
+<pre><code>def create_release(name, *, draft=True, prerelease=False):
+    ...
+
+create_release("v1.0")                      # OK
+create_release("v1.0", draft=False)         # OK
+create_release("v1.0", False)               # TypeError！draft 必須用關鍵字傳</code></pre>
+<p>你在 type hints 那個節點已經見過這個語法。它存在的理由：當多個參數型別相同或語意容易搞混時，強迫呼叫方寫出參數名，呼叫端的意圖就一目瞭然——<code>create_release("v1.0", False)</code> 裡的那個 <code>False</code> 是 draft 還是 prerelease？沒人讀得出來。這也是為什麼幾乎所有現代 Python API（包括 FastAPI）都大量使用它。</p>
+
+<h2>組合起來：一個現代風格的簽名</h2>
+<pre><code>def slugify(name: str, *, separator: str = "-") -> str:
+    cleaned = name.strip().lower()
+    return cleaned.replace(" ", separator)</code></pre>
+<p>位置參數 <code>name</code> 在前，<code>*</code> 之後是可選的 keyword-only 參數 <code>separator</code>。type hint、<code>*</code>、預設值三件事各司其職——這就是你在現代 Python 專案裡會看到的典型函式簽名。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="函式的預設參數值什麼時候被評估？" data-correct="2" data-explain="預設值在函式定義（def 執行）時評估一次，之後所有呼叫共用同一份。">
+  <button class="opt">每次呼叫時重新評估</button>
+  <button class="opt">第一次呼叫時評估</button>
+  <button class="opt">函式定義時評估一次</button>
+  <button class="opt">匯入模組時不評估</button>
+</div>
+
+<div class="quiz" data-question="def add_tag(name, tags=[]) 有什麼問題？" data-correct="1" data-explain="list 是可變物件且預設值只評估一次，所有呼叫共用同一個 list，結果會跨呼叫累積。">
+  <button class="opt">list 不能當參數使用</button>
+  <button class="opt">所有呼叫共用同一個 list</button>
+  <button class="opt">呼叫時一定會報 TypeError</button>
+  <button class="opt">每次呼叫都會新建一個 list</button>
+</div>
+
+<div class="quiz" data-question="可變預設值問題的標準解法是什麼？" data-correct="3" data-explain="預設值設 None，函式內檢查 if tags is None 再新建 list——這就是 None 慣用語。">
+  <button class="opt">改用 tuple 並呼叫 list() 轉換</button>
+  <button class="opt">在函式開頭呼叫 tags.clear()</button>
+  <button class="opt">把參數移到 * 後面強制關鍵字</button>
+  <button class="opt">預設值設 None，檢查後新建 list</button>
+</div>
+
+<div class="quiz" data-question="參數列表中單獨的 * 代表什麼？" data-correct="0" data-explain="* 是分隔符：之前的參數可照位置傳，之後的參數必須用關鍵字傳。">
+  <button class="opt">之後的參數必須用關鍵字傳</button>
+  <button class="opt">之後的參數必須有預設值</button>
+  <button class="opt">之後的參數可以接受多個值</button>
+  <button class="opt">之前的參數不接受 type hint</button>
+</div>
+
+<div class="quiz" data-question="slugify(name, *, separator=&quot;-&quot;)，以下哪個呼叫不合法？" data-correct="2" data-explain="separator 在 * 之後，必須用關鍵字傳入，不能用位置。">
+  <button class="opt">slugify("Payments API")</button>
+  <button class="opt">slugify("Payments API", separator="_")</button>
+  <button class="opt">slugify("Payments API", "_")</button>
+  <button class="opt">slugify(name="Payments API")</button>
+</div>
+
+<div class="quiz" data-question="為什麼 keyword-only 參數能讓呼叫端意圖更清楚？" data-correct="1" data-explain="強迫呼叫方寫出參數名，多個相同型別的參數就不會靠位置猜，程式碼自己會說話。">
+  <button class="opt">它讓參數傳遞的速度更快</button>
+  <button class="opt">參數名必須寫出來，不靠位置猜</button>
+  <button class="opt">它讓函式可以接受更多參數</button>
+  <button class="opt">它自動為參數加上 type hint</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./function-basics.html">← 上一步：Function basics — def, return vs print</a>
+  <a href="./if-elif-else.html">下一步：Conditionals — if / elif / else →</a>
+</div>
+
+<div class="footer">有問題？直接問你的 agent，它可以幫你釐清任何不清楚的地方。</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

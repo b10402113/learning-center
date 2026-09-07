@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>什麼時候該用完整類別？ — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>什麼時候該用完整類別？</h1>
+  <p class="meta">學習目標：能根據「資料容器 vs 行為載體」的判斷準則，決定一個型別該用 @dataclass 還是手寫完整類別。</p>
+
+  <h2>不是所有東西都適合 dataclass</h2>
+  <p>前面三課都在講 <code>@dataclass</code> 有多方便，但這不代表你應該把整個專案全部的類別都換成 dataclass。<code>@dataclass</code> 是一個工具，不是信仰。知道它擅长什麼、不擅长什麼，比盲目使用更重要。</p>
+
+  <p>dataclass 的核心假設是：<strong>這個物件主要是一堆欄位的容器</strong>，行为只是附加的。一旦這個假設不成立，樣板減少的效益就會被其他限制抵銷。</p>
+
+  <h2>什麼時候該用 dataclass</h2>
+  <p>只要下面任何一個條件成立，dataclass 就是個好選擇：</p>
+
+  <table>
+    <thead>
+      <tr><th>條件</th><th>例子</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>主要目的就是裝資料</td><td>API 回傳的 JSON 形狀、資料庫 row 的對應物件</td></tr>
+      <tr><td>欄位數量多，手寫樣板煩</td><td>有 10 個欄位的配置物件</td></tr>
+      <tr><td>需要值語意（== 比較、hash）</td><td>座標、貨幣、日期範圍</td></tr>
+      <tr><td>希望自動產生 __repr__ 方便除錯</td><td>幾乎所有資料物件都受惠</td></tr>
+      <tr><td>不需要複雜的初始化邏輯</td><td>絕大多數情境</td></tr>
+    </tbody>
+  </table>
+
+  <h2>什麼時候該用完整類別</h2>
+  <p>下面任何一個條件成立，手寫完整類別通常會比硬套 dataclass 更好：</p>
+
+  <table>
+    <thead>
+      <tr><th>條件</th><th>為什麼 dataclass 不適合</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>建構子需要複雜的初始化邏輯</td><td>dataclass 的 __init__ 就是「把參數塞進屬性」，客製化空間有限</td></tr>
+      <tr><td>需要大量自訂特殊方法（__enter__、__call__ 等）</td><td>dataclass 是為了簡化樣板，不是為了取代所有特殊方法</td></tr>
+      <tr><td>繼承階層很深，而且父類行為很複雜</td><td>dataclass 對多重繼承和複雜 MRO 的支援有限</td></tr>
+      <tr><td>需要控制記憶體佈局（__slots__）或底層行為</td><td>dataclass 目前對 __slots__ 的支援還不夠直覺</td></tr>
+      <tr><td>物件生命周期複雜（開啟/關閉、連線/中斷）</td><td>這通常需要 context manager，不屬於 dataclass 要解決的問題</td></tr>
+    </tbody>
+  </table>
+
+  <h2>一個具體的判斷流程</h2>
+  <p>下次在決定用哪一種的時候，可以這樣問自己：</p>
+
+  <blockquote>
+    <p><strong>Q1：這個類別的主要責任是什麼？</strong></p>
+    <p>如果答案是「裝資料」→ 先考慮 <code>@dataclass</code>。如果答案是「執行某個行為」或「管理某個資源」→ 考慮手寫完整類別。</p>
+    <p><strong>Q2：我需要客製 __init__ 嗎？</strong></p>
+    <p>如果你的初始化邏輯不只是「把參數塞進去」，而是需要做 IO、查資料庫、複雜計算 → 手寫 <code>__init__</code> 比較清楚。</p>
+    <p><strong>Q3：我會繼承這個類別嗎？繼承階層複雜嗎？</strong></p>
+    <p>單層、簡單的繼承，dataclass 處理得了。多層或需要覆寫一大堆父類方法的時候，手寫類別比較不會踩雷。</p>
+  </blockquote>
+
+  <h2>真實世界的混合用法</h2>
+  <p>在 FastAPI 專案裡，你會看到一種很常見的組合：用 dataclass 或 Pydantic 的 <code>BaseModel</code> 來裝請求和回應的資料形狀，但 router、service、repository 這些管理行為的元件，通常還是手寫完整類別或甚至只是函式。</p>
+
+  <p>這樣做很合理：邊界上（API 進出口）用資料容器確保形狀清晰，核心邏輯（怎麼處理這些資料）用完整類別或函式保持彈性。不是非此即彼，而是看位置決定工具。</p>
+
+  <h2>不要過度工程</h2>
+  <p>最後提醒一句：如果一個類別目前只需要 3 個欄位，而且未來很長一段時間也不會變，那用 <code>@dataclass</code> 就好，不要因為「搞不好以後會變複雜」就先手寫完整類別。等到真的需要的那天，再加上去也不遲。</p>
+
+  <blockquote class="good-code">
+    <strong>總結：</strong>dataclass 是你的預設起點，不是終點。需求變複雜的時候，隨時可以退一步手寫完整類別；但不要在手寫樣板寫到煩的時候，還死守著「完整類別比較正規」的偏見。
+  </blockquote>
+
+  <h2>隨堂測驗</h2>
+
+  <div class="quiz" data-question="下面哪一種情境最適合用 @dataclass？" data-correct="1" data-explain="API 請求/回應的資料形狀就是典型的資料容器，適合用 dataclass 自動生成樣板。">
+    <button class="opt">需要管理資料庫連線的 repository 類別</button>
+    <button class="opt">API 請求或回應的資料形狀</button>
+    <button class="opt">需要實做 context manager 的資源管理類別</button>
+    <button class="opt">有複雜繼承階層的框架基礎類別</button>
+  </div>
+
+  <div class="quiz" data-question="下面哪一個不是 dataclass 的擅长項目？" data-correct="0" data-explain="dataclass 的 __init__ 就是把參數塞進屬性，複雜的初始化邏輯不是它的設計目的。">
+    <button class="opt">需要複雜初始化邏輯的類別</button>
+    <button class="opt">裝資料的值物件</button>
+    <button class="opt">需要自動 __repr__ 的類別</button>
+    <button class="opt">欄位很多的資料容器</button>
+  </div>
+
+  <div class="quiz" data-question="下面關於選擇 dataclass 或完整類別的敘述，哪個是正確的？" data-correct="2" data-explain="資料容器用 dataclass 快速又安全；行為複雜的類別手寫完整類別比較不會被語法限制綁手綁腳。">
+    <button class="opt">所有類別都應該用 dataclass，因為它比較現代</button>
+    <button class="opt">完整類別已經過時了，應該被淘汰</button>
+    <button class="opt">依「資料容器 vs 行為載體」的判斷來選擇工具</button>
+    <button class="opt">一個專案只能選擇一種，不能混用</button>
+  </div>
+
+  <div class="quiz" data-question="如果一個類別目前只有 2 個欄位，但預測未來會成長到 10 個，應該怎麼做？" data-correct="1" data-explain="從簡單的開始，需求變複雜的時候再重構。過早最佳化是萬惡之源。">
+    <button class="opt">先手寫完整類別，避免以後重構</button>
+    <button class="opt">先用 @dataclass，等需求變複雜再調整</button>
+    <button class="opt">用 dataclass 但加上所有可能用到的特殊方法</button>
+    <button class="opt">避免使用 class，改用 dict 比較靈活</button>
+  </div>
+
+  <div class="quiz" data-question="下面哪一個是 dataclass 在繼承上的限制？" data-correct="3" data-explain="dataclass 對簡單繼承沒問題，但多重繼承、複雜 MRO 或需要覆寫大量父類方法時，容易出現非直覺的行為。">
+    <button class="opt">dataclass 完全不能繼承</button>
+    <button class="opt">dataclass 只能繼承一次</button>
+    <button class="opt">dataclass 繼承時欄位不能重複</button>
+    <button class="opt">dataclass 對複雜繼承階層的支援有限</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./frozen-instances.html">← 上一步：frozen=True 與不可變值物件</a>
+    <span></span>
+  </div>
+
+  <div class="footer">
+    <p>有問題？隨時問你的 agent，它可以幫你澄清任何不清楚的地方。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

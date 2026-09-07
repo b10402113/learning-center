@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>auto() 與免費的型別安全</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>auto() 與免費的型別安全</h1>
+<p class="meta">學習目標：能用 <code>auto()</code> 消除重複的值指派，並解釋 Enum 免費提供的型別檢查，以及它作為資料庫欄位驗證的用途。</p>
+
+<h2>Why this step matters</h2>
+<p>定義 <code>StrEnum</code> 時你可能有個疑問：<code>PLANNED = "planned"</code>——同一個字打兩遍，這不是另一種重複嗎？這一步用 <code>auto()</code> 把重複消掉，然後看 Enum 送你的另外兩樣禮物：不用 type hinting 就有的型別檢查，以及資料庫欄位驗證的殺手級用法。</p>
+
+<h2>抱怨是對的：PLANNED = "planned" 很重複</h2>
+<pre><code>class TaskStatus(StrEnum):
+    PLANNED = "planned"          # 打了兩次 planned
+    IN_PROGRESS = "in_progress"  # 又打了兩次
+    DONE = "done"                # 再一次……</code></pre>
+<p>成員少還好，成員一多就全是大寫與小寫的複製貼上。這正是 <code>auto()</code> 存在的理由。</p>
+
+<h2>auto()：讓值自動生成</h2>
+<p><code>auto</code> 跟 <code>StrEnum</code> 住在同一個 <code>enum</code> 模組裡：</p>
+<pre><code>from enum import StrEnum, auto
+
+class TaskStatus(StrEnum):
+    PLANNED = auto()             # 值是 "planned"
+    IN_PROGRESS = auto()         # 值是 "in_progress"
+    DONE = auto()                # 值是 "done"</code></pre>
+<p>在 <code>StrEnum</code> 裡，<code>auto()</code> 產生的值就是成員名的小寫形式——跟你自己手打 <code>"planned"</code> 結果完全相同。等於宣告一次名字，值就自動長好，重複指派整個消失，拼字錯誤也跟著少一個來源。（若用在沒有混入型別的普通 <code>Enum</code>，<code>auto()</code> 給的是 1、2、3 這種遞增整數。）</p>
+<p><strong>新手常踩的坑</strong>：忘記把 <code>auto</code> 加進 import。你會拿到一個 <code>NameError: name 'auto' is not defined</code>——訊息很直白，補上 import 就好。</p>
+
+<h2>免費的型別安全：成員必須是字串</h2>
+<p>課堂上有人問：自己寫個普通類別、手動放這些欄位，難道不行？差別之一藏在這裡——<code>StrEnum</code> 明確宣告了「這個列舉的成員<strong>必須是字串</strong>」。你在裡面塞一個非字串的值：</p>
+<pre><code>class TaskStatus(StrEnum):
+    PLANNED = auto()
+    DONE = 1        # TypeError！成員必須是字串</code></pre>
+<p>Python 直接拒絕。注意這個檢查<strong>不需要任何 type hinting</strong>——Enum 本身就給了你。它同時是一道護欄：Python 平時愛做隱性的型別轉換（coercion），但這裡它不會把 <code>1</code> 偷偷轉成 <code>"1"</code>，而是明確報錯。你等於免費拿到了一份「成員型別保證」。</p>
+
+<h2>殺手級用法：資料庫欄位的固定值集合</h2>
+<p>講師點出這套東西真正發威的地方：<strong>資料庫欄位只接受一組固定值</strong>的時候。任務狀態欄、優先權欄——值就是那幾個，多一個都不行。Enum 讓驗證變成一個二元問題：</p>
+<pre><code>def validate_status(value: str) -> TaskStatus:
+    try:
+        return TaskStatus(value)      # 按值查找成員
+    except ValueError:
+        raise ValueError(f"{value} 不是合法的任務狀態")
+
+&gt;&gt;&gt; validate_status("planned")
+&lt;TaskStatus.PLANNED: 'planned'&gt;
+
+&gt;&gt;&gt; validate_status("banana")
+ValueError: 'banana' 不是合法的任務狀態</code></pre>
+<p>「這個值是不是欄位接受的其中之一？」——是或不是，一行解決。若你自己寫類別做這件事，等於重造一套會員清單與檢查邏輯，徒增負擔。這也是之後所有驗證工作的基礎：Release Tracker 專案裡的任務狀態與優先權，就是這樣大規模使用 Enum 的。</p>
+
+<h2>一張圖總結這個節點</h2>
+<table>
+  <tr><th>工具</th><th>給你什麼</th></tr>
+  <tr><td><code>StrEnum</code></td><td>一組固定字串值 + 自動補全 + 拒絕無效狀態</td></tr>
+  <tr><td><code>IntEnum</code></td><td>同上，但成員是整數</td></tr>
+  <tr><td><code>auto()</code></td><td>值自動生成，免除重複指派</td></tr>
+  <tr><td>成員型別檢查</td><td>非字串成員當場報錯，不必寫 type hint</td></tr>
+  <tr><td><code>TaskStatus(value)</code></td><td>按值查找——欄位驗證的最短寫法</td></tr>
+</table>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="在 StrEnum 裡，auto() 為成員產生的值是什麼？" data-correct="2" data-explain="StrEnum 的 auto() 用成員名的小寫形式當值，PLANNED 會得到字串「planned」。">
+  <button class="opt">遞增的整數 1、2、3</button>
+  <button class="opt">成員名的大寫形式</button>
+  <button class="opt">成員名的小寫形式</button>
+  <button class="opt">空字串</button>
+</div>
+
+<div class="quiz" data-question="用了 auto() 卻忘了 from enum import auto，會發生什麼？" data-correct="0" data-explain="你會拿到 NameError: name 'auto' is not defined，補上 import 即可。">
+  <button class="opt">NameError：auto 未定義</button>
+  <button class="opt">TypeError：auto 不是字串</button>
+  <button class="opt">ValueError：值不合法</button>
+  <button class="opt">不會報錯，值變成 None</button>
+</div>
+
+<div class="quiz" data-question="在 StrEnum 裡寫 DONE = 1 會怎樣？" data-correct="3" data-explain="StrEnum 宣告成員必須是字串，塞整數會直接報 TypeError。">
+  <button class="opt">自動轉成字串 "1"</button>
+  <button class="opt">靜靜接受，值就是整數</button>
+  <button class="opt">只在 mypy 檢查時報錯</button>
+  <button class="opt">直接報 TypeError</button>
+</div>
+
+<div class="quiz" data-question="上述的成員型別檢查需要 type hinting 嗎？" data-correct="1" data-explain="不需要——這是 Enum 本身提供的檢查，連 type hint 都不用寫就生效。">
+  <button class="opt">需要先匯入 typing 模組</button>
+  <button class="opt">完全不需要，Enum 免費提供</button>
+  <button class="opt">需要，否則變成靜默通過</button>
+  <button class="opt">只有 mypy 執行時才需要</button>
+</div>
+
+<div class="quiz" data-question="檢查字串「banana」是否為合法任務狀態，最直接的方式是什麼？" data-correct="2" data-explain="TaskStatus(value) 按值查找：合法回傳成員，不合法拋 ValueError——驗證一行搞定。">
+  <button class="opt">用 for 迴圈逐一比較所有字串</button>
+  <button class="opt">寫一個字典手動對照每個值</button>
+  <button class="opt">呼叫 TaskStatus(value) 看是否 ValueError</button>
+  <button class="opt">先存進資料庫再查有沒有壞資料</button>
+</div>
+
+<div class="quiz" data-question="auto() 帶來的主要收益是什麼？" data-correct="0" data-explain="auto() 消除重複的值指派——名字宣告一次，值自動生成，也少一個拼字錯誤的來源。">
+  <button class="opt">去除重複的值指派</button>
+  <button class="opt">讓成員執行得更快</button>
+  <button class="opt">讓列舉可以無限擴充</button>
+  <button class="opt">讓列舉存進任何資料表</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./strenum-basics.html">← 上一步：定義與檢查 StrEnum：繼承為什麼重要</a>
+</div>
+
+<div class="footer">有問題？直接問你的 agent，它可以幫你釐清任何不清楚的地方。</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

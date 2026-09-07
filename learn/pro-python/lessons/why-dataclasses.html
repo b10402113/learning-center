@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>為什麼需要 @dataclass？ — pro-python</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>為什麼需要 @dataclass？</h1>
+  <p class="meta">學習目標：能說出傳統手寫資料類別的样板問題，以及 @dataclass 如何自動生成 __init__、__repr__、__eq__ 來消除重複。</p>
+
+  <h2>從一個痛點開始</h2>
+  <p>假設你要描述一個「專案」，需要名字、slug 和一個標記是否已封存的布林值。最直覺的做法就是寫一個 class，然後手動定義建構子、列印方法和相等比較。</p>
+
+  <pre><code>class Project:
+    def __init__(self, name, slug, archived=False):
+        self.name = name
+        self.slug = slug
+        self.archived = archived
+
+    def __repr__(self):
+        return f"Project(name={self.name!r}, slug={self.slug!r}, archived={self.archived!r})"
+
+    def __eq__(self, other):
+        if not isinstance(other, Project):
+            return NotImplemented
+        return (self.name, self.slug, self.archived) == (other.name, other.slug, other.archived)</code></pre>
+
+  <p>這段代碼裡，真正跟「專案」業務邏輯相關的只有第一行 <code>name, slug, archived</code>。剩下的全部都是樣板（boilerplate）：把參數一一塞進屬性、自己拼出可讀的列印格式、手動比對每個欄位是否相等。</p>
+
+  <h2>樣板長什麼樣子</h2>
+  <p>如果你曾經手寫過這種類別，你就會發現每次新增一個欄位，至少要改三個地方：<code>__init__</code> 的參數列表、<code>self.xxx = xxx</code> 的指派、還有 <code>__repr__</code> 和 <code>__eq__</code> 裡的欄位清單。少改任何一個，不是印出來的東西落相等比較就漏了一項。</p>
+
+  <blockquote class="bad-code">
+    <strong>常見陷阱：</strong>忘記更新 <code>__eq__</code> 會導致兩個明明不同的物件被誤認為相等，或者兩個一樣的物件被判成不相等。這種 bug 通常很難追蹤，因為它不會噴錯誤，只會讓判斷式靜悄悄地給出錯的結果。
+  </blockquote>
+
+  <h2>@dataclass 怎麼解決</h2>
+  <p>Python 的 <code>@dataclass</code> 裝飾器（decorator）的核心想法是：既然這些樣板都長得差不多，那就讓機器幫你產生。你只需要宣告「這個類別有哪些欄位、分別是什麼型別」，剩下的 <code>__init__</code>、<code>__repr__</code>、<code>__eq__</code> 全部自動生成。</p>
+
+  <pre><code>from dataclasses import dataclass
+
+@dataclass
+class Project:
+    name: str
+    slug: str
+    archived: bool = False</code></pre>
+
+  <p>這樣就夠了。三行欄位宣告取代了十幾行樣板，而且行為完全等價：你可以寫 <code>Project(name="demo", slug="demo")</code>，印出來會得到漂亮的 <code>Project(name='demo', slug='demo', archived=False)</code>，兩個物件也能直接比較。</p>
+
+  <h2>自動得到的三件事</h2>
+  <table>
+    <thead>
+      <tr><th>方法</th><th>做什麼</th><th>為什麼重要</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>__init__</code></td><td>按照你宣告的欄位順序建立建構子</td><td>不用自己寫 <code>self.x = x</code></td></tr>
+      <tr><td><code>__repr__</code></td><td>產生可讀的字串表示</td><td>印出來或除錯時不會看到 <code>&lt;__main__.Project object&gt;</td></tr>
+      <tr><td><code>__eq__</code></td><td>逐欄位比較兩個實體是否相等</td><td>不用自己寫 <code>self.x == other.x and ...</code></td></tr>
+    </tbody>
+  </table>
+
+  <blockquote class="good-code">
+    <strong>重點：</strong>dataclass 不是魔法，它只是把「宣告欄位 → 產生樣板」這件煩人的事自動化。你仍然可以隨時把手寫的方法加進去，需要客製行為的時候再客製就好。
+  </blockquote>
+
+  <h2>什麼時候該用</h2>
+  <p>一個簡單的判斷準則：如果你的類別<strong>主要目的是裝資料</strong>，而且你發現自己正在寫一堆 <code>self.x = x</code>，那八成該用 <code>@dataclass</code>。如果類別裡面已經有一大堆自訂方法、複雜的初始化邏輯、或者需要繼承階層裡做奇怪的事，那手寫完整類別可能還是比較合適——這會在最後一課詳細比較。</p>
+
+  <h2>隨堂測驗</h2>
+
+  <div class="quiz" data-question="下面哪一個不是 @dataclass 自動產生的方法？" data-correct="2" data-explain="dataclass 會自動產生 __init__、__repr__、__eq__，但不會幫你寫 __hash__，除非你顯式設定 frozen=True 或 unsafe_hash=True。">
+    <button class="opt">__init__</button>
+    <button class="opt">__repr__</button>
+    <button class="opt">__hash__</button>
+    <button class="opt">__eq__</button>
+  </div>
+
+  <div class="quiz" data-question="如果一個類別有 5 個欄位，手寫 __init__ 和 self.x = x 至少要寫幾行？" data-correct="1" data-explain="5 個欄位加上 def __init__(self, ...) 本身，至少 6 行；但 dataclass 只要 5 行型別宣告就搞定。">
+    <button class="opt">5 行</button>
+    <button class="opt">6 行</button>
+    <button class="opt">10 行</button>
+    <button class="opt">1 行</button>
+  </div>
+
+  <div class="quiz" data-question="下面哪一種情境最適合用 @dataclass？" data-correct="0" data-explain="主要裝資料、幾乎沒有自訂方法的類別，就是 dataclass 的主場。">
+    <button class="opt">一個只有欄位、幾乎沒有方法的資料容器</button>
+    <button class="opt">一個需要複雜初始化邏輯的類別</button>
+    <button class="opt">一個要覆寫十幾個特殊方法的類別</button>
+    <button class="opt">一個需要多重繼承的類別</button>
+  </div>
+
+  <div class="quiz" data-question="下面關於 __repr__ 的敘述，哪個是正確的？" data-correct="2" data-explain="手寫類別如果沒有覆寫 __repr__，印出來會像 <__main__.Project object at 0x...>，非常難除錯。">
+    <button class="opt">手寫類別的 __repr__ 預設會產生漂亮的欄位列表</button>
+    <button class="opt">__repr__ 只對 dataclass 有意義，手寫類別不需要</button>
+    <button class="opt">手寫類別沒覆寫 __repr__ 時，印出來會看到記憶體位址</button>
+    <button class="opt">__repr__ 和 __str__ 是完全不同的東西，不能混用</button>
+  </div>
+
+  <div class="quiz" data-question="下面關於 dataclass 的敘述，哪個是錯的？" data-correct="3" data-explain="dataclass 仍然可以加自訂方法，它只是幫你產生樣板，不會限制你寫自己的邏輯。">
+    <button class="opt">dataclass 可以擁有有預設值的欄位</button>
+    <button class="opt">dataclass 可以繼承其他 dataclass</button>
+    <button class="opt">dataclass 的欄位必須標註型別</button>
+    <button class="opt">dataclass 不能有任何自訂方法</button>
+  </div>
+
+  <div class="lesson-nav">
+    <span></span>
+    <a href="./post-init-validation.html">下一步：__post_init__ 與可變預設值 →</a>
+  </div>
+
+  <div class="footer">
+    <p>有問題？隨時問你的 agent，它可以幫你澄清任何不清楚的地方。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

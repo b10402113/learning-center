@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>魔術字串問題：為什麼需要 Enum</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>魔術字串問題：為什麼需要 Enum</h1>
+<p class="meta">學習目標：能說出散落在程式碼裡的「魔術字串」造成哪些問題，並解釋 Enum 如何用一組固定值解決它們。</p>
+
+<h2>Why this step matters</h2>
+<p>你每天都在讀別人寫的 Django/Flask 程式碼。追過狀態欄位嗎——任務是「進行中」，但資料庫裡存的字串到底是 <code>in_progress</code>、<code>In Progress</code> 還是 <code>INPROGRESS</code>？這一步教你認出這類痛點的名字，以及 Python 標準庫提供的解法。它會是後面所有「固定值集合」場景的地基。</p>
+
+<h2>現象：同一個字串，散落各處</h2>
+<p>假設你的程式裡有一個任務狀態，整個 codebase 都會用到：</p>
+<pre><code>def can_edit(task):
+    return task.status == "in progress"     # 是這樣嗎？
+
+def notify(task):
+    if task.status == "in_progress":        # 還是這樣？
+        send_email(task.owner)
+
+# 三個月後，另一個檔案裡……
+if task.status == "IN_PROGRESS":            # 全大寫？
+    ...</code></pre>
+<p>每次要寫這個狀態，你都得先回答一連串問題：底線還是空格？一個字還是兩個字？大小寫怎麼配？答案不在手邊——你只能翻遍程式碼，找出當初是怎麼寫的，然後祈禱每個人都寫得一樣。</p>
+
+<h2>這個痛點有名字：魔術字串</h2>
+<p>直接寫死在程式碼裡、沒有單一定義處的字面字串，叫做<strong>魔術字串（magic string）</strong>。它「魔術」的地方在於：程式能跑，但光讀其中一行，沒有人知道這個欄位的合法值有哪些。它帶來三個具體問題：</p>
+<table>
+  <tr><th>問題</th><th>實際發生什麼事</th></tr>
+  <tr><td>沒有自動補全</td><td>編輯器幫不了你，只能靠記憶重打精確的值</td></tr>
+  <tr><td>拼錯不會報錯</td><td><code>"in_progres"</code> 是完全合法的字串，比較永遠失敗，bug 靜靜藏著</td></tr>
+  <tr><td>無效狀態難拒絕</td><td>任何字串都能塞進 status，<code>"banana"</code> 也行，出事才發現</td></tr>
+</table>
+
+<h2>解法：Enum——一組固定不變的值</h2>
+<p>Python 標準庫的 <code>enum</code> 模組提供的<strong>列舉（Enum）</strong>，就是為「一組固定不變的值」而生：把所有合法狀態收進一個具名類別，每個狀態是它的一個<strong>成員（member）</strong>：</p>
+<pre><code>from enum import StrEnum
+
+class TaskStatus(StrEnum):
+    PLANNED = "planned"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"</code></pre>
+<p>之後整個程式碼庫只寫 <code>TaskStatus.IN_PROGRESS</code>。不用再猜拼法——合法值全部定義在同一個地方，一處就是真相。</p>
+
+<h2>三個問題，一次解決</h2>
+<p>回頭對照上面的表格：</p>
+<ul>
+<li><strong>自動補全回來了。</strong>打 <code>TaskStatus.</code>，編輯器列出全部成員——用選的，不用背的。你不再需要記住 <code>TaskStatus</code> 的進行中到底長什麼樣。</li>
+<li><strong>拼錯當場現形。</strong><code>TaskStatus.IN_PROGRES</code> 這個成員不存在——編輯器會標出來，真的跑起來也會直接報 <code>AttributeError</code>。錯誤發生在寫下的那一刻，不是三個月後的 production。</li>
+<li><strong>無效狀態更容易拒絕。</strong>合法值就只有定義裡那幾個成員，多出來的值在驗證時一眼就能擋下。</li>
+</ul>
+<p>這是講師明確推薦的做法：需要固定值集合時就用它；字串類的枚舉是你最常見到的那一種。</p>
+
+<h2>這是之後一切的基礎</h2>
+<p>「一組固定值」接下來會不斷出現：任務狀態、優先權、資料庫欄位允許的值。下一步深入 <code>StrEnum</code> 的定義細節——為什麼非要繼承不可、在 REPL 裡怎麼檢查成員——之後再用 <code>auto()</code> 連重複的值指派都省掉。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="「魔術字串（magic string）」指的是什麼？" data-correct="2" data-explain="魔術字串是直接寫死在程式碼裡、沒有單一定義處的字面字串，合法值有哪些無從得知。">
+  <button class="opt">經過加密處理的機密字串</button>
+  <button class="opt">從設定檔讀進來的字串</button>
+  <button class="opt">寫死在程式碼裡的字面字串</button>
+  <button class="opt">用 f-string 動態組出來的字串</button>
+</div>
+
+<div class="quiz" data-question="魔術字串最難抓的問題是什麼？" data-correct="1" data-explain="拼錯的字串完全合法，比較永遠失敗但不報錯，bug 會安靜地藏著。">
+  <button class="opt">它會讓程式直接拋出例外</button>
+  <button class="opt">拼錯了不會報錯，只是靜靜失效</button>
+  <button class="opt">它讓程式執行速度明顯變慢</button>
+  <button class="opt">編輯器會自動把它改成別的字</button>
+</div>
+
+<div class="quiz" data-question="Enum 的所有合法值定義在哪裡？" data-correct="0" data-explain="Enum 把一組固定值收進一個具名類別，每個值是一個成員，定義在同一處。">
+  <button class="opt">一個具名類別的成員裡</button>
+  <button class="opt">各使用處各自定義一份</button>
+  <button class="opt">環境變數的清單檔裡</button>
+  <button class="opt">資料庫的觸發器程序裡</button>
+</div>
+
+<div class="quiz" data-question="寫 TaskStatus. 之後，編輯器會給你什麼？" data-correct="3" data-explain="Enum 成員有自動補全：打出類別名，編輯器列出所有成員供選擇，不必背拼法。">
+  <button class="opt">一份隨機的建議字串清單</button>
+  <button class="opt">該類別的完整原始碼</button>
+  <button class="opt">所有字串欄位的名稱</button>
+  <button class="opt">全部成員的自動補全清單</button>
+</div>
+
+<div class="quiz" data-question="以下哪種情境最適合用 Enum？" data-correct="2" data-explain="Enum 為「一組固定不變的值」而生，例如任務狀態、優先權這類封閉集合。">
+  <button class="opt">使用者自由輸入的備註文字</button>
+  <button class="opt">每次請求都不同的隨機 token</button>
+  <button class="opt">固定不變的一組狀態值</button>
+  <button class="opt">數量持續成長的日誌訊息</button>
+</div>
+
+<div class="quiz" data-question="TaskStatus.IN_PROGRESS 相比字串「in_progress」的關鍵優勢是什麼？" data-correct="1" data-explain="成員寫錯會立刻被編輯器標出或直接報錯，字串拼錯則安靜失效。">
+  <button class="opt">它的執行速度比字串快</button>
+  <button class="opt">拼錯成員名會當場現形</button>
+  <button class="opt">它不需要匯入任何模組</button>
+  <button class="opt">它可以存放任意內容</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./strenum-basics.html">下一步：定義與檢查 StrEnum：繼承為什麼重要 →</a>
+</div>
+
+<div class="footer">有問題？直接問你的 agent，它可以幫你釐清任何不清楚的地方。</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>定義與檢查 StrEnum：繼承為什麼重要</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>定義與檢查 StrEnum：繼承為什麼重要</h1>
+<p class="meta">學習目標：能用 <code>StrEnum</code> 定義一組固定狀態值、在 REPL 檢查成員，並解釋為什麼必須繼承 <code>StrEnum</code> 而不是寫普通類別。</p>
+
+<h2>Why this step matters</h2>
+<p>上一步看過 <code>TaskStatus</code> 的長相了。這一步把它放進 REPL 裡翻來覆去檢查——這是你日後讀陌生 codebase 時最快的理解手法——並回答一個關鍵問題：這看起來就只是個普通類別加幾個欄位，為什麼非要繼承 <code>StrEnum</code> 不可？</p>
+
+<h2>定義：兩種寫法，同一件事</h2>
+<pre><code>from enum import StrEnum
+
+class TaskStatus(StrEnum):
+    PLANNED = "planned"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"</code></pre>
+<p><code>StrEnum</code> 是 Python 3.11 加入的字串列舉。更舊的程式碼裡你會看到它的前身寫法——混合繼承 <code>str</code> 與 <code>Enum</code>：</p>
+<pre><code>from enum import Enum
+
+class TaskStatus(str, Enum):        # 舊式寫法，效果相近
+    PLANNED = "planned"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"</code></pre>
+<p>讀舊 codebase 時認得後者就行；自己寫新程式碼，用 <code>StrEnum</code>。</p>
+
+<h2>放進 REPL 檢查</h2>
+<p>把這個類別貼進 REPL，幾個操作就能摸清它的行為：</p>
+<pre><code>&gt;&gt;&gt; TaskStatus.PLANNED
+&lt;TaskStatus.PLANNED: 'planned'&gt;
+
+&gt;&gt;&gt; TaskStatus.PLANNED.name       # 成員的名字
+'PLANNED'
+
+&gt;&gt;&gt; TaskStatus.PLANNED.value      # 成員攜帶的值
+'planned'
+
+&gt;&gt;&gt; print(TaskStatus.PLANNED)    # 印出來清楚可讀
+TaskStatus.PLANNED</code></pre>
+<p>每個成員都有兩個面向：<code>.name</code> 是你在類別裡寫的成員名（<code>PLANNED</code>），<code>.value</code> 是你指派給它的值（<code>"planned"</code>）。檢查一個成員時，你看到的是它的型別與身份——<code>TaskStatus.PLANNED</code>——比起一個裸字串，這種輸出除錯時好讀得多。</p>
+<p><code>StrEnum</code> 還有一個實點性質：成員<strong>本身就是字串</strong>。</p>
+<pre><code>&gt;&gt;&gt; TaskStatus.IN_PROGRESS == "in_progress"
+True</code></pre>
+<p>所以字串列舉是你最常會遇到的一種——值可以直接跟字串比較、直接存進資料庫欄位。</p>
+
+<h2>關鍵問答：為什麼一定要繼承？</h2>
+<p>課堂上有人問了完全正確的問題：這些「就只是普通類別欄位吧？為什麼要繼承 <code>StrEnum</code>？」答案：沒有那個繼承，你拿到的就只是一個普通類別加上幾個字串屬性——<strong>Enum 的全部機制都不會生效</strong>：</p>
+<ul>
+<li>成員不會被當成列舉成員，編輯器的自動補全與檢查幫不上忙；</li>
+<li>下一課的 <code>auto()</code> 完全沒有作用；</li>
+<li><code>.name</code>、<code>.value</code>、按值查找這些 Enum 行為一概不存在。</li>
+</ul>
+<p>繼承就是在宣告「這是一個 string enum 型別」。這個語法確實有點笨重——因為 enum 是後來才加進 Python 的，語法只能長這樣。多包一層看起來不優雅，但換來的是整套機制。</p>
+
+<h2>需要數字？用 IntEnum</h2>
+<p>狀態不一定是字串。若你需要的是數字狀態（例如各種 legacy 系統的 status code），標準庫備好了 <code>IntEnum</code>：</p>
+<pre><code>from enum import IntEnum
+
+class Priority(IntEnum):
+    LOW = 1
+    MEDIUM = 2
+    HIGH = 3
+
+&gt;&gt;&gt; Priority.HIGH == 3
+True</code></pre>
+<p>成員本身就是整數。選哪一種取決於你的值是字串還是數字——兩者的機制完全相同。</p>
+
+<h2>配對 match / case：乾淨的分支</h2>
+<p>列舉配上一個狀態的多種處理方式時，<code>match</code>/<code>case</code>（結構化模式匹配）是最自然的分支語法：</p>
+<pre><code>match task.status:
+    case TaskStatus.PLANNED:
+        schedule(task)
+    case TaskStatus.IN_PROGRESS:
+        notify_owner(task)
+    case TaskStatus.DONE:
+        archive(task)</code></pre>
+<p>每個 <code>case</code> 直接對成員匹配，意圖一目瞭然——比一串 <code>if status == ...</code> 好讀也好維護。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="Python 3.11 之前，字串列舉的等價寫法是什麼？" data-correct="2" data-explain="舊式寫法是混合繼承 str 與 Enum：class TaskStatus(str, Enum)，效果與 StrEnum 相近。">
+  <button class="opt">class TaskStatus(str, list)</button>
+  <button class="opt">class TaskStatus(Enum, str)</button>
+  <button class="opt">class TaskStatus(str, Enum)</button>
+  <button class="opt">class TaskStatus(dict, Enum)</button>
+</div>
+
+<div class="quiz" data-question="TaskStatus.PLANNED.value 回傳什麼？" data-correct="0" data-explain="value 是指派給成員的值，這裡是字串「planned」。">
+  <button class="opt">字串 "planned"</button>
+  <button class="opt">字串 "PLANNED"</button>
+  <button class="opt">整數 1</button>
+  <button class="opt">None</button>
+</div>
+
+<div class="quiz" data-question="TaskStatus.PLANNED.name 回傳什麼？" data-correct="3" data-explain="name 是類別裡寫的成員名「PLANNED」，value 才是指派的值。">
+  <button class="opt">字串 "planned"</button>
+  <button class="opt">整數 0</button>
+  <button class="opt">字串 "TaskStatus"</button>
+  <button class="opt">字串 "PLANNED"</button>
+</div>
+
+<div class="quiz" data-question="為什麼必須繼承 StrEnum，而不是寫普通類別？" data-correct="1" data-explain="繼承才會啟動 Enum 的機制：成員補全、auto()、name/value 與按值查找；普通類別只有字串屬性。">
+  <button class="opt">普通類別不能存放字串屬性</button>
+  <button class="opt">繼承才會啟動 Enum 的機制</button>
+  <button class="opt">普通類別會讓程式執行變慢</button>
+  <button class="opt">繼承可以省去匯入 enum 模組</button>
+</div>
+
+<div class="quiz" data-question="TaskStatus.IN_PROGRESS 與字串「in_progress」相等的結果是什麼？" data-correct="2" data-explain="StrEnum 成員本身就是字串，所以直接與同值字串相等。">
+  <button class="opt">False，成員不是字串</button>
+  <button class="opt">TypeError，型別不同</button>
+  <button class="opt">True，成員本身就是字串</button>
+  <button class="opt">False，成員是大寫版本</button>
+</div>
+
+<div class="quiz" data-question="需要數字狀態值時，應該使用哪個型別？" data-correct="1" data-explain="數字狀態用 IntEnum，它的成員本身就是整數。">
+  <button class="opt">StrEnum</button>
+  <button class="opt">IntEnum</button>
+  <button class="opt">list[int]</button>
+  <button class="opt">dict[str, int]</button>
+</div>
+
+<div class="quiz" data-question="match/case 對列舉最大的好處是什麼？" data-correct="3" data-explain="case 直接對成員匹配，每個分支意圖一目瞭然，比一串 if status == ... 好讀好維護。">
+  <button class="opt">執行速度比 if/elif 快好幾倍</button>
+  <button class="opt">可以匹配到沒定義的成員</button>
+  <button class="opt">完全不會發生任何例外</button>
+  <button class="opt">分支直接對成員匹配，意圖清楚</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./magic-string-problem.html">← 上一步：魔術字串問題：為什麼需要 Enum</a>
+  <a href="./auto-and-type-safety.html">下一步：auto() 與免費的型別安全 →</a>
+</div>
+
+<div class="footer">有問題？直接問你的 agent，它可以幫你釐清任何不清楚的地方。</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>
