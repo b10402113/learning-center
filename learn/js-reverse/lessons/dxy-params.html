@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>丁香网参数构造与字典序拼接</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>丁香网参数构造与字典序拼接</h1>
+<p class="meta">实战：SHA1 与百度 sign · 步骤 2/5</p>
+
+<h2>学习目标</h2>
+<p>能独立构造丁香网病例搜索接口的 noncestr、timestamp、serverTimestamp 和明文串，理解参数按字典序排列后再喂给 SHA1 的拼接规则。</p>
+
+<h2>先看请求里藏了什么</h2>
+<p>打开 DevTools，刷新丁香网的病例搜索页，你会看到一个 GET 请求，URL 参数里除了普通的 keyword、pageNum，还多出几个看起来无意义的字段：<code>noncestr</code>、<code>timestamp</code>、<code>serverTimestamp</code>、<code>sign</code>。后三个每次都变，<code>noncestr</code> 是一个 8 位数字。</p>
+
+<h2>noncestr：8 位随机数字</h2>
+<p><code>noncestr</code> 的生成规则很直接：生成一个 0 到 100000000 之间的随机整数，左补零到 8 位。</p>
+<pre><code>import random
+noncestr = str(random.randint(0, 100000000)).rjust(8, '0')</code></pre>
+<p>为什么是 8 位？因为后端校验的就是 8 位。为什么左补零？因为 <code>random.randint(0, 99999999)</code> 可能返回 12345（只有 5 位），不补零就不符合长度要求。<code>rjust(8, '0')</code> 把右侧对齐、左侧填零，正好得到 "00012345" 这种格式。</p>
+
+<h2>timestamp 与 serverTimestamp：一对差 2 毫秒的时间戳</h2>
+<p><code>timestamp</code> 是当前毫秒时间戳，<code>serverTimestamp</code> 则是它减 2：</p>
+<pre><code>import time
+timestamp = int(time.time() * 1000)
+serverTimestamp = timestamp - 2</code></pre>
+<p>为什么差 2 毫秒？这是丁香网前端自己加的偏移，不是 SHA1 的要求。它的唯一作用就是让你没法用「完全相同的时间戳」重放请求——每次请求的 <code>timestamp</code> 都会变，<code>sign</code> 也会跟着变。</p>
+
+<h2>关键规则：参数按字典序拼接</h2>
+<p>SHA1 的输入不是随便拼的，它要求所有参数按键名字典序排列：</p>
+<pre><code>data = (
+    'appSignKey=4bTogwpz7RzNO2VTFtW7zcfRkAE97ox6ZSgcQi7FgYdqrHqKB7aGqEZ4o7yssa2aEXoV3bQwh12FFgVNlpyYk2Yjm9d2EZGeGu3'
+    '&amp;keyword=新冠'
+    '&amp;noncestr=00122001'
+    '&amp;pageNum=1'
+    '&amp;pageSize=10'
+    '&amp;sectionCode=0'
+    '&amp;serverTimestamp=1704717058592'
+    '&amp;timestamp=1704717058594'
+)</code></pre>
+<p>注意顺序：<code>appSignKey</code> → <code>keyword</code> → <code>noncestr</code> → <code>pageNum</code> → <code>pageSize</code> → <code>sectionCode</code> → <code>serverTimestamp</code> → <code>timestamp</code>。这是严格的 ASCII 字典序——大写字母在小写字母前面，<code>pageN</code> 在 <code>pageS</code> 前面。</p>
+<p><code>appSignKey</code> 是一个硬编码常量，不会变。它的存在是为了给签名加一个只有前端知道的「盐」，防止别人只靠公开参数就算出 sign。</p>
+
+<h2>拼接错误最常见的两个坑</h2>
+<ol>
+  <li><strong>顺序搞错</strong>：按 URL 参数出现的顺序拼，而不是按 key 的名字典序。算出来的 sign 必然对不上。</li>
+  <li><strong>noncestr 没补零</strong>：直接用 <code>str(random.randint(...))</code> 不补零，长度不固定，sign 也会变。</li>
+</ol>
+
+<h2>小结</h2>
+<p>丁香网的参数构造没有技术难点，全是细节：noncestr 补零、timestamp 取毫秒、serverTimestamp 减 2、参数按字典序拼。下一步我们就把这段明文串丢给 execjs 跑 SHA1，拿到 sign 后拼进请求。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="noncestr 的生成规则是什么？" data-correct="2" data-explain="noncestr 是 0–100000000 的随机整数左补零到 8 位，保证长度固定。">
+  <button class="opt">8 个随机字母</button>
+  <button class="opt">当前时间戳的十六进制</button>
+  <button class="opt">0–100000000 的随机整数左补零到 8 位</button>
+  <button class="opt">keyword 的 MD5 前 8 位</button>
+</div>
+
+<div class="quiz" data-question="serverTimestamp 与 timestamp 的关系是什么？" data-correct="1" data-explain="serverTimestamp = timestamp - 2，是丁香网前端自己加的偏移。">
+  <button class="opt">serverTimestamp = timestamp + 2</button>
+  <button class="opt">serverTimestamp = timestamp - 2</button>
+  <button class="opt">serverTimestamp = timestamp * 2</button>
+  <button class="opt">serverTimestamp 与 timestamp 无关</button>
+</div>
+
+<div class="quiz" data-question="SHA1 输入的参数应该按什么顺序排列？" data-correct="0" data-explain="参数必须按键名的 ASCII 字典序排列，这是丁香网后端校验 sign 的前提。">
+  <button class="opt">按 key 的字典序排列</button>
+  <button class="opt">按 URL 参数出现的顺序排列</button>
+  <button class="opt">按 value 的长度排列</button>
+  <button class="opt">随机排列</button>
+</div>
+
+<div class="quiz" data-question="appSignKey 在明文串里起什么作用？" data-correct="3" data-explain="appSignKey 是硬编码在 JS 里的盐，只有前端知道，防止别人只靠公开参数算出 sign。">
+  <button class="opt">它是 keyword 的别名</button>
+  <button class="opt">它是随机生成的</button>
+  <button class="opt">它是服务器返回的 token</button>
+  <button class="opt">它是硬编码的盐，增加签名安全性</button>
+</div>
+
+<div class="quiz" data-question="以下哪种拼接顺序是正确的？" data-correct="2" data-explain="ASCII 字典序下，appSignKey 在最前，timestamp 在最后，pageN 在 pageS 前面。">
+  <button class="opt">timestamp, serverTimestamp, sign, noncestr</button>
+  <button class="opt">keyword, appSignKey, noncestr, pageNum</button>
+  <button class="opt">appSignKey, keyword, noncestr, pageNum, pageSize, sectionCode, serverTimestamp, timestamp</button>
+  <button class="opt">sign, keyword, timestamp, noncestr</button>
+</div>
+
+<div class="quiz" data-question="为什么 noncestr 必须左补零到 8 位？" data-correct="0" data-explain="后端校验 noncestr 长度必须为 8 位，不补零会导致长度不固定，sign 校验失败。">
+  <button class="opt">后端校验长度必须为 8 位</button>
+  <button class="opt">SHA1 要求输入长度是 8 的倍数</button>
+  <button class="opt">只是为了好看</button>
+  <button class="opt">防止随机数重复</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./sha1-features.html">← 上一步：SHA1 算法特征识别</a>
+  <a href="./dxy-execjs.html">下一步：execjs 调用 SHA1 与 GET 请求闭环 →</a>
+</div>
+
+<div class="footer">实战：SHA1 与百度 sign · 步骤 2/5</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

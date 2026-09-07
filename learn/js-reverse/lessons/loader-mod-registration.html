@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>loader + mod 分离：webpackJsonp.push 劫持与模块注册 — 实战：webpack 模组化分析</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>loader + mod 分离：webpackJsonp.push 劫持与模块注册</h1>
+<p class="meta">学习目标：理解真实站点的 webpack 产物如何被拆成 loader + 若干 mod，loader 如何劫持 webpackJsonp.push 完成模块注册，以及如何在本地 Node 里 require 后复现加密函数。</p>
+
+<h2>真实站点的产物长什么样</h2>
+<p>教学 demo 是理想化的单文件，真实站点会把产物拆成<strong>一个 loader.js + 多个 mod 文件</strong>。这种拆分有两个目的：</p>
+<ul>
+  <li><strong>并行加载</strong>：浏览器可以同时下载多个文件，提升首屏速度。</li>
+  <li><strong>长效缓存</strong>：第三方库（lodash、core-js）单独打包成一个 chunk，业务代码改动能复用缓存。</li>
+</ul>
+<p>对逆向者来说，这意味着<strong>加密函数只会在 mod 文件里，loader 本身只是调度壳</strong>。定位加密函数的第一步永远是先找到哪个 mod 文件包含了目标模块 ID。</p>
+
+<h2>webpackJsonp：模块注册的通道</h2>
+<p>loader 与 mod 之间的通信靠一个全局数组 <code>window.webpackJsonp</code>。这个名字是 webpack 默认的，有些站点会改名，但机制不变。</p>
+<p>mod 文件的典型头部长这样：</p>
+<pre><code>(window.webpackJsonp = window.webpackJsonp || []).push([
+  ["app"],           // chunk 名
+  { 模块字典 },      // 真正的模块源代码
+  [[1, "runtime", "chunk-libs"]]  // 依赖的其他 chunk
+])</code></pre>
+<p>这行代码的含义是：向 <code>webpackJsonp</code> 数组 push 一条记录，告诉 loader"我这里有 app 这个 chunk 的模块，但我依赖 runtime、chunk-libs 这两个 chunk，请确保它们先就绪"。</p>
+
+<h2>loader 如何劫持 push</h2>
+<p>loader 在初始化时，会把 <code>webpackJsonp.push</code> 替换成自己的处理函数：</p>
+<pre><code>var u = window.webpackJsonp.push;
+window.webpackJsonp.push = function(chunk) {
+  // 遍历 chunk 里的模块字典，逐个注册进加载器的调度表
+  chunk[1].forEach(function(moduleId, moduleSource) {
+    // 调度器内部把模块 ID 和源代码绑定
+  });
+  // 再调用原来的 push，保留数组语义
+  return u.call(window.webpackJsonp, chunk);
+};</code></pre>
+<p>这样，每当一个 mod 文件加载执行、调用 <code>push</code> 时，loader 就会第一时间把它的模块字典收入自己的调度表，同时执行该 chunk 依赖就绪后的入口模块。</p>
+
+<h2>loader 的分工：只调度，不干活</h2>
+<p>真实站点的 loader 通常只包含以下职责，<strong>没有任何业务加密逻辑</strong>：</p>
+<table>
+  <tr><th>职责</th><th>对应代码</th><th>说明</th></tr>
+  <tr><td>调度函数</td><td><code>f(n)</code> / <code>u(r)</code></td><td>传入 ID，返回 exports，带缓存</td></tr>
+  <tr><td>chunk 异步加载表</td><td><code>f.e</td>code></td><td>200+ 个 chunk 名到真实文件名的映射</td></tr>
+  <tr><td>资源根路径</td><td><code>f.p = "/"</code></td><td>补全异步 chunk 的 URL 前缀</td></tr>
+  <tr><td>依赖就绪检测</td><td><code>u()</code></td><td>按依赖图逐个执行入口模块</td></tr>
+</table>
+<p>看到这样的文件，你应该一眼认出："这是加载器壳子，加密函数在 mod 里"。</p>
+
+<h2>外贸电商平台的完整调用链</h2>
+<p>以外贸电商平台为例，loader 末尾直接写了一个测试调用：</p>
+<pre><code>window.loader("MuMZ").a("123")</code></pre>
+<p>这行代码的意思是：<strong>找到 MuMZ 模块的 exports，然后调它的 <code>a</code> 函数，传入 <code>"123"</code></strong>。<code>MuMZ</code> 是 4 位哈希 key，说明这个站点用的是哈希调度。</p>
+<p>调用链拆解如下：</p>
+<ol>
+  <li>加载器从缓存 <code>t["MuMZ"]</code> 找到模块 exports。</li>
+  <li>模块 exports 对象上有属性 <code>a</code>（即该模块导出的某个函数）。</li>
+  <li>调用 <code>a("123")</code> 得到加密结果。</li>
+</ol>
+
+<h2>本地 Node 复现的最小流程</h2>
+<p>要在本地 Node 里复现 <code>window.loader("MuMZ").a("123")</code>，只需要三步：</p>
+<pre><code>// 1. 补浏览器环境
+global.window = global;
+
+// 2. 按顺序 require loader 和它依赖的所有 mod
+require("./loader.js");          // 先加载调度器，劫持 webpackJsonp.push
+require("./mod1.js");            // 注册 app chunk 的模块（含 MuMZ）
+require("./mod2.js");            // 注册 chunk-libs 的第三方库
+
+// 3. 直接调目标函数
+console.log(window.loader("MuMZ").a("123"));</code></pre>
+<p>关键点：<strong>必须先 require loader，再 require mod</strong>。顺序反了，mod 执行时 <code>webpackJsonp.push</code> 还没被劫持，模块就注册失败了。</p>
+
+<h2>mod 文件的典型规模</h2>
+<p>真实站点的 mod 文件往往很大：</p>
+<ul>
+  <li>外贸电商平台 mod1：33745 行、2.5 MB，200+ 个模块。</li>
+  <li>外贸电商平台 mod2：38344 行，lodash + core-js + MD5。</li>
+</ul>
+<p>你不需要读完每一行。正确做法是<strong>先读文件头 100-300 行判定结构，再按模块 ID 用搜索定位目标函数</strong>。99% 的模块跟你无关。</p>
+
+<h2>随堂测验</h2>
+
+<div class="quiz" data-question="真实站点的 webpack 产物通常如何拆分？" data-correct="0" data-explain="真实站点会拆成一个 loader.js（调度壳）+ 多个 mod 文件（业务逻辑），便于并行加载和缓存。">
+  <button class="opt">一个 loader.js + 多个 mod 文件</button>
+  <button class="opt">全部打进一个 bundle.js</button>
+  <button class="opt">每个模块独立一个 .js 文件</button>
+  <button class="opt">只拆成两个 loader 文件</button>
+</div>
+
+<div class="quiz" data-question="mod 文件通过什么机制把模块注册进加载器？" data-correct="2" data-explain="mod 文件调用 window.webpackJsonp.push(...) 把自己注册进去，loader 会劫持这个 push 操作。">
+  <button class="opt">window.export = ...</button>
+  <button class="opt">loader.require(...)</button>
+  <button class="opt">window.webpackJsonp.push(...)</button>
+  <button class="opt">module.import(...)</button>
+</div>
+
+<div class="quiz" data-question="在 Node 里复现加密函数时，require 的正确顺序是？" data-correct="1" data-explain="必须先 require loader 让它劫持 webpackJsonp.push，再 require mod 让模块正确注册。">
+  <button class="opt">先 require mod，再 require loader</button>
+  <button class="opt">先 require loader，再 require mod</button>
+  <button class="opt">只 require loader 即可</button>
+  <button class="opt">只 require mod 即可</button>
+</div>
+
+<div class="quiz" data-question="loader 文件的核心职责是？" data-correct="3" data-explain="loader 是薄壳，只负责调度（查找、缓存、执行模块），业务加密逻辑都在 mod 文件里。">
+  <button class="opt">执行加密算法</button>
+  <button class="opt">生成签名</button>
+  <button class="opt">解密响应</button>
+  <button class="opt">按模块 ID 调度并返回 exports</button>
+</div>
+
+<div class="quiz" data-question="面对 3 万行的 mod 文件，正确的处理策略是？" data-correct="0" data-explain="先读头部 100-300 行判定结构，再按模块 ID 搜索定位，忽略 99% 无关模块。">
+  <button class="opt">先读文件头判定结构，再按模块 ID 搜索</button>
+  <button class="opt">从第一行逐行读完</button>
+  <button class="opt">只看最后 50 行</button>
+  <button class="opt">直接放弃，文件太大</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./webpack-loader-principle.html">← 上一步：webpack 加载器原理</a>
+  <a href="./cailianpress-case.html">下一步：财联社案例 →</a>
+</div>
+
+<footer class="footer">
+  <p>有任何问题，随时问你的 agent 老师。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

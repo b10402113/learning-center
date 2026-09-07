@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RC4 算法：KSA 密钥编排与 PRGA 输出</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<header>
+<h1>RC4 算法：KSA 密钥编排与 PRGA 输出</h1>
+<p class="subtitle">从混淆代码中识别 RC4 的两段式结构</p>
+</header>
+
+<main>
+
+<section>
+<h2>RC4 是什么？</h2>
+<p>RC4 是一种流密码（stream cipher），核心思想是：用密钥生成一个伪随机字节序列，再把明文的每个字节和序列里的对应字节做异或（XOR），得到密文。解密时做同样的异或操作就能还原明文。</p>
+<p>RC4 的特点是<strong>加密和解密是同一个函数</strong>——因为异或运算的逆运算就是异或本身。这个特性让它非常适合在浏览器里做轻量级的响应体加密，也是逆向工程里最常见的算法之一。</p>
+</section>
+
+<section>
+<h2>RC4 的两段式结构</h2>
+<p>RC4 分两步：</p>
+<ol>
+<li><strong>KSA（Key Scheduling Algorithm，密钥编排）</strong>：用密钥打乱一个 256 字节的置换盒（S-box）。</li>
+<li><strong>PRGA（Pseudo-Random Generation Algorithm，伪随机生成）</strong>：用打乱后的 S-box 逐字节产生密钥流，和明文异或。</li>
+</ol>
+<p>在混淆代码里，这两步通常写在一个循环里交替执行，但逻辑上是分开的。识别 RC4，就是认出这两段。</p>
+</section>
+
+<section>
+<h2>极简壁纸的 RC4 实现</h2>
+<p>扣下的代码里，RC4 被封装在 <code>_0x476691</code> 函数里。先看它的结构：</p>
+<pre><code>function _0x476691(_0x4eff8a) {
+    let _0x5f0aa7 = [-0x6f, 0x34, 0x5b, ...];  // 256 字节密钥数组
+    let _0x48065b = 0, _0x5274e8 = 0, _0x86b937 = 0;
+    let _0x114065 = [];
+
+    for (let _0x4aff5a = 0; _0x4aff5a &lt; _0x4eff8a.length; _0x4aff5a++) {
+        // KSA + PRGA 混合在这里
+    }
+    return _0x114065;
+}</code></pre>
+<p>关键点：</p>
+<ul>
+<li><code>_0x5f0aa7</code> 是 256 字节的密钥数组，直接硬编码在代码里，逆向时可以直接复用。</li>
+<li>函数输入是字节数组（<code>_0x4eff8a</code>），输出也是字节数组。</li>
+</ul>
+</section>
+
+<section>
+<h2>拆解 KSA + PRGA 循环</h2>
+<p>循环内部的三行代码，把 KSA 和 PRGA 混在一起：</p>
+<pre><code>_0x48065b = (_0x48065b + 1) &amp; 0xff;           // i 递增，取低 8 位
+_0x5274e8 = (_0x5f0aa7[_0x48065b] + _0x5274e8) &amp; 0xff;  // j 递增
+
+// 交换 S[i] 和 S[j]
+const _0x3c8821 = _0x5f0aa7[_0x48065b];
+_0x5f0aa7[_0x48065b] = _0x5f0aa7[_0x5274e8];
+_0x5f0aa7[_0x5274e8] = _0x3c8821;
+
+// 计算密钥流字节并异或
+_0x86b937 = (_0x5f0aa7[_0x48065b] + _0x5f0aa7[_0x5274e8]) &amp; 0xff;
+_0x114065.push(_0x4eff8a[_0x4aff5a] ^ _0x5f0aa7[_0x86b937]);</code></pre>
+<p>逐行解读：</p>
+<ul>
+<li><code>i = (i + 1) &amp; 0xff</code>：KSA 的索引 i 每次加 1，&amp; 0xff 保证在 0-255 范围内。</li>
+<li><code>j = (S[i] + j) &amp; 0xff</code>：KSA 的索引 j 加上 S[i]，取低 8 位。</li>
+<li>交换 <code>S[i]</code> 和 <code>S[j]</code>：打乱置换盒。</li>
+<li><code>k = S[(S[i] + S[j]) &amp; 0xff]</code>：PRGA 用当前 S-box 计算密钥流字节。</li>
+<li><code>明文[i] ^ k</code>：异或得到密文字节，推进结果数组。</li>
+</ul>
+<p>这就是 RC4 的核心循环。把它从混淆代码里抠出来，就能在 Python 里复现。</p>
+</section>
+
+<section>
+<h2>怎么认出 RC4？</h2>
+<p>在混淆代码里认 RC4，看三个特征：</p>
+<ol>
+<li><strong>256 字节数组</strong>：代码里有一行超长的整数数组，长度正好是 256。</li>
+<li><strong>&amp; 0xff</strong>：循环里反复出现 <code>&amp; 0xff</code> 或 <code>% 256</code>，保证索引在 0-255 范围内。</li>
+<li><strong>交换 + 异或</strong>：循环里有两次数组元素交换，接着用一个索引计算出的值做异或。</li>
+</ol>
+<p>只要同时看到这三样，基本就是 RC4。极简壁纸的代码把变量名混淆成了 <code>_0x5f0aa7</code>、<code>_0x48065b</code>，但结构没变。</p>
+</section>
+
+<section>
+<h2>密钥数组的复用</h2>
+<p>RC4 的密钥数组是<strong>硬编码</strong>在代码里的，意味着加密和解密用同一套密钥。逆向时直接把这 256 个数字抄下来，在 Python 里定义成同样的数组，就能复现算法。</p>
+<p>注意负数：代码里出现了 <code>-0x6f</code>、<code>-0x41</code> 这样的负数。在 JavaScript 里这是 32 位有符号整数，但实际参与 &amp; 0xff 运算后会转成无符号字节。抄写时要保留原样，Python 里会自动处理。</p>
+</section>
+
+<section class="quiz-section">
+<h2>随堂测验</h2>
+
+<div class="quiz" data-question="RC4 属于哪一类密码算法？" data-correct="1" data-explain="RC4 是流密码，逐字节异或加密。">
+  <button class="opt">分组密码（block cipher）</button>
+  <button class="opt">流密码（stream cipher）</button>
+  <button class="opt">非对称密码（asymmetric cipher）</button>
+  <button class="opt">摘要算法（digest）</button>
+</div>
+
+<div class="quiz" data-question="RC4 的两个核心步骤是什么？" data-correct="2" data-explain="KSA 负责用密钥打乱 S-box，PRGA 负责生成密钥流逐字节异或。">
+  <button class="opt">加密和解密</button>
+  <button class="opt">密钥生成和签名验证</button>
+  <button class="opt">KSA 密钥编排和 PRGA 伪随机生成</button>
+  <button class="opt">Base64 编码和 UTF-8 解码</button>
+</div>
+
+<div class="quiz" data-question="在混淆代码里认出 RC4，最可靠的特征是什么？" data-correct="0" data-explain="RC4 必须有一个 256 字节的 S-box 数组，这是最醒目的特征。">
+  <button class="opt">一个长度为 256 的整数数组</button>
+  <button class="opt">函数名包含 rc4 字样</button>
+  <button class="opt">使用了 window.btoa 调用</button>
+  <button class="opt">代码里出现了大量中文字符串</button>
+</div>
+
+<div class="quiz" data-question="RC4 加密和解密为什么能用同一个函数？" data-correct="3" data-explain="异或的逆运算是异或本身，同一密钥流异或两次就还原明文。">
+  <button class="opt">因为 RC4 加密强度很低</button>
+  <button class="opt">因为浏览器会自动做两次异或</button>
+  <button class="opt">因为 Node.js 内置了解密函数</button>
+  <button class="opt">因为异或运算的逆运算就是异或本身</button>
+</div>
+
+<div class="quiz" data-question="扣下的 RC4 代码里出现了 256 字节密钥数组，逆向时应该怎么处理？" data-correct="1" data-explain="密钥数组硬编码在代码里，直接抄写复现即可，无需推导。">
+  <button class="opt">忽略它，自己生成一个随机密钥</button>
+  <button class="opt">直接抄写这 256 个数字，在 Python 里复用</button>
+  <button class="opt">用 hashlib 从密钥数组派生新密钥</button>
+  <button class="opt">把密钥数组转成 MD5 再使用</button>
+</div>
+</section>
+
+</main>
+
+<div class="lesson-nav">
+<div class="nav-left">
+<a href="./proxy-interception.html">← 上一步：Proxy 拦截与环境探测</a>
+</div>
+<div class="nav-right">
+<a href="./wallpaper-decrypt-chain.html">下一步：极简壁纸的完整解密链 →</a>
+</div>
+</div>
+
+<footer>
+<p>有疑问？随时向老师提问。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

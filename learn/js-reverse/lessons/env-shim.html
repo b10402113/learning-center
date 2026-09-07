@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>最小可用补環境 — 拼多多進階補環境</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="breadcrumb">
+        <a href="../../nodes/25-pdd-supplement-env.mdx">25-pdd-supplement-env</a>
+        <span>/</span>
+        <span>env-shim</span>
+      </div>
+      <h1>最小可用補環境</h1>
+      <p class="subtitle">在 Node 環境中湊出網站 JavaScript 需要的全域物件，並抹除暴露宿主身份的痕跡。</p>
+    </header>
+
+    <section class="goal">
+      <h2>學習目標</h2>
+      <p>掌握在 Node 環境中補齊瀏覽器全域物件的最小可用 shim，並抹除暴露宿主身份的指紋。</p>
+    </section>
+
+    <section class="content">
+      <h2>為什麼需要補環境？</h2>
+      <p>網站的 JavaScript 原本跑在瀏覽器裡，預設可以使用 <code>window</code>、<code>document</code>、<code>navigator</code> 這些全域物件。當我們把這段 JS 從瀏覽器「摳」出來，想在本地 Node 環境重新跑一次（例如用 <code>execjs</code> 生成加密參數），這些全域物件就不存在了，JS 一執行就會因為存取 <code>undefined</code> 而崩潰。</p>
+      <p>補環境就是用手造的最小物件，填補這些缺口，讓 JS 以為自己還在瀏覽器裡。</p>
+
+      <h2>最小可用清單</h2>
+      <p>不是每個物件都需要補，而是要看目標 JS 到底讀了哪些。拼多多風控 JS 至少依赖這些：</p>
+      <table>
+        <thead>
+          <tr><th>物件</th><th>用途</th><th>必備欄位</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>window</code></td><td>全域容器，幾乎所有物件都掛在它身上</td><td>指向 <code>global</code></td></tr>
+          <tr><td><code>document</code></td><td>DOM 入口</td><td><code>addEventListener</code>、<code>cookie</code></td></tr>
+          <tr><td><code>navigator</code></td><td>瀏覽器身份</td><td><code>userAgent</code>、<code>webdriver</code></td></tr>
+          <tr><td><code>screen</code></td><td>螢幕資訊</td><td><code>width</code>、<code>height</code></td></tr>
+          <tr><td><code>history</code></td><td>瀏覽歷史</td><td><code>length</code>、<code>pushState</code></td></tr>
+          <tr><td><code>location</code></td><td>當前網址</td><td><code>href</code>、<code>origin</code>、<code>pathname</code></td></tr>
+        </tbody>
+      </table>
+
+      <h2>建構補環境</h2>
+      <p>第一步是讓 <code>window</code> 指向 Node 的 <code>global</code>，這樣所有掛在 <code>window</code> 下的屬性就能全域存取：</p>
+      <pre><code>window = global;</code></pre>
+
+      <p>接著把 <code>document</code> 造出來。拼多多 JS 會讀 <code>document.cookie</code> 拿一個叫做 <code>_nano_fp</code> 的風控指紋，所以我們直接把它寫死進去（正式使用時要換成真正從瀏覽器抓包拿到的值）：</p>
+      <pre><code>document = {
+  addEventListener: function(){},
+  cookie: "_nano_fp=XnpgjFnpmd89qUnqdfj3mWkWUg3i2PYoJdFocGpA..."
+};</code></pre>
+
+      <p><code>navigator</code> 要提供一個擬真的 Chrome User-Agent，並把 <code>webdriver</code> 設成 <code>false</code>。很多網站會用這個屬性偵測自動化爬蟲：</p>
+      <pre><code>navigator = {
+  userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36...",
+  webdriver: false,
+  platform: "MacIntel"
+};</code></pre>
+
+      <p><code>screen</code>、<code>history</code>、<code>location</code> 各補上最基本的欄位。<code>location</code> 的 <code>href</code> 要指向拼多多真實網址，否則 JS 內檢查 <code>origin</code> 或 <code>referer</code> 的校驗會失敗：</p>
+      <pre><code>screen = { width: 1440, height: 900 };
+history = { length: 1, pushState: function(){} };
+location = {
+  href: "https://www.pinduoduo.com/home/baby/",
+  origin: "https://www.pinduoduo.com",
+  pathname: "/home/baby/"
+};</code></pre>
+
+      <h2>抹除 Node 環境指紋</h2>
+      <p>補完瀏覽器物件後，還有一個反直覺的動作：把 Node 自帶的 <code>global</code> 和 <code>Buffer</code> 刪掉。</p>
+      <pre><code>delete global;
+delete Buffer;</code></pre>
+      <p>這是因為很多反爬蟲的 JS 會去檢查「這個環境是不是 Node？」它用的方法就是去讀 <code>global</code> 或 <code>Buffer</code> 這類瀏覽器不存在的物件。如果讀到了，就代表這段 JS 正在被「非瀏覽器環境」執行，於是直接回傳錯誤或拒絕服務。把它們刪掉，JS 就無法用這個方法認出我們。</p>
+
+      <h2>用 Proxy 觀察環境讀寫</h2>
+      <p>補環境最痛苦的不是寫，而是「不知道還缺什麼」。站點 JS 可能讀了某個我們沒補到的屬性，直接報錯中斷。</p>
+      <p>除錯的利器是用 <code>Proxy</code> 代理每個環境物件，攔截所有 <code>get</code> 和 <code>set</code> 操作並印出來：</p>
+      <pre><code>const handler = {
+  get(target, prop) {
+    console.log("get:", prop);
+    return target[prop];
+  },
+  set(target, prop, val) {
+    console.log("set:", prop, "=", val);
+    target[prop] = val;
+    return true;
+  }
+};
+window = new Proxy(global, handler);</code></pre>
+      <p>跑一次 JS，觀察 console 印出哪些屬性被讀取，再回頭補上。這就是補環境除錯的核心循環：跑 → 看報錯 → 補屬性 → 再跑。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+      <div class="quiz" data-question="為什麼要讓 window 指向 global？" data-correct="1" data-explain="window = global 讓掛在 window 下的屬性在全域都能存取，模擬瀏覽器的全域容器行為。">
+        <button class="opt">讓 JS 以為自己在瀏覽器裡執行</button>
+        <button class="opt">讓掛在 window 下的屬性在全域都能存取</button>
+        <button class="opt">避免 Node 的 global 被誤刪</button>
+        <button class="opt">讓 document 自動掛到 window 下</button>
+      </div>
+      <div class="quiz" data-question="document.cookie 裡的 _nano_fp 是什麼？" data-correct="2" data-explain="_nano_fp 是拼多多風控指紋字段，正式使用時要從真實瀏覽器抓包取得。">
+        <button class="opt">拼多多商品列表的加密 token</button>
+        <button class="opt">瀏覽器自動產生的 session id</button>
+        <button class="opt">拼多多風控指紋字段</button>
+        <button class="opt">webpack loader 的版本號</button>
+      </div>
+      <div class="quiz" data-question="爲什麼要把 navigator.webdriver 設成 false？" data-correct="0" data-explain="許多網站用 webdriver 屬性偵測自動化爬蟲，設成 false 才能繞過這類偵測。">
+        <button class="opt">繞過網站對自動化爬蟲的偵測</button>
+        <button class="opt">讓 JS 以為螢幕尺寸不同</button>
+        <button class="opt">避免 document.cookie 被清空</button>
+        <button class="opt">讓 webpackJsonp 能正確載入</button>
+      </div>
+      <div class="quiz" data-question="爲什麼要 delete global 和 delete Buffer？" data-correct="3" data-explain="反爬蟲 JS 會用 global/Buffer 這類瀏覽器不存在的物件來偵測 Node 環境，刪掉就能隱藏宿主身份。">
+        <button class="opt">釋放 Node 的記憶體</button>
+        <button class="opt">避免變數命名衝突</button>
+        <button class="opt">讓 window 指向 global 時更穩定</button>
+        <button class="opt">防止 JS 用它們偵測出這是 Node 環境</button>
+      </div>
+      <div class="quiz" data-question="用 Proxy 代理環境物件的主要目的是什麼？" data-correct="1" data-explain="Proxy 能攔截 get/set 並印出，讓我們觀察 JS 到底讀了哪些環境屬性，再回頭補上缺失的。">
+        <button class="opt">加速 JS 執行速度</button>
+        <button class="opt">觀察 JS 到底讀寫了哪些環境屬性</button>
+        <button class="opt">自動修補 undefined 的屬性</button>
+        <button class="opt">讓 document.cookie 可以動態更新</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <div class="nav-left"></div>
+      <div class="nav-right"><a href="./webpack-chunks.html">下一步：webpack 混淆 chunk 結構 →</a></div>
+    </div>
+
+    <footer class="lesson-footer">
+      <p>有任何問題，隨時向你的老師提問。</p>
+    </footer>
+  </div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

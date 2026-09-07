@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>中間件結合 Selenium 篡改回應 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>中間件結合 Selenium 篡改回應</h1>
+<div class="meta">js-reverse · Step 3/5 · 約 20 分鐘</div>
+
+<h2>這節課你會學到什麼</h2>
+<p>掌握在 <code>process_response</code> 中用 Selenium 渲染動態頁面並替換原回應的完整方案，理解「Scrapy 調度 + Selenium 渲染」混合架構的適用場景。</p>
+
+<h2>情境：Scrapy 拿到的回應是空的</h2>
+<p>你想爬網易新聞（https://news.163.com/）的國內板塊。用 Scrapy 直接請求板塊頁，拿到回應後用 XPath 解析——卻發現什麼都拿不到。原因是這個頁面的新聞列表是 JavaScript 動態載入的：伺服器回傳的 HTML 裡只有一個空殼容器，真正的資料是瀏覽器執行 JS 後另外發 Ajax 請求填進去的。</p>
+
+<p>Scrapy 本身不執行 JavaScript，所以它拿到的回應就是那個空殼。這就是「回應不滿足需求」的典型場景。</p>
+
+<h2>解法：Scrapy 調度 + Selenium 渲染</h2>
+<p>既然 Scrapy 不執行 JS，那就把「需要 JS 渲染的頁面」交給 Selenium（或 Pyppeteer）處理。具體做法：</p>
+
+<ol>
+  <li>爬蟲類裡例項化一個瀏覽器物件（<code>bro = webdriver.Chrome()</code>）</li>
+  <li>中介物的 <code>process_response</code> 裡，判斷當前 URL 是不是需要渲染的動態頁面</li>
+  <li>如果是，用瀏覽器打開這個 URL、等 JS 執行、滾動到底、取 <code>page_source</code></li>
+  <li>用 <code>page_source</code> 建構一個新的 <code>HtmlResponse</code>，替換掉原本的空殼回應</li>
+  <li>爬蟲拿到新的回應後，就能用 XPath 正常解析了</li>
+</ol>
+
+<p>這種架構讓 Scrapy 繼續負責「發請求、調度、解析、儲存」，只有「需要 JS 渲染的頁面」才交給瀏覽器，靜態頁面仍然走原生管線。</p>
+
+<h2>完整程式碼</h2>
+
+<h3>爬蟲檔案：定義瀏覽器與動態 URL 清單</h3>
+<pre><code># spiders/news163.py
+import scrapy
+from selenium import webdriver
+
+class News163Spider(scrapy.Spider):
+    name = 'news163'
+    start_urls = ['https://news.163.com/']
+
+    # 爬蟲類屬性：瀏覽器物件
+    bro = webdriver.Chrome()
+
+    def parse(self, response):
+        # 解析首頁，提取五個板塊的 URL
+        model_urls = []
+        # ... XPath 提取 ...
+        for url in model_urls:
+            yield scrapy.Request(url, callback=self.parse_model)
+        # 把動態 URL 清單存到爬蟲物件，中介件才能讀取
+        self.model_urls = model_urls
+
+    def parse_model(self, response):
+        # 此時 response 已經被中介件替換成渲染後的 HtmlResponse
+        titles = response.xpath('//div[@class="news_title"]/h3/text()').extract()
+        for title in titles:
+            item = {'title': title}
+            # 詳情頁用 meta 傳 item，延續深度爬取套路
+            detail_url = '...'
+            yield scrapy.Request(detail_url, callback=self.parse_detail, meta={'item': item})
+
+    def parse_detail(self, response):
+        item = response.meta['item']
+        item['content'] = response.xpath('//div[@class="content"]/text()').extract_first()
+        yield item
+
+    def closed(self, spider):
+        # 爬蟲關閉時關閉瀏覽器
+        self.bro.quit()</code></pre>
+
+<h3>中介件檔案：在 process_response 中替換回應</h3>
+<pre><code># middlewares.py
+from scrapy.http import HtmlResponse
+from time import sleep
+
+class SeleniumMiddleware:
+    def process_response(self, request, response, spider):
+        # 判斷當前 URL 是不是需要渲染的動態頁面
+        if request.url in spider.model_urls:
+            # 用爬蟲持有的瀏覽器物件打開頁面
+            spider.bro.get(request.url)
+            sleep(2)  # 等 JS 執行
+            # 滾到底部，觸發懶載入
+            spider.bro.execute_script('window.scrollTo(0, document.body.scrollHeight)')
+            # 取渲染後的原始碼
+            page_text = spider.bro.page_source
+            # 建構新的 HtmlResponse，替換掉原本的空殼回應
+            new_response = HtmlResponse(
+                url=request.url,
+                body=page_text,
+                request=request,
+                encoding='utf-8'
+            )
+            return new_response
+        # 不是動態頁面，原樣返回
+        return response</code></pre>
+
+<h2>關鍵步驟解析</h2>
+
+<h3>1. 為什麼用 spider.bro 而不是在中介件裡新建瀏覽器？</h3>
+<p>瀏覽器物件（<code>webdriver.Chrome()</code>）啟動較慢，如果每個請求都新建一個瀏覽器，速度會慢到無法接受。把瀏覽器作為爬蟲類的屬性，整個生命週期只啟動一次，中介件透過 <code>spider.bro</code> 取用，是效能與簡潔的折衷。</p>
+
+<h3>2. 為什麼要滾動到底？</h3>
+<p>很多動態頁面使用「懶載入（Lazy Load）」：只有當使用者滾動到某個位置時，才載入更多資料。<code>window.scrollTo(0, document.body.scrollHeight)</code> 把捲軸滾到最底，觸發所有懶載入的內容。</p>
+
+<h3>3. 爲什麼用 HtmlResponse 而不是直接回傳 page_source？</h3>
+<p><code>process_response</code> 必須回傳一個 <code>Response</code> 物件。<code>HtmlResponse</code> 是 Scrapy 內建的 Response 子類，能直接被 XPath 解析。建構時要傳入 <code>url</code>、<code>body</code>（原始碼）、<code>request</code>、<code>encoding</code> 四個參數。</p>
+
+<h3>4. 為什麼在 closed 裡關閉瀏覽器？</h3>
+<p>爬蟲結束時，瀏覽器行程不會自動關閉。<code>closed(self, spider)</code> 是 Scrapy 的內建信號函式，爬蟲關閉時自動被呼叫，在這裡呼叫 <code>self.bro.quit()</code> 釋放資源。</p>
+
+<h2>混合架構的適用場景</h2>
+<p>「Scrapy 調度 + Selenium 渲染」不是萬靈丹，它有明確的適用場景：</p>
+
+<ul>
+  <li><strong>適用</strong>：大部分頁面是靜態、只有少數頁面需要 JS 渲染（如網易新聞的首頁是靜態、板塊頁是動態）</li>
+  <li><strong>不適用</strong>：整站都是 JS 渲染（這種情況直接用 Selenium 或 Pyppeteer 從頭寫比較快）</li>
+</ul>
+
+<p>原則是：讓 Scrapy 做它擅長的事（調度、管線、併發），只把「必須執行 JS 的頁面」交給瀏覽器。</p>
+
+<h2>小結</h2>
+<p>當 Scrawy 拿到的回應是動態載入的空殼時，可以在 <code>process_response</code> 中用 Selenium 渲染頁面、用新的 <code>HtmlResponse</code> 替換原回應。瀏覽器物件作為爬蟲類屬性只啟動一次，中介件透過 <code>spider.bro</code> 取用。這種「Scrapy 調度 + Selenium 渲染」的混合架構，是應對動態載入站點的主力方案。</p>
+
+<div class="lesson-nav">
+  <div><a href="./request-middleware.html">← 上一步：代理、UA 與 Cookie 中介件</a></div>
+  <div><a href="./crawlspider.html">下一步：CrawlSpider 全站爬取 →</a></div>
+</div>
+
+<div class="quiz" data-question="為什麼 Scrapy 直接請求動態頁面會拿到空殼回應？" data-correct="2" data-explain="Scrapy 不執行 JavaScript，而動態頁面的內容是 JS 執行後才載入的，所以 Scrapy 拿到的 HTML 只有空殼。">
+  <button class="opt">Scrapy 無法發送 HTTP 請求</button>
+  <button class="opt">伺服器拒絕 Scrapy 的請求</button>
+  <button class="opt">Scrapy 不執行 JavaScript</button>
+  <button class="opt">動態頁面沒有 URL</button>
+</div>
+
+<div class="quiz" data-question="在中介件中，如何判斷當前請求是否需要 Selenium 渲染？" data-correct="1" data-explain="爬蟲檔案裡定義 model_urls 清單，中介件用 request.url in spider.model_urls 判斷。">
+  <button class="opt">檢查回應狀態碼是否為 200</button>
+  <button class="opt">檢查 request.url 是否在 spider.model_urls 裡</button>
+  <button class="opt">檢查回應長度是否小於 1000</button>
+  <button class="opt">檢查請求標頭裡是否有 Selenium 標記</button>
+</div>
+
+<div class="quiz" data-question="為什麼瀏覽器物件要作為爬蟲類屬性，而不是在中介件裡新建？" data-correct="3" data-explain="瀏覽器啟動較慢，作為爬蟲類屬性整個生命週期只啟動一次，避免每個請求都新建瀏覽器的效能損耗。">
+  <button class="opt">中介件裡不能建立物件</button>
+  <button class="opt">爬蟲類屬性才能被 XPath 解析</button>
+  <button class="opt">中介件裡建立的瀏覽器無法關閉</button>
+  <button class="opt">瀏覽器啟動慢，應整個生命週期只啟動一次</button>
+</div>
+
+<div class="quiz" data-question="process_response 中，新的 HtmlResponse 應該用什麼參數建構？" data-correct="0" data-explain="HtmlResponse 需要 url、body（渲染後的 page_source）、request、encoding 四個參數。">
+  <button class="opt">url、body、request、encoding</button>
+  <button class="opt">url、text、headers</button>
+  <button class="opt">status、body、url</button>
+  <button class="opt">request、response、spider</button>
+</div>
+
+<div class="quiz" data-question="closed 信號函式在什麼時候被呼叫？" data-correct="2" data-explain="closed 是 Scrapy 的內建信號函式，爬蟲關閉時自動被呼叫，適合用來釋放資源（如關閉瀏覽器）。">
+  <button class="opt">每個請求完成後</button>
+  <button class="opt">每個回應解析後</button>
+  <button class="opt">爬蟲關閉時</button>
+  <button class="opt">例外發生時</button>
+</div>
+
+<div class="footer">
+  js-reverse · 中間件、CrawlSpider 與分散式 · Step 3/5
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

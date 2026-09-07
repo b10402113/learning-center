@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>招标网 DES-ECB 解密实战</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>招标网 DES-ECB 解密实战</h1>
+<p class="meta">实战：DES/AES 案例 · 步骤 1/4</p>
+
+<h2>学习目标</h2>
+<p>用 requests 抓取招标网接口的密文响应，再通过 execjs 调用 <code>decryptByDES</code> 函数完成 DES-ECB 解密，掌握"Python 请求 + JS 解密"的完整闭环。</p>
+
+<h2>案例背景</h2>
+<p>招标网（ctbpsp.com）的推荐接口返回了一段看起来像乱码的字符串。它不是普通的 JSON，而是一段 <strong>DES-ECB 加密后的密文</strong>。服务器期望客户端拿到密文后，用约定的密钥在本地解密成明文 JSON。</p>
+<p>我们的任务是：用 Python 把这段密文拉下来，再把它还原成可读的 JSON。</p>
+
+<h2>目标接口</h2>
+<p>接口地址是一个简单的 GET 请求，参数直接拼在 URL 里：</p>
+<pre><code>https://ctbpsp.com/cutominfoapi/recommand/type/5/pagesize/10/currentpage/2</code></pre>
+<p>其中 <code>type=5</code> 是推荐类型，<code>pagesize=10</code> 是每页条数，<code>currentpage=2</code> 是页码。</p>
+
+<h2>请求头与 Cookie</h2>
+<p>招标网对请求头有一定要求。如果只发裸请求，服务器会返回错误或空内容。我们需要带上完整的 <code>headers</code> 和 <code>cookies</code>，模拟一个真实浏览器的请求：</p>
+<pre><code>import requests
+
+cookies = {
+    'route': 'ef535e3a0d0b78922cdc0df3d6b94403',
+    'Hm_lvt_b966fe201514832da03dcf6cbf25b8a2': '1702291397,1703911858,1704522835',
+    # ... 更多 cookie 字段
+}
+
+headers = {
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'zh-CN,zh;q=0.9',
+    'Referer': 'https://ctbpsp.com/',
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36...',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
+}</code></pre>
+
+<h2>抓取密文</h2>
+<p>用 <code>requests.get</code> 发送请求，拿到响应文本。注意响应外面包了一层双引号，调用前要先 <code>strip('"')</code> 去掉：</p>
+<pre><code>response = requests.get(
+    'https://ctbpsp.com/cutominfoapi/recommand/type/5/pagesize/10/currentpage/2',
+    cookies=cookies,
+    headers=headers,
+)
+
+ciphertext = response.text.strip('"')
+print(ciphertext[:80])  # 输出：JwdsCjMM05e4niaZd3zOKXjfJCSKzfLUd1joO6+H0TGjmj0y4AzXIiFlVNgGu02j...</code></pre>
+<p>这段 <code>JwdsCjMM05...</code> 就是 Base64 编码的 DES 密文。</p>
+
+<h2>用 execjs 调用解密函数</h2>
+<p>拿到密文后，下一步是把它交给 JS 解密。我们先把网站的解密 JS 保存为本地文件 <code>02 招标网.js</code>，然后用 <code>execjs</code> 编译并调用：</p>
+<pre><code>import execjs
+
+with open("02 招标网.js") as f:
+    js_code = f.read()
+
+js_compile = execjs.compile(js_code)
+ret = js_compile.call("decryptByDES", ciphertext)
+print(ret)</code></pre>
+<p><code>compile()</code> 把 JS 代码编译成可调用的对象，<code>call("decryptByDES", ciphertext)</code> 按函数名调用并传入密文，返回值就是解密后的明文。</p>
+
+<h2>完整流程一览</h2>
+<table>
+  <tr><th>步骤</th><th>职责</th><th>工具</th></tr>
+  <tr><td>1. 构造请求</td><td>模拟浏览器发送 GET</td><td>requests</td></tr>
+  <tr><td>2. 抓取密文</td><td>拿到 Base64 密文并去引号</td><td>Python 字符串处理</td></tr>
+  <tr><td>3. 调用 JS</td><td>编译并执行 decryptByDES</td><td>execjs</td></tr>
+  <tr><td>4. 输出明文</td><td>打印解密后的 JSON</td><td>print</td></tr>
+</table>
+<p>这就是"Python 请求 + JS 解密"的标准分工：Python 管网络，JS 管算法。</p>
+
+<h2>为什么不用 Python 原生复现 DES？</h2>
+<p>你可能会问：PyCryptodome 也能做 DES 解密，为什么还要拉一段 JS 来跑？</p>
+<p>原因有两个：第一，这段解密逻辑已经由网站前端 JS 实现并验证过，直接调用等于零翻译成本；第二，如果未来网站改了解密算法（比如换密钥、换模式），你只需要替换 <code>02 招标网.js</code>，而不需要重写 Python 代码。</p>
+<p>execjs 的核心价值就在这里：<strong>让加密逻辑留在它最熟悉的环境里</strong>。</p>
+
+<h2>常见坑</h2>
+<ul>
+  <li><strong>响应带引号</strong>：招标网的响应文本外面包了双引号，直接传进解密函数会失败，必须先 <code>strip('"')</code>。</li>
+  <li><strong>Cookie 过期</strong>：Cookie 是有时效的，如果请求返回空内容或 403，优先检查 Cookie 是否过期。</li>
+  <li><strong>execjs 找不到 node</strong>：execjs 需要系统安装 Node.js。Mac 上可以用 <code>brew install node</code> 安装。</li>
+</ul>
+
+<h2>小结</h2>
+<p>这一课跑通了招标网的完整解密链路。核心模式是：用 requests 模拟浏览器请求拿到密文，再用 execjs 调用网站的 JS 解密函数还原明文。下一步，我们深入拆解那段 JS 解密代码，逐行理解 CryptoJS DES 解密的 API 链。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="招标网接口返回的密文是什么编码？" data-correct="1" data-explain="响应是 Base64 编码的 DES 密文，解密前需要先 Base64 解析。">
+  <button class="opt">Base64 编码的 DES 密文</button>
+  <button class="opt">十六进制字符串</button>
+  <button class="opt">UTF-8 编码的明文 JSON</button>
+  <button class="opt">压缩后的二进制数据</button>
+</div>
+
+<div class="quiz" data-question="execjs.call('decryptByDES', ciphertext) 中，第一个参数 'decryptByDES' 代表什么？" data-correct="2" data-explain="call() 的第一个参数是 JS 函数的名称，后面的参数传给该函数。">
+  <button class="opt">Python 函数的名称</button>
+  <button class="opt">要执行的 JS 文件名</button>
+  <button class="opt">JS 函数的名称</button>
+  <button class="opt">execjs 的版本号</button>
+</div>
+
+<div class="quiz" data-question="招标网的响应文本为什么要先 strip('"')？" data-correct="0" data-explain="响应外面包了一层双引号，直接传进解密函数会失败，必须先去掉。">
+  <button class="opt">响应外面包了双引号，直接解密会失败</button>
+  <button class="opt">响应里面有空格需要去除</button>
+  <button class="opt">响应是十六进制需要转码</button>
+  <button class="opt">响应是压缩数据需要解压</button>
+</div>
+
+<div class="quiz" data-question="'Python 请求 + JS 解密' 混合路线的核心分工是什么？" data-correct="1" data-explain="Python 负责发请求、处理响应，JS 负责加密/解密/签名。">
+  <button class="opt">Python 负责解密，JS 负责发请求</button>
+  <button class="opt">Python 负责请求，JS 负责解密</button>
+  <button class="opt">Python 和 JS 各自发一半请求</button>
+  <button class="opt">JS 负责存储数据，Python 负责签名</button>
+</div>
+
+<div class="quiz" data-question="execjs 编译 JS 代码时，系统里必须安装什么运行环境？" data-correct="3" data-explain="execjs 需要系统里有 Node.js（或其他 JS 运行时）才能执行 JS 代码。">
+  <button class="opt">Chrome 浏览器</button>
+  <button class="opt">Java</button>
+  <button class="opt">Python 3.8</button>
+  <button class="opt">Node.js</button>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./cryptojs-des-api.html">下一步：CryptoJS DES 解密 API 链 →</a>
+</div>
+
+<div class="footer">实战：DES/AES 案例 · 步骤 1/4</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>作用域链与全局污染</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<h1>作用域链与全局污染</h1>
+<p class="meta">JS 逆向 · 节点 15 · 步骤 2/5</p>
+
+<h2>学习目标</h2>
+<p>能区分全局变量与局部变量、理解 var 无块级作用域、识别全局变量污染并判断变量修改的影响范围。</p>
+
+<h2>全局变量 vs 局部变量</h2>
+<p>函数内部用 <code>var</code> 声明的变量是<strong>局部变量</strong>，只在函数体内可见。函数外部声明的变量是<strong>全局变量</strong>，所有脚本都能读到。</p>
+<pre><code>var g = 100; // 全局
+
+function show() {
+  var l = 200; // 局部
+  console.log(g, l); // 100 200
+}
+show();
+console.log(l); // ReferenceError: l is not defined</code></pre>
+<p>读代码的第一步就是判断"这个变量是哪一层的"——局部变量只能在声明它的函数里访问，全局变量则到处都能碰到。</p>
+
+<h2>不写 <code>var</code> 赋值会改到全局</h2>
+<p>这是 JS 早期最反直觉的坑：函数内部如果对某个变量赋值却<strong>没声明</strong>，JS 会沿着作用域链一路往上找，一直找到全局作用域都没找到的话，就自动创建一个全局变量。这意味着函数里的赋值会"泄漏"到全局：</p>
+<pre><code>var x = 10;
+
+function leak() {
+  x = 100; // 没有 var，改的是全局 x
+}
+leak();
+console.log(x); // 100</code></pre>
+<p>逆向时看到函数里对某个标识符赋值却没有 <code>var</code>/<code>let</code>/<code>const</code>，要立刻警觉——它可能正在改全局状态，而全局状态往往就是逆向要找的关键数据。</p>
+
+<h2><code>var</code> 没有块级作用域</h2>
+<p>C/Java 系列语言里，<code>if</code> 块、<code>for</code> 块里声明的变量出了块就消失。但 <code>var</code> 只有<strong>函数级</strong>作用域，没有块级作用域：</p>
+<pre><code>if (true) {
+  var b = 200;
+}
+console.log(b); // 200 —— 块外仍然可见</code></pre>
+<p>等价于 <code>b</code> 被声明在函数顶部（或全局顶部）。所以老代码里 <code>if</code> 块内 <code>var</code> 的变量和函数顶部的变量是同一回事。ES6 的 <code>let</code>/<code>const</code> 才引入了块级作用域，但混淆代码和老项目里 <code>var</code> 满天飞，看到 <code>if</code> 里的 <code>var</code> 别以为它只在 <code>if</code> 里有效。</p>
+
+<h2>作用域遮蔽（shadowing）</h2>
+<p>如果局部变量和全局变量同名，在函数内部访问时优先命中局部变量——这叫<strong>遮蔽</strong>。函数内部可以声明一个 <code>var Math = 100</code>，把全局的 <code>Math</code> 对象遮掉：</p>
+<pre><code>var Math = 100; // 遮蔽全局 Math
+
+function f() {
+  var Math = 200; // 局部 Math，遮蔽外层
+  console.log(Math); // 200
+}
+f();
+console.log(Math); // 100 —— 函数外部还是外层 Math</code></pre>
+<p>逆向时遇到同名变量，一定要沿着作用域链从内往外找，第一个命中的是哪层，就读哪层的值。</p>
+
+<h2>全局变量污染：同名覆盖</h2>
+<p>同一个页面可能有多个 <code>&lt;script&gt;</code> 代码块，它们<strong>共享同一个全局作用域</strong>。两个代码块都声明了同名全局变量 <code>n</code>，后一个会覆盖前一个：</p>
+<pre><code>&lt;script&gt;
+  var n = 0;
+  function counter() { n++; console.log(n); }
+&lt;/script&gt;
+
+&lt;script&gt;
+  var n = 10; // 覆盖前一个 n
+&lt;/script&gt;
+
+&lt;button onclick="counter()"&gt;点我&lt;/button&gt;</code></pre>
+<p>按钮点击后打印 <code>11</code>，而不是 <code>1</code>——第二个代码块把 <code>n</code> 重写成 <code>10</code> 了。这种<strong>全局污染</strong>让多段脚本互相踩踏，是早期 JS 代码的常见问题。生产环境的解决方案就是把变量包进函数作用域，这正是下一节闭包的动机。</p>
+
+<h2>本节练习</h2>
+
+<div class="quiz" data-question="函数内部对变量赋值但没写 var，会怎样？" data-correct="1" data-explain="JS 会沿着作用域链查找，找不到就在全局作用域创建，所以赋值会泄漏到全局。">
+  <button class="opt">变量是局部变量</button>
+  <button class="opt">可能修改全局变量</button>
+  <button class="opt">一定报错</button>
+  <button class="opt">变量会被自动提升为 let</button>
+</div>
+
+<div class="quiz" data-question="var 声明的变量是否有块级作用域？" data-correct="0" data-explain="var 只有函数级作用域，if 块里 var 的变量块外仍可见。">
+  <button class="opt">没有，只有函数级作用域</button>
+  <button class="opt">有，块内声明块外不可见</button>
+  <button class="opt">严格模式下才有</button>
+  <button class="opt">取决于浏览器</button>
+</div>
+
+<div class="quiz" data-question="两个 script 块都声明 var n，第二个覆盖第一个，这种现象叫什么？" data-correct="2" data-explain="多个脚本共享全局作用域，同名变量后者覆盖前者，称为全局变量污染。">
+  <button class="opt">作用域链</button>
+  <button class="opt">变量提升</button>
+  <button class="opt">全局变量污染</button>
+  <button class="opt">闭包</button>
+</div>
+
+<div class="quiz" data-question="局部变量与全局变量同名时，函数内部访问会命中哪个？" data-correct="3" data-explain="作用域链从内往外找，优先命中局部变量，即遮蔽全局变量。">
+  <button class="opt">全局变量</button>
+  <button class="opt">先全局后局部</button>
+  <button class="opt">报错：ambiguous</button>
+  <button class="opt">局部变量</button>
+</div>
+
+<div class="quiz" data-question="下面代码输出是什么？ var n=1; function f(){ n=2; } f(); console.log(n);" data-correct="1" data-explain="函数内 n=2 没有 var，改的是全局 n，所以输出 2。">
+  <button class="opt">1</button>
+  <button class="opt">2</button>
+  <button class="opt">undefined</button>
+  <button class="opt">ReferenceError</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./function-basics.html">← 上一步：函数基础</a>
+  <a href="./closure.html">下一步：IIFE 与闭包 →</a>
+</div>
+
+<div class="footer">看不懂就问你的 agent：作用域链是后面理解闭包的前提，判断变量属于哪层是读 JS 代码的基本功。</div>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>分散式與增量式爬蟲 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>分散式與增量式爬蟲</h1>
+<div class="meta">js-reverse · Step 5/5 · 約 20 分鐘</div>
+
+<h2>這節課你會學到什麼</h2>
+<p>理解原生 Scrapy 無法分散式的根因，掌握用 <code>scrapy-redis</code> 改造 CrawlSpider 為分散式版本的完整流程，並能用 redis set 實現只爬新增資料的增量式爬蟲。</p>
+
+<h2>情境：單機爬蟲不夠用了</h2>
+<p>你的 CrawlSpider 要爬 10 萬頁資料，單機跑需要 8 小時。你想：能不能開兩台電腦一起跑，每台爬 5 萬頁，時間減半？</p>
+
+<p>問題來了：Scrapy 的調度器（Scheduler）和管道（Pipeline）都在各台機器的記憶體裡，兩台電腦無法共享同一個調度器——它們不知道對方已經爬了哪些 URL，結果不是重複爬就是漏爬。</p>
+
+<h2>原生 Scrapy 為什麼無法分散式</h2>
+<p>兩個原因：</p>
+
+<ul>
+  <li><strong>無法共享調度器</strong>：每台機器的 Scrapy 有自己的 URL 佇列，無法跨機器同步「哪些 URL 已爬、哪些未爬」</li>
+  <li><strong>無法共享管道</strong>：每台機器的管道各自寫入自己的檔案或資料庫，無法統一管理</li>
+</ul>
+
+<p>解法：引入 <strong>scrapy-redis</strong> 元件，把調度器和管道搬到 Redis 這台中央伺服器上，所有 Scrapy 實例都連到同一個 Redis，就能共享佇列和去重清單。</p>
+
+<h2>分散式改造八步</h2>
+
+<h3>Step 1：安裝 scrapy-redis</h3>
+<pre><code>pip install scrapy-redis</code></pre>
+
+<h3>Step 2：爬蟲父類改為 RedisCrawlSpider</h3>
+<pre><code># spiders/myspider.py
+from scrapy_redis.spiders import RedisCrawlSpider
+from scrapy.linkextractors import LinkExtractor
+from scrapy.spiders import Rule
+
+class MySpider(RedisCrawlSpider):  # 父類改這裡
+    name = 'myspider'
+    # start_urls 不再使用，改用 redis_key
+    redis_key = 'myspider:start_urls'
+
+    rules = (
+        Rule(LinkExtractor(allow=r'page=\d+'), callback='parse_item', follow=True),
+    )
+
+    def parse_item(self, response):
+        yield {'title': response.xpath('//h2/text()').extract_first()}</code></pre>
+
+<p><code>redis_key</code> 是 Redis 裡的佇列名稱，程式啟動後會監聽這個佇列，等待別人把起始 URL 推進來。</p>
+
+<h3>Step 3：settings.py 指定共享管道</h3>
+<pre><code>ITEM_PIPELINES = {
+    'scrapy_redis.pipelines.RedisPipeline': 300,
+}</code></pre>
+
+<h3>Step 4：settings.py 指定共享調度器</h3>
+<pre><code>SCHEDULER = "scrapy_redis.scheduler.Scheduler"
+DUPEFILTER_CLASS = "scrapy_redis.dupefilter.RFPDupeFilter"
+SCHEDULER_PERSIST = True  # 允許暫停後繼續（不清空佇列）</code></pre>
+
+<h3>Step 5：settings.py 指定 Redis 連線</h3>
+<pre><code>REDIS_HOST = '192.168.1.100'  # Redis 伺服器 IP
+REDIS_PORT = 6379</code></pre>
+
+<h3>Step 6：修改 Redis 設定，解除本機綁定</h3>
+<p>Redis 預設只允許本機連線，必須修改 <code>redis.conf</code>：</p>
+<pre><code># 註解掉這行
+# bind 127.0.0.1
+
+# 關閉保護模式
+protected-mode no</code></pre>
+
+<h3>Step 7：啟動多台機器的爬蟲</h3>
+<p>在每台機器上跑：</p>
+<pre><code>scrapy crawl myspider</code></pre>
+
+<p>程式會啟動並等待，不會立刻開始爬——因為 <code>redis_key</code> 對應的佇列還是空的。</p>
+
+<h3>Step 8：push 起始 URL 到 Redis</h3>
+<p>在 Redis 用戶端執行：</p>
+<pre><code>lpush myspider:start_urls https://example.com/page/1</code></pre>
+
+<p>多台機器同時監聽到有新 URL 出現，就會各自取出 URL 開始爬取，並把新發現的連結寫回 Redis 佇列，形成分散式協作。</p>
+
+<h2>分散式爬蟲的注意事項</h2>
+<p>課本提醒：<strong>分散式在日常開發中並不常用，只是一個噱頭</strong>。原因：</p>
+
+<ul>
+  <li>大多數爬蟲的瓶頸不是 CPU 或頻寬，而是反爬機制（IP 封鎖、驗證碼）</li>
+  <li>維護多台機器 + Redis 的成本，遠高於單機跑一夜</li>
+  <li>真正需要大規模爬取時，通常用 Scrapy + 代理池 + 分散式訊息佇列（如 RabbitMQ）從頭設計</li>
+</ul>
+
+<p>但理解分散式改造的原理，對掌握 Scrapy 的調度器、管道、去重機制很有幫助。</p>
+
+<h2>增量式爬蟲：只爬新增資料</h2>
+<p>增量式爬蟲（Incremental Crawling）是一種程式設計思路：監測網站資料更新，只爬最新資料，不重複爬已經抓過的內容。</p>
+
+<p>核心是<strong>去重</strong>：需要一個「記錄表」，記錄哪些資料已經爬過，每次爬取前先檢查。</p>
+
+<h2>記錄表的要求</h2>
+<p>記錄表必須同時具備兩個特性：</p>
+
+<ul>
+  <li><strong>去重</strong>：能快速判斷某個 URL 是否已經爬過</li>
+  <li><strong>持久化</strong>：程式重啟後記錄表不能遺失</li>
+</ul>
+
+<p>Python 的 <code>set</code> 能去重，但無法持久化（程式結束就消失），所以不適用。Redis 的 <code>set</code> 既能去重又能持久化，是合適方案。</p>
+
+<h2>增量式實作：用 redis set</h2>
+<pre><code>import redis
+import scrapy
+
+class IncrementalSpider(scrapy.Spider):
+    name = 'incremental'
+
+    def __init__(self):
+        # 連線到 Redis
+        self.conn = redis.Redis(host='localhost', port=6379)
+
+    def parse(self, response):
+        # 提取詳情頁 URL
+        detail_urls = response.xpath('//a/@href').extract()
+        for url in detail_urls:
+            # sadd 寫入詳情頁 URL 作為唯一標識
+            # 回傳 1 表示之前沒爬過（有更新），回傳 0 表示已爬過
+            if self.conn.sadd('data_id', url) == 1:
+                yield scrapy.Request(url, callback=self.parse_detail)
+            else:
+                print(f'暫無資料更新: {url}')
+
+    def parse_detail(self, response):
+        yield {'content': response.xpath('//div[@class="content"]/text()').extract_first()}</code></pre>
+
+<p>關鍵在 <code>sadd</code> 的回傳值：</p>
+
+<ul>
+  <li>回傳 <code>1</code>：元素新增成功，表示之前沒爬過 → 發請求</li>
+  <li>回傳 <code>0</code>：元素已存在，表示已爬過 → 跳過</li>
+</ul>
+
+<p>判斷標準是 <code>sadd</code> 的回傳值，而不是先查詢再寫入——因為 <code>sadd</code> 本身是原子操作，並發安全。</p>
+
+<h2>增量式爬蟲的適用場景</h2>
+<ul>
+  <li><strong>監測新聞網站</strong>：每小時跑一次，只抓新發布的文章</li>
+  <li><strong>監測商品價格</strong>：每天跑一次，只抓價格有變動的商品</li>
+  <li><strong>監測職缺網站</strong>：每天跑一次，只抓新發布的職缺</li>
+</ul>
+
+<p>增量式爬蟲的重點不是用什麼技術，而是「只爬新增資料」的設計思路——用 Redis set 只是最常見的實現方式。</p>
+
+<h2>小結</h2>
+<p>原生 Scrapy 無法分散式，因為多台電腦無法共享調度器和管道。scrapy-redis 提供可共享的調度器和管道，改造流程包括：父類改 <code>RedisCrawlSpider</code>、<code>start_urls</code> 換成 <code>redis_key</code>、settings 指定共享管道/調度器/去重/Redis 連線、修改 Redis 設定解除本機綁定、<code>lpush</code> 起始 URL 啟動爬取。增量式爬蟲用 Redis set 做去重記錄表，<code>sadd</code> 回傳 1 表示有更新才發請求，實現只爬新增資料。</p>
+
+<div class="lesson-nav">
+  <div><a href="./crawlspider.html">← 上一步：CrawlSpider 全站爬取</a></div>
+  <div></div>
+</div>
+
+<div class="quiz" data-question="原生 Scrapy 無法分散式的主要原因是什麼？" data-correct="1" data-explain="多台電腦無法共享同一個調度器和管道，導致無法跨機器同步 URL 佇列和去重清單。">
+  <button class="opt">Scrapy 不支援多執行緒</button>
+  <button class="opt">多台電腦無法共享調度器和管道</button>
+  <button class="opt">Scrapy 無法連線到 Redis</button>
+  <button class="opt">Scrapy 的管道太慢</button>
+</div>
+
+<div class="quiz" data-question="CrawlSpider 改為分散式時，start_urls 應該換成什麼？" data-correct="2" data-explain="redis_key 是 Redis 裡的佇列名稱，程式啟動後監聽這個佇列等待起始 URL。">
+  <button class="opt">redis_host</button>
+  <button class="opt">redis_urls</button>
+  <button class="opt">redis_key</button>
+  <button class="opt">start_key</button>
+</div>
+
+<div class="quiz" data-question="分散式爬蟲啟動後，為什麼不會立刻開始爬？" data-correct="0" data-explain="redis_key 對應的佇列初始是空的，必須用 lpush 推入起始 URL 才會開始爬取。">
+  <button class="opt">redis_key 對應的佇列是空的，要 lpush 推入起始 URL</button>
+  <button class="opt">Redis 連線失敗</button>
+  <button class="opt">爬蟲在等待其他機器</button>
+  <button class="opt">settings.py 沒有設定 REDIS_HOST</button>
+</div>
+
+<div class="quiz" data-question="增量式爬蟲中，sadd 回傳 1 代表什麼？" data-correct="3" data-explain="sadd 回傳 1 表示元素新增成功，之前沒爬過，有更新。">
+  <button class="opt">元素已存在</button>
+  <button class="opt">Redis 連線失敗</button>
+  <button class="opt">元素新增失敗</button>
+  <button class="opt">元素新增成功，之前沒爬過</button>
+</div>
+
+<div class="quiz" data-question="為什麼增量式爬蟲選用 Redis set 而不是 Python set？" data-correct="2" data-explain="Redis set 既能去重又能持久化，程式重啟後記錄表不會遺失；Python set 無法持久化。">
+  <button class="opt">Redis set 速度較快</button>
+  <button class="opt">Redis set 可以存更多資料</button>
+  <button class="opt">Redis set 既能去重又能持久化</button>
+  <button class="opt">Redis set 支援並發寫入</button>
+</div>
+
+<div class="footer">
+  js-reverse · 中間件、CrawlSpider 與分散式 · Step 5/5
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

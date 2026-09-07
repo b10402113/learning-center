@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>验证码实战与规避检测 — Selenium 浏览器自动化</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Selenium 浏览器自动化</h1>
+    <p class="subtitle">Step 5 — 验证码实战与规避检测</p>
+
+    <h2>Learning Goal</h2>
+    <p>掌握 OpenCV 缺口识别 + 动作链拖动的滑动验证解法，学会用打码平台处理点选验证码，并能用 stealth.min.js 规避 Selenium 侦测。</p>
+
+    <h2>滑动验证码：缺口识别 + 拖动</h2>
+    <p>滑动验证码是反爬的常见手段：用户把滑块拖到缺口处才能通过验证。用 Selenium 自动完成这个流程，核心是两步：<strong>算出滑动距离</strong>，<strong>模拟拖动</strong>。</p>
+
+    <h3>第一步：用 OpenCV 算出缺口位置</h3>
+    <p>OpenCV 的 <code>cv2.matchTemplate()</code> 可以在一张大图里找小图的位置。思路是：保存背景图（带缺口的完整图）和缺口图（滑块），用模板匹配找到缺口在背景图里的 x 坐标。</p>
+    <pre><code>import cv2
+import numpy as np
+from urllib.request import urlretrieve
+
+# 1. 下载背景图和缺口图
+urlretrieve(bg_src, 'background.png')
+urlretrieve(gap_src, 'gap.png')
+
+# 2. 读取图片
+bg = cv2.imread('background.png')
+gap = cv2.imread('gap.png')
+
+# 3. 模板匹配
+result = cv2.matchTemplate(bg, gap, cv2.TM_CCOEFF_NORMED)
+min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+
+# 4. 缺口 x 坐标
+x = max_loc[0]</code></pre>
+    <p>注意：页面显示的图片尺寸可能和原图不一样（CSS 缩放过），必须做<strong>像素单位换算</strong>：</p>
+    <pre><code># 页面显示宽度 278，原图宽度 360
+real_x = x * 278 / 360</code></pre>
+
+    <h3>第二步：用 ActionChains 模拟拖动</h3>
+    <p>算出距离后，用动作链完成「按住 → 移动 → 释放」：</p>
+    <pre><code>from selenium.webdriver.common.action_chains import ActionChains
+
+slider = browser.find_element(By.CLASS_NAME, 'slider')
+
+actions = ActionChains(browser)
+actions.click_and_hold(slider).move_by_offset(real_x, 0).release().perform()</code></pre>
+    <p>但这样往往过不了验证，原因有两个：</p>
+    <ul>
+      <li><strong>没有模拟人的行为</strong>：真人拖动有加速、减速、停顿，匀速直线移动会被识别为机器。</li>
+      <li><strong>被检测出是 Selenium</strong>：网站通过浏览器指纹发现你在用自动化工具。</li>
+    </ul>
+
+    <h2>打码平台：处理点选验证码</h2>
+    <p>滑动验证码还能用 OpenCV 硬解，但更复杂的验证码（汉字点选、计算题、文字识别）就不适合自己写算法了。工程上的做法是接入<strong>打码平台</strong>——把验证码图片发给平台，平台返回识别结果。</p>
+    <p>以图鉴（ttshitsu）为例，流程是：</p>
+    <ol>
+      <li>截图验证码区域，base64 编码。</li>
+      <li>POST 到 <code>/predict</code> 接口，带上 typeid（验证码类型编号）。</li>
+      <li>平台返回坐标，比如 <code>154,251|145,167</code>。</li>
+      <li>用 ActionChains 逐个点击对应坐标。</li>
+    </ol>
+    <pre><code>import requests
+import base64
+
+# 1. 截图验证码区域
+code_tag = browser.find_element(By.CLASS_NAME, 'geetest_panel')
+code_tag.screenshot('./code.png')
+
+# 2. base64 编码
+with open('./code.png', 'rb') as f:
+    b64 = base64.b64encode(f.read()).decode()
+
+# 3. 调用打码平台
+resp = requests.post('http://api.ttshitsu.com/predict', data={
+    'username': 'your_user',
+    'password': 'your_pwd',
+    'typeid': 27,  # 点选 1~4 坐标
+    'image': b64
+})
+result = resp.json()['data']['result']  # "154,251|145,167"
+
+# 4. 解析坐标并点击
+points = result.split('|')
+for point in points:
+    x, y = map(int, point.split(','))
+    actions = ActionChains(browser)
+    actions.move_to_element_with_offset(code_tag, x, y).click().perform()
+
+# 5. 确认提交
+browser.find_element(By.CLASS_NAME, 'geetest_commit').click()</code></pre>
+    <p>打码平台覆盖了数英混合、计算题、汉字、坐标点选、缺口识别、拼图等类型，比自己训练识别模型成本低得多。</p>
+
+    <h2>规避检测：stealth.min.js</h2>
+    <p>大网站会检测浏览器是不是 Selenium 驱动的。检测原理很简单：正常浏览器的 <code>window.navigator.webdriver</code> 属性是 <code>undefined</code> 或 <code>false</code>，而 Selenium 驱动下是 <code>true</code>。</p>
+    <p>解法是在打开任何页面<strong>之前</strong>，注入一段 JS 把这个属性改掉。这段 JS 就是 <code>stealth.min.js</code>，它不仅能隐藏 <code>webdriver</code> 属性，还能伪装其他自动化特征（比如 Chrome 的 <code>runtime</code>、<code>permissions</code> 等）。</p>
+    <pre><code># 1. 读取 stealth.min.js
+with open('stealth.min.js', 'r') as f:
+    js = f.read()
+
+# 2. 在打开页面前注入
+browser.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": js})
+
+# 3. 现在打开页面，window.navigator.webdriver 就是 undefined 了
+browser.get('https://www.jd.com')</code></pre>
+    <p><code>execute_cdp_cmd()</code> 执行的是 CDP（Chrome DevTools Protocol）命令，<code>Page.addScriptToEvaluateOnNewDocument</code> 的意思是「在每次加载新文档时先执行这段 JS」。这样页面里的任何检测代码都读不到真实的 <code>webdriver</code> 值。</p>
+
+    <h2>为什么滑动验证常失败？</h2>
+    <p>京东登录的滑动验证案例揭示了两个失败原因：</p>
+    <ul>
+      <li><strong>行为轨迹不像人</strong>：真人拖动滑块时会有抖动、加速、减速，而 <code>move_by_offset(x, 0)</code> 是匀速直线运动。高级反爬会记录鼠标轨迹，匀速运动直接判机器。</li>
+      <li><strong>Selenium 指纹暴露</strong>：即使轨迹模拟得像人，<code>window.navigator.webdriver = true</code> 也会直接暴露。必须用 stealth.min.js 隐藏指纹。</li>
+    </ul>
+    <p>实际项目中，滑动验证的通过率不是 100%，通常需要结合轨迹模拟 + stealth + 多次重试。</p>
+
+    <h2>关键概念总结</h2>
+    <ul>
+      <li><strong>OpenCV 模板匹配</strong>：<code>cv2.matchTemplate()</code> 在背景图中定位缺口，算出滑动距离。</li>
+      <li><strong>打码平台</strong>：把验证码图片发给第三方平台，返回识别结果，比自己训练模型成本低。</li>
+      <li><strong>stealth.min.js</strong>：注入 JS 隐藏 Selenium 的自动化特征，规避反爬检测。</li>
+      <li><strong>execute_cdp_cmd()</strong>：执行 CDP 命令，<code>Page.addScriptToEvaluateOnNewDocument</code> 在页面前注入 JS。</li>
+      <li><strong>行为轨迹</strong>：真人操作有加速减速，匀速直线运动会被识别为机器。</li>
+    </ul>
+
+    <div class="lesson-nav">
+      <a href="./action-chains-waiting.html">← 上一步：动作链与页面等待</a>
+      <div></div>
+    </div>
+
+    <h2>Quiz</h2>
+    <div class="quiz" data-question="OpenCV 的 cv2.matchTemplate 在滑动验证中的作用是？" data-correct="2" data-explain="matchTemplate 在背景图中定位缺口模板，算出缺口的 x 坐标即滑动距离。">
+      <button class="opt">生成滑动轨迹</button>
+      <button class="opt">模拟鼠标拖动</button>
+      <button class="opt">在背景图中定位缺口，算出滑动距离</button>
+      <button class="opt">识别验证码上的文字</button>
+    </div>
+    <div class="quiz" data-question="模板匹配后为什么要做像素单位换算？" data-correct="0" data-explain="页面显示的图片尺寸可能因 CSS 缩放与原图不一致，必须换算回真实像素。">
+      <button class="opt">页面显示的图片尺寸可能因 CSS 缩放与原图不一致</button>
+      <button class="opt">OpenCV 只能处理固定尺寸的图片</button>
+      <button class="opt">换算后图片更清晰</button>
+      <button class="opt">换算能防止被检测</button>
+    </div>
+    <div class="quiz" data-question="打码平台（如图鉴）的核心作用是？" data-correct="1" data-explain="打码平台把验证码图片发给人工识别，返回结果，比自己训练模型成本低。">
+      <button class="opt">自动生成验证码图片</button>
+      <button class="opt">把验证码图片发给人工识别，返回结果</button>
+      <button class="opt">绕过验证码直接登录</button>
+      <button class="opt">加密验证码图片</button>
+    </div>
+    <div class="quiz" data-question="网站检测 Selenium 的原理是？" data-correct="3" data-explain="正常浏览器 window.navigator.webdriver 是 undefined/false，Selenium 下是 true。">
+      <button class="opt">检测浏览器的版本号</button>
+      <button class="opt">检测鼠标移动速度</button>
+      <button class="opt">检测是否安装了 Chrome</button>
+      <button class="opt">检测 window.navigator.webdriver 是否为 true</button>
+    </div>
+    <div class="quiz" data-question="stealth.min.js 应该在什么时候注入？" data-correct="0" data-explain="必须在打开页面前注入，这样页面里的检测代码才读不到真实的 webdriver 值。">
+      <button class="opt">在打开任何页面之前注入</button>
+      <button class="opt">在打开页面之后注入</button>
+      <button class="opt">在点击按钮时注入</button>
+      <button class="opt">在关闭浏览器前注入</button>
+    </div>
+  </div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

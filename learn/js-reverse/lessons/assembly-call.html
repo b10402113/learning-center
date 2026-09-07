@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>組裝與呼叫 anti_content — 拼多多進階補環境</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="breadcrumb">
+        <a href="../../nodes/25-pdd-supplement-env.mdx">25-pdd-supplement-env</a>
+        <span>/</span>
+        <span>assembly-call</span>
+      </div>
+      <h1>組裝與呼叫 anti_content</h1>
+      <p class="subtitle">把補環境、chunk、loader 按順序組裝，包成一個可被外部呼叫的純函式。</p>
+    </header>
+
+    <section class="goal">
+      <h2>學習目標</h2>
+      <p>將補環境、chunk、loader 按順序組裝，並呼叫 <code>get_anti_content()</code> 生成風控 token。</p>
+    </section>
+
+    <section class="content">
+      <h2>組裝順序</h2>
+      <p>所有零件都摳出來之後，最後一個 JS 檔案（<code>05 pdd.js</code>）負責把它們按正確順序黏起來。順序是：</p>
+      <pre><code>require('./01 env.js');    // 1. 先補環境
+require('./02 mod1.js');    // 2. 再掛 chunk
+require('./03 mod2.js');    // 3. 再掛另一個 chunk
+require('./04 loader.js');  // 4. 最後跑 loader</code></pre>
+      <p>順序不能錯。如果 loader 在 chunk 之前跑，<code>webpackJsonp.push</code> 還沒被劫持，chunk 就無法正確註冊。如果 chunk 在 env 之前跑，JS 會因為找不到 <code>window.location</code> 而崩潰。</p>
+
+      <h2>封裝成純函式</h2>
+      <p>組裝完成後，我們定義一個對外的純函式 <code>get_anti_content()</code>。這個函式就是等等 Python 透過 <code>execjs</code> 呼叫的入口：</p>
+      <pre><code>function get_anti_content() {
+  window.loader("fbeZ");                          // 初始化風控模組
+  window.lt['updateServerTime'](Date.now());     // 更新時間因子
+  return window.dt();                            // 回傳加密字串
+}</code></pre>
+
+      <h2>三步固定套路</h2>
+      <p>仔細看 <code>get_anti_content()</code> 內部，它永遠照這三步執行：</p>
+      <ol>
+        <li><strong>初始化</strong>：<code>window.loader("fbeZ")</code> 手動載入風控模組。每次呼叫前重新執行這一行，可以重置模組內部狀態，避免舊狀態污染新結果。</li>
+        <li><strong>更新時間</strong>：<code>window.lt['updateServerTime'](new Date().getTime())</code> 把本地時間傳進去。時間因子參與加密結果，所以每次都要用當下時間，不能用固定值。</li>
+        <li><strong>取值</strong>：<code>window.dt()</code> 回傳最終的 <code>anti_content</code> 字串。</li>
+      </ol>
+
+      <h2>時間因子的重要性</h2>
+      <p><code>updateServerTime</code> 雖然名字有「Server」，但我們傳的是本地時間。這是因為加密演算法通常只驗證「時間是否在合理範圍內」，而不是要求與伺服器完全同步。只要本機時鐘不要偏差太大（例如差幾天），就能通過驗證。</p>
+      <p>這也解釋了為什麼 <code>anti_content</code> 不能复用：每次用舊的時間戳生成，伺服器一比對發現時間太古老，就會拒絕。所以每個請求都必須重新跑一次 <code>get_anti_content()</code>。</p>
+
+      <h2>為什麼要重新初始化？</h2>
+      <p>每次呼叫 <code>get_anti_content()</code> 都重新執行 <code>window.loader("fbeZ")</code>，看似浪費，其實是為了重置狀態。風控模組內部可能記住上次的輸入或中間變數，如果不重置，第二次以後的結果可能不如預期穩定。</p>
+
+      <h2>完整組裝模板</h2>
+      <p>把以上合起來，就是「摳出來之後怎麼組裝」的固定模板：</p>
+      <pre><code>// 1. 補環境
+// 2. 掛 chunk（所有 chunk）
+// 3. 跑 loader
+// 4. 定義對外純函式
+function get_anti_content() {
+  window.loader("fbeZ");
+  window.lt['updateServerTime'](new Date().getTime());
+  return window.dt();
+}</code></pre>
+      <p>這個模板幾乎適用於所有「在本地重現站點 JS 加密」的場景：補環境 → 掛 chunk → 跑 loader → 包一個可被外部呼叫的純函式。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+      <div class="quiz" data-question="組裝順序為什麼必須是 env → chunk → loader？" data-correct="1" data-explain="env 要先跑，chunk 才能找到 window.location；loader 要最後跑，才能正確劫持 push 並觸發依賴回呼。">
+        <button class="opt">只是習慣，順序不影響結果</button>
+        <button class="opt">env 要先補好物件，loader 要最後劫持 push</button>
+        <button class="opt">loader 必須先跑，chunk 才能被執行</button>
+        <button class="opt">chunk 必須先跑，env 才能被建立</button>
+      </div>
+      <div class="quiz" data-question="get_anti_content() 內的第一步為什麼要重新初始化 fbeZ？" data-correct="0" data-explain="重新初始化可以重置模組內部狀態，避免舊狀態污染新結果。">
+        <button class="opt">重置風控模組的內部狀態</button>
+        <button class="opt">讓 loader 重新載入 mod1 和 mod2</button>
+        <button class="opt">更新 window.location 的值</button>
+        <button class="opt">清除之前的 console.log 輸出</button>
+      </div>
+      <div class="quiz" data-question="updateServerTime 通常傳什麼值？" data-correct="2" data-explain="傳本地時間（Date.now()）即可，加密演算法只驗證時間是否在合理範圍內。">
+        <button class="opt">固定寫死的時間戳</button>
+        <button class="opt">從拼多多伺服器取得的時間</button>
+        <button class="opt">本地時間（Date.now()）</button>
+        <button class="opt">隨機產生的數字</button>
+      </div>
+      <div class="quiz" data-question="爲什麼 anti_content 不能复用舊值？" data-correct="3" data-explain="時間因子參與加密，舊值的时间戳太古老，伺服器會拒絕。">
+        <button class="opt">window.dt() 每次回傳不同長度</button>
+        <button class="opt">loader 會記住上次的結果</button>
+        <button class="opt">mod1 會自動清空 window.dt</button>
+        <button class="opt">時間因子參與加密，舊值會被伺服器拒絕</button>
+      </div>
+      <div class="quiz" data-question="這個組裝模板的最後一步通常是什麼？" data-correct="0" data-explain="最後一步是包一個可被外部（Python/HTTP）呼叫的純函式，例如 get_anti_content()。">
+        <button class="opt">包一個可被外部呼叫的純函式</button>
+        <button class="opt">把所有 chunk 合併成一個檔案</button>
+        <button class="opt">刪除 window.loader</button>
+        <button class="opt">把 env 改寫成 Proxy 模式</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <div class="nav-left"><a href="./loader-runtime.html">← 上一步：loader 執行時</a></div>
+      <div class="nav-right"><a href="./python-integration.html">下一步：Python 聯調與介面請求 →</a></div>
+    </div>
+
+    <footer class="lesson-footer">
+      <p>有任何問題，隨時向你的老師提問。</p>
+    </footer>
+  </div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

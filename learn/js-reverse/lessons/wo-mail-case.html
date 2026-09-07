@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>沃邮箱案例：数字模块 ID 与 RSA 登录加密 — 实战：webpack 模组化分析</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>沃邮箱案例：数字模块 ID 与 RSA 登录加密</h1>
+<p class="meta">学习目标：理解数字模块 ID 调度与哈希 key 调度的差异，按数字 ID 437 在 2 万行里定位 RSA 加密函数，确认老站 jQuery + 数字模块 ID 的旧版 webpack 形态。</p>
+
+<h2>沃邮箱登录页的加密场景</h2>
+<p>中国联通沃邮箱的登录页在提交密码前，会先用前端 JS 把明文密码加密，再发请求。抓包可见请求体里的 password 字段是 256 字节级的 hex 字符串，典型的 RSA 加密结果。</p>
+<p>这个加密函数的入口写在 loader 文件末尾：</p>
+<pre><code>window.loader(437).encrypt(t, o, n)</code></pre>
+<p>注意这里用的是<strong>数字下标 437</strong>，不是 <code>"W2Yj"</code> 这种哈希 key。这是旧版 webpack（以及老站）的典型形态。</p>
+
+<h2>数字下标 vs 哈希 key：两种调度方式的对比</h2>
+<table>
+  <tr><th>特征</th><th>数字下标</th><th>哈希 key</th></tr>
+  <tr><td>模块 ID 形状</td><td><code>437</code></td><td><code>"W2Yj"</code></td></tr>
+  <tr><td>调用方式</td><td><code>window.loader(437)</code></td><td><code>window.loader("W2Yj")</code></td></tr>
+  <tr><td>webpack 版本</td><td>webpack 3 及更早</td><td>webpack 4+ 主流</td></tr>
+  <tr><td>站点技术栈</td><td>jQuery 时代</td><td>React / Vue 现代栈</td></tr>
+  <tr><td>识别方法</td><td>loader 尾部测试调用是数字</td><td>loader 尾部测试调用是字符串</td></tr>
+</table>
+<p>两种只是 key 形状不同，调度函数本身的缓存-执行-返回逻辑完全一致。看到数字下标就意识到"这可能是 jQuery 老站"，可以预判 mod 文件里大概率内嵌了 jQuery 源码。</p>
+
+<h2>沃邮箱 loader 的结构特点</h2>
+<p>沃邮箱 loader（<code>login.54f91.js</code>）比财联社 loader 更"老派"：</p>
+<pre><code>// chunk 名映射为字符串
+{'0': 'loginCommon', '6': 'login'}
+
+// 入口模块 329 在 document.onreadystatechange 里异步加载
+Promise.all([t.e(0), t.e(6)]).then(...)
+
+// 资源根路径动态取
+c.p = window.__webpack_public_path__</code></pre>
+<ul>
+  <li><strong>chunk 名用字符串</strong>：<code>loginCommon</code>、<code>login</code>，不是数字或哈希。</li>
+  <li><strong>入口模块延迟执行</strong>：等 <code>document.onreadystatechange</code> 触发后再加载。</li>
+  <li><strong>资源根路径动态取</strong>：<code>window.__webpack_public_path__</code> 由服务端下发，不是硬编码。</li>
+</ul>
+
+<h2>mod1：2 万行里的 jQuery + RSA</h2>
+<p>沃邮箱只 require 一个 mod 文件——<code>loginCommon</code> chunk（chunk 0），但它有 21508 行、914 KB，是整包打包的产物。文件头部写着：</p>
+<pre><code>window = global;
+document = {};</code></pre>
+<p>除了 <code>window = global</code>，还多补了一个 <code>document = {}</code>，因为 jQuery 在初始化时会检测 <code>document</code>。</p>
+<p>用编辑器搜索 <code>"jquery"</code> 或 <code>jQuery</code>，你会看到完整的 jQuery 1.11.3 源码以 UMD 形式内嵌：</p>
+<pre><code>!function(a, b) {
+  "object" == typeof module && "object" == typeof module.exports ?
+    module.exports = a.document ? b(a, !0) : function(a) {...} :
+    b(a)
+}("undefined" != typeof window ? window : this, function(a, b) {
+  // jQuery 1.11.3 完整源码...
+});</code></pre>
+<p>看到这种 UMD 包装，就能确认：<strong>老站 = jQuery + 数字模块 ID</strong>。</p>
+
+<h2>按数字 ID 437 定位 RSA 加密</h2>
+<p>在 mod1 文件里搜索 <code>437:</code> 或 <code>"437":</code>，跳到 437 号模块的源代码：</p>
+<pre><code>437: function(e, n, t) {
+  // RSA 加密入口
+  e.exports = {
+    encrypt: function(t, o, n) {
+      // t: 明文
+      // o: 256 字节级超长 hex 模数
+      // n: '10001'（hex 65537，RSA 公钥指数）
+      // ...RSA 加密实现...
+    }
+  };
+}</code></pre>
+<p><code>encrypt(t, o, n)</code> 的参数含义：</p>
+<ul>
+  <li><code>t</code>：明文密码。</li>
+  <li><code>o</code>：RSA 模数（modulus），256 字节的 hex 字符串。</li>
+  <li><code>n</code>：RSA 公钥指数，固定为 <code>'10001'</code>（即十进制 65537）。</li>
+</ul>
+<p>这是标准的 RSA 公钥加密入参结构。只要找到这个函数，就能在 Python 里用 <code>rsa</code> 库或 <code>pycryptodome</code> 复现。</p>
+
+<h2>本地复现的完整代码</h2>
+<pre><code>// 1. 补环境
+global.window = global;
+global.document = {};
+
+// 2. 加载 loader 和 mod
+require("./09_loader.js");   // 沃邮箱 loader
+require("./10_mod1.js");     // loginCommon chunk
+
+// 3. 调目标加密函数
+var plain = "mypassword";
+var modulus = "a1b2c3d4e5f6...";  // 256 字节 hex，从真实请求抓
+var exponent = "10001";
+
+var encrypted = window.loader(437).encrypt(plain, modulus, exponent);
+console.log(encrypted);</code></pre>
+<p>注意这里<strong>只 require 一个 mod</strong>，因为沃邮箱是整包打包，所有模块都在 loginCommon 一个 chunk 里。跟财联社"三个 mod 依赖闭环"形成对比。</p>
+
+<h2>老站 vs 新站的逆向策略差异</h2>
+<table>
+  <tr><th>维度</th><th>老站（沃邮箱）</th><th>新站（财联社）</th></tr>
+  <tr><td>模块 ID</td><td>数字：<code>437</code></td><td>哈希：<code>"W2Yj"</code></td></tr>
+  <tr><td>jQuery</td><td>完整内嵌</td><td>无（React 栈）</td></tr>
+  <tr><td>chunk 数量</td><td>1 个整包</td><td>3+ 个，依赖闭环</td></tr>
+  <tr><td>补环境</td><td><code>window + document</code></td><td>只需 <code>window</code></td></tr>
+  <tr><td>定位目标</td><td>搜 <code>437:</code></td><td>搜 <code>"W2Yj"</code></td></tr>
+</table>
+
+<h2>随堂测验</h2>
+
+<div class="quiz" data-question="沃邮箱 loader 尾部的测试调用是什么？" data-correct="0" data-explain="沃邮箱用数字下标 437，调用 encrypt(t, o, n) 完成 RSA 登录加密。">
+  <button class="opt">window.loader(437).encrypt(t, o, n)</button>
+  <button class="opt">window.loader("W2Yj")(data)</button>
+  <button class="opt">window.loader(329).encrypt(t, o, n)</button>
+  <button class="opt">window.loader("loginCommon")(t, o, n)</button>
+</div>
+
+<div class="quiz" data-question="数字模块 ID（如 437）通常出现在什么技术栈的站点？" data-correct="2" data-explain="数字下标是 webpack 3 及更早的典型形态，对应 jQuery 时代的老站；现代 React/Vue 栈多用哈希 key。">
+  <button class="opt">React 现代栈</button>
+  <button class="opt">Vue 3 现代栈</button>
+  <button class="opt">jQuery 老站</button>
+  <button class="opt">Svelte 现代栈</button>
+</div>
+
+<div class="quiz" data-question="沃邮箱 mod1 头部除了 window = global，还补了什么？" data-correct="1" data-explain="jQuery 初始化时检测 document，所以 mod1 头部额外补了 document = {}。">
+  <button class="opt">navigator = {}</button>
+  <button class="opt">document = {}</button>
+  <button class="opt">location = {}</button>
+  <button class="opt">history = {}</button>
+</div>
+
+<div class="quiz" data-question="RSA encrypt(t, o, n) 中的参数 n = '10001' 是什么？" data-correct="3" data-explain="'10001' 是 hex，等于十进制 65537，是 RSA 最常用的公钥指数。">
+  <button class="opt">RSA 模数</button>
+  <button class="opt">明文密码</button>
+  <button class="opt">私钥指数</button>
+  <button class="opt">公钥指数</button>
+</div>
+
+<div class="quiz" data-question="沃邮箱和财联社在 mod 数量上有什么关键差异？" data-correct="0" data-explain="沃邮箱是整包打包，只 require 一个 mod；财联社拆成三个 chunk，构成依赖闭环，三个都要 require。">
+  <button class="opt">沃邮箱 1 个整包，财联社 3 个 chunk</button>
+  <button class="opt">沃邮箱 3 个 chunk，财联社 1 个整包</button>
+  <button class="opt">两者都是 1 个整包</button>
+  <button class="opt">两者都是 3 个 chunk</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./cailianpress-case.html">← 上一步：财联社案例</a>
+</div>
+
+<footer class="footer">
+  <p>有任何问题，随时问你的 agent 老师。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

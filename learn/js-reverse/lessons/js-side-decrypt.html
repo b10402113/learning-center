@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JS 侧 AES 解密：crypto-js 与 createDecipheriv</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>JS 侧 AES 解密：crypto-js 与 createDecipheriv</h1>
+<p class="meta">实战：sign 逆向（JS 执行） · 步骤 4/5</p>
+
+<h2>学习目标</h2>
+<p>能写出 JS 版 AES-128-CBC 解密函数 decrypt_data，理解 crypto-js 的密钥/IV 派生与解密流程。</p>
+
+<h2>为什么 AES 解密也要搬到 JS？</h2>
+<p>上一节我们把 sign 生成搬到了 JS。但 sign 只是请求的一半——有道翻译的响应是 AES 加密的，我们同样需要解密。</p>
+<p>PyCryptodome 虽然能实现 AES 解密，但响应里还涉及 base64 变体处理（<code>-</code> 替换成 <code>+</code>、<code>_</code> 替换成 <code>/</code>）、去填充、密钥和 IV 的 MD5 派生。如果加密逻辑已经用 crypto-js 实现了解密，直接复用是最省力的做法。</p>
+
+<h2>crypto-js 简介</h2>
+<p><code>crypto-js</code> 是一个纯 JS 加密库，浏览器和 node 都能用。它封装了常见的哈希和加密算法，API 比 node 的 <code>crypto</code> 更「高层」，直接提供 <code>AES.encrypt</code>/<code>AES.decrypt</code> 这样的方法。</p>
+<p>在有道翻译的例子里，密钥和 IV 是通过两个 <code>ydsecret://...</code> 字符串派生的——这两个字符串的 MD5 值分别作为 AES 的 key 和 IV。</p>
+
+<h2>base64 变体处理</h2>
+<p>有道翻译的响应文本用的是 URL-safe base64：把标准 base64 里的 <code>+</code> 替换成 <code>-</code>、<code>/</code> 替换成 <code>_</code>，并且省略了末尾的 <code>=</code> 填充。解密前必须替换回来：</p>
+<pre><code>function to_base64_urlsafe(s) {
+    // 标准 base64 → URL-safe base64
+    return s.replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+function from_base64_urlsafe(s) {
+    // URL-safe base64 → 标准 base64
+    return s.replace(/-/g, "+").replace(/_/g, "/");
+}</code></pre>
+
+<h2>密钥和 IV 的派生</h2>
+<p>有道翻译的密钥和 IV 分别由两个固定字符串的 MD5 值决定：</p>
+<ul>
+  <li>key = MD5(<code>ydsecret://query/key/B*RGygVywfNBwpmBaZg*WT7SIOUP2T0C9WHMZN39j^DAdaZhAnxvGcCY6VYFwnHl</code>)</li>
+  <li>iv = MD5(<code>ydsecret://query/iv/C@lZe2YzHtZ2CYgaXKSVfsb7Y4QWHjITPPZ0nQp87fBeJ!Iv6v^6fvi2WN@bYpJ4</code>)</li>
+</ul>
+<p>在 crypto-js 中，可以直接把 MD5 的结果转成 WordArray（二进制数据），直接当密钥和 IV 用：</p>
+<pre><code>const CryptoJS = require("crypto-js");
+
+const key = CryptoJS.MD5("ydsecret://query/key/B*RGygVywfNBwpmBaZg*WT7SIOUP2T0C9WHMZN39j^DAdaZhAnxvGcCY6VYFwnHl");
+const iv = CryptoJS.MD5("ydsecret://query/iv/C@lZe2YzHtZ2CYgaXKSVfsb7Y4QWHjITPPZ0nQp87fBeJ!Iv6v^6fvi2WN@bYpJ4");</code></pre>
+
+<h2>JS 版 decrypt_data 函数</h2>
+<p>把上面的逻辑封装成一个解密函数，接收加密的响应文本，返回解密后的明文字符串：</p>
+<pre><code>const CryptoJS = require("crypto-js");
+
+function decrypt_data(encryptedText) {
+    // 1. 密钥和 IV 派生
+    const key = CryptoJS.MD5("ydsecret://query/key/B*RGygVywfNBwpmBaZg*WT7SIOUP2T0C9WHMZN39j^DAdaZhAnxvGcCY6VYFwnHl");
+    const iv = CryptoJS.MD5("ydsecret://query/iv/C@lZe2YzHtZ2CYgaXKSVfsb7Y4QWHjITPPZ0nQp87fBeJ!Iv6v^6fvi2WN@bYpJ4");
+
+    // 2. URL-safe base64 转标准 base64
+    const base64 = encryptedText.replace(/-/g, "+").replace(/_/g, "/");
+
+    // 3. AES-128-CBC 解密
+    const decrypted = CryptoJS.AES.decrypt(
+        base64,
+        key,
+        {
+            iv: iv,
+            mode: CryptoJS.mode.CBC,
+            padding: CryptoJS.pad.Pkcs7
+        }
+    );
+
+    // 4. 转成 UTF-8 字符串
+    return decrypted.toString(CryptoJS.enc.Utf8);
+}
+
+// 测试
+console.log(decrypt_data("加密的响应文本"));</code></pre>
+
+<h2>逐行解读</h2>
+<table>
+  <th>代码行</th><th>作用</th>
+  <tr><td>CryptoJS.MD5(...)</td><td>对固定字符串取 MD3，返回 WordArray 作为密钥/IV</td></tr>
+  <tr><td>.replace(/-/g, "+").replace(/_/g, "/")</td><td>URL-safe base64 转标准 base64</td></tr>
+  <tr><td>CryptoJS.AES.decrypt(base64, key, options)</td><td>执行 AES-128-CBC 解密，返回 WordArray</td></tr>
+  <tr><td>decrypted.toString(CryptoJS.enc.Utf8)</td><td>把二进制结果转成 UTF-8 字符串</td></tr>
+</table>
+
+<h2>crypto-js vs PyCryptodome 参数对照</h2>
+<table>
+  <th>参数</th><th>crypto-js</th><th>PyCryptodome</th>
+  <tr><td>算法</td><td>AES（默认根据 key 长度选位数）</td><td>AES.new() 指定模式</td></tr>
+  <tr><td>模式</td><td>mode: CryptoJS.mode.CBC</td><td>mode=AES.MODE_CBC</td></tr>
+  <tr><td>填充</td><td>padding: CryptoJS.pad.Pkcs7</td><td>unpad(data, 16)</td></tr>
+  <tr><td>密钥</td><td>WordArray（MD5 结果）</td><td>bytes（MD5 digest）</td></tr>
+</table>
+
+<h2>在 node 中验证</h2>
+<p>把上面的代码保存为 JS 文件，运行前需要先安装 crypto-js：</p>
+<pre><code>npm install crypto-js</code></pre>
+<p>然后调用：</p>
+<pre><code>node decrypt.js</code></pre>
+<p>如果输出解密后的明文（比如 <code>{"translateResult":...}</code>），说明 JS 侧解密逻辑跑通了。</p>
+
+<h2>小结</h2>
+<p>JS 版 AES 解密的核心是 <code>CryptoJS.AES.decrypt(密文, key, {iv, mode, padding})</code>。密钥和 IV 由两个固定字符串的 MD5 值派生，密文需要先做 URL-safe base64 替换。下一步，我们用 Python execjs 调用这个解密函数。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="crypto-js 中，AES 解密需要指定 mode 和 padding，以下哪组参数对应 AES-128-CBC + PKCS7？" data-correct="0" data-explain="CBC 模式 + PKCS7 填充是最常见的 AES 配置，对应 mode.CBC 和 pad.Pkcs7。">
+  <button class="opt">mode.CBC, pad.Pkcs7</button>
+  <button class="opt">mode.ECB, pad.NoPadding</button>
+  <button class="opt">mode.CBC, pad.ZeroPadding</button>
+  <button class="opt">mode.GCM, pad.Pkcs7</button>
+</div>
+
+<div class="quiz" data-question="URL-safe base64 把标准 base64 里的哪些字符替换了？" data-correct="1" data-explain="URL-safe base64 把 + 替换成 -，/ 替换成 _，并省略末尾的 = 填充。">
+  <button class="opt">+ → _, / → -</button>
+  <button class="opt">+ → -, / → _</button>
+  <button class="opt">= → -, = → _</button>
+  <button class="opt">+ → /, / → +</button>
+</div>
+
+<div class="quiz" data-question="CryptoJS.AES.decrypt() 的返回值类型是什么？" data-correct="2" data-explain="decrypt() 返回一个 WordArray（二进制数据），需要用 toString(enc.Utf8) 转成字符串。">
+  <button class="opt">UTF-8 字符串</button>
+  <button class="opt">标准 base64 字符串</button>
+  <button class="opt">WordArray（二进制数据）</button>
+  <button class="opt">十六进制字符串</button>
+</div>
+
+<div class="quiz" data-question="有道翻译的 AES 密钥和 IV 分别由什么派生？" data-correct="3" data-explain="密钥和 IV 分别由两个固定字符串的 MD5 值派生，这是典型的「字符串 → MD5 → 密钥」模式。">
+  <button class="opt">两个固定字符串的 SHA1 值</button>
+  <button class="opt">两个随机生成的 16 字节</button>
+  <button class="opt">响应头里的两个字段</button>
+  <button class="opt">两个固定字符串的 MD5 值</button>
+</div>
+
+<div class="quiz" data-question="decrypted.toString(CryptoJS.enc.Utf8) 的作用是？" data-correct="0" data-explain="toString(enc.Utf8) 把 WordArray 二进制数据转成 UTF-8 字符串，这样才能得到明文。">
+  <button class="opt">把二进制数据转成 UTF-8 字符串</button>
+  <button class="opt">把字符串转成 base64</button>
+  <button class="opt">把 WordArray 转成十六进制</button>
+  <button class="opt">把 UTF-8 字符串转成二进制</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./python-call-js-sign.html">← 上一步：execjs 编译与调用</a>
+  <a href="./python-call-js-decrypt.html">下一步：Python 调 JS 解密 →</a>
+</div>
+
+<div class="footer">实战：sign 逆向（JS 执行） · 步骤 4/5</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Python 聯調與介面請求 — 拼多多進階補環境</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="breadcrumb">
+        <a href="../../nodes/25-pdd-supplement-env.mdx">25-pdd-supplement-env</a>
+        <span>/</span>
+        <span>python-integration</span>
+      </div>
+      <h1>Python 聯調與介面請求</h1>
+      <p class="subtitle">打通「JS 逆向產物 → Python 爬蟲參數」的最後一公里。</p>
+    </header>
+
+    <section class="goal">
+      <h2>學習目標</h2>
+      <p>用 <code>execjs</code> 在 Python 側即時生成 <code>anti_content</code>，構造合法請求拉取拼多多介面資料。</p>
+    </section>
+
+    <section class="content">
+      <h2>execjs 的角色</h2>
+      <p>前面所有步驟（補環境、掛 chunk、跑 loader、包純函式）都是在 JS 世界裡把 <code>get_anti_content()</code> 準備好。現在要讓 Python 能呼叫它。</p>
+      <p><code>execjs</code> 是一個 Python 套件，能把 JS 程式碼編譯後直接在 Python 裡執行。標準用法是：</p>
+      <pre><code>import execjs
+ctx = execjs.compile(open("05 pdd.js").read())
+anti_content = ctx.call("get_anti_content")</code></pre>
+      <p><code>compile</code> 把整個 JS 檔編成一個可呼叫的上下文，<code>call("get_anti_content")</code> 直接執行我們包好的純函式，回傳值就是最新的 <code>anti_content</code> 字串。</p>
+
+      <h2>構造請求</h2>
+      <p>拿到 <code>anti_content</code> 後，把它放進請求參數，打拼多多商品列表介面：</p>
+      <pre><code>import requests
+
+url = "https://apiv2.pinduoduo.com/api/gindex/tf/query_tf_goods_info"
+params = {
+    "anti_content": anti_content,
+    "tf_id": "...",
+    "page": 1,
+    "size": 20
+}
+headers = {
+    "Origin": "https://www.pinduoduo.com",
+    "Referer": "https://www.pinduoduo.com/",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)...",
+    "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"'
+}
+
+resp = requests.get(url, params=params, headers=headers)
+print(resp.json())</code></pre>
+
+      <h2>Headers 的風控細節</h2>
+      <p>拼多多不是隻看 <code>anti_content</code>，它還會檢查整組 headers 是否像一個正常的瀏覽器。幾個容易忽略的欄位：</p>
+      <table>
+        <thead>
+          <tr><th>欄位</th><th>作用</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>Origin</code></td><td>必須與 <code>location.origin</code> 一致，否則會被視為跨站請求</td></tr>
+          <tr><td><code>Referer</code></td><td>必須指向拼多多頁面，不能空著</td></tr>
+          <tr><td><code>sec-ch-ua</code></td><td>瀏覽器品牌與版本，要與 <code>User-Agent</code> 吻合</td></tr>
+          <tr><td><code>sec-ch-ua-platform</code></td><td>作業系統，要與 <code>navigator.platform</code> 吻合</td></tr>
+        </tbody>
+      </table>
+      <p>這些欄位在補環境時就已經被 JS 讀取並參與加密，所以 Python 側必須用同樣的值，否則伺服器會發現「JS 加密用的 UA 跟 HTTP headers 的 UA 不一致」，直接拒絕。</p>
+
+      <h2>即時生成，不缓存</h2>
+      <p>每次請求前都必須重新跑一次 <code>get_anti_content()</code>，不能把結果存起來重複使用。這是因為 <code>anti_content</code> 內含時間因子，舊值很快就會被伺服器認定為過期。</p>
+      <p>實務上的做法是在每個請求前都 <code>ctx.call("get_anti_content")</code> 一次，雖然會多一點點延遲，但能確保每次都是全新的 token。</p>
+
+      <h2>完整閉環</h2>
+      <p>把全部步驟合起來，就是一個完整的「JS 逆向 → Python 爬蟲」閉環：</p>
+      <ol>
+        <li>從站點摳出 JS（env、mod1、mod2、loader、pdd.js）。</li>
+        <li>用 <code>execjs</code> 編譯 <code>05 pdd.js</code>。</li>
+        <li>每次請求前呼叫 <code>get_anti_content()</code> 取得即時 token。</li>
+        <li>構造與瀏覽器一致的 headers 與 params。</li>
+        <li>發送請求，穩定翻頁拉取資料。</li>
+      </ol>
+      <p>這就是「補環境」這個技術在真實爬蟲裡的落地方式：不是為了跑 JS 而跑 JS，而是為了把 JS 產出的加密參數，橋接回 Python 的請求流程。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+      <div class="quiz" data-question="execjs.compile(...).call("get_anti_content") 的作用是？" data-correct="0" data-explain="compile 把 JS 編成可呼叫的上下文，call 直接執行 get_anti_content() 並回傳 anti_content。">
+        <button class="opt">在 Python 中執行 JS 函式並取得回傳值</button>
+        <button class="opt">把 Python 變數傳入 JS 環境</button>
+        <button class="opt">把 JS 檔案壓縮成一個字串</button>
+        <button class="opt">檢查 JS 語法是否正確</button>
+      </div>
+      <div class="quiz" data-question="為什麼每次請求前都必須重新生成 anti_content？" data-correct="2" data-explain="anti_content 內含時間因子，舊值會被伺服器認定為過期。">
+        <button class="opt">execjs 只能執行一次 call</button>
+        <button class="opt">Python 的 requests 會自動清空參數</button>
+        <button class="opt">anti_content 內含時間因子，舊值會被伺服器拒絕</button>
+        <button class="opt">loader 會記住上次的結果</button>
+      </div>
+      <div class="quiz" data-question="Origin 和 Referer 如果不與瀏覽器一致會怎樣？" data-correct="1" data-explain="伺服器會發現 headers 與 JS 加密時用的值不一致，直接拒絕請求。">
+        <button class="opt">請求速度會變慢</button>
+        <button class="opt">伺服器會視為異常請求並拒絕</button>
+        <button class="opt">anti_content 會自動失效</button>
+        <button class="opt">mod1 會重新載入</button>
+      </div>
+      <div class="quiz" data-question="sec-ch-ua 系列 headers 為什麼重要？" data-correct="0" data-explain="這些欄位要與 navigator.userAgent 和 platform 吻合，否則伺服器會偵測到不一致。">
+        <button class="opt">它們要與 JS 端讀取的 navigator 資訊吻合</button>
+        <button class="opt">它們決定了 anti_content 的長度</button>
+        <button class="opt">它們用來指定 chunk 的載入順序</button>
+        <button class="opt">它們控制 loader 的日誌輸出</button>
+      </div>
+      <div class="quiz" data-question="整個閉環的最後一步通常是什麼？" data-correct="3" data-explain="最後一步是用構造好的請求穩定翻頁拉取介面資料。">
+        <button class="opt">刪除 window.loader</button>
+        <button class="opt">把所有 chunk 合併成一個檔案</button>
+        <button class="opt">把 env 改寫成 Proxy 模式</button>
+        <button class="opt">構造請求並穩定翻頁拉取資料</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <div class="nav-left"><a href="./assembly-call.html">← 上一步：組裝與呼叫 anti_content</a></div>
+      <div class="nav-right"></div>
+    </div>
+
+    <footer class="lesson-footer">
+      <p>有任何問題，隨時向你的老師提問。</p>
+    </footer>
+  </div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

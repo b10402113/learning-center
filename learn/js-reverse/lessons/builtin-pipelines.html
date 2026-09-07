@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>内置管道 FilesPipeline 与 ImagesPipeline — Scrapy 管道与持久化</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>内置管道 FilesPipeline 与 ImagesPipeline</h1>
+<p class="meta">Scrapy 管道与持久化 · 步骤 3/4</p>
+
+<h2>学习目标</h2>
+<p>理解 scrapy 自带的 FilesPipeline 和 ImagesPipeline 的差异，掌握"约定字段驱动"与"重写方法驱动"两种模式，并能独立写出图片下载项目。</p>
+
+<h2>普通管道 vs 内置管道</h2>
+<p>上一节讲的管道都是"普通管道"——你自己写一个类，在 <code>process_item</code> 里手动处理 Item。这种方式灵活，但写起来啰嗦：你要自己发请求、自己处理二进制数据、自己写文件。</p>
+<p>Scrapy 为<strong>二进制资源下载</strong>这个高频场景提供了两个现成的管道类：</p>
+
+<table>
+  <tr><th>管道</th><th>适用场景</th><th>驱动方式</th></tr>
+  <tr><td><code>ImagesPipeline</code></td><td>图片、音频、视频等二进制文件</td><td>重写三个方法</td></tr>
+  <tr><td><code>FilesPipeline</code></td><td>普通文件（PDF、ZIP、Excel 等）</td><td>约定字段驱动</td></tr>
+</table>
+
+<p>两者最大的区别是<strong>驱动方式</strong>：ImagesPipeline 需要你重写三个方法来告诉它"怎么请求、怎么命名、怎么传下去"；FilesPipeline 则更"懒"——你只需要在 Item 里填好约定的字段，它自动下载、自动命名。</p>
+
+<h2>ImagesPipeline：重写三方法的图片下载管道</h2>
+<p>ImagesPipeline 是 scrapy 自带的图片下载管道。它的核心思路是：你告诉它图片链接在哪里、文件名叫什么、下载完怎么传给下一个管道，剩下的事情它全包了。</p>
+
+<p>第一步：安装 Pillow（图片处理库，ImagesPipeline 依赖它）：</p>
+<pre><code>pip install pillow</code></pre>
+
+<p>第二步：在 items.py 里定义 Item，并加入图片相关字段：</p>
+<pre><code># items.py
+import scrapy
+
+class ImageItem(scrapy.Item):
+    title = scrapy.Field()
+    image_url = scrapy.Field()      # 图片链接
+    image_path = scrapy.Field()     # 下载后的本地路径（管道自动填）</code></pre>
+
+<p>第三步：自定义一个继承自 ImagesPipeline 的类，重写三个方法：</p>
+
+<pre><code># pipelines.py
+from scrapy.pipelines.images import ImagesPipeline
+from scrapy.http import Request
+
+class MyImagesPipeline(ImagesPipeline):
+
+    def get_media_requests(self, item, info):
+        """对图片地址发起请求，返回二进制数据"""
+        url = item['image_url']
+        yield Request(url)
+
+    def file_path(self, request, response=None, info=None, *, item=None):
+        """指定保存文件名"""
+        # 用 title 做文件名，避免重复
+        title = item['title']
+        return f'full/{title}.jpg'
+
+    def item_completed(self, results, item, info):
+        """把 item 传给下一个管道"""
+        # results 是一个列表，包含每个请求的下载结果
+        for ok, value in results:
+            if ok:
+                item['image_path'] = value['path']
+        return item</code></pre>
+
+<p>三个方法的职责：</p>
+<ul>
+  <li><code>get_media_requests(item, info)</code>：告诉管道要下载哪张图片。对每个图片链接 yield 一个 Request。</li>
+  <li><code>file_path(request, response=None, info=None, *, item=None)</code>：告诉管道文件叫什么名字、放在哪个子目录。</li>
+  <li><code>item_completed(results, item, info)</code>：下载完成后调用，通常把下载结果（本地路径）写回 Item，然后 return item 传给下一个管道。</li>
+</ul>
+
+<p>第四步：在 settings.py 里配置存储路径和缩略图：</p>
+
+<pre><code># settings.py
+IMAGES_STORE = 'girlsLib'  # 图片保存根目录
+IMAGES_THUMBS = {
+    'small': (50, 50),
+    'big': (270, 270)
+}
+
+ITEM_PIPELINES = {
+    'myproject.pipelines.MyImagesPipeline': 300,
+}</code></pre>
+
+<p><code>IMAGES_THUMBS</code> 会自动生成缩略图：<code>'small': (50, 50)</code> 表示生成 50x50 的小图，<code>'big': (270, 270)</code> 表示生成 270x270 的大图。原图也会保留。</p>
+
+<h2>FilesPipeline：约定字段驱动的文件下载管道</h2>
+<p>FilesPipeline 和 ImagesPipeline 类似，但更"傻瓜"。它的规则是：你只需要在 Item 里提供两个字段——<code>file_urls</code>（下载链接列表）和 <code>files</code>（下载结果，管道自动填）——管道就会自动下载并填充结果。</p>
+
+<pre><code># pipelines.py
+from scrapy.pipelines.files import FilesPipeline
+
+class MyFilesPipeline(FilesPipeline):
+
+    def file_path(self, request, response=None, info=None, *, item=None):
+        """指定保存文件名"""
+        # 从 URL 里提取文件名
+        return request.url.split('/')[-1]</code></pre>
+
+<p>Item 必须包含这两个字段：</p>
+
+<pre><code># items.py
+class DocItem(scrapy.Item):
+    title = scrapy.Field()
+    file_urls = scrapy.Field()   # 必须：下载链接列表
+    files = scrapy.Field()       # 必须：管道自动填下载结果</code></pre>
+
+<p>Spider 把链接放进 <code>file_urls</code>：</p>
+
+<pre><code># spiders/doc.py
+def parse(self, response):
+    item = DocItem()
+    item['title'] = response.xpath('//h1/text()').extract_first()
+    item['file_urls'] = response.xpath('//a/@href').extract()
+    yield item</code></pre>
+
+<p>settings.py 配置：</p>
+
+<pre><code># settings.py
+FILES_STORE = 'docs'
+
+ITEM_PIPELINES = {
+    'myproject.pipelines.MyFilesPipeline': 300,
+}</code></pre>
+
+<p>FilesPipeline 和 ImagesPipeline 最大的区别是：FilesPipeline 靠<strong>约定字段</strong>驱动（你填 <code>file_urls</code>，它自动下载），而 ImagesPipeline 靠<strong>重写方法</strong>驱动（你告诉它每一步怎么做）。</p>
+
+<h2>两者选哪个？</h2>
+<ul>
+  <li><strong>只下载图片</strong>：两者都行。ImagesPipeline 更专业（支持缩略图、自动去重），FilesPipeline 更简单（不用重写方法）。</li>
+  <li><strong>下载音频、视频</strong>：用 ImagesPipeline，因为它支持任意二进制文件。</li>
+  <li><strong>下载普通文件（PDF、ZIP）</strong>：用 FilesPipeline，配置少，开箱即用。</li>
+  <li><strong>需要自定义命名规则</strong>：两者都支持重写 <code>file_path</code>。</li>
+</ul>
+
+<h2>常见踩坑</h2>
+<ul>
+  <li><strong>没装 Pillow</strong>：ImagesPipeline 依赖 Pillow，没装就直接报错。</li>
+  <li><strong>FilesPipeline 的 Item 缺少 file_urls 或 files 字段</strong>：管道会直接跳过，不下载任何东西。</li>
+  <li><strong>图片链接是相对路径</strong>：ImagesPipeline 和 FilesPipeline 都需要完整 URL。相对链接要先用 <code>response.urljoin()</code> 补全。</li>
+  <li><strong>IMAGES_STORE 或 FILES_STORE 没配</strong>：图片/文件没地方存，管道会报错。</li>
+</ul>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="ImagesPipeline 必须重写哪三个方法？" data-correct="0" data-explain="三个方法是 get_media_requests、file_path、item_completed。">
+  <button class="opt">get_media_requests / file_path / item_completed</button>
+  <button class="opt">open_spider / process_item / close_spider</button>
+  <button class="opt">start_requests / parse / closed</button>
+  <button class="opt">get_requests / save_file / finish</button>
+</div>
+
+<div class="quiz" data-question="FilesPipeline 的 Item 必须包含哪两个字段？" data-correct="1" data-explain="file_urls 放下载链接，files 由管道自动填下载结果。">
+  <button class="opt">file_name / file_data</button>
+  <button class="opt">file_urls / files</button>
+  <button class="opt">url / result</button>
+  <button class="opt">link / path</button>
+</div>
+
+<div class="quiz" data-question="ImagesPipeline 依赖哪一个 Python 库？" data-correct="2" data-explain="Pillow 是 Python 图片处理库，ImagesPipeline 用它来处理缩略图。">
+  <button class="opt">requests</button>
+  <button class="opt">PIL（Pillow）</button>
+  <button class="opt">opencv</button>
+  <button class="opt">matplotlib</button>
+</div>
+
+<div class="quiz" data-question="以下哪一项是 FilesPipeline 和 ImagesPipeline 的主要区别？" data-correct="3" data-explain="FilesPipeline 靠约定字段驱动，ImagesPipeline 靠重写方法驱动。">
+  <button class="opt">FilesPipeline 只能下载图片</button>
+  <button class="opt">ImagesPipeline 只能下载文件</button>
+  <button class="opt">两者没有区别</button>
+  <button class="opt">FilesPipeline 是约定字段驱动，ImagesPipeline 是重写方法驱动</button>
+</div>
+
+<div class="quiz" data-question="IMAGES_THUMBS 配置的作用是什么？" data-correct="0" data-explain="IMAGES_THUMBS 会自动生成指定尺寸的缩略图，原图也会保留。">
+  <button class="opt">自动生成缩略图</button>
+  <button class="opt">压缩原图大小</button>
+  <button class="opt">给图片加水印</button>
+  <button class="opt">过滤低分辨率图片</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./multi-pipeline-storage.html">← 上一步：多管道优先级与数据库存储</a>
+  <a href="./pipeline-integration.html">下一步：完整管道项目整合 →</a>
+</div>
+
+<div class="footer">Scrapy 管道与持久化 · 步骤 3/4</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

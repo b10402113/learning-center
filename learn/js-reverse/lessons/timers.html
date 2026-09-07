@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>定时器与 window 全局变量</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<h1>定时器与 window 全局变量</h1>
+<p class="meta">JS 逆向 · 节点 15 · 步骤 5/5</p>
+
+<h2>学习目标</h2>
+<p>能认出顶层 var/function 挂在 window 上、理解 setInterval/setTimeout 的行为与取消方式，定位网页中定时驱动的回调函数。</p>
+
+<h2>顶层 var/function 挂在 window 上</h2>
+<p>浏览器里有一个<strong>全局对象</strong> <code>window</code>。在 <code>&lt;script&gt;</code> 顶层用 <code>var</code> 声明的变量和用 <code>function</code> 声明的函数，会自动成为 <code>window</code> 对象的属性：</p>
+<pre><code>var username = "alice";
+function greet() { return "hi"; }
+
+console.log(window.username); // alice
+console.log(window.greet());  // hi</code></pre>
+<p>所以在浏览器控制台里直接打 <code>window</code> 就能看到所有全局状态——这是逆向时探测入口函数和全局配置的首选方式。注意：ES6 的 <code>let</code>/<code>const</code> 声明的变量<strong>不会</strong>挂到 <code>window</code> 上，只有 <code>var</code> 和函数声明会。</p>
+
+<h2><code>setTimeout</code>：延迟执行一次</h2>
+<p><code>setTimeout(fn, ms)</code> 让函数 <code>fn</code> 在 <code>ms</code> 毫秒后执行<strong>一次</strong>。它返回一个定时器 ID，供 <code>clearTimeout</code> 取消：</p>
+<pre><code>var id = setTimeout(function() {
+  console.log("3 秒后打印");
+}, 3000);
+
+// 如果中途想取消：
+clearTimeout(id);</code></pre>
+<p>逆向时如果发现某个操作"过一会儿才触发"，很可能就是 <code>setTimeout</code> 在驱动。找到定时器 ID 就能找到回调函数，找到回调函数就能找到核心逻辑。</p>
+
+<h2><code>setInterval</code>：周期重复执行</h2>
+<p><code>setInterval(fn, ms)</code> 每隔 <code>ms</code> 毫秒重复执行 <code>fn</code>。同样返回定时器 ID，用 <code>clearInterval</code> 取消：</p>
+<pre><code>var tick = 0;
+var id = setInterval(function() {
+  tick++;
+  console.log("第 " + tick + " 秒");
+}, 1000);
+
+// 5 秒后停止
+setTimeout(function() { clearInterval(id); }, 5000);</code></pre>
+<p>网页里<strong>周期性刷新 token、指纹更新、心跳包</strong>几乎都是 <code>setInterval</code> 驱动的。逆向时打开控制台，在 Sources 面板搜索 <code>setInterval</code>/<code>setTimeout</code>，往往能直接定位到关键的周期性任务。</p>
+
+<h2>定时器 + DOM：时钟显示案例</h2>
+<p>一个典型的综合案例：点击按钮后，用 <code>setInterval</code> 每秒刷新一次时间，并通过 DOM 操作写入输入框：</p>
+<pre><code>function show() {
+  var now = new Date().toLocaleString();
+  document.getElementsByTagName("input")[0].value = now;
+}
+// 点击开始按钮：
+// &lt;button onclick="start()"&gt;开始&lt;/button&gt;
+function start() {
+  setInterval(show, 1000);
+}</code></pre>
+<p>这段代码把<strong>定时器</strong>、<strong>Date 对象</strong>、<strong>DOM 查询</strong>、<strong>DOM 赋值</strong>串在一起，是网页动态行为的典型形态。读逆向目标时，看到 <code>setInterval</code> 配 <code>document.get...value = ...</code>，要意识到"这段代码正在周期性地往页面写数据"——它可能就是你要找的渲染逻辑或加密参数生成点。</p>
+
+<h2>本节练习</h2>
+
+<div class="quiz" data-question="顶层 var 声明的变量，实际挂载在哪里？" data-correct="1" data-explain="顶层 var 声明的变量和函数声明会挂到 window 对象上。">
+  <button class="opt">只存在当前 script 块里</button>
+  <button class="opt">window 对象上</button>
+  <button class="opt">globalThis 上但不在 window 上</button>
+  <button class="opt">function 作用域顶部</button>
+</div>
+
+<div class="quiz" data-question="setTimeout 与 setInterval 的主要区别是什么？" data-correct="0" data-explain="setTimeout 延迟执行一次，setInterval 周期重复执行。">
+  <button class="opt">setTimeout 执行一次，setInterval 重复执行</button>
+  <button class="opt">setTimeout 重复执行，setInterval 执行一次</button>
+  <button class="opt">两者无区别</button>
+  <button class="opt">setTimeout 只能传 1 秒</button>
+</div>
+
+<div class="quiz" data-question="如何取消一个尚未触发的 setTimeout？" data-correct="2" data-explain="clearTimeout 接收 setTimeout 返回的定时器 ID，可以取消尚未触发的定时器。">
+  <button class="opt">clearInterval(id)</button>
+  <button class="opt">setTimeout.cancel()</button>
+  <button class="opt">clearTimeout(id)</button>
+  <button class="opt">delete id</button>
+</div>
+
+<div class="quiz" data-question">网页中周期性刷新 token，最可能由哪个 API 驱动？" data-correct="3" data-explanation="setInterval 周期重复执行，是驱动 token 刷新的典型 API。">
+  <button class="opt">setTimeout</button>
+  <button class="opt">clearTimeout</button>
+  <button class="opt">Promise</button>
+  <button class="opt">setInterval</button>
+</div>
+
+<div class="quiz" data-question="在浏览器控制台探测全局状态，最直接的方式是？" data-correct="1" data-explain="顶层 var/function 挂在 window 上，控制台直接打 window 就能看到所有全局状态。">
+  <button class="opt">console.log(this)</button>
+  <button class="opt">查看 window 对象</button>
+  <button class="opt">读取 document.cookie</button>
+  <button class="opt">遍历 localStorage</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./prototype.html">← 上一步：原型物件与箭头函数</a>
+  <span></span>
+</div>
+
+<div class="footer">看不懂就问你的 agent：定时器是网页动态行为的引擎，逆向时搜索 setInterval/setTimeout 往往能直接定位核心逻辑。</div>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

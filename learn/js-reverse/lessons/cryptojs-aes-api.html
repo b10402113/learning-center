@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>crypto-js AES 解密与 iv=key 模式</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>crypto-js AES 解密与 iv=key 模式</h1>
+<p class="meta">实战：DES/AES 案例 · 步骤 4/4</p>
+
+<h2>学习目标</h2>
+<p>逐行拆解 crypto-js AES 解密的完整 API 链，理解 iv=key 这种简化模式在逆向中的识别特征，能独立写出 AES-CBC 解密函数。</p>
+
+<h2>解密函数全貌</h2>
+<p>上一课我们调用了 <code>decrypt_data</code> 函数来解密毛毛租的响应。现在打开 <code>04 mmz.js</code>，逐行读：</p>
+<pre><code>cryptoJs = require("crypto-js")
+
+function d(e, a) {
+    e = cryptoJs.enc.Utf8.parse(e);
+    var l = cryptoJs.AES.decrypt(a, e, {
+        mode: cryptoJs.mode.CBC,
+        padding: cryptoJs.pad.Pkcs7,
+        iv: e
+    });
+    return cryptoJs.enc.Utf8.stringify(l).toString()
+}
+
+function decrypt_data(data) {
+    e = '0a1fea31626b3b55'
+    return d(e, data)
+}</code></pre>
+
+<h2>外层函数：decrypt_data</h2>
+<pre><code>function decrypt_data(data) {
+    e = '0a1fea31626b3b55'
+    return d(e, data)
+}</code></pre>
+<p>这个函数很简单：把密钥 <code>'0a1fea31626b3b55'</code> 赋值给变量 <code>e</code>，然后调用内层函数 <code>d(e, data)</code>。密钥是 16 个字符，对应 AES-128 的 16 字节密钥。</p>
+
+<h2>内层函数：d</h2>
+<pre><code>function d(e, a) {
+    e = cryptoJs.enc.Utf8.parse(e);
+    var l = cryptoJs.AES.decrypt(a, e, {
+        mode: cryptoJs.mode.CBC,
+        padding: cryptoJs.pad.Pkcs7,
+        iv: e
+    });
+    return cryptoJs.enc.Utf8.stringify(l).toString()
+}</code></pre>
+<p>这个函数接受两个参数：<code>e</code> 是密钥，<code>a</code> 是密文。</p>
+
+<h2>第一行：解析密钥</h2>
+<pre><code>e = cryptoJs.enc.Utf8.parse(e);</code></pre>
+<p>和 CryptoJS 一样，<code>cryptoJs.enc.Utf8.parse()</code> 把字符串密钥转成 WordArray。注意这里把解析后的结果赋值回 <code>e</code>，后面的 <code>iv: e</code> 用的也是这个解析后的值。</p>
+
+<h2>第二行：执行解密</h2>
+<pre><code>var l = cryptoJs.AES.decrypt(a, e, {
+    mode: cryptoJs.mode.CBC,
+    padding: cryptoJs.pad.Pkcs7,
+    iv: e
+});</code></pre>
+<p><code>cryptoJs.AES.decrypt()</code> 接受三个参数：密文、密钥、配置项。注意这里的 <code>iv</code> 直接用了密钥 <code>e</strong>——这就是 <strong>iv=key</strong> 模式。</p>
+
+<h2>加密模式：CBC</h2>
+<pre><code>mode: cryptoJs.mode.CBC,</code></pre>
+<p><strong>CBC（Cipher Block Chaining，密码分组链接）</strong> 是最常用的分组加密模式。每个明文块在加密前会先与前一个密文块做异或（XOR），第一个块则与 IV 做异或。</p>
+<p>这样做的好处是：即使明文中有重复的块，加密后的密文也不会重复，安全性远高于 ECB。</p>
+
+<h2>填充方式：Pkcs7</h2>
+<pre><code>padding: cryptoJs.pad.Pkcs7,</code></pre>
+<p>和 DES 一样，AES 也要求明文长度是 16 字节的整数倍。Pkcs7 的填充规则是：缺几个字节就填几个该数字。</p>
+
+<h2>iv=key 模式</h2>
+<pre><code>iv: e</code></pre>
+<p>这里 <code>iv</code> 直接等于密钥 <code>e</code>。这是一种简化模式，虽然不够安全，但在逆向中很常见——开发者为了省事，直接把 key 当 iv 用。</p>
+<p>识别特征很明确：<strong>解密函数的 iv 参数和 key 参数是同一个值</strong>。</p>
+
+<h2>第三行：输出明文</h2>
+<pre><code>return cryptoJs.enc.Utf8.stringify(l).toString()</code></pre>
+<p><code>decrypt()</code> 返回的是 WordArray。<code>cryptoJs.enc.Utf8.stringify()</code> 把 WordArray 按 UTF-8 解码成字符串，再 <code>.toString()</code> 确保返回的是普通字符串。</p>
+
+<h2>完整 API 链</h2>
+<p>把整条链串起来：</p>
+<pre><code>密钥字符串 ──parse──▶ 密钥 WordArray ──┬──▶ iv
+                                      │
+                                      └──▶ key ──┐
+                                                ├──▶ AES.decrypt() ──stringify──▶ 明文
+密文字符串 ────────────────────────────────────────┘</code></pre>
+
+<h2>独立写出 AES-CBC 解密函数</h2>
+<p>理解了 API 链后，你应该能独立写出类似函数：</p>
+<pre><code>function aesDecrypt(ciphertext, key) {
+    // 1. 解析密钥
+    var keyHex = cryptoJs.enc.Utf8.parse(key);
+    // 2. 执行解密
+    var decrypted = cryptoJs.AES.decrypt(
+        ciphertext,
+        keyHex,
+        {
+            mode: cryptoJs.mode.CBC,
+            padding: cryptoJs.pad.Pkcs7,
+            iv: keyHex
+        }
+    );
+    // 3. 输出明文
+    return cryptoJs.enc.Utf8.stringify(decrypted).toString();
+}</code></pre>
+
+<h2>与 CryptoJS DES 的对比</h2>
+<table>
+  <tr><th>维度</th><th>CryptoJS DES</th><th>crypto-js AES</th></tr>
+  <tr><td>分组大小</td><td>8 字节</td><td>16 字节</td></tr>
+  <tr><td>密钥长度</td><td>8 字节（64 位）</td><td>16 字节（128 位）</td></tr>
+  <tr><td>模式</td><td>ECB</td><td>CBC</td></tr>
+  <tr><td>IV</td><td>不需要</td><td>需要（iv=key）</td></tr>
+  <tr><td>decrypt 调用</td><td>传递密文对象 {ciphertext: ...}</td><td>直接传递密文字符串</td></tr>
+</table>
+
+<h2>常见坑</h2>
+<ul>
+  <li><strong>key/iv 长度不对</strong>：AES-128 的 key 和 iv 都必须是 16 字节。</li>
+  <li><strong>iv 不匹配</strong>：如果加密端用 iv=key，解密端也必须用 iv=key，否则解密出来是乱码。</li>
+  <li><strong>密文不是 Base64</strong>：crypto-js 的 <code>AES.decrypt()</code> 默认密文是 Base64 字符串，如果是十六进制需要用 <code>cryptoJs.enc.Hex.parse()</code>。</li>
+</ul>
+
+<h2>小结</h2>
+<p>crypto-js AES 解密的 API 链和 CryptoJS DES 类似，但有几个关键区别：AES 的分组是 16 字节，模式是 CBC 需要 IV，而且这个案例里 iv=key。理解这条链之后，任何 crypto-js 的 AES 解密代码都只是一个模板。</p>
+<p>到这里，你已经跑通了两个完整的逆向案例：招标网的 DES-ECB 解密，以及毛毛租的 AES-CBC 加密与解密。下一步，可以挑战更复杂的案例——比如 SHA1 签名或百度翻译的 sign 逆向。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="crypto-js AES 加密的分组大小是多少？" data-correct="1" data-explain="AES 的分组大小是 16 字节，DES 是 8 字节。">
+  <button class="opt">8 字节</button>
+  <button class="opt">16 字节</button>
+  <button class="opt">32 字节</button>
+  <button class="opt">64 字节</button>
+</div>
+
+<div class="quiz" data-question="毛毛租的 AES 解密中，iv 和 key 的关系是什么？" data-correct="0" data-explain="iv 直接等于密钥 e，这是 iv=key 的简化模式。">
+  <button class="opt">iv 等于密钥</button>
+  <button class="opt">iv 是密钥的逆序</button>
+  <button class="opt">iv 与密钥完全无关</button>
+  <button class="opt">iv 是密钥的两倍长度</button>
+</div>
+
+<div class="quiz" data-question="CBC 模式与 ECB 模式的主要区别是什么？" data-correct="2" data-explain="CBC 模式下每个块会与前一个块做异或（第一个块与 IV），所以重复明文不会产生重复密文。">
+  <button class="opt">CBC 每块独立加密</button>
+  <button class="opt">CBC 是流密码模式</button>
+  <button class="opt">CBC 每块依赖前一块和 IV</button>
+  <button class="opt">CBC 不需要填充</button>
+</div>
+
+<div class="quiz" data-question="cryptoJs.AES.decrypt() 默认密文是什么格式？" data-correct="3" data-explain="cryptoJs.AES.decrypt() 默认密文是 Base64 编码的字符串。">
+  <button class="opt">十六进制字符串</button>
+  <button class="opt">UTF-8 编码的明文</button>
+  <button class="opt">WordArray 对象</button>
+  <button class="opt">Base64 编码的字符串</button>
+</div>
+
+<div class="quiz" data-question="如果加密端用 iv=key，解密端应该怎么做？" data-correct="1" data-explain="解密端也必须用 iv=key 模式，否则解密出来是乱码。">
+  <button class="opt">iv 设为空字符串</button>
+  <button class="opt">iv 也设为与 key 相同的值</button>
+  <button class="opt">iv 设为 key 的逆序</button>
+  <button class="opt">iv 随机生成</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./aes-cbc-case.html">← 上一步：毛毛租 AES-CBC 加密与解密实战</a>
+  <span></span>
+</div>
+
+<div class="footer">实战：DES/AES 案例 · 步骤 4/4</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

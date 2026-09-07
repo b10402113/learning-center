@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Item 封装与 Pipeline 三方法 — Scrapy 管道与持久化</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Item 封装与 Pipeline 三方法</h1>
+<p class="meta">Scrapy 管道与持久化 · 步骤 1/4</p>
+
+<h2>学习目标</h2>
+<p>掌握 items.py 定义字段、yield 提交、以及 pipelines.py 中 process_item / open_spider / close_spider 三方法的调用时机与职责。</p>
+
+<h2>为什么需要管道？</h2>
+<p>在 Scrapy 里，爬虫（Spider）只负责"抓"——发请求、解析响应、提取字段。但抓到的数据往哪里存？怎么存？这件事不能全塞给 Spider，否则 Spider 会越来越臃肿，换个存储方式就得改爬虫代码。</p>
+<p>Scrapy 的解法是<strong>把"抓"和"存"分开</strong>。Spider 解析完数据后，把数据封装成一个<strong>Item</strong>对象，然后 <code>yield</code> 出去。Scrapy 引擎收到这个 Item 后，会把它丢进一条"传送带"——这条传送带就是<strong>Pipeline（管道）</strong>。管道里可以挂多个处理类，每个类负责把 Item 存到一种载体（文件、MySQL、Redis……）。</p>
+<p>这种分工的好处是：Spider 只管解析，存储逻辑全部集中在 pipelines.py 里。想换数据库？改管道就行，Spider 一行不动。</p>
+
+<h2>Item：数据的标准化信封</h2>
+<p>Item 是 Scrapy 对"一条数据"的封装。它本质上是一个类，字段用 <code>scrapy.Field()</code> 定义。你可以把它想成一个<strong>标准化的信封</strong>——每个信封上都有固定的格子（字段），Spider 把解析结果填进去，管道再按格子取出来存。</p>
+
+<pre><code># items.py
+import scrapy
+
+class MovieItem(scrapy.Item):
+    title = scrapy.Field()
+    rating = scrapy.Field()
+    genre = scrapy.Field()</code></pre>
+
+<p>在 Spider 里，先实例化 Item，再把字段填进去，最后 <code>yield</code>：</p>
+
+<pre><code># spiders/movie.py
+def parse(self, response):
+    titles = response.xpath('//h2/text()').extract()
+    for title in titles:
+        item = MovieItem()
+        item['title'] = title
+        item['rating'] = '9.0'
+        item['genre'] = 'Drama'
+        yield item</code></pre>
+
+<p>注意：管道<strong>只能接收 Item 类型</strong>。如果你 <code>yield</code> 一个字典，管道会直接忽略它。这是初学者最常踩的坑。</p>
+
+<h2>Pipeline 三方法：一次请求的生命周期</h2>
+<p>一个管道类通常需要实现三个方法，它们对应爬虫运行的不同阶段：</p>
+
+<table>
+  <tr><th>方法</th><th>调用时机</th><th>典型用途</th></tr>
+  <tr><td><code>open_spider(self, spider)</code></td><td>爬虫启动时，只调用一次</td><td>打开文件、建立数据库连接、初始化 Redis 客户端</td></tr>
+  <tr><td><code>process_item(self, item, spider)</code></td><td>每次 Spider yield 一个 Item 时调用</td><td>把 Item 写入文件/数据库，必须 <code>return item</code></td></tr>
+  <tr><td><code>close_spider(self, spider)</code></td><td>爬虫结束时，只调用一次</td><td>关闭文件、关闭数据库连接、释放资源</td></tr>
+</table>
+
+<p>为什么是"三方法"而不是一个？因为资源管理有<strong>生命周期</strong>：数据库连接不能每次存一条数据都重新建连（太慢），也不能永远不关（会泄漏）。<code>open_spider</code> 和 <code>close_spider</code> 把资源的创建和销毁包起来，<code>process_item</code> 只管"来一条存一条"。</p>
+
+<pre><code># pipelines.py
+class MovieFilePipeline:
+    def open_spider(self, spider):
+        self.f = open('movies.csv', 'w', encoding='utf-8')
+        self.f.write('title,rating,genre\n')
+
+    def process_item(self, item, spider):
+        line = f"{item['title']},{item['rating']},{item['genre']}\n"
+        self.f.write(line)
+        return item   # 必须 return，否则下一个管道收不到
+
+    def close_spider(self, spider):
+        self.f.close()</code></pre>
+
+<p><code>return item</code> 这件事非常关键。Scrapy 的管道是<strong>链式传递</strong>的——一个 Item 经过第一个管道处理后，必须被 return 出来，才能流到下一个管道。如果你忘了 return，Item 就会在这个管道里"断掉"，后面的管道永远收不到它。</p>
+
+<h2>在 settings.py 里开启管道</h2>
+<p>写完管道类之后，Scrapy 默认不会启用它。你必须在 <code>settings.py</code> 里找到 <code>ITEM_PIPELINES</code> 配置项，取消注释并注册你的管道：</p>
+
+<pre><code># settings.py
+ITEM_PIPELINES = {
+    'myproject.pipelines.MovieFilePipeline': 300,
+}</code></pre>
+
+<p>这里的数字 <code>300</code> 是优先级——数字越小，优先级越高，Item 越先交给它处理。一个项目里可以同时注册多个管道，靠这个数字控制顺序。</p>
+
+<h2>常见踩坑</h2>
+<ul>
+  <li><strong>yield 字典而非 Item</strong>：管道只认 Item 类型，字典会被静默丢弃，不报错但数据消失。</li>
+  <li><strong>process_item 忘记 return</strong>：Item 在第一个管道就断了，后续管道全部失效。</li>
+  <li><strong>在 process_item 里建数据库连接</strong>：每次存一条数据都重新建连，爬虫跑得极慢。连接应该放在 <code>open_spider</code> 里。</li>
+  <li><strong>settings.py 没开启管道</strong>：代码写对了但数据不落盘，90% 是忘记在 <code>ITEM_PIPELINES</code> 里注册。</li>
+</ul>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="Scrapy 管道能接收以下哪种对象？" data-correct="1" data-explain="管道只接收 Item 类型，字典会被静默丢弃。">
+  <button class="opt">字典 dict</button>
+  <button class="opt">Item 对象</button>
+  <button class="opt">字符串 str</button>
+  <button class="opt">列表 list</button>
+</div>
+
+<div class="quiz" data-question="process_item 方法必须 return item 的原因是什么？" data-correct="2" data-explain="return item 才能让 Item 继续流向下一个管道，否则链会在这里断开。">
+  <button class="opt">否则爬虫会报错</button>
+  <button class="opt">否则数据会重复写入</button>
+  <button class="opt">否则下一个管道收不到这个 Item</button>
+  <button class="opt">否则 Item 会被自动丢弃</button>
+</div>
+
+<div class="quiz" data-question="数据库连接应该在哪一个方法里建立？" data-correct="0" data-explain="open_spider 只调用一次，适合做建连、打开文件等一次性初始化。">
+  <button class="opt">open_spider</button>
+  <button class="opt">process_item</button>
+  <button class="opt">close_spider</button>
+  <button class="opt">__init__</button>
+</div>
+
+<div class="quiz" data-question="ITEM_PIPELINES 里的数字 300 代表什么？" data-correct="1" data-explain="数字越小优先级越高，Item 越先交给它处理。">
+  <button class="opt">最多存储 300 条数据</button>
+  <button class="opt">管道的优先级，数字越小越先执行</button>
+  <button class="opt">管道的超时秒数</button>
+  <button class="opt">管道的线程数</button>
+</div>
+
+<div class="quiz" data-question="以下哪一项不是 Pipeline 三方法之一？" data-correct="3" data-explain="三方法是 open_spider、process_item、close_spider，没有 save_item。">
+  <button class="opt">open_spider</button>
+  <button class="opt">process_item</button>
+  <button class="opt">close_spider</button>
+  <button class="opt">save_item</button>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./multi-pipeline-storage.html">下一步：多管道优先级与数据库存储 →</a>
+</div>
+
+<div class="footer">Scrapy 管道与持久化 · 步骤 1/4</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

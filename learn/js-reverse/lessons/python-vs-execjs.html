@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>Python 原生复现 vs execjs 混合路线 — 实战：sign 逆向（Python 原生）</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Python 原生复现 vs execjs 混合路线</h1>
+<p class="meta">js-reverse · 步骤 5/5 · 两条路线的优劣与决策框架</p>
+
+<p>有道翻译的 sign 逆向有两种完全不同的实现路线。第一种是 Python 原生复现，也就是前面四步一直在做的——用 <code>hashlib.md5</code> 直接计算签名，不依赖任何 JavaScript 运行时。第二种是 execjs 混合路线——把生成签名的 JS 代码原封不动地保留在 JS 文件里，Python 通过 <code>execjs</code> 调用 Node.js 执行这段 JS，拿回计算结果。</p>
+
+<h2>Python 原生复现</h2>
+
+<p><strong>优势</strong>在于零依赖。<code>hashlib</code> 是 Python 标准库的一部分，不需要额外安装任何包。代码量通常只有十几行，运行速度快，部署到任何有 Python 的环境里就能直接跑。对于 MD5、SHA1、SHA256 这类标准摘要算法，以及拼接逻辑不复杂的签名，纯 Python 复现永远是第一选择。</p>
+
+<p><strong>劣势</strong>在于复现成本。如果 JS 代码里用了浏览器特有的对象（<code>document.cookie</code>、<code>window.location</code>），或者用了复杂的编码转换、自定义哈希函数、反调试陷阱，用 Python 逐行翻译这些逻辑就变得非常痛苦。每遇到一个浏览器对象，你都得手工找替代品；每遇到一个混淆变量，你都得靠上下文猜含义。当翻译成本超过一定程度，继续坚持纯 Python 就是一种浪费。</p>
+
+<h2>execjs 混合路线</h2>
+
+<p><strong>优势</strong>在于忠实还原。你不需要翻译任何逻辑，直接把 JS 源码加载进来，调用里面的函数就行。只要 JS 代码能在 Node.js 里跑通，Python 就能拿到结果。对于那些依赖浏览器环境、逻辑复杂、或者频繁变动的签名算法，execjs 是最稳妥的折中。</p>
+
+<p><strong>劣势</strong>在于额外的运行时依赖。目标机器必须安装 Node.js，而且每次调用都涉及进程间通信，性能比纯 Python 差一个数量级。代码结构也因此变得更复杂——你要维护一份 JS 文件、一份 Python 文件，两边要保持同步。</p>
+
+<h2>两条路线的对比</h2>
+
+<table style="width:100%; border-collapse: collapse; margin: 1em 0;">
+<tr style="background: #f3f4f6;">
+  <th style="padding: 8px; text-align: left; border: 1px solid #d1d5db;">维度</th>
+  <th style="padding: 8px; text-align: left; border: 1px solid #d1d5db;">Python 原生</th>
+  <th style="padding: 8px; text-align: left; border: 1px solid #d1d5db;">execjs 混合</th>
+</tr>
+<tr>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">依赖</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">无（标准库）</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">需安装 Node.js + execjs</td>
+</tr>
+<tr>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">性能</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">快（直接函数调用）</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">慢（进程间通信）</td>
+</tr>
+<tr>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">复现成本</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">低（标准算法）~ 高（复杂逻辑）</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">极低（原封不动搬过来）</td>
+</tr>
+<tr>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">维护性</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">一份 Python 文件</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">两份文件需保持同步</td>
+</tr>
+<tr>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">适用场景</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">标准算法 + 简单拼接</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">浏览器对象 / 复杂逻辑 / 频繁变动</td>
+</tr>
+</table>
+
+<h2>决策框架</h2>
+
+<p>决策标准其实很简单：<strong>先试纯 Python</strong>。如果你能在半小时内把签名逻辑用 <code>hashlib</code> 复现出来，就绝不碰 execjs。如果遇到浏览器对象、复杂编码、或者逻辑看不懂，再切换到 execjs。不要把 execjs 当成默认选项，但也不要因为「纯 Python 更酷」就拒绝用它。工具服务于目的，反过来不行。</p>
+
+<p>这个判断标准不仅适用于 sign 逆向，也适用于后续所有的加密参数逆向。下一节的 DES/AES 案例、SHA1 案例，以及 webpack 模块化分析，都会反复面对同样的路线选择。先把这个决策框架内化，后面就能快速做出判断。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="Python 原生复现 sign 的最大优势是什么？" data-correct="1" data-explain="hashlib 是标准库，无需额外安装任何依赖，代码量小且运行速度快。">
+  <button class="opt">代码可读性最高</button>
+  <button class="opt">零依赖，使用标准库即可完成</button>
+  <button class="opt">比 execjs 性能差但更灵活</button>
+  <button class="opt">可以直接调用 Node.js 运行</button>
+</div>
+
+<div class="quiz" data-question="什么时候应该考虑使用 execjs 而不是纯 Python？" data-correct="3" data-explain="当签名逻辑涉及浏览器对象或复杂编码时，逐行翻译的代价超过直接搬 JS 的代价。">
+  <button class="opt">当签名算法是标准 MD5 时</button>
+  <button class="opt">当签名拼接逻辑很简单时</button>
+  <button class="opt">当不需要依赖 Node.js 时</button>
+  <button class="opt">当 JS 逻辑涉及浏览器对象或复杂编码时</button>
+</div>
+
+<div class="quiz" data-question="execjs 混合路线的主要劣势是什么？" data-correct="2" data-explain="需要安装 Node.js，且每次调用都有进程间通信的性能开销。">
+  <button class="opt">代码太简单，不利于学习</button>
+  <button class="opt">无法处理标准摘要算法</button>
+  <button class="opt">需要 Node.js 运行时，性能差于纯 Python</button>
+  <button class="opt">只能在 Windows 上使用</button>
+</div>
+
+<div class="quiz" data-question="以下哪种场景最适合用 Python 原生复现？" data-correct="0" data-explain="MD5 这类标准算法加上简单的参数拼接，纯 Python 十几行就能搞定。">
+  <button class="opt">用 hashlib.md5 计算简单拼接字符串的签名</button>
+  <button class="opt">需要模拟 document.cookie 的复杂场景</button>
+  <button class="opt">JS 代码经过高度混淆，变量名全是单字母</button>
+  <button class="opt">签名逻辑每小时都在变化</button>
+</div>
+
+<div class="quiz" data-question="为什么 execjs 需要维护两份文件？" data-correct="1" data-explain="一份是 JS 源码文件（签名逻辑），一份是 Python 调用文件（发送请求），两边需要保持同步。">
+  <button class="opt">一份是 CSS 样式，一份是 HTML 模板</button>
+  <button class="opt">一份是 JS 签名逻辑，一份是 Python 请求文件</button>
+  <button class="opt">一份是备份文件，一份是主文件</button>
+  <button class="opt">一份是测试文件，一份是生产文件</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./request-structure.html">← 上一步：有道翻译请求结构与 pointParam</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

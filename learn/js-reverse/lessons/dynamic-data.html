@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>execute_script 与 page_source 获取动态数据 — Selenium 浏览器自动化</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Selenium 浏览器自动化</h1>
+    <p class="subtitle">Step 3 — execute_script 与 page_source 获取动态数据</p>
+
+    <h2>Learning Goal</h2>
+    <p>理解 page_source 拿到的是渲染后的动态源码，掌握用 execute_script 滚动触发懒加载、再用解析库提取数据的完整范式。</p>
+
+    <h2>page_source：Selenium 的核心产出</h2>
+    <p>Selenium 爬虫和 requests 爬虫最大的区别，就在于获取数据的方式。requests 用 <code>.text</code> 拿到的是服务器返回的原始 HTML；Selenium 用 <code>page_source</code> 拿到的，是浏览器<strong>渲染之后</strong>的 DOM 源码。</p>
+    <p>这意味着什么？如果一个页面的数据是 JavaScript 动态加载的——比如滚动到底部才加载更多商品、或者点击按钮后才渲染列表——requests 拿到的 HTML 里根本没有这些数据，但 <code>page_source</code> 里有。因为浏览器已经执行了 JS，DOM 里已经填充了这些内容。</p>
+    <p>一句话：<strong>page_source = 浏览器当前看到的页面源码 = 可见即可得</strong>。</p>
+    <pre><code># 获取当前页面的渲染后源码
+html = browser.page_source
+
+# 拿到之后，就可以用任何解析库提取数据
+from lxml import etree
+tree = etree.HTML(html)
+titles = tree.xpath('//h2[@class="title"]/text()')</code></pre>
+    <p>常用的解析库有正则、BeautifulSoup、pyquery、lxml，选一个顺手的就行。lxml 的 XPath 支持最完整，和 Selenium 配合最顺畅。</p>
+
+    <h2>execute_script：注入 JavaScript 的万能后门</h2>
+    <p>Selenium 的 API 覆盖了绝大多数浏览器操作，但总有些事情是 API 没提供的——比如滚动页面、修改隐藏字段的值、触发某个自定义事件。这时候就需要 <code>execute_script()</code>，它允许你直接在页面上下文里执行任意 JavaScript 代码。</p>
+    <p>最典型的用法是<strong>滚动页面</strong>。很多网站使用「懒加载（Lazy Load）」技术：页面一开始只渲染顶部内容，等用户滚动到附近时才加载更多数据。如果不滚动，<code>page_source</code> 里就只有顶部那几条。</p>
+    <pre><code># 向下滚动 2000 像素
+browser.execute_script('document.documentElement.scrollTo(0, 2000)')
+
+# 滚动到页面底部
+browser.execute_script('window.scrollTo(0, document.body.scrollHeight)')
+
+# 执行 JS 并返回值
+title = browser.execute_script('return document.title')</code></pre>
+    <p><code>execute_script()</code> 可以带返回值，只要 JS 代码里有 <code>return</code> 语句。这让你能直接从页面 DOM 里读取信息，而不需要先拿整个 <code>page_source</code> 再解析。</p>
+
+    <h2>「可见即可得」完整范式</h2>
+    <p>把滚动 + page_source + 解析串起来，就是 Selenium 爬虫抓取动态加载数据的标准流程：</p>
+    <pre><code>from selenium import webdriver
+from selenium.webdriver.common.by import By
+from lxml import etree
+import time
+
+browser = webdriver.Chrome()
+browser.get('https://movie.douban.com/explore')
+
+# 1. 滚动触发懒加载
+browser.execute_script('document.documentElement.scrollTo(0, 2000)')
+time.sleep(1)  # 等数据加载
+
+# 2. 再次滚动，加载更多
+browser.execute_script('document.documentElement.scrollTo(0, 4000)')
+time.sleep(1)
+
+# 3. 拿到渲染后的源码
+html = browser.page_source
+
+# 4. 解析提取数据
+tree = etree.HTML(html)
+titles = tree.xpath('//div[@class="title"]/a/text()')
+for title in titles:
+    print(title)
+
+browser.quit()</code></pre>
+    <p>这个范式可以应对绝大多数「没有接口可抓、数据靠 JS 渲染」的页面。核心就是：<strong>滚动让数据出现 → page_source 拿到完整 DOM → 解析库提取</strong>。</p>
+
+    <h2>获取动态加载数据：豆瓣电影案例</h2>
+    <p>以豆瓣电影分类页为例，页面初始只显示几部电影，向下滚动时才会加载更多。完整流程：</p>
+    <ol>
+      <li>打开页面，确认初始只有少量电影条目。</li>
+      <li>用 <code>execute_script</code> 滚动到页面底部，触发懒加载。</li>
+      <li>等待 1-2 秒，让新数据渲染完成。</li>
+      <li>再次滚动，重复几次，直到加载出所有数据。</li>
+      <li>用 <code>page_source</code> 拿到包含所有电影的完整源码。</li>
+      <li>用 lxml 的 XPath 解析出电影名、评分等信息。</li>
+    </ol>
+    <p>注意：滚动后必须 <code>time.sleep()</code> 等待数据加载，否则 <code>page_source</code> 里还是滚动前的内容。后面学「显式等待」后可以用更优雅的方式替代 sleep。</p>
+
+    <h2>execute_script 的其他妙用</h2>
+    <ul>
+      <li><strong>修改元素属性</strong>：<code>browser.execute_script("document.getElementById('x').type='text'")</code>，把隐藏字段改成可见。</li>
+      <li><strong>移除元素</strong>：<code>browser.execute_script("document.querySelector('.ad').remove()")</code>，去掉遮挡的弹窗或广告。</li>
+      <li><strong>触发事件</strong>：<code>browser.execute_script("document.querySelector('button').click()")</code>，直接调用 JS 点击。</li>
+      <li><strong>获取页面信息</strong>：<code>browser.execute_script("return document.cookie")</code>，读取当前页面的 Cookie。</li>
+    </ul>
+
+    <h2>关键概念总结</h2>
+    <ul>
+      <li><strong>page_source</strong>：浏览器渲染后的动态源码，包含 JS 执行后的内容，是 Selenium 爬虫的核心产出。</li>
+      <li><strong>execute_script()</strong>：在页面上下文执行 JavaScript，用于滚动、修改 DOM、触发事件等 API 未覆盖的操作。</li>
+      <li><strong>懒加载（Lazy Load）</strong>：页面初始只渲染部分内容，滚动到附近时才加载更多，需要 execute_script 滚动触发。</li>
+      <li><strong>可见即可得</strong>：Selenium 爬虫的核心理念——浏览器能看到的数据，page_source 里都有。</li>
+    </ul>
+
+    <div class="lesson-nav">
+      <a href="./element-interaction.html">← 上一步：元素定位与节点交互</a>
+      <a href="./action-chains-waiting.html">下一步：动作链与页面等待 →</a>
+    </div>
+
+    <h2>Quiz</h2>
+    <div class="quiz" data-question="page_source 和 requests 的 .text 最核心的区别是？" data-correct="2" data-explain="page_source 拿到的是浏览器渲染后的动态源码，包含 JS 执行后的内容。">
+      <button class="opt">page_source 速度更快</button>
+      <button class="opt">page_source 只能拿到文本，.text 能拿到二进制</button>
+      <button class="opt">page_source 拿到的是渲染后的动态源码，包含 JS 执行后的内容</button>
+      <button class="opt">没有区别，两者完全等价</button>
+    </div>
+    <div class="quiz" data-question="execute_script 最典型的用法是？" data-correct="0" data-explain="execute_script 最常用于滚动页面触发懒加载，这是 API 没有直接提供的功能。">
+      <button class="opt">滚动页面触发懒加载</button>
+      <button class="opt">定位页面元素</button>
+      <button class="opt">关闭浏览器</button>
+      <button class="opt">发送 HTTP 请求</button>
+    </div>
+    <div class="quiz" data-question="「可见即可得」指的是？" data-correct="3" data-explain="浏览器渲染后能看到的数据，page_source 里都有，这就是可见即可得。">
+      <button class="opt">Selenium 可以爬取所有网站的数据</button>
+      <button class="opt">page_source 能拿到服务器返回的原始 HTML</button>
+      <button class="opt">Selenium 不需要执行 JavaScript</button>
+      <button class="opt">浏览器能看到的数据，page_source 里都有</button>
+    </div>
+    <div class="quiz" data-question="滚动页面后为什么要 time.sleep()？" data-correct="1" data-explain="滚动后新数据需要时间渲染，sleep 等待加载完成，否则 page_source 里还是旧内容。">
+      <button class="opt">让浏览器休息一下，避免崩溃</button>
+      <button class="opt">等待新数据渲染完成，否则 page_source 里还是旧内容</button>
+      <button class="opt">防止被网站封 IP</button>
+      <button class="opt">sleep 是多余的，可以去掉</button>
+    </div>
+    <div class="quiz" data-question="用 execute_script 获取页面标题的正确写法是？" data-correct="0" data-explain="execute_script 中需要 return 才能返回值，return document.title 返回页面标题。">
+      <button class="opt">browser.execute_script('return document.title')</button>
+      <button class="opt">browser.execute_script('document.title')</button>
+      <button class="opt">browser.execute_script('get title')</button>
+      <button class="opt">browser.execute_script('title')</button>
+    </div>
+  </div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>詳細用法：launch 參數、視口、反檢測與節點互動 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>詳細用法：launch 參數、視口、反檢測與節點互動</h1>
+  <p class="meta">js-reverse · 08-pyppeteer · Step 3/4</p>
+
+  <h2>學習目標</h2>
+  <p>能配置 Pyppeteer 的各類運行細節：launch 參數、視口尺寸、webdriver 反檢測注入、type/click 節點互動。</p>
+
+  <h2>launch 的常用參數</h2>
+  <p><code>launch()</code> 是整個爬蟲的起點，它有幾個最常用的參數：</p>
+  <pre><code>browser = await launch(
+    ignoreHTTPSErrors=True,   # 預設 False，略過 HTTPS 憑證錯誤
+    headless=True,            # 預設 True 無頭模式，False 會顯示視窗
+    executablePath=None,      # 指定本機 Chrome/Chromium 路徑
+    devtools=False,           # True 會強制 headless=False 並打開 DevTools
+    args=['--disable-infobars']  # 額外命令列參數
+)</code></pre>
+  <ul>
+    <li><code>headless=True</code>：背景執行，不顯示瀏覽器視窗，適合爬蟲。</li>
+    <li><code>headless=False</code>：顯示視窗，方便除錯。</li>
+    <li><code>devtools=True</code>：強制開視窗並打開 DevTools，通常用於觀察頁面行為。</li>
+    <li><code>args</code>：可以傳入任何 Chromium 的命令列參數。</li>
+  </ul>
+
+  <h2>關閉自動化提示條</h2>
+  <p>你有沒有看過瀏覽器上方出現「Chrome 正受到自動測試軟體控制」的提示條？這是最基本的爬蟲特徵。關閉方法是在 <code>args</code> 裡加上 <code>--disable-infobars</code>：</p>
+  <pre><code>browser = await launch(
+    headless=True,
+    args=['--disable-infobars']
+)</code></pre>
+
+  <h2>視口設定</h2>
+  <p>有些網站會根據螢幕寬度調整版面，如果 Pyppeteer 用預設的 800x600 視口去訪問，可能會拿到異常的排版或元素位置。手動設定視口可以解決這個問題：</p>
+  <pre><code>await page.setViewport({'width': 1366, 'height': 768})</code></pre>
+  <p>這行通常放在 <code>goto()</code> 之前，確保頁面在正確的尺寸下渲染。</p>
+
+  <h2>注入 JS 反檢測</h2>
+  <p>這是 Pyppeteer 爬蟲的重點。正常瀏覽器裡，<code>window.navigator.webdriver</code> 是 <code>undefined</code> 或 <code>false</code>；但自動化工具驅動的瀏覽器，這個值會是 <code>true</code>。許多網站會據此擋爬蟲。</p>
+  <p>Pyppeteer 的解法是用 <code>page.evaluate()</code> 在頁面載入前注入一段 JS，把 <code>webdriver</code> 改回 <code>false</code>：</p>
+  <pre><code>await page.evaluate(
+    '''() => {
+        Object.defineProperties(navigator, {
+            webdriver: { get: () => false }
+        })
+    }'''
+)</code></pre>
+  <p>這一行通常放在 <code>goto()</code> 之前，效果等同於 Selenium 的 <code>stealth.min.js</code>。</p>
+
+  <h2>節點互動：type 與 click</h2>
+  <p>Pyppeteer 的節點互動和 Selenium 很像，但多了「擬人」的彈性。</p>
+  <p><strong>type</strong>：在指定選擇器輸入文字，可以設定 <code>delay</code> 模擬逐字輸入：</p>
+  <pre><code>await page.type('#kw', '周杰倫', {'delay': 100})  # 每字間隔 100ms</code></pre>
+  <p><strong>click</strong>：點擊指定選擇器：</p>
+  <pre><code>await page.click('#su')</code></pre>
+  <p><strong>querySelectorAll</strong>：取得多個元素，再逐一點擊：</p>
+  <pre><code>links = await page.querySelectorAll('.s_tab_inner > a')
+for link in links:
+    await link.click()</code></pre>
+
+  <h2>頁面等待</h2>
+  <p>動態頁面元素出現的時間不一定，Pyppeteer 提供幾種等待方式：</p>
+  <ul>
+    <li><code>await page.waitFor(2000)</code>：強制等待 2000 毫秒（2 秒）。</li>
+    <li><code>await page.waitForSelector('#btn')</code>：等待特定選擇器出現。</li>
+    <li><code>await page.waitForXPath('//h2')</code>：等待特定 XPath 出現。</li>
+  </ul>
+
+  <h2>元素定位的三種簡寫</h2>
+  <p>Pyppeteer 提供三種元素定位方法，還有對應的簡寫：</p>
+  <table>
+    <tr><th>方法</th><th>簡寫</th><th>說明</th></tr>
+    <tr><td>Page.querySelector()</td><td>Page.J()</td><td>取第一個符合的元素</td></tr>
+    <tr><td>Page.querySelectorAll()</td><td>Page.JJ()</td><td>取所有符合的元素</td></tr>
+    <tr><td>Page.xpath()</td><td>Page.Jx()</td><td>用 XPath 定位</td></tr>
+  </table>
+
+  <h2>取得元素屬性</h2>
+  <p>用 <code>Jeval()</code> 可以在定位元素後，用 JS 箭號函式取出屬性：</p>
+  <pre><code>src = await page.Jeval('#img', 'el => el.src')</code></pre>
+  <p>如果要取得元素的位置和大小，用 <code>boundingBox()</code>：</p>
+  <pre><code>box = await el.boundingBox()  # 回傳 {x, y, width, height}</code></pre>
+
+  <h2>隨堂測驗</h2>
+  <div class="quiz" data-question="關閉「Chrome 正受到自動測試軟體控制」提示條，應在 args 中傳入哪個參數？" data-correct="1" data-explain="--disable-infobars 可以關閉自動化提示條。">
+    <button class="opt">--disable-notifications</button>
+    <button class="opt">--disable-infobars</button>
+    <button class="opt">--no-sandbox</button>
+    <button class="opt">--disable-extensions</button>
+  </div>
+
+  <div class="quiz" data-question="若要手動設定瀏覽器視窗尺寸，應使用哪個 API？" data-correct="0" data-explain="page.setViewport() 可以設定 width 和 height，解決部分網站因視口異常而排版錯亂的問題。">
+    <button class="opt">page.setViewport()</button>
+    <button class="opt">page.resize()</button>
+    <button class="opt">page.setWindow()</button>
+    <button class="opt">page.windowSize()</button>
+  </div>
+
+  <div class="quiz" data-question="Pyppeteer 中，把 navigator.webdriver 改回 false 應使用哪個方法？" data-correct="2" data-explain="page.evaluate() 可以在頁面中執行 JS，把 webdriver 屬性改回 false 以規避檢測。">
+    <button class="opt">page.inject()</button>
+    <button class="opt">page.runJS()</button>
+    <button class="opt">page.evaluate()</button>
+    <button class="opt">page.setNavigator()</button>
+  </div>
+
+  <div class="quiz" data-question="page.type() 的 delay 參數有什麼作用？" data-correct="3" data-explain="delay 可以設定每字輸入的間隔毫秒數，模擬人的輸入節奏，避免被偵測為機器人。">
+    <button class="opt">延遲頁面載入時間</button>
+    <button class="opt">設定請求超時時間</button>
+    <button class="opt">控制瀏覽器啟動速度</button>
+    <button class="opt">模擬逐字輸入的間隔</button>
+  </div>
+
+  <div class="quiz" data-question="Page.querySelectorAll() 的簡寫是什麼？" data-correct="1" data-explain="Pyppeteer 提供 JJ 作為 querySelectorAll 的簡寫，J 是 querySelector，Jx 是 xpath。">
+    <button class="opt">Page.J()</button>
+    <button class="opt">Page.JJ()</button>
+    <button class="opt">Page.Jx()</button>
+    <button class="opt">Page.JA()</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./core-api.html">← 上一步：快速上手</a>
+    <a href="./slide-verify.html">下一步：滑動驗證 →</a>
+  </div>
+
+  <div class="footer">js-reverse · 08-pyppeteer · 共 4 步</div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>aiohttp 与多任务异步爬虫实战 — asyncio 与异步爬虫</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>aiohttp 与多任务异步爬虫实战</h1>
+<p class="meta">js-reverse · 06-asyncio · Step 4/4</p>
+
+<h2>学习 goal</h2>
+<p>能独立写出基于 aiohttp + asyncio 的多任务异步爬虫，理解为什么 requests/time 必须换成 aiohttp/asyncio.sleep。</p>
+
+<h2>为什么 requests 不行</h2>
+<p>requests 是同步库。它的 <code>get()</code> 方法会阻塞当前线程，直到服务器返回响应。如果在 asyncio 的特殊函数里用 requests，整个事件循环都会被卡住——其他任务全部暂停，异步就变成了同步。</p>
+<p>解决办法：用 <strong>aiohttp</strong>——一个支持异步的网络请求库，API 设计和 requests 很像，但所有方法都是 <code>async</code> 的，可以被 <code>await</code> 挂起。</p>
+
+<h2>aiohttp 快速上手</h2>
+<p>aiohttp 的核心是 <code>ClientSession</code>，用法和 requests 相似：</p>
+<pre><code>import aiohttp
+import asyncio
+
+async def fetch(url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            return await response.text()
+
+# response.text() → 字符串
+# response.read() → 二进制
+# response.json() → JSON 自动反序列化</code></pre>
+
+<h2>代理参数：和 requests 不同</h2>
+<p>aiohttp 的代理参数写法与 requests 不同。requests 用 <code>proxies={'http': 'http://ip:port'}</code>，aiohttp 直接用 <code>proxy='http://ip:port'</code>：</p>
+<pre><code>async with session.get(url, proxy='http://127.0.0.1:7890') as response:
+    return await response.text()</code></pre>
+
+<h2>多任务异步爬虫完整实战</h2>
+<p>来看一个完整的例子：用 Flask 搭建带 2 秒延迟的本地服务器模拟慢速网站，然后用 aiohttp 并发请求。三个 2 秒的请求，异步后总耗时约 2 秒。</p>
+
+<h3>服务端（模拟慢速网站）</h3>
+<pre><code>from flask import Flask
+import time
+
+app = Flask(__name__)
+
+@app.route('/page/<int:n>')
+def page(n):
+    time.sleep(2)  # 模拟慢速响应
+    return f'&lt;h1&gt;Page {n}&lt;/h1&gt;'
+
+app.run()</code></pre>
+
+<h3>爬虫端（aiohttp + asyncio）</h3>
+<pre><code>import aiohttp
+import asyncio
+from lxml import etree
+
+async def fetch(session, url):
+    async with session.get(url) as response:
+        return await response.text()
+
+def parse(html):
+    # 回调函数：解析数据
+    tree = etree.HTML(html)
+    title = tree.xpath('//h1/text()')[0]
+    print(title)
+
+async def main():
+    urls = [f'http://127.0.0.1:5000/page/{i}' for i in range(1, 4)]
+    async with aiohttp.ClientSession() as session:
+        tasks = [asyncio.ensure_future(fetch(session, url)) for url in urls]
+        # 绑定回调：数据解析放在回调里完成
+        for task in tasks:
+            task.add_done_callback(lambda t: parse(t.result()))
+        await asyncio.wait(tasks)
+
+loop = asyncio.get_event_loop()
+loop.run_until_complete(main())</code></pre>
+
+<h2>关键替换清单</h2>
+<table>
+  <tr><th>同步写法（会卡住）</th><th>异步写法（正确）</th></tr>
+  <tr><td><code>requests.get(url)</code></td><td><code>session.get(url)</code>（aiohttp）</td></tr>
+  <tr><td><code>time.sleep(2)</code></td><td><code>await asyncio.sleep(2)</code></td></tr>
+  <tr><td><code>response.text</code></td><td><code>await response.text()</code></td></tr>
+  <tr><td><code>proxies={'http': '...'}</code></td><td><code>proxy='http://...'</code></td></tr>
+</table>
+
+<h2>为什么总耗时约 2 秒</h2>
+<p>三个请求是同时发出的——<code>asyncio.wait(tasks)</code> 让它们并发执行。每个请求等 2 秒，但它们是同时等的，所以总耗时约 2 秒，而不是 6 秒。这就是异步的收益。</p>
+
+<h2>数据解析放在回调里</h2>
+<p>实战中，数据解析（lxml + xpath）通常放在任务回调里完成。这样任务一旦完成，立刻触发解析，不需要等所有任务都完成再统一处理。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="为什么在 asyncio 的特殊函数里不能用 requests？" data-correct="2" data-explain="requests 是同步库，会阻塞整个事件循环，导致异步效果中断。">
+  <button class="opt">requests 不支持 HTTP 协议</button>
+  <button class="opt">requests 不能在函数内部调用</button>
+  <button class="opt">requests 会阻塞事件循环，中断异步效果</button>
+  <button class="opt">requests 和 asyncio 语法冲突</button>
+</div>
+
+<div class="quiz" data-question="aiohttp 中，response.text() 的正确调用方式是？" data-correct="1" data-explain="aiohttp 的 response.text() 是协程方法，必须用 await 调用。">
+  <button class="opt">response.text()</button>
+  <button class="opt">await response.text()</button>
+  <button class="opt">await response.text</button>
+  <button class="opt">response.text(await)</button>
+</div>
+
+<div class="quiz" data-question="aiohttp 的代理参数写法是？" data-correct="3" data-explain="aiohttp 用 proxy='http://ip:port' 直接传代理，和 requests 的 proxies 字典不同。">
+  <button class="opt">proxies={'http': 'http://ip:port'}</button>
+  <button class="opt">proxy={'http': 'http://ip:port'}</button>
+  <button class="opt">proxy_url='http://ip:port'</button>
+  <button class="opt">proxy='http://ip:port'</button>
+</div>
+
+<div class="quiz" data-question="三个 2 秒的请求，异步并发执行后总耗时约多少？" data-correct="1" data-explain="三个请求同时发出、同时等待，总耗时约等于单个请求的耗时——2 秒。">
+  <button class="opt">6 秒</button>
+  <button class="opt">2 秒</button>
+  <button class="opt">4 秒</button>
+  <button class="opt">0 秒</button>
+</div>
+
+<div class="quiz" data-question="实战中，数据解析（lxml + xpath）通常放在哪里完成？" data-correct="0" data-explain="数据解析通常放在任务回调里完成，任务一完成就触发解析。">
+  <button class="opt">任务回调函数里</button>
+  <button class="opt">所有任务完成之后统一处理</button>
+  <button class="opt">主函数的最后一步</button>
+  <button class="opt">单独的线程里</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./asyncio-core.html">← 上一步：asyncio 四个核心概念与 wait/await</a>
+  <span></span>
+</div>
+
+<div class="footer">js-reverse · 06-asyncio · aiohttp 与多任务异步爬虫实战</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

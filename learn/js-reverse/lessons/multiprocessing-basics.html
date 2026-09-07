@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>multiprocessing 进程实战 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>multiprocessing 进程实战</h1>
+  <p class="meta">js-reverse · 节点 05 · 步骤 3/5</p>
+
+  <h2>学习目标</h2>
+  <p>掌握 multiprocessing.Process 的完整用法：创建、启动、传参、join 等待、进程数据隔离与守护进程，能写出异步爬虫骨架。</p>
+
+  <h2>Process 的基本用法</h2>
+  <p>运行的 Python 文件是<strong>主进程</strong>，基于 <code>Process</code> 创建的是<strong>子进程</strong>。两进程即可实现异步。</p>
+
+  <pre><code>from multiprocessing import Process
+
+def worker(name):
+    print(f"子进程 {name} 执行中")
+
+if __name__ == '__main__':
+    p = Process(target=worker, args=('A',))
+    p.start()      # 启动子进程
+    p.join()       # 等待子进程结束
+    print("主进程结束")</code></pre>
+
+  <h2>用进程实现异步</h2>
+  <p>假设三个任务各耗时 2 秒，同步串行总耗时约 6 秒。改成每任务一个子进程，三个进程并行执行，总耗时约 2 秒。</p>
+
+  <pre><code>import time
+from multiprocessing import Process
+
+def task(name):
+    print(f"{name} 开始")
+    time.sleep(2)
+    print(f"{name} 结束")
+
+if __name__ == '__main__':
+    processes = []
+    for i in range(3):
+        p = Process(target=task, args=(f"任务{i}",))
+        processes.append(p)
+        p.start()
+
+    # 正确写法：先 start 所有子进程，再逐个 join
+    for p in processes:
+        p.join()
+
+    print("全部完成")</code></pre>
+
+  <blockquote class="bad-code"><strong>错误写法</strong>：在循环内边 <code>start()</code> 边 <code>join()</code> —— 这样会变成串行，每个进程必须等前一个完成才启动下一个，失去了异步的意义。</blockquote>
+
+  <h2>进程数据隔离</h2>
+  <p>进程间数据完全隔离，不共享。子进程中的全局变量是主进程变量的拷贝，修改不影响主进程。</p>
+
+  <pre><code>from multiprocessing import Process
+
+n = 100
+
+def modify():
+    global n
+    n = 0
+
+if __name__ == '__main__':
+    p = Process(target=modify)
+    p.start()
+    p.join()
+    print(n)  # 输出 100，不是 0</code></pre>
+
+  <p>如果需要跨进程传值，需使用进程通信机制（管道、信号量等），但爬虫场景很少用到，了解即可。</p>
+
+  <h2>守护进程</h2>
+  <p>守护进程（daemon）随主进程代码结束而终止，且不能再开子进程。</p>
+
+  <pre><code>p = Process(target=task)
+p.daemon = True   # 必须在 start() 之前设置
+p.start()
+# 主进程代码结束，p 也随之终止</code></pre>
+
+  <blockquote>注意：守护进程内如果尝试再开启子进程，会抛出 AssertionError。</blockquote>
+
+  <h2>随堂测验</h2>
+
+  <div class="quiz" data-question="创建子进程时，target 参数的作用是？" data-correct="0" data-explain="target 指定子进程要执行的函数，args 是传给该函数的参数。">
+    <button class="opt">指定子进程要执行的函数</button>
+    <button class="opt">指定子进程的优先级</button>
+    <button class="opt">指定子进程的 ID</button>
+    <button class="opt">指定子进程的超时时间</button>
+  </div>
+
+  <div class="quiz" data-question="为什么应该先 start 所有子进程再逐个 join？" data-correct="2" data-explain="边 start 边 join 会变成串行，每个进程必须等前一个完成才启动，失去异步意义。">
+    <button class="opt">join 会阻塞主进程</button>
+    <button class="opt">start 必须放在 join 后面</button>
+    <button class="opt">避免变成串行执行</button>
+    <button class="opt">防止内存泄漏</button>
+  </div>
+
+  <div class="quiz" data-question="子进程修改全局变量后，主进程的变量会怎样？" data-correct="1" data-explain="进程间数据完全隔离，子进程修改的是主进程变量的拷贝，不影响主进程。">
+    <button class="opt">同步改变</button>
+    <button class="opt">保持不变</button>
+    <button class="opt">变成随机值</button>
+    <button class="opt">程序崩溃</button>
+  </div>
+
+  <div class="quiz" data-question="守护进程（daemon）的特点是什么？" data-correct="3" data-explain="守护进程随主进程代码结束而终止，且不能再开子进程。">
+    <button class="opt">优先级最高</button>
+    <button class="opt">不能被子进程终止</button>
+    <button class="opt">必须最后执行</button>
+    <button class="opt">主进程结束则随之终止</button>
+  </div>
+
+  <div class="quiz" data-question="守护进程的 daemon=True 应该在哪里设置？" data-correct="0" data-explain="daemon 必须在 start() 之前设置，否则会抛出异常。">
+    <button class="opt">start() 之前</button>
+    <button class="opt">start() 之后</button>
+    <button class="opt">join() 之前</button>
+    <button class="opt">任意位置都可以</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./scheduling-and-sync.html">← 上一步：进程调度、状态与同步异步</a>
+    <a href="./threading-and-pool.html">下一步：threading 线程与线程池 →</a>
+  </div>
+
+  <div class="footer">
+    <p>有疑问？随时向你的 agent 提问。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

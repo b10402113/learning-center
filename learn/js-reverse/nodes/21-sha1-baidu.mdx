@@ -4,28 +4,62 @@ title: 实战：SHA1 与百度 sign
 subject: js-reverse
 tier: 5
 order: 21
-status: draft
+status: content-written
 goal: 丁香网 SHA1 sign、百度翻译 gtk 位元运算 sign
 sources:
   - "[[sources/js-reverse/js逆向课件/Day25/01 丁香网.py]]"
   - "[[sources/js-reverse/js逆向课件/Day26/03 百度翻译.py]]"
-steps: []
-prerequisites: []
+steps:
+  - id: sha1-features
+    order: 1
+  - id: dxy-params
+    order: 2
+    deps:
+      - sha1-features
+  - id: dxy-execjs
+    order: 3
+    deps:
+      - dxy-params
+  - id: baidu-sign
+    order: 4
+    deps:
+      - sha1-features
+  - id: baidu-request
+    order: 5
+    deps:
+      - baidu-sign
+prerequisites:
+  - learn/js-reverse/nodes/18-sign-python
+  - learn/js-reverse/nodes/20-des-aes-cases
 created: 2026-09-05
-updated: 2026-09-05
+updated: 2026-09-07
 ---
 
 # 实战：SHA1 与百度 sign
 
 ## Learning goal
+
 丁香网 SHA1 sign、百度翻译 gtk 位元运算 sign
 
 ## Steps
-{/* /nodes fills this step-DAG */}
+
+1. [[learn/js-reverse/nodes/21-sha1-baidu/sha1-features|SHA1 算法特征识别]] — 从手写加密函数里认出 SHA1 的五个魔数与 80 轮循环
+2. [[learn/js-reverse/nodes/21-sha1-baidu/dxy-params|丁香网参数构造与字典序拼接]] — 构造 noncestr、timestamp 与字典序明文串（after step 1）
+3. [[learn/js-reverse/nodes/21-sha1-baidu/dxy-execjs|execjs 调用 SHA1 与 GET 请求闭环]] — 把扣下的 JS 挂到 Python 跑通丁香网请求（after step 2）
+4. [[learn/js-reverse/nodes/21-sha1-baidu/baidu-sign|百度翻译 get_sign 算法与 gtk 补环境]] — 看懂 gtk 拆段、魔数字符串位运算与 window.gtk 补法（after step 1）
+5. [[learn/js-reverse/nodes/21-sha1-baidu/baidu-request|百度翻译 POST 表单请求闭环]] — 拼出 query/sign/token/ts 表单跑通翻译接口（after step 4）
 
 ## Lesson
-{/* /nodes writes the main lesson here */}
+
+这一节是两个实战案例的组合：丁香网的 SHA1 sign 和百度翻译的 sign。它们分别代表了「扣下标准摘要算法直接调用」和「扣下混淆过的位运算逻辑再补环境」这两种最常见的逆向形态。
+
+丁香网的案例几乎是最干净的一类——加密函数 `u(e)` 是个手写的 SHA1，输入一段拼接好的明文串，输出 40 位十六进制摘要。识别它的关键不是看懂每一行位运算，而是认出五个初始魔数（1732584193、-271733879、-1732584194、271733878、-1009589776）和 80 轮循环。认出来之后，你甚至不需要理解 SHA1 的每一步在做什么，直接把整段 JS 扣下来、用 execjs 挂到 Python 里当黑盒用就行。真正要花心思的是明文串的拼接规则：参数必须按字典序排列，noncestr 要补零到 8 位，serverTimestamp 永远比 timestamp 小 2。这些细节藏在浏览器发出的请求里，靠对比请求参数和 JS 入口才能反推出来。
+
+百度翻译是另一种画风。它的 `get_sign` 不是标准算法，而是一段被混淆过的位运算逻辑，驱动它的是两个看起来像乱码的字符串 `+-a^+6` 和 `+-3^+b+-f`。真正让新手卡住的不是位运算本身，而是 `gtk`。这个值不在函数参数里，而是挂在 `window.gtk` 上。在浏览器里天然存在，但在 Node.js 里什么都不是——你不补一行 `window = global; window.gtk = '320305.131321201'`，函数直接报错。这就是「补环境」最直觉的含义：让扣下来的代码在 Node 里还能找到它依赖的浏览器属性。
+
+两个案例合起来，你会建立一个认知：sign 不一定藏在表单参数里，也可能藏在请求头里；sign 的输入不一定是单词原文，也可能被截成前 10、中 10、后 10；加密不一定是 AES/DES，也可能只是 SHA1 或者一段位运算。下一次看到一个陌生接口，你的第一反应不再是「这是什么加密」，而是「这个 sign 的值从哪来、依赖什么环境、用什么逻辑算出来的」。
 
 ## Sources
+
 - [[sources/js-reverse/js逆向课件/Day25/01 丁香网.py]]
 - [[sources/js-reverse/js逆向课件/Day26/03 百度翻译.py]]

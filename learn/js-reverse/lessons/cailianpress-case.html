@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>财联社案例：get_sign() 与 W2Yj 签名模块定位 — 实战：webpack 模组化分析</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>财联社案例：get_sign() 与 W2Yj 签名模块定位</h1>
+<p class="meta">学习目标：跑通「扣 loader + 三 mod → Node 里出 sign」的最小工作流，掌握先读文件头判定结构、再按模块 ID 精确定位的省力读法。</p>
+
+<h2>财联社签名的工作流</h2>
+<p>财联社网站的请求带有一个签名字段，由前端 JS 生成。这个签名不是简单的 MD5，而是由一个 webpack 模块 <code>W2Yj</code> 计算得出。整个调用链是：</p>
+<pre><code>get_sign()
+  → window.loader("W2Yj")(data)
+    → 返回签名结果</code></pre>
+<p>其中 <code>data</code> 是固定参数：</p>
+<pre><code>{"os": "web", "sv": "7.7.5", "app": "CailianpressWeb"}</code></pre>
+<p>站点用这组固定参数算 sign，说明签名与时间戳无关，只需要模块 <code>W2Yj</code> 被正确调用即可。</p>
+
+<h2>三个 mod 的分工</h2>
+<p>财联社的 loader 顶部 require 了三个 mod 文件，它们各司其职：</p>
+<table>
+  <tr><th>mod 文件</th><th>chunk ID</th><th>内容</th><th>需要细读吗</th></tr>
+  <tr><td>mod1</td><td>[4]</td><td>React/Redux 运行时 + W2Yj 签名模块</td><td>✅ 找 W2Yj</td></tr>
+  <tr><td>mod2</td><td>[0]</td><td>core-js polyfill（Object.keys、Array 迭代器）</td><td>❌ 必须加载，但不用读</td></tr>
+  <tr><td>mod3</td><td>[3]</td><td>Promise、setImmediate、querystring</td><td>❌ 必须加载，但不用读</td></tr>
+</table>
+<p>为什么三个都要 require？因为 webpack 的依赖是闭环的——mod1 的 <code>W2Yj</code> 可能间接依赖 polyfill，polyfill 又依赖 Promise。少一个都会在调用时报"X is not defined"。</p>
+
+<h2>先读 300 行判定结构</h2>
+<p>打开 mod1（4260 行），不要从头读。先看头 100-300 行，你会看到：</p>
+<pre><code>window = global;
+(window.webpackJsonp = window.webpackJsonp || []).push([[4], {
+  "q1tI": function(e, n, t) { /* React 运行时 */ },
+  "p9MR": function(e, n, t) { /* core-js 入口 */ },
+  // ...几百个无关模块...
+  "W2Yj": function(e, n, t) { /* 我们要的签名模块 */ }
+}]);</code></pre>
+<p>看到 <code>"q1tI"</code>（React 的 webpack 模块 ID）就能判断：<strong>这是 React 技术栈的 chunk</strong>。看到头部 <code>window = global</code>，说明这个 mod 已经自己补了浏览器环境。</p>
+
+<h2>按模块 ID 精确定位</h2>
+<p>判定结构后，用编辑器搜索 <code>"W2Yj"</code>，直接跳到签名模块的源代码。<code>W2Yj</code> 模块通常只有几十到几百行，内部是字符串拼接 + 摘要算法的组合。</p>
+<p>定位到模块后，验证它确实被 <code>get_sign()</code> 调用：在 loader 文件里搜 <code>get_sign</code>，你会看到类似这样的代码：</p>
+<pre><code>function get_sign() {
+  var data = {"os":"web","sv":"7.7.5","app":"CailianpressWeb"};
+  var sign = window.loader("W2Yj")(data);
+  console.log(sign);
+}</code></pre>
+<p>这就是<strong>本地复现的验收点</strong>：你在 Node 里跑完三个 mod 后，调 <code>get_sign()</code>，如果能打印出跟真实请求一样的签名格式，说明环境搭对了。</p>
+
+<h2>为什么调度函数带 try/finally</h2>
+<p>财联社的 loader 调度函数 <code>u(r)</code> 里有一处特别处理：</p>
+<pre><code>try {
+  e[r].call(o.exports, o, o.exports, n);
+} finally {
+  o.l = !1;
+  delete n[r];  // 注意：这里是清缓存，不是删模块
+}</code></pre>
+<p>这里的 <code>delete n[r]</code> 是在模块执行<strong>抛错</strong>时清缓存，防止"执行失败的脏 exports"留在调度表里污染后续调用。这是 webpack 错误恢复的标准做法，不影响正常路径。</p>
+
+<h2>本地复现的完整代码</h2>
+<pre><code>// 1. 补环境
+global.window = global;
+
+// 2. 按顺序加载
+require("./05_loader.js");   // 财联社 loader
+require("./06_mod1.js");     // chunk 4，含 W2Yj
+require("./07_mod2.js");     // chunk 0，core-js
+require("./08_mod3.js");     // chunk 3，Promise
+
+// 3. 调用验收
+get_sign();</code></pre>
+<p>注意这里不需要手动调 <code>window.loader("W2Yj")</code>，因为 loader 末尾自带的 <code>get_sign()</code> 已经帮你调了。<strong>真实站点的 loader 文件末尾往往有类似的测试调用，这是逆向者最好的验收信号。</strong></p>
+
+<h2>多 chunk 依赖闭环的处理</h2>
+<p>财联社这个案例有个教学重点：<strong>三个 mod 都要 require，但只有 mod1 需要细读</strong>。mod2 和 mod3 是 polyfill chunk，没有业务逻辑，但它们被 <code>W2Yj</code> 间接依赖。</p>
+<p>判断哪些 mod 需要细读的方法：</p>
+<ul>
+  <li><strong>看 loader 顶部的 require 顺序</strong>——它列出了所有直接依赖的 chunk。</li>
+  <li><strong>看 loader 的 chunk 异步加载表</strong>——<code>f.e</code> 里列出的 chunk 不一定全要 require，只有直接入口的才需要。</li>
+  <li><strong>看报错信息</strong>——运行时报 "X is not a function"，就说明缺了某个依赖 chunk。</li>
+</ul>
+
+<h2>随堂测验</h2>
+
+<div class="quiz" data-question="财联社签名模块的调用链是什么？" data-correct="2" data-explain="get_sign() 调 window.loader("W2Yj")(data)，传固定参数，返回签名。">
+  <button class="opt">window.loader("W2Yj") → get_sign()</button>
+  <button class="opt">get_sign() → window.W2Yj(data)</button>
+  <button class="opt">get_sign() → window.loader("W2Yj")(data)</button>
+  <button class="opt">window.W2Yj → get_sign()</button>
+</div>
+
+<div class="quiz" data-question="财联社本地复现需要 require 几个 mod 文件？" data-correct="1" data-explain="三个 mod 构成依赖闭环：mod1（含 W2Yj）、mod2（core-js）、mod3（Promise），少一个都会报错。">
+  <button class="opt">1 个（只含 W2Yj 的 mod1）</button>
+  <button class="opt">3 个（mod1 + mod2 + mod3）</button>
+  <button class="opt">2 个（mod1 + mod2）</button>
+  <button class="opt">4 个（含 loader）</button>
+</div>
+
+<div class="quiz" data-question="mod2（chunk 0）几乎全是 polyfill，为什么还要 require？" data-correct="0" data-explain="W2Yj 间接依赖 polyfill，少一个都会在调用时报 not defined。polyfill chunk 无业务逻辑但不可缺。">
+  <button class="opt">W2Yj 间接依赖它，缺了会报错</button>
+  <button class="opt">它含加密算法</button>
+  <button class="opt">它负责生成 sign</button>
+  <button class="opt">它是 loader 本体</button>
+</div>
+
+<div class="quiz" data-question="loader 文件末尾的 get_sign() 函数有什么作用？" data-correct="3" data-explain="loader 末尾的测试调用是逆向者的验收信号：跑通后 Node 输出真实签名格式，说明环境搭对了。">
+  <button class="opt">迷惑逆向者的假函数</button>
+  <button class="opt">调试用的断点</button>
+  <button class="opt">多余代码，可删除</button>
+  <button class="opt">本地复现的验收信号</button>
+</div>
+
+<div class="quiz" data-question="打开一个 4000 行的 mod 文件，第一步应该做什么？" data-correct="1" data-explain="先读头 100-300 行判定结构（React? core-js? 业务 chunk?），再按模块 ID 搜索定位，避免被行数淹没。">
+  <button class="opt">从第一行开始逐行读</button>
+  <button class="opt">先读头 300 行判定结构，再按模块 ID 搜索</button>
+  <button class="opt">直接调 window.loader()</button>
+  <button class="opt">只看文件末尾 50 行</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./loader-mod-registration.html">← 上一步：loader + mod 分离</a>
+  <a href="./wo-mail-case.html">下一步：沃邮箱案例 →</a>
+</div>
+
+<footer class="footer">
+  <p>有任何问题，随时问你的 agent 老师。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

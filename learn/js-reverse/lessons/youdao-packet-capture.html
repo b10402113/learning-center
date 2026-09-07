@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>有道翻译抓包实战 — DevTools 断点与逆向技巧</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>有道翻译抓包实战</h1>
+<p class="meta">js-reverse · 步骤 4/4 · 用 requests 复刻请求，亲眼看到动态参数失效</p>
+
+<p>前三步讲的是「找到加密参数在哪」。这一步要你做一件更具体的事：把抓到的请求原样用 Python requests 重发一次，亲眼看到哪些参数是固定不变的、哪些是会过期的。这是从「能看懂抓包」到「能开始逆向」的临界点。</p>
+
+<h2>有道翻译的接口长什么样</h2>
+
+<p>有道翻译的网页版在翻译时，会向 <code>https://dict.youdao.com/webtranslate</code> 发一个 POST 请求。用浏览器 Network 面板可以看到，请求体里有一大段 form 数据：</p>
+
+<pre><code>i: apple
+from: auto
+to:
+domain: 0
+dictResult: true
+keyid: webfanyi
+sign: 1be3315fc3cd8097a033646862b6e5db
+client: fanyideskweb
+product: webfanyi
+appVersion: 1.0.0
+vendor: web
+pointParam: client,mysticTime,product
+mysticTime: 1704288976618
+keyfrom: fanyi.web
+mid: 1
+screen: 1
+model: 1
+network: wifi
+abtest: 0
+yduuid: abcdefg</code></pre>
+
+<p>初看之下，大部分都是固定值：<code>client</code>、<code>product</code>、<code>appVersion</code>、<code>vendor</code> 这些字段每次请求都一样。但有两个字段很可疑：<code>sign</code> 和 <code>mysticTime</code>。它们每次请求都会变。</p>
+
+<h2>用 Python 复刻这个请求</h2>
+
+<p>把浏览器里看到的 cookies、headers、data 原样搬到 Python 里：</p>
+
+<pre><code>import requests
+
+cookies = {
+    'OUTFOX_SEARCH_USER_ID_NCOO': '1837136861.99783',
+    'OUTFOX_SEARCH_USER_ID': '2039883963@103.156.184.202',
+    'UM_distinctid': '18acc0c423c8a-067b7d9f92c33d-18525634-1d73c0-18acc0c423d1300',
+    'P_INFO': '13121758648|1702993425|1|youdao_zhiyun2018|00&99|null&null&null#bej&null#10#0|&0||13121758648',
+}
+
+headers = {
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'zh-CN,zh;q=0.9',
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'Origin': 'https://fanyi.youdao.com',
+    'Referer': 'https://fanyi.youdao.com/',
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+}
+
+data = {
+    'i': 'apple',
+    'from': 'auto',
+    'to': '',
+    'domain': '0',
+    'dictResult': 'true',
+    'keyid': 'webfanyi',
+    'sign': '1be3315fc3cd8097a033646862b6e5db',
+    'client': 'fanyideskweb',
+    'product': 'webfanyi',
+    'appVersion': '1.0.0',
+    'vendor': 'web',
+    'pointParam': 'client,mysticTime,product',
+    'mysticTime': '1704288976618',
+    'keyfrom': 'fanyi.web',
+    'mid': '1',
+    'screen': '1',
+    'model': '1',
+    'network': 'wifi',
+    'abtest': '0',
+    'yduuid': 'abcdefg',
+}
+
+response = requests.post(
+    'https://dict.youdao.com/webtranslate',
+    cookies=cookies,
+    headers=headers,
+    data=data
+)
+
+print(response.text)</code></pre>
+
+<p>第一次运行，大概率能成功返回翻译结果。这说明我们抓到的参数是完整的、有效的。</p>
+
+<h2>关键实验：硬编码值第二次请求会失败</h2>
+
+<p>不要改任何参数，直接再跑一次脚本。你会发现：第二次请求大概率返回错误码，或者返回空结果。</p>
+
+<p>原因就出在 <code>sign</code> 和 <code>mysticTime</code> 这两个字段。它们不是固定的，而是每次请求时由前端 JavaScript 实时计算出来的。<code>mysticTime</code> 是一个时间戳（毫秒级），<code>sign</code> 是基于这个时间戳和待翻译文本算出来的哈希值。</p>
+
+<p>服务器收到请求后，会用同样的算法验算一次 <code>sign</code>。如果客户端传来的 <code>sign</code> 和服务端算出来的不一致，服务器就认为这个请求是伪造的，直接拒绝。</p>
+
+<h2>这一实验对逆向意味着什么</h2>
+
+<p>它意味着：你不可能靠「抓一次包、硬编码所有参数」来长期爬取有道翻译。每一次请求之前，都必须重新算出 <code>sign</code> 和 <code>mysticTime</code> 的正确值。而计算这两个值的逻辑，藏在某个 JavaScript 文件里。</p>
+
+<p>下一步（下一节的内容）就是去找到这段计算 <code>sign</code> 的 JavaScript 代码，把它翻译成 Python 或者用 execjs 执行。现在你只需要建立这个直觉：动态参数是服务器设的门槛，逆向就是翻过这道门槛的过程。</p>
+
+<h2>抓包到复刻的工作清单</h2>
+
+<p>回顾一下这一套流程，以后遇到任何需要登录的网站，都可以按这个清单走：</p>
+
+<ol>
+  <li>打开浏览器 DevTools，切到 Network 面板</li>
+  <li>在页面上执行一次目标操作（比如翻译一个词）</li>
+  <li>在 Network 列表里找到对应的请求，查看 Headers 和 Payload</li>
+  <li>把 cookies、headers、form data 原样复制到 Python requests 代码里</li>
+  <li>运行脚本，验证是否能拿到正确的响应</li>
+  <li>不修改任何参数再跑一次，观察是否失效</li>
+  <li>如果失效，定位是哪些参数变化了——那就是下一步要逆向的目标</li>
+</ol>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="有道翻译的 POST 请求发送到哪里？" data-correct="1" data-explain="有道翻译网页版向 https://dict.youdao.com/webtranslate 发送 POST 请求来获取翻译结果。">
+  <button class="opt">https://fanyi.youdao.com/</button>
+  <button class="opt">https://dict.youdao.com/webtranslate</button>
+  <button class="opt">https://dict.youdao.com/sign</button>
+  <button class="opt">https://fanyi.youdao.com/api</button>
+</div>
+
+<div class="quiz" data-question="为什么用 Python 复刻有道翻译请求时，第二次运行通常会失败？" data-correct="0" data-explain="因为 sign 和 mysticTime 是动态计算的参数，第二次请求时时间戳变了，但 sign 还是旧的，服务器验算失败。">
+  <button class="opt">因为 sign 和 mysticTime 会过期，需要实时计算</button>
+  <button class="opt">因为 cookies 在第二次请求时自动过期了</button>
+  <button class="opt">因为服务器限制了 Python requests 的访问</button>
+  <button class="opt">因为 headers 在第二次请求时被浏览器篡改</button>
+</div>
+
+<div class="quiz" data-question="sign 字段最可能是什么？" data-correct="2" data-explain="sign 的长度是 32 位十六进制，符合 MD5 哈希的特征，通常是服务器用来验证请求合法性的签名。">
+  <button class="opt">一个随机生成的会话 ID</button>
+  <button class="opt">一个 Base64 编码的时间戳</button>
+  <button class="opt">一个基于时间戳和文本计算出来的哈希值</button>
+  <button class="opt">一个固定的客户端标识符</button>
+</div>
+
+<div class="quiz" data-question="mysticiTime 字段最可能的作用是什么？" data-correct="3" data-explain="mysticTime 的值是毫秒级时间戳，每次请求都会变化，是动态参数的一部分。">
+  <button class="opt">记录用户的登录时间</button>
+  <button class="opt">表示翻译的耗时</button>
+  <button class="opt">标识有道翻译的版本号</button>
+  <button class="opt">作为计算 sign 的输入之一，每次请求实时生成</button>
+</div>
+
+  <div class="quiz" data-question="在复刻抓包请求之前，为什么建议先跑一次验证能成功？" data-correct="1" data-explain="先验证能成功，说明抓到的参数是完整的，后续失效才能确定是动态参数导致的。">
+  <button class="opt">为了确认 Python 环境安装正确</button>
+  <button class="opt">为了确认抓到的 cookies、headers、form data 是完整的</button>
+  <button class="opt">为了测试服务器的响应速度</button>
+  <button class="opt">为了确认翻译结果是中文</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./keyword-search.html">← 上一步：关键字搜寻</a>
+  <span></span>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

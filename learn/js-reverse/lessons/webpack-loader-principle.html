@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>webpack 加载器原理：自执行结构与调度函数 — 实战：webpack 模组化分析</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>webpack 加载器原理：自执行结构与调度函数</h1>
+<p class="meta">学习目标：亲手跑通 80 行教学 demo，理解 webpack 加载器的自执行结构、缓存对象、调度函数，以及数组下标与哈希 key 两种调度方式。</p>
+
+<h2>为什么 webpack 产物看起来像天书</h2>
+<p>你打开一个大型站点的 JS 文件，发现里面全是 <code>MuMZ</code>、<code>W2Yj</code>、<code>zvER</code> 这种短标记，函数调用全是 <code>n("W2Yj")(data)</code> 这种形式——原始变量名、函数名全被混淆了。这是 webpack 打包后的典型产物。</p>
+<p>但无论怎么混淆，webpack 运行时必须保留一个核心机制：<strong>加载器（loader）+ 模块字典（mod）</strong> 的分离结构。加载器是薄壳，负责调度；mod 是厚肉，装实际业务逻辑。理解这个结构，你就能在任何 webpack 站点里还原出"哪个函数在哪"的地图。</p>
+
+<h2>从 80 行 demo 还原加载器骨架</h2>
+<p>教学 demo 用 80 行代码还原了 webpack 加载器的最小骨架，整体是一个立即执行函数（IIFE）：</p>
+<pre><code>!function(模块容器) {
+  // 加载器实现
+}(功能模块)</code></pre>
+<p>外层的 <code>!</code> 是把函数转为函数表达式的写法之一，效果跟 <code>(function(){...})()</code> 一样——定义完立刻执行，把"功能模块"作为参数塞进去。</p>
+
+<h2>加载器内部的三件套</h2>
+<p>加载器内部维护三个关键东西：</p>
+<table>
+  <tr><th>组件</th><th>角色</th><th>长什么样</th></tr>
+  <tr><td><code>t</code></td><td>缓存对象</td><td>已执行模块的 exports 按 ID 存这里</td></tr>
+  <tr><td><code>n(r)</code></td><td>调度函数</td><td>传入模块 ID <code>r</code>，返回模块的 exports</td></tr>
+  <tr><td><code>e[r]</code></td><td>模块字典</td><td>所有模块的源代码，key 是模块 ID</td></tr>
+</table>
+
+<p>调度函数 <code>n(r)</code> 的核心逻辑只有三步：</p>
+<pre><code>function n(r) {
+  // 1. 缓存命中，直接返回
+  if (t[r]) return t[r].exports;
+  // 2. 未命中，建一个模块容器 {id, loaded, exports}
+  var o = t[r] = {i: r, l: !1, exports: {}};
+  // 3. 执行模块，把 this 指向 o，参数是 (模块, 模块.exports, 调度函数)
+  e[r].call(o.exports, o, o.exports, n);
+  o.l = !0;
+  return o.exports;
+}</code></pre>
+<p>关键在第三行：<code>e[r].call(o.exports, o, o.exports, n)</code>。这行代码的意思是——把第 <code>r</code> 个模块的源代码拿出来执行，执行时的 <code>this</code> 指向模块的 <code>exports</code> 对象，同时把模块自身、exports、调度函数传进去，让模块内部可以引用它们。</p>
+
+<h2>模块如何对外导出</h2>
+<p>模块内部想要对外暴露功能，标准写法是 <code>this.exports = 值</code>（或者 <code>module.exports = 值</code>，webpack 里两种都支持）。例如：</p>
+<pre><code>// 模块 "hello" 的源代码
+function(e, module, n) {
+  module.exports = function(name) {
+    return "hello, " + name;
+  };
+}</code></pre>
+<p>当调度函数 <code>n("hello")</code> 执行完，<code>t["hello"].exports</code> 就变成了那个打招呼的函数。之后任何代码再调 <code>n("hello")</code>，直接从缓存拿，不会再执行一遍。</p>
+
+<h2>两种调度方式：数组下标 vs 哈希 key</h2>
+<p>webpack 模块字典的 key 有两种形态，对应两种调度方式：</p>
+<table>
+  <tr><th>形态</th><th>模块 ID</th><th>调用方式</th><th>典型站点</th></tr>
+  <tr><td>数组下标</td><td>数字：<code>437</code></td><td><code>window.loader(437)</code></td><td>沃邮箱（老站）</td></tr>
+  <tr><td>哈希 key</td><td>4 位混淆：<code>"W2Yj"</code></td><td><code>window.loader("W2Yj")</code></td><td>财联社、外贸电商平台</td></tr>
+</table>
+<p>数组下标版本直观，但不利于 tree-shaking；哈希 key 版本是 webpack 5+ 的主流。<strong>两种只是 key 的形状不同，调度函数本身逻辑完全一致。</strong></p>
+
+<h2>把调度器挂到 window.loader</h2>
+<p>加载器做完初始化后，会把调度函数暴露出来：</p>
+<pre><code>window.loader = n;</code></pre>
+<p>之后无论浏览器控制台还是 Node 环境，只要调 <code>window.loader("模块ID")</code>，就能拿到任意模块的 exports。这是本地复现加密函数的关键入口。</p>
+
+<h2>Node 环境怎么跑浏览器产物</h2>
+<p>教学 demo 里有一行兜底代码：</p>
+<pre><code>window = global;</code></pre>
+<p>这行是在 Node 环境里补浏览器全局对象——<code>window</code> 在浏览器里是顶级对象，Node 里没有，所以把 <code>global</code> 赋值给 <code>window</code>，让 <code>window.loader = n</code> 这行不会报错。真实站点的 mod 文件通常自己会在头部写 <code>window = global</code>，或者用 <code>(window.webpackJsonp || [])</code 这种写法兼容两种环境。</p>
+
+<h2>跑通 demo 的最小验收</h2>
+<p>跑通这两个版本后，你应该能回答这三个问题：</p>
+<ul>
+  <li>调度函数怎么避免重复执行同一个模块？（查缓存 <code>t[r]</code>）</li>
+  <li>模块内部怎么对外暴露功能？（<code>this.exports = 值</code>）</li>
+  <li><code>window.loader("模块ID")</code> 和 <code>window.loader(437)</code> 区别是什么？（key 形状不同，机制一样）</li>
+</ul>
+
+<h2>随堂测验</h2>
+
+<div class="quiz" data-question="webpack 加载器调度函数 n(r) 在返回模块 exports 之前会先做什么？" data-correct="2" data-explain="调度函数先查缓存 t[r]，命中就直接返回 exports，不重复执行模块。">
+  <button class="opt">立即执行 e[r]</button>
+  <button class="opt">删除 t[r]</button>
+  <button class="opt">先查缓存 t[r]，命中直接返回</button>
+  <button class="opt">抛出异常</button>
+</div>
+
+<div class="quiz" data-question="模块内部对外导出功能的标准写法是？" data-correct="0" data-explain="webpack 模块里 module.exports = 值 或 this.exports = 值 都可以向外暴露功能。">
+  <button class="opt">module.exports = 值</button>
+  <button class="opt">return 值</button>
+  <button class="opt">window.export = 值</button>
+  <button class="opt">global.exports = 值</button>
+</div>
+
+<div class="quiz" data-question="数组下标调度（如 loader(437)）和哈希 key 调度（如 loader('W2Yj')）的区别是？" data-correct="1" data-explain="两种只是模块 key 的形状不同，调度函数本身的缓存-执行-返回逻辑完全一致。">
+  <button class="opt">调度函数逻辑完全不同</button>
+  <button class="opt">key 形状不同，调度机制一致</button>
+  <button class="opt">数组下标不需要缓存</button>
+  <button class="opt">哈希 key 必须搭配 Promise</button>
+</div>
+
+<div class="quiz" data-question="window = global 这行代码的作用是？" data-correct="3" data-explain="Node 环境没有 window 对象，把 global 赋值给 window 是补环境，让浏览器产物能在 Node 里跑。">
+  <button class="opt">把 Node 的 global 销毁</button>
+  <button class="opt">把浏览器 window 导进 Node</button>
+  <button class="opt">声明一个新的 window 变量</button>
+  <button class="opt">用 global 填补缺失的 window 对象</button>
+</div>
+
+<div class="quiz" data-question="e[r].call(o.exports, o, o.exports, n) 中，第一个参数 o.exports 的作用是？" data-correct="2" data-explain="call 的第一个参数是 this 指向，这里把模块内部的 this 指向它的 exports 对象，这样 this.exports = 值 才能写入 exports。">
+  <button class="opt">给模块传入父级 exports</button>
+  <button class="opt">把模块 exports 清空</button>
+  <button class="opt">绑定模块内部的 this 到 exports</button>
+  <button class="opt">把 exports 转成字符串</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./loader-mod-registration.html">下一步：loader + mod 分离 →</a>
+</div>
+
+<footer class="footer">
+  <p>有任何问题，随时问你的 agent 老师。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

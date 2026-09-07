@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>请求堆叠回溯 — DevTools 断点与逆向技巧</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>请求堆叠回溯</h1>
+<p class="meta">js-reverse · 步骤 1/4 · 从请求发送入口逐层向上找加密函数</p>
+
+<p>浏览器发出去的每一个 HTTP 请求，都不是凭空出现的。它是某段 JavaScript 代码运行到某一行时，决定要把某个加密后的数据送出去。我们的目标很简单：顺着代码的执行顺序，从「请求发出去的地方」一路倒推回「数据被加密的地方」。</p>
+
+<h2>为什么 Call Stack 是你的起点</h2>
+
+<p>Chrome DevTools 的 Sources 面板里有一个 Call Stack 窗口。它记录的不是「谁调用了我」，而是「我是被谁一路调用过来的」。当你在一个断点停下来的时候，Call Stack 会从上到下显示：当前执行的函数在最上面，调用它的函数在再上面，一直追溯到最初触发的那个函数。</p>
+
+<p>这种「从终点倒推回起点」的结构，刚好就是逆向工程最需要的视角。正向看代码，你得先搞清楚入口在哪、什么时候触发；反向看 Call Stack，你直接站在请求发出的那一刻，沿着调用链往上爬就行。</p>
+
+<h2>一个六层调用链的例子</h2>
+
+<p>假设有一个前端页面，点击标题之后触发一串函数调用：</p>
+
+<pre><code>test01 → test02 → test03 → test04 → test05 → test06</code></pre>
+
+<p>其中 <code>test02</code> 负责加密数据，<code>test06</code> 负责发送 ajax 请求。如果你在 <code>test06</code> 里打一个断点，Call Stack 会这样显示：</p>
+
+<pre><code>test06          ← 当前停在这里，ajax 即将发出
+test05
+test04
+test03
+test02          ← 加密在这里发生
+test01          ← 最外层入口</code></pre>
+
+<p>你不需要从 <code>test01</code> 开始一行行读代码。只要在 Call Stack 里看到 <code>test06</code> 下面紧跟着一串中间函数，然后出现一个写着「加密」或「处理数据」名字的函数——那就是你的目标。</p>
+
+<h2>怎么在 DevTools 里实际操作</h2>
+
+<p>打开 Chrome DevTools，切到 Sources 面板。找到疑似发送请求的函数入口（通常是 <code>XMLHttpRequest.send</code>、<code>fetch</code>、或者某个 ajax 调用）。在这一行打上断点。然后回到页面触发这个请求。</p>
+
+<p>页面会暂停在断点处。这时候切回 Sources 面板，右侧的 Call Stack 窗口已经展开。点击 Call Stack 里的每一个函数名，DevTools 会跳到该函数的定义位置，并在侧栏显示当时的局部变量。</p>
+
+<p>你的任务就是沿着这条调用链，找出哪个函数第一次碰了那个加密后的值。一旦找到，后续所有的逆向工作都从那一个函数开始——不用管上面那些中转函数。</p>
+
+<h2>真实网站里的调用链会深得多</h2>
+
+<p>演示页只有六层，但真实网站可能有十几层甚至几十层。框架调用业务逻辑、业务逻辑调用工具函数、工具函数再调用加密库。没关系，Call Stack 会忠实地把每一层都列出来。你要做的就是一层层往下点，直到看见那个把明文变成乱码的函数。</p>
+
+<p>如果 Call Stack 里的函数名全是 <code>a</code>、<code>b</code>、<code>c</code> 这种混淆后的名字，看不清谁是加密函数，别急。下一步我们会讲怎么用关键字搜索来补位。这一节先建立「从请求出口倒推」的心智模型。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="Call Stack 面板的主要作用是什么？" data-correct="2" data-explain="Call Stack 记录的是当前函数被谁调用过来的路径，从终点倒推回起点，这正是逆向工程需要的视角。">
+  <button class="opt">显示当前函数内部的所有变量</button>
+  <button class="opt">列出页面上所有正在执行的函数</button>
+  <button class="opt">记录从最初触发函数到当前函数的调用路径</button>
+  <button class="opt">按字母顺序排列当前作用域的所有函数</button>
+</div>
+
+<div class="quiz" data-question="在 test06 函数中打断点后，Call Stack 从上到下的排列顺序通常是怎样的？" data-correct="0" data-explain="Call Stack 最顶端是当前执行的函数（test06），越往下越接近最初的入口（test01）。">
+  <button class="opt">test06 → test05 → test04 → test03 → test02 → test01</button>
+  <button class="opt">test01 → test02 → test03 → test04 → test05 → test06</button>
+  <button class="opt">test02 → test06 → test01 → test03 → test04 → test05</button>
+  <button class="opt">test06 → test01 → test02 → test03 → test04 → test05</button>
+</div>
+
+<div class="quiz" data-question="为什么逆向定位加密函数时，通常建议从发送请求的入口开始回溯？" data-correct="1" data-explain="从请求发送入口回溯，能直接锁定真正执行加密的那层调用，避免从入口函数开始逐行阅读无关代码。">
+  <button class="opt">因为入口函数的代码行数最少</button>
+  <button class="opt">因为请求发送入口是调用链的终点，往上回溯能直接找到加密逻辑</button>
+  <button class="opt">因为所有加密代码都写在请求发送函数里</button>
+  <button class="opt">因为浏览器只允许在发送请求的地方打断点</button>
+</div>
+
+<div class="quiz" data-question="如果在 Call Stack 里看到函数名都是 a、b、c，很难判断哪个是加密函数，下一步应该怎么做？" data-correct="3" data-explain="当调用栈过深或代码被混淆时，关键字搜索是 Call Stack 之外的另一把钥匙，用来直接定位参数名或敏感词。">
+  <button class="opt">放弃 Call Stack，改用 Network 面板</button>
+  <button class="opt">从 a 函数开始逐个设置断点</button>
+  <button class="opt">刷新页面重新抓取 Call Stack</button>
+  <button class="opt">改用关键字搜索来辅助定位</button>
+</div>
+
+<div class="quiz" data-question="以下哪一项描述了「请求堆栈回溯」的正确工作流程？" data-correct="0" data-explain="先在疑似发送请求的位置打断点，触发请求后在 Call Stack 里逐层向上回溯，直到找到加密函数。">
+  <button class="opt">在疑似请求入口打断点 → 触发请求 → 沿 Call Stack 向上回溯 → 定位加密函数</button>
+  <button class="opt">从 HTML 入口函数开始 → 逐行阅读代码 → 找到加密函数 → 打断点</button>
+  <button class="opt">搜索所有加密相关关键字 → 在搜索结果里打断点 → 查看 Call Stack</button>
+  <button class="opt">打开 Network 面板 → 查看请求体 → 在 Initiator 列点击 → 直接跳到加密函数</button>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./encrypted-value-hiding-spots.html">下一步：加密值三大藏身处 →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

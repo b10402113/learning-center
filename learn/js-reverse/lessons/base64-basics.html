@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>base64 編碼與解碼 — 編碼與加密特徵</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>base64 編碼與解碼</h1>
+<p class="meta">學習目標：理解 base64 是「位元組到可見字元的重編碼」而非加密，能從末尾 <code>=</code> 填充符和 <code>A-Za-z0-9+/</code> 字元集識別它，並在 Python 裡正確編解碼含中文與特殊位元組的字串。</p>
+
+<h2>現象：你在抓包裡看到這種字串</h2>
+<p>當你開始逆向前端請求，最常遇到的第一類密文長這樣：</p>
+<pre><code>SGVsbG8gV29ybGQh
+IyEk
+5L2g5aW9</code></pre>
+<p>它們有幾個共同特徵：只包含大小寫字母、數字、<code>+</code> 和 <code>/</code>，長度常常是 4 的倍數，末尾有時會冒出一到兩個等號。這不是加密，這是 <strong>base64</strong>。</p>
+
+<h2>為什麼需要 base64？</h2>
+<p>HTTP 協議是文字協定，但圖片、音訊、附件都是二進位資料。如果直接把二進位塞進 URL、JSON 或 HTML 裡，某些位元組會和協定字元衝突（例如 <code>&amp;</code>、<code>=</code>、換行）。base64 的本質就是：<strong>把 8 位元的二進位資料，重新編碼成 6 位元的可見字元</strong>，讓二進位資料可以安全地用文字傳輸。</p>
+
+<h2>原理：3 位元組 → 4 字元</h2>
+<p>base64 把輸入每 3 個位元組（24 位元）切成 4 組 6 位元，每組 6 位元對應到一個可見字元。6 位元有 64 種可能，所以字元表是：</p>
+<pre><code>索引 0-25:  A-Z
+索引 26-51: a-z
+索引 52-61: 0-9
+索引 62:    +
+索引 63:    /</code></pre>
+<p>用課本裡的例子推一次：<code>#!@</code> 這三個字元的 ASCII 分別是 <code>0x23</code>、<code>0x21</code>、<code>0x40</code>，二進位是：</p>
+<pre><code>00100011 00100001 01000000</code></pre>
+<p>重新按 6 位元切：</p>
+<pre><code>001000 110010 000101 000000</code></pre>
+<p>對應索引 8、51、5、0，查表得到 <code>IyEk</code>。這就是 base64 編碼結果。</p>
+
+<h2>填充符 <code>=</code> 的坑</h2>
+<p>如果原始資料不是 3 的倍數，base64 會在輸出末尾補 <code>=</code> 填充符，讓總長度維持在 4 的倍數：</p>
+<ul>
+  <li>剩 1 個位元組 → 補 2 個 <code>=</code></li>
+  <li>剩 2 個位元組 → 補 1 個 <code>=</code></li>
+</ul>
+<p>逆向時最常見的錯誤：抓到的 base64 字串被截斷或去掉了末尾等號，直接解碼會報錯。Python 裡手動補齊的寫法：</p>
+<pre><code>import base64
+
+data = "SGVsbG8"
+data += (4 - len(data) % 4) * "="
+print(base64.b64decode(data).decode())  # Hello</code></pre>
+
+<h2>Python 實作</h2>
+<p><code>base64.b64encode</code> 吃的是位元組，回傳的也是位元組。所以中文要先 <code>.encode()</code> 才能編解碼：</p>
+<pre><code>import base64
+
+# 編碼
+text = "你好世界"
+encoded = base64.b64encode(text.encode("utf-8")).decode()
+print(encoded)  # 5L2g5aW95LiW55WM
+
+# 解碼
+decoded = base64.b64decode(encoded).decode("utf-8")
+print(decoded)  # 你好世界</code></pre>
+
+<h2>重點整理</h2>
+<ul>
+  <li>base64 是編碼，不是加密，沒有金鑰，任何人都能解。</li>
+  <li>字元集：<code>A-Z a-z 0-9 + /</code>，末尾可能補 <code>=</code>。</li>
+  <li>長度一定是 4 的倍數；不是的話，先補 <code>=</code> 再解。</li>
+  <li>Python 用 <code>base64.b64encode</code> / <code>b64decode</code>，記得先 <code>.encode()</code> 成位元組。</li>
+</ul>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="base64 的本質是什麼？" data-correct="1" data-explain="base64 只是把二進位資料重新編碼成可見字元，沒有金鑰，不具備加密強度。">
+  <button class="opt">一種對稱加密演算法</button>
+  <button class="opt">一種把位元組重編碼成可見字元的方法</button>
+  <button class="opt">一種單向雜湊函數</button>
+  <button class="opt">一種壓縮演算法</button>
+</div>
+
+<div class="quiz" data-question="看到一串字元只包含 A-Z、a-z、0-9、+、/，且末尾有 =，最可能是什麼？" data-correct="2" data-explain="這個字元集加上 = 填充是 base64 的招牌特徵。">
+  <button class="opt">MD5 雜湊值</button>
+  <button class="opt">AES 密文</button>
+  <button class="opt">base64 編碼字串</button>
+  <button class="opt">RSA 公鑰</button>
+</div>
+
+<div class="quiz" data-question="base64 編碼時，每幾個原始位元組會變成 4 個輸出字元？" data-correct="0" data-explain="3 個位元組 = 24 位元，重新切成 4 組 6 位元，對應 4 個 base64 字元。">
+  <button class="opt">3 個位元組</button>
+  <button class="opt">4 個位元組</button>
+  <button class="opt">6 個位元組</button>
+  <button class="opt">8 個位元組</button>
+</div>
+
+<div class="quiz" data-question="用 Python 對一個中文字串做 base64 編碼，第一步要做什麼？" data-correct="3" data-explain="b64encode 吃的是位元組，中文字串必須先 .encode() 成 utf-8 位元組。">
+  <button class="opt">直接呼叫 b64encode</button>
+  <button class="opt">先做 MD5</button>
+  <button class="opt">先補齊 = 填充</button>
+  <button class="opt">先 .encode() 成位元組</button>
+</div>
+
+<div class="quiz" data-question="抓到的 base64 字串長度不是 4 的倍數，解碼前應該怎麼處理？" data-correct="1" data-explain="手動補齊 = 讓長度回到 4 的倍數，否則 b64decode 會報錯。">
+  <button class="opt">直接解碼，Python 會自動處理</button>
+  <button class="opt">補上 = 直到長度是 4 的倍數</button>
+  <button class="opt">把多餘字元刪掉</button>
+  <button class="opt">先做 URL decode</button>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./base64-variants.html">下一步：base64 變種與圖片 →</a>
+</div>
+
+<footer class="footer">
+  <p>有任何問題，隨時問你的 agent 老師。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

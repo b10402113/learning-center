@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>execjs 调用 SHA1 与 GET 请求闭环</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>execjs 调用 SHA1 与 GET 请求闭环</h1>
+<p class="meta">实战：SHA1 与百度 sign · 步骤 3/5</p>
+
+<h2>学习目标</h2>
+<p>能把扣下的 SHA1 JS 模块通过 execjs 挂到 Python 调用链上，拼出完整的丁香网 GET 请求，跑通从参数构造到拿到 JSON 响应的闭环。</p>
+
+<h2>execjs 的核心用法</h2>
+<p>execjs 只有两个关键动作：<code>compile()</code> 把 JS 代码编译成可调用的对象，<code>call()</code> 按函数名调用并传参。</p>
+<pre><code>import execjs
+
+# 读取扣下的 JS 文件
+js_code = open("02 丁香网.js").read()
+js_compile = execjs.compile(js_code)
+
+# 调用入口函数 u(data)，传入明文串
+sign = js_compile.call("u", data)
+print("sign:", sign)</code></pre>
+<p>这里不需要理解 JS 内部怎么算 SHA1，只需要知道入口函数名是 <code>u</code>，输入是明文串，输出是 40 位十六进制字符串。</p>
+
+<h2>完整请求闭环</h2>
+<p>把前两步串起来，就是一个完整的丁香网爬虫脚本：</p>
+<pre><code>import requests
+import execjs
+import random
+import time
+
+# 1. 构造参数
+noncestr = str(random.randint(0, 100000000)).rjust(8, '0')
+timestamp = int(time.time() * 1000)
+
+params = {
+    'keyword': '新冠',
+    'sectionCode': '0',
+    'pageSize': '10',
+    'pageNum': '1',
+    'serverTimestamp': timestamp - 2,
+    'timestamp': timestamp,
+    'noncestr': noncestr,
+}
+
+# 2. 按字典序拼接明文串
+data = (
+    'appSignKey=4bTogwpz7RzNO2VTFtW7zcfRkAE97ox6ZSgcQi7FgYdqrHqKB7aGqEZ4o7yssa2aEXoV3bQwh12FFgVNlpyYk2Yjm9d2EZGeGu3'
+    f'&amp;keyword={params["keyword"]}'
+    f'&amp;noncestr={params["noncestr"]}'
+    f'&amp;pageNum={params["pageNum"]}'
+    f'&amp;pageSize={params["pageSize"]}'
+    f'&amp;sectionCode=0'
+    f'&amp;serverTimestamp={params["serverTimestamp"]}'
+    f'&amp;timestamp={params["timestamp"]}'
+)
+
+# 3. 用 execjs 算 sign
+sign = execjs.compile(open("02 丁香网.js").read()).call("u", data)
+params["sign"] = sign
+
+# 4. 发 GET 请求
+response = requests.get(
+    'https://www.dxy.cn/bbs/newweb/case-bank/page-post-info',
+    params=params,
+    cookies=cookies,
+    headers=headers
+)
+print(response.text)</code></pre>
+
+<h2>为什么不用 Python hashlib 直接算？</h2>
+<p>理论上可以，但有一个坑：丁香网 JS 里的 SHA1 在算哈希前，先对输入做了 <code>unescape(encodeURIComponent(e))</code> 做 UTF-8 编码。如果你直接用 <code>hashlib.sha1(data.encode()).hexdigest()</code>，对于纯 ASCII 字符结果一样，但遇到中文（比如 keyword=新冠）就会因为编码方式不同算出不同的值。</p>
+<p>用 execjs 就省去了对齐编码细节的麻烦——JS 怎么编码的，你就让它原样跑，保证和浏览器算出一模一样的结果。</p>
+
+<h2>调试技巧：先打印 sign 再发请求</h2>
+<p>写爬虫时，先别急着发请求。把算出来的 <code>sign</code> 打印出来，和 DevTools 里浏览器实际发出的 sign 对比。如果长度不对（应该是 40 位），或者同一参数两次算出来不同，说明明文串拼接有问题。</p>
+
+<h2>小结</h2>
+<p>execjs 把 JS 加密函数变成了 Python 里的一个普通函数调用。整个闭环就是：构造参数 → 字典序拼接 → execjs 算 sign → 拼进 params → requests.get。下一步我们看一个更复杂的案例——百度翻译的 sign，它不是标准算法，而是一段被混淆过的位运算。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="execjs.compile() 的作用是什么？" data-correct="0" data-explain="compile() 把 JS 代码编译成可调用的对象，后续用 call() 调用其中的函数。">
+  <button class="opt">把 JS 代码编译成可调用的对象</button>
+  <button class="opt">把 Python 代码转成 JS</button>
+  <button class="opt">安装 node 运行环境</button>
+  <button class="opt">下载 JS 文件</button>
+</div>
+
+<div class="quiz" data-explain="丁香网入口函数是 u，输入是明文串，输出是 40 位十六进制 sign。" data-question="execjs.call('u', data) 中，'u' 代表什么？" data-correct="2">
+  <button class="opt">Python 函数的名称</button>
+  <button class="opt">要执行的 JS 文件名</button>
+  <button class="opt">JS 函数的名称</button>
+  <button class="opt">execjs 的版本号</button>
+</div>
+
+<div class="quiz" data-question="为什么丁香网案例不直接用 Python hashlib 算 SHA1？" data-correct="1" data-explain="JS 在算 SHA1 前对输入做了 unescape(encodeURIComponent(e)) 编码，直接用 hashlib 会因为编码差异算出不同结果。">
+  <button class="opt">Python 的 hashlib 不支持 SHA1</button>
+  <button class="opt">JS 对输入的预处理（UTF-8 编码）可能导致和 hashlib 直接算结果不同</button>
+  <button class="opt">SHA1 在 Python 里速度太慢</button>
+  <button class="opt">必须用 Java 才能算 SHA1</button>
+</div>
+
+<div class="quiz" data-question="调试 sign 时，第一步应该做什么？" data-correct="3" data-explain="先打印算出来的 sign，和 DevTools 里浏览器实际发出的 sign 对比，确认一致再发请求。">
+  <button class="opt">直接发请求看返回</button>
+  <button class="opt">修改 keyword 再算一次</button>
+  <button class="opt">换一个 JS 文件</button>
+  <button class="opt">打印 sign 并与浏览器实际发出的对比</button>
+</div>
+
+<div class="quiz" data-question="丁香网 sign 的输出长度应该是多少？" data-correct="0" data-explain="SHA1 输出 160 位 = 20 字节 = 40 个十六进制字符。">
+  <button class="opt">40 个十六进制字符</button>
+  <button class="opt">32 个十六进制字符</button>
+  <button class="opt">64 个十六进制字符</button>
+  <button class="opt">16 个十六进制字符</button>
+</div>
+
+<div class="quiz" data-question="execjs 混合路线的核心分工是什么？" data-correct="1" data-explain="JS 负责加密/解密/签名，Python 负责发请求、处理响应、存储数据。">
+  <button class="opt">Python 负责加密，JS 负责发请求</button>
+  <button class="opt">JS 负责加密解密，Python 负责发请求</button>
+  <button class="opt">JS 负责存储数据，Python 负责签名</button>
+  <button class="opt">Python 和 JS 各自发一半请求</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./dxy-params.html">← 上一步：丁香网参数构造与字典序拼接</a>
+  <a href="./baidu-sign.html">下一步：百度翻译 get_sign 算法与 gtk 补环境 →</a>
+</div>
+
+<div class="footer">实战：SHA1 与百度 sign · 步骤 3/5</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

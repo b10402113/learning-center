@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JS 侧 sign 生成：crypto 模块与 createHash</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>JS 侧 sign 生成：crypto 模块与 createHash</h1>
+<p class="meta">实战：sign 逆向（JS 执行） · 步骤 2/5</p>
+
+<h2>学习目标</h2>
+<p>能写出 JS 版 get_sign 函数，理解 crypto.createHash("md5") 的调用链与返回值。</p>
+
+<h2>从 Python 到 JS：同一个算法的两种写法</h2>
+<p>上一节的 Python 版 sign 生成逻辑是这样的：把固定字符串和动态时间戳拼起来，取 MD5。</p>
+<p>现在我们要把同样的逻辑搬到 JS 里。JS 没有内置的 <code>hashlib</code>，但 node 提供了 <code>crypto</code> 模块，功能和 Python 的 <code>hashlib</code> 对应。</p>
+
+<h2>node 的 crypto 模块</h2>
+<p><code>crypto</code> 是 node 的内置模块，不需要额外安装。它的 <code>createHash</code> 方法创建一个哈希对象，用法和 Python 的 <code>hashlib.md5()</code> 几乎一一对应：</p>
+<table>
+  <th>操作</th><th>Python hashlib</th><th>node crypto</th>
+  <tr><td>创建哈希对象</td><td>hashlib.md5()</td><td>crypto.createHash("md5")</td></tr>
+  <tr><td>喂数据</td><td>.update(b"data")</td><td>.update("data")</td></tr>
+  <tr><td>拿十六进制结果</td><td>.hexdigest()</td><td>.digest("hex")</td></tr>
+</table>
+
+<h2>模板字符串：JS 里的字符串插值</h2>
+<p>JS 的模板字符串（用反引号 <code>`</code> 包裹）可以在字符串里直接嵌入变量，语法是 <code>${变量名}</code>。这比 Python 的 f-string 更早出现，是 ES6 的标准特性：</p>
+<pre><code>const client = "fanyideskweb";
+const mysticTime = 1725600000000;
+const product = "webfanyi";
+const key = "fsdsogkndfokasodnaso";
+
+// 模板字符串拼接
+const signStr = `client=${client}&mysticTime=${mysticTime}&product=${product}&key=${key}`;
+console.log(signStr);
+// 输出：client=fanyideskweb&mysticTime=1725600000000&product=webfanyi&key=fsdsogkndfokasodnaso</code></pre>
+
+<h2>JS 版 get_sign 函数</h2>
+<p>把上面的逻辑封装成一个函数，接收一个时间戳参数 <code>t</code>，返回 sign 值：</p>
+<pre><code>const crypto = require("crypto");
+
+function get_sign(t) {
+    const client = "fanyideskweb";
+    const mysticTime = t;
+    const product = "webfanyi";
+    const key = "fsdsogkndfokasodnaso";
+    const signStr = `client=${client}&mysticTime=${mysticTime}&product=${product}&key=${key}`;
+    const sign = crypto.createHash("md5").update(signStr).digest("hex");
+    return sign;
+}</code></pre>
+<p>注意 <code>require("crypto")</code>：这是 node 引入内置模块的方式，相当于 Python 的 <code>import hashlib</code>。</p>
+
+<h2>一个更灵活的 get_sign 版本</h2>
+<p>上面的版本每次调用都要从外部传入时间戳。我们也可以把时间戳的生成逻辑封装进去，让 <code>get_sign()</code> 同时返回 [sign, 时间戳] 两个值：</p>
+<pre><code>const crypto = require("crypto");
+
+function get_sign() {
+    const client = "fanyideskweb";
+    const mysticTime = Date.now();  // 毫秒级时间戳
+    const product = "webfanyi";
+    const key = "fsdsogkndfokasodnaso";
+    const signStr = `client=${client}&mysticTime=${mysticTime}&product=${product}&key=${key}`;
+    const sign = crypto.createHash("md5").update(signStr).digest("hex");
+    return [sign, mysticTime];
+}
+
+const result = get_sign();
+console.log("sign:", result[0]);
+console.log("时间戳:", result[1]);</code></pre>
+<p><code>Date.now()</code> 是 JS 获取毫秒级时间戳的标准写法，等同于 Python 的 <code>int(time.time() * 1000)</code>。</p>
+
+<h2>在 node 中验证</h2>
+<p>把上面的代码保存为 <code>03 有道翻译.js</code>，然后在终端运行：</p>
+<pre><code>node "03 有道翻译.js"</code></pre>
+<p>如果输出一个 32 位的十六进制字符串和一个时间戳，说明 JS 侧 sign 生成逻辑跑通了。</p>
+
+<h2>关键对比：Python vs JS</h2>
+<table>
+  <th>步骤</th><th>Python</th><th>JS (node)</th>
+  <tr><td>引入模块</td><td>import hashlib</td><td>const crypto = require("crypto");</td></tr>
+  <tr><td>获取时间戳</td><td>int(time.time() * 1000)</td><td>Date.now()</td></tr>
+  <tr><td>字符串拼接</td><td>f"client={client}..."</td><td>`client=${client}...`</td></tr>
+  <tr><td>MD5 计算</td><td>hashlib.md5(s).hexdigest()</td><td>crypto.createHash("md5").update(s).digest("hex")</td></tr>
+</table>
+
+<h2>小结</h2>
+<p>JS 版 get_sign 的核心是 <code>crypto.createHash("md5").update(字符串).digest("hex")</code>，对应 Python 的 <code>hashlib.md5(字符串).hexdigest()</code>。时间戳用 <code>Date.now()</code>，字符串拼接用模板字符串。下一步，我们用 Python execjs 来调用这个 JS 函数。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="node 中引入 crypto 模块的正确写法是？" data-correct="1" data-explain="node 用 require() 引入内置模块，如 require('crypto')。">
+  <button class="opt">import crypto from "crypto"</button>
+  <button class="opt">const crypto = require("crypto")</button>
+  <button class="opt">include crypto</button>
+  <button class="opt">using crypto;</button>
+</div>
+
+<div class="quiz" data-question="crypto.createHash("md5").update(s).digest("hex") 中，digest("hex") 的作用是？" data-correct="3" data-explain="digest('hex') 把哈希结果输出为十六进制字符串，等同于 Python 的 hexdigest()。">
+  <button class="opt">把字符串 s 转成十六进制</button>
+  <button class="opt">把哈希结果转成 base64</button>
+  <button class="opt">把哈希结果转成二进制</button>
+  <button class="opt">把哈希结果转成十六进制字符串</button>
+</div>
+
+<div class="quiz" data-question="JS 中获取毫秒级时间戳的标准写法是？" data-correct="0" data-explain="Date.now() 返回当前时间的毫秒级时间戳，是 JS 标准写法。">
+  <button class="opt">Date.now()</button>
+  <button class="opt">new Date().getTime()</button>
+  <button class="opt">Date.currentTime()</button>
+  <button class="opt">time.now()</button>
+</div>
+
+<div class="quiz" data-question="模板字符串 `client=${client}` 中，${client} 的作用是？" data-correct="2" data-explain="${} 是模板字符串的插号语法，把变量的值嵌入字符串中。">
+  <button class="opt">调用 client 函数</button>
+  <button class="opt">声明一个变量 client</button>
+  <button class="opt">把变量 client 的值嵌入字符串</button>
+  <button class="opt">字符串拼接的另一种写法</button>
+</div>
+
+<div class="quiz" data-question="get_sign() 同时返回 [sign, 时间戳] 两个值，在 JS 里应该用什么数据结构？" data-correct="1" data-explain="JS 没有元组，用数组返回多个值，调用方按索引取值。">
+  <button class="opt">对象 {sign, time}</button>
+  <button class="opt">数组 [sign, time]</button>
+  <button class="opt">字符串 "sign,time"</button>
+  <button class="opt">Map 数据结构</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./execjs-motivation.html">← 上一步：execjs 混合路线</a>
+  <a href="./python-call-js-sign.html">下一步：execjs 编译与调用 →</a>
+</div>
+
+<div class="footer">实战：sign 逆向（JS 执行） · 步骤 2/5</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

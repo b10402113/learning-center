@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>原型物件与箭头函数</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<h1>原型物件与箭头函数</h1>
+<p class="meta">JS 逆向 · 节点 15 · 步骤 4/5</p>
+
+<h2>学习目标</h2>
+<p>能描述原型链查找、用 call/apply 改变 this、把箭头函数还原为传统函数阅读混淆代码。</p>
+
+<h2>把方法挂在 prototype 上，让所有实例共享</h2>
+<p>构造函数 <code>Person</code> 每 new 一次，如果方法直接写在构造函数里，每个实例都会复制一份——既浪费内存，也拖慢 <code>new</code>。解决办法是把方法挂到 <code>Person.prototype</code> 上：</p>
+<pre><code>function Person(name) {
+  this.name = name;
+}
+Person.prototype.eat = function() {
+  console.log(this.name + " eating");
+};
+
+var p1 = new Person("Alice");
+var p2 = new Person("Bob");
+p1.eat === p2.eat; // true —— 共享同一个方法</code></pre>
+<p>读代码时看到 <code>X.prototype.y = function(){}</code>，要意识到所有 <code>X</code> 的实例都能调用 <code>y</code>，但 <code>y</code> 并不在实例自身身上。</p>
+
+<h2><code>__proto__</code>、<code>prototype</code>、<code>constructor</strong> 三者的关系</h2>
+<p>这三个属性构成原型链的核心三角：</p>
+<ul>
+  <li><code>p1.__code> === Person.prototype</code> —— 实例的隐式原型指向构造函数的 prototype 对象。</li>
+  <li><code>Person.prototype.constructor === Person</code> —— prototype 对象里的 constructor 指回构造函数。</li>
+  <li><code>p1.__proto__.constructor === Person</code> —— 沿链上行，同样指回构造函数。</li>
+</ul>
+<p>当访问 <code>p1.eat</code> 时，JS 先在 <code>p1</code> 自身属性里找，找不到就沿 <code>__proto__</code> 上行到 <code>Person.prototype</code> 找——这就是<strong>原型链查找</strong>。读逆向代码时，如果某个方法不在对象身上，就往它的 <code>__proto__</code>（也就是构造函数的 <code>.prototype</code>）找。</p>
+
+<h2><code>call</code> 与 <code>apply</code>：改变 this 指向</h2>
+<p>JS 函数的 <code>this</code> 默认由调用方式决定。<code>call</code> 和 <code>apply</code> 允许你显式指定函数执行时 <code>this</code> 指向谁：</p>
+<pre><code>function eat(a, b) {
+  console.log(this.name + " eats " + a + " and " + b);
+}
+var p = { name: "Alice" };
+var q = { name: "Bob" };
+
+eat.call(p, "apple", "banana");   // Alice eats apple and banana
+eat.apply(q, ["apple", "banana"]); // Bob eats apple and banana</code></pre>
+<p>第一个参数都是新的 <code>this</code> 对象。区别在后续参数：<code>call</code> 逐个传，<code>apply</code> 传一个数组。逆向时看到 <code>fn.call(x, ...)</code> / <code>fn.apply(x, [...])</code>，要立即还原：它是在用 <code>x</code> 作为 <code>this</code> 调用 <code>fn</code>，参数就是后面那些。混淆器经常用 <code>call</code>/<code>apply</code> 把真实调用对象藏起来。</p>
+
+<h2>箭头函数：普通函数的语法糖</h2>
+<p>ES6 引入的箭头函数 <code>(x, y) =&gt; x + y</code> 是普通函数的简写形式。两种形态：</p>
+<pre><code>// 单表达式隐式返回
+var sq = i =&gt; i * i;
+// 等价于
+var sq = function(i) { return i * i; };
+
+// 带函数体需要显式 return
+var add = (a, b) =&gt; { return a + b; };</code></pre>
+<p>箭头函数最常见的场景是回调里一行完成映射：</p>
+<pre><code>var arr = [1, 2, 3];
+var squares = arr.map(i =&gt; i * i); // [1, 4, 9]
+// 等价于
+var squares = arr.map(function(item) { return item * item; });</code></pre>
+<p>逆向时如果看到 <code>=&gt;</code>，先在脑内还原成 <code>function(){}</code>，读起来会轻松很多。</p>
+
+<h2>箭头函数的 this 规则（逆向注意点）</h2>
+<p>箭头函数没有自己的 <code>this</code>，它的 <code>this</code> 由外层作用域决定——这和普通函数完全不同。在逆向时这个区别至关重要：</p>
+<pre><code>function Timer() {
+  this.seconds = 0;
+  setInterval(function() {
+    this.seconds++; // this 指向 window，不是 Timer 实例
+  }, 1000);
+}</code></pre>
+<p>很多逆向目标用 <code>var self = this</code> 或者箭头函数来保住 <code>this</code>。看到这类写法要能识别它的意图。</p>
+
+<h2>本节练习</h2>
+
+<div class="quiz" data-question="实例 p1 的 __proto__ 与构造函数 Person.prototype 的关系是？" data-correct="1" data-explain="p1.__proto__ === Person.prototype，实例的隐式原型指向构造函数的 prototype 对象。">
+  <button class="opt">p1.__proto__ 是 Person 的副本</button>
+  <button class="opt">p1.__proto__ 与 Person.prototype 指向同一对象</button>
+  <button class="opt">p1.__proto__ 等于 p1 自身</button>
+  <button class="opt">两者没有关系</button>
+</div>
+
+<div class="quiz" data-question="Person.prototype.constructor 指向什么？" data-correct="2" data-explain="prototype 对象的 constructor 指回构造函数 Person。">
+  <button class="opt">p1</button>
+  <button class="opt">Person.prototype</button>
+  <button class="opt">Person</button>
+  <button class="opt">Object</button>
+</div>
+
+<div class="quiz" data-question="call 和 apply 的主要区别是什么？" data-correct="0" data-explain="第一个参数都是新的 this；区别在于 call 逐个传参，apply 传数组。">
+  <button class="opt">call 逐个传参，apply 传数组</button>
+  <button class="opt">call 传数组，apply 逐个传参</button>
+  <button class="opt">call 只能传一个参数</button>
+  <button class="opt">没有区别</button>
+</div>
+
+<div class="quiz" data-question="i => i * i 等价于下面哪个传统函数？" data-correct="3" data-explain="单表达式箭头函数省略了花括号和 return，等价于 function(i){return i*i}。">
+  <button class="opt">function(i) { i * i; }</button>
+  <button class="opt">function(i) { return i; }</button>
+  <button class="opt">function(i) { i = i * i; }</button>
+  <button class="opt">function(i) { return i * i; }</button>
+</div>
+
+<div class="quiz" data-question">箭头函数的 this 由什么决定？" data-correct="2" data-explain="箭头函数没有自己的 this，它的 this 由外层作用域决定。">
+  <button class="opt">调用方式</button>
+  <button class="opt">arguments 对象</button>
+  <button class="opt">外层作用域</button>
+  <button class="opt">new 关键字</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./closure.html">← 上一步：IIFE 与闭包</a>
+  <a href="./timers.html">下一步：定时器与 window 全局变量 →</a>
+</div>
+
+<div class="footer">看不懂就问你的 agent：原型链、call/apply、箭头函数是读混淆代码的三把钥匙，DevTools 断点分析会反复用到。</div>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>滑動驗證：cv2 模板匹配與擬人化軌跡 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>滑動驗證：cv2 模板匹配與擬人化軌跡</h1>
+  <p class="meta">js-reverse · 08-pyppeteer · Step 4/4</p>
+
+  <h2>學習目標</h2>
+  <p>能用 cv2 模板匹配算出滑塊缺口距離，並用 Pyppeteer 的 hover/down/move/up 序列模擬人的滑動軌跡。</p>
+
+  <h2>滑動驗證的通用解法</h2>
+  <p>你在 day09 用 Selenium 做過滑動驗證，Pyppeteer 的思路完全一樣，只是 API 不同。整個流程分兩步：</p>
+  <ol>
+    <li><strong>算距離</strong>：用 OpenCV 的模板匹配算出缺口位置。</li>
+    <li><strong>模擬滑動</strong>：用滑鼠事件序列拖曳滑塊到缺口。</li>
+  </ol>
+
+  <h2>用 cv2 模板匹配算缺口距離</h2>
+  <p>這一步和 Selenium 完全相同。先下載背景圖和缺口圖，再用 <code>cv2.matchTemplate()</code> 比對：</p>
+  <pre><code>import cv2
+import numpy as np
+
+background = cv2.imread('background.png', 0)
+gap = cv2.imread('gap.png', 0)
+
+result = cv2.matchTemplate(background, gap, cv2.TM_CCOEFF_NORMED)
+min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+x = max_loc[0]  # 缺口的 x 座標</code></pre>
+  <p>注意：圖片在網頁上顯示的尺寸可能和原圖不同，必須做像素單位換算。例如網頁上顯示 360px，原圖是 278px，就要乘以 <code>278 / 360</code>，再減去滑塊起始位置的偏移量：</p>
+  <pre><code>distance = x * 278 / 360 - 13</code></pre>
+
+  <h2>Pyppeteer 的擬人化輸入</h2>
+  <p>在模擬滑動之前，通常要先輸入帳號密碼。Pyppeteer 的 <code>type()</code> 可以設定 <code>delay</code> 參數，讓每個字元的輸入間隔隨機化，模擬人的打字節奏：</p>
+  <pre><code>import random
+
+await page.type('#loginname', 'my_account', {'delay': random.randint(30, 60)})
+await page.type('#nloginpwd', 'my_password', {'delay': random.randint(30, 60)})</code></pre>
+  <p>這種「隨機 delay」是通過率的关键——固定間隔太像機器人。</p>
+
+  <h2>擬人化滑動軌跡</h2>
+  <p>Pyppeteer 的滑鼠操作是分步驟的，這讓我們能精確控制軌跡。滑動序列如下：</p>
+  <pre><code># 1. 懸停在滑塊上
+await page.hover('#slider')
+
+# 2. 按下滑鼠左鍵
+await page.mouse.down()
+
+# 3. 分 100 步緩慢移動到目標位置
+await page.mouse.move(x + distance, y, {'steps': 100})
+
+# 4. 釋放滑鼠左鍵
+await page.mouse.up()</code></pre>
+  <p>其中 <code>steps: 100</code> 是關鍵——steps 越大，移動越慢、越像人。如果一步到位，會被判定為機器人。</p>
+
+  <h2>加入隨機偏移</h2>
+  <p>為了讓軌跡更自然，可以在橫向距離上加一個隨機偏移量：</p>
+  <pre><code>import random
+
+actual_distance = distance + random.uniform(20, 40)
+await page.mouse.move(x + actual_distance, y, {'steps': 100})</code></pre>
+  <p>這個偏移模擬的是人眼判斷的微小誤差。</p>
+
+  <h2>取得元素位置</h2>
+  <p>在懸停之前，需要知道滑塊的位置。用 <code>boundingBox()</code> 取得元素的邊界框：</p>
+  <pre><code>slider = await page.J('#slider')
+box = await slider.boundingBox()
+x = box['x']
+y = box['y']</code></pre>
+
+  <h2>完整滑動流程</h2>
+  <pre><code>slider = await page.J('#slider')
+box = await slider.boundingBox()
+x, y = box['x'], box['y']
+
+await page.hover('#slider')
+await page.mouse.down()
+await page.mouse.move(x + distance, y, {'steps': 100})
+await page.mouse.up()
+
+await page.waitFor(2000)  # 等待驗證結果</code></pre>
+
+  <h2>與 Selenium 的對比</h2>
+  <table>
+    <tr><th>面向</th><th>Selenium</th><th>Pyppeteer</th></tr>
+    <tr><td>按住</td><td>ActionChains.click_and_hold()</td><td>page.mouse.down()</td></tr>
+    <tr><td>移動</td><td>move_by_offset()</td><td>page.mouse.move()</td></tr>
+    <tr><td>釋放</td><td>release()</td><td>page.mouse.up()</td></tr>
+    <tr><td>步數控制</td><td>需自行實作</td><td>steps 參數內建</td></tr>
+    <tr><td>輸入擬人</td><td>send_keys 固定速度</td><td>type 可設 delay</td></tr>
+  </table>
+
+  <h2>隨堂測驗</h2>
+  <div class="quiz" data-question="cv2.matchTemplate() 是用來做什麼的？" data-correct="1" data-explain="matchTemplate 可以在背景圖中找出缺口圖的位置，回傳匹配結果的座標。">
+    <button class="opt">下載圖片</button>
+    <button class="opt">在背景圖中定位缺口</button>
+    <button class="opt">合併圖片</button>
+    <button class="opt">壓縮圖片</button>
+  </div>
+
+  <div class="quiz" data-question="Pyppeteer 中，要模擬「按下滑鼠左鍵不放」，應使用哪個 API？" data-correct="2" data-explain="page.mouse.down() 會觸發滑鼠左鍵按下事件，相當於 Selenium 的 click_and_hold()。">
+    <button class="opt">page.mouse.click()</button>
+    <button class="opt">page.mouse.press()</button>
+    <button class="opt">page.mouse.down()</button>
+    <button class="opt">page.mouse.hold()</button>
+  </div>
+
+  <div class="quiz" data-question="page.mouse.move() 的 steps 參數有什麼作用？" data-correct="0" data-explain="steps 控制移動的步數，steps 越大移動越慢、越像人，避免被偵測為機器人。">
+    <button class="opt">控制移動的步數，越大越慢越像人</button>
+    <button class="opt">設定移動的總距離</button>
+    <button class="opt">控制滑鼠移動速度的倍率</button>
+    <button class="opt">設定移動的加速度</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼滑動驗證要加入隨機偏移量？" data-correct="3" data-explain="人眼判斷會有微小誤差，加入隨機偏移可以模擬這種自然的不精確，提高通過率。">
+    <button class="opt">為了加快滑動速度</button>
+    <button class="opt">為了減少圖片匹配誤差</button>
+    <button class="opt">為了繞過 HTTPS 檢測</button>
+    <button class="opt">模擬人眼判斷的微小誤差</button>
+  </div>
+
+  <div class="quiz" data-question="關於 Pyppeteer 的 type() 與 Selenium 的 send_keys()，下列敘述何者正確？" data-correct="1" data-explain="Pyppeteer 的 type() 可以設定 delay 參數，模擬逐字輸入的隨機間隔，比 Selenium 的 send_keys() 更擬人。">
+    <button class="opt">兩者完全相同</button>
+    <button class="opt">Pyppeteer 的 type() 可設定 delay 模擬擬人輸入</button>
+    <button class="opt">Selenium 的 send_keys() 不能輸入中文</button>
+    <button class="opt">Pyppeteer 的 type() 不能輸入密碼</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./detailed-usage.html">← 上一步：詳細用法</a>
+    <span></span>
+  </div>
+
+  <div class="footer">js-reverse · 08-pyppeteer · 共 4 步</div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>关键字搜寻 — DevTools 断点与逆向技巧</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>关键字搜寻</h1>
+<p class="meta">js-reverse · 步骤 3/4 · 当调用栈过深或代码混淆时的第二把钥匙</p>
+
+<p>Call Stack 很好用，但它有一个前提：你能看懂函数名。真实项目里的代码经常经过压缩和混淆，函数名会变成 <code>a</code>、<code>b</code>、<code>_0x1a2b3c</code> 这种无意义的符号。这时候就算 Call Stack 展开了十几层，你也不知道哪一层在做加密。关键字搜索就是为这种情况准备的备选入口。</p>
+
+<h2>关键字搜索的三类弹药</h2>
+
+<p>在 DevTools 的 Global Search（<code>Ctrl+Shift+F</code> 或 <code>Cmd+Shift+F</code>）里，可以用三类关键字来定位加密相关的代码：</p>
+
+<h3>1. 参数名关联</h3>
+
+<p>你已经从抓包里知道加密字段叫 <code>sign</code>、<code>token</code>、<code>password</code>，直接在搜索框里搜这些词。代码里凡是读取、赋值、拼接这个字段的地方都会列出来。找到赋值的那一行，上下看几行，通常就能定位到加密函数。</p>
+
+<h3>2. URL 路径搜索</h3>
+
+<p>有时候加密参数的名字起得很隐晦，直接搜字段名搜不到。这时候可以搜请求的 URL 路径。比如有道翻译的接口是 <code>/webtranslate</code>，直接搜这个字符串，就能跳到发送请求的那一行代码。在这一行附近打断点，或者沿着调用链往回找，就能摸到加密逻辑。</p>
+
+<h3>3. 敏感词搜索</h3>
+
+<p>如果参数名和 URL 路径都搜不到，就只能靠敏感词碰运气了。常见的敏感词分两类：</p>
+
+<ul>
+  <li>哈希与加密算法名：<code>md5</code>、<code>sha1</code>、<code>sha256</code>、<code>aes</code>、<code>des</code>、<code>rsa</code></li>
+  <li>序列化与编码函数：<code>encrypt</code>、<code>decrypt</code>、<code>JSON.stringify</code>、<code>JSON.parse</code>、<code>btoa</code>、<code>atob</code></li>
+</ul>
+
+<p>这些字符串即使经过混淆也经常保留原样，因为它们是 Web API 或者加密库暴露的方法名，混淆器一般不敢重命名它们。</p>
+
+<h2>关键字搜索和 Call Stack 的配合</h2>
+
+<p>在实际操作中，这两套方法经常交替使用。先用 Call Stack 快速定位一个大致范围，然后在这个范围里用关键字搜索精确定位。或者反过来：先用关键字搜索找到疑似加密函数，然后在里面打断点，触发请求后通过 Call Stack 验证调用路径。</p>
+
+<p>举个例子：你搜 <code>md5</code> 找到了三个函数，不确定哪个是算 <code>sign</code> 的。在三个函数里都打上断点，触发一次请求。哪个断点先停下来，哪个就是算 <code>sign</code> 的那个。</p>
+
+<h2>搜索结果的筛选技巧</h2>
+
+<p>Global Search 经常返回几十个结果。不需要一个个看。注意这几点可以快速过滤：</p>
+
+<ul>
+  <li>优先看 <code>.js</code> 文件，忽略 <code>.map</code> 和 <code>.css</code></li>
+  <li>优先看赋值语句（<code>=</code>）附近的上下文，而不是单纯读取变量的语句</li>
+  <li>如果搜索结果里有 <code>function</code> 关键字紧挨着敏感词，比如 <code>function encrypt(</code>，这种几乎就是目标</li>
+</ul>
+
+<h2>一个实战组合拳</h2>
+
+<p>假设你抓到一个请求，发现请求体里有 <code>sign=xxx</code>，但 Call Stack 里全是混淆后的函数名。你可以这样做：</p>
+
+<ol>
+  <li>Global Search 搜 <code>sign</code>，找到所有引用这个字段的地方</li>
+  <li>看搜索结果里有没有赋值给 <code>sign</code> 的语句</li>
+  <li>在赋值语句附近打断点，触发请求</li>
+  <li>断点停下来后，看局部变量里有没有明文变成密文的过程</li>
+</ol>
+
+<p>这套组合拳不依赖函数名是否可读，也不依赖调用栈的深度，纯粹靠字符串匹配来定位。代码压缩和混淆对它就基本无效。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="关键字搜索通常在什么情况下作为 Call Stack 的替代方案？" data-correct="2" data-explain="当代码被混淆、函数名变成无意义的符号时，Call Stack 难以阅读，关键字搜索就派上用场了。">
+  <button class="opt">当请求是 GET 而不是 POST 时</button>
+  <button class="opt">当请求体特别大的时候</button>
+  <button class="opt">当代码被混淆、函数名无法辨认时</button>
+  <button class="opt">当 Call Stack 的层数太少时</button>
+</div>
+
+<div class="quiz" data-question="以下哪一组关键字最可能帮助定位到加密逻辑？" data-correct="3" data-explain="md5、sha1、encrypt 都是加密和哈希相关的敏感词，代码混淆时这些字符串通常保留原样。">
+  <button class="opt">click、submit、button</button>
+  <button class="opt">div、span、container</button>
+  <button class="opt">width、height、padding</button>
+  <button class="opt">md5、sha1、encrypt</button>
+</div>
+
+  <div class="quiz" data-question="为什么 URL 路径搜索有时比参数名搜索更有效？" data-correct="1" data-explain="参数名可能经过重命名或隐藏，但请求路径通常是固定字符串，在代码里直接出现，更容易搜索到。">
+  <button class="opt">因为 URL 路径更短</button>
+  <button class="opt">因为请求路径通常是固定字符串，在代码里直接出现</button>
+  <button class="opt">因为参数名不能被搜索</button>
+  <button class="opt">因为 URL 路径包含加密密钥</button>
+</div>
+
+<div class="quiz" data-question="使用 Global Search 搜到几十个结果后，应该优先关注什么？" data-correct="0" data-explain="赋值语句附近的上下文更可能包含加密逻辑，因为加密的本质就是把明文赋值给某个变量。">
+  <button class="opt">包含赋值语句的结果，尤其是 .js 文件里的</button>
+  <button class="opt">搜索结果里排在最前面的几条</button>
+  <button class="opt">包含最多字符的结果</button>
+  <button class="opt">搜索结果里排在最后面的几条</button>
+</div>
+
+<div class="quiz" data-question="在混淆代码里，为什么 encrypt、JSON.stringify 这类方法名不会被重命名？" data-correct="1" data-explain="这些是 Web API 或加密库的公开接口，混淆器不敢重命名它们，否则代码会运行失败。">
+  <button class="opt">因为它们太短了</button>
+  <button class="opt">因为它们是 Web API 或加密库的公开接口，重命名会导致运行错误</button>
+  <button class="opt">因为混淆器只重命名变量，不重命名函数</button>
+  <button class="opt">因为它们是用中文写的</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./encrypted-value-hiding-spots.html">← 上一步：加密值三大藏身处</a>
+  <a href="./youdao-packet-capture.html">下一步：有道翻译抓包实战 →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

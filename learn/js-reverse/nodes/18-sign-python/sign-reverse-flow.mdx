@@ -1,0 +1,37 @@
+---
+id: sign-reverse-flow
+title: sign 逆向的基本流程
+subject: js-reverse
+sources:
+  - "[[sources/js-reverse/js逆向课件/Day23/01 基于Py逆向的有道翻译.py#基于Py逆向的有道翻译]]"
+created: 2026-09-07
+updated: 2026-09-07
+---
+
+# sign 逆向的基本流程
+
+## Learning goal
+
+能描述 sign 逆向的标准三步法：定位加密参数、还原拼接规则、用 Python 复现签名生成
+
+## Lesson
+
+拿到一个带 sign 参数的请求时，你面对的核心问题其实只有一个：这个看起来很乱的 32 位十六进制字符串，到底是怎么从原始数据算出来的。答案通常藏在一个固定的模式里——把几个关键参数按特定顺序拼成一串字符，然后取 MD5。整个逆向过程就是把这个模式重新挖出来的过程。
+
+先从浏览器 Network 面板开始。在有道翻译的输入框里输入一个词，然后看发送的请求。请求体里除了你要翻译的词之外，还会带上好十几个参数。其中 client、product、keyfrom 这些字段的值每次请求都一样，直接复制就能用。真正会变的只有两个：mysticTime 和 sign。mysticTime 一眼就能看出是毫秒级时间戳——一串十三位数字，每次请求都不同。sign 则是另一个每次都变的长字符串，三十二位，全是十六进制字符。
+
+这两个变化的参数之间其实有因果关系：sign 是用 mysticTime 算出来的。所以问题就简化成了：除了 mysticTime 之外，还有哪些参数参与了 sign 的计算。这时候你需要请求体里的第三个字段——pointParam。它的值是 client,mysticTime,product，恰好把参与签名计算的参数名字点名了出来。pointParam 就是客户端留给自己的备忘录，告诉自己在生成 sign 的时候该把哪些字段拼进去。
+
+确定了参与参数之后，下一步是还原拼接顺序。在 Python 版源码里，拼接的模板是固定的：client={u}&mysticTime={e}&product={d}&key={t}。这里的 u、e、d、t 分别对应四个值——client 字段放 fanyideskweb，mysticTime 放当前毫秒时间戳，product 放 webfanyi，key 放一个硬编码的字符串 fsdsogkndfokasodnaso。四个值按固定顺序用 & 和 = 连接成一条长字符串，然后对整个字符串取 MD5 摘要，得到的十六进制表示就是 sign。
+
+整个逆向过程可以总结成三步：第一步，从请求体里区分出哪些参数是静态的、哪些是动态的；第二步，通过 pointParam 字段或者直接阅读 JS 代码，确定哪些参数参与了签名计算以及它们的拼接顺序；第三步，用 Python 的 hashlib.md5 把同样的字符串拼出来、算出同样的摘要。三步都做完之后，你每次请求都只需要更新 mysticTime 这一个变量，sign 会自动跟着变，服务器就会认为这是一个合法的客户端请求。
+
+这个三步法的价值在于它不仅仅适用于有道翻译。之后你遇到的 sign、token、_d 这类动态参数，绝大多数都是同一个套路：固定模板 + 动态变量 + 标准摘要算法。掌握了这个流程，就相当于拿到了一把能开一类锁的通用钥匙。
+
+## Sources
+
+- [[sources/js-reverse/js逆向课件/Day23/01 基于Py逆向的有道翻译.py#基于Py逆向的有道翻译]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/sign-reverse-flow.html)

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>URL 結構與四種請求形式 — Ajax 與 JavaScript 引入</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>URL 結構與四種請求形式</h1>
+  <p class="meta">Node 13 · Step 1 / 4 · 預估 12–15 分鐘</p>
+
+  <h2>Learning goal</h2>
+  <p>拆解 URL 的四個組成部分，並區分瀏覽器同步請求與 JavaScript 非同步請求的差異，判斷一個請求是否需要去 JS 代碼裡找。</p>
+
+  <h2>Lesson</h2>
+
+  <p>在瀏覽器裡打一個網址、按下去，畫面就跳過去了。這個再直覺不過的動作，背後其實是一整套規格很明確的結構。你要逆向爬蟲，第一步就是學會把任何一個網址拆開，然後判斷「這個請求是瀏覽器自己完成的，還是 JavaScript 在背後偷偷打的」。</p>
+
+  <h3>把 URL 拆成四塊</h3>
+  <p>每個 URL 長得像這樣：</p>
+  <pre><code>https://www.baidu.com/s?wd=alex</code></pre>
+  <p>拆開來是四個部分：</p>
+  <table>
+    <tr><th>部分</th><th>在這例子裡</th><th>它決定什麼</th></tr>
+    <tr><td>協議（Protocol）</td><td>https://</td><td>用什麼規則和伺服器對話</td></tr>
+    <tr><td>域名與埠號（Host : Port）</td><td>www.baidu.com</td><td>要連哪一台機器</td></tr>
+    <tr><td>路徑（Path）</td><td>/s</td><td>伺服器上的哪一個資源</td></tr>
+    <tr><td>查詢參數（Query String）</td><td>wd=alex</td><td>附加給伺服器的鍵值對</td></tr>
+  </table>
+  <p>協議幾乎都是 https://，埠號如果沒寫就是 443（https 預設）。路徑是 / 或 /s 這種斜線開頭的字串。查詢參數以 ? 開頭，多個參數用 & 分隔，例如 <code>?wd=alex&page=2</code>。</p>
+
+  <h3>向伺服器發請求的四種形式</h3>
+  <p>瀏覽器向伺服器拿資料，總共只有四種方式。前三種是瀏覽器內建行為，最後一種是 JavaScript 自己打的：</p>
+
+  <table>
+    <tr><th>形式</th><th>觸發方式</th><th>同步與否</th><th>對頁面的影響</th></tr>
+    <tr><td>地址列 + 回车</td><td>在網址列輸入 URL 按 Enter</td><td>同步</td><td>整個頁面被覆蓋</td></tr>
+    <tr><td>a 標籤超連結</td><td>點擊 <code>&lt;a href="..."&gt;</code></td><td>同步</td><td>整個頁面被覆蓋</td></tr>
+    <tr><td>form 表單</td><td>點擊 <code>&lt;button type="submit"&gt;</code></td><td>同步</td><td>整個頁面被覆蓋</td></tr>
+    <tr><td>Ajax</td><td>JavaScript 執行 <code>$.ajax()</code> 或 <code>fetch()</code></td><td>非同步</td><td>頁面不動，資料在背景交換</td></tr>
+  </table>
+
+  <p>前三種的共同點是「同步」：瀏覽器送出請求，等伺服器回應，然後把整個頁面換成回應的內容。你在 DevTools 的 Network 面板裡會看到一個 Document 類型的請求，回應是完整 HTML。</p>
+
+  <p>Ajax（Asynchronous JavaScript and XML）則完全不同。它是 JavaScript 發起的非同步請求：瀏覽器在背景送出請求，拿到資料之後，再用 JavaScript 把資料塞進目前頁面的某個位置。整個過程你不會看到頁面跳掉或刷新。</p>
+
+  <h3>為什麼爬蟲要分這四種？</h3>
+  <p>對爬蟲來說，前三種和 Ajax 的處理方式差很多：</p>
+  <ul>
+    <li><strong>前三種</strong>：資料通常就在 HTML 裡。你對最終載入的 URL 發一次 GET 請求，拿回來的 HTML 就包含了你要的內容。</li>
+    <li><strong>Ajax</strong>：資料不在初始 HTML 裡。HTML 只是一個空殼，資料是 JavaScript 在背景從某個 JSON 介面抓回來、再填進去的。你要做的是找到那個 JSON 介面的 URL，直接對它發請求。</li>
+  </ul>
+
+  <p>所以每次你在 DevTools 裡看到一個請求，第一件事就是問自己：這個請求是頁面一載入就有的（Document / 同步），還是使用者做了某個動作之後才出現在 Network 面板的（XHR / Fetch / 非同步）？如果是後者，它的 URL 和參數就是你要逆向的目標。</p>
+
+  <h3>一個具體例子</h3>
+  <p>假設你在看一個書籍網站，首頁載入時 HTML 裡只有一個空的书單 <code>&lt;div id="book-list"&gt;&lt;/div&gt;</code>。你點了一本分類之後，畫面下方突然冒出四本書。打開 DevTools Network 面板，你會看到一個新的請求：</p>
+  <pre><code>GET /api/books?category=scifi</code></pre>
+  <p>回應是 JSON：</p>
+  <pre><code>["三體", "銀河帝國", "沙丘", "基地"]</code></pre>
+  <p>這就是 Ajax。你要爬這個資料，不是對首頁的 URL 發請求，而是要找到 <code>/api/books</code> 這個介面，然後自己用 Python 對它發 GET 請求。</p>
+
+  <h2>Quiz</h2>
+
+  <div class="quiz" data-question="URL https://www.baidu.com/s?wd=alex 中，查詢參數（Query String）是哪一段？" data-correct="2" data-explain="查詢參數是 ? 之後的字串，這裡是 wd=alex。">
+    <button class="opt">https://</button>
+    <button class="opt">www.baidu.com</button>
+    <button class="opt">wd=alex</button>
+    <button class="opt">/s</button>
+  </div>
+
+  <div class="quiz" data-question="以下哪一種請求形式會讓整個瀏覽器頁面被新內容覆蓋？" data-correct="1" data-explain="a 標籤超連結是瀏覽器內建的同步行為，點擊後整個頁面跳轉。">
+    <button class="opt">$.ajax()</button>
+    <button class="opt">&lt;a href="..."&gt;</button>
+    <button class="opt">fetch()</button>
+    <button class="opt">XMLHttpRequest</button>
+  </div>
+
+  <div class="quiz" data-question="Ajax 請求和前三種瀏覽器同步請求最大的差別是什麼？" data-correct="3" data-explain="Ajax 是非同步的，頁面不會刷新，資料在背景交換後由 JavaScript 塞進 DOM。">
+    <button class="opt">Ajax 只能傳 XML 格式</button>
+    <button class="opt">Ajax 必須用 POST 方法</button>
+    <button class="opt">Ajax 不會刷新頁面，資料在背景交換</button>
+    <button class="opt">Ajax 只能在同域名下發送</button>
+  </div>
+
+  <div class="quiz" data-question="你在 DevTools Network 面板看到一個 XHR 請求，回應是 JSON 資料。這代表什麼？" data-correct="0" data-explain="XHR / Fetch 類型的請求代表 JavaScript 在背景非同步抓取資料，這就是 Ajax。">
+    <button class="opt">這是 JavaScript 發起的 Ajax 請求</button>
+    <button class="opt">這是瀏覽器地址列輸入的請求</button>
+    <button class="opt">這是 form 表單提交的請求</button>
+    <button class="opt">這是圖片資源的請求</button>
+  </div>
+
+  <div class="quiz" data-question="一個網頁的初始 HTML 裡沒有你要的資料，但點擊按鈕後畫面出現了資料。你應該去哪裡找資料的來源？" data-correct="2" data-explain="資料是 JavaScript 點擊後從某個介面非同步抓回的，所以要從 XHR / Fetch 請求找。">
+    <button class="opt">初始 HTML 的原始碼</button>
+    <button class="opt">CSS 樣式表</button>
+    <button class="opt">點擊後才出現在 Network 面板的 XHR / Fetch 請求</button>
+    <button class="opt">瀏覽器的 Cookie</button>
+  </div>
+
+  <div class="lesson-nav">
+    <span></span>
+    <a href="./flask-server.html">下一步：Flask 演示伺服器 →</a>
+  </div>
+
+  <div class="footer">Ajax 與 JavaScript 引入 · Node 13 / Step 1</div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

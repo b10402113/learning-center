@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>极简壁纸请求-解密-下载闭环</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<header>
+<h1>极简壁纸请求-解密-下载闭环</h1>
+<p class="subtitle">POST → execjs 解密 → JSON 解析 → 拼 URL → 二进制落盘</p>
+</header>
+
+<main>
+
+<section>
+<h2>这个案例的完整链路</h2>
+<p>极简壁纸（<code>bz.zzzmh.cn</code>）是一个响应体加密的典型案例。请求本身没有加密参数，服务器返回的 JSON 里只有一个加密字符串。解密、解析、下载，全靠客户端完成。</p>
+<p>完整流程分五步：</p>
+<ol>
+<li>POST 请求 <code>/bz/v3/getData</code>，拿到加密响应。</li>
+<li>用 execjs 调 JS 解密函数，把加密字符串还原成明文 JSON。</li>
+<li><code>json.loads</code> 解析明文，取出图片列表。</li>
+<li>遍历列表，拼接每张图片的高清下载地址。</li>
+<li>GET 请求下载地址，把图片二进制写入本地。</li>
+</ol>
+</section>
+
+<section>
+<h2>第一步：POST 请求拿加密响应</h2>
+<p>接口地址是 <code>https://api.zzzmh.cn/bz/v3/getData</code>，POST 请求，请求体是 JSON：</p>
+<pre><code>import requests
+
+headers = {
+    'authority': 'api.zzzmh.cn',
+    'accept': 'application/json, text/plain, */*',
+    'accept-language': 'zh-CN,zh;q=0.9',
+    'cache-control': 'no-cache',
+    'content-type': 'application/json;charset=UTF-8',
+    'origin': 'https://bz.zzzmh.cn',
+    'referer': 'https://bz.zzzmh.cn/',
+    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15.7) AppleWebKit/537.36 ...',
+}
+
+json_data = {
+    'size': 24,
+    'current': 1,
+    'sort': 0,
+    'category': 0,
+    'resolution': 4,
+    'color': 0,
+    'categoryId': 0,
+    'ratio': 0,
+}
+
+response = requests.post('https://api.zzzmh.cn/bz/v3/getData', headers=headers, json=json_data)
+result = response.json().get("result")
+print(result)  # 输出: ak+9VCsq4dEdB+UdU/Go8kh5JDEbMHGTCmF/AyXJQ0IgHU+lUAiv ...</code></pre>
+<p>响应体里 <code>result</code> 字段就是加密的 base64 字符串。这一步没有任何加密参数，headers 里的 <code>authority</code>、<code>origin</code>、<code>referer</code> 都是从浏览器复制过来的，照搬即可。</p>
+</section>
+
+<section>
+<h2>第二步：execjs 调 JS 解密</h2>
+<p>把上一课讲的扣下代码准备好（<code>08 极简壁纸.js</code>），用 execjs 加载并调用入口函数 <code>_0x58b5da</code>：</p>
+<pre><code>import execjs
+
+data = execjs.compile(open("08 极简壁纸.js").read()).call("_0x58b5da", result)
+print("data:", data)
+print("data:", type(data))</code></pre>
+<p>关键点：</p>
+<ul>
+<li><code>execjs.compile(...)</code> 把 JS 代码编译成可执行的上下文。</li>
+<li><code>.call("_0x58b5da", result)</code> 调用入口函数，传入加密字符串。</li>
+<li>扣下的 JS 文件里已经有 <code>window = global;</code>，所以能直接跑。</li>
+</ul>
+</section>
+
+<section>
+<h2>第三步：JSON 解析取图片列表</h2>
+<p>解密后的 <code>data</code> 是一个 JSON 字符串，需要用 <code>json.loads</code> 解析成 Python 字典，再取出 <code>list</code> 字段：</p>
+<pre><code>import json
+
+data = json.loads(data).get("list")
+# data 是一个列表，每个元素是一张壁纸的信息字典</code></pre>
+<p>列表里的每个元素至少包含两个字段：</p>
+<ul>
+<li><code>i</code>：图片的基础 ID。</li>
+<li><code>t</code>：图片的类型编号。</li>
+</ul>
+</section>
+
+<section>
+<h2>第四步：拼接高清下载地址</h2>
+<p>每张图片的高清下载地址规则是：</p>
+<pre><code>高清地址 = "https://api.zzzmh.cn/bz/v3/getUrl/" + i + str(t) + "9"</code></pre>
+<p>比如 <code>i=12345</code>, <code>t=6</code>，拼出来的就是 <code>https://api.zzzmh.cn/bz/v3/getUrl/1234569</code>。这里的 <code>"9"</code> 是固定后缀，可能代表最高分辨率。</p>
+<pre><code>for img in data:
+    i = img.get("i")
+    t = img.get("t")
+    id_num = i + str(t) + "9"
+    url = "https://api.zzzmh.cn/bz/v3/getUrl/" + id_num
+    print(url)</code></pre>
+</section>
+
+<section>
+<h2>第五步：下载图片并落盘</h2>
+<p>拿到高清地址后，GET 请求就能拿到图片二进制内容。写入本地时一定要用 <code>wb</code> 模式（二进制写入），否则图片会损坏：</p>
+<pre><code>for img in data:
+    i = img.get("i")
+    t = img.get("t")
+    id_num = i + str(t) + "9"
+    url = "https://api.zzzmh.cn/bz/v3/getUrl/" + id_num
+
+    res = requests.get(url, headers=headers)
+
+    with open(f"img/{id_num}.jpg", "wb") as f:
+        f.write(res.content)
+    print(f"{id_num} 下载成功!")</code></pre>
+<p>注意几点：</p>
+<ul>
+<li>headers 和 POST 请求保持一致，否则可能被拒绝。</li>
+<li>文件路径 <code>img/{id_num}.jpg</code> 里的 <code>img/</code> 目录必须提前创建。</li>
+<li><code>res.content</code> 是 bytes 对象，对应二进制内容；<code>res.text</code> 是字符串，不能用来写图片。</li>
+</ul>
+</section>
+
+<section>
+<h2>响应体加密 vs 参数加密</h2>
+<p>极简壁纸属于<strong>响应体加密</strong>：请求本身没加密，密文藏在响应里。这和前面学过的<strong>参数加密</strong>（sign、AES 加密请求字段）形成对比：</p>
+<table>
+<thead>
+<tr><th>类型</th><th>密文位置</th><th>逆向目标</th><th>典型算法</th></tr>
+</thead>
+<tbody>
+<tr><td>参数加密</td><td>请求 URL / 表单</td><td>复现加密算法，生成密文</td><td>MD5、SHA1、AES</td></tr>
+<tr><td>响应体加密</td><td>响应 JSON / 字符串</td><td>复现解密算法，还原明文</td><td>RC4、AES、Base64</td></tr>
+</tbody>
+</table>
+<p>响应体加密的破解链路更长：不仅要会解密，还要处理 base64 编码、字符编码、JSON 解析、文件下载。但加密强度往往更低，因为 RC4 这类算法本身不难。</p>
+</section>
+
+<section class="quiz-section">
+<h2>随堂测验</h2>
+
+<div class="quiz" data-question="极简壁纸的案例属于哪一类加密形态？" data-correct="1" data-explain="请求本身没有加密参数，密文藏在响应体里，属于响应体加密。">
+  <button class="opt">参数加密</button>
+  <button class="opt">响应体加密</button>
+  <button class="opt">双向加密</button>
+  <button class="opt">TLS 加密</button>
+</div>
+
+<div class="quiz" data-question="execjs 调用 JS 解密函数的正确写法是？" data-correct="0" data-explain="先 compile 编译 JS 代码，再 call 调用指定函数并传入参数。">
+  <button class="opt">execjs.compile(open("08 极简壁纸.js").read()).call("_0x58b5da", result)</button>
+  <button class="opt">execjs.call("_0x58b5da", result).compile("08 极简壁纸.js")</button>
+  <button class="opt">execjs.run("08 极简壁纸.js", "_0x58b5da", result)</button>
+  <button class="opt">execjs.open("08 极简壁纸.js").exec("_0x58b5da", result)</button>
+</div>
+
+<div class="quiz" data-question="下载图片时，文件应该以什么模式打开？" data-correct="2" data-explain="图片是二进制内容，必须用 wb 模式写入，否则会损坏。">
+  <button class="opt">"w" 模式</button>
+  <button class="opt">"a" 模式</button>
+  <button class="opt">"wb" 模式</button>
+  <button class="opt">"r" 模式</button>
+</div>
+
+<div class="quiz" data-question="极简壁纸的高清下载地址拼接规则是什么？" data-correct="3" data-explain="地址 = 前缀 + i + str(t) + '9'，其中 '9' 是固定后缀。">
+  <button class="opt">前缀 + t + str(i) + "9"</button>
+  <button class="opt">前缀 + i + "9" + str(t)</button>
+  <button class="opt">前缀 + str(i) + t + "8"</button>
+  <button class="opt">前缀 + i + str(t) + "9"</button>
+</div>
+
+<div class="quiz" data-question="响应体加密和参数加密的主要区别是什么？" data-correct="0" data-explain="参数加密密文在请求里，响应体加密密文在响应里，逆向目标不同。">
+  <button class="opt">参数加密密文在请求里，响应体加密密文在响应里</button>
+  <button class="opt">参数加密必须用 RC4，响应体加密必须用 AES</button>
+  <button class="opt">参数加密不需要补环境，响应体加密需要</button>
+  <button class="opt">参数加密比响应体加密更难破解</button>
+</div>
+</section>
+
+</main>
+
+<div class="lesson-nav">
+<div class="nav-left">
+<a href="./wallpaper-decrypt-chain.html">← 上一步：极简壁纸的完整解密链</a>
+</div>
+</div>
+
+<footer>
+<p>有疑问？随时向老师提问。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

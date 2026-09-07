@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AES 對稱加密實戰 — 編碼與加密特徵</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>AES 對稱加密實戰</h1>
+<p class="meta">學習目標：掌握 AES-128-CBC 在 Python（pycryptodome）和前端（CryptoJS）兩端的互通：16 位元組 key/iv、PKCS7 填充、先 AES 加密再 base64 編碼的傳輸套路，並能復現一個帶 sign 校驗的爬蟲閉環。</p>
+
+<h2>現象：請求參數裡出現看似隨機的 base64 字串</h2>
+<p>你在 DevTools 裡看到請求參數 <code>sign</code> 或 <code>data</code> 是一串 base64，但每次請求都不同，長度也遠超過一般 base64 編碼的結果。這通常是<strong>先 AES 加密，再做 base64 編碼</strong>的組合。</p>
+
+<h2>AES 對稱加密的核心概念</h2>
+<ul>
+  <li><strong>對稱</strong>：加密和解密使用同一把金鑰。</li>
+  <li><strong>AES-128</strong>：金鑰長度 16 位元組（128 位元）。</li>
+  <li><strong>CBC 模式</strong>：Cipher Block Chaining，每個明文塊先與前一個密文塊做 XOR，第一塊與 IV（初始化向量）做 XOR。需要一個 16 位元組的 IV。</li>
+  <li><strong>PKCS7 填充</strong>：明文長度必須是 16 的倍數，不足處填充位元組，值等於缺少的位元組數。例如缺 5 位元組就填 5 個 <code>0x05</code>。</li>
+</ul>
+
+<h2>Python 加密流程</h2>
+<pre><code>from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+import base64
+
+key = b"0123456789abcdef"  # 16 位元組
+iv = b"1234567890abcdef"   # 16 位元組
+data = "hello world"
+
+# 加密
+aes = AES.new(key, AES.MODE_CBC, iv)
+encrypted = aes.encrypt(pad(data.encode(), 16))
+result = base64.b64encode(encrypted).decode()
+print(result)</code></pre>
+
+<h2>Python 解密流程</h2>
+<pre><code># 解密
+aes2 = AES.new(key, AES.MODE_CBC, iv)
+decrypted = unpad(aes2.decrypt(base64.b64decode(result)), 16)
+print(decrypted.decode())  # hello world</code></pre>
+
+<h2>前端 CryptoJS 的對應寫法</h2>
+<p>網頁裡用 CryptoJS 做同樣的 AES-128-CBC 加密：</p>
+<pre><code>const key = CryptoJS.enc.Utf8.parse("0123456789abcdef");
+const iv = CryptoJS.enc.Utf8.parse("1234567890abcdef");
+const encrypted = CryptoJS.AES.encrypt("hello world", key, {
+    iv: iv,
+    mode: CryptoJS.mode.CBC,
+    padding: CryptoJS.pad.Pkcs7
+});
+console.log(encrypted.toString());  // base64 密文</code></pre>
+<p>關鍵對應關係：</p>
+<ul>
+  <li><code>CryptoJS.enc.Utf8.parse</code> 等同於 Python 的 <code>b"..."</code> 或 <code>.encode()</code>。</li>
+  <li><code>CryptoJS.mode.CBC</code> 對應 <code>AES.MODE_CBC</code>。</li>
+  <li><code>CryptoJS.pad.Pkcs7</code> 對應 <code>pad(..., 16)</code> / <code>unpad(..., 16)</code>。</li>
+  <li><code>encrypted.toString()</code> 預設輸出 base64 字串。</li>
+</ul>
+
+<h2>復現 sign 參數的爬蟲閉環</h2>
+<p>一個典型的帶簽名介面：伺服器要求請求帶 <code>sign</code> 參數，值為 <code>base64(AES(json(參數)))</code>。爬蟲端要做的就是摳出前端 JS 裡的 key 和 iv，在 Python 裡復現同樣的加密流程：</p>
+<pre><code>import json
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad
+import base64
+
+key = b"0123456789abcdef"
+iv = b"1234567890abcdef"
+
+params = {"page": 1, "limit": 20}
+sign = base64.b64encode(
+    AES.new(key, AES.MODE_CBC, iv).encrypt(
+        pad(json.dumps(params).encode(), 16)
+    )
+).decode()
+
+# 把 sign 放進請求
+# requests.get(url, params={**params, "sign": sign})</code></pre>
+
+<h2>常見除錯清單</h2>
+<ul>
+  <li>解出亂碼？先核對 key、iv、模式、填充四要素是否與前端完全一致。</li>
+  <li>key 或 iv 不是 16 位元組？檢查是否用了錯誤的編碼或少了字元。</li>
+  <li>前端用 <code>CryptoJS.enc.Base64.parse</code> 處理 key？那 key 本身也是 base64 編碼過的，要先解回位元組。</li>
+</ul>
+
+<h2>重點整理</h2>
+<ul>
+  <li>AES-128-CBC：key 16 位元組、iv 16 位元組、明文填充到 16 的倍數。</li>
+  <li>傳輸套路：先 AES 加密，再 base64 編碼；解密則反過來。</li>
+  <li>Python 用 pycryptodome，前端用 CryptoJS，兩端結果可以互通。</li>
+  <li>復現 sign 的關鍵：從 JS 裡摳出 key/iv，按同樣順序做 json.dumps → pad → AES → base64。</li>
+</ul>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="AES-128 的金鑰長度是多少位元組？" data-correct="1" data-explain="AES-128 使用 128 位元 = 16 位元組的金鑰。">
+  <button class="opt">8 位元組</button>
+  <button class="opt">16 位元組</button>
+  <button class="opt">32 位元組</button>
+  <button class="opt">64 位元組</button>
+</div>
+
+<div class="quiz" data-question="AES 加密後通常再做什麼處理以便傳輸？" data-correct="2" data-explain="AES 輸出是二進位，通常再做 base64 編碼才能安全放進 URL 或 JSON。">
+  <button class="opt">MD5</button>
+  <button class="opt">URL encode</button>
+  <button class="opt">base64 編碼</button>
+  <button class="opt">十六進位編碼</button>
+</div>
+
+<div class="quiz" data-question="CryptoJS 的 CryptoJS.pad.Pkcs7 對應 Python 的什麼？" data-correct="0" data-explain="Pkcs7 填充在 pycryptodome 裡用 pad(data, 16) / unpad(data, 16) 實現。">
+  <button class="opt">pad(data, 16) / unpad(data, 16)</button>
+  <button class="opt">pad(data, 32) / unpad(data, 32)</button>
+  <button class="opt">不需要填充</button>
+  <button class="opt">strip()</button>
+</div>
+
+<div class="quiz" data-question="AES 解密時，金鑰或_iv_與加密時不同會怎樣？" data-correct="3" data-explain="金鑰或 iv 不對，AES 會解出完全無意義的亂碼，不會報錯。">
+  <button class="opt">拋出例外</button>
+  <button class="opt">自動修正</button>
+  <button class="opt">解出空白字串</button>
+  <button class="opt">解出亂碼</button>
+</div>
+
+<div class="quiz" data-question="前端用 CryptoJS 加密、Python 解密能成立的前提是？" data-correct="1" data-explain="key、iv、模式、填充四要素必須完全一致，跨語言才能互通。">
+  <button class="opt">使用相同的程式語言</button>
+  <button class="opt">key/iv/模式/填充四要素一致</button>
+  <button class="opt">使用相同的 base64 變種</button>
+  <button class="opt">使用相同的 json 鍵順序</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./digest-algorithms.html">← 上一步：摘要演算法家族</a>
+  <a href="./rsa-asymmetric.html">下一步：RSA 非對稱加密 →</a>
+</div>
+
+<footer class="footer">
+  <p>有任何問題，隨時問你的 agent 老師。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

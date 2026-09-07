@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CryptoJS DES 解密 API 链</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>CryptoJS DES 解密 API 链</h1>
+<p class="meta">实战：DES/AES 案例 · 步骤 2/4</p>
+
+<h2>学习目标</h2>
+<p>逐行拆解 CryptoJS DES 解密的完整 API 链——parse key、Base64 解析密文、decrypt 调用、UTF-8 输出，能独立写出 DES-ECB 解密函数。</p>
+
+<h2>解密函数全貌</h2>
+<p>上一课我们直接调用了 <code>decryptByDES</code> 函数，但没有解释它内部发生了什么。现在打开 <code>02 招标网.js</code>，逐行读：</p>
+<pre><code>CryptoJS = require("crypto-js")
+
+function decryptByDES(ciphertext) {
+    var keyHex = CryptoJS.enc.Utf8.parse("1qaz@wsx3e");
+    var decrypted = CryptoJS.DES.decrypt({
+            ciphertext: CryptoJS.enc.Base64.parse(ciphertext),
+        },
+        keyHex, {
+            mode: CryptoJS.mode.ECB,
+            padding: CryptoJS.pad.Pkcs7,
+        }
+    );
+    return decrypted.toString(CryptoJS.enc.Utf8);
+}</code></pre>
+
+<h2>第一行：解析密钥</h2>
+<pre><code>var keyHex = CryptoJS.enc.Utf8.parse("1qaz@wsx3e");</code></pre>
+<p><code>CryptoJS.enc.Utf8.parse()</code> 把字符串密钥转成 CryptoJS 内部的 <strong>WordArray</strong> 格式。密钥 <code>"1qaz@wsx3e"</code> 是 9 个字符，DES 密钥的有效长度是 8 字节（64 位），所以实际只取前 8 个字符 <code>"1qaz@wsx"</code>。</p>
+<p>这一步的要点是：<strong>parse 是把人类可读的字符串转成 CryptoJS 能处理的二进制格式</strong>。</p>
+
+<h2>第二行：解析密文</h2>
+<pre><code>ciphertext: CryptoJS.enc.Base64.parse(ciphertext),</code></pre>
+<p>我们拿到的密文是 Base64 编码的字符串。CryptoJS 要求密文也以 WordArray 格式传入，所以要用 <code>CryptoJS.enc.Base64.parse()</code> 把 Base64 字符串解码成原始字节。</p>
+<p>这一步对应的是：把 Base64 → 二进制。</p>
+
+<h2>第三行：执行解密</h2>
+<pre><code>var decrypted = CryptoJS.DES.decrypt(
+    { ciphertext: ... },   // 密文 WordArray
+    keyHex,                // 密钥 WordArray
+    { mode: ..., padding: ... }  // 配置项
+);</code></pre>
+<p><code>CryptoJS.DES.decrypt()</code> 接受三个参数：</p>
+<ul>
+  <li><strong>密文对象</strong>：包含 <code>ciphertext</code> 字段的对象</li>
+  <li><strong>密钥</strong>：WordArray 格式的密钥</li>
+  <li><strong>配置</strong>：加密模式和填充方式</li>
+</ul>
+
+<h2>加密模式：ECB</h2>
+<pre><code>mode: CryptoJS.mode.ECB,</code></pre>
+<p><strong>ECB（Electronic Codebook，电子密码本）</strong> 是最简单的分组加密模式：把明文切成固定大小的块（DES 是 8 字节一块），每块独立加密。相同的明文块会产生相同的密文块。</p>
+<table>
+  <tr><th>模式</th><th>特点</th><th>适用场景</th></tr>
+  <tr><td>ECB</td><td>每块独立加密，相同明文→相同密文</td><td>简单数据、短消息</td></tr>
+  <tr><td>CBC</td><td>每块依赖前一块，需要 IV</td><td>通用场景、长消息</td></tr>
+  <tr><td>CFB</td><td>流密码模式</td><td>实时数据流</td></tr>
+</table>
+<p>ECB 的缺点是安全性较低，但实现简单，很多老系统还在用。</p>
+
+<h2>填充方式：Pkcs7</h2>
+<pre><code>padding: CryptoJS.pad.Pkcs7,</code></pre>
+<p>DES 要求明文长度必须是 8 字节的整数倍。如果不够，就需要填充。<strong>Pkcs7</strong> 的填充规则是：缺几个字节就填几个该数字。</p>
+<p>例如：明文 <code>"hello"</code> 是 5 字节，还差 3 字节，就填充 <code>03 03 03</code>。解密时，CryptoJS 会自动识别并去除填充。</p>
+
+<h2>第四行：输出明文</h2>
+<pre><code>return decrypted.toString(CryptoJS.enc.Utf8);</code></pre>
+<p><code>decrypt()</code> 返回的是一个 WordArray 对象，要转回人类可读的字符串，需要用 <code>.toString()</code> 并指定编码。<code>CryptoJS.enc.Utf8</code> 表示把二进制数据按 UTF-8 解码成字符串。</p>
+
+<h2>完整 API 链</h2>
+<p>把四行代码串起来，就是 CryptoJS DES 解密的完整链条：</p>
+<pre><code>密钥字符串 ──parse──▶ 密钥 WordArray ──┐
+                                      ├──▶ decrypt() ──toString──▶ 明文
+Base64密文 ──parse──▶ 密文 WordArray ──┘</code></pre>
+
+<h2>独立写出 DES-ECB 解密函数</h2>
+<p>理解了 API 链后，你应该能独立写出类似函数。核心只有四步：</p>
+<pre><code>function desDecrypt(ciphertext, key) {
+    // 1. 解析密钥
+    var keyHex = CryptoJS.enc.Utf8.parse(key);
+    // 2. 执行解密
+    var decrypted = CryptoJS.DES.decrypt(
+        { ciphertext: CryptoJS.enc.Base64.parse(ciphertext) },
+        keyHex,
+        { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }
+    );
+    // 3. 输出明文
+    return decrypted.toString(CryptoJS.enc.Utf8);
+}</code></pre>
+
+<h2>与有道翻译案例的对比</h2>
+<table>
+  <tr><th>案例</th><th>加密类型</th><th>密钥来源</th><th>Python 侧职责</th></tr>
+  <tr><td>有道翻译</td><td>AES-CBC</td><td>固定字符串</td><td>发请求</td></tr>
+  <tr><td>招标网</td><td>DES-ECB</td><td>固定字符串</td><td>发请求 + JS 解密</td></tr>
+</table>
+<p>两个案例的共同点是：加密逻辑都在 JS 侧完成，Python 只负责发请求和接收结果。</p>
+
+<h2>常见坑</h2>
+<ul>
+  <li><strong>密钥长度不对</strong>：DES 密钥必须是 8 字节，超长会被截断，不足要填充。</li>
+  <li><strong>密文不是 Base64</strong>：如果密文是十六进制字符串，需要用 <code>CryptoJS.enc.Hex.parse()</code> 代替 <code>Base64.parse()</code>。</li>
+  <li><strong>模式/填充不匹配</strong>：加密端用 CBC + Pkcs7，解密端也得用 CBC + Pkcs7，否则解密出来是乱码。</li>
+</ul>
+
+<h2>小结</h2>
+<p>CryptoJS DES 解密的 API 链其实只有四步：parse key、parse ciphertext、decrypt、toString。理解这条链之后，任何 CryptoJS 的 DES 解密代码都只是一层窗户纸。下一步，我们把视线转向 AES——更现代、更安全的对称加密算法。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="CryptoJS DES 解密的第一步是什么？" data-correct="1" data-explain="用 CryptoJS.enc.Utf8.parse() 把字符串密钥转成 WordArray 格式。">
+  <button class="opt">Base64 解析密文</button>
+  <button class="opt">解析密钥字符串为 WordArray</button>
+  <button class="opt">执行 decrypt() 函数</button>
+  <button class="opt">去除填充字节</button>
+</div>
+
+<div class="quiz" data-question="ECB 加密模式的特点是什么？" data-correct="0" data-explain="ECB 模式下每块独立加密，相同的明文块会产生相同的密文块。">
+  <button class="opt">每块独立加密，相同明文产生相同密文</button>
+  <button class="opt">每块依赖前一块，需要 IV</button>
+  <button class="opt">流密码模式，适合实时数据</button>
+  <button class="opt">非对称加密，需要公私钥对</button>
+</div>
+
+<div class="quiz" data-question="Pkcs7 填充规则是什么？" data-correct="2" data-explain="缺几个字节就填几个该数字，例如缺 3 字节就填 03 03 03。">
+  <button class="opt">全部填充 0x00</button>
+  <button class="opt">全部填充 0xFF</button>
+  <button class="opt">缺几个字节就填几个该数字</button>
+  <button class="opt">随机填充任意字节</button>
+</div>
+
+<div class="quiz" data-question="decrypt() 返回的是什么类型？" data-correct="3" data-explain="decrypt() 返回 WordArray 对象，需要用 .toString(CryptoJS.enc.Utf8) 转成字符串。">
+  <button class="opt">字符串</button>
+  <button class="opt">Base64 编码</button>
+  <button class="opt">十六进制字符串</button>
+  <button class="opt">WordArray 对象</button>
+</div>
+
+<div class="quiz" data-question="如果密文是十六进制字符串而不是 Base64，应该用什么解析？" data-correct="1" data-explain="十六进制密文应该用 CryptoJS.enc.Hex.parse() 解析。">
+  <button class="opt">CryptoJS.enc.Utf8.parse()</button>
+  <button class="opt">CryptoJS.enc.Hex.parse()</button>
+  <button class="opt">CryptoJS.enc.Latin1.parse()</button>
+  <button class="opt">CryptoJS.enc.Base64.parse()</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./des-ecb-case.html">← 上一步：招标网 DES-ECB 解密实战</a>
+  <a href="./aes-cbc-case.html">下一步：毛毛租 AES-CBC 加密与解密实战 →</a>
+</div>
+
+<div class="footer">实战：DES/AES 案例 · 步骤 2/4</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Response 解析与终端运行 — Scrapy 框架入门</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>Response 解析与终端运行</h1>
+  <div class="meta">Scrapy 框架入门 · Step 3/4</div>
+
+  <h2>Learning goal</h2>
+  <p>掌握 response.xpath 返回 Selector 对象的机制，区分 extract 与 extract_first 的取舍，并能用 scrapy crawl 运行爬虫、读懂终端日志。</p>
+
+  <h2>Lesson</h2>
+
+  <p>Spider 的 parse 方法拿到的是一个 <code>response</code> 对象，它不是纯文本，而是 Scrapy 封装好的响应体。要从中提取数据，最常用的是 <code>response.xpath()</code>。</p>
+
+  <h3>response.xpath 返回的不是字符串</h3>
+  <p>这是新手最容易踩的坑。<code>response.xpath('//title/text()')</code> 返回的是一个 <strong>Selector 对象列表</strong>，不是字符串，也不是字符串列表。数据藏在 Selector 对象的 <code>data</code> 属性里，必须用 <code>extract()</code> 或 <code>extract_first()</code> 把它取出来。</p>
+
+  <h3>extract 与 extract_first</h3>
+  <table>
+    <tr><th>方法</th><th>返回值</th><th>适用场景</th></tr>
+    <tr><td>extract()</td><td>字符串列表（所有匹配结果）</td><td>匹配到多个节点</td></tr>
+    <tr><td>extract_first()</td><td>单个字符串（第一个匹配结果）</td><td>只取第一个节点</td></tr>
+  </table>
+
+  <pre><code>def parse(self, response):
+    # 取页面标题（只有一个）
+    title = response.xpath('//title/text()').extract_first()
+
+    # 取所有链接（多个）
+    links = response.xpath('//a/@href').extract()</code></pre>
+
+  <p>经验法则：列表里只有一个元素时用 <code>extract_first()</code>，否则用 <code>extract()</code>。</p>
+
+  <h3>为什么 Element 选项卡的 xpath 可能拿不到数据</h3>
+  <p>浏览器 DevTools 的 Element 选项卡显示的是<strong>渲染完成后</strong>的 DOM，而 Scrapy 拿到的是服务器返回的<strong>原始响应</strong>。如果页面用 JavaScript 动态渲染，Element 里看到的节点在原始 HTML 里根本不存在。</p>
+
+  <p>正确做法：在 DevTools 的 <strong>Network</strong> 面板里找到对应的请求，看它的 Response 内容，或者用 Scrapy 的 <code>response.text</code> 直接打印原始 HTML，再写 xpath。</p>
+
+  <h3>运行爬虫</h3>
+  <p>在项目根目录执行：</p>
+  <pre><code>scrapy crawl baidu</code></pre>
+  <p>终端会打印大量日志：请求的 URL、响应状态码、下载速度、数据统计。这是 Scrapy 在告诉你它正在干什么。</p>
+
+  <h3>settings 三项关键配置</h3>
+  <p>默认的 Scrapy 项目跑起来会弹很多警告，也容易被网站拦截。打开 <code>settings.py</code>，改三行：</p>
+  <pre><code># 不遵从 robots.txt 协议
+ROBOTSTXT_OBEY = False
+
+# 只显示错误级别日志，减少刷屏
+LOG_LEVEL = 'ERROR'
+
+# 指定 User-Agent，伪装成浏览器
+USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'</code></pre>
+
+  <p>改完再跑 <code>scrapy crawl baidu</code>，终端会干净很多。</p>
+
+  <h3>终端日志怎么看</h3>
+  <ul>
+    <li><code>[scrapy.core.engine] DEBUG: Crawled (200)</code> — 请求成功，状态码 200。</li>
+    <li><code>[scrapy.core.engine] DEBUG: Crawled (404)</code> — 页面不存在。</li>
+    <li><code>[scrapy.statscrawler] INFO: Dumping Scrapy stats</code> — 爬取结束后的统计摘要。</li>
+  </ul>
+
+  <h2>Quiz</h2>
+
+  <div class="quiz" data-question="response.xpath() 的直接返回值是什么？" data-correct="1" data-explain="xpath 返回的是 Selector 对象列表，不是字符串。">
+    <button class="opt">字符串列表</button>
+    <button class="opt">Selector 对象列表</button>
+    <button class="opt">纯文本</button>
+    <button class="opt">HTML 源码</button>
+  </div>
+
+  <div class="quiz" data-question="extract() 和 extract_first() 的主要区别是？" data-correct="0" data-explain="extract 返回所有匹配结果的列表，extract_first 只返回第一个。">
+    <button class="opt">extract 返回所有匹配结果，extract_first 只返回第一个</button>
+    <button class="opt">extract 用于文本，extract_first 用于链接</button>
+    <button class="opt">extract 更快，extract_first 更慢</button>
+    <button class="opt">没有区别，可以互换</button>
+  </div>
+
+  <div class="quiz" data-question="为什么从 Element 选项卡复制的 xpath 在 Scrapy 里可能拿不到数据？" data-correct="2" data-explain="Element 显示的是渲染后的 DOM，Scrapy 拿到的是原始响应，动态渲染的内容在原始 HTML 里不存在。">
+    <button class="opt">Scrapy 不支持 xpath</button>
+    <button class="opt">Element 选项卡的 xpath 格式错误</button>
+    <button class="opt">Element 显示的是渲染后的 DOM，Scrapy 拿到的是原始响应</button>
+    <button class="opt">Scrapy 会自动修改 xpath</button>
+  </div>
+
+  <div class="quiz" data-question="运行 Scrapy 爬虫的命令是？" data-correct="1" data-explain="scrapy crawl 爬虫名 是运行爬虫的标准命令。">
+    <button class="opt">scrapy run baidu</button>
+    <button class="opt">scrapy crawl baidu</button>
+    <button class="opt">scrapy start baidu</button>
+    <button class="opt">scrapy execute baidu</button>
+  </div>
+
+  <div class="quiz" data-question="settings.py 中 ROBOTSTXT_OBEY = False 的作用是？" data-correct="3" data-explain="ROBOTSTXT_OBEY = False 表示不遵从 robots.txt 协议。">
+    <button class="opt">关闭日志输出</button>
+    <button class="opt">设置浏览器 UA</button>
+    <button class="opt">开启并发请求</button>
+    <button class="opt">不遵从 robots.txt 协议</button>
+  </div>
+
+  <div class="lesson-nav">
+    <div><a href="./project-spider.html">← 上一步：项目创建与 Spider 编写</a></div>
+    <div><a href="./persist-data.html">下一步：持久化存储的两条路线 →</a></div>
+  </div>
+
+  <div class="footer">Scrapy 框架入门 · Response 解析与终端运行</div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

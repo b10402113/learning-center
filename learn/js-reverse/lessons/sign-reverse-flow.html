@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>sign 逆向的基本流程 — 实战：sign 逆向（Python 原生）</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>sign 逆向的基本流程</h1>
+<p class="meta">js-reverse · 步骤 1/5 · 从抓包到复现的三步法</p>
+
+<p>拿到一个带 <code>sign</code> 参数的请求时，你面对的核心问题其实只有一个：这个看起来很乱的 32 位十六进制字符串，到底是怎么从原始数据算出来的。答案通常藏在一个固定的模式里——把几个关键参数按特定顺序拼成一串字符，然后取 MD5。整个逆向过程就是把这个模式重新挖出来的过程。</p>
+
+<h2>从 Network 面板开始</h2>
+
+<p>在 Chrome DevTools 的 Network 面板里，有道翻译的 POST 请求体大概长这个样子：</p>
+
+<pre><code>i=apple
+from=auto
+to=
+dictResult=true
+keyid=webfanyi
+sign=1a2b3c4d5e6f7890abcdef1234567890
+client=fanyideskweb
+product=webfanyi
+appVersion=1.0.0
+vendor=web
+pointParam=client,mysticTime,product
+mysticTime=1718611200000
+keyfrom=fanyi.web</code></pre>
+
+<p>十几个参数里，真正每次请求都会变的只有两个：<code>mysticTime</code> 和 <code>sign</code>。<code>mysticTime</code> 是一串十三位数字，明显是毫秒级时间戳。<code>sign</code> 是一个三十二位的十六进制字符串，看起来完全随机。</p>
+
+<h2>找到变化的参数之间的因果关系</h2>
+
+<p>两个变化的参数之间其实有因果关系：<code>sign</code> 是用 <code>mysticTime</code> 算出来的。所以问题就简化成了：除了 <code>mysticTime</code> 之外，还有哪些参数参与了 <code>sign</code> 的计算？</p>
+
+<p>答案藏在 <code>pointParam</code> 字段里。它的值是 <code>client,mysticTime,product</code>，恰好把参与签名计算的参数名字点名了出来。<code>pointParam</code> 就是客户端留给自己的备忘录，告诉自己在生成 <code>sign</code> 的时候该把哪些字段拼进去。</p>
+
+<h2>还原拼接顺序</h2>
+
+<p>确定了参与参数之后，下一步是还原拼接顺序。在 Python 版源码里，拼接的模板是固定的：</p>
+
+<pre><code>s = f"client={u}&mysticTime={e}&product={d}&key={t}"</code></pre>
+
+<p>这里的 <code>u</code>、<code>e</code>、<code>d</code>、<code>t</code> 分别对应四个值：</p>
+
+<ul>
+  <li><code>u</code> = <code>fanyideskweb</code>（来自 client 字段）</li>
+  <li><code>e</code> = <code>1718611200000</code>（当前毫秒时间戳）</li>
+  <li><code>d</code> = <code>webfanyi</code>（来自 product 字段）</li>
+  <li><code>t</code> = <code>fsdsogkndfokasodnaso</code>（硬编码字符串）</li>
+</ul>
+
+<p>四个值按固定顺序用 <code>&</code> 和 <code>=</code> 连接成一条长字符串，然后对整个字符串取 MD5 摘要，得到的十六进制表示就是 <code>sign</code>。</p>
+
+<h2>三步法总结</h2>
+
+<p>整个逆向过程可以总结成三步：</p>
+
+<ol>
+  <li><strong>区分静态参数和动态参数</strong>——从请求体里找出每次都会变的字段。</li>
+  <li><strong>确定签名参数和拼接顺序</strong>——通过 <code>pointParam</code> 字段或者直接阅读 JS 代码。</li>
+  <li><strong>用 Python hashlib.md5 复现</strong>——把同样的字符串拼出来、算出同样的摘要。</li>
+</ol>
+
+<p>三步都做完之后，你每次请求都只需要更新 <code>mysticTime</code> 这一个变量，<code>sign</code> 会自动跟着变，服务器就会认为这是一个合法的客户端请求。</p>
+
+<h2>通用性</h2>
+
+<p>这个三步法的价值在于它不仅仅适用于有道翻译。之后你遇到的 <code>sign</code>、<code>token</code>、<code>_d</code> 这类动态参数，绝大多数都是同一个套路：固定模板 + 动态变量 + 标准摘要算法。掌握了这个流程，就相当于拿到了一把能开一类锁的通用钥匙。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="sign 逆向第一步的目标是什么？" data-correct="2" data-explain="第一步是从请求体里区分出静态参数和动态参数，找出哪些字段每次请求都会变化。">
+  <button class="opt">直接阅读 JS 源码，找到加密函数</button>
+  <button class="opt">用 Python 生成一个 sign 并发送请求</button>
+  <button class="opt">从请求体中区分出静态参数和动态参数</button>
+  <button class="opt">在 DevTools 里设置断点并逐层回溯</button>
+</div>
+
+<div class="quiz" data-question="pointParam 字段的主要作用是什么？" data-correct="1" data-explain="pointParam 明确列出了哪些参数参与了签名计算，是客户端留给自己的备忘录。">
+  <button class="opt">记录请求发送的目标服务器地址</button>
+  <button class="opt">列出参与 sign 计算的参数名称</button>
+  <button class="opt">存储加密后的签名结果</button>
+  <button class="opt">标识当前请求的协议版本</button>
+</div>
+
+<div class="quiz" data-question="为什么 sign 和 mysticTime 之间存在因果关系？" data-correct="0" data-explain="sign 的值是由 mysticTime 和其他参数拼接后取 MD5 生成的，所以 mysticTime 变化时 sign 必然变化。">
+  <button class="opt">sign 是由 mysticTime 和其他参数拼接后计算 MD5 得到的</button>
+  <button class="opt">mysticTime 是由 sign 截取前十三位得到的</button>
+  <button class="opt">两个参数都是服务器返回的随机值</button>
+  <button class="opt">两个参数都是客户端本地独立生成的随机数</button>
+</div>
+
+<div class="quiz" data-question="在拼接 sign 字符串时，参数的连接顺序是固定的还是随机的？" data-correct="3" data-explain="拼接顺序是固定的模板，服务器按同样的顺序校验，顺序错误会导致签名失败。">
+  <button class="opt">完全随机，每次请求都不同</button>
+  <button class="opt">按参数字母顺序排列</button>
+  <button class="opt">按参数在请求体中出现的顺序排列</button>
+  <button class="opt">固定顺序，由客户端代码硬编码决定</button>
+</div>
+
+<div class="quiz" data-question="以下哪一项不属于 sign 逆向三步法？" data-correct="2" data-explain="三步法是：区分静态/动态参数 → 确定签名参数和拼接顺序 → 用 Python 复现。直接替换整个请求体不是标准流程。">
+  <button class="opt">区分静态参数与动态参数</button>
+  <button class="opt">确定参与签名的参数与拼接顺序</button>
+  <button class="opt">将请求体中的静态参数全部替换为本地值</button>
+  <button class="opt">用 Python hashlib.md5 复现签名</button>
+</div>
+
+<div class="quiz" data-question="掌握 sign 三步法后，对后续逆向其他动态参数（如 token、_d）有什么帮助？" data-correct="1" data-explain="大多数动态参数都遵循相同的模式：固定模板 + 动态变量 + 标准摘要算法，因此三步法具有通用性。">
+  <button class="opt">只能用于有道翻译，其他网站需要完全不同的方法</button>
+  <button class="opt">大多数动态参数遵循相同模式，三步法可作为通用起点</button>
+  <button class="opt">后续参数都必须用 execjs 才能复现</button>
+  <button class="opt">后续参数都不再需要抓包，直接猜就能猜到</button>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./md5-hashlib.html">下一步：MD5 摘要算法与 hashlib.md5 →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

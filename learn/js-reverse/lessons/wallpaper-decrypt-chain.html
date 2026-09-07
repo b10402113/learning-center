@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>极简壁纸的完整解密链</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<header>
+<h1>极简壁纸的完整解密链</h1>
+<p class="subtitle">atob → Int8Array → RC4 → UTF-8 解码</p>
+</header>
+
+<main>
+
+<section>
+<h2>先看入口函数</h2>
+<p>扣下的解密代码入口是 <code>_0x58b5da</code>，它只有一行：</p>
+<pre><code>function _0x58b5da(_0x512f6f) {
+    return _0x300484(_0x476691(_0x4176cc(_0x512f6f)));
+}</code></pre>
+<p>这一行就是解密链的全貌。输入是 base64 加密字符串，输出是明文字符串。三个函数依次执行，每个函数做一件事。</p>
+</section>
+
+<section>
+<h2>第一步：_0x4176cc —— base64 转字节数组</h2>
+<pre><code>function _0x4176cc(_0x529333) {
+    const _0x2bc465 = window['atob'](_0x529333);  // base64 解码
+    const _0x5384be = new Int8Array(_0x2bc465.length);
+    for (let _0x41c9e8 = 0; _0x41c9e8 &lt; _0x2bc465.length; _0x41c9e8++)
+        _0x5384be[_0x41c9e8] = _0x2bc465['charCodeAt'](_0x41c9e8);
+    return _0x5384be;
+}</code></pre>
+<p>做了两件事：</p>
+<ol>
+<li><code>window.atob</code>：把 base64 字符串解码成普通字符串。这一步会用到浏览器 API，所以<strong>必须补环境</strong>（<code>window = global</code>）。</li>
+<li><code>Int8Array</code>：遍历字符串，把每个字符转成对应的字节（0-255 的整数），得到字节数组。</li>
+</ol>
+<p>输入是 <code>"ak+9VCsq..."</code> 这样的 base64 字符串，输出是字节数组。</p>
+</section>
+
+<section>
+<h2>第二步：_0x476691 —— RC4 异或</h2>
+<p>字节数组送进 RC4 函数，用 256 字节密钥数组做异或，输出还是字节数组，但内容已经是明文了。</p>
+<pre><code>function _0x476691(_0x4eff8a) {
+    // KSA + PRGA 混合循环
+    // 用密钥数组 _0x5f0aa7 对输入字节做异或
+    return _0x114065;  // 明文字节数组
+}</code></pre>
+<p>这一步完全在 Node.js 里跑，不需要补任何环境——因为 RC4 只用了数组运算，没碰浏览器 API。</p>
+</section>
+
+<section>
+<h2>第三步：_0x300484 —— UTF-8 字节解码成字符串</h2>
+<p>RC4 输出的是字节数组，但里面存的不是 ASCII 字符，而是 UTF-8 编码的中文字节。需要把这些字节还原成 JavaScript 字符串。</p>
+<pre><code>function _0x300484(_0x17a9d3) {
+    let _0x1403b1, _0x491f1a, _0x58689c = '';
+    for (var _0x2a4fe4 = 0; _0x2a4fe4 &lt; _0x17a9d3.length; ) {
+        _0x1403b1 = _0x17a9d3[_0x2a4fe4];
+        if (_0x1403b1 &gt;&gt;&gt; 7 === 0x0) {
+            // 单字节 ASCII（0xxxxxxx）
+            _0x58689c += String.fromCharCode(_0x17a9d3[_0x2a4fe4]);
+            _0x2a4fe4 += 1;
+        } else if (0xfc === (0xfc &amp; _0x1403b1)) {
+            // 6 字节字符（1111110x）
+            // ... 拼接 6 个字节成一个码点
+            _0x2a4fe4 += 6;
+        } else if (0xf8 === (0xf8 &amp; _0x1403b1)) {
+            // 5 字节字符（111110xx）
+            _0x2a4fe4 += 5;
+        } else if (0xf0 === (0xf0 &amp; _0x1403b1)) {
+            // 4 字节字符（11110xxx）
+            _0x2a4fe4 += 4;
+        } else if (0xe0 === (0xe0 &amp; _0x1403b1)) {
+            // 3 字节字符（1110xxxx）
+            _0x2a4fe4 += 3;
+        } else if (0xc0 === (0xc0 &amp; _0x1403b1)) {
+            // 2 字节字符（110xxxxx）
+            _0x2a4fe4 += 2;
+        }
+    }
+    return _0x58689c;
+}</code></pre>
+<p>这是<strong>手写的 UTF-8 解码器</strong>，按首字节的高位判断这个字符占几个字节（1-6 字节），然后把后续字节拼成一个 Unicode 码点，再转成字符。</p>
+<p>UTF-8 的字节规则：</p>
+<table>
+<thead>
+<tr><th>首字节模式</th><th>字符长度</th><th>范围</th></tr>
+</thead>
+<tbody>
+<tr><td><code>0xxxxxxx</code></td><td>1 字节</td><td>ASCII</td></tr>
+<tr><td><code>110xxxxx</code></td><td>2 字节</td><td>拉丁文扩展</td></tr>
+<tr><td><code>1110xxxx</code></td><td>3 字节</td><td>中日韩常用字</td></tr>
+<tr><td><code>11110xxx</code></td><td>4 字节</td><td>Emoji 等</td></tr>
+</tbody>
+</table>
+<p>这一步也不需要补环境，纯字节运算。</p>
+</section>
+
+<section>
+<h2>整条链串起来</h2>
+<pre><code>// 补环境：让 window.atob 能用
+window = global;
+
+// 扣下的三个函数
+function _0x4176cc(base64) { /* atob + Int8Array */ }
+function _0x476691(bytes)   { /* RC4 异或 */ }
+function _0x300484(bytes)   { /* UTF-8 解码 */ }
+
+// 入口
+function _0x58b5da(encrypted) {
+    return _0x300484(_0x476691(_0x4176cc(encrypted)));
+}
+
+// 调用
+console.log(_0x58b5da("ak+9VCsq..."));  // 输出明文 JSON 字符串</code></pre>
+<p>解密链跑通后，输出的就是一个 JSON 字符串，可以直接 <code>json.loads</code> 解析成 Python 字典。</p>
+</section>
+
+<section>
+<h2>为什么必须补 window.atob？</h2>
+<p>整条链只有第一步用了浏览器 API <code>window.atob</code>。后面两步都是纯字节运算，Node.js 原生就能跑。</p>
+<p>所以补环境的范围非常小：只需要保证 <code>window.atob</code> 能工作。最简单的写法是 <code>window = global</code>，然后在 Node.js 里用 <code>Buffer.from(str, 'base64').toString()</code> 替代——但既然我们是用 execjs 跑 JS 代码，直接 <code>window = global</code> 让 <code>window.atob</code> 指向 Node.js 内置的 base64 解码就行。</p>
+</section>
+
+<section class="quiz-section">
+<h2>随堂测验</h2>
+
+<div class="quiz" data-question="极简壁纸解密链的入口函数叫什么？" data-correct="0" data-explain="入口函数是 _0x58b5da，它内部串联了三个步骤。">
+  <button class="opt">_0x58b5da</button>
+  <button class="opt">_0x476691</button>
+  <button class="opt">_0x300484</button>
+  <button class="opt">_0x4176cc</button>
+</div>
+
+<div class="quiz" data-question="解密链的第一步 _0x4176cc 做了什么？" data-correct="2" data-explain="_0x4176cc 用 window.atob 把 base64 字符串解码，再用 Int8Array 转成字节数组。">
+  <button class="opt">用 RC4 异或字节数组</button>
+  <button class="opt">把 UTF-8 字节解码成字符串</button>
+  <button class="opt">用 atob 把 base64 转成字节数组</button>
+  <button class="opt">把字符串加密成 base64</button>
+</div>
+
+<div class="quiz" data-question="为什么解密链第一步必须补环境？" data-correct="1" data-explain="_0x4176cc 用了 window.atob，这是浏览器 API，Node.js 默认没有。">
+  <button class="opt">因为 RC4 算法需要浏览器支持</button>
+  <button class="opt">因为第一步用了 window.atob 浏览器 API</button>
+  <button class="opt">因为 UTF-8 解码只能在浏览器里跑</button>
+  <button class="opt">因为 Node.js 不支持数组运算</button>
+</div>
+
+<div class="quiz" data-question="_0x300484 函数的作用是什么？" data-correct="3" data-explain="_0x300484 是手写 UTF-8 解码器，把字节数组还原成字符串。">
+  <button class="opt">做 base64 编码</button>
+  <button class="opt">做 RC4 加密</button>
+  <button class="opt">把字符串转成字节数组</button>
+  <button class="opt">把 UTF-8 字节数组解码成字符串</button>
+</div>
+
+<div class="quiz" data-question="UTF-8 编码中，首字节是 0xE0（11100000）开头表示这个字符占几个字节？" data-correct="0" data-explain="1110xxxx 开头表示 3 字节字符，常用于中日韩常用字。">
+  <button class="opt">3 字节</button>
+  <button class="opt">1 字节</button>
+  <button class="opt">2 字节</button>
+  <button class="opt">4 字节</button>
+</div>
+</section>
+
+</main>
+
+<div class="lesson-nav">
+<div class="nav-left">
+<a href="./rc4-algorithm.html">← 上一步：RC4 算法</a>
+</div>
+<div class="nav-right">
+<a href="./wallpaper-full-flow.html">下一步：极简壁纸请求-解密-下载闭环 →</a>
+</div>
+</div>
+
+<footer>
+<p>有疑问？随时向老师提问。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

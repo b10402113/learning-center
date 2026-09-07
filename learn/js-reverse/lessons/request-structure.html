@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>有道翻译请求结构与 pointParam — 实战：sign 逆向（Python 原生）</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>有道翻译请求结构与 pointParam</h1>
+<p class="meta">js-reverse · 步骤 4/5 · 把请求体按功能分类</p>
+
+<p>把有道翻译的 POST 请求体全部摊开来看，大概有二十个字段。乍一看很吓人，但只要按功能分类，其实只有四类。</p>
+
+<h2>四类字段</h2>
+
+<p><strong>第一类是业务参数</strong>。这是服务器真正用来完成翻译任务的字段：<code>i</code> 是要翻译的原文，<code>from</code> 是源语言，<code>to</code> 是目标语言，<code>domain</code> 是领域，<code>dictResult</code> 是是否返回词典结果，<code>keyid</code> 是固定标识。这些字段和签名无关，直接照抄抓包值或者按需求修改就行。</p>
+
+<p><strong>第二类是客户端身份参数</strong>。<code>client</code> 标识客户端类型，<code>product</code> 标识产品线，<code>appVersion</code> 是版本号，<code>vendor</code> 是供应商，<code>keyfrom</code> 是来源页面。这些字段每次请求都一样，属于静态参数，复制一次就能反复使用。</p>
+
+<p><strong>第三类是签名相关参数</strong>。<code>sign</code> 是计算出来的签名值，<code>mysticTime</code> 是计算签名时用的毫秒时间戳，<code>pointParam</code> 是签名参数的名单。这三个字段是一个整体，每次请求都需要重新生成或计算。</p>
+
+<p><strong>第四类是其他辅助参数</strong>。<code>mid</code>、<code>screen</code>、<code>model</code>、<code>network</code>、<code>abtest</code>、<code>yduuid</code> 这些字段大多是客户端环境信息，对签名没有影响，保持默认值即可。</p>
+
+<h2>pointParam 的准确含义</h2>
+
+<p><code>pointParam</code> 这个字段值得单独拿出来说。它的值是 <code>client,mysticTime,product</code>，用逗号分隔，恰好对应参与签名计算的三个请求参数。但前面已经说过，签名时实际还多了一个硬编码的 <code>key</code>。所以 <code>pointParam</code> 的准确含义是：「从请求体里取这些字段，加上代码里写死的密钥，一起算签名」。</p>
+
+<h2>请求体的四个分类示例</h2>
+
+<table style="width:100%; border-collapse: collapse; margin: 1em 0;">
+<tr style="background: #f3f4f6;">
+  <th style="padding: 8px; text-align: left; border: 1px solid #d1d5db;">分类</th>
+  <th style="padding: 8px; text-align: left; border: 1px solid #d1d5db;">字段</th>
+  <th style="padding: 8px; text-align: left; border: 1px solid #d1d5db;">是否需要每次更新</th>
+</tr>
+<tr>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">业务参数</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;"><code>i</code>, <code>from</code>, <code>to</code>, <code>domain</code></td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">按需修改</td>
+</tr>
+<tr>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">客户端身份</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;"><code>client</code>, <code>product</code>, <code>vendor</code></td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">否（静态）</td>
+</tr>
+<tr>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">签名相关</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;"><code>sign</code>, <code>mysticTime</code>, <code>pointParam</code></td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">是（每次重新计算）</td>
+</tr>
+<tr>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">辅助参数</td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;"><code>mid</code>, <code>screen</code>, <code>yduuid</code></td>
+  <td style="padding: 8px; border: 1px solid #d1d5db;">否（保持默认）</td>
+</tr>
+</table>
+
+<h2>通用的请求结构检查清单</h2>
+
+<p>理解请求结构对逆向有两点价值。第一，你在复现请求时知道哪些字段必须保留、哪些可以删掉、哪些必须重新生成。第二，当你在其他网站上遇到类似的签名机制时，可以快速套用同样的分类逻辑。</p>
+
+<p>一个实际的检查清单：拿到一个陌生请求时，先找 <code>sign</code>、<code>token</code>、<code>_signature</code> 这类明显是签名的字段；再找 <code>time</code>、<code>t</code>、<code>_</code> 这类明显是时间戳的字段；然后找 <code>pointParam</code>、<code>sign_params</code>、<code>keys</code> 这类名单字段；最后剩下的就是业务参数和辅助参数。按这个顺序过一遍，通常能在几分钟内还原出签名逻辑的全貌。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="有道翻译请求体中，哪一类字段和签名计算无关？" data-correct="0" data-explain="业务参数是服务器用来完成翻译任务的，与签名无关。">
+  <button class="opt">业务参数（i, from, to）</button>
+  <button class="opt">签名相关参数（sign, mysticTime）</button>
+  <button class="opt">pointParam 字段</button>
+  <button class="opt">客户端身份参数（client, product）</button>
+</div>
+
+<div class="quiz" data-question="pointParam 的值 client,mysticTime,product 表示什么？" data-correct="2" data-explain="pointParam 列出的是从请求体里取哪些字段参与签名计算。">
+  <button class="opt">请求体中所有的参数列表</button>
+  <button class="opt">业务参数的名单</button>
+  <button class="opt">参与签名计算的请求参数名单</button>
+  <button class="opt">服务器返回的字段列表</button>
+</div>
+
+<div class="quiz" data-question="为什么实际签名计算时，拼接模板里多了一个 pointParam 里没有的 key？" data-correct="1" data-explain="key 是硬编码在 JS 代码里的密钥，不参与网络传输但参与签名计算。">
+  <button class="opt">因为 pointParam 是可选字段</button>
+  <button class="opt">因为 key 是硬编码密钥，不在请求体里但参与签名</button>
+  <button class="opt">因为服务器要求必须多一个参数</button>
+  <button class="opt">因为 pointParam 的值写错了</button>
+</div>
+
+<div class="quiz" data-question="拿到一个陌生请求时，第一步应该找什么？" data-correct="3" data-explain="先找 sign、token、_signature 这类明显是签名的字段，锁定逆向目标。">
+  <button class="opt">找时间戳字段</button>
+  <button class="opt">找业务参数</button>
+  <button class="opt">找辅助参数</button>
+  <button class="opt">找签名字段（sign, token, _signature）</button>
+</div>
+
+<div class="quiz" data-question="客户端身份参数（client, product）在请求中起什么作用？" data-correct="0" data-explain="客户端身份参数标识客户端类型和产品线，每次请求都一样，属于静态参数。">
+  <button class="opt">标识客户端类型和产品线，属于静态参数</button>
+  <button class="opt">参与签名计算的核心动态参数</button>
+  <button class="opt">服务器返回的验证信息</button>
+  <button class="opt">用于防止 CSRF 攻击的令牌</button>
+</div>
+
+<div class="quiz" data-question="以下哪一组字段全部属于签名相关参数？" data-correct="2" data-explain="sign、mysticTime、pointParam 三个字段都与签名计算直接相关。">
+  <button class="opt">i, from, to</button>
+  <button class="opt">client, product, vendor</button>
+  <button class="opt">sign, mysticTime, pointParam</button>
+  <button class="opt">mid, screen, model</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./timestamp-concatenation.html">← 上一步：动态时间戳与参数拼接规则</a>
+  <a href="./python-vs-execjs.html">下一步：Python 原生复现 vs execjs 混合路线 →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

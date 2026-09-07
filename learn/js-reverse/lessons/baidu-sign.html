@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>百度翻译 get_sign 算法与 gtk 补环境</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>百度翻译 get_sign 算法与 gtk 补环境</h1>
+<p class="meta">实战：SHA1 与百度 sign · 步骤 4/5</p>
+
+<h2>学习目标</h2>
+<p>能看懂百度翻译 get_sign 里 gtk 拆段、字符转码、魔数字符串驱动位运算的逻辑，并说出为什么 Node 里要先写 <code>window = global; window.gtk = ...</code> 才能跑通。</p>
+
+<h2>先看现象：sign 随 query 变化</h2>
+<p>在百度翻译输入不同单词，每次请求的 form 数据里 <code>sign</code> 都不同。但 <code>token</code> 和 <code>domain</code> 是固定的，<code>ts</code> 是毫秒时间戳。这说明 sign 是 query 的函数，而且算法藏在 JS 里。</p>
+
+<h2>gtk：藏在 window 里的全局变量</h2>
+<p>打开扣下的百度翻译 JS，第一行就是：</p>
+<pre><code>window = global;
+window.gtk = '320305.131321201'</code></pre>
+<p><code>gtk</code> 不在函数参数里，而是挂在 <code>window</code> 上。在浏览器里，<code>window.gtk</code> 是页面加载时由其他脚本设置好的全局变量。但在 Node.js 里，<code>window</code> 根本不存在——你不补这两行，<code>get_sign</code> 读到 <code>window.gtk</code> 就会报 <code>ReferenceError: window is not defined</code>。</p>
+<p>这就是「补环境」最直觉的含义：让扣下来的代码在 Node 里还能找到它依赖的浏览器属性。</p>
+
+<h2>get_sign 的三步逻辑</h2>
+<table>
+  <th>步骤</th><th>做了什么</th><th>一句话</th>
+  <tr><td>1. 文本截取</td><td>超过 30 字符的文本，截取前 10、中间 10、末尾 10 字符</td><td>长文本只取头中尾</td></tr>
+  <tr><td>2. 字符转码</td><td>把每个字符转成 UTF-16 编码（处理代理对）</td><td>字符 → 数字数组</td></tr>
+  <tr><td>3. 位运算循环</td><td>用两个魔数字符串驱动 n() 函数做移位、异或、加法</td><td>魔数字符串驱动位运算</td></tr>
+</table>
+
+<h2>魔数字符串：+-a^+6 和 +-3^+b+-f</h2>
+<p>这两个字符串看起来像乱码，其实是位运算的指令集：</p>
+<pre><code>w = "+-a^+6"
+k = "+-3^+b+-f"
+
+function n(t, e) {
+    for (var n = 0; n &lt; e.length - 2; n += 3) {
+        var r = e.charAt(n + 2);
+        r = "a" &lt;= r ? r.charCodeAt(0) - 87 : Number(r);
+        r = "+" === e.charAt(n + 1) ? t >>> r : t << r;
+        t = "+" === e.charAt(n) ? t + r &amp; 4294967295 : t ^ r;
+    }
+    return t;
+}</code></pre>
+<p>它每次取 3 个字符：第一个是运算符（<code>+</code> 表示加法/异或），第二个是方向（<code>+</code> 表示右移，<code>-</code> 表示左移），第三个是操作数（字母代表 10 以上数字）。这是一种经典的混淆手法——把简单的位运算拆成字符串解析，增加阅读难度。</p>
+
+<h2>gtk 怎么参与运算</h2>
+<p><code>gtk</code> 的值是 <code>'320305.131321201'</code>，get_sign 把它按 <code>.</code> 拆成两段整数：<code>f = 320305</code>、<code>m = 131321201</code>。<code>f</code> 作为位运算的初始值，<code>m</code> 作为最后的异或操作数。</p>
+<p>最终输出格式是 <code>(b % 1e6).toString() + "." + (b ^ f)</code>——一个六位数加一个点加一个整数，这就是你在请求里看到的 sign。</p>
+
+<h2>负数转正的技巧</h2>
+<p>位运算结果可能溢出成负数，百度翻译用这一行把它转回正数：</p>
+<pre><code>(b ^= m) &lt; 0 &amp;&amp; (b = 2147483648 + (2147483647 &amp; b))</code></pre>
+<p>这是 32 位有符号整数转无符号的标准写法。<code>2147483647 &amp; b</code> 把符号位清零，再加上 <code>2147483648</code>（即 2^31），等价于给负数加上 2^32。</p>
+
+<h2>小结</h2>
+<p>百度翻译的 sign 不是标准算法，而是一段被混淆过的位运算。真正让新手卡住的不是位运算本身，而是 <code>gtk</code> 这个环境依赖。补环境就是让扣下来的代码在 Node 里还能找到它依赖的浏览器属性。下一步我们就把 get_sign 挂到 Python 里，拼出完整的 POST 请求。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="为什么百度翻译的 JS 代码第一行要写 window = global; window.gtk = '...'？" data-correct="2" data-explain="Node.js 里没有 window 对象，补这两行让扣下来的代码能读到它依赖的浏览器全局变量。">
+  <button class="opt">为了加快运行速度</button>
+  <button class="opt">为了修复语法错误</button>
+  <button class="opt">为了在 Node 里补上浏览器环境依赖</button>
+  <button class="opt">为了加密 gtk 的值</button>
+</div>
+
+<div class="quiz" data-question="get_sign 对超过 30 字符的文本做了什么处理？" data-correct="0" data-explain="超过 30 字符的文本只截取前 10、中间 10、末尾 10 字符，减少计算量。">
+  <button class="opt">截取前 10、中间 10、末尾 10 字符</button>
+  <button class="opt">直接丢弃</button>
+  <button class="opt">只取前 30 字符</button>
+  <button class="opt">不做任何处理</button>
+</div>
+
+<div class="quiz" data-question="魔数字符串 '+-a^+6' 在 n() 函数里起什么作用？" data-correct="3" data-explain="魔数字符串是指令集，驱动 n() 函数做移位、加法、异或等位运算。">
+  <button class="opt">作为密钥直接异或</button>
+  <button class="opt">作为随机数种子</button>
+  <button class="opt">作为哈希盐</button>
+  <button class="opt">作为位运算指令集，驱动移位和异或</button>
+</div>
+
+<div class="quiz" data-question="gtk 的值 '320305.131321201' 在 get_sign 里怎么被使用？" data-correct="1" data-explain="gtk 按 '.' 拆成两段整数 f 和 m，f 作为位运算初始值，m 作为最后的异或操作数。">
+  <button class="opt">直接作为 sign 输出</button>
+  <button class="opt">按 '.' 拆成两段整数，分别作为位运算初始值和异或操作数</button>
+  <button class="opt">作为字符串拼进明文</button>
+  <button class="opt">作为随机数种子</button>
+</div>
+
+<div class="quiz" data-question="百度翻译 sign 的输出格式是什么？" data-correct="0" data-explain="sign = (b % 1e6).toString() + '.' + (b ^ f)，一个六位数加一个点加一个整数。">
+  <button class="opt">一个六位数 + 一个点 + 一个整数</button>
+  <button class="opt">40 个十六进制字符</button>
+  <button class="opt">纯数字字符串</button>
+  <button class="opt">Base64 编码字符串</button>
+</div>
+
+<div class="quiz" data-question="位运算结果为负数时，百度翻译怎么处理？" data-correct="2" data-explain="用 2147483648 + (2147483647 & b) 把 32 位有符号整数转回无符号。">
+  <button class="opt">直接取绝对值</button>
+  <button class="opt">丢弃负数，重新计算</button>
+  <button class="opt">用 2147483648 + (2147483647 & b) 转正</button>
+  <button class="opt">把负号拼进 sign</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./dxy-execjs.html">← 上一步：execjs 调用 SHA1 与 GET 请求闭环</a>
+  <a href="./baidu-request.html">下一步：百度翻译 POST 表单请求闭环 →</a>
+</div>
+
+<div class="footer">实战：SHA1 与百度 sign · 步骤 4/5</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

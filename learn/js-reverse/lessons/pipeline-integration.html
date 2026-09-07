@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>完整管道项目整合 — Scrapy 管道与持久化</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>完整管道项目整合</h1>
+<p class="meta">Scrapy 管道与持久化 · 步骤 4/4</p>
+
+<h2>学习目标</h2>
+<p>把多管道与内置管道组合成一个真实可跑的项目：列表页进详情页、解析字段交管道、图片走 ImagesPipeline、元数据走多管道分别落盘数据库与文件。</p>
+
+<h2>项目目标：爬取图片站</h2>
+<p>这一节我们做一个完整的 Scrapy 项目：爬取一个图片列表页，进入每张图片的详情页，提取标题、图片链接、标签，然后：</p>
+<ul>
+  <li>图片二进制数据 → <strong>ImagesPipeline</strong> 下载并保存到本地</li>
+  <li>标题、标签等元数据 → <strong>MySQL 管道</strong> 存入数据库</li>
+  <li>标题、标签等元数据 → <strong>Redis 管道</strong> 推入待处理队列</li>
+  <li>标题、标签等元数据 → <strong>文件管道</strong> 写入 CSV 做备份</li>
+</ul>
+
+<p>这是一个典型的"一进四出"管道架构：Spider 只负责解析，存储全部交给管道链。</p>
+
+<h2>项目结构</h2>
+<pre><code>myspider/
+├── scrapy.cfg
+├── myspider/
+│   ├── __init__.py
+│   ├── items.py          # 定义 ImageItem
+│   ├── middlewares.py
+│   ├── pipelines.py      # 四个管道类
+│   ├── settings.py       # 开启管道、配置存储
+│   └── spiders/
+│       └── image_spider.py
+└── images/               # ImagesPipeline 自动创建</code></pre>
+
+<h2>items.py：定义 Item</h2>
+<pre><code>import scrapy
+
+class ImageItem(scrapy.Item):
+    title = scrapy.Field()        # 图片标题
+    tags = scrapy.Field()         # 标签列表
+    image_url = scrapy.Field()    # 图片链接（ImagesPipeline 用）
+    image_path = scrapy.Field()   # 下载后的本地路径（管道自动填）
+    source_url = scrapy.Field()   # 来源页面 URL</code></pre>
+
+<h2>spiders/image_spider.py：爬虫解析</h2>
+<p>爬虫分两步：先解析列表页，提取详情页链接；再进详情页，提取标题、标签、图片链接，封装成 Item。</p>
+
+<pre><code>import scrapy
+from myspider.items import ImageItem
+
+class ImageSpider(scrapy.Spider):
+    name = 'image'
+    allowed_domains = ['example.com']
+    start_urls = ['https://example.com/list']
+
+    def parse(self, response):
+        """解析列表页，提取详情页链接"""
+        detail_urls = response.xpath('//a[@class="detail"]/@href').extract()
+        for url in detail_urls:
+            full_url = response.urljoin(url)
+            yield scrapy.Request(full_url, callback=self.parse_detail)
+
+    def parse_detail(self, response):
+        """解析详情页，提取字段并封装 Item"""
+        item = ImageItem()
+        item['title'] = response.xpath('//h1/text()').extract_first()
+        item['tags'] = response.xpath('//div[@class="tags"]/a/text()').extract()
+        item['image_url'] = response.xpath('//img[@class="main"]/@src').extract_first()
+        item['source_url'] = response.url
+        yield item</code></pre>
+
+<p>注意：<code>parse</code> 里用 <code>response.urljoin(url)</code> 把相对链接补成绝对链接，否则 ImagesPipeline 会下载失败。</p>
+
+<h2>pipelines.py：四个管道类</h2>
+<p>四个管道各司其职，按优先级串联：</p>
+
+<pre><code># pipelines.py
+import json
+import pymysql
+from redis import Redis
+from scrapy.pipelines.images import ImagesPipeline
+from scrapy.http import Request
+
+# 1. ImagesPipeline 子类（优先级 100，最先执行）
+class ImageDownloadPipeline(ImagesPipeline):
+
+    def get_media_requests(self, item, info):
+        url = item['image_url']
+        if url:
+            yield Request(url)
+
+    def file_path(self, request, response=None, info=None, *, item=None):
+        title = item['title'].replace('/', '-')  # 避免文件名含斜杠
+        return f'full/{title}.jpg'
+
+    def item_completed(self, results, item, info):
+        for ok, value in results:
+            if ok:
+                item['image_path'] = value['path']
+        return item
+
+
+# 2. 文件管道（优先级 200）
+class CsvBackupPipeline:
+    def open_spider(self, spider):
+        self.f = open('images_backup.csv', 'w', encoding='utf-8')
+        self.f.write('title,tags,image_path,source_url\n')
+
+    def process_item(self, item, spider):
+        line = f"{item['title']},{'|'.join(item['tags'])},{item.get('image_path','')},{item['source_url']}\n"
+        self.f.write(line)
+        return item
+
+    def close_spider(self, spider):
+        self.f.close()
+
+
+# 3. MySQL 管道（优先级 300）
+class MySQLPipeline:
+    def open_spider(self, spider):
+        self.conn = pymysql.Connect(
+            host='localhost', port=3306,
+            user='root', password='123456',
+            db='image_db', charset='utf8mb4'
+        )
+        self.cursor = self.conn.cursor()
+
+    def process_item(self, item, spider):
+        sql = "INSERT INTO image (title, tags, image_path, source_url) VALUES (%s, %s, %s, %s)"
+        self.cursor.execute(sql, (
+            item['title'],
+            json.dumps(item['tags'], ensure_ascii=False),
+            item.get('image_path', ''),
+            item['source_url']
+        ))
+        self.conn.commit()
+        return item
+
+    def close_spider(self, spider):
+        self.cursor.close()
+        self.conn.close()
+
+
+# 4. Redis 管道（优先级 400，最后执行）
+class RedisPipeline:
+    def open_spider(self, spider):
+        self.r = Redis(host='localhost', port=6379, db=0)
+
+    def process_item(self, item, spider):
+        self.r.lpush('image_queue', json.dumps(dict(item), ensure_ascii=False))
+        return item
+
+    def close_spider(self, spider):
+        pass</code></pre>
+
+<h2>settings.py：开启管道并配置存储</h2>
+<pre><code># settings.py
+BOT_NAME = 'myspider'
+SPIDER_MODULES = ['myspider.spiders']
+NEWSPIDER_MODULE = 'myspider.spiders'
+
+ROBOTSTXT_OBEY = False
+LOG_LEVEL = 'ERROR'
+
+# 图片存储路径
+IMAGES_STORE = 'images'
+IMAGES_THUMBS = {
+    'small': (50, 50),
+    'big': (270, 270)
+}
+
+# 管道优先级：数字越小越先执行
+ITEM_PIPELINES = {
+    'myspider.pipelines.ImageDownloadPipeline': 100,
+    'myspider.pipelines.CsvBackupPipeline': 200,
+    'myspider.pipelines.MySQLPipeline': 300,
+    'myspider.pipelines.RedisPipeline': 400,
+}</code></pre>
+
+<p>执行顺序：ImagesPipeline 先下载图片 → CSV 管道写备份 → MySQL 管道存数据库 → Redis 管道推队列。每个管道都必须 return item，否则链就断了。</p>
+
+<h2>运行项目</h2>
+<pre><code>scrapy crawl image</code></pre>
+
+<p>运行后你会看到：</p>
+<ul>
+  <li><code>images/</code> 目录下多了原图和缩略图</li>
+  <li><code>images_backup.csv</code> 里有一行行元数据</li>
+  <li>MySQL 的 <code>image</code> 表里有新记录</li>
+  <li>Redis 的 <code>image_queue</code> 列表里推入了 JSON 字符串</li>
+</ul>
+
+<h2>管道链断了怎么排查？</h2>
+<p>如果某个管道忘了 return item，后面的管道就收不到数据。排查方法：</p>
+<ol>
+  <li>看日志：Scrapy 不会报错，但后面的管道不会执行。</li>
+  <li>在每个管道的 <code>process_item</code> 开头加 <code>print(f"Processing in {self.__class__.__name__}")</code>，看输出到哪个管道就停了。</li>
+  <li>检查 <code>settings.py</code> 里的优先级数字，确认顺序是否符合预期。</li>
+</ol>
+
+<h2>常见踩坑</h2>
+<ul>
+  <li><strong>ImagesPipeline 的优先级设得太大</strong>：如果 MySQL 管道优先级是 100，ImagesPipeline 是 400，那 MySQL 会先执行，此时图片还没下载，<code>image_path</strong> 就是空的。</li>
+  <li><strong>Redis 存了 Item 对象</strong>：必须 <code>json.dumps(dict(item))</code> 转成字符串，否则 Redis 会报错。</li>
+  <li><strong>MySQL 的 tags 字段是列表</strong>：数据库里不能直接存列表，要 <code>json.dumps(item['tags'])</code> 序列化成 JSON 字符串。</li>
+  <li><strong>图片链接为空</strong>：如果详情页没有图片，<code>get_media_requests</code> 里要判断 <code>if url</code>，否则会 yield 一个 None 导致报错。</li>
+</ul>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="在这个项目里，ImagesPipeline 的优先级应该设为多少最合理？" data-correct="0" data-explain="图片下载应该最先执行，这样后续管道才能拿到 image_path。">
+  <button class="opt">100（最先执行）</button>
+  <button class="opt">200</button>
+  <button class="opt">300</button>
+  <button class="opt">400（最后执行）</button>
+</div>
+
+<div class="quiz" data-question="如果 CsvBackupPipeline 的 process_item 忘了 return item，会发生什么？" data-correct="2" data-explain="Item 会在 CSV 管道断掉，MySQL 和 Redis 管道都收不到数据。">
+  <button class="opt">爬虫会报错</button>
+  <button class="opt">CSV 文件会重复写入</button>
+  <button class="opt">MySQL 和 Redis 管道收不到数据</button>
+  <button class="opt">Item 会被自动丢弃</button>
+</div>
+
+<div class="quiz" data-question="Redis 管道里，Item 为什么要先转成 JSON 字符串？" data-correct="1" data-explain="Redis 不能直接存 Python 对象，必须序列化成字符串。">
+  <button class="opt">为了压缩数据</button>
+  <button class="opt">Redis 不能直接存 Python 对象</button>
+  <button class="opt">为了加密数据</button>
+  <button class="opt">为了去重</button>
+</div>
+
+<div class="quiz" data-question="parse 方法里为什么要用 response.urljoin(url)？" data-correct="0" data-explain="列表页提取的链接可能是相对路径，必须补成绝对 URL 才能被 ImagesPipeline 下载。">
+  <button class="opt">把相对链接补成绝对 URL</button>
+  <button class="opt">给链接加参数</button>
+  <button class="opt">过滤非法链接</button>
+  <button class="opt">去重</button>
+</div>
+
+<div class="quiz" data-question="MySQL 的 tags 字段是 Python 列表，直接存数据库会怎样？" data-correct="3" data-explain="MySQL 不能直接存 Python 列表，要 json.dumps() 序列化成 JSON 字符串。">
+  <button class="opt">正常存储，MySQL 会自动转换</button>
+  <button class="opt">报错，数据类型不匹配</button>
+  <button class="opt">只存第一个元素</button>
+  <button class="opt">需要先 json.dumps() 转成 JSON 字符串</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./builtin-pipelines.html">← 上一步：内置管道 FilesPipeline 与 ImagesPipeline</a>
+  <span></span>
+</div>
+
+<div class="footer">Scrapy 管道与持久化 · 步骤 4/4</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

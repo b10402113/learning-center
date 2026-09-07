@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RSA 非對稱加密 — 編碼與加密特徵</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>RSA 非對稱加密</h1>
+<p class="meta">學習目標：理解 RSA 公私鑰分工——公鑰加密私鑰解密用於資料傳輸，反向用於數位簽章；能從 PEM 檔案識別金鑰，在 Python 裡用 PKCS1_v1_5 完成加解密，並認識前端 CryptoJS 的 RSA 呼叫形態。</p>
+
+<h2>現象：前端用公鑰加密密碼</h2>
+<p>你在 DevTools 裡看到登入請求的 <code>password</code> 欄位不是明文，而是一段很長的 base64 字串。檢查網頁原始碼或 JS 檔案，常會發現一段以 <code>-----BEGIN PUBLIC KEY-----</code> 開頭的文字。這就是 <strong>RSA 非對稱加密</strong>。</p>
+
+<h2>與 AES 的根本差異</h2>
+<ul>
+  <li><strong>AES 對稱</strong>：加密和解密用同一把金鑰。</li>
+  <li><strong>RSA 非對稱</strong>：加密用公鑰，解密用私鑰。公鑰可以公開，私鑰必須保密。</li>
+</ul>
+<p>這解決了 AES 的「金鑰分發問題」：你不需要把金鑰傳給對方，只要拿到對方的公鑰就能加密，只有持有私鑰的對方能解開。</p>
+
+<h2>公私鑰分工的兩種用途</h2>
+<table>
+  <tr><th>用途</th><th>加密者</th><th>解密者</th></tr>
+  <tr><td>資料加密</td><td>公鑰</td><td>私鑰</td></tr>
+  <tr><td>數位簽章</td><td>私鑰</td><td>公鑰</td></tr>
+</table>
+<p>爬蟲最常遇到的是第一種：前端用公鑰加密敏感資料（如密碼），傳給伺服器後用私鑰解密。</p>
+
+<h2>PEM 檔案格式</h2>
+<p>RSA 金鑰通常以 PEM 格式儲存，看起來像這樣：</p>
+<pre><code>-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
+-----END PUBLIC KEY-----</code></pre>
+<p>PEM 本身只是 base64 編碼的文字，可以直接複製貼上到 Python 程式碼裡。</p>
+
+<h2>Python 實作：RSA 加解密</h2>
+<pre><code>from Crypto.PublicKey import RSA
+from Crypto.Cipher import PKCS1_v1_5
+import base64
+
+# 產生金鑰對（實務上從 PEM 匯入）
+key = RSA.generate(1024)
+private_key = key.export_key()
+public_key = key.publickey().export_key()
+
+# 公鑰加密
+message = "hello rsa"
+rsa_public = PKCS1_v1_5.new(RSA.import_key(public_key))
+encrypted = rsa_public.encrypt(message.encode())
+b64_encrypted = base64.b64encode(encrypted).decode()
+
+# 私鑰解密
+rsa_private = PKCS1_v1_5.new(RSA.import_key(private_key))
+decrypted = rsa_private.decrypt(base64.b64decode(b64_encrypted), None)
+print(decrypted.decode())  # hello rsa</code></pre>
+<p>注意 <code>decrypt</code> 的第二個參數是哨兵值（sentinel），用來偵測解密失敗，通常傳 <code>None</code>。</p>
+
+<h2>前端 CryptoJS 的 RSA 呼叫</h2>
+<p>前端用 CryptoJS 做 RSA 加密時，通常會用 JSEncrypt 或原生 CryptoJS 的 RSA 套件：</p>
+<pre><code>const encrypt = new JSEncrypt();
+encrypt.setPublicKey(`-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
+-----END PUBLIC KEY-----`);
+const encrypted = encrypt.encrypt("hello rsa");
+console.log(encrypted);  // base64 密文</code></pre>
+<p>逆向時，只要從 JS 裡擷取 PEM 公鑰，就能在 Python 裡復現同樣的加密流程。</p>
+
+<h2>與摘要演算法的組合</h2>
+<p>實務上 RSA 不會直接加密長訊息（RSA 有長度限制，1024 位元金鑰最多加密 117 位元組）。常見組合是：</p>
+<ol>
+  <li>用 AES 加密原始資料（對稱，速度快）。</li>
+  <li>用 RSA 加密 AES 金鑰（非對稱，安全傳遞金鑰）。</li>
+</ol>
+<p>這就是「混合加密」，HTTPS 底層也是同樣原理。</p>
+
+<h2>重點整理</h2>
+<ul>
+  <li>RSA 非對稱：公鑰加密私鑰解密，解決金鑰分發問題。</li>
+  <li>PEM 格式以 <code>-----BEGIN PUBLIC KEY-----</code> 開頭，可直接複製到程式碼。</li>
+  <li>Python 用 pycryptodome 的 <code>PKCS1_v1_5</code>，前端用 JSEncrypt 或 CryptoJS。</li>
+  <li>RSA 有長度限制，長訊息通常用混合加密（AES + RSA）。</li>
+</ul>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="RSA 非對稱加密中，用於加密的是哪個金鑰？" data-correct="0" data-explain="公鑰公開給所有人，任何人都能用公鑰加密，但只有持有私鑰的接收方能解密。">
+  <button class="opt">公鑰</button>
+  <button class="opt">私鑰</button>
+  <button class="opt">金鑰對</button>
+  <button class="opt">鹽值</button>
+</div>
+
+<div class="quiz" data-question="PEM 格式的 RSA 公鑰通常以什麼開頭？" data-correct="2" data-explain="PEM 格式用 BEGIN/END 標籤標示金鑰類型，公鑰以 -----BEGIN PUBLIC KEY----- 開頭。">
+  <button class="opt">-----BEGIN RSA KEY-----</button>
+  <button class="opt">-----BEGIN PRIVATE KEY-----</button>
+  <button class="opt">-----BEGIN PUBLIC KEY-----</button>
+  <button class="opt">-----BEGIN CERTIFICATE-----</button>
+</div>
+
+<div class="quiz" data-question="Python 裡 RSA 解密時，decrypt 的第二個參數通常傳什麼？" data-correct="1" data-explain="decrypt 的第二個參數是哨兵值，用來偵測解密失敗，通常傳 None。">
+  <button class="opt">空字串</button>
+  <button class="opt">None</button>
+  <button class="opt">0</button>
+  <button class="opt">私鑰</button>
+</div>
+
+<div class="quiz" data-question="RSA 直接加密長訊息的限制是什麼？" data-correct="3" data-explain="RSA 有長度限制（1024 位元金鑰最多加密約 117 位元組），長訊息通常用混合加密。">
+  <button class="opt">沒有長度限制</button>
+  <button class="opt">最多 16 位元組</button>
+  <button class="opt">最多 256 位元組</button>
+  <button class="opt">有長度限制，長訊息用混合加密</button>
+</div>
+
+<div class="quiz" data-question="HTTPS 底層結合了哪兩種加密方式？" data-correct="0" data-explain="HTTPS 用 RSA 交換 AES 金鑰，再用 AES 加密實際資料，兼顧安全與效能。">
+  <button class="opt">RSA + AES</button>
+  <button class="opt">RSA + MD5</button>
+  <button class="opt">AES + SHA256</button>
+  <button class="opt">RSA + base64</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./aes-symmetric.html">← 上一步：AES 對稱加密實戰</a>
+  <span></span>
+</div>
+
+<footer class="footer">
+  <p>有任何問題，隨時問你的 agent 老師。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

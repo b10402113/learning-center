@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>补环境的基本形态：window = global</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<header>
+<h1>补环境的基本形态：window = global</h1>
+<p class="subtitle">让扣下来的浏览器代码在 Node 里跑起来的第一步</p>
+</header>
+
+<main>
+
+<section>
+<h2>为什么扣下的代码跑不通？</h2>
+<p>用 DevTools 抠下一段加密脚本，复制粘贴到 Node.js 里运行，最常见的报错不是「算法看不懂」，而是<strong>某个全局对象 undefined</strong>。浏览器代码默认活在浏览器里，能随手使用 <code>window.atob</code>、<code>window.screenX</code>、<code>window.localStorage</code> 这些浏览器内建的全局对象。Node.js 没有浏览器，自然不存在这些东西。</p>
+<p>补环境的核心矛盾就在这里：代码依赖浏览器全局对象，Node.js 没有，所以报错。</p>
+</section>
+
+<section>
+<h2>最简补法：把 window 指向 global</h2>
+<p>浏览器里，<code>window</code> 就是全局对象。Node.js 里，全局对象叫 <code>global</code>。只要让 <code>window</code> 这个名字也指向 <code>global</code>，代码里所有 <code>window.xxx</code> 的访问就会落到 <code>global</code> 上，报错了就少了一大半。</p>
+<pre><code>window = global;</code></pre>
+<p>这一行是补环境的第一行。它不是模拟浏览器，而是给浏览器代码一个能落脚的全局对象。</p>
+</section>
+
+<section>
+<h2>缺什么补什么</h2>
+<p>但只写一行 <code>window = global</code> 还不够。<code>global</code> 里没有 <code>screenX</code>、<code>screenY</code> 这些浏览器属性，扣下的代码如果读了它们，依然会拿到 <code>undefined</code>。这时候的做法很朴素：<strong>缺什么补什么</strong>。</p>
+<p>比如扣下的代码用到了 <code>window.screenX</code> 和 <code>window.screenY</code>，就在执行之前手动补上：</p>
+<pre><code>window = global;
+window.screenX = 0;
+window.screenY = 37;
+
+function foo() {
+    return window.screenX + window.screenY + "asdfgh";
+}
+
+console.log(foo());  // 输出 "37asdfgh"</code></pre>
+<p>注意这里的策略：不是把整个浏览器搬进 Node（那是 jsdom 干的事），而是只补代码实际用到的属性。用到什么补什么，少了就加。</p>
+</section>
+
+<section>
+<h2>补环境的工作流</h2>
+<p>完整的补环境流程是三步循环：</p>
+<ol>
+<li><strong>执行</strong>：运行扣下的代码，看报什么错。</li>
+<li><strong>定位</strong>：从报错信息里找到缺了哪个属性。</li>
+<li><strong>补齐</strong>：手动在 <code>window</code> 上补上这个属性，再跑一次。</li>
+</ol>
+<p>循环到代码能跑通为止。这个过程就叫「补环境」。它不是一个工具，而是一个思路：用最小的代价，让扣下来的代码在 Node 里复现浏览器里的行为。</p>
+</section>
+
+<section>
+<h2>什么时候需要补环境？</h2>
+<p>所有「扣下来直接跑」的浏览器 JS 都可能需要补环境。常见场景：</p>
+<ul>
+<li>请求签名算法里读了 <code>window.screenX</code>、<code>window.gtk</code>、<code>window.btoa</code> 等浏览器属性。</li>
+<li>响应解密算法里用了 <code>window.atob</code> 做 base64 解码。</li>
+<li>加密代码访问了 <code>document.cookie</code>、<code>navigator.userAgent</code> 等浏览器环境。</li>
+</ul>
+<p>判断标准很简单：只要代码在浏览器里跑通过，在 Node 里跑挂了，第一步就是补环境。</p>
+</section>
+
+<section class="quiz-section">
+<h2>随堂测验</h2>
+<p>测验补环境的基本概念。</p>
+
+<div class="quiz" data-question="Node.js 里为什么需要补环境？" data-correct="1" data-explain="浏览器代码默认使用 window 等浏览器全局对象，Node.js 没有这些对象，所以需要手动补齐。">
+  <button class="opt">因为 Node.js 不支持 JavaScript 语法</button>
+  <button class="opt">因为 Node.js 缺少浏览器提供的全局对象（如 window.atob）</button>
+  <button class="opt">因为 Node.js 的执行速度比浏览器慢</button>
+  <button class="opt">因为 Node.js 无法运行超过 100 行的代码</button>
+</div>
+
+<div class="quiz" data-question="补环境的第一行代码通常是什么？" data-correct="2" data-explain="window = global 让浏览器代码中的 window 指向 Node 的全局对象。">
+  <button class="opt">global = window</button>
+  <button class="opt">import window from 'global'</button>
+  <button class="opt">window = global</button>
+  <button class="opt">window = document</button>
+</div>
+
+<div class="quiz" data-question="补环境的核心策略是什么？" data-correct="0" data-explain="补环境只补代码实际用到的属性，而不是模拟整个浏览器环境。">
+  <button class="opt">缺什么补什么，用到哪些属性就补哪些属性</button>
+  <button class="opt">把整个浏览器用 Node.js 重新实现一遍</button>
+  <button class="opt">修改扣下的代码，把所有浏览器调用删掉</button>
+  <button class="opt">在浏览器里运行代码，把结果复制到 Node.js</button>
+</div>
+
+<div class="quiz" data-question="下面哪个属性最可能需要手动补齐？" data-correct="3" data-explain="screenX 是浏览器窗口属性，Node.js 的 global 里不存在，需要手动补。">
+  <button class="opt">window.Math</button>
+  <button class="opt">window.JSON</button>
+  <button class="opt">window.console</button>
+  <button class="opt">window.screenX</button>
+</div>
+
+<div class="quiz" data-question="下面关于补环境的说法，哪个是正确的？" data-correct="1" data-explain="补环境适用于扣下来直接跑的浏览器 JS；修改源代码是最后手段。">
+  <button class="opt">补环境就是把浏览器代码翻译成 Node.js 原生代码</button>
+  <button class="opt">补环境是遇到浏览器全局对象报错时的第一步处理</button>
+  <button class="opt">补环境需要安装 jsdom 这样的第三方库才能实现</button>
+  <button class="opt">补环境会改变浏览器代码的加密逻辑</button>
+</div>
+</section>
+
+</main>
+
+<div class="lesson-nav">
+<div class="nav-right">
+<a href="./proxy-interception.html">下一步：Proxy 拦截与环境探测 →</a>
+</div>
+</div>
+
+<footer>
+<p>有疑问？随时向老师提问。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

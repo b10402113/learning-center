@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>协程原理：用户空间调度 — asyncio 与异步爬虫</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>协程原理：用户空间调度</h1>
+<p class="meta">js-reverse · 06-asyncio · Step 2/4</p>
+
+<h2>学习 goal</h2>
+<p>能说出协程与线程/进程的本质区别（用户空间调度 vs 操作系统调度），并解释协程为什么轻量、为什么可控。</p>
+
+<h2>线程和进程的痛点</h2>
+<p>上一章学了进程和线程。它们都能实现异步——多个任务交替执行，不傻等 IO。但它们有一个共同问题：切换由操作系统控制。</p>
+<p>操作系统调度线程时，用的是「时间片轮转」——每个线程跑一小段时间就被强制切走，不管它是不是正好在干关键活。更糟的是，你无法控制下一次切回来的时候，CPU 正好在跑你想要的那个下载任务。可能切来切去，CPU 花了不少时间在「切换」本身，而不是真正下载。</p>
+<p>这就引出一个需求：能不能在用户自己的程序里手动控制切换，而不是交给操作系统？</p>
+
+<h2>协程是什么</h2>
+<p><strong>协程（Coroutine）</strong>，也叫微线程，是一种用户空间的调度机制。它的核心思想是：程序员自己决定什么时候挂起当前任务、什么时候恢复下一个任务。</p>
+<p>和线程/进程的区别：</p>
+<table>
+  <tr><th>维度</th><th>线程/进程</th><th>协程</th></tr>
+  <tr><td>调度方</td><td>操作系统</td><td>程序员（用户空间）</td></tr>
+  <tr><td>切换成本</td><td>高（需要系统调用）</td><td>低（不需要系统调用）</td></tr>
+  <tr><td>可控性</td><td>不可控，随机切换</td><td>可控，自定义调度逻辑</td></tr>
+  <tr><td>资源占用</td><td>较重（每个线程占 MB 级栈内存）</td><td>极轻（协程只是对象，KB 级）</td></tr>
+</table>
+
+<h2>协程怎么切换</h2>
+<p>协程的切换只有两步：<strong>挂起当前任务</strong>，<strong>把控制权交给下一个任务</strong>。这个过程完全在用户空间进行，不需要操作系统介入，所以没有系统调用的开销。</p>
+<p>打个比方：线程切换像是老板（操作系统）随时可能打电话叫你去做别的事，你没法拒绝；协程切换像是你自己列了个待办清单，做完一件主动换下一件，节奏完全自己掌控。</p>
+
+<h2>协程的两个优点</h2>
+<p><strong>轻量级</strong>：协程的创建和销毁开销极小。一个线程占几 MB 栈内存，一个协程只是一个 Python 对象，几 KB 就够了。单线程里跑上万个协程很常见，但跑上万个线程会把操作系统拖垮。</p>
+<p><strong>可控性</strong>：调度逻辑由程序员自己写。你可以决定「遇到网络请求就挂起」「数据回来了就恢复」，而不是让操作系统随机切。这让协程在 IO 密集型任务里效率极高。</p>
+
+<h2>总原则：留住 CPU</h2>
+<p>协程的设计哲学可以用一句话概括：<strong>留住 CPU 在自己的程序中</strong>。线程/进程切换时，CPU 会进入内核态、保存上下文、恢复上下文，这些操作本身就在浪费 CPU 时间。协程把这些开销省了，让 CPU 尽可能花在真正有用的计算上。</p>
+
+<h2>协程与异步的关系</h2>
+<p>协程是实现异步的一种手段。多进程、多线程、协程都能实现异步，但协程在 IO 密集型场景下最轻量、最可控。Python 的 asyncio 框架就是协程的具体实现。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="协程和线程/进程的本质区别是什么？" data-correct="2" data-explain="协程的调度在用户空间由程序员控制，线程/进程的调度由操作系统控制。">
+  <button class="opt">协程必须多核，线程/进程可以单核</button>
+  <button class="opt">协程是操作系统级，线程/进程是用户级</button>
+  <button class="opt">协程是用户空间调度，线程/进程是操作系统调度</button>
+  <button class="opt">协程只能单任务，线程/进程可以多任务</button>
+</div>
+
+<div class="quiz" data-question="协程切换为什么比线程切换开销小？" data-correct="1" data-explain="协程切换在用户空间完成，不需要进入内核态，所以没有系统调用的开销。">
+  <button class="opt">协程不需要保存上下文</button>
+  <button class="opt">协程切换不需要系统调用</button>
+  <button class="opt">协程不需要分配内存</button>
+  <button class="opt">协程不需要 CPU 参与</button>
+</div>
+
+<div class="quiz" data-question="协程的两个主要优点是什么？" data-correct="0" data-explain="协程的两个优点是轻量级（创建销毁开销小）和可控性（调度由程序员控制）。">
+  <button class="opt">轻量级和可控性</button>
+  <button class="opt">并行性和高效性</button>
+  <button class="opt">安全性和稳定性</button>
+  <button class="opt">通用性和兼容性</button>
+</div>
+
+<div class="quiz" data-question="协程的设计哲学是什么？" data-correct="3" data-explain="协程的设计哲学是留住 CPU 在自己的程序中，避免切换带来的开销。">
+  <button class="opt">尽可能多地创建线程</button>
+  <button class="opt">让操作系统负责所有调度</button>
+  <button class="opt">用时间片轮转实现伪并行</button>
+  <button class="opt">留住 CPU 在自己的程序中</button>
+</div>
+
+<div class="quiz" data-question="以下哪一项不是协程的优点？" data-correct="2" data-explain="协程是单线程内的多任务，不能实现真正的多核并行——那是多进程的事。">
+  <button class="opt">创建销毁开销小</button>
+  <button class="opt">调度逻辑可自定义</button>
+  <button class="opt">能实现多核并行</button>
+  <button class="opt">资源占用极低</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./sync-async-concepts.html">← 上一步：同步、异步与并行、并发</a>
+  <a href="./asyncio-core.html">下一步：asyncio 四个核心概念与 wait/await →</a>
+</div>
+
+<div class="footer">js-reverse · 06-asyncio · 协程原理：用户空间调度</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Python 调 JS 解密：完整混合路线实战</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Python 调 JS 解密：完整混合路线实战</h1>
+<p class="meta">实战：sign 逆向（JS 执行） · 步骤 5/5</p>
+
+<h2>学习目标</h2>
+<p>能把 sign 生成与 AES 解密全部交给 JS，用 Python execjs 完成从请求到解密的完整闭环。</p>
+
+<h2>回顾前五步的分工</h2>
+<table>
+  <th>步骤</th><th>负责方</th><th>做什么</th>
+  <tr><td>sign 生成</td><td>JS</td><td>拼接字符串 + MD5</td></tr>
+  <tr><td>请求发送</td><td>Python</td><td>requests.post 发送带 sign 的请求</td></tr>
+  <tr><td>响应解密</td><td>JS</td><td>URL-safe base64 还原 + AES-128-CBC 解密</td></tr>
+</table>
+<p>Python 是总指挥，JS 是加密解密的执行者。execjs 负责在两者之间传递参数和返回值。</p>
+
+<h2>完整脚本：从请求到解密</h2>
+<p>下面是一个完整的混合路线脚本，把 sign 生成和 AES 解密全部用 execjs 交给 JS：</p>
+<pre><code>import execjs
+import requests
+import time
+
+# ========== 1. 加载 JS 文件 ==========
+with open("03 有道翻译.js", encoding="utf-8") as f:
+    js_code = f.read()
+
+# 如果解密函数在另一个文件里，也一起拼进来
+with open("decrypt.js", encoding="utf-8") as f:
+    js_code += "\n" + f.read()
+
+js_compile = execjs.compile(js_code)
+
+# ========== 2. 获取 sign ==========
+t = int(time.time() * 1000)
+sign = js_compile.call("get_sign", t)
+
+# ========== 3. 发送请求 ==========
+url = "https://dict.youdao.com/webtranslate"
+data = {
+    "i": "dog",
+    "from": "AUTO",
+    "to": "AUTO",
+    "client": "fanyideskweb",
+    "product": "webfanyi",
+    "sign": sign,
+    "mysticTime": t,
+    "keyfrom": "fanyi.web",
+    "domain": "0",
+    "dictResult": "true",
+    "keyid": "webfanyi",
+    "appVersion": "1.0.0",
+    "vendor": "web",
+    "pointParam": "client,mysticTime,product"
+}
+headers = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Content-Type": "application/x-www-form-urlencoded"
+}
+resp = requests.post(url, data=data, headers=headers)
+
+# ========== 4. 解密响应 ==========
+encrypted_text = resp.text
+decrypted = js_compile.call("decrypt_data", encrypted_text)
+print(decrypted)</code></pre>
+
+<h2>关键细节：JS 文件怎么组织？</h2>
+<p>实际逆向中，sign 生成和解密通常不在同一个文件里。有两种组织方式：</p>
+<ul>
+  <li><strong>合并编译</strong>：把多个 JS 文件的代码拼成一个字符串，一次性 <code>compile</code>。这样所有函数都在同一个上下文里，可以直接互相调用。</li>
+  <li<strong>分开编译</strong>：每个 JS 文件单独 <code>compile</code>，得到不同的上下文对象。这样模块边界清晰，但函数之间不能直接调用。</li>
+</ul>
+<p>对于有道翻译这种简单场景，合并编译最省事：</p>
+<pre><code>with open("03 有道翻译.js", encoding="utf-8") as f:
+    js_code = f.read()
+with open("decrypt.js", encoding="utf-8") as f:
+    js_code += "\n" + f.read()  # 拼接两个文件
+
+js_compile = execjs.compile(js_code)
+# 现在 get_sign 和 decrypt_data 都在同一个上下文里</code></pre>
+
+<h2>错误排查清单</h2>
+<ul>
+  <li><strong>Cannot find module 'crypto-js'</strong>：JS 代码里用了 <code>require("crypto-js")</code>，但 node_modules 里没装。运行 <code>npm install crypto-js</code>。</li>
+  <li><strong>window is not defined</strong>：JS 代码依赖浏览器对象。在 JS 文件顶部加 <code>const window = {};</code> 或补环境。</li>
+  <li><strong>Illegal return statement</strong>：JS 代码最外层写了 <code>return</code>。execjs 编译的是脚本，不是函数体，顶层不能 return。把要返回的结果赋值给一个全局变量，或通过函数返回。</li>
+  <li><strong>返回值是空字符串</strong>：检查 JS 解密函数是否正确处理了 base64 替换，以及密钥/IV 是否和目标网站一致。</li>
+</ul>
+
+<h2>execjs 混合路线的优缺点</h2>
+<table>
+  <th>维度</th><th>纯 Python 复现</th><th>execjs 混合路线</th>
+  <tr><td>开发效率</td><td>需要翻译每一行 JS</td><td>直接复用原 JS，改动最小</td></tr>
+  <tr><td>维护成本</td><td>网站改算法要重写 Python</td><td>网站改算法只改 JS 文件</td></tr>
+  <tr><td>依赖</td><td>只需 Python 库</td><td>需要 node 运行环境</td></tr>
+  <tr><td>性能</td><td>纯计算更快</td><td>跨语言调用有少量开销</td></tr>
+  <tr><td>适用场景</td><td>算法简单、标准库支持</td><td>算法复杂、依赖浏览器对象</td></tr>
+</table>
+
+<h2>什么时候该升级？</h2>
+<p>execjs 能处理大多数「加密逻辑不太复杂」的站点。但遇到以下情况，你可能需要更强的方案：</p>
+<ul>
+  <li><strong>重度混淆的 JS</strong>：<code>eval</code> 套 <code>eval</code>、控制流平坦化——execjs 能跑但调试困难。这时可以用 <code>jsdom</code> 补环境，或用 <code>selenium</code> 直接调浏览器。</li>
+  <li><strong>需要浏览器环境</strong>：验证码、滑块、canvas 指纹——这些必须用真实的浏览器，Pyppeteer 或 Selenium 更合适。</li>
+  <li><strong>性能要求高</strong>：execjs 每次调用都有跨语言开销，高并发场景下考虑纯 Py 复现或部署 node 微服务。</li>
+</ul>
+
+<h2>小结</h2>
+<p>本节走完了 execjs 混合路线的完整闭环：用 Python 负责请求调度和数据处理，用 JS 负责 sign 生成和 AES 解密，通过 execjs 在两者之间传递参数和返回值。这套模式是 JS 逆向工程中最常用的折中方案——既保留了 JS 原始实现，又不需要脱离 Python 的爬虫生态。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="execjs 混合路线中，Python 的核心职责是什么？" data-correct="1" data-explain="Python 是总指挥，负责发请求、处理响应、调度任务；加密解密逻辑交给 JS。">
+  <button class="opt">负责加密和解密逻辑</button>
+  <button class="opt">负责发请求、处理响应和调度任务</button>
+  <button class="opt">负责补浏览器环境</button>
+  <button class="opt">负责混淆 JS 代码</button>
+</div>
+
+<div class="quiz" data-question="多个 JS 文件合并编译的正确做法是？" data-correct="0" data-explain="把多个 JS 文件的代码拼成一个字符串后 compile，所有函数都在同一个上下文里，可以直接互相调用。">
+  <button class="opt">把代码拼成一个字符串后 compile</button>
+  <button class="opt">每个文件单独 compile，得到同一个对象</button>
+  <button class="opt">在 Python 里逐个 import JS 文件</button>
+  <button class="opt">用 execjs 的 merge() 方法合并</button>
+</div>
+
+<div class="quiz" data-question="JS 代码里用了 require('crypto-js') 但报 Cannot find module，应该怎么解决？" data-correct="2" data-explain="crypto-js 是第三方库，需要用 npm install crypto-js 安装到 node_modules 里。">
+  <button class="opt">在 Python 里 pip install crypto-js</button>
+  <button class="opt">把 require 改成 import</button>
+  <button class="opt">运行 npm install crypto-js</button>
+  <button class="opt">把 crypto-js 的代码复制粘贴到 JS 文件里</button>
+</div>
+
+<div class="quiz" data-question="execjs 混合路线相比纯 Python 复现，最大的优势是什么？" data-correct="3" data-explain="execjs 最大的优势是直接复用原 JS 实现，不需要跨语言移植，开发效率更高。">
+  <button class="opt">执行速度更快</button>
+  <button class="opt">不需要安装任何依赖</button>
+  <button class="opt">能处理所有混淆场景</button>
+  <button class="opt">直接复用原 JS 实现，改动最小</button>
+</div>
+
+<div class="quiz" data-question="以下哪种场景不适合用 execjs 混合路线？" data-correct="1" data-explain="重度混淆、需要浏览器环境（验证码、滑块）或高并发场景，需要更强的方案（Pyppeteer、纯 Py 复现或 node 微服务）。">
+  <button class="opt">有道翻译 sign 请求</button>
+  <button class="opt">需要过滑块验证码的登录接口</button>
+  <button class="opt">标准 MD5 签名接口</button>
+  <button class="opt">AES-CBC 加密的响应解密</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./js-side-decrypt.html">← 上一步：JS 侧 AES 解密</a>
+  <span></span>
+</div>
+
+<div class="footer">实战：sign 逆向（JS 执行） · 步骤 5/5</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>百度翻译 POST 表单请求闭环</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>百度翻译 POST 表单请求闭环</h1>
+<p class="meta">实战：SHA1 与百度 sign · 步骤 5/5</p>
+
+<h2>学习目标</h2>
+<p>能独立拼出百度翻译 v2transapi 的 POST 表单（query/sign/token/ts），让 sign 随 query 动态变化，跑通从输入单词到拿到翻译结果的闭环。</p>
+
+<h2>请求结构总览</h2>
+<p>百度翻译的接口是 <code>POST https://fanyi.baidu.com/v2transapi</code>，数据以 form 表单（<code>application/x-www-form-urlencoded</code>）提交，不是 JSON。表单字段如下：</p>
+<table>
+  <th>字段</th><th>类型</th><th>说明</th>
+  <tr><td>from</td><td>固定</td><td>源语言，如 'en'</td></tr>
+  <tr><td>to</td><td>固定</td><td>目标语言，如 'zh'</td></tr>
+  <tr><td>query</td><td>动态</td><td>要翻译的单词</td></tr>
+  <tr><td>transtype</td><td>固定</td><td>'realtime'</td></tr>
+  <tr><td>simple_means_flag</td><td>固定</td><td>'3'</td></tr>
+  <tr><td>sign</td><td>动态</td><td>由 get_sign(query) 算出</td></tr>
+  <tr><td>token</td><td>固定</td><td>硬编码字符串</td></tr>
+  <tr><td>domain</td><td>固定</td><td>'common'</td></tr>
+  <tr><td>ts</td><td>动态</td><td>毫秒时间戳</td></tr>
+</table>
+
+<h2>完整爬虫脚本</h2>
+<pre><code>import requests
+import execjs
+import time
+
+wd = 'banana'
+
+# 1. 算 sign
+sign = execjs.compile(open("04 百度翻译.js").read()).call("get_sign", wd)
+print("sign:", sign)
+
+# 2. 构造表单
+data = {
+    'from': 'en',
+    'to': 'zh',
+    'query': wd,
+    'transtype': 'realtime',
+    'simple_means_flag': '3',
+    'sign': sign,
+    'token': '54d75af66e933730e213ff5f038971c8',
+    'domain': 'common',
+    'ts': str(int(time.time() * 1000)),
+}
+
+# 3. 发 POST 请求
+response = requests.post(
+    'https://fanyi.baidu.com/v2transapi',
+    params={'from': 'en', 'to': 'zh'},
+    cookies=cookies,
+    headers=headers,
+    data=data
+)
+print(response.json())</code></pre>
+
+<h2>token 和 ts：两个容易搞混的字段</h2>
+<p><code>token</code> 是硬编码的，短期内不会变。它不是 sign，不是加密结果，只是一个标识客户端的令牌。<code>ts</code> 是毫秒时间戳，每次请求都要重新生成——如果你写死一个固定时间戳，过几分钟就会返回「请求过期」之类的错误。</p>
+
+<h2>为什么 sign 必须随 query 动态变化？</h2>
+<p>如果你把 sign 写死，只改 query，百度会直接返回错误。因为 get_sign 的输入是 query，不同的 query 必然算出不同的 sign。这是 sign 机制的核心目的：防止别人用一个固定签名批量刷接口。</p>
+
+<h2>请求头里的 Acs-Token</h2>
+<p>除了表单字段，百度翻译还要求请求头里带一个 <code>Acs-Token</code>。这个值也是动态生成的，但它的生成逻辑和 sign 无关——通常是一个独立的 JS 函数。如果你发现 sign 算对了还是被拦截，大概率是 Acs-Token 没带或过期了。</p>
+
+<h2>调试顺序</h2>
+<ol>
+  <li>先单独跑 <code>get_sign(wd)</code>，确认输出格式正确（六位数.整数）。</li>
+  <li>再发请求，看返回的 JSON 里是否有 <code>error</code> 字段。</li>
+  <li>如果返回「请求过期」，检查 <code>ts</code> 是否实时生成。</li>
+  <li>如果返回「sign 错误」，检查 query 是否做了 URL 编码或 trim。</li>
+</ol>
+
+<h2>小结</h2>
+<p>百度翻译的 POST 闭环就是：输入单词 → execjs 算 sign → 拼表单（query/sign/token/ts）→ requests.post。sign 必须随 query 动态变化，ts 必须实时生成，token 可以短期固定。到这里，你已经跑通了两个最典型的 sign 逆向案例：丁香网的 SHA1 和百度翻译的位运算。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="百度翻译的表单数据用什么格式提交？" data-correct="1" data-explain="百度翻译用 application/x-www-form-urlencoded 提交表单，不是 JSON。">
+  <button class="opt">JSON</button>
+  <button class="opt">application/x-www-form-urlencoded</button>
+  <button class="opt">multipart/form-data</button>
+  <button class="opt">XML</button>
+</div>
+
+<div class="quiz" data-question="sign 必须随什么字段动态变化？" data-correct="0" data-explain="get_sign 的输入是 query，不同的 query 算出不同的 sign，写死 sign 会被拦截。">
+  <button class="opt">query</button>
+  <button class="opt">token</button>
+  <button class="opt">domain</button>
+  <button class="opt">from</button>
+</div>
+
+<div class="quiz" data-question="ts 字段应该用什么值？" data-correct="2" data-explain="ts 是毫秒时间戳，每次请求都要重新生成，写死会导致请求过期。">
+  <button class="opt">固定字符串</button>
+  <button class="opt">随机数字</button>
+  <button class="opt">当前毫秒时间戳</button>
+  <button class="opt">query 的长度</button>
+</div>
+
+<div class="quiz" data-question="token 字段的特点是什么？" data-correct="3" data-explain="token 是硬编码的客户端令牌，短期内不需要每次重新生成。">
+  <button class="opt">每次请求都要重新算</button>
+  <button class="opt">等于 sign 的值</button>
+  <button class="opt">由服务器实时返回</button>
+  <button class="opt">硬编码，短期不变</button>
+</div>
+
+<div class="quiz" data-question="如果返回「请求过期」，最可能的原因是什么？" data-correct="1" data-explain="ts 是时间戳，如果写死一个固定值，过几分钟就会过期。">
+  <button class="opt">sign 算错了</button>
+  <button class="opt">ts 没有实时生成</button>
+  <button class="opt">token 写错了</button>
+  <button class="opt">query 为空</button>
+</div>
+
+<div class="quiz" data-question="百度翻译的接口 URL 是什么？" data-correct="0" data-explain="百度翻译的接口是 fanyi.baidu.com/v2transapi，用 POST 方法。">
+  <button class="opt">https://fanyi.baidu.com/v2transapi</button>
+  <button class="opt">https://fanyi.baidu.com/api/translate</button>
+  <button class="opt">https://api.fanyi.baidu.com/v2transapi</button>
+  <button class="opt">https://fanyi.baidu.com/sign</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./baidu-sign.html">← 上一步：百度翻译 get_sign 算法与 gtk 补环境</a>
+  <span></span>
+</div>
+
+<div class="footer">实战：SHA1 与百度 sign · 步骤 5/5</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

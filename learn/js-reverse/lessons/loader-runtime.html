@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>loader 執行時 — 拼多多進階補環境</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="breadcrumb">
+        <a href="../../nodes/25-pdd-supplement-env.mdx">25-pdd-supplement-env</a>
+        <span>/</span>
+        <span>loader-runtime</span>
+      </div>
+      <h1>loader 執行時</h1>
+      <p class="subtitle">把 webpack 的 JSONP loader 摳出來，改造成可按 id 查詢的模組庫。</p>
+    </header>
+
+    <section class="goal">
+      <h2>學習目標</h2>
+      <p>掌握 webpack JSONP loader 的最小執行時結構，能夠按模組 id 按需呼叫目標模組。</p>
+    </section>
+
+    <section class="content">
+      <h2>loader 的角色</h2>
+      <p>每個 chunk 只是「資料」：一張模組表。但誰來管理這張表？誰來決定什麼時候執行哪個模組？這就是 loader 的工作。它是一個約 120 行的 webpack runtime，負責：</p>
+      <ul>
+        <li>攔截 <code>webpackJsonp.push</code>，把每個進來的 chunk 登記進模組表。</li>
+        <li>維護已載入模組的快取（cache）。</li>
+        <li>提供 <code>require</code> 函式，讓模組之間能互相引用。</li>
+        <li>把載入函式掛到 <code>window.loader</code>，讓我們能手動觸發任意模組。</li>
+      </ul>
+
+      <h2>劫持 push</h2>
+      <p>loader 最關鍵的一行是劫持 <code>webpackJsonp.push</code>：</p>
+      <pre><code>f.push = r;</code></pre>
+      <p>原本 <code>push</code> 只是陣列的內建方法，loader 把它替換成自訂的 <code>r</code> 函式。從此以後，每當任何 chunk 呼叫 <code>webpackJsonp.push(...)</code>，不但會登記模組表，還會立刻執行「等待這個 chunk 的依賴回呼」。這就是為什麼只要 loader 跑起來，所有 chunk 就能自動就位。</p>
+
+      <h2>模組表與快取</h2>
+      <p>loader 內部用兩個物件管理模組生命週期：</p>
+      <pre><code>l.m = {};  // 模組表：id → 模組本體
+l.c = {};  // 快取：id → 已執行過的 exports</code></pre>
+      <p>模組表記錄「每個 id 對應的程式碼是什麼」，快取記錄「每個 id 執行後的結果是什麼」。當一個模組第一次被 <code>require</code> 時，它會被放進模組表、執行、結果存進快取；第二次以後直接從快取拿，不會重複執行。</p>
+
+      <h2>按需載入</h2>
+      <p>loader 把載入函式 <code>l</code> 掛到 <code>window.loader</code>，這就是我們手動呼叫任意模組的入口：</p>
+      <pre><code>window.loader = l;</code></pre>
+      <p>只要知道模組 id，就能在任何時候載入它。在拼多多案例裡，我們用 <code>window.loader("fbeZ")</code> 來觸發風控模組。</p>
+
+      <h2>interop 輔助</h2>
+      <p>loader 內建了 <code>l.d</code>、<code>l.r</code>、<code>l.t</code>、<code>l.n</code> 等 helper，處理 ESM/CJS 的模組格式轉換。還原 loader 時必須一併保留，否則某些模組會因為格式不相容而報錯。</p>
+
+      <h2>模組載入日誌</h2>
+      <p>講師在 loader 裡加了一行：</p>
+      <pre><code>console.log("r:::", r);</code></pre>
+      <p>這行會在每次 <code>push</code> 被呼叫時印出參數，讓我們觀察「哪些 id 實際被載入」。這是逆向時的鷹眼：如果 <code>fbeZ</code> 沒被載入，代表依賴鏈有問題；如果載入順序不對，代表 chunk 放錯位置。</p>
+
+      <h2>loader 的最小結構</h2>
+      <p>總結 loader 的四個核心零件：</p>
+      <table>
+        <thead>
+          <tr><th>零件</th><th>作用</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>f.push = r</code></td><td>攔截 chunk 註冊，觸發依賴回呼</td></tr>
+          <tr><td><code>l.m / l.c</code></td><td>模組表與快取</td></tr>
+          <tr><td><code>window.loader = l</code></td><td>手動載入任意模組的入口</td></tr>
+          <tr><td><code>l.d / l.r / l.t / l.n</code></td><td>ESM/CJS interop 輔助</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+      <div class="quiz" data-question="loader 劫持 webpackJsonp.push 的目的是什麼？" data-correct="2" data-explain="劫持 push 讓 chunk 註冊時不只登記模組表，還能立刻執行等待它的依賴回呼。">
+        <button class="opt">防止 chunk 被重複載入</button>
+        <button class="opt">讓 push 速度更快</button>
+        <button class="opt">在 chunk 註冊時觸發依賴回呼</button>
+        <button class="opt">把所有 chunk 合併成一個檔案</button>
+      </div>
+      <div class="quiz" data-question="l.c（快取）的作用是什麼？" data-correct="0" data-explain="l.c 記錄已執行過的模組結果，避免重複執行。">
+        <button class="opt">記錄已執行過的模組結果，避免重複執行</button>
+        <button class="opt">儲存 chunk 的原始碼</button>
+        <button class="opt">記錄 console.log 的輸出</button>
+        <button class="opt">管理 window 下的全域物件</button>
+      </div>
+      <div class="quiz" data-question="window.loader = l 代表什麼？" data-correct="1" data-explain="掛到 window.loader 後，就能用 window.loader("fbeZ") 手動載入任意模組。">
+        <button class="opt">loader 會自動載入所有 chunk</button>
+        <button class="opt">我們能用 window.loader("id") 手動載入任意模組</button>
+        <button class="opt">loader 會監控 window 的變化</button>
+        <button class="opt">所有模組都會被掛到 window 下</button>
+      </div>
+      <div class="quiz" data-question="loader 內的 l.d / l.r / l.t / l.n 負責什麼？" data-correct="3" data-explain="這些 helper 處理 ESM/CJS 模組格式轉換，還原 loader 時必須保留。">
+        <button class="opt">管理 document、navigator、screen 等環境物件</button>
+        <button class="opt">產生 anti_content 加密字串</button>
+        <button class="opt">攔截 window.webpackJsonp.push</button>
+        <button class="opt">處理 ESM/CJS 模組格式轉換</button>
+      </div>
+      <div class="quiz" data-question="console.log("r:::", r) 這行日誌的作用是？" data-correct="0" data-explain="這行讓我們觀察哪些 id 實際被載入，是逆向時判斷依賴鏈是否正確的鷹眼。">
+        <button class="opt">觀察哪些模組 id 實際被載入</button>
+        <button class="opt">印出 anti_content 的值</button>
+        <button class="opt">記錄 window.loader 被呼叫的次數</button>
+        <button class="opt">顯示 chunk 檔案的大小</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <div class="nav-left"><a href="./webpack-chunks.html">← 上一步：webpack 混淆 chunk 結構</a></div>
+      <div class="nav-right"><a href="./assembly-call.html">下一步：組裝與呼叫 anti_content →</a></div>
+    </div>
+
+    <footer class="lesson-footer">
+      <p>有任何問題，隨時向你的老師提問。</p>
+    </footer>
+  </div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

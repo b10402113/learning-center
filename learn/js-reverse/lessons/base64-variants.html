@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>base64 變種與圖片 — 編碼與加密特徵</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>base64 變種與圖片</h1>
+<p class="meta">學習目標：識別 URL 安全型 base64 的字元替換規則（<code>-</code> 替 <code>+</code>、<code>_</code> 替 <code>/</code>），能把網頁裡 <code>data:image/png;base64</code> 內嵌圖片還原成可查看的圖片檔案，並處理密文裡混入空格或缺失填充符的髒資料。</p>
+
+<h2>現象：長得像 base64，但解不開</h2>
+<p>有時候你拿到一串字元，看起來像 base64，但裡面出現 <code>-</code> 或 <code>_</code>，用標準 <code>b64decode</code> 會報錯或解出亂碼。這是 <strong>URL 安全型 base64</strong>。</p>
+<p>標準 base64 使用 <code>+</code> 和 <code>/</code>，但這兩個字元在 URL 裡是保留字元（分別代表空格和路徑分隔）。為了讓 base64 可以直接塞進 URL 參數，變種把 <code>+</code> 換成 <code>-</code>、<code>/</code> 換成 <code>_</code>。規則是固定的：</p>
+<ul>
+  <li><code>+</code> → <code>-</code></li>
+  <li><code>/</code> → <code>_</code></li>
+</ul>
+
+<h2>解碼前要先還原</h2>
+<p>遇到疑似變種的字串，解碼前用 <code>replace</code> 還原回標準字元，再做 <code>b64decode</code>：</p>
+<pre><code>import base64
+
+variant = "SGVsbG8gV29ybGQh_tw"
+standard = variant.replace("-", "+").replace("_", "/")
+print(base64.b64decode(standard).decode())  # Hello world!?</code></pre>
+<p>實戰裡常見的是 JWT（JSON Web Token）的 header 和 payload 部分，就是標準的 URL-safe base64。</p>
+
+<h2>內嵌圖片：data URL</h2>
+<p>網頁裡有些圖片不是用 <code>&lt;img src="url"&gt;</code> 載入，而是直接寫在 HTML 或 CSS 裡，前綴長這樣：</p>
+<pre><code>data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...</code></pre>
+<p>這是 <strong>data URL</strong>，格式為 <code>data:&lt;MIME型別&gt;;base64,&lt;資料&gt;</code>。只要用最後一個逗號切開，取後半段做 base64 解碼，就能拿到原始圖片的位元組：</p>
+<pre><code>import base64
+
+data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."
+header, b64_data = data_url.split(",", 1)
+img_bytes = base64.b64decode(b64_data)
+
+with open("output.png", "wb") as f:
+    f.write(img_bytes)</code></pre>
+<p>常見陷阱：</p>
+<ul>
+  <li>資料裡混入了空白字元（換行、空格），要先 <code>strip()</code> 或 <code>replace()</code> 清掉。</li>
+  <li>解出來副檔名不一定對應副檔名，要依前綴的 MIME 型別決定副檔名（<code>image/png</code> → <code>.png</code>）。</li>
+</ul>
+
+<h2>髒資料處理清單</h2>
+<p>逆向時抓到的 base64 字串往往不乾淨，處理順序建議：</p>
+<ol>
+  <li>去空白：<code>data.strip().replace("\n", "").replace(" ", "")</code></li>
+  <li>還原變種：<code>.replace("-", "+").replace("_", "/")</code></li>
+  <li>補填充：<code>data += (4 - len(data) % 4) * "="</code></li>
+  <li>解碼：<code>base64.b64decode(data)</code></li>
+</ol>
+
+<h2>重點整理</h2>
+<ul>
+  <li>URL-safe base64 把 <code>+</code>、<code>/</code> 換成 <code>-</code>、<code>_</code>，解碼前要先還原。</li>
+  <li>data URL 格式：<code>data:&lt;MIME&gt;;base64,&lt;資料&gt;</code>，用逗號切開取後半。</li>
+  <li>內嵌圖片解出來是位元組，要用 <code>"wb"</code> 二進位模式寫檔。</li>
+  <li>髒資料處理順序：去空白 → 還原變種 → 補 <code>=</code> → 解碼。</li>
+</ul>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="URL 安全型 base64 把標準 base64 的哪兩個字元替換掉了？" data-correct="1" data-explain="為了避開 URL 保留字元，+ 換成 -，/ 換成 _。">
+  <button class="opt">+ 和 / 換成 - 和 _</button>
+  <button class="opt">+ 和 / 換成 _ 和 -</button>
+  <button class="opt">= 和 + 換成 - 和 _</button>
+  <button class="opt">/ 和 = 換成 _ 和 -</button>
+</div>
+
+<div class="quiz" data-question="data:image/png;base64,iVBORw0KGgo... 如何取出 base64 資料？" data-correct="2" data-explain="用最後一個逗號切開，取後半段就是純 base64 資料。">
+  <button class="opt">直接對整串做 b64decode</button>
+  <button class="opt">取 data: 之後的部分</button>
+  <button class="opt">用逗號切開，取最後一段</button>
+  <button class="opt">取 ;base64, 之前的部分</button>
+</div>
+
+<div class="quiz" data-question="解出 base64 圖片資料後，寫入檔案時要用什麼模式？" data-correct="0" data-explain="圖片是二進位資料，必須用 &quot;wb&quot; 二進位模式寫檔。">
+  <button class="opt">二進位模式 &quot;wb&quot;</button>
+  <button class="opt">文字模式 &quot;w&quot;</button>
+  <button class="opt">附加模式 &quot;a&quot;</button>
+  <button class="opt">獨佔模式 &quot;x&quot;</button>
+</div>
+
+<div class="quiz" data-question="JWT 的 header 和 payload 部分通常使用哪種 base64？" data-correct="3" data-explain="JWT 為了能安全放在 URL 裡，使用 URL-safe base64（無填充或替換 +/）。">
+  <button class="opt">標準 base64</button>
+  <button class="opt">base64 變種但保留 =</button>
+  <button class="opt">十六進位編碼</button>
+  <button class="opt">URL 安全型 base64</button>
+</div>
+
+<div class="quiz" data-question="抓到混雜換行和空白的 base64 字串，第一步應該做什麼？" data-correct="2" data-explain="先去除所有空白字元，避免 b64decode 因雜質報錯。">
+  <button class="opt">直接補齊 = 填充</button>
+  <button class="opt">先還原變種字元</button>
+  <button class="opt">先去除所有空白字元</button>
+  <button class="opt">直接呼叫 b64decode</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./base64-basics.html">← 上一步：base64 編碼與解碼</a>
+  <a href="./digest-algorithms.html">下一步：摘要演算法家族 →</a>
+</div>
+
+<footer class="footer">
+  <p>有任何問題，隨時問你的 agent 老師。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

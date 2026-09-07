@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>threading 线程与线程池 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>Threading 线程与线程池</h1>
+  <p class="meta">js-reverse · 节点 05 · 步骤 4/5</p>
+
+  <h2>学习目标</h2>
+  <p>掌握 threading.Thread 的创建与启动，理解线程共享全局变量与进程数据隔离的差异，并学会用线程池 pool.map 批量派发爬虫任务。</p>
+
+  <h2>Thread 的基本用法</h2>
+  <p>Python 推荐使用 <code>threading</code> 模块（比 <code>thread</code> 更先进、支持更完善）。创建线程的 API 与 Process 几乎一致。</p>
+
+  <pre><code>import threading
+
+def worker(name):
+    print(f"线程 {name} 执行中")
+
+t = threading.Thread(target=worker, args=('A',))
+t.start()      # 启动线程
+t.join()       # 等待线程结束</code></pre>
+
+  <p>也可以继承 <code>Thread</code> 重写 <code>run</code> 方法：</p>
+
+  <pre><code>class MyThread(threading.Thread):
+    def run(self):
+        print("线程执行中")
+
+t = MyThread()
+t.start()</code></pre>
+
+  <h2>线程共享全局变量</h2>
+  <p>与进程数据隔离相反，同一进程内的线程共享全局变量。子线程修改全局变量后，主线程立即可见。</p>
+
+  <pre><code>import threading
+
+n = 100
+
+def modify():
+    global n
+    n = 0
+
+t = threading.Thread(target=modify)
+t.start()
+t.join()
+print(n)  # 输出 0</code></pre>
+
+  <blockquote>关键对照：进程修改全局变量不影响主进程（输出 100），线程修改全局变量主线程可见（输出 0）。这是进程与线程最核心的行为差异。</blockquote>
+
+  <h2>线程池</h2>
+  <p>线程预先创建放入池中，处理完当前任务后不销毁而是接下一个任务，避免多次创建线程的开销，带来更好性能和系统稳定性。</p>
+
+  <p>线程池模块从 <code>multiprocessing.dummy</code> 导入 <code>Pool</code>：</p>
+
+  <pre><code>from multiprocessing.dummy import Pool
+import requests
+
+urls = ['http://example.com/1', 'http://example.com/2', 'http://example.com/3']
+
+def download(url):
+    resp = requests.get(url)
+    return len(resp.text)
+
+# 创建含 3 个线程的池
+pool = Pool(3)
+# 批量派发任务
+results = pool.map(download, urls)
+pool.close()  # 释放池
+print(results)  # [响应长度1, 响应长度2, 响应长度3]</code></pre>
+
+  <p><code>pool.map(func, urls)</code> 的调用次数取决于可迭代对象元素个数，每次接收一个元素作为参数。这是爬虫批量请求最常用的写法。</p>
+
+  <h2>进程 vs 线程选型</h2>
+  <table>
+    <tr><th>场景</th><th>推荐</th><th>原因</th></tr>
+    <tr><td>需要数据隔离</td><td>进程</td><td>避免相互影响，稳定性高</td></tr>
+    <tr><td>需要共享数据</td><td>线程</td><td>天然共享全局变量</td></tr>
+    <tr><td>CPU 密集型</td><td>进程</td><td>绕过 GIL，利用多核</td></tr>
+    <tr><td>I/O 密集型（爬虫）</td><td>线程/协程</td><td>轻量，切换快</td></tr>
+  </table>
+
+  <h2>随堂测验</h2>
+
+  <div class="quiz" data-question="threading.Thread 与 multiprocessing.Process 的 API 关系是？" data-correct="0" data-explain="两者的 API 几乎一致：target 指定函数，args 传参，start() 启动，join() 等待。">
+    <button class="opt">几乎一致</button>
+    <button class="opt">完全不同</button>
+    <button class="opt">Thread 更复杂</button>
+    <button class="opt">Process 已被弃用</button>
+  </div>
+
+  <div class="quiz" data-question="子线程修改全局变量 n=0 后，主线程读取 n 的值是？" data-correct="1" data-explain="线程共享全局变量，子线程修改后主线程立即可见。">
+    <button class="opt">100</button>
+    <button class="opt">0</button>
+    <button class="opt">随机值</button>
+    <button class="opt">抛出异常</button>
+  </div>
+
+  <div class="quiz" data-question="线程池的主要作用是什么？" data-correct="2" data-explain="线程池复用线程，避免反复创建销毁的开销，提升性能和稳定性。">
+    <button class="opt">增加线程数量上限</button>
+    <button class="opt">让线程运行更快</button>
+    <button class="opt">复用线程，减少创建销毁开销</button>
+    <button class="opt">强制线程同步执行</button>
+  </div>
+
+  <div class="quiz" data-question="pool.map(func, urls) 中，func 的调用次数取决于？" data-correct="0" data-explain="func 的调用次数等于 urls 列表的元素个数，每次接收一个 url 作为参数。">
+    <button class="opt">urls 的元素个数</button>
+    <button class="opt">pool 的线程数</button>
+    <button class="opt">CPU 核心数</button>
+    <button class="opt">随机决定</button>
+  </div>
+
+  <div class="quiz" data-question="爬虫（I/O 密集型）更适合用哪种并发方式？" data-correct="3" data-explain="爬虫主要是网络请求（I/O 等待），线程或协程更轻量、切换更快。">
+    <button class="opt">多进程</button>
+    <button class="opt">单线程同步</button>
+    <button class="opt">多核并行</button>
+    <button class="opt">多线程或协程</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./multiprocessing-basics.html">← 上一步：multiprocessing 进程实战</a>
+    <a href="./coroutine-concept.html">下一步：协程原理与动机 →</a>
+  </div>
+
+  <div class="footer">
+    <p>有疑问？随时向你的 agent 提问。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

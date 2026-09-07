@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>持久化存储的两条路线 — Scrapy 框架入门</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>持久化存储的两条路线</h1>
+  <div class="meta">Scrapy 框架入门 · Step 4/4</div>
+
+  <h2>Learning goal</h2>
+  <p>能根据场景在「终端指令式」与「管道式」之间做选型判断，并写出把爬取结果落盘到 .csv 的完整流程。</p>
+
+  <h2>Lesson</h2>
+
+  <p>数据抓下来只是第一步，还得存起来。Scrapy 提供了两条落盘路线：一条是终端指令式，简单但局限；一条是管道式，编码流程多但能存文件也能存数据库。</p>
+
+  <h3>路线一：终端指令式</h3>
+  <p>最简单的方式：让 parse 方法把数据作为返回值 yield 出来，运行时用 <code>-o</code> 参数指定输出文件。</p>
+  <pre><code>scrapy crawl baidu -o result.csv</code></pre>
+
+  <p>优点：一行命令搞定，适合快速验证。</p>
+  <p>缺点：局限性强——只能存文本文件（.csv / .json / .jl），存不了数据库，而且数据必须封装在 parse 的返回值里。</p>
+
+  <h3>路线二：管道式（推荐）</h3>
+  <p>管道式是 Scrapy 推荐的持久化方案。它的核心思路是：Spider 产出 item → 管道接收 item → 管道负责存储。</p>
+
+  <h3>管道式六步编码流程</h3>
+  <ol>
+    <li><strong>解析数据</strong>：在 parse 里用 xpath 提取字段。</li>
+    <li><strong>定义字段</strong>：在 <code>items.py</code> 里用 <code>scrapy.Field()</code> 声明字段。</li>
+    <li><strong>封装 item</strong>：把提取的数据装进 item 对象。</li>
+    <li><strong>yield 提交</strong>：用 <code>yield item</code> 把 item 提交给管道。</li>
+    <li><strong>管道处理</strong>：在 <code>pipelines.py</code> 里写 <code>process_item</code> 方法接收并存储。</li>
+    <li><strong>开启管道</strong>：在 <code>settings.py</code> 里解除 <code>ITEM_PIPELINES</code> 注释。</li>
+  </ol>
+
+  <h3>items.py 定义字段</h3>
+  <pre><code>import scrapy
+
+class MyprojectItem(scrapy.Item):
+    title = scrapy.Field()
+    link = scrapy.Field()</code></pre>
+
+  <h3>Spider 里 yield item</h3>
+  <pre><code>def parse(self, response):
+    item = MyprojectItem()
+    item['title'] = response.xpath('//title/text()').extract_first()
+    item['link'] = response.url
+    yield item</code></pre>
+
+  <h3>pipelines.py 接收并存储</h3>
+  <pre><code>class MyprojectPipeline:
+    def open_spider(self, spider):
+        self.f = open('result.csv', 'w')
+
+    def process_item(self, item, spider):
+        self.f.write(f"{item['title']},{item['link']}\n")
+        return item
+
+    def close_spider(self, spider):
+        self.f.close()</code></pre>
+
+  <p>注意：<code>process_item</code> 必须 <code>return item</code>，否则下一个管道就收不到数据了。</p>
+
+  <h3>settings.py 开启管道</h3>
+  <pre><code>ITEM_PIPELINES = {
+   'myproject.pipelines.MyprojectPipeline': 300,
+}</code></pre>
+  <p>数字 300 是优先级，数字越小优先级越高。多个管道时，item 会按优先级从小到大流转。</p>
+
+  <h3>两条路线怎么选</h3>
+  <table>
+    <tr><th>场景</th><th>推荐路线</th></tr>
+    <tr><td>快速验证、临时抓一把</td><td>终端指令式</td></tr>
+    <tr><td>正式项目、要存数据库</td><td>管道式</td></tr>
+    <tr><td>同一份数据要存多个载体</td><td>管道式（多管道）</td></tr>
+  </table>
+
+  <h2>Quiz</h2>
+
+  <div class="quiz" data-question="终端指令式存储的正确命令是？" data-correct="0" data-explain="scrapy crawl 爬虫名 -o 文件名 是终端指令式存储的标准命令。">
+    <button class="opt">scrapy crawl baidu -o result.csv</button>
+    <button class="opt">scrapy save baidu result.csv</button>
+    <button class="opt">scrapy export baidu result.csv</button>
+    <button class="opt">scrapy dump baidu result.csv</button>
+  </div>
+
+  <div class="quiz" data-question="终端指令式的主要局限是什么？" data-correct="1" data-explain="终端指令式只能存文本文件，存不了数据库。">
+    <button class="opt">运行速度太慢</button>
+    <button class="opt">只能存文本文件，存不了数据库</button>
+    <button class="opt">需要写很多代码</button>
+    <button class="opt">不能指定文件名</button>
+  </div>
+
+  <div class="quiz" data-question="管道式中，Spider 用什么关键字把数据提交给管道？" data-correct="2" data-explain="yield item 把 item 提交给管道。">
+    <button class="opt">return item</button>
+    <button class="opt">send item</button>
+    <button class="opt">yield item</button>
+    <button class="opt">pass item</button>
+  </div>
+
+  <div class="quiz" data-question="process_item 方法必须返回什么？" data-correct="0" data-explain="process_item 必须 return item，否则下一个管道收不到数据。">
+    <button class="opt">item</button>
+    <button class="opt">True</button>
+    <button class="opt">response</button>
+    <button class="opt">什么都不用返回</button>
+  </div>
+
+  <div class="quiz" data-question="settings.py 中 ITEM_PIPELINES 字典里的数字代表什么？" data-correct="2" data-explain="ITEM_PIPELINES 里的数字代表运行优先级，数字越小优先级越高。">
+    <button class="opt">管道的线程数</button>
+    <button class="opt">管道的端口号</button>
+    <button class="opt">管道的优先级，数字越小优先级越高</button>
+    <button class="opt">管道的缓存大小</button>
+  </div>
+
+  <div class="lesson-nav">
+    <div><a href="./parse-response.html">← 上一步：Response 解析与终端运行</a></div>
+    <div></div>
+  </div>
+
+  <div class="footer">Scrapy 框架入门 · 持久化存储的两条路线</div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

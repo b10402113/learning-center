@@ -1,0 +1,50 @@
+---
+id: timestamp-concatenation
+title: 动态时间戳与参数拼接规则
+subject: js-reverse
+sources:
+  - "[[sources/js-reverse/js逆向课件/Day23/01 基于Py逆向的有道翻译.py#基于Py逆向的有道翻译]]"
+created: 2026-09-07
+updated: 2026-09-07
+---
+
+# 动态时间戳与参数拼接规则
+
+## Learning goal
+
+能独立用 Python 生成毫秒级时间戳 mysticTime，并按固定模板将四个参数拼接成待签名字符串，理解 pointParam 与 key 字段在拼接中的作用
+
+## Lesson
+
+sign 的值每次请求都会变，但变的原因只有一个：mysticTime 每次都在变。只要你能生成一个和客户端逻辑一致的 mysticTime，再把它代进拼接模板里，算出来的 sign 就一定是有效的。
+
+mysticTime 的生成方式其实非常简单。在 Python 里，`time.time()` 返回的是从 1970 年 1 月 1 日到现在的浮点秒数。乘以一千之后变成毫秒数，再取整就是十三位整数。最后用 `str()` 转成字符串，就能直接塞进拼接模板：
+
+```python
+import time
+e = str(int(time.time() * 1000))
+```
+
+这一行代码就是 mysticTime 的全部秘密。没有任何隐藏逻辑，没有额外的随机数，就是把当前时间戳转成字符串而已。
+
+确定了时间戳之后，下一步是把四个参数拼成一个完整的字符串。拼接模板是：
+
+```python
+s = f"client={u}&mysticTime={e}&product={d}&key={t}"
+```
+
+其中 `u`、`e`、`d`、`t` 分别对应四个值：`u = "fanyideskweb"`，`e` 是刚才算出来的毫秒时间戳，`d = "webfanyi"`，`t = "fsdsogkndfokasodnaso"`。这个硬编码的 `t` 值在请求体里不会出现，它是客户端代码里写死的常量，唯一的办法是去 JS 源码里把它挖出来。
+
+一个容易让人困惑的点是：为什么 `pointParam` 里只列了 `client,mysticTime,product`，拼接时却多了一个 `key`？答案是 `pointParam` 标记的是「参与签名的请求参数」，而 `key` 是一个不放在请求体里的硬编码密钥。它参与了签名计算，但不会出现在 POST 数据里。这是前端加密里很常见的做法——把一部分秘密藏在代码里，不通过网络传输，服务器端用同样的密钥重新算一遍来验证。
+
+拼接时必须严格按照模板的顺序来。`client` 在前，`mysticTime` 在后，不能调换，也不能漏掉任何一个 `&` 或 `=`。MD5 对输入是逐字节敏感的，哪怕只差一个字符，输出的 sign 就会面目全非。在实际操作中，最稳妥的办法是把模板直接复制到 Python 代码里，用 f-string 把四个变量填进去，这样既不容易出错，也方便后续排查。
+
+最后一步就是算 MD5。把拼好的字符串 `s` 喂给 `hashlib.md5(s.encode()).hexdigest()`，得到的十六进制字符串就是本次请求的 sign。因为 `e` 每次都是当前时间戳，所以每次请求算出来的 sign 都不一样，但服务器用同样的规则算一遍，结果一定一致。
+
+## Sources
+
+- [[sources/js-reverse/js逆向课件/Day23/01 基于Py逆向的有道翻译.py#基于Py逆向的有道翻译]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/timestamp-concatenation.html)

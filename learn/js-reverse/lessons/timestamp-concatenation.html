@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>动态时间戳与参数拼接规则 — 实战：sign 逆向（Python 原生）</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>动态时间戳与参数拼接规则</h1>
+<p class="meta">js-reverse · 步骤 3/5 · 毫秒时间戳与固定模板的拼接</p>
+
+<p><code>sign</code> 的值每次请求都会变，但变的原因只有一个：<code>mysticTime</code> 每次都在变。只要你能生成一个和客户端逻辑一致的 <code>mysticTime</code>，再把它代进拼接模板里，算出来的 <code>sign</code> 就一定是有效的。</p>
+
+<h2>mysticTime 的生成</h2>
+
+<p><code>mysticTime</code> 的生成方式其实非常简单。在 Python 里，<code>time.time()</code> 返回的是从 1970 年 1 月 1 日到现在的浮点秒数。乘以一千之后变成毫秒数，再取整就是十三位整数。最后用 <code>str()</code> 转成字符串，就能直接塞进拼接模板：</p>
+
+<pre><code>import time
+e = str(int(time.time() * 1000))</code></pre>
+
+<p>这一行代码就是 <code>mysticTime</code> 的全部秘密。没有任何隐藏逻辑，没有额外的随机数，就是把当前时间戳转成字符串而已。</p>
+
+<h2>拼接模板的固定顺序</h2>
+
+<p>确定了时间戳之后，下一步是把四个参数拼成一个完整的字符串。拼接模板是：</p>
+
+<pre><code>s = f"client={u}&mysticTime={e}&product={d}&key={t}"</code></pre>
+
+<p>其中 <code>u</code>、<code>e</code>、<code>d</code>、<code>t</code> 分别对应四个值：</p>
+
+<ul>
+  <li><code>u</code> = <code>"fanyideskweb"</code></li>
+  <li><code>e</code> = 刚才算出来的毫秒时间戳</li>
+  <li><code>d</code> = <code>"webfanyi"</code></li>
+  <li><code>t</code> = <code>"fsdsogkndfokasodnaso"</code></li>
+</ul>
+
+<p>这个硬编码的 <code>t</code> 值在请求体里不会出现，它是客户端代码里写死的常量，唯一的办法是去 JS 源码里把它挖出来。</p>
+
+<h2>pointParam 与 key 的区别</h2>
+
+<p>一个容易让人困惑的点是：为什么 <code>pointParam</code> 里只列了 <code>client,mysticTime,product</code>，拼接时却多了一个 <code>key</code>？</p>
+
+<p>答案是 <code>pointParam</code> 标记的是「参与签名的请求参数」，而 <code>key</code> 是一个不放在请求体里的硬编码密钥。它参与了签名计算，但不会出现在 POST 数据里。这是前端加密里很常见的做法——把一部分秘密藏在代码里，不通过网络传输，服务器端用同样的密钥重新算一遍来验证。</p>
+
+<h2>拼接顺序必须严格</h2>
+
+<p>拼接时必须严格按照模板的顺序来。<code>client</code> 在前，<code>mysticTime</code> 在后，不能调换，也不能漏掉任何一个 <code>&amp;</code> 或 <code>=</code>。MD5 对输入是逐字节敏感的，哪怕只差一个字符，输出的 <code>sign</code> 就会面目全非。</p>
+
+<p>在实际操作中，最稳妥的办法是把模板直接复制到 Python 代码里，用 f-string 把四个变量填进去，这样既不容易出错，也方便后续排查。</p>
+
+<h2>完整的签名生成流程</h2>
+
+<p>把前面三步串起来，完整的签名生成流程是这样的：</p>
+
+<pre><code>import time
+import hashlib
+
+# 1. 生成毫秒时间戳
+e = str(int(time.time() * 1000))
+
+# 2. 定义固定参数
+u = "fanyideskweb"
+d = "webfanyi"
+t = "fsdsogkndfokasodnaso"
+
+# 3. 按固定顺序拼接
+s = f"client={u}&mysticTime={e}&product={d}&key={t}"
+
+# 4. 计算 MD5
+sign = hashlib.md5(s.encode()).hexdigest()
+
+print(f"mysticTime: {e}")
+print(f"sign: {sign}")</code></pre>
+
+<p>因为 <code>e</code> 每次都是当前时间戳，所以每次请求算出来的 <code>sign</code> 都不一样，但服务器用同样的规则算一遍，结果一定一致。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="mysticTime 的值是如何生成的？" data-correct="2" data-explain="mysticTime 是当前时间戳乘以 1000 后取整，再转成字符串。">
+  <button class="opt">从服务器返回的随机数</button>
+  <button class="opt">客户端生成的 UUID</button>
+  <button class="opt">当前时间戳乘以 1000 后取整</button>
+  <button class="opt">固定不变的常量值</button>
+</div>
+
+<div class="quiz" data-question="为什么 pointParam 里只列了三个参数，但拼接时却多了一个 key？" data-correct="1" data-explain="pointParam 标记的是参与签名的请求参数，key 是硬编码密钥，不参与网络传输但参与签名计算。">
+  <button class="opt">因为 key 是可选参数，可以省略</button>
+  <button class="opt">因为 key 是硬编码密钥，不参与网络传输但参与签名计算</button>
+  <button class="opt">因为 pointParam 写错了，应该包含 key</button>
+  <button class="opt">因为 key 只在服务器端使用</button>
+</div>
+
+<div class="quiz" data-question="拼接模板中的四个参数 u、e、d、t 分别对应什么？" data-correct="0" data-explain="u 对应 client 值，e 对应 mysticTime，d 对应 product 值，t 对应硬编码的 key 值。">
+  <button class="opt">u=client, e=mysticTime, d=product, t=key</button>
+  <button class="opt">u=mysticTime, e=client, d=key, t=product</button>
+  <button class="opt">u=product, e=key, d=client, t=mysticTime</button>
+  <button class="opt">u=key, e=product, d=mysticTime, t=client</button>
+</div>
+
+<div class="quiz" data-question="为什么拼接顺序必须严格按照模板来？" data-correct="3" data-explain="MD5 对输入逐字节敏感，任何顺序差异都会导致完全不同的签名结果。">
+  <button class="opt">因为 Python 的 f-string 有顺序限制</button>
+  <button class="opt">因为服务器会按字母顺序重新排序</button>
+  <button class="opt">因为拼接顺序是随机的，每次都要重新猜</button>
+  <button class="opt">因为 MD5 对输入逐字节敏感，顺序差异会导致完全不同的结果</button>
+</div>
+
+<div class="quiz" data-question="硬编码的 key 值 fsdsogkndfokasodnaso 从哪里来？" data-correct="2" data-explain="这个 key 值在请求体里不会出现，必须从 JS 源码里挖出来。">
+  <button class="opt">从请求体的某个字段里获取</button>
+  <button class="opt">从服务器响应里获取</button>
+  <button class="opt">从 JS 源码里挖出来的硬编码常量</button>
+  <button class="opt">从 Cookie 里获取</button>
+</div>
+
+<div class="quiz" data-question="以下哪段代码能正确生成 mysticTime？" data-correct="1" data-explain="正确的方式是 time.time() 乘以 1000 后取整，再转成字符串。">
+  <button class="opt"><code>e = str(time.time())</code></button>
+  <button class="opt"><code>e = str(int(time.time() * 1000))</code></button>
+  <button class="opt"><code>e = int(time.time() * 1000)</code></button>
+  <button class="opt"><code>e = str(time.time() / 1000)</code></button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./md5-hashlib.html">← 上一步：MD5 摘要算法与 hashlib.md5</a>
+  <a href="./request-structure.html">下一步：有道翻译请求结构与 pointParam →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

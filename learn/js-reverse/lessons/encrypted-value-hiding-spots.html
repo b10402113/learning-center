@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>加密值三大藏身处 — DevTools 断点与逆向技巧</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>加密值三大藏身处</h1>
+<p class="meta">js-reverse · 步骤 2/4 · 抓到请求后先检查这三个位置</p>
+
+<p>当你用抓包工具或者浏览器 Network 面板拿到一个 HTTP 请求之后，下一步就是找出里面哪个参数是加密过的。请求体那么长，不可能从头到尾一个字段一个字段地猜。加密值在请求里出现的位置，翻来覆去只有三个地方。</p>
+
+<h2>第一藏身地：查询参数与 form 数据</h2>
+
+<p>这是最常见的位置。POST 请求体里的 <code>sign</code>、<code>token</code>、<code>password</code>，GET 问号后面的 <code>?key=xxx</code>，都属于这一类。它们就明明白白地躺在请求体或者 URL 里，看起来是一串毫无规律的字符，比如 <code>1be3315fc3cd8097a033646862b6e5db</code>。</p>
+
+<p>抓包的时候，先看 POST 的 Form Data 或者 Request Payload。如果里面有一串长度固定、字符集有限（十六进制或者 Base64）的值，大概率就是加密后的结果。有道翻译的 <code>sign</code> 字段就是这种情况。</p>
+
+<h2>第二藏身地：请求头</h2>
+
+<p>有些网站不把加密参数放在请求体里，而是塞进 HTTP Header。常见的名字有 <code>Authorization</code>、<code>X-Token</code>、<code>X-Sign</code>、<code>Cookie</code> 里的某个键值。</p>
+
+<p>请求头里的加密值通常比请求体里的更长，格式也更多样：可能是 Bearer token、JWT 三段式、或者自定义的 <code>sign: xxx</code>。抓包的时候别只看请求体，把 Headers 选项卡也展开看一眼。</p>
+
+<h2>第三藏身地：Cookie</h2>
+
+<p>Cookie 是第三类藏身地，但它的特殊之处在于：Cookie 通常是服务器生成之后下发给客户端的，客户端下次请求时自动带上。所以 Cookie 里的加密值，往往是会话标识或者服务器签名的结果，而不是客户端实时计算出来的。</p>
+
+<p>不过也有例外。有些网站会在前端用 JavaScript 往 Cookie 里写入一个加密后的时间戳或者用户标识，下次请求时带上。这时候 Cookie 里的值就是客户端加密的结果，同样需要逆向。</p>
+
+<h2>为什么是「三大藏身处」而不是「四大」</h2>
+
+<p>因为 HTTP 请求的结构就是这三块：URL/请求体、Header、Cookie。加密值说到底也是数据，数据只能放在这三个位置之一。建立这个心智模型之后，你抓到一个新请求，不用从头翻到尾，直接按顺序检查：</p>
+
+<ol>
+  <li>先看请求体里有没有看起来像加密结果的字段</li>
+  <li>再看请求头里有没有 sign、token、authorization 之类的键</li>
+  <li>最后看 Cookie 里有没有可疑的键值</li>
+</ol>
+
+<p>三个地方都看完了，如果还没找到，再考虑是不是加密值被拆散放在了多个字段里，或者经过了二次编码（比如先 Base64 再 URL encode）。</p>
+
+<h2>一个判断加密值的快速方法</h2>
+
+<p>怎么判断一个字段是不是加密过的？看长度和字符集。MD5 固定 32 位十六进制，SHA-1 固定 40 位，Base64 只包含 <code>A-Z</code>、<code>a-z</code>、<code>0-9</code>、<code>+</code>、<code>/</code>、<code>=</code>。如果一个字段的值符合这些特征，而且每次请求都不一样，那基本就是加密或者签名后的结果。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="加密值在 HTTP 请求中最常见的三种藏身位置分别是什么？" data-correct="1" data-explain="HTTP 请求的结构分为 URL/请求体、Header、Cookie 三块，加密值只能放在这三个位置之一。">
+  <button class="opt">URL 参数、请求体、响应体</button>
+  <button class="opt">查询参数与 form 数据、请求头、Cookie</button>
+  <button class="opt">请求体、响应头、Session</button>
+  <button class="opt">URL 路径、请求方法、状态码</button>
+</div>
+
+<div class="quiz" data-question="有道翻译的 sign 字段最可能出现在请求的哪个位置？" data-correct="0" data-explain="sign 通常作为 POST 请求体里的一个字段发送，属于查询参数与 form 数据的范畴。">
+  <button class="opt">POST 请求体（Form Data）</button>
+  <button class="opt">请求头（Request Headers）</button>
+  <button class="opt">Cookie</button>
+  <button class="opt">URL 查询参数</button>
+</div>
+
+<div class="quiz" data-question="为什么 Cookie 里的加密值有时不是客户端实时计算的？" data-correct="2" data-explain="Cookie 通常是服务器生成后下发给客户端的，下次请求自动携带，所以里面的值往往是服务器端签名的结果。">
+  <button class="opt">因为 Cookie 只能存储明文</button>
+  <button class="opt">因为 Cookie 的大小限制太小</button>
+  <button class="opt">因为 Cookie 通常是服务器生成后下发的会话标识</button>
+  <button class="opt">因为 Cookie 每次请求都会自动变化</button>
+</div>
+
+<div class="quiz" data-question="以下哪一项是判断一个字段可能是加密值的有效线索？" data-correct="3" data-explain="加密值通常长度固定、字符集有限（十六进制或 Base64），且每次请求都不一样。">
+  <button class="opt">字段名是中文</button>
+  <button class="opt">字段的值每次请求都相同</button>
+  <button class="opt">字段的值是纯数字</button>
+  <button class="opt">字段的值长度固定且只包含十六进制字符</button>
+</div>
+
+<div class="quiz" data-question="如果抓到一个请求，在请求体和请求头里都没找到可疑的加密字段，下一步应该检查哪里？" data-correct="0" data-explain="三大藏身处按顺序是：请求体、请求头、Cookie。前两个没找到，就该看 Cookie 了。">
+  <button class="opt">Cookie</button>
+  <button class="opt">响应体</button>
+  <button class="opt">URL 路径</button>
+  <button class="opt">请求方法</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./call-stack-backtrace.html">← 上一步：请求堆叠回溯</a>
+  <a href="./keyword-search.html">下一步：关键字搜寻 →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

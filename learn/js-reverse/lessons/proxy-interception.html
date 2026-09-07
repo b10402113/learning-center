@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Proxy 拦截与环境探测</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<header>
+<h1>Proxy 拦截与环境探测</h1>
+<p class="subtitle">用 Proxy 自动发现扣下的代码读了哪些环境属性</p>
+</header>
+
+<main>
+
+<section>
+<h2>为什么要用 Proxy？</h2>
+<p>上一课讲到「缺什么补什么」的工作流：跑代码 → 看报错 → 补属性 → 再跑。这个流程能用，但<strong>低效</strong>——每补一个属性就要重新跑一遍，遇到依赖属性多的代码，来回折腾十几次是常态。</p>
+<p>有没有办法让代码自己「报」出它读了什么？有，用 <code>Proxy</code> 把 <code>window</code> 包装一下，代码每次读属性时，Proxy 都能感知并记录下来。这样跑一次就知道缺什么，一次性补齐。</p>
+</section>
+
+<section>
+<h2>Proxy 的基本结构</h2>
+<p><code>Proxy</code> 是 ES6 引入的代理机制，能拦截对象的基本操作。对补环境来说，最常用的是 <code>get</code> 和 <code>set</code> 两个 trap：</p>
+<pre><code>var obj = { username: "yuan", age: 0 };
+
+obj = new Proxy(obj, {
+    get(target, p, receiver) {
+        // 读取属性时触发
+        console.log("读取属性:", p);
+        return Reflect.get(target, p);
+    },
+    set(target, p, value, receiver) {
+        // 写入属性时触发
+        console.log("写入属性:", p, "=", value);
+        Reflect.set(target, p, value);
+    }
+});
+
+console.log(obj.username);  // 触发 get，输出 "读取属性: username"
+obj.age = 25;               // 触发 set，输出 "写入属性: age = 25"</code></pre>
+<p><code>target</code> 是被代理的原始对象，<code>p</code> 是属性名，<code>value</code> 是新值。<code>Reflect.get</code> 和 <code>Reflect.set</code> 是 trap 里操作原对象的正确姿势——它们等价于直接读写 <code>target[p]</code>，但不会再次触发 Proxy 的 trap（避免递归）。</p>
+</section>
+
+<section>
+<h2>用 Proxy 做环境探测</h2>
+<p>把上一课的 <code>window = global</code> 和 Proxy 结合，就能做出一个「环境探测代理」：代码读了什么属性、写了什么值，全部打印出来。跑一次就知道要补什么。</p>
+<pre><code>window = global;
+window = new Proxy(window, {
+    get(target, p) {
+        console.log("读取环境属性:", p);
+        return Reflect.get(target, p);
+    },
+    set(target, p, value) {
+        console.log("写入环境属性:", p, "=", value);
+        return Reflect.set(target, p, value);
+    }
+});</code></pre>
+<p>把扣下的代码接在后面跑，所有对 <code>window</code> 的访问都会触发 <code>get</code>/<code>set</code>，控制台输出一行行日志。跑完一遍，补环境的清单就出来了。</p>
+</section>
+
+<section>
+<h2>set trap 里还能做校验</h2>
+<p>Proxy 的 <code>set</code> trap 不只是记录，还能做校验。比如限制 <code>age</code> 字段的取值范围：</p>
+<pre><code>set(target, p, value, receiver) {
+    if (p === "age") {
+        if (value < 100) {
+            Reflect.set(target, p, value);
+        } else {
+            console.log("age 范围不对");  // 拦截非法值
+        }
+    } else {
+        Reflect.set(target, p, value);
+    }
+}</code></pre>
+<p>补环境时这个能力很有用：如果某个环境属性被写入了一个离谱的值（比如 <code>window.screenWidth = 99999</code>），可以直接拦截并提醒自己「这个值可能不对」。</p>
+</section>
+
+<section>
+<h2>一个容易踩的坑：递归</h2>
+<p>在 <code>get</code> trap 里写 <code>return window['xxx']</code> 是错的——这会再次触发 Proxy 的 <code>get</code> trap，无限递归，直到爆栈。</p>
+<pre><code>// 错误写法
+get(target, p) {
+    return window['username'];  // 又触发 get → 递归！
+}
+
+// 正确写法
+get(target, p) {
+    return Reflect.get(target, p);  // 不触发 trap
+}</code></pre>
+<p>在 trap 里操作原对象，永远用 <code>Reflect.get(target, p)</code> 或 <code>Reflect.set(target, p, value)</code>，不要直接访问被代理的对象。</p>
+</section>
+
+<section>
+<h2>完整工作流对比</h2>
+<table>
+<thead>
+<tr><th>传统补环境</th><th>Proxy 环境探测</th></tr>
+</thead>
+<tbody>
+<tr><td>跑代码 → 报错 → 补属性 → 再跑</td><td>Proxy 包装 window → 跑一次 → 看日志 → 批量补齐</td></tr>
+<tr><td>每次只能发现一个缺失属性</td><td>一次运行发现所有读写</td></tr>
+<tr><td>适合属性少的简单场景</td><td>适合属性多、依赖复杂的代码</td></tr>
+</tbody>
+</table>
+<p>两种方式不矛盾：简单场景用手动补，复杂场景用 Proxy 探测，发现属性后再批量补上。</p>
+</section>
+
+<section class="quiz-section">
+<h2>随堂测验</h2>
+
+<div class="quiz" data-question="Proxy 的 get trap 什么时候被触发？" data-correct="0" data-explain="get trap 在读取代理对象的属性时触发。">
+  <button class="opt">读取代理对象的属性时</button>
+  <button class="opt">修改代理对象的属性时</button>
+  <button class="opt">删除代理对象的属性时</button>
+  <button class="opt">创建代理对象时</button>
+</div>
+
+<div class="quiz" data-question="在 get trap 里操作原对象，应该用哪个 API？" data-correct="2" data-explain="Reflect.get 能读取属性且不触发 Proxy 的 trap，避免递归。">
+  <button class="opt">target.p</button>
+  <button class="opt">window['p']</button>
+  <button class="opt">Reflect.get(target, p)</button>
+  <button class="opt">proxy.get(p)</button>
+</div>
+
+<div class="quiz" data-question="在 get trap 里写 return window['username'] 会导致什么问题？" data-correct="1" data-explain="访问 window['username'] 会再次触发 get trap，形成无限递归直到爆栈。">
+  <button class="opt">没有影响，正常返回值</button>
+  <button class="opt">无限递归，导致栈溢出</button>
+  <button class="opt">抛出语法错误</button>
+  <button class="opt">返回 undefined</button>
+</div>
+
+<div class="quiz" data-question="Proxy 在补环境中的主要作用是什么？" data-correct="3" data-explain="Proxy 能拦截属性读写，用于自动探测代码访问了哪些环境属性。">
+  <button class="opt">让代码执行得更快</button>
+  <button class="opt">自动修复代码里的 bug</button>
+  <button class="opt">把浏览器代码编译成 Node.js 代码</button>
+  <button class="opt">自动探测代码访问了哪些环境属性</button>
+</div>
+
+<div class="quiz" data-question="set trap 里做校验的好处是什么？" data-correct="0" data-explain="set trap 能拦截非法写入，及时发现异常值，辅助调试。">
+  <button class="opt">能拦截非法写入，发现异常的环境属性值</button>
+  <button class="opt">能让代码跳过所有错误继续执行</button>
+  <button class="opt">能自动修正写入的错误值</button>
+  <button class="opt">能让代码在浏览器里也能运行</button>
+</div>
+</section>
+
+</main>
+
+<div class="lesson-nav">
+<div class="nav-left">
+<a href="./supplement-env-basics.html">← 上一步：补环境的基本形态：window = global</a>
+</div>
+<div class="nav-right">
+<a href="./rc4-algorithm.html">下一步：RC4 算法 →</a>
+</div>
+</div>
+
+<footer>
+<p>有疑问？随时向老师提问。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

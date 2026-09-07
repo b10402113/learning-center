@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>代理、UA 與 Cookie 中間件 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>代理、UA 與 Cookie 中間件</h1>
+<div class="meta">js-reverse · Step 2/5 · 約 15 分鐘</div>
+
+<h2>這節課你會學到什麼</h2>
+<p>掌握代理中間件、UA 中間件和 Cookie 中間件的實作方式，理解全域代理的效率弊端，並能用 <code>spider</code> 參數打通爬蟲檔案與中介物的資料交互。</p>
+
+<h2>從「每個請求都要改」到「中間件一次搞定」</h2>
+<p>上一節課我們知道 <code>process_request</code> 能攔截所有請求。如果想在每個請求上掛代理、隨機換 User-Agent、或塞 Cookie，最直覺的寫法是在爬蟲的 <code>parse</code> 裡一筆一筆改——但這樣做，每個 <code>yield scrapy.Request()</code> 之前都要重複寫一樣的行程式碼。</p>
+
+<p>更好的做法是把這些「每請求都要做的事」抽到中介物裡。中介物對所有請求生效，爬蟲檔案就只需要管「發什麼請求、怎麼解析回應」。</p>
+
+<h2>代理中間件：讓請求走代理 IP</h2>
+<p>代理中間件的核心只一行：在 <code>process_request</code> 裡把代理 IP 塞進 <code>request.meta['proxy']</code>。</p>
+
+<pre><code># middlewares.py
+import random
+
+class ProxyMiddleware:
+    def process_request(self, request, spider):
+        proxy = random.choice(spider.proxy_list)
+        request.meta['proxy'] = proxy
+        # 注意：值必須包含協議前綴
+        # request.meta['proxy'] = 'http://11.22.33.44:8080'</code></pre>
+
+<p>但要注意一個陷阱：<strong>全域代理會讓整體請求效率變慢</strong>。因為每個請求都必須多走一趟代理伺服器，如果代理本身速度慢或不穩定，原本 0.5 秒能抓完的頁面可能變成 3 秒。所以代理通常只掛在「會被封 IP」的請求上，而不是全部。</p>
+
+<h2>UA 中間件：隨機換 User-Agent</h2>
+<p>User-Agent（UA）是要求標頭裡的一段文字，代表「你用什麼瀏覽器、什麼作業系統」。如果一個網站發現 10,000 個請求全都用同一個 UA，就會懷疑你是爬蟲。</p>
+
+<p>UA 中介物的標準寫法：準備一個 UA 清單，每次請求隨機選一個，塞進 <code>request.headers['User-Agent']</code>。</p>
+
+<pre><code># middlewares.py
+import random
+
+class UAMiddleware:
+    ua_list = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ...',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ...',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ...',
+    ]
+
+    def process_request(self, request, spider):
+        ua = random.choice(self.ua_list)
+        request.headers['User-Agent'] = ua</code></pre>
+
+<p>進階做法是用 <code>fake_useragent</code> 套件動態產生 UA，避免手動維護清單。</p>
+
+<h2>Cookie 中介件：帶登入狀態發請求</h2>
+<p>Cookie 是伺服器存在瀏覽器裡的一小段資料，常見用途是記住登入狀態。Scrapy 發請求時預設不帶 Cookie，但可以用兩種等價方式掛上：</p>
+
+<pre><code># middlewares.py
+class CookieMiddleware:
+    def process_request(self, request, spider):
+        cookies = {
+            'sessionid': 'abc123',
+            'token': 'xyz789',
+        }
+        # 寫法一：直接指定 cookies 參數
+        request.cookies = cookies
+
+        # 寫法二：手動塞進 headers
+        # request.headers['cookie'] = 'sessionid=abc123; token=xyz789'</code></pre>
+
+<p>兩種方式效果相同，但 <code>request.cookies</code> 接受字典、可讀性較好；<code>request.headers['cookie']</code> 接受字串、格式必須手動拼接。</p>
+
+<h2>spider 參數的協作模式</h2>
+<p>上一節課提過 <code>spider</code> 是爬蟲類別的實例。最常見的協作模式是：爬蟲檔案裡定義「資料源」（如代理池、UA 清單、Cookie 字典），中介物裡用 <code>spider.xxx</code> 取用。</p>
+
+<pre><code># spiders/myspider.py
+class MySpider(scrapy.Spider):
+    name = 'myspider'
+    proxy_list = [
+        'http://11.22.33.44:8080',
+        'http://55.66.77.88:3128',
+        'http://99.88.77.66:9090',
+    ]
+    ua_list = ['UA1', 'UA2', 'UA3']
+
+# middlewares.py
+class MyMiddleware:
+    def process_request(self, request, spider):
+        # 從 spider 物件動態取得代理池
+        request.meta['proxy'] = random.choice(spider.proxy_list)
+        request.headers['User-Agent'] = random.choice(spider.ua_list)</code></pre>
+
+<p>這種分工讓爬蟲的配置（用哪些代理、哪些 UA）和中間件的行為（怎麼掛、什麼時候掛）解耦。爬蟲檔案像一份設定檔，中間件像一個通用引擎。</p>
+
+<h2>中介物的優先順序</h2>
+<p>如果同時啟用代理、UA、Cookie 三個中介物，它們的執行順序由 <code>settings.py</code> 裡的優先級數字決定：</p>
+
+<pre><code>DOWNLOADER_MIDDLEWARES = {
+    'myproject.middlewares.UAMiddleware': 543,
+    'myproject.middlewares.CookieMiddleware': 544,
+    'myproject.middlewares.ProxyMiddleware': 545,
+}</code></pre>
+
+<p>數字越小越先執行 <code>process_request</code>。所以 UA 中介物（543）會先塞 User-Agent，然後 Cookie 中介物（544）塞 Cookie，最後 Proxy 中介物（545）掛代理。</p>
+
+<h2>小結</h2>
+<p>三類請求中介物都在 <code>process_request</code> 裡改寫請求：代理中介物用 <code>request.meta['proxy']</code> 掛代理、UA 中介物用 <code>request.headers['User-Agent']</code> 隨機換 UA、Cookie 中介物用 <code>request.cookies</code> 或 <code>request.headers['cookie']</code> 帶登入狀態。<code>spider</code> 參數讓爬蟲檔案定義資料源、中介物取用，實現配置與行為的解耦。</p>
+
+<div class="lesson-nav">
+  <div><a href="./middleware-basics.html">← 上一步：下載中間件核心概念</a></div>
+  <div><a href="./selenium-response.html">下一步：中間件結合 Selenium 篡改回應 →</a></div>
+</div>
+
+<div class="quiz" data-question="代理中介件中，代理 IP 應該塞進 request 的哪個屬性？" data-correct="2" data-explain="代理 IP 必須塞進 request.meta['proxy']，值需包含協議前綴（如 http://）。">
+  <button class="opt">request.headers['proxy']</button>
+  <button class="opt">request.cookies['proxy']</button>
+  <button class="opt">request.meta['proxy']</button>
+  <button class="opt">request.url</button>
+</div>
+
+<div class="quiz" data-question="全域代理的主要缺點是什麼？" data-correct="1" data-explain="每個請求都走代理會增加延遲，若代理本身速度慢，整體請求效率會明顯下降。">
+  <button class="opt">無法設定 Cookie</button>
+  <button class="opt">會讓整體請求效率變慢</button>
+  <button class="opt">只能用在 HTTP 網站</button>
+  <button class="opt">無法搭配 UA 中介件使用</button>
+</div>
+
+<div class="quiz" data-question="UA 中介件的主要目的是什麼？" data-correct="0" data-explain="隨機換 User-Agent 讓每次請求看起來來自不同瀏覽器，降低被網站懷疑為爬蟲的風險。">
+  <button class="opt">讓每次請求看起來來自不同瀏覽器</button>
+  <button class="opt">提高請求速度</button>
+  <button class="opt">自動登入網站</button>
+  <button class="opt">壓縮回應資料</button>
+</div>
+
+<div class="quiz" data-question="request.cookies 和 request.headers['cookie'] 的差異是什麼？" data-correct="3" data-explain="request.cookies 接受字典、可讀性較好；request.headers['cookie'] 接受字串、格式必須手動拼接。">
+  <button class="opt">前者只能用在 HTTP，後者只能用在 HTTPS</button>
+  <button class="opt">前者速度較快</button>
+  <button class="opt">前者是 Scrapy 獨有，後者是 requests 獨有</button>
+  <button class="opt">前者接受字典，後者接受字串</button>
+</div>
+
+<div class="quiz" data-question="爲什麼 spider 參數在中介件中很重要？" data-correct="2" data-explain="spider 讓中介件能讀取爬蟲檔案裡定義的屬性（如 proxy_list、ua_list），實現配置與行為的解耦。">
+  <button class="opt">它能加快請求發送速度</button>
+  <button class="opt">它能自動產生 UA</button>
+  <button class="opt">它能讓中介件讀取爬蟲檔案裡定義的屬性</button>
+  <button class="opt">它能自動處理例外</button>
+</div>
+
+<div class="footer">
+  js-reverse · 中間件、CrawlSpider 與分散式 · Step 2/5
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

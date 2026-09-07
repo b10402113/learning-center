@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>下载中间件核心概念 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>下载中间件核心概念</h1>
+<div class="meta">js-reverse · Step 1/5 · 約 15 分鐘</div>
+
+<h2>這節課你會學到什麼</h2>
+<p>理解 Scrapy 下載中間件在框架中的位置、三個核心方法的作用，以及 <code>spider</code> 參數如何實現爬蟲類與中間件的資料交互。</p>
+
+<h2>情境：Scrapy 框架裡，請求怎麼流動？</h2>
+<p>你在 Scrapy 專案裡發了 100 個請求，每個請求都要經過引擎、調度器、下載器、爬蟲、管道這五個組件。但你想過沒有：請求從引擎送到下載器的途中，有沒有一個「檢查站」，能在請求出發前偷偷塞一個代理 IP，或在回應回來時順手把動態頁面重渲染一次？</p>
+
+<p>這個檢查站就是<strong>下載中間件（Downloader Middleware）</strong>。它位於引擎與下載器之間，所有請求和回應都必須經過它——就像海關，每份貨物都要檢查蓋章。</p>
+
+<pre><code>引擎 ──→ 【下載中間件】──→ 下載器 ──→ 網路
+  ←── 【下載中間件】←── 下載器 ←── 網路
+
+請求流向：引擎 → 中間件 → 下載器
+回應流向：下載器 → 中間件 → 引擎</code></pre>
+
+<p>Scrapy 有兩類中間件：<strong>爬蟲中間件（Spider Middleware）</strong>連接引擎與爬蟲，<strong>下載中間件（Downloader Middleware）</strong>連接引擎與下載器。本節聚焦下載中間件，因為幾乎所有「改請求、改回應、掛代理、掛 UA」的需求都在這裡完成。</p>
+
+<h2>中間件的骨架</h2>
+<p>一類下載中間件就是一個普通 Python 類別，通常擺在專案的 <code>middlewares.py</code> 檔案裡。它有三個核心方法：</p>
+
+<pre><code># middlewares.py
+class MyDownloaderMiddleware:
+    def process_request(self, request, spider):
+        """處理每個發送前的請求"""
+        pass
+
+    def process_response(self, request, response, spider):
+        """處理每個下載完成后的回應"""
+        pass
+
+    def process_exception(self, request, exception, spider):
+        """處理請求發生例外的情況"""
+        pass</code></pre>
+
+<h2>三個核心方法</h2>
+
+<h3>1. process_request — 請求出門前的最後改寫</h3>
+<p><code>process_request(self, request, spider)</code> 攔截所有即將被發出的請求。你可以在這裡改要求標頭（headers）、塞代理 IP（<code>request.meta['proxy']</code>）、掛 Cookie。</p>
+
+<p>這個方法回傳 <code>None</code>，代表「繼續往下傳給下載器」；如果回傳一個 <code>Response</code> 物件，Scrapy 會跳過下載器直接把這個 Response 交給爬蟲解析；如果回傳 <code>Request</code> 物件，則重新排程這個新請求。</p>
+
+<h3>2. process_response — 回應進門前的重新包裝</h3>
+<p><code>process_response(self, request, response, spider)</code> 攔截所有下載完成后的回應。最常見的用途是動態頁面：當 Scrawy 拿到的回應裡沒有你需要的資料（因為資料是 JavaScript 渲染的），你可以在這裡用瀏覽器重新渲染，再用新的 <code>HtmlResponse</code> 替換掉原本的 <code>response</code>。</p>
+
+<p>這個方法必須回傳一個 <code>Response</code> 物件（新的或舊的都可以）。</p>
+
+<h3>3. process_exception — 例外時的降級方案</h3>
+<p><code>process_exception(self, request, exception, spider)</code> 在請求丟出例外時觸發，例如逾時、連線被拒。你可以在這裡記錄例外、換一個代理重試、或回傳一個「降級用的 Response」讓爬蟲繼續跑。</p>
+
+<h2>spider 參數：打通爬蟲與中間件的橋樑</h2>
+<p>三個方法都有的 <code>spider</code> 參數，是爬蟲類別的實例化物件。透過它，爬蟲檔案裡定義的屬性，中間件都能讀取；反過來，中間件也可以把資料塞給爬蟲。</p>
+
+<p>最典型的協作模式：爬蟲檔案裡定義一個代理池，中間件裡用 <code>spider.proxy_list</code> 取用。</p>
+
+<pre><code># spiders/myspider.py
+class MySpider(scrapy.Spider):
+    name = 'myspider'
+    # 代理池定義在爬蟲類中
+    proxy_list = [
+        'http://11.22.33.44:8080',
+        'http://55.66.77.88:3128',
+    ]
+
+# middlewares.py
+import random
+
+class ProxyMiddleware:
+    def process_request(self, request, spider):
+        # 從爬蟲物件拿到代理池
+        proxy = random.choice(spider.proxy_list)
+        request.meta['proxy'] = proxy</code></pre>
+
+<p>這種「資料源放爬蟲、消費邏輯放中間件」的分工，讓爬蟲的配置和中間件的行為解耦，後面 Selenium 案例會繼續沿用。</p>
+
+<h2>中間件的啟用與優先順序</h2>
+<p>寫好中間件類別後，必須在 <code>settings.py</code> 的 <code>DOWNLOADER_MIDDLEWARES</code> 字典裡註冊才會生效：</p>
+
+<pre><code># settings.py
+DOWNLOADER_MIDDLEWARES = {
+    'myproject.middlewares.MyDownloaderMiddleware': 543,
+}</code></pre>
+
+<p>鍵是中間件類別的完整路徑，值是優先級（0–1000 的整數）。數字越小，代表該中間件越靠近引擎、越先執行 <code>process_request</code>、越後執行 <code>process_response</code>。一個直覺記憶：</p>
+
+<ul>
+  <li><code>process_request</code>：小數字先執行（靠近引擎）</li>
+  <li><code>process_response</code>：大數字先執行（靠近引擎）</li>
+</ul>
+
+<h2>小結</h2>
+<p>下載中間件位於引擎與下載器之間，是 Scrapy 的全局請求／回應攔截點。三個核心方法各司其職：<code>process_request</code> 改寫請求、<code>process_response</code> 替換回應、<code>process_exception</code> 處理例外。<code>spider</code> 參數讓爬蟲檔案與中間件共享資料，是後續 Selenium 案例的基礎。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./request-middleware.html">下一步：代理、UA 與 Cookie 中間件 →</a></div>
+</div>
+
+<div class="quiz" data-question="下載中間件在 Scrapy 框架中位於哪兩個組件之間？" data-correct="1" data-explain="下載中間件位於引擎與下載器之間，攔截所有請求與回應。">
+  <button class="opt">爬蟲與管道</button>
+  <button class="opt">引擎與下載器</button>
+  <button class="opt">調度器與引擎</button>
+  <button class="opt">爬蟲與引擎</button>
+</div>
+
+<div class="quiz" data-question="process_request 在什麼時機點被呼叫？" data-correct="0" data-explain="process_request 攔截所有即將被發出的請求，在請求交給下載器之前執行。">
+  <button class="opt">請求發出前</button>
+  <button class="opt">回應回來後</button>
+  <button class="opt">例外發生時</button>
+  <button class="opt">爬蟲關閉時</button>
+</div>
+
+<div class="quiz" data-question="process_response 必須回傳什麼？" data-correct="2" data-explain="process_response 必須回傳一個 Response 物件（新的或舊的都可以），否則管線會斷掉。">
+  <button class="opt">None</button>
+  <button class="opt">Request 物件</button>
+  <button class="opt">Response 物件</button>
+  <button class="opt">Item 物件</button>
+</div>
+
+<div class="quiz" data-question="spider 參數在中介物中扮演什麼角色？" data-correct="3" data-explain="spider 是爬蟲類別的實例，讓中介物能讀取爬蟲檔案裡定義的屬性（如 proxy_list）。">
+  <button class="opt">儲存請求的暫存資料</button>
+  <button class="opt">代表當前下載的回應</button>
+  <button class="opt">記錄例外訊息</button>
+  <button class="opt">讓中介物與爬蟲類共享資料</button>
+</div>
+
+<div class="quiz" data-question="DOWNLOADER_MIDDLEWARES 的優先級數字越小，代表什麼？" data-correct="1" data-explain="數字越小越靠近引擎，process_request 越先執行，process_response 越後執行。">
+  <button class="opt">越晚被載入</button>
+  <button class="opt">越靠近引擎、越先執行 process_request</button>
+  <button class="opt">優先級越低</button>
+  <button class="opt">越靠近下載器</button>
+</div>
+
+<div class="footer">
+  js-reverse · 中間件、CrawlSpider 與分散式 · Step 1/5
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

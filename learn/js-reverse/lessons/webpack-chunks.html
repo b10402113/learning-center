@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>webpack 混淆 chunk 結構 — 拼多多進階補環境</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="breadcrumb">
+        <a href="../../nodes/25-pdd-supplement-env.mdx">25-pdd-supplement-env</a>
+        <span>/</span>
+        <span>webpack-chunks</span>
+      </div>
+      <h1>webpack 混淆 chunk 結構</h1>
+      <p class="subtitle">面對上萬行的混淆程式碼，正確姿勢是不通讀，靠全域物件反查模組 id。</p>
+    </header>
+
+    <section class="goal">
+      <h2>學習目標</h2>
+      <p>理解巨型 webpack 混淆 chunk 的註冊機制，以及如何從中定位目標模組而不通讀全文。</p>
+    </section>
+
+    <section class="content">
+      <h2>chunk 是什麼？</h2>
+      <p>webpack 打包網站 JS 時，不會把所有程式碼壓成一個檔案，而是拆成多個「chunk」。每個 chunk 就是一個用 <code>window.webpackJsonp.push</code> 註冊進去的模組集合。拼多多頁面至少包含兩個 chunk：</p>
+      <table>
+        <thead>
+          <tr><th>chunk</th><th>大小</th><th>內容</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>mod1（id 34）</td><td>約 24,000 行</td><td>業務邏輯與第三方套件，包含風控模組 fbeZ</td></tr>
+          <tr><td>mod2（id 0）</td><td>約 12,000 行</td><td>core-js 風格 polyfill，提供 ES 標準函式庫墊片</td></tr>
+        </tbody>
+      </table>
+
+      <h2>模組註冊機制</h2>
+      <p>每個 chunk 的檔案開頭都長這樣：</p>
+      <pre><code>window.webpackJsonp.push([[34], {
+  "+s0g": function(module, exports, require){ ... },
+  "fbeZ": function(module, exports, require){ ... },
+  "WEpk": function(module, exports, require){ ... }
+}]);</code></pre>
+      <p><code>[34]</code> 是 chunk 的 id，後面的物件是一張「模組表」：key 是短哈希字串（如 <code>fbeZ</code>），value 是模組本體。所有 chunk 共用同一張表，透過 <code>webpackJsonp.push</code> 不斷疊加。</p>
+
+      <h2>如何定位目標模組？</h2>
+      <p>面對兩萬多行程式碼，從頭讀到尾不但慢，還會被大量無關的 vendor 程式碼淹沒（mod1 裡就混雜了 moment.js 的國際化檔）。正確做法是反向搜尋：</p>
+      <ol>
+        <li>先找出目標模組「最後會把結果掛到哪個全域物件上」。例如風控模組會掛出 <code>window.lt</code> 和 <code>window.dt</code>。</li>
+        <li>用 <code>grep "window\.lt"</code> 或 <code>grep "window\.dt"</code> 在 chunk 檔案裡搜尋。</li>
+        <li>找到負責掛全域物件的那行程式碼，它所在的模組 id 就是我們要的入口。</li>
+      </ol>
+      <p>在拼多多案例裡，這個入口是 <code>fbeZ</code>。</p>
+
+      <h2>mod1：風控核心</h2>
+      <p><code>fbeZ</code> 模組被執行後，會掛出兩個關鍵物件：</p>
+      <ul>
+        <li><code>window.lt</code>：內含 <code>updateServerTime</code> 等更新介面，用來同步時間因子。</li>
+        <li><code>window.dt</code>：取值函式，呼叫後會回傳產生好的加密字串（也就是 <code>anti_content</code>）。</li>
+      </ul>
+      <p>mod1 同時也讀取了 <code>window.location</code>、<code>window.history</code>、<code>window.addEventListener</code> 等環境點，這些就是我們上一步補環境時必須湊齊的物件。</p>
+
+      <h2>mod2：不可或缺的墊片</h2>
+      <p>mod2 看起來很無聊，裡面大量是這種東西：</p>
+      <pre><code>"WEpk": function(module, exports){
+  exports = n("WEpk").Symbol;
+}</code></pre>
+      <p>這是 core-js 風格的 polyfill，提供 <code>Symbol</code>、<code>Set</code>、<code>Object.getPrototypeOf</code> 等 ES 標準功能。mod1 在執行時會用 <code>require</code> 呼叫這些墊片，如果 mod2 沒載入，mod1 的依賴鏈就會斷裂，直接報錯。</p>
+      <p>這教訓是：從站點抽 JS 時，chunk 要抓全。漏掉任何一個，都可能讓目標模組在 require 鏈上斷掉。</p>
+
+      <h2>兩個 chunk 一個模組空間</h2>
+      <p>mod1 和 mod2 雖然是不同檔案，但它們 <code>push</code> 到同一個 <code>webpackJsonp</code> 陣列，所以共用同一張模組表。mod1 的 <code>fbeZ</code> 可以直接 <code>require</code> mod2 的 <code>WEpk</code>，反過來也行。這就是為什麼 loader 需要一次載入所有 chunk，才能正確解析跨 chunk 依賴。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+      <div class="quiz" data-question="webpack chunk 透過什麼方式註冊模組？" data-correct="2" data-explain="每個 chunk 用 window.webpackJsonp.push 把自己的模組表疊加進共用陣列。">
+        <button class="opt">window.modules.register()</button>
+        <button class="opt">document.write()</button>
+        <button class="opt">window.webpackJsonp.push()</button>
+        <button class="opt">require.ensure()</button>
+      </div>
+      <div class="quiz" data-question="面對上萬行混淆 chunk，應該怎麼找到目標模組？" data-correct="0" data-explain="正確姿勢是反向搜尋目標模組掛出的全域物件（如 window.dt），再找出它所在的模組 id。">
+        <button class="opt">搜尋目標模組掛出的全域物件，反查其模組 id</button>
+        <button class="opt">從第一行開始逐行閱讀</button>
+        <button class="opt">只讀檔案最後 100 行</button>
+        <button class="opt">用正規表達式搜尋所有 function 關鍵字</button>
+      </div>
+      <div class="quiz" data-question="mod1 的 fbeZ 模組被執行後會掛出什麼？" data-correct="1" data-explain="fbeZ 會掛出 window.lt（含 updateServerTime 等更新介面）和 window.dt（取值函式）。">
+        <button class="opt">window.anti_content 和 window.sign</button>
+        <button class="opt">window.lt 和 window.dt</button>
+        <button class="opt">window.loader 和 window.modules</button>
+        <button class="opt">window.document 和 window.navigator</button>
+      </div>
+      <div class="quiz" data-question="mod2 為什麼不可或缺？" data-correct="3" data-explain="mod2 提供 core-js 風格 polyfill，mod1 執行時會 require 這些墊片，缺了依賴鏈會斷裂。">
+        <button class="opt">它包含 fbeZ 模組的原始碼</button>
+        <button class="opt">它負責產生 anti_content</button>
+        <button class="opt">它定義了 window.webpackJsonp</button>
+        <button class="opt">它提供 mod1 需要的 ES 標準函式庫墊片</button>
+      </div>
+      <div class="quiz" data-question="mod1 和 mod2 為什麼能互相 require？" data-correct="0" data-explain="兩個 chunk 共用同一張模組表，所以跨 chunk 依賴可以正確解析。">
+        <button class="opt">它們共用同一張模組表</button>
+        <button class="opt">mod2 會先 copy 一份 mod1 的程式碼</button>
+        <button class="opt">瀏覽器會自動合併所有 chunk</button>
+        <button class="opt">loader 會重新命名所有模組 id</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <div class="nav-left"><a href="./env-shim.html">← 上一步：最小可用補環境</a></div>
+      <div class="nav-right"><a href="./loader-runtime.html">下一步：loader 執行時 →</a></div>
+    </div>
+
+    <footer class="lesson-footer">
+      <p>有任何問題，隨時向你的老師提問。</p>
+    </footer>
+  </div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>动作链与页面等待 — Selenium 浏览器自动化</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Selenium 浏览器自动化</h1>
+    <p class="subtitle">Step 4 — 动作链与页面等待</p>
+
+    <h2>Learning Goal</h2>
+    <p>掌握 ActionChains 处理鼠标拖曳等无特定对象的动作，能按场景选择强制、显式、隐式三种等待策略。</p>
+
+    <h2>动作链 ActionChains：处理复杂交互</h2>
+    <p>前面学的 <code>click()</code>、<code>send_keys()</code> 都是针对具体元素的操作——你得先定位到一个按钮，然后点击它。但有些操作没有明确的「目标元素」：鼠标拖曳、键盘快捷键、鼠标悬停在某个区域上触发下拉菜单……这些动作需要描述「一系列移动过程」，而不是「对某个元素做某件事」。</p>
+    <p><strong>ActionChains（动作链）</strong>就是用来处理这类场景的。它把多个动作串起来，按顺序执行。核心用法是：创建动作链 → 添加动作 → 调用 <code>perform()</code> 执行。</p>
+    <pre><code>from selenium.webdriver.common.action_chains import ActionChains
+
+# 1. 创建动作链，绑定浏览器
+actions = ActionChains(browser)
+
+# 2. 定位要拖曳的元素
+tag = browser.find_element(By.ID, 'draggable')
+
+# 3. 添加动作：点击按住 → 移动 → 释放
+actions.click_and_hold(tag).move_by_offset(200, 0).release()
+
+# 4. 执行动作链
+actions.perform()</code></pre>
+    <p>注意：动作链不会自动执行，必须最后调用 <code>perform()</code>，之前添加的动作只是「排队」。</p>
+
+    <h2>ActionChains 常用动作</h2>
+    <table>
+      <thead>
+        <tr><th>方法</th><th>作用</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>click_and_hold(element)</code></td><td>点击并按住元素</td></tr>
+        <tr><td><code>move_by_offset(x, y)</code></td><td>从当前位置偏移移动</td></tr>
+        <tr><td><code>move_to_element(element)</code></td><td>移动到元素中心</td></tr>
+        <tr><td><code>release()</code></td><td>释放鼠标</td></tr>
+        <tr><td><code>drag_and_drop(source, target)</code></td><td>拖曳元素到目标</td></tr>
+        <tr><td><code>key_down('ctrl')</code></td><td>按下键盘按键</td></tr>
+        <tr><td><code>key_up('ctrl')</code></td><td>释放键盘按键</td></tr>
+        <tr><td><code>send_keys('文字')</code></td><td>输入文字（可不在元素上）</td></tr>
+      </tbody>
+    </table>
+
+    <h2>iframe 内元素定位：先切入再操作</h2>
+    <p>一个常见的坑：页面里嵌了 iframe（子页面），iframe 里的元素用普通定位方式找不到，会报 <code>NoSuchElementException</code>。必须先「切入」iframe，定位完再「切回」主页面：</p>
+    <pre><code># 切入 iframe（通过 id、name 或定位到的 iframe 元素）
+browser.switch_to.frame('iframeResult')
+
+# 现在可以定位 iframe 里面的元素了
+tag = browser.find_element(By.ID, 'inner-button')
+tag.click()
+
+# 操作完切回主页面
+browser.switch_to.default_content()</code></pre>
+    <p>动作链在 iframe 里同样适用，但必须先切入 iframe，否则 <code>move_by_offset</code> 等动作会相对于主页面执行，导致位置偏移。</p>
+
+    <h2>页面等待：解决「元素还没出现」</h2>
+    <p>动态 HTML 页面的元素出现时间不确定——可能 0.5 秒就渲染完，也可能要 3 秒。如果代码执行太快，元素还没出现就去定位，就会报错。Selenium 提供了三种等待策略：</p>
+
+    <h3>1. 强制等待：time.sleep()</h3>
+    <p>最简单也最笨：让代码阻塞固定秒数。不管元素是否已经出现，都要等够时间。</p>
+    <pre><code>import time
+time.sleep(3)  # 阻塞 3 秒</code></pre>
+    <p>优点：简单。缺点：浪费时间（元素 0.5 秒就出现了，还要等 2.5 秒），元素一直不出现也会白等。</p>
+
+    <h3>2. 显式等待：WebDriverWait（推荐）</h3>
+    <p>「智能等待」：设定一个最长等待时间，每隔 0.5 秒检查一次目标元素是否出现，出现了就立即返回，超时才抛异常。这是最灵活、最常用的方式。</p>
+    <pre><code>from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
+
+# 最长等 10 秒，每 0.5 秒检查一次
+wait = WebDriverWait(browser, 10, 0.5)
+
+# 等待 id 为 kw 的元素出现
+element = wait.until(EC.presence_of_element_located((By.ID, 'kw')))</code></pre>
+    <p>常用的等待条件：</p>
+    <table>
+      <thead>
+        <tr><th>条件</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>presence_of_element_located</code></td><td>元素出现在 DOM 里（不一定可见）</td></tr>
+        <tr><td><code>visibility_of_element_located</code></td><td>元素可见（宽高都大于 0）</td></tr>
+        <tr><td><code>element_to_be_clickable</code></td><td>元素可点击（可见且启用）</td></tr>
+        <tr><td><code>title_contains('关键字')</code></td><td>页面标题包含指定文字</td></tr>
+      </tbody>
+    </table>
+
+    <h3>3. 隐式等待：implicitly_wait()</h3>
+    <p>全局设置：之后所有 <code>find_element</code> 调用，如果元素没立即出现，会在 n 秒内不断重试，超时才报错。</p>
+    <pre><code>browser.implicitly_wait(10)  # 全局隐式等待 10 秒</code></pre>
+    <p>优点：一次设置，全局生效。缺点：只能等元素出现，不能等标题变化、元素可点击等复杂条件；而且会影响所有定位操作，可能拖慢整体执行速度。</p>
+
+    <h2>三种等待的选择策略</h2>
+    <table>
+      <thead>
+        <tr><th>场景</th><th>推荐等待</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>调试脚本、临时停顿</td><td><code>time.sleep()</code></td></tr>
+        <tr><td>关键元素加载（登录按钮、搜索结果）</td><td><code>WebDriverWait</code></td></tr>
+        <tr><td>全局兜底，防止个别元素加载慢</td><td><code>implicitly_wait()</code></td></tr>
+      </tbody>
+    </table>
+    <p>实际项目中，通常用 <code>implicitly_wait()</code> 做全局兜底，关键步骤用 <code>WebDriverWait</code> 精确等待，调试时临时用 <code>sleep</code>。</p>
+
+    <h2>关键概念总结</h2>
+    <ul>
+      <li><strong>ActionChains</strong>：动作链，把多个动作串起来，处理拖曳、悬停等无特定目标元素的交互。</li>
+      <li><strong>perform()</strong>：执行动作链，必须调用才会生效。</li>
+      <li><strong>iframe</strong>：页面中嵌入的子页面，里面的元素必须先 <code>switch_to.frame()</code> 切入才能定位。</li>
+      <li><strong>显式等待</strong>：<code>WebDriverWait</code> + 条件，智能轮询指定元素，最灵活。</li>
+      <li><strong>隐式等待</strong>：<code>implicitly_wait()</code> 全局生效，n 秒内不断重试找元素。</li>
+    </ul>
+
+    <div class="lesson-nav">
+      <a href="./element-interaction.html">← 上一步：元素定位与节点交互</a>
+      <a href="./captcha-anti-detect.html">下一步：验证码实战与规避检测 →</a>
+    </div>
+
+    <h2>Quiz</h2>
+    <div class="quiz" data-question="ActionChains 的主要作用是？" data-correct="1" data-explain="ActionChains 把多个动作串起来，处理拖曳、悬停等无特定目标元素的复杂交互。">
+      <button class="opt">定位页面元素</button>
+      <button class="opt">处理鼠标拖曳等无特定目标元素的复杂交互</button>
+      <button class="opt">发送 HTTP 请求</button>
+      <button class="opt">解析网页源码</button>
+    </div>
+    <div class="quiz" data-question="动作链添加动作后，必须调用什么方法才会执行？" data-correct="2" data-explain="动作链只是排队，必须调用 perform() 才会真正执行。">
+      <button class="opt">run()</button>
+      <button class="opt">start()</button>
+      <button class="opt">perform()</button>
+      <button class="opt">execute()</button>
+    </div>
+    <div class="quiz" data-question="iframe 里的元素定位不到时，应该？" data-correct="0" data-explain="必须先 switch_to.frame() 切入 iframe，才能定位里面的元素。">
+      <button class="opt">先 browser.switch_to.frame() 切入 iframe</button>
+      <button class="opt">改用 XPath 定位</button>
+      <button class="opt">刷新页面再定位</button>
+      <button class="opt">用 find_elements 代替 find_element</button>
+    </div>
+    <div class="quiz" data-question="显式等待（WebDriverWait）的核心机制是？" data-correct="3" data-explain="WebDriverWait 是 while 循环不停尝试，找到元素立即返回，超时才抛异常。">
+      <button class="opt">阻塞固定秒数后继续执行</button>
+      <button class="opt">只检查一次元素是否存在</button>
+      <button class="opt">等待页面完全加载完毕</button>
+      <button class="opt">轮询检查元素，找到立即返回，超时抛异常</button>
+    </div>
+    <div class="quiz" data-question="隐式等待 implicitly_wait(10) 的作用是？" data-correct="1" data-explain="implicitly_wait 全局生效，之后所有 find_element 调用都会在 10 秒内不断重试找元素。">
+      <button class="opt">让代码阻塞 10 秒</button>
+      <button class="opt">之后所有 find_element 调用，10 秒内不断重试找元素</button>
+      <button class="opt">只等待第一个元素加载 10 秒</button>
+      <button class="opt">设置页面加载超时时间为 10 秒</button>
+    </div>
+  </div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

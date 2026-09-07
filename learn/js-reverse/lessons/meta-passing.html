@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>meta 跨页传参 — 深度爬取与 POST 请求</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>meta 跨页传参</h1>
+<p class="meta">深度爬取与 POST 请求 · 步骤 3/4</p>
+
+<h2>学习目标</h2>
+<p>能用 meta 字典把列表页的 item 传给详情页回调，实现"翻页 + 进详情页"的深度爬取。</p>
+
+<h2>什么是"深度爬取"？</h2>
+<p>scrapy 里说的"深度"不是指爬很多层，而是指<strong>数据不在同一张页面里</strong>。比如一个新闻列表页只显示标题和摘要，要看到完整正文必须点进详情页。这时候你就需要：</p>
+<ol>
+  <li>在列表页解析出标题，并构造详情页的 URL。</li>
+  <li>把标题<strong>带进</strong>详情页的回调函数。</li>
+  <li>在详情页解析出正文，和标题合并成同一个 item。</li>
+  <li>把完整的 item 交给 Pipeline 存储。</li>
+</ol>
+<p>第 2 步就是"跨页传参"——scrapy 用 meta 字典来实现。</p>
+
+<h2>meta 字典的用法</h2>
+<p>在 <code>yield scrapy.Request()</code> 时，传入一个 meta 参数，里面放你想传递给下一个回调的数据：</p>
+<pre><code>yield scrapy.Request(
+    url=detail_url,
+    callback=self.parse_detail,
+    meta={'item': item}   # 把当前 item 传过去
+)</code></pre>
+<p>在目标回调里，用 <code>response.meta['item']</code> 取出来：</p>
+<pre><code>def parse_detail(self, response):
+    item = response.meta['item']   # 取出上一页传来的 item
+    item['content'] = response.xpath('//div[@class="content"]/text()').extract_first()
+    yield item</code></pre>
+<p>meta 本质上就是一个普通字典，你可以往里面放任何可序列化的数据——字符串、数字、列表、甚至 Item 对象。</p>
+
+<h2>完整示例：列表页 + 详情页</h2>
+<p>以东莞阳光网问政平台为例，列表页显示标题，详情页显示完整内容：</p>
+<pre><code>import scrapy
+
+class SunSpider(scrapy.Spider):
+    name = 'sun'
+    start_urls = ['https://wz.sun0769.com/political/index/politicsNewest?page=1']
+
+    def parse(self, response):
+        # 列表页：解析每条新闻的标题和详情页链接
+        news_list = response.xpath('//li[@class="clear"]')
+        for news in news_list:
+            item = {}
+            item['title'] = news.xpath('./span[@class="state3"]/text()').extract_first()
+            detail_url = news.xpath('./span[@class="state3"]/a/@href').extract_first()
+            detail_url = response.urljoin(detail_url)
+
+            # 把 item 带进详情页
+            yield scrapy.Request(
+                url=detail_url,
+                callback=self.parse_detail,
+                meta={'item': item}
+            )
+
+        # 翻页
+        next_url = response.xpath('//a[@class="next"]/@href').extract_first()
+        if next_url:
+            yield scrapy.Request(url=response.urljoin(next_url), callback=self.parse)
+
+    def parse_detail(self, response):
+        # 详情页：取出 item，补上正文
+        item = response.meta['item']
+        item['content'] = response.xpath('//div[@class="details"]/text()').extract_first()
+        yield item</code></pre>
+<p>注意：列表页的 <code>parse</code> 和详情页的 <code>parse_detail</code> 是两个不同的回调。列表页的 Request 用 <code>callback=self.parse</code>（翻页），详情页的 Request 用 <code>callback=self.parse_detail</code>（取正文）。</p>
+
+<h2>为什么不能直接 return item？</h2>
+<p>初学者常问：为什么不在列表页直接把 item yield 出去，然后在详情页再 yield 一次？</p>
+<p>因为 scrapy 的回调是<strong>异步</strong>的——列表页的 <code>parse</code> 和详情页的 <code>parse_detail</code> 不在同一个函数调用栈里。<strong>Moonshot AI</strong> scrapy 提供的"跨回调传数据"的唯一通道。没有它，两个回调之间无法共享变量。</p>
+
+<h2>翻页 + 进详情页的组合</h2>
+<p>真实项目里，翻页和进详情页通常是叠加的：</p>
+<ul>
+  <li>列表页 1 → 进详情页 1-1、1-2、1-3……</li>
+  <li>列表页 2 → 进详情页 2-1、2-2、2-3……</li>
+  <li>……</li>
+</ul>
+<p>每一层都用 <code>yield scrapy.Request()</code>，每一层都可以带 meta。scrapy 会自动调度这些请求，并发下载，不会搞混。</p>
+
+<h2>常见踩坑</h2>
+<ul>
+  <li><strong>meta key 写错</strong>：传的时候用 <code>meta={'item': item}</code>，取的时候必须用 <code>response.meta['item']</code>，key 要一致。</li>
+  <li><strong>忘记 <code>response.urljoin()</code></strong>：详情页链接可能是相对路径（<code>/politics/123.html</code>），必须用 <code>response.urljoin()</code> 补全成绝对 URL。</li>
+  <li><strong>在列表页就 yield item</strong>：如果列表页的 item 还没填完就 yield 出去，Pipeline 会收到一个不完整的 item。应该等详情页补完所有字段后再 yield。</li>
+</ul>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="scrapy 中跨页传参使用的是什么机制？" data-correct="1" data-explain="scrapy 用 meta 字典在 Request 和 callback 之间传递数据。">
+  <button class="opt">全局变量</button>
+  <button class="opt">meta 字典</button>
+  <button class="opt">Pipeline</button>
+  <button class="opt">settings.py</button>
+</div>
+
+<div class="quiz" data-question="在回调中取出 meta 数据的正确写法是？" data-correct="2" data-explain="通过 response.meta['key'] 取出上一页传来的数据。">
+  <button class="opt">request.meta['item']</button>
+  <button class="opt">self.meta['item']</button>
+  <button class="opt">response.meta['item']</button>
+  <button class="opt">meta['item']</button>
+</div>
+
+<div class="quiz" data-question="为什么列表页的 item 不能直接 yield 给 Pipeline？" data-correct="0" data-explain="列表页的 item 通常只有部分字段，需要详情页补全后再 yield。">
+  <button class="opt">列表页的 item 还没填完，需要详情页补全字段</button>
+  <button class="opt">Pipeline 只接收详情页的 item</button>
+  <button class="opt">列表页的 item 会被自动丢弃</button>
+  <button class="opt">scrapy 不允许在列表页 yield item</button>
+</div>
+
+<div class="quiz" data-question="详情页链接是相对路径时，应该怎么处理？" data-correct="3" data-explain="用 response.urljoin() 把相对路径补全成绝对 URL。">
+  <button class="opt">直接传给 scrapy.Request</button>
+  <button class="opt">手动拼接域名</button>
+  <button class="opt">用 urllib.parse.urljoin</button>
+  <button class="opt">用 response.urljoin()</button>
+</div>
+
+<div class="quiz" data-question="以下哪一项不是 meta 跨页传参的典型应用场景？" data-correct="1" data-explain="翻页不需要传 item，只需要构造下一页的 URL 即可。">
+  <button class="opt">列表页标题 → 详情页正文</button>
+  <button class="opt">翻页时传递页码</button>
+  <button class="opt">列表页图片 URL → 详情页下载图片</button>
+  <button class="opt">列表页价格 → 详情页库存</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./pagination.html">← 上一步：多页翻页爬取</a>
+  <a href="./formrequest-post.html">下一步：FormRequest 发送 POST 请求 →</a>
+</div>
+
+<div class="footer">深度爬取与 POST 请求 · 步骤 3/4</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

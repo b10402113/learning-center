@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>scrapy 五大核心组件与数据流 — 深度爬取与 POST 请求</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>scrapy 五大核心组件与数据流</h1>
+<p class="meta">深度爬取与 POST 请求 · 步骤 1/4</p>
+
+<h2>学习目标</h2>
+<p>理解 scrapy 五大核心组件的职责分工与请求/响应的数据流，并掌握两条最低成本的性能调优配置。</p>
+
+<h2>为什么需要理解组件？</h2>
+<p>写 scrapy 爬虫时，你写的代码只占框架的一小部分——Spider 负责解析，Pipeline 负责存储。但请求是怎么从 Spider 发到网站的？响应又是怎么回到 Spider 的？这些幕后工作由 scrapy 的五大核心组件协作完成。</p>
+<p>不理解这五个组件，你只能照搬模板；理解了它们，你才能知道<strong>中间件该插在哪个位置</strong>、<strong>请求在队列里怎么排队</strong>、<strong>并发数调的是哪个参数</strong>。这是后续学习中间件、分布式、深度爬取的共同地基。</p>
+
+<h2>五大核心组件</h2>
+<p>scrapy 的五大组件各司其职，请求和响应像流水线上的工件一样在它们之间流转：</p>
+
+<table>
+  <tr><th>组件</th><th>职责</th><th>一句话记法</th></tr>
+  <tr><td>引擎（Engine）</td><td>处理整个系统的数据流、触发事务</td><td>总指挥，不发请求不存数据，只调度</td></tr>
+  <tr><td>调度器（Scheduler）</td><td>接收引擎的请求、压入队列、返回下一个请求</td><td>URL 优先队列，负责去重和排队</td></tr>
+  <tr><td>下载器（Downloader）</td><td>基于 twisted 异步模型下载网页内容</td><td>真正发请求的工人，把响应交回引擎</td></tr>
+  <tr><td>爬虫（Spider）</td><td>从特定网页提取 Item，也可提取链接继续抓取</td><td>解析员，决定"抓什么"和"抓完后下一步抓哪里"</td></tr>
+  <tr><td>项目管道（Pipeline）</td><td>持久化、验证、清洗 Item</td><td>仓库管理员，负责把数据存到文件/数据库</td></tr>
+</table>
+
+<h2>一次请求的完整旅程</h2>
+<p>假设你的 Spider 解析完一页，<code>yield</code> 了一个新请求。这个请求会经历以下旅程：</p>
+<ol>
+  <li>引擎收到 Spider 的 Request，交给调度器。</li>
+  <li>调度器把它压入队列，按优先级排队、去重。</li>
+  <li>调度器把排在最前面的请求交回引擎。</li>
+  <li>引擎把请求交给下载器。</li>
+  <li>下载器通过 twisted 异步模型发出 HTTP 请求，拿到响应。</li>
+  <li>引擎把响应交回给 Spider 的回调函数。</li>
+  <li>Spider 解析响应，yield 新的 Request 或 Item。</li>
+  <li>如果是 Item，引擎把它交给 Pipeline 处理。</li>
+</ol>
+<p>整个过程是<strong>异步非阻塞</strong>的——下载器在等网站响应时，引擎可以继续调度其他请求。这就是 scrapy 默认并发 32 个请求而不卡死的原因。</p>
+
+<h2>两条最低成本的性能调优</h2>
+<p>当你的爬虫跑得慢时，先别急着加机器。scrapy 有两个 settings 级参数，改一行配置就能明显提速：</p>
+
+<h3>1. 增加并发请求数</h3>
+<p>scrapy 默认同时发 32 个请求。如果你的目标网站响应快、带宽够，可以把它调大：</p>
+<pre><code># settings.py
+CONCURRENT_REQUESTS = 100</code></pre>
+<p>注意：并发数不是越大越好。设太高会被目标网站封 IP，或者把对方服务器打挂。一般 50~100 是比较安全的范围。</p>
+
+<h3>2. 降低日志级别</h3>
+<p>scrapy 默认会打印大量 DEBUG 日志（每个请求的 URL、状态码、耗时）。日志输出本身会消耗 CPU，在 Windows 上尤其明显。把日志级别调高可以省下一部分 CPU：</p>
+<pre><code># settings.py
+LOG_LEVEL = 'ERROR'</code></pre>
+<p>这样只有报错时才打印日志。调试时可以用 <code>'WARNING'</code>，正式跑时用 <code>'ERROR'</code>。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="scrapy 五大组件中，真正发出 HTTP 请求的是哪一个？" data-correct="2" data-explain="下载器（Downloader）基于 twisted 异步模型下载网页内容，是真正发请求的组件。">
+  <button class="opt">引擎（Engine）</button>
+  <button class="opt">调度器（Scheduler）</button>
+  <button class="opt">下载器（Downloader）</button>
+  <button class="opt">爬虫（Spider）</button>
+</div>
+
+<div class="quiz" data-question="调度器（Scheduler）的核心职责是什么？" data-correct="1" data-explain="调度器相当于 URL 优先队列，负责请求的排队和去重。">
+  <button class="opt">下载网页内容</button>
+  <button class="opt">接收请求、排队、去重、返回下一个请求</button>
+  <button class="opt">解析网页提取 Item</button>
+  <button class="opt">把 Item 存入数据库</button>
+</div>
+
+<div class="quiz" data-question="scrapy 默认的并发请求数是多少？" data-correct="0" data-explain="scrapy 默认 CONCURRENT_REQUESTS = 32，可以在 settings.py 中调大。">
+  <button class="opt">32</button>
+  <button class="opt">8</button>
+  <button class="opt">64</button>
+  <button class="opt">16</button>
+</div>
+
+<div class="quiz" data-question="把 LOG_LEVEL 设为 'ERROR' 的主要目的是什么？" data-correct="2" data-explain="减少日志输出可以降低 CPU 消耗，让爬虫把更多资源用在发请求和解析上。">
+  <button class="opt">让爬虫完全不输出任何信息</button>
+  <button class="opt">让爬虫运行得更安全</button>
+  <button class="opt">减少日志输出，降低 CPU 消耗</button>
+  <button class="opt">让爬虫只抓错误页面</button>
+</div>
+
+<div class="quiz" data-question="Item 在引擎中会被交给哪个组件处理？" data-correct="3" data-explain="Pipeline 负责 Item 的持久化、验证和清洗，是 Item 的终点。">
+  <button class="opt">调度器</button>
+  <button class="opt">下载器</button>
+  <button class="opt">爬虫</button>
+  <button class="opt">项目管道（Pipeline）</button>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./pagination.html">下一步：多页翻页爬取 →</a>
+</div>
+
+<div class="footer">深度爬取与 POST 请求 · 步骤 1/4</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

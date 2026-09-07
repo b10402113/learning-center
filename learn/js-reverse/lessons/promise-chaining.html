@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>鏈式 Promise 與 AJAX 封裝 — Promise 與異步模式</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<header class="lesson-header">
+  <div class="breadcrumb"><a href="../../nodes/24-promise-async.mdx">24-promise-async</a> · Step 3</div>
+  <h1>鏈式 Promise 與 AJAX 封裝</h1>
+  <p class="learning-goal">用鏈式 Promise 拉平串行異步流程，並學會將回調風格的異步 API（如 $.ajax）封裝成 Promise 供鏈式消費。</p>
+</header>
+
+<main>
+
+<section>
+  <h2>鏈式then：在回調裡回傳新 Promise</h2>
+  <p>Promise 真正的威力在於：<code>.then()</code> 的回調裡可以 <code>return</code> 一個新的 Promise，下一個 <code>.then()</code> 會等它落定再執行。於是，回呼地獄的三角形被拉平成一條向右延伸的鏈。</p>
+  <pre><code>function get_A() {
+    return new Promise(function (resolve, reject) {
+        console.log("發送A請求")
+        setTimeout(function () {
+            let data_A = "AAA"
+            resolve(data_A)
+        }, 1000)
+    })
+}
+
+function get_B() {
+    return new Promise(function (resolve, reject) {
+        console.log("發送B請求")
+        setTimeout(function () {
+            resolve()
+        }, 2000)
+    })
+}
+
+function get_C() {
+    return new Promise(function (resolve, reject) {
+        console.log("發送C請求")
+        setTimeout(function () {
+            resolve()
+        }, 3000)
+    })
+}
+
+let p = get_A()
+p.then(function (res) {
+    console.log("A請求結束")
+    console.log("A請求響應數據為：", res)
+    return get_B()
+}).then(function (res) {
+    console.log("B請求結束")
+    return get_C()
+}).then(function (res) {
+    console.log("C請求結束")
+})</code></pre>
+  <p>注意三個關鍵：每個 <code>get_X()</code> 都 <code>return new Promise</code>；上一個 <code>.then()</code> 裡 <code>return get_B()</code>，下一個 <code>.then()</code> 就等 <code>get_B()</code> 的 Promise 落定；上一個 <code>then</code> 拿到的 <code>res</code> 是上一個 Promise <code>resolve</code> 出來的數據。</p>
+</section>
+
+<section>
+  <h2>把回調風格 API 封裝成 Promise</h2>
+  <p>老代碼常用 <code>$.ajax</code> 這種回調風格：成功走 <code>success</code>，失敗走 <code>error</code>。要把它們接入鏈式世界，只要用 <code>new Promise</code> 包一層就行。</p>
+  <pre><code>function fetchData(url) {
+    return new Promise(function (resolve, reject) {
+        console.log("發送請求！");
+        $.ajax({
+            url: url,
+            success: function (res) {
+                resolve(res)
+            }
+        })
+    });
+}</code></pre>
+  <p>封裝的規則是：成功時調用 <code>resolve(res)</code>，失敗時調用 <code>reject(error)</code>。封裝完的 <code>fetchData(url)</code> 就是一個返回 Promise 的函數，可以直接 <code>.then()</code>。</p>
+</section>
+
+<section>
+  <h2>實戰：連續請求同一個 API</h2>
+  <p>把 <code>fetchData</code> 用鏈式調用串起來，可以對同一個 API 連續發兩次請求，第一次取 <code>res.now</code>，第二次取 <code>res.refer</code>：</p>
+  <pre><code>let url = "https://devapi.qweather.com/v7/weather/now?location=101070101&key=0718ad154da14f0a98ca49778f9bfd53"
+
+fetchData(url).then(function (res) {
+    console.log("響應數據:", res.now)
+    return fetchData(url)
+}).then(function (res){
+    console.log("響應數據:", res.refer)
+})</code></pre>
+  <p>這就是現代加密網站裡最常見的代碼形態：接口 A 的返回值是接口 B 的輸入， Promise 鏈讓這種串行依賴變得清晰可追蹤。</p>
+</section>
+
+<section>
+  <h2>小結</h2>
+  <p>三步走完，你現在應該能：</p>
+  <ul>
+    <li>認出回呼地獄的嵌套結構，理解爲什麼它難以維護。</li>
+    <li>用 Promise 的三狀態（pending / fulfilled / rejected）和 then 雙回調讀懂異步代碼。</li>
+    <li>用鏈式 <code>.then()</code> 拉平串行流程，並把任意回調風格的 API 封裝成 Promise。</li>
+  </ul>
+  <p>下一步的學習會進入 <code>async / await</code> 語法——它讓鏈式 Promise 看起來更像同步代碼，是逆向调试加密網站異步請求的終極武器。</p>
+</section>
+
+<section class="quiz-section">
+  <h2>隨堂測驗</h2>
+  <div class="quiz" data-question="then 的回調裡 return 一個新 Promise 會發生什麼？" data-correct="2" data-explain="then 回調裡返回的新 Promise 會被上一個 then 等待，下一個 then 等它落定再執行。">
+    <button class="opt">立刻報錯</button>
+    <button class="opt">新 Promise 被忽略</button>
+    <button class="opt">下一個 then 會等它落定</button>
+    <button class="opt">新 Promise 和舊 Promise 同時執行</button>
+  </div>
+  <div class="quiz" data-question="把 $.ajax 封裝成 Promise 時，success 回調應該調用哪個函數？" data-correct="0" data-explain="success 回調對應成功，應該調用 resolve(res)。">
+    <button class="opt">resolve(res)</button>
+    <button class="opt">reject(res)</button>
+    <button class="opt">return res</button>
+    <button class="opt">console.log(res)</button>
+  </div>
+  <div class="quiz" data-question="鏈式 then 裡，上一個 then 拿到的 res 是什麼？" data-correct="3" data-explain="上一個 then 收到的 res 是上一個 Promise resolve 出來的數據。">
+    <button class="opt">當前 then 的返回值</button>
+    <button class="opt">下一個 Promise 的狀態</button>
+    <button class="opt">$.ajax 的 error 對象</button>
+    <button class="opt">上一個 Promise resolve 的數據</button>
+  </div>
+  <div class="quiz" data-question="關於鏈式 Promise 與嵌套回調的關係，下列描述正確的是？" data-correct="1" data-explain="鏈式寫法與嵌套寫語語義等價，但結構扁平，閱讀和維護成本更低。">
+    <button class="opt">鏈式寫法執行更快</button>
+    <button class="opt">語義等價但鏈式結構扁平</button>
+    <button class="opt">鏈式寫法會改變執行順序</button>
+    <button class="opt">嵌套寫法能處理更多錯誤</button>
+  </div>
+  <div class="quiz" data-question="fetchData(url).then(...).then(...) 中，第二個 then 何時會執行？" data-correct="2" data-explain="第二個 then 會等第一個 then 返回的 fetchData(url) 的 Promise 落定後才執行。">
+    <button class="opt">第一個 then 開始時立刻執行</button>
+    <button class="opt">第一個 then 的同步代碼執行完就執行</button>
+    <button class="opt">第一個 then 返回的 Promise 落定後執行</button>
+    <button class="opt">永遠不會執行</button>
+  </div>
+</section>
+
+</main>
+
+<div class="lesson-nav">
+  <a href="./promise-basics.html" class="prev">← 上一步：Promise 語法與三狀態機制</a>
+  <span></span>
+</div>
+
+<footer class="lesson-footer">
+  <p>有問題？回到 <a href="../../nodes/24-promise-async.mdx">節點頁面</a> 或問你的 Agent。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

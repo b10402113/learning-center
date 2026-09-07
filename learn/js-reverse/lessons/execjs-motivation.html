@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>execjs 混合路线：什么时候该用 Python 调 JS？</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>execjs 混合路线：什么时候该用 Python 调 JS？</h1>
+<p class="meta">实战：sign 逆向（JS 执行） · 步骤 1/5</p>
+
+<h2>学习目标</h2>
+<p>能说明 Python 原生复现与 execjs 混合路线各自的适用边界，以及在什么条件下应该选 execjs。</p>
+
+<h2>回顾：Python 原生复现的代价</h2>
+<p>上一节我们直接用 Python 的 <code>hashlib.md5</code> 复现了有道翻译的 sign 生成逻辑。核心代码是把 <code>client=fanyideskweb&amp;mysticTime={时间戳}&amp;product=webfanyi&amp;key=fsdsogkndfokasodnaso</code> 拼起来取 MD5。</p>
+<p>这条「纯 Python」路线能跑通，是因为 sign 算法足够简单：字符串拼接 + 标准 MD5，Python 原生库直接就能做。但现实中，你遇到的加密逻辑往往更复杂。</p>
+
+<h2>三种让 Python 原生复现变难的情况</h2>
+
+<h3>1. 加密依赖浏览器对象</h3>
+<p>有些 sign 算法会调用 <code>window.navigator.userAgent</code>、<code>document.cookie</code>、<code>location.href</code> 等浏览器内置对象。这些对象在 Python 里根本不存在，硬要复现就得先伪造整个浏览器环境——工作量直接爆炸。</p>
+
+<h3>2. 加密调用了 node 专有模块</h3>
+<p>node 的 <code>crypto</code> 模块提供了底层的加密原语（<code>createHash</code>、<code>createCipheriv</code>），而浏览器端的 <code>crypto-js</code> 也有自己的一套 API。如果你的目标 JS 代码已经用了这些模块，用 Python 的 <code>hashlib</code>/<code>Cryptography</code> 重新实现，等于把同一种逻辑用两种语言写两遍，维护成本翻倍。</p>
+
+<h3>3. 加密逻辑被混淆或闭包层层包裹</h3>
+<p>很多网站会对 JS 做混淆：变量名替换成 <code>_0x1a2b3c</code>、字符串数组化、控制流平坦化。硬抠 Python 复现时，你得像翻译一样一行行对照，稍不留神就漏掉一个条件分支，sign 就算不对。</p>
+
+<h2>execjs 的核心思路</h2>
+<p>execjs 说：既然加密逻辑已经写在 JS 里了，那就别翻译了，直接在 Python 里跑 JS。</p>
+<p>它的分工很明确：</p>
+<ul>
+  <li><strong>JS 负责</strong>：加密、解密、签名——任何依赖浏览器/node 对象的逻辑</li>
+  <li><strong>Python 负责</strong>：发请求（<code>requests</code>）、处理响应、存储数据、调度任务</li>
+</ul>
+<p>这样你保留了 JS 的原始实现，不需要任何跨语言移植，sign 算法怎么改你就怎么改。</p>
+
+<h2>什么时候该选 execjs？</h2>
+<table>
+  <th>条件</th><th>纯 Python 复现</th><th>execjs 混合路线</th>
+  <tr><td>算法是标准 MD5/SHA1/BASE64</td><td>✓ 推荐</td><td>可用但没必要</td></tr>
+  <tr><td>算法依赖浏览器对象（window、document）</td><td>✗ 需要伪造环境</td><td>✓ 推荐</td></tr>
+  <tr><td>算法已用 crypto-js 实现</td><td>需要重写</td><td>✓ 推荐</td></tr>
+  <tr><td>算法被严重混淆、闭包层层包裹</td><td>抠代码很累</td><td>✓ 推荐</td></tr>
+  <tr><td>只需要纯计算、无外部依赖</td><td>✓ 推荐</td><td>可用但没必要</td></tr>
+</table>
+
+<h2>execjs 的安装与环境</h2>
+<p>execjs 本身只是一个桥接器，它需要系统里有一个 JS 运行环境。Mac 上通常已经预装了 node，所以安装很简单：</p>
+<pre><code>pip install PyExecJS</code></pre>
+<p>安装后可以用一行代码验证是否可用：</p>
+<pre><code>import execjs
+print(execjs.get().name)  # 输出：Node.js (V8)</code></pre>
+<p>如果输出 <code>Node.js (V8)</code>，说明 execjs 已经能调用 node 执行 JS 代码了。</p>
+
+<h2>一个最小示例</h2>
+<p>下面这段代码展示了 execjs 最核心的用法——在 Python 中执行一段 JS 代码，并拿到返回值：</p>
+<pre><code>import execjs
+
+# 编译 JS 代码
+js_compile = execjs.compile("""
+function add(a, b) {
+    return a + b;
+}
+""")
+
+# 调用 JS 函数
+result = js_compile.call("add", 1, 2)
+print(result)  # 输出：3</code></pre>
+<p><code>compile()</code> 把你的 JS 代码编译成一个可调用的对象，<code>call()</code> 按函数名调用，参数直接往后传，返回值就是 JS 函数的返回值。</p>
+
+<h2>小结</h2>
+<p>execjs 混合路线的本质是「让加密逻辑留在它最熟悉的环境里」。当 Python 原生复现的成本（伪造环境、重写算法、抠混淆代码）超过引入一个 JS 运行时的时候，就应该切换到 execjs。下一步，我们就把有道翻译的 sign 生成逻辑搬到 JS 里。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="execjs 混合路线的核心分工是什么？" data-correct="1" data-explain="JS 负责加密/解密/签名，Python 负责发请求、处理响应、存储数据。">
+  <button class="opt">Python 负责加密，JS 负责发请求</button>
+  <button class="opt">JS 负责加密解密，Python 负责发请求</button>
+  <button class="opt">JS 负责存储数据，Python 负责签名</button>
+  <button class="opt">Python 和 JS 各自发一半请求</button>
+</div>
+
+<div class="quiz" data-question="以下哪种情况下，Python 原生复现的难度最低？" data-correct="2" data-explain="标准 MD5/SHA1/BASE64 是 Python 原生库直接支持的算法，不需要伪造环境或重写代码。">
+  <button class="opt">sign 算法调用了 window.navigator.userAgent</button>
+  <button class="opt">sign 算法用了 crypto-js 的 AES 加密</button>
+  <button class="opt">sign 算法是标准 MD5</button>
+  <button class="opt">sign 算法被严重混淆</button>
+</div>
+
+<div class="quiz" data-question="execjs 运行时，以下哪个是系统里必须安装的 JS 运行环境？" data-correct="3" data-explain="execjs 需要系统里有 node（或其他 JS 运行时）才能执行 JS 代码。">
+  <button class="opt">Chrome 浏览器</button>
+  <button class="opt">Java</button>
+  <button class="opt">Python 3.8</button>
+  <button class="opt">Node.js</button>
+</div>
+
+<div class="quiz" data-question="execjs.compile() 的作用是什么？" data-correct="0" data-explain="compile() 把 JS 代码编译成一个可调用的对象，后续用 call() 调用其中的函数。">
+  <button class="opt">编译 JS 代码为可调用对象</button>
+  <button class="opt">把 Python 代码转成 JS</button>
+  <button class="opt">安装 node 运行环境</button>
+  <button class="opt">下载 JS 文件</button>
+</div>
+
+<div class="quiz" data-question="execjs.call('add', 1, 2) 中，'add' 参数代表什么？" data-correct="2" data-explain="call() 的第一个参数是 JS 函数的名称，后面的参数传给该函数。">
+  <button class="opt">Python 函数的名称</button>
+  <button class="opt">要执行的 JS 文件名</button>
+  <button class="opt">JS 函数的名称</button>
+  <button class="opt">execjs 的版本号</button>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./js-side-sign.html">下一步：JS 侧 sign 生成 →</a>
+</div>
+
+<div class="footer">实战：sign 逆向（JS 执行） · 步骤 1/5</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

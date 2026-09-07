@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>摘要演算法家族 — 編碼與加密特徵</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>摘要演算法家族</h1>
+<p class="meta">學習目標：理解 md5、sha1、sha256 都是單向雜湊函數：不可逆、同輸入同輸出、輸出定長；能從十六進位長度識別演算法，並在 Python 裡用 hashlib 復現「鹽 + 資料」的加鹽摘要。</p>
+
+<h2>現象：你看到一串固定長度的十六進位字串</h2>
+<p>前端請求參數裡常出現這種固定長度的字串：</p>
+<pre><code>md5:    65a8e27d8879283831b664bd8b7f0ad4          (32 字元)
+sha1:   2ef7bde608ce5404e97d5f042f95f89f1c232871  (40 字元)
+sha256: 5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8  (64 字元)</code></pre>
+<p>它們看起來隨機，但同一个輸入永遠得到同一個輸出。這就是<strong>摘要演算法</strong>（message digest / hash function）。</p>
+
+<h2>核心特徵</h2>
+<ul>
+  <li><strong>單向性</strong>：不可逆。從雜湊值推不回原始資料。</li>
+  <li><strong>確定性</strong>：同輸入必得同輸出。</li>
+  <li><strong>定長輸出</strong>：無論輸入多大，輸出長度固定（md5 = 128 位元 = 32 十六進位字元）。</li>
+  <li><strong>雪崩效應</strong>：輸入差一個位元，輸出看起來完全不同。</li>
+</ul>
+
+<h2>從長度識別演算法</h2>
+<p>這在逆向裡非常實用：</p>
+<table>
+  <tr><th>十六進位長度</th><th>位元數</th><th>演算法</th></tr>
+  <tr><td>32</td><td>128</td><td>md5</td></tr>
+  <tr><td>40</td><td>160</td><td>sha1</td></tr>
+  <tr><td>64</td><td>256</td><td>sha256</td></tr>
+  <tr><td>128</td><td>512</td><td>sha512</td></tr>
+</table>
+
+<h2>Python 實作：加鹽摘要</h2>
+<p>網站儲存密碼或產生 sign 參數時，很少直接對明文做 md5，而是<strong>加鹽</strong>（salt）：</p>
+<pre><code>import hashlib
+
+salt = "abc123"
+password = "my_password"
+
+# 第一次：直接 md5
+m = hashlib.md5()
+m.update(password.encode())
+print(m.hexdigest())
+
+# 第二次：加鹽 md5
+m2 = hashlib.md5()
+m2.update(salt.encode())
+m2.update(password.encode())
+print(m2.hexdigest())</code></pre>
+<p>呼叫多次 <code>update</code> 等同於把字串拼接後再 hash：<code>hashlib.md5((salt + password).encode())</code>。這在復現前端 sign 參數時非常常見。</p>
+
+<h2>實戰用途</h2>
+<ul>
+  <li><strong>口令儲存</strong>：資料庫存 md5(鹽 + 密碼)，而非明文。</li>
+  <li><strong>一致性校驗</strong>：下載檔案後算 md5，比對官方提供的 md5 確認檔案未損毀。</li>
+  <li><strong>sign 參數</strong>：把請求參數按特定順序拼接後加鹽 md5，伺服器端用同樣的鹽複算驗證請求未被竄改。</li>
+</ul>
+
+<h2>安全提醒</h2>
+<p>md5 和 sha1 在密碼學上已被碰撞攻擊破解，不應繼續用於安全場景。但逆向的需求是「復現」而非「破解」：你不需要找碰撞，只需要用同樣的輸入和同樣的鹽，得到同樣的輸出。</p>
+
+<h2>重點整理</h2>
+<ul>
+  <li>md5 = 32 十六進位字元、sha1 = 40、sha256 = 64、sha512 = 128。</li>
+  <li>摘要演算法不可逆，但可以復現：同樣的輸入 + 同樣的鹽 = 同樣的輸出。</li>
+  <li>Python 用 <code>hashlib.md5()</code> / <code>sha1()</code> / <code>sha256()</code>，記得多段 <code>update()</code> 等於拼接。</li>
+  <li>逆向 sign 時，第一直覺就是試 md5(鹽 + 參數拼接)。</li>
+</ul>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="md5 的輸出長度是幾個十六進位字元？" data-correct="0" data-explain="md5 輸出 128 位元 = 32 個十六進位字元。">
+  <button class="opt">32</button>
+  <button class="opt">40</button>
+  <button class="opt">64</button>
+  <button class="opt">128</button>
+</div>
+
+<div class="quiz" data-question="摘要演算法（hash）最重要的特性是什麼？" data-correct="1" data-explain="單向性：從雜湊值無法反推原始資料，這是雜湊與加密的根本差異。">
+  <button class="opt">可逆性</button>
+  <button class="opt">單向性</button>
+  <button class="opt">變長輸出</button>
+  <button class="opt">需要金鑰</button>
+</div>
+
+<div class="quiz" data-question="Python 中對 md5 物件呼叫兩次 update(a) 和 update(b)，等效於？" data-correct="2" data-explain="多次 update 等同於把所有輸入拼接後再做一次 hash。">
+  <button class="opt">md5(a) + md5(b)</button>
+  <button class="opt">md5(b) + md5(a)</button>
+  <button class="opt">md5(a + b)</button>
+  <button class="opt">md5(a) 與 md5(b) 無關</button>
+</div>
+
+<div class="quiz" data-question="看到一個 40 字元的十六進位字串，最可能是哪個演算法？" data-correct="3" data-explain="sha1 輸出 160 位元 = 40 個十六進位字元。">
+  <button class="opt">md5</button>
+  <button class="opt">sha256</button>
+  <button class="opt">base64</button>
+  <button class="opt">sha1</button>
+</div>
+
+<div class="quiz" data-question="網站儲存密碼時通常怎麼做？" data-correct="0" data-explain="存 md5(鹽 + 密碼) 而非明文，避免資料庫外洩時密碼直接曝光。">
+  <button class="opt">md5(鹽 + 密碼)</button>
+  <button class="opt">明文儲存</button>
+  <button class="opt">AES 加密</button>
+  <button class="opt">RSA 加密</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./base64-variants.html">← 上一步：base64 變種與圖片</a>
+  <a href="./aes-symmetric.html">下一步：AES 對稱加密實戰 →</a>
+</div>
+
+<footer class="footer">
+  <p>有任何問題，隨時問你的 agent 老師。</p>
+</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

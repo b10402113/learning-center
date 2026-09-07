@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ajax 前端演示頁 — Ajax 與 JavaScript 引入</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>Ajax 前端演示頁</h1>
+  <p class="meta">Node 13 · Step 3 / 4 · 預估 15–18 分鐘</p>
+
+  <h2>Learning goal</h2>
+  <p>看懂 jQuery $.ajax 的事件驅動流程：點擊觸發 → 非同步請求 → 回調函式 → DOM 更新，並在 DevTools Network 面板裡辨識出對應的 XHR 請求。</p>
+
+  <h2>Lesson</h2>
+
+  <p>上一課我們架好了靶站，這一次要寫前端頁面，讓 JavaScript 在背後對 /books 發 Ajax 請求。關鍵不是 jQuery 本身，而是背後的「事件驅動」模型：程式不會從上往下跑到底，而是等使用者做了某個動作（點擊、輸入、滾動），才觸發對應的程式碼。</p>
+
+  <h3>事件驅動：點一下才做事</h3>
+  <p>傳統程式像食譜：第一步、第二步、第三步，照順序跑。JavaScript 在瀏覽器裡不是這樣。它像一個接線生：電話響了（事件發生），才拿起話筒（執行對應的函式）。沒事的時候，它什麼都不做。</p>
+
+  <p>最常見的事件是點擊。我們用 <code>onclick</code> 把一個函式綁到 DOM 元素上：</p>
+  <pre><code>var btn = document.getElementById("load-btn");
+btn.onclick = function() {
+    // 點擊後才執行這裡的程式碼
+    console.log("被點了");
+};</code></pre>
+  <p>在 <code>onclick</code> 裡面，我們放的就是「被點擊後要做的動作」—— 也就是發 Ajax 請求。</p>
+
+  <h3>jQuery 的 $.ajax 封裝</h3>
+  <p>jQuery 是一套古老的 JavaScript 函式庫，它把各家瀏覽器不同的 Ajax API 統一成一個簡單的 <code>$.ajax()</code> 呼叫。一個最簡單的 GET 請求長這樣：</p>
+  <pre><code>$.ajax({
+    url: "/books",
+    type: "get",
+    success: function(res) {
+        console.log(res);
+    }
+});</code></pre>
+  <p>三個參數各自的角色：</p>
+  <ul>
+    <li><code>url: "/books"</code>：對準哪個伺服器路徑。因為是相對路徑，瀏覽器會自動補上目前頁面的域名和埠號，變成 <code>http://127.0.0.1:5000/books</code>。</li>
+    <li><code>type: "get"</code>：HTTP 方法。這裡是 GET，代表「我要拿資料」。</li>
+    <li><code>success: function(res) {...}</code>：回調函式（callback）。伺服器成功回應後，Flask 回傳的 JSON 會自動解析成 JavaScript 陣列，放進 <code>res</code> 參數裡。</li>
+  </ul>
+
+  <p>回調函式是 Ajax 最核心的概念。因為請求是非同步的，你不能寫「等它回來再繼續下一行」；你必須把「回來之後要做的事」包成一個函式，交給 <code>success</code> 參數。伺服器回應時，jQuery 會自動呼叫它。</p>
+
+  <h3>把資料塞回畫面：DOM 操作</h3>
+  <p>拿到 <code>res</code>（一個 JavaScript 陣列）之後，我們要把書名顯示在畫面上。jQuery 提供了一堆 DOM 操作的方法，這裡用的是 <code>.html()</code>：</p>
+  <pre><code>success: function(res) {
+    var text = res.join(",");          // 把陣列用逗號接成字串
+    $("p").eq(2).html(text);           # 選第三個 <p>，把內容換成書名
+}</code></pre>
+  <p><code>$("p").eq(2)</code> 用 CSS _selector_ 選出所有 <code>&lt;p&gt;</code> 標籤，再用 <code>.eq(2)</code> 取第三個（索引從 0 開始）。<code>.html(text)</code> 把這個 <code>&lt;p&gt;</code> 的內部 HTML 換成書名字串。</p>
+
+  <p>整個流程跑起來像這樣：</p>
+  <ol>
+    <li>使用者點擊頁面上的段落。</li>
+    <li>jQuery 對 <code>/books</code> 送出 GET 請求。</li>
+    <li>Flask 收到請求，隨機抽 4 本書，回傳 JSON。</li>
+    <li>jQuery 收到回應，自動把 JSON 解析成 JavaScript 陣列。</li>
+    <li><code>success</code> 回調被觸發，把書名用逗號接起來，塞進第三個 <code>&lt;p&gt;</code>。</li>
+  </ol>
+
+  <p>從頭到尾，瀏覽器沒有換頁、沒有刷新。資料是「長」在原本頁面裡的。</p>
+
+  <h3>在 DevTools 裡看到這一幕</h3>
+  <p>打開 Chrome DevTools（F12），切到 Network 面板，重新整理頁面。你會看到：</p>
+  <ul>
+    <li>第一個請求是 <code>index.html</code>（Document 類型），回應是完整 HTML。</li>
+    <li>點擊頁面之後，多了一個 <code>books</code> 請求（XHR 類型），回應是 JSON。</li>
+  </ul>
+  <p>點開 <code>books</code> 請求，看它的 Headers：</p>
+  <pre><code>Request URL: http://127.0.0.1:5000/books
+Request Method: GET
+Status Code: 200 OK</code></pre>
+  <p>再看 Response：</p>
+  <pre><code>["三體","銀河帝國","沙丘","基地"]</code></pre>
+  <p>這就是 Ajax 請求的全部真相：一個 GET 請求，URL 是 <code>/books</code>，回應是 JSON 陣列。沒有魔法，就是這樣。</p>
+
+  <h3>login.html 的對照：同步表單</h3>
+  <p>為了讓你明確感受同步和非同步的差異，示範頁還附了一個 login.html：</p>
+  <pre><code>&lt;form action="/login" method="post"&gt;
+    &lt;input name="username"&gt;
+    &lt;input name="password" type="password"&gt;
+    &lt;button type="submit"&gt;登入&lt;/button&gt;
+&lt;/form&gt;</code></pre>
+  <p>按下「登入」之後，瀏覽器會把表單資料包成 POST 請求，整個頁面跳轉到 <code>/login</code> 的回應。你在 DevTools 會看到一個 Document 請求，回應是新的 HTML。這就是同步全覆盖。</p>
+
+  <p>對比之下，Ajax 的 /books 請求不會讓頁面跳轉，回應也不是 HTML，而是純資料。這就是為什麼爬蟲要分「同步」和「非同步」—— 它們的回應格式、URL 尋找方式完全不同。</p>
+
+  <h2>Quiz</h2>
+
+  <div class="quiz" data-question="JavaScript 的事件驅動模型指的是什麼？" data-correct="2" data-explain="事件驅動的意思是程式不從上往下跑到底，而是等事件發生（點擊、輸入）才觸發對應的處理函式。">
+    <button class="opt">程式從第一行依序跑到最後一行</button>
+    <button class="opt">程式會自動重複執行</button>
+    <button class="opt">等事件發生才觸發對應的處理函式</button>
+    <button class="opt">程式只在載入時執行一次</button>
+  </div>
+
+  <div class="quiz" data-question="$.ajax({ url: "/books", type: "get", success: fn }) 中，success 參數的作用是什麼？" data-correct="0" data-explain="success 是回調函式，伺服器成功回應後，jQuery 會自動把解析後的資料傳進去並執行它。">
+    <button class="opt">伺服器成功回應後，自動執行的回調函式</button>
+    <button class="opt">請求發送前要先執行的驗證函式</button>
+    <button class="opt">無論成功失敗都會執行的收尾函式</button>
+    <button class="opt">設定請求逾時時間的參數</button>
+  </div>
+
+  <div class="quiz" data-question="Ajax 請求和表單同步請求最大的差別是什麼？" data-correct="1" data-explain="Ajax 是非同步的，頁面不跳轉，回應由 JavaScript 處理；表單是同步的，整個頁面被新回應覆蓋。">
+    <button class="opt">Ajax 只能用 GET，表單只能用 POST</button>
+    <button class="opt">Ajax 不會跳轉頁面，表單會整個頁面跳轉</button>
+    <button class="opt">Ajax 回應一定是 JSON，表單回應一定是 HTML</button>
+    <button class="opt">Ajax 只能在同域名下發送，表單沒有這個限制</button>
+  </div>
+
+  <div class="quiz" data-question="你在 DevTools Network 面板看到一個 XHR 請求，URL 是 /books，回應是 JSON。這代表什麼？" data-correct="3" data-explain="XHR / Fetch 類型代表 JavaScript 在背景非同步抓取資料，這就是 Ajax。">
+    <button class="opt">瀏覽器自動載入了 books.html</button>
+    <button class="opt">使用者在網址列輸入了 /books</button>
+    <button class="opt">表單被提交了</button>
+    <button class="opt">JavaScript 用 Ajax 請求在背景抓資料</button>
+  </div>
+
+  <div class="quiz" data-question="$("p").eq(2).html("三體,銀河帝國") 的作用是什麼？" data-correct="0" data-explain="選第三個 p 元素，把它的內部 HTML 換成書名字串。">
+    <button class="opt">把第三個 p 元素的內容換成書名字串</button>
+    <button class="opt">新增一個 p 元素到頁面</button>
+    <button class="opt">刪除第三個 p 元素</button>
+    <button class="opt">把書名字串送到伺服器</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./flask-server.html">← 上一步：Flask 演示伺服器</a>
+    <a href="./python-client.html">下一步：Python 客戶端對照 →</a>
+  </div>
+
+  <div class="footer">Ajax 與 JavaScript 引入 · Node 13 / Step 3</div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

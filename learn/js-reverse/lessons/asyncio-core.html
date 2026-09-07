@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>asyncio 四个核心概念与 wait/await — asyncio 与异步爬虫</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>asyncio 四个核心概念与 wait/await</h1>
+<p class="meta">js-reverse · 06-asyncio · Step 3/4</p>
+
+<h2>学习 goal</h2>
+<p>能独立写出「特殊函数 + 任务列表 + wait + 回调解析」的 asyncio 多任务协程代码，并解释每个核心概念的角色。</p>
+
+<h2>从协程到 asyncio</h2>
+<p>协程是一种思想，asyncio 是 Python 3.6+ 内置的协程框架。它提供了一套完整的机制来定义、调度、执行协程。理解 asyncio 的关键是掌握四个层层递进的概念。</p>
+
+<h2>概念一：特殊函数</h2>
+<p>用 <code>async def</code> 定义的函数叫<strong>特殊函数</strong>（async function）。调用它时，不会立即执行函数体，而是返回一个<strong>协程对象</strong>。</p>
+<pre><code>async def fetch(url):
+    response = await aiohttp.ClientSession().get(url)
+    return await response.text()
+
+# 调用特殊函数不会执行，而是返回协程对象
+coro = fetch('http://example.com')
+print(coro)  # &lt;coroutine object fetch at 0x...&gt;</code></pre>
+<p>注意：特殊函数内部不能出现不支持异步的代码（比如 <code>time.sleep</code> 或 <code>requests</code>），否则会中断整个异步效果。要用 <code>asyncio.sleep</code> 代替 <code>time.sleep</code>。</p>
+
+<h2>概念二：协程对象</h2>
+<p><strong>协程对象</strong>是调用特殊函数后返回的对象。它只是一组「待执行的操作」的封装，本身不会运行。必须把它交给事件循环才能执行。</p>
+
+<h2>概念三：任务对象</h2>
+<p><strong>任务对象（Task）</strong>是高级协程。它和普通协程对象的区别在于：可以绑定回调函数。</p>
+<pre><code>import asyncio
+
+async def fetch(url):
+    return "html content"
+
+# 把协程对象包装成任务对象
+task = asyncio.ensure_future(fetch('http://example.com'))
+
+# 绑定回调函数——任务完成后自动调用
+task.add_done_callback(lambda t: print(t.result()))</code></pre>
+<p>回调函数有且仅有一个参数 <code>t</code>（就是任务对象本身），用 <code>t.result()</code> 可以拿到特殊函数的返回值。</p>
+
+<h2>概念四：事件循环</h2>
+<p><strong>事件循环（Event Loop）</strong>是装载任务对象并启动执行的容器。它是 asyncio 的发动机——所有协程都要放进事件循环里才能跑。</p>
+<pre><code>loop = asyncio.get_event_loop()
+loop.run_until_complete(task)</code></pre>
+
+<h2>多任务：wait 和 await</h2>
+<p>单个任务没意义。多任务协程的关键是 <code>asyncio.wait(tasks)</code>：它接收一个任务列表，给每个任务赋予「可被挂起」的权限。</p>
+<p><code>await</code> 必须加在每一个阻塞操作前面。它的作用是人为检测阻塞并挂起任务——遇到 <code>await</code> 就交出控制权，让事件循环去跑别的任务。</p>
+<pre><code>async def main():
+    tasks = [
+        asyncio.ensure_future(fetch(url1)),
+        asyncio.ensure_future(fetch(url2)),
+        asyncio.ensure_future(fetch(url3)),
+    ]
+    # wait 给每个任务赋予可挂起的权限
+    done, pending = await asyncio.wait(tasks)
+    for t in done:
+        print(t.result())</code></pre>
+
+<h2>完整链路</h2>
+<p>四个概念的协作关系：</p>
+<ol>
+  <li><code>async def</code> 定义特殊函数</li>
+  <li>调用特殊函数 → 得到协程对象</li>
+  <li><code>asyncio.ensure_future</code> → 包装成任务对象（可绑定回调）</li>
+  <li>任务对象放进事件循环 → <code>loop.run_until_complete</code> 启动</li>
+  <li>内部用 <code>await</code> 挂起阻塞操作，<code>asyncio.wait</code> 调度多任务</li>
+</ol>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="用 async def 定义的特殊函数被调用后会发生什么？" data-correct="1" data-explain="特殊函数被调用后不会立即执行函数体，而是返回一个协程对象。">
+  <button class="opt">立即执行函数体并返回结果</button>
+  <button class="opt">不执行函数体，返回协程对象</button>
+  <button class="opt">创建一个新线程来执行函数</button>
+  <button class="opt">把函数放入事件循环并立即执行</button>
+</div>
+
+<div class="quiz" data-question="任务对象和普通协程对象的主要区别是什么？" data-correct="2" data-explain="任务对象是高级协程，可以绑定回调函数，回调中用 t.result() 取返回值。">
+  <button class="opt">任务对象不能绑定回调，协程对象可以</button>
+  <button class="opt">任务对象必须串行执行，协程对象可以并行</button>
+  <button class="opt">任务对象可以绑定回调函数，协程对象不能</button>
+  <button class="opt">任务对象由操作系统调度，协程对象由程序员调度</button>
+</div>
+
+<div class="quiz" data-question="事件循环的作用是什么？" data-correct="0" data-explain="事件循环是装载任务对象并启动执行的容器，是 asyncio 的发动机。">
+  <button class="opt">装载任务对象并启动执行</button>
+  <button class="opt">创建新的线程来执行任务</button>
+  <button class="opt">管理操作系统的进程调度</button>
+  <button class="opt">替代特殊函数的定义</button>
+</div>
+
+<div class="quiz" data-question="asyncio.wait(tasks) 的作用是什么？" data-correct="3" data-explain="asyncio.wait() 给每个任务赋予可被挂起的权限，实现多任务调度。">
+  <button class="opt">按顺序逐个执行任务列表</button>
+  <button class="opt">等待所有任务完成后才继续执行</button>
+  <button class="opt">把任务放入不同的线程执行</button>
+  <button class="opt">给每个任务赋予可被挂起的权限</button>
+</div>
+
+<div class="quiz" data-question="特殊函数内部不能出现 time.sleep 或 requests 的原因是什么？" data-correct="1" data-explain="time.sleep 和 requests 不支持异步，会阻塞整个事件循环，中断异步效果。">
+  <button class="opt">它们会占用太多内存</button>
+  <button class="opt">它们不支持异步，会中断整个异步效果</button>
+  <button class="opt">它们会导致语法错误</button>
+  <button class="opt">它们只能在主线程中使用</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./coroutine-principle.html">← 上一步：协程原理：用户空间调度</a>
+  <a href="./aiohttp-crawler.html">下一步：aiohttp 与多任务异步爬虫实战 →</a>
+</div>
+
+<div class="footer">js-reverse · 06-asyncio · asyncio 四个核心概念与 wait/await</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

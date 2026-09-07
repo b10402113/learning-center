@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>MD5 摘要算法与 hashlib.md5 — 实战：sign 逆向（Python 原生）</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>MD5 摘要算法与 hashlib.md5</h1>
+<p class="meta">js-reverse · 步骤 2/5 · Python 标准库里的单向散列工具</p>
+
+<p>MD5（Message-Digest Algorithm 5）是一种单向散列函数。单向意味着你只能从明文算出密文，不能从密文倒推回明文。散列意味着无论输入多长，输出永远固定在一百二十八位——也就是三十二个十六进制字符。这两个特性让 MD5 成了签名场景里的常客：服务器不需要知道你的明文是什么，只需要用同样的规则算一遍，看结果跟你发过来的 <code>sign</code> 是否一致。</p>
+
+<h2>Python 里的 MD5 调用链</h2>
+
+<p>在 Python 里用 MD5 只需要一行导入：<code>import hashlib</code>。实际计算分两步走。第一步，创建一个 md5 对象：<code>m = hashlib.md5()</code>。第二步，往对象里喂数据并取出结果。喂数据用 <code>m.update(s.encode())</code>，其中 <code>s.encode()</code> 把字符串转成 UTF-8 字节——MD5 只接受字节，不接受字符串。取结果用 <code>m.hexdigest()</code>，返回的就是三十二位小写十六进制字符串。</p>
+
+<p>整个调用链可以写成四行：</p>
+
+<pre><code>import hashlib
+m = hashlib.md5()
+m.update(s.encode())
+sign = m.hexdigest()</code></pre>
+
+<p>也可以压成一行：<code>sign = hashlib.md5(s.encode()).hexdigest()</code>。两种写法完全等价，选哪个取决于你个人偏好。</p>
+
+<h2>必须踩过的两个坑</h2>
+
+<p>第一个坑：<code>update</code> 可以接受字节，但不能接受字符串。如果你写了 <code>m.update(s)</code> 而 <code>s</code> 是字符串，Python 会抛出 <code>TypeError: Unicode-objects must be encoded before hashing</code>。这个报错在逆向初期很常见，只要记得先 <code>.encode()</code> 就不会卡住。</p>
+
+<p>第二个坑：MD5 对大小写敏感。<code>"abc"</code> 和 <code>"ABC"</code> 算出来的 MD5 完全不同。在逆向 sign 时，拼接字符串里的每个字符都必须和 JS 端或服务器端的完全一致——包括大小写、空格、<code>&amp;</code> 和 <code>=</code> 的位置。任何一个字符的差异都会导致摘要面目全非。</p>
+
+<h2>逆向不是破解</h2>
+
+<p>MD5 的不可逆性也意味着：当你拿到一个 sign 值时，你不需要尝试去「解密」它。你只需要按照同样的规则，把参与拼接的参数重新拼一遍、重新算一遍，看结果是否匹配。这就是逆向工程和密码学攻击的本质区别——你不是在破解算法，而是在复现算法。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="MD5 算法的核心特性是什么？" data-correct="1" data-explain="MD5 是单向散列函数，只能从明文算出密文，不能反向推导。">
+  <button class="opt">可逆加密，可以从密文恢复明文</button>
+  <button class="opt">单向散列，只能从明文算出密文</button>
+  <button class="opt">对称加密，加密和解密用同一把钥匙</button>
+  <button class="opt">非对称加密，公钥加密私钥解密</button>
+</div>
+
+<div class="quiz" data-question="hashlib.md5 的 hexdigest 方法返回什么？" data-correct="2" data-explain="hexdigest 返回三十二位小写十六进制字符串，这就是 sign 的值。">
+  <button class="opt">返回原始字节的二进制表示</button>
+  <button class="opt">返回一个六十位的 Base64 字符串</button>
+  <button class="opt">返回三十二位小写十六进制字符串</button>
+  <button class="opt">返回一个六十四位的十六进制字符串</button>
+</div>
+
+<div class="quiz" data-question="调用 m.update(s) 时，如果 s 是字符串会怎样？" data-correct="0" data-explain="update 只接受字节，不编码直接传字符串会抛出 TypeError。">
+  <button class="opt">抛出 TypeError，提示必须先编码</button>
+  <button class="opt">自动按 UTF-8 编码，正常运行</button>
+  <button class="opt">返回空结果，不报错</button>
+  <button class="opt">只处理字符串的前一百个字符</button>
+</div>
+
+<div class="quiz" data-question="为什么在逆向 sign 时必须精确还原拼接字符串的每个字符？" data-correct="3" data-explain="MD5 对输入极其敏感，任何一个字符的差异都会导致摘要完全不同。">
+  <button class="opt">因为 Python 的 hashlib 有长度限制</button>
+  <button class="opt">因为服务器会先解码再比较</button>
+  <button class="opt">因为 MD5 只接受固定长度的输入</button>
+  <button class="opt">因为 MD5 对输入敏感，任何字符差异都会改变摘要</button>
+</div>
+
+<div class="quiz" data-question="逆向工程 MD5 签名的正确思路是什么？" data-correct="1" data-explain="逆向的目标是复现相同的输入和算法，从而得到相同的输出，而不是破解 MD5 本身。">
+  <button class="opt">尝试从密文反推明文</button>
+  <button class="opt">用相同的输入和算法复现相同的输出</button>
+  <button class="opt">寻找 MD5 的碰撞漏洞</button>
+  <button class="opt">用暴力字典攻击猜出原始字符串</button>
+</div>
+
+<div class="quiz" data-question="MD5 的输出长度固定是多少位十六进制字符？" data-correct="2" data-explain="MD5 输出一百二十八位二进制，用十六进制表示正好是三十二个字符。">
+  <button class="opt">十六位</button>
+  <button class="opt">二十四位</button>
+  <button class="opt">三十二位</button>
+  <button class="opt">六十四位</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./sign-reverse-flow.html">← 上一步：sign 逆向的基本流程</a>
+  <a href="./timestamp-concatenation.html">下一步：动态时间戳与参数拼接规则 →</a>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

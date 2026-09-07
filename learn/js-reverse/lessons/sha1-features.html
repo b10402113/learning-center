@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SHA1 算法特征识别</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>SHA1 算法特征识别</h1>
+<p class="meta">实战：SHA1 与百度 sign · 步骤 1/5</p>
+
+<h2>学习目标</h2>
+<p>能从一个手写的加密函数里识别出 SHA1 的五个魔数、80 轮循环和 hex 输出特征，知道它为什么不是"自定义加密"而是标准摘要算法。</p>
+
+<h2>先看现象：一段不像普通加密的 JS</h2>
+<p>当你抠下一个网站的加密函数，发现它长这样：</p>
+<pre><code>var s = function (e) {
+    var o = t.bytesToWords(e)
+      , i = 8 * e.length
+      , a = []
+      , s = 1732584193
+      , u = -271733879
+      , c = -1732584194
+      , l = 271733878
+      , f = -1009589776;
+    // ... 80 轮循环 ...
+    return [s, u, c, l, f]
+}</code></pre>
+<p>五个初始值不是 0 或 1，而是四个正数一个负数，循环次数固定为 80。这不像常见的 XOR 或 BASE64 混淆——它更像某种标准算法的「手写实现」。</p>
+
+<h2>SHA1 的三个识别锚点</h2>
+<table>
+  <th>锚点</th><th>具体特征</th><th>意义</th>
+  <tr><td>五个初始魔数</td><td>1732584193、-271733879、-1732584194、271733878、-1009589776</td><td>SHA1 独有的初始哈希值（H0–H4），见过一次就不会认错</td></tr>
+  <tr><td>80 轮循环</td><td>for (m = 0; m &lt; 80; m++)，每轮用不同的常数（1518500249、1859775393、2400959708、3395469782）</td><td>MD5 是 64 轮，SHA256 是 64 轮，只有 SHA1 是 80 轮</td></tr>
+  <tr><td>输出转 hex</td><td>bytesToHex(wordsToBytes(result))</td><td>输出固定 40 个十六进制字符（160 位）</td></tr>
+</table>
+
+<h2>为什么 Python 不需要重写它？</h2>
+<p>SHA1 是标准摘要算法，Python 的 <code>hashlib</code> 原生支持。但这里有一个陷阱：丁香网的 JS 函数接受的输入是一串已经拼好的字符串，内部自己做了 UTF-8 编码转换（<code>unescape(encodeURIComponent(e))</code>）。如果你直接用 <code>hashlib.sha1(data.encode()).hexdigest()</code>，会因为编码差异算出不同的结果。</p>
+<p>所以识别出 SHA1 只是第一步——输入怎么预处理、字节怎么转单词（<code>bytesToWords</code>）这些细节，决定了你是直接调 Python 的 hashlib，还是老老实实用 execjs 把这段 JS 整体跑起来。</p>
+
+<h2>Webpack 模块加载器：可以直接搬运的信号</h2>
+<p>你可能会在代码里看到这种奇怪的包裹：</p>
+<pre><code>function n(e, t) {
+    return t = { exports: {} }, e(t, t.exports), t.exports
+}
+var o = n((function (e) { ... e.exports = n ... }))</code></pre>
+<p>这是 Webpack 的手写模块加载器。遇到这种结构，不需要去理解它怎么调度模块——整个 <code>n(...)</code> 包裹的代码是自包含的，可以直接整段复制到 Node.js 里跑。只要入口函数（这里是 <code>u(e)</code>）能调到，依赖的内部模块就已经打包在一起了。</p>
+
+<h2>小结</h2>
+<p>识别 SHA1 的关键不是能默写算法步骤，而是看到五个魔数 + 80 轮 + hex 输出就反应出「这是 SHA1，可以直接调标准库或原样搬运」。下一步我们就看丁香网怎么把请求参数拼成 SHA1 的输入。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="以下哪一组是 SHA1 的五个初始魔数特征？" data-correct="1" data-explain="SHA1 用五个特定的 32 位整数作为初始哈希值，这是它的识别指纹。">
+  <button class="opt">全为 0 的初始值</button>
+  <button class="opt">四个正数 + 一个负数（如 1732584193, -271733879...）</button>
+  <button class="opt">五个随机生成的 64 位数</button>
+  <button class="opt">直接用输入字符串的 ASCII 码</button>
+</div>
+
+<div class="quiz" data-question="SHA1 主循环的轮数是多少？" data-correct="2" data-explain="SHA1 固定 80 轮，MD5 是 64 轮，SHA256 是 64 轮。">
+  <button class="opt">64 轮</button>
+  <button class="opt">128 轮</button>
+  <button class="opt">80 轮</button>
+  <button class="opt">32 轮</button>
+</div>
+
+<div class="quiz" data-question="SHA1 的输出长度是多少位？" data-correct="0" data-explain="SHA1 输出 160 位（20 字节），用十六进制表示就是 40 个字符。">
+  <button class="opt">160 位（40 个十六进制字符）</button>
+  <button class="opt">128 位（32 个十六进制字符）</button>
+  <button class="opt">256 位（64 个十六进制字符）</button>
+  <button class="opt">64 位（16 个十六进制字符）</button>
+</div>
+
+<div class="quiz" data-question="代码里出现 function n(e, t) { return t = {exports:{}}, e(t, t.exports), t.exports } 说明什么？" data-correct="3" data-explain="这是 Webpack 的手写模块加载器，意味着被包裹的代码是自包含的，可以整体搬运到 Node.js 运行。">
+  <button class="opt">这是一个死循环</button>
+  <button class="opt">代码被严重加密了</button>
+  <button class="opt">这是一个语法错误</button>
+  <button class="opt">这是 Webpack 的模块加载器，代码可整体搬运</button>
+</div>
+
+<div class="quiz" data-question="为什么识别出 SHA1 后，有时还是不能用 Python hashlib 直接算？" data-correct="1" data-explain="因为 JS 在算 SHA1 前可能自己对输入做了预处理（如 UTF-8 编码转换），直接丢给 hashlib 会因为编码差异得到不同结果。">
+  <button class="opt">Python 的 hashlib 不支持 SHA1</button>
+  <button class="opt">JS 对输入的预处理（如 UTF-8 编码）可能导致和 hashlib 直接算结果不同</button>
+  <button class="opt">SHA1 在 Python 里速度太慢</button>
+  <button class="opt">必须用 Java 才能算 SHA1</button>
+</div>
+
+<div class="quiz" data-question="bytesToWords 函数的作用是什么？" data-correct="0" data-explain="bytesToWords 把字节数组转成 32 位字数组（每 4 字节拼成一个 32 位整数），这是 SHA1 内部处理的第一步。">
+  <button class="opt">把字节数组转成 32 位字数组</button>
+  <button class="opt">把单词拼成字节</button>
+  <button class="opt">把十六进制转成十进制</button>
+  <button class="opt">把字符串反转</button>
+</div>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./dxy-params.html">下一步：丁香网参数构造与字典序拼接 →</a>
+</div>
+
+<div class="footer">实战：SHA1 与百度 sign · 步骤 1/5</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

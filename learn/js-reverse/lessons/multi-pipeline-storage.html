@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>多管道优先级与数据库存储 — Scrapy 管道与持久化</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>多管道优先级与数据库存储</h1>
+<p class="meta">Scrapy 管道与持久化 · 步骤 2/4</p>
+
+<h2>学习目标</h2>
+<p>用多个管道类把同一份数据分别存到文件、MySQL、Redis，并理解优先级数字如何控制 Item 在管道链中的流转顺序。</p>
+
+<h2>一个 Item，多个目的地</h2>
+<p>上一节我们学会了用一个管道把 Item 存到文件。但真实项目里，一份数据往往要同时存到多个地方：写一份 CSV 做备份、写 MySQL 做查询、写 Redis 做缓存队列。难道要 Spider 分别 yield 三次吗？</p>
+<p>不需要。Scrapy 支持在 <code>ITEM_PIPELINES</code> 里注册<strong>多个管道类</strong>。Spider 只管 yield 一次 Item，引擎会自动把 Item 丢进管道链，让每个管道轮流处理一遍。</p>
+
+<h2>优先级数字：谁先谁后？</h2>
+<p><code>ITEM_PIPELINES</code> 是一个字典，key 是管道类的路径，value 是优先级数字。<strong>数字越小，优先级越高</strong>，Item 越先交给它处理。</p>
+
+<pre><code># settings.py
+ITEM_PIPELINES = {
+    'myproject.pipelines.FilePipeline': 300,
+    'myproject.pipelines.MySQLPipeline': 301,
+    'myproject.pipelines.RedisPipeline': 302,
+}</code></pre>
+
+<p>Item 的流转顺序是：</p>
+<ol>
+  <li>先交给 <code>FilePipeline</code>（300，最高优先级）</li>
+  <li><code>FilePipeline.process_item</code> 处理完，<code>return item</code></li>
+  <li>引擎把 Item 交给 <code>MySQLPipeline</code>（301）</li>
+  <li><code>MySQLPipeline.process_item</code> 处理完，<code>return item</code></li>
+  <li>引擎把 Item 交给 <code>RedisPipeline</code>（302）</li>
+  <li><code>RedisPipeline.process_item</code> 处理完，<code>return item</code></li>
+  <li>没有下一个管道了，Item 处理完毕</li>
+</ol>
+
+<p>这里的关键规则是：<strong>每个管道的 process_item 都必须 return item</strong>。只要有一个管道忘了 return，Item 就会在这个管道里断掉，后面的管道全部收不到。</p>
+
+<h2>MySQL 管道：用 pymysql 存关系型数据库</h2>
+<p>MySQL 管道是最常见的数据库存储方案。核心流程是：在 <code>open_spider</code> 里用 <code>pymysql.Connect</code> 建立连接，在 <code>process_item</code> 里用 cursor 执行 SQL 并 <code>commit</code>，在 <code>close_spider</code> 里关闭游标和连接。</p>
+
+<pre><code># pipelines.py
+import pymysql
+
+class MySQLPipeline:
+    def open_spider(self, spider):
+        self.conn = pymysql.Connect(
+            host='localhost',
+            port=3306,
+            user='root',
+            password='123456',
+            db='movies',
+            charset='utf8mb4'
+        )
+        self.cursor = self.conn.cursor()
+
+    def process_item(self, item, spider):
+        sql = "INSERT INTO movie (title, rating, genre) VALUES (%s, %s, %s)"
+        self.cursor.execute(sql, (item['title'], item['rating'], item['genre']))
+        self.conn.commit()
+        return item
+
+    def close_spider(self, spider):
+        self.cursor.close()
+        self.conn.close()</code></pre>
+
+<p>注意几点：</p>
+<ul>
+  <li>连接在 <code>open_spider</code> 里建一次，不要每次 <code>process_item</code> 都重新建连。</li>
+  <li>SQL 执行后必须 <code>self.conn.commit()</code>，否则数据不会真正写入。</li>
+  <li>用 <code>%s</code> 占位符而不是字符串拼接，防止 SQL 注入。</li>
+</ul>
+
+<h2>Redis 管道：存列表做队列</h2>
+<p>Redis 在爬虫项目里常用来做"待爬 URL 队列"或"已爬数据缓存"。Scrapy 存 Redis 最简单的方式是用 <code>lpush</code> 把 Item 塞进一个列表。</p>
+
+<pre><code># pipelines.py
+from redis import Redis
+
+class RedisPipeline:
+    def open_spider(self, spider):
+        self.r = Redis(host='localhost', port=6379, db=0)
+
+    def process_item(self, item, spider):
+        self.r.lpush('movies', str(item))
+        return item
+
+    def close_spider(self, spider):
+        # Redis 连接通常不需要显式关闭，连接池会自动管理
+        pass</code></pre>
+
+<p>这里 <code>lpush 'movies', item</code> 的意思是：往 Redis 里名为 <code>movies</code> 的列表左侧（头部）插入一条数据。你可以把它想象成一叠盘子——每次新盘子都放在最上面。</p>
+
+<h2>文件管道：CSV 落盘做备份</h2>
+<p>文件管道和上一节讲的一样，负责把 Item 写成 CSV 或 JSON 文件。在多管道场景下，文件管道通常设为最高优先级（数字最小），这样数据会最先落盘，即使后面的数据库管道出错，文件里也有一份备份。</p>
+
+<pre><code># pipelines.py
+class FilePipeline:
+    def open_spider(self, spider):
+        self.f = open('movies.csv', 'w', encoding='utf-8')
+        self.f.write('title,rating,genre\n')
+
+    def process_item(self, item, spider):
+        line = f"{item['title']},{item['rating']},{item['genre']}\n"
+        self.f.write(line)
+        return item
+
+    def close_spider(self, spider):
+        self.f.close()</code></pre>
+
+<h2>多管道协作的完整流程</h2>
+<p>把三个管道合在一起，一个 Item 的生命周期是这样的：</p>
+
+<table>
+  <tr><th>阶段</th><th>发生什么</th></tr>
+  <tr><td>Spider yield item</td><td>引擎收到 Item，准备送入管道链</td></tr>
+  <tr><td>FilePipeline.process_item</td><td>写入 CSV 文件，return item</td></tr>
+  <tr><td>MySQLPipeline.process_item</td><td>执行 SQL 并 commit，return item</td></tr>
+  <tr><td>RedisPipeline.process_item</td><td>lpush 到 Redis 列表，return item</td></tr>
+  <tr><td>结束</td><td>Item 处理完毕，引擎等待下一个 Item</td></tr>
+</table>
+
+<p>如果 MySQLPipeline 的 process_item 忘了 return，RedisPipeline 就永远收不到 Item——但 FilePipeline 已经写入了，所以文件里还有数据。这就是为什么文件管道通常设为最高优先级：它是最后一道保险。</p>
+
+<h2>常见踩坑</h2>
+<ul>
+  <li><strong>优先级数字写反了</strong>：想让文件先存，结果把 MySQL 设成 300、文件设成 302，顺序就反了。</li>
+  <li><strong>MySQL 忘记 commit</strong>：执行了 execute 但没 commit，数据不会真正写入数据库。</li>
+  <li><strong>Redis 存了 Item 对象</strong>：Redis 不能直接存 Python 对象，要 <code>str(item)</code> 或 <code>json.dumps(dict(item))</code> 转成字符串。</li>
+  <li><strong>open_spider 里建连失败</strong>：数据库没启动或密码错误，爬虫一启动就崩溃。建议先在 Python 交互式环境里测试连接。</li>
+</ul>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="ITEM_PIPELINES 里数字 300 和 301，哪个管道会先收到 Item？" data-correct="0" data-explain="数字越小优先级越高，300 比 301 先执行。">
+  <button class="opt">300 的管道先收到</button>
+  <button class="opt">301 的管道先收到</button>
+  <button class="opt">同时收到</button>
+  <button class="opt">取决于注册顺序</button>
+</div>
+
+<div class="quiz" data-question="如果 MySQLPipeline 的 process_item 忘了 return item，会发生什么？" data-correct="2" data-explain="Item 会在这个管道断掉，后面的 RedisPipeline 永远收不到它。">
+  <button class="opt">爬虫会报错</button>
+  <button class="opt">数据会重复写入</button>
+  <button class="opt">RedisPipeline 收不到这个 Item</button>
+  <button class="opt">Item 会被自动丢弃</button>
+</div>
+
+<div class="quiz" data-question="MySQL 管道里，SQL 执行后必须做什么操作数据才会真正写入？" data-correct="1" data-explain="pymysql 默认开启事务，必须 commit 才会把数据持久化到磁盘。">
+  <button class="opt">self.cursor.close()</button>
+  <button class="opt">self.conn.commit()</button>
+  <button class="opt">self.conn.ping()</button>
+  <button class="opt">self.cursor.fetchall()</button>
+</div>
+
+<div class="quiz" data-question="Redis 的 lpush 命令的作用是什么？" data-correct="0" data-explain="lpush 把数据插入列表左侧（头部），lpop 从左侧弹出。">
+  <button class="opt">往列表左侧插入一条数据</button>
+  <button class="opt">往列表右侧插入一条数据</button>
+  <button class="opt">从列表左侧弹出一条数据</button>
+  <button class="opt">从列表右侧弹出一条数据</button>
+</div>
+
+<div class="quiz" data-question="为什么文件管道通常设为最高优先级（数字最小）？" data-correct="3" data-explain="文件管道作为最后一道保险，即使后面的数据库管道出错，文件里也有一份备份。">
+  <button class="opt">因为文件写入最快</button>
+  <button class="opt">因为文件管道代码最简单</button>
+  <button class="opt">因为 Scrapy 要求文件管道必须最先执行</button>
+  <button class="opt">作为最后一道保险，即使后续管道出错，文件里也有备份</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./item-pipeline-basics.html">← 上一步：Item 封装与 Pipeline 三方法</a>
+  <a href="./builtin-pipelines.html">下一步：内置管道 FilesPipeline 与 ImagesPipeline →</a>
+</div>
+
+<div class="footer">Scrapy 管道与持久化 · 步骤 2/4</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

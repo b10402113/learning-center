@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>快速上手：核心 API 走通渲染頁面抓取 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>快速上手：核心 API 走通渲染頁面抓取</h1>
+  <p class="meta">js-reverse · 08-pyppeteer · Step 2/4</p>
+
+  <h2>學習目標</h2>
+  <p>能獨立寫出 Pyppeteer 非同步爬蟲的完整骨架：launch → newPage → goto → content，並把它嵌進 asyncio 任務回呼體系。</p>
+
+  <h2>從一個 JS 渲染頁開始</h2>
+  <p>假設我們要爬 <code>quotes.toscrape.com/js/</code>，這個頁面的內容是 JavaScript 動態產生的，用 requests 直接拿只會得到空殼 HTML。Pyppeteer 的解法很簡單：讓瀏覽器跑完 JS，再取渲染後的原始碼。</p>
+
+  <h2>五行核心 API</h2>
+  <p>Pyppeteer 的爬蟲骨架只有五個步驟，全部寫在一個 <code>async def</code> 函式裡：</p>
+  <pre><code>import asyncio
+from pyppeteer import launch
+
+async def main():
+    browser = await launch(headless=True)   # 1. 啟動瀏覽器
+    page = await browser.newPage()          # 2. 開新分頁
+    await page.goto('http://quotes.toscrape.com/js/')  # 3. 跳轉並等待載入
+    content = await page.content()          # 4. 取得渲染後的原始碼
+    await browser.close()                   # 5. 關閉瀏覽器
+    return content
+
+html = asyncio.get_event_loop().run_until_complete(main())</code></pre>
+  <p>這五行程式碼就能達到 Selenium 同等的效果，而且全程非同步。</p>
+
+  <h2>把 Pyppeteer 嵌進 asyncio 任務回呼</h2>
+  <p>你在 day08 學過「特殊函式 → 協程物件 → 任務物件 → 事件循環」的架構。Pyppeteer 可以無縫嵌進去，寫法一樣：用 <code>asyncio.ensure_future()</code> 包成任務物件，再用 <code>add_done_callback()</code> 綁定解析回呼。</p>
+  <pre><code>import asyncio
+from pyppeteer import launch
+from lxml import etree
+
+async def crawl(url):
+    browser = await launch(headless=True)
+    page = await browser.newPage()
+    await page.goto(url)
+    content = await page.content()
+    await browser.close()
+    return content
+
+def parse(task):
+    html = task.result()
+    tree = etree.HTML(html)
+    titles = tree.xpath('//h2/text()')
+    print(titles)
+
+url = 'https://news.163.com/'
+loop = asyncio.get_event_loop()
+task = asyncio.ensure_future(crawl(url))
+task.add_done_callback(parse)
+loop.run_until_complete(task)</code></pre>
+  <p>這種「渲染 + 非同步 + 解析」的模板，就是 Pyppeteer 爬蟲的標準結構。</p>
+
+  <h2>用本機 Chrome 取代內建 Chromium</h2>
+  <p>如果不想用 Pyppeteer 內建的 Chromium，可以把 <code>executablePath</code> 指向本機已裝的 Google Chrome。路徑可以在瀏覽器網址列輸入 <code>chrome://version/</code>，找到「應用程式路徑」或「個人資料路徑」：</p>
+  <pre><code>browser = await launch(
+    headless=True,
+    executablePath='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+)</code></pre>
+
+  <h2>與 day08 的 aiohttp 模板對照</h2>
+  <table>
+    <tr><th>步驟</th><th>aiohttp 版</th><th>Pyppeteer 版</th></tr>
+    <tr><td>建立連線</td><td>ClientSession()</td><td>launch() + newPage()</td></tr>
+    <tr><td>發送請求</td><td>session.get(url)</td><td>page.goto(url)</td></tr>
+    <tr><td>取得回應</td><td>response.text()</td><td>page.content()</td></tr>
+    <tr><td>關閉連線</td><td>session.close()</td><td>browser.close()</td></tr>
+  </table>
+  <p>你會發現兩者結構幾乎一樣，差別只在 Pyppeteer 拿到的是「渲染後」的 HTML。</p>
+
+  <h2>隨堂測驗</h2>
+  <div class="quiz" data-question="Pyppeteer 中，相當於瀏覽器「開新分頁」的 API 是哪一個？" data-correct="2" data-explain="browser.newPage() 會建立一個新的 Page 物件，相當於瀏覽器的新分頁。">
+    <button class="opt">browser.open()</button>
+    <button class="opt">browser.openPage()</button>
+    <button class="opt">browser.newPage()</button>
+    <button class="opt">browser.createTab()</button>
+  </div>
+
+  <div class="quiz" data-question="page.content() 回傳的內容是什麼？" data-correct="0" data-explain="page.content() 回傳瀏覽器渲染後的完整 HTML 原始碼，包含 JS 執行後產生的內容。">
+    <button class="opt">渲染後的 HTML 原始碼</button>
+    <button class="opt">頁面截圖的二進位資料</button>
+    <button class="opt">頁面標題</button>
+    <button class="opt">所有網路請求的列表</button>
+  </div>
+
+  <div class="quiz" data-question="要把 Pyppeteer 嵌進 asyncio 多任務回呼，應使用哪個方法綁定回呼？" data-correct="1" data-explain="add_done_callback() 可以在任務完成後自動觸發回呼函式，回呼內用 task.result() 取值。">
+    <button class="opt">task.add_callback()</button>
+    <button class="opt">task.add_done_callback()</button>
+    <button class="opt">task.set_callback()</button>
+    <button class="opt">task.bind()</button>
+  </div>
+
+  <div class="quiz" data-question="若想讓 Pyppeteer 使用本機 Chrome，應設定哪個參數？" data-correct="3" data-explain="executablePath 可指定本機 Chrome 的執行檔路徑，Pyppeteer 就不會用內建的 Chromium。">
+    <button class="opt">chrome_path</button>
+    <button class="opt">browser_path</button>
+    <button class="opt">chrome_executable</button>
+    <button class="opt">executablePath</button>
+  </div>
+
+  <div class="quiz" data-question="關於 Pyppeteer 與 aiohttp 的比較，下列敘述何者正確？" data-correct="2" data-explain="兩者結構幾乎相同，但 Pyppeteer 拿到的是瀏覽器渲染後的 HTML，aiohttp 只拿到原始回應。">
+    <button class="opt">Pyppeteer 不能和 asyncio 一起用</button>
+    <button class="opt">aiohttp 也能執行 JavaScript</button>
+    <button class="opt">Pyppeteer 拿到的是渲染後的 HTML</button>
+    <button class="opt">兩者 API 完全不同</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./intro-install.html">← 上一步：簡介與環境安裝</a>
+    <a href="./detailed-usage.html">下一步：詳細用法 →</a>
+  </div>
+
+  <div class="footer">js-reverse · 08-pyppeteer · 共 4 步</div>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

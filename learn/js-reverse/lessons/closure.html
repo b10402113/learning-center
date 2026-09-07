@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IIFE 与闭包</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<h1>IIFE 与闭包</h1>
+<p class="meta">JS 逆向 · 节点 15 · 步骤 3/5</p>
+
+<h2>学习目标</h2>
+<p>能识别 IIFE 与闭包、理解闭包如何构建私有状态，读懂混淆代码里藏在闭包里的关键变量。</p>
+
+<h2>匿名函数与函数表达式</h2>
+<p>JS 的函数可以不给名字——这就是<strong>匿名函数</strong>。最常见的用法是赋值给变量，变成<strong>函数表达式</strong>：</p>
+<pre><code>var greet = function(name) {
+  return "hi " + name;
+};
+console.log(greet("world")); // hi world</code></pre>
+<p>函数表达式和函数声明的关键区别：函数表达式<strong>不会</strong>被提升，变量只提升声明、不提升赋值。所以函数表达式必须写在调用之前，否则会报错。</p>
+
+<h2>IIFE：定义即执行的匿名函数</h2>
+<p><strong>IIFE</strong>（Immediately Invoked Function Expression，立即调用函数表达式）就是定义完立刻跑的匿名函数。写法是把函数包在括号里，末尾加一对调用括号：</p>
+<pre><code>(function(a, b) {
+  console.log(a + b);
+})(1, 2); // 3</code></pre>
+<p>还有一种变体是在函数前面加 <code>!</code>、<code>+</code>、<code>-</code> 这类一元运算符，把函数声明强制转成表达式：</p>
+<pre><code>!(function(x, y) {
+  console.log(x * y);
+})(3, 4); // 12</code></pre>
+<p>为什么非要写成这样？因为 <code>function(){}</code> 放在行首会被解析成函数声明，而函数声明不能直接加 <code>()</code> 调用。加括号或加 <code>!</code> 就是告诉解析器"这是个表达式"。逆向时看到 <code>!</code>、<code>+</code>、<code>(</code> 开头的匿名函数，要立刻认出这是 IIFE——这是混淆代码最经典的包裹方式。</p>
+
+<h2>IIFE 为什么能隔离作用域</h2>
+<p>IIFE 内部声明的变量被锁在函数作用域里，外部访问不到：</p>
+<pre><code>(function() {
+  var n = 0;
+  // n 跑在 IIFE 内部，外部访问不到
+})();
+console.log(typeof n); // undefined</code></pre>
+<p>这可以当成"一次性的局部作用域"用。但它有一个局限：IIFE 跑完就没了，无法重复调用。如果想要多个各自独立的计数器，IIFE 做不到——这就需要闭包。</p>
+
+<h2>闭包：外层函数返回内层函数</h2>
+<p>闭包的本质是<strong>一个函数持续引用外层函数的变量</strong>。典型写法是外层函数返回内层函数：</p>
+<pre><code>function getCounter() {
+  var n = 0; // 外层变量
+  function counter() {
+    n++;
+    console.log(n);
+  }
+  return counter;
+}
+
+var c1 = getCounter();
+var c2 = getCounter();
+c1(); // 1
+c1(); // 2
+c2(); // 1（独立的 n）</code></pre>
+<p><code>getCounter()</code> 执行完之后，按理说它的局部变量 <code>n</code> 应该被销毁。但因为返回的 <code>counter</code> 函数始终引用着 <code>n</code>，JS 引擎会把 <code>n</code> 保留在内存里——这就是闭包。每次调用 <code>getCounter()</code> 都会创建一份全新的、独立的 <code>n</code>，所以 <code>c1</code> 和 <code>c2</code> 各自计数、互不干扰。</p>
+
+<h2>闭包的私有性</h2>
+<p>闭包里的变量<strong>外部无法直接访问</strong>，也不污染全局：</p>
+<pre><code>var c = getCounter();
+console.log(c.n); // undefined —— 没有 n 这个属性
+console.log(n);    // ReferenceError —— 全局也没有 n</code></pre>
+<p>想要读到或改掉 <code>n</code>，只能通过闭包暴露出来的 <code>counter</code> 函数。这种"数据藏在函数里"的模式，正是混淆器保护关键变量和函数的标准手段。逆向时如果发现某个变量既不在全局、也不在对象属性上，首先怀疑它被藏在某个闭包里——接下来要做的就是找到持有它的外层函数。</p>
+
+<h2>本节练习</h2>
+
+<div class="quiz" data-question="IIFE 的全称是什么？" data-correct="1" data-explain="IIFE 是 Immediately Invoked Function Expression，即立即调用函数表达式。">
+  <button class="opt">Inline Invoked Function Expression</button>
+  <button class="opt">Immediately Invoked Function Expression</button>
+  <button class="opt">Internal Invoked Function Expression</button>
+  <button class="opt">Indirect Invoked Function Expression</button>
+</div>
+
+<div class="quiz" data-question="为什么 IIFE 常被写成 !(function(){})() 这种形式？" data-correct="2" data-explain="行首的 function 会被解析成函数声明，加 ! 强制转成表达式才能立刻调用。">
+  <button class="opt">为了加快执行速度</button>
+  <button class="opt">为了传参方便</button>
+  <button class="opt">把函数声明强制转成表达式</button>
+  <button class="opt">为了兼容旧浏览器</button>
+</div>
+
+<div class="quiz" data-question="闭包的核心机制是什么？" data-correct="3" data-explain="闭包是内层函数持续引用外层函数的变量，使外层变量不会被销毁。">
+  <button class="opt">函数内部声明全局变量</button>
+  <button class="opt">函数返回 undefined</button>
+  <button class="opt">函数嵌套函数</button>
+  <button class="opt">内层函数引用外层变量</button>
+</div>
+
+<div class="quiz" data-question="两次调用 getCounter() 返回的两个计数器，变量 n 是共享还是独立？" data-correct="0" data-explain="每次调用 getCounter() 都会创建一份全新的 n，所以两个计数器各自独立。">
+  <button class="opt">各自独立</button>
+  <button class="opt">共享同一个 n</button>
+  <button class="opt">第一次独立第二次共享</button>
+  <button class="opt">取决于函数写法</button>
+</div>
+
+<div class="quiz" data-question="闭包里的变量，外部如何访问？" data-correct="2" data-explain="闭包变量对外不可直接访问，只能通过闭包暴露出来的函数间接操作。">
+  <button class="opt">直接通过变量名访问</button>
+  <button class="opt">通过 window.变量名 访问</button>
+  <button class="opt">无法直接访问，只能通过闭包暴露的函数</button>
+  <button class="opt">通过 globalThis 访问</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./scope-chain.html">← 上一步：作用域链与全局污染</a>
+  <a href="./prototype.html">下一步：原型物件与箭头函数 →</a>
+</div>
+
+<div class="footer">看不懂就问你的 agent：闭包是混淆代码藏变量的核心手法，理解闭包才能定位真正的逻辑。</div>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

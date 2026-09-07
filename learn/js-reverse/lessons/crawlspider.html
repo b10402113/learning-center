@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CrawlSpider 全站爬取 — js-reverse</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>CrawlSpider 全站爬取</h1>
+<div class="meta">js-reverse · Step 4/5 · 約 20 分鐘</div>
+
+<h2>這節課你會學到什麼</h2>
+<p>掌握 CrawlSpider 的 <code>rules</code>、<code>LinkExtractor</code> 與 <code>Rule</code> 配合方式，能自動翻頁爬取全站資料，並掌握「列表頁 meta 傳 item + 詳情頁補全」的深度爬取通用套路。</p>
+
+<h2>情境：手動翻頁太麻煩</h2>
+<p>上一節課我們用 <code>scrapy.Request()</code> 手動翻頁：在 <code>parse</code> 裡提取下一頁的 URL，<code>yield</code> 一個新請求，回呼到同一個 <code>parse</code>。這種寫法直覺，但如果全站有 200 頁、每個頁面結構都一樣，手動寫翻頁就顯得重複且容易出錯。</p>
+
+<p>Scrapy 提供一個內建爬蟲類別 <strong>CrawlSpider</strong>，專門處理「按照某種規則自動翻頁、爬全站」的場景。</p>
+
+<h2>CrawlSpider 的建立與核心概念</h2>
+<p>用 <code>scrapy genspider -t crawl</code> 建立一個 CrawlSpider：</p>
+
+<pre><code>scrapy genspider -t crawl myspider www.example.com</code></pre>
+
+<p>和普通 Spider 相比，CrawlSpider 多了一個類變數 <code>rules</code>，裡面放了一組 <code>Rule</code> 物件。每個 <code>Rule</code> 由兩部分組成：</p>
+
+<ul>
+  <li><strong>LinkExtractor</strong>：連結提取器，決定「從頁面裡提取哪些連結」</li>
+  <li><strong>Rule</strong>：規則解析器，決定「對提取到的連結發請求、用哪個回呼解析」</li>
+</ul>
+
+<p>LinkExtractor 與 Rule 一一對應，一個 Rule 就是一條「提取 → 請求 → 解析」的流水線。</p>
+
+<h2>LinkExtractor：提取連結的兩種方式</h2>
+
+<h3>1. 用 allow 正則提取</h3>
+<p><code>allow</code> 接受一個正則表達式，只有符合正則的連結才會被提取。例如：</p>
+
+<pre><code>from scrapy.linkextractors import LinkExtractor
+
+LinkExtractor(allow=r'page=\d+')</code></pre>
+
+<p>會提取所有 URL 裡包含 <code>page=數字</code> 的連結。如果 <code>allow</code> 是空正則（<code>allow=r''</code>），則提取頁面上的所有連結。</p>
+
+<h3>2. 用 restrict_xpaths 按標籤定位提取</h3>
+<p><code>restrict_xpaths</code> 接受一個 XPath 表達式，只在 XPath 選取的區域裡提取連結。例如：</p>
+
+<pre><code>LinkExtractor(restrict_xpaths='//div[@class="pagination"]')</code></pre>
+
+<p>只在分頁器區域裡提取連結，避免提取到其他不相關的連結。</p>
+
+<h2>Rule：對提取到的連結發請求</h2>
+<p><code>Rule</code> 決定對 LinkExtractor 提取到的每個連結怎麼處理：</p>
+
+<pre><code>from scrapy.spiders import Rule
+
+Rule(
+    LinkExtractor(allow=r'page=\d+'),  # 提取器
+    callback='parse_item',             # 用哪個回呼解析
+    follow=True                        # 是否繼續跟進提取到的連結
+)</code></pre>
+
+<ul>
+  <li><code>callback</code>：指定回呼函式，相當於普通 Spider 裡的 <code>parse</code></li>
+  <li><code>follow=True</code>：對提取到的連結，繼續用 rules 裡的其他 Rule 提取下一層連結（預設 <code>False</code>）</li>
+</ul>
+
+<h2>完整範例：多頁爬取</h2>
+<pre><code># spiders/myspider.py
+from scrapy.linkextractors import LinkExtractor
+from scrapy.spiders import CrawlSpider, Rule
+
+class MySpider(CrawlSpider):
+    name = 'myspider'
+    allowed_domains = ['example.com']
+    start_urls = ['https://example.com/page/1']
+
+    rules = (
+        # 提取分頁連結，用 parse_item 解析，繼續跟進
+        Rule(LinkExtractor(allow=r'page=\d+'), callback='parse_item', follow=True),
+    )
+
+    def parse_item(self, response):
+        # 解析每個分頁裡的資料
+        titles = response.xpath('//h2/text()').extract()
+        for title in titles:
+            yield {'title': title}</code></pre>
+
+<p>注意：CrawlSpider 的起始回呼是 <code>parse_start_url</code>，不是 <code>parse</code>。因為 LinkExtractor 提取的分頁連結裡通常不包含第一頁，所以第一頁要用 <code>parse_start_url</code> 解析。</p>
+
+<h2>深度爬取：列表頁 meta 傳 item + 詳情頁補全</h2>
+<p>很多網站的列表頁只顯示摘要（如標題、縮圖），要點進詳情頁才能看到完整內容。CrawlSpider 配合手動 <code>scrapy.Request</code> 的套路：</p>
+
+<pre><code>class MySpider(CrawlSpider):
+    name = 'myspider'
+    start_urls = ['https://example.com/list']
+
+    rules = (
+        Rule(LinkExtractor(allow=r'page=\d+'), callback='parse_list', follow=True),
+    )
+
+    def parse_list(self, response):
+        # 列表頁：提取每條新聞的標題和詳情頁 URL
+        articles = response.xpath('//div[@class="article"]')
+        for article in articles:
+            item = {
+                'title': article.xpath('.//h2/text()').extract_first(),
+            }
+            detail_url = article.xpath('.//a/@href').extract_first()
+            # 手動發請求，用 meta 把 item 傳給詳情頁
+            yield scrapy.Request(detail_url, callback=self.parse_detail, meta={'item': item})
+
+    def parse_detail(self, response):
+        # 詳情頁：從 meta 取出 item，補全內容
+        item = response.meta['item']
+        item['content'] = response.xpath('//div[@class="content"]/text()').extract_first()
+        yield item</code></pre>
+
+<p>這個套路是深度爬取的通用模式：列表頁負責「提取摘要 + 產生詳情頁請求」，詳情頁負責「補全內容 + 輸出 item」。<code>meta={'item': item}</code> 是跨頁傳遞資料的標準做法。</p>
+
+<h2>Scrapy 中四種發請求方式</h2>
+<p>學到這裡，Scrapy 中發送請求的方式已經全部登場：</p>
+
+<ol>
+  <li><code>start_urls</code>：起始 URL，最簡單</li>
+  <li><code>scrapy.Request()</code>：手動發請求，最靈活</li>
+  <li><code>scrapy.FormRequest()</code>：發 POST 請求（如登入表單）</li>
+  <li><code>Rule</code> 規則解析器：CrawlSpider 專用，自動翻頁</li>
+</ol>
+
+<h2>小結</h2>
+<p>CrawlSpider 用 LinkExtractor 按正則或 XPath 提取連結，用 Rule 對每個連結發請求並解析，從而自動翻頁爬全站。<code>parse_start_url</code> 解析第一頁，<code>follow=True</code> 讓提取到的連結繼續被規則處理。配合 <code>meta={'item': item}</code> 手動發請求，可以完成「列表頁提取摘要 → 詳情頁補全內容」的深度爬取。</p>
+
+<div class="lesson-nav">
+  <div><a href="./selenium-response.html">← 上一步：中間件結合 Selenium 篡改回應</a></div>
+  <div><a href="./distributed-incremental.html">下一步：分散式與增量式爬蟲 →</a></div>
+</div>
+
+<div class="quiz" data-question="CrawlSpider 中，LinkExtractor 和 Rule 的關係是什麼？" data-correct="1" data-explain="LinkExtractor 負責提取連結，Rule 負責對提取到的連結發請求並解析，兩者一一對應。">
+  <button class="opt">LinkExtractor 發請求，Rule 解析回應</button>
+  <button class="opt">LinkExtractor 提取連結，Rule 發請求並解析</button>
+  <button class="opt">LinkExtractor 解析回應，Rule 提取連結</button>
+  <button class="opt">兩者沒有關係</button>
+</div>
+
+<div class="quiz" data-question="LinkExtractor 的 allow 參數接受什麼？" data-correct="0" data-explain="allow 接受一個正則表達式，只有符合正則的連結才會被提取。">
+  <button class="opt">正則表達式</button>
+  <button class="opt">XPath 表達式</button>
+  <button class="opt">CSS 選擇器</button>
+  <button class="opt">URL 字串</button>
+</div>
+
+<div class="quiz" data-question="CrawlSpider 的起始頁應該用哪個回呼解析？" data-correct="2" data-explain="LinkExtractor 提取的分頁連結通常不包含第一頁，所以第一頁要用 parse_start_url 解析。">
+  <button class="opt">parse</button>
+  <button class="opt">parse_item</button>
+  <button class="opt">parse_start_url</button>
+  <button class="opt">parse_list</button>
+</div>
+
+<div class="quiz" data-question="深度爬取中，meta={'item': item} 的作用是什麼？" data-correct="3" data-explain="Moonshot AI跨頁傳遞資料的標準做法，列表頁把 item 傳給詳情頁補全。">
+  <button class="opt">設定請求的標頭</button>
+  <button class="opt">設定請求的 Cookie</button>
+  <button class="opt">設定請求的代理</button>
+  <button class="opt">跨頁傳遞資料</button>
+</div>
+
+<div class="quiz" data-question="Rule 的 follow=True 代表什麼？" data-correct="1" data-explain="follow=True 表示對提取到的連結，繼續用 rules 裡的其他 Rule 提取下一層連結。">
+  <button class="opt">繼續解析當前頁面的所有連結</button>
+  <button class="opt">對提取到的連結繼續用 rules 提取下一層</button>
+  <button class="opt">自動關閉爬蟲</button>
+  <button class="opt">跳過當前連結</button>
+</div>
+
+<div class="footer">
+  js-reverse · 中間件、CrawlSpider 與分散式 · Step 4/5
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

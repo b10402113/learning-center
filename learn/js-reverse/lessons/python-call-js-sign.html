@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>execjs 编译与调用：Python 调 JS 拿 sign</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>execjs 编译与调用：Python 调 JS 拿 sign</h1>
+<p class="meta">实战：sign 逆向（JS 执行） · 步骤 3/5</p>
+
+<h2>学习目标</h2>
+<p>能用 execjs.compile 加载 JS 文件并调用 get_sign 函数，完成有道翻译 sign 请求。</p>
+
+<h2>execjs 的三步调用链</h2>
+<p>execjs 的固定套路只有三步，记住就不会乱：</p>
+<ol>
+  <li><strong>compile</strong>：把 JS 代码（字符串或文件内容）编译成可调用的上下文对象</li>
+  <li><strong>call</strong>：按函数名调用 JS 函数，参数直接往后传</li>
+  <li><strong>拿返回值</strong>：JS 函数的返回值自动转成 Python 类型（数字、字符串、列表、字典）</li>
+</ol>
+
+<h2>第一步：compile 编译 JS</h2>
+<p>execjs 支持两种编译方式。第一种是直接传 JS 代码字符串：</p>
+<pre><code>import execjs
+
+js_code = """
+const crypto = require("crypto");
+function get_sign(t) {
+    const signStr = `client=fanyideskweb&mysticTime=${t}&product=webfanyi&key=fsdsogkndfokasodnaso`;
+    return crypto.createHash("md5").update(signStr).digest("hex");
+}
+"""
+js_compile = execjs.compile(js_code)</code></pre>
+<p>第二种是读取 JS 文件后编译，这在实际逆向中更常见——你抠出来的 JS 代码通常保存在文件里：</p>
+<pre><code>import execjs
+
+with open("03 有道翻译.js", encoding="utf-8") as f:
+    js_compile = execjs.compile(f.read())</code></pre>
+<p>两种方式得到的 <code>js_compile</code> 是同一个东西：一个可调用的上下文对象。</p>
+
+<h2>第二步：call 调用 JS 函数</h2>
+<p><code>call()</code> 的第一个参数是 JS 函数的名称（字符串），后面的参数会原样传给 JS 函数：</p>
+<pre><code>import time
+
+# 获取当前毫秒时间戳
+t = int(time.time() * 1000)
+
+# 调用 JS 函数，返回 sign
+sign = js_compile.call("get_sign", t)
+print("sign:", sign)</code></pre>
+<p>如果 JS 函数返回的是数组（比如 <code>return [sign, e]</code>），execjs 会自动把它转成 Python 列表：</p>
+<pre><code>result = js_compile.call("get_sign")
+sign = result[0]   # 签名字符串
+timestamp = result[1]  # 时间戳
+print(f"sign={sign}, time={timestamp}")</code></pre>
+
+<h2>第三步：发请求</h2>
+<p>拿到 sign 后，剩下的就是标准的 requests 流程：把 sign 和时间戳塞进 POST 请求体，发给有道翻译接口：</p>
+<pre><code>import requests
+
+url = "https://dict.youdao.com/webtranslate"
+data = {
+    "i": "dog",
+    "from": "AUTO",
+    "to": "AUTO",
+    "domain": "0",
+    "dictResult": "true",
+    "keyid": "webfanyi",
+    "sign": sign,
+    "client": "fanyideskweb",
+    "product": "webfanyi",
+    "appVersion": "1.0.0",
+    "vendor": "web",
+    "pointParam": "client,mysticTime,product",
+    "mysticTime": t,
+    "keyfrom": "fanyi.web"
+}
+
+resp = requests.post(url, data=data)
+print(resp.text[:200])  # 打印前 200 字符</code></pre>
+
+<h2>完整脚本</h2>
+<p>把上面三步拼起来，就是一个完整的有道翻译请求脚本：</p>
+<pre><code>import execjs
+import requests
+import time
+
+# 1. 编译 JS
+with open("03 有道翻译.js", encoding="utf-8") as f:
+    js_compile = execjs.compile(f.read())
+
+# 2. 调用 JS 获取 sign
+t = int(time.time() * 1000)
+sign = js_compile.call("get_sign", t)
+
+# 3. 发请求
+url = "https://dict.youdao.com/webtranslate"
+data = {
+    "i": "dog",
+    "from": "AUTO",
+    "to": "AUTO",
+    "client": "fanyideskweb",
+    "product": "webfanyi",
+    "sign": sign,
+    "mysticTime": t,
+    "keyfrom": "fanyi.web",
+    # ... 其他参数省略
+}
+resp = requests.post(url, data=data)
+print(resp.text[:200])</code></pre>
+
+<h2>常见踩坑</h2>
+<ul>
+  <li><strong>JS 文件编码问题</strong>：Windows 上抠出来的 JS 文件可能是 GBK 编码，用 <code>encoding="utf-8"</code> 打开会报错。遇到乱码时试试 <code>encoding="gbk"</code> 或用 <code>errors="ignore"</code>。</li>
+  <li><strong>node 未安装</strong>：execjs 找不到 JS 运行时会抛出 <code>RuntimeError: Could not find a runtime</code>。Mac 上装 node 最简单的方式是 <code>brew install node</code>。</li>
+  <li><strong>JS 代码依赖浏览器对象</strong>：如果 JS 里用了 <code>window</code>、<code>document</code>，在 node 里跑会报错。这时需要补环境（后面节点会讲），先把这些对象声明为空对象即可：<code>const window = {};</code></li>
+</ul>
+
+<h2>小结</h2>
+<p>execjs 的调用链就三步：compile 编译 → call 传参调用 → 拿返回值。sign 生成逻辑原封不动留在 JS 里，Python 只负责拿结果发请求。下一步，我们把 AES 解密逻辑也搬到 JS 里。</p>
+
+<h2>测验</h2>
+
+<div class="quiz" data-question="execjs.compile() 的参数应该是什么类型？" data-correct="1" data-explain="compile() 接收一个 JS 代码字符串，可以是直接写的字符串，也可以是读取文件得到的内容。">
+  <button class="opt">一个 URL 地址</button>
+  <button class="opt">一个 JS 代码字符串</button>
+  <button class="opt">一个 Python 字典</button>
+  <button class="opt">一个 execjs 对象</button>
+</div>
+
+<div class="quiz" data-question="js_compile.call('get_sign', t) 中，参数 t 会怎样传给 JS 函数？" data-correct="0" data-explain="call() 的第二个及之后的参数会原样传给 JS 函数，所以 t 会成为 get_sign 的第一个形参。">
+  <button class="opt">作为 get_sign 的第一个形参传入</button>
+  <button class="opt">作为字符串拼接进函数名</button>
+  <button class="opt">作为全局变量自动注入</button>
+  <button class="opt">作为回调函数传入</button>
+</div>
+
+<div class="quiz" data-question="JS 函数返回 [sign, e]，在 Python 里会变成什么？" data-correct="2" data-explain="execjs 会把 JS 数组自动转成 Python 列表，JS 对象转成 Python 字典。">
+  <button class="opt">Python 元组 (sign, e)</button>
+  <button class="opt">Python 字符串 "[sign, e]"</button>
+  <button class="opt">Python 列表 [sign, e]</button>
+  <button class="opt">Python 字典 {0: sign, 1: e}</button>
+</div>
+
+<div class="quiz" data-question="execjs 运行时，如果系统里没有 node，会报什么错？" data-correct="3" data-explain="execjs 找不到 JS 运行时会抛出 RuntimeError: Could not find a runtime。">
+  <button class="opt">SyntaxError</button>
+  <button class="opt">ModuleNotFoundError</button>
+  <button class="opt">TypeError</button>
+  <button class="opt">RuntimeError</button>
+</div>
+
+<div class="quiz" data-question="以下哪种操作是 execjs 做不到的？" data-correct="1" data-explain="execjs 只能调用 JS 函数并拿返回值，不能在 Python 里直接修改 JS 的全局变量。">
+  <button class="opt">调用 JS 函数并获取返回值</button>
+  <button class="opt">在 Python 里直接修改 JS 的全局变量</button>
+  <button class="opt">传递整数和字符串参数给 JS 函数</button>
+  <button class="opt">执行一段 JS 代码字符串</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./js-side-sign.html">← 上一步：JS 侧 sign 生成</a>
+  <a href="./js-side-decrypt.html">下一步：JS 侧 AES 解密 →</a>
+</div>
+
+<div class="footer">实战：sign 逆向（JS 执行） · 步骤 3/5</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>
