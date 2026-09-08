@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>視窗調整的標準做法 — three-js</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <main class="lesson">
+    <header class="lesson-header">
+      <p class="eyebrow">Step 1 / 4</p>
+      <h1>視窗調整的標準做法</h1>
+      <p class="goal">學會用 resize 事件更新渲染器尺寸與攝影機比例，讓視窗放大縮小時畫面不變形。</p>
+    </header>
+
+    <section class="concept">
+      <h2>為什麼畫面不會跟著視窗變大</h2>
+      <p>你第一次建立 <code>WebGLRenderer</code> 時，給了它一個寬度和高度。從那一刻起，渲染器就認定了這個尺寸——不管使用者怎麼拉動瀏覽器視窗，它都畫著同一張固定大小的圖片。結果不是畫面被裁切，就是旁邊多出一圈黑邊。</p>
+      <p>問題出在兩個地方：渲染器不知道新的視窗大小，攝影機也不知道。你必須在視窗改變時，主動告訴它們。</p>
+    </section>
+
+    <section class="concept">
+      <h2>三步更新法</h2>
+      <p>視窗大小改變時，必須依序做三件事，缺一不可：</p>
+      <ol>
+        <li><strong>更新渲染器尺寸</strong>：<code>renderer.setSize(width, height)</code> 告訴渲染器新的畫布大小。</li>
+        <li><strong>更新攝影機長寬比</strong>：<code>camera.aspect = width / height</code> 告訴攝影機新的畫面比例。</li>
+        <li><strong>重算投影矩陣</strong>：<code>camera.updateProjectionMatrix()</code> 讓攝影機把新的長寬比套用到 3D 投影計算裡。</li>
+      </ol>
+      <p>很多人忘了第三步。<code>camera.aspt</code> 只是一個數字，改了不會自動生效；一定要呼叫 <code>updateProjectionMatrix()</code>，Three.js 才會根據新數字重新算出物體在畫面上的位置。</p>
+    </section>
+
+    <section class="concept">
+      <h2>放在對的地方：resize 事件</h2>
+      <p>把這三步放進 <code>window.addEventListener('resize', ...)</code> 回呼函式裡，就能確保只在視窗真正改變時才執行，而不是每一幀都跑一遍。</p>
+      <pre><code>window.addEventListener('resize', () => {
+  // 1. 更新渲染器
+  renderer.setSize(window.innerWidth, window.innerHeight);
+
+  // 2. 更新攝影機長寬比
+  camera.aspect = window.innerWidth / window.innerHeight;
+
+  // 3. 重算投影矩陣
+  camera.updateProjectionMatrix();
+});</code></pre>
+      <p>這個模式就是 Three.js 官方範例用的標準做法。記住：<strong>改完 aspect，一定要 updateProjectionMatrix()</strong>。</p>
+    </section>
+
+    <section class="concept">
+      <h2>什麼時候不該用這個模式</h2>
+      <p>如果你需要「每幀都根據目前視窗大小微調」（例如搭配某些 UI 動畫），可以把尺寸更新放進渲染迴圈裡。但大多數情況下，resize 事件就夠了，而且效能更好。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+
+      <div class="quiz" data-question="視窗放大後，畫面出現黑邊。最可能的原因是什麼？" data-correct="2" data-explain="渲染器只記得建立時的尺寸，必須在 resize 時重新呼叫 setSize() 才能填滿新視窗。">
+        <button class="opt">攝影機位置跑掉了</button>
+        <button class="opt">GPU 記憶體不足</button>
+        <button class="opt">渲染器尺寸沒有跟著視窗更新</button>
+        <button class="opt">Scene 裡的物件被移走了</button>
+      </div>
+
+      <div class="quiz" data-question="更新 camera.aspect 之後，畫面仍然變形。下一步應該做什麼？" data-correct="0" data-explain="aspect 只是數字，必須呼叫 updateProjectionMatrix() 讓 Three.js 重算投影。">
+        <button class="opt">呼叫 camera.updateProjectionMatrix()</button>
+        <button class="opt">重新建立一個新的 PerspectiveCamera</button>
+        <button class="opt">把 renderer.setSize() 再呼叫一次</button>
+        <button class="opt">清除 canvas 上的內容</button>
+      </div>
+
+      <div class="quiz" data-question="為什麼 resize 邏輯應該放在 window 的 resize 事件裡，而不是放進渲染迴圈？" data-correct="1" data-explain="視窗大小不會每幀都變，用事件監聽只在需要時執行，避免浪費運算資源。">
+        <button class="opt">渲染迴圈不能存取 window 物件</button>
+        <button class="opt">視窗大小不會每幀都變，用事件監聽更有效率</button>
+        <button class="opt">resize 事件才能拿到正確的 innerWidth</button>
+        <button class="opt">渲染迴圈會阻塞 resize 事件</button>
+      </div>
+
+      <div class="quiz" data-question="renderer.setSize() 的作用是什麼？" data-correct="3" data-explain="setSize 同時更新 canvas 的 CSS 尺寸和繪圖緩衝區大小，讓渲染器知道要畫多大。">
+        <button class="opt">移動物件在畫面上的位置</button>
+        <button class="opt">改變攝影機的視野範圍</button>
+        <button class="opt">調整場景的亮度</button>
+        <button class="opt">設定渲染器要繪製的畫布尺寸</button>
+      </div>
+
+      <div class="quiz" data-question="如果只更新 renderer.setSize() 和 camera.aspect，卻忘了 updateProjectionMatrix()，會發生什麼事？" data-correct="0" data-explain="aspect 改了但沒重算投影，攝影機仍然用舊的長寬比畫圖，畫面會變形。">
+        <button class="opt">畫面比例錯誤，物件看起來被壓扁或拉長</button>
+        <button class="opt">瀏覽器會報錯</button>
+        <button class="opt">畫面完全空白</button>
+        <button class="opt">渲染器會自動補上 updateProjectionMatrix()</button>
+      </div>
+    </section>
+
+    <footer class="lesson-footer">
+      <div class="lesson-nav">
+        <span class="nav-left"></span>
+        <a class="nav-right" href="./aliasing-cause.html">下一步：為什麼邊緣會出現鋸齒？ →</a>
+      </div>
+      <p class="feedback">有問題？隨時問你的老師。</p>
+    </footer>
+  </main>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

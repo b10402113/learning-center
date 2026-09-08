@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>requestAnimationFrame 渲染迴圈 — three-js</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <main class="lesson">
+    <header class="lesson-header">
+      <p class="eyebrow">Step 2 / 4</p>
+      <h1>requestAnimationFrame 渲染迴圈</h1>
+      <p class="goal">掌握 requestAnimationFrame 的遞迴呼叫模式，理解它如何與螢幕刷新率同步、為什麼比 setInterval 和 while 迴圈更適合做渲染。</p>
+    </header>
+
+    <section class="concept">
+      <h2>螢幕有自己的節奏</h2>
+      <p>你的螢幕不是「隨時都在刷」，而是每隔一段時間重畫一次——這個頻率叫刷新率。多數螢幕是 60Hz（每秒 60 次），高階螢幕可能是 120Hz 或 240Hz，部分省電裝置只有 30Hz。每一次刷新，瀏覽器都有極短的一次機會可以塞進一張新畫面。</p>
+      <p>渲染迴圈的任務，就是每次都搶在刷新之前算好一張圖，交給瀏覽器。算太慢會掉幀，算太快則徒勞無功——因為螢幕還沒準備好接收下一張。</p>
+    </section>
+
+    <section class="concept">
+      <h2>先看看「錯」的方法</h2>
+      <p>最先想到的可能是 <code>setInterval</code>：</p>
+      <pre><code>function animate() {
+  cube.rotation.x += 0.01;
+  renderer.render(scene, camera);
+}
+setInterval(animate, 16); // 嘗試每秒跑 60 次</code></pre>
+      <blockquote class="bad-code">這個寫法看起來合理，其實有兩個致命問題。</blockquote>
+      <p><strong>第一，時間不精確。</strong><code>setInterval</code> 只保證「至少」等 16 毫秒，實際觸發時間會被其他任務排擠。當瀏覽器忙碌時，迴圈可能跑得比預期慢，畫面就會卡頓。</p>
+      <p><strong>第二，與刷新率脫鉤。</strong>60Hz 的螢幕每 16.67 毫秒刷一次，但 120Hz 的螢幕每 8.33 毫秒刷一次。你無法用一個固定數字同時適配兩種螢幕。</p>
+    </section>
+
+    <section class="concept">
+      <h2>while 迴圈更糟</h2>
+      <p>有人可能會想：那用 <code>while (true)</code> 不斷跑呢？</p>
+      <pre><code>while (true) {
+  animate();
+}</code></pre>
+      <p>這會立刻卡死瀏覽器。JavaScript 是單執行緒，<code>while (true)</code> 永遠不還手控制权，瀏覽器既無法回應點擊、也無法重繪畫面、更無法執行其他腳本。頁面就此定格，只能強制關閉分頁。</p>
+    </section>
+
+    <section class="concept">
+      <h2>瀏覽器給的專屬門票</h2>
+      <p><code>requestAnimationFrame</code>（簡稱 rAF）是瀏覽器專門為動畫設計的 API。它的運作方式優雅：</p>
+      <ol>
+        <li>你呼叫 <code>requestAnimationFrame(animate)</code>，告訴瀏覽器「下次刷新前，請幫我跑這個函式」。</li>
+        <li>瀏覽器在下一次刷新之前、最恰當的時間點呼叫你的 <code>animate</code>。</li>
+        <li>你在 <code>animate</code> 裡面做完狀態更新和渲染後，再次呼叫 <code>requestAnimationFrame(animate)</code>，排隊等下一次刷新。</li>
+      </ol>
+      <p>這個遞迴模式確保每一幀只跑一次 <code>animate</code>，而且與螢幕刷新率完美同步。</p>
+    </section>
+
+    <section class="concept">
+      <h2>最小渲染迴圈</h2>
+      <p>實際的程式碼非常短：</p>
+      <pre><code>function animate() {
+  requestAnimationFrame(animate);  // 預約下一幀
+  cube.rotation.x += 0.01;         // 1. 更新狀態
+  renderer.render(scene, camera);  // 2. 渲染
+}
+
+animate();  // 啟動迴圈</code></pre>
+      <p>注意第一行就預約了下一幀——這不是浪費，而是確保迴圈永遠不會停。只要頁面還開著，<code>animate</code> 就會一直被呼叫。</p>
+    </section>
+
+    <section class="concept">
+      <h2>rAF 的額外好處</h2>
+      <ul>
+        <li><strong>背景分頁自動暫停</strong>：當瀏覽器分頁被切換到背景，rAF 會暫停呼叫，不浪費電力和 CPU。</li>
+        <li><strong>自動適配刷新率</strong>：60Hz 的螢幕每秒約跑 60 次 <code>animate</code>，120Hz 的螢幕自動變成 120 次，不需要你寫任何判斷。</li>
+        <li><strong>不阻塞渲染</strong>：rAF 的回呼（callback）被安排在渲染管線中，不會像 <code>setTimeout</code> 那樣被其他任務延遲。</li>
+      </ul>
+    </section>
+
+    <section class="concept">
+      <h2>為什麼不寫成 setTimeout</h2>
+      <blockquote class="good-code"><code>setTimeout(animate, 1000 / 60)</code> 勉強能用，但終究是妥協：它不知道螢幕何時刷新、無法暫停在背景分頁、也無法適配 120Hz 螢幕。<code>requestAnimationFrame</code> 是瀏覽器原生方案，永遠是首選。</blockquote>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+
+      <div class="quiz" data-question="為什麼不建議用 setInterval 做渲染迴圈？" data-correct="0" data-explain="setInterval 無法精確匹配螢幕刷新率，會被其他任務排擠，導致畫面卡頓或與刷新率脫鉤。">
+        <button class="opt">它的時間不精確，且無法與螢幕刷新率同步</button>
+        <button class="opt">它会让瀏覽器分頁自動關閉</button>
+        <button class="opt">它只能在 Node.js 環境執行</button>
+        <button class="opt">它會強制清除 GPU 記憶體</button>
+      </div>
+
+      <div class="quiz" data-question="while (true) { animate(); } 為什麼會卡死瀏覽器？" data-correct="2" data-explain="JavaScript 單執行緒，while(true) 永不還手控制权，瀏覽器無法執行其他任務。">
+        <button class="opt">它會把 GPU 燒壞</button>
+        <button class="opt">它會耗盡電腦記憶體</button>
+        <button class="opt">它永遠不還手控制权，瀏覽器無法回應其他事件</button>
+        <button class="opt">它會把 canvas 清空</button>
+      </div>
+
+      <div class="quiz" data-question="requestAnimationFrame 的正確啟動模式是什麼？" data-correct="1" data-explain="在 animate 函式內部再次呼叫 requestAnimationFrame(animate)，形成遞迴預約，讓瀏覽器在每一幀都跑一次 animate。">
+        <button class="opt">在 animate 函式外只呼叫一次 requestAnimationFrame</button>
+        <button class="opt">animate 函式內部再次呼叫 requestAnimationFrame 預約下一幀</button>
+        <button class="opt">用 for 迴圈連續呼叫 60 次 requestAnimationFrame</button>
+        <button class="opt">在 setTimeout 回呼裡呼叫 requestAnimationFrame</button>
+      </div>
+
+      <div class="quiz" data-question="一個 120Hz 的螢幕，使用 requestAnimationFrame 時每秒大約會跑幾次 animate？" data-correct="3" data-explain="rAF 與螢幕刷新率同步，120Hz 螢幕每秒刷新 120 次，animate 也會被呼叫約 120 次。">
+        <button class="opt">30 次</button>
+        <button class="opt">60 次</button>
+        <button class="opt">100 次</button>
+        <button class="opt">120 次</button>
+      </div>
+
+      <div class="quiz" data-question="當瀏覽器分頁被切到背景時，requestAnimationFrame 會如何？" data-correct="0" data-explain="rAF 在背景分頁會自動暫停，避免浪費電力與 CPU，这是 setTimeout 做不到的。">
+        <button class="opt">自動暫停呼叫，切回前景後續繼續</button>
+        <button class="opt">繼續全速執行，消耗更多電力</button>
+        <button class="opt">立刻停止，永遠不再恢復</button>
+        <button class="opt">把畫幀率降為每秒一次</button>
+      </div>
+    </section>
+
+    <footer class="lesson-footer">
+      <div class="lesson-nav">
+        <a class="nav-left" href="./why-render-loop.html">← 上一步：為什麼需要渲染迴圈</a>
+        <a class="nav-right" href="./clock-and-delta.html">下一步：THREE.Clock 與影格獨立時間 →</a>
+      </div>
+      <p class="feedback">有問題？隨時問你的老師。</p>
+    </footer>
+  </main>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

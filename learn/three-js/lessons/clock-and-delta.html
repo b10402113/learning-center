@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>THREE.Clock 與影格獨立時間 — three-js</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <main class="lesson">
+    <header class="lesson-header">
+      <p class="eyebrow">Step 3 / 4</p>
+      <h1>THREE.Clock 與影格獨立時間</h1>
+      <p class="goal">理解 THREE.Clock 如何提供 getDelta() 與 getElapsedTime()，並用 delta 實現影格率獨立的動畫。</p>
+    </header>
+
+    <section class="concept">
+      <h2>一個陷阱</h2>
+      <p>我們在上一課建立的渲染迴圈裡寫了：</p>
+      <pre><code>cube.rotation.x += 0.01;</code></pre>
+      <p>這段程式碼看起來沒問題，但其實藏著一個陷阱：它假設每一幀的時間間隔是固定不變的。事實上，在 60Hz 螢幕上每幀約 16.67 毫秒，但 30Hz 的舊手機可能只有 33.33 毫秒，而效能低落時甚至會掉到 50 毫秒。</p>
+      <p>結果就是：同一台裝置上動畫速度一致，但換到不同裝置上就變得忽快忽慢。在 120Hz 螢幕上，同樣的 <code>+= 0.01</code> 會讓方塊旋轉速度快一倍——因為它每秒跑了 120 次，而不是 60 次。</p>
+    </section>
+
+    <section class="concept">
+      <h2>影格率獨立（frame-rate independent）</h2>
+      <p>我們要的是一種動畫方式，讓物體的<strong>真實移動速率</strong>不隨裝置的影格率而改變。無論你在 30Hz 的平板、60Hz 的桌機、還是 120Hz 的高刷螢幕上，物體的移動速度都一樣。</p>
+      <p>做法很簡單：用「自從上一幀過了多少時間」來調整每幀的增量。時間間隔大就多移一點，時間間隔小就少移一點，總速率不變。</p>
+      <p>這個「上一幀到這一幀的時間差」叫做 <strong>delta time</strong>（影格時間差），在 Three.js 裡由 <code>THREE.Clock</code> 類別提供。</p>
+    </section>
+
+    <section class="concept">
+      <h2>THREE.Clock 是什麼？</h2>
+      <p><code>THREE.Clock</code> 是 Three.js 內建的計時器工具。你建立一個 Clock 物件後，它會從建立的瞬間開始計時，並提供兩個方法：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>方法</th>
+            <th>回傳值</th>
+            <th>用途</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>clock.getDelta()</code></td>
+            <td>自從上次呼叫後經過的秒數（浮點數）</td>
+            <td>取得影格時間差，用於計算每幀增量</td>
+          </tr>
+          <tr>
+            <td><code>clock.getElapsedTime()</code></td>
+            <td>從 Clock 建立以來的總經過秒數</td>
+            <td>用於週期性動畫（sin/cos）的時間參數</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <pre><code>const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const delta = clock.getDelta();  // 上一幀到這一幀的時間差（秒）
+
+  cube.rotation.x += 0.5 * delta;  // 每秒旋轉 0.5 弧度，不受影格率影響
+
+  renderer.render(scene, camera);
+}</code></pre>
+
+      <p>無論裝置跑 30fps 還是 120fps，<code>delta</code> 會自動調整大小，所以 <code>0.5 * delta</code> 累積起來每秒永遠等於 0.5 弧度。</p>
+    </section>
+
+    <section class="concept">
+      <h2>getDelta() vs getElapsedTime()</h2>
+      <p>兩個方法適用不同場景：</p>
+      <ul>
+        <li><strong><code>getDelta()</code></strong>：適合持續性的運動——旋轉、平移、沿路徑前進。你把 delta 乘上一個速率，物體就以那個速率移動，不隨裝置而異。</li>
+        <li><strong><code>getElapsedTime()</code></strong>：適合週期性的動畫——用 <code>Math.sin(time)</code> 做上下振盪、用 <code>Math.cos(time)</code> 做圓周運動。時間自然增長，不需要手動累計。</li>
+      </ul>
+      <p>注意：呼叫 <code>getDelta()</code> 時 Clock 內部的計時器會重設；呼叫 <code>getElapsedTime()</code> 則不會。兩者不要混在同一幀裡各自想當然——要知道它們各自影響 Clock 的內部狀態。</p>
+    </section>
+
+    <section class="concept">
+      <h2>為什麼不手算 delta？</h2>
+      <p>你也可以自己手算：</p>
+      <pre><code>let prevTime = performance.now();
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const now = performance.now();
+  const delta = (now - prevTime) / 1000;
+  prevTime = now;
+
+  cube.rotation.x += 0.5 * delta;
+  renderer.render(scene, camera);
+}</code></pre>
+      <p>這和 <code>THREE.Clock</code> 的效果完全相同。Clock 只是把這套邏輯包裝好了，讓你少寫幾行，也不會忘記除以 1000（performance.now 回傳的是毫秒）。</p>
+    </section>
+
+    <section class="concept">
+      <h2>常見誤區</h2>
+      <blockquote class="bad-code"><code>cube.rotation.x += 0.01; // 沒有乘 delta — 不是影格率獨立</code></blockquote>
+      <p>這是最常見的錯誤。在效能好的裝置上跑得順，換到舊手機就突然慢了一半。只要涉及「持續改變數值」，都應該乘上 <code>delta</code>。</p>
+      <blockquote class="good-code"><code>cube.rotation.x += 0.5 * delta; // 影格率獨立 ✓</code></blockquote>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+
+      <div class="quiz" data-question="cube.rotation.x += 0.01 沒有乘 delta，會造成什麼後果？" data-correct="2" data-explain="不乘 delta 時，旋轉量固定每幀加 0.01，影格率高的裝置旋轉更快，影格率低的裝置旋轉更慢。">
+        <button class="opt">方塊會完全不轉</button>
+        <button class="opt">方塊會轉得更快</button>
+        <button class="opt">不同影格率的裝置旋轉速度不同</button>
+        <button class="opt">瀏覽器會報錯</button>
+      </div>
+
+      <div class="quiz" data-question="clock.getDelta() 回傳的是什麼？" data-correct="1" data-explain="getDelta() 回傳自從上次呼叫經過的秒數（浮點數）。">
+        <button class="opt">Clock 建立以來的總秒數</button>
+        <button class="opt">自從上次呼叫後經過的秒數</button>
+        <button class="opt">螢幕的刷新率</button>
+        <button class="opt">目前的 FPS</button>
+      </div>
+
+      <div class="quiz" data-question="用 Math.sin(clock.getElapsedTime()) 做振盪動畫，為什麼不需要手動累計時間？" data-correct="0" data-explain="getElapsedTime() 自動回傳 Clock 建立以來的總經過時間，自然遞增，不需要自己累加。">
+        <button class="opt">getElapsedTime() 自動累計從 Clock 建立到現在的總時間</button>
+        <button class="opt">sin 函式自己會計時</button>
+        <button class="opt">瀏覽器會自動累加時間值</button>
+        <button class="opt">使用 getTime() 取得的也是累計時間</button>
+      </div>
+
+      <div class="quiz" data-question="下列哪個寫法是影格率獨立的動畫？" data-correct="3" data-explain="乘上 delta 可確保每秒的總增量固定，不受影格率影響。">
+        <button class="opt">mesh.position.x += 1</button>
+        <button class="opt">mesh.position.x += 0.1</button>
+        <button class="opt">mesh.rotation.y++</button>
+        <button class="opt">mesh.position.x += 2.0 * delta</button>
+      </div>
+
+      <div class="quiz" data-question="THREE.Clock 在建立後，getDelta() 的第一次回傳值通常非常接近什麼？" data-correct="0" data-explain="Clock 在建立時記錄當下時間，第一次呼叫 getDelta() 時經過的時間極短（接近 0）。">
+        <button class="opt">0（因為 Clock 剛建立）</button>
+        <button class="opt">1.0（預設值）</button>
+        <button class="opt">1000（毫秒換算為秒）</button>
+        <button class="opt">Infinity（無限大）</button>
+      </div>
+    </section>
+
+    <footer class="lesson-footer">
+      <div class="lesson-nav">
+        <a class="nav-left" href="./request-animation-frame.html">← 上一步：requestAnimationFrame 渲染迴圈</a>
+        <a class="nav-right" href="./complete-render-loop.html">下一步：完整渲染迴圈與 controls.update() →</a>
+      </div>
+      <p class="feedback">有問題？隨時問你的老師。</p>
+    </footer>
+  </main>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

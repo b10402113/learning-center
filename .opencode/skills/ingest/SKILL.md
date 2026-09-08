@@ -13,11 +13,11 @@ Prereqs: `learn/<subject>/MEMORY.md` exists, `learn/<subject>/ROADMAP.md` exists
 
 ## Step 1 — Detect new sources
 
-Inventory `sources/<subject>/`. Collect every **file** at the top level (skip subdirectories, `.DS_Store`). These are the candidates. Then filter out any that have already been processed:
+Inventory `sources/<subject>/` recursively. Collect every **file** at any depth, skipping `.DS_Store`. These are the candidates. Then filter out any that have already been processed:
 
 1. Create `sources/<subject>/YYYYMMDD/` (today's date) if missing.
-2. For each candidate file, check if `sources/<subject>/<any-date-folder>/<filename>` already exists in any dated subfolder. If it does, skip it — it was ingested in a prior run.
-3. Move the remaining (unprocessed) files into `sources/<subject>/YYYYMMDD/` keeping the original filename unchanged. Use `mv`, not copy.
+2. For each candidate file, compute its relative path from `sources/<subject>/` (e.g. `chapter-notes/fig1.png` for a file in a subdirectory, or just `notes.pdf` for a top-level file). Check if `sources/<subject>/<any-date-folder>/<relative-path>` already exists in any dated subfolder. If it does, skip it — it was ingested in a prior run.
+3. Move the remaining (unprocessed) files into `sources/<subject>/YYYYMMDD/<relative-path>`. Use `mv`, not copy. If the relative path includes subdirectories, create them under the dated folder first (`mkdir -p`).
 
 If no files needed moving (all were already in dated subfolders), say so and stop.
 
@@ -31,6 +31,8 @@ For sources needing a digest:
 
 1. Follow `docs/reference/source-reading.md`. Check size via `pdftotext | wc -l`. Large sources (> 5,000 lines or > ~250 KB): parallel sub-agents write part digests to `learn/<subject>/digests/<stem>.<n>.part.md`, then merge into `<stem>.md`. Small sources: read directly in context, write the digest.
 2. Record `source_hash`, `source_lines`, `L1` overview, and `L2` section detail with locators.
+
+When citing a source that came from a subdirectory, preserve its relative path inside the dated folder in source links: `[[sources/<subject>/YYYYMMDD/chapter-notes/fig1.png]]` rather than flattening to the filename alone.
 
 If all newly archived sources already have current digests (hash match), say so — their content will still be included in the integration analysis in step 4.
 

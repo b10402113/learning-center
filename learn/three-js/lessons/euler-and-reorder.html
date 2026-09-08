@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>Euler 角度與旋轉順序 — three-js/transforms</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Euler 角度與旋轉順序</h1>
+<p class="meta">three-js / transforms / step 3 — 約 10 分鐘</p>
+
+<h2>Learning goal</h2>
+<p>理解 <code>rotation</code> 是 Euler 弧度，能轉換度數並用 <code>reorder</code> 修正旋轉順序。</p>
+
+<h2>Lesson</h2>
+
+<p>上一節提到 <code>rotation</code> 是 Euler（歐拉角），不是 Vector3。這不是 cosmetic 差異——它帶來了三個至關重要的實際影響，不理解這些你遲早會在旋轉上踩坑。</p>
+
+<h3>1. 弧度：Three.js 的原生語言</h3>
+
+<p>Three.js 的 <code>rotation</code> 三個分量全是<strong>弧度</strong>（radians），不是角度（degrees）。弧度的定義是：</p>
+
+<pre><code>Math.PI = 180°   （半圈）
+Math.PI * 2 = 360°  （完整一圈）
+Math.PI / 2 = 90°   （四分之一圈）</code></pre>
+
+<p>大多數人寫角度比較直覺，所以 Three.js 提供了一個轉換函式：</p>
+
+<pre><code>import { MathUtils } from 'three';
+
+mesh.rotation.y = MathUtils.degToRad(45);  // 45° → Math.PI / 4</code></pre>
+
+<p><code>MathUtils.degToRad()</code> 把角度數字乘以 <code>π / 180</code>，讓你用熟悉的度數寫，又能正確傳給 Three.js。這是最常見的轉換，務必記住。</p>
+
+<h3>2. 旋轉順序：XYZ 不是直覺上那個順序</h3>
+
+<p>你可能以為 <code>rotation.x</code>、<code>rotation.y</code>、<code>rotation.z</code> 三個角度是「依照你賦值的順序」生效。不是。<code>Euler</code> 有一個 internal 預設順序：<code>XYZ</code>。這意味著 Three.js 永遠先繞 X 轉，再繞 Y 轉，最後繞 Z 轉，<strong>不管</strong>你設定的時間順序。</p>
+
+<p>為什麼這很重要？因為旋轉是有方向性的——同一個物件，先繞 X 轉 90 度再繞 Y 轉 45 度，跟先繞 Y 轉 45 度再繞 X 轉 90 度，最終朝向完全不同。</p>
+
+<p>實驗看看：</p>
+
+<pre><code>// 這兩個結果不同！
+mesh.rotation.x = MathUtils.degToRad(90);
+mesh.rotation.y = MathUtils.degToRad(45);
+
+// 等效於這段代碼（XYZ 順序）
+// Three.js 先套 X 90°，再套 Y 45°
+// 不是先 Y 再 X</code></pre>
+
+<p>在預設 XYZ 順序下，即便你把 Y 寫在前面、X 寫在後面，Three.js 還是會先套 X。所以 <code>rotation.y</code> 的「行為」會受到 <code>rotation.x</code> 的值影響。這就是所謂的 Euler coupling（歐拉角耦合）。</p>
+
+<h3>3. 用 <code>reorder()</code> 修正旋轉順序</h3>
+
+<p>當默認 XYZ 順序給出奇怪的結果時，可以用 <code>.reorder()</code> 改變 Euler 角的應用順序：</p>
+
+<pre><code>mesh.rotation.order = 'YXZ'; // 先套 Y，再 X，最後 Z
+mesh.rotation.set(
+  MathUtils.degToRad(45),  // X
+  MathUtils.degToRad(90),  // Y
+  0                          // Z
+);</code></pre>
+
+<p>另一個寫法是直接在物件上設定：</p>
+
+<pre><code>mesh.rotation.reorder('YXZ');</code></pre>
+
+<p>最常見的調整場景：你想要物件「先繞著自己（Y 軸）轉 360 度，再輕微傾斜（X 軸）」。預設 XYZ 下，Y 的轉動會被 X 的傾斜「吃掉」。改成 <code>YXZ</code> 就正常了。</p>
+
+<p>實用判斷法：當旋轉結果看起來「怪怪的」、好像被某個角度干擾了，第一時間就懷疑是 Euler 順序問題，先試試 <code>.reorder()</code>。</p>
+
+<h2>Key takeaways</h2>
+
+<ul>
+<li><code>rotation</code> 是 <code>Euler</code> 角，三軸全是弧度。</li>
+<li><code>MathUtils.degToRad(角度)</code> 把度數轉成弧度。</li>
+<li>預設旋轉順序是 XYZ——Three.js 永遠先套 X 再套 Y 再套 Z。</li>
+<li>Euler coupling：改變一個軸的值會影響其他軸的視覺結果。</li>
+<li>用 <code>.reorder('YXZ')</code> 等方法改變順序，修正奇怪的旋轉。</li>
+</ul>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="MathUtils.degToRad(90) 的值大約是？" data-correct="1" data-explain="π / 2 ≈ 1.5708，也就是 90° 轉弧度的值。">
+  <button class="opt">3.1416</button>
+  <button class="opt">1.5708</button>
+  <button class="opt">1.0</button>
+  <button class="opt">0.7854</button>
+</div>
+
+<div class="quiz" data-question="Three.js 預設的 Euler 旋轉順序是什麼？" data-correct="2" data-explain="XYZ 是預設值，也就是先 X、再 Y、最後 Z。">
+  <button class="opt">ZXY</button>
+  <button class="opt">YXZ</button>
+  <button class="opt">XYZ</button>
+  <button class="opt">YZX</button>
+</div>
+
+<div class="quiz" data-question="rotation.x = 90° 和 rotation.y = 45° 的結果，跟先寫 Y 再寫 X 一樣嗎？" data-correct="3" data-explain="不一樣。Euler 的順序是固定的 XYZ，不管你的賦值順序。">
+  <button class="opt">一樣，因為覆寫不影響結果</button>
+  <button class="opt">一樣，因為 Euler 沒有順序</button>
+  <button class="opt">不一樣，但只差一点点</button>
+  <button class="opt">不一樣，Euler 的順序固定是 XYZ</button>
+</div>
+
+<div class="quiz" data-question="什麼時候最應該試 .reorder()？" data-correct="0" data-explain="旋轉結果看起來「怪怪的」、有不預期的傾斜或耦合時。">
+  <button class="opt">旋轉結果看起來奇怪、有不預期的傾斜</button>
+  <button class="opt">每次設定 rotation 都要先呼叫</button>
+  <button class="opt">物件太大導致旋轉失敗</button>
+  <button class="opt">使用 OrthographicCamera 時</button>
+</div>
+
+<div class="quiz" data-question="Euler coupling 是什麼意思？" data-correct="2" data-explain="改變一個軸的值會影響其他軸的視覺結果，因為旋轉順序是固定的。">
+  <button class="opt">三個軸的旋轉可以同時設定</button>
+  <button class="opt">Euler 是 Vector3 的一種</button>
+  <button class="opt">一個軸的旋轉值會影響其他軸的視覺結果</button>
+  <button class="opt">只有 Y 軸的旋轉有耦合</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./rotation-basics.html">← 上一步：Rotation 基礎與可視化</a>
+  <span></span>
+</div>
+
+<footer class="footer">three-js / transforms / euler-and-reorder · 有問題就問你的 Claude 老師。</footer>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

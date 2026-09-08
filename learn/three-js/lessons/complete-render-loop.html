@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>完整渲染迴圈與 controls.update() — three-js</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <main class="lesson">
+    <header class="lesson-header">
+      <p class="eyebrow">Step 4 / 4</p>
+      <h1>完整渲染迴圈與 controls.update()</h1>
+      <p class="goal">能寫出包含 controls.update()、影格獨立動畫與 renderer.render() 的完整渲染迴圈。</p>
+    </header>
+
+    <section class="concept">
+      <h2>把前幾課拼起來</h2>
+      <p>我們已經有了三塊拼圖：</p>
+      <ul>
+        <li><code>requestAnimationFrame</code>：預約下一幀，讓迴圈持續跑。</li>
+        <li><code>THREE.Clock</code>：提供 <code>delta</code>，讓動畫影格率獨立。</li>
+        <li><code>controls.update()</code>：讓 OrbitControls 的 damping 和 autoRotate 生效。</li>
+      </ul>
+      <p>現在把它們組合成一個完整的渲染迴圈。</p>
+    </section>
+
+    <section class="concept">
+      <h2>完整程式碼</h2>
+      <pre><code>const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);  // 1. 預約下一幀
+
+  const delta = clock.getDelta();  // 2. 取得影格時間差
+
+  // 3. 更新控制器（damping / autoRotate 需要每幀呼叫）
+  controls.update();
+
+  // 4. 影格獨立動畫
+  cube.rotation.x += 0.5 * delta;
+  cube.rotation.y += 0.3 * delta;
+
+  // 5. 渲染
+  renderer.render(scene, camera);
+}
+
+animate();  // 啟動</code></pre>
+      <p>這個迴圈就是所有 Three.js 應用的心臟。從現在起，幾乎每個專案都會看到它。</p>
+    </section>
+
+    <section class="concept">
+      <h2>順序很重要</h2>
+      <p>迴圈裡的步驟順序不是隨便排的：</p>
+      <ol>
+        <li><strong>預約下一幀</strong>：放在最前面，確保即使後面出錯，迴圈也不會意外中斷。</li>
+        <li><strong>取得 delta</strong>：在更新動畫之前取得，才能正確反映這一幀的時間差。</li>
+        <li><strong>更新控制器</strong>：<code>controls.update()</code> 必須在 <code>renderer.render()</code> 之前呼叫，否則 damping 會延遲一幀才生效。</li>
+        <li><strong>更新動畫</strong>：用 <code>delta</code> 調整物體狀態。</li>
+        <li><strong>渲染</strong>：最後才把場景算成畫面。</li>
+      </ol>
+    </section>
+
+    <section class="concept">
+      <h2>什麼時候才需要 controls.update()？</h2>
+      <p>OrbitControls 有三種常見設定，決定了你是否需要每幀呼叫 <code>controls.update()</code>：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>設定</th>
+            <th>需要 update()？</th>
+            <th>原因</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>無 damping、無 autoRotate</td>
+            <td>否</td>
+            <td>控制器的狀態在使用者操作時已經即時更新，不需要每幀重算</td>
+          </tr>
+          <tr>
+            <td>啟用 damping</td>
+            <td>是</td>
+            <td>放開滑鼠後攝影機還會滑行，滑行過程必須每幀微調</td>
+          </tr>
+          <tr>
+            <td>啟用 autoRotate</td>
+            <td>是</td>
+            <td>自動旋轉必須每幀累加角度，否則場景不會動</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>最簡單的做法：<strong>永遠在迴圈裡呼叫 <code>controls.update()</code></strong>。即使當前設定不需要，多呼叫一次也不會有副作用，卻能避免之後加了 damping 或 autoRotate 時忘記補這一行。</p>
+    </section>
+
+    <section class="concept">
+      <h2>零延遲的秘訣</h2>
+      <p>這個節點的目標是「零延遲 render loop」。所謂零延遲，不是指每幀跑得飛快，而是指<strong>畫面永遠即時反映狀態變化</strong>：</p>
+      <ul>
+        <li>拖曳放開後，damping 滑行平滑跟上——因為 <code>controls.update()</code> 每幀都在跑。</li>
+        <li>方塊旋轉速度在所有裝置上一致——因為乘了 <code>delta</code>。</li>
+        <li>畫面不卡頓、不跳幀——因為 <code>requestAnimationFrame</code> 與螢幕刷新率同步。</li>
+      </ul>
+      <p>做到這三點，你的 Three.js 應用就會看起來「跟手」，用起來像原生程式。</p>
+    </section>
+
+    <section class="concept">
+      <h2>之後的擴充點</h2>
+      <p>這個基本迴圈是之後所有功能的骨架。未來你會陸續在迴圈裡加入：</p>
+      <ul>
+        <li>物理引擎的 <code>world.step()</code></li>
+        <li>動畫混合器的 <code>mixer.update(delta)</code></li>
+        <li>自訂的粒子系統更新</li>
+        <li>資料驅動的物件狀態同步</li>
+      </ul>
+      <p>但不變的核心永遠是：預約下一幀 → 取得 delta → 更新控制器 → 更新動畫 → 渲染。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>隨堂測驗</h2>
+
+      <div class="quiz" data-question="在完整渲染迴圈中，controls.update() 應該放在哪個位置？" data-correct="1" data-explain="controls.update() 必須在 renderer.render() 之前呼叫，否則 damping 會延遲一幀生效。">
+        <button class="opt">在 renderer.render() 之後</button>
+        <button class="opt">在 renderer.render() 之前</button>
+        <button class="opt">在 requestAnimationFrame 之前</button>
+        <button class="opt">只在使用者操作時呼叫</button>
+      </div>
+
+      <div class="quiz" data-question="為什麼建議永遠在迴圈裡呼叫 controls.update()，即使當前設定不需要？" data-correct="0" data-explain="多呼叫一次無副作用，但能避免之後啟用 damping 或 autoRotate 時忘記補這一行。">
+        <button class="opt">避免之後啟用 damping 或 autoRotate 時忘記補這一行</button>
+        <button class="opt">讓渲染速度變快</button>
+        <button class="opt">強制清除 GPU 記憶體</button>
+        <button class="opt">讓 canvas 自動調整尺寸</button>
+      </div>
+
+      <div class="quiz" data-question="requestAnimationFrame(animate) 放在 animate 函式的第一行，有什麼好處？" data-correct="2" data-explain="預約放在最前面，即使後面出錯或丟出例外，迴圈也不會意外中斷。">
+        <button class="opt">讓動畫跑得更快</button>
+        <button class="opt">減少 delta 的誤差</button>
+        <button class="opt">即使後面出錯，迴圈也不會意外中斷</button>
+        <button class="opt">讓 controls.update() 先執行</button>
+      </div>
+
+      <div class="quiz" data-question="啟用 autoRotate 後，場景沒有自動旋轉，最可能的原因是？" data-correct="3" data-explain="autoRotate 需要每幀呼叫 controls.update() 才能累加角度，沒呼叫就不會動。">
+        <button class="opt">Clock 沒有建立</button>
+        <button class="opt">delta 沒有乘上</button>
+        <button class="opt">requestAnimationFrame 沒有遞迴</button>
+        <button class="opt">controls.update() 沒有在迴圈裡呼叫</button>
+      </div>
+
+      <div class="quiz" data-question="「零延遲 render loop」的核心意義是什麼？" data-correct="1" data-explain="零延遲指畫面永遠即時反映狀態變化，包含 damping 滑行、影格率獨立動畫、與刷新率同步。">
+        <button class="opt">每幀跑在 1 毫秒以內</button>
+        <button class="opt">畫面永遠即時反映狀態變化</button>
+        <button class="opt">完全不使用 setTimeout</button>
+        <button class="opt">只渲染有變動的物件</button>
+      </div>
+    </section>
+
+    <footer class="lesson-footer">
+      <div class="lesson-nav">
+        <a class="nav-left" href="./clock-and-delta.html">← 上一步：THREE.Clock 與影格獨立時間</a>
+        <span class="nav-right"></span>
+      </div>
+      <p class="feedback">有問題？隨時問你的老師。</p>
+    </footer>
+  </main>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>空間操作：距離與鄰近偵測 — Three.js 座標系統</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>空間操作：距離與鄰近偵測</h1>
+  <div class="meta">Three.js 座標系統 · Step 3/3</div>
+
+  <blockquote>
+    在 3D IC 編輯器裡，你不需要手動計算畢氏定理。<br>
+    <code>Vector3</code> 已經把距離公式打包好了——你只要叫它「算距離」就行。
+  </blockquote>
+
+  <h2>觀察：物件之間有多遠？</h2>
+  <p>假設場景裡有一個 die 和一個攝影機，你想知道它們之間的距離。在純數學裡，這要套用畢氏定理：</p>
+
+  <pre><code>// 自己算距離（別這樣做）
+const dx = a.x - b.x
+const dy = a.y - b.y
+const dz = a.z - b.z
+const dist = Math.sqrt(dx*dx + dy*dy + dz*dz)</code></pre>
+
+<p>Three.js 的 <code>Vector3</code> 已經把這個公式包進 <code>distanceTo()</code> 方法裡：</p>
+
+  <pre><code>// Three.js 幫你算（這樣就對了）
+const dist = die.position.distanceTo(camera.position)</code></pre>
+
+<p>當你在 IC 編輯器中判斷「滑鼠游標是否靠近某個 die」，或是「兩個 die 是否靠太近」，就是靠這個距離計算。</p>
+
+  <h2>理解：copy() 保留位置快照</h2>
+  <p>有時候你需要「記住」某個物件此刻的位置，稍後拿出來比對。如果直接用賦值，兩個變數會指向同一個 <code>Vector3</code> 物件，當物件移動時，你以為保存過的舊位置也跟著變了。</p>
+
+  <pre><code>// 錯誤：oldPos 會跟著物件一起動
+const oldPos = die.position
+
+// 正確：oldPos 是獨立副本，不受物件移動影響
+const oldPos = die.position.clone()</code></pre>
+
+  <p><code>clone()</code> 創造一個全新的 <code>Vector3</code> 副本，與原本的物件互不影響。這是遊戲開發和編輯器中常見的模式：每一幀記錄物件位置，然後跟前一幀比對，計算位移或速度。</p>
+
+  <h2>理解：distance2() 的效能優勢</h2>
+  <p><code>Vector3</code> 還提供一個較少人知的方法：<code>distance2()</code>。它的用途跟 <code>distanceTo()</code> 一樣，但回傳的是「距離的平方」，而不是實際距離。</p>
+
+  <p>什麼時候用平方版本？當你只需要「比較遠近」，而不需要知道「實際長度」的時候。例如：在 200 個 die 中找出最接近游標的那個。</p>
+
+  <pre><code>let nearest = null
+let minDist2 = Infinity
+
+for (const die of dies) {
+  const d2 = die.position.distance2(mouseVector)
+  if (d2 < minDist2) {
+    minDist2 = d2
+    nearest = die
+  }
+}</code></pre>
+
+  <p>因為 <code>distance2()</code> 省掉了 <code>Math.sqrt()</code> 的開銷，在大規模場景中能有效提升效能。雖然 Three.js 官方文件較常用 <code>distanceTo()</code>，但許多高效能遊戲引擎的底層都是跑平方距離比較。</p>
+
+  <h2>動腦時間</h2>
+
+  <div class="quiz" data-question="在 Three.js 中，計算兩個物件位置之間距離的最佳方法是什麼？" data-correct="1" data-explain="distanceTo() 是 Vector3 提供的官方方法，內部已實作畢氏定理，比自己寫數學更可靠、更好讀。">
+    <button class="opt">自己寫畢氏定理公式</button>
+    <button class="opt">使用 distanceTo() 方法</button>
+    <button class="opt">直接把 x、y、z 相加</button>
+    <button class="opt">使用 clone() 方法</button>
+  </div>
+
+  <div class="quiz" data-question="clone() 的主要作用是什麼？" data-correct="2" data-explain="clone() 創造一個全新的 Vector3 副本，與原本物件互不影響，適合用來保存位置快照。">
+    <button class="opt">把別人的值複製到自己身上</button>
+    <button class="opt">把 Vector3 變成普通物件</button>
+    <button class="opt">創造一個獨立的 Vector3 副本</button>
+    <button class="opt">刪除原本的 Vector3</button>
+  </div>
+
+  <div class="quiz" data-question="distance2() 和 distanceTo() 的主要差異是什麼？" data-correct="0" data-explain="distance2() 回傳距離的平方，省去了 sqrt 計算，適合只需要比較遠近的場景。">
+    <button class="opt">distance2() 回傳距離的平方，distanceTo() 回傳實際距離</button>
+    <button class="opt">distance2() 只能用在 2D，distanceTo() 用在 3D</button>
+    <button class="opt">distance2() 比較慢，distanceTo() 比較快</button>
+    <button class="opt">distance2() 會改變原始 Vector3，distanceTo() 不會</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼在 200 個 die 中找最接近游標的對象時，建議用 distance2() 而非 distanceTo()？" data-explain="distance2() 省去了 sqrt 計算，在大量比較時能提升效能。">
+    <button class="opt">distance2() 結果更精確</button>
+    <button class="opt">distance2() 不需要畢氏定理</button>
+    <button class="opt">distance2() 回傳距離的平方，省去 sqrt 計算，效能更好</button>
+    <button class="opt">distance2() 語法更短</button>
+  </div>
+
+  <div class="quiz" data-question="如果你寫了 const oldPos = die.position，然後 die 移動了，oldPos 的值會如何？" data-explain="直接賦值只是複製參照，oldPos 和 die.position 指向同一個 Vector3 物件，所以 die 移動時 oldPos 也會跟著變。">
+    <button class="opt">oldPos 保持不變，因為賦值就是複製</button>
+    <button class="opt">oldPos 會跟著 die 一起移動，因為兩者是同一個物件</button>
+    <button class="opt">oldPos 會自動變成 undefined</button>
+    <button class="opt">Three.js 會報錯</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./vector3-and-position.html">← 上一步：Vector3 與位置屬性</a>
+    <span></span>
+  </div>
+
+  <div class="footer">
+    有問題？隨時問你的 AI 老師 — 例如：「要怎麼判斷滑鼠點擊到哪個 die？」或「Raycasting 又是什麼？」
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用 Clock + delta 做 frame-rate independent 動畫 — 動畫模式</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <main class="lesson">
+    <header class="lesson-header">
+      <p class="lesson-meta">Step 2 / 3 · 動畫模式</p>
+      <h1>用 Clock + delta 做 frame-rate independent 動畫</h1>
+      <p class="lesson-goal">用 THREE.Clock 的 getElapsedTime 與 delta 時間，寫出在不同幀率下速度一致的動畫。</p>
+    </header>
+
+    <section class="card">
+      <h2>問題：為什麼 <code>+= 0.01</code> 不夠？</h2>
+      <p>上一課的寫法：<code>cube.rotation.x += 0.01</code>。看起來能用，但有一個隱藏問題：</p>
+      <ul>
+        <li>60 Hz 螢幕：每秒執行 60 次 → 每秒轉 0.6 弧度</li>
+        <li>144 Hz 螢幕：每秒執行 144 次 → 每秒轉 1.44 弧度</li>
+        <li>30 FPS 的舊筆電：每秒執行 30 次 → 每秒轉 0.3 弧度</li>
+      </ul>
+      <p>同樣一段程式碼，在高速螢幕上轉得快，在慢速螢幕上轉得慢。這在遊戲裡叫做「幀率依賴（frame-rate dependent）」——動畫速度被硬體綁架了。</p>
+    </section>
+
+    <section class="card">
+      <h2>解法：delta 時間</h2>
+      <p>不要每幀加固定值，而是乘上「離上幀過了多久」：</p>
+      <pre><code>const speed = 2; // 每秒 2 弧度
+cube.rotation.x += speed * delta;</code></pre>
+      <p>這樣一來：</p>
+      <ul>
+        <li>60 FPS：每幀約 0.0167 秒 → 每幀轉 0.033 弧度 → 每秒 2 弧度</li>
+        <li>144 FPS：每幀約 0.0069 秒 → 每幀轉 0.014 弧度 → 每秒 2 弧度</li>
+        <li>30 FPS：每幀約 0.0333 秒 → 每幀轉 0.067 弧度 → 每秒 2 弧度</li>
+      </ul>
+      <p>不管幀率多少，每秒轉的弧度都一樣。這就是「frame-rate independent」。</p>
+    </section>
+
+    <section class="card">
+      <h2>THREE.Clock 的用法</h2>
+      <p>Three.js 內建 <code>THREE.Clock</code> 幫你算時間。它有兩個常用方法：</p>
+      <dl>
+        <dt><code>getElapsedTime()</code></dt>
+        <dd>從 Clock 建立後經過的總秒數（浮點數）。適合做 sin/cos 振盪。</dd>
+        <dt><code>getDelta()</code></dt>
+        <dd>離上一次呼叫 <code>getDelta()</code> 過了幾秒。適合做 frame-rate independent 動畫。</dd>
+      </dl>
+      <p>注意：<code>getDelta()</code> 會更新內部狀態，所以每幀只能呼叫一次。</p>
+    </section>
+
+    <section class="card">
+      <h2>完整程式碼：frame-rate independent 旋轉</h2>
+      <pre><code>const clock = new THREE.Clock();
+const speed = 2; // 每秒 2 弧度
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const delta = clock.getDelta();        // 離上幀過了幾秒
+  cube.rotation.x += speed * delta;      // 乘上 delta
+
+  renderer.render(scene, camera);
+}
+animate();</code></pre>
+      <p>不管使用者的螢幕是 60Hz 還是 144Hz，方塊每秒都轉 2 弧度。</p>
+    </section>
+
+    <section class="card">
+      <h2>手動算 delta 的寫法</h2>
+      <p>如果你不想用 Clock，也可以自己記錄時間：</p>
+      <pre><code>let previousTime = performance.now();
+
+function animate(currentTime) {
+  requestAnimationFrame(animate);
+
+  const delta = (currentTime - previousTime) / 1000; // 轉成秒
+  previousTime = currentTime;
+
+  cube.rotation.x += speed * delta;
+
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);</code></pre>
+      <p><code>requestAnimationFrame</code> 會把當前時間（毫秒）傳給回呼函式。用目前時間減去上次時間，就是 delta。除以 1000 是為了從毫秒轉成秒。</p>
+    </section>
+
+    <section class="card">
+      <h2>什麼時候用 getElapsedTime，什麼時候用 getDelta？</h2>
+      <ul>
+        <li><strong>getDelta()</strong>：用在「每幀累加」的動畫，例如移動、旋轉。重點是「速度一致」。</li>
+        <li><strong>getElapsedTime()</strong>：用在「跟總時間綁定」的動畫，例如 sin/cos 振盪。重點是「知道現在是第幾秒」。</li>
+      </ul>
+      <p>下一課會看到 getElapsedTime 的經典用法。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>自我檢測</h2>
+      <div class="quiz" data-question="為什麼 cube.rotation.x += 0.01 是 frame-rate dependent？" data-correct="2" data-explain="因為每幀加固定值，幀率愈高，每秒加的次數愈多，動畫就愈快。">
+        <button class="opt">因為它用了錯誤的屬性</button>
+        <button class="opt">因為它沒有用 Clock</button>
+        <button class="opt">因為每幀加固定值，幀率愈高動畫愈快</button>
+        <button class="opt">因為它沒有呼叫 requestAnimationFrame</button>
+      </div>
+      <div class="quiz" data-question="如何讓動畫變成 frame-rate independent？" data-correct="1" data-explain="把每幀的變化量乘上 delta（離上幀過了幾秒），這樣每秒的變化總量就固定了。">
+        <button class="opt">把變化量設為 0</button>
+        <button class="opt">把變化量乘上 delta 時間</button>
+        <button class="opt">把變化量除以 delta 時間</button>
+        <button class="opt">把變化量加上 delta 時間</button>
+      </div>
+      <div class="quiz" data-question="THREE.Clock.getDelta() 回傳的單位是什麼？" data-correct="0" data-explain="getDelta() 回傳的是秒（浮點數），例如 0.0167 代表離上幀過了 16.7 毫秒。">
+        <button class="opt">秒</button>
+        <button class="opt">毫秒</button>
+        <button class="opt">幀數</button>
+        <button class="opt">弧度</button>
+      </div>
+      <div class="quiz" data-question="為什麼每幀只能呼叫一次 getDelta()？" data-correct="3" data-explain="getDelta() 會更新內部記錄的「上次時間」，如果同幀呼叫兩次，第二次會得到 0。">
+        <button class="opt">因為它很慢</button>
+        <button class="opt">因為它會當機</button>
+        <button class="opt">因為它會回傳負數</button>
+        <button class="opt">因為它會更新內部狀態，第二次會得到 0</button>
+      </div>
+      <div class="quiz" data-question="getElapsedTime() 和 getDelta() 的主要差別是什麼？" data-correct="2" data-explain="getElapsedTime 回傳總時間（從 Clock 建立開始算），getDelta 回傳離上幀的時間差。">
+        <button class="opt">沒有差別，可以互換</button>
+        <button class="opt">getElapsedTime 比較快</button>
+        <button class="opt">getElapsedTime 回傳總時間，getDelta 回傳離上幀的時間差</button>
+        <button class="opt">getDelta 回傳總時間，getElapsedTime 回傳離上幀的時間差</button>
+      </div>
+      <div class="quiz" data-question="手動算 delta 時，為什麼要除以 1000？" data-correct="1" data-explain="performance.now() 和 rAF 的時間參數都是毫秒，除以 1000 才能轉成秒，跟速度單位（每秒多少）匹配。">
+        <button class="opt">因為要讓動畫變慢</button>
+        <button class="opt">因為要把毫秒轉成秒</button>
+        <button class="opt">因為要避免數字太大</button>
+        <button class="opt">因為要配合螢幕更新率</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <a class="nav-left" href="./animation-basics.html">← 上一步：動畫的本質：在 render loop 裡每幀動態改變 transform</a>
+      <a class="nav-right" href="./oscillation-patterns.html">下一步：用 sin/cos 做 bounded 振盪動畫 →</a>
+    </div>
+  </main>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>
