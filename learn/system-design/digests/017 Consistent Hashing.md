@@ -4,6 +4,8 @@ source_hash: a8896896aa3964cf682a9ea8c67a4a4bafa4f87c5bc8afe707423775f1ca842b
 source_lines: 64
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 017 Consistent Hashing

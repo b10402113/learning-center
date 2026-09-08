@@ -4,6 +4,8 @@ source_hash: 2a1512b7f0d048009d5d4d84bb105db8973eab9eb38c73e8b9adee118e688410
 source_lines: 355
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 065 Other courses

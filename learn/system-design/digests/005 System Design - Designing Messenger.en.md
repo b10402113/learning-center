@@ -4,6 +4,8 @@ source_hash: 51f0d947eb9069d8f60b6977c1d29ba151f2cd7c88d794e85ab2ffac3929e3d9
 source_lines: 7512
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 005 System Design - Designing Messenger.en

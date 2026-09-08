@@ -4,6 +4,8 @@ source_hash: 24d31fe209c223750db77a1f0b27e68084e58e0b651d4edb869a9ff1747fd230
 source_lines: 18
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 011 Indexes

@@ -4,6 +4,8 @@ source_hash: 6144c9531dd60a04388064eb89b69b88260795611503b0b0ebac1f8ac2e6a501
 source_lines: 395
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 057 Designing Twitter Search

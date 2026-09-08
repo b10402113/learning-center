@@ -4,6 +4,8 @@ source_hash: cd0ae4f884f09a86be551963d571e06938317f6ce7e3c219eb54b32228a3203c
 source_lines: 61
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 004 Things to Avoid During System Design Interview

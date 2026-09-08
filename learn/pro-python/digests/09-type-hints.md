@@ -4,6 +4,8 @@ source_hash: 2b6164d8728c17ce1392d22f9cfa7c42947ab4e19a8babef17130199dadf7b32
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 09-type-hints.md

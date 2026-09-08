@@ -4,6 +4,8 @@ source_hash: defb1d487f2f71d0c9c3c9fa53f64b977fe5fac10f7119945c6163868e64b1ec
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 12-fundamentals-exercise.md

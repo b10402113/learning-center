@@ -4,6 +4,8 @@ source_hash: b191e46361906d01df7f89313746d04ded4958d6b44a61e457a2a88965586cb7
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 05-variables.md

@@ -4,6 +4,8 @@ source_hash: e3901914c5ab77882cae4ed8f25af5d021b6175831ebde89538a32fbadad6a8f
 source_lines: 14
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 022 Heartbeat

@@ -4,6 +4,8 @@ source_hash: 07e48302ed881a6b289d2e94c4749a02c99859877f09836c652478273eee1f4c
 source_lines: 448
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 060 Designing Yelp or Nearby Friends

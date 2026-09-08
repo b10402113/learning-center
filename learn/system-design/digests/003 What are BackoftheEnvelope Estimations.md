@@ -4,6 +4,8 @@ source_hash: a187e4769effeeb63a1b66ff9923ce95db2f811b913970b3d29519c68719b56d
 source_lines: 146
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 003 What are BackoftheEnvelope Estimations

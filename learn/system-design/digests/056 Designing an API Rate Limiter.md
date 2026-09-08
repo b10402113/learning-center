@@ -4,6 +4,8 @@ source_hash: 2c092b3b0dc3143ed4d635393562ef0b0d40a3d3ba36e28e3933c881aad6c682
 source_lines: 445
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 056 Designing an API Rate Limiter

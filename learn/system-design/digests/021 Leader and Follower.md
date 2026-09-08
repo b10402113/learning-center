@@ -4,6 +4,8 @@ source_hash: fcdaebd8ee414da258f4c9932aa4bf1a7df80c800db6931c88bb7a4129e882ec
 source_lines: 14
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 021 Leader and Follower

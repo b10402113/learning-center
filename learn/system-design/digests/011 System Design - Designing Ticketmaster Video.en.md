@@ -4,6 +4,8 @@ source_hash: c395022d5e4351124d3e02c742f49d6cfda31696a50a5b1ecf0059e1a912d836
 source_lines: 6808
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 011 System Design - Designing Ticketmaster Video.en

@@ -4,6 +4,8 @@ source_hash: 1000ef37b6b3175e349654eecc759f36a76816ba2fc701ae318c55c05e5f0b78
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 02-why-python.md

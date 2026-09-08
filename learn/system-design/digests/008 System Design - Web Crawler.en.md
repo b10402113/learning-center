@@ -4,6 +4,8 @@ source_hash: 4c2e6e9f0b31bcf8b69e4a24e54fa0cfa8788b14aaec79a8a4eb325ed510a8ac
 source_lines: 4732
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 008 System Design - Web Crawler.en

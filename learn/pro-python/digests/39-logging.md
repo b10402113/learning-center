@@ -4,6 +4,8 @@ source_hash: 5c12c41e46363bd8f06885868857c62cb9159c642e1745c1321136353f0ab1b9
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 39-logging.md

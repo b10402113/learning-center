@@ -4,6 +4,8 @@ source_hash: 3c2d3ccd9166202bda55736998b710761d85cd7f8ab607f7af26a93a6a841dc7
 source_lines: 78
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — python-for-pros

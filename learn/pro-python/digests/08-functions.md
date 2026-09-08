@@ -4,6 +4,8 @@ source_hash: 8f7d74e7eb0488c6ed993404e1ad0b76a45a43b491f303292fc8aa0ea40eb9dc
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 08-functions.md

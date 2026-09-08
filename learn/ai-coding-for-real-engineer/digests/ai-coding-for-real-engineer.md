@@ -94,6 +94,8 @@ source_hash:
 source_lines: 39326
 created: 2026-08-18
 updated: 2026-09-02
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — ai-coding-for-real-engineer

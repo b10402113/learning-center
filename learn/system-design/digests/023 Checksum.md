@@ -4,6 +4,8 @@ source_hash: 8bf1c3935dcc8311f0b808df9afe266faf21ed3114e08cda225fb5c09d8b4e34
 source_lines: 15
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 023 Checksum

@@ -19,6 +19,11 @@ created: 2026-09-05
 ## Nodes
 
 ### Tier 1 — 基础工具箱
+0. **[[learn/js-reverse/00-crawler-fundamentals|爬虫基础：定义、分类与合法性]]**
+   - Goal: 理解爬虫的本质、三种分类（通用/聚焦/增量式）以及使用爬虫的法律边界
+   - Sources:
+     - [[sources/js-reverse/20260908/02 初识爬虫/课堂笔记/02 初识爬虫[UA检测 乱码 动态数据以及图片数据爬取].md#爬虫相关介绍]]
+     - [[sources/js-reverse/20260908/02 初识爬虫/课堂笔记/02 初识爬虫[UA检测 乱码 动态数据以及图片数据爬取].md#爬虫合法性探究]]
 1. **[[learn/js-reverse/01-python-functions|Python 基础：函式与档案操作]]**
    - Goal: 定义/呼叫函式、读写档案、with 上下文管理器
    - Sources:

@@ -2,6 +2,8 @@
 source: vertex-prompts
 created: 2026-08-22
 updated: 2026-08-22
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — vertex-prompts

@@ -4,6 +4,8 @@ source_hash: 36142d184133191ac0af38b48e2a4cac0c3964c03f34d43f59643ae20c9d81ae
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 61-wrapup.md

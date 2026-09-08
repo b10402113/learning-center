@@ -4,6 +4,8 @@ source_hash: 9bce66f2ddcc2593ff4ced9674e1bf2eab277a27c5dfff78389a4a843605ac69
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 24-fastapi.md

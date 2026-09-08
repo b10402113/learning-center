@@ -14,6 +14,8 @@ source_hash:
 source_lines: 3266
 created: 2026-09-05
 updated: 2026-09-05
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — js逆向课件/Day27

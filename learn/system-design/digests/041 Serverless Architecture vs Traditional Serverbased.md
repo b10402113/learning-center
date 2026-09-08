@@ -4,6 +4,8 @@ source_hash: 941911521a967eea31590b4dae4d09ef24ec54d816896b5fb90617fb22fa4f17
 source_lines: 67
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 041 Serverless Architecture vs Traditional Serverbased

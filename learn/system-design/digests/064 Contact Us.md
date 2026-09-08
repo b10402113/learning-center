@@ -4,6 +4,8 @@ source_hash: 25ae20146f70fe25967e5a92e9ec708aee457965b7267aaf8ef4e5c28899f31f
 source_lines: 333
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 064 Contact Us

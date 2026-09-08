@@ -4,6 +4,8 @@ source_hash: efa044fdd8db315c01d939b5b578a1ca37a5c1644db3e17a0afc604c73aa3ef2
 source_lines: 75
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 043 Hybrid Cloud Storage vs AllCloud Storage

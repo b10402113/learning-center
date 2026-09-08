@@ -4,6 +4,8 @@ source_hash: 4295bcb4422938b9cfefdcc36463c687ad67ad891074744ac8d802d3fcbe4bd2
 source_lines: 124
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 045 Read Heavy vs Write Heavy System

@@ -4,6 +4,8 @@ source_hash: d3026a09a8d9004450bd98ff70b5e5c74df51843a61c446518163b9c693ae63e
 source_lines: 47
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 027 ACID vs BASE Properties in Databases

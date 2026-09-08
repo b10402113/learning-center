@@ -4,6 +4,8 @@ source_hash: 4458de7e1862e5c2f3baf9e1497c0ed13c2d2bd1eb2c308ab0fa358704df7e92
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 03-creating-a-project-with-uv.md

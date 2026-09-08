@@ -4,6 +4,8 @@ source_hash: 61c93f1b027e2eaff5620b08b81d2223181983d7a8a7d5919b2b1321d102c804
 source_lines: 471
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 053 Designing Twitter

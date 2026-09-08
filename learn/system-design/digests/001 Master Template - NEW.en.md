@@ -4,6 +4,8 @@ source_hash: 21db2bca902b3091d4eb749ff50b1fe0c5cff349d140f4d0a924de4ef7e9017b
 source_lines: 2728
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 001 Master Template - NEW.en

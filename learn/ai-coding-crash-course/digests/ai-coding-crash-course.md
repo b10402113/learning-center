@@ -4,6 +4,8 @@ source_hash: da481b10e4ee06523bb249bd623801d02915be4f05472a6d991396a56d17294a
 source_lines: 10222
 created: 2026-08-19
 updated: 2026-08-19
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — ai-coding-crash-course

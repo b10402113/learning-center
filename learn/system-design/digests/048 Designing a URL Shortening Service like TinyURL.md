@@ -4,6 +4,8 @@ source_hash: 34ae1792dad47ee2691fe5100e742d1bd507fa2cab86264aa7f6904a070e5de2
 source_lines: 9538
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 048 Designing a URL Shortening Service like TinyURL

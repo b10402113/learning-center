@@ -4,6 +4,8 @@ source_hash: 3b75e09b3f489b22da2b766f6b10e72ca38959683824882cf18dada3683d5809
 source_lines: 66
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 020 Quorum

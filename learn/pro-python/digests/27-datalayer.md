@@ -4,6 +4,8 @@ source_hash: 14ba76b3a2b48467702b043cebecb0736ace746b4927013517cc180431593048
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 27-datalayer.md

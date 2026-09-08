@@ -4,6 +4,8 @@ source_hash: 76dd55eb7f4de7cc99a5a93bcf3813f1118a5371fdf128aeb0c6287009366a6d
 source_lines: 6920
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 004 Design Dropbox.en

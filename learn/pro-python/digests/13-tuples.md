@@ -4,6 +4,8 @@ source_hash: 0deaa42f365666c4722d3ba15897005222f063417ed2b87f6b698150c29c7f1a
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 13-tuples.md

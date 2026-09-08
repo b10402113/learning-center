@@ -4,6 +4,8 @@ source_hash: 35848bf502ed6fb0cd1175b4a9cb364726a7851007cd1bf9d52b0d026c0e7b9e
 source_lines: 7480
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 010 System Design - Yelp & Uber 2.en

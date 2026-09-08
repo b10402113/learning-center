@@ -4,6 +4,8 @@ source_hash: c02e152958f900fbc5a3ed691a504eca45c6f192fed9f18c72dfcc6aa956a8d2
 source_lines: 12674
 created: 2026-08-28
 updated: 2026-08-28
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — generative-ai-full-stack-development

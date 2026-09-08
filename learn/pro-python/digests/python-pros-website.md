@@ -4,6 +4,8 @@ source_hash: scraped-from-netlify
 source_lines: 500
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — python-pros-website

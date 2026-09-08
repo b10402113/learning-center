@@ -4,6 +4,8 @@ source_hash: 4642f075ea57ce63f225944c8dafb74cd275f34d05b6bf87e1c92d0611a7ea3c
 source_lines: 55
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 019 Bloom Filters

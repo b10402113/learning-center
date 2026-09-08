@@ -4,6 +4,8 @@ source_hash: 317c846fee77dd2de0b958c95a9510fd16f98cf8024834fd7d4fde55ddc68691
 source_lines: 63
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 030 Load Balancer vs API Gateway

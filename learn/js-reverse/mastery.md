@@ -3,6 +3,18 @@ created: 2026-09-05
 updated: 2026-09-07
 ---
 
+## 00-crawler-fundamentals — 爬虫基础：定义、分类与合法性
+
+probe skipped via /nodes js-reverse/00-crawler-fundamentals skip-probe on 2026-09-08
+
+### Strands
+
+- 爬虫定义与 B/S 架构中的客户端模拟: unknown
+- 通用/聚焦/增量式三种分类的特征与区别: unknown
+- 反爬机制与反反爬策略的对立关系: unknown
+- 爬虫技术中立性与善意/恶意行为边界: unknown
+- 三大法律风险与规避建议: unknown
+
 ## 13-ajax-js-intro — Ajax 与 JavaScript 引入
 
 probe skipped via /nodes js-reverse/13-ajax-js-intro skip-probe on 2026-09-07

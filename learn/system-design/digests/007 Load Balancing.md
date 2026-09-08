@@ -4,6 +4,8 @@ source_hash: 50edec9cd8d6b9eda3cafb1c9c081106b595df4906e93a95c70474a5be524cdc
 source_lines: 25
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 007 Load Balancing

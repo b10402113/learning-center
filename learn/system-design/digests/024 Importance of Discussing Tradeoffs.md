@@ -4,6 +4,8 @@ source_hash: 1570e2440b4065a39da21178fc6f551aa11936a323fe3936e54c9d958777a786
 source_lines: 61
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 024 Importance of Discussing Tradeoffs

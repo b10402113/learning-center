@@ -4,6 +4,8 @@ source_hash: ed50dfe8c492080325d5552a5517d18dcaa8f6c7297e5eac99983a9181a5a85d
 source_lines: 45
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 010 Data Partitioning

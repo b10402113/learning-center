@@ -4,6 +4,8 @@ source_hash: e645e2cd0027bebfa66ff1775242857019528630e8e7d943ebdcdd2c318dd557
 source_lines: 74
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 046 System Design Interviews  A step by step guide

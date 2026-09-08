@@ -4,6 +4,8 @@ source_hash: 51f54bdcc09da209db1583096106817a705832d203808d7a5ed61039d268e8ee
 source_lines: 73
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 034 SQL vs NoSQL (2)

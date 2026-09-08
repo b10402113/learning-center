@@ -4,6 +4,8 @@ source_hash: f511b8b74140f8d4406d9fc1e047aae7b1b849e9b629944273891f310cda9e5b
 source_lines: 479
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 049 Designing Pastebin

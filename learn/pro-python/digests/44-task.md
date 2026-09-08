@@ -4,6 +4,8 @@ source_hash: 6b703b9d93d4e5083e590bac9436e7c24ea020eac68564bb337c1c642f027711
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 44-task.md

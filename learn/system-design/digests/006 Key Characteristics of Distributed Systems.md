@@ -4,6 +4,8 @@ source_hash: ae7e6c9508feca942a134e92bbd4f287e6fd5efca89b9e10a8aca8dd8215031a
 source_lines: 62
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 006 Key Characteristics of Distributed Systems

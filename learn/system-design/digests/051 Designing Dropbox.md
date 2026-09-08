@@ -4,6 +4,8 @@ source_hash: 30803cf140c5d68819cac005740c8b7a72f8dd55ab21823e34797d6c2d6e3b97
 source_lines: 440
 created: 2025-08-25
 updated: 2025-08-25
+status: absorbed
+absorbed_at: 2026-09-08
 ---
 
 # Digest — 051 Designing Dropbox
