@@ -27,21 +27,21 @@ updated: 2026-09-05
 
 ### 爬虫相关介绍
 
-- Locator: `[[sources/js-reverse/js逆向课件/day04/requests基础.md#爬虫相关介绍]]`
+- Locator: `[[sources/js-reverse/20260908/js逆向课件/day04/requests基础.md#爬虫相关介绍]]`
 - Summary: 定义什么是爬虫（模拟浏览器上网抓取数据），并按应用场景给出五类爬虫分类，同时引出反爬/反反爬的对抗关系与 Robots 君子协议。
 - Key claims: 爬虫=模拟浏览器+抓取数据，浏览器本身是纯天然爬虫工具；分类为通用（整页源码）、聚焦（页面局部数据，建立在通用之上）、功能（浏览器/app 自动化操作）、增量式（监测网站更新）、分布式（机群联合爬取）；爬不到数据的唯一原因是模拟浏览器的力度不够；反爬机制对应门户网站、反反爬策略对应爬虫程序；Robots 协议全称"网络爬虫排除标准"，需自觉遵守而无强制力。
 - Learner-relevant: 建立课程的世界观——一切爬虫问题都归结为"模拟力度"，后续每个案例都是这一原则的具体展开；五类分类帮助定位自己要写的爬虫类型。
 
 ### 爬虫合法性探究
 
-- Locator: `[[sources/js-reverse/js逆向课件/day04/requests基础.md#爬虫合法性探究]]`
+- Locator: `[[sources/js-reverse/20260908/js逆向课件/day04/requests基础.md#爬虫合法性探究]]`
 - Summary: 论证爬虫技术本身中立合法，但使用行为存在违法风险，并列出三大风险与三条避坑原则。
 - Key claims: 爬虫批量获取前端公开信息原则上合法，配合黑客技术攻击后台窃取数据则违法；风险三方面：强行突破反爬措施、干扰被访问网站正常运营、抓取受法律保护的特定数据；自保三原则：遵守 robots 协议、优化代码避免干扰运行、审查抓取内容并及时删除个人信息/隐私/商业秘密；搜索引擎类"善意爬虫"被欢迎，抢票软件类高频"恶意爬虫"被厌恶。
 - Learner-relevant: 在写第一行爬虫代码前建立法律与道德边界意识，知道哪些操作绝对不能做。
 
 ### requests基础操作(代码实操重点！！！)
 
-- Locator: `[[sources/js-reverse/js逆向课件/day04/requests基础.md#requests基础操作(代码实操重点！！！)]]`
+- Locator: `[[sources/js-reverse/20260908/js逆向课件/day04/requests基础.md#requests基础操作(代码实操重点！！！)]]`
 - Summary: requests 模块的完整入门：编码四流程，以及东方财富、51游戏搜索、人事考试网（UA 检测/POST）、智慧职教（动态加载）、肯德基、图片爬取等递进案例。
 - Key claims: 编码流程为指定 url→发起请求→获取响应数据→持久化存储；response.text 返回字符串、response.content 返回二进制、response.json() 直接反序列化；中文乱码用 response.encoding='utf-8' 处理；GET 参数用 params 字典、POST 参数用 data 字典封装；User-Agent 是请求载体身份标识，UA 检测的反反爬是 UA 伪装；动态加载数据=不是通过浏览器地址栏 url 请求到的数据，需抓包工具 Ctrl+F 全局搜索定位数据包，再提取 url/请求参数模拟请求，且请求头常需携带 Referer；图片爬取方式一为 requests.get().content 写 wb 文件（需 UA 伪装时用），方式二为 urlretrieve(img_url, 路径) 直接存储。
 - Learner-relevant: 掌握 requests 爬虫的标准编码范式与两大反爬破解（UA 伪装、动态数据包定位），能独立完成页面爬取、搜索参数处理、动态数据抓取和图片下载。

@@ -31,42 +31,42 @@ updated: 2026-09-05
 
 ### 基于Py逆向的有道翻译
 
-- Locator: `[[sources/js-reverse/js逆向课件/Day23/01 基于Py逆向的有道翻译.py#基于Py逆向的有道翻译]]`
+- Locator: `[[sources/js-reverse/20260908/js逆向课件/Day23/01 基于Py逆向的有道翻译.py#基于Py逆向的有道翻译]]`
 - Summary: 在 Python 中用 hashlib.md5 手工拼接 `client=&mysticTime=&product=&key=` 字符串后取 MD5 得到 sign，配合动态时间戳 mysticTime 完成有道翻译请求，验证 Python 原生复现加密的可行性。
 - Key claims: sign 由 `client=fanyideskweb&mysticTime={时间戳}&product=webfanyi&key=fsdsogkndfokasodnaso` 取 MD5 生成；mysticTime 为毫秒级时间戳；Python 用 hashlib.md5 即可原生复现；无需 JS 运行时即可完成 sign 构造
 - Learner-relevant: 掌握"Python 原生复现加密"的最简模式——当加密算法是标准 MD5 时，可直接脱离 JS 环境，降低逆向工程复杂度。
 
 ### node.js入门与crypto模块
 
-- Locator: `[[sources/js-reverse/js逆向课件/Day23/02 node.js#node.js入门与crypto模块]]`
+- Locator: `[[sources/js-reverse/20260908/js逆向课件/Day23/02 node.js#node.js入门与crypto模块]]`
 - Summary: 用 demo.js/demo.py 演示 node 运行 JS、模板字符串、时间戳获取，并引入 crypto-js/crypto 模块，为后续 JS 侧 sign 与 AES 解密做环境铺垫。
 - Key claims: node 可执行 JS 文件；模板字符串用反引号包裹变量；`time.time()*1000` 取毫秒时间戳；crypto-js/crypto 是后续 sign 与 AES 解密的依赖模块
 - Learner-relevant: 建立 node 运行 JS 的基本认知，理解为什么后续 sign 和 AES 解密可以先在 node 中调通再交给 execjs。
 
 ### 有道翻译JS侧sign生成
 
-- Locator: `[[sources/js-reverse/js逆向课件/Day23/03 有道翻译.js#有道翻译JS侧sign生成]]`
+- Locator: `[[sources/js-reverse/20260908/js逆向课件/Day23/03 有道翻译.js#有道翻译JS侧sign生成]]`
 - Summary: 把 sign 生成逻辑搬到 JS，用 crypto.createHash("md5") 计算 sign；03 有道翻译.js 暴露 get_sign(t) 供外部调用，03 有道翻译2.js 则封装 get_sign() 同时返回 [sign, 时间戳]。
 - Key claims: JS 用 crypto.createHash("md5").update(e).digest("hex") 生成 sign；get_sign(t) 接收外部时间戳；get_sign() 内部生成时间戳并返回 [sign, e]；sign 拼接逻辑与 Py 版一致
 - Learner-relevant: 理解同一加密逻辑的双语实现，为 execjs"Python 调 JS"混合路线提供可调用的 JS 入口函数。
 
 ### 基于JS逆向的有道翻译
 
-- Locator: `[[sources/js-reverse/js逆向课件/Day23/04 基于JS逆向的有道翻译.py#基于JS逆向的有道翻译]]`
+- Locator: `[[sources/js-reverse/20260908/js逆向课件/Day23/04 基于JS逆向的有道翻译.py#基于JS逆向的有道翻译]]`
 - Summary: Python 通过 execjs.compile 加载 03 有道翻译.js，调用 js_compile.call("get_sign", t) 获取 sign，再发送有道翻译请求，验证"Python 调 JS 执行加密"的混合路线。
 - Key claims: execjs.compile 编译 JS 代码；js_compile.call("get_sign", t) 调用 JS 函数；sign 由 JS 侧生成后返回给 Python；请求仍由 requests 发送
 - Learner-relevant: 掌握 execjs 混合路线——当 JS 加密逻辑复杂或含浏览器对象时，用 Python 调 JS 比纯 Py 复现更稳妥，是逆向工程中的常用折中。
 
 ### 有道翻译响应解密Py版
 
-- Locator: `[[sources/js-reverse/js逆向课件/Day23/05 基于Py逆向的有道翻译的解密.py#有道翻译响应解密Py版]]`
+- Locator: `[[sources/js-reverse/20260908/js逆向课件/Day23/05 基于Py逆向的有道翻译的解密.py#有道翻译响应解密Py版]]`
 - Summary: 在 Python 中用 PyCryptodome 实现 AES-128-CBC 解密——key/iv 分别由两个 `ydsecret://...` 字符串取 MD5 digest 得到，响应文本先做 base64 url-safe→standard 替换再解密去填充。
 - Key claims: key = md5("ydsecret://query/key/B*RGygVywfNBwpmBaZg*WT7SIOUP2T0C9WHMZN39j^DAdaZhAnxvGcCY6VYFwnHl").digest()；iv = md5("ydsecret://query/iv/C@lZe2YzHtZ2CYgaXKSVfsb7Y4QWHjITPPZ0nQp87fBeJ!Iv6v^6fvi2WN@bYpJ4").digest()；响应文本需 replace("-","+").replace("_","/") 再做 base64.b64decode；AES 模式为 CBC，去填充用 unpad(data, 16)
 - Learner-relevant: 掌握"Python 原生 AES 解密"的完整流程——key/iv 派生、base64 变体处理、CBC 解密与去填充，是响应解密的标准模板。
 
 ### 有道翻译响应解密JS版
 
-- Locator: `[[sources/js-reverse/js逆向课件/Day23/06 基于JS逆向的有道翻译的解密.py#有道翻译响应解密JS版]]`
+- Locator: `[[sources/js-reverse/20260908/js逆向课件/Day23/06 基于JS逆向的有道翻译的解密.py#有道翻译响应解密JS版]]`
 - Summary: 把 AES 解密逻辑写在 JS（decrypt_data）中，Python 通过 execjs 直接调用 JS 解密函数，验证"JS 加密 JS 解密"的对称路线，与 Py 版解密形成对比。
 - Key claims: JS 侧 decrypt_data 封装 AES-128-CBC 解密逻辑；Python 用 js_compile.call("decrypt_data", response.text) 调用；JS 内部用 cryptoJs.createDecipheriv 解密；与 Py 版解密结果等价
 - Learner-relevant: 理解"JS 加密 JS 解密"的对称性——当加密逻辑已用 JS 实现时，解密也优先用 JS 实现可减少跨语言移植成本，是逆向工程中的实用策略。
