@@ -1,6 +1,5 @@
 ---
 source: full-stack-fastapi-react-mongodb
-source_hash: d49060e237c88b5eecf101f984e23cc8ff007658eb41cb779610e90830480ef5
 source_lines: 8281
 created: 2026-08-28
 updated: 2026-08-28

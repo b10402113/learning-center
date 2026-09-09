@@ -1,6 +1,5 @@
 ---
 source: 044 Token Bucket vs Leaky Bucket
-source_hash: fcee24f388f75796ef9ed9d7d3debb6ff6d5daa69c59a6010564a87d744ae34f
 source_lines: 61
 created: 2025-08-25
 updated: 2025-08-25

@@ -1,6 +1,5 @@
 ---
 source: 14-looping-through-collections.md
-source_hash: cf65d34666184efc12a9dc3121219f4e9fc2fc60f30db6e98d5944c071de1e6c
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03

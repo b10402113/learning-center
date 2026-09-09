@@ -1,6 +1,5 @@
 ---
 source: 04-tools-setup.md
-source_hash: 09b132102fa8df4c4d45b1052a3dfbb2b2fe7a18b469987d1b2bf8b2cabe412a
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03

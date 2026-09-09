@@ -1,6 +1,5 @@
 ---
 source: AGENTS.md_GUIDE.pdf
-source_hash: 1c83aff35ca8b62884107504debfad4cd2cdd63f038f2f2aeded4eddea62b210
 source_lines: 952
 created: 2026-08-22
 updated: 2026-08-22

@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>table_info 與 column_info：結構化元數據</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>table_info 與 column_info：結構化元數據</h1>
+<div class="meta">元數據知識庫結構 · Step 2/4</div>
+
+<h2>學習目標</h2>
+<p>能說清 table_info 和 column_info 兩張表的字段含義，理解 role 字段如何把表和列分類。</p>
+
+<h2>table_info：每張表是什麼角色？</h2>
+
+<p>在星型模型的數據倉庫裡，表分兩種：事實表（fact）和維度表（dim）。<code>table_info</code> 就是登記這件事的地方。</p>
+
+<pre><code>CREATE TABLE table_info (
+  id          VARCHAR(64)  PRIMARY KEY,  -- 表編號，如 'fact_order'
+  name        VARCHAR(128),              -- 表名稱
+  role        VARCHAR(32),               -- 'fact' 或 'dim'
+  description TEXT                       -- 表的業務描述
+);</code></pre>
+
+<p>實際數據是這樣的：</p>
+
+<table>
+  <tr><th>id</th><th>name</th><th>role</th><th>description</th></tr>
+  <tr><td><code>fact_order</code></td><td>fact_order</td><td><strong>fact</strong></td><td>訂單事實表，記錄訂單數量和金額等核心指標</td></tr>
+  <tr><td><code>dim_customer</code></td><td>dim_customer</td><td>dim</td><td>客戶維度表，描述下單客戶的基本屬性</td></tr>
+  <tr><td><code>dim_date</code></td><td>dim_date</td><td>dim</td><td>時間維度表，用於多時間粒度分析</td></tr>
+  <tr><td><code>dim_product</code></td><td>dim_product</td><td>dim</td><td>商品維度表，描述商品的基本屬性信息</td></tr>
+  <tr><td><code>dim_region</code></td><td>dim_region</td><td>dim</td><td>地區維度表，用於描述訂單發生的地理區域</td></tr>
+</table>
+
+<p><code>role</code> 字段只有兩個值：<code>fact</code> 和 <code>dim</code>。當 LLM 看到用戶問「訂單金額」時，它通過 <code>role</code> 知道要從事實表 <code>fact_order</code> 取數據，然後 JOIN 維度表來補充維度信息。</p>
+
+<h2>column_info：每列的完整檔案</h2>
+
+<p><code>column_info</code> 是四張表裡字段最多的，也是最核心的。它為數據倉庫的每一列建檔：</p>
+
+<pre><code>CREATE TABLE column_info (
+  id          VARCHAR(64)  PRIMARY KEY,  -- 列編號，如 'fact_order.order_amount'
+  name        VARCHAR(128),              -- 列名
+  type        VARCHAR(64),               -- 數據類型
+  role        VARCHAR(32),               -- primary_key / foreign_key / measure / dimension
+  examples    JSON,                      -- 數據示例
+  description TEXT,                      -- 列描述
+  alias       JSON,                      -- 列別名（中文）
+  table_id    VARCHAR(64)                -- 所屬表編號
+);</code></pre>
+
+<h3>role 字段：四種角色</h3>
+
+<p><code>column_info</code> 的 <code>role</code> 有四個值，分別對應列在星型模型中的角色：</p>
+
+<table>
+  <tr><th>role</th><th>含義</th><th>示例</th><th>對 SQL 生成的影響</th></tr>
+  <tr><td><code>primary_key</code></td><td>主鍵，唯一標識每一行</td><td><code>order_id</code></td><td>用於 COUNT(DISTINCT ...) 去重計數</td></tr>
+  <tr><td><code>foreign_key</code></td><td>外鍵，關聯到維度表</td><td><code>customer_id</code></td><td>用於 JOIN 維度表</td></tr>
+  <tr><td><code>measure</code></td><td>度量，數值型可聚合</td><td><code>order_amount</code></td><td>用於 SUM / AVG 等聚合</td></tr>
+  <tr><td><code>dimension</code></td><td>維度，描述性屬性</td><td><code>region_name</code></td><td>用於 GROUP BY / WHERE 條件</td></tr>
+</table>
+
+<p>舉個例子：當 LLM 需要生成「華東地區的訂單總金額」時，它會查 <code>column_info</code> 發現：</p>
+<ul>
+  <li><code>order_amount</code> 的 role 是 <code>measure</code> → 需要 SUM</li>
+  <li><code>region_name</code> 的 role 是 <code>dimension</code> → 需要 GROUP BY 或 WHERE</li>
+  <li><code>region_id</code> 在 dim_region 中是 <code>primary_key</code>，在 fact_order 中是 <code>foreign_key</code> → 用它做 JOIN</li>
+</ul>
+
+<h3>alias 字段：填平語義鴻溝</h3>
+
+<p><code>alias</code> 是 JSON 數組，存儲列的中文別名。這是讓 LLM 能理解自然語言的關鍵：</p>
+
+<pre><code>-- order_amount 的 alias
+["銷售額", "訂單金額", "收入"]
+
+-- order_quantity 的 alias
+["銷量", "購買數量", "件數"]
+
+-- region_name 的 alias
+["地區", "區域", "大區"]</code></pre>
+
+<p>當用戶說「銷售額」，LLM 查 <code>column_info</code> 的 <code>alias</code> 字段，發現匹配 <code>order_amount</code>——語義鴻溝被填平了。</p>
+
+<h3>examples 字段：給 LLM 看真實數據</h3>
+
+<p><code>examples</code> 也是 JSON 數組，存儲列的真實數據示例。它的作用是讓 LLM 理解這列存的是什麼格式的數據：</p>
+
+<pre><code>-- customer_id 的 examples
+["C001", "C002", "C003", ...]
+
+-- order_amount 的 examples  
+[8999.0, 6999.0, 125.0, 899.0, ...]
+
+-- member_level 的 examples
+["黃金", "白銀", "青銅", "鉑金"]</code></pre>
+
+<p>有了這些示例，LLM 知道 <code>member_level</code> 存的是「黃金/白銀/青銅/鉑金」，而不是數字。當用戶說「黃金會員」，LLM 就能精確匹配。</p>
+
+<h2>table_id 的關聯方式</h2>
+
+<p><code>column_info</code> 的 <code>table_id</code> 字段指向 <code>table_info</code> 的 <code>id</code>。這樣就把列和表關聯起來了：</p>
+
+<pre><code>column_info.table_id = table_info.id
+
+例如：
+  column_info ('fact_order.order_amount').table_id = 'fact_order'
+  table_info ('fact_order').role = 'fact'</code></pre>
+
+<p>LLM 通過這層關聯，能知道 <code>order_amount</code> 來自事實表 <code>fact_order</code>，role 是 measure——需要聚合。而 <code>region_name</code> 來自維度表 <code>dim_region</code>，role 是 dimension——需要分組。</p>
+
+<h2>小結</h2>
+
+<p><code>table_info</code> 告訴 LLM 每張表是事實表還是維度表；<code>column_info</code> 告訴 LLM 每列的角色、別名、示例數據。兩張表配合，LLM 就能從自然語言精準定位到數據庫的列，並知道該對它做什麼操作。接下來看指標層——metric_info 和 column_metric。</p>
+
+<h2>測驗</h2>
+
+<div class="quiz" data-question="column_info 的 role 字段有哪四個值？" data-correct="0" data-explain="primary_key、foreign_key、measure、dimension，分別對應主鍵、外鍵、度量、維度。">
+  <button class="opt">primary_key, foreign_key, measure, dimension</button>
+  <button class="opt">key, index, metric, attr</button>
+  <button class="opt">pk, fk, agg, dim</button>
+  <button class="opt">primary, foreign, numeric, categorical</button>
+</div>
+
+<div class="quiz" data-question="table_info 的 role 字段有哪兩個值？" data-correct="2" data-explain="fact（事實表）和 dim（維度表），對應星型模型的兩類表。">
+  <button class="opt">main 和 sub</button>
+  <button class="opt">detail 和 summary</button>
+  <button class="opt">fact 和 dim</button>
+  <button class="opt">source 和 target</button>
+</div>
+
+<div class="quiz" data-question="column_info 的 alias 字段存儲什麼？" data-correct="1" data-explain="alias 是 JSON 數組，存儲列的中文別名，用於自然語言到列名的語義匹配。">
+  <button class="opt">列的 SQL 表達式</button>
+  <button class="opt">列的中文別名</button>
+  <button class="opt">列的數據庫引擎類型</button>
+  <button class="opt">列的壓縮算法</button>
+</div>
+
+<div class="quiz" data-question="當用戶說「銷量」，LLM 如何找到對應的列？" data-correct="3" data-explain="LLM 查 column_info 的 alias 字段，發現「銷量」匹配 order_quantity。">
+  <button class="opt">直接猜 order_count</button>
+  <button class="opt">搜索 DDL 裡的注釋</button>
+  <button class="opt">用模糊匹配找相似列名</button>
+  <button class="opt">查 column_info 的 alias 字段做精確匹配</button>
+</div>
+
+<div class="quiz" data-question="column_info 的 examples 字段的作用是什麼？" data-correct="0" data-explain="examples 存儲列的真實數據示例，讓 LLM 理解數據格式和取值範圍。">
+  <button class="opt">讓 LLM 理解列的數據格式和取值範圍</button>
+  <button class="opt">存儲列的統計信息</button>
+  <button class="opt">記錄列的歷史修改</button>
+  <button class="opt">控制列的訪問權限</button>
+</div>
+
+<div class="quiz" data-question="column_info 的 table_id 字段的作用是什麼？" data-correct="2" data-explain="table_id 指向 table_info 的 id，把列和表關聯起來，讓 LLM 知道列來自哪張表。">
+  <button class="opt">記錄列的創建順序</button>
+  <button class="opt">存儲列的壓縮大小</button>
+  <button class="opt">指向 table_info 的 id，關聯列所屬的表</button>
+  <button class="opt">控制列的索引類型</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="./why-metadata.html">← 上一步：為什麼 NL2SQL 需要元數據知識庫</a></div>
+  <div><a href="./metric-column-metric.html">下一步：metric_info 與 column_metric →</a></div>
+</div>
+
+<div class="footer">
+  <p>元數據知識庫結構 · table_info 與 column_info：結構化元數據</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

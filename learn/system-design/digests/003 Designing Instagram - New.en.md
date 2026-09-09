@@ -1,6 +1,5 @@
 ---
 source: 003 Designing Instagram - New.en
-source_hash: bf3d66cf4ee7f8152e1a83de2696bdb1c145bb7872f35eec4973d63c72b468ae
 source_lines: 4104
 created: 2025-08-25
 updated: 2025-08-25

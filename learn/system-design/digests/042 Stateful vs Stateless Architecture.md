@@ -1,6 +1,5 @@
 ---
 source: 042 Stateful vs Stateless Architecture
-source_hash: 22a29353507a5d17536da8001a4581c204bd6d06633edb259970b00d0560a97d
 source_lines: 64
 created: 2025-08-25
 updated: 2025-08-25

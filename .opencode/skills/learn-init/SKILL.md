@@ -9,23 +9,26 @@ Start a new learning subject. The subject **comes from the argument** — `sourc
 
 ## Archive source files
 
-Before reading, move each source file into a dated subfolder so the active `sources/<subject>/` stays clean:
+Before reading, move each source file **and directory** into a dated subfolder so the active `sources/<subject>/` stays clean:
 
 1. Create `sources/<subject>/YYYYMMDD/` (today's date) if it does not exist.
-2. For every file in `sources/<subject>/` (skip subdirectories and `.DS_Store`), move it into `sources/<subject>/YYYYMMDD/` keeping the original filename unchanged. Example: `sources/<subject>/20260903/AI Agents in Action, Second Edi - Micheal Lanham.pdf`.
-3. After moving, `sources/<subject>/` contains only subdirectories.
+2. For every entry in `sources/<subject>/` (skip `.DS_Store`): if it is a file, move it into `sources/<subject>/YYYYMMDD/` keeping the original filename; if it is a directory, move the whole directory into `sources/<subject>/YYYYMMDD/` preserving its internal structure. Example: `sources/<subject>/20260903/AI Agents in Action, Second Edi - Micheal Lanham.pdf` and `sources/<subject>/20260903/codebase/src/auth.ts`.
+3. After moving, `sources/<subject>/` contains only the `YYYYMMDD/` subfolder.
 
-Skip this step entirely if no loose files remain in `sources/<subject>/` (i.e. only subdirectories exist).
+Skip this step entirely if `sources/<subject>/` already contains only dated subfolders.
 
 ## Read the material first
 
-Follow the shared `docs/reference/source-reading.md` protocol — never read a PDF directly and never load a large source into the main context wholesale. Concretely:
+Follow the shared `docs/reference/source-reading.md` protocol — never read a source directly and never load a large source into the main context wholesale. Concretely:
 
-1. **Ensure digests.** For each file in `sources/<subject>/YYYYMMDD/` subfolders (do not browse `sources/` or `wiki/` or any other subject's folder), check `learn/<subject>/digests/<source-stem>.md`. Reuse it if the stored `source_hash` matches; build it via the sub-agent workflow if it is missing, stale, or the source is large. Small sources: read directly in the main context and write the digest yourself. The `source-stem` is the original filename without extension.
+1. **Ensure digests.** For each entry in `sources/<subject>/YYYYMMDD/` subfolders (do not browse `sources/` or `wiki/` or any other subject's folder):
+   - **PDF / text file:** check `learn/<subject>/digests/<source-stem>.md`. If it exists and has `status: pending`, skip. If missing, build it via the sub-agent workflow (large sources) or read directly in the main context and write it yourself (small sources). The `source-stem` is the original filename without extension.
+   - **Codebase directory:** detect by file extension — if the directory contains ≥ 1 source code file (`.py`, `.ts`, `.js`, `.go`, `.rs`, `.java`, `.c`, `.cpp`, `.rb`, `.swift`, `.kt`, `.php`), treat it as a codebase. Check `learn/<subject>/digests/<dir-stem>.md` (small) or `learn/<subject>/digests/<dir-stem>.*.part.md` (large). If it exists and has `status: pending`, skip. If missing, build it per the codebase digest workflow in `source-reading.md`. The `dir-stem` is the directory name.
+   Every new digest must have `status: pending` in its frontmatter.
 2. **Load L1 + TOC.** Read only the L1 overviews (and the sub-agents' compact TOC lines), not the L2 section detail. This is the ground truth your grilling questions will probe and your MEMORY will anchor to.
 3. **Pull detail lazily.** If a grilling question needs a specific section, dispatch a sub-agent to extract it — one-off, returned in message.
 
-If digests already exist and hashes match, skip reading entirely.
+If digests already exist with `status: pending`, skip reading entirely — the digests are ready for `/roadmap`.
 
 Run a `/grilling` session focused on the learner: work in rounds, one frontier per round, each question numbered with your recommendation. Cover every branch:
 

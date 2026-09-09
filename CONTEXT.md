@@ -32,7 +32,7 @@ The subject-level index (`ROADMAP.md`) that partitions the material into tiers a
 _Avoid_: plan, outline
 
 **Digest**:
-A two-level summary of an immutable source (`learn/<subject>/digests/`), written once per source and reused on hash match.
+A two-level summary of an immutable source (`learn/<subject>/digests/`), written once per source. Has a `status` field (`pending` | `absorbed`) tracking whether it has been consumed by `/roadmap` or `/absorb`.
 
 **Probe**:
 The per-node pre-view assessment stage (`/probe <subject>/<node-id>`), run after `/roadmap` and before `/nodes`: adaptive MCQ from shallow to deep across one node's source scope, binary-searching each strand. It is a hard gate — `/nodes` refuses a node that has not been probed. Outputs that node's mastery entry used to calibrate step depth. It never proposes pruning — all content stays complete and readable; mastery only shapes how deep each part is taught.
@@ -92,7 +92,7 @@ Per-subject state split in two: **mastery** (measurement from `/probe` and `/tac
 ## Verification
 
 **Deterministic check**:
-A check a script can run mechanically, limited to **format correctness** — required frontmatter, ID/filename match, step↔DAG consistency, `teaches` agreement, link resolution, element section presence, digest `source_hash`, source-locator resolution, node-count baseline. It never judges prose quality or content semantics. Runs in the verification script, never by the LLM.
+A check a script can run mechanically, limited to **format correctness** — required frontmatter, ID/filename match, step↔DAG consistency, `teaches` agreement, link resolution, element section presence, source-locator resolution, node-count baseline. It never judges prose quality or content semantics. Runs in the verification script, never by the LLM.
 _Avoid_: lint, mechanical check
 
 **Format check**:

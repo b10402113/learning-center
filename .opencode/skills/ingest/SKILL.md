@@ -25,17 +25,17 @@ If no files needed moving (all were already in dated subfolders), say so and sto
 
 For each file that was **just moved** in step 1 (not files that were already in dated subfolders before step 1), compute the digest stem — the original filename **without** extension.
 
-Check `learn/<subject>/digests/<stem>.md`: reuse it if the stored `source_hash` matches the archived file's sha256; rebuild if missing or stale.
+Check `learn/<subject>/digests/<stem>.md`: if it exists, skip; if missing, create it.
 
 For sources needing a digest:
 
-1. Follow `docs/reference/source-reading.md`. Check size via `pdftotext | wc -l`. Large sources (> 5,000 lines or > ~250 KB): parallel sub-agents write part digests to `learn/<subject>/digests/<stem>.<n>.part.md`, then merge into `<stem>.md`. Small sources: read directly in context, write the digest.
-2. Frontmatter must include `status: pending` and `absorbed_at: ""`.
-3. Record `source_hash`, `source_lines`, `L1` overview, and `L2` section detail with locators.
+1. Follow `docs/reference/source-reading.md`. Check size via `pdftotext | wc -l` (PDF) or `wc -l` (codebase). Large sources (> 5,000 lines or > ~250 KB): parallel sub-agents write part digests to `learn/<subject>/digests/<stem>.<n>.part.md`. There is no merge step: the part files together are the digest. Small sources: read directly in context, write the digest.
+2. Frontmatter must include `source`, `source_lines`, `status: pending`, and `absorbed_at: ""`.
+3. Record `source_lines`, `L1` overview, and `L2` section detail with locators.
 
 When citing a source that came from a subdirectory, preserve its relative path inside the dated folder in source links: `[[sources/<subject>/YYYYMMDD/chapter-notes/fig1.png]]` rather than flattening to the filename alone.
 
-If all newly archived sources already have current digests (hash match), say so.
+If all newly archived sources already have digests, say so.
 
 ## Step 3 — Report
 
@@ -44,4 +44,4 @@ Summarise:
 - How many digests were created or reused.
 - That digest status is `pending` — run `/absorb <subject>` to integrate into the learning graph.
 
-Completion: every new source file is in a dated subfolder under `sources/<subject>/`, every source has a digest with a matching hash and `status: pending`, and the learner knows to run `/absorb` next.
+Completion: every new source file is in a dated subfolder under `sources/<subject>/`, every source has a digest with `status: pending`, and the learner knows to run `/absorb` next.

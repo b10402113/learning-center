@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>數倉表結構與演示數據</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>數倉表結構與演示數據</h1>
+<p class="meta">Step 1/3 · 演示數據與 SQL 腳本</p>
+
+<h2>學習目標</h2>
+<p>能說清 dw-schema-data.sql 中 5 張表的建表語句與演示數據的規模、覆蓋範圍。</p>
+
+<h2>為什麼要從 SQL 腳本開始？</h2>
+
+<p>掌柜問數是一個 NL2SQL 系統——用戶說自然語言，系統生成 SQL 去查數據。那數據從哪裡來？答案是：一個名為 <code>dw</code> 的 MySQL 數據庫，裡面是一套星型模型（star schema）結構。這套結構由 <code>dw-schema-data.sql</code> 這份腳本一次性搞定：建庫、建表、插數據。</p>
+
+<p>跑通這份腳本，是你理解整個系統的第一步——因為後面所有的檢索、SQL 生成、結果返回，都是圍繞這 5 張表展開的。</p>
+
+<h2>星型模型：1 張事實表 + 4 張維度表</h2>
+
+<p>星型模型是數據倉庫最經典的建模方式。核心思想：把「發生了什麼」和「是誰/在哪/什麼時候/什麼東西」分開存。</p>
+
+<ul>
+<li><strong>事實表（fact table）</strong>：記錄「發生了什麼」——每筆訂單的金額、數量，以及指向維度表的外鍵</li>
+<li><strong>維度表（dimension table）</strong>：記錄「是誰/在哪/什麼時候/什麼東西」——客戶信息、日期、商品、地區的描述性屬性</li>
+</ul>
+
+<p>畫出來是這樣的：</p>
+
+<pre><code>        dim_customer
+            |
+dim_date — fact_order — dim_product
+            |
+        dim_region</code></pre>
+
+<p>事實表在中間，四張維度表像星星的角一樣向外輻射——這就是「星型」名字的由來。</p>
+
+<h2>5 張表逐一拆解</h2>
+
+<h3>1. dim_customer（客戶維度表）</h3>
+
+<p>存客戶的基本信息。每行一個客戶，20 行。</p>
+
+<table>
+<thead>
+<tr><th>字段</th><th>類型</th><th>角色</th><th>示例</th></tr>
+</thead>
+<tbody>
+<tr><td>customer_id</td><td>varchar(20)</td><td>主鍵（PK）</td><td>C001</td></tr>
+<tr><td>customer_name</td><td>varchar(50)</td><td>維度</td><td>李偉</td></tr>
+<tr><td>gender</td><td>varchar(10)</td><td>維度</td><td>男 / 女</td></tr>
+<tr><td>member_level</td><td>varchar(20)</td><td>維度</td><td>黃金 / 白銀 / 青銅 / 鉑金</td></tr>
+</tbody>
+</table>
+
+<p>會員等級分四檔：黃金、白銀、青銅、鉑金。20 位客戶覆蓋了男/女和四個等級的組合，足以驗證「按會員等級統計 GMV」這類查詢。</p>
+
+<h3>2. dim_date（時間維度表）</h3>
+
+<p>存日期信息，90 行，覆蓋 2025 年 Q1（1 月 1 日到 3 月 31 日）。</p>
+
+<table>
+<thead>
+<tr><th>字段</th><th>類型</th><th>角色</th><th>示例</th></tr>
+</thead>
+<tbody>
+<tr><td>date_id</td><td>int</td><td>主鍵（PK）</td><td>20250101</td></tr>
+<tr><td>year</td><td>int</td><td>維度</td><td>2025</td></tr>
+<tr><td>quarter</td><td>varchar(2)</td><td>維度</td><td>Q1</td></tr>
+<tr><td>month</td><td>int</td><td>維度</td><td>1</td></tr>
+<tr><td>day</td><td>int</td><td>維度</td><td>1</td></tr>
+</tbody>
+</table>
+
+<p>日期表支持多時間粒度查詢：按日、按月、按季度。因為整個數據集只有一個季度，所以 quarter 永遠是 Q1，但結構上支持擴展。</p>
+
+<h3>3. dim_product（商品維度表）</h3>
+
+<p>存商品信息，15 行。</p>
+
+<table>
+<thead>
+<tr><th>字段</th><th>類型</th><th>角色</th><th>示例</th></tr>
+</thead>
+<tbody>
+<tr><td>product_id</td><td>varchar(20)</td><td>主鍵（PK）</td><td>P001</td></tr>
+<tr><td>product_name</td><td>varchar(200)</td><td>維度</td><td>iPhone 15 Pro</td></tr>
+<tr><td>category</td><td>varchar(50)</td><td>維度</td><td>手機數碼</td></tr>
+<tr><td>brand</td><td>varchar(50)</td><td>維度</td><td>蘋果</td></tr>
+</tbody>
+</table>
+
+<p>15 件商品覆蓋 6 個品類（手機數碼、家用電器、鞋靴、服飾、食品飲料、休閒零食）和多個品牌。這讓「按品類統計銷量」「按品牌統計 GMV」這類分析有足夠的切面。</p>
+
+<h3>4. dim_region（地區維度表）</h3>
+
+<p>存地區信息，6 行。</p>
+
+<table>
+<thead>
+<tr><th>字段</th><th>類型</th><th>角色</th><th>示例</th></tr>
+</thead>
+<tbody>
+<tr><td>region_id</td><td>varchar(20)</td><td>主鍵（PK）</td><td>R001</td></tr>
+<tr><td>province</td><td>varchar(50)</td><td>維度</td><td>廣東省</td></tr>
+<tr><td>region_name</td><td>varchar(50)</td><td>維度</td><td>華南</td></tr>
+<tr><td>country</td><td>varchar(50)</td><td>維度</td><td>中國</td></tr>
+</tbody>
+</table>
+
+<p>6 個地區覆蓋華南（廣東）、華東（浙江、上海）、西南（四川）、華北（北京）、華中（湖北），足以驗證「按地區查詢訂單」這類場景。</p>
+
+<h3>5. fact_order（訂單事實表）</h3>
+
+<p>這是整個星型模型的核心——每筆訂單一行，約 116 行。</p>
+
+<table>
+<thead>
+<tr><th>字段</th><th>類型</th><th>角色</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td>order_id</td><td>varchar(30)</td><td>主鍵（PK）</td><td>訂單唯一標識，格式 ORD+日期+序號</td></tr>
+<tr><td>customer_id</td><td>varchar(20)</td><td>外鍵（FK）</td><td>指向 dim_customer</td></tr>
+<tr><td>product_id</td><td>varchar(20)</td><td>外鍵（FK）</td><td>指向 dim_product</td></tr>
+<tr><td>date_id</td><td>int</td><td>外鍵（FK）</td><td>指向 dim_date</td></tr>
+<tr><td>region_id</td><td>varchar(20)</td><td>外鍵（FK）</td><td>指向 dim_region</td></tr>
+<tr><td>order_quantity</td><td>int</td><td>度量（measure）</td><td>購買數量</td></tr>
+<tr><td>order_amount</td><td>float</td><td>度量（measure）</td><td>訂單金額</td></tr>
+</tbody>
+</table>
+
+<p>事實表只存「數字」（數量、金額）和「外鍵」（指向誰）。描述性的信息（客戶叫什麼、商品叫什麼）全部在維度表裡。這是星型模型的核心約定：事實表存度量，維度表存屬性。</p>
+
+<p>訂單金額範圍從 35 元（一包奧利奧）到 9499 元（一部 Galaxy S24 Ultra），覆蓋了低單價和高單價的分析場景。</p>
+
+<h2>建表語句的關鍵細節</h2>
+
+<p>腳本開頭有兩行值得注意：</p>
+
+<pre><code>SET NAMES utf8mb4;
+SET FOREIGN_KEY_CHECKS = 0;</code></pre>
+
+<p><code>utf8mb4</code> 確保中文字符正確存儲。<code>FOREIGN_KEY_CHECKS = 0</code> 關閉外鍵約束檢查——因為建表順序是先建事實表再建維度表（腳本先 DROP/CREATE fact_order），如果不關閉外鍵檢查，MySQL 會報錯。腳本結尾再把外鍵檢查開回來。</p>
+
+<p>所有表都用 <code>InnoDB</code> 引擎、<code>utf8mb4</code> 字符集、<code>Dynamic</code> 行格式——這是 MySQL 8.0 的推薦配置。</p>
+
+<h2>數據規模總覽</h2>
+
+<table>
+<thead>
+<tr><th>表</th><th>行數</th><th>覆蓋範圍</th></tr>
+</thead>
+<tbody>
+<tr><td>dim_customer</td><td>20</td><td>4 檔會員 × 男/女</td></tr>
+<tr><td>dim_date</td><td>90</td><td>2025 Q1（90 天）</td></tr>
+<tr><td>dim_product</td><td>15</td><td>6 個品類 × 多品牌</td></tr>
+<tr><td>dim_region</td><td>6</td><td>5 大區 × 6 省份</td></tr>
+<tr><td>fact_order</td><td>~116</td><td>Q1 全部訂單</td></tr>
+</tbody>
+</table>
+
+<p>數據量很小，但維度覆蓋面廣。這是刻意設計的：Text2SQL 系統的演示數據不需要大，但需要覆蓋足夠多的分析切面，讓每一種查詢（按時間、按地區、按品類、按會員等級）都有對應的數據可以跑。</p>
+
+<h2>小結</h2>
+
+<p>dw-schema-data.sql 用一份腳本完成了三件事：建庫、建表、插數據。5 張表構成星型模型——1 張事實表存訂單的數字，4 張維度表存描述性屬性。數據覆蓋 2025 Q1 的 116 筝訂單，橫跨時間、地區、品類、品牌、會員等級五個分析維度。這就是整個 NL2SQL 系統的「答案數據集」。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./meta-schema-setup.html">下一步：元數據表結構與業務含義 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="事實表和維度表的核心區別是什麼？" data-correct="2" data-explain="事實表存度量（數字）和外鍵，維度表存描述性屬性。">
+  <button class="opt">事實表存文本，維度表存數字</button>
+  <button class="opt">兩者沒有區別，只是名字不同</button>
+  <button class="opt">事實表存度量和外鍵，維度表存描述性屬性</button>
+  <button class="opt">事實表比維度表小</button>
+</div>
+
+<div class="quiz" data-question="dim_date 表覆蓋的時間範圍是什麼？" data-correct="1" data-explain="90 行，從 2025-01-01 到 2025-03-31，覆蓋整個 Q1。">
+  <button class="opt">2024 年全年</button>
+  <button class="opt">2025 年 Q1（90 天）</button>
+  <button class="opt">2025 年上半年</button>
+  <button class="opt">2025 年全年</button>
+</div>
+
+<div class="quiz" data-question="fact_order 中 order_amount 的值域大約是？" data-correct="0" data-explain="最低 35 元（零食），最高 9499 元（手機），覆蓋低高單價場景。">
+  <button class="opt">35–9499 元</button>
+  <button class="opt">100–5000 元</button>
+  <button class="opt">1000–10000 元</button>
+  <button class="opt">50–2000 元</button>
+</div>
+
+<div class="quiz" data-question="腳本為什麼要在開頭關閉 FOREIGN_KEY_CHECKS？" data-correct="3" data-explain="因為建表順序可能先建有外鍵引用的表，關閉檢查避免報錯。">
+  <button class="opt">為了加快建表速度</button>
+  <button class="opt">為了節省存儲空間</button>
+  <button class="opt">因為演示數據不需要外鍵</button>
+  <button class="opt">因為建表順序可能觸發外鍵約束報錯</button>
+</div>
+
+<div class="quiz" data-question="dim_product 表覆蓋了多少個品類？" data-correct="2" data-explain="手機數碼、家用電器、鞋靴、服飾、食品飲料、休閒零食，共 6 個。">
+  <button class="opt">3 個</button>
+  <button class="opt">4 個</button>
+  <button class="opt">6 個</button>
+  <button class="opt">8 個</button>
+</div>
+
+<div class="quiz" data-question="為什麼演示數據量很小但仍然有用？" data-correct="1" data-explain="數據量小但維度覆蓋面廣，足以驗證每一種查詢場景。">
+  <button class="opt">因為小數據跑得更快</button>
+  <button class="opt">因為維度覆蓋面廣，能驗證各類查詢場景</button>
+  <button class="opt">因為 Text2SQL 不需要數據</button>
+  <button class="opt">因為生產環境也會用小數據</button>
+</div>
+
+<div class="footer">
+  <p>掌柜問數 · 數倉表結構與演示數據 · Step 1/3</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

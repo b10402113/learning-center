@@ -1,6 +1,5 @@
 ---
 source: 013 Redundancy and Replication
-source_hash: 40249d68574aefaa585d6b7cf63ea631db4a584b570e7f820c0dd75f526ec6e9
 source_lines: 20
 created: 2025-08-25
 updated: 2025-08-25

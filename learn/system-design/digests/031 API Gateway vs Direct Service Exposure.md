@@ -1,6 +1,5 @@
 ---
 source: 031 API Gateway vs Direct Service Exposure
-source_hash: 95b4a1bb57a71c119615f88f25661c9103fa3a1ed520df2df713aa98e31c3be8
 source_lines: 65
 created: 2025-08-25
 updated: 2025-08-25

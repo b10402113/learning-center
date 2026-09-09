@@ -1,6 +1,5 @@
 ---
 source: 028 ReadThrough vs WriteThrough Cache
-source_hash: 545eff2336096d2b2bbb841d8b34642e0e4262b2440eab896fe089a4f05db682
 source_lines: 128
 created: 2025-08-25
 updated: 2025-08-25

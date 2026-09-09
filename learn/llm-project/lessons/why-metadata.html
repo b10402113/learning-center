@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>為什麼 NL2SQL 需要元數據知識庫</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>為什麼 NL2SQL 需要元數據知識庫</h1>
+<div class="meta">元數據知識庫結構 · Step 1/4</div>
+
+<h2>學習目標</h2>
+<p>能解釋「自然語言問數」場景下，為什麼不能把用戶的問題直接丟給 LLM 生成 SQL，而需要一個元數據知識庫做語義中間層。</p>
+
+<h2>一個問題，兩種理解</h2>
+
+<p>假設業務同學在聊天框裡問了一句：「上週華東地區 GMV 多少？」</p>
+
+<p>這句話對人來說很直覺，但對 LLM 來說，它面臨三個不確定性：</p>
+
+<blockquote>
+<strong>「華東」是什麼？</strong> 數據庫裡對應的到底是 <code>dim_region.region_name</code> 的值「華東」，還是某個 <code>province</code> 包含「華」字的記錄？<br><br>
+<strong>「GMV」是什麼？</strong> 數據庫裡有 <code>order_amount</code> 這一列，但 LLM 不知道「GMV」= SUM(order_amount)。它甚至不知道這個指標叫 GMV。<br><br>
+<strong>「上週」怎麼翻譯？</strong> 需要知道 <code>dim_date</code> 表的 <code>date_id</code> 格式是 yyyyMMdd，以及「上週」對應的具體日期範圍。
+</blockquote>
+
+<p>如果直接把用戶問題和數據庫 DDL 扔給 LLM，它要同時解決語義匹配、指標理解、SQL 語法三件事——這太難了，容易出錯。</p>
+
+<h2>元數據知識庫的角色</h2>
+
+<p>元數據知識庫本質上是一份「數據庫的說明書中心」。它把數據庫裡「有什麼表、有什麼列、列是什麼角色、有哪些業務指標、指標怎麼算」這些信息登記在四張專門的表裡。</p>
+
+<table>
+  <tr><th>表</th><th>登記什麼</th><th>一句話</th></tr>
+  <tr><td><code>table_info</code></td><td>每張表的角色</td><td>這張表是事實表還是維度表</td></tr>
+  <tr><td><code>column_info</code></td><td>每列的類型、角色、別名</td><td>這列是主鍵、外鍵、度量還是維度</td></tr>
+  <tr><td><code>metric_info</code></td><td>業務指標的定義</td><td>GMV 是什麼、由哪些列算出來</td></tr>
+  <tr><td><code>column_metric</code></td><td>列與指標的關聯</td><td>order_amount 參與了 GMV 計算</td></tr>
+</table>
+
+<p>有了這份說明書，LLM 不用猜——它可以直接查到：「GMV」對應的指標 ID 是 <code>GMV</code>，涉及的列是 <code>fact_order.order_amount</code>，角色是 <code>measure</code>。</p>
+
+<h2>為什麼不能只靠 LLM 自己猜？</h2>
+
+<p>你可能會問：現在的大模型這麼聰明，直接把表結構告訴它不就行了？為什麼還需要元數據？</p>
+
+<p>原因有三：</p>
+
+<p><strong>第一，自然語言和數據庫語言之間有語義鴻溝。</strong> 用戶說「銷量」，數據庫裡叫 <code>order_quantity</code>；用戶說「成交總額」，數據庫裡叫 <code>order_amount</code>。元數據的 <code>alias</code> 字段就是為了填平這道溝——它把每個列的中文別名登記好，讓 LLM 能做精確匹配。</p>
+
+<p><strong>第二，指標的計算邏輯不能靠猜。</strong> 「AOV」是平均訂單金額，計算公式是 SUM(order_amount) / COUNT(DISTINCT order_id)。如果 LLM 不知道這個定義，它可能只算 SUM(order_amount)——結果差了十倍。元數據的 <code>metric_info</code> 表把每個指標的描述和相關列登記清楚，LLM 才能生成正確的聚合邏輯。</p>
+
+<p><strong>第三，表的語義角色決定 JOIN 邏輯。</strong> <code>fact_order</code> 是事實表，<code>dim_region</code> 是維度表。當用戶問「華東地區的訂單數」，系統需要 JOIN 這兩張表。元數據的 <code>role</code> 字段（fact / dim）直接告訴 LLM 哪些表需要 JOIN、怎麼 JOIN。</p>
+
+<h2>元數據知識庫在整個系統中的位置</h2>
+
+<p>在掌柜問數的架構裡，元數據知識庫處於「數據倉庫」和「智能體」之間：</p>
+
+<p><strong>數據倉庫</strong>（dw 庫）存的是業務數據——訂單、客戶、商品、地區、日期。</p>
+
+<p><strong>元數據知識庫</strong>（meta 庫）存的是「關於數據的數據」——每張表是什麼角色、每列是什麼含義、有哪些業務指標。</p>
+
+<p><strong>智能體</strong>（LangGraph Agent）拿到用戶問題後，先從元數據知識庫中召回相關的表、列、指標，再結合 LLM 生成 SQL。</p>
+
+<p>簡單說：元數據知識庫是 LLM 理解業務數據的「字典」。沒有這本字典，LLM 就是在黑暗中寫 SQL。</p>
+
+<h2>小結</h2>
+
+<p>元數據知識庫解決的核心問題是：讓 LLM 從「猜」變成「查」。用戶說「GMV」，LLM 不用猜，直接查元數據就知道對應 <code>fact_order.order_amount</code> 的 SUM。接下來三步，我們逐張看這四張表的具體結構。</p>
+
+<h2>測驗</h2>
+
+<div class="quiz" data-question="元數據知識庫在掌柜問數架構中處於哪兩個組件之間？" data-correct="2" data-explain="元數據知識庫是數據倉庫和智能體之間的語義中間層。">
+  <button class="opt">前端和後端之間</button>
+  <button class="opt">LLM 和前端之間</button>
+  <button class="opt">數據倉庫和智能體之間</button>
+  <button class="opt">Qdrant 和 ES 之間</button>
+</div>
+
+<div class="quiz" data-question="用戶說「銷量」，數據庫裡對應的列名是什麼？" data-correct="1" data-explain="column_info 的 alias 字段把「銷量」映射到 order_quantity。">
+  <button class="opt">order_amount</button>
+  <button class="opt">order_quantity</button>
+  <button class="opt">product_quantity</button>
+  <button class="opt">sales_count</button>
+</div>
+
+<div class="quiz" data-question="為什麼不能只把 DDL 扔給 LLM 而不建元數據？" data-correct="3" data-explain="DDL 只有列名和類型，沒有別名、指標定義、語義角色——LLM 無法理解業務含義。">
+  <button class="opt">因為 DDL 太長了</button>
+  <button class="opt">因為 LLM 不支持 SQL</button>
+  <button class="opt">因為 DDL 缺少別名、指標定義和語義角色</button>
+  <button class="opt">因為 DDL 不支持 JSON 格式</button>
+</div>
+
+<div class="quiz" data-question="元數據知識庫包含哪四張表？" data-correct="0" data-explain="table_info、column_info、metric_info、column_metric。">
+  <button class="opt">table_info、column_info、metric_info、column_metric</button>
+  <button class="opt">table_info、column_info、index_info、metric_info</button>
+  <button class="opt">schema_info、column_info、metric_info、relation_info</button>
+  <button class="opt">table_meta、column_meta、metric_meta、link_meta</button>
+</div>
+
+<div class="quiz" data-question="「AOV」這個指標的計算邏輯是什麼？" data-correct="2" data-explain="AOV = SUM(order_amount) / COUNT(DISTINCT order_id)，即平均訂單金額。">
+  <button class="opt">SUM(order_amount)</button>
+  <button class="opt">COUNT(order_id)</button>
+  <button class="opt">SUM(order_amount) / COUNT(DISTINCT order_id)</button>
+  <button class="opt">AVG(order_quantity)</button>
+</div>
+
+<div class="quiz" data-question="元數據知識庫的 role 字段有什麼作用？" data-correct="1" data-explain="role 標記表是 fact 還是 dim，列是 primary_key / foreign_key / measure / dimension，直接影響 JOIN 邏輯和聚合方式。">
+  <button class="opt">記錄表的創建時間</button>
+  <button class="opt">標記表或列的語義角色，影響 JOIN 和聚合邏輯</button>
+  <button class="opt">控制數據的訪問權限</button>
+  <button class="opt">存儲表的行數統計</button>
+</div>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./table-column-info.html">下一步：table_info 與 column_info →</a></div>
+</div>
+
+<div class="footer">
+  <p>元數據知識庫結構 · 為什麼 NL2SQL 需要元數據知識庫</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

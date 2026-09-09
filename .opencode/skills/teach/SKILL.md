@@ -165,7 +165,7 @@ When invoked as `/teach <subject>/<node-id>` (detected by the node file existing
 
 1. Read `learn/<subject>/nodes/<node-id>.mdx` — parse the `steps` frontmatter for the DAG (step ids, order, deps). Read `learn/<subject>/MEMORY.md` for language and learner profile. Read `learn/<subject>/digests/` for source material. Read `learn/<subject>/MISSION.md` if it exists.
 2. If the node's `status` is already `content-written`, skip the teach cycle and ask the user if they have any questions about the content — use it as a Q&A / review session instead.
-3. **Ensure assets.** Create `learn/<subject>/lessons/assets/` if it does not exist. Copy the canonical `shared.css` from `.opencode/skills/teach/assets/shared.css` into it. If a `quiz.js` is needed, copy from `assets/quiz.js`. All HTML lessons for this subject must reference assets as `./assets/shared.css` and `./assets/quiz.js` — never inline CSS/JS that belongs in a shared component, and never use relative paths that escape `lessons/` (e.g. `../assets/`).
+3. **Ensure assets.** Create `learn/<subject>/lessons/assets/` if it does not exist. If `learn/<subject>/lessons/assets/shared.css` does not exist, copy the canonical `shared.css` from `.opencode/skills/teach/assets/shared.css` into it. If `learn/<subject>/lessons/assets/quiz.js` does not exist and a `quiz.js` is needed, copy from `assets/quiz.js`. All HTML lessons for this subject must reference assets as `./assets/shared.css` and `./assets/quiz.js` — never inline CSS/JS that belongs in a shared component, and never use relative paths that escape `lessons/` (e.g. `../assets/`).
 4. Topological sort the DAG — teach deps before dependents. Steps with no deps are entry points.
 
 ### Teach cycle

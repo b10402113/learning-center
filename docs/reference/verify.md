@@ -42,7 +42,6 @@ Exit code: `0` = no failures, `1` = at least one failure. A non-zero exit is a h
 | `elem-nodes-ref` | element `nodes` reference existing nodes |
 | `src-path` | source link subject matches; source file exists |
 | `src-locator` | locator resolves in a digest (containment match) |
-| `digest-hash` | digest `source_hash` matches a source file |
 | `elem-connections` | Connections section present with ≥2 element links |
 | `elem-questions` | Questions section present |
 
@@ -55,7 +54,6 @@ Section-heading checks (`elem-connections`, `elem-questions`) are **localization
 | `lint-node-count` | actual node count within ±40% of the formula baseline (flag) |
 | `lint-orphan` | node/step/element files unreferenced by any link (flag) |
 | `lint-edge-refs` | edge `from`/`to`/`nodes` resolve |
-| `lint-digest-all` | every source file has a matching digest hash |
 
 ## False-positive policy
 

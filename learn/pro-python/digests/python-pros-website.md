@@ -1,6 +1,5 @@
 ---
 source: python-pros-website
-source_hash: scraped-from-netlify
 source_lines: 500
 created: 2025-09-03
 updated: 2025-09-03

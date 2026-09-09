@@ -1,6 +1,5 @@
 ---
 source: 016 PACELC Theorem
-source_hash: 873b216256d304d9c1033b6783a92e22f18a933806ba8eaa7960c2c9bbb928ab
 source_lines: 24
 created: 2025-08-25
 updated: 2025-08-25

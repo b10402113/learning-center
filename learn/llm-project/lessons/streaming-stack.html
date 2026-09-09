@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>流式響應與全棧串接</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>流式響應與全棧串接</h1>
+<p class="meta">Step 4/4 · 一個查詢的完整旅程</p>
+
+<h2>學習目標</h2>
+<p>能解釋 LangGraph 的 astream 如何橋接為 HTTP SSE 流，說清 progress/result/error 三種事件的用途與前端消費方式。</p>
+
+<h2>為什麼需要流式響應？</h2>
+
+<p>上一步我們走完了 12 個節點的工作流。但實際使用時，用戶不會願意等所有節點跑完才看到結果——整個過程可能要幾秒甚至十幾秒。如果前端只在最後才顯示結果，用戶會以為系統卡死了。</p>
+
+<p>SSE（Server-Sent Events）解決了這個問題：它讓後端能以 HTTP 長連接的方式，把數據「推」給前端。前端不需要反覆輪詢，後端有新數據時直接推送過來。這比 WebSocket 輕量，比輪詢高效，非常適合「單向推送進度和結果」的場景。</p>
+
+<h2>SSE 協議基礎</h2>
+
+<p>SSE 的數據格式很簡單：每個事件是一行 <code>data: {JSON}\n\n</code>。前端通過 <code>EventSource</code> API 接收這些事件。服務器不需要特殊的庫——只要設置好 HTTP 響應頭 <code>Content-Type: text/event-stream</code>，然後逐行寫入 <code>data:</code> 開頭的文本就行。</p>
+
+<p>在 FastAPI 裡，這通過 <code>StreamingResponse</code> 實現：</p>
+
+<pre><code>@query_router.post("/api/query")
+async def query(
+    query: QuerySchema,
+    query_service: QueryService = Depends(get_query_service)
+):
+    return StreamingResponse(
+        query_service.query(query.query),
+        media_type="text/event-stream"
+    )</code></pre>
+
+<p>關鍵在於 <code>query_service.query()</code> 是一個 async generator（異步生成器）——它不返回一個完整的響應，而是逐塊 yield 數據。FastAPI 的 <code>StreamingResponse</code> 會把每次 yield 的數據以 SSE 格式推送到客戶端。</p>
+
+<h2>三種事件類型</h2>
+
+<p>掌柜問數定義了三種 SSE 事件，每種有不同的用途：</p>
+
+<table>
+<thead>
+<tr><th>事件類型</th><th>格式</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr><td>progress</td><td><code>{"type":"progress","step":"...","status":"running/success/error"}</code></td><td>推送執行進度</td></tr>
+<tr><td>result</td><td><code>{"type":"result","data":[...]}</code></td><td>推送查詢結果</td></tr>
+<tr><td>error</td><td><code>{"type":"error","message":"..."}</code></td><td>推送錯誤信息</td></tr>
+</tbody>
+</table>
+
+<h3>progress 事件</h3>
+
+<p>每個 Agent 節點在執行時都會推送 progress 事件，包含三個字段：</p>
+
+<ul>
+<li><code>step</code>——節點名稱的中文描述（如「抽取關鍵詞」「召回字段」）</li>
+<li><code>status</code>——三種狀態：<code>running</code>（開始執行）、<code>success</code>（執行成功）、<code>error</code>（執行失敗）</li>
+</ul>
+
+<p>前端收到 progress 事件後，可以實時更新進度條或步驟列表，讓用戶知道系統正在幹什麼。</p>
+
+<h3>result 事件</h3>
+
+<p>SQL 執行成功後，查詢結果通過 result 事件推送。<code>data</code> 字段是一個數組，每個元素是一行查詢結果（鍵值對格式）。前端拿到後直接渲染成表格。</p>
+
+<h3>error 事件</h3>
+
+<p>如果整個流程中出現未捕獲的異常（比如數據庫連接超時），系統會推送 error 事件。<code>message</code> 字段包含錯誤描述，前端可以顯示錯誤提示。</p>
+
+<h2>從 LangGraph 到 SSE 的橋接</h2>
+
+<p>核心橋接邏輯在 <code>QueryService.query()</code> 裡：</p>
+
+<pre><code>async def query(self, query: str):
+    context = DataAgentContext(...)
+    state = DataAgentState(query=query)
+    try:
+        async for chunk in graph.astream(
+            input=state, context=context, stream_mode="custom"
+        ):
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+    except Exception as e:
+        yield f"data: {json.dumps({'type':'error','message':str(e)})}\n\n"</code></pre>
+
+<p>幾點要注意：</p>
+
+<ul>
+<li><code>graph.astream()</code> 是 LangGraph 的異步流式執行方法，<code>stream_mode="custom"</code> 表示使用節點內部 <code>stream_writer</code> 推送的自定義數據</li>
+<li>每次 yield 的 <code>chunk</code> 就是一個 dict（如 <code>{"type":"progress","step":"召回字段","status":"running"}</code>）</li>
+<li><code>json.dumps(ensure_ascii=False)</code> 確保中文不會被轉成 <code>\uXXXX</code> 編碼</li>
+<li>整個 generator 被 <code>StreamingResponse</code> 包裝成 SSE 流</li>
+</ul>
+
+<h2>依賴注入鏈</h2>
+
+<p>FastAPI 的依賴注入（Dependency Injection）在這裡起了關鍵作用。整個注入鏈是這樣的：</p>
+
+<pre><code>query_router
+  └─ Depends(get_query_service)
+       ├─ Depends(get_embedding_client)
+       ├─ Depends(get_column_qdrant_repository)
+       ├─ Depends(get_value_es_repository)
+       ├─ Depends(get_metric_qdrant_repository)
+       ├─ Depends(get_meta_mysql_repository)
+       │    └─ Depends(get_meta_session)
+       └─ Depends(get_dw_mysql_repository)
+            └─ Depends(get_dw_session)</code></pre>
+
+<p>每個 Depends 函數負責創建一個資源（數據庫 session、向量庫客戶端等）。FastAPI 自動管理這些資源的生命週期——請求開始時創建，請求結束時關閉。這就是為什麼你不需要手動管理 session 的開啟和關閉。</p>
+
+<h2>Lifespan 生命週期管理</h2>
+
+<p>除了請求級的資源管理，還有應用級的資源——MySQL 客戶端、Qdrant 客戶端、ES 客戶端、Embedding 客戶端。這些客戶端在 FastAPI 啟動時初始化，關閉時釋放：</p>
+
+<pre><code>@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 啟動時：初始化所有客戶端
+    embedding_client_manager.init()
+    qdrant_client_manager.init()
+    es_client_manager.init()
+    meta_mysql_client_manager.init()
+    dw_mysql_client_manager.init()
+    yield
+    # 關閉時：釋放所有客戶端
+    await qdrant_client_manager.close()
+    await es_client_manager.close()
+    await meta_mysql_client_manager.close()
+    await dw_mysql_client_manager.close()</code></pre>
+
+<p>這個函數被註冊到 FastAPI 的 <code>lifespan</code> 參數上，框架會在啟動和關閉時自動調用。</p>
+
+<h2>前端消費 SSE</h2>
+
+<p>前端通過 JavaScript 的 <code>EventSource</code> 或 <code>fetch</code> + ReadableStream 來消費 SSE 流。收到的事件根據 <code>type</code> 字段分發處理：</p>
+
+<table>
+<thead>
+<tr><th>收到的 type</th><th>前端動作</th></tr>
+</thead>
+<tbody>
+<tr><td>progress + running</td><td>更新進度列表，顯示「正在...」</td></tr>
+<tr><td>progress + success</td><td>標記該步驟完成（打勾）</td></tr>
+<tr><td>progress + error</td><td>標記該步驟失敗（紅叉）</td></tr>
+<tr><td>result</td><td>渲染結果表格</td></tr>
+<tr><td>error</td><td>顯示錯誤提示</td></tr>
+</tbody>
+</table>
+
+<p>前端項目基於 Vue + Vite 構建，通過 <code>npm install</code> 安裝依賴，<code>npm run dev</code> 啟動開發服務器，連接後端 SSE 接口完成全棧聯調。</p>
+
+<h2>Request ID 追蹤</h2>
+
+<p>在生產環境中，多個用戶同時提問時怎麼區分誰的日誌是誰的？系統用 <code>ContextVar</code>（Python 的上下文變量）為每個請求生成唯一的 <code>request_id</code>，中間件在請求進入時設置，日誌系統在輸出時自動附帶。這樣你在日誌裡搜索一個 request_id，就能看到一個完整請求的所有處理過程。</p>
+
+<h2>小結</h2>
+
+<p>SSE 把 LangGraph 的流式輸出橋接到 HTTP 長連接，三種事件類型（progress/result/error）覆蓋了進度、結果和錯誤的全場景。FastAPI 的依賴注入鏈自動管理請求級資源，lifespan 管理應用級資源，ContextVar 實現請求級日誌追蹤。前端通過 EventSource 消費 SSE 事件，實時渲染進度和結果。整個全棧串接的設計非常乾淨，是搭建類似系統的標準模式。</p>
+
+<div class="lesson-nav">
+  <div><a href="./retrieval-to-sql.html">← 上一步：多路召回到 SQL 生成</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="SSE 和 WebSocket 的核心區別是什麼？" data-correct="2" data-explain="SSE 是單向推送（服務器→客戶端），WebSocket 是雙向通信。">
+  <button class="opt">SSE 更安全</button>
+  <button class="opt">SSE 支持二進制數據</button>
+  <button class="opt">SSE 是單向推送，WebSocket 是雙向通信</button>
+  <button class="opt">SSE 比 WebSocket 更快</button>
+</div>
+
+<div class="quiz" data-question="掌柜問數的 SSE 事件有哪三種類型？" data-correct="0" data-explain="progress（進度）、result（結果）、error（錯誤）。">
+  <button class="opt">progress、result、error</button>
+  <button class="opt">start、middle、end</button>
+  <button class="opt">info、warning、danger</button>
+  <button class="opt">query、response、timeout</button>
+</div>
+
+<div class="quiz" data-question="FastAPI 的依賴注入鏈在請求結束時會做什麼？" data-correct="3" data-explain="自動關閉請求期間創建的資源（如數據庫 session）。">
+  <button class="opt">什麼都不做</button>
+  <button class="opt">緩存結果</button>
+  <button class="opt">發送通知</button>
+  <button class="opt">自動關閉請求期間創建的資源</button>
+</div>
+
+<div class="quiz" data-question="graph.astream 的 stream_mode="custom" 表示什麼？" data-correct="1" data-explain="使用節點內部 stream_writer 推送的自定義數據。">
+  <button class="opt">使用默認的流式模式</button>
+  <button class="opt">使用節點內部 stream_writer 推送的自定義數據</button>
+  <button class="opt">使用壓縮模式</button>
+  <button class="opt">使用二進制模式</button>
+</div>
+
+<div class="quiz" data-question="ContextVar 在這個系統裡的作用是什麼？" data-correct="2" data-explain="為每個請求生成唯一的 request_id，實現併發場景下的日誌追蹤。">
+  <button class="opt">存儲數據庫連接</button>
+  <button class="opt">管理 LLM 會話</button>
+  <button class="opt">為每個請求生成唯一 ID，實現日誌追蹤</button>
+  <button class="opt">管理前端狀態</button>
+</div>
+
+<div class="quiz" data-question="lifespan 函數在什麼時候被調用？" data-correct="1" data-explain="FastAPI 啟動時執行初始化代碼，關閉時執行清理代碼。">
+  <button class="opt">每次請求到來時</button>
+  <button class="opt">FastAPI 啟動時和關閉時</button>
+  <button class="opt">只在第一次請求時</button>
+  <button class="opt">只在服務器崩潰時</button>
+</div>
+
+<div class="footer">
+  <p>掌柜問數 · 一個查詢的完整旅程 · Step 4/4</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

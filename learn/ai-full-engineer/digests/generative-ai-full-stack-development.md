@@ -1,6 +1,5 @@
 ---
 source: generative-ai-full-stack-development
-source_hash: c02e152958f900fbc5a3ed691a504eca45c6f192fed9f18c72dfcc6aa956a8d2
 source_lines: 12674
 created: 2026-08-28
 updated: 2026-08-28

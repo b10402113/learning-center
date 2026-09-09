@@ -1,6 +1,5 @@
 ---
 source: 006 System Design Master Template.en
-source_hash: 19d8424a00e28ecba3954d6cad719da7dc835bbcfca3bec35629a1d99cef21ef
 source_lines: 6756
 created: 2025-08-25
 updated: 2025-08-25

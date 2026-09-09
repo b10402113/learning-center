@@ -1,6 +1,5 @@
 ---
 source: 047 System Design Master Template
-source_hash: 99754b4270348a0600522afd856b8ae8a86be6cc700cce2e338d3f20736880b3
 source_lines: 165
 created: 2025-08-25
 updated: 2025-08-25

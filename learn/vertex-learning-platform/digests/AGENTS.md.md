@@ -1,6 +1,5 @@
 ---
 source: AGENTS.md
-source_hash: 35764268eab1025259417c0dd3eb2f242b662b7bbd9e4905aef484351e4116a6
 source_lines: 194
 created: 2026-08-22
 updated: 2026-08-22

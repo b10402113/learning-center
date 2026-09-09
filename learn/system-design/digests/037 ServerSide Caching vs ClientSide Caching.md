@@ -1,6 +1,5 @@
 ---
 source: 037 ServerSide Caching vs ClientSide Caching
-source_hash: 6b92701e6b0aacb880da1b8ee785cfafffabf4848d5c75614f544e20d46f508f
 source_lines: 76
 created: 2025-08-25
 updated: 2025-08-25

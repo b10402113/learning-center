@@ -1,6 +1,5 @@
 ---
 source: 11-classes.md
-source_hash: 8a0940bb0d4c460bc0970ef1bc7829778099d4d1c3a7d6a6b3c5c89d7d10a764
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03

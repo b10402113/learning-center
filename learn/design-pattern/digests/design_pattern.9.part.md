@@ -1,6 +1,5 @@
 ---
 source: design_pattern
-source_hash: 7e40d1038887e21ab701140c74eefca654c937c34abb056d68d40a32386b5b09
 source_lines: 24398
 part: 9
 created: 2026-09-01

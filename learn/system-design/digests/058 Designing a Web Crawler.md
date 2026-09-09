@@ -1,6 +1,5 @@
 ---
 source: 058 Designing a Web Crawler
-source_hash: 870bd95f24ba3137bfaaba4733a4efdf146b31df8a8eab9b8b3591fbca3052a7
 source_lines: 423
 created: 2025-08-25
 updated: 2025-08-25

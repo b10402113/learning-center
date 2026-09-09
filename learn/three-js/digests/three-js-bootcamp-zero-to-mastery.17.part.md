@@ -1,6 +1,5 @@
 ---
 source: three-js-bootcamp-zero-to-mastery
-source_hash: 46f58bf9321ff5a95fd0ec5e93c39f0d108db98f3384501fe7777f77dbd25c38
 source_lines: 44849
 part: 17
 created: 2026-09-07

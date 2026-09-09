@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>metric_info 與 column_metric：指標定義與多對多關聯</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>metric_info 與 column_metric：指標定義與多對多關聯</h1>
+<div class="meta">元數據知識庫結構 · Step 3/4</div>
+
+<h2>學習目標</h2>
+<p>能說清 metric_info 和 column_metric 的字段含義，理解指標如何通過關聯表與數據列建立多對多關係。</p>
+
+<h2>metric_info：業務指標的「身份證」</h2>
+
+<p>在業務對話中，用戶不會說「請幫我 SUM(order_amount)」，他們會說「GMV 多少」「平均單價多少」。LLM 需要知道每個指標對應的計算邏輯——<code>metric_info</code> 就是登記這些的地方。</p>
+
+<pre><code>CREATE TABLE metric_info (
+  id                VARCHAR(64)  PRIMARY KEY,  -- 指標編碼，如 'GMV'
+  name              VARCHAR(128),              -- 指標名稱
+  description       TEXT,                      -- 指標描述（含計算邏輯）
+  relevant_columns  JSON,                      -- 關聯的列
+  alias             JSON                       -- 指標別名
+);</code></pre>
+
+<h3>實際數據示例</h3>
+
+<table>
+  <tr><th>id</th><th>name</th><th>description</th><th>relevant_columns</th><th>alias</th></tr>
+  <tr>
+    <td><code>GMV</code></td>
+    <td>GMV</td>
+    <td>Gross Merchandise Value，所有訂單的成交金額總和</td>
+    <td>["fact_order.order_amount"]</td>
+    <td>["成交總額", "訂單總額"]</td>
+  </tr>
+  <tr>
+    <td><code>AOV</code></td>
+    <td>AOV</td>
+    <td>Average Order Value，所有訂單的成交金額平均值</td>
+    <td>["fact_order.order_quantity"]</td>
+    <td>["平均單價", "平均訂單金額"]</td>
+  </tr>
+  <tr>
+    <td><code>DAILY_GMV</code></td>
+    <td>日成交總額</td>
+    <td>按日期維度統計的每日 GMV</td>
+    <td>["fact_order.order_amount", "dim_date.date_id", ...]</td>
+    <td>["日GMV", "每日成交總額"]</td>
+  </tr>
+  <tr>
+    <td><code>GMV_BY_BRAND</code></td>
+    <td>品牌成交總額</td>
+    <td>按商品品牌統計的成交總額</td>
+    <td>["fact_order.order_amount", "dim_product.brand"]</td>
+    <td>["品牌GMV", "各品牌銷售額"]</td>
+  </tr>
+</table>
+
+<h3>description 的關鍵作用</h3>
+
+<p><code>description</code> 不只是個標籤——它包含指標的計算邏輯。LLM 讀了 description 就知道：</p>
+
+<ul>
+  <li>GMV = SUM(order_amount)，需要聚合</li>
+  <li>AOV = SUM(order_amount) / COUNT(DISTINCT order_id)，需要兩個列配合</li>
+  <li>DAILY_GMV 需要按 date_id 分組</li>
+</ul>
+
+<p>如果 LLM 不知道 AOV 的定義，它可能只算 SUM(order_amount)——結果差了十倍。description 就是防止這種錯誤的保險。</p>
+
+<h3>alias：指標的中文別名</h3>
+
+<p>和 <code>column_info</code> 的 alias 一樣，<code>metric_info</code> 的 alias 也是 JSON 數組。當用戶說「成交總額」，LLM 查 alias 發現匹配 GMV——語義匹配完成。</p>
+
+<pre><code>-- GMV 的 alias
+["成交總額", "訂單總額"]
+
+-- AOV 的 alias  
+["平均單價", "平均訂單金額"]
+
+-- ORDER_COUNT 的 alias
+["訂單數", "下單量"]</code></pre>
+
+<h2>column_metric：多對多關聯表</h2>
+
+<p>一個指標可能涉及多個列，一個列也可能參與多個指標。比如 <code>order_amount</code> 既參與 GMV 計算，也參與 AVG_AMOUNT_BY_CUSTOMER 計算。這種多對多關係通過 <code>column_metric</code> 關聯表實現。</p>
+
+<pre><code>CREATE TABLE column_metric (
+  column_id  VARCHAR(64),  -- 列編號（指向 column_info.id）
+  metric_id  VARCHAR(64),  -- 指標編號（指向 metric_info.id）
+  PRIMARY KEY (column_id, metric_id)
+);</code></pre>
+
+<h3>實際關聯示例</h3>
+
+<table>
+  <tr><th>column_id</th><th>metric_id</th><th>含義</th></tr>
+  <tr><td><code>fact_order.order_amount</code></td><td><code>GMV</code></td><td>order_amount 參與 GMV 計算</td></tr>
+  <tr><td><code>fact_order.order_amount</code></td><td><code>AVG_AMOUNT_BY_CUSTOMER</code></td><td>order_amount 參與客戶平均消費額</td></tr>
+  <tr><td><code>fact_order.order_amount</code></td><td><code>GMV_BY_BRAND</code></td><td>order_amount 參與品牌成交總額</td></tr>
+  <tr><td><code>fact_order.order_quantity</code></td><td><code>AOV</code></td><td>order_quantity 參與 AOV 計算</td></tr>
+  <tr><td><code>fact_order.order_quantity</code></td><td><code>SALES_QUANTITY</code></td><td>order_quantity 參與銷售總量</td></tr>
+  <tr><td><code>dim_product.brand</code></td><td><code>GMV_BY_BRAND</code></td><td>brand 作為 GMV_BY_BRAND 的分組維度</td></tr>
+  <tr><td><code>dim_region.region_id</code></td><td><code>ORDER_COUNT_BY_REGION</code></td><td>region_id 作為區域訂單數的分組維度</td></tr>
+</table>
+
+<p>注意看：<code>order_amount</code> 一行對應三個指標，<code>GMV_BY_BRAND</code> 一行對應兩個列（order_amount + brand）。這就是多對多。</p>
+
+<h3>為什麼需要 column_metric？</h3>
+
+<p>你可能會問：<code>metric_info</code> 裡不是已經有 <code>relevant_columns</code> 了嗎？為什麼還需要 <code>column_metric</code> 關聯表？</p>
+
+<p>原因是 <code>relevant_columns</code> 是 JSON 字段，方便 LLM 快速讀取；而 <code>column_metric</code> 是關係型關聯表，方便：</p>
+<ul>
+  <li><strong>數據一致性</strong>：通過外鍵約束確保關聯的列和指標都存在</li>
+  <li><strong>高效查詢</strong>：「哪些指標用到了 order_amount？」一句 SQL 就能查出來</li>
+  <li><strong>動態維護</strong>：新增或修改關聯時不需要改 JSON 字段</li>
+</ul>
+
+<h2>relevant_columns vs column_metric</h2>
+
+<p>實際上系統同時使用兩種方式存儲列-指標關聯：</p>
+
+<table>
+  <tr><th>存儲位置</th><th>格式</th><th>誰用</th><th>場景</th></tr>
+  <tr><td><code>metric_info.relevant_columns</code></td><td>JSON 數組</td><td>LLM</td><td>快速讀取指標涉及哪些列</td></tr>
+  <tr><td><code>column_metric</code></td><td>關係表</td><td>SQL 查詢</td><td>高效反向查詢「某列參與了哪些指標」</td></tr>
+</table>
+
+<p>兩者存的是同樣的信息，但服務不同的使用場景。這是一種常見的冗餘設計——用空間換查詢效率。</p>
+
+<h2>小結</h2>
+
+<p><code>metric_info</code> 為每個業務指標建檔——名稱、描述、計算邏輯、別名。<code>column_metric</code> 把列和指標的多對多關係登記清楚。兩張表配合，LLM 就能從「成交總額」定位到 GMV，再從 GMV 找到需要聚合的列。接下來最後一步，我們把四張表串起來看完整的 NL2SQL 流程。</p>
+
+<h2>測驗</h2>
+
+<div class="quiz" data-question="metric_info 的 description 字段存儲什麼？" data-correct="1" data-explain="description 包含指標的計算邏輯，LLM 用它來決定生成什麼聚合表達式。">
+  <button class="opt">指標的創建時間</button>
+  <button class="opt">指標的計算邏輯和業務含義</button>
+  <button class="opt">指標的訪問權限</button>
+  <button class="opt">指標的歷史值</button>
+</div>
+
+<div class="quiz" data-question="column_metric 關聯表的主鍵是什麼？" data-correct="2" data-explain="聯合主鍵由 column_id 和 metric_id 組成，確保同一對列-指標不重複。">
+  <button class="opt">單一 id 字段</button>
+  <button class="opt">column_id</button>
+  <button class="opt">column_id + metric_id 聯合主鍵</button>
+  <button class="opt">metric_id</button>
+</div>
+
+<div class="quiz" data-question="為什麼同時用 relevant_columns（JSON）和 column_metric（關係表）存儲列-指標關聯？" data-correct="0" data-explain="JSON 方便 LLM 快速讀取，關係表方便 SQL 高效反向查詢——冗餘設計換查詢效率。">
+  <button class="opt">JSON 方便 LLM 讀取，關係表方便 SQL 高效查詢</button>
+  <button class="opt">因為開發者忘了刪掉其中一個</button>
+  <button class="opt">因為 JSON 不支持外鍵約束</button>
+  <button class="opt">因為兩者存的是不同的信息</button>
+</div>
+
+<div class="quiz" data-question="當用戶說「成交總額」，LLM 如何找到對應的指標？" data-correct="3" data-explain="LLM 查 metric_info 的 alias 字段，發現「成交總額」匹配 GMV。">
+  <button class="opt">直接搜 DDL 裡的表名</button>
+  <button class="opt">用正則表達式匹配 description</button>
+  <button class="opt">查 column_info 的 examples</button>
+  <button class="opt">查 metric_info 的 alias 字段做精確匹配</button>
+</div>
+
+<div class="quiz" data-question="一個列可以參與幾個指標？" data-correct="1" data-explain="多對多關係——一個列可以參與多個指標，如 order_amount 同時參與 GMV、AVG_AMOUNT_BY_CUSTOMER、GMV_BY_BRAND。">
+  <button class="opt">只能參與一個</button>
+  <button class="opt">可以參與多個</button>
+  <button class="opt">只能參與兩個</button>
+  <button class="opt">取決於表的 role</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="./table-column-info.html">← 上一步：table_info 與 column_info</a></div>
+  <div><a href="./metadata-complete.html">下一步：元數據協同 →</a></div>
+</div>
+
+<div class="footer">
+  <p>元數據知識庫結構 · metric_info 與 column_metric：指標定義與多對多關聯</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

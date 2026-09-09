@@ -1,6 +1,5 @@
 ---
 source: 032 Proxy vs Reverse Proxy
-source_hash: 81168f256bbe15a792e6c3cdd38fa7ebdbbf1b0cdf2a979d69882094a8b958ba
 source_lines: 51
 created: 2025-08-25
 updated: 2025-08-25

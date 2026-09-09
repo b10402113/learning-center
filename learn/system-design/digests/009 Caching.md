@@ -1,6 +1,5 @@
 ---
 source: 009 Caching
-source_hash: 231945c7ef42bffa6f5e8399c11650c7f2a7377fd83c572495b03d29a36b38a4
 source_lines: 121
 created: 2025-08-25
 updated: 2025-08-25

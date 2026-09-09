@@ -1,6 +1,5 @@
 ---
 source: 06-types.md
-source_hash: 3a0d06f1956cdce840364a412de1705f276681396e696ca4db41df5497ee2793
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03

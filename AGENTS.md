@@ -63,14 +63,14 @@ Each stage is user-invoked. `subject/node-name` is explicit so a node name never
 
 ## Source reading
 
-All stages share `docs/reference/source-reading.md`. Sources are read once into two-level digests (`learn/<subject>/digests/`) — L1 chapter overviews for `learn-init`/`roadmap`, L2 section detail with `[[sources/<subject>/<file>#<section>]]` locators for `nodes`. Raw text never enters the main context wholesale:
+All stages share `docs/reference/source-reading.md`. Sources are read once into two-level digests (`learn/<subject>/digests/`) — L1 overviews for `learn-init`/`roadmap`, L2 detail with locators for `nodes`. A source is a PDF/text file or a codebase directory (detected by source-code file extension). Raw text never enters the main context wholesale:
 
-- Large source (> 5,000 `pdftotext` lines or > ~250 KB): parallel sub-agents write part digests.
+- Large PDF (> 5,000 `pdftotext` lines or > ~250 KB): parallel sub-agents write part digests.
+- Large codebase (> 5,000 `wc -l` lines): parallel sub-agents write per-directory part digests — there is no merge step.
 - Small source: the main context reads it directly and writes the digest itself.
-- Digest lifecycle: compare the stored `source_hash`; reuse on match, rebuild on missing/mismatch. Sources are immutable, so digests are stable.
-- Digest status: each digest has a `status` field (`pending` | `absorbed`) tracking whether `/absorb` has integrated it. New digests start as `pending`; `/absorb` marks them `absorbed` after integration.
+- Digest lifecycle: each digest has a `status` field (`pending` | `absorbed`). New digests start as `pending`; `/absorb` marks them `absorbed` after integration; `/roadmap` marks them `absorbed` after consuming them into the node plan. Sources are immutable, so digests are stable once written.
 
-**Node count baseline.** `target = clamp(round(total_pdftotext_lines / 1100), 3, 30)`. It is a soft target for the roadmap checkpoint, not a gate — the learner confirms or adjusts the final partition.
+**Node count baseline.** `target = clamp(round(total_lines / 1100), 3, 30)`, where `total_lines` sums `pdftotext` lines (PDFs) and `wc -l` lines (codebases). It is a soft target for the roadmap checkpoint, not a gate — the learner confirms or adjusts the final partition.
 
 ## Formats
 
@@ -79,7 +79,7 @@ The writing skills are the single source of truth for generated templates.
 - **Roadmap** — `learn/<subject>/ROADMAP.md`. Frontmatter: `subject, status, created`. It indexes nodes; it does not list elements.
 - **Node (container)** — `learn/<subject>/nodes/<node-id>.mdx`. Frontmatter: `id, title, subject, tier, order, duration, status, goal, sources, steps, prerequisites, created, updated`. The node file holds the **step-DAG** — all step ids with their order and deps (`steps`) — plus the reading order and the main lesson. Sections: Learning goal · Steps (the DAG) · Lesson · Sources. Tiers organize nodes from general to specific. `prerequisites` is a list of `learn/<subject>/nodes/<id>` stable IDs.
 - **Step (article)** — `learn/<subject>/nodes/<node-id>/<step-id>.mdx`, a first-class article. Frontmatter: `id, title, subject, sources, created, updated` (plus `order` when the node's DAG does not set it). Deps are declared centrally in the node file's `steps` DAG, never in the step file. Sections: Learning goal · Lesson · Sources · Course (link to HTML lesson).
-- **Digest** — `learn/<subject>/digests/<stem>.md`. Frontmatter: `source, source_hash, source_lines, status, absorbed_at`. `status` is `pending` (newly created, not yet integrated) or `absorbed` (integrated by `/absorb`). Sections: L1 overview, L2 section detail with locators.
+- **Digest** — `learn/<subject>/digests/<stem>.md`. Frontmatter: `source, source_type (pdf | codebase), source_lines, status, absorbed_at` (plus `language, file_count` for codebases). `status` is `pending` (newly created, not yet integrated) or `absorbed` (integrated by `/absorb` or consumed by `/roadmap`). Sections: L1 overview, L2 detail with locators.
 - **Mastery** — `learn/<subject>/mastery.md`, the per-subject mastery report. Written by `/probe` (and seeded as all-`unknown` by `/nodes … skip-probe`), written back by `/tackle`; it never prunes content. Keyed by node, each node's strands rated `unknown | partial | solid`. It is calibration data only — step completion is separate client-side state.
 - **Edge** — `learn/<subject>/edges/<edge-id>.mdx`. Frontmatter: `title, type, from, to, nodes, created, updated`. Sections: The relationship · Why it matters · When each applies · Interleave.
 
@@ -126,7 +126,7 @@ When the learner asks a question about a subject:
 
 ### Lint
 
-Run the verification script: `node scripts/verify.mjs --subject <subject>` (whole-subject) or `node scripts/verify.mjs --node <subject>/<node-id>` (one node). It is the single source of truth for format checks — per `docs/reference/verify.md` — and covers: broken node-qualified step/source links, step IDs that do not match filenames, node `steps` DAG entries whose step file does not exist (and step files with no DAG entry), orphan nodes/steps, edges whose `from`/`to`/`nodes` no longer resolve, large sources missing a digest, node count deviating more than ±40% from the formula baseline, digest `source_hash` no longer matching its source file, and source locators that cannot be found in the source's digest.
+Run the verification script: `node scripts/verify.mjs --subject <subject>` (whole-subject) or `node scripts/verify.mjs --node <subject>/<node-id>` (one node). It is the single source of truth for format checks — per `docs/reference/verify.md` — and covers: broken node-qualified step/source links, step IDs that do not match filenames, node `steps` DAG entries whose step file does not exist (and step files with no DAG entry), orphan nodes/steps, edges whose `from`/`to`/`nodes` no longer resolve, large sources missing a digest, node count deviating more than ±40% from the formula baseline, and source locators that cannot be found in the source's digest.
 
 The script checks format only. Content judgment — contradictory or stale claims (mark stale ones `[needs update]` instead of deleting), prose style, and semantic quality — is not automated: it is the learner's manual pass, run on request when reviewing a subject or node.
 

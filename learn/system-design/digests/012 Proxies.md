@@ -1,6 +1,5 @@
 ---
 source: 012 Proxies
-source_hash: 8316cc99558625354033e9f93a58976c312da13b8b68125bce4079522287fd57
 source_lines: 19
 created: 2025-08-25
 updated: 2025-08-25

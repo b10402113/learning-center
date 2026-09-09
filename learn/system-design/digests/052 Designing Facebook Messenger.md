@@ -1,6 +1,5 @@
 ---
 source: 052 Designing Facebook Messenger
-source_hash: 51c3b8d8f9e5967abf7fae86345d15f52a8f966acc70e09f7717fcd392aa9590
 source_lines: 447
 created: 2025-08-25
 updated: 2025-08-25

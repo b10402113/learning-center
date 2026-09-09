@@ -1,6 +1,5 @@
 ---
 source: 15-error-handling.md
-source_hash: daf1c16a054943c3db179a52323279e75d75e021e0c30c4fde0832281450f627
 source_lines: 2
 created: 2025-09-03
 updated: 2025-09-03

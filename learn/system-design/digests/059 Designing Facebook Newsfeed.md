@@ -1,6 +1,5 @@
 ---
 source: 059 Designing Facebook Newsfeed
-source_hash: a1d420745b4d98fbf43489e7922d0ec17badd0840bb6dc4b5031722d6c8d833f
 source_lines: 434
 created: 2025-08-25
 updated: 2025-08-25

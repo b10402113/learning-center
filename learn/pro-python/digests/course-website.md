@@ -1,6 +1,5 @@
 ---
 source: course-website.md
-source_hash: e6d5b6005c370ccb7080aaa761011eac36f89d4fca0c1d3e12a225c96926a2bd
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03

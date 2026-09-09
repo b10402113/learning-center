@@ -1,6 +1,5 @@
 ---
 source: 054 Designing Youtube or Netflix
-source_hash: 04d6a3cf0e2150e2270969cdbce8a657e2e94633af2487822bf54cd2f305654a
 source_lines: 486
 created: 2025-08-25
 updated: 2025-08-25

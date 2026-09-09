@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多路召回到 SQL 生成</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>多路召回到 SQL 生成</h1>
+<p class="meta">Step 3/4 · 一個查詢的完整旅程</p>
+
+<h2>學習目標</h2>
+<p>能畫出「關鍵詞抽取 → 三路並行召回 → 合併過濾 → SQL 生成 → 校驗校正」的完整管線，說清每個節點的輸入與輸出。</p>
+
+<h2>12 個節點的工作流</h2>
+
+<p>上一步我們知道了元數據知識庫的三層結構。現在要看的是：系統怎麼利用這些元數據，從用戶的一句話一步步生成最終的 SQL。整個過程由 LangGraph（基於圖結構的 Agent 編排框架）驅動，一共 12 個節點。</p>
+
+<p>這 12 個節點可以分成五大階段：</p>
+
+<pre><code>START
+  ↓
+① extract_keywords（關鍵詞抽取）
+  ↓ ┌──────────┬──────────┐
+  ↓ recall_column  recall_metric  recall_value  ← 三路並行
+  ↓ └──────────┴──────────┘
+  ↓
+② merge_retrieved_info（合併召回信息）
+  ↓ ┌──────────┬──────────┐
+  ↓ filter_table    filter_metric        ← 並行過濾
+  ↓ └──────────┴──────────┘
+  ↓
+③ add_extra_context（注入額外上下文）
+  ↓
+④ generate_sql → validate_sql
+  ↓                     ↓
+  ↓              ┌──────┴──────┐
+  ↓        error=None    error≠None
+  ↓              ↓            ↓
+  ↓        execute_sql   correct_sql
+  ↓              ↓            ↓
+  ↓              └──────┬──────┘
+  ↓                     ↓
+  END ← execute_sql</code></pre>
+
+<h2>階段一：關鍵詞抽取</h2>
+
+<p>輸入：用戶的自然語言問題（如「上週華東地區的訂單總金額」）。</p>
+
+<p>系統用 jieba 中文分詞庫對問題進行分詞，然後按詞性篩選出關鍵詞。jieba 會把句子拆成：上週/t（時間）、華東/n（名詞）、地區/n、訂單/n、總金額/n。名詞和時間詞被提取出來，作為後續三路召回的檢索詞。</p>
+
+<p>輸出：關鍵詞列表。</p>
+
+<h2>階段二：三路並行召回</h2>
+
+<p>關鍵詞列表出來後，系統同時發起三路召回。注意這裡的「並行」是真正的並行——LangGraph 的圖結構讓三個節點同時執行，不互相等待。</p>
+
+<h3>字段召回（recall_column）</h3>
+
+<p>系統先把關鍵詞餵給 LLM，讓 LLM 擴展出更多相關詞（比如「訂單」可能擴展出「交易」「消費」），然後把擴展後的詞轉成向量，在 Qdrant 的 <code>data-agent-column</code> 集合裡做相似度搜索。搜到的結果是相關字段的完整信息（名稱、類型、描述、別名等）。</p>
+
+<h3>指標召回（recall_metric）</h3>
+
+<p>和字段召回類似，但搜索的集合是 <code>data-agent-metric</code>。指標召回找到的是業務指標的定義（如「訂單總金額 = SUM(order_amount)」），這些定義是 SQL 生成的語義依據。</p>
+
+<h3>取值召回（recall_value）</h3>
+
+<p>這路走的是 Elasticsearch。關鍵詞（如「華東」）被送到 ES 做全文搜索，在 <code>data-agent-value</code> 索引裡匹配維度值。找到的結果包括具體的值和它所屬的字段 ID，這樣系統就知道「華東」對應的是 <code>region_name</code> 字段。</p>
+
+<p>三路召回的輸出格式統一：一組候選記錄，每條記錄帶有來源信息（來自哪個集合/索引）。</p>
+
+<h2>階段三：合併過濾</h2>
+
+<h3>合併（merge_retrieved_info）</h3>
+
+<p>三路召回的結果先匯合到一起。合併節點做三件事：</p>
+
+<ol>
+<li><strong>補充主外鍵</strong>——召回結果裡可能只有用戶問到的字段，但 SQL 生成需要主外鍵來做 JOIN。合併節點會從 MySQL 補查每張表的主鍵和外鍵字段。</li>
+<li><strong>補充取值示例</strong>——把取值召回找到的具體值（如「華東」）補到對應字段的 examples 列表裡，讓 LLM 知道這個字段裡實際存了什麼值。</li>
+<li><strong>按表分組</strong>——把字段按所屬表分組，形成「表 → 字段列表」的映射結構。</li>
+</ol>
+
+<p>輸出：結構化的表信息列表 + 指標信息列表。</p>
+
+<h3>過濾表（filter_table）和過濾指標（filter_metric）</h3>
+
+<p>合併後的候選清單可能有噪音——比如用戶問的是「訂單金額」，但召回結果裡可能帶上了「發貨地址」這種不相關的字段。過濾節點用 LLM 做精篩：</p>
+
+<ul>
+<li><strong>filter_table</strong>——把用戶問題和候選表信息一起餵給 LLM，讓它判斷哪些表和字段是真正需要的，輸出一個「表名 → 選中字段」的映射。</li>
+<li><strong>filter_metric</strong>——同樣用 LLM 過濾，只保留和用戶問題相關的指標。</li>
+</ul>
+
+<p>兩個過濾節點也是並行執行的。過濾後，候選清單縮減到最小必要集合。</p>
+
+<h2>階段四：SQL 生成與校驗</h2>
+
+<h3>注入額外上下文（add_extra_context）</h3>
+
+<p>在生成 SQL 之前，系統還要補充兩個信息：當前日期（讓 LLM 知道「上週」是哪一週）和數據庫方言（MySQL 的語法細節）。這些信息被注入到狀態中，和元數據一起傳給下一個節點。</p>
+
+<h3>生成 SQL（generate_sql）</h3>
+
+<p>這是核心節點。輸入是：</p>
+
+<ul>
+<li>用戶的原始問題</li>
+<li>過濾後的表/字段/指標信息（最小必要 schema）</li>
+<li>當前日期和數據庫方言</li>
+</ul>
+
+<p>LLM 根據這些信息生成一條 SQL 語句。Prompt 裡有嚴格的約束：必須用提供的表和字段名、必須遵循指標的定義口径、不能編造不存在的表或字段。</p>
+
+<h3>校驗 SQL（validate_sql）</h3>
+
+<p>生成的 SQL 不直接執行——先用 <code>EXPLAIN</code> 語句做語法校驗。如果 SQL 有語法錯誤，<code>EXPLAIN</code> 會報錯。</p>
+
+<p>校驗結果決定走向：</p>
+
+<table>
+<thead>
+<tr><th>結果</th><th>走向</th></tr>
+</thead>
+<tbody>
+<tr><td>error = None（通過）</td><td>→ execute_sql</td></tr>
+<tr><td>error ≠ None（失敗）</td><td>→ correct_sql</td></tr>
+</tbody>
+</table>
+
+<h3>校正 SQL（correct_sql）</h3>
+
+<p>如果校驗失敗，系統把原始 SQL 和錯誤信息一起餵給 LLM，讓它修正。校正後的 SQL 會重新回到 validate_sql 再校驗一次，形成一個校正回路。</p>
+
+<h2>階段五：執行 SQL</h2>
+
+<p>校驗通過的 SQL 被送到數據倉庫執行，拿到查詢結果。結果通過 <code>stream_writer</code> 以 SSE 格式推送到前端，格式是 <code>{"type": "result", "data": [...]}</code>。</p>
+
+<h2>流式輸出機制</h2>
+
+<p>整個工作流的每個節點在執行時，都會通過 LangGraph 的 <code>stream_writer</code> 實時推送進度：</p>
+
+<pre><code>{"type": "progress", "step": "抽取關鍵詞", "status": "running"}
+{"type": "progress", "step": "抽取關鍵詞", "status": "success"}
+{"type": "progress", "step": "召回字段", "status": "running"}
+...（其他節點）
+{"type": "result", "data": [{"region_name": "華東", "order_amount": 2000}]}</code></pre>
+
+<p>前端收到這些事件後，實時更新進度提示和結果表格。</p>
+
+<h2>小結</h2>
+
+<p>12 個節點分成五大階段：關鍵詞抽取 → 三路並行召回 → 合併過濾 → SQL 生成校驗 → 執行。並行分支提高效率，條件分支處理錯誤校正，流式輸出保障用戶體驗。每個節點的輸入輸出都很明確，這是搭建類似系統的核心骨架。</p>
+
+<div class="lesson-nav">
+  <div><a href="./metadata-foundation.html">← 上一步：元數據基礎：支撐 RAG 的知識庫</a></div>
+  <div><a href="./streaming-stack.html">下一步：流式響應與全棧串接 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="關鍵詞抽取節點用什麼工具來分詞？" data-correct="1" data-explain="jieba 是中文分詞庫，按詞性篩選出關鍵詞。">
+  <button class="opt">spaCy</button>
+  <button class="opt">jieba</button>
+  <button class="opt">NLTK</button>
+  <button class="opt">HanLP</button>
+</div>
+
+<div class="quiz" data-question="三路召回中，哪一路走的是 Elasticsearch？" data-correct="3" data-explain="取值召回用 ES 全文索引匹配維度值。">
+  <button class="opt">字段召回</button>
+  <button class="opt">指標召回</button>
+  <button class="opt">三路都走 ES</button>
+  <button class="opt">取值召回</button>
+</div>
+
+<div class="quiz" data-question="合併節點做了哪三件事？" data-correct="0" data-explain="補充主外鍵、補充取值示例、按表分組。">
+  <button class="opt">補充主外鍵、補充取值示例、按表分組</button>
+  <button class="opt">刪除重複項、排序、格式化</button>
+  <button class="opt">生成 SQL、校驗 SQL、執行 SQL</button>
+  <button class="opt">分詞、向量化、索引</button>
+</div>
+
+<div class="quiz" data-question="SQL 校驗失敗後的走向是什麼？" data-correct="2" data-explain="校驗失敗走 correct_sql 校正，校正後重新校驗。">
+  <button class="opt">直接報錯</button>
+  <button class="opt">跳過校驗直接執行</button>
+  <button class="opt">走 correct_sql 校正後重新校驗</button>
+  <button class="opt">讓用戶重新提問</button>
+</div>
+
+<div class="quiz" data-question="add_extra_context 節點注入了什麼信息？" data-correct="1" data-explain="當前日期和數據庫方言，讓 LLM 有時間感知和語法適配能力。">
+  <button class="opt">用戶歷史對話</button>
+  <button class="opt">當前日期和數據庫方言</button>
+  <button class="opt">數據庫密碼</button>
+  <button class="opt">API 密鑰</button>
+</div>
+
+<div class="quiz" data-question="generate_sql 的 Prompt 約束裡最重要的一條是什麼？" data-correct="2" data-explain="不能編造不存在的表或字段，必須用提供的最小必要 schema。">
+  <button class="opt">SQL 必須用 PostgreSQL 語法</button>
+  <button class="opt">必須返回 JSON 格式</button>
+  <button class="opt">不能編造不存在的表或字段</button>
+  <button class="opt">必須用 JOIN 而不是子查詢</button>
+</div>
+
+<div class="footer">
+  <p>掌柜問數 · 一個查詢的完整旅程 · Step 3/4</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

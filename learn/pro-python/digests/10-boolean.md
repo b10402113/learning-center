@@ -1,6 +1,5 @@
 ---
 source: 10-boolean.md
-source_hash: 8f366b7f6870867d282cbe4d854c1bb7aaef09eea2a888fdf0a982d7a03beebc
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03

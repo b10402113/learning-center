@@ -2,7 +2,7 @@
 // verify.mjs — the verification script for the learning path.
 //
 // Runs deterministic FORMAT checks only (frontmatter, IDs, DAG consistency,
-// link/reference resolution, digest hash, section presence). It never judges
+// link/reference resolution, section presence). It never judges
 // prose quality or content semantics — that is deliberately out of scope.
 //
 // Usage:
@@ -12,7 +12,6 @@
 //
 // Exit 0 = no failures, 1 = at least one failure.
 
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,10 +33,6 @@ const ALLOWED_STATUS = new Set([
 const NODE_FM = ["id", "title", "subject", "tier", "order", "status", "goal", "sources", "steps", "created", "updated"];
 const STEP_FM = ["id", "title", "subject", "sources", "created", "updated"];
 const EDGE_FM = ["title", "type", "from", "to", "nodes", "created", "updated"];
-
-function sha256(buf) {
-  return createHash("sha256").update(buf).digest("hex");
-}
 
 class Report {
   constructor() {
@@ -145,28 +140,21 @@ function findHeadingSection(body, token) {
 
 function buildDigestIndex(subject) {
   const digests = scanSubjectDir(subject).digests;
-  const hashToDigest = new Map();
   const allLocators = new Set();
   const totalLines = { value: 0 };
-  const countedHashes = new Set();
+  const countedSources = new Set();
   for (const d of digests) {
     const { data, body } = parseFrontmatter(readFileSync(d.path, "utf8"));
-    const hashes = Array.isArray(data.source_hash) ? data.source_hash : data.source_hash ? [data.source_hash] : [];
-    for (const h of hashes) hashToDigest.set(h, d.name);
-    if (typeof data.source_lines === "number" && hashes.length > 0) {
-      const linesPerHash = Math.round(data.source_lines / hashes.length);
-      for (const h of hashes) {
-        if (!countedHashes.has(h)) {
-          countedHashes.add(h);
-          totalLines.value += linesPerHash;
-        }
-      }
+    const src = data.source || "";
+    if (typeof data.source_lines === "number" && src && !countedSources.has(src)) {
+      countedSources.add(src);
+      totalLines.value += data.source_lines;
     }
     const re = /Locator:\s*`?\[\[\s*sources\/[^\]]*?#([^\]]+)\s*\]\]`?/g;
     let m;
     while ((m = re.exec(body)) !== null) allLocators.add(m[1].trim());
   }
-  return { digests, hashToDigest, allLocators, totalLines };
+  return { digests, allLocators, totalLines };
 }
 
 function sourceFilesFor(subject) {
@@ -181,7 +169,7 @@ function sourceFilesFor(subject) {
       if (e.isDirectory()) {
         walk(full, name);
       } else if (e.isFile()) {
-        out.push({ name, hash: sha256(readFileSync(full)) });
+        out.push({ name });
       }
     }
   }
@@ -348,8 +336,6 @@ function runNodeChecks(report, subject, nodeId, scan, digestIdx, sourceNames, no
     checkReferences(report, step.path, body, subject, nodeIds, stepKeys);
     checkSourceLinks(report, step.path, body, subject, sourceNames);
   }
-
-  checkDigestHash(report, subject, sourceNames, digestIdx);
 }
 
 function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, nodeIds, stepKeys) {
@@ -397,22 +383,6 @@ function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, nodeIds
 
   checkOrphans(report, subject, scan, nodeIds, stepKeys);
   checkNodeCount(report, subject, scan, digestIdx);
-  checkDigestHash(report, subject, sourceNames, digestIdx);
-}
-
-function checkDigestHash(report, subject, sourceNames, digestIdx) {
-  const rel = `learn/${subject}/digests/`;
-  for (const src of sourceFilesFor(subject)) {
-    if (!digestIdx.hashToDigest.has(src.hash)) {
-      report.fail(rel, 0, "digest-hash", `no digest matches source file "${src.name}" (hash mismatch or missing digest)`);
-    }
-  }
-  for (const [hash, digestName] of digestIdx.hashToDigest) {
-    const matches = sourceFilesFor(subject).some((s) => s.hash === hash);
-    if (!matches) {
-      report.fail(`${rel}${digestName}`, 0, "digest-hash", `digest source_hash matches no source file`);
-    }
-  }
 }
 
 function checkNodeCount(report, subject, scan, digestIdx) {

@@ -1,6 +1,5 @@
 ---
 source: 005 System Design Basics
-source_hash: 81d453fc1233d6bae4fcdd039a5ba74686b76b7525029278f3024d46a1b0047a
 source_lines: 17
 created: 2025-08-25
 updated: 2025-08-25

@@ -1,6 +1,5 @@
 ---
 source: 23-fastapi.md
-source_hash: 8da8426f70ac06cfa8f4021524bb51ae0257449e2b2f6e36ed61ac0ebfbc8fd1
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03

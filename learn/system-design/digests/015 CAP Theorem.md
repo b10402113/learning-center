@@ -1,6 +1,5 @@
 ---
 source: 015 CAP Theorem
-source_hash: fd7939143022a7a0f8a3ebd1c7e9a5d63f6aca03a107b2e893a544779c09aa48
 source_lines: 17
 created: 2025-08-25
 updated: 2025-08-25

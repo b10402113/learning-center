@@ -1,6 +1,5 @@
 ---
 source: 039 Polling vs LongPolling vs WebSockets vs Webhooks
-source_hash: f4f87ed6867cd700c74aa10de935cf448cff93ad15859512f7bec89d38700c19
 source_lines: 98
 created: 2025-08-25
 updated: 2025-08-25

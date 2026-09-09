@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>系統全貌：從提問到結果的完整旅程</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>系統全貌：從提問到結果的完整旅程</h1>
+<p class="meta">Step 1/4 · 一個查詢的完整旅程</p>
+
+<h2>學習目標</h2>
+<p>能畫出從用戶提問到結果返回的完整數據流，說清每個階段的輸入與輸出。</p>
+
+<h2>為什麼需要一個「問數」系統？</h2>
+
+<p>想像你是個電商運營，老闆突然問：「上週華東地區的訂單總金額是多少？」你腦子裡第一個反應是——我得寫 SQL。但你不是數據工程師，就算寫得出 <code>SELECT SUM(order_amount) FROM fact_order JOIN dim_region ...</code>，你也未必知道該 JOIN 哪些表、用哪個字段。</p>
+
+<p>掌柜問數就是來解決這個問題的：你只要打字問一句，系統自己搞定剩下的。它是一個面向數據倉庫的 NL2SQL 智能分析系統——NL 是 Natural Language（自然語言），SQL 是結構化查詢語言。把自然語言翻譯成 SQL，再把查出來的數據變成你能看懂的表格，這就是它的全部使命。</p>
+
+<h2>數據倉庫是什麼？</h2>
+
+<p>要理解這套系統，先得搞懂它背後的數據存在哪裡。</p>
+
+<p><strong>業務庫管「幹活」，數據倉庫管「復盤」</strong>——這句話是理解整個架構的起點。業務庫（比如 MySQL 裡的訂單表）存的是當下正在發生的交易：誰下了單、付了多少錢、貨發到哪裡。數據倉庫（Data Warehouse）則是把這些零散的業務數據，經過抽取、清洗、轉換後，按主題域整合起來，專門用來做分析和決策。</p>
+
+<p>為什麼不直接查業務庫？因為業務庫是為了「記帳」設計的，結構-normalized、數據量大、查分析型查詢很慢。數據倉庫是為了「看帳」設計的——數據按分析場景組織，查起來快，結構也對分析更友好。</p>
+
+<p>數據倉庫的數據來源主要有兩種：</p>
+
+<table>
+<thead>
+<tr><th>來源</th><th>內容</th><th>採集方式</th></tr>
+</thead>
+<tbody>
+<tr><td>業務系統</td><td>訂單、用戶、商品、支付等交易數據</td><td>CDC（實時）、全量/增量同步</td></tr>
+<tr><td>日誌數據</td><td>用戶行為、埋點、服務端日誌</td><td>Kafka、Logstash 採集</td></tr>
+</tbody>
+</table>
+
+<h2>完整數據流：五個階段</h2>
+
+<p>當用戶打字提問「上週華東地區的訂單總金額」時，數據要經過五個階段才能回到用戶手裡。畫出來是這樣的：</p>
+
+<pre><code>用戶提問
+  ↓
+① 關鍵詞抽取
+  ↓
+② 多路召回（字段 / 指標 / 取值）
+  ↓
+③ 合併過濾 + SQL 生成 + 校驗
+  ↓
+④ 執行 SQL，拿到結果
+  ↓
+⑤ 流式返回前端，渲染表格</code></pre>
+
+<p>下面逐步拆開。</p>
+
+<h3>階段一：關鍵詞抽取</h3>
+
+<p>用戶說的是自然語言，但檢索系統需要的是關鍵詞。系統用 jieba（中文分詞庫）把「上週華東地區的訂單總金額」拆成關鍵詞：上週、華東、地區、訂單、總金額。這一步的輸出是一組關鍵詞列表。</p>
+
+<h3>階段二：多路召回</h3>
+
+<p>拿到關鍵詞後，系統同時走三條路去找相關信息：</p>
+
+<table>
+<thead>
+<tr><th>召回路徑</th><th>去哪裡找</th><th>找到什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>字段召回</td><td>Qdrant 向量索引</td><td>相關的表字段（如 order_amount、region_name）</td></tr>
+<tr><td>指標召回</td><td>Qdrant 向量索引</td><td>相關的業務指標（如訂單總金額的定義）</td></tr>
+<tr><td>取值召回</td><td>Elasticsearch 全文索引</td><td>維度值的真實取值（如「華東」對應 region_name）</td></tr>
+</tbody>
+</table>
+
+<p>為什麼要走三條路？因為自然語言的模糊性——「訂單總金額」可能對應字段 <code>order_amount</code>，也可能對應指標「訂單金額合計」的定義。「華東」需要匹配到數據庫裡真實的維度值 <code>region_name = '華東'</code>。三路並行，覆蓋面最廣。</p>
+
+<h3>階段三：合併過濾 + SQL 生成</h3>
+
+<p>三路召回的結果先合併成一份「候選表/字段/指標清單」，然後用 LLM（大語言模型）做兩件事：</p>
+
+<ol>
+<li><strong>過濾</strong>——從候選清單裡挑出真正有用的表和字段，去掉不相關的噪音</li>
+<li><strong>生成 SQL</strong>——把用戶問題 + 篩選後的元數據一起餵給 LLM，讓它生成 SQL 語句</li>
+</ol>
+
+<p>生成的 SQL 還要過一道校驗：用 <code>EXPLAIN</code> 語句檢查語法是否正確。如果校驗失敗，系統會自動用 LLM 校正，再重新校驗，直到 SQL 能跑通為止。</p>
+
+<h3>階段四：執行 SQL</h3>
+
+<p>校驗通過的 SQL 被送到數據倉庫執行，拿到原始結果（一組行數據）。這一步的輸入是 SQL 字符串，輸出是結構化的查詢結果。</p>
+
+<h3>階段五：流式返回</h3>
+
+<p>系統不會等所有步驟跑完才一次性返回結果——它用 SSE（Server-Sent Events）協議把每一步的進度實時推送到前端。前端用戶能看到「正在抽取關鍵詞...」「正在召回字段...」這樣的進度提示，最後再拿到查詢結果渲染成表格。</p>
+
+<h2>整體架構一覽</h2>
+
+<p>把上面五個階段放回系統架構裡看：</p>
+
+<table>
+<thead>
+<tr><th>層級</th><th>組件</th><th>職責</th></tr>
+</thead>
+<tbody>
+<tr><td>前端</td><td>Vue 應用</td><td>接收 SSE 事件，渲染進度與結果表格</td></tr>
+<tr><td>API 層</td><td>FastAPI + SSE</td><td>接收查詢請求，橋接 LangGraph 流式輸出</td></tr>
+<tr><td>Agent 層</td><td>LangGraph 狀態機</td><td>編排 12 個節點的工作流</td></tr>
+<tr><td>檢索層</td><td>Qdrant + Elasticsearch</td><td>向量語義召回 + 全文關鍵詞召回</td></tr>
+<tr><td>存儲層</td><td>MySQL（元數據 + 數據倉庫）</td><td>結構化元數據 + 星型模型數據</td></tr>
+</tbody>
+</table>
+
+<p>整個系統的核心設計思想是 <strong>RAG（Retrieval-Augmented Generation，檢索增強生成）</strong>——先從元數據知識庫裡檢索出相關信息，再把這些信息和用戶問題一起餵給 LLM，讓它生成更準確的 SQL。這比直接把整個數據庫的 schema 塞給 LLM 要高效得多，也準確得多。</p>
+
+<h2>小結</h2>
+
+<p>一個查詢從用戶手指到結果返回，要經過：關鍵詞抽取 → 三路並行召回 → 合併過濾 → SQL 生成與校驗 → 執行 → 流式返回。每一步的輸入和輸出都很明確，這是搭建類似系統的心智模型基礎。接下來三步會逐一拆開每個階段的細節。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./metadata-foundation.html">下一步：元數據基礎：支撐 RAG 的知識庫 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="數據倉庫和業務庫的核心區別是什麼？" data-correct="2" data-explain="數據倉庫是為分析決策設計的，業務庫是為日常交易設計的。">
+  <button class="opt">數據倉庫存的數據更多</button>
+  <button class="opt">業務庫不能存結構化數據</button>
+  <button class="opt">數據倉庫為分析設計，業務庫為交易設計</button>
+  <button class="opt">兩者沒有本質區別</button>
+</div>
+
+<div class="quiz" data-question="掌柜問數使用哪三種存儲來構建元數據知識庫？" data-correct="1" data-explain="MySQL 存結構化元數據，Qdrant 做向量索引，Elasticsearch 做全文索引。">
+  <button class="opt">MySQL + Redis + MongoDB</button>
+  <button class="opt">MySQL + Qdrant + Elasticsearch</button>
+  <button class="opt">PostgreSQL + FAISS + Solr</button>
+  <button class="opt">SQLite + Milvus + Lucene</button>
+</div>
+
+<div class="quiz" data-question="為什麼系統要走「三路並行召回」而不是只走一路？" data-correct="0" data-explain="三路覆蓋不同維度的信息，並行提高召回率和覆蓋面。">
+  <button class="opt">三路覆蓋不同維度，並行提高覆蓋率</button>
+  <button class="opt">因為只有一路的話速度太慢</button>
+  <button class="opt">因為三路走的是同一個數據庫</button>
+  <button class="opt">因為系統必須用三種不同的語言</button>
+</div>
+
+<div class="quiz" data-question="SQL 校驗失敗後系統會怎麼做？" data-correct="3" data-explain="系統用 LLM 自動校正 SQL，然後重新校驗，形成回路。">
+  <button class="opt">直接報錯返回用戶</button>
+  <button class="opt">跳過校驗直接執行</button>
+  <button class="opt">讓用戶重新提問</button>
+  <button class="opt">用 LLM 校正後重新校驗</button>
+</div>
+
+<div class="quiz" data-question="SSE 協議在這個系統裡的作用是什麼？" data-correct="2" data-explain="SSE 讓後端能把每一步的進度實時推送到前端。">
+  <button class="opt">用來加密傳輸數據</button>
+  <button class="opt">用來存儲查詢結果</button>
+  <button class="opt">實時推送執行進度到前端</button>
+  <button class="opt">用來管理數據庫連接</button>
+</div>
+
+<div class="quiz" data-question="RAG 在掌柜問數中的作用是什麼？" data-correct="1" data-explain="RAG 先檢索相關元數據，再餵給 LLM 生成更準確的 SQL。">
+  <button class="opt">直接把整個數據庫 schema 塞給 LLM</button>
+  <button class="opt">先檢索相關元數據，再餵給 LLM 生成 SQL</button>
+  <button class="opt">用 LLM 來做數據清洗</button>
+  <button class="opt">用 LLM 來管理數據庫連接</button>
+</div>
+
+<div class="footer">
+  <p>掌柜問數 · 一個查詢的完整旅程 · Step 1/4</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

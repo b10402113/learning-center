@@ -1,6 +1,5 @@
 ---
 source: 34-dependency-injection-with-annotated.md
-source_hash: e1626b17a6199ddef6d500ea76b334819631320ff8f90ec3badddede41b189c7
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03

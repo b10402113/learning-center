@@ -1,6 +1,5 @@
 ---
 source: 007 System Design - Designing Typeahead Suggestion.en
-source_hash: e36084f5b3ca43aa311c6c4b605f4d771647ed4f888804e671a8d1f0ddacee39
 source_lines: 4868
 created: 2025-08-25
 updated: 2025-08-25

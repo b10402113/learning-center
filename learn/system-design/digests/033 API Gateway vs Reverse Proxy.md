@@ -1,6 +1,5 @@
 ---
 source: 033 API Gateway vs Reverse Proxy
-source_hash: 5e4e18ede435b84d77c5c443ee7eaa86292839c758fae26a28c06fab5ce5099d
 source_lines: 55
 created: 2025-08-25
 updated: 2025-08-25

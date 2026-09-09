@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>元數據協同：四張表如何驅動 NL2SQL</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>元數據協同：四張表如何驅動 NL2SQL</h1>
+<div class="meta">元數據知識庫結構 · Step 4/4</div>
+
+<h2>學習目標</h2>
+<p>能完整說清一個用戶問題從「自然語言」到「SQL 查詢」的過程中，四張元數據表各自扮演什麼角色。</p>
+
+<h2>完整流程：從「GMV 多少」到 SELECT SUM(order_amount)</h2>
+
+<p>讓我們用一個真實例子串起四張表。用戶問了一句：「華東地區 Q1 的 GMV 多少？」</p>
+
+<h3>第一步：語義匹配（column_info + metric_info）</h3>
+
+<p>LLM 拿到用戶問題後，首先做關鍵詞抽取和語義匹配：</p>
+
+<table>
+  <tr><th>用戶說的</th><th>查什麼表</th><th>匹配結果</th></tr>
+  <tr><td>GMV</td><td><code>metric_info.alias</code></td><td>匹配 <code>GMV</code> 指標</td></tr>
+  <tr><td>華東</td><td><code>column_info.alias</code></td><td>匹配 <code>region_name</code> 列</td></tr>
+  <tr><td>Q1</td><td><code>column_info.alias</code></td><td>匹配 <code>quarter</code> 列</td></tr>
+</table>
+
+<p>如果沒有元數據，LLM 要自己猜「GMV」是什麼意思——它可能猜對，也可能猜成 COUNT(order_id)。有了元數據，匹配是確定性的。</p>
+
+<h3>第二步：定位列和表（column_info + table_info）</h3>
+
+<p>匹配到列名後，LLM 需要知道這些列來自哪些表、是什麼角色：</p>
+
+<table>
+  <tr><th>列</th><th>table_id</th><th>table_info.role</th><th>column_info.role</th></tr>
+  <tr><td><code>order_amount</code></td><td><code>fact_order</code></td><td><strong>fact</strong></td><td><strong>measure</strong></td></tr>
+  <tr><td><code>region_name</code></td><td><code>dim_region</code></td><td><strong>dim</strong></td><td><strong>dimension</strong></td></tr>
+  <tr><td><code>quarter</code></td><td><code>dim_date</code></td><td><strong>dim</strong></td><td><strong>dimension</strong></td></tr>
+</table>
+
+<p>LLM 現在知道：</p>
+<ul>
+  <li><code>order_amount</code> 來自事實表，role 是 measure → 需要聚合（SUM）</li>
+  <li><code>region_name</code> 和 <code>quarter</code> 來自維度表，role 是 dimension → 需要過濾或分組</li>
+  <li>事實表需要 JOIN 維度表才能拿到維度信息</li>
+</ul>
+
+<h3>第三步：確認指標邏輯（metric_info）</h3>
+
+<p>LLM 查 <code>metric_info</code> 確認 GMV 的計算邏輯：</p>
+
+<pre><code>metric_info WHERE id = 'GMV'
+→ description: "Gross Merchandise Value，所有訂單的成交金額總和"
+→ relevant_columns: ["fact_order.order_amount"]</code></pre>
+
+<p>確認：GMV = SUM(order_amount)，不需要去重，不需要其他列配合。</p>
+
+<h3>第四步：確認 JOIN 鍵（column_info）</h3>
+
+<p>LLM 需要 JOIN fact_order 和 dim_region、dim_date。它查 <code>column_info</code> 找外鍵：</p>
+
+<pre><code>fact_order.region_id → role: foreign_key → JOIN dim_region.region_id (primary_key)
+fact_order.date_id   → role: foreign_key → JOIN dim_date.date_id (primary_key)</code></pre>
+
+<p>外鍵-主鍵配對告訴 LLM 用什麼列做 JOIN。</p>
+
+<h3>第五步：生成 SQL</h3>
+
+<p>所有信息到齊，LLM 生成：</p>
+
+<pre><code>SELECT SUM(f.order_amount) AS gmv
+FROM fact_order f
+JOIN dim_region r ON f.region_id = r.region_id
+JOIN dim_date d ON f.date_id = d.date_id
+WHERE r.region_name = '華東'
+  AND d.quarter = 'Q1';</code></pre>
+
+<p>這個 SQL 的每個元素都有元數據支撐：</p>
+<ul>
+  <li>SUM(order_amount) ← metric_info 的 description</li>
+  <li>JOIN dim_region ← column_info 的 foreign_key + primary_key</li>
+  <li>WHERE region_name = '華東' ← column_info 的 alias 匹配</li>
+  <li>AND quarter = 'Q1' ← column_info 的 alias 匹配</li>
+</ul>
+
+<h2>四張表的角色總結</h2>
+
+<table>
+  <tr><th>表</th><th>在流程中的角色</th><th>沒有它會怎樣</th></tr>
+  <tr><td><code>table_info</code></td><td>告訴 LLM 哪些是事實表、哪些是維度表</td><td>LLM 不知道該 JOIN 哪些表</td></tr>
+  <tr><td><code>column_info</code></td><td>告訴 LLM 每列的角色、別名、示例數據</td><td>LLM 無法匹配自然語言到列名</td></tr>
+  <tr><td><code>metric_info</code></td><td>告訴 LLM 指標的計算邏輯</td><td>LLM 可能生成錯誤的聚合表達式</td></tr>
+  <tr><td><code>column_metric</code></td><td>登記列與指標的多對多關聯</td><td>LLM 不知道哪些列參與了指標計算</td></tr>
+</table>
+
+<h2>與召回機制的銜接</h2>
+
+<p>元數據知識庫不只被 LLM 直接查詢——它還被同步到 Qdrant（向量索引）和 Elasticsearch（全文索引）：</p>
+
+<ul>
+  <li><strong>Qdrant</strong>：對 <code>column_info</code> 的 name/description/alias 和 <code>metric_info</code> 的 name/description/alias 建立向量索引。語義召回（「銷量」→ order_quantity）走這裡。</li>
+  <li><strong>Elasticsearch</strong>：對維度列的實際取值建立全文索引。值召回（「華東」→ region_name）走這裡。</li>
+</ul>
+
+<p>元數據知識庫是整個 NL2SQL 系統的語義基礎——它不只是一份說明書，更是多路召回和 SQL 生成的核心數據源。</p>
+
+<h2>小結</h2>
+
+<p>四張表各司其職：table_info 定義表的角色，column_info 定義列的語義，metric_info 定義指標的邏輯，column_metric 登記它們的關聯。它們共同構成了 LLM 理解業務數據的「語義中間層」，讓自然語言問數從「靠猜」變成「靠查」。</p>
+
+<h2>測驗</h2>
+
+<div class="quiz" data-question="用戶問「華東地區 Q1 的 GMV」，LLM 第一步做什麼？" data-correct="2" data-explain="第一步是語義匹配——從 metric_info 和 column_info 的 alias 字段匹配用戶說的關鍵詞。">
+  <button class="opt">直接生成 SQL</button>
+  <button class="opt">查詢 table_info 確認表數量</button>
+  <button class="opt">從 metric_info 和 column_info 的 alias 做語義匹配</button>
+  <button class="opt">連接 Qdrant 做向量搜索</button>
+</div>
+
+<div class="quiz" data-question="LLM 如何知道 ORDER BY 還是 GROUP BY？" data-correct="1" data-explain="column_info 的 role 決定：dimension 用 GROUP BY / WHERE，measure 用聚合函數。">
+  <button class="opt">靠 LLM 的 SQL 經驗猜</button>
+  <button class="opt">靠 column_info 的 role 字段判斷</button>
+  <button class="opt">靠 table_info 的 description</button>
+  <button class="opt">靠 metric_info 的 alias</button>
+</div>
+
+<div class="quiz" data-question="元數據知識庫除了被 LLM 直接查詢，還被同步到哪裡？" data-correct="3" data-explain="同步到 Qdrant（向量索引）和 Elasticsearch（全文索引），支持多路召回。">
+  <button class="opt">只存在 MySQL 裡</button>
+  <button class="opt">同步到 Redis 緩存</button>
+  <button class="opt">同步到 MongoDB</button>
+  <button class="opt">同步到 Qdrant 向量索引和 ES 全文索引</button>
+</div>
+
+<div class="quiz" data-question="LLM 如何確認 GMV 的計算邏輯是 SUM 而不是 COUNT？" data-correct="0" data-explain="查 metric_info 的 description，它明確描述了 GMV = 所有訂單的成交金額總和。">
+  <button class="opt">查 metric_info 的 description</button>
+  <button class="opt">查 column_info 的 type 字段</button>
+  <button class="opt">查 table_info 的 role</button>
+  <button class="opt">靠 LLM 自己的知識</button>
+</div>
+
+<div class="quiz" data-question="LLM 怎麼知道 fact_order 和 dim_region 該用什麼列做 JOIN？" data-correct="2" data-explain="查 column_info 的 role：fact_order.region_id 是 foreign_key，dim_region.region_id 是 primary_key——外鍵配主鍵。">
+  <button class="opt">隨便找同名列</button>
+  <button class="opt">查 metric_info 的 relevant_columns</button>
+  <button class="opt">查 column_info 的 role：foreign_key 配 primary_key</button>
+  <button class="opt">查 table_info 的 description</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="./metric-column-metric.html">← 上一步：metric_info 與 column_metric</a></div>
+  <div></div>
+</div>
+
+<div class="footer">
+  <p>元數據知識庫結構 · 元數據協同：四張表如何驅動 NL2SQL</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

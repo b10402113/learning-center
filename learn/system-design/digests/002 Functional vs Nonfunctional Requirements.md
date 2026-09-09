@@ -1,6 +1,5 @@
 ---
 source: 002 Functional vs Nonfunctional Requirements
-source_hash: fd658f94bd2b62c0c1cb85fa96e173706b7f37f2bf4e2ccd9ae0d92693cbfdb9
 source_lines: 68
 created: 2025-08-25
 updated: 2025-08-25

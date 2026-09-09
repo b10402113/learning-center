@@ -1,8 +1,5 @@
 ---
 source: js逆向课件/day10
-source_hash:
-  - 5b4ed8f22f9560798d7a305397b220519284f9570b900125c9d73e0223c59133
-  - 46b58d2663e487bebe64c741d4d2b3827f98a4c929ca9afd84cfc949a035b2a0
 source_lines: 453
 created: 2026-09-05
 updated: 2026-09-05

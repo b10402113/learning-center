@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>元數據表結構與業務含義</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>元數據表結構與業務含義</h1>
+<p class="meta">Step 2/3 · 演示數據與 SQL 腳本</p>
+
+<h2>學習目標</h2>
+<p>能說清 4 張 meta 表的元數據內容，理解 column_info.role 如何區分 primary_key / foreign_key / measure / dimension。</p>
+
+<h2>數據庫有了，然後呢？</h2>
+
+<p>上一步建好了 <code>dw</code> 庫——5 張表、116 筆訂單。但 NL2SQL 系統不能直接去猜表結構。當用戶問「上週華東地區的訂單總金額」時，系統需要知道：哪些列是「金額」？哪些列是「地區」？哪張表是事實表、哪張是維度表？</p>
+
+<p>這些信息存在另一個庫——<codeMoonshot AI/code> 庫。它是一個元數據知識庫（metadata knowledge base），專門回答「dw 庫裡有什麼、每個字段是什麼意思、它們之間有什麼關係」。<code>meta-schema-data.sql</code> 這份腳本就是建這個庫的。</p>
+
+<h2>4 張表一覽</h2>
+
+<pre><code>table_info —— 告訴你「dw 裡有幾張表、各自是什麼角色」
+    ↓
+column_info —— 告訴你「每張表的每列是什麼、什麼類型、什麼角色」
+    ↓
+metric_info —— 告訴你「有哪些業務指標、怎麼定義的」
+    ↓
+column_metric —— 告訴你「每個指標關聯哪些列」</code></pre>
+
+<h2>1. table_info：表級元數據</h2>
+
+<p>最簡單的一張表——登記 dw 庫裡每張表的角色和描述。</p>
+
+<table>
+<thead>
+<tr><th>字段</th><th>類型</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td>id</td><td>varchar(64)</td><td>表名（如 fact_order）</td></tr>
+<tr><td>name</td><td>varchar(128)</td><td>表名（冗餘，方便展示）</td></tr>
+<tr><td>role</td><td>varchar(32)</td><td>fact（事實表）或 dim（維度表）</td></tr>
+<tr><td>description</td><td>text</td><td>表的業務描述</td></tr>
+</tbody>
+</table>
+
+<p>5 行數據，對應 dw 庫的 5 張表。role 字段只有兩個值：<code>fact</code> 和 <code>dim</code>——這是星型模型的基本分類。當 LLM 生成 SQL 時，它需要知道哪張表是事實表（放度量的），哪張是維度表（放屬性的），才能正確地 JOIN 和聚合。</p>
+
+<h2>2. column_info：列級元數據</h2>
+
+<p>這是 meta 庫最核心的一張表——為 dw 庫的每一列建立「身份證」。</p>
+
+<table>
+<thead>
+<tr><th>字段</th><th>類型</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td>id</td><td>varchar(64)</td><td>列的全限定名（如 fact_order.order_amount）</td></tr>
+<tr><td>name</td><td>varchar(128)</td><td>列名（如 order_amount）</td></tr>
+<tr><td>type</td><td>varchar(64)</td><td>數據類型（如 float、varchar(20)）</td></tr>
+<tr><td>role</td><td>varchar(32)</td><td>列角色——下面重點講</td></tr>
+<tr><td>examples</td><td>json</td><td>示例值（如 [8999.0, 6999.0, 125.0]）</td></tr>
+<tr><td>description</td><td>text</td><td>列的業務描述</td></tr>
+<tr><td>alias</td><td>json</td><td>中文別名（如 ["銷售額", "訂單金額", "收入"]）</td></tr>
+<tr><td>table_id</td><td>varchar(64)</td><td>所屬表名</td></tr>
+</tbody>
+</table>
+
+<h3>role 字段的四種值</h3>
+
+<p>role 是 column_info 裡最重要的字段——它直接決定 LLM 在生成 SQL 時怎麼用這列：</p>
+
+<table>
+<thead>
+<tr><th>role</th><th>含義</th><th>SQL 行為</th><th>示例列</th></tr>
+</thead>
+<tbody>
+<tr><td>primary_key</td><td>主鍵，唯一標識一行</td><td>通常不出現在 SELECT 裡，用於 JOIN 條件</td><td>fact_order.order_id、dim_customer.customer_id</td></tr>
+<tr><td>foreign_key</td><td>外鍵，指向另一張表的主鍵</td><td>用於 JOIN 條件，連接事實表和維度表</td><td>fact_order.customer_id、fact_order.region_id</td></tr>
+<tr><td>measure</td><td>度量，可聚合的數值</td><td>用於 SUM/AVG/COUNT 等聚合函數</td><td>fact_order.order_amount、fact_order.order_quantity</td></tr>
+<tr><td>dimension</td><td>維度，描述性屬性</td><td>用於 WHERE 條件、GROUP BY 分組</td><td>dim_product.category、dim_region.region_name</td></tr>
+</tbody>
+</table>
+
+<p>舉個例子：用戶問「華東地區的訂單總金額」。LLM 看到 <code>region_name</code> 的 role 是 <code>dimension</code>，就知道可以用 <code>WHERE region_name = '華東'</code>；看到 <code>order_amount</code> 的 role 是 <code>measure</code>，就知道可以用 <code>SUM(order_amount)</code>。</p>
+
+<h3>alias 字段：語義匹配的橋樑</h3>
+
+<p>alias 存的是中文別名，是一個 JSON 數組。比如 <code>order_amount</code> 的 alias 是 <code>["銷售額", "訂單金額", "收入"]</code>。</p>
+
+<p>當用戶說「銷售額」時，系統通過 alias 匹配到 <code>order_amount</code> 這個字段名。這就是 NL2SQL 裡「語義匹配」的核心機制——自然語言和數據庫字段之間的映射，靠的就是這些別名。</p>
+
+<h3>examples 字段：讓 LLM 理解數據長什麼樣</h3>
+
+<p>examples 存的是示例值，也是 JSON 數組。比如 <code>member_level</code> 的 examples 是 <code>["黃金", "白銀", "青銅", "鉑金"]</code>。</p>
+
+<p>這些示例值有兩個作用：一是幫助 LLM 理解這列存的是什麼類型的數據（是文本、數字還是枚舉值），二是在生成 SQL 時提供具體的值參考（比如 <code>WHERE member_level = '黃金'</code>）。</p>
+
+<h2>3. metric_info：指標定義</h2>
+
+<p>業務指標是從原始數據計算出來的衍生值。meta 庫定義了 13 個指標，覆蓋了常見的電商分析場景。</p>
+
+<table>
+<thead>
+<tr><th>字段</th><th>類型</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td>id</td><td>varchar(64)</td><td>指標編碼（如 GMV）</td></tr>
+<tr><td>name</td><td>varchar(128)</td><td>指標名稱</td></tr>
+<tr><td>description</td><td>text</td><td>指標定義和計算邏輯</td></tr>
+<tr><td>relevant_columns</td><td>json</td><td>計算此指標需要的列</td></tr>
+<tr><td>alias</td><td>json</td><td>中文別名</td></tr>
+</tbody>
+</table>
+
+<p>幾個核心指標：</p>
+
+<table>
+<thead>
+<tr><th>ID</th><th>名稱</th><th>計算邏輯</th><th>別名</th></tr>
+</thead>
+<tbody>
+<tr><td>GMV</td><td>Gross Merchandise Value</td><td>SUM(order_amount)</td><td>成交總額、訂單總額</td></tr>
+<tr><td>AOV</td><td>Average Order Value</td><td>AVG(order_amount)</td><td>平均單價、平均訂單金額</td></tr>
+<tr><td>ORDER_COUNT</td><td>訂單總數</td><td>COUNT(DISTINCT order_id)</td><td>訂單數、下單量</td></tr>
+<tr><td>SALES_QUANTITY</td><td>商品銷售總量</td><td>SUM(order_quantity)</td><td>總銷量、銷售件數</td></tr>
+</tbody>
+</table>
+
+<p>每個指標的 <code>relevant_columns</code> 字段列出了計算此指標需要關聯哪些列。比如 GMV 的 relevant_columns 是 <code>["fact_order.order_amount"]</code>——只需要 order_amount 一列就能算。而 DAILY_GMV 的 relevant_columns 包含了 order_amount 和 dim_date 的所有時間列——因為需要按日期分組。</p>
+
+<h2>4. column_metric：列-指標關聯</h2>
+
+<p>一張多對多的關聯表，把「哪些列參與計算哪個指標」的關係顯式化。</p>
+
+<table>
+<thead>
+<tr><th>字段</th><th>類型</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td>column_id</td><td>varchar(64)</td><td>列的全限定名</td></tr>
+<tr><td>metric_id</td><td>varchar(64)</td><td>指標 ID</td></tr>
+</tbody>
+</table>
+
+<p>比如 <code>fact_order.order_amount → GMV</code>，表示 order_amount 列參與 GMV 指標的計算。<code>fact_order.order_quantity → AOV</code>，表示 order_quantity 列參與 AOV 的計算。</p>
+
+<p>這張表的價值在於：當系統需要回答「GMV 怎麼算」時，可以直接查 column_metric 找到相關列，再查 column_info 拿到這些列的詳細信息，最後組裝成 LLM 需要的上下文。</p>
+
+<h2>meta 庫的整體設計邏輯</h2>
+
+<p>四張表形成一個從粗到細的描述鏈：</p>
+
+<pre><code>table_info（有哪些表、什麼角色）
+    ↓
+column_info（每列是什麼、什麼類型、什麼角色、叫什麼別名）
+    ↓
+metric_info（有哪些指標、怎麼定義、需要哪些列）
+    ↓
+column_metric（列和指標的多對多關係）</code></pre>
+
+<p>這個結構對應的是 NL2SQL 的核心需求：<strong>先理解業務語義，再生成 SQL</strong>。LLM 不需要去猜「銷售額對應哪個字段」——meta 庫已經把這些映射關係準備好了。這就是 RAG（Retrieval-Augmented Generation）的「R」——先從元數據知識庫裡檢索相關信息，再餵給 LLM 做生成。</p>
+
+<h2>小結</h2>
+
+<p>meta-schema-data.sql 建了 4 張元數據表：table_info 登記表角色，column_info 為每列建立身份證（類型、角色、別名、示例值），metric_info 定義業務指標，column_metric 記錄列與指標的關聯。其中 column_info 的 role 字段（primary_key / foreign_key / measure / dimension）是 LLM 生成 SQL 時判斷「該用這列做什麼」的核心依據。</p>
+
+<div class="lesson-nav">
+  <div><a href="./dw-schema-setup.html">← 上一步：數倉表結構與演示數據</a></div>
+  <div><a href="./run-demo-pipeline.html">下一步：完整初始化流程與數據驗證 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="column_info 中 role 字段有哪四種值？" data-correct="2" data-explain="primary_key、foreign_key、measure、dimension。">
+  <button class="opt">fact、dim、key、value</button>
+  <button class="opt">PK、FK、index、unique</button>
+  <button class="opt">primary_key、foreign_key、measure、dimension</button>
+  <button class="opt">string、int、float、json</button>
+</div>
+
+<div class="quiz" data-question="alias 字段在 NL2SQL 系統中的作用是什麼？" data-correct="1" data-explain="alias 存中文別名，讓系統能把用戶說的「銷售額」匹配到 order_amount 字段。">
+  <button class="opt">用來存儲加密信息</button>
+  <button class="opt">提供中文別名，做語義匹配</button>
+  <button class="opt">用來做數據壓縮</button>
+  <button class="opt">用來存儲歷史版本</button>
+</div>
+
+<div class="quiz" data-question="metric_info 的 relevant_columns 字段告訴 LLM 什麼？" data-correct="3" data-explain="計算此指標需要關聯哪些列。">
+  <button class="opt">指標的數據類型</button>
+  <button class="opt">指標的存儲位置</button>
+  <button class="opt">指標的歷史趨勢</button>
+  <button class="opt">計算此指標需要關聯哪些列</button>
+</div>
+
+<div class="quiz" data-question="table_info 表的 role 字段有哪些值？" data-correct="0" data-explain="fact（事實表）和 dim（維度表），對應星型模型的基本分類。">
+  <button class="opt">fact 和 dim</button>
+  <button class="opt">primary 和 secondary</button>
+  <button class="opt">main 和 sub</button>
+  <button class="opt">source 和 target</button>
+</div>
+
+<div class="quiz" data-question="為什麼 meta 庫要顯式存儲 column_metric 關聯表？" data-correct="2" data-explain="讓系統能快速找到「計算某個指標需要哪些列」，避免 LLM 自己去猜。">
+  <button class="opt">為了節省存儲空間</button>
+  <button class="opt">為了加快查詢速度</button>
+  <button class="opt">讓系統能快速找到計算指標所需的列</button>
+  <button class="opt">為了支持多數據庫遷移</button>
+</div>
+
+<div class="quiz" data-question="column_info 中 examples 字段存的是什麼？" data-correct="1" data-explain="示例值的 JSON 數組，幫助 LLM 理解數據長什麼樣。">
+  <button class="opt">列的數據類型</button>
+  <button class="opt">示例值的 JSON 數組</button>
+  <button class="opt">列的索引信息</button>
+  <button class="opt">列的權限配置</button>
+</div>
+
+<div class="footer">
+  <p>掌柜問數 · 元數據表結構與業務含義 · Step 2/3</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,6 +1,5 @@
 ---
 source: 018 LongPolling vs WebSockets vs ServerSent Events
-source_hash: 2bad6f0f8530e18f2f2460d4ee154379e3a86fd16fe6e140f617be7307be1d1e
 source_lines: 45
 created: 2025-08-25
 updated: 2025-08-25

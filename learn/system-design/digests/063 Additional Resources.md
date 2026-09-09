@@ -1,6 +1,5 @@
 ---
 source: 063 Additional Resources
-source_hash: 01d1e65b05f5275feb5a4901833fc43b78f4264d5652961e1d8b2600e41bbe30
 source_lines: 408
 created: 2025-08-25
 updated: 2025-08-25

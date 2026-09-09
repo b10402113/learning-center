@@ -1,6 +1,5 @@
 ---
 source: 07-enums.md
-source_hash: e743fc0835a9e5eaa84bd609372f6871dfb64b7a49e6ba5efcec31d626eb0e77
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03

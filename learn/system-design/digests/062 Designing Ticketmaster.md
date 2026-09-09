@@ -1,6 +1,5 @@
 ---
 source: 062 Designing Ticketmaster
-source_hash: dda503153c869f38a9a5ac5cafd6f9777305b93f51e9ea1529ff63bdeeaf50e4
 source_lines: 524
 created: 2025-08-25
 updated: 2025-08-25

@@ -1,6 +1,5 @@
 ---
 source: 040 CDN Usage vs Direct Server Serving
-source_hash: b3b75a2a9b6525c363901ed803cf4e7b6a65e623043288fc58c233961f0620fb
 source_lines: 65
 created: 2025-08-25
 updated: 2025-08-25

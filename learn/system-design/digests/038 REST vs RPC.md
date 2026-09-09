@@ -1,6 +1,5 @@
 ---
 source: 038 REST vs RPC
-source_hash: 51d4a2fbde5d733d7c03a2e99c540c9ec6214c0ac756658738290f80f447a139
 source_lines: 51
 created: 2025-08-25
 updated: 2025-08-25

@@ -1,6 +1,5 @@
 ---
 source: 49-Authentication.md
-source_hash: 78cbc93d75191025a088317d06507f9e4c638fd93ddaf3b0bfd1ebcbecc81662
 source_lines: 1
 created: 2025-09-03
 updated: 2025-09-03

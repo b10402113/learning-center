@@ -1,7 +1,5 @@
 ---
 source: js逆向课件/day08
-source_hash:
-  - e30eae6f4dc4dcd207fc9abb11642271ec66a0cc42ee64f4c65b48560981569a
 source_lines: 380
 created: 2026-09-05
 updated: 2026-09-05

@@ -1,6 +1,5 @@
 ---
 source: 035 PrimaryReplica vs PeertoPeer Replication
-source_hash: b21ac3e1321206d426216a91cf490e4756a9f99604f83a032aa27dda0a40e8ef
 source_lines: 62
 created: 2025-08-25
 updated: 2025-08-25

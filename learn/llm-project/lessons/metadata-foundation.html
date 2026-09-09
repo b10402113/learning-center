@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>元數據基礎：支撐 RAG 的知識庫</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>元數據基礎：支撐 RAG 的知識庫</h1>
+<p class="meta">Step 2/4 · 一個查詢的完整旅程</p>
+
+<h2>學習目標</h2>
+<p>能說清元數據知識庫的三層結構——MySQL 結構化存儲、Qdrant 向量索引、ES 全文索引——以及它們各自解決什麼問題。</p>
+
+<h2>什麼是元數據？</h2>
+
+<p>上一步我們知道系統要用 RAG 來增強 LLM 的 SQL 生成能力。問題是：LLM 需要什麼信息才能生成準確的 SQL？它需要知道數據倉庫裡有哪些表、每張表有哪些字段、每個字段是什麼意思、有哪些業務指標、字段裡實際存了什麼值。</p>
+
+<p>這些「關於數據的數據」就是<strong>元數據（metadata）</strong>。你可以把它想成數據倉庫的「說明書中心」——它不是業務數據本身（不是訂單金額、不是用戶名），而是描述業務數據的結構和含義。</p>
+
+<h2>元數據知識庫的三層架構</h2>
+
+<p>掌柜問數把元數據分三層存儲，每一層解決一個不同的問題：</p>
+
+<table>
+<thead>
+<tr><th>層級</th><th>存儲系統</th><th>存什麼</th><th>解決什麼問題</th></tr>
+</thead>
+<tbody>
+<tr><td>結構化存儲</td><td>MySQL</td><td>表/字段/指標的定義</td><td>精確查詢：「fact_order 有哪些字段？」</td></tr>
+<tr><td>語義向量索引</td><td>Qdrant</td><td>字段名/描述/別名的向量</td><td>語義匹配：「訂單金額」→ order_amount</td></tr>
+<tr><td>全文索引</td><td>Elasticsearch</td><td>維度字段的實際取值</td><td>值匹配：「華東」→ region_name</td></tr>
+</tbody>
+</table>
+
+<p>為什麼不只用一層？因為三層各自解決不同類型的匹配問題，少了任何一層都會影響召回率。</p>
+
+<h2>第一層：MySQL 結構化存儲</h2>
+
+<p>元數據的核心是四張 MySQL 表：</p>
+
+<table>
+<thead>
+<tr><th>表名</th><th>存什麼</th><th>舉例</th></tr>
+</thead>
+<tbody>
+<tr><td>table_info</td><td>表的元信息</td><td>fact_order 是事實表，存訂單交易數據</td></tr>
+<tr><td>column_info</td><td>字段的元信息</td><td>order_amount 是 FLOAT 類型的度量，描述是「訂單實付金額」</td></tr>
+<tr><td>metric_info</td><td>業務指標的定義</td><td>「訂單總金額」= SUM(order_amount)</td></tr>
+<tr><td>column_metric</td><td>字段與指標的關聯</td><td>order_amount 屬於「訂單總金額」指標</td></tr>
+</tbody>
+</table>
+
+<p>以 <code>fact_order.order_amount</code> 為例，它在 column_info 裡長這樣：</p>
+
+<table>
+<thead>
+<tr><th>字段</th><th>值</th></tr>
+</thead>
+<tbody>
+<tr><td>id</td><td>fact_order.order_amount</td></tr>
+<tr><td>name</td><td>order_amount</td></tr>
+<tr><td>type</td><td>FLOAT</td></tr>
+<tr><td>role</td><td>measure（度量）</td></tr>
+<tr><td>description</td><td>訂單實付金額，單位：元，不含運費/優惠</td></tr>
+<tr><td>alias</td><td>["訂單金額", "實付金額"]</td></tr>
+<tr><td>examples</td><td>["8999.00", "6999.00"]</td></tr>
+</tbody>
+</table>
+
+<p>MySQL 這層的作用是讓系統能精確查詢：「fact_order 有哪些字段？order_amount 的類型是什麼？它有哪些別名？」這些結構化信息是 SQL 生成的直接依據。</p>
+
+<h2>第二層：Qdrant 向量索引</h2>
+
+<p>MySQL 能回答「order_amount 是什麼」，但回答不了「用戶說的『訂單金額』對應哪個字段」。因為「訂單金額」和 order_amount 在字面上不完全匹配——一個是中文別名，一個是英文列名。</p>
+
+<p>這就需要<strong>語義匹配</strong>。系統用 Embedding 模型（BGE-large-zh）把字段名、描述、別名轉成向量，存入 Qdrant。當用戶說「訂單金額」時，系統把這句話也轉成向量，然後在 Qdrant 裡做相似度搜索，找到最接近的字段。</p>
+
+<p>具體來說，系統為每個字段建了三條向量記錄：</p>
+
+<table>
+<thead>
+<tr><th>記錄類型</th><th>示例</th><th>作用</th></tr>
+</thead>
+<tbody>
+<tr><td>字段名</td><td>order_amount</td><td>精確匹配英文列名</td></tr>
+<tr><td>字段描述</td><td>訂單實付金額，單位：元</td><td>語義匹配含義</td></tr>
+<tr><td>字段別名</td><td>訂單金額、實付金額</td><td>匹配用戶口語化表達</td></tr>
+</tbody>
+</table>
+
+<p>拆成三條而不是合成一條，是為了提高召回覆蓋率——用戶可能用任何一種方式來描述同一個字段。</p>
+
+<h2>第三層：Elasticsearch 全文索引</h2>
+
+<p>向量索引解決了「字段名匹配」的問題，但還有一類匹配它搞不定：維度值的匹配。</p>
+
+<p>用戶說「華東地區」，系統需要知道 <code>region_name</code> 字段裡存的是「華東」這個值。但「華東地區」和「華東」在向量空間裡未必足夠接近——ES 的全文索引 + IK 分詞器正好能處理這種場景。</p>
+
+<p>ES 對維度字段的實際取值建立倒排索引。比如 <code>dim_region.region_name</code> 裡存了「華東」「華南」「華北」「華中」等值，這些值被分詞後存入 ES。當用戶說「華東地區」時，IK 分詞器把它拆成「華東」「地區」，然後在 ES 裡匹配到 region_name = '華東'。</p>
+
+<h2>三層如何協作？</h2>
+
+<p>回到上一步的「三路召回」，現在你能看清每一路背後的存儲了：</p>
+
+<pre><code>用戶問題：「上週華東地區的訂單總金額」
+  ↓
+關鍵詞：上週、華東、地區、訂單、總金額
+  ↓
+┌─ 字段召回 → Qdrant（語義匹配字段名/描述/別名）
+├─ 指標召回 → Qdrant（語義匹配指標名/描述/別名）
+└─ 取值召回 → ES（全文匹配維度值）
+  ↓
+三路結果合併 → 候選表/字段/指標清單</code></pre>
+
+<p>三層存儲各司其職：MySQL 供結構化查詢，Qdrant 供語義匹配，ES 供值匹配。少了任何一層，召回的覆蓋率和準確率都會下降。</p>
+
+<h2>小結</h2>
+
+<p>元數據知識庫是 RAG 的語義基礎。MySQL 存結構化定義（精確查詢），Qdrant 存向量索引（語義匹配），ES 存全文索引（值匹配）。三層協作，確保用戶的自然語言能被準確地映射到數據倉庫的表、字段和取值。</p>
+
+<div class="lesson-nav">
+  <div><a href="./overview.html">← 上一步：系統全貌：從提問到結果的完整旅程</a></div>
+  <div><a href="./retrieval-to-sql.html">下一步：多路召回到 SQL 生成 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="元數據知識庫的三層存儲分別解決什麼問題？" data-correct="2" data-explain="MySQL 解決精確查詢，Qdrant 解決語義匹配，ES 解決值匹配。">
+  <button class="opt">備份、緩存、索引</button>
+  <button class="opt">讀、寫、刪</button>
+  <button class="opt">精確查詢、語義匹配、值匹配</button>
+  <button class="opt">日誌、監控、告警</button>
+</div>
+
+<div class="quiz" data-question="為什麼字段信息要在 Qdrant 裡建三條向量而不是一條？" data-correct="1" data-explain="拆成字段名、描述、別名三條，能覆蓋用戶不同的表達方式。">
+  <button class="opt">因為 Qdrant 有存儲限制</button>
+  <button class="opt">因為要覆蓋用戶不同的表達方式</button>
+  <button class="opt">因為三條向量更安全</button>
+  <button class="opt">因為字段名、描述、別名是三種不同的數據類型</button>
+</div>
+
+<div class="quiz" data-question="用戶說「華東地區」，系統用什麼來匹配 region_name = '華東'？" data-correct="0" data-explain="ES 全文索引 + IK 分詞器處理維度值的匹配。">
+  <button class="opt">Elasticsearch 全文索引 + IK 分詞器</button>
+  <button class="opt">Qdrant 向量相似度搜索</button>
+  <button class="opt">MySQL LIKE 模糊查詢</button>
+  <button class="opt">LLM 直接理解語義</button>
+</div>
+
+<div class="quiz" data-question="column_info 裡的 alias 字段存的是什麼？" data-correct="3" data-explain="alias 存的是字段的中文別名，用於匹配用戶的口語化表達。">
+  <button class="opt">字段的數據類型</button>
+  <button class="opt">字段的英文列名</button>
+  <button class="opt">字段的主外鍵關係</button>
+  <button class="opt">字段的中文別名</button>
+</div>
+
+<div class="quiz" data-question="元數據的來源有哪兩部分？" data-correct="1" data-explain="一部分自動採集，一部分人工補充配置。">
+  <button class="opt">用戶輸入和系統生成</button>
+  <button class="opt">數倉自動採集和人工補充配置</button>
+  <button class="opt">前端傳入和後端計算</button>
+  <button class="opt">API 返回和數據庫同步</button>
+</div>
+
+<div class="quiz" data-question="如果只有 MySQL 沒有 Qdrant 和 ES，系統的什麼能力會受損？" data-correct="2" data-explain="沒有 Qdrant 就沒有語義匹配，沒有 ES 就沒有值匹配，召回率會大幅下降。">
+  <button class="opt">SQL 執行速度</button>
+  <button class="opt">數據存儲容量</button>
+  <button class="opt">自然語言到字段/值的召回能力</button>
+  <button class="opt">前端頁面渲染速度</button>
+</div>
+
+<div class="footer">
+  <p>掌柜問數 · 一個查詢的完整旅程 · Step 2/4</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

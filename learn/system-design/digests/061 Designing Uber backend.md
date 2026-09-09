@@ -1,6 +1,5 @@
 ---
 source: 061 Designing Uber backend
-source_hash: 8622d9ac0aeb14cd255479218025a4b04a68cc39beba518dfd5ae5ebc621796d
 source_lines: 389
 created: 2025-08-25
 updated: 2025-08-25

@@ -1,6 +1,5 @@
 ---
 source: 034 SQL vs NoSQL (2)
-source_hash: 51f54bdcc09da209db1583096106817a705832d203808d7a5ed61039d268e8ee
 source_lines: 73
 created: 2025-08-25
 updated: 2025-08-25

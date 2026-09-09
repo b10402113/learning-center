@@ -1,6 +1,5 @@
 ---
 source: 029 Batch Processing vs Stream Processing
-source_hash: 4577fc18d112c898b40ab46bd709ff15f97792a03841ee196d9abac91825c86e
 source_lines: 63
 created: 2025-08-25
 updated: 2025-08-25

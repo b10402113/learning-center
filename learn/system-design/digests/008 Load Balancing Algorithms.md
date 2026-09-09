@@ -1,6 +1,5 @@
 ---
 source: 008 Load Balancing Algorithms
-source_hash: 182f6657171ea89448bc4e07024c9457734a312b3d99699d02d315a8146cf6b7
 source_lines: 231
 created: 2025-08-25
 updated: 2025-08-25
