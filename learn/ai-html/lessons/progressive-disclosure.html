@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Progressive Disclosure 載入模式</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Progressive Disclosure 載入模式</h1>
+<div class="meta">ai-html · Agent Skill 架構 · Step 4/4</div>
+
+<p>前三課我們看到了 skill 的定義、資料夾結構、和 SKILL.md 的工作流設計。這一課解決一個技術問題：當 skill 裡的參考文件很多很大時，怎麼讓代理有效地使用它們？答案是 Progressive Disclosure（漸進式揭露）——分層載入，按需取用。</p>
+
+<h2>為什麼不能一次全部載入？</h2>
+
+<p>假設 beautiful-article skill 有 18 份 reference 文件。如果代理在一開始就把全部 18 份文件讀進上下文：</p>
+
+<ol>
+<li><strong>上下文爆炸</strong>——18 份文件可能有數萬 token，直接佔滿上下文視窗，代理沒空間做實際工作</li>
+<li><strong>資訊過載</strong>——代理會被不相關的資訊干擾。在「來源提取」階段，它不需要知道「PDF 匯出」的規格</li>
+<li><strong>成本浪費</strong>——每次執行都要載入全部文件，即使 90% 在當前階段用不到</li>
+</ol>
+
+<p>Progressive Disclosure 的解法是：把參考文件分成三層，代理只在需要的時候才載入更詳細的那一層。</p>
+
+<h2>三層載入架構</h2>
+
+<h3>第一層：Index（索引）</h3>
+<p>最輕量的一層。代理一開始只讀 SKILL.md 裡的索引或摘要。比如 frontend-slides 的 <code>selection-index.json</code> 是一個 JSON 陣列，裡面有 34 個模板的元資料：名稱、標語、適用場景、避免使用場景。每個條目只有幾行，但足夠代理做初步篩選。</p>
+
+<pre><code>[
+  {
+    "slug": "bold-signal",
+    "name": "Bold Signal",
+    "tagline": "High-impact, minimal chrome",
+    "mood": "confident",
+    "best_for": "product launches, keynotes",
+    "avoid_for": "academic, legal",
+    "preview": "bold-signal/preview.md",
+    "design": "bold-signal/design.md"
+  },
+  ...
+]</code></pre>
+
+<p>代理讀完索引後，就知道有哪些候選，但還不知道具體長什麼樣。</p>
+
+<h3>第二層：Preview（預覽）</h3>
+<p>代理從索引中選出 2-3 個候選，然後載入它們的 preview.md。Preview 是一張輕量風格卡：配色快照、標誌性設計元素、適用場景。它足夠讓代理判斷「這個風格適不適合」，但不包含完整的設計規格。</p>
+
+<p>frontend-slides 的預覽策略很聰明：從 34 個模板中選 1 個安全選項 + 1 個大膽選項 + 1 個野卡選項，然後用 preview.md 讓使用者快速比較。</p>
+
+<h3>第三層：Full Reference（完整參考）</h3>
+<p>使用者確認後，代理才載入對應的 design.md——完整的設計系統規格：配色、字型尺度、間距節奏、元件文法、CJK 支援、投影片類型藍圖。這是最大的文件，但只在確定使用後才載入。</p>
+
+<h2>實際流程圖</h2>
+
+<pre><code>SKILL.md (入口)
+  │
+  ├── 載入 selection-index.json (索引，~2KB)
+  │     │
+  │     ├── 篩選 3 個候選
+  │     │
+  │     ├── 載入候選 A 的 preview.md (~1KB)
+  │     ├── 載入候選 B 的 preview.md (~1KB)
+  │     └── 載入候選 C 的 preview.md (~1KB)
+  │
+  ├── 使用者選擇 → 候選 B
+  │
+  └── 載入候選 B 的 design.md (~8KB)
+        │
+        └── 按 design.md 生成內容</code></pre>
+
+<p>總共載入量：索引 2KB + 3 個 preview 3KB + 1 個 design 8KB = 13KB。相比一次載入 34 個 design.md（~272KB），節省了 95% 的上下文佔用。</p>
+
+<h2>Boring-video 的 Progressive Disclosure</h2>
+
+<p>boring-video 也使用這種模式，但它的三層不是模板索引，而是工作流階段：</p>
+
+<table>
+<tr><th>層級</th><th>載入時機</th><th>內容</th></tr>
+<tr><td>L1: SKILL.md</td><td>一開始</td><td>工作流階段劃分、intake 問題、產物鏈順序</td></tr>
+<tr><td>L2: 階段 SKILL.md</td><td>進入該階段時</td><td>to-spec-beats、to-narration 等各階段的完整規格</td></tr>
+<tr><td>L3: references/</td><td>階段內判斷時</td><td>hyperframes-capability-envelope.md、scene-format.md 等深度參考</td></tr>
+</table>
+
+<p>比如代理在執行 to-scenes 階段時，才載入 <code>references/hyperframes-capability-envelope.md</code> 來判斷場景的可行性——因為在前面的 beats 和 narration 階段，這個文件完全用不到。</p>
+
+<h2>Progressive Disclosure 的設計原則</h2>
+
+<h3>1. 每一層都要有足夠資訊做判斷</h3>
+<p>索引要能讓代理篩選候選，preview 要能讓使用者做風格比較。如果某個層級資訊不足，代理就需要載入更多文件，progressive disclosure 就失效了。</p>
+
+<h3>2. 上一層的產出決定下一層的輸入</h3>
+<p>索引篩選出候選 → preview 決定最終選擇 → design 指導生成。每一步的產出是下一步的輸入，不能跳過。</p>
+
+<h3>3. 只在確定後才載入大文件</h3>
+<p>完整參考（design.md、harness.md）是最重量級的文件，只在使用者確認後才載入。這確保了上下文始終保持在可控範圍內。</p>
+
+<div class="quiz" data-question="Progressive Disclosure 的三層載入架構是什麼？" data-correct="2" data-explain="Index（索引）→ Preview（預覽）→ Full Reference（完整參考），每層逐漸增加細節，按需載入。">
+  <button class="opt">全文索引 → 關鍵字搜索 → 模糊匹配</button>
+  <button class="opt">L1 摘要 → L2 全文 → L3 超連結</button>
+  <button class="opt">Index（索引）→ Preview（預覽）→ Full Reference（完整參考）</button>
+  <button class="opt">快取 → 預載入 → 即時生成</button>
+</div>
+
+<div class="quiz" data-question="為什麼不能在 skill 執行一開始就把所有 reference 文件全部載入？" data-correct="0" data-explain="18 份文件可能有數萬 token，直接佔滿上下文視窗，代理沒空間做實際工作，且多數文件在當前階段用不到。">
+  <button class="opt">上下文視窗有限，多數文件在當前階段用不到，全部載入會佔滿空間且造成資訊過載</button>
+  <button class="opt">因為 reference 文件是加密的，只能按需解密</button>
+  <button class="opt">因為 Agent 每次只能讀一個檔案</button>
+  <button class="opt">因為 reference 文件必須在線上才能讀取</button>
+</div>
+
+<div class="quiz" data-question="frontend-slides 的預覽策略是從 34 個模板中選幾個做 preview？" data-correct="1" data-explain="選 3 個候選：1 個安全選項 + 1 個大膽選項 + 1 個野卡選項，然後用 preview.md 讓使用者快速比較。">
+  <button class="opt">1 個</button>
+  <button class="opt">3 個（安全 + 大膽 + 野卡）</button>
+  <button class="opt">10 個</button>
+  <button class="opt">全部 34 個</button>
+</div>
+
+<div class="quiz" data-question="boring-video 的 to-scenes 階段需要載入哪個 reference 文件？" data-correct="3" data-explain="to-scenes 階段需要 hyperframes-capability-envelope.md 來判斷場景的可行性——在前面的 beats 和 narration 階段用不到。">
+  <button class="opt">article-types.md</button>
+  <button class="opt">plan-template.md</button>
+  <button class="opt">review-checklist.md</button>
+  <button class="opt">hyperframes-capability-envelope.md</button>
+</div>
+
+<div class="quiz" data-question="Progressive Disclosure 的設計原則中，「上一層的產出決定下一層的輸入」是什麼意思？" data-correct="2" data-explain="索引篩選出候選 → preview 決定最終選擇 → design 指導生成，每一步的產出是下一步的輸入，不能跳過。">
+  <button class="opt">每一層都可以獨立使用</button>
+  <button class="opt">上一層的文件可以重複使用</button>
+  <button class="opt">索引篩選出候選 → preview 決定選擇 → design 指導生成，每步產出是下一步輸入</button>
+  <button class="opt">所有層級同時載入</button>
+</div>
+
+<div class="quiz" data-question="使用 Progressive Disclosure 後，frontend-slides 的總載入量大約是多少？" data-correct="1" data-explain="索引 2KB + 3 個 preview 3KB + 1 個 design 8KB ≈ 13KB，相比一次載入 34 個 design.md 的 ~272KB 節省了 95%。">
+  <button class="opt">~272KB</button>
+  <button class="opt">~13KB</button>
+  <button class="opt">~2KB</button>
+  <button class="opt">~50KB</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="./skill-md-structure.html">← 上一步：SKILL.md 工作流設計</a></div>
+  <div></div>
+</div>
+
+<div class="footer">
+  ai-html · Agent Skill 架構 · Step 4/4
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>固定舞台與視窗模型 — 投影片基礎</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>固定舞台與視窗模型</h1>
+  <div class="meta">投影片基礎 · Step 1/4</div>
+
+  <h2>學習目標</h2>
+  <p>理解 1920×1080 固定舞台的設計原理：為什麼用 CSS transform 縮放而不是自適應佈局，以及 slide 堆疊與可見性切換的機制。</p>
+
+  <h2>為什麼是「固定畫布」而不是「自適應」？</h2>
+
+  <p>大多數網頁是自適應的——你拉大瀏覽器視窗，內容就跟著放大。但投影片不一樣。每一張投影片都是一幅精心排版的畫面：標題的大小、文字和圖片的位置、留白的比例，都是設計好的。如果你讓它「自適應」，排版就會在不同螢幕上崩掉。</p>
+
+  <p>所以 HTML 投影片選擇了一條反直覺的路：先在一個固定尺寸的畫布（stage）上把排版鎖死，然後用 CSS transform 把整個畫布縮放到當前瀏覽器視窗的大小。畫布永遠是 1920×1080 像素，不管你的螢幕是 13 吋筆電還是 27 吋桌面螢幕。</p>
+
+  <blockquote>核心思路：排版在固定畫布上完成，顯示時由瀏覽器統一縮放。設計師控制每一像素，瀏覽器只負責「把它塞進螢幕」。</blockquote>
+
+  <h2>三層結構：viewport → stage → slide</h2>
+
+  <p>HTML 投影片的 DOM 結構分三層，每一層各司其職：</p>
+
+  <table>
+    <tr><th>層級</th><th>CSS class</th><th>職責</th></tr>
+    <tr><td>外框</td><td><code>.deck-viewport</code></td><td>佔滿整個瀏覽器視窗，溢位藏掉（overflow: hidden）</td></tr>
+    <tr><td>舞台</td><td><code>.deck-stage</code></td><td>固定 1920×1080，透過 CSS transform 縮放到視窗大小</td></tr>
+    <tr><td>投影片</td><td><code>.slide</code></td><td>多張堆疊，同一時間只有一張可見</td></tr>
+  </table>
+
+  <p>用一句話記住：<strong>viewport 是瀏覽器的「鏡頭」，stage 是「畫布」，slide 是畫布上的「頁面」。</strong></p>
+
+  <h2>CSS transform 縮放機制</h2>
+
+  <p>舞台的縮放是整個系統的靈魂。核心邏輯很簡單：</p>
+
+  <pre><code>/* 計算縮放比例 */
+const scaleX = window.innerWidth / 1920;
+const scaleY = window.innerHeight / 1080;
+const scale = Math.min(scaleX, scaleY);
+
+/* 套用到舞台 */
+stage.style.transform = `scale(${scale})`;
+stage.style.transformOrigin = 'top left';</code></pre>
+
+  <p>用 <code>Math.min</code> 取較小的縮放比例，確保畫布完全塞進視窗而不裁切。配合 <code>transform-origin: top left</code>，畫布從左上角開始縮放，剩餘空間用背景色填滿。</p>
+
+  <p>當瀏覽器視窗大小改變時，觸發 <code>resize</code> 事件重新計算。這就是為什麼你在開發者工具裡拉動視窗邊框，投影片會即時跟著縮放。</p>
+
+  <blockquote>關鍵概念：CSS transform 縮放是「像素完美」的——所有文字、圖片、間距都保持設計時的比例，不會像 CSS <code>vw/vh</code> 單位那樣產生非整數像素的模糊。</blockquote>
+
+  <h2>Slide 堆疊與可見性切換</h2>
+
+  <p>所有投影片在 DOM 裡是「堆疊」的——它們全部疊在同一個位置，就像一疊撲克牌。但你一次只能看到一張。切換方式是透過 CSS class 控制 <code>visibility</code> 和 <code>opacity</code>：</p>
+
+  <table>
+    <tr><th>狀態</th><th>CSS class</th><th>效果</th></tr>
+    <tr><td>當前顯示</td><td><code>.slide.active</code></td><td>visibility: visible; opacity: 1</td></tr>
+    <tr><td>已載入但隱藏</td><td><code>.slide.visible</code></td><td>visibility: visible; opacity: 0（佔位但看不見）</td></tr>
+    <tr><td>未載入</td><td>（無 class）</td><td>visibility: hidden（不佔位）</td></tr>
+  </table>
+
+  <p>為什麼用 <code>visibility</code> + <code>opacity</code> 而不是 <code>display: none</code>？因為 <code>display: none</code> 會讓元素完全脫離文件流——瀏覽器不渲染它，也不會載入裡面的圖片。用 <code>visibility: hidden</code> + <code>opacity: 0</code>，元素仍然佔位、仍然被渲染，只是看不見。這樣切換時不需要重新渲染，動畫也更流暢。</p>
+
+  <h2>列印樣式與無障礙支援</h2>
+
+  <p>一個完整的投影片系統還要處理兩個邊界情況：</p>
+
+  <h3>列印（Print）</h3>
+  <p>當使用者按 <code>Ctrl+P</code> 列印時，<code>@media print</code> 樣式會把每一張 slide 顯示為獨立的列印頁面，隱藏其他 slide 和導航元素。這樣你就能直接從瀏覽器列印出 PDF。</p>
+
+  <h3>減少動畫（Reduced Motion）</h3>
+  <p><code>@media (prefers-reduced-motion: reduce)</code> 是系統級的無障礙設定。如果使用者在作業系統裡開啟了「減少動畫」，投影片會跳過所有進入動畫，直接顯示最終狀態。這是對前庭障礙（vestibular disorder）使用者的基本尊重。</p>
+
+  <h2>零依賴的單檔輸出</h2>
+
+  <p>所有這些——viewport CSS、stage 縮放 JS、slide 堆疊邏輯、列印樣式、無障礙支援——全部內聯在一個 HTML 檔案裡。不需要任何外部 CSS 檔、JS 檔或套件管理器。瀏覽器就是播放器，一個 HTML 檔就是一部投影片。</p>
+
+  <p>這是 HTML 投影片最強大的地方：你可以把一個 .html 檔傳給任何人，對方不需要安裝任何東西，打開瀏覽器就能看。不需要 PowerPoint、不需要 Google Slides、不需要網路連線。</p>
+
+  <h2>Quiz</h2>
+
+  <div class="quiz" data-question="HTML 投影片的舞台尺寸是多少？" data-correct="1" data-explain="舞台固定為 1920×1080 像素，這是 16:9 的標準解析度。">
+    <button class="opt">1280×720</button>
+    <button class="opt">1920×1080</button>
+    <button class="opt">2560×1440</button>
+    <button class="opt">3840×2160</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼用 CSS transform 而不是 vw/vh 單位來縮放舞台？" data-correct="2" data-explain="CSS transform 保持像素完美，vw/vh 會產生非整數像素導致模糊。">
+    <button class="opt">vw/vh 不支援 16:9</button>
+    <button class="opt">transform 動畫效能更好</button>
+    <button class="opt">transform 保持像素完美不模糊</button>
+    <button class="opt">vw/vh 無法偵測螢幕大小</button>
+  </div>
+
+  <div class="quiz" data-question="切換投影片時為什麼用 visibility + opacity 而不是 display: none？" data-correct="0" data-explain="display: none 會讓元素脫離文件流，瀏覽器不渲染也不載入圖片，切換時需要重新渲染。">
+    <button class="opt">display: none 會讓元素脫離文件流，需要重新渲染</button>
+    <button class="opt">visibility 動畫效能更好</button>
+    <button class="opt">opacity 可以做淡入淡出</button>
+    <button class="opt">display: none 在 Firefox 有 bug</button>
+  </div>
+
+  <div class="quiz" data-question="HTML 投影片系統的三層 DOM 結構從外到內是？" data-correct="1" data-explain="viewport（外框）→ stage（畫布）→ slide（頁面），三層各司其職。">
+    <button class="opt">slide → stage → viewport</button>
+    <button class="opt">viewport → stage → slide</button>
+    <button class="opt">stage → viewport → slide</button>
+    <button class="opt">viewport → slide → stage</button>
+  </div>
+
+  <div class="quiz" data-question="當使用者在作業系統開啟「減少動畫」時，投影片會怎麼做？" data-correct="3" data-explain="prefers-reduced-motion 媒體查詢會讓投影片跳過所有進入動畫，直接顯示最終狀態。">
+    <button class="opt">完全不顯示投影片</button>
+    <button class="opt">改用文字模式顯示</button>
+    <button class="opt">只播放背景音樂</button>
+    <button class="opt">跳過所有進入動畫，直接顯示最終狀態</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼說 HTML 投影片是「零依賴」的？" data-correct="2" data-explain="所有 CSS、JS、字型設定都內聯在一個 HTML 檔裡，不需要外部檔案或套件管理器。">
+    <button class="opt">因為它不需要瀏覽器</button>
+    <button class="opt">因為它不使用 CSS</button>
+    <button class="opt">因為所有程式碼都內聯在一個 HTML 檔裡，不需要外部檔案</button>
+    <button class="opt">因為它只需要網路連線</button>
+  </div>
+
+  <div class="lesson-nav">
+    <span></span>
+    <a href="./html-slide-navigation.html">下一步：導航與互動控制 →</a>
+  </div>
+
+  <div class="footer">
+    <p>如有疑問，向你的 AI 教師提問。他可以協助解答任何不清楚的地方。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

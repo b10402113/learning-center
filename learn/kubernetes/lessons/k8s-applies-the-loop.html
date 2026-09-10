@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kubernetes 如何套用 Reconciliation Loop — Kubernetes 核心：Reconciliation Loop</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Kubernetes 如何套用 Reconciliation Loop</h1>
+<p class="meta">Kubernetes 核心：Reconciliation Loop · Step 2/3</p>
+
+<h2>學習目標</h2>
+<p>說明 Kubernetes 將 loop 應用在容器、Volume、IP、Load Balancer 等資源上的方式，以及為什麼 loop 是整個平台唯一一致的組件。</p>
+
+<h2>Kubernetes 裡有成千上萬個 Loop</h2>
+<p>上一步你學到，reconciliation loop 就是「聲明期望 → 觀察實際 → 關閉差距」。在 Kubernetes 裡，<strong>每一個資源</strong>都有自己的 loop 在跑。不是只有一個大循環——而是成千上萬個小循環同時運作，各自管理各自的資源。</p>
+<p>舉幾個例子：</p>
+<table>
+  <tr><th>資源類型</th><th>期望狀態（Desired）</th><th>實際狀態（Actual）</th><th>Reconcile 動作</th></tr>
+  <tr><td>Container（容器）</td><td>容器應該在跑</td><td>容器停了</td><td>重新啟動容器</td></tr>
+  <tr><td>Volume（儲存卷）</td><td>磁碟應該掛載到 Pod</td><td>磁碟未掛載</td><td>掛載磁碟</td></tr>
+  <tr><td>IP 位址</td><td>Pod 應該有 IP</td><td>Pod 沒有 IP</td><td>分配 IP</td></tr>
+  <tr><td>Load Balancer</td><td>流量應該導到健康的 Pod</td><td>某 Pod 不健康</td><td>從負載均衡移除該 Pod</td></tr>
+</table>
+<p>每一個 loop 都在做同一件事：檢查「你想要什麼」和「實際上有什麼」之間的差距，然後想辦法關閉。</p>
+
+<h2>Loop 是唯一一致的東西</h2>
+<p>Kubernetes 生態系龐大得嚇人——有數千個不同的組件、控制器、Operator、插件。但所有這些東西，不管它們做什麼，底層都在跑同一個 reconciliation loop。</p>
+<p>這意味著<strong>loop 是你在 Kubernetes 裡唯一可以完全依賴的一致機制</strong>。不管遇到什麼問題——Pod 跑不起來、Service 沒有流量、儲存卷掛不上——你都可以回到同一個思考框架：</p>
+<ol>
+  <li>期望狀態是什麼？（你寫的 manifest 裡聲明了什麼）</li>
+  <li>實際狀態是什麼？（<code>kubectl get</code> / <code>kubectl describe</code> 看到什麼）</li>
+  <li>差距在哪？怎麼關閉？</li>
+</ol>
+<p>這就是為什麼 Kubernetes 雖然學起來很重，但一旦學會就非常好除錯——因為所有的問題都可以用同一個邏輯拆解。</p>
+
+<h2>Controller 就是 Loop 的管理者</h2>
+<p>在 Kubernetes 裡，管理某個資源的 reconciliation loop 的組件叫做 <strong>Controller</strong>（控制器）。例如：</p>
+<ul>
+  <li><strong>Deployment Controller</strong> 管理 Deployment 的 loop：你聲明要 3 個 Pod，它確保確實有 3 個在跑</li>
+  <li><strong>Node Controller</strong> 管理節點的 loop：你聲明要 5 個 worker node，它確保有 5 個 healthy 的節點</li>
+  <li><strong>Service Controller</strong> 管理 Service 的 loop：你聲明要一個 Load Balancer，它確保雲端真的建立了一個</li>
+</ul>
+<p>每個 Controller 只管自己的資源，但機制完全相同：desired → actual → reconcile。這種設計讓 Kubernetes 能夠用一致的方式管理截然不同的基礎設施。</p>
+
+<h2>操控面板（Control Plane）：所有 Loop 的總管</h2>
+<p>這些 Controller 都跑在一個叫做 <strong>Control Plane</strong>（控制平面）的地方。Control Plane 是整個集群的大腦——它不直接跑你的應用，它負責：</p>
+<ul>
+  <li>儲存整個集群的狀態（存在 etcd 這個分散式資料庫裡）</li>
+  <li>執行所有 Controller，讓它們各自的 loop 持續運作</li>
+  <li>接收你的 manifest（透過 API Server），更新期望狀態</li>
+</ul>
+<p>當你執行 <code>kubectl apply -f deployment.yaml</code>，你其實是在告訴 API Server：「我想要 3 個 Pod 在跑。」API Server 把這個期望狀態存進 etcd，然後 Deployment Controller 的 loop 偵測到差距，開始建立 Pod。</p>
+<p>整個過程沒有任何人在旁邊按按鈕——loop 自己發現、自己調整、自己完成。</p>
+
+<h2>小結</h2>
+<p>Kubernetes 的每一種資源——容器、儲存、網路、負載均衡——都由各自的 Controller 透過 reconciliation loop 管理。loop 是整個平台唯一一致的機制，也是你除錯時的思維起點。下一個問題是：這種 loop 架構和我們熟悉的 Ansible 等指令式工具有什麼不同？</p>
+
+<div class="lesson-nav">
+  <div><a href="./what-is-reconciliation.html">← 上一步：什麼是 Reconciliation Loop？</a></div>
+  <div><a href="./declarative-vs-imperative.html">下一步：Loop vs 指令式工具 →</a></div>
+</div>
+
+<div class="quiz" data-question="在 Kubernetes 裡，管理某個資源 reconciliation loop 的組件叫做？" data-correct="2" data-explain="Controller 就是跑在 Control Plane 上的 loop 管理者。">
+  <button class="opt">Scheduler</button>
+  <button class="opt">Proxy</button>
+  <button class="opt">Controller</button>
+  <button class="opt">Operator</button>
+</div>
+
+<div class="quiz" data-question="當你執行 kubectl apply，你實際上是在做什麼？" data-correct="1" data-explain="kubectl 透過 API Server 把你聲明的期望狀態寫入 etcd，loop 接著自動反應。">
+  <button class="opt">直接重啟所有 Pod</button>
+  <button class="opt">告訴 API Server 你的期望狀態</button>
+  <button class="opt">手動調度 Pod 到特定節點</button>
+  <button class="opt">刪除舊的 Pod 再建立新的</button>
+</div>
+
+<div class="quiz" data-question="Kubernetes 裡為什麼說 loop 是「唯一一致的東西」？" data-correct="0" data-explain="數千個不同組件底層跑的都是同一個 desired → actual → reconcile 模式，這讓除錯有了統一的思考框架。">
+  <button class="opt">所有資源底層都跑同一個 desired → actual → reconcile 模式</button>
+  <button class="opt">只有 loop 有官方文件</button>
+  <button class="opt">loop 是唯一不需要網路的功能</button>
+  <button class="opt">其他功能都是 loop 的替代方案</button>
+</div>
+
+<div class="quiz" data-question="Deployment Controller 的 reconcile 動作是什麼？" data-correct="3" data-explain="你聲明要 3 個 Pod，如果實際只有 2 個，Controller 會自動建立第 3 個。">
+  <button class="opt">刪除所有 Pod 再重建</button>
+  <button class="opt">更新容器映像版本</button>
+  <button class="opt">重新分配 IP 位址</button>
+  <button class="opt">確保 Pod 數量符合你聲明的副本數</button>
+</div>
+
+<div class="quiz" data-question="etcd 在 Kubernetes 裡扮演什麼角色？" data-correct="1" data-explain="etcd 是分散式資料庫，儲存整個集群的狀態，所有 Controller 的 loop 都從這裡讀取期望狀態。">
+  <button class="opt">執行容器的 runtime</button>
+  <button class="opt">儲存集群狀態的分散式資料庫</button>
+  <button class="opt">管理網路路由的 proxy</button>
+  <button class="opt">排程 Pod 的 scheduler</button>
+</div>
+
+<div class="quiz" data-question="如果 Load Balancer Controller 偵測到某個 Pod 不健康，它會做什麼？" data-correct="2" data-explain="reconciliation loop 偵測到實際狀態（Pod 不健康）偏離期望狀態（所有 Pod 都健康），自動把該 Pod 從負載均衡移除。">
+  <button class="opt">重啟整個 Load Balancer</button>
+  <button class="opt">停止所有流量</button>
+  <button class="opt">把該 Pod 從負載均衡移除</button>
+  <button class="opt">發送告警後不做任何事</button>
+</div>
+
+<div class="lesson-nav">
+  <div></div>
+  <div></div>
+</div>
+
+<div class="footer">
+  Kubernetes 核心：Reconciliation Loop · Step 2/3 · Kubernetes 如何套用 Reconciliation Loop
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

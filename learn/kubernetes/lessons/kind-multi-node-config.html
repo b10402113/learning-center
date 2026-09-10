@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用 Config 建立多節點集群</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <article>
+    <h1>用 Config 建立多節點集群</h1>
+    <p class="subtitle">建立本地開發環境 · 第 3 步</p>
+
+    <section class="learning-goal">
+      <h2>學習目標</h2>
+      <p>能撰寫 Kind cluster config 建立含 1 個 control-plane 和 2 個 worker 的多節點集群，理解節點角色的差異與 port mapping。</p>
+    </section>
+
+    <section>
+      <h2>預設集群的限制</h2>
+      <p>上一步建立的 `kind create cluster` 是一個預設的單節點集群——所有東西都跑在同一個 control-plane 節點上。這對學習已經夠用，但真實的 Kubernetes 集群幾乎都是多節點的：有專門的 control-plane 負責管理和決策，有 worker 節點負責跑你的應用程式。</p>
+      <p>要建立多節點集群，你需要一個 config 檔案。</p>
+    </section>
+
+    <section>
+      <h2>撰寫 cluster config</h2>
+      <p>建立一個名為 `kind-cluster.yaml` 的檔案：</p>
+      <pre><code># kind-cluster.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP
+  - role: worker
+  - role: worker</code></pre>
+      <p>這份 config 說了什麼？</p>
+      <ul>
+        <li><strong>kind: Cluster</strong> — 這是 Kind 的 cluster 資源類型</li>
+        <li><strong>role: control-plane</strong> — 建立一個控制平面節點，跑 API server、etcd、scheduler 等</li>
+        <li><strong>role: worker × 2</strong> — 建立兩個 worker 節點，負責跑你的應用 Pod</li>
+        <li><strong>extraPortMappings</strong> — 把容器的 30080 port 映射到主機，方便未來做 Ingress 測試</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Control-plane vs Worker</h2>
+      <p>Kubernetes 的節點分為兩種角色，這是理解集群架構的關鍵：</p>
+      <table>
+        <thead>
+          <tr><th></th><th>Control-plane</th><th>Worker</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>跑什麼</strong></td>
+            <td>API server、etcd、controller manager、scheduler</td>
+            <td>kubelet、kube-proxy、你的應用 Pod</td>
+          </tr>
+          <tr>
+            <td><strong>功能</strong></td>
+            <td>管理集群狀態、做決策、接受指令</td>
+            <td>執行工作負載、跑容器</td>
+          </tr>
+          <tr>
+            <td><strong>類比</strong></td>
+            <td>公司的管理層和 IT 控制台</td>
+            <td>實際做事的員工</td>
+          </tr>
+          <tr>
+            <td><strong>數量</strong></td>
+            <td>通常 1 個或 3 個（奇數，為了 etcd 共識）</td>
+            <td>根據工作負載需求決定</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>在你的日常操作中，你會透過 kubectl 向 control-plane 下指令，但你的應用 Pod 實際跑在 worker 節點上。control-plane 決定 Pod 該跑在哪個 worker，worker 執行它。</p>
+    </section>
+
+    <section>
+      <h2>建立多節點集群</h2>
+      <pre><code># 先刪除之前的集群
+kind delete cluster --name my-cluster
+
+# 用 config 建立新集群
+kind create cluster --config kind-cluster.yaml --name my-cluster</code></pre>
+      <p>建立完成後，驗證所有節點都就緒：</p>
+      <pre><code>kubectl get nodes</code></pre>
+      <p>你應該看到三個節點，角色分別是 control-plane 和 worker：</p>
+      <pre><code>NAME                            STATUS   ROLES           AGE   VERSION
+my-cluster-control-plane        Ready    control-plane   30s   v1.xx.x
+my-cluster-worker               Ready    &lt;none&gt;          25s   v1.xx.x
+my-cluster-worker2              Ready    &lt;none&gt;          25s   v1.xx.x</code></pre>
+      <p>注意 worker 節點的 ROLES 欄位是 `<none>`，這是 Kind 的一個已知行為——它不會自動幫 worker 設定 label。這不影響功能，只是顯示上的差異。</p>
+    </section>
+
+    <section>
+      <h2>Port mapping 的意義</h2>
+      <p>config 中的 `extraPortMappings` 把容器內的 30080 port 映射到你的主機。為什麼要預先設定這個？</p>
+      <p>在 Kubernetes 中，NodePort Service 可以把你的服務暴露到 30000–32767 的範圍。選擇 30080 是為了將來建 Ingress 時，你可以在瀏覽器中用 `localhost:30080` 測試流量。這是本地開發的常見模式——先把 port 留好，後面再用。</p>
+      <p>如果你現在建立一個 NodePort Service 並指定 port 30080，就可以用 `http://localhost:30080` 從主機訪問你的服務。</p>
+    </section>
+
+    <section>
+      <h2>驗證集群</h2>
+      <p>確認系統 Pod 全部正常：</p>
+      <pre><code>kubectl get pods -n kube-system</code></pre>
+      <p>所有 Pod 都應該是 Running 或 Completed 狀態。如果看到 Pending 或 CrashLoopBackOff，等一下再檢查——有些 Pod 需要依賴其他 Pod 先啟動完成。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>確認理解</h2>
+
+      <div class="quiz" data-question="Control-plane 節點跑什麼？" data-correct="0" data-explain="Control-plane 跑 API server、etcd、controller manager、scheduler——負責管理集群。">
+        <button class="opt">API server、etcd、scheduler 等管理元件</button>
+        <button class="opt">你的應用 Pod</button>
+        <button class="opt">Docker daemon</button>
+        <button class="opt">coredns 和 kube-proxy</button>
+      </div>
+
+      <div class="quiz" data-question="為什麼 etcd 集群建議用奇數節點？" data-correct="2" data-explain="etcd 使用 Raft 共識演算法，需要多數節點（quorum）才能選出 leader 和運作。3 節點可以容忍 1 個故障。">
+        <button class="opt">因為奇數比較省資源</button>
+        <button class="opt">因為 Kubernetes 要求奇數</button>
+        <button class="opt">因為 Raft 共識演算法需要多數（quorum）才能運作</button>
+        <button class="opt">因為偶數節點會互相衝突</button>
+      </div>
+
+      <div class="quiz" data-question="extraPortMappings: containerPort 30080 的目的是什麼？" data-correct="1" data-explain="把容器內的 port 映射到主機，方便未來用 NodePort 測試時用 localhost:30080 訪問。">
+        <button class="opt">讓 Kubernetes 可以存取主機</button>
+        <button class="opt">把容器內的 port 映射到主機，方便未來 NodePort 測試</button>
+        <button class="opt">讓 Docker 可以跑多個容器</button>
+        <button class="opt">讓 API server 可以存取外部網路</button>
+      </div>
+
+      <div class="quiz" data-question="kubectl get nodes 看到 worker 的 ROLES 是 <none>，這是什麼意思？" data-correct="3" data-explain="這是 Kind 的已知行為，worker 沒有自動設定 label，不影響功能。">
+        <button class="opt">表示 worker 壞了</button>
+        <button class="opt">表示 worker 沒有跑任何 Pod</button>
+        <button class="opt">表示你的 config 有錯</button>
+        <button class="opt">Kind 不會自動幫 worker 設定 role label，不影響功能</button>
+      </div>
+
+      <div class="quiz" data-question="在多節點集群中，Pod 實際跑在哪裡？" data-correct="2" data-explain="Worker 節點負責跑你的應用 Pod；control-plane 只負責管理和決策。">
+        <button class="opt">Control-plane 節點</button>
+        <button class="opt">取決於 Pod 的大小</button>
+        <button class="opt">Worker 節點</button>
+        <button class="opt">所有節點平均分配</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <a href="./getting-started-kind.html">← 上一步：用 Kind 建立第一個集群</a>
+      <div></div>
+    </div>
+  </article>
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>
