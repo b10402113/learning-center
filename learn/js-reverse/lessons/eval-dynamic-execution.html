@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>eval 与动态执行</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+<h1>eval 与动态执行</h1>
+<p class="meta">JS 逆向 · 节点 15 · 步骤 6/7</p>
+
+<h2>学习目标</h2>
+<p>能识别 eval 将字符串转为可执行代码的运行机制，并在阅读混淆脚本时判断其调试与追踪影响。</p>
+
+<h2>eval：把字符串当代码跑</h2>
+<p><code>eval</code> 的功能一句话就能说清：<strong>把字符串当作 JS 代码来执行</strong>。它和 Python 里的 <code>eval</code> 一模一样：</p>
+<pre><code>var s = "console.log('我爱你')";
+eval(s);   // 打印：我爱你</code></pre>
+<p>这里 <code>eval(s)</code> 并没有打印字符串 <code>s</code>，而是把 <code>s</code> 的内容当成代码编译并运行。记住这一条就够了：<strong><code>eval()</code> 里面不论多复杂，它最终接收的一定是一个字符串。</strong></p>
+
+<h2>为什么逆向一定要认识 eval</h2>
+<p>正常业务代码很少用 <code>eval</code>。但很多网站恰恰利用它来做反爬——把真实代码包成字符串，运行时才"解包"执行，静态读源码时你看到的就是一团乱码：</p>
+<pre><code>eval(function(p,a,c,k,e,d){
+  e = function(c){ return (c &lt; a ? '' : e(parseInt(c/a)))
+    + ((c = c % a) &gt; 35 ? String.fromCharCode(c + 29) : c.toString(36)); };
+  if (!''.replace(/^/, String)) {
+    while (c--) d[e(c)] = k[c] || e(c);
+    k = [function(e){ return d[e]; }];
+    e = function(){ return '\\w+'; };
+    c = 1;
+  }
+  while (c--) if (k[c]) p = p.replace(new RegExp('\\b' + e(c) + '\\b', 'g'), k[c]);
+  return p;
+}('0.1(\'我爱你\')', 62, 2, 'console|log'.split('|'), 0, {}));</code></pre>
+<p>这就是经典的 <strong>eval 混淆</strong>：外层是一个解码函数 <code>function(p,a,c,k,e,d)</code>，它把压缩过的字符串解成可读代码。关键不是去读解码函数，而是记住——<strong>把 <code>eval()</code> 里的内容整个拷贝出来执行一次，它一定吐出一个字符串</strong>，那个字符串才是真正的代码。</p>
+
+<h2>逆向做法：先把字符串还原</h2>
+<p>遇到 <code>eval(...)</code>，最有效的做法不是硬读，而是把字符串还原出来：</p>
+<ol>
+  <li>把 <code>eval(...)</code> 里的整段内容拷贝出来。</li>
+  <li>把它单独执行一次，结果必然是一个字符串（否则 eval 也没法执行）。</li>
+  <li>把那个字符串打印或美化，就看到真实逻辑了。</li>
+</ol>
+<pre><code>// 把 eval 换成 console.log，打印解码后的字符串
+var dec = (function(p,a,c,k,e,d){
+  /* 解码函数同左 */
+})('0.1(\'我爱你\')', 62, 2, 'console|log'.split('|'), 0, {});
+console.log(dec); // console.log('我爱你')</code></pre>
+<p>更省事的是直接借助工具：把混淆片段丢进在线 eval 解码器（如 jb51 的 evalencode 工具）即可还原，绝大多数 eval 加密都能直接解开。</p>
+
+<h2>eval 对调试与追踪的影响</h2>
+<p><code>eval</code> 的动态性在逆向时有三个实际后果：</p>
+<ul>
+  <li><strong>静态分析失效</strong>：eval 里的代码运行前在 Sources 面板里不存在，直接读文件看不到真实逻辑，必须靠"执行字符串"来还原。</li>
+  <li><strong>断点更麻烦</strong>：代码是运行时生成的，只能对 eval 调用本身下断点，或在还原后的字符串代码里断点。</li>
+  <li><strong>作用域泄漏</strong>：非严格模式下，eval 内用 <code>var</code> 声明的变量会泄漏到调用它的作用域。你把它抠出来单独跑时，这些"副作用"可能影响全局状态，要留意。</li>
+</ul>
+
+<h2>本节练习</h2>
+
+<div class="quiz" data-question="eval 的核心功能是什么？" data-correct="1" data-explain="eval 把字符串当作 JS 代码执行，与 Python 的 eval 相同。">
+  <button class="opt">把代码转成字符串</button>
+  <button class="opt">把字符串当作代码执行</button>
+  <button class="opt">压缩混淆 JS 代码</button>
+  <button class="opt">格式化美化源码</button>
+</div>
+
+<div class="quiz" data-question="无论 eval() 里多复杂，它接收的一定是什么？" data-correct="3" data-explain="eval 的参数最终一定是一个字符串，解码就是把这段字符串还原。">
+  <button class="opt">一个函数对象</button>
+  <button class="opt">一个十六进制数</button>
+  <button class="opt">一个正则表达式</button>
+  <button class="opt">一个字符串</button>
+</div>
+
+<div class="quiz" data-question="逆向时想读 eval 里的真实代码，第一步该做什么？" data-correct="0" data-explain="把 eval() 里的内容单独执行一次，得到解码后的字符串，那才是真实代码。">
+  <button class="opt">执行内容取出字符串</button>
+  <button class="opt">直接删除 eval 关键字</button>
+  <button class="opt">搜索变量名逐个猜</button>
+  <button class="opt">刷新页面反复抓包</button>
+</div>
+
+<div class="quiz" data-question="为什么 eval 让静态调试变得更难？" data-correct="2" data-explain="eval 里的代码运行时才生成，运行前在 Sources 里不存在，静态分析读不到。">
+  <button class="opt">eval 无法被断点打断</button>
+  <button class="opt">eval 只执行加密数据</button>
+  <button class="opt">代码运行前并不存在</button>
+  <button class="opt">eval 会删除所有代码</button>
+</div>
+
+<div class="quiz" data-question="页面代码被 eval 加密，哪种做法最有效？" data-correct="1" data-explain="把 eval 换成 console.log，打印解码后的字符串即可还原真实逻辑。">
+  <button class="opt">在 Network 里找响应体</button>
+  <button class="opt">换成 console.log 打印</button>
+  <button class="opt">禁用浏览器的缓存</button>
+  <button class="opt">把页面下载到本地</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./timers.html">← 上一步：定时器与 window 全局变量</a>
+  <a href="./global-object-runtime.html">下一步：window、globalThis 与运行时全局对象 →</a>
+</div>
+
+<div class="footer">看不懂就问你的 agent：eval 是反爬混淆的高频手段，核心思路永远是把字符串还原出来再分析。</div>
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

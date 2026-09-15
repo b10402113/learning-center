@@ -5,6 +5,17 @@ updated: 2026-09-07
 ---
 # Mastery — pro-python
 
+## 28-github-actions
+
+probe skipped via /nodes pro-python/28-github-actions skip-probe on 2026-09-13
+
+| Strand | Mastery |
+| --- | --- |
+| GitHub Actions workflow structure | unknown |
+| Reproducible CI runner setup | unknown |
+| Ruff, MyPy, pytest, and coverage gates | unknown |
+| Secrets, health checks, and failure diagnosis | unknown |
+
 ## 03-first-fastapi
 
 probe skipped via /nodes pro-python/03-first-fastapi skip-probe on 2026-09-03
@@ -332,3 +343,15 @@ probe skipped via /nodes pro-python/34-error-handling skip-probe on 2026-09-07
 | Catching specific exceptions with try/except and avoiding bare except | unknown |
 | Creating custom exceptions by subclassing Exception | unknown |
 | Adding context when catching exceptions instead of ignoring them | unknown |
+
+## 26-dockerfile
+
+probe skipped via /nodes pro-python/26-dockerfile skip-probe on 2026-09-13
+
+| Strand | Mastery |
+| --- | --- |
+| Docker images and slim base runtimes | unknown |
+| Dockerfile instructions and build context | unknown |
+| UV version pinning and production-only dependencies | unknown |
+| Runtime environment and explicit file boundaries | unknown |
+| Docker Compose orchestration and health verification | unknown |
