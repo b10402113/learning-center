@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Durable 解耦：讓 run 不再依附 client</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Durable 解耦：讓 run 不再依附 client</h1>
+<p class="meta">Step 3/5 · 從「可以延後」到「非有不可」的那條線</p>
+
+<h2>學習目標</h2>
+<p>能解釋 durable execution 如何把 agent run 與 client 解耦（SSE 重整、關頁面都不丟失），並判斷何時該把它從「可延後的下一步」升級成非有不可的一層。</p>
+
+<h2>症狀：重整頁面，工作就死了</h2>
+<p>最直觀的故障長這樣：agent 正在跑一段十幾秒的推理，使用者重新整理頁面——然後一切重來。剛剛的工具呼叫、剛剛想好的計畫，全沒了。或者 server 換一個 instance、重啟一次，進行中的工作直接消失。</p>
+
+<p>原因不是模型不穩，而是<strong>run 的生命週期綁在發出請求的那個 client 上</strong>：工作活在 request handler 的堆疊裡，連線一斷，堆疊就散了。durable execution 要修的就是這件事。</p>
+
+<h2>解耦的是什麼：run 與 client 的生命週期</h2>
+<p>解耦之後，run 有自己的身分（一個 workflow id）與自己的持久狀態（寫進資料庫的事件日誌）；client 不再是 run 的宿主，只是它的<strong>訂閱者</strong>。連線斷了，頂多少了一個觀眾，run 照樣往前跑；使用者重連，只是重新訂閱同一條事件流，把中間漏掉的事件補回來。</p>
+
+<blockquote>畫一條線：線的一邊是「工作」，另一邊是「看工作的人」。durable 就是讓這兩邊分開，誰都不必等誰。</blockquote>
+
+<h2>你已經有的機制</h2>
+<p>前面幾個節點其實已經把解耦的四塊積木都做好了。把他們排在一起看，就會發現 durable 不是一個新功能，而是這些機制的合成結果：</p>
+
+<table>
+<thead>
+<tr><th>機制</th><th>它解耦了什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>event_log 資料表</td><td>把「發生過什麼」從記憶體搬到資料庫，成為真相來源</td></tr>
+<tr><td>durable bus（先寫後廣播）</td><td>事件先落地再推送，訂閱者來去不影響歷史</td></tr>
+<tr><td>DBOS steps（model turn / tool call）</td><td>每一步都 checkpoint，重啟後從最後一步接續而不是重來</td></tr>
+<tr><td>server bootstrap + history replay</td><td>重連時回放事件，把畫面補到最新狀態</td></tr>
+</tbody>
+</table>
+
+<h2>什麼時候可以延後</h2>
+<p>回顧 step 1 的結論：對一個 chat agent，durable 可以晚點再補。判斷的標準是「斷掉重問一次的代價大不大」：</p>
+<ul>
+<li>工作很短（一兩次模型呼叫就回覆）。</li>
+<li>斷了重來，使用者不會真的損失什麼。</li>
+<li>只有單一 client、單一使用者盯著畫面。</li>
+</ul>
+<p>在這些條件下，把力氣先花在記憶與壓縮上，投報率更高。</p>
+
+<h2>什麼時候變成必要</h2>
+<p>但只要體驗換一下，durable 就從選配變成地基：</p>
+
+<table>
+<thead>
+<tr><th>情境</th><th>為什麼 durable 變必要</th></tr>
+</thead>
+<tbody>
+<tr><td>工作壽命超過一次連線</td><td>深研究跑十幾分鐘，使用者不可能一直盯著分頁</td></tr>
+<tr><td>需要背景完成與通知</td><td>關掉頁面也要跑完，完成後再主動通知</td></tr>
+<tr><td>不可逆動作的審批等待</td><td>approval gate 要能無限期待機、跨天跨重啟</td></tr>
+<tr><td>多裝置 / 多使用者同時看</td><td>run 不屬於任何一個連線，任何人都能訂閱</td></tr>
+</tbody>
+</table>
+
+<h2>代價：它不是免費的一層</h2>
+<p>durable 換來的是可靠，付出的是複雜度：你要有一個 durable store（課程用 Postgres / Neon，連線字串記得去掉 <code>-pooler</code>）、要把 workflow 與 step 註冊好、還要小心選擇 step 邊界——尤其是不可逆的動作（退款、出貨）絕不能被重跑，必須包在正確的 step 與冪等設計裡。環境設定有摩擦，但這是把 agent 從「玩具」推向「產品」時最值得付的一筆。</p>
+
+<h2>轉折：durable 是無限 agent 的入場券</h2>
+<p>對 chat agent，durable 可以延後；但對另一種形態的 agent——在背景無限地跑、等事件、做完再通知你的那種——durable 不是選配，而是入場券。它同時也是理解那個形態最好的起點，因為那裡的每一個互動都建立在「run 活得比連線久」之上。</p>
+
+<p>下一步就來看那個形態：無限／背景 agent，以及它用來跟人互動的 inbox。</p>
+
+<div class="lesson-nav">
+  <div><a href="./table-stakes-vs-situational.html">← 上一步：Table stakes 與 situational：從目標體驗反推</a></div>
+  <div><a href="./infinite-background-agents.html">下一步：無限／背景 agent 與 inbox →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="重整頁面就讓工作消失，根本原因是什麼？" data-correct="1" data-explain="run 的生命週期綁在 client 連線上，連線一斷，進行中的工作也跟著散了。">
+  <button class="opt">模型的推理不夠穩定</button>
+  <button class="opt">run 的生命週期綁在 client</button>
+  <button class="opt">事件流沒有壓縮歷史</button>
+  <button class="opt">工具呼叫沒有設逾時</button>
+</div>
+
+<div class="quiz" data-question="解耦之後，client 在整個架構裡的角色變成什麼？" data-correct="2" data-explain="client 不再是 run 的宿主，而只是訂閱同一條事件流的觀眾。">
+  <button class="opt">run 的擁有者</button>
+  <button class="opt">事件的真相來源</button>
+  <button class="opt">run 的訂閱者</button>
+  <button class="opt">step 的排程器</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不是課程中達成解耦的既有機制？" data-correct="3" data-explain="event_log、durable bus、DBOS steps 與 history replay 才是；沙箱 timeout 處理的是另一件事。">
+  <button class="opt">event_log 資料表</button>
+  <button class="opt">durable bus 先寫後廣播</button>
+  <button class="opt">DBOS steps 與 history replay</button>
+  <button class="opt">沙箱的 execution timeout</button>
+</div>
+
+<div class="quiz" data-question="durable execution 對 chat agent 可以延後，判準主要是什麼？" data-correct="1" data-explain="若工作很短、斷了重問代價小、只有單一 client，先把力氣花在記憶與壓縮更划算。">
+  <button class="opt">因為聊天不需要工具呼叫</button>
+  <button class="opt">因為斷了重問的代價很小</button>
+  <button class="opt">因為 chat agent 不需要記憶</button>
+  <button class="opt">因為 SSE 已經自帶持久化</button>
+</div>
+
+<div class="quiz" data-question="為什麼 approval gate 讓 durable execution 變成必要？" data-correct="2" data-explain="審批要能無限期待機、跨天跨重啟，只有 run 不依附連線才做得到。">
+  <button class="opt">因為審批要壓縮歷史</button>
+  <button class="opt">因為審批要用沙箱執行</button>
+  <button class="opt">因為等待要能跨重啟與跨天</button>
+  <button class="opt">因為審批需要平行派發</button>
+</div>
+
+<div class="quiz" data-question="durable 要付出什麼主要代價？" data-correct="0" data-explain="需要 durable store 與正確的 step 邊界，尤其不可逆動作不能重跑，環境也有設定摩擦。">
+  <button class="opt">durable store 與正確的 step 邊界</button>
+  <button class="opt">更貴的模型與更長的 prompt</button>
+  <button class="opt">更大的前端與更多 UI 元件</button>
+  <button class="opt">更快的網路與更近的機房</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 生產級 Harness 與下一步 · Step 3/5</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

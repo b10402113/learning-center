@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>唯讀 investigators：註冊表與最小權限</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>唯讀 investigators：註冊表與最小權限</h1>
+<p class="meta">Step 2/5 · 用資料描述 sub-agent、限制工具、單次有界執行</p>
+
+<h2>學習目標</h2>
+<p>能用 <code>Record&lt;string, investigator&gt;</code> 註冊 billing / technical / sales，各自只拿職責內的 <code>getCharges</code> 或 <code>searchKB</code>，並用 <code>generateText</code> 讓 <code>runInvestigator</code> 以有界步數單次執行。</p>
+
+<h2>工人是什麼：唯讀的調查員</h2>
+<p>supervisor 派出的工人叫做 <strong>investigator（調查員）</strong>，它們的定義性特徵是<strong>唯讀</strong>：只查資料、只讀知識庫，不改任何狀態、不產生副作用。</p>
+
+<p>唯讀帶來一個非常關鍵的好處——<strong>重跑是安全的</strong>。如果一個調查員執行到一半掛掉，直接重跑它不會造成重複扣款、重複寄信之類的災難。也因為這樣，investigator 不需要被升級成第一級的 DBOS step；它可以安穩地活在 supervisor 的某個 step <em>裡面</em>，用 AI SDK 的工具迴圈 inline 跑完。</p>
+
+<blockquote>打個比方：investigator 分到的是辦公室的「小隔間（cubicle）」，不是主管的「獨立辦公室（corner office）」。它有自己的 context window，但沒有自己的持久化生命週期。</blockquote>
+
+<h2>兩個唯讀工具</h2>
+<p>先用 AI SDK 的 <code>tool()</code> 把兩個唯讀能力包成工具，輸入都用 zod 描述：</p>
+
+<pre><code>const getCharges = tool({
+  description: "Look up a customer's charges.",
+  inputSchema: z.object({ customerId: z.string() }),
+  execute: async ({ customerId }) =&gt; CHARGES[customerId] ?? [],
+});
+
+const searchKnowledgeBase = tool({
+  description: "Search the support knowledge base.",
+  inputSchema: z.object({ query: z.string() }),
+  execute: async ({ query }) =&gt; searchKB(query),
+});</code></pre>
+
+<p>這裡用了兩堂課前的模式：工具就是資料（名稱、description、inputSchema、execute）。因為有 <code>execute</code>，工具迴圈由 AI SDK 內聯處理，整個 sub-agent 就成為「一次有界的互動」，可以被塞進單一 step。</p>
+
+<h2>註冊表：agent 是一筆資料</h2>
+<p>三個調查員用一個型別化的 <strong>註冊表（registry）</strong>描述。每筆資料只有兩個欄位：一段 system prompt 和一份工具清單。</p>
+
+<pre><code>type Investigator = { systemPrompt: string; tools: ToolSet };
+
+const INVESTIGATORS: Record&lt;string, Investigator&gt; = {
+  billing: {
+    systemPrompt:
+      "You are a billing investigator. Use getCharges to find duplicate or erroneous charges. Report the charge ids, the amount, and the refund you'd recommend — concisely.",
+    tools: { getCharges },
+  },
+  technical: {
+    systemPrompt:
+      "You are a technical investigator. Use searchKnowledgeBase to find known bugs and workarounds. Report the issue, any ticket, and the workaround — concisely.",
+    tools: { searchKnowledgeBase },
+  },
+  sales: {
+    systemPrompt:
+      "You are a sales investigator. Use searchKnowledgeBase for pricing guidance, then state the relevant numbers and next step — concisely.",
+    tools: { searchKnowledgeBase },
+  },
+};</code></pre>
+
+<p>這正是 agent 當資料的極致：一顆 sub-agent 就是一個字串加一個工具集。要新增一個領域的調查員，只要在註冊表加一筆，supervisor 的程式完全不用改。</p>
+
+<h2>最小權限：各自只拿該拿的工具</h2>
+<p>注意工具是<strong>分開的</strong>：billing 只拿 <code>getCharges</code>，technical 和 sales 只拿 <code>searchKB</code>。沒有任何一個調查員同時握有兩種能力，更不會碰到像退款那種有破壞性的操作。</p>
+
+<table>
+<thead>
+<tr><th>investigator</th><th>工具</th><th>職責</th></tr>
+</thead>
+<tbody>
+<tr><td>billing</td><td><code>getCharges</code></td><td>找重複或錯誤的收費，報 charge id、金額與建議退款</td></tr>
+<tr><td>technical</td><td><code>searchKB</code></td><td>找已知 bug 與 workaround，報 issue、ticket</td></tr>
+<tr><td>sales</td><td><code>searchKB</code></td><td>查定價資訊，prompt 調成偏價格與下一步</td></tr>
+</tbody>
+</table>
+
+<p>給每個調查員寫一段「有自信」的 system prompt，是刻意的手法：角色越明確，它回報的格式越穩定、越貼近你要的欄位。sales 的 prompt 特別往 pricing 調，就是同一個註冊表、不同角色的一例。</p>
+
+<h2>執行一次：runInvestigator</h2>
+<pre><code>export async function runInvestigator(agent: string, objective: string): Promise&lt;string&gt; {
+  if (process.env.CHAOS_FAIL === agent) {
+    throw new Error(`investigator '${agent}' crashed (CHAOS_FAIL)`);
+  }
+
+  const investigator = INVESTIGATORS[agent];
+  if (!investigator) throw new Error(`unknown investigator: ${agent}`);
+
+  const { text } = await generateText({
+    model,
+    system: investigator.systemPrompt,
+    prompt: objective,
+    tools: investigator.tools,
+    stopWhen: stepCountIs(5),
+  });
+  return text;
+}</code></pre>
+
+<p>三個設計決定值得記住：</p>
+<ul>
+<li><strong>查表 + 防呆</strong>：先看註冊表有沒有這個名字，沒有就丟錯。這讓計畫裡打錯的 agent 名稱立刻爆出來，而不是默默跑出一個沒有工具的空殼。</li>
+<li><strong>用 <code>prompt</code> 不用 <code>messages</code></strong>：這是背景的一次性任務，沒有來回對話，所以直接給一個 objective 字串即可。</li>
+<li><strong>步數有界</strong>：<code>stopWhen: stepCountIs(5)</code> 把工具迴圈限制在五步內。sub-agent 是拿來做有界調查的，不是讓它無限探索。</li>
+</ul>
+
+<h2>失敗是設計的一部分：CHAOS_FAIL</h2>
+<p>開頭那行 <code>CHAOS_FAIL</code> 是一個刻意留的混亂開關：只要啟動時設定 <code>CHAOS_FAIL=technical npm run dev</code>，technical 調查員就一定會丟錯。這不是惡作劇，而是把「某個子 agent 掛掉」變成可重現的場景，好在下一步看到整條 supervisor 如何優雅降級——少一個調查員，答案仍能送達。</p>
+
+<p>現在我們有了工人。下一步要打造的是那份能指揮他們的計畫。</p>
+
+<div class="lesson-nav">
+  <div><a href="./when-supervision-pays.html">← 上一步：階層式監督何時划算：隔離與 fan-out</a></div>
+  <div><a href="./structured-plan-artifact.html">下一步：把 plan 做成一級結構化產物 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="investigator 被設計成唯讀，最主要的直接好處是什麼？" data-correct="2" data-explain="唯讀代表重跑安全，因此可以 inline 在單一 step 內執行，不需要自己一個持久化生命週期。">
+  <button class="opt">回覆速度比較快</button>
+  <button class="opt">prompt 可以寫得比較短</button>
+  <button class="opt">重跑安全，因此能 inline 在一個 step 內</button>
+  <button class="opt">可以同時修改資料庫</button>
+</div>
+
+<div class="quiz" data-question="註冊表 INVESTIGATORS 中，一個 investigator 由哪兩個欄位定義？" data-correct="1" data-explain="每筆資料是 systemPrompt 加 tools（ToolSet），沒有模型或記憶等額外欄位。">
+  <button class="opt">model 與 memory</button>
+  <button class="opt">systemPrompt 與 tools</button>
+  <button class="opt">name 與 temperature</button>
+  <button class="opt">tools 與 workflowId</button>
+</div>
+
+<div class="quiz" data-question="為什麼 technical 與 sales 都只拿 searchKB，而 billing 只拿 getCharges？" data-correct="2" data-explain="這是每個子 agent 的最小權限——只拿到職責所需的工具，避免危險或有破壞性的能力外洩。">
+  <button class="opt">因為工具數量越多越慢</button>
+  <button class="opt">因為模型不支援多工具</button>
+  <button class="opt">最小權限：每個 agent 只拿職責內的工具</button>
+  <button class="opt">因為 searchKB 比 getCharges 便宜</button>
+</div>
+
+<div class="quiz" data-question="runInvestigator 為什麼用 prompt 而不是 messages 傳入 objective？" data-correct="1" data-explain="它是背景的一次性任務，沒有來回對話，所以一個 objective 字串就足夠。">
+  <button class="opt">messages 會讓模型變慢</button>
+  <button class="opt">這是背景一次性任務，沒有來回對話</button>
+  <button class="opt">messages 不支援 system prompt</button>
+  <button class="opt">prompt 才能帶工具</button>
+</div>
+
+<div class="quiz" data-question="stopWhen: stepCountIs(5) 的作用是什麼？" data-correct="2" data-explain="它把工具迴圈限制在五步內，讓 sub-agent 保持為一次有界的調查。">
+  <button class="opt">限制回覆的字數</button>
+  <button class="opt">限制可使用的工具數量</button>
+  <button class="opt">把工具迴圈限制在五步內</button>
+  <button class="opt">設定五秒的逾時</button>
+</div>
+
+<div class="quiz" data-question="CHAOS_FAIL=technical 這個環境變數存在的目的是？" data-correct="1" data-explain="它讓「某個子 agent 失敗」成為可重現的場景，用來示範 supervisor 的優雅降級。">
+  <button class="opt">加快 technical 調查員的速度</button>
+  <button class="opt">讓子 agent 失敗可重現，以展示優雅降級</button>
+  <button class="opt">關閉技術類的知識庫搜尋</button>
+  <button class="opt">強制所有調查員都失敗</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 階層式監督與 Sub-agents · Step 2/5</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

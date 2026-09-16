@@ -4,7 +4,8 @@ title: 記憶：脈絡注入與壓縮
 subject: agent-harness
 tier: 5
 order: 7
-status: draft
+duration: 45-60 minutes
+status: content-written
 goal: 區分 History / State / Context，做出 token 估算器、buildContext 與 LLM summarizer，把壓縮以 turn 為單位接進 runtime 並包成 durable step，用 memory_compacted 事件驗證。
 sources:
   - "[[sources/agent-harness/20260915/16-memory-context-hydration.txt#estimate-tokens]]"
@@ -14,10 +15,30 @@ sources:
   - "[[sources/agent-harness/20260915/17-summarization-compaction.txt#durable-summarize-step]]"
   - "[[sources/agent-harness/20260915/18-clearing-durable-event-log.txt#observing-compaction]]"
   - "[[sources/agent-harness/20260915/harness-engineering/harness/memory.ts]]"
-steps: []
-prerequisites: []
+steps:
+  - id: context-growth-and-three-kinds-of-memory
+    order: 1
+  - id: hydrate-context
+    order: 2
+    deps:
+      - context-growth-and-three-kinds-of-memory
+  - id: summarize-to-compact
+    order: 3
+    deps:
+      - hydrate-context
+  - id: turn-based-compaction
+    order: 4
+    deps:
+      - summarize-to-compact
+  - id: observing-compaction
+    order: 5
+    deps:
+      - turn-based-compaction
+prerequisites:
+  - learn/agent-harness/nodes/harness-runtime-loop
+  - learn/agent-harness/nodes/making-the-loop-durable
 created: 2026-09-15
-updated: 2026-09-15
+updated: 2026-09-16
 ---
 
 # 記憶：脈絡注入與壓縮
@@ -28,11 +49,21 @@ updated: 2026-09-15
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/agent-harness/nodes/memory-hydration-compaction/context-growth-and-three-kinds-of-memory|脈絡為何膨脹：History、State、Context]] — 為何無限成長的脈絡讓模型變笨、變慢、變貴，並分清三種記憶
+2. [[learn/agent-harness/nodes/memory-hydration-compaction/hydrate-context|Hydrator：估算 token 並組出這一輪的 context]] — `estimateTokens` 與 `buildContext`：模型每一輪到底看到什麼（after step 1）
+3. [[learn/agent-harness/nodes/memory-hydration-compaction/summarize-to-compact|Summarizer：用一次 LLM 呼叫把舊 turns 壓成摘要]] — `generateText` 寫出可累積的 running summary（after step 2）
+4. [[learn/agent-harness/nodes/memory-hydration-compaction/turn-based-compaction|以 turn 為單位的壓縮：接進 runtime 的 durable step]] — 迴圈開頭檢查預算、整 turn 滑窗、包成 DBOS step 並發 `memory_compacted`（after step 3）
+5. [[learn/agent-harness/nodes/memory-hydration-compaction/observing-compaction|觀察壓縮：清空事件日誌，在 inspector 看 memory_compacted]] — `clearEventLog`、`POST /api/clear` 與壓縮時機的實測（after step 4）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+聊天產品讓使用者看到完整歷史，但模型從來沒有看過全部——它每一輪只看到一個被精心組出來的子集。這一課把那個落差補上：持久化的事件日誌（History）會無限膨脹，所以 harness 必須把它壓縮成一份會累積的摘要（State），再在每一輪即時組出模型真正需要的訊息（Context）。
+
+五個步驟沿著「問題 → 兩個積木 → 接線 → 驗證」走。第一步先講清楚脈絡膨脹的代價：模型會變笨（中間內容等於被遺忘）、變慢、變貴，而更大的 context window 並不是解方；同時建立 History / State / Context 三分法。第二步與第三步各做一個可重用的積木：`estimateTokens` 量大小、`buildContext` 組出這一輪的 messages，`summarize` 用一次獨立的 LLM 呼叫把舊 turns 摺成精簡摘要（還能摘要的摘要）。
+
+第四步是關鍵的接線：壓縮一定發生在每一輪的 **model turn 之前**，而且以 **turn** 為原子單位滑動——只砍最舊的整個 turn，不拆單一 message，否則會留下沒有回應的 tool call 而弄壞 API。摘要本身包成具名的 DBOS step（重跑安全），完成後發出 `memory_compacted` 事件帶上摘要了幾個 turn、當下 token 數與摘要本文。第五步把 durable 日誌清空重跑，在 inspector 上親眼看到事件反覆出現，並理解壓縮為何總是發生在門檻略下方。
+
+走完之後，你會有一條完整的記憶管線，也能把同一組決策（預算驅動、turn 對齊、摘要可累積、狀態可重放）搬回自己的 runtime。
 
 ## Sources
 

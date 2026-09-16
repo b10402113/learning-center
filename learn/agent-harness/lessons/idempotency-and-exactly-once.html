@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>不可逆的動作為何不能重跑</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>不可逆的動作為何不能重跑</h1>
+<p class="meta">Step 3/4 · 冪等（idempotency）與 exactly-once：動作只能發生一次</p>
+
+<h2>學習目標</h2>
+<p>能解釋兩個具體危害——訊息全放在記憶體會在重啟時消失、send_reply／轉帳這類不可逆動作不能 undo——並用冪等（idempotency）與 exactly-once 語意說出不可逆動作為何必須「只做一次」。</p>
+
+<h2>第一種危害：記憶體一關就歸零</h2>
+
+<p>回到課程到目前為止的 runtime loop。每個 agent 的訊息、對話、狀態——<strong>全都放在記憶體（in-memory）裡</strong>。這代表一件事：只要 process 一重啟，agent 對「剛剛發生過什麼」就一無所知。</p>
+
+<p>對使用者來說，這是致命的體驗：你等 agent 跑了半天，某個環節出錯、或只是 server 例行重啟，agent 醒來之後彷彿失憶，完全不記得你交代過什麼、它已經做到哪。這不是「等一下就好」的暫時卡頓，而是<strong>整段進度憑空蒸發</strong>。</p>
+
+<p>所以 durable execution 的第一個動機非常具體：<strong>把執行狀態從記憶體搬到一個能活過重啟的地方</strong>。這是上一節「checkpointing」要落地的地方。</p>
+
+<h2>第二種危害：不可逆的動作</h2>
+
+<p>第二種更危險。agent 不只「想」，它會<strong>出手做事情</strong>——而且有些事情一旦做了，就收不回來。課程裡把它叫做 <strong>destructive action（破壞性／不可逆動作）</strong>。</p>
+
+<p>想像兩個場景：</p>
+
+<blockquote class="good-code">場景一：send_reply 發出到一半，系統壞了。訊息到底寄出沒？你不知道，於是你再跑一次——結果同一封信被寄了兩次。</blockquote>
+
+<blockquote class="good-code">場景二：轉帳轉到一半，系統壞了。你又跑一次——結果錢被轉了兩次。</blockquote>
+
+<p>關鍵是：<strong>你不能 undo</strong>。訊息已經寄出去了，你沒辦法把手伸進別人的信箱、在他打開之前把信抽回來；轉帳也是一樣。這些動作只要重跑，就會重複發生——而重複一次都可能是災難。</p>
+
+<h2>解法：冪等與 exactly-once</h2>
+
+<p>面對不可逆動作，正確的做法不是「祈禱不要出錯」，而是在結構上保證「出錯重跑也不會重複」。這就帶出分散式系統裡最重要的兩個詞：</p>
+
+<table>
+<thead>
+<tr><th>概念</th><th>白話</th><th>它保證什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>idempotency（冪等）</td><td>同一件事做兩次 = 做一次，結果不變</td><td>動作重跑是安全的</td></tr>
+<tr><td>exactly-once（恰好一次）</td><td>整個系統最終只執行一次</td><td>不會被重複觸發</td></tr>
+</tbody>
+</table>
+
+<p>兩者的關係是：<strong>exactly-once 靠冪等的 step 堆出來</strong>。如果每個動作本身冪等（多跑一次結果一樣），那麼即便失敗重試、甚至整個 workflow 重播，最終效果也像是「只做了一次」。反過來，一個不冪等的動作，你永遠無法保證 exactly-once——因為重試一定會造成重複副作用。</p>
+
+<p>用轉帳來體會：如果「轉帳」這個動作被設計成冪等的（例如帶上一個唯一的轉帳編號，系統看到編號就知道這筆處理過、直接跳過），那麼無論系統壞幾次、重播幾次，這筆錢最終都只會轉一次。</p>
+
+<h2>關鍵一句話</h2>
+
+<blockquote class="good-code">不可逆的動作，必須冪等；冪等，才談得上 exactly-once。</blockquote>
+
+<p>記住這個因果鏈：**動作不可逆 → 不能重跑 → 必須冪等 → 冪等才保證 exactly-once**。下一節選 DBOS 時會直接用到它——DBOS 要求你把 runtime 包成「冪等的 step」，就是為了讓失敗重播時能安全地跳過已經做過的步驟。</p>
+
+<div class="lesson-nav">
+  <div><a href="./cicd-as-distributed-mental-model.html">← 上一步：CI/CD：一套早已熟悉的分散式系統</a></div>
+  <div><a href="./dbos-postgres-durable-store.html">下一步：選擇 DBOS + Postgres 與取得資料庫 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="訊息全放在記憶體會造成什麼後果？" data-correct="0" data-explain="process 一重啟，agent 對剛發生的事就完全沒有印象。">
+  <button class="opt">重啟後 agent 對剛才發生的事一無所知</button>
+  <button class="opt">訊息會自動被壓縮成摘要</button>
+  <button class="opt">執行速度變得更快</button>
+  <button class="opt">訊息會備份到 client 端</button>
+</div>
+
+<div class="quiz" data-question="send_reply 寄到一半系統壞了，為什麼不能重跑一次？" data-correct="1" data-explain="訊息已經寄出，你無法 undo，重跑會重複寄出。">
+  <button class="opt">因為重跑會導致 server 變慢</button>
+  <button class="opt">因為訊息無法 undo，重跑會重複寄出</button>
+  <button class="opt">因為寄信不用處理錯誤</button>
+  <button class="opt">因為 client 端會拒絕第二封信</button>
+</div>
+
+<div class="quiz" data-question="「冪等」這個詞最貼近什麼意思？" data-correct="2" data-explain="同一件事做兩次跟做一次結果一樣，重跑是安全的。">
+  <button class="opt">動作只能被執行一次</button>
+  <button class="opt">動作永遠不會失敗</button>
+  <button class="opt">重跑跟跑一次的結果相同</button>
+  <button class="opt">動作執行時間固定不變</button>
+</div>
+
+<div class="quiz" data-question="exactly-once 跟冪等是什麼關係？" data-correct="3" data-explain="exactly-once 靠冪等的 step 堆出來，缺了冪等就談不上 exactly-once。">
+  <button class="opt">兩者完全無關</button>
+  <button class="opt">exactly-once 比冪等更弱</button>
+  <button class="opt">冪等是 exactly-once 之外的另一種方案</button>
+  <button class="opt">exactly-once 靠冪等的 step 堆出來</button>
+</div>
+
+<div class="quiz" data-question="一個帶唯一編號的轉帳動作、看到編號就跳過，這體現了什麼？" data-correct="1" data-explain="這是冪等——重播或重試都不會再轉第二次。">
+  <button class="opt">checkpointing</button>
+  <button class="opt">冪等設計</button>
+  <button class="opt">非同步回報</button>
+  <button class="opt">cache 機制</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 為什麼需要持久化執行 · Step 3/4</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

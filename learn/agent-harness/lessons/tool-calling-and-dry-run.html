@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工具呼叫語意與 Dry Run</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>工具呼叫語意與 Dry Run</h1>
+<p class="meta">Step 5/5 · 模型只請求、harness 執行，然後看缺口</p>
+
+<h2>學習目標</h2>
+<p>能說出「LLM 不執行工具、只請求工具」的語意，把完成的回應 append 回 messages，並用 dry run 辨識裸迴圈還缺什麼。</p>
+
+<h2>第一個誤解：模型會自己跑工具？</h2>
+
+<p>最需要被糾正的一個概念是：<strong>模型不會執行工具，它只會「請求」工具。</strong>你把工具傳給 <code>streamText</code>，模型因此知道每個工具的名稱、描述與參數 schema（結構），但它手上根本沒有那些函式的實作。OpenAI 的伺服器上不會替你跑你的函式。</p>
+
+<p>真正的分工是：模型看到任務，決定「該用哪個工具、該給什麼參數」，然後生成一個 <strong>toolCallId（工具呼叫 ID）</strong>，把這份請求丟給你；<strong>你在自己的 server 上真的去跑那個函式，再把結果（配上同一個 toolCallId）餵回去給模型。</strong>你——harness——就是模型的小助手、它的執行手。</p>
+
+<p>那個 toolCallId 至關重要：你回傳結果時必須原樣帶回去，模型才知道「這結果對應我剛才哪一次請求」。漏掉或搞錯 ID，大多數 LLM 會直接壞掉。回傳結果的訊息長這樣：</p>
+
+<pre><code>{
+  role: "tool",
+  content: [
+    { type: "tool-result", toolCallId, toolName, output },
+  ],
+}</code></pre>
+
+<p>至於 provider 自帶的託管工具、或客戶端工具，課程承認它們存在，但刻意不碰——這裡的重點，是<strong>自己掌握工具執行</strong>，這份控制權後面會一再用到。</p>
+
+<h2>把完成的回覆 append 回 messages</h2>
+
+<p>串流處理完，模型這一輪講了什麼，得塞回訊息陣列，否則下一輪它看不見自己剛說的話。但注意：只能塞<strong>完整跑完的結果</strong>，不能塞串流中的半成品 token。串流必須先 await 到整個 stream 結束：</p>
+
+<pre><code>messages.push(...(await result.messages));</code></pre>
+
+<p>回到第一步那個事實：模型沒記憶，所以這一步是必要的。而它也解釋了為什麼對話越長、每輪要送的 token 越多、就越慢越貴——這個「越長越貴」的痛苦，正是後面記憶壓縮那一課要解決的。</p>
+
+<h2>兩種結局：完成，或撞牆</h2>
+
+<p>一輪結尾要判斷「還有沒有工具要跑」。先取得工具呼叫：</p>
+
+<pre><code>const toolCalls = await result.toolCalls;</code></pre>
+
+<p>若 <code>toolCalls</code> 是空的，代表模型不打算再叫工具了，它就緒回答了。此時把最終文字送出去、宣告工作完成，然後<strong>從迴圈內部 return 出去</strong>：</p>
+
+<pre><code>if (toolCalls.length === 0) {
+  emit({ type: "modelCompleted", workflowId, text: await result.text });
+  emit({ type: "workflowCompleted", workflowId, output: text });
+  return;
+}</code></pre>
+
+<p>重點是那個 <code>return</code>：正常完成一定要直接離開。反過來，<strong>如果你掉出了迴圈底、卻不是靠 return 出來，那只有一種可能——撞到 maxSteps</strong>。所以掉出迴圈後的結尾事件，要老老實實寫成失敗：</p>
+
+<pre><code>// 迴圈底，沒 return = 撞到 maxSteps 或被其他外力踢出
+emit({ type: "workflowFailed", workflowId, error: "Hit the maxSteps limit." });</code></pre>
+
+<p>這一成一敗兩個終態，是誠實的訊號；後面做 durable 重構時，會原樣保留它們，只換執行方式。</p>
+
+<h2>Dry Run：讓缺口自己露餡</h2>
+
+<p>這版迴圈有個重要特性：<strong>它會請求工具、會發出 toolRequest 事件，但並不會真的去執行工具</strong>（執行是下一課才接的）。所以這階段的跑一次，本質上是個 dry run（乾跑）——用來看模型「想」做什麼，而不是真做什麼。</p>
+
+<p>跑下去你就會看到問題。拿一個要它「處理客訴並回信」的範例 prompt 下去：模型可能一口氣申請寄出三封回覆，而明明一封就夠；更糟的是，它寄出回覆前<strong>完全不問你</strong>——草稿都打了、也顯示給你了，然後自己就寄出去了。「給我看了草稿又擅自寄出」，這東西你敢拿上線賣嗎？不敢。</p>
+
+<p>這些不是隨機 bug，而是裸迴圈缺的那一層在向你揮手：重複副作用（要冪等）、破壞性動作前缺批准（要 human-in-the-loop）。而 inspector 的價值就在這：它把你每一次 <code>emit</code> 都重播成一條有序的事件 log——deltas、model/workflow 完成、工具請求——讓你能親眼看到「agent 是怎麼一步步走到這個結果的」。</p>
+
+<p>所以這五步收在這裡：你寫出了一顆會轉、會串流、會把 chunk 翻譯成事件、但<strong>還不敢真讓它做事的迴圈</strong>。接下來每一課，都是來補它露出的某一種餡。</p>
+
+<div class="lesson-nav">
+  <div><a href="./parts-to-events.html">← 上一步：Stream Part 轉成 Harness 事件</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="模型面對一個工具時，實際上會做什麼？" data-correct="2" data-explain="模型只按名稱與參數請求執行，真正跑函式的是你的 server。">
+  <button class="opt">把函式下載到自己伺服器跑</button>
+  <button class="opt">直接改寫函式內容</button>
+  <button class="opt">只請求執行，真正跑的是你</button>
+  <button class="opt">拒絕使用任何工具</button>
+</div>
+
+<div class="quiz" data-question="工具結果要帶上什麼，模型才認得出對應哪次請求？" data-correct="0" data-explain="要原樣回傳 toolCallId，漏掉它多數 LLM 會壞掉。">
+  <button class="opt">toolCallId</button>
+  <button class="opt">時間戳記</button>
+  <button class="opt">HTTP 狀態碼</button>
+  <button class="opt">使用者名稱</button>
+</div>
+
+<div class="quiz" data-question="append 回 messages 時，為什麼要先 await 整個 stream？" data-correct="3" data-explain="只能塞完整跑完的結果，不能塞串流中的半成品。">
+  <button class="opt">因為 await 能加速</button>
+  <button class="opt">因為不 await 會漏 token</button>
+  <button class="opt">因為 await 會壓縮內容</button>
+  <button class="opt">只塞完整結果，不塞半成品</button>
+</div>
+
+<div class="quiz" data-question="掉出迴圈底卻不是靠 return，代表什麼？" data-correct="1" data-explain="正常完成都在迴圈內 return；掉出來只可能是撞到 maxSteps 等失敗。">
+  <button class="opt">代表任務成功完成</button>
+  <button class="opt">撞到 maxSteps 之類的失敗</button>
+  <button class="opt">代表模型罷工</button>
+  <button class="opt">代表沒有任何工具</button>
+</div>
+
+<div class="quiz" data-question="dry run 跑下來，模型寄了三封回覆又不問你，這暴露了哪些缺口？" data-correct="1" data-explain="重複副作用需要冪等，破壞性動作前需要人類批准。">
+  <button class="opt">模型太笨需要換掉</button>
+  <button class="opt">重複副作用與缺審批</button>
+  <button class="opt">伺服器記憶體不足</button>
+  <button class="opt">串流速度太慢</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · Harness Runtime 迴圈 · Step 5/5</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -4,7 +4,8 @@ title: 讓迴圈持久化
 subject: agent-harness
 tier: 3
 order: 5
-status: draft
+duration: 45-60 minutes
+status: content-written
 goal: 建 event_log + Drizzle client + durable bus，把 model turn、tool call、emit 包成 DBOS steps 並註冊 workflow，接上 server 與 history replay，完成「殺掉 server 重啟後續跑」的示範。
 sources:
   - "[[sources/agent-harness/20260915/8-implementing-durable-execution.txt#event-log-table-schema]]"
@@ -18,10 +19,31 @@ sources:
   - "[[sources/agent-harness/20260915/harness-engineering/harness/db.ts]]"
   - "[[sources/agent-harness/20260915/harness-engineering/harness/bus.ts]]"
   - "[[sources/agent-harness/20260915/harness-engineering/server/index.ts]]"
-steps: []
-prerequisites: []
+steps:
+  - id: event-log-and-durable-bus
+    order: 1
+  - id: durability-boundaries-and-run-tool
+    order: 2
+    deps:
+      - event-log-and-durable-bus
+  - id: model-turn-and-tool-step
+    order: 3
+    deps:
+      - durability-boundaries-and-run-tool
+  - id: wrapping-the-loop-in-steps
+    order: 4
+    deps:
+      - event-log-and-durable-bus
+      - model-turn-and-tool-step
+  - id: server-wiring-and-history-replay
+    order: 5
+    deps:
+      - wrapping-the-loop-in-steps
+prerequisites:
+  - learn/agent-harness/nodes/harness-runtime-loop
+  - learn/agent-harness/nodes/why-durable-execution
 created: 2026-09-15
-updated: 2026-09-15
+updated: 2026-09-16
 ---
 
 # 讓迴圈持久化
@@ -32,11 +54,19 @@ updated: 2026-09-15
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/agent-harness/nodes/making-the-loop-durable/event-log-and-durable-bus|把事件寫進 Postgres：event_log 與 durable bus]] — 建 event_log 表與 Drizzle client，把 bus 改成「先寫後廣播」並能依 seq 重播
+2. [[learn/agent-harness/nodes/making-the-loop-durable/durability-boundaries-and-run-tool|決定哪些要持久化，並把工具執行收回來]] — 判定該包進 step 的邊界、移除 execute、集中成 runTool、定義 ToolCall/Turn 型別（after step 1）
+3. [[learn/agent-harness/nodes/making-the-loop-durable/model-turn-and-tool-step|把 model turn 與 tool call 抽成函式]] — 抽出 modelTurn 與 toolStep 兩個可被包進 step 的函式（after step 2）
+4. [[learn/agent-harness/nodes/making-the-loop-durable/wrapping-the-loop-in-steps|把迴圈包成 DBOS workflow]] — 用 DBOS.runStep 包住各副作用、判別 step 外允許的動作、註冊 workflow（after steps 1、3）
+5. [[learn/agent-harness/nodes/making-the-loop-durable/server-wiring-and-history-replay|接上 server：重啟續跑與 history replay]] — 接 server、startWorkflow 啟動、連線重播 history、看懂重啟續跑的示範（after step 4）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+前一節課講清楚了「為什麼需要持久化執行」——agent 的執行必須活得比任何 client、任何 process 都久。這一節課把話付諸行動：動手把上一個 runtime loop 改成真正落盤、崩潰後能續跑的 durable workflow。
+
+關鍵的心智轉折只有一個：**這不是重寫，而是包裝（wrap）**。原本的 while 迴圈——叫模型吐字、執行工具、發事件——邏輯一行都沒變，唯一做的事是把三種副作用（emit、tool call、streamText）各自包進 DBOS step，讓它們的輸入輸出被持久化、重跑時不再重複副作用。event_log 是這一切的落點，bus 的「先寫後廣播」是它的寫法，history replay 是它重接 client 的讀法。
+
+走完這五步，你應該能在一張白紙上畫出：事件怎麼從 stream 流進 Postgres 的 event_log，哪些動作被包成 step、哪些刻意留在 step 外，workflow 如何註冊，以及 server 如何用 startWorkflow 啟動它、用 history() 把斷線 client 錯過的部分補回來。最後那個「殺掉 server、重啟、瀏覽器重載、agent 自己接著跑」的示範，就是這一切組裝完成後的自然結果。
 
 ## Sources
 

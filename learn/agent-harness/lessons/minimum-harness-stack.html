@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>最小可上線的 Harness 清單</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>最小可上線的 Harness 清單</h1>
+<p class="meta">Step 1/5 · 三樣非有不可，一樣可以延後</p>
+
+<h2>學習目標</h2>
+<p>能排出 chat agent 上線的最小 harness 清單與建置順序——tool calling、自己掌握的記憶、記憶壓縮——並說明 durable 解耦為何可以延後、turn limit 如何防止迴圈跑飛。</p>
+
+<h2>問題：只能留三樣，留哪三樣？</h2>
+<p>前面幾堂課你已經把整個 harness 蓋起來了：持久化迴圈、沙箱、記憶壓縮、handoff、監督、審批。現在換一個更現實的問題——如果今天就要把一個聊天型 agent 推上線，哪些層是非有不可、哪些可以晚點再補？</p>
+
+<p>答案出乎意料地樸素：<strong>tool calling、由你自己掌握的記憶、以及記憶壓縮</strong>。剩下的能力不是不重要，而是它們的優先序取決於你要交付的體驗；其中 durable execution 是最常被高估、也最該被延後的一項。</p>
+
+<h2>第一樣：tool calling——免費，但只是入場券</h2>
+<p>工具呼叫在現在每個 SDK 裡幾乎都是免費附帶的。以 AI SDK 為例，你用 <code>tool()</code> 定義名稱、description、schema 與 <code>execute</code>，把工具集交給 <code>streamText</code>，它就會自動幫你跑工具迴圈，把模型的工具呼叫、執行結果、下一輪回應串起來。</p>
+
+<p>免費不代表不重要——它是 agent 能「動手」的前提。正因為免費，它也不是差異化的地方：你不會因為用了工具呼叫就打贏別人，只會因為沒有它而根本做不出 agent。</p>
+
+<h2>第二樣：記憶——免費的是「有」，貴的是「存在哪」</h2>
+<p>SDK 大多會幫你維護一個 messages 陣列，感覺像免費的記憶。但那個陣列只活在單一 process 的記憶體裡：server 一換、process 一重開、或同時有多個使用者，它就不見了。</p>
+
+<p>真正要花力氣的是把歷史<strong>持久化到你自己控制的儲存</strong>——課程裡就是 event_log 資料表加 Postgres（Neon），用 Drizzle 讀寫。控制權在你手上，你才能決定要保留什麼、丟掉什麼、什麼時候壓縮。這也解釋了為什麼「用供應商的對話狀態」和「自己存歷史」是兩種完全不同的產品成熟度。</p>
+
+<blockquote>記憶的分水嶺不是「有沒有記憶」，而是「記憶的主人是誰」。</blockquote>
+
+<h2>第三樣：壓縮——歷史一定會長到爆</h2>
+<p>對話只會越來越長，context 只會越積越多。沒有壓縮，遲早撞到 context 上限，agent 不是變笨就是直接壞掉。</p>
+
+<p>做法是把太舊的輪次交給 LLM 摘要成一段短記憶，只保留最近幾輪的原文——也就是以「輪（turn）」為單位的滑動視窗。課程把摘要包成一個 durable step，並發出 <code>memory_compacted</code> 事件，讓你能在 inspector 上親眼看到壓縮真的發生了、壓掉了多少。</p>
+
+<h2>可以延後的那一樣：durable execution</h2>
+<p>durable execution 解耦的是「run 活在哪裡」：run 不再依附發出請求的那個 client。最直觀的症狀是 SSE——使用者重整頁面時，如果 run 綁在那條連線上，工作就斷了；durable 之後，重連只是重新訂閱事件流，run 照樣往前跑。</p>
+
+<p>這件事很重要，但對一個聊天型 agent 來說，<strong>可以晚一點再加</strong>。先把記憶與壓縮做對，使用者的體驗損失有限；等你要做「關掉頁面也要完成、完成後通知我」的工作時，它才會從選配變成必備。</p>
+
+<h2>別忘了最低成本的保險：turn limit</h2>
+<p>大約十步的上限。模型偶爾會卡在工具迴圈裡來回鬼打牆，一個 turn limit 就能讓它停下來，不至於無限燃燒 token。在 AI SDK 裡就是 <code>stopWhen</code> / <code>maxSteps</code> 這類設定。</p>
+
+<h2>把清單排成建置順序</h2>
+<table>
+<thead>
+<tr><th>順序</th><th>能力</th><th>為什麼在這裡</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>tool calling</td><td>SDK 免費附帶，是 agent 能動手的前提</td></tr>
+<tr><td>2</td><td>記憶持久化到自己控制的儲存</td><td>唯一能決定保留與丟棄的地方</td></tr>
+<tr><td>3</td><td>記憶壓縮</td><td>歷史必然長過 context 上限</td></tr>
+<tr><td>3.5</td><td>turn limit（約十步）</td><td>防止工具迴圈跑飛的最低成本保險</td></tr>
+<tr><td>4（可延後）</td><td>durable execution</td><td>解耦 client；聊天型 agent 可先不做</td></tr>
+</tbody>
+</table>
+
+<h2>AI SDK 已經幫你準備了大半</h2>
+<p>tool calling、工具迴圈、串流、結構化輸出，AI SDK 都給你了。真正要自己動手的不多：把記憶搬進自己的資料庫、寫壓縮、設一個 turn limit。這也是為什麼「會 harness engineering」比「會挑最新模型」值錢——模型大家都叫得到，harness 才是你自己的。</p>
+
+<p>但這份清單是「chat agent」這個體驗的答案，不是普世真理。下一步要學的是：換一個體驗，這份清單會怎麼整個換一組。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./table-stakes-vs-situational.html">下一步：Table stakes 與 situational：從目標體驗反推 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="要把 chat agent 推上線，最小清單的三樣核心是什麼？" data-correct="1" data-explain="tool calling、由自己掌握的記憶、以及記憶壓縮，其餘能力都可以依體驗延後。">
+  <button class="opt">串流、UI 與快取</button>
+  <button class="opt">tool calling、自己的記憶、壓縮</button>
+  <button class="opt">RAG、fine-tune 與量化</button>
+  <button class="opt">supervisor、handoff 與 sandbox</button>
+</div>
+
+<div class="quiz" data-question="為什麼 tool calling 通常不是產品差異化的來源？" data-correct="2" data-explain="它在每個 SDK 裡幾乎都免費內建，是入場券而不是勝負手。">
+  <button class="opt">因為工具很難寫對</button>
+  <button class="opt">因為模型其實不會用工具</button>
+  <button class="opt">因為每個 SDK 幾乎都免費內建</button>
+  <button class="opt">因為工具不能持久化</button>
+</div>
+
+<div class="quiz" data-question="記憶「免費」與「要花力氣」的分界線在哪裡？" data-correct="1" data-explain="SDK 幫你維護記憶體中的陣列，但要能信任就得把它存進自己控制的儲存。">
+  <button class="opt">取決於模型夠不夠聰明</button>
+  <button class="opt">記憶存在誰控制的儲存裡</button>
+  <button class="opt">取決於對話已經幾輪</button>
+  <button class="opt">取決於用哪一家供應商</button>
+</div>
+
+<div class="quiz" data-question="為什麼記憶壓縮是必要的，而不是加分項？" data-correct="2" data-explain="歷史只會越積越長，沒有壓縮遲早會撞上 context 上限。">
+  <button class="opt">讓回覆字數變得比較短</button>
+  <button class="opt">降低每一次呼叫的費用</button>
+  <button class="opt">歷史會長到超過 context 上限</button>
+  <button class="opt">讓模型記住 system prompt</button>
+</div>
+
+<div class="quiz" data-question="對聊天型 agent 而言，durable execution 的定位是什麼？" data-correct="1" data-explain="它可以延後，因為它解耦的是 client 與 run，聊天體驗不會立刻因此崩壞。">
+  <button class="opt">一定要第一個就做</button>
+  <button class="opt">可以延後，但能解耦 client</button>
+  <button class="opt">只有背景 agent 才需要做</button>
+  <button class="opt">可以取代記憶壓縮</button>
+</div>
+
+<div class="quiz" data-question="turn limit（約十步）存在的目的是什麼？" data-correct="2" data-explain="它防止模型卡在工具迴圈裡無限燃燒，是最低成本的保險。">
+  <button class="opt">限制可以使用的工具數量</button>
+  <button class="opt">限制模型回覆的字數</button>
+  <button class="opt">防止工具迴圈無限跑飛</button>
+  <button class="opt">設定對外的 API 逾時</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 生產級 Harness 與下一步 · Step 1/5</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -4,17 +4,35 @@ title: 為什麼需要持久化執行
 subject: agent-harness
 tier: 3
 order: 4
-status: draft
+duration: 30-45 minutes
+status: content-written
 goal: 說清楚 client 無關性與崩潰存活的需求，用冪等／exactly-once 解釋不可逆動作為何不能重跑，並比較 DBOS 與其他工作流引擎、取得 Postgres。
 sources:
   - "[[sources/agent-harness/20260915/7-durable-execution-setup-with-neondb.txt#what-is-durable-execution]]"
   - "[[sources/agent-harness/20260915/7-durable-execution-setup-with-neondb.txt#cicd-as-distributed-analogy]]"
   - "[[sources/agent-harness/20260915/7-durable-execution-setup-with-neondb.txt#why-the-agent-needs-durability]]"
   - "[[sources/agent-harness/20260915/7-durable-execution-setup-with-neondb.txt#dbos-and-postgres-durable-stores]]"
-steps: []
-prerequisites: []
+  - "[[sources/agent-harness/20260915/7-durable-execution-setup-with-neondb.txt#neon-postgres-setup]]"
+steps:
+  - id: client-independence-crash-survival
+    order: 1
+  - id: cicd-as-distributed-mental-model
+    order: 2
+    deps:
+      - client-independence-crash-survival
+  - id: idempotency-and-exactly-once
+    order: 3
+    deps:
+      - client-independence-crash-survival
+  - id: dbos-postgres-durable-store
+    order: 4
+    deps:
+      - idempotency-and-exactly-once
+      - cicd-as-distributed-mental-model
+prerequisites:
+  - learn/agent-harness/nodes/harness-runtime-loop
 created: 2026-09-15
-updated: 2026-09-15
+updated: 2026-09-16
 ---
 
 # 為什麼需要持久化執行
@@ -25,11 +43,18 @@ updated: 2026-09-15
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/agent-harness/nodes/why-durable-execution/client-independence-crash-survival|執行要活得比任何觀察者久]] — durable execution 的定義與 checkpointing、fault tolerance、resilience 三個要件
+2. [[learn/agent-harness/nodes/why-durable-execution/cicd-as-distributed-mental-model|CI/CD：一套早已熟悉的分散式系統]] — 用 CI/CD 類比 retry、replay、cache、斷線恢復（after step 1）
+3. [[learn/agent-harness/nodes/why-durable-execution/idempotency-and-exactly-once|不可逆的動作為何不能重跑]] — 記憶體喪失與不可逆動作，冪等與 exactly-once（after step 1）
+4. [[learn/agent-harness/nodes/why-durable-execution/dbos-postgres-durable-store|選擇 DBOS + Postgres 與取得資料庫]] — workflow ID 記錄/重播、比較各種引擎、用 Neon 取得 Postgres（after steps 2–3）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+上一節課做出來的 runtime loop，agent 的每一步都活在記憶體裡：一殺掉 server、一斷線，剛剛進行到哪、做過什麼，全部蒸發。這一節要回答「為什麼非加上持久化不可」——先把需求講透，再選引擎。
+
+核心洞見是：agent 的執行必須獨立於任何正在看它的 client，而且要能在 process 掛掉後存活。拆成兩個更尖銳的問題：第一，命令（client）和執行（server）是兩台機器，本來就可能一方先走；第二，agent 會做出「不可逆」的動作（寄信、轉帳、發訊息），這些動作不能因為重跑而重複。前者逼出 checkpointing 與 fault tolerance，後者逼出冪等與 exactly-once——兩者合起來就是 durable execution 要解決的全部。
+
+走完這四步，你應該能用自己的話講清楚：為什麼 agent 需要 durable execution，為什麼 CI/CD 是最貼切的類比，哪些動作絕不能重跑，以及為什麼選 DBOS（database-backed、幾乎不用改 code）而不是 Temporal 那類 service-based 引擎。
 
 ## Sources
 
@@ -37,3 +62,4 @@ updated: 2026-09-15
 - [[sources/agent-harness/20260915/7-durable-execution-setup-with-neondb.txt#cicd-as-distributed-analogy]]
 - [[sources/agent-harness/20260915/7-durable-execution-setup-with-neondb.txt#why-the-agent-needs-durability]]
 - [[sources/agent-harness/20260915/7-durable-execution-setup-with-neondb.txt#dbos-and-postgres-durable-stores]]
+- [[sources/agent-harness/20260915/7-durable-execution-setup-with-neondb.txt#neon-postgres-setup]]

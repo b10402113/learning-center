@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把迴圈包成 DBOS workflow</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>把迴圈包成 DBOS workflow</h1>
+<p class="meta">Step 4/5 · 用 DBOS.runStep 包住各副作用，判別哪些能留在 step 外，並 registerWorkflow 啟動持久化</p>
+
+<h2>學習目標</h2>
+<p>用 DBOS.runStep 把 model turn、tool step、多種 emit 與失敗 emit 包成 step，用「是否非確定 / 昂貴」判別哪些能留在 step 外，再用 registerWorkflow 啟動持久化語意。</p>
+
+<h2>整個機制只有一個動詞：wrap</h2>
+
+<p>前面準備了那麼多，現在來到整堂課的收網時刻。DBOS 的用法驚人地簡單——<strong>你要做的就只有一件事：把既有的程式碼包進 <code>DBOS.runStep</code></strong>。</p>
+
+<pre><code>import { DBOS } from "@dbos-inc/dbos-sdk";
+
+await DBOS.runStep(async () =&gt; {
+  // 既有的程式碼照寫，一行都不用改
+  return emit({ type: "modelDone", workflowId });
+}, { name: "model-done" });</code></pre>
+
+<p><code>DBOS.runStep(callback, { name })</code> 會把 callback 的輸入與輸出持久化，這樣它就可以被 retry、可以 suspend、在 crash 之後不會重新執行。原來的邏輯原封不動——正因為不用改邏輯、只加一層包裝，DBOS 是作者用過最簡單的 durable execution 引擎。</p>
+
+<h2>什麼該留、什麼該包：判別標準是「非確定」</h2>
+
+<p>先定一條規則，防止你不分青紅皂白把所有東西都包進去。<strong>純淨、無副作用、每次跑結果都完全一樣的初始化程式碼，可以留在 step 外面</strong>——像是把 agents 清單、system prompt 組出來這種事。它每次執行都長一個樣，包進 step 只會徒增簿記。</p>
+
+<p>判斷標準不是「大不大」，而是「是否非確定（nondeterministic）或昂貴」。凡是依賴網路、時間、亂數、外部狀態，或者會花大錢（呼叫 LLM）、會造成外部副作用（發事件、執行工具）的，都該包。記住這把尺，它比死記「哪幾行要包」有用得多。</p>
+
+<h2>三個必須包進 step 的東西</h2>
+
+<p>把迴圈掃一遍，有三樣東西會被包進 step：</p>
+
+<h3>1. model turn —— 別讓模型被重複計費</h3>
+
+<pre><code>const turn = await DBOS.runStep(
+  async () =&gt; modelTurn(workflowId, messages),
+  { name: `model-turn-${stepCount}` }
+);</code></pre>
+
+<p>如果讓 <code>streamText</code> 留在 step 外，workflow 一重啟它就會重新執行——換句話說，每一輪 resume 都要多燒一次 LLM 的錢和 token。包成 step 後，重啟會接著上次的結果走，而不是重新呼叫。</p>
+
+<p>一個常見的混淆要澄清：<strong>await 一個 step 不等於 await 那條串流</strong>。step 內部仍然在 await 自己的 stream，所以瀏覽器照樣能看到字一個一個吐出來；外面這個 <code>await</code> 只在等整個 step 完成。持久化沒有犧牲串流體驗。</p>
+
+<h3>2. emit —— 別讓重播重複寫列</h3>
+
+<p>「模型完成」和「工作完成」這兩個會寫進資料庫的 emit，也都包進 step：</p>
+
+<pre><code>await DBOS.runStep(() =&gt; emit({ type: "modelDone", workflowId }), { name: "model-done" });
+await DBOS.runStep(() =&gt; emit({ type: "completed", workflowId }), { name: "completed" });</code></pre>
+
+<p>emit 本身是非冪等的——它每跑一次就往 event_log 多寫一列。留著不包，retry 時就會冒出重複事件、UI 出現幽靈訊息。包成 step 後，這些副作用就變成冪等，不可能同一件事發兩次。</p>
+
+<h3>3. tool call —— 自己逐個執行、自己組結果</h3>
+
+<p>因為前面已經透過刪掉 <code>execute</code> 放棄了 SDK 的自動執行，現在迴圈要自己迭代 <code>turn.toolCalls</code>，把每一個工具呼叫跑進 durable step，然後把結果組回 messages：</p>
+
+<pre><code>for (const call of turn.toolCalls) {
+  const output = await DBOS.runStep(
+    () =&gt; toolStep(workflowId, call),
+    { name: `tool-${call.toolCallId}` }
+  );
+
+  messages.push({
+    role: "tool",
+    content: [{
+      type: "tool-result",
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      output: { type: "json", value: output },
+    }],
+  });
+}</code></pre>
+
+<p>注意回填給模型的 message 形狀有嚴格要求：role 要是 <code>tool</code>、content 的 type 要是 <code>tool-result</code>、要帶 <code>toolCallId</code> 與 <code>toolName</code>、產出要用 <code>{ type: "json", value: output }</code> 包一層。這些手動工作之所以出現，純粹是因為我們把執行權從 SDK 手上拿了回來——自主權的代價就是要把細節自己填對。</p>
+
+<h2>連失敗也要包起來</h2>
+
+<p>最容易漏的一支是失敗路徑。迴圈底部的 workflow-failed emit 也要有自己的 step：</p>
+
+<pre><code>await DBOS.runStep(() =&gt; emit({ type: "workflowFailed", workflowId }), { name: "failed" });</code></pre>
+
+<p>失敗訊號同樣不能發兩次——重試時如果它裸奔在 workflow 裡，就可能重複記錄失敗。給它一個 step，失敗的簿記就只會發生一次。</p>
+
+<h2>最後一把鑰匙：registerWorkflow</h2>
+
+<p>包完一堆 step，它們其實還只是一堆普通函式。<strong>除非把包住它們的外層函式註冊成 workflow，否則這些 step 一點意義都沒有</strong>。做法是把 runtime 函式改名為 <code>agentWorkflow</code>，交給 DBOS：</p>
+
+<pre><code>export const runAgentWorkflow = DBOS.registerWorkflow(agentWorkflow);</code></pre>
+
+<p>命名上有個約定：結尾加 <code>Workflow</code> 後綴，是刻意要讓讀程式的人一眼看出「這個函式有特殊的 durable 語意」，不是普通 function。註冊之後，行為不變、邏輯不變，唯一多出來的是 step 之間的邊界與持久化能力。</p>
+
+<h2>這一課完成後</h2>
+
+<p>runtime loop 的邏輯一行沒改，但它現在每一個昂貴的、有副作用的動作都被包成了可救回、不重跑的 step，而且整條 workflow 已經註冊生效。workflow 有了 durable 語意，剩下的就是把 server 接上它——讓使用者按下送出、讓崩潰後重開的瀏覽器能看到完整歷史。那是最後一課。</p>
+
+<div class="lesson-nav">
+  <div><a href="./model-turn-and-tool-step.html">← 上一步：把 model turn 與 tool call 抽成函式</a></div>
+  <div><a href="./server-wiring-and-history-replay.html">下一步：接上 server：重啟續跑與 history replay →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="DBOS.runStep 的作用是什麼？" data-correct="1" data-explain="持久化 callback 的輸入輸出，使其可 retry / suspend / 存活。">
+  <button class="opt">把函式改成同步執行</button>
+  <button class="opt">持久化輸入輸出，使其可重試與存活</button>
+  <button class="opt">自動產生函式名稱</button>
+  <button class="opt">把函式部署到雲端</button>
+</div>
+
+<div class="quiz" data-question="判斷一段初始化程式能否留在 step 外，標準是什麼？" data-correct="2" data-explain="看是否非確定或昂貴，純淨且每次相同就留外面。">
+  <button class="opt">看程式碼長不長</button>
+  <button class="opt">看有沒有 import 其他模組</button>
+  <button class="opt">是否非確定或昂貴，純淨就留外面</button>
+  <button class="opt">看有沒有用到 async</button>
+</div>
+
+<div class="quiz" data-question="為什麼 streamText 必須包進 step？" data-correct="0" data-explain="留在外面，workflow 重啟就重跑，多燒錢與 token。">
+  <button class="opt">避免重啟時重新呼叫模型、重複計費</button>
+  <button class="opt">讓串流速度變得更快</button>
+  <button class="opt">因為 streamText 不是非同步函式</button>
+  <button class="opt">讓模型能呼叫更多工具</button>
+</div>
+
+<div class="quiz" data-question="「await 一個 step」與「await 那條串流」的關係？" data-correct="3" data-explain="不同——await step 是等整個 step 完成，內部的 stream 仍在 await，串流照常。">
+  <button class="opt">兩者完全相同</button>
+  <button class="opt">await step 會取消串流</button>
+  <button class="opt">一定要先 await 串流才能 await step</button>
+  <button class="opt">不同——await step 在等整段完成，串流照常</button>
+</div>
+
+<div class="quiz" data-question="回填給模型的工具結果 message，role 要設成什麼？" data-correct="1" data-explain="role 必須是 tool，content type 是 tool-result。">
+  <button class="opt">assistant</button>
+  <button class="opt">tool</button>
+  <button class="opt">user</button>
+  <button class="opt">system</button>
+</div>
+
+<div class="quiz" data-question="包完一堆 step 之後，為什麼還需要 registerWorkflow？" data-correct="2" data-explain="step 唯有在外層函式註冊成 workflow 後才有 durable 語意。">
+  <button class="opt">為了自動產生 step 名稱</button>
+  <button class="opt">為了讓函式可以被 import</button>
+  <button class="opt">讓 step 具備 durable 語意並可被啟動</button>
+  <button class="opt">為了把工作流上傳到資料庫</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 讓迴圈持久化 · Step 4/5</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

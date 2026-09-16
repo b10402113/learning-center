@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DBOS recv/send：無限期暫停與恢復</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>DBOS recv/send：無限期暫停與恢復</h1>
+<p class="meta">Step 2/4 · Human-in-the-Loop 審批</p>
+
+<h2>學習目標</h2>
+<p>能用 DBOS.receive 無限暫停一個 workflow、用 DBOS.send 攜帶 payload 與 tag 喚醒它，並解釋 durable 為什麼讓「等一個人類、甚至等很多天」不必燒任何 compute。</p>
+
+<h2>問題：到底要等多久？</h2>
+
+<p>上一節決定了「要暫停」。但要暫停多久？答案是不確定——人類可能三十秒後批准，也可能三天後才看到。而我們不可能讓一個 process 撐開三天：沒有那麼多資源，而且 crash 一次就全沒了。</p>
+
+<p>所以需要一種暫停，是「把狀態寫進資料庫、然後 process 可以自由結束」的暫停。DBOS 的 <code>recv</code> 就是這個原語（primitive）。</p>
+
+<h2>DBOS.recv：把 workflow 停進 Postgres</h2>
+
+<p><code>DBOS.recv</code> 會暫停執行——<strong>compute 完全停止</strong>——直到它等的那個變數改變為止。改變的方式，是從外界送一則訊息進來。Scott 的說法是：它「可以無限期暫停，幾年都行」。</p>
+
+<pre><code>const decision =
+  await DBOS.recv&lt;{ approved: boolean }&gt;("approval", APPROVAL_TIMEOUT_S);</code></pre>
+
+<p>參數有兩個重點：</p>
+
+<ul>
+<li>第一個字串 <code>"approval"</code> 是 <strong>topic</strong>（頻道）。送訊息的人要送到同一個 topic。</li>
+<li>第二個是 timeout（秒）。課程給 <code>APPROVAL_TIMEOUT_S = 86_400</code>，也就是一天——但這只是「最多願意等一天」，等待長度本身可以拉到年。</li>
+</ul>
+
+<p>關鍵在於：當 workflow 停在 <code>recv</code>，它<strong>不是</strong>一個卡住的 thread。它被寫進 Postgres，process 可以退出、可以重啟、可以換一台機器。沒有任何 compute 在為這個等待買單。</p>
+
+<h2>DBOS.send：從外界叫醒它</h2>
+
+<p>另一半是送訊息的人。用 <code>DBOS.send</code> 把 payload 送到指定 workflow 的指定 topic：</p>
+
+<pre><code>await DBOS.send(workflowId, { approved: true }, "approval");</code></pre>
+
+<p>這會把訊息寫進 Postgres，並喚醒那個正在 <code>recv("approval")</code> 上等待的 workflow。它可以在不同的 process、不同的時間點送達——課裡的說法是「甚至幾天後、甚至重啟之後」。workflow 醒來後，<code>recv</code> 的 promise resolve 成送進來的 payload，於是它知道人類的決定是什麼，繼續往下跑。</p>
+
+<h2>recv 是原語，不是 step</h2>
+
+<p>課程特別點出一個容易混淆的地方：<code>recv</code> 是 durable workflow 的<strong>原語</strong>，不是一個 step。差別在哪？收到的訊息會被 <strong>checkpoint</strong> 起來。所以當 workflow 因為 crash 被 DBOS 恢復時，它只有兩種可能：</p>
+
+<blockquote class="good-code">要嘛拿到「它先前已經收到的那個決定」，要嘛繼續等——不會漏掉、也不會重問。</blockquote>
+
+<p>這正是 durable 的價值：暫停與恢復都是狀態，而不是記憶體裡一個懸著的 promise。</p>
+
+<h2>白話對照</h2>
+
+<table>
+<thead>
+<tr><th>原語</th><th>做什麼</th><th>誰呼叫</th></tr>
+</thead>
+<tbody>
+<tr><td><code>DBOS.recv(topic, timeout)</code></td><td>暫停 workflow，等 topic 上的訊息</td><td>workflow 內部</td></tr>
+<tr><td><code>DBOS.send(workflowId, payload, topic)</code></td><td>送訊息到 workflow，喚醒它的 recv</td><td>workflow 外部（server）</td></tr>
+</tbody>
+</table>
+
+<p>換句話說：<code>recv</code> 是「我在等」、<code>send</code> 是「我來了」。兩者透過 Postgres 對接，中間可以隔著好幾天、隔著一次 crash、隔著不同的 process。</p>
+
+<p>順帶一提，這不是 DBOS 獨有的把戲。生產上等價的東西有 Temporal 的 signal、Inngest 的 <code>waitForEvent</code>、durable promises，以及專門處理 human-in-the-loop 的 HumanLayer——它們都在做同一件事：把人類的決定變成一個第一級、durable、可恢復的 workflow 狀態。</p>
+
+<div class="lesson-nav">
+  <div><a href="./approval-as-harness-gate.html">← 上一步：審批是 harness 的責任，不是 LLM 的請求</a></div>
+  <div><a href="./approval-gate-in-the-loop.html">下一步：把 approval gate 接進 durable loop →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="DBOS.recv 在等待時，compute 處於什麼狀態？" data-correct="1" data-explain="compute 完全停止，workflow 被寫進 Postgres，process 可以自由退出。">
+  <button class="opt">持續在背景輪詢資料庫</button>
+  <button class="opt">完全停止，process 可退出</button>
+  <button class="opt">佔用一個 thread 等待</button>
+  <button class="opt">每三十秒喚醒檢查一次</button>
+</div>
+
+<div class="quiz" data-question="誰負責喚醒被暫停的 workflow？" data-correct="0" data-explain="由外部的 DBOS.send 把訊息送進指定 topic，喚醒等待中的 recv。">
+  <button class="opt">DBOS.send 從外部送訊息</button>
+  <button class="opt">另一個 recv 主動去拉取</button>
+  <button class="opt">workflow 自己的 timeout</button>
+  <button class="opt">server 定時重新啟動</button>
+</div>
+
+<div class="quiz" data-question="recv 的第一個參數 approval 代表什麼？" data-correct="1" data-explain="那是 topic 頻道，send 的一方必須送到同一個 topic。">
+  <button class="opt">要等待的秒數</button>
+  <button class="opt">訊息的 topic 頻道</button>
+  <button class="opt">目標 workflow 的 ID</button>
+  <button class="opt">訊息的 JSON schema</button>
+</div>
+
+<div class="quiz" data-question="為什麼說 recv 是原語、不是 step？" data-correct="1" data-explain="因為收到的訊息會被 checkpoint，恢復時要嘛沿用已收到的決定、要嘛繼續等。">
+  <button class="opt">因為它不能回傳任何值</button>
+  <button class="opt">因為收到的訊息會被 checkpoint</button>
+  <button class="opt">因為它不能設定 timeout</button>
+  <button class="opt">因為它一輩子只能呼叫一次</button>
+</div>
+
+<div class="quiz" data-question="這個暫停最長可以持續多久？" data-correct="2" data-explain="durable 的等待可以拉長到數年，不受 process 壽命限制。">
+  <button class="opt">最多三十秒</button>
+  <button class="opt">最多一天</button>
+  <button class="opt">可以長到好幾年</button>
+  <button class="opt">不能超過 process 壽命</button>
+</div>
+
+<div class="quiz" data-question="為什麼等待一個人類不燒任何 compute？" data-correct="0" data-explain="因為 DBOS 把等待變成資料庫裡的狀態，而不是一個卡住的執行緒。">
+  <button class="opt">因為等待被寫成資料庫狀態</button>
+  <button class="opt">因為人類的回覆速度很快</button>
+  <button class="opt">因為訊息走的是 WebSocket</button>
+  <button class="opt">因為 timeout 會自動取消它</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · Human-in-the-Loop 審批 · Step 2/4</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

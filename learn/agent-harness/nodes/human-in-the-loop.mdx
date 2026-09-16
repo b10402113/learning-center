@@ -4,7 +4,8 @@ title: Human-in-the-Loop 審批
 subject: agent-harness
 tier: 7
 order: 10
-status: draft
+duration: 45-60 minutes
+status: content-written
 goal: 把審批做成 harness 層的決定性機制（不靠 LLM 求情），用 DBOS recv/send 實作可無限期暫停與恢復的 approval gate，並接上 UI 批准流程。
 sources:
   - "[[sources/agent-harness/20260915/25-human-in-the-loop.txt#deterministic-approvals]]"
@@ -12,10 +13,28 @@ sources:
   - "[[sources/agent-harness/20260915/25-human-in-the-loop.txt#approval-exercise]]"
   - "[[sources/agent-harness/20260915/harness-engineering/harness/runtime.ts]]"
   - "[[sources/agent-harness/20260915/harness-engineering/server/index.ts]]"
-steps: []
-prerequisites: []
+steps:
+  - id: approval-as-harness-gate
+    order: 1
+  - id: dbos-recv-send
+    order: 2
+    deps:
+      - approval-as-harness-gate
+  - id: approval-gate-in-the-loop
+    order: 3
+    deps:
+      - approval-as-harness-gate
+      - dbos-recv-send
+  - id: approval-endpoint-and-plan
+    order: 4
+    deps:
+      - approval-gate-in-the-loop
+prerequisites:
+  - learn/agent-harness/nodes/making-the-loop-durable
+  - learn/agent-harness/nodes/handoffs-and-routing
+  - learn/agent-harness/nodes/hierarchical-supervision
 created: 2026-09-15
-updated: 2026-09-15
+updated: 2026-09-16
 ---
 
 # Human-in-the-Loop 審批
@@ -26,11 +45,18 @@ updated: 2026-09-15
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/agent-harness/nodes/human-in-the-loop/approval-as-harness-gate|審批是 harness 的責任，不是 LLM 的請求]] — 解釋為何審批要像 handoff 一樣在 harness 層決定性偵測，而非在 prompt 裡求 LLM 照做
+2. [[learn/agent-harness/nodes/human-in-the-loop/dbos-recv-send|DBOS recv/send：無限期暫停與恢復]] — 用 DBOS.receive 暫停、DBOS.send 喚醒，理解 durable 讓漫長等待不燒 compute（after step 1）
+3. [[learn/agent-harness/nodes/human-in-the-loop/approval-gate-in-the-loop|把 approval gate 接進 durable loop]] — 在 tool call 分派處加 NEEDS_APPROVAL 檢查，發事件、等待、執行或拒絕（after steps 1–2）
+4. [[learn/agent-harness/nodes/human-in-the-loop/approval-endpoint-and-plan|送審端：/api/approve、UI 按鈕與 plan 審批練習]] — 用 /api/approve 送決定、閉合雙向流程，做 plan 先批準再執行的收尾練習（after step 3）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+前面幾節課教會你：agent 的執行要活得比 process 久（durable）、控制權可以橫向轉移（handoff）、複雜工作可以拆成 plan 後平行派發（supervisor）。這三者疊起來，就會碰到一個新的信任問題——有些動作太不可逆，不該讓模型自己決定。發出退款、改生產、訂購東西：一旦做錯就回不來，於是你需要一個「人類在迴圈裡」的關卡。
+
+這節課的核心判斷只有一句話：**審批必須是決定性的 harness 行為，而不是在 prompt 裡求 LLM 慈悲。** 就像 handoff 是由 harness 攔截工具呼叫、而不是期待模型乖乖合作，審批也一樣——harness 看到執行到某個工具、查到它被標記為「要審批」，就直接把整個 workflow 凍結在那裡，等一個人類按下按鈕。
+
+凍結的手段是 DBOS 的兩個原語：`recv` 讓 compute 完全停止、可以無限期等；`send` 從外界把「批准了 / 拒絕了」這個 payload 送進 workflow，讓它從凍結處繼續。因為 workflow 是 durable 的，這個等待可以跨天、跨重啟，人類不必守在原地。走完這四步，你會看到一個完整的閉環：模型申請 → harness 凍結 → UI 出現 approve 按鈕 → 人類決定 → workflow 原地復活繼續跑。
 
 ## Sources
 

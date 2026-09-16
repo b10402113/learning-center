@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>run_code 工具：把沙箱接進 harness</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>run_code 工具：把沙箱接進 harness</h1>
+<p class="meta">Step 3/4 · 把沙箱變成 agent 的一支工具</p>
+
+<h2>學習目標</h2>
+<p>能定義 <code>runCode</code> 工具（description + code schema）、建出只開放 <code>getCharges</code> 與 <code>searchKnowledgeBase</code> 的 sandbox API，並在 <code>runTool</code> switch 裡接上它，體會「定義工具、處理工具」的固定節奏。</p>
+
+<h2>先有 sandbox API：白名單長什麼樣</h2>
+
+<p>上一步的 <code>runInSandbox(code, api)</code> 要一個 <code>api</code>。這一課要決定「這個 sandbox 到底允許 agent 的程式做什麼」。課程用一個 billing（帳單／退款）情境，白名單刻意縮到只剩兩支函式：</p>
+
+<pre><code>const sandboxApi: SandboxApi = {
+  getCharges: (customerId: string) =&gt;
+    CHARGES.filter((c) =&gt; c.customerId === customerId),
+  searchKnowledgeBase: (query: string) =&gt;
+    searchKB(query),
+};</code></pre>
+
+<ul>
+<li><code>getCharges(customerId)</code> —— 查出某個客戶的所有帳單（過濾假資料 <code>CHARGES</code>）。</li>
+<li><code>searchKnowledgeBase(query)</code> —— 去知識庫檢索（例如退款政策）。</li>
+</ul>
+
+<p>兩支都是<strong>唯讀</strong>。沙箱裡的程式能讀取、能計算，但<strong>不能改狀態、不能寄信、不能退款</strong>——那些有副作用的能力，留在外面的 durable tools 裡，走完全不同的安全路徑。這就是「safe / dangerous 工具的界線」：跑在沙箱裡的只配拿到唯讀能力。</p>
+
+<p>另外注意 <code>searchKB</code> 被抽成了獨立 helper：原本的工具程式碼和現在的 sandbox，<strong>兩邊共用同一支函式</strong>，避免同一份檢索邏輯寫兩次。這是個小卻重要的重構——能力要能複用，才不會各寫各的。</p>
+
+<h2>定義工具：description 就是給模型的說明書</h2>
+
+<p>工具定義跟前幾課學的 <code>tool()</code> 完全一樣，只是這次 tool 的動作是「讓模型寫程式」：</p>
+
+<pre><code>runCode: tool({
+  description:
+    "Run a JavaScript async function body inside a sandbox. " +
+    "Use `await tools.getCharges(customerId)` and " +
+    "`await tools.searchKnowledgeBase(query)`. " +
+    "Write results with `console.log(...)`, and `return` any JSON value.",
+  inputSchema: z.object({ code: z.string() }),
+  execute: () =&gt; { throw new Error("handled by runTool"); },
+}),</code></pre>
+
+<p>看清楚這裡的契約，它跟前面的工具節點是同一套道理：</p>
+
+<ul>
+<li><code>description</code> —— 告訴模型「這支工具讓你寫一段 JavaScript async 函式主體，你可以 <code>await</code> 哪些東西、可以 <code>console.log</code>、可以 <code>return</code> JSON」。模型依賴這段文字來決定何時用它、怎麼寫。</li>
+<li><code>inputSchema</code> —— 輸入就一個欄位：<code>code: string</code>。模型把整段程式碼塞進這個字串。</li>
+</ul>
+
+<p>一句話記法：<strong>工具的 description 是護欄</strong>。你只有在說明書裡寫清楚「能 <code>await</code> 白名單那兩支函式」，模型的程式才不會妄想呼叫 <code>process</code> 或 <code>require</code>。</p>
+
+<h2>處理工具：runTool switch 接上沙箱</h2>
+
+<p>定義了工具，還得在 harness 自己的 executor <code>runTool</code> 裡「處理」它。這是整門課一直重複的節奏——<strong>定義工具、處理工具</strong>：</p>
+
+<pre><code>switch (toolName) {
+  case "getCharges": { ... }
+  case "searchKnowledgeBase": { ... }
+  case "runCode": {
+    const { code } = args as { code: string };
+    return runInSandbox(code, sandboxApi);   // options 可省略，兩個參數就夠
+  }
+}</code></pre>
+
+<p>重點在 <code>runCode</code> 這個 case：解析出 <code>code</code> 字串，直接丟給 <code>runInSandbox(code, sandboxApi)</code>。注意 <code>options</code> 是選填——只用預設的 2 秒 timeout，所以傳兩個參數就合法。沙箱回傳的 <code>{ ok, ... }</code> 原封不動地當成 tool 結果，交回給模型。</p>
+
+<p>至此整條路就通了：模型遇到要算的事情 → 呼叫 <code>runCode</code> → 寫一段程式 → <code>runTool</code> 把它送進沙箱 → 沙箱在只有兩支唯讀函式的環境裡執行、綁 timeout → 回傳 <code>{ ok, result, logs }</code>。下次想再加一種沙箱能力，節奏不變：<strong>在 sandbox API 加一支函式、在工具 description 裡提它、在 switch 加一個 case</strong>。</p>
+
+<div class="lesson-nav">
+  <div><a href="./run-in-sandbox.html">← 上一步：實作 runInSandbox：node:vm 的沙箱邊界</a></div>
+  <div><a href="./code-beats-inference.html">下一步：為何 code 勝 inference，與 vm 不是真正的邊界 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="sandbox API 裡的 getCharges 和 searchKnowledgeBase 的共同點是？" data-correct="3" data-explain="兩支都是唯讀，沙箱程式能讀能算但不能改狀態。">
+  <button class="opt">都會寫入資料庫</button>
+  <button class="opt">都會寄出 Email</button>
+  <button class="opt">都會呼叫外部 LLM</button>
+  <button class="opt">都是唯讀操作</button>
+</div>
+
+<div class="quiz" data-question="為什麼 searchKB 要被抽成獨立 helper？" data-correct="1" data-explain="讓舊工具和沙箱共用同一支檢索邏輯，不重複寫。">
+  <button class="opt">為了讓它跑得更快</button>
+  <button class="opt">讓工具和沙箱共用同一支檢索邏輯</button>
+  <button class="opt">為了把它藏起來不給模型用</button>
+  <button class="opt">因為它需要獨立資料庫</button>
+</div>
+
+<div class="quiz" data-question="runCode 工具的 inputSchema 是什麼？" data-correct="0" data-explain="輸入就一個 code: string，模型把整段程式碼塞進去。">
+  <button class="opt">一個 code 字串</button>
+  <button class="opt">一個 customerId 數字</button>
+  <button class="opt">一個 query 物件</button>
+  <button class="opt">一個 timeout 秒數</button>
+</div>
+
+<div class="quiz" data-question="工具的 description 在 code mode 裡的關鍵作用是？" data-correct="2" data-explain="description 是護欄，告訴模型能 await 哪支白名單函式。">
+  <button class="opt">提升程式執行速度</button>
+  <button class="opt">取代 inputSchema</button>
+  <button class="opt">告訴模型能 await 哪支白名單函式</button>
+  <button class="opt">決定沙箱的記憶體上限</button>
+</div>
+
+<div class="quiz" data-question="新增一種沙箱能力的固定節奏是什麼？" data-correct="1" data-explain="在 API 加函式、description 提到它、switch 加 case——定義工具、處理工具。">
+  <button class="opt">只改 description 就好</button>
+  <button class="opt">定義工具、處理工具</button>
+  <button class="opt">重寫整個沙箱</button>
+  <button class="opt">改 node:vm 的原始碼</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 沙箱與 Code Mode · Step 3/4</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

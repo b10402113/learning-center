@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把 model turn 與 tool call 抽成函式</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>把 model turn 與 tool call 抽成函式</h1>
+<p class="meta">Step 3/5 · 抽出 modelTurn 與 toolStep 兩個可被單獨包進 step 的函式</p>
+
+<h2>學習目標</h2>
+<p>把舊 runtime 裡的串流與工具執行抽成 modelTurn（emit modelDelta → 回傳 Turn）與 toolStep（toolRequested → runTool → toolCompleted）兩個獨立函式，讓每段副作用都能被單獨包進 durable step。</p>
+
+<h2>重構，不是重寫</h2>
+
+<p>上一課我們把工具執行收回自己手上，也畫好了 step 邊界。現在要做的是把原本混在 runtime loop 裡的一大段程式碼，抽成兩個「可以被包進 step」的獨立函式。請注意一件重要的事：<strong>這一步只搬程式碼的位置，不改任何行為</strong>——純粹是 refactor。</p>
+
+<p>為什麼要抽？因為 <code>DBOS.runStep</code> 需要一段「可被描述、可被單獨重試」的程式碼當參數。原來一整陀的 inline 邏輯沒有清楚的邊界，就沒辦法精準地只包住想要的片段。抽成函式，就是給每一段副作用一個名字和一條清楚界線。</p>
+
+<h2>modelTurn：一次 model 呼叫的完整產物</h2>
+
+<p>第一個函式 <code>modelTurn</code> 包住「叫模型、把回傳串流出去」這整件事：</p>
+
+<pre><code>async function modelTurn(workflowId: string, messages: Message[]) {
+  const result = streamText({ model, messages, tools });
+
+  for await (const chunk of result.fullStream) {
+    if (chunk.type === "text-delta") {
+      emit({ type: "modelDelta", text: chunk.textDelta, workflowId });
+    }
+  }
+
+  const toolCalls = (await result.toolCalls).map((call) =&gt; ({
+    toolCallId: call.toolCallId,
+    toolName: call.toolName,
+    inputs: call.input,
+  }));
+
+  const response = { messages: await result.response.messages };
+  return { text: "", toolCalls, response };
+}</code></pre>
+
+<p>它的運作拆成三段：</p>
+
+<ol>
+<li><strong>串流</strong>——迭代 <code>result.fullStream</code>，每遇到一個文字片段 <code>text-delta</code>，就 emit 一個 <code>modelDelta</code> 事件，讓瀏覽器即時看到字一個一個冒出來。</li>
+<li><strong>收集工具呼叫</strong>——串流結束後 <code>await result.toolCalls</code>，把模型要求的工具呼叫映射成乾淨的 <code>ToolCall</code> 物件（只有 toolCallId / toolName / inputs 三欄）。</li>
+<li><strong>回傳 Turn</strong>——把 response messages 一併 await 出來，包成 <code>Turn</code> 回傳。</li>
+</ol>
+
+<p>注意每個函式都吃一個 <code>workflowId</code> 參數，並把它放進事件裡。這是為了讓 event log 裡的每一條事件都能追溯到它屬於哪一次 workflow 執行——將來重播或除錯時，才能把同一回合的事件聚在一起。</p>
+
+<h2>toolStep：一次工具呼叫的完整產物</h2>
+
+<p>第二個函式 <code>toolStep</code> 包住「執行一個工具」這整件事，並用兩條事件把原因和結果框起來：</p>
+
+<pre><code>async function toolStep(workflowId: string, call: ToolCall) {
+  emit({
+    type: "toolRequested",
+    toolCallId: call.toolCallId,
+    toolName: call.toolName,
+    inputs: call.inputs,
+    workflowId,
+  });
+
+  const output = await runTool(call.toolName, call.inputs);
+
+  emit({
+    type: "toolCompleted",
+    toolCallId: call.toolCallId,
+    output,
+    workflowId,
+  });
+
+  return output;
+}</code></pre>
+
+<p>這裡的 correspondence（對應關係）是整個設計的重點：<code>toolRequested</code> 帶著 <code>toolCallId</code>、工具名稱與參數，<code>toolCompleted</code> 帶著<strong>同一個</strong> <code>toolCallId</code> 與產出。有了這個 id 當關聯鍵，任何觀察者都能把「模型請求了什麼」和「工具回傳了什麼」精確對起來——這正是 inspector 能做到「看到每一通工具呼叫的前因後果」的原因。</p>
+
+<p>這份「request → execute → completed」的三段式，就是工具進度變得可見、可重播的事件契約。未來任何工具——打資料庫、發訊息、跑沙箱——都套這同一個契約。</p>
+
+<h2>抽完之後，迴圈骨幹更清楚了</h2>
+
+<p>抽完這兩個函式，runtime loop 的骨架反而變得更乾淨：loop 每回合呼叫 modelTurn 拿到 Turn，若 Turn 有 toolCalls 就逐個跑 toolStep，把結果塞回 messages，再進入下一回合。原本糾纏在一起的「串流、工具執行、事件發送」現在各自有名有姓，正好各自對應一個可以包進 step 的單位。</p>
+
+<p>但到目前為止，它們還只是普通函式——重跑仍然會重跑，crash 仍然會 crash。下一課，就是把它們真正丟進 <code>DBOS.runStep</code>，讓持久化生效。</p>
+
+<div class="lesson-nav">
+  <div><a href="./durability-boundaries-and-run-tool.html">← 上一步：決定哪些要持久化，並把工具執行收回來</a></div>
+  <div><a href="./wrapping-the-loop-in-steps.html">下一步：把迴圈包成 DBOS workflow →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="抽成 modelTurn / toolStep 這一步，本質上是什麼？" data-correct="2" data-explain="只搬位置、不改行為，純粹 refactor 以利套 step。">
+  <button class="opt">加入新的工具執行邏輯</button>
+  <button class="opt">移除傳輸層的錯誤處理</button>
+  <button class="opt">搬位置不改行為的純粹重構</button>
+  <button class="opt">把 model 換成新的供應商</button>
+</div>
+
+<div class="quiz" data-question="modelTurn 串流階段 emit 的是哪種事件？" data-correct="1" data-explain="每遇一個文字片段就 emit modelDelta。">
+  <button class="opt">toolRequested</button>
+  <button class="opt">modelDelta（文字片段）</button>
+  <button class="opt">toolCompleted</button>
+  <button class="opt">workflowStarted</button>
+</div>
+
+<div class="quiz" data-question="每個函式都吃 workflowId 參數，主要目的是什麼？" data-correct="0" data-explain="讓事件可追溯到屬於哪一次 workflow 執行。">
+  <button class="opt">讓事件追溯回所屬的 workflow 執行</button>
+  <button class="opt">當作工具執行的超時上限</button>
+  <button class="opt">決定該呼叫哪一個 model</button>
+  <button class="opt">當作資料庫的連線憑證</button>
+</div>
+
+<div class="quiz" data-question="toolRequested 與 toolCompleted 靠什麼欄位對應起來？" data-correct="3" data-explain="同一個 toolCallId 讓請求與結果精確對應。">
+  <button class="opt">相同的 toolName</button>
+  <button class="opt">相同的 inputs 內容</button>
+  <button class="opt">相同的 workflowId</button>
+  <button class="opt">相同的 toolCallId</button>
+</div>
+
+<div class="quiz" data-question="toolStep 的三段式契約是哪三件事？" data-correct="1" data-explain="emit toolRequested → runTool 執行 → emit toolCompleted。">
+  <button class="opt">emit → 等待 → 重試</button>
+  <button class="opt">toolRequested → 執行 → toolCompleted</button>
+  <button class="opt">serialize → 寫入 → 重播</button>
+  <button class="opt">開始 → 暫停 → 恢復</button>
+</div>
+
+<div class="quiz" data-question="modelTurn 收集工具呼叫是以什麼形式回傳？" data-correct="2" data-explain="映射成乾淨的 ToolCall 物件（toolCallId/toolName/inputs）。">
+  <button class="opt">完整的 SDK 原始回應</button>
+  <button class="opt">一包序列化後的 JSON 字串</button>
+  <button class="opt">乾淨的 ToolCall 物件陣列</button>
+  <button class="opt">直接用來發送的事件</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 讓迴圈持久化 · Step 3/5</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>平行 dispatch、fan-in 容錯與 supervised 路由</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>平行 dispatch、fan-in 容錯與 supervised 路由</h1>
+<p class="meta">Step 5/5 · allSettled 平行子 agent、記錄失敗、註冊與路由</p>
+
+<h2>學習目標</h2>
+<p>能用 <code>plan.steps.map</code> 對每個子 agent 起一個平行 DBOS step、以 <code>allSettled</code> 收集 fulfilled 的 findings、對失敗的發 <code>SubagentFailed</code> 事件並繼續，將 <code>synthesize</code> 包成 step，最後註冊 workflow 並用 <code>mode === 'supervised'</code> 路由。</p>
+
+<h2>為什麼全部塞進「一個 step」</h2>
+<p>dispatch 的做法是：計畫裡每一個 step，各自啟動一個平行的 DBOS step。但這裡有一個刻意的設計——所有子 agent 被放在<strong>同一個上層步驟的邏輯範圍</strong>內一起啟動，因為它們必須同時跑，所以當其中一次重試時，是整批一起重試。</p>
+
+<blockquote>這不是理論上最優的設計（最優會讓每個子 agent 各自擁有獨立的重試生命週期），但在這裡是刻意選擇：簡單、便宜，且對「一次有界調查」的工作負載足夠。你應該知道這個取捨，而不是誤以為它是唯一解。</blockquote>
+
+<p>另一個重點是 context：<strong>每個子 agent 有自己的 context window</strong>。它們不共用 supervisor 的對話，各自在乾淨的 context 裡讀資料，這正是我們要的隔離。</p>
+
+<h2>平行派工：plan.steps.map</h2>
+<pre><code>const settled = await Promise.allSettled(
+  plan.steps.map((s) =&gt;
+    DBOS.runStep(
+      async () =&gt; {
+        await emit({
+          type: EventType.SubagentStarted,
+          workflowId,
+          stepId: s.id,
+          agent: s.agent,
+          objective: s.objective,
+        });
+        const findings = await runInvestigator(s.agent, s.objective);
+        await emit({
+          type: EventType.SubagentCompleted,
+          workflowId,
+          stepId: s.id,
+          agent: s.agent,
+          findings,
+        });
+        return { agent: s.agent, findings };
+      },
+      { name: `subagent-${s.id}` },
+    ),
+  ),
+);</code></pre>
+
+<p>每個 callback 的節奏是：<strong>發開始事件 → 跑調查 → 發完成事件 → 回傳 findings</strong>。發事件是為了讓 GUI 逐步看到每個子 agent 的狀態；step 名稱用 <code>subagent-{id}</code> 讓每次執行在 DBOS 裡可辨識。<code>plan.steps.map</code> 一次把計畫中所有項目變成進行中的 promise。</p>
+
+<h2>fan-in：收成功的、記失敗的、繼續走</h2>
+<pre><code>const findings: { agent: string; findings: string }[] = [];
+for (let i = 0; i &lt; settled.length; i++) {
+  const result = settled[i];
+  const step = plan.steps[i];
+  if (result.status === "fulfilled") {
+    findings.push(result.value);
+  } else {
+    await DBOS.runStep(
+      () =&gt;
+        emit({
+          type: EventType.SubagentFailed,
+          workflowId,
+          stepId: step.id,
+          agent: step.agent,
+          error: String(result.reason),
+        }),
+      { name: `subagent-failed-${step.id}` },
+    );
+  }
+}</code></pre>
+
+<p><code>Promise.allSettled</code> 是關鍵：它<strong>不會因為一個 promise 失敗就整批掛掉</strong>，而是回傳每一項的狀態。於是 fan-in 可以很單純地：fulfilled 的把 findings 收進陣列；rejected 的發一個 <code>SubagentFailed</code> 事件、記下它死掉的原因，然後繼續迴圈。整條 workflow 因此能<strong>局部降級</strong>——少一個調查員，答案仍能產出，只是會承認那一塊沒查到。</p>
+
+<p>課堂上點出一個更進階的選項：把失敗餵回 supervisor，讓它決定要不要補救（例如換個 objective 重派、或直接告訴使用者）。這被明確延後——先掌握最小可行的降級模式就夠了。</p>
+
+<h2>synthesize 也要包 step、也要發事件</h2>
+<pre><code>const reply = await DBOS.runStep(() =&gt; synthesize(task, findings), { name: "synthesize" });
+await DBOS.runStep(
+  () =&gt; emit({ type: EventType.ModelCompleted, workflowId, text: reply }),
+  { name: "synth" },
+);
+await DBOS.runStep(
+  () =&gt; emit({ type: EventType.WorkflowCompleted, workflowId, output: reply }),
+  { name: "completed" },
+);
+return reply;</code></pre>
+
+<p>這再次套用同一條規則：synthesize 是非決定性又昂貴的模型呼叫，所以包進 step。跑完後發 <code>ModelCompleted</code>，最後發 <code>WorkflowCompleted</code> 並回傳答案。</p>
+
+<p>這裡藏著一個真實的教訓：原本程式<strong>忘了 <code>return reply</code></strong>，而這個 bug 之所以被發現，是因為那行 <code>ModelCompleted</code> 的 emit 期待收到一段 stream 型別的文字，型別檢查當場指出「你沒有把結果傳出來」。持久化 workflow 裡的每個 emit，同時也變成一道型別護欄。</p>
+
+<h2>註冊 workflow</h2>
+<p>最後把整條函式註冊進 DBOS，給它一個穩定的名字：</p>
+
+<pre><code>export const runSupervisorWorkflow = DBOS.registerWorkflow(supervisorWorkflow, {
+  name: "supervisorWorkflow",
+});</code></pre>
+
+<h2>路由：mode === 'supervised'</h2>
+<p>最後一塊拼圖是把 supervisor 接進 server，讓它成為使用者可以主動選的模式。server 的 index 匯入 <code>runSupervisorWorkflow</code>，提交任務的處理器檢查訊息上的 mode：</p>
+
+<pre><code>if (message.mode === "supervised") {
+  // 啟動 supervisor workflow
+  await runSupervisorWorkflow(message.input, ...);
+} else {
+  // 預設走原本的 agent workflow
+}</code></pre>
+
+<p>這就是「plan mode 由使用者明示開啟」在程式裡的落點——沒有自動推斷，只有一個明確的旗標決定走哪條 workflow。</p>
+
+<h2>端到端：一次監督模式執行長什麼樣</h2>
+<p>跑一次 supervised 模式，事件流會依序出現：</p>
+<ul>
+<li>產生的 <strong>plan 物件</strong>——一個 steps 陣列，標明哪個 agent 做哪個 objective。</li>
+<li>三個子 agent 各自的 <strong>start / complete 事件</strong>（billing 找到重複收費、technical 搜了知識庫、sales 處理 50 人座的定價需求）。</li>
+<li><strong>每個調查員的 findings</strong>。</li>
+<li>最後 <strong>synthesize 出的回覆</strong>。</li>
+</ul>
+
+<p>另外兩個值得記住的觀察：第一，<strong>handoff 只存在於 agent workflow，supervisor workflow 不知道 handoff</strong>，所以兩者不能任意合併；第二，課堂建議之後可以再補一個「investigation completed」的 step，讓 inspector 的軌跡更完整。</p>
+
+<p>至此你走完了 supervisor 的完整生命週期：計畫 → 平行派工 → 容錯收斂 → 導向使用者的路由。這也是整個 harness 系列裡，「控制權留在主管手上」這條路線的終點。</p>
+
+<div class="lesson-nav">
+  <div><a href="./durable-supervisor-workflow.html">← 上一步：持久化的 supervisor workflow 與 synthesize</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼這門課把所有子 agent 放在同一個上層步驟一起啟動？" data-correct="1" data-explain="它們必須同時跑，所以重試時整批一起重試；這被承認不是最優，但是刻意選擇的簡單取捨。">
+  <button class="opt">DBOS 不支援多個平行 step</button>
+  <button class="opt">它們必須同時跑，重試時整批一起重試</button>
+  <button class="opt">這樣可以共用同一個 context window</button>
+  <button class="opt">因為子 agent 數量永遠只有一個</button>
+</div>
+
+<div class="quiz" data-question="每個子 agent 平行執行時，context window 的關係是？" data-correct="2" data-explain="每個子 agent 擁有自己的 context window，各自在乾淨的 context 裡讀資料，達成隔離。">
+  <button class="opt">全部共用 supervisor 的 context</button>
+  <button class="opt">依執行順序輪流使用同一個 context</button>
+  <button class="opt">各自擁有獨立的 context window</button>
+  <button class="opt">子 agent 完全不需要 context</button>
+</div>
+
+<div class="quiz" data-question="為什麼用 Promise.allSettled 而不是 Promise.all 做 fan-in？" data-correct="1" data-explain="allSettled 不會因一項失敗就整批掛掉，而是回傳每項的狀態，讓 workflow 能局部降級。">
+  <button class="opt">allSettled 執行速度比較快</button>
+  <button class="opt">allSettled 不會因單一失敗而整批失敗，可局部降級</button>
+  <button class="opt">all 不支援平行執行</button>
+  <button class="opt">allSettled 會自動重試失敗的項目</button>
+</div>
+
+<div class="quiz" data-question="當某個 investigator 失敗時，fan-in 的做法是？" data-correct="2" data-explain="它只收集 fulfilled 的 findings，對失敗的發 SubagentFailed 事件記錄原因，然後繼續執行。">
+  <button class="opt">中止整條 workflow 並回滾</button>
+  <button class="opt">立刻重啟所有調查員</button>
+  <button class="opt">記錄失敗事件、略過它，繼續往下走</button>
+  <button class="opt">把主管換成失敗的調查員</button>
+</div>
+
+<div class="quiz" data-question="supervisor workflow 要怎麼被使用者觸發？" data-correct="1" data-explain="server 檢查 message.mode === 'supervised'，成立才走 supervisor workflow，否則預設走 agent workflow。">
+  <button class="opt">由模型自動判斷並切換</button>
+  <button class="opt">訊息帶 mode === 'supervised' 時</button>
+  <button class="opt">每次啟動伺服器時自動執行</button>
+  <button class="opt">只有排程器能觸發</button>
+</div>
+
+<div class="quiz" data-question="關於 handoff 與 supervisor 的關係，下列何者正確？" data-correct="2" data-explain="handoff 只存在於 agent workflow，supervisor workflow 不知道 handoff，兩者不能任意合併。">
+  <button class="opt">supervisor workflow 內建完整 handoff 支援</button>
+  <button class="opt">兩者是完全相同的 workflow</button>
+  <button class="opt">handoff 只在 agent workflow，兩者不能任意合併</button>
+  <button class="opt">supervisor 執行時會自動降級成 handoff</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 階層式監督與 Sub-agents · Step 5/5</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

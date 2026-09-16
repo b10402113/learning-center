@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>持久化的 supervisor workflow 與 synthesize</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>持久化的 supervisor workflow 與 synthesize</h1>
+<p class="meta">Step 4/5 · 第二條 DBOS workflow、plan 包進 step、fan-in 收斂</p>
+
+<h2>學習目標</h2>
+<p>能建立第二條 DBOS workflow（<code>supervisorWorkflow</code>），把 <code>makePlan</code> 包進 <code>runStep</code> 讓 plan 只計算一次並成為可持久化的一級產物，用 event 當 checkpoint，並實作 <code>synthesize</code> 把多份 findings 收斂成單一回覆。</p>
+
+<h2>第二條 workflow：為什麼不塞進原本的 agent loop</h2>
+<p>原本已經有一條 runtime 的 agent loop workflow。supervisor 是另一種執行形狀——它不跑對話式工具迴圈，而是 plan → dispatch → fan-in → synthesize——所以它被獨立成一條新的 DBOS workflow：</p>
+
+<pre><code>async function supervisorWorkflow(task: string): Promise&lt;string&gt; {
+  const workflowId = DBOS.workflowID ?? "unknown";
+  await DBOS.runStep(
+    () =&gt; emit({ type: EventType.WorkflowStarted, workflowId, input: task }),
+    { name: "started" },
+  );
+
+  // PLAN.
+  const plan = await DBOS.runStep(() =&gt; makePlan(task), { name: "plan" });
+  await DBOS.runStep(
+    () =&gt; emit({ type: EventType.PlanCreated, workflowId, steps: plan.steps }),
+    { name: "plan-emit" },
+  );
+  // ...
+}</code></pre>
+
+<p>兩個前置動作：用 <code>DBOS.workflowID</code> 取得這條 workflow 的 ID，然後發一個 <code>WorkflowStarted</code> 事件。</p>
+
+<h2>規則一：event 永遠在 step 裡發</h2>
+<p>注意每個 <code>emit</code> 都被包在 <code>DBOS.runStep</code> 裡。原因是 <code>emit</code> 會<strong>碰資料庫</strong>，而訂閱者（GUI inspector）正在監聽這條事件流。凡是會產生副作用、或結果需要被持久記錄的動作，都該是 step。</p>
+
+<h2>規則二：把非決定性、昂貴的工作包進 runStep</h2>
+<p>這是持久化執行最實用的一條規則，套用在這裡就是：<strong><code>makePlan</code> 必須包進 <code>DBOS.runStep</code></strong>。</p>
+
+<ul>
+<li>呼叫模型是非決定性的——同樣的輸入，每次可能給出不同的計畫。</li>
+<li>呼叫模型是昂貴的——要花時間與錢。</li>
+</ul>
+
+<p>DBOS 在復原或重新評估 workflow 時，會重播已完成的 step 而不是重跑它們。把 <code>makePlan</code> 包成 step，就代表這份 plan <strong>只會被建立一次，然後被永久保存（immortalized）</strong>；之後 workflow 無論被重新評估幾次，讀到的都是同一份 plan，而不是又重新生成一份。</p>
+
+<blockquote class="good-code">這正是「plan 是一級產物」的落地方式：不是靠記憶體裡的變數，而是靠 DBOS 的 step 邊界，讓它成為跨崩潰可重讀的資料。</blockquote>
+
+<h2>事件就是 checkpoint</h2>
+<p>每個 <code>emit</code> 同時扮演 <strong>checkpoint</strong> 的角色。事件（WorkflowStarted、PlanCreated、後面的 SubagentStarted / SubagentCompleted / ModelCompleted / WorkflowCompleted）依序記錄下來，就構成了「執行到哪裡了」的可重建軌跡。當 workflow 需要復原時，這些 checkpoint 讓它能確定地接回斷點，而不是從頭瞎猜。</p>
+
+<p>把這三件事連起來：非決定性工作 → 包 step → 發事件當 checkpoint。這條鏈就是 supervisor 能「崩潰後還活著」的原因。</p>
+
+<h2>synthesize：fan-in 的另一半</h2>
+<p>計畫產生、工人跑完之後，最後要把散落的發現收斂成一個連貫回覆。<code>synthesize</code> 的任務是：把各調查員的 findings 總結到一處，讓 supervisor 能據此寫出對客戶的回答。</p>
+
+<pre><code>async function synthesize(
+  task: string,
+  findings: { agent: string; findings: string }[],
+): Promise&lt;string&gt; {
+  const { text } = await generateText({
+    model,
+    system:
+      "You are a support lead. Using your investigators' findings, write ONE clear, friendly reply to the customer that addresses every point they raised. If an area's investigation is missing, acknowledge it briefly and say you'll follow up.",
+    prompt: `Customer escalation:\n${task}\n\nInvestigator findings:\n${
+      findings.map((f) =&gt; `[${f.agent}] ${f.findings}`).join("\n\n") || "(none)"
+    }`,
+  });
+  return text;
+}</code></pre>
+
+<p>幾個關鍵點：</p>
+<ul>
+<li><strong>用 <code>generateText</code>，不是 <code>generateObject</code></strong>：這裡的目標是摘要出一段自然語言，不是產出要被程式消費的結構化資料，所以不需要 schema。</li>
+<li><strong>角色是 support lead</strong>：system prompt 讓模型以「客服主管」的身分，寫<em>一則</em>清楚、友善、涵蓋所有客戶提問點的回覆。</li>
+<li><strong>承認缺口</strong>：如果有某個領域的調查缺失（例如某個 sub-agent 失敗），prompt 要求它簡短承認並承諾跟進——這就是優雅降級在使用者眼中的樣子。</li>
+<li><strong>prompt 帶入原始客訴與 findings</strong>：把 escalation task 和調查員的發現一起餵進去，收斂才有依據。</li>
+</ul>
+
+<p>至此 plan 有了持久化的家、fan-in 有了收斂函式。下一步是把 plan 裡的每個項目真的平行派出去，並且讓失敗的子 agent 不拖垮整條 workflow。</p>
+
+<div class="lesson-nav">
+  <div><a href="./structured-plan-artifact.html">← 上一步：把 plan 做成一級結構化產物</a></div>
+  <div><a href="./parallel-dispatch-and-fan-in.html">下一步：平行 dispatch、fan-in 容錯與 supervised 路由 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 makePlan 必須包在 DBOS.runStep 裡？" data-correct="1" data-explain="呼叫模型既非決定性又昂貴；包成 step 後 plan 只建立一次並被永久保存，重播時不會重新生成。">
+  <button class="opt">因為它會修改資料庫的內容</button>
+  <button class="opt">它是非決定性又昂貴的工作，包成 step 後只算一次</button>
+  <button class="opt">因為 runStep 會自動加上時間戳</button>
+  <button class="opt">因為不包就無法呼叫工具</button>
+</div>
+
+<div class="quiz" data-question="為什麼每個 emit 都放在某個 step 裡？" data-correct="2" data-explain="emit 會觸碰資料庫，且有 GUI 訂閱者在監聽，屬於需要被持久記錄的副作用。">
+  <button class="opt">emit 只能在 step 內編譯</button>
+  <button class="opt">為了減少事件的數量</button>
+  <button class="opt">emit 會碰資料庫，訂閱者正在監聽這條事件流</button>
+  <button class="opt">因為 step 會幫事件加密</button>
+</div>
+
+<div class="quiz" data-question="在這條 workflow 裡，事件（event）扮演什麼額外角色？" data-correct="1" data-explain="事件依序記錄下來就構成 checkpoint，讓復原時能確定地重建執行到哪裡。">
+  <button class="opt">拿來當使用者的通知信</button>
+  <button class="opt">當作 checkpoint，用來重建執行位置</button>
+  <button class="opt">取代 DBOS 的資料庫</button>
+  <button class="opt">加快模型生成速度</button>
+</div>
+
+<div class="quiz" data-question="synthesize 為什麼用 generateText 而不是 generateObject？" data-correct="2" data-explain="synthesize 的目標是產生一段自然語言的摘要回覆，不需要被程式消費的結構，所以不需要 schema。">
+  <button class="opt">因為 generateObject 已無法使用</button>
+  <button class="opt">因為 generateText 支援工具</button>
+  <button class="opt">目標是一段自然語言回覆，不需要 schema</button>
+  <button class="opt">因為它要平行執行多次</button>
+</div>
+
+<div class="quiz" data-question="synthesize 的 system prompt 如何處理「某個調查缺失」的情況？" data-correct="1" data-explain="prompt 要求模型簡短承認缺口並表示會跟進，這正是優雅降級對使用者的呈現。">
+  <button class="opt">假裝已經查過該領域</button>
+  <button class="opt">簡短承認並說會跟進</button>
+  <button class="opt">把整段回覆丟棄不送出</button>
+  <button class="opt">重新啟動所有調查員</button>
+</div>
+
+<div class="quiz" data-question="把 supervisor 做成第二條 DBOS workflow（而非塞進 agent loop）的主要理由是？" data-correct="2" data-explain="supervisor 是另一種執行形狀——plan→dispatch→fan-in→synthesize，沒有對話式工具迴圈，所以獨立成一條 workflow。">
+  <button class="opt">DBOS 不允許 workflow 內有迴圈</button>
+  <button class="opt">為了讓它有獨立的資料庫連線</button>
+  <button class="opt">它的執行形狀不同，不跑對話式工具迴圈</button>
+  <button class="opt">因為 agent loop 已被刪除</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 階層式監督與 Sub-agents · Step 4/5</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>接上 server：重啟續跑與 history replay</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>接上 server：重啟續跑與 history replay</h1>
+<p class="meta">Step 5/5 · 接 server、startWorkflow 啟動、連線重播 history，並看懂重啟續跑的示範</p>
+
+<h2>學習目標</h2>
+<p>用 env loader、main bootstrap、DBOS.launch 把 server 接上 durable bus，讓 submit_task 經 startWorkflow 啟動 workflow、連線時重播 history，並看懂「殺掉 server 重啟後續跑」的示範與其背後的訊息陣列機制。</p>
+
+<h2>開機順序，一步都不能亂</h2>
+
+<p>現在 workflow 已經註冊好了，剩下的就是把它接上真正會跑的 server。這裡最要緊的是<strong>初始化的先後順序</strong>——資料庫在讀環境變數當下就需要 <code>DATABASE_URL</code>，所以順序錯了，啟動當下就會炸。</p>
+
+<p>第一步，<code>env.ts</code> 用 dotenv 載入 <code>.env</code>，而且必須是 server 的第一個 import，搶在任何會讀 env 的模組（例如 <code>harness/db.ts</code>）之前執行。之前 AI SDK 會自己默默載入環境變數，現在有資料庫了，這個時機得由我們自己掌握、往前挪一步。</p>
+
+<p>第二步，把所有東西包進一個 async <code>main()</code>，依序做三件事：</p>
+
+<pre><code>async function main() {
+  await ensureSchema();                              // 1. 建立/補全 event_log 表
+  DBOS.setConfig({
+    name: "harness",
+    database: { hostname: "localhost", ... }         // 2. 指向 Postgres
+  });
+  await DBOS.launch();                               // 3. 啟動 durable 引擎
+  // 接著才啟動 Express + WebSocket server
+}
+main().catch((err) =&gt; {
+  console.error(err);
+  process.exit(1);
+});</code></pre>
+
+<p><code>ensureSchema</code> 開機時自動建表（正式系統會改成真正的 migration，但課程先求能跑）；<code>DBOS.setConfig</code> 傳入 app 名稱和資料庫連線；<code>DBOS.launch()</code> 才真正啟動 durable 引擎——它同時也負責找回上次 crash 時進行到一半的 workflow。關鍵約束：<strong>server 的 <code>listen</code> 必須發生在 <code>DBOS.launch()</code> 之後</strong>，否則 workflow 還沒準備好就接流量。</p>
+
+<h2>把 durable bus 接上 WebSocket</h2>
+
+<p>server 起來後，把上一課寫的 bus 接進 WebSocket：<code>subscribe</code> 一個回呼，等 bus 有任何事件，就 JSON.stringify 後廣播給所有還開著的 client：</p>
+
+<pre><code>subscribe((event) =&gt; {
+  const payload = JSON.stringify(event);
+  clients.forEach((client) =&gt; {
+    if (client.readyState === WebSocket.OPEN) client.send(payload);
+  });
+});</code></pre>
+
+<p>檢查 <code>readyState === OPEN</code> 是必要防護——對一個已經斷裂的連線發訊息會直接拋錯。這麼一來，之前那個「先寫後廣播」的 durable bus 就成了 durable workflow 與 live client 之間的橋樑：workflow 落盤的每一條事件，都會即時推給線上看的人。</p>
+
+<h2>一個動作 = 一次 workflow</h2>
+
+<p>使用者按下送出，對 server 來說就是一條 <code>submit_task</code> 訊息。handler 裡做的事情，是把這個使用者動作變成一次 durable、可恢復的 workflow：</p>
+
+<pre><code>if (message.type === "submit_task") {
+  await DBOS.startWorkflow(runAgentWorkflow)(message.input);
+}</code></pre>
+
+<p><code>DBOS.startWorkflow(runAgentWorkflow)</code> 回傳一個「接受 workflow 參數的函式」，於是在同一個表達式裡立刻呼叫它、把輸入餵進去。這一行取代了原本直接 in-process 呼叫 runtime 的寫法——就這麼一個整合點，使用者動作從「一次性、會蒸發」變成了「持久化、可恢復」。</p>
+
+<h2>history replay：替重連的人補回錯過的部分</h2>
+
+<p>當一個 client 重新連上（不管是它斷線，還是 server 重啟），<code>on connection</code> 會做一件重要的事——把整段歷史倒出來、一條一條送回去：</p>
+
+<pre><code>ws.on("connection", (socket) =&gt; {
+  // 逐條重播，而非一次整包送出
+  const events = await history();
+  for (const event of events) {
+    socket.send(JSON.stringify(event));
+  }
+});</code></pre>
+
+<p>注意是<strong>逐條</strong>傳、不是一次打包。這讓 client 端能像看直播回放一樣，依序重建出「過去發生過什麼」。這就是為什麼你可能隨時重整瀏覽器，畫面上已發生過的對話都還在——它們不是存在前端，而是從 event_log 倒回來的。</p>
+
+<h2>最終示範：殺掉 server，然後讓它自己接著跑</h2>
+
+<p>組裝完成後，課程用一場 live demo 驗證一切：送出一個任務，趁 agent 還在「想」的時候，把 server 做掉。重啟 server、重整瀏覽器——工作流並不會從頭再來，反而<strong>從中斷處自己接下去繼續串流</strong>。</p>
+
+<p>這不是魔法，背後有個可解釋的機制。回想 agent loop 的 messages 陣列：<strong>只要最後一則訊息的 role 是 <code>user</code> 或 <code>tool</code>，模型就知道自己必須回話</strong>；反過來，如果最後一則要是 <code>assistant</code>，模型不會回——那只會變成「自己回自己」，冒出兩條連續的 assistant。demo 裡，取消的時機恰好留下了一則還沒被回應的工具結果（role 是 <code>tool</code>），所以重啟後模型很自然地看出「還欠它一筆回應」，就自己接著產生了。</p>
+
+<p>整堂課收束成一句話：<strong>runtime 的邏輯一行都沒改，我們只是把 emit、tool call、streamText 三個副作用包成了 durable step，讓它們落盤、可救回、不重複。</strong>那些「看起來像重寫」的大段 diff，本質上只是包裝。現在這個 agent 已經可以從崩潰中活下來了。</p>
+
+<div class="lesson-nav">
+  <div><a href="./wrapping-the-loop-in-steps.html">← 上一步：把迴圈包成 DBOS workflow</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="env.ts 為什麼必須是 server 的第一個 import？" data-correct="1" data-explain="要在任何讀 env 的模組（如 db.ts）執行前，先載入 DATABASE_URL。">
+  <button class="opt">提高整體啟動速度</button>
+  <button class="opt">搶在讀 env 的模組前先載入變數</button>
+  <button class="opt">避免資料庫被重複連線</button>
+  <button class="opt">讓 WebSocket 先建立連線</button>
+</div>
+
+<div class="quiz" data-question="server.listen 與 DBOS.launch 的順序關係？" data-correct="3" data-explain="listen 必須在 launch 之後，否則 workflow 還沒就緒就接流量。">
+  <button class="opt">listen 一定要在 launch 之前</button>
+  <button class="opt">兩者順序無關</button>
+  <button class="opt">launch 一定要等到第一個 client 連線</button>
+  <button class="opt">listen 必須在 launch 之後</button>
+</div>
+
+<div class="quiz" data-question="廣播事件前為什麼要檢查 readyState === OPEN？" data-correct="0" data-explain="對斷裂連線發訊息會拋錯。">
+  <button class="opt">避免對斷裂連線發訊息拋錯</button>
+  <button class="opt">加快事件序列化速度</button>
+  <button class="opt">決定該使用哪種壓縮</button>
+  <button class="opt">過濾掉非法的 payload</button>
+</div>
+
+<div class="quiz" data-question="DBOS.startWorkflow(runAgentWorkflow) 回傳的是什麼？" data-correct="2" data-explain="回傳一個接受 workflow 參數、可立即呼叫的函式。">
+  <button class="opt">一個 Promise 結果值</button>
+  <button class="opt">一個 error handler</button>
+  <button class="opt">接受 workflow 參數、可立即呼叫的函式</button>
+  <button class="opt">一串 JSON string</button>
+</div>
+
+<div class="quiz" data-question="重連 client 收到 history 的方式是哪一種？" data-correct="1" data-explain="逐條重播，讓前端依序重建過去的事件。">
+  <button class="opt">一次打包所有事件送出</button>
+  <button class="opt">逐條依序重播每一事件</button>
+  <button class="opt">只送最後一則事件</button>
+  <button class="opt">要求 client 主動拉取</button>
+</div>
+
+<div class="quiz" data-question="重啟後模型為什麼能自己接著產生？" data-correct="2" data-explain="最後一則訊息的 role 是 user 或 tool，模型知道自己必須回話。">
+  <button class="opt">因為前端的狀態被存了下來</button>
+  <button class="opt">因為模型記住了使用者 IP</button>
+  <button class="opt">最後一則訊息 role 是 user/tool，模型知道自己該回話</button>
+  <button class="opt">因為瀏覽器重新送了同一則訊息</button>
+</div>
+
+<div class="quiz" data-question="整堂課的本質，用一句話概括是哪句？" data-correct="3" data-explain="runtime 邏輯沒改，只是把三種副作用包成 durable step。">
+  <button class="opt">把 runtime 全部重寫成資料庫操作</button>
+  <button class="opt">把模型換成不同的供應商</button>
+  <button class="opt">把 bus 全部移除，改用輪詢</button>
+  <button class="opt">邏輯不變，僅將副作用包成 durable step</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 讓迴圈持久化 · Step 5/5</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

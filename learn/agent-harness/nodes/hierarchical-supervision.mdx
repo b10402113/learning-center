@@ -4,7 +4,7 @@ title: 階層式監督與 Sub-agents
 subject: agent-harness
 tier: 6
 order: 9
-status: draft
+status: content-written
 goal: 用 supervisor 完成 plan → 平行 dispatch 唯讀 investigators → allSettled fan-in → synthesize，把 plan 當第一級持久化產物，用 generateObject 取結構化輸出並容忍子 agent 失敗。
 sources:
   - "[[sources/agent-harness/20260915/22-supervision-with-subagents.txt#plan-mode-artifact]]"
@@ -15,10 +15,31 @@ sources:
   - "[[sources/agent-harness/20260915/24-dispatching-subagents.txt#supervised-mode-routing]]"
   - "[[sources/agent-harness/20260915/harness-engineering/harness/supervisor.ts]]"
   - "[[sources/agent-harness/20260915/harness-engineering/harness/investigators.ts]]"
-steps: []
-prerequisites: []
+steps:
+  - id: when-supervision-pays
+    order: 1
+  - id: read-only-investigators
+    order: 2
+    deps:
+      - when-supervision-pays
+  - id: structured-plan-artifact
+    order: 3
+    deps:
+      - read-only-investigators
+  - id: durable-supervisor-workflow
+    order: 4
+    deps:
+      - structured-plan-artifact
+  - id: parallel-dispatch-and-fan-in
+    order: 5
+    deps:
+      - durable-supervisor-workflow
+prerequisites:
+  - learn/agent-harness/nodes/tools-and-agent-contract
+  - learn/agent-harness/nodes/making-the-loop-durable
+  - learn/agent-harness/nodes/handoffs-and-routing
 created: 2026-09-15
-updated: 2026-09-15
+updated: 2026-09-16
 ---
 
 # 階層式監督與 Sub-agents
@@ -29,11 +50,19 @@ updated: 2026-09-15
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/agent-harness/nodes/hierarchical-supervision/when-supervision-pays|階層式監督何時划算：隔離與 fan-out]] — 判斷何時值得開 sub-agents，以及 plan mode 為何由使用者明示開啟
+2. [[learn/agent-harness/nodes/hierarchical-supervision/read-only-investigators|唯讀 investigators：註冊表與最小權限]] — 用註冊表定義三個唯讀調查員，各自只拿職責內的工具（after step 1）
+3. [[learn/agent-harness/nodes/hierarchical-supervision/structured-plan-artifact|把 plan 做成一級結構化產物]] — 用 `generateObject` + zod schema 產生可驗證的 plan（after step 2）
+4. [[learn/agent-harness/nodes/hierarchical-supervision/durable-supervisor-workflow|持久化的 supervisor workflow 與 synthesize]] — 第二條 DBOS workflow、plan 包進 step、fan-in 收斂（after step 3）
+5. [[learn/agent-harness/nodes/hierarchical-supervision/parallel-dispatch-and-fan-in|平行 dispatch、fan-in 容錯與 supervised 路由]] — 平行起子 agent、`allSettled` 容錯、`mode === 'supervised'` 路由（after step 4）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+分工的下一步是階層：不再把控制權交出去（handoff），而是讓一個 supervisor 全程保有控制權，先計畫、再把子任務平行派給一群唯讀的調查員，最後把他們的發現收斂成一份回覆。
+
+這正是 supervisor 模式與 handoff 的分野：handoff 是「換聯絡人」，任務不再回來；階層式監督則是「我派工人、我整合、我還是我」。它划算的前提很具體——你有一條隔離邊界（例如每個 sub-agent 各自一個 git worktree，不會互相踩到 merge conflict），或是你要把一份單一 agent 的 context 視窗塞不下的研究題目切出去平行跑。除此之外，把一個頂級模型加上像樣 harness 就能解的問題硬拆成一堆 agent，只是燒更多錢。
+
+這節課的骨架是四個動作：**plan → dispatch → fan-in → synthesize**。plan 不是執行緒裡一閃即逝的一段文字，而是一份有 schema、能通過驗證、能持久化、崩潰後還能重讀的一級產物；dispatch 把計畫裡的每個項目平行丟給對應的唯讀調查員；fan-in 用 `Promise.allSettled` 收集成功的發現、記錄失敗的、然後繼續走；synthesize 把散落的發現收斂成一個連貫的回答。因為失敗的子 agent 會被跳過而不是拖垮整條 workflow，這條架構天生就能局部降級——少一個調查員，回覆仍能送達，只是會誠實地說某塊沒查到。
 
 ## Sources
 

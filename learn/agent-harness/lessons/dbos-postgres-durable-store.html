@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>選擇 DBOS + Postgres 與取得資料庫</title>
+<link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>選擇 DBOS + Postgres 與取得資料庫</h1>
+<p class="meta">Step 4/4 · database-backed 的 DBOS，跟 service-based 引擎比一比，再拿一個 Postgres</p>
+
+<h2>學習目標</h2>
+<p>能說出 DBOS 如何用 workflow ID 記錄/重播 step 的輸入輸出、讓失敗的工作流跳過已完成的工作、且 step 必須冪等；比較 DBOS 與 Temporal／Cloudflare／Inngest／Upstash／Vercel Workflows，並用 Neon 取得一個 Postgres 資料庫。</p>
+
+<h2>把 runtime 包成「被記錄的 step」</h2>
+
+<p>前面三步把需求講透了：執行要獨立、要能從斷點接續、不可逆動作要冪等。現在要選一個工具來落地。課程選的是 <strong>DBOS</strong>——一個用 <strong>Postgres</strong> 當骨幹、讓你能建立「持久化 workflow（工作流）」的框架。</p>
+
+<p>它的運作方式，就是本章要實現的合約：</p>
+
+<blockquote class="good-code">把 runtime 的每一步，包成 DBOS 的 step；每個 step 的輸入、輸出都被記錄進資料庫。</blockquote>
+
+<p>這樣一來，如果某個工作流跑到一半失敗了，要重跑的時候，DBOS 不需要從頭來——它會<strong>查閱每個 step 的記錄</strong>，發現「這個 workflow ID 的這一步，我已經做過了」，就<strong>直接跳過</strong>。這正是第二步 CI/CD 那套「單獨 retry 一個 stage、不重跑前面 stage」的機制，只是現在由資料庫來背書。</p>
+
+<h2>你的責任：讓 step 冪等</h2>
+
+<p>注意一句關鍵分工：</p>
+
+<blockquote class="good-code">DBOS 負責記錄與重播；你負責讓每個 step 冪等。</blockquote>
+
+<p>如果某個 step 被重跑，它必須給出一樣的結果——這是上一步講的冪等。DBOS 把「跳過已完成的 step」這件事做得很方便，但它無法替你保證你寫的 step 本身不會產生重複的副作用。讓 step 冪等，是分散式系統裡通用的功課，也是接下來實作時你每一條 step 都要過腦的檢查。</p>
+
+<p>除了記錄 step 的輸入輸出，DBOS 還會幫你記一份 <strong>event log（事件日誌）</strong>：你 fire 出去的每一個事件都留底，形成一份歷史紀錄。用 Drizzle（一個 ORM／SDK，負責跟 Postgres 對話）把這些全部寫進 Postgres。</p>
+
+<h2>為什麼選 DBOS，而不是那一票 service</h2>
+
+<p>「持久化執行」這個需求，市場上有一大堆選擇，而且它們做的事本質上都是同一件事——給你 durable execution。差別在於你用起來的成本：</p>
+
+<table>
+<thead>
+<tr><th>引擎</th><th>性質</th><th>對你的摩擦</th></tr>
+</thead>
+<tbody>
+<tr><td>Temporal</td><td>獨立服務，業界最大咖</td><td>要另起服務、概念重，沒後端經驗很吃力</td></tr>
+<tr><td>Cloudflare / Inngest / Upstash / Vercel Workflows</td><td>託管服務</td><td>要付費、要接額外一個 service</td></tr>
+<tr><td>DBOS</td><td>database-backed 框架</td><td>幾乎不用改 code，直接掛上你的 Postgres</td></tr>
+</tbody>
+</table>
+
+<p>選擇 DBOS 的兩個理由非常務實：</p>
+
+<ul>
+  <li><strong>不用改 code</strong>：你幾乎不用重構現有的 runtime，把動作標成 step 就行。</li>
+  <li><strong>backed by database</strong>：它不是另一個要你付費、要你跑 Docker 的獨立服務，就是掛在你已經有的 Postgres 上。</li>
+</ul>
+
+<p>對「大部分心思想放在 harness 本身、不想陷在後端基礎設施」的學習者來說，DBOS 用最少的摩擦，換來持久化——這正是課程挑它的原因。</p>
+
+<h2>取得一個 Postgres：Neon</h2>
+
+<p>DBOS 需要一個 Postgres 資料庫。你本機已經有 Postgres 的話，直接拿來用就好。沒有的話，最快的管道是 <strong>Neon</strong>：</p>
+
+<ul>
+  <li>到 <strong>neon.new</strong>，點「try it in the browser」。</li>
+  <li>它會給你一段連線 URL——免費、可用 72 小時、不用註冊帳號。</li>
+  <li>把這段 URL 貼進 <code>.dev.vars</code> 或 <code>.env</code>，命名為 <code>DATABASE_URL</code>。</li>
+</ul>
+
+<p>有一個小坑要特別標出來：貼之前，<strong>把 URL 裡的 <code>-pooler</code> 拿掉</strong>。</p>
+
+<blockquote class="good-code">DATABASE_URL 去掉 -pooler：那是資料庫連線池（pooling），跟 DBOS 一起用會變複雜。</blockquote>
+
+<p><code>-pooler</code> 那段代表 Neon 的 connection pooling 版本；DBOS 直接連非 pooling 的版本才簡單。去掉它，你就拿到能跟 DBOS 合作的資料庫連線了。</p>
+
+<h2>把四步收起來</h2>
+
+<p>到這裡，「為什麼需要持久化執行」這條線就打通了：執行要獨立於任何觀察者（第一步）→ 用 CI/CD 當心智模型看懂 retry/replay/斷線恢復（第二步）→ 不可逆動作逼出冪等與 exactly-once（第三步）→ 選 database-backed 的 DBOS、用 workflow ID 記錄重播、拿一個 Postgres 開工（第四步）。下一步就能真的動手，把 runtime loop 接上 event log 跟 DBOS workflow。</p>
+
+<div class="lesson-nav">
+  <div><a href="./idempotency-and-exactly-once.html">← 上一步：不可逆的動作為何不能重跑</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="DBOS 靠什麼讓失敗的工作流「跳過已完成的工作」？" data-correct="2" data-explain="查閱 step 的輸入輸出記錄，發現該 workflow ID 已做過就跳過。">
+  <button class="opt">每次從頭重跑所有 step</button>
+  <button class="opt">把失敗的 step 標記為成功</button>
+  <button class="opt">記錄每個 step 的輸入輸出，靠 workflow ID 重播並跳過已做過的</button>
+  <button class="opt">靠人力手動確認哪些已完成</button>
+</div>
+
+<div class="quiz" data-question="在使用 DBOS 時，你的責任是什麼？" data-correct="1" data-explain="DBOS 負責記錄與重播，你負責讓每個 step 冪等。">
+  <button class="opt">自己實作資料庫重播邏輯</button>
+  <button class="opt">讓每個 step 冪等</button>
+  <button class="opt">管理連線池（pooling）</button>
+  <button class="opt">替 DBOS 寫一個 docker 服務</button>
+</div>
+
+<div class="quiz" data-question="DBOS 相對 Temporal 或 Cloudflare 這些方案，最大的優點是什麼？" data-correct="3" data-explain="幾乎不用改 code，而且是 database-backed，不是另一個服務或 Docker 依賴。">
+  <button class="opt">它是最老牌的 durable execution 引擎</button>
+  <button class="opt">它完全不需要資料庫</button>
+  <button class="opt">它提供免費的獨立雲端服務</button>
+  <button class="opt">幾乎不用改 code，且是 database-backed</button>
+</div>
+
+<div class="quiz" data-question="Neon 給你的連線 URL 為什麼要拔掉 -pooler？" data-correct="0" data-explain="-pooler 是連線池版本，跟 DBOS 一起用會變複雜，非 pooling 版本才簡單。">
+  <button class="opt">那是連線池版本，跟 DBOS 一起用較複雜</button>
+  <button class="opt">因為 pooling 會讓資料庫變慢</button>
+  <button class="opt">因為 pooling 需要付費</button>
+  <button class="opt">因為 pooling 只支援本機連線</button>
+</div>
+
+<div class="quiz" data-question="除了 step 的輸入輸出，DBOS 還會幫你記什麼？" data-correct="1" data-explain="event log——所有 fire 出的事件留底，作為歷史紀錄。">
+  <button class="opt">每個 client 的 IP 位址</button>
+  <button class="opt">event log（事件日誌）</button>
+  <button class="opt">模型每次的 token 成本</button>
+  <button class="opt">所有使用者的密碼</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 為什麼需要持久化執行 · Step 4/4</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>
