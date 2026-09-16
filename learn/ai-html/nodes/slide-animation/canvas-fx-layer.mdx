@@ -1,0 +1,98 @@
+---
+id: canvas-fx-layer
+title: Canvas FX 即時效果
+subject: ai-html
+sources:
+  - "[[sources/ai-html/20260910/html-ppt-skill.md#animation-system]]"
+  - "[[sources/ai-html/20260910/Claude HTML Slides.srt.md#animation-components]]"
+created: 2026-09-11
+updated: 2026-09-11
+---
+
+# Canvas FX 即時效果
+
+## Learning goal
+
+能說出 Canvas FX 的 20 個模組如何透過 fx-runtime.js 自動管理生命週期（進入時初始化、離開時清除），以及 ResizeObserver + DPR 修正如何讓 canvas 畫面解析度無關。
+
+## Lesson
+
+### 為什麼需要 Canvas FX
+
+CSS 進入動畫解決了「元素出場」的問題，但它有兩個根本限制：一是只能播放一次，不能持續運行；二是只能操作 DOM 元素的屬性（位移、透明度、縮放），不能畫出粒子、線條、幾何圖形等自訂視覺效果。
+
+當你想在投影片背景放一片星海、在數據揭露時讓數字爆成粒子、在轉場時讓畫面像被撕裂一樣——這些都需要 Canvas。Canvas 是 HTML5 提供的像素級繪圖介面，讓你用 JavaScript 畫出任何視覺效果。
+
+在這套動畫系統裡，Canvas FX 是第二層動畫：它和 CSS 進入動畫共存，但角色不同。CSS 負責 DOM 元素的出場，Canvas 負責背景視覺和持續效果。
+
+### 20 個 FX 模組
+
+系統提供 20 個現成的 Canvas FX 模組，每一個都是一個獨立的 JavaScript 模組，可以用 `data-fx` 屬性啟用：
+
+| 分類 | 模組名稱 | 效果 |
+| --- | --- | --- |
+| 粒子爆發 | `particle-burst`, `confetti-cannon`, `firework` | 從中心爆發的粒子、紙片、煙火 |
+| 太空場景 | `starfield`, `galaxy-swirl`, `constellation`, `orbit-ring` | 星空穿越、星系旋轉、星座連線、軌道環 |
+| 數位效果 | `matrix-rain`, `data-stream`, `neural-net` | 數位雨、數據流、神經網路信號脈衝 |
+| 知識視覺化 | `knowledge-graph`, `word-cascade`, `letter-explode` | 知識圖譜力導向佈局、文字瀑布、字母爆裂 |
+| 動態效果 | `chain-react`, `magnetic-field`, `shockwave` | 連鎖反應、磁場線、衝擊波 |
+| 抽象效果 | `gradient-blob`, `kimile-trail`, `constellation` | 漸層光斑、拖尾軌跡、星座 |
+| 數字動畫 | `counter-explosion`, `typewriter-multi` | 數字爆裂、多行打字機 |
+
+每個模組都是一個獨立的 JS 檔案，放在 `assets/animations/fx/` 目錄下。使用時只需要在 HTML 裡加一個屬性：
+
+```html
+<div data-fx="particle-burst" style="width: 1920px; height: 1080px;"></div>
+```
+
+當投影片切換到這張 slide 時，fx-runtime.js 自動初始化這個 canvas，播放粒子爆發效果；離開這張 slide 時，自動清除 canvas 並釋放記憶體。
+
+### fx-runtime.js：生命週期管理
+
+20 個 FX 模組如果各自管理生命週期，會非常混亂。所以有一個中央管理者：`fx-runtime.js`。它做三件事：
+
+**第一，自動初始化。** 當投影片切換時，runtime 掃描畫面上所有 `[data-fx]` 元素，讀取 `data-fx` 的值（例如 `particle-burst`），動態載入對應的 JS 模組，建立 canvas 元素，啟動動畫。
+
+**第二，自動清除。** 當使用者切換到下一張投影片時，runtime 銷毀所有當前的 FX：停止動畫循環、移除 canvas 元素、釋放記憶體。這防止了記憶體洩漏——如果 FX 不清理，每次切換投影片都會累積新的 canvas，最終瀏覽器會當掉。
+
+**第三，DPR 修正。** 現代顯示器有高 DPI（例如 Apple Retina 的 2x 或 3x 像素密度）。如果 canvas 畫布大小是 1920×1080，但在 2x 顯示器上只渲染 1920×1080 個像素，畫面會模糊。runtime 自動讀取 `window.devicePixelRatio`（DPR），把 canvas 的內部解析度乘以 DPR，但 CSS 尺寸保持 1920×1080。例如在 2x 顯示器上，canvas 實際渲染 3840×2160 個像素，但佔據的螢幕空間還是 1920×1080。
+
+```javascript
+const dpr = window.devicePixelRatio || 1;
+canvas.width = 1920 * dpr;
+canvas.height = 1080 * dpr;
+canvas.style.width = '1920px';
+canvas.style.height = '1080px';
+ctx.scale(dpr, dpr);
+```
+
+### ResizeObserver：動態尺寸適應
+
+投影片可以在全螢幕和視窗模式之間切換，canvas 的顯示尺寸會變。fx-runtime.js 用 `ResizeObserver` 監聽 canvas 的尺寸變化，當偵測到尺寸改變時，自動重新計算 DPR 和內部解析度，重新繪製當前幀。
+
+這讓 FX 效果在任何顯示尺寸下都保持清晰，不需要作者手動處理。
+
+### data-fx 屬性與 CSS 變數整合
+
+Canvas FX 讀取主題的 CSS custom properties 來決定顏色。例如 `particle-burst` 模組會讀取 `--accent` 和 `--accent-2` 來決定粒子的顏色，讀取 `--bg` 來決定背景色。這意味著同一個 FX 模組在不同主題下會自動呈現不同配色——你不需要為每個主題重寫 FX 程式碼。
+
+```javascript
+// fx-runtime.js 讀取主題色
+const style = getComputedStyle(document.documentElement);
+const accent = style.getPropertyValue('--accent').trim();
+```
+
+這是動畫系統和主題系統（token-theming）的關鍵連接點：主題定義颜色，動畫消費颜色。換主題時，FX 效果自動跟著換。
+
+### Canvas FX 的限制
+
+Canvas FX 雖然強大，但有幾個實際限制。首先是效能：20 個模組裡有些是重運算的（例如 `knowledge-graph` 的力導向佈局），在低階機器上可能掉幀。其次是尺寸：canvas 必須有明確的寬高（`style="width: 1920px; height: 1080px"`），如果沒有設定，runtime 無法正確初始化。最後是相容性：Canvas 2D 在所有現代瀏覽器上都支援，但某些效果（例如 `neural-net` 的 WebGL 變體）可能需要額外的瀏覽器支持。
+
+## Sources
+
+- [[sources/ai-html/20260910/html-ppt-skill.md#animation-system]]
+- [[sources/ai-html/20260910/Claude HTML Slides.srt.md#animation-components]]
+
+## Course
+
+[↗ 課程頁面](../../lessons/canvas-fx-layer.html)

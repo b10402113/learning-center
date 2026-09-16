@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>從零重建集群 — Kubernetes</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>從零重建集群</h1>
+<p class="meta">Kubernetes · Tier 1 · 第一個應用部署（POC）</p>
+
+<h2>學習目標</h2>
+<p>能刪除並重建整個集群與所有部署，建立 CLI 操作的肌肉記憶，理解 Kind 集群的建立與銷毀是低成本操作。</p>
+
+<h2>為什麼要從零重建？</h2>
+
+<p>你已經學會了跑 Pod 和建立 Deployment。現在要做一件聽起來很瘋狂的事：把整個集群砍掉，從零開始重建。</p>
+
+<p>這不是在浪費時間。恰恰相反——這是建立肌肉記憶最有效的方式。Kubernetes 的 CLI 工作流有一個特點：<strong>你越是熟悉「建立→部署→刪除→重建」的循環，你在除錯時就越不容易慌</strong>。</p>
+
+<p>而且，Kind 集群就是一個 Docker 容器。建立和銷毀的成本極低——幾秒鐘的事情。你不需要害怕「搞壞集群」，因為重建它比修復它快得多。</p>
+
+<blockquote>Kind 集群是 disposable（可丟棄的）——就像一個臨時的工作區，用完就丟，重建一個新的比清理舊的更乾淨。</blockquote>
+
+<h2>第一步：刪除現有集群</h2>
+
+<p>刪除 Kind 集群只需要一行命令：</p>
+
+<pre><code>kind delete cluster</code></pre>
+
+<p>這會刪除集群中的所有資源：Pod、Deployment、Service、Namespace——一切歸零。你的本機上不會留下任何殘留。</p>
+
+<p>確認集群已經不存在：</p>
+
+<pre><code>kubectl cluster-info</code></pre>
+
+<p>如果看到錯誤訊息，表示集群已經成功刪除。</p>
+
+<h2>第二步：重新建立集群</h2>
+
+<p>如果你之前用了自定義的 config 檔案來建立多節點集群，現在可以用同樣的檔案重建：</p>
+
+<pre><code>kind create cluster --config kind-config.yaml</code></pre>
+
+<p>如果只是要快速跑起來，用預設配置就好：</p>
+
+<pre><code>kind create cluster</code></pre>
+
+<p>等幾秒鐘，確認集群已經就緒：</p>
+
+<pre><code>kubectl get nodes</code></pre>
+
+<p>你會看到你的節點（如果是預設配置就是一個 <code>control-plane</code> 節點）狀態為 <code>Ready</code>。</p>
+
+<h2>第三步：重新部署應用</h2>
+
+<p>現在集群是全新的——什麼都沒有。你需要重新建立 Deployment：</p>
+
+<pre><code>kubectl create deployment nginx --image=nginx --port=80</code></pre>
+
+<p>確認它在跑了：</p>
+
+<pre><code>kubectl get pods
+kubectl get deployments</code></pre>
+
+<p>整個過程從刪除到重建，通常不超過一分鐘。你已經擁有了一個全新的 Kubernetes 環境，裡面跑著你剛部署的應用。</p>
+
+<h2>肌肉記憶：完整的循環</h2>
+
+<p>把整個流程串起來，你剛完成了一個完整的循環：</p>
+
+<table>
+  <thead>
+    <tr><th>步驟</th><th>命令</th><th>效果</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1. 刪除集群</td><td><code>kind delete cluster</code></td><td>一切歸零</td></tr>
+    <tr><td>2. 建立集群</td><td><code>kind create cluster</code></td><td>全新環境</td></tr>
+    <tr><td>3. 部署應用</td><td><code>kubectl create deployment ...</code></td><td>Pod 在新集群裡跑起來</td></tr>
+    <tr><td>4. 確認狀態</td><td><code>kubectl get pods</code></td><td>Pod 狀態為 Running</td></tr>
+  </tbody>
+</table>
+
+<p>建議你多做幾次這個循環。每次重建，你對 CLI 的熟悉度就會增加一層。當你在後面遇到需要除錯的場景時，這種肌肉記憶會讓你更快找到問題。</p>
+
+<h2>POC 階段的反思</h2>
+
+<p>到目前為止，你已經完成了 POC（概念驗證）階段的核心操作。回顧一下你做過的事：</p>
+
+<ul>
+  <li>用 <code>kubectl run</code> 跑了一個裸 Pod</li>
+  <li>用 <code>kubectl create deployment</code> 建立了有自我修復能力的 Deployment</li>
+  <li>刪除並重建了整個集群</li>
+</ul>
+
+<p>這些都是「命令式」操作——你親手一條一條地輸入命令。這在 POC 和除錯時很方便，但不適合實際部署。實際部署需要「宣告式」操作：把所有設定寫在 YAML 檔案裡，用 <code>kubectl apply</code> 一次性套用。</p>
+
+<p>這是下一個階段的起點：從命令式過渡到宣告式。但在此之前，先確保你對 CLI 工作流有足夠的信心——多做幾次從零重建的練習。</p>
+
+<blockquote>POC 階段的目的是「讓東西跑起來」，不是「讓東西穩定運行」。你做的一切在生產環境中都是不對的——但你現在知道什麼是不對的，才能理解為什麼需要改進。</blockquote>
+
+<h2>小結</h2>
+
+<p>你現在能：</p>
+
+<ul>
+  <li>刪除 Kind 集群（<code>kind delete cluster</code>）</li>
+  <li>重建 Kind 集群（<code>kind create cluster</code>）</li>
+  <li>在新集群中重新部署應用</li>
+  <li>理解 Kind 集群的建立和銷毀是低成本操作</li>
+</ul>
+
+<p>下一步，你會進入 Tier 2——學習 Service（服務發現）和更進階的工作負載管理。你會開始理解 Kubernetes 的網路模型，以及 Pod 之間如何互相通訊。</p>
+
+<div class="lesson-nav">
+  <a href="./deployments-and-self-healing.html">← 上一步：Deployment 與自我修復</a>
+  <span></span>
+</div>
+
+<h2>複習測驗</h2>
+
+<div class="quiz" data-question="刪除 Kind 集群的命令是什麼？" data-correct="2" data-explain="kind delete cluster 會刪除集群中的所有資源，包括 Pod、Deployment、Service 等。">
+  <button class="opt">kubectl delete cluster</button>
+  <button class="opt">docker rm kind</button>
+  <button class="opt">kind delete cluster</button>
+  <button class="opt">kind destroy</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Kind 集群的建立和銷毀成本很低？" data-correct="0" data-explain="Kind 集群本質上就是一個 Docker 容器，建立和刪除只需要幾秒鐘。">
+  <button class="opt">因為它本質上是一個 Docker 容器</button>
+  <button class="opt">因為它只用了很少的 CPU</button>
+  <button class="opt">因為它不需要網路</button>
+  <button class="opt">因為它把資料存在雲端</button>
+</div>
+
+<div class="quiz" data-question="刪除集群後，用什麼命令確認集群已經不存在？" data-correct="1" data-explain="kubectl cluster-info 會返回錯誤訊息表示找不到集群，確認刪除成功。">
+  <button class="opt">kind list clusters</button>
+  <button class="opt">kubectl cluster-info</button>
+  <button class="opt">docker ps</button>
+  <button class="opt">kubectl get nodes</button>
+</div>
+
+<div class="quiz" data-question="POC 階段的操作方式有什麼特點？" data-correct="3" data-explain="POC 階段用命令式操作——親手輸入 kubectl 命令，方便快速但不適合生產部署。">
+  <button class="opt">使用 YAML manifest 宣告式部署</button>
+  <button class="opt">使用 Helm chart 管理</button>
+  <button class="opt">使用 GitOps 自動同步</button>
+  <button class="opt">使用命令式操作（kubectl 命令）</button>
+</div>
+
+<div class="quiz" data-question="重建集群後，之前部署的 Deployment 會怎樣？" data-correct="0" data-explain="刪除集群會清除所有資源，重建後是一個全新的環境，需要重新部署。">
+  <button class="opt">全部消失，需要重新部署</button>
+  <button class="opt">自動恢復</button>
+  <button class="opt">被保留但在 Error 狀態</button>
+  <button class="opt">移到另一個集群</button>
+</div>
+
+<div class="quiz" data-question="為什麼要反覆練習「建立→部署→刪除→重建」的循環？" data-correct="1" data-explain="反覆練習建立肌肉記憶，在除錯時能更快找到問題，不怕搞壞集群。">
+  <button class="opt">因為每次都需要不同的配置</button>
+  <button class="opt">建立肌肉記憶，讓除錯時更從容</button>
+  <button class="opt">因為 Kind 集群會自動過期</button>
+  <button class="opt">因為 Kubernetes 要求定期重建</button>
+</div>
+
+<div class="footer">
+  <p>Kubernetes · 第一個應用部署（POC）· 從零重建集群</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

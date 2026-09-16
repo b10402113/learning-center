@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loop vs 指令式工具 — Kubernetes 核心：Reconciliation Loop</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>Loop vs 指令式工具</h1>
+<p class="meta">Kubernetes 核心：Reconciliation Loop · Step 3/3</p>
+
+<h2>學習目標</h2>
+<p>比較 loop-based 架構與 Ansible 等指令式工具在規模化上的差異，理解 Kubernetes 為什麼更容易除錯。</p>
+
+<h2>兩種思維：「去做」vs「讓它成為」</h2>
+<p>在認識 Kubernetes 之前，你可能用過 Ansible、SSH 腳本、或其他工具來管理伺服器。這些工具有一個共同模式：</p>
+<ul>
+  <li><strong>指令式（Imperative）</strong>：你一步一步告訴系統「做 A → 做 B → 做 C」。每一步是一個命令，跑完就結束了。</li>
+</ul>
+<p>Kubernetes 走的是完全相反的路：</p>
+<ul>
+  <li><strong>宣告式（Declarative）</strong>：你聲明「我想要這個狀態」，系統自己想辦法達成，然後<em>永遠維持</em>這個狀態。</li>
+</ul>
+<p>用一個比喻：指令式像是叫外送——你打電話說「我要一份炒飯、一碗酸辣湯」，店家照做一次就結束了。宣告式像是在自動販賣機前放了一枚硬幣——你聲明「我要這個」，機器自己出貨，然後<em>持續待命</em>等下一次需求。</p>
+
+<h2>Ansible vs Kubernetes：規模化的分水嶺</h2>
+<p>假設你要管理 100 台伺服器，確保上面都裝了 nginx：</p>
+<table>
+  <tr><th></th><th>Ansible（指令式）</th><th>Kubernetes（Loop）</th></tr>
+  <tr><td><strong>做法</strong></td><td>SSH 到每台機器，逐一執行安裝命令</td><td>聲明「我想要 nginx 在跑」，每個節點自己協調</td></tr>
+  <tr><td><strong>新機器加入</strong></td><td>要手動跑一次 playbook</td><td>自動偵測、自動達成期望狀態</td></tr>
+  <tr><td><strong>機器壞掉</strong></td><td>要手動偵測、手動修復</td><td>loop 自動偵測，自動在其他地方補回來</td></tr>
+  <tr><td><strong>規模到 1000 台</strong></td><td>Ansible 要逐一連線，效能瓶頸</td><td>每個節點自我協調，無需中央逐一派送</td></tr>
+</table>
+<p>Ansible 的問題不是它不好——它在小規模、一次性任務上非常方便。但當你管理的機器數量增加，逐一 SSH 連線的模式會遇到兩大瓶頸：</p>
+<ol>
+  <li><strong>速度</strong>：Ansible 要逐一連線到每台機器執行命令，1000 台就是 1000 次 SSH</li>
+  <li><strong>自我修復</strong>：Ansible 跑完 playbook 後就結束了——如果某台機器過了十分鐘又壞了，Ansible 不會自動再跑一次</li>
+</ol>
+<p>Kubernetes 的 loop 解決了這兩個問題：每個節點自己檢查、自己調整，不需要中央逐一派送；loop 永不停止，任何偏離都會被持續偵測並修正。</p>
+
+<h2>可除錯性的來源</h2>
+<p>Kubernetes 雖然學起來很重，但學會之後非常好除錯。為什麼？因為<strong>所有的問題都可以用同一個框架拆解</strong>：</p>
+<blockquote>期望狀態是什麼？實際狀態是什麼？差距在哪？</blockquote>
+<p>舉個具體例子：你部署了一個 Deployment，聲明要 3 個 Pod，但 <code>kubectl get pods</code> 只看到 1 個。你可以立即回答：</p>
+<ul>
+  <li><strong>期望狀態</strong>：3 個 Pod（manifest 裡 <code>replicas: 3</code>）</li>
+  <li><strong>實際狀態</strong>：1 個 Pod（<code>kubectl get</code> 告訴你的）</li>
+  <li><strong>差距</strong>：少了 2 個 Pod</li>
+  <li><strong>下一步</strong>：<code>kubectl describe</code> 看看那 2 個 Pod 為什麼起不來——是映像拉不下來？端口衝突？資源不足？</li>
+</ol>
+<p>這種「聲明 → 觀察 → 差距分析」的思維，是你在 Kubernetes 裡除錯的核心武器。不管問題出在容器、網路、儲存、還是負載均衡，都可以用這個框架來拆解。</p>
+
+<h2>Loop 的代價：你必須提供信號</h2>
+<p>loop 會<em>永遠</em>重試——這既是優點也是陷阱。如果某個 Pod 一直起不來，loop 會一直重試、一直重試，但<strong>它不會主動通知你</strong>。</p>
+<p>這就像一個永遠不放棄的員工——他會一直嘗試修好問題，但如果你沒有設定告警（Slack 通知、Discord webhook、監控儀表板），你可能根本不知道他在那邊白忙。</p>
+<p>所以 Kubernetes 的最佳實踐是：<strong>loop 負責自動修復，你負責建立信號連線</strong>。把 Kubernetes 的事件和指標接上你的告警系統（例如 Prometheus + Alertmanager），這樣 loop 在白忙的時候你至少會收到通知。</p>
+
+<h2>總結：Reconciliation Loop 三步走</h2>
+<p>在這個節點裡，你學到了三件事：</p>
+<ol>
+  <li><strong>Reconciliation Loop 是什麼</strong>：「聲明期望 → 觀察實際 → 關閉差距」的永不停止的循環。定速巡航、烤箱恆溫、餐廳出餐都是它的日常原型。</li>
+  <li><strong>Kubernetes 如何套用它</strong>：每一種資源——容器、Volume、IP、Load Balancer——都有各自的 Controller 在跑同一個 loop。loop 是整個平台唯一一致的機制。</li>
+  <li><strong>Loop vs 指令式</strong>：loop 天然適合規模化（每個節點自我協調，無需中央逐一派送），也天然適合除錯（所有問題都可用「期望 vs 實際」框架拆解）。但 loop 不會主動通知你——你必須建立信號連線。</li>
+</ol>
+<p>這個心智模型會貫穿你之後學到的每一個 Kubernetes 概念。現在你知道了「為什麼」，接下來的節點會教你「怎麼做」。</p>
+
+<div class="lesson-nav">
+  <div><a href="./k8s-applies-the-loop.html">← 上一步：Kubernetes 如何套用 Reconciliation Loop</a></div>
+  <div></div>
+</div>
+
+<div class="quiz" data-question="指令式和宣告式最大的差別是什麼？" data-correct="2" data-explain="指令式是一次性命令；宣告式是聲明期望狀態，系統持續維持。">
+  <button class="opt">指令式更安全</button>
+  <button class="opt">宣告式不需要網路</button>
+  <button class="opt">指令式是一次性命令，宣告式是持續維持的期望狀態</button>
+  <button class="opt">宣告式跑得更快</button>
+</div>
+
+<div class="quiz" data-question="Ansible 在 1000 台伺服器上面臨的主要瓶頸是什麼？" data-correct="1" data-explain="Ansible 要逐一 SSH 到每台機器執行命令，規模越大連線成本越高。">
+  <button class="opt">Ansible 不支援 YAML</button>
+  <button class="opt">要逐一 SSH 連線，規模越大成本越高</button>
+  <button class="opt">Ansible 只能管理 Linux</button>
+  <button class="opt">Ansible 不支援自動化</button>
+</div>
+
+<div class="quiz" data-question="Kubernetes 的 loop 為什麼比 Ansible 更容易自我修復？" data-correct="3" data-explain="Ansible 跑完就結束了；loop 永不停止，任何偏離都會被持續偵測並修正。">
+  <button class="opt">Ansible 不支援重試</button>
+  <button class="opt">Kubernetes 有更多記憶體</button>
+  <button class="opt">Kubernetes 的 loop 有超時限制</button>
+  <button class="opt">Loop 永不停止，持續偵測偏離並修正</button>
+</div>
+
+<div class="quiz" data-question="在 Kubernetes 裡除錯時，第一步應該問什麼？" data-correct="0" data-explain="先搞清楚「期望 vs 實際」的差距，這是一切除錯的起點。">
+  <button class="opt">期望狀態是什麼？實際狀態是什麼？</button>
+  <button class="opt">Pod 的 IP 位址是什麼？</button>
+  <button class="opt">container image 版本是什麼？</button>
+  <button class="opt">CPU 使用率是多少？</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Kubernetes 需要搭配告警系統？" data-correct="2" data-explain="loop 會一直重試但不會主動通知你，你需要外部信號連線才能知道它在白忙。">
+  <button class="opt">loop 會自動關機</button>
+  <button class="opt">loop 不會自動修復</button>
+  <button class="opt">loop 永遠重試但不會主動通知你</button>
+  <button class="opt">Kubernetes 沒有內建日誌</button>
+</div>
+
+<div class="quiz" data-question="你部署了一個 Deployment 聲明要 3 個 Pod，但 kubectl 只看到 1 個。下一步應該怎麼做？" data-correct="1" data-explain="先用 describe 看 events，找出那 2 個 Pod 為什麼起不來。">
+  <button class="opt">刪除 Deployment 重新建立</button>
+  <button class="opt">kubectl describe 看 Pod 為什麼起不來</button>
+  <button class="opt">重啟整個集群</button>
+  <button class="opt">增加 CPU 限制</button>
+</div>
+
+<div class="lesson-nav">
+  <div></div>
+  <div></div>
+</div>
+
+<div class="footer">
+  Kubernetes 核心：Reconciliation Loop · Step 3/3 · Loop vs 指令式工具
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

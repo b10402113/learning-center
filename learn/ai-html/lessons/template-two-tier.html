@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>兩層文件設計 — 投影片模板</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>兩層文件設計</h1>
+<p class="meta">投影片模板 · Step 2/3</p>
+
+<h2>Learning goal</h2>
+<p>能解釋 preview.md 與 design.md 的分工，以及 selection-index.json 如何驅動候選篩選。</p>
+
+<h2>每個模板的兩層文件</h2>
+
+<p>打開 bold-template-pack 的任何一個模板目錄，你會看到兩個文件：一個叫 preview.md，一個叫 design.md。這不是偶然——它們是一個刻意的兩層設計。</p>
+
+<h3>Preview.md：輕量風格卡片</h3>
+
+<p>preview.md 是一個「風格名片」。它的目的是讓代理在幾秒鐘內判斷這個模板是否適合當前的投影片。裡面包含：</p>
+
+<ul>
+  <li><strong>色票快照</strong>：主色、輔色、背景色的直覺描述（不是完整 CSS 變數）</li>
+  <li><strong>Signature moves</strong>：這個模板最顯著的視覺特徵（如「像素霓虹」或「襯線字大標題」）</li>
+  <li><strong>Preview 規則</strong>：用這個模板生成標題頁預覽時的注意事項</li>
+</ul>
+
+<p>Preview.md 的核心原則是：<strong>夠用就好，不要多</strong>。它不是用來生成完整投影片的，只是用來做「這個模板適不適合」的快速判斷。</p>
+
+<h3>Design.md：完整設計系統 Recipe</h3>
+
+<p>design.md 是這個模板的「完整藍圖」。裡面包含：</p>
+
+<table>
+  <tr><th>區塊</th><th>內容</th></tr>
+  <tr><td>Color tokens</td><td>完整的 CSS custom properties 定義</td></tr>
+  <tr><td>Typography scale</td><td>每一級字型的字體、字重、字號、行高</td></tr>
+  <tr><td>Component grammar</td><td>標題、段落、卡片、按鈕等元件的 CSS 規格</td></tr>
+  <tr><td>Spacing rhythm</td><td>間距系統：padding、margin、gap 的倍數關係</td></tr>
+  <tr><td>Decorative vocabulary</td><td>裝飾元素：線條、形狀、紋理的使用規則</td></tr>
+  <tr><td>CJK support</td><td>中文排版的特殊處理（字號降級、行高調整）</td></tr>
+  <tr><td>Slide-type blueprints</td><td>封面、內頁、結尾頁的 HTML 骨架</td></tr>
+</table>
+
+<p>Design.md 是代理在生成完整投影片時才會讀取的文件。它足夠詳細，讓代理可以直接照著 recipe 生成 HTML——不需要再回去讀原始的 template.html。</p>
+
+<h2>selection-index.json：機器可讀的索引</h2>
+
+<p>在兩層文件之上，還有一層更輕量的索引：selection-index.json。這是一個 JSON 檔案，裡面是一個陣列，每個元素對應一個模板的元數據：</p>
+
+<pre><code>{
+  "slug": "bold-poster",
+  "name": "Bold Poster",
+  "tagline": "Editorial poster aesthetic with massive Shrikhand display...",
+  "mood": ["bold", "editorial", "loud", "confident"],
+  "tone": ["dramatic", "graphic", "sharp", "intentional"],
+  "formality": "medium",
+  "density": "low",
+  "scheme": "light",
+  "best_for": "Anything that should land like a magazine cover...",
+  "avoid_for": "Decks that need to communicate dense information...",
+  "preview_md": "bold-template-pack/templates/bold-poster/preview.md",
+  "design_md": "bold-template-pack/templates/bold-poster/design.md"
+}</code></pre>
+
+<p>這個索引的設計目的是讓代理可以<strong>不讀任何 markdown 文件</strong>就完成初步篩選。它用結構化的欄位（mood、tone、formality、density、scheme）取代自由文字描述，讓代理可以用程式化的方式匹配。</p>
+
+<h2>三步篩選流程</h2>
+
+<p>完整的模板選擇流程是這樣的：</p>
+
+<ol>
+  <li><strong>讀 index</strong>：載入 selection-index.json（~20KB），根據當前投影片的需求（formality、density、scheme）篩選出 2-3 個候選</li>
+  <li><strong>讀 preview</strong>：只讀候選模板的 preview.md，生成標題頁預覽給使用者看</li>
+  <li><strong>讀 design</strong>：使用者選定後，只讀那一個模板的 design.md，開始生成完整投影片</li>
+</ol>
+
+<p>關鍵約束：<strong>每次只讀一個 design.md</strong>。不要一次載入所有模板的完整規格。這是 progressive-disclosure 的核心——先粗筛，再精讀，最後只深入一個。</p>
+
+<h2>為什麼要分兩層？</h2>
+
+<p>如果把 preview 和 design 合成一個文件，會發生什麼？每次篩選都要讀完整的设计系統 recipe，34 個模板就是 34 次完整讀取。這對 context window 的壓力很大，而且大部分資訊在篩選階段是不需要的。</p>
+
+<p>分兩層的結果是：</p>
+
+<table>
+  <tr><th>階段</th><th>讀取量</th><th>目的</th></tr>
+  <tr><td>篩選</td><td>~20KB（index）</td><td>從 34 個中選 2-3 個候選</td></tr>
+  <tr><td>預覽</td><td>~6KB（2-3 個 preview）</td><td>生成標題頁給使用者看</td></tr>
+  <tr><td>生成</td><td>~5-10KB（1 個 design）</td><td>照 recipe 生成完整投影片</td></tr>
+</table>
+
+<p>從頭到尾，代理只需要讀取 ~30KB 的資訊。如果是一次全讀，則是 ~200KB。這就是 progressive-disclosure 的威力。</p>
+
+<h2>Quiz</h2>
+
+<div class="quiz" data-question="preview.md 的主要用途是什麼？" data-correct="1" data-explain="preview.md 是風格名片，用於快速判斷模板是否適合當前投影片，不是用來生成完整投影片的。">
+  <button class="opt">生成完整的 HTML 投影片</button>
+  <button class="opt">快速判斷模板是否適合</button>
+  <button class="opt">儲存使用者的選擇紀錄</button>
+  <button class="opt">驗證 CSS 變數是否正確</button>
+</div>
+
+<div class="quiz" data-question="selection-index.json 裡用什麼欄位來描述模板的情緒？" data-correct="0" data-explain="mood 和 tone 兩個欄位共同描述模板的情緒特徵。">
+  <button class="opt">mood 和 tone</button>
+  <button class="opt">style 和 theme</button>
+  <button class="opt">category 和 tag</button>
+  <button class="opt">feel 和 vibe</button>
+</div>
+
+<div class="quiz" data-question="在三步篩選流程中，什麼時候才會讀取 design.md？" data-correct="2" data-explain="只有在使用者從 preview 中選定一個模板後，才讀取那個模板的 design.md。">
+  <button class="opt">第一步讀取 index 時</button>
+  <button class="opt">生成 preview 預覽時</button>
+  <button class="opt">使用者選定後生成完整投影片時</button>
+  <button class="opt">第一次使用 skill 時</button>
+</div>
+
+<div class="quiz" data-question="design.md 裡包含什麼？" data-correct="3" data-explain="design.md 是完整的設計系統 recipe，包含 color tokens、typography scale、component grammar、spacing rhythm 等所有生成所需資訊。">
+  <button class="opt">只有色票和字型名稱</button>
+  <button class="opt">模板的歷史演變</button>
+  <button class="opt">使用者偏好設定</button>
+  <button class="opt">完整的 CSS 變數、字型層級、元件語法、間距系統</button>
+</div>
+
+<div class="quiz" data-question="為什麼 preview 和 design 要分成兩個文件而不是合併？" data-correct="1" data-explain="分兩層是為了 progressive-disclosure——篩選時只讀輕量 index，避免一次載入所有 design recipe 佔滿 context window。">
+  <button class="opt">因為 markdown 不能太長</button>
+  <button class="opt">為了 progressive-disclosure，避免一次載入所有 design recipe</button>
+  <button class="opt">因為 preview 是給人類看的，design 是給機器看的</button>
+  <button class="opt">因為兩種文件由不同的人維護</button>
+</div>
+
+<div class="quiz" data-question="selection-index.json 裡的 best_for 欄位有什麼作用？" data-correct="0" data-explain="best_for 描述這個模板最適合的使用情境，幫助代理根據投影片的需求快速匹配合適的模板。">
+  <button class="opt">描述模板最適合的使用情境</button>
+  <button class="opt">列出模板的技術限制</button>
+  <button class="opt">記錄模板的版本歷史</button>
+  <button class="opt">定義 CSS 的瀏覽器相容性</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./template-overview.html">← 上一步：模板架構全景</a>
+  <a href="./locked-layout-system.html">下一步：Locked Layout 系統 →</a>
+</div>
+
+<div class="footer">
+  投影片模板 · 兩層文件設計
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

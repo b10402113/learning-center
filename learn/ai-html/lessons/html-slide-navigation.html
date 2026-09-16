@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>導航與互動控制 — 投影片基礎</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>導航與互動控制</h1>
+  <div class="meta">投影片基礎 · Step 2/4</div>
+
+  <h2>學習目標</h2>
+  <p>掌握投影片的導航機制：鍵盤方向鍵、觸控滑動、滾輪切換如何驅動 slide 切換，以及 <code>&lt;deck-stage&gt;</code> Web Component 的自動縮放。</p>
+
+  <h2>導覽器的誕生</h2>
+
+  <p>上一步你學到，所有投影片堆疊在同一位置，靠 CSS class 切換可見性。但「切換」這個動作本身需要一個控制者——偵測使用者的操作、判斷方向、更新 class。這個控制者就是 <strong>SlidePresentation</strong> class，或它的現代替代品 <code>&lt;deck-stage&gt;</code> Web Component。</p>
+
+  <p>它的職責只有一件事：<strong>把使用者的輸入轉換成 slide 切換</strong>。鍵盤按了什麼、手指滑了多遠、滾輪轉了多少——全部匯聚到同一個出口：<code>showSlide(index)</code>。</p>
+
+  <h2>鍵盤導航</h2>
+
+  <p>鍵盤是最可靠的導覽方式。基本規則：</p>
+
+  <table>
+    <tr><th>按鍵</th><th>動作</th><th>備註</th></tr>
+    <tr><td><code>→</code> 或 <code>空格</code></td><td>下一張</td><td>最直覺的操作</td></tr>
+    <tr><td><code>←</code></td><td>上一張</td><td>回顧用</td></tr>
+    <tr><td><code>Home</code></td><td>跳到第一張</td><td>快速回開頭</td></tr>
+    <tr><td><code>End</code></td><td>跳到最後一張</td><td>快速到結尾</td></tr>
+  </table>
+
+  <p>實作上，SlidePresentation 在建構函式裡註冊一個全域的 <code>keydown</code> 事件監聽器。偵測到方向鍵或空格時，計算目標 index（不超過 0 和總數 -1 的邊界），然後呼叫 <code>showSlide()</code>：</p>
+
+  <pre><code>document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight' || e.key === ' ') {
+    e.preventDefault();
+    this.showSlide(this.current + 1);
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    this.showSlide(this.current - 1);
+  }
+});</code></pre>
+
+  <p>注意 <code>e.preventDefault()</code>——它阻止瀏覽器的預設行為（例如空格鍵向下捲動頁面）。這在投影片播放時至關重要，因為任何非預期的滾動都會破壞體驗。</p>
+
+  <h2>觸控導航</h2>
+
+  <p>在手機或平板上，使用者用手指滑動來切換投影片。觸控導航的核心是<strong>水平滑動偵測</strong>：</p>
+
+  <ol>
+    <li>手指觸碰時記錄起始 X 坐標（<code>touchstart</code>）</li>
+    <li>手指離開時記錄結束 X 坐標（<code>touchend</code>）</li>
+    <li>計算水平位移：結束 X − 起始 X</li>
+    <li>如果位移 > 閾值（通常是 50px），判定為有效滑動</li>
+    <li>向左滑 → 下一張；向右滑 → 上一張</li>
+  </ol>
+
+  <p>為什麼只看水平位移？因為垂直滑動可能是使用者在捲動頁面內容，不該被誤判為切換投影片。實作時會同時檢查水平和垂直位移的比例，只有水平位移明顯大於垂直位移時才觸發切換。</p>
+
+  <h3>手機的 tap zones</h3>
+
+  <p>除了滑動，手機上還有一個便捷操作：<strong>點擊螢幕左右兩側</strong>。左半邊 = 上一張，右半邊 = 下一張。這是鍵盤左右鍵的觸控版等價物，在投影片演示時特別實用——你不需要精準地滑動，只要輕觸一下就行。</p>
+
+  <h2>滾輪導航</h2>
+
+  <p>桌面瀏覽器的滾輪（mouse wheel）也能切換投影片：</p>
+
+  <pre><code>document.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (e.deltaY > 0) this.showSlide(this.current + 1);
+  else this.showSlide(this.current - 1);
+}, { passive: false });</code></pre>
+
+  <p>注意 <code>{ passive: false }</code>——這告訴瀏覽器這個事件處理器會呼叫 <code>preventDefault()</code>，所以不要最佳化它。在 Chrome 裡，如果你忘了這個選項，控制台會出現警告，而且預設行為（頁面捲動）不會被阻止。</p>
+
+  <h2>Web Component：&lt;deck-stage&gt;</h2>
+
+  <p>上面的鍵盤、觸控、滾輪三種導航方式，在傳統做法中需要你自己手動綁定事件。但在更現代的架構中，這些全部被封裝成一個 <strong>Web Component</strong>：<code>&lt;deck-stage&gt;</code>。</p>
+
+  <p>Web Component 是瀏覽器原生的元件化機制，不需要 React 或 Vue。它用 <strong>Shadow DOM</strong> 把自己的 CSS 和 JS 封裝起來，不會污染外部頁面的樣式。</p>
+
+  <p>使用方式極其簡單：</p>
+
+  <pre><code>&lt;deck-stage width="1920" height="1080"&gt;
+  &lt;section class="slide"&gt;第一張投影片&lt;/section&gt;
+  &lt;section class="slide"&gt;第二張投影片&lt;/section&gt;
+  &lt;section class="slide"&gt;第三張投影片&lt;/section&gt;
+&lt;/deck-stage&gt;</code></pre>
+
+  <p>Web Component 內部自動處理：鍵盤導航、觸控滑動、滾輪切換、視窗縮放、投影片計數器、重置按鈕。你只需要負責排版每一張 slide 的內容。</p>
+
+  <h3>公開 API</h3>
+
+  <table>
+    <tr><th>方法 / 屬性</th><th>說明</th></tr>
+    <tr><td><code>.next()</code></td><td>前進到下一張</td></tr>
+    <tr><td><code>.prev()</code></td><td>後退到上一張</td></tr>
+    <tr><td><code>.goTo(i)</code></td><td>跳到第 i 張（0-indexed）</td></tr>
+    <tr><td><code>.reset()</code></td><td>回到第一張</td></tr>
+    <tr><td><code>.index</code></td><td>當前投影片的索引（唯讀）</td></tr>
+    <tr><td><code>.length</code></td><td>總投影片數（唯讀）</td></tr>
+  </table>
+
+  <h3>事件：slidechange</h3>
+
+  <p>每次切換投影片時，<code>&lt;deck-stage&gt;</code> 會發出一個 <code>slidechange</code> 自訂事件（CustomEvent）：</p>
+
+  <pre><code>stage.addEventListener('slidechange', (e) => {
+  console.log(e.detail.index);        // 當前索引
+  console.log(e.detail.previousIndex); // 切換前的索引
+  console.log(e.detail.total);        // 總投影片數
+  console.log(e.detail.reason);       // 'keyboard' | 'touch' | 'wheel' | 'api'
+});</code></pre>
+
+  <p><code>reason</code> 欄位特別有用——它讓你知道是什麼觸發了切換，可以用來做差異化處理（例如：鍵盤切換時播放音效，API 切換時不播放）。</p>
+
+  <h3>屬性驅動的縮放</h3>
+
+  <p><code>&lt;deck-stage&gt;</code> 的 <code>width</code> 和 <code>height</code> 屬性定義了畫布尺寸，預設是 1920×1080。加上 <code>noscale</code> 屬性可以關閉自動縮放——在你需要把投影片嵌入到一個已經有自己佈局的頁面時很有用。</p>
+
+  <h2>列印模式</h2>
+
+  <p><code>&lt;deck-stage&gt;</code> 會自動注入列印樣式。當使用者按 <code>Ctrl+P</code> 時，每一張 slide 會自動成為獨立的列印頁面，導航 UI 隱藏。整個過程不需要額外的 PDF 匯出工具——瀏覽器內建的列印功能就是你的 PDF 產生器。</p>
+
+  <h2>Speaker Notes（講者備註）</h2>
+
+  <p>導航系統還支援講者備註的同步。透過 <code>postMessage</code> API，主投影片視窗可以把當前投影片的備註發送到另一個視窗（演示者視圖）。這讓你在演示時能同時看到投影片和備註，而觀眾只看到投影片。</p>
+
+  <p>投影片切換時，<code>slidechange</code> 事件的 <code>detail</code> 裡包含當前投影片的 index，演示者視窗據此從 <code>SPEAKER_NOTES</code> 陣列中取出對應的備註內容。</p>
+
+  <h2>Quiz</h2>
+
+  <div class="quiz" data-question="在 HTML 投影片中，按方向右鍵或空格鍵會發生什麼？" data-correct="0" data-explain="這兩個按鍵都觸發 showSlide(current + 1)，前進到下一張投影片。">
+    <button class="opt">前進到下一張投影片</button>
+    <button class="opt">後退到上一張投影片</button>
+    <button class="opt">跳到第一張投影片</button>
+    <button class="opt">打開選單</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼觸控導航只偵測水平滑動？" data-correct="2" data-explain="垂直滑動可能是使用者在捲動頁面內容，不該被誤判為切換投影片。">
+    <button class="opt">因為垂直滑動速度太慢</button>
+    <button class="opt">因為手指只能水平移動</button>
+    <button class="opt">因為垂直滑動可能是捲動頁面內容</button>
+    <button class="opt">因為手機不支援垂直觸控</button>
+  </div>
+
+  <div class="quiz" data-question="<deck-stage> 的 slidechange 事件中，reason 欄位有什麼用途？" data-correct="1" data-explain="reason 告訴你切換是由鍵盤、觸控、滾輪還是 API 呼叫觸發的，可以據此做差異化處理。">
+    <button class="opt">決定下一張投影片的內容</button>
+    <button class="opt">辨識觸發來源，做差異化處理</button>
+    <button class="opt">控制投影片的播放速度</button>
+    <button class="opt">記錄使用者的觀看時間</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼滾輪事件處理器需要 { passive: false }？" data-correct="3" data-explain="加上 passive: false 才能呼叫 preventDefault()，阻止瀏覽器預設的頁面捲動行為。">
+    <button class="opt">因為 Chrome 需要它才能運作</button>
+    <button class="opt">因為它能提升效能</button>
+    <button class="opt">因為它能偵測滾動方向</button>
+    <button class="opt">因為需要呼叫 preventDefault() 阻止頁面捲動</button>
+  </div>
+
+  <div class="quiz" data-question="在手機上，除了滑動切換投影片外，還可以怎麼操作？" data-correct="1" data-explain="點擊螢幕左半邊 = 上一張，右半邊 = 下一張，這是鍵盤左右鍵的觸控版等價物。">
+    <button class="opt">搖晃手機切換</button>
+    <button class="opt">點擊螢幕左右兩側</button>
+    <button class="opt">長按螢幕中央</button>
+    <button class="opt">雙指縮放切換</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼鍵盤事件處理器要呼叫 e.preventDefault()？" data-correct="0" data-explain="阻止空格鍵向下捲動頁面、方向鍵滾動等預設行為，確保投影片體驗不被打斷。">
+    <button class="opt">阻止空格鍵捲動頁面等預設行為</button>
+    <button class="opt">讓按鍵反應更快</button>
+    <button class="opt">防止鍵盤重複觸發</button>
+    <button class="opt">支援無障礙輔助技術</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./html-slide-stage.html">← 上一步：固定舞台與視窗模型</a>
+    <a href="./html-slide-templates.html">下一步：模板系統與設計選型 →</a>
+  </div>
+
+  <div class="footer">
+    <p>如有疑問，向你的 AI 教師提問。他可以協助解答任何不清楚的地方。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>完整製作流程 — 投影片基礎</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>完整製作流程</h1>
+  <div class="meta">投影片基礎 · Step 4/4</div>
+
+  <h2>學習目標</h2>
+  <p>走完從素材到可播放投影片的完整流程：6 階段 pipeline 的每一步做什麼、品質檢查要點、以及匯出與分享。</p>
+
+  <h2>從素材到投影片：6 階段 Pipeline</h2>
+
+  <p>前幾步你學了舞台模型、導航機制、模板系統。這一步把它們串成一個完整的工作流——從你手上的素材（PDF、筆記、PPT、文章）到一組可播放的 HTML 投影片。</p>
+
+  <p>frontend-slides 這個 skill 定義了 6 個階段：</p>
+
+  <table>
+    <tr><th>階段</th><th>名稱</th><th>做什麼</th></tr>
+    <tr><td>0</td><td>偵測模式（Detect Mode）</td><td>判斷使用者要做什麼類型的投影片</td></tr>
+    <tr><td>1</td><td>內容發現（Content Discovery）</td><td>從素材中提取內容</td></tr>
+    <tr><td>2</td><td>風格發現（Style Discovery）</td><td>選定設計模板和視覺風格</td></tr>
+    <tr><td>3</td><td>生成（Generate）</td><td>組裝 HTML 投影片</td></tr>
+    <tr><td>4</td><td>交付（Delivery）</td><td>品質檢查、調整、確認</td></tr>
+    <tr><td>5</td><td>分享/匯出（Share/Export）</td><td>部署、PDF 匯出、分享連結</td></tr>
+  </table>
+
+  <h2>階段 0：偵測模式</h2>
+
+  <p>第一步不是開始排版，而是搞清楚「使用者想做什麼」。常見模式：</p>
+
+  <ul>
+    <li><strong>從零開始</strong>——給我一個主題，幫我做投影片</li>
+    <li><strong>從 PPT 轉換</strong>——我有一個 .pptx 檔，幫我轉成 HTML</li>
+    <li><strong>從文章生成</strong>——我有一篇文章，幫我做成投影片</li>
+    <li><strong>從筆記生成</strong>——我有一些零散筆記，幫我整理成投影片</li>
+  </ul>
+
+  <p>不同的模式決定後續的 pipeline 走法。例如 PPT 轉換會先用 <code>extract-pptx.py</code> 抓出文字和圖片，然後用提取的內容填充模板。</p>
+
+  <h2>階段 1：內容發現</h2>
+
+  <p>內容發現的任務是把素材轉換成結構化的內容。如果是從零開始，agent 會用 LLM 根據主題生成大綱和內容。如果是從現有素材來，就需要提取和重組。</p>
+
+  <p>關鍵原則：<strong>投影片的內容密度遠低於文章</strong>。一張投影片不該塞進一段完整的段落。好的投影片內容是：一個標題、2-3 個要點、一個視覺元素。如果發現內容太密，就拆成更多張。</p>
+
+  <h2>階段 2：風格發現</h2>
+
+  <p>這一步對應上一步學到的模板系統。流程是：</p>
+
+  <ol>
+    <li>讀取 <code>selection-index.json</code>，根據主題和受眾篩選候選</li>
+    <li>讀取候選模板的 <code>preview.md</code>，做三選一（Safe/Bold/Wildcard）</li>
+    <li>確認後讀取 <code>design.md</code>，獲得完整的設計規範</li>
+  </ol>
+
+  <p>如果你用的是 guizang 的雙系統，這一步就是選 Style A 還是 Style B，然後選主題色。選定後，所有後續生成的投影片都會嚴格遵循這套設計語言。</p>
+
+  <h2>階段 3：生成</h2>
+
+  <p>這是 pipeline 的核心——把結構化內容和設計規範組合成一個完整的 HTML 檔案。</p>
+
+  <p>生成過程：</p>
+  <ol>
+    <li>載入 viewport-base.css（固定舞台 + slide 堆疊）</li>
+    <li>載入選定模板的 CSS（顏色 token + 字型 + 元件樣式）</li>
+    <li>為每一張 slide 生成 HTML 結構（使用模板定義的佈局 class）</li>
+    <li>加入動畫效果（CSS 進入動畫或 canvas FX）</li>
+    <li>加入導航 JS（SlidePresentation 或 &lt;deck-stage&gt;）</li>
+    <li>如果有講者備註，加入 SPEAKER_NOTES 陣列和簡報模式</li>
+  </ol>
+
+  <p>最終產出是一個<strong>單一 HTML 檔案</strong>——所有 CSS、JS、字型設定都內聯。這是「零依賴單檔輸出」的實現。</p>
+
+  <h2>階段 4：交付（品質檢查）</h2>
+
+  <p>生成後不能直接交付，需要過品質關。guizang 的品質清單分 P0-P3 四級：</p>
+
+  <table>
+    <tr><th>等級</th><th>檢查項目</th><th>嚴重程度</th></tr>
+    <tr><td>P0</td><td>簡報模式可控制、Swiss locked mode 合規</td><td>阻斷性</td></tr>
+    <tr><td>P1</td><td>視覺節奏、圖片對齊、標題尺寸</td><td>高</td></tr>
+    <tr><td>P2</td><td>動畫克制、手機預覽</td><td>中</td></tr>
+    <tr><td>P3</td><td>邊界情況處理</td><td>低</td></tr>
+  </table>
+
+  <p>frontend-slides 也有自己的自我檢查機制——agent 生成後會自動驗證 class 名稱是否存在於模板中、圖片比例是否正確、佈局是否溢位。</p>
+
+  <p>自動化驗證腳本：</p>
+  <ul>
+    <li><code>validate-swiss-deck.mjs</code>——靜態檢查 + 可選的 Playwright 視覺測量</li>
+    <li><code>validate-presenter-mode.mjs</code>——頁面 ID 唯一性、備註對齊、時間估算</li>
+  </ul>
+
+  <h2>階段 5：分享/匯出</h2>
+
+  <p>品質通過後，有幾種分享方式：</p>
+
+  <table>
+    <tr><th>方式</th><th>工具</th><th>適合場景</th></tr>
+    <tr><td>直接分享 HTML</td><td>傳檔案</td><td>離線演示、最簡單</td></tr>
+    <tr><td>部署到網路</td><td><code>deploy.sh</code>（Vercel）</td><td>需要連結分享</td></tr>
+    <tr><td>匯出 PDF</td><td><code>export-pdf.sh</code>（Playwright）</td><td>需要印刷或離線閱讀</td></tr>
+    <tr><td>匯出 PPT</td><td>保持 HTML（PPT 轉入，HTML 轉出）</td><td>與 PowerPoint 生態整合</td></tr>
+  </table>
+
+  <p>HTML 投影片的匯出特別有趣：用 Playwright（無頭瀏覽器）逐一截圖每一張 slide，然後組合成 PDF。這比 PowerPoint 的 PDF 匯出更精確，因為你控制了渲染環境。</p>
+
+  <h2>Guizang 的 10 步工作流</h2>
+
+  <p>guizang-ppt-skill 把 pipeline 規劃得更細，分 10 步：</p>
+
+  <ol>
+    <li>更新檢查——確認 skill 版本最新</li>
+    <li>需求釐清——7 問 intake（風格 A/B、受眾、時長、素材、圖片、主題、限制）</li>
+    <li>複製模板——從 template.html 或 template-swiss.html 出發</li>
+    <li>填充內容——套用佈局、填入文字、計算主題節奏</li>
+    <li>（可選）Codex 圖片生成——用 AI 生成插圖</li>
+    <li>講者備註——生成 SPEAKER_NOTES 和 data-slide-id</li>
+    <li>自我檢查——用品質清單和驗證腳本</li>
+    <li>預覽——在瀏覽器中播放確認</li>
+    <li>排練——開啟簡報模式測試</li>
+    <li>迭代——根據反饋修改</li>
+  </ol>
+
+  <p>注意第 2 步的 7 問 intake——這是在開始任何排版之前必須回答的問題。這確保你不會做出來之後才發現「風格不對」或「受眾不合」。</p>
+
+  <h2>三層方法論</h2>
+
+  <p>RoboNuggets 的教程提出了 HTML 投影片的三層進階路徑：</p>
+
+  <table>
+    <tr><th>層級</th><th>做什麼</th><th>能力要求</th></tr>
+    <tr><td>Level 1</td><td>安裝 HTML slides skill，直接使用</td><td>零——開箱即用</td></tr>
+    <tr><td>Level 2</td><td>用品牌設計系統定制</td><td>理解 CSS custom properties</td></tr>
+    <tr><td>Level 3</td><td>構建自己的動畫組件庫</td><td>HTML/CSS/JS 開發能力</td></tr>
+  </table>
+
+  <p>你的學習路徑大致對應 Level 1 → Level 2 的過渡。目前你已經理解了固定舞台、導航、模板的原理，正在走向能夠修改和客製設計系統的階段。</p>
+
+  <h2>Quiz</h2>
+
+  <div class="quiz" data-question="frontend-slides 的 6 階段 pipeline 中，第一步（階段 0）是什麼？" data-correct="1" data-explain="階段 0 是偵測模式——判斷使用者要做什麼類型的投影片，這決定後續的 pipeline 走法。">
+    <button class="opt">載入模板</button>
+    <button class="opt">偵測模式</button>
+    <button class="opt">品質檢查</button>
+    <button class="opt">匯出 PDF</button>
+  </div>
+
+  <div class="quiz" data-question="為什麼投影片的內容密度要遠低於文章？" data-correct="2" data-explain="投影片是視覺媒介，觀眾同時在看畫面和聽演講，過多文字會分散注意力。">
+    <button class="opt">因為 HTML 不支援長文字</button>
+    <button class="opt">因為投影片空間太小</button>
+    <button class="opt">因為觀眾同時在看畫面和聽演講，過多文字會分散注意力</button>
+    <button class="opt">因為瀏覽器有文字長度限制</button>
+  </div>
+
+  <div class="quiz" data-question="guizang 的品質清單中，P0 級別的檢查項目是什麼？" data-correct="0" data-explain="P0 是阻斷性問題——簡報模式可控制和 Swiss locked mode 合規。">
+    <button class="opt">簡報模式可控制、Swiss locked mode 合規</button>
+    <button class="opt">視覺節奏和圖片對齊</button>
+    <button class="opt">動畫克制和手機預覽</button>
+    <button class="opt">邊界情況處理</button>
+  </div>
+
+  <div class="quiz" data-question="HTML 投影片匯出 PDF 的方式是？" data-correct="3" data-explain="用 Playwright（無頭瀏覽器）逐一截圖每一張 slide，然後組合成 PDF。">
+    <button class="opt">用 CSS print 樣式直接列印</button>
+    <button class="opt">用 Puppeteer 擷取 DOM</button>
+    <button class="opt">用 Canvas API 繪製</button>
+    <button class="opt">用 Playwright 逐一截圖每一張 slide，然後組合成 PDF</button>
+  </div>
+
+  <div class="quiz" data-question="guizang 的 7 問 intake 中，哪個問題在開始排版前必須回答？" data-correct="1" data-explain="風格 A/B 是第一個決定，因為兩者的 CSS class 完全不能混用。">
+    <button class="opt">投影片要多少張</button>
+    <button class="opt">用 Style A 還是 Style B</button>
+    <button class="opt">要用什麼字型</button>
+    <button class="opt">要部署到哪裡</button>
+  </div>
+
+  <div class="quiz" data-question="「零依賴單檔輸出」意味著什麼？" data-correct="0" data-explain="所有 CSS、JS、字型設定都內聯在一個 HTML 檔裡，不需要外部檔案或套件管理器。">
+    <button class="opt">所有程式碼都內聯在一個 HTML 檔，不需外部檔案</button>
+    <button class="opt">不需要瀏覽器就能播放</button>
+    <button class="opt">不需要網路連線</button>
+    <button class="opt">不使用任何 CSS 和 JavaScript</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./html-slide-templates.html">← 上一步：模板系統與設計選型</a>
+    <span></span>
+  </div>
+
+  <div class="footer">
+    <p>如有疑問，向你的 AI 教師提問。他可以協助解答任何不清楚的地方。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>

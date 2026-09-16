@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用 kubectl run 部署第一個 Pod — Kubernetes</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+
+<h1>用 kubectl run 部署第一個 Pod</h1>
+<p class="meta">Kubernetes · Tier 1 · 第一個應用部署（POC）</p>
+
+<h2>學習目標</h2>
+<p>能用 <code>kubectl run</code> 部署一個 Pod，理解 Pod 是 Kubernetes 最小的部署單位，以及裸 Pod 與受控 Pod 的差異。</p>
+
+<h2>Pod 是什麼？</h2>
+
+<p>在 Kubernetes 的世界裡，<strong>Pod</strong> 是你能部署的最小單位。一個 Pod 代表集群中一個正在運行的進程——它是一個或多個容器的包裝。大多數時候，一個 Pod 裡面只有一個容器。</p>
+
+<p>你可以把 Pod 想像成一個「膠囊」：裡面裝著你的應用容器、網路位址、儲存資源的設定。Kubernetes 不會直接管理容器，它管理的是 Pod。你跟 Kubernetes 說「我要跑一個 Nginx」，Kubernetes 創建的不是一個容器，而是一個包裝了 Nginx 容器的 Pod。</p>
+
+<blockquote>Pod 是 Kubernetes 調度的原子單位。Kubernetes 的调度器（scheduler）決定的不是「哪個容器跑在哪個節點」，而是「哪個 Pod 跑在哪個節點」。</blockquote>
+
+<h2>用 kubectl run 跑第一個 Pod</h2>
+
+<p>最命令式（imperative）的方式是用 <code>kubectl run</code>。打開你的終端，確認你已經有一個運行中的 Kind 集群，然後輸入：</p>
+
+<pre><code>kubectl run nginx --image=nginx --port=80</code></pre>
+
+<p>這條命令做了什麼？</p>
+
+<table>
+  <thead>
+    <tr><th>部分</th><th>意義</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>kubectl run</code></td><td>告訴 Kubernetes 創建一個 Pod</td></tr>
+    <tr><td><code>nginx</code></td><td>Pod 的名稱</td></tr>
+    <tr><td><code>--image=nginx</code></td><td>使用官方 Nginx Docker 映像</td></tr>
+    <tr><td><code>--port=80</code></td><td>聲明這個 Pod 監聽 80 端口</td></tr>
+  </tbody>
+</table>
+
+<p>執行後，Kubernetes 會在集群裡創建一個 Pod。用以下命令確認：</p>
+
+<pre><code>kubectl get pods</code></pre>
+
+<p>你會看到類似這樣的輸出：</p>
+
+<pre><code>NAME    READY   STATUS    RESTARTS   AGE
+nginx   1/1     Running   0          10s</code></pre>
+
+<p><code>READY 1/1</code> 表示 Pod 裡的一個容器已經準備好。如果看到 <code>0/1</code>，表示容器還在啟動中。</p>
+
+<h2>Pod 背後的 Secret：kubectl 幫你寫了 YAML</h2>
+
+<p>雖然你只輸入了一行命令，但 Kubernetes 其實在背後生成了一個 YAML manifest（宣告式配置檔）。你可以用這個命令看到它：</p>
+
+<pre><code>kubectl get pod nginx -o yaml</code></pre>
+
+<p>你會看到一大段 YAML，描述了 Pod 的所有設定：使用什麼映像、端口、環境變數、節點選擇器等等。這很重要——<strong>命令式操作背後永遠是宣告式狀態</strong>。每一條 <code>kubectl</code> 命令都在生成一個 manifest，只是你選擇了不親手寫它。</p>
+
+<p>這個認知會在後面的章節反覆出現：當你開始用 YAML 寫 manifest 時，你只是把背後發生的事情直接寫出來。</p>
+
+<h2>裸 Pod 的致命缺陷</h2>
+
+<p>你剛才跑的 <code>kubectl run nginx</code> 創建的是一個<strong>裸 Pod（bare pod）</strong>——沒有任何控制器（controller）管理它。這是 POC 階段的典型做法，但有嚴重的問題：</p>
+
+<pre><code>kubectl delete pod nginx</code></pre>
+
+<p>執行這條命令後，Pod 就消失了。不會有任何東西把它帶回來。因為沒有控制器在監督這個 Pod，Kubernetes 不知道「我應該保持有一個 Nginx 在跑」。它只知道你要求刪除，於是就刪了。</p>
+
+<p>對比一下：</p>
+
+<table>
+  <thead>
+    <tr><th>特性</th><th>裸 Pod</th><th>受控制器管理的 Pod</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>生命週期管理</td><td>手動</td><td>自動（控制器負責）</td></tr>
+    <tr><td>刪除後會重建？</td><td>不會</td><td>會（幾毫秒內）</td></tr>
+    <tr><td>適合生產環境？</td><td>不適合</td><td>適合</td></tr>
+    <tr><td>用途</td><td>除錯、快速測試</td><td>實際部署</td></tr>
+  </tbody>
+</table>
+
+<blockquote>裸 Pod 是你 Kubernetes 旅程的第一步，但請記住它只適合除錯。真正的應用永遠需要一個控制器來管理。</blockquote>
+
+<h2>Namespace：組織單位，不是安全邊界</h2>
+
+<p>你可能注意到 <code>kubectl run</code> 預設會把 Pod 放在 <code>default</code> namespace（命名空間）裡。Namespace 是 Kubernetes 的組織單位，讓你可以把不同的資源分組管理：</p>
+
+<pre><code>kubectl get pods --all-namespaces</code></pre>
+
+<p>你會看到除了你的 <code>default</code> namespace，還有 <code>kube-system</code> 等系統 namespace——裡面跑著 CoreDNS、etcd、API server 等核心組件。</p>
+
+<p>但要小心一個常見誤解：<strong>Namespace 預設不提供安全或網路隔離</strong>。不同 namespace 裡的 Pod 理論上可以互相通訊。真正的隔離需要 NetworkPolicy 和 RBAC（角色權限控制），這些是後面才會接觸到的主題。</p>
+
+<h2>小結</h2>
+
+<p>你已經完成了一件重要的事：在 Kubernetes 集群裡跑起了第一個 Pod。你現在知道：</p>
+
+<ul>
+  <li>Pod 是 Kubernetes 最小的部署單位</li>
+  <li><code>kubectl run</code> 創建的是裸 Pod——適合除錯，不適合生產</li>
+  <li>命令式操作背後永遠是宣告式 manifest</li>
+  <li>裸 Pod 被刪除後不會自動重建</li>
+  <li>Namespace 是組織單位，不是安全邊界</li>
+</ul>
+
+<p>下一步，你會看到 Deployment 如何解決裸 Pod 的問題——讓 Pod 擁有自我修復的能力。</p>
+
+<div class="lesson-nav">
+  <span></span>
+  <a href="./deployments-and-self-healing.html">下一步：Deployment 與自我修復 →</a>
+</div>
+
+<h2>複習測驗</h2>
+
+<div class="quiz" data-question="Kubernetes 中最小的部署單位是什麼？" data-correct="1" data-explain="Pod 是 Kubernetes 調度和管理的原子單位，容器只是 Pod 裡面的進程。">
+  <button class="opt">容器（Container）</button>
+  <button class="opt">Pod</button>
+  <button class="opt">Deployment</button>
+  <button class="opt">Node</button>
+</div>
+
+<div class="quiz" data-question="用 kubectl run 創建的裸 Pod 被刪除後會怎樣？" data-correct="2" data-explain="裸 Pod 沒有控制器管理，刪除就是刪除，不會自動重建。">
+  <button class="opt">自動重建</button>
+  <button class="opt">進入 Terminating 狀態後重新啟動</button>
+  <button class="opt">直接消失，不會重建</button>
+  <button class="opt">被移到另一個 Node 上</button>
+</div>
+
+<div class="quiz" data-question="kubectl run nginx --image=nginx 背後實際生成了什麼？" data-correct="0" data-explain="每一條 kubectl 命令都在背後生成一個 YAML manifest，只是你選擇了不親手寫它。">
+  <button class="opt">一個 YAML manifest（宣告式配置檔）</button>
+  <button class="opt">一個 Docker Compose 檔案</button>
+  <button class="opt">一個 Shell 腳本</button>
+  <button class="opt">一個 Dockerfile</button>
+</div>
+
+<div class="quiz" data-question="Namespace 在 Kubernetes 中預設提供什麼？" data-correct="2" data-explain="Namespace 只是邏輯分組，預設不提供網路或安全隔離。隔離需要額外配置 NetworkPolicy 和 RBAC。">
+  <button class="opt">網路隔離</button>
+  <button class="opt">安全權限控制</button>
+  <button class="opt">邏輯分組（組織單位）</button>
+  <button class="opt">自動備份</button>
+</div>
+
+<div class="quiz" data-question="kube-system namespace 裡跑的是什麼？" data-correct="3" data-explain="kube-system 放的是 Kubernetes 核心組件：CoreDNS、etcd、API server、controller manager、scheduler 等。">
+  <button class="opt">用戶部署的應用</button>
+  <button class="opt">監控工具</button>
+  <button class="opt">日誌收集器</button>
+  <button class="opt">Kubernetes 核心組件（CoreDNS、etcd 等）</button>
+</div>
+
+<div class="quiz" data-question="裸 Pod 適合用在什麼場景？" data-correct="1" data-explain="裸 Pod 沒有自我修復能力，只適合除錯和快速測試，不適合實際部署。">
+  <button class="opt">生產環境部署</button>
+  <button class="opt">除錯和快速測試</button>
+  <button class="opt">長期運行的服務</button>
+  <button class="opt">資料庫部署</button>
+</div>
+
+<div class="footer">
+  <p>Kubernetes · 第一個應用部署（POC）· 用 kubectl run 部署第一個 Pod</p>
+</div>
+
+<script src="./assets/quiz.js"></script>
+</body>
+</html>

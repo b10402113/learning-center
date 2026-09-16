@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canvas FX 即時效果 — 投影片動畫</title>
+  <link rel="stylesheet" href="./assets/shared.css">
+</head>
+<body>
+  <h1>Canvas FX 即時效果</h1>
+  <div class="meta">投影片動畫 · Step 3/4</div>
+
+  <h2>學習目標</h2>
+  <p>能說出 Canvas FX 的 20 個模組如何透過 fx-runtime.js 自動管理生命週期（進入時初始化、離開時清除），以及 ResizeObserver + DPR 修正如何讓 canvas 畫面解析度無關。</p>
+
+  <h2>為什麼需要 Canvas FX</h2>
+
+  <p>CSS 進入動畫解決了「元素出場」的問題，但它有兩個根本限制：一是只能播放一次，不能持續運行；二是只能操作 DOM 元素的屬性（位移、透明度、縮放），不能畫出粒子、線條、幾何圖形等自訂視覺效果。</p>
+
+  <p>當你想在投影片背景放一片星海、在數據揭露時讓數字爆成粒子、在轉場時讓畫面像被撕裂一樣——這些都需要 Canvas。Canvas 是 HTML5 提供的像素級繪圖介面，讓你用 JavaScript 畫出任何視覺效果。</p>
+
+  <p>在這套動畫系統裡，Canvas FX 是第二層動畫：它和 CSS 進入動畫共存，但角色不同。CSS 負責 DOM 元素的出場，Canvas 負責背景視覺和持續效果。</p>
+
+  <h2>20 個 FX 模組</h2>
+
+  <p>系統提供 20 個現成的 Canvas FX 模組，每一個都是一個獨立的 JavaScript 模組，可以用 <code>data-fx</code> 屬性啟用：</p>
+
+  <table>
+    <tr><th>分類</th><th>模組名稱</th><th>效果</th></tr>
+    <tr><td>粒子爆發</td><td><code>particle-burst</code>, <code>confetti-cannon</code>, <code>firework</code></td><td>從中心爆發的粒子、紙片、煙火</td></tr>
+    <tr><td>太空場景</td><td><code>starfield</code>, <code>galaxy-swirl</code>, <code>constellation</code>, <code>orbit-ring</code></td><td>星空穿越、星系旋轉、星座連線、軌道環</td></tr>
+    <tr><td>數位效果</td><td><code>matrix-rain</code>, <code>data-stream</code>, <code>neural-net</code></td><td>數位雨、數據流、神經網路信號脈衝</td></tr>
+    <tr><td>知識視覺化</td><td><code>knowledge-graph</code>, <code>word-cascade</code>, <code>letter-explode</code></td><td>知識圖譜力導向佈局、文字瀑布、字母爆裂</td></tr>
+    <tr><td>動態效果</td><td><code>chain-react</code>, <code>magnetic-field</code>, <code>shockwave</code></td><td>連鎖反應、磁場線、衝擊波</td></tr>
+    <tr><td>抽象效果</td><td><code>gradient-blob</code>, <code>kimile-trail</code>, <code>constellation</code></td><td>漸層光斑、拖尾軌跡、星座</td></tr>
+    <tr><td>數字動畫</td><td><code>counter-explosion</code>, <code>typewriter-multi</code></td><td>數字爆裂、多行打字機</td></tr>
+  </table>
+
+  <p>每個模組都是一個獨立的 JS 檔案，放在 <code>assets/animations/fx/</code> 目錄下。使用時只需要在 HTML 裡加一個屬性：</p>
+
+  <pre><code>&lt;div data-fx="particle-burst" style="width: 1920px; height: 1080px;"&gt;&lt;/div&gt;</code></pre>
+
+  <p>當投影片切換到這張 slide 時，fx-runtime.js 自動初始化這個 canvas，播放粒子爆發效果；離開這張 slide 時，自動清除 canvas 並釋放記憶體。</p>
+
+  <h2>fx-runtime.js：生命週期管理</h2>
+
+  <p>20 個 FX 模組如果各自管理生命週期，會非常混亂。所以有一個中央管理者：<code>fx-runtime.js</code>。它做三件事：</p>
+
+  <p><strong>第一，自動初始化。</strong> 當投影片切換時，runtime 掃描畫面上所有 <code>[data-fx]</code> 元素，讀取 <code>data-fx</code> 的值（例如 <code>particle-burst</code>），動態載入對應的 JS 模組，建立 canvas 元素，啟動動畫。</p>
+
+  <p><strong>第二，自動清除。</strong> 當使用者切換到下一張投影片時，runtime 銷毀所有當前的 FX：停止動畫循環、移除 canvas 元素、釋放記憶體。這防止了記憶體洩漏——如果 FX 不清理，每次切換投影片都會累積新的 canvas，最終瀏覽器會當掉。</p>
+
+  <p><strong>第三，DPR 修正。</strong> 現代顯示器有高 DPI（例如 Apple Retina 的 2x 或 3x 像素密度）。如果 canvas 畫布大小是 1920×1080，但在 2x 顯示器上只渲染 1920×1080 個像素，畫面會模糊。runtime 自動讀取 <code>window.devicePixelRatio</code>（DPR），把 canvas 的內部解析度乘以 DPR，但 CSS 尺寸保持 1920×1080。</p>
+
+  <pre><code>const dpr = window.devicePixelRatio || 1;
+canvas.width = 1920 * dpr;
+canvas.height = 1080 * dpr;
+canvas.style.width = '1920px';
+canvas.style.height = '1080px';
+ctx.scale(dpr, dpr);</code></pre>
+
+  <p>例如在 2x 顯示器上，canvas 實際渲染 3840×2160 個像素，但佔據的螢幕空間還是 1920×1080。</p>
+
+  <h2>ResizeObserver：動態尺寸適應</h2>
+
+  <p>投影片可以在全螢幕和視窗模式之間切換，canvas 的顯示尺寸會變。fx-runtime.js 用 <code>ResizeObserver</code> 監聽 canvas 的尺寸變化，當偵測到尺寸改變時，自動重新計算 DPR 和內部解析度，重新繪製當前幀。</p>
+
+  <p>這讓 FX 效果在任何顯示尺寸下都保持清晰，不需要作者手動處理。</p>
+
+  <h2>data-fx 屬性與 CSS 變數整合</h2>
+
+  <p>Canvas FX 讀取主題的 CSS custom properties 來決定顏色。例如 <code>particle-burst</code> 模組會讀取 <code>--accent</code> 和 <code>--accent-2</code> 來決定粒子的顏色，讀取 <code>--bg</code> 來決定背景色。這意味著同一個 FX 模組在不同主題下會自動呈現不同配色——你不需要為每個主題重寫 FX 程式碼。</p>
+
+  <pre><code>// fx-runtime.js 讀取主題色
+const style = getComputedStyle(document.documentElement);
+const accent = style.getPropertyValue('--accent').trim();</code></pre>
+
+  <p>這是動畫系統和主題系統（token-theming）的關鍵連接點：主題定義顏色，動畫消費顏色。換主題時，FX 效果自動跟著換。</p>
+
+  <h2>Canvas FX 的限制</h2>
+
+  <p>Canvas FX 雖然強大，但有幾個實際限制。首先是效能：20 個模組裡有些是重運算的（例如 <code>knowledge-graph</code> 的力導向佈局），在低階機器上可能掉幀。其次是尺寸：canvas 必須有明確的寬高（<code>style="width: 1920px; height: 1080px"</code>），如果沒有設定，runtime 無法正確初始化。最後是相容性：Canvas 2D 在所有現代瀏覽器上都支援，但某些效果可能需要額外的瀏覽器支持。</p>
+
+  <h2>Quiz</h2>
+
+  <div class="quiz" data-question="Canvas FX 和 CSS 進入動畫的角色分工是什麼？" data-correct="2" data-explain="CSS 負責 DOM 元素的出場動畫（播放一次），Canvas 負責背景視覺和持續運行的效果。">
+    <button class="opt">兩者完全相同，可以互換</button>
+    <button class="opt">Canvas 只用於列印，CSS 只用於螢幕</button>
+    <button class="opt">CSS 負責元素出場，Canvas 負責持續背景效果</button>
+    <button class="opt">Canvas 只能畫靜態圖片</button>
+  </div>
+
+  <div class="quiz" data-question="fx-runtime.js 為什麼要在投影片離開時清除 canvas？" data-correct="1" data-explain="不清除會導致記憶體洩漏——每次切換都累積新的 canvas，最終瀏覽器當掉。">
+    <button class="opt">為了節省電池</button>
+    <button class="opt">防止記憶體洩漏</button>
+    <button class="opt">為了讓下一張投影片的動畫更快</button>
+    <button class="opt">瀏覽器不允許同時存在多個 canvas</button>
+  </div>
+
+  <div class="quiz" data-question="DPR 修正是什麼？為什麼 canvas 需要它？" data-correct="0" data-explain="DPR（devicePixelRatio）是螢幕的像素密度倍數。不乘以 DPR，canvas 在高 DPI 螢幕上會模糊。">
+    <button class="opt">把 canvas 內部解析度乘以螢幕像素密度，避免模糊</button>
+    <button class="opt">降低 canvas 解析度以提升效能</button>
+    <button class="opt">讓 canvas 支援透明背景</button>
+    <button class="opt">讓 canvas 能顯示中文</button>
+  </div>
+
+  <div class="quiz" data-question="Canvas FX 如何讀取主題的顏色？" data-correct="3" data-explain="透過 getComputedStyle 讀取 CSS custom properties（如 --accent、--bg），自動適應不同主題。">
+    <button class="opt">每個 FX 模組硬編碼顏色</button>
+    <button class="opt">從 JSON 配置檔讀取</button>
+    <button class="opt">用 JavaScript 變數全域定義</button>
+    <button class="opt">讀取 CSS custom properties（如 --accent）</button>
+  </div>
+
+  <div class="quiz" data-question="使用 Canvas FX 時，HTML 元素必須設定什麼？" data-correct="1" data-explain="data-fx 容器必須有明確的 width 和 height，否則 fx-runtime.js 無法正確初始化。">
+    <button class="opt">data-anim 屬性</button>
+    <button class="opt">明確的 width 和 height</button>
+    <button class="opt">position: fixed</button>
+    <button class="opt">z-index</button>
+  </div>
+
+  <div class="quiz" data-question="ResizeObserver 在 fx-runtime.js 裡的作用是什麼？" data-correct="2" data-explain="監聽 canvas 尺寸變化，自動重新計算 DPR 和內部解析度，確保全螢幕切換時畫面清晰。">
+    <button class="opt">偵測使用者是否在用觸控螢幕</button>
+    <button class="opt">控制動畫的播放速度</button>
+    <button class="opt">偵測 canvas 尺寸變化並重新計算解析度</button>
+    <button class="opt">自動調整投影片的排版</button>
+  </div>
+
+  <div class="lesson-nav">
+    <a href="./emotion-animation-mapping.html">← 上一步：情感-動畫對應</a>
+    <a href="./animation-composition.html">下一步：動畫組合與節制 →</a>
+  </div>
+
+  <div class="footer">
+    <p>如有疑問，向你的 AI 教師提問。他可以協助解答任何不清楚的地方。</p>
+  </div>
+
+  <script src="./assets/quiz.js"></script>
+</body>
+</html>
