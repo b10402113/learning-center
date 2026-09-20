@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一個 agent 是怎麼呼叫工具的</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一個 agent 是怎麼呼叫工具的</h1>
+<p class="meta">Step 1/4 · 工具與 Agent 的契約</p>
+
+<h2>學習目標</h2>
+<p>能說出一個沒有 harness 的 agent 是怎麼用工具完成一件事的——工具呼叫 → 拿到結果 → 迴圈直到有信心回答——並列出三種讓這個裸迴圈在生產環境失敗的原因。</p>
+
+<h2>先想：模型本身動不了外面任何東西</h2>
+
+<p>一個大型語言模型（LLM，Large Language Model）本質上只會做一件事：吃一串文字，吐一串文字。它無法自己查資料庫、無法寄信、無法花錢。要讓它真的對世界動手，你得給它<strong>工具（tool）</strong>，並讓它自己決定「現在該不該叫工具、叫哪一個、帶什麼參數」。</p>
+
+<p>這一節只講最小、最直覺的版本——先不談任何 harness。這就叫<strong>裸迴圈（naive loop）</strong>：模型的推論能力和幾個工具的執行，直接串在一起，中間沒有任何保護、沒有限制、沒有失敗處理。它跑給別人的示範（demo）非常漂亮，卻完全不能上生產。</p>
+
+<h2>工具呼叫迴圈的解剖</h2>
+
+<p>把這個裸迴圈一步步拆開，它長這樣：</p>
+
+<ol>
+  <li><strong>給工具加描述。</strong>你把每一支工具、以及它是做什麼用的描述，一起放進模型能看到的地方。模型看不到工具底下的程式碼，它只透過這些描述文字來「認識」工具。</li>
+  <li><strong>呼叫模型。</strong>模型讀完使用者問題和工具描述，決定下一步：是直接回答，還是要叫一支工具。</li>
+  <li><strong>模型要求工具呼叫。</strong>當模型決定叫工具，它的回應裡會指名是哪一支工具、以及要傳給它的<strong>參數（arguments）</strong>。</li>
+  <li><strong>執行工具。</strong>你的程式拿到那份參數，真正去跑這支工具。</li>
+  <li><strong>把結果餵回去。</strong>工具的執行結果被當成新訊息，塞回模型。</li>
+  <li><strong>重複。</strong>模型看了結果，可能再叫一支工具、或者覺得夠了，給出最終回答。迴圈一直轉到模型有信心回答為止。</li>
+</ol>
+
+<p>這個「叫工具 → 拿結果 → 再判斷」的迴圈，就是所有 agent 執行的底層心跳。值得一提的是，像 AI SDK 這類函式庫現在已經把這段迴圈直接內建了——你呼叫高層 API，它自己會在背後跑完這整輪。</p>
+
+<h2>裸迴圈的三種失敗模式</h2>
+
+<p>問題是，這個迴圈是一匹沒有韁繩的野馬。具體來看，它至少在三件事上會砸鍋：</p>
+
+<table>
+<thead>
+<tr><th>失敗模式</th><th>出了什麼事</th><th>舉例</th></tr>
+</thead>
+<tbody>
+<tr><td>無限迴圈</td><td>沒有停止條件、沒有失敗處理，可能一直轉或一遇錯誤就死</td><td>模型永遠「覺得還差一點」，狂叫工具停不下來</td></tr>
+<tr><td>危險工具無把關</td><td>會造成真實後果的工具沒有審批層，模型說叫就叫</td><td>一支「花錢」的退款工具，迴圈毫不猶豫就執行</td></tr>
+<tr><td>可靠性靠機率</td><td>LLM 輸出是機率的，好的示範可能只是好的、沒被量測的 prompt</td><td>換句話說 prompt 後，同一個 agent 表現天差地別</td></tr>
+</tbody>
+</table>
+
+<p>前兩項是「結構」問題，可以用程式硬性補上（限制步數、加審批）。第三項是「機率」問題，光靠程式補不齊：你得有<strong>評估（evals）</strong>去量測它到底行不行。<strong>evals 是修好可靠性的其中一半，基礎設施（infrastructure）是另一半</strong>——這門課專注做的，就是基礎設施那一半。</p>
+
+<p>把這個心智模型立好之後，下一節就要動手：一支工具的定義到底長什麼樣、那些「描述文字」和「參數」是怎麼被寫死下來變成可執行的契約。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./defining-tools-with-tool.html">下一步：用 tool() 定義工具：description、schema、execute →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="裸迴圈的「心跳」是什麼？" data-correct="2" data-explain="叫工具 → 拿結果 → 再判斷，一直轉到模型有信心回答。">
+  <button class="opt">一次查詢、一次回答、結束</button>
+  <button class="opt">每次都把所有工具描述重貼一遍</button>
+  <button class="opt">呼叫工具、拿結果、再判斷的迴圈</button>
+  <button class="opt">人類先審完每個步驟再執行</button>
+</div>
+
+<div class="quiz" data-question="模型是怎麼「認識」一支工具的？" data-correct="0" data-explain="模型看不到程式碼，只能透過工具的描述文字來認識它。">
+  <button class="opt">透過工具描述文字</button>
+  <button class="opt">透過讀取工具原始碼</button>
+  <button class="opt">透過執行時間的堆疊追蹤</button>
+  <button class="opt">透過資料庫裡存的註解</button>
+</div>
+
+<div class="quiz" data-question="哪一項不是裸迴圈的失敗模式？" data-correct="3" data-explain="模型讀不完大檔案是輸入長度問題，不是裸迴圈本身的結構或機率失敗。">
+  <button class="opt">沒有停止條件的無限迴圈</button>
+  <button class="opt">危險工具缺少審批層</button>
+  <button class="opt">可靠性靠機率、無法量測</button>
+  <button class="opt">模型讀不完超大檔案</button>
+</div>
+
+<div class="quiz" data-question="修好「可靠性靠機率」需要的是什麼？" data-correct="1" data-explain="光靠補程式不齊，還得用 evals 去量測；evals 是一半，基礎設施是另一半。">
+  <button class="opt">更多更貴的模型</button>
+  <button class="opt">評估（evals）加基礎設施</button>
+  <button class="opt">把 prompt 寫得更長</button>
+  <button class="opt">限制每次只能叫一支工具</button>
+</div>
+
+<div class="quiz" data-question="當模型決定叫工具，它會輸出什麼？" data-correct="3" data-explain="模型在回應裡指名工具名稱，並附上要傳的參數。">
+  <button class="opt">一段自然語言描述</button>
+  <button class="opt">工具的執行結果</button>
+  <button class="opt">需要審批的請求表單</button>
+  <button class="opt">工具名稱加上參數</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 工具與 Agent 的契約 · Step 1/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

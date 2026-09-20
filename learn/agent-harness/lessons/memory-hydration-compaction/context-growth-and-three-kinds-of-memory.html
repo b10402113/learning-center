@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>脈絡為何膨脹：History、State、Context</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>脈絡為何膨脹：History、State、Context</h1>
+<p class="meta">Step 1/5 · 先看清楚問題，才有後面兩個積木</p>
+
+<h2>學習目標</h2>
+<p>說出脈絡無限成長為何讓模型變笨、變慢、變貴，並分辨 History（持久事件日誌）、State（壓縮摘要）、Context（這一輪送進模型的內容）三者的角色。</p>
+
+<h2>一個所有人都看過的假象</h2>
+
+<p>打開任何一個聊天產品，你都會看到完整的對話歷史：從第一句到剛剛那句，一字不漏地往上滑。於是你很自然地以為，模型也看得到這一切。</p>
+
+<p>它沒有。模型看到的，永遠是 harness 特別為這一輪<strong>組出來的一個子集</strong>。前面那些你以為它記得的內容，可能早就被壓成幾行摘要，甚至完全不在這次送出的訊息裡。</p>
+
+<blockquote>使用者看到的是 History；模型看到的是 Context。兩者之間的落差，就是這一課要蓋的橋。</blockquote>
+
+<h2>脈絡一直長，模型會怎樣</h2>
+
+<p>如果 harness 什麼都不做，讓對話歷史原封不動地一直往後接，會發生三件事——而且它們是同時發生的：</p>
+
+<table>
+<thead>
+<tr><th>代價</th><th>發生什麼</th><th>為什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>變笨</td><td>中間的內容等於被遺忘</td><td>模型對 context 的注意力不是均勻的：開頭與結尾最可靠，夾在中間的東西最容易被忽略</td></tr>
+<tr><td>變慢</td><td>每一輪的回應時間拉長</td><td>每一輪都得重新處理整段輸入，輸入越長、越快不了</td></tr>
+<tr><td>變貴</td><td>帳單跟著 context 一起長</td><td>輸入 token 是要計費的，而且每多一輪就往後累加一次</td></tr>
+</tbody>
+</table>
+
+<p>「中間被遺忘」這點特別反直覺。你可能會想：都已經放進 context 了，模型怎麼可能沒看到？但 attention（注意力）不是資料庫查詢——它是一種會被長度稀釋的加權。文件放在中段，就像簡報夾在中場休息後的那一頁，最容易滑過去。</p>
+
+<h2>換一個更大的視窗，並不是解方</h2>
+
+<p>面對這個問題，第一個冒出來的念頭通常是「那我用 context window 更大的模型就好」。這條路走不通，理由有兩個：</p>
+
+<ul>
+<li><strong>更多不等於更好。</strong>視窗變大並沒有讓中間內容的注意力問題消失，反而常常更嚴重。把更多東西塞進去，只是讓被稀釋的範圍更大。</li>
+<li><strong>它只是把懸崖往後移。</strong>對話總有一天會超過任何固定的上限。超過的那一刻，錯誤不是慢慢變差，而是直接爆掉——請求被拒絕、整段流程中斷。</li>
+</ul>
+
+<p>所以真正的問題不是「視窗夠不夠大」，而是「誰決定模型此刻需要看到什麼」。這個決定不能交給模型自己，因為它根本不知道自己沒看到什麼。</p>
+
+<h2>三種記憶：History、State、Context</h2>
+
+<p>要把這件事想清楚，得先分開三個常被混為一談的東西：</p>
+
+<table>
+<thead>
+<tr><th>名稱</th><th>它是什麼</th><th>壽命</th><th>誰在看</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>History</strong>（歷史）</td><td>持久化的事件日誌：每一件事都留在 durable 儲存裡</td><td>永久，除非主動清空</td><td>系統、審計、重放</td></tr>
+<tr><td><strong>State</strong>（狀態）</td><td>被壓縮後的那份 running summary：舊內容的結晶</td><td>跟著工作流累積</td><td>harness 自己</td></tr>
+<tr><td><strong>Context</strong>（脈絡）</td><td>這一輪真正送進模型的 messages 陣列</td><td>只活一輪</td><td>模型</td></tr>
+</tbody>
+</table>
+
+<p>三者的關係是這樣的：History 會無限膨脹，所以需要被壓縮成 State；State 加上最近還沒被壓縮的 turns，再被組裝成 Context。每一次使用者送出訊息，Context 都重新組一次——它不是一份持續累積、從不重建的檔案，而是每輪即時重算的產物。</p>
+
+<p>這也正是為什麼「context assembly（脈絡組裝）」在某些團隊裡是一個專職角色：模型每一輪看到什麼，直接決定了它的行為與成本。</p>
+
+<h2>這一課要蓋的兩個積木</h2>
+
+<p>接下來會做兩個可重用的積木，各自對應上面的一個環節：</p>
+
+<ul>
+<li><strong>Hydrator（脈絡注入器）</strong>：在每一輪即時組出 Context——該帶哪份摘要、該帶哪個任務、該留哪幾個 turns。</li>
+<li><strong>Compactor（壓縮器）</strong>：當預算快滿時，把最舊的內容從 turns 裡移出來、餵給 summarizer，把 History 的成長煞住。</li>
+</ul>
+
+<p>兩個積木都放進 <code>harness/memory.ts</code>。你會在這支檔案裡看到兩個旋鈕：<code>maxTokens</code> 與 <code>keepContextTokens</code>。課程裡會把它們故意設得很小（例如上限 500、保留 200），這樣跑一次 demo 就能看到壓縮真的發生；真實系統的值當然會大得多，但機制完全一樣。</p>
+
+<pre><code>// harness/memory.ts 的兩個旋鈕（課程中故意調小，讓壓縮看得見）
+const maxTokens = 500;         // 超過就該壓縮
+const keepContextTokens = 200; // 壓到低於這裡為止</code></pre>
+
+<p>順帶記一個往後會用到的細節：課程的 token 估算很粗糙，因為它只是把字數除以四左右來逼近。真實系統要換成跟模型相同的 tokenizer（分詞器／編碼器），否則你估算的數字跟模型實際看到的會對不上。</p>
+
+<h2>帶回自己的 runtime</h2>
+
+<p>把這一課的模型對照回自寫的 ReAct loop，問題會很具體：你的 loop 是不是把所有歷史都無腦往 messages 裡塞？如果是，那它不是「還沒壞」，而是「還沒長到會壞」。這一層的決策——預算驅動、舊內容壓縮、每輪重組 context——跟語言無關，Java runtime 一樣要面對。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./hydrate-context.html">下一步：Hydrator：估算 token 並組出這一輪的 context →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="聊天產品顯示完整歷史，但模型實際上看到什麼？" data-correct="1" data-explain="使用者看到 History，模型每輪只看到 harness 組出來的 Context 子集。">
+  <button class="opt">和畫面完全相同的歷史</button>
+  <button class="opt">harness 為這一輪組出的子集</button>
+  <button class="opt">只有系統提示與最新一句</button>
+  <button class="opt">模型自己選擇要記住的部分</button>
+</div>
+
+<div class="quiz" data-question="context 變長時，模型最容易忽略哪一段？" data-correct="2" data-explain="注意力不均勻，開頭與結尾可靠，夾在中間的內容最容易被忽略。">
+  <button class="opt">最開頭的系統提示</button>
+  <button class="opt">最結尾的最新訊息</button>
+  <button class="opt">夾在中間的那一段</button>
+  <button class="opt">所有工具呼叫的結果</button>
+</div>
+
+<div class="quiz" data-question="為什麼改用更大的 context window 不是解方？" data-correct="3" data-explain="視窗變大不會解決中間內容被忽略的問題，而且聊到最後終究會爆掉。">
+  <button class="opt">大視窗的模型回答比較慢</button>
+  <button class="opt">大視窗的模型價格較便宜</button>
+  <button class="opt">大視窗不支援工具呼叫</button>
+  <button class="opt">中間內容仍被忽略，且終究會爆掉</button>
+</div>
+
+<div class="quiz" data-question="History、State、Context 三者中，哪個只活一輪？" data-correct="0" data-explain="Context 是這一輪送進模型的 messages，每輪重新組一次。">
+  <button class="opt">Context</button>
+  <button class="opt">History</button>
+  <button class="opt">State</button>
+  <button class="opt">三者都只活一輪</button>
+</div>
+
+<div class="quiz" data-question="Compactor 的工作是什麼？" data-correct="2" data-explain="Compactor 在預算快滿時把最舊內容移出並摘要，煞住 History 的成長。">
+  <button class="opt">把每輪輸入加密後儲存</button>
+  <button class="opt">把模型回應改寫得更短</button>
+  <button class="opt">把最舊內容移出並摘要</button>
+  <button class="opt">把工具呼叫平行化處理</button>
+</div>
+
+<div class="quiz" data-question="為什麼課程把 token 上限設得特別小？" data-correct="1" data-explain="設小是為了讓壓縮在 demo 中真的發生、看得見，機制與生產環境相同。">
+  <button class="opt">因為模型只支援短輸入</button>
+  <button class="opt">為了讓壓縮在 demo 中看得見</button>
+  <button class="opt">為了節省課程的 API 費用</button>
+  <button class="opt">因為資料庫放不下大數值</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 記憶：脈絡注入與壓縮 · Step 1/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

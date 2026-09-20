@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用 ProjectDep 簡化路由處理器</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+  <header>
+    <h1>用 ProjectDep 簡化路由處理器</h1>
+    <p class="subtitle">DRY dependencies with ProjectDep · Step 4/4</p>
+  </header>
+
+  <main>
+    <section class="learning-goal">
+      <h2>Learning Goal</h2>
+      <p>能把原本重複的 lookup-or-404 路由重構成只接收 `ProjectDep` 的簡潔版本。</p>
+    </section>
+
+    <section class="lesson">
+      <h2>Lesson</h2>
+
+      <p>前兩課我們建立了 `get_project_or_404` 和 `ProjectDep`。現在來看看路由能簡化到什麼程度。</p>
+
+      <p>重構前，每個路由都長這樣：</p>
+
+      <pre><code>@app.get("/projects/{project_id}")
+async def get_project(project_id: int, session: SessionDep):
+    project = crud.get_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+@app.put("/projects/{project_id}")
+async def update_project(
+    project_id: int,
+    data: ProjectUpdate,
+    session: SessionDep,
+):
+    project = crud.get_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project.name = data.name
+    project.description = data.description
+    session.commit()
+    return project
+
+@app.delete("/projects/{project_id}")
+async def delete_project(project_id: int, session: SessionDep):
+    project = crud.get_project(session, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    session.delete(project)
+    session.commit()
+    return {"ok": True}</code></pre>
+
+      <p>重構後，每個路由只剩核心邏輯：</p>
+
+      <pre><code>@app.get("/projects/{project_id}")
+async def get_project(project: ProjectDep):
+    return project
+
+@app.put("/projects/{project_id}")
+async def update_project(project: ProjectDep, data: ProjectUpdate, session: SessionDep):
+    project.name = data.name
+    project.description = data.description
+    session.commit()
+    return project
+
+@app.delete("/projects/{project_id}")
+async def delete_project(project: ProjectDep, session: SessionDep):
+    session.delete(project)
+    session.commit()
+    return {"ok": True}</code></pre>
+
+      <p>比較一下：</p>
+
+      <ul>
+        <li><strong>get_project</strong>：從 6 行變成 2 行。</li>
+        <li><strong>update_project</strong>：從 10 行變成 5 行。</li>
+        <li><strong>delete_project</strong>：從 7 行變成 4 行。</li>
+      </ul>
+
+      <p>每個路由拿到的是已經驗證存在的 <code>Project</code> 物件。如果 <code>project_id</code> 查不到東西，FastAPI 會在進路由之前就回傳 404，路由本身完全不需要處理這個狀況。</p>
+
+      <p>這就是 DRY（Don't Repeat Yourself）在 FastAPI 依賴注入裡的實際應用：把跨路由的重複邏輯抽成依賴，讓每個路由專注在它真正該做的事。</p>
+    </section>
+
+    <div class="lesson-nav">
+      <a href="../16-dry-dependencies/annotated-type-alias.html">← 上一步：用 Annotated 建立可複用的型別別名</a>
+      <span></span>
+    </div>
+
+    <section class="quiz-section">
+      <h2>Quiz</h2>
+
+      <div class="quiz" data-question="重構後的 get_project 路由，總共幾行？" data-correct="1" data-explain="重構後只剩裝飾器、簽章和 return 一行。">
+        <button class="opt">1 行</button>
+        <button class="opt">2 行</button>
+        <button class="opt">3 行</button>
+        <button class="opt">4 行</button>
+      </div>
+
+      <div class="quiz" data-question="如果 project_id 查不到 Project，FastAPI 會在什麼時候回傳 404？" data-correct="3" data-explain="依賴在路由執行前就被解析，查不到就直接拋 404。">
+        <button class="opt">路由執行到一半時</button>
+        <button class="opt">session.commit() 時</button>
+        <button class="opt">回應序列化時</button>
+        <button class="opt">在進入路由之前（依賴解析階段）</button>
+      </div>
+
+      <div class="quiz" data-question="重構後，update_project 路由不再需要處理什麼？" data-correct="0" data-explain="404 判斷已經交給 ProjectDep 處理。">
+        <button class="opt">404 判斷</button>
+        <button class="opt">資料驗證</button>
+        <button class="opt">session.commit()</button>
+        <button class="opt">JSON 序列化</button>
+      </div>
+
+      <div class="quiz" data-question="DRY 原則是什麼的縮寫？" data-correct="2" data-explain="DRY = Don't Repeat Yourself。">
+        <button class="opt">Do Repeat Yourself</button>
+        <button class="opt">Don't Return Yet</button>
+        <button class="opt">Don't Repeat Yourself</button>
+        <button class="opt">Do Return Yourself</button>
+      </div>
+
+      <div class="quiz" data-question="重構後，每個路由拿到的是什麼？" data-correct="1" data-explain="路由拿到的是已經驗證存在的 Project 物件。">
+        <button class="opt">一個 project_id 整數</button>
+        <button class="opt">一個已經驗證存在的 Project 物件</button>
+        <button class="opt">一個 Session 物件</button>
+        <button class="opt">一個 HTTPException</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="../assets/quiz.js"></script>
+</body>
+</html>

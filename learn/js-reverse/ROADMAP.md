@@ -174,6 +174,11 @@ created: 2026-09-05
     - Sources:
       - [[sources/js-reverse/20260908/js逆向课件/Day29/01 env.js#补环境]]
       - [[sources/js-reverse/20260908/js逆向课件/Day29/05 pdd.js#Pinduoduo anti_content实战]]
+26. **[[learn/js-reverse/26-hook-interception|Hook 插件：函数与属性拦截监控]]**
+    - Goal: 用 hook 拦截并监控浏览器中的函数与属性，定位加密逻辑调用点、观察参数与返回值，并理解 hook 检测与反检测
+    - Sources:
+      - [[sources/js-reverse/20260920/课堂笔记/js进阶02.md#二. hook插件]]
+      - [[sources/js-reverse/20260920/课上代码/01 hook.js]]
 
 ## Status
 - [ ] Roadmap and nodes confirmed

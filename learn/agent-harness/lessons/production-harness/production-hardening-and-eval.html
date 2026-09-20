@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>生產硬化：託管沙箱與 eval</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>生產硬化：託管沙箱與 eval</h1>
+<p class="meta">Step 5/5 · 從課程專案走到可維運的生產系統</p>
+
+<h2>學習目標</h2>
+<p>能判斷何時該把工具執行從本機 <code>node:vm</code> 移到託管沙箱、用 eval 驗證每一次改進，並用「多用戶、非寫程式的產品」這條線決定該自建 programmatic agent 還是用現成 harness。</p>
+
+<h2>沙箱：從 node:vm 走向託管服務</h2>
+<p>課程裡我們用本機的 <code>node:vm</code> 做 code mode，也學過一個關鍵限制：<strong>vm 不是真正的安全邊界</strong>。它適合示範「用一段程式取代多次工具往返」的概念，但如果你把它當成跑不可信程式碼的防線，那就是在賭。</p>
+
+<p>生產環境的做法是把工具執行搬到<strong>託管沙箱（hosted sandbox）</strong>：由專門的服務負責隔離、資源限制與生命週期。這個領域已經有幾個成熟的選項，各自提供不同的隔離層級與 API，把它們接進 harness 的方式，跟你當初接 <code>runInSandbox</code> 幾乎一樣——換掉實作，保留介面。</p>
+
+<blockquote>介面是你自己定的（<code>runInSandbox(code)</code>），實作是可以換的。先寫對介面，之後搬家就不痛。</blockquote>
+
+<h2>什麼時候該換掉本機沙箱</h2>
+<table>
+<thead>
+<tr><th>訊號</th><th>為什麼本機沙箱不夠</th></tr>
+</thead>
+<tbody>
+<tr><td>多租戶 / 多使用者</td><td>別人的程式碼不該跟你的 process 共享同一個世界</td></tr>
+<tr><td>執行的是不可信輸入</td><td>vm 逃逸後果等同直接執行任意程式</td></tr>
+<tr><td>需要嚴格資源上限</td><td>CPU、記憶體、網路都要能硬性隔離與計量</td></tr>
+<tr><td>要對外承諾 SLA</td><td>隔離、審計、可觀測性得由專門服務承擔</td></tr>
+</tbody>
+</table>
+
+<h2>Eval：驗證「改動真的變好」的唯一方法</h2>
+<p>harness 的每一層都能調——prompt 的措辭、工具的描述、壓縮的門檻、supervisor 的計畫。問題是：你憑什麼知道你改對了？沒有 eval，你只能靠感覺，而感覺在這種系統裡幾乎一定會騙你。</p>
+
+<p>Eval 的做法不只是跑分，而是先把「好」定義清楚，再建立可重複的評測集，讓每次改動都有前後可比的訊號。它回答的是那個唯一重要的問題：<strong>這次改動到底讓系統變好，還是只是變了？</strong></p>
+
+<h2>知道系統該長什麼樣，才看得出幻覺</h2>
+<p>另一個只有真的動手建過才有的能力，是「看得出模型在胡說」。如果你清楚一個正確的 harness 應該產生哪些事件——工具呼叫的順序、handoff 的理由、審批的觸發點——那麼當模型編造出一個不存在的流程時，你一眼就能察覺。這不是直覺，而是你把系統建起來後長出的刻度尺。</p>
+
+<p>也因此，這個領域的學習方式不是讀完就好：多建幾個 agent，讓每個都真的跑起來；讀研究論文找靈感，就算數學看不懂，裡面的架構想法常常可以直接借；然後用 eval 把「靈感」變成可驗證的改進。</p>
+
+<h2>自建還是用現成：多用戶產品那條線</h2>
+<p>走到生產，最後會撞上一個決策：我該自己寫 programmatic agent，還是直接用 Claude Code 這類現成 harness？答案取決於任務與規模：</p>
+
+<table>
+<thead>
+<tr><th>情境</th><th>建議</th><th>理由</th></tr>
+</thead>
+<tbody>
+<tr><td>任務是寫程式、需要電腦</td><td>用現成 coding harness</td><td>Bash、檔案、終端機、repo 它都幫你處理好了</td></tr>
+<tr><td>任務是資料分析或原型</td><td>用現成 coding harness</td><td>它能直接動手，你不用自己造輪子</td></tr>
+<tr><td>多用戶、非寫程式的產品</td><td>自建 programmatic agent</td><td>現成 harness 太通用、prompt 難 eval、無法強制決定性流程</td></tr>
+</tbody>
+</table>
+
+<p>關鍵在那句「無法強制決定性流程」。前面幾堂課你不斷看到的模式——審批由 harness 決定、handoff 由 runtime 攔截——都建立在你能控制流程的前提上。現成 harness 把這些控制權收走了，你只剩 prompt、skills 與 MCP（本質上都只是 context）。對一個要對使用者負責的多用戶產品，這樣是不夠的。</p>
+
+<h2>這個領域還很前沿</h2>
+<p>這些內容不是業界共識，而是相對前沿的做法：多數人會說「Claude 會做」，卻說不出內部怎麼做、也無法驗證做得對不對。好消息是，因為你現在知道系統該長什麼樣，你具備了驗證的能力——這正是這門課想留給你的東西。</p>
+
+<h2>把這套帶回你自己的 runtime</h2>
+<p>最後把整條路線收起來。你走過的每一個能力，都是可遷移的模式，而不是某個函式庫的用法：</p>
+<ul>
+<li><strong>durable execution</strong>：把 side effect 包成可重放、可 checkpoint 的 step。</li>
+<li><strong>sandbox boundary</strong>：自訂介面、可換實作，本機到託管只是換引擎。</li>
+<li><strong>compaction</strong>：歷史要能估算、摘要、以輪為單位滑動。</li>
+<li><strong>handoff 與 supervisor</strong>：agent 是資料，控制權轉移由 runtime 攔截。</li>
+<li><strong>approval gate</strong>：決定性的暫停與恢復，是 inbox 世界的互動基礎。</li>
+</ul>
+<p>把這些模式在你自己的 Agent OS 上重新推導一次，你會發現你學會的不是「怎麼用 TypeScript 寫一個 harness」，而是「一個 harness 為什麼要長這樣」——那才是能帶得走的部分。</p>
+
+<div class="lesson-nav">
+  <div><a href="./infinite-background-agents.html">← 上一步：無限／背景 agent 與 inbox</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼生產環境不該用本機 node:vm 當安全邊界？" data-correct="2" data-explain="vm 適合示範概念，卻不是真正的隔離邊界，跑不可信程式碼等同在賭。">
+  <button class="opt">因為它執行速度太慢</button>
+  <button class="opt">因為它不支援 async</button>
+  <button class="opt">因為它不是真正的隔離邊界</button>
+  <button class="opt">因為它不能注入工具</button>
+</div>
+
+<div class="quiz" data-question="把本機沙箱換成託管沙箱時，最該保留的是什麼？" data-correct="1" data-explain="自訂的介面（如 runInSandbox）不變，只換底層實作，搬家才不會痛。">
+  <button class="opt">node:vm 的實作細節</button>
+  <button class="opt">你自己定的沙箱介面</button>
+  <button class="opt">本機的檔案系統路徑</button>
+  <button class="opt">原本的 timeout 數值</button>
+</div>
+
+<div class="quiz" data-question="下列哪一個不是該換掉本機沙箱的訊號？" data-correct="3" data-explain="多租戶、不可信輸入、嚴格資源上限都需要真隔離；單人本機原型則不需要。">
+  <button class="opt">系統要服務多租戶</button>
+  <button class="opt">要執行不可信的輸入</button>
+  <button class="opt">需要嚴格的資源上限</button>
+  <button class="opt">只有你一個人用原型</button>
+</div>
+
+<div class="quiz" data-question="eval 存在的核心價值是什麼？" data-correct="0" data-explain="它提供可重複的前後比較訊號，回答這次改動是變好還是只是變了。">
+  <button class="opt">驗證改動是否真的變好</button>
+  <button class="opt">降低每次呼叫的成本</button>
+  <button class="opt">加快模型回應的速度</button>
+  <button class="opt">取代人工撰寫測試</button>
+</div>
+
+<div class="quiz" data-question="什麼情況下應該自建 programmatic agent？" data-correct="2" data-explain="多用戶、非寫程式的產品需要可控的決定性流程，現成 harness 太通用且難以 eval。">
+  <button class="opt">需要 Bash 與檔案系統時</button>
+  <button class="opt">做資料分析與原型時</button>
+  <button class="opt">多用戶且非寫程式產品時</button>
+  <button class="opt">只是自己本機玩一玩時</button>
+</div>
+
+<div class="quiz" data-question="為什麼現成 coding harness 難以支撐多用戶產品？" data-correct="1" data-explain="它的流程固定、只剩 prompt/skills/MCP 可調，無法強制決定性的工作流。">
+  <button class="opt">它的模型版本太舊</button>
+  <button class="opt">它無法強制決定性流程</button>
+  <button class="opt">它不支援任何工具呼叫</button>
+  <button class="opt">它的執行速度不夠快</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 生產級 Harness 與下一步 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

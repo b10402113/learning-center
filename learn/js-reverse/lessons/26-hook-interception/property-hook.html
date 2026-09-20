@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>對象屬性的 hook：Object.defineProperty — Hook 插件：函數與屬性攔截監控</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="breadcrumb">
+        <a href="../../nodes/26-hook-interception.mdx">26-hook-interception</a>
+        <span>/</span>
+        <span>property-hook</span>
+      </div>
+      <h1>對象屬性的 hook：Object.defineProperty</h1>
+      <p class="subtitle">函數能被包裹，屬性的讀寫也能——把「取個值」「賦個值」都變成帶日誌的監控入口。</p>
+    </header>
+
+    <section class="goal">
+      <h2>學習目標</h2>
+      <p>掌握用 Object.defineProperty 的 get/set 重新定義對象屬性的寫法，把屬性的讀與寫都變成可監控的入口——包括對象上原本不存在的屬性。</p>
+    </section>
+
+    <section class="content">
+      <h2>為什麼屬性也需要 hook</h2>
+      <p>函數 hook 監控的是「調用」這個動作。但網站的關鍵資料常常不走函數，而是藏在對象屬性裡：一個 token 被寫進 <code>user.token</code>，一個配置從 <code>config.key</code> 讀走。屬性的讀和寫發生時沒有任何函數被調用，函數 hook 對此無能為力。你需要的是把「讀屬性」和「寫屬性」本身變成可以攔截的操作。</p>
+      <p><code>Object.defineProperty</code>（重新定義對象屬性的 API）就是為此而生。它接收三個參數：<strong>參數 1 是對象，參數 2 是屬性名，參數 3 是屬性描述符</strong>。描述符裡可以定義 <code>get()</code> 和 <code>set(value)</code> 兩個函數：讀取屬性值時執行 <code>get</code>，設置屬性值時執行 <code>set</code>。把這兩個函數換成帶日誌的版本，屬性就被 hook 了。</p>
+
+      <h2>已有屬性的 hook：三步</h2>
+      <pre><code>// 1、創建一個對象
+let user = {
+    "name": "波波",
+};
+
+// 2、保存原屬性
+_name = user.name;
+
+// 3、對象屬性的 hook
+Object.defineProperty(user, "name", {
+    get(){ // 獲取屬性值的時候執行
+        console.log("正在獲取屬性值");
+        return _name;
+    },
+    set(value){ // 設置屬性值的時候執行
+        console.log("正在設置屬性值:", value);
+        _name = value;
+    }
+});
+
+// 4、獲取屬性和設置屬性操作
+console.log(user.name)   // 觸發 get：打印"正在獲取屬性值"，輸出 波波
+user.name = 'Jay'        // 觸發 set：打印"正在設置屬性值: Jay"
+console.log(user.name)   // 觸發 get：輸出 Jay</code></pre>
+      <p>結構和函數 hook 完全同構：<strong>保存原值</strong>（<code>_name = user.name</code>）對應保存原函數；<strong>重新定義</strong>（defineProperty）對應同名覆蓋。讀寫方照常寫 <code>user.name</code>，毫無察覺。</p>
+
+      <h2>關鍵細節：為什麼要把原值存到外部變數</h2>
+      <p>注意 <code>get</code> 裡返回的是 <code>_name</code>，<code>set</code> 裡寫的也是 <code>_name</code>——兩者都不碰 <code>user.name</code> 本身。這不是風格問題，而是生死問題：如果在 <code>get</code> 裡寫 <code>return user.name</code>，讀取 <code>user.name</code> 又會觸發 <code>get</code>，無限遞歸直到棧溢出；<code>set</code> 同理。把真正的值保存在描述符之外的普通變數 <code>_name</code> 裡，<code>get</code>/<code>set</code> 只做「日誌 + 轉手」，就不會自引用。</p>
+
+      <h2>不存在的屬性也能 hook</h2>
+      <p>一個自然的疑問：對象上沒有的屬性（比如 <code>user</code> 只有 <code>name</code>，沒有 <code>age</code>），能 hook 嗎？能。<code>Object.defineProperty</code> 本來就是「定義」屬性的 API——屬性不存在時，它會把屬性創造出來。寫法一模一樣，只是「保存原值」這步變成給外部變數一個初始值：</p>
+      <pre><code>let user = {
+    "name": "波波",
+};
+
+// 保存原值（age 原本不存在，先給外部變數一個初始值）
+_age = 18;
+
+// 對象屬性 age 的 hook
+Object.defineProperty(user, "age", {
+    get(){
+        console.log("正在獲取屬性值");
+        return _age;
+    },
+    set(value){
+        console.log("正在設置屬性值:", value);
+        _age = value;
+    }
+});
+
+console.log(user.age)   // 觸發 get：輸出 18
+user.age = 20           // 觸發 set
+console.log(user.age)   // 觸發 get：輸出 20</code></pre>
+      <p>這個能力在實戰中很關鍵：網站常常在多個 JS 文件間傳值——<code>xxx.js</code> 裡創建對象，<code>ooo.js</code> 裡才 <code>user.age = 18</code> 動態加上屬性。你不必等屬性出現，提前把監控埋好，屬性第一次被寫入時就能看到。</p>
+
+      <h2>本節小結</h2>
+      <p>屬性 hook = 用 <code>Object.defineProperty(obj, prop, { get, set })</code> 把屬性的讀寫重新定義成帶日誌的函數。三個要點：<code>get</code> 在讀取時執行、<code>set(value)</code> 在設置時執行；真正的值必須存到外部變數避免遞歸自引用；不存在的屬性可以先定義再監控。下一節把這兩套寫法搬進真實瀏覽器，去 hook 瀏覽器自帶的函數和 cookie。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>檢查理解</h2>
+      <div class="quiz" data-question="Object.defineProperty 的三個參數分別是什麼？" data-correct="2" data-explain="參數 1 是對象、參數 2 是屬性名、參數 3 是屬性描述符，描述符裡寫 get 和 set。">
+        <button class="opt">屬性名、屬性值、對象</button>
+        <button class="opt">對象、屬性值、回調函數</button>
+        <button class="opt">對象、屬性名、屬性描述符</button>
+        <button class="opt">屬性描述符、對象、屬性名</button>
+      </div>
+      <div class="quiz" data-question="描述符裡的 get() 和 set(value) 分別在什麼時候執行？" data-correct="0" data-explain="get 在讀取屬性值時執行，set 在設置屬性值時執行，新值作為 set 的參數傳入。">
+        <button class="opt">get 讀取時執行，set 設置時執行</button>
+        <button class="opt">get 設置時執行，set 讀取時執行</button>
+        <button class="opt">兩者都在讀取時執行</button>
+        <button class="opt">兩者都在設置時執行</button>
+      </div>
+      <div class="quiz" data-question="為什麼 get 裡要 return _name 而不是 return user.name？" data-correct="3" data-explain="在 get 裡讀 user.name 會再次觸發 get 造成無限遞歸，真正的值必須存在描述符之外。">
+        <button class="opt">_name 的讀取速度比較快</button>
+        <button class="opt">user.name 是唯讀屬性</button>
+        <button class="opt">_name 會自動同步到頁面</button>
+        <button class="opt">讀 user.name 會再次觸發 get 造成無限遞歸</button>
+      </div>
+      <div class="quiz" data-question="對象上原本不存在的屬性可以被 hook 嗎？" data-correct="1" data-explain="可以。defineProperty 本來就是定義屬性的 API，屬性不存在時會先創造出來再掛上 get/set。">
+        <button class="opt">不行，必須等屬性先被賦值</button>
+        <button class="opt">可以，defineProperty 會把屬性定義出來</button>
+        <button class="opt">不行，defineProperty 只能改已有屬性</button>
+        <button class="opt">可以，但必須先 delete 該屬性</button>
+      </div>
+      <div class="quiz" data-question="屬性 hook 與函數 hook 在結構上的對應關係是什麼？" data-correct="2" data-explain="保存原值對應保存原函數，重新定義屬性對應同名覆蓋，讀寫方照常使用毫無察覺。">
+        <button class="opt">兩者結構完全不同無法對應</button>
+        <button class="opt">get 對應保存原函數，set 對應覆蓋</button>
+        <button class="opt">保存原值對應保存原函數，重新定義對應同名覆蓋</button>
+        <button class="opt">保存原值對應同名覆蓋，重新定義對應保存原函數</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <div class="nav-left"><a href="./function-hook.html">← 上一步：函數的 hook：包裹原函數</a></div>
+      <div class="nav-right"><a href="./browser-first-hook.html">下一步：瀏覽器先手 hook：atob 與 cookie →</a></div>
+    </div>
+
+    <footer class="lesson-footer">
+      <p>有任何問題，隨時向你的老師提問。</p>
+    </footer>
+  </div>
+  <script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -5,7 +5,7 @@
  *
  *   src/data/subjects.json        ← index of all subjects
  *   src/data/subjects/<id>.json   ← one course per subject
- *   public/lessons/<subject>/     ← rendered lesson HTML pages (copied)
+ *   public/lessons/<subject>/<node>/   ← rendered lesson HTML pages (copied)
  *
  * Usage: node scripts/build-data.mjs [--subject system-design]   (filter to one)
  */
@@ -158,7 +158,7 @@ function buildSubject(subject) {
         learningGoal: "",
         lessonMd: "",
         sources: [],
-        coursePage: null, // "<subject>/<file>.html" under public/lessons/
+        coursePage: null, // "<subject>/<node>/<file>.html" under public/lessons/
         hasContent: false,
       };
 
@@ -179,10 +179,10 @@ function buildSubject(subject) {
         step.lessonMd = cleanWikilinks(ss["Lesson"] || "");
 
         const courseLink = (ss["Course"] || "").match(
-          /\(([^)]*lessons\/[^)]+\.html)\)/
+          /\([^)]*lessons\/([^)]+\.html)\)/
         );
         if (courseLink) {
-          step.coursePage = `${subject}/${path.basename(courseLink[1])}`;
+          step.coursePage = `${subject}/${courseLink[1]}`;
         }
 
         step.sources = (sf.frontmatter.sources || []).map(parseSource);

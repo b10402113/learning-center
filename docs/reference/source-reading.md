@@ -104,6 +104,37 @@ There is no merge step: the part files together are the digest.
 
 Sub-agents never write anywhere outside `learn/<subject>/digests/`. Their returned message must stay small — the file carries the content, not the message.
 
+## Batch-aware digest grouping
+
+### Scope
+This protocol extends the one-file-per-digest rule to accommodate the `ingest` skill’s new batch-aware behavior. When `ingest` processes a set of files archived in the same dated subfolder, it groups them into **clusters** based on topic relevance before creating digests. The goal is to produce one digest per meaningful learning unit that downstream `/absorb` can treat as a single concept block.
+
+### Grouping principles
+
+1. **The batch is the input.** `ingest` reads all files that were just moved into `sources/<subject>/YYYYMMDD/`. It does not consider earlier archived files, even if they share the same subject.
+2. **Clustering.** Files are clustered by semantic similarity. Two files belong in the same cluster if their combined content forms a coherent learning unit that `absorb` can reasonably consider as a single node goal. Standalone files that do not match any other file’s topic form single-file clusters.
+3. **Digest name.** The digest name is derived from the cluster’s unified topic (e.g., `closure-basics`). For a single-file cluster where the file is self-contained, the name may be the original file stem.
+4. **Large-source handling.** The size check and sub-agent path from the large-source sections still apply within a cluster. Part digests are named `<cluster-name>.<n>.part.md`.
+5. **Locator preservation.** Each L2 section records source locators exactly as in the one-file format, e.g., `[[sources/<subject>/YYYYMMDD/chapter-notes/fig1.png]]`.
+
+### Image-only digests
+
+Images without text counterparts are treated as a separate class: they form their own minimal digest(s) (one per related batch of images) with `source_type: image`. Their L1/L2 structure is lighter (no section summaries, just locator + one-line description).
+
+### Backward compatibility
+
+Existing per-file digests remain untouched. This batch-aware grouping applies only to files archived by future runs of `/ingest`. If a batch contains a single file, or if the learner explicitly opts out of clustering, the system falls back to the original one-file-per-digest behavior.
+
+### Design rationale
+
+- **Why not merge all files into one digest?** A single digest would obscure the semantic boundaries that `/absorb` needs to decide what goes into existing nodes vs. new nodes.
+- **Why not keep strict one-file-per-digest?** Without clustering, the learning graph would become unnecessarily fragmented, leading to many single-file nodes that are trivial to teach.
+- **Why not re-ingest existing digests?** Sources are immutable, and existing digests already have `status: absorbed`. Re-processing would duplicate work and risk breaking existing pipelines.
+
+### Lint considerations
+
+When validating digests, the linter should still check for broken locators and correct frontmatter. It does not enforce the new batch-aware constraints: it only checks that each file referenced in `[[...]]` points to an actual source file, and that every cluster’s L2 entries have at least one matching locator.
+
 ## Digest lifecycle
 
 Each digest has a `status` field in its frontmatter:

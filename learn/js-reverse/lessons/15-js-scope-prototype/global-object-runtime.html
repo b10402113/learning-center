@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>window、globalThis 与运行时全局对象</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+<h1>window、globalThis 与运行时全局对象</h1>
+<p class="meta">JS 逆向 · 节点 15 · 步骤 7/7</p>
+
+<h2>学习目标</h2>
+<p>能区分浏览器的 window、Node 的全局对象与 globalThis，并据此判断抽取 JS 在不同运行环境中的依赖。</p>
+
+<h2>window：浏览器专属的全局对象</h2>
+<p>浏览器里有个<strong>全局对象</strong> <code>window</code>，可以理解成 JS 的全局作用域：你不写任何前缀去访问一个顶层标识符，默认就是在访问 <code>window</code> 上的属性。</p>
+<pre><code>var a = 10;
+a === window.a;   // true
+
+window.mm = "爱你";
+console.log(mm);  // 爱你</code></pre>
+<p><code>window</code> 还代表浏览器窗口本身，是浏览器对象模型（BOM）的根节点，下面挂着 <code>navigator</code>（浏览器信息）、<code>screen</code>（屏幕）、<code>history</code>（历史）、<code>location</code>（URL）、<code>document</code>（整个页面）等子对象。逆向时在 DevTools 的 Console 里直接打 <code>window</code>，就能翻到所有全局状态和入口函数。</p>
+
+<h2>换环境就报错：window is not defined</h2>
+<p><code>window</code> 是<strong>浏览器环境专属</strong>的内置对象。在没有浏览器窗口的环境里——比如 PyCharm、纯 Node 脚本——直接写 <code>window</code> 会报错：</p>
+<pre><code>// Node 或 PyCharm 里执行：
+console.log(window);
+// ReferenceError: window is not defined</code></pre>
+<p>这个报错信息在逆向里非常重要：它告诉你"当前跑的这段代码依赖浏览器环境"。</p>
+
+<h2>globalThis：跨环境的全局对象</h2>
+<p><code>globalThis</code> 是 ES2020 提供的<strong>统一全局对象</strong>，浏览器和 Node 都能用。用它可以写出在两种环境都不报错的全局访问/声明：</p>
+<pre><code>globalThis.a = 10;
+console.log(a);       // 10
+
+// 在浏览器里：
+globalThis === window // true</code></pre>
+<p>也就是说：<code>window</code> 只属于浏览器，<code>globalThis</code> 两边通用，且在浏览器里 <code>globalThis === window</code>。这是你判断抽取的 JS 依赖哪个全局对象的钥匙。</p>
+
+<h2>常见的 IIFE 传参模式：把全局对象递进去</h2>
+<p>生产代码（尤其是混淆过的）经常用一个技巧：把全局对象作为参数传进立即执行函数，这样内部既能访问全局、又不直接裸写 <code>window</code>：</p>
+<pre><code>(function(w){
+  var chi = function(){ console.log("我是吃"); };
+  w.chi = chi;   // 通过参数 w 挂到全局
+})(window);
+chi();           // 外部就能调用了
+
+// Node 里同样的套路：
+(function(g){ g.chi = chi; })(globalThis);</code></pre>
+<p>逆向时看到 <code>(function(w){...})(window)</code> 或 <code>(function(window, document){...})(window, document)</code> 这种开头，要立刻识别：这是在把全局对象递进闭包，内部通过参数名访问全局。</p>
+
+<h2>对逆向的启示：抽取 JS 换环境跑</h2>
+<p>我们后面做 sign 逆向时，常把网页里的 JS 抠出来放到 Node 或 execjs 里执行。这时第一步就是检查它依赖哪个全局对象：</p>
+<ul>
+  <li>代码里出现 <code>window</code> → 直接跑会 <code>window is not defined</code>，需要补一个 <code>window</code> 壳（shim），或先确认能否换成 <code>globalThis</code>。</li>
+  <li>代码用 <code>(function(w){...})(window)</code> 开头 → 记住：传进来的那个参数就是要补的环境。</li>
+  <li>只用了 <code>globalThis</code> → 换环境最省事，两边都不用补。</li>
+</ul>
+
+<h2>本节练习</h2>
+
+<div class="quiz" data-question="window 对象只能在哪个环境中直接使用？" data-correct="0" data-explain="window 是浏览器专属的内置对象，Node、PyCharm 里会报 is not defined。">
+  <button class="opt">浏览器环境</button>
+  <button class="opt">Node 环境</button>
+  <button class="opt">所有环境通用</button>
+  <button class="opt">PyCharm 环境</button>
+</div>
+
+<div class="quiz" data-question="顶层 var a = 10 之后，window.a 的值是多少？" data-correct="3" data-explain="顶层 var 声明的变量会成为 window 的属性，所以 window.a 也是 10。">
+  <button class="opt">undefined</button>
+  <button class="opt">null</button>
+  <button class="opt">报错</button>
+  <button class="opt">10</button>
+</div>
+
+<div class="quiz" data-question="在浏览器中，globalThis 与 window 是什么关系？" data-correct="1" data-explain="浏览器里 globalThis === window，两者指向同一个全局对象。">
+  <button class="opt">完全无关的两个对象</button>
+  <button class="opt">指向同一个对象</button>
+  <button class="opt">globalThis 是 window 的子对象</button>
+  <button class="opt">window 是 globalThis 的子对象</button>
+</div>
+
+<div class="quiz" data-question="把只在浏览器里能跑的代码丢进 Node，最先可能遇到什么错？" data-correct="2" data-explain="window 只存在于浏览器，Node 里访问会报 ReferenceError: window is not defined。">
+  <button class="opt">SyntaxError: 语法错误</button>
+  <button class="opt">TypeError: 类型不匹配</button>
+  <button class="opt">window is not defined</button>
+  <button class="opt">document is undefined</button>
+</div>
+
+<div class="quiz" data-question="混淆代码常写成 (function(w){...})(window)，意图是什么？" data-correct="0" data-explain="把全局对象作为参数递进闭包，内部通过参数名访问全局，这是常见包裹模式。">
+  <button class="opt">把全局对象递进作用域使用</button>
+  <button class="opt">制造一个死循环</button>
+  <button class="opt">隐藏函数的参数个数</button>
+  <button class="opt">把代码编译成字节码</button>
+</div>
+
+<div class="lesson-nav">
+  <a href="./eval-dynamic-execution.html">← 上一步：eval 与动态执行</a>
+  <span></span>
+</div>
+
+<div class="footer">看不懂就问你的 agent：判断一段 JS 依赖哪个全局对象，是抽取后换环境运行的第一步。</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

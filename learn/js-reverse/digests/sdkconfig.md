@@ -2,8 +2,8 @@
 source: sdkconfig
 source_type: asset
 source_lines: 4
-status: pending
-absorbed_at: ""
+status: absorbed
+absorbed_at: 2026-09-20
 created: 2026-09-13
 updated: 2026-09-13
 ---

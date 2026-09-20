@@ -56,9 +56,9 @@ After writing all HTML lesson files, verify assets are present and correctly ref
    - `quiz.js` ← `assets/quiz.js` (repo root)
    Do not skip this — HTML lessons will render broken without them.
 
-2. **Verify every HTML file.** For each `.html` file in `learn/<SUBJECT>/lessons/`, confirm:
-   - `<head>` contains `<link rel="stylesheet" href="./assets/shared.css">`
-   - `</body>` is preceded by `<script src="./assets/quiz.js"></script>`
+2. **Verify every HTML file.** For each `.html` file in `learn/<SUBJECT>/lessons/<node-id>/`, confirm:
+   - `<head>` contains `<link rel="stylesheet" href="../assets/shared.css">`
+   - `</body>` is preceded by `<script src="../assets/quiz.js"></script>`
    If either tag is missing, edit the file to add it. Do not proceed until every HTML file passes both checks.
 
 Workspace context:

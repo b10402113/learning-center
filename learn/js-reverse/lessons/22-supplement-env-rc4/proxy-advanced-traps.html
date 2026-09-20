@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Proxy 进阶捕获器：属性描述符与调用/构造拦截</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+<header>
+<h1>Proxy 进阶捕获器：属性描述符与调用/构造拦截</h1>
+<p class="subtitle">网站绕过 get/set 的三种姿势，Proxy 都有对应的捕获器</p>
+</header>
+
+<main>
+
+<section>
+<h2>为什么 get/set 还不够？</h2>
+<p>上一课用 <code>get</code>/<code>set</code> 拦住了「点号读写」——<code>obj.name</code>、<code>obj.age = 25</code> 这类操作。但 JS 对象身上的底层操作远不止这两种。有些网站偏偏不走点号，而是用<strong>属性描述符 API</strong> 读写属性；你还可能想监控「某个加密函数什么时候被调用、参数是什么」「网站什么时候 new 了一个对象」。这三种操作，<code>get</code>/<code>set</code> 全都抓不到。</p>
+<p>Proxy 的设计是一对一的：JS 里每种底层操作，都有对应的捕获器（trap）。这节课补齐逆向中最常用的四个进阶 trap：<code>getOwnPropertyDescriptor</code>、<code>defineProperty</code>、<code>apply</code>、<code>construct</code>。补完之后，网站换什么姿势操作对象，都躲不过你的监控。</p>
+</section>
+
+<section>
+<h2>先补一课：属性描述符是什么</h2>
+<p>JS 对象的每个属性，除了值之外还带着一份「说明书」，叫<strong>属性描述符</strong>。用 <code>Object.getOwnPropertyDescriptor</code> 能看到它：</p>
+<pre><code>var Stu = { "name": "小明" };
+
+console.log(Object.getOwnPropertyDescriptor(Stu, "name"));
+// { value: '小明', writable: true, enumerable: true, configurable: true }</code></pre>
+<p>四个字段：<code>value</code> 是属性值；<code>writable</code> 控制能不能改值；<code>enumerable</code> 控制能不能被 <code>for...in</code> 枚举出来；<code>configurable</code> 控制能不能删除属性或修改描述符本身。</p>
+<p>关键点在这里：网站可以用 <code>Object.getOwnPropertyDescriptor(Stu, "name").value</code> 读到 <code>name</code> 的值——整个过程<strong>不触发你的 <code>get</code> trap</strong>。同理，用 <code>Object.defineProperty</code> 定义属性也不会触发 <code>set</code>。这就是网站绕过基础监控的标准手法。</p>
+</section>
+
+<section>
+<h2>getOwnPropertyDescriptor：拦截描述符读取</h2>
+<p>在 handler 里加上同名 trap，描述符读取这一操作也被纳入监控：</p>
+<pre><code>var User = {
+    username: "bobo",
+    age: 20,
+    address: "Bj"
+};
+
+User = new Proxy(User, {
+    get(target, p, receiver) {
+        console.log(`获取属性${p}操作`);
+        return Reflect.get(target, p);
+    },
+    getOwnPropertyDescriptor(target, p) {
+        let result;
+        result = Reflect.getOwnPropertyDescriptor(target, p);
+        console.log(`通过属性描述符获取属性${p}操作`);
+        return result;
+    }
+});
+
+console.log(User.username);  // 触发 get
+console.log(Object.getOwnPropertyDescriptor(User, "address").value);
+// 触发 getOwnPropertyDescriptor，日志打出「通过属性描述符获取属性address操作」</code></pre>
+<p>写法和 <code>get</code> 完全同构：先用 <code>Reflect.getOwnPropertyDescriptor(target, p)</code> 拿到真实结果，再打日志，最后把结果原样返回。注意返回值必须是一个合法的描述符对象（或 <code>undefined</code>），不能随便返回别的，否则 JS 引擎会报错。</p>
+</section>
+
+<section>
+<h2>defineProperty：拦截描述符定义</h2>
+<p>写入方向同理。网站用 <code>Object.defineProperty</code> 给对象定义属性时——比如偷偷挂一个检测字段——<code>defineProperty</code> trap 就会触发：</p>
+<pre><code>var Person = {};
+
+Person = new Proxy(Person, {
+    getOwnPropertyDescriptor(target, p) {
+        let result;
+        result = Reflect.getOwnPropertyDescriptor(target, p);
+        console.log(`通过属性描述符获取属性${p}操作`);
+        return result;
+    },
+    defineProperty: function (target, p, descriptor) {
+        console.log(`通过属性描述符设置属性${p}操作`);
+        let result;
+        result = Reflect.defineProperty(target, p, descriptor);
+        return result;
+    }
+});
+
+// 通过属性描述符给 Person 定义一个 name 属性
+Object.defineProperty(Person, 'name', {
+    value: 'Bobo',
+    writable: true,      // 允许修改属性值
+    enumerable: true,    // 允许枚举属性
+    configurable: true   // 允许删除或修改属性描述符
+});</code></pre>
+<p><code>descriptor</code> 参数就是网站传进来的那个描述符对象——它想写什么值、设了哪些开关，你在 trap 里看得一清二楚。这对分析「网站在对象上藏了什么字段」特别有用。</p>
+</section>
+
+<section>
+<h2>apply：拦截函数调用</h2>
+<p>Proxy 不只包对象，也能包函数。函数被<strong>调用</strong>时，<code>apply</code> trap 触发：</p>
+<pre><code>add = function (a, b) {
+    console.log("add函数正在被调用");
+    return a + b;
+};
+
+add = new Proxy(add, {
+    apply: function (target, thisArg, argList) {
+        // target: 函数对象。thisArg: 调用时的 this 指针。argList: 参数数组
+        let result;
+        result = Reflect.apply(target, thisArg, argList);
+        console.log(`${target.name}函数被调用，参数为:${argList}`);
+        return result;
+    }
+});
+
+add(1, 2);</code></pre>
+<p>三个参数各管一件事：<code>target</code> 是被代理的函数对象（<code>target.name</code> 能拿到函数名）；<code>thisArg</code> 是这次调用的 <code>this</code> 指向；<code>argList</code> 是<strong>参数数组</strong>——<code>add(1, 2)</code> 传进来就是 <code>[1, 2]</code>。<code>Reflect.apply</code> 用原参数执行原函数，拿到返回值后打日志再返回。</p>
+<p>逆向用法很直接：定位到加密函数后，给它套上带 <code>apply</code> 的 Proxy，它<strong>每次被调用、传了什么参数</strong>全部落在控制台里。这和 hook 的「保存原函数 + 同名覆盖」殊途同归，但 Proxy 的写法更系统，不用手动管原函数的保存与调用。</p>
+</section>
+
+<section>
+<h2>construct：拦截 new 构造</h2>
+<p><code>new Fn()</code> 调的就是构造函数。要监控「网站什么时候 new 了一个对象」，用 <code>construct</code> trap：</p>
+<pre><code>function Animal() {
+    // 构造方法，类似 Python 里的 __init__
+}
+
+Animal = new Proxy(Animal, {
+    construct: function (target, argArray, newTarget) {
+        // target: 函数对象。argArray: 构造参数列表。newTarget: 代理后的对象
+        let result = Reflect.construct(target, argArray, newTarget);
+        console.log(`${target.name}对象被创建`);
+        return result;
+    }
+});
+
+obj = new Animal();  // 日志打出「Animal对象被创建」</code></pre>
+<p><code>argArray</code> 是传给构造函数的参数列表，<code>newTarget</code> 是代理后的构造函数本身。<code>Reflect.construct</code> 负责真正执行构造、产出实例，trap 里把这个实例返回即可。网站的加密器如果是个类（<code>new Encryptor(key)</code> 这种写法），<code>construct</code> 一拦，密钥什么时候传进来的就暴露了。</p>
+</section>
+
+<section>
+<h2>六类 trap 速查表</h2>
+<p>到这里，逆向中最常用的 Proxy 捕获器就齐了。记住这个对应表：每种操作一个 trap，trap 里用同名 <code>Reflect</code> 方法转发原操作。</p>
+<table>
+<thead>
+<tr><th>网站的操作</th><th>触发的 trap</th><th>转发用的 Reflect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>obj.p</code> 读属性</td><td><code>get</code></td><td><code>Reflect.get</code></td></tr>
+<tr><td><code>obj.p = v</code> 写属性</td><td><code>set</code></td><td><code>Reflect.set</code></td></tr>
+<tr><td><code>Object.getOwnPropertyDescriptor(obj, p)</code></td><td><code>getOwnPropertyDescriptor</code></td><td><code>Reflect.getOwnPropertyDescriptor</code></td></tr>
+<tr><td><code>Object.defineProperty(obj, p, desc)</code></td><td><code>defineProperty</code></td><td><code>Reflect.defineProperty</code></td></tr>
+<tr><td><code>fn(...args)</code> 调用函数</td><td><code>apply</code></td><td><code>Reflect.apply</code></td></tr>
+<tr><td><code>new Fn(...args)</code> 构造对象</td><td><code>construct</code></td><td><code>Reflect.construct</code></td></tr>
+</tbody>
+</table>
+<p>把这套带全部 trap 的 Proxy 套在 <code>window</code> 上做环境探测，监控面就从「点号读写」扩展到了「描述符 API、函数调用、对象构造」。网站无论换哪种姿势读环境、藏字段、调函数，都会在日志里留下痕迹。</p>
+</section>
+
+<section class="quiz-section">
+<h2>随堂测验</h2>
+<p>测验 Proxy 进阶捕获器的概念。</p>
+
+<div class="quiz" data-question="属性描述符里不包含下面哪个字段？" data-correct="3" data-explain="描述符只有 value、writable、enumerable、configurable 四个字段，没有 name。">
+  <button class="opt">value</button>
+  <button class="opt">writable</button>
+  <button class="opt">enumerable</button>
+  <button class="opt">name</button>
+</div>
+
+<div class="quiz" data-question="网站用 Object.getOwnPropertyDescriptor(User, &quot;address&quot;).value 读属性值时，会触发哪个 trap？" data-correct="1" data-explain="走属性描述符 API 的读取触发 getOwnPropertyDescriptor trap，不触发 get。">
+  <button class="opt">get</button>
+  <button class="opt">getOwnPropertyDescriptor</button>
+  <button class="opt">defineProperty</button>
+  <button class="opt">apply</button>
+</div>
+
+<div class="quiz" data-question="defineProperty trap 的 descriptor 参数是什么？" data-correct="2" data-explain="descriptor 是网站传给 Object.defineProperty 的描述符对象，包含要写的值和 writable 等开关。">
+  <button class="opt">被代理的原始对象</button>
+  <button class="opt">属性的旧值</button>
+  <button class="opt">网站想定义的属性描述符对象</button>
+  <button class="opt">代理后的新对象</button>
+</div>
+
+<div class="quiz" data-question="apply trap 的 argList 参数代表什么？" data-correct="0" data-explain="argList 是函数调用时的参数数组，add(1, 2) 对应 [1, 2]。">
+  <button class="opt">函数被调用时传入的参数数组</button>
+  <button class="opt">函数内部的局部变量列表</button>
+  <button class="opt">调用处的 this 指向对象</button>
+  <button class="opt">函数对象的属性名列表</button>
+</div>
+
+<div class="quiz" data-question="下面哪种操作会触发 construct trap？" data-correct="1" data-explain="construct 拦截 new 关键字触发的构造调用。">
+  <button class="opt">Animal.call(obj)</button>
+  <button class="opt">new Animal()</button>
+  <button class="opt">Animal.prototype</button>
+  <button class="opt">Animal.name</button>
+</div>
+
+<div class="quiz" data-question="在进阶 trap 里转发原操作，推荐的做法是什么？" data-correct="2" data-explain="trap 里用同名的 Reflect 方法转发，能拿到正确结果且不破坏原对象行为。">
+  <button class="opt">直接读写被代理的对象本身</button>
+  <button class="opt">把结果写死成固定值返回</button>
+  <button class="opt">用对应的 Reflect 同名方法转发</button>
+  <button class="opt">再包一层新的 Proxy 转发</button>
+</div>
+</section>
+
+</main>
+
+<div class="lesson-nav">
+<div class="nav-left">
+<a href="./proxy-interception.html">← 上一步：Proxy 拦截与环境探测</a>
+</div>
+<div class="nav-right">
+<a href="./rc4-algorithm.html">下一步：RC4 算法 →</a>
+</div>
+</div>
+
+<footer>
+<p>有疑问？随时向老师提问。</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

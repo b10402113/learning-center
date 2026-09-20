@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>無限／背景 agent 與 inbox</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>無限／背景 agent 與 inbox</h1>
+<p class="meta">Step 4/5 · 沒有對話的 agent，要怎麼跟人互動</p>
+
+<h2>學習目標</h2>
+<p>能描述無限／背景 agent 的運作模型——給一個任務或等一個事件、無限地跑、用 inbox 對外交互——並說明為何它不需要 messages API，以及真正難的是 eval 與約束。</p>
+
+<h2>把「對話」拿掉之後</h2>
+<p>我們習慣的 agent 都長在同一個框架裡：你一句、它一句，messages 陣列越來越長，這就是「對話」。但 agent 不一定要這樣運作。</p>
+
+<p><strong>無限／背景 agent</strong> 是完全不同的形態：你不是跟它聊天，而是<strong>給它一個任務</strong>，或讓它<strong>待命等一個事件</strong>，然後它就一直跑下去，需要你的時候才來找你。它沒有「對話」可言，因此整個 chat 的框架——messages 陣列、逐輪回應、SSE 串流——大多用不上。</p>
+
+<h2>兩種啟動方式：給任務，或等事件</h2>
+<ul>
+<li><strong>任務驅動</strong>：你丟一個目標進去（「監控這批服務」、「研究這個市場並持續更新」），它就自己去跑，跑到完成或持續維持。</li>
+<li><strong>事件驅動</strong>：它平常待命，等外部事件叫醒它——webhook、告警系統、佇列訊息。事件一到才開始工作。</li>
+</ul>
+<p>兩者的共同點是「無限」：這類 agent 的生命週期不是一次問答，而是持續存在、反覆被喚醒的存在。</p>
+
+<h2>durable 是入場券，不是選配</h2>
+<p>因為它活在背景、活得比任何連線都久，durable execution 在這裡不是可以延後的那一項，而是<strong>入場券</strong>：workflow 要能接受任務、暫停、被事件喚醒、繼續跑，而且每一步都要能跨重啟存活。</p>
+
+<p>換句話說，前一步那條「durable 什麼時候從選配變必要」的線，在這裡被直接跳過——背景 agent 沒有「先不做 durable」的選項。這也讓 durable 成為理解這個形態最好的切入點。</p>
+
+<h2>不需要 messages API</h2>
+<p>一般 agent 靠 messages API 維護對話歷史：你送一則、模型回一則。但背景 agent 沒有來回對話，也就不需要那套 API。它需要的不是「對話歷史」，而是<strong>任務狀態</strong>：這個任務現在跑到哪、上次事件處理的結果是什麼、下一步要做什麼。</p>
+
+<p>如果硬把對話 API 套上去，你會得到一個假裝在聊天的東西，反而把真正的狀態管理藏起來。正確的做法是讓事件日誌與 durable workflow 當狀態的家，而不是逼 agent 演一場對話。</p>
+
+<h2>互動模型：inbox</h2>
+<p>那它要怎麼跟人互動？答案是 <strong>inbox（收件匣）</strong>：agent 主動把東西<strong>投遞</strong>到你的 inbox，你從 inbox 回覆，它再繼續。投遞的內容通常是這幾類：</p>
+
+<table>
+<thead>
+<tr><th>投遞內容</th><th>什麼時候出現</th></tr>
+</thead>
+<tbody>
+<tr><td>問題</td><td>它缺一個只有你知道的資訊</td></tr>
+<tr><td>審批</td><td>它要執行一個不可逆的動作，需要你放行</td></tr>
+<tr><td>選項</td><td>有多條路，它要你挑一條</td></tr>
+</tbody>
+</table>
+
+<p>注意這正是前面 human-in-the-loop 的 approval gate 的泛化：DBOS 的暫停／恢復機制，原本用來等一個批准，現在變成一個通用的「投遞—等待—回覆」通道。訊息方向也反了過來——從「使用者在聊天框打字」變成「agent 主動來敲你」。</p>
+
+<h2>難的不是做，是做好</h2>
+<p>把這套拼起來並不難：durable workflow 是地基，approval gate 是互動通道，事件日誌是狀態的真相。真正難的兩件事是：</p>
+<ul>
+<li><strong>約束（constraining）</strong>：一個無限跑、會自己動手的 agent，如果沒有護欄與審批，出錯的幅度也會是無限的。</li>
+<li><strong>評測（evaluating）</strong>：沒有對話可以讓你看懂它為什麼這樣做，你必須靠 eval 才能知道它到底做得好不好。</li>
+</ul>
+
+<blockquote>把它做出來很容易，把它做好很難。</blockquote>
+
+<p>所以這個形態的門檻不在「能不能跑」，而在你有沒有能力衡量它、約束它。這也是為什麼前一步的 eval 迴圈、這一路學的 guardrail 與 approval，到了這裡全部變成核心議題，而不是附加功能。</p>
+
+<h2>回頭看：這是你已經有的積木</h2>
+<p>有趣的是，背景 agent 不需要任何新技術——它是你已經做過的東西換一個組裝方式：durable workflow 當心臟、approval 的暫停／恢復當 inbox、event_log 當狀態、guardrail 當煞車。你缺的只是把「對話」這個前提拿掉，然後重新想清楚人與 agent 的互動該長什麼樣。</p>
+
+<p>如果你手上有一個自己的 agent runtime，這一步其實是最好遷移的：它要的不是新的函式庫，而是把 durable 執行與暫停／恢復的語意做對。</p>
+
+<div class="lesson-nav">
+  <div><a href="./durable-decoupling.html">← 上一步：Durable 解耦：讓 run 不再依附 client</a></div>
+  <div><a href="./production-hardening-and-eval.html">下一步：生產硬化：託管沙箱與 eval →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="無限／背景 agent 和 chat agent 最根本的差別是什麼？" data-correct="2" data-explain="它不是被拿來聊天，而是被派任務或等事件，因此整個對話框架大多用不上。">
+  <button class="opt">它用的模型比較大</button>
+  <button class="opt">它不需要工具呼叫</button>
+  <button class="opt">它沒有來回對話可言</button>
+  <button class="opt">它不能執行任何程式</button>
+</div>
+
+<div class="quiz" data-question="這類 agent 的兩種典型啟動方式是什麼？" data-correct="1" data-explain="一種是被給定任務，另一種是待命等外部事件（webhook、告警）來喚醒。">
+  <button class="opt">定時輪詢與手動重啟</button>
+  <button class="opt">給任務與等事件</button>
+  <button class="opt">上傳檔案與語音輸入</button>
+  <button class="opt">使用者登入與登出</button>
+</div>
+
+<div class="quiz" data-question="在背景 agent 的形態裡，durable execution 的角色是什麼？" data-correct="0" data-explain="它不是在選配與必備之間搖擺，而是讓這整個形態成立的入場券。">
+  <button class="opt">入場券，不是選配</button>
+  <button class="opt">可以延後到最後再補</button>
+  <button class="opt">只在需要審批時才用</button>
+  <button class="opt">用來取代事件日誌</button>
+</div>
+
+<div class="quiz" data-question="為什麼背景 agent 不需要 messages API？" data-correct="1" data-explain="沒有來回對話就沒有對話歷史要維護，它真正需要的是任務狀態。">
+  <button class="opt">因為 messages API 太貴</button>
+  <button class="opt">因為它沒有對話要維護</button>
+  <button class="opt">因為它不呼叫任何模型</button>
+  <button class="opt">因為它只用結構化輸出</button>
+</div>
+
+<div class="quiz" data-question="inbox 互動模型中，訊息的方向變成什麼樣？" data-correct="2" data-explain="不再由使用者在聊天框打字，而是 agent 主動投遞問題、審批或選項，人再回覆。">
+  <button class="opt">使用者不斷地追問進度</button>
+  <button class="opt">雙方同時在線即時對話</button>
+  <button class="opt">agent 主動投遞，人再回覆</button>
+  <button class="opt">系統自動回覆不需人工</button>
+</div>
+
+<div class="quiz" data-question="作者說「做很容易、做好很難」，難的兩件事是什麼？" data-correct="0" data-explain="沒有對話可觀察，你必須靠 eval 衡量好壞，同時用護欄與審批約束它的行為。">
+  <button class="opt">評測與約束它</button>
+  <button class="opt">安裝與部署它</button>
+  <button class="opt">選模型與調參數</button>
+  <button class="opt">寫 prompt 與工具</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 生產級 Harness 與下一步 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -15,7 +15,7 @@ Treat the current directory as a teaching workspace. The state of their learning
 - `./reference/*.html`: A directory of reference materials. These are the compressed learnings from the lessons - cheat sheets, reference algorithms, syntax, yoga poses, glossaries. They are the raw units of learning. They should be beautiful documents which print out well, and are designed for quick reference.
 - `RESOURCES.md`: A list of resources which can be explored to ground your teaching in contextual knowledge, or to acquire knowledge and wisdom. Use the format in [RESOURCES-FORMAT.md](./RESOURCES-FORMAT.md).
 - `./learning-records/*.md`: A directory of learning records, which capture what the user has learned. These are loosely equivalent to architectural decision records in software development - they capture non-obvious lessons and key insights that may need to be revised later, or drive future sessions. These should be used to calculate the zone of proximal development. They are titled `0001-<dash-case-name>.md`, where the number increments each time. Use the format in [LEARNING-RECORD-FORMAT.md](./LEARNING-RECORD-FORMAT.md).
-- `./lessons/*.html`: A directory of lessons. A **lesson** is a single, self-contained HTML output that teaches one tightly-scoped thing tied to the mission. This is the primary unit of teaching in this workspace.
+- `./lessons/<node-slug>/*.html`: A directory of lessons, one subfolder per node. A **lesson** is a single, self-contained HTML output that teaches one tightly-scoped thing tied to the mission. This is the primary unit of teaching in this workspace.
 - `./lessons/assets/*`: Reusable **components** shared across lessons. See [Assets](#assets).
 - `NOTES.md`: A scratchpad for you to jot down user preferences, or working notes.
 
@@ -46,7 +46,7 @@ Fluency can give the user an illusory sense of mastery, but storage strength is 
 
 ## Lessons
 
-A lesson is the main thing you produce — the unit in which knowledge and skills reach the user. Each lesson is one self-contained HTML file, saved to `./lessons/` and titled `0001-<dash-case-name>.html` where the number increments each time.
+A lesson is the main thing you produce — the unit in which knowledge and skills reach the user. Each lesson is one self-contained HTML file, saved under its node's folder, `./lessons/<node-slug>/`, and titled `0001-<dash-case-name>.html` where the number increments each time.
 
 A lesson should be **beautiful** — clean, readable typography and layout — since the user will return to these later to review. Think Tufte.
 
@@ -66,7 +66,7 @@ Lessons are built from reusable **components**, stored in `./lessons/assets/`: s
 
 Reuse is the default, not the exception. Before authoring a lesson, read `./lessons/assets/` and build from the components already there. When a lesson needs something new and reusable, write it as a component in `./lessons/assets/` and link to it — never inline code a future lesson would duplicate.
 
-A shared stylesheet is the first component every workspace earns: every lesson links it via `<link rel="stylesheet" href="./assets/shared.css">`, so the lessons look like one consistent course rather than a pile of one-offs. As the workspace grows, so should the component library.
+A shared stylesheet is the first component every workspace earns: every lesson links it via `<link rel="stylesheet" href="../assets/shared.css">`, so the lessons look like one consistent course rather than a pile of one-offs. As the workspace grows, so should the component library.
 
 ## The Mission
 
@@ -111,7 +111,7 @@ For quizzes, each answer should be exactly the same number of words (and charact
 
 ### Quiz format
 
-Every in-lesson quiz uses this HTML structure, powered by `./assets/quiz.js`:
+Every in-lesson quiz uses this HTML structure, powered by `../assets/quiz.js`:
 
 ```html
 <div class="quiz" data-question="問題文字" data-correct="2" data-explain="解說">
@@ -125,7 +125,7 @@ Every in-lesson quiz uses this HTML structure, powered by `./assets/quiz.js`:
 - `data-correct` is the **0-based index** of the correct option.
 - `data-explain` is shown after a correct answer; keep it to one sentence.
 - All `<button class="opt">` elements are siblings inside the `<div class="quiz">`.
-- Every lesson HTML must include `<script src="./assets/quiz.js"></script>` before `</body>` for quizzes to work.
+- Every lesson HTML must include `<script src="../assets/quiz.js"></script>` before `</body>` for quizzes to work.
 
 ## Acquiring Wisdom
 
@@ -159,13 +159,13 @@ The user will sometimes express preferences of how they want to be taught, or th
 
 ## Node step teaching
 
-When invoked as `/teach <subject>/<node-id>` (detected by the node file existing at `learn/<subject>/nodes/<node-id>.mdx`), this skill enters node-teaching mode. Use the subject's own directory — `learn/<subject>/` — for all state: `MISSION.md`, `lessons/`, `reference/`, `learning-records/`, `MEMORY.md`. If `learn/<subject>/MISSION.md` exists, read it; if `learn/<subject>/lessons/` exists, write HTML there. The only addition to the workspace teaching workflow: step-by-step teaching from the node's step-DAG, with content written back to the skeleton step files.
+When invoked as `/teach <subject>/<node-id>` (detected by the node file existing at `learn/<subject>/nodes/<node-id>.mdx`), this skill enters node-teaching mode. Use the subject's own directory — `learn/<subject>/` — for all state: `MISSION.md`, `lessons/`, `reference/`, `learning-records/`, `MEMORY.md`. If `learn/<subject>/MISSION.md` exists, read it; write each node's HTML under `learn/<subject>/lessons/<node-id>/`. The only addition to the workspace teaching workflow: step-by-step teaching from the node's step-DAG, with content written back to the skeleton step files.
 
 ### Setup
 
 1. Read `learn/<subject>/nodes/<node-id>.mdx` — parse the `steps` frontmatter for the DAG (step ids, order, deps). Read `learn/<subject>/MEMORY.md` for language and learner profile. Read `learn/<subject>/digests/` for source material. Read `learn/<subject>/MISSION.md` if it exists.
 2. If the node's `status` is already `content-written`, skip the teach cycle and ask the user if they have any questions about the content — use it as a Q&A / review session instead.
-3. **Ensure assets.** Create `learn/<subject>/lessons/assets/` if it does not exist. If `learn/<subject>/lessons/assets/shared.css` does not exist, copy the canonical `shared.css` from `.opencode/skills/teach/assets/shared.css` into it. If `learn/<subject>/lessons/assets/quiz.js` does not exist and a `quiz.js` is needed, copy from `assets/quiz.js`. All HTML lessons for this subject must reference assets as `./assets/shared.css` and `./assets/quiz.js` — never inline CSS/JS that belongs in a shared component, and never use relative paths that escape `lessons/` (e.g. `../assets/`).
+3. **Ensure assets.** Create `learn/<subject>/lessons/assets/` if it does not exist. If `learn/<subject>/lessons/assets/shared.css` does not exist, copy the canonical `shared.css` from `.opencode/skills/teach/assets/shared.css` into it. If `learn/<subject>/lessons/assets/quiz.js` does not exist and a `quiz.js` is needed, copy from `assets/quiz.js`. Each node's HTML lives in its own `lessons/<node-id>/` folder one level below `lessons/`, so every HTML lesson for this subject must reference assets as `../assets/shared.css` and `../assets/quiz.js` — never inline CSS/JS that belongs in a shared component.
 4. Topological sort the DAG — teach deps before dependents. Steps with no deps are entry points.
 
 ### Teach cycle
@@ -173,10 +173,10 @@ When invoked as `/teach <subject>/<node-id>` (detected by the node file existing
 For each step in sorted order:
 
 1. **Read the skeleton.** Load `learn/<subject>/nodes/<node-id>/<step-id>.mdx` — Read source files when necessary.
-2. **Teach.** Generate a self-contained HTML lesson file and save it to `learn/<subject>/lessons/<step-id>.html`. Present the step's learning goal, explain core concepts (pulling from digests), give examples or analogies, and render it as a beautiful standalone HTML page (see [Lessons](#lessons) for style). Use the subject's `language` from `MEMORY.md`. Follow the philosophy above — retrieval practice, desirable difficulty, tight feedback loops. Every HTML file must reference `<link rel="stylesheet" href="./assets/shared.css">` in `<head>` and `<script src="./assets/quiz.js"></script>` before `</body>` (if quizzes are used). Never inline CSS/JS that belongs in the shared assets. **Include prev/next step navigation.** Place a `<div class="lesson-nav">` before the footer: the left slot holds a link to the previous step (`← 上一步：<title>`), the right slot holds a link to the next step (`下一步：<title> →`). Omit the left slot for the first step; omit the right slot for the last step. Use the topologically sorted order from the node's `steps` DAG to determine sequence, and read each step's `title` from its MDX frontmatter for the link text. After writing the file, open it, and wait for them to confirm they have read it.
+2. **Teach.** Generate a self-contained HTML lesson file and save it to `learn/<subject>/lessons/<node-id>/<step-id>.html`. Present the step's learning goal, explain core concepts (pulling from digests), give examples or analogies, and render it as a beautiful standalone HTML page (see [Lessons](#lessons) for style). Use the subject's `language` from `MEMORY.md`. Follow the philosophy above — retrieval practice, desirable difficulty, tight feedback loops. Every HTML file must reference `<link rel="stylesheet" href="../assets/shared.css">` in `<head>` and `<script src="../assets/quiz.js"></script>` before `</body>` (if quizzes are used). Never inline CSS/JS that belongs in the shared assets. **Include prev/next step navigation.** Place a `<div class="lesson-nav">` before the footer: the left slot holds a link to the previous step (`← 上一步：<title>`), the right slot holds a link to the next step (`下一步：<title> →`). Omit the left slot for the first step; omit the right slot for the last step. Use the topologically sorted order from the node's `steps` DAG to determine sequence, read each step's `title` from its MDX frontmatter for the link text, and link each as a sibling file in the same node folder (`./<step-id>.html`). After writing the file, open it, and wait for them to confirm they have read it.
 3. **Validate.** After writing the HTML, read the file back and verify it ends with a Quiz section with **at least 5 questions** covering the step's core concepts. If missing or under 5, append questions until the minimum is met before proceeding.
 4. **Check.** After the user confirms they have read the HTML lesson, ask 5-6 check questions to verify understanding. On failing, re-explain (update the HTML if needed) and re-check, user can also skip the check questions if they feel confident.
-5. **Write.** After the learner passes, compose the `## Lesson` body as a single-sentence summary of the step's core concept. The HTML is the detailed record; the MDX note is just a one-line reminder of what was taught. Append a `## Course` section after `## Lesson` with the relative path to the HTML lesson: `## Course\n\n[↗ 課程頁面](../../lessons/<step-id>.html)` — this lets the learner jump from the MDX article to the interactive HTML lesson.
+5. **Write.** After the learner passes, compose the `## Lesson` body as a single-sentence summary of the step's core concept. The HTML is the detailed record; the MDX note is just a one-line reminder of what was taught. Append a `## Course` section after `## Lesson` with the relative path to the HTML lesson: `## Course\n\n[↗ 課程頁面](../../lessons/<node-id>/<step-id>.html)` — this lets the learner jump from the MDX article to the interactive HTML lesson.
 6. **Progress.** Show completion status (e.g., "Step 2/5 done"). Confirm with the learner before moving to the next step.
 
 ### `-skip-task` mode
@@ -184,9 +184,9 @@ For each step in sorted order:
 When `-skip-task` appears in the invocation (e.g. `/teach <subject>/<node-id> skip-task`), skip the **Check** step entirely. For each step in sorted order:
 
 1. **Read the skeleton.** Load `learn/<subject>/nodes/<node-id>/<step-id>.mdx` — Read source files when necessary.
-2. **Write the HTML.** Generate a self-contained HTML lesson file and save it to `learn/<subject>/lessons/<step-id>.html`. Present the step's learning goal, explain core concepts (pulling from digests), give examples or analogies, and render it as a beautiful standalone HTML page (see [Lessons](#lessons) for style). Use the subject's `language` from `MEMORY.md`. Follow the philosophy above — retrieval practice, desirable difficulty, tight feedback loops. Every HTML file must reference `<link rel="stylesheet" href="./assets/shared.css">` in `<head>` and `<script src="./assets/quiz.js"></script>` before `</body>` (if quizzes are used). Never inline CSS/JS that belongs in the shared assets. **Include prev/next step navigation.** Place a `<div class="lesson-nav">` before the footer: the left slot holds a link to the previous step (`← 上一步：<title>`), the right slot holds a link to the next step (`下一步：<title> →`). Omit the left slot for the first step; omit the right slot for the last step. Use the topologically sorted order from the node's `steps` DAG to determine sequence, and read each step's `title` from its MDX frontmatter for the link text. After writing the file, read it back and verify it ends with a Quiz section with **at least 5 questions** covering the step's core concepts. If missing or under 5, append questions until the minimum is met before proceeding.
+2. **Write the HTML.** Generate a self-contained HTML lesson file and save it to `learn/<subject>/lessons/<node-id>/<step-id>.html`. Present the step's learning goal, explain core concepts (pulling from digests), give examples or analogies, and render it as a beautiful standalone HTML page (see [Lessons](#lessons) for style). Use the subject's `language` from `MEMORY.md`. Follow the philosophy above — retrieval practice, desirable difficulty, tight feedback loops. Every HTML file must reference `<link rel="stylesheet" href="../assets/shared.css">` in `<head>` and `<script src="../assets/quiz.js"></script>` before `</body>` (if quizzes are used). Never inline CSS/JS that belongs in the shared assets. **Include prev/next step navigation.** Place a `<div class="lesson-nav">` before the footer: the left slot holds a link to the previous step (`← 上一步：<title>`), the right slot holds a link to the next step (`下一步：<title> →`). Omit the left slot for the first step; omit the right slot for the last step. Use the topologically sorted order from the node's `steps` DAG to determine sequence, read each step's `title` from its MDX frontmatter for the link text, and link each as a sibling file in the same node folder (`./<step-id>.html`). After writing the file, read it back and verify it ends with a Quiz section with **at least 5 questions** covering the step's core concepts. If missing or under 5, append questions until the minimum is met before proceeding.
 3. **Write the MDX.** Compose the `## Lesson` body as a single-sentence summary of the step's core concept. The HTML is the detailed record; the MDX note is just a one-line reminder of what was taught.
-4. **Append Course Section.** Append a `## Course` section after `## Lesson` with the relative path to the HTML lesson: `## Course\n\n[↗ 課程頁面](../../lessons/<step-id>.html)` — this lets the learner jump from the MDX article to the interactive HTML lesson.
+4. **Append Course Section.** Append a `## Course` section after `## Lesson` with the relative path to the HTML lesson: `## Course\n\n[↗ 課程頁面](../../lessons/<node-id>/<step-id>.html)` — this lets the learner jump from the MDX article to the interactive HTML lesson.
 5. **Progress.** Show completion status (e.g., "Step 2/5 done"). Move directly to the next step without waiting for user confirmation.
 
 Skip-task mode assumes the learner will review the content offline or has already studied the material and needs the articles generated. No check questions are asked, no mastery is written back, and the learner is not prompted to confirm before moving to the next step.

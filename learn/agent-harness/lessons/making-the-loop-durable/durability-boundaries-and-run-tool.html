@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>決定哪些要持久化，並把工具執行收回來</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>決定哪些要持久化，並把工具執行收回來</h1>
+<p class="meta">Step 2/5 · 判定該包進 durable step 的邊界、移除 execute、集中成 runTool，並定義 ToolCall/Turn 型別</p>
+
+<h2>學習目標</h2>
+<p>用「重跑會不會造成傷害」判定該包進 durable step 的邊界（tool call、emit、streamText），移除工具的 execute、集中成單一 runTool switch，並定義 ToolCall 與 Turn 兩個型別。</p>
+
+<h2>一個決定性的問題：哪些要持久化？</h2>
+
+<p>裝好 DBOS 之後會出現一個誘惑：把一切都包起來。但持久化不是免費的，每包一個 step 就多一份紀錄的簿記。所以先問一個尖銳的篩選問題——<strong>如果這段程式因為重啟而重跑一次，會不會造成傷害？</strong></p>
+
+<p>帶著這個問題掃一遍現有 runtime，會浮出三個答案很明顯的候選：</p>
+
+<table>
+<thead>
+<tr><th>動作</th><th>重跑會發生什麼</th><th>該不該包</th></tr>
+</thead>
+<tbody>
+<tr><td>個別 tool call</td><td>工具真的執行第二次——寄兩封信、發兩條訊息</td><td>該，各自一個 step</td></tr>
+<tr><td>emit 事件</td><td>bus 已經寫資料庫了，重跑會多出重複的事件列</td><td>該，避免重複行</td></tr>
+<tr><td>streamText 呼叫模型</td><td>模型被呼叫第二次，多燒一輪錢和 token</td><td>該，避免重複計費</td></tr>
+</tbody>
+</table>
+
+<p>DBOS 的規則是：凡是被包進 <code>DBOS.runStep</code> 的東西，它的輸入和輸出都會被持久化，所以可以 retry、可以 suspend、可以在 server 失敗後存活。把上面三個候選各自包成 step，再把這些 step 串起來，就組成一個 <strong>workflow（工作流）</strong>。這一步是在「劃邊界」——決定耐用性的界線畫在哪裡，這是整個 durable workflow 設計裡最核心、最能遷移的判斷力。</p>
+
+<h2>把工具執行從 AI SDK 手上收回來</h2>
+
+<p>這裡有個阻礙：Vercel AI SDK 的預設行為是「你只要給工具一個 <code>execute</code> 函式，它就自動幫你跑」。這聽起來貼心，卻正好擋在持久化前面——如果 SDK 自己把工具跑完，你就沒有機會在「工具執行」這件事上包 step 了。</p>
+
+<p>解法很直接：<strong>把每個工具的 <code>execute</code> 欄位刪掉</strong>。刪掉之後 SDK 不會自動執行，工具只變成一紙描述（名稱、schema），真正執行得靠我們自己。接著寫一個單一的 <code>runTool</code>，用 switch 把工具名稱對應回原本那些 mock 邏輯：</p>
+
+<pre><code>export async function runTool(name: string, args: unknown) {
+  switch (name) {
+    case "searchKB":
+      return searchKB(args as SearchKBArgs);
+    case "classify":
+      return classify(args as ClassifyArgs);
+    // ...其他工具
+    default:
+      throw new Error(`Unknown tool: ${name}`);
+  }
+}</code></pre>
+
+<p>為什麼集中成一個函式、而不是留著每個工具各一個 execute？兩個理由：第一，<strong>控制權</strong>——執行發生在我們寫的程式裡，才可能在它外面套 durable step，也才可能有審計軌跡；第二，<strong>可獨立匯出</strong>——<code>runTool</code> 檔案裡沒有任何 DBOS import，將來這個檔案可以被其他地方重複使用，不只服務於這一個 workflow。</p>
+
+<h2>step 邊界畫在呼叫端，不畫在工具檔</h2>
+
+<p>一個容易踩錯的點：該在哪裡包 <code>DBOS.runStep</code>？答案是——<strong>在 workflow 裡「呼叫 runTool 的地方」包，而不是在 tools 檔裡包</strong>。</p>
+
+<p>如果把 DBOS import 加進 tools 檔，等於讓一個純邏輯的模組依賴上執行引擎，未來想獨立重用就綁手綁腳。反之，把包裝放在 workflow 的呼叫端，所有 step 就集中在同一個 workflow 裡，不會散落在整個 repo 各處——這是要刻意避開的散落模式。這是一個「cross-cutting concern（橫切關注點）該落在哪一層」的模組邊界判斷：持久化是 workflow 的責任，不是工具檔的責任。</p>
+
+<h2>兩個新型別：ToolCall 與 Turn</h2>
+
+<p>一旦自己接管工具執行，就得自己描述「一次工具呼叫」和「一回合」長什麼樣。定義兩個 TypeScript 型別：</p>
+
+<pre><code>type ToolCall = {
+  toolCallId: string;
+  toolName: string;
+  inputs: unknown;
+};
+
+type Turn = {
+  text: string;
+  toolCalls: ToolCall[];
+  response: { messages: Message[] };
+};</code></pre>
+
+<p><code>ToolCall</code> 帶著三個欄位：<code>toolCallId</code>（把請求與結果對起來的關聯鍵）、<code>toolName</code>、<code>inputs</code>。<code>Turn</code> 則描述一次 model 呼叫的產物：要麼請求工具呼叫，要麼答案完成，再加上回傳的 response messages。之所以要把「turn」當成一個可追蹤的單位，是因為它正是 durable workflow 的<strong>進度單元</strong>——把 turn 記進 event log，才能在重啟後知道「上一回合進行到一半」，從中斷的那回合接續，而不是從頭開始。</p>
+
+<h2>這一步的收穫</h2>
+
+<p>你現在有了三個判斷工具：(1) 用「重跑會不會造成傷害」劃 step 邊界；(2) 用「控制執行」去決定工具該不該給 SDK 自動跑；(3) 用「呼叫端 vs 模組內」決定包裝落在哪一層。下一步就是真的把 model turn 和 tool call 抽成兩個可被套進 step 的函式。</p>
+
+<div class="lesson-nav">
+  <div><a href="./event-log-and-durable-bus.html">← 上一步：把事件寫進 Postgres：event_log 與 durable bus</a></div>
+  <div><a href="./model-turn-and-tool-step.html">下一步：把 model turn 與 tool call 抽成函式 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="判定一段程式該不該包進 durable step，核心問題是什麼？" data-correct="1" data-explain="若重跑會造成傷害、浪費，就該包成 step。">
+  <button class="opt">它有沒有用到資料庫</button>
+  <button class="opt">重跑一次會不會造成傷害</button>
+  <button class="opt">它寫起來會不會很長</button>
+  <button class="opt">它是不是非同步執行</button>
+</div>
+
+<div class="quiz" data-question="為什麼要刪掉每個工具的 execute 欄位？" data-correct="0" data-explain="AI SDK 會自動執行有 execute 的工具，bypass 掉 step。">
+  <button class="opt">SDK 會自動執行，bypass 掉 durable step</button>
+  <button class="opt">execute 會讓工具跑太慢</button>
+  <button class="opt">execute 會消耗過多 token</button>
+  <button class="opt">execute 讓 schema 失效</button>
+</div>
+
+<div class="quiz" data-question="runTool 集中成單一 switch 的原因是什麼？" data-correct="3" data-explain="控制執行讓持久化與審計成為可能，且可獨立匯出重用。">
+  <button class="opt">讓程式碼看起來更短</button>
+  <button class="opt">避免 import 太多工具</button>
+  <button class="opt">讓 SDK 可以自動執行</button>
+  <button class="opt">控制執行以套 step，且可獨立匯出</button>
+</div>
+
+<div class="quiz" data-question="DBOS.runStep 該包在哪個位置？" data-correct="2" data-explain="在 workflow 呼叫 runTool 的地方包，不是 tools 檔裡包。">
+  <button class="opt">tools 檔內每個函式裡</button>
+  <button class="opt">資料庫驅動程式的連接處</button>
+  <button class="opt">workflow 呼叫 runTool 的呼叫端</button>
+  <button class="opt">server 的 WebSocket handler 裡</button>
+</div>
+
+<div class="quiz" data-question="為什麼要把 turn 當成可追蹤的單位？" data-correct="1" data-explain="turn 是進度單元，重啟後能從中斷的那回合接續。">
+  <button class="opt">turn 是 token 計費的最小單位</button>
+  <button class="opt">turn 是進度單元，重啟後可從中斷回合接續</button>
+  <button class="opt">turn 是資料庫交易的最小單位</button>
+  <button class="opt">turn 決定某個工具是否該執行</button>
+</div>
+
+<div class="quiz" data-question="ToolCall 的 toolCallId 欄位作用是什麼？" data-correct="0" data-explain="把模型的請求與執行結果關聯起來。">
+  <button class="opt">把請求與執行結果關聯起來</button>
+  <button class="opt">當作工具的對外搜尋鍵</button>
+  <button class="opt">判斷工具是否可重試</button>
+  <button class="opt">決定工具執行順序</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 讓迴圈持久化 · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

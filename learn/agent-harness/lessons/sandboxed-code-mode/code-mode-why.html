@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Code Mode：一段程式取代多次往返</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Code Mode：一段程式取代多次往返</h1>
+<p class="meta">Step 1/4 · 為什麼 agent 寫的程式不能直接在機器上跑</p>
+
+<h2>學習目標</h2>
+<p>能說出 code mode 是什麼、為什麼 agent 產生的程式碼不能在開發機或生產伺服器上直接執行，以及沙箱必須「逃不出去」的理由。</p>
+
+<h2>先看一個 agent 想「自己算」的時候會怎麼做</h2>
+
+<p>你已經有一個能呼叫工具的 agent：它會描述需求、呼叫一個工具、等待結果、推理下一步，再呼叫下一個工具。對簡單任務這沒問題，但遇到「需要一連串計算」的任務，這段「呼叫─等待─推理─回傳」的迴圈就開始失控。</p>
+
+<p>想像一個客服 agent 要「找出重複扣款的客戶，算出該退多少錢」。它可能得：查訂單、數有幾筆、加總、查退款政策、再比對——每一小步都是一次工具的往返。整段下來可能要 <strong>十幾次</strong> sequential 的工具往返，每次都花掉一個 model turn 的 token 與時間。就算加平行化，還是擺脫不了「一堆 small round-trip」的本質。</p>
+
+<h2>Code mode：一個回合內把它寫成一支程式</h2>
+
+<p>這裡有個更聰明的做法：與其讓模型在十幾次往返裡逐步呼叫工具，不如讓它<strong>直接寫一支程式</strong>，把這些工具串在一起，一次跑完、一次回傳最終結果。</p>
+
+<blockquote class="good-code">code mode = 讓 LLM 寫一支程式來串工具，用「一個回合」取代「多次工具往返」，最後只回傳結果。</blockquote>
+
+<p>英文叫 <strong>code mode</strong>（這個詞是 Claude 先用的，業界有各種等價說法，例如 Small-Agents、HuggingFace 的 CodeActs）。它的核心不是「讓模型更聰明」，而是<strong>換一種工作方式</strong>：把複雜、跨多個模式的計算，交給一支確定性（deterministic）的程式做完。</p>
+
+<p>為什麼特別有效？模型極度擅長「寫程式」，卻極度不擅長「在心裏算數」。一段二次方程式求根，讓模型用一堆計算器函式慢慢逼近，容易出錯；讓它寫一支 Python 腳本，一次就對。code mode 把這兩件能力（寫程式強、算術弱）正好對齊。</p>
+
+<h2>但這支程式該在哪裡跑？</h2>
+
+<p>這是整個沙箱主題最尖銳的問題：<strong>這支程式是模型寫的嗎？是。那你信得過它嗎？</strong></p>
+
+<p>情況是這樣：一個 coding agent 想跑 Bash、一個分析 agent 想跑 SQL 或算數。這份由模型生成的程式碼，<strong>絕不該跑在你的開發機或生產伺服器上</strong>——它可能寫錯、可能讀檔案、可能連到不該連的地方。把 agent 放進生產環境，就像把陌生人直接請進機房：agent 在生產伺服器上搞砸，比在筆電上搞砸嚴重得多。</p>
+
+<p>所以答案是：讓 agent 有<strong>生成並執行程式碼</strong>的能力，但只在一個<strong>沙箱（sandbox）</strong>裡執行。這個沙箱有一條硬性要求：</p>
+
+<blockquote class="bad-code">沙箱必須「逃不出去」。它是一道邊界，模型寫的程式只能碰沙箱裡有給它的東西。</blockquote>
+
+<h2>課堂做法 vs 生產做法</h2>
+
+<p>市面上有一堆沙箱產品（託管的隔離環境、獨立 process、專用 runtime）。但這門課要的是「學得又快、又看得懂」：我們用 Node 內建的 <code>node:vm</code>，在離線、最小的 context 裡執行這段程式。</p>
+
+<p>等一下有個重要的誠實聲明要記住：<strong><code>vm</code> 不是真正的安全邊界</strong>——它過去真的有過可被逃逸的漏洞。課堂上用它來示範「邊界」的概念剛剛好；但真要部署到生產，請換成託管的沙箱產品或獨立 process。這個「課堂 vs 生產」的分界，會是整個節點的最後一課。</p>
+
+<h2>這一課的交付物</h2>
+
+<p>把上面這些拼起來，本節點的具體目標就很清楚了：在 harness 裡加一個沙箱，再定義一個 <code>run_code</code> 工具——它「寫一支程式、在沙箱裡執行、回傳結果」，然後把這個工具暴露給 agent。</p>
+
+<p>拆成接下來的三步：第二步實作沙箱本體 <code>runInSandbox</code>，第三步把沙箱接成 <code>run_code</code> 工具，第四步用一個真的算出退款的 demo 驗證，並回到「<code>vm</code> 不是安全邊界」這個重點。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./run-in-sandbox.html">下一步：實作 runInSandbox：node:vm 的沙箱邊界 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="code mode 的本質是什麼？" data-correct="1" data-explain="用一段程式把多次工具呼叫串起來，一個回合拿最終結果。">
+  <button class="opt">讓模型變得更聰明、算得更準</button>
+  <button class="opt">用一段程式取代多次工具往返</button>
+  <button class="opt">平行呼叫更多工具以加速</button>
+  <button class="opt">把工具全部換成資料庫查詢</button>
+</div>
+
+<div class="quiz" data-question="為什麼 agent 產生的程式碼得跑在沙箱裡？" data-correct="2" data-explain="模型寫的程式靠不住，不能在開發機或生產伺服器上直接執行。">
+  <button class="opt">因為沙箱跑得比本機更快</button>
+  <button class="opt">因為沙箱能存取更多檔案</button>
+  <button class="opt">因為它可能在開發機或伺服器上搞砸</button>
+  <button class="opt">因為模型只認得沙箱的語法</button>
+</div>
+
+<div class="quiz" data-question="沙箱最關鍵的硬性要求是什麼？" data-correct="3" data-explain="沙箱必須讓模型寫的程式「逃不出去」。">
+  <button class="opt">跑得夠快、延遲要低</button>
+  <button class="opt">能存取生產資料庫</button>
+  <button class="opt">支援所有程式語言</button>
+  <button class="opt">必須逃不出去</button>
+</div>
+
+<div class="quiz" data-question="模型「寫程式 vs 做算術」哪個強？" data-correct="0" data-explain="模型極擅長寫程式，卻不擅長在推論裡做算術。">
+  <button class="opt">寫程式強、算術弱</button>
+  <button class="opt">算術強、寫程式弱</button>
+  <button class="opt">兩者都強</button>
+  <button class="opt">兩者都弱</button>
+</div>
+
+<div class="quiz" data-question="這門課用 node:vm 做沙箱，對它的正確態度是？" data-correct="1" data-explain="vm 只是課堂示範，不是真正的安全邊界，生產要換託管沙箱。">
+  <button class="opt">它是牢不可破的安全邊界</button>
+  <button class="opt">它是課堂示範、並非真正安全邊界</button>
+  <button class="opt">它比託管沙箱更適合生產</button>
+  <button class="opt">它不需要任何額外的防護</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 沙箱與 Code Mode · Step 1/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

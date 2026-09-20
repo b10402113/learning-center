@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>runtime 攔截 handoff：橫向控制權轉移</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>runtime 攔截 handoff：橫向控制權轉移</h1>
+<p class="meta">Step 3/4 · handoff 工具、currentAgent、攔截、交換與 durable event</p>
+
+<h2>學習目標</h2>
+<p>能定義 handoff 與 issueRefund 工具，說明為何 handoff 必須由 runtime 攔截（agent 無法把自己換掉），並追蹤 currentAgent 的攔截、event 與交換流程。</p>
+
+<h2>開場：handoff 是一個 agent 做不到的動作</h2>
+
+<p>前一步有了兩個 agent，但沒有任何機制讓 triage 把控制權交給 billing。這裡有個很反直覺的重點：<strong>這不是 agent 自己能完成的動作</strong>。agent 活在「自己的」context 與迴圈裡，它無法把自己從這段 context 移除、再換另一個 agent 進來。能決定「現在跑的是哪個 agent」的，只有外面那一層——runtime。</p>
+
+<p>所以 handoff 要拆成兩半：agent 那一半只負責<strong>表達意圖</strong>（呼叫一個工具），runtime 那一半負責<strong>真的換人</strong>。控制流的原語住在 harness，不住在 LLM。</p>
+
+<h2>先造兩個工具：issueRefund 與 handoff</h2>
+
+<p>兩個工具都用 zod 定義輸入 schema，但結局完全不同。</p>
+
+<p><strong>issueRefund</strong> 是一個標準工具——它有 schema、有 description，但<strong>刻意沒有 <code>execute</code></strong>：</p>
+
+<pre><code>issueRefund: tool({
+  description: "Issue a refund to the customer. Irreversible. Moves real money.",
+  inputSchema: z.object({
+    customerId: z.string(),
+    chargeId: z.string(),
+    amountCents: z.number(),
+  }),
+  // 沒有 execute —— 實際執行在 runtime 的 switch 裡，
+  // 這樣才能被包進 workflow step（持久化）。
+});</code></pre>
+
+<p>沒有 <code>execute</code> 是為了把執行權收回 runtime：只有 runtime 能把它包進 workflow step，於是「退款」變成一個可被記錄、可被跳過重播的 durable 動作。</p>
+
+<p><strong>handoff</strong> 則記錄「要轉給誰」與「為什麼轉」：</p>
+
+<pre><code>handoff: tool({
+  description: "Hand the conversation off to another agent.",
+  inputSchema: z.object({
+    to: z.string(),      // 目前只有 "billing"
+    reason: z.string(),
+  }),
+});</code></pre>
+
+<p>為什麼非得做成工具？因為沒有工具，agent 就沒有「說出我要轉」的管道。你只能另外做一個什麼都看、什麼都管的 <strong>micromanager agent</strong> 在旁邊盯場——一個把所有工具呼叫都拿來審核的監工。handoff 工具讓轉移變成 agent 主動、明確的一個動作。</p>
+
+<h2>為什麼 handoff 不能在 tools 的 switch 裡處理</h2>
+
+<p>runtime 有一份工具執行的 <code>switch</code>：呼叫 <code>issueRefund</code> 就在那裡回一個硬編碼的結果。但 <code>handoff</code> <strong>故意不放進去</strong>。</p>
+
+<blockquote class="bad-code">如果 handoff 在工具層處理，結果只會回到「同一個 agent」的 context，那個 agent 仍然在場。</blockquote>
+
+<p>換句話說，在工具層處理的 handoff 根本不是 handoff，只是「同一個 agent 自言自語說我轉給別人了」。真正的轉移必須被拉到上一層——由 runtime 攔截，因為只有 runtime 掌握「哪個 agent 的迴圈正在跑」。這條原則不只用於 handoff：approval（人工核准）也一樣，不能讓 LLM 自己決定要不要走核准流程，而必須由 harness 在確定性的地方攔下來，這樣才會<strong>每次都一樣</strong>，不受模型幻覺影響。</p>
+
+<h2>currentAgent：唯一一顆可變狀態</h2>
+
+<p>Runtime 新增一個可變變數，預設指向入口 agent：</p>
+
+<pre><code>let currentAgent = triageAgent;</code></pre>
+
+<p>整個多 agent 的「現在是誰在跑」就靠這一行。handoff 要做的事，本質上就是改這顆變數的指向。同時，因為每個 agent 有自己的 prompt 與工具，迴圈裡兩處 <code>buildContext</code> 都要改傳 <code>currentAgent.systemPrompt</code>，<code>modelTurn</code> 也要多收一個 <code>currentAgent.tools</code> 參數往下傳給 <code>streamText</code>。漏改任何一處，每個 agent 就會共用同一份 prompt 或同一套工具。</p>
+
+<h2>攔截點：在執行任何工具之前先看名字</h2>
+
+<p>Runtime 在迭代這回合的 tool calls、要執行 step 之前，先做一次檢查：</p>
+
+<pre><code>for (const call of toolCalls) {
+  if (call.toolName === "handoff") {          // 先攔截
+    const to     = call.input.to ?? "";
+    const reason = call.input.reason;
+    const from   = currentAgent.name;
+    // ...durable step + 換人 + 回填工具結果
+  } else {
+    // 原本的工具執行路徑
+  }
+}</code></pre>
+
+<p>因為 handoff 從來沒有註冊執行函式，這個檢查必須<strong>早於</strong>一般工具執行。小提醒：實務上會把 <code>"handoff"</code> 抽成常數或 enum，避免哪天打錯字就整條路由失效。</p>
+
+<h2>Durable event 與 agent 交換</h2>
+
+<p>攔到之後，按順序做三件事。</p>
+
+<p><strong>一、把 handoff 本身持久化。</strong>用 <code>DBOS.runStep</code> 包一個名為 <code>handoff_step</code> 的步驟，發出一個 <code>agent_handoff</code> 事件，帶著 workflow ID、<code>from</code>、<code>to</code>、<code>reason</code>：</p>
+
+<pre><code>await DBOS.runStep(async () =&gt; {
+  emit({
+    type: "agent_handoff",
+    workflowId,
+    from,
+    to,
+    reason,
+  });
+}, { name: "handoff_step" });</code></pre>
+
+<p>這樣 handoff 不是藏在某段記憶體裡的暗轉，而是一條 durable、可被 inspector 看到、UI 可訂閱的事件。誰轉給誰、為什麼轉，全部留底。</p>
+
+<p><strong>二、換人。</strong>就是一次查表：</p>
+
+<pre><code>currentAgent = agents[to] ?? currentAgent;</code></pre>
+
+<p>目的地存在就切過去；不存在（例如 <code>to</code> 打錯或空字串）就留在原地——一個安全、不會把工作流弄死的 fallback。</p>
+
+<p><strong>三、立刻回填工具結果。</strong>別忘了 handoff 對模型來說仍然是一次 tool call，而 tool call 的規定是：下一則訊息必須是同一個 tool call ID 的結果。這個放在下一步細講。</p>
+
+<table>
+<thead>
+<tr><th>階段</th><th>動作</th><th>為什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>攔截</td><td>檢查 <code>call.toolName === "handoff"</code></td><td>handoff 沒有註冊執行，必須特別處理</td></tr>
+<tr><td>持久化</td><td><code>DBOS.runStep</code> 發出 <code>agent_handoff</code></td><td>事件可觀測、可重播，UI 能反應</td></tr>
+<tr><td>交換</td><td><code>currentAgent = agents[to]</code></td><td>真正改變「現在誰在跑」</td></tr>
+<tr><td>回應</td><td>回填同 ID 的 tool result</td><td>維持 message 陣列有效</td></tr>
+</tbody>
+</table>
+
+<blockquote class="good-code">agent 提供意圖，runtime 提供權力：換 agent 這件事，只有掌握 currentAgent 的那一層做得到。</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./agent-as-data.html">← 上一步：把 agent 變成資料：三個欄位</a></div>
+  <div><a href="./turn-integrity-and-demo.html">下一步：訊息序列完整性與端到端示範 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 handoff 必須由 runtime 攔截，而不是在工具裡處理？" data-correct="2" data-explain="在工具層處理的話，結果只會回到同一個 agent 的 context，原 agent 仍在場；只有 runtime 能換掉正在跑的 agent。">
+  <button class="opt">因為工具不支援 zod schema</button>
+  <button class="opt">因為工具層無法回傳字串</button>
+  <button class="opt">因為只有 runtime 能換掉正在跑的 agent</button>
+  <button class="opt">因為 handoff 需要呼叫 LLM</button>
+</div>
+
+<div class="quiz" data-question="issueRefund 為什麼刻意不寫 execute？" data-correct="1" data-explain="把執行收回 runtime 的 switch，才能包進 workflow step、被持久化與重播。">
+  <button class="opt">因為它不需要任何參數</button>
+  <button class="opt">讓 runtime 控制執行，才能包進 workflow step</button>
+  <button class="opt">因為 zod 不允許 execute</button>
+  <button class="opt">因為它會呼叫另一個 agent</button>
+</div>
+
+<div class="quiz" data-question="runtime 用哪一顆狀態代表「現在是哪個 agent 在跑」？" data-correct="0" data-explain="currentAgent 是可變變數，預設是入口的 triage，handoff 就是切換它的指向。">
+  <button class="opt">currentAgent</button>
+  <button class="opt">activeWorkflow</button>
+  <button class="opt">modelTurn</button>
+  <button class="opt">toolSet</button>
+</div>
+
+<div class="quiz" data-question="handoff 被持久化時發出的事件型別是什麼？" data-correct="3" data-explain="DBOS.runStep 以 handoff_step 為名發出 agent_handoff 事件，帶 from／to／reason。">
+  <button class="opt">tool_result</button>
+  <button class="opt">agent_swap</button>
+  <button class="opt">memcached</button>
+  <button class="opt">agent_handoff</button>
+</div>
+
+<div class="quiz" data-question="交換 agent 時，若 to 指向不存在的名字會怎樣？" data-correct="1" data-explain="用 agents[to] ?? currentAgent 的 fallback：查不到就留在目前 agent，不會弄死工作流。">
+  <button class="opt">整個工作流立刻崩潰</button>
+  <button class="opt">留在目前的 agent 不動</button>
+  <button class="opt">自動建立一個新 agent</button>
+  <button class="opt">回到 triage 重新開始</button>
+</div>
+
+<div class="quiz" data-question="為什麼 approval（人工核准）也被拿來跟 handoff 相提並論？" data-correct="2" data-explain="兩者都是確定性的控制流，應該由 harness 攔截處理，而不是交給 LLM 自己決定，才不會受幻覺影響。">
+  <button class="opt">因為兩者都會動到錢</button>
+  <button class="opt">因為兩者都需要寫 zod schema</button>
+  <button class="opt">因為兩者都是 harness 該負責的確定性控制流</button>
+  <button class="opt">因為兩者都會改變系統提示</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · Handoff 與 Agent 路由 · Step 3/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

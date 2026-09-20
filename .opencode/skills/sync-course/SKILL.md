@@ -24,14 +24,14 @@ Present the extraction list to the user for confirmation before writing anything
 
 For each confirmed item:
 
-1. **HTML lesson** — `learn/<subject>/lessons/<step-id>.html`. Read the current teaching sections.
+1. **HTML lesson** — `learn/<subject>/lessons/<node-id>/<step-id>.html`. Read the current teaching sections.
 2. **Node container** — `learn/<subject>/nodes/<node-id>.mdx`. Read for context on the step's position in the DAG.
 
 If the HTML does not exist (node not yet taught), skip it and report which items could not be synced.
 
 ## Update HTML
 
-Update `learn/<subject>/lessons/<step-id>.html`. Follow the lesson's existing structure — same CSS classes, same section pattern, same quiz widget variant. Do not introduce new inline styles or change the quiz format mid-lesson.
+Update `learn/<subject>/lessons/<node-id>/<step-id>.html`. Follow the lesson's existing structure — same CSS classes, same section pattern, same quiz widget variant. Do not introduce new inline styles or change the quiz format mid-lesson.
 
 **Tables first.** If the new material improves or adds a `<table>`, update or insert it before editing prose — tables carry the densest information and are the most likely to be stale.
 

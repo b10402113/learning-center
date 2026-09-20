@@ -37,6 +37,7 @@ probe skipped via /nodes js-reverse/22-supplement-env-rc4 skip-probe on 2026-09-
 
 - window = global 补环境的基本形态与缺失属性补齐: unknown
 - Proxy get/set 拦截与 Reflect 操作原对象: unknown
+- Proxy 进阶捕获器（getOwnPropertyDescriptor / defineProperty / apply / construct）: unknown
 - RC4 算法 KSA 密钥编排与 PRGA 异或输出: unknown
 - atob + Int8Array + RC4 + UTF-8 解码的完整解密链: unknown
 - 极简壁纸响应解密与图片下载的完整闭环: unknown
@@ -277,3 +278,15 @@ probe skipped via /nodes js-reverse/25-pdd-supplement-env skip-probe on 2026-09-
 - webpack JSONP loader 运行时（模块注册/缓存/按需 require）: unknown
 - anti_content 生成三步固定套路（loader 初始化 → updateServerTime → dt 取值）: unknown
 - execjs 联调与拼多多接口请求构造: unknown
+
+## 26-hook-interception — Hook 插件：函数与属性拦截监控
+
+probe skipped via /nodes js-reverse/26-hook-interception skip-probe on 2026-09-20
+
+### Strands
+
+- Hook 的概念与作用（拦截和修改函数/方法行为、不改原代码增加功能）: unknown
+- 「保存原函数 + 同名覆盖」的函数 hook 写法与 hook 时机: unknown
+- Object.defineProperty 的 get/set 属性监控（含不存在属性）: unknown
+- 浏览器环境下 atob/cookie 的先手 hook（DevTools Snippets + Script 事件监听）: unknown
+- toString() 检测、[native code] 标记、原型链检测的两级破解及代价: unknown

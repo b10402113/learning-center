@@ -23,25 +23,58 @@ If no files needed moving (all were already in dated subfolders), say so and sto
 
 ## Step 2 — Create digests
 
-For each file that was **just moved** in step 1 (not files that were already in dated subfolders before step 1), compute the digest stem — the original filename **without** extension.
+Collect all files that were **just moved** in step 1. These form the **current batch**.
 
-Check `learn/<subject>/digests/<stem>.md`: if it exists, skip; if missing, create it.
+### Single-file batch → fallback to per-file mode
 
-For sources needing a digest:
+If the batch contains only one file, or if the learner explicitly wants the old behavior, proceed directly to single-file mode (see §Single-file mode below).
 
-1. Follow `docs/reference/source-reading.md`. Check size via `pdftotext | wc -l` (PDF) or `wc -l` (codebase). Large sources (> 5,000 lines or > ~250 KB): parallel sub-agents write part digests to `learn/<subject>/digests/<stem>.<n>.part.md`. There is no merge step: the part files together are the digest. Small sources: read directly in context, write the digest.
-2. Frontmatter must include `source`, `source_lines`, `status: pending`, and `absorbed_at: ""`.
-3. Record `source_lines`, `L1` overview, and `L2` section detail with locators.
+### Batch mode (two or more files)
 
-When citing a source that came from a subdirectory, preserve its relative path inside the dated folder in source links: `[[sources/<subject>/YYYYMMDD/chapter-notes/fig1.png]]` rather than flattening to the filename alone.
+1. **Read all files.** Load the content of every file in the batch into context.
+2. **Group by topic.** Analyze the batch holistically and cluster the files into groups by topic/concept relevance. Each cluster must be a single meaningful learning unit that downstream `/absorb` can reason about as one concept block. Files that have no thematic overlap with any other file remain as single-file clusters.
+3. **Choose digest names.** For each cluster, derive a semantic name from its unified topic. If the cluster contains exactly one file and its content is self-contained, the name may be that file's stem; otherwise pick a name that reflects the shared topic (e.g. `closure-basics`, `async-event-loop`).
+4. **Check size.** For each file in a cluster, determine source type and size:
+   - PDF: `pdftotext | wc -l` for line count; also check byte size (`du -b`).
+   - Codebase: `wc -l` for line count.
+   - Else: treat as small (read directly).
+   Large sources (> 3,000 lines or > ~250 KB) follow the sub-agent path in `docs/reference/source-reading.md`; their part files are grouped under the cluster digest name (e.g. `closure-basics.1.part.md`, `closure-basics.2.part.md`).
+5. **Check for existing digest.** Before writing, check `learn/<subject>/digests/<name>.md` (and `<name>.*.part.md`). If a digest with the same name already exists, skip writing — it was produced in a prior run.
+6. **Write the cluster digest.** For each new cluster:
+   1. Frontmatter must include `source` (the digest name), `source_lines` (total lines across all cluster members), `status: pending`, and `absorbed_at: ""`.
+   2. L1 overview: summarize the unified topic. If the cluster contains multiple files, list them and note what each contributes.
+   3. L2 sections: organized by sub-topic, not by original file boundary. Each `Locator:` entry references the specific source file(s) that support that sub-topic. A section may list multiple locators on separate lines when more than one file contributes.
+   4. **Images:** if a cluster's text members reference images, cite those image locators inside the relevant L2 section. Images with no text counterpart in the cluster get their own minimal image-only digest (see §Image-only digests).
+7. **Mark remaining singles.** Files that did not group with any other file still get their own digest, named from their content/topic (or their stem when the file is clearly self-contained).
 
-If all newly archived sources already have digests, say so.
+### Image-only digests
+
+For images, screenshots, and other non-text sources that did not attach to any text cluster:
+
+1. One digest per image, or one digest per small group of related images (e.g. all figures from the same tutorial).
+2. Minimal L1: one-line summary of what the batch of images depicts.
+3. L2: one entry per image, with `Locator:` and a one-line description of what it shows.
+4. Frontmatter: `source_type: image` (or appropriate type), `source_lines: 0`.
+
+### Single-file mode
+
+One file in the batch, or a file that stands alone. One digest per source, named after the source stem. Follow `docs/reference/source-reading.md` for size check and sub-agent dispatch.
+
+### Source path preservation
+
+When citing a source that came from a dated subfolder, preserve its relative path inside the dated folder in source links: `[[sources/<subject>/YYYYMMDD/chapter-notes/fig1.png]]` rather than flattening to the filename alone. This applies to both single-file and batch digests.
+
+### Backward compatibility
+
+Existing per-file digests (created before this change) are not modified. This new logic applies only to files archived in future `/ingest` runs.
 
 ## Step 3 — Report
 
 Summarise:
 - How many sources were archived.
+- Whether the batch was processed in batch mode (clustering applied) or single-file mode.
+- How many clusters were formed and which files went into each cluster.
 - How many digests were created or reused.
 - That digest status is `pending` — run `/absorb <subject>` to integrate into the learning graph.
 
-Completion: every new source file is in a dated subfolder under `sources/<subject>/`, every source has a digest with `status: pending`, and the learner knows to run `/absorb` next.
+Completion: every new source file is in a dated subfolder under `sources/<subject>/`, every source contributes to exactly one digest (either a topic cluster or a standalone file digest) with `status: pending`, and the learner knows to run `/absorb` next.

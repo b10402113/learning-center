@@ -33,7 +33,7 @@ Read `learn/<subject>/ROADMAP.md` as the node index. For each significant concep
 For each candidate node identified in Step 2:
 
 1. Read its node container `learn/<subject>/nodes/<node-id>.mdx` to obtain the current step-DAG, step goals, source list, and prerequisites.
-2. Read only the candidate node's referenced step HTML lessons (`learn/<subject>/lessons/<step-id>.html`) to determine whether each matched concept is already covered.
+2. Read only the candidate node's referenced step HTML lessons (`learn/<subject>/lessons/<node-id>/<step-id>.html`) to determine whether each matched concept is already covered.
    - **Covered** — the concept appears in an existing step's HTML lesson. Skip it.
    - **Not covered** — the concept belongs to this node's scope but no existing step teaches it. Classify as **node gap**.
 3. Read `learn/<subject>/mastery.md` only when mastery ratings are needed to decide depth or placement; otherwise leave it unloaded.

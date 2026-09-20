@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>觀察壓縮：清空事件日誌，在 inspector 看 memory_compacted</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>觀察壓縮：清空事件日誌，在 inspector 看 memory_compacted</h1>
+<p class="meta">Step 5/5 · 把 durable 日誌歸零，親眼看壓縮發生</p>
+
+<h2>學習目標</h2>
+<p>用 <code>clearEventLog</code> 與 <code>POST /api/clear</code>（含 CORS）清空 durable 日誌，在 inspector 上看到 <code>memory_compacted</code> 事件的 summarized turns 與 token 數，並解釋為何壓縮總發生在門檻略下方。</p>
+
+<h2>為什麼要先清空日誌</h2>
+
+<p>前面的壓縮都是寫進 durable event log 的，所以每次重跑 demo，日誌都還留著上一次的內容。想乾淨地觀察「這一輪到底發生了幾次壓縮」，得先把歷史歸零。</p>
+
+<p>做法是在 <code>db.ts</code> 加一支 <code>clearEventLog</code>，直接把 event log 表 truncate 掉：</p>
+
+<pre><code>export async function clearEventLog() {
+  await db.execute(sql`TRUNCATE TABLE event_log`);
+}</code></pre>
+
+<p>這是純資料庫層的操作，export 出去讓 server 的入口檔跟 <code>ensureSchema</code> 一起 import。它的用途就只有一個：<strong>把 durable 狀態重設，讓你能從乾淨的起點重跑與觀察</strong>。</p>
+
+<h2>CORS：瀏覽器跨來源呼叫的前置檢查</h2>
+
+<p>清空動作要從瀏覽器介面（不同來源）打到 server，這就踩到 CORS（跨來源資源共享）。瀏覽器在真正送出 <code>POST</code> 之前，會先送一個 preflight（預檢）的 <code>OPTIONS</code> 請求；伺服器必須在回應裡明確允許，真正的請求才過關。</p>
+
+<pre><code>app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});</code></pre>
+
+<p>CORS 管的是「哪些非同一來源的客戶端可以存取這個伺服器」。沒有這道中介層，瀏覽器會在預檢階段就把請求擋掉，你連 server 的錯誤訊息都看不到——這是最常見的「明明程式沒錯卻打不通」之一。</p>
+
+<h2>POST /api/clear：把操作變成端點</h2>
+
+<p>有了清空函式、也給了瀏覽器許可，最後只要把它掛成一個路由：</p>
+
+<pre><code>app.post("/api/clear", async (_req, res) => {
+  await clearEventLog();
+  res.json({ ok: true });
+});</code></pre>
+
+<p>介面上原本就有的 Clear 按鈕早就指向這個端點，所以前端一行都不用改。這也示範了一個模式：<strong>harness 的維運動作，用 HTTP 端點暴露給 inspector UI</strong>——清空日誌只是第一個，之後的審批之類的操作也是同一條路。</p>
+
+<h2>跑一次，看 inspector</h2>
+
+<p>重啟後不會有啟動錯誤，按下 Clear，貼上範例任務開始跑。event 串流上你會看到 agent 一次處理一個項目地工作，接著——<strong><code>memory_compacted</code> 事件出現了</strong>。</p>
+
+<p>每個事件帶著幾項關鍵資訊：</p>
+
+<table>
+<thead>
+<tr><th>欄位</th><th>範例</th><th>你可以從它看出什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>summarizedTurns</td><td>3</td><td>這次壓掉了幾個 turn</td></tr>
+<tr><td>tokens</td><td>619 / 674</td><td>壓縮前後的 token 數，證明真的降了</td></tr>
+<tr><td>summary</td><td>一段精簡文字</td><td>摘要品質：ID、金額、已送事項有沒有留住</td></tr>
+</tbody>
+</table>
+
+<p>一場跑完不只會出現一次。因為 agent 一邊工作、token 一邊長，每跨過門檻就再壓一次——所以你會看到壓縮<strong>反覆發生</strong>，這正是它作為持續機制（而不是一次性清理）的證據。實務上你有時只會瞥見它閃過一下，得回頭到 event log 裡才找得到完整內容。</p>
+
+<h2>為什麼壓縮總發生在門檻「略下方」</h2>
+
+<p>看事件時你可能會注意到一個怪現象：每次壓縮的 token 數都貼在限制下方不遠處，而不是大幅超標才觸發。原因在於第四步那個順序——<strong>檢查在每一輪迴圈的開頭、呼叫模型之前</strong>：</p>
+
+<ol>
+<li>此刻的估算超過上限（例如 674 &gt; 500）。</li>
+<li>於是開始 shift 最舊的 turn，一路移到降回 <code>keepContextTokens</code>（200）以下為止。</li>
+<li>然後才呼叫模型，所以模型看到的數字是被壓低後的結果。</li>
+</ol>
+
+<p>換句話說，壓縮的觸發點由「上限」決定，但壓完的落點由「保留門檻」決定。兩個數字之間的那段差距，就是每次壓縮要清掉的量。課程用的 <code>maxContextTokens</code> 500、<code>keepContextTokens</code> 200 是<strong>刻意調得很激進</strong>的展示值，不是生產建議——真實系統的門檻會大得多，機制不變。</p>
+
+<h2>別忘了封住摘要的輸出</h2>
+
+<p>還有一個會影響觀察結果的旋鈕：摘要的輸出長度。如果摘要本身沒有上限，它會慢慢吃掉你省下來的空間。用 summarize 呼叫上的 <code>maxOutputTokens</code> 封頂，才是可靠的做法——比在 prompt 裡拜託模型「寫短一點」實在得多。</p>
+
+<h2>收尾：一條完整的記憶管線</h2>
+
+<p>走到這裡，你手上已經有完整的迴路：<strong>History 無限成長 → 每輪開頭量預算 → 超過就整 turn 滑出 → 摘要成 State（durable step）→ buildContext 把 State 注入這一輪 → 發出 memory_compacted → 繼續跑</strong>。</p>
+
+<p>把它對照回自己的 runtime（OryxOS / Java），要換掉的只有 API 名稱：預算驅動、turn 對齊、摘要可累積、狀態可重放——這四個決策跟語言無關，也是最值得帶走的部分。</p>
+
+<div class="lesson-nav">
+  <div><a href="./turn-based-compaction.html">← 上一步：以 turn 為單位的壓縮：接進 runtime 的 durable step</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="clearEventLog 對 event log 做了什麼？" data-correct="1" data-explain="它把 event log 表 truncate 掉，用來重設 durable 狀態以便乾淨重跑。">
+  <button class="opt">把事件內容加密保存</button>
+  <button class="opt">把整張表清空歸零</button>
+  <button class="opt">把事件備份到檔案</button>
+  <button class="opt">把事件標記為已讀</button>
+</div>
+
+<div class="quiz" data-question="瀏覽器在跨來源 POST 之前會先送什麼？" data-correct="3" data-explain="瀏覽器先送 preflight 的 OPTIONS 請求，伺服器允許後才送出真正的請求。">
+  <button class="opt">一個 GET 的健康檢查</button>
+  <button class="opt">一個 WebSocket 握手</button>
+  <button class="opt">一個重導向的 HEAD 請求</button>
+  <button class="opt">一個 preflight 的 OPTIONS</button>
+</div>
+
+<div class="quiz" data-question="CORS 中介層如果沒設好，通常會如何？" data-correct="0" data-explain="瀏覽器會在預檢階段就擋掉請求，連 server 的錯誤訊息都看不到。">
+  <button class="opt">請求在預檢就被瀏覽器擋掉</button>
+  <button class="opt">伺服器會直接當機重啟</button>
+  <button class="opt">資料庫會拒絕連線</button>
+  <button class="opt">事件會被寫入兩次</button>
+</div>
+
+<div class="quiz" data-question="為何壓縮的 token 數通常貼在門檻下方？" data-correct="2" data-explain="檢查在呼叫模型之前，超標就開始移出舊 turn，直到降回保留門檻以下才呼叫模型。">
+  <button class="opt">因為摘要一定會失敗重試</button>
+  <button class="opt">因為模型會自動省略內容</button>
+  <button class="opt">因為超標就先壓，壓完才呼叫模型</button>
+  <button class="opt">因為事件日誌會重複計算</button>
+</div>
+
+<div class="quiz" data-question="maxContextTokens 決定什麼，keepContextTokens 決定什麼？" data-correct="1" data-explain="上限決定何時觸發壓縮，保留門檻決定壓完要降到哪裡。">
+  <button class="opt">兩者都只決定摘要長度</button>
+  <button class="opt">上限決定觸發點，保留門檻決定落點</button>
+  <button class="opt">兩者都只決定模型輸出的長度</button>
+  <button class="opt">上限決定落點，保留門檻決定觸發點</button>
+</div>
+
+<div class="quiz" data-question="課程設 500／200 這組數字的用意是？" data-correct="3" data-explain="刻意調激進是為了在 demo 中快速逼出壓縮，並非生產建議值。">
+  <button class="opt">這是模型硬性規定的上限</button>
+  <button class="opt">這是業界公認的生產建議值</button>
+  <button class="opt">這是資料庫欄位的長度限制</button>
+  <button class="opt">刻意調小以在 demo 中逼出壓縮</button>
+</div>
+
+<div class="quiz" data-question="一場任務只會發生一次壓縮嗎？" data-correct="2" data-explain="token 會一邊工作一邊長，每跨過門檻就再壓一次，所以會反覆發生。">
+  <button class="opt">只會發生一次，開頭清理</button>
+  <button class="opt">只在任務結束時發生一次</button>
+  <button class="opt">每跨過門檻就再壓一次</button>
+  <button class="opt">只有使用者手動觸發時才會</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 記憶：脈絡注入與壓縮 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

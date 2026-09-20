@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>以 turn 為單位的壓縮：接進 runtime 的 durable step</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>以 turn 為單位的壓縮：接進 runtime 的 durable step</h1>
+<p class="meta">Step 4/5 · 兩個積木接上迴圈，變成一套會自我煞車的系統</p>
+
+<h2>學習目標</h2>
+<p>在每個迴圈開頭、model turn 之前檢查 token 預算，用 while 迴圈把最舊的整個 turn 移出（不拆 message），把摘要包成 DBOS step 並發出 <code>memory_compacted</code>，再用 <code>buildContext</code> 跑這一輪。</p>
+
+<h2>把記憶模組搬進 runtime</h2>
+
+<p>前兩步做的東西都住在 <code>harness/memory.ts</code>，現在要把它們 import 進 runtime，並在 agent 迴圈裡準備兩個會「跨迭代存活」的狀態：</p>
+
+<pre><code>import { buildContext, summarize, estimateTokens, maxTokens, keepContextTokens } from "./memory";
+
+let turns: ModelMessage[] = [];  // 還沒被壓縮的完整 turn
+let summary = "";                // 累積中的 running summary（State）</code></pre>
+
+<table>
+<thead>
+<tr><th>狀態</th><th>型別</th><th>它代表什麼</th></tr>
+</thead>
+<tbody>
+<tr><td><code>turns</code></td><td><code>ModelMessage[]</code></td><td>最近、還沒被摘要的完整往返；是「細節」的來源</td></tr>
+<tr><td><code>summary</code></td><td><code>string</code></td><td>已經被壓縮掉的舊內容結晶；是「歷史」的來源</td></tr>
+</tbody>
+</table>
+
+<p><code>summary</code> 一定要宣告在迴圈<strong>外面</strong>，因為它得跨迭代累積——每一次壓縮都把上一次的摘要折回來，這正是第三步「摘要的摘要」能成立的前提。同時課程把允許的步數調大，讓 agent 有機會跑得夠久、真的觸發壓縮。</p>
+
+<h2>壓縮要放在 model turn 之前</h2>
+
+<p>這是整步最重要的順序約束：<strong>檢查與壓縮發生在每一輪迴圈的開頭，就在呼叫模型之前。</strong></p>
+
+<p>理由很直接：會爆掉的位置是 model turn。如果等模型回應完才檢查，那時你早就把過長的輸入送出去了——錯誤已經發生，補救來不及。把檢查放在送出之前，超標的輸入根本沒有機會到達模型。</p>
+
+<pre><code>while (true) {
+  // 1. 先量、先壓縮（模型還沒被呼叫）
+  if (estimateTokens(turns) > maxTokens) {
+    // 見下方的滑動視窗
+  }
+
+  // 2. 用壓縮後的內容組出這一輪的 context
+  const context = buildContext(systemPrompt, task, summary, turns);
+
+  // 3. 才呼叫模型
+  const turn = await modelTurn(context);
+  turns.push(...turn.response.messages);
+}</code></pre>
+
+<h2>以 turn 為單位滑動，不是以 message</h2>
+
+<p>壓縮的迴圈長這樣：把最舊的 turn 從前面移出來，推進一個 <code>old</code> 陣列，直到估算降到 <code>keepContextTokens</code> 以下：</p>
+
+<pre><code>const old: ModelMessage[] = [];
+while (turns.length > 0 && estimateTokens(turns) > keepContextTokens) {
+  old.push(turns.shift()!);  // 一次移出「一整個 turn」
+}</code></pre>
+
+<p>為什麼堅持以 turn 為原子單位、而不是逐則 message 砍？因為 messages 陣列有結構：一則 tool call 後面必須跟著它的回應。如果你只砍掉「舊的 tool call」卻留下「它的回應」，或反過來，陣列就會出現一段<strong>懸空的工具呼叫</strong>——API 直接拒收，整個流程掛掉。</p>
+
+<table>
+<thead>
+<tr><th>單位</th><th>一次移出什麼</th><th>結果</th></tr>
+</thead>
+<tbody>
+<tr><td>message</td><td>單一則訊息</td><td>可能留下懸空 tool call，API 報錯</td></tr>
+<tr><td><strong>turn</strong></td><td>一整組完整往返</td><td>邊界永遠是合法的循環，陣列不會壞</td></tr>
+</tbody>
+</table>
+
+<p>那一個 turn 的邊界怎麼算？它包含：<strong>使用者的輸入文字、它觸發的工具呼叫、以及所有對應的回應訊息</strong>。以這個為單位滑動，切點永遠落在「一個完整循環」的接縫上。滑動視窗保留最近約 X 個 token 的內容，較舊的整批移去摘要——這就是「以預算保留最近、把更舊的沉澱成 State」的具體形狀。</p>
+
+<h2>摘要包成具名的 durable step</h2>
+
+<p>移出來的 <code>old</code> 不能直接丟掉。這裡是 durable execution 進場的地方——呼叫摘要時要用 <code>DBOS.runStep</code> 包起來，而且給它一個名字：</p>
+
+<pre><code>if (old.length > 0) {
+  summary = await DBOS.runStep(
+    () => summarize(old, summary),
+    { name: "summarize-turns" },
+  );
+
+  // 重算、重建、發事件
+  const after = estimateTokens(buildContext(systemPrompt, task, summary, turns));
+  await bus.emit({
+    type: "memory_compacted",
+    workflowId: DBOS.workflowID,
+    summarizedTurns: old.length,
+    tokens: after,
+    summary,
+  });
+}</code></pre>
+
+<p>為什麼非得是 durable step？因為摘要是一次昂貴的 LLM 呼叫。如果它只是普通程式碼，那麼流程中途崩潰、工作流重放時，這段摘要會<strong>再被呼叫一次</strong>——不但浪費錢，結果還可能不一樣，導致後續狀態對不上。包成具名 step 之後，DBOS 會記錄它的輸出；重放時直接取回上次的結果，不會重跑。這跟持久化那課把 model turn、tool call 包成 step 是同一套邏輯，只是換成「摘要」這個動作。</p>
+
+<h2>memory_compacted：讓使用者知道自己被摘要了</h2>
+
+<p>壓縮是有副作用的——模型「忘掉」了一些細節。這種事不該悄悄發生。所以壓縮完成後發出 <code>memory_compacted</code> 事件，裡面帶四樣東西：</p>
+
+<ul>
+<li><code>workflowId</code>：是哪一條工作流發生的，方便在 event log 裡追。</li>
+<li><code>summarizedTurns</code>：這次壓掉了幾個 turn。</li>
+<li><code>tokens</code>：壓縮後的 token 數——證明真的降下來了。</li>
+<li><code>summary</code>：摘要本文，讓你能檢視它有沒有留住關鍵事實。</li>
+</ul>
+
+<p>這個事件同時服務三種人：使用者（我的歷史被摘要了）、開發者（壓縮是否按預期發生）、以及未來的自己（出事時可以回頭查摘要品質）。它走的是既有的 durable bus，所以跟其他事件一樣會被寫進 event log。</p>
+
+<h2>壓縮之後，用 buildContext 跑這一輪</h2>
+
+<p>壓縮完，model turn 收到的不再是原始 <code>turns</code>，而是 <code>buildContext</code> 重新組出來的 context——其中包含剛更新的 <code>summary</code>。這是第二步那支函式真正的用武之地：摘要只有被注入 context，模型才知道「之前發生過什麼」。</p>
+
+<pre><code>const context = buildContext(systemPrompt, task, summary, turns);
+const turn = await modelTurn(context);
+
+// 這一輪的回應也要回到 turns 裡，未來才能整 turn 壓縮
+turns.push(...turn.response.messages);</code></pre>
+
+<p>最後那個 push 常被忽略，卻是整套機制能持續運轉的關鍵。模型的回應也是一個 turn 的一半；如果不把它放回 <code>turns</code>，下次滑動時就會找不到完整的往返，切點也就無法對齊。所以每一輪都是：<strong>先量、可能壓、組 context、跑模型、把完整 turn 收回去</strong>。</p>
+
+<h2>那句刻意設計的 system prompt</h2>
+
+<p>課程順手改了 system prompt，要求 agent「一次處理一個項目、四個步驟都做完才換下一個、全部完成後簡短總結」。這不是什麼業界最佳實務建議，而是<strong>刻意讓 token 成長得又快又猛</strong>，好在短時間內逼出壓縮。真實部署時，這段提示很可能根本不需要。</p>
+
+<blockquote>這裡的教訓不是「要這樣寫 prompt」，而是：prompt 的設計會直接改變 token 的成長曲線，所以它也是你調控預算的一個槓桿。</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./summarize-to-compact.html">← 上一步：Summarizer：用一次 LLM 呼叫把舊 turns 壓成摘要</a></div>
+  <div><a href="./observing-compaction.html">下一步：觀察壓縮：清空事件日誌，在 inspector 看 memory_compacted →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼壓縮檢查要放在 model turn 之前？" data-correct="2" data-explain="會爆掉的位置就是 model turn，必須在送出前攔下超標的輸入。">
+  <button class="opt">因為壓縮比模型呼叫便宜</button>
+  <button class="opt">因為摘要需要先寫進資料庫</button>
+  <button class="opt">會爆掉的位置就是 model turn</button>
+  <button class="opt">因為模型不支援過長的輸出</button>
+</div>
+
+<div class="quiz" data-question="為什麼壓縮必須以 turn 為單位，不能拆單一 message？" data-correct="1" data-explain="逐則砍可能留下懸空的工具呼叫，messages 陣列會不合法而被 API 拒收。">
+  <button class="opt">因為 turn 的 token 數比較容易算</button>
+  <button class="opt">逐則砍可能留下懸空工具呼叫</button>
+  <button class="opt">因為 message 無法被摘要</button>
+  <button class="opt">因為 turn 一定比 message 短</button>
+</div>
+
+<div class="quiz" data-question="一個 turn 的邊界包含哪些東西？" data-correct="3" data-explain="一個 turn 是輸入文字、它觸發的工具呼叫與所有對應回應訊息的完整循環。">
+  <button class="opt">只有使用者送出的那一句</button>
+  <button class="opt">只有模型這一輪的回應</button>
+  <button class="opt">系統提示加上使用者輸入</button>
+  <button class="opt">輸入、工具呼叫與對應回應</button>
+</div>
+
+<div class="quiz" data-question="為什麼 summarize 要用 DBOS.runStep 包成具名 step？" data-correct="0" data-explain="重放時可以直接取回上次的摘要結果，不會重跑昂貴且可能不一致的 LLM 呼叫。">
+  <button class="opt">重放時不會重跑這次 LLM 呼叫</button>
+  <button class="opt">這樣摘要會跑得比較快</button>
+  <button class="opt">這樣可以省下 system prompt</button>
+  <button class="opt">這樣才能並行多次摘要</button>
+</div>
+
+<div class="quiz" data-question="memory_compacted 事件不包含下列哪一項？" data-correct="2" data-explain="事件帶 workflowId、summarizedTurns、tokens 與摘要本文，不含原始完整歷史。">
+  <button class="opt">summarizedTurns</button>
+  <button class="opt">壓縮後的 tokens</button>
+  <button class="opt">被丟棄的原始完整歷史</button>
+  <button class="opt">摘要本文</button>
+</div>
+
+<div class="quiz" data-question="為什麼模型的回應要 push 回 turns？" data-correct="1" data-explain="不把回應收回，下次滑動就找不到完整往返，切點無法對齊。">
+  <button class="opt">為了讓畫面顯示完整對話</button>
+  <button class="opt">為了讓下次壓縮有完整往返</button>
+  <button class="opt">為了降低摘要的呼叫次數</button>
+  <button class="opt">為了讓事件日誌不重複</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 記憶：脈絡注入與壓縮 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

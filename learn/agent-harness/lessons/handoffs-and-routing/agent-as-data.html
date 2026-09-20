@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把 agent 變成資料：三個欄位</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>把 agent 變成資料：三個欄位</h1>
+<p class="meta">Step 2/4 · name + systemPrompt + toolSet，triage 與 billing，最小權限</p>
+
+<h2>學習目標</h2>
+<p>能把 agent 收斂成 name + systemPrompt + toolSet 三個欄位，做出 triage 與 billing 兩個 agent，並解釋最小權限（退款只給 billing、triage 只靠 handoff）為何勝過把每個工具發給每個 agent。</p>
+
+<h2>開場：從「一顆寫死的迴圈」到「一筆資料」</h2>
+
+<p>第一步決定了「要拆」，但拆的動作在程式碼裡長什麼樣？如果每個 agent 都要自己一套 runtime、自己的迴圈、自己的持久化，那拆 agent 就是一場重構災難。</p>
+
+<p>這裡的做法是把「agent」降格成一筆<strong>資料</strong>。原本那個寫死的 workflow loop 被抽成一個 agent 定義，於是新增一個 agent 不是新增機械，而是新增一筆設定——runtime 那一層完全不用動。</p>
+
+<h2>Agent 的三個欄位</h2>
+
+<p>整份型別就只有這樣：</p>
+
+<pre><code>export type Agent = {
+  name: string;
+  systemPrompt: string;
+  tools: ToolSet;
+};
+
+export const agents: Record&lt;string, Agent&gt; = {
+  triage: triageAgent,
+  billing: billingAgent,
+};</code></pre>
+
+<p>三個欄位各有分工：</p>
+
+<table>
+<thead>
+<tr><th>欄位</th><th>它是什麼</th><th>決定 agent 的什麼</th></tr>
+</thead>
+<tbody>
+<tr><td><code>name</code></td><td>識別字，也是路由的鍵</td><td>handoff 的 <code>to</code>／<code>from</code>，事件與 UI 都靠它</td></tr>
+<tr><td><code>systemPrompt</code></td><td>這個角色的職責與禁令</td><td>它的行為、語氣、能做與不能做</td></tr>
+<tr><td><code>tools</code>（tool set）</td><td>它被允許呼叫的工具子集</td><td>它真正能造成什麼副作用</td></tr>
+</tbody>
+</table>
+
+<blockquote class="good-code">runtime、loop、DBOS 持久化、工具處理全部共用；每個 agent 只在這三個欄位上不同。</blockquote>
+
+<p>最後那個 <code>agents</code> 物件是關鍵：它把每個 agent 用 <code>name</code> 當 key 收在一張表裡。之後 runtime 只要拿一個字串去查表，就能切換「現在是誰在跑」——這正是下一步 handoff 的機制。</p>
+
+<h2>triageAgent：永遠的入口，但沒有退款權</h2>
+
+<p>第一個 agent 是 <code>triageAgent</code>。它是<strong>入口 agent（point of entry）</strong>：每一筆請求都先到它手上，它能處理的就處理，不能或不該處理的就轉出去。</p>
+
+<pre><code>export const triageAgent: Agent = {
+  name: "triage",
+  systemPrompt: `You are a support triage agent.
+...
+IMPORTANT: you are NOT allowed to issue refunds. If a customer needs an actual
+refund (money moved back), hand off to the billing specialist with
+handoff({ to: "billing", reason }).`,
+  tools: {
+    classifyItem: tools.classifyItem,
+    runCode: tools.runCode,
+    draftReply: tools.draftReply,
+    sendReply: tools.sendReply,
+    handoff: tools.handoff,
+  },
+};</code></pre>
+
+<p>注意它的工具清單裡<strong>沒有</strong> <code>issueRefund</code>。它能「聊」退款，但碰不到錢。而 system prompt 裡那句 <code>NOT allowed to issue refunds</code> 不是裝飾——它是一個<strong>強制函式</strong>：把「退款」這件事從 triage 的能力範圍裡拿掉，逼它只能走 handoff。也就是說，「能不能做」同時被兩層鎖住：工具集不給它，prompt 再明白禁止。</p>
+
+<h2>billingAgent：持有特權工具的專家</h2>
+
+<p>第二個 agent 用同一套模式複製出來，只是換了名字、prompt 與工具集：</p>
+
+<pre><code>export const billingAgent: Agent = {
+  name: "billing",
+  systemPrompt: `You are the billing &amp; refunds specialist. issueRefund is
+IRREVERSIBLE and moves real money, so be careful — but it IS your job.`,
+  tools: {
+    runCode: tools.runCode,
+    issueRefund: tools.issueRefund,
+    draftReply: tools.draftReply,
+    sendReply: tools.sendReply,
+  },
+};</code></pre>
+
+<p>對照兩個 agent 的工具表，差異一目了然：</p>
+
+<table>
+<thead>
+<tr><th>工具</th><th>triage</th><th>billing</th><th>為什麼</th></tr>
+</thead>
+<tbody>
+<tr><td><code>classifyItem</code></td><td>✓</td><td>✗</td><td>分類是入口的職責</td></tr>
+<tr><td><code>issueRefund</code></td><td>✗</td><td>✓</td><td>能動錢的高風險工具，只給專家</td></tr>
+<tr><td><code>handoff</code></td><td>✓</td><td>✗</td><td>轉出的能力；這一步只做 triage → billing 單向</td></tr>
+<tr><td><code>runCode</code> / <code>draftReply</code> / <code>sendReply</code></td><td>✓</td><td>✓</td><td>每個 agent 都需要的共用能力</td></tr>
+</tbody>
+</table>
+
+<h2>共用能力：reply 工具為什麼每個人都有</h2>
+
+<p>仔細看：<code>draftReply</code> 與 <code>sendReply</code> 兩個 agent 都有。這不是偷懶，而是刻意的設計判斷——<strong>agent 必須能直接跟使用者收尾</strong>。如果沒有這兩個工具，agent 想回一句話都得先 hand off 給「專門回話的 agent」，那 handoff 就被濫用了。</p>
+
+<p>當然有另一個選項：把「回覆」獨立成一個專門調校的 agent。理由是專注——當一個 agent 只要管草稿與發送，prompt 更好調、也比較不容易被其他任務分心。代價是 agent 數量變多、路由變複雜。兩種拆法都對，端看你要的是「每個 agent 都能自己收尾」還是「回覆品質被集中調到最好」。</p>
+
+<h2>最小權限：不是把每個工具發給每個人</h2>
+
+<p>這一步真正的收穫是一個安全原則：<strong>特權只給需要它的那個 agent</strong>。退款工具只出現在 billing 的工具集裡；triage 想退款，唯一的辦法是把手上的案子轉出去。</p>
+
+<p>把它跟「一個百寶箱 agent」對比就懂了：</p>
+
+<table>
+<thead>
+<tr><th></th><th>全能 agent</th><th>拆成 triage + billing</th></tr>
+</thead>
+<tbody>
+<tr><td>退款工具的可及範圍</td><td>整個 agent 都能呼叫</td><td>只有 billing 拿得到</td></tr>
+<tr><td>誤用的風險</td><td>任何情境都可能被觸發</td><td>被限制在職責範圍內</td></tr>
+<tr><td>prompt 複雜度</td><td>一份 prompt 要講所有事、塞滿禁令</td><td>每個 prompt 只講一件事</td></tr>
+<tr><td>擴充方式</td><td>往同一顆 agent 繼續加</td><td>新增一筆 name + prompt + tools</td></tr>
+</tbody>
+</table>
+
+<blockquote class="good-code">安全不是靠 prompt 說「請不要」，而是靠工具集讓它「做不到」；prompt 只是第二道鎖。</blockquote>
+
+<p>對照你自己寫的 OryxOS ReAct loop：以前你可能會把「所有工具」一次丟進同一份 tool 清單，靠 prompt 提醒模型小心使用。拆 agent 之後，這份清單變成<strong>依角色裁剪</strong>的——同一顆 runtime，餵不同工具集，就得到不同權限邊界的 agent。這就是「agent 是資料」真正換來的東西。</p>
+
+<div class="lesson-nav">
+  <div><a href="./when-to-split.html">← 上一步：判斷：何時拆 agent，handoff 到底是什麼</a></div>
+  <div><a href="./runtime-intercepts-handoff.html">下一步：runtime 攔截 handoff：橫向控制權轉移 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="在這套實作裡，一個 agent 由哪三個欄位決定？" data-correct="1" data-explain="就只有 name、systemPrompt、tools 三個欄位，其餘 runtime 機械全部共用。">
+  <button class="opt">name、model、temperature</button>
+  <button class="opt">name、systemPrompt、工具集</button>
+  <button class="opt">name、memory、workflow</button>
+  <button class="opt">id、prompt、資料庫</button>
+</div>
+
+<div class="quiz" data-question="triageAgent 的工具集裡刻意不放哪一個工具？" data-correct="2" data-explain="issueRefund 是高風險工具，只給 billing；triage 要退款只能靠 handoff。">
+  <button class="opt">classifyItem</button>
+  <button class="opt">runCode</button>
+  <button class="opt">issueRefund</button>
+  <button class="opt">draftReply</button>
+</div>
+
+<div class="quiz" data-question="為什麼 draftReply 與 sendReply 幾乎每個 agent 都要有？" data-correct="0" data-explain="否則 agent 想回一句話都得 hand off 給專門回話的 agent，反而濫用 handoff。">
+  <button class="opt">讓每個 agent 能自己跟使用者收尾</button>
+  <button class="opt">因為這兩個工具最難寫</button>
+  <button class="opt">因為它們能動到錢</button>
+  <button class="opt">因為它們是 handoff 的必要條件</button>
+</div>
+
+<div class="quiz" data-question="「最小權限」在這一步的具體意思是什麼？" data-correct="3" data-explain="特權工具只出現在需要它的 agent 工具集裡；安全靠工具集讓它做不到，prompt 只是第二道鎖。">
+  <button class="opt">每個 agent 都拿到全部工具</button>
+  <button class="opt">用 prompt 警告模型不要亂用</button>
+  <button class="opt">所有 agent 共用同一份 prompt</button>
+  <button class="opt">特權工具只給職責上需要它的 agent</button>
+</div>
+
+<div class="quiz" data-question="system prompt 裡的「NOT allowed to issue refunds」扮演什麼角色？" data-correct="1" data-explain="它是第二道鎖／強制函式，把退款行為逼向 handoff，但真正讓它做不到的是工具集。">
+  <button class="opt">它是唯一阻止退款的機制</button>
+  <button class="opt">它是第二道鎖，逼 agent 改走 handoff</button>
+  <button class="opt">它會自動停用 issueRefund 工具</button>
+  <button class="opt">它只是給使用者看的說明</button>
+</div>
+
+<div class="quiz" data-question="新增一個專家 agent 需要改動 runtime 嗎？" data-correct="2" data-explain="不需要——只要多一筆 name + systemPrompt + tools 的資料，runtime 與 loop 完全共用。">
+  <button class="opt">要，必須複製一份 runtime</button>
+  <button class="opt">要，必須改寫整個 workflow loop</button>
+  <button class="opt">不用，只是多一筆資料設定</button>
+  <button class="opt">不用，但也無法被路由到</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · Handoff 與 Agent 路由 · Step 2/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

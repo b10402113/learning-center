@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把 plan 做成一級結構化產物</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>把 plan 做成一級結構化產物</h1>
+<p class="meta">Step 3/5 · generateObject、zod schema、z.infer 與 deprecation 提醒</p>
+
+<h2>學習目標</h2>
+<p>能說明 <code>generateObject</code> 相對 <code>generateText</code> 的差異，用 zod 定義 plan schema（steps 內含 id / agent / objective）並以 <code>z.infer</code> 取型別，實作 <code>makePlan</code>；同時知道 <code>generateObject</code> 已被標記 deprecated 的替代寫法。</p>
+
+<h2>問題：計畫不能只是散文</h2>
+<p>如果 supervisor 產出的計畫只是一段自由文字，會有兩個麻煩：程式沒辦法可靠地迭代它（哪一步對應哪個 agent？），也沒辦法驗證它（少了一個欄位誰知道？）。所以第一步是讓計畫變成一份<strong>有結構、可驗證</strong>的物件。</p>
+
+<p>這正是 <strong>結構化輸出（structured outputs）</strong>要解決的事。</p>
+
+<h2>generateObject vs generateText</h2>
+<p>兩者都呼叫模型，差別在回傳的東西：</p>
+
+<table>
+<thead>
+<tr><th></th><th>回傳</th><th>保證</th><th>適合</th></tr>
+</thead>
+<tbody>
+<tr><td><code>generateText</code></td><td>純文字</td><td>無結構保證</td><td>摘要、對話、需要自然語言的地方</td></tr>
+<tr><td><code>generateObject</code></td><td>JSON 物件</td><td>保證符合你給的 schema</td><td>計畫、分類、任何要被程式消費的資料</td></tr>
+</tbody>
+</table>
+
+<p>結構化輸出之所以強大，是因為它<strong>由 schema 背書</strong>：你宣告形狀，模型就必須吐出符合形狀的 JSON。這解鎖了比如「用元件 schema 生成 React 元件」這種即時生成 UI 的用例。</p>
+
+<p>它也讓「舊做法」顯得多餘。以前要拿結構化資料，得在 prompt 裡拜託模型用 markdown 的 JSON 區塊回答，再自己 parse、比對 schema、不合法就重試——一個 loop-parse-retry 的迴圈。現在的模型在模型層就被調校過 JSON 輸出，schema 遵循變成模型本身的能力，而不是你外掛的補救措施。</p>
+
+<h2>定義 plan schema</h2>
+<p>計畫的形狀是：一個 <code>steps</code> 陣列，每個元素回答「哪個 agent、做什麼」。用 zod 宣告，並在欄位上寫 <code>describe</code> 當給模型的指示：</p>
+
+<pre><code>const PlanSchema = z.object({
+  steps: z.array(
+    z.object({
+      id: z.string().describe("short id, e.g. 'billing'"),
+      agent: z.enum(["billing", "technical", "sales"]),
+      objective: z.string().describe("what this investigator should find out"),
+    }),
+  ),
+});
+type Plan = z.infer&lt;typeof PlanSchema&gt;;</code></pre>
+
+<p>三個細節：<code>agent</code> 用 <code>z.enum</code> 限制成三個已知的調查員名稱——這讓模型不可能編出一個不存在的工人（正好對上 <code>runInvestigator</code> 的防呆）；<code>id</code> 與 <code>objective</code> 的 <code>describe</code> 直接變成對模型的欄位說明；而 <code>z.infer</code> 從同一份 schema <strong>推導出 TypeScript 型別</strong>，之後的程式碼就能拿到完整的型別檢查，不必手動維護兩份定義。</p>
+
+<h2>makePlan(task)</h2>
+<pre><code>async function makePlan(task: string): Promise&lt;Plan&gt; {
+  const { object } = await generateObject({
+    model,
+    schema: PlanSchema,
+    system:
+      "Decompose a customer escalation into independent sub-tasks — one per area the message actually raises (billing / technical / sales). Only include relevant areas.",
+    prompt: task,
+  });
+  return object;
+}</code></pre>
+
+<p>system prompt 是計畫品質的關鍵。它做兩件事：把客訴拆成<strong>彼此獨立</strong>的子任務，以及「只包含訊息真的提到的領域」——如果客訴沒談技術問題，就不該硬派一個 technical 調查員出去浪費一次呼叫。</p>
+
+<h2>supervisor 的角色定位</h2>
+<p>到這裡可以清楚劃分職責了：supervisor 的工作是<strong>判斷需不需要調查員、以及計畫是什麼</strong>；它本身不是調查員，不碰工具、不查資料。它是規劃者與指揮者，計畫是它的產出。這也是為什麼 supervisor 是整段程式裡最複雜的檔案——它要同時接上 DBOS、事件、模型與 workflow。</p>
+
+<h2>一個當前的 API 提醒：generateObject 已 deprecated</h2>
+<blockquote class="bad-code">寫這段程式時會遇到一個 deprecation 警告：<code>generateObject</code> 被標記為已棄用。</blockquote>
+
+<p>官方建議的替代寫法是改用 <code>generateText</code> 搭配 output 設定（要做串流則有 <code>streamObject</code> 等變體）。這裡刻意<strong>保留目前的 <code>generateObject</code> 程式碼</strong>，因為它把結構化輸出的概念表達得最直接；但你在自己的專案或之後重構時，應該採用新的 API。記住這個落差就好，不必現在改。</p>
+
+<p>計畫有了型別與 schema，下一步是把它放進一條持久化的 workflow，讓它只被計算一次、崩潰也不重來。</p>
+
+<div class="lesson-nav">
+  <div><a href="./read-only-investigators.html">← 上一步：唯讀 investigators：註冊表與最小權限</a></div>
+  <div><a href="./durable-supervisor-workflow.html">下一步：持久化的 supervisor workflow 與 synthesize →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="generateObject 相對 generateText 的核心差別是什麼？" data-correct="1" data-explain="generateObject 回傳保證符合所給 schema 的 JSON 物件；generateText 只回傳純文字。">
+  <button class="opt">它比較快也比較便宜</button>
+  <button class="opt">它回傳保證符合 schema 的 JSON 物件</button>
+  <button class="opt">它不需要 system prompt</button>
+  <button class="opt">它只能用在 UI 生成</button>
+</div>
+
+<div class="quiz" data-question="為什麼 plan schema 中 agent 欄位用 z.enum 限制三個名稱？" data-correct="2" data-explain="z.enum 讓模型不可能編出不存在的調查員，與 runInvestigator 的未知名稱防呆互相呼應。">
+  <button class="opt">為了讓 JSON 更短</button>
+  <button class="opt">為了加快模型生成速度</button>
+  <button class="opt">避免模型編出不存在的調查員</button>
+  <button class="opt">因為 zod 不支援 string</button>
+</div>
+
+<div class="quiz" data-question="z.infer&lt;typeof PlanSchema&gt; 的作用是什麼？" data-correct="1" data-explain="它從 zod schema 直接推導出 TypeScript 型別，避免手動維護兩份定義。">
+  <button class="opt">執行時驗證 schema 是否合法</button>
+  <button class="opt">從 schema 推導出 TypeScript 型別</button>
+  <button class="opt">把型別轉回 zod schema</button>
+  <button class="opt">產生資料庫的表格</button>
+</div>
+
+<div class="quiz" data-question="makePlan 的 system prompt 特別強調什麼？" data-correct="2" data-explain="它要求拆成獨立子任務，且只包含訊息真正提到的領域，避免浪費呼叫。">
+  <button class="opt">一定要派出全部三個調查員</button>
+  <button class="opt">要用最長的句子描述 objective</button>
+  <button class="opt">只包含客訴真正提到的領域</button>
+  <button class="opt">把計畫格式化成 markdown 表格</button>
+</div>
+
+<div class="quiz" data-question="supervisor 在這套架構中的角色是？" data-correct="1" data-explain="supervisor 是規劃者與指揮者——決定是否需要調查員並產出計畫，本身不查資料、不碰工具。">
+  <button class="opt">一個什麼都查的全能調查員</button>
+  <button class="opt">規劃者與指揮者，產出計畫但不查資料</button>
+  <button class="opt">只負責最後把答案寄給客戶</button>
+  <button class="opt">一個負責保存資料庫的角色</button>
+</div>
+
+<div class="quiz" data-question="關於 generateObject 被標記 deprecated，這門課的處理方式是？" data-correct="1" data-explain="保留目前程式碼以便清楚表達概念，但提醒讀者改用 generateText 搭配 output 設定的新 API。">
+  <button class="opt">立刻把整份程式改寫成新 API</button>
+  <button class="opt">保留程式碼，但提醒改用 generateText 搭配 output</button>
+  <button class="opt">忽略這個警告，它沒有意義</button>
+  <button class="opt">改用 markdown JSON 區塊加 parse</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 階層式監督與 Sub-agents · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

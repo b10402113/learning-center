@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>階層式監督何時划算：隔離與 fan-out</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>階層式監督何時划算：隔離與 fan-out</h1>
+<p class="meta">Step 1/5 · 何時該用 supervisor、plan mode 為何要使用者開啟</p>
+
+<h2>學習目標</h2>
+<p>能判斷何時該用 supervisor 與 sub-agents（隔離邊界如 git worktree、研究型 fan-out 與 context 切分），並說明 plan mode 為何由使用者明示開啟而非自動判斷。</p>
+
+<h2>開場：接在 handoff 之後的下一種拓撲</h2>
+<p>上一節課的 handoff 是「橫向」的控制權轉移：櫃台把你轉給鬍鬚專家之後，櫃台就退場了，任務不再回頭。這一節要學的是另一種拓撲——<strong>階層式監督（hierarchical supervision）</strong>：主管 Agent 自己不動手做細活，而是把子任務派給一群工人，工人在各自的角落做完回報，主管再把結果整合成一份答案。</p>
+
+<p>差別就在控制權：handoff 是「換聯絡人」，監督是「我派工人、我整合、我還是我」。整個過程裡，對使用者負責的始終是同一個 supervisor。</p>
+
+<h2>supervisor 的四個動作</h2>
+<p>整條架構可以用四個動詞記住：</p>
+
+<table>
+<thead>
+<tr><th>動作</th><th>做什麼</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>plan</strong></td><td>把使用者的需求拆成一份具體計畫：誰（哪個 agent）去做哪一件（objective）</td></tr>
+<tr><td><strong>dispatch</strong></td><td>把計畫裡的每個項目平行丟給對應的 sub-agent</td></tr>
+<tr><td><strong>fan-in</strong></td><td>收集成功的結果、記錄失敗的、然後繼續走</td></tr>
+<tr><td><strong>synthesize</strong></td><td>把散落的發現收斂成一份連貫、直接回給使用者的答案</td></tr>
+</tbody>
+</table>
+
+<p>後面四步就是在把這四個動作一步步寫出來。</p>
+
+<h2>什麼時候扇出才划算？</h2>
+<p>先打一劑預防針：<strong>不是每個需求都該開 sub-agents</strong>。花力氣拆 agent 要有明確回報，而回報來自兩種具體條件。</p>
+
+<h3>條件一：隔離邊界（isolation boundary）</h3>
+<p>典型場景是寫程式。如果每個 sub-agent 都在自己的 <strong>git worktree</strong>（同一份 repo 的獨立工作目錄）裡改檔，彼此就不會踩到對方的變更，也不會有 merge conflict。平行工作之所以安全，不是因為模型聰明，而是因為底層把隔離做好了。</p>
+
+<h3>條件二：fan-out 與 context 切分</h3>
+<p>典型場景是研究。並行跑多個調查可以換到速度；更重要的是，有些題目需要的資料量超過單一 agent 的 <strong>context window</strong>（模型一次能看見的輸入上限）。把它切成幾個子題、各自在獨立的 context 裡讀，最後再合併，是單一 agent 體質上做不到的事。</p>
+
+<h2>反例：不要做成全自動 swarm</h2>
+<p>相對的陷阱是讓一堆 sub-agent 和 supervisor 無限期地互相溝通。這種「自主 swarm」會大量產生幻覺——每一輪對話都可能累積並放大錯誤，而且沒有人能確定最終答案從哪裡來。這裡明確<strong>不採用</strong>這種架構：工人只做一次有界的工作、回報、結束，supervisor 保留控制權並負責收斂。</p>
+
+<blockquote>判斷口訣：找得到一條清楚的隔離邊界，或題目真的塞不進單一 context，才值得扇出。否則一個頂級模型加一個像樣的 harness 通常就夠了。</blockquote>
+
+<h2>plan mode：為什麼是使用者決定，而不是 agent 自己判斷</h2>
+<p>這門課把「階層式監督」做成一個使用者可以主動開啟的模式（plan mode，也稱 supervised mode），而不是讓 agent 自行揣測什麼時候該用 sub-agents。</p>
+
+<p>理由很務實：要讓 agent 準確判斷「這個需求該不該拆」需要 <strong>evals</strong>（系統性的評估資料與量測），而那不是這門課要處理的範圍。與其做一個沒被驗證過的自動判斷，不如把決定權交給使用者——你想用監督模式就跑監督模式，這是明示的 toggle。</p>
+
+<p>這也牽動一個關鍵設計：<strong>plan 是一級產物（first-class artifact）</strong>。它不是在對話執行緒裡閃過的一段文字，而是被產生、被存下來、能通過 schema 驗證、崩潰後還能重讀的一份物件。正因為它被明示建立、結構化儲存，後面的 dispatch 才能穩定地照著它跑。</p>
+
+<h2>兩種拓撲的對照</h2>
+<table>
+<thead>
+<tr><th></th><th>控制權</th><th>對使用者來說</th><th>典型用途</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>handoff</strong></td><td>完整轉移，原 agent 退場</td><td>聯絡人換人</td><td>權限邊界、職責劃分</td></tr>
+<tr><td><strong>supervisor</strong></td><td>主管保留，派工人再收斂</td><td>聯絡人始終同一人</td><td>隔離平行、context 切分</td></tr>
+</tbody>
+</table>
+
+<p>同一個問題可以用其中任一種解，選的是拓撲，不是「哪個 agent 比較強」。接下來四步都用「主管保留控制權」這一半。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./read-only-investigators.html">下一步：唯讀 investigators：註冊表與最小權限 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="階層式監督與 handoff 最根本的差別是什麼？" data-correct="1" data-explain="handoff 是完整、永久的控制權轉移；supervisor 全程保留控制權，派人再整合。">
+  <button class="opt">用的 LLM 模型不同</button>
+  <button class="opt">handoff 交出控制權，supervisor 保留控制權</button>
+  <button class="opt">supervisor 完全不用工具</button>
+  <button class="opt">兩者其實是完全相同的拓撲</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項是這門課認為值得扇出 sub-agents 的具體條件？" data-correct="2" data-explain="等價的兩種條件是清楚的隔離邊界（如 git worktree）與 fan-out／context 切分。">
+  <button class="opt">工具數量超過十個</button>
+  <button class="opt">想讓架構看起來更先進</button>
+  <button class="opt">有清楚的隔離邊界或題目塞不進單一 context</button>
+  <button class="opt">使用者要求越多 agent 越好</button>
+</div>
+
+<div class="quiz" data-question="為什麼「全自動、無限期互相溝通的 swarm」被明確排除？" data-correct="1" data-explain="無止境的 agent 間對話會大量累積與放大幻覺，且難以追溯答案來源。">
+  <button class="opt">它跑得太快難以觀察</button>
+  <button class="opt">會大量產生幻覺，且難以確定答案從何而來</button>
+  <button class="opt">它比單一 agent 便宜</button>
+  <button class="opt">它不需要 harness 支援</button>
+</div>
+
+<div class="quiz" data-question="plan mode 為什麼做成使用者明示開啟，而不是 agent 自動判斷？" data-correct="2" data-explain="要準確判斷何時該拆需要 evals，超出課程範圍；因此把決定權交給使用者。">
+  <button class="opt">使用者比較喜歡按按鈕</button>
+  <button class="opt">agent 無法理解使用者的需求</button>
+  <button class="opt">自動判斷需要 evals，課程不涵蓋</button>
+  <button class="opt">sub-agent 執行成本太高</button>
+</div>
+
+<div class="quiz" data-question="「plan 是一級產物」這句話的意思是？" data-correct="1" data-explain="plan 不是執行緒裡閃過的文字，而是被建立、儲存、能通過 schema 驗證、崩潰後可重讀的物件。">
+  <button class="opt">plan 只是一段暫時的對話文字</button>
+  <button class="opt">plan 是被產生、儲存、可驗證的正式物件</button>
+  <button class="opt">plan 由使用者手動撰寫</button>
+  <button class="opt">plan 每次執行都要重新推導</button>
+</div>
+
+<div class="quiz" data-question="在寫程式的場景裡，平行 sub-agent 之所以安全，主要靠什麼？" data-correct="2" data-explain="安全來自底層隔離——每個 sub-agent 有自己的 git worktree，不會互相產生 merge conflict。">
+  <button class="opt">模型本身不會出錯</button>
+  <button class="opt">全部工人共用同一份工作目錄</button>
+  <button class="opt">每個工人有自己的 git worktree 隔離</button>
+  <button class="opt">主管會即時修正每個工人</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · 階層式監督與 Sub-agents · Step 1/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

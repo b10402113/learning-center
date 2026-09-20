@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>函數的 hook：包裹原函數 — Hook 插件：函數與屬性攔截監控</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+  <div class="container">
+    <header class="lesson-header">
+      <div class="breadcrumb">
+        <a href="../../nodes/26-hook-interception.mdx">26-hook-interception</a>
+        <span>/</span>
+        <span>function-hook</span>
+      </div>
+      <h1>函數的 hook：包裹原函數</h1>
+      <p class="subtitle">四步流程，讓任何一個函數在被調用時自動彙報參數與返回值。</p>
+    </header>
+
+    <section class="goal">
+      <h2>學習目標</h2>
+      <p>能獨立寫出函數 hook 的四步流程——定義/取得原函數、保存原函數、同名包裹、調用觀察，並理解 hook 必須在原函數加載完成之後的時機要求。</p>
+    </section>
+
+    <section class="content">
+      <h2>四步流程</h2>
+      <p>對一個具體函數做 hook，永遠是同一個四步套路。用一個簡單的 <code>add</code> 函數演示：</p>
+
+      <h3>第一步：定義（或取得）原函數</h3>
+      <pre><code>function add(a, b) {
+    console.log("add方法正在執行");
+    return a + b;
+}</code></pre>
+      <p>在真實逆向中，這個函數不是你寫的，而是網站自己的加密函數——你要做的是先確認它「存在於哪個作用域、叫什麼名字」，這裡用 demo 把它定義出來。</p>
+
+      <h3>第二步：保存原函數</h3>
+      <pre><code>_add = add;</code></pre>
+      <p>目的是<strong>不修改原函數內部的實現</strong>。<code>_add</code> 此時指向原來那個函數對象，真正的加法邏輯一行未動。</p>
+
+      <h3>第三步：同名包裹</h3>
+      <pre><code>add = function (a, b) {
+    console.log("原函數調用前, 參數：", a, b);
+    let result = _add(a, b);   // 執行原函數
+    console.log("原函數調用後, 結果：", result);
+    return result;
+};</code></pre>
+      <p>包裹函數的內部結構是固定的三段：<strong>打印參數 → 調用原函數 → 打印結果並原樣返回</strong>。調用方拿到的返回值和 hook 之前完全一致。</p>
+      <p><strong>時機要求</strong>：這段 hook 代碼的位置必須在原函數加載完成之後——在原函數定義之前執行 <code>_add = add</code>，保存的就是 <code>undefined</code>。</p>
+
+      <h3>第四步：調用並觀察輸出</h3>
+      <pre><code>add(1, 2);</code></pre>
+      <p>控制台依次輸出：</p>
+      <pre><code>原函數調用前, 參數： 1 2
+add方法正在執行
+原函數調用後, 結果： 3</code></pre>
+      <p>調用方只寫了一行 <code>add(1, 2)</code>，你卻看到了完整的調用現場：進去的參數、出來的結果，以及原函數確實被執行過。</p>
+
+      <h2>逆向場景：它到底被誰調用了</h2>
+      <p>四步流程的威力在調用鏈複雜時才真正顯現。設想頁面腳本裡藏著這樣一串調用關係：<code>e()</code> 調 <code>d()</code>，<code>d()</code> 調 <code>add()</code> 再調 <code>c()</code>，<code>c()</code> 調 <code>b()</code>，<code>b()</code> 又調了一次 <code>add()</code>：</p>
+      <pre><code>function add(a, b) { return a + b; }   // 加密函數
+
+_add = add;
+add = function (a, b) {
+    console.log("原函數執行前，參數", a, b);
+    let result = _add(a, b);           // 執行原函數
+    console.log("原函數執行後，結果", result);
+    return result;
+};
+
+function c() { console.log("c"); b(); }
+function b() { console.log("b"); add(); a(); }
+function d() { console.log("d"); add(); c(); }
+function e() { console.log("e"); d(); }
+e();</code></pre>
+      <p>跑一次 <code>e()</code>，控制台裡「原函數執行前」的日誌出現幾次、夾在哪些函數的日誌之間，<code>add</code> 的調用點就一清二楚。這正是 hook 三大作用裡「便於調試和定位」的含義——你不需要讀懂整條調用鏈，只需要讓加密函數自己開口。</p>
+
+      <h2>本節小結</h2>
+      <p>函數 hook = 四步：定義/取得原函數 → <code>_add = add</code> 保存 → 同名包裹（打印參數 → 調原函數 → 打印結果 → 原樣返回）→ 調用觀察。記住兩個「不」：<strong>不改原函數實現</strong>、<strong>不改調用方式</strong>；和一個時機：<strong>原函數加載完成之後</strong>才能 hook。</p>
+    </section>
+
+    <section class="quiz-section">
+      <h2>檢查理解</h2>
+      <div class="quiz" data-question="函數 hook 四步流程的正確順序是什麼？" data-correct="1" data-explain="先取得原函數，再保存，再同名包裹，最後調用觀察；保存必須發生在原函數加載之後。">
+        <button class="opt">同名包裹 → 保存原函數 → 定義原函數 → 調用觀察</button>
+        <button class="opt">定義原函數 → 保存原函數 → 同名包裹 → 調用觀察</button>
+        <button class="opt">調用觀察 → 定義原函數 → 保存原函數 → 同名包裹</button>
+        <button class="opt">保存原函數 → 定義原函數 → 同名包裹 → 調用觀察</button>
+      </div>
+      <div class="quiz" data-question="包裹函數內部的固定三段結構是什麼？" data-correct="3" data-explain="打印參數 → 調用原函數 → 打印結果並原樣返回，這三段缺一不可。">
+        <button class="opt">調用原函數 → 打印參數 → 修改返回值</button>
+        <button class="opt">修改參數 → 修改返回值 → 調用原函數</button>
+        <button class="opt">打印結果 → 調用原函數 → 打印參數</button>
+        <button class="opt">打印參數 → 調用原函數 → 打印結果並原樣返回</button>
+      </div>
+      <div class="quiz" data-question="如果在原函數定義之前執行 _add = add，會發生什麼？" data-correct="0" data-explain="原函數還未定義時保存的是 undefined，包裹函數一調用 _add() 就會報錯。">
+        <button class="opt">保存下來的是 undefined，調用時報錯</button>
+        <button class="opt">瀏覽器會自動等待函數定義完成</button>
+        <button class="opt">hook 會自動失效但不出錯</button>
+        <button class="opt">原函數會被永久刪除</button>
+      </div>
+      <div class="quiz" data-question="調用鏈 demo 裡（e→d→add、c，c→b→add），跑一次 e() 後控制台幾次出現 add 的日誌？" data-correct="2" data-explain="d() 裡調一次 add、b() 裡又調一次 add，控制台共出現兩組『執行前/執行後』日誌。">
+        <button class="opt">零次，因為 add 沒有被調用</button>
+        <button class="opt">一次，只有 d() 調用了 add</button>
+        <button class="opt">兩次，d() 和 b() 各調一次</button>
+        <button class="opt">三次，每個函數都調一次</button>
+      </div>
+      <div class="quiz" data-question="這個調用鏈 demo 展示的 hook 作用是哪一條？" data-correct="1" data-explain="讓加密函數在調用時自報家門，不需要讀懂整條調用鏈就能定位調用點。">
+        <button class="opt">提升整條調用鏈的執行效能</button>
+        <button class="opt">便於調試和定位函數的調用點</button>
+        <button class="opt">減少調用鏈造成的記憶體佔用</button>
+        <button class="opt">加密調用鏈上傳遞的資料</button>
+      </div>
+    </section>
+
+    <div class="lesson-nav">
+      <div class="nav-left"><a href="./hook-mindset.html">← 上一步：Hook 的概念與最小可用模式</a></div>
+      <div class="nav-right"><a href="./property-hook.html">下一步：對象屬性的 hook：Object.defineProperty →</a></div>
+    </div>
+
+    <footer class="lesson-footer">
+      <p>有任何問題，隨時向你的老師提問。</p>
+    </footer>
+  </div>
+  <script src="../assets/quiz.js"></script>
+</body>
+</html>

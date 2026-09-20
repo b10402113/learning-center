@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>streamText 與串流迴圈</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>streamText 與串流迴圈</h1>
+<p class="meta">Step 3/5 · 不 await 的串流，與逐 chunk 迭代</p>
+
+<h2>學習目標</h2>
+<p>能解釋 streamText 為何不 await、for-await 如何逐段迭代 fullStream，以及為什麼串流是不可讓步的體驗底線。</p>
+
+<h2>呼叫之後，你拿到一串流</h2>
+
+<p>迴圈裡最關鍵的一行，是這句：</p>
+
+<pre><code>const result = streamText({ model, messages, tools });</code></pre>
+
+<p>注意它<strong>沒有被 await</strong>。原因很直接：<code>streamText</code> 回傳的不是最終答案，而是一條「流」（stream）——一個可以訂閱的物件。模型開始產生 token，這些 token 一路流進來，你一路接。若你改用 <code>generateText</code>，那才是「等我全部生完、一次給你結果」，那種才能 await。</p>
+
+<p>換句話說：<code>streamText</code> 是「邊生邊來」，<code>generateText</code> 是「生完再來」。我們要前者，因為後面所有 UI 體驗都建立在「token 一個一個出現」這件事上。</p>
+
+<h2>逐段迭代 fullStream</h2>
+
+<p>拿到流之後，用一個 async 迴圈把它一段一段吞掉：</p>
+
+<pre><code>for await (const part of result.fullStream) {
+  // 每抵達一個 chunk，就在這裡處理它
+}</code></pre>
+
+<p>這裡的 <code>part</code> 是流裡的一小塊（chunk）。別小看這個「一塊」——provider 送來的不是均質的純文字，而是<strong>好幾種不同的 chunk</strong>：可能是純 token，可能是一個工具呼叫，可能是工具結果，也可能是錯誤。迴圈每轉一次，你就得判斷「這一塊是哪一種」，再決定怎麼處理。判斷的細節是下一課的主角。</p>
+
+<h2>為什麼串流不可讓步</h2>
+
+<p>有人會問：把串流全砍掉、等最終結果再一次丟上畫面，不是更省事嗎？技術上可行，但你會得到什麼？</p>
+
+<p>一個使用者等半天、畫面一片空白、最後「啪」地蹦出整段答案的產品。2026 年，沒有人會為這種體驗付錢，也沒有人會繼續用。串流之所以是全部這些 chunk 處理程式碼存在的理由，正是因為它把「等待」變成「正在發生」。若你不串流，這整段 chunk 處理的程式碼可以直接刪光——而刪掉的同時，你也把產品刪沒了。</p>
+
+<p>所以把這條當成底線記住：<strong>不串流，就是在流失使用者</strong>。下一課，我們接手這些 chunk，把它們翻譯成客戶端看得懂的事件。</p>
+
+<div class="lesson-nav">
+  <div><a href="./loop-and-step-budget.html">← 上一步：Agent Loop 與 Step 上限</a></div>
+  <div><a href="./parts-to-events.html">下一步：Stream Part 轉成 Harness 事件 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="streamText 為什麼不 await？" data-correct="0" data-explain="它回傳的是可訂閱的流，得邊生邊接，不是一次給結果。">
+  <button class="opt">它回傳一條可訂閱的流</button>
+  <button class="opt">它本身沒有回傳值</button>
+  <button class="opt">await 它會當掉</button>
+  <button class="opt">它是同步函式</button>
+</div>
+
+<div class="quiz" data-question="想一次拿到最終答案，該用哪個函式？" data-correct="3" data-explain="generateText 才是生完再給你，能 await。">
+  <button class="opt">readText</button>
+  <button class="opt">fetchText</button>
+  <button class="opt">sendText</button>
+  <button class="opt">generateText</button>
+</div>
+
+<div class="quiz" data-question="result.fullStream 裡流出來的是什麼？" data-correct="1" data-explain="各種不同的 chunk：純 token、工具呼叫、工具結果、錯誤。">
+  <button class="opt">一大段完整文章</button>
+  <button class="opt">不同類型的 chunk</button>
+  <button class="opt">只有純文字字元</button>
+  <button class="opt">HTTP 狀態碼</button>
+</div>
+
+<div class="quiz" data-question="課程主張不串流的產品會怎樣？" data-correct="2" data-explain="沒人會為等半天才蹦出整段答案的體驗付錢或繼續用。">
+  <button class="opt">更便宜所以更受歡迎</button>
+  <button class="opt">載入更快所以更好</button>
+  <button class="opt">沒人會付錢或繼續用</button>
+  <button class="opt">更容易除錯維護</button>
+</div>
+
+<div class="quiz" data-question="「不串流就是在流失使用者」這句話在強調什麼？" data-correct="0" data-explain="串流把「等待」變成「正在發生」，是體驗底線。">
+  <button class="opt">串流是不可讓步的體驗底線</button>
+  <button class="opt">串流能省 token 成本</button>
+  <button class="opt">串流是安全機制</button>
+  <button class="opt">串流能讓模型更聰明</button>
+</div>
+
+<div class="footer">
+  <p>agent-harness · Harness Runtime 迴圈 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
