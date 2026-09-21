@@ -15,38 +15,36 @@
         <span>browser-first-hook</span>
       </div>
       <h1>瀏覽器先手 hook：atob 與 cookie</h1>
-      <p class="subtitle">網頁腳本跑完你才注入 hook 就太晚了——用 DevTools 搶在頁面加載之前埋下監控。</p>
+      <p class="subtitle">頁面腳本還沒跑，hook 已經蹲好了——這就是「先手」。</p>
     </header>
 
     <section class="goal">
       <h2>學習目標</h2>
-      <p>能在真實瀏覽器裡用 DevTools 的 Script 事件監聽 + Sources Snippets，在頁面加載之前完成 atob 與 document.cookie 的先手 hook，監控每一次調用。</p>
+      <p>在真實瀏覽器裡用「Script 事件監聽 + Snippets」搶在頁面腳本之前完成內置函數（atob）與 cookie 屬性的 hook，並理解為什麼時機必須早於頁面加載。</p>
     </section>
 
     <section class="content">
-      <h2>問題：hook 寫好了，但來不及注入</h2>
-      <p>前面兩節的寫法在本地 demo 裡完美可用。可真到了瀏覽器裡，時機成了頭號難題：目標網站的加密代碼在<strong>頁面加載過程中</strong>就跑掉了——比如把登入憑證加密成 base64 再發出去。等你打開控制台手動粘貼 hook 代碼，關鍵的那次調用早已結束。hook 必須<strong>在瀏覽器頁面加載出來之前</strong>完成，才能攔到第一批調用。</p>
-      <p>本節的目標是 hook 瀏覽器環境自帶的 <code>atob</code>——它是瀏覽器內置的 base64 解碼函數。網站只要做 base64 編解碼就繞不開它，hook 住它就等於在所有 base64 數據的必經之路上設了崗哨，這是逆向 base64 數據最常用的起手式。</p>
+      <h2>最大的難題不是寫法，是時機</h2>
+      <p>前兩步的 hook 寫法，搬到瀏覽器裡有一個致命問題：<strong>太慢</strong>。等頁面加載完、你再打開控制台粘貼 hook 代碼時，網站的加密代碼早就跑完了——該解的 base64 解完了，該寫的 cookie 寫完了，你的 hook 一次都沒被觸發。</p>
+      <p>所以瀏覽器環境的 hook 有一條鐵律：<strong>hook 時機必須在頁面加載出來之前</strong>。要搶先，就要讓頁面腳本在起跑線上停下來等你——這件事靠 DevTools 的兩個功能配合完成：<strong>Script 事件監聽</strong>負責「讓頁面停下來」，<strong>Snippets</strong> 負責「趁停頓注入 hook」。</p>
 
       <h2>先手 hook 的五步操作鏈</h2>
-      <p>核心思路：用 DevTools 的「Script 事件監聽」讓頁面在執行第一段腳本之前自動斷住，趁機注入 hook。</p>
+      <p>以瀏覽器自帶的 base64 解碼函數 <code>atob</code> 為例（它是逆向 base64 數據的常用起手式）：</p>
       <table>
         <thead>
           <tr><th>步驟</th><th>操作</th><th>目的</th></tr>
         </thead>
         <tbody>
-          <tr><td>1</td><td>在<strong>空白頁面</strong>打開瀏覽器開發者工具（F12）</td><td>在乾淨的環境準備好工具，不觸發目標站腳本</td></tr>
-          <tr><td>2</td><td>開啟 JS 的<strong>事件監聽器斷點</strong>：Sources → Event Listener Breakpoints → 勾選 <em>Script</em></td><td>讓 DevTools 在任何腳本執行的瞬間自動斷住</td></tr>
-          <tr><td>3</td><td>訪問目標頁（如百度），頁面會立刻<strong>斷點停留</strong>在腳本執行前</td><td>搶在網站自己的代碼動起來之前獲得控制權</td></tr>
-          <tr><td>4</td><td>在 Sources 的 <strong>Snippets（程式碼片段）</strong>中新建 hook 代碼片段，打上斷點，然後運行</td><td>在頁面腳本執行之前注入 hook</td></tr>
-          <tr><td>5</td><td><strong>取消事件監聽器中的 Script</strong> 勾選，之後即可監控每次調用</td><td>hook 已生效，不再需要每段腳本都斷住</td></tr>
+          <tr><td>1</td><td>在一個空白頁面打開 DevTools</td><td>準備好調試環境，此時還沒有目標頁面干擾</td></tr>
+          <tr><td>2</td><td>開啟事件監聽斷點裡的 Script（腳本）事件</td><td>讓頁面在任何 script 執行前先斷住</td></tr>
+          <tr><td>3</td><td>訪問目標頁面</td><td>頁面開始加載，Script 斷點立刻把執行停住</td></tr>
+          <tr><td>4</td><td>Sources → Snippets 新建 hook 代碼片段，打上斷點，右鍵 Run 運行</td><td>趁頁面腳本還停著，搶先完成同名覆蓋</td></tr>
+          <tr><td>5</td><td>取消 Script 事件監聽，讓頁面繼續跑（<strong>不可刷新頁面</strong>）</td><td>hook 已就位，之後每次 atob 調用都會被監控</td></tr>
         </tbody>
       </table>
-      <p>第 5 步有一個致命細節：<strong>不可刷新頁面</strong>。hook 是對當前頁面裡的函數對象做的替換，一旦刷新，整個 JS 環境重建，hook 隨之消失，必須從第 1 步重來。</p>
-
-      <h2>atob 的 hook 代碼</h2>
-      <p>寫法就是函數 hook 的四步套路，一個字都不用改：</p>
-      <pre><code>_atob = atob; // 保存原函數
+      <h2>hook atob：攔截 base64 解碼</h2>
+      <p>第 4 步的 Snippets 裡，寫的還是那副「保存原函數 + 同名覆蓋」的骨架：</p>
+      <pre><code>_atob = atob;  // 保存原函數
 
 atob = function (str) {
     console.log("正在執行atob方法, 參數:", str);
@@ -54,11 +52,11 @@ atob = function (str) {
     console.log("正在執行atob方法, 返回值:", result);
     return result;
 };</code></pre>
-      <p>注入成功後，網站每做一次 base64 解碼，控制台就自動打印出原始密文字符串和解出的明文。配合 <code>console.trace()</code> 還能順藤摸瓜找到調用它的加密邏輯位置。</p>
+      <p>把這段代碼存成 Snippet、Run 一次。等頁面繼續加載、開始處理 base64 數據時，控制台就會一行行打出每次 <code>atob</code> 的輸入與解碼結果。逆向 base64 混淆的參數時，這一步能直接告訴你「原文長什麼樣」。</p>
 
-      <h2>cookie 的 hook：屬性 hook 的實戰版</h2>
-      <p><code>document.cookie</code> 是屬性不是函數，所以換用上一節的 defineProperty 寫法。操作步驟與 atob hook 完全相同（同一條五步操作鏈），只是注入的 Snippet 換成：</p>
-      <pre><code>_cookie = document.cookie; // 先保存原值
+      <h2>hook cookie：監控憑證的讀寫</h2>
+      <p>cookie 是屬性，不是函數，所以寫法換成 <code>Object.defineProperty</code>，但操作鏈完全一樣（同上面的五步）：</p>
+      <pre><code>_cookie = document.cookie;  // 保存原值
 
 Object.defineProperty(document, 'cookie', {
     get(){
@@ -70,43 +68,42 @@ Object.defineProperty(document, 'cookie', {
         _cookie = value;
     }
 });</code></pre>
-      <p>cookie 是登入憑證的大本營（session id、token 常寫在這裡）。hook 住它，網站<strong>什麼時候讀出、什麼時候寫入</strong> cookie、每次寫入的值是什麼，全部一覽無餘——這正是定位重要憑證生成位置的手段。</p>
+      <p>這段 hook 的價值在於：網站什麼時候讀 cookie、什麼時候寫入新的 cookie，全都會打印出來。當你追查「登入憑證／風控字段是怎麼生成、何時種下的」，這就是最直接的線索。</p>
 
-      <h2>本節小結</h2>
-      <p>瀏覽器先手 hook 的關鍵不是新寫法，而是<strong>時機</strong>：在頁面加載之前完成注入。操作鏈是：空白頁開 DevTools → 勾選 Script 事件監聽斷點 → 訪問目標頁讓它斷住 → Snippets 注入 hook 代碼 → 取消 Script 監聽（之後不可刷新）。hook 內容本身只是複用前面的套路：atob 用函數 hook，cookie 用 defineProperty 屬性 hook。有了先手能力，下一節要看攻防的另一面——網站如何檢測你的 hook，你又如何隱藏它。</p>
+      <h2>為什麼最後一步不能刷新頁面</h2>
+      <p>hook 是「同名覆蓋」——它改變的是<strong>當前頁面運行時</strong>裡 <code>atob</code> 和 <code>document.cookie</code> 指向什麼。一旦刷新，整個頁面上下文重建，你的覆蓋全部作廢，網站又拿回了原生函數。所以先手 hook 完成後：可以繼續操作頁面、可以發請求，但<strong>不能刷新</strong>，直到你收集完數據為止。</p>
     </section>
-
     <section class="quiz-section">
-      <h2>檢查理解</h2>
-      <div class="quiz" data-question="對瀏覽器內置函數做 hook，時機上有什麼要求？" data-correct="1" data-explain="必須在頁面加載出來之前完成 hook，否則網站的第一批加密調用早就跑完了。">
-        <button class="opt">等頁面完全加載完成後再 hook</button>
-        <button class="opt">在瀏覽器頁面加載出來之前完成 hook</button>
-        <button class="opt">等用戶觸發加密操作後再 hook</button>
-        <button class="opt">隨時都可以，沒有時機要求</button>
+      <h2>隨堂測驗</h2>
+      <div class="quiz" data-question="瀏覽器裡 hook 的鐵律是什麼？" data-correct="1" data-explain="頁面加載完加密代碼就跑完了，hook 時機必須在頁面加載出來之前。">
+        <button class="opt">hook 代碼必須寫在原函數所在文件裡</button>
+        <button class="opt">hook 時機必須在頁面加載出來之前</button>
+        <button class="opt">hook 必須等所有網路請求完成後注入</button>
+        <button class="opt">hook 必須用無痕視窗避免被網站發現</button>
       </div>
-      <div class="quiz" data-question="開啟事件監聽器斷點裡的 Script，作用是讓 DevTools 在什麼時候停住？" data-correct="3" data-explain="勾選 Script 後，任何腳本執行的瞬間都會自動斷住，從而搶在網站代碼前獲得控制權。">
-        <button class="opt">在網路請求發出的時候停住</button>
-        <button class="opt">在頁面渲染完成的時候停住</button>
-        <button class="opt">在 cookie 被寫入的時候停住</button>
-        <button class="opt">在任何腳本執行的瞬間停住</button>
+      <div class="quiz" data-question="「先手 hook」靠哪兩個 DevTools 功能配合完成？" data-correct="0" data-explain="Script 事件監聽負責讓頁面在腳本執行前斷住，Snippets 負責趁停頓注入 hook 代碼。">
+        <button class="opt">Script 事件監聽斷點與 Snippets 代碼片段</button>
+        <button class="opt">Network 面板抓包與 Console 控制台粘貼</button>
+        <button class="opt">Application 存儲面板與 Elements 元素面板</button>
+        <button class="opt">Performance 性能錄製與 Memory 記憶體快照</button>
       </div>
-      <div class="quiz" data-question="hook 代碼為什麼要寫在 Sources 的 Snippets 裡執行？" data-correct="0" data-explain="Snippets 是 DevTools 自帶的代碼片段執行區，可打斷點並在頁面腳本之前運行，是注入 hook 的載體。">
-        <button class="opt">Snippets 能在頁面腳本之前運行注入的 hook</button>
-        <button class="opt">Snippets 能自動保存到目標網站伺服器</button>
-        <button class="opt">Snippets 能修改網站的原始 JS 文件</button>
-        <button class="opt">Snippets 能繞過瀏覽器的同源策略</button>
+      <div class="quiz" data-question="hook 成功之後，為什麼不能刷新頁面？" data-correct="2" data-explain="刷新會重建頁面運行時，同名覆蓋全部作廢，網站拿回原生函數。">
+        <button class="opt">刷新會觸發網站的風控系統直接封禁帳號</button>
+        <button class="opt">刷新會把 Snippets 面板裡的代碼片段清空</button>
+        <button class="opt">刷新會重建頁面上下文讓同名覆蓋作廢</button>
+        <button class="opt">刷新會讓 DevTools 的斷點配置全部丟失</button>
       </div>
-      <div class="quiz" data-question="完成 hook 並取消 Script 監聽之後，為什麼不能刷新頁面？" data-correct="2" data-explain="刷新會重建整個 JS 環境，替換掉的函數恢復原狀，注入的 hook 隨之消失。">
-        <button class="opt">刷新會讓 DevTools 自動關閉</button>
-        <button class="opt">刷新會讓 cookie 全部被清空</button>
-        <button class="opt">刷新會重建 JS 環境使 hook 失效</button>
-        <button class="opt">刷新會觸發網站的 hook 檢測</button>
+      <div class="quiz" data-question="atob 是瀏覽器自帶的什麼函數？" data-correct="3" data-explain="atob 用來對 base64 數據做解碼，hook 它能直接看到被混淆的原文。">
+        <button class="opt">把任意字符串做 MD5 摘要的哈希函數</button>
+        <button class="opt">把明文數據做 AES 對稱加密的加密函數</button>
+        <button class="opt">把二進制數據編碼成 base64 的編碼函數</button>
+        <button class="opt">把 base64 數據還原成原文的解碼函數</button>
       </div>
-      <div class="quiz" data-question="hook document.cookie 用的是哪種寫法？" data-correct="1" data-explain="cookie 是屬性不是函數，用 Object.defineProperty 的 get/set 監控它的讀寫。">
-        <button class="opt">函數包裹的四步套路</button>
-        <button class="opt">Object.defineProperty 的 get/set</button>
-        <button class="opt">new Proxy 代理整個 document</button>
-        <button class="opt">重寫 Function.prototype.toString</button>
+      <div class="quiz" data-question="hook document.cookie 用的是哪種技術？" data-correct="0" data-explain="cookie 是屬性，用 Object.defineProperty 定義 get/set 來監控讀寫。">
+        <button class="opt">用 Object.defineProperty 重新定義 get/set</button>
+        <button class="opt">用同名覆蓋把 cookie 換成新寫的函數</button>
+        <button class="opt">用 addEventListener 監聽 cookie 變化事件</button>
+        <button class="opt">用 localStorage 攔截所有 cookie 的寫入</button>
       </div>
     </section>
 

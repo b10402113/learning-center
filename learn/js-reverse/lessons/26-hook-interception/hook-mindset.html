@@ -15,90 +15,85 @@
         <span>hook-mindset</span>
       </div>
       <h1>Hook 的概念與最小可用模式</h1>
-      <p class="subtitle">看懂別人的加密代碼之前，先學會在不改代碼的前提下「偷聽」每一次函數調用。</p>
+      <p class="subtitle">在不改原代碼、不變調用方式的前提下，看清每一次函數調用。</p>
     </header>
 
     <section class="goal">
       <h2>學習目標</h2>
-      <p>理解 hook（攔截和修改函數或方法行為的技術）的概念、三大作用，以及「保存原函數 + 同名覆蓋」這個所有 hook 共用的最小可用模式。</p>
+      <p>理解 hook 是「攔截和修改函數行為的技術」，說出它在逆向中的用途，並記住「保存原函數 + 同名覆蓋」這個貫穿全程的最小可用模式。</p>
     </section>
 
     <section class="content">
-      <h2>逆向時最常遇到的處境</h2>
-      <p>你在目標網站的 JS 裡翻出了一個可疑的加密函數——姑且叫它 <code>add</code>。你知道它是關鍵，但接下來的問題是：它在哪些 JS 文件裡被調用？每次傳了什麼參數？返回了什麼值？一個頁面加載時會執行幾十個 JS 文件、成百上千個函數，挨個文件去搜「<code>add(</code>」既不現實，也看不到運行時的真實參數。</p>
-      <p>你真正想要的，是在原代碼一行不改的前提下，讓 <code>add</code> 每次被調用時「自報家門」：誰調了我、傳了什麼、我回了什麼。這就是 hook 要做的事。</p>
+      <h2>先從一個真實處境說起</h2>
+      <p>你在分析一個網站，翻 JS 文件時發現了一個加密函數——姑且叫它 <code>add</code>，它負責生成請求要帶的 <code>sign</code>。你真正想知道的不是它的內部實現，而是三件事：<strong>它在哪些 JS 代碼裡被調用？每次傳了什麼參數？返回了什麼？</strong></p>
+      <p>一個頁面加載時會執行很多 JS 文件，每個文件裡又有很多函數。一個個文件翻過去找調用點，太慢，也太容易漏。你需要一種「守株待兔」的辦法：蹲在 <code>add</code> 的門口，誰來調它、帶了什麼、拿走了什麼，全部記下來。</p>
+      <p>這個辦法就是 <strong>hook（鉤子）</strong>。</p>
 
-      <h2>什麼是 hook</h2>
-      <p>在 JavaScript 中，hook（鉤子）是一種<strong>攔截和修改函數或方法行為的技術</strong>。使用 hook，你可以在現有函數<strong>執行前</strong>插入邏輯、在<strong>執行後</strong>插入邏輯，或者乾脆<strong>替換</strong>函數的實現。它的目的是找到函數的入口、觀察參數的變化，從而分析 JS 邏輯。</p>
-      <p>hook 的作用有三條：</p>
+      <h2>hook 是什麼</h2>
+      <p>在 JavaScript 中，hook 是一種能夠<strong>攔截和修改函數或方法行為</strong>的技術。通過 hook，你可以在現有函數執行之前、執行之後插入自己的邏輯，甚至整個替換掉函數的實現。hook 的目的是<strong>找到函數入口以及一些參數變化，便於分析 JS 邏輯</strong>。</p>
+      <p>hook 的價值有三條：</p>
       <table>
         <thead>
-          <tr><th>作用</th><th>說明</th></tr>
+          <tr><th>作用</th><th>含義</th><th>逆向中的意義</th></tr>
         </thead>
         <tbody>
-          <tr><td><strong>增強可擴展性</strong></td><td>不修改原始代碼就能增加或修改功能，代碼更靈活</td></tr>
-          <tr><td><strong>減少侵入性</strong></td><td>不改變原代碼的前提下加新功能，新功能更容易管理和維護</td></tr>
-          <tr><td><strong>便於調試和定位</strong></td><td>在函數執行前後插入日誌，理解程序執行流程、定位問題源頭</td></tr>
+          <tr><td>增強可擴展性</td><td>不修改原始代碼就能增加或修改功能</td><td>目標網站的 JS 一個字都不用動</td></tr>
+          <tr><td>減少侵入性</td><td>新功能好管理、好維護、隨時可拆</td><td>hook 代碼寫在控制台或 Snippets 裡，與原代碼完全隔離</td></tr>
+          <tr><td>便於調試定位</td><td>在函數執行前後插入調試信息</td><td>看清執行流程，定位問題源頭與調用點</td></tr>
         </tbody>
       </table>
-      <p>前兩條是正規開發者關心的；第三條是逆向者關心的——hook 是逆向中<strong>定位函數調用點、觀察入參/出參的第一手段</strong>。</p>
-
       <h2>最小可用模式：保存原函數 + 同名覆蓋</h2>
-      <p>hook 的寫法千變萬化，但核心永遠是同一個兩步模式。假設目標函數是 <code>add</code>：</p>
-      <pre><code>// 第一步：保存原函數
+      <p>hook 的寫法千變萬化，但核心骨架只有兩個動作：</p>
+      <pre><code>// 1. 保存原函數——目的是不修改原函數內部的實現
 _add = add;
 
-// 第二步：用同名變數重新賦值，包裹原函數
+// 2. 同名覆蓋——新函數包裹原函數，順便打印日誌
 add = function (a, b) {
-    console.log("原函數調用前, 參數：", a, b);
-    let result = _add(a, b);   // 執行原函數
-    console.log("原函數調用後, 結果：", result);
-    return result;
+  console.log('原函數執行前，參數', a, b);
+  let result = _add(a, b);  // 執行原函數
+  console.log('原函數執行後，結果', result);
+  return result;
 };</code></pre>
-      <p>這兩步各自解決一個問題：</p>
-      <ul>
-        <li><strong>保存原函數</strong>（<code>_add = add</code>）——目的是<strong>不修改原函數內部的實現</strong>。原函數依然是原函數，只是換了個名字被存起來。包裹函數裡調用 <code>_add(a, b)</code>，拿到的結果和原來一模一樣。</li>
-        <li><strong>同名覆蓋</strong>（<code>add = function(...)</code>）——目的是<strong>不改變調用方式</strong>。網站裡所有調用 <code>add(...)</code> 的地方照常工作，但它們現在調到的是你的包裹函數。包裹函數打印日誌之後，把原函數的返回值原樣 <code>return</code> 回去，調用方毫無察覺。</li>
-      </ul>
+      <p>第一行把真正的 <code>add</code> 存到 <code>_add</code> 裡保管起來；第二行讓 <code>add</code> 這個名字指向一個新函數。新函數先打印參數，再調用保管好的原函數拿到結果，打印結果，最後把結果原樣返回。</p>
 
-      <h2>一個硬性條件：hook 的位置</h2>
-      <p>hook 代碼的位置必須在<strong>加載完需要 hook 的函數（原函數）之後</strong>。如果原函數還沒定義你就執行 <code>_add = add</code>，保存下來的就是 <code>undefined</code>，包裹函數一調用 <code>_add()</code> 就報錯。這條時機約束在平時的 demo 裡很自然——把 hook 代碼放在原函數定義後面就行；但一旦搬到真實瀏覽器裡，它就成了最棘手的問題（怎麼搶在頁面腳本之前完成 hook），後面「瀏覽器先手 hook」一步專門解決它。</p>
+      <h2>為什麼調用方毫無察覺</h2>
+      <p>關鍵在「同名覆蓋」。網站原有的代碼照樣寫 <code>add(x, y)</code>、照樣拿返回值去用——名字沒變、參數沒變、返回值也沒變。唯一多出來的，是控制台裡你插进去的兩行日誌。對調用方來說，這次調用和往常沒有任何區別；對你來說，每一次調用的入參和出參都被看得一清二楚。</p>
+      <p>這就是 hook 的精髓：<strong>不改原代碼、不變調用方式，只在中間加一雙眼睛。</strong></p>
 
-      <h2>本節小結</h2>
-      <p>hook = 攔截和修改函數行為的技術；逆向里用它定位調用點、觀察參數與返回值。最小可用模式只有兩步：<strong>保存原函數</strong>（不改原實現）＋ <strong>同名覆蓋</strong>（不改調用方式）。記住時機約束：hook 必須在原函數加載完成之後執行。接下來的每一步——函數 hook、屬性 hook、瀏覽器先手 hook——都只是這個模式在不同對象上的展開。</p>
+      <h2>這個模式會一直陪著你</h2>
+      <p>本節點後面的每一步，都是這個骨架的變體：函數的 hook 是它的完整四步流程；對象屬性的 hook 把「保存原值 + 重新定義」搬到了 <code>Object.defineProperty</code> 的 <code>get</code>/<code>set</code> 上；瀏覽器先手 hook 解決的是「什麼時機注入這段代碼」；檢測與反檢測則是攻防雙方圍繞「函數被換過了」這件事的拉扯。記住這副骨架，後面每一步你都會認出它。</p>
     </section>
-
     <section class="quiz-section">
-      <h2>檢查理解</h2>
-      <div class="quiz" data-question="在 JS 逆向中，hook 最核心的用途是什麼？" data-correct="2" data-explain="hook 能在不改原代碼的前提下觀察函數的入參與返回值，是定位調用點的第一手段。">
-        <button class="opt">提升網站 JS 的執行速度</button>
-        <button class="opt">壓縮網站 JS 的文件體積</button>
-        <button class="opt">定位函數調用點並觀察參數與返回值</button>
-        <button class="opt">自動修復網站 JS 的語法錯誤</button>
+      <h2>隨堂測驗</h2>
+      <div class="quiz" data-question="hook 的核心目的是什麼？" data-correct="0" data-explain="hook 的目的是找到函數入口、觀察參數變化，便於分析 JS 邏輯。">
+        <button class="opt">找到函數入口並觀察參數與返回值的變化</button>
+        <button class="opt">修改原函數的內部實現以提升執行效率</button>
+        <button class="opt">把網站的 JS 文件全部下載到本地保存</button>
+        <button class="opt">繞過網站的登入驗證直接去調用接口</button>
       </div>
-      <div class="quiz" data-question="最小可用模式的第一步 _add = add 是為了什麼？" data-correct="1" data-explain="保存原函數是為了不修改原函數內部實現，包裹函數裡調 _add 拿到的結果和原來一樣。">
-        <button class="opt">不改變 add 的調用方式</button>
-        <button class="opt">不修改原函數的內部實現</button>
-        <button class="opt">讓 add 變成全域變數</button>
-        <button class="opt">避免瀏覽器的記憶體洩漏</button>
+      <div class="quiz" data-question="為什麼要先用 _add = add 保存原函數？" data-correct="2" data-explain="保存原函數是為了不修改原函數的內部實現，包裹函數裡還要靠它拿到正確結果。">
+        <button class="opt">為了讓原函數執行得比改寫後更快一些</button>
+        <button class="opt">為了讓控制台日誌輸出兩遍方便對照</button>
+        <button class="opt">為了不修改原函數的實現且仍能調用它</button>
+        <button class="opt">為了把原函數從記憶體中徹底釋放掉</button>
       </div>
-      <div class="quiz" data-question="同名覆蓋（add = function(...)）解決的是哪個問題？" data-correct="0" data-explain="同名覆蓋讓網站中所有調用 add 的地方照常工作，它們現在調到的是你的包裹函數。">
-        <button class="opt">不改變原代碼的調用方式</button>
-        <button class="opt">不修改原函數的內部實現</button>
-        <button class="opt">防止變數名發生衝突</button>
-        <button class="opt">讓日誌輸出更易於閱讀</button>
+      <div class="quiz" data-question="hook 之後，網站原有的調用代碼為什麼不需要改動？" data-correct="1" data-explain="同名覆蓋讓函數名、參數、返回值都不變，調用方完全無感知。">
+        <button class="opt">因為 hook 會自動修補所有調用點代碼</button>
+        <button class="opt">因為新函數沿用了同名且返回值不變</button>
+        <button class="opt">因為瀏覽器忽略了函數被替換的事實</button>
+        <button class="opt">因為調用點早已被瀏覽器緩存起來了</button>
       </div>
-      <div class="quiz" data-question="包裹函數拿到 _add(a, b) 的結果後，為什麼必須原樣 return？" data-correct="3" data-explain="原樣返回讓調用方拿到的結果與 hook 之前完全一致，調用方毫無察覺。">
-        <button class="opt">讓 console.log 能打印結果</button>
-        <button class="opt">避免 _add 被垃圾回收</button>
-        <button class="opt">觸發瀏覽器的斷點調試</button>
-        <button class="opt">讓調用方拿到與原來一致的結果</button>
+      <div class="quiz" data-question="下列哪一項不是 hook 的作用？" data-correct="3" data-explain="hook 的作用是增強可擴展性、減少侵入性、便於調試定位，與加密能力無關。">
+        <button class="opt">不改原始代碼的前提下為函數增加新功能</button>
+        <button class="opt">在函數執行前後插入調試資訊定位問題</button>
+        <button class="opt">減少對原始代碼的侵入讓功能便於管理</button>
+        <button class="opt">自動加密網站請求中的明文敏感參數值</button>
       </div>
-      <div class="quiz" data-question="hook 代碼的執行位置有什麼硬性要求？" data-correct="1" data-explain="hook 必須在原函數加載完成之後執行，否則保存下來的是 undefined，一調用就報錯。">
-        <button class="opt">必須在原函數定義之前執行</button>
-        <button class="opt">必須在原函數加載完成之後執行</button>
-        <button class="opt">必須在頁面完全關閉之後執行</button>
-        <button class="opt">必須在伺服器響應之前執行</button>
+      <div class="quiz" data-question="「最小可用模式」包含哪兩個動作？" data-correct="0" data-explain="保存原函數 + 同名覆蓋，是整個節點反覆使用的核心骨架。">
+        <button class="opt">保存原函數，再用同名的新函數覆蓋它</button>
+        <button class="opt">刪除原函數，再寫一個完全不同新函數</button>
+        <button class="opt">複製原函數源碼，再粘貼到控制台運行</button>
+        <button class="opt">註釋原函數代碼，再重寫一遍相同邏輯</button>
       </div>
     </section>
 

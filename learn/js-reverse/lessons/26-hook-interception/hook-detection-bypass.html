@@ -15,109 +15,97 @@
         <span>hook-detection-bypass</span>
       </div>
       <h1>Hook 檢測與反檢測</h1>
-      <p class="subtitle">你 hook 了網站的函數，網站也想知道自己有沒有被 hook——一場圍繞 toString() 的貓鼠遊戲。</p>
+      <p class="subtitle">你用 hook 窺探網站，網站也在檢查自己有沒有被動過手腳。</p>
     </header>
 
     <section class="goal">
       <h2>學習目標</h2>
-      <p>理解網站用 toString() 與 Function.prototype.toString.call 兩級檢測識別 hook 的原理，掌握重寫實例 toString 與重寫原型鏈 toString 兩種破解及各自代價。</p>
+      <p>理解網站如何用 toString() 與原型鏈上的 Function.prototype.toString.call 檢測函數是否被 hook，並掌握對應的兩級破解寫法與各自代價。</p>
     </section>
 
     <section class="content">
-      <h2>攻防的另一面</h2>
-      <p>hook 不是聖誕老人的禮物——一些網站會嚴格檢測自己的關鍵函數或屬性是否被「別有用心的人」動過手腳。檢測抓到異常，輕則拒絕服務，重則上報風控。所以做逆向必須理解兩個問題：<strong>網站怎麼檢測 hook？又怎麼破解這種檢測？</strong></p>
+      <h2>第一級檢測：toString() 比對</h2>
+      <p>一些網站會嚴格檢測自己的函數或屬性有沒有被人 hook。最常用的手段出乎意料地簡單：對函數調用 <code>toString()</code>。</p>
+      <p>JavaScript 裡，內置函數的實現是被隱藏的——<code>atob</code>、<code>toString</code> 這類原生函數調 <code>toString()</code> 時，返回的不是源碼，而是一個特殊標記：</p>
+      <pre><code>atob.toString();
+// 原生情況下返回：
+// "function atob() { [native code] }"</code></pre>
+      <p><code>[native code]</code> 表示「這個函數的實現由瀏覽器內部完成，不給你看」。而一旦 <code>atob</code> 被我們同名覆蓋成包裹函數，再調 <code>toString()</code>，返回的就是你那段包裹函數的<strong>完整源碼</strong>——兩個結果一對比，網站立刻知道 <code>atob</code> 被動過了。</p>
 
-      <h2>檢測法：toString() 現出原形</h2>
-      <p>JS 裡每個函數都有 <code>toString()</code> 方法，返回函數的源代碼字符串。但有一類函數是例外：<strong>瀏覽器內置函數</strong>。它們的實現藏在瀏覽器底層（C++），JS 層面拿不到源碼，於是 <code>toString()</code> 返回的是一個特殊標記：</p>
-      <pre><code>// 原生 atob 的 toString() 結果：
-"function atob() { [native code] }"</code></pre>
-      <p><code>[native code]</code>（原生代碼標記）的含義是：這個函數的實現被隱藏了。這對提高代碼的安全性和封裝性有一定作用——而對網站來說，它恰好是一個絕佳的「純真證明」。</p>
-      <p>現在對比被 hook 之後的 <code>atob</code>：</p>
-      <pre><code>// 被 hook 後 atob.toString() 的結果：
-"function (str) {
-    console.log(\"正在執行atob方法, 參數:\", str);
-    let result = _atob(str);
-    ...
-}"</code></pre>
-      <p>兩個結果一眼就能分辨：原生返回 <code>[native code]</code> 標記，被 hook 後返回的是你的包裹函數源碼。網站只要執行一次 <code>atob.toString()</code>、檢查結果裡有沒有 <code>[native code]</code>，就知道函數有沒有被動過。這就是 <strong>toString() 檢測法</strong>。</p>
-
-      <h2>破解一：重寫實例上的 toString</h2>
-      <p>思路很直接：既然檢測方靠 <code>toString()</code> 識破偽裝，那就把 <code>toString</code> 也 hook 掉，讓它撒一個「我很原生」的謊：</p>
-      <pre><code>_atob = atob; // 保存原函數
+      <h2>第一級破解：重寫實例的 toString</h2>
+      <p>既然檢測靠 <code>toString()</code> 的返回值，那就把這個返回值也偽造掉——在 hook 裡順手重寫 <code>atob</code> 自己的 <code>toString</code>：</p>
+      <pre><code>_atob = atob;  // 保存原函數
 
 atob = function (str) {
     console.log("正在執行atob方法, 參數:", str);
     let result = _atob(str);
     console.log("正在執行atob方法, 返回值:", result);
     return result;
-};
+}
+
 // 重寫 atob 函數的 toString 方法
 atob.toString = function () {
-    return 'function atob() { [native code] }';
-};</code></pre>
-      <p>代價很小、效果立竿見影——但只對「直接調 <code>atob.toString()</code>」的檢測有效。對方一旦升級，這個謊言就破了。</p>
-
-      <h2>檢測法升級：原型鏈上的 toString</h2>
-      <p>檢測方的反制是繞開實例上那個被你重寫的 <code>toString</code>，直接去函數的原型對象上取：</p>
+    return 'function atob() { [native code] }'
+}</code></pre>
+      <p>這樣網站調 <code>atob.toString()</code> 時，拿到的依然是那句以假亂真的 <code>[native code]</code>。檢測被騙過了——暫時。</p>
+      <h2>第二級檢測：原型鏈上的 toString</h2>
+      <p>防守方也知道你會重寫實例上的 <code>toString</code>。於是檢測升級：不用 <code>atob.toString()</code>（這會讀到你在實例上重寫的版本），而是繞到原型鏈上，直接借用所有函數共用的那個原始版本：</p>
       <pre><code>Function.prototype.toString.call(atob)
 // 調用函數原型對象中的 toString 進行檢測，
-// 而不是 atob 實例對象上的 toString 了</code></pre>
-      <p>原理：<code>atob.toString()</code> 走的是實例屬性查找，你在實例上重寫就能攔截；而 <code>Function.prototype.toString.call(atob)</code> 明確指定用原型鏈上的版本，你掛在實例上的假貨根本沒機會執行。函數的真身再次暴露。</p>
+// 而不是 atob 實例對象上的 toString 了。</code></pre>
+      <p><code>Function.prototype.toString</code> 是所有函數默認的 <code>toString</code> 來源。你在 <code>atob</code> 實例上重寫的那個版本被直接跳過，原型上的原版一出馬，包裹函數的源碼又暴露了。</p>
 
-      <h2>破解二：重寫原型鏈上的 toString</h2>
-      <p>再升一級：連原型鏈上的 <code>toString</code> 也一併重寫：</p>
+      <h2>第二級破解：重寫原型鏈上的 toString</h2>
+      <p>對應的破解也只能升到原型鏈上：把 <code>Function.prototype.toString</code> 本身重寫，讓它永遠返回原生風格的字串：</p>
       <pre><code>// 重寫原型鏈上的 toString 方法
 Function.prototype.toString = function () {
-    return `function ${this.name}() { [native code] }`;
-};</code></pre>
-      <p>注意兩個細節：</p>
-      <ul>
-        <li><strong>為什麼用 <code>this.name</code></strong>：<code>this</code> 是 <code>toString</code> 的調用者。<code>this.name</code> 動態取出調用者的函數名——<code>Location.toString()</code> 時 <code>this.name</code> 就是 <code>"Location"</code>，結果自然是 <code>function Location() { [native code] }</code>。</li>
-        <li><strong>寫死的代價</strong>：如果把 <code>this.name</code> 直接寫死成 <code>atob</code>，那以後<strong>任何</strong>函數調 <code>toString()</code> 都返回 <code>function atob() { [native code] }</code>——<code>Location.toString()</code> 也變成了 atob，反而露出更明顯的馬腳。</li>
-      </ul>
-      <p>而即便用 <code>this.name</code> 動態適配，重寫原型鏈的代價也比實例級大得多：你改的是<strong>所有函數共享的原型</strong>，整個頁面裡每個函數的 <code>toString()</code> 行為都被污染。這是全攻全守的打法——能騙過原型鏈檢測，但影響面越廣、被更精巧的檢測（比如對比兩個無關函數的 toString 來源）抓到的風險也越高。</p>
+    return `function ${this.name}() { [native code] }`
+}</code></pre>
+      <p>注意這裡用了 <code>this.name</code> 而不是寫死 <code>atob</code>。<code>this</code> 是 <code>toString</code> 的調用者——誰調它，<code>this.name</code> 就是誰的名字：<code>Location.toString()</code> 返回 <code>function Location() { [native code] }</code>，<code>atob.toString()</code> 返回 <code>function atob() { [native code] }</code>。如果貪省事把名字寫死成 <code>atob</code>，那以後<strong>任何</strong>函數調 <code>toString()</code> 都返回 <code>function atob() ...</code>——<code>Location.toString()</code> 也變成 atob，這種自相矛盾的結果反而成了新的破綻。</p>
 
-      <h2>本節小結</h2>
-      <p>hook 會增加被檢測的風險，攻防圍繞 <code>toString()</code> 展開兩級對抗：<strong>第一級</strong>，網站調 <code>atob.toString()</code> 找 <code>[native code]</code> 標記，你重寫實例上的 <code>toString</code> 撒謊；<strong>第二級</strong>，網站用 <code>Function.prototype.toString.call(atob)</code> 繞開實例重寫，你把原型鏈上的 <code>toString</code> 也重寫，並用 <code>this.name</code> 動態適配調用者名字。破解級別越高、污染面越大。判斷該破解到哪一級，取決於對方檢測的深度——先觀察、最少改動，是逆向的通用紀律。</p>
+      <h2>兩級攻防對照</h2>
+      <table>
+        <thead>
+          <tr><th>輪次</th><th>檢測方（網站）</th><th>破解方（你）</th><th>代價／風險</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td><code>atob.toString()</code> 比對是否為 <code>[native code]</code></td><td>重寫 <code>atob.toString</code>，返回偽造的原生字串</td><td>只蓋住實例這一層</td></tr>
+          <tr><td>2</td><td><code>Function.prototype.toString.call(atob)</code> 繞過實例重寫</td><td>重寫 <code>Function.prototype.toString</code>，用 <code>this.name</code> 動態適配</td><td>影響所有函數的 toString；寫死名字會製造新破綻</td></tr>
+        </tbody>
+      </table>
+      <p>這條攻防鏈給逆向者的啟示是：<strong>hook 會增加被檢測的風險</strong>。每補一層偽裝，就多動了一處全域環境，也就多一分露出馬腳的可能。實戰裡要權衡：監控帶來的情報價值，是否值得承擔被網站識破的代價。</p>
     </section>
-
     <section class="quiz-section">
-      <h2>檢查理解</h2>
-      <div class="quiz" data-question="原生瀏覽器內置函數的 toString() 返回有什麼特徵？" data-correct="1" data-explain="內置函數的實現被隱藏，返回形如 function atob() { [native code] } 的標記。">
-        <button class="opt">返回函數的完整源代碼字符串</button>
-        <button class="opt">帶有 [native code] 標記的偽源碼</button>
-        <button class="opt">返回一個空字符串什麼都沒有</button>
-        <button class="opt">返回函數的調用堆疊信息</button>
+      <h2>隨堂測驗</h2>
+      <div class="quiz" data-question="toString() 檢測法的原理是什麼？" data-correct="0" data-explain="原生函數 toString() 返回 [native code]，被 hook 後返回包裹函數源源碼，兩者不同即被識破。">
+        <button class="opt">原生函數與被 hook 函數的 toString 返回值不同</button>
+        <button class="opt">被 hook 的函數調用 toString 時會直接拋出異常</button>
+        <button class="opt">原生函數的 toString 執行速度比包裹函數更快</button>
+        <button class="opt">被 hook 的函數名字會自動改變而暴露在外面</button>
       </div>
-      <div class="quiz" data-question="網站用 toString() 檢測 hook 的原理是什麼？" data-correct="3" data-explain="原生函數返回 [native code]，被 hook 後 toString() 返回包裹函數源碼，兩者不同即可識別。">
-        <button class="opt">檢測 atob 的執行速度變慢</button>
-        <button class="opt">檢測 atob 的返回值是否正確</button>
-        <button class="opt">檢測 console 是否被打印日誌</button>
-        <button class="opt">檢測 toString() 結果是否為包裹函數源碼</button>
+      <div class="quiz" data-question="toString() 結果裡的 [native code] 代表什麼？" data-correct="2" data-explain="[native code] 表示函數實現由瀏覽器內部完成而被隱藏，是內置函數的標記。">
+        <button class="opt">函數的源碼被網站做了高強度混淆壓縮處理</button>
+        <button class="opt">函數已經被別人 hook 且重寫過一次以上了</button>
+        <button class="opt">函數的實現由瀏覽器內部完成不對外顯示</button>
+        <button class="opt">函數在嚴格模式下運行所以隱藏掉註釋內容</button>
       </div>
-      <div class="quiz" data-question="破解 toString() 檢測的第一級方法是什麼？" data-correct="0" data-explain="在 hook 時順手重寫實例上的 toString，讓它返回偽造的 function atob() { [native code] }。">
-        <button class="opt">重寫實例的 toString 返回 [native code]</button>
-        <button class="opt">刪除實例上的 toString 方法</button>
-        <button class="opt">重寫原型鏈上的 toString 方法</button>
-        <button class="opt">刪除原型鏈上的 toString 方法</button>
+      <div class="quiz" data-question="第一級破解是怎麼做的？" data-correct="1" data-explain="重寫 atob 實例上的 toString，讓它返回偽造的 function atob() { [native code] }。">
+        <button class="opt">刪掉 atob 的 toString 方法讓檢測直接報錯</button>
+        <button class="opt">重寫 atob 的 toString 返回偽造原生字串</button>
+        <button class="opt">把 atob 包進另一層代理隱藏真實的源代碼</button>
+        <button class="opt">修改瀏覽器的配置關閉函數源碼查看功能</button>
       </div>
-      <div class="quiz" data-question="Function.prototype.toString.call(atob) 為什麼能繞過實例上重寫的 toString？" data-correct="2" data-explain="它明確指定使用函數原型對象上的 toString，掛在實例上的假版本根本沒機會執行。">
-        <button class="opt">它的執行速度比實例方法快</button>
-        <button class="opt">它會先刪除實例上的 toString</button>
-        <button class="opt">它指定使用原型對象上的 toString</button>
-        <button class="opt">它會觸發瀏覽器的安全模式</button>
+      <div class="quiz" data-question="Function.prototype.toString.call(atob) 為什麼能識破第一級破解？" data-correct="3" data-explain="它借用原型鏈上所有函數共用的原版 toString，直接跳過你在 atob 實例上重寫的版本。">
+        <button class="opt">它會同時調用所有函數的 toString 交叉比對</button>
+        <button class="opt">它會恢復 atob 被覆蓋之前的原始函數引用</button>
+        <button class="opt">它能讀取瀏覽器內部保存的函數創建時間</button>
+        <button class="opt">它繞過實例直接用原型鏈上的原版來檢測</button>
       </div>
-      <div class="quiz" data-question="重寫原型鏈 toString 時，為什麼要用 this.name 而不是寫死 'atob'？" data-correct="1" data-explain="寫死會讓所有函數的 toString 都返回 atob，this.name 動態適配每個調用者才不穿幫。">
-        <button class="opt">this.name 的執行效率更高</button>
-        <button class="opt">寫死會讓所有函數都返回 atob 名字</button>
-        <button class="opt">this.name 可以避免遞歸調用</button>
-        <button class="opt">寫死會導致原型鏈查找失敗</button>
-      </div>
-      <div class="quiz" data-question="重寫 Function.prototype.toString 的主要代價是什麼？" data-correct="3" data-explain="原型是所有函數共享的，重寫它會污染頁面裡每個函數的 toString 行為，暴露面更大。">
-        <button class="opt">會讓 atob 失去解碼能力</button>
-        <button class="opt">會導致瀏覽器立即崩潰</button>
-        <button class="opt">會讓 Snippets 無法執行</button>
-        <button class="opt">污染所有函數的 toString 行為</button>
+      <div class="quiz" data-question="重寫原型鏈 toString 時為什麼要用 this.name 而不是寫死 atob？" data-correct="0" data-explain="寫死的話所有函數調 toString 都返回 function atob()，像 Location.toString() 這種矛盾結果會成為新破綻。">
+        <button class="opt">讓返回值裡的函數名跟隨實際調用者變化</button>
+        <button class="opt">因為 this.name 的執行速度比寫死字串更快</button>
+        <button class="opt">因為原型鏈上不允許出現硬編碼的字符串</button>
+        <button class="opt">讓 atob 之外的函數再也無法調 toString</button>
       </div>
     </section>
 

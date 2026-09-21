@@ -1,6 +1,7 @@
 subject: js-reverse
 created: 2026-09-05
 updated: 2026-09-07
+
 ---
 
 ## 00-crawler-fundamentals — 爬虫基础：定义、分类与合法性
@@ -25,6 +26,7 @@ probe skipped via /nodes js-reverse/13-ajax-js-intro skip-probe on 2026-09-07
 - Flask 演示伺服器路由設計與 JSON 介面: unknown
 - Ajax 前端演示頁事件驅動與 jQuery $.ajax 流程: unknown
 - Python requests 與瀏覽器 Ajax 的映射關係: unknown
+
 ---
 
 # Mastery — js-reverse
@@ -281,12 +283,12 @@ probe skipped via /nodes js-reverse/25-pdd-supplement-env skip-probe on 2026-09-
 
 ## 26-hook-interception — Hook 插件：函数与属性拦截监控
 
-probe skipped via /nodes js-reverse/26-hook-interception skip-probe on 2026-09-20
+probe skipped via /nodes js-reverse/26-hook-interception skip-probe on 2026-09-21
 
 ### Strands
 
-- Hook 的概念与作用（拦截和修改函数/方法行为、不改原代码增加功能）: unknown
-- 「保存原函数 + 同名覆盖」的函数 hook 写法与 hook 时机: unknown
-- Object.defineProperty 的 get/set 属性监控（含不存在属性）: unknown
-- 浏览器环境下 atob/cookie 的先手 hook（DevTools Snippets + Script 事件监听）: unknown
-- toString() 检测、[native code] 标记、原型链检测的两级破解及代价: unknown
+- hook 概念（拦截修改函数行为）与「保存原函数 + 同名覆盖」最小可用模式: unknown
+- 函数 hook 四步流程与 hook 位置必须在原函数加载之后: unknown
+- Object.defineProperty 属性 get/set hook（含不存在属性的 hook）: unknown
+- 浏览器先手 hook：Script 事件监听 + Snippets 在页面加载前注入（atob 与 cookie）: unknown
+- toString() 检测法、原型链 toString 检测法与两级破解: unknown
