@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Session：冪等 session id 的單一真相</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Session：冪等 session id</h1>
+<p class="meta">Step 3/4 · CLI 與 Session</p>
+
+<h2>學習目標</h2>
+<p>能說出 session id 是 channel+user+profile 三元組、為什麼必須只在 SessionManager 內部拼裝，以及冪等的定義（同樣的三元組 → 同一 session）。</p>
+
+<h2>先看它要解決的問題</h2>
+<p>Agent 要有連續性：你說「查一下北京天氣」→ 它查完回你；你接著說「那杭州呢」→ 它得知道「那」指的是「天氣」。所以對話歷史要被記得。OryxOS 把「一段要被記得的對話」叫一個 <strong>Session（會話）</strong>。</p>
+<p>問題來了：同一句話 <code>agentService.process(...)</code>，怎麼知道該接在哪段歷史後面？這就是 session id 的用途——它是「哪一段對話」的身份證。</p>
+
+<h2>session id = channel + user + profile 三元組</h2>
+<p>OryxOS 的 session id 不是隨機 UUID，而是由三個欄位拼出來的：</p>
+<table>
+<thead>
+<tr><th>欄位</th><th>這是誰</th><th>為什麼要進身份證</th></tr>
+</thead>
+<tbody>
+<tr><td><code>channel</code></td><td>哪個入口</td><td>CLI 傳 <code>"cli"</code>、Web 傳 <code>"web"</code>——同樣的人在不同入口可有不同語境</td></tr>
+<tr><td><code>user</code></td><td>哪個使用者</td><td>不同使用者不會共用歷史</td></tr>
+<tr><td><code>profile</code></td><td>哪份 Profile</td><td>換 Profile（像是換 Agent「人格」）就算重開一段語境</td></tr>
+</tbody>
+</table>
+<p>這個三元組決定了「冪等性」：<strong>同樣的 <code>(channel, user, profile)</code> 一定得到同一個 session</strong>。你 <code>chat</code> 十次、退出十次，只要三元組不變，歷史都在。</p>
+
+<h2>關鍵規則：拼裝只能發生在一處</h2>
+<p>三個欄位怎麼組成一格 id？元組的格式（例如 <code>cli:alice:weather</code>）只有 <code>SessionManager</code> 內部知道。所有入口——CLI、Web、後來的排程——都只把「三元組的三個值」傳進去，由 <code>SessionManager.getOrCreate(channel, user, profile)</code> 統一拼。</p>
+<blockquote>
+<strong>任何入口都不准自己拼 session 字串。</strong>否則兩個入口用不同的拼接規則，同一個使用者就會裂成兩段「互相不認識」的歷史。
+</blockquote>
+<p>舉例：CLI 拼成 <code>"cli:alice:weather"</code>，某天有人偷懶在 Web 端自己拼成 <code>"cli_alice_weather"</code>——表面上看起來都在存取「weather」的對話，實際上存到了兩把不相干的鑰匙，Agent 的連續性就斷了。</p>
+
+<h2>程式怎麼接</h2>
+<p><code>ChatCommand</code> 的迴圈長這樣：讀 stdin 的一行 → 若 <code>/quit</code> 就退出 → 否則拿到三個值（<code>"cli"</code>、目前使用者、Profile 名）丟給 <code>sessionManager.getOrCreate(...)</code>，把回傳的 <code>Session</code> 和那一行一起丟進 <code>agentService.process(session, line)</code>。</p>
+<pre><code>// 概念示意，省略細節
+Session s = sessionManager.getOrCreate("cli", currentUser(), profileName);
+agentService.process(s, line);
+</code></pre>
+<p>引擎側的 <code>AgentService</code> 則依賴 <code>SessionManager</code> 幫它取 Session、存 Session——它自己不需要知道 session id 是什麼形狀。</p>
+
+<h2>這個規則是「單一真相」的起點</h2>
+<p>session 身份只存在 <code>SessionManager</code> 一個地方亂拼，這條規則會被後面的 Web Service、定時任務、IM 渠道反覆複用。一旦你在哪個入口自己拼了 id，你就在引擎不知情的地方製造了第二個真相——這是「明明寫對卻找不到對話」的經典來源。</p>
+
+<div class="lesson-nav">
+  <div><a href="./cli-command-split.html">← 上一步：動手前的四個決定</a></div>
+  <div><a href="./session-persistence-verify.html">下一步：Session 持久化與驗收 harness →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="OryxOS 的 session id 是由哪三個欄位組成？" data-correct="1" data-explain="channel + user + profile 三元組。">
+  <button class="opt">uuid + profile + timestamp</button>
+  <button class="opt">channel + user + profile</button>
+  <button class="opt">agent + model + session</button>
+  <button class="opt">worker + channel + token</button>
+</div>
+
+<div class="quiz" data-question="「冪等 session id」的冪等指的是什麼？" data-correct="3" data-explain="同樣的三元組一定得到同一個 session，所以歷史能接著。">
+  <button class="opt">同一個 id 永遠不重複產生</button>
+  <button class="opt">id 可以由任何入口重新拼</button>
+  <button class="opt">session 登出後立即刪除</button>
+  <button class="opt">同樣三元組得到同一個 session</button>
+</div>
+
+<div class="quiz" data-question="為什麼拼 session 字串只能發生在 SessionManager 內部？" data-correct="2" data-explain="否則各入口自訂格式，同一使用者就裂成互不認識的歷史。">
+  <button class="opt">因為 SessionManager 需要鎖定</button>
+  <button class="opt">因為 id 是密碼不能外漏</button>
+  <button class="opt">避免入口各自拼出不同真相</button>
+  <button class="opt">因為 String 拼接在 Java 太慢</button>
+</div>
+
+<div class="quiz" data-question="ChatCommand 每讀一行輸入，會呼叫哪個方法換到 Session？" data-correct="0" data-explain="sessionManager.getOrCreate(channel, user, profile)。">
+  <button class="opt">sessionManager.getOrCreate(...)</button>
+  <button class="opt">agentService.processStateless(...)</button>
+  <button class="opt">reActLoop.run(...)</button>
+  <button class="opt">sessionRepository.newSession(...)</button>
+</div>
+
+<div class="quiz" data-question="CLI 給 channel 這個欄位傳什麼值？" data-correct="2" data-explain="CLI 傳「cli」，Web 傳「web」。">
+  <button class="opt">「web」</button>
+  <button class="opt">「chat」</button>
+  <button class="opt">「cli」</button>
+  <button class="opt">「stdin」</button>
+</div>
+
+<div class="quiz" data-question="如果 Web 端自己把 id 拼成不同格式，會發生什麼事？" data-correct="1" data-explain="同一使用者裂成兩段不相關的歷史，連續性斷掉。">
+  <button class="opt">沒有任何影響，行為完全相同</button>
+  <button class="opt">同一個使用者裂成兩段歷史</button>
+  <button class="opt">編譯器直接報錯不給編譯</button>
+  <button class="opt">SessionManager 自動修正格式</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · CLI 與 Session · Step 3/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

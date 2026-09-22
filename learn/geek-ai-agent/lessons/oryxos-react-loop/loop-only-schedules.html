@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>迴圈只做排程：職責分離與為什麼手寫</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>迴圈只做排程：職責分離與為什麼手寫</h1>
+<p class="meta">Step 2/5 · 手寫 ReAct 迴圈</p>
+
+<h2>學習目標</h2>
+<p>能畫出 ReActLoop／PromptBuilder／ProviderService／ToolExecutor 的職責分工，說出為什麼要手寫而不用框架黑盒，並指出三個經典陷阱。</p>
+
+<h2>主迴圈其實只有幾十行</h2>
+<p>上一節說「迴圈只指揮、動手全交給別人」。這不是比喻，而是刻意到極致的設計：<strong>真正的迴圈主體只有幾十行</strong>。難的不是那幾十行，而是幾十行之外的邊界——「誰負責準備上下文、誰負責呼叫模型、誰負責執行工具、什麼時候該停」——這些如果不在動手前就想清楚，事後補丁只會愈補愈亂。</p>
+
+<h2>四職責分離</h2>
+<table>
+<thead>
+<tr><th>角色</th><th>只負責一件事</th><th>它不負責</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>ReActLoop</strong></td><td>排程：決定每輪做什麼、檢查停不停</td><td>不呼叫模型、不執行工具、不打 prompt</td></tr>
+<tr><td><strong>PromptBuilder</strong></td><td>組裝這一輪送給模型的上下文</td><td>不決定策略，只負責拼出「模型看到什麼」</td></tr>
+<tr><td><strong>ProviderService</strong></td><td>呼叫 LLM（上一節學過）</td><td>不執行工具，工具呼叫只是「要求」不是「動作」</td></tr>
+<tr><td><strong>ToolExecutor</strong></td><td>執行工具、檢查權限、記錄稽核</td><td>不決定該不該叫這個工具——那是模型的決定</td></tr>
+</tbody>
+</table>
+<blockquote>
+一句話記法：<strong>ReActLoop 想、PromptBuilder 寫、ProviderService 問、ToolExecutor 做</strong>。每個角色都只看得到自己那張票據。
+</blockquote>
+
+<h2>為什麼手寫，不用框架黑盒</h2>
+<p>用框架的 Agent 抽象（例如某個現成的 Agent driver）看似省事，但四個東西你必須能控制，而黑盒把它們藏起來：</p>
+<ol>
+<li><strong>停止條件</strong>——什麼時候算任務完成、迭代上限設多少，你要能決定。</li>
+<li><strong>工具失敗</strong>——工具報錯時要怎麼往回走、要不要重試，得由你的規則決定。</li>
+<li><strong>上下文成長</strong>——每輪對話與工具結果都長大，塞爆 context 時誰負責截斷。</li>
+<li><strong>模型切換</strong>——換模型、換 provider 時行為不能偷偷變。</li>
+</ol>
+<p>除此之外還有一個直接理由：<strong>你寫一遍，才真正懂這個 Agent 是怎麼運作的</strong>。OryxOS 把所有能力（Provider、Tool、Memory）都長在自寫迴圈的骨架上，前提是這副骨架是你自己搭的。</p>
+
+<h2>三個經典陷阱</h2>
+<p>不管是不是手寫，迴圈設計有三個坑，幾乎每個實作者都會踩：</p>
+<table>
+<thead>
+<tr><th>陷阱</th><th>沒管的後果</th><th>解方</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>沒有迭代上限</strong></td><td>死迴圈：模型一直叫工具、永不收尾</td><td>第 1 節的 MAX_ITERATIONS=10</td></tr>
+<tr><td><strong>上下文無界成長</strong></td><td>context 愈積愈大，最後爆掉或變慢</td><td>只保留最近 N 輪（預設 20）＋固定 system prompt</td></tr>
+<tr><td><strong>回應與結果沒累積回 Session</strong></td><td>下一輪看不到上一輪做了什麼、回應了什麼</td><td>每輪模型回應與工具結果都 append 進 Session</td></tr>
+</tbody>
+</table>
+<p>第三個最隱蔽：迴圈轉了，但模型永遠「失憶」——上一輪查到的天氣，這一輪就看走了。迴圈的整個目的就是「累積」，把過程證據一條條留下來，下一輪才有得推理。</p>
+
+<h2>這套紀律會一路借用</h2>
+<p>「短迴圈、委派職責、邊界自主控制」不只是 ReAct 的寫法。OryxOS 後面的 Memory、Tool、Sandbox、Web，全部長在這一副骨架上；連 When 專案的迴圈工程也是同一套紀律。這一節的思考方式，是你把 Agent 能力「搬回自己的專案」時最值錢的東西。</p>
+
+<div class="lesson-nav">
+  <div><a href="./react-loop-principle.html">← 上一步：ReAct 迴圈是什麼：決定、行動、觀察</a></div>
+  <div><a href="./writing-the-loop.html">下一步：手寫 ReActLoop、PromptBuilder、ToolExecutor →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="真正的 ReAct 迴圈主體大約多少行？" data-correct="1" data-explain="主迴圈只有幾十行；難的是幾十行之外的邊界與職責切割。">
+  <button class="opt">約一千行，任務複雜所以必然龐大</button>
+  <button class="opt">只有幾十行</button>
+  <button class="opt">沒有行數，全在框架黑盒裡</button>
+  <button class="opt">至少五百行起跳才夠完整</button>
+</div>
+
+<div class="quiz" data-question="PromptBuilder 的職責是什麼？" data-correct="3" data-explain="PromptBuilder 負責組裝這輪送給模型的上下文（system prompt、記憶、歷史、工具清單）。">
+  <button class="opt">決定這一輪要不要叫工具</button>
+  <button class="opt">親自執行模型選好的工具</button>
+  <button class="opt">呼叫送到模型服務商的 HTTP 端口</button>
+  <button class="opt">組裝這一輪送給模型的上下文</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不是手寫迴圈而不用框架黑盒的理由？" data-correct="2" data-explain="手寫的理由是能控制停止條件、工具失敗、上下文成長與模型切換；「省電」不是原因。">
+  <button class="opt">停止條件必須能自己決定</button>
+  <button class="opt">工具失敗時如何往回走要自訂</button>
+  <button class="opt">框架黑盒的程式不用 import，省記憶體</button>
+  <button class="opt">上下文成長時誰負責截斷要可控</button>
+</div>
+
+<div class="quiz" data-question="「回應與結果沒累積回 Session」會造成什麼後果？" data-correct="0" data-explain="每輪的模型回應與工具結果都要塞回 Session，否則下一輪看不到，模型等於永遠失憶。">
+  <button class="opt">下一輪看不到上一輪做了什麼，模型失憶</button>
+  <button class="opt">迴圈直接崩潰無法啟動</button>
+  <button class="opt">工具會被呼叫兩次</button>
+  <button class="opt">模型會自動改用別的 Provider</button>
+</div>
+
+<div class="quiz" data-question="「上下文無界成長」的典型解法是什麼？" data-correct="1" data-explain="只保留最近 N 輪歷史（預設 20 輪）並固定 system prompt 篇幅，讓 context 有界。">
+  <button class="opt">每輪把整套上下文送入模型不做任何限制</button>
+  <button class="opt">只保留最近 N 輪對話，其餘截斷</button>
+  <button class="opt">升級到無限上下文模型就不必管</button>
+  <button class="opt">把歷史全部寫到硬碟暫存再逐行讀回</button>
+</div>
+
+<div class="quiz" data-question="工具錯誤處理通常在哪個角色管？" data-correct="2" data-explain="Provider 只回報「想呼叫工具」的要求、ToolExecutor 執行，工具失敗要由迴圈規則決定如何往回走。">
+  <button class="opt">指派給使用者一張錯誤清單自己解決</button>
+  <button class="opt">全權交給框架黑盒自動重試到成功</button>
+  <button class="opt">由迴圈按自己的規則決定重試或結束</button>
+  <button class="opt">直接丟棄錯誤當作成功</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 手寫 ReAct 迴圈 · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>介面牆與三層設計：MemoryService、四契約、信號驅動升級</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>介面牆與三層設計</h1>
+<p class="meta">Step 4/6 · Memory</p>
+
+<h2>學習目標</h2>
+<p>能設計 MemoryService 門面與 LongTermMemoryStore 後端介面這道「介面牆」，背出三後端共守的四條行為契約，定位 core／session／archival 三層，並說出觸發向量檢索升級的三個真實信號。</p>
+
+<h2>設計原則：不是最強，而是夠用、可控、能長大</h2>
+<p>OryxOS 對記憶的第一原則，不是做最強的記憶系統，而是做一個<strong>夠用、可控、能平滑長大</strong>的：方向清楚、介面正確，實作只做到現在該做的。這條原則和後來 Sandbox、排程模組共用，都是「分階段克制、不過度設計」。而分隔「現在」與「未來」的那條線，就是<strong>介面牆</strong>。</p>
+
+<h2>介面牆的兩側</h2>
+<p>把記憶拆成兩個方向明確的介面，牆就立起來了：</p>
+<table>
+<thead>
+<tr><th>介面</th><th>面向</th><th>方法</th></tr>
+</thead>
+<tbody>
+<tr><td><code>MemoryService</code>（門面）</td><td>朝上，給 <code>PromptBuilder</code> 與記憶工具用</td><td><code>buildContext(session)</code>、<code>remember(content, scope)</code>、<code>recall(keyword)</code>、<code>readAll(agentName)</code></td></tr>
+<tr><td><code>LongTermMemoryStore</code>（後端）</td><td>朝下，由三檔實作</td><td><code>append</code>、<code>load</code>、<code>recallByKeyword</code>、<code>capabilities</code>、<code>archivalEntries</code></td></tr>
+</tbody>
+</table>
+<p>引擎只呼叫抽象方法，永遠不知道後端是檔案、SQLite、向量庫還是外部框架。這正是 MemGPT 把穩定記憶操作藏在背後換入換出的同一招。先釘死介面，比先選儲存重要得多。</p>
+
+<h2>三後端共守的四條行為契約</h2>
+<p>介面牆要成立，不能只靠簽名，還要靠行為。所有後端實作都必須遵守四條契約——它們也是「一份測試跑三檔」的前提：</p>
+<ol>
+<li><strong>不快取</strong>：每次 <code>load</code> 都重新讀檔／查庫／呼叫 API。這樣 Agent 剛寫的 <code>save_memory</code> 下一輪立刻可見。</li>
+<li><strong>核心記憶永不被截斷</strong>：截斷只作用在歸檔區；核心區完整返回、不參與檢索、也不進向量索引。</li>
+<li><strong>寫哪一區由呼叫方顯式指定</strong>：透過 <code>scope</code> 傳入，系統不猜；做不到分區語義的實作在裝配期就被可讀地拒絕。</li>
+<li><strong>檢索只在歸檔區</strong>：而且形態可按能力三態降級——語意路缺席時回落成關鍵詞＋時間兩路，關鍵詞行為是統一底線。</li>
+</ol>
+<p>注意契約一和二特別重要：<strong>不快取</strong>讓「寫了就有感」，<strong>核心不截斷</strong>保證常駐事實永遠在場。誰違反，參數化的契約測試就會在那一行變紅。</p>
+
+<h2>三層記憶落在哪</h2>
+<p>借 MemGPT 的分層，OryxOS 把記憶切成三層，各自職責分明：</p>
+<table>
+<thead>
+<tr><th>層</th><th>存在哪</th><th>特性</th></tr>
+</thead>
+<tbody>
+<tr><td>Core（核心）</td><td>檔頭一小塊固定區</td><td>永遠在場、精煉、不檢索、不截斷</td></tr>
+<tr><td>Session（會話）</td><td>SQLite</td><td>當前會話的對話歷史</td></tr>
+<tr><td>Archival（歸檔）</td><td>檔案，關鍵詞匹配</td><td>按需檢索、量大、可截斷</td></tr>
+</tbody>
+</table>
+<p>核心與歸檔由 <strong>Agent 主動呼叫 <code>save_memory</code></strong> 寫入，不是系統自動抽取。為什麼？因為自動抽取是<strong>尚未被驗證的需求</strong>，硬做要多花模型呼叫、還要一套「何時觸發」的邏輯；所以延後到擴展階段，等真實信號。整個階段一閉環<strong>零外部依賴</strong>，剛好符合 OryxOS 的單一二進位目標。</p>
+
+<h2>信號驅動的階段二：向量檢索何時上場</h2>
+<p>什麼時候該升級成向量檢索？不是「大家都在用」，而是出現以下三個真實信號之一：</p>
+<ol>
+<li><strong>關鍵詞檢索開始漏掉同義記憶</strong>——明明存過，卻撈不到。</li>
+<li><strong>歸檔量跨進數百到數千條</strong>——關鍵詞掃描開始力不從心。</li>
+<li><strong>真的需要精準的跨會話召回</strong>——業務場景逼出來的。</li>
+</ol>
+<p>升級方式是把 <code>MemoryService</code> 之後的實作換掉，<strong>介面不變、上層一行不改</strong>。沒有這些信號就上向量，是過度設計＋背了一個重依賴。這條「信號驅動」規則，Sandbox 與排程模組也一樣在用。</p>
+
+<h2>自查：五個問題</h2>
+<p>在動手寫程式前，先過一遍這份評審自查：能一句話分辨短期／長期與上下文／記憶壓縮嗎？這道 <code>MemoryService</code> 牆夠不夠密（ReAct 知道實作細節嗎）？三層各住在哪、為什麼由 Agent 主動寫？三個向量升級信號背得出來嗎？自造還是集成的錨是什麼？——<strong>只要有任何一題的答案靠「大家都在用」，設計就還沒想清楚。</strong></p>
+
+<div class="lesson-nav">
+  <div><a href="./memory-industry-landscape.html">← 上一步：業界方案盤點</a></div>
+  <div><a href="./memory-three-backends.html">下一步：可插拔三後端 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="「介面牆」分隔的是哪兩個介面？" data-correct="1" data-explain="朝上的 MemoryService 門面與朝下的 LongTermMemoryStore 後端介面。">
+  <button class="opt">ProviderService 與 ChatModel</button>
+  <button class="opt">MemoryService 與 LongTermMemoryStore</button>
+  <button class="opt">ReActLoop 與 ToolExecutor</button>
+  <button class="opt">SessionManager 與 SQLite</button>
+</div>
+
+<div class="quiz" data-question="「不快取」這條契約的目的是什麼？" data-correct="2" data-explain="每次 load 都重新讀，讓 Agent 剛寫的 save_memory 下一輪立刻可見。">
+  <button class="opt">節省磁碟讀取以提升效能</button>
+  <button class="opt">避免多執行緒同時寫入</button>
+  <button class="opt">讓剛寫入的記憶下一輪立刻可見</button>
+  <button class="opt">降低模型呼叫的費用</button>
+</div>
+
+<div class="quiz" data-question="哪一層「永遠完整在場、不參與檢索、不被截斷」？" data-correct="0" data-explain="Core（核心）記憶常駐 system prompt、精煉、不檢索也不截斷；歸檔才可截斷。">
+  <button class="opt">Core 核心記憶</button>
+  <button class="opt">Session 會話記憶</button>
+  <button class="opt">Archival 歸檔記憶</button>
+  <button class="opt">向量索引</button>
+</div>
+
+<div class="quiz" data-question="為什麼核心階段不做自動抽取長期記憶？" data-correct="3" data-explain="自動抽取是未驗證的需求，要多花模型呼叫與觸發邏輯，故延後、由 Agent 主動 save_memory。">
+  <button class="opt">因為模型不支援抽取任務</button>
+  <button class="opt">因為抽取會洩漏資料出域</button>
+  <button class="opt">因為檔案格式無法自動寫入</button>
+  <button class="opt">因為這是尚未驗證的需求且成本高</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不是向量檢索升級的三個信號之一？" data-correct="1" data-explain="三個信號是關鍵詞漏召回、歸檔量到數百上千、需要精準跨會話召回；模型評測分數高不在此列。">
+  <button class="opt">關鍵詞檢索開始漏掉同義記憶</button>
+  <button class="opt">模型在公開評測上分數很高</button>
+  <button class="opt">歸檔量跨進數百到數千條</button>
+  <button class="opt">真的需要精準跨會話召回</button>
+</div>
+
+<div class="quiz" data-question="階段一記憶閉環的「零外部依賴」有什麼價值？" data-correct="2" data-explain="零外部依賴讓核心階段維持單一二進位、可私有部署，符合專案目標。">
+  <button class="opt">讓檢索速度比向量快十倍</button>
+  <button class="opt">讓記憶永不遺失</button>
+  <button class="opt">維持單一二進位、可私有部署</button>
+  <button class="opt">讓 Agent 能自己訓練模型</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Memory · Step 4/6</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>事中與事後防線：Permission 與 Hooks</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>事中與事後防線</h1>
+<p class="meta">Step 5/6 · Harness Engineering</p>
+
+<h2>學習目標</h2>
+<p>能用 allow／ask／deny 規則設出動作前的邊界，並用 PreToolUse／PostToolUse Hooks 掛上 lint 與相關測試的事後檢查。</p>
+
+<h2>Permission：夾在「什麼都問」與「讓它亂跑」之間</h2>
+<p>面對 AI 要執行的每個動作，你只有兩種極端選擇：每一件都問你（安全，但被打斷到無法工作），或全部放行（順暢，但一個 <code>rm -rf</code> 就再見）。<strong>Permission（權限）</strong>就是這兩個極端之間的空間——用規則決定哪些動作放行、哪些要問、哪些直接拒絕。</p>
+<p>它的規則通常寫成三種判定：</p>
+<table>
+<thead>
+<tr><th>判定</th><th>意思</th><th>適合的動作</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>allow</strong></td><td>直接放行，不問</td><td>唯讀查詢、跑測試、看 git 狀態</td></tr>
+<tr><td><strong>ask</strong></td><td>每次都要你點頭</td><td>改既有檔案、安裝依賴、對外發請求</td></tr>
+<tr><td><strong>deny</strong></td><td>直接拒絕</td><td>刪資料、force push、動生產設定</td></tr>
+</tbody>
+</table>
+<p>設計這份規則時，問自己一個問題：<strong>「這個動作如果做錯了，代價是幾秒鐘還是幾小時？」</strong>代價低的放 allow，讓 AI 不必為瑣事打斷你；代價高、或不可逆的，放 ask 或 deny。這樣你既保住流暢度，又守住不會付出真實代價的底線。</p>
+
+<h2>Hooks：把「AI 說它做完了」換成「機器證明它做完了」</h2>
+<p>AI 很常說「我已經完成了」，但它可能只是寫了程式、沒跑測試，或改了 A 卻弄壞了 B。你需要一個不靠它自述的驗證機制，這就是 <strong>Hooks（掛鉤）</strong>。</p>
+<p>Hooks 綁在工具的執行前後，最常用的兩種是：</p>
+<table>
+<thead>
+<tr><th>掛鉤</th><th>時機</th><th>能做什麼</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>PreToolUse</strong></td><td>工具呼叫前</td><td>檢查參數、攔下危險指令、補上必要前置條件</td></tr>
+<tr><td><strong>PostToolUse</strong></td><td>工具呼叫後</td><td>自動跑 lint、跑相關測試、格式化、記錄</td></tr>
+</tbody>
+</table>
+<p>最小可用的配置只要兩條，都掛在 PostToolUse、由「檔案編輯」觸發：<strong>第一條跑 lint</strong>，<strong>第二條跑與被改檔案相關的測試</strong>。這樣每次 AI 改完程式，機器立刻告訴它哪裡壞了，形成一個緊密的回饋迴圈——它才有機會當場修，而不是等你半小時後發現。</p>
+<p>Hooks 最關鍵的價值場景，是<strong>你不在場的時候</strong>。你盯著螢幕時可以自己看；但當 AI 在你開會、下班、或 CI 裡自己跑時，Hooks 就是你唯一的眼睛。</p>
+
+<h2>三道防線合起來</h2>
+<p>現在把前、中、後三道防線接起來看：</p>
+<table>
+<thead>
+<tr><th>防線</th><th>工具</th><th>攔住什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>前——動手前</td><td>Plan Mode</td><td>方向錯誤：計畫階段就修正</td></tr>
+<tr><td>中——動作前</td><td>Permission</td><td>範圍越界與高風險動作</td></tr>
+<tr><td>後——動作後</td><td>Hooks</td><td>錯誤結果未被發現</td></tr>
+</tbody>
+</table>
+<p>它們不是彼此替代，而是互補：Plan Mode 讓 AI 做對的事，Permission 讓它不做不該做的事，Hooks 讓它做的事被驗證。缺任何一道，都會留一個特定的破口。最後一個步驟，我們要回答最重要的問題——這些工具，什麼時候該加哪一道？</p>
+
+<div class="lesson-nav">
+  <div><a href="./context-isolation-and-plan-mode.html">← 上一步：上下文隔離與計畫先行</a></div>
+  <div><a href="./when-to-add-and-real-world-harness.html">下一步：何時該加哪一道 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Permission 規則的三種判定是哪三個？" data-correct="0" data-explain="allow 放行、ask 要問、deny 拒絕，構成動作前的邊界空間。">
+  <button class="opt">allow、ask、deny</button>
+  <button class="opt">run、stop、retry</button>
+  <button class="opt">open、edit、delete</button>
+  <button class="opt">plan、act、observe</button>
+</div>
+
+<div class="quiz" data-question="哪一類動作最適合放進 deny？" data-correct="3" data-explain="刪資料、force push、動生產設定這類不可逆且代價高的動作該直接拒絕。">
+  <button class="opt">查看目前的 git 狀態</button>
+  <button class="opt">讀取專案裡的一個檔案</button>
+  <button class="opt">執行既有的單元測試</button>
+  <button class="opt">強制推送並改寫歷史</button>
+</div>
+
+<div class="quiz" data-question="設計 Permission 規則的核心問題是什麼？" data-correct="1" data-explain="用「做錯的代價是幾秒還是幾小時」來區分該放行、該問還是該拒絕。">
+  <button class="opt">這個動作會用掉多少 token</button>
+  <button class="opt">做錯的代價是幾秒或幾小時</button>
+  <button class="opt">這個動作需要幾核心的 CPU</button>
+  <button class="opt">這個動作會被記錄在哪個檔案</button>
+</div>
+
+<div class="quiz" data-question="最小可用的 Hooks 配置通常掛哪兩條？" data-correct="2" data-explain="PostToolUse 觸發的 lint 與相關測試，讓 AI 改完立刻知道哪裡壞了。">
+  <button class="opt">開機檢查與關機清理各一條</button>
+  <button class="opt">PreToolUse 的兩條備份掛鉤</button>
+  <button class="opt">編輯後跑 lint 與相關測試</button>
+  <button class="opt">每次對話開始與結束的記錄</button>
+</div>
+
+<div class="quiz" data-question="Hooks 最關鍵的價值場景是什麼？" data-correct="0" data-explain="你不在場時，Hooks 是唯一能自動驗證 AI 成果的眼睛。">
+  <button class="opt">你不在場、AI 自己跑的時候</button>
+  <button class="opt">你盯著螢幕逐步檢查的時候</button>
+  <button class="opt">你完全停止使用 AI 的時候</button>
+  <button class="opt">你手動執行所有指令的時候</button>
+</div>
+
+<div class="quiz" data-question="三道防線依序各攔住什麼？" data-correct="3" data-explain="Plan Mode 攔方向錯、Permission 攔越界、Hooks 攔錯誤沒被發現。">
+  <button class="opt">算力不足、記憶不夠、速度太慢</button>
+  <button class="opt">需求模糊、規格太粗、測試太少</button>
+  <button class="opt">模型幻覺、參數過多、成本過高</button>
+  <button class="opt">方向錯、範圍越界、錯誤沒被發現</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Harness Engineering · Step 5/6</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>

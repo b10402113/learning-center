@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把內建工具補齊到業界水準</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>把內建工具補齊到業界水準</h1>
+<p class="meta">Step 5/5 · Tool 體系</p>
+
+<h2>學習目標</h2>
+<p>能說出對標 Claude Code／Cursor／OpenAI Assistants 後補上的五個高頻工具（edit_file／ask_user／grep／glob／web_search）各自的設計要點，並解釋「好抽象讓新增工具成本恆定」的道理。</p>
+
+<h2>九個工具就夠了嗎？拿去跟行家比一比</h2>
+<p>上一課我們有九個內建工具、三級插件、統一的執行鏈——一切都很完整。但當你真的拿 OryxOS 去跟 Claude Code、Cursor、OpenAI Assistants 這幾位「行家」比，會發現一件事：<strong>別人搜尋、改檔、問人、查網路都有一整套，我們的核心列表還太薄</strong>。工具清單不是「加上就是贏」，而是要用真實工作頻率去對標。這一課就是一次成品審視：缺了什麼、補上什麼、補完之後驗證什麼。</p>
+
+<h2>五個從業界實務補上的高頻工具</h2>
+<p>對標完畢，缺了五個高頻使用、而且跨 Agent 都通用的工具。它們是「基礎工具」不是「業務能力」，所以該放進內建清單：</p>
+
+<h3>1. edit_file：唯一且精準的原地替換</h3>
+<p>寫檔案很容易，但要「在長檔裡改一小段」就需要精確度。edit_file 的做法是<strong>唯一舊文本替換</strong>：你必須提供「要替換的舊文字」與「新文字」，工具在檔案裡找這一段。找不到就報錯，找到多個也報錯——寧可失敗，也絕不誤改。這是把「該改哪」的決定權交給模型，同時把「絕不改錯地方」的底線焊死。</p>
+
+<h3>2. grep：正規表示式的內容搜尋</h3>
+<p>依檔名找檔是 list_dir／glob 的事，但「在內容裡找關鍵字」得靠 grep。設計上它有兩個保護：一次最多回 200 筆結果（防止記憶體爆炸），並跳過二進位與非 UTF-8 檔（避免把亂碼塞回上下文）。</p>
+
+<h3>3. glob：萬用字元的檔名搜尋</h3>
+<p>用 <code>**/*.java</code> 這種 wildcard 描述要找哪些檔，跟 grep 共用同一個 200 筆上限。</p>
+
+<h3>4. ask_user：把人類拉進審查迴路</h3>
+<p>Agent 不該永遠自作主張——碰上「要不要刪這個資料夾」「這個金額對嗎」，正確動作是停下來問人。ask_user 透過一個 <code>UserInteraction</code> 介面完成，介面下有兩個實作：<strong>Console</strong>（CLI 下即時問答）與 <strong>Unsupported</strong>（不支援此渠道時，直接回傳「此環境不支援人工確認」）。介面先行，是它最重要的設計。</p>
+
+<h3>5. web_search：讓 Agent 能查最新網路資訊</h3>
+<p>要查「今天」的即時資料，光靠 http_get 撞特定網址不夠，需要真正的搜尋。它透過 <code>SearchProvider</code> 介面接上搜尋引擎，預設用 DuckDuckGo。因為它本質上是網路請求，自然走 http_get 的網域白名單，安全檢查照舊生效。</p>
+
+<h2>「新增工具成本恆定」才是真正的考驗</h2>
+<p>五個工具各有各的新邏輯，但把它們加進系統的成本，說起來會讓你吃驚：<strong>每加一個，只需要「寫一個類 + 註冊一個 adapter」</strong>。為什麼這麼便宜？</p>
+<ul>
+<li>Sandbox 檢查——不用改，自動套用（edit_file 走檔案白名單、web_search 走網域白名單）。</li>
+<li>tool_invocations 審計——不用改，執行鏈自動記錄。</li>
+<li>Profile 過濾——不用改，tools 欄位照樣篩。</li>
+</ul>
+<p>這正是前三課那套抽象（統一 OryxTool、單一 ToolExecutor、白名單在先）的兌現：<strong>好抽象讓「新增工具」這個動作的成本保持恆定、不隨數量成長</strong>。反過來說，如果某天你發現「加個工具還要改核心」，那就是抽象破功的警訊。</p>
+
+<h2>用四大測試區塊驗證整套設計</h2>
+<p>加了新工具不能拍拍屁股就說完成，需要用測試把行為釘住。課程給了一套「驗收 harness」，四大區塊：</p>
+<ol>
+<li><strong>OryxToolContractTest</strong>——參數化跑過每一個註冊的工具，斷言 name／description／inputSchema 都不為空。任何一個工具漏了 getInputSchema，立刻被紅旗標出（否則 Provider 的 Function Calling 翻譯會卡死）。</li>
+<li><strong>ToolRegistryTest</strong>——驗證三種來源都註冊成 OryxTool，Profile 過濾後拿到「不多不少」的精確子集。</li>
+<li><strong>FileToolsTest／ShellToolsTest／HttpToolsTest</strong>——每個工具的「正常＋被擋」兩條路：正常該成功就成功，白名單外該被擋就要被擋。</li>
+<li><strong>McpToolAdapterTest／McpClientServiceTest</strong>——用 mock client，驗證壞掉的 MCP server 只記 WARN、不拖垮啟動。</li>
+</ol>
+<p>這套 harness 跟「抽象價值」是同一枚硬幣的兩面：抽象讓加工具便宜，測試確保便宜不等於隨便。</p>
+
+<h2>回到本節的意義</h2>
+<p>把九個補到十四個，不是湊數量，而是完成一次「對標業界 → 補齊基礎 → 驗證抽象」的閉環。你現在手上握著整套 Tool 心智模型：統一抽象（OryxTool＋ToolResult）→ 三級插件（零／輕／重）→ 唯一執行鏈（Registry＋Executor＋白名單）→ 好抽象讓成本恆定。閉上眼，你應該能回答：一個新業務工具要進 OryxOS，我會走哪條路、在哪裡被檢查、會被記錄到哪——這，就是這個節點真正要交付的東西。</p>
+
+<div class="lesson-nav">
+  <div><a href="./toolregistry-executor-sandbox.html">← 上一步：ToolRegistry、ToolExecutor 與安全白名單</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="edit_file 的「唯一舊文本」設計追求什麼？" data-correct="2" data-explain="舊文本找不到或找到多個都報錯，寧可失敗也不誤改——精確優先。">
+  <button class="opt">讓替換速度最快</button>
+  <button class="opt">允許模糊比對降低成本</button>
+  <button class="opt">找不到或多重匹配都報錯，絕不誤改</button>
+  <button class="opt">自動猜測使用者要改哪一段</button>
+</div>
+
+<div class="quiz" data-question="grep 與 glob 共用哪一個防爆上限？" data-correct="1" data-explain="兩者都限制最多 200 筆結果，防止長內容與亂碼塞爆上下文。">
+  <button class="opt">10 筆</button>
+  <button class="opt">200 筆</button>
+  <button class="opt">1000 筆</button>
+  <button class="opt">不限筆數</button>
+</div>
+
+<div class="quiz" data-question="ask_user 這個工具解決的核心問題是什麼？" data-correct="0" data-explain="把人類拉進審查迴路，遇到高風險決定停下來問使用者，而非自作主張。">
+  <button class="opt">高風險決定前把人類拉進審查迴路</button>
+  <button class="opt">讓 Agent 發訊息給所有同事</button>
+  <button class="opt">加快模型推理速度</button>
+  <button class="opt">儲存使用者偏好到記憶</button>
+</div>
+
+<div class="quiz" data-question="為什麼每加一個新工具「幾乎不用改核心」？" data-correct="3" data-explain="Sandbox 檢查、審計、Profile 過濾都自動套用，因為統一抽象這層把橫切邏輯焊死了。">
+  <button class="opt">因為新工具都比較簡單</button>
+  <button class="opt">因為核心幾乎沒寫任何功能</button>
+  <button class="opt">因為新工具不需要註冊</button>
+  <button class="opt">因為 Sandbox／審計／過濾都自動套用</button>
+</div>
+
+<div class="quiz" data-question="OryxToolContractTest 的主要斷言是什麼？" data-correct="1" data-explain="參數化跑過每個工具，斷言 name／description／inputSchema 不為空，漏 schema 立刻紅旗。">
+  <button class="opt">所有工具執行時間小於 1 秒</button>
+  <button class="opt">每個工具的 name、description、inputSchema 都不為空</button>
+  <button class="opt">每個工具都只能成功一次</button>
+  <button class="opt">工具名稱必須全部小寫</button>
+</div>
+
+<div class="quiz" data-question="「新增工具成本恆定」若被打破代表什麼？" data-correct="2" data-explain="那是抽象破功的警訊：本應由執行鏈與註冊層吸收的成本，被漏回核心了。">
+  <button class="opt">代表工具數量太多</button>
+  <button class="opt">代表測試寫得不夠</button>
+  <button class="opt">抽象破功，新工具逼著改核心</button>
+  <button class="opt">代表該換資料庫</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Tool 體系 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

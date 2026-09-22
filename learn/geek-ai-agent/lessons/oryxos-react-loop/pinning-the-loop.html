@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用測試與 Demo 釘死迴圈</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用測試與 Demo 釘死迴圈</h1>
+<p class="meta">Step 5/5 · 手寫 ReAct 迴圈</p>
+
+<h2>學習目標</h2>
+<p>能設計五個單元測試類的覆蓋重點與兩個最值錢的回歸測試，並說出 Demo 1（北京天氣＋穿搭建議）的驗收標準為什麼能證明迴圈是手寫的。</p>
+
+<h2>為什麼單元測試特別重要</h2>
+<p>迴圈是 Agent 底座的心跳——如果它會無限轉、會失憶、會洩漏身分，上面長的所有能力（記憶、工具、Web）全部白搭。<strong>全部五個測試類都不需要網路、不需要真實模型</strong>，用假的 Provider 與假的工具就能一次跑完，因此可以當成最便宜的第一道防線。</p>
+
+<h2>五個測試類，各盯一個面向</h2>
+<table>
+<thead>
+<tr><th>測試類</th><th>釘死的行為</th></tr>
+</thead>
+<tbody>
+<tr><td>ReActLoopTest</td><td>一輪直接結束、工具往返（call→result 回到迴圈）、到達最大迭代就停、過程全部累積</td></tr>
+<tr><td>PromptBuilderTest</td><td>四段組裝順序、歷史截斷到 N 輪、日期時間後綴</td></tr>
+<tr><td>ToolExecutorTest</td><td>成功與失敗都寫稽核表</td></tr>
+<tr><td>AgentServiceTest</td><td>ProfileContext set 之後，即使處理拋異常也會在 finally 清掉</td></tr>
+<tr><td>ContextLoaderTest</td><td>不落快取（改檔後再讀是新內容）、缺檔處理</td></tr>
+</tbody>
+</table>
+
+<h2>兩個最值錢的回歸測試</h2>
+<p>不是每個測試份量一樣。講師明說有兩個回歸「最值錢」：</p>
+<ol>
+<li><strong>「模型一直要求工具 → 在第 10 次迭代被強制停住」</strong>——這直接釘死上一節的 <code>MAX_ITERATIONS</code> 安全帶。模型對著迴圈 pipe 大量工具要求不稀奇，稀奇的是迴圈不會陪它無限轉。沒有這個測試，死迴圈會以「看起來很忙、永遠沒結果」的形式活在產品裡。</li>
+<li><strong>「即使 process 拋異常，ProfileContext 也要在 finally 清掉」</strong>——這釘死 ThreadLocal 洩漏。單次請求的測試永遠測不出來，因為每次都是新執行緒、新身分；只有模擬「同一條執行緒上，上一個請求炸了、下一個請求進來」才算數。</li>
+</ol>
+
+<h2>做完怎麼驗：Demo 1 端到端</h2>
+<p>單元測試只能證明「零件沒壞」。要證明「整台機器真的會想事」，OryxOS 用 Demo 1 收尾：</p>
+<ol>
+<li>跑一串真實多輪對話：「查北京天氣，建議該穿什麼。」</li>
+<li>完整走一遍：CLI → AgentService → ReActLoop → PromptBuilder（組上下文）→ 模型（DeepSeek 等）回一個 <code>http_get</code> 工具呼叫 → ToolExecutor 過 Sandbox 執行 → 天氣 JSON 回到 Session → 第二輪 → 模型給穿搭建議。</li>
+<li><strong>Code review 確認迴圈是手寫的</strong>：沒有任何框架的 Agent 包裝，主迴圈就是自己那幾十行。</li>
+</ol>
+<p>所以 Demo 1 的驗收標準其實是兩件事的合體：<strong>「端到端能跑」＋「跑的方式確實是手寫」</strong>。前者證功能，後者證明你不欠框架黑盒任何東西——兩者缺一，都不是這個節點的過關線。</p>
+
+<h2>核心階段刻意不做的事</h2>
+<p>迴圈節點把邊界畫得很清楚——以下全部推遲到擴展階段，核心階段不做：</p>
+<ul>
+<li><strong>並行工具呼叫</strong>：一次只執行一個工具。</li>
+<li><strong>Agent 委派</strong>：Agent 呼叫另一個 Agent。</li>
+<li><strong>串流（streaming）</strong>：逐 token 吐出回應。</li>
+<li><strong>上下文壓縮</strong>：核心階段只「保留最近 N 輪」，不重寫歷史。</li>
+</ul>
+<blockquote>
+「這些事很重要，只是不是這個階段」——這是前面工作流與需求節點一再強調的紀律：先釘死能跑的最小完整核心，差異化留給訊號出現後的擴展階段。
+</blockquote>
+
+<h2>把整套迴圈打包帶走</h2>
+<p>到這裡，你已經從「迴圈是什麼」一路走到「怎麼驗證迴圈不會偷偷壞」。剩下的問題只有一個：怎麼把這副骨架搬回你自己的專案。答案就是這五節的主線——先想清楚職責邊界，再寫那幾十行，再用兩個最值錢的回歸把行為釘死。</p>
+
+<div class="lesson-nav">
+  <div><a href="./agent-service-orchestration.html">← 上一步：單一編排器：AgentService、ProfileContext、ContextLoader</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="五個單元測試類的共同特點是什麼？" data-correct="1" data-explain="全部都用假的 Provider 與假工具、不需要網路與真實模型，因此又快又便宜。">
+  <button class="opt">都要連上真實模型才能跑</button>
+  <button class="opt">不需網路，用假 Provider 與假工具即可</button>
+  <button class="opt">只能在 Demo 端到端跑完後執行</button>
+  <button class="opt">需要等排程器同步完才能測</button>
+</div>
+
+<div class="quiz" data-question="ReActLoopTest 不釘死哪一項行為？" data-correct="2" data-explain="ReActLoopTest 釘死一輪結束、工具往返、最大迭代停止與累積；組 prompt 的順序是 PromptBuilderTest 的範圍。">
+  <button class="opt">一輪直接結束</button>
+  <button class="opt">工具呼叫結果回到迴圈</button>
+  <button class="opt">四段組裝的順序</button>
+  <button class="opt">到達最大迭代就停止</button>
+</div>
+
+<div class="quiz" data-question="兩個最值錢的回歸測試之一，「模型一直要求工具」要驗證什麼？" data-correct="3" data-explain="驗證迴圈在第 10 次迭代被強制停住——MAX_ITERATIONS 這條安全帶真的會攔住死迴圈。">
+  <button class="opt">模型會自動改用更好的工具</button>
+  <button class="opt">工具稽核表會少寫一半</button>
+  <button class="opt">Provider 會自動切換模型</button>
+  <button class="opt">迴圈在第 10 次被強制停住</button>
+</div>
+
+<div class="quiz" data-question="為什麼 ThreadLocal 洩漏在單次請求測試裡測不出來？" data-correct="0" data-explain="單次請求每次都用新執行緒、新身分，洩漏只發生在同一條被重用的執行緒上。">
+  <button class="opt">單次請求用新執行緒，洩漏只在執行緒重用時浮現</button>
+  <button class="opt">因為單次請求不會呼叫模型</button>
+  <button class="opt">因為 Profile 只在 Web 模式出現</button>
+  <button class="opt">因為工具執行不寫稽核表</button>
+</div>
+
+<div class="quiz" data-question="Demo 1（北京天氣＋穿搭建議）的驗收標準是？" data-correct="2" data-explain="兩件事合體：端到端能跑，且 code review 確認迴圈是手寫、沒有框架 Agent 包裝。">
+  <button class="opt">只要能用真實模型回一句話就算過</button>
+  <button class="opt">只要五個單元測試全綠就算過</button>
+  <button class="opt">端到端能跑且確認為手寫迴圈</button>
+  <button class="opt">只要能跑出天氣 JSON 就算過</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項是核心階段刻意不做的？" data-correct="1" data-explain="並行工具呼叫、Agent 委派、串流、上下文壓縮全部推遲到擴展階段，核心只保留最近 N 輪。">
+  <button class="opt">把每輪結果累積回 Session</button>
+  <button class="opt">單輪只執行一個工具</button>
+  <button class="opt">並行工具呼叫</button>
+  <button class="opt">到達最大迭代時強制結束</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 手寫 ReAct 迴圈 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

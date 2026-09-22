@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>從能跑到跑得穩：穩定打磨與兩線驗收</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>從能跑到跑得穩：穩定打磨與兩線驗收</h1>
+<p class="meta">Step 6/6 · 全流程串聯</p>
+
+<h2>學習目標</h2>
+<p>能列出讓底座「跑得穩」的打磨項目，並把對賬固化成「無 key 機制驗證 + 真 key 鏈路驗證」兩線驗收，讓 mvn verify 回答整台機器是否可用。</p>
+
+<h2>能跑之後，還差的是「穩」</h2>
+<p>主流程打通、排程會跑、重啟不失憶、多 Agent 不打架——這些讓底座「能跑」。但能跑和跑得穩之間，還隔著一批<strong>小、卻在演示時一眼看得見</strong>的打磨項目。它們不改變架構，卻決定了這台機器在真實環境裡是可靠還是脆弱。</p>
+
+<h2>打磨項目：五件小事</h2>
+<table>
+<thead>
+<tr><th>項目</th><th>要求</th></tr>
+</thead>
+<tbody>
+<tr><td>該逾時的要逾時</td><td>模型呼叫、工具執行、notify 推送都要有逾時，一通呼叫卡住不能拖垮整個虛擬執行緒；整通 Agent 呼叫另設 60 秒上限</td></tr>
+<tr><td>錯誤訊息人類可讀</td><td><code>error_message</code> 存的是原因（例如「網域不在白名單內: evil.com」），不是堆疊追蹤——審計表是給人看的</td></tr>
+<tr><td>一次觸發一條日誌主線</td><td>用 session id 就能把一次對話／觸發追出來，不必翻幾百行日誌</td></tr>
+<tr><td>外部 MCP 掛掉不拖垮自己</td><td>外部 MCP 不可用時記 <code>WARN</code>、跳過它的工具、正常啟動——別人的可用性不能變成你的</td></tr>
+</tbody>
+</table>
+<p>最後一條值得多說一句：把外部依賴的失敗直接放大成自己的啟動失敗，是最常見的自傷。一個新聞 MCP 沒起來，不該讓整個 OryxOS 起不來。</p>
+
+<h2>Demo 前置清單：先別被自己絆倒</h2>
+<p>演示或部署前，把這六項一次設定並核對完：</p>
+<ol>
+<li>網域白名單包含天氣 API 與 webhook 網域。</li>
+<li>通知渠道設定完成，並手動收到過一則推送。</li>
+<li>新聞 MCP 在 <code>mcp_servers.yaml</code> 宣告，且工具在 <code>oryxos tool list</code> 看得見。</li>
+<li>記憶裡已經有一條偏好（例如把「更關注 AI 和芯片」談進 <code>MEMORY.md</code>）。</li>
+<li>cron 運算式與<strong>明確時區</strong>（例如 Asia/Shanghai）都檢查過。</li>
+<li>跨重啟驗證過：session 持久、定時任務重新註冊。</li>
+</ol>
+<p>其中最容易自己踩的坑是第一項。Sandbox 預設是 <strong>deny-all</strong>，所以三個網域必須<strong>顯式加白</strong>：天氣來源（例如 <code>api.open-meteo.com</code>）、團隊通知 webhook（例如飛書 <code>*.feishu.cn</code> 或企業微信 <code>qyapi.weixin.qq.com</code>）、以及任何新聞來源。</p>
+<p>同時要記得：<code>file</code> 與 <code>shell</code> 這兩個白名單<strong>維持 deny-all</strong>（這些 demo 用不到）；另外要確認 <code>OpenAiAutoConfiguration</code> 已被排除，否則 <code>serve</code> 根本起不來。這些檢查一次做完，才不會在台上發現環境只對了一半。</p>
+
+<h2>把對賬固化成兩線驗收</h2>
+<p>人工對賬做完，最後一步是把它變成會自己重複執行的測試。這裡刻意分成兩條線，因為它們的前置條件完全不同：</p>
+<table>
+<thead>
+<tr><th>線</th><th>代表測試</th><th>前置</th><th>驗什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>機制線（無 key）</td><td><code>ScheduledTaskE2ETest</code>、<code>MockProviderFlowTest</code>、<code>MockAgentE2ETest</code></td><td>不需要 key 與網路，進 gate</td><td>註冊／執行／持久化／管理的機制，以及整條鏈會跑</td></tr>
+<tr><td>鏈路線（真 key）</td><td><code>SchedulerFlowIT</code>、<code>RestartRecoveryIT</code>、<code>HumanTriggerFlowIT</code></td><td>需要真 key 與網路，預設 CI 略過</td><td>天氣／推送真的送出、重啟真的恢復、對賬真的對平</td></tr>
+</tbody>
+</table>
+
+<h2>無 key 那條線怎麼可能驗全鏈？</h2>
+<p>關鍵在 mock provider。在顯式映射下開一個 <code>mock</code> 名字，它不接真模型、不需要 key，只照劇本演一段 ReAct：第一輪要求呼叫工具，第二輪呼叫 <code>save_memory</code>（真的去寫 <code>MEMORY.md</code>，留下一個可觀察的檔案寫入），然後回傳最終答案。</p>
+<p>這裡的紀律是：<strong>只有「模型」是假的</strong>。<code>ReActLoop</code>、<code>ToolExecutor</code>、Memory、Session、審計全部走真實路徑。所以它能驗的是「整條鏈的接線」，而不是「模型答得好不好」。為了讓測試互不干擾，工作區根目錄支援以系統屬性 <code>oryxos.root</code> 指定（預設 <code>.oryxos</code>），測試就指向一個臨時工作區。</p>
+<p>以 <code>ScheduledTaskE2ETest</code> 為例：在臨時工作區放一個 <code>provider: mock</code> 的 Agent 並帶 schedules（cron 設得很遠，改用 run-now 觸發），啟動後斷言它已註冊（<code>run_count=0</code>、<code>enabled=true</code>）；接著 <code>POST /schedules/{id}/run</code> 跑一次真正的 ReAct，斷言 <code>run_count=1</code>、<code>last_status=success</code>、有一筆執行紀錄、記憶可查；最後用 <code>PUT</code> 把它停用。整個過程不需要 key。</p>
+
+<h2>真 key 那條線驗的是「鏈路」</h2>
+<p>無 key 的測試驗不到「天氣真的查回來、推送真的送到」。所以另有一條真 key 的線：<code>SchedulerFlowIT</code> 用測試 Profile 觸發「查北京天氣推送穿搭」，斷言 session 被重用、<code>llm_calls</code>=2、<code>tool_invocations</code>=2、測試 webhook 收到，並額外驗白名單外的失敗路徑留下 <code>success=false</code> 而不殺死排程。</p>
+<p>再加上 <code>RestartRecoveryIT</code>（kill／重新 serve 後斷言四項都回來）與多 Agent 隔離測試，整條真 key 線就把「機制對」升級成「真的有用」。</p>
+
+<h2>收尾：把體感變成事實</h2>
+<p>這一課之後，「這台機器跑得穩」不再是你讀日誌後的體感，而是<strong>每次 <code>mvn verify</code> 都會回答的確定事實</strong>——機制線在 gate 裡每次跑，鏈路線需要 key 時手動跑。驗收清單的最後一項也因此很簡單：<code>mvn clean verify</code> 全綠。</p>
+<p>到這裡，底座的第一部分完成了：人推的問答答得對、排程的任務能定義／執行／管理／對賬、重啟不失憶、多個 Agent 不打架。但我們其實還沒真正<strong>定義</strong>一個業務 Agent——那正是下一課的視角轉換：底座是底座，Agent 是 Agent。</p>
+
+<div class="lesson-nav">
+  <div><a href="./restart-and-multi-agent.html">← 上一步：跨重啟恢復與多 Agent 並存</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="下列哪一項屬於「跑得穩」的打磨項目？" data-correct="1" data-explain="模型呼叫、工具執行、推送都要逾時，一次卡住不能拖垮整個虛擬執行緒。">
+  <button class="opt">把模型換成更大的參數量</button>
+  <button class="opt">模型、工具、推送都要逾時</button>
+  <button class="opt">把審計表改成只記成功</button>
+  <button class="opt">為每個請求都建立新資料庫</button>
+</div>
+
+<div class="quiz" data-question="error_message 應該存什麼？" data-correct="2" data-explain="存人類可讀的原因，例如「網域不在白名單內」，因為審計表是給人看的。">
+  <button class="opt">完整的 Java 堆疊追蹤</button>
+  <button class="opt">該次呼叫的 token 數量</button>
+  <button class="opt">人類可讀的失敗原因</button>
+  <button class="opt">模型回傳的原始 JSON</button>
+</div>
+
+<div class="quiz" data-question="外部 MCP 掛掉時，OryxOS 應該怎麼做？" data-correct="0" data-explain="記 WARN、跳過它的工具、正常啟動；別人的可用性不能變成你的。">
+  <button class="opt">記 WARN 並跳過其工具正常啟動</button>
+  <button class="opt">整個服務拒絕啟動等待修復</button>
+  <button class="opt">自動重試直到 MCP 恢復為止</button>
+  <button class="opt">把所有工具一起停用</button>
+</div>
+
+<div class="quiz" data-question="Sandbox 預設 deny-all，Demo 最常被什麼絆倒？" data-correct="3" data-explain="忘了顯式加白天氣、通知、新聞三個網域，導致自家 demo 被自己擋住。">
+  <button class="opt">模型金鑰的額度不足</button>
+  <button class="opt">SQLite 檔案權限錯誤</button>
+  <button class="opt">虛擬執行緒數量太少</button>
+  <button class="opt">忘了把 demo 網域加白</button>
+</div>
+
+<div class="quiz" data-question="mock provider 的紀律是什麼？" data-correct="1" data-explain="只有「模型」是假的，ReActLoop、ToolExecutor、Memory、Session、審計都走真實路徑。">
+  <button class="opt">整條鏈都用假的實作</button>
+  <button class="opt">只有模型是假的，其餘真實</button>
+  <button class="opt">只有審計是真的，其餘假的</button>
+  <button class="opt">模型與工具都是假的</button>
+</div>
+
+<div class="quiz" data-question="為什麼驗收要分「無 key」與「真 key」兩條線？" data-correct="2" data-explain="需要 key 與網路的只能手動；機制線進 gate，每次 mvn verify 都能回答全鏈是否會跑。">
+  <button class="opt">因為真 key 的測試比較慢</button>
+  <button class="opt">因為無 key 的測試沒有效力</button>
+  <button class="opt">因為前置條件不同，機制線可進 gate</button>
+  <button class="opt">因為管理台需要兩種連線</button>
+</div>
+
+<div class="quiz" data-question="這一課之後，「跑得穩」靠什麼變成確定事實？" data-correct="0" data-explain="把對賬固化成測試後，每次 mvn verify 都會回答機制線是否可用。">
+  <button class="opt">每次 mvn verify 的回答</button>
+  <button class="opt">人工翻閱啟動日誌</button>
+  <button class="opt">管理台上的一張圖表</button>
+  <button class="opt">模型自己回報的信心值</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 全流程串聯 · Step 6/6</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

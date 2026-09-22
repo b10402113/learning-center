@@ -1,0 +1,79 @@
+---
+id: oryxos-plugin-agent
+title: 插件化 Agent 與動態管理
+subject: geek-ai-agent
+tier: 5
+order: 20
+status: content-written
+goal: 懂一目錄一 Agent 的載入機制（AGENT.md→Profile→註冊→自跑）與動態管理（免重啟掃描、上傳即上線、一句話生成）。
+sources:
+  - "[[sources/geek-ai-agent/20260922/第29节：插件化 Agent 一个目录定义一个会自己跑的 Agent.pdf#开篇-为什么敢叫-Agent-OS]]"
+  - "[[sources/geek-ai-agent/20260922/第29节：插件化 Agent 一个目录定义一个会自己跑的 Agent.pdf#一-3-一个-Agent-目录长什么样]]"
+  - "[[sources/geek-ai-agent/20260922/第30节：动态管理 Agent 一句话生成、上传即上线.pdf#一-本节目标-Agent-能动态管-免重启]]"
+  - "[[sources/geek-ai-agent/20260922/第30节：动态管理 Agent 一句话生成、上传即上线.pdf#二-3-一句话生成一个-Agent]]"
+  - "[[sources/geek-ai-agent/20260922/oryxos/oryxos-core/src/main/java/io/oryxos/core/agent/AgentLoader.java]]"
+  - "[[sources/geek-ai-agent/20260922/oryxos/CLAUDE.md]]"
+steps:
+  - id: agent-as-os-program
+    order: 1
+  - id: agent-directory-anatomy
+    order: 2
+    deps:
+      - agent-as-os-program
+  - id: derive-profile-register
+    order: 3
+    deps:
+      - agent-as-os-program
+      - agent-directory-anatomy
+  - id: dynamic-registration-lifecycle
+    order: 4
+    deps:
+      - derive-profile-register
+  - id: one-sentence-generation-trust
+    order: 5
+    deps:
+      - derive-profile-register
+      - dynamic-registration-lifecycle
+prerequisites:
+  - learn/geek-ai-agent/nodes/agent-anatomy
+  - learn/geek-ai-agent/nodes/oryxos-requirements
+  - learn/geek-ai-agent/nodes/oryxos-technical-solution
+  - learn/geek-ai-agent/nodes/oryxos-react-loop
+  - learn/geek-ai-agent/nodes/oryxos-cli-session
+  - learn/geek-ai-agent/nodes/oryxos-tool
+created: 2026-09-22
+updated: 2026-09-22
+---
+
+# 插件化 Agent 與動態管理
+
+## Learning goal
+
+懂一目錄一 Agent 的載入機制（AGENT.md→Profile→註冊→自跑）與動態管理（免重啟掃描、上傳即上線、一句話生成）。
+
+## Steps
+
+1. [[learn/geek-ai-agent/nodes/oryxos-plugin-agent/agent-as-os-program|一目錄一 Agent：為什麼這叫 Agent OS]] — 底座是核心、Agent 是可執行程式；借 Skill 目錄形態但定義 Agent
+2. [[learn/geek-ai-agent/nodes/oryxos-plugin-agent/agent-directory-anatomy|一個 Agent 目錄長什麼樣：AGENT.md、scripts、skills、REFERENCE.md]] — 四個檔案如何以 progressive disclosure 各自用到才進上下文（after step 1）
+3. [[learn/geek-ai-agent/nodes/oryxos-plugin-agent/derive-profile-register|掃描→deriveProfile→註冊→自跑：底座零改動的插件機制]] — 掃描、derive、註冊、自跑四步，Profile 取用讓底座零改動（after steps 1–2）
+4. [[learn/geek-ai-agent/nodes/oryxos-plugin-agent/dynamic-registration-lifecycle|動態管理：免重啟掃描、上傳即上線與生命週期編排]] — WorkspaceWatcher 單一註冊入口、CRUD 端點、rollback 與刪改語義（after step 3）
+5. [[learn/geek-ai-agent/nodes/oryxos-plugin-agent/one-sentence-generation-trust|一句話生成與腳本信任邊界]] — 生成必須人審、模板骨架落地、L3 腳本信任邊界（after steps 3–4）
+
+## Lesson
+
+OryxOS 在第二十八節之前已經有一座完整的核心（kernel）：Provider、ReAct、內建 Tool、Memory、Sandbox、排程、Web。但「能跑一個 Agent」還不等於「是 Agent OS」。作業系統之所以是作業系統，不在核心多強，而在於它提供一套標準機制，讓你能在不改核心、不重新編譯的前提下，安裝並執行任意多個互相隔離的程式。第二十九與三十節補上的，正是這套機制：**定義一個 Agent、安裝它、讓它自己跑**。
+
+這套機制的核心是一條邊界：**底座（base）是所有人共用的系統能力，Agent（業務層）是一個自足的目錄**。一個 Agent 就是 `.oryxos/agents/<name>/` 底下的一個目錄，裡面用 `AGENT.md` 帶身分與設定、帶任務指令，其餘檔案（腳本、子指令、欄位參考）各自用到才進上下文。目錄的形狀借自 Anthropic Agent Skills，但定義的單位被釘死為「一個目錄 = 一個 Agent」——skill 降級成這個目錄內部的選用元件，不存在跨 Agent 的能力庫或全域索引。
+
+真正讓「目錄」變成「會自己跑的 Agent」的，是四步鏈路：掃描 `.oryxos/agents/`、把 `AGENT.md` frontmatter `deriveProfile` 成底座認識的 `Profile`、註冊進可變的 `ProfileRegistry`（排程同時交給 `AgentScheduler`）、觸發時走同一條 `AgentService.process` 自跑。關鍵在於底座從頭到尾只認 `Profile` 這個值物件，所以「從 Profile YAML 讀」換成「從 Agent 目錄推導」時，底座一行都不用改——這也是整個插件化最省力、最關鍵的一步。
+
+第三十節把這條鏈路從「登入伺服器放檔案、重啟才生效」升級成動態管理：一個真相源 `.oryxos/agents/`、兩條錄入路徑（API 上傳與目錄即時監看），共用同一個註冊入口，所以「上傳即上線」等於「丟目錄即上線」；再補上 CRUD 端點、一句話生成，以及刪除／更新時「先動排程 handle、再動索引與目錄」的順序紀律。最後一條是誠實的信任邊界：安裝一個帶腳本的 Agent，等於信任它的作者，因為子程序網路能繞過內建 `http_get` 的域名白名單。
+
+## Sources
+
+- [[sources/geek-ai-agent/20260922/第29节：插件化 Agent 一个目录定义一个会自己跑的 Agent.pdf#开篇-为什么敢叫-Agent-OS]]
+- [[sources/geek-ai-agent/20260922/第29节：插件化 Agent 一个目录定义一个会自己跑的 Agent.pdf#一-3-一个-Agent-目录长什么样]]
+- [[sources/geek-ai-agent/20260922/第30节：动态管理 Agent 一句话生成、上传即上线.pdf#一-本节目标-Agent-能动态管-免重启]]
+- [[sources/geek-ai-agent/20260922/第30节：动态管理 Agent 一句话生成、上传即上线.pdf#二-3-一句话生成一个-Agent]]
+- [[sources/geek-ai-agent/20260922/oryxos/oryxos-core/src/main/java/io/oryxos/core/agent/AgentLoader.java]]
+- [[sources/geek-ai-agent/20260922/oryxos/CLAUDE.md]]

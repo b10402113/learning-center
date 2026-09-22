@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>整體架構與同質節點</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>整體架構與同質節點</h1>
+<p class="meta">Step 2/5 · When 技術方案</p>
+
+<h2>學習目標</h2>
+<p>能用業務／叢集／外部依賴／下游 Sink 四塊畫出 When 的整體架構，並說明同質節點、Controller 角色與節點內部模組如何切分。</p>
+
+<h2>先看四塊：一張架構圖的分區方式</h2>
+<p>When 的整體架構可以切成四塊，由左到右是一條資料流：</p>
+<table>
+<thead>
+<tr><th>區塊</th><th>角色</th><th>內容</th></tr>
+</thead>
+<tbody>
+<tr><td>業務方</td><td>需求來源</td><td>透過 HTTP API 提交訊息、查詢、取消</td></tr>
+<tr><td>When 叢集</td><td>核心</td><td>多個同質節點，其中一台被選為 Controller</td></tr>
+<tr><td>外部依賴</td><td>被外推的難題</td><td>ETCD 負責協調、Redis 負責訊息與索引的持久化</td></tr>
+<tr><td>下游 Sink</td><td>投遞出口</td><td>HTTP、Kafka 等，以 SPI 插件方式接入</td></tr>
+</tbody>
+</table>
+<p>這四塊裡有一個關鍵的設計態度：<strong>ETCD 與 Redis 是「拿來用」而不是「拿來自己重寫」的</strong>。When 不重新發明協調服務，也不重新發明可靠的鍵值儲存；它只負責把訊息排進時間輪、時間到時交給 Sink。</p>
+
+<h2>同質節點：Controller 是一個角色，不是一台專用機器</h2>
+<p>叢集裡的每個 When 節點跑的程式完全一樣，這叫<strong>同質（homogeneous）節點</strong>。它們都在做同一件事：接收訊息、排程、投遞。<strong>Controller 不是另一種機器，而是一個被選舉出來的角色</strong>——某一個時刻剛好有一台節點擔任它。</p>
+<p>這樣設計的好處是：沒有「專用節點掛掉就群龍無首」的單點，擴容時也只要多開一個一樣的節點。Controller 的職責是做全域決策（例如重新分配副本、指派新 Slave），但資料與排程仍然散在每台節點上。</p>
+
+<h2>節點內部的八個模組</h2>
+<p>把一個節點打開，會看到八個模組，每個都對應一個清楚的職責：</p>
+<ul>
+<li><strong>ingress（接入）</strong>——接收業務的 HTTP 請求，做驗證。</li>
+<li><strong>router（路由）</strong>——用一致雜湊（consistent hashing）決定訊息屬於哪個時間輪；若該輪的 Master 在別台節點，就透過 gRPC 轉發。</li>
+<li><strong>time-wheel engine（時間輪引擎）</strong>——記憶體中的排程核心，決定訊息何時到期。</li>
+<li><strong>replica synchronizer（副本同步器）</strong>——把 Master 的變更非同步同步給 Slave。</li>
+<li><strong>Sink deliverer（投遞器）</strong>——到期後把訊息送給下游，內含執行緒池與重試。</li>
+<li><strong>ETCD client</strong>——註冊、心跳、選舉、Watch。</li>
+<li><strong>Redis client</strong>——訊息與索引的讀寫。</li>
+<li><strong>observability（可觀測）</strong>——指標、結構化日誌、健康檢查。</li>
+</ul>
+<p>模組的切法反映了資料流：<em>ingress → router → time-wheel engine → Sink deliverer</em> 是主線，其餘是支撐。</p>
+
+<h2>叢集怎麼組起來</h2>
+<p>叢集的形成與協調全部透過 ETCD，共四個動作：</p>
+<ol>
+<li><strong>註冊</strong>：節點啟動後把自己的資訊寫到 <code>/when/nodes/{node_id}</code>，並綁定一個 <strong>10 秒的 Lease（租約）</strong>。租約到期若沒續，ETCD 會自動移除這個節點——這就是「失敗自動下線」的機制。</li>
+<li><strong>心跳</strong>：節點每 <strong>3 秒</strong> 對租約做一次 KeepAlive，在<strong>獨立的執行緒與連線</strong>上進行，不佔用業務執行緒，避免忙碌時心跳遲到而被誤判死亡。</li>
+<li><strong>選舉</strong>：想當 Controller 的節點，對 <code>/when/controller</code> 做一次原子的寫入（Txn／PUT，同樣綁 Lease）。ETCD 保證只有一個成功，成功者就是 Controller；新 Controller 先載入叢集狀態，再開始巡邏。</li>
+<li><strong>感知</strong>：所有節點 Watch <code>/when/nodes/</code> 的變化。有節點加入（PUT）就觸發重新平衡；有節點消失（DELETE）就立刻把它名下的 Slave 提升為 Master，並補一個新 Slave。<strong>這是事件驅動，不是主動輪詢</strong>——不需要有人定期去問「你還好嗎」。</li>
+</ol>
+<p>ETCD 的 key space 因此被規劃成清楚的四個層級：<code>/when/nodes</code>、<code>/when/controller</code>、<code>/when/timewheels</code>、<code>/when/config</code>，原則是「階層清楚、key 要小、生命週期分明」。</p>
+
+<h2>擴縮容：先搬 Slave，別動 Master</h2>
+<p>有新節點加入時，流程是：註冊 → 觸發 PUT 事件 → Controller 重新平衡 → 把某個 Slave 搬到新節點 → 新節點同步完成後正式接下 Slave 角色。這裡有一條貫穿全篇的原則：<strong>優先搬 Slave，不急著搬 Master</strong>，因為搬 Master 會中斷寫入。</p>
+<p>節點離開分兩種。主動離開走優雅關機：收到 <code>SIGTERM</code> → 主動註銷 → Controller 在約 1 秒內提升它名下 Slave 為新 Master → 再補一個新 Slave。異常離開則靠 Lease 到期發現，流程一樣，只是要等租約失效，時間落在數秒級。</p>
+<p>重新平衡的目標很單純：每個時間輪維持 <strong>1 個 Master + 1 個 Slave</strong>，兩者放在不同節點，且每台節點手上的副本數盡量平均。演算法會從超載的節點把副本搬到空閒的節點，一次只微調一台（±1），優先搬 Slave，並在每次成員變動時觸發，另外每 5 分鐘做一次週期性檢查。</p>
+
+<h2>為什麼生產環境從三節點起跳</h2>
+<p>三節點是最小的 HA 組態，因為它<strong>容得下一個節點故障</strong>：一台走了，還有兩台可以接手它的 Master 與 Slave。這是 When 定義「生產可用」的門檻，也是後續部署形態反覆出現「3 個 When 節點」的原因。</p>
+
+<div class="lesson-nav">
+  <div><a href="./six-decisions.html">← 上一步：六大技術決策與 3 週 HA 的理由</a></div>
+  <div><a href="./multilayer-timewheel.html">下一步：多層時間輪的設計 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="When 的 Controller 是什麼？" data-correct="2" data-explain="Controller 是被選舉出來的角色，任何同質節點都可能擔任，不是專用機器。">
+  <button class="opt">一台專門負責排程的機器</button>
+  <button class="opt">一個獨立的協調服務行程</button>
+  <button class="opt">一個會被選舉出來的角色</button>
+  <button class="opt">一個部署在 ETCD 內的模組</button>
+</div>
+
+<div class="quiz" data-question="節點註冊時綁定 10 秒 Lease 的作用是什麼？" data-correct="1" data-explain="租約到期未續，ETCD 自動移除節點，失敗下線因此不需要人工介入。">
+  <button class="opt">限制每則訊息的存活時間</button>
+  <button class="opt">讓失敗節點自動被移除</button>
+  <button class="opt">保證節點之間強一致性</button>
+  <button class="opt">控制 Sink 重試的間隔</button>
+</div>
+
+<div class="quiz" data-question="心跳為什麼要放在獨立的執行緒與連線上？" data-correct="3" data-explain="避免業務忙碌時心跳遲到，被 ETCD 誤判為節點死亡。">
+  <button class="opt">為了節省 ETCD 的連線數量</button>
+  <button class="opt">為了讓心跳可以平行加密</button>
+  <button class="opt">為了降低 Redis 的讀取壓力</button>
+  <button class="opt">為了避免忙碌時心跳遲到</button>
+</div>
+
+<div class="quiz" data-question="Watch 到節點消失（DELETE）時，叢集會做什麼？" data-correct="0" data-explain="先把它名下的 Slave 提升為 Master，再補一個新的 Slave。">
+  <button class="opt">提升 Slave 並補一個新 Slave</button>
+  <button class="opt">直接把該節點的訊息全部刪除</button>
+  <button class="opt">停止整個叢集等待人工恢復</button>
+  <button class="opt">將該節點的 Master 搬到 Redis</button>
+</div>
+
+<div class="quiz" data-question="重新平衡時為什麼優先搬 Slave？" data-correct="1" data-explain="搬動 Master 會中斷寫入，搬 Slave 對業務的干擾最小。">
+  <button class="opt">因為 Slave 的資料量比較小</button>
+  <button class="opt">因為搬 Master 會中斷寫入</button>
+  <button class="opt">因為 Slave 不需要同步資料</button>
+  <button class="opt">因為 Master 只能由 Controller 搬</button>
+</div>
+
+<div class="quiz" data-question="生產環境從三個節點起跳的理由是什麼？" data-correct="3" data-explain="三節點是最小 HA 組態，容得下一個節點故障。">
+  <button class="opt">因為 ETCD 至少需要三個成員</button>
+  <button class="opt">因為時間輪至少要三層才夠用</button>
+  <button class="opt">因為一致雜湊需要三個節點</button>
+  <button class="opt">因為它容得下一個節點故障</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不是節點內部模組？" data-correct="2" data-explain="ZooKeeper 不在 When 的技術棧中，協調一律走 ETCD。">
+  <button class="opt">ingress 與 router</button>
+  <button class="opt">time-wheel engine</button>
+  <button class="opt">ZooKeeper client</button>
+  <button class="opt">replica synchronizer</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · When 技術方案 · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

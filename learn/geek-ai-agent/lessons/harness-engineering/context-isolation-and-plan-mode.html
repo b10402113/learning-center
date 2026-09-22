@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>上下文隔離與計畫先行：Subagents 與 Plan Mode</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>上下文隔離與計畫先行</h1>
+<p class="meta">Step 4/6 · Harness Engineering</p>
+
+<h2>學習目標</h2>
+<p>能判斷何時該派 Subagent 做上下文隔離（並看懂 4 個 subagent 並行初始化 11 個模組的案例），以及哪些情境必須先進 Plan Mode 才動手。</p>
+
+<h2>上下文污染：為什麼 AI 越到後面越笨</h2>
+<p>想像你要初始化一個有 11 個模組的專案，於是叫 AI 一個一個模組建。每建完一個，那個模組的檔案內容、編譯錯誤、討論過程全都留在同一段對話裡。到第五個模組時，對話已經塞滿前四個模組的細節——AI 的注意力被稀釋，開始漏看你的要求，品質明顯下滑。</p>
+<p>這就是<strong>上下文污染</strong>：不是 AI 變笨了，而是它每一輪要處理的相關與無關資訊一起變多，真正重要的訊號被淹沒。它有兩個解法，分別對應「在哪裡做」和「什麼時候做」。</p>
+
+<h2>解法一：Subagents——把子任務丟到乾淨的 context</h2>
+<p><strong>Subagent（子代理）</strong>是一個獨立執行子任務的代理，擁有自己的、乾淨的 context。它做完只把<strong>結果</strong>交回主代理，過程中的檔案內容與錯誤不會污染主對話。</p>
+<table>
+<thead>
+<tr><th>做法</th><th>主 context</th><th>品質與速度</th></tr>
+</thead>
+<tbody>
+<tr><td>序列初始化（主代理自己做完 11 個模組）</td><td>不斷膨脹</td><td>注意力被稀釋、品質逐漸下降</td></tr>
+<tr><td>並行 Subagents（每個負責一批模組）</td><td>只收結果，保持乾淨</td><td>品質穩定、約 4 倍速度</td></tr>
+</tbody>
+</table>
+
+<h3>一個真實案例：4 個 subagent 並行初始化 11 個模組</h3>
+<p>把 11 個 Maven 模組切成四份，派四個 subagent 各自在乾淨 context 裡開工：</p>
+<ul>
+<li><strong>A</strong>：核心 + Provider（ReActLoop／PromptBuilder／ToolExecutor／OryxTool／Session／Profile，以及 ProviderService 與 function-calling 轉接）。</li>
+<li><strong>B</strong>：Memory + 內建工具（MemoryService／MemoryTools，FileTools／ShellTools／HttpTools／SandboxChecker）。</li>
+<li><strong>C</strong>：Skill + MCP 工具（SkillLoader，McpClientService／McpToolAdapter）。</li>
+<li><strong>D</strong>：Web + 儲存 + CLI + 啟動（WebServer 與六個 controller、SessionRepository、Picocli 與 Spring Boot fat JAR）。</li>
+</ul>
+<p>每個 subagent 交付模組目錄、<code>pom.xml</code>、核心類別骨架與基本測試，驗收標準是 <code>mvn compile</code> 通過。最後的結果是：11 個模組都能編譯、沒有依賴衝突、核心介面都定義好了，還有一個能跑的 fat JAR，而架構漂移檢查是 0。這不是示範用的玩具程式，而是一個真的可編譯的多模組骨架。</p>
+
+<h3>什麼時候不該用 Subagent</h3>
+<p>Subagent 不是萬靈丹。在輕量模式的小任務裡，光是拆任務、寫清楚 subagent 的指令、再把結果整合回來，成本就高於直接做——這時它<strong>反而是負擔</strong>。判斷原則：任務夠大、夠獨立、且會明顯污染主 context 時才派。</p>
+
+<h2>解法二：Plan Mode——把錯誤擋在動作之前</h2>
+<p>Subagent 管「在哪裡做」，<strong>Plan Mode（計畫模式）</strong>管「什麼時候做」。它要求 AI 在動手修改之前，先產出一份計畫給你確認。</p>
+<p>為什麼它是最划算的一道防線？因為此時錯誤還只是文字，改一行計畫的成本，遠低於改十個檔案。反過來說，有些情境幾乎一定該先進 Plan Mode：</p>
+<ul>
+<li><strong>有風險</strong>的操作——會影響資料、部署或共用模組。</li>
+<li><strong>不熟悉</strong>的程式碼或技術棧——AI 只能猜，猜錯機率高。</li>
+<li><strong>第一次</strong>做這件事——沒有先例可循，先對齊方向再動手。</li>
+</ul>
+<p>換句話說，Plan Mode 是對「未知與後果」收的保險費；對熟悉、低風險、改一行的小事，硬要走計畫流程只是拖慢速度。</p>
+
+<h2>兩者合起來</h2>
+<p>這兩個工具處理的是同一個大問題的不同切面：上下文污染來自「太多資訊擠在一個地方」，Subagent 用隔離解決它；盲目動手來自「還沒想清楚就開始改」，Plan Mode 用事前確認解決它。下一個步驟，我們補上最後兩道防線——動作前攔阻的 Permission，與動作後驗證的 Hooks。</p>
+
+<div class="lesson-nav">
+  <div><a href="./project-rules-and-skills.html">← 上一步：專案規則與能力槓桿</a></div>
+  <div><a href="./permission-and-hooks.html">下一步：事中與事後防線 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="上下文污染的根本原因是什麼？" data-correct="2" data-explain="不是模型變笨，而是相關與無關資訊一起變多，稀釋了重要訊號。">
+  <button class="opt">模型的參數數量不夠大</button>
+  <button class="opt">對話的輪數被限制住了</button>
+  <button class="opt">無關資訊稀釋了重要訊號</button>
+  <button class="opt">工具呼叫的次數太多了</button>
+</div>
+
+<div class="quiz" data-question="Subagent 隔離上下文的方式是什麼？" data-correct="1" data-explain="它在自己乾淨的 context 裡執行，只把結果交回主代理。">
+  <button class="opt">把主對話的歷史全部壓縮</button>
+  <button class="opt">用乾淨 context 只交回結果</button>
+  <button class="opt">把子任務拆成更小的提示詞</button>
+  <button class="opt">讓多個模型投票選出答案</button>
+</div>
+
+<div class="quiz" data-question="4 個 subagent 並行初始化 11 個模組，帶來的主要好處是？" data-correct="3" data-explain="乾淨 context 讓品質穩定，並行讓速度約提升到 4 倍。">
+  <button class="opt">讓每個模組都自動產生完整測試</button>
+  <button class="opt">讓模型可以自己選擇技術棧</button>
+  <button class="opt">讓架構漂移完全不可能發生</button>
+  <button class="opt">品質穩定且速度約快四倍</button>
+</div>
+
+<div class="quiz" data-question="什麼情況下 Subagent 反而是負擔？" data-correct="0" data-explain="輕量模式的小任務裡，拆派與整合的成本高於直接做。">
+  <button class="opt">輕量模式的小而獨立任務</button>
+  <button class="opt">橫跨多模組的大型初始化</button>
+  <button class="opt">會明顯污染主對話的任務</button>
+  <button class="opt">彼此獨立可平行處理的任務</button>
+</div>
+
+<div class="quiz" data-question="Plan Mode 為什麼是最划算的防線？" data-correct="1" data-explain="錯誤還只是文字，改一行計畫的成本遠低於改十個檔案。">
+  <button class="opt">因為它會自動修正 AI 的錯誤</button>
+  <button class="opt">因為改計畫比改檔案便宜得多</button>
+  <button class="opt">因為它讓 AI 完全不會犯錯</button>
+  <button class="opt">因為它可以取代 Permission 功能</button>
+</div>
+
+<div class="quiz" data-question="下列哪個情境最該先進 Plan Mode？" data-correct="2" data-explain="有風險、不熟悉、第一次做的情境才值得收這筆保險費。">
+  <button class="opt">改一個熟悉檔案裡的一行文案</button>
+  <button class="opt">跑一次已經固定的單元測試</button>
+  <button class="opt">第一次碰且會動到共用模組</button>
+  <button class="opt">重新格式化一個獨立的檔案</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Harness Engineering · Step 4/6</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>

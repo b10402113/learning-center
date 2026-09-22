@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>持久化選型：SQLite、MEMORY.md 與檔案系統</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>持久化選型：SQLite、MEMORY.md 與檔案系統</h1>
+<p class="meta">Step 5/5 · OryxOS 技術方案</p>
+
+<h2>學習目標</h2>
+<p>能解釋為什麼核心用 SQLite + MEMORY.md 而不用向量庫，以及三條升級路徑與各自的代價。</p>
+
+<h2>資料放哪裡：三個儲存目的地</h2>
+<p>一個 Agent 系統會產生很多狀態。OryxOS 的核心只用三種儲存，各管一類資料：</p>
+<table>
+<thead>
+<tr><th>儲存</th><th>放什麼</th><th>選它的理由</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>SQLite</strong>（+ Spring Data JPA）</td><td>會話、工具呼叫、模型呼叫紀錄</td><td>單檔、免外部行程、關係查詢</td></tr>
+<tr><td><strong>MEMORY.md</strong></td><td>長期記憶</td><td>人可讀、可手改、LLM 可直接解讀</td></tr>
+<tr><td><strong>檔案系統</strong></td><td>Profile、Bootstrap、Skill、MCP 設定、日誌</td><td>使用者要維護、要能 git 與備份</td></tr>
+</tbody>
+</table>
+
+<h2>為什麼核心不用向量資料庫</h2>
+<p>講到「長期記憶」，直覺會想到向量資料庫（vector database）——把文字轉成向量，做語義檢索。但核心階段的 OryxOS 明確不用，理由是四個選項在當下都不划算：</p>
+<ul>
+<li><strong>LanceDB</strong>：Java 端的本地嵌入（embedding）能力還沒就緒。</li>
+<li><strong>Qdrant／Chroma／Milvus</strong>：都需要額外跑一個外部行程，破壞「單一可執行 JAR」。</li>
+<li><strong>pgvector</strong>：需要外部 PostgreSQL，同樣引入依賴。</li>
+<li><strong>JVector</strong>：嵌入式可行，但當時尚未被驗證。</li>
+</ul>
+<p>於是核心改用最笨但可靠的方法：<strong>整份 MEMORY.md 注入 prompt + 關鍵字召回</strong>。這不是否定向量檢索，而是把「更聰明的檢索」推遲到擴展階段，<strong>並在介面上先預留</strong>。這正是前面那個共同模式：核心留主幹，介面先留好。</p>
+
+<h2>三張表：SQLite 到底存什麼</h2>
+<p>關係型資料庫裡有三張表：</p>
+<ul>
+<li><code>sessions</code>——會話的 metadata 與 JSON 格式的歷史。</li>
+<li><code>tool_invocations</code>——每一次工具呼叫。</li>
+<li><code>llm_calls</code>——每一次模型呼叫（provider、模型、tokens）。</li>
+</ul>
+<p>後兩張是<strong>審計表</strong>，呼應「第一天就寫」的決策：即使核心階段還沒有查詢它們的端點，也先開始記錄。</p>
+<p>這裡有一個很實際的工程風險要記住：<strong>SQLite 的 <code>ALTER TABLE</code> 能力很弱</strong>，而 Hibernate 的 <code>ddl-auto=update</code> 對 schema 變更並不可靠。所以正式做法是<strong>手寫遷移腳本</strong>，或引入 Flyway／Liquibase。這是一個「看起來節省、其實會踩雷」的典型，越早釘死越好。</p>
+
+<h2>為什麼有些資料留在檔案系統</h2>
+<p>Profile YAML、Bootstrap 檔、MEMORY.md、SKILL.md、MCP 設定、日誌——這些都放在檔案系統，不進資料庫。判斷標準是：<strong>使用者需要看見、編輯、版控或備份的東西，適合檔案系統；系統自己產生、需要查詢的狀態，適合資料庫。</strong></p>
+<p>把 MEMORY.md 留在檔案系統尤其關鍵：使用者可以直接打開、讀懂、手動修正 Agent 的記憶。這帶來資料庫給不了的透明感與可控制感——對一個企業要「敢用」的 Agent 底座來說，這不是小事。</p>
+
+<h2>三條升級路徑</h2>
+<p>當記憶量成長到關鍵字檢索不夠用時，介面已經預留好，可以走三條路之一：</p>
+<table>
+<thead>
+<tr><th>路徑</th><th>做法</th><th>代價</th></tr>
+</thead>
+<tbody>
+<tr><td>A</td><td>等 LanceDB GA，用本地嵌入</td><td>需等成熟度</td></tr>
+<tr><td>B</td><td>PostgreSQL + pgvector</td><td>引入外部資料庫</td></tr>
+<tr><td>C</td><td>JVector 嵌入式</td><td>生態未經大規模驗證</td></tr>
+</tbody>
+</table>
+<p>三條路都不必改動上層：這就是「介面先留好」的回報。</p>
+
+<h2>效能與可擴展性</h2>
+<p>核心階段的效能數字有明確理由支撐：</p>
+<ul>
+<li><strong>虛擬執行緒</strong>承載高併發，只需少量作業系統執行緒。</li>
+<li><strong>1000 個 sessions 約 50MB</strong>——記憶體不是瓶頸。</li>
+<li><strong>MEMORY.md 每次重讀約 1–2ms</strong>，所以「不快取、每輪重讀」是可接受的取捨。</li>
+<li><strong>啟動約 2–4 秒</strong>——靠 CLI 拆分命令緩解；未來可用 GraalVM 原生映像壓到 100ms 以下。</li>
+<li>SQLite 一開始每次都寫，若真成為瓶頸再加批次。</li>
+</ul>
+<p>這些數字不是拍腦袋的樂觀，而是把「為什麼這個取捨在核心階段成立」量化出來。當你之後重讀這份技術方案，遇到任何「為什麼不做得更好」的疑問，多半都能在這一串數字裡找到答案：不是做不到，而是<strong>現在做不划算</strong>。</p>
+
+<div class="lesson-nav">
+  <div><a href="./module-and-support-structure.html">← 上一步：九個 Maven 模組與支撐層</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="核心階段不用向量資料庫，最主要的原因是什麼？" data-correct="1" data-explain="向量庫選項都要外部行程或未就緒，破壞單一可執行 JAR。">
+  <button class="opt">因為向量檢索的準確率太差</button>
+  <button class="opt">因為選項都要外部行程或未就緒</button>
+  <button class="opt">因為 SQLite 天生支援向量檢索</button>
+  <button class="opt">因為向量資料庫的授權太貴</button>
+</div>
+
+<div class="quiz" data-question="SQLite 的三張表不包含下列哪一張？" data-correct="3" data-explain="三張表為 sessions、tool_invocations、llm_calls。">
+  <button class="opt">sessions</button>
+  <button class="opt">tool_invocations</button>
+  <button class="opt">llm_calls</button>
+  <button class="opt">embeddings</button>
+</div>
+
+<div class="quiz" data-question="SQLite schema 演進要用什麼做法？" data-correct="2" data-explain="ALTER TABLE 弱、ddl-auto=update 不可靠，用手寫腳本或 Flyway/Liquibase。">
+  <button class="opt">依賴 Hibernate 的 ddl-auto=update</button>
+  <button class="opt">每次啟動刪庫重建所有表</button>
+  <button class="opt">手寫腳本或導入遷移工具</button>
+  <button class="opt">把 schema 交給 LLM 自動修改</button>
+</div>
+
+<div class="quiz" data-question="哪些資料適合留在檔案系統？" data-correct="0" data-explain="使用者要看見、編輯、版控、備份的設定與記憶，適合檔案系統。">
+  <button class="opt">使用者要編輯與版控的設定</button>
+  <button class="opt">需要高頻查詢的統計資料</button>
+  <button class="opt">跨節點協調的鎖定資訊</button>
+  <button class="opt">需要交易保證的帳務紀錄</button>
+</div>
+
+<div class="quiz" data-question="下列哪一條不是文件列出的儲存升級路徑？" data-correct="1" data-explain="三條為 LanceDB、PostgreSQL + pgvector、JVector；MongoDB 不在其中。">
+  <button class="opt">LanceDB 本地嵌入</button>
+  <button class="opt">MongoDB 文件資料庫</button>
+  <button class="opt">PostgreSQL 加 pgvector</button>
+  <button class="opt">JVector 嵌入式方案</button>
+</div>
+
+<div class="quiz" data-question="MEMORY.md 每輪重讀約需多久？" data-correct="2" data-explain="約 1–2ms，因此不快取、每輪重讀是可接受的取捨。">
+  <button class="opt">約 1–2 微秒</button>
+  <button class="opt">約 1–2 毫秒</button>
+  <button class="opt">約 1–2 秒</button>
+  <button class="opt">約 1–2 分鐘</button>
+</div>
+
+<div class="quiz" data-question="核心啟動約 2–4 秒，靠什麼緩解？" data-correct="0" data-explain="把不需 Spring context 的 CLI 命令直接執行，跳過啟動。">
+  <button class="opt">拆分不需 Spring 的 CLI 命令</button>
+  <button class="opt">把 SQLite 改成純記憶體資料庫</button>
+  <button class="opt">停用 Profile 的啟動驗證</button>
+  <button class="opt">把模型呼叫改成非同步批次</button>
+</div>
+
+<div class="quiz" data-question="預留向量檢索介面的最大回報是什麼？" data-correct="3" data-explain="三條升級路徑都不必改動上層程式碼。">
+  <button class="opt">讓核心階段就能做語義檢索</button>
+  <button class="opt">讓 MEMORY.md 不再需要載入</button>
+  <button class="opt">讓 SQLite 自動升級為向量庫</button>
+  <button class="opt">讓升級不必改動上層程式</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · OryxOS 技術方案 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

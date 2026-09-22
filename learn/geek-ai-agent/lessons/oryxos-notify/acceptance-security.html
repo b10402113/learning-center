@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>驗收 harness 與安全順序：enforce 必須在 send 之前</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>驗收 harness 與安全順序：enforce 必須在 send 之前</h1>
+<p class="meta">Step 4/5 · Notify 出站</p>
+
+<h2>學習目標</h2>
+<p>能說明兩批測試各測什麼、為何 enforce-before-send 的順序斷言是白名單防線的關鍵，以及「未設定」要 loudly fail 而不能靜默。</p>
+
+<h2>程式碼寫完，不代表做對了</h2>
+<p>上一課把四個類別寫出來了。但「寫出來」和「做對了」之間隔著一道驗收。Notify 的驗收拆成<strong>兩批測試</strong>，分批的理由是相依就位：<code>WebhookNotifyAdapterTest</code> 現在就能寫；<code>NotifyToolsTest</code> 要等 Tool 註冊（@Tool）與 Sandbox（<code>enforce</code>）就位——所以先做第一批，第二批 hook 好之後補。這跟上一課講的「完成點在 24 課之後」是同一個節奏。</p>
+
+<h2>第一批：WebhookNotifyAdapterTest——單一實作的行為</h2>
+<p>用 <code>MockWebServer</code>（一個在測試裡起真實 HTTP 服務的假 server）測 adapter 真正發出去的請求，斷言三件事：</p>
+<table>
+<thead>
+<tr><th>斷言</th><th>驗證的目的</th></tr>
+</thead>
+<tbody>
+<tr><td>POST 的 body 帶了 <code>content</code></td><td>adapter 真的把要通知的內容放進請求裡</td></tr>
+<tr><td>URL 來自 NotifyTarget.config 而非 hardcode</td><td>adapter 是從目標設定取位址，不是寫死某個網址</td></tr>
+<tr><td>5xx 會被傳出去、不吞掉</td><td>目標回錯誤時要讓呼叫端知道，不能假裝成功</td></tr>
+</tbody>
+</table>
+<p>第三個斷言特別提醒一個壞習慣：有些實作會把例外 catch 起來「靜默吞掉」，讓「通知失敗」看起來像「通知成功」。adapter 必須把錯誤<strong>往上拋</strong>。</p>
+
+<h2>第二批：NotifyToolsTest——把整條鏈的規則釘死</h2>
+<p>對 Sandbox 與 Adapter 都用 mock（替身），把 NotifyTools 當成黑盒來測它的三個行為規則：</p>
+<ul>
+<li><strong>沒設定 <code>notify_channels</code> 時，要明確報錯</strong>——不能默默選一個「預設」然後發出去，因為推錯了地方比不推更糟。</li>
+<li><strong>缺 channel 時，用第一個渠道</strong>——這是上課學過的「非必填」行為，要用測試證實。</li>
+<li><strong>enforce 在 send 之前呼叫</strong>——用 Mockito 的 <code>InOrder</code> 斷言兩次呼叫的次序。</li>
+</ul>
+
+<h2>最關鍵的斷言：create 順序，inOrder</h2>
+<p>這一條要單獨拿出來講，因為它是安全防線的地基。程式碼可以「看起來一樣」，但呼叫次序不同，安全性天差地遠：</p>
+<pre><code>// 對（enforce 先、send 後）
+sandbox.enforce(action);
+adapter.send(target, content);
+
+// 錯（send 先、enforce 後）
+adapter.send(target, content);
+sandbox.enforce(action);
+</code></pre>
+<p>第二種寫法、訊息先出去了才檢查——檢查等於沒有檢查，白名單形同廢紙。所以測試用 <code>InOrder</code> 明確斷言「<code>enforce</code> 先於 <code>send</code>」，<strong>順序反了＝白名單繞過</strong>。這是驗收 harness 裡最不能砍的一條斷言。</p>
+
+<h2>兩個安全文化：Loud Fail + 順序敏感</h2>
+<p>把兩批測試背後的設計態度總結成兩條規則，將來任何模組都適用：</p>
+<ol>
+<li><strong>未設定必須大聲失敗（fail loud）</strong>。「沒配通知渠道」和「不通知」是兩回事；前者是設定錯誤，要讓使用者立刻看到「notify_channels 未設定」的明確錯誤，而不是讓訊息消失。</li>
+<li><strong>安全檢查的順序是值得用測試釘死的契約</strong>。能用 <code>InOrder</code> 斷言次序，就不該只靠 code review 靠肉眼。</li>
+</ol>
+
+<h2>實作完之後，怎麼用怎麼驗</h2>
+<p>測試批次之外，還有一層<strong>手動驗收</strong>（怎麼用做完怎麼驗）：設定好 <code>notify_channels</code> 後，讓 Agent 自主決定何時呼叫（例如天氣 Agent 把每天的天氣推到群組），然後人工檢查：</p>
+<ul>
+<li><strong>真的收到</strong>——找一個真實 webhook（或自己的測試組），確認訊息真的到了目標群組。</li>
+<li><strong>介面中性自測</strong>——問自己：現在要換成微信 SDK，需要改函數簽名嗎？答案必須是「不用」。</li>
+</ul>
+<p>前者驗「鏈真的通」，後者驗「介面真的中性」——兩題都過，Notify 才算完成「Agent 不只會說話、還會對外送達」的出口。</p>
+
+<div class="lesson-nav">
+  <div><a href="./writing-notify.html">← 上一步：程式碼怎麼寫：NotifyChannelAdapter、NotifyTarget、WebhookNotifyAdapter、NotifyTools</a></div>
+  <div><a href="./enterprise-channels.html">下一步：擴到企業主流渠道：場景、webhook 差異與延伸路徑 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="WebhookNotifyAdapterTest 為什麼用 MockWebServer？" data-correct="1" data-explain="MockWebServer 在測試裡起真實 HTTP server，能斷言 adapter 真正發出的請求內容。">
+  <button class="opt">為了把測試跑得更快</button>
+  <button class="opt">為了攔截並檢查真實發出的 HTTP 請求</button>
+  <button class="opt">為了取代 LLM 的呼叫</button>
+  <button class="opt">為了把 Sandbox mock 掉</button>
+</div>
+
+<div class="quiz" data-question="adapter 收到 5xx 回應應該怎麼做？" data-correct="0" data-explain="5xx 要往上拋、不能吞掉，讓「通知失敗」不能被誤認為成功。">
+  <button class="opt">往上拋，不能靜默吞掉</button>
+  <button class="opt">重試一次然後當作成功</button>
+  <button class="opt">把錯誤寫進 content 裡</button>
+  <button class="opt">忽略，因為 webhook 不保證送達</button>
+</div>
+
+<div class="quiz" data-question="NotifyTools 未設定 notify_channels 時應如何？" data-correct="2" data-explain="未設定要明確報錯（fail loud），不能默默選預設發出去。">
+  <button class="opt">默默用第一個渠道送出</button>
+  <button class="opt">靜默放棄，當作沒這回事</button>
+  <button class="opt">明確報錯，fail loud</button>
+  <button class="opt">自動建立一個假的渠道</button>
+</div>
+
+<div class="quiz" data-question="enforce-before-send 順序被顛倒，後果是什麼？" data-correct="3" data-explain="先 send 後 enforce 等於訊息先出去才檢查，白名單形同虛設，等於被繞過。">
+  <button class="opt">沒有任何影響</button>
+  <button class="opt">訊息會送達兩次</button>
+  <button class="opt">只會讓測試變慢</button>
+  <button class="opt">等同白名單被繞過</button>
+</div>
+
+<div class="quiz" data-question="用哪個工具斷言 enforce 先於 send 呼叫？" data-correct="1" data-explain="Mockito 的 InOrder 能明確斷言兩次 mock 呼叫的次序。">
+  <button class="opt">assertEquals 比較回傳值</button>
+  <button class="opt">Mockito 的 InOrder</button>
+  <button class="opt">JUnit 的 @BeforeEach</button>
+  <button class="opt">透過 sleep 計時推斷</button>
+</div>
+
+<div class="quiz" data-question="「介面中性自測」這道手動檢查在做什麼？" data-correct="0" data-explain="自問換成別家 SDK 要不要改簽名，答案必須是不用——驗證介面真的中性。">
+  <button class="opt">問自己換 SDK 是否需改簽名</button>
+  <button class="opt">問自己 webhook 是否保証送達</button>
+  <button class="opt">問自己資料是否加密</button>
+  <button class="opt">問自己測試通過與否</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Notify 出站 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

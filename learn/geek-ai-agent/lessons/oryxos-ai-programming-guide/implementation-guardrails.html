@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>實施護欄：analyze 防漂移與五個易錯點</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>實施護欄：讓 AI 跑在軌道上</h1>
+<p class="meta">Step 4/5 · OryxOS AI 編程指南</p>
+
+<h2>學習目標</h2>
+<p>能列出跨 US 的協作動作與五個最容易寫錯的點，並在 AI 跑偏時知道怎麼修正。</p>
+
+<h2>為什麼需要護欄</h2>
+<p>即使準備階段做得再完美，真正的實作還是會遇到一個根本問題：AI agent 的<strong>上下文會斷</strong>。它做 US-3 的時候，可能已經忘了 US-1 定下的 provider 規則；它生成程式碼的時候，可能已經偏離了憲法。護欄就是為了在偏離發生時把它拉回來。</p>
+
+<h2>跨 US 的四個協作動作</h2>
+<p>整個實作過程有四個必須反覆執行的動作：</p>
+<ol>
+<li><strong>每個 US 跑完後跑一次 <code>/speckit.analyze</code></strong>。它做跨 artifact 的一致性檢查（constitution ↔ spec ↔ plan ↔ tasks），只讀不改、只報告問題。官方建議的時機是 tasks 之後、implement 之前。</li>
+<li><strong>發現 AI 偏離憲法時立刻糾正</strong>。不要等到整個 US 做完才回頭改——那時錯誤已經擴散。</li>
+<li><strong>上下文丟失時，重讀 spec、plan 與最近的程式碼</strong>。這是把斷掉的上下文重新接上的標準動作。</li>
+<li><strong>每個 US 完成後做一次 git commit</strong>。有了 commit 邊界，出錯時才知道該退回哪裡。</li>
+</ol>
+
+<h2>五個最容易寫錯的點</h2>
+<p>這些是 OryxOS 專案裡反覆出問題的地方，值得事先背下來：</p>
+<table>
+<thead>
+<tr><th>易錯點</th><th>正確做法</th></tr>
+</thead>
+<tbody>
+<tr><td>Spring AI 自動工具執行被打開</td><td>在任務裡明確關閉，工具才不會被呼叫兩次</td></tr>
+<tr><td>provider 用型別掃描自動註冊</td><td>改用顯式的 name → ChatModel 映射</td></tr>
+<tr><td>Tool 被拆成多個模組</td><td>保持 Tool 的單一抽象，不要按工具種類拆模組</td></tr>
+<tr><td>SkillLoader 被當成 Tool</td><td>SkillLoader 是載入器，不是工具；兩者職責不同</td></tr>
+<tr><td>審計表沒有被持久化</td><td>US-5 就要把審計表寫進 SQLite，對應憲法原則</td></tr>
+</tbody>
+</table>
+<p>這五點的共通性很明顯：它們都是<strong>憲法已經寫明、但 AI 因為上下文丟失或偷懶而略過</strong>的地方。這也是為什麼 analyze 要反覆跑——它正是用來抓這種跨階段的遺漏。</p>
+
+<h2>實作上的常見挑戰</h2>
+<p>除了上述五個易錯點，還有幾個會拖慢進度的現實挑戰，以及它們的處理方式：</p>
+<ul>
+<li><strong>AI 偏離憲法</strong>：重讀 constitution.md，把偏離的地方擋下。</li>
+<li><strong>跨 US 的上下文斷裂</strong>：重讀 spec、plan 與最近的程式碼。</li>
+<li><strong>analyze 被跳過</strong>：把它設成硬性步驟，不是「有空才跑」。</li>
+<li><strong>MCP 整合踩坑</strong>：先用一個最小的 MCP server 測連線，確認通了再接真的工具。</li>
+<li><strong>Java 基礎不足</strong>：這是前提——Spring Boot、Maven、JPA 不熟的話，會卡在跟 AI 無關的地方。</li>
+</ul>
+
+<h2>工具本身的使用紀律</h2>
+<p>最後是關於 Spec-Kit 這把工具本身的三條紀律：</p>
+<ol>
+<li><strong>主體開發期間鎖定一個特定的 Specify CLI 版本</strong>，避免工具更新造成行為漂移；</li>
+<li><strong>永遠以官方文件為準</strong>，不要憑記憶或二手教學操作；</li>
+<li><strong>只用官方核心命令，不要用社群那七十多個擴充套件</strong>——它們品質不一，會引入不確定性。</li>
+</ol>
+<blockquote>
+<p>護欄的本質不是「不信任 AI」，而是承認上下文會斷、上下文斷了行為就會漂——所以要用外部機制（analyze、commit 邊界、憲法）把漂移拉回來。</p>
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./split-by-user-story.html">← 上一步：按 user story 拆解：US-1 → US-2 → (US-3 ∥ US-4) → US-5</a></div>
+  <div><a href="./increment-phase.html">下一步：增量階段：手動提示詞工作流與 artifact 對接 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="/speckit.analyze 官方建議的最佳時機是什麼？" data-correct="1" data-explain="analyze 排在 tasks 之後、implement 之前，做跨 artifact 一致性檢查。">
+  <button class="opt">在 specify 之後、plan 之前</button>
+  <button class="opt">在 tasks 之後、implement 之前</button>
+  <button class="opt">在 implement 全部完成之後</button>
+  <button class="opt">在 constitution 完成之前</button>
+</div>
+
+<div class="quiz" data-question="為什麼要在每個 US 完成後做一次 git commit？" data-correct="3" data-explain="commit 提供清楚的邊界，出錯時才知道該退回哪個狀態。">
+  <button class="opt">讓 CI 能自動部署到正式環境</button>
+  <button class="opt">因為 Spec-Kit 要求強制提交</button>
+  <button class="opt">避免 AI 修改到憲法檔案</button>
+  <button class="opt">提供清楚的邊界便於退回</button>
+</div>
+
+<div class="quiz" data-question="provider 實作時應避免哪一種做法？" data-correct="0" data-explain="應用顯式的 name → ChatModel 映射，不要用型別掃描自動註冊。">
+  <button class="opt">用型別掃描自動註冊 provider</button>
+  <button class="opt">用顯式名稱映射對應模型</button>
+  <button class="opt">把 provider 放在獨立模組中</button>
+  <button class="opt">在 boot 模組完成組裝設定</button>
+</div>
+
+<div class="quiz" data-question="SkillLoader 與 Tool 的關係是什麼？" data-correct="2" data-explain="SkillLoader 是載入器而非工具，兩者職責不同，不能混為一談。">
+  <button class="opt">SkillLoader 是 Tool 的子類別</button>
+  <button class="opt">SkillLoader 就是一種內建 Tool</button>
+  <button class="opt">SkillLoader 是載入器不是 Tool</button>
+  <button class="opt">SkillLoader 只能載入 Tool 定義</button>
+</div>
+
+<div class="quiz" data-question="MCP 整合踩坑時，建議的排查方式是什麼？" data-correct="1" data-explain="先用一個最小的 MCP server 測通連線，再接真實工具。">
+  <button class="opt">直接接上正式環境的完整工具</button>
+  <button class="opt">先用最小 MCP server 測連線</button>
+  <button class="opt">跳過 MCP 改用型別掃描註冊</button>
+  <button class="opt">把 MCP client 併入 Tool 模組</button>
+</div>
+
+<div class="quiz" data-question="關於 Spec-Kit 社群擴充套件，建議的態度是什麼？" data-correct="3" data-explain="只用官方核心命令，社群七十多個擴充套件品質不一，會引入不確定性。">
+  <button class="opt">全部安裝以獲得最多功能</button>
+  <button class="opt">只安裝下載數最高的幾個</button>
+  <button class="opt">自行 fork 後全部導入使用</button>
+  <button class="opt">只用官方核心命令避免風險</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · OryxOS AI 編程指南 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

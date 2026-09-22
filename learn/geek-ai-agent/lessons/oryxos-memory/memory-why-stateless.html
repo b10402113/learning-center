@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>為什麼 Agent 需要記憶：無狀態 LLM 與短期／長期記憶</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>為什麼 Agent 需要記憶</h1>
+<p class="meta">Step 1/6 · Memory</p>
+
+<h2>學習目標</h2>
+<p>能說清 LLM 每次呼叫都無狀態、context window 有限且昂貴，因此 Agent 必須在視窗之外管理記憶；並能區分短期（工作）記憶與長期記憶（情節／語意／程序）。</p>
+
+<h2>先看一個真實到讓人尷尬的故事</h2>
+<p>一個 Agent 星期一通過了所有評測，表現得像個可靠的助理。星期三，同一個使用者回來，Agent 卻問他「請問您怎麼稱呼？」。模型沒換、程式沒改，為什麼短短兩天就「失憶」了？</p>
+<p>這不是模型問題，是<strong>記憶問題</strong>。而且它不是個案——把 Agent 從 demo 推進到生產，記憶是第一號障礙。</p>
+
+<h2>根本原因一：LLM 每一次呼叫都是無狀態的</h2>
+<p>你呼叫一次模型，它生成一次回覆，然後就把這次互動忘得乾乾淨淨。它沒有「上一次我們聊到哪」的概念。所以如果希望它記得，<strong>歷史必須由呼叫方自己在每一次請求裡重新塞回去</strong>。</p>
+<blockquote>打個比方：你每次打電話給同一位顧問，但他每次接起電話前都被施了一次失憶咒。要讓他接得上話，你得在開口前先把整段前情提要重講一遍。</blockquote>
+<p>這解釋了為什麼「多輪對話」其實是個錯覺：模型不是記住了，是每一輪都有人（你的程式）把過去的訊息重新餵給它。</p>
+
+<h2>根本原因二：context window 又小又貴</h2>
+<p>就算你想把所有歷史都塞回去，也塞不下。context window（上下文視窗）是模型單次能看到的文字總量，它有兩個硬限制：</p>
+<ul>
+<li><strong>有限</strong>：視窗再大也有上限，跨會話、跨月累積的偏好與事實必然超出去。</li>
+<li><strong>昂貴</strong>：塞進去的每個字都要計費，而且越長越貴、越長模型越容易分心抓不到重點。</li>
+</ul>
+<p>所以真正的答案不是「塞更多」，而是<strong>在視窗之外管理記憶</strong>——該留的留下、該撈的撈回來、該忘的丟掉。這就是 Agent Memory 的本質。</p>
+
+<h2>短期記憶 vs 長期記憶</h2>
+<p>要管理記憶，先得分清楚兩種。它們不是「同一種東西的長短版」，而是位置與壽命都不同的兩層：</p>
+<table>
+<thead>
+<tr><th></th><th>短期／工作記憶</th><th>長期記憶</th></tr>
+</thead>
+<tbody>
+<tr><td>放在哪</td><td>當前對話／任務的上下文，就在視窗裡</td><td>落地到視窗之外，需要時再檢索回來</td></tr>
+<tr><td>壽命</td><td>短，會話結束就沒了</td><td>跨會話、跨天數持續存在</td></tr>
+<tr><td>容量</td><td>受視窗限制</td><td>理論上可持續累積</td></tr>
+<tr><td>速度</td><td>快，直接就在眼前</td><td>慢，要先撈出來才能用</td></tr>
+</tbody>
+</table>
+<p>長期記憶內部還能再細分成三類，這個分類在後面挑選方案時很有用：</p>
+<ul>
+<li><strong>情節記憶（episodic）</strong>：發生過的事件——「上週三部署失敗過一次」。</li>
+<li><strong>語意記憶（semantic）</strong>：事實與偏好——「使用者偏好用繁體中文、關注 AI 與晶片」。</li>
+<li><strong>程序記憶（procedural）</strong>：怎麼做某件事，有時以技能或規則形式存在——「這個專案的發版流程要先跑 mvn verify」。</li>
+</ul>
+
+<h2>兩層之間的迴圈</h2>
+<p>短期與長期不是各管各的。核心迴圈是：<strong>把短期裡重要的內容搬進長期儲存，並在需要時把相關的長期內容撈回上下文</strong>。搬得太少，會話一結束就白聊；搬得太多，長期倉庫變垃圾場、檢索變噪音。這個取捨就是後面幾步要展開的「提煉」與「壓縮」。</p>
+
+<h2>接到 OryxOS：這個能力長在哪</h2>
+<p>OryxOS 把記憶列為三大核心能力之一——ReAct 負責「會想」、Tool 負責「會做」、Memory 負責「記得住」。具體落點在 ReAct 迴圈組裝 prompt 的那一步：<code>PromptBuilder</code> 每一輪都會把長期記憶注入 system prompt 的一個獨立段落。換句話說，Agent 之所以看起來記得，就是因為每一輪都有人把記憶重新放回它眼前。這條注入管線怎麼接、記憶又存在哪裡，是接下來五步的主線。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./memory-compression-extraction.html">下一步：壓縮 vs 提煉 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 Agent 需要記憶系統？" data-correct="1" data-explain="LLM 每次呼叫都無狀態，歷史必須由呼叫方重新注入，而 context window 有限且昂貴，所以要在視窗之外管理記憶。">
+  <button class="opt">因為模型訓練資料太舊需要更新</button>
+  <button class="opt">因為 LLM 無狀態且視窗有限昂貴</button>
+  <button class="opt">因為模型不支援多輪對話</button>
+  <button class="opt">因為記憶能讓模型變得更聰明</button>
+</div>
+
+<div class="quiz" data-question="「Agent 能多輪對話」這句話最準確的理解是什麼？" data-correct="2" data-explain="模型並沒有記住，而是呼叫方每一輪都把過去的訊息重新塞回請求裡。">
+  <button class="opt">模型內部自動保存了對話狀態</button>
+  <button class="opt">模型透過 API 記住了上一次請求</button>
+  <button class="opt">呼叫方每輪重新注入了歷史訊息</button>
+  <button class="opt">模型對同一使用者的請求有快取</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項屬於「語意記憶」？" data-correct="0" data-explain="語意記憶是事實與偏好，例如使用者偏好繁體中文；事件屬情節記憶，流程屬程序記憶。">
+  <button class="opt">使用者偏好用繁體中文與關注晶片</button>
+  <button class="opt">上週三部署失敗過一次</button>
+  <button class="opt">發版前要先跑 mvn verify</button>
+  <button class="opt">昨天問過北京天氣</button>
+</div>
+
+<div class="quiz" data-question="長期記憶與短期記憶最關鍵的差別在哪？" data-correct="3" data-explain="短期記憶留在視窗內、會話結束即失；長期記憶落在視窗之外、跨會話持續並可按需檢索回來。">
+  <button class="opt">長期記憶比較準，短期記憶比較不準</button>
+  <button class="opt">長期記憶用向量，短期記憶用文字</button>
+  <button class="opt">長期記憶給人看，短期記憶給模型看</button>
+  <button class="opt">長期記憶外置持久，短期記憶在視窗內</button>
+</div>
+
+<div class="quiz" data-question="Agent Memory 的本質是什麼？" data-correct="1" data-explain="本質是在有限且昂貴的視窗之外管理「記住」：留該留的、撈需要用的、忘該忘的。">
+  <button class="opt">把模型微調成記得使用者</button>
+  <button class="opt">在視窗之外管理「記住」這件事</button>
+  <button class="opt">把 context window 擴到無限大</button>
+  <button class="opt">把所有歷史原文永久塞進 prompt</button>
+</div>
+
+<div class="quiz" data-question="OryxOS 的記憶能力具體接在哪個環節？" data-correct="2" data-explain="PromptBuilder 每輪組裝 prompt 時把長期記憶注入 system prompt 的獨立段落。">
+  <button class="opt">在 Provider 層攔截並改寫使用者訊息</button>
+  <button class="opt">在 Tool 執行後自動摘要所有結果</button>
+  <button class="opt">PromptBuilder 每輪注入 system prompt</button>
+  <button class="opt">在 CLI 啟動時把歷史寫進設定檔</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Memory · Step 1/6</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

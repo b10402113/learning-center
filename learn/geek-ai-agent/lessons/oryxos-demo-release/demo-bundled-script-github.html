@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Demo 三：目錄帶腳本的每日 GitHub 日報</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Demo 三：目錄帶腳本的每日 GitHub 日報</h1>
+<p class="meta">Step 3/6 · Demo 與發布</p>
+
+<h2>學習目標</h2>
+<p>能說明為何把抓取 GitHub trending 的確定性工作寫成目錄裡的 Python 腳本、由 Agent 用 <code>shell</code> 執行，並解釋子行程自行連網如何繞過 <code>http_get</code> 網域白名單、把信任轉移到 Agent 作者身上。</p>
+
+<h2>確定性的事，就交給確定性的工具</h2>
+<p>天氣與日報都是「抓一段文字，讓模型重組」。GitHub 日報不同：它要的是 GitHub 上「今日熱門、本月熱門、本月 AI 熱門」三組排名，這些是可以精確算出來的資料。如果硬用 <code>http_get</code> 抓網頁再讓模型拼，模型可能漏抓、可能順序顛倒，這種確定性工作交給模型是自找麻煩。</p>
+<p>正確的分工是：<strong>把抓取寫成腳本，讓確定性的部分確定地完成；把組稿留給模型，讓語言的部分由 LLM 處理。</strong> 腳本負責拿到結構化資料，模型負責把資料寫成人話。</p>
+
+<h2>目錄長什麼樣</h2>
+<p>Agent 目錄是 <code>.oryxos/agents/github-daily/</code>，比日報多了一個 <code>scripts/</code> 子目錄。AGENT.md 的 frontmatter 把工具換成 <code>shell</code> 與 <code>notify</code>：</p>
+<pre><code>---
+name: github-daily
+provider: deepseek/deepseek-chat
+tools: [shell, notify]
+schedules:
+  cron: "0 30 9 * * *"
+  zone: Asia/Shanghai
+  message: 到点了，按你的说明执行。
+---</code></pre>
+<p>body 描述的流程是：執行 <code>python scripts/github_trending.py</code> 拿到 JSON（內含 <code>today</code>、<code>month</code>、<code>ai</code> 三組，每項有 name／stars／desc／url）→ 組成三段（今日 top5、本月 top5、本月 AI）→ AI 段優先套用記憶偏好 → 通知。</p>
+<p>腳本 <code>scripts/github_trending.py</code> 用 GitHub 的 Search API（<code>https://api.github.com/search/repositories</code>），以 <code>created:&gt;日期</code> 搭配 stars 排序來「近似 trending」——因為 GitHub 官方沒有 trending API。未認證的呼叫每分鐘上限 10 次，零外部依賴，夠這個每天跑一次的 Agent 用。</p>
+
+<h2>關鍵觀念：子行程連網，繞過了白名單</h2>
+<p>這裡有一個必須對觀眾講清楚的信任邊界。前面的 <code>http_get</code> 會受 <code>http.allowed_domains</code> 的網域白名單管轄，但那個白名單只約束「內建工具」，管不到 Python 子行程自己發出的網路請求。也就是說，<code>github_trending.py</code> 對 <code>api.github.com</code> 的連線，是子行程自己發的，不受白名單檢查。</p>
+<p>這帶來一個誠實的結論：<strong>安裝 <code>github-daily</code> 這個 Agent，等於信任它的作者。</strong> 腳本裡寫了什麼網路行為，你只能靠信任作者來保證。這不是設計缺陷，而是「一目錄一 Agent」機制的必然——把能力交給使用者自由擴充，就必須把信任一併移轉過去。這也是為什麼核心階段的 Sandbox 只做兩道白名單：<code>shell.allowed_commands</code> 允許 <code>python</code>、<code>file.allowed_paths</code> 把檔案存取限制在 Agent 自己的 <code>scripts/</code>。這兩道能限制「能跑什麼、能碰哪些檔」，但不能限制「子行程連去哪裡」。</p>
+<p>Sandbox 的前提因此有三項：允許 <code>python</code>、把 <code>api.github.com</code> 加進 <code>http.allowed_domains</code>（主要為了審計與未來收緊）、以及讓 <code>file.allowed_paths</code> 涵蓋 <code>.oryxos/agents/github-daily/</code>。</p>
+
+<h2>播種偏好與對賬</h2>
+<p>先種偏好：「我更關注 Agent 框架和推理引擎方向的開源項目」。接著用同一招除錯——先推再看時鐘。對賬要核對四件事：腳本真的跑了（<code>tool_invocations</code> 裡有 shell／py 的呼叫）、程式碼本身沒有進入 context 但它的 JSON 進去了、記憶偏好讓 Agent 框架與推理引擎的專案排到前面、以及最後由 LLM 完成組稿而 OryxOS 不解析任何步驟。</p>
+<p>「程式碼不進 context、JSON 才進」這點值得多想一秒：Agent 執行的是腳本這個動作，模型看到的是腳本的輸出，而不是腳本內容。這正是確定性資料與語言組稿各司其職的證據。</p>
+
+<h2>三種目錄形態，到此收齊</h2>
+<table>
+<thead>
+<tr><th>Demo</th><th>目錄多出來的一層</th><th>交給誰</th></tr>
+</thead>
+<tbody>
+<tr><td>每日天氣</td><td>無，光桿 AGENT.md</td><td>LLM + 內建工具</td></tr>
+<tr><td>每日科技日報</td><td><code>skills/*.md</code> 子指令</td><td>LLM + 按需載入的規範</td></tr>
+<tr><td>每日 GitHub 日報</td><td><code>scripts/*.py</code> 腳本</td><td>腳本取得資料、LLM 組稿</td></tr>
+</tbody>
+</table>
+<p>三個 Demo 合起來，就是第二十九節「一目錄一 Agent」的完整驗收：目錄能容納多豐富的能力，取決於你往裡面放什麼，而不是改動底座。</p>
+
+<div class="lesson-nav">
+  <div><a href="./demo-sub-instruction-digest.html">← 上一步：Demo 二：目錄帶子指令的每日科技日報</a></div>
+  <div><a href="./base-agent-boundary.html">下一步：底座與 Agent 的分界 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼抓 GitHub trending 要寫成腳本而不是用 http_get？" data-correct="2" data-explain="trending 是可精確計算的確定性工作，交給腳本才可靠；模型只適合做後段的語言組稿。">
+  <button class="opt">因為 http_get 無法解析 JSON 回應</button>
+  <button class="opt">因為腳本執行比工具呼叫更安全</button>
+  <button class="opt">因為這是確定性工作，腳本可靠、模型易出錯</button>
+  <button class="opt">因為 shell 是唯一能連網的工具</button>
+</div>
+
+<div class="quiz" data-question="子行程網路請求與 http_get 白名單的關係是什麼？" data-correct="1" data-explain="http.allowed_domains 只管內建工具，管不到 Python 子行程自己發出的網路請求。">
+  <button class="opt">兩者受同一份網域白名單約束</button>
+  <button class="opt">子行程連網不受白名單約束</button>
+  <button class="opt">子行程連網會自動繼承白名單</button>
+  <button class="opt">白名單會阻止所有子行程執行</button>
+</div>
+
+<div class="quiz" data-question="「安裝 github-daily 等於信任它的作者」這句話的根據是什麼？" data-correct="0" data-explain="腳本可以自行對外連網，不受白名單限制，所以只能靠信任作者來保證行為。">
+  <button class="opt">腳本能自行連網，不受白名單限制</button>
+  <button class="opt">腳本會被自動上傳到雲端執行</button>
+  <button class="opt">腳本取得系統管理員權限</button>
+  <button class="opt">腳本內容會被模型任意改寫</button>
+</div>
+
+<div class="quiz" data-question="核心階段 Sandbox 對這個 Agent 做的兩道白名單是什麼？" data-correct="3" data-explain="shell.allowed_commands 允許 python，file.allowed_paths 把檔案限制在 Agent 的 scripts/。">
+  <button class="opt">模型白名單與 webhook 白名單</button>
+  <button class="opt">記憶白名單與排程白名單</button>
+  <button class="opt">MCP 白名單與 notify 白名單</button>
+  <button class="opt">允許的命令白名單與可存取的檔案路徑白名單</button>
+</div>
+
+<div class="quiz" data-question="對賬時「程式碼不進 context、JSON 才進」說明了什麼？" data-correct="2" data-explain="Agent 執行腳本這個動作，模型看到的是輸出 JSON，不是腳本內容，正是分工的證據。">
+  <button class="opt">腳本執行失敗但系統仍回報成功</button>
+  <button class="opt">模型偷偷讀了腳本再自己重寫</button>
+  <button class="opt">模型看到的是腳本輸出，而非腳本內容</button>
+  <button class="opt">JSON 被寫進長期記憶而非上下文</button>
+</div>
+
+<div class="quiz" data-question="為了讓這個 Agent 能跑 python，Sandbox 前提必須包含什麼？" data-correct="1" data-explain="需要在 shell.allowed_commands 允許 python，並讓檔案路徑白名單涵蓋該 Agent 目錄。">
+  <button class="opt">把 python 加入 MCP server 清單</button>
+  <button class="opt">在 shell.allowed_commands 允許 python</button>
+  <button class="opt">把腳本改寫成 Java Bean</button>
+  <button class="opt">關閉 ShellTools 的審計寫入</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Demo 與發布 · Step 3/6</p>
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

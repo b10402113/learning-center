@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跨重啟恢復與多 Agent 並存</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>跨重啟恢復與多 Agent 並存</h1>
+<p class="meta">Step 5/6 · 全流程串聯</p>
+
+<h2>學習目標</h2>
+<p>能用一次 kill／重啟驗證狀態全數外置，並用兩個不同 Profile 驗證工具、會話、排程三條隔離邊界互不打架。</p>
+
+<h2>測試的可以是一句架構承諾</h2>
+<p>技術方案裡有一句很硬的承諾：<strong>所有狀態都活在進程之外（SQLite 加上檔案系統），進程本身什麼都不存。</strong>這句話不是設計偏好，而是未來要邁向分布式的前提——只有當每個實例都是無狀態的，你才能放心地起第二個、第三個實例，然後讓流量在它們之間流動。</p>
+<p>但承諾要能被驗證才有意義。驗證方法出奇簡單：<strong>讓它死一次，再活過來，看該不該忘的東西有沒有忘。</strong>這就是跨重啟恢復測試。</p>
+
+<h2>怎麼跑這一趟</h2>
+<p>先在活著的系統上累積狀態：跑幾段對話、寫進一些記憶、讓一個定時任務至少觸發過一次。然後 <code>kill</code> 掉進程、重新 <code>serve</code> 起來，逐項核對：</p>
+<table>
+<thead>
+<tr><th>要回來的東西</th><th>為什麼它該回來</th><th>怎麼看</th></tr>
+</thead>
+<tbody>
+<tr><td>sessions</td><td>對話歷史存在 SQLite</td><td><code>GET /sessions/{id}</code> 看得到重啟前的完整歷史</td></tr>
+<tr><td>memory</td><td><code>MEMORY.md</code> 是一個檔案</td><td>檔案天生跨重啟，讀出來即可</td></tr>
+<tr><td>scheduled tasks</td><td>定義從 skill 重新註冊，狀態與歷史還在兩張表</td><td><code>GET /api/v1/schedules</code> 一次看全部</td></tr>
+<tr><td>audit</td><td>審計落庫、不隨進程消失</td><td>重啟前後的 <code>llm_calls</code> 連續、不中斷</td></tr>
+</tbody>
+</table>
+
+<h2>哪一項沒回來，就是一個隱患</h2>
+<p>這裡的判讀邏輯要反過來想：<strong>任何一項沒能回來，都證明某個狀態偷偷留在了進程的記憶體裡。</strong>例如排程觸發次數如果重啟後歸零，代表 <code>run_count</code> 其實只記在記憶體，只是「看起來」有在累加。這種隱藏狀態在單機時可能無害，一旦走向分布式就會變成致命傷——兩個實例各自記一半，誰都不是真相。</p>
+<p>所以重啟測試不是在驗「資料庫有沒有壞」，而是在<strong>逼出所有偷偷留在記憶體裡的狀態</strong>。這是走向分布式之前必須先消滅的一類隱患。</p>
+
+<h2>多 Agent 並存：同一個實例，兩個不同的 Agent</h2>
+<p>「OS」這個字要成立，核心階段的最低門檻是：<strong>同一個實例上能跑多個 Profile。</strong>做法是配置兩個明顯不同的 Profile——例如一個只掛檔案工具、一個只掛 HTTP 工具——然後交替使用它們，驗證三條隔離邊界。</p>
+<table>
+<thead>
+<tr><th>隔離邊界</th><th>要驗什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>工具隔離</td><td>A 的對話裡，工具清單<strong>不得</strong>出現 B 的專屬工具（<code>tools</code> 過濾確實生效）</td></tr>
+<tr><td>會話隔離</td><td>A 與 B 的 session 不混在一起——session id 帶著 Profile 名；要特別留意有沒有程式碼用了「預設 Profile」而把兩者混在一起</td></tr>
+<tr><td>排程隔離</td><td>A 的排程任務拋出例外時，<strong>不得</strong>阻止 B 的下一次觸發</td></tr>
+</tbody>
+</table>
+<p>這三條必須<strong>全部</strong>驗，不能只看工具清單。工具隔離最容易被想到，但也最容易讓人誤以為「驗完工具就等於驗完隔離」。真正會出事的往往是會話混線與排程互相拖累——它們不會在畫面上一眼看出來，只會在使用者發現「我怎麼看到別人的歷史」時才爆開。</p>
+
+<h2>為什麼這是底座與 Demo 的分水嶺</h2>
+<p>把這一課放回整條主線看：一個 Agent demo 只需要在演示的那幾分鐘裡活著，關掉重開就算資料沒了也無所謂；但一個底座必須在<strong>沒人看的時候仍然維持正確</strong>——重啟不失憶、多個 Agent 不打架。前者是表演，後者是基礎設施。</p>
+<p>跨重啟恢復與多 Agent 並存，正是這兩者之間的分水嶺。走過這一課，你手上才真的是一台「自己跑得穩」的底座，而不只是一條跑得起來的主流程。</p>
+
+<div class="lesson-nav">
+  <div><a href="./scheduled-tasks-subsystem.html">← 上一步：定時任務子系統：定義、執行、持久化、管理</a></div>
+  <div><a href="./stability-acceptance.html">下一步：從能跑到跑得穩：穩定打磨與兩線驗收 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="跨重啟恢復測試真正想驗證的是什麼？" data-correct="2" data-explain="它要逼出所有偷偷留在進程記憶體裡的狀態，確保實例無狀態。">
+  <button class="opt">資料庫的寫入速度是否夠快</button>
+  <button class="opt">進程能否在短時間內重啟</button>
+  <button class="opt">狀態是否全都在進程之外</button>
+  <button class="opt">記憶檔的格式是否正確</button>
+</div>
+
+<div class="quiz" data-question="為什麼 MEMORY.md 天生就能跨重啟？" data-correct="1" data-explain="它是檔案系統上的一個檔案，本來就在進程之外。">
+  <button class="opt">因為它被快取在記憶體中</button>
+  <button class="opt">因為它就是一個檔案</button>
+  <button class="opt">因為它由排程器週期備份</button>
+  <button class="opt">因為它存在瀏覽器本機</button>
+</div>
+
+<div class="quiz" data-question="某項狀態重啟後沒回來，代表什麼？" data-correct="3" data-explain="代表有狀態被藏在進程記憶體裡，這在分布式下會成為致命傷。">
+  <button class="opt">資料庫檔案已經損毀</button>
+  <button class="opt">排程的 cron 寫錯了</button>
+  <button class="opt">重啟順序不夠正確</button>
+  <button class="opt">有狀態暗藏在記憶體</button>
+</div>
+
+<div class="quiz" data-question="多 Agent 並存需要驗的三條邊界是哪一組？" data-correct="0" data-explain="工具、會話、排程三條邊界都要驗，不能只看工具清單。">
+  <button class="opt">工具、會話、排程</button>
+  <button class="opt">模型、金鑰、網路</button>
+  <button class="opt">日誌、指標、告警</button>
+  <button class="opt">記憶、沙箱、通知</button>
+</div>
+
+<div class="quiz" data-question="驗多 Agent 時，只檢查工具清單的盲點是什麼？" data-correct="2" data-explain="真正會爆的常是會話混線與排程互相拖累，畫面上一眼看不出來。">
+  <button class="opt">工具清單無法被程式查詢</button>
+  <button class="opt">工具清單每次都會變動</button>
+  <button class="opt">會話混線與排程拖累看不出來</button>
+  <button class="opt">工具清單需要真 key 才能驗</button>
+</div>
+
+<div class="quiz" data-question="A 的排程任務拋錯，B 的下一次觸發應該如何？" data-correct="1" data-explain="排程失敗要隔離，A 的錯誤不得阻止 B 照常觸發。">
+  <button class="opt">也一起被暫停等待修復</button>
+  <button class="opt">照常觸發不受影響</button>
+  <button class="opt">被標記為同一個失敗任務</button>
+  <button class="opt">改用 A 的歷史重新執行</button>
+</div>
+
+<div class="quiz" data-question="為什麼說重啟與多 Agent 是底座與 Demo 的分水嶺？" data-correct="3" data-explain="Demo 只要活過演示那幾分鐘；底座必須在沒人看時仍維持正確。">
+  <button class="opt">因為它讓系統跑得比 Demo 更快</button>
+  <button class="opt">因為它讓部署只需要一台機器</button>
+  <button class="opt">因為它讓模型的成本大幅下降</button>
+  <button class="opt">因為底座要在沒人看時仍正確</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 全流程串聯 · Step 5/6</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

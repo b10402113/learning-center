@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>動態管理：免重啟掃描、上傳即上線與生命週期編排</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>動態管理：免重啟掃描、上傳即上線與生命週期編排</h1>
+<p class="meta">Step 4/5 · 插件化 Agent 與動態管理</p>
+
+<h2>學習目標</h2>
+<p>能設計「免重啟」的動態註冊：兩條錄入路徑共用同一個 register，並說出刪除／更新為何必須先處理排程 handle。</p>
+
+<h2>還差最後一哩：重啟這條尾巴</h2>
+<p>第三課結束時，一個目錄已經能推導出一個會自跑的 Agent。但入口仍然是「登入伺服器、把檔案放上去、重啟才生效」。這對業務系統來說等於不可達：管理台只能看，不能管；業務想上一個新 Agent，得找工程師上機器操作。</p>
+<p>這一課要把「重啟」這條尾巴剪掉，做到三件可驗證的終態：</p>
+<ol>
+<li><strong>建立／上傳即上線</strong>——<code>POST /api/v1/agents</code> 回 200，免重啟，Agent 立刻出現在清單、到點自跑。</li>
+<li><strong>丟目錄即上線</strong>——用 scp／git／編輯器把一個目錄放進 <code>.oryxos/agents/</code>，幾秒內自動註冊可用，不必經過 API。</li>
+<li><strong>一句話生成</strong>——在管理台說「每天早上九點查北京天氣，把穿搭建議發到團隊群」，系統用 LLM 產出一份合法的 <code>AGENT.md</code> 供預覽、編輯、一鍵建立（這一條下一課細講）。</li>
+</ol>
+
+<h2>一個真相源，兩條錄入路徑</h2>
+<p>設計的第一個決定：真相源只有一個——<code>.oryxos/agents/</code>，一個子目錄一個 Agent。但有兩條路可以走進來：</p>
+<ol>
+<li><strong>API 上傳</strong>：<code>POST /api/v1/agents</code>，本質是「驗證後把 Agent 目錄寫進 <code>.oryxos/agents/&lt;name&gt;/</code>」。</li>
+<li><strong>手動丟目錄</strong>：透過 scp、git pull 或編輯器放進去。</li>
+</ol>
+<p>關鍵在於：目錄是<strong>即時被監看</strong>的，不是啟動時掃一次。新增一個 <code>WorkspaceWatcher</code>，開機時做一次全掃，之後用 JDK <code>WatchService</code> 盯著 <code>.oryxos/agents/</code>。它被設計成<strong>唯一的註冊入口</strong>：</p>
+<pre><code>目錄被新增/修改/刪除
+        │
+        ▼
+WorkspaceWatcher → deriveProfile 驗證
+        │
+        ▼
+ProfileRegistry.register/remove
+AgentScheduler.registerProfile/unregister
+</code></pre>
+<p>因為只有一個入口，所以「API 上傳即上線」跟「丟目錄即上線」是同一件事——API 只是幫你把目錄寫好，再叫同一個 <code>register(agentDir)</code>；watcher 則是收到檔案事件時叫同一個 <code>register(agentDir)</code>。刪除也是對稱的。</p>
+<blockquote><strong>為什麼這樣設計？</strong> 動態管理的本質是「改目錄就等於改執行時」。如果 API 一條實作、watcher 又一條，兩邊遲早行為不一致。收斂到單一入口，就保證了兩條路造出來的 Agent 一模一樣。</blockquote>
+<p>另外，<code>WorkspaceWatcher</code> 是一個背景 daemon 執行緒（跟排程執行緒同性質）。它是基礎設施，不在請求鏈裡做非同步模型，所以不違反「同步加虛擬執行緒」的憲章原則。</p>
+
+<h2>端點與生命週期：只編排，不重複實作</h2>
+<p>端點本身不引入新能力：<code>deriveProfile</code>、register／unregister／validate 全部沿用第三課；唯一新增的是一個編排者 <code>AgentLifecycleService</code>，負責把步驟排好、失敗時回滾。端點表面：</p>
+<table>
+<thead>
+<tr><th>端點</th><th>作用</th></tr>
+</thead>
+<tbody>
+<tr><td><code>POST /api/v1/agents</code></td><td>驗證 → 寫入目錄 → deriveProfile → 註冊 → 有排程就排</td></tr>
+<tr><td><code>POST /api/v1/agents/generate</code></td><td>一句話 → LLM 產生草稿，只回傳、不落地、不註冊</td></tr>
+<tr><td><code>GET /api/v1/agents</code>、<code>GET /{name}</code></td><td>查詢已定義的 Agent</td></tr>
+<tr><td><code>PUT /api/v1/agents/{name}</code></td><td>編輯 body／provider／notify；若排程變了，先註銷舊 handle 再註冊新的</td></tr>
+<tr><td><code>DELETE /api/v1/agents/{name}</code></td><td>註銷排程 → 移出索引 → 目錄封存到 <code>.oryxos/archive/</code></td></tr>
+<tr><td><code>POST /api/v1/agents/{name}/invoke</code></td><td>第 26 節的無狀態呼叫，不變</td></tr>
+</tbody>
+</table>
+<p>判斷標準仍然是第三課那一條：<strong>API 建立的與手動丟進去的 Agent，行為必須一致</strong>；兩者都收斂在 <code>register(agentDir)</code>，沒有第二份實作。</p>
+
+<h2>刪除與更新：先把語義定死</h2>
+<p>刪除與更新是最容易藏 bug 的地方，所以語義要提前定死。</p>
+<p><strong>刪除</strong>的順序是固定的三步：</p>
+<ol>
+<li>先註銷排程，用第三課存下的 handle。</li>
+<li>再從 <code>ProfileRegistry</code> 移除。</li>
+<li>最後把整個目錄移到 <code>.oryxos/archive/</code>。</li>
+</ol>
+<p>刻意不做物理刪除，是因為它做過的事已經留在審計表裡，它的定義也應該可追溯。</p>
+<p><strong>更新</strong>：改 body 就是覆寫 <code>AGENT.md</code>；因為 <code>ContextLoader</code> 每次都重新讀，所以下次觸發立即生效。但如果<strong>排程也變了</strong>，必須先註銷舊 handle、再註冊新的——否則舊的 cron 會跟新的並存，等於同一個 Agent 觸發兩次。手動刪目錄也對稱：watcher 收到 delete 事件後註銷；API 刪除只是「刪目錄 + 封存」這個更整齊的版本。</p>
+<blockquote class="bad-code"><strong>順序反了會怎樣？</strong> 如果先移除索引與目錄、最後才停排程，中間存在一個時間窗：cron 觸發時去查一份已經不存在的 Profile。這種時序 bug，手動驗收幾乎測不出來，但單元測試用 <code>InOrder</code> 很容易釘死。</blockquote>
+
+<h2>建立流程與失敗回滾</h2>
+<p><code>AgentLifecycleService.create()</code> 依序做四件事，全部複用第三課：</p>
+<ol>
+<li>驗證——provider／tool 存在、名稱不衝突。</li>
+<li>寫入 Agent 目錄。</li>
+<li>呼叫與 <code>WorkspaceWatcher</code> 共用的 <code>register(agentDir)</code>。</li>
+<li>若有排程，註冊排程。</li>
+</ol>
+<p>任何一步失敗就<strong>回滾</strong>：刪掉剛寫入的目錄，絕不留一個半成品 Agent。錯誤碼沿用第 26 節的口徑：名稱已存在、欄位非法、引用不存在的 provider 都是 400（不同代碼）；查詢／更新／刪除不存在的 Agent 是 404；全部走同一套 <code>ApiResponse</code> 外殼，不新造狀態碼。</p>
+
+<h2>工作區瀏覽：必須防目錄穿越</h2>
+<p>動態管理順帶給了管理台一個工作區檔案瀏覽器，端點是 <code>GET /api/v1/workspace/tree</code> 與 <code>GET /api/v1/workspace/file?path=...</code>。這裡有一條強制防線：<strong>目錄穿越（directory traversal）防護</strong>。</p>
+<p>做法是把傳入的 <code>path</code> 正規化，要求它必須落在 <code>.oryxos/</code> 底下，否則回 400。最關鍵的回歸測試就是 <code>file?path=../../etc/passwd</code> 必須被擋成 400——少了這一步，瀏覽器就變成任意檔案讀取漏洞。</p>
+
+<h2>驗收：把編排與失敗路徑固化成測試</h2>
+<p>這一課的複雜度幾乎全在「編排順序」與「失敗回滾」，正好是單元測試的守備範圍：mock 掉 <code>agentStore</code>／<code>profileRegistry</code>／<code>agentScheduler</code>／<code>agentLoader</code>／<code>providerService</code>，用 <code>InOrder</code> 釘順序、用注入例外釘回滾。最有價值的兩條斷言是：</p>
+<ol>
+<li>註冊失敗時，必須回滾已寫入的目錄，而且<strong>絕不進到排程註冊</strong>。</li>
+<li>刪除時，必須<strong>先停排程</strong>再動索引與目錄。</li>
+</ol>
+<p>另外 <code>WorkspaceWatcherTest</code> 要驗「手動丟目錄會觸發註冊、刪除會註銷、一個壞目錄不會拖垮 watcher」；<code>WorkspaceApiControllerTest</code> 要驗目錄穿越回 400。</p>
+
+<div class="lesson-nav">
+  <div><a href="./derive-profile-register.html">← 上一步：掃描→deriveProfile→註冊→自跑：底座零改動的插件機制</a></div>
+  <div><a href="./one-sentence-generation-trust.html">下一步：一句話生成與腳本信任邊界 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 API 上傳與手動丟目錄要共用同一個註冊入口？" data-correct="1" data-explain="共用 register(agentDir) 才能保證兩條路徑造出的 Agent 行為完全一致，不會出現第二份實作。">
+  <button class="opt">為了節省伺服器的記憶體用量</button>
+  <button class="opt">保證兩條路徑行為完全一致</button>
+  <button class="opt">讓 API 擁有比 watcher 更高的權限</button>
+  <button class="opt">因為 WatchService 無法呼叫 API</button>
+</div>
+
+<div class="quiz" data-question="WorkspaceWatcher 用什麼方式讓目錄變更即時生效？" data-correct="2" data-explain="開機全掃一次，之後用 JDK WatchService 監看 .oryxos/agents/，變更即觸發註冊。">
+  <button class="opt">每隔一小時重新掃描目錄一次</button>
+  <button class="opt">每次 API 呼叫時才重掃目錄</button>
+  <button class="opt">開機全掃加 JDK WatchService 監看</button>
+  <button class="opt">依賴使用者手動重啟服務</button>
+</div>
+
+<div class="quiz" data-question="刪除一個 Agent 的正確順序是什麼？" data-correct="0" data-explain="先註銷排程、再移除索引、最後封存目錄；反過來會留下 cron 觸發到不存在 Profile 的時序 bug。">
+  <button class="opt">註銷排程 → 移除索引 → 封存目錄</button>
+  <button class="opt">封存目錄 → 移除索引 → 註銷排程</button>
+  <button class="opt">移除索引 → 註銷排程 → 封存目錄</button>
+  <button class="opt">同時並行執行三個步驟</button>
+</div>
+
+<div class="quiz" data-question="刪除時為什麼用封存而不是物理刪除？" data-correct="3" data-explain="它做過的事留在審計表，定義也應可追溯，所以移到 .oryxos/archive/。">
+  <button class="opt">因為檔案系統不支援刪除目錄</button>
+  <button class="opt">為了節省磁碟讀寫的效能</button>
+  <button class="opt">為了讓排程器可以繼續執行</button>
+  <button class="opt">保留可追溯性，搭配審計紀錄</button>
+</div>
+
+<div class="quiz" data-question="更新 Agent 時若排程有變，必須做什麼？" data-correct="1" data-explain="要先註銷舊 handle 再註冊新的，否則新舊 cron 並存會重複觸發。">
+  <button class="opt">直接覆寫 AGENT.md 即可</button>
+  <button class="opt">先註銷舊 handle 再註冊新的</button>
+  <button class="opt">停用整個排程器再重啟</button>
+  <button class="opt">把舊目錄先複製一份封存</button>
+</div>
+
+<div class="quiz" data-question="create() 任何一步失敗時的行為是什麼？" data-correct="2" data-explain="失敗就回滾：刪掉剛寫入的目錄，絕不留半成品。">
+  <button class="opt">保留目錄，讓使用者手動清理</button>
+  <button class="opt">繼續執行剩餘步驟後再報錯</button>
+  <button class="opt">刪掉剛寫入的目錄，完整回滾</button>
+  <button class="opt">自動重試三次再放棄</button>
+</div>
+
+<div class="quiz" data-question="工作區檔案端點最重要的安全防線是什麼？" data-correct="0" data-explain="正規化 path 並要求落在 .oryxos/ 底下，否則 400；../../etc/passwd 是關鍵回歸案例。">
+  <button class="opt">正規化路徑並限制在 .oryxos/ 底下</button>
+  <button class="opt">只允許管理員帳號登入使用</button>
+  <button class="opt">把檔案內容加密後再回傳</button>
+  <button class="opt">限制每秒可查詢的檔案數量</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 插件化 Agent 與動態管理 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

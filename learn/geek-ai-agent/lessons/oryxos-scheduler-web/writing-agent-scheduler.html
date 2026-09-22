@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentScheduler 實作與驗收：動態註冊、本地鎖、第二次進入</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>AgentScheduler 實作與驗收</h1>
+<p class="meta">Step 3/5 · 定時任務與 Web Service</p>
+
+<h2>學習目標</h2>
+<p>能手寫 registerAll／runOnce：用 ThreadPoolTaskScheduler 動態 schedule（CronTrigger 帶時區）、每任務一個 ReentrantLock 做 tryLock、固定 scheduler session 身分、finally 解鎖，並用「第二次進入」的斷言證明鎖確實釋放。</p>
+
+<h2>AgentScheduler 手上有什麼</h2>
+<p>實作上只靠四個成員就夠，沒有多餘的依賴：</p>
+<ul>
+<li><code>ThreadPoolTaskScheduler</code>——Spring 提供的排程執行器，負責到點呼叫。</li>
+<li><code>ProfileRegistry</code>——到哪找所有 Agent 的排程配置（每個 Profile 的 <code>schedules</code>）。</li>
+<li><code>AgentService</code>——真正處理訊息的單一編排入口。</li>
+<li>一張 <code>ConcurrentMap&lt;String, Lock&gt;</code>——每個任務一把鎖。</li>
+</ul>
+
+<h2>registerAll：把「配置」變成「到點動作」</h2>
+<p>啟動時，排程器遍歷所有 Profile 的 <code>schedules</code>，對每一筆排程呼叫：</p>
+<pre><code>taskScheduler.schedule(
+    () -&gt; runOnce(profile, sc),
+    new CronTrigger(sc.getCron(), sc.getZoneId()));</code></pre>
+<p>關鍵在 <code>new CronTrigger(sc.getCron(), sc.getZoneId())</code>——時區在這裡就明確綁進觸發器，而不是靠伺服器預設。這正是上一節「時區陷阱」的落腳：陷阱二的坑，在程式裡用一行 <code>getZoneId()</code> 堵死。</p>
+<blockquote>
+為什麼用 <code>TaskScheduler.schedule</code> 動態註冊，而不寫 <code>@Scheduled</code> 註解？因為 <code>@Scheduled</code> 的 cron 在編譯時就釘死了，要改觸發時間就得改程式、重新編譯。動態註冊讓「改觸發時間」退化成純配置變更——改 Profile 的 cron 欄位，重啟生效，一行 Java 都不動。
+</blockquote>
+
+<h2>runOnce：加鎖進場、固定身分、finally 出場</h2>
+<p>每次觸發都會進到 <code>runOnce(profile, sc)</code>：</p>
+<ol>
+<li>先按任務 id 從那張 Map 取得（或建立）一把 <code>ReentrantLock</code>，<code>tryLock()</code>；鎖被佔著就<strong>跳過並記錄</strong>，不排隊。這對應「重疊陷阱」——上一次還沒跑完，這趟就放棄，而不是疊加執行。</li>
+<li>接著 <code>sessionManager.getOrCreate("scheduler", "scheduler", profile.getName())</code>——排程器的 session 身分是<strong>固定三元組</strong>，代表「scheduler 這個通道、scheduler 這個使用者、這個 Agent」。歷史長度由 <code>max_history_turns</code> 截斷。</li>
+<li>呼叫 <code>agentService.process(session, sc.getMessage())</code>——和 CLI、Web 完全同一條路，審計照樣寫進 <code>llm_calls</code>／<code>tool_invocations</code>。</li>
+<li>整段包在 <code>try/catch</code> 裡，例外用 <code>log.error</code> 記下但<strong>不往上一層拋</strong>（失敗隔離）；不管成功失敗，<code>finally</code> 裡必定 <code>unlock()</code>。</li>
+</ol>
+
+<h2>身分配號：runs 之間保持連續</h2>
+<p>同一個任務的兩次觸發，會進到<strong>同一個 session 三元組</strong>，所以第二次觸發是接續第一次的歷史，而不是另起爐灶。對「每日天氣」這類連續性任務，這是刻意設計：排程是同一場「與這個 Agent 的長期對話」，只是對話由時鐘來推進。</p>
+
+<h2>驗收：不等真實時間, 重演四個陷阱</h2>
+<p>測試最快樂的思考是「別真的等到那時刻」。排程器把 <code>runOnce</code> 抽成獨立方法，測試就直接呼叫它；fire 正不正確是 Spring 的事，測試只驗證「註冊參數對不對」。一個 <code>AgentSchedulerTest</code> 就把四個陷阱全部重演：</p>
+<table>
+<thead>
+<tr><th>陷阱</th><th>斷言方式</th></tr>
+</thead>
+<tbody>
+<tr><td>時區／配置</td><td>用 ArgumentCaptor 抓到 <code>CronTrigger</code>，確認它帶著配置裡的 cron 與時區</td></tr>
+<tr><td>重疊</td><td>先佔住鎖，再觸發一次，斷言這次被跳過、沒有排隊</td></tr>
+<tr><td>失敗隔離</td><td>讓 <code>runOnce</code> 拋例外，斷言例外不外洩、且鎖在 <code>finally</code> 被釋放</td></tr>
+<tr><td>session 身分</td><td>連續兩次觸發，斷言拿到同一個 session 三元組</td></tr>
+</tbody>
+</table>
+
+<h2>最有價值的一半：第二次進入</h2>
+<p>最容易被漏掉的是失敗隔離那條的第二半——例外測完之後，<strong>再呼叫一次 <code>runOnce</code></strong>，斷言這次能正常進場。為什麼？因為如果 <code>finally</code> 忘了 <code>unlock</code>，第一次測試也許照樣通過（例外沒外洩就算過），鎖卻一直卡著，之後排程永久失靈。<strong>只有「第二次進入」能證明鎖真的有被釋放</strong>——這是一個專門抓「漏了解鎖」的測試設計。</p>
+
+<h2>做完怎麼驗</h2>
+<p>自動測試之外，人還要做一遍真實演練：把某個排程設成每分鐘觸發一次，觀察 Agent 自主發起對話、審計有紀錄；改掉 cron 表達式再重啟，看它照新時間走——這同時驗證了「配置驅動、免重新編譯」。這趟「觸發 → ReAct 迴圈 → 審計紀錄」全路徑，也正是下一節 Web Service 與之後三支 Demo Agent 的基石。</p>
+
+<div class="lesson-nav">
+  <div><a href="./scheduler-thin-layer-traps.html">← 上一步：動手前先想清楚：薄排程層與四個陷阱</a></div>
+  <div><a href="./web-service-showcase.html">下一步：Web Service：10 端點把引擎變成 REST 介面 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="registerAll 用什麼機制把排程掛進執行器？" data-correct="2" data-explain="用 TaskScheduler.schedule(...) 動態註冊，搭配帶 cron 與時區的 CronTrigger。">
+  <button class="opt">在方法上加 @Scheduled 註解</button>
+  <button class="opt">啟動時讀取 Java 常數清單</button>
+  <button class="opt">taskScheduler.schedule 搭配 CronTrigger</button>
+  <button class="opt">外部 crontab 檔案</button>
+</div>
+
+<div class="quiz" data-question="為什麼不用 @Scheduled 註解而用動態註冊？" data-correct="1" data-explain="動態註冊讓改觸發時間只是配置變更，不需重新編譯。">
+  <button class="opt">因為 @Scheduled 不支援 cron 語法</button>
+  <button class="opt">改觸發時間要從重新編譯變成純配置變更</button>
+  <button class="opt">因為 @Scheduled 無法在 Spring Boot 執行</button>
+  <button class="opt">為了能讓排程跑支援虛擬執行緒</button>
+</div>
+
+<div class="quiz" data-question="runOnce 中，同一任務的鎖要如何獲取？" data-correct="0" data-explain="每任務一把 ReentrantLock，用 tryLock；被佔住就跳過並記錄，不排隊。">
+  <button class="opt">tryLock，佔不到就跳過並記錄</button>
+  <button class="opt">lock，一定要排隊等到解鎖</button>
+  <button class="opt">不用鎖，直接並行執行</button>
+  <button class="opt">改用悲觀分佈式鎖</button>
+</div>
+
+<div class="quiz" data-question="排程器的 session 身分固定三元組是什麼？" data-correct="3" data-explain="固定是 (scheduler, scheduler, profileName)——channel、user、Agent 三元組。">
+  <button class="opt">(profileName, sessionId, user)</button>
+  <button class="opt">(cron, zoneId, message)</button>
+  <button class="opt">(taskId, runCount, status)</button>
+  <button class="opt">(scheduler, scheduler, profileName)</button>
+</div>
+
+<div class="quiz" data-question="測試為什麼不用真的等到排程時刻？" data-correct="2" data-explain="runOnce 被抽成獨立方法可直接呼叫；fire 正不正確是 Spring 的職責。">
+  <button class="opt">因為測試環境沒有時鐘</button>
+  <button class="opt">因為全用 mock 就無法測觸發</button>
+  <button class="opt">因為 runOnce 被抽出可直呼，fire 屬於 Spring</button>
+  <button class="opt">因為排程只在夜間執行</button>
+</div>
+
+<div class="quiz" data-question="「第二次進入」斷言想要抓出什麼 bug？" data-correct="1" data-explain="光測「例外不外洩」可能通過，卻漏了 finally 忘了 unlock——第二次進入才證明鎖已釋放。">
+  <button class="opt">排程器忘了呼叫 AgentService</button>
+  <button class="opt">finally 忘了 unlock 導致鎖卡死</button>
+  <button class="opt">CronTrigger 帶錯時區</button>
+  <button class="opt">session 三元組拼錯</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 定時任務與 Web Service · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

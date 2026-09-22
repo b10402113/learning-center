@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>七大關鍵技術決策</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>七大關鍵技術決策</h1>
+<p class="meta">Step 1/5 · OryxOS 技術方案</p>
+
+<h2>學習目標</h2>
+<p>能說出 OryxOS 的七個關鍵技術決策，並解釋每一個決策擋掉的是什麼風險。</p>
+
+<h2>為什麼技術方案要從「決策」開始</h2>
+<p>需求文件說「要蓋什麼」，技術方案說「<strong>怎麼蓋</strong>」。蓋法有無數種，但其中有七個岔路口，一旦走錯，後面再怎麼補救都會付雙倍代價。技術方案的第一段不是架構圖，而是先把這七個選擇釘死——每一個都在回答同一句話：「這裡很容易走偏，我們選哪條、為什麼。」</p>
+<p>先看整體技術棧，它是這些決策的落地材料：<strong>JDK 21 + Spring Boot 3.x</strong>，用 <strong>Spring AI Alibaba</strong> 呼叫模型，<strong>自己手寫 ReAct loop</strong>，<strong>Spring MVC</strong> 對外，<strong>Picocli</strong> 做 CLI，<strong>SQLite</strong> 做關聯式儲存，最後打包成<strong>單一可執行 JAR</strong>。一句話記法：<em>JDK 21 + Spring Boot 3.x + Spring AI Alibaba + 自寫 ReAct + SQLite + Picocli</em>。</p>
+
+<h2>決策一：自己手寫 ReAct loop，不用框架的 Agent 抽象</h2>
+<p>ReAct（Reason + Act，推理與行動交錯）是整個系統的心跳。市面上有現成的 Agent 框架抽象可以直接用，但 OryxOS 選擇自己寫——因為這段迴圈只有<strong>幾十行</strong>，而自己寫才能完全掌握它「什麼時候想、什麼時候動手、每輪帶了什麼上下文」。</p>
+<p>框架黑盒最大的問題不是效能，而是<strong>不可觀測</strong>：你不知道它內部替你做了哪些決定，出錯時也無法沿著每一輪的 Reason / Act / Observe 去追。手寫這幾十行，換來的是可除錯、可審計，以及對整個 Agent 行為的完整理解。</p>
+
+<h2>決策二：只用 Spring AI 的一半，並關掉自動工具執行</h2>
+<p>這是七個決策裡<strong>最容易寫錯</strong>的一個。Spring AI 提供的不只是「呼叫模型」，它還能自動幫你執行工具呼叫（function calling）。聽起來很方便，但如果同時保留了這個自動執行，又在前面的 ReAct loop 裡自己執行一次工具，結果就是<strong>同一個工具被呼叫兩次</strong>。</p>
+<p>所以 OryxOS 只用 Spring AI 的兩塊：<strong>Provider 抽象</strong>（接各家模型）與 <strong>schema 生成</strong>（把工具描述轉成模型看得懂的格式），然後<strong>關閉自動工具執行</strong>。工具「什麼時候執行」永遠由自己的 ReAct loop 決定。</p>
+
+<h2>決策三：同步阻塞 + 虛擬執行緒</h2>
+<p>呼叫模型是 I/O 密集工作，會等待。傳統上有兩條路：寫 reactive（反應式）非阻塞程式，或寫同步阻塞程式。OryxOS 選了後者，因為同步程式碼好讀、好除錯、好維護。</p>
+<p>但同步的傳統缺點是「一條執行緒卡在等待」。JDK 21 的<strong>虛擬執行緒（virtual thread）</strong>解決了這點：可以在少數作業系統執行緒上掛起成千上萬條虛擬執行緒，讓同步寫法也能承載高併發。於是「好寫」與「能撐併發」不再二選一。</p>
+
+<h2>決策四：@Tool 註解 + OryxTool 抽象</h2>
+<p>工具可能來自三個地方：內建工具、Spring AI 的 <code>@Tool</code> 註解方法、以及外部的 MCP（Model Context Protocol，模型上下文協議）server。來源不同，格式各異。</p>
+<p>OryxOS 用一層 <strong>OryxTool 抽象</strong>把它們全部包成同一個介面。這樣 ReAct loop 在呼叫工具時，<strong>完全不需要知道工具從哪來</strong>——它只看得到「一個有名字、有描述、有輸入 schema、能執行」的物件。</p>
+
+<h2>決策五：Spring MVC + 虛擬執行緒</h2>
+<p>對外服務沒有選更新的 WebFlux，而是選成熟的 <strong>Spring MVC</strong>，再搭配虛擬執行緒。理由和決策三一致：MVC 的同步心智模型簡單，虛擬執行緒補上併發能力，團隊不需要為了非阻塞而改寫整個程式風格。</p>
+
+<h2>決策六：路徑／模式白名單沙箱，不用 SecurityManager</h2>
+<p>Agent 能讀檔、跑指令、打 HTTP，安全邊界不能沒有。傳統 Java 會想到 <code>SecurityManager</code>，但它在 JDK 21 已經被停用、不再可用。於是 OryxOS 改用<strong>應用層白名單</strong>：路徑白名單、指令白名單、網域白名單，三類檢查都放在工具真正執行之前。這也呼應決策四——檢查點統一掛在 OryxTool 的執行路徑上。</p>
+
+<h2>決策七：SQLite + MEMORY.md，且第一天就寫審計表</h2>
+<p>儲存不做向量資料庫，而是<strong>SQLite + MEMORY.md</strong>（下一節的持久化選型會詳談理由）。這個決策的重點其實在後半句：<strong>第一天就寫審計表</strong>。</p>
+<p>工具呼叫寫進 <code>tool_invocations</code>，模型呼叫寫進 <code>llm_calls</code>。即使核心階段還沒有查詢這些表的端點，也必須先開始記錄——因為可審計性是企業級 Agent 的底線，而且事後補記會永遠缺資料。這和決策一是同一個價值：讓系統的每一步都留下痕跡。</p>
+
+<h2>七個決策其實在保護同一件事</h2>
+<p>把它們排在一起看，會發現它們都指向「核心階段要<strong>最短可跑</strong>」這個目標，並各自擋掉一種會讓專案失控的風險：</p>
+<table>
+<thead>
+<tr><th>決策</th><th>擋掉的風險</th></tr>
+</thead>
+<tbody>
+<tr><td>自寫 ReAct</td><td>黑盒不可觀測、無法除錯</td></tr>
+<tr><td>只用半個 Spring AI</td><td>工具被重複執行的隱藏行為</td></tr>
+<tr><td>同步 + 虛擬執行緒</td><td>為併發而犧牲可讀性</td></tr>
+<tr><td>@Tool + OryxTool</td><td>工具來源外洩到迴圈</td></tr>
+<tr><td>Spring MVC</td><td>整個 Web 層被迫改寫</td></tr>
+<tr><td>白名單沙箱</td><td>Agent 越權存取資源</td></tr>
+<tr><td>SQLite + 第一天審計</td><td>不可審計、事後補不回來</td></tr>
+</tbody>
+</table>
+<p>這七條是後面每一步的護欄。之後談架構、談模組、談持久化時，凡是看到「為什麼要這樣切」，答案幾乎都會回到這裡。</p>
+
+<div class="lesson-nav">
+  <div><a href="./layered-architecture.html">下一步：四層架構與五大能力的互相供養 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="七個決策中，哪一個被特別標為最容易寫錯？" data-correct="1" data-explain="若不關掉 Spring AI 的自動工具執行，工具會被執行兩次。">
+  <button class="opt">自己手寫 ReAct 迴圈</button>
+  <button class="opt">只用 Spring AI 的一半</button>
+  <button class="opt">採用同步加虛擬執行緒</button>
+  <button class="opt">核心階段只用 SQLite</button>
+</div>
+
+<div class="quiz" data-question="為什麼不用 SecurityManager 來做沙箱？" data-correct="2" data-explain="SecurityManager 在 JDK 21 已被停用，改用應用層白名單。">
+  <button class="opt">因為它的效能實在太差</button>
+  <button class="opt">因為它無法搭配虛擬執行緒</button>
+  <button class="opt">因為 JDK 21 已停用它</button>
+  <button class="opt">因為它只支援 Windows 平台</button>
+</div>
+
+<div class="quiz" data-question="審計表在什麼時候開始寫入？" data-correct="0" data-explain="第一天就寫 tool_invocations 與 llm_calls，事後補記會缺資料。">
+  <button class="opt">第一天，即使還沒有查詢端點</button>
+  <button class="opt">等 Web Service 端點做完之後</button>
+  <button class="opt">等擴展階段接上監控系統時</button>
+  <button class="opt">等出現效能瓶頸的時候</button>
+</div>
+
+<div class="quiz" data-question="OryxTool 抽象最主要的目的為何？" data-correct="3" data-explain="三種來源的工具都包成同一介面，迴圈不必知道工具從哪來。">
+  <button class="opt">讓工具執行速度變得更快</button>
+  <button class="opt">讓工具自動產生單元測試</button>
+  <button class="opt">讓工具改由模型自動執行</button>
+  <button class="opt">讓迴圈不必知道工具來源</button>
+</div>
+
+<div class="quiz" data-question="同步阻塞為什麼能承載高併發？" data-correct="1" data-explain="虛擬執行緒讓同步寫法也能在少數 OS 執行緒上掛起大量任務。">
+  <button class="opt">因為 SQLite 會自動批次寫入</button>
+  <button class="opt">因為虛擬執行緒能大量掛起</button>
+  <button class="opt">因為 Spring MVC 內建連線池</button>
+  <button class="opt">因為 Picocli 會平行解析命令</button>
+</div>
+
+<div class="quiz" data-question="自寫 ReAct 迴圈最主要的價值是什麼？" data-correct="2" data-explain="幾十行程式換來可觀測、可除錯，並完整理解 Agent 行為。">
+  <button class="opt">可以大幅減少程式碼總行數</button>
+  <button class="opt">可以自動支援多供應商模型</button>
+  <button class="opt">可以觀測並掌握每輪行為</button>
+  <button class="opt">可以省下撰寫單元測試的時間</button>
+</div>
+
+<div class="quiz" data-question="Spring AI 在 OryxOS 中負責哪一部分？" data-correct="0" data-explain="只用 Provider 抽象與 schema 生成，工具執行由自己的迴圈控制。">
+  <button class="opt">只做 Provider 抽象與 schema 生成</button>
+  <button class="opt">負責整個 ReAct 迴圈的排程執行</button>
+  <button class="opt">負責 Session 的持久化與查詢</button>
+  <button class="opt">負責 Web Service 的路由分派</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · OryxOS 技術方案 · Step 1/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

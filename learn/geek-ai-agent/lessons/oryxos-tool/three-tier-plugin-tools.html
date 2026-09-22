@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>三級 Plugin Tool：零代碼、輕代碼、重代碼</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>三級 Plugin Tool：零代碼、輕代碼、重代碼</h1>
+<p class="meta">Step 3/5 · Tool 體系</p>
+
+<h2>學習目標</h2>
+<p>能說出三級 Plugin Tool 各自的適用場景與代碼量（方式一零代碼 SKILL.md＋MCP、方式二自寫 MCP server、方式三 @Tool Java Bean），並遵循「能用方式一就不用方式二，能用方式二就不用方式三」的選型規則。</p>
+
+<h2>業務要的不是「又一種工具」，是「我能自己接」</h2>
+<p>平台作者把九個內建工具寫好很容易——難的是讓企業自己把「查 CRM」「推 Slack」「拉 GitHub PR」這些自家能力接進 Agent。這條路不能只給一種走法：有的業務想要零代碼、半天接完；有的業務願意寫程式、要深度整合。OryxOS 於是設計了<strong>三級 Plugin Tool</strong>，按代碼量從零到重排成一條漸進的階梯。</p>
+
+<h2>方式一：零代碼——SKILL.md ＋ 複用現成 MCP server（推薦首選）</h2>
+<p>場景：市面上已有開箱即用的 MCP server（GitHub、Slack 都有社區版的），你只要把它接上，再寫一段「任務說明」教 Agent 怎麼用。</p>
+<p>做法只有兩步：</p>
+<ol>
+<li>寫一個 markdown 的 <code>SKILL.md</code>——frontmatter 帶 name、description、trigger、required_tools 等欄位，正文寫任務描述（例如「把每日 PR 摘要推送到某 Slack 頻道」）。</li>
+<li>在 Profile 裡引用這個 skill，並把對應的 MCP server 配置進 <code>mcp_servers.yaml</code>。</li>
+</ol>
+<p>OryxOS 啟動時把 SKILL.md 內容注入 system prompt，模型自己決定用哪些 MCP 工具、怎麼組合完成任務。注意一個關鍵設計：<strong>OryxOS 不解析任務步驟、也不跑 workflow 引擎</strong>——它把判斷完全交給模型。也正因如此，SKILL.md 歸 <code>ContextLoader</code>（上下文裝載）管，而不是 Tool 系統管；它不是一個會被執行的工具，而是一張「給模型看的說明卡」。</p>
+<p>代碼量：<strong>零。</strong>這是教學 Demo 三的標準示範——業務方寫一份 daily-pr-digest.md、接 github-mcp 和 slack-mcp、建一個 Profile，第二天就能跑。</p>
+
+<h2>方式二：輕代碼——自己寫一個 MCP server</h2>
+<p>場景：社區沒有現成 server，但你願意寫一點程式（任何語言都可以），把自家系統包成標準的 MCP 服務。某些 SDK 語言，例如 Go、Python、TypeScript，都有 MCP 官方或社區 SDK，寫一座「橋」接自家 API 即可。</p>
+<p>做法：<code>McpClientService.connectAll</code> 在啟動時讀 <code>.oryxos/mcp_servers.yaml</code>，透過 stdio 或 SSE 連上你的 server，呼叫它的 <code>tools/list</code> 拿到工具清單，把每一條包成 <code>McpToolAdapter</code> 註冊進系統。之後模型呼叫時，adapter 用 JSON-RPC 把請求轉給你的 server。</p>
+<p>這裡有一條很重要的韌性設計：<strong>某個 MCP server 連不上，只記 WARN、跳過它，絕不讓整個系統啟動失敗</strong>。外部依賴不該成為內部的單點故障。呼叫失敗則被包成一個 retryable 的 ToolResult 交給迴圈決定重試。</p>
+<p>代碼量：中——一座跨語言的小服務。對比方式一，你能把自家獨有邏輯完整放進工具。</p>
+
+<h2>方式三：重代碼——用 Spring AI 的 @Tool 寫 Java Spring Bean</h2>
+<p>場景：工具就要跟 Java 核心深度整合——要直接呼叫內部 Java 服務、要重用 Spring Bean、要跟 Spring Security 一起做權限，全部在進程內完成，不經過 MCP、不做序列化。</p>
+<p>做法：把 Spring AI 的 <code>@Tool</code> 註解標在一個 Java 方法上，啟動時系統掃描並註冊成 OryxTool。跟內建工具的寫法一模一樣，性能最好。</p>
+<p>代碼量：高——你要寫 Java、過 Spring 的生命週期。這是整合深度換來的，通常在企業想讓 Agent 直接操作自家核心系統時才值得。</p>
+
+<h2>選型規則：能用簡單的，就不用複雜的</h2>
+<p>三條路不是並排任挑，而是有明確的優先順序：</p>
+<blockquote>能用方式一就不用方式二，能用方式二就不用方式三。</blockquote>
+<p>為什麼？方式一代價最低且可維護性最好——它不寫代碼，純由模型驅動；方式二把邏輯放進自家可控的服務，但要維護一座 server 的生命週期；方式三最強，卻把自己綁死在 Java 進程裡，只有當「深度整合是剛需」時才值。</p>
+<p>這條規則保證平台新增業務能力的成本跟業務的複雜度成比例——簡單的事用便宜的方式，複雜的事才付出高的代價。而不管選哪一條，對 OryxTool 那張統一的臉來說，一切照舊。</p>
+
+<h2>一步一驗</h2>
+<p>接完之後怎麼確認真的能跑？加工具遵循同一套三級路徑，用 <code>oryxos tool list</code> 看註冊結果。方式一：SKILL.md 做好、真實 MCP server 在線，跑一次任務應該真的完成（例如真的把 PR 推到 Slack）。方式三：@Tool 的範例要能出現在清單、能被呼叫。而且每一筆工具呼叫都要寫進 <code>tool_invocations</code> 審計表——驗證時直接看有沒有這筆記錄。</p>
+
+<div class="lesson-nav">
+  <div><a href="./oryxtool-unified-abstraction.html">← 上一步：OryxTool 單一抽象與 ToolResult</a></div>
+  <div><a href="./toolregistry-executor-sandbox.html">下一步：ToolRegistry、ToolExecutor 與安全白名單 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="三級 Plugin Tool 正確的優先順序是什麼？" data-correct="1" data-explain="固定規則：能用方式一就不用方式二，能用方式二就不用方式三。">
+  <button class="opt">方式三 > 方式二 > 方式一</button>
+  <button class="opt">方式一 > 方式二 > 方式三</button>
+  <button class="opt">看心情任選</button>
+  <button class="opt">方式二永遠是最佳解</button>
+</div>
+
+<div class="quiz" data-question="方式一「零代碼」的兩塊基石是什麼？" data-correct="0" data-explain="一張 SKILL.md 説明任務 + 複用現成社區 MCP server。">
+  <button class="opt">SKILL.md ＋ 複用現成 MCP server</button>
+  <button class="opt">自寫 MCP server ＋ YAML 配置</button>
+  <button class="opt">@Tool 註解 ＋ Spring 掃描</button>
+  <button class="opt">自寫 HTTP API ＋ 硬編碼整合</button>
+</div>
+
+<div class="quiz" data-question="SKILL.md 在系統裡歸哪個模組管？" data-correct="3" data-explain="它注入 system prompt 給模型看，屬 ContextLoader，不是 Tool 系統。">
+  <button class="opt">ToolRegistry</button>
+  <button class="opt">McpClientService</button>
+  <button class="opt">SandboxChecker</button>
+  <button class="opt">ContextLoader</button>
+</div>
+
+<div class="quiz" data-question="某個 MCP server 啟動時連不上，系統該怎麼處理？" data-correct="2" data-explain="連線失敗只記 WARN、跳過該 server，絕不讓啟動失敗。">
+  <button class="opt">整個系統拒絕啟動</button>
+  <button class="opt">反覆阻塞重試直到成功</button>
+  <button class="opt">記 WARN、跳過，不阻斷啟動</button>
+  <button class="opt">自動刪除該配置</button>
+</div>
+
+<div class="quiz" data-question="方式三（@Tool Java Bean）最適合什麼場景？" data-correct="1" data-explain="要跟內部 Java 服務深度整合、重用 Spring Bean 與權限控制時，進程內直接呼叫。">
+  <button class="opt">想零代碼接 GitHub</button>
+  <button class="opt">要深度整合內部 Java 系統與 Spring Bean</button>
+  <button class="opt">想寫一座跨語言的小橋</button>
+  <button class="opt">怕寫程式但有現成 MCP</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Tool 體系 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>成員感知與唯一決策：心跳、租約與選舉</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>成員感知與唯一決策</h1>
+<p class="meta">Step 2/5 · 集群化六機制與選型</p>
+
+<h2>學習目標</h2>
+<p>能解釋心跳加租約如何把「節點還活著嗎」變成可判定的「租約過期了嗎」，並說出 CAS 與多數派（quorum）為何能保證唯一決策、避免腦裂。</p>
+
+<h2>問題一：這台機器還活著嗎</h2>
+<p>多機之後第一個要解決的是「成員感知」：叢集要知道現在有哪些節點線上。最天真的做法是每台定期大喊一聲「我在」，其他節點聽到就更新狀態。但這會遇到一個無法解決的難題——<strong>當你沒有聽到某台的聲音時，到底是它死了，還是網路斷了？</strong>在分散式系統裡，你永遠分不清「對方當機」和「訊息在路上」。這個「無法區分」是所有分散式系統的根問題。</p>
+<p>解法不是去分辨，而是換一個可判定的問題。這就是租約（lease）的價值。</p>
+
+<h2>租約：把模糊問題變成可判定問題</h2>
+<p>租約是協調服務（例如 etcd）發的一張有期限的憑證，背後用 TTL（time-to-live，存活時限）控制。運作方式是：</p>
+<ol>
+<li>節點啟動時向 etcd 註冊，並綁定一張租約，例如 TTL 設 10 秒。</li>
+<li>節點用一個<strong>獨立執行緒</strong>，每約 3 秒送一次續約（keepalive），把租約的到期時間往後推。</li>
+<li>如果節點掛了，續約停止，租約到期，etcd 自動刪掉它的註冊 key。</li>
+<li>其他節點透過 Watch（監看某個 key 的變更）收到刪除事件，就知道這個成員離線了。</li>
+</ol>
+<p>關鍵在於：就算節點其實只是網路卡住、人還活著，只要它續不了約，租約一樣會過期。整個叢集對「它不在了」的判斷因此變得<strong>確定</strong>——不必管真相，只看到期。這一步轉換，是後面故障接管能成立的地基。</p>
+
+<h3>代價：TTL 是一把雙面刃</h3>
+<p>租約也給了明確的調校旋鈕，但沒有免費的午餐：</p>
+<ul>
+<li><strong>偵測延遲的下限就是 TTL。</strong>租約 10 秒到期，最快也要 10 秒才可能發現節點死了。</li>
+<li><strong>TTL 調小</strong>＝更快發現故障，但續約頻率變高，協調服務的壓力變大。</li>
+<li><strong>TTL 調大</strong>＝續約壓力小，但故障被發現得更慢。</li>
+</ul>
+<blockquote>一句話記法：租約是「用續約的頻寬」換「偵測的速度」。TTL 就是你願意等多久才承認對方不在。</blockquote>
+
+<h2>問題二：誰說了算</h2>
+<p>知道誰活著之後，下一個問題是<strong>唯一決策</strong>：叢集裡很多事需要「只能有一個人做決定」——例如誰負責把某個分片的角色從 Slave 切成 Master。如果同時有兩個人以為自己是老大，就會出現<strong>腦裂（split-brain）</strong>：兩邊各自下決定、各自改資料，最後資料損毀。</p>
+<p>解決方式有兩層，第一層是原子操作，第二層是共識。</p>
+
+<h3>第一層：CAS 保證「只有一個搶到」</h3>
+<p>選舉最直接的做法，是讓所有節點去搶同一個位置，例如 etcd 裡的 <code>/leader</code>。但不能用普通的「先讀再寫」——兩個節點可能同時讀到「沒人」，然後都寫入。要保證唯一，必須用 CAS（compare-and-swap，比較後再交換），在 etcd 裡就是一次 Txn（transaction）：</p>
+<pre><code># 只有當 /leader 的 createRevision == 0（還沒被建立）
+# 才執行 Put；否則失敗
+Txn:
+  compare: createRevision(/leader) == 0
+  success: Put(/leader, me)
+  failure: (交給 Watch 等待)</code></pre>
+<p>這是一個原子操作：所有節點同時送出，只有一個能成功寫入，其他都失敗。沒搶到的節點不重試，而是 Watch 這個 key，等現任 leader 消失再來搶。原子性是「唯一」的硬保證。</p>
+
+<h3>第二層：多數派保證「不會有兩個老大」</h3>
+<p>但如果網路發生分區（partition）——一半節點互相連得到、另一半被隔開——光靠 CAS 可能兩邊各自選出一個 leader。要防這個，需要共識演算法（Paxos、Raft）的多數派（quorum）規則：</p>
+<blockquote>任何決定都要拿到超過半數的節點同意（N/2 + 1）。因此分裂成兩半時，只有節點數較多的那一側能湊到多數、選出 leader；少數那側永遠選不出來。腦裂被自然擋掉。</blockquote>
+<p>例如 5 台節點分成 3 與 2，多數派門檻是 3，只有 3 台那側能運作，2 台那側只能等。這就是為什麼共識元件通常建議部署 3 或 5 台——它要的是奇數與多數，不是數量多就好。</p>
+
+<h3>為什麼不要自己寫共識</h3>
+<p>Paxos、Raft 的實作細節極多，正確性極難驗證。實務上的判斷很明確：<strong>共識與選舉用成熟元件（etcd、ZooKeeper 等）提供的機制，不要自己造。</strong>你在做的是一般的業務協調，不是分散式演算法研究。</p>
+
+<h2>把這一步放回全景</h2>
+<p>成員感知（心跳 + 租約）回答「誰還活著」，唯一決策（CAS + 多數派共識）回答「誰說了算」。這兩個機制是搭在同一塊協調平面上的，而它們的產物——「目前誰是 Controller」——正是下一步故障接管在「決策」階段要用的東西。下一步先看資料怎麼被定位與複製。</p>
+
+<div class="lesson-nav">
+  <div><a href="./why-cluster-and-panorama.html">← 上一步：為何要叢集化</a></div>
+  <div><a href="./data-location-and-replication.html">下一步：資料定位與複製一致性 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼心跳機制無法直接判斷節點是否當機？" data-correct="1" data-explain="沒收到心跳可能是對方死了，也可能是網路斷了，這兩者在分散式系統裡無法區分。">
+  <button class="opt">因為心跳封包太容易被偽造</button>
+  <button class="opt">因為無法分辨當機與網路斷線</button>
+  <button class="opt">因為節點數量永遠會變動</button>
+  <button class="opt">因為心跳的頻寬成本太高</button>
+</div>
+
+<div class="quiz" data-question="租約（lease）機制的核心價值是什麼？" data-correct="3" data-explain="租約把無法判定的存活問題，換成可精確判定的「租約是否過期」。">
+  <button class="opt">讓節點之間可以互相備份資料</button>
+  <button class="opt">把請求平均分散到所有節點</button>
+  <button class="opt">加快節點處理單一請求的速度</button>
+  <button class="opt">把存活問題變成到期與否問題</button>
+</div>
+
+<div class="quiz" data-question="若把租約 TTL 從 10 秒調小到 2 秒，會發生什麼？" data-correct="0" data-explain="偵測更快，但續約更頻繁，協調服務的負載上升。">
+  <button class="opt">偵測更快但續約負載更高</button>
+  <button class="opt">偵測更慢但續約負載更低</button>
+  <button class="opt">偵測與負載都完全不受影響</button>
+  <button class="opt">偵測更快且負載同時下降</button>
+</div>
+
+<div class="quiz" data-question="CAS（compare-and-swap）在選舉中保證了什麼？" data-correct="2" data-explain="CAS 是原子操作，所有節點同時搶時只有一個能成功，保證唯一。">
+  <button class="opt">保證所有節點都能當上 leader</button>
+  <button class="opt">保證選舉過程不會用到網路</button>
+  <button class="opt">保證同一時間只有一個搶到</button>
+  <button class="opt">保證 leader 一定是效能最好的</button>
+</div>
+
+<div class="quiz" data-question="為什麼多數派（quorum）能防止腦裂？" data-correct="1" data-explain="任何決定都要過半同意，分裂時只有較大一側能湊到多數，少數側選不出 leader。">
+  <button class="opt">因為它讓所有節點都停下來等待</button>
+  <button class="opt">因為只有多數一側能選出 leader</button>
+  <button class="opt">因為它會把少數那側的資料刪掉</button>
+  <button class="opt">因為它固定由最大的機器當 leader</button>
+</div>
+
+<div class="quiz" data-question="依本課判斷，實務上遇到需要共識的場合應該怎麼做？" data-correct="3" data-explain="共識極難寫對，應使用成熟元件的機制，不要自己實作。">
+  <button class="opt">自己刻一套 Raft 以完全掌控</button>
+  <button class="opt">用時間戳大小決定誰是老大</button>
+  <button class="opt">讓最快的節點自動當選 leader</button>
+  <button class="opt">採用成熟協調元件的機制</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 集群化六機制與選型 · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

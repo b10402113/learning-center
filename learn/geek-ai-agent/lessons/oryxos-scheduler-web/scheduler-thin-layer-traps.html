@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>動手前先想清楚：薄排程層與四個陷阱</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>動手前先想清楚：薄排程層與四個陷阱</h1>
+<p class="meta">Step 2/5 · 定時任務與 Web Service</p>
+
+<h2>學習目標</h2>
+<p>能界定 AgentScheduler 只做「讀排程、觸發、組裝訊息、防重疊、記成敗」五件事，選擇 Spring 內建 TaskScheduler 而非自寫，並講出配置來源、重疊、失敗隔離、時區四個陷阱。</p>
+
+<h2>動手之前，先問「它到底負責什麼」</h2>
+<p>定時任務模組看似簡單，但新手容易讓它越長越胖：有人想讓它決定「訊息內容」，有人想讓它管「哪台機器跑」，有人甚至想寫一套排程引擎。動手前必須先把職責邊界定死。</p>
+<p><strong>AgentScheduler 只做五件事：</strong></p>
+<ol>
+<li>讀取 cron 排程配置</li>
+<li>在到點時刻觸發</li>
+<li>組裝一個訊息交給 <code>AgentService</code></li>
+<li>防止同一個任務重疊執行</li>
+<li>記錄觸發的成敗</li>
+</ol>
+
+<h2>它刻意不做的事</h2>
+<p>反面清單和正面清單同等重要。AgentScheduler <strong>不</strong>決定：</p>
+<ul>
+<li>訊息內容說什麼——那是 Profile／SKILL.md 的職責（配置即 Agent）。</li>
+<li>訊息怎麼被處理——那是 ReActLoop 的事。</li>
+<li>由哪個實例執行——分散式協調是第二階段的議題（leader election、分散式鎖、Lease）。</li>
+</ul>
+<p>換句話說，它是一片<strong>薄排程層</strong>：只管「幾點叫誰」，不管「叫了之後發生什麼」。</p>
+
+<h2>不要自己寫排程器</h2>
+<p>第二個決定很務實：<strong>直接用 Spring 內建的 <code>TaskScheduler</code></strong>，不自寫。它支援標準 cron 語法與動態註冊，正是這個模組需要的——既可以手寫成 `@Scheduled` 那類靜態排程，也能在執行中期動態掛入新任務。重新發明一個排程引擎，只會把維護負擔攬回自己身上。</p>
+
+<h2>四個陷阱</h2>
+<p>整個設計的精神，都濃縮在四個陷阱裡。每個陷阱都是一個「不看就會出事」的點：</p>
+
+<h3>陷阱一：配置來源——cron 與訊息必須來自 Profile／SKILL.md</h3>
+<p>排程時間和觸發訊息不能寫死在 Java 常數裡。要改觸發時間，應該是改配置檔，而不是改程式、重新編譯。這個原則叫<strong>配置即 Agent</strong>——一個 Agent 的外觀樣貌與行為，全部由它的配置文件決定，Java 端只是執行器。</p>
+
+<h3>陷阱二：重疊執行——單實例用程序內鎖就夠</h3>
+<p>如果上一次執行還沒結束、下一個週期又到了，理論上同一個任務可能同時跑兩趟。對單實例的核心期來說，一把<strong>程序內（process-local）的鎖</strong>就足夠了——不需要分散式鎖。分散式鎖是第二階段的事。</p>
+
+<h3>陷阱三：失敗隔離——執行崩了不能拖垮排程器，也不能靜默</h3>
+<p>一趟排程執行拋出例外，排程器本身必須照常運作；但不代表可以假裝沒發生。這趟失敗照樣要走平時的審計路線——寫進 <code>llm_calls</code>／<code>tool_invocations</code>——讓它被看見，而不是默默吞掉。</p>
+
+<h3>陷阱四：時區——cron 預設用伺服器時區</h3>
+<p>cron 表達式本身不含時區資訊，預設跟著伺服器的時區走。如果你的「早 8 點」指的是北京時間，而伺服器在 UTC，就會差八個小時。所以配置裡必須<strong>明確指定時區</strong>，不能靠預設。</p>
+
+<blockquote>
+四個陷阱的共同點是同一件事：排程器應該是一層薄薄的通用機制，所有「業務相關」的決定都留在配置與既有引擎裡。誰碰壞這條邊界，誰就把薄層變厚，把重疊、時區、失敗這些麻煩全部攬進 Java 程式碼。
+</blockquote>
+
+<h2>下一步</h2>
+<p>邊界清楚了，下一步就是看這片薄層的實際程式碼怎麼寫：動態註冊、每任務一把鎖、固定的排程 session 身分，以及怎麼用測試把四個陷阱一一釘死。</p>
+
+<div class="lesson-nav">
+  <div><a href="./scheduler-third-trigger.html">← 上一步：定時任務：第三個觸發源</a></div>
+  <div><a href="./writing-agent-scheduler.html">下一步：AgentScheduler 實作與驗收：動態註冊、本地鎖、第二次進入 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="AgentScheduler 的職責下列哪一項它不做？" data-correct="3" data-explain="訊息內容由 Profile／SKILL.md 決定，AgentScheduler 只組裝並投遞，不決定內容。">
+  <button class="opt">讀取 cron 排程配置</button>
+  <button class="opt">防止同任務重疊執行</button>
+  <button class="opt">記錄觸發的成敗</button>
+  <button class="opt">決定訊息內容是什麼</button>
+</div>
+
+<div class="quiz" data-question="排程器要用什麼元件？" data-correct="1" data-explain="直接用 Spring 內建 TaskScheduler（標準 cron、動態註冊），不自寫排程引擎。">
+  <button class="opt">自己從零寫一套排程引擎</button>
+  <button class="opt">Spring 內建的 TaskScheduler</button>
+  <button class="opt">Quartz 的分散式叢集</button>
+  <button class="opt">Linux crontab 外部程序</button>
+</div>
+
+<div class="quiz" data-question="「配置即 Agent」指的是什麼？" data-correct="2" data-explain="cron 與訊息都來自 Profile／SKILL.md，改觸發時間只需改配置，不必重新編譯。">
+  <button class="opt">排程器用配置檔儲存 Java 常數</button>
+  <button class="opt">Agent 只能由 Java 程式碼定義</button>
+  <button class="opt">Agent 的行為由配置文件決定，Java 只是執行器</button>
+  <button class="opt">配置檔要加密才安全</button>
+</div>
+
+<div class="quiz" data-question="上一次執行還沒結束、下一個週期又到了，單實例核心期用什麼防重疊？" data-correct="0" data-explain="單實例核心期一把程序內鎖就夠，分散式鎖留給第二階段。">
+  <button class="opt">一把程序內的本地鎖</button>
+  <button class="opt">Redis 分散式鎖</button>
+  <button class="opt">Controller 選舉機制</button>
+  <button class="opt">跳過下一次執行不需任何鎖</button>
+</div>
+
+<div class="quiz" data-question="一趟排程執行拋出例外，正確的處理是？" data-correct="2" data-explain="排程器照常運作，但失敗要寫進 llm_calls/tool_invocations 被看見，不靜默吞掉。">
+  <button class="opt">當作沒發生，繼續下一次</button>
+  <button class="opt">立即停掉整個排程器</button>
+  <button class="opt">不拖垮排程器，但照正常審計路線記錄失敗</button>
+  <button class="opt">重啟整個應用程式</button>
+</div>
+
+<div class="quiz" data-question="cron 表達式的時區預設是怎麼運作的？" data-correct="3" data-explain="cron 不含時區，預設跟著伺服器時區走，所以配置必須明確指定時區。">
+  <button class="opt">永遠是 GMT+0 協調世界時</button>
+  <button class="opt">自動偵測使用者的瀏覽器時區</button>
+  <button class="opt">預設北京時區，無需設定</button>
+  <button class="opt">預設伺服器時區，配置必須明確指定</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 定時任務與 Web Service · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

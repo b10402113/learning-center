@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>兩層配置與 Profile 系統</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>兩層配置與 Profile 系統</h1>
+<p class="meta">Step 3/5 · Provider 抽象</p>
+
+<h2>學習目標</h2>
+<p>能解釋 Provider 的「兩層配置」：應用層宣告 provider 與憑證、Profile 層宣告用哪個模型與溫度，並闡述 ProfileLoader／ProfileRegistry 如何載入、驗證與索引 Profile，以及「引用不存在的 Provider 必須硬失敗」的理由。</p>
+
+<h2>為什麼要兩層，而不是一張配置表</h2>
+<p>把「這個系統有哪幾家模型供應商」和「這一個 Agent 用哪個模型」混在一張表裡，會發生什麼？答：每次新增一個 Agent，都要去動那份「供應商清單」，接著很容易不小心改到別人正在用的模型，或把憑證攤給所有人。兩件事的<strong>變動頻率與影響範圍完全不同</strong>，所以拆成兩層：</p>
+<table>
+<thead>
+<tr><th>層</th><th>宣告什麼</th><th>範例</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>應用層</strong>（application.yaml）</td><td>有哪些 provider、各自的 API key 與 base URL</td><td>deepseek、kimi、qwen 各一條</td></tr>
+<tr><td><strong>Profile 層</strong>（Profile YAML）</td><td>這一個 Agent 用哪個模型、什麼溫度</td><td>「本 Agent → deepseek／deepseek-chat／0.7」</td></tr>
+</tbody>
+</table>
+<p>應用層回答「系統認識誰」，Profile 層回答「這個 Agent 用誰」。Profile 用 <strong>provider name</strong> 引用應用層的供應商，兩層透過 name 連起來。</p>
+
+<h2>應用層：provider 清單與憑證</h2>
+<p>應用層以 <code>oryxos.providers</code> 宣告 provider 清單。每個 provider 有三個欄位：name、apiKey、baseUrl。第二個原則是<strong>憑證不走明文</strong>——Profile 或 provider 設定裡用 <code>${ENV_VAR}</code> 佔位，真正值從環境變數讀取：</p>
+<pre><code>providers:
+  - name: deepseek
+    apiKey: ${DEEPSEEK_API_KEY}
+    baseUrl: https://api.deepseek.com</code></pre>
+<p>這層要負責<strong>啟動驗證</strong>：name 非空且不重複、api-key 已解析非空、base-url 非空。缺哪個就點名報錯，不靜默失敗——「驗證失敗必須大聲說」是安全管理原則延伸出的硬要求。</p>
+<p>另外，OryxOS 內建一個名為 <code>mock</code> 的保留 provider：它不連真實端點，專門給你「沒有 API key 也能全鏈路自測」用。</p>
+
+<h2>Profile 層：一個 Agent 一份設定</h2>
+<p>Profile 是<strong>一個 Agent 的完整設定投影</strong>，用 YAML 寫在 <code>.oryxos/profiles/*.yaml</code>（或由 Agent 目錄的 <code>AGENT.md</code> frontmatter 派生）。它記錄這個 Agent 的長相：名字、描述、身份、人格、以及最重要的——provider ref：</p>
+<pre><code>name: ops-agent
+description: 運維助手
+provider:
+  name: deepseek          # 對應應用層的 provider name
+  model: deepseek-chat
+  temperature: 0.7
+  api_key: ${DEEPSEEK_API_KEY}</code></pre>
+<p>Profile 層只回答「用哪個模型、多高的溫度」，它<strong>不重複辦理憑證</strong>——那是應用層的事。</p>
+
+<h2>載入、驗證、索引：Loader → Registry</h2>
+<p>Profile 從檔案變成可用物件，走三個角色：</p>
+<ol>
+<li><strong>ProfileLoader</strong>：掃描 <code>.oryxos/profiles/*.yaml</code>，做 YAML 解析與 <code>${ENV}</code> 解析。發現壞掉的 Profile（例如格式錯、cron 錯）→ 記錄錯誤日誌但<strong>不阻斷啟動</strong>。</li>
+<li><strong>ProfileRegistry</strong>：啟動時把 Profile 建到一個記憶體索引，按 name 快速查詢。Channel 收到訊息時，從這裡拿對應的 Profile 繼續處理。</li>
+<li><strong>驗證掛勾</strong>：Validator 檢查 Profile 引用的東西是否真的存在——尤其是 provider 名。</li>
+</ol>
+
+<h2>「引用不存在的 Provider」為什麼要硬失敗</h2>
+<p>這裡有個對比要記住：<strong>Profile 本身格式壞掉 → 軟失敗</strong>（跳過它、記日誌、繼續啟動）；但 <strong>Profile 引用了不存在的 provider → 硬失敗</strong>。</p>
+<p>為什麼態度差這麼多？因為前者是一個壞掉的 Agent 檔案，不影響別人；後者意味著「這個 Agent 被設定成用一個系統根本不認識的模型」——它一旦上線，每輪呼叫都是在用不存在的東西，而且往往要等到使用者真正問問題時才暴露。與其讓它靜默地一直壞，不如在啟動時就把問題點破，逼你立刻修正。</p>
+
+<h2>整條血拼起來</h2>
+<p>應用層定義「系統認識哪些模型供應商」。Profile 層定義「這個 Agent 用哪家、哪個型號、多少溫度」。ProfileLoader 把 Profile 從檔案載入並做格式／環境變數解析，ProfileRegistry 把它們建成按名查詢的索引，並在放入時驗證 provider 名確實存在——不存在的就硬失敗。之後 ReAct 迴圈每輪呼叫，就只要帶著 sessionId 與 Profile，遞給 ProviderService。</p>
+
+<div class="lesson-nav">
+  <div><a href="./explicit-mapping-and-traps.html">← 上一步：動手前先想清楚</a></div>
+  <div><a href="./chat-and-tool-schema.html">下一步：一次呼叫與工具 schema 轉換 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="應用層（application.yaml）的主要職責是什麼？" data-correct="3" data-explain="它宣告系統認識哪些 provider、與各自的 API key 與 base URL。">
+  <button class="opt">決定每個 Agent 的提示詞溫度</button>
+  <button class="opt">儲存 Agent 的任務指令</button>
+  <button class="opt">分配每個 Agent 的最大迭代次數</button>
+  <button class="opt">宣告 provider 清單與憑證</button>
+</div>
+
+<div class="quiz" data-question="Profile 層與應用層的關係是什麼？" data-correct="1" data-explain="Profile 用 provider name 引用應用層的供應商，透過 name 連接兩層。">
+  <button class="opt">Profile 覆寫應用層的 API key</button>
+  <button class="opt">Profile 用 provider name 引用應用層</button>
+  <button class="opt">兩層是各自獨立的，不互相參考</button>
+  <button class="opt">應用層從 Profile 派生出所有設定</button>
+</div>
+
+<div class="quiz" data-question="應用層對憑證的處理原則是什麼？" data-correct="0" data-explain="憑證用 ${ENV_VAR} 佔位，從環境變數讀取，不明文寫死。">
+  <button class="opt">用環境變數佔位，不明文寫死</button>
+  <button class="opt">加密後存進 YAML 檔</button>
+  <button class="opt">直接寫在 Profile YAML 裡</button>
+  <button class="opt">存在資料庫的一段加密欄位</button>
+</div>
+
+<div class="quiz" data-question="Profile 格式壞掉 vs 引用不存在的 provider，處理有何不同？" data-correct="2" data-explain="格式壞掉軟失敗（記日誌繼續），引用不存在的 provider 硬失敗（啟動就點破）。">
+  <button class="opt">兩者都直接終止啟動</button>
+  <button class="opt">兩者都記日誌然後繼續</button>
+  <button class="opt">前者軟失敗，後者硬失敗</button>
+  <button class="opt">前者硬失敗，後者軟失敗</button>
+</div>
+
+<div class="quiz" data-question="ProfileLoader 的主要工作是什麼？" data-correct="3" data-explain="掃描 Profile YAML、做 ${ENV} 解析，壞檔記日誌不阻斷啟動。">
+  <button class="opt">執行工具的 JSON Schema 生成</button>
+  <button class="opt">建立 name→ChatModel 的映射表</button>
+  <button class="opt">寫入 llm_calls 審計表</button>
+  <button class="opt">掃描並解析 Profile YAML</button>
+</div>
+
+<div class="quiz" data-question="「mock」這個保留 provider 的主要用途是什麼？" data-correct="1" data-explain="mock 不連真實端點，讓你在沒有 API key 時也能做全鏈路自測。">
+  <button class="opt">處理所有請求的快取層</button>
+  <button class="opt">無 key 時的全鏈路自測</button>
+  <button class="opt">自動抽換最大模型</button>
+  <button class="opt">連接企業 KMS 加密</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Provider 抽象 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多層時間輪的設計</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>多層時間輪的設計</h1>
+<p class="meta">Step 3/5 · When 技術方案</p>
+
+<h2>學習目標</h2>
+<p>能解釋多層時間輪如何用環加指針做到 O(1) 插入與觸發，說清跨層降級、多輪分片與排程迴圈的精度設計。</p>
+
+<h2>先解決一個問題：怎麼「記住」三十天後的事</h2>
+<p>延遲投遞的核心是排程：訊息進來說「三天後送到」，系統得在正確的時刻把它拿出來。最直覺的做法是維護一個按到期時間排序的佇列，但每次插入都要重新排序，成本是 O(log n)——訊息越多越慢。</p>
+<p>時間輪（timing wheel）換一個想法：不要把時間「排序」，改成把時間「切格」。用一個固定大小的環形陣列代表時間，每個格子（slot）是一個時間單位，一個指針（pointer）每過一格就前進一格，走到哪一格就把那一格裡的訊息全部取出。</p>
+
+<h2>單層時間輪：一個環加一根指針</h2>
+<p>假設環有 60 格、每格代表 1 秒。現在要排一則 5 秒後到期的訊息，就把訊息放進「當前指針位置 + 5」的那一格。指針每秒前進一次，走到那一格時，訊息正好到期。</p>
+<p>這個動作有兩個漂亮的性質：插入只是算個位置放進去，<strong>O(1)</strong>；觸發只是把一整格的訊息取出，也是 <strong>O(1)</strong>。成本與佇列長度無關。</p>
+<p>但單層環有個明顯的限制：<strong>它只能表示一個環週期內的延遲</strong>。60 格的 1 秒環，最多只能表達 60 秒後的訊息；超過一個週期就會繞回同一格，無法區分「這輪」與「下輪」。而 When 要支援的延遲範圍是 1 秒到 30 天。</p>
+
+<h2>多層時間輪：用四層覆蓋三十天</h2>
+<p>解法是把多個不同粒度的環疊起來，像時鐘的秒針、分針、時針一樣：</p>
+<table>
+<thead>
+<tr><th>層</th><th>格數 × 每格</th><th>覆蓋範圍</th></tr>
+</thead>
+<tbody>
+<tr><td>第 1 層</td><td>60 × 1 秒</td><td>1 分鐘</td></tr>
+<tr><td>第 2 層</td><td>60 × 1 分鐘</td><td>1 小時</td></tr>
+<tr><td>第 3 層</td><td>24 × 1 小時</td><td>1 天</td></tr>
+<tr><td>第 4 層</td><td>30 × 1 天</td><td>30 天</td></tr>
+</tbody>
+</table>
+<p>規則很簡單：<strong>一則訊息的延遲若超出當前層能表示的範圍，就放到更粗的那一層。</strong> 例如「三天後」放不進 1 分鐘的細環，就放進第 3 層（每格 1 小時、24 格）或第 4 層。放進粗層時，只需要記「大約哪一格」，不需要精確到秒。</p>
+
+<h2>跨層降級：粗層只負責「接近」，細層才負責「精準」</h2>
+<p>那粗層的訊息要怎麼變成精準觸發？靠<strong>降級（cascade downgrade）</strong>。當粗層的指針走到某一格，代表「這批訊息距離到期只剩下一層的範圍了」，此時把它們<strong>降到更細的層重新排</strong>，由細層做精確的觸發。</p>
+<p>舉例：一則「3 天 5 小時後」的訊息放在第 4 層（1 天／格、30 格）。三天過去，第 4 層的指針走到對應格，系統把剩下的「5 小時」重新放進第 2 層（1 分鐘／格）；接著逐層往下，直到進入第 1 層，由秒級指針精準觸發。</p>
+<p>這就是多層時間輪的核心分工：<strong>粗層管「還很久」，細層管「即將到」</strong>。每一層都維持 O(1)，而 30 天的跨度被四層分攤掉。</p>
+
+<h2>一台節點不只一個輪</h2>
+<p>When 的每個節點預設會開 <strong>2 到 4 個時間輪</strong>，而不是一個巨大無比的輪。理由有三個：提升併發度、隔離故障（一個輪出問題不影響其他輪）、以及把負載分散開。</p>
+<p>那訊息該進哪個輪？用<strong>一致雜湊（consistent hashing）</strong>，以訊息 ID 決定。這一點很重要：因為路由是確定的，所以之後要查詢或取消同一則訊息時，一定能被送到正確的輪上；如果那個輪的 Master 在別台節點，就透過 gRPC 轉發過去。</p>
+
+<h2>排程迴圈：只讀與觸發，重活全部非同步</h2>
+<p>每個時間輪有一個排程迴圈（scheduling loop）。它的設計原則是<strong>絕對不能阻塞</strong>，否則指針就會走慢、精度崩塌。所以迴圈本身只做兩件事：讀取到期格、觸發。真正耗時的工作——刪除 Redis 的 key、把訊息送進 Sink——全部丟給非同步流程。</p>
+<p>精度還有一個關鍵細節：迴圈用 <code>sleep_until_next_slot()</code> 而不是固定睡一段時間。它<strong>睡到下一個格子的絕對時間點</strong>，而不是「睡 1 秒」。這樣即使某次迴圈的處理花了額外時間，也不會累積成漂移（drift）；睡醒的時間永遠對齊格子的邊界。</p>
+<p>需要接受的取捨是：<strong>同一個格子內的訊息沒有嚴格順序</strong>。它們會在同一秒被觸發，但誰先誰後並不保證——對延遲投遞而言，秒級的精準已經足夠，硬要維持格內排序只會增加成本。</p>
+
+<h2>放進訊息生命週期裡看</h2>
+<p>時間輪是訊息生命週期中的「排程」環節。一則訊息進來，先驗證、產生 Snowflake ID（雪花演算法產生的唯一 ID）、用一致雜湊選輪、寫入 Redis，然後才插入記憶體中的時間輪；寫入成功才回傳，P99 目標在 100 毫秒內。到期時，指針取出訊息，降級到細層後交給 Sink 執行緒池非同步投遞；投遞成功就刪除 Redis 的 key，失敗則進入重試。</p>
+<p>把時間輪放在這條線上理解，就會明白它的 O(1) 為什麼是整個系統的效能基礎：寫入路徑與觸發路徑都經過它，而它永遠不隨訊息量變慢。</p>
+
+<div class="lesson-nav">
+  <div><a href="./cluster-architecture.html">← 上一步：整體架構與同質節點</a></div>
+  <div><a href="./replica-failover.html">下一步：Master/Slave 複製與 10 秒接管 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="單層時間輪最主要的限制是什麼？" data-correct="2" data-explain="單層環只能表示一個環週期內的延遲，超過就會繞回同一格。">
+  <button class="opt">插入與觸發都是 O(log n)</button>
+  <button class="opt">它無法在記憶體中運作</button>
+  <button class="opt">只能表示一個週期內的延遲</button>
+  <button class="opt">它不能支援定時刪除訊息</button>
+</div>
+
+<div class="quiz" data-question="When 的多層時間輪四層合計覆蓋多久？" data-correct="1" data-explain="60×1 秒、60×1 分、24×1 時、30×1 天，最粗一層覆蓋 30 天。">
+  <button class="opt">1 天</button>
+  <button class="opt">30 天</button>
+  <button class="opt">60 天</button>
+  <button class="opt">365 天</button>
+</div>
+
+<div class="quiz" data-question="跨層降級的目的為何？" data-correct="3" data-explain="粗層只做到「接近」，降到細層後才由細層精準觸發。">
+  <button class="opt">把過期訊息直接刪除</button>
+  <button class="opt">把訊息從 Redis 搬到記憶體</button>
+  <button class="opt">把負載平均分散到各節點</button>
+  <button class="opt">讓粗層的訊息被精準觸發</button>
+</div>
+
+<div class="quiz" data-question="訊息進入哪一個時間輪是由什麼決定的？" data-correct="0" data-explain="以訊息 ID 做一致雜湊，路由確定，查詢與取消才能被送到正確的輪。">
+  <button class="opt">訊息 ID 的一致雜湊結果</button>
+  <button class="opt">訊息當下的到期時間先後</button>
+  <button class="opt">發送訊息的業務方所在區域</button>
+  <button class="opt">該節點當下的 CPU 負載</button>
+</div>
+
+<div class="quiz" data-question="排程迴圈為什麼要避免阻塞？" data-correct="2" data-explain="迴圈阻塞會讓指針走慢，精度崩塌；因此刪 Redis 與投遞都非同步處理。">
+  <button class="opt">因為阻塞會使 Redis 斷線</button>
+  <button class="opt">因為阻塞會讓 ETCD 觸發選舉</button>
+  <button class="opt">因為阻塞會讓指針走慢而失準</button>
+  <button class="opt">因為阻塞會使訊息被重複投遞</button>
+</div>
+
+<div class="quiz" data-question="使用 sleep_until_next_slot() 而非固定睡眠，是為了什麼？" data-correct="1" data-explain="睡到下一個格子的絕對時間點，避免處理時間累積成漂移。">
+  <button class="opt">讓每個格子的訊息自動排序</button>
+  <button class="opt">避免處理時間累積成漂移</button>
+  <button class="opt">讓 CPU 佔用降到最低</button>
+  <button class="opt">讓心跳能在獨立執行緒送出</button>
+</div>
+
+<div class="quiz" data-question="同一格內的訊息在哪一點上放寬了保證？" data-correct="3" data-explain="同一秒內到期觸發，但彼此沒有嚴格順序，這是可接受的取捨。">
+  <button class="opt">它們不會被寫入 Redis</button>
+  <button class="opt">它們不經過一致雜湊</button>
+  <button class="opt">它們會被降級到粗層</button>
+  <button class="opt">它們彼此沒有嚴格順序</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · When 技術方案 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

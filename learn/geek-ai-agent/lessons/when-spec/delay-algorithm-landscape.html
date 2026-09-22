@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>延遲投遞的底層演算法與選型</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>延遲投遞的底層演算法與選型</h1>
+<p class="meta">Step 2/5 · When 調研與需求</p>
+
+<h2>學習目標</h2>
+<p>能列出延遲投遞的六種底層實作路徑，並用六個維度說明為什麼沒有萬能解。</p>
+
+<h2>為什麼要先談演算法</h2>
+<p>上一課確認了「延遲投遞需要一個獨立元件」。但一個服務的核心是「把訊息存在哪裡、到點怎麼找出來」，這件事一旦選錯，後面再怎麼補救都有限。業界走過的路可以歸納成六種實作路徑，每一種都在不同的維度上取捨。先看懂取捨，後面 When 的技術決策才不會像憑空冒出來。</p>
+
+<h2>六種實作路徑</h2>
+<table>
+<thead>
+<tr><th>路徑</th><th>做法</th><th>強項</th><th>代價</th></tr>
+</thead>
+<tbody>
+<tr><td>① 資料庫定期掃描</td><td>訊息存進 DB，輪詢掃出到期的</td><td>實作最簡單</td><td>B+Tree 不擅長大量隨機寫入</td></tr>
+<tr><td>② RocksDB + 時間輪</td><td>LSM 儲存引擎搭配時間輪（Chronos）</td><td>寫入吞吐高</td><td>HA 與運維很重</td></tr>
+<tr><td>③ Redis ZSet + hash pool</td><td>ZSet 依時間排序，多 worker 取出</td><td>效能好、實作簡單</td><td>big-key、Redis 單執行緒敏感</td></tr>
+<tr><td>④ RocketMQ 固定級別</td><td>預設有限個延遲級別</td><td>直接可用</td><td>不靈活、最大 2 小時</td></tr>
+<tr><td>⑤ QMQ 多層時間輪</td><td>磁碟排程檔加記憶體雜湊輪</td><td>O(1)、跨度大、省記憶體</td><td>實作複雜</td></tr>
+<tr><td>⑥ 多層時間輪 + LSM</td><td>把⑤的儲存換成 LSM</td><td>理論最優</td><td>複雜度最高</td></tr>
+</tbody>
+</table>
+
+<h2>為什麼「時間輪」能做到 O(1)</h2>
+<p>時間輪（timing wheel）像一個時鐘：它的每個槽位對應一個時間刻度。要插入一則在未來 T 時刻到期的訊息，只要算出它落在哪個槽位，把它掛進那個槽位的鏈結串列即可——成本與「目前有多少訊息」無關，所以是 O(1)。刪除同理，定位到槽位後從鏈結串列摘除。</p>
+<p>問題是：如果只用一層、每格一秒，要覆蓋 30 天就得有 259 萬個槽位，記憶體吃不消。於是有<strong>多層時間輪</strong>：低層用細粒度（例如秒級），高層用粗粒度（例如小時、天級）。當一則訊息的到期時間超出當前層的覆蓋範圍，就往上一層放；時間推進時，高層的訊息會逐層「下放」到低層——這個過程叫<strong>級聯（cascade）</strong>。這樣既能保持 O(1)，又能覆蓋很大的時間跨度。</p>
+
+<h2>深入看 QMQ：磁碟與記憶體兩層</h2>
+<p>前面提過 QMQ 的設計被視為業界參考，值得拆開看：</p>
+<ul>
+<li><strong>第一層在磁碟</strong>：每小時寫一個排程檔（schedule log）。兩年的跨度只需要約 17,568 個檔案。</li>
+<li><strong>第二層在記憶體</strong>：以 500 毫秒為粒度，只載入「即將到來那一小時」的訊息索引（每筆是 offset 加 size），而不是全部訊息。</li>
+</ul>
+<p>這個兩層結構同時拿到三個好處：插入與刪除都是 O(1)；靠多層覆蓋很長的時間跨度；靠<strong>懶載入（lazy loading）</strong>省記憶體。還有一個容易被忽略的優點：延遲訊息被獨立存放，不會干擾正常訊息的空間回收。</p>
+
+<h2>選型的六個維度</h2>
+<p>把上表收斂成可比較的維度，就是選型時真正在拉扯的六件事：</p>
+<ol>
+<li><strong>寫入吞吐</strong>：每秒能收進多少則訊息。</li>
+<li><strong>調度精度</strong>：能不能精確到秒、甚至毫秒。</li>
+<li><strong>時間跨度</strong>：最遠能排到多久之後。</li>
+<li><strong>記憶體</strong>：為了調度要付多少記憶體成本。</li>
+<li><strong>多副本</strong>：能不能安全地做副本與故障接管。</li>
+<li><strong>實作複雜度</strong>：要花多少人月、多少運維心力。</li>
+</ol>
+<p>關鍵在於：<strong>這些維度彼此衝突，沒有銀彈。</strong>想要高精度，可能得犧牲記憶體；想要大跨度，可能要犧牲簡單度。資料庫掃描最簡單，但大量寫入會壓垮 B+Tree；Redis ZSet 精度好、實作簡單，卻換來 big-key 與記憶體風險；RocksDB 寫吞吐好，但 HA 很重。所以真正的工作不是「找出最好的演算法」，而是「根據你的規模與精度要求，選一組可接受的取捨」。</p>
+
+<blockquote>
+延遲投遞的演算法選擇，本質是一組取捨：寫入吞吐、調度精度、時間跨度、記憶體、多副本、實作複雜度。你選的不是最強的方案，而是最適合你那個約束組合的方案。
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./delay-demand-and-gap.html">← 上一步：延遲投遞的需求與現況缺口</a></div>
+  <div><a href="./when-positioning-and-nongoals.html">下一步：When 的定位與非目標 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="下列哪一種路徑被形容為「理論最優但最複雜」？" data-correct="3" data-explain="多層時間輪加 LSM 同時取得大跨度與高寫入吞吐，但實作複雜度最高。">
+  <button class="opt">資料庫定期掃描到期訊息</button>
+  <button class="opt">Redis ZSet 搭配多個工作者</button>
+  <button class="opt">RocketMQ 的固定延遲級別</button>
+  <button class="opt">多層時間輪結合 LSM 儲存</button>
+</div>
+
+<div class="quiz" data-question="時間輪插入訊息為什麼是 O(1)？" data-correct="1" data-explain="插入只需算出訊息落在哪個槽位並掛進鏈結串列，成本與已存訊息數量無關。">
+  <button class="opt">因為它每秒重新排序全部訊息</button>
+  <button class="opt">因為它只做算槽位與掛鏈結串列</button>
+  <button class="opt">因為它把訊息平均分散到各節點</button>
+  <button class="opt">因為它事先為每則訊息配置記憶體</button>
+</div>
+
+<div class="quiz" data-question="多層時間輪用「級聯」解決什麼問題？" data-correct="2" data-explain="單層要覆蓋大跨度需要海量槽位；多層用粗粒度的高層接住遠期訊息，時間推進時再逐層下放。">
+  <button class="opt">解決同一槽位訊息過多的問題</button>
+  <button class="opt">解決下游投遞失敗重試的問題</button>
+  <button class="opt">解決單層覆蓋大跨度太耗記憶體</button>
+  <button class="opt">解決多副本之間的資料一致性</button>
+</div>
+
+<div class="quiz" data-question="QMQ 用磁碟加記憶體兩層設計，主要是為了換到什麼？" data-correct="0" data-explain="磁碟排程檔提供大跨度，記憶體只載入即將到來那一小時的索引，兼顧 O(1) 與省記憶體。">
+  <button class="opt">大跨度且省記憶體又 O(1)</button>
+  <button class="opt">完全不需要任何備份機制</button>
+  <button class="opt">讓下游不必支援重複投遞</button>
+  <button class="opt">讓訊息保證不會重複送達</button>
+</div>
+
+<div class="quiz" data-question="某團隊需要 30 天跨度、秒級精度、且單機記憶體有限，依六維度取捨應優先考慮？" data-correct="3" data-explain="這種約束組合正是多層時間輪要解決的：低層保精度、高層擴跨度、懶載入省記憶體。">
+  <button class="opt">資料庫定期掃描的簡單方案</button>
+  <button class="opt">把所有訊息放進單一 ZSet</button>
+  <button class="opt">只用一層、每秒一個槽位</button>
+  <button class="opt">多層時間輪搭配懶載入</button>
+</div>
+
+<div class="quiz" data-question="為什麼資料庫定期掃描不適合高寫入吞吐的延遲場景？" data-correct="1" data-explain="B+Tree 面對大量隨機寫入會產生寫放大與索引維護成本，吞吐上不去。">
+  <button class="opt">資料庫無法儲存時間戳欄位</button>
+  <button class="opt">B+Tree 不擅長大量隨機寫入</button>
+  <button class="opt">資料庫無法做到分散式部署</button>
+  <button class="opt">資料庫不支援交易式寫入</button>
+</div>
+
+<div class="quiz" data-question="「選型沒有銀彈」最貼切的解釋是什麼？" data-correct="2" data-explain="六個維度彼此衝突，只能依自身規模與精度要求選一組可接受的取捨。">
+  <button class="opt">因為所有演算法的效能都一樣</button>
+  <button class="opt">因為只有 QMQ 的方案值得採用</button>
+  <button class="opt">因為六個維度彼此衝突難兼顧</button>
+  <button class="opt">因為雲廠商不提供這類服務</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · When 調研與需求 · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

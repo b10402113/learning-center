@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Demo 一：光桿 AGENT.md 的每日天氣 Agent</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Demo 一：光桿 AGENT.md 的每日天氣 Agent</h1>
+<p class="meta">Step 1/6 · Demo 與發布</p>
+
+<h2>學習目標</h2>
+<p>能用一個光桿 AGENT.md 定義出每日 08:00 自動推送天氣與穿搭建議的 Agent，說清它的最小設定、三道環境閘門，以及「先推再看時鐘」的除錯順序。</p>
+
+<h2>第一階段的驗收長什麼樣</h2>
+<p>前面二十八節把 OryxOS 的底座一層層蓋起來，但底座本身沒有使用者。第一階段的驗收，是三個真的會在固定時間自己跑起來、把結果推給人的業務 Agent，再加上一個打了標籤、別人也能部署的版本。三個 Demo 是刻意挑的，它們的目錄貧富程度一檔比一檔高，正好把插件化「多一個檔案就多一種能力」的落差量出來。</p>
+<table>
+<thead>
+<tr><th>Demo</th><th>目錄形態</th><th>定時</th><th>它要證明什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>每日天氣</td><td>光桿 AGENT.md</td><td>08:00</td><td>一個 AGENT.md 就能定義一個會自跑的 Agent</td></tr>
+<tr><td>每日科技日報</td><td>AGENT.md + <code>skills/</code></td><td>09:00</td><td>長篇子指令用 <code>read_file</code> 按需載入</td></tr>
+<tr><td>每日 GitHub 日報</td><td>AGENT.md + <code>scripts/</code></td><td>09:30</td><td>目錄腳本用 <code>shell</code> 取得確定性資料</td></tr>
+</tbody>
+</table>
+
+<h2>Demo 一：一個檔案就是一個 Agent</h2>
+<p>天氣 Agent 的定義放在 <code>.oryxos/agents/weather-daily/AGENT.md</code>。你可以用管理台的「新建 Agent」表單建立，也可以打 <code>POST /api/v1/agents</code>，兩條路最後都產生同一份檔案。它有兩個部分：frontmatter 回答「誰、什麼時候、用什麼」，body 回答「做什麼」。</p>
+<pre><code>---
+name: weather-daily
+provider: deepseek/deepseek-chat
+tools: [http_get, notify]
+notify_channels:
+  - "${TEAM_WEBHOOK_URL}"
+schedules:
+  cron: "0 0 8 * * *"
+  zone: Asia/Shanghai
+  message: 到点了，按你的说明执行。
+---
+每天早上查詢北京天氣，給出穿搭建議，然後通知團隊。</code></pre>
+<p>這裡有三個設計選擇值得停下來看。第一，<code>tools</code> 只給了 <code>http_get</code> 與 <code>notify</code>——它不讀子指令、不跑腳本，所以不需要 <code>read_file</code> 或 <code>shell</code>，這是最小權限原則，工具給得越少，出事的面越小。第二，網址用 <code>${TEAM_WEBHOOK_URL}</code> 這種環境變數佔位，密鑰不寫死在檔案裡。第三，<code>schedules</code> 用標準 cron 表示式，六欄位的 <code>0 0 8 * * *</code> 就是每天 08:00，並明確指定時區，避免伺服器在哪個時區就幾點推的模糊。</p>
+<p>body 只有一句話，卻已經說完了整個流程的意圖。更完整的版本會告訴它：用 <code>http_get</code> 打 <code>https://api.open-meteo.com/v1/forecast</code>，帶上北京的經緯度與 <code>current=temperature_2m,precipitation,wind_speed_10m</code>，拿到資料後給出穿搭建議，最後呼叫 <code>notify</code> 推播。天氣源刻意選 open-meteo：免費、免金鑰、直接回 JSON，避免 Demo 當天因為對外服務要申請而翻車。</p>
+
+<h2>三道環境閘門：沒過就靜默待命</h2>
+<p>檔案寫好不代表就會跑。這個 Agent 要真的動起來，必須先過三道環境閘門，任何一道沒過，它只會安靜地待命，不會報錯提醒你——這也是新手上路最容易卡住的地方。</p>
+<ul>
+<li><strong>模型金鑰</strong>：因為設定裡排除了自動配置，你必須先 <code>export DEEPSEEK_API_KEY</code>，否則呼叫不到模型。</li>
+<li><strong>網域白名單</strong>：<code>http.allowed_domains</code> 必須包含 <code>api.open-meteo.com</code> 與 webhook 的網域（飛書是 <code>*.feishu.cn</code>、企業微信是 <code>qyapi.weixin.qq.com</code>）。少了任何一個，工具會在白名單那關被擋下。</li>
+<li><strong>Webhook 可達</strong>：通知要送得出去，webhook 位址必須是活的。</li>
+</ul>
+
+<h2>除錯順序：先推再看時鐘</h2>
+<p>不要傻等 08:00。除錯的順序是「先手動推一次，再回過頭看時鐘」。手動觸發有兩個等價入口：<code>oryxos chat --profile weather-daily</code>，或 <code>POST /agents/weather-daily/invoke</code>。這兩條路和時鐘觸發走的是同一條主鏈，所以手動能跑通，時鐘就能跑通。</p>
+<p>手動推的價值在於它會立刻把問題攤開：白名單沒設好，工具呼叫當場被攔；body 寫得太含糊（例如只寫「查天氣」而沒說用哪個工具），模型可能根本不去呼叫工具，只回一段廢話。這些問題在真正推送前修掉，成本最低。</p>
+
+<h2>時鐘真的響了之後，怎麼對賬</h2>
+<p>等到 cron 真的觸發，一次成功的自動推送會留下固定的痕跡。把它們一條條對上，你就確認了整條鏈：</p>
+<ul>
+<li>cron 觸發，排程把 body 當提示注入；</li>
+<li>Agent 呼叫 <code>http_get</code>，通過 Sandbox 白名單（<code>tool_invocations</code> 第 1 筆）；</li>
+<li>LLM 生成穿搭建議（這一步產生兩次 <code>llm_calls</code>）；</li>
+<li>呼叫 <code>notify</code> 推播，再次通過白名單（<code>tool_invocations</code> 第 2 筆），群組收到訊息。</li>
+</ul>
+<p>驗收的硬指標因此很具體：<strong>沒有人手動觸發它</strong>、兩個對外呼叫都過白名單且留下審計、兩次 <code>llm_calls</code>、<code>GET /sessions/{id}</code> 能看到整段被自動觸發的對話、群組真的收到訊息。這些指標之所以能逐條核對，是因為審計從第一天就寫進資料庫；沒有審計，「感覺有跑」和「確定有跑」就分不出來。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./demo-sub-instruction-digest.html">下一步：Demo 二：目錄帶子指令的每日科技日報 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="天氣 Agent 的 tools 只給 http_get 與 notify，最主要的原因是什麼？" data-correct="1" data-explain="它不需要讀子指令或跑腳本，給越少工具出事面越小，這就是最小權限原則。">
+  <button class="opt">因為其他工具還沒開發完成</button>
+  <button class="opt">因為最小權限，用不到就不要給</button>
+  <button class="opt">因為工具越多執行速度越慢</button>
+  <button class="opt">因為白名單只支援這兩個工具</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不是這節列出的三道環境閘門之一？" data-correct="3" data-explain="三道閘門是模型金鑰、網域白名單、webhook 可達；資料庫版本不在此列。">
+  <button class="opt">設定模型 API 金鑰環境變數</button>
+  <button class="opt">把天氣與 webhook 網域加入白名單</button>
+  <button class="opt">確認通知 webhook 位址可達</button>
+  <button class="opt">確認 SQLite 資料庫版本正確</button>
+</div>
+
+<div class="quiz" data-question="為什麼除錯時建議「先手動推一次，再看時鐘」？" data-correct="0" data-explain="手動觸發和時鐘觸發走同一條主鏈，能立刻暴露白名單與 body 的問題，不必空等。">
+  <button class="opt">手動觸發與時鐘走同一條鏈，能立刻暴露問題</button>
+  <button class="opt">手動觸發會自動修好白名單設定</button>
+  <button class="opt">時鐘觸發的日誌預設是關閉的</button>
+  <button class="opt">手動觸發會跳過模型呼叫以節省成本</button>
+</div>
+
+<div class="quiz" data-question="一次成功的天氣自動推送，會在審計表留下什麼？" data-correct="2" data-explain="兩筆 tool_invocations（http_get 與 notify）加兩次 llm_calls，正是可逐條核對的痕跡。">
+  <button class="opt">零筆工具呼叫，只有一次模型呼叫</button>
+  <button class="opt">一筆工具呼叫與一次模型呼叫</button>
+  <button class="opt">兩筆工具呼叫與兩次模型呼叫</button>
+  <button class="opt">四筆工具呼叫與四次模型呼叫</button>
+</div>
+
+<div class="quiz" data-question="為什麼天氣源刻意選 open-meteo？" data-correct="1" data-explain="它免費、免金鑰、直接回 JSON，能避免 Demo 當天因申請或認證而翻車。">
+  <button class="opt">因為它提供最精準的在地氣象</button>
+  <button class="opt">因為免費免金鑰且直接回 JSON</button>
+  <button class="opt">因為它只能用內建工具呼叫</button>
+  <button class="opt">因為它已被加入預設白名單</button>
+</div>
+
+<div class="quiz" data-question="如果 AGENT.md 的 body 只寫「查天氣」而沒說用哪個工具，最可能發生什麼？" data-correct="2" data-explain="body 太含糊時，模型可能不呼叫工具，只回一段文字，整個自動化就失效了。">
+  <button class="opt">排程會自動補上工具名稱</button>
+  <button class="opt">模型會改用 shell 執行腳本</button>
+  <button class="opt">模型可能不呼叫工具，只回一段文字</button>
+  <button class="opt">白名單會拒絕這次 prompt 注入</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Demo 與發布 · Step 1/6</p>
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

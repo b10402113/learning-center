@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>三週 MVP 與驗收標準</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>三週 MVP 與驗收標準</h1>
+<p class="meta">Step 5/5 · When 調研與需求</p>
+
+<h2>學習目標</h2>
+<p>能界定三週 MVP 的做與不做、非功能指標，並複述七項驗收標準（包含 AI 產出驗收）。</p>
+
+<h2>貫穿整個 MVP 的原則：主流程優先</h2>
+<p>三週做出一個分散式系統，最危險的不是技術難，而是範圍失控。所以 MVP 只守一個原則：<strong>主流程優先（main-flow first），能 demo 勝過完美。</strong>先讓「提交一則訊息，時間到，它被送到下游」這條路真的跑通，其餘一切都可以之後再補。這個原則會在下方的做與不做清單裡反覆出現。</p>
+
+<h2>MVP 要做的八件事</h2>
+<table>
+<thead>
+<tr><th>面向</th><th>MVP 範圍</th></tr>
+</thead>
+<tbody>
+<tr><td>主流程</td><td>提交與投遞；延遲範圍 1 秒到 30 天，精度目標 99% 落在 ±1 秒</td></tr>
+<tr><td>三個 HTTP API</td><td><code>POST</code>／<code>GET</code>／<code>DELETE</code> <code>/api/v1/messages</code></td></tr>
+<tr><td>訊息</td><td>payload 直通、上限 64KB；at-least-once</td></tr>
+<tr><td>狀態機</td><td>pending → delivering → delivered／failed，另有 cancelled</td></tr>
+<tr><td>Sink</td><td>HTTP 與 Kafka 兩種；SPI 從第一天就存在</td></tr>
+<tr><td>持久化</td><td>Redis，以訊息 ID 分片的 key，禁止用 ZSet 大集合；單機或主從，Redis ≥5.0</td></tr>
+<tr><td>調度</td><td>單機多層時間輪（受 QMQ 啟發），重啟時從 Redis 重建</td></tr>
+<tr><td>交付配套</td><td>半小時可部署、兩個管理台頁面（任務列表、投遞日誌）、Prometheus 指標 + JSON 日誌 + <code>/health</code></td></tr>
+</tbody>
+</table>
+<p>其中「SPI 從第一天就存在」與「以訊息 ID 分片 key」是兩個關鍵的設計選擇：前者確保擴充下游不用改核心，後者直接避開上一課談過的 big-key 風險。</p>
+
+<h2>MVP 明確不做的事</h2>
+<p>這份清單和「要做」一樣重要：</p>
+<ul>
+<li>不做叢集、Controller、Master/Slave、故障接管（failover）。</li>
+<li>不做 HTTP／Kafka 之外的 Sink。</li>
+<li>不做驗證與限流（auth／rate-limit）。</li>
+<li>不做死信佇列（DLQ）與自訂重試策略。</li>
+<li>不做 SDK、多租戶、跨區部署。</li>
+<li>不做 Kubernetes Operator、MCP Server。</li>
+</ul>
+<p>這些不是永遠不做，而是留給後續階段。把它們擋在 MVP 之外，三週才有可能跑完主流程。</p>
+
+<h2>非功能指標：MVP 與長期的差距</h2>
+<p>功能有範圍，效能也一樣，先看 MVP 的門檻，再看長期目標：</p>
+<table>
+<thead>
+<tr><th>指標</th><th>3 週 MVP</th><th>長期</th></tr>
+</thead>
+<tbody>
+<tr><td>寫入／投遞 QPS</td><td>≥1000</td><td>≥10,000，叢集線性擴展</td></tr>
+<tr><td>容量</td><td>穩定 10 萬則訊息</td><td>每節點 100 萬則</td></tr>
+<tr><td>精度</td><td>99% 落在 ±1 秒</td><td>維持，且不遺失</td></tr>
+<tr><td>API 延遲</td><td>P99 ≤100ms</td><td>維持</td></tr>
+<tr><td>故障接管</td><td>不做（單機妥協）</td><td>Master 故障後 Slave ≤10 秒接手</td></tr>
+</tbody>
+</table>
+<p>值得注意的是那條「單機妥協」：MVP 不做故障接管，所以重啟期間服務不可用，靠業務端重試來補。這是刻意的範圍取捨，不是疏漏。</p>
+
+<h2>七項驗收標準</h2>
+<p>三週結束時，要用這七項來判定專案是否過關：</p>
+<ol>
+<li><strong>功能</strong>：三個 API + 兩種 Sink + 兩個管理台頁面 + 可重現的部署。</li>
+<li><strong>精度</strong>：延遲在 1 秒到 1 小時範圍內，99% 落在 ±1 秒。</li>
+<li><strong>效能</strong>：QPS ≥1000 持續 5 分鐘，穩定承載 10 萬則。</li>
+<li><strong>部署</strong>：第三方能在半小時內端到端部署完成。</li>
+<li><strong>可觀測</strong>：Prometheus 接上 Grafana、結構化日誌含 trace ID、健康檢查可用。</li>
+<li><strong>Demo</strong>：10 分鐘端到端演示，分別投遞到 HTTP 與 Kafka。</li>
+<li><strong>AI 產出驗收</strong>：累計 AI 比例 ≥90%、每個 PR 有真實 review、沒有空批准。</li>
+</ol>
+<p>第七項是整體驗收的<strong>必要條件</strong>——少了它，其他六項再漂亮也不算通過。這正是把上一課談的 AI 編程約束，真正寫進驗收尺規的方式。</p>
+
+<h2>三週怎麼排</h2>
+<ul>
+<li><strong>第 1 週</strong>：需求與設計定案；AI 工程鷹架（Spec、CLAUDE.md、Skills）就緒。</li>
+<li><strong>第 2 週</strong>：核心調度與儲存完成；用 curl 提交一則 30 秒後到期的訊息，能在 ±1 秒內送到測試 HTTP 端點；AI 比例 ≥90% 且 review 清楚。</li>
+<li><strong>第 3 週</strong>：Kafka Sink、管理台、部署、可觀測；在雲主機上用 docker-compose 跑起來，看得到 Grafana 指標，AI 比例再次 ≥90%。</li>
+</ul>
+
+<h2>已知風險</h2>
+<p>需求文件誠實列出四個風險，後續技術方案會逐一回應：Redis big key（用每訊息 ID 的 key 緩解）、時間輪記憶體膨脹（多層加懶載入）、單機重啟不可用（MVP 的妥協）、爆量到期（投遞池限流與削峰）。把它們記在心上，第四課的技術決策才不會顯得突然。</p>
+
+<div class="lesson-nav">
+  <div><a href="./ai-programming-constraints.html">← 上一步：AI 編程約束：讓 AI 寫 90%</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="三週 MVP 貫穿全域的原則是什麼？" data-correct="2" data-explain="主流程優先——先讓提交與投遞真的跑通，能 demo 勝過完美，其餘留待後續。">
+  <button class="opt">把所有功能一次做齊再上線</button>
+  <button class="opt">先做管理台再回頭做核心</button>
+  <button class="opt">主流程優先且能 demo 勝過完美</button>
+  <button class="opt">先完成叢集再接單機主流程</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項屬於 MVP 明確「不做」的範圍？" data-correct="1" data-explain="叢集、Controller、Master/Slave、failover 等都留給後續階段，MVP 只做單機。">
+  <button class="opt">HTTP 與 Kafka 兩種 Sink</button>
+  <button class="opt">Master/Slave 與故障接管</button>
+  <button class="opt">三個訊息的 HTTP API</button>
+  <button class="opt">Prometheus 指標與健康檢查</button>
+</div>
+
+<div class="quiz" data-question="MVP 的精度驗收目標是什麼？" data-correct="3" data-explain="延遲在 1 秒到 1 小時範圍內，99% 的投遞落在目標時間 ±1 秒內。">
+  <button class="opt">100% 落在 ±10 毫秒之內</button>
+  <button class="opt">95% 落在 ±100 毫秒之內</button>
+  <button class="opt">90% 落在 ±1 分鐘之內</button>
+  <button class="opt">99% 落在 ±1 秒之內</button>
+</div>
+
+<div class="quiz" data-question="為什麼 MVP 明文「禁止用 ZSet 大集合」？" data-correct="0" data-explain="單一大 ZSet 會形成 big-key，操作時阻塞 Redis；改用每訊息 ID 分片的 key 來避開。">
+  <button class="opt">避開 big-key 阻塞 Redis 的風險</button>
+  <button class="opt">因為 ZSet 無法保存時間排序</button>
+  <button class="opt">因為 Redis 5.0 不支援 ZSet</button>
+  <button class="opt">因為 ZSet 會讓訊息重複投遞</button>
+</div>
+
+<div class="quiz" data-question="七項驗收中，哪一項是整體通過的必要條件？" data-correct="2" data-explain="AI 產出驗收（比例 ≥90%、每個 PR 有真 review、沒有空批准）是整體通過的必要條件。">
+  <button class="opt">效能達到 QPS ≥1000</button>
+  <button class="opt">第三方半小時內完成部署</button>
+  <button class="opt">AI 產出的比例與 review 驗收</button>
+  <button class="opt">10 分鐘端到端的 Demo</button>
+</div>
+
+<div class="quiz" data-question="MVP 為什麼接受「重啟期間服務不可用」？" data-correct="1" data-explain="這是刻意的範圍取捨：MVP 不做故障接管，靠業務端重試補上，把叢集留到後續階段。">
+  <button class="opt">因為 Redis 不支援持久化資料</button>
+  <button class="opt">因為故障接管屬刻意延後的範圍</button>
+  <button class="opt">因為時間輪無法從磁碟重建</button>
+  <button class="opt">因為業務不需要訊息不遺失</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項是需求文件列出的已知風險？" data-correct="3" data-explain="四個風險是 Redis big key、時間輪記憶體膨脹、單機重啟不可用、爆量到期。">
+  <button class="opt">下游不支援 HTTP 協定</button>
+  <button class="opt">管理台無法顯示訊息內容</button>
+  <button class="opt">Kafka 叢集版本過舊</button>
+  <button class="opt">時間輪記憶體膨脹</button>
+</div>
+
+<div class="quiz" data-question="第 2 週的里程碑要求驗證什麼？" data-correct="0" data-explain="用 curl 提交一則 30 秒後到期的訊息，能在 ±1 秒內送達測試 HTTP 端點，且 AI 比例 ≥90%。">
+  <button class="opt">curl 提交 30 秒訊息準時送達</button>
+  <button class="opt">Grafana 上看到五類指標變化</button>
+  <button class="opt">Kafka Sink 完成端到端投遞</button>
+  <button class="opt">第三方完成半小時內部屬</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · When 調研與需求 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

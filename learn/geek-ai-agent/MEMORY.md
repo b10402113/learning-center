@@ -1,46 +1,47 @@
 ---
 subject: geek-ai-agent
 language: zh-Hant
-tune: none
-tune-scope: elements-steps
-created: 2026-08-19
-updated: 2026-08-19
+created: 2026-09-22
+updated: 2026-09-22
 ---
 
 # MEMORY — geek-ai-agent
 
 ## Goal
-學會用 AI coding agent 把企業級真實項目「做成」：先建立一套能落地的 AI 編程工作流（SDD + Harness），再真動手從 0 寫出一個 Agent OS（OryxOS：JDK 21 + Spring Boot + 自研 ReAct loop），把「用 AI 把一件事做成」變成肌肉記憶。When（分布式延時系統）以概念與案例理解為主，不真動手。
+能用 AI 主導交付一個企業級 Agent 系統（OryxOS 級），並把同一套 SDD + Harness + Loop 工作流複製到自己的專案。以整門實戰營為載體走完三條線：認知篇建立判斷力；OryxOS 底座從需求分析 → Provider / ReAct / CLI / Notify / Tool / Memory / Sandbox / 排程 / Web → 全流程串聯 → 插件化與動態管理 → 發布 v0.1.0；When 用 Loop 工程做一個分散式延遲投遞元件（etcd 協調、時間輪、Master/Slave、10 秒 failover）。
 
 ## Why
-吞吐量動機延續自 ai-coding-for-real-engineer：一個人做超過一個人的事（"plan while the AI ships"）。本主題再疊一層：想真正搞懂 Agent / Agent OS 技術本身，能自己從 0 寫或基於開源二開——把「AI 編程能力」沉澱成「可遷移的工程判斷力」。
+讓 OryxOS 從「我讀過」變成「我能自己重建／擴充」——把底座每個能力對回自己寫的 ReAct loop，缺哪層補哪層；並把 Loop Engineering 搬回公司的 Java 平台，讓一個人交付遠超一個人的事。這個動機是卡關（環境摩擦、AI 亂搞、分散式難驗）時真正撐得住的錨。
 
 ## Prior experience
-- TypeScript / React / Node 熟悉（舊主題的 20k 行 TS/React playground）。
-- 已學過 ai-coding-for-real-engineer：七階段流程（grill→research→prototype→PRD+plan→issues→implement→review）、AFK 離線交付、Claude Code 基本操作、PRD-to-plan skill、公平比較的實驗設置。
-- 用過 LLM 寫程式 / 修 bug；有「系統化工作流」的意識，但尚未內化成肌肉記憶。
-- Java 是增量——OryxOS 是 JDK 21 + Spring Boot 3.x + Spring AI，要當新領域補（不會一步步教 IDE，直接進項目）。
-- 未勾選：git/GitHub 進階、Docker/sandbox、軟體架構理論。
+- Java 21 / Spring Boot 3.x、Maven 多模組——底層前提已熟，**不重教**，只教它們在 OryxOS／When 裡怎麼被用。
+- 自己寫過 OryxOS 的 ReAct loop；了解自寫 loop vs 框架黑盒的取捨。
+- Redis、MQ、Docker/Compose。
+- 分散式概念（DDIA）：複製、一致性、冪等、exactly-once、event log。
+- Claude Code / opencode 重度使用（本身就是帶 harness 的 agent）。
+- LangGraph 多節點 agent + SSE 串流（llm-project）。
+- **新知識、要從零教**：Spec-Kit、etcd（Lease / Watch / Txn）、時間輪（timing wheel）、Spring AI Alibaba、gRPC、Prometheus / Micrometer、K8s 部署。
 
 ## Anchors
-- 舊主題的 playground 與 fair-test-setup 實驗——「受控比較」姿勢可對照到 Skills/Spec 的評估與迭代。
-- 日常就在用 opencode / Claude Code 這類 agent 工具（有實際操作手感）。
-- 沒有自己的 codebase 要套用——以課程的 OryxOS/When 當 playground。
-- 認知篇（02–08）與舊主題高度重疊：已學過的不深讀，只挑 GitHub 趨勢(04)、自動化邊界(06)、SDD+Harness(07) 深讀；其餘略過。
-- 源材料不含 DifyPro/mq9——roadmap 範圍就是 認知篇(02–08) + 擴展篇(09–15) + OryxOS(16–19) + When(20–23)。
+- 自己的 OryxOS repo——每個底座能力都可對照「我的 loop 缺這層會怎樣」。
+- 公司的 Java 平台——Loop/Harness 最終要搬回去的地方。
+- When 的四份文件（業界調研 → 需求 → 技術方案 → AI 編程指引），是可複製的文件鏈範本。
+- `agent-harness` 的 TS runtime——同構對照：TS 版能力 vs Java 生產版實作。
+- 日常使用 Claude Code / opencode——從「使用者的體感」反推「內部怎麼做」。
 
 ## Habits & constraints
-- 每週 1–2 小時，集中在週末/晚上的長段時間。
-- 可以在本機安裝並執行 agent 工具與 Java 開發環境（JDK 21 / Maven / Spring Boot）。
-- 時間緊，範圍需裁剪：項目壓到 OryxOS 一個，When 只做概念與案例理解。
-- Docker 未確認可用——OryxOS 的 sandbox/部署若涉及容器會是明顯門檻，需要先補環境（延續舊主題的未勾選項）。
+- **每週 1–2 小時，且碎片化**——內容必須切成小塊能一次讀完，不能一篇長文壓下來。
+- Mac 環境，能跑 Java / OryxOS；可自行安裝 etcd、Redis、Docker。
+- 無硬性 deadline，中等壓力。
 
 ## Knowledge type
-Mixed，以 procedural 為主。真正的學習發生在「動手建 OryxOS」與「跑通 SDD+Harness 工作流」；認知/擴展篇提供支撐性概念（Agent 五組件+一循環、SDD/Harness、自動化邊界、Skills），是「知道為什麼」的骨架，不是目的。
+mixed，**procedural 為主**。核心是「會做且能複製」的交付能力；但此主題含大量 declarative 內容（認知篇的判斷、Agent OS 架構、分散式原理、選型取捨），這些要在「做的脈絡」裡講，不空談理論。
 
 ## How to teach me
-- 先看完整實跑（worked run）：prompt → agent 行為 → 結果，一個完整來龍去脈，再上手。
-- 簡潔、密度高、不要廢話；不耐煩冗長鋪陳。
-- 要動手：在 OryxOS 項目上做真實練習，不是讀過去。
-- 無聊的點：工具安裝/basics（TS 已熟、認知篇重疊部分）、重複已經懂的東西。
-- 講「為什麼」的機制（為什麼 ReAct loop 要自研、為什麼時間輪 O(1)、為什麼 Harness 是三道防線）有助於記住「怎麼做」。
+- **架構優先，程式碼為佐證**：先講清楚架構與「這層為什麼存在」，再用 repo 真程式碼對照關鍵片段；不要求每步都自己跑。
+- 簡潔、密度高、不要廢話；**跳過 Java / Spring / tooling / basics**。
+- 每篇要能**碎片化讀完**，結尾落在「真的能跑或真的能決定」的事上。
+- **認知篇也要深教**（不略讀），但用「判斷／取捨」的方式講，不堆名詞與清單。
+- 用「為什麼 X 很重要？」點價值，配具體例子與數字，不堆術語。
+- 講「為什麼」的機制（為什麼 context 會變笨、為什麼 Lease 能偵測節點死亡、為什麼時間輪是 O(1)）幫我記住「怎麼做」。
+- 輸出語言 **zh-Hant**；程式碼、識別字、API 名稱保持英文。

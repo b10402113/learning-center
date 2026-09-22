@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>動手前的四個決定：輕/重命令切分與 JPA 掃描坑</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>動手前的四個決定</h1>
+<p class="meta">Step 2/4 · CLI 與 Session</p>
+
+<h2>學習目標</h2>
+<p>能複述動手前的四個決定（不碰 Agent 邏輯、輕重切分、Picocli、顯式 JPA 掃描），並能解釋「Found 0 JPA repository interfaces」這個陷阱的成因與修法。</p>
+
+<h2>寫 CLI 之前，先想清楚四件事</h2>
+<p>CLI 太容易寫成「一把抓」：反正終端機指令嘛，能在 <code>main</code> 裡把參數解析、呼叫引擎、順便管理 Session 全寫在一起。但 OryxOS 動手前就先釘死四個決定，避免事後被啟動延遲和 Spring 的隱形行為咬到。</p>
+
+<h2>決定一：CLI 永遠不碰 Agent 邏輯</h2>
+<p>CLI 只發命令、收回應。它不該自己判斷該調哪個模型、不該自己拼 prompt、不該自己決策工具呼叫。所有腦力都在引擎（<code>AgentService</code> → <code>ReActLoop</code>）與能力塊裡。這個決定讓 CLI 保持薄，也讓測試能被縮到很小——因為沒什麼可測的。</p>
+
+<h2>決定二：輕/重命令切分</h2>
+<p>不是每個命令都值得啟動整個 Spring 容器。啟動 <code>chat</code> 需要引擎，所以必須開 Spring；但 <code>init</code> 只是複製幾份檔案、<code>profile list</code> 只是列個目錄，開整套 Spring 是白付啟動延遲。</p>
+<table>
+<thead>
+<tr><th>種類</th><th>例子</th><th>需要 Spring？</th><th>行為</th></tr>
+</thead>
+<tbody>
+<tr><td>輕命令</td><td><code>init</code>、<code>profile list</code></td><td>否</td><td>直接走檔案 API，瞬間回</td></tr>
+<tr><td>重命令</td><td><code>chat</code>、<code>serve</code>、<code>gateway</code></td><td>是</td><td>啟動 Spring、載引擎</td></tr>
+</tbody>
+</table>
+<p>啟動延遲是有感的：一個 2–4 秒的 <code>chat</code> 可以忍，但每次查 Profile 都要 4 秒就很煩。輕重切分本質上是「啟動延遲預算」的分解。</p>
+
+<h2>決定三：用 Picocli，不自己拆參數</h2>
+<p>子命令一多，手寫 <code>args</code> 解析就會變成災難（錯誤訊息不一致、help 不統一、縮排對不齊）。OryxOS 用 Picocli：一個子命令對一個 <code>@Command</code> 類別，參數、說明、錯誤處理全部交給框架。12 個子命令就 12 個類別，每個都極薄。</p>
+
+<h2>決定四：重命令要顯式宣告 JPA 掃描範圍（這是個坑）</h2>
+<p>這是輕重切分最容易踩的真實陷阱。你用 <code>@SpringBootApplication(scanBasePackages=...)</code> 指定了套件掃描範圍，<strong>但這個 scanBasePackages 並不自動攜帶 JPA 的 repository／entity 掃描</strong>。也就是說，即使你的 <code>SessionRepository</code> 在掃描範圍裡，Spring Boot 自動設定的 <code>@EnableJpaRepositories</code> 拿到的還是預設的「當前套件」，於是啟動就報：</p>
+<pre><code>Found 0 JPA repository interfaces
+</code></pre>
+<p>修法很直接：在重命令的啟動類別上顯式宣告掃描範圍，把底座真正的儲存套件指進去：</p>
+<pre><code>@EnableJpaRepositories(basePackages = "io.oryxos...storage...")
+@EntityScan(basePackages = "io.oryxos...domain...")
+</code></pre>
+<p>輕命令不受影響，因為它們根本不開 Spring、不碰 JPA。這個坑的教訓是：<strong>走「自訂掃描 + 自動設定」這條路時，永遠要懷疑 Spring 的自動設定到底掃了哪裡。</strong></p>
+
+<h2>怎麼驗證命令切分對</h2>
+<p>驗證不需要重邏輯——主要是看行為：輕命令要「秒回」（不該有數秒的 Spark 啟動打嗝）、啟動紀錄要能看到 <code>N &gt; 0</code> 個 JPA repository 被找到、12 個子命令的 <code>--help</code> 都能正常列出。</p>
+
+<div class="lesson-nav">
+  <div><a href="./cli-overview.html">← 上一步：CLI 是什麼：薄入口與十二個子命令</a></div>
+  <div><a href="./session-identity.html">下一步：Session：冪等 session id 的單一真相 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="動手前的四個決定是哪四個？" data-correct="2" data-explain="不碰 Agent 邏輯、輕重切分、Picocli、顯式 JPA 掃描。">
+  <button class="opt">型別安全、DI、AOP、快取</button>
+  <button class="opt">Provider、Memory、Tool、Sandbox</button>
+  <button class="opt">不碰 Agent 邏輯、輕重切分、Picocli、JPA 掃描</button>
+  <button class="opt">日誌、監控、限量、重試</button>
+</div>
+
+<div class="quiz" data-question="輕命令（如 profile list）為什麼不開 Spring？" data-correct="3" data-explain="它只是列目錄、走檔案 API，開整套 Spring 是白付啟動延遲。">
+  <button class="opt">因為輕命令不該存在於 CLI</button>
+  <button class="opt">因為 Spring 不支援檔案 API</button>
+  <button class="opt">因為開 Spring 需要授權金鑰</button>
+  <button class="opt">因為開整套 Spring 白付啟動延遲</button>
+</div>
+
+<div class="quiz" data-question="「Found 0 JPA repository interfaces」的成因是什麼？" data-correct="1" data-explain="scanBasePackages 不自動攜帶 JPA 的 repository/entity 掃描。">
+  <button class="opt">Picocli 沒有導入 repository 套件</button>
+  <button class="opt">scanBasePackages 不帶 JPA 自動掃描</button>
+  <button class="opt">SQLite 不支援 JPA repository</button>
+  <button class="opt">Dialect 設定錯誤</button>
+</div>
+
+<div class="quiz" data-question="修好 JPA 掃描坑的正確做法是什麼？" data-correct="0" data-explain="在重命令啟動類別顯式宣告掃描範圍，把儲存與領域套件指進去。">
+  <button class="opt">顯式宣告掃描範圍</button>
+  <button class="opt">把 repository 全部刪掉</button>
+  <button class="opt">改用原生 JDBC 忽略 JPA</button>
+  <button class="opt">把啟動類別改放根套件</button>
+</div>
+
+<div class="quiz" data-question="為什麼用 Picocli 而不是手寫參數解析？" data-correct="2" data-explain="子命令一多，手寫解析會災難化；Picocli 統一 help、錯誤與參數。">
+  <button class="opt">因為手寫解析一定會有資安漏洞</button>
+  <button class="opt">因為 Picocli 是唯一合法的選項</button>
+  <button class="opt">子命令一多手寫解析就災難化</button>
+  <button class="opt">因為 Spring 不讓你在 main 裡拆參數</button>
+</div>
+
+<div class="quiz" data-question="如何驗證輕重切分做對了？" data-correct="3" data-explain="看行為：輕命令秒回、啟動紀錄找到 N>0 個 repository。">
+  <button class="opt">讀原始碼找到 12 個 @Command</button>
+  <button class="opt">跑一遍 spring-boot 健康檢查</button>
+  <button class="opt">檢查有沒有 JPA 依賴</button>
+  <button class="opt">輕命令秒回且啟動找到 repository</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · CLI 與 Session · Step 2/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

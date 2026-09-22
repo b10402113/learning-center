@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>故障接管：偵測、決策、回填資料缺口</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>故障接管</h1>
+<p class="meta">Step 4/5 · 集群化六機制與選型</p>
+
+<h2>學習目標</h2>
+<p>能把故障接管拆成偵測、決策、執行三個階段，並解釋為什麼回填非同步複製留下的資料缺口是最難、最容易出錯的一步。</p>
+
+<h2>從「知道壞了」到「有人接手」</h2>
+<p>前面幾步已經備好了零件：租約能偵測節點死亡、選舉能選出唯一的決策者、副本與路由表能描述誰該負責哪個分片。故障接管（failover）就是把這些零件按順序裝起來的流程——一台 Master 掛掉之後，叢集自動讓備份頂上。</p>
+<p>這件事必須照<strong>三個階段</strong>走，不能跳、不能並行亂做：</p>
+
+<table>
+<thead>
+<tr><th>階段</th><th>做什麼</th><th>依賴的機制</th></tr>
+</thead>
+<tbody>
+<tr><td>1. 偵測</td><td>發現某個 Master 已經不可用，時間 ≤ 租約 TTL</td><td>租約 / 心跳</td></tr>
+<tr><td>2. 決策</td><td>由唯一的 Controller 決定由誰接管，避免多頭馬車</td><td>Controller 選舉</td></tr>
+<tr><td>3. 執行</td><td>切換角色（把 Slave 升為 Master）並回填資料缺口</td><td>副本 + 路由表</td></tr>
+</tbody>
+</table>
+
+<h2>階段一：偵測</h2>
+<p>偵測靠的就是租約。Master 持續向協調服務續約，一旦它當機、續約停止，租約在 TTL 內過期，其他節點透過 Watch 立刻得知。這個階段的延遲下限就是 TTL，這也是前面為什麼說 TTL 是「偵測速度」的旋鈕。</p>
+
+<h2>階段二：決策</h2>
+<p>知道「有人死了」還不夠，還要知道「由誰接班」。如果讓每個節點各自判斷、各自行動，就可能出現兩個節點同時以為自己該接管同一個分片——這正是腦裂的場景。</p>
+<p>所以決策必須收斂到<strong>單一的 Controller</strong>：由選舉產生的唯一決策者來拍板「這段分片改由哪台接手」，再把決定寫進路由元數據表。其他節點只負責遵守，不自行決定。決策的「唯一」，是靠前面選舉的 CAS 與多數派保證的。</p>
+
+<h2>階段三：執行，以及最難的回填</h2>
+<p>決策出爐後就是執行：把被指定接班的 Slave 升為 Master，同時改掉路由表裡那一格。到這裡聽起來不難——麻煩在於<strong>接班的 Slave 可能不是最新的</strong>。</p>
+<p>回想上一步的複製取捨：如果用的是<strong>非同步複製</strong>，Master 是「先回傳成功、再背景複製」，所以 Slave 幾乎必然落後 Master 一小段。Master 突然死亡時，那一小段還來不及複製的資料，就成了新舊之間的<strong>資料缺口（data gap）</strong>。回填這個缺口，是整個接管流程中最困難、最容易出錯的一步：</p>
+<ul>
+<li>缺口有多大？取決於死亡當下的複製進度，事先無法確定。</li>
+<li>怎麼補？要有辦法知道「哪些資料還沒同步過去」，並安全地補齊。</li>
+<li>補的過程如果又出錯，可能造成重複投遞或漏投。</li>
+</ul>
+<p>When 的答案，正是前面鋪好的那條路：因為 Redis 是可信的外部來源，新升上來的 Master 可以<strong>重新從 Redis 載入、對帳，把記憶體視圖重建起來</strong>，缺口就補上了。這也說明了為什麼「外部可信來源」在非同步複製的設計裡是不可或缺的——沒有它，回填就無從下手。</p>
+
+<blockquote>接管的可信度，最終取決於你能不能處理那個資料缺口。「偵測」與「決策」相對標準，「回填」才是真正拉開實作品質的地方。</blockquote>
+
+<h2>把三個階段串成一條線</h2>
+<p>完整的故障接管是：租約過期（偵測）→ 唯一 Controller 拍板（決策）→ 切換角色並回填 Redis 缺口（執行）。三個階段分別依賴租約、選舉、副本與路由表，缺一環就接不起來。它同時是整個叢集最容易出錯的一段流程，因此也是後續自動化測試與正確性驗證的重點——測試會刻意注入故障，專門驗證這條路能不能在 10 秒內、不丟不重地跑完。</p>
+
+<div class="lesson-nav">
+  <div><a href="./data-location-and-replication.html">← 上一步：資料定位與複製一致性</a></div>
+  <div><a href="./coordination-and-selection.html">下一步：公共協調層與選型 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="故障接管的三個階段依序是？" data-correct="1" data-explain="先偵測誰壞了，再由唯一決策者決定誰接班，最後執行角色切換與回填。">
+  <button class="opt">執行、決策、偵測三階段</button>
+  <button class="opt">偵測、決策、執行三階段</button>
+  <button class="opt">決策、偵測、執行三階段</button>
+  <button class="opt">偵測、執行、決策三階段</button>
+</div>
+
+<div class="quiz" data-question="偵測階段最快多久能發現一個 Master 掛了？" data-correct="3" data-explain="偵測延遲下限就是租約 TTL，TTL 多大就至少等多久。">
+  <button class="opt">完全不需要任何等待時間</button>
+  <button class="opt">固定為網路來回一次的延遲</button>
+  <button class="opt">取決於副本之間的同步速度</button>
+  <button class="opt">受限於租約的 TTL 長度</button>
+</div>
+
+<div class="quiz" data-question="為什麼接管決策必須收斂到單一 Controller？" data-correct="0" data-explain="避免多個節點各自判斷、各自接管同一分片，形成腦裂與資料衝突。">
+  <button class="opt">避免多頭決策造成腦裂</button>
+  <button class="opt">因為 Controller 效能一定最好</button>
+  <button class="opt">為了讓偵測階段可以省略</button>
+  <button class="opt">因為其他節點沒有任何資料</button>
+</div>
+
+<div class="quiz" data-question="非同步複製下，Slave 在 Master 死亡瞬間的狀態通常是？" data-correct="1" data-explain="非同步是先回傳再背景複製，Slave 幾乎必然落後 Master 一小段。">
+  <button class="opt">一定是完全同步、毫無落後</button>
+  <button class="opt">通常落後一小段未複製資料</button>
+  <button class="opt">一定比 Master 擁有更多資料</button>
+  <button class="opt">資料內容與 Master 完全無關</button>
+</div>
+
+<div class="quiz" data-question="When 用什麼方式回填接管時的資料缺口？" data-correct="2" data-explain="Redis 是可信外部來源，新 Master 可重新載入並對帳，重建記憶體視圖。">
+  <button class="opt">放棄缺口、等待人工補資料</button>
+  <button class="opt">要求用戶端重新送出所有訊息</button>
+  <button class="opt">從 Redis 重新載入並對帳</button>
+  <button class="opt">把缺口直接寫進路由表覆蓋</button>
+</div>
+
+<div class="quiz" data-question="為什麼說回填資料缺口是最容易出錯的一步？" data-correct="3" data-explain="缺口大小事先不確定，補的過程若出錯還可能造成重複投遞或漏投。">
+  <button class="opt">因為它需要重新選舉 Controller</button>
+  <button class="opt">因為它一定會超過租約的 TTL</button>
+  <button class="opt">因為它會讓整台機器重新開機</button>
+  <button class="opt">因為缺口大小不確定且易補錯</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 集群化六機制與選型 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

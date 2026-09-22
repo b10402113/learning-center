@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>業界記憶方案盤點與 MemGPT／Mem0 解剖</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>業界記憶方案盤點與 MemGPT／Mem0 解剖</h1>
+<p class="meta">Step 3/6 · Memory</p>
+
+<h2>學習目標</h2>
+<p>能盤點 Mem0／Zep／Letta(MemGPT)／Cognee／LangMem／ReMe 的定位差異，說清 MemGPT「記憶即作業系統」與 Mem0「add 即消解」兩個核心思想，並用「記憶是否為核心差異化能力」這個錨判斷自造或集成。</p>
+
+<h2>為什麼要先看業界</h2>
+<p>2026 年開源記憶生態已經成熟到「不缺實作，缺的是選型判斷」。同樣一組問答，不同架構在時間性檢索上能差出約 15 個百分點——所以關鍵問題不是「要不要用記憶框架」，而是<strong>哪種架構適合我的場景</strong>。先看清楚別人做了什麼，才不會重造輪子、也不會盲目集成。</p>
+
+<h2>2026 開源記憶生態一覽</h2>
+<table>
+<thead>
+<tr><th>方案</th><th>定位</th><th>記憶體</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Mem0</strong></td><td>即插即用的記憶層，47K+ stars；<code>add</code>／<code>search</code> 藏起一切</td><td>向量＋圖＋KV，user／session／agent 三種 scope</td></tr>
+<tr><td><strong>Zep / Graphiti</strong></td><td>時序知識圖譜檢索</td><td>圖；LongMemEval 約 63.8%（Mem0 約 49%）</td></tr>
+<tr><td><strong>Letta / MemGPT</strong></td><td>有狀態 Agent 執行時（memory-as-OS）</td><td>主上下文＋外部儲存，Agent 自管記憶</td></tr>
+<tr><td><strong>Cognee</strong></td><td>圖原生、可自我改進的 ECL 管線</td><td>圖；提煉／壓縮映射成 cognify／memify 管線步驟</td></tr>
+<tr><td><strong>LangMem</strong></td><td>LangGraph 官方記憶元件</td><td>與 LangGraph 深度綁定</td></tr>
+<tr><td><strong>ReMe</strong></td><td>透明、檔案式記憶</td><td>檔案；可讀可版控</td></tr>
+</tbody>
+</table>
+<p>兩個值得記住的觀察：第一，<strong>LongMemEval 已是事實上的壓力測試</strong>，架構差異會直接反映在分數上；第二，多數框架<strong>不碰上下文壓縮</strong>，而是傾向把狀態外部化——這和 OryxOS 的思路一致。</p>
+
+<h2>思想一：MemGPT——把記憶當作業系統管</h2>
+<p>MemGPT 的核心洞見是一組對照：<strong>LLM 的上下文就像記憶體</strong>（快、貴、小），<strong>外部儲存就像磁碟</strong>（慢、便宜、超大）。要管好兩者，就該像作業系統管虛擬記憶體那樣——分層、換入換出。</p>
+<p>它把記憶切成兩層：主上下文裡有一小塊永遠在場的 <strong>Core Memory</strong>，外部則有 <strong>Archival Memory</strong> 與完整歷史，需要時才檢索進主上下文。更關鍵的是，MemGPT 給 Agent 自己管理記憶的工具，並在上下文快滿時發出一個<strong>「記憶壓力」訊號</strong>，讓 Agent 自己決定要摘要什麼、寫什麼、歸檔什麼、丟什麼。</p>
+<p>其中兩個想法直接影響了 OryxOS：<strong>核心記憶這一層</strong>（階段一就採用）與<strong>壓力觸發的整合</strong>（列為擴展候選）。</p>
+
+<h2>思想二：Mem0——add 即消解</h2>
+<p>Mem0 把自動提煉、衝突消解、混合儲存、多 scope 全打包成一個 library，對外只露 <code>add</code>／<code>search</code>。它最核心的地方不是「存」，而是<strong>寫入時的比較與更新</strong>：新增一條事實時，先拿它跟既有記憶比對——</p>
+<table>
+<thead>
+<tr><th>新事實與既有記憶的關係</th><th>動作</th></tr>
+</thead>
+<tbody>
+<tr><td>互相矛盾</td><td>update（更新舊條目）</td></tr>
+<tr><td>重複</td><td>merge（合併）</td></tr>
+<tr><td>無關</td><td>add（新增）</td></tr>
+</tbody>
+</table>
+<p>這個「add 即消解」正是<strong>記憶壓縮的實務落地</strong>，也恰好照出 OryxOS 純追加式 <code>MEMORY.md</code> 的弱點：只會一直往後疊，不會消解矛盾。但它也有代價——每次 add 多一次模型呼叫、衝突消解是黑箱、資料會流經它自己的管線。值得注意的是：Mem0 是<strong>可自架的 library，不是 runtime</strong>，所以它跟 OryxOS 的定位不衝突。</p>
+
+<h2>知識圖譜：向量檢索的盲點</h2>
+<p>向量檢索擅長「語意相近」，卻對<strong>關係</strong>與<strong>時間</strong>兩件事視而不見。經典反例：使用者換了工作，向量檢索可能仍把舊的「在 A 公司任職」撈出來，壓過新的「在 B 公司任職」——因為兩句話語意太近了。</p>
+<p>Graphiti／Zep 的時序知識圖譜正是來補這個洞：實體是節點、帶時間戳的關係是邊；新事實不是覆蓋舊邊，而是<strong>讓舊邊過期</strong>。於是可以回答「誰在什麼時候跟誰有關」。三種儲存各有所長：</p>
+<ul>
+<li>檔案／KV：適合「是什麼」的離散事實。</li>
+<li>向量：適合「語意相近」的模糊召回。</li>
+<li>知識圖譜：適合「誰跟誰、在什麼時候」的關係與時間查詢。</li>
+</ul>
+<p>OryxOS 的目標場景以偏好與事實為主、關係複雜度低，所以<strong>把圖記憶排在向量之後</strong>，時序一致性先靠 Agent 判斷；若真要圖記憶，也應集成可自架的 Graphiti，而不是自己造。</p>
+
+<h2>自造還是集成：一個判斷錨</h2>
+<p>選型的關鍵，是先分辨對方是「執行時」還是「可集成的零件」：</p>
+<ul>
+<li><strong>Letta 是執行時</strong>——它是有狀態的 Agent 執行時，站在 OryxOS 同一層，屬於同儕／競品。這種<strong>絕不集成</strong>，只學它的思想（核心記憶、壓力觸發）。</li>
+<li><strong>Mem0 是零件</strong>——它是設計來被集成的 library。若記憶屬於「必要但不差異化」的能力，可以集成。</li>
+</ul>
+<blockquote>選型錨：<strong>記憶是不是我的核心差異化能力？</strong></blockquote>
+<p>OryxOS 目前的傾向：核心階段的檔案式記憶<strong>自造</strong>（簡單、可控、可私有部署）；階段二的向量層優先<strong>薄自造</strong>以守住資料主權，只有在自造明顯落後、且記憶確實不是重點時，才集成可自架方案。如果一個決定的理由只剩「大家都在用」，那這個設計就還沒想清楚。</p>
+
+<div class="lesson-nav">
+  <div><a href="./memory-compression-extraction.html">← 上一步：壓縮 vs 提煉</a></div>
+  <div><a href="./memory-interface-wall.html">下一步：介面牆與三層設計 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="MemGPT 的核心洞見把「LLM 上下文」比喻成什麼？" data-correct="1" data-explain="上下文像記憶體（快、貴、小），外部儲存像磁碟（慢、便宜、大），因此要分層換入換出。">
+  <button class="opt">像 CPU 的快取，永不夠用</button>
+  <button class="opt">像記憶體，外部儲存像磁碟</button>
+  <button class="opt">像網路頻寬，越寬越好</button>
+  <button class="opt">像資料庫索引，用來加速查詢</button>
+</div>
+
+<div class="quiz" data-question="Mem0 的「add 即消解」對應到哪個概念？" data-correct="2" data-explain="寫入時比對既有記憶並更新／合併／新增，是記憶壓縮的實務落地。">
+  <button class="opt">上下文壓縮</button>
+  <button class="opt">提示詞工程</button>
+  <button class="opt">記憶壓縮</button>
+  <button class="opt">模型微調</button>
+</div>
+
+<div class="quiz" data-question="向量檢索最大的盲點是什麼？" data-correct="3" data-explain="向量擅長語意相近，但看不到關係與時間，可能把過期的關係當成現況召回。">
+  <button class="opt">無法處理中文</button>
+  <button class="opt">檢索速度太慢</button>
+  <button class="opt">無法儲存偏好</button>
+  <button class="opt">看不見關係與時間</button>
+</div>
+
+<div class="quiz" data-question="為什麼 OryxOS 決定不集成 Letta？" data-correct="0" data-explain="Letta 是有狀態 Agent 執行時，與 OryxOS 同層，屬同儕／競品；只學其思想，不集成其執行時。">
+  <button class="opt">它是執行時，與 OryxOS 同層同儕</button>
+  <button class="opt">它的授權條款不允許商用</button>
+  <button class="opt">它只能處理英文記憶</button>
+  <button class="opt">它沒有開源無法自架</button>
+</div>
+
+<div class="quiz" data-question="「自造還是集成」的判斷錨是什麼？" data-correct="1" data-explain="錨是：記憶是不是你的核心差異化能力？是則自造守主權，否則可集成。">
+  <button class="opt">框架的 GitHub star 多不多</button>
+  <button class="opt">記憶是否為你的核心差異化能力</button>
+  <button class="opt">團隊有沒有人學過那個框架</button>
+  <button class="opt">社群討論熱度夠不夠高</button>
+</div>
+
+<div class="quiz" data-question="為什麼 OryxOS 把知識圖譜記憶排在向量之後？" data-correct="2" data-explain="目標場景以偏好與事實為主、關係複雜度低，圖記憶的必要性低於向量。">
+  <button class="opt">圖資料庫授權太貴</button>
+  <button class="opt">圖檢索比關鍵詞還慢</button>
+  <button class="opt">場景關係複雜度低，必要性低於向量</button>
+  <button class="opt">知識圖譜已被廢棄不用</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Memory · Step 3/6</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

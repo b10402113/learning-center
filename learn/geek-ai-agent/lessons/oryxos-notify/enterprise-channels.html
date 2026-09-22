@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>擴到企業主流渠道：場景、webhook 差異與延伸路徑</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>擴到企業主流渠道：場景、webhook 差異與延伸路徑</h1>
+<p class="meta">Step 5/5 · Notify 出站</p>
+
+<h2>學習目標</h2>
+<p>能依場景選通知渠道、看懂各家 webhook 格式差異與對接坑，並用三原則決定「純文字→webhook、特殊格式→專用 adapter、富卡片→MCP」的延伸路徑。</p>
+
+<h2>先問場景，再挑渠道</h2>
+<p>企業通知渠道不是越多越好，而是<strong>按場景選</strong>。OryxOS 按使用情境把渠道分成四類：</p>
+<table>
+<thead>
+<tr><th>場景</th><th>代表渠道</th><th>特點</th></tr>
+</thead>
+<tbody>
+<tr><td>團隊協作</td><td>企業微信、飛書、釘釘、Slack</td><td>進群、@人、多人可見，Agent 日報的主戰場</td></tr>
+<tr><td>個人通知</td><td>Telegram、ntfy</td><td>個人裝置直接收，適合個人專案的提醒</td></tr>
+<tr><td>告警值班（alert-on-call）</td><td>PagerDuty、Opsgenie</td><td>真的要出事的告警，帶升級與值班流程</td></tr>
+<tr><td>正式觸達</td><td>Email、合規平台</td><td>給客戶／外部對象，要走正式渠道</td></tr>
+</tbody>
+</table>
+<p>判斷規則很務實：<strong>一次 POST 到 URL 就搞定的 = 核心階段可達；要建連線、token 刷新、請求簽名的 = 擴展階段再做。</strong></p>
+
+<h2>「所有 webhook」≠「同一種 JSON」</h2>
+<p>最常踩的坑：以為各家渠道既然都叫 webhook，格式一定一樣。實際上<strong>核心 <code>WebhookNotifyAdapter</code> 送的是 <code>{"content": ...}</code>，而每家渠道的 payload 都不同</strong>——企業微信、飛書、釘釘、Slack、Discord、Telegram、ntfy、Teams 各有各的欄位約定。舉幾個真實差異：</p>
+<ul>
+<li>釘釘要求三選一的安全設定（加簽／關鍵詞／IP 白名單），漏了就要接特別處理。</li>
+<li>飛書的簽名是可選的。</li>
+<li>Teams 的經典 webhook 已退役，改走 Power Automate。</li>
+</ul>
+<p>所以「對接渠道」這四個字背後，是逐家的 payload 對照與坑位清單，不是一份 doc 打天下。</p>
+
+<h2>對接一家渠道的五步流程</h2>
+<p>不管接哪家，流程是同一套，順序也固定：</p>
+<ol>
+<li><strong>建機器人</strong>——在渠道管理後台建一個群機器人，拿到 webhook URL。</li>
+<li><strong>網址放環境變數</strong>——例如 <code>TEAM_WEBHOOK_URL</code>，不明文寫死在設定檔。</li>
+<li><strong>配置到 Profile</strong>——寫進 <code>notify_channels</code>。</li>
+<li><strong>把域名加進 Sandbox 白名單</strong>——讓 <code>enforce</code> 放行這個 webhook 網址。</li>
+<li><strong>發一條測試訊息</strong>——確認真的進群。</li>
+</ol>
+<p>每一步卡住都有明確的修法，例如飛書要多做一步簽名可選的判斷，釘釘要注意它的三選一安全設定。</p>
+
+<h2>三原則：什麼時候該動手寫 adapter？</h2>
+<p>通用 webhook 是核心階段的「下限」。遇到 payload 格式不對的渠道，用三原則決定走哪條路：</p>
+<table>
+<thead>
+<tr><th>需求</th><th>選擇</th><th>理由</th></tr>
+</thead>
+<tbody>
+<tr><td>純文字就能表達</td><td><code>notify</code> + webhook</td><td>核心已經幫你統一掉了，不用寫東西</td></tr>
+<tr><td>特殊格式或認證步驟</td><td>專用 <code>NotifyChannelAdapter</code></td><td>payload 對不上，就寫一個專屬 adapter，介面不用動</td></tr>
+<tr><td>富卡片、複雜互動</td><td>MCP（方式二）</td><td>要官方富文本卡片這種格式，直接接專用 MCP server</td></tr>
+</tbody>
+</table>
+<p>關鍵在於：不管走哪條路，<strong><code>NotifyChannelAdapter.send(NotifyTarget, String)</code> 這個簽名永遠不用改</strong>——介面中性的紀律到擴展階段依然成立。</p>
+
+<h2>安全紅線：webhook URL 本身就是憑證</h2>
+<p>這條要格外記住：<strong>webhook URL 裡的 token 本身就是認證憑證</strong>——拿到 URL 就等於拿到往群組發訊息的鑰匙。所以它必須：絕不明文落進設定檔、絕不寫進記錄（log）、絕不進 Git 提交。一律走環境變數，必要時加密儲存。</p>
+
+<h2>回到整條鏈：Notify 只是「推送」這一步</h2>
+<p>把視角拉大：Notify 不是「另一個系統」，它是 OryxOS 底座能力的一環。天氣 Agent、科技日報 Agent、GitHub 日報 Agent 全部是同一條鏈——「查資料 → 組內容 → <code>notify(channel, content)</code> 推送」。而 Agent 到底用哪個渠道，靠的是 Profile 設定（<code>notify_channels</code>）＋ Agent 的決定（要不要推）。渠道多、格式雜，靠介面隔離；這正是 OryxOS 敢在外接一大堆企業渠道的原因。</p>
+
+<div class="lesson-nav">
+  <div><a href="./acceptance-security.html">← 上一步：驗收 harness 與安全順序：enforce 必須在 send 之前</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="通知渠道應該怎麼選？" data-correct="1" data-explain="先按場景（團隊協作／個人／告警／正式）挑渠道，不是越多越好。">
+  <button class="opt">能接的全接上，多多益善</button>
+  <button class="opt">先問場景，再依場景選渠道</button>
+  <button class="opt">只選有 webhook 的那幾家</button>
+  <button class="opt">讓 Agent 自己隨機決定</button>
+</div>
+
+<div class="quiz" data-question="「所有 webhook」為什麼不等於「同一種 JSON」？" data-correct="0" data-explain="核心送 {"content": ...}，各家渠道的 payload 欄位約定都不同。">
+  <button class="opt">各家渠道的 payload 格式都不相同</button>
+  <button class="opt">因為 HTTP 協議不支援 JSON</button>
+  <button class="opt">因為 webhook 一定要加密</button>
+  <button class="opt">各家其實格式相同，只是文件沒寫</button>
+</div>
+
+<div class="quiz" data-question="對接一家渠道的五步，順序正確的是哪個？" data-correct="3" data-explain="建機器人 → 網址放環境變數 → 配置到 Profile → 域名加白名單 → 發測試訊息。">
+  <button class="opt">建機器人 → 發測試訊息 → 加白名單 → 配 Profile</button>
+  <button class="opt">加白名單 → 建機器人 → 配環境變數 → 發訊息</button>
+  <button class="opt">配 Profile → 建機器人 → 發訊息 → 加白名單</button>
+  <button class="opt">建機器人 → 環境變數 → Profile → 白名單 → 測試訊息</button>
+</div>
+
+<div class="quiz" data-question="遇到 payload 對不上的渠道，什麼情況該走 MCP？" data-correct="2" data-explain="需要富卡片、複雜互動時走 MCP；純文字走 webhook；特殊格式走專用 adapter。">
+  <button class="opt">只是要發純文字通知</button>
+  <button class="opt">沒有 webhook 位址可用</button>
+  <button class="opt">需要官方富文本卡片這類格式</button>
+  <button class="opt">渠道在中國大陸不可用</button>
+</div>
+
+<div class="quiz" data-question="延伸三原則中，特殊格式或認證步驟應該走哪條路？" data-correct="1" data-explain="payload 對不上就寫專屬 NotifyChannelAdapter，介面不用動。">
+  <button class="opt">還是用通用 webhook 硬塞</button>
+  <button class="opt">寫專用的 NotifyChannelAdapter</button>
+  <button class="opt">放棄這個渠道</button>
+  <button class="opt">改走 Socket 長連線</button>
+</div>
+
+<div class="quiz" data-question="webhook URL 的 token 在安全上怎麼看待？" data-correct="3" data-explain="URL 的 token 本身就是憑證，絕不明文落盤／入 log／進 Git。">
+  <button class="opt">可以寫進設定檔方便除錯</button>
+  <button class="opt">可以記進 log 方便溯源</button>
+  <button class="opt">可以提交進 Git 給團隊共用</button>
+  <button class="opt">它本身就是認證憑證，必須保密</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Notify 出站 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

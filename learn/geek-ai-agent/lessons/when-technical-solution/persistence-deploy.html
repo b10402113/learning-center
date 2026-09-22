@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>持久化 key 設計與部署形態</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>持久化 key 設計與部署形態</h1>
+<p class="meta">Step 5/5 · When 技術方案</p>
+
+<h2>學習目標</h2>
+<p>能畫出 When 的 Redis key 結構並解釋如何避開 big-key，說清重啟恢復順序與三種部署形態的取捨。</p>
+
+<h2>Redis 只放三種東西</h2>
+<p>前面提過，Redis 是訊息的「唯一真相」。但要讓它又快又省，不能什麼都往裡塞。When 把 Redis 的資料精簡成三類 key：</p>
+<table>
+<thead>
+<tr><th>Key 樣式</th><th>型別</th><th>存什麼</th><th>生命週期</th></tr>
+</thead>
+<tbody>
+<tr><td><code>/when/messages/{message_id}</code></td><td>STRING（JSON）</td><td>訊息本體</td><td>TTL = deliver_at + 7 天</td></tr>
+<tr><td><code>/when/timewheels/{tw_id}/index/{message_id}</code></td><td>STRING</td><td>到期時間（deliver_at）</td><td>投遞或取消後刪除</td></tr>
+<tr><td><code>/when/timewheels/{tw_id}/messages_in_slot/{slot_key}</code></td><td>SET</td><td>哪個槽位有哪些訊息</td><td>僅用於重啟恢復</td></tr>
+</tbody>
+</table>
+<p>三個設計要點藏在這裡。第一，<strong>訊息本體以 message_id 拆開</strong>，一則一 key。第二，<strong>索引按時間輪（tw_id）拆分</strong>，而不是全域共用一個大結構。第三，<strong>TTL 當安全網</strong>：正常流程會在投遞或取消後主動刪除 key，但如果哪裡漏刪了，deliver_at 再加 7 天的到期時間會自動清掉，避免垃圾無限累積。</p>
+
+<h2>big-key 是 Redis 的頭號敵人</h2>
+<p>big-key 指的是單一 key 底下的資料量過大（例如一個塞了幾百萬成員的集合）。它的危害是：讀寫該 key 會佔用大量記憶體與 CPU、在叢集擴容時難以搬遷、某個熱 key 可能拖垮整個實例。</p>
+<p>When 明確<strong>不用 ZSet，也不用大 Hash</strong>——因為它們天生會把大量成員收在同一個 key 底下。取而代之的是「很多個小 key」，訊息本體一則一 key、索引按輪拆開。Redis 對數百萬個小 key 的處理能力很強，這個代價是划算的。方案也把 big-key、時間輪記憶體、Slave 落後、到期洪峰列為主要風險，並各自給了對策。</p>
+
+<h2>讀寫策略與重啟恢復</h2>
+<p>三個路徑的行為要分清楚：</p>
+<ul>
+<li><strong>寫入</strong>：先寫 Redis（用 Pipeline 批次送以降低往返次數），成功才寫記憶體並回傳成功；Redis 失敗就回報失敗，絕不留下「記憶體有、Redis 沒有」的訊息。</li>
+<li><strong>排程／投遞</strong>：以記憶體為準讀取，非同步刪除 Redis 的 key，不阻塞指針。</li>
+<li><strong>查詢</strong>：先讀記憶體快取，找不到再讀 Redis。</li>
+</ul>
+<p>重啟恢復有一個容易寫錯的順序。節點啟動時，<strong>必須先把 Redis 裡的資料載回記憶體、把時間輪重建完成，才能向 ETCD 註冊</strong>。如果反過來先註冊，叢集會以為這台節點已經可以服務，而它其實還在載入——這正是「已註冊但還沒就緒」的典型陷阱。先載資料、後註冊，才能確保被派工時真的接得住。</p>
+<p>至於 Redis 本身的高可用，MVP 階段只做單機或主從，並把真正的 HA 留給部署方決定。Redis 若中斷，寫入會失敗，業務方依約重試即可。</p>
+
+<h2>三種部署形態</h2>
+<p>When 提供三種部署方式，對應不同階段的需求：</p>
+<table>
+<thead>
+<tr><th>形態</th><th>用途</th><th>內容</th></tr>
+</thead>
+<tbody>
+<tr><td>docker-compose</td><td>本機開發與示範</td><td>ETCD + Redis + Kafka + 三個 When 節點，各自帶環境變數</td></tr>
+<tr><td>單機生產</td><td>小型正式環境</td><td>ETCD、Redis，三個 When 節點置於 Nginx 之後；文件細到每條指令，約半小時可裝好</td></tr>
+<tr><td>Kubernetes</td><td>雲原生生產</td><td>Deployment（replicas=3）加探針、Service、ConfigMap、Secret，可選 HPA 與 PDB；不含 Operator；ETCD 與 Redis 用 Helm 安裝</td></tr>
+</tbody>
+</table>
+<p>K8s 形態裡有一個和前面呼應的細節：Deployment 的 <strong>replicas 固定 3</strong>，對應「三節點是最小 HA」；同時掛上 liveness 與 readiness 探針，讓還沒載完資料的節點不會被導進流量——這正是重啟恢復順序在部署層的體現。組態一律走環境變數，符合 12-factor（十二要素應用）原則，同一個映像檔可以在三種形態中通用。</p>
+
+<h2>把技術方案收在一條線上</h2>
+<p>回頭看，這個節點的每一步都在回答同一個問題：<strong>怎麼讓一個分散式的延遲投遞元件，用最少的自製程式碼撐住可靠性</strong>。六個決策把協調外推給 ETCD、把可靠外推給 Redis；架構讓節點保持同質、狀態盡量外部化；時間輪專注把排程做到 O(1)；Master/Slave 用非同步複製換取十秒內的快速接管；最後用拆散的 key 與「先載後註冊」把持久化與恢復釘死。技術方案的價值不在功能清單，而在於每個「不做什麼、為什麼」都寫成了一句可驗證的理由。</p>
+
+<div class="lesson-nav">
+  <div><a href="./replica-failover.html">← 上一步：Master/Slave 複製與 10 秒接管</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="訊息本體在 Redis 中如何儲存？" data-correct="1" data-explain="以 message_id 為 key 的 STRING（JSON），一則訊息一個 key。">
+  <button class="opt">全部放在一個大 Hash 裡</button>
+  <button class="opt">以 message_id 為 key 一則一 key</button>
+  <button class="opt">放在一個全域 ZSet 裡排序</button>
+  <button class="opt">以業務標籤聚合為多個 List</button>
+</div>
+
+<div class="quiz" data-question="訊息本體的 TTL 設為 deliver_at 加 7 天，用意是什麼？" data-correct="3" data-explain="正常流程會主動刪除，TTL 是防止漏刪後垃圾無限累積的安全網。">
+  <button class="opt">強制訊息在七天內被投遞</button>
+  <button class="opt">讓 Redis 可以省下記憶體</button>
+  <button class="opt">提供七天內的重試能力</button>
+  <button class="opt">當作漏刪時的安全網</button>
+</div>
+
+<div class="quiz" data-question="為什麼 When 明確不用 ZSet 或大 Hash？" data-correct="0" data-explain="它們會把大量成員收在同一個 key 底下而長成 big-key，改用很多小 key。">
+  <button class="opt">因為它們容易長成 big-key</button>
+  <button class="opt">因為它們不支援 TTL 過期</button>
+  <button class="opt">因為它們無法在叢集中使用</button>
+  <button class="opt">因為它們的讀取複雜度太高</button>
+</div>
+
+<div class="quiz" data-question="節點重啟時為什麼要先載資料再註冊？" data-correct="2" data-explain="先註冊會讓叢集以為節點已可服務，但它其實還在載入，形成「已註冊但未就緒」。">
+  <button class="opt">因為 ETCD 註冊需要先讀 Redis</button>
+  <button class="opt">因為不先載入就無法建立 Lease</button>
+  <button class="opt">因為先註冊會出現未就緒卻接工</button>
+  <button class="opt">因為註冊會清除 Redis 中的索引</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不是 When 提供的部署形態？" data-correct="1" data-explain="When 提供 docker-compose、單機生產與 K8s，不含 Operator 形態。">
+  <button class="opt">docker-compose 本機開發</button>
+  <button class="opt">K8s Operator 形態</button>
+  <button class="opt">單機生產三節點</button>
+  <button class="opt">Kubernetes Deployment</button>
+</div>
+
+<div class="quiz" data-question="K8s 形態中 readiness 探針的作用是什麼？" data-correct="3" data-explain="避免尚未載完資料的節點被導入流量，呼應先載後註冊的順序。">
+  <button class="opt">自動擴容 When 節點數量</button>
+  <button class="opt">在故障時觸發 Master 提升</button>
+  <button class="opt">監控 Redis 的連線品質</button>
+  <button class="opt">避免未就緒節點被導入流量</button>
+</div>
+
+<div class="quiz" data-question="執行投遞（排程到期）時，Redis 的刪除如何處理？" data-correct="1" data-explain="以記憶體為準讀取，Redis 刪除非同步進行，避免阻塞時間輪指針。">
+  <button class="opt">同步刪除並等待 Redis 確認</button>
+  <button class="opt">非同步刪除以免阻塞指針</button>
+  <button class="opt">交由 ETCD 交易一起刪除</button>
+  <button class="opt">等到下次重啟時批次清理</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · When 技術方案 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

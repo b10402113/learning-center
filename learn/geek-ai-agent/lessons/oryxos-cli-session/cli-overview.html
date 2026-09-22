@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CLI 是什麼：薄入口與十二個子命令</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>CLI 是什麼：薄入口</h1>
+<p class="meta">Step 1/4 · CLI 與 Session</p>
+
+<h2>學習目標</h2>
+<p>能說出 CLI 的定位是「門不是工人」、核心階段 12 個子命令怎麼分成三組，以及三種運行模式如何共用同一個引擎與同一份 Session 存儲。</p>
+
+<h2>一張圖先擺好：CLI 站在哪</h2>
+<p>OryxOS 包成一個可執行的 JAR，`main` 就是 <code>OryxOsCli</code>。整個底座有兩個「人推」的入口：CLI 與 Web Service，兩者都餵進同一個 ReAct 引擎；引擎再調度 Provider／Memory／Tool 三大能力塊。（之後第 25 節的定時任務會加上第三個「時鐘推」的入口。）</p>
+<blockquote>
+<strong>CLI 是門，不是工人。</strong>那扇門只負責把訊息接進來；真正的活是引擎在幹。
+</blockquote>
+<p>這句話是理解本節所有設計的鑰匙：編排、呼叫 LLM、調工具、記憶，沒有一樣屬於 CLI。CLI 只管「把標準輸入的一行字送到引擎，再把引擎的回應印回標準輸出」。</p>
+
+<h2>核心階段的 12 個子命令</h2>
+<p>核心階段（對應需求文件的「核心範圍」）有 12 個子命令，可以大致分成三組：</p>
+
+<table>
+<thead>
+<tr><th>族群</th><th>命令</th><th>幹嘛用</th></tr>
+</thead>
+<tbody>
+<tr><td>啟動 Agent（跑起來）</td><td><code>chat</code> / <code>serve</code> / <code>gateway</code></td><td>三種運行方式，差別只在訊息從哪來</td></tr>
+<tr><td>查看狀態（檢查）</td><td><code>status</code>、<code>profile list/create/show/delete</code>、<code>provider list</code>、<code>tool list</code>、<code>session list</code></td><td>看組態、看資料、看會話</td></tr>
+<tr><td>初始化（引導）</td><td><code>init</code></td><td>生出一份乾淨的工作區骨架</td></tr>
+</tbody>
+</table>
+
+<p>命令的分組不是隨意分的：<strong>「啟動 Agent」這組要開 Spring 容器（重），「查看狀態」大半不用（輕）</strong>——輕與重怎麼切，是 Step 2 的主題。這裡只要先記住這 12 個命令存在，以及它們在設計上分成三個角色。</p>
+
+<h2>三種運行模式：一魚三吃</h2>
+<p><code>chat</code>（互動對話）、<code>serve</code>（開 Web Service）、<code>gateway</code>（很多渠道的守護行程）共用三樣東西：一份 Profile 組態、一個 Session 存儲、同一個底層引擎。它們<strong>唯一的不同是訊息從哪裡來</strong>：</p>
+<ul>
+  <li><code>chat</code> —— 從標準輸入（stdin）來，印到標準輸出（stdout）。</li>
+  <li><code>serve</code> —— 從 HTTP REST 來，走 Web Service。</li>
+  <li><code>gateway</code> —— 從各聊天渠道來，走 Channel 抽象。</li>
+</ul>
+<p>這意味著你在 <code>chat</code> 裡產生的一段對話，印證「狀態在引擎，不在入口」——換個入口，對話還在同一個 Session 上。</p>
+
+<h2>動手先摸一摸</h2>
+<p>整組命令的日常長這樣：</p>
+<pre><code>oryxos init                 # 生出工作區
+oryxos profile list         # 看有哪些 Profile
+oryxos chat                 # 進互動對話
+oryxos chat --profile weather  # 用 weather 這個 Profile 進對話
+oryxos serve                # 開 Web Service
+oryxos status               # 看目前的狀態
+</code></pre>
+<p>這是 Provider 與 ReAct 之後你第一次真的在終端機「跟自己的 Agent 講話」——從這裡開始，底座不再是紙上架構。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./cli-command-split.html">下一步：動手前的四個決定：輕/重命令切分 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="CLI 在 OryxOS 架構裡的角色是什麼？" data-correct="1" data-explain="CLI 是門不是工人——它只接訊息，引擎與能力塊才幹活。">
+  <button class="opt">它是主要的 Agent 邏輯執行場所</button>
+  <button class="opt">它只是把訊息接進引擎的薄入口</button>
+  <button class="opt">它負責記憶與持久化所有對話</button>
+  <button class="opt">它直接呼叫 LLM 並編排工具</button>
+</div>
+
+<div class="quiz" data-question="啟動 Agent 的那一組子命令是哪三個？" data-correct="3" data-explain="chat/serve/gateway 是啟動 Agent 的三種方式。">
+  <button class="opt">status / profile list / tool list</button>
+  <button class="opt">init / status / session list</button>
+  <button class="opt">init / provider list / tool list</button>
+  <button class="opt">chat / serve / gateway</button>
+</div>
+
+<div class="quiz" data-question="chat、serve、gateway 三者真正不同的地方在哪？" data-correct="0" data-explain="三者共用 Profile、Session、引擎，只有訊息來源不同。">
+  <button class="opt">訊息從哪裡來</button>
+  <button class="opt">用的是不是同一個引擎</button>
+  <button class="opt">Profile 組態內容</button>
+  <button class="opt">Session 存儲位置</button>
+</div>
+
+<div class="quiz" data-question="核心階段的子命令一共幾個、大致分幾組？" data-correct="2" data-explain="12 個子命令，分成啟動/查看/初始化三組。">
+  <button class="opt">10 個，兩組</button>
+  <button class="opt">15 個，四組</button>
+  <button class="opt">12 個，三組</button>
+  <button class="opt">8 個，三組</button>
+</div>
+
+<div class="quiz" data-question="為什麼 CLI 不需要知道 Tool 怎麼執行、Memory 怎麼存取？" data-correct="1" data-explain="因為職責在引擎與能力塊，CLI 只管收發訊息。">
+  <button class="opt">因為那些能力在核心階段根本不存在</button>
+  <button class="opt">因為那些是引擎與能力塊的職責</button>
+  <button class="opt">因為 CLI 有自己的另一套實作</button>
+  <button class="opt">因為 ChatModel 直接處理了這些</button>
+</div>
+
+<div class="quiz" data-question="用 `oryxos chat --profile weather` 進對話，行為跟 `oryxos chat` 的差別是什麼？" data-correct="3" data-explain="--profile 指定用哪份 Profile 設定進對話。">
+  <button class="opt">啟動速度快很多</button>
+  <button class="opt">改用 HTTP 而非標準輸入</button>
+  <button class="opt">不載入 Session 歷史</button>
+  <button class="opt">換一份 Profile 組態</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · CLI 與 Session · Step 1/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

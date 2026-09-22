@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一句話生成與腳本信任邊界</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一句話生成與腳本信任邊界</h1>
+<p class="meta">Step 5/5 · 插件化 Agent 與動態管理</p>
+
+<h2>學習目標</h2>
+<p>能說出「一句話生成」為何必須人審、最終落地為何改成模板骨架，以及安裝帶腳本的 Agent 等於信任作者的信任邊界。</p>
+
+<h2>問題：運維不會寫 AGENT.md</h2>
+<p>動態管理讓「丟一個目錄」變得可行，但還有一個現實門檻：運維人員不會寫 <code>AGENT.md</code>。他們的訴求是一句話——「每天早上九點查北京天氣，把穿搭建議發到團隊群」。所以還需要一條「一句話生成一個 Agent」的路。</p>
+<p>它的本質是<strong>一次 LLM 呼叫</strong>：把使用者那句話，加上「OryxOS 的 AGENT.md 格式規範」丟給模型，讓它產出一份合規的 <code>AGENT.md</code>——完整的 frontmatter 加清楚的 body。</p>
+
+<h2>關鍵：一句話不能直達上線</h2>
+<p>危險就在「直達」兩個字。正確設計是<strong>兩步、有人在迴路中（human in the loop）</strong>：</p>
+<ol>
+<li><code>POST /api/v1/agents/generate</code> 收下那句話 → LLM 產生 <code>AGENT.md</code> 草稿 → <strong>原樣回傳給前端預覽，不落地、不註冊</strong>。</li>
+<li>使用者看過、可以改（尤其是 <code>schedules</code> 裡的 cron 與 tools 權限）→ 再呼叫 <code>POST /api/v1/agents</code> 正式建立。</li>
+</ol>
+<p>這一步不能省，理由很具體：模型可能把 cron 的時間讀錯，或是一個不小心開放過多工具權限。人必須掃一眼。而且生成本身也是一次 LLM 呼叫，要進 <code>llm_calls</code> 審計——這是憲章要求（每次呼叫都留痕）。</p>
+
+<h2>最終落地：設計演進與模板骨架</h2>
+<p>上面那個「generate 端點回草稿」是最初的設計，值得保留當作設計演進的紀錄；但<strong>最終實作改了方向</strong>：</p>
+<ul>
+<li><code>POST /agents/generate</code> 被取消。建立改成 <code>POST /agents {name, description}</code>，由後端<strong>從模板腳手架（scaffold）出一個完整目錄</strong>（AGENT.md + <code>scripts/</code> + <code>skills/</code> + <code>REFERENCE.md</code>）。</li>
+<li>「用 LLM 生成」下沉為<strong>對既有 Agent 的按需重生成</strong>：端點 <code>POST /api/v1/agents/{name}/generate-files {description}</code> 一次 LLM 呼叫產生 <code>{相對路徑 → 內容}</code> 供預覽，再以 <code>POST /api/v1/agents/{name}/files {files}</code> 寫入（先驗 AGENT.md 可解析，再覆寫並重新註冊）。</li>
+<li>生成用 <code>ProviderService.chat(genSessionId, ProviderRequest.of(prompt)).text()</code>（沒有 <code>complete</code>，只有 <code>chat</code>），並新增設定鍵 <code>oryxos.author.provider</code> / <code>oryxos.author.model</code>；沒有「預設模型」時，空的 model 回一個可讀的 503，而不是把 <code>model=null</code> 送給 OpenAI 相容端點。</li>
+</ul>
+<p>為什麼最後選「模板先行、LLM 其次」？因為模板腳手架出來的是一份<strong>立刻合法、可執行、可審計</strong>的骨架——建立一個 Agent 不需要賭模型輸出。LLM 更適合用在「針對某個已經存在的 Agent 迭代內容」，而不是從零建立。</p>
+<p>最終落地還順帶補了四項能力：<strong>每個 Agent 自己的記憶</strong>（全域 <code>MEMORY.md</code> 改為 <code>.oryxos/agents/&lt;name&gt;/MEMORY.md</code>，靠 <code>ToolExecutionContext</code> 這個 <code>ThreadLocal&lt;String&gt; agentName</code> 讓工具知道自己在為哪個 Agent 執行）；<strong>每個 Agent 一個固定 session</strong>（<code>channel="admin"</code>、<code>user="console"</code>、<code>profile=</code> Agent 名，冪等地拿到一個常數 <code>admin:console:&lt;name&gt;</code>）；<strong>檔案可編輯</strong>（<code>POST /api/v1/workspace/file</code>，沿用目錄穿越防護）；以及<strong>生成／編輯 Agent</strong> 的兩個端點。其中編輯 <code>AGENT.md</code> 要走 <code>AgentLifecycleService.update</code>（寫入＋驗證＋重新註冊），因為 macOS 的 <code>WatchService</code> 不監看子目錄內的檔案變更。</p>
+
+<h2>誠實的信任邊界：腳本即任意程式碼</h2>
+<p>整課最需要誠實面對的地方，是腳本的沙箱邊界。一個 Agent 的腳本是透過底座的 <code>shell</code>／<code>python</code> 執行的，而白名單管的是「<strong>直譯器（<code>python</code>／<code>bash</code>）＋ 只允許這個 Agent 自己 <code>scripts/</code> 目錄底下的腳本</strong>」。</p>
+<p>但這裡有一條不能裝作看不見的界線：<strong>腳本就是任意程式碼</strong>。一旦你允許了 <code>python scripts/foo.py</code>，這支腳本自己就能讀寫檔案、發出網路請求——它<strong>繞過了 <code>http_get</code> 的域名白名單</strong>。因為那個白名單只管內建的 <code>http_get</code>，管不到子程序的網路行為。</p>
+<blockquote class="bad-code"><strong>結論：安裝一個帶腳本的 Agent，等於信任它的作者。</strong> 核心階段的沙箱只做到「直譯器 + 目錄」的白名單；要把第三方 Agent 關進受限容器、做網路隔離，是擴展階段的任務。</blockquote>
+<p>也因為這條邊界，有些事這一階段<strong>刻意不做</strong>：Agent 版本管理、Agent 市集與分享、跨 Agent 能力重用、L3 容器／網路隔離、名稱衝突政策。範圍停在「一個目錄推導出一個會自跑的 Agent」，加上執行時註冊與動態管理。</p>
+
+<h2>驗收：生成與信任的測試</h2>
+<p>生成路徑要驗的是「只生成、不落地」：<code>GenerateTest</code> 確認產出的草稿能被 <code>AgentLoader</code> 解析、確認它沒有被持久化也沒有被註冊；若 LLM 吐出的不是合法 AGENT.md，要回 400 並帶可讀原因。至於信任邊界，它不是靠單元測試能證明的性質——它是<strong>設計上必須明說的限制</strong>，並用白名單把可攻擊面收斂到「直譯器 + 本目錄腳本」。</p>
+<p>走到這裡，插件化與動態管理這條線就完整了：目錄定義 Agent、deriveProfile 接上底座、watcher 與 API 共用註冊、生命週期編排保證一致、生成由人把關、腳本信任邊界誠實劃出。</p>
+
+<div class="lesson-nav">
+  <div><a href="./dynamic-registration-lifecycle.html">← 上一步：動態管理：免重啟掃描、上傳即上線與生命週期編排</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼「一句話生成」不能一句話直達上線？" data-correct="1" data-explain="模型可能讀錯 cron 時間或開放過多工具權限，必須讓人在中間審查草稿。">
+  <button class="opt">因為 LLM 呼叫的成本太高昂</button>
+  <button class="opt">模型可能讀錯 cron 或開太多權限</button>
+  <button class="opt">因為資料庫不允許寫入草稿</button>
+  <button class="opt">因為前端無法顯示 Markdown</button>
+</div>
+
+<div class="quiz" data-question="最初的 generate 端點，產生的草稿會怎麼處理？" data-correct="3" data-explain="只回傳供預覽，不落地也不註冊；確定建立是由另一個端點負責。">
+  <button class="opt">立即持久化到 SQLite 資料庫</button>
+  <button class="opt">直接註冊進 ProfileRegistry</button>
+  <button class="opt">自動排程到隔天早上執行</button>
+  <button class="opt">只回傳供預覽，不落地不註冊</button>
+</div>
+
+<div class="quiz" data-question="最終落地把建立流程改成什麼？" data-correct="0" data-explain="建立改為 POST /agents {name, description}，後端從模板 scaffold 出完整目錄；LLM 生成下沉為對既有 Agent 的重生成。">
+  <button class="opt">由後端模板 scaffold 出完整目錄</button>
+  <button class="opt">完全交給 LLM 從零生成檔案</button>
+  <button class="opt">要求使用者手寫每個檔案</button>
+  <button class="opt">從其他 Agent 複製目錄內容</button>
+</div>
+
+<div class="quiz" data-question="L3 腳本沙箱的白名單允許什麼？" data-correct="2" data-explain="只允許直譯器與該 Agent 自己 scripts/ 目錄下的腳本，範圍刻意收斂。">
+  <button class="opt">任意路徑下的任何執行檔</button>
+  <button class="opt">所有已註冊的 MCP 伺服器</button>
+  <button class="opt">直譯器與自己 scripts/ 下的腳本</button>
+  <button class="opt">系統管理員等級的所有命令</button>
+</div>
+
+<div class="quiz" data-question="為什麼說安裝帶腳本的 Agent 等於信任它作者？" data-correct="1" data-explain="腳本是任意程式碼，能自行讀寫檔案與發網路請求，繞過 http_get 的域名白名單。">
+  <button class="opt">因為腳本會被自動同步到雲端</button>
+  <button class="opt">腳本能繞過 http_get 的域名白名單</button>
+  <button class="opt">因為腳本擁有管理員的執行權限</button>
+  <button class="opt">因為腳本無法被審計系統記錄</button>
+</div>
+
+<div class="quiz" data-question="編輯現有 Agent 的 AGENT.md 為什麼要走 AgentLifecycleService.update？" data-correct="0" data-explain="因為 macOS 的 WatchService 不監看子目錄內的檔案變更，需要走寫入＋驗證＋重新註冊的流程。">
+  <button class="opt">macOS 的 WatchService 不監看子目錄檔案變更</button>
+  <button class="opt">因為 update 才能加密 AGENT.md</button>
+  <button class="opt">因為直接寫入會觸發排程重複執行</button>
+  <button class="opt">因為檔案系統是唯讀的</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項是這一階段「刻意不做」的？" data-correct="2" data-explain="L3 容器／網路隔離、Agent 版本管理、市集分享、跨 Agent 能力重用都留到擴展階段。">
+  <button class="opt">API 建立與上傳 Agent</button>
+  <button class="opt">目錄即時監看與註冊</button>
+  <button class="opt">L3 容器與網路隔離</button>
+  <button class="opt">刪除時封存 Agent 目錄</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 插件化 Agent 與動態管理 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

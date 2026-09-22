@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>按 user story 拆解：US-1 → US-2 → (US-3 ∥ US-4) → US-5</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>按 user story 拆解，不按時間拆</h1>
+<p class="meta">Step 3/5 · OryxOS AI 編程指南</p>
+
+<h2>學習目標</h2>
+<p>能按 user story 把 OryxOS 專案拆成有依賴順序的可執行任務，並說出五個 US 各自的核心任務類別。</p>
+
+<h2>為什麼是「按 user story」而不是「按時間」</h2>
+<p>最直覺的拆法是按時間：第一週做 A、第二週做 B。這種拆法在 AI 編程裡行不通，因為它把<strong>相依的東西硬切成時間片段</strong>，最後會得到一堆無法獨立驗收的半成品。</p>
+<p>另一種拆法是按 user story。它好在兩點：第一，每個 user story 都能獨立驗收（有對應的 demo），做完就有一個能跑的東西；第二，依賴關係自然浮現，你可以一眼看出誰一定要先做、誰可以並行。而 Spec-Kit 的 <code>/speckit.tasks</code> <strong>天生就按 user story 組織任務</strong>——OryxOS 的五個能力剛好可以用五個 user story 表達，兩边的拆解方式天然對齊。</p>
+
+<h2>主幹：一條依賴鏈</h2>
+<p>五個 user story 之間的依賴關係非常清楚：</p>
+<table>
+<thead>
+<tr><th>User story</th><th>能力</th><th>依賴</th></tr>
+</thead>
+<tbody>
+<tr><td>US-1</td><td>對接 LLM（Provider）</td><td>無，是地基</td></tr>
+<tr><td>US-2</td><td>ReAct 迴圈</td><td>依賴 US-1</td></tr>
+<tr><td>US-3</td><td>Memory 三層記憶</td><td>依賴 US-2，與 US-4 獨立</td></tr>
+<tr><td>US-4</td><td>Plugin Tool 體系</td><td>依賴 US-2，與 US-3 獨立</td></tr>
+<tr><td>US-5</td><td>Web Service</td><td>依賴前四個</td></tr>
+</tbody>
+</table>
+<p>所以實作順序是 <strong>US-1 → US-2 →（US-3 與 US-4 並行）→ US-5</strong>。US-3 和 US-4 可以同時做，因為它們都只依賴 US-2、彼此之間沒有依賴。US-5 一定要最後，因為它要把前面所有能力透過 REST 暴露出去。</p>
+
+<h2>US-1：對接 LLM</h2>
+<p><strong>目標</strong>：讓 OryxOS 能透明地呼叫任何主流 LLM，並具備選模、呼叫、轉換、審計的能力。<strong>涉及模組</strong>：<code>core</code>、<code>provider</code>、<code>boot</code>。任務大致分成四類：環境搭建、核心抽象、provider 實作、設定。</p>
+<p>這裡有一顆地雷：<strong>provider 要用顯式的名稱映射（name → ChatModel），不要用型別掃描</strong>。AI 很愛用掃描自動註冊 provider，但那會讓啟動行為不可控。</p>
+<blockquote>
+<p>US-1 本身<strong>沒有 demo</strong>。原因很簡單——LLM 對接是底層能力，要等 US-2 的 ReAct 迴圈把它串起來，才能跑出第一個可展示的東西。</p>
+</blockquote>
+
+<h2>US-2：ReAct 迴圈</h2>
+<p><strong>目標</strong>：做出 Agent 的核心機制。<strong>涉及模組</strong>：<code>core</code>、<code>tool</code>、<code>channel-cli</code>、<code>cli</code>。任務類別：ReAct 迴圈本體、CLI 通道、基礎工具、Profile 的 YAML 定義、Session（記憶體版）。</p>
+<p>這個 user story 的關鍵是和 AI 的對話：要把 <code>ReActLoop</code> 與 <code>PromptBuilder</code> 拆成兩個子任務分別做，並且<strong>在任務裡明確寫出「關閉 Spring AI 的自動工具執行」</strong>。為什麼？因為 AI 很容易預設啟用它，結果工具被呼叫兩次——一次由 Spring AI 自動執行、一次由你自己的迴圈執行。這個坑在 US-2 就要堵住。</p>
+<p><strong>Demo 1</strong>：天氣查詢加穿搭建議。這是 OryxOS 的第一個可運行展示。</p>
+
+<h2>US-3：Memory 三層記憶</h2>
+<p><strong>目標</strong>：讓 Agent 有跨對話的狀態。<strong>涉及模組</strong>：<code>memory</code>。任務類別：<code>MemoryService</code> 門面（facade）、<code>LongTermMemoryStore</code> 的四個方法（並為將來的語意檢索升級預留位置）、<code>MemoryTools</code>（以 <code>@Tool</code> 形式暴露給 Agent）、把 Memory 接進 <code>PromptBuilder</code>、<code>MEMORY.md</code> 檔案管理。</p>
+<p>US-3 和 US-4 彼此獨立，所以順序可以換。但要注意一個風險：<strong>把 Memory 接進 PromptBuilder 時，不能弄壞已經能跑的 ReAct 迴圈</strong>——這是典型的「新功能回歸破壞舊功能」。</p>
+<p><strong>Demo 2</strong>：跨對話的偏好回憶。你上次告訴 Agent 的偏好，下一次對話它還記得。</p>
+
+<h2>US-4：Plugin Tool 體系</h2>
+<p><strong>目標</strong>：做出業務擴展的三級制——零碼（SKILL.md 加 MCP）、輕碼（自寫 MCP server）、重碼（<code>@Tool</code>）。<strong>涉及模組</strong>：<code>tool</code>、<code>core</code>。任務類別：內建工具、MCP client（先做 stdio）、透過 ContextLoader 載入 SKILL.md、Profile 升級。</p>
+<p>這裡的任務粒度要特別細。MCP 的 Java 生態成熟度比 Python 低，所以要<strong>把 stdio client 拆成連接、列工具、呼叫工具、錯誤恢復四個子任務</strong>，逐一驗證。SandboxChecker 的完整版也拆成三個子任務。</p>
+<p><strong>Demo 3</strong>：零碼 PR 摘要。不寫 Java，只靠 SKILL.md 就讓 Agent 多出一項能力。</p>
+
+<h2>US-5：Web Service</h2>
+<p><strong>目標</strong>：把所有能力透過 REST 暴露出去。<strong>涉及模組</strong>：<code>web</code>、<code>storage</code>、<code>cli</code>、<code>core</code>。任務類別：Web 基礎、六個 ApiController（可並行）、十個端點、持久化升級（Session 進 SQLite 加審計表）、設定與上下文、完整 CLI、工程化（日誌）。</p>
+<p>這是五個 user story 裡最密的一個。有一個很容易被 AI 省略的點：<strong>審計表的寫入屬於 US-5</strong>（對應憲法第六條「審計第一天就要寫」），AI 傾向於不做持久化。另外，六個 ApiController 因為彼此獨立，可以標記為可並行任務。</p>
+<p><strong>Demo 4 與 Demo 5</strong>：管理平台與完整的 REST 驗收。</p>
+
+<h2>任務粒度：一到兩個檔案</h2>
+<p><code>/speckit.tasks</code> 產出的任務，粒度控制在<strong>一到兩個檔案</strong>：每個任務只碰一到兩個檔案，彼此獨立的標為可並行（parallelizable），並按依賴排序。這樣切有兩個好處：每個任務的範圍小到 AI 不會「湊合」，而且<strong>每個任務結束都產出能跑的程式碼</strong>——不是半成品。當後續 AI agent 一次只看見一個任務時，它跑偏的機率就大幅下降。</p>
+
+<blockquote>
+<p>記住這個節點的第二個判斷：<strong>拆解單位是能獨立驗收的能力，不是能塞滿的時段。</strong></p>
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./preparation-artifacts.html">← 上一步：準備階段：constitution、spec、plan 三份 artifact</a></div>
+  <div><a href="./implementation-guardrails.html">下一步：實施護欄：analyze 防漂移與五個易錯點 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="OryxOS 為什麼按 user story 拆解而非按時間拆？" data-correct="2" data-explain="每個 user story 能獨立驗收、依賴關係自然浮現，且與 /speckit.tasks 的組織方式對齊。">
+  <button class="opt">按時間拆能讓每週產出更平均</button>
+  <button class="opt">user story 的數量剛好是五個</button>
+  <button class="opt">能獨立驗收且依賴關係自然浮現</button>
+  <button class="opt">時間拆分無法對應到任何模組</button>
+</div>
+
+<div class="quiz" data-question="五個 user story 的正確實作順序是什麼？" data-correct="0" data-explain="US-1 → US-2 →（US-3 與 US-4 並行）→ US-5，US-3 與 US-4 都只依賴 US-2。">
+  <button class="opt">US-1 → US-2 →（US-3 ∥ US-4）→ US-5</button>
+  <button class="opt">US-5 → US-4 → US-3 → US-2 → US-1</button>
+  <button class="opt">US-3 → US-4 → US-1 → US-2 → US-5</button>
+  <button class="opt">US-2 → US-1 → US-5 →（US-3 ∥ US-4）</button>
+</div>
+
+<div class="quiz" data-question="US-2 任務裡為什麼要明確關閉 Spring AI 的自動工具執行？" data-correct="1" data-explain="AI 很容易預設啟用它，導致工具被呼叫兩次——一次由 Spring AI、一次由自己的迴圈。">
+  <button class="opt">關閉後模型推論速度會變快</button>
+  <button class="opt">避免工具被自動與手動各呼叫一次</button>
+  <button class="opt">Spring AI 不支援任何工具呼叫</button>
+  <button class="opt">關閉後才能取得正確的 Provider</button>
+</div>
+
+<div class="quiz" data-question="US-1 為什麼沒有可展示的 demo？" data-correct="3" data-explain="LLM 對接是底層能力，要等 US-2 的 ReAct 迴圈把它串起來才能展示。">
+  <button class="opt">因為 provider 模組還沒被設計</button>
+  <button class="opt">因為第一個 demo 排在 US-5</button>
+  <button class="opt">因為 LLM 呼叫不允許被展示</button>
+  <button class="opt">因為要等 US-2 把迴圈串起來</button>
+</div>
+
+<div class="quiz" data-question="審計表的寫入被歸在哪一個 user story？" data-correct="2" data-explain="審計表寫入屬於 US-5 的持久化升級，對應憲法「審計第一天就要寫」，AI 傾向省略。">
+  <button class="opt">US-1 的 provider 實作</button>
+  <button class="opt">US-3 的 Memory 模組</button>
+  <button class="opt">US-5 的持久化升級</button>
+  <button class="opt">US-4 的 Plugin Tool</button>
+</div>
+
+<div class="quiz" data-question="任務粒度控制在「一到兩個檔案」的主要好處是什麼？" data-correct="1" data-explain="範圍小讓 AI 不會湊合，且每個任務結束都產出能跑的程式碼，降低跑偏機率。">
+  <button class="opt">讓任務總數看起來比較多</button>
+  <button class="opt">每個任務結束都產出能跑的碼</button>
+  <button class="opt">讓 AI 一次能看完整個專案</button>
+  <button class="opt">避免任務之間出現任何依賴</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · OryxOS AI 編程指南 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

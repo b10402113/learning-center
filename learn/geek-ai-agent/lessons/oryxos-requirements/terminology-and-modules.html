@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>術語表與九個 Maven 模組</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>術語表與九個 Maven 模組</h1>
+<p class="meta">Step 3/5 · OryxOS 需求</p>
+
+<h2>學習目標</h2>
+<p>能用自己的話定義 Agent、Profile、Provider、Session、Channel、Tool Policy、Skill、Bootstrap、Workspace 等核心術語，並把五大能力對應到九個 Maven 模組中的哪幾個。</p>
+
+<h2>為什麼先統一術語</h2>
+<p>一份需求文件最貴的資產不是功能列表，而是<strong>一套所有人共用、不會各說各話的詞彙</strong>。當十幾個模組都用同一套術語，模組之間才接得起來；否則最常見的 AI 大專案失敗就是「每一塊自己定義自己的 Agent，最後拼不起來」。OryxOS 的術語刻意對齊開源 Agent OS 的事實標準命名，讓熟悉 OpenClaw / Hermes 的人能直接看懂。</p>
+
+<h2>核心術語表</h2>
+<table>
+<thead>
+<tr><th>術語</th><th>定義</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Agent</strong></td><td>一個由 Profile 定義、能呼叫模型與工具、自主跑的實體</td></tr>
+<tr><td><strong>Profile</strong></td><td>Agent 的完整設定（YAML）：身份、provider、工具、渠道、bootstrap。<strong>一個 Profile 就是一個 Agent</strong></td></tr>
+<tr><td><strong>Provider</strong></td><td>對某個模型供應商的呼叫抽象；有 name / model / API key / base URL</td></tr>
+<tr><td><strong>ReAct 迴圈</strong></td><td>Reason + Act：想一步、做一步、觀察結果，直到完成或到上限</td></tr>
+<tr><td><strong>Tool</strong></td><td>Agent 能呼叫的能力，分內建（builtin）與插件（Plugin）</td></tr>
+<tr><td><strong>Memory</strong></td><td>三層：session（會話）、long-term（長期）、episodic（情景）</td></tr>
+<tr><td><strong>Channel</strong></td><td>訊息進出的通道，例如 CLI、企業微信、飛書</td></tr>
+<tr><td><strong>Web Service</strong></td><td>把引擎暴露成 REST 介面的服務</td></tr>
+<tr><td><strong>Session</strong></td><td>對話上下文的容器：時間、使用者身份、Agent id、歷史、臨時變數</td></tr>
+<tr><td><strong>Sandbox</strong></td><td>工具執行的安全邊界</td></tr>
+<tr><td><strong>Tool Policy</strong></td><td>Profile 層級的工具允許／拒絕清單，最輕量的治理手段</td></tr>
+<tr><td><strong>Skill</strong></td><td>用 <code>SKILL.md</code> 描述的能力包，相容 agentskills.io 標準</td></tr>
+<tr><td><strong>Bootstrap</strong></td><td>啟動時注入的引導檔：<code>AGENTS.md</code> / <code>SOUL.md</code> / <code>USER.md</code></td></tr>
+<tr><td><strong>Workspace</strong></td><td>工作區目錄 <code>.oryxos/</code>，存放 profiles、sessions、skills、logs、tools</td></tr>
+</tbody>
+</table>
+<p>這張表是往後每一份 OryxOS 文件的閱讀基礎。看到「Profile」就知道是一個 Agent 的設定，看到「Session」就知道是對話狀態，看到「Channel」就知道是進出口——不需要每次都回頭查。</p>
+
+<h2>從文件到模組：九個 Maven 模組</h2>
+<p>術語定義了「概念」，模組定義了「程式碼住哪裡」。OryxOS 拆成九個 Maven 模組，剛好是<strong>五個核心能力 + 四個支撐模組</strong>：</p>
+<table>
+<thead>
+<tr><th>模組</th><th>類型</th><th>負責什麼</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>provider</strong></td><td>核心能力一</td><td>對接 LLM</td></tr>
+<tr><td><strong>core</strong></td><td>核心能力二</td><td>ReAct 引擎（整個底座的心臟）</td></tr>
+<tr><td><strong>memory</strong></td><td>核心能力三</td><td>記憶</td></tr>
+<tr><td><strong>tool</strong></td><td>核心能力四</td><td>工具與沙箱</td></tr>
+<tr><td><strong>web</strong></td><td>核心能力五</td><td>對外 REST 服務</td></tr>
+<tr><td><strong>boot</strong></td><td>支撐</td><td>啟動裝配：把各模組組起來</td></tr>
+<tr><td><strong>cli</strong></td><td>支撐</td><td>命令列入口</td></tr>
+<tr><td><strong>storage</strong></td><td>支撐</td><td>持久化</td></tr>
+<tr><td><strong>channel-cli</strong></td><td>支撐</td><td>核心階段的唯一渠道（CLI）</td></tr>
+</tbody>
+</table>
+<p>這張對應表有一個很實用的判斷價值：當你後面看到某個功能要改，先問「它在哪個模組」。引擎是 <strong>core（ReAct）</strong>，它被 <strong>Provider / Memory / Tool</strong> 三個模組餵養，再由 <strong>CLI / Web</strong> 兩個入口暴露出去——模組的依賴方向，就是能力的供養方向。</p>
+
+<h2>三層範圍，先說清楚「核心」的邊界</h2>
+<p>需求文件把功能分三層，核心階段只做第一層：</p>
+<ol>
+<li><strong>核心功能</strong>：最短可跑的鏈——用 Profile 設定 Agent、用 CLI 對話、呼叫 LLM 與工具、用 REST API 暴露。對應 4 週 × 3 小時 = 12 小時的硬預算。</li>
+<li><strong>擴展功能</strong>：生產必需但不在核心，含企業治理層。</li>
+<li><strong>社區共建功能</strong>：長期方向，不影響主線。</li>
+</ol>
+<p>把範圍和模組疊在一起看，你會得到一個很重要的心智模型：<strong>核心階段做的九個模組，是整個 OryxOS 的地基；三層範圍則是往後所有取捨的依據</strong>。任何新需求進來，先問它落在哪一層——核心已滿，就代表它得排隊。</p>
+
+<div class="lesson-nav">
+  <div><a href="./five-capabilities.html">← 上一步：五大能力：Provider、ReAct、Memory、Tool、Web Service</a></div>
+  <div><a href="./design-goals-and-scenarios.html">下一步：四個設計目標與三個典型場景 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="一個 Profile 在 OryxOS 裡代表什麼？" data-correct="2" data-explain="Profile 是 Agent 的完整設定，一個 Profile 就是一個 Agent。">
+  <button class="opt">一個模型的連線設定檔</button>
+  <button class="opt">一次對話的完整歷史紀錄</button>
+  <button class="opt">一個 Agent 的完整設定檔</button>
+  <button class="opt">一組工具權限的白名單</button>
+</div>
+
+<div class="quiz" data-question="下列哪一個不是記憶的其中一層？" data-correct="1" data-explain="記憶三層是 session、long-term、episodic；Provider 屬於模型呼叫的抽象。">
+  <button class="opt">session（會話記憶）</button>
+  <button class="opt">Provider（供應商抽象）</button>
+  <button class="opt">long-term（長期記憶）</button>
+  <button class="opt">episodic（情景記憶）</button>
+</div>
+
+<div class="quiz" data-question="Bootstrap 啟動時注入的三個檔案是？" data-correct="0" data-explain="AGENTS.md、SOUL.md、USER.md 是啟動時注入的引導檔。">
+  <button class="opt">AGENTS.md、SOUL.md、USER.md</button>
+  <button class="opt">README.md、LICENSE、NOTICE</button>
+  <button class="opt">config.yaml、secrets.env、logs</button>
+  <button class="opt">profiles、sessions、skills</button>
+</div>
+
+<div class="quiz" data-question="九個 Maven 模組中，負責 ReAct 引擎的是哪一個？" data-correct="3" data-explain="core 模組就是 ReAct 引擎，被 Provider、Memory、Tool 三個模組餵養。">
+  <button class="opt">provider</button>
+  <button class="opt">memory</button>
+  <button class="opt">tool</button>
+  <button class="opt">core</button>
+</div>
+
+<div class="quiz" data-question="四個支撐模組是哪一組？" data-correct="1" data-explain="boot、cli、storage、channel-cli 是五個核心能力之外的支撐模組。">
+  <button class="opt">provider、core、memory、tool</button>
+  <button class="opt">boot、cli、storage、channel-cli</button>
+  <button class="opt">web、cli、sandbox、policy</button>
+  <button class="opt">core、web、boot、storage</button>
+</div>
+
+<div class="quiz" data-question="Tool Policy 是什麼層級的工具治理？" data-correct="0" data-explain="Tool Policy 是 Profile 層級的允許／拒絕清單，最輕量的治理手段。">
+  <button class="opt">Profile 層級的允許清單</button>
+  <button class="opt">作業系統層級的沙箱隔離</button>
+  <button class="opt">網路層級的網域白名單</button>
+  <button class="opt">資料庫層級的權限控管</button>
+</div>
+
+<div class="quiz" data-question="核心階段的硬預算是多少？" data-correct="2" data-explain="核心階段是 4 週 × 每週 3 小時，共 12 小時。">
+  <button class="opt">1 週 × 3 小時，共 3 小時</button>
+  <button class="opt">2 週 × 6 小時，共 12 小時</button>
+  <button class="opt">4 週 × 3 小時，共 12 小時</button>
+  <button class="opt">8 週 × 2 小時，共 16 小時</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · OryxOS 需求 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

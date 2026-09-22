@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>記憶工具、Prompt 注入與契約測試</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>記憶工具、Prompt 注入與契約測試</h1>
+<p class="meta">Step 6/6 · Memory</p>
+
+<h2>學習目標</h2>
+<p>能把 save_memory／recall_memory 兩個內建工具接上 MemoryService，讓 PromptBuilder 每輪注入長期記憶，並用一份參數化契約測試證明三後端行為一致、切換後端上層不變。</p>
+
+<h2>兩個內建工具：把記憶暴露給 Agent</h2>
+<p>記憶要能被 Agent 使用，得先變成工具。這裡落地第 20 節預留的兩個內建工具：</p>
+<table>
+<thead>
+<tr><th>工具</th><th>輸入</th><th>行為</th></tr>
+</thead>
+<tbody>
+<tr><td><code>save_memory</code></td><td><code>content</code>、<code>scope</code>（core／archival）</td><td>轉發 <code>remember(content, scope)</code>，回「已記住」</td></tr>
+<tr><td><code>recall_memory</code></td><td><code>keyword</code></td><td>轉發 <code>recall(keyword)</code>，命中逐行回、沒命中回「沒有找到相關記憶」</td></tr>
+</tbody>
+</table>
+<p>幾個關鍵設計：<code>save_memory</code> 的 <code>scope</code> <strong>缺省為 archival</strong>（不確定就存一般事件與結論）；遇到無法辨識的 scope <strong>明確報錯並點名</strong>，不靜默落錯區。<code>recall_memory</code> 沒有命中時<strong>回一句可讀訊息而不是拋例外</strong>，對話不中斷。而整個 <code>MemoryTools</code> 只認 <code>MemoryService</code> 門面，對底層是哪一檔後端完全無感——所以換後端不用碰它。</p>
+<p><code>scope</code> 的語意也值得記住：<strong>core = 少量常駐事實</strong>（身份／偏好／硬約束，每輪都在場、務必精煉）；<strong>archival = 一般值得記住的事件與結論</strong>（按需檢索找回）。</p>
+
+<h2>注入 Prompt：每輪都重新想起</h2>
+<p>工具負責「寫」，<code>PromptBuilder</code> 負責「讀回來用」。ReAct 迴圈每輪組裝 prompt 分成四段：system prompt（含當前時間）、<strong>長期記憶</strong>、最近 N 輪對話歷史、可用工具列表。其中長期記憶那一段就是呼叫 <code>memoryService.buildContext(session)</code> 得到的——<strong>核心區全量＋歸檔區截斷後</strong>。</p>
+<blockquote>因為契約一是「不快取」，<code>load</code> 每輪重新讀：Agent 這一輪呼叫 <code>save_memory</code>，下一輪組 prompt 時記憶就真的在場了。</blockquote>
+<p>這裡也順帶分清兩個常被搞混的檔案：<strong><code>USER.md</code></strong> 是使用者手寫的初始設定，OryxOS <strong>只讀不寫</strong>；<strong><code>MEMORY.md</code></strong> 是 Agent 透過 <code>save_memory</code> 自己寫的成長記錄，OryxOS 讀寫。一個是「我告訴你我是誰」，一個是「你逐漸認識我」。</p>
+
+<h2>契約測試：一份測試守住三檔</h2>
+<p>介面牆要真的成立，不能只靠人工。最有價值的設計是一份<strong>參數化契約測試</strong> <code>MemoryStoreContractTest</code>——同一組斷言跑在三檔後端上，每條斷言對應一條契約：</p>
+<table>
+<thead>
+<tr><th>斷言</th><th>對應契約</th></tr>
+</thead>
+<tbody>
+<tr><td>寫入後立刻讀得到</td><td>一：不快取</td></tr>
+<tr><td>截斷只動歸檔、核心保持完整</td><td>二：核心不截斷</td></tr>
+<tr><td>scope 路由到正確的區</td><td>三：scope 顯式</td></tr>
+<tr><td>檢索只搜歸檔區</td><td>四：檢索限歸檔</td></tr>
+</tbody>
+</table>
+<p>它的威力在於：任何一檔破壞任一契約，就會在它那條參數化斷言上<strong>變紅</strong>，而且你能立刻知道是哪一檔壞了。此外各檔還有自己的實作測試（Markdown 的字串截斷與表頭解析、SQLite 的 schema／LIMIT／LIKE、Mem0 用 mock 的 RestClient），以及 <code>MemoryToolsTest</code>（scope 缺省與未命中訊息不拋例外）與 <code>MemoryServiceImplTest</code>（<code>buildContext</code>）。</p>
+
+<h2>人工驗收：換後端，感受一樣</h2>
+<p>自動測試之外，最後的驗證是人跑一遍：把 <code>memory.backend</code> 在 markdown／sqlite 之間切換，跑同一段對話，感受「換了後端、體驗一模一樣」；有條件就自架 Mem0，確認 <code>save_memory</code> 進得去、<code>recall</code> 能語意撈回。再跑一段真實模型對話：Agent 呼叫 <code>save_memory</code>，然後<strong>開一個新 session</strong>，看核心記憶是否出現在 system prompt 裡。順帶確認 <code>USER.md</code> 唯讀不變。</p>
+<p>走到這裡，「會想（ReAct）、會做（Tool）、記得住（Memory）」就齊了——Demo 二「每日科技日報反映使用者偏好」正是靠這條記憶管線才成立。而整條設計留給你的可複製動作是：<strong>先釘介面牆、實作只填最輕一檔、用契約測試守住、等真實信號再升級。</strong></p>
+
+<div class="lesson-nav">
+  <div><a href="./memory-three-backends.html">← 上一步：可插拔三後端</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="save_memory 的 scope 缺省值是什麼？" data-correct="2" data-explain="缺省 archival——不確定就存一般事件與結論；core 只放少量常駐事實。">
+  <button class="opt">CORE</button>
+  <button class="opt">SESSION</button>
+  <button class="opt">ARCHIVAL</button>
+  <button class="opt">GLOBAL</button>
+</div>
+
+<div class="quiz" data-question="遇到無法辨識的 scope，save_memory 應該怎麼做？" data-correct="1" data-explain="明確報錯並點名，不靜默落錯區，避免記憶寫到不該寫的地方。">
+  <button class="opt">預設存進 CORE</button>
+  <button class="opt">明確報錯並點名該 scope</button>
+  <button class="opt">忽略這次呼叫不寫入</button>
+  <button class="opt">隨機挑一個區寫入</button>
+</div>
+
+<div class="quiz" data-question="recall_memory 沒有命中時的行為是什麼？" data-correct="3" data-explain="回一句「沒有找到相關記憶」而不是拋例外，讓對話不中斷。">
+  <button class="opt">拋出例外中斷本輪迴圈</button>
+  <button class="opt">回傳全部歸檔記憶</button>
+  <button class="opt">自動改寫關鍵詞再搜一次</button>
+  <button class="opt">回「沒有找到相關記憶」不拋例外</button>
+</div>
+
+<div class="quiz" data-question="PromptBuilder 注入的長期記憶內容是什麼？" data-correct="0" data-explain="buildContext 回傳核心區全量＋歸檔區截斷後；會話歷史由另一段負責。">
+  <button class="opt">核心區全量＋歸檔區截斷後</button>
+  <button class="opt">歸檔區全量＋核心區截斷後</button>
+  <button class="opt">只有最近的會話歷史</button>
+  <button class="opt">工具執行的完整結果</button>
+</div>
+
+<div class="quiz" data-question="MEMORY.md 與 USER.md 的角色差別是什麼？" data-correct="2" data-explain="USER.md 是使用者手寫、OryxOS 只讀；MEMORY.md 是 Agent 透過 save_memory 寫入的成長記錄、讀寫皆可。">
+  <button class="opt">兩者都是 Agent 自動寫入的</button>
+  <button class="opt">兩者都是使用者手寫且唯讀</button>
+  <button class="opt">USER.md 使用者寫唯讀，MEMORY.md Agent 寫</button>
+  <button class="opt">USER.md 存偏好，MEMORY.md 存密鑰</button>
+</div>
+
+<div class="quiz" data-question="參數化契約測試最大的價值是什麼？" data-correct="1" data-explain="同一組斷言跑三檔；任一檔破壞契約就在那條斷言變紅，且能立刻指出是哪一檔壞了。">
+  <button class="opt">取代所有人工驗收</button>
+  <button class="opt">任一檔破契約即在對應斷言變紅並可定位</button>
+  <button class="opt">讓三檔共用同一份程式碼</button>
+  <button class="opt">自動替三檔生成記憶資料</button>
+</div>
+
+<div class="quiz" data-question="「不快取」契約在工具與 Prompt 之間的作用是什麼？" data-correct="3" data-explain="每輪重新讀，讓本輪的 save_memory 下一輪組 prompt 時就真的在場。">
+  <button class="opt">讓記憶寫入不需要經過模型</button>
+  <button class="opt">讓歷史輪次自動被摘要壓縮</button>
+  <button class="opt">讓多個後端共享同一份快取</button>
+  <button class="opt">讓本輪寫入下一輪組 prompt 時就在場</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Memory · Step 6/6</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

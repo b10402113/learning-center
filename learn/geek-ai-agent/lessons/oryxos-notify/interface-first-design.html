@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>動手前先想清楚：介面先行與四個決策</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>動手前先想清楚：介面先行與四個決策</h1>
+<p class="meta">Step 2/5 · Notify 出站</p>
+
+<h2>學習目標</h2>
+<p>能複述動手前的四個決策（介面表達意圖、核心只做通用 webhook、安全留給 Sandbox、目的地放 Profile），並解釋入站 ChannelAdapter 與出站 NotifyChannelAdapter 的對稱性。</p>
+
+<h2>一件事：動手之前，先把介面想清楚</h2>
+<p>上一課確定了「要有出站抽象」。這一課回答「這個抽象長什麼樣子」。原則是<strong>介面先行（interface first）</strong>：先定義一個表達「意圖」的介面，再決定實作。這是整個 Notify 模組的施工順序，也是後面 Memory、Sandbox 模組都會重複使用的習慣——<strong>先釘介面，再談實作</strong>。</p>
+<p>為什麼順序這麼重要？因為介面是通往未來擴展的牆壁。如果你先寫死「推送 = 對企業微信 webhook 發 POST」，那下個月要接飛書、釘釘、Slack、Telegram，每一家都得改這面牆。如果你先把「意圖」抽象出來，牆壁一次釘好，實作怎麼換都不會碰到它——<strong>測試的方法是：把最重的未來實作（例如整個微信 SDK）放進這個介面，看看塞不塞得進去，塞得進去牆就立住了。</strong></p>
+
+<h2>四個決策</h2>
+<p>動手前，原案把問題拆成四個明確的決策，每寫一行程式碼之前就定下來：</p>
+
+<h3>決策一：介面要表達意圖，不表達渠道</h3>
+<p>介面簽名描述「把內容送達一個通知目標」這件事，<strong>不能出現任何渠道專屬的詞彙</strong>——沒有 webhook、沒有企微、沒有 JSON。簽名長這樣（細節下一課展開）：</p>
+<pre><code>interface NotifyChannelAdapter {
+    void send(NotifyTarget target, String content);
+}
+</code></pre>
+<p><code>NotifyTarget</code> 只是「一個通知目標」的描述，不牽扯是哪家渠道。這樣換渠道時，呼叫端零改動。</p>
+
+<h3>決策二：核心階段只做一種通用的 webhook</h3>
+<p>企業主流通知渠道（企業微信、飛書、釘釘、Slack…）幾乎都提供 webhook 位址，核心階段<strong>只實作一個通用的 <code>WebhookNotifyAdapter</code></strong>——把 content 包成指定的 JSON、發一次 POST。簽名算法、AccessToken 刷新那些各家專屬認證細節，核心階段通通不做，留給擴展階段逐家接。通用 webhook 之後、逐家專屬 adapter 之前，中間的關係是「一個介面、多份實作」。</p>
+
+<h3>決策三：安全驗證留給 Sandbox 模組</h3>
+<p>發 webhook 是網路請求，該不該放行是安全邊界的事。核心階段這裡只留一個<strong>佔位</strong>，真正細講在 Sandbox 模組（23/24 課）——就像後面全流程串聯看到的 <code>Sandbox.enforce(...)</code>。設計立場很明確：<strong>Notify 不自己發明安全，它復用已有的白名單機制。</strong></p>
+
+<h3>決策四：目的地放 Profile 設定，不放對話內容</h3>
+<p>「推送去哪裡」這件事，<strong>由 Agent 的 Profile 設定（<code>notify_channels</code>）決定，不讓 LLM 從對話內容裡臨時決定</strong>。Profile 範例：</p>
+<pre><code>notify_channels:
+  - type: webhook
+    url: ${TEAM_WEBHOOK_URL}
+</code></pre>
+<p>這樣的目的很實際：通知目標是系統性、要被人管理的配置，不是每次對話的變數。把目的地交給模型隨口說，等於把「今天通知去哪」交給不可控的推斷；放在 Profile，人管渠道，Agent 只決定「要不要推、推什麼」。</p>
+
+<h2>為什麼選成本最低的通用 webhook？</h2>
+<p>你可能會問：為什麼不一次到位，把企業微信、飛書、釘釘全接上？<strong>因為「全接」不是核心階段要證明的東西。</strong>核心階段的目標是「最短可跑的 runtime kernel」——先證明「Agent 能把結果推出去」這條鏈真的通，至於推給哪家，都是同一套 webhook 機制。選通用 webhook 的理由是它能用一份實作覆蓋最多渠道的入門形態，邊際價值最高，成本最低。</p>
+<p>這也呼應整門課的階段克制紀律：不是每件事都該現在做，是有信號才做。webhook 接不通、要富文本卡片——那才啟動擴展階段的專屬 adapter 或 MCP（第五課詳談）。</p>
+
+<h2>對稱性是刻意的：入站 / 出站雙向插件</h2>
+<p>這裡的 <code>ChannelAdapter</code>（8.4 Channel 接入：定義「什麼進來了」）和 <code>NotifyChannelAdapter</code>（定義「結果出去哪」）是<strong>鏡像對稱</strong>的兩個抽象。它們共享同一個 plugin 模式，但<strong>不合成一個介面</strong>——因為語義方向相反。實作上，同一個企業微信群，完全可能同時是某個 Agent 的入站 Channel、又是另一個 Agent 的出站通知目標。入站收、出站送，兩件事分開建模，介面才乾淨。</p>
+
+<h2>完工順序不是教學順序</h2>
+<p>順帶拆穿一個常見的誤解：<code>NotifyChannelAdapter</code>／<code>NotifyTarget</code>／<code>WebhookNotifyAdapter</code> 這三件現在就能實作，但完整的 <code>NotifyTools</code> 要等兩件事就位——Tool 的 <code>@Tool</code> 註冊（Tool 模組）和 <code>Sandbox.enforce</code>（Sandbox 模組）。所以程式碼的「完成點」在 24 課之後。這叫做<strong>教學順序與建造順序分離</strong>：先把介面釘死，實作等相依模組就位。</p>
+
+<div class="lesson-nav">
+  <div><a href="./notify-why.html">← 上一步：為什麼需要 Notify：觸發斷裂與出站職責</a></div>
+  <div><a href="./writing-notify.html">下一步：程式碼怎麼寫：NotifyChannelAdapter、NotifyTarget、WebhookNotifyAdapter、NotifyTools →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="「介面先行」的核心判準是什麼？" data-correct="3" data-explain="把最重的未來實作（例如微信 SDK）塞進介面，塞得進去表示介面表達對了意圖。">
+  <button class="opt">介面寫得愈多方法愈好</button>
+  <button class="opt">介面直接寫出各家渠道的網址</button>
+  <button class="opt">先實作再回頭抽象出介面</button>
+  <button class="opt">最重實作塞得進介面，牆就立住了</button>
+</div>
+
+<div class="quiz" data-question="NotifyChannelAdapter 的介面為什么不能出現渠道專屬詞彙？" data-correct="1" data-explain="介面要表達意圖而非渠道，換渠道時呼叫端才不用改。">
+  <button class="opt">因為編譯器會拒絕渠道關鍵字</button>
+  <button class="opt">為了換渠道時呼叫端零改動</button>
+  <button class="opt">因為渠道名稱太長難維護</button>
+  <button class="opt">因為 webhook 不是標準協議</button>
+</div>
+
+<div class="quiz" data-question="核心階段只實作哪一種 NotifyAdapter？" data-correct="2" data-explain="核心只做通用的 WebhookNotifyAdapter，各家認證細節留給擴展階段的專屬 adapter。">
+  <button class="opt">企業微信專屬 Adapter</button>
+  <button class="opt">飛書專屬 Adapter</button>
+  <button class="opt">通用 WebhookNotifyAdapter</button>
+  <button class="opt">SMTP EmailNotifyAdapter</button>
+</div>
+
+<div class="quiz" data-question="Notify 的安全驗證在核心階段如何處理？" data-correct="0" data-explain="安全驗證是 Sandbox 模組的事，Notify 只留佔位並復用白名單，不自己發明安全。">
+  <button class="opt">佔位，交給 Sandbox.enforce 復用白名單</button>
+  <button class="opt">在 adapter 內實作完整簽名算法</button>
+  <button class="opt">完全不驗證，直接發送</button>
+  <button class="opt">用 VPN 隔離取代白名單</button>
+</div>
+
+<div class="quiz" data-question="「推送去哪」這件事應該由誰決定？" data-correct="1" data-explain="目的地是系統性配置，放 Profile 的 notify_channels，不讓 LLM 從對話內容臨時決定。">
+  <button class="opt">LLM 每次從對話內容臨時決定</button>
+  <button class="opt">Profile 設定裡的 notify_channels</button>
+  <button class="opt">使用者發訊息時隨口指定網址</button>
+  <button class="opt">Adapter 的寫死常數</button>
+</div>
+
+<div class="quiz" data-question="完整的 NotifyTools 為什麼完成點在 24 課之後？" data-correct="3" data-explain="NotifyTools 依賴 @Tool 註冊（Tool 模組）與 Sandbox.enforce（Sandbox 模組）兩件就位。">
+  <button class="opt">因為要先寫五個測試</button>
+  <button class="opt">因為模型能力還不夠</button>
+  <button class="opt">因為介面還沒想清楚</button>
+  <button class="opt">依賴 @Tool 註冊與 Sandbox.enforce 就位</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Notify 出站 · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>程式碼怎麼寫：NotifyChannelAdapter、NotifyTarget、WebhookNotifyAdapter、NotifyTools</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>程式碼怎麼寫：NotifyChannelAdapter、NotifyTarget、WebhookNotifyAdapter、NotifyTools</h1>
+<p class="meta">Step 3/5 · Notify 出站</p>
+
+<h2>學習目標</h2>
+<p>能說出四個類別各自的職責、介面簽名為何不含任何渠道概念，以及 channel 非必填時的行為。</p>
+
+<h2>四個類別，三個角色</h2>
+<p>動手前的四個決策釘完了，現在把它們落成四個類別。它們不是平起平坐，而是三層分工：</p>
+<table>
+<thead>
+<tr><th>類別</th><th>角色</th><th>一句話職責</th></tr>
+</thead>
+<tbody>
+<tr><td><code>NotifyChannelAdapter</code></td><td>介面</td><td>表達「把內容送達一個通知目標」的意圖，不含任何渠道詞彙</td></tr>
+<tr><td><code>NotifyTarget</code></td><td>資料</td><td>描述「一個通知目標」：渠道類型 + 設定 Map</td></tr>
+<tr><td><code>WebhookNotifyAdapter</code></td><td>實作</td><td>核心階段唯一的實作：POST <code>{"content": ...}</code> 到目標 URL</td></tr>
+<tr><td><code>NotifyTools</code></td><td>扳機</td><td>把「推送」變成 LLM 可呼叫的 Tool：解析目標 → 過沙箱 → 送</td></tr>
+</tbody>
+</table>
+
+<h2>介面：把意圖寫在簽名裡</h2>
+<pre><code>public interface NotifyChannelAdapter {
+    void send(NotifyTarget target, String content);
+}
+</code></pre>
+<p>這個簽名只用「目標 + 內容」，一個渠道專屬的概念都不帶。這正是介面先行的成果：<strong>把 webhook 換成任何一家專屬 adapter，<code>NotifyTools</code> 一行都不用改。</strong></p>
+
+<h2>資料：NotifyTarget 把「目標」描述清楚</h2>
+<pre><code>public record NotifyTarget(String channelType, Map&lt;String, String&gt; config) {}
+</code></pre>
+<p><code>channelType</code> 說「這是哪一種渠道」（webhook／企業微信／飛書…），<code>config</code> 用一個 key-value Map 帶該渠道需要的設定（例如 <code>webhook</code> 類的 <code>url</code>）。把設定包成 Map 而不是固定欄位，是為了讓同一個介面能承載不同渠道不同的欄位需求。</p>
+
+<h2>實作：WebhookNotifyAdapter 做最小的事</h2>
+<pre><code>public class WebhookNotifyAdapter implements NotifyChannelAdapter {
+    @Override
+    public void send(NotifyTarget target, String content) {
+        String url = target.config().get("url");
+        // 發 HTTP POST，body: {"content": content}
+    }
+}
+</code></pre>
+<p>URL 從 <code>target.config()</code> 讀，不 hardcode，所以同一份 adapter 能送給任何 webhook 位址。核心階段的職責就到這裡——把「內容包成 <code>{"content": ...}</code> 的一次 POST」——不做簽名、不接 token 刷新。</p>
+
+<h2>扳機：NotifyTools 把整條鏈接起來</h2>
+<pre><code>@Tool
+public String notify(String content, String channel) {
+    NotifyTarget target = resolveFromProfile(channel);  // 1. 解析目標
+    sandbox.enforce(new SandboxAction(HTTP_REQUEST, url)); // 2. 過白名單
+    return adapter.send(target, content);                 // 3. 送出
+}
+</code></pre>
+<p>三個動作，順序是刻意設計的：</p>
+<ol>
+<li><strong>解析目標</strong>——從當前 Profile 的 <code>notify_channels</code> 回解析出 <code>NotifyTarget</code>。用 <code>ProfileContext</code>（ThreadLocal 持有當前 Profile）。</li>
+<li><strong>過安全</strong>——<code>sandbox.enforce(...HTTP_REQUEST...)</code> 檢查目標域名在白名單內。</li>
+<li><strong>送出</strong>——真正交給 adapter。</li>
+</ol>
+<p>兩個重要的行為細節：</p>
+<ul>
+<li><code>channel</code> 參數<strong>非必填</strong>——省略時預設用 <code>notify_channels</code> 的第一個渠道。</li>
+<li>Profile 設定範例：<code>notify_channels: [{type: webhook, url: ${TEAM_WEBHOOK_URL}}]</code>——網址帶環境變數，貫徹「敏感資訊不放明文設定」的原則。</li>
+</ul>
+
+<h2>一個關鍵心智模型：介面中性</h2>
+<p>整段程式碼的精華在於「<strong>介面中性（channel-neutral）</strong>」。你可以做一個自測題：現在要換掉 webhook，全部改用企業微信 SDK。<code>NotifyTools</code> 要改幾行？——<strong>零行</strong>。它呼叫的還是同一個 <code>NotifyChannelAdapter.send(NotifyTarget, String)</code>。要變的只有：註冊到 registry 的實作從 <code>WebhookNotifyAdapter</code> 換成 <code>WeComNotifyAdapter</code>。介面把變化隔離在實作層。</p>
+<p>如果把「通知」寫死成 webhook 的呼叫，換渠道就得翻動所有呼叫它的業務 Skill；介面中性讓「要不要推、推什麼」與「怎麼推」徹底解耦。</p>
+
+<h2>跟在後面的安全掛鉤</h2>
+<p>注意 <code>sandbox.enforce</code> 呼叫<strong>在</strong> <code>adapter.send</code> <strong>之前</strong>。這個順序就是下一課驗收 harness 裡最重要的一條斷言：順序反了，等於訊息先送出去、白名單檢查變成馬後炮——白名單防線就形同虛設。現在記住「先 enforce、後 send」，下一課我們用測試把它釘死。</p>
+
+<div class="lesson-nav">
+  <div><a href="./interface-first-design.html">← 上一步：動手前先想清楚：介面先行與四個決策</a></div>
+  <div><a href="./acceptance-security.html">下一步：驗收 harness 與安全順序：enforce 必須在 send 之前 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="NotifyChannelAdapter 介面的簽名表達了什麼？" data-correct="2" data-explain="簽名只有「目標 + 內容」，表達把內容送達一個通知目標的意圖，不含渠道概念。">
+  <button class="opt">某家渠道專屬的認證資訊</button>
+  <button class="opt">Webhook 的 URL 格式規範</button>
+  <button class="opt">把內容送達一個通知目標的意圖</button>
+  <button class="opt">Agent 的模型與溫度設定</button>
+</div>
+
+<div class="quiz" data-question="NotifyTarget 的 config 為什麼用 Map？" data-correct="1" data-explain="Map 能承載不同渠道不同的欄位需求，讓同一個介面能接各種渠道。">
+  <button class="opt">因為 Java 不支援固定欄位</button>
+  <button class="opt">為了承載不同渠道不同的設定欄位</button>
+  <button class="opt">因為 Map 比 Record 效能好</button>
+  <button class="opt">因為要儲存對話歷史</button>
+</div>
+
+<div class="quiz" data-question="WebhookNotifyAdapter 的 URL 從哪來？" data-correct="3" data-explain="URL 從 notifyTarget.config 讀取，不 hardcode，同一份 adapter 能送給任何 webhook 位址。">
+  <button class="opt">從環境變數的全域常數</button>
+  <button class="opt">從 Agent 的對話歷史</button>
+  <button class="opt">從模型自己推斷</button>
+  <button class="opt">從 notifyTarget.config 的 url 欄位</button>
+</div>
+
+<div class="quiz" data-question="NotifyTools.notify 省略 channel 參數時會發生什麼？" data-correct="0" data-explain="channel 非必填，省略時預設用 notify_channels 的第一個渠道。">
+  <button class="opt">預設使用第一個渠道</button>
+  <button class="opt">直接丟出例外</button>
+  <button class="opt">傳給三個渠道各送一次</button>
+  <button class="opt">改用最後一個渠道</button>
+</div>
+
+<div class="quiz" data-question="把 webhook 換成企業微信 SDK，NotifyTools 要改幾行？" data-correct="2" data-explain="介面中性讓換渠道不動呼叫端，要改的只有註冊的 adapter 實作。">
+  <button class="opt">全部重寫</button>
+  <button class="opt">約 20 行</button>
+  <button class="opt">零行</button>
+  <button class="opt">一行，改 notify 的簽名</button>
+</div>
+
+<div class="quiz" data-question="NotifyTools 三步驟中，sandbox.enforce 何時執行？" data-correct="1" data-explain="順序是解析目標 → sandbox.enforce → adapter.send；先檢查後送出。">
+  <button class="opt">在 adapter.send 之後</button>
+  <button class="opt">在 adapter.send 之前</button>
+  <button class="opt">在解析目標之前</button>
+  <button class="opt">完全不需要執行</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Notify 出站 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

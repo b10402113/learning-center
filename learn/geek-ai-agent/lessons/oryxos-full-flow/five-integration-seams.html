@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>五條典型縫隙與單一來源修法</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>五條典型縫隙與單一來源修法</h1>
+<p class="meta">Step 2/6 · 全流程串聯</p>
+
+<h2>學習目標</h2>
+<p>能認出整合期最常見的五條縫隙（JPA 掃描、工具重複執行、session id 不一致、Bootstrap 靜默跳過、失敗路徑缺審計），並說出每一條對應的單一來源修法。</p>
+
+<h2>症狀在執行期，根因在交接處</h2>
+<p>把模組接起來之後，你會撞到的 bug 有一個共同長相：<strong>症狀出現在執行期，但根因從來不在出症狀的那個模組裡，而在兩個模組的交接處</strong>。這正是為什麼單模組測試抓不到它們——每個模組單獨看都對，兩個接在一起才錯。</p>
+<p>下面五條是整合時最常撞到的縫隙。它們看似無關，卻都收斂到同一種解法：<strong>把某件事的決定權收回到唯一一個地方（單一來源）</strong>。認出「這是哪一種單一來源被破壞」，你就能自己修沒見過的第六條。</p>
+
+<h2>縫隙一：啟動時 Found 0 JPA repositories</h2>
+<p><strong>症狀。</strong>服務能啟動，但日誌裡出現 <code>Found 0 JPA repositories</code>，接著任何用到資料庫的操作都失敗。</p>
+<p><strong>根因。</strong>啟動類上的 <code>scanBasePackages</code> 只會掃描 Spring 的元件，它<strong>拖不動</strong> JPA 自己的 <code>@EnableJpaRepositories</code> 與 <code>@EntityScan</code>。你的 Repository 和 Entity 明明存在，卻被掃描範圍漏掉了。</p>
+<p><strong>修法。</strong>在啟動類上顯式聲明兩者各自的 <code>basePackages</code>，不要指望一個 <code>scanBasePackages</code> 包辦三種掃描。</p>
+<p><strong>驗收。</strong>日誌裡的 repository 數量必須大於 0（例如 <code>Found N JPA repositories</code>，N &gt; 0）。看到 0 就是還沒修好。</p>
+
+<h2>縫隙二：工具被執行兩次</h2>
+<p><strong>症狀。</strong>一次對話裡，同一個工具被呼叫了兩次，結果重複。</p>
+<p><strong>根因。</strong>Spring AI 的自動工具執行沒有被完全關閉。這個坑在 Provider 那一課就埋過雷：只要你用 <code>ChatClient</code> 的「自動工具執行」寫法，框架會自己跑一次工具，而你的 <code>ToolExecutor</code> 又跑一次。</p>
+<p><strong>修法。</strong>確認工具執行權<strong>只存在於 <code>ToolExecutor</code> 一處</strong>。Provider 只負責呼叫模型、拿回意的 tool call，實際執行交給 <code>ToolExecutor</code>。回到 Provider 一課，把自動執行關乾淨。</p>
+<p><strong>驗收。</strong>對賬時 <code>tool_invocations</code> 的筆數要恰好等於預期（天氣對話恰好 1 筆）；出現 2 筆就是這個坑復發。</p>
+
+<h2>縫隙三：同一個使用者分裂成兩份歷史</h2>
+<p><strong>症狀。</strong>同一個人在 CLI 問過的話，到了 REST 或管理台卻看不到；或反過來，兩邊各自長出一份自己的歷史。</p>
+<p><strong>根因。</strong>session id 不是隨手取的，它有固定結構——<strong>「渠道 + 使用者 + Profile」</strong>三者組合而成。如果 CLI 和 Web 各自用自己的方式拼接這個 id，同一個使用者就會被算成兩個不同的 session，歷史自然對不上。</p>
+<p><strong>修法。</strong>id <strong>只在 <code>SessionManager</code> 裡生成一處</strong>；各入口傳進來的是三個原料（渠道、使用者、Profile），而不是自己拼好的字串。這樣無論從哪條入口進來，同一組原料一定得到同一個 id。</p>
+<p><strong>驗收。</strong>CLI 建一個 session，用 REST 依同一個 id 查得到，且管理台顯示的是同一筆。</p>
+
+<h2>縫隙四：Bootstrap 檔被靜默跳過</h2>
+<p><strong>症狀。</strong>Agent 的人格（persona）莫名其妙消失了，回答的語氣與設定完全不同，但沒有任何錯誤訊息。</p>
+<p><strong>根因。</strong>Bootstrap 檔（例如定義人格的 <code>SOUL.md</code>）如果不存在，<code>ContextLoader</code> 會<strong>安靜地略過</strong>它。既然沒有人報錯，也就沒有人知道人格已經悄悄不見了。</p>
+<p><strong>修法。</strong>缺失至少要在日誌留下 <code>WARN</code>；如果某個 Profile <strong>顯式引用</strong>了一個不存在的檔案，就該直接<strong>硬性報錯</strong>，而不是吞掉。無聲的降級是最危險的降級。</p>
+<p><strong>驗收。</strong>故意移除一個被引用的 Bootstrap 檔，啟動時應該看到明確警告或錯誤，而不是安靜地跑起來。</p>
+
+<h2>縫隙五：審計只記了成功那一半</h2>
+<p><strong>症狀。</strong>一切正常時審計表看起來很完整；一旦出錯，卻查不到任何痕跡。</p>
+<p><strong>根因。</strong>整合時很容易只顧著讓「成功路徑」跑通，忘了失敗路徑也要留痕。而審計的價值恰恰在出錯的時候——Provider 逾時、Sandbox 攔截、工具拋例外，這些都應該留下一筆 <code>success=false</code> 的紀錄。</p>
+<p><strong>修法。</strong>把失敗路徑當成<strong>一等公民</strong>來對賬：主動製造這三種失敗（Provider 逾時、Sandbox 阻擋、工具例外），逐一確認每一種都留下 <code>success=false</code>，而且系統不會因此崩掉。</p>
+<p><strong>驗收。</strong>三種失敗各觸發一次，對應的表上都有一筆失敗紀錄。</p>
+
+<h2>把五條收斂成一句</h2>
+<table>
+<thead>
+<tr><th>縫隙</th><th>被破壞的單一來源</th></tr>
+</thead>
+<tbody>
+<tr><td>Found 0 JPA repositories</td><td>掃描範圍只宣告了一處，漏掉另外兩種</td></tr>
+<tr><td>工具被執行兩次</td><td>工具執行權有兩個地方（框架 + ToolExecutor）</td></tr>
+<tr><td>session id 不一致</td><td>id 生成散落在各入口，而非 SessionManager</td></tr>
+<tr><td>Bootstrap 靜默跳過</td><td>檔案缺失的決定被吞掉，沒有單一負責人發聲</td></tr>
+<tr><td>失敗路徑缺審計</td><td>審計的單一義務只覆蓋成功一半</td></tr>
+</tbody>
+</table>
+<p>所以修法不是逐個打補丁，而是把每件事的決定權收回唯一一處。這也是下一課要延續的主題：要讓對賬能自動化，每條痕跡都得先有一個可查的單一端點。</p>
+
+<div class="lesson-nav">
+  <div><a href="./flow-reconciliation-standard.html">← 上一步：全流程串聯：真能用的標準與對賬方法</a></div>
+  <div><a href="./admin-and-query-endpoint.html">下一步：三面同源：補列會話端點與管理台 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="日誌出現 Found 0 JPA repositories，根因是什麼？" data-correct="2" data-explain="scanBasePackages 拖不動 @EnableJpaRepositories 與 @EntityScan，需各自聲明 basePackages。">
+  <button class="opt">資料庫連線字串設錯了</button>
+  <button class="opt">Repository 介面忘了加註解</button>
+  <button class="opt">JPA 掃描沒被 scanBasePackages 帶上</button>
+  <button class="opt">Entity 類別放錯 Maven 模組</button>
+</div>
+
+<div class="quiz" data-question="同一個工具被執行兩次，修法是什麼？" data-correct="1" data-explain="確認執行權只存在於 ToolExecutor 一處，Provider 只做呼叫與轉換。">
+  <button class="opt">把工具改成非同步執行</button>
+  <button class="opt">確認執行權只在 ToolExecutor</button>
+  <button class="opt">在工具內部加去重快取</button>
+  <button class="opt">把工具從 Profile 中移除</button>
+</div>
+
+<div class="quiz" data-question="session id 應該由誰生成？" data-correct="3" data-explain="id 是渠道＋使用者＋Profile 的組合，只在 SessionManager 生成一處，入口只傳三個原料。">
+  <button class="opt">由 CLI 在啟動時生成</button>
+  <button class="opt">由 Web 控制器生成</button>
+  <button class="opt">由前端管理台生成</button>
+  <button class="opt">只在 SessionManager 生成</button>
+</div>
+
+<div class="quiz" data-question="Bootstrap 檔缺失卻沒有報錯，為什麼危險？" data-correct="0" data-explain="人格被靜默略過，是無聲降級，沒人知道 Agent 已經變了樣。">
+  <button class="opt">因為它是無聲降級，沒人知道</button>
+  <button class="opt">因為它會讓服務啟動變慢</button>
+  <button class="opt">因為它會佔用額外記憶體</button>
+  <button class="opt">因為它會使 token 成本上升</button>
+</div>
+
+<div class="quiz" data-question="審計若只記成功路徑，最關鍵的損失是什麼？" data-correct="2" data-explain="審計的價值在出錯時，失敗卻不留痕會讓問題無法追溯。">
+  <button class="opt">成功紀錄會顯得太過冗長</button>
+  <button class="opt">資料庫索引會失去效益</button>
+  <button class="opt">出錯時查不到任何痕跡</button>
+  <button class="opt">查詢介面會無法分頁</button>
+</div>
+
+<div class="quiz" data-question="這五條縫隙共同的修法精神是什麼？" data-correct="1" data-explain="把每件事的決定權收回唯一一處，也就是恢復單一來源。">
+  <button class="opt">為每個模組都加上重試機制</button>
+  <button class="opt">把決定權收回唯一一處</button>
+  <button class="opt">用更多日誌覆蓋所有分支</button>
+  <button class="opt">把模組拆得更細以降低耦合</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 全流程串聯 · Step 2/6</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

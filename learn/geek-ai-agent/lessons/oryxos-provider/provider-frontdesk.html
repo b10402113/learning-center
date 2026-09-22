@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>什麼是 Provider：Agent 與 LLM 之間的前台</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>什麼是 Provider</h1>
+<p class="meta">Step 1/5 · Provider 抽象</p>
+
+<h2>學習目標</h2>
+<p>能說出 Provider 在整個 Agent 架構中的位置（前台）、它承擔的四件事與絕不承擔的一件事，並解釋為什麼換模型可以只改配置。</p>
+
+<h2>先看一個場景：換模型為什麼讓你頭大</h2>
+<p>假設你寫好了 ReAct 迴圈，呼叫的是 DeepSeek。突然決定切到 Kimi，或兩家都上線做對比。最直接的改法，是到迴圈裡把所有請求格式、端點、參數通通改一遍——然後很快發現每家廠商的 API 格式長得完全不一樣：bename、message 結構、tool call 的形狀各有各的脾氣。你的 Agent 邏輯還沒長大，就先被這種「協議差異」淹沒了。</p>
+<p>Provider 要解決的正是這個。它的位置，在 <strong>Agent 與 LLM 之間</strong>——像一間公司大樓的前台：樓上的人（ReAct 迴圈）不用知道裡面每個部門怎麼運作，把需求遞給前台，前台替你找到對的人、把需求翻譯過去、再把結果帶回來。</p>
+
+<h2>Provider 是什麼：一句話定義</h2>
+<p><strong>Provider 是 Agent 與 LLM 之間的抽象層（前台）</strong>。上層只傳兩個東西：一個 <strong>Profile</strong>（設定檔，告訴它要用哪個模型）和一段 <strong>Prompt</strong>（提示詞）。Provider 負責選出對應的模型、完成一次呼叫，然後把原始回應原樣交回來。上層完全不接觸「OpenAI 的 JSON 長怎樣、Anthropic 的格式長怎樣」這些細節。</p>
+<blockquote>
+Provider 是一個工程接縫：把「LLM 這個大腦」從 Agent 的五元件（LLM + Tools + Memory + Loop + Environment）裡隔離出來，底下換誰，上面不用動。
+</blockquote>
+
+<h2>四件事做，一件事絕不做</h2>
+<p>Provider 的職責被刻意收窄成四件事：</p>
+<table>
+<thead>
+<tr><th>職責</th><th>它做什麼</th><th>一句話記憶</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>選模</strong></td><td>依 Profile 選擇對應的模型</td><td>看名單找人</td></tr>
+<tr><td><strong>呼叫</strong></td><td>完成一次 LLM 呼叫並取回原始回應</td><td>打完電話回報</td></tr>
+<tr><td><strong>轉換</strong></td><td>把工具 schema 翻譯成各家模型的格式</td><td>把需求翻成對方聽得懂的話</td></tr>
+<tr><td><strong>審計</strong></td><td>記錄這次呼叫（成敗、token、模型）</td><td>每次通話留底</td></tr>
+</tbody>
+</table>
+<p>而它<strong>絕不執行工具</strong>。當模型說「我想呼叫 <code>http_get</code> 這個工具」時，這只是 Function Calling 回傳的一個「想呼叫 X」的請求。Provider 把它原樣交回給迴圈，由 <strong>ToolExecutor</strong> 決定要不要真正執行。這個分工是憲法層級的原則：執行權只在一處，否則工具會被執行兩次。</p>
+
+<h2>為什麼換模型可以是純配置</h2>
+<p>因為四個職責裡，「選模」是唯一的入口。Profile 用 <strong>provider name</strong>（一個字串，例如 <code>deepseek</code>）來指名要用哪個模型，而不是直接寫死某個類別或 Bean。Provider 內部維護這張 name → 模型的對照表。於是你把 Profile 裡的 name 從 <code>deepseek</code> 改成 <code>kimi</code>，換模型就完成了——上層的迴圈、記憶、工具一行都不用改。</p>
+
+<h2>介面長什麼樣（先看契約，不看實作）</h2>
+<p>在 OryxOS 裡，契約是一支叫 <code>ProviderService</code> 的介面，放在 core：</p>
+<pre><code>ProviderResponse chat(String sessionId, Profile profile, ProviderRequest request);</code></pre>
+<p>輸入包括 session id（給審計用）、Profile（決定選哪個模型）、以及一次呼叫的請求（系統提示＋對話＋可用工具）。回傳的 <code>ProviderResponse</code> 只有三樣：<strong>文字回覆 text、工具呼叫請求 toolCalls、token 用量 usage</strong>。這個契約刻意不使用任何 Spring AI 的型別——core 不依賴框架，具體協議轉換由 provider 實作模組完成。依賴是倒過來的：介面在 core，實作在底部。</p>
+
+<h2>把職責邊界記成一句話</h2>
+<p>遇到任何跟 Provider 有關的設計問題，先問：這是「選模、呼叫、轉換、審計」裡的一件事嗎？如果是「執行工具」「決定迴圈順序」「累積上下文」——那不屬於 Provider，往別處找。</p>
+
+<div class="lesson-nav">
+  <div><a href="./explicit-mapping-and-traps.html">下一步：動手前先想清楚 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Provider 在 Agent 架構中的位置可以比作什麼？" data-correct="0" data-explain="Provider 是前台：接收上層需求，代為找到對的人、翻譯、帶回結果。">
+  <button class="opt">大樓的前台</button>
+  <button class="opt">CEO 辦公室</button>
+  <button class="opt">保全系統</button>
+  <button class="opt">停車場</button>
+</div>
+
+<div class="quiz" data-question="Provider 的哪一項職責，讓「換模型只改配置」成為可能？" data-correct="1" data-explain="Profile 用 provider name 指名模型，選模是唯一入口，換 name 就換模型。">
+  <button class="opt">審計</button>
+  <button class="opt">選模</button>
+  <button class="opt">轉換</button>
+  <button class="opt">呼叫</button>
+</div>
+
+<div class="quiz" data-question="當模型想呼叫工具時，Provider 該怎麼做？" data-correct="2" data-explain="工具執行權在 ToolExecutor，Provider 只把 tool call 回傳，絕不自己執行。">
+  <button class="opt">直接執行並把結果回傳</button>
+  <button class="opt">丟棄請求並產生錯誤</button>
+  <button class="opt">只回傳這個呼叫請求，由迴圈執行</button>
+  <button class="opt">快取類似的結果以免再呼叫</button>
+</div>
+
+<div class="quiz" data-question="ProviderService 的契約放在哪裡？" data-correct="3" data-explain="介面放 core、實作放下游模組，是依賴倒置，core 不依賴 Spring AI 型別。">
+  <button class="opt">跟實作模組放一起</button>
+  <button class="opt">放在資料庫模組</button>
+  <button class="opt">以 json schema 發布</button>
+  <button class="opt">放在 core，實作在別處</button>
+</div>
+
+<div class="quiz" data-question="ProviderResponse 回傳的三樣東西是什麼？" data-correct="1" data-explain="文字回覆、工具呼叫請求、token 用量——不含執行結果。">
+  <button class="opt">身份、金鑰、驗證資訊</button>
+  <button class="opt">文字、工具呼叫請求、用量</button>
+  <button class="opt">錯誤碼、重試次數、時序</button>
+  <button class="opt">提示詞、參數、組態</button>
+</div>
+
+<div class="quiz" data-question="下面哪一件事不屬於 Provider 的職責？" data-correct="0" data-explain="累積上下文是迴圈／Session 的事，Provider 只做單次呼叫。">
+  <button class="opt">累積對話上下文</button>
+  <button class="opt">依 Profile 選模型</button>
+  <button class="opt">記錄這次呼叫的審計</button>
+  <button class="opt">轉換工具 schema</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Provider 抽象 · Step 1/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>單一編排器：AgentService、ProfileContext、ContextLoader</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>單一編排器：AgentService、ProfileContext、ContextLoader</h1>
+<p class="meta">Step 4/5 · 手寫 ReAct 迴圈</p>
+
+<h2>學習目標</h2>
+<p>能說清 AgentService.process 為什麼是 CLI／Web／排程唯一的編排入口，以及 ProfileContext（ThreadLocal）與 ContextLoader（每次重讀、不落快取）各自解決什麼問題。</p>
+
+<h2>問題：三條路，一份核心</h2>
+<p>Agent 有至少三種進入方式：人在 CLI 打一輪、外部系統打 Web API、排程器到了時間自動打一輪。如果三條路各自呼叫不同程式，壞事很快就會來——同一份規則 Token 三次，兩個入口的行為開始分歧。</p>
+<blockquote>
+第一性規則是「<strong>同一個入口，重用不要重寫</strong>」：人推（human-push）與鐘推（clock-push）共用同一個 AgentService；凡是出現「第二條路」，不久就會出現「兩條路行為不一致」的 bug。OryxOS 多數最難解的 bug 都從這裡來。
+</blockquote>
+<p>解法：把「處理一輪」這件事收斂成單一函式 <code>AgentService.process</code>，CLI、Web、排程全都叫它。</p>
+
+<h2>AgentService.process：一輪的生命週期</h2>
+<p>process 幹的事不多，但都串在「一輪」的生命週期上：</p>
+<ol>
+<li>設定身分（Profile）與追蹤上下文</li>
+<li>讀取 Session（含 Session id 的確定）</li>
+<li>呼叫 ReActLoop 跑完整個迴圈</li>
+<li>把結果存回 Session</li>
+</ol>
+<p>它不決定「模型回什麼」，也不決定「工具跑不跑」——那些分別是迴圈與 ToolExecutor 的事。它是<strong>編排</strong>：確保每一次「Agent 想事情」前後，身分、Session、稽核都對得上。</p>
+
+<h2>ProfileContext：一個 ThreadLocal 的故事</h2>
+<p>這裡有一個非常實務的坑：<code>OryxTool.execute(JsonNode)</code> 的簽名<strong>沒有帶 Profile（身分）參數</strong>。工具端真正要知道「現在是哪個 Agent 在叫我、它的 provider 是什麼、它被授權用哪些東西」——但這個資訊沒有從迴圈一路傳下去。</p>
+<p>解法是用 <code>ProfileContext</code>：一個以 ThreadLocal 存身分的容器。</p>
+<ol>
+<li><code>process</code> 開頭把 Profile 放進 ProfileContext（set）</li>
+<li>整條呼叫鏈（loop → Provider → ToolExecutor → 工具）都在同一條執行緒裡，工具隨時可用 ProfileContext 取到身分</li>
+<li>處理結束（含異常路徑）在 <code>finally</code> 清掉（clear）</li>
+</ol>
+<blockquote>
+第三個「finally 清掉」是最容易被忽略的一步：執行緒會被容器重用。如果不清，下一個請求會撿到上一個請求的 Profile——這種錯在單次請求測試裡完全不見，等流量一大才爆。
+</blockquote>
+<p>這條執行緒用虛擬執行緒（virtual thread）跑，阻塞式同步模型，讓 ThreadLocal 沿著單一執行緒自然傳遞。</p>
+
+<h2>ContextLoader：每次重讀，不落快取</h2>
+<p>Agent 的人設來自一堆 Markdown 文件：Bootstrap（AGENTS.md／SOUL.md／USER.md）與 Skill（SKILL.md），全部會注入 system prompt。問題是：如果 ContextLoader 有快取，改了 SOUL.md，Agent 的人設會莫名其妙還維持舊的，或者要重啟才生效。</p>
+<p>OryxOS 的決定很乾脆：<strong>每次組 prompt 都重讀文件、完全不落快取</strong>。記憶成本就是一次 1–2 ms 的檔案 IO，換來「改檔立即生效」與「不可能讀到髒資料」。</p>
+<p>另外兩個規則：</p>
+<ul>
+<li>Profile 明確引用了某個檔案但檔案不存在 → <strong>直接報錯</strong>，不偷偷跳過（否則 Agent 的人設會靜默消失，非常難查）。</li>
+<li>連 Memory 的整棵 MEMORY.md 也用同樣精神：每輪重新讀，讓 save_memory 下一輪就生效。</li>
+</ul>
+
+<h2>把三節串成一條鏈</h2>
+<p>回顧整條主鏈：<strong>CLI／Web／排程</strong>都進 <code>AgentService.process</code> → 它設定身分並呼叫 <code>ReActLoop.run</code> → 迴圈用 <code>PromptBuilder</code> 組上下文（ContextLoader 每次重讀＋MemoryService 提供記憶）→ 委派 <code>ProviderService</code> 呼叫模型 → 需要時委派 <code>ToolExecutor</code>（ProfileContext 供身分、Sandbox 做安全、寫稽核）→ 每輪結果累積回 Session。你現在看懂的，就是整個 Agent 底座的心跳。</p>
+
+<div class="lesson-nav">
+  <div><a href="./writing-the-loop.html">← 上一步：手寫 ReActLoop、PromptBuilder、ToolExecutor</a></div>
+  <div><a href="./pinning-the-loop.html">下一步：用測試與 Demo 釘死迴圈 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="CLI、Web、排程三條路進入引擎時，應該怎麼設計？" data-correct="2" data-explain="同一入口重用不重寫：全都呼叫同一個 AgentService.process，避免兩條路行為分歧。">
+  <button class="opt">每條路各自寫一套處理邏輯較有效率</button>
+  <button class="opt">排程比較重要，先讓它走特殊路徑</button>
+  <button class="opt">共用單一的 AgentService.process</button>
+  <button class="opt">Web 走快路徑、CLI 走慢路徑</button>
+</div>
+
+<div class="quiz" data-question="ProfileContext 用 ThreadLocal 是要解決什麼問題？" data-correct="1" data-explain="OryxTool.execute 的簽名沒帶 Profile，工具要得知身分，靠單一執行緒上的 ThreadLocal 傳遞。">
+  <button class="opt">讓 Profile 可以跨心跳傳到另一台機器</button>
+  <button class="opt">OryxTool.execute 簽名沒有 Profile，靠執行緒分享身分</button>
+  <button class="opt">讓模型可以記住使用者的中文名字</button>
+  <button class="opt">把 Session 強制改成單例</button>
+</div>
+
+<div class="quiz" data-question="ProfileContext 在 finally 清掉，防的是哪個 bug？" data-correct="3" data-explain="執行緒會被容器重用，不清掉的話下一個請求會撿到上一個的 Profile，形成 ThreadLocal 洩漏。">
+  <button class="opt">Session 資料庫爆炸</button>
+  <button class="opt">模型回應速度變慢</button>
+  <button class="opt">工具稽核表重複寫入</button>
+  <button class="opt">下一個請求撿到上一個的身分</button>
+</div>
+
+<div class="quiz" data-question="ContextLoader 每次組 prompt 都重讀文件、不落快取的理由是什麼？" data-correct="0" data-explain="不落快取讓改檔立即生效、不會讀到髒資料，代價只是 1–2 ms 的檔案 IO。">
+  <button class="opt">改檔立即生效且不會讀到髒資料</button>
+  <button class="opt">省硬碟空間以免文件佔太多</button>
+  <button class="opt">避免多執行緒同時讀檔時鎖死</button>
+  <button class="opt">讓壓縮檔案後能加快啟動</button>
+</div>
+
+<div class="quiz" data-question="Profile 明確引用了某檔案但檔案不存在時，正確行為是？" data-correct="1" data-explain="要直接報錯，不能默默跳過——否則 Agent 的人設會靜默消失，極難排查。">
+  <button class="opt">靜默跳過，當作沒有這份文件</button>
+  <button class="opt">直接報錯，不偷偷忽略</button>
+  <button class="opt">自動生成一份空文件頂替</button>
+  <button class="opt">延後到下次重啟再檢查</button>
+</div>
+
+<div class="quiz" data-question="AgentService.process 主要做哪一件事？" data-correct="2" data-explain="它不決定模型回什麼、也不決定工具跑不跑，只負責編排一輪的身分、Session、迴圈與存回。">
+  <button class="opt">親自寫 system prompt</button>
+  <button class="opt">親自執行所有工具呼叫</button>
+  <button class="opt">編排一輪的身分、Session、迴圈與存回</button>
+  <button class="opt">決定下一次排程在幾點觸發</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 手寫 ReAct 迴圈 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

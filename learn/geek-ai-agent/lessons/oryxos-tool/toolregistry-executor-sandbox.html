@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ToolRegistry、ToolExecutor 與安全白名單</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>ToolRegistry、ToolExecutor 與安全白名單</h1>
+<p class="meta">Step 4/5 · Tool 體系</p>
+
+<h2>學習目標</h2>
+<p>能說出 ToolRegistry 如何匯集三種工具來源、Profile 如何用 tools 欄位過濾工具子集，以及每次工具執行前為何必須先通過路徑／命令／網域白名單的 Sandbox 檢查。</p>
+
+<h2>一把「所有工具都得經過」的門</h2>
+<p>前三課讓我們有了統一的 OryxTool，也有了三種插件方式。但工具這麼多，總得有個地方把它們收在一起、讓迴圈能找得到——那就是 <strong>ToolRegistry（工具註冊表）</strong>。而真正「動手前一刻」的關卡，則在 <strong>ToolExecutor（工具執行器）</strong>與 <strong>Sandbox 檢查</strong>。本課把這三件事連成一條完整的執行鏈。</p>
+
+<h2>ToolRegistry：三種來源，一本總清冊</h2>
+<p>ToolRegistry 是唯一知道「世界上有哪些工具」的地方。它囊括三種來源：</p>
+<ul>
+<li><strong>內建工具</strong>＋<strong>方式三的 @Tool Java Bean</strong>：啟動時掃描自帶的 @Tool 方法，統統包成 OryxTool。</li>
+<li><strong>方式二的 MCP 工具</strong>：McpClientService 連上的 server，每個 <code>tools/list</code> 條目也包成 OryxTool 註冊進來。</li>
+</ul>
+<p>所以不管你用哪種方式加工具，最終都是把自己交進 ToolRegistry 這本總清冊。設計上的一個關鍵決定：註冊表只用「名稱」當鑰匙，反覆強調「顯式映射」而非類型掃描。</p>
+<p>但工具不能不分青紅皂白全給每個 Agent 用。一個只管天氣查詢的 Agent，不需要（也不該要）shell 權限。於是每個 Profile（Agent 的設定檔）帶一個 <code>tools</code> 欄位，列出這個 Agent 可以使用哪些工具。<strong>ToolRegistry 提供全部，Profile 過濾出子集</strong>——迴圈在組 prompt 時只把這個 Agent 允許的工具清單列給模型，等於做了最粗一層的極小權限。</p>
+
+<h2>ToolExecutor：唯一的執行路徑</h2>
+<p>工具找到了，接著就要執行。OryxOS 規定一條鐵律：<strong>執行工具的路徑只能有一條 ToolExecutor</strong>，迴圈不能繞過它直接用某個工具實作。它的流程是固定四步：</p>
+<ol>
+<li><strong>按名稱找工具</strong>——從 ToolRegistry 依名字撈對應的 OryxTool。</li>
+<li><strong>過 Sandbox 白名單</strong>——動手前先檢查這次操作是否在允許範圍內（下一秒詳述）。</li>
+<li><strong>執行並包裝</strong>——呼叫 execute，把結果包成 ToolResult（success／content／errorMessage／retryable）。</li>
+<li><strong>寫入審計</strong>——把這次呼叫（工具名、參數、結果、成敗）寫進 <code>tool_invocations</code> 表。沒有查詢介面也照寫，這是「可審計」的底線。</li>
+</ol>
+<p>這條路徑同時解決了兩個問題：一是執行權收斂，任何工具都得經過同一套檢查與記錄；二是審計完整，之後任何「這工具幹了什麼」的疑問都有據可查。</p>
+
+<h2>Sandbox 檢查：動手前先過安全門</h2>
+<p>核心階段的安全治理，靠的是「每次執行前面對世界的一張白名單」。JDK 21 早已沒有 SecurityManager，所以 OryxOS 用應用層的白名單檢查達成隔離。它按工具觸碰的資源分類：</p>
+<table>
+<thead>
+<tr><th>資源</th><th>白名單內容</th><th>受保護的是</th></tr>
+</thead>
+<tbody>
+<tr><td>檔案</td><td>允許的路徑（<code>file.allowed_paths</code>）</td><td>Agent 只能碰工作區內能寫的目錄，不能亂讀系統檔</td></tr>
+<tr><td>命令</td><td>允許執行的命令（<code>shell.allowed_commands</code>）</td><td>只能跑白名單裡的命令，例如 git、python</td></tr>
+<tr><td>網路</td><td>允許的網域（<code>http.allowed_domains</code>，用萬用字元）</td><td>http_get 只能打允許的 API 網域，防跳板、防 SSRF</td></tr>
+</tbody>
+</table>
+<p>檢查失敗就拋 <code>SandboxViolationException</code>，這次執行到此為止，不會真的動手。這張白名單的設定寫在 application.yaml，屬於「應用層配置」，是核心階段唯一的工具治理機制。</p>
+
+<h2>「先檢查、後執行」是一條硬規則</h2>
+<p>注意一個很容易被忽略、卻是最重要的設計：<strong>檢查必須在 execute 之前，且內建工具自己也要做</strong>。以 http_get 為例，它的真實作法是「先呼叫 sandbox.enforce(...) 檢查目標網域，再發請求」——不是等資料都抓回來才發現被擋。任何一個新工具寫出來，都要遵守同一個「先檢查後動手」的節奏，這樣安全就不是事後補丁，而是焊在執行鏈裡的一環。</p>
+<p>把這課跟上一課結合：不管工具來自方式一、二、三，進了 ToolRegistry 就是 OryxTool；不管它是誰，都要過 ToolExecutor 這條唯一的門；不管它多遜，動手前都得過白名單。三層疊起來，就是「全部收編、統一入口、先查再動」的完整治理。</p>
+
+<div class="lesson-nav">
+  <div><a href="./three-tier-plugin-tools.html">← 上一步：三級 Plugin Tool：零代碼、輕代碼、重代碼</a></div>
+  <div><a href="./builtin-tools-industry-standard.html">下一步：把內建工具補齊到業界水準 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="ToolRegistry 負責的角色是什麼？" data-correct="1" data-explain="它是把所有工具來源收編、能被程式查找的唯一總清冊。">
+  <button class="opt">執行每一個工具並返回結果</button>
+  <button class="opt">匯集所有來源的工具並提供查詢</button>
+  <button class="opt">攔截不合法的網路請求</button>
+  <button class="opt">寫入工具執行審計記錄</button>
+</div>
+
+<div class="quiz" data-question="Profile 的 tools 欄位做什麼用？" data-correct="2" data-explain="Profile 用它過濾出該 Agent 允許的工具子集，實現粗粒度極小權限。">
+  <button class="opt">定義工具的白名單路徑</button>
+  <button class="opt">決定工具是否可重試</button>
+  <button class="opt">過濾出該 Agent 可用的工具子集</button>
+  <button class="opt">指定工具由哪台機器執行</button>
+</div>
+
+<div class="quiz" data-question="ToolExecutor 的四步順序是什麼？" data-correct="3" data-explain="找工具 → 過 Sandbox 白名單 → 執行並包 ToolResult → 寫 audit。">
+  <button class="opt">執行 → 找工具 → 寫 audit → 檢查</button>
+  <button class="opt">檢查 → 執行 → 找工具 → 寫 audit</button>
+  <button class="opt">寫 audit → 找工具 → 檢查 → 執行</button>
+  <button class="opt">找工具 → 白名單檢查 → 執行包結果 → 寫 audit</button>
+</div>
+
+<div class="quiz" data-question="sandbox 對 http_get 的要求是？" data-correct="1" data-explain="只允許白名單內的網域；檢查失敗即拋例外，不會發出請求。">
+  <button class="opt">不檢查，來者不拒</button>
+  <button class="opt">只能打白名單內允許的網域</button>
+  <button class="opt">必須先登錄所有參數再放行</button>
+  <button class="opt">請求回來後再決定要不要擋</button>
+</div>
+
+<div class="quiz" data-question="為什麼內建工具自己也要先做 sandbox 檢查？" data-correct="0" data-explain="「先檢查後執行」是硬規則，內建工具也不例外——安全焊在執行鏈裡，不是事後補丁。">
+  <button class="opt">因為先檢查後執行是對所有工具的一致硬規則</button>
+  <button class="opt">因為內建工具更容易犯錯</button>
+  <button class="opt">因為外掛工具才需要檢查</button>
+  <button class="opt">為了讓執行速度變慢</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Tool 體系 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

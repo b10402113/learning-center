@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>介面先行的 Sandbox 抽象：不讓第一檔帶偏</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>介面先行的 Sandbox 抽象：不讓第一檔帶偏</h1>
+<p class="meta">Step 3/4 · Sandbox</p>
+
+<h2>學習目標</h2>
+<p>能把「方向／介面／實作」三層拆開設計 Sandbox，讓介面只表達意圖（enforce 一個動作），並用「microVM 能不能乾淨塞進去」作為介面中性的反向驗證，且背出兩個升級訊號。</p>
+
+<h2>回顧：我們站在哪條線上</h2>
+<p>上一課看到四檔方案都是一條「強度 ↔ 開銷」線上的點。現在問題變成：<strong>如果今天只打算做第一檔，這道牆要怎麼設計，才不會在明年要升級到容器／microVM 時整面重寫？</strong>這一課的答案是一句可搬走的話：</p>
+<blockquote>
+<strong>方向現在就定，介面現在就釘，實作只做現在需要的。</strong>
+</blockquote>
+
+<h2>設計原則：方向／介面／實作三層</h2>
+<p>為了多階段演進而設計，不代表現在就寫未來的程式碼，而是把工作切成三層、各用自己的節奏：</p>
+<ul>
+  <li><strong>方向現在定</strong>——應用層 → 容器 → microVM，以及各自什麼訊號觸發（下一步「升級訊號」）。</li>
+  <li><strong>介面現在釘死（最重要）</strong>——把「這面牆長什麼樣」定下來，這是所有投資回報率最高的一層。</li>
+  <li><strong>實作只做第一檔</strong>——但只用現在需要的量。</li>
+</ul>
+<p>這三個動作的分界線是<strong>介面牆</strong>：牆之上的（抽象、契約）現在設計；牆之下的（具體實作）只寫現在需要的。這跟 Memory 模組的「方向／介面／實作」三合一原則、以及排程器是同一套系統思考。</p>
+
+<h2>介面表達意圖，不表達實作</h2>
+<p>最關鍵的設計準則：<code>Sandbox</code> 的介面抽象的是<strong>意圖</strong>——「在一個受控環境裡執行這個動作」——而不是實作。絕不放進「白名單」「容器 image」「VM 設定」這些字眼。</p>
+<pre><code>// 介面：只說要做什麼
+interface Sandbox {
+    void enforce(SandboxAction action);
+}
+record SandboxAction(ActionType type, String target); // enum + 目標
+</code></pre>
+<p>隔離的需求也不寫死在介面簽名裡，而是放在一個<strong>策略物件（strategy object）</strong>裡跟著走：允許的路徑／網域、資源上限、要求的隔離等級（basic／container／microVM）。</p>
+<ul>
+  <li>每個檔次是一個<strong>獨立可插拔的實作</strong>，對應某個隔離等級。</li>
+  <li>核心階段只有應用層實作，但介面＋策略保留了「隔離等級」這個維度。</li>
+  <li>以後加容器 = 新增一個實作類別去回應 container 等級，<strong>不是介面修改</strong>——開／閉原則（open/closed principle）。</li>
+</ul>
+
+<h2>別讓介面被第一檔帶偏（最重要的一課）</h2>
+<p>當你只有一個實作時，最誘人（也最危險）的作法是把介面設計成「為這個實作量身打造」：方法叫 <code>checkPath</code>／<code>checkCommand</code>——但那根本塞不下一個容器（容器的回答是「我提供一個隔離的檔案系統」，不是「我檢查一個路徑」）。</p>
+<blockquote>
+<strong>解法：設計時想最重的那一檔（microVM），然後問「一個 microVM 實作能不能乾淨地塞進這個介面？」</strong>如果不行，介面就被第一檔帶偏了。
+</blockquote>
+<p>第二個提醒來自 Hermes 的警告：隔離介面必須<strong>為將來覆蓋 MCP 子行程與行程內能力留空間</strong>，不能焊死成「攔截一次工具呼叫」。OryxOS 的 enforce 只覆蓋工具執行路徑——MCP 子行程與行程內直接呼叫仍然裸露，這是階段一必須承認的邊界。</p>
+
+<h2>介面中性的反向驗證：KataMicroVmSandbox 測試</h2>
+<p>動手前的最後一個自我檢查：<strong>想像現在要寫一個 <code>KataMicroVmSandbox</code></strong>。</p>
+<ul>
+  <li>它需要新增方法嗎？不需要——乾脆地呼叫同一個 <code>enforce(SandboxAction)</code>，自己決定怎麼隔離。</li>
+  <li>它的簽名裡會出現第一檔的字眼嗎？不會。</li>
+</ul>
+<p>答案有任一個「是」，介面就被第一檔綁死了。</p>
+
+<h2>升級訊號：不是「大家都用容器」</h2>
+<p>升級永遠由真實的信任等級觸發，不靠趕流行：</p>
+<ul>
+  <li><strong>訊號 1（應用層 → 容器）</strong>：開始跑「相對不可信」的程式／指令，或需要多租戶。</li>
+  <li><strong>訊號 2（容器 → microVM）</strong>：要跑「完全不可信」的程式（例如公開上傳），或要靠強度＋密度同時放大一堆互相不信任的沙箱。</li>
+</ul>
+<blockquote>
+<strong>沒有訊號，就不升級。</strong>這叫「有訊號才動」——和 Memory、排程器的強度節制是同一條原則。
+</blockquote>
+
+<h2>分階段路線總覽</h2>
+<table>
+<thead>
+<tr><th>階段</th><th>做什麼</th><th>隔離強度</th></tr>
+</thead>
+<tbody>
+<tr><td>第一天起（永久）</td><td>介面層：意圖抽象 + 含隔離等級的策略，microVM 反向驗證</td><td>—</td></tr>
+<tr><td>核心階段</td><td>應用層白名單（file／command／domain），零依賴、單二進位，誠實標為第一層勸阻</td><td>第一檔</td></tr>
+<tr><td>訊號 1 →</td><td>容器隔離（namespaces + cgroups + seccomp，四維）</td><td>第二檔</td></tr>
+<tr><td>訊號 2 →</td><td>microVM（Kata／Firecracker）</td><td>第三檔</td></tr>
+</tbody>
+</table>
+<p>全程不變的三件事：網路出口管控、資源配額、全鏈審計——它們不隨隔離檔次而變。</p>
+
+<div class="lesson-nav">
+  <div><a href="./sandbox-four-tiers.html">← 上一步：四檔方案與隔離強度/開銷光譜</a></div>
+  <div><a href="./sandbox-whitelist-impl.html">下一步：實作 WhitelistSandbox 並接進既有工具 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Sandbox 介面應該抽象什麼？" data-correct="2" data-explain="介面抽象的是意圖「在受控環境執行這個動作」，不是白名單或容器實作。">
+  <button class="opt">白名單的規則格式</button>
+  <button class="opt">容器的 image 設定</button>
+  <button class="opt">在受控環境執行這個動作的意圖</button>
+  <button class="opt">VMM 的記憶體參數</button>
+</div>
+
+<div class="quiz" data-question="「介面被第一檔帶偏」最典型的症狀是什麼？" data-correct="1" data-explain="方法名變成 checkPath／checkCommand 這類第一檔專屬字眼，塞不下容器。">
+  <button class="opt">介面多了隔離等級欄位</button>
+  <button class="opt">方法叫 checkPath／checkCommand</button>
+  <button class="opt">介面只有一個實作</button>
+  <button class="opt">策略物件攜帶允許清單</button>
+</div>
+
+<div class="quiz" data-question="用「microVM 能不能乾淨塞進去」驗證介面的原因是什麼？" data-correct="0" data-explain="最重的一檔都塞得下，介面就一定是中性的；這叫反向驗證。">
+  <button class="opt">最重的一檔塞得下，介面就一定是中性的</button>
+  <button class="opt">因為 microVM 是最便宜的一檔</button>
+  <button class="opt">為了測試啟動速度</button>
+  <button class="opt">因為大家都用 microVM</button>
+</div>
+
+<div class="quiz" data-question="從應用層升級到容器的訊號是什麼？" data-correct="3" data-explain="訊號 1 是開始跑相對不可信的程式或需要多租戶。">
+  <button class="opt">程式碼超過一萬行</button>
+  <button class="opt">團隊預算增加了</button>
+  <button class="opt">模型升級到新版本</button>
+  <button class="opt">要跑相對不可信的程式或需要多租戶</button>
+</div>
+
+<div class="quiz" data-question="哪三件事不隨隔離檔次改變、每一檔都得有？" data-correct="1" data-explain="網路出口管控、資源配額、全鏈審計是全程不變的縱深防禦。">
+  <button class="opt">firewall、TLS、備份</button>
+  <button class="opt">出口管控、資源配額、全鏈審計</button>
+  <button class="opt">資料庫、Redis、佇列</button>
+  <button class="opt">容器、鏡像、註冊</button>
+</div>
+
+<div class="quiz" data-question="一個 KataMicroVmSandbox 要乾淨接進 Sandbox 介面，需要新方法嗎？" data-correct="2" data-explain="不需要——它乾脆呼叫同一個 enforce，自己決定怎麼隔離。">
+  <button class="opt">需要，要加 startVm 方法</button>
+  <button class="opt">需要，要加 injectImage 方法</button>
+  <button class="opt">不需要，同一個 enforce 即可</button>
+  <button class="opt">需要，要加 checkPath 方法</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Sandbox · Step 3/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

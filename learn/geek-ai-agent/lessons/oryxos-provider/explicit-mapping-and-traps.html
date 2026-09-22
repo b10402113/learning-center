@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>動手前先想清楚：三個陷阱與顯式映射</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>動手前先想清楚</h1>
+<p class="meta">Step 2/5 · Provider 抽象</p>
+
+<h2>學習目標</h2>
+<p>能逐一說出設計 Provider 前必須釘死的三個陷阱（型別無法區分多 Provider、Spring AI 自動執行工具、未驗證 starter 依賴），並解釋「顯式 name→ChatModel 映射、不靠型別掃描」為什麼是首要原則。</p>
+
+<h2>為什麼「先動手」反而最慢</h2>
+<p>Provider 看起來很直觀：寫個類別呼叫模型而已。但實務上，幾乎所有嚴重的 bug 都是在一開始沒想清楚邊界造成的——而且往往要到整合時才爆。設計 Provider 之前，有三個陷阱值得先釘死。它們有一個共同特徵：<strong>都是「框架給了你預設行為，而這個預設行為剛好不是你要的」</strong>。</p>
+
+<h2>陷阱一：型別無法區分多個 Provider</h2>
+<p>假設你同時接 DeepSeek、Kimi、Qwen。用的是 Spring AI，各家都會註冊成 <code>ChatModel</code> Bean。問題是：<strong>它們的型別一模一樣</strong>——容器裡放著好幾個 <code>ChatModel</code>，但你光靠「掃描容器裡所有 ChatModel」來找，根本不知道哪個是 DeepSeek、哪個是 Kimi，因為 Bean 名未必等於 provider name。</p>
+<p>解法不是猜，而是<strong>維護一份顯式的 provider name → ChatModel 對照表</strong>：</p>
+<pre><code>Map&lt;String, ChatModel&gt; providerMap = Map.of(
+    "deepseek", deepseekChatModel,
+    "qwen",     qwenChatModel,
+    "kimi",     kimiChatModel
+);</code></pre>
+<p>這條原則在 OryxOS 的技術方案裡被寫死：「<strong>顯式映射、不靠型別掃描，否則多 Provider 跑不起來</strong>」。Profile 透過 provider name 引用，啟動時按 name 建表，多 Provider 並存才有確定性。</p>
+
+<h2>陷阱二：Spring AI 會自動執行工具</h2>
+<p>這是整個 OryxOS 最常踩、也最容易出事的陷阱。Spring AI 的 <code>ChatClient.prompt().call()</code> 這條捷徑，內建了「偵測 tool call → 自動幫你執行工具」的行為。如果你用了它，模型想呼叫 <code>shell</code> 或 <code>http_post</code>，框架就自己先跑了一次——然後你的 ReActLoop／ToolExecutor 又跑第二次。工具被執行兩次，後果可能是重複發 HTTP、重複送訊息、甚至重複扣錢。</p>
+<p>OryxOS 的解法是：<strong>明確關閉 Spring AI 的 tool 自動執行</strong>（<code>internalToolExecutionEnabled=false</code>），只用它做兩件事——LLM 協議轉換、與 <code>@Tool</code> 的 JSON Schema 生成。工具被回傳成「想呼叫 X」的請求後，執行權完全交給 <code>ToolExecutor</code>。這同時守住前面說的「工具執行權只在一處」。</p>
+
+<h2>陷阱三：範例用的 provider 名，先去驗證依賴</h2>
+<p>課堂或範例裡看到 <code>deepseek</code>、<code>kimi</code>、<code>qwen</code> 這些名字，很容易直接寫進配置。但「名字存在」不等於「你的 Spring AI BOM 鎖定了對應的 starter 依賴」。如果沒鎖，啟動時可能根本建不出對應的模型。</p>
+<p>動手前先跑 <code>mvn dependency:tree</code>，確認你要的 provider starter 在鎖定的 BOM 裡解析得出來。這是一個「<strong>開發前先驗證</strong>」的習慣：先證明依賴存在、能被聯絡，再寫呼叫程式碼——避免做出一個無法連結、或連結到錯誤物件的地方。</p>
+
+<h2>三個陷阱 → 三條測試</h2>
+<p>把每一個陷阱釘成回歸測試，是這個節奏最漂亮的地方：</p>
+<table>
+<thead>
+<tr><th>陷阱</th><th>它該被什麼測試釘住</th></tr>
+</thead>
+<tbody>
+<tr><td>型別無法區分 Provider</td><td>兩個 Provider 之間不得互相竄線（各走各的模型）</td></tr>
+<tr><td>自動執行工具</td><td>捕捉到的請求裡，自動執行必須是關閉的</td></tr>
+<tr><td>未驗證依賴</td><td>（手動）BOM 能解析、integration 冒煙測試有真實呼叫</td></tr>
+</tbody>
+</table>
+<p>往後在講驗收的那一步，會看到這三條如何變成真正可跑的測試。</p>
+
+<div class="lesson-nav">
+  <div><a href="./provider-frontdesk.html">← 上一步：什麼是 Provider</a></div>
+  <div><a href="./two-layer-config-and-profile.html">下一步：兩層配置與 Profile 系統 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼不能靠型別掃描區分多個 Provider？" data-correct="2" data-explain="多個 ChatModel Bean 型別相同、Bean 名未必等於 provider name，掃描無法可靠區分。">
+  <button class="opt">因為掃描會被防火牆擋住</button>
+  <button class="opt">因為 Bean 名就是 provider name</button>
+  <button class="opt">因為型別與 Bean 名都無法唯一定義該用誰</button>
+  <button class="opt">因為型別掃描只對無容器環境有效</button>
+</div>
+
+<div class="quiz" data-question="「顯式映射、不靠型別掃描」要守住，原因是什麼？" data-correct="1" data-explain="多 Provider 並存若沒有顯式映射，路由就會產生歧義，直接跑不起來。">
+  <button class="opt">能省下不少啟動記憶體</button>
+  <button class="opt">否則多 Provider 無法可靠運作</button>
+  <button class="opt">會產生巨量的日誌輸出</button>
+  <button class="opt">能讓審計表變得更簡單</button>
+</div>
+
+<div class="quiz" data-question="Spring AI 的 ChatClient.prompt().call() 預設行為有什麼問題？" data-correct="3" data-explain="它會自動執行偵測到的 tool call，導致工具被執行兩次。">
+  <button class="opt">它不支援任何模型</button>
+  <button class="opt">它會快取所有回應</button>
+  <button class="opt">它不發送 system prompt</button>
+  <button class="opt">它會自動執行工具</button>
+</div>
+
+<div class="quiz" data-question="OryxOS 如何解決工具被執行兩次的問題？" data-correct="0" data-explain="明確關閉並只用 Spring AI 做協議轉換與 schema 生成，執行權留在 ToolExecutor。">
+  <button class="opt">關閉工具自動執行，執行權給 ToolExecutor</button>
+  <button class="opt">把工具移除，不讓模型呼叫</button>
+  <button class="opt">讓兩次執行結果合併</button>
+  <button class="opt">改用自己的 protobuf 命名</button>
+</div>
+
+<div class="quiz" data-question="寫程式前先跑 mvn dependency:tree 的目的為何？" data-correct="1" data-explain="確認要用的 provider starter 真的在鎖定 BOM 裡被解析出來，避免做到一半才發現依賴不存在。">
+  <button class="opt">清理無用的歷史依賴</button>
+  <button class="opt">驗證 provider starter 在 BOM 中可解析</button>
+  <button class="opt">產生專案的 UML 類別圖</button>
+  <button class="opt">混算各模組的程式碼行數</button>
+</div>
+
+<div class="quiz" data-question="「兩個 Provider 不得互相竄線」這條測試，對應哪個陷阱？" data-correct="2" data-explain="它驗證了顯式映射真的有效，每個 Provider 都走自己的模型。">
+  <button class="opt">自動執行工具陷阱</button>
+  <button class="opt">未驗證依賴陷阱</button>
+  <button class="opt">型別無法區分陷阱</button>
+  <button class="opt">審計落庫陷阱</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Provider 抽象 · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

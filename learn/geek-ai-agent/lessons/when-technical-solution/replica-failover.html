@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Master/Slave 複製與 10 秒接管</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Master/Slave 複製與 10 秒接管</h1>
+<p class="meta">Step 4/5 · When 技術方案</p>
+
+<h2>學習目標</h2>
+<p>能說清 Master/Slave 非同步複製、用 Lease 偵測故障、10 秒內完成接管的完整順序，以及為何只保證 at-least-once。</p>
+
+<h2>問題：一台節點死了，排程中的訊息怎麼辦</h2>
+<p>訊息存在記憶體中的時間輪裡。如果負責某個輪的節點突然掛掉，那個輪上所有還沒到期的訊息不就消失了？HA（高可用）要解決的正是這件事。When 的答案是：每個時間輪都有 <strong>1 個 Master 加 1 個 Slave</strong>，兩者刻意放在不同的節點上，Master 出事時由 Slave 接手。</p>
+
+<h2>為什麼是 Master/Slave，而不是共識演算法</h2>
+<p>先釐清副本的真正目的：<strong>它不是為了讓資料有多份以保證不丟，而是為了讓切換夠快</strong>。因為所有訊息在寫入記憶體之前，都已經先寫進 Redis 了——Redis 才是可靠性的來源，也就是「唯一真相（single source of truth）」。副本只是為了在 Master 死亡時，有一個已經在記憶體中排好隊的替補可以馬上接手，不必重新從 Redis 把整個輪重建起來。</p>
+<p>既然不需要跨節點的強一致性投票，就不用背上 Raft / Paxos 的延遲與複雜度。這是第一步「副本用 Master/Slave」決策在架構上的落實。</p>
+
+<h2>非同步複製：不擋寫入，容許幾毫秒的落後</h2>
+<p>Master 收到變更後，把操作<strong>非同步</strong>推給 Slave，不等 Slave 確認就回覆完成。整個同步通常只花幾毫秒，而且永遠不會阻塞寫入路徑。</p>
+<p>這個設計容許 Slave 短暫落後（lag）。因為 Redis 保存了完整資料，即使 Slave 少同步了一兩筆，最壞情況也只是接管後需要從 Redis 補上，不會造成訊息遺失。這就是「有唯一真相來源」帶來的好處：<strong>副本可以允許不精確，因為它不是最後一道防線。</strong></p>
+<p>如果同步本身失敗呢？系統不會硬撐，而是把該副本標記為 <strong>out-of-sync（不同步）</strong>，並觸發重建——從 Redis 重新把狀態補回 Slave。</p>
+
+<h2>用 Lease 偵測故障，而不是猜</h2>
+<p>「Master 掛了嗎？」這個判斷很容易出錯。如果用「心臟跳動超過幾秒沒來就判定死亡」的啟發式做法，一次 GC 暫停或網路抖動就可能誤判，導致健康的 Master 被換掉，反而製造中斷。</p>
+<p>When 把故障偵測完全交給 ETCD 的 <strong>Lease</strong>：節點用 10 秒的租約註冊，並在獨立執行緒上每 3 秒續約。只有當續約真的失敗、租約真的過期，ETCD 才會移除該節點。這是一個由共識系統背書的判定，<strong>不會因為短暫的停頓而產生偽陽性</strong>。故障偵測因此是「免費」拿到的，不需要 When 自己寫一套心跳判斷。</p>
+
+<h2>十秒接管的完整順序</h2>
+<p>當 Master 所在的節點死亡，接管在 <strong>10 秒內</strong>完成，順序如下：</p>
+<ol>
+<li><strong>故障被發現</strong>：該節點的 Lease 到期，ETCD 移除它。</li>
+<li><strong>Controller 收到通知</strong>：所有節點都 Watch 著 <code>/when/nodes/</code>，Controller 看到 DELETE 事件。</li>
+<li><strong>提升 Slave</strong>：Controller 把死亡節點名下對應的 Slave 提升為新的 Master。</li>
+<li><strong>新 Master 從 Redis 恢復</strong>：新的 Master 以 Redis 中的訊息與索引為準，把記憶體中的時間輪補齊——包含那些還沒同步過來的落後資料。</li>
+<li><strong>指派新 Slave</strong>：Controller 再挑一個節點擔任新的 Slave，重建 1 Master + 1 Slave 的組態。</li>
+</ol>
+<p>在這 10 秒內，寫入會短暫不可用（因為 Master 正在換手），但<strong>已經存進 Redis 的訊息永遠不會遺失</strong>。這是「可用性短暫下降，但資料不丟」的取捨。</p>
+
+<h2>不丟失是怎麼保證的</h2>
+<p>「不丟失」不是靠副本，而是靠兩條規則的組合：</p>
+<ul>
+<li><strong>回傳前先寫 Redis</strong>：訊息必須先成功寫入 Redis，API 才會回覆成功。若 Redis 寫入失敗，就直接回報失敗，且<strong>不寫入記憶體</strong>——寧可讓業務重試，也不留下「記憶體有、Redis 沒有」的訊息。</li>
+<li><strong>新 Master 從 Redis 恢復</strong>：接管時，新 Master 的狀態以 Redis 為唯一依據，任何記憶體中漏掉的都能補回。</li>
+</ul>
+<p>只要這兩條成立，即使副本完全沒同步到，訊息依然存在。</p>
+
+<h2>為什麼只保證 at-least-once</h2>
+<p>投遞流程是「先投遞、成功後才刪除 Redis」。如果在「投遞成功」與「刪除成功」之間節點崩潰，訊息還在 Redis 裡，接管後會被再投一次——所以系統的語意是 <strong>at-least-once（至少一次）</strong>，可能重複，但不會遺漏。</p>
+<p>要跨系統做到 exactly-once（恰好一次）代價極高，而且業界主流也不這麼做：Kafka、RocketMQ、Pulsar 都只提供 at-least-once。正確的用法是把「去重」交給下游用冪等（idempotency）處理——例如業務方以 message_id 為鍵，重複收到時直接忽略。這是分散式系統的產業共識，不是 When 的偷懶。</p>
+
+<div class="lesson-nav">
+  <div><a href="./multilayer-timewheel.html">← 上一步：多層時間輪的設計</a></div>
+  <div><a href="./persistence-deploy.html">下一步：持久化 key 設計與部署形態 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="When 的副本機制正式名稱與組態是什麼？" data-correct="1" data-explain="每個時間輪 1 個 Master 加 1 個 Slave，兩者放在不同節點。">
+  <button class="opt">Raft 三副本多數派</button>
+  <button class="opt">1 Master 加 1 Slave</button>
+  <button class="opt">Paxos 雙主互備</button>
+  <button class="opt">2 Master 加 1 Slave</button>
+</div>
+
+<div class="quiz" data-question="副本的真正目的是什麼？" data-correct="2" data-explain="副本為快速切換而存在，可靠性由 Redis 這唯一真相來源保證。">
+  <button class="opt">讓資料有三份以保證不丟</button>
+  <button class="opt">降低 Redis 的寫入延遲</button>
+  <button class="opt">讓 Master 死亡時快速切換</button>
+  <button class="opt">分攤 gRPC 轉發的流量</button>
+</div>
+
+<div class="quiz" data-question="為什麼故障偵測完全交給 Lease？" data-correct="3" data-explain="Lease 由共識系統背書，不會因 GC 暫停或網路抖動誤判健康節點死亡。">
+  <button class="opt">因為 Lease 能加快訊息投遞</button>
+  <button class="opt">因為 Lease 可以取代 Redis</button>
+  <button class="opt">因為 Lease 能壓縮複製延遲</button>
+  <button class="opt">因為它不會因抖動誤判死亡</button>
+</div>
+
+<div class="quiz" data-question="接管的順序中，新 Master 如何恢復狀態？" data-correct="0" data-explain="以 Redis 為唯一依據，把記憶體中的時間輪補齊，包含落後資料。">
+  <button class="opt">從 Redis 恢復並補齊時間輪</button>
+  <button class="opt">向舊 Master 要求完整快照</button>
+  <button class="opt">從 ETCD 讀取訊息內容</button>
+  <button class="opt">等待業務方重新提交所有訊息</button>
+</div>
+
+<div class="quiz" data-question="「訊息不丟失」是靠哪兩條規則？" data-correct="2" data-explain="回傳前先寫 Redis，且新 Master 從 Redis 恢復；副本只是加速切換。">
+  <button class="opt">三副本與多數派投票</button>
+  <button class="opt">同步複製與 Raft 日誌</button>
+  <button class="opt">先寫 Redis 與新 Master 恢復</button>
+  <button class="opt">心跳偵測與自動重建快照</button>
+</div>
+
+<div class="quiz" data-question="為什麼 When 只保證 at-least-once？" data-correct="3" data-explain="投遞成功後才刪除，若中間崩潰會重投；跨系統 exactly-once 代價過高。">
+  <button class="opt">因為 Redis 無法保證寫入成功</button>
+  <button class="opt">因為時間輪不支援去重</button>
+  <button class="opt">因為 gRPC 轉發可能逾時</button>
+  <button class="opt">因為先投遞後刪除可能重複</button>
+</div>
+
+<div class="quiz" data-question="對 at-least-once 的正確因應方式是什麼？" data-correct="1" data-explain="下游以 message_id 做冪等處理，重複收到時忽略，這是產業共識。">
+  <button class="opt">要求 When 改成 exactly-once</button>
+  <button class="opt">下游以 message_id 做冪等</button>
+  <button class="opt">關閉 Slave 以避免重複</button>
+  <button class="opt">改用同步複製並停用重試</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · When 技術方案 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

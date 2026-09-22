@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>動手前先想清楚到驗收：五個決定與統一異常出口</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>動手前先想清楚到驗收</h1>
+<p class="meta">Step 5/5 · 定時任務與 Web Service</p>
+
+<h2>學習目標</h2>
+<p>能複述 Web Service 動手前的五個決定（薄控制器共用引擎、單一異常出口、核心期非目標、serve 單 key、admin 唯讀），並說清 400／404／500／503／504 錯誤碼的對應與「內部細節絕不漏進 500」的驗收。</p>
+
+<h2>五個決定，一次想完</h2>
+<p>動手寫任何一個 controller 之前，先把五件事釘死。它們決定了 Web Service 是「引擎的一層皮」還是「第二套系統」。</p>
+
+<h3>決定一：控制器必須薄，並且共用同一顆引擎</h3>
+<p><code>POST /sessions/{id}/messages</code> 呼叫的，必須是 <code>oryxos chat</code> 用的同一個 <code>AgentService.process</code>，沒有第二條處理鏈。最大的誘惑是「在 controller 裡順手加一點邏輯」——每加一點，Web 就跟 CLI 岔開一點，最後變成兩套行為不一致的系統。這是會破壞架構的那條紅線。</p>
+
+<h3>決定二：單一異常出口，固定的錯誤碼</h3>
+<p>六支控制器不各自處理例外，全部交給一支 <code>GlobalExceptionHandler</code>，產出統一的 JSON（包含 <code>errorCode</code>、<code>message</code>、<code>timestamp</code>）：</p>
+<table>
+<thead>
+<tr><th>HTTP 狀態</th><th>代表什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>400</td><td>參數錯誤（例如訊息超過 32KB）</td></tr>
+<tr><td>404</td><td>資源不存在（例如 session 找不到）</td></tr>
+<tr><td>500</td><td>內部錯誤（訊息不洩露內部細節）</td></tr>
+<tr><td>503</td><td>Provider 服務不可用</td></tr>
+<tr><td>504</td><td>Agent 呼叫超過 60 秒逾時</td></tr>
+</tbody>
+</table>
+
+<h3>決定三：核心期非目標，寫清楚不該做什麼</h3>
+<p>認證（內網假設，Auth 留給擴展）、SSE 串流、WebSocket、rate limiting、RBAC——這些<strong>核心期明確不做</strong>。只保留兩道請求尺寸防護：單則訊息上限 32KB、session 歷史保留最近 100 則。把非目標寫進文件，是為了防止開發到一半「順手加上去」。</p>
+
+<h3>決定四：serve 必須能用單一 provider key 啟動</h3>
+<p>Spring AI 的 <code>OpenAiAutoConfiguration</code> 會急切地要求 <code>spring.ai.openai.api-key</code>，沒有就啟動失敗。解法不是塞一個假 key，而是<strong>把它排除在自動配置之外</strong>——和排除 <code>DashScopeAutoConfiguration</code> 是同一個手法。這樣 <code>serve</code> 就只認 <code>DEEPSEEK_API_KEY</code> 一個 key。</p>
+
+<h3>決定五：admin v1 唯讀</h3>
+<p>管理平台可以看 session、Profile、Tool、記憶、狀態，但<strong>不能建立或編輯 Agent</strong>——那需要第 29／30 節的端點。UI 上不放「假按鈕」，做不到的操作就不要畫出來。</p>
+
+<h2>程式怎麼寫：薄控制器與虛擬執行緒</h2>
+<p>設定上開啟 <code>spring.threads.virtual.enabled: true</code>，每個請求跑在一個虛擬執行緒（virtual thread）上——高並發時不必為每個連線開一條 OS 執行緒。典型控制器 <code>SessionApiController.send</code> 只有三步：驗證 <code>content</code> 非空且 ≤32KB；載入 session，找不到就丟 404；然後 <code>agentService.process(session, req.content())</code>。其餘端點（invoke、profiles、tools、memory、health、info）一樣直接。OpenAPI 規格由 springdoc 自動產生，掛在 <code>/swagger-ui</code>。</p>
+
+<h2>驗收 harness：三種測試各自抓什麼</h2>
+<ul>
+<li><code>@WebMvcTest</code> 切片（mock 掉 <code>AgentService</code>）——只掛 MVC，不啟動模型與資料庫，跑得快。<code>SessionApiControllerTest</code> 斷言 &gt;32KB → 400、session 不見 → 404、以及 <code>agentService.process</code> <strong>恰好被呼叫一次</strong>（證明 controller 沒偷偷加邏輯）。</li>
+<li><code>@SpringBootTest</code>（真實 context、無模型）的 <code>GlobalExceptionHandlerTest</code>——逐個確認例外對到議定的狀態碼與統一 body，以及 500 <strong>不洩露內部例外訊息</strong>。</li>
+<li><code>WebSmokeIT</code> 走真實路徑打 <code>/health</code>、<code>/info</code>、<code>/profiles</code>、<code>/tools</code>，驗證 bean 組裝與掃描——也順帶抓回第 18 節那類「Found 0 repositories」的 JPA 掃描 bug。</li>
+</ul>
+<blockquote>
+最關鍵的一條回歸：<strong>內部細節（例如一段 JDBC 連線字串）絕不能出現在 500 的回應 body 裡。</strong>對外門面照顧的不只是可用性，還有把內部世界洩漏出去的問題——這條在測試裡釘死，漏出去任何內部訊息都算測試失敗。
+</blockquote>
+
+<h2>人做完的驗證清單</h2>
+<p>測試綠以後，人類再做一遍真實驗證：開啟 <code>oryxos serve</code> 後用 curl 走完 10 個端點（含一次真實模型的 <code>POST /sessions/{id}/messages</code>）、確認 CLI 建立的 session 用 Web 讀得到（兩個入口共用儲存）；把 Provider 關掉看 503、把呼叫拖到 60 秒以上看 504（真實故障注入）；跑 200 個並發 invoke 看虛擬執行緒撐不撐得住；最後確認 admin 五個頁面都渲染真實資料、沒有任何寫入口，<code>/swagger-ui</code> 完整。</p>
+
+<h2>收尾：從「散落零件」到「整條鏈」</h2>
+<p>到這裡，五大核心能力都各有對外出口——CLI、Web、排程三條入口共享同一顆引擎。但 Agent 仍然只是「散落的零件」：還沒有人把整條鏈拉起來跑。接下來的兩節（全流程串聯）就是把這十幾個模組對表對賬、串成真能運作的完整流程。</p>
+
+<div class="lesson-nav">
+  <div><a href="./web-service-showcase.html">← 上一步：Web Service：10 端點把引擎變成 REST 介面</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="薄控制器原則禁止什麼？" data-correct="1" data-explain="禁止在 controller 裡加與引擎不同的邏輯，否則 Web 與 CLI 會岔成兩套行為。">
+  <button class="opt">在 controller 呼叫 AgentService</button>
+  <button class="opt">在 controller 裡順手加一段「專屬邏輯」</button>
+  <button class="opt">控制器只做參數驗證</button>
+  <button class="opt">錯誤交給 GlobalExceptionHandler</button>
+</div>
+
+<div class="quiz" data-question="Provider 不可用與 Agent 呼叫逾時分別對應哪些狀態碼？" data-correct="2" data-explain="Provider 不可用是 503，Agent 呼叫超過 60 秒是 504。">
+  <button class="opt">500 與 502</button>
+  <button class="opt">404 與 400</button>
+  <button class="opt">503 與 504</button>
+  <button class="opt">502 與 504</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項是核心期刻意不做（非目標）的？" data-correct="0" data-explain="認證（內網假設）、SSE、WebSocket、rate limiting、RBAC 全是核心期非目標。">
+  <button class="opt">網內認證（Auth）</button>
+  <button class="opt">單則訊息 32KB 上限</button>
+  <button class="opt">session 歷史保留 100 則</button>
+  <button class="opt">統一的 ApiResponse 錯誤格式</button>
+</div>
+
+<div class="quiz" data-question="serve 要排除 OpenAiAutoConfiguration 的原因？" data-correct="3" data-explain="它會急切要求 spring.ai.openai.api-key，排除後 serve 只認 DEEPSEEK_API_KEY 一個 key。">
+  <button class="opt">讓 OpenAPI 規格自動產生</button>
+  <button class="opt">關掉虛擬執行緒</button>
+  <button class="opt">避免 admin 平台被掃描</button>
+  <button class="opt">它會急切要求 api-key，排除後只需 DEEPSEEK_API_KEY</button>
+</div>
+
+<div class="quiz" data-question="admin v1 平台能做下列哪一件事？" data-correct="2" data-explain="admin v1 唯讀：可以看 session、Profile、Tool、記憶、狀態，但不能建立或編輯 Agent。">
+  <button class="opt">建立新的 Agent</button>
+  <button class="opt">修改 Agent 的 cron 排程</button>
+  <button class="opt">檢視現有 session 內容</button>
+  <button class="opt">上傳新的 SKILL 目錄</button>
+</div>
+
+<div class="quiz" data-question="哪個測試斷言「內部細節不會洩漏進 500 body」？" data-correct="1" data-explain="GlobalExceptionHandlerTest（@SpringBootTest）負責檢查例外對應與 500 不洩露內部例外訊息。">
+  <button class="opt">SessionApiControllerTest 切片</button>
+  <button class="opt">GlobalExceptionHandlerTest</button>
+  <button class="opt">WebSmokeIT</button>
+  <button class="opt">AgentSchedulerTest</button>
+</div>
+
+<div class="quiz" data-question="@WebMvcTest 切片為什麼快？" data-correct="0" data-explain="只啟動 MVC 層並 mock AgentService，不啟動模型與資料庫。">
+  <button class="opt">只掛 MVC、mock AgentService，不起模型資料庫</button>
+  <button class="opt">它平行快取所有測試結果</button>
+  <button class="opt">因為它不寫任何日誌</button>
+  <button class="opt">它使用記憶體資料庫</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 定時任務與 Web Service · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

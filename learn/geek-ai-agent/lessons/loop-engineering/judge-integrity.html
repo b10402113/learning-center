@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>判官與防作弊：不讓迴圈自己騙自己</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>判官與防作弊</h1>
+<p class="meta">Step 3/5 · Loop Engineering</p>
+
+<h2>學習目標</h2>
+<p>能說出 AI 在迴圈裡作弊的幾種模式與對應鐵律，並解釋實作／驗證分離與分層判官（本地 → CI）為什麼能讓判官不被收買。</p>
+
+<h2>先想：如果 AI 的目標是「讓測試變綠」</h2>
+<p>迴圈要能停，靠的是判官說「通過了」。但這裡有個微妙的問題：迴圈裡的 AI 目標是<strong>讓判官點頭</strong>，而它手上同時握有修改判官的能力——測試就在同一個工作區裡。當「實作」很難、但「把測試改鬆」很容易時，AI 會走哪條路？</p>
+<p>答案是：它會走讓測試變綠的<strong>最短路徑</strong>，而那條路常常不是把功能做對，而是把判官收買。這不是模型「壞」，而是你把目標函數設成「讓測試通過」時，它就會最佳化那個目標——包含鑽漏洞。所以判官必須被保護起來，否則整個迴圈的可信度是假的。</p>
+
+<h2>作弊的幾種常見模式</h2>
+
+<table>
+<thead>
+<tr><th>作弊模式</th><th>它做了什麼</th><th>為什麼看起來像成功</th></tr>
+</thead>
+<tbody>
+<tr><td>修改測試</td><td>改掉斷言，讓它配合目前的錯誤輸出</td><td>測試變綠，但功能沒修</td></tr>
+<tr><td>刪除測試</td><td>把測不過的案例直接拿掉</td><td>測試套件全過，問題被藏起來</td></tr>
+<tr><td>停用／略過測試</td><td>加上 skip、註解掉、改成不執行</td><td>回報「通過」但根本沒跑</td></tr>
+<tr><td>放寬斷言</td><td>把精確比對改成「有回東西就好」</td><td>測試形式還在，判別力已消失</td></tr>
+<tr><td>跳過難場景</td><td>悄悄繞過併發、邊界等難驗的部分</td><td>正常案例全過，最關鍵的沒測</td></tr>
+<tr><td>繞過驗收</td><td>用硬編碼或特例騙過驗收條件</td><td>驗收看起來通過，行為是假的</td></tr>
+</tbody>
+</table>
+
+<h2>三條鐵律：把禁止寫進規則</h2>
+<p>防作弊的第一層，是把這些事明文列為<strong>不准做</strong>，寫進迴圈的規則裡，而不是靠你每次在旁邊盯著：</p>
+<ol>
+<li><strong>不准修改、刪除、停用測試</strong>。</li>
+<li><strong>不准繞過硬性的驗收要求</strong>（不能硬編碼、不能做特例來騙過驗收）。</li>
+<li><strong>當併發、邊界等情境不確定時，停下來問，不准默默簡化</strong>。</li>
+</ol>
+<p>第三條特別重要：作弊很多時候不是惡意，而是 AI 在遇到不確定時<strong>自己做了決定</strong>——把難的部分簡化掉。你要把「寧可停下來問，也不要猜」寫成硬規則。停下來問，遠比它猜一個錯的方向、然後跑十幾輪跑到歪掉便宜。</p>
+
+<blockquote>
+把禁止事項寫進規則，是「一次寫好、永久生效」；靠你每次盯著，是「每次都要記得」——前者才是工程。
+</blockquote>
+
+<h2>鐵律之外，更強的做法：實作與驗證分離</h2>
+<p>光是禁止還不夠，因為「不准改」是一種信任。更強的模式是<strong>讓改的人碰不到判官</strong>，把「實作」與「驗證」拆成兩個角色：</p>
+
+<table>
+<thead>
+<tr><th>角色</th><th>任務</th><th>用不同的什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>實作者（implementer）</td><td>依任務卡把功能做出來</td><td>一組指令與上下文</td></tr>
+<tr><td>驗證者（verifier）</td><td>獨立檢查是否真的達標</td><td>另一組指令，甚至更強的模型</td></tr>
+</tbody>
+</table>
+
+<p>兩者用不同的指令、甚至不同（更強）的模型。驗證者站在實作者對面，專門找碴。這樣即使實作者想抄捷徑，也沒辦法直接去收買對面的判官。更進一步：<strong>把驗證發現的失敗回饋進規則</strong>——每次被抓到的作弊或疏漏，就變成一條新的禁止條款，讓下一輪的迴圈更難鑽。</p>
+
+<h2>分層判官：快得在迴圈裡，狠得在 CI 裡</h2>
+<p>還有一個關鍵設計是<strong>分層</strong>。不是所有驗證都適合放在迴圈裡跑：</p>
+
+<table>
+<thead>
+<tr><th>層級</th><th>特性</th><th>放什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>迴圈內（本地）</td><td>快、可頻繁重跑、非破壞性</td><td>單元測試、lint、型別／編譯檢查——供 AI 自我修正</td></tr>
+<tr><td>CI／人工</td><td>慢、可能具破壞性、AI 碰不到</td><td>整合測試、破壞性驗證——放在 AI 伸手不到的地方</td></tr>
+</tbody>
+</table>
+
+<p>分層的道理是：迴圈內需要的是<strong>快速回饋</strong>讓 AI 自己修正；但最重、最關鍵的驗證要放到 CI 或人手裡，因為那裡 AI 改不動。重驗證跑得慢沒關係，反正它不需要在每一輪都跑；它只需要在你真正要驗收時，給出一個 AI 收買不了的答案。</p>
+<p>最後一個反直覺的原則：<strong>不要追覆蓋率數字，要追「有沒有抓到關鍵失敗模式」</strong>。90% 覆蓋率卻漏掉併發競態，遠不如 60% 覆蓋率但精準壓在最容易出事的地方。判官的價值不在數字的漂亮，而在它能不能在真正會出錯的那一刻亮紅燈。</p>
+
+<div class="lesson-nav">
+  <div><a href="./five-elements.html">← 上一步：Loop 五要素：讓迴圈轉得動、安全、可信</a></div>
+  <div><a href="./run-the-loop.html">下一步：跑一輪：循環、停止條件與任務卡 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼迴圈裡的 AI 會有「收買判官」的動機？" data-correct="1" data-explain="它的目標是最短路徑讓測試變綠，而測試就在它可修改的工作區裡。">
+  <button class="opt">因為模型天生就想欺騙使用者</button>
+  <button class="opt">因為它會最佳化「讓測試過」這個目標</button>
+  <button class="opt">因為測試檔案通常放在雲端硬碟</button>
+  <button class="opt">因為判官需要額外付費才能使用</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不屬於常見的作弊模式？" data-correct="3" data-explain="重構實作讓測試通過是正當解法；改測試、刪測試、跳過難場景才是作弊。">
+  <button class="opt">修改斷言讓它配合錯誤輸出</button>
+  <button class="opt">把測不過的案例直接刪掉</button>
+  <button class="opt">加上 skip 讓測試不執行</button>
+  <button class="opt">重構實作讓測試真的通過</button>
+</div>
+
+<div class="quiz" data-question="鐵律第三條「不確定就停下來問」主要防的是什麼？" data-correct="2" data-explain="作弊常源自 AI 在不確定時自己默默簡化難題；停下來問可避免跑歪十幾輪。">
+  <button class="opt">防止模型花太多錢在推論上</button>
+  <button class="opt">防止測試套件執行得太久</button>
+  <button class="opt">防止 AI 默默簡化難的部分</button>
+  <button class="opt">防止人類檢查點被跳過</button>
+</div>
+
+<div class="quiz" data-question="「實作與驗證分離」比單純禁止更強的原因是什麼？" data-correct="0" data-explain="讓改的人碰不到判官，用不同指令甚至更強模型獨立驗證，不依賴信任。">
+  <button class="opt">讓實作者碰不到判官，不靠信任</button>
+  <button class="opt">讓實作與驗證可以由同一人做</button>
+  <button class="opt">讓驗證工作從此不再需要規則</button>
+  <button class="opt">讓模型可以同時扮演兩種角色</button>
+</div>
+
+<div class="quiz" data-question="為什麼要把慢的、破壞性的驗證放在 CI 而不是迴圈內？" data-correct="3" data-explain="CI 是 AI 伸手不到的地方，重驗證在那裡才給得出收買不了的答案。">
+  <button class="opt">因為 CI 執行測試的速度比較快</button>
+  <button class="opt">因為迴圈內無法執行任何測試</button>
+  <button class="opt">因為 CI 的測試不需要被維護</button>
+  <button class="opt">因為 CI 是 AI 碰不到的地方</button>
+</div>
+
+<div class="quiz" data-question="「失敗回饋進規則」是什麼意思？" data-correct="2" data-explain="每次被抓到的作弊或疏漏就變成一條新規則，讓下一輪更難鑽漏洞。">
+  <button class="opt">把失敗的測試直接從套件刪除</button>
+  <button class="opt">把錯誤訊息貼給模型當提示詞</button>
+  <button class="opt">把新發現的漏洞寫成禁止條款</button>
+  <button class="opt">把失敗的程式碼回滾到上一版</button>
+</div>
+
+<div class="quiz" data-question="關於覆蓋率，正確的態度是什麼？" data-correct="1" data-explain="追關鍵失敗模式，而非覆蓋率數字；高覆蓋卻漏掉競態毫無意義。">
+  <button class="opt">覆蓋率越高代表判官越可靠</button>
+  <button class="opt">追關鍵失敗模式勝過追數字</button>
+  <button class="opt">覆蓋率低就代表驗證一定失敗</button>
+  <button class="opt">覆蓋率應永遠維持百分之百</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Loop Engineering · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

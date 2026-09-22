@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Session 持久化與驗收 harness</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Session 持久化與驗收</h1>
+<p class="meta">Step 4/4 · CLI 與 Session</p>
+
+<h2>學習目標</h2>
+<p>能說明 session 歷史以 JSON 存進 SQLite 的 <code>sessions</code> 表、重啟後如何恢復，並能複述 <code>SessionManagerTest</code> 與 <code>SessionRepositoryTest</code> 各驗證了什麼。</p>
+
+<h2>對話要能活過重啟</h2>
+<p>Session 身份想清楚了，下一步是「它記在哪」。如果 Session 只在記憶體，關機就忘——你昨天問到一半的專案背景，今天開 <code>chat</code> 全沒了。OryxOS 核心階段把 Session 存進 SQLite。</p>
+
+<h2>一張表：sessions，一格 JSON</h2>
+<p>核心階段只有一張主表：<code>sessions</code>。Metadata（session id、Profile 等）拆成欄位，而<strong>整段對話歷史序列化成 JSON，塞進一格 <code>messages_json</code></strong>。</p>
+<table>
+<thead>
+<tr><th>欄位</th><th>內容</th></tr>
+</thead>
+<tbody>
+<tr><td><code>id</code></td><td>session id（三元組拼出來的那格）</td></tr>
+<tr><td><code>messages_json</code></td><td>整段對話歷史，打成一份 JSON</td></tr>
+<tr><td>其他 metadata</td><td>關聯的 Profile、時間等</td></tr>
+</tbody>
+</table>
+<p>選擇「塞一個 JSON」而非「每則訊息一行」有兩個後果：實現極簡（讀一個欄位就拿到整段歷史），代價是每輪都整段覆寫（訊息的追加式更新在核心階段不細做，效能問題留給後面）。</p>
+
+<h2>手維護 schema，不要迷信自動更新</h2>
+<p>技術方案的選型提醒很實際：<strong>SQLite 的 <code>ALTER TABLE</code> 很弱，而 Hibernate 的 <code>ddl-auto=update</code> 對 SQLite 不可靠</strong>。所以 sessions 表的 schema 是手寫維護的——不要指望框架幫你遷移，要遷就寫腳本或用 Flyway／Liquibase。</p>
+
+<h2>兩個測試，各釘一個契約</h2>
+<p>CLI 是薄殼所以程式層沒多少好測；OryxOS 把驗收火力集中在 Session 層，用兩個測試各守一條契約：</p>
+<table>
+<thead>
+<tr><th>測試</th><th>驗證什麼</th><th>契約</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SessionManagerTest</code></td><td>同樣三元組 → 同一個 Session；任一欄位不同 → 不同 Session</td><td><strong>冪等性</strong>（id 拼裝在一處、結果可重現）</td></tr>
+<tr><td><code>SessionRepositoryTest</code></td><td>手建的 sessions 表能寫能讀；模擬重啟後歷史還在</td><td><strong>持久性</strong>（重啟恢復）</td></tr>
+</tbody>
+</table>
+<p>為什麼這樣測最划算？因為 Session 契約的 bug（id 拼錯、寫了讀不回）是之後第七層「縫隙分析」最難追的那種——現在用兩個測試釘死，比之後在整條主流程裡排查便宜得多。</p>
+
+<h2>怎麼手動驗收整條 CLI</h2>
+<p>最後用真實操作收一遍尾：<code>chat</code> 多輪對話 + <code>/quit</code>；輕命令秒回、啟動紀錄出現 <code>N &gt; 0</code> 個 JPA repositories；<code>chat</code>／<code>serve</code>／<code>gateway</code> 三種模式共用同一份 Profile 與 Session 存儲（在 <code>chat</code> 產生的歷史，切到 <code>serve</code> 也看得到）；12 個子命令 <code>--help</code> 都能跑。到這一步，你的底座第一次「真的能在終端機裡被自己用起來」。</p>
+
+<div class="lesson-nav">
+  <div><a href="./session-identity.html">← 上一步：Session：冪等 session id 的單一真相</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="核心階段把整段對話歷史存在哪裡？" data-correct="1" data-explain="sessions 表的一格 messages_json，整段序列化成 JSON。">
+  <button class="opt">每一則訊息一行存</button>
+  <button class="opt">sessions 表的一格 messages_json</button>
+  <button class="opt">記憶體裡的 ConcurrentHashMap</button>
+  <button class="opt">Redis 的 list</button>
+</div>
+
+<div class="quiz" data-question="為什麼 schema 要手維護而不是靠 ddl-auto=update？" data-correct="3" data-explain="SQLite 的 ALTER TABLE 弱，Hibernate 的自動更新對 SQLite 不可靠。">
+  <button class="opt">因為手寫比較好看</button>
+  <button class="opt">因為 ddl-auto 會刪掉資料</button>
+  <button class="opt">因為 SQLite 不支援表格</button>
+  <button class="opt">SQLite 的 ALTER TABLE 很弱</button>
+</div>
+
+<div class="quiz" data-question="SessionManagerTest 驗證的是哪條契約？" data-correct="2" data-explain="冪等性——同樣三元組得到同一 session，任一欄位不同就是不同 session。">
+  <button class="opt">重啟後歷史還在</button>
+  <button class="opt">輕命令不啟動 Spring</button>
+  <button class="opt">session id 的冪等性</button>
+  <button class="opt">JSON 序列化格式正確</button>
+</div>
+
+<div class="quiz" data-question="SessionRepositoryTest 為何模擬「重啟」？" data-correct="0" data-explain="為了驗證持久性契約：寫進 SQLite 的歷史跨重啟仍能讀回。">
+  <button class="opt">驗證歷史跨重啟仍能讀回</button>
+  <button class="opt">驗證啟動速度足夠快</button>
+  <button class="opt">驗證 Picocli 的 help 輸出</button>
+  <button class="opt">驗證 JPA 掃描到 repository</button>
+</div>
+
+<div class="quiz" data-question="實作上「整段對話存一格 JSON」的代價是什麼？" data-correct="2" data-explain="每輪要整段覆寫 messages_json，效能優化留給後續階段。">
+  <button class="opt">不能跨機器同步 Session</button>
+  <button class="opt">SQLite 無法存 JSON</button>
+  <button class="opt">每輪追加要整段覆寫</button>
+  <button class="opt">歷史只能存 100 則</button>
+</div>
+
+<div class="quiz" data-question="手動驗收三種運行模式共用的重點是確認什麼？" data-correct="1" data-explain="chat/serve/gateway 共用 Profile 與 Session 存儲，歷史互通。">
+  <button class="opt">三個模式的啟動時間相同</button>
+  <button class="opt">共用 Profile 與 Session 存儲</button>
+  <button class="opt">三個模式各自用獨立資料庫</button>
+  <button class="opt">只有 chat 才有 Session</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · CLI 與 Session · Step 4/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

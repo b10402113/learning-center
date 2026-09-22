@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Demo 二：目錄帶子指令的每日科技日報</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Demo 二：目錄帶子指令的每日科技日報</h1>
+<p class="meta">Step 2/6 · Demo 與發布</p>
+
+<h2>學習目標</h2>
+<p>能說明把長篇排版規範放進目錄子指令、用 <code>read_file</code> 按需載入的做法，並解釋為何一份 seed 進長期記憶的偏好能讓之後每天的日報都把 AI／晶片排前面。</p>
+
+<h2>光桿 AGENT.md 不夠用時，多出來的那一層</h2>
+<p>天氣 Agent 只需要一句話 body 就夠了，但日報不一樣。日報有一份很長的「組稿排版規範」：要挑幾則、每則怎麼寫、怎麼排序、開頭要不要總覽。如果把這整份規範直接塞進 AGENT.md 的 body，它就會天天佔著系統提示的一大塊，而且大部分時候根本用不到——只有真的要組稿那一步才需要它。</p>
+<p>解法是把規範從 body 搬出去，放進 Agent 目錄底下的 <code>skills/digest-format.md</code>，body 只留一句「組稿的時候去讀它」。Agent 在需要的那一刻才呼叫 <code>read_file</code> 把規範載進來。這個做法叫<strong>漸進式揭露（progressive disclosure）</strong>：能力都在同一個目錄裡，但只在對的時候曝光對的部分，平常不佔上下文。</p>
+
+<h2>先解決「新聞從哪裡來」</h2>
+<p>日報要有新聞來源，有兩條路，選哪條決定了 Demo 的風險落在誰身上。</p>
+<p><strong>路徑一（預設，穩）</strong>：用內建的 <code>http_get</code> 去打一個免金鑰、回 JSON、穩定的新聞源，讓 LLM 自己挑選與重組。只要把該網域加進 <code>http.allowed_domains</code> 白名單就好，整個過程沒有外部行程，Demo 的命運握在你自己手上。</p>
+<p><strong>路徑二（MCP 練習，險）</strong>：在 <code>.oryxos/mcp_servers.yaml</code> 宣告一個新聞 MCP server，然後用 <code>oryxos tool list</code> 確認它的工具真的註冊進來。要走這條路，就得事先自己寫好、驗證過一個最少幾十行的 <code>news-mcp</code>，不要臨時去賭社群 server。原因很實際：連不上的 MCP server 只會被 WARN 跳過（這是第二十八節的既有行為），不會讓整個啟動失敗——也就是說，日報會直接啞掉，而你一時還找不到原因。</p>
+
+<h2>播種一個跨日生效的偏好</h2>
+<p>接下來用一句話把偏好種進長期記憶。對任何一個 Agent 說「以後幫我關注科技新聞的話，我更關注 AI 和芯片方向」，模型就會呼叫 <code>save_memory</code> 把它存起來。這一步的價值不在當下，而在之後每一天：日報組稿時會讀到這個偏好，於是把 AI 與晶片的條目排到前面。這正是記憶從「當次對話」跨到「跨日累積」的兌現。</p>
+
+<h2>寫出這個目錄</h2>
+<p>整個 Agent 目錄是 <code>.oryxos/agents/daily-tech-digest/</code>，只有兩個 Markdown 檔，零 Java。AGENT.md 的 frontmatter 是這樣：</p>
+<pre><code>---
+name: daily-tech-digest
+provider: deepseek/deepseek-chat
+tools: [http_get, read_file, notify]
+schedules:
+  cron: "0 0 9 * * *"
+  zone: Asia/Shanghai
+  message: 到点了，按你的说明执行。
+---</code></pre>
+<p>跟天氣 Agent 相比，<code>tools</code> 多了一個 <code>read_file</code>——不是隨便加的，而是因為它要讀 <code>skills/digest-format.md</code> 這份子指令。body 描述的流程是：抓新聞 → 讀子指令取排版規範 → 依記憶偏好決定優先順序 → 通知。</p>
+<p>子指令 <code>skills/digest-format.md</code> 裡放的是真正的排版規範：挑 5 到 8 則重要新聞，每則一行，寫成「標題＋一句評論＋連結」，依重要性排序且偏好優先，開頭加一段總覽，結尾不加口號。這些細節如果寫在 body，每天都會佔用系統提示；放進子指令，就只有組稿那一刻才被載入。</p>
+<p>還有一個容易漏的 Sandbox 前提：<code>file.allowed_paths</code> 必須涵蓋 <code>.oryxos/agents/daily-tech-digest/</code>。不然 <code>read_file</code> 連自己的子指令都讀不到——白名單不認目錄，再正確的設計也動不了。</p>
+
+<h2>對賬時，比天氣多盯兩件事</h2>
+<p>日報的除錯流程和天氣一樣（先推再看時鐘），但對賬時要多確認兩個地方，因為它們是這個 Demo 獨有的機制：</p>
+<ul>
+<li><strong>子指令真的被按需讀取</strong>：<code>tool_invocations</code> 裡要能看到一筆對 <code>skills/digest-format.md</code> 的 <code>read_file</code> 呼叫。這是漸進式揭露確實發生的證據，而不是規範被偷偷塞進了系統提示。</li>
+<li><strong>偏好真的生效</strong>：產出的日報要把 AI／晶片條目排前面。手動推一次看不出這點的全部價值，要連續兩天都對，才證明記憶是跨日累積、穩定生效的。</li>
+</ul>
+<p>驗收硬指標因此是：零 Java、MCP 工具確實註冊（若走路徑二）、日報內容反映記憶偏好。這裡的核心觀念是「能力在目錄裡、曝光在需要時」——同一份子指令，放錯位置是負擔，放對位置就是彈藥。</p>
+
+<div class="lesson-nav">
+  <div><a href="./demo-bare-agent-weather.html">← 上一步：Demo 一：光桿 AGENT.md 的每日天氣 Agent</a></div>
+  <div><a href="./demo-bundled-script-github.html">下一步：Demo 三：目錄帶腳本的每日 GitHub 日報 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼把組稿排版規範放進 skills/ 而不是 AGENT.md 的 body？" data-correct="2" data-explain="規範很長、大多時候用不到；放子指令讓它只在組稿那一步被 read_file 載入，平常不佔系統提示。">
+  <button class="opt">因為 body 不能寫超過一句話</button>
+  <button class="opt">因為 skills/ 會自動定時執行</button>
+  <button class="opt">因為只有組稿時才需要，平時不該佔系統提示</button>
+  <button class="opt">因為放 body 會讓模型無法呼叫工具</button>
+</div>
+
+<div class="quiz" data-question="日報 Agent 的 tools 為何要多一個 read_file？" data-correct="1" data-explain="read_file 是用來讀 skills/digest-format.md 這份按需載入的子指令。">
+  <button class="opt">用來把日報寫回本機檔案</button>
+  <button class="opt">用來讀取 skills 目錄裡的子指令</button>
+  <button class="opt">用來讀取長期記憶檔</button>
+  <button class="opt">用來掃描 MCP server 清單</button>
+</div>
+
+<div class="quiz" data-question="在 .oryxos/mcp_servers.yaml 宣告的新聞 MCP server 連不上時，會發生什麼？" data-correct="3" data-explain="不可達的 MCP 只會被 WARN 跳過，啟動不會失敗，但日報會因此啞掉。">
+  <button class="opt">整個 OryxOS 啟動直接失敗</button>
+  <button class="opt">自動改用內建 http_get 替代</button>
+  <button class="opt">系統會自動重試直到連上為止</button>
+  <button class="opt">只記 WARN 並跳過，日報因此沒有內容</button>
+</div>
+
+<div class="quiz" data-question="「我更關注 AI 和芯片方向」這句話被存下後，影響的是什麼？" data-correct="0" data-explain="它被 save_memory 存進長期記憶，之後每天組稿都會讀到並把 AI／晶片排前面。">
+  <button class="opt">之後每天的日報排序會體現這個偏好</button>
+  <button class="opt">只影響當次對話的回覆語氣</button>
+  <button class="opt">會改變 Agent 排程的執行時間</button>
+  <button class="opt">會自動把偏好寫進 AGENT.md</button>
+</div>
+
+<div class="quiz" data-question="要證明「子指令是按需載入」而非事先塞進提示，該看哪個證據？" data-correct="1" data-explain="tool_invocations 裡有一筆對 skills/digest-format.md 的 read_file，才證明它是當下才被讀取。">
+  <button class="opt">看 AGENT.md 的 frontmatter 有沒有 skills 欄位</button>
+  <button class="opt">看 tool_invocations 有無 read_file 呼叫</button>
+  <button class="opt">看日報輸出的字數有沒有變長</button>
+  <button class="opt">看排程 cron 有沒有被觸發</button>
+</div>
+
+<div class="quiz" data-question="為什麼要確認 file.allowed_paths 涵蓋 daily-tech-digest 目錄？" data-correct="2" data-explain="否則 read_file 會在白名單那關被擋，連自己的子指令都讀不到。">
+  <button class="opt">因為沒有它排程不會被觸發</button>
+  <button class="opt">因為沒有它模型無法被呼叫</button>
+  <button class="opt">因為 read_file 必須通過白名單才能讀檔</button>
+  <button class="opt">因為沒有它 webhook 會拒收通知</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Demo 與發布 · Step 2/6</p>
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

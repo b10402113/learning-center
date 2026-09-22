@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>四檔方案與隔離強度/開銷光譜</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>四檔方案與隔離強度/開銷光譜</h1>
+<p class="meta">Step 2/4 · Sandbox</p>
+
+<h2>學習目標</h2>
+<p>能沿「越深越安全、越重越貴」的光譜定位四檔隔離方案，並用「你跑的是誰的程式」與亂鬥的誤信助理（confused deputy）判斷業界系統為何選不同檔。</p>
+
+<h2>一條線先擺好：強度越好、代價越高</h2>
+<p>任何沙箱方案都站在同一條線上取點：<strong>隔離強度越強，開銷越大、啟動越慢。</strong>這條線的另一個方向是——<strong>隔離邊界越深，越安全</strong>（隔離邊界 = 保障在哪一層落地）。</p>
+<blockquote>
+<strong>選哪一檔的本質問題只有一個：「你跑的是多不可信的程式，你願意為隔離付多少價？」</strong>
+</blockquote>
+<p>把四個維度（檔案系統／網路／程序／資源）用越深的邊界去擋，就越安全，但也越貴、越重。</p>
+
+<h2>四檔方案，由淺到深</h2>
+
+<table>
+<thead>
+<tr><th>檔次</th><th>邊界在哪</th><th>強度</th><th>代價</th></tr>
+</thead>
+<tbody>
+<tr><td>第一檔：應用層白名單（Application Whitelist）</td><td>程式碼層——執行前先檢查</td><td>最弱</td><td>零基礎設施、零效能開銷、單一可執行檔</td></tr>
+<tr><td>第二檔：容器（Container）</td><td>程序／作業系統層——Linux namespaces + cgroups + seccomp</td><td>中</td><td>每個執行都活在精簡隔離世界；啟動比行程慢</td></tr>
+<tr><td>第三檔：microVM</td><td>核心層——每個沙箱一個輕量核心</td><td>強</td><td>Firecracker 定義檔啟動約 100ms、小記憶體，密度接近容器</td></tr>
+<tr><td>第四檔：完整 VM 與物理隔離</td><td>硬體／物理層</td><td>最強</td><td>最重、最貴，只用在極端合規場景</td></tr>
+</tbody>
+</table>
+
+<h2>第一檔的誠實邊界：勸阻，不是禁錮</h2>
+<p>應用層白名單不提供真正的系統隔離，它只是在<strong>執行前做程式碼檢查</strong>：這個路徑准不准、這個指令在不在黑名單、這個網域准不准。零基礎設施、零開銷、單二進位，很好用。</p>
+<p>但它的致命弱點是：<strong>勸阻（dissuasion），不是禁錮（confinement）。</strong>任何沒被覆蓋的繞過方式——指令拼接、symlink、編碼變體、白名單沒列到的指令——都能繞開。它擋得住愚蠢的失誤，擋不住蓄意攻擊。</p>
+<blockquote>
+<strong>第一檔永遠只該當縱深防禦的第一層，不該當唯一的生產防線。</strong>OryxOS 用它的時候，必須老實貼上這個標籤。
+</blockquote>
+
+<h2>第二檔與第三檔：為什麼 microVM 是當今黃金標準</h2>
+<p><strong>容器（第二檔）</strong>用 Linux namespaces 隔離檔案系統／網路／程序的視野，cgroups 限制資源，seccomp 限制系統呼叫。生態成熟、覆蓋全面，是大部分跑不可信程式的主要方案。天花板是：<strong>共享 host 核心</strong>——核心一旦有漏洞被利用，就能逃出容器；所以純容器對「完全不可信」的程式通常被認為不足。</p>
+<p><strong>microVM（第三檔）</strong>給每個沙箱一個自己的輕量核心，拿到 VM 邊界的隔離，卻接近容器的速度與密度：Firecracker（啟動約 100ms、記憶體極小）、Kata Containers（容器般的體驗跑在輕量 VM 上）、gVisor（使用者空間核心）。它在 Agent 時代很熱，因為大量不可信程式（例如雲端 coding 直譯器跑數百萬份使用者程式）需要「強隔離 + 容器級啟動與密度」；旁路是把沒用到的裝置模擬砍掉的極簡 VMM。</p>
+<p>選型即路線：成熟平台多數走「容器 → Kata → Firecracker」的升級路線。</p>
+
+<h2>縱深防禦：沙箱是組合，不是開關</h2>
+<p>四檔是一條強度遞增的演化線，但成熟系統是把多層疊起來：應用層白名單攔下明顯的，容器／microVM 提供強隔離，再加上<strong>網路出口管控、資源配額、全鏈審計</strong>。</p>
+<blockquote>
+<strong>沒有一層是萬能的。</strong>就算上了 microVM，出口管控、配額、審計照樣不可少——這三件事不隨隔離檔次改變，每一檔都得有。
+</blockquote>
+
+<h2>業界怎麼選：決定因素是「跑誰的程式」</h2>
+<p>真實系統分三類，選檔全由這一個問題決定，不是「越強越好」：</p>
+<ul>
+  <li><strong>本地 coding agent（Claude Code 一類）</strong>跑在你信得過的機器上，威脅 = 失誤 + 提示注入，於是第一檔權限閘 + 可選第二檔 OS 沙箱（macOS Seatbelt、Linux bubblewrap+seccomp+socat），不上 microVM。</li>
+  <li><strong>可插拔多後端的 Agent（Hermes）</strong>把隔離做成可換的終端後端，六個選項（local／Docker／SSH／Singularity／Modal／Daytona）。</li>
+  <li><strong>雲端程式直譯器（OpenAI gVisor、E2B Firecracker、Daytona）</strong>跑陌生人的程式，直接上 microVM。</li>
+</ul>
+<p>OryxOS 刻意站回最左邊（第一檔），對齊 Claude Code 的威脅模型：核心階段只跑你自己信的程式，不值得為此付容器／microVM 的代價。</p>
+
+<h2>學界的提醒：亂鬥的誤信助理（confused deputy）</h2>
+<p>最大的一課來自一個真實的分類：<strong>Agent 握有高權限，但一個低權限的注入輸入騙它濫用這些權限</strong>——這叫亂鬥的誤信助理（confused deputy，誤信助理困局：持有高權限的程式被不可信輸入騙去做壞事）。純白名單／核准閘只驗請求的「形狀」，不驗它是不是被髒資料誘發的。</p>
+<p>所以：就算隔離再強，一個「依法被授權」的工具在被毒化的指示下照樣能造成傷害。<strong>審計（第一天就有）與最小權限（Profile 的 tools 欄位）和隔離同等重要。</strong></p>
+
+<div class="lesson-nav">
+  <div><a href="./sandbox-why-and-risk.html">← 上一步：為什麼 Agent 一定要有沙箱：風險模型與四維隔離</a></div>
+  <div><a href="./sandbox-interface-design.html">下一步：介面先行的 Sandbox 抽象：不讓第一檔帶偏 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="隔離強度與開銷的關係是什麼？" data-correct="0" data-explain="越強越安全，同時越貴、啟動越慢——兩者同方向上的一條線。">
+  <button class="opt">越強越安全，也越貴越慢</button>
+  <button class="opt">越強越安全，卻越便宜越快</button>
+  <button class="opt">強度與開銷無關</button>
+  <button class="opt">只有資源維度有開銷</button>
+</div>
+
+<div class="quiz" data-question="第一檔應用層白名單最老實的定位是什麼？" data-correct="3" data-explain="它擋得住愚蠢失誤，擋不住蓄意攻擊——是勸阻不是禁錮。">
+  <button class="opt">足以隔離完全不可信的程式</button>
+  <button class="opt">等於第二檔容器隔離</button>
+  <button class="opt">能防住所有提示注入</button>
+  <button class="opt">勸阻，不是禁錮</button>
+</div>
+
+<div class="quiz" data-question="容器的天花板在哪？" data-correct="2" data-explain="容器共享 host 核心，核心漏洞被利用就能逃出。">
+  <button class="opt">啟動太慢</button>
+  <button class="opt">覆蓋四個維度不全</button>
+  <button class="opt">共享 host 核心，核心漏洞可致逃逸</button>
+  <button class="opt">無法使用 namespaces</button>
+</div>
+
+<div class="quiz" data-question="microVM 為什麼在 Agent 時代成為黃金標準？" data-correct="1" data-explain="大量不可信程式需要 VM 邊界的強隔離，加上容器般的啟動與密度。">
+  <button class="opt">因為它不佔記憶體</button>
+  <button class="opt">VM 邊界隔離 + 近容器的啟動與密度</button>
+  <button class="opt">因為它完全不需要 VMM</button>
+  <button class="opt">因為它只跑在雲端</button>
+</div>
+
+<div class="quiz" data-question="業界選沙箱檔次由什麼決定？" data-correct="0" data-explain="『你跑的是誰的程式』決定信任等級與隔離深度，不是越強越好。">
+  <button class="opt">你跑的是誰的程式</button>
+  <button class="opt">團隊預算有多少</button>
+  <button class="opt">用了哪個作業系統</button>
+  <button class="opt">模型支援多少工具</button>
+</div>
+
+<div class="quiz" data-question="『誤信助理（confused deputy）』描述的是哪種情境？" data-correct="2" data-explain="高權限 Agent 被低權限的注入輸入誘使濫用權限。">
+  <button class="opt">權限設得太小導致任務失敗</button>
+  <button class="opt">兩個 Agent 互相搶權限</button>
+  <button class="opt">高權限的 Agent 被不可信輸入騙去做壞事</button>
+  <button class="opt">資料庫密碼外洩</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Sandbox · Step 2/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

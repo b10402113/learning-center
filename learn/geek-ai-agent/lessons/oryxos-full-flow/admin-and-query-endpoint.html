@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>三面同源：補列會話端點與管理台</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>三面同源：補列會話端點與管理台</h1>
+<p class="meta">Step 3/6 · 全流程串聯</p>
+
+<h2>學習目標</h2>
+<p>能說清「一進程兩面」的啟動模型，實作列出會話的 GET /api/v1/sessions 端點，並讓 CLI、REST、管理台三面顯示同一份資料。</p>
+
+<h2>為什麼要為了對賬補一個端點</h2>
+<p>上一課的對賬是人工的：打開資料庫，逐張表數筆數。人工對賬可以偶爾做，卻沒法每次都做，更沒法進 CI。要讓「三面同源」變成可以<strong>自動化</strong>驗證的東西，前提是——每一條痕跡都必須先有一個<strong>可以查的 HTTP 端點</strong>。</p>
+<p>沒有端點，就沒有東西可以被斷言；不能被斷言，就只能靠人看。所以這一課要補的其實不是一個「功能」，而是把對賬從「人看」升級成「網頁／測試看」所缺的最後一格。</p>
+
+<h2>先盤點：10 個端點裡缺了哪一個</h2>
+<p>Web Service 那一課給了 10 個端點，涵蓋會話明細、記憶、工具、Profile、系統狀態。把它們列出來逐一對照「管理台需要看什麼」，會發現只有一個缺口：<strong>「列出所有會話」</strong>。</p>
+<p>原本只有「依 id 查單一會話」（<code>GET /sessions/{id}</code>），卻沒有「列出會話清單」。結果就是管理台的會話頁<strong>永遠是空的</strong>——它拿得到某一個會話，卻不知道有哪些會話存在。</p>
+<p>修法很直接：新增 <code>GET /api/v1/sessions</code>，回傳一份會話摘要清單。</p>
+
+<h2>這個端點長什麼樣</h2>
+<table>
+<thead>
+<tr><th>項目</th><th>設計</th></tr>
+</thead>
+<tbody>
+<tr><td>排序</td><td>依最後活躍時間（last-active）倒序，最近的排前面</td></tr>
+<tr><td>預設數量</td><td>100 筆摘要</td></tr>
+<tr><td>回傳欄位</td><td>session id、Profile 名稱、渠道、使用者、狀態、建立／最後活躍時間、訊息數</td></tr>
+<tr><td>不回傳</td><td>完整對話正文（那是明細端點的事）</td></tr>
+<tr><td>可選過濾</td><td><code>?status=active</code></td></tr>
+</tbody>
+</table>
+<p>為什麼只給摘要、不給全文？因為列表頁和對賬要回答的問題是「<strong>有哪些會話、各自多大、最近什麼時候動過</strong>」，而不是「某一句話講了什麼」。把全文塞進列表，既拖慢回應，也讓欄位失去焦點。要看正文，走既有的明細端點。</p>
+
+<h2>實作只加三樣東西</h2>
+<p>這個擴充刻意做得跟上一課的 <code>archive()</code>／<code>readAll()</code> 一模一樣，維持同一種擴充模式：</p>
+<ol>
+<li><code>SessionManager.listRecent(int)</code>：底層透過 <code>SessionRepository</code> 撈出最近若干筆。</li>
+<li>一個<strong>沒有 <code>{id}</code> 路徑變數</strong>的 <code>@GetMapping</code>：這就是與明細端點唯一的分野。</li>
+<li>一個 session-summary DTO：把清單要的欄位挑出來，不直接把整顆 Session 丟出去。</li>
+</ol>
+<p>注意這裡沒有任何業務邏輯進到 Controller：它只做「驗參數、包回應、交錯誤」，真正的查詢落在 <code>SessionManager</code>。這條紀律在整條主線上反覆出現——加端點不能讓引擎分岔。</p>
+
+<h2>一進程兩面：Web Service 與管理台是同一個進程</h2>
+<p>管理台不是另一個服務。<code>oryxos serve</code> 起的這一個 Spring，<strong>同時</strong>服務兩件事：<code>/api/v1/**</code> 的 REST 介面，以及 <code>/admin</code> 的管理台頁面。沒有第二個進程、沒有第二份部署。</p>
+<p>這個模型直接決定了「三面同源」為什麼成立：CLI、REST、管理台看到的都是同一顆引擎、同一個資料庫裡的同一份資料。管理台只是換一個視角把它畫出來。</p>
+
+<h2>啟動管理台是「建置」，不是「打開網頁」</h2>
+<p>很多人第一次會卡在這裡：以為開瀏覽器連 <code>/admin</code> 就會有頁面。其實要先把它建出來：</p>
+<ol>
+<li>前端執行 <code>npm run build</code>，產物輸出到 <code>oryxos-web/src/main/resources/static/admin/</code>。</li>
+<li>Spring 托管 <code>/admin</code>，並把<strong>未匹配的 <code>/admin/**</code> 一律 fallback 到 <code>index.html</code></strong>——這樣前端自己的路由（例如 <code>/admin/sessions</code>）直接輸入網址也不會 404。<code>/api/v1/**</code> 不受這個 fallback 影響。</li>
+</ol>
+<p>另外有兩個前置條件，缺一個管理台就<strong>空轉</strong>：</p>
+<ul>
+<li><code>export DEEPSEEK_API_KEY=...</code>：因為啟動時排除了 Spring AI 的 <code>OpenAiAutoConfiguration</code>，服務只認這把 key。</li>
+<li>前端<strong>已經建置</strong>到 <code>static/admin/</code>。</li>
+</ul>
+
+<h2>完整的啟動流程</h2>
+<p>把上面的步驟串起來：建置前端 → <code>mvn clean package -DskipTests</code> → <code>java -jar oryxos-boot/target/oryxos-boot-*.jar serve --port 8080</code>。起來之後用 <code>curl .../health</code> 確認活著，再開 <code>/admin</code> 與 <code>/swagger-ui</code>。</p>
+<p>這裡的發布形態是「<strong>一個 jar 托管全部</strong>」：前端產物被打進 jar，REST 與頁面同源。所以文件要記載的發布方式是這個 jar，而不是開發者本機的 <code>npm run dev</code>——後者只是開發時的熱更新，不是交付形態。</p>
+
+<h2>收尾：第三個視角正式上線</h2>
+<p>補完端點、建好管理台之後，在管理台打開「會話」頁，應該看到剛剛那筆天氣／穿搭對話——跟 CLI、REST 看到的一模一樣。這一刻，「<strong>同資料、同引擎、第三個視角</strong>」的三面同源才算真正落地，而且因為有了 <code>GET /api/v1/sessions</code>，這份一致性從此可以被自動斷言，而不是靠人再看一遍。</p>
+
+<div class="lesson-nav">
+  <div><a href="./five-integration-seams.html">← 上一步：五條典型縫隙與單一來源修法</a></div>
+  <div><a href="./scheduled-tasks-subsystem.html">下一步：定時任務子系統：定義、執行、持久化、管理 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼要為對賬補一個查詢端點？" data-correct="2" data-explain="有可查端點才能自動斷言痕跡，否則三面同源只能靠人看。">
+  <button class="opt">為了讓前端畫面更漂亮</button>
+  <button class="opt">為了降低資料庫的查詢成本</button>
+  <button class="opt">為了讓痕跡能被自動斷言</button>
+  <button class="opt">為了取代既有的明細端點</button>
+</div>
+
+<div class="quiz" data-question="10 個端點裡，為了管理台會話頁補的是哪一個缺口？" data-correct="1" data-explain="缺的是「列出所有會話」，所以補 GET /api/v1/sessions。">
+  <button class="opt">缺少依 id 查單一會話</button>
+  <button class="opt">缺少列出所有會話</button>
+  <button class="opt">缺少刪除指定會話</button>
+  <button class="opt">缺少建立新會話端點</button>
+</div>
+
+<div class="quiz" data-question="GET /api/v1/sessions 為什麼只回摘要、不回完整對話？" data-correct="3" data-explain="列表要回答「有哪些會話」，看正文走明細端點，避免拖慢與失焦。">
+  <button class="opt">因為資料庫無法存完整對話</button>
+  <button class="opt">因為摘要的資訊量比較大</button>
+  <button class="opt">因為前端無法渲染完整對話</button>
+  <button class="opt">因為列表要的是有哪些會話</button>
+</div>
+
+<div class="quiz" data-question="Web Service 與管理台的進程關係是什麼？" data-correct="0" data-explain="同一個 oryxos serve 進程同時服務 REST 與 /admin 頁面，沒有第二個進程。">
+  <button class="opt">同一個進程同時服務兩面</button>
+  <button class="opt">管理台是獨立部署的服務</button>
+  <button class="opt">管理台由 CLI 進程托管</button>
+  <button class="opt">兩者靠外部反向代理串接</button>
+</div>
+
+<div class="quiz" data-question="為什麼未匹配的 /admin/** 要 fallback 到 index.html？" data-correct="2" data-explain="避免前端路由直接輸入網址時 404，/api/v1/** 則不受影響。">
+  <button class="opt">為了加快靜態資源的下載</button>
+  <button class="opt">為了讓 API 路徑也走前端</button>
+  <button class="opt">為了避免前端路由直接 404</button>
+  <button class="opt">為了隱藏後端的實作細節</button>
+</div>
+
+<div class="quiz" data-question="管理台空轉，最可能是缺了哪個前置條件？" data-correct="1" data-explain="要么缺 provider key，要么前端沒有 build 進 static/admin/。">
+  <button class="opt">缺少額外的資料庫服務</button>
+  <button class="opt">前端未建置或缺少 key</button>
+  <button class="opt">缺少獨立的後端進程</button>
+  <button class="opt">缺少 Nginx 反向代理設定</button>
+</div>
+
+<div class="quiz" data-question="文件該記載的發布形態是什麼？" data-correct="3" data-explain="交付形態是一個托管全部的 jar；npm run dev 只是開發時的熱更新。">
+  <button class="opt">npm run dev 的開發指令</button>
+  <button class="opt">獨立的 Nginx 靜態站</button>
+  <button class="opt">分成兩個 jar 分別部署</button>
+  <button class="opt">一個托管全部的 jar</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 全流程串聯 · Step 3/6</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

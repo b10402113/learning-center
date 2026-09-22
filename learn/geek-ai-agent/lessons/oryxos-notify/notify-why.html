@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>為什麼需要 Notify：觸發斷裂與出站職責</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>為什麼需要 Notify：觸發斷裂與出站職責</h1>
+<p class="meta">Step 1/5 · Notify 出站</p>
+
+<h2>學習目標</h2>
+<p>能說出「到點自動」觸發如何讓入站請求／回應路徑失效，並指出 Notify 是 Agent 主動決定「把結果送到哪」的對應補位。</p>
+
+<h2>先從一個問題開始：誰在等 Agent 的回答？</h2>
+<p>到目前為止 OryxOS 的兩條主路徑都是<strong>「人問、機器答」</strong>：CLI 是你敲一行 <code>oryxos chat ...</code>，Web Service 是你的系統打一個 REST API，然後 Agent 把結果回給你。這兩條路徑有個共同前提——<strong>有一個請求方在現場等回應</strong>。你問，它答，你收走，就完結了。</p>
+<p>現在換一個場景：一個每天早上八點自動跑的「每日天氣 + 穿搭建議」Agent。到點之後，沒有任何人敲鍵盤、沒有任何人打 API，程式自己醒過來。它查完天氣、生成完建議——然後呢？結果要送去哪？誰會來領？<strong>沒有請求方。</strong></p>
+<p>這一瞬間，原本設計好的「人問機器答」路徑就地斷裂。你可以把整批結果寫進 Session、留在資料庫裡，但那就是讓結果<strong>爛在 Session 裡</strong>——沒人會打開某個 sqlite 表去翻今天的天氣建議。這不是「多一個功能」的問題，而是整個觸發模型反過來了。</p>
+
+<h2>觸發斷裂：從「被拉」到「被推」</h2>
+<p>把兩條路徑攤開看差異：</p>
+<table>
+<thead>
+<tr><th>面向</th><th>CLI / Web Service</th><th>定時任務 + Notify</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>誰發起</strong></td><td>人（或業務系統）主動</td><td>時鐘（到點自動）</td></tr>
+<tr><td><strong>有沒有人在等</strong></td><td>有，同一個請求方在等回應</td><td>沒有，誰都不在現場</td></tr>
+<tr><td><strong>結果的去向</strong></td><td>沿通訊路徑原路返回</td><td>必須由 Agent 自己決定、自己送出</td></tr>
+<tr><td><strong>Agent 的角色</strong></td><td>被動回應</td><td>主動出站（outbound）</td></tr>
+</tbody>
+</table>
+<p>關鍵詞是<strong>出站（outbound）</strong>：前面所有模組（Provider、ReAct、CLI、Tool）幾乎都在處理「請求進來、處理、回應回去」，方向是進出成對的。<code>Notify</code> 是這個系統第一次真正把「<strong>Agent 主動把訊息推出去</strong>」當成一等公民來設計——沒有入站請求，也要能把結果送達。</p>
+<p>所以 Notify 的定義一句話：<code>Notify（Notify 通知）</code> 讓 Agent 在「沒有請求方等待」的場景下，決定<strong>往哪個通知目標、發什麼內容</strong>，把結果主動推送出去。它在排程（scheduled）觸發、日報／天氣這類「到點自動」的場景才真正發光。</p>
+
+<h2>對稱的另一半：入站与出站都該是插件</h2>
+<p>這裡有個很容易忽略的設計呼應：OryxOS 已經有一個處理「訊息怎麼進來」的抽象——入站的 <code>ChannelAdapter</code>（看 03-18 技術方案的 8.4 Channel 接入：CLI、之後的企業微信／飛書／釘釘／Slack 都走這個插件位）。現在要處理「訊息怎麼出去」，<strong>出站也要一個對稱的 adapter 插件</strong>：<code>NotifyChannelAdapter</code>。</p>
+<p>為什麼必須對稱？因為如果不抽這層，給扳機的情境會變成：每個業務 Skill 為了「把結果推出去」，各自手寫自己的 webhook／MCP 對接，企業微信一套、飛書一套、釘釘一套，散落各處。而<strong>「推送一條訊息出去」其實是所有 Auto Agent 都會重複需要的一件事</strong>——把它抽成一個統一動作（<code>NotifyTools</code>）放在底座，業務 Skill 就只要呼叫「推送」，不用管底層是哪家渠道。</p>
+<p>這張圖就是整個 Notify 模組的心智模型：<strong>入站用 ChannelAdapter 收，出站用 NotifyChannelAdapter 送，中間是同一個 Agent 引擎。</strong>入站決定「什麼觸發 Agent 開始跑」，出站決定「Agent 跑完把結果送到哪」——方向相反、設計對稱。</p>
+
+<h2>它解決的問題，具體到能驗證</h2>
+<p>把視角拉到「底座有沒有這個能力」的驗收層：<strong>有了 Notify，Agent 才能從「只會說話」升級成「會對外送達」。</strong>少了它，定時任務就算能準時觸發、能生成完美的內容，結果也永遠困在系統裡。你可以把「定時任務＋Notify」想成一把鎖的兩片鑰匙：排程負責「什麼時候醒」，Notify 負責「醒來之後去哪裡」，缺一片就開不了門。</p>
+<p>往後看，天氣 Agent、GitHub 日報 Agent、訂單對賬 Agent 全部是「查完 → 組內容 → <code>notify</code> 推送」這同一條鏈。你現在先看懂「為什麼要有一個出站抽象」，下一課再決定這個抽象的形狀。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./interface-first-design.html">下一步：動手前先想清楚：介面先行與四個決策 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="CLI 和 Web Service 這兩條路徑的共同前提是什麼？" data-correct="1" data-explain="兩者都是「人問機器答」：有一個請求方在現場等回應，結果沿原路返回。">
+  <button class="opt">Agent 需要主動決定推送目標</button>
+  <button class="opt">有一個請求方在現場等回應</button>
+  <button class="opt">必須用到 Notify 才能把結果送出去</button>
+  <button class="opt">觸發方式是到點自動</button>
+</div>
+
+<div class="quiz" data-question="「到點自動」的定時任務為什麼會讓原路徑斷裂？" data-correct="3" data-explain="定時任務沒有請求方在現場等，是時鐘自己觸發，結果沒人來領就卡在原地。">
+  <button class="opt">因為定時任務不支援記憶</button>
+  <button class="opt">因為 Agent 的模型能力不夠</button>
+  <button class="opt">因為 Session 無法持久化結果</button>
+  <button class="opt">因為沒有請求方在現場等回應</button>
+</div>
+
+<div class="quiz" data-question="Notify 解決的核心問題是什麼？" data-correct="0" data-explain="Notify 讓 Agent 在沒有請求方的情況下，主動決定把結果推送到哪個目標。">
+  <button class="opt">讓 Agent 主動決定往哪送、送什麼</button>
+  <button class="opt">讓 Agent 的推理更準確</button>
+  <button class="opt">替代所有入站 ChannelAdapter</button>
+  <button class="opt">提高 LLM 的回應速度</button>
+</div>
+
+<div class="quiz" data-question="為什麼出站也要像入站一樣用 adapter 插件模式？" data-correct="2" data-explain="不抽這層的話，每個業務 Skill 都得各自手寫 webhook／MCP 對接，推送這件事散落重複。">
+  <button class="opt">為了讓通知速度更快</button>
+  <button class="opt">因為 Controller 需要統一管理</button>
+  <button class="opt">避免每個業務 Skill 各自手寫 webhook 對接</button>
+  <button class="opt">因為框架不支援直接發 HTTP</button>
+</div>
+
+<div class="quiz" data-question="「定時任務＋Notify」這兩片鑰匙各負責什麼？" data-correct="1" data-explain="排程負責什麼時候醒，Notify 負責醒來之後把結果送到哪。">
+  <button class="opt">排程負責送結果，Notify 負責觸發</button>
+  <button class="opt">排程負責觸發，Notify 負責送達</button>
+  <button class="opt">兩個都只負責觸發</button>
+  <button class="opt">兩個都只負責送達</button>
+</div>
+
+<div class="quiz" data-question="沒有 Notify 時，定時 Agent 的結果會發生什麼事？" data-correct="0" data-explain="結果會留在 Session / 資料庫裡，沒人去看，等於爛在系統裡。">
+  <button class="opt">留在 Session 裡沒人取用</button>
+  <button class="opt">自動轉成郵件寄出</button>
+  <button class="opt">被 Sandbox 自動丟棄</button>
+  <button class="opt">寫進系統的日誌就完成使命</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Notify 出站 · Step 1/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

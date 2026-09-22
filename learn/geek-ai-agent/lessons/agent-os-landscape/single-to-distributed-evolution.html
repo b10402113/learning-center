@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>從單機到分散式：狀態外置與 Agent 協作的遠景</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>從單機到分散式：狀態外置與 Agent 協作的遠景</h1>
+<p class="meta">Step 5/5 · 分散式的第一步不是多開幾台，而是先把狀態搬出去</p>
+
+<h2>學習目標</h2>
+<p>說明「實例無狀態、狀態外置」為何是分散式的第一步，並描述多實例要解決的協調問題、高可用與水平擴展的模型，以及更遠的跨節點 Agent 協作遠景。</p>
+
+<h2>起點：目前是單機私有部署</h2>
+
+<p>OryxOS 現在的樣子是一台機器上的單一實例，私有部署。這對很多企業已經夠用，但只要業務量長大、只要不能停機，就一定會走到「多實例一起跑」這一步。而從單機到叢集，關鍵的第一步幾乎所有人都會猜錯。</p>
+
+<h2>核心原則：實例無狀態，狀態外置</h2>
+
+<p>大部分人以為分散式的第一步是「多開幾台機器、前面掛負載均衡」。但如果每一台實例自己的硬碟裡都存著不能重建的狀態，那你只是把一個會壞的系統變成四個會壞的系統——而且更難修。</p>
+
+<blockquote>真正的第一步是：讓實例不持有任何「不可重建」的狀態，把所有狀態外置到共用的儲存層。</blockquote>
+
+<p>具體搬去哪裡，其實都是企業早就有的中間件：</p>
+
+<table>
+<thead>
+<tr><th>狀態</th><th>搬到哪</th></tr>
+</thead>
+<tbody>
+<tr><td>Session／短期上下文</td><td>Redis</td></tr>
+<tr><td>長期記憶／Skill 庫</td><td>PostgreSQL（pgvector）或獨立的向量庫</td></tr>
+<tr><td>審計日誌／大檔案</td><td>物件儲存</td></tr>
+<tr><td>Agent 設定／租戶資訊</td><td>配置中心＋資料庫</td></tr>
+</tbody>
+</table>
+
+<p>做完這一件事，實例就變成「可拋棄的」——壞了就重開一台，狀態從共用儲存重建即可。這是後面所有分散式能力的地基。</p>
+
+<h2>多實例下要解決的幾件事</h2>
+
+<p>狀態外置之後，新的問題才會浮現。它們都是「多個實例同時在看同一份狀態」造成的：</p>
+
+<table>
+<thead>
+<tr><th>問題</th><th>解法方向</th></tr>
+</thead>
+<tbody>
+<tr><td>渠道訊息被重複消費</td><td>統一訊息分派層／佇列的 consumer group，確保一則訊息只被處理一次</td></tr>
+<tr><td>Agent 調度與歸屬</td><td>用分散式鎖／lease 管理定時任務與長任務，避免兩個實例同時跑同一個 Agent</td></tr>
+<tr><td>多租戶隔離</td><td>在儲存層用 key 前綴／schema 隔離，並讓租戶身分一路帶在請求路徑上</td></tr>
+</tbody>
+</table>
+
+<p>注意這裡的「重複消費」與「同一個 Agent 被跑兩次」都是<strong>靜默錯誤</strong>——系統不會當掉，只會偷偷做兩次事。這類錯誤比崩潰更難發現，也是分散式最貴的地方。</p>
+
+<h2>高可用與水平擴展</h2>
+
+<p>做完上面兩步，高可用與擴展就變得很自然：無狀態實例放上 K8s，前面掛負載均衡；某台實例掛掉，流量自動轉移；要擴容就多開幾台，不需要搬資料；儲存層各自用自己的 HA 機制（都是企業熟悉的中間件）。</p>
+
+<p>換句話說：<strong>難的不是「多開幾台」，難的是「讓多開幾台是安全的」</strong>。前者是運維動作，後者是設計決定。</p>
+
+<h2>為什麼 Java 生態做分散式是順手的</h2>
+
+<p>這裡又回到 Java 的優勢。分散式需要的整套工具鏈，Java 生態早就有了：Nacos 做註冊與配置、Sentinel 做限流與斷路、Spring Cloud Gateway 做閘道、SkyWalking 做追蹤、Prometheus＋Grafana 做監控。而且這些東西<strong>企業裡本來就在跑</strong>。</p>
+
+<p>反過來說，Node.js／Python 的專案要做到同樣的分散式與服務治理，多半得自己補一整套。分散式、高可用、服務治理，正是 Java／Spring 最強的地方。</p>
+
+<h2>更遠的願景：跨節點的 Agent 協作</h2>
+
+<p>上面談的都還只是「同一個底座多開幾台副本」。再往前一步，是真正意義上的<strong>跨節點 Agent 協作</strong>：不同部門、甚至不同組織的 Agent，能夠互相發現、可靠地把任務委派出去、共享必要的上下文。</p>
+
+<p>這個場景可以類比成「服務發現、RPC、訊息中介出現之前的早期分散式系統」——大家都知道最終需要它，但標準與基礎設施還沒成形。它需要的是一個<strong>獨立的 Agent 通訊底座</strong>：OryxOS 負責單節點 runtime，通訊底座負責把節點連起來。</p>
+
+<p>必須說清楚：這是<strong>方向性的願景，不是當前的需求</strong>。現階段的務實目標是單機私有部署，中期是實例無狀態＋狀態外置的分散式底座，遠期才是跨節點協作。</p>
+
+<h2>順便看一眼這一層的三年判斷</h2>
+
+<p>把視角拉到未來三年，有幾個趨勢判斷值得記住：協定會收斂（工具與資料接入會逐步標準化，MCP 這類協定會像 JDBC／ODBC 一樣）；底座會下沉成基礎設施（像今天的訊息佇列與註冊中心，成為企業的標準一層）；競爭點會從「能不能跑」轉向「治理與成本」（審計、權限、配額、可觀測、多模型調度）；而開源會佔相當份額，因為想掌握控制的企業需要一個能自己看、自己改的底座。</p>
+
+<blockquote>在標準還沒定死、底座還沒成形的這個窗口裡，個人與小團隊才有切進去的機會。</blockquote>
+
+<h2>帶回自己</h2>
+
+<p>你之後會用 Loop 工程做一個分散式延遲投遞元件（etcd 協調、時間輪、Master／Slave、10 秒 failover），那是「分散式中間件」的分散式；OryxOS 這裡是「Agent 底座」的分散式。兩者手段相似（無狀態、外置狀態、lease、consumer group），但目標不同——前者的難點在協調與故障轉移的精確性，後者的難點在把一整套狀態安全地搬出實例。把這一課的原則記住：先問「這個狀態能不能重建、該放哪」，再談要開幾台。</p>
+
+<div class="lesson-nav">
+  <div><a href="./oryxos-positioning-and-boundary.html">← 上一步：OryxOS 的定位、邊界與安全設計</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="從單機走向分散式的第一步是什麼？" data-correct="1" data-explain="不是多開機器，而是讓實例無狀態、把不可重建的狀態外置到共用儲存。">
+  <button class="opt">先多開幾台機器再說</button>
+  <button class="opt">實例無狀態、狀態外置</button>
+  <button class="opt">先把模型換成更大的</button>
+  <button class="opt">先關閉所有定時任務</button>
+</div>
+
+<div class="quiz" data-question="長期記憶與 Skill 庫通常外置到哪裡？" data-correct="2" data-explain="長期記憶／Skill 庫放 PostgreSQL（pgvector）或獨立向量庫；session 短期上下文才放 Redis。">
+  <button class="opt">Redis</button>
+  <button class="opt">物件儲存</button>
+  <button class="opt">PostgreSQL 或向量庫</button>
+  <button class="opt">本地磁碟即可</button>
+</div>
+
+<div class="quiz" data-question="多實例下「渠道訊息被重複消費」該怎麼解？" data-correct="0" data-explain="用統一訊息分派層／佇列 consumer group 確保一則訊息只處理一次。">
+  <button class="opt">統一訊息分派層與 consumer group</button>
+  <button class="opt">讓每個實例都處理全部訊息</button>
+  <button class="opt">把渠道連線全部關掉</button>
+  <button class="opt">把訊息存在實例本地磁碟</button>
+</div>
+
+<div class="quiz" data-question="為什麼「Agent 被跑兩次」這類錯誤特別難處理？" data-correct="3" data-explain="它是靜默錯誤——系統不會當掉，只會偷偷做兩次事，比崩潰更難發現。">
+  <button class="opt">因為它一定會讓系統崩潰</button>
+  <button class="opt">因為它只影響 UI 顯示</button>
+  <button class="opt">因為它會刪除所有日誌</button>
+  <button class="opt">因為它不會當掉、只會重複做事</button>
+</div>
+
+<div class="quiz" data-question="Java 生態在分散式上的優勢主要來自哪裡？" data-correct="1" data-explain="Nacos、Sentinel、Spring Cloud Gateway、SkyWalking 等工具鏈企業本來就在跑，Node／Python 常得自己補。">
+  <button class="opt">Java 的執行速度比 Python 快</button>
+  <button class="opt">成熟且企業本來就在用的工具鏈</button>
+  <button class="opt">Java 不需要任何註冊中心</button>
+  <button class="opt">Java 內建了時間輪實作</button>
+</div>
+
+<div class="quiz" data-question="關於「跨節點 Agent 協作」，正確的定位是？" data-correct="2" data-explain="它是方向性願景而非當前需求；現階段是單機，中期是分散式底座，遠期才是跨節點協作。">
+  <button class="opt">這是目前版本的已完成功能</button>
+  <button class="opt">這是解決單機效能的必要手段</button>
+  <button class="opt">這是方向性願景、非當前需求</button>
+  <button class="opt">這是 OryxOS 刻意排除的方向</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Agent OS 與 OryxOS 定位 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

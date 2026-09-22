@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Loop：ReAct 迴圈與它必須處理的四件事</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Loop：ReAct 迴圈</h1>
+<p class="meta">Step 3/5 · Agent 五元件與真偽判別</p>
+
+<h2>學習目標</h2>
+<p>能畫出 ReAct 迴圈（Reasoning → Acting → Observation）並解釋為什麼「單次 LLM 呼叫是聊天機器人、只有循環的決策—行動—觀察才是 Agent」，以及一個好迴圈必須處理的四件事（停止條件、錯誤恢復、上下文壓縮、多模型切換）。</p>
+
+<h2>分界線：一次呼叫 vs 反覆循環</h2>
+<p>五個元件裡，LLM、Tools、Memory、Environment 都是「零件」，只有 Loop 是把它們串起來的「引擎」。這裡有一條清楚的分界線：</p>
+<blockquote>
+<strong>單次 LLM 呼叫是聊天機器人；只有循環的決策—行動—觀察，才讓它變成 Agent。</strong>
+</blockquote>
+<p>差別不在模型多強，而在「它能不能根據上一次行動的結果，自己決定下一步」。能，就是探索性的 Agent；不能，就是照著輸入產出輸出的聊天機器人。</p>
+
+<h2>ReAct：Reason + Act</h2>
+<p>ReAct 是 Reasoning（推理）與 Acting（行動）的縮寫，三個動作一直轉：</p>
+<ol>
+  <li><strong>Reasoning（推理）</strong>——LLM 看目前狀態，想「下一步該做什麼」。</li>
+  <li><strong>Acting（行動）</strong>——決定呼叫某個工具，並給出參數；或直接產出答案。</li>
+  <li><strong>Observation（觀察）</strong>——工具執行的結果回到迴圈裡，成為下一輪推理的輸入。</li>
+</ol>
+<p>然後回到第 1 步，直到達成目標。聽起來簡單，但魔鬼全在「一直轉」這三個字。</p>
+
+<h2>一個好迴圈必須處理的四件事</h2>
+<p>真正把 ReAct 寫進生產系統時，挑戰不在主流程，而在四個旁支問題——它們是框架八成複雜度的來源：</p>
+
+<table>
+<thead>
+<tr><th>要處理的事</th><th>不處理會怎樣</th><th>典型做法</th></tr>
+</thead>
+<tbody>
+<tr><td>停止條件</td><td>模型永遠覺得「還差一點」，迴圈停不下來</td><td>設定最大迭代次數（例如 MAX_ITER = 10）與完成判斷</td></tr>
+<tr><td>錯誤恢復</td><td>工具一報錯，整個流程就死在那裡</td><td>把錯誤當成一種 Observation 回填，讓模型有機會重試或換路</td></tr>
+<tr><td>上下文壓縮</td><td>歷史越積越長，超過模型能吃的長度</td><td>保留近期歷史、摘要或截斷較舊的內容</td></tr>
+<tr><td>多模型切換</td><td>簡單步驟用了貴模型，成本失控或速度太慢</td><td>依步驟難度路由到不同模型</td></tr>
+</tbody>
+</table>
+
+<p>這四件事會反覆出現：後面 OryxOS 的 <code>ReActLoop</code> 之所以要寫這麼多控制邏輯，就是在處理它們。以 OryxOS 為例，迴圈設了 <code>MAX_ITER = 10</code>，每一輪的 LLM 回應與工具結果都會<strong>累積進 session 歷史</strong>（這讓每一步都可事後審計），而當歷史長到超過上下文視窗時，就保留近期歷史。整套東西在 OryxOS 裡用不到 100 行 Java 就能寫完——ReAct 沒有任何魔法，它是可以被完整推導出來的。</p>
+
+<h2>不是每一輪都要叫工具</h2>
+<p>回到翻譯 README 的例子：第 1 輪呼叫讀檔工具、第 3 輪呼叫寫檔工具，但第 2 輪的「翻譯」是 LLM 自己完成的。這點很重要——<strong>迴圈的每一輪不一定都有工具呼叫</strong>。推理本身就能產出進展；工具只是當需要碰外部世界時才出場。把 Loop 想成節拍器，不是每一拍都要敲鼓。</p>
+
+<h2>為什麼這一節要獨立成一步</h2>
+<p>因為當你能拆解任何 Agent 之後，真正決定成敗的往往不是「有沒有用某個模型」，而是這個迴圈設計得好不好：停得下來嗎？錯得起的嗎？記得住又不爆掉嗎？成本控得住嗎？這四個問題就是後面 Loop Engineering 方法論的起點。</p>
+
+<div class="lesson-nav">
+  <div><a href="./five-components.html">← 上一步：五元件拆解</a></div>
+  <div><a href="./confusable-concepts.html">下一步：真偽判別：Agent vs LLM、聊天機器人、工作流 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="ReAct 的三個動作依序是？" data-correct="0" data-explain="Reasoning → Acting → Observation，觀察結果回到下一輪推理。">
+  <button class="opt">推理 → 行動 → 觀察</button>
+  <button class="opt">行動 → 推理 → 觀察</button>
+  <button class="opt">觀察 → 推理 → 行動</button>
+  <button class="opt">推理 → 觀察 → 行動</button>
+</div>
+
+<div class="quiz" data-question="「單次 LLM 呼叫」為什麼不算 Agent？" data-correct="2" data-explain="它缺少根據上一次結果自主決定下一步的循環，只是問一句答一句。">
+  <button class="opt">因為它沒有使用工具的能力</button>
+  <button class="opt">因為它沒有記憶體可以儲存</button>
+  <button class="opt">因為它缺少自主決策的循環</button>
+  <button class="opt">因為它不能輸出自然語言</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不是迴圈必須處理的四件事？" data-correct="3" data-explain="四件事是停止條件、錯誤恢復、上下文壓縮、多模型切換；資料庫選型不在其中。">
+  <button class="opt">停止條件與錯誤恢復</button>
+  <button class="opt">上下文壓縮與截斷</button>
+  <button class="opt">多模型之間的切換</button>
+  <button class="opt">向量資料庫的選型</button>
+</div>
+
+<div class="quiz" data-question="工具執行出錯時，好的迴圈通常怎麼做？" data-correct="1" data-explain="把錯誤當成一種 Observation 回填，讓模型有機會重試或換路。">
+  <button class="opt">立刻終止整個流程並告警</button>
+  <button class="opt">把錯誤當觀察結果回填給模型</button>
+  <button class="opt">忽略錯誤繼續執行下一個工具</button>
+  <button class="opt">重新啟動整個 session 從頭來</button>
+</div>
+
+<div class="quiz" data-question="上下文壓縮是為了解決什麼問題？" data-correct="3" data-explain="歷史越積越長會超過模型可吃的長度，所以要保留近期、摘要或截斷較舊內容。">
+  <button class="opt">工具數量太多難以管理</button>
+  <button class="opt">模型推理速度不夠快</button>
+  <button class="opt">回饋迴圈沒有停止條件</button>
+  <button class="opt">歷史超過上下文視窗</button>
+</div>
+
+<div class="quiz" data-question="翻譯 README 的第 2 輪沒有工具呼叫，說明了什麼？" data-correct="2" data-explain="推理本身就能產出進展，工具只在需要碰外部世界時出場。">
+  <button class="opt">第 2 輪其實沒有真的執行</button>
+  <button class="opt">翻譯必須靠外部工具完成</button>
+  <button class="opt">不是每一輪都需要叫工具</button>
+  <button class="opt">迴圈在第 2 輪就應該停止</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Agent 五元件與真偽判別 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

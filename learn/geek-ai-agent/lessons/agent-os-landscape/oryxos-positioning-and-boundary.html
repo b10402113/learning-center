@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OryxOS 的定位、邊界與安全設計</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>OryxOS 的定位、邊界與安全設計</h1>
+<p class="meta">Step 4/5 · 一句話定義、一條邊界、一套安全觀</p>
+
+<h2>學習目標</h2>
+<p>用一句話定義 OryxOS，說清它的四字願景、做 runtime 不做編排的邊界，以及它與框架、編排平台、其他開源專案的關係與 day-one 安全設計。</p>
+
+<h2>OryxOS 是什麼：一句話</h2>
+
+<blockquote>OryxOS 是一個企業完全可控、Java 原生、私有部署、可審計的統一 Agent 底座。</blockquote>
+
+<p>把它展開：它部署在你自己的 K8s／伺服器／實體機上，同時跑各種業務 Agent，讓它們共用渠道接入、模型路由、記憶、工具呼叫與安全審計。業務方要做的只有兩件事——配置一個 Agent、用 MCP 寫一個 Tool。資料留在企業內，不綁任何雲；業務方不需要寫 Agent 的後端程式碼。</p>
+
+<p>它是一個採用 Apache 2.0、可完整審計、可 fork 的開源專案。這個授權選擇本身就是定位的一部分：嚴監管企業要的是「能自己看、自己改」的底層。</p>
+
+<h2>它把錨下在哪裡</h2>
+
+<p>OryxOS 借「Agent OS」這個框架來描述自己，但它刻意<strong>不把錨下在概念上</strong>，而是下在不變的需求上：嚴監管企業需要一個完全可控的 Agent 底座。</p>
+
+<p>這個區別很關鍵。如果你錨在「Agent OS」這個詞，哪天這個詞被換掉、被行銷用爛，你就失去了立足點；但如果你錨在「企業需要一個完全可控的底座」這個需求，無論概念怎麼變，需求都還在。</p>
+
+<h2>四字願景：統一、私有、易接入、可觀測</h2>
+
+<table>
+<thead>
+<tr><th>字</th><th>意思</th></tr>
+</thead>
+<tbody>
+<tr><td>統一</td><td>一群 Agent 共用同一套渠道、接入、記憶與工具層</td></tr>
+<tr><td>私有</td><td>資料與能力都留在企業自己的基礎設施上</td></tr>
+<tr><td>易接入</td><td>像安裝一個 Spring Boot 應用一樣自然，業務方只負責業務</td></tr>
+<tr><td>可觀測</td><td>每一次呼叫、每一段決策都可被追蹤與審計</td></tr>
+</tbody>
+</table>
+
+<p>這裡最深的價值錨點還是<strong>知識沉澱</strong>：透過 Skill 系統，資深員工的經驗會被寫成可重用的技能，留在企業裡，而不是隨著人員流動帶走。</p>
+
+<h2>邊界：做執行時，不做編排</h2>
+
+<p>一個底座最怕什麼都想做。OryxOS 很清楚自己守在哪一層——<strong>runtime</strong>：</p>
+
+<table>
+<thead>
+<tr><th>它做（runtime 層）</th><th>它不做（編排層）</th></tr>
+</thead>
+<tbody>
+<tr><td>Channel（渠道）、LLM Provider、Memory、Tool registry、Sandbox</td><td>可視化工作流編排</td></tr>
+<tr><td>多租戶、SSO、RBAC、審計</td><td>複雜任務分解</td></tr>
+<tr><td>可觀測、Web 控制台</td><td>顯式的多 Agent 協作編排</td></tr>
+</tbody>
+</table>
+
+<p>看懂了嗎？編排平台（像 Dify）其實可以<strong>跑在 OryxOS 之上</strong>，把 OryxOS 當成一個客戶端。這不是退讓，而是分工：OryxOS 守著底座，編排在它上面蓋。</p>
+
+<h2>OryxOS 不是什麼：三方對比</h2>
+
+<p>用「產出什麼、給誰用、站在哪一層」三個維度看，一切就清楚了：</p>
+
+<table>
+<thead>
+<tr><th></th><th>框架（LangChain／Spring AI）</th><th>編排平台（Dify）</th><th>OryxOS</th></tr>
+</thead>
+<tbody>
+<tr><td>產出</td><td>程式碼</td><td>一條工作流</td><td>被配置好的常駐 Agent</td></tr>
+<tr><td>給誰用</td><td>開發者</td><td>業務人員</td><td>業務方配置＋寫 Tool</td></tr>
+<tr><td>站在哪層</td><td>最底層的元件</td><td>應用層</td><td>runtime 層</td></tr>
+</tbody>
+</table>
+
+<p>所以 OryxOS 同時「重用框架」與「支撐編排平台」，而自己佔住 runtime 這一層。</p>
+
+<h2>安全：把它當第一天的設計，而不是補丁</h2>
+
+<p>前一步看過 OpenClaw 的教訓——它的安全問題是結構性的。OryxOS 選擇在每一點上都走相反的路：</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>OryxOS 的做法</th></tr>
+</thead>
+<tbody>
+<tr><td>Skill／Tool 來源</td><td>受控註冊與審查，不做無界的公開技能市集</td></tr>
+<tr><td>權限</td><td>最小權限，而不是預設全開</td></tr>
+<tr><td>隔離</td><td>強制沙箱，檔案／網路／shell 預設收緊</td></tr>
+<tr><td>憑證</td><td>走企業金鑰系統（KMS／Vault），憑證不落地、不進 prompt／log</td></tr>
+<tr><td>攻擊防禦</td><td>主動防 prompt injection（提示注入）與資料外洩，記憶寫入與工具輸入都過安全掃描</td></tr>
+<tr><td>審計</td><td>全鏈路審計是底座能力，且輸出到企業 SIEM</td></tr>
+<tr><td>流程對接</td><td>因為是在企業基礎設施上跑 Java／Spring，能直接過既有安全審查</td></tr>
+</tbody>
+</table>
+
+<p>最後一點常被忽略但最重要：安全不是自己說安全，而是<strong>要能被企業既有的審查流程接受</strong>。Java／Spring 的技術選型在這裡再次變成優勢。</p>
+
+<h2>它跟其他專案的關係</h2>
+
+<p>OryxOS 並不重新發明輪子。它借用 OpenClaw／Hermes 已經驗證過的設計哲學——Agent 生命週期、Channel 抽象、三層記憶、以 <code>SKILL.md</code> 描述技能（相容 agentskills.io 開放標準）、MCP 工具呼叫、單一二進位打包——然後<strong>用 Java 重新實作</strong>，再補上多租戶、SSO、RBAC、審計、Web 控制台與深度整合。</p>
+
+<blockquote>同一個類別，不同定位：OpenClaw 服務個人，Hermes 服務小團隊，OryxOS 服務嚴監管企業；與編排平台互補，與 Java AI 框架是重用關係。</blockquote>
+
+<h2>工程設計：插件化與生產門檻</h2>
+
+<p>底座要能長期演進，靠的是<strong>插件化</strong>：Provider 插件（換模型不改上層）、Tool 插件（加工具不動核心）、Memory／儲存插件（換儲存只加一個實作）。做法是在核心定義介面、把實作放進插件目錄，用 SPI／registry 載入。檢驗標準只有一句：</p>
+
+<blockquote>加一個模型或工具，需不需要改核心程式碼？如果需要，代表抽象錯了。</blockquote>
+
+<p>而從 demo 走進企業，會遇到四道「生產門檻」，也是企業第一次評審必問的：</p>
+
+<table>
+<thead>
+<tr><th>門檻</th><th>要求</th></tr>
+</thead>
+<tbody>
+<tr><td>多租戶隔離</td><td>不同部門／業務的 Agent、資料、配額互不干擾</td></tr>
+<tr><td>權限與配額</td><td>誰能呼叫哪個工具、每日幾次、超額怎麼辦</td></tr>
+<tr><td>工具沙箱</td><td>執行有資源與網路邊界，出錯不影響底座</td></tr>
+<tr><td>全鏈路審計</td><td>每次呼叫都可追溯：誰、何時、做了什麼、結果如何</td></tr>
+</tbody>
+</table>
+
+<h2>帶回自己</h2>
+
+<p>用「邊界」和「生產門檻」兩把尺，量一下你想做的底座：它有沒有正在偷做編排的事？加一個新模型時，你得動核心碼還是只加一個插件？企業第一次評審問你多租戶與審計時，你答得出來嗎？這三題決定了它是玩具還是底座。</p>
+
+<div class="lesson-nav">
+  <div><a href="./why-private-base-and-java.html">← 上一步：為什麼企業要私有底座，又為什麼是 Java</a></div>
+  <div><a href="./single-to-distributed-evolution.html">下一步：從單機到分散式：狀態外置與 Agent 協作的遠景 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="OryxOS 把自己錨在哪裡？" data-correct="2" data-explain="它用 Agent OS 當描述框架，但錨在不變的需求：嚴監管企業需要完全可控的底座。">
+  <button class="opt">錨在「Agent OS」這個熱門名詞</button>
+  <button class="opt">錨在某一家雲廠商的生態</button>
+  <button class="opt">錨在企業不變的可控需求</button>
+  <button class="opt">錨在特定基礎模型的能力</button>
+</div>
+
+<div class="quiz" data-question="OryxOS 的四字願景是哪四個？" data-correct="1" data-explain="統一、私有、易接入、可觀測。">
+  <button class="opt">快速、便宜、開源、雲端</button>
+  <button class="opt">統一、私有、易接入、可觀測</button>
+  <button class="opt">分散、即時、低碼、多模</button>
+  <button class="opt">安全、高效、彈性、智能</button>
+</div>
+
+<div class="quiz" data-question="OryxOS 的核心邊界是什麼？" data-correct="0" data-explain="它守 runtime 層，不做可視化編排與多 Agent 協作編排，讓 Dify 之流跑在其上。">
+  <button class="opt">做 runtime，不做編排</button>
+  <button class="opt">做編排，不做 runtime</button>
+  <button class="opt">同時做編排與 runtime</button>
+  <button class="opt">只做模型訓練與微調</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項是 OryxOS「刻意不做」的？" data-correct="3" data-explain="可視化工作流編排屬於編排層，OryxOS 刻意不做；它做渠道、Provider、記憶、工具、沙箱、審計等。">
+  <button class="opt">統一渠道接入</button>
+  <button class="opt">多租戶與 SSO</button>
+  <button class="opt">全鏈路審計</button>
+  <button class="opt">可視化工作流編排</button>
+</div>
+
+<div class="quiz" data-question="OryxOS 在安全上與 OpenClaw 的差異本質是什麼？" data-correct="1" data-explain="OryxOS 把安全當第一天設計，OpenClaw 的問題則是結構性的、事後補丁。">
+  <button class="opt">OryxOS 完全不允許使用工具</button>
+  <button class="opt">安全是第一天設計，而非事後補丁</button>
+  <button class="opt">OryxOS 不開源所以更安全</button>
+  <button class="opt">OryxOS 把所有資料放到公有雲</button>
+</div>
+
+<div class="quiz" data-question="判斷插件化抽象是否正確的檢驗標準是？" data-correct="2" data-explain="加一個模型或工具時，若必須改核心碼，代表抽象錯了。">
+  <button class="opt">插件目錄的檔案數量夠不夠多</button>
+  <button class="opt">插件是否全部用同一種語言寫</button>
+  <button class="opt">加模型或工具是否需改核心碼</button>
+  <button class="opt">插件是否能在雲端執行</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Agent OS 與 OryxOS 定位 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

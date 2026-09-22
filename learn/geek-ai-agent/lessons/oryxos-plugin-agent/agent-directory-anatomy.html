@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一個 Agent 目錄長什麼樣：AGENT.md、scripts、skills、REFERENCE.md</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一個 Agent 目錄長什麼樣：AGENT.md、scripts、skills、REFERENCE.md</h1>
+<p class="meta">Step 2/5 · 插件化 Agent 與動態管理</p>
+
+<h2>學習目標</h2>
+<p>能畫出一個 Agent 目錄的完整結構，並說出哪個檔案在什麼時機才進入上下文（progressive disclosure）。</p>
+
+<h2>用一個真實的 Agent 走一遍</h2>
+<p>抽象地講「一目錄一 Agent」不好懂。用一個貫穿全課的例子來看：<strong>每日對賬 Agent</strong>（<code>daily-reconcile</code>）。它每天早上比對交易庫與清算庫的訂單數與金額，產生一份分級報告，推到運維群。</p>
+<p>這個例子特別值得看，因為它<strong>同時用到全部四種資源</strong>：主指令、腳本、子指令、參考檔案。目錄長這樣：</p>
+<pre><code>.oryxos/agents/daily-reconcile/
+├── AGENT.md              # 主指令：frontmatter 是設定，body 是任務指令
+├── REFERENCE.md          # 選用：欄位字典 + 已知可接受的差異
+├── skills/
+│   └── report-format.md  # 子指令：報告結構與分級規則
+└── scripts/
+    └── reconcile.py      # 腳本：確定性的抓取與比對邏輯
+</code></pre>
+<p>存放位置固定：`.oryxos/agents/<name>/`，而 `<name>` 既是目錄名、也是這個 Agent 的唯一識別碼。</p>
+
+<h2>AGENT.md：frontmatter 是這個 Agent 的 Profile</h2>
+<p><code>AGENT.md</code> 是核心，它分成兩半。上半是 YAML frontmatter，也就是這個 Agent 自帶的 Profile——身分、模型、能力、推送目標、排程時間，全部集中在這裡：</p>
+<table>
+<thead>
+<tr><th>欄位</th><th>作用</th></tr>
+</thead>
+<tbody>
+<tr><td><code>name</code></td><td>唯一識別碼，等於目錄名</td></tr>
+<tr><td><code>description</code></td><td>一句話說明它是什麼</td></tr>
+<tr><td><code>identity</code>（<code>agent_name</code>／<code>prompt</code>／<code>provider</code>／<code>model</code>／<code>temperature</code>／<code>tools</code>）</td><td>人設、用哪個模型、開放哪些系統能力，例如 <code>[shell, read_file, notify, save_memory]</code></td></tr>
+<tr><td><code>notify_channels</code></td><td>跑完的結果往哪推</td></tr>
+<tr><td><code>schedules</code></td><td><code>{id, cron, zone, message}</code>，例如 <code>0 0 9 * * *</code> 搭 <code>Asia/Shanghai</code></td></tr>
+</tbody>
+</table>
+<p>這正好對上前面那條邊界：一個 Agent 把身分、模型、能力、推送、排程全帶在自己身上，所以以前那份獨立的 `.oryxos/profiles/` 設定就被移除了。排程從 Agent 自己身上長出來，不是另外設定的。</p>
+
+<h2>AGENT.md 的 body：只負責「編排」</h2>
+<p>下半是 body，也就是給 LLM 的任務指令。要注意的是：<strong>body 只做編排，不塞細節</strong>。它的內容大致是：</p>
+<ol>
+<li>執行 <code>python scripts/reconcile.py</code>，拿到一份確定性的 JSON。</li>
+<li>看 JSON 裡的 <code>diffs</code> 分支。</li>
+<li>若出現差異，用 <code>read_file</code> 讀 <code>skills/report-format.md</code>，取得報告結構與 P0／P1／P2 分級規則。</li>
+<li>若某個差異的分級不確定，再讀 <code>REFERENCE.md</code>。</li>
+<li>最後 <code>notify</code> 推送，並 <code>save_memory</code>。</li>
+</ol>
+<p>真正的報告規格、欄位定義、抓取邏輯，全都住在另外三個檔案裡。body 之所以能這麼薄，靠的就是漸進式揭露。</p>
+
+<h2>三個檔案，各自用到才進上下文</h2>
+<p>這是整個目錄設計的精華。同一個 Agent 內的四個檔案，進入 LLM 上下文的時機完全不同：</p>
+<table>
+<thead>
+<tr><th>檔案</th><th>何時進上下文</th><th>靠什麼能力</th></tr>
+</thead>
+<tbody>
+<tr><td><code>AGENT.md</code> body</td><td>觸發時常駐系統提示</td><td><code>ContextLoader</code> 注入</td></tr>
+<tr><td><code>scripts/reconcile.py</code></td><td>用到時執行；<strong>只有輸出的 JSON 進上下文，程式碼不進</strong></td><td><code>shell</code>／<code>python</code></td></tr>
+<tr><td><code>skills/report-format.md</code></td><td>出現差異、要寫報告時才讀</td><td><code>read_file</code></td></tr>
+<tr><td><code>REFERENCE.md</code></td><td>分級不確定時才讀</td><td><code>read_file</code></td></tr>
+</tbody>
+</table>
+<p>關鍵在第二列：腳本執行完，<strong>進上下文的是結果，不是原始碼</strong>。這代表確定性的工作（抓資料、比對、算差額）不會消耗 token 去讓模型「重算一遍」，也就不會出錯。這是把「該用程式做的」和「該用模型判斷的」分開。</p>
+<p>而這整件事完全不需要新的底層能力——它只用到底座既有的 <code>read_file</code> 與 <code>shell</code>。漸進式揭露不是一個新功能，而是一種<strong>用法</strong>。</p>
+
+<h2>腳本吐出什麼、報告如何分級</h2>
+<p>看具體內容會更清楚。範例腳本載入兩份匯出的 CSV，算出三類差異：<code>missing_in_settle</code>（清算庫缺）、<code>missing_in_orders</code>（交易庫缺）、<code>amount_mismatch</code>（金額不符），然後輸出一份 JSON，帶 <code>date</code>／<code>counts</code>／<code>amounts</code>／<code>diffs</code>。<code>report-format.md</code> 再定義分級：</p>
+<table>
+<thead>
+<tr><th>級別</th><th>條件</th><th>處理</th></tr>
+</thead>
+<tbody>
+<tr><td>P0</td><td>總差額 &gt; 10000，或單筆差額 &gt; 5000</td><td>可能財務損失，立即處理</td></tr>
+<tr><td>P1</td><td>至少一筆 <code>missing_in_settle</code></td><td>當日查清</td></tr>
+<tr><td>P2</td><td>只有 <code>missing_in_orders</code>，或 0.01 的尾差</td><td>觀察即可</td></tr>
+</tbody>
+</table>
+<p>一個 Agent 目錄，四個檔案合起來就是「一個完整、可執行的 Agent」。這裡的 <code>daily-reconcile/</code> 是由 spec-kit 從課程素材生成的參考產物——課件是輸入，程式碼是被生成出來的。</p>
+
+<div class="lesson-nav">
+  <div><a href="./agent-as-os-program.html">← 上一步：一目錄一 Agent：為什麼這叫 Agent OS</a></div>
+  <div><a href="./derive-profile-register.html">下一步：掃描→deriveProfile→註冊→自跑：底座零改動的插件機制 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="AGENT.md 的 frontmatter 在整個模型裡代表什麼？" data-correct="1" data-explain="frontmatter 就是這個 Agent 自帶的 Profile：身分、模型、能力、推送與排程。">
+  <button class="opt">一份給使用者看的說明文件</button>
+  <button class="opt">這個 Agent 自帶的 Profile</button>
+  <button class="opt">腳本執行結果的快取</button>
+  <button class="opt">系統層級的權限白名單</button>
+</div>
+
+<div class="quiz" data-question="腳本 <code>scripts/reconcile.py</code> 執行後，哪一部分會進入上下文？" data-correct="2" data-explain="只有腳本輸出的 JSON 進上下文；程式碼本身不進，所以確定性工作不燒 token。">
+  <button class="opt">整份 Python 原始碼</button>
+  <button class="opt">腳本與輸出兩者都進</button>
+  <button class="opt">只有輸出的 JSON 結果</button>
+  <button class="opt">兩者都不進上下文</button>
+</div>
+
+<div class="quiz" data-question="什麼情況下 Agent 才會去讀 <code>skills/report-format.md</code>？" data-correct="0" data-explain="body 只負責編排；出現差異、要寫報告時才用 read_file 讀報告規格。">
+  <button class="opt">出現差異、要寫報告時</button>
+  <button class="opt">每次觸發的一開始</button>
+  <button class="opt">腳本執行失敗之後</button>
+  <button class="opt">推送完成的最後一步</button>
+</div>
+
+<div class="quiz" data-question="漸進式揭露靠的是底座哪一組既有能力？" data-correct="3" data-explain="它不靠新功能，只用既有 read_file 與 shell，按需要才把檔案帶進上下文。">
+  <button class="opt">Provider 與 ReAct</button>
+  <button class="opt">Memory 與 Sandbox</button>
+  <button class="opt">AgentScheduler 與 Web</button>
+  <button class="opt">read_file 與 shell</button>
+</div>
+
+<div class="quiz" data-question="daily-reconcile 的排程資訊從哪裡來？" data-correct="1" data-explain="排程來自 AGENT.md frontmatter 的 schedules 欄位，所以底座排程器不需要另外設定。">
+  <button class="opt">獨立的 <code>.oryxos/profiles/</code> 設定檔</button>
+  <button class="opt">AGENT.md frontmatter 的 schedules</button>
+  <button class="opt">腳本 <code>reconcile.py</code> 內部</button>
+  <button class="opt">Web Service 的資料庫表格</button>
+</div>
+
+<div class="quiz" data-question="body 之所以能寫得很薄，最主要的原因是什麼？" data-correct="2" data-explain="細節都放在腳本、子指令與參考檔，按需要才載入，body 只需負責編排流程。">
+  <button class="opt">模型無法理解太長的指令</button>
+  <button class="opt">系統限制 body 的字數上限</button>
+  <button class="opt">細節放在其他檔案按需要才載入</button>
+  <button class="opt">腳本已包含所有報告規則</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 插件化 Agent 與動態管理 · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

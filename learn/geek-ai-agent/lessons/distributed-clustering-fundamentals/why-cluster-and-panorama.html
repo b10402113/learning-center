@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>為何要叢集化：單機的兩道天花板與六問題全景</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>為何要叢集化</h1>
+<p class="meta">Step 1/5 · 集群化六機制與選型</p>
+
+<h2>學習目標</h2>
+<p>能說出單機的兩道天花板（容量、單點故障）為何逼出叢集化，並用成員、唯一決策、資料定位、故障接管、複製一致性、協調選型六個問題，以及它們對應的六個機制，拼出一個叢集系統的全景。</p>
+
+<h2>一台機器的兩道天花板</h2>
+<p>先從一個很具體的場景想像：你要做一個「延遲投遞」服務——訊息帶著未來的發送時間進來，時間到了才送出去。最直覺的做法是把所有待發訊息放在記憶體裡，用一個時間輪（timing wheel，一種 O(1) 加入與移除的定時資料結構）排程。單機跑一個小規模沒問題，但很快會撞到第一道天花板。</p>
+<p><strong>第一道天花板是容量。</strong>時間輪活在記憶體裡，訊息的數量遲早會超過一台機器的 RAM。記憶體放不下的東西，單機就是做不到，跟程式寫得多好無關。</p>
+<p><strong>第二道天花板是單點故障。</strong>假設容量硬撐過去了，這台機器一當機，記憶體裡所有還沒發送的訊息瞬間全部消失。對一個承諾「必須準時送達」的系統來說，這是不可接受的——一次停機就等於一次資料遺失。</p>
+
+<h2>叢集化：答案，也是代價</h2>
+<p>叢集化（clustering）就是同時對付這兩道牆的做法：<strong>水平擴充</strong>（加機器來分攤容量）加上<strong>消除單點</strong>（用多台機器互相備援）。機器從一台變多台，容量問題被攤開，單點故障被備援蓋住。</p>
+<p>但這個答案不是免費的。原本在一台機器上理所當然的事——「資料就放在這塊記憶體裡」、「只有我一個人在改它」——一旦拆到多台，全都變成真問題。這些問題可以被收斂成六個，叢集化的技術，本質上就是在回答這六題。</p>
+
+<h2>六個問題，六個機制</h2>
+<p>下表是這整節課的地圖。左邊是多機之後冒出來的新問題，右邊是解它的機制與關鍵點：</p>
+
+<table>
+<thead>
+<tr><th>新問題</th><th>機制</th><th>關鍵點</th></tr>
+</thead>
+<tbody>
+<tr><td>成員感知（誰還活著）</td><td>心跳 + 租約（heartbeat + lease）</td><td>把「還活著嗎」變成「租約過期了嗎」；偵測延遲下限＝租約 TTL</td></tr>
+<tr><td>唯一決策（誰說了算）</td><td>Controller 選舉 + 共識（consensus）</td><td>多數派（quorum）防腦裂；不要自己造共識</td></tr>
+<tr><td>資料定位（東西在哪台）</td><td>分片 + 路由元數據</td><td>查表定位 Master，不是對節點算雜湊；一致性雜湊減少搬遷</td></tr>
+<tr><td>故障接管（死機後誰頂）</td><td>副本 + 角色切換</td><td>最難的是回填複製留下的資料缺口</td></tr>
+<tr><td>複製一致性（副本怎麼同步）</td><td>同步 vs 非同步</td><td>工程上的 CAP 取捨；有外部可信來源時非同步才安全</td></tr>
+<tr><td>公共協調（以上放哪、怎麼通知）</td><td>協調服務（etcd／ZooKeeper／Consul／DB 表）</td><td>按即時性、一致性、維運成本選</td></tr>
+</tbody>
+</table>
+
+<p>先記住這張地圖，後面的每一步都會把其中一格展開。這裡先點出一個核心轉換：成員感知的機制，是把一個無法直接回答的問題「這台機器現在還活著嗎」換成一個可以精確判定的問題「這張租約過期了嗎」。這個轉換是後面所有故障偵測與接管的基礎。</p>
+
+<h2>叢集跑起來長什麼樣</h2>
+<p>把六個機制疊起來，就是一個叢集系統的執行期全景。以延遲投遞為例：</p>
+
+<table>
+<thead>
+<tr><th>層</th><th>做什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>接入與路由</td><td>請求先到任一台節點；節點依訊息分片，查出該分片的 Master 在哪，若不在本機就用 gRPC 轉發過去</td></tr>
+<tr><td>分片內部</td><td>每個分片跑一個時間輪實例；同一分片的主備（Master／Slave）分置不同機器</td></tr>
+<tr><td>協調平面</td><td>etcd 負責成員租約、Controller 選舉、路由元數據；其他節點用 Watch 監看變更</td></tr>
+</tbody>
+</table>
+
+<p>注意這裡的關鍵設計：請求可能落在任意一台，但真正處理它的 Master 是「查出來的」，不是「算出來的」。這也是後面資料定位那一步要講清楚的地方。</p>
+
+<h2>三個通用判斷</h2>
+<p>拆解完機制，還有三個可以隨身帶走的設計判斷，它們會在所有分散式設計裡重複出現：</p>
+<ol>
+<li><strong>借，不要造。</strong>共識與協調這種極難寫對的東西，用成熟元件，不要自己實作。</li>
+<li><strong>狀態外部化。</strong>不可以丟的狀態放進可靠的儲存層；節點本身盡量無狀態，才好擴充、好切換。</li>
+<li><strong>按場景選。</strong>即時性、一致性、維運成本夠用就好；過度設計才是敵人。</li>
+</ol>
+<p>下一步要把第一格「成員感知」展開——它同時也是「唯一決策」的前置。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./membership-and-election.html">下一步：成員感知與唯一決策 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="單機系統面對的兩道天花板是什麼？" data-correct="2" data-explain="容量（記憶體、CPU、磁碟）與單點故障，這兩者逼出了叢集化。">
+  <button class="opt">延遲與頻寬兩者</button>
+  <button class="opt">成本與人力兩者</button>
+  <button class="opt">容量與單點故障</button>
+  <button class="opt">版本與相容性兩者</button>
+</div>
+
+<div class="quiz" data-question="叢集化的本質是什麼？" data-correct="0" data-explain="叢集化＝水平擴充＋消除單點，代價是六個多機新問題。">
+  <button class="opt">水平擴充加消除單點</button>
+  <button class="opt">把一台機器換成更貴的</button>
+  <button class="opt">用快取避開所有磁碟</button>
+  <button class="opt">把服務拆成更多後端語言</button>
+</div>
+
+<div class="quiz" data-question="成員感知的機制把「還活著嗎」轉換成什麼問題？" data-correct="1" data-explain="租約把模糊的存活問題變成可判定的「租約是否過期」，偵測延遲下限就是 TTL。">
+  <button class="opt">這台機器快不快</button>
+  <button class="opt">這張租約過期了嗎</button>
+  <button class="opt">這條連線佔多少頻寬</button>
+  <button class="opt">這個請求排在第幾位</button>
+</div>
+
+<div class="quiz" data-question="請求送到叢集後，Master 是用什麼方式被找到的？" data-correct="3" data-explain="先分片、再查路由元數據表定位 Master；不是對節點算雜湊。">
+  <button class="opt">用廣播問每一台節點</button>
+  <button class="opt">對節點清單算雜湊值</button>
+  <button class="opt">看哪台回應速度最快</button>
+  <button class="opt">查路由元數據表定位</button>
+</div>
+
+<div class="quiz" data-question="以下哪一項屬於「借，不要造」的判斷？" data-correct="1" data-explain="共識與協調極難寫對，應使用成熟元件而非自行實作。">
+  <button class="opt">自己寫一套 Raft 演算法</button>
+  <button class="opt">用成熟的協調元件</button>
+  <button class="opt">把狀態留在每台記憶體</button>
+  <button class="opt">把所有機制都做到最強</button>
+</div>
+
+<div class="quiz" data-question="若一個系統的訊息可以忍受停機後重跑一次，依三個通用判斷，最可能的選擇是？" data-correct="2" data-explain="按場景選：不是即時性需求時，重用既有儲存層通常就夠，無須引入更重的元件。">
+  <button class="opt">一律引進 etcd 才專業</button>
+  <button class="opt">一定要同步複製到底</button>
+  <button class="opt">重用既有儲存層即可</button>
+  <button class="opt">每台節點各自為政</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 集群化六機制與選型 · Step 1/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

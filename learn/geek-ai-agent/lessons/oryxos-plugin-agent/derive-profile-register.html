@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>掃描→deriveProfile→註冊→自跑：底座零改動的插件機制</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>掃描→deriveProfile→註冊→自跑：底座零改動的插件機制</h1>
+<p class="meta">Step 3/5 · 插件化 Agent 與動態管理</p>
+
+<h2>學習目標</h2>
+<p>能說出「掃描→deriveProfile→註冊→自跑」四個步驟各自做什麼，並解釋為什麼這條路徑讓底座一行都不用改。</p>
+
+<h2>問題：目錄憑什麼被系統認得？</h2>
+<p>上一課我們已經能寫出一個自足的 Agent 目錄。但目錄本身只是檔案——系統要怎麼「發現」它、把它變成一份可執行的設定、並且讓它到點自己跑起來？</p>
+<p>這裡有一個很容易走偏的誘惑：既然每種 Agent 需求不同，乾脆改一改 <code>AgentService</code>、改一改排程器，讓它們直接去讀 <code>AGENT.md</code>。這條路一旦走上去，每加一種 Agent 就要動一次底座，底座很快會變成一團泥巴。</p>
+<p>OryxOS 選了另一條路，一條原則講完：<strong>不改寫底座，只加一個 Profile 的來源。</strong></p>
+
+<h2>為什麼只加一個來源就夠？</h2>
+<p>因為底座從第二十八節走到現在，一直只認一個值物件：<code>Profile</code>。`AgentService`、`ReActLoop`、`PromptBuilder`、`AgentScheduler` 全都消費 <code>Profile</code>——它們不關心這份 Profile 是怎麼來的，只關心它裡面有什麼。</p>
+<p>所以插件化的核心，只是把一句話換掉：</p>
+<blockquote>原本：從 Profile YAML 讀出一份 <code>Profile</code>。<br>現在：從 Agent 目錄的 <code>AGENT.md</code> frontmatter <strong>推導</strong>出一份 <code>Profile</code>。</blockquote>
+<p>換句話說，<strong>「推導 Profile」就是整個插件化機制</strong>。改變的只有 Profile 的產生方式，後面的註冊、驗證、執行、排程，全部沿用。</p>
+
+<h2>四個步驟：掃描 → 推導 → 註冊 → 自跑</h2>
+<p>把上面的原則拆成具體鏈路，就是四步：</p>
+<table>
+<thead>
+<tr><th>步驟</th><th>做什麼</th><th>主要角色</th></tr>
+</thead>
+<tbody>
+<tr><td>1. 掃描</td><td>啟動時掃 <code>.oryxos/agents/</code> 底下的每個目錄</td><td>組裝層</td></tr>
+<tr><td>2. 解析</td><td>把 <code>AGENT.md</code> 的 frontmatter（設定）與 body（指令）切開，並記下 <code>scripts/</code>、<code>skills/</code>、<code>REFERENCE.md</code> 的路徑</td><td><code>AgentLoader</code>／<code>AgentMarkdown.split</code></td></tr>
+<tr><td>3. 推導</td><td><code>deriveProfile(agentDir)</code> 把 frontmatter 映射成 <code>Profile</code>：name／provider／tools／notify_channels／schedules</td><td><code>AgentLoader.deriveProfile</code></td></tr>
+<tr><td>4. 註冊</td><td>把 <code>Profile</code> 放進 <code>ProfileRegistry</code>；排程交給 <code>AgentScheduler.registerProfile</code></td><td><code>ProfileRegistry</code>／<code>AgentScheduler</code></td></tr>
+</tbody>
+</table>
+<p>註冊時的驗證沿用既有的規則（第 16 節那一套）：<code>provider</code> 必須存在、<code>tool</code> 必須是已註冊的能力。缺了 <code>AGENT.md</code> 的必填欄位，錯誤會直接點名是哪個欄位；引用了不存在的工具則會警告。</p>
+<p>第四步之後，這件事就結束了。之後任何觸發——不管是排程到點還是 API 呼叫——都走<strong>同一條 <code>AgentService.process</code></strong>，ReAct、Tool、Provider 一行都沒動。</p>
+<pre><code>觸發 → AgentService.process(Profile, ...) → ReActLoop → ToolExecutor → Provider
+                                                  ▲
+                                   這整段完全不知道 Agent 從哪來
+</code></pre>
+
+<h2>排程從 Agent 身上長出來，所以排程器不用改</h2>
+<p>排程這一塊值得單獨提一句。因為 <code>schedules</code> 是從 Agent frontmatter 推導進 <code>Profile</code> 的，<code>AgentScheduler</code> 只需要照著 <code>Profile.schedules</code> 去排，<strong>它自己的程式碼改變行數是零</strong>。這就是「Profile 取用」的威力：新能力接進來的成本，取決於舊模組是否已經在消費那個抽象。</p>
+
+<h2>為了下一課，先鋪好兩個可變的掛鉤</h2>
+<p>到這裡，「一個目錄推導出一個會自跑的 Agent」已經機制完整。但入口仍然是「登入伺服器、把檔案放上去、重啟才生效」。為了下一課的動態管理，這一課先做兩件小小的改造：</p>
+<ul>
+<li><strong><code>ProfileRegistry</code> 從不可變改成可變的並行 Map</strong>——提供 <code>register(Profile)</code>／<code>remove(String)</code>／<code>exists(String)</code>。這樣「啟動掃描」和「執行時新增」走的是同一份程式碼、同一套驗證。</li>
+<li><strong><code>AgentScheduler</code> 抽出 <code>registerProfile</code>，並加一張 <code>Map&lt;String, ScheduledFuture&lt;?&gt;&gt;</code> 的 handle 表</strong>——把每個排程的「取消把手」存起來，下一課要註銷或更新排程時才有東西可操作。</li>
+</ul>
+<p>另外，<code>ContextLoader</code> 負責把 Agent body 注入系統提示。它不做快取，所以 Agent body 一改，下次觸發立即生效——這條「改指令立即生效」的行為在第 17 節的 <code>ContextLoaderTest</code> 已經用 no-cache 回歸測試釘死，本課不必重測。</p>
+
+<h2>這一課的驗收，釘的是機制</h2>
+<p>因為機制是「掃描 → 推導 Profile → 註冊 → 自跑」，驗收測試就一段一段打：<code>AgentLoaderTest</code> 驗 frontmatter／body 切分與資源辨識；<code>DeriveProfileTest</code> 驗欄位正確映射、schedules 有帶過去；<code>AgentScanRegisterTest</code> 驗掃 N 個目錄就有 N 個進 <code>ProfileRegistry</code>；<code>ProfileRegistryRuntimeTest</code> 驗執行時註冊立刻可見；<code>AgentSchedulerRegisterTest</code> 驗 handle 存在；<code>ProgressiveDisclosureTest</code> 驗 body 進系統提示、參考與腳本不預載。</p>
+<p>其中最重要的一條判斷標準是：<strong>由目錄推導出來的 Agent，和手寫 Profile 的 Agent，必須走同一套驗證與同一條底座。</strong> 只要這一點成立，「定義一個 Agent 不必寫 Java」才是真的。</p>
+
+<div class="lesson-nav">
+  <div><a href="./agent-directory-anatomy.html">← 上一步：一個 Agent 目錄長什麼樣：AGENT.md、scripts、skills、REFERENCE.md</a></div>
+  <div><a href="./dynamic-registration-lifecycle.html">下一步：動態管理：免重啟掃描、上傳即上線與生命週期編排 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="插件化最重要的那條原則是什麼？" data-correct="2" data-explain="不改底座，只加一個 Profile 來源：把「讀 YAML」換成「從 AGENT.md 推導」。">
+  <button class="opt">重寫 AgentService 直接讀取目錄</button>
+  <button class="opt">為每種 Agent 型態新增模組</button>
+  <button class="opt">不改底座，只加一個 Profile 來源</button>
+  <button class="opt">把排程邏輯搬進 Agent 腳本</button>
+</div>
+
+<div class="quiz" data-question="為什麼「推導 Profile」就能讓底座零改動？" data-correct="0" data-explain="底座所有模組都只消費 Profile 值物件，不關心它從 YAML 還是目錄來。">
+  <button class="opt">底座只消費 Profile 值物件</button>
+  <button class="opt">底座會自動重新編譯自己</button>
+  <button class="opt">Profile 是唯一的 Java 類別</button>
+  <button class="opt">排程器會攔截所有檔案變更</button>
+</div>
+
+<div class="quiz" data-question="四步鏈路中，<code>deriveProfile(agentDir)</code> 負責什麼？" data-correct="3" data-explain="它把 AGENT.md frontmatter 映射成 Profile：name、provider、tools、notify_channels、schedules。">
+  <button class="opt">把 Agent 目錄壓縮成 zip 封存</button>
+  <button class="opt">啟動 ReAct 迴圈並等待模型</button>
+  <button class="opt">驗證 webhook 域名是否合法</button>
+  <button class="opt">把 frontmatter 映射成 Profile</button>
+</div>
+
+<div class="quiz" data-question="排程從 Agent frontmatter 推導進 Profile，對 AgentScheduler 的影響是？" data-correct="1" data-explain="排程器照 Profile.schedules 排程，本身程式碼零改動。">
+  <button class="opt">需要為每種 cron 新增分支</button>
+  <button class="opt">程式碼零改動</button>
+  <button class="opt">必須改讀 AGENT.md 檔案</button>
+  <button class="opt">要停用內建的 ReAct 迴圈</button>
+</div>
+
+<div class="quiz" data-question="這一課為什麼把 ProfileRegistry 改成可變的並行 Map？" data-correct="2" data-explain="為了讓啟動掃描與執行時註冊共用同一份程式碼與驗證，並替下一課的動態管理鋪路。">
+  <button class="opt">為了加快啟動掃描的速度</button>
+  <button class="opt">為了支援同時執行多個模型</button>
+  <button class="opt">讓啟動掃描與執行時註冊共用路徑</button>
+  <button class="opt">為了把 Profile 持久化到資料庫</button>
+</div>
+
+<div class="quiz" data-question="由目錄推導的 Agent 與手寫 Profile 的 Agent，驗收上必須滿足什麼？" data-correct="0" data-explain="兩者必須走同一套驗證與同一條底座，這才證明「定義 Agent 不必寫 Java」。">
+  <button class="opt">走同一套驗證與同一條底座</button>
+  <button class="opt">由目錄推導者享有更高權限</button>
+  <button class="opt">手寫 Profile 優先於目錄版本</button>
+  <button class="opt">兩者使用不同的執行引擎</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 插件化 Agent 與動態管理 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

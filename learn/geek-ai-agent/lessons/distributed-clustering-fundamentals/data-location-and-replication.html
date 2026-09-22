@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>資料定位與複製一致性：分片路由與同步／非同步</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>資料定位與複製一致性</h1>
+<p class="meta">Step 3/5 · 集群化六機制與選型</p>
+
+<h2>學習目標</h2>
+<p>能說明訊息如何先分片、再靠路由元數據表查到 Master，並比較同步與非同步複製的得失，講清 When 為何在外有可信來源（Redis）的情況下選擇非同步。</p>
+
+<h2>問題三：東西在哪一台</h2>
+<p>請求可能落在叢集的任何一台節點，但真正該處理它的可能不在本機。所以系統必須能回答：「這條訊息歸哪個分片（shard），而那個分片的 Master 現在在哪台？」</p>
+<p>這裡有一個很容易搞錯的地方：<strong>定位節點是「查表」，不是「對節點算雜湊」。</strong>分片與定位是兩件分開的事。</p>
+
+<h3>第一步：分片，決定訊息歸誰管</h3>
+<p>分片是把全體資料切成若干份、分散到不同節點的做法。要選一個路由鍵，把訊息映射到一個分片。常見策略有兩種：</p>
+<ul>
+<li><strong>雜湊分片：</strong>對 message_id 取雜湊，再用雜湊值對分片數取模，均勻打散。</li>
+<li><strong>範圍分片：</strong>按某個鍵的範圍（例如時間區間、ID 區段）切分。</li>
+</ul>
+<p>分片只是把訊息歸類，還沒有回答「這個分片的 Master 在哪台」。那要靠下一張表。</p>
+
+<h3>第二步：路由元數據表，查出 Master 在哪</h3>
+<p>系統維護一張「分片 → 副本」的元數據表，記錄每個分片的 Master 與 Slave 各在哪台機器上。這張表由 Controller（唯一決策選出來的那個角色）維護，寫入 etcd，每個節點再透過 Watch 拿到變更並快取在本地。定位的流程是：</p>
+<ol>
+<li>收到訊息，算出它屬於哪個分片（例如對 message_id 取雜湊）。</li>
+<li>查路由元數據表，得到這個分片的 Master 節點。</li>
+<li>若 Master 不是本機，用 gRPC 把請求轉發過去。</li>
+</ol>
+<p>這個設計有個很漂亮的效果：<strong>分片遷移與主備切換，本質上都只是「改這張表」</strong>。要搬一個分片，不是搬機器，而是把表裡那一格的指向改掉，再讓各節點透過 Watch 慢慢更新快取。路由表就是整個叢集的「地籍圖」。</p>
+
+<h3>順帶一提：一致性雜湊</h3>
+<p>分片數不是固定的——擴充、縮減都會讓分片數量變動。如果用「雜湊值對分片數取模」，只要分片數一變，幾乎所有訊息都會被重新映射到不同分片，造成大規模搬遷。</p>
+<p>一致性雜湊（consistent hashing）把節點與資料都映射到同一個環上，增減一個節點時，只有環上相鄰的一小段資料需要搬到新節點，其餘不受影響。它的價值不在「能不能分片」，而在<strong>分片變動時把搬遷量降到最低</strong>。</p>
+
+<h2>問題四：副本怎麼同步</h2>
+<p>有了主備副本，下一個問題是：寫入要怎麼從 Master 傳到 Slave？這有兩種做法，取捨非常典型。</p>
+
+<table>
+<thead>
+<tr><th>方式</th><th>流程</th><th>好處</th><th>代價</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>同步複製</strong></td><td>寫 Master → 複製到 Slave → 等 Slave 回 ACK → 才回傳成功</td><td>不丟資料：Slave 一定跟得上</td><td>慢；Slave 一抖動就拖慢 Master</td></tr>
+<tr><td><strong>非同步複製</strong></td><td>寫 Master → 立刻回傳成功 → 背景慢慢複製</td><td>快；Master 不被 Slave 拖累</td><td>Master 當機可能丟掉尾端尚未複製的資料</td></tr>
+</tbody>
+</table>
+
+<p>這其實就是 CAP 定理在工程上的具體樣子：一致性（C）與可用性（A）在網路分區（P）時只能選一邊。同步是把一致性拉到滿，代價是延遲與脆弱；非同步是把可用性與速度放前面，代價是可能丟一小截資料。</p>
+
+<h3>When 為什麼敢選非同步</h3>
+<p>關鍵不在「非同步比較快」，而在<strong>系統有沒有一個可靠的外部來源（source of truth）</strong>。</p>
+<p>在延遲投遞系統裡，訊息不是只存在記憶體的時間輪裡，它同時寫在 Redis 這種可靠的儲存中。時間輪只是「現在該送哪些」的記憶體視圖，Redis 才是資料本體。在這種前提下，Master 當機時非同步複製丟掉的，只是記憶體視圖裡最後那一小截還沒複製過去的排程狀態——重新從 Redis 載入就能補回來，<strong>真正的資料一條都沒丟</strong>。</p>
+<blockquote>判準：如果資料有可信的外部來源兜底，非同步複製的「可能丟尾端」就從資料遺失降級成視圖重建；如果沒有，就得認真考慮同步複製。</blockquote>
+
+<h2>把這一步放回全景</h2>
+<p>這一步回答了兩個問題：資料定位用「分片 + 路由元數據表」查表定位 Master，複製一致性用「同步／非同步」在 CAP 之間取捨。而這兩者——「Master 是誰」與「Slave 落後多少」——正好就是下一步故障接管要處理的原料。下一步把偵測、決策、執行三階段串起來。</p>
+
+<div class="lesson-nav">
+  <div><a href="./membership-and-election.html">← 上一步：成員感知與唯一決策</a></div>
+  <div><a href="./failover.html">下一步：故障接管 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="在叢集裡「定位分片 Master」的正確做法是？" data-correct="2" data-explain="定位是查路由元數據表，不是對節點清單算雜湊。">
+  <button class="opt">對節點清單再算一次雜湊</button>
+  <button class="opt">向所有節點廣播後取最快者</button>
+  <button class="opt">查詢分片到副本的路由表</button>
+  <button class="opt">固定由編號最小的節點擔任</button>
+</div>
+
+<div class="quiz" data-question="路由元數據表由誰維護、存在哪、其他節點怎麼拿到？" data-correct="1" data-explain="Controller 維護路由表並寫入 etcd，其他節點透過 Watch 取得變更並本地快取。">
+  <button class="opt">每台節點各自維護一份互不相干</button>
+  <button class="opt">Controller 維護、存 etcd、節點 Watch</button>
+  <button class="opt">由用戶端維護並隨請求附上</button>
+  <button class="opt">存在訊息內容裡隨訊息一起傳</button>
+</div>
+
+<div class="quiz" data-question="一致性雜湊（consistent hashing）的主要價值是什麼？" data-correct="3" data-explain="它讓節點增減時只有相鄰一小段資料需要搬移，把遷移量降到最低。">
+  <button class="opt">讓雜湊運算變得更快速</button>
+  <button class="opt">保證資料絕對不會重複</button>
+  <button class="opt">讓所有分片永遠等量負載</button>
+  <button class="opt">節點增減時減少資料搬遷</button>
+</div>
+
+<div class="quiz" data-question="同步複製最主要的代價是什麼？" data-correct="0" data-explain="同步要等 Slave 的 ACK，慢，而且 Slave 一抖動就拖慢 Master。">
+  <button class="opt">Slave 抖動會拖慢 Master</button>
+  <button class="opt">Master 一定會丟掉尾端資料</button>
+  <button class="opt">資料永遠不會被複製到 Slave</button>
+  <button class="opt">完全無法保證資料一致性</button>
+</div>
+
+<div class="quiz" data-question="When 選擇非同步複製的關鍵前提是什麼？" data-correct="2" data-explain="Redis 是可信的外部資料來源，非同步丟的只是記憶體視圖，可重新載入補回。">
+  <button class="opt">因為非同步複製比較容易實作</button>
+  <button class="opt">因為它完全不會丟失任何資料</button>
+  <button class="opt">因為有 Redis 作為可信資料來源</button>
+  <button class="opt">因為系統不需要考慮故障情況</button>
+</div>
+
+<div class="quiz" data-question="「分片遷移」在這個架構下本質上是什麼動作？" data-correct="1" data-explain="遷移與切換都只是修改路由元數據表，各節點透過 Watch 更新快取。">
+  <button class="opt">把整台機器的硬碟實體搬走</button>
+  <button class="opt">修改路由元數據表的指向</button>
+  <button class="opt">重新啟動所有分片的節點</button>
+  <button class="opt">向用戶端逐一通知新位址</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 集群化六機制與選型 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>五大能力的設計取捨</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>五大能力的設計取捨</h1>
+<p class="meta">Step 3/5 · OryxOS 技術方案</p>
+
+<h2>學習目標</h2>
+<p>能說出技術方案對 Provider、ReAct、Memory、Tool、Web 各下了哪些關鍵設計決定，以及哪些刻意留到擴展階段。</p>
+
+<h2>能力一：Provider——只做轉接，不做聰明事</h2>
+<p>Provider 的職責被壓到最小：把「呼叫一個模型」收斂成一個服務，內部用 Spring AI 的 <code>ChatClient</code> 去接各家供應商。它只做三件事：選模型、呼叫、把工具描述轉成模型看得懂的 schema。至於<strong>成本與可靠性的花招，核心階段全部不做</strong>：沒有失敗降級、沒有多路競速（hedge racing），模型出錯就直接往上拋給 Agent。</p>
+<p>這裡有一個很具體、很容易踩的坑：當系統同時註冊多個 provider 時，會存在<strong>多個型別相同的 <code>ChatModel</code> bean</strong>，光靠型別掃描無法判斷誰是誰。所以 OryxOS 不用型別掃描，而是維護一份<strong>顯式的「provider 名稱 → ChatModel」映射</strong>。每個 Provider 宣告一個唯一名稱，Profile 用名稱來引用它。原則是：<em>不明確映射，多 provider 就會壞</em>。</p>
+<p>成本透明也只做基本盤——把 tokens、provider、模型記進 <code>llm_calls</code> 表。完整的成本聚合與儀表板留到擴展階段。</p>
+
+<h2>能力二：ReAct——七步演算法與上下文紀律</h2>
+<p>ReAct 迴圈的核心是一段七步演算法：附加訊息 → 組裝 prompt → 呼叫 LLM → 若沒有工具呼叫就回傳最終答案 → 否則執行工具並把結果附加回去 → 繼續迴圈 → 撞到最大迭代次數時強制結束（預設 <strong>10 次</strong>，可在 Profile 覆寫）。</p>
+<pre><code>loop (max 10):
+  context.append(message)
+  prompt = build()
+  resp = llm(prompt)
+  if resp.hasToolCall:
+      result = execute(resp.toolCall)
+      context.append(result)
+  else:
+      return resp</code></pre>
+<p>它由三個模組組成：<strong>ReActLoop</strong>（幾十行的引擎）、<strong>PromptBuilder</strong>（四段組裝：system prompt、Memory 注入、對話歷史、可用工具清單）、<strong>ToolExecutor</strong>（找工具、過沙箱、執行、包 ToolResult、寫 <code>tool_invocations</code>）。</p>
+<p>上下文管理有明確紀律：保留 system prompt 加上最近 N 輪對話（預設 <strong>20</strong>）。核心階段刻意不並行呼叫工具、不做子 Agent 委派、也不做串流輸出。這不是能力不足，而是先把「一輪一輪正確地跑」做穩。</p>
+
+<h2>能力三：Memory——一個 facade，一個檔案</h2>
+<p>記憶在設計上有三層，但核心階段只做兩層，並且用一個<strong>統一的 facade（門面）</strong>把它們包起來，讓 ReAct 只呼叫一個介面。</p>
+<table>
+<thead>
+<tr><th>層</th><th>核心階段</th><th>做法</th></tr>
+</thead>
+<tbody>
+<tr><td>會話記憶</td><td>做</td><td>由 SessionManager 存進 SQLite</td></tr>
+<tr><td>長期記憶</td><td>做</td><td>一個 <code>MEMORY.md</code> 檔，用 <code>save_memory</code>／<code>recall_memory</code> 兩個工具存取</td></tr>
+<tr><td>情景記憶</td><td>推遲</td><td>核心階段不做</td></tr>
+</tbody>
+</table>
+<p>長期記憶的實作非常樸素：就是一個 markdown 檔，用日期當標題列，格式不嚴格、交給 LLM 自己解讀。它提供 append、load、recallByKeyword（關鍵字召回）、truncateIfNeeded（超長截斷）四個動作。</p>
+<p>Memory 注入 system prompt 的方式也很直接：<strong>每次組 prompt 都重新讀一次整個 MEMORY.md，不快取</strong>。這樣 <code>save_memory</code> 寫入後，下一輪立刻生效。代價是多一次檔案 I/O（約 1–2ms），核心階段認為可以接受。</p>
+<p>還有一個常見混淆點：<strong>MEMORY.md 跟 USER.md 是兩回事</strong>。USER.md 是使用者手寫的 Bootstrap 檔，OryxOS 對它唯讀，屬於「使用者的初始設定」；MEMORY.md 是 Agent 透過 <code>save_memory</code> 寫入的長期記憶，屬於「Agent 的成長記錄」。兩者都會進 system prompt，但來源與生命週期完全不同。</p>
+<p>核心階段也不做自動事實抽取、語義檢索、記憶 wiki、矛盾偵測與壓縮——只做簡單截斷，並在介面上<strong>預留向量檢索</strong>給擴展階段。</p>
+
+<h2>能力四：Tool——一個抽象，三種擴展</h2>
+<p>所有工具都收斂到 <strong>OryxTool</strong> 這個介面，只有四個方法：<code>getName</code>、<code>getDescription</code>、<code>getInputSchema</code>（JSON Schema）、<code>execute</code>（JSON 進、<code>ToolResult</code> 出）。<code>ToolResult</code> 帶四個欄位：成功旗標、內容、錯誤、是否可重試。內建工具、<code>@Tool</code> 外掛、MCP 工具全都包成 OryxTool，所以 ReAct 看不到差異。</p>
+<p>外掛擴展依成本分三級，原則是<strong>能用低成本的就別用高成本的</strong>：</p>
+<table>
+<thead>
+<tr><th>級別</th><th>形式</th><th>什麼時候用</th></tr>
+</thead>
+<tbody>
+<tr><td>第一級</td><td>零程式碼：<code>SKILL.md</code> + 現成 MCP</td><td>能用現成能力解決就優先用這級</td></tr>
+<tr><td>第二級</td><td>輕程式碼：自寫 MCP server</td><td>需要一點客製邏輯時</td></tr>
+<tr><td>第三級</td><td>重程式碼：Java <code>@Tool</code> Bean</td><td>要深度接進企業系統時</td></tr>
+</tbody>
+</table>
+<p>第一級值得多說一句：它不是工作流程引擎。OryxOS 只把 <code>SKILL.md</code> 的內容載入 system prompt，<strong>由 LLM 自己決定要用哪些工具、怎麼組合</strong>——OryxOS 不解析任務步驟、也不執行流程。這也是為什麼 SkillLoader 被歸在 ContextLoader，而不是 Tool 模組。</p>
+<p>註冊與安全集中在兩個元件：<strong>ToolRegistry</strong> 在啟動時掃描 <code>@Tool</code> 方法、加上 MCP 註冊的工具，全部包成 OryxTool；<strong>SandboxChecker</strong> 在執行前檢查檔案路徑、shell 指令、HTTP 網域三類白名單，違規則拋例外。核心階段不做容器隔離，那是擴展階段的事。</p>
+
+<h2>能力五：Web——十個端點，先不認證</h2>
+<p>Web 層用 Spring MVC（埠 8080、虛擬執行緒、<code>oryxos serve</code> 啟動），由六個 ApiController 組成：Session、Agent、Profile、Memory、Tool、System，外加 GlobalExceptionHandler 與 OpenAPI 文件。Controller 的職責很薄：只做驗證、包裝回應、處理錯誤，商業邏輯全部委派給 core 的服務。</p>
+<p>核心階段只做 <strong>10 個端點</strong>：Session 四類（建立、送訊息、取歷史、歸檔）、Agent 直接 invoke、查詢類（profiles／memory／tools）、維運類（health／info）。其餘 15 個端點推遲。核心<strong>不做認證</strong>（假設跑在內網，API Key 與 JWT 留到擴展）、不做 SSE、WebSocket、RBAC、限流。</p>
+<p>但邊界寫得很明確：訊息大小上限 32KB、session 歷史最多保留 100 條、Agent 呼叫 60 秒逾時回 504、錯誤碼用 HTTP status 加上內部碼（400／404／500／503）。核心階段的 CORS 全開——這正是「內網假設」的直接體現。</p>
+
+<h2>一個共同模式：核心只留主幹，介面先留好</h2>
+<p>把五個能力並排看，會發現同一個模式反覆出現：<strong>核心階段只實作最短可跑的主幹，把其餘明確推遲，但介面先預留。</strong>Provider 不降級、ReAct 不並行不委派、Memory 不用向量庫、Tool 不容器隔離、Web 不認證——每一項「先不做」都寫成了一句可驗證的理由。這讓後續實作有明確的護欄，也讓擴展階段知道該往哪裡加。</p>
+
+<div class="lesson-nav">
+  <div><a href="./layered-architecture.html">← 上一步：四層架構與五大能力的互相供養</a></div>
+  <div><a href="./module-and-support-structure.html">下一步：九個 Maven 模組與支撐層 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Provider 為什麼要用顯式名稱映射而非型別掃描？" data-correct="2" data-explain="多個 ChatModel bean 型別相同、名稱不定，型別掃描無法分辨。">
+  <button class="opt">因為型別掃描的執行速度較慢</button>
+  <button class="opt">因為名稱映射能自動產生 API 文件</button>
+  <button class="opt">因為多個同型別 bean 無法分辨</button>
+  <button class="opt">因為型別掃描不支援 Spring AI</button>
+</div>
+
+<div class="quiz" data-question="ReAct 迴圈的預設最大迭代次數是多少？" data-correct="1" data-explain="預設 10 次，且可在 Profile 中覆寫。">
+  <button class="opt">5 次</button>
+  <button class="opt">10 次</button>
+  <button class="opt">20 次</button>
+  <button class="opt">100 次</button>
+</div>
+
+<div class="quiz" data-question="ReAct 核心階段刻意不做下列哪一件事？" data-correct="3" data-explain="核心不並行工具、不委派子 Agent、不做串流輸出。">
+  <button class="opt">把工具結果附加回上下文</button>
+  <button class="opt">在最大迭代次數時強制結束</button>
+  <button class="opt">把每輪呼叫寫進審計表</button>
+  <button class="opt">並行執行多個工具呼叫</button>
+</div>
+
+<div class="quiz" data-question="MEMORY.md 與 USER.md 的主要差別是什麼？" data-correct="0" data-explain="USER.md 是使用者手寫唯讀；MEMORY.md 是 Agent 寫入的成長記錄。">
+  <button class="opt">一由使用者手寫，一由 Agent 寫入</button>
+  <button class="opt">一存 SQLite，一存外部向量庫</button>
+  <button class="opt">一只進 system prompt，一不進</button>
+  <button class="opt">一用於會話，一用於審計記錄</button>
+</div>
+
+<div class="quiz" data-question="第一級 Plugin Tool 的運作方式是什麼？" data-correct="1" data-explain="載入 SKILL.md 到 system prompt，由 LLM 決定工具與組合。">
+  <button class="opt">由 OryxOS 逐步解析並執行工作流</button>
+  <button class="opt">載入 SKILL.md 後由 LLM 自行組合</button>
+  <button class="opt">由 MCP server 自動觸發固定流程</button>
+  <button class="opt">由 Java Bean 定時排程執行任務</button>
+</div>
+
+<div class="quiz" data-question="SandboxChecker 檢查哪三類白名單？" data-correct="2" data-explain="檔案路徑、shell 指令、HTTP 網域三類。">
+  <button class="opt">使用者、角色、權限</button>
+  <button class="opt">模型、供應商、成本</button>
+  <button class="opt">路徑、指令、網域</button>
+  <button class="opt">Session、Profile、Skill</button>
+</div>
+
+<div class="quiz" data-question="核心階段 Web Service 對認證的處理為何？" data-correct="0" data-explain="核心假設內網、不做認證，API Key 與 JWT 留到擴展階段。">
+  <button class="opt">不做認證，假設跑在企業內網</button>
+  <button class="opt">強制 JWT 並支援多租戶隔離</button>
+  <button class="opt">整合 SSO 並同步企業目錄</button>
+  <button class="opt">以 API Key 做基本存取控制</button>
+</div>
+
+<div class="quiz" data-question="五個能力並排看，浮現的共同模式是什麼？" data-correct="3" data-explain="核心只留主幹並明確推遲其餘，但介面先預留。">
+  <button class="opt">每個能力都追求功能最完整</button>
+  <button class="opt">每個能力都直接引入外部服務</button>
+  <button class="opt">每個能力都自己實作一套框架</button>
+  <button class="opt">核心留主幹並預留擴展介面</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · OryxOS 技術方案 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

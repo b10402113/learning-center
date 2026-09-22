@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ReAct 迴圈是什麼：決定、行動、觀察</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>ReAct 迴圈是什麼</h1>
+<p class="meta">Step 1/5 · 手寫 ReAct 迴圈</p>
+
+<h2>學習目標</h2>
+<p>能說出 ReAct 迴圈的單輪結構（Reason→Act→Observe）與兩條停止條件，並講清「單次 LLM 呼叫＝聊天機器人、達成迴圈＝Agent」的分界。</p>
+
+<h2>先看一台「會想事」的機器</h2>
+<p>你請一個人幫你查北京天氣、再建議穿什麼。他的動作不是一次做完的：先想「我要查天氣」→ 去查 → 看到結果 → 再想「氣溫 8 度應該穿外套」→ 回答你。中間每一步的結果都餵回他的判斷。</p>
+<p>Agent 要「自主做事」，走的也是同一條路。這條路在 2022 年被整理成一個明確的框架，現在幾乎是所有 Agent 系統的事實標準：<strong>ReAct（Reasoning + Acting，推理與行動）</strong>。</p>
+
+<h2>單輪結構：Reason → Act → Observe</h2>
+<p>ReAct 把每一輪固定成三個動作，順序不能亂：</p>
+<table>
+<thead>
+<tr><th>階段</th><th>做什麼</th><th>產出</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Reason（推理）</strong></td><td>模型根據目前看到的上下文，決定下一步要做什麼</td><td>「我要查天氣」這個決定；可能是要呼叫某個工具，也可能是直接回答</td></tr>
+<tr><td><strong>Act（行動）</strong></td><td>執行模型選的那個工具（例如查天氣、讀檔案）</td><td>工具回傳的原始結果</td></tr>
+<tr><td><strong>Observe（觀察）</strong></td><td>把工具結果收回來，放進模型的上下文</td><td>下一輪能看到的資料</td></tr>
+</tbody>
+</table>
+<p>這一輪走完，模型看到比上一輪更多的資訊，於是重新 Reason，再 Act，再 Observe……一直到任務做完。每一步的「結果」都成為下一步的「輸入」，這就是迴圈的意義。</p>
+
+<h2>兩條停止條件</h2>
+<p>迴圈不能永遠轉下去，它有兩個終點：</p>
+<ol>
+<li><strong>模型不再發出工具呼叫</strong>——它決定直接回覆最終答案，這代表任務被認為做完了，迴圈把這個回覆當成結果交出去。</li>
+<li><strong>碰到最大迭代數上限</strong>——預設 10 輪（<code>MAX_ITERATIONS</code>，可覆寫）。就算模型一直要求呼叫工具，到達上限就強制結束，回覆一段「到達最大迭代數」的訊息。</li>
+</ol>
+<blockquote>
+為什麼要第二條？因為模型可能陷入「不斷想做事、卻沒真做完」的死迴圈（例如一直查同一個檔案）。沒有一條硬性上限，一部機器會無限燒錢與時間。這條上限是整個迴圈的第一道安全帶。
+</blockquote>
+
+<h2>ReAct 自己不做，只指揮</h2>
+<p>這裡有個新手最容易搞錯的點：<strong>ReAct 迴圈本身既不呼叫模型，也不執行工具</strong>。它只是排程——負責決定「這一輪要做什麼」，真正動手的是另外兩個角色：</p>
+<ul>
+<li>呼叫 LLM 的工作，委派給 Provider（上一節的 ProviderService）。</li>
+<li>執行工具的工作，委派給 ToolExecutor。</li>
+</ul>
+<p>所以迴圈像一台機器的「腦」：它想、它指揮、它看結果，但動手的是手腳。這個「迴圈只排程、動手全委派」的職責切割，是下一節的主角。</p>
+
+<h2>七步算法</h2>
+<p>把上面濃縮成 OryxOS 技術方案裡那份核心算法，就是七步：</p>
+<ol>
+<li>把使用者訊息加進 Session（append message）</li>
+<li>組裝這一輪的 prompt（assemble prompt）</li>
+<li>呼叫 LLM</li>
+<li>若模型沒發出工具呼叫 → 回傳最終回覆</li>
+<li>否則執行工具，把結果加回上下文</li>
+<li>回到第 2 步，重複</li>
+<li>到達 max iterations（預設 10）→ 強制結束</li>
+</ol>
+
+<h2>為什麼「迴圈」等於「Agent」</h2>
+<p>把分界講清楚：<strong>單次 LLM 呼叫只是聊天機器人；只有進入「決策→行動→觀察」的迴圈，才算 Agent</strong>。Claude Code、Cursor、LangChain 的 agent 底層全是這個模式——它們的迴圈長得一樣，差別只在工具種類與執行環境的深度。</p>
+<p>這也對應你每天在用的工具：Claude Code 幫你改檔時，它就是在跑 ReAct——決定改哪個檔、呼叫讀檔工具、看了結果再改。把這層窗戶打開，你就在看自己正在用的機器的心跳。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./loop-only-schedules.html">下一步：迴圈只做排程：職責分離與為什麼手寫 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="ReAct 單輪的固定順序是什麼？" data-correct="1" data-explain="單輪固定是 Reason→Act→Observe：先決定下一步、再執行一個工具、最後把結果收回上下文。">
+  <button class="opt">Act → Reason → Observe</button>
+  <button class="opt">Reason → Act → Observe</button>
+  <button class="opt">Observe → Act → Reason</button>
+  <button class="opt">Reason → Observe → Act</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不是 ReAct 迴圈的停止條件？" data-correct="2" data-explain="正常只靠「沒工具呼叫」與「最大迭代數」兩個終點，工具執行成功本身不是終點。">
+  <button class="opt">模型這輪沒發出任何工具呼叫</button>
+  <button class="opt">迭代數到達 MAX_ITERATIONS 上限（預設 10）</button>
+  <button class="opt">任何一次工具呼叫成功執行完成</button>
+  <button class="opt">模型決定直接回覆最終答案</button>
+</div>
+
+<div class="quiz" data-question="ReAct 迴圈自己實際動手做什麼？" data-correct="3" data-explain="迴圈只排程與指揮：它自己既不呼叫模型，也不執行工具，兩者分別委派給 Provider 與 ToolExecutor。">
+  <button class="opt">親手呼叫 LLM 取得回覆</button>
+  <button class="opt">親自執行每一個工具呼叫</button>
+  <button class="opt">自行組織工具與模型之間的協議細節</button>
+  <button class="opt">決定這一輪要做什麼，並把動手交給別人</button>
+</div>
+
+<div class="quiz" data-question="真正執行工具（例如查天氣）的是哪個角色？" data-correct="2" data-explain="工具執行由 ToolExecutor 負責；呼叫模型由 Provider 負責，兩者都被 ReAct 迴圈指揮。">
+  <button class="opt">LLM 本身直接執行</button>
+  <button class="opt">ProviderService 執行</button>
+  <button class="opt">ToolExecutor 執行</button>
+  <button class="opt">使用者手動執行</button>
+</div>
+
+<div class="quiz" data-question="為什麼需要最大迭代數上限？" data-correct="2" data-explain="模型可能陷入不斷要求工具卻不完成任務的死迴圈，上限避免無限燒時間與成本。">
+  <button class="opt">因為模型只能記住十輪以內的內容</button>
+  <button class="opt">因為工具服務商的免費額度剛好是十次</button>
+  <button class="opt">防止模型一直要求工具而永不收尾</button>
+  <button class="opt">因為十輪之後上下文就自動清空了</button>
+</div>
+
+<div class="quiz" data-question="「單次 LLM 呼叫」與「Agent」的技術分界是什麼？" data-correct="0" data-explain="只有進入決策→行動→觀察的自主迴圈才算 Agent，單次呼叫只是聊天機器人。">
+  <button class="opt">是否存在自主的決策迴圈</button>
+  <button class="opt">模型是否足夠大</button>
+  <button class="opt">是否支援多種語言</button>
+  <button class="opt">是否能存取網際網路</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 手寫 ReAct 迴圈 · Step 1/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

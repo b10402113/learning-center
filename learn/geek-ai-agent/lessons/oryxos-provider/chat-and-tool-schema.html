@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一次呼叫與工具 schema 轉換</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一次呼叫與工具 schema 轉換</h1>
+<p class="meta">Step 4/5 · Provider 抽象</p>
+
+<h2>學習目標</h2>
+<p>能說出 ProviderService.chat 一次同步呼叫的完整路徑（Profile 路由 → 構建 Prompt → 關閉工具自動執行 → 呼叫 ChatModel → 回傳 text／toolCall／usage），並解釋 ToolSchemaAdapter 為何「只翻譯不執行」。</p>
+
+<h2>一趟呼叫從哪裡開始</h2>
+<p>上層（ReAct 迴圈）跟 ProviderService 說話時，只傳三個東西：<strong>sessionId</strong>（審計用）、<strong>Profile</strong>（決定用哪個模型）、<strong>ProviderRequest</strong>（這次要送的內容：system prompt、結構化對話、可用工具清單）。一次呼叫的旅程，大致是：</p>
+<pre><code>chat(sessionId, Profile, request):
+  model   = 依 Profile 從顯式映射找 ChatModel
+  prompt  = 構建 Prompt（關閉工具自動執行 + 工具 schema + 消息）
+  resp    = model.call(prompt)          ← 真正的網路呼叫
+  return  (text, toolCalls, usage)      ← 原樣轉回給迴圈</code></pre>
+
+<h2>第一步：Profile 路由到模型</h2>
+<p>「選模」這一步在 code 裡靠<strong>按 name 的顯式查詢</strong>完成：把 Provider name 送進去，從映射表取出對應的 <code>ChatModel</code>。這裡有個值得注意的實作技巧：模型實例會<strong>依「apiKey|baseUrl」的組態指紋快取</strong>——同一指紋沿用舊實例，配置變了就原地重建替換。好處是：反覆改 key／url 不會累積一堆無法回收的舊模型實例，符合「動態 provider」的胃口。</p>
+
+<h2>第二步：構建 Prompt 的關鍵——關閉自動執行</h2>
+<p>構建 Prompt 時，<code>OpenAiChatOptions</code> 裡必須設定 <code>internalToolExecutionEnabled = false</code>。這一步就是陷阱二的落點：Spring AI 預設會自動執行工具，你要在這裡明確關掉，讓「執行權只在 ToolExecutor」這件事落實到每次呼叫的請求裡。選模、構建、呼叫、回傳——<strong>每一環都不碰工具執行</strong>。</p>
+<p>構建的另一方面是<strong>保留結構化消息</strong>：system prompt 之外，逐條轉換對話消息，並保留 assistant tool_calls 與 tool 結果的 <code>tool_call_id</code> 配對。為什麼重要？多步 ReAct 裡，模型必須能從消息看出「某工具已經被呼叫過、結果是 X」，否則它會反覆重呼叫同一個工具。</p>
+
+<h2>第三步：ToolSchemaAdapter——只翻譯、不執行</h2>
+<p>送進請求的工具，必須先從 OryxOS 內部的 <code>OryxTool</code> 長相翻成 Spring AI 認得的工具描述。這份翻譯由 <code>ToolSchemaAdapter</code> 負責：它讀 OryxTool 的三要素——<strong>name、description、inputSchema</strong>——產出對應的 <code>ToolDefinition</code>。</p>
+<p>關鍵在它的名字：SchemaOnly。這個 adapter 產出的 callback<strong>只攜帶 schema 描述，不攜帶任何可執行邏輯</strong>。萬一有人誤觸它的 <code>call()</code>，它直接丟例外："Provider 只翻譯工具、不執行工具"。這是一個「雙保險」：正常流程靠 <code>internalToolExecutionEnabled=false</code> 擋住；就算框架失靈想執行，這個的 <code>call()</code> 也會爆炸給你聽，提醒你執行權放錯地方了。</p>
+
+<h2>第四步：呼叫與回傳</h2>
+<p>一切就緒後呼叫 <code>model.call(prompt)</code>。回傳的 <code>ChatResponse</code> 被轉成 OryxOS 自己的 <code>ProviderResponse</code>：<strong>text</strong>（純文字回答）、<strong>toolCalls</strong>（模型想要呼叫的工具請求，帶 id／name／引數）、<strong>usage</strong>（這次的 token 用量）。</p>
+<p>如果 <code>toolCalls</code> 非空，Provider 只是把它<strong>原樣交回給迴圈</strong>。迴圈看到後，才讓 ToolExecutor 真正執行。Provider 的職責在呼叫返回那一刻就結束了。</p>
+
+<h2>流式呢？（一個優雅的回退）</h2>
+<p>ProviderService 還提供 <code>chatStream</code>。它的介面設計很克制：<code>chatStream</code> 有一個<strong>預設實作</strong>——非同步呼叫 <code>chat</code>，收到完整回應後把全文一次性交給 <code>onToken</code> 回呼。若某個實作真的支援流式，就覆寫這個方法做逐段回呼。也就是說，「流式」是可選的升級，而不是必須的平行世界。而且為了不拖垮合法呼叫，流式取得失敗且結果殘缺時，實作必須上拋錯誤，絕不能把殘缺內容當完整回傳。</p>
+
+<div class="lesson-nav">
+  <div><a href="./two-layer-config-and-profile.html">← 上一步：兩層配置與 Profile 系統</a></div>
+  <div><a href="./audit-and-acceptance.html">下一步：llm_calls 審計與驗收 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="ProviderService.chat 的第一步是做什麼？" data-correct="2" data-explain="依 Profile 從顯式映射表選出對應的 ChatModel。">
+  <button class="opt">執行模型回傳的工具呼叫</button>
+  <button class="opt">查詢使用者權限</button>
+  <button class="opt">依 Profile 找到對應的 ChatModel</button>
+  <button class="opt">把回應格式化為 JSON</button>
+</div>
+
+<div class="quiz" data-question="構建 Prompt 時 internalToolExecutionEnabled 要設成多少？" data-correct="1" data-explain="關閉框架自動執行，執行權完全交給 ToolExecutor。">
+  <button class="opt">保持框架預設值</button>
+  <button class="opt">false</button>
+  <button class="opt">true</button>
+  <button class="opt">null 讓它自行判斷</button>
+</div>
+
+<div class="quiz" data-question="ToolSchemaAdapter 讀 OryxTool 的哪三樣東西來翻譯？" data-correct="0" data-explain="name、description、inputSchema——三要素構成工具描述。">
+  <button class="opt">名稱、描述、輸入 schema</button>
+  <button class="opt">門檻、呼叫次數、回退策略</button>
+  <button class="opt">金鑰、端點、超時</button>
+  <button class="opt">參數、預算、審計旗標</button>
+</div>
+
+<div class="quiz" data-question="如果誤觸了 ToolSchemaAdapter 產物 call()，會發生什麼？" data-correct="3" data-explain="它的 call() 總是拋例外，這是「絕不執行」的第二道保險。">
+  <button class="opt">工具被執行一次</button>
+  <button class="opt">結果被快取起來</button>
+  <button class="opt">靜默回傳空字串</button>
+  <button class="opt">直接拋出例外提醒</button>
+</div>
+
+<div class="quiz" data-question="ProviderResponse 的 toolCalls 非空時，Provider 要做什麼？" data-correct="2" data-explain="原樣交回給迴圈，由 ToolExecutor 決定是否執行。">
+  <button class="opt">立刻執行並回傳結果</button>
+  <button class="opt">依白名單審核後執行</button>
+  <button class="opt">原樣交回給迴圈處理</button>
+  <button class="opt">丟棄它保持回應純文字</button>
+</div>
+
+<div class="quiz" data-question="chatStream 的預設實作是怎麼做的？" data-correct="1" data-explain="預設不過度設計：呼叫 chat 後把全文一次性回呼；真正支援流式才覆寫。">
+  <button class="opt">只支援平行串流管道</button>
+  <button class="opt">先呼叫 chat 再整段回呼</button>
+  <button class="opt">把回應儲存到資料表</button>
+  <button class="opt">絕不接受任何流式請求</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Provider 抽象 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

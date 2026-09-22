@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>實作 WhitelistSandbox 並接進既有工具</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>實作 WhitelistSandbox 並接進既有工具</h1>
+<p class="meta">Step 4/4 · Sandbox</p>
+
+<h2>學習目標</h2>
+<p>能用 Sandbox／SandboxAction／ActionType 最小物件先釘介面，實作 WhitelistSandbox 的三個私有檢查，並在每個 @Tool 方法開頭只加一行 enforce 接進既有工具。</p>
+
+<h2>這一節的邊界：只做最小的有用增量</h2>
+<p>上一課把介面牆釘死了。這一節做三件事：<strong>把介面背後的空白填上白名單實作，並把它接進既有工具</strong>。明確<strong>不做</strong>兩件事：不寫容器／microVM 實作，也不改 <code>ToolExecutor</code> 的審計邏輯——它的失敗路徑已經存在，<strong>一次沙箱拒絕就是一次很普通的工具失敗</strong>。</p>
+<blockquote>
+<strong>Sandbox 違規只是一隻普通的 RuntimeException。</strong>它從 Tool 丟出來，就自動走掉既有 <code>success=false</code> 的工具審計路徑——不需要任何新程式碼。
+</blockquote>
+
+<h2>動手前先拆任務</h2>
+<p>實作順序與上一課的設計順序保持一致：</p>
+<ol>
+  <li>定義 <code>Sandbox</code>、<code>SandboxAction</code>、<code>ActionType</code>、<code>SandboxViolationException</code> 並凍結。</li>
+  <li>寫 <code>WhitelistSandbox</code>：讀 <code>file.allowed_paths</code>、<code>shell.allowed_commands</code>、<code>http.allowed_domains</code> 三個組態，做檔案路徑／shell 指令／HTTP 網域三個檢查。</li>
+  <li>在每個 Tool 的 execute 開頭插 <code>sandbox.enforce(...)</code>。</li>
+  <li>確認失敗路徑不需要新程式碼。</li>
+  <li>自我檢查介面中立性（想像一個 microVM 實作）。</li>
+</ol>
+<p>全部放在 <code>oryxos-tool</code> 模組，<strong>既有的 IO 程式碼一行不動</strong>。</p>
+
+<h2>程式怎麼寫：最小物件先凍結介面</h2>
+<pre><code>// 1. 介面：只表達意圖
+interface Sandbox {
+    void enforce(SandboxAction action);
+}
+
+// 2. 動作：type + target，沒有白名單/容器/鏡像字眼
+record SandboxAction(ActionType type, String target) {}
+
+// 3. 動作類型：讀寫拆開，為未來「讀/寫各自權限」留路
+enum ActionType {
+    FILE_READ, FILE_WRITE, SHELL_COMMAND, HTTP_REQUEST
+}
+
+// 4. 違規例外：復用既有工具的失敗路徑
+class SandboxViolationException extends RuntimeException {
+    public SandboxViolationException(String msg) { super(msg); }
+}
+</code></pre>
+<blockquote>
+<strong>注意介面紀律：</strong><code>SandboxAction</code> 裡不放任何與白名單、容器、鏡像有關的字眼——那是上一課對意的介面的承諾。
+</blockquote>
+
+<h2>WhitelistSandbox：三個私有檢查</h2>
+<pre><code>@ConfigurationProperties(prefix = "file")  record FileSandboxProperties   (List&lt;String&gt; allowedPaths) { }
+@ConfigurationProperties(prefix = "shell") record ShellSandboxProperties(List&lt;String&gt; allowedCommands) { }
+@ConfigurationProperties(prefix = "http")  record HttpSandboxProperties  (List&lt;String&gt; allowedDomains) { }
+
+class WhitelistSandbox implements Sandbox {
+    void enforce(SandboxAction a) {
+        switch (a.type()) {
+            case FILE_READ, FILE_WRITE -> checkFilePath(a.target(), fileProps);
+            case SHELL_COMMAND       -> checkShellCommand(a.target(), shellProps);
+            case HTTP_REQUEST        -> checkHttpUrl(a.target(), httpProps);
+        }
+    }
+    private void checkFilePath(String p, FileSandboxProperties props) {
+        Path abs = Path.of(p).normalize().toAbsolutePath();
+        if (props.allowedPaths().stream()
+                .noneMatch(allow -> abs.startsWith(Path.of(allow).normalize().toAbsolutePath())))
+            throw new SandboxViolationException("路徑不在白名單: " + p);
+    }
+    private void checkShellCommand(String cmd, ShellSandboxProperties props) {
+        String firstToken = cmd.trim().split("\\s+")[0];
+        if (!props.allowedCommands().contains(firstToken))
+            throw new SandboxViolationException("指令不在白名單: " + cmd);
+    }
+    private void checkHttpUrl(String url, HttpSandboxProperties props) {
+        // 精確匹配，或 *.example.com 萬用準配 api.example.com
+        if (!allowed(props.allowedDomains(), hostOf(url)))
+            throw new SandboxViolationException("網域不在白名單: " + url);
+    }
+}
+</code></pre>
+<p>三個檢查都設為 <strong>private</strong>，對外只暴露 <code>enforce</code>——這正是上一課「不讓介面被第一檔帶偏」的一次實作落地。</p>
+<p>最常被漏掉的一行是這裡：<code>Path.normalize().toAbsolutePath()</code> 擋住了 <code>../../etc/passwd</code> 這種目錄穿越——<strong>應用層最常見的洞</strong>。</p>
+
+<h2>接進既有工具：一行 enforce</h2>
+<p>正確的抽象讓接線成本小得不成比例：</p>
+<pre><code>@Component class FileTools {
+    @Tool public ToolResult readFile(@ToolParam String path) {
+        sandbox.enforce(new SandboxAction(ActionType.FILE_READ, path)); // ← 一行
+        return doRead(path); // doRead 一行不動
+    }
+}
+@Tool public ToolResult writeFile(...)  { sandbox.enforce(FILE_WRITE, path); return doWrite(path); }
+@Tool public ToolResult shell(String cmd) { sandbox.enforce(SHELL_COMMAND, cmd); return doExecute(cmd); }
+@Tool public ToolResult http_get(String url) { sandbox.enforce(HTTP_REQUEST, url); return doGet(url); }
+</code></pre>
+<p>對 <code>ShellTools</code>、<code>FileTools</code>（<code>readFile</code>／<code>writeFile</code>）、<code>HttpTools</code> 都是在 <code>@Tool</code> 方法頂端加一行；<code>doExecute</code>／<code>doRead</code>／<code>doWrite</code>／<code>doGet</code> 全部不動。NotifyTools 也一樣，在發送前先過 <code>Sandbox.enforce(HTTP_REQUEST)</code>。</p>
+
+<h2>驗收 Harness：allow + reject + bypass 三件套</h2>
+<p>測試照三個族群組織（檔案路徑／shell 指令／HTTP 網域），每一組都有三種：<strong>准（allow）、拒（reject）、繞（bypass）</strong>。</p>
+<ul>
+  <li>相對路徑穿越：靠 normalize 攔截。</li>
+  <li>shell：第一個空白 token 的空白／大小寫變體。</li>
+  <li>網域：精確匹配 + 萬用 <code>*.example.com</code> 匹配 <code>api.example.com</code>，但<strong>不</strong>匹配 <code>evil-example.com</code>。</li>
+</ul>
+<blockquote>
+<strong>那個經典的洞：</strong><code>"evilexample.com".endsWith("example.com")</code> 是 true——所以萬用匹配必須含「點邊界」（<code>.example.com</code>），否則 <code>evil-example.com</code> 就繞過去了。
+</blockquote>
+<p>其次，<strong>只斷言「丟了例外」是不夠的</strong>——接線回歸測試還必須證明真實 IO 沒有發生：<code>verify(executor, never())</code>，斷言被擋的輸入之下，真正的讀檔／寫檔／執行從沒被呼叫。<strong>「能不能被繞」比「准不准」更值得測。</strong></p>
+
+<h2>做完怎麼驗</h2>
+<ul>
+  <li><strong>真實鏈路整合</strong>：白名單只放 <code>ls</code>，跑一個被擋的指令，確認丟 <code>SandboxViolationException</code>、<code>tool_invocations</code> 出現 <code>success=false</code> 且 message 可讀。</li>
+  <li><strong>介面中立性自查</strong>：<code>KataMicroVmSandbox</code> 需要新方法嗎？不需要。</li>
+  <li><strong>組態語意寫清楚</strong>：空的白名單 = 「什麼都不准」，不是「跳過驗證」（fail-closed）。</li>
+  <li>被改動的四個 Tool 原測試保持綠。</li>
+</ul>
+<p>誠實的邊界：<code>enforce</code> 目前只覆蓋工具執行路徑；MCP 子行程與行程內直接呼叫仍然裸露，方向是未來做整個行程的隔離。</p>
+
+<div class="lesson-nav">
+  <div><a href="./sandbox-interface-design.html">← 上一步：介面先行的 Sandbox 抽象：不讓第一檔帶偏</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Sandbox 拒絕一次工具呼叫，正確的失敗處理是什麼？" data-correct="2" data-explain="一次 sandbox 違規就是一隻普通 RuntimeException，自動走現有的 success=false 工具審計路徑。">
+  <button class="opt">重啟整個 Agent</button>
+  <button class="opt">把違規記錄到單獨一張新表</button>
+  <button class="opt">丟一隻普通 RuntimeException 走既有審計路徑</button>
+  <button class="opt">靜默吞掉不記錄</button>
+</div>
+
+<div class="quiz" data-question="ActionType 為什麼要把 FILE_READ 和 FILE_WRITE 拆開？" data-correct="3" data-explain="為未來「讀／寫各自權限」留路，現在同名指向同一個檢查。">
+  <button class="opt">因為 Java enum 不允許合併</button>
+  <button class="opt">因為兩者檢查邏輯不同</button>
+  <button class="opt">因為要分兩個模組</button>
+  <button class="opt">為未來讀寫各自權限留路</button>
+</div>
+
+<div class="quiz" data-question="checkFilePath 為什麼要先 normalise + toAbsolutePath？" data-correct="1" data-explain="normalize 後以絕對路徑做 startsWith，擋住 ../../etc/passwd 目錄穿越。">
+  <button class="opt">為了加快比較速度</button>
+  <button class="opt">擋住目錄穿越（../..）</button>
+  <button class="opt">為了支援 Windows 路徑</button>
+  <button class="opt">讓白名單可以大小寫不分</button>
+</div>
+
+<div class="quiz" data-question="網域萬用匹配必須包含點邊界（.example.com）的原因是什麼？" data-correct="0" data-explain="否則 evilexample.com 因為 endsWith(\"example.com\") 是 true 而繞過。">
+  <button class="opt">防 evilexample.com 這類繞過</button>
+  <button class="opt">讓子網域都能夠匹配</button>
+  <button class="opt">加快字串比較</button>
+  <button class="opt">避免 DNS 查詢</button>
+</div>
+
+<div class="quiz" data-question="接線回歸測試為什麼要驗證 verify(executor, never())？" data-correct="2" data-explain="只斷言丟例外不夠——必須證明真實 IO 從沒發生，繞不開。">
+  <button class="opt">為了節省測試時間</button>
+  <button class="opt">為了符合 checkstyle</button>
+  <button class="opt">證明被擋時真實 IO 從未發生</button>
+  <button class="opt">為了檢查執行緒安全</button>
+</div>
+
+<div class="quiz" data-question="組態裡白名單是空清單，語意是什麼？" data-correct="3" data-explain="空清單 = 什麼都不准（fail-closed），不是跳過驗證。">
+  <button class="opt">跳過驗證，都准</button>
+  <button class="opt">只擋可疑請求</button>
+  <button class="opt">回歸預設值重載</button>
+  <button class="opt">什麼都不准，不是跳過驗證</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Sandbox · Step 4/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

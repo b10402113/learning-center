@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>四層架構與五大能力的互相供養</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>四層架構與五大能力的互相供養</h1>
+<p class="meta">Step 2/5 · OryxOS 技術方案</p>
+
+<h2>學習目標</h2>
+<p>能畫出 access／engine／capability／foundation 四層，並說明五大能力如何各自供養 ReAct 引擎、又如何在兩端被暴露出去。</p>
+
+<h2>把一個作業系統拆成四層</h2>
+<p>七個決策講完「選哪條路」，接著就要回答「整個東西長什麼樣」。OryxOS 是一個<strong>單體（monolith）</strong>的 Spring Boot 應用——不是微服務，而是一個程式，內部再分成四層。每層只做自己那一段，並只透過介面跟上下層說話。</p>
+<table>
+<thead>
+<tr><th>層</th><th>放什麼</th><th>一句話角色</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>access（接入層）</strong></td><td>CLI Channel、Web REST API</td><td>外界從哪裡進來</td></tr>
+<tr><td><strong>engine（引擎層）</strong></td><td>ReActLoop、PromptBuilder、ToolExecutor</td><td>Agent 怎麼想與動</td></tr>
+<tr><td><strong>capability（能力層）</strong></td><td>Provider、Memory、Tool</td><td>引擎能用的三種資源</td></tr>
+<tr><td><strong>foundation（基礎層）</strong></td><td>Profile／Bootstrap／Skill 載入、Session 儲存、SQLite、config/secrets</td><td>一切運轉的地基</td></tr>
+</tbody>
+</table>
+<p>注意兩個關鍵設計：<strong>接入層有兩個入口</strong>（CLI 與 Web），但它們餵給的是<strong>同一個引擎</strong>；而<strong>能力層只有三個</strong>成員（Provider、Memory、Tool），並不含 ReAct——因為 ReAct 是引擎本身，是「使用者」，不是「被使用的資源」。</p>
+
+<h2>五大能力怎麼互相供養</h2>
+<p>需求文件裡的五大能力是 Provider、ReAct、Memory、Tool、Web Service。到了技術方案，它們的關係被講得更精確：<strong>ReAct 是引擎，另外三個是餵給引擎的資源，Web Service 是把引擎能力開放出去的出口。</strong></p>
+<p>用一句話概括：<em>Provider／Memory／Tool 供養 ReAct 引擎；引擎的能力再透過 CLI 與 Web Service 暴露。</em></p>
+<ul>
+<li><strong>Provider</strong> 讓迴圈「有得想」——沒有它，模型呼叫無從發生。</li>
+<li><strong>Memory</strong> 讓每一輪「不必從頭」——它給迴圈上下文。</li>
+<li><strong>Tool</strong> 讓迴圈「能動手」——它給迴圈執行力。</li>
+<li><strong>ReAct</strong> 把上面三者串成一個會自己迭代的過程。</li>
+<li><strong>Web Service</strong> 把整個過程包成 REST，讓外部系統能叫它。</li>
+</ul>
+<p>這個視角很重要：五大能力<strong>不是五個平行模組</strong>，而是一條有方向的鏈。缺任何一環，Agent 都會退化——少了 Tool 只能動嘴，少了 Memory 每次失憶，少了 Provider 就沒有腦。</p>
+
+<h2>資料怎麼流過這四層</h2>
+<p>把一輪對話攤開來看，四層各司其職：</p>
+<pre><code>使用者輸入
+  → [access] CLI 或 Web 收到請求，建立 Session
+  → [engine] ReActLoop 啟動一輪
+      → [capability] MemoryService 給歷史與長期記憶
+      → [engine] PromptBuilder 組裝 prompt
+      → [capability] Provider 呼叫模型
+      → [capability] ToolExecutor 執行工具（含沙箱檢查）
+      → [engine] 把結果附加回上下文，再問一次模型
+  → [foundation] Session、審計表寫入 SQLite
+  → [access] 回覆使用者</code></pre>
+<p>這就是「四層架構」真正的作用：把「進來的路」「想事情的路」「能用的資源」「記得住的地基」切乾淨。切乾淨之後，<strong>擴展只需要動邊緣</strong>——例如新增一個企業 IM 渠道，只是多一個接入層的 adapter，呼叫既有的 Agent API，完全不用碰引擎與能力層。</p>
+
+<h2>為什麼單體反而是正確答案</h2>
+<p>聽到「作業系統」很容易想像成微服務大軍，但核心階段的 OryxOS 刻意選單體：一個 JAR、一個行程、四層清楚切開。理由和七個決策一脈相承——分散式會帶來網路、協調、部署的複雜度，而核心階段要的是<strong>最短可跑</strong>。單體不是妥協，而是把「先讓引擎正確地跑起來」放在「先讓它分散」前面。</p>
+<p>而四層架構確保了單體不會變成大泥球：層與層之間靠介面，所以未來要拆模組、加渠道、加工具，都有乾淨的接縫可切。</p>
+
+<div class="lesson-nav">
+  <div><a href="./seven-decisions.html">← 上一步：七大關鍵技術決策</a></div>
+  <div><a href="./capability-design-tradeoffs.html">下一步：五大能力的設計取捨 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="capability 能力層包含下列哪三個成員？" data-correct="1" data-explain="Provider、Memory、Tool 是餵給引擎的資源；ReAct 是引擎本身。">
+  <button class="opt">ReAct、PromptBuilder、ToolExecutor</button>
+  <button class="opt">Provider、Memory、Tool</button>
+  <button class="opt">CLI、Web、Channel</button>
+  <button class="opt">Profile、Session、SQLite</button>
+</div>
+
+<div class="quiz" data-question="access 接入層包含哪兩個入口？" data-correct="2" data-explain="CLI Channel 與 Web REST API 兩個入口餵給同一個引擎。">
+  <button class="opt">Provider 與 Memory</button>
+  <button class="opt">Engine 與 Capability</button>
+  <button class="opt">CLI Channel 與 Web REST API</button>
+  <button class="opt">Bootstrap 與 Skill</button>
+</div>
+
+<div class="quiz" data-question="五大能力之間的關係，最準確的描述是哪一個？" data-correct="0" data-explain="Provider/Memory/Tool 供養 ReAct，Web Service 是對外出口。">
+  <button class="opt">三者供養引擎，再由出口暴露</button>
+  <button class="opt">五個能力完全平行、互不依賴</button>
+  <button class="opt">Web Service 供養 ReAct 引擎</button>
+  <button class="opt">Memory 是引擎，其餘都是資源</button>
+</div>
+
+<div class="quiz" data-question="為什麼新增企業 IM 渠道不需要改動引擎？" data-correct="3" data-explain="渠道只是接入層的 adapter，呼叫既有 Agent API。">
+  <button class="opt">因為渠道會自動覆寫引擎設定</button>
+  <button class="opt">因為引擎會動態生成新渠道程式</button>
+  <button class="opt">因為渠道被編譯進同一個模組</button>
+  <button class="opt">因為渠道只接在接入層邊緣</button>
+</div>
+
+<div class="quiz" data-question="foundation 基礎層不包含下列哪一項？" data-correct="1" data-explain="ReActLoop 屬引擎層；foundation 管 Profile、Session、SQLite 與 config。">
+  <button class="opt">Session 的持久化儲存</button>
+  <button class="opt">ReActLoop 的迴圈排程</button>
+  <button class="opt">Profile 與 Skill 的載入</button>
+  <button class="opt">config 與 secrets 的讀取</button>
+</div>
+
+<div class="quiz" data-question="核心階段的 OryxOS 為什麼選擇單體？" data-correct="2" data-explain="分散式會帶來協調與部署複雜度，核心要最短可跑。">
+  <button class="opt">因為單體天生比微服務更快</button>
+  <button class="opt">因為 Spring Boot 不支援雲端部署</button>
+  <button class="opt">因為最短可跑優先於分散部署</button>
+  <button class="opt">因為單體不需要任何介面切分</button>
+</div>
+
+<div class="quiz" data-question="分層架構真正的價值是什麼？" data-correct="0" data-explain="切乾淨後擴展只動邊緣，新增渠道或工具不改核心。">
+  <button class="opt">讓擴展只需要改動邊緣元件</button>
+  <button class="opt">讓程式碼的行數大幅增加</button>
+  <button class="opt">讓所有功能集中在單一檔案</button>
+  <button class="opt">讓模型可以自己修改程式碼</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · OryxOS 技術方案 · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

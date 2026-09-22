@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>為什麼 Agent 一定要有沙箱：風險模型與四維隔離</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>為什麼 Agent 一定要有沙箱：風險模型與四維隔離</h1>
+<p class="meta">Step 1/4 · Sandbox</p>
+
+<h2>學習目標</h2>
+<p>能說出 Agent 情境為什麼不能沿用「信任自己寫的程式」的舊假設，並用檔案系統、網路、程序/系統呼叫、資源四維隔離去拆解任何沙箱要防守的風險面。</p>
+
+<h2>先看一件事：Agent 執行的是誰的指令？</h2>
+<p>傳統軟體的安全假設，建立在「你寫的程式裡做什麼事，你都看得懂」。一個 Java 服務不會自己半夜冒出一句「刪掉這台機器上所有檔案」——會出事的通常是不小心、是 bug，是程式設計師自己的失誤。</p>
+<blockquote>
+<strong>Agent 打破了這個假設。</strong>它會在運行時自己產生要執行的指令——這些指令是 LLM 當下「想」出來的，沒有一行經過人工審查。
+</blockquote>
+<p>這些指令可能來自四個源頭，全都不可信：</p>
+<ul>
+  <li>Agent 自己的破壞性失誤——模型一時糊塗，產生了刪檔、蓋檔、亂 call 的指令。</li>
+  <li><strong>提示注入（prompt injection）</strong>——網頁內容、郵件、別人的訊息都是潛在的惡意輸入，可以誘使 Agent 執行它原本不想做的事。</li>
+  <li>工具回傳的「髒資料」——結果本身就是聲音，會被當成下一步決策的原料。</li>
+  <li>多租戶、多 Agent 共存下的越界——租戶 A 的 Agent 絕不能讀租戶 B 的資料、影響租戶 B 的運行。</li>
+</ul>
+
+<h2>環境維度：五元件裡的 Environment</h2>
+<p>回到最早的 Agent 五元件心智模型（LLM + Tools + Memory + Loop + Environment），LLM 只管輸出結構化指令，真正執行的框架；<strong>沙箱就是 Environment 的安全設計</strong>——它決定了 Agent 的「能力天花板」也決定了「安全地板」。沒有隔離，你不敢讓 Agent 做任何有副作用的動作，它就永遠只是個只會聊天玩具。</p>
+<p>用一句話記住這個位置：<strong>LLM 出主意，沙箱管底線。</strong></p>
+
+<h2>四維隔離：拆任何沙箱的眼鏡</h2>
+<p>不管哪一套沙箱技術，翻來覆去都是在防守四個維度：</p>
+
+<table>
+<thead>
+<tr><th>維度</th><th>防守什麼</th><th>出事畫面</th></tr>
+</thead>
+<tbody>
+<tr><td>檔案系統（Filesystem）</td><td>不能任意讀寫主機檔案</td><td>讀走 API key、設定檔、別人的工作目錄；把整顆磁碟蓋掉</td></tr>
+<tr><td>網路（Network）</td><td>不能任意向外連線</td><td>把資料外洩（data exfiltration）、拿主機當跳板去打內網</td></tr>
+<tr><td>程序/系統呼叫（Process/Syscall）</td><td>不能做危險操作、提權</td><td>fork bomb、掛載、改權限、影響主機其他行程</td></tr>
+<tr><td>資源（Resources）</td><td>不能吃光 CPU／記憶體／磁碟</td><td>resource bomb 拖垮整台機器與其他租戶</td></tr>
+</tbody>
+</table>
+
+<p>這四個維度是後面所有內容的<strong>評估眼鏡</strong>：看到任何一個沙箱方案，先問「它四維各覆蓋到什麼程度？代價是多大？」下一課的四檔方案，本質就是「四個維度各用多深的邊界去擋」的取捨。</p>
+
+<h2>動手先摸一摸</h2>
+<p>你不需要現在寫任何程式。先做一次「風險盤點」：把你手上現有的 Agent（自己的 ReAct loop、或日常用 Claude Code／opencode）想一遍——<strong>讀檔、寫檔、跑 shell、發 HTTP 這四件事，目前有沒有任何一層在檢查？</strong>如果都沒有，你現在就站在「不敢讓它做有副作用的事」的那條線前面。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./sandbox-four-tiers.html">下一步：四檔方案與隔離強度/開銷光譜 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Agent 情境為什麼不能沿用『信任自己寫的程式』的舊假設？" data-correct="2" data-explain="Agent 在運行時自己產生並執行未經審查的指令，這是信任模型顛覆的核心。">
+  <button class="opt">因為 Agent 的程式碼一定有很多 bug</button>
+  <button class="opt">因為傳統軟體從不安全</button>
+  <button class="opt">因為指令是 LLM 當下產生的，沒有一行經人工審查</button>
+  <button class="opt">因為多租戶需要更多硬碟</button>
+</div>
+
+<div class="quiz" data-question="『提示注入』是一類怎樣的威脅？" data-correct="1" data-explain="外部不可信內容（網頁、郵件）誘使 Agent 執行非預期指令。">
+  <button class="opt">一種讓 CPU 過熱的攻擊</button>
+  <button class="opt">不可信輸入誘使 Agent 執行非預期指令</button>
+  <button class="opt">一種讀取主機環境變數的方式</button>
+  <button class="opt">作業系統層的記憶體漏洞</button>
+</div>
+
+<div class="quiz" data-question="四維隔離不包括下面哪一個？" data-correct="3" data-explain="四維是檔案系統、網路、程序/系統呼叫、資源；資料庫是應用層元件，不是隔離維度。">
+  <button class="opt">檔案系統</button>
+  <button class="opt">網路</button>
+  <button class="opt">程序/系統呼叫</button>
+  <button class="opt">資料庫索引</button>
+</div>
+
+<div class="quiz" data-question="『拿主機當跳板去打內網』落在哪個維度？" data-correct="0" data-explain="跳板攻擊走的是往外連線的能力，屬網路維度。">
+  <button class="opt">網路</button>
+  <button class="opt">檔案系統</button>
+  <button class="opt">資源</button>
+  <button class="opt">程序/系統呼叫</button>
+</div>
+
+<div class="quiz" data-question="為什麼說沙箱是 Agent 上生產的前提？" data-correct="2" data-explain="沒有隔離，你不敢讓它做任何有副作用的事，它就只是聊天玩具。">
+  <button class="opt">因為模型在沙箱裡跑得更快</button>
+  <button class="opt">因為沙箱能自動修復 bug</button>
+  <button class="opt">因為沒有隔離你不敢讓它做有副作用的動作</button>
+  <button class="opt">因為沙箱可以節省 API 費用</button>
+</div>
+
+<div class="quiz" data-question="在 Agent 五元件裡，沙箱屬於哪一個元件？" data-correct="3" data-explain="沙箱是 Environment 的安全設計，決定 Agent 的能力與安全邊界。">
+  <button class="opt">Memory</button>
+  <button class="opt">Loop</button>
+  <button class="opt">Tools</button>
+  <button class="opt">Environment</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Sandbox · Step 1/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

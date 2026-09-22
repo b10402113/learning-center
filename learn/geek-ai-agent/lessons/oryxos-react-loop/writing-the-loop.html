@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>手寫 ReActLoop、PromptBuilder、ToolExecutor</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>手寫 ReActLoop、PromptBuilder、ToolExecutor</h1>
+<p class="meta">Step 3/5 · 手寫 ReAct 迴圈</p>
+
+<h2>學習目標</h2>
+<p>能手寫 ReActLoop 的主迴圈、PromptBuilder 的四段組裝與 ToolExecutor 的執行路徑，並解釋「執行權只放在 ToolExecutor 一處」這條規則。</p>
+
+<h2>三個類別，一份分工</h2>
+<p>實作落在三個類別，職責就是前一節那張表：</p>
+<ul>
+<li><strong>ReActLoop</strong>——主迴圈：組 prompt、叫模型、看要不要停、執行工具、累積結果。</li>
+<li><strong>PromptBuilder</strong>——組裝「模型每輪看到的東西」。</li>
+<li><strong>ToolExecutor</strong>——唯一允許執行工具的地方。</li>
+</ul>
+
+<h2>ReActLoop.run：每一步都在累積</h2>
+<p>主迴圈的偽碼長這樣（真實版約幾十行）：</p>
+<pre><code>loop(turn = 1 .. MAX_ITERATIONS):
+    想 = promptBuilder.build(session)          # 組出這輪送給模型的全部內容
+    回覆 = providerService.chat(session.id, 想) # 委派給 Provider 呼叫 LLM
+    session.append(回覆)                        # 模型的回應累積回 Session
+    if 沒有 工具呼叫: return 回覆                # 停止條件 1：任務完成
+    for 每個 toolCall in 回覆工具呼叫:
+        結果 = toolExecutor.execute(session.id, toolCall)  # 委派執行
+        session.append(結果)                    # 工具結果也累積回 Session
+    # 回到迴圈開頭，重組 prompt —— 因為新的結果已經在 Session 裡了
+return MAX_ITERATIONS_REPLY                      # 停止條件 2：強制結束</code></pre>
+<p>三個關鍵動作：<code>promptBuilder.build</code>、<code>providerService.chat(session.id(), ...)</code>、<code>toolExecutor.execute(...)</code>。迴圈自己一行都沒動到模型或工具——它只負責確保「每一次動作的結果都進入 Session」，下一輪的 prompt 自然就看得到。</p>
+<blockquote>
+注意 <code>session.id()</code> 被傳進模型呼叫與工具執行兩側：Session 是唯一真相源，模型呼叫（llm_calls）與工具執行（tool_invocations）都掛在它下面，整條決策鏈才可稽核。
+</blockquote>
+
+<h2>PromptBuilder 的四段組裝</h2>
+<p>每一輪送給模型的 prompt 固定四段，順序不能動：</p>
+<table>
+<thead>
+<tr><th>段落</th><th>內容</th><th>來源</th></tr>
+</thead>
+<tbody>
+<tr><td>1. System prompt</td><td>system prompt＋目前日期時間</td><td>ContextLoader＋時鐘</td></tr>
+<tr><td>2. 長期記憶</td><td>跨對話的 Memory（MEMORY.md）</td><td>MemoryService</td></tr>
+<tr><td>3. 對話歷史</td><td>最近 N=20 輪對話</td><td>Session（有界，前幾節說的截斷）</td></tr>
+<tr><td>4. 可用工具清單</td><td>這個 Profile 能用的工具</td><td>ToolRegistry／Profile</td></tr>
+</tbody>
+</table>
+<p>第 3 段就是「上下文累積與管理」的落點：只保留最近 20 輪，system prompt 每次固定組裝，讓 context 有界且可控。第 4 段排除了 Profile 沒授權的工具——模型根本看不到它，因為執行權在別處。</p>
+
+<h2>ToolExecutor：執行權只在一處</h2>
+<p>執行路徑是四步：</p>
+<ol>
+<li><strong>找工具</strong>：依名稱從 ToolRegistry 取出（找不到就回報錯誤）。</li>
+<li><strong>安全檢查</strong>：跑 Sandbox／白名單檢查（路徑、命令、URL），違規直接擋下。</li>
+<li><strong>執行</strong>：呼叫工具，把結果包成 <code>ToolResult</code>（success、content、error、retryable 四個欄位）。</li>
+<li><strong>稽核</strong>：不管成功或失敗，都寫入 <code>tool_invocations</code>。</li>
+</ol>
+<p>為什麼「執行權只放在 ToolExecutor 一處」會是一條鐵律？因為框架（Spring AI）預設會自動執行工具——如果你開了它，<strong>同一個工具會被呼叫兩次</strong>（框架一次、你的迴圈再一次）。OryxOS 的技術決策明確寫著：只用 Spring AI 的 Provider 抽象與 schema 產生，<strong>關掉自動工具執行</strong>，把執行權唯一收斂在 ToolExecutor。這是整個 Agent 最容易出錯的地方。</p>
+
+<h2>Sandbox 只是其中一道</h2>
+<p>ToolExecutor 先過 Sandbox 白名單，進入具體工具後（例如 http_get）工具內部還會再 call 一次<code>sandbox.enforce(...)</code>。這是「兩道門」：介面層的統一檢查＋工具內部的防線。Sandbox 違規當成一次普通工具失敗處理——會被 catch、會寫稽核，不會整個迴圈爆炸。</p>
+
+<h2>往下接：誰把這一切叫起來</h2>
+<p>三個類別都有了，但誰在 CLI、Web、排程三條路都統一叫它們？答案是 AgentService——它負責身分（Profile）的傳遞，這正是下一節的主題（ProfileContext 與 ContextLoader）。</p>
+
+<div class="lesson-nav">
+  <div><a href="./loop-only-schedules.html">← 上一步：迴圈只做排程：職責分離與為什麼手寫</a></div>
+  <div><a href="./agent-service-orchestration.html">下一步：單一編排器：AgentService、ProfileContext、ContextLoader →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="ReActLoop.run 每輪第一個動作是什麼？" data-correct="3" data-explain="每輪先由 promptBuilder.build 組出這輪送給模型的內容，再委託 Provider 呼叫，並把結果累積回 Session。">
+  <button class="opt">直接執行模型選好的工具</button>
+  <button class="opt">清空 Session 重新開始</button>
+  <button class="opt">叫醒是 PromptBuilder 還是 ToolExecutor 的紀律</button>
+  <button class="opt">用 promptBuilder.build 組裝這輪 prompt</button>
+</div>
+
+<div class="quiz" data-question="每一輪模型的回應與工具結果都要進到哪個地方？" data-correct="1" data-explain="都要 append 回 Session——Session 是唯一真相源，下一輪組 prompt 時才看得到，且整條鏈可稽核。">
+  <button class="opt">暫存到局部變數用過即丟</button>
+  <button class="opt">Session</button>
+  <button class="opt">ToolExecutor 的稽核表</button>
+  <button class="opt">Provider 的檔案快取</button>
+</div>
+
+<div class="quiz" data-question="PromptBuilder 的四段組裝順序為什麼有講究？" data-correct="2" data-explain="順序固定：system prompt＋日期時間 → 長期記憶 → 最近 N 輪歷史 → 可用工具清單，缺一或亂序都可能影響模型行為。">
+  <button class="opt">順序是隨機的，每次重排更好</button>
+  <button class="opt">只要工具清單在最前即可</button>
+  <button class="opt">四段順序固定且每段有明確來源</button>
+  <button class="opt">系統只送歷史，其他三段永遠不送</button>
+</div>
+
+<div class="quiz" data-question="對話歷史段為何只保留最近 20 輪？" data-correct="0" data-explain="保留最近 N 輪（預設 20）是上下文管理手段：讓 context 有界、可控，避免無界成長。">
+  <button class="opt">這是上下文管理：有界、可控的 context</button>
+  <button class="opt">模型只會記 20 輪的對話</button>
+  <button class="opt">Session 資料庫最多存 20 筆</button>
+  <button class="opt">工具一次只能帶 20 個參數</button>
+</div>
+
+<div class="quiz" data-question="執行權收斂在 ToolExecutor 一處，最直接要防的 bug 是什麼？" data-correct="1" data-explain="框架（Spring AI）預設會自動執行工具，若不關閉，同一工具會被框架與 ToolExecutor 各執行一次。">
+  <button class="opt">模型看不懂工具清單</button>
+  <button class="opt">同一個工具被呼叫兩次</button>
+  <button class="opt">Provider 把請求送錯模型</button>
+  <button class="opt">上下文一次只累積一半</button>
+</div>
+
+<div class="quiz" data-question="ToolResult 的四個欄位是什麼？" data-correct="2" data-explain="ToolResult 由 success、content、error、retryable 四個欄位構成，告訴迴圈結果成敗與可否重試。">
+  <button class="opt">id、name、schema、version</button>
+  <button class="opt">status、code、message、time</button>
+  <button class="opt">success、content、error、retryable</button>
+  <button class="opt">input、output、tool、session</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 手寫 ReAct 迴圈 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

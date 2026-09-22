@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一目錄一 Agent：為什麼這叫 Agent OS</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一目錄一 Agent：為什麼這叫 Agent OS</h1>
+<p class="meta">Step 1/5 · 插件化 Agent 與動態管理</p>
+
+<h2>學習目標</h2>
+<p>能說清「一目錄一 Agent」為什麼是 Agent OS 的分界線，以及它借了 Skill 目錄形態、卻定義 Agent 的關鍵差別。</p>
+
+<h2>先看一個尷尬的處境</h2>
+<p>走到第二十八節，OryxOS 的核心已經很完整：Provider 能選模、ReAct 能自己想與做、Tool 體系能呼叫外部能力、Memory 能記住、Sandbox 能擋、排程能到點觸發、Web 能對外開介面。這是一顆像樣的 kernel。</p>
+<p>但這時候你要跑一個業務 Agent——比如「每天早上九點對賬並推送到運維群」——還是得把它的指令硬寫進一份設定、手工把模組組起來。也就是說，核心能跑「一個」Agent，卻沒有一套標準方式去「定義、安裝、執行任意多個」Agent。系統離「是 Agent OS」還差最後一塊拼圖。</p>
+
+<h2>作業系統的定義不在核心，而在機制</h2>
+<p>一條判斷準則：<strong>能跑一個程式的東西不叫作業系統；作業系統是「你可以在上面安裝並執行任意多個程式，彼此隔離，且不必修改或重新編譯核心」。</strong></p>
+<p>Windows 之所以是作業系統，不是因為它的核心多強，而是因為它同時提供了三件事：一個標準的可執行檔格式（exe）、一個載入器（loader）把檔案變成執行中的程式、一個排程器決定誰在什麼時候跑。有了這套機制，開發者不必碰核心，就能發佈無數個程式。</p>
+<p>OryxOS 缺的正好是這套「定義 → 載入 → 排程」的機制。第二十九節把它補上，這也是整門專案裡「敢叫 Agent OS」的關鍵一課。</p>
+
+<h2>兩層架構：底座是核心，Agent 是可執行程式</h2>
+<p>補上這塊拼圖後，整個系統切成一條清楚的邊界：</p>
+<table>
+<thead>
+<tr><th>層</th><th>作業系統類比</th><th>內容</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>底座（base）</strong></td><td>核心 / 共用系統能力</td><td>Provider、ReAct、內建 Tool（<code>read_file</code>／<code>shell</code>／<code>http_get</code>／<code>notify</code>／<code>save_memory</code>…）、Memory、Sandbox、排程、Web</td></tr>
+<tr><td><strong>Agent 層</strong></td><td>一支可執行程式 / 套件</td><td>一個 <code>.oryxos/agents/&lt;name&gt;/</code> 目錄，自足地帶身分設定、任務指令、腳本、參考檔案</td></tr>
+</tbody>
+</table>
+<p>底座是所有 Agent 共用的系統能力；Agent 是一個自足的目錄。這條「底座 vs Agent」的切分，就是整個架構的中心邊界。</p>
+<p>它有一個可驗證的終態：丟進一個 Agent 目錄 → 它出現在 Agent 清單 → 到它聲明的時間自己跑起來（思考 → 呼叫系統能力 → 回答 → 推送），全程留審計 → 你改它的指令，下次觸發立即生效 → 而且這一切<strong>不需要寫一行 Java，也不需要碰底座</strong>。</p>
+
+<h2>借了 Skill 的形態，但定義的是 Agent</h2>
+<p>這套目錄模型借了 Anthropic Agent Skills 的<strong>形態</strong>——一個目錄，裡面有主指令檔加腳本加參考資料——但沒有借它的命名。差別很關鍵：</p>
+<ul>
+<li><strong>一目錄 = 一 Agent。</strong> 在 OryxOS 裡，這樣一個目錄定義的是一個「會自己跑的業務程式」，而不是「附掛在別人身上的某個能力」。</li>
+<li><strong>skill 降級成內部元件。</strong> 「skill」在這個模型裡只是該 Agent 目錄內一個選用的子指令 <code>.md</code>，不是頂層單位。早期教材曾在「一個 Skill = 一個 Agent」與「Skill = 可重用能力」之間搖擺，這個版本把它釘死。</li>
+<li><strong>沒有跨 Agent 的能力庫。</strong> OryxOS 不做全局索引、不做 <code>use_skill</code>、不做跨 Agent 能力重用。每個 Agent 獨立自足，只呼叫底座提供的系統能力。</li>
+</ul>
+<p>那它到底向 Anthropic 學了什麼？學的是 <strong>progressive disclosure（漸進式揭露）</strong>：Agent 目錄裡的東西按階段、按需要才進上下文，而不是一次全塞進 prompt。這正是下一課要拆的目錄結構重點。</p>
+
+<h2>為什麼這條邊界值錢</h2>
+<p>把「N 個業務 Agent」與「一座底座」解耦之後，新增一個 Agent 的成本降到「丟一個目錄」；多個 Agent 之間互相隔離、互不干擾；底座保持穩定，不必為了新業務改動核心。這就是從「一個能跑 Agent 的框架」變成「一個能跑 N 個 Agent 的 OS」的意義。</p>
+<p>不過「丟一個目錄」只是終態的門面。目錄裡到底裝什麼、憑什麼被底座認得、又憑什麼會自己跑起來，是接下來三課的主線。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./agent-directory-anatomy.html">下一步：一個 Agent 目錄長什麼樣：AGENT.md、scripts、skills、REFERENCE.md →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="一個系統被稱為 Agent OS 的關鍵判準是什麼？" data-correct="2" data-explain="OS 的定義是提供標準機制來定義、安裝、執行任意多個程式，而不必改動核心。">
+  <button class="opt">核心的模型推理能力特別強</button>
+  <button class="opt">內建工具數量比別人多</button>
+  <button class="opt">能在不改核心下安裝執行多個 Agent</button>
+  <button class="opt">支援的對話輪數特別長</button>
+</div>
+
+<div class="quiz" data-question="在 OryxOS 的兩層架構裡，哪一項屬於「底座」？" data-correct="0" data-explain="Provider、ReAct、Memory、Sandbox 等是所有 Agent 共用的系統能力；業務指令屬於 Agent 層。">
+  <button class="opt">所有 Agent 共用的 Provider 與 Memory</button>
+  <button class="opt">某個 Agent 的每日對賬任務指令</button>
+  <button class="opt">某個 Agent 目錄下的 <code>scripts/</code></button>
+  <button class="opt">某個 Agent 的 <code>AGENT.md</code> 設定</button>
+</div>
+
+<div class="quiz" data-question="OryxOS 向 Anthropic Agent Skills 借了什麼、又改了什麼？" data-correct="1" data-explain="借目錄形態與漸進式揭露，但把定義單位釘死為一目錄一 Agent，skill 成為內部元件。">
+  <button class="opt">借命名規則，改了目錄結構</button>
+  <button class="opt">借目錄形態，改了定義的單位</button>
+  <button class="opt">借執行引擎，改了排程方式</button>
+  <button class="opt">借安全模型，改了審計格式</button>
+</div>
+
+<div class="quiz" data-question="「skill」在 OryxOS 的目錄模型裡扮演什麼角色？" data-correct="3" data-explain="skill 不是頂層單位，而是 Agent 目錄內一個選用的子指令檔案，不再跨 Agent 共享。">
+  <button class="opt">跨 Agent 共用的全域能力庫</button>
+  <button class="opt">系統層級的權限控制單位</button>
+  <button class="opt">排程器註冊的最小單位</button>
+  <button class="opt">Agent 目錄內的選用子指令</button>
+</div>
+
+<div class="quiz" data-question="「漸進式揭露（progressive disclosure）」在這個模型裡指的是？" data-correct="1" data-explain="目錄裡的檔案按階段、按需要才進上下文，避免一次把所有內容塞進 prompt。">
+  <button class="opt">把所有檔案一次載入系統提示</button>
+  <button class="opt">檔案按需要才進入上下文</button>
+  <button class="opt">逐步把 Agent 目錄加密保護</button>
+  <button class="opt">依照使用者權限分批顯示檔案</button>
+</div>
+
+<div class="quiz" data-question="這個單元裡，「新增一個業務 Agent」的理想成本是什麼？" data-correct="2" data-explain="終態是丟一個目錄，不需寫 Java、不動底座；這正是插件化的價值。">
+  <button class="opt">新增一個 Maven 模組並重新編譯</button>
+  <button class="opt">修改 <code>AgentService</code> 的設定</button>
+  <button class="opt">丟一個目錄，不寫 Java</button>
+  <button class="opt">改寫核心的排程器邏輯</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 插件化 Agent 與動態管理 · Step 1/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

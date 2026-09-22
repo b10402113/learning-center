@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>可插拔三後端：Markdown／SQLite／Mem0</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>可插拔三後端</h1>
+<p class="meta">Step 5/6 · Memory</p>
+
+<h2>學習目標</h2>
+<p>能實作 Markdown、SQLite、Mem0 三檔 LongTermMemoryStore，說清各自定位與四契約如何落地，並證明只改 memory.backend 設定就能換後端而門面以上零改動。</p>
+
+<h2>動手前：兩層、三檔、四契約</h2>
+<p>實作前先把形狀定清楚。<code>MemoryService</code> 朝上（方法固定給 PromptBuilder 與工具用），<code>LongTermMemoryStore</code> 朝下（三個實作）。三檔的定位對應第 21 節的演進路線：</p>
+<table>
+<thead>
+<tr><th>後端</th><th>定位</th><th>何時用</th></tr>
+</thead>
+<tbody>
+<tr><td>Markdown</td><td>階段一預設，零依賴、人可讀、git 可追蹤</td><td>預設</td></tr>
+<tr><td>SQLite</td><td>結構化升級，支援 scope／時間查詢、LIMIT 截斷</td><td>記憶量變大</td></tr>
+<tr><td>Mem0</td><td>外部集成檔，需自架 mem0 server，資料留在內網</td><td>真需要自動抽取／語意檢索</td></tr>
+</tbody>
+</table>
+<p>四契約（不快取、核心不截斷、scope 顯式、檢索只在歸檔區）是三者共同的行為底線，差別只在「怎麼落地」。</p>
+
+<h2>檔一（預設）：MarkdownMemoryStore</h2>
+<p>長期記憶存在一個 Markdown 檔，用兩個區塊組織：<code>## 核心記憶</code> 與 <code>## 歸檔記憶</code>。每條記憶是一行：<code>- [yyyy-MM-dd HH:mm:ss] 內容</code>。內容進檔前會壓成單行、並把區塊頭字面量中和掉（否則使用者可控的文字會被誤當成分區邊界，導致核心記憶被截斷或串區）。</p>
+<pre><code>## 核心記憶
+- [2026-09-22 10:03:11] 後端技術棧：Spring Boot 3.x on K8s
+## 歸檔記憶
+- [2026-09-22 10:05:40] 上週三部署因 OOM 失敗，重啟後恢復</code></pre>
+<p>四契約的落地方式很直觀：<code>load()</code> 每次 <code>Files.readString</code>、不快取（契約一）；截斷只接歸檔區那段字串裁尾、<strong>物理上碰不到核心區</strong>（契約二），上限 <code>MAX_ARCHIVE_CHARS = 4000</code>；寫核心還是歸檔由 <code>scope</code> 決定（契約三）；<code>recallByKeyword</code> 只掃歸檔區、不分大小寫（契約四）。寫入用「先寫暫存檔再原子改名」，並對每個檔案加鎖——讀-改-寫整段互斥，避免並行會話互相覆蓋。</p>
+
+<h2>檔二（結構化升級）：SqliteMemoryStore</h2>
+<p>記憶量變大後，改用 SQLite 按條存進 <code>memory_entries</code> 表（欄位含 agent、scope、content、時間）。同樣四契約，只是換了實現手段：</p>
+<table>
+<thead>
+<tr><th>契約</th><th>Markdown 檔</th><th>SQLite 檔</th></tr>
+</thead>
+<tbody>
+<tr><td>不快取</td><td>每次讀檔</td><td>每次查庫</td></tr>
+<tr><td>核心不截斷</td><td>只裁歸檔那段字串</td><td>核心用 <code>WHERE scope='CORE'</code> 全量取</td></tr>
+<tr><td>scope 顯式</td><td>寫入對應區塊</td><td>寫入 scope 欄位</td></tr>
+<tr><td>檢索只在歸檔</td><td>掃歸檔區行</td><td>SQL <code>LIKE</code></td></tr>
+</tbody>
+</table>
+<p>歸檔區用「最近 N 條」實現截斷：先按 id 倒序取 <code>LIMIT 100</code>，再翻回時間正序拼接。截斷從「字串裁尾」變成「查詢 LIMIT」，語意一致但更精準。</p>
+
+<h2>檔三（外部集成）：Mem0MemoryStore</h2>
+<p>這一檔把 <code>append</code>／<code>load</code>／<code>recallByKeyword</code> 翻譯成 {@code mem0} 自架 server 的 REST 呼叫（<code>POST /memories</code>、<code>POST /search</code>、<code>GET /memories</code>）。它的能力宣告是 <code>DELEGATED</code>——意思是「後端自帶語意」，底座不再自己建索引。最關鍵的一組映射：</p>
+<ul>
+<li>寫核心：<code>infer:false</code>，原文一字不差落庫（保住核心的保真）。</li>
+<li>寫歸檔：<code>infer:true</code>，把提煉／衝突消解交給 mem0。</li>
+<li>檢索：<code>search</code> 帶 <code>filters:{scope:ARCHIVAL}</code>，返回側再按 metadata 防禦性過濾（因為 mem0 filters 有版本性 bug），<strong>杜絕核心區串入檢索</strong>。</li>
+</ul>
+<p>換句話說，在 Mem0 檔裡，<strong>截斷、提煉、衝突消解全被下放給 mem0</strong>，這一檔只做協定翻譯，契約四也被「升級」成語意檢索。但要注意：Mem0 是外部服務，記憶資料會流經它的管線，所以對「資料不出域」有嚴格要求的場景，必須在內網自架——<strong>這正是為何預設是 Markdown，而不是功能更強的 Mem0</strong>。</p>
+
+<h2>換後端：只改一個設定</h2>
+<blockquote>配置一鍵：<code>memory.backend: markdown | sqlite | mem0</code>，裝配時注入對應 store。</blockquote>
+<p>因為 <code>MemoryService</code> 是唯一門面，換後端改的是「注入哪個 <code>LongTermMemoryStore</code>」，門面以上（PromptBuilder、記憶工具、測試）<strong>一行都不用動</strong>。這就是介面牆最直觀的回報：設定從 markdown 改成 mem0，上層毫無感覺。</p>
+
+<div class="lesson-nav">
+  <div><a href="./memory-interface-wall.html">← 上一步：介面牆與三層設計</a></div>
+  <div><a href="./memory-tools-wiring-harness.html">下一步：記憶工具與契約測試 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="MarkdownMemoryStore 用哪兩個區塊組織長期記憶？" data-correct="1" data-explain="## 核心記憶（常駐、不截斷）與 ## 歸檔記憶（按需檢索、可截斷）。">
+  <button class="opt">## 短期記憶 與 ## 長期記憶</button>
+  <button class="opt">## 核心記憶 與 ## 歸檔記憶</button>
+  <button class="opt">## 使用者記憶 與 ## 系統記憶</button>
+  <button class="opt">## 事實記憶 與 ## 事件記憶</button>
+</div>
+
+<div class="quiz" data-question="Markdown 檔如何保證「核心記憶永不截斷」？" data-correct="2" data-explain="截斷函式只接收歸檔區那段字串，核心區根本不在入參裡，靠物理隔離保證。">
+  <button class="opt">用更高權限保護核心區檔案</button>
+  <button class="opt">截斷時加判斷式跳過核心</button>
+  <button class="opt">截斷只接歸檔字串，核心不入參</button>
+  <button class="opt">把核心區另存到 SQLite</button>
+</div>
+
+<div class="quiz" data-question="SQLite 檔的「截斷」具體怎麼實現？" data-correct="3" data-explain="歸檔用最近 N 條的 LIMIT 查詢實現截斷，核心用 WHERE scope='CORE' 全量取。">
+  <button class="opt">把整張表按容量自動清理</button>
+  <button class="opt">用字串裁尾刪掉多餘字元</button>
+  <button class="opt">定期把小於 4000 字的列刪除</button>
+  <button class="opt">歸檔用 LIMIT，核心全量取</button>
+</div>
+
+<div class="quiz" data-question="Mem0 檔寫入「核心記憶」時為什麼用 infer:false？" data-correct="0" data-explain="核心必須原文一字不差落庫（保真），因此關閉 mem0 的推論／提煉。">
+  <button class="opt">要原文保真，不做推論改寫</button>
+  <button class="opt">為了節省模型呼叫費用</button>
+  <button class="opt">因為 mem0 不支援中文推論</button>
+  <button class="opt">為了讓檢索更快</button>
+</div>
+
+<div class="quiz" data-question="Mem0 檔的 capabilities() 回傳什麼，代表什麼意思？" data-correct="2" data-explain="回傳 DELEGATED，表示後端自帶語意檢索，底座不再自建索引、recall 直通。">
+  <button class="opt">KEYWORD，代表只能關鍵詞匹配</button>
+  <button class="opt">HYBRID_BUILTIN，代表底座跑三路融合</button>
+  <button class="opt">DELEGATED，代表後端自帶語意檢索</button>
+  <button class="opt">DISABLED，代表關閉檢索</button>
+</div>
+
+<div class="quiz" data-question="為什麼預設後端是 Markdown 而不是功能更強的 Mem0？" data-correct="1" data-explain="Mem0 是外部服務、資料會流經其管線；嚴格資料不出域的場景需內網自架，因此預設用零依賴的 Markdown。">
+  <button class="opt">Mem0 的檢索速度比較慢</button>
+  <button class="opt">Mem0 是外部服務，資料會流經它</button>
+  <button class="opt">Mem0 不支援核心／歸檔分區</button>
+  <button class="opt">Mem0 無法自架只能雲端用</button>
+</div>
+
+<div class="quiz" data-question="換後端只改 memory.backend 就能生效，靠的是什麼？" data-correct="3" data-explain="MemoryService 是唯一門面，換的是注入的 store，門面以上不動。">
+  <button class="opt">三檔共用同一份 Markdown 檔</button>
+  <button class="opt">執行時動態重新編譯程式</button>
+  <button class="opt">上層每次都判斷目前設定檔</button>
+  <button class="opt">門面固定，只換注入的 store</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Memory · Step 5/6</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

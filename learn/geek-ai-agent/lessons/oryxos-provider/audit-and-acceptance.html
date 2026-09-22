@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>llm_calls 審計與驗收 Harness</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>llm_calls 審計與驗收 Harness</h1>
+<p class="meta">Step 5/5 · Provider 抽象</p>
+
+<h2>學習目標</h2>
+<p>能解釋 llm_calls 為何成功與失敗都要落庫（day-one 審計、兩欄位設計、手寫 schema 而非 ddl-auto），並說出頂尖三條測試的由來與 mock／integration 測試的切分。</p>
+
+<h2>審計：為什麼「只記成功」是災難</h2>
+<p>假設你要調查為什麼某個 Agent 昨天半夜連續失敗。如果你只記錄成功的呼叫，資料表裡就空空如也——<strong>一次真實事故完全沒留下痕跡</strong>。可審計是 OryxOS 的核心差異點（企業願意換底座，往往就是為了「每一筆呼叫都能追」），而這必須從第一天就做到。</p>
+<p>所以 Provider 的規矩是：<strong>成功和失敗都要寫進 llm_calls 表</strong>。失敗時照樣落一筆，標記 success=false 並記下錯誤訊息；然後才把錯誤往上拋。</p>
+
+<h2>llm_calls 表：需要哪兩欄就設計哪兩欄</h2>
+<p>因為失敗也要落庫，<code>llm_calls</code> 表就<strong>不能只有「成功」那一欄</strong>。它需要兩個字段：</p>
+<table>
+<thead>
+<tr><th>字段</th><th>意義</th></tr>
+</thead>
+<tbody>
+<tr><td><code>success</code>（布林）</td><td>這次呼叫成不成功</td></tr>
+<tr><td><code>error_message</code>（文本，可空）</td><td>失敗時記下錯誤訊息</td></tr>
+</tbody>
+</table>
+<p>再加上 provider、model、token 用量（prompt／completion）、門檻毫秒數與時間戳，就構成一筆完整的呼叫留痕。抓住「失敗也要寫」這個需求，設計上自然不會漏掉欄位。</p>
+
+<h2>手寫 schema，不要 ddl-auto=update</h2>
+<p>一個容易被忽略、但很痛的表結構陷阱：OryxOS 的schema是<strong>手寫遷移腳本</strong>（SQLite 底下由手寫 schema 腳本管理），而不是依賴 JPA 的 <code>ddl-auto=update</code>。為什麼？因為 SQLite 的 <code>ALTER TABLE</code> 能力很弱，依賴框架自動改表結構在實務上不可靠。表是契約，契約要用明確的遷移腳本版本控管，而不是交給框架偷偷改。</p>
+
+<h2>驗收：mock 即可，別每次都打真實模型</h2>
+<p>Provider 的測試必須能又快又穩定地跑，不能每次跑測試都消耗真實 token。所以切分原則是：</p>
+<ul>
+<li><strong>單元測試</strong>：用一個 <strong>mock 的 ChatModel</strong> 去測試路由、驗證、審計、翻譯這些邏輯——快、不依賴網路、可以天天跑。</li>
+<li><strong>integration 冒煙測試</strong>：真打一次模型，驗證「真的能連通」。用 <code>@Tag("integration")</code> 標起來，<strong>CI 預設跳過</strong>，由你在有 key 時手動跑。</li>
+</ul>
+<p>這樣把「邏輯對不對」和「真的連不連得上」分成兩層驗證。</p>
+
+<h2>頂尖三條測試（把每個陷阱釘死）</h2>
+<p>設計時抓住的每一個陷阱，都值得一條回歸測試。其中最有價值的三條：</p>
+<table>
+<thead>
+<tr><th>測試</th><th>它釘住什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>兩個 Provider 不互相竄線</td><td>顯式映射真的有效，各走各的模型</td></tr>
+<tr><td>失敗仍寫 success=false 審計</td><td>失敗路徑也會落庫，不是只記成功</td></tr>
+<tr><td>捕捉的請求確認自動執行是關的</td><td>internalToolExecutionEnabled=false 真的生效</td></tr>
+</tbody>
+</table>
+<p>這三條正好對上前一步的三個陷阱：映射陷阱、審計缺口、自動執行陷阱。你把設計時怕的事變成測試，測試就變成會替你守門的警衛。</p>
+
+<h2>做完怎麼驗：手動檢查清單</h2>
+<p>光有自動測試還不夠，發布前走一遍手動清單：</p>
+<ol>
+<li>starter 依賴確認：要用的 provider starter 在鎖定 BOM 中可解析。</li>
+<li>冒煙測試跑過：用真實 API key 跑一次 integration 冒煙測試，真的拿到回應。</li>
+<li>無明文金鑰：<code>grep -r "sk-"</code> 在你的 codebase 裡找不到任何金鑰殘留。</li>
+</ol>
+<p>另外要記住 Provider 的<strong>完成定義</strong>：它沒有自己獨立的入口，驗證方式是「支援 Demo 的 LLM 呼叫，並驗證與 ReAct 一起跑通」。一次穩定成功的呼叫就是完成線——fallback、hedging、circuit breaker 這些更強的重力方案，通通留到擴展階段。</p>
+
+<div class="lesson-nav">
+  <div><a href="./chat-and-tool-schema.html">← 上一步：一次呼叫與工具 schema 轉換</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 Provider 要「成功與失敗都落庫」？" data-correct="2" data-explain="只記成功會讓真實事故完全不留痕跡，調查時一無所獲。">
+  <button class="opt">為了維持資料表固定行數</button>
+  <button class="opt">因為消耗 token 必須對帳</button>
+  <button class="opt">否則真實事故沒有痕跡</button>
+  <button class="opt">因為每家模型回傳格式統一</button>
+</div>
+
+<div class="quiz" data-question="llm_calls 表需要哪些欄位搭配，才能記錄失敗？" data-correct="1" data-explain="success 布林＋error_message 文本，兩欄缺一不可。">
+  <button class="opt">status 字串＋retry 計數器</button>
+  <button class="opt">success 布林＋error_message</button>
+  <button class="opt">模型名＋temperature</button>
+  <button class="opt">provider name＋僅成功時的 tokens</button>
+</div>
+
+<div class="quiz" data-question="為何不用 hibernate 的 ddl-auto=update？" data-correct="3" data-explain="SQLite 的 ALTER TABLE 很弱，自動改表結構不可靠，改用明確的手寫遷移腳本。">
+  <button class="opt">因為它不支援字串欄位</button>
+  <button class="opt">因為它太慢不適合測試</button>
+  <button class="opt">因為它容易產生冗餘索引</button>
+  <button class="opt">因為自動改表在 SQLite 不可靠</button>
+</div>
+
+<div class="quiz" data-question="「兩個 Provider 不互相竄線」這條測試釘住什麼？" data-correct="0" data-explain="驗證顯式映射真的有效，每個請求都走對應的模型。">
+  <button class="opt">顯式映射真的有效</button>
+  <button class="opt">憑證都是加密的</button>
+  <button class="opt">啟動時間符合門檻</button>
+  <button class="opt">流式回呼不漏字</button>
+</div>
+
+<div class="quiz" data-question="integration 冒煙測試在 CI 的待遇通常是什麼？" data-correct="2" data-explain="用 @Tag(\"integration\") 標示，CI 預設跳過，有 key 時手動跑。">
+  <button class="opt">每次提交都必須通過</button>
+  <button class="opt">只在午夜排程執行</button>
+  <button class="opt">CI 預設跳過</button>
+  <button class="opt">由資料庫模組執行</button>
+</div>
+
+<div class="quiz" data-question="發布前的手動檢查清單包含哪三件事？" data-correct="1" data-explain="驗證 BOM 可解析、冒煙測試真實成功、無明文金鑰殘留。">
+  <button class="opt">跑單元測試、跑整合測試、跑壓力測試</button>
+  <button class="opt">驗證 BOM、冒煙測試、無明文金鑰</button>
+  <button class="opt">寫文件、寫註解、寫 CHANGELOG</button>
+  <button class="opt">檢查端口、檢查容器、檢查日誌</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Provider 抽象 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

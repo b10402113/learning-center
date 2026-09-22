@@ -1,0 +1,79 @@
+---
+id: oryxos-react-loop
+title: 手寫 ReAct 迴圈
+subject: geek-ai-agent
+tier: 4
+order: 12
+status: content-written
+goal: 能手寫 ReActLoop／PromptBuilder／ToolExecutor，說清迴圈只做排程、上下文如何累積與管理，以及為什麼不用框架黑盒。
+sources:
+  - "[[sources/geek-ai-agent/20260922/第17节：ReAct 原理解析、实现与代码讲解.pdf#一-react-是什么]]"
+  - "[[sources/geek-ai-agent/20260922/第17节：ReAct 原理解析、实现与代码讲解.pdf#二-动手前先想清楚]]"
+  - "[[sources/geek-ai-agent/20260922/第17节：ReAct 原理解析、实现与代码讲解.pdf#三-代码怎么写]]"
+  - "[[sources/geek-ai-agent/20260922/第17节：ReAct 原理解析、实现与代码讲解.pdf#四-验收-harness]]"
+  - "[[sources/geek-ai-agent/20260922/第17节：ReAct 原理解析、实现与代码讲解.pdf#五-做完怎么验]]"
+  - "[[sources/geek-ai-agent/20260922/03-18 18. 项目篇 OryxOS：技术方案文档.html#4.1 ReAct loop 算法]]"
+  - "[[sources/geek-ai-agent/20260922/第8节：Agent 架构拆解：LLM + Tools + Memory + Loop + Environment.pdf#loop-mechanics]]"
+  - "[[sources/geek-ai-agent/20260922/oryxos/oryxos-core/src/main/java/io/oryxos/core/agent/ReActLoop.java]]"
+  - "[[sources/geek-ai-agent/20260922/oryxos/CLAUDE.md]]"
+steps:
+  - id: react-loop-principle
+    order: 1
+  - id: loop-only-schedules
+    order: 2
+    deps:
+      - react-loop-principle
+  - id: writing-the-loop
+    order: 3
+    deps:
+      - loop-only-schedules
+  - id: agent-service-orchestration
+    order: 4
+    deps:
+      - writing-the-loop
+  - id: pinning-the-loop
+    order: 5
+    deps:
+      - agent-service-orchestration
+prerequisites:
+  - learn/geek-ai-agent/nodes/agent-anatomy
+  - learn/geek-ai-agent/nodes/oryxos-requirements
+  - learn/geek-ai-agent/nodes/oryxos-technical-solution
+  - learn/geek-ai-agent/nodes/oryxos-provider
+created: 2026-09-22
+updated: 2026-09-22
+---
+
+# 手寫 ReAct 迴圈
+
+## Learning goal
+
+能手寫 ReActLoop／PromptBuilder／ToolExecutor，說清迴圈只做排程、上下文如何累積與管理，以及為什麼不用框架黑盒。
+
+## Steps
+
+1. [[learn/geek-ai-agent/nodes/oryxos-react-loop/react-loop-principle|ReAct 迴圈是什麼：決定、行動、觀察]] — 單輪結構、兩條停止條件，與「迴圈＝Agent」的分界
+2. [[learn/geek-ai-agent/nodes/oryxos-react-loop/loop-only-schedules|迴圈只做排程：職責分離與為什麼手寫]] — 四職責分工、框架黑盒的風險、三個經典陷阱（after step 1）
+3. [[learn/geek-ai-agent/nodes/oryxos-react-loop/writing-the-loop|手寫 ReActLoop、PromptBuilder、ToolExecutor]] — 主迴圈、四段組裝、執行路徑與「執行權只在一處」（after step 2）
+4. [[learn/geek-ai-agent/nodes/oryxos-react-loop/agent-service-orchestration|單一編排器：AgentService、ProfileContext、ContextLoader]] — 唯一編排入口、ThreadLocal 身分、每輪重讀上下文（after step 3）
+5. [[learn/geek-ai-agent/nodes/oryxos-react-loop/pinning-the-loop|用測試與 Demo 釘死迴圈]] — 五個單元測試類與 Demo 1 的驗收標準（after step 4）
+
+## Lesson
+
+ReAct（Reasoning + Acting，推理與行動）迴圈是整個 Agent 底座的「心跳」：模型負責想、工具負責做、迴圈負責把兩者串起來重複到任務完成。沒有這個迴圈，一次 LLM 呼叫就是聊天機器人；有了它，Agent 才能自主做多步決策。這個節點的目的，是讓你把這個心跳親自寫一遍，而不是從框架黑盒裡拿。
+
+主線有三條。第一，"**迴圈只做排程**"——真正的迴圈主體只有幾十行，它自己不呼叫模型、不執行工具，而是把這兩件事委派給 ProviderService 與 ToolExecutor，自己只負責決定做哪件事、檢查要不要停。第二，"**上下文自己管**"——每一輪模型的回應與工具的結果都要累積回 Session，才能在下一輪被看到；PromptBuilder 每輪重新組裝 system prompt、記憶、近 N 輪對話與工具清單，ContextLoader 每次重讀文件、不落快取，讓每一輪都有最新上下文。第三，"**執行權只在一處**"——工具到底能不能跑、怎麼跑，全部收斂在 ToolExecutor 一個地方，因此要關掉 Spring AI 的自動工具執行，否則一個工具會被呼叫兩次。
+
+共識不是憑空來的：Claude Code、Cursor、LangChain 的 Agent 底層都是這個模式，差別只在工具與環境的深度。要不要出工具、執行到第幾輪停、context 塞不下怎麼辦，這些邊界必須在設計時就決定，而不是事後打補丁——這是本節反覆強調的紀律，也是後面每個模組（Memory、Tool、Sandbox、Web）都跟著遵守的骨架。
+
+## Sources
+
+- [[sources/geek-ai-agent/20260922/第17节：ReAct 原理解析、实现与代码讲解.pdf#一-react-是什么]]
+- [[sources/geek-ai-agent/20260922/第17节：ReAct 原理解析、实现与代码讲解.pdf#二-动手前先想清楚]]
+- [[sources/geek-ai-agent/20260922/第17节：ReAct 原理解析、实现与代码讲解.pdf#三-代码怎么写]]
+- [[sources/geek-ai-agent/20260922/第17节：ReAct 原理解析、实现与代码讲解.pdf#四-验收-harness]]
+- [[sources/geek-ai-agent/20260922/第17节：ReAct 原理解析、实现与代码讲解.pdf#五-做完怎么验]]
+- [[sources/geek-ai-agent/20260922/03-18 18. 项目篇 OryxOS：技术方案文档.html#4.1 ReAct loop 算法]]
+- [[sources/geek-ai-agent/20260922/第8节：Agent 架构拆解：LLM + Tools + Memory + Loop + Environment.pdf#loop-mechanics]]
+- [[sources/geek-ai-agent/20260922/oryxos/oryxos-core/src/main/java/io/oryxos/core/agent/ReActLoop.java]]
+- [[sources/geek-ai-agent/20260922/oryxos/CLAUDE.md]]

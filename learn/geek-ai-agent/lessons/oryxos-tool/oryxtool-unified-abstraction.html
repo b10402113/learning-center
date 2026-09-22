@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OryxTool 單一抽象與 ToolResult</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>OryxTool 單一抽象與 ToolResult</h1>
+<p class="meta">Step 2/5 · Tool 體系</p>
+
+<h2>學習目標</h2>
+<p>能說明 OryxTool 的四個方法（getDescription／getName／getInputSchema／execute）與 ToolResult 的四個欄位，並解釋為何 ReAct 迴圈不必知道工具來自內建、MCP 還是 Java Bean。</p>
+
+<h2>從「九個工具」到「一種工具」</h2>
+<p>上一課數出了九個內建工具，之後還會有插件工具、MCP 工具、Java Bean 工具。如果每個工具都長得不一樣——有的用 JSON、有的用 YAML、有的直接把方法名當名字——ReAct 迴圈就得懂每一種，每接一個新工具就要改一次迴圈。這正是模組化最怕的噩夢。</p>
+<p>解法是在動手寫工具前先做一個設計決定：<strong>把所有工具抽象成同一個介面 `OryxTool`</strong>。內建的、MCP 的、Java Bean 的，通通包裝成這個介面；對外只有一張臉，裡面愛怎麼做都行。</p>
+
+<h2>OryxTool：四個方法</h2>
+<p>介面非常小，只有四個方法——這是刻意的。方法越少，任何工具就越容易滿足它：</p>
+<ul>
+<li><strong>getName()</strong>：工具的唯一名稱，例如 <code>read_file</code>。模型靠這個名字指定要呼叫誰。</li>
+<li><strong>getDescription()</strong>：一段給模型看的人話描述，說清楚這工具做什麼、何時該用。模型靠它決定「這步我該不該呼叫這個工具」。</li>
+<li><strong>getInputSchema()</strong>：描述輸入參數的 JSON Schema 文字。Provider 在翻譯 Function Calling（函式呼叫）時消費它——沒有它，模型不知道該傳哪些參數。這是早期版本最常被漏掉的方法，一旦漏掉，Function Calling 直接卡死。</li>
+<li><strong>execute(JsonNode input)</strong>：真正執行的入口。輸入是 JSON 節點，丟回一個 ToolResult。整個 Agent 的努力，最後就是落在這一行上。</li>
+</ul>
+<p>注意 getInputSchema() 是「字串」不是物件——它是 JSON Schema 的文本，等著被 Provider 拿去轉成各家模型 API 的格式。這把「工具的輸入長怎樣」這個問題，從核心完全剝離出去。</p>
+
+<h2>ToolResult：四個欄位</h2>
+<p>執行完工具，迴圈要的不只是一段文字，而是一個「可判斷成敗」的結果。ToolResult 用四個欄位表達這件事：</p>
+<table>
+<thead>
+<tr><th>欄位</th><th>意義</th></tr>
+</thead>
+<tbody>
+<tr><td><code>success</code></td><td>這次執行是成功還是失敗</td></tr>
+<tr><td><code>content</code></td><td>要交給模型看的實際內容（例如天氣 JSON）</td></tr>
+<tr><td><code>errorMessage</code></td><td>失敗時的錯誤訊息</td></tr>
+<tr><td><code>retryable</code></td><td>這個失敗值不值得重試——外部服務暫掛通常可重試，業務邏輯錯誤則不行</td></tr>
+</tbody>
+</table>
+<p><code>retryable</code> 是容易被忽略但極重要的一欄：它讓「這次失敗了」多了一個維度。迴圈可以根據它決定「是不是拉高重試」「要不要把錯誤原樣丟回給模型讓它換個策略」。一個 API 暫時連不上是暫時性失敗，而「參數格式寫錯」是謬誤——兩者後續的處理完全不同。</p>
+
+<h2>為何統一抽象：三個來源，一張臉</h2>
+<p>OryxTool 的價值在於「來源無知」（source-agnostic）。上一課的分界在這裡兌現：</p>
+<ul>
+<li><strong>內建工具</strong>（FileTools、ShellTools、HttpTools）直接實作 OryxTool。</li>
+<li><strong>MCP 工具</strong>被包成 <code>McpToolAdapter</code>——把 MCP server 的 tools/list 條目包進同一個介面，對外看不出是跨進程。</li>
+<li><strong>Java Bean 工具</strong>（下一課的第三種插件方式）也包成 OryxTool。</li>
+</ul>
+<p>結果是 ReAct 迴圈根本不需要知道自己呼叫的「手」是內建的還是外部的。它只跟 OryxTool 打交道，程式整個乾淨了。這也解釋了為什麼 OryxTool 的依賴只有 Jackson 的 JsonNode——刻意保持零框架依賴，任何來源都能輕鬆包裝。</p>
+
+<h2>設計帶來的附帶好處</h2>
+<p>統一抽象不只是為了好寫程式，它同時是治理的入口。既然是「所有工具都得過這張臉」，那「在每次執行前加一道檢查」就有了天然的位置——那道檢查就是第四課的安全白名單。抽象的價值，於是在安全、審計、測試這些橫切面上全部放大。</p>
+
+<div class="lesson-nav">
+  <div><a href="./tool-is-the-hands.html">← 上一步：Tool 是什麼：Agent 的「手」與內建工具全景</a></div>
+  <div><a href="./three-tier-plugin-tools.html">下一步：三級 Plugin Tool：零代碼、輕代碼、重代碼 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="OryxTool 介面總共有幾個方法？" data-correct="2" data-explain="getDescription、getName、getInputSchema、execute，一共四個。">
+  <button class="opt">二個</button>
+  <button class="opt">三個</button>
+  <button class="opt">四個</button>
+  <button class="opt">五個</button>
+</div>
+
+<div class="quiz" data-question="getInputSchema() 的用途是什麼？" data-correct="3" data-explain="它回傳 JSON Schema 文本，Provider 翻譯 Function Calling 時使用；漏掉它會卡死呼叫。">
+  <button class="opt">儲存工具執行時寫入的資料</button>
+  <button class="opt">控制誰能呼叫這個工具</button>
+  <button class="opt">記錄工具的每次執行記錄</button>
+  <button class="opt">描述工具輸入參數，供 Function Calling 翻譯</button>
+</div>
+
+<div class="quiz" data-question="ToolResult 的 retryable 欄位表達什麼？" data-correct="1" data-explain="表達這次失敗值不值得重試——外部暫掛可重試，邏輯錯誤則不可。">
+  <button class="opt">工具這次執行了多少次</button>
+  <button class="opt">這次失敗值不值得重試</button>
+  <button class="opt">結果內容有多大</button>
+  <button class="opt">呼叫工具的是哪個 Agent</button>
+</div>
+
+<div class="quiz" data-question="為什麼 ReAct 迴圈不用區分工具來源？" data-correct="0" data-explain="因為所有來源都被包成同一個 OryxTool 介面，迴圈只跟這張臉打交道。">
+  <button class="opt">因為都被抽象成同一個 OryxTool 介面</button>
+  <button class="opt">因為外部工具一律不允許</button>
+  <button class="opt">因為迴圈裡不准呼叫工具</button>
+  <button class="opt">因為所有工具都必須同步執行</button>
+</div>
+
+<div class="quiz" data-question="MCP 工具如何變成 OryxTool？" data-correct="2" data-explain="MCP server 的 tools/list 條目被包成 McpToolAdapter，對外看不出是跨進程。">
+  <button class="opt">直接左原生的 MCP 格式執行</button>
+  <button class="opt">翻譯成純文字給模型</button>
+  <button class="opt">包成 McpToolAdapter，對外看不出跨進程</button>
+  <button class="opt">用 Bean 掃描自動註冊</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · Tool 體系 · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
