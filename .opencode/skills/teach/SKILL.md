@@ -179,6 +179,25 @@ For each step in sorted order:
 5. **Write.** After the learner passes, compose the `## Lesson` body as a single-sentence summary of the step's core concept. The HTML is the detailed record; the MDX note is just a one-line reminder of what was taught. Append a `## Course` section after `## Lesson` with the relative path to the HTML lesson: `## Course\n\n[↗ 課程頁面](../../lessons/<node-id>/<step-id>.html)` — this lets the learner jump from the MDX article to the interactive HTML lesson.
 6. **Progress.** Show completion status (e.g., "Step 2/5 done"). Confirm with the learner before moving to the next step.
 
+### Traditional Chinese Readability
+
+When the learner's language is Traditional Chinese
+(zh-Hant):
+
+- Write natural Taiwanese Traditional Chinese.
+- Optimize for reading comprehension, not visual novelty.
+- Use short paragraphs with one main idea each.
+- Prefer continuous explanatory prose over excessive cards, callouts, and fragmented bullet points.
+- Introduce terminology before using it in examples.
+- Avoid unnecessary English and literal translations.
+- Use descriptive headings rather than decorative or abstract headings.
+- Keep the main reading column comfortable for Chinese.
+- Do not apply excessive letter-spacing to Chinese text.
+- Use shared CSS for typography and layout.
+- Keep quizzes visually separate from lesson content.
+
+A lesson should read like a well-edited Chinese textbook, not a collection of presentation slides.
+
 ### `-skip-task` mode
 
 When `-skip-task` appears in the invocation (e.g. `/teach <subject>/<node-id> skip-task`), skip the **Check** step entirely. For each step in sorted order:
