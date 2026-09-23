@@ -12,63 +12,37 @@
 <p class="meta">Step 3/6 · 全流程串聯</p>
 
 <h2>學習目標</h2>
-<p>能說清「一進程兩面」的啟動模型，實作列出會話的 GET /api/v1/sessions 端點，並讓 CLI、REST、管理台三面顯示同一份資料。</p>
+<p>能說清「一進程兩面」的啟動模型，實作列出會話的 <code>GET /api/v1/sessions</code> 端點，並讓 CLI、REST、管理台三面顯示同一份資料。</p>
 
-<h2>為什麼要為了對賬補一個端點</h2>
-<p>上一課的對賬是人工的：打開資料庫，逐張表數筆數。人工對賬可以偶爾做，卻沒法每次都做，更沒法進 CI。要讓「三面同源」變成可以<strong>自動化</strong>驗證的東西，前提是——每一條痕跡都必須先有一個<strong>可以查的 HTTP 端點</strong>。</p>
-<p>沒有端點，就沒有東西可以被斷言；不能被斷言，就只能靠人看。所以這一課要補的其實不是一個「功能」，而是把對賬從「人看」升級成「網頁／測試看」所缺的最後一格。</p>
+<h2>為什麼要補「列出會話」這個端點</h2>
+<p>上一課說對賬是「逐表核對」，可是要自動核對，就得先能<strong>問得出來</strong>。回顧 Web Service 的 10 個端點：查單一會話、查記憶、列工具、列 Profile 都有，唯獨<strong>「列出所有會話」</strong>是缺口——第 26 節只有「依 id 查一個」，所以管理台的「會話」頁一直是空的。</p>
+<p>這不是小事：一個痕跡若沒有可查的端點，就永遠只能靠人讀日誌，無法變成自動斷言。所以這課補上 <code>GET /api/v1/sessions</code>，讓「三面同源」可以真正被驗證。</p>
 
-<h2>先盤點：10 個端點裡缺了哪一個</h2>
-<p>Web Service 那一課給了 10 個端點，涵蓋會話明細、記憶、工具、Profile、系統狀態。把它們列出來逐一對照「管理台需要看什麼」，會發現只有一個缺口：<strong>「列出所有會話」</strong>。</p>
-<p>原本只有「依 id 查單一會話」（<code>GET /sessions/{id}</code>），卻沒有「列出會話清單」。結果就是管理台的會話頁<strong>永遠是空的</strong>——它拿得到某一個會話，卻不知道有哪些會話存在。</p>
-<p>修法很直接：新增 <code>GET /api/v1/sessions</code>，回傳一份會話摘要清單。</p>
+<h2>一進程兩面：Web 與管理台共用同一個 Spring</h2>
+<p>先搞清楚管理台是怎麼跑起來的。很多人以為管理台是另一個獨立服務，其實不是：<strong><code>oryxos serve</code> 一個進程同時服務兩面</strong>——同一個 Spring 既處理 <code>/api/v1/**</code> 的 REST，也提供 <code>/admin</code> 的頁面，不需要第二個進程。</p>
+<p>管理台的啟動是「建置」而不是「開網頁」：先 <code>npm run build</code> 把前端產物輸出到 <code>oryxos-web/src/main/resources/static/admin/</code>，Spring 接著託管 <code>/admin</code>，並把未命中的 <code>/admin/**</code> 路徑回退到 <code>index.html</code>——這樣前端路由才不會 404，而 <code>/api/v1/**</code> 完全不受影響。</p>
 
-<h2>這個端點長什麼樣</h2>
-<table>
-<thead>
-<tr><th>項目</th><th>設計</th></tr>
-</thead>
-<tbody>
-<tr><td>排序</td><td>依最後活躍時間（last-active）倒序，最近的排前面</td></tr>
-<tr><td>預設數量</td><td>100 筆摘要</td></tr>
-<tr><td>回傳欄位</td><td>session id、Profile 名稱、渠道、使用者、狀態、建立／最後活躍時間、訊息數</td></tr>
-<tr><td>不回傳</td><td>完整對話正文（那是明細端點的事）</td></tr>
-<tr><td>可選過濾</td><td><code>?status=active</code></td></tr>
-</tbody>
-</table>
-<p>為什麼只給摘要、不給全文？因為列表頁和對賬要回答的問題是「<strong>有哪些會話、各自多大、最近什麼時候動過</strong>」，而不是「某一句話講了什麼」。把全文塞進列表，既拖慢回應，也讓欄位失去焦點。要看正文，走既有的明細端點。</p>
-
-<h2>實作只加三樣東西</h2>
-<p>這個擴充刻意做得跟上一課的 <code>archive()</code>／<code>readAll()</code> 一模一樣，維持同一種擴充模式：</p>
-<ol>
-<li><code>SessionManager.listRecent(int)</code>：底層透過 <code>SessionRepository</code> 撈出最近若干筆。</li>
-<li>一個<strong>沒有 <code>{id}</code> 路徑變數</strong>的 <code>@GetMapping</code>：這就是與明細端點唯一的分野。</li>
-<li>一個 session-summary DTO：把清單要的欄位挑出來，不直接把整顆 Session 丟出去。</li>
-</ol>
-<p>注意這裡沒有任何業務邏輯進到 Controller：它只做「驗參數、包回應、交錯誤」，真正的查詢落在 <code>SessionManager</code>。這條紀律在整條主線上反覆出現——加端點不能讓引擎分岔。</p>
-
-<h2>一進程兩面：Web Service 與管理台是同一個進程</h2>
-<p>管理台不是另一個服務。<code>oryxos serve</code> 起的這一個 Spring，<strong>同時</strong>服務兩件事：<code>/api/v1/**</code> 的 REST 介面，以及 <code>/admin</code> 的管理台頁面。沒有第二個進程、沒有第二份部署。</p>
-<p>這個模型直接決定了「三面同源」為什麼成立：CLI、REST、管理台看到的都是同一顆引擎、同一個資料庫裡的同一份資料。管理台只是換一個視角把它畫出來。</p>
-
-<h2>啟動管理台是「建置」，不是「打開網頁」</h2>
-<p>很多人第一次會卡在這裡：以為開瀏覽器連 <code>/admin</code> 就會有頁面。其實要先把它建出來：</p>
-<ol>
-<li>前端執行 <code>npm run build</code>，產物輸出到 <code>oryxos-web/src/main/resources/static/admin/</code>。</li>
-<li>Spring 托管 <code>/admin</code>，並把<strong>未匹配的 <code>/admin/**</code> 一律 fallback 到 <code>index.html</code></strong>——這樣前端自己的路由（例如 <code>/admin/sessions</code>）直接輸入網址也不會 404。<code>/api/v1/**</code> 不受這個 fallback 影響。</li>
-</ol>
-<p>另外有兩個前置條件，缺一個管理台就<strong>空轉</strong>：</p>
+<h2>兩個前置條件，缺一就閒置</h2>
+<p>這台機器要真的動起來，有兩個前置條件：</p>
 <ul>
-<li><code>export DEEPSEEK_API_KEY=...</code>：因為啟動時排除了 Spring AI 的 <code>OpenAiAutoConfiguration</code>，服務只認這把 key。</li>
-<li>前端<strong>已經建置</strong>到 <code>static/admin/</code>。</li>
+<li><code>export DEEPSEEK_API_KEY=...</code>——因為 <code>OpenAiAutoConfiguration</code> 被排除了，不設 key 引擎就沒有模型可呼叫。</li>
+<li>前端已經 build 進 <code>static/admin/</code>——沒建置，<code>/admin</code> 就是一片空白。</li>
 </ul>
+<p>完整的啟動序列是：建置前端 → <code>mvn clean package -DskipTests</code> → <code>java -jar oryxos-boot/target/oryxos-boot-*.jar serve --port 8080</code> → 用 <code>curl .../health</code> 確認健康 → 打開 <code>/admin</code> 與 <code>/swagger-ui</code>。</p>
 
-<h2>完整的啟動流程</h2>
-<p>把上面的步驟串起來：建置前端 → <code>mvn clean package -DskipTests</code> → <code>java -jar oryxos-boot/target/oryxos-boot-*.jar serve --port 8080</code>。起來之後用 <code>curl .../health</code> 確認活著，再開 <code>/admin</code> 與 <code>/swagger-ui</code>。</p>
-<p>這裡的發布形態是「<strong>一個 jar 托管全部</strong>」：前端產物被打進 jar，REST 與頁面同源。所以文件要記載的發布方式是這個 jar，而不是開發者本機的 <code>npm run dev</code>——後者只是開發時的熱更新，不是交付形態。</p>
+<h2>補上 <code>GET /api/v1/sessions</code></h2>
+<p>這個端點的職責是「列出會話摘要」：按最後活躍時間<strong>遞減</strong>排序，預設回傳 100 筆摘要（session id、Profile 名稱、channel、user、狀態、建立／最後活躍時間、訊息數），<strong>不含完整對話內文</strong>，另可帶 <code>?status=active</code> 過濾。</p>
+<p>實作沿著第 26 節 <code>archive()</code>／<code>readAll()</code> 的同一套擴充模式走：</p>
+<ul>
+<li><code>SessionManager.listRecent(int)</code> 經 <code>SessionRepository</code> 查最近 N 筆；</li>
+<li>一個不帶 <code>{id}</code> 的 <code>@GetMapping</code>；</li>
+<li>一個 session-summary DTO 把內文剝掉、只留摘要。</li>
+</ul>
+<p>補上之後，管理台的「會話」頁就接到這個端點，跟 CLI、REST 看到同一批會話——這就是三面同源的落點。</p>
 
-<h2>收尾：第三個視角正式上線</h2>
-<p>補完端點、建好管理台之後，在管理台打開「會話」頁，應該看到剛剛那筆天氣／穿搭對話——跟 CLI、REST 看到的一模一樣。這一刻，「<strong>同資料、同引擎、第三個視角</strong>」的三面同源才算真正落地，而且因為有了 <code>GET /api/v1/sessions</code>，這份一致性從此可以被自動斷言，而不是靠人再看一遍。</p>
+<h2>三面同源 = 一個引擎 + 每個痕跡都可查</h2>
+<p>把這一課的收穫歸成一句話：<strong>三面同源不是把資料複製三份，而是三個入口讀同一顆引擎。</strong>CLI、REST、管理台都不是資料的「源頭」，真正的源頭是引擎背後的 SQLite 與檔案；三個入口只是三扇不同的窗，望向同一個房間。要做到這點，每個痕跡都得先有可查的端點——補上 <code>GET /api/v1/sessions</code> 就是補上這扇窗的最後一塊玻璃。</p>
+<p>下一課轉到下半場：人沒問、機器也要照樣幹活——把薄薄的排程層長成一個能被定義、能自己跑、重啟不失憶、還能被管理的完整子系統。</p>
 
 <div class="lesson-nav">
   <div><a href="./five-integration-seams.html">← 上一步：五條典型縫隙與單一來源修法</a></div>
@@ -77,53 +51,46 @@
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="為什麼要為對賬補一個查詢端點？" data-correct="2" data-explain="有可查端點才能自動斷言痕跡，否則三面同源只能靠人看。">
-  <button class="opt">為了讓前端畫面更漂亮</button>
-  <button class="opt">為了降低資料庫的查詢成本</button>
-  <button class="opt">為了讓痕跡能被自動斷言</button>
-  <button class="opt">為了取代既有的明細端點</button>
+<div class="quiz" data-question="管理台（/admin）是怎麼跑起來的？" data-correct="0" data-explain="oryxos serve 一個進程同時服務 REST 與 /admin 兩面，不需要第二個進程。">
+  <button class="opt">與 REST 共用同一個 Spring 進程</button>
+  <button class="opt">一個獨立的 Node.js 服務</button>
+  <button class="opt">一個獨立的前端 CDN 站</button>
+  <button class="opt">由 swagger-ui 自動產生</button>
 </div>
 
-<div class="quiz" data-question="10 個端點裡，為了管理台會話頁補的是哪一個缺口？" data-correct="1" data-explain="缺的是「列出所有會話」，所以補 GET /api/v1/sessions。">
-  <button class="opt">缺少依 id 查單一會話</button>
-  <button class="opt">缺少列出所有會話</button>
-  <button class="opt">缺少刪除指定會話</button>
-  <button class="opt">缺少建立新會話端點</button>
+<div class="quiz" data-question="管理台的啟動是「建置」而不是「開網頁」，意思是？" data-correct="3" data-explain="要先 npm run build 把前端產物輸出到 static/admin/，Spring 再託管 /admin。">
+  <button class="opt">直接用瀏覽器打開 index.html</button>
+  <button class="opt">每次請求都重新打包前端</button>
+  <button class="opt">用 npm run dev 掛著跑</button>
+  <button class="opt">先 build 產物到 static/admin/，Spring 再託管</button>
 </div>
 
-<div class="quiz" data-question="GET /api/v1/sessions 為什麼只回摘要、不回完整對話？" data-correct="3" data-explain="列表要回答「有哪些會話」，看正文走明細端點，避免拖慢與失焦。">
-  <button class="opt">因為資料庫無法存完整對話</button>
-  <button class="opt">因為摘要的資訊量比較大</button>
-  <button class="opt">因為前端無法渲染完整對話</button>
-  <button class="opt">因為列表要的是有哪些會話</button>
+<div class="quiz" data-question="為什麼要補 <code>GET /api/v1/sessions</code>？" data-correct="1" data-explain="原本只有依 id 查一個，缺「列出全部」；每個痕跡都要有可查端點才能自動斷言三面同源。">
+  <button class="opt">原本沒有任何會話端點</button>
+  <button class="opt">缺「列出全部」的端點，讓三面同源可驗證</button>
+  <button class="opt">要回傳完整對話內文給前端</button>
+  <button class="opt">要支援 SSE 串流</button>
 </div>
 
-<div class="quiz" data-question="Web Service 與管理台的進程關係是什麼？" data-correct="0" data-explain="同一個 oryxos serve 進程同時服務 REST 與 /admin 頁面，沒有第二個進程。">
-  <button class="opt">同一個進程同時服務兩面</button>
-  <button class="opt">管理台是獨立部署的服務</button>
-  <button class="opt">管理台由 CLI 進程托管</button>
-  <button class="opt">兩者靠外部反向代理串接</button>
+<div class="quiz" data-question="GET /api/v1/sessions 回傳的內容為何？" data-correct="2" data-explain="回傳依最後活躍遞減的摘要清單，不含完整內文，可帶 ?status=active 過濾。">
+  <button class="opt">所有會話的完整對話內文</button>
+  <button class="opt">僅回傳第一筆會話</button>
+  <button class="opt">最近活躍遞減的摘要清單，不含內文</button>
+  <button class="opt">僅回傳已歸檔的會話</button>
 </div>
 
-<div class="quiz" data-question="為什麼未匹配的 /admin/** 要 fallback 到 index.html？" data-correct="2" data-explain="避免前端路由直接輸入網址時 404，/api/v1/** 則不受影響。">
-  <button class="opt">為了加快靜態資源的下載</button>
-  <button class="opt">為了讓 API 路徑也走前端</button>
-  <button class="opt">為了避免前端路由直接 404</button>
-  <button class="opt">為了隱藏後端的實作細節</button>
+<div class="quiz" data-question="不設 <code>DEEPSEEK_API_KEY</code> 會發生什麼事？" data-correct="1" data-explain="OpenAiAutoConfiguration 被排除，沒 key 引擎就沒有模型可呼叫。">
+  <button class="opt">改用內建預設模型</button>
+  <button class="opt">引擎沒有模型可呼叫而閒置</button>
+  <button class="opt">自動從環境讀取預設 key</button>
+  <button class="opt">只影響管理台、不影響 CLI</button>
 </div>
 
-<div class="quiz" data-question="管理台空轉，最可能是缺了哪個前置條件？" data-correct="1" data-explain="要么缺 provider key，要么前端沒有 build 進 static/admin/。">
-  <button class="opt">缺少額外的資料庫服務</button>
-  <button class="opt">前端未建置或缺少 key</button>
-  <button class="opt">缺少獨立的後端進程</button>
-  <button class="opt">缺少 Nginx 反向代理設定</button>
-</div>
-
-<div class="quiz" data-question="文件該記載的發布形態是什麼？" data-correct="3" data-explain="交付形態是一個托管全部的 jar；npm run dev 只是開發時的熱更新。">
-  <button class="opt">npm run dev 的開發指令</button>
-  <button class="opt">獨立的 Nginx 靜態站</button>
-  <button class="opt">分成兩個 jar 分別部署</button>
-  <button class="opt">一個托管全部的 jar</button>
+<div class="quiz" data-question="「三面同源」的本質是什麼？" data-correct="0" data-explain="三面同源不是複製三份，而是三個入口讀同一顆引擎背後的 SQLite 與檔案。">
+  <button class="opt">三個入口讀同一顆引擎的資料</button>
+  <button class="opt">把資料複製成三份各存一份</button>
+  <button class="opt">三個入口各維護自己的快取</button>
+  <button class="opt">由前端負責同步三份資料</button>
 </div>
 
 <div class="footer">

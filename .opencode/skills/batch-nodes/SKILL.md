@@ -21,14 +21,14 @@ Prereqs: `learn/<subject>/MEMORY.md` exists, `learn/<subject>/ROADMAP.md` exists
    - **all** — no scope args. Read `learn/<subject>/ROADMAP.md` and extract every node id from `[[learn/<subject>/nodes/<node-id>|...]]` links in tier order.
 
    Validate each resolved slug has a container at `learn/<subject>/nodes/<slug>.mdx`. Skip nodes whose status is already `content-written` or `edges-written` — report them as skipped.
-2. **Process.** Partition the resolved node list into batches of size `max-subagents`. Process batches sequentially; nodes within a batch run in parallel. For each batch, launch one subagent per node via the `task` tool — all calls in a single message. Each subagent receives [NODES-AND-TEACH-PROMPT](#nodes-and-teach-prompt) with `<NODE-ID>` and `<SUBJECT>` filled in. The subagent runs `/nodes` then `/teach` sequentially for its node. Wait for every subagent to return. Record each node's outcome: succeeded (both structure and content written, asset verification passed) or failed. Show a progress line after each batch.
+2. **Process.** Partition the resolved node list into batches of size `max-subagents`. Process batches sequentially; nodes within a batch run in parallel. For each batch, launch one subagent per node via the `task` tool — all calls in a single message, each with `subagent_type: teach-agent` so the article-writing rules (Taiwan Traditional Chinese, plain wording, no AI tells, `/humanizer` pass) apply. Each subagent receives [NODES-AND-TEACH-PROMPT](#nodes-and-teach-prompt) with `<NODE-ID>` and `<SUBJECT>` filled in. The subagent runs `/nodes` then `/teach` sequentially for its node. Wait for every subagent to return. Record each node's outcome: succeeded (both structure and content written, asset verification passed) or failed. Show a progress line after each batch.
 3. **Report.** Summarise: total completed, total failed, total skipped. List any failed nodes with their errors and which part failed (structure or content). Suggest re-running `/batch-nodes <subject> <failed-slug>` for failures, or running `/edges <subject>/<node-id>` on completed nodes.
 
 Completion: every non-skipped node was dispatched to a subagent, every subagent returned, outcomes recorded, and the final report delivered.
 
 ## Nodes-and-teach-prompt
 
-The prompt below is the complete text passed to each `task` call. Fill `<NODE-ID>` and `<SUBJECT>` before dispatching.
+The prompt below is the complete text passed to each `task` call. Dispatch every call with `subagent_type: teach-agent`. Fill `<NODE-ID>` and `<SUBJECT>` before dispatching.
 
 ```
 Build the step-DAG and fill lesson content for one node. Node: <SUBJECT>/<NODE-ID>.
@@ -45,7 +45,7 @@ Stop stage 1 after the node container is written and verified. Proceed immediate
 
 ### Stage 2 — Content
 
-Load the /teach skill via the skill tool (name: "teach"). Follow it for node <NODE-ID> with skip-task. The skeleton step files already exist from stage 1 — fill each step's MDX lesson body and generate the HTML lesson files. Skip-task means no check questions, no user confirmation.
+Load the /teach skill via the skill tool (name: "teach"). Follow it for node <NODE-ID> with skip-task. The skeleton step files already exist from stage 1 — fill each step's MDX lesson body and generate the HTML lesson files. Skip-task means no check questions, no user confirmation. Write in Taiwan Traditional Chinese per the teach-agent writing rules, and run the /humanizer skill on each finished HTML.
 
 #### Asset verification (mandatory, after all HTML written)
 

@@ -14,60 +14,36 @@
 <h2>學習目標</h2>
 <p>能把薄排程層長成完整子系統：skill 定義任務、共用 scheduler 會話執行、兩張表持久化狀態與歷史、四個端點加上管理台可即時執行與啟停。</p>
 
-<h2>為什麼排程要從「薄層」長成「子系統」</h2>
-<p>排程模組的定位一直很清楚：它是一個<strong>觸發源</strong>，不是新能力。時間到了，系統組裝一個訊息，投進與 CLI／Web 完全同一條 <code>AgentService.process</code>。<code>ReActLoop</code>、工具執行、Provider 全都不用改。</p>
-<p>但「能觸發」和「能管理」是兩件事。一個只會在記憶體裡註冊 cron 的薄排程層，能應付課堂演示，卻撐不起一個底座——重啟之後任務就不見了，出了幾次執行、成不成功也沒人知道，更別提在管理台即時跑一次或臨時停掉。要讓底座「沒人問也照樣幹活」，排程必須長成完整子系統，而完整子系統要同時具備四塊：<strong>定義、執行、持久化、管理</strong>。</p>
+<h2>從「會觸發」到「能管理」</h2>
+<p>第 25 節的定時任務只做到「cron 到點會觸發」，狀態全在記憶體裡，重啟就忘，也沒法看、沒法管。這一課要把它長成一個<strong>完整子系統</strong>：一個任務要能<strong>被定義、自己跑、記得起來、還能被管理</strong>。四件事對應四塊積木，我們一塊一塊看。</p>
 
-<h2>第一塊：定義——仍然只有 skill 一個來源</h2>
-<p>定義一個定時任務，不需要新的設定檔，也不需要在 Java 裡寫常數。做法仍然是 skill：<strong>一個任務 = 一條 <code>schedules</code> 條目</strong>，內容是 <code>id + cron + zone + message</code>。</p>
-<p>其中 <code>message</code> 就是到點時要交給 <code>AgentService.process</code> 的 prompt。這點很重要：排程層不決定訊息寫什麼，它只是把這條訊息端到引擎面前。任務的「內容」屬於 Agent 的定義，「何時觸發」才是排程的職責。</p>
-<blockquote>
-紀律：定義排程<strong>永遠不新增第二個定義來源</strong>。如果 cron 一下子來自設定檔、一下子來自 Java 註解，之後你就會有兩個地方要改，而且它們遲早會不一致。
-</blockquote>
+<h2>第一塊：定義——永遠只有 skill 一個來源</h2>
+<p>任務怎麼定義？答案跟前幾節一致：<strong>用 skill</strong>。一個任務就是 <code>schedules</code> 條目裡的一筆，欄位是 <code>id + cron + zone + message</code>，其中 <code>message</code> 就是要交給 <code>AgentService.process</code> 的提示詞。這樣做的好處是：<strong>不新增第二個定義來源</strong>——Agent 的行為由 skill 定義，排程的行為也由 skill 定義，整台機器只有一個「說清楚誰該做什麼」的地方。</p>
 
-<h2>第二塊：執行——同一條入口，換一個頭</h2>
-<p>用一個測試 Profile 每兩分鐘觸發一次，訊息是「查一下北京天氣，把穿搭建議推送出去」。這一趟的對賬預期是：</p>
-<table>
-<thead>
-<tr><th>痕跡</th><th>預期</th></tr>
-</thead>
-<tbody>
-<tr><td><code>scheduler</code> 渠道的 session</td><td>被<strong>重用</strong>——第二次觸發會 append 到同一份歷史，而不是另開一個</td></tr>
-<tr><td><code>llm_calls</code></td><td>2 筆（先決定查天氣、再依結果組推送內容）</td></tr>
-<tr><td><code>tool_invocations</code></td><td>2 筆：<code>http_get</code>（查天氣）與 <code>notify</code>（推送）</td></tr>
-<tr><td>webhook</td><td>真的收到推送</td></tr>
-</tbody>
-</table>
-<p>這裡有兩個最容易踩的陷阱。</p>
-<p><strong>陷阱一：session 重用。</strong>排程不是每次觸發都開新對話。它固定用同一組 session 身分（渠道 <code>scheduler</code>），所以兩次觸發仍然是<strong>同一列</strong> session，歷史被續寫。若對賬時發現 session 變成兩筆，就代表 session 身分沒有固定。</p>
-<p><strong>陷阱二：推送失敗拖垮排程。</strong>如果推送目標的網域不在白名單內，Sandbox 會擋下，留下一筆 <code>success=false</code>。這正是要的——一次推送失敗<strong>不該把排程器本身弄掛</strong>，下一次觸發照常進行。</p>
+<h2>第二塊：執行——共用同一個 scheduler 會話</h2>
+<p>到點之後，排程器把 <code>message</code> 組成一則訊息，投進跟 CLI、Web <strong>完全同一條</strong> <code>AgentService.process</code> 入口。以一個測試 Profile 每兩分鐘跑「查一下北京天氣，把穿搭建議推送出去」為例，對賬時要看到：<code>llm_calls</code> = 2、<code>tool_invocations</code> = 2（<code>http_get</code> + <code>notify</code>）、而且 webhook 真的收到推送。</p>
+<p>這裡有兩個坑要先防。坑一：<strong>會話重用</strong>——scheduler 頻道的會話要重複使用，觸發兩次仍是同一列歷史，而不是每跑一次就開一列新會話。坑二：<strong>推送失敗隔離</strong>——若推送目標域名不在白名單內，Sandbox 會攔下，留下一筆 <code>success=false</code>，但排程器本身不能被拖垮，下一次觸發照常跑。</p>
 
-<h2>第三塊：持久化——兩張表，一個介面</h2>
-<p>要讓「重啟後排程還在」變成事實，狀態必須落到 SQLite。這裡手工建兩張表：</p>
-<table>
-<thead>
-<tr><th>表</th><th>欄位</th></tr>
-</thead>
-<tbody>
-<tr><td><code>scheduled_tasks</code></td><td><code>task_id</code>、<code>profile_name</code>、<code>cron</code>、<code>zone</code>、<code>message</code>、<code>enabled</code>、<code>next_run_at</code>、<code>last_run_at</code>、<code>last_status</code>、<code>run_count</code></td></tr>
-<tr><td><code>task_executions</code></td><td><code>task_id</code>、<code>session_id</code>、<code>started_at</code>、<code>success</code>、<code>error_message</code>、<code>duration_ms</code></td></tr>
-</tbody>
-</table>
-<p>關鍵在架構而非欄位：這兩張表背後是一層 core 介面 <code>ScheduledTaskStore</code>，真正的 JPA 實作放在 storage 模組。這是<strong>依賴倒置</strong>——核心定義「我需要能存排程狀態與執行歷史」，具體怎麼存由儲存層決定。核心因此不必認識任何 ORM 註解。</p>
-<p>對應地，<code>AgentScheduler</code> 的職責也從「只讀 cron」擴充成：註冊時算出 <code>next_run_at</code>、把流程拆成「檢查 enabled → 才執行」、跳過被停用的任務、寫入執行紀錄並更新狀態，另外加上一個 <code>runNow(taskId)</code> 供即時觸發。</p>
-
-<h2>第四塊：管理——四個端點與第一個寫操作頁</h2>
-<p>有了持久化，管理就有東西可管。四個端點：</p>
+<h2>第三塊：持久化——兩張表藏在介面之後</h2>
+<p>要讓「重啟後排程還在」，狀態就得落進 SQLite。這裡有兩張手工建立的表：</p>
 <ul>
-<li><code>GET /schedules</code>：列出所有任務</li>
-<li><code>GET /schedules/{id}/executions</code>：看某個任務的執行歷史</li>
-<li><code>POST /schedules/{id}/run</code>：立刻跑一次</li>
-<li><code>PUT /schedules/{id}</code>：啟用／停用（或修改）</li>
+<li><code>scheduled_tasks</code>：任務本身（task_id、profile_name、cron、zone、message、enabled、next_run_at、last_run_at、last_status、run_count）；</li>
+<li><code>task_executions</code>：每次執行的歷史（task_id、session_id、started_at、success、error_message、duration_ms）。</li>
 </ul>
-<p>管理台再補上一個「定時任務」頁：列出任務、即時執行、啟用／停用。這是先前那版<strong>唯讀</strong>管理台的第一個<strong>寫操作</strong>頁面——它會改變系統狀態，因此也象徵管理台開始從「看板」邁向「控制台」。</p>
+<p>這兩張表<strong>藏在一個核心介面 <code>ScheduledTaskStore</code> 之後</strong>，由 storage 模組用 JPA 實作——這就是依賴倒置：核心只認介面，不知道底下是 SQLite 還是別的東西。<code>AgentScheduler</code> 註冊每個任務時算出 <code>next_run_at</code>，觸發時先檢查 enabled，跳過已停用的任務，跑完寫執行紀錄、更新狀態，另外加一個 <code>runNow(taskId)</code> 供手動即時執行。</p>
 
-<h2>收斂成一句</h2>
-<p>排程子系統的四塊其實共用兩條紀律：<strong>定義永遠只有 skill 一個來源；儲存永遠藏在介面之後。</strong>做到這兩條，持久化帶來的回報就是——「重啟後排程回來了」不再是靠讀日誌猜的體感，而是一句 <code>GET /api/v1/schedules</code> 就能對平的斷言。這也為下一課的跨重啟恢復鋪好了路。</p>
+<h2>第四塊：管理——四個端點 + 管理台第一個寫入頁</h2>
+<p>最後補上管理面。四個端點：</p>
+<ul>
+<li><code>GET /schedules</code>：列出所有排程；</li>
+<li><code>GET /schedules/{id}/executions</code>：查某排程的執行歷史；</li>
+<li><code>POST /schedules/{id}/run</code>：即時跑一次；</li>
+<li><code>PUT /schedules/{id}</code>：啟用／停用。</li>
+</ul>
+<p>管理台加上「定時任務」頁，可列、可即時執行、可啟停——這正是第 26 節唯讀管理台上的<strong>第一個寫入操作頁</strong>。持久化之後，「排程重啟後還在」從「讀日誌的體感」變成一句 <code>GET /api/v1/schedules</code> 的確定斷言。</p>
+
+<h2>一張圖記住整個子系統</h2>
+<p>把四塊拼起來，這條鏈就是：<strong>cron 觸發 → 同一條 <code>AgentService.process</code> → ReAct → notify 推送 → 落兩張表</strong>。它跟人推鏈是同一條主幹，只是換了一個「時鐘」的頭、加了一個「推送」的尾。下一課要驗證的正是這條鏈最關鍵的承諾：狀態全在進程之外，重啟不失憶，而且多個 Agent 並存互不打架。</p>
 
 <div class="lesson-nav">
   <div><a href="./admin-and-query-endpoint.html">← 上一步：三面同源：補列會話端點與管理台</a></div>
@@ -76,53 +52,46 @@
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="定時任務唯一允許的定義來源是什麼？" data-correct="2" data-explain="一個任務是一條 schedules 條目（id、cron、zone、message），定義於 skill，不新增第二來源。">
-  <button class="opt">Java 常數與註解</button>
-  <button class="opt">獨立的 YAML 設定檔</button>
+<div class="quiz" data-question="定時任務的「定義」應該用什麼來源？" data-correct="0" data-explain="用 skill 的 schedules 條目定義，不新增第二個定義來源，整台機器只有一個定義真相。">
   <button class="opt">skill 的 schedules 條目</button>
-  <button class="opt">管理台的臨時表單</button>
+  <button class="opt">資料庫的 cron 欄位</button>
+  <button class="opt">管理台手動填寫的表單</button>
+  <button class="opt">寫死在程式碼裡的常數</button>
 </div>
 
-<div class="quiz" data-question="排程到點時，訊息被餵給誰？" data-correct="1" data-explain="與 CLI／Web 同一條 AgentService.process，引擎核心零改動。">
-  <button class="opt">一條全新的排程專用鏈</button>
-  <button class="opt">與 CLI／Web 同一條入口</button>
-  <button class="opt">直接呼叫模型不經引擎</button>
-  <button class="opt">Notify 出站通道</button>
+<div class="quiz" data-question="排程器到點後，把訊息投進哪裡？" data-correct="2" data-explain="投進與 CLI、Web 完全同一條 AgentService.process 入口，引擎零改動。">
+  <button class="opt">一條排程專用的新處理鏈</button>
+  <button class="opt">直接呼叫 notify 工具</button>
+  <button class="opt">同一條 AgentService.process 入口</button>
+  <button class="opt">一個獨立的執行緒池</button>
 </div>
 
-<div class="quiz" data-question="第二次觸發後，scheduler 渠道的 session 應該如何？" data-correct="3" data-explain="排程固定同一組 session 身分，第二次觸發 append 到同一份歷史，仍是一列。">
-  <button class="opt">另開一列新的 session</button>
-  <button class="opt">被刪除後重新建立</button>
-  <button class="opt">被標記為 archived</button>
-  <button class="opt">續寫在同一份歷史</button>
+<div class="quiz" data-question="「會話重用」指的是什麼？" data-correct="1" data-explain="scheduler 頻道的會話要重複使用，觸發兩次仍是同一列歷史，而不是每跑一次開一列新會話。">
+  <button class="opt">每次觸發都建立全新會話</button>
+  <button class="opt">觸發多次仍共用同一列會話歷史</button>
+  <button class="opt">把會話存進記憶體加速</button>
+  <button class="opt">會話跨 Profile 互相借用</button>
 </div>
 
-<div class="quiz" data-question="推送網域不在白名單內時，正確結果是什麼？" data-correct="0" data-explain="Sandbox 攔下一筆 success=false，但排程器不受影響、下次照常觸發。">
-  <button class="opt">留一筆失敗且排程不受影響</button>
-  <button class="opt">整個排程器停止運作</button>
-  <button class="opt">自動把網域加入白名單</button>
-  <button class="opt">改由記憶模組代理推送</button>
+<div class="quiz" data-question="推送目標域名不在白名單時，正確的行為是？" data-correct="3" data-explain="Sandbox 攔下、留一筆 success=false，但排程器不能被拖垮，下一次照常觸發。">
+  <button class="opt">排程器整個停止</button>
+  <button class="opt">繞過沙箱強行推送</button>
+  <button class="opt">重試到成功為止</button>
+  <button class="opt">攔下留 success=false，但排程器照常跑</button>
 </div>
 
-<div class="quiz" data-question="ScheduledTaskStore 介面與 JPA 實作的分工體現了什麼？" data-correct="2" data-explain="核心只依賴介面，實作放 storage，是依賴倒置。">
-  <button class="opt">把資料庫查詢集中到控制器</button>
-  <button class="opt">讓各模組直接互相依賴</button>
-  <button class="opt">核心只依賴介面的依賴倒置</button>
-  <button class="opt">用靜態方法取代相依注入</button>
+<div class="quiz" data-question="兩張持久化表藏在什麼之後？" data-correct="1" data-explain="藏在核心介面 ScheduledTaskStore 之後，storage 用 JPA 實作，這是依賴倒置。">
+  <button class="opt">一個靜態工具類</button>
+  <button class="opt">核心介面 ScheduledTaskStore</button>
+  <button class="opt">Spring Data 的自動 repository</button>
+  <button class="opt">AgentService 的私有方法</button>
 </div>
 
-<div class="quiz" data-question="管理台「定時任務」頁的特別意義是什麼？" data-correct="3" data-explain="它是先前唯讀管理台的第一個寫操作頁，能即時執行與啟停。">
-  <button class="opt">它是第一個使用 Vue 的頁面</button>
-  <button class="opt">它是第一個只讀的監控頁</button>
-  <button class="opt">它是第一個顯示日誌的頁面</button>
-  <button class="opt">它是第一個寫操作控制頁</button>
-</div>
-
-<div class="quiz" data-question="持久化之後，「重啟後排程還在」如何被驗證？" data-correct="1" data-explain="狀態落進 scheduled_tasks 與 task_executions，一句 GET /schedules 即可斷言。">
-  <button class="opt">靠人工翻閱啟動日誌</button>
-  <button class="opt">一句 GET /schedules 斷言</button>
-  <button class="opt">重新觸發一次並肉眼觀察</button>
-  <button class="opt">檢查 cron 運算式是否合法</button>
+<div class="quiz" data-question="持久化之後，驗證「排程重啟還在」變成什麼？" data-correct="2" data-explain="從讀日誌的體感變成一句 GET /api/v1/schedules 的確定斷言。">
+  <button class="opt">檢查記憶體裡的排程物件</button>
+  <button class="opt">重開之後看 cron 有沒有報錯</button>
+  <button class="opt">一句 GET /api/v1/schedules 的斷言</button>
+  <button class="opt">比對每次觸發的 wall-clock 時間</button>
 </div>
 
 <div class="footer">

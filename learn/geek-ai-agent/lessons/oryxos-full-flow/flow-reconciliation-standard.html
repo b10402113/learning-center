@@ -14,73 +14,57 @@
 <h2>學習目標</h2>
 <p>能用一個可證偽的標準定義「主流程真能用」，並用對表與逐表對賬兩步方法，判斷一台組裝好的 Agent 底座是否真的打通。</p>
 
-<h2>為什麼單模組測試全綠，還是不敢說「能跑」</h2>
-<p>走到這裡，Provider、ReAct、CLI、Notify、Tool、Memory、Sandbox、排程、Web Service 每一層都有自己的驗收測試，而且都是綠的。但這只證明「每個零件單獨裝在測試台上會動」，不證明「這些零件接成一條線之後整台機器會動」。</p>
-<p>原因很簡單：<strong>縫隙從來長在兩個模組的交接處，而不是任何一個模組內部。</strong>單模組測試各自把邊界 mock 掉了，恰恰把最容易出事的那一段遮住。所以「全流程串聯」這一課不新增任何能力，它要做的事只有一件——把零件裝成一台機器，並且證明它真的會動。</p>
+<h2>單元測試全綠，不代表機器會動</h2>
+<p>走到這一步，OryxOS 已經把九個模組都立起來了：Provider 抽象、ReAct 迴圈、CLI、Notify、Tool、Memory、Sandbox、定時任務、Web Service。每一個模組都有自己的測試，而且都綠燈。問題是：<strong>每個零件單獨驗過，跟把它們裝成一台機器之後會不會動，是兩件事。</strong></p>
+<p>縫隙從來不長在任何一個模組「內部」，而長在兩個模組的「交接處」。Provider 把結果交給 ReAct、ReAct 把工具呼叫交給 ToolExecutor、ToolExecutor 把留痕寫進審計表——每一條交接地帶都可能悄悄漏掉一筆。單元測試看不到這些，因為它每次只讓一個模組上場。</p>
 
-<h2>先給「真能用」下一個可證偽的標準</h2>
-<p>「能用」如果只是一種感覺，就沒法驗收。所以要先把感覺翻譯成三條可以當場檢查的斷言，而且三條必須<strong>同時</strong>成立：</p>
+<h2>什麼叫「真能用」：一個可證偽的標準</h2>
+<p>「跑得起來」這種說法太模糊，無法驗收。所以要先把「真能用」定義成一個<strong>可以被推翻（可證偽）的具體標準</strong>。挑一句有代表性的話——「今天北京天氣怎麼樣，穿什麼合適」——它必須同時滿足三件事：</p>
+<ul>
+<li><strong>答得對</strong>：這句話會走完「想 → 查 → 答 → 記帳」整條鏈，觸發兩次 LLM 呼叫（第一次決定要不要查、第二次把答案組織出來）加一次工具呼叫（查天氣）。</li>
+<li><strong>記帳正確</strong>：沿途留下的痕跡在 <code>sessions</code>、<code>llm_calls</code>、<code>tool_invocations</code> 三張表裡，一筆不多、一筆不少。</li>
+<li><strong>三面同源</strong>：CLI、REST、管理台這三個入口，看到的都是同一份資料。</li>
+</ul>
+<p>這三件事必須<strong>同時</strong>成立，缺一不可。這就是「真能用」的定義——不是一句口號，而是一份可以被自動斷言檢查的清單。</p>
+
+<h2>第一步：對表，先確認每個模組都在位</h2>
+<p>動手串聯之前，花十分鐘做「對表」：把前面每一節的驗收清單濃縮成一行行，逐行確認每個模組承諾的<strong>對外能力</strong>還在位。這張表本身就是一張跨模組的能力地圖：</p>
 <table>
 <thead>
-<tr><th>#</th><th>斷言</th><th>怎麼檢查</th></tr>
+<tr><th>模組</th><th>要確認的對外承諾</th></tr>
 </thead>
 <tbody>
-<tr><td>1</td><td>答得出來</td><td>問一句有代表性的話，系統走完整條鏈並真的給出答案（例：兩個模型回合 + 一次工具呼叫）</td></tr>
-<tr><td>2</td><td>帳記得對</td><td>這一趟在 <code>sessions</code>、<code>llm_calls</code>、<code>tool_invocations</code> 留下的痕跡，數量與內容恰好符合預期</td></tr>
-<tr><td>3</td><td>三面同源</td><td>同一份資料，從 CLI、REST、管理台三個入口看過去完全一致</td></tr>
+<tr><td>Provider</td><td>顯式映射路由正確、自動工具執行關閉、成敗都寫 <code>llm_calls</code></td></tr>
+<tr><td>ReAct</td><td>達上限有 fallback、每輪結果累積回 Session</td></tr>
+<tr><td>CLI</td><td>輕／重命令切分、對話能進能出</td></tr>
+<tr><td>Notify</td><td>Webhook 能推、通道未設定時錯誤清晰</td></tr>
+<tr><td>Tool</td><td>九個內建工具可呼叫、三個來源統一成 <code>OryxTool</code></td></tr>
+<tr><td>Memory</td><td>核心記憶恆在、寫入後立刻讀得到（無快取）</td></tr>
+<tr><td>Sandbox</td><td>三張白名單強制生效、違規寫進 <code>tool_invocations</code></td></tr>
+<tr><td>定時任務</td><td>cron 會觸發、本地鎖防重疊</td></tr>
+<tr><td>Web Service</td><td>10 個端點、統一錯誤 JSON、Vue 產物在 <code>static/admin/</code></td></tr>
 </tbody>
 </table>
-<p>這三條把「能跑」變成一句可以被推翻的話。任何一條不成立，就是這台機器還沒組裝完，而不是「差不多可以了」。</p>
+<p>任何一行沒勾上，代表那個零件是壞的，就該先回那一節修好。用一個壞零件裝機器，後面每一次故障都會是「假警報」——你永遠分不清是整合錯了，還是零件本來就壞。</p>
 
-<h2>第一步：對表——整合前先確認每個模組都在位</h2>
-<p>動手把模組接起來之前，先花十分鐘做一件看似多餘的事：把前面每一課的驗收清單壓縮成一份點名表，逐項確認「這個模組當初承諾的對外能力，現在還在」。這叫<strong>對表</strong>。</p>
-<p>為什麼值得？因為你要裝的是一台機器，不是一堆零件。裝上一顆壞零件，之後每一次失敗都會變成<strong>假警報</strong>——你以為是接線接錯，其實是零件本來就壞的。先把零件驗乾淨，後面的問題才指向真正的縫隙。</p>
+<h2>第二步：對賬，拉一句話走一遍、逐表核對</h2>
+<p>對完表之後才真正拉對話。在 <code>oryxos chat</code> 裡問那句代表句，然後<strong>逐表對賬</strong>，把每一張表該出現的痕跡核對一遍：</p>
 <table>
 <thead>
-<tr><th>模組</th><th>要確認在位的能力</th></tr>
+<tr><th>檢查點</th><th>期望值</th></tr>
 </thead>
 <tbody>
-<tr><td>Provider</td><td>顯式映射路由正確、自動工具執行已關閉、成功與失敗都寫 <code>llm_calls</code></td></tr>
-<tr><td>ReAct</td><td>達最大迭代有回退處理、每一輪結果累積回 Session</td></tr>
-<tr><td>CLI</td><td>輕／重命令切分正確、能進能出</td></tr>
-<tr><td>Notify</td><td>webhook 推送可用、渠道未設定時有清楚錯誤</td></tr>
-<tr><td>Tool</td><td>內建工具可呼叫、三種來源統一成 <code>OryxTool</code></td></tr>
-<tr><td>Memory</td><td>核心記憶恆在、先寫後讀且不走快取</td></tr>
-<tr><td>Sandbox</td><td>三條白名單確實攔截、違規寫進 <code>tool_invocations</code></td></tr>
-<tr><td>Scheduler</td><td>cron 到點會觸發、本地鎖避免疊跑</td></tr>
-<tr><td>Web Service</td><td>端點齊全、錯誤 JSON 統一、Vue 管理台已建進 <code>static/admin/</code></td></tr>
-</tbody>
-</table>
-<p>任何一格沒打勾，就回去那一課先修好，不要帶著它往下整合。</p>
-
-<h2>第二步：對賬——拉一句對話走一遍，逐站核對痕跡</h2>
-<p>對表是靜態的點名，對賬是動態的實測。<strong>對賬</strong>的做法是：挑一句真的有代表性的話，讓它從入口走到出口，然後在每一個該留下痕跡的站點，核對「痕跡對不對」。</p>
-<p>這句代表性的話是：<strong>「今天北京天氣怎麼樣，穿什麼合適」</strong>。它好在哪裡？它既需要查外部資料（觸發工具），又需要模型做兩次判斷（先決定要不要查、再根據結果組答案），剛好把主流程的關鍵分支都走過一遍。在 <code>oryxos chat</code> 裡問出這句話之後，逐張表核對：</p>
-<table>
-<thead>
-<tr><th>表／檔案</th><th>預期痕跡</th></tr>
-</thead>
-<tbody>
-<tr><td><code>sessions</code></td><td>恰好 1 筆記錄，含完整歷史：使用者問句、兩則模型回覆、一筆天氣結果</td></tr>
-<tr><td><code>llm_calls</code></td><td>恰好 2 筆（先決定是否呼叫工具、再組答案），同一 session id、皆成功、token 非零</td></tr>
+<tr><td><code>sessions</code></td><td>恰好 1 筆，歷史完整（用戶問題、兩則模型回覆、一次天氣結果）</td></tr>
+<tr><td><code>llm_calls</code></td><td>恰好 2 筆，同一 session id、都成功、token 非零</td></tr>
 <tr><td><code>tool_invocations</code></td><td>恰好 1 筆（<code>http_get</code> 查天氣），成功、延遲正常</td></tr>
-<tr><td><code>MEMORY.md</code></td><td>沒有被改動——這趟對話不涉及記憶</td></tr>
+<tr><td><code>MEMORY.md</code></td><td>不變——這段對話不涉及記憶，動了就代表有東西不分青紅皂白在寫記憶</td></tr>
 </tbody>
 </table>
+<p>接著再用 REST 重跑一遍（<code>POST /sessions</code> 加 <code>POST /sessions/{id}/messages</code>），確認對賬結果一模一樣。這證明了「兩個入口共用一顆引擎」不是口號，而是一筆你算得清的帳。</p>
 
-<h2>對賬最容易被忽略的一半：不該有的不能有</h2>
-<p>很多人對賬只做一半：確認「該有的都在」。但紀律是雙向的——<strong>「該有的要在」與「不該有的不能有」同等重要</strong>。多一筆和少一筆一樣都是 bug。</p>
-<p>以上面的例子來說，<code>llm_calls</code> 若出現 3 筆，代表迴圈多繞了一圈；<code>tool_invocations</code> 若出現 2 筆，代表工具被重複執行（常見於自動工具執行沒關乾淨）；<code>MEMORY.md</code> 若被動到，代表有東西在不該寫記憶的時候寫了記憶。這些「多出來的痕跡」往往比缺漏更難查，因為系統表面上「跑成功了」，只有對賬會把它抓出來。</p>
-
-<h2>換一條入口再對一次帳</h2>
-<p>CLI 對完，接著用 REST 再走一遍：<code>POST /sessions</code> 建會話、<code>POST /sessions/{id}/messages</code> 送同一句話，然後再做一次同樣的逐表核對，確認結果一模一樣。</p>
-<p>這一步的價值不只是「REST 也能用」，而是把「兩個入口共用同一個引擎」從一句口號，變成一筆當場可以對平的帳。CLI 與 Web 最後都收在 <code>AgentService.process</code> 這一個編排入口上，所以兩條入口留下的痕跡應該完全一致；只要有一處不同，就代表某條入口偷偷多做了事。</p>
-<blockquote>
-為什麼要把「對賬」講得這麼細？因為它是後面所有整合工作的通用方法。同一套手法之後會用來驗排程鏈、驗重啟恢復、驗多 Agent 並存——差別只在於「換哪一句觸發、對哪幾張表」。
-</blockquote>
-
-<h2>把這套方法收進口袋</h2>
-<p>這一節的收穫不是新程式，而是一套可重複的驗收姿勢：<strong>先對表（靜態點名），再對賬（動態核對），而且兩個方向都要看</strong>。接下來兩課會分別處理「對賬時最常撞到的五條縫隙」與「讓對賬可自動化所需的查詢端點與管理台」，最後再把它固化成每次 <code>mvn verify</code> 都會回答的測試。</p>
+<h2>紀律：該有的要在，不該有的不能有</h2>
+<p>對賬這門功夫有一條最反直覺、卻最重要的紀律：<strong>「該有的痕跡要在」和「不該有的痕跡不能有」同等重要。</strong>多一筆跟少一筆，一樣都是 bug。少了 <code>llm_calls</code> 代表審計漏寫；多了一筆 <code>tool_invocations</code> 代表某個工具被重複執行、或某處不該寫記憶卻寫了。</p>
+<p>把這條紀律刻進心裡，整合期的除錯才會從「到處猜」變成「逐表算」：每一張表都是一本帳，帳對得上，機器才真的打通。下一步我們看對賬時最容易撞上的五條典型縫隙——症狀都出現在執行期，根因卻都在交接處。</p>
 
 <div class="lesson-nav">
   <div></div>
@@ -89,53 +73,46 @@
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="為什麼單模組測試全綠，仍不代表主流程能用？" data-correct="1" data-explain="測試把模組邊界 mock 掉了，而真正的縫隙就長在模組交接處。">
-  <button class="opt">因為測試跑得太快，沒測到真實模型</button>
-  <button class="opt">因為縫隙長在模組交接處，被 mock 遮住</button>
-  <button class="opt">因為單模組測試的覆蓋率一律偏低</button>
-  <button class="opt">因為整合後程式碼會被重新編譯</button>
+<div class="quiz" data-question="單元測試全綠為什麼不等於主流程打通？" data-correct="2" data-explain="縫隙長在兩個模組的交接處，單元測試每次只讓一個模組上場，看不到交接帶的漏寫。">
+  <button class="opt">因為單元測試寫得還不夠多</button>
+  <button class="opt">因為測試環境跟生產環境不同</button>
+  <button class="opt">縫隙長在模組交接處，單元測試看不到</button>
+  <button class="opt">因為程式碼還沒有壓縮打包</button>
 </div>
 
-<div class="quiz" data-question="「真能用」的三條標準，要同時成立的是哪一組？" data-correct="3" data-explain="答得出來、帳記得對、三面同源，三者必須同時成立。">
-  <button class="opt">跑得快、省 token、錯誤少</button>
-  <button class="opt">有介面、有文件、有測試</button>
-  <button class="opt">能呼叫、能記憶、能排程</button>
-  <button class="opt">答得出來、帳記得對、三面同源</button>
+<div class="quiz" data-question="代表句「今天北京天氣怎麼樣，穿什麼合適」應觸發幾次 LLM 呼叫？" data-correct="1" data-explain="兩次：第一次決定要不要查工具，第二次把答案組織出來。">
+  <button class="opt">一次，模型直接給答案</button>
+  <button class="opt">兩次，決定查詢與組織答案</button>
+  <button class="opt">三次，查詢、整理、再加潤飾</button>
+  <button class="opt">零次，因為只查資料庫</button>
 </div>
 
-<div class="quiz" data-question="對表（點名）的主要目的是什麼？" data-correct="2" data-explain="先驗乾淨零件，才不會讓後面的每一次失敗都變成假警報。">
-  <button class="opt">統計每個模組寫了幾行程式</button>
-  <button class="opt">比較各模組的測試覆蓋率排名</button>
-  <button class="opt">先確認零件沒壞，避免後續假警報</button>
-  <button class="opt">決定哪個模組可以先上線</button>
+<div class="quiz" data-question="「對表」這一步的目的是什麼？" data-correct="0" data-explain="對表是逐行確認每個模組承諾的對外能力還在位，壞零件先修好再裝機。">
+  <button class="opt">確認每個模組的對外能力還在位</button>
+  <button class="opt">把模組重新排列順序</button>
+  <button class="opt">寫一輪新的單元測試</button>
+  <button class="opt">啟動 HTTP 服務看有沒有例外</button>
 </div>
 
-<div class="quiz" data-question="用天氣穿搭問題對賬時，llm_calls 預期恰好幾筆？" data-correct="0" data-explain="先決定是否呼叫工具、再依結果組答案，因此恰好兩筆。">
-  <button class="opt">恰好 2 筆</button>
-  <button class="opt">恰好 1 筆</button>
-  <button class="opt">恰好 3 筆</button>
-  <button class="opt">恰好 4 筆</button>
+<div class="quiz" data-question="對賬後，那段天氣對話的 MEMORY.md 應該如何？" data-correct="3" data-explain="這段對話不涉及記憶，MEMORY.md 應保持不變；動了就代表有東西不分青紅皂白在寫記憶。">
+  <button class="opt">多出一筆北京天氣紀錄</button>
+  <button class="opt">被截斷成最近 4000 字</button>
+  <button class="opt">被清空重新累積</button>
+  <button class="opt">完全不變</button>
 </div>
 
-<div class="quiz" data-question="這趟天氣對話之後，MEMORY.md 應該是什麼狀態？" data-correct="1" data-explain="該對話不涉及記憶，記憶檔不該被動到；若被改就是有東西亂寫記憶。">
-  <button class="opt">多出一條北京的天氣記錄</button>
-  <button class="opt">完全沒有被改動</button>
-  <button class="opt">被截斷到最近的內容</button>
-  <button class="opt">被清空以便下次寫入</button>
+<div class="quiz" data-question="對賬紀律裡，哪句話最反直覺卻最重要？" data-correct="1" data-explain="「該有的要在」與「不該有的不能有」同等重要——多一筆跟少一筆一樣都是 bug。">
+  <button class="opt">能跑起來就是好機器</button>
+  <button class="opt">該有的要在，不該有的不能有</button>
+  <button class="opt">先求有，再求對</button>
+  <button class="opt">日誌夠詳細就免審計</button>
 </div>
 
-<div class="quiz" data-question="「多一筆痕跡」為什麼也是 bug？" data-correct="2" data-explain="多出痕跡代表有環節重複執行或亂寫，系統卻表面成功，反而更難查。">
-  <button class="opt">因為資料庫容量會被撐爆</button>
-  <button class="opt">因為查詢時會拖慢回應速度</button>
-  <button class="opt">因為代表有環節重複執行或亂寫</button>
-  <button class="opt">因為會讓 token 成本無法預估</button>
-</div>
-
-<div class="quiz" data-question="CLI 對完帳後再用 REST 對一次，主要在證明什麼？" data-correct="3" data-explain="兩條入口收在同一個 AgentService.process，痕跡一致才證明共用同一引擎。">
-  <button class="opt">REST 端點比 CLI 更穩定可靠</button>
-  <button class="opt">REST 的回應速度比 CLI 更快</button>
-  <button class="opt">管理台可以取代命令列工具</button>
-  <button class="opt">兩個入口確實共用同一個引擎</button>
+<div class="quiz" data-question="用 REST 重跑同一段對話，對賬結果一模一樣，證明了什麼？" data-correct="2" data-explain="CLI 與 REST 共用同一顆引擎，兩個入口的帳能對上，三面同源才成立。">
+  <button class="opt">REST 比 CLI 更快</button>
+  <button class="opt">審計表可以省略不查</button>
+  <button class="opt">兩個入口共用同一顆引擎</button>
+  <button class="opt">模型輸出是確定性的</button>
 </div>
 
 <div class="footer">
