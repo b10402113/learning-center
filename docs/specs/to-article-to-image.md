@@ -11,7 +11,7 @@
 在 learning-center 引入兩支新 skill，並把 `article-agent` 的 pipeline 攤進來改成支援 HTML：
 
 1. 複製 `article-agent/src/` 與 `article-agent/prompts/` 到 repo 根 `src/`、`prompts/`，原 Markdown 流程保留，另加 HTML 流程。
-2. `/to-article <subject> [tier<N> | node-slug ...] [-max-subagents N]`：對範圍內每個 step，去掉 quiz/nav/footer 後把 HTML 正文交給文字 LLM 改寫成 HTML（照範本），並在適合位置放 `<!--image:N-->`；寫回正式 HTML（佔位框形式）並記錄配圖計畫。
+2. `/to-article <subject> [tier<N> | node-slug ...] [-max-subagents N]`：對範圍內每個 step，去掉 quiz/nav/footer 後把 HTML 正文交給文字 LLM 改寫成 HTML（照範本）；改寫完成後由 agent 讀成稿決定配圖位置、插入 `<!--image:N-->` 標記；程式驗證標記後寫回正式 HTML（佔位框形式）並記錄配圖計畫。
 3. `/to-image <subject> [tier<N> | node-slug ...] [-max-subagents N] [-skip-ask]`：讀配圖計畫逐張生圖，插入 `<figure>`，完成文章。
 4. step MDX frontmatter 新增選填 `illustration: none | planned | done` 記錄進度；node `status` 梯子不動。
 
@@ -47,18 +47,17 @@ Prereqs：`learn/<subject>/MEMORY.md`、`learn/<subject>/ROADMAP.md` 存在；`s
 
 1. 輸入：若 `learn/<subject>/output/<node>/<step>/original.html` 存在就讀它，否則讀正式 `learn/<subject>/lessons/<node>/<step>.html`。將原始稿存為 `original.html`。
 2. 切分：`<head>`（含 `../assets/shared.css` 連結）由程式保留；從 body 移除 quiz、`lesson-nav`、`footer`、`script`。`h1` 與 `.meta` 保留在送給 LLM 的內容中，**允許改寫**。
-3. Agent 讀清理後的 HTML，決定 `imagePlan`（1–5 項，每項 `heading`、`anchor`、`prompt`）。
-4. 一次文字呼叫（沿用 article-agent 方法、`.env` 的 `TEXT_MODEL`）。系統 prompt 為新增的 `prompts/html-rewrite.txt`；user 訊息含 `brief`（取自 `MEMORY.md` 的語言與教學偏好）、`imagePlan`、清理後的 HTML。要求回傳 HTML，並在對應區塊後放獨立一行的 `<!--image:N-->`。
-5. 驗證（硬失敗則不覆蓋、保留原稿、回報）：
-   - 標記數量與順序等於 `imagePlan`；
+3. 一次文字呼叫（沿用 article-agent 方法、`.env` 的 `TEXT_MODEL`）。系統 prompt 為新增的 `prompts/html-rewrite.txt`；user 訊息含 `brief`（取自 `MEMORY.md` 的語言與教學偏好）與清理後的 HTML。要求只回傳 HTML，**不含任何圖片標記**。成功後寫 `rewritten.html`。
+4. 驗證（硬失敗則不覆蓋、回報）：
    - 輸出為合法 HTML（可解析）；
    - 原稿所有 code 區塊內容原樣保留；
    - 原稿所有 `<a href>` 連結全部保留。
-6. 組裝：LLM 回傳的 body + 接回 quiz、`lesson-nav`、`footer`、`<script src="../assets/quiz.js">`。寫回正式 `learn/<subject>/lessons/<node>/<step>.html`，每個 `<!--image:N-->` 直接換成指向未來圖片路徑的 `<figure>`（圖還沒生成也先寫好路徑）：
+5. Agent 讀**改寫後的** `rewritten.html`，自行挑 1–5 個最需配圖的位置，在該段落後插入獨立一行的 `<!--image:N-->`（N 依序從 1），並把 `heading`/`anchor`/`prompt` 計畫寫到 `plan.input.json`。agent 只能新增標記行，不得改寫內文。
+6. finalize（純程式、無模型呼叫）：驗證標記數量與順序等於計畫；通過才儲存 `plan.json`（失敗則不留，避免 `/to-image` 撿到沒改寫過文章計畫），並把每個 `<!--image:N-->` 換成指向未來圖片路徑的 `<figure>`，組裝回 quiz、`lesson-nav`、`footer`、`<script src="../assets/quiz.js">`，寫回正式 `learn/<subject>/lessons/<node>/<step>.html`：
    ```html
    <figure class="lesson-figure"><img src="./<step>-assets/image-N.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
    ```
-7. 改寫成功後才儲存 `plan.json`（失敗則不留，避免 `/to-image` 撿到沒改寫過文章計畫），並儲存 `rewritten.html`、`manifest.json` 至 `learn/<subject>/output/<node>/<step>/`；step MDX 設 `illustration: planned` 並更新 `updated`。
+7. 保存 `rewritten.html`、`manifest.json` 至 `learn/<subject>/output/<node>/<step>/`；step MDX 設 `illustration: planned` 並更新 `updated`。
 8. 確保 `learn/<subject>/lessons/assets/shared.css` 含 figure 樣式（缺則附加）。
 
 ## /to-image pipeline（付費）
@@ -104,13 +103,13 @@ learn/<subject>/
 - 複製 `article-agent/src/`（`pipeline.mjs`、`cli.mjs`、`pipeline.test.mjs`、`test.ts`）與 `article-agent/prompts/`（`publisher.txt`、`rewrite.txt`、`image.txt`）到 repo 根 `src/`、`prompts/`。
 - 新增根 `package.json`（依賴 `openai`）、`.env`（複製自 article-agent 並填金鑰）；於根目錄 `npm install`。原 Markdown 流程與 `cli.mjs` 保持可用。
 - 新增 `src/html.mjs`（HTML pipeline：清理、改寫呼叫、驗證、組裝、生圖插入）與 `prompts/html-rewrite.txt`；`prompts/image.txt` 沿用。
-- 新增薄 CLI `src/html-cli.mjs` 供兩支 skill 呼叫（每次處理一個 step，模式 `article` 或 `image`，並接受 subject/node/step 路徑與 scope 參數）。
+- 新增薄 CLI `src/html-cli.mjs` 供兩支 skill 呼叫（每次處理一個 step，模式 `article`（改寫）、`figures`（驗證標記並組裝）、`image`（生圖），並接受 subject/node/step 路徑與 scope 參數）。
 - 根 `.gitignore` 補：`node_modules/`、`.env`、`.env.*`、`!*.env.example`、`learn/*/output/`。
 
 ## Testing Decisions
 
 - 沿用 `article-agent/src/pipeline.test.mjs` 的 mock API 測試思路，為 `src/html.mjs` 新增單元測試：清理（去 quiz/nav/footer）、標記解析與驗證、code/連結保留驗證、組裝（接回 quiz/nav/footer/script、`<figure><img>` 路徑與舊版佔位框遷移）、resume（既有 original/plan/assets 行為）。
-- 以 mock 文字 / 圖片 API 驗證「每次 /to-article 只呼叫一次文字模型」「生圖後不再呼叫文字模型」「標記不符即失敗」「改寫失敗不留 plan.json」。
+- 以 mock 文字 / 圖片 API 驗證「每次 /to-article 只呼叫一次文字模型」「改寫階段不寫 lesson / plan / 標記」「agent 標記與計畫不符即失敗」「生圖後不再呼叫文字模型」「改寫失敗不留 plan.json」。
 - 端到端手動驗證：對一個真實 node 跑 `/to-article`，確認審稿 HTML 正常以 shared.css 呈現、`<img>` 路徑已指向未來圖片；再跑 `/to-image`，確認圖出現在 `<step>-assets/` 且頁面正常、quiz 仍在。
 - `node scripts/verify.mjs --subject <subject>` 需通過（`illustration` 欄位合法）。
 

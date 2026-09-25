@@ -5,7 +5,7 @@ disable-model-invocation: true
 argument-hint: "/to-article <subject> [tier<N> | node-slug ...] [-max-subagents N]"
 ---
 
-Rewrite the HTML lessons of a subject's steps into readable illustrated articles, planning where images go but **not generating them**. The rewrite is done by `src/html-cli.mjs`, which calls the `.env` `TEXT_MODEL`; the dispatched `article-agent` only decides the image plan. A later `/to-image` spends the image money.
+Rewrite the HTML lessons of a subject's steps into readable illustrated articles, planning where images go but **not generating them**. The rewrite is done by `src/html-cli.mjs`, which calls the `.env` `TEXT_MODEL`; the dispatched `article-agent` reads the finished rewrite, decides where images go, and marks those spots. A later `/to-image` spends the image money.
 
 **Invocation modes:**
 - `/to-article <subject>` — all nodes in the roadmap.
@@ -28,7 +28,7 @@ The prompt below is the complete text passed to each `task` call. Dispatch with 
 ```
 Process exactly one lesson step in article mode. Subject: <SUBJECT>. Node: <NODE-ID>. Step: <STEP-ID>.
 
-Follow your article-agent instructions exactly. Your only writes are the plan file and the `src/html-cli.mjs` calls; do not edit any HTML yourself. The CLI calls the .env text model for the rewrite.
+Follow your article-agent instructions exactly. The rewrite and finalization go through `src/html-cli.mjs` (which calls the .env text model); between the two CLI calls you read the rewritten article, decide where images go, add `<!--image:N-->` marker lines to `rewritten.html`, and write the plan file. Do not rewrite the prose yourself.
 
 Report the step id, status (rewritten / failed / skipped), the image count planned, and any error message.
 ```

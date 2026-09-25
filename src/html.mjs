@@ -205,9 +205,9 @@ export function normalizeRewrite(raw) {
 /** Every marker must appear once, in plan order, as a standalone line. */
 export function parseImageMarkers(rewritten, plan) {
   const matches = [...String(rewritten).matchAll(markerRe())];
-  if (!matches.length) throw new Error('Rewrite returned no image markers; the image plan was not preserved');
+  if (!matches.length) throw new Error('No image markers found in the rewritten article');
   if (matches.length !== plan.length)
-    throw new Error(`Rewrite preserved ${matches.length} of ${plan.length} image markers`);
+    throw new Error(`Found ${matches.length} image markers but the plan has ${plan.length}`);
   matches.forEach((match, i) => {
     if (Number(match[1]) !== i + 1)
       throw new Error(`Image markers are out of order: expected <!--image:${i + 1}-->, found <!--image:${match[1]}-->`);
@@ -215,10 +215,9 @@ export function parseImageMarkers(rewritten, plan) {
   return matches.map((match, i) => ({ index: i + 1, position: match.index }));
 }
 
-/** Hard validation of a rewrite: markers, HTML shape, code blocks and links. */
-export function validateRewrite({ rewritten, plan, originalBody }) {
+/** Hard validation of a rewrite: HTML shape, code blocks and links. */
+export function validateRewrite({ rewritten, originalBody }) {
   if (typeof rewritten !== 'string' || !rewritten.trim()) throw new Error('Rewrite was empty');
-  parseImageMarkers(rewritten, plan);
   if (!isHtmlParseable(rewritten)) throw new Error('Rewrite is not valid HTML');
   const decoded = plainText(rewritten);
   for (const block of extractCodeBlocks(originalBody)) {
@@ -372,20 +371,18 @@ export async function prepareHtmlLesson(args, root = projectRoot) {
   return { root, paths, original, ...split, chrome };
 }
 
-/** One text-model call per run: clean the original, rewrite it, then record the plan. */
+/**
+ * One text-model call per run: clean the original, rewrite it, and save the
+ * rewrite. No image plan is involved — the calling agent reads the finished
+ * article afterwards and marks where figures should go.
+ */
 export async function generateHtmlArticle(args, root = projectRoot, injected = {}) {
-  const { root: resolved, paths, htmlTag, headInner, chrome } = await prepareHtmlLesson(args, root);
+  const { root: resolved, paths, chrome } = await prepareHtmlLesson(args, root);
   const subject = assertSafeId('subject', args.subject);
   const node = assertSafeId('node', args.node);
   const step = assertSafeId('step', args.step);
   loadEnv(resolved);
   const textModel = resolveTextModel();
-  const providedPlan = args.imagePlan
-    ?? await readJson(paths.plan)
-    ?? await readJson(paths.planInput);
-  const plan = normalizeImagePlan(providedPlan);
-  if (!plan.length) throw new Error('imagePlan is required: the calling agent must decide which sections get images');
-  if (plan.length > MAX_IMAGES) throw new Error(`imagePlan has ${plan.length} items; at most ${MAX_IMAGES} are allowed`);
   const manifest = {
     status: 'running',
     mode: 'article',
@@ -393,7 +390,6 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
     textModel,
     textRequests: 0,
     responses: [],
-    plan,
     stages: { original: true, cleaned: true },
   };
   const saveManifest = () => fs.writeFile(paths.manifest, JSON.stringify(manifest, null, 2));
@@ -408,7 +404,7 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
       model: textModel,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: JSON.stringify({ brief, imagePlan: plan, html: chrome.cleaned }) },
+        { role: 'user', content: JSON.stringify({ brief, html: chrome.cleaned }) },
       ],
     });
     manifest.responses.push({ id: response?.data?.id ?? response?.id, usage: response?.usage ?? response?.data?.usage });
@@ -416,20 +412,12 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
     const apiError = responseError(response);
     if (apiError) throw apiError;
     const rewritten = normalizeRewrite(textContent(response));
-    validateRewrite({ rewritten, plan, originalBody: chrome.cleaned });
+    validateRewrite({ rewritten, originalBody: chrome.cleaned });
     manifest.stages.rewritten = true;
     await fs.writeFile(paths.rewritten, `${rewritten}\n`);
-    // The plan is only recorded once the rewrite has succeeded, so /to-image
-    // never picks up a plan for an article that was never written.
-    await fs.writeFile(paths.plan, JSON.stringify(plan, null, 2));
-    const body = markersToFigures(rewritten, plan, step);
-    await fs.writeFile(paths.lesson, assembleLesson({ htmlTag, headInner, body, chrome }));
-    await ensureLessonFigureStyles(resolved, subject);
-    await setStepIllustration(resolved, subject, node, step, 'planned');
-    manifest.stages.assembled = true;
     manifest.status = 'completed';
     await saveManifest();
-    return { lesson: paths.lesson, plan: paths.plan, rewritten: paths.rewritten, manifest: paths.manifest };
+    return { rewritten: paths.rewritten, planInput: paths.planInput, manifest: paths.manifest };
   } catch (error) {
     manifest.status = 'failed';
     manifest.error = {
@@ -441,6 +429,38 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
     await saveManifest().catch(() => {});
     throw new Error(`Article rewrite failed (${manifest.error.message}); partial files: ${paths.outDir}`, { cause: error });
   }
+}
+
+/**
+ * Program-only: the agent has already inserted `<!--image:N-->` markers into
+ * the rewrite and written the plan. Convert the markers to figures, assemble
+ * the lesson, and record the plan.
+ */
+export async function finalizeHtmlArticle(args, root = projectRoot) {
+  const { root: resolved, paths, htmlTag, headInner, chrome } = await prepareHtmlLesson(args, root);
+  const subject = assertSafeId('subject', args.subject);
+  const node = assertSafeId('node', args.node);
+  const step = assertSafeId('step', args.step);
+  const rewritten = await fs.readFile(paths.rewritten, 'utf8').catch(() => null);
+  if (rewritten == null)
+    throw new Error(`No rewritten article at ${path.relative(resolved, paths.rewritten)}; run the article rewrite first`);
+  const providedPlan = args.imagePlan ?? await readJson(paths.planInput);
+  const plan = normalizeImagePlan(providedPlan);
+  if (!plan.length) throw new Error('imagePlan is required: the calling agent must mark at least one image');
+  if (plan.length > MAX_IMAGES) throw new Error(`imagePlan has ${plan.length} items; at most ${MAX_IMAGES} are allowed`);
+  parseImageMarkers(rewritten, plan);
+  // The plan is only recorded once the markers validate, so /to-image never
+  // picks up a plan for an article that was never written.
+  await fs.writeFile(paths.plan, JSON.stringify(plan, null, 2));
+  const body = markersToFigures(rewritten, plan, step);
+  await fs.writeFile(paths.lesson, assembleLesson({ htmlTag, headInner, body, chrome }));
+  await ensureLessonFigureStyles(resolved, subject);
+  await setStepIllustration(resolved, subject, node, step, 'planned');
+  const manifest = await readJson(paths.manifest) ?? { mode: 'article' };
+  manifest.status = 'completed';
+  manifest.stages = { ...(manifest.stages ?? {}), assembled: true };
+  await fs.writeFile(paths.manifest, JSON.stringify(manifest, null, 2));
+  return { lesson: paths.lesson, plan: paths.plan, rewritten: paths.rewritten };
 }
 
 function buildImagePrompt(item, context, imageTemplate) {

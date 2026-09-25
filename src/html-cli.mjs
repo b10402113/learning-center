@@ -1,10 +1,11 @@
 import fs from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { prepareHtmlLesson, generateHtmlArticle, generateHtmlImages } from './html.mjs';
+import { prepareHtmlLesson, generateHtmlArticle, finalizeHtmlArticle, generateHtmlImages } from './html.mjs';
 
 const usage = `Usage:
   node src/html-cli.mjs clean   --subject <s> --node <n> --step <t> [--root <dir>]
-  node src/html-cli.mjs article --subject <s> --node <n> --step <t> [--plan <file>] [--brief <text>] [--root <dir>]
+  node src/html-cli.mjs article --subject <s> --node <n> --step <t> [--brief <text>] [--root <dir>]
+  node src/html-cli.mjs figures --subject <s> --node <n> --step <t> [--plan <file>] [--root <dir>]
   node src/html-cli.mjs image   --subject <s> --node <n> --step <t> [--root <dir>]`;
 
 const { values, positionals } = parseArgs({
@@ -44,8 +45,11 @@ try {
         planInput: paths.planInput,
       }, null, 2));
     } else if (mode === 'article') {
+      const result = await generateHtmlArticle({ ...target, brief: values.brief }, root);
+      console.log(JSON.stringify(result, null, 2));
+    } else if (mode === 'figures') {
       const imagePlan = values.plan ? JSON.parse(await fs.readFile(values.plan, 'utf8')) : undefined;
-      const result = await generateHtmlArticle({ ...target, imagePlan, brief: values.brief }, root);
+      const result = await finalizeHtmlArticle({ ...target, imagePlan }, root);
       console.log(JSON.stringify(result, null, 2));
     } else if (mode === 'image') {
       const result = await generateHtmlImages(target, root);
