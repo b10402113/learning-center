@@ -31,6 +31,7 @@ Exit code: `0` = no failures, `1` = at least one failure. A non-zero exit is a h
 |---|---|
 | `fm-required` | required frontmatter keys present per file type |
 | `fm-status` | node `status` is a legal value |
+| `fm-illustration` | optional step `illustration` is `none`/`planned`/`done` |
 | `fm-nodes-no-elements` | node container carries no flat `elements` list |
 | `fm-type` | element `type` is `article`/`video`; `video` has `videoUrl` |
 | `id-filename` | frontmatter `id` equals the filename |

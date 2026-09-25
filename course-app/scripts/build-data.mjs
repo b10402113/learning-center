@@ -160,6 +160,7 @@ function buildSubject(subject) {
         sources: [],
         coursePage: null, // "<subject>/<node>/<file>.html" under public/lessons/
         hasContent: false,
+        illustration: "none",
       };
 
       if (fs.existsSync(stepFile)) {
@@ -187,6 +188,7 @@ function buildSubject(subject) {
 
         step.sources = (sf.frontmatter.sources || []).map(parseSource);
         step.hasContent = step.lessonMd.length > 0;
+        step.illustration = sf.frontmatter.illustration || "none";
       }
       steps.push(step);
     }

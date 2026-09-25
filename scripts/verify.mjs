@@ -30,6 +30,8 @@ const ALLOWED_STATUS = new Set([
   "edges-written",
 ]);
 
+const ALLOWED_ILLUSTRATION = new Set(["none", "planned", "done"]);
+
 const NODE_FM = ["id", "title", "subject", "tier", "order", "status", "goal", "sources", "steps", "created", "updated"];
 const STEP_FM = ["id", "title", "subject", "sources", "created", "updated"];
 const EDGE_FM = ["title", "type", "from", "to", "nodes", "created", "updated"];
@@ -207,6 +209,13 @@ function checkIdFilename(report, path, id, expectedId) {
   }
 }
 
+function checkIllustration(report, path, fm) {
+  if (fm.illustration === undefined || fm.illustration === null) return;
+  if (!ALLOWED_ILLUSTRATION.has(String(fm.illustration))) {
+    report.fail(path.replace(REPO_ROOT + "/", ""), 1, "fm-illustration", `invalid illustration: ${fm.illustration}`);
+  }
+}
+
 function checkDag(report, path, nodeId, fm, stepFiles, stepIdsByNode) {
   const rel = path.replace(REPO_ROOT + "/", "");
   const dag = Array.isArray(fm.steps) ? fm.steps : [];
@@ -332,6 +341,7 @@ function runNodeChecks(report, subject, nodeId, scan, digestIdx, sourceNames, no
   for (const step of nodeSteps) {
     const { data: fm, body } = parse(step.path);
     checkFrontmatter(report, step.path, fm, STEP_FM);
+    checkIllustration(report, step.path, fm);
     checkIdFilename(report, step.path, fm.id, step.id);
     checkReferences(report, step.path, body, subject, nodeIds, stepKeys);
     checkSourceLinks(report, step.path, body, subject, sourceNames);
@@ -357,6 +367,7 @@ function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, nodeIds
   for (const step of scan.steps) {
     const { data: fm, body } = parse(step.path);
     checkFrontmatter(report, step.path, fm, STEP_FM);
+    checkIllustration(report, step.path, fm);
     checkIdFilename(report, step.path, fm.id, step.id);
     checkReferences(report, step.path, body, subject, nodeIds, stepKeys);
     checkSourceLinks(report, step.path, body, subject, sourceNames);
