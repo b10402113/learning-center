@@ -41,7 +41,7 @@ try {
         outDir: paths.outDir,
         original: paths.original,
         cleaned: paths.cleaned,
-        plan: paths.plan,
+        planInput: paths.planInput,
       }, null, 2));
     } else if (mode === 'article') {
       const imagePlan = values.plan ? JSON.parse(await fs.readFile(values.plan, 'utf8')) : undefined;

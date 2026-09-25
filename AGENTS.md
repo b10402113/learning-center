@@ -18,7 +18,7 @@ This repo turns raw material into customized, subject-specific lessons. A **node
 │       ├── digests/   ← two-level source digests from /learn-init & /roadmap & /ingest
 │       ├── nodes/     ← one container file per node + a folder of step files per node
 │       ├── lessons/   ← HTML lessons from /teach, one folder per node (<node-id>/<step-id>.html); shared assets in lessons/assets/; illustrations in <node>/<step>-assets/
-│       └── output/    ← /to-article & /to-image working files per step (<node>/<step>/original.html, cleaned.html, plan.json, rewritten.html, manifest.json, assets/); not served
+│       └── output/    ← /to-article & /to-image working files per step (<node>/<step>/original.html, cleaned.html, plan.input.json, plan.json, rewritten.html, manifest.json, assets/); not served
 ├── src/               ← Markdown article pipeline (cli.mjs, pipeline.mjs) + HTML lesson pipeline (html-cli.mjs, html.mjs); tests beside them
 ├── prompts/           ← rewrite / image / publisher / html-rewrite prompts used by src/
 ├── .opencode/         ← skills and subagents; article-agent owns one step of /to-article or /to-image

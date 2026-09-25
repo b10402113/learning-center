@@ -14,8 +14,8 @@ import {
   normalizeRewrite,
   parseImageMarkers,
   validateRewrite,
-  markersToPlaceholders,
-  replacePlaceholderWithFigure,
+  markersToFigures,
+  ensureFigure,
   prepareHtmlLesson,
   generateHtmlArticle,
   generateHtmlImages,
@@ -207,14 +207,20 @@ test('validateRewrite preserves code blocks and links', () => {
   assert.throws(() => validateRewrite({ rewritten: '<div><p>壞</div>\n\n<!--image:1-->', plan, originalBody }), /valid HTML/);
 });
 
-test('markers become placeholders and then figures', () => {
+test('markers become figures pointing at the known image path', () => {
   const plan = normalizeImagePlan([{ prompt: 'a' }, { prompt: 'b' }]);
-  const out = markersToPlaceholders('A\n\n<!--image:1-->\n\nB\n\n<!--image:2-->', plan);
-  assert.match(out, /<figure class="lesson-figure pending">配圖 1 待生成<\/figure>/);
-  const withFigure = replacePlaceholderWithFigure(out, 1, { step: 'my-step', filename: 'image-1.png' });
-  assert.match(withFigure, /<figure class="lesson-figure"><img src="\.\/my-step-assets\/image-1\.png" alt=""><figcaption>AI 生成示意圖<\/figcaption><\/figure>/);
-  assert.match(withFigure, /配圖 2 待生成/);
-  assert.throws(() => replacePlaceholderWithFigure('<p>無</p>', 9, { step: 's', filename: 'image-9.png' }), /Placeholder for figure 9/);
+  const out = markersToFigures('A\n\n<!--image:1-->\n\nB\n\n<!--image:2-->', plan, 'my-step');
+  assert.match(out, /<figure class="lesson-figure"><img src="\.\/my-step-assets\/image-1\.png" alt=""><figcaption>AI 生成示意圖<\/figcaption><\/figure>/);
+  assert.match(out, /<img src="\.\/my-step-assets\/image-2\.png"/);
+  assert.doesNotMatch(out, /pending|待生成/);
+});
+
+test('ensureFigure is idempotent and migrates an old pending placeholder', () => {
+  const legacy = 'A\n\n<figure class="lesson-figure pending">配圖 1 待生成</figure>\n\nB';
+  const migrated = ensureFigure(legacy, 1, 'my-step');
+  assert.match(migrated, /<img src="\.\/my-step-assets\/image-1\.png"/);
+  assert.doesNotMatch(migrated, /pending|待生成/);
+  assert.equal(ensureFigure(migrated, 1, 'my-step'), migrated);
 });
 
 test('markerContexts attaches each marker to its preceding block', () => {
@@ -240,7 +246,7 @@ test('prepareHtmlLesson backs up the original and writes a cleaned body', async 
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('article: one text call, placeholders written, illustration planned', async () => {
+test('article: one text call, figures written with known paths, illustration planned', async () => {
   const root = await makeRoot();
   try {
     let textCalls = 0;
@@ -260,12 +266,15 @@ test('article: one text call, placeholders written, illustration planned', async
     assert.equal(textCalls, 1);
     assert.equal(imageCalls, 0);
     const lesson = await fs.readFile(result.lesson, 'utf8');
-    assert.match(lesson, /配圖 1 待生成/);
+    assert.match(lesson, /<figure class="lesson-figure"><img src="\.\/step-one-assets\/image-1\.png" alt=""><figcaption>AI 生成示意圖<\/figcaption><\/figure>/);
+    assert.doesNotMatch(lesson, /pending|待生成/);
     assert.match(lesson, /class="quiz"/);
     assert.match(lesson, /測試頁尾/);
     assert.match(lesson, /<script src="\.\.\/assets\/quiz\.js"><\/script>/);
     assert.match(await fs.readFile(mdxPath(root), 'utf8'), /^illustration: planned$/m);
     assert.match(await fs.readFile(path.join(root, 'learn', 'demo', 'lessons', 'assets', 'shared.css'), 'utf8'), /\.lesson-figure/);
+    const plan = JSON.parse(await fs.readFile(path.join(outputDir(root), 'plan.json'), 'utf8'));
+    assert.equal(plan.length, 1);
     const manifest = JSON.parse(await fs.readFile(result.manifest, 'utf8'));
     assert.equal(manifest.textRequests, 1);
     assert.equal(manifest.status, 'completed');
@@ -298,6 +307,7 @@ test('article: a dropped marker fails without overwriting the lesson', async () 
         { client: textClient(bad), generateImage: async () => Buffer.from('00', 'hex') }),
       /no image markers|preserved 0 of 1/);
     assert.equal(await fs.readFile(lessonPath(root), 'utf8'), before);
+    assert.equal(await fs.readFile(path.join(outputDir(root), 'plan.json'), 'utf8').catch(() => null), null);
     const manifest = JSON.parse(await fs.readFile(path.join(outputDir(root), 'manifest.json'), 'utf8'));
     assert.equal(manifest.status, 'failed');
   } finally { await fs.rm(root, { recursive: true, force: true }); }

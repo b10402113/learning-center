@@ -233,20 +233,30 @@ export function validateRewrite({ rewritten, plan, originalBody }) {
   return true;
 }
 
-export function markersToPlaceholders(rewritten, plan) {
+export function figureHtml(step, index) {
+  return `<figure class="lesson-figure"><img src="./${step}-assets/image-${index}.png" alt=""><figcaption>${FIGURE_CAPTION}</figcaption></figure>`;
+}
+
+/** Replace each marker with its final figure, whose src points at the future image path. */
+export function markersToFigures(rewritten, plan, step) {
   const indexes = new Set(plan.map(item => item.index));
   return String(rewritten).replace(markerRe(), (whole, digits) => {
     const n = Number(digits);
-    return indexes.has(n) ? `<figure class="lesson-figure pending">${PENDING_CAPTION(n)}</figure>` : whole;
+    return indexes.has(n) ? figureHtml(step, n) : whole;
   });
 }
 
-export function replacePlaceholderWithFigure(html, index, { step, filename }) {
-  const pending = `<figure class="lesson-figure pending">${PENDING_CAPTION(index)}</figure>`;
-  const figure = `<figure class="lesson-figure"><img src="./${step}-assets/${filename}" alt=""><figcaption>${FIGURE_CAPTION}</figcaption></figure>`;
-  if (html.includes(pending)) return html.split(pending).join(figure);
+/**
+ * Ensure the figure for `index` is present. Articles rewritten from now on
+ * already carry the final figure; articles written by an older version carry a
+ * pending placeholder, which is swapped for the final figure.
+ */
+export function ensureFigure(html, index, step) {
+  const figure = figureHtml(step, index);
   if (html.includes(figure)) return html;
-  throw new Error(`Placeholder for figure ${index} not found in lesson HTML`);
+  const pending = `<figure class="lesson-figure pending">${PENDING_CAPTION(index)}</figure>`;
+  if (html.includes(pending)) return html.split(pending).join(figure);
+  return html;
 }
 
 // --- paths / brief / frontmatter -------------------------------------------
@@ -262,6 +272,7 @@ export function htmlPaths(root, subject, node, step) {
     outDir,
     original: path.join(outDir, 'original.html'),
     cleaned: path.join(outDir, 'cleaned.html'),
+    planInput: path.join(outDir, 'plan.input.json'),
     plan: path.join(outDir, 'plan.json'),
     rewritten: path.join(outDir, 'rewritten.html'),
     manifest: path.join(outDir, 'manifest.json'),
@@ -361,7 +372,7 @@ export async function prepareHtmlLesson(args, root = projectRoot) {
   return { root, paths, original, ...split, chrome };
 }
 
-/** One text-model call per run: clean the original, rewrite it, and write placeholders back. */
+/** One text-model call per run: clean the original, rewrite it, then record the plan. */
 export async function generateHtmlArticle(args, root = projectRoot, injected = {}) {
   const { root: resolved, paths, htmlTag, headInner, chrome } = await prepareHtmlLesson(args, root);
   const subject = assertSafeId('subject', args.subject);
@@ -369,7 +380,10 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
   const step = assertSafeId('step', args.step);
   loadEnv(resolved);
   const textModel = resolveTextModel();
-  const plan = normalizeImagePlan(args.imagePlan ?? await readJson(paths.plan));
+  const providedPlan = args.imagePlan
+    ?? await readJson(paths.plan)
+    ?? await readJson(paths.planInput);
+  const plan = normalizeImagePlan(providedPlan);
   if (!plan.length) throw new Error('imagePlan is required: the calling agent must decide which sections get images');
   if (plan.length > MAX_IMAGES) throw new Error(`imagePlan has ${plan.length} items; at most ${MAX_IMAGES} are allowed`);
   const manifest = {
@@ -384,7 +398,6 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
   };
   const saveManifest = () => fs.writeFile(paths.manifest, JSON.stringify(manifest, null, 2));
   try {
-    await fs.writeFile(paths.plan, JSON.stringify(plan, null, 2));
     const client = injected.client ?? await createTextClient();
     const systemPrompt = await fs.readFile(path.join(resolved, 'prompts', 'html-rewrite.txt'), 'utf8');
     const brief = args.brief ?? await buildBrief(resolved, subject);
@@ -406,7 +419,10 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
     validateRewrite({ rewritten, plan, originalBody: chrome.cleaned });
     manifest.stages.rewritten = true;
     await fs.writeFile(paths.rewritten, `${rewritten}\n`);
-    const body = markersToPlaceholders(rewritten, plan);
+    // The plan is only recorded once the rewrite has succeeded, so /to-image
+    // never picks up a plan for an article that was never written.
+    await fs.writeFile(paths.plan, JSON.stringify(plan, null, 2));
+    const body = markersToFigures(rewritten, plan, step);
     await fs.writeFile(paths.lesson, assembleLesson({ htmlTag, headInner, body, chrome }));
     await ensureLessonFigureStyles(resolved, subject);
     await setStepIllustration(resolved, subject, node, step, 'planned');
@@ -496,7 +512,7 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
       figures.push({ index: item.index, filename });
     }
     let lesson = await fs.readFile(paths.lesson, 'utf8');
-    for (const figure of figures) lesson = replacePlaceholderWithFigure(lesson, figure.index, { step, filename: figure.filename });
+    for (const figure of figures) lesson = ensureFigure(lesson, figure.index, step);
     await fs.writeFile(paths.lesson, lesson);
     await setStepIllustration(root, subject, node, step, 'done');
     manifest.stages.figures = true;
