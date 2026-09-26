@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>寫入順序、原子轉移與重啟恢復</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>寫入順序、原子轉移與重啟恢復</h1>
+<p class="meta">Step 3/5 · 存儲與元數據</p>
+
+<h2>學習目標</h2>
+<p>能複述 create 的固定寫入順序、原子 transition 如何保證只有一個執行者取得投遞權，以及重啟時為何要先載資料再對外服務。</p>
+
+<h2>create 的固定寫入順序</h2>
+<p>上一課說「先寫儲存、再進記憶體」，但儲存本身其實有兩個東西要寫：訊息本體，以及排程索引用來記錄到期時間。順序和批次方式都是固定的：</p>
+<ol>
+<li>把 <code>Message</code> 序列化成 JSON。</li>
+<li>用 Pipeline 一次送出兩個寫入：先 <code>SET</code> 本體（<code>when:msg:{id}</code>），再 <code>SET</code> 索引（<code>when:tw:{tw_id}:idx:{id}</code>）。</li>
+<li>確認 Redis 回報成功。</li>
+<li>把訊息放進記憶體時間輪。</li>
+<li>回報呼叫方受理成功。</li>
+</ol>
+<p>用 Pipeline（管線）是為了把兩個命令一次送出去、一次收結果，省掉一趟網路往返。而「確認成功」這一步不能省：任何一個步驟失敗，就直接回報失敗，<strong>完全不去碰記憶體</strong>。這條規則保證了反方向的一致性：記憶體裡有的，Redis 一定有。</p>
+<blockquote>寧可少一則訊息，也不要多一則只在記憶體裡的幽靈訊息。少的那則呼叫方會重試，幽靈的那則沒人救得回來。</blockquote>
+<p>這也解釋了 Redis 掛掉時的行為：<code>create</code> 拋出錯誤，呼叫方收到失敗、自行重試。系統不會偷偷先把訊息塞進記憶體假裝成功。</p>
+
+<h2>transition：只准一個執行者拿到投遞權</h2>
+<p>訊息到期之後，最怕的是「同一個訊息被投遞兩次」。會發生這種事的場景很多：時間輪指針剛好掃到、節點同時在做故障轉移、重試排程又剛好醒來。如果沒有防護，兩個執行緒可能都覺得「該我送了」。</p>
+<p><code>transition</code> 就是用來擋這件事的。它只在一種條件下動手：<strong>目前狀態等於預期狀態</strong>。例如把 <code>PENDING</code> 轉成 <code>DELIVERING</code>，只有當這則訊息現在真的是 <code>PENDING</code>，更新才會生效，而且會在同一筆操作裡原子地補上重試次數、錯誤訊息、下次嘗試時間等欄位。實作上可以用 Lua 腳本，或等效的交易機制。驗收裡有一個很直接的測試：<strong>同時發 100 個 PENDING → DELIVERING 的請求，只准一個成功。</strong>贏的那個拿到投遞權，其餘全部失敗、摸摸鼻子退開。</p>
+<p>另一個容易被忽略的紀律是：<strong>排程執行緒永遠不做同步的 Redis 讀寫。</strong>時間輪的指針一旦被 Redis 的網路延遲卡住，整個排程就會歪掉。所以指針掃到到期訊息時，它只負責把工作交給非同步的執行器，由執行器去呼叫 <code>transition</code> 搶投遞權、更新結果。指針本身繼續往前走。</p>
+
+<h2>重啟恢復：先把資料載回來，再對外服務</h2>
+<p>節點啟動時，記憶體是空的，但 Redis 裡還留著一堆「還沒排到的 PENDING 訊息」。恢復的動作是呼叫 <code>loadPendingByTimeWheel(twId)</code>，把每一輪裡還在等的訊息撈回來，重建記憶體時間輪。這裡只載 PENDING，因為已經在投遞中的、已完成的都不需要再排進時間輪。</p>
+<p>關鍵在於<strong>順序</strong>：必須等資料載完、時間輪重建完成，節點才能對外表示自己可以服務（在叢集裡就是完成註冊）。如果反過來先註冊、後載入，叢集會以為這台節點已經準備好了，把工作派給它，而它其實還在慢慢載資料，接不住。這就是典型的「已註冊但未就緒」陷阱。</p>
+
+<h2>終態訊息怎麼收尾</h2>
+<p>訊息投遞成功、或重試耗盡進入終態之後，並不會立刻從 Redis 消失，而是保留一段時間供查詢與排查。過了保留期，清理工作會呼叫 <code>deleteExpired(messageId)</code>，把本體和索引一起刪掉。刪除同樣用 Pipeline 批次處理，避免一則一則慢慢刪。</p>
+
+<h2>把效能約束變成測試</h2>
+<p>「不要出現 big-key」「要用 Pipeline」這種話，如果只寫在文件裡，遲早會被改壞。這個模組把三件事寫成必須存在的測試：</p>
+<ul>
+<li><strong>big-key 反回歸測試</strong>：斷言 key 的數量隨訊息量<strong>線性成長</strong>，而且不存在任何單一的大型集合。只要有人偷偷改回 ZSet，這個測試就會亮紅燈。</li>
+<li><strong>寫入失敗測試</strong>：讓 Redis 不可用，斷言 <code>create</code> 會拋錯，且呼叫方失敗時訊息<strong>沒有</strong>進到記憶體時間輪。</li>
+<li><strong>Pipeline 斷言</strong>：本體與索引的寫入走 Pipeline，刪除也走 Pipeline。</li>
+</ul>
+<p>其他驗收還包括：<code>type()</code> 回傳 <code>"redis"</code>、create 後 get 能拿回一模一樣的訊息、每個寫入的 key 都有 TTL、終態訊息在保留期內查得到而 <code>deleteExpired</code> 後本體與索引都消失。這些測試跑在 Testcontainers 起出來的真實 Redis 上，不是用 mock 假裝。</p>
+
+<div class="lesson-nav">
+  <div><a href="./redis-key-design.html">← 上一步：Redis key 結構與避開 big-key</a></div>
+  <div><a href="./metadata-vs-data.html">下一步：元數據與訊息資料的分工：ZK、etcd、Consul 選型 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="create 的正確寫入順序是哪一個？" data-correct="0" data-explain="序列化後用 Pipeline 寫本體與索引，Redis 成功才進記憶體並回傳。">
+  <button class="opt">序列化、寫 Redis、成功才進記憶體</button>
+  <button class="opt">先進記憶體、再寫 Redis、最後回傳</button>
+  <button class="opt">回傳受理、背景寫 Redis、再進記憶體</button>
+  <button class="opt">序列化、寫記憶體、背景補寫 Redis</button>
+</div>
+
+<div class="quiz" data-question="為什麼本體與索引要用 Pipeline 一起寫？" data-correct="2" data-explain="一次送出、一次收結果，省掉一趟網路往返。">
+  <button class="opt">讓 index 的 TTL 自動套用到 body</button>
+  <button class="opt">避免索引被其他節點讀走</button>
+  <button class="opt">把兩次命令合成一趟往返</button>
+  <button class="opt">讓 Redis 自動啟用交易鎖</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Redis 寫入失敗時絕不能先寫記憶體？" data-correct="1" data-explain="會產生記憶體有、儲存沒有的幽靈訊息，重啟後無法補救。">
+  <button class="opt">會讓時間輪的指針停住</button>
+  <button class="opt">會產生無法補救的幽靈訊息</button>
+  <button class="opt">會讓 key 的數量爆炸成長</button>
+  <button class="opt">會破壞索引與 TTL 的關聯</button>
+</div>
+
+<div class="quiz" data-question="transition 要滿足什麼條件才會真的更新？" data-correct="3" data-explain="只有目前狀態等於預期狀態時才更新，這是比較並交換。">
+  <button class="opt">只要目標狀態還沒被使用過</button>
+  <button class="opt">只要重試次數還沒有超限</button>
+  <button class="opt">只要索引 key 仍然存在</button>
+  <button class="opt">目前狀態等於預期狀態</button>
+</div>
+
+<div class="quiz" data-question="100 個並行 PENDING→DELIVERING 只准一個成功，是為了保證什麼？" data-correct="0" data-explain="只有一個執行者能取得投遞權，避免同一則訊息被重複投遞。">
+  <button class="opt">只有一個執行者取得投遞權</button>
+  <button class="opt">只有一個執行者可以讀取訊息</button>
+  <button class="opt">只有一個執行者能設定 TTL</button>
+  <button class="opt">只有一個執行者能寫入索引</button>
+</div>
+
+<div class="quiz" data-question="重啟時為什麼要先載完資料再對外表示可服務？" data-correct="2" data-explain="先註冊會讓叢集以為節點就緒，實際上它還在載入而接不住工作。">
+  <button class="opt">因為載入前無法建立 Redis 連線</button>
+  <button class="opt">因為註冊會清掉 Redis 的索引</button>
+  <button class="opt">先註冊會變成未就緒卻接工</button>
+  <button class="opt">因為時間輪重建需要先通過選舉</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 存儲與元數據 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

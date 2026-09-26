@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JDK 與 Maven：安裝之後，真正麻煩的是環境變數</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>JDK 與 Maven：解壓只是起點，環境變數才是接線</h1>
+<p class="meta">Step 2/3 · 工具鏈就緒：Claude Code / Node / git / JDK + Maven</p>
+
+<h2>檔案已經在硬碟上，系統卻還找不到</h2>
+<p>JDK 與 Maven 通常是下載後解壓縮即可使用。問題是，解壓縮不代表系統知道它們在哪裡。</p>
+
+<p>因此你可能會遇到這些訊息：</p>
+<ul>
+<li>輸入 <code>mvn</code>，出現 <code>command not found</code>。</li>
+<li>執行編譯時，系統說找不到編譯器。</li>
+<li><code>java</code> 看似正常，但 Maven 實際使用的是另一個 Java 版本。</li>
+</ul>
+
+<p>把工具目錄接到系統上，靠的是環境變數。它們就像地圖上的路標：檔案本身已經存在，但沒有路標，系統就不知道該往哪裡走。</p>
+
+<figure class="lesson-figure"><img src="./jdk-maven-and-env-vars-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>三個環境變數，分別負責什麼</h2>
+<table>
+<thead>
+<tr><th>變數</th><th>應該指向哪裡</th><th>沒設好會發生什麼事</th></tr>
+</thead>
+<tbody>
+<tr><td><code>JAVA_HOME</code></td><td>JDK 的安裝根目錄</td><td>Maven 找不到 Java，或使用錯誤版本</td></tr>
+<tr><td><code>MAVEN_HOME</code></td><td>Maven 的安裝根目錄</td><td>部分工具找不到 Maven；新版 Maven 多半只需要設定 PATH</td></tr>
+<tr><td><code>PATH</code></td><td>加入 JDK 與 Maven 的 <code>bin/</code> 目錄</td><td>輸入 <code>java</code> 或 <code>mvn</code> 時，系統找不到指令</td></tr>
+</tbody>
+</table>
+
+<p>最容易設錯的是 <code>JAVA_HOME</code>。它要指向 JDK 的根目錄，不是裡面的 <code>bin/</code>，也不是 JRE。</p>
+
+<p>許多工具會把 <code>JAVA_HOME</code> 當成「這台機器要使用哪套 Java」的明確答案，而不是從 PATH 裡猜。Maven 就是其中之一。</p>
+
+<p><code>PATH</code> 則是告訴系統去哪裡找可執行檔。要讓你在任何目錄都能輸入 <code>java</code> 與 <code>mvn</code>，至少要把 <code>$JAVA_HOME/bin</code> 和 Maven 的 <code>bin/</code> 加進去。</p>
+
+<figure class="lesson-figure"><img src="./jdk-maven-and-env-vars-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>先跑一次完整驗證</h2>
+<p>不要只看安裝資料夾是否存在，直接執行這三個命令：</p>
+
+<pre><code>java -version
+javac -version
+mvn -version</code></pre>
+
+<p>這三個命令各自驗證不同事情：</p>
+<ul>
+<li><code>java -version</code>：確認目前找到的 Java 執行環境。</li>
+<li><code>javac -version</code>：確認編譯器存在，也就是你使用的是完整 JDK。</li>
+<li><code>mvn -version</code>：確認 Maven 版本，以及 Maven 實際採用的 Java 版本。</li>
+</ul>
+
+<p>只驗證 <code>java</code> 不夠。某些環境可能只有 JRE，能執行 Java 程式，卻沒有 <code>javac</code>，因此無法編譯。JDK 9 之後，JRE 已整合進 JDK；只要 <code>javac</code> 存在，基本上就代表完整的 JDK 已被找到。</p>
+
+<p>最有判斷力的是 <code>mvn -version</code>。它除了顯示 Maven 版本，也會印出 <code>Java version</code>。如果這裡顯示的版本不是你預期的，問題通常在環境變數或版本指向，而不是 Maven 本身。</p>
+
+<figure class="lesson-figure"><img src="./jdk-maven-and-env-vars-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>四個最容易踩到的坑</h2>
+
+<h3>1. <code>JAVA_HOME</code> 指到 JRE</h3>
+<p>JRE 只有執行環境，沒有編譯器。這種錯誤很容易造成「看起來一切正常」的假象：</p>
+
+<ul>
+<li><code>java -version</code> 有正常回應。</li>
+<li>真正開始編譯時，Maven 才報找不到 <code>javac</code>。</li>
+</ul>
+
+<p>檢查 <code>$JAVA_HOME/bin</code>，確認裡面同時有 <code>java</code> 和 <code>javac</code>。</p>
+
+<h3>2. PATH 裡的系統 Java 搶在前面</h3>
+<p>macOS 的 <code>/usr/bin/java</code> 可能只是轉接用的 stub。第一次執行時，甚至可能跳出要求安裝 Java 的提示。</p>
+
+<p>如果 <code>$JAVA_HOME/bin</code> 排在它後面，<code>java -version</code> 找到的可能不是你安裝的 JDK。把 <code>$JAVA_HOME/bin</code> 放到 PATH 前面，才能讓你的 JDK 優先被使用。</p>
+
+<h3>3. 多個 JDK 彼此指向不同版本</h3>
+<p>這是最容易讓人誤判的版本錯亂：</p>
+
+<ul>
+<li>單獨執行 <code>java -version</code>，結果看起來正確。</li>
+<li>單獨執行 <code>mvn -version</code>，也有正常回應。</li>
+<li>真正編譯時，卻出現版本不相容的錯誤。</li>
+</ul>
+
+<p>原因可能是 PATH 裡的 <code>java</code> 和 <code>JAVA_HOME</code> 指向不同 JDK。換版本時，要一起檢查：</p>
+
+<ul>
+<li><code>JAVA_HOME</code> 指向哪一套 JDK。</li>
+<li>PATH 裡的 <code>java</code> 來自哪裡。</li>
+<li>IDE 指向哪一套 JDK。</li>
+</ul>
+
+<p>三者要指向同一個版本，不能只改其中一處。</p>
+
+<figure class="lesson-figure"><img src="./jdk-maven-and-env-vars-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>4. 設定檔改錯地方，或改完沒有重新載入</h3>
+<p>macOS 目前預設使用 zsh，相關設定通常要寫在 <code>~/.zshrc</code>。如果設定寫在 <code>~/.bash_profile</code>，可能不會生效。</p>
+
+<p>修改後要開新的終端機視窗，或執行：</p>
+
+<pre><code>source ~/.zshrc</code></pre>
+
+<p>另外，從圖形介面啟動的程式，例如某些 IDE，不一定會讀取你在 shell 裡設定的 PATH。終端機中的 <code>java</code> 明明正確，IDE 卻可能仍使用另一套 JDK；這時要到 IDE 自己的設定中檢查 Java 指向。</p>
+
+<h2>為什麼 Maven 特別看重 JAVA_HOME</h2>
+<p>Maven 的啟動腳本會先讀取 <code>JAVA_HOME</code>，用它決定要執行哪個 Java。只有在 <code>JAVA_HOME</code> 沒有設定時，才會退回使用 PATH 裡找到的 <code>java</code>。</p>
+
+<p>所以即使 PATH 已經指向新版本，只要 <code>JAVA_HOME</code> 還留著舊版本，Maven 仍然會使用舊的 JDK。這就是「直接執行 <code>java</code> 沒問題，但 <code>mvn</code> 用錯版本」的常見原因。</p>
+
+<figure class="lesson-figure"><img src="./jdk-maven-and-env-vars-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<blockquote>
+<p>換 JDK 時，不要只改一個地方。同步檢查 <code>JAVA_HOME</code>、PATH 裡的 JDK <code>bin</code>，以及 IDE 的 JDK 設定。最後重新執行 <code>java -version</code>、<code>javac -version</code> 和 <code>mvn -version</code>；三個結果一致，環境才算真的接好。</p>
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./agent-runtime-and-version-checks.html">← 上一步：代理的底座：Node.js、git 與 Claude Code 全域安裝</a></div>
+  <div><a href="./prompt-driven-readiness-inspection.html">下一步：用白話讓 agent 檢查與設定環境 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼只驗證 java -version 還不足以確認 JDK 裝好？" data-correct="2" data-explain="java 可能來自只有執行環境的 JRE，要看到 javac 存在才代表是完整 JDK。">
+  <button class="opt">因為 java 命令不會顯示版本號</button>
+  <button class="opt">因為 java 只在特定目錄才能執行</button>
+  <button class="opt">因為 java 可能來自沒有編譯器的 JRE</button>
+  <button class="opt">因為 java 命令需要管理員權限</button>
+</div>
+<div class="quiz" data-question="JAVA_HOME 應該指向哪裡？" data-correct="0" data-explain="它要指向 JDK 的安裝根目錄，不是 bin 子目錄，也不是 JRE。">
+  <button class="opt">JDK 的安裝根目錄</button>
+  <button class="opt">JDK 底下的 bin 目錄</button>
+  <button class="opt">系統預設的 JRE 目錄</button>
+  <button class="opt">Maven 的安裝根目錄</button>
+</div>
+<div class="quiz" data-question="要一次看出 Maven 實際用了哪套 JDK，該打哪個指令？" data-correct="3" data-explain="mvn -version 會同時印出 Maven 版本與 Java version，直接揭露它挑中的 JDK。">
+  <button class="opt">node --version</button>
+  <button class="opt">java --version</button>
+  <button class="opt">mvn --help</button>
+  <button class="opt">mvn -version</button>
+</div>
+<div class="quiz" data-question="單獨跑 java 與 mvn 都正常，編譯卻出現版本不符，最可能的原因是什麼？" data-correct="1" data-explain="JAVA_HOME 與 PATH 裡的 java 指向不同 JDK，導致 Maven 和其他工具用了不同版本。">
+  <button class="opt">Maven 的安裝檔案損毀</button>
+  <button class="opt">兩個變數指向不同的 JDK</button>
+  <button class="opt">JDK 沒有正確解除安裝</button>
+  <button class="opt">網路下載的 JDK 來源不合法</button>
+</div>
+<div class="quiz" data-question="在 macOS 的 zsh 設定 java 環境變數，該寫進哪個檔案？" data-correct="0" data-explain="zsh 的設定寫在 ~/.zshrc；寫進 .bash_profile 不會被讀取。">
+  <button class="opt">~/.zshrc</button>
+  <button class="opt">~/.bash_profile</button>
+  <button class="opt">/etc/hosts</button>
+  <button class="opt">~/.gitconfig</button>
+</div>
+<div class="quiz" data-question="改完環境變數後，為什麼有時還是沒生效？" data-correct="2" data-explain="環境變數在 shell 啟動時載入，要開新終端機或 source 設定檔；GUI 啟動的程式還可能不讀 shell 設定。">
+  <button class="opt">因為變數會自動加密無法讀取</button>
+  <button class="opt">因為 PATH 只能設定一次不能改</button>
+  <button class="opt">因為變數只在 shell 啟動時載入</button>
+  <button class="opt">因為 Maven 會快取舊的設定檔</button>
+</div>
+
+<div class="footer">
+  <p>vibe-coding-fengjianyingyue · 工具鏈就緒：Claude Code / Node / git / JDK+Maven · Step 2/3</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

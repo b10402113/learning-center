@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>反射、動態代理與泛型擦除</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>框架的魔法，原來是這樣變出來的</h1>
+<p class="meta">Step 4/6 · Java 語言與物件</p>
+
+<div class="learning-goal">
+<strong>學習目標：</strong>看懂框架如何靠反射與動態代理運作，分清 JDK 代理和 CGLIB 代理的取捨，也能說明泛型擦除為什麼讓 Java 不支援泛型陣列。
+</div>
+
+<h2>反射：讓程式在執行時才認識類別</h2>
+
+<p>一般寫程式時，類別和方法在編譯期就決定好了，編譯器知道你要呼叫誰。反射則像是把程式變成一位臨時偵探：到了執行時，才去查詢「這個類別有哪些欄位和方法」，再依查到的結果建立物件、呼叫方法。</p>
+
+<p>Spring 掃描你的 <code>@Service</code>、注入相依物件，MyBatis 把介面方法對應到 SQL，背後都離不開這種能力。</p>
+
+<figure class="lesson-figure"><img src="./reflection-proxy-generics-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<pre><code>Class&lt;?&gt; clazz = Class.forName("com.demo.User");
+Object instance = clazz.getDeclaredConstructor().newInstance();
+Method setName = clazz.getMethod("setName", String.class);
+setName.invoke(instance, "Amy");</code></pre>
+
+<p>代價也很直接：反射比直接呼叫慢。方法必須在執行時解析，呼叫時還可能經過存取權限檢查；參數常需要裝箱，而這種高度動態的呼叫點也不利於 JIT 內聯最佳化。</p>
+
+<p>要改善效能，就要對準這些成本下手：快取 <code>Method</code> 物件、用 <code>setAccessible(true)</code> 略過部分檢查、改用 <code>MethodHandle</code>，或乾脆透過字節碼生成，例如 CGLIB、ASM，在執行時產生更接近直接呼叫的類別。</p>
+
+<h2>代理：不改原物件，也能加上額外行為</h2>
+
+<p>代理（Proxy）解決的是另一個常見問題：你想在原物件前後加上記錄日誌、開啟事務或檢查權限，卻不想把這些邏輯硬塞進原本的業務類別。</p>
+
+<figure class="lesson-figure"><img src="./reflection-proxy-generics-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>最直覺的做法是靜態代理：在編譯前就手寫一個代理類別。</p>
+
+<pre><code>interface UserService {
+    void save();
+}
+
+class UserServiceImpl implements UserService {
+    public void save() { System.out.println("save"); }
+}
+
+class UserServiceProxy implements UserService {
+    private final UserService target;
+    UserServiceProxy(UserService target) { this.target = target; }
+
+    public void save() {
+        System.out.println("before");   // 增強
+        target.save();
+        System.out.println("after");
+    }
+}</code></pre>
+
+<p>小型範例沒問題，但如果每個介面、每個方法都要手寫一份代理，類別數量很快就會失控。這就是動態代理出場的原因：你只提供「要額外做什麼」，代理類別交給框架在執行時產生。</p>
+
+<h2>JDK 代理與 CGLIB：一個靠介面，一個靠繼承</h2>
+
+<p>兩者都能幫物件加上額外邏輯，但產生代理的方式不同。JDK 動態代理像是「找一個人重新實作同一份合約」；CGLIB 則像是「產生目標類別的子類別，再覆寫方法」。</p>
+
+<table>
+  <tr><th></th><th>JDK 動態代理</th><th>CGLIB 動態代理</th></tr>
+  <tr><td>底層方式</td><td>基於介面，實現同樣的介面</td><td>基於繼承，產生目標類別的子類別</td></tr>
+  <tr><td>前提</td><td>目標必須有介面</td><td>目標類別與方法不能是 final</td></tr>
+  <tr><td>限制</td><td>只能代理介面中宣告的方法</td><td>無法代理 final 方法</td></tr>
+  <tr><td>產生速度</td><td>較快</td><td>較慢</td></tr>
+  <tr><td>呼叫效能</td><td>較慢（反射呼叫）</td><td>較快（直接呼叫子類別方法）</td></tr>
+</table>
+
+<p>Spring 的傳統選擇規則是：目標有實作介面時，預設使用 JDK 代理；沒有介面時，使用 CGLIB。不過 Spring Boot 2.0 之後，為了避免同一個 Bean 有時是介面代理、有時是子類別代理，導致型別判斷出現意外，預設改成一律傾向使用 CGLIB。</p>
+
+<figure class="lesson-figure"><img src="./reflection-proxy-generics-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這就是 AOP 的底層樣子：你寫在 <code>@Around</code> 裡的增強邏輯，最後會掛到這個執行時生成的代理物件上。</p>
+
+<h2>泛型擦除：編譯期有型別，執行時卻看不見</h2>
+
+<p>泛型主要是編譯期的安全網：它能提早擋住型別錯誤。但這些泛型資訊不會完整保留到執行時。編譯器會把泛型參數擦除成它的上界；沒有指定上界，就擦成 <code>Object</code>；如果寫的是 <code>&lt;T extends Number&gt;</code>，就擦成 <code>Number</code>。</p>
+
+<figure class="lesson-figure"><img src="./reflection-proxy-generics-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<pre><code>List&lt;String&gt; list = new ArrayList&lt;&gt;();
+List&lt;Integer&gt; list2 = new ArrayList&lt;&gt;();
+System.out.println(list.getClass() == list2.getClass());   // true，都是 ArrayList</code></pre>
+
+<p>為什麼不把泛型完整放進執行環境？關鍵在向後相容。泛型是 Java 5 才加入的；如果泛型資訊改變了位元組碼格式，舊版類別庫和執行環境就可能無法與新程式碼一起工作。擦除讓新舊程式碼仍能共存。</p>
+
+<h2>為什麼 Java 不支援泛型陣列？</h2>
+
+<p>答案可以從陣列和泛型的個性差異看出來。</p>
+
+<p>陣列是「具體化」的：執行時知道自己的元素型別，而且支援協變，例如 <code>Object[]</code> 可以指向 <code>String[]</code>。泛型則在執行時被擦除。如果把兩種規則疊在一起，就可能留下型別漏洞。</p>
+
+<p>例如，宣告成 <code>List&lt;String&gt;[]</code> 的陣列，可能先被當成 <code>List[]</code>，再塞進一個 <code>List&lt;Integer&gt;</code>。錯誤不會在塞入的當下被完整攔住，直到之後取出元素才爆炸。</p>
+
+<figure class="lesson-figure"><img src="./reflection-proxy-generics-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>為了堵住這個洞，Java 在編譯期就禁止建立泛型陣列。日常如果要做「裝泛型的容器」，使用 <code>List&lt;List&lt;String&gt;&gt;</code> 這類集合，別用陣列硬湊。</p>
+
+<h2>補上另一塊地基：註解只是元數據</h2>
+
+<p>反射和註解經常一起出現，但註解本身不會自動產生行為。它比較像貼在程式碼上的標籤，也就是元數據；必須由編譯器或反射機制讀取，標籤才會真正發揮作用。</p>
+
+<p>其中，只有標註 <code>@Retention(RUNTIME)</code> 的註解，才能在執行時被反射讀到。Spring 的 <code>@Service</code>、MyBatis 的 <code>@Mapper</code> 都屬於這類。沒有執行時讀取這一步，註解再漂亮，也只是一張貼紙。</p>
+
+<h2>小結</h2>
+
+<p>反射讓程式在執行時才認識類別並動態呼叫，代價是效能較差；常見優化方式包括快取、略過部分檢查，以及生成字節碼。動態代理則讓框架能在執行時製造「加強版」物件：JDK 代理依賴介面，CGLIB 依賴繼承。</p>
+
+<p>泛型擦除是為了維持 Java 的向後相容，也因此讓泛型資訊在執行時消失；當它和陣列的具體型別、協變規則放在一起時，容易形成型別漏洞，這正是 Java 禁止泛型陣列的原因。</p>
+
+<div class="lesson-nav">
+  <a href="./strings-and-immutability.html">← 上一課：String 不可變、常量池與拼接選型</a>
+  <a href="./collections-framework-and-list.html">下一課：集合框架地圖與 List 選型 →</a>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="下列哪一項是反射呼叫比直接呼叫慢的原因？" data-correct="2" data-explain="方法要等到運行時才解析，呼叫點太動態，JIT 難以內聯最佳化。">
+  <button class="opt">反射會複製整個物件到堆</button>
+  <button class="opt">反射只能呼叫靜態方法</button>
+  <button class="opt">執行時才解析且難以內聯</button>
+  <button class="opt">反射會永久停用 JIT</button>
+</div>
+<div class="quiz" data-question="JDK 動態代理能夠運作的前提是什麼？" data-correct="0" data-explain="JDK 代理靠實作同一組介面來生成代理類別，所以目標必須有介面。">
+  <button class="opt">目標類別必須實作介面</button>
+  <button class="opt">目標類別不能是 final</button>
+  <button class="opt">目標方法必須是 static</button>
+  <button class="opt">目標類別必須是 public</button>
+</div>
+<div class="quiz" data-question="CGLIB 動態代理無法代理下列哪一種成員？" data-correct="1" data-explain="CGLIB 靠繼承產生子類別，final 方法無法被覆寫，因此代理不到。">
+  <button class="opt">私有欄位</button>
+  <button class="opt">final 方法</button>
+  <button class="opt">抽象方法</button>
+  <button class="opt">介面中的方法</button>
+</div>
+<div class="quiz" data-question="Java 保留泛型擦除機制的主要理由是什麼？" data-correct="3" data-explain="泛型是後期才加入的特性，擦除讓新舊位元組碼能向後相容。">
+  <button class="opt">讓程式執行速度更快</button>
+  <button class="opt">減少每顆物件佔用的記憶體</button>
+  <button class="opt">讓運行時能做型別檢查</button>
+  <button class="opt">讓泛型與舊版位元組碼相容</button>
+</div>
+<div class="quiz" data-question="Java 不支援泛型陣列，最主要的原因是？" data-correct="2" data-explain="陣列協變搭配泛型擦除，會出現繞過編譯期檢查的漏洞。">
+  <button class="opt">陣列不支援引用型別</button>
+  <button class="opt">泛型只能用在集合類別</button>
+  <button class="opt">陣列協變與擦除會繞過檢查</button>
+  <button class="opt">泛型陣列語法尚未實作</button>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

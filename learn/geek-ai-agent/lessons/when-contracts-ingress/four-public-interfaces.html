@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>四大公共介面與契約地圖</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>四大公共介面與契約地圖</h1>
+<p class="meta">Step 3/5 · 公共契約與接入路由</p>
+
+<h2>學習目標</h2>
+<p>能說出 StoragePlugin、TimeWheel、Sink、Router 四個公共介面各自的職責，並用契約地圖指出每個契約是誰定義、誰實作、誰使用。</p>
+
+<h2>契約有兩種：資料與行為</h2>
+<p>前兩步講的是資料契約：一則 Message 長什麼樣、狀態怎麼流轉。但光有資料還不夠，模組之間還要能互相呼叫。形容資料的是模型，形容行為的是介面。When 把模組之間的互動收斂成<strong>四個公共介面</strong>，它們就是整個系統的四道接縫。</p>
+<p>標準化的價值可以借用貨櫃來說明：以前每一種貨物各自裝箱，船、吊車、卡車都得為它量身打造；貨櫃把尺寸統一之後，任何運輸工具只要認得這個箱子就能搬。四個公共介面就是 When 的「貨櫃規格」：任何模組只要認得這些介面，就能跟其他模組協作。</p>
+
+<h2>四個介面各自的職責</h2>
+<table>
+<thead>
+<tr><th>介面</th><th>職責</th><th>誰實作</th><th>誰使用</th></tr>
+</thead>
+<tbody>
+<tr><td><code>StoragePlugin</code></td><td>訊息的建立與查詢、原子的狀態轉移、未完成訊息的恢復、終態的清理</td><td>儲存模組（Redis 插件）</td><td>時間輪、接入與路由、副本同步</td></tr>
+<tr><td><code>TimeWheel</code></td><td>記憶體中的排程索引：加入（<code>add</code>）與移除（<code>remove</code>）</td><td>時間輪模組</td><td>接入與路由、恢復流程</td></tr>
+<tr><td><code>Sink</code></td><td>真正把訊息投遞出去，例如 HTTP 或 Kafka</td><td>投遞模組（HTTP／Kafka 兩種實作）</td><td>投遞流程</td></tr>
+<tr><td><code>Router</code></td><td>路由：把 <code>messageId</code> 映射到穩定的 <code>tw_id</code></td><td>接入與路由模組</td><td>時間輪與跨節點轉發</td></tr>
+</tbody>
+</table>
+<p><code>Router</code> 只回答「這則訊息該去哪個輪子」，不負責「那個輪子在哪一台機器」。尋找節點、跨機轉發是接入與路由層的編排工作，不屬於路由介面本身。把純粹的計算（雜湊）和會動的編排分開，介面才容易測試、也容易替換。</p>
+
+<h2>契約地圖：誰定義、誰實作、誰使用</h2>
+<p>當系統有幾十個模組，最怕的就是「好幾個地方都在定義同一件事」。所以除了介面本身，還要有一張契約地圖，寫清楚每個契約的唯一擁有者：</p>
+<table>
+<thead>
+<tr><th>契約</th><th>定義</th><th>實作</th><th>使用</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Message</code>、<code>MessageStatus</code></td><td>公共模型</td><td>不適用（是資料，不是行為）</td><td>所有模組</td></tr>
+<tr><td><code>SinkType</code>、<code>SinkConfig</code></td><td>公共模型</td><td>不適用</td><td>傳輸層搬運、接入層轉換、投遞層使用</td></tr>
+<tr><td><code>StoragePlugin</code></td><td>公共模型</td><td>儲存模組</td><td>時間輪、接入與路由、副本同步</td></tr>
+<tr><td><code>TimeWheel</code>、<code>Router</code></td><td>公共模型</td><td>時間輪、接入與路由</td><td>接入與路由、時間輪</td></tr>
+<tr><td><code>Sink</code></td><td>公共模型</td><td>投遞模組</td><td>投遞流程</td></tr>
+</tbody>
+</table>
+<p>這張地圖的用途很實際：當某個契約需要改動，你知道要從哪裡改起、改完要通知哪些人。規則和第一步一樣：<strong>先改定義處，再逐一檢查所有實作者與使用者</strong>。舉例來說，<code>SinkConfig</code> 由公共模型定義，傳輸層只負責搬運它的格式，接入層把它轉成 Message 的一部分，最後投遞層才真正拿它去送。沿著這條鏈，任何一環偷偷改欄位，都會與其他人對不上。</p>
+
+<h2>只依賴介面，不依賴實作</h2>
+<p>四個介面還有一個關鍵作用：它們讓模組之間<strong>只依賴抽象，不依賴具體實作</strong>。接入層需要儲存訊息，但它不直接呼叫 Redis，而是依賴 <code>StoragePlugin</code>；需要時間輪，就依賴 <code>TimeWheel</code>。這樣做的好處在測試時最明顯：測試可以塞進一個假實作，不必真的開一台 Redis。依賴方向因此變成單向的：核心邏輯指向公共介面，實作掛在介面底下。</p>
+<blockquote>
+分層與依賴方向不是造型，而是可替換性的前提。只要大家都對著介面寫，儲存從 Redis 換成別的、投遞從 HTTP 增加 Kafka，都不必改動上游模組。
+</blockquote>
+
+<h2>公共規則：所有模組都遵守的護欄</h2>
+<p>除了資料與介面，還有一組橫向的公共規則（公共 Harness），每個模組都必須遵守：</p>
+<table>
+<thead>
+<tr><th>規則</th><th>要求</th></tr>
+</thead>
+<tbody>
+<tr><td>安全</td><td>不得把帳號密碼、金鑰硬寫在程式碼裡</td></tr>
+<tr><td>分層</td><td>程式碼歸屬在 api / core / plugin / cluster 這幾層之一，不能亂放</td></tr>
+<tr><td>依賴</td><td>模組只能依賴公共介面，不能直接依賴別人的實作</td></tr>
+<tr><td>驗收</td><td>測試不能為了讓進度好看而被刪除</td></tr>
+</tbody>
+</table>
+<p>公共 Harness 管的是全專案共同的規矩；每個模組再往上加自己的規則，例如「時間輪的執行緒禁止同步 I/O」「Redis 禁止 big-key」「敏感設定用環境變數」。兩層合起來，才是完整的約束。</p>
+
+<h2>這一節的完成標準</h2>
+<p>這一步的交付物是可編譯、可檢查的：Java 公共型別與四個介面、公共 proto（<code>SinkType</code>、<code>MessageStatus</code>、強型別 <code>SinkConfig</code>），以及寫進專案根目錄 <code>CLAUDE.md</code> 的公共 Harness。完成之後，後續每個模組就只實作自己的責任，不再重新定義公共物件。</p>
+
+<div class="lesson-nav">
+  <div><a href="./message-state-machine.html">← 上一步：五狀態訊息狀態機與轉移語義</a></div>
+  <div><a href="./grpc-contract.html">下一步：gRPC 傳輸契約與驗證分層 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Router 介面負責的是哪一件事？" data-correct="1" data-explain="Router 只把 messageId 一致雜湊成穩定的 tw_id；尋找節點與跨機轉發屬於接入層的編排工作。">
+  <button class="opt">找出目標輪子目前在哪一台機器上</button>
+  <button class="opt">把 messageId 映射成穩定的 tw_id</button>
+  <button class="opt">把訊息實際投遞到 HTTP 或 Kafka</button>
+  <button class="opt">原子地改變訊息的目前狀態</button>
+</div>
+
+<div class="quiz" data-question="StoragePlugin 的四項核心能力不包括下列哪一項？" data-correct="3" data-explain="投遞是把訊息送往下游，屬於 Sink 的職責；StoragePlugin 負責建立／查詢、轉移、恢復與清理。">
+  <button class="opt">建立與查詢訊息</button>
+  <button class="opt">原子的狀態轉移</button>
+  <button class="opt">恢復未完成的訊息</button>
+  <button class="opt">把訊息投遞到下游服務</button>
+</div>
+
+<div class="quiz" data-question="為什麼要有「契約地圖」寫清楚誰定義、誰實作、誰使用？" data-correct="2" data-explain="有唯一擁有者，改動時才知道從哪裡改起、要通知哪些實作與使用者，避免版本分歧。">
+  <button class="opt">為了統計每個模組的程式碼行數</button>
+  <button class="opt">為了決定哪個模組可以先上線</button>
+  <button class="opt">為了改契約時知道改哪、通知誰</button>
+  <button class="opt">為了自動產生測試的覆蓋率報告</button>
+</div>
+
+<div class="quiz" data-question="接入層需要儲存訊息時，正確的做法是什麼？" data-correct="0" data-explain="它依賴 StoragePlugin 介面並由建構子注入實作，不直接呼叫 Redis；這讓測試可以換成假實作。">
+  <button class="opt">依賴 StoragePlugin 介面並注入實作</button>
+  <button class="opt">直接匯入 Redis 用戶端並自行連線</button>
+  <button class="opt">自己再寫一套儲存邏輯以免依賴別人</button>
+  <button class="opt">把狀態存在記憶體就不用儲存層</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項屬於公共 Harness 的規則？" data-correct="3" data-explain="公共 Harness 包含安全（不得硬寫憑證）、分層、只依賴公共介面、測試不得刪除。">
+  <button class="opt">時間輪執行緒禁止同步 I/O</button>
+  <button class="opt">Redis 禁止使用 big-key</button>
+  <button class="opt">敏感設定必須用環境變數</button>
+  <button class="opt">測試不得為了進度好看而刪除</button>
+</div>
+
+<div class="quiz" data-question="SinkConfig 從定義到被使用，順序是什麼？" data-correct="1" data-explain="SinkConfig 由公共模型定義，傳輸層搬運其格式，接入層轉成 Message，最後由投遞層拿去送。">
+  <button class="opt">投遞層定義、傳輸層轉換、接入層搬運</button>
+  <button class="opt">公共模型定義、傳輸搬運、接入轉換、投遞使用</button>
+  <button class="opt">接入層定義、投遞層搬運、公共模型使用</button>
+  <button class="opt">傳輸層定義、公共模型轉換、接入層使用</button>
+</div>
+
+<div class="quiz" data-question="「只依賴介面、不依賴實作」在測試上最大的好處是什麼？" data-correct="2" data-explain="因為依賴的是介面，測試可以注入假實作，不必真的啟動 Redis 或時間輪。">
+  <button class="opt">可以讓測試執行速度變成零延遲</button>
+  <button class="opt">可以讓測試完全不需任何斷言</button>
+  <button class="opt">可以注入假實作而不必啟動真服務</button>
+  <button class="opt">可以讓程式碼自動生成所有測試</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 公共契約與接入路由 · Step 3/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

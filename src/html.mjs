@@ -476,7 +476,7 @@ function buildImagePrompt(item, context, imageTemplate) {
   ].join('\n');
 }
 
-/** One figure per plan item: reuse existing PNGs, generate the rest, then swap placeholders. */
+/** One figure per plan item: reuse existing PNGs, generate the rest in parallel, then swap placeholders. */
 export async function generateHtmlImages(args, root = projectRoot, injected = {}) {
   const subject = assertSafeId('subject', args.subject);
   const node = assertSafeId('node', args.node);
@@ -507,8 +507,9 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
     const imageTemplate = await fs.readFile(path.join(root, 'prompts', 'image.txt'), 'utf8').catch(() => '');
     const rewritten = await fs.readFile(paths.rewritten, 'utf8').catch(() => '');
     const contexts = rewritten ? markerContexts(rewritten, plan) : [];
-    const figures = [];
-    for (const item of plan) {
+    // Fire every figure at once rather than one at a time; collect the results
+    // by index so the manifest and marker replacement stay deterministic.
+    const outcomes = await Promise.allSettled(plan.map(async item => {
       const filename = `image-${item.index}.png`;
       const source = path.join(paths.assets, filename);
       let bytes = await fs.readFile(source).catch(() => null);
@@ -527,10 +528,15 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
         await fs.writeFile(source, bytes);
       }
       await fs.copyFile(source, path.join(paths.imageAssets, filename));
-      manifest.images.push({ index: item.index, filename, reused });
-      await saveManifest();
-      figures.push({ index: item.index, filename });
-    }
+      return { index: item.index, filename, reused };
+    }));
+    // Wait for every job to settle before failing, so no straggler overwrites
+    // the failed manifest the catch block is about to write.
+    const failed = outcomes.find(outcome => outcome.status === 'rejected');
+    if (failed) throw failed.reason;
+    const figures = outcomes.map(outcome => outcome.value).sort((a, b) => a.index - b.index);
+    manifest.images = figures;
+    await saveManifest();
     let lesson = await fs.readFile(paths.lesson, 'utf8');
     for (const figure of figures) lesson = ensureFigure(lesson, figure.index, step);
     await fs.writeFile(paths.lesson, lesson);

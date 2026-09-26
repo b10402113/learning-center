@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>物件的建立、傳遞與複製</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一行 Java 背後：物件怎麼建立、參數怎麼傳</h1>
+<p class="meta">Step 1/6 · Java 語言與物件</p>
+
+<div class="learning-goal">
+<strong>學習目標：</strong>這一節要搞懂三件事：Java 為什麼只有值傳遞、基本型別和包裝類為什麼要並存，以及裝箱快取、淺拷貝與深拷貝會在哪些情境留下陷阱。
+</div>
+
+<h2>先拆開 <code>new</code>：物件和變數不是同一件事</h2>
+
+<p>看到 <code>User u = new User("Amy");</code>，不要把它當成「建立一個叫 <code>u</code> 的物件」。這行其實分成兩步：</p>
+
+<ol>
+  <li><code>new User("Amy")</code> 在堆（heap）上建立物件、配置記憶體。</li>
+  <li><code>u</code> 是目前執行緒堆疊（stack）中的區域變數，裡面存的是指向該物件的位址。</li>
+</ol>
+
+<p>也就是說，<code>u</code> 比較像一張寫著地址的紙條，不是地址指向的那棟房子。</p>
+
+<figure class="lesson-figure"><img src="./object-creation-passing-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+  <tr><th>變數型別</th><th>變數裡裝什麼</th><th>例子</th></tr>
+  <tr><td>基本型別</td><td>真正的值</td><td><code>int x = 10;</code>，x 就是 10</td></tr>
+  <tr><td>引用型別</td><td>物件在堆上的位址</td><td><code>User u = new User();</code>，u 是位址</td></tr>
+</table>
+
+<p>這個差異會一路影響後面的參數傳遞、<code>==</code> 比較，以及物件拷貝。如果把「變數」直接等同於「物件」，後面很容易一路判斷錯。</p>
+
+<h2>Java 只有值傳遞：引用傳的是位址這個值</h2>
+
+<p>呼叫方法時，JVM 會替被呼叫的方法建立新的堆疊幀（stack frame），再把參數複製一份放進這個幀的區域變數表。方法拿到的是副本，不是呼叫端的那個變數本身。</p>
+
+<p>差別只在於：基本型別複製的是數字或布林值；引用型別複製的是物件位址。因此 Java 從頭到尾都是值傳遞，只是引用型別傳遞的「值」剛好是一個位址。</p>
+
+<pre><code>class User {
+    String name;
+    User(String name) { this.name = name; }
+    void setName(String n) { this.name = n; }
+}
+
+static void rename(User u) {
+    u.setName("Bob");            // 照位址找到同一個物件，改到本尊
+}
+
+static void replace(User u) {
+    u = new User("Carol");       // 只改動副本的位址，本尊不受影響
+}
+
+User a = new User("Amy");
+rename(a);    // a.name 變成 Bob
+replace(a);   // a.name 仍然是 Bob</code></pre>
+
+<p><code>rename</code> 能改到原物件，是因為方法裡的 <code>u</code> 副本，仍然指向同一個物件。<code>replace</code> 則只是把方法內那張「地址紙條」改寫成 <code>Carol</code> 的新地址，呼叫端的 <code>a</code> 完全沒有換地址。</p>
+
+<figure class="lesson-figure"><img src="./object-creation-passing-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>所以，「方法可以改到物件內容」不代表 Java 是引用傳遞。這裡其實是兩件事：</p>
+
+<ul>
+  <li><strong>物件是否共享：</strong>兩個引用可能指向同一個物件。</li>
+  <li><strong>參數如何傳遞：</strong>方法收到的引用變數仍然只是副本。</li>
+</ul>
+
+<div class="analogy">
+<strong>類比：</strong>你把一張寫著家裡地址的紙條交給朋友。朋友照著地址去你家換窗簾，你回家當然看得到；但如果朋友只把自己手上的紙條改寫成另一間房子的地址，你家的房子不會因此消失。紙條是影印本，這就是值傳遞。
+</div>
+
+<h2>基本型別已經夠快，為什麼還要包裝類？</h2>
+
+<p>基本型別省記憶體、運算也直接。那為什麼還需要 <code>Integer</code>、<code>Long</code>、<code>Boolean</code> 這些包裝類？因為有些 Java 機制只接受物件。</p>
+
+<p>第一個原因是集合與泛型。泛型在編譯後會被擦除，容器實際上是以 <code>Object</code> 的方式處理元素。<code>List&lt;Integer&gt;</code> 可以編譯，是因為 <code>Integer</code> 是物件；<code>List&lt;int&gt;</code> 則不行，因為基本型別不是物件，也沒有對應的父型別。</p>
+
+<p>第二個原因是需要表達「沒有值」。例如資料庫查不到資料時，<code>Integer</code> 可以是 <code>null</code>；如果使用 <code>int</code>，就只能挑一個數字假裝代表「沒有資料」，原本的語意便消失了。</p>
+
+<p>第三個原因是工具方法。像 <code>Integer.parseInt</code>、<code>Long.toBinaryString</code>、<code>Double.compare</code>，都放在對應的包裝類上。</p>
+
+<p>代價也很直接：包裝類是真正的物件，會多出物件與記憶體的開銷。大量數值運算或對效能敏感的迴圈，通常應優先使用基本型別。</p>
+
+<h2>裝箱與拆箱：等號背後其實有方法呼叫</h2>
+
+<p>基本型別和包裝類之間的自動轉換，看起來像編譯器什麼都沒做，其實只是把方法呼叫藏起來了：</p>
+
+<pre><code>Integer i = 10;   // 編譯後：Integer.valueOf(10)
+int j = i;        // 編譯後：i.intValue()</code></pre>
+
+<p>這件事最常造成兩種問題。</p>
+
+<h3>問題一：拆箱可能觸發空指標</h3>
+
+<pre><code>Integer count = null;
+int c = count;    // 拆箱時呼叫 intValue()，直接 NullPointerException</code></pre>
+
+<p><code>count</code> 是 <code>null</code>，沒有任何物件可以呼叫 <code>intValue()</code>，所以在拆箱的那一刻就會拋出 <code>NullPointerException</code>。</p>
+
+<h3>問題二：迴圈裡反覆裝箱會增加 GC 壓力</h3>
+
+<pre><code>Integer sum = 0;
+for (int k = 0; k &lt; 100000; k++) {
+    sum += k;     // 每輪都拆箱再加、再加箱存回去
+}</code></pre>
+
+<p>每一輪的 <code>sum += k</code> 都要先拆箱、完成加法，再把結果裝箱回 <code>Integer</code>。短時間產生大量用完即丟的物件，會增加垃圾回收（GC）的負擔。這種場景通常改用 <code>int sum</code> 更合適。</p>
+
+<figure class="lesson-figure"><img src="./object-creation-passing-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<div class="analogy">
+<strong>類比：</strong>基本型別像直接拿在手上的零錢，拿來就能用；包裝類像把零錢裝進盒子，每次使用都要開盒、取出，使用完再放回去。偶爾做一次沒差，但一天重複十萬次，就會變成不必要的搬運。
+</div>
+
+<h2>Integer 快取池：為什麼 <code>==</code> 有時真、有時假？</h2>
+
+<p>來看一段容易讓人誤判的程式：</p>
+
+<pre><code>Integer a = 127, b = 127;
+System.out.println(a == b);   // true
+
+Integer c = 128, d = 128;
+System.out.println(c == d);   // false</code></pre>
+
+<p>關鍵在於自動裝箱會呼叫 <code>Integer.valueOf</code>。這個方法內部有一個 <code>IntegerCache</code>：</p>
+
+<ul>
+  <li>數值落在 -128 到 127 時，直接回傳預先建立好的快取物件。</li>
+  <li>超出這個範圍時，通常會建立新的物件。</li>
+</ul>
+
+<p>因此 <code>a</code> 和 <code>b</code> 指向同一個快取物件，<code>==</code> 比的是位址，所以結果是 <code>true</code>。<code>c</code> 和 <code>d</code> 則是兩個不同物件，位址不同，結果便是 <code>false</code>。</p>
+
+<figure class="lesson-figure"><img src="./object-creation-passing-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>幾個細節要記住：</p>
+
+<ul>
+  <li>快取下限 -128 是固定的，不能修改。</li>
+  <li>上限 127 可以透過 <code>-XX:AutoBoxCacheMax</code> 啟動參數調大。</li>
+  <li>使用 <code>new Integer(100)</code> 會建立新物件，不會使用快取。</li>
+</ul>
+
+<p><code>==</code> 比較的是兩個引用是否指向同一個物件，不是數值是否相等。包裝類的數值比較應拆箱後比較，或使用 <code>equals</code>，不要把快取行為當成保證。</p>
+
+<h2>淺拷貝與深拷貝：影印的是值，還是同一張地址？</h2>
+
+<p><code>Object.clone()</code> 預設做的是按欄位複製：把每個欄位的內容抄到新物件裡。</p>
+
+<ul>
+  <li>欄位是基本型別：複製後是獨立的值。</li>
+  <li>欄位是引用型別：複製的是位址，兩個物件仍共用同一個內部物件。</li>
+</ul>
+
+<p>後者就是淺拷貝。</p>
+
+<pre><code>class Order implements Cloneable {
+    List&lt;String&gt; items = new ArrayList&lt;&gt;();
+
+    @Override
+    public Order clone() throws CloneNotSupportedException {
+        return (Order) super.clone();
+    }
+}
+
+Order o1 = new Order();
+o1.items.add("A");
+
+Order o2 = o1.clone();
+o2.items.add("B");
+
+System.out.println(o1.items);   // [A, B]，兩份訂單共用同一個 List</code></pre>
+
+<p><code>o2.items</code> 和 <code>o1.items</code> 指向同一個 <code>List</code>。所以看似只修改副本，原本的訂單也出現了 <code>B</code>。</p>
+
+<figure class="lesson-figure"><img src="./object-creation-passing-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>如果希望兩份物件完全分開，就需要深拷貝，讓內部的可變物件也各自建立副本。常見方式有三種：</p>
+
+<ul>
+  <li>自己一層一層 <code>clone</code>：結構簡單時可行，但遇到多層嵌套會很難維護。</li>
+  <li>序列化後再反序列化：可以重建整棵物件結構。</li>
+  <li>透過 JSON 等轉換工具重新建立物件。</li>
+</ul>
+
+<p>不過，不是所有欄位都需要深拷貝。如果欄位本身是不可變物件，共用它通常沒有問題；真正需要小心的是可變欄位。</p>
+
+<h2>這一節真正要記住的事</h2>
+
+<p>變數裡存的值，和物件本身是兩回事。Java 方法收到的永遠是參數副本，因此 Java 只有值傳遞；引用型別只是把「物件位址」當成值傳進去。</p>
+
+<p>包裝類讓基本型別能進入集合與泛型，也能表達 <code>null</code>，但會帶來物件開銷。裝箱與拆箱是編譯器補上的方法呼叫，可能造成 <code>NullPointerException</code> 和額外 GC 壓力。Integer 快取則提醒你：包裝類不要用 <code>==</code> 比數值。</p>
+
+<p>最後，<code>clone</code> 預設是淺拷貝；只要物件裡有可變的引用型別，就要確認你要的是共用，還是必須做深拷貝。</p>
+
+<div class="lesson-nav">
+  <span>← 這是本節點的第一課</span>
+  <a href="./equality-and-hashcode.html">下一課：==、equals 與 hashCode 契約 →</a>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Java 的參數傳遞方式是哪一種？" data-correct="1" data-explain="引用型別傳的也是位址的副本，所以本質上只有值傳遞。">
+  <button class="opt">只有引用傳遞</button>
+  <button class="opt">只有值傳遞</button>
+  <button class="opt">基本型別值傳遞、物件引用傳遞</button>
+  <button class="opt">由編譯器依情況決定</button>
+</div>
+<div class="quiz" data-question="方法內把參數重新賦值成 new 出來的新物件，呼叫端的物件會怎樣？" data-correct="2" data-explain="方法改的是副本裡的位址，堆上的原物件不受影響。">
+  <button class="opt">一起被換成新物件</button>
+  <button class="opt">屬性被清空</button>
+  <button class="opt">完全不受影響</button>
+  <button class="opt">立刻拋出例外</button>
+</div>
+<div class="quiz" data-question="Integer a = 127, b = 127，a == b 為 true 的原因是？" data-correct="3" data-explain="Integer.valueOf 在 -128 到 127 之間回傳快取池裡的同一顆物件。">
+  <button class="opt">編譯器自動呼叫了 equals</button>
+  <button class="opt">127 是質數所以被快取</button>
+  <button class="opt">兩個變數被編譯器合併</button>
+  <button class="opt">命中 -128 到 127 的快取池</button>
+</div>
+<div class="quiz" data-question="包裝類在集合框架中不可或缺，最直接的原因是？" data-correct="1" data-explain="泛型擦除後容器實際裝的是 Object，基本型別進不去。">
+  <button class="opt">包裝類佔用的記憶體更小</button>
+  <button class="opt">泛型與集合只接受引用型別</button>
+  <button class="opt">基本型別不支援數學運算</button>
+  <button class="opt">包裝類可以防止整數溢位</button>
+</div>
+<div class="quiz" data-question="只用 super.clone() 卻沒處理內部的 List 欄位，會發生什麼？" data-correct="2" data-explain="clone 是按位複製，引用欄位共享同一個物件，這就是淺拷貝。">
+  <button class="opt">編譯器直接編譯錯誤</button>
+  <button class="opt">List 自動變成不可變</button>
+  <button class="opt">兩個物件共用同一個 List</button>
+  <button class="opt">執行時拋出 CloneNotSupportedException</button>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

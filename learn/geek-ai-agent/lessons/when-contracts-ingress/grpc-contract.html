@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>gRPC 傳輸契約與驗證分層</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>gRPC 傳輸契約與驗證分層</h1>
+<p class="meta">Step 4/5 · 公共契約與接入路由</p>
+
+<h2>學習目標</h2>
+<p>能說明 When 為何對內用 gRPC、對外用 HTTP，設計出 Submit／Query／Cancel 三個 RPC 的 proto 契約，並分清契約層結構驗證與執行時配置驗證。</p>
+
+<h2>模型與介面有了，客戶端怎麼講話？</h2>
+<p>到目前為止，契約處理的是「系統內部」的事：資料長什麼樣、模組之間用什麼介面。但使用者與外部系統要怎麼把一則延遲訊息送進來？這需要另一種契約：傳輸契約。它的難題是語言：客戶端可能用 Java、Go、Python 寫，總不能要求大家都讀 Java 的類別定義。</p>
+<p>When 的答案是 <strong>proto</strong>。它是語言無關的介面定義語言：寫一份 <code>.proto</code>，工具就能替各種語言產生客戶端與伺服器的程式碼骨架。這就像各國海關的報關單：不管出口商用什麼語言談生意，填的都是同一套標準欄位，海關才收得進來。</p>
+
+<h2>為什麼對內用 gRPC、對外用 HTTP</h2>
+<p>傳輸方式有兩種選擇，When 兩個都用，但用在不同的地方：</p>
+<table>
+<thead>
+<tr><th>面向</th><th>用什麼</th><th>為什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>節點之間、內部客戶端</td><td>gRPC</td><td>叢集節點呼叫頻繁；二進位傳輸加強型別契約，比裸 HTTP 更有效率也更不易錯</td></tr>
+<tr><td>管理台、業務呼叫方</td><td>HTTP API</td><td>外部整合友善、除錯直觀；與 gRPC 共用同一套操作語義，但傳輸契約分開</td></tr>
+</tbody>
+</table>
+<p>這就是技術方案裡的決策：「<strong>HTTP outside, gRPC inside</strong>」。對內講效率與型別安全，對外講整合便利。兩邊的操作語義一致（都能送出、查詢、取消），所以業務邏輯只需要認得一套語義，傳輸的差異則被擋在介面之外。這種分工也叫「傳輸層與應用層分離」：gRPC server 只管把請求翻譯成內部命令，真正的業務邏輯留給後面的接入層。</p>
+
+<h2>三個操作：Submit、Query、Cancel</h2>
+<p>對外的訊息操作只有三種，全部定義在 <code>when-api.proto</code>：</p>
+<table>
+<thead>
+<tr><th>RPC</th><th>輸入</th><th>輸出</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Submit</code></td><td>訊息內容、延遲或送達時間、投遞目標</td><td>全域唯一的 <code>message_id</code>，狀態 <code>PENDING</code></td></tr>
+<tr><td><code>Query</code></td><td><code>message_id</code></td><td>目前狀態與各時間戳</td></tr>
+<tr><td><code>Cancel</code></td><td><code>message_id</code></td><td>取消結果；已投遞的訊息不能取消</td></tr>
+</tbody>
+</table>
+<p>三個操作合起來就是一則訊息的基本生命週期：送進來、查現在怎樣、不想送了就取消。這裡有一個關鍵紀律：<code>Submit</code> 回傳的 <code>message_id</code> 必須是全域唯一的。這是後面路由與查詢能穩定運作的基礎：同一個 id 到哪裡都指向同一則訊息。</p>
+
+<h2>不重複定義，只引用公共模型</h2>
+<p><code>when-api.proto</code> 不會重新定義 <code>Message</code>、<code>MessageStatus</code>、<code>SinkType</code>、<code>SinkConfig</code>，而是 <strong>import</strong> 公共模型那份 proto。這個動作看起來很小，意義卻很大：如果 api 這份檔案自己再定義一次狀態列舉，哪天公共模型多了一個狀態，兩份就會不同步。契約只能有一個定義處，其他地方用引用。</p>
+
+<h2>強型別的 sink_config：不要讓實作去猜 key</h2>
+<p>投遞目標的設定是最容易出錯的地方。如果 <code>sink_config</code> 只是一個通用的鍵值對（map），HTTP 的實作就得自己猜裡面有沒有 <code>url</code>、Kafka 的實作得自己猜有沒有 <code>topic</code>，猜錯只會在執行時炸開。When 改用 proto 的 <code>oneof</code>，讓它變成強型別：</p>
+<pre><code>message SinkConfig {
+  oneof config {
+    HttpConfig http  = 1;
+    KafkaConfig kafka = 2;
+  }
+}
+// HttpConfig: url, headers, timeout_ms
+// KafkaConfig: bootstrap_servers, topic</code></pre>
+<p>如此一來，HTTP 的 Sink 拿到的一定是有 <code>url</code>、<code>headers</code>、<code>timeout_ms</code> 的物件；Kafka 的 Sink 拿到的一定是有 <code>bootstrap_servers</code>、<code>topic</code> 的物件。型別本身就把「這個分支該有哪些欄位」講清楚了，不必靠默契。敏感的憑證則透過環境變數注入，不寫進設定檔。</p>
+
+<h2>伺服器只做三件事：解析、驗證、委派</h2>
+<p>gRPC server 的程式骨架刻意做得很薄。它的工作固定是這條流水線：</p>
+<ol>
+<li><strong>解析</strong>請求（request parser）；</li>
+<li>做<strong>基本驗證</strong>；</li>
+<li>呼叫被注入的應用層處理器（<code>DelayMessageHandler</code>）並<strong>委派</strong>；</li>
+<li>把結果或錯誤<strong>映射</strong>回回應。</li>
+</ol>
+<p>它<strong>不</strong>產生訊息 ID、不碰儲存、不調度時間輪、不真正投遞、不做跨節點路由。那些都屬於後面的模組。伺服器依賴的 <code>DelayMessageHandler</code> 只有三個方法：<code>submit</code>、<code>query</code>、<code>cancel</code>。測試時可以塞一個測試用的處理器，驗證 gRPC 呼叫、委派與回應映射是否正確；真正的實作則由接入層提供。這種「只做協議轉換、其餘靠介面外接」的設計，就是埠與配接器（port / adapter）的概念：傳輸是配接器，應用層是核心。</p>
+
+<h2>驗證分兩層：契約層看結構，執行時看環境</h2>
+<p>驗證不是全部塞在一處，而是分層。gRPC 這一層只檢查「proto 表達得出來的結構性約束」：</p>
+<table>
+<thead>
+<tr><th>檢查項目</th><th>規則</th></tr>
+</thead>
+<tbody>
+<tr><td>時間二選一</td><td><code>deliver_at</code>（Unix 毫秒）與 <code>delay_seconds</code> 必須恰好填一個</td></tr>
+<tr><td>時間範圍</td><td>送達時間必須在未來；延遲必須介於 1 秒到 2,592,000 秒（30 天）</td></tr>
+<tr><td>分支一致</td><td><code>sink_config</code> 的分支要和 <code>sink_type</code> 對上（HTTP 要 url、Kafka 要 bootstrap_servers 與 topic）</td></tr>
+<tr><td>內容大小</td><td><code>payload</code> 解碼後不得超過 64KB</td></tr>
+</tbody>
+</table>
+<p>驗證失敗要回傳 <code>INVALID_ARGUMENT</code>，並在訊息裡<strong>指名是哪個欄位錯</strong>，否則呼叫方只看到「參數錯誤」，根本不知道要改什麼。另外兩種錯誤也有固定映射：查不到訊息回 <code>NOT_FOUND</code>；嘗試取消一則不可取消的訊息回 <code>FAILED_PRECONDITION</code>。</p>
+<p>至於「這個 URL 真的連得到嗎」「Kafka 的位址通不通」這類問題，gRPC 這一層管不著，要留給實際投遞的模組在執行時檢查。結構驗證與執行時驗證分開，每一層只回答自己答得出來的事。</p>
+
+<h2>這一節的邊界</h2>
+<p>要抵抗「順手多做一些」的誘惑，就要把非目標寫清楚。這一節<strong>不</strong>實作訊息 ID 產生、狀態儲存、時間輪調度、真正的 Sink 投遞、跨節點路由，也<strong>不</strong>提供 HTTP API 或驗證／限流。它的停止條件是：契約穩定、proto 產生出 stub、伺服器啟動成功、驗收測試通過。做到這裡就停，剩下的交給後續的接入層。</p>
+
+<div class="lesson-nav">
+  <div><a href="./four-public-interfaces.html">← 上一步：四大公共介面與契約地圖</a></div>
+  <div><a href="./ingress-router.html">下一步：接入層七步寫路徑與一致雜湊路由 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="When 選擇「對內 gRPC、對外 HTTP」的主要理由是什麼？" data-correct="2" data-explain="節點間呼叫頻繁，gRPC 的二進位與強型別更合適；對外則用 HTTP 方便管理台與業務整合。">
+  <button class="opt">因為 HTTP 的傳輸速度比 gRPC 更快</button>
+  <button class="opt">因為 gRPC 無法瀏覽器直接呼叫使用</button>
+  <button class="opt">因為內部要效率、外部要整合便利</button>
+  <button class="opt">因為兩種都只是個人偏好沒有差別</button>
+</div>
+
+<div class="quiz" data-question="when-api.proto 對公共模型的 MessageStatus 應該怎麼處理？" data-correct="1" data-explain="應 import 公共模型那份 proto，不能重新定義，否則兩份狀態列舉會不同步。">
+  <button class="opt">重新定義一份以維持 api 檔案完整</button>
+  <button class="opt">import 公共模型，不重新定義</button>
+  <button class="opt">複製一份並在註解說明來源</button>
+  <button class="opt">改用字串欄位取代列舉型別</button>
+</div>
+
+<div class="quiz" data-question="sink_config 用強型別 oneof 的最大好處是什麼？" data-correct="3" data-explain="HTTP 與 Kafka 的實作各自拿到確定欄位的物件，不必靠猜測 key 是否存在，減少執行時錯誤。">
+  <button class="opt">讓設定檔的體積變得更小</button>
+  <button class="opt">讓傳輸速度比鍵值對更快</button>
+  <button class="opt">讓不懂 proto 的人也能修改設定</button>
+  <button class="opt">讓實作拿到確定欄位而非猜 key</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項是 gRPC 這一層該負責的驗證？" data-correct="0" data-explain="proto 能表達的結構性約束由這層檢查，例如 deliver_at 與 delay_seconds 必須二選一。">
+  <button class="opt">deliver_at 與 delay_seconds 二選一</button>
+  <button class="opt">投遞目標的 URL 是否真的可連線</button>
+  <button class="opt">Kafka 叢集目前是否健康可寫入</button>
+  <button class="opt">下游服務是否能處理這筆訊息內容</button>
+</div>
+
+<div class="quiz" data-question="嘗試取消一則已經投遞完成的訊息，應該回傳哪個錯誤？" data-correct="2" data-explain="狀態不允許這個操作屬於前置條件錯誤，回 FAILED_PRECONDITION；查不到才是 NOT_FOUND。">
+  <button class="opt">INVALID_ARGUMENT</button>
+  <button class="opt">NOT_FOUND</button>
+  <button class="opt">FAILED_PRECONDITION</button>
+  <button class="opt">INTERNAL</button>
+</div>
+
+<div class="quiz" data-question="gRPC server 的程式骨架刻意只做什麼？" data-correct="1" data-explain="它只解析請求、做基本驗證、委派給應用層處理器並映射回應；ID、儲存、調度、投遞、路由都不做。">
+  <button class="opt">產生 ID、存取儲存並完成投遞</button>
+  <button class="opt">解析、驗證、委派與回應映射</button>
+  <button class="opt">實作路由並管理整個節點叢集</button>
+  <button class="opt">驗證下游連線並自行重試投遞</button>
+</div>
+
+<div class="quiz" data-question="Submit 回傳全域唯一的 message_id，對後續設計為什麼重要？" data-correct="3" data-explain="有了穩定唯一的 id，路由才能把同一則訊息固定映射到同一個輪子，查詢與取消也才有可靠的依據。">
+  <button class="opt">讓訊息內容可以被壓縮得更小</button>
+  <button class="opt">讓伺服器不需要驗證請求格式</button>
+  <button class="opt">讓使用者可以自己選擇訊息編號</button>
+  <button class="opt">讓路由與查詢能穩定指向同一則訊息</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 公共契約與接入路由 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

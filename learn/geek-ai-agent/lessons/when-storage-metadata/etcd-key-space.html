@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>etcd key space 與心跳約定</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>etcd key space 與心跳約定</h1>
+<p class="meta">Step 5/5 · 存儲與元數據</p>
+
+<h2>學習目標</h2>
+<p>能畫出 etcd 的四類 key space 與生命週期，並說出 Lease TTL 6 秒、續約 2 秒與獨立執行緒／連線的理由。</p>
+
+<h2>四類 key，四種生命週期</h2>
+<p>etcd 裡的所有 key 都掛在 <code>/when/</code> 底下，依用途分成四類。分類的依據是它何時該消失，跟資料的內容無關。</p>
+<table>
+<thead>
+<tr><th>Key</th><th>內容</th><th>生命週期</th></tr>
+</thead>
+<tbody>
+<tr><td><code>/when/nodes/{node_id}</code></td><td><code>{ip, port, start_time, load}</code></td><td>綁 Lease，節點停止續約就自動消失</td></tr>
+<tr><td><code>/when/controller</code></td><td>目前 Controller 的 node_id</td><td>綁 Lease，Controller 掛掉就自動消失</td></tr>
+<tr><td><code>/when/timewheels/{tw_id}</code></td><td><code>{master, slave, status}</code></td><td>持久保存，由系統維護</td></tr>
+<tr><td><code>/when/config/*</code></td><td>replica_count、timewheel_count 等</td><td>持久保存，可動態調整</td></tr>
+</tbody>
+</table>
+<p>上半部（nodes、controller）代表「現在誰還活著、誰在做主」，所以用 Lease；下半部（timewheels、config）代表「這個叢集被設定成什麼樣子」，所以持久保存。把這兩種混用，就會出現「節點一重啟，時間輪分配也一起消失」這種災難。</p>
+
+<h2>設計 key space 的三個原則</h2>
+<ul>
+<li><strong>清楚的階層</strong>：每一類資料有自己的前綴。這樣才能用 <code>Watch("/when/nodes/", ...)</code> 一次訂閱整段前綴的變化，不必一個 key 一個 key 去盯。</li>
+<li><strong>小 key 優先</strong>：每個 value 抓在幾百 bytes 以內，不要把大型物件塞進 etcd。etcd 是協調服務，不是資料庫，塞大物件會拖垮共識效能。</li>
+<li><strong>生命週期分離</strong>：會隨節點生死自動清除的，和必須長期存在的，分開放。這是上一條「四類 key」的由來，也是所有叢集模組都要遵守的紀律。</li>
+</ul>
+
+<h2>心跳約定：TTL 6 秒、續約 2 秒</h2>
+<p>節點註冊用的 Lease TTL 定為 <strong>6 秒</strong>，續約間隔定為 <strong>2 秒</strong>。這兩個數字不是隨便挑的。整個系統給故障切換的預算是 <strong>10 秒</strong>，Lease 過期是其中的第一段；TTL 取 6 秒，等於留了 4 秒給後面的偵測、選舉與接管流程。續約取 2 秒，則是在 6 秒的期限內可以容許連續兩次續約失敗才判定死亡，避免一次網路抖動就誤殺一台好節點。</p>
+<blockquote>Lease 的秒數是在「太快誤判」與「太慢切換」之間取平衡，最終仍要靠故障注入測試來驗證。</blockquote>
+<p>還有一個容易寫錯的地方：<strong>續約要用獨立的執行緒和獨立的 etcd 連線</strong>，不可以跟業務執行緒共用。理由是 Java 的 GC 或業務尖峰會讓執行緒短暫卡住；如果續約跟業務綁在一起，一次漫長的 GC 就可能讓續約遲到、Lease 過期，叢集於是誤判這台健康的節點已經死亡。把心跳隔離出來，才能讓「活著」的訊號真正反映節點狀態。</p>
+
+<h2>etcd client 封裝：五個原語</h2>
+<p>整個叢集只准透過一個封裝好的 client 存取 etcd，這個封裝提供五組操作：</p>
+<table>
+<thead>
+<tr><th>操作</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr><td><code>putWithLease(key, value, ttl)</code> / <code>keepAlive(lease)</code></td><td>註冊與心跳續約</td></tr>
+<tr><td><code>get(key)</code> / <code>getPrefix(prefix)</code></td><td>讀單一 key 或整段前綴</td></tr>
+<tr><td><code>watch(prefix, handler)</code></td><td>訂閱前綴下的新增與刪除事件</td></tr>
+<tr><td><code>txnPutIfAbsent(key, value)</code></td><td>只有 key 不存在時才寫入，原子操作</td></tr>
+</tbody>
+</table>
+<p>最後一個 <code>txnPutIfAbsent</code> 值得多看一眼：它「不存在才寫」的語意，正是後面 Controller 選舉的地基：多個節點同時搶著寫同一個 key，只有一個會成功，那個成功者就是新的 Controller。</p>
+<p>驗收方式是把這些操作全部拿到真實的 etcd 上跑：透過 Testcontainers 起一個 etcd，驗證 Lease 停止續約後會自動刪 key、<code>keepAlive</code> 能維持住 key、<code>watch(prefix)</code> 收得到 PUT 與 DELETE、<code>txnPutIfAbsent</code> 在 key 已存在時回報失敗。另外還有一組 key space 慣例測試，確認四類前綴的讀寫與結構都符合約定。不用 mock，因為 Lease 過期、Watch 事件、Txn 原子性這些行為，mock 假不出來。</p>
+
+<h2>用 Harness 把規則釘住</h2>
+<p>為了不讓「單一入口」「小 key」「生命週期分離」這些約定被後來的程式碼繞過，這個模組用 Harness 強制幾件事：etcd 存取集中在 <code>cluster/etcd</code> 套件，是叢集端唯一的 etcd 入口；key 的拼接與 <code>/when/</code> 前綴集中在常數裡；端點與憑證一律從環境變數讀，不寫進程式；節點 metadata 裡不得出現任何敏感憑證；依賴只准用 when-common 與官方 jetcd。</p>
+
+<h2>把整個節點收在一條線上</h2>
+<p>回頭看，這個節點其實在回答同一個問題：<strong>When 該把哪些狀態交給外部儲存，又該怎麼切分？</strong>訊息這條線，是把大量短命的資料交給 Redis，用一則一 key 的拆法避開 big-key，用固定寫入順序與原子 transition 守住一致性。協調這條線，是把少量關鍵的資料交給 etcd，用清楚的 key space 與 Lease 心跳讓節點活得明白、死得乾脆。兩條線的交會點是「狀態外部化」：節點本身盡量無狀態，重啟後只要把 Redis 與 etcd 的狀態讀回來，就能無縫接回叢集。</p>
+<p>下一站是時間輪與節點集群，那裡會把這裡定義好的 key space 與 Lease，真正用進註冊、續約、選舉與 Watch。</p>
+
+<div class="lesson-nav">
+  <div><a href="./metadata-vs-data.html">← 上一步：元數據與訊息資料的分工：ZK、etcd、Consul 選型</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="/when/nodes/{node_id} 使用哪一種生命週期？" data-correct="1" data-explain="節點註冊綁 Lease，停止續約後 key 自動消失。">
+  <button class="opt">永久保存，由管理者手動刪除</button>
+  <button class="opt">綁 Lease，停止續約就自動消失</button>
+  <button class="opt">綁 TTL 七天，之後自動過期</button>
+  <button class="opt">由 Controller 決定何時刪除</button>
+</div>
+
+<div class="quiz" data-question="下列哪一類 key 應該持久保存？" data-correct="2" data-explain="時間輪分配與叢集組態代表長期設定，必須持久保存。">
+  <button class="opt">節點註冊資訊</button>
+  <button class="opt">Controller 的歸屬</button>
+  <button class="opt">時間輪分配與組態</button>
+  <button class="opt">節點的心跳時間</button>
+</div>
+
+<div class="quiz" data-question="key space 要求清楚階層的主要目的是什麼？" data-correct="0" data-explain="有階層才能用 prefix Watch 一次訂閱整類資料的變化。">
+  <button class="opt">能用前綴一次訂閱整類變化</button>
+  <button class="opt">能讓每個 value 變得更小</button>
+  <button class="opt">能讓 Lease 自動延長期限</button>
+  <button class="opt">能避免節點寫入重複的 key</button>
+</div>
+
+<div class="quiz" data-question="Lease TTL 6 秒、續約 2 秒的設計理由是什麼？" data-correct="3" data-explain="在 10 秒切換預算內留恢復時間，並容許一次續約失敗不誤判。">
+  <button class="opt">讓 etcd 的儲存空間可以更省</button>
+  <button class="opt">讓節點的註冊流程可以更快</button>
+  <button class="opt">讓 Watch 事件的延遲可以更低</button>
+  <button class="opt">10 秒預算內留恢復且容許一次失敗</button>
+</div>
+
+<div class="quiz" data-question="為什麼心跳續約要用獨立執行緒與獨立連線？" data-correct="1" data-explain="避免 GC 或業務尖峰讓續約遲到，造成健康節點被誤判死亡。">
+  <button class="opt">因為 etcd 不允許共用連線續約</button>
+  <button class="opt">避免 GC 忙碌造成誤判死亡</button>
+  <button class="opt">讓續約可以順便處理業務請求</button>
+  <button class="opt">減少 etcd 上的 key 數量成長</button>
+</div>
+
+<div class="quiz" data-question="txnPutIfAbsent 的語意與用途是什麼？" data-correct="2" data-explain="只有 key 不存在時才寫入，原子操作，是 Controller 選舉的地基。">
+  <button class="opt">覆寫既有 key 以更新節點負載</button>
+  <button class="opt">批次刪除某段前綴的所有 key</button>
+  <button class="opt">key 不存在才寫，是選舉的地基</button>
+  <button class="opt">替既有 key 自動續約 Lease</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 存儲與元數據 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

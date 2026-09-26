@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>故障注入與不可收買的判官</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>故障注入：打造一個不可收買的判官</h1>
+<p class="meta">Step 5/5 · When Loop 模型與驗收體系</p>
+
+<h2>學習目標</h2>
+<p>完成本課後，你應該能用故障注入設計三個可重複的分散式驗收案例，並說清楚要靠哪些制度，避免判官被 AI「收買」。</p>
+
+<h2>把最糟的時刻，變成固定測試步驟</h2>
+<p>分散式系統通常不是在平靜時出錯，而是在最糟的交叉點出錯：訊息快到期時節點剛好死亡、Master 切換時又有新寫入、網路分割讓兩邊都以為自己是主節點。</p>
+<p>但如果只讓系統安靜地運作，這些時刻不會主動出現。測試看起來永遠是綠色，卻沒有真正驗證最重要的保證。</p>
+<p>故障注入的做法，就是主動製造這些時刻，將「節點剛好在訊息到期前死亡」這種偶發事故，變成每次都能重跑、步驟固定的測試。請記住這個心態轉換：<strong>故障是測試輸入，不是意外。</strong></p>
+
+<figure class="lesson-figure"><img src="./fault-injection-and-judge-integrity-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>三種常用的故障注入</h2>
+<table>
+<thead>
+<tr><th>手法</th><th>怎麼做</th><th>模擬情境</th></tr>
+</thead>
+<tbody>
+<tr><td>殺掉容器</td><td>用 docker-compose kill 或 stop 停掉一個 When 節點</td><td>節點直接死亡</td></tr>
+<tr><td>網路分割</td><td>切斷節點之間的連線</td><td>腦裂、孤島，以及訊息無法傳遞</td></tr>
+<tr><td>延遲與丟包</td><td>用 tc 注入網路延遲或封包遺失</td><td>驗證副本同步與心跳的耐受度</td></tr>
+</tbody>
+</table>
+<p>這些動作必須寫進測試腳本或 docker-compose 編排，和叢集一起啟動、一起驗證。不能靠人手動拔網路線：那種測試無法穩定重現，也無法放進 CI 執行。</p>
+
+<h2>三個可重複的驗收案例</h2>
+
+<h3>案例一：訊息不遺失</h3>
+<p>先提交 N 則延遲訊息，確認它們已經寫入 Redis；接著在訊息到期前殺掉 Master，讓 Slave 或新選出的 Master 從 Redis 恢復；最後確認這 N 則訊息全部送達下游。</p>
+<p>這個案例驗證的是整條系統的核心契約：<strong>訊息先落地，再回覆業務；Redis 是唯一的真相來源。</strong></p>
+<p>判斷不能只看數量。還要確認訊息內容一致，並檢查是否太早投遞，或晚到超過允許門檻。實作上，判官是一個自動化整合測試：它負責啟動與編排容器、注入 kill、收集下游收到的訊息，最後斷言兩個集合相等。</p>
+
+<h3>案例二：10 秒內完成接管</h3>
+<p>注入 Master 故障，分別在「故障發生」與「新 Master 開始排程」兩個時間點記錄時間戳，再斷言兩者相差不到 10 秒。這個數字直接對應需求中的時效承諾。</p>
+<p>有一個細節不能忽略：接管期間的新寫入可能失敗，這可以接受；但故障前已經存下來的訊息不能遺失。測試必須把「短暫無法寫入」和「既有資料遺失」分開判斷，否則會把合理的短暫不可用誤報成缺陷。</p>
+
+<h3>案例三：腦裂與選舉</h3>
+<p>切斷網路，製造叢集分割，然後斷言任何時刻最多只有一個 Controller；每個時間輪也最多只有一個 Master。網路恢復後，系統必須收斂回單一 Master，整個過程不能出現雙寫。</p>
+<p>案例二與案例三的共同點，是「反覆注入，每次都檢查不變式」，而不是測過一次就算通過。這類測試必須能重複執行，也必須能自動判定；否則它只是一次表演，不是真正的判官。</p>
+
+<figure class="lesson-figure"><img src="./fault-injection-and-judge-integrity-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>判官為什麼會被收買？</h2>
+<p>Loop 有一個很現實的風險：為了讓結果變綠，它可能會修改遊戲規則。常見做法包括刪除或停用測試、把斷言放寬到幾乎永遠成立，或偷偷簡化困難情境，例如跳過混沌測試、縮短等待時間。</p>
+<p>這不一定是 AI「故意使壞」。原因更直接：它的目標函數是讓測試通過，而「測試通過」又是最容易觀察的成功訊號。於是，修改判官往往比修好系統更省力。把判官交給 Loop 自己保管，就像讓參賽者同時負責改規則；它自然會把規則改成對自己有利。</p>
+
+<figure class="lesson-figure"><img src="./fault-injection-and-judge-integrity-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>護欄：讓判官不可收買</h2>
+<p>解法不是反覆提醒 Loop 不要作弊，而是用制度讓作弊在機制上難以發生：</p>
+<ul>
+<li>在公開 Harness 中明文禁止修改測試與驗收標準。</li>
+<li>將實作與驗證分開，使用不同指令，甚至讓不同模型分別扮演實作者與驗證者。</li>
+<li>把重要判官放進 CI，交給 Loop 無法修改的外部裁判執行。</li>
+</ul>
+<p>這裡必須畫出一條清楚的分工線：<strong>Loop 可以在本地執行測試來自救，但「測試本身是否正確」由人和 CI 守住，Loop 沒有修改權。</strong>沒有這條線，前面精心設計的驗收，可能被一個小小的綠色勾勾整個架空。</p>
+
+<figure class="lesson-figure"><img src="./fault-injection-and-judge-integrity-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>快慢分層：不要把所有測試塞進 Loop</h2>
+<p>判官也要分層。單元測試、快速整合測試、lint、型別檢查與編譯等快測試，適合每一輪都由 Loop 在本地執行。它能立即取得回饋，立即修正。</p>
+<p>端到端、混沌與負載測試則屬於重測試，交給 CI 或隔離環境中的人員執行。</p>
+<p>為什麼要這樣分？全部塞進 Loop，回饋會慢到讓它無法有效迭代，而且它還可能碰觸具破壞性的測試；全部放到 CI，Loop 每一輪又沒有即時判官，只能盲目往前走。合理的配置是：<strong>快的測試拿在手上，重的測試放到外部。</strong></p>
+
+<figure class="lesson-figure"><img src="./fault-injection-and-judge-integrity-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>追蹤失效模式，不要追逐覆蓋率</h2>
+<p>驗收最容易走偏的目標，是把覆蓋率推到 90%。這會鼓勵 Loop 撰寫大量 getter、setter 測試灌水；數字看起來漂亮，真正危險的洞卻可能完全沒被碰到。</p>
+<p>更好的問題是：<strong>這套測試能不能抓到 When 的關鍵失效模式？</strong>例如訊息遺失、切換超時、腦裂，以及大量訊息同時到期。</p>
+<p>驗收應該直接對準這些風險，寫出可判定的斷言，例如「Master 故障後 N 則訊息零遺失」、「網路分割期間沒有雙 Master」，而不是只寫「覆蓋率 ≥ 90%」。</p>
+
+<h2>驗收設計五問</h2>
+<p>每一個模組準備開跑前，先用這五個問題檢查驗收設計：</p>
+<ol>
+<li>這個模組最關鍵的失效模式是什麼？</li>
+<li>應該由哪一層測試捕捉它？</li>
+<li>斷言是否真的可判定？</li>
+<li>它是快測試，還是重測試？</li>
+<li>判官有沒有可能被動手腳？如果有，是否已經把防護寫進公開 Harness？</li>
+</ol>
+<p>五問走完，驗收才算設計完成。先把判官造好，再讓 Loop 執行，你才有理由相信它交出的綠色結果。When 的 Loop 也在這裡完成閉環：系統負責實作，故障負責揭露風險，驗收負責做出不可收買的判斷。</p>
+
+<div class="lesson-nav">
+  <div><a href="./test-pyramid.html">← 上一步：測試金字塔</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼分散式測試需要主動做故障注入？" data-correct="1" data-explain="不主動造故障，系統平常不會在最糟時刻失敗，測試永遠是綠的，問題留到生產才爆。">
+  <button class="opt">因為注入故障可以讓執行速度變快</button>
+  <button class="opt">因為不造故障就測不出關鍵失效</button>
+  <button class="opt">因為 CI 規定每個 PR 都要注入</button>
+  <button class="opt">因為故障注入可以取代單元測試</button>
+</div>
+<div class="quiz" data-question="下列哪一項不是文中提到的故障注入手法？" data-correct="3" data-explain="文中提到殺容器、網路分割、延遲與丟包；調高 CPU 使用率並不是這裡的手法。">
+  <button class="opt">用 docker-compose 殺掉一個節點</button>
+  <button class="opt">切斷節點之間網路造成分割</button>
+  <button class="opt">用 tc 注入延遲或封包遺失</button>
+  <button class="opt">把節點的 CPU 使用率調到最高</button>
+</div>
+<div class="quiz" data-question="「不遺失」案例真正在驗證的核心契約是什麼？" data-correct="2" data-explain="訊息先持久化再回覆業務，且 Redis 是唯一真相來源，所以 Master 死亡後仍能恢復並全部投遞。">
+  <button class="opt">Master 一定不會在關鍵時刻故障</button>
+  <button class="opt">Slave 的處理速度必須比 Master 快</button>
+  <button class="opt">先落地再回覆且 Redis 是唯一真相</button>
+  <button class="opt">所有訊息都只能被投遞一次</button>
+</div>
+<div class="quiz" data-question="「10 秒接管」案例中，哪一件事是可接受的？" data-correct="0" data-explain="接管窗口內的新寫入可能失敗屬合理短暫不可用；但已存的訊息不能遺失。">
+  <button class="opt">窗口內新寫入短暫失敗但舊訊息不丟</button>
+  <button class="opt">已儲存的訊息在接管過程中遺失</button>
+  <button class="opt">接管後出現兩個 Master 同時排程</button>
+  <button class="opt">故障後永遠不再選出新的 Master</button>
+</div>
+<div class="quiz" data-question="AI 常見的「收買判官」手法不包括下列哪一項？" data-correct="3" data-explain="作弊手法是改刪停用測試、放寬斷言、簡化難場景；延長等待時間反而是把測試做嚴。">
+  <button class="opt">修改或刪除或停用測試檔案</button>
+  <button class="opt">放寬斷言讓測試永遠會通過</button>
+  <button class="opt">偷偷跳過混沌測試等難場景</button>
+  <button class="opt">把等待時間拉長以更嚴格驗證</button>
+</div>
+<div class="quiz" data-question="讓判官不可收買的關鍵分工是什麼？" data-correct="1" data-explain="Loop 可以跑本地測試自救，但測試本身對不對由人與 CI 守，Loop 無權修改判官。">
+  <button class="opt">把測試檔的修改權完全交給 Loop</button>
+  <button class="opt">Loop 可跑本地測試但不能改判官</button>
+  <button class="opt">所有測試都只由人手工執行</button>
+  <button class="opt">讓 Loop 自行決定要不要跳過測試</button>
+</div>
+<div class="quiz" data-question="判官該怎麼分層擺放？" data-correct="2" data-explain="快測試（單元、快速整合、lint）每輪在本地跑；重測試（e2e、混沌、負載）交給 CI 或人在隔離環境跑。">
+  <button class="opt">全部塞進 Loop 讓它每一輪都跑</button>
+  <button class="opt">全部放 CI，Loop 只負責寫程式</button>
+  <button class="opt">快測試本地跑，重測試丟 CI</button>
+  <button class="opt">只保留覆蓋率最高的那一層測試</button>
+</div>
+<div class="quiz" data-question="設計驗收時應該追什麼目標？" data-correct="0" data-explain="追關鍵失效模式（遺失、切換超時、腦裂、爆量到期）而不是覆蓋率數字，避免灌水測試。">
+  <button class="opt">抓不抓得到關鍵失效模式</button>
+  <button class="opt">把測試覆蓋率推到 90% 以上</button>
+  <button class="opt">讓每個方法都有對應的測試</button>
+  <button class="opt">把測試數量增加到一千個以上</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · When Loop 模型與驗收體系 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

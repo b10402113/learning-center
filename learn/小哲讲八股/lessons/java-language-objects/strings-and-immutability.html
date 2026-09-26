@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>String 不可變、常量池與拼接選型</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>String 為什麼是面試的萬年考題？</h1>
+<p class="meta">Step 3/6 · Java 語言與物件</p>
+
+<div class="learning-goal">
+<strong>學習目標：</strong>理解 String 為什麼不可變、字串常量池如何共用字面量，並能判斷 <code>new String</code> 會建立幾個物件、<code>intern()</code> 在不同 JDK 的差異，以及字串拼接該選哪一種工具。
+</div>
+
+<h2>先抓住核心：String 為什麼不能改？</h2>
+
+<p>想像 String 是一張已經封膜的紙。你可以拿它去複印、剪裁或重新排列內容，但不能直接把原本那張紙改掉。Java 的 String 就是這樣：字串一旦建立，內容便不會改變。</p>
+
+<figure class="lesson-figure"><img src="./strings-and-immutability-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>String 的底層是一個被 <code>final</code> 修飾的字元容器：JDK 8 及以前使用 <code>final char[]</code>，JDK 9 之後則改成更省空間的 <code>byte[]</code>，並搭配一個編碼標記。陣列不能被換掉，String 也不提供修改原內容的方法，因此任何看似「修改」的操作，例如 <code>substring</code>、<code>replace</code>、<code>concat</code>，實際上都是建立並回傳一個新的字串。</p>
+
+<p>這種設計解決了幾個很實際的問題。首先，不可變物件可以安全地被多執行緒共用，不必擔心某個執行緒偷偷改掉其他人的資料。其次，String 的 <code>hashCode</code> 可以計算一次後快取起來，放進 <code>HashMap</code> 時就不必反覆計算。更關鍵的是，字串常量池之所以能讓多個變數共用同一個 String，正是因為這個 String 永遠不會被改寫；否則大家共用同一張紙，任何一個人動筆都可能害其他人看到錯誤內容。</p>
+
+<h2>字串常量池：相同字面量只留一份</h2>
+
+<p>程式裡直接寫出的 <code>"abc"</code> 稱為字串字面量。編譯後，這些字面量會放進字串常量池（String Constant Pool）。相同內容通常只保留一份，之後再遇到相同字面量，就直接拿來共用。</p>
+
+<pre><code>String s1 = "abc";
+String s2 = "abc";
+System.out.println(s1 == s2);   // true，兩者指向池中同一顆</code></pre>
+
+<p>這裡的 <code>==</code> 比較的是「是不是同一個物件」，不是比較字串內容。結果為 <code>true</code>，代表 <code>s1</code> 和 <code>s2</code> 指向常量池中的同一顆 String。</p>
+
+<figure class="lesson-figure"><img src="./strings-and-immutability-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這和前面提過的 Integer 快取池是同一種思路：常用、不可變的物件先建立好，之後讓大家共用，避免不必要的配置。</p>
+
+<h2><code>new String("abc")</code> 到底會建立幾個物件？</h2>
+
+<p>這題不能只背「兩個物件」，因為答案取決於常量池裡原本有沒有 <code>"abc"</code>。要分清楚兩件事：</p>
+
+<ul>
+  <li><code>"abc"</code> 這個字面量可能需要在常量池中留一份。</li>
+  <li><code>new String(...)</code> 則會強制在堆上建立一個新的 String 物件。</li>
+</ul>
+
+<p>因此會有兩種情況：</p>
+
+<ul>
+  <li>池裡本來沒有 <code>"abc"</code>：先在池中建立 <code>"abc"</code>，再在堆上用 <code>new</code> 建立一顆新的 String，總共 2 個物件。</li>
+  <li>池裡已經有 <code>"abc"</code>：字面量直接使用池中那一顆，只有 <code>new</code> 在堆上建立新物件，總共 1 個新建立的物件。</li>
+</ul>
+
+<figure class="lesson-figure"><img src="./strings-and-immutability-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<pre><code>String s = new String("abc");
+// new 出來的物件和池中的 "abc" 位址不同
+System.out.println(s == "abc");        // false
+System.out.println(s.equals("abc"));   // true</code></pre>
+
+<p>這段程式正好呈現兩個比較方式的差異：<code>==</code> 比較參照位置，所以結果是 <code>false</code>；<code>equals</code> 比較內容，因此結果是 <code>true</code>。</p>
+
+<h2><code>intern()</code>：把字串交給常量池管理</h2>
+
+<p><code>intern()</code> 可以理解成「去常量池查同款」。如果池裡已經有內容相同的字串，就回傳池中的那一顆；如果沒有，就把這顆字串放進池裡，再回傳池中的參照。</p>
+
+<p>面試常追問 JDK 1.6 和 JDK 1.7 之後的差異，關鍵在於：JDK 1.7 起，常量池移到堆中，池裡可以記錄原物件的引用，而不一定要再複製一份。</p>
+
+<table>
+  <tr><th>版本</th><th>intern 的做法</th><th>結果</th></tr>
+  <tr><td>JDK 1.6</td><td>把字串複製一份到永久代（PermGen）的池中</td><td>回傳的是池中那份複製品，和原物件不同一顆</td></tr>
+  <tr><td>JDK 1.7 以後</td><td>池移到堆裡，只把「原物件的引用」記進池</td><td>回傳的就是原物件本身，位址相同</td></tr>
+</table>
+
+<pre><code>String s = new String("abc");
+System.out.println(s.intern() == "abc");   // true
+
+// JDK 1.7 起，intern 回傳的引用就等於 s 自己
+System.out.println(s.intern() == s);       // 1.7 之後為 true，1.6 為 false</code></pre>
+
+<p>為什麼要改？其中一個原因是永久代空間較小，字串太多時容易出現 <code>OutOfMemoryError: PermGen space</code>。JDK 1.7 把字串常量池搬到堆中，便改善了這部分問題；JDK 1.8 也延續這種做法。</p>
+
+<figure class="lesson-figure"><img src="./strings-and-immutability-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>String、StringBuilder、StringBuffer：拼接時怎麼選？</h2>
+
+<p>String 不可變，所以每次用 <code>+</code> 拼接，都可能產生新的 String。單一運算式中的 <code>+</code>，編譯器有機會幫你最佳化成 StringBuilder；但如果是在迴圈裡反覆累加，前一次的結果每次都要再產生新字串，成本會隨迴圈次數增加。</p>
+
+<pre><code>// 壞味道：迴圈裡每次 + 都產生新字串
+String result = "";
+for (String word : words) {
+    result += word;
+}
+
+// 好味道：同一顆 StringBuilder 累積
+StringBuilder sb = new StringBuilder();
+for (String word : words) {
+    sb.append(word);
+}
+String result2 = sb.toString();</code></pre>
+
+<p>第一種寫法像是每加一個字，就重新影印一整份完整文件；資料越長，重複工作的量越大。第二種寫法則是準備一個可變的緩衝區，先持續把內容接上，最後才一次產生 String。</p>
+
+<figure class="lesson-figure"><img src="./strings-and-immutability-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+  <tr><th>類別</th><th>可變性</th><th>執行緒安全</th><th>適用場景</th></tr>
+  <tr><td>String</td><td>不可變</td><td>安全（因為不可變）</td><td>內容固定、少量拼接</td></tr>
+  <tr><td>StringBuilder</td><td>可變</td><td>不安全</td><td>單執行緒大量拼接</td></tr>
+  <tr><td>StringBuffer</td><td>可變</td><td>安全（方法加 synchronized）</td><td>多執行緒共用同一個緩衝區</td></tr>
+</table>
+
+<p>效能大致可以記成：StringBuilder 快於 StringBuffer，而兩者都遠快於反覆使用 String 的 <code>+</code>。一般情況直接選 StringBuilder；只有確定同一個緩衝區會被多執行緒共用時，才考慮 StringBuffer。</p>
+
+<h2>把面試答案串起來</h2>
+
+<p>String 的不可變性，是字串常量池、<code>hashCode</code> 快取與執行緒安全的地基。字串字面量可以共用；<code>new String</code> 則一定會在堆上建立新的物件。<code>intern()</code> 在 JDK 1.7 之後能直接記錄原物件的引用，不再一定複製一份。至於大量拼接，別在迴圈裡反覆使用 <code>+</code>：單執行緒用 StringBuilder，需要同步保護時再考慮 StringBuffer。</p>
+
+<div class="lesson-nav">
+  <a href="./equality-and-hashcode.html">← 上一課：==、equals 與 hashCode 契約</a>
+  <a href="./reflection-proxy-generics.html">下一課：反射、動態代理與泛型擦除 →</a>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="String 不可變帶來的好處，哪一項最關鍵？" data-correct="3" data-explain="正因為內容永不改變，常量池才敢讓多個引用共用同一顆物件。">
+  <button class="opt">字串長度可以無限成長</button>
+  <button class="opt">拼接速度變成 O(1)</button>
+  <button class="opt">字串不需要垃圾回收</button>
+  <button class="opt">常量池可以安全地共用物件</button>
+</div>
+<div class="quiz" data-question="new String(&quot;abc&quot;) 在池裡已有 &quot;abc&quot; 時，會建立幾個物件？" data-correct="1" data-explain="字面量沿用池中那一顆，只在堆上 new 一顆，共 1 個。">
+  <button class="opt">2 個</button>
+  <button class="opt">1 個</button>
+  <button class="opt">0 個</button>
+  <button class="opt">3 個</button>
+</div>
+<div class="quiz" data-question="JDK 1.7 之後 intern() 的做法是什麼？" data-correct="2" data-explain="常量池搬到堆後，intern 只在池裡記下原物件的引用，不再複製。">
+  <button class="opt">把字串複製進永久代</button>
+  <button class="opt">把字串就地轉成 byte</button>
+  <button class="opt">池中只記下原物件的引用</button>
+  <button class="opt">每次呼叫都建立新物件</button>
+</div>
+<div class="quiz" data-question="兩個內容相同的字面量 s1 == s2 為 true，原因是什麼？" data-correct="0" data-explain="兩個字面量指向常量池中同一顆物件，比的是位址。">
+  <button class="opt">兩者指向池中同一顆物件</button>
+  <button class="opt">String 重寫了 == 運算子</button>
+  <button class="opt">編譯器把兩個變數合併</button>
+  <button class="opt">JVM 自動改呼叫 equals</button>
+</div>
+<div class="quiz" data-question="在迴圈裡做大量字串拼接，應該改用哪一個？" data-correct="3" data-explain="StringBuilder 可變，單執行緒下最快，避免每次拼接產生新字串。">
+  <button class="opt">String 的 + 運算子</button>
+  <button class="opt">StringBuffer 的同步方法</button>
+  <button class="opt">字元陣列相加</button>
+  <button class="opt">StringBuilder</button>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

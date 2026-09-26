@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>五狀態訊息狀態機與轉移語義</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>五狀態訊息狀態機與轉移語義</h1>
+<p class="meta">Step 2/5 · 公共契約與接入路由</p>
+
+<h2>學習目標</h2>
+<p>能畫出 PENDING／DELIVERING／DELIVERED／FAILED／CANCELLED 五個狀態與五種合法轉移，並說明為什麼每次轉移都必須原子且只有一個執行者能持有投遞權。</p>
+
+<h2>一則訊息的一生，是一台小小的狀態機</h2>
+<p>上一步定義了 Message 長什麼樣。但光有欄位還不夠，欄位會隨時間改變，而「什麼時候可以從什麼變成什麼」如果沒規定，每個模組就會各有一套默契。所以契約要一起定義狀態機：一則延遲訊息從出生到結束，只能落在五個狀態之一。</p>
+<table>
+<thead>
+<tr><th>狀態</th><th>意思</th><th>此刻誰在動作</th></tr>
+</thead>
+<tbody>
+<tr><td><code>PENDING</code></td><td>已建立、等待到點</td><td>沒有人，時間輪排程中</td></tr>
+<tr><td><code>DELIVERING</code></td><td>正在投遞，已取得投遞權</td><td>唯一一個執行者</td></tr>
+<tr><td><code>DELIVERED</code></td><td>投遞成功，終態</td><td>完成，等保留期滿才清</td></tr>
+<tr><td><code>FAILED</code></td><td>不可重試或重試耗盡，終態</td><td>完成（失敗收場）</td></tr>
+<tr><td><code>CANCELLED</code></td><td>被取消，終態</td><td>完成（人為中止）</td></tr>
+</tbody>
+</table>
+
+<h2>只有五種合法轉移</h2>
+<p>狀態多不是重點，重點是轉移。When 只允許這五條路：</p>
+<table>
+<thead>
+<tr><th>轉移</th><th>觸發情境</th><th>關鍵動作</th></tr>
+</thead>
+<tbody>
+<tr><td><code>PENDING</code> → <code>DELIVERING</code></td><td>到點，某個執行者搶到投遞權</td><td>鎖定這則訊息，不讓別人再搶</td></tr>
+<tr><td><code>DELIVERING</code> → <code>DELIVERED</code></td><td>投遞成功</td><td>寫下 <code>deliveredAt</code></td></tr>
+<tr><td><code>DELIVERING</code> → <code>PENDING</code></td><td>可重試的失敗（例如下游暫時不可用）</td><td>重排 <code>nextAttemptAt</code>，之後再試</td></tr>
+<tr><td><code>DELIVERING</code> → <code>FAILED</code></td><td>不可重試的失敗，或重試次數耗盡</td><td>記下 <code>lastError</code>，不再重試</td></tr>
+<tr><td><code>PENDING</code> → <code>CANCELLED</code></td><td>使用者要求取消</td><td>只有還沒開始投遞的才准取消</td></tr>
+</tbody>
+</table>
+<p>有兩條路是<strong>刻意不存在</strong>的。第一，沒有任何一條路直接從 <code>PENDING</code> 跳到 <code>DELIVERED</code>，因為投遞一定要經過 <code>DELIVERING</code>。第二，<code>DELIVERING</code> 不能直接回到 <code>CANCELLED</code>，因為一旦開始投遞，就沒有「假裝沒發生」這回事。終態（<code>DELIVERED</code>／<code>FAILED</code>／<code>CANCELLED</code>）則不再轉移出去。</p>
+
+<h2>為什麼要有 DELIVERING 這個中間狀態</h2>
+<p>如果狀態只有「待送」和「送完」，會發生一件可怕的事：兩個執行者同時看到一則 <code>PENDING</code> 的訊息，兩邊都覺得該由自己送，結果同一則訊息被送了兩次。問題不是執行者不乖，而是契約根本沒給它一個「暫時佔用」的位置。</p>
+<p><code>DELIVERING</code> 就是那個位置：它代表「這則訊息的投遞權已經被某一個執行者拿走了」。契約規定，<strong>一則訊息同時只有一個執行者能持有投遞權</strong>。想從 <code>PENDING</code> 進入 <code>DELIVERING</code>，必須是一場原子操作：要嘛你搶到，要嘛你沒搶到，不能有「兩個人都搶到一半」的中間狀態。這就像一間手術室：同一時間只能有一組人動刀，門口那盞「手術中」的燈一亮，其他人就得等。</p>
+
+<h2>原子性：轉移不能被打斷</h2>
+<p>「原子」的意思是這一步要嘛整個成功，要嘛完全沒發生。所有狀態變更都必須走同一個入口，也就是儲存層的 <code>transition</code> 操作，由它保證原子性。如果允許各模組自己讀出狀態、在記憶體裡改一改、再寫回去，就會出現經典的競態：A 讀到 <code>PENDING</code>，B 也讀到 <code>PENDING</code>，兩邊都以為自己可以做下一步。</p>
+<blockquote>
+一條規則要記牢：狀態不可以各自為政地改。要改，就走原子的 <code>transition</code>，讓「檢查目前狀態」和「寫入新狀態」在同一把鎖裡完成。
+</blockquote>
+
+<h2>狀態存在哪：Redis 是真相，時間輪只是索引</h2>
+<p>這裡要分清楚兩個地方。訊息的權威狀態（現在到底是 <code>PENDING</code> 還是 <code>DELIVERED</code>）儲存在 Redis；而時間輪只是記憶體裡的排程索引，它記的是「這則訊息大概什麼時候該處理」。為什麼要分開？因為記憶體裡的東西一關機就沒了，而 Redis 不會。</p>
+<p>這個分工帶來最重要的好處：<strong>節點重啟時，時間輪可以從 Redis 重建</strong>。權威狀態從頭到尾都在 Redis 手上，記憶體的索引弄丟了再重建就好，訊息不會因此少一則。儲存契約還規定了四個基本能力：建立／查詢（<code>create</code> / <code>get</code>）、原子轉移（<code>transition</code>）、把未完成的訊息撈回來恢復（recovery）、以及在保留期滿後清掉終態訊息（cleanup）。</p>
+
+<h2>終態為什麼還要留著</h2>
+<p>投遞成功或失敗後，訊息不是立刻消失，而是要在保留期內繼續查得到：管理台要能查「這則訊息最後怎麼了」，重試與對帳也需要它。契約的規定是：終態訊息在保留期內仍可查詢，只有保留期滿才進行清理。這解釋了第一步那個整合災難：如果投遞層一送完就刪，查詢方就會撲空。</p>
+
+<div class="lesson-nav">
+  <div><a href="./contract-first-and-message-model.html">← 上一步：契約先行與 Message 公共模型</a></div>
+  <div><a href="./four-public-interfaces.html">下一步：四大公共介面與契約地圖 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼狀態機需要 DELIVERING 這個中間狀態？" data-correct="2" data-explain="DELIVERING 代表投遞權已被某個執行者取走，避免兩個執行者同時從 PENDING 出發而重複投遞。">
+  <button class="opt">因為投遞失敗需要一個地方記錄錯誤</button>
+  <button class="opt">因為使用者需要知道訊息正在傳輸</button>
+  <button class="opt">因為要確保同時只有一個執行者持有投遞權</button>
+  <button class="opt">因為 Redis 無法直接儲存布林值欄位</button>
+</div>
+
+<div class="quiz" data-question="下列哪一條轉移是不合法的？" data-correct="3" data-explain="投遞一定要先取得投遞權，PENDING 不能直接跳到 DELIVERED，必須經過 DELIVERING。">
+  <button class="opt">PENDING → DELIVERING</button>
+  <button class="opt">DELIVERING → PENDING</button>
+  <button class="opt">PENDING → CANCELLED</button>
+  <button class="opt">PENDING → DELIVERED</button>
+</div>
+
+<div class="quiz" data-question="當投遞遇到「可重試的失敗」時，狀態應該怎麼走？" data-correct="0" data-explain="可重試失敗會回到 PENDING，並重排 nextAttemptAt，之後再試一次。">
+  <button class="opt">回到 PENDING 並重排 nextAttemptAt</button>
+  <button class="opt">直接進入 FAILED 並記錄錯誤</button>
+  <button class="opt">維持 DELIVERING 並等待人工處理</button>
+  <button class="opt">直接進入 DELIVERED 視為完成</button>
+</div>
+
+<div class="quiz" data-question="使用者想取消一則訊息，什麼狀態下才可能成功？" data-correct="1" data-explain="只有 PENDING 能轉為 CANCELLED；一旦進入 DELIVERING 或已是終態，就不能再取消。">
+  <button class="opt">任何狀態都能取消，包含已投遞完成</button>
+  <button class="opt">只有 PENDING 狀態可以取消</button>
+  <button class="opt">只有 DELIVERING 狀態可以取消</button>
+  <button class="opt">只有終態可以取消並重新排程</button>
+</div>
+
+<div class="quiz" data-question="為什麼狀態變更必須走原子的 transition，而不能各自讀寫？" data-correct="3" data-explain="若兩個執行者都先讀到 PENDING 再各自寫入，就會產生競態；原子轉移把檢查與寫入放進同一把鎖。">
+  <button class="opt">因為 Redis 不允許兩個用戶端同時連線</button>
+  <button class="opt">因為讀寫分離會讓查詢延遲變高</button>
+  <button class="opt">因為非原子寫入會讓日誌難以閱讀</button>
+  <button class="opt">因為分別讀寫會產生競態與重複投遞</button>
+</div>
+
+<div class="quiz" data-question="Redis 與時間輪在狀態上的分工是什麼？" data-correct="1" data-explain="Redis 持有權威狀態，時間輪只是記憶體排程索引；重啟時索引可從 Redis 重建。">
+  <button class="opt">時間輪持有權威狀態，Redis 只是快取</button>
+  <button class="opt">Redis 持有權威狀態，時間輪只是可重建索引</button>
+  <button class="opt">兩者都持有權威狀態，靠共識演算法同步</button>
+  <button class="opt">兩者都只是快取，權威狀態在檔案系統</button>
+</div>
+
+<div class="quiz" data-question="終態訊息為什麼不立刻刪除？" data-correct="2" data-explain="保留期內要能查詢最後狀態以支援管理台與對帳，保留期滿才清理。">
+  <button class="opt">因為刪除操作在 Redis 中非常昂貴</button>
+  <button class="opt">因為刪掉後就無法重新投遞失敗訊息</button>
+  <button class="opt">因為保留期內要能查詢與對帳</button>
+  <button class="opt">因為終態其實還會自動轉回 PENDING</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 公共契約與接入路由 · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

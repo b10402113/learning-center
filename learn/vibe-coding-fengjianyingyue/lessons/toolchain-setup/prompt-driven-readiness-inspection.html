@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用白話讓 agent 檢查與設定環境</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>先讓 agent 檢查，再讓它動手設定環境</h1>
+<p class="meta">Step 3/3 · 工具鏈就緒：Claude Code / Node / git / JDK+Maven</p>
+
+<h2>檢查和設定，像看診與開藥</h2>
+<p>前兩步的環境安裝，可以自己一步步完成，也可以交給 agent 協助。不過，先把兩種工作分開：<strong>檢查環境是只讀操作，設定環境是寫入操作</strong>。</p>
+
+<p>比較安全的流程是：先請 agent 回報現況，確認缺少什麼，再決定要不要讓它修改。這就像先量血壓、看檢查報告，再開藥，而不是一進門就把整個藥櫃搬回家。</p>
+
+<figure class="lesson-figure"><img src="./prompt-driven-readiness-inspection-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這樣做有兩個好處：你知道它改了什麼，也不會在還沒搞清楚狀況時，讓它擅自修改 PATH 或安裝其他工具。</p>
+
+<h2>第一階段：只讀檢查，先把邊界講死</h2>
+<p>agent 通常很主動。它發現環境少了東西，可能不只回報問題，還會順手下載 JDK、修改環境變數。你只想先知道現況時，提示詞要明確寫出「只檢查，不做其他操作」：</p>
+
+<pre><code>請你檢查本機的 Java 開發環境是否就緒。
+只檢查，不做其他操作。</code></pre>
+
+<p>這句限制看似簡單，卻是關鍵。agent 應該停在診斷階段，只回報 Java 是否安裝、安裝位置與版本，把下一步的決定權留在你手上。</p>
+
+<p>同樣的做法也能用來檢查 git：</p>
+
+<pre><code>幫我看一下當前電腦環境有沒有 git，
+以及這個專案能不能建立成版本庫。
+只幫我檢查，不要做其他任何操作。</code></pre>
+
+<p><strong>風險提醒：</strong>如果沒有寫清楚「只檢查」，agent 可能把「發現問題」直接理解成「立刻修好」。這不一定符合你的預期，也可能改到 PATH、專案設定或其他既有環境。</p>
+
+<figure class="lesson-figure"><img src="./prompt-driven-readiness-inspection-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第二階段：寫入設定，路徑由你提供</h2>
+<p>確認需要補環境變數後，才進入寫入操作。這時的分工很清楚：<strong>你負責告訴 agent 工具實際放在哪裡，它負責處理作業系統的設定方式</strong>。</p>
+
+<p>路徑不能讓 agent 猜。你可能把 JDK 解壓在自訂資料夾，agent 不知道那個位置，猜錯就會把環境變數指向不存在的目錄。相對地，macOS 要寫入 <code>~/.zshrc</code>、Windows 要修改系統環境變數、Linux 要看目前使用的 shell，這些系統差異正適合交給 agent 處理。</p>
+
+<pre><code>我已經下載了 JDK，目錄在 /你的/實際/路徑，
+請你根據我的作業系統設定這個 JDK 的環境變數。
+
+我已經下載了 Maven，目錄在 /你的/實際/路徑，
+請你根據我的作業系統設定這個 Maven 的環境變數。</code></pre>
+
+<p>這裡最重要的是兩件事：路徑要填成真實位置，而且要明確要求它依照你的作業系統設定。如此一來，你不用自己背 macOS、Windows、Linux 各自要修改哪個檔案，但也不會把路徑這個關鍵資訊交給 agent 猜。</p>
+
+<figure class="lesson-figure"><img src="./prompt-driven-readiness-inspection-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第三階段：agent 說完成，不代表真的生效</h2>
+<p>agent 回報「設定好了」，只是代表它執行過寫入指令，不代表目前的終端機已經讀到新設定。</p>
+
+<p>環境變數通常會在 shell 啟動時載入。agent 剛把設定寫進檔案時，你原本開著的終端機仍可能使用舊值。因此要做兩件事：</p>
+
+<ol>
+<li>開一個全新的終端機，或執行 <code>source ~/.zshrc</code>，重新載入設定。</li>
+<li>執行版本命令，確認實際使用的工具與路徑。</li>
+</ol>
+
+<p>以前面的 JDK 與 Maven 為例：</p>
+
+<pre><code>java -version
+mvn -version</code></pre>
+
+<p>尤其要看 <code>mvn -version</code> 輸出的 <code>Java version</code> 那一行，確認 Maven 使用的 Java，正是你交給 agent 的那一套。</p>
+
+<p>如果版本不對，可能是設定尚未生效，也可能是另一套 Java 排在 PATH 前面。這時要回頭檢查 PATH 順序與 <code>JAVA_HOME</code>。這一步不是多餘的收尾，而是唯一能證明「設定真的正確」的實跑驗證。</p>
+
+<figure class="lesson-figure"><img src="./prompt-driven-readiness-inspection-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把流程固定成三步</h2>
+<p>換新電腦、重灌系統，或第一次接手公司的開發環境時，都可以重複這個流程：</p>
+
+<ol>
+<li><strong>檢查：</strong>請 agent 只讀地回報環境現況。</li>
+<li><strong>設定：</strong>由你提供實際路徑，讓 agent 依作業系統完成設定。</li>
+<li><strong>複驗：</strong>開新終端機，再執行版本命令確認結果。</li>
+</ol>
+
+<p>只有三步都完成，你才是真的掌握這台機器的工具鏈，而不是只看著 agent 的一句「完成」就相信它。</p>
+
+<figure class="lesson-figure"><img src="./prompt-driven-readiness-inspection-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<blockquote>
+<p>診斷與變更要分開，是整條 vibe coding 流程都適用的安全習慣：先讓 agent 只讀地報告現況，再由你決定是否寫入，最後親自驗證結果。</p>
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./jdk-maven-and-env-vars.html">← 上一步：JDK 與 Maven：安裝之後，真正麻煩的是環境變數</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼建議把「檢查環境」和「設定環境」分成兩次下指令？" data-correct="1" data-explain="檢查是只讀、設定是寫入，分開能讓你掌握 agent 動了什麼，也避免它在狀況未明時擅自修改。">
+  <button class="opt">因為分兩次可以節省模型的用量</button>
+  <button class="opt">因為只讀與寫入分開較安全可控</button>
+  <button class="opt">因為 agent 一次只能處理一個問題</button>
+  <button class="opt">因為環境變數必須分開兩個檔案</button>
+</div>
+<div class="quiz" data-question="只讀提示詞裡「只檢查，不做其他操作」的作用是什麼？" data-correct="2" data-explain="agent 預設很主動，這句話把它的行動限制在診斷，不讓它順手替你做變更。">
+  <button class="opt">讓檢查的速度明顯變快</button>
+  <button class="opt">強制 agent 使用特定版本的指令</button>
+  <button class="opt">把 agent 限制在診斷、不做變更</button>
+  <button class="opt">讓 agent 自動備份你的設定檔</button>
+</div>
+<div class="quiz" data-question="在設定環境變數時，為什麼「路徑」要由使用者自己提供？" data-correct="0" data-explain="agent 不知道你把檔案解壓到哪裡，猜路徑容易設錯；提供精確路徑是使用者的責任。">
+  <button class="opt">因為 agent 不知道你把檔案放哪</button>
+  <button class="opt">因為路徑需要管理員權限才能輸入</button>
+  <button class="opt">因為路徑會隨作業系統自動改變</button>
+  <button class="opt">因為 agent 無法讀取任何檔案路徑</button>
+</div>
+<div class="quiz" data-question="提示詞中「根據我的作業系統」這句，主要交給 agent 處理什麼？" data-correct="3" data-explain="不同系統設定環境變數的位置與方式不同，這類 boilerplate 正適合交給 agent 判斷。">
+  <button class="opt">決定 JDK 應該下載哪個版本</button>
+  <button class="opt">決定專案要用哪個建置工具</button>
+  <button class="opt">計算環境變數的雜湊值</button>
+  <button class="opt">處理各系統不同的設定方式</button>
+</div>
+<div class="quiz" data-question="agent 回報環境變數設定完成後，為什麼要開新的終端機再驗證？" data-correct="1" data-explain="環境變數在 shell 啟動時載入，當下視窗還是舊的，要開新視窗或 source 設定檔才會生效。">
+  <button class="opt">因為舊終端機的鍵盤輸入會被鎖定</button>
+  <button class="opt">因為變數只在 shell 啟動時載入</button>
+  <button class="opt">因為 agent 會刪除舊的終端機紀錄</button>
+  <button class="opt">因為新終端機會自動修正路徑錯誤</button>
+</div>
+<div class="quiz" data-question="複驗 Maven 環境時，應該特別確認哪一項？" data-correct="2" data-explain="mvn -version 會印出 Java version，用它確認 Maven 真的用在你指定的那套 JDK。">
+  <button class="opt">Maven 的下載檔案大小</button>
+  <button class="opt">終端機的字體是否正常</button>
+  <button class="opt">mvn 印出的 Java version 那一行</button>
+  <button class="opt">git 是否已完成初始化</button>
+</div>
+
+<div class="footer">
+  <p>vibe-coding-fengjianyingyue · 工具鏈就緒：Claude Code / Node / git / JDK+Maven · Step 3/3</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -4,17 +4,37 @@ title: 存儲與元數據
 subject: geek-ai-agent
 tier: 7
 order: 27
-status: draft
+status: content-written
 goal: 能設計 StoragePlugin 與 Redis key 結構（避開 big-key），並在 ZK／etcd／Consul 間選型與定義 etcd key space。
 sources:
   - "[[sources/geek-ai-agent/20260922/第41节：存储层插件化 + Redis 插件（Loop 原料）.pdf#interface-and-key-structure]]"
   - "[[sources/geek-ai-agent/20260922/第41节：存储层插件化 + Redis 插件（Loop 原料）.pdf#acceptance-and-tests]]"
   - "[[sources/geek-ai-agent/20260922/第42节：元数据存储 ZK vs ETCD 选型（Loop 原料）.pdf#interface-and-key-space]]"
   - "[[sources/geek-ai-agent/20260922/第42节：元数据存储 ZK vs ETCD 选型（Loop 原料）.pdf#field-and-key-definitions]]"
-steps: []
-prerequisites: []
+steps:
+  - id: storage-contract
+    order: 1
+  - id: redis-key-design
+    order: 2
+    deps:
+      - storage-contract
+  - id: persist-order-and-transition
+    order: 3
+    deps:
+      - redis-key-design
+  - id: metadata-vs-data
+    order: 4
+    deps:
+      - storage-contract
+  - id: etcd-key-space
+    order: 5
+    deps:
+      - metadata-vs-data
+prerequisites:
+  - learn/geek-ai-agent/nodes/when-contracts-ingress
+  - learn/geek-ai-agent/nodes/when-technical-solution
 created: 2026-09-22
-updated: 2026-09-22
+updated: 2026-09-25
 ---
 
 # 存儲與元數據
@@ -25,11 +45,17 @@ updated: 2026-09-22
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/geek-ai-agent/nodes/when-storage-metadata/storage-contract|為什麼訊息要先落地：StoragePlugin 契約]] — 落地不變量與五方法介面（deep）
+2. [[learn/geek-ai-agent/nodes/when-storage-metadata/redis-key-design|Redis key 結構與避開 big-key]] — 三類 key、TTL 規則與拆小 key 的理由（after step 1, deep）
+3. [[learn/geek-ai-agent/nodes/when-storage-metadata/persist-order-and-transition|寫入順序、原子轉移與重啟恢復]] — 先 Redis 後記憶體的順序、CAS 搶投遞權、先載後註冊（after step 2, deep）
+4. [[learn/geek-ai-agent/nodes/when-storage-metadata/metadata-vs-data|元數據與訊息資料的分工：ZK、etcd、Consul 選型]] — 小量強一致 vs 大量求快，以及選 etcd 的理由（after step 1, deep）
+5. [[learn/geek-ai-agent/nodes/when-storage-metadata/etcd-key-space|etcd key space 與心跳約定]] — 四類 key、生命週期、Lease 6 秒／續約 2 秒（after step 4, deep）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+When 要把兩條資料線分開處理：一頭是「量大、短命、只求快」的延遲訊息，一頭是「量小、要強一致、關心誰還活著」的叢集元數據。這個節點先把訊息落地這件事講清楚——延遲訊息在進記憶體時間輪之前必須先寫進儲存，否則節點一重啟就整批消失；落地用的是 StoragePlugin 這個只依賴介面的插件，第一個實作是 Redis，key 的拆法刻意做到「很多個小 key」以避開 big-key。
+
+接著把鏡頭轉到協調平面：訊息資料放 Redis，元數據放另一種儲存。ZK、etcd、Consul 三套都能做協調，但 etcd 的 Put／Get／Watch／Lease 原語最貼合這個專案，維運負擔也最輕，因此選它。最後把 etcd 的 key space 與 Lease 心跳約定釘死，讓後面註冊、選舉、故障偵測的模組都照同一套契約走。
 
 ## Sources
 

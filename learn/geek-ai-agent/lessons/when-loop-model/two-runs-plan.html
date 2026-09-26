@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>為什麼拆兩次 Loop：單機核心與分散式 HA</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>為什麼要拆兩次 Loop：先穩住單機，再驗證分散式 HA</h1>
+<p class="meta">Step 1/5 · When 的 Loop 模型與驗收體系</p>
+
+<h2>這一篇要掌握什麼</h2>
+<p>看懂 When 為什麼拆成兩次 Loop，並能說清楚每一部分負責什麼、完成的判準是什麼，以及切分背後的依據。</p>
+
+<h2>整包一次交給 AI，技術上做得到嗎？</h2>
+<p>如果技術方案已經寫清楚，架構、模組邊界和測試都準備好了，When 的確可能一次完成。關鍵在兩件事：模型能不能撐住整段上下文與多個步驟，以及專案本身的耦合和驗證難度有多高。</p>
+
+<p>但「做得到」不代表「適合這樣做」。整包一次執行，最後通常只會看到全綠或全紅；哪個模組先完成、哪裡卡住、錯誤從哪一層開始，都像被蓋上黑布。</p>
+
+<p>教學要讓每一步都看得見、風險也能及早煞車。因此 When 仍然完整使用 Loop 模型，但拆成兩次執行，再加上第三步整合驗收。</p>
+
+<figure class="lesson-figure"><img src="./two-runs-plan-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>所以，分兩次是<strong>教學節奏的選擇，不是技術上的限制</strong>。在真實工程裡，只要團隊願意承擔一次驗證的範圍，兩次也可以合併成一次。</p>
+
+<h2>兩次 Loop 怎麼切？</h2>
+<p>切分依據不是哪個技術聽起來更酷，而是<strong>可驗證性與風險</strong>：先處理容易確認的核心路徑，再處理最難模擬、出錯代價也最高的分散式行為。</p>
+
+<table>
+<thead>
+<tr><th>階段</th><th>範圍</th><th>完成時要看見什麼</th></tr>
+</thead>
+<tbody>
+<tr>
+<td>Part 1：單機核心路徑</td>
+<td>接入層與 API、路由（Snowflake ID 與一致性雜湊）、Redis 儲存插件、Sink 投遞（HTTP／Kafka）、多層時間輪引擎</td>
+<td>一則延遲訊息被接收、存進 Redis，時間到後被觸發並投遞出去；整條路徑都能自動驗證，包括投遞精度與不遺失</td>
+</tr>
+<tr>
+<td>Part 2：分散式 HA</td>
+<td>ETCD 協調（節點註冊、Controller 選舉、Watch）、Master／Slave 副本與接管、Controller 與再平衡、節點擴縮</td>
+<td>三節點叢集建立完成；Slave 能在 10 秒內接手且不遺失訊息。這部分以正確性為主，需要混沌測試與故障注入</td>
+</tr>
+<tr>
+<td>第三步：整合驗收</td>
+<td>用整體 Harness 串起兩部分：三節點端到端的提交 → 排程 → 投遞、跨節點路由、可觀測性、部署與 Web 管理台</td>
+<td>看著訊息從 pending 走到 delivered，確認跨節點路由正確，整條鏈路能重複驗證</td>
+</tr>
+</tbody>
+</table>
+
+<figure class="lesson-figure"><img src="./two-runs-plan-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>Part 1 為什麼先做？</h3>
+<p>因為核心路徑必須先正確，分散式問題才值得討論。如果訊息沒有準時觸發，或根本沒有正確寫入 Redis，這時候去驗證選舉、副本與接管，只是在錯誤的地基上加蓋。</p>
+
+<p>Part 1 不碰叢集，驗證路徑直接，Loop 也比較容易收斂，因此適合先跑。可以把它想成樣品屋：先確認水電接對、開關按下去燈會亮。這時還不用處理整條街的電網，出了問題也能快速拆掉重做。</p>
+
+<figure class="lesson-figure"><img src="./two-runs-plan-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>Part 2 為什麼要獨立跑？</h3>
+<p>分散式正確性是 When 最難、風險也最高的部分。它的麻煩在於：系統平常運作時，測試可能一直是綠的；真正的錯誤，往往只在節點剛好於關鍵時刻故障時出現。</p>
+
+<p>因此，這部分不能和核心路徑混在同一輪驗證。它需要自己的測試策略，以及專門針對故障的驗收方式。</p>
+
+<p>如果 Part 1 是樣品屋，Part 2 就是把房子接上市電、自來水，再裝上備援發電機。驗收重點不只是「平常能不能用」，而是「停電的那一刻，系統能不能撐住」。</p>
+
+<figure class="lesson-figure"><img src="./two-runs-plan-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>一輪 Loop 會怎麼跑？</h2>
+<p>兩個部分各自套用同一套循環：</p>
+
+<ol>
+<li>閱讀該部分的文件，也就是 part doc。</li>
+<li>建立隔離分支，避免影響主線。</li>
+<li>反覆實作、測試與修正；測試失敗，就回到實作和測試。</li>
+<li>全部測試通過後交棒，由人進行 review。</li>
+</ol>
+
+<p>交棒後有兩條路。</p>
+
+<p>第一條是出口 A：review 通過，合併 PR，進入下一個部分。</p>
+
+<p>第二條是出口 B：review 不滿意，回頭修改 part doc，再從乾淨狀態重新執行。這裡的關鍵是：不滿意時要修的是<strong>文件</strong>，不是在對話裡一直和 AI 拉扯。</p>
+
+<p>文件是 Loop 的輸入。輸入沒有改對，重跑只是在同一條錯路上多走幾次；輸入改清楚了，重新執行才有意義。</p>
+
+<figure class="lesson-figure"><img src="./two-runs-plan-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>哪些工作交給 Loop，哪些工作由人主導？</h2>
+<p>切好階段後，還要決定每個模組由誰負責。判準一樣是可驗證性。</p>
+
+<table>
+<thead>
+<tr><th>交給 Loop</th><th>由人主導</th></tr>
+</thead>
+<tbody>
+<tr>
+<td>多層時間輪演算法、一致性雜湊、序列化、HTTP／gRPC 介面、參數驗證、Sink 插件、Redis key 設計</td>
+<td>接管正確性、Master／Slave 副本一致性、選舉與腦裂處理</td>
+</tr>
+</tbody>
+</table>
+
+<p>判準可以濃縮成一句話：便宜、明確，而且能自動驗證的工作，交給 Loop；難以驗證、出錯代價又高的部分，由人先決定方案，Loop 再協助實作。</p>
+
+<p>如果把這條線畫錯，代價通常比自己動手寫還高。Part 1 的終點，是一條真的能自動驗證的單機核心路徑；Part 2 的終點，則是能在故障情境下做出正確接管決定的分散式系統。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./loop-raw-material.html">下一步：Loop 原料與一輪迴圈 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="When 把實作拆成兩次 Loop，主要原因是什麼？" data-correct="2" data-explain="拆兩次是教學節奏與風險可視化的選擇；技術上整包一次跑完其實做得到。">
+  <button class="opt">模型能力不足以一次寫完整包</button>
+  <button class="opt">技術上根本無法一次跑完整包</button>
+  <button class="opt">為了看見步驟並卡住高風險部分</button>
+  <button class="opt">因為 Maven 模組無法一次編譯完</button>
+</div>
+<div class="quiz" data-question="Part 1 單機核心路徑不包含下列哪一項？" data-correct="3" data-explain="Master/Slave 副本與接管屬於 Part 2 分散式 HA，Part 1 不碰叢集。">
+  <button class="opt">Redis 儲存插件與一致性雜湊路由</button>
+  <button class="opt">HTTP 與 Kafka 兩種 Sink 投遞</button>
+  <button class="opt">多層時間輪引擎與 API 接入</button>
+  <button class="opt">Master/Slave 副本與 10 秒接管</button>
+</div>
+<div class="quiz" data-question="為什麼 Part 1 要排在 Part 2 之前？" data-correct="0" data-explain="核心路徑必須先正確，分散式問題才有意義；且單機不碰叢集，驗證最直接、Loop 最容易收斂。">
+  <button class="opt">核心路徑先對，且單機驗證最直接</button>
+  <button class="opt">因為 Redis 一定要在 ETCD 之前啟動</button>
+  <button class="opt">因為叢集功能比較不重要可以晚做</button>
+  <button class="opt">因為單機版本不需要寫任何測試</button>
+</div>
+<div class="quiz" data-question="當你對 Loop 的產出不滿意時，正確的處理方式是什麼？" data-correct="1" data-explain="修 part doc 再從乾淨狀態重跑，比在對話裡來回爭辯更有效，因為你修的是 Loop 的輸入。">
+  <button class="opt">在對話裡跟 AI 爭辯到它改對</button>
+  <button class="opt">改 part doc 再從乾淨狀態重跑</button>
+  <button class="opt">自己接手把整段程式碼重寫</button>
+  <button class="opt">放寬驗收標準讓測試先變綠</button>
+</div>
+<div class="quiz" data-question="決定一個模組該交給 Loop 還是人主導的判準是什麼？" data-correct="2" data-explain="判準是可驗證性與出錯成本：便宜可確定驗證的交給 Loop，難驗且出錯貴的由人主導。">
+  <button class="opt">模組的程式碼行數多不多</button>
+  <button class="opt">模組用 Java 還是 TypeScript 寫</button>
+  <button class="opt">可驗證性與出錯後的代價</button>
+  <button class="opt">模組是不是由 AI 第一次生成</button>
+</div>
+<div class="quiz" data-question="下列哪一項屬於「人來主導」而非交給 Loop 的工作？" data-correct="3" data-explain="選舉與腦裂處理只在關鍵時刻失敗、難以穩定驗證，且錯起來代價高，應由人決定方案。">
+  <button class="opt">多層時間輪的演算法實作</button>
+  <button class="opt">gRPC 介面與參數驗證</button>
+  <button class="opt">Redis key 結構與序列化</button>
+  <button class="opt">選舉與腦裂的處理邏輯</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · When Loop 模型與驗收體系 · Step 1/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

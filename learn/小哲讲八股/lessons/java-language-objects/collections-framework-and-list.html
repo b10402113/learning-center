@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>集合框架地圖與 List 選型</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>先畫出集合地圖，再挑對容器</h1>
+<p class="meta">Step 5/6 · Java 語言與物件</p>
+
+<div class="learning-goal">
+<strong>學習目標：</strong>畫出 Collection 與 Map 兩大派系的地圖，並從資料結構、擴容方式與 CPU 快取，理解 ArrayList、LinkedList、CopyOnWriteArrayList 的選型，以及 fail-fast 與 fail-safe 的差異。
+</div>
+
+<h2>先認路：集合框架其實分成兩大派系</h2>
+
+<p>Java 集合框架的頂端不是一整棵樹，而是兩條各自發展的路線。</p>
+
+<p>第一條是 <code>Collection</code>，往下分成 List、Set、Queue：List 保留順序、允許重複；Set 不允許重複；Queue 則用來處理佇列或優先權。第二條是 <code>Map</code>，專門存放鍵值對。</p>
+
+<p>關鍵在這裡：<strong>Map 並不繼承 Collection</strong>，而是獨立的根介面。面試問「Map 是不是 Collection」時，答錯通常不是不會用，而是集合地圖還沒畫清楚。</p>
+
+<table>
+  <tr><th>介面</th><th>特性</th><th>常見實作</th></tr>
+  <tr><td>List</td><td>有序、可重複、可依索引存取</td><td>ArrayList、LinkedList、CopyOnWriteArrayList</td></tr>
+  <tr><td>Set</td><td>不可重複，HashSet 無序、TreeSet 有序</td><td>HashSet、LinkedHashSet、TreeSet</td></tr>
+  <tr><td>Queue</td><td>先進先出或依優先權排序</td><td>ArrayDeque、PriorityQueue、ArrayBlockingQueue</td></tr>
+  <tr><td>Map</td><td>鍵值對，鍵不可重複</td><td>HashMap、TreeMap、ConcurrentHashMap</td></tr>
+</table>
+
+<p>另外，<code>Collections</code> 是工具類別，提供排序、反轉等靜態方法；<code>Collection</code> 則是介面，兩者只是名字很像。<code>Iterator</code> 是走訪集合的標準方式。</p>
+
+<p>整套框架的核心思路很實際：用不同的底層結構，交換不同的增、刪、查、改效率。容器沒有絕對的冠軍，只有適不適合目前的資料存取方式。</p>
+
+<figure class="lesson-figure"><img src="./collections-framework-and-list-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<h2>ArrayList vs. LinkedList：陣列和鏈結節點的選擇</h2>
+
+<p><code>ArrayList</code> 底層是一個會自動長大的陣列，元素在記憶體中連續排列；<code>LinkedList</code> 則是雙向鏈結串列，每個節點都記著前後鄰居的位址。</p>
+
+<table>
+  <tr><th>操作</th><th>ArrayList</th><th>LinkedList</th></tr>
+  <tr><td>依索引隨機存取</td><td>O(1)，直接計算位址</td><td>O(N)，必須沿著節點逐個尋找</td></tr>
+  <tr><td>中間插入或刪除</td><td>O(N)，要搬移後續元素</td><td>O(1) 修改指標，但仍要先用 O(N) 找到位置</td></tr>
+  <tr><td>記憶體</td><td>連續、較精簡</td><td>每個節點多存前後指標，較佔空間</td></tr>
+</table>
+
+<p>課本常把結論濃縮成「LinkedList 插入、刪除比較快」，但這句話少了一個重要前提：<strong>你必須已經找到要操作的節點</strong>。</p>
+
+<p>如果要在中間插入，LinkedList 還是得先走過去找位置，這一步就是 O(N)。此外，每個節點都多了兩個指標，節點也分散在記憶體各處，實際效能不只由 Big O 決定。</p>
+
+<figure class="lesson-figure"><img src="./collections-framework-and-list-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<h2>ArrayList 為什麼用 1.5 倍擴容？</h2>
+
+<p>ArrayList 採用懶加載：建立物件時不急著配置完整陣列，第一次 <code>add</code> 時才把容量開到 10。當元素數量超過目前容量，就會把容量擴成舊容量的 1.5 倍：</p>
+
+<pre><code>// 擴容公式
+int newCapacity = oldCapacity + (oldCapacity &gt;&gt; 1);
+
+// 1.8 的實際流程大致是
+elementData = Arrays.copyOf(elementData, newCapacity);   // 底層走 System.arraycopy</code></pre>
+
+<p>擴容時必須複製整個陣列，所以這一次操作是 O(N)。那為什麼不每次只增加一格？因為每次新增都可能觸發複製，總成本會累積成 1+2+3+...+N，最後變成 O(N²)。</p>
+
+<p>改用倍數擴容後，複製不會每次發生；把多次 <code>add</code> 的成本平均攤開，每次新增的平均成本可視為 O(1)。代價則是陣列可能暫時留有尚未使用的空間，這是一場典型的空間換時間。</p>
+
+<figure class="lesson-figure"><img src="./collections-framework-and-list-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<div class="analogy">
+<strong>類比：</strong>這就像去超市採買。每次只買一顆蛋，不夠就再跑一趟，最後時間都花在往返；一次買一盒，雖然可能暫時多買幾顆，卻能省下大量來回成本。倍數擴容選的就是後者。
+</div>
+
+<p>如果事先知道大概要放多少元素，可以直接使用 <code>new ArrayList&lt;&gt;(n)</code> 指定初始容量，一次避開前幾次擴容與陣列複製。</p>
+
+<h2>為什麼現代 CPU 上 ArrayList 常常更快？</h2>
+
+<p>只看 Big O，很容易以為 LinkedList 在插刪時一定勝出；但現代 CPU 還有一張看不見的牌：快取。</p>
+
+<p>CPU 從記憶體取資料時，通常不是只拿一個位元組，而是一次載入一整條快取行（cache line），常見大小是 64 位元組。ArrayList 的元素連續放在記憶體裡，讀到其中一個元素時，後面幾個元素很可能也已經一併載入快取，這叫做<strong>空間局部性</strong>。</p>
+
+<p>LinkedList 的節點則可能散落在記憶體各處。CPU 沿著指標跳來跳去，容易發生快取未命中；每次未命中，都可能得重新向主記憶體取資料。</p>
+
+<figure class="lesson-figure"><img src="./collections-framework-and-list-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<p>因此會出現一個看似矛盾、其實很常見的結果：理論上 LinkedList 的某些插刪操作是 O(1)，實際走訪或處理中小型資料時，卻常常輸給連續配置的 ArrayList。資料結構的理論成本，還得和記憶體佈局一起看。</p>
+
+<h2>CopyOnWriteArrayList：把成本放到寫入端</h2>
+
+<p><code>CopyOnWriteArrayList</code> 用「讀多寫少」的策略處理併發。讀取不加鎖；寫入時，例如 <code>add</code>、<code>set</code>，會先取得鎖，複製一份新的底層陣列，在新陣列上完成修改，最後再把引用切換過去。</p>
+
+<p>這樣一來，迭代器拿到的是舊陣列的快照。迭代期間即使有其他執行緒寫入，也不會看到新資料，也不會因為集合被修改而拋出併發修改例外；這種行為就是它的<strong>弱一致性</strong>特徵之一。</p>
+
+<pre><code>List&lt;String&gt; handlers = new CopyOnWriteArrayList&lt;&gt;();
+handlers.add("A");
+
+for (String h : handlers) {
+    handlers.add("B");   // 不會拋 ConcurrentModificationException
+}</code></pre>
+
+<p>白名單、事件監聽器清單這類「讀很多、改很少」的資料，適合使用它。反過來，如果寫入頻繁，每次寫入都要複製整個陣列，記憶體配置與 GC 壓力會很可觀，就不適合使用。</p>
+
+<h2>fail-fast 與 fail-safe：修改集合時，迭代器怎麼反應？</h2>
+
+<p>如果集合正在被迭代，另一邊又修改了它，可能出現兩種行為。</p>
+
+<p>ArrayList、HashMap 這類集合通常是 <strong>fail-fast</strong>。集合內部用 <code>modCount</code> 記錄結構修改次數，迭代器每次取元素時都檢查這個數值。如果發現集合被偷偷改過，立即拋出 <code>ConcurrentModificationException</code>。</p>
+
+<p>它的態度很直接：寧可立刻報錯，也不要讓程式繼續使用可能不一致的迭代狀態。不過，fail-fast 主要是偵測錯誤的機制，不是完整的併發安全保證。</p>
+
+<p>CopyOnWriteArrayList、ConcurrentHashMap 則常被歸類為 <strong>fail-safe</strong>。前者基於快照迭代；後者提供弱一致性的迭代，可能看見部分更新、也可能看不到剛發生的更新，但不會因一般的併發修改而拋出例外。</p>
+
+<p>所以兩者的取捨不是單純的「哪個比較安全」：fail-fast 讓問題更早浮現；fail-safe 則讓迭代可以繼續，但你必須接受可能讀到舊資料或非即時狀態。</p>
+
+<figure class="lesson-figure"><img src="./collections-framework-and-list-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<h2>把選型重點收進地圖</h2>
+
+<p>先記住兩條主線：<code>Collection</code> 與 <code>Map</code>；Map 不繼承 Collection。</p>
+
+<p>選 List 時，不要只背「ArrayList 查得快、LinkedList 插刪快」的口訣，還要看資料的存取模式、尋找位置的成本，以及記憶體佈局。ArrayList 透過 1.5 倍擴容，把反覆複製的 O(N²) 成本攤平成平均 O(1)；CPU 快取則讓連續記憶體在實務上常常勝出。</p>
+
+<p>遇到併發迭代時，再分清楚需求：是要 fail-fast，讓錯誤盡早被發現；還是接受 fail-safe 的弱一致性，換取讀取不中斷。</p>
+
+<div class="lesson-nav">
+  <a href="./reflection-proxy-generics.html">← 上一課：反射、動態代理與泛型擦除</a>
+  <a href="./hashmap-and-concurrent-map.html">下一課：HashMap 演進與併發 Map →</a>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Map 與 Collection 之間的關係是什麼？" data-correct="1" data-explain="Map 是獨立於 Collection 之外的根介面，這是常見的誤答點。">
+  <button class="opt">Map 繼承自 Collection</button>
+  <button class="opt">Map 是獨立根介面，不繼承 Collection</button>
+  <button class="opt">Collection 繼承自 Map</button>
+  <button class="opt">兩者都是 List 的子介面</button>
+</div>
+<div class="quiz" data-question="JDK 1.8 的 ArrayList 擴容倍率是多少？" data-correct="0" data-explain="公式是 oldCapacity + (oldCapacity >> 1)，也就是 1.5 倍。">
+  <button class="opt">1.5 倍</button>
+  <button class="opt">2 倍</button>
+  <button class="opt">1 倍</button>
+  <button class="opt">3 倍</button>
+</div>
+<div class="quiz" data-question="ArrayList 不採用「每次加 1」擴容，主要原因是什麼？" data-correct="3" data-explain="每次加 1 會讓搬移成本累加成 O(N²)，倍數擴容把成本攤平。">
+  <button class="opt">陣列不允許逐步成長</button>
+  <button class="opt">每次加 1 會破壞元素排序</button>
+  <button class="opt">JVM 不支援小量複製</button>
+  <button class="opt">總搬移成本會退化成 O(N²)</button>
+</div>
+<div class="quiz" data-question="在現代 CPU 上 ArrayList 常勝過 LinkedList，關鍵是什麼？" data-correct="2" data-explain="連續記憶體讓快取行能載入多個相鄰元素，空間局部性好。">
+  <button class="opt">ArrayList 的演算法複雜度更低</button>
+  <button class="opt">LinkedList 不支援隨機存取</button>
+  <button class="opt">連續記憶體的快取局部性較好</button>
+  <button class="opt">ArrayList 完全不需要擴容</button>
+</div>
+<div class="quiz" data-question="在迭代 ArrayList 的過程中直接修改集合，通常會怎樣？" data-correct="1" data-explain="fail-fast 迭代器檢查 modCount，發現被偷改就立刻拋例外。">
+  <button class="opt">靜默忽略這次修改</button>
+  <button class="opt">拋出 ConcurrentModificationException</button>
+  <button class="opt">自動改用快照繼續迭代</button>
+  <button class="opt">讓迭代器回傳 null</button>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

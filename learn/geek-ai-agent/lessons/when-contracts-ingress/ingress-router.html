@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>接入層七步寫路徑與一致雜湊路由</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>接入層七步寫路徑與一致雜湊路由</h1>
+<p class="meta">Step 5/5 · 公共契約與接入路由</p>
+
+<h2>學習目標</h2>
+<p>能走完 Submit 的七步寫路徑，說明 Snowflake 產生 message_id、一致雜湊把同一個 id 固定映射到同一個 time wheel、跨節點以 gRPC 轉發，以及「先持久化、再進輪、才回傳」為何是防丢訊的第一道保證。</p>
+
+<h2>把零件串成一條會動的線</h2>
+<p>前面幾步定義了模型、狀態機、四個介面與 gRPC 傳輸契約。但這些零件單獨放著不會自己動。接入層與路由層的工作，就是把它們編排成一條完整的寫入路徑：收到請求、驗證、產生編號、選定輪子、必要時轉發、持久化、加入排程、回覆。它同時對兩種入口提供服務：gRPC server 把請求轉成內部命令交給它，HTTP API 也轉成同一種命令交給它。因此它的介面必須與傳輸無關。</p>
+<blockquote>
+接入層只做「編排」：它呼叫儲存、時間輪、路由與 gRPC 轉發，但不實作它們的內部。這條界線是這個模組能保持單純的關鍵。
+</blockquote>
+
+<h2>Submit 的七步寫路徑</h2>
+<p>一則訊息送進來，會依序經過這七步：</p>
+<table>
+<thead>
+<tr><th>步驟</th><th>動作</th><th>重點</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>接收請求</td><td>來源可能是 gRPC 或 HTTP，先轉成內部命令</td></tr>
+<tr><td>2</td><td>驗證時間、payload、sink_config 結構</td><td>規則與傳輸契約一致，違反回 INVALID_ARGUMENT</td></tr>
+<tr><td>3</td><td>產生 <code>message_id</code></td><td>用 Snowflake 在本機產生，全域唯一</td></tr>
+<tr><td>4</td><td>一致雜湊到 <code>tw_id</code></td><td>同一個 id 永遠映射到同一個輪子</td></tr>
+<tr><td>5</td><td>判斷 Master 是否在本機</td><td>不在就透過 gRPC 轉發；在本地就 <code>storage.create()</code></td></tr>
+<tr><td>6</td><td>成功後 <code>timeWheel.add()</code></td><td>先寫入持久層，才加入記憶體排程</td></tr>
+<tr><td>7</td><td>回傳 <code>message_id</code> + <code>PENDING</code></td><td>使用者拿到編號，之後可查詢或取消</td></tr>
+</tbody>
+</table>
+
+<h2>為什麼用 Snowflake 產生編號</h2>
+<p>訊息需要一個全域唯一、又不能靠中央服務產生的編號。若要向一台「編號伺服器」要號碼，那台機器就成了單點：它掛了，整個系統就送不出訊息；流量一大，它也是瓶頸。Snowflake 的作法是<strong>每個節點自己在本地產生</strong>編號，形式是：</p>
+<pre><code>message_id = 時間戳 | 節點位元（來自 WHEN_NODE_ID） | 序號</code></pre>
+<p>三個部分合起來保證兩件事：不同節點不會產生一樣的號碼（節點位元不同），同一節點同一毫秒內的多個請求也不會撞號（序號遞增）。因為開頭是時間戳，號碼大致上還會隨時間遞增，方便除錯與排序。結論是：不用中央服務，也能拿到全域唯一、並發安全、大致有序的編號。</p>
+
+<h2>一致雜湊：同一個 id 永遠進同一個輪子</h2>
+<p>當系統有多個時間輪分散在不同節點，一則訊息該進哪一個？如果隨便挑，會發生嚴重的後果：送出時進了 A 輪，查詢時卻被導到 B 輪，B 輪根本不知道這則訊息，於是查不到；取消時也一樣取消不掉。所以選輪必須是<strong>確定性的</strong>：</p>
+<pre><code>tw_id = consistentHash(message_id) % 輪子環</code></pre>
+<p>只要雜湊函式固定，同一個 <code>message_id</code> 算出來的 <code>tw_id</code> 就永遠一樣。這樣送出、查詢、取消都會落在同一個輪子上，訊息才找得到、取消得掉。要注意的是：這裡的雜湊是「訊息 id → 輪子」，和「副本集、Master 在哪」的 metadata 是兩件不同的事，後者屬於叢集與元資料管理。把兩者混在一起，就會讓路由變得不穩定。</p>
+
+<h2>跨節點轉發：對使用者完全透明</h2>
+<p>算出 <code>tw_id</code> 之後，下一個問題是：負責這個輪子的 Master 在哪一台機器上？接入層透過注入的叢集視圖查詢（<code>masterOf(twId)</code>）。如果 Master 剛好在本機，就地處理；如果在別的節點，就透過內部 gRPC 把請求轉發過去。對業務呼叫方來說，它只知道「我把訊息送進了 When」，完全不需要知道背後是哪一台機器在處理。</p>
+<p>這裡有兩條紀律。第一，路由層<strong>不得自己直接讀取 etcd</strong>；叢集資訊要透過注入的介面取得，這樣測試才能換成靜態的假視圖。第二，當查不到 Master 或本機找不到對應的輪子時，必須<strong>明確失敗</strong>，不能偷偷挑一個節點或建立預設值。默默把訊息送到錯的地方，比直接報錯危險得多。</p>
+
+<h2>先持久化、再進輪、才回傳</h2>
+<p>七步裡最關鍵的是第 5、6、7 步的<strong>順序</strong>。正確順序是：先 <code>storage.create()</code> 把訊息寫進持久層；成功後才 <code>timeWheel.add()</code> 加入記憶體排程；最後才回傳成功。為什麼不能反過來？</p>
+<p>如果先把訊息放進記憶體時間輪、再寫持久層，那麼在寫入失敗或節點當機的瞬間，訊息只存在於記憶體裡，一重啟就消失，使用者卻可能已經收到「成功」的回覆，這就是丢訊。反過來，先寫入持久層，就算記憶體狀態還沒建好就掛掉，重啟後也能從持久層把未完成的訊息撈回來重建排程。若 Redis 寫入失敗，就回傳失敗，並且<strong>完全不動記憶體裡的排程狀態</strong>，讓系統維持在「這則訊息不存在」的一致狀態。這個「先持久化」的不變式，是防丢訊的第一道保證。</p>
+
+<h2>Query 與 Cancel 也要走同一條路</h2>
+<p>送出不是唯一的路徑。查詢一則訊息時，同樣先把 <code>message_id</code> 雜湊到輪子，必要時轉發到 Master，再讀取狀態。取消則更嚴格：它要用原子的狀態轉移把 <code>PENDING</code> 改成 <code>CANCELLED</code>，成功後才把訊息從時間輪移除；如果訊息當下不是 <code>PENDING</code>（例如已經在投遞中或已投遞），取消就失敗。這也解釋了為什麼需要原子轉移：如果一百個人同時取消同一則訊息，只有一個能成功，其餘都會看到「狀態已不是 PENDING」。終態訊息在保留期內仍可查詢。</p>
+<p>另外，狀態轉移有明確的歸屬：這一層負責發起「建立」與「取消」的轉移；投遞成功、失敗、重試的轉移則由投遞層發起。但不論誰發起，所有轉移都必須走儲存層的原子 <code>transition</code>。</p>
+
+<h2>這一層的邊界</h2>
+<p>接入與路由層只做三件事：接入（驗證、產生編號、狀態機）、路由（一致雜湊與轉發）、以及 Submit／Query／Cancel 的編排。它<strong>不</strong>實作時間輪的內部資料結構、<strong>不</strong>實作儲存的 key 設計、<strong>不</strong>真正投遞、也<strong>不</strong>處理 Master／Slave 副本與故障切換，它只「查 Master 在哪、然後轉發」，不負責切換。把邊界守住，這一層才能專注在編排，並藉由建構子注入讓每一條路徑都能被測試。</p>
+
+<div class="lesson-nav">
+  <div><a href="./grpc-contract.html">← 上一步：gRPC 傳輸契約與驗證分層</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Submit 的正確順序是哪一個？" data-correct="1" data-explain="必須先持久化、成功後才加入記憶體時間輪、最後才回傳，否則記憶體狀態會在重啟時遺失並造成丢訊。">
+  <button class="opt">加入時間輪 → 持久化 → 回傳</button>
+  <button class="opt">持久化 → 加入時間輪 → 回傳</button>
+  <button class="opt">回傳 → 持久化 → 加入時間輪</button>
+  <button class="opt">持久化 → 回傳 → 加入時間輪</button>
+</div>
+
+<div class="quiz" data-question="為什麼一致雜湊要用 message_id 當作鍵？" data-correct="2" data-explain="同一個 id 要永遠映射到同一個輪子，送出、查詢、取消才落在同一處，訊息才找得到、取消得掉。">
+  <button class="opt">因為 message_id 比業務標籤更容易取得</button>
+  <button class="opt">因為雜湊 message_id 的計算速度最快</button>
+  <button class="opt">因為同一個 id 才能固定映射同一個輪子</button>
+  <button class="opt">因為這樣可以平均分散每一台節點</button>
+</div>
+
+<div class="quiz" data-question="若 Redis 寫入失敗，這一層應該怎麼做？" data-correct="3" data-explain="回傳失敗且完全不改動記憶體排程狀態，讓系統維持「這則訊息不存在」的一致狀態。">
+  <button class="opt">先加入時間輪之後再重試持久化</button>
+  <button class="opt">回傳成功但背景默默重試寫入</button>
+  <button class="opt">把訊息改存到另一台節點的記憶體</button>
+  <button class="opt">回傳失敗且不動任何排程狀態</button>
+</div>
+
+<div class="quiz" data-question="當負責某輪子的 Master 不在本機時，接入層會怎麼處理？" data-correct="0" data-explain="透過內部 gRPC 把請求轉發到 Master 所在節點，對業務呼叫方完全透明。">
+  <button class="opt">用內部 gRPC 轉發到 Master 節點</button>
+  <button class="opt">改把訊息塞進本機的另一個輪子</button>
+  <button class="opt">直接回傳錯誤要求使用者重試</button>
+  <button class="opt">複製一份訊息到所有輪子上</button>
+</div>
+
+<div class="quiz" data-question="取消一則訊息在什麼情況下會失敗？" data-correct="2" data-explain="取消需要原子地把 PENDING 轉為 CANCELLED；若目前不是 PENDING（投遞中或已投遞），就無法取消。">
+  <button class="opt">當訊息編號不是 Snowflake 格式時</button>
+  <button class="opt">當訊息已經超過保留期限時</button>
+  <button class="opt">當訊息當下已不是 PENDING 時</button>
+  <button class="opt">當訊息內容超過 64KB 大小時</button>
+</div>
+
+<div class="quiz" data-question="路由層查不到 Master 或本機找不到輪子時，正確行為是什麼？" data-correct="1" data-explain="必須明確失敗；默默挑一個節點或建立預設值會把訊息送到錯的地方，比報錯更危險。">
+  <button class="opt">挑一個負載最輕的節點送去</button>
+  <button class="opt">明確失敗，不偷偷建立預設值</button>
+  <button class="opt">把訊息留在本機等 Master 出現</button>
+  <button class="opt">回傳成功但標記為待重新路由</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不是接入與路由層的職責？" data-correct="3" data-explain="Master／Slave 副本同步與故障切換屬於後續的故障恢復模組；這一層只查 Master 在哪並轉發。">
+  <button class="opt">驗證請求並產生 message_id</button>
+  <button class="opt">一致雜湊選定目標時間輪</button>
+  <button class="opt">編排 Submit／Query／Cancel 流程</button>
+  <button class="opt">實作 Master／Slave 副本與故障切換</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 公共契約與接入路由 · Step 5/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

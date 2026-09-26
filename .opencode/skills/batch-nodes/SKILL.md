@@ -1,30 +1,32 @@
 ---
 name: batch-nodes
-description: Batch-create step-DAGs and teach content for nodes in a subject via parallel subagents. Supports all nodes, a single tier, or explicit node slugs.
+description: Batch-create a subject's node step-DAGs, teach their lesson content, and optionally rewrite the lessons into illustrated articles or generate the planned figures, via parallel subagents.
 disable-model-invocation: true
-argument-hint: "/batch-nodes <subject> [tier<N> | node-slug ...] [-max-subagents N]"
+argument-hint: "/batch-nodes <subject> [tier<N> | node-slug ...] [-max-subagents N] [-gen-article] [-gen-image] [-force]"
 ---
 
-Bulk-process nodes in a subject through `/nodes -skip-probe` then `/teach -skip-task`, dispatching parallel subagents in **batches**. Each subagent handles both structure and content for its node — `/nodes` first, then `/teach`, sequentially within the same subagent.
+Bulk-process a subject's nodes through `/nodes -skip-probe` then `/teach -skip-task`, one parallel subagent per node. When asked, two generation phases follow the teaching batches: `-gen-article` rewrites the finished HTML lessons into illustrated articles and plans their figures; `-gen-image` generates those planned figures.
 
 **Invocation modes:**
 - `/batch-nodes <subject>` — all nodes in the roadmap.
 - `/batch-nodes <subject> tier<N>` — all nodes under `### Tier <N>` in the roadmap (e.g. `tier1`, `tier3`).
 - `/batch-nodes <subject> <slug> [<slug> ...]` — only the listed nodes.
-- Append `-max-subagents N` (default 3) to any mode to control batch width.
+- `-max-subagents N` — batch width (default 3).
+- `-gen-article` — after teaching, rewrite each in-scope step's HTML lesson into an article and plan its figures (one text-model call per step, no image spend).
+- `-gen-image` — generate the figures planned for each in-scope step that has a plan (spends image-API money).
+- `-force` — regenerate the generation phases for steps the skip guards would otherwise pass over. With `-gen-image`, this also clears each forced step's cached `output/<node>/<step>/assets/`, since `/to-image` reuses those images rather than re-spending.
 
-Prereqs: `learn/<subject>/MEMORY.md` exists, `learn/<subject>/ROADMAP.md` exists, `learn/<subject>/digests/` exists. If any is missing, say so and stop.
+The two generation flags are independent: pass both to plan and then generate, or `-gen-image` alone to generate the plans an earlier run left behind.
 
-1. **Resolve.** Parse arguments: extract `subject` (first positional arg), `-max-subagents N` (default 3), and the **scope** — one of:
-   - **tier** — an arg matching `tier<N>` (e.g. `tier1`, `tier3`). Read `learn/<subject>/ROADMAP.md`, locate the `### Tier <N> — ...` heading, and extract node ids from `[[learn/<subject>/nodes/<node-id>|...]]` links under that heading until the next `### Tier` heading or end of file.
-   - **explicit slugs** — one or more args that are not `tier<N>` and not `-max-subagents`. Use them as-is.
-   - **all** — no scope args. Read `learn/<subject>/ROADMAP.md` and extract every node id from `[[learn/<subject>/nodes/<node-id>|...]]` links in tier order.
+Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<subject>/digests/` exist. With either generation flag, the repo root also has `npm install` run and a `.env` holding `TEXT_API_KEY` (and the image API keys for `-gen-image`). If a prerequisite is missing, name it and stop before dispatching anything.
 
-   Validate each resolved slug has a container at `learn/<subject>/nodes/<slug>.mdx`. Skip nodes whose status is already `content-written` or `edges-written` — report them as skipped.
-2. **Process.** Partition the resolved node list into batches of size `max-subagents`. Process batches sequentially; nodes within a batch run in parallel. For each batch, launch one subagent per node via the `task` tool — all calls in a single message, each with `subagent_type: teach-agent` so the article-writing rules (Taiwan Traditional Chinese, plain wording, no AI tells, `/humanizer` pass) apply. Each subagent receives [NODES-AND-TEACH-PROMPT](#nodes-and-teach-prompt) with `<NODE-ID>` and `<SUBJECT>` filled in. The subagent runs `/nodes` then `/teach` sequentially for its node. Wait for every subagent to return. Record each node's outcome: succeeded (both structure and content written, asset verification passed) or failed. Show a progress line after each batch.
-3. **Report.** Summarise: total completed, total failed, total skipped. List any failed nodes with their errors and which part failed (structure or content). Suggest re-running `/batch-nodes <subject> <failed-slug>` for failures, or running `/edges <subject>/<node-id>` on completed nodes.
+1. **Resolve.** Parse `subject`, `-max-subagents N` (default 3), the flags, and the scope (`tier<N>` | explicit slugs | all) per `docs/reference/skill-scope.md`. Validate each slug's container at `learn/<subject>/nodes/<slug>.mdx`. Nodes already `content-written` or `edges-written` leave the teaching batches but stay in scope for the generation phases. Gate the prereqs here, so a missing key ends the run before any subagent fires.
+2. **Teach.** Batch the teaching nodes into groups of `max-subagents`; run batches sequentially and nodes within a batch in parallel. For each batch dispatch one `task` call per node — all calls in one message, each with `subagent_type: teach-agent` so the writing rules (Taiwan Traditional Chinese, plain wording, no AI tells, `/humanizer` pass) apply. Each subagent receives [NODES-AND-TEACH-PROMPT](#nodes-and-teach-prompt) with `<NODE-ID>` and `<SUBJECT>` filled in and runs `/nodes` then `/teach` for its node. Wait for every subagent to return, record each outcome, show a progress line, and continue.
+3. **Article** (`-gen-article` only). Run the `/to-article` flow (`.opencode/skills/to-article/SKILL.md`) over the resolved scope — one `article-agent` per step, reusing this skill's `-max-subagents`. One delta from that skill: a step whose `illustration` is already `planned` or `done` and which has `output/<node>/<step>/plan.json` is skipped, unless `-force`.
+4. **Image** (`-gen-image` only). Run the `/to-image` flow (`.opencode/skills/to-image/SKILL.md`) over every in-scope step that has a `plan.json` and whose `illustration` is not `done` — one `article-agent` per step, unless `-force`. The flag is the consent: generate without the confirmation prompt.
+5. **Report.** Summarise the teaching nodes (completed / failed / skipped, with reasons) and, when run, each generation phase (rewritten / generated / failed / skipped). List failures with their errors and suggest re-running `/batch-nodes <subject> <failed-slug>`, or running `/edges <subject>/<node-id>` on completed nodes.
 
-Completion: every non-skipped node was dispatched to a subagent, every subagent returned, outcomes recorded, and the final report delivered.
+Completion: every in-scope node and step was dispatched to its own subagent, every subagent returned, every outcome recorded, and the final report delivered.
 
 ## Nodes-and-teach-prompt
 

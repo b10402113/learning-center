@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把 agent 技能當依賴管：skills-lock.json 與技能落地位置</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>把 agent 技能當成依賴管理：skills-lock.json 與技能落地位置</h1>
+<p class="meta">Step 3/4 · 專案骨架與 agent 說明書：角色化資料夾 + AGENTS.md/CLAUDE.md</p>
+
+<h2>這一課要完成什麼</h2>
+<p>你會看懂 <code>skills-lock.json</code> 為什麼要記錄技能來源、技能檔位置與內容雜湊，也會知道如何把第三方 skill 放進 <code>.agents/skills</code> 或 <code>.claude/skills</code>，讓對應的 agent 找得到、載入並使用。</p>
+
+<h2>agent 的能力，不只來自模型</h2>
+<p>前面兩步處理的是「agent 知道什麼」。但真正決定它能做什麼的，還有另一半：它能不能產生 PPT、審查一份 skill，或撰寫公眾號文章。</p>
+
+<p>這些能力通常不是模型天生具備，而是靠一份份 <strong>skill</strong> 疊出來。你可以把 skill 想成 agent 的工作手冊：裡面寫著什麼情況要啟用、該走哪些步驟，以及可以使用哪些資源。</p>
+
+<p>一個 skill 通常就是一個資料夾，裡面放一份 <code>SKILL.md</code>。把它放到 agent 會讀取的位置，agent 就多了一項可執行的工作能力。許多 skill 直接來自 GitHub 上其他人維護的專案。</p>
+
+<p>麻煩也從這裡開始：第三方 skill 本質上是別人寫的指令，而 agent 會照著這些指令行動。它可能改版，也可能被改壞；今天安裝的內容，和下個月重新安裝的內容不一定相同。若只靠記憶，很快就會搞不清楚自己到底裝了哪個版本。</p>
+
+<figure class="lesson-figure"><img src="./pin-agent-skills-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>先看完整結果：skills-lock.json</h2>
+<p>示範專案根目錄的 <code>skills-lock.json</code>，就是 agent 能力的依賴帳本。它記住版本格式，以及每個 skill 的來源、技能檔位置和內容指紋：</p>
+
+<figure class="lesson-figure"><img src="./pin-agent-skills-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<pre><code>{
+  "version": 1,
+  "skills": {
+    "html-ppt": {
+      "source": "lewislulu/html-ppt-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "977bae0cdd515696cf400bb050b1c8741e8d911466fb1ec011138f4411396a03"
+    }
+  }
+}</code></pre>
+
+<p>這個專案一共釘住四個技能：</p>
+
+<table>
+  <thead>
+    <tr><th>技能</th><th>來源（GitHub）</th><th>技能檔位置</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>find-skills</code></td><td><code>vercel-labs/skills</code></td><td><code>skills/find-skills/SKILL.md</code></td></tr>
+    <tr><td><code>html-ppt</code></td><td><code>lewislulu/html-ppt-skill</code></td><td><code>SKILL.md</code></td></tr>
+    <tr><td><code>skill-vetter</code></td><td><code>useai-pro/openclaw-skills-security</code></td><td><code>skills/skill-vetter/SKILL.md</code></td></tr>
+    <tr><td><code>wechat-article-writer</code></td><td><code>iamzhihuix/happy-claude-skills</code></td><td><code>skills/wechat-article-writer/SKILL.md</code></td></tr>
+  </tbody>
+</table>
+
+<p>這三類欄位各自回答不同問題：</p>
+
+<ul>
+  <li><code>source</code> 與 <code>sourceType</code>：這個 skill 是誰的、從哪裡取得？</li>
+  <li><code>skillPath</code>：技能檔在來源專案的哪個位置？</li>
+  <li><code>computedHash</code>：目前記錄的內容，之後有沒有被改動？</li>
+</ul>
+
+<h2>computedHash：技能內容的指紋</h2>
+<p><code>computedHash</code> 是根據技能內容計算出來的指紋。內容就算只改了一個字，重新計算出的指紋也會完全不同。</p>
+
+<p>它主要防兩種情況：</p>
+
+<ul>
+  <li>你以為安裝的是 A 版本，實際拿到的卻是 B 版本。</li>
+  <li>有人，或某次更新，改動了技能指令，而你沒有察覺。</li>
+</ul>
+
+<p>這和 <code>package-lock.json</code> 記錄 npm 套件版本與雜湊的概念相同：程式依賴需要可重現，agent 的能力來源也一樣。當 agent 能做的事愈來愈像一個小型系統，就不該只靠印象記得「我好像裝過什麼」，而要把能力來源當成依賴管理。</p>
+
+<figure class="lesson-figure"><img src="./pin-agent-skills-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>專案裡的 <code>skill-vetter</code> 來自 <code>useai-pro/openclaw-skills-security</code>，用途就是審查 skill。社群會出現專門檢查技能的工具，正好提醒你：從網路抓下來的技能，本來就不該無條件信任。</p>
+
+<h2>鎖檔有了，技能還要放到 agent 找得到的地方</h2>
+<p><code>skills-lock.json</code> 只記錄「專案有哪些技能」。要讓 agent 真的使用，還必須把技能放進它會讀取的資料夾。示範專案有兩個位置，分別對應不同 agent：</p>
+
+<ul>
+  <li><code>.claude/skills/</code>：Claude Code 會讀這裡；專案裡放了 <code>weekly-report/SKILL.md</code>。</li>
+  <li><code>.agents/skills/</code>：Codex 等其他 agent 會讀這裡；專案裡放了 <code>html-ppt/</code>、<code>skill-vetter/</code>、<code>wechat-article-writer/</code>。</li>
+</ul>
+
+<p>這和上一課的 <code>AGENTS.md</code>、<code>CLAUDE.md</code> 是同一種設計思路：不同 agent 有不同的讀取約定，因此同一類設定要放在它認得的位置。</p>
+
+<p>可以把它想成一間倉庫：</p>
+
+<ul>
+  <li><code>skills-lock.json</code> 是帳本，記錄有哪些能力、來源是哪裡。</li>
+  <li><code>.agents/skills</code> 與 <code>.claude/skills</code> 是倉庫，放著 agent 實際要載入的技能。</li>
+</ul>
+
+<p>因此，鎖檔列出四個技能，但某個 agent 的資料夾只放其中幾個，並不矛盾。鎖檔管理的是整個專案的能力清單；技能資料夾則決定某個 agent 實際載入哪些能力。</p>
+
+<figure class="lesson-figure"><img src="./pin-agent-skills-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>真正要記住的風險</h2>
+<p>把第三方 skill 當成依賴，表面上是工程管理，實際上也是 vibe coding 的安全習慣。當你讓 agent 使用網路上的 skill，就等於讓它依照陌生人寫的指令做事。</p>
+
+<p>有了鎖檔，你至少能回答三個關鍵問題：</p>
+
+<ol>
+  <li>這項能力從哪裡來？</li>
+  <li>我現在使用的是哪一版內容？</li>
+  <li>它之後有沒有被動過？</li>
+</ol>
+
+<p>反過來，如果你連自己裝了哪些 skill 都說不清楚，就很難追查 agent 為什麼突然多做一步，或多改一個檔案。能力來源不清楚，行為出錯時也就沒有可靠的起點可查。</p>
+
+<figure class="lesson-figure"><img src="./pin-agent-skills-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>下一課會把前三步收在一起：畫出自己的角色資料夾、寫出第一份 <code>AGENTS.md</code>，並把這份鎖檔變成之後持續維護的習慣。</p>
+
+<div class="lesson-nav">
+  <div><a href="./agent-config-files.html">← 上一步：AGENTS.md 與 CLAUDE.md：一份給 agent 的專案說明書</a></div>
+  <div><a href="./write-your-own-project-brief.html">下一步：換成你的產品：從骨架到第一份 AGENTS.md →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="在 agent 的語境裡，一個 skill 通常是什麼？" data-correct="2" data-explain="它通常是一個含 SKILL.md 的資料夾，寫清楚何時觸發與怎麼做，放進 agent 會讀的位置。">
+  <button class="opt">一種加速模型回應的硬體晶片</button>
+  <button class="opt">一段寫死在模型裡無法修改的程式</button>
+  <button class="opt">一個含 SKILL.md、讓 agent 多會一件事的資料夾</button>
+  <button class="opt">一份只能給人閱讀的技術文件</button>
+</div>
+<div class="quiz" data-question="skills-lock.json 裡的 computedHash 主要用來做什麼？" data-correct="1" data-explain="它是內容指紋，用來確認實際拿到的技能內容有沒有和記錄不同或被改過。">
+  <button class="opt">加快 agent 載入技能的速度</button>
+  <button class="opt">確認技能內容有沒有被改動</button>
+  <button class="opt">自動把技能翻譯成中文</button>
+  <button class="opt">決定哪個技能優先被觸發</button>
+</div>
+<div class="quiz" data-question="把 skills-lock.json 類比成 package-lock.json，共通點是什麼？" data-correct="3" data-explain="兩者都記下來源與雜湊，讓依賴可重現；agent 能力被當成一種依賴來管。">
+  <button class="opt">兩者都只記錄檔案的建立時間</button>
+  <button class="opt">兩者都由瀏覽器自動產生與更新</button>
+  <button class="opt">兩者都只能用來安裝硬體驅動</button>
+  <button class="opt">兩者都記來源與雜湊讓依賴可重現</button>
+</div>
+<div class="quiz" data-question=".claude/skills 與 .agents/skills 的差別是什麼？" data-correct="0" data-explain="兩者是不同 agent 讀取技能的約定位置，Claude Code 讀前者，Codex 等讀後者。">
+  <button class="opt">分別對應不同 agent 讀取技能的約定位置</button>
+  <button class="opt">前者放付費技能，後者放免費技能</button>
+  <button class="opt">前者是備份，後者才是正式使用</button>
+  <button class="opt">前者給人看，後者給 agent 執行</button>
+</div>
+<div class="quiz" data-question="專案裡同時出現 skill-vetter 這個技能，說明了什麼？" data-correct="2" data-explain="連社群都長出審查技能的工具，顯示第三方技能需要被檢查，不該無條件信任。">
+  <button class="opt">這個專案已經放棄使用第三方技能</button>
+  <button class="opt">所有第三方技能都保證安全無虞</button>
+  <button class="opt">第三方技能需要檢查、不該無條件信任</button>
+  <button class="opt">技能審查只能在雲端伺服器上執行</button>
+</div>
+<div class="quiz" data-question="鎖檔記了四個技能，但某個 agent 的倉庫只放其中幾個，這代表什麼？" data-correct="1" data-explain="鎖檔是整個專案的能力清單，倉庫是某個 agent 實際載入哪些技能，兩者本來就可以不同。">
+  <button class="opt">鎖檔一定寫錯了，應該以倉庫為準</button>
+  <button class="opt">鎖檔管能力清單，倉庫管該 agent 載入什麼</button>
+  <button class="opt">那個 agent 已經損壞，需要重新安裝</button>
+  <button class="opt">倉庫必須強制補滿四個技能才合規</button>
+</div>
+
+<div class="footer">
+  <p>vibe-coding-fengjianyingyue · 專案骨架與 agent 說明書 · Step 3/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

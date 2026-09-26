@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>==、equals 與 hashCode 契約</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1><code>==</code>、<code>equals</code> 到底在比什麼？</h1>
+<p class="meta">Step 2/6 · Java 語言與物件</p>
+
+<div class="learning-goal">
+<strong>學習目標：</strong>分清楚「比數值、比位址、比內容」三種等值判斷，並理解為什麼只重寫 <code>equals</code>，會讓 <code>HashMap</code>、<code>HashSet</code> 找不到或重複存入資料。
+</div>
+
+<h2>先問一個問題：你想比較的是哪一種「相同」？</h2>
+
+<p>看到兩個 Java 變數時，「它們相等嗎？」其實可能有三種意思：</p>
+
+<ul>
+  <li>數值相同，例如兩個 <code>int</code> 都是 <code>10</code>。</li>
+  <li>是不是同一個物件，也就是位址相同。</li>
+  <li>物件內容是否相同，例如兩個 <code>String</code> 都是 <code>"abc"</code>。</li>
+</ul>
+
+<p><code>==</code> 和 <code>equals</code> 的差別，就在於它們預設處理的是不同層次的「相同」。</p>
+
+<figure class="lesson-figure"><img src="./equality-and-hashcode-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+  <tr><th>情境</th><th><code>==</code> 比什麼</th><th><code>equals</code> 比什麼</th></tr>
+  <tr><td>基本型別</td><td>數值</td><td>不適用</td></tr>
+  <tr><td>沒有重寫 <code>equals</code> 的類別</td><td>位址</td><td>位址，效果等同於 <code>==</code></td></tr>
+  <tr><td><code>String</code>、<code>Integer</code> 等類別</td><td>位址</td><td>內容</td></tr>
+</table>
+
+<h2><code>==</code>：基本型別比值，引用型別比是不是同一顆物件</h2>
+
+<p>基本型別的變數裡直接放的是值，所以用 <code>==</code> 比較時，看的就是數值。</p>
+
+<p>但引用型別的變數裡放的是物件參考。這時候 <code>==</code> 比的不是物件內容，而是兩個參考是否指向同一個物件。就像兩個人手上各拿一張地址：<code>==</code> 問的是「是不是同一個地址」，不是「兩間房子的格局是否一樣」。</p>
+
+<figure class="lesson-figure"><img src="./equality-and-hashcode-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p><code>equals</code> 則是 <code>Object</code> 定義的方法。<code>Object</code> 的預設實作就是用 <code>this == obj</code> 比較，因此沒有重寫時，<code>equals</code> 和 <code>==</code> 的結果一樣。只有類別自行重寫 <code>equals</code>，它才可能改成比較內容。</p>
+
+<h2>為什麼 <code>String</code> 的 <code>==</code> 很容易踩雷？</h2>
+
+<p><code>String</code> 重寫了 <code>equals</code>，所以可以用內容比較；但 <code>==</code> 的規則沒有因此改變，依然是在比兩個參考是否指向同一個物件。</p>
+
+<p>字串常量會放進字串常量池，內容相同的字面值通常可以共用同一個物件；但使用 <code>new</code> 時，會另外建立一顆物件。於是「內容一樣」不代表「物件是同一顆」。</p>
+
+<pre><code>String s1 = "abc";
+String s2 = "abc";
+String s3 = new String("abc");
+
+System.out.println(s1 == s2);        // true，都指向常量池同一顆
+System.out.println(s1 == s3);        // false，s3 是堆上另外一顆
+System.out.println(s1.equals(s3));   // true，內容相同</code></pre>
+
+<p>所以，物件通常不要用 <code>==</code> 判斷內容是否相等；要先確認該類別的 <code>equals</code> 是否已按照需求重寫。</p>
+
+<figure class="lesson-figure"><img src="./equality-and-hashcode-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2><code>hashCode</code> 和 <code>equals</code>：HashMap 為什麼需要兩道檢查？</h2>
+
+<p>只理解 <code>==</code> 和 <code>equals</code> 還不夠。當物件被拿去當作 <code>HashMap</code> 的 key，或放進 <code>HashSet</code>，還會用到 <code>hashCode</code>。</p>
+
+<p>它們之間有一份不能破壞的契約：</p>
+
+<ul>
+  <li>如果兩個物件的 <code>equals</code> 回傳 <code>true</code>，它們的 <code>hashCode</code> 必須相等。</li>
+  <li>反過來不成立：<code>hashCode</code> 相等的兩個物件，<code>equals</code> 不一定為 <code>true</code>。這種情況叫雜湊碰撞，是正常現象。</li>
+  <li>同一個物件在程式執行期間，只要參與比較的欄位沒有改變，<code>hashCode</code> 就應該保持一致。</li>
+</ul>
+
+<p>可以把 <code>HashMap</code> 想成一間分區的大倉庫：</p>
+
+<ol>
+  <li><code>hashCode</code> 先決定要走到哪一區，也就是哪個 bucket。</li>
+  <li>到了那一區後，再用 <code>equals</code> 確認是不是要找的那個 key。</li>
+</ol>
+
+<div class="analogy">
+<strong>類比：</strong>圖書館的書架編號像 <code>hashCode</code>，書名像 <code>equals</code>。館員先依編號走到那一排，再逐本核對書名。如果同一本書前後被算出兩個不同的架號，館員就會走到錯的書架；即使書名完全正確，也找不到它。
+</div>
+
+<figure class="lesson-figure"><img src="./equality-and-hashcode-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>壞味道：只重寫 <code>equals</code>，忘記重寫 <code>hashCode</code></h2>
+
+<p>以下的 <code>User</code> 只把 <code>id</code> 當成相等條件，卻忘了同步重寫 <code>hashCode</code>：</p>
+
+<pre><code>class User {
+    String id;
+    User(String id) { this.id = id; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (!(o instanceof User)) return false;
+        return id.equals(((User) o).id);
+    }
+    // 忘了重寫 hashCode
+}
+
+Map&lt;User, String&gt; map = new HashMap&lt;&gt;();
+map.put(new User("A1"), "Amy");        // hash 落在某個桶
+
+System.out.println(map.get(new User("A1")));   // null</code></pre>
+
+<p>乍看之下，兩個 <code>User</code> 的 <code>id</code> 都是 <code>"A1"</code>，<code>equals</code> 也會回傳 <code>true</code>，應該找得到才對。但問題在於：預設的 <code>hashCode</code> 通常是依物件身分計算，這兩個 <code>User</code> 是不同物件，因此很可能得到不同的雜湊值。</p>
+
+<p><code>put</code> 把資料放進第一個桶，<code>get</code> 卻被導向另一個桶。它根本沒有機會遇到那個真正的 key，自然只能得到 <code>null</code>。</p>
+
+<figure class="lesson-figure"><img src="./equality-and-hashcode-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p><code>HashSet</code> 也有同樣的問題：同一個 <code>id</code> 的物件可能被重複放入，因為集合先依 <code>hashCode</code> 找候選位置。修法很簡單：如果用哪些欄位實作 <code>equals</code>，就要用同一組欄位實作 <code>hashCode</code>。</p>
+
+<h2>BigDecimal 的陷阱：數值相等，不代表寫法相同</h2>
+
+<p>金額比較常用 <code>BigDecimal</code>，但它有一個面試很常考的細節：<code>BigDecimal</code> 的 <code>equals</code> 會同時比較數值與精度（scale），而 <code>compareTo</code> 只比較數值大小。</p>
+
+<pre><code>BigDecimal a = new BigDecimal("1.0");
+BigDecimal b = new BigDecimal("1.00");
+
+System.out.println(a.equals(b));      // false，scale 一個是 1 一個是 2
+System.out.println(a.compareTo(b));   // 0，代表數值相等</code></pre>
+
+<p><code>1.0</code> 和 <code>1.00</code> 在金額意義上通常代表同一個數字，但它們的小數位數不同。因此，若需求是判斷金額數值是否相等，應該寫成 <code>compareTo(...) == 0</code>，不要直接使用 <code>equals</code>。</p>
+
+<h2>金額為什麼不能用 <code>float</code>、<code>double</code>？</h2>
+
+<p>浮點數使用二進位表示小數，而許多十進位小數無法用二進位精確表示。這就像拿有限刻度的尺去量一段無法整除的長度：每次計算都可能留下微小誤差。</p>
+
+<pre><code>System.out.println(0.1 + 0.2);   // 0.30000000000000004</code></pre>
+
+<p>結果不是預期的 <code>0.3</code>。這種誤差對金額不可接受，也讓浮點數的等值比較變得不可靠。</p>
+
+<p>金額應使用 <code>BigDecimal</code>，建立物件時建議傳入字串，或使用 <code>BigDecimal.valueOf</code>，避免先經過 <code>double</code>，在建立 <code>BigDecimal</code> 之前就已經失去精度。</p>
+
+<h2>把判斷順序記成一張小抄</h2>
+
+<p>遇到等值比較時，先問自己：現在要比的是數值、物件位址，還是物件內容？</p>
+
+<ul>
+  <li>基本型別比數值：使用 <code>==</code>。</li>
+  <li>物件比內容：使用該類別正確重寫的 <code>equals</code>。</li>
+  <li>物件要放進 <code>HashMap</code> 或 <code>HashSet</code>：重寫 <code>equals</code> 時，必須一起重寫 <code>hashCode</code>。</li>
+  <li><code>BigDecimal</code> 比數值：使用 <code>compareTo(...) == 0</code>。</li>
+  <li>金額不要使用 <code>float</code> 或 <code>double</code>。</li>
+</ul>
+
+<div class="lesson-nav">
+  <a href="./object-creation-passing.html">← 上一課：物件的建立、傳遞與複製</a>
+  <a href="./strings-and-immutability.html">下一課：String 不可變、常量池與拼接選型 →</a>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="沒有重寫 equals 的類別，equals 的預設行為是什麼？" data-correct="2" data-explain="Object.equals 的實作是 this == obj，也就是比物件位址。">
+  <button class="opt">逐一比較所有欄位內容</button>
+  <button class="opt">永遠回傳 true</button>
+  <button class="opt">等同 ==，比物件位址</button>
+  <button class="opt">先算 hashCode 再比較</button>
+</div>
+<div class="quiz" data-question="只重寫 equals 沒重寫 hashCode，把物件當 HashMap 的 key 會怎樣？" data-correct="3" data-explain="hashCode 不同會被帶到別的桶，即使 equals 相等也找不到。">
+  <button class="opt">put 一定會拋出例外</button>
+  <button class="opt">HashMap 會自動補上 hashCode</button>
+  <button class="opt">資料會被自動排序後存入</button>
+  <button class="opt">get 可能找不到已存入的資料</button>
+</div>
+<div class="quiz" data-question="兩個物件 hashCode 相等，它們的 equals 一定為 true 嗎？" data-correct="1" data-explain="hashCode 相等只代表落在同一個桶，還可能是雜湊碰撞。">
+  <button class="opt">一定為 true</button>
+  <button class="opt">不一定，可能只是雜湊碰撞</button>
+  <button class="opt">一定為 false</button>
+  <button class="opt">取決於 JVM 的版本</button>
+</div>
+<div class="quiz" data-question="用 BigDecimal 比較兩筆金額是否相等，應該用哪個方法？" data-correct="2" data-explain="compareTo 只比數值，equals 會連 scale 一起比。">
+  <button class="opt">equals(...)</button>
+  <button class="opt">== 運算子</button>
+  <button class="opt">compareTo(...) == 0</button>
+  <button class="opt">hashCode()</button>
+</div>
+<div class="quiz" data-question="0.1 + 0.2 用 double 算出來為什麼不是 0.3？" data-correct="0" data-explain="浮點數以二進位表示，無法精確表達這些十進位小數。">
+  <button class="opt">二進位無法精確表示這些小數</button>
+  <button class="opt">編譯器四捨五入發生錯誤</button>
+  <button class="opt">JVM 的浮點運算溢位</button>
+  <button class="opt">println 的顯示格式問題</button>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

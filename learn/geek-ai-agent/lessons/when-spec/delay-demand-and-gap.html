@@ -11,17 +11,27 @@
 <h1>延遲投遞的需求與現況缺口</h1>
 <p class="meta">Step 1/5 · When 調研與需求</p>
 
-<h2>學習目標</h2>
-<p>能說明延遲投遞在哪些場景出現、它的精確度與可靠性分級，並指出現有方案共同的邊界缺口。</p>
+<h2>先定義邊界：延遲投遞是在等時間，不是在做處理</h2>
+<p>延遲投遞（delayed delivery）指的是：先記住一則訊息，等到指定時間，再把它送到下游。</p>
 
-<h2>先看一件事：所謂「延遲投遞」到底是什麼</h2>
-<p>在未來的某一個精確時刻，把一則訊息投遞到指定的下游——這就是延遲投遞（delayed delivery）。它要解決的不是「怎麼處理這則訊息」，而是「時間到了才把它送出去」。所以它的核心動作是<strong>到點觸發</strong>；而「投遞到哪裡」決定了它的邊界。理解這一點，才能分清它與訊息佇列、排程器的差別。</p>
+<p>它解決的核心問題不是「這則訊息要怎麼處理」，而是「什麼時候才送出去」。因此，系統至少要處理兩件事：</p>
 
-<h2>需求真實且廣泛：四類場景</h2>
-<p>延遲投遞不是冷門需求。它出現在幾乎所有需要「未來某刻做某事」的業務裡：</p>
+<ul>
+<li><strong>到點觸發</strong>：時間到了，找出應該送出的訊息。</li>
+<li><strong>投遞目標</strong>：把訊息送到 HTTP、RPC、Push、ClickHouse 等下游。</li>
+</ul>
+
+<p>第二點決定了它的邊界。延遲投遞不是單純的訊息佇列，也不是固定週期的排程器；它是一個把「時間」與「投遞目標」拆開處理的元件。</p>
+
+<figure class="lesson-figure"><img src="./delay-demand-and-gap-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>為什麼這是通用需求？四類場景都在等未來某一刻</h2>
+
+<p>凡是「現在先記下來，未來再做某件事」的業務，都可能需要延遲投遞：</p>
+
 <table>
 <thead>
-<tr><th>場景類型</th><th>典型例子</th><th>對精確度／可靠性的要求</th></tr>
+<tr><th>場景類型</th><th>典型例子</th><th>精確度／可靠性要求</th></tr>
 </thead>
 <tbody>
 <tr><td>電商／交易</td><td>訂單逾時取消、優惠券到期、退款逾時、團購結算</td><td>精確度中，可靠性嚴格</td></tr>
@@ -30,48 +40,116 @@
 <tr><td>風控／審計</td><td>延遲結算、閾值觸發規則、歸檔</td><td>精確度低，盡力而為加補償</td></tr>
 </tbody>
 </table>
-<p>再加上會議提醒、IoT 喚醒、A/B 測試的延遲效果等雜項。這些場景共享幾個特徵：精確度分成秒、分鐘、小時到天三級；可靠性分成三級（嚴格如訂單支付、容忍如推送、盡力而為加補償如歸檔）；規模從中小企業的每天一萬到一百萬則，到頭部網路公司的每天十億則以上。需求真實、廣泛、長期，這是這個元件值得存在的前提。</p>
 
-<h2>現有方案一：訊息中介軟體內建的延遲能力</h2>
-<p>最直覺的想法是「用 MQ 的延遲功能」。但每一家的做法都不一樣，限制也不同：</p>
+<p>其他例子還包括會議提醒、IoT 喚醒，以及 A/B 測試中的延遲效果。</p>
+
+<p>這些需求的差異，主要落在兩個軸線：</p>
+
 <ul>
-<li><strong>Kafka</strong>：原生沒有延遲能力。得靠外部 Redis ZSet 加 worker，或用內部 topic 做時間分桶，兩者都不乾淨。</li>
-<li><strong>RocketMQ 4.x</strong>：內建 18 個固定延遲級別（從 1 秒到 2 小時），但不靈活；5.0 加入時間輪支援任意延遲，採用率仍低。</li>
-<li><strong>Pulsar</strong>：原生支援任意延遲（Delayed Message Tracker），但整個系統偏重。</li>
-<li><strong>RabbitMQ</strong>：要用 TTL 加死信佇列（DLX，粒度粗、有順序問題），或延遲訊息插件（為小規模設計）。</li>
+<li><strong>精確度</strong>：可能要求精準到秒，也可能只要分鐘、小時，甚至天級。</li>
+<li><strong>可靠性</strong>：訂單支付等交易不能漏；推送可以容忍少量誤差；歸檔則可採盡力而為，再靠補償機制收尾。</li>
 </ul>
-<p>它們有一個<strong>共同的缺陷</strong>：延遲能力被綁死在某個特定中介軟體上。但真實的下游可能是 HTTP、RPC、Push、ClickHouse 等各式各樣的服務，而且企業往往同時使用多個下游。把延遲綁在 MQ 上，就等於把投遞目標綁死在 MQ 上。</p>
 
-<h2>現有方案二：SDK 類方案</h2>
-<p>另一條路是用 Redis ZSet 實作的延遲佇列 SDK，例如 Redisson 的 DelayedQueue（Java）、HDT3213/delayqueue（Go）、Curator 的 DistributedDelayQueue（ZooKeeper）。它們有三層問題：</p>
+<p>規模也可以從中小企業每天一萬到一百萬則，延伸到頭部網路公司每天十億則以上。需求既廣泛又長期存在，這是延遲投遞值得成為獨立元件的第一個理由。</p>
+
+<figure class="lesson-figure"><img src="./delay-demand-and-gap-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>現有方案一：把延遲能力放進訊息中介軟體</h2>
+
+<p>最直覺的做法，是直接使用 MQ 的延遲訊息功能。但這條路的問題是：延遲能力通常和特定 MQ 綁在一起，而且不同產品的實作差異很大。</p>
+
 <ul>
-<li><strong>big-key 風險</strong>：把所有延遲訊息塞進同一個 ZSet，單次 <code>ZRANGE</code>／<code>ZREM</code> 就可能阻塞 Redis 數百毫秒；分片只能緩解。</li>
-<li><strong>SDK 形態的限制</strong>：輪詢、重試、狀態都落在客戶端，升級困難、可觀測性由業務自己扛、版本碎片化、無法跨語言。</li>
-<li><strong>依賴業務自己的 Redis</strong>：會影響業務 Redis 的 QPS、帶來 big-key 風險，而且維運責任歸屬模糊。</li>
+<li><strong>Kafka</strong>：原生沒有延遲能力，通常要外接 Redis ZSet 加 worker，或使用內部 topic 做時間分桶；兩種做法都不夠乾淨。</li>
+<li><strong>RocketMQ 4.x</strong>：內建 18 個固定延遲級別，範圍從 1 秒到 2 小時，使用簡單但不夠靈活；5.0 加入時間輪支援任意延遲，但採用率仍低。</li>
+<li><strong>Pulsar</strong>：原生支援任意延遲，使用 Delayed Message Tracker，但整體系統偏重。</li>
+<li><strong>RabbitMQ</strong>：可以用 TTL 加死信佇列（DLX），但粒度粗且有順序問題；也可以使用延遲訊息插件，不過主要是為小規模場景設計。</li>
 </ul>
-<p>所以 SDK 只解決小規模的延遲，不是通用基礎設施。</p>
 
-<h2>現有方案三：獨立延遲服務的嘗試，以及那個空著的位置</h2>
-<p>既然 SDK 和 MQ 都不夠，業界有人嘗試做獨立服務，但都沒站穩：</p>
+<p>共同缺口在於<strong>投遞目標被 MQ 綁住</strong>。真實業務的下游可能是 HTTP、RPC、Push 或 ClickHouse，企業也可能同時使用多個 MQ。若延遲能力只是某個 MQ 的附屬功能，系統就很難把「何時送」和「送到哪裡」分開。</p>
+
+<h2>現有方案二：用 SDK 加 Redis ZSet 拼出延遲佇列</h2>
+
+<p>另一種做法是使用 SDK，在 Redis ZSet 裡以時間戳記排序訊息。例如：</p>
+
+<ul>
+<li>Redisson 的 DelayedQueue（Java）</li>
+<li>HDT3213/delayqueue（Go）</li>
+<li>Curator 的 DistributedDelayQueue（ZooKeeper）</li>
+</ul>
+
+<p>這類方案適合快速補上小規模需求，但一旦變成共用基礎設施，就會遇到三層問題。</p>
+
+<ul>
+<li><strong>big-key 風險</strong>：若所有延遲訊息都放進同一個 ZSet，單次 <code>ZRANGE</code> 或 <code>ZREM</code> 可能讓 Redis 阻塞數百毫秒。分片可以緩解，但不能消除這個模型本身的限制。</li>
+<li><strong>SDK 把責任推回業務</strong>：輪詢、重試與狀態管理都落在客戶端，導致升級困難、可觀測性要由各業務自行維護，還會產生版本碎片化與跨語言問題。</li>
+<li><strong>共用業務 Redis 被牽連</strong>：延遲訊息會消耗業務 Redis 的 QPS，也把 big-key 風險帶進原本不相關的資料庫；出了問題時，維運責任也不容易切清楚。</li>
+</ul>
+
+<p>因此，SDK 解決的是「某個服務需要延遲佇列」；它還沒有解決「多個服務共用一套可靠、可觀測、與業務 Redis 隔離的延遲基礎設施」。</p>
+
+<figure class="lesson-figure"><img src="./delay-demand-and-gap-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>現有方案三：獨立延遲服務，為什麼仍沒有站穩？</h2>
+
+<p>既然 MQ 綁定太深、SDK 又把複雜度推給業務，業界也曾嘗試打造獨立服務，但各自都有明顯限制：</p>
+
 <table>
 <thead>
-<tr><th>嘗試</th><th>做法</th><th>為什麼沒成</th></tr>
+<tr><th>嘗試</th><th>做法</th><th>沒有普及的原因</th></tr>
 </thead>
 <tbody>
-<tr><td>Airbnb Dynein</td><td>調度與佇列分離，K8s 上無狀態</td><td>綁死 AWS、Java/Dropwizard 老堆疊、社群停滯</td></tr>
-<tr><td>Netflix Dyno-queues</td><td>綁定 Dynomite</td><td>生態冷、依賴特定基礎設施</td></tr>
-<tr><td>滴滴 DDMQ + Chronos</td><td>RocksDB 儲存引擎加時間輪</td><td>堆疊極深（PProxy+RocketMQ+Chronos+RocksDB）、綁 RocketMQ、社群低</td></tr>
+<tr><td>Airbnb Dynein</td><td>將調度與佇列分離，部署在 K8s 上並採無狀態設計</td><td>綁定 AWS、使用 Java／Dropwizard 老堆疊，社群逐漸停滯</td></tr>
+<tr><td>Netflix Dyno-queues</td><td>綁定 Dynomite</td><td>生態較冷，依賴特定基礎設施</td></tr>
+<tr><td>滴滴 DDMQ + Chronos</td><td>使用 RocksDB 儲存引擎與時間輪</td><td>堆疊很深，包含 PProxy、RocketMQ、Chronos、RocksDB；同時綁定 RocketMQ，社群活躍度低</td></tr>
 </tbody>
 </table>
-<p>其中延遲設計最受業界認可的是去哪兒的 <strong>QMQ</strong>：磁碟上每小時一個排程檔（schedule log），兩年只需約 17,568 個檔；記憶體裡用 500 毫秒粒度的雜湊輪，只載入即將到來那一小時的訊息索引。它的插入與刪除都是 <strong>O(1)</strong>，時間跨度大、記憶體友善。但 QMQ 終究是一個 MQ 模組，不是獨立服務，開源社群也有限。</p>
-<p>結論很清楚：<strong>一個通用、獨立、以延遲為核心、被廣泛採用的開源專案，到今天仍沒有事實標準。</strong>這個位置是空的。</p>
 
-<h2>順手排除混淆項：任務佇列與任務調度</h2>
-<p>有兩個常被誤認為同類的東西，必須劃清界線：<strong>任務佇列</strong>（BullMQ、Celery、Sidekiq）的核心是把任務分配給 worker 執行，延遲只是附加功能；<strong>任務調度器</strong>（XXL-JOB、PowerJob、Quartz）的核心是 cron 式的預定義週期任務。延遲投遞則是在執行時才生成、每一則的延遲不同、目標／內容／上下文都不同，而且沒有 worker 的概念。三者無法互相取代。至於雲廠商的託管服務（AWS EventBridge Scheduler、GCP Cloud Tasks），小規模便宜，但綁定特定雲、投遞目標受限，不適合多數私有部署。</p>
+<h2>QMQ 的設計：為什麼時間輪能把成本壓低？</h2>
+
+<p>業界最受認可的延遲設計之一，是去哪兒的 <strong>QMQ</strong>。</p>
+
+<p>QMQ 把時間跨度很大的訊息拆成兩層：</p>
+
+<ul>
+<li><strong>磁碟層</strong>：每小時建立一個排程檔（schedule log）。兩年大約只需要 17,568 個檔案。</li>
+<li><strong>記憶體層</strong>：使用 500 毫秒粒度的雜湊輪，只載入接下來一小時的訊息索引。</li>
+</ul>
+
+<p>時間輪可以想成一個有固定刻度的圓盤：每個刻度是一個 bucket，指標隨時間向前走。插入訊息時，只要依照到期時間找到對應 bucket；刪除時，也只需要從該 bucket 移除，不必重新掃描全部訊息。這就是它能讓插入與刪除達到 <strong>O(1)</strong> 的原因。</p>
+
+<p>這種設計同時保留了兩個優點：很遠的未來訊息不必全部塞進記憶體，而即將到期的訊息又能快速被觸發。只是 QMQ 終究是 MQ 裡的延遲模組，不是獨立服務，開源社群也有限。</p>
+
+<figure class="lesson-figure"><img src="./delay-demand-and-gap-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>不要混淆：任務佇列、任務調度器都不是延遲投遞</h2>
+
+<p>看起來相似的系統，核心責任其實不同：</p>
+
+<ul>
+<li><strong>任務佇列</strong>：例如 BullMQ、Celery、Sidekiq，核心是把任務分配給 worker 執行；延遲只是附加功能。</li>
+<li><strong>任務調度器</strong>：例如 XXL-JOB、PowerJob、Quartz，核心是執行 cron 式的預定義週期任務。</li>
+<li><strong>延遲投遞</strong>：訊息是在執行期間才生成，每一則訊息的延遲時間、目標、內容與上下文都可能不同，而且不要求存在 worker。</li>
+</ul>
+
+<p>例如，「每天凌晨一點產生報表」是任務調度；「付款失敗後 30 秒重試」則是延遲投遞。兩者都和時間有關，但觸發模型不同，不能直接互相取代。</p>
+
+<p>雲端託管服務如 AWS EventBridge Scheduler、GCP Cloud Tasks，在小規模場景可能便宜又方便；但它們綁定特定雲端，投遞目標也受到限制，因此不適合多數私有部署或同時使用多種下游的企業。</p>
+
+<h2>缺口已經很清楚</h2>
+
+<p>把需求、現有方案與演算法設計放在一起看，可以得到三個判斷：</p>
+
+<ul>
+<li>需求真實，而且從交易到通知都有。</li>
+<li>現有方案多半是拼湊：不是綁定 MQ，就是把責任推回 SDK 與業務。</li>
+<li>獨立、通用、以延遲投遞為核心，並且被廣泛採用的開源服務，至今仍沒有事實標準。</li>
+</ul>
 
 <blockquote>
-把需求、現有方案、與演算法景觀放在一起看，得到的判斷是：需求真實、方案拼湊、獨立服務的位置空著。這正是 When 存在的理由。
+<p>這個空位，就是 When 存在的理由：把「何時送出」從特定 MQ、業務 Redis 與任務 worker 中抽離，做成獨立的延遲投遞服務。</p>
 </blockquote>
+
+<figure class="lesson-figure"><img src="./delay-demand-and-gap-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <div class="lesson-nav">
   <div></div>
@@ -86,42 +164,36 @@
   <button class="opt">把訊息持久化起來以便重播</button>
   <button class="opt">把訊息依內容為它選擇路由</button>
 </div>
-
 <div class="quiz" data-question="訊息中介軟體內建延遲能力的共同缺陷是什麼？" data-correct="2" data-explain="延遲被綁死在特定中介軟體，真實下游卻可能是 HTTP、RPC、Push 等，且企業常同時用多個下游。">
   <button class="opt">它們全都無法支援任意延遲時間</button>
   <button class="opt">它們全都需要額外部署資料庫</button>
   <button class="opt">它們把延遲綁死在某個中介軟體上</button>
   <button class="opt">它們全都無法保證訊息不遺失</button>
 </div>
-
 <div class="quiz" data-question="Redis ZSet 延遲佇列 SDK 為什麼只能解小規模？" data-correct="0" data-explain="所有訊息擠在同一個 ZSet 會形成 big-key，單次操作就可能阻塞 Redis 數百毫秒。">
   <button class="opt">big-key 讓單次操作阻塞 Redis</button>
   <button class="opt">ZSet 無法儲存超過一萬筆資料</button>
   <button class="opt">ZSet 的排序精度只到分鐘級</button>
   <button class="opt">SDK 無法在 Java 環境中運行</button>
 </div>
-
 <div class="quiz" data-question="一間企業要同時把訊息投遞到 HTTP 端點與 Kafka，為何用 RocketMQ 4.x 的延遲級別不合適？" data-correct="3" data-explain="它只有 18 個固定延遲級別且綁定 RocketMQ，無法精確指定任意延遲、也無法覆蓋非 MQ 下游。">
   <button class="opt">它只有 18 個排程執行緒可用</button>
   <button class="opt">它最多只能保存一萬筆訊息</button>
   <button class="opt">它無法保證至少一次的語義</button>
   <button class="opt">它級別固定且綁死單一中介軟體</button>
 </div>
-
 <div class="quiz" data-question="任務調度器（如 XXL-JOB）與延遲投遞最關鍵的差別是什麼？" data-correct="1" data-explain="調度器處理 cron 式、事先定義好的週期任務；延遲投遞的每一則訊息在執行時生成，延遲與目標都不同。">
   <button class="opt">調度器不支援分散式部署</button>
   <button class="opt">調度器只跑事先定義好的任務</button>
   <button class="opt">調度器無法觸發 HTTP 請求</button>
   <button class="opt">調度器無法記錄執行日誌</button>
 </div>
-
 <div class="quiz" data-question="QMQ 的延遲設計為什麼被視為業界參考？" data-correct="2" data-explain="磁碟排程檔加記憶體雜湊輪，讓插入刪除都是 O(1)，且時間跨度大又省記憶體。">
   <button class="opt">它用單一資料庫表就能完成</button>
   <button class="opt">它完全不需要任何持久化</button>
   <button class="opt">它 O(1) 且跨度大又省記憶體</button>
   <button class="opt">它把延遲交給下游自己處理</button>
 </div>
-
 <div class="quiz" data-question="綜合判斷後，延遲投遞這個領域的現況是什麼？" data-correct="0" data-explain="需求真實、廣泛、長期，但方案拼湊、獨立嘗試多已停滯，通用獨立的開源標準仍空著。">
   <button class="opt">需求大但通用獨立標準仍空缺</button>
   <button class="opt">需求小且已被中介軟體完全滿足</button>

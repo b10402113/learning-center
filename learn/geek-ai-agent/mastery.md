@@ -1,7 +1,7 @@
 ---
 subject: geek-ai-agent
 created: 2026-09-22
-updated: 2026-09-22
+updated: 2026-09-25
 ---
 
 # Mastery — geek-ai-agent
@@ -436,6 +436,27 @@ updated: 2026-09-22
 
 > probe skipped via /nodes geek-ai-agent/when-technical-solution skip-probe on 2026-09-22
 
+## when-storage-metadata — 存儲與元數據
+
+- storage-before-delivery-invariant: unknown
+- storageplugin-five-methods: unknown
+- plugin-port-adapter: unknown
+- redis-key-structure: unknown
+- big-key-avoidance: unknown
+- ttl-design: unknown
+- write-order-consistency: unknown
+- atomic-transition-cas: unknown
+- async-io-off-scheduler: unknown
+- restart-recovery-order: unknown
+- metadata-vs-data-split: unknown
+- zk-etcd-consul-selection: unknown
+- etcd-key-space-four-classes: unknown
+- lifecycle-separation: unknown
+- lease-heartbeat-convention: unknown
+- etcd-client-wrapper-primitives: unknown
+
+> probe skipped via /nodes geek-ai-agent/when-storage-metadata skip-probe on 2026-09-25
+
 ## oryxos-full-flow — 全流程串聯
 
 - full-flow-usable-standard: unknown
@@ -483,6 +504,31 @@ updated: 2026-09-22
 
 > probe skipped via /nodes geek-ai-agent/distributed-clustering-fundamentals skip-probe on 2026-09-22
 
+## when-contracts-ingress — 公共契約與接入路由
+
+- contract-first-rationale: unknown
+- message-model-three-families: unknown
+- state-machine-five-states: unknown
+- state-machine-legal-transitions: unknown
+- state-machine-atomic-delivery-right: unknown
+- storage-plugin-contract: unknown
+- four-public-interfaces: unknown
+- contract-map-ownership: unknown
+- common-harness-rules: unknown
+- grpc-internal-http-external: unknown
+- proto-submit-query-cancel: unknown
+- strongly-typed-sink-config: unknown
+- validation-structural-vs-runtime: unknown
+- grpc-server-delegate-only: unknown
+- snowflake-message-id: unknown
+- consistent-hash-tw-id: unknown
+- cross-node-forwarding: unknown
+- persist-before-add-invariant: unknown
+- router-and-handler-interfaces: unknown
+- ingress-router-boundary: unknown
+
+> probe skipped via /nodes geek-ai-agent/when-contracts-ingress skip-probe on 2026-09-25
+
 ## oryxos-demo-release — Demo 與發布
 
 - three-directory-richness-levels: unknown
@@ -499,3 +545,26 @@ updated: 2026-09-22
 - signal-driven-extension: unknown
 
 > probe skipped via /nodes geek-ai-agent/oryxos-demo-release skip-probe on 2026-09-22
+
+## when-loop-model — When Loop 模型與驗收體系
+
+- one-shot-vs-two-runs: unknown
+- loop-flow-and-part-doc: unknown
+- decidable-acceptance: unknown
+- harness-is-core: unknown
+- harness-two-layers: unknown
+- part-one-single-machine: unknown
+- part-two-distributed: unknown
+- verifiability-boundary: unknown
+- test-pyramid-five-layers: unknown
+- distributed-correctness-hardest: unknown
+- invariants: unknown
+- no-loss-case: unknown
+- switchover-and-splitbrain-cases: unknown
+- fault-injection-tools: unknown
+- judge-cannot-be-bribed: unknown
+- layered-judges: unknown
+- failure-modes-not-coverage: unknown
+- two-run-acceptance: unknown
+
+> probe skipped via /nodes geek-ai-agent/when-loop-model skip-probe on 2026-09-25

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>測試金字塔：五層判官與分散式正確性</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>測試金字塔：五層判官守住分散式正確性</h1>
+<p class="meta">Step 4/5 · When 模型與驗收體系</p>
+
+<h2>學習目標</h2>
+<p>完成本課後，你應該能說清楚 When 的五層測試各自負責抓什麼，也能判斷為什麼分散式正確性最難驗證，以及單機與叢集兩個部分各自要通過哪些驗收。</p>
+
+<h2>判官要在 Loop 開跑前就準備好</h2>
+<p>上一課提到，驗收是 Harness 最重要的一張臉。這一課把它拆開來看，因為每一輪 Loop 都會問同一個問題：「這次改動對嗎？」答案就來自自動化測試與驗收體系。</p>
+
+<p>這套驗收體系，就是 Loop 的判官。</p>
+
+<p>判官夠強，Loop 才能根據測試回饋逐步收斂到正確答案；判官夠弱，甚至沒有判官，Loop 只會更快、更有自信地往錯誤方向前進。測試因此不是最後才做的清理工作，而是開工前就要鋪好的地基。</p>
+
+<p>請記住一句話：<strong>你信不信得過 Loop，取決於判官有多強。</strong></p>
+
+<h2>五層測試金字塔</h2>
+<p>When 的驗收體系可以看成五層金字塔：越往上，越慢、越昂貴，也越接近真實環境，因此數量會越少。</p>
+
+<figure class="lesson-figure"><img src="./test-pyramid-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<table>
+<thead>
+<tr><th>層</th><th>測什麼</th><th>特性</th></tr>
+</thead>
+<tbody>
+<tr><td>單元測試</td><td>時間輪演算法、一致性雜湊、序列化等純邏輯</td><td>毫秒級、數量最多、執行最快</td></tr>
+<tr><td>整合測試</td><td>連接真實 Redis 與 ETCD，驗證讀寫和協調語意</td><td>較慢，會牽涉外部依賴</td></tr>
+<tr><td>端到端測試</td><td>HTTP 提交 → 排程 → Sink 收到，驗證完整主流程</td><td>較慢，但最接近真實使用路徑</td></tr>
+<tr><td>分散式正確性／混沌</td><td>殺掉節點、注入網路分割，觀察系統在最糟情況下是否仍正確</td><td>破壞性強，最難設計</td></tr>
+<tr><td>效能／負載</td><td>寫入 P99、投遞延遲，以及大量訊息同時到期時的表現</td><td>耗時，通常定期執行，不會每個 PR 都跑</td></tr>
+</tbody>
+</table>
+
+<p>When 的驗收難度，主要集中在上面兩層，尤其是分散式正確性。這也是下一課要專門談故障注入的原因。</p>
+
+<h2>為什麼分散式正確性最難？</h2>
+<p>因為它往往只在最糟的那一刻出錯。</p>
+
+<p>平常所有節點都正常運作，測試自然一路全綠。等到某個節點剛好在訊息即將到期的關鍵瞬間掛掉，問題才會浮現。</p>
+
+<p>這會帶來兩個後果。</p>
+
+<p>第一，結果同時取決於故障發生的時機，以及你有沒有主動製造故障。如果不注入故障，測試可能永遠是綠的，問題卻會被拖到生產環境才爆開。</p>
+
+<p>第二，許多分散式性質無法靠單一斷言證明「永遠成立」。比較實際的做法，是反覆注入故障，並要求每一次測試中的不變式都成立。</p>
+
+<p>單元測試像是在健身房量握力：姿勢和環境固定，結果容易重現。分散式正確性則像把車開上結冰的山路：平常開得再穩，也不能代表打滑時不會失控。問題是，打滑通常不會自己出現，所以你得主動製造出那個瞬間。</p>
+
+<figure class="lesson-figure"><img src="./test-pyramid-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<h2>四個必須持續成立的不變式</h2>
+<p>既然很難直接證明系統「永遠正確」，就把正確性拆成幾條不變式，再透過故障注入反覆檢查：</p>
+
+<ul>
+<li><strong>不遺失</strong>：已經存下來的訊息，最終一定會被投遞出去。</li>
+<li><strong>不重複語意</strong>：訊息可能被重複投遞，但下游會用冪等方式吸收，因此業務語意上不重複。</li>
+<li><strong>時效</strong>：Master 故障後，接管必須在 10 秒內完成。</li>
+<li><strong>唯一</strong>：任何時刻最多只能有一個 Master、一个 Controller。</li>
+</ul>
+
+<p>這四條不是口號，而是可以轉成明確斷言的驗收條件；下一課的三個驗收案例，也會從這些不變式直接長出來。</p>
+
+<figure class="lesson-figure"><img src="./test-pyramid-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<h2>兩次 Loop，判官的工作不同</h2>
+
+<table>
+<thead>
+<tr><th></th><th>Part 1 單機正確性</th><th>Part 2 叢集正確性</th></tr>
+</thead>
+<tbody>
+<tr><td>重點</td><td>時間到期精度 P99、訊息從收到到投遞的流程，以及單元、整合、單機端到端測試</td><td>不遺失、10 秒內切換、腦裂時維持唯一，以及副本延遲後能恢復</td></tr>
+<tr><td>判官特性</td><td>快速、可重複，Loop 容易自行收斂</td><td>緩慢、具破壞性，較適合交給 CI 或人工執行</td></tr>
+<tr><td>主導方式</td><td>以單元測試和整合測試為主</td><td>以混沌測試和故障注入為主</td></tr>
+</tbody>
+</table>
+
+<p>這正好接上上一課的原則：<strong>可驗證的交給 Loop，難驗證的由人把關。</strong></p>
+
+<p>Part 1 的判官快速又穩定，適合每一輪 Loop 自動執行。Part 2 的判官既慢又具破壞性，若每輪都跑，成本高，也可能干擾開發流程，因此通常交由 CI，或在隔離環境中由人執行。</p>
+
+<figure class="lesson-figure"><img src="./test-pyramid-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<h2>用 When 的硬指標當驗收尺規</h2>
+<p>把前面的原則套回 When，就能得到可直接判定的驗收門檻：</p>
+
+<ul>
+<li>延遲支援 1 秒到 1 小時的範圍。</li>
+<li>99% 的投遞結果落在目標時間的 ±1 秒內。</li>
+<li>QPS 至少達到 1000。</li>
+<li>系統能穩定承載 10 萬則訊息。</li>
+<li>Master 故障後，Slave 在 10 秒內接手，且訊息不遺失。</li>
+</ul>
+
+<p>這些數字重要，不是因為數字看起來精確，而是因為每一項都能寫成測試。Loop 因此不必靠感覺判斷「差不多完成了」，而是能根據明確門檻決定：這次改動是否真的達標。</p>
+
+<figure class="lesson-figure"><img src="./test-pyramid-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<div class="lesson-nav">
+  <div><a href="./harness-two-layers.html">← 上一步：兩層 Harness</a></div>
+  <div><a href="./fault-injection-and-judge-integrity.html">下一步：故障注入與不可收買的判官 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼說測試要在 Loop 開跑之前就準備好？" data-correct="2" data-explain="每一輪 Loop 的對錯判斷都來自測試；判官是地基，不是事後清理。">
+  <button class="opt">因為測試寫在後面比較容易通過</button>
+  <button class="opt">因為 CI 規定測試必須先提交</button>
+  <button class="opt">因為 Loop 的對錯全靠測試判斷</button>
+  <button class="opt">因為先寫測試可以減少程式碼行數</button>
+</div>
+<div class="quiz" data-question="When 的五層測試中，數量最多、最快的是哪一層？" data-correct="0" data-explain="單元測試針對純邏輯如時間輪演算法、一致性雜湊、序列化，是毫秒級且數量最多的一層。">
+  <button class="opt">單元測試，測純邏輯且毫秒級</button>
+  <button class="opt">整合測試，接真實 Redis 與 ETCD</button>
+  <button class="opt">端到端測試，跑完整主流程</button>
+  <button class="opt">混沌測試，殺節點與注入分割</button>
+</div>
+<div class="quiz" data-question="為什麼分散式正確性被認為最難驗？" data-correct="3" data-explain="它只在最糟的那一刻失敗，成敗取決於時機與是否主動注入故障，且難以用單一斷言證明。">
+  <button class="opt">因為它需要最多的程式碼才能實作</button>
+  <button class="opt">因為它每次執行都會穩定失敗</button>
+  <button class="opt">因為它只能用人工手動測試</button>
+  <button class="opt">因為它只在最糟的那一刻才失敗</button>
+</div>
+<div class="quiz" data-question="下列哪一項是文中列出的不變式之一？" data-correct="1" data-explain="四個不變式是不遺失、不重複語意、時效（10 秒接管）、唯一（最多一個 Master／Controller）。">
+  <button class="opt">所有節點的 CPU 使用率必須相同</button>
+  <button class="opt">任何時刻最多只有一個 Master</button>
+  <button class="opt">每則訊息的 payload 必須加密</button>
+  <button class="opt">Redis 必須比 ETCD 先啟動完成</button>
+</div>
+<div class="quiz" data-question="Part 1 與 Part 2 的驗收差異，主要體現在哪裡？" data-correct="2" data-explain="Part 1 的判官快又可重複，適合 Loop 每輪自跑；Part 2 慢又具破壞性，多交由 CI 或人執行。">
+  <button class="opt">Part 1 完全不需要任何自動化測試</button>
+  <button class="opt">Part 2 只做單元測試就足夠了</button>
+  <button class="opt">Part 1 判官快，Part 2 判官慢且具破壞性</button>
+  <button class="opt">兩部分的驗收內容其實完全相同</button>
+</div>
+<div class="quiz" data-question="面對無法用單一斷言證明的性質，文中建議怎麼做？" data-correct="0" data-explain="用反覆注入故障、並要求不變式每次都要成立的方式來逼近正確性。">
+  <button class="opt">反覆注入故障並要求不變式成立</button>
+  <button class="opt">放棄測試，改用人工在生產觀察</button>
+  <button class="opt">只測一次，通過後就不再重測</button>
+  <button class="opt">把不變式改寫成比較寬鬆的版本</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · When Loop 模型與驗收體系 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

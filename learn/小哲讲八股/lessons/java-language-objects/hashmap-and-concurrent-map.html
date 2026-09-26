@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HashMap 演進與併發 Map</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>HashMap 的演進：從鏈表，到紅黑樹與併發版本</h1>
+<p class="meta">Step 6/6 · Java 語言與物件</p>
+
+<div class="learning-goal">
+<strong>學習目標：</strong>看懂 HashMap 從 JDK 1.7 到 1.8 的結構、插入與擴容差異；理解紅黑樹的 8／6 閾值、0.75 負載因子的取捨，以及 ConcurrentHashMap 兩代如何逐步縮小鎖的範圍。
+</div>
+
+<h2>先抓住主線：1.7 到 1.8 改了什麼</h2>
+
+<p>HashMap 的版本演進，不是單純「換了個資料結構」，而是針對幾個實際問題逐一補強：鏈表太長時查詢變慢、並發擴容可能形成死循環，以及搬遷資料時不必每次都重新計算 hash。</p>
+
+<table>
+  <tr><th>面向</th><th>JDK 1.7</th><th>JDK 1.8</th></tr>
+  <tr><td>資料結構</td><td>陣列 + 鏈表</td><td>陣列 + 鏈表 + 紅黑樹</td></tr>
+  <tr><td>插入方式</td><td>頭插法</td><td>尾插法</td></tr>
+  <tr><td>擴容搬遷</td><td>重新計算每個節點的 hash</td><td>用 hash &amp; oldCap 判斷留在原位或搬到原位加舊容量</td></tr>
+</table>
+
+<p>1.7 使用頭插法，平常在單執行緒下沒有問題；但多執行緒同時擴容時，鏈表順序可能被改亂，甚至形成環。1.8 改用尾插法，保留原本的鏈表順序；同時加入紅黑樹，處理極端的 hash 衝突；擴容時也改用位元運算，省下重新計算位置的成本。</p>
+
+<h2>鏈表為什麼要變成紅黑樹</h2>
+
+<p>雜湊表的理想狀態，是每個桶裡只有少量節點。但如果很多 key 剛好落進同一個桶，鏈表就會越串越長。查找原本接近 O(1)，一旦退化成長鏈表，最壞情況就會變成 O(N)，像是在抽屜裡找東西，卻把所有物品疊成一條長龍。</p>
+
+<p>紅黑樹能把最壞查找成本壓到 O(logN)。不過，樹節點比鏈表節點大約多佔一倍空間，衝突不嚴重時，直接用樹反而浪費。因此 HashMap 不是一開始就建樹，而是等鏈表長到一定程度，才把它轉成紅黑樹。</p>
+
+<figure class="lesson-figure"><img src="./hashmap-and-concurrent-map-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>為什麼轉樹是 8，退回鏈表是 6</h2>
+
+<p>轉樹閾值設定為 8，和雜湊分布的機率有關。在理想的雜湊函式下，桶內節點數大致服從泊松分布，同一個桶累積到 8 個節點的機率約為 0.00000006，幾乎不會發生。也就是說，能長到 8 個，通常代表這個桶的衝突已經嚴重到值得用樹處理。</p>
+
+<p>退樹閾值則設為 6，而不是同樣設成 8。這中間刻意留下緩衝區，避免節點數在 7、8 附近上下波動時，資料結構不斷在鏈表與紅黑樹之間切換，像是門被風吹得反覆開關。</p>
+
+<p>還有一個前提：只有在陣列長度至少 64 時才會轉樹。若陣列還太小，HashMap 會優先擴容，先用增加桶數的方式稀釋衝突，而不是立刻付出紅黑樹的額外空間成本。</p>
+
+<h2>擴容：為什麼是 0.75 負載因子</h2>
+
+<p>HashMap 會在「容量 × 負載因子」超過門檻時擴容。預設容量是 16，負載因子是 0.75，因此門檻為 12。放入第 13 個元素時，就會觸發擴容，容量變成原來的兩倍。</p>
+
+<p>負載因子其實是在交換兩種成本：</p>
+
+<ul>
+  <li>設得太高，例如 1.0：表格可以塞得更滿，但碰撞增加，鏈表可能變長，查詢速度變慢。</li>
+  <li>設得太低，例如 0.5：碰撞較少，但表格空間很多，擴容更頻繁，也更浪費記憶體。</li>
+</ul>
+
+<p>0.75 是時間與空間之間的折衷：不要讓桶塞得太滿，也不要為了避免碰撞而預留過多空間。</p>
+
+<figure class="lesson-figure"><img src="./hashmap-and-concurrent-map-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<pre><code>// 1.8 擴容搬遷的核心：只看 hash 與舊容量的一個位元
+// 結果只有兩種：留在原索引，或搬到 原索引 + oldCap
+if ((e.hash &amp; oldCap) == 0) {
+    // 留在低位鏈
+} else {
+    // 搬到高位鏈
+}</code></pre>
+
+<p>因為容量每次都是加倍，擴容後的索引只會有兩種結果：留在原本的位置，或移到「原索引 + oldCap」的位置。1.8 只要檢查 <code>hash &amp; oldCap</code> 的結果，就能判斷節點要去哪裡，不必重新計算完整 hash。</p>
+
+<h2>1.7 的死循環：頭插法在並發擴容時翻車</h2>
+
+<p>1.7 的頭插法，遇到兩個執行緒同時擴容時，可能把同一條鏈表重新排列。由於每個節點都插到鏈表頭部，兩個執行緒交錯執行後，鏈表順序可能被顛倒，甚至讓節點彼此指向，形成一個環。</p>
+
+<p>一旦成環，之後的 <code>get</code> 會沿著指標一直繞圈，永遠走不到 <code>null</code>，CPU 可能直接衝到 100%。這是把非執行緒安全容器拿去多執行緒寫入時，最經典的翻車案例之一。</p>
+
+<figure class="lesson-figure"><img src="./hashmap-and-concurrent-map-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>1.8 改用尾插法，搬遷時維持原本的鏈表順序，因此根除了這種死循環。但「不再形成死循環」不代表 HashMap 已經變成執行緒安全。多執行緒同時寫入時，資料仍可能互相覆蓋；需要併發存取時，應該使用 ConcurrentHashMap。</p>
+
+<h2>ConcurrentHashMap：鎖的範圍越來越小</h2>
+
+<p>HashMap 解決的是單執行緒下的資料組織問題；ConcurrentHashMap 則要面對另一個問題：多個執行緒同時讀寫時，怎麼避免整張表被一把大鎖卡住。</p>
+
+<table>
+  <tr><th></th><th>JDK 1.7</th><th>JDK 1.8</th></tr>
+  <tr><td>鎖粒度</td><td>分段鎖 Segment，一個 Segment 鎖一段</td><td>拋棄 Segment，CAS 加 synchronized 鎖單一桶的頭節點</td></tr>
+  <tr><td>併發度</td><td>固定為 16（Segment 數量）</td><td>隨陣列長度成長，粒度更細</td></tr>
+  <tr><td>空桶插入</td><td>鎖住整個 Segment</td><td>用 CAS 無鎖寫入</td></tr>
+</table>
+
+<p>JDK 1.7 把整張表切成 16 個 Segment，每段各有一把鎖。這比整張表共用一把鎖好，最多可以讓 16 個執行緒同時寫入；但併發度也因此被固定在 16。</p>
+
+<p>JDK 1.8 直接拿掉 Segment，改成更細的桶級別控制：</p>
+
+<ul>
+  <li>空桶插入時，使用 CAS 嘗試寫入，不需要先取得鎖。</li>
+  <li>桶裡已有節點時，才用 <code>synchronized</code> 鎖住該桶的頭節點。</li>
+</ul>
+
+<p>鎖的範圍從「一整段」縮小成「單一桶」。不同桶之間可以同時操作，陣列越大，能夠並行處理的區域也越多。</p>
+
+<figure class="lesson-figure"><img src="./hashmap-and-concurrent-map-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>ConcurrentHashMap 如何協助擴容</h2>
+
+<p>擴容是併發容器最麻煩的時刻：舊表的資料要搬到新表，但其他執行緒不能全部停在原地等候。JDK 1.8 因此把搬遷工作切成一小段一小段，讓多個執行緒可以分頭處理。</p>
+
+<p>它使用 <code>transferIndex</code> 記錄尚未搬遷的範圍。某個執行緒領到一段工作後，就負責搬那一段；其他執行緒也能接著領取不同區段，一起完成擴容。</p>
+
+<p>正在搬遷的桶會放入 <code>ForwardingNode</code>。這是一個特殊標記，裡面指向新表：</p>
+
+<ul>
+  <li>其他寫入執行緒遇到它，不會傻等，而是加入擴容工作。</li>
+  <li>讀執行緒遇到它，會轉到新表繼續查找。</li>
+</ul>
+
+<p>因此，擴容不再只是某一個執行緒獨自搬完整張表，而是可以由多個執行緒協助完成。</p>
+
+<h2>為什麼 ConcurrentHashMap 不允許 null</h2>
+
+<p>HashMap 允許 key 或 value 是 <code>null</code>，但 ConcurrentHashMap 明確禁止。關鍵不在於 null 本身，而在於多執行緒環境下，<code>null</code> 會造成結果無法判讀。</p>
+
+<p>假設：</p>
+
+<pre><code>map.get(k)</code></pre>
+
+<p>回傳 <code>null</code>，這可能代表兩件事：</p>
+
+<ul>
+  <li>key 根本不存在。</li>
+  <li>key 存在，但 value 就是 <code>null</code>。</li>
+</ul>
+
+<p>單執行緒時，可以再呼叫 <code>containsKey</code> 進一步確認。但在併發環境，這兩次操作之間可能有另一個執行緒修改資料。也就是說，先檢查、再採取行動的 <em>check-then-act</em> 並不是原子操作，第二步看到的世界可能已經變了。</p>
+
+<p>禁止 null 後，<code>get</code> 回傳 <code>null</code> 就只代表一件事：找不到這個 key。這是用限制 API 的方式，消除併發情境下的二義性。</p>
+
+<h2>高併發下，size() 怎麼算</h2>
+
+<p>如果每次修改元素都更新同一個全域計數器，所有執行緒會搶同一個位置，計數器反而變成新的瓶頸。因此 ConcurrentHashMap 的 <code>size()</code> 不使用全域鎖，而是採用類似 LongAdder 的分散式計數方式。</p>
+
+<ul>
+  <li>沒有太多競爭時，執行緒用 CAS 更新共用的 <code>baseCount</code>。</li>
+  <li>如果 CAS 競爭激烈、更新失敗，就改寫入自己負責的 <code>CounterCell</code>。</li>
+  <li>需要計算總數時，再把 <code>baseCount</code> 與所有計數格的值加總。</li>
+</ul>
+
+<p>這種設計把大家搶同一個櫃檯，改成分散到多個櫃檯辦理，能減少高併發下的衝突。但代價是 <code>size()</code> 具有弱一致性：計算期間仍可能有其他執行緒寫入，所以得到的是當下的近似值，不是精確、不可變動的瞬時值。</p>
+
+<figure class="lesson-figure"><img src="./hashmap-and-concurrent-map-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把整節串起來</h2>
+
+<p>HashMap 1.8 的三個關鍵改動，各自對應一個問題：</p>
+
+<ul>
+  <li><strong>紅黑樹：</strong>處理極端 hash 衝突，避免長鏈表讓查找退化。</li>
+  <li><strong>尾插法：</strong>維持搬遷後的鏈表順序，根除 1.7 並發擴容可能形成的死循環。</li>
+  <li><strong>位元運算搬遷：</strong>利用容量加倍的特性，只判斷節點留在原位，還是移到原索引加上舊容量的位置。</li>
+</ul>
+
+<p>紅黑樹的 8 與 6，是在空間成本、衝突機率和避免反覆轉換之間取得平衡；0.75 則是在查詢效率與記憶體使用量之間取捨。</p>
+
+<p>ConcurrentHashMap 也沿著同一條思路演進：JDK 1.7 用 Segment 分段加鎖，JDK 1.8 改成 CAS 加上桶級別的 <code>synchronized</code>。再配合 <code>ForwardingNode</code>，讓多個執行緒能協助擴容。禁止 null 和讓 <code>size()</code> 保持弱一致，則是為了避開多執行緒下無法可靠判讀或維護的狀態。</p>
+
+<div class="lesson-nav">
+  <a href="./collections-framework-and-list.html">← 上一課：集合框架地圖與 List 選型</a>
+  <span>這是本節點的最後一課</span>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="HashMap 1.8 相對 1.7 的改變，下列哪一項正確？" data-correct="2" data-explain="1.8 加入紅黑樹、改用尾插法，並用位元運算簡化擴容搬遷。">
+  <button class="opt">改成陣列加二叉搜尋樹</button>
+  <button class="opt">改成頭插法並移除鏈表</button>
+  <button class="opt">加入紅黑樹並改用尾插法</button>
+  <button class="opt">取消擴容機制</button>
+</div>
+<div class="quiz" data-question="鏈表轉紅黑樹的閾值訂在 8，是基於什麼？" data-correct="0" data-explain="理想雜湊下桶內節點數服從泊松分布，到 8 的機率極低。">
+  <button class="opt">桶內節點數服從泊松分布</button>
+  <button class="opt">CPU 快取行的容量大小</button>
+  <button class="opt">陣列的預設初始長度</button>
+  <button class="opt">hashCode 產生的位元數</button>
+</div>
+<div class="quiz" data-question="HashMap 預設負載因子 0.75 代表什麼？" data-correct="3" data-explain="調高衝突變多，調低浪費空間，0.75 是兩者的折衷。">
+  <button class="opt">保證絕對不會發生碰撞</button>
+  <button class="opt">讓鏈表更早轉成紅黑樹</button>
+  <button class="opt">讓擴容永遠不會發生</button>
+  <button class="opt">時間與空間成本的折衷</button>
+</div>
+<div class="quiz" data-question="JDK 1.7 的 HashMap 併發擴容為何會死循環？" data-correct="1" data-explain="頭插法在併發搬遷時讓鏈表倒置並可能成環，get 便會無限繞圈。">
+  <button class="opt">負載因子被改成 1.0</button>
+  <button class="opt">頭插法讓鏈表倒置成環</button>
+  <button class="opt">紅黑樹旋轉發生錯誤</button>
+  <button class="opt">size 計數溢位</button>
+</div>
+<div class="quiz" data-question="ConcurrentHashMap 1.8 對空桶的寫入方式是什麼？" data-correct="2" data-explain="空桶用 CAS 無鎖寫入，只有桶內已有節點才鎖住頭節點。">
+  <button class="opt">鎖住整個 Segment</button>
+  <button class="opt">鎖住整張雜湊表</button>
+  <button class="opt">用 CAS 無鎖寫入</button>
+  <button class="opt">暫停所有讀取執行緒</button>
+</div>
+<div class="quiz" data-question="ConcurrentHashMap 不允許 null value 的主要理由是？" data-correct="0" data-explain="多執行緒下 get 回 null 無法分辨「鍵不存在」還是「值為 null」。">
+  <button class="opt">null 在 get 時有兩種意思</button>
+  <button class="opt">null 會讓雜湊函式失效</button>
+  <button class="opt">null 無法被序列化</button>
+  <button class="opt">null 會佔用額外的空間</button>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

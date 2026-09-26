@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>為什麼訊息要先落地：StoragePlugin 契約</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>為什麼訊息要先落地：StoragePlugin 契約</h1>
+<p class="meta">Step 1/5 · 存儲與元數據</p>
+
+<h2>學習目標</h2>
+<p>能說明延遲訊息為何必須先寫入儲存才能進記憶體與回傳，並說出 StoragePlugin 五個方法各自的職責。</p>
+
+<h2>一個會消失的承諾</h2>
+<p>先想像一個場景。使用者送出一筆「三天後提醒我續約」的延遲訊息。排程節點收到之後，把它放進記憶體裡的時間輪，回報「已受理」。三天之內，這個節點因為部署更新重啟了一次，記憶體裡的時間輪跟著清空，那筆提醒就此人間蒸發。使用者不會收到任何錯誤，因為系統當下確實回了「已受理」。</p>
+<p>延遲訊息和一般請求最大的差別，就在這裡：它是一張「未來的兌現承諾」，從接單到履約之間可能隔好幾個小時、甚至好幾天，而這段時間裡節點幾乎不可能不重啟。如果記憶體是唯一的真相，那承諾隨時會被重啟吃掉。</p>
+<blockquote>延遲訊息必須在進入記憶體之前先落地。重啟可以丟掉記憶體，但不能丟掉已經答應別人的訊息。</blockquote>
+
+<h2>落地不變量：先寫儲存，再進記憶體</h2>
+<p>When 把這件事寫成一條不變量：<strong>任何進入記憶體時間輪的訊息，儲存裡一定已經有一份。</strong>落地的東西除了訊息本體，還有排程索引；重啟之後，系統得靠它知道「哪些訊息還在等、分別等到什麼時候」。</p>
+<p>要做到這件事，寫入的順序就沒有模糊空間。呼叫方送進來的訊息，一定先寫進 Redis，<strong>確認成功之後</strong>才放進記憶體、才回報受理。反過來（先進記憶體、後寫 Redis）會出現最糟的情況：使用者看到受理，節點一重啟訊息卻不見了，而且儲存裡完全沒有線索可以補救。</p>
+<p>Redis 短暫不可用時，這個設計也給出明確的行為：寫入失敗就讓 API 回錯，由業務呼叫方自行重試。這種「寧可當下失敗」的策略叫 fail-down，重點是不要產生「記憶體有、儲存沒有」的幽靈訊息。</p>
+
+<h2>為什麼要把儲存做成插件</h2>
+<p>企業用的基礎設施五花八門：有人只有 Redis，有人有 RocksDB，有人想接自己的 MySQL。如果呼叫方直接綁死一個 Redis client，換儲存就等於改一輪程式碼。</p>
+<p>When 的作法是把它抽象成 <code>StoragePlugin</code>：上層只依賴這個介面，完全不知道背後是 Redis 還是別的。要換一套儲存，只是多寫一個實作類別，排程、投遞、路由那些模組一行都不用動。這是典型的<strong>埠與配接器（port/adapter）</strong>模式：介面是埠，Redis 實作是插上去的配接器。</p>
+
+<h2>StoragePlugin 的五個資料方法</h2>
+<p>介面本身定義在公共契約裡，這個模組的任務是「實作它」，而不是重新定義它。資料操作有五個方法，外加一個 <code>type()</code> 用來標識這是哪種儲存（Redis 實作回傳 <code>"redis"</code>，由插件註冊表載入）。</p>
+<table>
+<thead>
+<tr><th>方法</th><th>做什麼</th><th>誰會用到</th></tr>
+</thead>
+<tbody>
+<tr><td><code>create(Message)</code></td><td>把訊息寫進儲存，成功後才進記憶體</td><td>接入層在回覆受理前</td></tr>
+<tr><td><code>get(messageId)</code></td><td>依 id 讀回訊息本體</td><td>查詢、除錯、補救</td></tr>
+<tr><td><code>transition(messageId, expected, target, patch)</code></td><td>狀態等於預期值時才更新，並原子地補上重試次數等欄位</td><td>投遞、故障轉移</td></tr>
+<tr><td><code>loadPendingByTimeWheel(twId)</code></td><td>撈出這一輪裡「還在等排程」的 PENDING 訊息</td><td>節點重啟、故障轉移後的恢復</td></tr>
+<tr><td><code>deleteExpired(messageId)</code></td><td>終態訊息過了保留期後，刪掉本體與索引</td><td>清理排程工作</td></tr>
+</tbody>
+</table>
+<p>一句話看五個方法的關係：<code>create</code> 負責進場，<code>get</code> 負責查，<code>transition</code> 負責原子地改狀態，<code>loadPendingByTimeWheel</code> 負責重啟後把還在等的訊息撈回來，<code>deleteExpired</code> 負責收尾清理。</p>
+
+<h2>為什麼第一個插件是 Redis</h2>
+<p>延遲訊息對儲存有三個硬需求：寫得快、單一 key 的讀寫快、要有 TTL 可以自動清理。Redis 三個都滿足，而且到處都裝得到。RocksDB 速度也好，但要另外部署維運；MySQL 面對大量隨機的小 key 讀寫相對吃力。所以第一個插件選 Redis，其餘的留給之後按需要補。</p>
+<p>這個模組的邊界也要說清楚：它<strong>只</strong>做儲存插件。時間輪排程、Sink 投遞、叢集協調、故障切換都不在這裡；Redis 自己的高可用（Cluster／Sentinel／AOF／異地備援）也交給部署方，插件只管單機或主從。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./redis-key-design.html">下一步：Redis key 結構與避開 big-key →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼延遲訊息不能只放在記憶體？" data-correct="0" data-explain="延遲訊息的生命期跨越多次重啟，記憶體一重啟就整個清空。">
+  <button class="opt">因為重啟會讓記憶體資料消失</button>
+  <button class="opt">因為記憶體無法支援 TTL 過期</button>
+  <button class="opt">因為記憶體不能序列化訊息</button>
+  <button class="opt">因為記憶體容量不足以放訊息</button>
+</div>
+
+<div class="quiz" data-question="落地不變量要求的正確寫入順序是什麼？" data-correct="1" data-explain="先寫儲存並確認成功，才進記憶體、才回報受理。">
+  <button class="opt">先進記憶體，再寫入儲存</button>
+  <button class="opt">先寫儲存，成功才進記憶體</button>
+  <button class="opt">同時寫入記憶體與儲存</button>
+  <button class="opt">先回報受理，再背景寫儲存</button>
+</div>
+
+<div class="quiz" data-question="把儲存抽象成 StoragePlugin 的主要好處是什麼？" data-correct="0" data-explain="上層只依賴介面，換儲存只需新增一個實作。">
+  <button class="opt">上層只依賴介面，換儲存不動上層</button>
+  <button class="opt">讓 Redis 自動變成主從架構</button>
+  <button class="opt">讓訊息本體的體積可以縮小</button>
+  <button class="opt">讓時間輪的排程精度可以提高</button>
+</div>
+
+<div class="quiz" data-question="哪個方法負責「狀態等於預期值時才更新」？" data-correct="2" data-explain="transition 是比較並交換，符合預期狀態才更新並補上 patch。">
+  <button class="opt">create</button>
+  <button class="opt">get</button>
+  <button class="opt">transition</button>
+  <button class="opt">loadPendingByTimeWheel</button>
+</div>
+
+<div class="quiz" data-question="Redis 短暫不可用時，create 的正確行為是什麼？" data-correct="2" data-explain="寫入失敗就回錯，由業務呼叫方重試，避免產生幽靈訊息。">
+  <button class="opt">先寫記憶體，稍後再補寫儲存</button>
+  <button class="opt">靜默丟棄這一筆訊息</button>
+  <button class="opt">回傳失敗，由呼叫方重試</button>
+  <button class="opt">自動切換到別的儲存插件</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不在這個模組的職責範圍內？" data-correct="2" data-explain="時間輪排程與投遞屬於別的模組，這個模組只做儲存插件。">
+  <button class="opt">實作 Redis 版 StoragePlugin</button>
+  <button class="opt">設計 Redis 的 key 結構</button>
+  <button class="opt">實作時間輪排程與投遞</button>
+  <button class="opt">驗證狀態轉移的原子性</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 存儲與元數據 · Step 1/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

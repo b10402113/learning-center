@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Redis key 結構與避開 big-key</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Redis key 結構與避開 big-key</h1>
+<p class="meta">Step 2/5 · 存儲與元數據</p>
+
+<h2>學習目標</h2>
+<p>能畫出 When 的三類 Redis key、說出每類的型別與 TTL 規則，並解釋這樣設計如何避開 big-key。</p>
+
+<h2>訊息進 Redis 之後長什麼樣</h2>
+<p>訊息落地不能只是「把 Message 物件丟進去」。重啟恢復時，系統不只要找回訊息本體，還要知道它「排在什麼時間、屬於哪一輪時間輪」。所以 When 把要存的東西拆成三類 key：本體一類，排程索引一類，重啟恢復用的槽位索引一類。</p>
+<table>
+<thead>
+<tr><th>Key 樣式</th><th>型別</th><th>存什麼</th><th>生命週期</th></tr>
+</thead>
+<tbody>
+<tr><td><code>when:msg:{message_id}</code></td><td>STRING（JSON）</td><td>序列化後的訊息本體</td><td>TTL = deliver_at + 7 天</td></tr>
+<tr><td><code>when:tw:{tw_id}:idx:{message_id}</code></td><td>STRING</td><td>這則訊息的到期時間</td><td>投遞或取消後刪除</td></tr>
+<tr><td><code>when:tw:{tw_id}:slot:{slot_key}</code></td><td>SET</td><td>槽位裡有哪些訊息 id</td><td>只用於節點重啟恢復，不做日常排程</td></tr>
+</tbody>
+</table>
+<p>三個設計決定藏在表裡。第一，<strong>本體以 message_id 拆開</strong>，一則訊息一個 key。第二，<strong>索引按時間輪 id 拆開</strong>，而不是全部丟進同一個大結構。第三，<strong>TTL 當安全網</strong>：正常流程會在投遞或取消後主動刪 key，但如果哪裡漏刪了，到期時間會自動清掉，不讓垃圾無限累積。單則訊息本體抓在 64KB 以內（含 metadata 通常數十 KB）。</p>
+
+<h2>big-key 為什麼是 Redis 的頭號敵人</h2>
+<p>big-key（大 key）指的是單一 key 底下的資料量過大，例如一個塞了幾百萬成員的集合。它可怕的地方在於，Redis 執行命令是<strong>單執行緒</strong>的：一次只能處理一件事。當某個請求要去搬動、刪除或掃描一個巨大的 key，整條執行緒就被它佔住，其他所有請求只能排隊。除此之外，大 key 在叢集擴容時難以搬遷，也很容易變成熱點，拖垮它所在的那個實例。</p>
+<blockquote>單執行緒是 Redis 快的原因，也是它怕 big-key 的原因。你不能讓任何一個 key 大到足以擋住所有人的路。</blockquote>
+<p>很多延遲佇列的 SDK 會把所有延遲訊息放進<strong>同一個 ZSet</strong>，用到期時間當分數排序。這在資料量小的時候很優雅，量一大就變成一個不斷長大的 big-key，每次讀寫都要碰它。When 明確反其道而行：<strong>不用 ZSet，也不用大 Hash。</strong>每一則訊息都是自己的小 key，十萬則訊息就是十萬個獨立的小 key，而不是一個裝了十萬成員的大集合。</p>
+<p>這樣做的代價是 key 的數量多（從數十萬到數百萬個），但 Redis 對「大量小 key」的處理能力很強，這個代價遠比養一個 big-key 划算。</p>
+
+<h2>TTL 不只是清理，還是正確性</h2>
+<p>TTL 的設定規則不是隨手填一個數字。它必須<strong>不早於</strong>這則訊息所有可能被用到的時間點，也就是 <code>max(deliverAt, nextAttemptAt, deliveredAt)</code> 再加上一段保留期。為什麼要抓最大值？因為重試會把下一次嘗試的時間往後推，投遞成功則會記下 deliveredAt；如果 TTL 只看到最初的 deliverAt，一則正在重試的訊息可能在半路被過期清掉。</p>
+<p>反過來說，當狀態改變讓計畫時間往後延，TTL 就必須跟著延長。這是很多實作會漏掉的一步，也是驗收會特別檢查的地方：<strong>每一個寫進去的 key 都必須有 TTL</strong>，而且要以 <code>deliver_at + 7 天</code> 為基準通過檢查。</p>
+
+<h2>key 的字首集中管理</h2>
+<p>所有 key 都掛在同一個字首 <code>when:</code> 底下，而字首本身集中在常數裡，不准在各處用字串拼出來。理由很實際：哪天要換命名、要加環境前綴、要做掃描清理，只需要改一個地方。這個約定在後面的模組會被強制遵守，因為模組之間就是靠同一套 key 命名在對話。</p>
+
+<div class="lesson-nav">
+  <div><a href="./storage-contract.html">← 上一步：為什麼訊息要先落地：StoragePlugin 契約</a></div>
+  <div><a href="./persist-order-and-transition.html">下一步：寫入順序、原子轉移與重啟恢復 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="訊息本體在 Redis 裡如何儲存？" data-correct="1" data-explain="以 message_id 為 key 的 STRING（JSON），一則訊息一個 key。">
+  <button class="opt">全部收在一個大 Hash 裡</button>
+  <button class="opt">以 message_id 為 key 一則一 key</button>
+  <button class="opt">放在一個全域 ZSet 裡排序</button>
+  <button class="opt">以業務標籤聚合成多個 List</button>
+</div>
+
+<div class="quiz" data-question="為什麼索引要按時間輪 id 拆開？" data-correct="2" data-explain="拆開才不會讓所有訊息擠進同一個 big-key。">
+  <button class="opt">因為 Redis 不支援全域的索引</button>
+  <button class="opt">因為這樣可以省下 TTL 設定</button>
+  <button class="opt">避免所有訊息擠成一個 big-key</button>
+  <button class="opt">讓索引的讀取變成 O(1) 複雜度</button>
+</div>
+
+<div class="quiz" data-question="big-key 為什麼對 Redis 特別致命？" data-correct="0" data-explain="Redis 是單執行緒，處理大 key 時會佔住整條執行緒，讓其他請求排隊。">
+  <button class="opt">單執行緒會被大 key 卡住</button>
+  <button class="opt">大 key 無法設定 TTL 過期</button>
+  <button class="opt">大 key 只能存在主節點上</button>
+  <button class="opt">大 key 會讓資料自動遺失</button>
+</div>
+
+<div class="quiz" data-question="訊息本體的 TTL 以什麼為基準？" data-correct="1" data-explain="deliver_at 再加七天的保留期，作為漏刪時的安全網。">
+  <button class="opt">建立時間再加七天</button>
+  <button class="opt">deliver_at 再加七天</button>
+  <button class="opt">最後一次查詢再加七天</button>
+  <button class="opt">節點啟動時間再加七天</button>
+</div>
+
+<div class="quiz" data-question="當重試讓計畫時間往後延時，TTL 應該怎麼處理？" data-correct="3" data-explain="TTL 不能早於任何可能的使用時間，計畫延後就要跟著延長。">
+  <button class="opt">維持原本的到期時間不動</button>
+  <button class="opt">直接改成永不過期</button>
+  <button class="opt">縮短以免佔用記憶體</button>
+  <button class="opt">跟著往後延長</button>
+</div>
+
+<div class="quiz" data-question="slot 這類 key 在設計上的用途是什麼？" data-correct="2" data-explain="它只在節點重啟恢復時使用，不參與日常排程。">
+  <button class="opt">加速日常排程的查詢</button>
+  <button class="opt">保存訊息的完整本體</button>
+  <button class="opt">僅供節點重啟恢復使用</button>
+  <button class="opt">記錄每個節點的負載</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 存儲與元數據 · Step 2/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

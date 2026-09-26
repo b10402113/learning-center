@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>元數據與訊息資料的分工：ZK、etcd、Consul 選型</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>元數據與訊息資料的分工：ZK、etcd、Consul 選型</h1>
+<p class="meta">Step 4/5 · 存儲與元數據</p>
+
+<h2>學習目標</h2>
+<p>能說出元數據與訊息資料在一致性與生命週期上的差異，並用能力契合度與維運負擔比較 ZK／etcd／Consul 後選出 etcd。</p>
+
+<h2>兩種資料，兩種完全不同的需求</h2>
+<p>When 叢集要處理的資料其實分成兩大類，而它們的性格幾乎相反。</p>
+<table>
+<thead>
+<tr><th></th><th>訊息資料</th><th>叢集元數據</th></tr>
+</thead>
+<tbody>
+<tr><td>內容</td><td>延遲訊息本體與排程索引</td><td>節點清單、Controller、時間輪分配、叢集組態</td></tr>
+<tr><td>數量</td><td>極大，數百萬則</td><td>極小，相對訊息量微不足道</td></tr>
+<tr><td>生命期</td><td>短，投遞完就該清掉</td><td>與叢集同壽命，有人上線下線就變</td></tr>
+<tr><td>最在意</td><td>寫得快、讀得快</td><td>一致性、變更通知、存活判斷</td></tr>
+<tr><td>放哪裡</td><td>Redis</td><td>etcd</td></tr>
+</tbody>
+</table>
+<p>把兩者混在一起放，會兩邊都做不好：用 Redis 存元數據，得到的是一致性不足與沒有可靠的變更通知；用 etcd 存訊息，等於拿一台需要 Raft 共識的協調服務去扛海量短命資料，成本高又不必要。所以 When 做的是<strong>分流</strong>：大量求快的進 Redis，少量要強一致的進 etcd。</p>
+
+<h2>元數據到底存哪四類東西</h2>
+<ul>
+<li><strong>節點註冊</strong>：每一台還活著的節點一筆記錄，含 IP、port、啟動時間、負載，並綁一個 Lease（租約），讓節點意外掛掉時記錄自動消失。</li>
+<li><strong>Controller</strong>：目前哪一台節點是 Controller，同樣綁 Lease。</li>
+<li><strong>時間輪 metadata</strong>：每一輪的 Master／Slave 分配與狀態，是持久資料。</li>
+<li><strong>叢集組態</strong>：副本數、時間輪數量等，持久但可以動態調整。</li>
+</ul>
+<p>這裡的重點是「誰該綁 Lease、誰該持久」。會隨節點生死消失的（節點、Controller）用 Lease；代表叢集組態、必須長期存在的（時間輪、config）就持久保存。搞混這兩種生命週期，後面註冊與選舉的模組就會一團亂。</p>
+
+<h2>ZK、etcd、Consul 比一比</h2>
+<table>
+<thead>
+<tr><th>方案</th><th>強項</th><th>弱點</th></tr>
+</thead>
+<tbody>
+<tr><td>ZooKeeper</td><td>成熟、生態完整（Kafka、Pulsar 都用它）</td><td>API 偏底層、client 複雜、維運負擔重</td></tr>
+<tr><td>etcd</td><td>雲原生事實標準（K8s 核心）、API 簡單、內建 Raft</td><td>設計目標較專注，不主打服務發現生態</td></tr>
+<tr><td>Consul</td><td>服務發現與健康檢查很強</td><td>協調語意不若 etcd 直接</td></tr>
+</tbody>
+</table>
+<p>三套其實都能做協調。差別在於「誰的原語最貼合這個專案」。etcd 提供的就是 <code>Put</code>／<code>Get</code>／<code>Watch</code>／<code>Lease</code> 這幾件事，client 很輕，內建 Raft 直接給你強一致性，維運負擔最輕；而且只要環境裡跑 K8s，etcd 本來就在。ZooKeeper 不是不好，是這個專案不需要為它付那筆維運學費；Consul 則是強在服務發現，跟這裡要的協調語意有一點距離。</p>
+<blockquote>選型的重點在能力曲線是否貼合需求，以及維運代價能不能接受。</blockquote>
+<p>有一個容易搞錯的細節：When 用的是獨立、或平台另外提供的<strong>業務 etcd</strong>，不會去連 Kubernetes 控制平面自己的 etcd。控制平面的 etcd 是叢集的命脈，拿它來存業務資料，等於把自家的延遲訊息壓在整個 K8s 的心臟上。</p>
+
+<h2>Lease 與 Watch 為什麼剛好夠用</h2>
+<p>etcd 的兩個原語，正好對上叢集最需要的兩件事：</p>
+<ul>
+<li><strong>Lease（租約）</strong>：替一個 key 設定期限。節點只要持續續約，key 就一直有效；節點一旦停止續約（掛了、斷線、被隔離），Lease 到期後 key 自動被刪除。這等於一個不用自己寫的存活探測器。</li>
+<li><strong>Watch（監看）</strong>：訂閱某個 key 或整段前綴的變化，有人新增或刪除時立刻收到通知。節點上下線、Controller 換人，其他節點能馬上知道，不必輪詢。</li>
+</ul>
+<p>把這兩個原語組合起來，後面章節要做的節點註冊、存活偵測、Controller 選舉、成員變更通知，就都有現成的積木可用。這是選 etcd 的核心理由：它的<strong>原語集合跟需求一對一對上</strong>。</p>
+
+<h2>這個模組做到哪裡為止</h2>
+<p>職責界線要劃清楚：這個模組只做<strong>選型結論 + 元數據 key space 契約 + etcd client 封裝 + 測試</strong>。節點註冊的流程、Controller 怎麼選、故障怎麼感知，都留給下一個模組；etcd 自己的高可用（三節點容忍一台故障）屬於部署責任，不在程式範圍裡。這樣切，是為了讓後面所有叢集模組都共用同一套 key 契約，而不用各自重新發明。</p>
+
+<div class="lesson-nav">
+  <div><a href="./persist-order-and-transition.html">← 上一步：寫入順序、原子轉移與重啟恢復</a></div>
+  <div><a href="./etcd-key-space.html">下一步：etcd key space 與心跳約定 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="訊息資料與叢集元數據分別放在哪裡？" data-correct="1" data-explain="大量求快的訊息進 Redis，少量要強一致的元數據進 etcd。">
+  <button class="opt">訊息進 etcd，元數據進 Redis</button>
+  <button class="opt">訊息進 Redis，元數據進 etcd</button>
+  <button class="opt">兩者都進同一套 etcd 叢集</button>
+  <button class="opt">兩者都進同一套 Redis 叢集</button>
+</div>
+
+<div class="quiz" data-question="為什麼叢集元數據不適合只放 Redis？" data-correct="2" data-explain="元數據需要強一致與可靠的變更通知，這不是 Redis 的強項。">
+  <button class="opt">因為 Redis 無法儲存小筆資料</button>
+  <button class="opt">因為 Redis 不支援設定 key 前綴</button>
+  <button class="opt">因為需要強一致與變更通知</button>
+  <button class="opt">因為 Redis 的讀取速度太慢</button>
+</div>
+
+<div class="quiz" data-question="為什麼不直接使用 Kubernetes 控制平面的 etcd？" data-correct="3" data-explain="控制平面是叢集命脈，不能拿來存業務資料。">
+  <button class="opt">因為控制平面 etcd 不支援 Watch</button>
+  <button class="opt">因為控制平面 etcd 沒有 Lease 功能</button>
+  <button class="opt">因為控制平面 etcd 的版本太舊</button>
+  <button class="opt">控制平面是命脈，不宜混業務資料</button>
+</div>
+
+<div class="quiz" data-question="下列哪一類元數據應該綁定 Lease？" data-correct="0" data-explain="節點註冊與 Controller 會隨節點生死消失，適合用 Lease 自動清除。">
+  <button class="opt">節點註冊與 Controller</button>
+  <button class="opt">時間輪的 Master／Slave 分配</button>
+  <button class="opt">叢集的副本數設定</button>
+  <button class="opt">時間輪的數量設定</button>
+</div>
+
+<div class="quiz" data-question="Lease 是怎麼達成節點死亡偵測的？" data-correct="1" data-explain="節點停止續約後，Lease 到期，對應的 key 自動被刪除。">
+  <button class="opt">由 Controller 主動 ping 每個節點</button>
+  <button class="opt">停止續約後 key 自動到期刪除</button>
+  <button class="opt">由 Redis 週期性回報節點狀態</button>
+  <button class="opt">由 Watch 強制中斷節點連線</button>
+</div>
+
+<div class="quiz" data-question="選擇 etcd 的最主要理由是什麼？" data-correct="3" data-explain="它的原語集合貼合協調需求，且維運負擔最輕。">
+  <button class="opt">它的服務發現功能最完整</button>
+  <button class="opt">它的生態系比 ZooKeeper 成熟</button>
+  <button class="opt">它的資料儲存容量最大</button>
+  <button class="opt">原語貼合需求且維運負擔最輕</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 存儲與元數據 · Step 4/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

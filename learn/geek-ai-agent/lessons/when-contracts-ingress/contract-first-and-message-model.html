@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>契約先行與 Message 公共模型</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>契約先行與 Message 公共模型</h1>
+<p class="meta">Step 1/5 · 公共契約與接入路由</p>
+
+<h2>學習目標</h2>
+<p>能說明為什麼 When 必須先統一公共模型再分模組實作，並描述一則 Message 的身份／時間、投遞意圖與執行狀態三組欄位。</p>
+
+<h2>先看一個失敗現場</h2>
+<p>假設 When 有五個模組：接入層、路由層、排程的時間輪、儲存層、投遞層。如果讓每個人各自開工，很可能出現這種結果：五個模組各自都寫完了，單元測試全綠燈，進度報告漂亮得很。等到把它們接在一起跑，系統卻到處出錯。</p>
+<p>錯在哪？接入層收到的請求裡，訊息的編號欄位叫 <code>taskId</code>；儲存層存的欄位叫 <code>messageId</code>。兩邊都是「這則訊息的編號」，但名字不一樣，接起來就是抓不到。再比如，投遞層把一則訊息成功送出後就把它從儲存刪掉，但管理台還想查這則訊息的狀態，於是查到一半資料不見了。還有一種更隱蔽的：兩個執行者同時撈到同一則待投遞訊息，都以為自己該送，結果同一則訊息被送了兩次。</p>
+<p>這類問題有個共同點：<strong>它們不會在單元測試裡出現，只會在整合時爆發</strong>。因為每個模組自己測自己，欄位名、狀態值、生命週期都由它自己說了算，測試自然會過。真正的衝突發生在模組的邊界上，而修這種錯，往往要同時改好幾個模組，成本遠高於一開始就講清楚。</p>
+
+<h2>所以第一步不是寫程式，而是定義契約</h2>
+<p>When 的作法是：在任何模組動手之前，先把「大家共用的事實」定義下來。這套事實有兩個部分：一個共用的資料模型（Message），以及一組共用的介面（後面步驟會談）。所有後續模組都指向同一份契約，最後系統才能正確地拼起來。</p>
+<p>可以把它想成鐵路的軌距。每一段鐵路各自鋪自己的軌，鋪得再直再穩，只要軌距不一樣，火車就是開不過去。契約先行（contract-first）就是在鋪軌之前，先講好軌距是多少。</p>
+<blockquote>
+契約先行的重點不是「先寫文件」，而是「先讓所有模組面對同一組事實」。當大家共用同一份模型，模組才能平行開發、獨立實作，最後還能正確組合。
+</blockquote>
+
+<h2>一份 Message 走遍全流程</h2>
+<p>When 裡的每一則延遲訊息，從進入系統到被送出，會經過接入、路由、調度、儲存、投遞這幾個階段。關鍵設計是：<strong>這一路用的都是同一個 Message 物件</strong>，沒有任何一個模組可以另外定義一個「長得很像」的訊息物件。欄位分成三組：</p>
+<table>
+<thead>
+<tr><th>欄位家族</th><th>包含什麼</th><th>回答的問題</th></tr>
+</thead>
+<tbody>
+<tr><td>身份與時間</td><td><code>messageId</code> / <code>traceId</code>、<code>createdAt</code> / <code>deliverAt</code>、<code>nextAttemptAt</code></td><td>這是哪一則訊息、什麼時候該送、下次重試是哪時</td></tr>
+<tr><td>投遞意圖</td><td><code>sinkType</code> + <code>sinkConfig</code>、<code>payload</code>（≤ 64KB）、<code>businessTag</code></td><td>要送到哪裡、送什麼內容</td></tr>
+<tr><td>執行狀態</td><td><code>timeWheelId</code> / <code>status</code>、<code>retryCount</code> / <code>deliveredAt</code>、<code>lastError</code></td><td>現在進度到哪、失敗過幾次、最後一次錯什麼</td></tr>
+</tbody>
+</table>
+<p>把這三組分清楚，後面每一步才有共同的語言。身份與時間是訊息的座標，投遞意圖是它的目的，執行狀態是它的進度。少了任何一組，某個模組就得自己另外記一份，於是又回到剛才的整合災難。</p>
+
+<h2>契約如何在模組之間流動</h2>
+<p>同一個 Message 不是被複製到每個模組，而是透過公共介面在模組之間傳遞。介面就是模組之間的接縫：接入層把請求變成 Message，儲存層負責把它原子地寫入與改狀態，時間輪只記住它在記憶體裡的排程位置，投遞層最後把它送到目標。契約定得好，每個模組只要專心做好自己那一小段，接縫自然對得上。</p>
+
+<h2>這一節的交付物</h2>
+<p>這一節做完之後，手上應該有三樣可檢查的東西：第一，可以編譯的 Java 公共型別（<code>Message</code>、<code>StatePatch</code> 與四個公共介面）；第二，公共的 proto 定義（<code>SinkType</code>、<code>MessageStatus</code> 與強型別的 <code>SinkConfig</code>）；第三，寫進專案根目錄 <code>CLAUDE.md</code> 的公共 Harness（規範）。從下一節開始，每個模組只實作自己的責任，不能重新定義公共物件。</p>
+
+<h2>契約要改的時候怎麼辦</h2>
+<p>現實中契約一定會變。規則是：一旦發現欄位或介面衝突，<strong>先回頭改這份公共契約，再逐一檢查所有實作者與使用者</strong>。順序不能顛倒。如果讓某個模組偷偷改自己的版本，整合失敗就會重演。契約先行的價值，就在於讓「改一處、查全部」這條路徑清楚可行。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./message-state-machine.html">下一步：五狀態訊息狀態機與轉移語義 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼不先各自實作模組、最後再整合？" data-correct="1" data-explain="各模組自己定義訊息與狀態時，單元測試會過，但欄位、狀態與生命週期的衝突只會在整合時爆發。">
+  <button class="opt">因為整合階段沒有自動化測試可用</button>
+  <button class="opt">因為各自定義會讓整合才爆出衝突</button>
+  <button class="opt">因為平行開發會讓專案進度不易追蹤</button>
+  <button class="opt">因為模組太多會超過編譯器的限制</button>
+</div>
+
+<div class="quiz" data-question="「契約先行」在這裡真正的意思比較接近哪一個？" data-correct="2" data-explain="重點不是先寫文件，而是讓所有模組面對同一組事實，因此能平行開發又正確組合。">
+  <button class="opt">先把所有文件寫完再開始寫程式</button>
+  <button class="opt">先實作最重要的模組當作範本</button>
+  <button class="opt">先讓所有模組面對同一組事實</button>
+  <button class="opt">先決定要用哪一套程式語言框架</button>
+</div>
+
+<div class="quiz" data-question="下列哪一組欄位屬於 Message 的「投遞意圖」？" data-correct="3" data-explain="投遞意圖回答「送到哪、送什麼」，包含 sinkType、sinkConfig、payload 與 businessTag。">
+  <button class="opt">messageId、createdAt、deliverAt</button>
+  <button class="opt">timeWheelId、status、retryCount</button>
+  <button class="opt">nextAttemptAt、lastError、deliveredAt</button>
+  <button class="opt">sinkType、sinkConfig、payload</button>
+</div>
+
+<div class="quiz" data-question="一則訊息在 When 裡應該有幾份「訊息物件」？" data-correct="0" data-explain="全程共用同一個 Message，各模組禁止再定義等價但不同的訊息物件。">
+  <button class="opt">一份，所有模組共用同一個物件</button>
+  <button class="opt">兩份，接入用一份、投遞用一份</button>
+  <button class="opt">每個模組各一份，欄位可以自由調整</button>
+  <button class="opt">看情況，由實作者自己決定</button>
+</div>
+
+<div class="quiz" data-question="為什麼同一則訊息可能被投遞兩次，是個必須在契約層解決的問題？" data-correct="2" data-explain="如果允許兩個執行者同時取得投遞權，重複投遞就會發生，因此必須由狀態機與原子轉移從源頭禁止。">
+  <button class="opt">因為下游的服務一定會重複處理訊息</button>
+  <button class="opt">因為網路傳輸本身無法避免重送封包</button>
+  <button class="opt">因為兩個執行者可能同時取得投遞權</button>
+  <button class="opt">因為訊息內容太長需要切成多段送出</button>
+</div>
+
+<div class="quiz" data-question="當公共契約需要修改時，正確的處理順序是什麼？" data-correct="1" data-explain="先改公共契約，再逐一檢查所有實作者與使用者，才能避免各模組版本分歧。">
+  <button class="opt">先讓最急的模組改自己的版本上線</button>
+  <button class="opt">先改公共契約再檢查所有實作與使用</button>
+  <button class="opt">先刪掉所有舊測試再重新定義模型</button>
+  <button class="opt">先凍結契約等下一個版本再處理</button>
+</div>
+
+<div class="footer">
+  <p>geek-ai-agent · 公共契約與接入路由 · Step 1/5</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -4,19 +4,52 @@ title: 公共契約與接入路由
 subject: geek-ai-agent
 tier: 7
 order: 26
-status: draft
+status: content-written
 goal: 能定義 Message 模型與狀態機、四大公共介面，並實作 gRPC 契約、接入層與一致雜湊路由。
 sources:
+  - "[[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#why-unify-first]]"
   - "[[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#message-model]]"
   - "[[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#state-machine]]"
+  - "[[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#storage-contract]]"
   - "[[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#contract-map]]"
+  - "[[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#common-rules]]"
+  - "[[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#completion]]"
+  - "[[sources/geek-ai-agent/20260922/第40节：gRPC Server 与对外接口设计（Loop 原料）.pdf#why-designed-this-way]]"
+  - "[[sources/geek-ai-agent/20260922/第40节：gRPC Server 与对外接口设计（Loop 原料）.pdf#features-and-interactions]]"
   - "[[sources/geek-ai-agent/20260922/第40节：gRPC Server 与对外接口设计（Loop 原料）.pdf#interface-contract-design]]"
+  - "[[sources/geek-ai-agent/20260922/第40节：gRPC Server 与对外接口设计（Loop 原料）.pdf#field-definitions-and-validation]]"
+  - "[[sources/geek-ai-agent/20260922/第45节：接入层 + 路由层（Loop 原料）.pdf#why-designed-this-way]]"
   - "[[sources/geek-ai-agent/20260922/第45节：接入层 + 路由层（Loop 原料）.pdf#features-and-interactions]]"
   - "[[sources/geek-ai-agent/20260922/第45节：接入层 + 路由层（Loop 原料）.pdf#interface-contract-design]]"
-steps: []
-prerequisites: []
+  - "[[sources/geek-ai-agent/20260922/第45节：接入层 + 路由层（Loop 原料）.pdf#field-and-rule-definitions]]"
+  - "[[sources/geek-ai-agent/20260922/第45节：接入层 + 路由层（Loop 原料）.pdf#acceptance-and-tests]]"
+steps:
+  - id: contract-first-and-message-model
+    order: 1
+  - id: message-state-machine
+    order: 2
+    deps:
+      - contract-first-and-message-model
+  - id: four-public-interfaces
+    order: 3
+    deps:
+      - contract-first-and-message-model
+      - message-state-machine
+  - id: grpc-contract
+    order: 4
+    deps:
+      - message-state-machine
+      - four-public-interfaces
+  - id: ingress-router
+    order: 5
+    deps:
+      - four-public-interfaces
+      - grpc-contract
+prerequisites:
+  - learn/geek-ai-agent/nodes/when-technical-solution
+  - learn/geek-ai-agent/nodes/distributed-clustering-fundamentals
 created: 2026-09-22
-updated: 2026-09-22
+updated: 2026-09-25
 ---
 
 # 公共契約與接入路由
@@ -27,17 +60,35 @@ updated: 2026-09-22
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/geek-ai-agent/nodes/when-contracts-ingress/contract-first-and-message-model|契約先行與 Message 公共模型]] — 為什麼先統一契約，以及一則訊息長什麼樣
+2. [[learn/geek-ai-agent/nodes/when-contracts-ingress/message-state-machine|五狀態訊息狀態機與轉移語義]] — 五個狀態、五種合法轉移與原子投遞權（after step 1）
+3. [[learn/geek-ai-agent/nodes/when-contracts-ingress/four-public-interfaces|四大公共介面與契約地圖]] — StoragePlugin／TimeWheel／Sink／Router 的職責與歸屬（after steps 1–2）
+4. [[learn/geek-ai-agent/nodes/when-contracts-ingress/grpc-contract|gRPC 傳輸契約與驗證分層]] — Submit／Query／Cancel 的 proto 與契約層驗證（after steps 2–3）
+5. [[learn/geek-ai-agent/nodes/when-contracts-ingress/ingress-router|接入層七步寫路徑與一致雜湊路由]] — Snowflake、一致雜湊、跨節點轉發與先持久化不變式（after steps 3–4）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+When 是一個分散式的延遲投遞元件，由幾十個模組拼起來。這個節點處理的是整條交付線最上游、最容易被跳過、卻最決定成敗的一步：在任何人開始寫模組之前，先把「大家共用的事實」定義清楚。原因很直白——如果每個模組自己定義訊息物件與狀態，模組各自測試都會過，整合起來卻對不上：接入層叫 taskId、儲存層叫 messageId；一個模組已經把訊息刪了，另一個還在讀它的狀態。這類錯誤不會在單元測試裡出現，只會在整合時爆發，而修復成本遠高於一開始就統一。
+
+統一的內容分成三塊。第一塊是公共模型：一則 Message 從接入、路由、調度、儲存一路到投遞，全程都用同一個物件，欄位分成身份／時間、投遞意圖、執行狀態三組；所有模組都禁用等價但不同的訊息物件。第二塊是狀態機：PENDING、DELIVERING、DELIVERED、FAILED、CANCELLED 五個狀態，只有五種合法轉移，且每次轉移都必須是原子的、一則訊息同時只能有一個執行者持有投遞權。第三塊是四個公共介面——StoragePlugin、TimeWheel、Sink、Router——以及一張契約地圖，寫清楚每個契約由誰定義、誰實作、誰使用。
+
+有了這層契約，後面的模組才能平行開發、正確組合。往下的路徑是先看訊息物件與狀態機（步驟 1–2），再看四個介面與歸屬（步驟 3），接著用 gRPC 契約把 Submit／Query／Cancel 三個操作定死（步驟 4），最後落到接入層與路由層，把 ID 產生、一致雜湊選輪、跨節點轉發與「先持久化再進輪」的寫路徑串起來（步驟 5）。
 
 ## Sources
 
+- [[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#why-unify-first]]
 - [[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#message-model]]
 - [[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#state-machine]]
+- [[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#storage-contract]]
 - [[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#contract-map]]
+- [[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#common-rules]]
+- [[sources/geek-ai-agent/20260922/第39节：定义 When 的公共模型与模块接口.pdf#completion]]
+- [[sources/geek-ai-agent/20260922/第40节：gRPC Server 与对外接口设计（Loop 原料）.pdf#why-designed-this-way]]
+- [[sources/geek-ai-agent/20260922/第40节：gRPC Server 与对外接口设计（Loop 原料）.pdf#features-and-interactions]]
 - [[sources/geek-ai-agent/20260922/第40节：gRPC Server 与对外接口设计（Loop 原料）.pdf#interface-contract-design]]
+- [[sources/geek-ai-agent/20260922/第40节：gRPC Server 与对外接口设计（Loop 原料）.pdf#field-definitions-and-validation]]
+- [[sources/geek-ai-agent/20260922/第45节：接入层 + 路由层（Loop 原料）.pdf#why-designed-this-way]]
 - [[sources/geek-ai-agent/20260922/第45节：接入层 + 路由层（Loop 原料）.pdf#features-and-interactions]]
 - [[sources/geek-ai-agent/20260922/第45节：接入层 + 路由层（Loop 原料）.pdf#interface-contract-design]]
+- [[sources/geek-ai-agent/20260922/第45节：接入层 + 路由层（Loop 原料）.pdf#field-and-rule-definitions]]
+- [[sources/geek-ai-agent/20260922/第45节：接入层 + 路由层（Loop 原料）.pdf#acceptance-and-tests]]
