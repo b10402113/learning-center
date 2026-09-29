@@ -8,67 +8,170 @@
 </head>
 <body>
 
-<h1>verify：把應用跑起來，用證據下判斷</h1>
+<h1>verify：把應用真正跑起來，用證據做判斷</h1>
 <p class="meta">Step 2/4 · /check：合併前的驗證與審查</p>
 
 <h2>學習目標</h2>
-<p>能跑一輪 <code>/check verify</code>：把規格裡的驗收條件變成可觀察的行為、依 build approach 校準「怎樣才算會動」、實際啟動並操作應用、記下證據帳，最後用證據閘逐條給出 conformance 裁決。</p>
+<p>完成一輪 <code>/check verify</code>：把規格中的驗收條件轉成可觀察的行為，依照 build approach 校準「做到什麼才算會動」，實際啟動並操作應用，邊做邊記錄證據，最後用證據閘逐條做出 conformance 裁決。</p>
 
-<h2>前言：測試全綠，功能還是可能不存在</h2>
+<h2>前言：測試全綠，功能仍可能不存在</h2>
 
-<p>這是很多工程師都遇過的場景。你做了一個信箱驗證功能，程式碼寫完、測試檔也補了，指令跑下去一片綠。於是你打開 PR，覺得這件事結束了。直到有人真的去點「寄送驗證信」，信沒寄出來，原來那支新增 <code>verified_at</code> 欄位的 migration 寫了、也 commit 了，卻從來沒有在正式環境跑過。資料表根本沒有那個欄位。</p>
+<p>想像你做了一個信箱驗證功能。程式碼寫好了，測試也補上了，指令一跑，畫面上一片綠色。你於是開了 PR，以為工作已經收尾。</p>
 
-<p>測試綠只證明了一件事：作者想到要測的那些程式碼，跑起來是對的。它證明不了那個欄位真的存在，也證明不了規格裡承諾的另一個頁面有沒有被建出來。<code>/check verify</code> 要補的，就是「測試綠」到「功能真的會動」之間那道縫。它不讀你的程式碼猜答案，它把應用真的開起來，去按一遍。</p>
+<p>直到有人真的點下「寄送驗證信」，信卻沒有寄出去。再查才發現：新增 <code>verified_at</code> 欄位的 migration 雖然寫好、也 commit 了，卻從來沒有在環境中執行。資料表裡根本沒有這個欄位。</p>
 
-<h2>你的角色是驗收工程師</h2>
+<figure class="lesson-figure"><img src="./verify-runtime-proof-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>跑 <code>verify</code> 的時候，請把心態切成驗收工程師：相信你親眼觀察到的行為，不相信綠色勾勾。這不是對測試不信任，而是清楚知道測試的極限，一個通過的測試套件，證明的是「作者以為要測的東西」，不是「功能真的存在」。</p>
+<p>測試全綠，只能證明「作者想到要測的那些程式碼」能通過測試。它不能證明欄位真的存在，也不能證明規格承諾的頁面真的建好了。<code>/check verify</code> 要補上的，正是「測試綠」與「功能真的會動」之間的縫隙。</p>
 
-<p>所以它的做法很直接：先把這次改動拆成幾個「人看著就能判斷」的觀察行為，然後照專案自己的方式把應用跑起來，實際操作那些行為，記錄你看到什麼，最後逐條給出通過或失敗。它是 <code>/test</code> 的執行期對應物：<code>/test</code> 寫下的斷言會往後每次自動跑，<code>verify</code> 則是這次親眼看到。</p>
+<p>它不靠閱讀程式碼來猜答案，而是把應用真正開起來，走過實際操作流程。</p>
 
-<h2>兩種起手式：feature 與 refactor</h2>
+<h2>把自己切換成驗收工程師</h2>
 
-<p>同樣是驗證，但改動的性質不同，判斷「怎樣才算過」的方式就不同。第一種是預設的 <strong>feature 模式</strong>：這次改動新增或改變了行為，你要確認它真的做了那件新的事。第二種是 <strong>refactor / regression 模式</strong>：改動是行為保持不變的（重構、去重、改名），這時候「有動」不是重點，「動作一模一樣」才是重點。</p>
+<p>執行 <code>verify</code> 時，請採用驗收工程師的視角：相信親眼觀察到的行為，不要只相信綠色勾勾。這不是否定測試，而是承認測試有邊界。通過的測試套件，證明的是「作者以為需要測的東西」，不等於「規格承諾的功能真的存在」。</p>
 
-<p>refactor 模式的做法值得一提，因為它把「不變」變成可以被證明的東西。它會在同一個應用的「改動前」與「改動後」各跑一次，把兩次的輸出抓下來對照。改動前的狀態，優先用一個用完就丟的 git worktree 還原到改動之前的 commit：在工作區裡起一份乾淨的舊版、啟動應用、把每個受影響的介面打一遍、存下原始輸出，再拆掉那個 worktree。只有在 worktree 不可用時，才退回 <code>git stash --include-untracked</code>，而且一定要加 <code>--include-untracked</code>，因為普通的 <code>git stash</code> 會把新增的檔案留在原地，反而污染了那份「改動前」。</p>
+<p>因此，<code>verify</code> 的做法很直接：</p>
 
-<p>兩份輸出逐面比對，行為保持不變的改動應該位元組完全相同。只要出現差異，就當成回歸，把精確的差異抓出來丟給 <code>/debug</code>。這種驗證特別適合沒有測試框架的專案，因為它等於臨時搭起了一張安全網。因為它要同時握著前後兩份輸出，所以通常在一個獨立的子代理裡跑，免得把主對話的上下文塞爆。</p>
+<ol>
+<li>把這次改動拆成幾個人看得懂、也能直接判斷的觀察行為。</li>
+<li>依照專案自己的方式啟動應用。</li>
+<li>實際操作這些行為，記錄看到的結果。</li>
+<li>逐條判斷通過、缺少實作、尚未套用，或因環境受阻。</li>
+</ol>
 
-<h2>載入規格合約：AC-N 與要確認的介面</h2>
+<p>它可以看成 <code>/test</code> 的執行期對應物：<code>/test</code> 寫下的斷言，之後每次都能自動重跑；<code>verify</code> 則是這一次親自走過流程、確認現實。</p>
 
-<p>要驗收，就得先知道「什麼叫做對」。如果這次改動背後有一份治理它的規格（放在 <code>docs/specs/NNNN-&lt;feature&gt;/</code>），那它就是合約。規格裡的 <code>## Requirements</code> 段會列出有編號的驗收條件 <code>AC-1</code>、<code>AC-2</code> 等等，也會寫明它承諾要做哪些介面，例如某個頁面、某條路由、某張資料表、某支 migration。</p>
+<h2>先分清楚：feature 還是 refactor</h2>
 
-<p>載入的方式有優先順序。最好的是規格旁邊那份每個功能專屬的 <code>verify.md</code>，那是 <code>/develop</code> 產出的，裡面的每一步都已經標好它對應到哪個 <code>AC-N</code>，等於一份現成的檢查清單。如果沒有，就退回規格的 <code>## Requirements</code>，自己把每個 <code>AC-N</code> 變成一個可觀察的檢查。如果這次改動根本沒有規格（例如純粹的小修改、沒有留下決策紀錄），那就跳過這一步，只對照你觀察到的行為來判斷。</p>
+<p>驗證方式會隨改動性質改變。預設是 <strong>feature 模式</strong>：這次改動新增或改變了行為，所以要確認它真的完成了那件新工作。</p>
 
-<p>把這份合約帶進後面所有步驟之後，你會得到兩份清單：一份要確認是否滿足的 <code>AC-N</code>，一份要確認是否存在的介面清單。後面那步有個關鍵提醒：檢查範圍不要只縮到「有改動的檔案」。一個 <code>AC</code> 或一個介面完全沒有實作，正是這道閘最該抓到的漏，所以它會留在清單上，讓後面的裁決去點名。</p>
+<p>另一種是 <strong>refactor / regression 模式</strong>：改動只是重構、去重或改名，預期行為應該保持不變。這時重點不是「程式有沒有動」，而是「動作是否完全一樣」。</p>
 
-<h2>校準「算不算會動」：看 build approach</h2>
+<p>refactor 模式會把「不變」轉成可證明的結果。它在同一個應用上分別執行改動前與改動後的版本，擷取兩次輸出並進行比對。</p>
 
-<p>知道要做什麼之後，還要知道「做到什麼程度才算過」。這件事由這個切片的 build approach 決定。同一個功能，用 Tracer Bullet 做的和用 Facade 做的，該有的完成度完全不同。用錯的尺去量，會製造出假失敗或假通過。</p>
+<p>改動前的狀態，優先使用一次性的 git worktree 還原到改動前的 commit：在工作區建立一份乾淨舊版、啟動應用、逐一操作受影響的介面、保存原始輸出，接著拆掉 worktree。只有 worktree 無法使用時，才退回 <code>git stash --include-untracked</code>。</p>
 
-<p>build approach 的優先順序是：先看這個功能在 scope 裡有沒有自己的覆寫，有就用它；沒有就用專案預設（寫在根目錄的 <code>AGENTS.md</code>，不然就是 scope 的檔頭）；兩個都沒有，才用推理出的預設值，而且要把這個假設講出來。幾個常見的標準可以幫你對齊：一條穿過每一層的薄薄端到端路徑，要求整條路真的把請求送到真的結果；一個最小可用的核心迴圈，只要求那個迴圈真的會動、周邊配件還不用；一個先接上佔位的 UI 外殼，要求外殼與佔位流程能渲染能導覽，資料源是假的在這個階段是計畫、不是缺陷。</p>
+<p>這裡一定要加上 <code>--include-untracked</code>，因為普通的 <code>git stash</code> 會把新增檔案留在原地，反而污染本來要代表「改動前」的環境。</p>
 
-<p>一句話記住這條線：規格說「什麼必須為真」，build approach 說「後面這些層現在有多少是真的」。前者要驗得硬，後者不要拿還允許假裝的部分去判它失敗。</p>
+<p>兩份輸出要逐個介面比對。行為保持不變的改動，輸出應該位元組完全相同；只要出現差異，就先視為回歸，抓出精確差異後交給 <code>/debug</code>。</p>
 
-<h2>把改動變成可觀察的行為，並決定怎麼啟動</h2>
+<p>這種做法特別適合沒有測試框架的專案，因為它臨時搭出了一張安全網。由於必須同時保存前後兩份輸出，通常會在獨立的子代理裡執行，避免把主對話的 context 塞滿。</p>
 
-<p>下一步是把抽象的「改動」翻譯成具體的觀察點。先找出 base 分支（<code>main</code> 不存在就用 <code>master</code>），把有改動的檔案列出來（包含還沒 commit 的）。如果有規格合約，那份 <code>AC-N</code> 與介面清單就是你的範圍；如果沒有，就從改動檔案裡寫出二到五個「人看著就能判斷」的具體行為，例如「<code>/pricing</code> 頁面渲染出三個方案，而且點 CTA 會開啟結帳流程」。</p>
+<h2>載入規格合約：AC-N 與承諾的介面</h2>
 
-<p>接著決定怎麼把應用跑起來。在 monorepo 裡，要跑受影響的那個應用，不是 repo 根目錄，因為根目錄通常沒有完整的啟動方式。啟動指令的尋找順序是：專案自己的 run/start skill、<code>AGENTS.md</code>、<code>package.json</code> 裡的 <code>dev</code> 或 <code>start</code>、<code>Makefile</code>、<code>Procfile</code>、<code>docker-compose</code>。優先採用專案本來就在用的方式。</p>
+<p>要驗收，先要知道「什麼叫做正確」。如果這次改動背後有一份規格，位置通常是 <code>docs/specs/NNNN-&lt;feature&gt;/</code>，那份規格就是驗收合約。</p>
 
-<p>如果專案沒有明講，就依型別套內建模式。網頁應用起 dev server 然後驅動路由，優先用連上的瀏覽器自動化工具，其次用 agent 自帶的瀏覽器工具，都不行就改用 HTTP 請求抓 HTML 並做一次啟動檢查。後端 API 起 server 後打端點；CLI 帶代表性的參數跑指令；函式庫用一個臨時腳本或 REPL 操作它的公開 API；背景工作就觸發它、看著它跑到結束。如果真的判斷不出怎麼啟動，就問工程師啟動指令，不要瞎猜。</p>
+<p>規格的 <code>## Requirements</code> 段落會列出編號化的驗收條件，例如 <code>AC-1</code>、<code>AC-2</code>，也會寫明承諾要提供哪些介面：某個頁面、某條路由、某張資料表，或某支 migration。</p>
 
-<h2>跑、操作、邊跑邊記證據帳</h2>
+<p>載入順序如下：</p>
 
-<p>啟動時優先用背景程序，這樣你才能一邊跑一邊互動。如果環境允許，盡量用連接上的工具讓檢查更真實：瀏覽器自動化工具可以真的導覽、點擊、輸入、送出、截圖；資料庫工具可以直接查線上的 schema，確認那支 migration 真的套用了，而不是用猜的。</p>
+<ol>
+<li>優先讀規格旁邊、功能專用的 <code>verify.md</code>。這通常是 <code>/develop</code> 產出的檢查清單，每一步都標示對應的 <code>AC-N</code>。</li>
+<li>如果沒有 <code>verify.md</code>，就退回規格的 <code>## Requirements</code>，自行把每個 <code>AC-N</code> 轉成可觀察的檢查。</li>
+<li>如果這次改動根本沒有規格，例如單純的小修改、沒有留下決策紀錄，就跳過規格載入，直接依觀察到的行為判斷。</li>
+</ol>
 
-<p>逐個觀察行為操作時，重點是「抓到能證明的東西」。介面要走到那個路由、實際點擊輸入送出、把結果和錯誤狀態截圖下來，看的是渲染出來的畫面，不是只看回傳 200。API 要送出請求、抓下狀態碼和回應內容、確認形狀與關鍵欄位。CLI 或背景工作要實際跑起來，抓下它的輸出與產物。就算畫面上看起來一切正常，也要去翻 server 或主控台的日誌，看看有沒有錯誤或警告被吞掉。</p>
+<p>這樣會得到兩份清單：</p>
 
-<p>然後是這個模式的核心習慣：<strong>邊做邊記一份證據帳</strong>。每操作完一個行為，就在當下把證明你操作過它的東西寫下來。介面的帳是載入的 URL、截圖路徑、你看到什麼；API 的帳是請求行、HTTP 狀態、回應的關鍵欄位；CLI 或工作的帳是指令、結束碼、輸出的節錄；資料層的帳是你對線上 schema 下的查詢與它的結果。這份帳不只是筆記，它等一下會被引用，因為<strong>沒有記到證據的行為，不管你多確定，都不算驗過</strong>。</p>
+<ul>
+<li>需要確認是否滿足的 <code>AC-N</code>。</li>
+<li>需要確認是否真的存在的介面。</li>
+</ul>
+
+<p>檢查範圍不能縮成「只有有改動的檔案」。一個 <code>AC</code> 或介面完全沒有實作，正是這道閘應該抓到的漏。即使某個項目沒有對應的變更檔案，也要留在清單裡，讓最後的裁決明確指出它缺少什麼。</p>
+
+<h2>依 build approach 校準「算不算會動」</h2>
+
+<p>知道要確認什麼後，還要知道做到什麼程度才算通過。這由目前切片採用的 build approach 決定。</p>
+
+<p>同一個功能，如果採用 Tracer Bullet，期待的是一條穿過各層的薄型端到端路徑；如果採用 Facade，可能只要求最小可用的核心迴圈。拿錯標準去量，就會把應該通過的項目判成失敗，或把還沒完成的項目誤判為通過。</p>
+
+<p>build approach 的優先順序是：</p>
+
+<ol>
+<li>先看這個功能在 scope 中是否有自己的覆寫設定。</li>
+<li>如果沒有，就使用專案預設：根目錄的 <code>AGENTS.md</code>，或 scope 檔頭中的設定。</li>
+<li>兩者都沒有時，才使用推理出的預設值，而且要明確說出這個假設。</li>
+</ol>
+
+<p>幾個常見標準可以幫助校準：</p>
+
+<ul>
+<li><strong>Tracer Bullet：</strong>要求一條穿過各層的薄型端到端路徑，整條路都必須真的把請求送到真正的結果。</li>
+<li><strong>核心迴圈：</strong>只要求最小可用的核心流程真的能跑，周邊配件可以稍後補上。</li>
+<li><strong>Facade：</strong>先接上一個佔位的 UI 外殼，要求外殼與佔位流程能渲染、能導覽；這個階段資料源仍是假的，屬於既定計畫，不是缺陷。</li>
+</ul>
+
+<p>可以用一句話記住分工：規格說「哪些事情必須為真」；build approach 說「目前後面的層要有多少是真的」。規格承諾要驗得嚴格，但不能拿仍被 build approach 允許暫時佔位的部分判定失敗。</p>
+
+<figure class="lesson-figure"><img src="./verify-runtime-proof-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把改動翻成可觀察行為，並決定如何啟動</h2>
+
+<p>接著要把抽象的「這次改動」翻成具體的觀察點。先找出 base 分支：有 <code>main</code> 就使用 <code>main</code>，不存在時使用 <code>master</code>。然後列出所有改動檔案，包括尚未 commit 的檔案。</p>
+
+<p>如果有規格合約，就以 <code>AC-N</code> 與介面清單作為範圍。如果沒有，就從改動內容寫出二到五個人看著就能判斷的具體行為，例如：「<code>/pricing</code> 頁面渲染出三個方案，而且點擊 CTA 會開啟結帳流程。」</p>
+
+<p>接著決定如何啟動應用。在 monorepo 裡，應該啟動受影響的那個應用，而不是直接在 repo 根目錄執行。根目錄通常沒有完整的啟動方式。</p>
+
+<p>啟動指令依下列順序尋找：</p>
+
+<ol>
+<li>專案自己的 run/start skill。</li>
+<li><code>AGENTS.md</code>。</li>
+<li><code>package.json</code> 裡的 <code>dev</code> 或 <code>start</code>。</li>
+<li><code>Makefile</code>。</li>
+<li><code>Procfile</code>。</li>
+<li><code>docker-compose</code>。</li>
+</ol>
+
+<p>優先採用專案原本就在使用的方式。如果專案沒有明確說明，就依照類型套用內建模式：</p>
+
+<ul>
+<li>網頁應用：啟動 dev server，再驅動路由。優先使用連線的瀏覽器自動化工具，其次使用 agent 自帶的瀏覽器工具；都無法使用時，才用 HTTP 請求抓 HTML，並做一次啟動檢查。</li>
+<li>後端 API：啟動 server，對端點送出請求。</li>
+<li>CLI：帶入代表性參數，實際執行指令。</li>
+<li>函式庫：用臨時腳本或 REPL 操作公開 API。</li>
+<li>背景工作：觸發工作，觀察它跑到結束。</li>
+</ul>
+
+<p>如果真的無法判斷如何啟動，就向工程師詢問啟動指令，不要自行猜測。</p>
+
+<h2>實際操作，並同步建立證據帳</h2>
+
+<p>啟動時優先使用背景程序，這樣可以一邊讓應用運作，一邊進行互動。如果環境允許，盡量使用連線工具，讓檢查更接近真實情境。</p>
+
+<p>瀏覽器自動化工具可以真的導覽、點擊、輸入、送出與截圖；資料庫工具則可以直接查線上 schema，確認 migration 真的套用了，而不是只看程式碼猜測。</p>
+
+<p>操作每個觀察行為時，重點是留下能證明結果的資料：</p>
+
+<ul>
+<li><strong>介面：</strong>走到指定路由，實際點擊、輸入與送出，保存截圖與錯誤狀態；看渲染出的畫面，不要只看回傳 200。</li>
+<li><strong>API：</strong>送出請求，記下狀態碼、回應內容、資料形狀與關鍵欄位。</li>
+<li><strong>CLI 或背景工作：</strong>實際執行，保存指令、結束碼、輸出與產物。</li>
+<li><strong>資料層：</strong>記下對線上 schema 執行的查詢，以及查詢結果。</li>
+</ul>
+
+<p>即使畫面看起來正常，也要查看 server 或主控台日誌，確認沒有錯誤或警告被吞掉。</p>
+
+<p>這個流程最重要的習慣是：<strong>邊做邊記一份證據帳</strong>。每完成一個行為，就立刻保存能證明你確實操作過、也確實看到結果的資料。</p>
+
+<p>證據帳可以包含：</p>
+
+<ul>
+<li>介面：載入的 URL、截圖路徑、實際看到的內容。</li>
+<li>API：請求內容、HTTP 狀態、回應中的關鍵欄位。</li>
+<li>CLI 或背景工作：指令、結束碼、輸出節錄。</li>
+<li>資料層：查詢內容與查詢結果。</li>
+</ul>
+
+<p>這不是普通筆記，而是最後裁決會引用的依據。<strong>沒有記錄證據的行為，不論你多確定，都不能算已驗證。</strong></p>
+
+<figure class="lesson-figure"><img src="./verify-runtime-proof-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>逐條裁決：四種結果</h2>
 
-<p>操作完之後，把觀察到的東西滾成一份逐條的判斷。如果有載入規格合約，就對每一個 <code>AC-N</code> 與每一個承諾的介面，給出下列四種結果之一。</p>
+<p>操作完成後，把觀察結果整理成逐條判斷。如果載入了規格合約，就要對每一個 <code>AC-N</code> 與每一個承諾介面，給出以下四種結果之一。</p>
 
 <table>
 <thead>
@@ -76,41 +179,71 @@
 </thead>
 <tbody>
 <tr><td>met ✅</td><td>檢查通過，或介面存在且行為符合規格</td><td>不用處理</td></tr>
-<tr><td>specced but missing 🚫</td><td>規格有寫，但完全沒有實作，根本沒東西可跑</td><td>去 /develop 把它建出來</td></tr>
-<tr><td>specced but not applied ⚠️</td><td>程式碼在，但執行期檢查失敗（典型是 migration 沒跑）</td><td>去套用它</td></tr>
-<tr><td>blocked ⚠️</td><td>缺資料、缺憑證或缺環境，根本跑不了</td><td>說出需要什麼</td></tr>
+<tr><td>specced but missing 🚫</td><td>規格有寫，但完全沒有實作，根本沒有東西可跑</td><td>交給 /develop 建立</td></tr>
+<tr><td>specced but not applied ⚠️</td><td>程式碼存在，但執行期檢查失敗；典型例子是 migration 尚未套用</td><td>套用它</td></tr>
+<tr><td>blocked ⚠️</td><td>缺資料、憑證或環境，導致流程無法執行</td><td>說明需要補什麼</td></tr>
 </tbody>
 </table>
 
-<p>這裡有兩個詞很容易被混為一談，但它們要分開報，因為修法完全不同。<strong>missing</strong> 是「從沒建」，屬於範圍漏掉，要去 <code>/develop</code> 補；<strong>not applied</strong> 是「建了但沒有生效」，屬於接線漏掉，例如程式碼寫了但 migration 還沒套用。兩個都會擋住「完成」，但要分開講，修的人才知道該補的是實作還是設定。</p>
+<p>其中兩個結果很容易混在一起，但一定要分開報告，因為修法完全不同。</p>
 
-<p>整條 conformance 要算 <strong>PASS</strong>，條件很硬：每一個 <code>AC-N</code> 都 met，而且每一個承諾的介面都存在。只要有一個 missing 或 not applied，整體就是 FAIL，即使你的測試一片綠燈也一樣。</p>
+<p><strong>missing</strong> 是「從來沒有建出來」，屬於範圍或實作遺漏，要交給 <code>/develop</code> 補上。<strong>not applied</strong> 是「已經建好，但沒有生效」，例如程式碼寫好了，migration 卻還沒套用。</p>
 
-<h2>證據閘：一個你不能捏造的判斷</h2>
+<p>兩者都會阻止功能被視為完成，但分開描述後，負責修正的人才能知道要補的是實作，還是設定與套用流程。</p>
 
-<p>這個 skill 存在的目的，就是用「真的跑過」來證明改動會動。所以它設了一道證據閘，四條規則要照字面遵守。</p>
+<figure class="lesson-figure"><img src="./verify-runtime-proof-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>第一，<strong>沒有證據，就沒有 ✅</strong>。一個行為要能標成 met，前提是你能引用證據帳裡對應的那一筆，指令與輸出、URL 與渲染結果、截圖路徑、查詢與結果。引用不出來，它就只能是 blocked，不能是 met。</p>
+<p>整體 conformance 要判定為 <strong>PASS</strong>，條件很硬：每一個 <code>AC-N</code> 都必須是 met，每一個承諾的介面也都必須存在。只要有一個 missing 或 not applied，整體就是 FAIL，即使測試全數通過也一樣。</p>
 
-<p>第二，<strong>沒有真的啟動，就永遠不能 PASS</strong>。如果這一輪你根本沒有把應用跑起來（沒起 dev server、沒送出請求、沒跑過任何指令），那你不能對任何一個行為發出 PASS 或 ✅，要老實地把每個行為都報成 blocked，說清楚什麼都沒跑以及原因，然後停手。</p>
+<h2>證據閘：不能捏造的判斷</h2>
 
-<p>第三，<strong>用不了的工具是 block，不是 pass</strong>。沒有瀏覽器工具、沒有資料庫工具、缺憑證、build 起不來，這些都會讓需要它的行為變成 blocked。退一步說「我看程式碼覺得應該沒錯」，正是這個 skill 被設計出來要防的那種失敗。第四，<strong>說出你沒檢查什麼</strong>。如果有些行為跑了、有些沒跑，報告一定要把沒跑的那些列在 blocked 底下。一份只跑了一半卻報成全程通過的報告，比完全不跑還糟。</p>
+<p><code>verify</code> 的目的，是用「真的跑過」證明改動能運作。因此它有四條證據閘，必須照字面遵守。</p>
+
+<p>第一，<strong>沒有證據，就沒有 ✅</strong>。要把行為標成 met，必須能引用證據帳裡對應的紀錄，例如指令與輸出、URL 與渲染結果、截圖路徑，或查詢與結果。引用不出來，就只能標成 blocked，不能標成 met。</p>
+
+<p>第二，<strong>沒有真的啟動，就永遠不能 PASS</strong>。如果這一輪根本沒有啟動應用、沒有送出請求，也沒有實際執行任何指令，就不能對任何行為發出 PASS 或 ✅。此時每個行為都要報成 blocked，說清楚什麼沒有執行、原因是什麼，然後停止。</p>
+
+<p>第三，<strong>工具用不了就是 block，不是 pass</strong>。沒有瀏覽器工具、沒有資料庫工具、缺少憑證，或 build 根本起不來，都會讓需要這些工具的行為變成 blocked。</p>
+
+<p>「我看過程式碼，覺得應該沒問題」正是這個 skill 要防止的錯誤。程式碼看起來合理，不等於執行環境真的完成接線。</p>
+
+<p>第四，<strong>要說出沒有檢查什麼</strong>。如果有些行為執行了，有些沒有，報告必須把未執行的項目列在 blocked 底下。一份只跑了一半卻宣稱全數通過的報告，比完全不跑更危險。</p>
+
+<figure class="lesson-figure"><img src="./verify-runtime-proof-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>報告與收尾</h2>
 
-<p>報告的寫法是「先給結論，再列欠帳」。開頭一句就是裁決（PASS / FAIL / BLOCKED），接著只列失敗或欠處理的項目，通過的那些不用逐條列出來，因為真正的紀錄在證據帳裡。如果這次功能有對應的 scope 列，而且結果是 PASS，就把它的 <code>Verify it</code> 勾起來；同時把這次真的跑過、也通過的 <code>verify.md</code> 步驟逐格打勾，失敗或沒跑到的就留著不勾。</p>
+<p>報告採用「先給結論，再列欠帳」的方式。開頭先寫裁決：PASS、FAIL 或 BLOCKED。接著只列出失敗或尚未處理的項目，通過項目不必逐條重複，因為完整紀錄已經在證據帳裡。</p>
 
-<p>PASS 的時候，它會「建議」你把功能標成 done，而不是幫你卡住。如果 <code>Verify it</code> 是這個功能的最後一格（Alpha 等級），它會說一句「驗過且通過，可以標 done 了，或你想繼續也行」，由你決定。如果後面還有 <code>Test it</code> 之類的格子（Beta 或 GA），它會建議下一步跑 <code>/test</code>，但你同樣可以選擇標 done 跳過。FAIL 或 BLOCKED 的時候，它什麼都不勾，只把缺口講清楚。</p>
+<p>如果功能有對應的 scope 列，而且結果是 PASS，就勾起 <code>Verify it</code>。同時，把這次確實執行且通過的 <code>verify.md</code> 步驟逐格勾選；失敗或沒執行到的步驟則保持未勾選。</p>
 
-<p>收尾還有一個不能省的動作：明確說出你在每個檔案裡勾了什麼。例如「scope：勾了 <code>Verify it</code>；spec：狀態改成 Accepted」。如果找不到對應的 scope 列，就要明說「找不到符合的功能列」，不能默默結束。最後，把自己啟動的程序清乾淨。整個 <code>verify</code> 只確認現實，從不修也不斷言：失敗交給 <code>/debug</code>、沒建的介面交給 <code>/develop</code>、想讓通過的行為永久留下交給 <code>/test</code>。而捏造一個 PASS，是它絕對不能產出的東西，因為後面每一個階段都信任它。</p>
+<p>PASS 時，<code>verify</code> 只會建議你把功能標成 done，不會替你強制決定。如果 <code>Verify it</code> 是 Alpha 等級功能的最後一格，它會提示：「已驗證且通過，可以標成 done，也可以繼續。」最後由你決定。</p>
+
+<p>如果後面還有 <code>Test it</code> 等格子，例如 Beta 或 GA 等級，<code>verify</code> 會建議下一步執行 <code>/test</code>；你也可以選擇直接標成 done 並跳過。FAIL 或 BLOCKED 時，則什麼都不勾，只把缺口說清楚。</p>
+
+<p>收尾還有一個不能省略的動作：明確列出你在每個檔案中勾選或修改了什麼。例如：「scope：勾選 <code>Verify it</code>；spec：狀態改成 Accepted。」</p>
+
+<p>如果找不到對應的 scope 列，要明確寫出「找不到符合的功能列」，不能默默結束。最後，清理這次啟動的程序。</p>
+
+<p>整個 <code>verify</code> 只負責確認現實，不負責修正，也不負責把斷言永久留下：</p>
+
+<ul>
+<li>失敗交給 <code>/debug</code>。</li>
+<li>缺少的介面交給 <code>/develop</code>。</li>
+<li>想把這次通過的行為固定成日後可重跑的檢查，交給 <code>/test</code>。</li>
+</ul>
+
+<p>而捏造一個 PASS，是 <code>verify</code> 絕對不能產出的結果，因為後續每個階段都會信任這份判斷。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-<code>verify</code> 的立場是驗收工程師：相信觀察，不相信綠色勾勾。它先載入規格合約（<code>AC-N</code> 與承諾的介面），依 build approach 校準「怎樣才算會動」，把改動翻成可觀察的行為，然後真的啟動應用、操作、邊做邊記一份證據帳。逐條裁決分四種：met ✅、specced but missing 🚫、specced but not applied ⚠️、blocked ⚠️。它有四條證據閘：沒證據就沒 ✅、沒啟動就永遠不能 PASS、用不了的工具有如 block、要說出沒檢查什麼。整條要 PASS，必須每個驗收條件都 met、每個承諾介面都存在。
+<code>verify</code> 採用驗收工程師的立場：相信觀察，不相信綠色勾勾。它先載入規格合約，包括 <code>AC-N</code> 與承諾的介面，再依 build approach 校準「怎樣才算會動」，把改動轉成可觀察的行為，實際啟動應用並操作，同時建立證據帳。逐條裁決共有四種：met ✅、specced but missing 🚫、specced but not applied ⚠️、blocked ⚠️。證據閘也有四條：沒有證據就沒有 ✅、沒有啟動就不能 PASS、工具無法使用就只能 block，還要明確列出沒有檢查的項目。整體要 PASS，必須每個驗收條件都 met，且每個承諾的介面都存在。
 </blockquote>
 
-<p><code>verify</code> 回答的是「這東西真的會動嗎」。但就算它會動，程式碼本身可能還有問題，錯誤處理沒做、有安全漏洞、寫法難維護。那種問題 <code>verify</code> 看不見，得換一雙眼睛。下一節要看的 <code>review</code>，就是請一個沒寫過這段碼的模型，來當那雙眼睛。</p>
+<p><code>verify</code> 回答的是：「這個東西真的會動嗎？」但即使功能能運作，程式碼仍可能有錯誤處理缺口、安全漏洞或難以維護的寫法。這些問題不是 <code>verify</code> 的視角能看見的，必須換一雙眼睛。</p>
+
+<p>下一節的 <code>review</code>，會請一個沒有寫過這段程式碼的模型來檢查它，找出原作者容易忽略的問題。</p>
 
 <div class="lesson-nav">
   <div><a href="./routing-gate.html">← 上一步：/check 入口：兩個模式，而且它不猜</a></div>
@@ -125,35 +258,30 @@
   <button class="opt">因為測試沒辦法自動重複執行</button>
   <button class="opt">因為測試會偷偷改動原始碼</button>
 </div>
-
 <div class="quiz" data-question="refactor 模式對「過關」的定義是什麼？" data-correct="1" data-explain="行為保持不變的改動，要求改動前後的輸出一模一樣。">
   <button class="opt">新的行為有正確地出現</button>
   <button class="opt">改動前後的輸出一模一樣</button>
   <button class="opt">測試覆蓋率達到指定門檻</button>
   <button class="opt">審查模型說沒有發現問題</button>
 </div>
-
 <div class="quiz" data-question="refactor 模式為什麼優先用 git worktree 抓改動前狀態？" data-correct="1" data-explain="worktree 能還原一份乾淨的改動前版本來跑 before，避免污染那份基準。">
   <button class="opt">避免不小心動到主分支</button>
   <button class="opt">還原乾淨的改動前版本跑 before</button>
   <button class="opt">讓應用啟動的速度變快</button>
   <button class="opt">讓 commit 的訊息更清楚</button>
 </div>
-
 <div class="quiz" data-question="規格合約裡的 AC-1、AC-2 代表什麼？" data-correct="0" data-explain="它們是 ## Requirements 裡有編號的驗收條件，也就是要逐條確認的東西。">
   <button class="opt">有編號的驗收條件</button>
   <button class="opt">程式碼審查的嚴重度</button>
   <button class="opt">審查子代理的型號代號</button>
   <button class="opt">專案分支的命名規則</button>
 </div>
-
 <div class="quiz" data-question="「specced but not applied」最典型的例子是什麼？" data-correct="1" data-explain="程式碼在、但執行期沒生效，例如 migration 寫了卻沒套用。">
   <button class="opt">規格要求的頁面完全沒實作</button>
   <button class="opt">migration 寫了但是沒有跑</button>
   <button class="opt">測試檔的斷言寫得太少</button>
   <button class="opt">審查時發現了一個邏輯錯誤</button>
 </div>
-
 <div class="quiz" data-question="證據閘規定這輪完全沒啟動應用時，該怎麼報？" data-correct="0" data-explain="沒真的啟動就永遠不能 PASS，每個行為都要老實報成 blocked。">
   <button class="opt">每個行為一律報成 blocked</button>
   <button class="opt">依程式碼推論給出 PASS</button>
@@ -169,6 +297,3 @@
 <script src="../assets/quiz.js"></script>
 </body>
 </html>
-
-
-

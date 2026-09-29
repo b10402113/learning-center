@@ -12,78 +12,127 @@
 <p class="meta">Step 4/4 · 設計理念與 Skill 解剖</p>
 
 <h2>學習目標</h2>
-<p>能列出 check-portability 的 11 條規則與 byte budget，並解釋 prompt 的 lint 如何用 warn-before-fail 頻帶與 prose masking 讓風格和 token 預算不再靠人記得。</p>
+<p>本課會拆解 <code>check-portability</code> 的 11 條規則與 byte budget，並說明 prompt lint 如何透過 <code>warn-before-fail</code> 警告頻帶與 prose masking，讓風格和 token 預算不必再靠人記憶。</p>
 
-<h2>前言：寫在文件裡的規則，會慢慢失效</h2>
+<h2>前言：文件裡的規則，會自己慢慢走樣</h2>
 
-<p>前三課建立了一套設計標準：四條慣例、成本模型、skill 結構與六條撰寫規則。但這些標準都寫在文件裡。只要是人寫的規則，就會漂移。有人新增一個 skill 時忘了加 <code>allowed-tools</code>，有人把「read only」寫成「read-only」，有人為了塞功能悄悄把檔案養到兩倍大，還有人在描述裡用了一個破折號，忘了整套 skill 正在教使用者不要用破折號。</p>
+<p>前三課已經建立一套設計標準：四條慣例、成本模型、 skill 結構，以及六條撰寫規則。問題是，標準如果只存在文件裡，就像貼在牆上的使用須知，剛開始人人都看，過一陣子就容易被忽略。</p>
 
-<p>這些問題單獨看都很小，累積起來卻會讓整套工作流失去一致性，甚至讓 token 預算失去意義。jsm-skills 的解法很直接：把規則變成程式碼。一支零依賴的檢查腳本掃過所有 skill 檔案，違規就讓 CI 紅燈，這比再寫一份「請大家遵守」的文件有用得多。這一課要拆開這支守門員，看它檢查哪 11 件事，以及兩個值得偷學的設計手法。</p>
+<p>有人新增 skill 時忘了加 <code>allowed-tools</code>，有人把「read only」寫成「read-only」，有人為了塞進新功能，悄悄把檔案養到原本的兩倍大。也有人在描述裡放進破折號，卻忘了整套 skill 正在教使用者不要用破折號。</p>
 
-<h2>為什麼「檢查腳本就是測試套件」</h2>
+<p>這些錯誤單獨看都不嚴重，但累積之後，會讓整套工作流失去一致性，甚至讓 token 預算變成沒有意義的數字。jsm-skills 的解法很直接：把規則寫成程式碼。</p>
 
-<p>在一般軟體專案，<code>npm test</code> 跑的是單元測試。在這個專案裡，<code>package.json</code> 把 <code>test</code> 直接指向 <code>check</code>，也就是 <code>node scripts/check-portability.mjs</code>。換句話說，這支慣例檢查腳本<strong>就是</strong>整個專案的測試套件。</p>
+<p>一支零依賴的檢查腳本會掃過所有 skill 檔案。只要違規，CI 就會亮紅燈。這比再寫一份「請大家遵守」的文件可靠得多。本課會拆開這支守門員，看看它檢查哪 11 件事，以及其中兩個值得帶回自己專案的設計手法。</p>
 
-<p>這個安排透露了一個判斷：這裡的「產品」是一堆 prompt 檔案，最常壞掉的地方是風格與預算慢慢走鐘。既然如此，防線就該設在「檔案有沒有遵守約定」上面。腳本本身沒有安裝任何套件，只用 Node 標準函式庫，所以 CI 裡連 <code>npm install</code> 都不用跑，直接執行就行。</p>
+<figure class="lesson-figure"><img src="./enforcement-and-lint-rules-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>11 條規則，分三組看</h2>
+<h2>為什麼檢查腳本就是測試套件</h2>
 
-<p>規則乍看很雜，但大致落在三個主題：跨工具可攜性、預算，以及風格一致性。以下逐條說明。</p>
+<p>一般軟體專案裡，<code>npm test</code> 通常會執行單元測試。但在這個專案裡，<code>package.json</code> 把 <code>test</code> 直接指向 <code>check</code>，也就是 <code>node scripts/check-portability.mjs</code>。</p>
+
+<p>換句話說，這支慣例檢查腳本<strong>就是</strong>整個專案的測試套件。</p>
+
+<p>這個安排反映出一個重要判斷：這裡的產品是一組 prompt 檔案，而最容易出問題的地方，正是風格與預算逐漸走樣。因此，防線應該放在「檔案是否遵守約定」上，而不是只測試某段傳統程式碼能不能執行。</p>
+
+<p>腳本只使用 Node 標準函式庫，沒有額外套件。CI 甚至不必先執行 <code>npm install</code>，直接跑檢查即可。</p>
+
+<h2>11 條規則，分成三組看</h2>
+
+<p>11 條規則乍看分散，其實可以整理成三個主題：跨工具可攜性、預算，以及風格一致性。</p>
 
 <h3>跨工具可攜性</h3>
 
 <ul>
-<li><strong>規則 1：每個 <code>SKILL.md</code> 的 frontmatter 都要有 <code>allowed-tools</code>。</strong>宣告這個 skill 允許動用哪些工具，讓不同客戶端知道該開哪些權限。</li>
-<li><strong>規則 2：不能把模型別名寫死成 spawn 指令。</strong>不能在檔案裡寫 <code>model: "haiku"</code> 這種指定。原因很實際：subagent 如果沒有被明確指定模型，通常會繼承主 session 用的模型，而那往往是比較貴的等級。正確做法是用角色詞描述，例如「用一個快而低成本的模型」，把各家工具的別名只當成不引號的範例。</li>
-<li><strong>規則 3：不要在敘述裡指名 subagent 工具。</strong>不要寫「用 Agent 工具」「spawn 一個 Agent」，要改用能力描述，例如「派一個 subagent 去讀」。這樣換一個工具或工具改名，skill 都不用跟著改。</li>
-<li><strong>規則 4：不能有會讓 PowerShell 爆掉的 shell 黏著語法。</strong>例如 <code>&gt;/dev/null</code>、<code>&amp;&amp; BASE=</code> 這類只在類 Unix 環境成立的寫法。git 指令本身沒問題，有問題的是那些非 git 的 shell 花招。分支選擇的邏輯要用文字描述，而不是塞進 shell 表達式。</li>
-<li><strong>規則 7：每個 skill 都要附上 <code>agents/openai.yaml</code>。</strong>而且必須含有 <code>interface:</code>、<code>display_name:</code>、<code>short_description:</code>、<code>default_prompt:</code> 四個欄位，這是給其他客戶端的介面轉接。</li>
-<li><strong>規則 8：<code>allowed-tools</code> 要寫 <code>Agent</code>，不是舊的 <code>Task</code>。</strong>Claude Code 已經把 subagent 工具從 <code>Task</code> 改名為 <code>Agent</code>，舊名只保留相容性。既然要宣告，就宣告真正的名字。</li>
-<li><strong>規則 9：被標記的共用區塊，在不同 skill 之間必須逐位元一致。</strong>因為 skill 是各自獨立安裝的資料夾，一條「兩個 skill 都必須遵守」的規則沒辦法放在單一共用檔裡，只能刻意複製。複製就會有漂移風險，所以腳本把這些區塊用 <code>&lt;!-- NAME:START --&gt;</code> 標記框起來，逐字比對，一旦有人只改了一邊就報錯。</li>
+<li><strong>規則 1：每個 <code>SKILL.md</code> 的 frontmatter 都要有 <code>allowed-tools</code>。</strong>這個欄位宣告 skill 可以使用哪些工具，讓不同客戶端知道該開啟哪些權限。</li>
+<li><strong>規則 2：不能把模型別名寫死成 spawn 指令。</strong>檔案裡不能寫 <code>model: "haiku"</code> 這類固定指定。原因很實際：如果沒有明確指定模型，subagent 通常會繼承主 session 使用的模型，而主 session 往往是較昂貴的等級。正確做法是用角色描述，例如「使用一個快速且低成本的模型」，把各家工具的模型別名只放在不引號的範例裡。</li>
+<li><strong>規則 3：不要在敘述裡指名 subagent 工具。</strong>不要寫「用 Agent 工具」或「spawn 一個 Agent」，而要描述能力，例如「派一個 subagent 去讀」。這樣即使工具更名或替換，skill 也不用跟著改寫。</li>
+<li><strong>規則 4：不能有會讓 PowerShell 爆掉的 shell 黏著語法。</strong>例如 <code>&gt;/dev/null</code>、<code>&amp;&amp; BASE=</code> 這些寫法，只在類 Unix 環境成立。git 指令本身沒有問題，真正有風險的是那些依賴特定 shell 的花招。分支選擇邏輯應該用文字說明，不要硬塞進 shell 表達式。</li>
+<li><strong>規則 7：每個 skill 都要附上 <code>agents/openai.yaml</code>。</strong>檔案必須包含 <code>interface:</code>、<code>display_name:</code>、<code>short_description:</code>、<code>default_prompt:</code> 四個欄位，作為其他客戶端的介面轉接層。</li>
+<li><strong>規則 8：<code>allowed-tools</code> 要寫 <code>Agent</code>，不能寫舊的 <code>Task</code>。</strong>Claude Code 已將 subagent 工具從 <code>Task</code> 改名為 <code>Agent</code>，舊名稱只為相容性保留。既然要宣告工具，就應該宣告目前真正使用的名稱。</li>
+<li><strong>規則 9：被標記的共用區塊，在不同 skill 之間必須逐位元一致。</strong>每個 skill 都是獨立安裝的資料夾，因此「兩個 skill 都必須遵守」的規則，無法只放在一個共用檔裡，只能刻意複製。複製會帶來漂移風險，所以腳本要求用 <code>&lt;!-- NAME:START --&gt;</code> 標記框住共用區塊，再逐字比對。只要有人只改了其中一邊，就會報錯。</li>
 </ul>
 
 <h3>預算</h3>
 
 <ul>
-<li><strong>規則 5：單檔 byte 上限。</strong><code>SKILL.md</code> 本文 32 KB，支援檔案 24 KB，少數歷史檔案有列在例外名單裡。</li>
-<li><strong>規則 5b：熱路徑總量預算。</strong>單檔沒超標，不代表一次執行不會超載。腳本另外模擬幾條真實路徑的總讀取量，例如 architect 完整設計流程 72 KB、scope 規劃 48 KB、develop 做 UI 的完整主對話讀取 90 KB，各有一條總量上限。哪條路徑快撐爆，報表會直接標出來。</li>
+<li><strong>規則 5：單檔 byte 上限。</strong><code>SKILL.md</code> 本文上限是 32 KB，支援檔案上限是 24 KB。少數歷史檔案則列在例外名單裡。</li>
+<li><strong>規則 5b：熱路徑總量預算。</strong>單一檔案沒有超標，不代表一次執行時不會過載。腳本還會模擬幾條真實路徑的總讀取量，例如 architect 完整設計流程是 72 KB、scope 規劃是 48 KB、develop 執行 UI 工作時的完整主對話讀取量是 90 KB。每條路徑都有自己的總量上限，哪一條快要撐爆，報表會直接標出來。</li>
 </ul>
 
 <h3>風格一致性</h3>
 
 <ul>
-<li><strong>規則 6：<code>description</code> 不超過 400 個字元。</strong>這是全專案出場次數最多的文字，每個 session 都會載入，所以最該短，也順便套用規則 10 的破折號禁令。</li>
-<li><strong>規則 10：任何指令檔與描述都不能出現 em dash 或 en dash。</strong>整套 skill 都在教模型輸出時不要用破折號，那麼自己的指令檔更該以身作則。破折號要改成逗號、冒號或括號。</li>
-<li><strong>規則 11：敘述文字裡不能有連字號（hyphen）。</strong>複合詞要寫成簡單單字，例如「read only」而不是「read-only」。程式碼、路徑、旗標、全大寫關鍵字，以及少數「被解析的固定詞」可以保留連字號。</li>
+<li><strong>規則 6：<code>description</code> 不超過 400 個字元。</strong>這段文字在整個專案裡出場次數最多，每個 session 都會載入，因此最該保持精簡，也會一併套用規則 10 的破折號禁令。</li>
+<li><strong>規則 10：任何指令檔與描述都不能出現 em dash 或 en dash。</strong>整套 skill 都在教模型輸出時不要使用破折號，那麼自己的指令檔更應該先做到。需要轉折或補充時，改用逗號、冒號或括號。</li>
+<li><strong>規則 11：敘述文字裡不能有連字號（hyphen）。</strong>複合詞要改寫成簡單單字，例如使用「read only」，不要使用「read-only」。程式碼、路徑、旗標、全大寫關鍵字，以及少數會被解析的固定詞，可以保留連字號。</li>
 </ul>
+
+<figure class="lesson-figure"><img src="./enforcement-and-lint-rules-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>設計亮點一：warn-before-fail 的警告頻帶</h2>
 
-<p>這支腳本有一個值得偷學的設計：<code>WARN_AT</code> 設成 0.9。任何檔案若用到預算的九成以上，但還沒超標，會被列為警告；每次執行都印出各條路徑的使用率，超過九成就在報表上被點名。真正超標的才列入違規，讓程式回傳非零的結束碼。</p>
+<p>這支腳本有一個很值得借用的設計：<code>WARN_AT</code> 設為 0.9。檔案只要使用到預算的九成以上，雖然還沒有超標，就會先被列為警告。</p>
 
-<p>為什麼要在「還沒壞」的時候就先提醒？把預算設得剛好貼著現況，會發生一件反效果的事：每一次正常編輯都會踩線，於是工程師唯一的出路就是把上限調高。只要開始抬高上限，這個預算就再也不能反映真實需要，變成一張好看的裝飾。留下一段警告頻帶，是要讓「正在變胖」在還便宜的時候就被看見；原則是接近上限先刪內容，真的需要更多才調高，而且要說明理由。例外名單只能往下修，不能往上加。</p>
+<p>每次執行時，腳本都會印出各條路徑的使用率。超過九成的路徑會在報表中被點名；真正超過上限的項目才會列為違規，並讓程式回傳非零結束碼。</p>
+
+<p>為什麼要在「還沒壞」時就提醒？如果預算上限剛好貼著目前的使用量，每次正常編輯都可能踩線。工程師最後通常只剩一個選項：把上限調高。</p>
+
+<p>一旦開始不斷抬高上限，預算就不再反映真實需求，只剩一張好看的裝飾。保留一段警告頻帶，則能讓「正在變胖」的檔案在還容易處理時就被看見。</p>
+
+<p>實際原則是：接近上限時，先刪掉不必要的內容；真的需要更多空間時，才調高上限，並且說明理由。例外名單只能往下修，不能不斷往上加。</p>
+
+<figure class="lesson-figure"><img src="./enforcement-and-lint-rules-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>設計亮點二：用遮罩分辨程式碼與散文</h2>
 
-<p>規則 10 和 11 要求敘述不能有破折號與連字號，但程式碼裡到處都是連字號：<code>allowed-tools</code>、<code>&gt;/dev/null</code>、檔名、URL。如果腳本不分青紅皂白地全抓，會產生大量誤報，最後沒人看警告。</p>
+<p>規則 10 和規則 11 要求敘述裡不能有破折號與連字號。但程式碼中到處都是連字號，例如 <code>allowed-tools</code>、<code>&gt;/dev/null</code>、檔名與 URL。</p>
 
-<p>它的解法是「先遮罩、再檢查」。腳本把圍起來的程式碼區塊、行內程式碼、HTML 註解、markdown 連結目標、裸 URL，以及 frontmatter 的鍵，全部用空白蓋掉（保留長度，行號才不會跑掉）。遮罩之後，任何還站著的連字號單字，就一定是散文，該被改寫。剩下的少數例外用一張固定清單處理，例如 <code>in-progress</code>、<code>gap-fill</code>、<code>whole-repo</code>、<code>Follow-up</code>、<code>pre-flight</code>。這些是 skill 會互相匹配的「具名值」，例如某個 phase 名稱或某個 section 標題，改掉它們等於要同步遷移所有 skill，不是單純的文案修改，所以特准保留。</p>
+<p>如果腳本不分內容類型，直接搜尋整個檔案，就會產生大量誤報。警告一多，最後大家反而不再看警告。</p>
 
-<p>這個手法的價值在於：它讓一條「風格規則」變成不會誤傷程式碼的自動檢查。規則不再只能靠 review 時用眼睛抓。</p>
+<p>腳本採用的解法是「先遮罩，再檢查」。它會把下列內容用空白蓋掉：</p>
+
+<ul>
+<li>圍起來的程式碼區塊</li>
+<li>行內程式碼</li>
+<li>HTML 註解</li>
+<li>Markdown 連結目標</li>
+<li>裸 URL</li>
+<li>frontmatter 的鍵</li>
+</ul>
+
+<p>遮罩時會保留原本的長度，因此行號不會跑掉。完成遮罩後，仍然留在文字裡的連字號單字，就可以視為散文內容，應該被改寫。</p>
+
+<p>少數例外則用固定清單處理，例如 <code>in-progress</code>、<code>gap-fill</code>、<code>whole-repo</code>、<code>Follow-up</code>、<code>pre-flight</code>。這些是 skill 彼此匹配時使用的具名值，例如 phase 名稱或 section 標題。改掉它們，就不只是修改文案，還需要同步遷移所有 skill，因此允許保留。</p>
+
+<p>這個手法的價值在於：它讓風格規則可以自動檢查，同時不會誤傷程式碼。原本只能靠 review 時用眼睛搜尋的規則，現在變成可以重複執行的檢查。</p>
+
+<figure class="lesson-figure"><img src="./enforcement-and-lint-rules-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>執法迴圈：本機與 CI</h2>
 
-<p>規則要真的生效，得進到流程裡。本機端，<code>npm run check</code> 負責跑完整檢查；<code>npm run tokens</code> 則是上一課那支唯讀的 token 分析工具，用來看一次 session 的錢花到哪。CI 端，<code>.github/workflows/check.yml</code> 在 push 到 <code>main</code> 以及每個 pull request 上執行：用 ubuntu、裝 Node 20、跑 <code>npm run check</code>，因為腳本零依賴，不需要安裝步驟。</p>
+<p>規則要真正生效，就必須接進日常流程。本機端由 <code>npm run check</code> 執行完整檢查；<code>npm run tokens</code> 則負責執行上一課介紹的唯讀 token 分析工具，用來查看一次 session 的成本花在哪裡。</p>
 
-<p>把三條線接起來看：文字規則（慣例與撰寫標準）寫進腳本（11 條檢查）再進 CI（每個 PR 都跑）。任何人想改 skill，都得先通過這道守門員。風格和預算因此由流程把關，不必靠人記得。</p>
+<p>CI 端則由 <code>.github/workflows/check.yml</code> 負責。在 push 到 <code>main</code>，以及每個 pull request 時，流程會使用 ubuntu、安裝 Node 20，再執行 <code>npm run check</code>。因為腳本零依賴，所以不需要額外的套件安裝步驟。</p>
+
+<p>把這三條線接起來看：</p>
+
+<ul>
+<li>文字規則：慣例與撰寫標準</li>
+<li>檢查腳本：11 條可執行檢查</li>
+<li>CI：每個 pull request 都執行</li>
+</ul>
+
+<p>任何人想修改 skill，都必須先通過這道守門員。風格與預算因此由流程把關，不必期待每個人都記得所有規則。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-把 prompt 當產品、把慣例當測試，是這個專案的核心手法。檢查腳本零依賴、只掃 <code>skills/</code> 下的所有 markdown，違規則回傳非零。11 條規則分成跨工具可攜性（allowed-tools、模型別名、工具命名、PowerShell 相容、openai 轉接、Agent 正名、共用區塊逐位元一致）、預算（單檔 32/24 KB 與熱路徑總量）、風格（description 400 字元、無破折號、散文無連字號）。兩個關鍵手法是：留一段九成的警告頻帶，讓變胖在還便宜時被看見；以及先遮罩程式碼再檢查散文，讓風格規則不會誤傷程式碼。
+把 prompt 當成產品，把慣例當成測試，是這個專案的核心手法。檢查腳本零依賴，只掃描 <code>skills/</code> 下的所有 markdown；只要違規，就回傳非零結束碼。11 條規則分成三組：跨工具可攜性，包括 <code>allowed-tools</code>、模型別名、工具命名、PowerShell 相容性、openai 轉接、<code>Agent</code> 正名，以及共用區塊逐位元一致；預算，包括單檔 32/24 KB 與熱路徑總量；風格，包括 <code>description</code> 400 字元上限、禁止破折號，以及散文不得使用連字號。兩個關鍵手法是：保留九成使用量的警告頻帶，讓內容變胖時能及早被看見；以及先遮罩程式碼，再檢查散文，避免風格規則誤傷程式碼。
 </blockquote>
 
-<p>到這裡，你已經走完 Tier 1 的最後一塊拼圖：從四條慣例、成本模型、skill 結構，一路到可執行的檢查。接下來進入 Tier 2，會逐階段拆解九個 skill 的操作規則。你現在有了設計視角，讀那些規則時，會更容易看出每一句為什麼存在、哪一句可以拿掉。</p>
+<p>到這裡，你已經完成 Tier 1 的最後一塊拼圖：從四條慣例、成本模型、skill 結構，一路走到可執行的檢查。接下來進入 Tier 2，逐階段拆解九個 skill 的操作規則。</p>
+
+<p>現在你已經有了設計視角。閱讀那些規則時，可以直接追問每一句為什麼存在，以及哪些內容真的可以拿掉。</p>
 
 <div class="lesson-nav">
   <div><a href="./skill-anatomy-and-authoring-rules.html">← 上一步：Skill 解剖與撰寫規則</a></div>
@@ -98,42 +147,36 @@
   <button class="opt">因為 CI 環境不支援跑真正的測試框架</button>
   <button class="opt">因為想用同一個腳本同時處理建置與部署</button>
 </div>
-
 <div class="quiz" data-question="規則 2 為什麼禁止把模型別名寫死？" data-correct="2" data-explain="subagent 未指定時常繼承昂貴的主 session 模型，所以要用角色詞明確指定。">
   <button class="opt">因為模型別名在不同工具之間會直接造成語法錯誤</button>
   <button class="opt">因為寫死的模型別名會讓 frontmatter 無法被解析</button>
   <button class="opt">因為 subagent 常會繼承昂貴的主 session 模型</button>
   <button class="opt">因為角色詞比模型別名更容易被使用者理解</button>
 </div>
-
 <div class="quiz" data-question="為什麼共用區塊要刻意重複、再用規則 9 綁成逐位元一致？" data-correct="0" data-explain="skill 各自獨立安裝，共用規則無法放單一共用檔，只能複製並釘住。">
   <button class="opt">skill 各自獨立安裝，共用規則無法放同一檔案</button>
   <button class="opt">重複區塊可以讓每個 skill 的載入速度更快</button>
   <button class="opt">重複是為了讓不同語言的版本可以各自調整</button>
   <button class="opt">逐位元一致可以避免使用者看到重複的內容</button>
 </div>
-
 <div class="quiz" data-question="`WARN_AT` 設成 0.9 的目的為何？" data-correct="2" data-explain="在還沒超標時先提醒，讓變胖在還便宜時被看見，而不是每次都踩線。">
   <button class="opt">讓預算的數字看起來比實際需要更寬鬆一些</button>
   <button class="opt">讓超過九成的檔案一律直接判定為違規</button>
   <button class="opt">在還沒超標時先提醒，避免每次都踩線</button>
   <button class="opt">讓 CI 只在檔案達到上限時才執行檢查</button>
 </div>
-
 <div class="quiz" data-question="檢查腳本為什麼要先把程式碼「遮罩」再找連字號？" data-correct="1" data-explain="程式碼與路徑本來就含連字號，先遮罩才能只抓真正的散文誤用。">
   <button class="opt">因為遮罩可以讓腳本的執行速度明顯變快</button>
   <button class="opt">因為程式碼本來就含連字號，先遮罩才不誤報</button>
   <button class="opt">因為遮罩可以把檔案轉成另一種程式語言</button>
   <button class="opt">因為遮罩能自動修正散文裡錯誤的連字號</button>
 </div>
-
 <div class="quiz" data-question="哪些詞被特准保留連字號，即使出現在散文裡？" data-correct="3" data-explain="像 in-progress、gap-fill、pre-flight 這類被解析的具名值是跨 skill 的識別字。">
   <button class="opt">所有出現在 frontmatter 裡的鍵與它們的值</button>
   <button class="opt">所有長度超過三個音節的英文複合詞</button>
   <button class="opt">所有第一次出現在檔案裡的技術術語</button>
   <button class="opt">被解析的具名值如 gap-fill 與 pre-flight</button>
 </div>
-
 <div class="quiz" data-question="CI 為什麼不需要 `npm install` 這一步？" data-correct="1" data-explain="檢查腳本只用 Node 標準函式庫，沒有第三方依賴。">
   <button class="opt">因為 CI 環境早就預先裝好了所有需要的套件</button>
   <button class="opt">因為檢查腳本零依賴，只用 Node 標準函式庫</button>

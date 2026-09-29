@@ -8,71 +8,111 @@
 </head>
 <body>
 
-<h1>從 git 圈出這次要對的變更</h1>
+<h1>先用 git 圈出這次真正要對的變更</h1>
 <p class="meta">Step 2/6 · /sync：把知識對回 repo</p>
 
 <h2>學習目標</h2>
-<p>能用 git 取出這次的變更集（先驗 freshness、判斷 base 與 mode、用 <code>--name-status</code> 取得 A/M/D），濾掉文件與測試只留 source 檔，並定位出該看的 AGENTS.md、specs 與這次相關的 scope 路徑。</p>
+<p>完成這一節後，你會知道如何用 git 取出本次變更集：先檢查 freshness，再判斷 base 與 mode，接著用 <code>--name-status</code> 取得 A、M、D 狀態。之後，把文件與測試排除，只留下 source 檔，並定位這次真正相關的 <code>AGENTS.md</code>、spec 與 scope 路徑。</p>
 
-<h2>前言：對帳前，先確認帳本是哪一本</h2>
+<h2>前言：對帳前，先確認拿的是哪一本帳</h2>
 
-<p>上一節說 <code>/sync</code> 的工作是對帳。對帳的第一步永遠是「拿出這次的帳本」，也就是「這個改動到底碰了哪些檔案」。而這個問題的答案，取決於你現在站在哪裡：改動還沒 commit，跟改動已經在一個領先主線的分支上，是兩種完全不同的取法。</p>
+<p><code>/sync</code> 的工作是對帳，但對帳不能一開始就把整個 repo 攤在桌上。第一步應該先回答一個問題：這次改動到底碰了哪些檔案？</p>
 
-<p>如果它一開始就亂抓，比方說不小心把整個 repo 當成變更範圍，那它會去更新一堆跟這次無關的東西，製造出大量噪音。所以它有一套固定的開場流程，先確認你身處的狀態，再精準地圈出範圍。這一節就來看這套流程，以及它圈完範圍後是怎麼定位相關檔案的。</p>
+<p>答案取決於改動目前處在哪種狀態。它可能還沒 commit，直接留在基準分支上；也可能已經 commit，存在一個領先主線的 branch。這兩種情況要用不同方式取得變更。</p>
 
-<h2>第一件事：確認你沒有落後主線</h2>
+<p>如果一開始就抓錯範圍，例如把整個 repo 都當成這次的變更，後續就會讀到大量無關內容，甚至更新不該碰的文件。這就像拿整本帳簿逐頁重對，最後噪音比線索還多。因此，<code>/sync</code> 有一套固定的開場流程：先確認目前狀態，再精準圈出變更，最後才找相關知識檔。</p>
 
-<p>在團隊裡，最怕的是「別人已經同步過同一份文件，你又跑一次」。所以 <code>/sync</code> 的開場是一個 freshness（新鮮度）檢查：先 <code>git fetch</code> 把遠端狀態抓下來，再看你落後主線幾個 commit。如果發現你落後了，它會停下來提醒你先 pull，因為可能已經有隊友處理過這些文件。這個檢查花不了多少成本，卻能避免重複勞動與互相打架。</p>
+<h2>第一件事：確認沒有落後主線</h2>
 
-<h2>判斷 base 與模式：你是在 commit 前還 commit 後</h2>
+<p>團隊協作時，一個常見風險是：隊友已經同步過同一份文件，你卻在不知道的情況下又處理一次。結果可能是重複勞動，也可能讓兩次更新互相打架。</p>
 
-<p>接下來要決定「拿什麼當比較基準」。基準分支是 <code>main</code>，如果沒有就用 <code>master</code>。然後看現在的 branch 是不是就是基準本身，這會決定走哪一種模式：</p>
+<p>所以 <code>/sync</code> 一開始會做 freshness（新鮮度）檢查。它先執行 <code>git fetch</code>，取得遠端最新狀態，再檢查目前分支落後主線幾個 commit。</p>
+
+<p>如果發現目前分支落後主線，流程就會停下來，提醒你先 pull。這個檢查成本很低，卻能先擋住「拿著過期狀態開始同步」的風險。</p>
+
+<h2>判斷 base 與模式：改動是在 commit 前，還是 commit 後？</h2>
+
+<p>確認沒有落後主線後，下一步是決定比較基準。基準分支優先使用 <code>main</code>；如果 repo 沒有 <code>main</code>，就使用 <code>master</code>。</p>
+
+<p>接著檢查目前所在的 branch 是否就是這個基準分支。這會決定 <code>/sync</code> 要走哪一種模式：</p>
 
 <ul>
-<li>如果當前分支就是基準分支，模式是 <code>uncommitted</code>，它用 <code>git diff --name-status HEAD</code> 看你還沒 commit 的改動。</li>
-<li>如果當前分支領先基準，模式是 <code>branch</code>，它先找出 <code>git merge-base</code>（兩條分支的共同祖先），再 <code>git diff --name-status</code> 比較那個共同點到現在。</li>
+<li>如果目前分支就是基準分支，模式是 <code>uncommitted</code>。此時用 <code>git diff --name-status HEAD</code>，查看尚未 commit 的改動。</li>
+<li>如果目前分支領先基準分支，模式是 <code>branch</code>。此時先找出 <code>git merge-base</code>，也就是兩條分支的共同祖先，再用 <code>git diff --name-status</code> 比較共同祖先到目前狀態之間的變更。</li>
 </ul>
 
-<p>這裡有一個容易忽略的小細節：它用的是 <code>--name-status</code>，不是 <code>--name-only</code>。差別在於，前者會給每個檔案一個狀態碼，而這個狀態碼決定了後面兩種邏輯怎麼跑。</p>
+<p>這裡不是單純列出檔名而已。<code>/sync</code> 特別使用 <code>--name-status</code>，而不是 <code>--name-only</code>。原因是後續判斷需要知道每個檔案的狀態碼；只拿檔名，就像只知道包裹的地址，卻不知道它是新寄出的、被修改過的，還是已經取消的。</p>
 
-<h2>三種狀態碼：A、M、D 各有用途</h2>
+<figure class="lesson-figure"><img src="./scope-the-change-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p><code>--name-status</code> 會在每個檔案前面標一個字母：<strong>A</strong> 代表這次新增（Added），<strong>M</strong> 代表這次修改（Modified），<strong>D</strong> 代表這次刪除（Deleted）。這三個字母不是裝飾，它們直接餵給後面的判斷：一個區域是不是「全新」，要看它底下的檔案是不是全部都是 A；有沒有孤兒文件要清，要看那些 D 的檔案。</p>
+<h2>三種狀態碼：A、M、D 各自提供線索</h2>
 
-<p>除了追蹤中的檔案，它還會用 <code>git ls-files --others --exclude-standard</code> 把還沒被追蹤的新檔案也撈進來，並幫它們補上一個 <code>A</code>，讓格式跟前面的輸出一致。到這裡，一份完整的變更清單就成形了。</p>
+<p><code>--name-status</code> 會在每個檔案前標上一個字母：</p>
 
-<h2>過濾：只留程式碼，其餘分開擺</h2>
+<ul>
+<li><strong>A</strong> 代表新增（Added）。</li>
+<li><strong>M</strong> 代表修改（Modified）。</li>
+<li><strong>D</strong> 代表刪除（Deleted）。</li>
+</ul>
 
-<p>拿到清單後，它會先移除重複，再過濾成「拿來當作變更來源」的檔案。這裡的邏輯很值得學，因為它展現了 <code>/sync</code> 的分寸：有些檔案它不是不看，而是不把它們當成「變更的來源」，只把它們當成「要被更新的目標」。</p>
+<p>這些狀態碼會直接影響後續邏輯。例如，要判斷某個區域是否全新，就要看其中的檔案是否全部都是 <strong>A</strong>；要找出需要清理的孤兒文件，則要另外查看狀態為 <strong>D</strong> 的檔案。</p>
 
-<p>首先被剔掉的，是文件與設定檔：任何層級的 <code>AGENTS.md</code>、<code>docs/**</code>、<code>*.md</code>、<code>test-preferences.json</code>、lock 檔、產生物。這些正是 <code>/sync</code> 要讀取的目標或上下文，如果把它們也當成變更來源，就會邏輯打結。接著被剔掉的是測試檔，因為測試不是某個區域的長期慣例。</p>
+<p>除了已被 git 追蹤的檔案，<code>/sync</code> 也會用 <code>git ls-files --others --exclude-standard</code> 找出尚未被追蹤的新檔案，並替它們補上 <code>A</code>。這樣一來，已追蹤與未追蹤的變更就能使用同一種格式處理。</p>
 
-<p>但它沒有把刪除的檔案直接丟掉。那些 <strong>D</strong> 的項目會被單獨放進一份清單，留給後面的孤兒清理用。同樣地，依賴清單的變動（例如 <code>package.json</code>、<code>pyproject.toml</code>、<code>go.mod</code> 這類 manifest）也會單獨放一份，因為它們要餵給下一步的工具探索。要注意的是，它只拿 manifest 當訊號，不會把 lock 檔的內容拿去用。</p>
+<p>到這裡，完整的變更清單才算建立完成。</p>
 
-<p>最後有一個重要的煞車：如果把文件、測試、lock、產生物全濾掉之後，已經沒有 source 檔、也沒有 manifest 變動了，它就停下來，判定「沒有東西要同步」。這個 <code>NOTHING_TO_SYNC</code> 不是失敗，而是一個完全正常的結果。</p>
+<h2>過濾：只把 source 當成變更來源</h2>
 
-<h2>第二步：定位相關檔案，但先不要讀</h2>
+<p>有了完整清單後，<code>/sync</code> 會先移除重複項目，再把檔案分成不同用途。這裡有一個重要分寸：有些檔案不是不看，而是不把它們當成「變更來源」。它們可能是後續要讀取或更新的目標，角色不同，不能混在一起。</p>
 
-<p>圈完變更集之後，它要找出「這次該看哪些知識檔」。這裡有一個紀律：<strong>這一步只記路徑，不讀內容</strong>。因為真正的閱讀要留到寫入階段，現在讀只會白白塞爆 context，而且讀到的還可能過期。它會用檔案搜尋工具做四件事：</p>
+<p>首先排除的是文件與設定檔，包括任何層級的 <code>AGENTS.md</code>、<code>docs/**</code>、<code>*.md</code>、<code>test-preferences.json</code>、lock 檔與產生物。這些檔案本身可能是同步的目標或上下文。如果把它們也當成變更來源，流程就會拿「要被更新的內容」反過來決定「要更新什麼」，範圍容易失控。</p>
+
+<p>測試檔也會被排除。原因是測試描述的是驗證方式，不是某個區域長期維持的慣例；因此它們不應直接成為同步知識的來源。</p>
+
+<p>不過，被排除不代表被丟掉。狀態為 <strong>D</strong> 的檔案會另外放進刪除清單，交給後續的孤兒清理使用。</p>
+
+<p>依賴清單的變動也會單獨整理。例如 <code>package.json</code>、<code>pyproject.toml</code> 與 <code>go.mod</code> 這類 manifest，會提供給下一步的工具探索。要注意的是，這裡只把 manifest 當成訊號，不會把 lock 檔內容拿來使用。</p>
+
+<figure class="lesson-figure"><img src="./scope-the-change-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>安全煞車：什麼都沒有要同步時就停下來</h2>
+
+<p>完成過濾後，如果已經沒有 source 檔，也沒有 manifest 變動，<code>/sync</code> 就會停止，判定為 <code>NOTHING_TO_SYNC</code>。</p>
+
+<p>這不是失敗，而是正常結果。它代表這次變更只有文件、測試、lock 或產生物等項目，沒有足以觸發同步的 source 或依賴清單變動。這個煞車能避免 agent 為了「做點什麼」而擴大範圍，留下不必要的更新。</p>
+
+<h2>第二步：定位相關檔案，但先不要讀內容</h2>
+
+<p>變更集圈好後，下一個問題是：這次應該查看哪些知識檔？這一步有一條嚴格紀律：<strong>只記錄路徑，不讀內容</strong>。</p>
+
+<p>真正的閱讀會留到寫入階段。現在就把所有文件讀進 context，不只浪費空間，也可能讀到已經過期的內容。先定位、後閱讀，就像先把要查的書列成清單，而不是把整座圖書館搬進房間。</p>
+
+<p>這一步會透過檔案搜尋工具完成四件事：</p>
 
 <ol>
-<li>確認 root 有沒有 <code>AGENTS.md</code>。</li>
-<li>找出所有 <code>AGENTS.md</code>（root 加 nested），排除 <code>node_modules/</code> 與 <code>.git/</code>。</li>
-<li>找出 <code>docs/specs/</code> 底下所有以數字開頭的 spec，並排序。</li>
-<li>找出這次 diff 真正碰到的 workspace 對應的 scope 檔；在 monorepo 裡，一個像是 <code>apps/&lt;x&gt;/…</code> 的變更，會去選 <code>docs/scope/&lt;x&gt;/</code>，而且它<strong>永遠不會讀或傳入整個 <code>docs/scope/</code></strong>。</li>
+<li>確認 repo root 是否有 <code>AGENTS.md</code>。</li>
+<li>找出所有 <code>AGENTS.md</code>，包括 root 與 nested 版本，同時排除 <code>node_modules/</code> 與 <code>.git/</code>。</li>
+<li>找出 <code>docs/specs/</code> 底下所有以數字開頭的 spec，並依序排序。</li>
+<li>找出這次 diff 實際碰到的 workspace 所對應的 scope 檔。在 monorepo 中，如果變更路徑像是 <code>apps/&lt;x&gt;/…</code>，就選擇 <code>docs/scope/&lt;x&gt;/</code>；而且<strong>永遠不會讀取或傳入整個 <code>docs/scope/</code></strong>。</li>
 </ol>
 
-<p>唯一現在就讀的是 root <code>AGENTS.md</code>，因為它通常很短，而且能提供一個整體的錨點。它也會為每個變更檔記下「最靠近它的那個 <code>AGENTS.md</code>」是哪一個（root 或 nested），那通常是這份改動最可能需要更新的上下文檔。</p>
+<p>唯一會在此時讀取的是 root <code>AGENTS.md</code>。它通常很短，可以提供整體規則與方向，作為後續處理的錨點。</p>
 
-<p>把 scope 限定在「相關的 workspace」而不是整個 <code>docs/scope/</code>，是為了守住一條界線：一個 workspace 的改動，不該授權你去動另一個 workspace 的紀錄。</p>
+<p>此外，<code>/sync</code> 會為每個變更檔記下「離它最近的 <code>AGENTS.md</code>」。這份檔案可能是 root 版本，也可能是 nested 版本；它通常是這次變更最可能需要更新的上下文文件。</p>
+
+<p>scope 只限定在相關 workspace，而不是整個 <code>docs/scope/</code>，是為了守住變更邊界：一個 workspace 的改動，不應該授權流程去修改另一個 workspace 的紀錄。</p>
+
+<figure class="lesson-figure"><img src="./scope-the-change-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>小結</h2>
 
 <blockquote>
-<code>/sync</code> 的開場是圈出變更集。它先驗 freshness（落後主線就提醒先 pull），判斷 base（<code>main</code>，否則 <code>master</code>）與模式（<code>uncommitted</code> 或 <code>branch</code>），用 <code>--name-status</code> 取得每個檔案的 A／M／D 狀態，並補上未追蹤的新檔。接著把文件與測試濾掉，只留 source 檔當變更來源，但保留 D 清單（孤兒清理）與 manifest 清單（工具探索）。若濾完一無所有就停。第二步只記路徑不讀內容，會定位 root／nested <code>AGENTS.md</code>、<code>docs/specs/</code> 的 spec，以及這次相關 workspace 的 scope 檔，並建立「變更檔 → 最近上下文檔」的對應。
+<p><code>/sync</code> 的開場任務，是先把變更集圈準。它會先檢查 freshness；如果目前分支落後主線，就提醒先 pull。接著以 <code>main</code> 為優先、<code>master</code> 為備選，判斷要走 <code>uncommitted</code> 還是 <code>branch</code> 模式。</p>
+<p>取得差異時使用 <code>--name-status</code>，保留每個檔案的 A、M、D 狀態，並把未追蹤的新檔案補成 <strong>A</strong>。之後移除文件、測試、lock 與產生物，只保留 source 檔作為變更來源；但會另外保留 <strong>D</strong> 清單供孤兒清理使用，也會保留 manifest 清單供工具探索。若過濾後沒有 source 或 manifest 變動，就以 <code>NOTHING_TO_SYNC</code> 正常停止。</p>
+<p>完成變更定位後，第二步只記錄路徑、不讀內容。流程會找出 root 與 nested 的 <code>AGENTS.md</code>、<code>docs/specs/</code> 中的 spec，以及這次變更所屬 workspace 的 scope 檔，並建立「變更檔 → 最近上下文檔」的對應。</p>
 </blockquote>
 
-<p>範圍圈好了，接下來有一個岔路：如果這次改動新增了重量級的外部工具，<code>/sync</code> 會在中途停下來問你一件事。下一節就來處理這個「先問再做」的岔路。</p>
+<p>範圍圈好後，流程會遇到下一個岔路：如果這次改動新增了重量級的外部工具，<code>/sync</code> 會先停下來問你是否要繼續。下一節將處理這個「先問再做」的岔路。</p>
 
 <div class="lesson-nav">
   <div><a href="./role-and-boundaries.html">← 上一步：/sync 的定位與界線：外科手術，不是重寫</a></div>
@@ -87,35 +127,30 @@
   <button class="opt">避免在沒有網路時無法連上遠端</button>
   <button class="opt">避免重複隊友已經做過的同步工作</button>
 </div>
-
 <div class="quiz" data-question="為什麼 /sync 用 --name-status 而不是 --name-only？" data-correct="1" data-explain="A／M／D 狀態碼是後面判斷 net-new 區域與孤兒清理的關鍵。">
   <button class="opt">因為它輸出比較短、比較省 token</button>
   <button class="opt">因為 A／M／D 狀態碼是後續判斷的關鍵</button>
   <button class="opt">因為只有它能列出未追蹤的新檔案</button>
   <button class="opt">因為 --name-only 在新版 git 已被移除</button>
 </div>
-
 <div class="quiz" data-question="被刪除的檔案（狀態 D）在流程裡被怎麼處理？" data-correct="0" data-explain="它們不被當成變更來源，而是單獨保留，驅動後面的孤兒文件清理。">
   <button class="opt">單獨保留，用來驅動孤兒清理</button>
   <button class="opt">直接丟棄，因為檔案已經不在了</button>
   <button class="opt">當成變更來源，寫進 AGENTS.md</button>
   <button class="opt">交給 /architect 去處理與追認</button>
 </div>
-
 <div class="quiz" data-question="下列哪一類檔案會被 /sync 當成「要被更新的目標」而濾出變更來源？" data-correct="2" data-explain="任何層級的 AGENTS.md、docs/**、*.md 是它要讀取的目標或上下文，不當變更來源。">
   <button class="opt">應用程式的 source 檔案本身</button>
   <button class="opt">這次新增的依賴清單變動</button>
   <button class="opt">任何層級的 AGENTS.md 與 docs 檔</button>
   <button class="opt">沒有被 git 追蹤的全新檔案</button>
 </div>
-
 <div class="quiz" data-question="在 monorepo 裡，/sync 怎麼決定要對齊哪一份 scope？" data-correct="3" data-explain="用變更檔的 workspace（例如 apps/<x>/）去選對應的 docs/scope/<x>/，絕不讀整個 docs/scope/。">
   <button class="opt">把 docs/scope/ 底下所有檔案一次讀完</button>
   <button class="opt">由工程師在對話裡口頭指定哪一份</button>
   <button class="opt">挑目錄底下最近被修改的那一份</button>
   <button class="opt">用變更檔的 workspace 對應到該份</button>
 </div>
-
 <div class="quiz" data-question="濾完之後既沒有 source 檔、也沒有依賴清單變動，/sync 會怎麼做？" data-correct="1" data-explain="它會停下來，NOTHING_TO_SYNC 是正常的好結果，不是失敗。">
   <button class="opt">硬把整份 AGENTS.md 重寫一遍交差</button>
   <button class="opt">停下來，這是正常的無事可對結果</button>

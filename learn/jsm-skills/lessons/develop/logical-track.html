@@ -11,91 +11,205 @@
 <h1>Logical 軌：從資料層到介面的七個階段</h1>
 <p class="meta">Step 4/5 · /develop：依規格實作</p>
 
+<h2>先看你要避免的兩種假完成</h2>
+
+<p>後端任務最危險的地方，往往不是程式直接報錯，而是看起來已經完成。migration 檔案產生了、型別檢查也通過了，工程師就把任務打勾；但 migration 其實從沒套用到真正的資料庫。</p>
+
+<p>另一個常見陷阱，是把「使用者已登入」當成「使用者可以操作這筆資料」。驗證只回答「你是誰」，授權才回答「你能不能動這個資源」。這兩個漏洞在本機開發時可能安靜得像沒事，到了真實環境卻會變成資料錯誤或安全事故。</p>
+
+<p>Logical 軌的七個階段，就是用一條固定路徑把這些洞堵起來：從資料庫不變量開始，經過核心邏輯與介面，接上外部服務，最後刪除被取代的程式碼並重新檢查正確性。</p>
+
+<figure class="lesson-figure"><img src="./logical-track-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
 <h2>學習目標</h2>
-<p>能照 logical-guide 的七個階段實作後端：把不變量放進資料庫、對金流與訊息做冪等、在介面層做授權而不只驗證，並在整合層處理密鑰、webhook 與日誌。</p>
 
-<h2>前言：後端工程師最常偷的兩步</h2>
+<p>完成這個階段後，你應能依照 <code>logical-guide</code> 的七個階段實作後端：</p>
 
-<p>後端工作有一種很容易發生的墮落。第一種是「遷移檔寫好了就算做完」：migration 產生出來、型別也過了，任務就打勾，但那個 migration 從來沒對真正的資料庫跑過。第二種是「授權等於驗證」：確認了使用者有登入，就讓他呼叫 API，卻忘了檢查他能不能動<strong>這一筆</strong>資源。這兩個洞都不會在開發時報錯，只會在真實世界裡變成事故。</p>
+<ul>
+<li>把能由資料庫保證的不變量放進資料庫。</li>
+<li>讓金流、訊息與其他外部副作用具備冪等性。</li>
+<li>在介面層執行授權，而不是只檢查使用者是否登入。</li>
+<li>在整合層正確處理密鑰、webhook 與日誌。</li>
+</ul>
 
-<p>Logical 軌的七個階段，很大一部分就是在堵這些洞。它先給你一個清楚的自我定位：你是這個專案的資深後端工程師，你的工作是實作 `/architect` 已經做好的決策，不是再辯一次。規格是你的規格，程式區旁邊的 <code>AGENTS.md</code> 是你的慣例，既有的程式碼是你的風格指南。順著這三個來源走，你就不會重新發明一套模式。</p>
+<h2>先確立三條地面規則</h2>
 
-<h2>三條地面規則</h2>
+<p>Logical 軌的定位很清楚：你是專案的資深後端工程師，負責實作 <code>/architect</code> 已經做好的決策，而不是重新辯論一次架構。</p>
+
+<p>你的工作依據有三個來源：規格、程式區旁邊的 <code>AGENTS.md</code>，以及既有程式碼。規格決定要做什麼，<code>AGENTS.md</code> 說明專案慣例，既有程式碼則提供實際的風格與模式。先對齊這三者，就不必在每個檔案旁邊重新發明一套做法。</p>
 
 <table>
 <thead>
-<tr><th>規則</th><th>意思</th></tr>
+<tr><th>規則</th><th>實際做法</th></tr>
 </thead>
 <tbody>
-<tr><td>照規格蓋</td><td>資料模型、API 介面、關鍵不變量、安全模型、設定都來自規格的 <code>Feature design</code>。規格說狀態機是「試用 → 生效 → 逾期」，你就實作那一台，不是自己另開一台。</td></tr>
-<tr><td>對齊 codebase</td><td>動手前讀最近的 <code>AGENTS.md</code> 和二到三個鄰近檔案。用專案現有的 ORM、錯誤處理、驗證函式庫與檔案佈局。既有模式存在就絕不另立一套，因為那是決策，決策屬於規格。</td></tr>
-<tr><td>推斷／詢問／建議</td><td>能從規格、<code>AGENTS.md</code> 與程式碼推斷的就推斷，不要問已經記錄過的事。只有真正模糊、會擋住正確實作的商業規則才問。實作細節（helper 的形狀、檔案放哪）自己決定並往前，不要煩工程師。</td></tr>
+<tr>
+<td><strong>照規格蓋</strong></td>
+<td>資料模型、API 介面、關鍵不變量、安全模型與設定，都以規格的 <code>Feature design</code> 為準。規格定義狀態機為「試用 → 生效 → 逾期」，就實作這一台，不要自行創造另一套狀態。</td>
+</tr>
+<tr>
+<td><strong>對齊 codebase</strong></td>
+<td>動手前先讀最近的 <code>AGENTS.md</code> 與二到三個鄰近檔案。沿用專案既有的 ORM、錯誤處理、驗證函式庫與檔案配置。既有模式就是已經做過的決策，不要另立一套。</td>
+</tr>
+<tr>
+<td><strong>推斷、詢問、建議</strong></td>
+<td>規格、<code>AGENTS.md</code> 與程式碼已經能回答的問題，直接推斷，不要再問。只有模糊到會阻擋正確實作的商業規則才需要詢問。至於 helper 長什麼樣、檔案放在哪裡等實作細節，自己決定並往前做。</td>
+</tr>
 </tbody>
 </table>
 
 <h2>Phase 1：先把決策吃進去</h2>
 
-<p>動手前先把要蓋的東西摸清楚，而且只在紙上確認，不先寫碼。這一步包含幾件事。</p>
+<p>第一階段不是寫程式，而是確認你要蓋什麼、哪些東西不能自行改動。</p>
 
-<p>首先把治理規格整份讀過，尤其是 <code>Feature design</code>（資料模型、API 介面、不變量、安全模型、設定）與 <code>Consequences</code>。接著把 spec 的 <code>## Requirements</code> 也讀進來，因為那些 <code>AC-1…</code> 是這次建置的合約，而 build plan 的每個任務都標明它服務哪個 <code>AC</code>。然後以 step 2.5 那張探索地圖為底，不要去重讀整個區域。如果這個任務會<strong>取代</strong>既有程式碼（一個重構或遷移，而不是全新的新增），就在這裡先把「它取代了哪些舊函式、舊檔案、舊模式」記下來，這樣你就知道 Phase 6 要刪什麼。</p>
+<p>先完整讀過治理規格，特別是 <code>Feature design</code> 與 <code>Consequences</code>。前者通常包含資料模型、API 介面、不變量、安全模型與設定；後者則說明這些決策帶來的影響。</p>
 
-<p>把整合點與建置順序列出來，這條軌的典型順序就是後面那幾個階段：資料 → 邏輯 → 介面 → 整合 → 清理。如果 grounding 的過程中發現規格站不住腳，例如決定的資料模型撐不住、驗收條件跟 API 介面矛盾，那就停下來交回 <code>/architect</code>，在動手寫出偏離之前先改規格。</p>
+<p>接著讀 spec 的 <code>## Requirements</code>。其中的 <code>AC-1…</code> 是這次建置的合約，而 build plan 的每個任務都會標明它服務哪個 <code>AC</code>。最後，以 step 2.5 的探索地圖作為範圍，不要為了重新確認已知資訊而重讀整個區域。</p>
 
-<h2>Phase 2：資料層，套用並確認上線才算完</h2>
+<p>如果這次任務會取代既有程式碼，例如重構或遷移，而不是單純新增功能，就在這一步先記下：</p>
 
-<p>照規格的資料模型草圖實作 schema 與 migration：欄位型別、可否為 null、外鍵關聯、唯一約束。這裡有一條絕對規則：<strong>資料層的變更，要等 migration 套用且 schema 確認上線，才算完成</strong>。產生 migration 不等於做完，你要真的對目標資料庫跑它，然後確認表、欄位、關聯真的存在。最好用一個連上的資料庫 MCP 去查真實 schema，否則用專案自己的 introspection 或 describe 查詢。絕不要只是盯著 migration 檔看一眼就算過，也絕不在「產生但未套用」的 migration 上打勾。</p>
+<ul>
+<li>哪些舊函式會被取代。</li>
+<li>哪些舊檔案會被移除。</li>
+<li>哪些舊模式會被新做法替換。</li>
+</ul>
 
-<p>另外兩件很實務的事。第一，能在資料庫層強制的不變量就放在那裡用約束表達，不要只靠應用層檢查。第二，在活系統上要遵守遷移紀律：新增欄位要「先可 null → 回填 → 再加約束」，絕不直接加一個沒有預設值的 <code>NOT NULL</code> 欄位。最後，用專案既有的 ORM 與命名慣例，不要自己拉一套。</p>
+<p>這份清單會在 Phase 6 使用。沒有先列出來，很容易只把新碼加上去，卻忘了刪除舊碼。</p>
+
+<p>同時列出整合點與建置順序。這條軌通常依序走過：資料、邏輯、介面、整合、清理。</p>
+
+<p>如果在這個 grounding 過程中發現規格本身站不住腳，例如資料模型撐不住需求，或驗收條件與 API 介面互相矛盾，就先停下來交回 <code>/architect</code>。不要先寫出一套偏離規格的程式，再期待後面補救。</p>
+
+<h2>Phase 2：資料層，套用上線才算完成</h2>
+
+<p>依照規格的資料模型草圖實作 schema 與 migration，確認欄位型別、是否可為 null、外鍵關聯與唯一約束都符合設計。</p>
+
+<p><strong>產生 migration 不等於完成。</strong>資料層變更必須真的套用到目標資料庫，並確認 schema 已經上線，才算完成。</p>
+
+<p>最可靠的做法，是使用已連線的資料庫 MCP 查詢真實 schema。若專案沒有這項工具，就使用既有的 introspection 或 describe 查詢。不要只盯著 migration 檔案看，因為檔案存在只能證明「有人描述了變更」，不能證明資料庫真的發生了變更。</p>
+
+<figure class="lesson-figure"><img src="./logical-track-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>資料層還有兩條實務規則：</p>
+
+<ul>
+<li>能由資料庫強制的不變量，就用資料庫約束表達，不要只依賴應用層檢查。</li>
+<li>活系統要遵守遷移紀律：新增欄位時，先允許 null，再回填資料，最後才加上約束。</li>
+</ul>
+
+<p>不要直接在已有資料的活系統上加入一個沒有預設值的 <code>NOT NULL</code> 欄位。這種 migration 可能在開發環境看似沒問題，到了實際資料庫就會因為既有資料無法填入而失敗。</p>
+
+<p>最後，沿用專案既有的 ORM 與命名慣例，不要另外拉出一套資料存取方式。</p>
 
 <h2>Phase 3：核心邏輯與服務</h2>
 
-<p>把規格裡的商業邏輯與狀態轉移實作出來。狀態機要明確建模，遇到不合法的轉移要拒絕，而不是放任它流過去。</p>
+<p>這一階段把規格中的商業邏輯與狀態轉移真正實作出來。</p>
 
-<p><strong>冪等</strong>是這個階段最容易被忽略、後果卻最嚴重的一點。任何牽涉金流、訊息或外部副作用的變更，都要產生並遵守 idempotency key，讓重試是安全的。想像一下：客戶網路抖一下，同一個付款請求送了兩次，如果沒有冪等，就會扣兩次款。這種 bug 上線後非常難補。</p>
+<p>狀態機要明確建模。合法的轉移要能發生，不合法的轉移則必須被拒絕，而不是讓任何狀態都能任意跳轉。</p>
 
-<p>輸入在邊界就要驗證，而且<strong>要往安全的方向失敗</strong>（fail closed），不確定就拒絕，而不是放行。錯誤則用專案既有的模式處理，跟著已經存在於 codebase 的 result／exception／error 形狀走，不要自己發明一套新的。</p>
+<p><strong>冪等性</strong>是這裡最容易被忽略、後果卻很嚴重的要求。凡是涉及金流、訊息或其他外部副作用的變更，都要產生並遵守 idempotency key，讓同一個請求被重試時不會重複造成結果。</p>
 
-<h2>Phase 4：介面層，API 與 action</h2>
+<p>想像客戶的網路短暫中斷：付款請求其實已經送達，但客戶端沒有收到回應，因此又送了一次。如果沒有冪等設計，系統可能會扣兩次款。這類問題通常很難等到上線後才補救。</p>
 
-<p>每個 endpoint 或 action 都要<strong>完全照規格的 API 介面表</strong>實作：方法、路徑、輸入、輸出、認證需求、關鍵錯誤。這裡有四個規矩值得逐條看。</p>
+<figure class="lesson-figure"><img src="./logical-track-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>輸入資料要在邊界驗證，並且<strong>往安全的方向失敗</strong>（fail closed）：遇到不確定的情況就拒絕，而不是放行。</p>
+
+<p>錯誤處理則沿用 codebase 已有的模式。專案使用 result，就跟著 result；使用 exception，就跟著 exception；使用既定的 error 形狀，也不要自行創造另一種回傳格式。</p>
+
+<h2>Phase 4：介面層，實作 API 與 action</h2>
+
+<p>每個 endpoint 或 action 都必須完整對照規格的 API 介面表，包含方法、路徑、輸入、輸出、認證需求與關鍵錯誤。</p>
+
+<figure class="lesson-figure"><img src="./logical-track-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <ol>
-<li><strong>強制授權，不只是認證。</strong> 確認呼叫者<strong>可以對這個資源</strong>採取行動，依規格的安全模型檢查擁有權、角色或組織範圍。使用者有登入，只代表他身分有效，不代表他能動這筆資料。</li>
-<li><strong>每一個列表 endpoint 都要分頁</strong>，就算是 MVP 也一樣。不分頁的列表最後都會變成事故。</li>
-<li><strong>回傳客戶端可以依賴的一致錯誤形狀</strong>，並用正確的 HTTP 狀態碼。</li>
-<li><strong>公開的 endpoint 要限流。</strong></li>
+<li>
+<strong>強制授權，不只是認證。</strong>
+<p>認證只能確認呼叫者的身分有效。授權則要依安全模型確認呼叫者是否擁有這筆資源、是否具備正確角色，或是否位於允許的組織範圍內。使用者已登入，不代表他可以操作這一筆資料。</p>
+</li>
+<li>
+<strong>每個列表 endpoint 都要分頁。</strong>
+<p>即使是 MVP，也不要讓列表一次回傳全部資料。不分頁的列表很容易在資料量成長後變成效能事故。</p>
+</li>
+<li>
+<strong>維持一致的錯誤形狀。</strong>
+<p>客戶端必須能依賴一致的錯誤格式，並且搭配正確的 HTTP 狀態碼。</p>
+</li>
+<li>
+<strong>公開 endpoint 要限流。</strong>
+<p>對外公開的介面必須具備限流，避免被過量請求拖垮。</p>
+</li>
 </ol>
 
 <h2>Phase 5：整合與設定</h2>
 
-<p>外部供應商照規格決定的接上去（供應商本身是 `/architect` 已經做好的建議決策，直接用）。密鑰與金鑰一律從環境變數或密鑰管理服務讀，<strong>絕不硬編碼、也絕不提交進版控</strong>；每個新環境變數都要命名，並在報告裡提醒工程師去設定。</p>
+<p>外部供應商依照規格中已由 <code>/architect</code> 決定的建議接上去。這裡不是重新挑供應商的時機，而是依決策完成整合。</p>
 
-<p>處理入站 webhook 時有三件事一定要做：<strong>驗證簽章</strong>、讓 handler <strong>冪等</strong>（例如用一張事件表，讓重送的 webhook 不會重複套用）、以及依規格需要時，用定期補掃來跟 webhook 驅動的狀態對帳。最後，在邊界加上<strong>結構化日誌</strong>，並對任何碰到金流、存取控制或合規範圍的變更加上<strong>稽核日誌</strong>。</p>
+<p>密鑰與金鑰一律從環境變數或密鑰管理服務讀取。<strong>絕不硬編碼，也絕不提交進版控。</strong>每個新增的環境變數都要命名，並在報告中提醒工程師完成設定。</p>
 
-<h2>Phase 6：刪掉被取代的碼</h2>
+<p>入站 webhook 至少要處理三件事：</p>
 
-<p>只要這次建置<strong>取代</strong>了既有的模式或實作（一個重構，或一個把舊做法換成新做法的 rollout），這一步就適用。規則是：<strong>新舊實作不能共存</strong>。把死碼留在後面，是這一類工作最經典的漏失，而移除它是這次建置的一部分，不是之後再說的雜事。</p>
+<ul>
+<li><strong>驗證簽章</strong>，確認請求確實來自預期的來源。</li>
+<li><strong>讓 handler 具備冪等性</strong>，例如使用事件表，避免同一個 webhook 重送時重複套用。</li>
+<li>依規格需要，使用定期補掃與 webhook 驅動的狀態互相對帳。</li>
+</ul>
 
-<p>要刪的有：已經被取代的函式與類別、變成不可達的分支、因為改動而被孤立的檔案、還有懸空的 import 與 export。刪完之後要<strong>證明沒有任何東西還在引用它</strong>：拿每一個被移除的符號去搜整個 codebase（用它的名字、它的 import 路徑），確認沒有殘留的呼叫者、轉發用的 export，或指向它的 index barrel。如果還有東西需要它，那代表遷移還沒完成，你要把那個呼叫者也遷移掉，而不是把舊碼留活。</p>
+<p>在整合邊界加上<strong>結構化日誌</strong>，讓事件能被查詢與分析。凡是涉及金流、存取控制或合規範圍的變更，還要加上<strong>稽核日誌</strong>。</p>
 
-<p>最後要<strong>在舊碼真的不在的情況下驗證乾淨</strong>：跑專案的型別檢查、建置、lint，以及任何偵測死碼或未使用 import 的檢查。它必須在刪除之後通過，一個未使用 import 或無法解析的引用錯誤，就是你在告訴你漏了一個地方。不要靠把舊碼加回去來消掉這個訊號。</p>
+<h2>Phase 6：刪掉被取代的程式碼</h2>
 
-<p>只有一種例外：規格要求一段過渡期，新舊必須同時跑（例如用 feature flag 的遷移，或一段回填視窗）。那就照規格做，並留下明確的註記：還剩什麼要移除、什麼時候移除，免得被忘掉。</p>
+<p>如果這次建置取代了既有模式或實作，例如重構，或把舊做法換成新做法的 rollout，就必須執行這個階段。</p>
+
+<p>核心規則很簡單：<strong>新舊實作不能共存。</strong></p>
+
+<p>把死碼留在專案裡，是重構最常見的漏失。移除它不是之後再整理的雜事，而是這次建置的一部分。</p>
+
+<p>要清理的內容包括：</p>
+
+<ul>
+<li>已被取代的函式與類別。</li>
+<li>已經不可達的分支。</li>
+<li>因為改動而被孤立的檔案。</li>
+<li>懸空的 import 與 export。</li>
+</ul>
+
+<p>刪除後，必須證明沒有任何東西仍在引用它。對每個被移除的符號搜尋整個 codebase，除了搜尋名稱，也要搜尋它的 import 路徑，確認沒有殘留的呼叫者、轉發用的 export，或指向它的 index barrel。</p>
+
+<p>如果還有東西需要舊符號，代表遷移尚未完成。正確做法是把那個呼叫者也遷移掉，而不是把舊碼留下來繼續存活。</p>
+
+<p>接著在舊碼確實不存在的狀態下執行型別檢查、建置、lint，以及專案提供的死碼或未使用 import 檢查。這些檢查要在刪除之後通過。</p>
+
+<p>未使用 import 或無法解析的引用錯誤，通常是在告訴你還漏了一個地方。不要為了消除錯誤而把舊碼加回去。</p>
+
+<figure class="lesson-figure"><img src="./logical-track-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>唯一的例外，是規格明確要求一段過渡期，讓新舊實作暫時同時運作，例如 feature flag 遷移或回填視窗。這時要照規格執行，並留下清楚註記：</p>
+
+<ul>
+<li>還有哪些內容需要移除。</li>
+<li>應該在什麼時候移除。</li>
+</ul>
+
+<p>沒有這些註記，過渡碼很容易被遺忘，最後變成永久死碼。</p>
 
 <h2>Phase 7：正確性與安全檢查</h2>
 
-<p>這不是最後才做的一張清單，它貫穿每個階段，只是在這裡再強制檢查一次。</p>
+<p>正確性與安全不是最後才做的一張清單，而是貫穿每個階段的檢查。到了 Phase 7，再強制確認一次。</p>
 
 <ul>
-<li><strong>安全</strong>：每個 endpoint 都對行為者做了授權；回應與日誌裡沒有敏感資料外洩；程式裡沒有密鑰。</li>
-<li><strong>失敗模式</strong>：第三方逾時、資料庫變慢、並行寫入時會發生什麼？重試要有界且冪等。</li>
-<li><strong>不變量在並行下成立</strong>：規格裡的關鍵不變量，不能因為兩個同時進來的請求而被破壞。</li>
-<li><strong>設定完整</strong>：每個新環境變數都有被記錄；缺少必要密鑰時，功能要大聲失敗，而不是默默出錯。</li>
+<li><strong>安全：</strong>每個 endpoint 都檢查行為者的授權；回應與日誌沒有洩漏敏感資料；程式碼中沒有密鑰。</li>
+<li><strong>失敗模式：</strong>第三方逾時、資料庫變慢、並行寫入時，系統會如何反應？重試必須有界，而且必須具備冪等性。</li>
+<li><strong>並行下的不變量：</strong>規格中的關鍵不變量，不能因為兩個請求同時進來就被破壞。</li>
+<li><strong>設定完整：</strong>每個新增環境變數都有記錄。缺少必要密鑰時，功能要明確失敗，而不是默默產生錯誤結果。</li>
 </ul>
 
-<h2>報告的樣子</h2>
+<h2>報告要短，但要能讓人採取行動</h2>
 
-<p>做完之後的報告有固定形狀：先給標題那一句，再給下一步，只有在真有的時候才給一個提醒。已經蓋好的檔案、資料模型、endpoint、設定都在程式碼與規格裡，不要重印一遍。例如：</p>
+<p>完成後的報告有固定形狀：先給一句完成摘要，再給下一步；只有真的需要工程師注意時，才補一個提醒。</p>
+
+<p>已經建立的檔案、資料模型、endpoint 與設定都已經存在於程式碼與規格中，不要在報告裡全部重印一次。報告只指出需要工程師採取行動或留意的事項，例如新的環境變數、規格尚未決定的商業規則，或尚未成功套用的 migration。</p>
 
 <blockquote>
 <strong>Built &lt;feature&gt;：一句話，例如「votes API 加上一人一票的不變量，migration 已套用且 schema 上線」。</strong><br>
@@ -103,15 +217,17 @@ Next: /check verify &lt;feature&gt;<br>
 Heads up: &lt;要設定的新環境變數 `X` · 規格沒定的一條商業規則 · 舊碼已移除&gt;
 </blockquote>
 
-<p>報告只講需要工程師注意的事：一個要設定的新環境變數、一個規格沒定的開放問題，或一個沒套用成功的 migration。</p>
-
-<h2>小結</h2>
+<h2>小結：七個階段要留下可驗證的結果</h2>
 
 <blockquote>
-Logical 軌的定位是資深後端工程師：實作 `/architect` 的決策，不重辯，跟著規格、<code>AGENTS.md</code> 與既有程式碼的風格走。三條地面規則是照規格蓋、對齊 codebase、以及推斷／詢問／建議的紀律。七個階段依序是：Phase 1 先把決策吃進去並列出整合點與被取代的舊碼；Phase 2 資料層，migration 要套用且 schema 確認上線，能在資料庫強制的不變量就放那裡；Phase 3 核心邏輯，狀態機要明確，金流與訊息要冪等，輸入在邊界往安全方向失敗；Phase 4 介面層，照 API 表實作，強制授權、每個列表都分頁、一致錯誤形狀、公開端點限流；Phase 5 整合與設定，密鑰從環境讀、webhook 驗簽章並冪等、加結構化與稽核日誌；Phase 6 刪掉被取代的碼並證明無人引用，舊碼在則遷移未完成；Phase 7 正確性與安全檢查，涵蓋安全、失敗模式、並行下的不變量與設定完整。
+Logical 軌的定位是資深後端工程師：實作 `/architect` 的決策，不重辯，並依照規格、<code>AGENTS.md</code> 與既有程式碼的風格工作。三條地面規則是照規格蓋、對齊 codebase，以及遵守推斷／詢問／建議的紀律。
+
+七個階段依序是：Phase 1 讀懂決策，列出整合點與會被取代的舊碼；Phase 2 實作資料層，套用 migration 並確認 schema 上線，把能由資料庫強制的不變量放進資料庫；Phase 3 實作核心邏輯，明確建模狀態機，讓金流與訊息具備冪等性，並讓輸入在邊界往安全方向失敗；Phase 4 依 API 表實作介面，強制授權、為列表分頁、維持一致錯誤形狀，並為公開 endpoint 限流；Phase 5 完成整合與設定，從環境讀取密鑰，驗證並冪等處理 webhook，加入結構化與稽核日誌；Phase 6 刪除被取代的程式碼，搜尋並證明沒有殘留引用；Phase 7 重新檢查安全、失敗模式、並行下的不變量與設定完整性。
 </blockquote>
 
-<p>兩條軌都介紹完了。接下來要處理的是它們共同的最後一段：把被取代的舊碼刪乾淨之後，怎麼只更新該動的那幾行 scope 與 spec 狀態、怎麼把驗證步驟留下來，以及 git 要在什麼時候開分支、什麼時候提交。</p>
+<p>這條軌最後要留下的，不只是「程式碼寫好了」這句話，而是可驗證的結果：資料庫真的套用變更，API 真的符合規格，外部副作用可以安全重試，被取代的舊碼真的消失，必要設定也已經被清楚交代。</p>
+
+<p>兩條軌都介紹完了。接下來要處理的是共同的最後一段：刪乾淨被取代的舊碼之後，如何只更新該動的 scope 與 spec 狀態、留下驗證步驟，以及決定 git 何時開分支、何時提交。</p>
 
 <div class="lesson-nav">
   <div><a href="./ui-track.html">← 上一步：UI 軌：四條設計來源與產品級版面</a></div>
@@ -126,56 +242,48 @@ Logical 軌的定位是資深後端工程師：實作 `/architect` 的決策，�
   <button class="opt">只寫文件的技術寫手角色</button>
   <button class="opt">只負責跑測試的品保工程師</button>
 </div>
-
 <div class="quiz" data-question="資料層的變更什麼時候才算完成？" data-correct="3" data-explain="migration 要真的套用到目標資料庫、schema 確認上線，產生但未套用等於沒做。">
   <button class="opt">migration 檔產生並通過型別檢查</button>
   <button class="opt">資料模型類別在程式碼裡建立好</button>
   <button class="opt">build plan 上把那個任務打勾</button>
   <button class="opt">migration 套用且 schema 上線</button>
 </div>
-
 <div class="quiz" data-question="在活的系統上新增一個 NOT NULL 欄位，正確順序是什麼？" data-correct="0" data-explain="先可 null → 回填 → 再加約束，絕不直接加一個沒有預設值的 NOT NULL 欄位。">
   <button class="opt">先可 null、回填、再加約束</button>
   <button class="opt">直接加 NOT NULL 並設好預設值</button>
   <button class="opt">先加約束再回填歷史資料</button>
   <button class="opt">等所有舊資料先刪掉再加欄位</button>
 </div>
-
 <div class="quiz" data-question="任何牽涉金流、訊息或外部副作用的變更，一定要有什麼？" data-correct="2" data-explain="要有 idempotency key，讓重試是安全的，否則重送會重複扣款或重複套用。">
   <button class="opt">一個新的錯誤處理模式</button>
   <button class="opt">一份額外的單元測試檔案</button>
   <button class="opt">讓重試安全的冪等鍵</button>
   <button class="opt">一組新的資料庫連線池</button>
 </div>
-
 <div class="quiz" data-question="「強制授權，而不只是認證」是什麼意思？" data-correct="1" data-explain="除了確認登入，還要檢查呼叫者能否對「這個」資源行動，依擁有權、角色或組織範圍。">
   <button class="opt">確認使用者有登入就算可以呼叫</button>
   <button class="opt">檢查呼叫者能否動這個資源</button>
   <button class="opt">把授權交給前端畫面處理就好</button>
   <button class="opt">用 API 金鑰取代使用者身分</button>
 </div>
-
 <div class="quiz" data-question="列表 endpoint 在 MVP 階段要不要分頁？" data-correct="2" data-explain="每一個列表 endpoint 都要分頁，就算 MVP 也一樣，不分頁的列表最後都會變成事故。">
   <button class="opt">不用，等資料量變大再加就好</button>
   <button class="opt">只有公開的列表需要分頁</button>
   <button class="opt">要，MVP 也要分頁</button>
   <button class="opt">只有後台管理的列表要分頁</button>
 </div>
-
 <div class="quiz" data-question="處理入站 webhook 時，下列哪一項是必須的？" data-correct="3" data-explain="要驗證簽章、讓 handler 冪等（例如用事件表），依規格用定期補掃對帳。">
   <button class="opt">把 webhook 的內容直接寫進日誌</button>
   <button class="opt">收到就先相信來源一定是對的</button>
   <button class="opt">只用一次性的記憶體去重複處理</button>
   <button class="opt">驗簽章並讓 handler 冪等</button>
 </div>
-
 <div class="quiz" data-question="Phase 6 為什麼要證明「沒有任何東西還在引用」被刪的碼？" data-correct="0" data-explain="如果還有呼叫者，代表遷移還沒完成；把那個呼叫者也遷移掉，而不是留著舊碼。">
   <button class="opt">還有呼叫者代表遷移還沒完成</button>
   <button class="opt">因為 lint 工具會自動幫你刪掉</button>
   <button class="opt">因為舊碼會讓 migration 無法套用</button>
   <button class="opt">因為規格要求一定要留下註解</button>
 </div>
-
 <div class="quiz" data-question="新舊實作並存在同一個 codebase 裡，代表什麼？" data-correct="1" data-explain="新舊共存等於沒完成；移除被取代的碼是這次建置的一部分，唯一的例外是規格明講的過渡期。">
   <button class="opt">一種可以接受的漸進式遷移狀態</button>
   <button class="opt">還沒完成，要把舊碼移除</button>

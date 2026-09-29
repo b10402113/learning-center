@@ -8,111 +8,217 @@
 </head>
 <body>
 
-<h1>收尾：刪掉被取代的碼、更新 scope、走 git</h1>
+<h1>收尾：刪掉被取代的碼、更新 scope，再走 git</h1>
 <p class="meta">Step 5/5 · /develop：依規格實作</p>
 
 <h2>學習目標</h2>
-<p>能在建置落地後刪淨被取代的舊碼並證明無人引用，外科手術式更新 scope 與 spec 狀態，產生 verify 步驟，並照 git 政策分支出與提交。</p>
+<p>完成建置後，你要能刪乾淨被取代的舊碼，證明沒有任何地方仍在引用它；只更新正確的 scope 與 spec 狀態；產生可執行的 verify 步驟；最後依照 git 政策建立分支與提交。</p>
 
-<h2>前言：最像做完、其實還沒做完的那一刻</h2>
+<h2>前言：最像做完，其實還沒做完的時刻</h2>
 
-<p>功能跑起來了、型別檢查也過了，功能清單打勾，心裡覺得收工了。可是這一刻剛好是 `/develop` 最需要誠實的地方。有兩個漏失特別容易在這裡發生，而且都不會亮紅燈。</p>
+<p>功能跑起來了，型別檢查也通過，清單上的項目一個個打勾。看起來可以收工，但這正是 `/develop` 最需要保持誠實的時候。</p>
 
-<p>第一個是舊碼沒有刪。新做法已經接手，但舊函式、舊分支、被孤立的檔案還靜靜躺在那裡。第二個是狀態回報太寬鬆：任務其實只做了一半，卻先在 scope 上打了勾，於是一個月後沒人知道當時到底完成了什麼。這兩個縫要補起來，另外還有一件很日常的事要講：當 `AGENTS.md` 說要開 git 時，分支與提交該在什麼時間點發生。</p>
+<p>最容易漏掉的有兩件事。第一，舊碼可能還留在原地：新做法已經接手，舊函式、舊分支和孤立檔案卻沒人清理。第二，狀態可能報得太寬鬆：任務只完成一半，scope 卻先被打勾，過了一個月，沒人說得清楚當時究竟完成了什麼。</p>
+
+<p>另外，當最近的 <code>AGENTS.md</code> 要求使用 git 時，還要釐清分支與提交的時機。這些都不是「之後再整理」的小事，而是建置真正完成前的最後幾道閘門。</p>
 
 <h2>刪掉被取代的碼：新舊不能共存</h2>
 
-<p>這條規則是跨軌的，UI 軌與 Logical 軌都適用。只要這次建置<strong>取代</strong>了既有的模式或實作，例如重構，或把一種做法換成另一種，那這次建置就包含<strong>刪除</strong>。要刪的是：被取代的函式與類別、變成不可達的分支、因改動而孤立的檔案、以及任何懸空的 import 與 export。</p>
+<p>這條規則同時適用於 UI 軌與 Logical 軌。只要這次建置<strong>取代</strong>了原本的模式或實作，例如完成重構，或把一種做法換成另一種做法，刪除就屬於這次建置的一部分。</p>
 
-<p>刪完不能就算了，要<strong>證明沒有任何東西還在引用它</strong>。拿每一個被移除的符號去搜整個 codebase，包含它的名字與它的 import 路徑，確認沒有殘留的呼叫者、轉發用的 export，或指向它的 index barrel。如果還有東西需要它，那代表遷移還沒完成，你應該把那個呼叫者也遷移掉，而不是把舊碼留活。最後，在舊碼真的不在的情況下跑專案的型別檢查、建置與 lint，它必須通過；一個未使用 import 或無法解析引用的錯誤，就是漏了一個地方，不要靠把舊碼加回去來消掉訊號。</p>
+<p>要清掉的包括：</p>
 
-<p>刪除的時機依範圍而定。<strong>單一站</strong>：新碼進去、型別檢查變綠的那一刻就刪。<strong>多站 rollout</strong>：要等所有站都遷移完、型別檢查全綠的那一趟，才移除被取代的碼，因為還沒遷移的站仍在引用它，太早刪會弄壞建置。唯一的例外是規格明確要求一段過渡期，例如用 feature flag 的遷移或回填視窗；那就照規格做，並留下「還剩什麼要移除、什麼時候移除」的註記。</p>
+<ul>
+<li>被取代的函式與類別。</li>
+<li>已經不可達的分支。</li>
+<li>因改動而孤立的檔案。</li>
+<li>懸空的 import 與 export。</li>
+</ul>
 
-<h2>更新 scope 與報告：只標真的落地的事</h2>
+<p>刪除之後還不算完成。你必須<strong>證明沒有任何東西仍在引用它</strong>。針對每個被移除的符號搜尋整個 codebase，搜尋時同時檢查符號名稱與 import 路徑，確認沒有殘留的呼叫者、轉發用的 export，或指向它的 index barrel。</p>
 
-<p>收尾的第一步是確認，不是宣布。動手勾之前先驗證：檔案真的寫了、程式碼真的在而且型別檢查通過；資料層的任務則要 migration 真的套用、schema 確認上線，而不是只有產生。如果是被打斷或只做一半的任務，就讓它保持未勾、功能維持 <code>in-progress</code>，並明確報告哪裡沒做完、為什麼。<strong>絕不在未驗證或未完成的建置上把任務標成 done。</strong></p>
+<figure class="lesson-figure"><img src="./cleanup-and-finish-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>勾選的層級要分清楚：<strong>原子任務勾在規格裡，里程碑勾在 scope 裡</strong>，而且只動 step 0 讀到的那一個 scope 檔。規格 <code>## Build plan</code> 的每個完成任務勾在規格；某個里程碑的規格任務都完成時，勾 scope 的里程碑子框；所有里程碑都完成時，勾 <code>Build it</code> 框；最後把指標行填上（<code>code in &lt;path&gt;</code>）。沒有規格的功能，就直接勾它 scope 的 checkbox。這裡有一個<strong>收尾閘門</strong>：報告你分別在每個檔案勾了什麼（scope 的框加上 spec 的任務與狀態），或者說明沒有對應的 scope 列，絕不默默結束。</p>
+<p>如果還有程式需要這個符號，表示遷移尚未完成。應該把那個呼叫者也遷移掉，而不是把舊碼留在原地。最後，在舊碼真的移除後，再跑型別檢查、建置與 lint。若出現未使用的 import 或無法解析的引用，那是漏查的訊號，不要把舊碼加回去掩蓋問題。</p>
+
+<p>刪除時機取決於 rollout 的範圍：</p>
+
+<ul>
+<li><strong>單一站：</strong>新碼加入且型別檢查變綠後，就刪除舊碼。</li>
+<li><strong>多站 rollout：</strong>等所有站完成遷移、型別檢查全部變綠後，再移除舊碼。太早刪除會讓仍未遷移的站無法建置。</li>
+</ul>
+
+<p>唯一例外是規格明確要求保留過渡期，例如使用 feature flag 的遷移或回填視窗。這時要照規格執行，並留下「還剩下什麼要移除、預計什麼時候移除」的註記。</p>
+
+<h2>更新 scope 與報告：只標記真正落地的事</h2>
+
+<p>收尾的第一步是確認，不是宣布。開始勾選之前，先確認檔案真的寫入、程式碼真的存在，而且型別檢查已通過。</p>
+
+<p>資料層任務也一樣：migration 必須真的套用，schema 必須確認已上線，不能只停在「migration 檔案已產生」。如果任務被打斷或只完成一半，就維持未勾選，讓功能保持 <code>in-progress</code>，並清楚說明哪裡沒完成、原因是什麼。<strong>未驗證或未完成的建置，絕不能標成 done。</strong></p>
+
+<p>勾選層級要分開：</p>
+
+<ul>
+<li><strong>原子任務：</strong>勾在規格裡。</li>
+<li><strong>里程碑：</strong>勾在 scope 裡。</li>
+<li><strong>功能指標：</strong>填入 <code>code in &lt;path&gt;</code>。</li>
+</ul>
+
+<p>具體來說，規格 <code>## Build plan</code> 中完成的任務，要在規格內勾選。某個里程碑的規格任務全部完成後，才勾 scope 裡的里程碑子框；所有里程碑完成後，才勾 <code>Build it</code> 框。沒有規格的功能，則直接勾它在 scope 中的 checkbox。</p>
+
+<p>還有一個<strong>收尾閘門</strong>：報告中要分別列出每個檔案勾了什麼，包括 scope 的框、spec 的任務與目前狀態。如果找不到對應的 scope 列，也要明確說明，不能默默結束。</p>
+
+<figure class="lesson-figure"><img src="./cleanup-and-finish-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h3>done 是工程師的決定，不是 skill 的閘門</h3>
 
-<p>把所有確定落地的事勾完、自我檢查過（型別或建置綠、能渲染就看過、migration 套用且上線）之後，不是自己宣布完成，而是提出選項：現在把它標成 <code>done</code>，還是先走建議的下一步。如果這個功能沒有 <code>Verify it</code> 或 <code>Test it</code> 的框（例如一個基礎或決策加骨架的功能，或一個 Prototype 建置），那 <code>done</code> 就是自然的下一步；如果它有後面的框，就把那些框當成建議的、可跳過的下一步說明清楚。什麼時候設 <code>done</code>，由工程師說了算，被跳過的步驟也要誠實記成跳過。</p>
+<p>所有確定落地的項目勾完後，先完成自我檢查：型別檢查或建置要綠；能渲染的畫面要實際看過；migration 要已套用且上線。</p>
 
-<p>還有一條特別的規則：<strong>Assumed 規格不會擋住 done</strong>。如果是照著前一節那份假設在建置，就在報告裡立旗：「這個是建立在一個還沒被正式審議的決策上，方便的時候找 <code>/architect</code> 補審。」然後讓工程師自己決定。旗子要亮著，但不當成否決票。</p>
+<p>完成這些檢查後，不要由 skill 自行宣布完成，而是提出選項：現在標成 <code>done</code>，或先走建議的下一步。</p>
 
-<p>當工程師把功能標成 <code>done</code>，要順手把治理規格的 <code>**Status**</code> 從 <code>In Progress</code> 推進到 <code>Accepted</code>，而且是外科手術式地只改那一行：動手前再讀一次，狀態不是 <code>In Progress</code>（例如已經是 <code>Accepted</code>、<code>Superseded</code> 或 <code>Assumed</code>），就立旗而不是覆蓋。這個鏡射動作由哪個 skill 設定 <code>done</code> 就由它做；如果工程師在 `/develop` 之後才跑 verify 或 test，那就輪到那個 skill 做。</p>
+<p>如果功能沒有 <code>Verify it</code> 或 <code>Test it</code> 的框，例如基礎功能、決策加骨架的功能，或 Prototype 建置，<code>done</code> 就是自然的下一步。如果後面還有這些框，就清楚說明它們是建議、可以跳過的下一步。是否設定 <code>done</code>，由工程師決定；跳過的步驟也要誠實記錄為跳過。</p>
 
-<h2>發出 verify 步驟，然後問要放哪裡</h2>
+<p>另外，<strong>Assumed 規格不會阻擋 done</strong>。如果建置是根據尚未正式審議的假設完成，就在報告中立旗說明：「這個功能建立在尚未正式審議的決策上，方便時請找 <code>/architect</code> 補審。」旗子要保留，但不把它當成否決票。</p>
 
-<p>這一步每次都會做，而且<strong>永遠不會自動存檔</strong>。它從驗收條件推導出具體的驗證步驟，每一步都要綁到它對應的 <code>AC-N</code>，例如「進到 <code>/signup</code>、註冊、預期被導到 <code>/auth/verify-email</code>，對應 AC-1」。除了 AC，還要<strong>為規格 Value sourcing 表的每一列各加一個步驟</strong>，因為真正的正確性保證是行為層，規格閘門只是設計期的檢查。這一步要真的去動每個值的來源：換一個輸入、時區、語系、幣別或租戶，再看輸出對不對。這樣就算閘門漏掉了一個被錯誤指源的値（例如用錯時區算出來的「今天」），行為層還是抓得到。</p>
+<p>工程師將功能標成 <code>done</code> 時，要同步把治理規格的 <code>**Status**</code> 從 <code>In Progress</code> 推進到 <code>Accepted</code>。這個修改必須是外科手術式的：只改那一行。</p>
 
-<p>推導完，會給你一個面板問要怎麼處理：</p>
+<figure class="lesson-figure"><img src="./cleanup-and-finish-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>修改前再讀一次狀態。如果狀態不是 <code>In Progress</code>，例如已經是 <code>Accepted</code>、<code>Superseded</code> 或 <code>Assumed</code>，就立旗提醒，不要覆蓋原本的狀態。</p>
+
+<p>由哪個 skill 設定 <code>done</code>，就由哪個 skill 完成這個鏡射動作。如果工程師在 `/develop` 之後才執行 verify 或 test，則由對應的 skill 更新狀態。</p>
+
+<h2>產生 verify 步驟，再詢問要不要存檔</h2>
+
+<p>這一步每次都會執行，但<strong>永遠不會自動存檔</strong>。它會從驗收條件推導出具體的驗證步驟，而且每一步都要綁定對應的 <code>AC-N</code>。</p>
+
+<p>例如：</p>
+
+<p>「進入 <code>/signup</code>、完成註冊，預期被導向 <code>/auth/verify-email</code>，對應 AC-1。」</p>
+
+<p>除了 AC，規格中 Value sourcing 表的每一列也都要各產生一個步驟。因為真正的正確性保證在行為層，規格閘門只是設計期的檢查。</p>
+
+<p>每個步驟都要實際改動該值的來源，例如換一個輸入、時區、語系、幣別或租戶，再觀察輸出是否正確。這能抓到閘門沒攔住的錯誤，例如把錯誤時區算出的日期當成「今天」。</p>
+
+<figure class="lesson-figure"><img src="./cleanup-and-finish-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>推導完成後，會出現面板詢問如何處理：</p>
 
 <table>
 <thead>
 <tr><th>選項</th><th>它做什麼</th><th>什麼時候推薦</th></tr>
 </thead>
 <tbody>
-<tr><td>Save to verify.md</td><td>把步驟寫進功能旁的 <code>verify.md</code>，成為一份耐久清單，讓 `/check verify` 之後可以照跑、`/test` 可以鎖成測試。</td><td>資料、認證或風險較高的功能，推薦這個。</td></tr>
-<tr><td>Just show in summary</td><td>只留在這次的報告裡，不寫檔。</td><td>你只想先看一眼、不想多一份檔。</td></tr>
+<tr><td>Save to verify.md</td><td>把步驟寫入功能旁的 <code>verify.md</code>，成為耐久的驗證清單，讓 `/check verify` 之後可以照著執行，也能由 `/test` 鎖成測試。</td><td>資料、認證或風險較高的功能，推薦使用這個選項。</td></tr>
+<tr><td>Just show in summary</td><td>只保留在這次報告中，不寫入檔案。</td><td>只想先查看步驟，不想增加檔案時。</td></tr>
 </tbody>
 </table>
 
-<p>選了存檔，它會把 <code>verify.md</code> 寫在規格旁邊。如果規格是單一檔案，會先把它升級成目錄：<code>docs/specs/NNNN-feature.md</code> 變成 <code>docs/specs/NNNN-feature/{index.md, rationale.md, verify.md}</code>，把決策歷史的段落搬進 <code>rationale.md</code>、建置規格留在 <code>index.md</code>，並把 scope 的連結指向新的 <code>index.md</code>。已經有 <code>verify.md</code> 就用附加的，不覆蓋。</p>
+<p>如果選擇存檔，<code>verify.md</code> 會寫在規格旁邊。若規格目前是單一檔案，會先將它升級成目錄：</p>
 
-<h2>建議下一步，但講清楚是可選的</h2>
+<pre><code>docs/specs/NNNN-feature.md</code></pre>
 
-<p>報告的結尾會從 scope 推導出建議的下一步，並很清楚地說它是可以選、可以跳過的。它會拿這個功能<strong>第一個還沒勾的框</strong>當建議；所有框都勾完了，就指向下一個功能；如果這個功能根本沒有 <code>Verify it</code> 或 <code>Test it</code> 的框，那就沒有可建議的，直接往下走。它絕不會把任何一個階段講成必要的。</p>
+<p>目錄會變成：</p>
 
-<p>兩個小地方很重要。如果規格是 <code>Assumed</code>，它會先建議補審：<code>/architect &lt;feature&gt;: ratify the assumed &lt;decision&gt;</code>，因為趁早抓到錯誤的假設，比之後繼續往上蓋要好；但這仍然由工程師決定。還有，它會提醒你在下一個功能之前先跑 <code>/clear</code>，因為狀態都活在檔案裡，冗長的 session 就算有快取也比較貴；建置很長的話，可以中途 <code>/compact</code>。最後劃清界線：<code>/develop</code> 只負責建置，不會替你跑 <code>/check verify</code>、<code>/test</code>、<code>/sync</code> 或 <code>/architect</code>，它只做指路，你決定。</p>
+<pre><code>docs/specs/NNNN-feature/{index.md, rationale.md, verify.md}</code></pre>
 
-<h2>git：分支在開工前，提交在里程碑</h2>
+<p>決策歷史的段落會移到 <code>rationale.md</code>，建置規格保留在 <code>index.md</code>，scope 的連結也會改為指向新的 <code>index.md</code>。如果已經存在 <code>verify.md</code>，就採用附加內容的方式，不覆蓋原檔。</p>
 
-<p>git 這一段只在最近的 <code>AGENTS.md</code> 的 <code>## Git</code> 區塊寫著 <code>integration: on</code> 時才會讀。沒寫或寫 <code>off</code>，就不做任何主動的 git 操作，由工程師自己管分支與提交，但前面那些唯讀的狀態檢查照樣會跑。</p>
+<h2>建議下一步，但說清楚它是可選的</h2>
 
-<p>設定有三個：<code>integration</code>、<code>branch prefix</code>（預設 <code>feat/</code>）、<code>commit</code>（預設 <code>per-milestone</code>，也可以是 <code>end-of-build</code> 或 <code>manual</code>）。本機的操作，例如開分支與提交，都是帶建議的選項；<strong>push 與 PR 永遠要先確認</strong>，因為那是對外的動作，而且 PR 是 <code>/document</code> 的工作，不是這裡。</p>
+<p>報告結尾會根據 scope 推導下一步，而且必須清楚說明這只是建議，可以跳過。</p>
 
-<p>如果 integration 開著、但專案還不是一個 git repo，它在開分支或提交之前會先跑 <code>git init</code>，並把已經存在的內容先 stage 起來當第一個 commit。`/audit` 通常在打開 integration 的那一刻就做掉了，這是給走到建置還沒 init 的專案一個保險。</p>
+<p>它會先找出這個功能<strong>第一個尚未勾選的框</strong>。如果目前功能的所有框都已勾選，就指向下一個功能。如果功能根本沒有 <code>Verify it</code> 或 <code>Test it</code> 的框，就不提出下一步建議，直接往下走。</p>
 
-<h3>分支：永遠不要在預設分支上建置</h3>
+<p>任何階段都不能被描述成強制流程。</p>
+
+<p>若規格狀態是 <code>Assumed</code>，會優先建議補審：</p>
+
+<pre><code>/architect &lt;feature&gt;: ratify the assumed &lt;decision&gt;</code></pre>
+
+<p>及早檢查錯誤假設，通常比繼續在錯誤基礎上往上蓋更好；但要不要做，仍由工程師決定。</p>
+
+<p>進入下一個功能前，報告也會提醒先執行 <code>/clear</code>。狀態都保存在檔案中，冗長的 session 即使有快取，成本仍然較高。若建置時間很長，可以在中途執行 <code>/compact</code>。</p>
+
+<p>最後要劃清責任範圍：<code>/develop</code> 只負責建置，不會替你執行 <code>/check verify</code>、<code>/test</code>、<code>/sync</code> 或 <code>/architect</code>。它只提供方向，是否進入下一步由你決定。</p>
+
+<h2>git：開工前建分支，里程碑完成時提交</h2>
+
+<p>只有當最近的 <code>AGENTS.md</code> 在 <code>## Git</code> 區塊中寫著 <code>integration: on</code>，才會讀取這段 git 設定。</p>
+
+<p>如果沒有設定，或設定為 <code>off</code>，就不主動執行 git 操作。分支與提交由工程師自行管理；不過前面的唯讀狀態檢查仍然會執行。</p>
+
+<p>設定有三個：</p>
 
 <ul>
-<li>在預設分支（<code>main</code> 或 <code>master</code>）上，它會<strong>提議開一條分支</strong>（推薦），名字是 <code>&lt;prefix&gt;&lt;feature-slug&gt;</code>，用 scope 的功能名做 kebab case，例如 <code>feat/accounts-sign-in</code>。</li>
-<li>已經在功能分支上，就沿用，不再另開。</li>
-<li>續做一個半成品功能時，如果那個功能的分支存在、而你不在上面，就先切過去。</li>
-<li>如果不是新功能，用變更型別當前綴，例如 <code>fix/</code>、<code>refine/</code>；否則用設定的預設。</li>
+<li><code>integration</code></li>
+<li><code>branch prefix</code>：預設為 <code>feat/</code></li>
+<li><code>commit</code>：預設為 <code>per-milestone</code>，也可以是 <code>end-of-build</code> 或 <code>manual</code></li>
 </ul>
 
-<p>注意這個動作發生的時間點：在「動手建置之前」，它屬於開工前那一輪 freshness 與協作檢查的一部分，而不是收尾才做。</p>
+<p>本機操作，例如建立分支與提交，都是帶有建議性質的選項。<strong>push 與 PR 永遠要先確認</strong>，因為它們是對外的動作；而 PR 屬於 <code>/document</code> 的工作，不是 `/develop` 的工作。</p>
 
-<h3>提交：里程碑落地就提，且要照格式</h3>
+<p>如果 integration 開啟，但專案還不是 git repo，系統會在建立分支或提交之前先執行 <code>git init</code>，並把現有內容先 stage 起來，作為第一個 commit。通常 `/audit` 在 integration 開啟時就已經完成這件事，這也替尚未初始化的專案留下一道保險。</p>
+
+<h3>分支：不要在預設分支上建置</h3>
+
+<ul>
+<li>如果目前在預設分支（<code>main</code> 或 <code>master</code>）上，會<strong>建議建立功能分支</strong>。分支名稱使用 <code>&lt;prefix&gt;&lt;feature-slug&gt;</code>，以 scope 的功能名稱轉成 kebab case，例如 <code>feat/accounts-sign-in</code>。</li>
+<li>如果已經在功能分支上，就沿用目前分支，不再另開。</li>
+<li>如果要繼續完成半成品功能，而該功能的分支已存在但目前不在上面，就先切換過去。</li>
+<li>如果不是新功能，使用變更類型作為前綴，例如 <code>fix/</code> 或 <code>refine/</code>；否則使用設定中的預設前綴。</li>
+</ul>
+
+<p>分支建立的時間點很重要：它要發生在「動手建置之前」，屬於開工前那一輪 freshness 與協作檢查，不是收尾時才補做。</p>
+
+<figure class="lesson-figure"><img src="./cleanup-and-finish-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>提交：里程碑落地就提交，而且要符合格式</h3>
 
 <table>
 <thead>
 <tr><th>設定</th><th>行為</th></tr>
 </thead>
 <tbody>
-<tr><td><code>per-milestone</code>（預設）</td><td>一個里程碑落地、型別檢查變綠時，提議只提交那個里程碑的檔案。</td></tr>
-<tr><td><code>end-of-build</code></td><td>建置整個落地時提一次。</td></tr>
-<tr><td><code>manual</code></td><td>永不提交，工程師自己來。</td></tr>
+<tr><td><code>per-milestone</code>（預設）</td><td>里程碑落地且型別檢查變綠時，建議只提交該里程碑的檔案。</td></tr>
+<tr><td><code>end-of-build</code></td><td>整個建置完成後提交一次。</td></tr>
+<tr><td><code>manual</code></td><td>永不自動提交，由工程師自行處理。</td></tr>
 </tbody>
 </table>
 
-<p>訊息是一行 Conventional Commit 主旨，不寫散文式的 body，並附上必要的 <code>Co-Authored-By</code> trailer。型別從工作性質來（<code>feat</code>、<code>fix</code>、<code>refactor</code>、<code>test</code>、<code>chore</code>），scope 可有可無，摘要用祈使句：</p>
+<p>提交訊息使用一行 Conventional Commit 主旨，不寫散文式的 body，並附上必要的 <code>Co-Authored-By</code> trailer。型別依工作性質選擇，例如 <code>feat</code>、<code>fix</code>、<code>refactor</code>、<code>test</code> 或 <code>chore</code>。scope 可有可無，摘要使用祈使句：</p>
 
 <pre><code>feat(auth): add session persistence
 
 Co-Authored-By: Claude Opus 4.8 (1M context) &lt;noreply@anthropic.com&gt;</code></pre>
 
-<p>三個規矩：<strong>為什麼</strong>這件事留在規格與 PR 裡，永遠不寫進 commit body（單一來源）；只提交真的落地而且型別檢查通過的東西，絕不提交半個里程碑；這裡永遠不 <code>git push</code>，那個動作屬於 PR 時刻的 <code>/document</code>，而且要先確認。報告時，如果 integration 是開的，就加一行說明你在哪條分支、提交了什麼（例如 <code>feat(auth): … · 3 commits</code>），或是提交是 <code>manual</code>；如果 integration 關著或沒設定，就一個字都別提 git。</p>
+<p>記住三條規矩：</p>
+
+<ul>
+<li><strong>為什麼</strong>要做這件事，留在規格與 PR 中，不寫進 commit body，維持單一來源。</li>
+<li>只提交已落地且型別檢查通過的內容，絕不提交半個里程碑。</li>
+<li>這裡永遠不執行 <code>git push</code>。push 屬於 PR 時刻的 <code>/document</code>，而且必須先確認。</li>
+</ul>
+
+<p>如果 integration 開啟，報告要說明目前在哪條分支，以及提交了什麼，例如 <code>feat(auth): … · 3 commits</code>；如果提交設定為 <code>manual</code>，也要明確標示。若 integration 關閉或未設定，就完全不要在報告中提到 git。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-收尾有兩個最容易漏的動作。第一，被取代的舊碼要刪乾淨並證明無人引用：刪掉被取代的函式、不可達分支、孤立檔案與懸空 import，搜尋每個被移除符號確認沒有殘留呼叫者，並在舊碼不在的情況下讓型別檢查、建置、lint 通過；單站的新碼綠了就刪，多站等全綠那一趟再刪，唯一例外是規格明講的過渡期。第二，只標真的落地的事：原子任務勾在規格、里程碑勾在 scope、只動那個 scope 檔，並遵守收尾閘門回報勾了什麼；done 是工程師的決定，Assumed 規格不擋 done，標 done 時把治理規格從 In Progress 鏡射成 Accepted，且動手前再讀一次。每次都要從 AC 與 Value sourcing 表推出綁著 AC 的 verify 步驟，並問要存進 verify.md 還是只放摘要，絕不自動存。建議下一步時講清楚它是可選的。git 只在 integration 開啟時作用：開工前先開功能分支，里程碑落地照設定提交一行 Conventional Commit 加 Co-Authored-By，push 與 PR 永遠先確認且屬於 /document。
+收尾最容易漏掉兩件事。
+
+第一，必須刪乾淨被取代的舊碼，並證明沒有任何地方仍在引用它。清掉被取代的函式、不可達分支、孤立檔案與懸空 import；搜尋每個被移除的符號，確認沒有殘留呼叫者；最後在舊碼移除後，讓型別檢查、建置與 lint 通過。單一站的新碼變綠後就刪除，多站則等所有站遷移並全數變綠後再刪。只有規格明確要求過渡期時，才暫時保留，並記錄後續移除計畫。
+
+第二，只標記真正落地的事。原子任務勾在規格，里程碑勾在 scope，只修改指定的 scope 檔，並遵守收尾閘門回報各檔案勾了什麼。done 是工程師的決定；Assumed 規格不會阻擋 done。標成 done 時，再把治理規格的狀態從 In Progress 鏡射成 Accepted，而且修改前要重新確認狀態。
+
+每次都要從 AC 與 Value sourcing 表產生綁定 AC 的 verify 步驟，再詢問要存進 verify.md，還是只放在摘要中，絕不自動存檔。提出建議下一步時，要清楚說明它是可選的。
+
+git 只在 integration 開啟時作用：開工前先建立功能分支，里程碑落地後依設定提交一行 Conventional Commit 與 Co-Authored-By。push 與 PR 永遠要先確認，並且屬於 /document。
 </blockquote>
 
-<p>走到這裡，你已經把 `/develop` 從閘門到收尾走完了一遍：先確認決策有人做過，分軌載入規格並隔離探索，在 UI 軌與 Logical 軌各自把東西蓋到位，最後把舊碼清乾淨、把狀態誠實回報、把驗證步驟交給下一個階段。下一步是把這條建置好的線交給 `/check verify` 與 `/test` 去證明它真的能動。</p>
+<p>到這裡，你已經完成 `/develop` 從閘門到收尾的整條流程：先確認決策有人做過，依軌道載入規格並隔離探索；在 UI 軌與 Logical 軌完成建置；最後刪乾淨舊碼、誠實更新狀態，並把驗證步驟交給下一個階段。</p>
+
+<p>下一步就是把這條已建置的線交給 `/check verify` 與 `/test`，證明它真的能動。</p>
 
 <div class="lesson-nav">
   <div><a href="./logical-track.html">← 上一步：Logical 軌：從資料層到介面的七個階段</a></div>
@@ -126,63 +232,54 @@ Co-Authored-By: Claude Opus 4.8 (1M context) &lt;noreply@anthropic.com&gt;</code
   <button class="opt">代表舊函式還有其他用途</button>
   <button class="opt">代表新做法還沒通過審查</button>
 </div>
-
 <div class="quiz" data-question="單一站的替換，被取代的舊碼該什麼時候刪？" data-correct="2" data-explain="單站的話，新碼進去、型別檢查變綠的那一刻就刪；多站則等全部遷移完、全綠那一趟再刪。">
   <button class="opt">等下一個功能開始時一起處理</button>
   <button class="opt">等所有站都遷移完再一起刪</button>
   <button class="opt">新碼進、型別檢查綠就刪</button>
   <button class="opt">等 code review 通過之後再刪</button>
 </div>
-
 <div class="quiz" data-question="功能什麼時候算 done，由誰決定？" data-correct="3" data-explain="done 是工程師的決定，skill 只勾確定落地的事並提出選項，從不自己宣布完成。">
   <button class="opt">由 /develop 在型別檢查通過時決定</button>
   <button class="opt">由 /check verify 跑完之後決定</button>
   <button class="opt">由 scope 上所有框自動判斷</button>
   <button class="opt">由工程師決定，skill 不代決</button>
 </div>
-
 <div class="quiz" data-question="工程師把功能標成 done 時，治理規格的狀態要怎麼動？" data-correct="0" data-explain="把 **Status** 從 In Progress 外科手術式地推進到 Accepted，動手前再讀一次，狀態不符就立旗不覆蓋。">
   <button class="opt">從 In Progress 推進到 Accepted</button>
   <button class="opt">從 Proposed 直接跳成 Accepted</button>
   <button class="opt">從 Assumed 自動清成 Accepted</button>
   <button class="opt">維持原狀，等 /sync 統一處理</button>
 </div>
-
 <div class="quiz" data-question="除了每個 AC 之外，verify 步驟還要涵蓋什麼？" data-correct="2" data-explain="規格 Value sourcing 表的每一列各要一個步驟，實際去換輸入、時區、語系等，確認每個值的來源是對的。">
   <button class="opt">每個 scope 里程碑的子框各一步</button>
   <button class="opt">每個 commit 的訊息各一個步驟</button>
   <button class="opt">Value sourcing 表的每一列</button>
   <button class="opt">每個被刪掉的舊函式各一步</button>
 </div>
-
 <div class="quiz" data-question="verify 步驟推導完之後，/develop 會怎麼處理？" data-correct="1" data-explain="它會問要存進 verify.md 還是只放摘要，永遠不會自動存檔；資料、認證或高風險功能推薦存檔。">
   <button class="opt">一律自動寫進 verify.md 檔案</button>
   <button class="opt">問要存檔還是只放摘要</button>
   <button class="opt">直接刪掉，只留給 /test 處理</button>
   <button class="opt">存進 scope 檔的功能段落裡</button>
 </div>
-
 <div class="quiz" data-question="git integration 是開的，而你人在 main 分支上，會怎麼做？" data-correct="3" data-explain="它會提議開一條功能分支（推薦），因為永遠不要在預設分支上建置。">
   <button class="opt">直接在 main 上開始建置</button>
   <button class="opt">幫你 push 一個新的遠端分支</button>
   <button class="opt">自動把 main 合併到新的分支</button>
   <button class="opt">提議開一條功能分支</button>
 </div>
-
 <div class="quiz" data-question="commit 訊息的格式要求是什麼？" data-correct="0" data-explain="一行 Conventional Commit 主旨，加上必要的 Co-Authored-By trailer；為什麼留在規格與 PR，不寫進 commit body。">
   <button class="opt">一行主旨加 Co-Authored-By</button>
   <button class="opt">完整段落說明這次的決策理由</button>
   <button class="opt">只寫一個單字當作主題</button>
   <button class="opt">把規格全文貼進 commit body</button>
 </div>
-
 <div class="quiz" data-question="/develop 會自己 git push 嗎？" data-correct="2" data-explain="永遠不會。push 是對外動作要先確認，而且 PR 是 /document 的工作，不是 /develop 的。">
   <button class="opt">會，里程碑落地時順便 push</button>
   <button class="opt">會，但只 push 到功能分支上</button>
   <button class="opt">不會，push 屬於 /document</button>
   <button class="opt">不會，因為 push 沒有必要</button>
 </div>
-
 <div class="quiz" data-question="功能建立在 Assumed 規格上，會擋住 done 嗎？" data-correct="1" data-explain="不會。Assumed 規格不擋 done，但旗子要亮著，提醒決策還沒被 /architect 正式審過。">
   <button class="opt">會，必須先補審才能標 done</button>
   <button class="opt">不會，但要立旗提醒補審</button>
