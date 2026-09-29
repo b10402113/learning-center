@@ -50,3 +50,60 @@ updated: 2026-09-29
 - artifact-interactivity-and-sharing: unknown
 
 > probe skipped via /nodes claude-ecosystem-bootcamp/first-win skip-probe on 2026-09-29
+
+## cowork-files — Cowork 接手本機檔案
+
+- cowork-vs-chat: unknown
+- chat-limits: unknown
+- agentic-delegation: unknown
+- folder-access-scoped: unknown
+- cowork-core-features: unknown
+- cowork-model-choice: unknown
+- dispatch-and-settings: unknown
+- global-instruction: unknown
+- plan-then-execute-flow: unknown
+- downloads-organization: unknown
+- rename-generic-files: unknown
+- duplicate-and-delete-safety: unknown
+- receipt-scanning: unknown
+- expense-extraction: unknown
+- excel-report-structure: unknown
+- flagging-unclear-items: unknown
+
+> probe skipped via /nodes claude-ecosystem-bootcamp/cowork-files skip-probe on 2026-09-30
+
+## chat-for-real-work — 用 Chat 做真實工作
+
+- desktop-vs-web-surface: unknown
+- desktop-required-for-fuller-experience: unknown
+- chat-conversation-tool: unknown
+- chat-strengths: unknown
+- writing-and-editing: unknown
+- explaining-complex-things: unknown
+- brainstorming: unknown
+- quick-analysis: unknown
+- research-and-qa: unknown
+- one-off-drafting: unknown
+- chat-limits: unknown
+- chat-vs-cowork-code: unknown
+
+> probe skipped via /nodes claude-ecosystem-bootcamp/chat-for-real-work skip-probe on 2026-09-30
+
+## projects-and-context — 專案與三層 context
+
+- project-as-persistent-workspace: unknown
+- three-project-parts: unknown
+- when-to-use-projects: unknown
+- one-project-one-job: unknown
+- creating-a-chat-project-walkthrough: unknown
+- project-vs-skill: unknown
+- chat-vs-cowork-projects: unknown
+- cowork-project-capabilities: unknown
+- three-ways-to-create-cowork-project: unknown
+- context-layers-overview: unknown
+- specificity-wins-conflict: unknown
+- claude-md-file: unknown
+- common-project-mistakes: unknown
+- test-prompt-verify-context: unknown
+
+> probe skipped via /nodes claude-ecosystem-bootcamp/projects-and-context skip-probe on 2026-09-30
