@@ -11,16 +11,20 @@
 <h1>Summarizer：用一次 LLM 呼叫把舊 turns 壓成摘要</h1>
 <p class="meta">Step 3/5 · 摘要的摘要，是怎麼累積出來的</p>
 
+<p>對話一長，所有舊 turns 都塞進 context，不只會變慢，也會讓真正重要的資訊被淹沒。這一步要做的事很單純：把快要移除的舊內容整理成摘要，並把摘要一路帶到下一次壓縮，讓 agent 記得必要的事，卻不用背著完整歷史前進。</p>
+
 <h2>學習目標</h2>
-<p>用 <code>generateText</code> 寫出 <code>summarize</code>：把舊 turns 攤平成文字、折入既有摘要（summaries of summaries）、保留 ID／類別／金額／已送事項，並用 <code>maxOutputTokens</code> 設上限。</p>
+<p>用 <code>generateText</code> 寫出 <code>summarize</code>：把舊 turns 攤平成文字、折入既有摘要（summaries of summaries），保留 ID、類別、金額與已送出的事項，最後用 <code>maxOutputTokens</code> 設定摘要上限。</p>
 
-<h2>摘要不是演算法，就是一次 LLM 呼叫</h2>
+<h2>摘要的本質：一次 LLM 呼叫</h2>
 
-<p>聽到「把對話壓縮成摘要」，很容易想像一套複雜的抽取規則：挑關鍵字、算權重、砍句子。這裡完全不是那樣。</p>
+<p>聽到「把對話壓縮成摘要」，很容易以為要先挑關鍵字、計算權重，再刪掉不重要的句子。但這裡不需要另外設計一套摘要演算法。</p>
 
-<p><code>summarize</code> 的本質就是<strong>一次普通的 LLM 呼叫</strong>，只是餵給它的輸入是「快要被丟掉的舊內容 + 既有摘要」，並用一個專門的 system prompt 要求它吐出精簡的版本。你之後想加強它——換更便宜的模型、加更嚴的格式要求、甚至做成串流——都只是在調這一次呼叫。</p>
+<p><code>summarize</code> 的核心就是<strong>一次普通的 LLM 呼叫</strong>。輸入是「即將被移除的舊內容，加上既有摘要」，再透過專用的 system prompt，要求模型產生更新後的精簡版本。</p>
 
-<h2>用 generateText，不是 streamText</h2>
+<p>之後如果要換便宜一點的模型、加上更嚴格的格式要求，或改成串流處理，都是在調整這一次呼叫。摘要本身不需要被包裝成另一種神祕機制。</p>
+
+<h2>先用 generateText，不要用 streamText</h2>
 
 <pre><code>import { generateText } from "ai";
 
@@ -46,21 +50,29 @@ export async function summarize(
   return text;
 }</code></pre>
 
-<p>第一個要停下來看的選擇是 <code>generateText</code> 而非 <code>streamText</code>。為什麼？因為<strong>摘要沒有要即時顯示給使用者看，而且後續流程必須等它完成才能繼續</strong>。串流是為了讓使用者感覺快，這裡沒有觀眾；硬要串流只是多繞一圈，還得自己把碎片拼回來。</p>
+<p>這裡選 <code>generateText</code>，而不是 <code>streamText</code>，是因為摘要不需要即時顯示給使用者。它是內部流程的中間產物，後續步驟必須等摘要完整產生後才能繼續。</p>
 
-<blockquote>判斷準則很簡單：內容要邊產生邊給人看 → 用 <code>streamText</code>；內容是內部流程的中間產物、完成後才用 → 用 <code>generateText</code>。</blockquote>
+<p>串流適合「一邊產生、一邊讓人看」的內容。摘要沒有觀眾，使用串流反而要多處理一層：收集碎片，再把它們拼回完整文字。</p>
 
-<h2>摘要器有自己的 system prompt</h2>
+<blockquote>判斷準則很簡單：內容要邊產生邊給人看，就用 <code>streamText</code>；內容是內部流程的中間產物，完成後才會被使用，就用 <code>generateText</code>。</blockquote>
 
-<p>注意 <code>system: SUMMARIZER_PROMPT</code>：摘要器用的是一份<strong>跟任務 agent 完全不同的指示</strong>。任務 agent 的 prompt 在講「你是客服、要怎麼處理退款」；摘要器的 prompt 在講「你是壓縮器、只准留下事實、要短」。兩者混用會出問題——你不想讓摘要器以為自己也要去處理退款。</p>
+<figure class="lesson-figure"><img src="./summarize-to-compact-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>這份 prompt 的內容大致是要求它產出精簡的 running summary，並且<strong>明確保留具體事實</strong>：ID、類別、金額，以及「哪些事情已經送出去了」。這些是後面步驟最容易被壓掉、又最不能壓掉的東西——摘要一旦漏掉「已送出的項目」，agent 就可能重複動作。</p>
+<h2>摘要器要有自己的 system prompt</h2>
 
-<h2>摘要的摘要：把舊摘要折回來</h2>
+<p>程式裡的 <code>system: SUMMARIZER_PROMPT</code> 很重要。摘要器使用的指示，應該和執行任務的 agent 分開。</p>
 
-<p>真正的關鍵在參數 <code>priorSummary</code>。每次壓縮不是從零開始寫一份新摘要，而是把<strong>上一次的摘要</strong>一起餵進去，讓模型產出「更新後的版本」。</p>
+<p>任務 agent 的 prompt 可能是在說「你是客服，請處理退款」；摘要器的 prompt 則是在說「你是壓縮器，只留下事實，並保持精簡」。如果共用同一份指示，摘要器可能誤以為自己也要執行退款，而不是整理發生過的事情。</p>
 
-<p>這就是 summaries of summaries（摘要的摘要）：第一次壓縮把 20 個 turns 壓成 5 行；第二次再把「那 5 行 + 新的舊 turns」壓成 6 行。歷史上所有被壓掉的內容，都還以濃縮的形式留在這條鏈上，不會因為被移出 turns 就消失。</p>
+<p>摘要 prompt 至少要要求模型產生精簡的 running summary，並<strong>明確保留具體事實</strong>：ID、類別、金額，以及哪些事情已經送出。</p>
+
+<p>這些資訊最容易在壓縮時被省略，卻又不能遺失。尤其是「已送出的項目」；摘要若沒有記住它，agent 下一次就可能把同一個動作再做一次。</p>
+
+<h2>摘要的摘要：把 priorSummary 折回來</h2>
+
+<p>真正讓摘要能持續運作的關鍵，是參數 <code>priorSummary</code>。每次壓縮都不是從零開始，而是把<strong>上一份摘要</strong>和新一批舊 turns 一起交給模型，產出更新後的版本。</p>
+
+<p>這就是 summaries of summaries，也就是「摘要的摘要」。第一次可能把 20 個 turns 壓成 5 行；下一次再把那 5 行和新的舊 turns 一起壓縮成 6 行。被移出 turns 的歷史，不會直接消失，而是以濃縮後的形式留在摘要鏈上。</p>
 
 <table>
 <thead>
@@ -73,15 +85,21 @@ export async function summarize(
 </tbody>
 </table>
 
-<p>所以「State 會累積」不是說它一直變長，而是說它<strong>帶著過去的資訊一起往前走</strong>——每一步都吸收新內容、吐出更精簡的版本。</p>
+<p>所以「State 會累積」不是指文字會無限變長，而是指它會帶著過去的重要資訊往前走。每次壓縮都吸收新內容，再吐出一份更精簡的版本。</p>
 
-<h2>結尾還是要留一則 user</h2>
+<figure class="lesson-figure"><img src="./summarize-to-compact-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>還記得 messages 陣列的規矩嗎？在這裡同樣適用，只是換成 <code>generateText</code> 的 prompt：最後一段必須是給模型的<strong>指令</strong>（「把更新後的摘要寫出來」），否則模型只是在讀一份沒有問題的報告，不知道自己該產出什麼。上面程式碼把那段指令放在陣列最後，就是為了這個。</p>
+<h2>最後要放一段明確指令</h2>
 
-<h2>用 maxOutputTokens 封住摘要的長度</h2>
+<p>這裡也要遵守 messages 的基本規矩：輸入最後必須告訴模型要做什麼。</p>
 
-<p>摘要的長度也該有上限。做法不是寫在 prompt 裡拜託模型「請短一點」——那只是建議，模型不一定聽。真正可靠的是 inference 參數 <code>maxOutputTokens</code>：把它設在 summarize 呼叫上，模型產出的摘要就被硬性封頂。</p>
+<p>程式最後放入 <code>"Write the updated running summary."</code>，就是為了明確要求模型產生更新後的摘要。如果只有 <code>priorSummary</code> 和 <code>history</code>，模型看到的只是一份資料報告，不一定知道下一步要輸出摘要。</p>
+
+<h2>用 maxOutputTokens 封住摘要</h2>
+
+<p>只在 prompt 裡寫「請保持精簡」，比較像是在拜託模型，不能當成可靠的長度控制。摘要本身會被放回後續 context；如果摘要也越寫越長，壓縮就失去意義。</p>
+
+<p>真正的上限要交給 inference 參數 <code>maxOutputTokens</code>：</p>
 
 <pre><code>const { text } = await generateText({
   model,
@@ -90,11 +108,15 @@ export async function summarize(
   maxOutputTokens: 300, // 硬性上限，不靠 prompt 求情
 });</code></pre>
 
-<p>這也回答了一個常見疑惑：為什麼我壓縮完之後，context 還是很肥？因為摘要本身也是一段會被塞回 system 的文字。摘要不封頂，等於壓縮效果被封頂。用參數封住，才是真有保證。</p>
+<p>這個設定會硬性限制模型產出的摘要長度。當你發現壓縮後 context 仍然很肥，除了檢查舊 turns 是否真的移除，也要檢查摘要本身是否有設上限。</p>
 
 <h2>帶回自己的 runtime</h2>
 
-<p>這一步最有遷移價值的兩個決策：<strong>摘要是一次獨立的 LLM 呼叫（有自己的 prompt）</strong>，以及<strong>摘要可累積（把舊摘要折回來）</strong>。前者讓你可以獨立調整成本與品質，後者讓壓縮不會造成資訊斷層。兩者都跟 TS 或 Java 無關。</p>
+<p>這一步有兩個可以直接帶走的決策。</p>
+
+<p>第一，摘要是<strong>一次獨立的 LLM 呼叫，並且有自己的 prompt</strong>。因此你可以單獨調整摘要的模型、成本與品質，而不必改動任務 agent。</p>
+
+<p>第二，摘要要<strong>把上一份摘要折回輸入</strong>。這讓壓縮變成持續更新，而不是每次重寫一段互不相干的文字，也避免歷史資訊在 turns 被移除後突然斷掉。</p>
 
 <div class="lesson-nav">
   <div><a href="./hydrate-context.html">← 上一步：Hydrator：估算 token 並組出這一輪的 context</a></div>
@@ -109,35 +131,30 @@ export async function summarize(
   <button class="opt">資料庫端的聚合查詢</button>
   <button class="opt">模型內建的記憶壓縮功能</button>
 </div>
-
 <div class="quiz" data-question="summarize 為什麼用 generateText 而非 streamText？" data-correct="3" data-explain="摘要不需要即時顯示，而且後續流程必須等它完成才能繼續。">
   <button class="opt">generateText 比較便宜</button>
   <button class="opt">streamText 不支援摘要</button>
   <button class="opt">generateText 可以省略 system prompt</button>
   <button class="opt">摘要不需顯示，且必須等它完成</button>
 </div>
-
 <div class="quiz" data-question="為什麼摘要器要用自己的 system prompt？" data-correct="0" data-explain="摘要器的職責是壓縮事實，與任務 agent 的角色不同，混用會混淆。">
   <button class="opt">它的職責與任務 agent 不同</button>
   <button class="opt">任務 agent 的 prompt 太短</button>
   <button class="opt">這樣才能節省 token</button>
   <button class="opt">系統只允許一份 prompt</button>
 </div>
-
 <div class="quiz" data-question="priorSummary 參數讓壓縮得到什麼效果？" data-correct="2" data-explain="把舊摘要折回來，產生更新版，形成摘要的摘要而不斷層。">
   <button class="opt">讓摘要自動加密保存</button>
   <button class="opt">讓每次壓縮重新開始</button>
   <button class="opt">讓舊摘要被吸收成更新版</button>
   <button class="opt">讓壓縮跳過最近的 turns</button>
 </div>
-
 <div class="quiz" data-question="摘要最該保留哪些內容？" data-correct="1" data-explain="ID、類別、金額與已送事項等具體事實最容易被壓掉，也最不能漏。">
   <button class="opt">模型的思考過程與語氣</button>
   <button class="opt">ID、金額與已送事項</button>
   <button class="opt">每一輪完整的原文</button>
   <button class="opt">工具呼叫的實作細節</button>
 </div>
-
 <div class="quiz" data-question="要可靠地限制摘要長度，該怎麼做？" data-correct="3" data-explain="用 maxOutputTokens 硬性封頂，比在 prompt 裡拜託模型更可靠。">
   <button class="opt">在 prompt 寫「請短一點」</button>
   <button class="opt">把輸入字串先截短</button>

@@ -8,72 +8,86 @@
 </head>
 <body>
 
-<h1>為何 code 勝 inference，與 vm 不是真正的邊界</h1>
-<p class="meta">Step 4/4 · 用一個 $49 的 demo 驗證，然後誠實面對邊界的極限</p>
+<h1>為什麼 code 比 inference 可靠？而 <code>node:vm</code> 不是安全邊界</h1>
+<p class="meta">Step 4/4 · 用一個 $49 的 demo 驗證，再誠實面對沙箱的極限</p>
 
 <h2>學習目標</h2>
-<p>能解釋為什麼讓模型「寫程式再執行」比「用推論做算術」可靠（算術跟日期會幻覺），並說得出 <code>node:vm</code> 只是中介點、不是真正的安全邊界，生產環境該用託管沙箱。</p>
+<p>當 agent 需要處理金額或日期時，直接讓模型推論，答案可能會漂移。這一節會用一個退款案例看見：讓模型先寫程式，再交給程式執行，為什麼更可靠。</p>
+
+<p>你也會弄清楚 <code>node:vm</code> 能攔下什麼、攔不下什麼，以及為什麼它只是中介點，不是真正的安全邊界。最後，你要能判斷：什麼情況適合用自己的沙箱，什麼情況該交給託管沙箱。</p>
 
 <h2>先把工具「說給模型聽」</h2>
 
-<p>工具建好了，模型不會自動知道要去用它。得在 system prompt 裡「廣告」一下：告訴 agent，凡是需要算術，就呼叫 <code>run_code</code>，在一個 async 包裝裡寫 JavaScript，可以用 <code>getCharges</code>、<code>searchKnowledgeBase</code> 這兩個 helper。</p>
+<p>工具建好之後，模型不會自動知道它們存在。你得在 system prompt 裡明確告訴 agent：只要需要算術，就呼叫 <code>run_code</code>；程式要包在 async 函式裡，並且可以使用 <code>getCharges</code> 與 <code>searchKnowledgeBase</code> 這兩個 helper。</p>
 
-<p>有趣的是：<strong>這段 prompt 沒有所謂標準答案</strong>。怎麼寫都可以，重點是讓模型知道「有 <code>run_code</code> 這個工具、何時該用」。這是個關於探索的小提醒——工具描述是給模型看的護欄，措辭是自由的。</p>
+<p><strong>這段 prompt 沒有所謂標準答案。</strong>重點只有兩個：讓模型知道有 <code>run_code</code>，也讓它知道什麼時候該用。工具描述比較像給模型看的護欄；護欄要放在哪裡可以調整，措辭本身不是固定格式。</p>
 
 <h2>Demo：算出精確退款</h2>
 
-<p>拿一個 billing prompt 來實測，故意設計成「不用 code mode 就很痛苦」的題型：</p>
+<p>拿一個 billing prompt 來實測，故意挑一個不用 code mode 就很麻煩的任務：</p>
 
 <blockquote class="good-code">「幫我找出重複扣款的客戶，告訴我該退多少錢（美元，精確數字）。」</blockquote>
 
-<p>agent 接了這個任務，走完一整輪：classify → 呼叫 <code>run_code</code> → 真的寫出一支程式，<code>await tools.getCharges(...)</code> 把帳單撈進來、<code>console.log</code> 打印、找出同一客戶同一天重複扣款的那筆、再問知識庫退款政策、最後 <code>return</code> 出結果。</p>
+<p>agent 接到任務後，會走完一整輪流程：先 classify，再呼叫 <code>run_code</code>，接著真的寫出一支程式。</p>
 
-<p>出來的數字是——<strong>精確的 $49</strong>。而且這個 $49 是從「return 的回傳值」來的，不是從 log 裏猜的。整件事「遠比讓模型在幾十次搜尋+算術的工具往返裡慢慢推理」快多了。</p>
+<p>這支程式會用 <code>await tools.getCharges(...)</code> 撈帳單，透過 <code>console.log</code> 印出資料，找出同一客戶在同一天重複扣款的那筆，再查詢知識庫中的退款政策，最後用 <code>return</code> 回傳結果。</p>
+
+<p>答案是——<strong>精確的 $49</strong>。而且這個 $49 來自程式的 return 值，不是模型看著 log 猜出來的。整個流程也比讓模型在幾十次搜尋與算術的工具往返中慢慢推理快得多。</p>
+
+<figure class="lesson-figure"><img src="./code-beats-inference-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>為什麼 code 勝過 inference</h2>
 
-<p>這是本節點最深的一課，也是它最反直覺的地方。多數人會想：「讓模型直接算不就好了，為什麼還要寫程式？」答案是：<strong>模型做算術是不可靠的，它做的是機率性的推理。</strong></p>
+<p>這裡最反直覺的地方是：模型明明會算，為什麼還要讓它寫程式？</p>
 
-<p>具體兩大地雷：</p>
-
-<ul>
-<li><strong>算術幻覺</strong>：模型有時把任何出現的數字當成模板，隨機代入別的數值。算術只要走推論路線，某個地方就一定會幻覺——因為這整個過程是機率性的。</li>
-<li><strong>日期特別糟</strong>：日期尤其不可靠，因為位數多、模型常記不住或弄錯。</li>
-</ul>
-
-<p>解法就是那句口訣：<strong>模型擅長寫程式，不擅長數數，那就讓它寫程式。</strong>把輸入「強行餵給」一段確定性的程式碼，出來的結果是可重複、可驗證的。程式不會因為同一個輸入而偶爾給出不同的答案。</p>
-
-<h2>timeout 能設在哪？</h2>
-
-<p>回到一個實際的運維問題：萬一模型寫了支掛住的程式，要怎麼擋？答案是 timeout 可以在<strong>呼叫層或 runtime 層</strong>控制：</p>
+<p>因為模型的推理是機率性的。它可以很會組織步驟，卻不適合當計算機使用。</p>
 
 <ul>
-<li>預設是 2 秒，但目前預設值「擺在那沒被用」。</li>
-<li>你也可以在 <code>runTool</code> 的 switch 裡呼叫 <code>runInSandbox</code> 時，把 <code>options.timeoutMs</code> 傳進去。</li>
-<li>背後的 <code>withTimeout</code> 會 promise 出一個「計時到就 reject」的新 promise，跟程式 <code>Promise.race</code>——先完成的贏。</li>
-<li>程式若超時，reject 就順勢掉進錯誤路徑，掛住的程式無法無限期卡住 server。</li>
+<li><strong>算術幻覺</strong>：模型有時會把上下文裡出現的數字當成模板，再隨機代入其他數值。只要算術走的是推論路線，就可能在某個步驟出錯。</li>
+<li><strong>日期特別不可靠</strong>：日期通常位數較多，模型容易記錯、算錯，或在轉換過程中弄混。</li>
 </ul>
 
-<h2>把邊界「打出來看」：test-sandbox</h2>
+<p>所以可以記住這句話：<strong>模型擅長寫程式，不擅長數數，那就讓它寫程式。</strong></p>
 
-<p>課程還附了一支 <code>test-sandbox.ts</code>，直接驅動 <code>runInSandbox</code>（不需要 agent），把這道邊界的三種護欄實地演一遍：</p>
+<p>把資料輸入一段確定性的程式碼，結果就能重複執行，也能驗證。相同輸入交給同一段程式，不會像推論一樣偶爾得到不同答案。</p>
+
+<h2>timeout 能設在哪裡？</h2>
+
+<p>模型寫出的程式可能會卡住。要避免它拖住整台 server，timeout 可以放在<strong>呼叫層或 runtime 層</strong>控制：</p>
+
+<ul>
+<li>預設 timeout 是 2 秒，但目前這個預設值只是放著，尚未被使用。</li>
+<li>你也可以在 <code>runTool</code> 的 switch 中呼叫 <code>runInSandbox</code> 時，傳入 <code>options.timeoutMs</code>。</li>
+<li>底層的 <code>withTimeout</code> 會建立一個新的 promise，時間到了就 reject；它的行為就像 <code>Promise.race</code>，先完成的那個結果獲勝。</li>
+<li>程式超時後，reject 會進入錯誤路徑，讓掛住的程式無法無限期佔住 server。</li>
+</ul>
+
+<h2>把邊界打出來看：<code>test-sandbox</code></h2>
+
+<p>課程附了一支 <code>test-sandbox.ts</code>。它不需要透過 agent，而是直接驅動 <code>runInSandbox</code>，把沙箱提供的四種行為實際跑一遍：</p>
 
 <ol>
-<li><strong>正常計算</strong>——透過 <code>tools</code> API 撈資料、算出結果。</li>
-<li><strong>同步無窮迴圈</strong> <code>while (true) {}</code>——被 timeout 攔下來。</li>
-<li><strong><code>require("fs")</code></strong>——被封鎖，因為 context 裡根本沒有 <code>require</code>。</li>
-<li><strong>一支有 bug 的程式</strong>——回傳一個<strong>結構化錯誤</strong>，模型可以拿它來自我修正。</li>
+<li><strong>正常計算</strong>：透過 <code>tools</code> API 撈資料，並算出結果。</li>
+<li><strong>同步無窮迴圈</strong> <code>while (true) {}</code>：被 timeout 攔下來。</li>
+<li><strong><code>require("fs")</code></strong>：因為 context 裡根本沒有 <code>require</code>，所以會被封鎖。</li>
+<li><strong>有 bug 的程式</strong>：回傳結構化錯誤，讓模型可以根據錯誤重新修正程式。</li>
 </ol>
 
-<p>第四點尤其重要：錯誤要是結構化的（有明確的 <code>error</code> 訊息、清楚的 <code>ok: false</code>），模型才有辦法「讀懂自己錯在哪、再寫一次」。這正是讓 code mode 可以自癒的基礎。</p>
+<p>第四點是 code mode 能自我修正的關鍵。錯誤不能只是一段模糊文字；它需要有明確的 <code>error</code> 訊息，以及清楚的 <code>ok: false</code>。模型讀得懂這種結果，才知道自己錯在哪裡，也才有機會再寫一次。</p>
 
-<h2>誠實的最後一課：vm 不是真正的安全邊界</h2>
+<h2>誠實的最後一課：<code>vm</code> 不是真正的安全邊界</h2>
 
-<p>整節最該帶走的一句話：<strong><code>node:vm</code> 是個中介點（mediation point），不是真正的安全邊界。</strong></p>
+<p>整節最該記住的一句話是：<strong><code>node:vm</code> 是中介點（mediation point），不是真正的安全邊界。</strong></p>
 
-<p>它做得到「攔住 <code>require</code>、綁 timeout、只給白名單」，但做不到真正的隔離——例如它<strong>殺不掉外洩出來的非同步工作</strong>，而且歷史上真出現過可被逃逸的漏洞。課堂上用它是因為簡單、離線、一看就懂；但要真的部署，答案是換掉它：用<strong>託管沙箱 / 隔離產品</strong>（e2b、Cloudflare Sandbox SDK、Fly、Daytona 這一類），或至少一個獨立 process。</p>
+<p>它可以攔住 <code>require</code>、設定 timeout，也可以只提供白名單中的能力。但它做不到真正隔離。例如，它<strong>殺不掉已經外洩出去的非同步工作</strong>；而且歷史上也曾出現過可以從中逃逸的漏洞。</p>
 
-<p>把這幾課收斂成一個判斷：<strong>在學習、prototype 階段，用自己的 <code>node:vm</code> 沙箱又快又好；一旦要把 agent 放上生產，沙箱這層就該外包給專門的託管產品。</strong>這跟你自己的 runtime（OryxOS / Java）是同一套邏輯：先自己推導出邊界的雛形，真要到生產時，就換算成平台職責。</p>
+<p>課堂使用 <code>node:vm</code>，是因為它簡單、可以離線執行，而且邊界一看就懂。但真的要部署時，應該換成<strong>託管沙箱或隔離產品</strong>，例如 e2b、Cloudflare Sandbox SDK、Fly、Daytona 這一類；至少，也要使用獨立 process。</p>
+
+<figure class="lesson-figure"><img src="./code-beats-inference-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>最後把判斷收斂成一句話：<strong>學習與 prototype 階段，自己做 <code>node:vm</code> 沙箱又快又清楚；一旦 agent 要進入生產環境，沙箱這層就該交給專門的託管產品。</strong></p>
+
+<p>這和你自己的 runtime（OryxOS / Java）是同一套邏輯：先自己推導出邊界的雛形，真正上線時，再把它轉換成平台應負責的能力。</p>
 
 <div class="lesson-nav">
   <div><a href="./run-code-tool.html">← 上一步：run_code 工具：把沙箱接進 harness</a></div>
@@ -88,35 +102,30 @@
   <button class="opt">$49</button>
   <button class="opt">$59</button>
 </div>
-
 <div class="quiz" data-question="為什麼讓模型寫程式來算，比讓它直接算可靠？" data-correct="1" data-explain="推論是機率性的，算術和日期會幻覺；程式是確定性的。">
   <button class="opt">程式佔用較少記憶體</button>
   <button class="opt">推論做算術會幻覺，程式是確定性的</button>
   <button class="opt">模型比較喜歡寫程式</button>
   <button class="opt">程式能平行處理更多工具</button>
 </div>
-
 <div class="quiz" data-question="模型在推論裡特別不可靠的兩件事是？" data-correct="0" data-explain="算術與日期最容易幻覺，日期位數多尤其糟。">
   <button class="opt">算術與日期</button>
   <button class="opt">文法與標點</button>
   <button class="opt">命名與縮排</button>
   <button class="opt">註解與文件</button>
 </div>
-
 <div class="quiz" data-question="test-sandbox 沒測到哪一項護欄？" data-correct="3" data-explain="它測了計算、無窮迴圈 timeout、封鎖 require、結構化錯誤，沒測網路外連。">
   <button class="opt">正常計算</button>
   <button class="opt">無窮迴圈被 timeout 攔下</button>
   <button class="opt">封鎖 require</button>
   <button class="opt">封鎖網路外連</button>
 </div>
-
 <div class="quiz" data-question="node:vm 的正確定位是？" data-correct="1" data-explain="vm 是中介點不是安全邊界，生產該用託管沙箱或獨立 process。">
   <button class="opt">牢不可破的安全邊界</button>
   <button class="opt">中介點，不是真正的安全邊界</button>
   <button class="opt">唯一的託管沙箱方案</button>
   <button class="opt">比獨立 process 更隔離</button>
 </div>
-
 <div class="quiz" data-question="結構化錯誤為什麼重要？" data-correct="2" data-explain="清楚的 ok:false 與 error 訊息，讓模型能讀懂錯在哪並自我修正。">
   <button class="opt">讓錯誤資訊更難被讀取</button>
   <button class="opt">減少伺服器的 log 量</button>

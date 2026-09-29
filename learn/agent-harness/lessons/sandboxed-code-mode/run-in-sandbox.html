@@ -8,29 +8,28 @@
 </head>
 <body>
 
-<h1>實作 runInSandbox：node:vm 的沙箱邊界</h1>
+<h1>實作 <code>runInSandbox</code>：替 agent 畫出 <code>node:vm</code> 沙箱邊界</h1>
 <p class="meta">Step 2/4 · 用最小 context 執行 agent 寫的程式</p>
 
-<h2>學習目標</h2>
-<p>能用 <code>node:vm</code> 寫出 <code>runInSandbox</code> 的完整流程：建立 context、只注入 <code>tools</code> 與 <code>console.log</code>、用 async IIFE 包住程式碼、再以 <code>Promise.race</code> 對上 timeout，返回 <code>{ ok }</code> 結果。</p>
+<p>agent 產生的程式碼本質上只是一段字串。問題是：這段字串不能直接在 server 裡隨意執行，否則它可能碰到不該碰的能力，或因為無窮迴圈把整個請求卡住。這一步要做的，就是把程式放進一間只有指定工具、而且有時間限制的空房間。</p>
 
-<h2>函式的契約：三個輸入</h2>
+<h2>先看完整契約：三個輸入，一個結果</h2>
 
-<p>沙箱只有一個入口函式 <code>runInSandbox</code>。它的簽名就是這道邊界的全部定義——什麼進得來、什麼傳得出去：</p>
+<p><code>runInSandbox</code> 是沙箱唯一的入口。它的簽名直接定義了什麼能進來：</p>
 
 <pre><code>runInSandbox(code: string, api: SandboxApi, options?: { timeoutMs?: number })</code></pre>
 
 <ul>
-<li><code>code</code> —— 模型寫的那段程式碼，就只是個字串。</li>
-<li><code>api</code> —— sandbox API，一個「函式對照表」。沙箱裡的程式只能呼叫這裡白名單列出的函式，別的全都碰不到。</li>
-<li><code>options.timeoutMs</code> —— 逾時毫秒數，預設 2 秒（2000）。這是防止模型寫出無窮迴圈、把 server 卡死的那道保險。</li>
+<li><code>code</code>：模型寫出的程式碼，傳進來時只是一個字串。</li>
+<li><code>api</code>：sandbox API，也就是函式白名單。沙箱裡的程式只能呼叫這張表上的能力。</li>
+<li><code>options.timeoutMs</code>：逾時毫秒數，預設為 2 秒（2000）。它用來限制程式的執行時間，避免模型寫出的程式長時間卡住 server。</li>
 </ul>
 
-<p>它還維護一個 <code>logs: string[]</code>，把沙箱裡所有 <code>console.log</code> 都收起來，最後一起回傳——因為沙箱裡的輸出不會直接印到你的終端機。</p>
+<p>沙箱另外維護 <code>logs: string[]</code>，攔截其中所有 <code>console.log</code> 的輸出，最後再一併回傳。因為沙箱裡的輸出不會自動出現在外部終端機。</p>
 
-<h2>建立 context：白名單之外，一無所有</h2>
+<h2>第一層：建立只放白名單的 context</h2>
 
-<p>接著用 <code>vm.createContext</code> 造一個隔離的執行環境。關鍵在於：<strong>你往這個 context 裡放什麼，沙箱裡就只看得到什麼</strong>。這裡只放兩樣東西：</p>
+<p>用 <code>vm.createContext</code> 建立隔離的執行環境。這裡的規則很直接：<strong>你放進 context 的東西，才是沙箱看得到的東西。</strong></p>
 
 <pre><code>const context = createContext({
   tools: api,                // 白名單能力，暴露成 sandbox 內的 global `tools`
@@ -41,28 +40,25 @@
   },
 });</code></pre>
 
-<p>兩點值得停下來想：</p>
+<p>這層存在的原因，是把「可用能力」從執行環境切出來管理。沙箱只拿到 <code>tools</code> 和自訂的 <code>console.log</code>；<code>require</code>、<code>process</code>、<code>fetch</code> 不在 context 裡，因此模型即使寫出 <code>require("fs")</code>，也沒有對應的能力可以使用。</p>
 
-<ul>
-<li>能力注入（capability injection）：沙箱能用的東西「只有你給它的」。沒有 <code>require</code>、沒有 <code>process</code>、沒有 <code>fetch</code>——它們根本不在 context 裡，模型寫的程式想 <code>require("fs")</code> 也拿不到。</li>
-<li>console 被偷換了：真正的 <code>console.log</code> 會印到你的終端機。這裡用一支假 console 攔截，把每個參數轉成字串、用空白接起來，推進 <code>logs</code>。參數型別是 <code>unknown[]</code>，所以要先 <code>String()</code> 再 join。</li>
-</ul>
+<figure class="lesson-figure"><img src="./run-in-sandbox-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>async IIFE：讓模型可以寫頂層 await</h2>
+<p><code>console</code> 也是刻意替換的。真正的 <code>console.log</code> 會直接印到 server 終端機；這裡改成攔截函式，把每個參數先用 <code>String()</code> 轉成字串，再用空白接起來放進 <code>logs</code>。參數型別是 <code>unknown[]</code>，所以不能直接假設它們已經是字串。</p>
 
-<p>模型寫程式時，很可能想用 <code>await tools.getCharges(...)</code> 這種非同步語法。但我們執行的是一段「函式主體」，不是一個 async 函式——直接 <code>runInContext(code)</code> 會因為頂層 <code>await</code> 而爆掉。</p>
+<h2>第二層：用 async IIFE 支援頂層 <code>await</code></h2>
 
-<p>解法很輕巧：把這段程式碼包進一個<strong>立即執行的 async 函式（async IIFE）</strong>：</p>
+<p>agent 很可能會寫出 <code>await tools.getCharges(...)</code>。但直接把這段字串交給 <code>runInContext</code> 執行時，它並不在 async 函式裡，頂層 <code>await</code> 會造成語法錯誤。</p>
+
+<p>因此先把程式包進立即執行的 async 函式（async IIFE）：</p>
 
 <pre><code>const wrapped = `(async () =&gt; { ${code} })()`;</code></pre>
 
-<p>這樣模型就不用自己寫包裝，程式碼裡想用 <code>await</code> 就能用。注意：這純粹是方便模型，跟安全無關。</p>
+<p>包裝後，模型可以直接在自己的程式碼裡使用 <code>await</code>，不必知道外層執行器的細節。這只是語法上的便利，<strong>不會增加任何安全性</strong>；沙箱能碰到什麼，仍然由 context 裡注入的能力決定。</p>
 
-<h2>執行 + timeout：Promise.race 對決</h2>
+<h2>第三層：讓程式和計時器競速</h2>
 
-<p>真正執行是用 <code>vm.runInContext</code>，把包好的 code、context、還有 timeout 一起丟進去。但這裡有個關鍵細節：<strong>不直接 await 那個 pending promise</strong>——如果程式卡死（例如 <code>while (true) {}</code>），await 就永遠回不來。</p>
-
-<p>所以外加一個 <code>withTimeout</code> helper，用 <code>Promise.race</code> 讓「程式」和「倒數計時器」比賽，誰先完成誰贏：</p>
+<p>執行時使用 <code>vm.runInContext</code>，把包好的程式、context 和 timeout 傳進去。非同步程式不能直接無限期地 <code>await</code>，所以再用 <code>Promise.race</code> 讓「程式完成」與「計時器到期」競速：</p>
 
 <pre><code>function withTimeout&lt;T&gt;(promise: Promise&lt;T&gt;, ms: number): Promise&lt;T&gt; {
   return Promise.race([
@@ -73,11 +69,20 @@
   ]);
 }</code></pre>
 
-<p>程式先做完 → 正常回傳；計時器先觸發 → reject，走進錯誤路徑。這樣一個掛住的程式就無法無限期地卡在伺服器上。</p>
+<p>程式先完成，就拿到它的結果；計時器先觸發，就會 <code>reject</code> 並進入錯誤路徑。</p>
 
-<h2>用 ok 標記成敗：因為讀結果的是 AI</h2>
+<p>這裡有兩種不同的卡住情況：</p>
 
-<p>最後把結果包成一個清楚的成功／失敗 union：</p>
+<ul>
+<li>同步無窮迴圈，例如 <code>while (true) {}</code>，由 <code>runInContext</code> 的 <code>timeout</code> 選項處理。</li>
+<li>非同步程式一直沒有完成，則由 <code>withTimeout</code> 的 <code>Promise.race</code> 回報逾時。</li>
+</ul>
+
+<p><code>Promise.race</code> 只決定要先回傳哪個結果，不會取消已經開始的底層 Promise；它的責任是讓呼叫端不必無限期等待。</p>
+
+<h2>第四層：用 <code>ok</code> 明確回報成敗</h2>
+
+<p>最後把執行結果包成成功／失敗 union：</p>
 
 <pre><code>try {
   const result = await withTimeout(runInContext(wrapped, context, { timeout: timeoutMs }), timeoutMs);
@@ -86,9 +91,22 @@
   return { ok: false, error: error instanceof Error ? error.message : String(error) };
 }</code></pre>
 
-<p>為什麼要多一個 <code>ok</code> 布林值？因為<strong>讀這個回傳值的不是人，是模型</strong>。與其讓模型自己去猜「有 <code>error</code> 欄位就是失敗」，不如大字標出 <code>ok: true/false</code>，模型一眼就能分辨，拿起 <code>result</code> 或是 <code>error</code> 繼續下一步。</p>
+<p><code>ok</code> 不是多餘的包裝。這個結果通常會交給模型繼續判斷；與其讓模型猜測「有沒有 <code>error</code> 欄位代表失敗」，不如直接提供 <code>ok: true</code> 或 <code>ok: false</code>。成功時讀 <code>result</code>，失敗時讀 <code>error</code>，下一步就有明確分支。</p>
 
-<p>統整一下整支 <code>runInSandbox</code> 的心智模型：<strong>給它一段字串，它在一座只有 <code>tools</code> 和 <code>console.log</code> 的空房間裡執行，綁著 timeout，最後用 <code>ok</code> 跟你回報成敗</strong>。這就是整道沙箱邊界的全部。</p>
+<h2>把整條執行路徑記住</h2>
+
+<p><code>runInSandbox</code> 的心智模型可以縮成四步：</p>
+
+<ol>
+<li>把模型寫的字串包成 async IIFE。</li>
+<li>建立只包含 <code>tools</code> 與攔截版 <code>console.log</code> 的 context。</li>
+<li>用 <code>vm.runInContext</code> 執行，並用同步 timeout 與 <code>Promise.race</code> 限制等待時間。</li>
+<li>用 <code>ok</code> 回報成功或失敗，並在成功時帶回 <code>result</code> 與 <code>logs</code>。</li>
+</ol>
+
+<p>最後得到的不是一個任意執行器，而是一條清楚的沙箱邊界：程式只能使用你注入的 <code>tools</code>，只能透過收集過的 <code>console.log</code> 回報，還必須在時間限制內完成。</p>
+
+<figure class="lesson-figure"><img src="./run-in-sandbox-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <div class="lesson-nav">
   <div><a href="./code-mode-why.html">← 上一步：Code Mode：一段程式取代多次往返</a></div>
@@ -103,28 +121,24 @@
   <button class="opt">沙箱可用的函式白名單</button>
   <button class="opt">沙箱的程式語言版本</button>
 </div>
-
 <div class="quiz" data-question="為什麼要把模型程式碼包進 async IIFE？" data-correct="0" data-explain="包成 async IIFE，模型就能在頂層用 await。">
   <button class="opt">讓程式能用頂層 await</button>
   <button class="opt">讓程式跑得更快</button>
   <button class="opt">讓程式無法存取 require</button>
   <button class="opt">讓程式自動處理 timeout</button>
 </div>
-
 <div class="quiz" data-question="為什麼不直接 await 執行結果？" data-correct="1" data-explain="直接 await 一個卡死的程式會永遠回不來，必須跟 timeout race。">
   <button class="opt">await 語法效能比較慢</button>
   <button class="opt">卡死的程式會讓 await 永遠回不來</button>
   <button class="opt">await 無法傳入 timeout</button>
   <button class="opt">await 只支援同步程式</button>
 </div>
-
 <div class="quiz" data-question="withTimeout 用哪個機制讓程式和計時器比賽？" data-correct="3" data-explain="Promise.race 讓程式與倒數計時器比賽，先完成者勝。">
   <button class="opt">Promise.all</button>
   <button class="opt">setInterval</button>
   <button class="opt">try/catch</button>
   <button class="opt">Promise.race</button>
 </div>
-
 <div class="quiz" data-question="回傳值要多一個 ok 欄位，是因為？" data-correct="1" data-explain="讀結果的是模型不是人，ok 讓它一眼分辨成敗。">
   <button class="opt">這是最新型的 TypeScript 語法</button>
   <button class="opt">讀結果的是模型，ok 讓它一眼分辨成敗</button>
