@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>review：換一個模型，替你看見盲點</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>review：換一個模型，替你看見盲點</h1>
+<p class="meta">Step 3/4 · /check：合併前的驗證與審查</p>
+
+<h2>學習目標</h2>
+<p>能說清楚 review 的跨模型不變量，並跑完一輪：偵測與確認作者模型、對照到不同的審查模型、界定 diff 範圍、用唯讀子代理產出嚴重度排序的發現。</p>
+
+<h2>前言：自己審自己，怎麼看都對</h2>
+
+<p>你有沒有過這種經驗：一段程式碼自己來回看了十遍，覺得沒問題，隔天同事只花兩分鐘就指出一個你完全沒看到的地雷。不是你不夠仔細，而是每個人對自己寫的東西都有一組看不見的盲點，你腦中的假設、你覺得「這當然不會發生」的那種情況，讓你的眼睛自動略過它。</p>
+
+<p>把審查交給 AI 也一樣。如果叫「寫出這段碼的同一個模型」再看一遍，它會沿用跟你同一套假設，於是也看不到同一批問題。這跟聰明與否無關，真正的差別是它跟你共享盲點。<code>/check review</code> 的整個設計，就是在繞開這件事：它刻意換一個<strong>沒寫過這段程式碼的模型</strong>來做資深審查。這一節先講這個機制怎麼運作，下一節再看那個模型手上拿的評分標準。</p>
+
+<h2>唯一不能彎的規則：換一個模型</h2>
+
+<p>整個 <code>review</code> 只有一條規則是不容許打折的：審查必須跑在跟寫程式碼<em>不同</em>的模型上。這是它跟一般「請 AI 幫我看一下程式碼」最大的差別。模型審自己的輸出，會系統性地漏掉自己的盲點，所以那條保證一旦破了，整份審查的價值就打折了。</p>
+
+<p>好消息是，這件事不用你自己接 API、做設定。它會在一個子代理裡，用對照的 Claude 模型來跑審查，全程自動。整個過程對程式碼是唯讀的：它只產出發現，絕對不改動被審的那段程式碼。如果你想要更獨立的意見、換一個供應商（例如 GPT 或 Gemini），它的建議是你切換自己的模型再跑一次，而不是幫你把程式碼送到別的地方去。它自己不會把你的程式碼傳去任何地方。</p>
+
+<h2>先偵測作者模型，再用一句選擇題確認</h2>
+
+<p>問題來了：要換一個「不同」的模型，得先知道原本是哪一個。這件事不能靠模型自我介紹。系統提示裡那句「你是由某某模型驅動」是在對話開始時寫下的，你一用 <code>/model</code> 換模型它就過時了，而且模型本身也沒辦法可靠地認出自己。所以它改用比較耐久的線索來偵測：環境變數裡的模型設定，以及專案與使用者層級的設定檔。讀到之後，把模型代號對應到家族，例如 <code>opus</code>、<code>sonnet</code>、<code>haiku</code>、<code>fable</code>。</p>
+
+<p>偵測完，它還是會問你一句選擇題：<strong>「這段程式碼是哪個模型寫的？」</strong>，並把偵測到的答案預設成推薦選項。為什麼要這麼囉唆？因為猜錯的代價不小，一旦猜成跟作者同一個模型，整條跨模型保證就悄悄破功了，而你不會收到任何錯誤訊息。這題唯一的例外是：偵測結果很明確，而且你已經明確指定了要用哪個審查模型，那才跳過。除了這一句，其餘的蒐範圍、審查、寫發現，它都不再問你。</p>
+
+<h2>對照表與三條鐵則</h2>
+
+<p>確認作者模型後，它會挑一個對照的審查模型。對照關係是固定的：作者用 opus，就派 sonnet 來審；作者用 sonnet，就派 opus；作者用 fable，也派 opus；作者用 haiku，則派 sonnet。為什麼 haiku 從來不當審查者？因為審查是高價值的推理工作，要用強模型，這一條沒有例外。</p>
+
+<p>除了不能同家族、不能派 haiku，還有一條是「遇到限制時怎麼退」。有些組織的政策會限制可用的模型，有些 AI 工具的子代理會直接繼承母體模型（例如 Antigravity 的 <code>invoke_subagent</code>），導致你根本叫不出一個不同的強模型。這種情況下的退法是：先退到「最強、但跟作者不同」的那個；如果連一個不同的都找不到，就在作者模型上原地跑，而且必須明講「這是一份降級的審查，跟作者共享盲點」，不能假裝保證還在。</p>
+
+<p>如果你的指令裡已經指定了審查模型，它只在「跟作者不同」時才照做。要是你點的是作者自己的模型，它會直接拒絕並解釋原因：「那就是寫這段碼的模型，用它來審會共享盲點，我改用另一個。」最後，它在動工前會把選定的組合講清楚，例如「作者是 opus，我用 sonnet 來審，第二個模型才看得見作者看不見的地方」。</p>
+
+<h2>界定要審的範圍：branch 還是 uncommitted</h2>
+
+<p>審查模型決定了之後，要決定「審什麼」。這裡的原則是主對話要盡量輕，所以它只蒐集檔名跟基準點，不讀檔案內容，真正的 diff 交給子代理自己跑、檔案自己讀。</p>
+
+<p>範圍有兩種模式，選法取決於你現在在哪個分支。它會先找 base 分支（<code>main</code> 不存在就用 <code>master</code>），再看目前分支。如果目前分支就是 base 分支，代表你是直接在主線上工作，那就用 <strong>uncommitted 模式</strong>，只審工作區還沒有提交的改動。如果目前是一個功能分支，就用 <strong>branch 模式</strong>，審的是從分支點到現在的所有差異，這剛好等於「如果現在開 PR，會被合併進去的內容」。你也可以直接指定 <code>/check review uncommitted</code> 強制只審未提交的改動。</p>
+
+<p>蒐集檔名時會做兩件小過濾。第一是去重複；第二是把鎖定檔與生成物（例如 <code>dist/</code>、<code>build/</code> 這類產物）從「要審幾個檔」的計數裡排除，免得數字看起來很嚇人，但子代理仍然會看到完整的 diff。如果比對下來發現根本沒有改動，它不會硬跑，而是停下來告訴你「沒有東西可以審，先做點改動，或把範圍指到某個分支」。</p>
+
+<h2>只帶輕量指標，重檔留給子代理</h2>
+
+<p>主對話需要的資訊很少，只有幾樣。它會列出 <code>docs/specs/</code> 底下最近的三個規格檔（只給路徑，不讀內容），並判斷專案的測試訊號屬於哪一種狀態。</p>
+
+<p>測試訊號有三態，這個判斷會影響審查者怎麼看「測試不夠」這件事。第一種是 <code>configured</code>：專案有設定測試框架，那就正常評估覆蓋率。第二種是 <code>none-by-design</code>：專案刻意不設測試框架，改用型別檢查加上 <code>/check verify</code> 當作關卡，這是它自己選的，不是偷懶。第三種是 <code>none-yet</code>：沒有測試框架、也沒有明講任何慣例，這是真的缺口，值得在裁決層提一次。這三態分清楚很重要，因為對一個刻意選擇不用測試的專案吵著要測試，只是噪音。</p>
+
+<p>準備好這些之後，它會把專案慣例的內容直接內嵌進去，連同三個規格路徑、基準點與 diff 範圍，一起交給子代理。子代理只讀治理這次改動那份規格的「建置相關章節」（需求、決策、設計、後果），不讀決策歷史那份，除非某個具體發現非得回頭看歷史才講得通。</p>
+
+<h2>用對照模型叫起審查子代理</h2>
+
+<p>接下來就是真的把審查跑起來。它會把這個 skill 的資料夾解析成絕對路徑，然後在子代理的啟動提示裡，附上兩個檔案的路徑：一個是啟動範本，一個是評分標準（rubric）。這裡有一個刻意的地方，母體模型<strong>不會把這兩個檔案的內容讀進自己的對話</strong>，它只傳路徑；子代理被叫起來後，第一個動作才是去讀那個範本並照著做。這樣做是為了讓母體的對話保持精簡，而且範本與標準都放在同一個地方維護。</p>
+
+<p>這個子代理的工具權限裡有讀取、執行指令、搜尋、寫檔，<strong>但沒有編輯工具</strong>。原因很直白：它是來報告的，不是來改程式碼的。它唯一的寫入權限，就是把發現寫成一份檔案。如果某個 AI 工具的子代理沒辦法讀檔，它才會退回把兩個檔案的內容直接內嵌進提示的做法。</p>
+
+<h2>接回結果，並勾掉該勾的格子</h2>
+
+<p>子代理跑完後，會把發現寫進 <code>docs/reviews/</code> 底下一份以日期與分支命名的檔案，然後回傳一段精簡的摘要。母體模型的工作是把這段摘要轉述給你，方式也是「先給結論」：最上面一行是裁決，接著把每一個 blocker 跟 major 都列出來，因為那些才是你得採取行動的地方；至於 minor、nit、優點、審查者與檔案數，全部收成一行尾巴，再加上一個指向完整發現檔的路徑。如果一個 blocker 和 major 都沒有，它就只留裁決那一行跟尾巴，不再多話。</p>
+
+<p>如果這次審查的結論是 Blocked 或 Changes requested，或者本身就是高風險改動，它會多補一句提醒：想要更獨立的第二意見，可以用 <code>/model</code> 切換成別的供應商，把 diff 貼到另一個助理再跑一次，不需要任何 API 金鑰。</p>
+
+<p>最後是一個收尾的動作：如果被審的功能在 <code>docs/scope/</code> 裡有對應的列，它會把那一列的 <code>Review it</code> 勾起來。這個勾代表的是「審查跑過了」，不是「審查通過了」，兩件事不要混。它也會在報告裡明講勾了什麼。整個 <code>review</code> 到轉述完就結束了，它不負責修那些發現，也不會自己去叫下一個階段，修是寫程式的人的事。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>review</code> 的核心是那條不能彎的規則：審查要跑在跟作者不同的模型上，因為同一個模型審自己會共享盲點。它從耐久設定偵測作者模型，再用一句選擇題確認（猜錯會悄悄破壞保證），然後對照到不同的審查模型，並且審查者永遠不用最弱的模型。它界定要審的範圍（branch 或 uncommitted），只帶輕量指標，把 diff 留給子代理，並傳遞測試訊號讓審查者知道該不該要求測試。子代理只有讀取與寫發現的權限，沒有編輯工具；跑完由母體轉述裁決，最後把 scope 的 Review it 勾起來（代表跑過，不代表通過）。
+</blockquote>
+
+<p>機制看完了，但那個審查子代理到底憑什麼說「這是 blocker」或「這只是 nit」？它手上的那把尺，決定了整份審查是專業判斷還是隨口抱怨。下一節就把那把尺攤開來看。</p>
+
+<div class="lesson-nav">
+  <div><a href="./verify-runtime-proof.html">← 上一步：verify：把應用跑起來，用證據下判斷</a></div>
+  <div><a href="./review-rubric.html">下一步：review 的尺：嚴重度、裁決與發現清單 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="review 唯一不能彎的規則是什麼？" data-correct="0" data-explain="審查必須跑在跟寫程式的模型不同的模型上，這是整份審查價值的來源。">
+  <button class="opt">要用跟作者不同的模型來審</button>
+  <button class="opt">要用速度最快的模型來審</button>
+  <button class="opt">一定要審遍所有改動的檔案</button>
+  <button class="opt">一定要先跑過完整測試套件</button>
+</div>
+
+<div class="quiz" data-question="為什麼辨識作者模型不能靠系統提示那句話？" data-correct="1" data-explain="那句是對話開始時寫下的，使用者一換模型它就過時，無法反映現況。">
+  <button class="opt">因為那句話長度太長</button>
+  <button class="opt">因為使用者一換模型它就會過時</button>
+  <button class="opt">因為那句話完全沒有模型名稱</button>
+  <button class="opt">因為那句話只寫成英文</button>
+</div>
+
+<div class="quiz" data-question="對照關係裡，作者是 opus 時審查要派哪一個模型？" data-correct="1" data-explain="opus 對照 sonnet，審查者不能跟作者同家族。">
+  <button class="opt">opus</button>
+  <button class="opt">sonnet</button>
+  <button class="opt">haiku</button>
+  <button class="opt">fable</button>
+</div>
+
+<div class="quiz" data-question="為什麼審查永遠不派 haiku？" data-correct="1" data-explain="審查是高價值的推理工作，要用強模型，這條沒有例外。">
+  <button class="opt">因為它沒有讀取檔案的能力</button>
+  <button class="opt">因為審查需要高價值的推理</button>
+  <button class="opt">因為它不支援當子代理</button>
+  <button class="opt">因為它的使用成本太高</button>
+</div>
+
+<div class="quiz" data-question="什麼情況下會採用 uncommitted 模式？" data-correct="0" data-explain="當目前分支就是 base 分支、直接在主線上工作時，只審還沒提交的改動。">
+  <button class="opt">直接工作在 base 分支上的時候</button>
+  <button class="opt">開了一條功能分支的時候</button>
+  <button class="opt">有未追蹤檔案出現的時候</button>
+  <button class="opt">任何時候都當成預設模式</button>
+</div>
+
+<div class="quiz" data-question="測試訊號是 none-by-design 時，審查者該怎麼處理測試？" data-correct="1" data-explain="那是專案刻意的選擇，安全網是型別檢查加 /check verify，不要吵著要測試。">
+  <button class="opt">在裁決層提一次缺少測試</button>
+  <button class="opt">完全不要提缺少測試的事</button>
+  <button class="opt">每個改動檔案都各提一次</button>
+  <button class="opt">把裁決直接改成 Blocked</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /check：合併前的驗證與審查 · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
+
+

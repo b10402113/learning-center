@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>寫給不看碼的人：release note 與 postmortem</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>寫給不看碼的人：release note 與 postmortem</h1>
+<p class="meta">Step 5/5 · /document：把變更寫成人話</p>
+
+<h2>學習目標</h2>
+<p>能把技術變更翻成使用者看得懂、不埋 breaking changes 的 release note，並寫出時間軸與根因分離的 blameless postmortem。</p>
+
+<h2>前言：這兩種讀者，連 diff 都看不到</h2>
+
+<p>上一節處理的兩種讀者，好歹看得到碼。這一節的兩種完全看不到：一種是付錢使用你產品的人，一種是跟你一起處理事故的團隊成員。</p>
+
+<p>對這兩種人來說，你的改動會被讀成兩件事，而不是一組檔案。使用者只在乎「我現在能多做什麼、有沒有東西被我搞壞」；團隊只在乎「這次到底發生了什麼、下次要怎麼讓它不再發生」。把 PR 描述直接貼給使用者看，就像把引擎維修單貼在展示間裡：資訊不缺，但根本不是對方要的。這一節要練的就是這種「翻譯」與「事後敘事」的能力。</p>
+
+<h2>release note：把技術翻成使用者能做的事</h2>
+
+<p>release note 寫到 <code>docs/releases/&lt;version&gt;.md</code>，對象是終端使用者。核心原則是：<strong>把技術變更翻譯成使用者現在能做的事，並把他們最在乎的放最前面。</strong> 這是四種文件裡最精緻、也最不技術的一份；它的成功標準是「使用者讀得懂，並且知道這跟自己有什麼關係」。</p>
+
+<p>它的結構長這樣：</p>
+
+<pre><code># &lt;產品&gt; &lt;版本&gt;
+
+_Released &lt;日期&gt;_
+
+&lt;一到兩句總結這個版本的主題，一句使用者會記住的重點。&gt;
+
+## Highlights
+
+- **&lt;功能名稱&gt;**：&lt;一句話說明它對使用者的價值。&gt;
+
+## Improvements
+
+- &lt;較小的增強，用使用者的語言寫。&gt;
+
+## Fixes
+
+- &lt;修正的問題，寫成使用者經歷的樣子，例如「修正了一個……的問題」。&gt;
+
+## Breaking changes
+
+&lt;只有真的有才寫。清楚說明壞了什麼、誰受影響、遷移步驟。沒有就省略。&gt;
+
+## Upgrade notes
+
+&lt;要怎麼升級；若升級是自動或無感的，就省略。&gt;</code></pre>
+
+<p>幾條規則值得反覆咀嚼。第一，<strong>先講使用者價值，再講實作。</strong>「你現在可以把報表匯出成 CSV」遠比「在匯出模組裡加了 CSV 序列化」有用。第二，<strong>依重要性排序</strong>：Highlights 在前，接著 Improvements，最後 Fixes。第三，<strong>對 breaking changes 誠實，絕不把它埋掉。</strong> 任何會讓既有使用者壞掉的改動，都要有自己一個清楚標示的段落。第四，不要用內部術語、ticket 編號或檔名，這是四種文件裡最該把這些東西拿掉的一份。最後，一切都從區間內真的 commits 與 diff 推出來，不承諾根本不存在的功能。</p>
+
+<h2>postmortem：一場事故，一份不指責人的報告</h2>
+
+<p>postmortem 寫到 <code>docs/postmortems/&lt;date&gt;-&lt;slug&gt;.md</code>，素材是工程師提供的事故事實，加上 diff 或 <code>/debug</code> 紀錄裡的根因細節。它有一個很關鍵的性質叫 <strong>blameless（不歸咎個人）</strong>：整份報告聚焦在系統與促成因素上，永遠不針對人。「這個部署缺少健康檢查」是對的說法；「某人忘了加健康檢查」是錯的。</p>
+
+<p>結構分成幾個段落：</p>
+
+<ul>
+<li><strong>標題與基本資料表</strong>：包括 Severity（SEV1 到 SEV4，或 critical 到 low）、Duration（開始到解決，含時區）、User impact（誰受影響、怎麼影響，能量化就量化）、Status（Resolved 或 Monitoring）。</li>
+<li><strong>Summary</strong>：三到五句，讓忙碌的讀者一次吸收：發生什麼、影響、根因、修法。</li>
+<li><strong>Timeline</strong>：標註時區，只放有時間戳的<strong>事實</strong>：發生或觀察到什麼、怎麼被發現、關鍵診斷或緩解、最後解決。</li>
+<li><strong>Root cause</strong>：真正的技術原因，從觸發到失敗的整條鏈。這裡有一個很重要的區分：<strong>trigger（導火線）</strong> 與 <strong>underlying weakness（底層弱點）</strong> 要分開講。導火線是「那一次按下了什麼」，底層弱點是「為什麼那一下會釀成事故」。</li>
+<li><strong>Contributing factors</strong>：讓它變得更糟、更難偵測、或更難修的東西，例如少了一個警示、沒有 timeout、擁有權不清楚。</li>
+<li><strong>What went well</strong>：快速偵測、乾淨的 rollback、好用的工具。這裡要把功勞歸給系統，而不是歸給英雄。</li>
+<li><strong>Action items</strong>：一張表，欄位是 Action、Type、Owner、Priority。每個動作都要<strong>具體且可指派</strong>，並標上 Prevent（防止再發）、Detect（更快發現）、或 Mitigate（降低衝擊）。不要出現「更小心一點」這種空話。</li>
+<li><strong>Lessons</strong>：可以長久帶走的結論。如果這裡應該長出一份規格或一個具體後續，就直接點名它。</li>
+</ul>
+
+<p>規則同樣重要：全程 blameless；時間軸只放事實，分析留在 Root cause 與 Contributing factors；action item 要具體可指派並分類；根因若對應到某種系統失敗模式，就建議一個具體的後續動作，若有過去的決策促成它，也把那份規格記下來。真正無法確定的，寫 <code>Unknown, to investigate</code>，不要猜。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+release note 給終端使用者，寫到 <code>docs/releases/&lt;version&gt;.md</code>：先講使用者價值、依重要性排序（Highlights → Improvements → Fixes）、breaking changes 絕不埋、不用內部術語與 ticket 編號，一切從區間內的 commits 與 diff 推。postmortem 給團隊，寫到 <code>docs/postmortems/&lt;date&gt;-&lt;slug&gt;.md</code>：全程 blameless，時間軸只放有時間戳的事實，Root cause 要分開導火線與底層弱點，action item 具體可指派並標 Prevent / Detect / Mitigate，未知的就寫 <code>Unknown, to investigate</code>。
+</blockquote>
+
+<p>五節走完，你已經看過 <code>/document</code> 的全貌：它產出哪四種文件、各自面對誰、素材怎麼從 git 撈出來、四條不能破的底線，以及最不技術的兩種文件要怎麼翻譯。下一步就是把它真的跑在你的練習專案上。挑一個剛做完的功能，跑一次 <code>/document pr</code>，看它怎麼把你三個檔的改動，講成一段審查者讀得懂、你也敢背書的描述。</p>
+
+<div class="lesson-nav">
+  <div><a href="./write-for-reviewers-and-developers.html">← 上一步：寫給看碼的人：PR 描述與 changelog</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="release note 的 Audience 與主要原則是什麼？" data-correct="2" data-explain="對象是終端使用者，原則是先講使用者價值、把最重要的放最前面。">
+  <button class="opt">對象是審查者，重點在風險與上線方式</button>
+  <button class="opt">對象是開發者，重點在能力與行為變化</button>
+  <button class="opt">對象是終端使用者，重點在使用者價值</button>
+  <button class="opt">對象是維運團隊，重點在事故與根因</button>
+</div>
+
+<div class="quiz" data-question="release note 遇到 breaking changes 時應該怎麼處理？" data-correct="0" data-explain="它有自己的清楚段落，絕不埋掉，要說明壞了什麼、誰受影響、怎麼遷移。">
+  <button class="opt">給它清楚標示的段落，絕不埋掉</button>
+  <button class="opt">混進 Fixes 段落裡低調帶過即可</button>
+  <button class="opt">只在程式碼註解裡說明，不進文件</button>
+  <button class="opt">等使用者自己發現再個別通知他們</button>
+</div>
+
+<div class="quiz" data-question="postmortem 的 Timeline 段落應該放什麼？" data-correct="3" data-explain="只放有時間戳的事實，分析留給 Root cause 與 Contributing factors。">
+  <button class="opt">對事故成因的推測與各種可能假設</button>
+  <button class="opt">對相關人員的責任歸屬與檢討內容</button>
+  <button class="opt">這次事故學到的教訓與未來的行動項目</button>
+  <button class="opt">標註時區、有時間戳的事實與事件</button>
+</div>
+
+<div class="quiz" data-question="Root cause 段落裡「trigger」與「underlying weakness」的差別是什麼？" data-correct="1" data-explain="trigger 是導火線，underlying weakness 是讓它釀成事故的底層弱點。">
+  <button class="opt">trigger 是系統問題，weakness 是人的疏失</button>
+  <button class="opt">trigger 是導火線，weakness 是底層弱點</button>
+  <button class="opt">trigger 是事後補救，weakness 是事前預防</button>
+  <button class="opt">trigger 在時間軸裡，weakness 在 Lessons</button>
+</div>
+
+<div class="quiz" data-question="postmortem 的 action items 應該具備什麼特質？" data-correct="2" data-explain="每個動作要具體可指派，並標上 Prevent、Detect 或 Mitigate。">
+  <button class="opt">盡量抽象，保留團隊後續調整的彈性</button>
+  <button class="opt">只列最急迫的一項，避免工作太分散</button>
+  <button class="opt">具體可指派，並標 Prevent / Detect / Mitigate</button>
+  <button class="opt">由事故當事人認領，以示負責與警惕</button>
+</div>
+
+<div class="quiz" data-question="「blameless」在 postmortem 裡具體要求什麼？" data-correct="0" data-explain="聚焦系統與促成因素，不針對個人，例如說部署少了健康檢查而非某人忘了加。">
+  <button class="opt">聚焦系統與促成因素，不針對個人</button>
+  <button class="opt">不記錄任何錯誤，只寫做得好的部分</button>
+  <button class="opt">由主管統一對外說明，避免私下指責</button>
+  <button class="opt">把所有責任平均分攤給整個團隊</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /document：把變更寫成人話 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

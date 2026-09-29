@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>最小修補、回歸測試與同源兄弟</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>最小修補、回歸測試與同源兄弟</h1>
+<p class="meta">Step 4/5 · /debug：根因除錯迴圈</p>
+
+<h2>學習目標</h2>
+<p>能只做針對已證實根因的最小修補、不順手重構或偷做功能，並用重現重跑、周邊測試、回歸測試與同源兄弟檢查把修補鎖住。</p>
+
+<h2>前言：找到原因的那一刻，手最癢</h2>
+
+<p>上一節你終於把根因證實了。這時候往往是整場除錯裡最想「順便做點事」的時刻。旁邊那個函式寫得很醜，反正都打開這個檔案了；那個命名也一直想改；還有一個小功能感覺可以一起加上去。</p>
+
+<p>這些念頭都很合理，但它們會讓這次修補變得難以驗收。這節要講的是修補的紀律：只做針對已證實根因的最小改動，然後用一連串方式把成果鎖住，讓這個 bug 不能悄悄回來。</p>
+
+<h2>Step 5：修在根處，而且只修最少</h2>
+
+<p><code>/debug</code> 在修補階段的要求是「最小、針對性」。最小不是指程式碼行數最少，而是指改動的範圍只覆蓋已證實的根因。你已經知道原因是什麼，就針對那個原因動手，不要多繞。</p>
+
+<p>什麼叫修症狀而不是修因？舉個對照就清楚：如果根因是「上游傳進來的值是 null」，修因是去處理上游為什麼會產生 null；修症狀則是在下游加一行「如果是 null 就當成 0」。後者讓這一處不再報錯，卻沒有回答 null 從哪來，等於把一個定時炸彈換個地方埋。</p>
+
+<p>同一條紀律也排除兩種誘惑。第一是 scope creep（範圍蔓延）：趁修 bug 順手把旁邊那段程式重構掉。第二是把功能偷偷塞進來：反正都在改了，多加一點。這兩件事都會讓這次 diff 變大，大到沒人分得清哪一行才是真的修補。如果哪天需要回滾，你會被那些順手做的改動綁住手腳。</p>
+
+<p>還有一個容易被忽略的要求：修補要跟著專案既有的慣例走，讀 <code>AGENTS.md</code>，也看隔壁的程式碼怎麼寫。修 bug 不該是你偷偷換一套風格的時候。</p>
+
+<h2>它擁有什麼，又拒絕什麼</h2>
+
+<p><code>/debug</code> 對自己的產出有很明確的界線。它負責的是「針對根因的最小程式修補」，其他一律不碰。這條界線值得記住，因為它決定了你該把哪種問題丟給它。</p>
+
+<table>
+  <tr><th>它會做</th><th>它不會做</th></tr>
+  <tr><td>針對已證實根因的最小修補</td><td>偷做新功能</td></tr>
+  <tr><td>建議把回歸測試交給 <code>/test</code>（或直接寫一段先壞後好的測試）</td><td>順手重構無關的程式碼</td></tr>
+  <tr><td>如果 bug 揭露的是設計缺陷，指出來並把問題導向 <code>/architect</code></td><td>重寫規格</td></tr>
+</table>
+
+<p>最後一列特別有意思。有些 bug 表面看是寫錯一行，追下去才發現是一個當初的決策本身有問題。這時正確的處理不是用程式碼把症狀遮起來，而是把它點出來，因為真正的修法可能是一份規格要改，不是一行程式要改。</p>
+
+<h2>Step 6：驗證，然後把它鎖住</h2>
+
+<p>改完不是就結束了。<code>/debug</code> 要求做四件事，把這次修補的成果確認並固定下來。</p>
+
+<h3>一、重跑 Step 1 的重現</h3>
+
+<p>回到第一節拿到的那個確定性重現，再跑一次，確認它現在會過。這是最直接的證據：原本能穩定觸發的失敗，現在穩定地不發生了。</p>
+
+<h3>二、跑周邊的測試套件</h3>
+
+<p>只確認那一個案例會過還不夠，因為你的改動可能影響到別的行為。所以要跑周邊的測試套件，確認沒有造成 regression（把原本好的弄壞）。</p>
+
+<h3>三、加一個回歸測試</h3>
+
+<p>這是最關鍵的一步：加一個回歸測試，一個在沒有這個修補時會失敗、有了修補才會過的測試。它的作用是讓這個 bug 不能悄悄地回來。你可以直接寫在這次改動裡，也可以把測試的需求交給 <code>/test</code> 去寫。重點是它必須能區分「修好了」和「沒修好」，否則就只是一條安慰用的綠燈。</p>
+
+<h3>四、檢查有沒有同源的兄弟</h3>
+
+<p>最後，同一個根因常常不只存在一個地方。同樣的模式、同樣的錯誤假設，很可能被複製到別的檔案裡。這一步要做的是 grep 全專案，把相同成因的兄弟找出來，能修就一起修，不能修就至少記錄下來。</p>
+
+<p>把這四件事放一起看，它們其實在回答兩個問題：這次真的修好了嗎（重現重跑、周邊測試），以及它以後還會不會再犯（回歸測試、同源兄弟）。前兩件證明現在，後兩件保護未來。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+修補的紀律是「最小、針對根因」。修的是原因，不是症狀，不順手重構，不偷做功能，並跟著專案慣例走。當 bug 揭露的是決策缺陷而不是程式錯誤，<code>/debug</code> 會把問題指向 <code>/architect</code>，而不是用程式碼掩蓋。修完之後用四件事鎖住成果：重跑重現、跑周邊測試、補一個沒有修補就會失敗的回歸測試，以及 grep 找出同源的兄弟。
+</blockquote>
+
+<p>到這裡，一圈完整的根因迴圈已經走完。最後一節要處理剩下的兩個問題：一場不簡單的追查該不該外包給子代理，以及結束時那份報告該怎麼寫，才讓人一眼看到重點。</p>
+
+<div class="lesson-nav">
+  <div><a href="./one-falsifiable-hypothesis.html">← 上一步：一次只驗一個可否證的假設</a></div>
+  <div><a href="./delegation-and-report.html">下一步：交給子代理，並用根因收尾 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="「最小修補」的「最小」是指什麼？" data-correct="1" data-explain="指改動範圍只覆蓋已證實的根因，不是單純比行數少。">
+  <button class="opt">程式碼行數越少越好</button>
+  <button class="opt">只覆蓋已證實的根因</button>
+  <button class="opt">只改一個檔案就好</button>
+  <button class="opt">愈快改完愈好</button>
+</div>
+
+<div class="quiz" data-question="下列哪一個是「修症狀」而不是「修根因」？" data-correct="3" data-explain="在下游把 null 當成 0 只是把錯誤擋掉，沒有回答 null 從哪裡來。">
+  <button class="opt">追查上游為何產生 null</button>
+  <button class="opt">修正產生 null 的來源</button>
+  <button class="opt">補上造成 null 的條件</button>
+  <button class="opt">下游把 null 當成 0</button>
+</div>
+
+<div class="quiz" data-question="/debug 對新功能的立場是什麼？" data-correct="0" data-explain="它只做針對根因的最小修補，不偷做功能、不順手重構、不改規格。">
+  <button class="opt">不做，只修根因</button>
+  <button class="opt">順手一起加上去</button>
+  <button class="opt">有時間就順便做</button>
+  <button class="opt">先做功能再修 bug</button>
+</div>
+
+<div class="quiz" data-question="什麼情況下 /debug 會把問題指向 /architect？" data-correct="2" data-explain="當 bug 揭露的是決策或設計缺陷，而不是單純的程式錯誤時。">
+  <button class="opt">當測試套件跑得很慢</button>
+  <button class="opt">當 bug 完全無法重現</button>
+  <button class="opt">當原因是設計決策有問題</button>
+  <button class="opt">當修補需要改很多行</button>
+</div>
+
+<div class="quiz" data-question="回歸測試為什麼必須「沒有修補時會失敗」？" data-correct="1" data-explain="只有能區分修好與沒修好的測試，才真的能防止 bug 悄悄回來。">
+  <button class="opt">這樣執行速度會比較快</button>
+  <button class="opt">才能區分修好或沒修好</button>
+  <button class="opt">這樣就不必跑周邊測試</button>
+  <button class="opt">才能順便測其他功能</button>
+</div>
+
+<div class="quiz" data-question="「檢查同源兄弟」是在找什麼？" data-correct="3" data-explain="同一根因常以相同模式或相同錯誤假設藏在別處，要 grep 找出來一起處理。">
+  <button class="opt">同一段程式碼的重複排版</button>
+  <button class="opt">同一個作者寫的其他檔案</button>
+  <button class="opt">同一個版本的舊提交紀錄</button>
+  <button class="opt">同一成因藏在別處的地方</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /debug：根因除錯迴圈 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

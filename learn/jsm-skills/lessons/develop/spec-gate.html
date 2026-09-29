@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>規格閘門：先確認決策有人做過</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>規格閘門：先確認決策有人做過</h1>
+<p class="meta">Step 1/5 · /develop：依規格實作</p>
+
+<h2>學習目標</h2>
+<p>能跑 /develop 的 Step 0 規格閘門：用 input coverage 測試判斷有沒有決策欠著，分清 load bearing 與 local detail，並在需要時選對三條出路。</p>
+
+<h2>前言：為什麼要先停下來問一句</h2>
+
+<p>你剛跑完 <code>/architect</code>，手上有一紙已經講好做法的規格。現在打一句 <code>/develop 做登入頁</code>，照理說接下來就是寫碼。可是這個階段偏偏在一開始就停下來，先問一句：「這裡有沒有哪個決策其實還沒被想過？」</p>
+
+<p>乍聽之下很囉嗦。你都說要做了，為什麼不直接做？因為這正是 AI 寫程式最危險的一個瞬間。模型在動手時很擅長把一個決策講成「只是接線」：它會挑一個驗證服務、決定 session 怎麼存、決定使用者看到的「今天」要用哪個時區。這些選擇每一個都影響行為，但它們不會被標成「決策」，它們會在寫碼的過程裡悄悄發生，然後消失在對話裡。</p>
+
+<p>過幾週你再打開這個 repo，沒有人知道當時為什麼選了這個供應商；換一個 session 重跑，模型可能選了另一個。`/develop` 的 Step 0 規格閘門，就是為了堵住這個縫。它的核心主張是：<strong>這個階段只實作決策，不製造決策</strong>。決策要在 `/architect` 被想過、寫下來，`/develop` 才動手。</p>
+
+<h2>不要用「感覺」判斷，用 input coverage 測試</h2>
+
+<p>判斷有沒有欠決策，最容易犯的錯是憑感覺。你問自己「我是不是在發明東西？」模型幾乎一定會回答「沒有啊，我只是把它接起來」。這條路不可靠，因為模型很會替自己找理由。</p>
+
+<p>所以這裡用的是一條刻意機械化、很難自我說服的測試，叫做 <strong>input coverage（輸入覆蓋）</strong>：</p>
+
+<blockquote>
+列出這次建置必須產生、計算或顯示的每一個值（從驗收條件與規格的設計推出來）。對每一個值問：規格有沒有指名它的來源？來源可以是某個輸入、某個資料庫欄位、從某個已命名值的推導，或某個先前的決策。任何一個必要的值，如果它的來源沒有被指名，那就是一個欠著的決策。
+</blockquote>
+
+<p>這條測試的威力在於它不看你的心情，只看「值的來源有沒有被寫下來」。它把「我覺得沒問題」換成「這個值的來源欄位是空的」。</p>
+
+<h2>一個看起來像小事的例子</h2>
+
+<p>想像規格裡有一條驗收條件：首頁要顯示「使用者今天完成的待辦數」。你要算出「今天」，於是你想：就讀使用者最後一次上線那筆資料上的時區，用它來決定日期。聽起來很合理，甚至很像實作細節，不是嗎？</p>
+
+<p>可是拿 input coverage 一測就現形了：這個「今天」是要顯示的值，而它的來源（哪個時區、伺服器時區還是使用者時區、要不要跟隨 DST）並沒有被規格指名。它決定了「一個被驗收條件約束的值的來源」，所以它是 load bearing（承重）的，不管它表面多小。你如果自己選了，就是替代 `/architect` 做了一個決策。</p>
+
+<h2>什麼算承重、什麼真的只是實作細節</h2>
+
+<p>把界線劃清楚，之後判斷就快很多。下面這張表是兩種情況的對照。</p>
+
+<table>
+<thead>
+<tr><th></th><th>承重（決策欠著，要停）</th><th>實作細節（可直接做）</th></tr>
+</thead>
+<tbody>
+<tr><td>本質</td><td>決定某個值的來源，或決定一條驗收條件約束的行為</td><td>在規格已指名的來源裡選一個</td></tr>
+<tr><td>例子</td><td>驗證供應商、資料庫或 ORM、快取策略、整個畫面、一個功能的行為</td><td>迴圈寫法、變數命名、呼叫哪個 helper</td></tr>
+<tr><td>判斷法</td><td>需要「發明」一個新東西才能填</td><td>規格、<code>design.md</code>、<code>AGENTS.md</code> 已經完全涵蓋</td></tr>
+</tbody>
+</table>
+
+<p>還有一類乾淨的情況完全不欠決策，可以直接做：一個小 bug 修正、照著既有 <code>design.md</code> 做一個元件、把規格已經指名來源的零件接起來、改一句文案。這些是「純實作」。反過來說，只要你發現某個必要值的來源是空的，或你自己也不確定，就當作欠決策，去問（下一段的面板）。<strong>寧可多問，也不要漏掉一個決策</strong>，因為漏掉（false negative）才是這個階段的失敗模式。</p>
+
+<h2>檢查的順序：只看這次要用的那幾份文件</h2>
+
+<p>在決定問不問之前，先照順序查三件事。這一步刻意很窄，只讀這次功能真的需要的文件，不去翻整棵 <code>docs/</code> 樹。</p>
+
+<ol>
+<li><strong>找到這個功能的 scope 檔（只找這一個）。</strong> monorepo 就到 <code>docs/scope/&lt;workspace&gt;/</code> 找對應套件的檔，從 At a glance 表格挑出這個功能的段落來讀。如果它寫著 <code>needs a decision</code> 卻還沒有 spec 指標，那就是決策欠著而且缺檔。檔案格式壞掉就回報並詢問，不要猜。</li>
+<li><strong>順著功能上的 <code>spec</code> 指標打開治理它的規格。</strong> 只讀它的建置段落（後面 step 2 會細講有哪些）。找到了，它就是這份規格，繼續。沒有指標、也沒有連到的規格，就在 <code>docs/specs/&lt;workspace&gt;/</code> 裡針對性找一份跟這個功能對得上的，絕不整批讀。</li>
+<li><strong>最近的 <code>AGENTS.md</code> 可能早就記過這個決策了。</strong> 如果之前的功能已經把「驗證供應商早就選好了」同步進去，那就不用再開一份 spec，直接做。</li>
+</ol>
+
+<p>三關都過完，如果決策確實欠著而且沒被記錄，就別猜、也別默默收工。用一個單選面板把它交回給你。面板的問法會指出具體是哪個承重選擇欠著，例如「這看起來需要先做一個架構決策：要用哪個驗證供應商加上哪種 session 模型？」然後給三條出路。</p>
+
+<h2>三條出路：推薦先交給 architect</h2>
+
+<table>
+<thead>
+<tr><th>選項</th><th>它做什麼</th><th>什麼時候用</th></tr>
+</thead>
+<tbody>
+<tr><td>Architect it first</td><td>先把決策寫成一份 spec，再回來建置。系統推薦這個，然後結束這一輪，不寫任何碼。</td><td>這是真的承重決策，而且值得被想清楚</td></tr>
+<tr><td>No, not needed</td><td>你判斷這裡沒有真正的決策，直接進建置流程。</td><td>你確定的確只是純實作</td></tr>
+<tr><td>Build now, record it as an assumed spec</td><td>先建，但先把假設寫成一份 Assumed spec，讓決策活在 repo 裡。</td><td>你現在就要往前，但不希望決策只留在對話裡</td></tr>
+</tbody>
+</table>
+
+<p>推薦永遠是第一個，理由很直白：這個階段的職責是實作決策，決策的品質該在 `/architect` 被處理。另外兩個是給你的彈性，不是給 AI 的方便。</p>
+
+<h2>Assumed spec：讓假設留在 repo，而不是留在對話</h2>
+
+<p>第三條出路值得多講一句，因為它解決一個很實際的痛點。選了它，`/develop` 會在建置之前先寫一份最小規格，這是它在整個流程裡<strong>唯一</strong>擁有的一種 spec 寫入權。它會照 `/architect` 的規則決定放在哪裡、取號，然後寫進這些欄位：</p>
+
+<ul>
+<li><strong>Status</strong>：固定是 <code>Assumed</code>。</li>
+<li><strong>Owed decision</strong>：還沒被做的那個承重選擇。</li>
+<li><strong>Assumption built on</strong>：這次建置實際採用的具體假設。</li>
+<li><strong>Code area</strong>：這次會碰到的路徑。</li>
+<li><strong>Requirements</strong>：從 scope 的 Done when 帶過來的驗收條件種子。</li>
+<li><strong>Ratify</strong>：說明這份決策是被記錄的、不是被審議的，之後要找 <code>/architect</code> 補審。</li>
+</ul>
+
+<p>寫完之後，feature 的 scope 指標會指到這份檔。從此這個假設是耐久的：它撐得過 <code>/clear</code>，隊友讀得到，下一次 <code>/develop</code> 會照著它蓋，而不是再猜一次。兩件容易搞錯的事要記住：這份假設的狀態<strong>一直停在 Assumed</strong>，`/develop` 不能把它推進，只有 `/architect` 審議通過才能清掉；而它<strong>不會擋住 done</strong>，功能還是可以被標成完成，只是旗子會亮著，提醒你這個決策還沒被正式審過。</p>
+
+<h2>動手之前：三個會讓你在錯狀態上開工的警訊</h2>
+
+<p>決策閘門其實還會順手做三件防呆，對象是專案當下的狀態。前提是你在用 git、不是單人離線環境，否則它會默默跳過。首先它會安靜地跑一次 <code>git fetch</code>，base 取 <code>main</code>，沒有才取 <code>master</code>，然後看兩件事：落後幾個 commit、工作區有沒有未提交的變更。</p>
+
+<table>
+<thead>
+<tr><th>訊號</th><th>它會警告你</th></tr>
+</thead>
+<tbody>
+<tr><td>落後 origin 多個 commit</td><td>你可能在舊狀態上開工，隊友說不定已經改過或出貨了，先 pull 再跑。</td></tr>
+<tr><td>要碰的區域有未提交變更</td><td>先把變更提交或 stash，免得這次建置跟它們糾纏在一起。你要硬做它還是會讓你做。</td></tr>
+<tr><td>功能是 in-progress 且那段程式近期有別人 commit</td><td>這個功能看起來已經有人在建了，先協調再繼續。</td></tr>
+</tbody>
+</table>
+
+<p>這些都是警告而不是硬擋，但它們會被你看到。背後是同一個精神：<strong>不要在過期的狀態上、或壓在隊友身上寫程式</strong>。</p>
+
+<p>最後還有一條線索要讀：最近的 <code>AGENTS.md</code> 裡如果寫著 <code>## Git</code> 的 <code>integration: on</code>，那建置前要先開分支。它怎麼運作，等收尾那一步再一起講。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+`/develop` 只實作決策，不製造決策。Step 0 用機械化的 input coverage 測試決定有沒有決策欠著：列出每個必要值，檢查規格有沒有指名它的來源，沒指名就是欠著。承重的定義是「決定了某個值的來源，或決定了驗收條件約束的行為」，不是看它表面大小；純實作才是真的可以直接做。決策欠著時，面板推薦先交給 <code>/architect</code>，另外兩條是「判斷不必要」與「先寫一份 Assumed spec 再建」。Assumed spec 是這個階段唯一擁有的一種 spec，狀態固定在 Assumed、不擋 done、只有 <code>/architect</code> 能清。開工前還會查落後、未提交與隊友是否在建，三者都是警告而非硬擋。
+</blockquote>
+
+<p>閘門過了之後，接下來才是實際的工作。下一步要處理的是：這次要做的是畫面、邏輯，還是兩者都有？規格和慣例要怎麼載進來？寫碼前該先探索什麼？下一節走一遍「分軌、載入、探索後動手」的完整流程。</p>
+
+<div class="lesson-nav">
+  <div><a href="./build-flow.html">下一步：開工流程：分軌、載入規格、探索後動手 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="/develop 為什麼不靠自省來判斷有沒有欠決策？" data-correct="1" data-explain="模型很會把真正的決策合理化成「只是接線」，憑感覺判斷不可靠。">
+  <button class="opt">因為自省會花掉太多 context 預算</button>
+  <button class="opt">因為模型會把真決策說成只是接線</button>
+  <button class="opt">因為規格檔案裡通常已經寫好答案</button>
+  <button class="opt">因為 git 狀態會蓋過自省的結論</button>
+</div>
+
+<div class="quiz" data-question="input coverage 測試要求你對每個必要值檢查什麼？" data-correct="2" data-explain="對每個必須產生的值，檢查規格有沒有指名它的來源：輸入、欄位、推導或先前的決策。">
+  <button class="opt">它能不能用現成的函式庫算出來</button>
+  <button class="opt">它有沒有寫進測試檔案裡面去</button>
+  <button class="opt">規格有沒有指名這個值的來源</button>
+  <button class="opt">它是不是這次驗收條件要用的值</button>
+</div>
+
+<div class="quiz" data-question="把「使用者的今天」用最後上線資料的時區來推導，為什麼算承重？" data-correct="0" data-explain="它決定了某個被驗收條件約束的值的來源，所以是 load bearing，不是實作細節。">
+  <button class="opt">它決定了驗收條件約束的值的來源</button>
+  <button class="opt">它會多用到一個資料庫的欄位查詢</button>
+  <button class="opt">它讓前端跟後端的時間不一致了</button>
+  <button class="opt">它讓規格檔案需要重新拆成兩份</button>
+</div>
+
+<div class="quiz" data-question="決策欠著時，面板推薦的選項是哪一個？" data-correct="3" data-explain="推薦 Architect it first：先把決策寫成 spec 再建，然後結束這一輪不寫碼。">
+  <button class="opt">No, not needed，直接進建置流程</button>
+  <button class="opt">先寫一份 Assumed spec 然後開工</button>
+  <button class="opt">先用最省力的方式把它繞過去</button>
+  <button class="opt">Architect it first，先寫成 spec</button>
+</div>
+
+<div class="quiz" data-question="Assumed spec 的狀態在 /develop 期間會怎麼變化？" data-correct="1" data-explain="它固定在 Assumed，/develop 不能推進；只有 /architect 審議通過才能清掉，而且它不擋 done。">
+  <button class="opt">建置開始就從 Assumed 變成 In Progress</button>
+  <button class="opt">一直停在 Assumed，不擋 done</button>
+  <button class="opt">建置完成就自動變成 Accepted</button>
+  <button class="opt">開分支的時候會變成 Superseded</button>
+</div>
+
+<div class="quiz" data-question="freshness 檢查發現你落後 origin 好幾個 commit，會怎麼處理？" data-correct="2" data-explain="它會停下來警告你先 pull，因為隊友可能已經改過或出貨；這是警告不是硬擋。">
+  <button class="opt">自動幫你 pull 再繼續這次建置</button>
+  <button class="opt">忽略它，因為落後不影響建置</button>
+  <button class="opt">警告你先 pull 再跑一次</button>
+  <button class="opt">直接把你切到 main 分支上面</button>
+</div>
+
+<div class="quiz" data-question="下列哪一個才是真正的「純實作」，不欠決策？" data-correct="3" data-explain="照著既有 design.md 做一個元件，來源與風格都已被涵蓋，可以直接做。">
+  <button class="opt">挑一套新的快取策略來接上服務</button>
+  <button class="opt">決定整個登入頁要用哪個供應商</button>
+  <button class="opt">決定會員功能的行為應該長怎樣</button>
+  <button class="opt">照既有 design.md 做一個新元件</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /develop：依規格實作 · Step 1/5</p>
+  <p>主要來源：<code>skills/develop/SKILL.md</code>。讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -11,53 +11,55 @@
 <h1>Code Mode：用一段程式取代多次工具往返</h1>
 <p class="meta">Step 1/4 · 為什麼 agent 產生的程式不能直接在機器上執行</p>
 
-<h2>先想像一個反覆查資料的 agent</h2>
-<p>客服 agent 接到「找出重複扣款的客戶，算出每個人該退多少錢」的需求。它得先查訂單、數筆數、加總金額、查退款政策，最後再比對結果。</p>
+<h2>先看 agent 為什麼會變慢、變脆弱</h2>
+<p>你已經有一個能呼叫工具的 agent：它描述需求、呼叫工具、等待結果、推理下一步，再呼叫下一個工具。簡單任務通常沒問題；但只要工作需要一連串計算，「呼叫─等待─推理─回傳」的迴圈就會變得又慢又容易出錯。</p>
 
-<p>如果 agent 每完成一小步就呼叫一次工具，再等待結果、重新推理下一步，整段流程可能產生<strong>十幾次</strong> sequential 工具往返。每次往返都會消耗一個 model turn 的 token 與時間。即使把部分呼叫平行化，仍然擺脫不了大量 small round-trip。</p>
+<p>例如，客服 agent 要找出重複扣款的客戶，並算出應退款金額。它可能要查訂單、計算筆數、加總金額、查退款政策，再逐筆比對。整段流程可能產生<strong>十幾次</strong> sequential 的工具往返；每一次都會消耗一個 model turn 的 token 與時間。即使加入平行化，仍然擺脫不了許多 small round-trip。</p>
+
+<p>這正是 code mode 要解決的問題：把一連串操作交給一支程式一次完成，而不是讓模型逐步盯著每個結果來回處理。</p>
 
 <figure class="lesson-figure"><img src="./code-mode-why-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-
-<h2>學習目標</h2>
-<p>這一課會讓你能說明三件事：什麼是 code mode、為什麼 agent 產生的程式不能直接在開發機或生產伺服器上執行，以及沙箱為什麼必須「逃不出去」。</p>
-
-<h2>Code mode：一個回合內把流程寫成程式</h2>
-<p>更有效的做法，是讓模型直接寫一支程式，把多個工具串起來，執行完整流程，最後只回傳結果。原本的「呼叫、等待、推理、再呼叫」迴圈，就被收進一段程式裡。</p>
+<h2>Code mode：一個回合內串起工具</h2>
+<p>與其讓模型在十幾次往返中逐步呼叫工具，不如讓它<strong>直接寫一支程式</strong>，把需要的工具串在一起，一次執行，最後只回傳結果。</p>
 
 <blockquote class="good-code">code mode = 讓 LLM 寫一支程式來串工具，用「一個回合」取代「多次工具往返」，最後只回傳結果。</blockquote>
 
-<p>英文稱為 <strong>code mode</strong>。這個詞最早由 Claude 使用，業界也有其他等價說法，例如 Small-Agents，以及 HuggingFace 的 CodeActs。</p>
+<p>英文叫 <strong>code mode</strong>。這個詞最早由 Claude 使用，業界也有其他等價說法，例如 Small-Agents，以及 HuggingFace 的 CodeActs。</p>
 
-<p>它的重點不是讓模型突然變得更聰明，而是換一種工作方式：把複雜、跨多個步驟的計算交給程式處理。程式執行是確定性的（deterministic），同樣的輸入會按照相同的邏輯完成計算。</p>
+<p>它的核心不是讓模型變得更聰明，而是<strong>換一種工作方式</strong>：把複雜、跨多個步驟的計算交給一支確定性（deterministic）的程式完成。</p>
 
-<p>模型通常很擅長寫程式，卻不擅長在心裡精確計算。像二次方程式求根，讓模型反覆呼叫計算器函式、一步步逼近，容易在中途出錯；讓它寫一支 Python 腳本，再交給程式一次算完，反而更可靠。code mode 正好把「模型擅長寫程式」與「程式擅長精確計算」接在一起。</p>
+<p>這種做法有效，是因為模型很擅長「寫程式」，卻不擅長「在心裡算數」。例如，求解二次方程式時，讓模型反覆呼叫計算器函式，容易在中途出錯；讓它寫一支 Python 腳本，再一次執行，通常更可靠。code mode 正好把「寫程式強、算術弱」這兩項特性對齊。</p>
 
-<h2>問題來了：這支程式要在哪裡跑？</h2>
-<p>現在風險也變得很直接：這支程式是模型產生的嗎？是。那你能直接信任它嗎？不能。</p>
+<h2>但模型寫的程式要在哪裡跑？</h2>
+<p>這是沙箱最核心的問題：<strong>程式是模型寫的嗎？是。那你信得過它嗎？</strong></p>
 
-<p>Coding agent 可能想執行 Bash，分析 agent 可能想執行 SQL 或進行計算。模型產生的程式碼可能寫錯，也可能讀取檔案，甚至連到不該連線的地方。因此，<strong>絕不能讓它直接跑在你的開發機或生產伺服器上</strong>。</p>
+<p>coding agent 可能想執行 Bash，分析 agent 可能想執行 SQL 或計算。這些由模型生成的程式碼，<strong>絕不該直接跑在開發機或生產伺服器上</strong>。它可能寫錯、讀取不該讀的檔案，或連到不該連的地方。</p>
 
-<p>把 agent 直接放進生產伺服器，就像把陌生人請進機房。它在筆電上出錯或許只是一次實驗；它在生產環境上出錯，可能影響真正的資料與服務。</p>
-
-<p>正確做法是保留 agent「生成並執行程式碼」的能力，但把執行位置換成<strong>沙箱（sandbox）</strong>。沙箱會提供一個受限制的環境，讓程式只能使用明確提供給它的資源。</p>
+<p>把 agent 直接放進生產環境，就像把陌生人請進機房：程式在筆電上出錯，和在生產伺服器上出錯，後果完全不同。</p>
 
 <figure class="lesson-figure"><img src="./code-mode-why-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
+<p>因此，agent 可以保有<strong>生成並執行程式碼</strong>的能力，但執行位置必須是<strong>沙箱（sandbox）</strong>。沙箱的硬性要求只有一句話：</p>
 
-<blockquote class="bad-code">沙箱必須「逃不出去」。它是一道邊界，模型寫的程式只能碰沙箱裡有給它的東西。</blockquote>
+<blockquote class="bad-code">沙箱必須「逃不出去」。它是一道邊界，模型寫的程式只能碰沙箱裡提供給它的東西。</blockquote>
 
 <h2>課堂做法與生產做法</h2>
-<p>市面上有許多沙箱方案，例如託管的隔離環境、獨立 process，或專用 runtime。不過，這門課希望你能快速看懂核心機制，因此會使用 Node 內建的 <code>node:vm</code>，在離線且最小的 context 裡執行程式。</p>
+<p>市面上有許多沙箱方案，例如託管的隔離環境、獨立 process，以及專用 runtime。這門課先選擇容易理解、能快速實跑的做法：使用 Node 內建的 <code>node:vm</code>，在離線且最小的 context 中執行程式。</p>
 
-<p>這裡要先記住一個重要限制：<strong><code>vm</code> 不是真正的安全邊界</strong>。它過去曾出現可被逃逸的漏洞。用它來示範「程式應該被限制在哪裡」很合適；但若要部署到生產環境，應改用託管的沙箱產品或獨立 process。</p>
+<p>但要記住一個重要的誠實聲明：<strong><code>vm</code> 不是真正的安全邊界</strong>。它過去曾經出現過可以被逃逸的漏洞。</p>
 
-<p>所以，本課程會清楚區分兩件事：課堂上用 <code>vm</code> 學會沙箱的概念；生產環境則必須採用真正的隔離方案。</p>
+<p>所以，<code>vm</code> 很適合在課堂上示範「邊界」這個概念；真正部署到生產環境時，應改用託管的沙箱產品或獨立 process。課堂與生產之間的這條界線，是本節點最後要驗證的重點。</p>
 
-<h2>這一課要完成的東西</h2>
-<p>接下來會把這個概念放進 harness，完成一個 <code>run_code</code> 工具。它會接收 agent 產生的程式，在沙箱裡執行，再把結果回傳給 agent。</p>
+<h2>這一課的交付物</h2>
+<p>本節點要在 harness 裡加入一個沙箱，並定義一個 <code>run_code</code> 工具。它負責讓 agent「寫一支程式、在沙箱裡執行、回傳結果」，再把這個工具暴露給 agent 使用。</p>
 
-<p>流程分成三步：第二步實作沙箱本體 <code>runInSandbox</code>；第三步把它接成 <code>run_code</code> 工具；第四步用一個真的算出退款金額的 demo 驗證整條流程，並再次確認：<code>vm</code> 只是課堂示範工具，不是生產環境的安全邊界。</p>
+<p>接下來分成三步：</p>
+<ol>
+  <li>第二步：實作沙箱本體 <code>runInSandbox</code>。</li>
+  <li>第三步：把沙箱接成 <code>run_code</code> 工具。</li>
+  <li>第四步：用一個真的算出退款金額的 demo 驗證，並再次確認 <code>vm</code> 不是安全邊界。</li>
+</ol>
 
 <div class="lesson-nav">
   <div></div>

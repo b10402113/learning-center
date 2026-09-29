@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>四種模式：feature、architecture、enhancement、cross-cutting</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>四種模式：feature、architecture、enhancement、cross-cutting</h1>
+<p class="meta">Step 3/5 · /architect：從請求到規格</p>
+
+<h2>學習目標</h2>
+<p>能依情境選對 <code>FEATURE</code> / <code>ARCHITECTURE</code> / <code>ENHANCEMENT</code> / <code>CROSS-CUTTING</code>，並說出每個模式多產出的設計段與它套用的專家預設。</p>
+
+<h2>前言：同一句請求，問法不該一樣</h2>
+
+<p>上一節你認得規格的骨架了。但骨架不是每個模式都長得一樣：不同的設計對象，除了共用的段落之外，還會多出一個屬於自己的設計段，訪談時要問的問題也完全不同。</p>
+
+<p>想像兩個人同時下達指令。一個人說「設計團隊邀請功能」，另一個人說「幫我挑這個新專案的技術棧」。表面上看起來都是「設計」，但前者要問的是資料模型、邀請流程、權限；後者要問的是規模、團隊大小、每一層要選哪個產品。如果 <code>/architect</code> 把這兩件事用同一套問法處理，第一種會被問一堆無關的部署問題，第二種會被要求先確認驗收條件，兩邊都問錯重點。</p>
+
+<p>所以它先判斷模式，再依模式決定訪談與設計段的內容。這一節要看的就是這四種模式，以及背後那位負責寫規格的「人」抱持什麼立場。</p>
+
+<h2>誰在寫這份規格</h2>
+
+<p>寫規格的那個角色被設定成一位有十五年經驗的 Staff Engineer 兼 Principal Architect：管過服務數百萬使用者的系統，半夜三點被自己的決定叫醒過，也看過同一批失敗模式在不同公司重複上演。它的立場不是提供一份中立菜單，而是把你帶向對的答案，坦白說出取捨，遇到明顯會撞上已知失敗模式的方向就直接講。</p>
+
+<p>它的幾條思考原則值得記住，因為它們會反覆出現在每個模式的建議裡：</p>
+
+<ul>
+<li><strong>簡單勝過聰明。</strong>最好的架構，是團隊在週二下午五點、資深工程師請假時還能搭得出來、看得懂、跑得動的那一個。</li>
+<li><strong>無聊的技術是優點。</strong>有社群、有文件、失敗模式已經被摸透的成熟工具，勝過又新又炫的選擇。</li>
+<li><strong>為失敗而設計，不是為順利的流程而設計。</strong>每個決定都要回答：這東西壞掉時會怎樣，我們怎麼回復？</li>
+<li><strong>用三個時間尺度想事情。</strong>第一天能不能出貨、第一百八十天能不能維護、第七百三十天團隊擴大時要不要重寫。</li>
+<li><strong>維運現實不是選配。</strong>一個需要多三套基礎設施元件才能運作的「優雅」方案，並不優雅。</li>
+</ul>
+
+<p>它也列了幾件自己不做的事：不給沒有清楚推薦的選項、不因為某技術流行就推薦它、不為使用者從未提過的想像規模做設計、不忽略團隊實際能達成的能力、不說「這要看情況」卻不馬上說要看什麼。</p>
+
+<h2>動筆之前先挑戰前提</h2>
+
+<p>在進入模式之前，它會先質疑題目本身：這是對的問題嗎？有沒有更簡單的框架能達到同樣目的？這個方向是不是撞上了某個已知的失敗模式？</p>
+
+<p>如果發現問題，它會在 <code>## Context</code> 開頭放一段 <code>⚠️ Premise note</code>：說明擔憂是什麼、會導致什麼失敗、正確的框架應該是什麼樣子，然後照原方向繼續做。你可以否決它的挑戰，但它必須先把話說出來。它同時會檢查三件事：題目是不是大到橫跨三份以上規格（若是，會先聚焦在最關鍵的那一個，其餘列出來建議另開規格）、這個功能有沒有碰觸受規範的資料（有的話要點名適用的法規，安全模型欄位變成必填，稽核紀錄不可協商）、以及它依賴的前置決定是否還沒有規格（例如「假設已經有 auth 與 session 模型，但這假設沒有規格」）。</p>
+
+<p>底下這張表是它拿來比對方向的已知失敗模式。信號出現時，它會直接點名：</p>
+
+<table>
+<thead>
+<tr><th>失敗模式</th><th>信號</th><th>它會說什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>過早微服務</td><td>不到十人的團隊想拆微服務</td><td>微服務要多花三倍工程時間建置與維運，先用結構良好的單體，等真正的瓶頸出現再拆。</td></tr>
+<tr><td>拿 NoSQL 存關聯資料</td><td>有明顯關聯的資料卻提議文件或鍵值資料庫</td><td>這個領域有清楚的關聯結構，關聯式資料庫配上 ACID、join 與約束更合適。</td></tr>
+<tr><td>大爆炸重寫</td><td>想一次取代上線中的系統</td><td>生產系統的大爆炸重寫失敗多於成功，用 strangler：新舊並行、逐步遷移、證明可行才退場。</td></tr>
+<tr><td>過早最佳化</td><td>還沒量到問題就想加快取、佇列或 CDN</td><td>還沒有量測到的效能問題，先做 profiling，再針對量到的瓶頸加基礎設施。</td></tr>
+<tr><td>預設 GraphQL</td><td>標準 CRUD API 也想用 GraphQL</td><td>GraphQL 適合多樣客戶端彈性查詢；標準 CRUD 用 REST，省下 schema 維護與 N+1 風險。</td></tr>
+<tr><td>拿 serverless 跑有狀態工作</td><td>長時或帶狀態流程放進 serverless</td><td>serverless 有冷啟動、十五分鐘上限、連線限制，有狀態或長時工作該放容器或 VM。</td></tr>
+<tr><td>自己重造 auth</td><td>想從零手刻身分驗證</td><td>JWT 到期、refresh token 輪替、CSRF、session fixation 每一個都可能變成破口，用成熟方案。</td></tr>
+<tr><td>組織隔離當事後補丁</td><td>B2B SaaS 沒有先設計 org 隔離</td><td>org 隔離是承重的，上線後才加 <code>org_id</code> 要重寫每個查詢、政策與索引，第一天就要設計。</td></tr>
+</tbody>
+</table>
+
+<h2>四種模式：一張表看懂差別</h2>
+
+<table>
+<thead>
+<tr><th>模式</th><th>什麼時候用</th><th>設計行為</th></tr>
+</thead>
+<tbody>
+<tr><td><code>FEATURE</code></td><td>從零設計一個新功能，有沒有既有程式碼都算</td><td>第一原理設計、最佳實務、最少量的程式碼閱讀</td></tr>
+<tr><td><code>ARCHITECTURE</code></td><td>為新專案選技術棧或基礎架構</td><td>完整的技術棧評估、業界模式、沒有程式碼可讀</td></tr>
+<tr><td><code>ENHANCEMENT</code></td><td>改善、取代或擴充一個已經存在的東西</td><td>讀既有程式碼與規格、聚焦的選項比較</td></tr>
+<tr><td><code>CROSS-CUTTING</code></td><td>把一個模式統一到整個程式庫（錯誤處理、日誌、auth、命名）</td><td>抽樣現況、精確定義標準、建議強制機制</td></tr>
+</tbody>
+</table>
+
+<p>接下來逐個看每個模式多做了什麼。</p>
+
+<h2>FEATURE：設計一個新功能</h2>
+
+<p>FEATURE 模式面對的是從零開始的功能，所以它走第一原理：不讀整份程式庫，只讀這個功能必須整合的既有部分。它依序想清楚七個維度，一個都不跳過：使用者真正要解的<strong>問題</strong>（他們想達成什麼結果，而不是他們嘴巴上要的功能）、<strong>資料模型</strong>（實體、生命週期狀態、必須永遠成立的不變條件）、<strong>一致性需求</strong>（強一致或最終一致、誰寫誰讀、多常讀）、<strong>最小 API 介面</strong>（每個端點的方法、路徑、關鍵輸入輸出、驗證要求、最重要的錯誤）、<strong>失敗模式</strong>（資料庫慢、第三方呼叫失敗、兩個人同時動作）、<strong>安全表面</strong>（哪些資料敏感、誰能讀寫、授權模型）、以及<strong>設定需求</strong>（新的環境變數、密鑰、第三方憑證）。</p>
+
+<p>它還會套用一批專家預設，這些都是踩過坑之後留下的意見：</p>
+
+<ul>
+<li><strong>冪等性從第一天做起。</strong>每個會改動狀態的操作都要能安全重試；牽涉到金錢、通訊或外部副作用時，用冪等鍵。</li>
+<li><strong>分頁不是選配。</strong>任何列表端點都要分頁，就算 MVP 也一樣；沒分頁的列表最後都會變成上線事故。</li>
+<li><strong>軟刪除通常是錯的。</strong>它會污染查詢、破壞唯一約束、留下幽靈資料；改用明確的 <code>archived_at</code> 時間戳或封存表。</li>
+<li><strong>不要預先計算並儲存衍生值</strong>，除非你已經量到效能問題。讀取時再算，存起來的值會過期。</li>
+<li><strong>稽核紀錄是必要的</strong>，只要操作碰到金錢、存取控制、醫療資料或法規範圍就要有，事後補非常痛。</li>
+<li><strong>公開端點一定要限流。</strong>沒有 MVP 例外，替未登入的端點加上限流只要一小時，卻能擋掉一整類濫用。</li>
+<li><strong>永遠不要把密鑰存進資料庫或程式碼</strong>，改用環境變數或密鑰管理服務。</li>
+</ul>
+
+<p>這些東西最後收進 <code>## Feature design</code> 段落：資料模型草圖、狀態轉移、API 介面、值來源、關鍵不變條件、安全模型、設定、以及關鍵測試情境。其中「值來源」表是一個容易忽略卻很關鍵的設計：每個動作要產生、計算或顯示的值，都要寫出它從哪裡來。如果某個驗收條件需要的值沒有任何來源，那就是一個還沒決定的輸入，必須當場解決，不能留給建置的人去發明。</p>
+
+<h2>ARCHITECTURE：選一套技術棧</h2>
+
+<p>ARCHITECTURE 模式面對的是基礎的技術棧決定。它有個重要的順序：<strong>先選架構模式，再選技術。</strong>架構模式由規模和團隊大小決定：使用者不到一千、團隊五人以下，先做單體；一千到十萬、團隊五到十五人，用分層單體（controller → service → repository）；十萬以上、團隊十五人以上且界線清楚，才在領域邊界上拆出兩三條服務；資料密集的場合，先決定批次還是串流，批次（cron 加倉儲）通常就夠。</p>
+
+<p>決定模式之後才逐層挑技術。這裡的手法很值得學：<strong>在耐久的分類上推理，再挑當前的產品。</strong>表格列的是類別與機制（耐久的建議），因為這個領域汰換很快，實際產品要當下重新挑、對齊專案已經在用的東西。這些耐久分類包括：主要資料庫用關聯式資料庫、快取用記憶體內快取（當它是暫時的，絕不當主要儲存）、auth 用成熟的函式庫或服務（絕不從零手刻）、背景工作先用資料庫驅動的佇列、檔案用物件儲存（絕不把檔案存進資料庫）、搜尋先用資料庫內建的全文本搜尋、可觀測性用結構化日誌加錯誤追蹤且第一天就要有。</p>
+
+<p>它套用的專家意見延續同一套保守邏輯：單體優先，因為微服務貴三倍且難以合併回去；關聯式資料庫是預設，95% 的產品碰不到它處理不了的負載；serverless 跑 API 有真實取捨（冷啟動、無狀態、執行時限、連線限制），要明講；多區域部署延後到真的需要；ORM 處理 CRUD、複雜查詢寫 SQL；完整的容器編排是給有平台工程團隊的公司用的，小團隊用託管平台就好。</p>
+
+<p>ARCHITECTURE 是決策型規格，所以它<strong>不寫 Build plan</strong>，產出的是 <code>## Proposed stack</code>：一張逐層的技術棧表，每一層都要有一句理由。</p>
+
+<h2>ENHANCEMENT：改動一個已經存在的東西</h2>
+
+<p>ENHANCEMENT 模式面對的是上線中的系統。它的第一步是讀既有程式碼與相關規格，第二步是誠實診斷：目前的做法「實際上」怎麼運作（不是當初打算怎麼運作）、問題或落差的根因是什麼、既有系統加上了哪些限制（資料格式、API 合約、團隊知識、遷移風險）。</p>
+
+<p>它的選項永遠有三個：<strong>就地修補</strong>（針對現有做法的定點改善，常常被低估，有時它就是正解）、<strong>用 strangler 取代</strong>（新舊並行、逐步遷移、證明可行才讓舊的退場）、<strong>直接取代</strong>（只在舊系統真的無法維護、或範圍小且風險低時才用）。</p>
+
+<p>專家意見再次圍繞「不要衝動重寫」：</p>
+
+<ul>
+<li><strong>先量測再最佳化。</strong>每次效能改善都從 profiling 資料開始。「感覺很慢」不是設計輸入，「p99 延遲 4 秒、profiling 顯示 80% 花在付款供應商呼叫」才是。</li>
+<li><strong>strangler 幾乎永遠是生產系統遷移的正確策略。</strong>大爆炸重寫會遲交，還會弄壞本來好好的東西。</li>
+<li><strong>快取既是資產也是負債。</strong>推薦快取之前，先回答三題：快取什麼？什麼讓它失效？它過期時會怎樣？三題答不出來就還不能推薦。</li>
+<li><strong>功能旗標是重大變更的部署機制。</strong>可以逐步放量、即時回滾、做 A/B 測試，不必重新部署。</li>
+<li><strong>生產環境的資料庫遷移要有安全順序：</strong>先加可為 null 的欄位 → 部署同時寫新舊兩邊的程式 → 回填 → 加約束 → 移除舊欄位。絕不要在運行中的系統直接加一個沒有預設值的 NOT NULL 欄位。</li>
+</ul>
+
+<p>當遷移不單純（需要超過一次部署、要轉換線上既有資料、需要協調窗口、或沒辦法靠回退一個 commit 完全還原），它會多寫一個 <code>## Migration plan</code>，交代策略、階段、回滾方式與風險。</p>
+
+<h2>CROSS-CUTTING：定義一套跨檔案的標準</h2>
+
+<p>CROSS-CUTTING 模式處理的不是壞掉的系統，也不是選技術棧，而是<strong>結束不一致</strong>：把整個程式庫裡做同一件事的各種方式，收斂成一個明確、可強制執行的標準。它的產出是一份精確定義的「唯一正確做法」。</p>
+
+<p>它的第一步是抽樣，不是全面審查。它列出大約五十個原始檔，但只細讀其中四到六個能代表當前不一致的代表性檔案，先辨認出兩到三種互相競爭的模式，再看它們並存時造成了什麼損害（送到客戶端的錯誤形狀不一致、日誌噪音、型別錯誤、同樣條件下行為不同）。</p>
+
+<p>接著它把標準定義到「星期一早上誰都能照著套用」的程度，包含五件事：唯一的<strong>標準範式</strong>（一段具體的程式碼範例）、<strong>它取代掉哪些模式</strong>（明確列出現在算錯的寫法）、<strong>強制機制</strong>、<strong>例外</strong>（什麼情況不適用，「沒有例外」也是有效答案）、以及<strong>推行方式</strong>。</p>
+
+<p>強制機制是有排序的，從最強到最弱：<strong>lint 規則或外掛</strong>（最好，自動化、CI 會擋）&gt; <strong>編譯期型別或抽象基底類別</strong>（好，編譯時就攔）&gt; <strong>PR 範本清單</strong>（弱，靠人）&gt; <strong>審查慣例</strong>（最弱，沒有自動化）。這裡有個很實在的判斷：<strong>一個沒有可行強制機制的標準是弱的</strong>，因為它最後只會變成一句口號。</p>
+
+<p>CROSS-CUTTING 的選項不是技術，而是強制層級與推行策略的組合：定義標準並向前強制（新程式碼一律遵守，舊的列為待償）、定義標準加上一次性的遷移 PR（一次把不合規的檔案全部改完）、或只寫成文件靠審查。它的設計段是 <code>## Standard definition</code>，和 ARCHITECTURE 一樣屬於決策型規格，不寫 Build plan。</p>
+
+<h2>怎麼選模式</h2>
+
+<p>模式不是問來的，是從題目和「這東西在程式碼裡存不存在」推斷出來的，只有在真的模稜兩可時才向你確認。有幾條線索很容易分辨：題目講的是一個還不存在的新功能，就是 FEATURE；題目本身就是選技術棧或基礎架構，就是 ARCHITECTURE；題目要動一個已經在跑的系統，就是 ENHANCEMENT；題目講的是「整個專案都要統一某件事」，就是 CROSS-CUTTING。</p>
+
+<p>還有一個防呆：如果推斷出 ENHANCEMENT，卻在程式庫裡找不到任何原始檔，它會停下來問你，是程式碼在別的目錄，還是其實根本還沒有實作？後者的話，這個題目其實是 FEATURE 或 ARCHITECTURE，模式就會被改掉。這個檢查擋掉「拿改動既有系統的問法，去設計一個全新東西」的錯位。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/architect</code> 背後是一位 Staff Engineer 兼 Principal Architect 的立場：簡單勝過聰明、無聊技術是優點、為失敗設計、用三個時間尺度想事情、維運現實不是選配。動筆前它先挑戰前提，並對照八個已知失敗模式。四種模式各有用途：FEATURE 用第一原理走七個維度並套用功能專家預設，產出 <code>## Feature design</code>；ARCHITECTURE 先選架構模式再逐層挑技術，在耐久分類上推理、挑當前產品，產出 <code>## Proposed stack</code>；ENHANCEMENT 讀既有系統、誠實診斷，永遠比較就地補丁、strangler 與直接取代，遷移不單純才加 <code>## Migration plan</code>；CROSS-CUTTING 抽樣現況、精確定義標準，並依 lint &gt; 型別 &gt; PR 清單 &gt; 審查慣例 排序強制機制，產出 <code>## Standard definition</code>。
+</blockquote>
+
+<p>模式選定之後，真正的重頭戲是那場「一次一個決定」的訪談。下一節要看這場 staged design conversation 怎麼從 scope 驗證開始，走過六個階段，最後通過完整性關卡才動筆。</p>
+
+<div class="lesson-nav">
+  <div><a href="./spec-template-and-audiences.html">← 上一步：規格的骨架：兩個受眾、一條 AC 主線</a></div>
+  <div><a href="./staged-design-conversation.html">下一步：設計訪談怎麼跑：從 scope 驗證到完整性關卡 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="題目是「幫新專案挑一套技術棧」，該用哪個模式？" data-correct="3" data-explain="題目本身就是選技術棧或基礎架構，屬於 ARCHITECTURE，走完整技術棧評估。">
+  <button class="opt">FEATURE，當成一個新功能來設計</button>
+  <button class="opt">ENHANCEMENT，先讀既有程式碼再改</button>
+  <button class="opt">CROSS-CUTTING，把選型統一成標準</button>
+  <button class="opt">ARCHITECTURE，逐層評估後提出技術棧</button>
+</div>
+
+<div class="quiz" data-question="ENHANCEMENT 模式永遠會比較哪三個選項？" data-correct="1" data-explain="它一定比較就地補丁、strangler 取代與直接取代，其中就地補丁常被低估。">
+  <button class="opt">單體、分層單體、微服務三種規模</button>
+  <button class="opt">就地補丁、strangler 與直接取代</button>
+  <button class="opt">批次、串流、以及混合同步三種架構</button>
+  <button class="opt">lint、編譯期型別、PR 清單三種強制</button>
+</div>
+
+<div class="quiz" data-question="CROSS-CUTTING 的強制機制強度排序，最強的是哪一個？" data-correct="0" data-explain="lint 規則最好，因為自動化且 CI 會擋；型別其次；PR 清單與審查慣例都靠人，最弱。">
+  <button class="opt">lint 規則或外掛，運行在 CI</button>
+  <button class="opt">編譯期型別或抽象基底類別</button>
+  <button class="opt">PR 範本裡附上一份檢查清單</button>
+  <button class="opt">寫進團隊的程式碼審查慣例</button>
+</div>
+
+<div class="quiz" data-question="ARCHITECTURE 模式為什麼不寫 Build plan？" data-correct="2" data-explain="它是決策型規格，規格本體就是 Proposed stack；執行決定的 scaffold 步驟由 /develop 推導，避免同一工作被規格兩次。">
+  <button class="opt">因為技術棧的決定不需要任何驗收條件</button>
+  <button class="opt">因為 Build plan 由 /scope 統一代為撰寫</button>
+  <button class="opt">因為決定的執行步驟留給 /develop 推導</button>
+  <button class="opt">因為它改用 Migration plan 取代 Build plan</button>
+</div>
+
+<div class="quiz" data-question="碰到「不到十人的團隊想拆微服務」，它會怎麼回應？" data-correct="1" data-explain="這是過早微服務的失敗模式：微服務要多花約三倍時間，先用結構良好的單體，等真正瓶頸再拆。">
+  <button class="opt">同意拆，因為微服務是業界標準做法</button>
+  <button class="opt">先做單體，等真正瓶頸出現再拆</button>
+  <button class="opt">拆成兩三條服務以保留擴充彈性</button>
+  <button class="opt">先導入容器編排再決定要不要拆</button>
+</div>
+
+<div class="quiz" data-question="推薦快取之前，必須先回答哪三題？" data-correct="3" data-explain="快取什麼、什麼讓它失效、過期時會怎樣，三題答不出來就還不能推薦。">
+  <button class="opt">誰來維運、成本多少、放在哪一層</button>
+  <button class="opt">用哪個產品、容量多大、TTL 多長</button>
+  <button class="opt">延遲降多少、命中率多高、何時退場</button>
+  <button class="opt">快取什麼、什麼失效、過期會怎樣</button>
+</div>
+
+<div class="quiz" data-question="推斷為 ENHANCEMENT 卻找不到任何原始檔時，它會怎麼做？" data-correct="0" data-explain="它會停下來問程式碼是否在別處，或其實沒有實作；若是後者就把模式改成 FEATURE 或 ARCHITECTURE。">
+  <button class="opt">停下來問清楚，必要時改掉模式</button>
+  <button class="opt">照樣繼續，改讀線上文件來補足</button>
+  <button class="opt">直接改成 CROSS-CUTTING 繼續進行</button>
+  <button class="opt">跳過讀碼，直接進入設計訪談</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /architect：從請求到規格 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

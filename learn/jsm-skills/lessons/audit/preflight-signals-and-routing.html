@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pre-flight 訊號與 phase 路由</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>pre-flight 訊號與 phase 路由</h1>
+<p class="meta">Step 2/5 · /audit：建立 AGENTS.md 與風格底線</p>
+
+<h2>學習目標</h2>
+<p>能從一個 repo 的線上訊號判斷它該走哪個 phase，並解釋為什麼「工作流設定中」這個訊號會蓋過原始碼數量。</p>
+
+<h2>前言：同一個指令，四種做法</h2>
+
+<p>上一節我們確認了 <code>/audit</code> 的產出就是 <code>AGENTS.md</code>。但如果你真的只在一個空白專案上跑過它，會以為它的流程很單純：問幾個問題、寫一份檔案、結束。實際不然。</p>
+
+<p>把它跑在一個剛 scaffold 出來的專案上，它會用面板問你一整套技術慣例；跑在一個有三年歷史、卻沒有任何說明文件的 repo 上，它反而不問，直接開始掃描；跑在你只說「幫我看一下 src/auth」時，它只處理那個區域；跑在已經有 root 說明書的專案上，它又變成保守的撿漏模式。</p>
+
+<p>四種情境，四套做法。<code>/audit</code> 得先判斷自己站在哪一種，而它的判斷方式，是先用一輪叫做 <strong>pre-flight</strong> 的前置檢查，收集幾個具體的線上訊號，再照一張路由表決定走哪個 phase。這一節就把這套判斷邏輯拆開來看。</p>
+
+<h2>為什麼不能只看檔案數量</h2>
+
+<p>最直覺的分類方式大概是數檔案：檔案少就是新專案，檔案多就是老專案。這個做法看起來合理，卻會在最常見的情境上出錯。</p>
+
+<p>想像一個剛剛 scaffold 好的專案。你用框架的初始化指令生出了專案骨架，裡面已經有 <code>package.json</code>、一堆設定檔，還有幾十個範例原始碼。如果只數檔案，它會被歸類成「有碼的既有專案」，於是 <code>/audit</code> 跳過所有技術慣例的提問，直接去掃描。可是這個專案根本沒有真正的功能，工程師心中的慣例也還沒定下來，跳過提問等於放掉最重要的一次設定機會。</p>
+
+<p>反過來也有失準的時候。一個不熟的語言、冷門的副檔名，可能讓檔案計數直接歸零，把一個成熟專案誤判成空白專案。所以這套流程刻意不依賴單一數字，而是同時看幾種不同性質的訊號，互相校正。</p>
+
+<h2>pre-flight 收集的五種訊號</h2>
+
+<p>前置檢查在真正動手前收集以下幾類資訊。</p>
+
+<table>
+<thead>
+<tr><th>訊號</th><th>看什麼</th><th>可能的值</th></tr>
+</thead>
+<tbody>
+<tr><td>情境檔狀態</td><td>根目錄有沒有說明書</td><td><code>ROOT_EXISTS</code> / <code>ROOT_LEGACY</code> / <code>ROOT_MISSING</code></td></tr>
+<tr><td>原始碼數量</td><td>跨常見語言的副檔名，排除 <code>node_modules</code>、<code>dist</code>、<code>build</code> 等</td><td>一個數字</td></tr>
+<tr><td>成熟度</td><td><code>git log</code> 的歷史深度、有沒有真正的 manifest（<code>package.json</code>、<code>go.mod</code> 等）</td><td>有或無</td></tr>
+<tr><td>Monorepo</td><td>workspace 標記（<code>pnpm-workspace.yaml</code>、<code>turbo.json</code> 等）</td><td><code>MONOREPO=yes</code> 或 <code>no</code></td></tr>
+<tr><td>工作流設定中</td><td>根目錄沒有說明書，但工作流已經決定了技術棧</td><td><code>WORKFLOW_SETUP</code></td></tr>
+</tbody>
+</table>
+
+<p>其中「情境檔狀態」有三種可能。<code>ROOT_EXISTS</code> 是根目錄已經有 <code>AGENTS.md</code>；<code>ROOT_LEGACY</code> 是只有一個有內容的舊版 <code>CLAUDE.md</code>；兩者都沒有則是 <code>ROOT_MISSING</code>。</p>
+
+<p>最後那個 <code>WORKFLOW_SETUP</code> 訊號最需要解釋。它指的是：根目錄雖然還沒有說明書，但工作流後面的階段已經幫你把技術棧決定好了，證據通常是 <code>docs/specs/</code> 裡有一份帶 <code>## Proposed stack</code> 的架構規格，或是 <code>docs/scope/</code> 裡有一個專門決定技術棧的功能項目。</p>
+
+<h2>路由表：條件對應到哪個 phase</h2>
+
+<p>訊號收齊後，照著下面這張表決定路線。注意它是一條由上往下逐一檢查的順序，不是同時比對。</p>
+
+<table>
+<thead>
+<tr><th>條件</th><th>Phase</th></tr>
+</thead>
+<tbody>
+<tr><td>命令後面有給區域路徑（例如 <code>/audit src/auth</code>）</td><td>Phase 3（area 掃描）</td></tr>
+<tr><td>根目錄已有 <code>AGENTS.md</code>（或遷移後就有了）</td><td>Phase 4（gap-fill）</td></tr>
+<tr><td>沒有說明書，但 <code>WORKFLOW_SETUP</code> 成立</td><td>Phase 1（greenfield）</td></tr>
+<tr><td>沒有說明書，沒有工作流設定，也沒有原始碼與 manifest</td><td>Phase 1（greenfield）</td></tr>
+<tr><td>沒有說明書，沒有工作流設定，但有真功能碼與至少兩次提交</td><td>Phase 2（whole-repo 掃描）</td></tr>
+<tr><td>有碼但看起來是沒動過的骨架，或只有一次提交，或分不清新舊</td><td>Phase 0（停下來問你）</td></tr>
+</tbody>
+</table>
+
+<p>這張表讀下來的感覺是：越確定的情境走越特定的路，越模糊的情境越會退回中間。最後一列就是保險絲。當 <code>/audit</code> 無法從訊號判斷這個專案到底是新的還是舊的，它不會硬選一個，而是停下來問你一次。</p>
+
+<h2>為什麼工作流設定訊號要蓋過原始碼數量</h2>
+
+<p>這張表裡最值得玩味的一點是：<code>WORKFLOW_SETUP</code> 明明有原始碼、有 manifest，卻還是走 greenfield。這正是前面「不能只看檔案數」的具體解方。</p>
+
+<p>還記得那條完整的工作流順序嗎？<code>/scope</code> 先想清楚要什麼，<code>/architect</code> 決定技術棧，然後照著技術棧把專案 scaffold 起來，最後才輪到 <code>/audit</code> 把慣例記錄下來。所以當 <code>/audit</code> 到達時，專案確實已經有一堆檔案了，但那些都是剛生出來的骨架，不是累積出來的成品。此時真正的狀態是「新專案還沒定慣例」，唯一的差別是它長得比較像老專案。</p>
+
+<p>工作流設定訊號就是用來認出這件事。它一看到「說明書還沒有，但規格裡已經寫了 Proposed stack」，就知道這是剛 scaffold 完的合作專案，於是照樣走 greenfield，把技術標準問清楚。相對地，<strong>真正的 brownfield（Phase 2）有更嚴格的定義：是真的功能碼、真的開發歷史，而且沒有一個正在進行中的工作流設定。</strong></p>
+
+<p>那如果專案的狀態介於兩者之間，怎麼看都不像呢？這種情況會落到 Phase 0。Phase 0 的處理方式是不猜，直接問一次，而且問題會附上一個標著「建議」的選項，依當下哪個訊號比較強來決定建議值：如果是一個有 manifest 但幾乎沒有歷史的骨架，就建議「新專案」；如果是真功能碼加上很深的歷史，就建議「既有專案」。不管你選哪邊，之後的流程就會接上對應的 phase。</p>
+
+<h2>舊版 CLAUDE.md 的遷移</h2>
+
+<p>路由表外面還有一個特例要交代：<code>ROOT_LEGACY</code>。當根目錄只有一個有內容的舊版 <code>CLAUDE.md</code>，卻沒有 <code>AGENTS.md</code> 時，代表這個專案的知識全都鎖在只被單一工具讀取的檔案裡。這時候 <code>/audit</code> 不會直接動它，而是先問你的許可：「我找到一份有內容的 CLAUDE.md 但沒有 AGENTS.md，我打算把內容搬進新的 AGENTS.md，並把 CLAUDE.md 換成指標，可以嗎？」</p>
+
+<p>你同意的話，它會把內容原封不動搬過去，再把舊檔換成那行指標，之後就當作 Phase 4 繼續跑。你不同意的話，兩個檔都原樣留著，<code>/audit</code> 就跳過遷移。這裡再次看到同一條哲學：<strong>既有內容可能是人寫的，任何會動到它的動作，都得先問過。</strong></p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/audit</code> 靠 pre-flight 收集五類訊號，再照路由表選 phase。它不用單一檔案數判斷，因為 scaffold 會讓新專案看起來像老專案。關鍵是 <code>WORKFLOW_SETUP</code> 這條訊號：只要工作流已經決定技術棧，即使有一堆檔案也照走 greenfield。真的分不清時，它退回 Phase 0 問你一句，而不是硬猜。舊版 <code>CLAUDE.md</code> 的遷移也遵守「先問再動」的原則。
+</blockquote>
+
+<p>到這裡，你已經知道路線是怎麼選的。接下來三節會逐一走進每一條路線的操作內容。先登場的是最需要你深度參與的那一條：greenfield。它是唯一一次把所有技術慣例一次問清楚的機會，也是四種 coding-style preset 上場的地方。</p>
+
+<div class="lesson-nav">
+  <div><a href="./audit-role-and-context-files.html">← 上一步：/audit 在做什麼：AGENTS.md 是唯一正本</a></div>
+  <div><a href="./greenfield-setup-and-pattern-presets.html">下一步：Greenfield：決策面板與四種風格 preset →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 pre-flight 不能只看原始碼數量？" data-correct="2" data-explain="剛 scaffold 的專案會有一堆範例檔，單看數量會誤判成老專案。">
+  <button class="opt">因為數量計算的指令很不可靠</button>
+  <button class="opt">因為數量無法反映專案的語言</button>
+  <button class="opt">因為 scaffold 會讓新專案像老專案</button>
+  <button class="opt">因為數量會受到 git 歷史影響</button>
+</div>
+
+<div class="quiz" data-question="WORKFLOW_SETUP 訊號代表什麼狀態？" data-correct="1" data-explain="根目錄還缺說明書，但規格或 scope 已經決定了技術棧，屬於剛 scaffold 的 greenfield。">
+  <button class="opt">說明書已存在但內容過期</button>
+  <button class="opt">技術棧已定但說明書還缺</button>
+  <button class="opt">專案剛完成第一次功能提交</button>
+  <button class="opt">專案同時存在多個 workspace</button>
+</div>
+
+<div class="quiz" data-question="命令後面帶了區域路徑，會路由到哪個 phase？" data-correct="3" data-explain="帶區域參數直接觸發 Phase 3 的 area 掃描。">
+  <button class="opt">Phase 0 先停下來詢問</button>
+  <button class="opt">Phase 1 的 greenfield 設定</button>
+  <button class="opt">Phase 2 的 whole-repo 掃描</button>
+  <button class="opt">Phase 3 的 area 區域掃描</button>
+</div>
+
+<div class="quiz" data-question="真正算 brownfield（Phase 2）的條件是什麼？" data-correct="0" data-explain="要有真功能碼、真歷史，且沒有正在進行的工作流設定。">
+  <button class="opt">真功能碼、真歷史、無進行中設定</button>
+  <button class="opt">有 package.json 且提交過一次</button>
+  <button class="opt">有架構規格但還沒有 root 說明書</button>
+  <button class="opt">檔案數很多而且語言很陌生</button>
+</div>
+
+<div class="quiz" data-question="pre-flight 分不清新舊專案時，/audit 會怎麼做？" data-correct="2" data-explain="退回 Phase 0，停下來問你一次，而不是自己硬選一個。">
+  <button class="opt">一律當成老專案來掃描</button>
+  <button class="opt">一律當成新專案來設定</button>
+  <button class="opt">停下來問你這是哪一種</button>
+  <button class="opt">跳過 audit 直接結束流程</button>
+</div>
+
+<div class="quiz" data-question="遇到有內容的舊版 CLAUDE.md，/audit 的第一步是什麼？" data-correct="1" data-explain="先問你許可，同意後才把內容原封搬進 AGENTS.md 並換成指標。">
+  <button class="opt">直接刪掉它並重建說明書</button>
+  <button class="opt">先問你許可再進行遷移</button>
+  <button class="opt">把內容複製成兩份備份</button>
+  <button class="opt">忽略它並改走 Phase 2</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /audit：建立 AGENTS.md 與風格底線 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

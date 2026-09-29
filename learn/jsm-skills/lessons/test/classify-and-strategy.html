@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>先分類再下手：五種檔案各自對應的測試策略</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>先分類再下手：五種檔案各自對應的測試策略</h1>
+<p class="meta">Step 2/5 · /test：為變更寫回歸測試</p>
+
+<h2>學習目標</h2>
+<p>能從路徑與檔名把變更檔案分成 logic、component、page/flow、api/server、cli 五類，並說出每一類該用哪一種測試策略，以及大 diff 與 monorepo 該怎麼處理。</p>
+
+<h2>前言：同一句「寫測試」，卻是完全不同的兩件事</h2>
+
+<p>上一節你已經知道 <code>/test</code> 的範圍，是這條分支裡還沒提交的那些檔案。現在你手上有了清單，問題卻從「要測什麼」變成「每一個檔案該怎麼測」。</p>
+
+<p>這兩個問題的難度差很多。一個純計算函式，測試就是餵它輸入、看它吐什麼；但一個 Vue 元件，你要驗證的是使用者看到什麼、點下去會怎樣；一個 API route 又不同，你要模擬一個真的請求進去看它回什麼；至於 CLI 指令，你得真的把它跑起來看它印了什麼、退出碼是多少。同樣叫「寫測試」，做法卻沒有一個通用版本。</p>
+
+<p>所以 <code>/test</code> 在動手之前會先做一件事：把每個檔案歸類。這一節就來看它憑什麼分類、分成哪五類，以及每一類各自對應的策略。分類看起來像個小步驟，但它其實決定了測試會不會測錯地方。</p>
+
+<h2>只看路徑與檔名，就先把檔案歸類</h2>
+
+<p>它分類的方式刻意便宜：只看檔案的路徑與檔名，不打開內容。因為在這個階段，命名慣例通常已經講得夠清楚了。判斷規則如下。</p>
+
+<table>
+<thead>
+<tr><th>路徑或檔名出現的訊號</th><th>類別</th><th>對應的測試策略</th></tr>
+</thead>
+<tbody>
+<tr><td><code>*.tsx</code>、<code>*.jsx</code>、<code>*.vue</code>、<code>*.svelte</code>，且不在 route 或 page 路徑下</td><td>component</td><td>元件測試：render、互動、斷言 DOM 與 ARIA</td></tr>
+<tr><td><code>app/**/page.*</code>、<code>pages/**</code>（不含 <code>pages/api</code>）、<code>*Screen.*</code>、<code>*View.*</code></td><td>page/flow</td><td>E2E 候選，外加各零件的元件測試</td></tr>
+<tr><td><code>app/**/route.*</code>、<code>pages/api/**</code>、<code>*.controller.*</code>、<code>*.handler.*</code>、<code>*.resolver.*</code>、<code>actions.*</code></td><td>api/server</td><td>整合測試：呼叫 handler，只在邊界 mock</td></tr>
+<tr><td>一般的 <code>.ts</code>、<code>.js</code>、<code>.py</code>、<code>.go</code>、<code>.rs</code>，以及 utils、hooks、services、domain logic</td><td>logic</td><td>單元測試：輸入到輸出、邊界、錯誤</td></tr>
+<tr><td><code>cli.*</code>、<code>bin/**</code>、<code>*.command.*</code>、<code>cmd/**</code></td><td>cli</td><td>整合測試：實際呼叫這個指令</td></tr>
+</tbody>
+</table>
+
+<p>真的遇到模糊、光看檔名判斷不出來的檔案時，它會先暫且標成 logic，等到真的打開檔案讀的時候再改標記。這個寬容的設計是為了讓分類保持便宜，不必為了歸類而先把所有檔案讀過一遍。</p>
+
+<p>分完類，它會順手記下一個開關：只要清單裡有任何一個 page/flow 檔案，就把 <code>E2E_RELEVANT</code> 設成 yes。這個開關後面會決定它要不要問你 E2E 工具的事。</p>
+
+<h2>變更檔案太多時：先挑風險高的</h2>
+
+<p>如果這次的變更超過 15 個原始檔，它不會硬著頭皮一次全寫完。那種規模的變更一次寫完，品質一定下滑，而且很容易漏掉最該測的地方。它的做法是依照類別排優先序，先處理 logic 與 api/server，因為這兩類風險最高、也最便宜測得扎實，然後用一張決策面板問你打算怎麼聚焦：是先把 logic 與 API 測掉、其餘標成尚未覆蓋；還是分好幾批全部測完；或者由你直接指定最重要的檔案或目錄。</p>
+
+<p>在 monorepo 裡還有一層解析。它會為每個檔案往上找出最近的那個 <code>package.json</code>，把同一個 root 的檔案歸成一組。不同的 root 可能用不同的框架、套件管理員與測試目錄，因此它會分組安裝、分組寫測試。如果往上找最終都指向同一個 root（這是常見情況），那就當成單一專案處理。</p>
+
+<h2>五類檔案，五種下手方式</h2>
+
+<p>分類完成後，每一類走自己的策略。這些策略的差別，說到底就是「該驗證到哪一層」與「哪些東西可以假裝」。</p>
+
+<h3>logic：純單元測試，餵真的輸入看真的輸出</h3>
+
+<p>純邏輯的檔案最好測，也最該測得徹底。做法是用真實輸入呼叫那個函式，斷言輸出，然後把邊界與錯誤情況盡量補齊。這裡有一條紀律：只 mock 真正的外部邊界，例如網路、檔案系統、時鐘、隨機數。你擁有的東西不要 mock，因為一旦把邏輯本身也 mock 掉，測試就只是在確認「我自己的假東西會回傳我自己設定好的值」。</p>
+
+<h3>component：測使用者看到什麼，不測元件內部</h3>
+
+<p>元件測試要 render 元件、用使用者事件去互動，然後斷言使用者實際感知到的東西，例如畫面上出現的文字、元素扮演的角色、按鈕是不是被 disabled、某個區塊是不是 expanded。無障礙也要一起驗。反過來說，不要斷言元件的內部 state，也不要斷言 class 名稱，那兩者都屬於實作細節，改了不該讓測試變紅。</p>
+
+<h3>page/flow：有 E2E 工具就走真實瀏覽器，沒有就退回元件層</h3>
+
+<p>頁面或流程如果設定了 E2E 工具，就為主要路徑寫一條真實瀏覽器流程：載入、操作、斷言結果，再加一條失敗路徑。頁面裡那些不簡單的零件，另外用元件測試覆蓋。要是沒有 E2E 工具，就在元件層把整個頁面覆蓋起來。這是一個務實的取捨：E2E 最接近真實使用，但成本也最高，所以只在有工具時才走這條路。</p>
+
+<h3>api/server：用代表性請求打 handler，只在邊界 mock</h3>
+
+<p>API 與 server 的檔案寫整合測試。用有代表性的請求去呼叫 handler、route 或 action，斷言回應的狀態、形狀，以及錯誤回應，例如壞輸入、未授權、找不到資源。資料庫與外部服務只在邊界那一層 mock 掉，其餘照真的走。</p>
+
+<h3>cli：真的把指令跑起來</h3>
+
+<p>命令列工具就用參數把它實際跑起來，斷言標準輸出、退出碼與副作用，並且至少涵蓋一條「參數不對」的路徑。因為 CLI 的價值就在於它被當成一個程式執行，所以測試也該這樣對待它。</p>
+
+<h2>為什麼分類這麼重要</h2>
+
+<p>如果分類錯了，測試就會測錯東西，而且錯得很隱蔽。把一個 React 元件當成 logic 來測，你就會去斷言它內部的 state，結果是改個 class 名稱測試就紅了，但元件真的壞掉時它卻不紅。這種假綠的測試，正是上一節說「比沒有更糟」的那一種。分類是為了對齊驗證的層次，讓你測的是這個檔案真正對外承諾的行為。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/test</code> 只用路徑與檔名就先把變更檔案分成五類：component、page/flow、api/server、logic、cli。每一類對應不同的策略，從純單元測試到真實瀏覽器流程都有。分類錯了，測試就會測到實作細節而不是行為。變更超過 15 個檔案時，先從風險高又便宜的 logic 與 api/server 下手；monorepo 則依最近的 <code>package.json</code> 分組處理。
+</blockquote>
+
+<p>知道每個檔案該用哪一招之後，下一步是：你要用哪一套工具來跑這些測試？這個選擇會被記在 <code>test-preferences.json</code> 裡。下一節就來看這個檔案，以及專案「刻意不裝測試 runner」時那套完全不同的形狀。</p>
+
+<div class="lesson-nav">
+  <div><a href="./test-philosophy-and-scope.html">← 上一步：/test 的角色：只為這條分支的未提交變更寫回歸測試</a></div>
+  <div><a href="./preferences-and-setup.html">下一步：test-preferences.json：記住測試框架，或記住你選擇不裝 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="/test 靠什麼把變更檔案分類？" data-correct="0" data-explain="只看路徑與檔名，便宜又不需先讀內容；真的模糊時先標 logic，讀檔時再改。">
+  <button class="opt">只看檔案的路徑與檔名</button>
+  <button class="opt">先完整讀過每一個檔案內容</button>
+  <button class="opt">用上一次的覆蓋率報告判斷</button>
+  <button class="opt">由工程師逐一指定每一類</button>
+</div>
+
+<div class="quiz" data-question="一個純邏輯的 util 檔應該套用哪種策略？" data-correct="2" data-explain="用真實輸入呼叫函式、斷言輸出，把邊界與錯誤補齊，只 mock 真正的外部邊界。">
+  <button class="opt">真實瀏覽器流程加一條失敗路徑</button>
+  <button class="opt">render 後用使用者事件互動斷言</button>
+  <button class="opt">單元測試，斷言輸入到輸出與邊界</button>
+  <button class="opt">呼叫 handler 並斷言回應形狀</button>
+</div>
+
+<div class="quiz" data-question="測 component 時，下列哪一種斷言是不該寫的？" data-correct="1" data-explain="內部 state 與 class 名稱屬於實作細節，改了不該讓測試變紅；要斷言使用者感知到的東西。">
+  <button class="opt">按鈕在載入中是 disabled</button>
+  <button class="opt">元件的內部 state 剛好等於某值</button>
+  <button class="opt">對話框出現時 aria expanded 為真</button>
+  <button class="opt">畫面上出現使用者該看到的文字</button>
+</div>
+
+<div class="quiz" data-question="api/server 類的檔案，mock 應該下在哪一層？" data-correct="3" data-explain="只在系統邊界 mock 資料庫與外部服務，其餘用有代表性的請求真的走一遍。">
+  <button class="opt">把整個 handler 換成假的函式</button>
+  <button class="opt">把請求物件本身完全斷開</button>
+  <button class="opt">把回應的斷言先寫成空殼</button>
+  <button class="opt">只在資料庫與外部服務的邊界</button>
+</div>
+
+<div class="quiz" data-question="變更檔案超過 15 個時，/test 會怎麼做？" data-correct="1" data-explain="先挑風險高又便宜的 logic 與 api/server，再用決策面板問你要怎麼聚焦。">
+  <button class="opt">直接跳過，不寫任何測試</button>
+  <button class="opt">先挑 logic 與 api/server 下手</button>
+  <button class="opt">平均分散，每個檔案都寫一條</button>
+  <button class="opt">只測工程師指定的一個檔案</button>
+</div>
+
+<div class="quiz" data-question="E2E_RELEVANT 被設成 yes 的條件是什麼？" data-correct="2" data-explain="只要清單裡有任何一個 page/flow 檔案，就代表需要考慮 E2E 工具。">
+  <button class="opt">專案裡總共超過十個元件</button>
+  <button class="opt">有任何一個純邏輯的檔案</button>
+  <button class="opt">清單裡有 page/flow 的檔案</button>
+  <button class="opt">使用者的裝置是手機或平板</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /test：為變更寫回歸測試 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

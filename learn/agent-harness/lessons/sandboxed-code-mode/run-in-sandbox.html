@@ -8,28 +8,34 @@
 </head>
 <body>
 
-<h1>實作 <code>runInSandbox</code>：替 agent 畫出 <code>node:vm</code> 沙箱邊界</h1>
+<h1>實作 runInSandbox：用 node:vm 劃出沙箱邊界</h1>
 <p class="meta">Step 2/4 · 用最小 context 執行 agent 寫的程式</p>
 
-<p>agent 產生的程式碼本質上只是一段字串。問題是：這段字串不能直接在 server 裡隨意執行，否則它可能碰到不該碰的能力，或因為無窮迴圈把整個請求卡住。這一步要做的，就是把程式放進一間只有指定工具、而且有時間限制的空房間。</p>
+<p>Agent 會產生程式碼，也可能要求呼叫工具。問題是：這段程式碼不能直接在 server 的環境裡奔跑，否則它可能碰到不該碰的 API，甚至一直執行不回來。這一步要做的，就是替它準備一間「只有必要物品的房間」：只放進允許使用的 <code>tools</code>、攔截輸出的 <code>console.log</code>，再加上執行時間限制。</p>
 
-<h2>先看完整契約：三個輸入，一個結果</h2>
+<h2>學習目標</h2>
 
-<p><code>runInSandbox</code> 是沙箱唯一的入口。它的簽名直接定義了什麼能進來：</p>
+<p>完成 <code>runInSandbox</code> 的完整流程：建立 context、只注入 <code>tools</code> 與 <code>console.log</code>、用 async IIFE 包住程式碼，再以 <code>Promise.race</code> 加上 timeout，最後回傳帶有 <code>ok</code> 的結果。</p>
+
+<h2>函式的契約：三個輸入</h2>
+
+<p>沙箱只有一個入口函式：<code>runInSandbox</code>。它的簽名先把邊界畫清楚，定義哪些東西能進來：</p>
 
 <pre><code>runInSandbox(code: string, api: SandboxApi, options?: { timeoutMs?: number })</code></pre>
 
 <ul>
-<li><code>code</code>：模型寫出的程式碼，傳進來時只是一個字串。</li>
-<li><code>api</code>：sandbox API，也就是函式白名單。沙箱裡的程式只能呼叫這張表上的能力。</li>
-<li><code>options.timeoutMs</code>：逾時毫秒數，預設為 2 秒（2000）。它用來限制程式的執行時間，避免模型寫出的程式長時間卡住 server。</li>
+<li><code>code</code>：模型產生的程式碼。對 <code>runInSandbox</code> 來說，它只是一段字串。</li>
+<li><code>api</code>：sandbox API，也就是一張函式白名單。沙箱內的程式只能呼叫這裡提供的能力。</li>
+<li><code>options.timeoutMs</code>：逾時毫秒數，預設為 2 秒（2000）。這是避免模型寫出無窮迴圈或其他長時間不結束的程式。</li>
 </ul>
 
-<p>沙箱另外維護 <code>logs: string[]</code>，攔截其中所有 <code>console.log</code> 的輸出，最後再一併回傳。因為沙箱裡的輸出不會自動出現在外部終端機。</p>
+<p>函式也會維護一個 <code>logs: string[]</code>，把沙箱內所有 <code>console.log</code> 的內容收集起來，最後一併回傳。因為沙箱裡的輸出不應該直接混進 server 的終端機。</p>
 
-<h2>第一層：建立只放白名單的 context</h2>
+<h2>建立 context：白名單之外，一無所有</h2>
 
-<p>用 <code>vm.createContext</code> 建立隔離的執行環境。這裡的規則很直接：<strong>你放進 context 的東西，才是沙箱看得到的東西。</strong></p>
+<p>先用 <code>vm.createContext</code> 建立隔離的執行環境。這裡最重要的規則是：<strong>context 裡放了什麼，沙箱裡才看得到什麼。</strong></p>
+
+<p>因此，這個最小 context 只提供兩樣東西：</p>
 
 <pre><code>const context = createContext({
   tools: api,                // 白名單能力，暴露成 sandbox 內的 global `tools`
@@ -40,25 +46,32 @@
   },
 });</code></pre>
 
-<p>這層存在的原因，是把「可用能力」從執行環境切出來管理。沙箱只拿到 <code>tools</code> 和自訂的 <code>console.log</code>；<code>require</code>、<code>process</code>、<code>fetch</code> 不在 context 裡，因此模型即使寫出 <code>require("fs")</code>，也沒有對應的能力可以使用。</p>
+<p>這一層存在的原因，是把「能做什麼」從模型的程式碼裡抽離，改由 harness 明確決定。</p>
+
+<ul>
+<li><strong>能力注入（capability injection）</strong>：沙箱能使用的東西，只有你主動放進去的東西。這裡沒有 <code>require</code>、<code>process</code> 或 <code>fetch</code>，所以模型即使寫出 <code>require("fs")</code>，也找不到這個能力。</li>
+<li><strong>攔截 console</strong>：這裡沒有使用真正的 <code>console.log</code>，而是放入一支假的 <code>console</code>。它會把每個參數轉成字串，用空白串起來，再推進 <code>logs</code>。</li>
+</ul>
+
+<p><code>args</code> 的型別是 <code>unknown[]</code>，所以必須先用 <code>String()</code> 轉換，才能交給 <code>join</code>。跑到這裡，你已經完成第一層邊界：沙箱只能看見白名單能力，輸出也會被 harness 收回來。</p>
 
 <figure class="lesson-figure"><img src="./run-in-sandbox-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p><code>console</code> 也是刻意替換的。真正的 <code>console.log</code> 會直接印到 server 終端機；這裡改成攔截函式，把每個參數先用 <code>String()</code> 轉成字串，再用空白接起來放進 <code>logs</code>。參數型別是 <code>unknown[]</code>，所以不能直接假設它們已經是字串。</p>
+<h2>async IIFE：讓模型可以寫頂層 await</h2>
 
-<h2>第二層：用 async IIFE 支援頂層 <code>await</code></h2>
+<p>模型很可能會寫出 <code>await tools.getCharges(...)</code>。但我們拿到的是一段程式碼字串，不是一個已經宣告好的 async 函式；如果直接把它交給 <code>runInContext(code)</code>，頂層 <code>await</code> 就會造成語法錯誤。</p>
 
-<p>agent 很可能會寫出 <code>await tools.getCharges(...)</code>。但直接把這段字串交給 <code>runInContext</code> 執行時，它並不在 async 函式裡，頂層 <code>await</code> 會造成語法錯誤。</p>
-
-<p>因此先把程式包進立即執行的 async 函式（async IIFE）：</p>
+<p>做法是把程式碼包進一個<strong>立即執行的 async 函式（async IIFE）</strong>：</p>
 
 <pre><code>const wrapped = `(async () =&gt; { ${code} })()`;</code></pre>
 
-<p>包裝後，模型可以直接在自己的程式碼裡使用 <code>await</code>，不必知道外層執行器的細節。這只是語法上的便利，<strong>不會增加任何安全性</strong>；沙箱能碰到什麼，仍然由 context 裡注入的能力決定。</p>
+<p>這樣模型不需要自己補函式外殼，直接在程式碼裡使用 <code>await</code> 即可。這一層只負責改善執行介面，<strong>不是安全機制</strong>；它只是把一段字串包成可以非同步執行的形式。</p>
 
-<h2>第三層：讓程式和計時器競速</h2>
+<h2>執行與 timeout：讓程式和倒數計時器競賽</h2>
 
-<p>執行時使用 <code>vm.runInContext</code>，把包好的程式、context 和 timeout 傳進去。非同步程式不能直接無限期地 <code>await</code>，所以再用 <code>Promise.race</code> 讓「程式完成」與「計時器到期」競速：</p>
+<p>接著用 <code>vm.runInContext</code> 執行包好的程式碼，並把 context 與 timeout 一起交給它。</p>
+
+<p>這裡不能直接無限期地 <code>await</code> 執行結果。假設程式進入無窮迴圈，或非同步工作一直沒有完成，呼叫端就可能永遠等下去。因此再加上一個 <code>withTimeout</code> helper，讓「程式結果」和「計時器」比賽，誰先完成就採用誰：</p>
 
 <pre><code>function withTimeout&lt;T&gt;(promise: Promise&lt;T&gt;, ms: number): Promise&lt;T&gt; {
   return Promise.race([
@@ -69,20 +82,13 @@
   ]);
 }</code></pre>
 
-<p>程式先完成，就拿到它的結果；計時器先觸發，就會 <code>reject</code> 並進入錯誤路徑。</p>
+<p>程式先完成，就正常取得結果；計時器先觸發，就以 <code>reject</code> 結束等待，進入錯誤處理路徑。這層的重點不是讓程式「消失」，而是避免 harness 永遠卡在等待結果的狀態。</p>
 
-<p>這裡有兩種不同的卡住情況：</p>
+<figure class="lesson-figure"><img src="./run-in-sandbox-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<ul>
-<li>同步無窮迴圈，例如 <code>while (true) {}</code>，由 <code>runInContext</code> 的 <code>timeout</code> 選項處理。</li>
-<li>非同步程式一直沒有完成，則由 <code>withTimeout</code> 的 <code>Promise.race</code> 回報逾時。</li>
-</ul>
+<h2>用 ok 標記成敗：讓 AI 不必猜結果</h2>
 
-<p><code>Promise.race</code> 只決定要先回傳哪個結果，不會取消已經開始的底層 Promise；它的責任是讓呼叫端不必無限期等待。</p>
-
-<h2>第四層：用 <code>ok</code> 明確回報成敗</h2>
-
-<p>最後把執行結果包成成功／失敗 union：</p>
+<p>最後把執行結果包成清楚的成功／失敗 union：</p>
 
 <pre><code>try {
   const result = await withTimeout(runInContext(wrapped, context, { timeout: timeoutMs }), timeoutMs);
@@ -91,22 +97,9 @@
   return { ok: false, error: error instanceof Error ? error.message : String(error) };
 }</code></pre>
 
-<p><code>ok</code> 不是多餘的包裝。這個結果通常會交給模型繼續判斷；與其讓模型猜測「有沒有 <code>error</code> 欄位代表失敗」，不如直接提供 <code>ok: true</code> 或 <code>ok: false</code>。成功時讀 <code>result</code>，失敗時讀 <code>error</code>，下一步就有明確分支。</p>
+<p>為什麼要明確放一個 <code>ok</code>？因為讀取結果的可能不是人，而是下一個 AI 步驟。與其讓它自行猜測「有 <code>error</code> 欄位是否代表失敗」，不如直接用 <code>ok: true</code> 或 <code>ok: false</code> 標示狀態。成功時讀 <code>result</code> 與 <code>logs</code>；失敗時讀 <code>error</code>。</p>
 
-<h2>把整條執行路徑記住</h2>
-
-<p><code>runInSandbox</code> 的心智模型可以縮成四步：</p>
-
-<ol>
-<li>把模型寫的字串包成 async IIFE。</li>
-<li>建立只包含 <code>tools</code> 與攔截版 <code>console.log</code> 的 context。</li>
-<li>用 <code>vm.runInContext</code> 執行，並用同步 timeout 與 <code>Promise.race</code> 限制等待時間。</li>
-<li>用 <code>ok</code> 回報成功或失敗，並在成功時帶回 <code>result</code> 與 <code>logs</code>。</li>
-</ol>
-
-<p>最後得到的不是一個任意執行器，而是一條清楚的沙箱邊界：程式只能使用你注入的 <code>tools</code>，只能透過收集過的 <code>console.log</code> 回報，還必須在時間限制內完成。</p>
-
-<figure class="lesson-figure"><img src="./run-in-sandbox-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p>整支 <code>runInSandbox</code> 可以記成一個簡單模型：<strong>把程式碼字串放進只有 <code>tools</code> 和 <code>console.log</code> 的空房間，限制它的等待時間，再用 <code>ok</code> 回報成敗。</strong> 到這裡，沙箱的入口、能力白名單、輸出收集與結果判定都已經具備。</p>
 
 <div class="lesson-nav">
   <div><a href="./code-mode-why.html">← 上一步：Code Mode：一段程式取代多次往返</a></div>

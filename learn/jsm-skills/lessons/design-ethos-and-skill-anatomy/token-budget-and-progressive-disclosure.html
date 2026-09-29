@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Token 預算與 progressive disclosure：為什麼每一行都是成本</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Token 預算與 progressive disclosure：為什麼每一行都是成本</h1>
+<p class="meta">Step 2/4 · 設計理念與 Skill 解剖</p>
+
+<h2>學習目標</h2>
+<p>能用「每次載入都是成本」解釋 progressive disclosure 與 token 預算，並用 cost-unit 權重判斷該先砍輸出、砍 fresh input，還是砍 resident 檔。</p>
+
+<h2>前言：為什麼一句提醒也要斤斤計較</h2>
+
+<p>上一課的第四條慣例說「skill 要瘦，因為每一行都是成本」。這句話很容易被當成口號：反正現在的模型 context window 很大，多寫幾句會怎樣？</p>
+
+<p>問題在於「每次」這兩個字。你維護的規則是給 agent 讀的，而 agent 每次執行你的 skill，都會把那份指令從頭讀一遍。你今天多加的一句提醒，不是付一次錢，是往後每一次執行都要付一次。如果這句話又不改變 agent 的行為，那它就是在幫你穩定地燒錢，什麼都沒換到。要判斷哪一句該留、哪一段該拆檔，就得先搞清楚這筆帳是怎麼算的。</p>
+
+<h2>成本從哪裡來：三種載入路徑</h2>
+
+<p>一個 skill 的內容不是平均地花錢，它分三條路徑進場，成本結構完全不同，並不是平均地花錢。</p>
+
+<p>第一條是 <code>SKILL.md</code> 的本文。只要這個 skill 被叫到，它的主體就會完整載入主對話的 context。這是每次執行都在付的固定成本，也是為什麼「瘦身」主要針對它。</p>
+
+<p>第二條是 frontmatter 裡的 <code>description</code>。它更狠：每個安裝好的 skill，它的描述都會載入到「每一個 session」，不管你這次有沒有要用它。所以描述必須短，真正的理由是它出場次數最多，跟排版好不好看無關。jsm-skills 給它的上限是 400 個字元。</p>
+
+<p>第三條是 skill 資料夾裡的支援檔案，例如各種 mode 或 guide。這些檔案通常在 subagent 被叫用時，才載入到 subagent 的 context。它們不會拖累主對話的每一次執行，但還是要控制大小。</p>
+
+<p>把三條放在一起看，就能理解為什麼專案把「最常用的東西留在最小的地方」當成原則。</p>
+
+<h2>Progressive disclosure：把罕見又長的內容請出去</h2>
+
+<p>所謂 progressive disclosure（漸進式揭露），在 skill 設計裡的定義很具體：<strong>只把「罕見需要」而且「內容很長」的東西，移到另一個用到才讀的檔案；短或常用的內容，就留在入口。</strong></p>
+
+<p>你可以想像一位醫師的診間。牆上貼的是常見症狀的處置流程，一抬頭就看到，因為每天都在用。真正罕見病例的詳細手冊，則收在抽屜裡，遇到那種病人才拿出來翻。如果把整本手冊都貼在牆上，牆面會被塞爆，而且你九成時間根本用不到那些內容，只是每天抬頭都看到它。</p>
+
+<p>這裡有兩個判準缺一不可。內容要「罕見」，拆出去才划算，因為它在主路徑上多半用不到；同時它要「長」，拆出去才值得，因為短的東西搬來搬去只是多一道讀取。只符合其中一個條件，就該留在原地。</p>
+
+<p>拆檔的時候還有一個不能忘的細節：觸發條件要寫明。不能只留一個檔名，要寫成「如果遇到 X，先讀 Y 再繼續」。少了這句，agent 根本不知道什麼時候該去讀那個檔案，內容等於白拆。</p>
+
+<h2>把預算變成可執行的數字</h2>
+
+<p>既然成本可以量，jsm-skills 就把它寫成具體的上限，交給腳本去盯。主要幾條是這樣：每個 <code>SKILL.md</code> 的本文上限 32 KB；支援檔案上限 24 KB，少數歷史檔案有例外。除了單檔上限，還有一組「熱路徑預算」（hot path），用來模擬一次真實執行實際會載入的總量，例如 <code>/architect</code> 走完整設計流程、<code>/scope</code> 規劃、<code>/develop</code> 做 UI 時的完整讀取，各自有自己的總量上限。</p>
+
+<p>更有意思的是預算政策。這些上限刻意設在「實際大小再往上留一點」的位置，大約是警告線的 0.9 再高一階，讓平常的小修改能安全過關，只有真正長胖時才會觸發。反過來，如果上限剛好貼著現在的大小設，那麼每一次編輯都會踩線，而面對一個永遠在叫的警報，工程師唯一能做的是把上限往上調。一旦開始這樣做，這個預算就再也沒有意義了。所以專案的原則是：接近上限要「先刪」，不是抬高天花板；例外名單只能往下修，不能往上加。</p>
+
+<h2>帳單其實長什麼樣：cost unit 的四種權重</h2>
+
+<p>要知道省錢該從哪裡下手，得先理解 token 不是等價的。專案裡的 <code>analyze-token-usage.mjs</code> 把一次 session 的用量拆成四類，並給了相對權重（以一個未快取的輸入 token 為 1）：</p>
+
+<table>
+<thead>
+<tr><th>類別</th><th>權重</th><th>白話解釋</th></tr>
+</thead>
+<tbody>
+<tr><td>fresh input</td><td>1.0</td><td>這次真的新讀進來、沒有快取的輸入</td></tr>
+<tr><td>cache-write</td><td>1.25</td><td>第一次寫進快取，比一般輸入還稍貴</td></tr>
+<tr><td>cache-read</td><td>0.1</td><td>命中快取重讀，只算約十分之一</td></tr>
+<tr><td>output</td><td>5.0</td><td>模型生成的字，權重最高</td></tr>
+</tbody>
+</table>
+
+<p>這張表推翻了一個直覺。你看到一次執行「讀了八萬個 token」，第一反應是「好多」，但如果其中大部分是 cache-read，實際帳單只有十分之一。工具在報表最後會提醒你：原始總量會高估成本，在 cost unit 的尺度上，真正的錢多半花在 output 生成上。</p>
+
+<p>所以省錢的槓桿有明確排序：<strong>先砍 output 和 fresh input，cache-read 本來就便宜。</strong>而這兩個槓桿對應到很不一樣的動作。砍 output，靠的是減少冗長的來回：面談少問幾輪、問題問得更準，生成的字自然變少。砍 fresh input，靠的是不重複載入新的長內容。至於把常駐檔案改小，影響的其實只是便宜的 cache-read。</p>
+
+<p>這正好接回上一課的慣例三。為什麼「每個問題都附一個推薦選項」不只是禮貌問題？因為它讓你少來回好幾趟，而每一趟都是一次 output 生成。把問題問好，就是最有效的省錢手段。</p>
+
+<h2>Subagent 是另一種省錢法</h2>
+
+<p>工具報表還會把用量拆成「主對話」與「subagent」兩邊。這個拆法的意義在於：你可以把大量、粗糙的讀取工作丟給 subagent，讓它回傳一份壓縮過的摘要，主對話只收摘要，不需把原始內容全部吃進來。</p>
+
+<p>jsm-skills 的兩個唯讀 subagent 就是這個思路。<code>scout</code> 負責掃描程式庫，它被要求回傳一份約一到兩千 token 的精簡地圖，包含要建立或修改的檔案、可重用的符號、以及要注意的陷阱。<code>researcher</code> 負責查外部資料，只回傳查證過的連結與結論，不把整頁網頁搬回來。它們的產出有明確的 token 上限，這就是主對話不會被撐爆的原因。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+成本來自三條載入路徑：<code>SKILL.md</code> 本文每次執行都進主 context、<code>description</code> 進每個 session、支援檔案在 subagent 被叫用時載入。Progressive disclosure 的判準是「罕見又長」才拆檔，並寫明觸發條件。預算用 byte 上限與熱路徑總量來管，原則是接近上限先刪、例外只能下修。而 token 不等價：cache-read 只算約十分之一，output 權重最高，所以省錢要先砍 output 和 fresh input，把常駐檔案改小只能省到便宜的 cache-read。
+</blockquote>
+
+<p>既然每一行都有成本，下一個問題自然是：一個設計良好的 skill 到底該長什麼樣？下一課要拆開 skill 的資料夾結構，並整理出六條把成本意識落實在檔案裡的撰寫規則。</p>
+
+<div class="lesson-nav">
+  <div><a href="./four-conventions.html">← 上一步：四條核心慣例：誰握方向盤</a></div>
+  <div><a href="./skill-anatomy-and-authoring-rules.html">下一步：Skill 解剖與撰寫規則 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 skill 的 `description` 必須特別短？" data-correct="1" data-explain="它會載入到每一個 session，出場次數比 SKILL.md 本文更多。">
+  <button class="opt">因為它會載入到每次執行時的主對話 context</button>
+  <button class="opt">因為它會載入到每一個 session 而不論是否用到</button>
+  <button class="opt">因為它會在 subagent 被叫用時才載入</button>
+  <button class="opt">因為它是唯一會被使用者直接看到的一段</button>
+</div>
+
+<div class="quiz" data-question="根據 progressive disclosure，什麼內容才該拆成另一個檔案？" data-correct="2" data-explain="兩個判準缺一不可：既罕見又長。短或常用的內容留在入口。">
+  <button class="opt">任何超過三百字的段落都應該拆出去</button>
+  <button class="opt">常用但很長的內容應該拆出去以縮短入口</button>
+  <button class="opt">罕見且很長的內容才拆，並寫明觸發條件</button>
+  <button class="opt">罕見但很短的內容也該拆出去方便查找</button>
+</div>
+
+<div class="quiz" data-question="為什麼 byte budget 要設在實際大小再往上留一點？" data-correct="0" data-explain="若貼著現況設上限，每次編輯都踩線，最後只會不斷抬高上限而失去意義。">
+  <button class="opt">讓平常編輯安全過關，真正長胖才觸發</button>
+  <button class="opt">讓每個檔案都能盡量寫到接近上限為止</button>
+  <button class="opt">讓警告永遠不會出現以避免打擾開發者</button>
+  <button class="opt">讓例外檔案可以無限制地往上調高上限</button>
+</div>
+
+<div class="quiz" data-question="依 cost unit 權重，省錢應該優先砍什麼？" data-correct="3" data-explain="輸出權重 5.0 最高、fresh input 次之，cache-read 只算約十分之一。">
+  <button class="opt">先砍 cache-read，因為它佔了原始總量最多</button>
+  <button class="opt">先砍 subagent 摘要，因為它們是額外負擔</button>
+  <button class="opt">先砍常駐檔案，因為它們每次都進 context</button>
+  <button class="opt">先砍 output 與 fresh input，cache-read 已便宜</button>
+</div>
+
+<div class="quiz" data-question="把常駐的 SKILL.md 縮小，主要影響哪一種成本？" data-correct="1" data-explain="常駐檔在每次執行被重讀，多半命中快取，屬於便宜的 cache-read。">
+  <button class="opt">主要是 fresh input，因為每次都是首次讀取</button>
+  <button class="opt">主要是 cache-read，而它本來就相對便宜</button>
+  <button class="opt">主要是 output，因為少了提示會生成更多</button>
+  <button class="opt">主要是 cache-write，因為寫入權重最高</button>
+</div>
+
+<div class="quiz" data-question="為什麼「每個問題附一個推薦選項」也是一種省成本手法？" data-correct="2" data-explain="問題問得準，來回次數變少，而每次來回都是一次高權重的 output 生成。">
+  <button class="opt">因為推薦選項會讓 skill 的本文變得更短</button>
+  <button class="opt">因為推薦選項可以減少 subagent 被叫用的次數</button>
+  <button class="opt">因為問題問得準能減少來回，直接少生成 output</button>
+  <button class="opt">因為使用者覆寫選項時會跳過部分驗證步驟</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · 設計理念與 Skill 解剖 · Step 2/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

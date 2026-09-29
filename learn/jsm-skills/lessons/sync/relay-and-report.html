@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>收尾與回報：為什麼第二次跑不該再改東西</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>收尾與回報：為什麼第二次跑不該再改東西</h1>
+<p class="meta">Step 6/6 · /sync：把知識對回 repo</p>
+
+<h2>學習目標</h2>
+<p>能讀懂 /sync 的固定回報區塊與 Heads up 四種指向，說明 idempotent 與 flag-don't-overwrite 如何在第二次執行時保證零新編輯，並分辨 NOTHING_TO_SYNC 與執行失敗。</p>
+
+<h2>前言：一份沒人看得完的報告，等於沒有報告</h2>
+
+<p>你有沒有收過那種自動工具吐出來的交差報告：三百行 log、每個動作都列一遍，你滑了兩下就放棄，直接關掉。工具做了很多事沒錯，但它沒有幫你分辨「哪些需要你看一眼、哪些可以完全放心」。一份好的收尾報告，應該是「你只需要看幾行」。</p>
+
+<p>接下來看 <code>/sync</code> 怎麼把成果交回你手上。它把「做了什麼」和「需要你決定什麼」拆開：前者留在檔案裡，後者用一個簡短的 Heads up 段落點出來。看完這一節，你也能理解它整個技能最重要的一個性質：冪等。</p>
+
+<h2>它怎麼交回成果</h2>
+
+<p><code>/sync</code> 在收尾時有一個很清楚的原則：<strong>先講它對帳了什麼，再列出「需要你出手的事」</strong>。它不小心把每一筆編輯都唸給你聽，因為那些編輯本身就在檔案裡，你看得到、也可以還原。真正需要你注意的是那些它<strong>不能自己決定</strong>的事，例如某份 spec 已經過期、某個 gap 需要另一個 skill 補、或某段精心寫過的內容出現了衝突。它會用一個模板來呈現，大致長這樣：</p>
+
+<pre><code>## /sync complete · reconciled &lt;N&gt; changed files
+
+**Updated &lt;AGENTS.md files · scope features · spec statuses&gt; to match the diff.**
+Heads up (need you):
+- Stale spec → /architect: `&lt;file&gt;` (&lt;為什麼&gt;)
+- Assumed, not ratified → /architect: `&lt;file&gt;`
+- Context gap → /audit: `&lt;area&gt;`
+- Conflict, decide manually: `&lt;path&gt;`</code></pre>
+
+<p>這個模板有幾個設計到細節的地方。它會把「這個區塊裡沒有東西」的 bullet 直接刪掉；如果整段 Heads up 一個項目都沒有，那就整段不出現，不留一句「Heads up: 無」。它也不會列出自己做了哪些對帳動作（打了幾個勾、清了哪些孤兒），那些都在檔案裡。最關鍵的一條是：<strong>它不幫你跑 <code>/architect</code> 或 <code>/audit</code></strong>。它只負責指出方向，決定權留給你。</p>
+
+<h2>Heads up 的四種指向</h2>
+
+<p>這四種指向，剛好對應前面幾節學過的四種「它不能自己處理」的情況：</p>
+
+<table>
+<thead>
+<tr><th>指向</th><th>情況</th></tr>
+</thead>
+<tbody>
+<tr><td>Stale spec → /architect</td><td>某份 spec 被這次改動違反了，或是一個它無法安全對齊的狀態落差</td></tr>
+<tr><td>Assumed, not ratified → /architect</td><td>有一份 <code>Assumed</code> spec 欠追認；它不擋 <code>done</code>，但需要 <code>/architect</code> 正式承認</td></tr>
+<tr><td>Context gap → /audit</td><td>一個早就存在但沒有文件的區域，光看這次 diff 不足以寫出好文件</td></tr>
+<tr><td>Conflict, decide manually</td><td>某段精心寫過的內容若要改準，就得重寫；這種事留給人</td></tr>
+</tbody>
+</table>
+
+<p>看到這四行，你就能很快決定下一步：前兩類去找 <code>/architect</code>，第三類去找 <code>/audit</code>，第四類自己判斷。這就是「只列需要你的」的價值，它把一份可能很長的執行紀錄，壓縮成幾行決策清單。</p>
+
+<h2>另一種回報：逐項的報告區塊</h2>
+
+<p>除了給人看的摘要，<code>/sync</code> 在維護規則裡還定義了一個固定的報告區塊，逐項列出它做了什麼。這個區塊的用意是當作一份可稽核的紀錄，欄位固定、缺的就省略，包括：</p>
+
+<ul>
+<li><code>SCOPE</code>：這次變更集有幾個檔案。</li>
+<li><code>AGENTS_UPDATED</code> / <code>AGENTS_CREATED</code>：改了或新建了哪些 <code>AGENTS.md</code>。</li>
+<li><code>ORPHANS_CLEANED</code>：清掉哪些孤兒文件、修好哪些斷掉的指標。</li>
+<li><code>SCOPE_RECONCILED</code>：哪些 feature 的子任務被打了勾、狀態被推進。</li>
+<li><code>SPEC_STATUS_RECONCILED</code>：哪些 spec 的 Status 行被對齊。</li>
+<li><code>STALE_SPECS</code> / <code>CONTEXT_GAPS</code> / <code>CONFLICTS</code>：需要交出去的過期、缺口與衝突。</li>
+</ul>
+
+<p>如果它這一趟什麼都沒改、也沒找到任何過期的東西，它不會硬湊一份報告，而是直接輸出 <code>SCOPE: &lt;N&gt; changed files</code> 加上 <code>NOTHING_TO_SYNC: everything is already current</code>。</p>
+
+<h2>NOTHING_TO_SYNC 不等於失敗</h2>
+
+<p>這裡有一個容易混淆的區分。有兩種「什麼都沒做」長得很像，但意義完全相反：一種是 <code>NOTHING_TO_SYNC</code>，代表它確實檢查過、確認一切都已經是最新的，這是一個正常的成功結果；另一種是執行真的<strong>失敗</strong>了，例如 crash 或吐出無法解析的空輸出。後者不能當成前者。規則很直白：如果維護失敗、或沒有產生可解析的摘要，就據實回報，然後<strong>再做一次</strong>，絕不編一個結果出來交差。</p>
+
+<p>這條規則其實是這個技能整個態度的縮影：它寧可老實說「我沒做完」，也不願假裝一切正常。</p>
+
+<h2>為什麼第二次跑不該再改東西</h2>
+
+<p>最後回到整個技能最重要的一個性質：<strong>idempotent（冪等）</strong>。意思是，同一份變更，第一次跑會做出該做的編輯；第二次再跑，應該是零新編輯。這不是巧合，而是每一個動作都被設計成這樣：改 <code>AGENTS.md</code> 前會先讀一次，如果那個事實已經在了，即使措辭不同也不再加；對齊 spec 狀態前會再讀一次，如果那一行已經等於目標，就什麼都不做；scope 上已經打勾的框維持打勾，重跑不會有任何變動。</p>
+
+<p>冪等加上「flag 而不覆寫」，合起來解釋了 <code>/sync</code> 為什麼可以安全地反覆執行。你可以放心地對同一個分支跑第二次、第三次，不用擔心它會把文件愈改愈亂。它每一次執行，都像第一次那樣保守。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/sync</code> 的回報分成兩層：給人看的摘要只列出「需要你出手的事」，用四種 Heads up 指向對應的 skill 或人類；逐項的報告區塊則留下可稽核的紀錄，空的欄位直接省略。它不會幫你跑 <code>/architect</code> 或 <code>/audit</code>，只指出方向。<code>NOTHING_TO_SYNC</code> 是正常的成功，執行失敗則要據實回報並重做，不能捏造結果。整個技能靠 idempotent 加 flag 而不覆寫，保證同一份變更跑第二次時零新編輯。
+</blockquote>
+
+<p>走到這裡，這個節點的六步都完成了。你已經知道 <code>/sync</code> 怎麼圈變更、怎麼探索新工具、怎麼對齊 <code>AGENTS.md</code> 與 scope／spec，以及怎麼回報。下一步就是在自己的練習專案上真的跑一次，讓這些規則變成手感。</p>
+
+<div class="lesson-nav">
+  <div><a href="./reconcile-scope-and-specs.html">← 上一步：對齊 scope 與 spec：打勾、改狀態、標過期</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="/sync 給人看的回報，主要只列出什麼？" data-correct="1" data-explain="它先講對帳了什麼，再只列需要工程師出手決定的事，其餘都在檔案裡。">
+  <button class="opt">它這次跑過的每一筆編輯動作</button>
+  <button class="opt">需要工程師出手處理與決定的事</button>
+  <button class="opt">每個檔案的完整 diff 與行號</button>
+  <button class="opt">所有它讀過但決定不動的檔案</button>
+</div>
+
+<div class="quiz" data-question="「Assumed, not ratified」這種 Heads up 會指向哪個 skill？" data-correct="3" data-explain="Assumed spec 欠追認，需要 /architect 正式承認，但它不擋 done。">
+  <button class="opt">/audit，請它補上區域的 AGENTS.md</button>
+  <button class="opt">/scope，請它重新排定 feature 順序</button>
+  <button class="opt">/test，請它補上這個功能的測試</button>
+  <button class="opt">/architect，請它正式追認這份 spec</button>
+</div>
+
+<div class="quiz" data-question="當 Heads up 這個區塊沒有任何項目時，/sync 會怎麼處理？" data-correct="0" data-explain="沒有項目的 bullet 直接刪掉，整段都沒有就整段不出現。">
+  <button class="opt">整段不出現，不留一句空話佔位</button>
+  <button class="opt">輸出一行 Heads up: none 作為紀錄</button>
+  <button class="opt">隨機挑一個最接近的項目來填空</button>
+  <button class="opt">改列出它這次做過的每一筆編輯</button>
+</div>
+
+<div class="quiz" data-question="關於 NOTHING_TO_SYNC，下列敘述何者正確？" data-correct="2" data-explain="它代表檢查後確認一切都已最新，是正常的成功結果。">
+  <button class="opt">代表這次執行失敗，需要工程師重跑</button>
+  <button class="opt">代表這個專案完全沒有可對帳的檔案</button>
+  <button class="opt">代表檢查後一切已最新，是正常的成功</button>
+  <button class="opt">代表執行真的當機，必須手動介入修復</button>
+</div>
+
+<div class="quiz" data-question="如果維護失敗、沒有產生可解析的摘要，/sync 該怎麼做？" data-correct="1" data-explain="它據實回報再做一次，絕不編造一個看起來成功的結果。">
+  <button class="opt">輸出 NOTHING_TO_SYNC 當作成功收場</button>
+  <button class="opt">據實回報並重做，不捏造結果交差</button>
+  <button class="opt">直接改成只對齊 AGENTS.md 就好</button>
+  <button class="opt">把錯誤吞掉，等下一次執行再說</button>
+</div>
+
+<div class="quiz" data-question="同一份變更第二次執行 /sync，理想上是什麼結果？" data-correct="3" data-explain="因為每個動作都先檢查再改，第二次執行應該是零新編輯。">
+  <button class="opt">把第一次漏掉的部分一次補齊</button>
+  <button class="opt">把所有文件重寫一遍確保一致</button>
+  <button class="opt">把第一次的編輯全部還原重來</button>
+  <button class="opt">零新編輯，一切維持原來的樣子</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /sync：把知識對回 repo · Step 6/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

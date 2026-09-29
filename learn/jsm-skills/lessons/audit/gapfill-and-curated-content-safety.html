@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gap-fill 與「絕不覆寫」的安全寫入準則</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Gap-fill 與「絕不覆寫」的安全寫入準則</h1>
+<p class="meta">Step 5/5 · /audit：建立 AGENTS.md 與風格底線</p>
+
+<h2>學習目標</h2>
+<p>能跑 Phase 4 的 gap-fill，分辨「缺漏」與「矛盾」，並遵守 provenance 印章、proposed-diff、permission-gated 這三道保護既有內容的規則。</p>
+
+<h2>前言：當說明書已經有人寫過</h2>
+
+<p>前面三節處理的都是「沒有說明書」的情境：空的、剛 scaffold 的、有碼但沒文件的、只看一個區域的。但真實工作裡，你更常遇到的是第四種：<strong>root 說明書早就存在了，只是它跟現在的程式碼對不上。</strong>也許是半年前寫的，也許是某個同事隨手補的，也許是上一次 <code>/audit</code> 留下來的。裡面有些內容還是對的，有些已經過期，有些甚至跟程式碼互相矛盾。</p>
+
+<p>這種情況最危險的地方在於：這份文件可能有人用心寫過。<strong>如果 <code>/audit</code> 像 Phase 2 那樣重寫一遍，就會把那些精心維護的內容一起抹掉。</strong>所以 Phase 4 的難點不是「怎麼寫」，而是「怎麼改才不會傷到不該傷的東西」。這一節要看它的四種判斷，以及撐起整條哲學的三道保護。</p>
+
+<h2>Phase 4：gap-fill 的觸發與心態</h2>
+
+<p>Phase 4 的觸發條件是：命令沒有指定區域、codebase 存在、而且 root <code>AGENTS.md</code> 已經有了。剛完成舊版 <code>CLAUDE.md</code> 遷移的專案，也會接進這條路線。</p>
+
+<p>它的工作是拿整個 codebase 去對照現有的說明，把真正的漏洞補起來，但方式是<strong>保守的</strong>。掃描範圍和 Phase 2 一樣大，大型 repo 一樣可以把閱讀外包給唯讀的 scout 子代理，但目標完全不同：Phase 2 是從零建一份說明，Phase 4 是在既有說明上做最小的外科手術。動手寫檔的依然是主線程。</p>
+
+<h2>四種 finding：什麼能做、什麼只能問</h2>
+
+<p>掃描完成後，所有發現會被歸成四類，每一類的處理方式都不一樣。這張表可以說是整個 Phase 4 的核心。</p>
+
+<table>
+<thead>
+<tr><th>類別</th><th>發現了什麼</th><th>處理方式</th></tr>
+</thead>
+<tbody>
+<tr><td>(a) root 缺口</td><td>root 少了一個全局事實：日常指令、技術棧元素、專案級通則，或 scope 裡有但 root 沒寫的 build approach</td><td>收成 <code>ROOT_GAPS</code>，取得許可才套用</td></tr>
+<tr><td>(b) 未記錄的區域</td><td>一個有獨特慣例或坑的主要區域，卻沒有 nested 文件</td><td>直接建立 nested 文件（建立不是覆寫，安全）</td></tr>
+<tr><td>(c) nested 文件不完整</td><td>既有的 nested 文件漏了某件現在為真的事</td><td>回報成 <code>PROPOSED_ADDITIONS</code>，自己不動手改</td></tr>
+<tr><td>(d) 矛盾</td><td>文件寫的跟程式碼、規格或 scope 不符</td><td>收成 <code>CONTRADICTIONS</code>，交給你決定，絕不自動修</td></tr>
+</tbody>
+</table>
+
+<p>這四類的差別不是隨意的，而是沿著一條「誰擁有這行字」的線切開。(b) 之所以能直接做，是因為它<strong>建立</strong>一個本來不存在的檔案，不碰任何人的既有內容。(a) 和 (c) 都在動既有檔案，所以要嘛先問，要嘛只提案。(d) 最敏感，因為它牽涉的可能是某人刻意寫下的句子，<code>/audit</code> 頂多只能指出矛盾，不能選邊站。</p>
+
+<p>什麼算是矛盾？例子包括：文件寫的測試框架實際上不是專案在用的；<code>## Stack</code> 跟架構規格打架；<code>## Build approach</code> 跟 scope 標頭不一致；文件寫的某個指令現在根本不存在。矛盾比單純的缺漏嚴重，因為缺漏只是少講，矛盾是<strong>講錯</strong>，會主動誤導下一個讀到它的人或 AI。面對矛盾，<code>/audit</code> 會用「某份文件說 X，但程式碼或規格顯示 Y」的形式回報，把決定權交回你手上。</p>
+
+<p>還有一個重要的紀律是保守：只標記你有信心、而且耐久的發現。實作細節、TODO 註解、或任何經常變動的東西都不該被標；不確定時，寧可留著不動。</p>
+
+<h2>三道保護：印章、提案、許可</h2>
+
+<p>「絕不覆寫」不是一句口號，而是由三個機制一起撐起來的。</p>
+
+<p><strong>第一道是 provenance 印章。</strong>每一份由 <code>/audit</code> 建立的文件，結尾都會有一行 draft 註記，說明這份草稿是工具產生的、值得人快速看過一遍。這行字的功能是讓之後的執行能在開啟檔案前就知道：這份內容是機器草稿，還是已經被人接手編輯過？判斷規則是這樣的：如果檔案還帶著印章，就可以針對事實做外科手術式的增補，印章留著；如果印章已經不見了，代表有人把它接手了，那之後就只允許新增缺漏的事實、<strong>絕不重寫任何一行</strong>，任何會改動既有敘述的發現都改走矛盾回報。</p>
+
+<p>這裡要小心一個誤解：<strong>印章記錄的是「來源」，不是「授權」。</strong>帶著印章不代表 <code>/audit</code> 就可以隨便覆寫；它只是讓後續能分辨內容是誰寫的。那條「不覆寫人工內容」的規則，不管有沒有印章都一樣成立。</p>
+
+<p><strong>第二道是 proposed-diff 格式。</strong>當一個檔案已經存在、而 <code>/audit</code> 想補東西時，它不會直接改，而是輸出一段提案，寫清楚：在哪個 <code>##</code> 區塊下、要加入的確切 markdown、以及為什麼。而且它只提「缺少且真的有用」的東西，不會重寫既有段落。</p>
+
+<p><strong>第三道是 permission-gated 的套用。</strong>對既有 root 文件的增補、以及對既有 nested 文件的提案，都不會自動生效，而是走前面看過的那個三選一面板：現在就加（建議）、給我看差異、暫時跳過。你選「現在就加」時，它會照著收集時保存的原文一字不改地套用，不重新措辭。報告結尾則會用幾個固定的「需要你決定」欄位，把 root 缺口、提案、矛盾分開列出，方便你逐項處理。</p>
+
+<h2>mirrored fields 在 gap-fill 裡的兩種結局</h2>
+
+<p>前一節介紹過的兩個 mirrored fields，到了 Phase 4 有更明確的處理方式，因為它們正好對應到「缺漏」與「矛盾」的分界。</p>
+
+<ul>
+<li><strong>欄位缺漏或還是佔位符</strong>：這是 <code>ROOT_GAPS</code>。例如 <code>## Stack</code> 是空的，或還停在「待填」，就該補上。</li>
+<li><strong>欄位與它的來源衝突</strong>：這是 <code>CONTRADICTIONS</code>。例如 <code>## Build approach</code> 跟 scope 標頭講的不一樣，就回報出來，不自己認定誰對。</li>
+</ul>
+
+<p>這個分法再一次說明，同一種資訊只要「沒寫」和「寫錯」就是兩件事，前者可以問你要不要補，後者只能交給你判斷。而無論在哪一種，<code>/audit</code> 都不會在沒有來源的情況下自己編一個值填進去。</p>
+
+<h2>完成前的自我檢查</h2>
+
+<p>所有 phase 跑完後，還有一個容易被忽略的收尾檢查：如果明明該寫 <code>AGENTS.md</code> 卻沒寫出來（檔案不存在或是空的），<code>/audit</code> 會直接回報失敗並重做，而不是回報一個它根本沒產生的成功。這個看似瑣碎的規則，是整個流程誠實原則的一部分：<strong>報告要對得上實際發生的事。</strong></p>
+
+<p>完成時，它會產出一段簡短的報告，先講寫了哪些文件、下一步是什麼，再只列出真正需要你處理的事。需要你的部分會分成幾個欄位：root 缺口、對既有檔案的提案、以及矛盾。沒有內容的欄位就整個省略，不會為了湊版面硬留一行空的。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+Phase 4 gap-fill 在 root 已存在時，拿整個 codebase 對照現有說明，做最小的外科手術。四種發現各走各的路：root 缺口收成 <code>ROOT_GAPS</code> 並先問許可；未記錄的區域可以直接建立 nested 文件；既有 nested 文件的不完整回報成 <code>PROPOSED_ADDITIONS</code>；矛盾回報成 <code>CONTRADICTIONS</code>，絕不自動修。三道保護是 provenance 印章（記錄來源而非授權）、proposed-diff 格式，以及 permission-gated 的套用。mirrored fields 缺漏算缺口、衝突算矛盾。整條哲學就是：既有內容可能有人用心寫過，所以只補、只問、不覆寫。
+</blockquote>
+
+<p>到這裡，整個 <code>/audit</code> 節點就完整了。你現在應該能把它的四條路線講清楚，也知道它為什麼對「不覆寫」這麼執著。往後當你在練習專案上跑 <code>/audit</code> 時，不妨留意一件事：它是整條工作流裡最安靜的一個階段，卻替後面每一站決定了要讀什麼。接下來可以接著讀 <code>/architect</code>，看它如何在這份情境說明之上，把一個模糊請求變成一紙 ratified spec。</p>
+
+<div class="lesson-nav">
+  <div><a href="./scan-phases-and-nested-docs.html">← 上一步：掃描既有 repo：whole-repo 與 area 模式</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Phase 4 相對於 Phase 2 最大的差別是什麼？" data-correct="1" data-explain="Phase 2 從零建立說明；Phase 4 在既有說明上做最小的外科手術，特別小心已有人寫過的內容。">
+  <button class="opt">Phase 4 掃描的範圍比 Phase 2 更小</button>
+  <button class="opt">Phase 4 在既有說明上做最小修改</button>
+  <button class="opt">Phase 4 完全不讀任何程式碼檔</button>
+  <button class="opt">Phase 4 只建立全新的說明文件</button>
+</div>
+
+<div class="quiz" data-question="發現一個有獨特慣例卻沒有 nested 文件的區域，可以直接建立嗎？" data-correct="0" data-explain="建立是新增而非覆寫，屬於安全動作，可以直接做。">
+  <button class="opt">可以，建立屬於安全的新增動作</button>
+  <button class="opt">不行，任何寫入都要先問過</button>
+  <button class="opt">不行，要等其他區域先建好</button>
+  <button class="opt">可以，但必須刪掉 root 舊內容</button>
+</div>
+
+<div class="quiz" data-question="發現文件寫的測試框架和專案實際用的不一致，這算哪一類？" data-correct="3" data-explain="文件講錯、與程式碼不符，屬於矛盾，只能回報給你決定。">
+  <button class="opt">root 缺口，收成 ROOT_GAPS</button>
+  <button class="opt">未記錄區域，直接建立文件</button>
+  <button class="opt">提案，收成 PROPOSED_ADDITIONS</button>
+  <button class="opt">矛盾，收成 CONTRADICTIONS</button>
+</div>
+
+<div class="quiz" data-question="provenance 印章存在的真正用途是什麼？" data-correct="2" data-explain="它記錄內容的來源，讓後續能分辨機器草稿與人工接手，不是覆寫的授權。">
+  <button class="opt">授權工具可以覆寫這份文件</button>
+  <button class="opt">證明這份文件已經通過審核</button>
+  <button class="opt">記錄來源以分辨是否人工接手</button>
+  <button class="opt">標記這份文件有幾行是有效的</button>
+</div>
+
+<div class="quiz" data-question="當一份 AGENTS.md 已經沒有 provenance 印章了，/audit 會怎麼對待它？" data-correct="1" data-explain="沒有印章代表有人接手了，只能新增缺漏事實，絕不重寫既有行。">
+  <button class="opt">重新生成一份全新的檔案取代它</button>
+  <button class="opt">只新增缺漏事實，絕不重寫行</button>
+  <button class="opt">補回印章後再照常自由修改</button>
+  <button class="opt">跳過它並改走 Phase 2 掃描</button>
+</div>
+
+<div class="quiz" data-question="## Stack 這個 mirrored field 與來源不一致時，會被歸類成什麼？" data-correct="2" data-explain="欄位與來源衝突屬於矛盾，會回報出來，而不是自動選邊修掉。">
+  <button class="opt">root 缺口，建議立刻套用修正</button>
+  <button class="opt">提案，收進 PROPOSED_ADDITIONS</button>
+  <button class="opt">矛盾，收進 CONTRADICTIONS</button>
+  <button class="opt">忽略，因為欄位不是它負責的</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /audit：建立 AGENTS.md 與風格底線 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

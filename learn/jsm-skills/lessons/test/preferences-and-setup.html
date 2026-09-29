@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>test-preferences.json：記住測試框架，或記住你選擇不裝</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>test-preferences.json：記住測試框架，或記住你選擇不裝</h1>
+<p class="meta">Step 3/5 · /test：為變更寫回歸測試</p>
+
+<h2>學習目標</h2>
+<p>能說出 <code>test-preferences.json</code> 的 framework 與 gate 兩種形狀各自什麼時候用，並跑對第一次執行時的 setup 問答與安裝檢查。</p>
+
+<h2>前言：知道怎麼測，但用什麼測？</h2>
+
+<p>上一節你已經懂得把每個檔案分類，也知道每一類該用什麼策略。可是還缺一塊：要用哪一套工具來跑這些測試？這就像你已經知道要把釘子敲進去，卻還沒確定手上拿的是鐵鎚還是螺絲起子。Vitest、Jest、pytest、Playwright，各自適用的地方不一樣。</p>
+
+<p>更麻煩的是，這個選擇每隔一次就要重做一遍。如果每次跑 <code>/test</code> 都重新問你「這次要用哪個框架」，那會很煩，而且答案通常跟上次一樣。<code>/test</code> 的解法是把這個選擇記在專案根目錄的 <code>test-preferences.json</code> 裡。這一節就來看它怎麼讀這個檔，第一次沒有檔的時候會問什麼，以及一個很多人會誤會的形狀：有些專案是刻意不裝測試 runner 的。</p>
+
+<h2>它怎麼讀這個檔：看有沒有指名工具，不是看檔案在不在</h2>
+
+<p>讀偏好檔時，判斷的關鍵不是「檔案存不存在」，而是「這個檔案有沒有指名一套 <code>tool</code>」。這四個分支的差別就在這裡。</p>
+
+<table>
+<thead>
+<tr><th>讀到的內容</th><th>情況</th><th>接下來做什麼</th></tr>
+</thead>
+<tbody>
+<tr><td><code>tool</code> 有值</td><td>常見的寫入路徑</td><td>載入 tool、additionalTools、e2eTool、testDir、filePattern、packageManager，直接跳到安裝檢查</td></tr>
+<tr><td><code>tool</code> 是 null 且 <code>gate</code> 有值</td><td>這個專案刻意不用 runner（GATE_ONLY）</td><td>不寫套件、不安裝、不重問；跑 typecheck 或 lint 關卡，回報行為用 <code>/check verify</code> 確認</td></tr>
+<tr><td>檔案不存在</td><td>第一次跑（NO_PREFS）</td><td>進 setup 模式：偵測堆疊、問框架、做安裝檢查、存偏好</td></tr>
+<tr><td>有檔但兩個鍵都沒有，或 JSON 壞掉</td><td>格式壞掉</td><td>講清楚，當成第一次重新跑 setup，並覆蓋它</td></tr>
+</tbody>
+</table>
+
+<p>為什麼要看有沒有指名工具，而不是看檔案在不在？因為 gate 形狀的檔案也是存在、也有效的，只是它代表另一種完全不同的選擇。把它誤讀成「這個專案還沒設定測試」，就會做出完全相反的動作。</p>
+
+<h2>遇到的五種設定：辨識出真實的偏好，而不是套預設值</h2>
+
+<p>第一次跑 <code>/test</code>、還沒有偏好檔時，它會讀 setup 模式，先偵測這個專案的堆疊。偵測的方式很直接：套件管理員看 lockfile 是哪一種，語言與框架看 <code>package.json</code>、<code>pyproject.toml</code>、<code>go.mod</code>、<code>Cargo.toml</code>，已安裝的測試工具則看依賴裡有沒有 vitest、jest、playwright、cypress 或 Testing Library。</p>
+
+<p>這裡有一個很重要的細節：如果這個專案已經在用別的 runner，例如 <code>bun test</code>、<code>node:test</code>、<code>ava</code> 或 <code>deno test</code>，它會直接用那一個，不會硬塞一套新的進來。尊重既有選擇，比追求「最新推薦」重要。</p>
+
+<h3>Q0：完全沒有測試設定時，先別假設對方想要一套</h3>
+
+<p>如果整個 repo（或 monorepo 裡的某個 package）連一套測試工具都沒有，它不會直接開始安裝。它會先去找有沒有「刻意不裝 runner」的慣例寫在最近的 <code>AGENTS.md</code> 或規格裡，例如一句「這個專案不用 runner，typecheck 加 <code>/check verify</code> 就是關卡」。</p>
+
+<p>有寫，就尊重它：存成 gate 形狀，跑 typecheck 當關卡，並指向 <code>/check verify</code> 去確認行為。沒寫，才開口問，而且選項不是「預設安裝」，而是三條並列的路：設一套測試框架、不用 runner 而用 typecheck 加 <code>/check verify</code>、或只做 typecheck。在 monorepo 裡，這個判斷是逐 package 做的，某個 package 沒有測試、但它的兄弟 package 有完整套件，是完全合理的。</p>
+
+<h3>Q1 到 Q3：框架、E2E、元件 addon</h3>
+
+<p>如果工程師選擇要設一套框架，接下來才有 Q1。Q1 問的是單元與整合測試要用哪個框架，選項會依偵測到的語言過濾，而且已經安裝的那個會排在第一個並標上 <code>(already installed)</code>，視為推薦。JavaScript 與 TypeScript 的常見預設是 Vitest，其次 Jest；Python 是 pytest 與 unittest；Go 是 <code>testing</code> 加 testify；Rust 用內建的 <code>cargo test</code>，不需要問，直接跳過。</p>
+
+<p>Q2 只有在 <code>E2E_RELEVANT</code> 是 yes 的時候才問，也就是變更裡有 page/flow 檔案時。選項是 Playwright（推薦）、Cypress，或不做 E2E、改在元件層覆蓋頁面。</p>
+
+<p>Q3 只在 JavaScript 或 TypeScript 專案、偵測到 React、Vue 或 Svelte，而且範圍裡有 component 或 page/flow 檔案時才問，問要不要加元件測試的 addon。如果這次的範圍只有 logic、api 或 cli，這一題整個跳過。</p>
+
+<h2>兩種形狀，兩個都要寫</h2>
+
+<p>問答結束後，它會把 <code>test-preferences.json</code> 寫到專案根目錄。根據 Q0 的答案，這個檔有兩種形狀。</p>
+
+<p>第一種是 <strong>framework 形狀</strong>，代表這個專案有一套 runner：</p>
+
+<pre><code>{
+  "tool": "vitest",
+  "gate": null,
+  "additionalTools": ["@testing-library/react"],
+  "e2eTool": "playwright",
+  "testDir": "beside the source",
+  "filePattern": "*.test.ts",
+  "packageManager": "npm"
+}</code></pre>
+
+<p>第二種是 <strong>gate 形狀</strong>，代表這個專案刻意不用 runner：</p>
+
+<pre><code>{
+  "tool": null,
+  "gate": "typecheck+verify",
+  "packageManager": "npm"
+}</code></pre>
+
+<p>這裡有一個關鍵規則：兩個鍵都要寫，不能只寫一個。因為 <code>/test</code> 讀 <code>tool</code> 來決定要不要寫測試套件，而 <code>/check review</code> 讀 <code>gate</code> 來分辨「這個專案是刻意不用 runner」還是「這個專案根本沒設過測試」。一個兩個鍵都沒有的檔案，會被當成壞掉，而不是有效設定。</p>
+
+<p>所以 gate 形狀不是「還沒設定」，而是一個刻意的選擇。它常常出現在強調型別安全、且用 <code>/check verify</code> 手動確認行為的小專案上。認得出這個選擇，才不會每次跑 <code>/test</code> 都想說服對方裝一套 runner。</p>
+
+<h2>安裝檢查：缺工具時問一次，而不是自作主張</h2>
+
+<p>偏好確定之後，它會檢查選定的工具有沒有真的裝好。JavaScript 與 TypeScript 看 <code>node_modules</code> 底下有沒有那個套件，或 <code>package.json</code> 的 devDependencies 裡有沒有列；Python 看 <code>pyproject.toml</code> 或 <code>requirements.txt</code>；Go 看 <code>go.sum</code> 裡有沒有 testify。</p>
+
+<p>如果都裝好了，就往下一步。如果有缺，它會先問你，而不是自己跑安裝。選項是「現在裝，然後繼續」或「不裝，先把測試寫成可以跑的版本，等我自己裝完再跑」。選後者的話，它會把安裝狀態記成 deferred，但<strong>照樣寫出完整正確的測試</strong>，只是把執行指令回報成「等你安裝後再跑」。測試的品質不因為還沒安裝而打折。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/test</code> 把測試工具記在專案根目錄的 <code>test-preferences.json</code>，讀它的關鍵是看有沒有指名 <code>tool</code>，不是看檔案在不在。四種情況各有不同的處理：有 tool 就直接寫；tool 是 null 而 gate 有值，代表專案刻意不用 runner，只跑 typecheck 並指向 <code>/check verify</code>；沒有檔案就進 setup 問答；格式壞掉就重跑 setup 覆蓋。設定分成 framework 與 gate 兩種形狀，兩個鍵都要寫，因為 <code>/test</code> 讀 tool、<code>/check review</code> 讀 gate。第一次問答包含 Q0 到 Q3，缺工具時先問再裝。
+</blockquote>
+
+<p>到這裡，你已經知道要測哪些檔案、每個檔案用什麼策略、以及用哪套工具來跑。接下來就是真正下筆的紀律：哪些一定要測、測試要怎麼寫、以及怎麼讓每個測試都能追回規格的驗收條件。下一節進入寫測試本身。</p>
+
+<div class="lesson-nav">
+  <div><a href="./classify-and-strategy.html">← 上一步：先分類再下手：五種檔案各自對應的測試策略</a></div>
+  <div><a href="./write-with-discipline.html">下一步：寫測試的紀律：抓行為、不改原碼、可追到驗收條件 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="/test 判斷 test-preferences.json 該走哪條分支，依據是什麼？" data-correct="3" data-explain="關鍵是有沒有指名 tool，不是檔案在不在；gate 形狀的檔也存在且有效。">
+  <button class="opt">檔案修改時間距離現在多久</button>
+  <button class="opt">檔案裡總共有幾個 JSON 欄位</button>
+  <button class="opt">這個檔案是否真的存在於根目錄</button>
+  <button class="opt">這個檔案有沒有指名一個 tool</button>
+</div>
+
+<div class="quiz" data-question="讀到 tool 是 null 且 gate 有值時，/test 應該怎麼做？" data-correct="1" data-explain="這是刻意不用 runner 的專案，不寫套件、不安裝，跑 typecheck 並指向 /check verify。">
+  <button class="opt">當成第一次設定，重新問一遍框架</button>
+  <button class="opt">跑 typecheck 並指向 /check verify</button>
+  <button class="opt">自動安裝 Vitest 並開始寫測試</button>
+  <button class="opt">把 gate 改成 tool 後繼續寫測試</button>
+</div>
+
+<div class="quiz" data-question="專案已經在用 bun test 時，setup 應該怎麼處理？" data-correct="2" data-explain="尊重專案既有的 runner，不要另外安裝一套新的測試框架。">
+  <button class="opt">一律改裝 Vitest 當作新的標準</button>
+  <button class="opt">同時安裝兩套讓工程師自己挑</button>
+  <button class="opt">直接用 bun test，不另裝新框架</button>
+  <button class="opt">跳過測試，改跑 typecheck 關卡</button>
+</div>
+
+<div class="quiz" data-question="為什麼 test-preferences.json 的兩個鍵都要寫？" data-correct="0" data-explain="/test 讀 tool 決定要不要寫套件，/check review 讀 gate 分辨刻意不用 runner 與沒設過。">
+  <button class="opt">因為不同 skill 各讀不同的鍵</button>
+  <button class="opt">因為 JSON 格式規定要成對出現</button>
+  <button class="opt">因為兩個鍵加起來才算一份設定</button>
+  <button class="opt">因為這樣才能同時跑兩種工具</button>
+</div>
+
+<div class="quiz" data-question="安裝狀態記成 deferred 時，/test 會怎麼寫測試？" data-correct="1" data-explain="照樣寫出完整正確的測試，只是把執行指令回報成「安裝後再跑」，品質不打折。">
+  <button class="opt">只寫幾條樁，等安裝後再補齊</button>
+  <button class="opt">照寫完整正確的測試，只是先不跑</button>
+  <button class="opt">停止整輪，等工具裝好再開始</button>
+  <button class="opt">改寫成不需要工具也能執行的形式</button>
+</div>
+
+<div class="quiz" data-question="Q2 會在什麼條件下才被問？" data-correct="2" data-explain="只有變更裡出現 page/flow 檔案、E2E_RELEVANT 為 yes 時，才問 E2E 工具。">
+  <button class="opt">只要專案使用 React 或 Vue</button>
+  <button class="opt">只要偵測到任何測試工具缺失</button>
+  <button class="opt">變更裡有 page/flow 檔案時</button>
+  <button class="opt">範圍裡只有 logic 與 cli 的時候</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /test：為變更寫回歸測試 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

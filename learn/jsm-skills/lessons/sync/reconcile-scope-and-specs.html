@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>對齊 scope 與 spec：打勾、改狀態、標過期</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>對齊 scope 與 spec：打勾、改狀態、標過期</h1>
+<p class="meta">Step 5/6 · /sync：把知識對回 repo</p>
+
+<h2>學習目標</h2>
+<p>能用 scope 狀態對應規則只改 spec 的 Status 行、嚴格判斷何時該把 spec 標為 stale，並以「universal sub task reconciler」身分依證據表把 feature 的子任務打勾與推進狀態，且守住只能改狀態、不增刪 feature 的界線。</p>
+
+<h2>前言：那個「差最後一哩」的錯覺</h2>
+
+<p>有一個功能其實早就做完了：程式碼在、測試也在、PR 也合併了。但你翻開 scope，發現上面那格還是空的，狀態還停在 <code>in-progress</code>。對照它的 spec，狀態也還寫著 <code>Proposed</code>。單看文件，你會以為這個功能才剛起步；只有真的去翻 repo，才知道它早就完成了。</p>
+
+<p>問題在於，每個 skill 都只顧自己那一格。<code>/develop</code> 會打勾它自己的子任務，但 <code>/test</code>、<code>/audit</code>、<code>/sync</code> 這些子任務沒有人負責收尾。於是 scope 上有幾格永遠空著，spec 的狀態永遠慢半拍。這一節就來看 <code>/sync</code> 怎麼補上這道落差，以及它在補的時候如何不越界。</p>
+
+<h2>先講 spec 的狀態對應</h2>
+
+<p>一份 spec 的狀態，是它對應 feature 的建置生命週期的鏡子。所以對應關係是固定的：</p>
+
+<table>
+<thead>
+<tr><th>spec 的 Status</th><th>意義</th><th>對應的 scope 狀態</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Proposed</code></td><td>還沒開始建</td><td><code>planned</code></td></tr>
+<tr><td><code>In Progress</code></td><td>正在建</td><td><code>in-progress</code></td></tr>
+<tr><td><code>Accepted</code></td><td>建好且驗證過；功能沒上線前不算 Accepted</td><td><code>done</code></td></tr>
+<tr><td><code>Superseded</code></td><td>被後來的 spec 取代</td><td>不從 scope 狀態設定，改 flag</td></tr>
+</tbody>
+</table>
+
+<p>規則看起來簡單，但有幾個容易踩的坑。第一，如果處理的是 umbrella decision（一個總括性的決策），要對齊的是它連結的 <code>index.md</code>，因為子 spec 不帶狀態、也不做對齊。第二，這個動作<strong>只適用於連結到可建置 scope feature 的 spec</strong>。一份 standalone 的決策 spec（例如基礎架構或跨領域標準，沒有連結 feature）走的是決策狀態：寫下時是 <code>Proposed</code>，被追認後是 <code>Accepted</code>，它不鏡射 feature 狀態。這種 spec 沒有連結 feature 是正常的，不該因此被列進 <code>STALE_SPECS</code>。</p>
+
+<p>對每一份真的有連結 feature 的 spec，它的流程是：找出這份 spec 治理的 feature，讀出該 feature 當前的 scope 狀態，推導出目標狀態，然後<strong>在寫入前再讀一次 spec</strong>（因為隊友或另一個 session 可能剛剛改過）。如果那一行已經等於目標，就什麼都不做，這就是 idempotent。否則只做一次單行編輯，並記錄在 <code>SPEC_STATUS_RECONCILED</code>。這裡有一條保命規則：<strong>不要猜</strong>。如果關聯模糊（無法確定只連到一個 feature、對應不清楚、狀態已經是 <code>Superseded</code>、或是一個你解釋不了的降級），就不要改，把它記到 <code>STALE_SPECS</code>。</p>
+
+<h2>標過期：證據要具體，態度要嚴格</h2>
+
+<p>spec 的內容本身，<code>/sync</code> 一個字都不改。但如果這次改動跟某份 spec 的決定互相矛盾，它必須把這件事標出來。這裡的紀律是「嚴格」，因為誤報會侵蝕信任。它只有在能<strong>指名道姓說出「這次改動違反了哪一個具體決定」</strong>時才會標，例如某份 spec 規定只能用一種資料庫，而這次卻為另一種加了 adapter；或是某份 spec 固定了一個介面或邊界，而這次改動把它打破了。還有一種情況也會標：某份 spec 被後來的 spec 取代了，它的狀態應該變成 <code>Superseded</code>，而設定這個狀態是 <code>/architect</code> 的工作，不是這裡的 Status 行對齊。</p>
+
+<p>它絕不標那種「可能受影響」的模糊情況。有疑慮時就不標。而且它讀 spec 也很節制：只從標題與開頭幾行判斷這份 spec 的主題有沒有可能被動到，不會盲目地全部讀一遍。真正的命中會記在 <code>STALE_SPECS</code>，附上被違反的點，並建議 <code>/architect</code> 去更新或取代它。內容的任何編輯，都不在它的權限內。</p>
+
+<h2>對齊 scope：你才是那個「萬用子任務收尾者」</h2>
+
+<p>scope 這一段是 <code>/sync</code> 角色最特別的地方。它被稱為 <strong>universal sub task reconciler</strong>，意思是：所有其他 skill 沒有打勾的子任務，最後都由它來收。它的做法是，對這次 diff 碰到的<strong>每一個 feature</strong>，重新評估它的<strong>每一個</strong>子任務，然後把真正完成的打勾。注意這裡的措辭：diff 決定「要重新檢查哪些 feature」，但 repo 的實際狀態決定「哪些子任務真的做完了」。所以它會直接去看檔案、跑指令、搜尋，而不是只看這次 diff 加了什麼。</p>
+
+<p>判斷完成靠的是一張證據表，不同類型的子任務有不同的證據：</p>
+
+<table>
+<thead>
+<tr><th>子任務類型</th><th>可打勾的證據</th></tr>
+</thead>
+<tbody>
+<tr><td>UI／資料模型／後端／整合／資料整合</td><td>feature 的程式區裡對應的檔案存在（元件、schema 或 migration、service 或 endpoint、真實查詢取代了 mock）</td></tr>
+<tr><td>Build it（含里程碑）</td><td>feature 的程式存在於它的區域，里程碑的區塊也都在；通常 <code>/develop</code> 自己會打勾</td></tr>
+<tr><td>Verify it</td><td>spec 旁邊有一份 <code>verify.md</code>，或有通過的 runtime 驗證紀錄</td></tr>
+<tr><td>Test it</td><td>測試檔涵蓋了這個 feature 的區域</td></tr>
+<tr><td>Review it（fresh model）</td><td><code>docs/reviews/</code> 底下有一份針對這個 feature 的 findings 檔</td></tr>
+<tr><td>Document it</td><td>有一段涵蓋這個 feature 的 PR 內文、<code>CHANGELOG.md</code> 條目或 release note</td></tr>
+<tr><td>SEO &amp; metadata</td><td>feature 的頁面上看得到 metadata 或結構化資料</td></tr>
+<tr><td>Sync（record conventions）</td><td>該區域的 <code>AGENTS.md</code> 存在，而且反映了這個 feature</td></tr>
+<tr><td>Coding standards／tooling</td><td>repo 裡有 linter、formatter 或 pre-commit 設定</td></tr>
+</tbody>
+</table>
+
+<p>打完勾之後，它會更新 feature 的狀態，而且是兩個地方一起改：<code>At-a-glance</code> 表格裡，以及 feature 標題旁邊。原則是：只要這個 feature 真的有、而且還沒打勾的框（<code>Build it</code> 加它的里程碑，加上該流程等級包含的 <code>Verify it</code>／<code>Test it</code>）還有剩，就維持 <code>in-progress</code>；等它所有的框都打勾了，才設成 <code>done</code>。有一件絕對不能做的事：<strong>永不降級</strong>一個工程師已經標成 <code>done</code> 的 feature。就算工程師選擇跳過某一步，那也只是被誠實記錄為「跳過」，不是重開它的理由。</p>
+
+<h2>它的三個界線</h2>
+
+<p>scope 的處理有三條不能越過的線。第一，<strong>只能改狀態</strong>：永遠不新增、刪除、改名或重排 feature 與 checkbox，那是 <code>/scope</code> 的工作；<code>existing</code> 與 <code>dropped</code> 的 feature 直接跳過。如果發現有已上線的程式碼明顯不屬於任何 feature，它只會記一句「unmapped：某區域，建議跑 /scope 把這個計畫外的工作納入」，而不是自己發明一個 feature。第二，<strong>歸屬要明確</strong>：只有在「檔案對到 feature」的對應毫無疑問時才打勾。在 monorepo 裡，變更檔的 workspace 決定要更新哪一份 scope，絕不會在錯的 workspace 打勾；如果一個區域同時對到多個 feature，它不猜，記一句 ambiguous 就好。第三，這是<strong>保守、冪等</strong>的：已經打勾的框維持打勾，同一件事重跑不會有任何變動；證據不明確時就留著不打。</p>
+
+<p>如果 root <code>AGENTS.md</code> 的 <code>## Git</code> 段落寫著 <code>integration: on</code>，而且 <code>commit</code> 不是 <code>manual</code>，它還會提議用一行訊息（例如 <code>chore(sync): reconcile docs</code>）加上 Co-Authored-By 標記，把這次的對齊 commit 起來。但它永遠不 push。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+spec 的 Status 是 feature 建置週期的鏡子：<code>planned</code>→<code>Proposed</code>、<code>in-progress</code>→<code>In Progress</code>、<code>done</code>→<code>Accepted</code>，而 <code>Superseded</code> 從不自動設定。只有連結到可建置 feature 的 spec 才對齊，standalone 決策 spec 維持原樣；寫入前要重讀、不能猜，模糊就 flag。標 stale 要嚴格，只有能指名被違反的具體決定才標，內容絕不編輯。scope 方面，<code>/sync</code> 是萬用子任務收尾者，依證據表對每條子任務打勾並推進 feature 狀態，但永不降級已完成的 feature，也不能新增、刪除或重排任何 feature。
+</blockquote>
+
+<p>知識都對齊完了，最後要把它交回給你。下一節看它的固定回報區塊，以及為什麼同一份變更第二次跑，應該一行都不改。</p>
+
+<div class="lesson-nav">
+  <div><a href="./reconcile-agents-md.html">← 上一步：把 AGENTS.md 對回 repo：只加必要的一行</a></div>
+  <div><a href="./relay-and-report.html">下一步：收尾與回報：為什麼第二次跑不該再改東西 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="當 scope 的 feature 狀態是 done，對應 spec 的 Status 應該是什麼？" data-correct="2" data-explain="done 對應 Accepted，代表功能已建好並驗證過。">
+  <button class="opt">Proposed，代表還沒開始建置</button>
+  <button class="opt">In Progress，代表正在建置中</button>
+  <button class="opt">Accepted，代表已建好並驗證過</button>
+  <button class="opt">Superseded，代表已被後續取代</button>
+</div>
+
+<div class="quiz" data-question="關於 standalone 決策 spec，/sync 的處理方式是什麼？" data-correct="0" data-explain="它走決策狀態（Proposed／Accepted），不鏡射 feature 狀態，也不因沒有連結 feature 而被標 stale。">
+  <button class="opt">維持原狀，不因沒有連結 feature 就標 stale</button>
+  <button class="opt">一律把它對齊到目前 repo 的整體狀態</button>
+  <button class="opt">一律標記成過期，建議 /architect 處理</button>
+  <button class="opt">把它的 Status 直接設成 Superseded</button>
+</div>
+
+<div class="quiz" data-question="什麼時候 /sync 才會把一份 spec 標為 stale？" data-correct="1" data-explain="只有當它能指名這次改動違反了哪一個具體決定，或這份 spec 已被後續 spec 取代時。">
+  <button class="opt">只要這次改動的路徑靠近這份 spec 就標</button>
+  <button class="opt">能指名被違反的具體決定或被取代時</button>
+  <button class="opt">只要 spec 很久沒有人更新過就標</button>
+  <button class="opt">只要 spec 沒有連結到任何 feature 就標</button>
+</div>
+
+<div class="quiz" data-question="/sync 被稱為 universal sub task reconciler，是因為它做了什麼？" data-correct="3" data-explain="其他 skill 沒打勾的子任務最後由它依證據收尾，並推進 feature 狀態。">
+  <button class="opt">它會替每個 feature 重新命名與排序</button>
+  <button class="opt">它會把整份 scope 重新寫過一遍</button>
+  <button class="opt">它會自動替 repo 產生全新的 feature</button>
+  <button class="opt">它會收尾其他 skill 沒打勾的子任務</button>
+</div>
+
+<div class="quiz" data-question="如果一個 feature 已經被工程師標成 done，/sync 可以怎麼做？" data-correct="0" data-explain="永不降級已完成的 feature；被跳過的步驟只是誠實記為 skipped，不是重開的理由。">
+  <button class="opt">永不降級，跳過的步驟記為 skipped</button>
+  <button class="opt">發現子任務沒打勾就改回 in-progress</button>
+  <button class="opt">把它底下的所有子任務全部清空重來</button>
+  <button class="opt">直接把這個 feature 標成 dropped</button>
+</div>
+
+<div class="quiz" data-question="在 monorepo 裡，某個變更檔同時對應到兩個 feature，/sync 應該怎麼做？" data-correct="2" data-explain="歸屬不明確時它不猜，記一句 ambiguous，說明可能對到哪兩個 feature。">
+  <button class="opt">優先打勾範圍比較大的那一個 feature</button>
+  <button class="opt">兩個 feature 的子任務都一起打勾</button>
+  <button class="opt">不猜，記一句 ambiguous 並列兩者</button>
+  <button class="opt">忽略這個變更檔，當作沒看到</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /sync：把知識對回 repo · Step 5/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

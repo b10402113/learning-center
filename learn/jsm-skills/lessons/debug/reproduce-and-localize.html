@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>先重現，再定位：把 bug 縮到最小表面</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>先重現，再定位：把 bug 縮到最小表面</h1>
+<p class="meta">Step 2/5 · /debug：根因除錯迴圈</p>
+
+<h2>學習目標</h2>
+<p>能依序完成 capture symptom（observed / expected / repro）、取得可重現的確定性重現，並用二分法把失敗縮到最小表面（二分程式路徑、二分歷史 git bisect、讀真實值）。</p>
+
+<h2>前言：一句「有時候會壞」沒辦法修</h2>
+
+<p>上一節建立了調查員的角色和六步迴圈，我們知道第一件事是重現。這一節就從那個最尷尬的起點開始：使用者跟你說「登入有時候會失敗」。</p>
+
+<p>這句話幾乎沒辦法直接動手。什麼叫有時候？是特定帳號、特定瀏覽器，還是特定時間？如果連你自己都沒看過它壞，你怎麼知道等一下的修改有沒有真的把它修好？</p>
+
+<p>所以 <code>/debug</code> 一開始不會急著打開程式碼，而是先把症狀問清楚、想辦法讓它隨叫隨到，再把失敗的範圍一層一層縮小。這一步做扎實，後面找原因會快很多；這一步偷懶，後面就會變成一場猜謎。</p>
+
+<h2>Step 0：先把症狀講精確</h2>
+
+<p>在碰任何程式碼之前，<code>/debug</code> 要求先把三件事釘死：</p>
+
+<table>
+  <tr><th>欄位</th><th>要寫什麼</th></tr>
+  <tr><td><code>Observed</code>（觀察到）</td><td>實際的錯誤訊息、stack trace、錯誤輸出或截圖</td></tr>
+  <tr><td><code>Expected</code>（預期）</td><td>你本來以為會發生的行為</td></tr>
+  <tr><td><code>Repro</code>（重現）</td><td>能觸發它的步驟、輸入與環境</td></tr>
+</table>
+
+<p>這三格看起來很基本，卻是最常被跳過的地方。很多時候「觀察到」和「預期」之所以對不起來，是因為其中一格根本沒被寫清楚。如果這三件事有任何一項不清楚，而且你自己也推不出來，那就問。理由很簡單：連重現都做不到的東西，根本無從除錯起。</p>
+
+<h2>Step 1：想辦法讓它隨叫隨到</h2>
+
+<p>症狀清楚了，下一步是拿到一個確定性的重現，一個測試、一道指令、一個請求，每次執行都會穩定地觸發這個 bug。</p>
+
+<p>如果它是間歇性的，任務就變成找出「是什麼讓它變成確定」。常見的原因有幾種：時間相關（只在跨日或特定時區出錯）、執行順序（A 先跑完才出問題）、資料相關（只有某筆特定資料會踩到）、並行（多個請求同時跑才撞在一起）。把這些因素一個一個固定下來，間歇性常常就會變成穩定可重現。</p>
+
+<p>這裡有一條判準很硬：不能隨叫隨到的 bug，你就不能證明自己修好了。如果試到最後真的重現不了，正確的做法是加一段 instrumentation（在關鍵位置埋記錄或監測）去等它自己現形，並且老實說出「目前還重現不了」。最糟的做法是假裝找到原因、盲修一發。</p>
+
+<h2>Step 2：定位，把失敗縮到最小</h2>
+
+<p>有了重現，接下來在開始猜原因之前，要先做一件事：把失敗縮到最小的可能範圍。範圍越小，你後面要考慮的假設就越少。定位有三個手段。</p>
+
+<h3>二分程式路徑</h3>
+
+<p>第一種是二分程式路徑。想像資料從「好的輸入」一路流到「壞的輸出」，中間一定有一個點是好的變壞的分界。二分法就是不斷往中間切：在程式碼中段印出當下的值，看它到這裡還是好的、還是已經壞了。如果中段還是好的，問題就在後半段；如果中段已經壞了，問題就在前半段。每切一次，範圍減半。工具可以是中段的 log、中斷點，或暫時註解掉後半段。</p>
+
+<p>這就像玩猜數字遊戲，每次砍掉一半的候選範圍。比起從頭一行一行讀，二分能快很多地帶你逼近現場。</p>
+
+<h3>二分歷史</h3>
+
+<p>第二種是二分歷史。如果這是一個 regression（以前正常、最近才壞掉的問題），那答案可能不在程式碼本身，而在某一次改動裡。這時可以用 <code>git bisect</code> 沿著 commit 歷史二分，找出是哪一次改動引進了這個 bug；如果嫌 bisect 麻煩，也可以在可疑的檔案上跑 <code>git log -p</code>，逐筆看改動內容。</p>
+
+<p>二分歷史的價值在於，找到「哪一次改動」通常就直接指出了成因，因為那次改動的意圖和這個 bug 往往只差一步。</p>
+
+<h3>讀真實的值，不要用猜的</h3>
+
+<p>第三種最容易被忽略：去讀真實的值。在資料的邊界，也就是輸入進來、輸出出去的地方，把實際的值印出來或記錄下來，而不是憑印象假設它是什麼。</p>
+
+<p>很多 bug 拖很久，就是因為大家對某個值「想當然耳」。你以為 <code>userId</code> 一定是數字，結果它是字串；你以為那個欄位一定有值，結果它偶爾是 <code>null</code>。親眼看到值的那一秒，往往比讀十遍程式碼更有用。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+重現與定位是後面所有推理的地基。先做 Step 0，把 observed、expected、repro 三格寫清楚，不清楚就問。再做 Step 1，拿到一個隨叫隨到的確定性重現，間歇性就找出讓它變確定的因素，真的重現不了就加 instrumentation 並老實說，不盲修。最後做 Step 2，用二分程式路徑、二分歷史（<code>git bisect</code>）和讀真實值，把失敗縮到最小的範圍。
+</blockquote>
+
+<p>範圍縮小之後，你手上多半已經有一個隱約的猜想。下一節要處理的，就是怎麼把這個猜想變成一個可以被證明是錯的假設，並且一次只驗一個。</p>
+
+<div class="lesson-nav">
+  <div><a href="./investigator-and-evidence-loop.html">← 上一步：除錯是證明，不是猜：角色與六步迴圈</a></div>
+  <div><a href="./one-falsifiable-hypothesis.html">下一步：一次只驗一個可否證的假設 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Step 0 要先釘死哪三件事？" data-correct="1" data-explain="observed（觀察到）、expected（預期）、repro（重現），三格缺一不可。">
+  <button class="opt">版本、環境、執行時間</button>
+  <button class="opt">觀察到、預期、重現</button>
+  <button class="opt">作者、檔案、行號</button>
+  <button class="opt">輸入、輸出、資料庫</button>
+</div>
+
+<div class="quiz" data-question="重現不了 bug 時，正確做法是什麼？" data-correct="2" data-explain="加 instrumentation 去等它現形，並老實說還重現不了，絕不盲修。">
+  <button class="opt">直接修改最可疑那行</button>
+  <button class="opt">先改多處再觀察結果</button>
+  <button class="opt">加記錄並老實說出來</button>
+  <button class="opt">宣告這個 bug 不存在</button>
+</div>
+
+<div class="quiz" data-question="二分程式路徑具體在做什麼？" data-correct="0" data-explain="在資料路徑中點檢查值是好是壞，決定問題在前半段還是後半段，每切一次範圍減半。">
+  <button class="opt">在中點檢查值是好或壞</button>
+  <button class="opt">從第一行依序讀到最後</button>
+  <button class="opt">把整個檔案重寫一遍</button>
+  <button class="opt">猜一個位置直接改掉</button>
+</div>
+
+<div class="quiz" data-question="什麼時候適合用 git bisect 二分歷史？" data-correct="3" data-explain="當它是以前正常、最近才壞的 regression 時，二分 commit 歷史能找出引進問題的改動。">
+  <button class="opt">當 bug 完全無法重現時</button>
+  <button class="opt">當只有一個檔案要讀時</button>
+  <button class="opt">當錯誤訊息非常明確時</button>
+  <button class="opt">當它是最近才壞的 regression</button>
+</div>
+
+<div class="quiz" data-question="為什麼定位時要讀真實的值？" data-correct="1" data-explain="很多 bug 來自對值的想當然耳，親眼看過比憑印象假設可靠得多。">
+  <button class="opt">因為讀值比讀程式快</button>
+  <button class="opt">避免對值想當然耳</button>
+  <button class="opt">因為工具會自動記錄</button>
+  <button class="opt">可以減少程式碼行數</button>
+</div>
+
+<div class="quiz" data-question="間歇性 bug 要變成確定性重現，通常要先固定什麼？" data-correct="2" data-explain="時間、執行順序、資料、並行等因素固定下來後，間歇性常會變成穩定可重現。">
+  <button class="opt">把程式的註解全部刪掉</button>
+  <button class="opt">把測試全部改成跳過</button>
+  <button class="opt">時間順序資料並行等變數</button>
+  <button class="opt">把日誌等級調到最安靜</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /debug：根因除錯迴圈 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

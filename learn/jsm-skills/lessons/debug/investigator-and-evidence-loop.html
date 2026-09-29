@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>除錯是證明，不是猜：角色與六步迴圈</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>除錯是證明，不是猜：角色與六步迴圈</h1>
+<p class="meta">Step 1/5 · /debug：根因除錯迴圈</p>
+
+<h2>學習目標</h2>
+<p>能說明 /debug 的調查員角色、六步迴圈（reproduce → localize → hypothesize → test → fix → verify）、它何時被叫用，以及它跟 /loop 的差別，並知道它只有在無法重現時才發問、不會先問准許才調查。</p>
+
+<h2>前言：它好了，然後又壞了</h2>
+
+<p>你一定遇過這種情況。測試偶爾紅一次，重跑又綠了。使用者回報「有時候存不進去」，但你在自己的機器上怎麼試都正常。</p>
+
+<p>於是你打開出問題的那個檔案，看到一行可疑的程式碼，改了它，重跑，過了。你鬆一口氣，把它當成解決了。過了幾天，同一個 bug 換一個入口又冒出來，而且這次更難抓。</p>
+
+<p>問題出在順序。你先動手，後理解。而一個沒有被真正理解的修補，通常只是把症狀暫時壓下去，病因還留在原地等你。<code>/debug</code> 這個 skill 要做的，就是把這個順序倒過來：先證明，再動手。</p>
+
+<h2>你的角色是調查員，不是修理工</h2>
+
+<p><code>/debug</code> 對使用者的第一個定位是「調查員」：相信證據，不相信直覺。它把 bug 當成一個要證明的案子，而不是一個要趕快平息的事故。你要能隨時重現它、把它縮到最小的失敗範圍、而且一次只改一件事，這樣每一個實驗的結果才有意義。</p>
+
+<p>它有一句話很值得記住：一個你說不出原因的修補，代表你其實還沒抓到那個 bug。這句話解釋了它為什麼會刻意抵抗一種反射動作。看到 <code>null</code> 就想加個判斷把它擋掉，看到 crash 就想用 <code>try/catch</code> 包起來，這些動作能讓錯誤訊息消失，卻回答不了「它為什麼是 null」、「它為什麼會 crash」。</p>
+
+<p>所以這一整套流程的目標不是「讓症狀消失」，而是「讓原因被證明」。修補只是證明成立之後，順手做掉的最後一步。</p>
+
+<h2>六步迴圈：把猜測換成證據</h2>
+
+<p>與其說 <code>/debug</code> 是在猜哪裡壞了、改改看，不如說它在跑一套固定的迴圈。六個階段依序是這樣：</p>
+
+<table>
+  <tr><th>階段</th><th>它要回答的問題</th></tr>
+  <tr><td><code>reproduce</code>（重現）</td><td>我能不能讓這個 bug 隨叫隨到？</td></tr>
+  <tr><td><code>localize</code>（定位）</td><td>失敗是從哪一小段開始的？</td></tr>
+  <tr><td><code>hypothesize</code>（假設）</td><td>我認為的根因，能不能被實驗證明是錯的？</td></tr>
+  <tr><td><code>test</code>（測試）</td><td>這個實驗的結果支持假設，還是推翻它？</td></tr>
+  <tr><td><code>fix</code>（修補）</td><td>針對已證實的根因，最小的改動是什麼？</td></tr>
+  <tr><td><code>verify</code>（驗證）</td><td>真的修好了嗎？它會不會再回來？</td></tr>
+</table>
+
+<p>這裡有一條容易被忽略的線：<code>test</code> 被推翻時，流程其實會回頭，不是繼續往下。帶著剛剛學到的線索回到 <code>localize</code> 或 <code>hypothesize</code> 再來一輪，直到某個假設被證據證實，才輪到修補。這也是為什麼後面幾節會把「假設」和「測試」講得特別細。</p>
+
+<p>整個迴圈背後有一條鐵則：一次只動一個變因。如果你同時改了三個地方，然後 bug 消失了，你根本不知道是哪一個改動救了你。下一次它再出現，你手上沒有任何可靠的線索。</p>
+
+<h2>什麼時候該叫它</h2>
+
+<p>如果你不確定現在該不該動用 <code>/debug</code>，看三個訊號就好。第一，有一個測試失敗，但你一時看不出原因。第二，<code>/check verify</code> 跑完之後回報某個行為和規格對不上。第三，你自己觀察到行為不對，例如某個按鈕按了沒反應。</p>
+
+<p>它常常接手前一個階段的失敗。當 <code>/check verify</code> 發現問題，<code>/check</code> 本身是不改程式碼的，它會把問題指向 <code>/debug</code> 或 <code>/develop</code>。換句話說，<code>/debug</code> 是那條「發現問題之後，專門處理成因」的路徑。</p>
+
+<h2>它不是 /loop，名字很像但用途相反</h2>
+
+<p>這裡有個很容易混淆的地方。<code>/debug</code> 裡的「loop」指的是單次執行內部的調查迴圈，也就是上面那六步反覆迭代。而 <code>/loop</code> 是另一個獨立的 skill，它把一個指令按時間間隔重複執行。</p>
+
+<table>
+  <tr><th></th><th>/debug</th><th>/loop</th></tr>
+  <tr><td>問題型態</td><td>一個 bug，要找成因</td><td>一個指令，要持續觀察</td></tr>
+  <tr><td>執行方式</td><td>單次執行內反覆六步</td><td>按時間間隔重複跑</td></tr>
+  <tr><td>典型場合</td><td>測試失敗、行為不符規格</td><td>盯著不穩定的測試，看它多久壞一次</td></tr>
+</table>
+
+<p>判斷方法很簡單：你要的是弄清楚一個 bug 為什麼會發生，還是隨時間觀察某個東西的表現？如果是後者，例如你想知道一個不穩定的測試跑一百次會壞幾次，那才是 <code>/loop</code> 的場合。</p>
+
+<h2>它平常自己動手，只有重現不了才問你</h2>
+
+<p>還有一個讓人安心的設計：<code>/debug</code> 不會先問你「我可以開始調查嗎」。重現、追查、修補都是它主動做的事，不需要你逐項批准。它把工程師當成有權限下判斷的人，而不是每一步都要蓋章的單位。</p>
+
+<p>它只在一種情況下反問你：當它無法從現有資訊重現這個 bug。這時它會要四項東西：確切的重現步驟、輸入、環境，以及你觀察到的行為和預期行為。理由很直白，重現不了的東西，沒辦法證明已經修好。與其胡亂猜一個原因，它寧可先問清楚再開始。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/debug</code> 把除錯當成一場要證明的調查，而不是猜一猜改一改。它的角色是相信證據勝過直覺的調查員，跑的是 reproduce → localize → hypothesize → test → fix → verify 這個迴圈，而且一次只動一個變因。它在你給得出重現時會自己一路做下去，只有當連重現都拿不到時才回頭問你四件事：步驟、輸入、環境、觀察與預期。它跟 <code>/loop</code> 名字很像，但 <code>/loop</code> 是按時間重跑指令，用來隨時間觀察，不是用來找 bug 成因。
+</blockquote>
+
+<p>角色和迴圈看清楚了，下一節就從迴圈的第一步開始。我們要把一句模糊的「有時候會壞」，變成一條可以隨叫隨到的重現指令，再用二分法把失敗縮到最小的那一段。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./reproduce-and-localize.html">下一步：先重現，再定位：把 bug 縮到最小表面 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="/debug 對 bug 的基本態度是什麼？" data-correct="0" data-explain="它把 bug 當成要證明的案子，相信證據勝過直覺，先證明再動手。">
+  <button class="opt">相信證據勝過直覺</button>
+  <button class="opt">相信經驗勝過量測</button>
+  <button class="opt">相信速度勝過正確</button>
+  <button class="opt">相信工具勝過判斷</button>
+</div>
+
+<div class="quiz" data-question="六步迴圈的正確順序是哪一個？" data-correct="2" data-explain="依序是 reproduce、localize、hypothesize、test、fix、verify。">
+  <button class="opt">reproduce、fix、verify、localize、test、hypothesize</button>
+  <button class="opt">hypothesize、test、reproduce、localize、fix、verify</button>
+  <button class="opt">reproduce、localize、hypothesize、test、fix、verify</button>
+  <button class="opt">localize、reproduce、test、hypothesize、verify、fix</button>
+</div>
+
+<div class="quiz" data-question="/debug 什麼時候會主動停下來問你？" data-correct="1" data-explain="它平常主動調查與修補，只有當無法從現有資訊重現 bug 時才反問。">
+  <button class="opt">每次開始調查之前</button>
+  <button class="opt">無法重現這個 bug 時</button>
+  <button class="opt">找到根因準備修補時</button>
+  <button class="opt">執行完驗證測試之後</button>
+</div>
+
+<div class="quiz" data-question="為什麼規定一次只能動一個變因？" data-correct="3" data-explain="同時改多處就無法確定是哪個改動有效，等於失去了可靠的線索。">
+  <button class="opt">因為這樣執行速度最快</button>
+  <button class="opt">因為工具只允許改一處</button>
+  <button class="opt">因為專案規範這樣要求</button>
+  <button class="opt">才能確定哪個改動有效</button>
+</div>
+
+<div class="quiz" data-question="/loop 和 /debug 的差別是什麼？" data-correct="1" data-explain="/loop 把指令按時間間隔重複跑，用來隨時間觀察，不是用來找成因。">
+  <button class="opt">/loop 是 /debug 的舊版名稱</button>
+  <button class="opt">/loop 按時間間隔重跑指令</button>
+  <button class="opt">/loop 只修補不負責重現</button>
+  <button class="opt">/loop 專門處理間歇性測試</button>
+</div>
+
+<div class="quiz" data-question="一個你說不出原因的修補，代表了什麼？" data-correct="2" data-explain="說不出原因就代表你還沒抓到根因，症狀可能還會再回來。">
+  <button class="opt">代表這個 bug 很簡單</button>
+  <button class="opt">代表這個 bug 不重要</button>
+  <button class="opt">代表這個 bug 還沒抓到</button>
+  <button class="opt">代表這個 bug 無法重現</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /debug：根因除錯迴圈 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

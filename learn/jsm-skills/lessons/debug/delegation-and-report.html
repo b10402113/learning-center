@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>交給子代理，並用根因收尾</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>交給子代理，並用根因收尾</h1>
+<p class="meta">Step 5/5 · /debug：根因除錯迴圈</p>
+
+<h2>學習目標</h2>
+<p>能判斷何時把調查交給子代理（明確指定較強模型、工具集與提示內容），並用「先講根因與修補」的格式收尾報告，遇到設計缺陷改指向 /architect。</p>
+
+<h2>前言：追查越久，對話框越吵</h2>
+
+<p>前面四節把迴圈走完了。但真正的案子不一定這麼乾淨。有些 bug 要查很久，你得反覆讀檔、跑指令、grep 線索、再讀檔，來來回回幾十次。</p>
+
+<p>這些過程全塞在同一個對話裡，會發生一件事：主要的上下文被大量中間過程佔滿，模型到後面會愈來愈笨，開始忘記前面已經排除過哪些可能。這一節講兩個收尾的功夫，一是把這種不簡單的追查外包給子代理，二是結束時那份報告怎麼寫才有用。</p>
+
+<h2>什麼時候該把調查外包</h2>
+
+<p><code>/debug</code> 給了一個明確的判斷點：當這場追查「不簡單」時，就開一個子代理去查。所謂不簡單，通常是指需要大量反覆的工具操作。把這些迭代留在子代理裡，就不會把主對話的上下文吃掉。</p>
+
+<p>這背後是同一套分工邏輯：主線負責決定方向、跟你對話，子代理負責埋頭做那些吵雜的工作，最後只把結論帶回來。跟前面幾個階段用子代理做唯讀探索是同樣的道理。</p>
+
+<h2>子代理怎麼設定</h2>
+
+<p>設定它的時候，有幾個不能省的地方：</p>
+
+<table>
+  <tr><th>欄位</th><th>要求</th></tr>
+  <tr><td><code>model</code></td><td>明確指定一個較強的模型，不要繼承當前 session 的模型（以 Claude Code 為例是 <code>sonnet</code>）</td></tr>
+  <tr><td><code>description</code></td><td>寫成 <code>"Debug: &lt;symptom&gt;"</code>，讓人一眼知道在查什麼</td></tr>
+  <tr><td>工具</td><td><code>Read</code>、<code>Bash</code>、<code>Grep</code>、<code>Glob</code>、<code>Edit</code>、<code>Write</code></td></tr>
+  <tr><td><code>prompt</code></td><td>把整條迴圈、捕捉到的症狀、重現步驟，以及相關的 <code>AGENTS.md</code> 直接內嵌進去</td></tr>
+</table>
+
+<p>其中兩個要求值得多說一句。第一，為什麼要明確指定模型，而不是沿用當前 session 的模型？因為除錯的品質不該取決於你當初開對話時剛好用哪個模型。今天用一個較弱的模型開場，臨時要除錯，如果子代理直接繼承，就會用同樣的弱模型去查，這不是你要的。</p>
+
+<p>第二，prompt 裡要要求它「回報根因並附上證據」，而不是只回一句「我修好了」。因為子代理的輸出是你唯一看得到的部分，如果它只給結論不給證據，你根本無從判斷它是真的抓到根因，還是又一次把症狀壓過去。這跟整條迴圈「先證明再動手」的精神是一致的。</p>
+
+<h2>報告：先講根因，過程是附錄</h2>
+
+<p>不管有沒有用子代理，收尾都要產出一份報告。<code>/debug</code> 對報告的格式要求，可以濃縮成一句話：把根因和修補放在最前面，重現與證據是佐證的軌跡，不是頭條。</p>
+
+<p>為什麼要這樣排？因為讀報告的人最想先知道「壞在哪、怎麼修的、下一步做什麼」。如果你從「我首先做了 A，然後做了 B」開始講，他得讀到最後才拿到重點。把結論前置，等於把讀者的時間還給他。</p>
+
+<p>它的模板長這樣：</p>
+
+<pre><code>## /debug complete · &lt;the bug, one line&gt;
+
+**Root cause: &lt;the proven cause&gt;. Fixed by &lt;the minimal change, files touched&gt;.**
+Next: /test &lt;feature&gt;   (lock in the regression test, added inline or handed over)
+Heads up: &lt;same cause also at &lt;where&gt;, fixed too · or a design flaw → /architect &lt;what&gt;&gt;   (omit if none)</code></pre>
+
+<p>拆開來看，第一行是這個 bug 的一句話描述。第二行是根因加上最小修補，也就是整個案子的結論。第三行是下一步，通常是把回歸測試鎖進 <code>/test</code>。第四行是提醒，只有在有同源兄弟或設計缺陷時才寫，沒有的話就整行省略。</p>
+
+<h2>當原因不是寫錯，而是想錯</h2>
+
+<p>最後一個很重要的判斷：如果追到最後發現，問題不是某一行程式寫錯，而是當初的某個決策本身有問題，那報告就要把這件事放到頭條，而不是塞在角落。</p>
+
+<p>理由是，這種情況的正確修法往往不是改一行程式，而是改一份規格。如果 <code>/debug</code> 只是硬用程式碼把症狀蓋掉，就把一個「該回頭修正決策」的訊號浪費掉了。所以它會明確指出這個決策缺陷，並把問題導向 <code>/architect</code>。這也再次呼應整條流程的分工：每個 skill 只擁有自己那段該負責的東西，不越界替別的階段做決定。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+當一場追查需要大量反覆操作時，把它交給子代理，避免中間過程吃掉主對話的上下文。子代理要明確指定較強的模型，附上工具集，prompt 要內嵌整條迴圈、症狀、重現步驟和相關的 <code>AGENTS.md</code>，並要求它回報根因時附證據。收尾報告先講根因與最小修補，再放下一步與提醒，重現與證據只是佐證。如果問題的根源是決策缺陷而不是程式錯誤，就把這件事放頭條，並指向 <code>/architect</code>。
+</blockquote>
+
+<p>五步走完，你手上就有一套完整的根因除錯法：從建立調查員的心態，到重現與定位，到可否證的假設與實驗，到最小修補與回歸保護，最後到外包與收尾報告。下一次測試不明原因變紅，你就有順序可循，而不是憑感覺亂改。</p>
+
+<div class="lesson-nav">
+  <div><a href="./minimal-fix-and-regression.html">← 上一步：最小修補、回歸測試與同源兄弟</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="什麼情況下適合把調查交給子代理？" data-correct="1" data-explain="當追查不簡單、需要大量反覆工具操作時，外包可避免中間過程吃掉主對話上下文。">
+  <button class="opt">任何一個 bug 都應該外包</button>
+  <button class="opt">追查需要大量反覆操作時</button>
+  <button class="opt">只要重現得了就該外包</button>
+  <button class="opt">只有無法重現時才外包</button>
+</div>
+
+<div class="quiz" data-question="子代理的 model 為什麼要明確指定，不繼承？" data-correct="2" data-explain="除錯品質不該取決於開對話時剛好用哪個模型，要確保用較強模型來查。">
+  <button class="opt">因為繼承會讓程式跑太慢</button>
+  <button class="opt">因為子代理不支援繼承</button>
+  <button class="opt">品質不該取決於開場模型</button>
+  <button class="opt">因為指定模型比較省錢</button>
+</div>
+
+<div class="quiz" data-question="子代理的 prompt 應該要求它回報什麼？" data-correct="0" data-explain="要求它回報根因並附上證據，而不是只說一句「我修好了」。">
+  <button class="opt">根因並附上證據</button>
+  <button class="opt">每個指令的原始輸出</button>
+  <button class="opt">花費的時間與成本</button>
+  <button class="opt">所有走過的死路清單</button>
+</div>
+
+<div class="quiz" data-question="報告為什麼要把根因與修補放最前面？" data-correct="3" data-explain="讀者最想先知道壞在哪、怎麼修、下一步，結論前置才是把時間還給讀者。">
+  <button class="opt">因為這樣篇幅看起來較短</button>
+  <button class="opt">因為過程細節不重要</button>
+  <button class="opt">因為模板規定不能更改</button>
+  <button class="opt">讀者最想先知道結論</button>
+</div>
+
+<div class="quiz" data-question="報告中的 Heads up 那行什麼時候要省略？" data-correct="1" data-explain="只有在有同源兄弟或設計缺陷時才寫，沒有的話整行省略。">
+  <button class="opt">每次都要保留不能省略</button>
+  <button class="opt">沒有同源兄弟或缺陷時</button>
+  <button class="opt">只要修補小於一行就省</button>
+  <button class="opt">只要測試套件是綠的就省</button>
+</div>
+
+<div class="quiz" data-question="當根源是決策缺陷而非程式錯誤時，該怎麼做？" data-correct="2" data-explain="把它放上頭條，並指向 /architect，因為正確修法可能是改規格而不是改程式。">
+  <button class="opt">用程式碼把症狀遮起來</button>
+  <button class="opt">把這段程式整個刪掉</button>
+  <button class="opt">放頭條並指向 /architect</button>
+  <button class="opt">當成一般 bug 直接修掉</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /debug：根因除錯迴圈 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

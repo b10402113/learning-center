@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跑與不跑的差別：分辨測試錯還是程式錯，然後收尾</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>跑與不跑的差別：分辨測試錯還是程式錯，然後收尾</h1>
+<p class="meta">Step 5/5 · /test：為變更寫回歸測試</p>
+
+<h2>學習目標</h2>
+<p>能在跑測試後誠實分辨「測試寫錯」與「程式真的錯」，把後者留在 BUGS_FOUND 而不弱化斷言，並依 RUN_AFTER 產出正確的回報與 scope 收尾。</p>
+
+<h2>前言：測試寫完了，但它到底會不會過？</h2>
+
+<p>上一節你已經把測試寫出來，規則也都守住了。現在桌面上剩兩個問題。第一個很簡單：要不要現在把它跑一遍？第二個比較難：如果它紅了，你怎麼知道是測試自己寫錯，還是程式真的壞了？</p>
+
+<p>這兩個問題之所以重要，是因為它們各自藏著一種失敗。<code>/test</code> 要你每次自己決定跑或不跑，因為這件事沒有標準答案，取決於你當下的時間與信心。而當測試紅了卻分不清是哪一種錯，人很容易做出兩種壞選擇：一種是動手改原碼，讓紅色消失；另一種是把斷言放寬，讓它看起來過了。兩者都在欺騙自己。這一節就是最後一段路：怎麼跑、怎麼分辨、怎麼回報與收尾。</p>
+
+<h2>每一輪都先問一次：跑，還是不跑？</h2>
+
+<p>這是 <code>/test</code> 每一輪都一定會問的問題，即使偏好檔已經存在也一樣。它會告訴你這次要為多少個變更檔案寫測試，然後給你兩條路：跑一遍並修到全綠；或只寫測試，把執行步驟交回你手上。這個選擇<strong>每輪重新決定，不會被存起來</strong>。因為要不要現在花時間跑，跟這次改動的風險、你的時間預算都有關，不適合寫死成一個長期偏好。</p>
+
+<p>如果你選了「只寫不跑」，它就不會執行任何東西，而是寫完測試後給出一份手動執行說明，讓你自己跑、自己驗證。測試仍然寫得完整，只是把執行的責任交回你身上。</p>
+
+<h2>跑的時候：用小輸出，只重跑失敗的</h2>
+
+<p>選擇要跑的話，有兩個小技巧能讓過程順利。第一，它會用精簡的 reporter 來跑，例如 Vitest 與 Jest 用 <code>--reporter=dot</code>、Playwright 用 <code>--reporter=line</code>、pytest 與 <code>go test</code> 用 <code>-q</code>。你要看的是通過與失敗的計數，以及失敗案例的名字，不是全部通過的完整輸出。第二，第一次跑完之後，每次重試只跑剛剛失敗的那幾個檔案，而不是整個套件重跑一遍。這樣每一輪的輸出都小、都很快，你的注意力也不會被淹沒。</p>
+
+<p>它從 package root 執行，所有路徑與指令都從那裡算起。</p>
+
+<h2>紅掉的時候：兩種失敗，兩種處理</h2>
+
+<p>迭代的規則只有三條，但每一條都很關鍵。</p>
+
+<h3>第一種：測試自己寫錯了</h3>
+
+<p>如果失敗的原因是測試本身有問題，例如 import 錯了、selector 抓錯、期望值寫錯、或少了必要的 setup，那就修測試，然後只重跑那個檔案，重複到這類失敗清空為止。這些是「我寫的測試有 bug」，跟被測的程式無關。</p>
+
+<h3>第二種：程式真的錯了</h3>
+
+<p>如果失敗的原因是應用程式碼真的違反了它自己的合約或規格，那這正是測試在盡它的職責。這時候<strong>不要改原始碼讓它通過，也不要弱化斷言</strong>。你要做的是讓這條測試保持紅色，把它記到 BUGS_FOUND 裡，然後繼續往下走。這條規則守的是整套流程的誠信：測試的價值就在於它會在你改壞時叫你，如果一紅你就把它哄睡，那它就不再是測試了。</p>
+
+<h3>第三種：停手</h3>
+
+<p>當剩下的失敗都已經被歸到 BUGS_FOUND 的真 bug，或者全部都綠了，迭代就結束。</p>
+
+<p>分辨這兩種失敗要誠實。報告的時候也不要把原始的測試輸出整段貼上來，而是摘要成計數加上具體的失敗案例，讓人一眼看得懂。</p>
+
+<h2>回報：兩種格式，看你選了跑或不跑</h2>
+
+<p>報告的格式跟著你前面的選擇走。如果選了要跑，報告會包含四個區塊：測試寫在哪裡（每個檔案的路徑、類別、測試數、涵蓋摘要，以及是延伸既有還是新建）、執行結果（通過與失敗的計數，以及用的指令）、BUGS_FOUND（每個真 bug 的檔案與行號、哪個斷言失敗、揭露了程式哪裡壞掉；沒有就整段省略）、以及 NOT_COVERED（哪些情境沒涵蓋，以及原因）。</p>
+
+<p>如果選了不跑，報告則由測試清單、手動執行說明（安裝步驟、跑全部、只跑單檔、預期會看到什麼、失敗時怎麼分辨測試缺口與真 bug）、以及 NOT_COVERED 組成。</p>
+
+<p>這裡有一個特別的規矩：如果 BUGS_FOUND 不是空的，報告要<strong>把它放在最前面</strong>。因為一條正確地在壞掉的程式上失敗的測試，是一個真實的發現，不是該被消音的東西。<code>/test</code> 到這裡仍然不會去改應用程式碼。</p>
+
+<h2>收尾：勾 scope、鏡射 spec、絕不自己宣布 done</h2>
+
+<p>測試有了結果之後，還要把狀態對回專案的文件。如果這個功能列在 scope 上，而且這一輪測試通過了，它會勾掉 scope 裡那個對應的 <code>Test it</code> 格子，然後<strong>提議</strong>把這個功能標成 done，例如問你「測試進來而且通過了，要不要標成 done？」。它不會替你按下去，決定權在你。</p>
+
+<p>你同意的話，它才會把狀態設成 done（同時更新 At a glance 表與標題），並把規格裡的 Status 一併鏡射成 Accepted。如果這個規格還是 Assumed 狀態，並不會擋住 done；它會標記「欠 ratification，有空時用 <code>/architect</code> 補」，把選擇權交給你。</p>
+
+<p>反過來說，如果測試失敗、或覆蓋不完整，那個 <code>Test it</code> 格子就保持不打勾，並如實回報，不營造已經完成的假象。</p>
+
+<p>收尾時一定要有一次確認，不能默默帶過：它會明講在每個檔案勾了什麼，例如「Scope：勾了 Test it，狀態變成 done。Spec：狀態變成 Accepted」。如果 scope 上根本找不到對應的那一列，也要說出來，而不是安靜地結束。</p>
+
+<p>功能走到 done 之後，它會建議你在開始下一個功能前先清一次上下文。因為 scope 與 spec 已經把一切記下來了，一個乾淨的新 session 能讓下一個 build 更省、更準。</p>
+
+<h2>兩個和 git、和流程等級有關的細節</h2>
+
+<p>如果最近的 <code>AGENTS.md</code> 在 Git 段寫著會在整合時自動提交，而且提交不是手動模式，它會提議把這組測試順手提交，用一行像 <code>test(&lt;scope&gt;): …</code> 的訊息加上協作 trailer。它<strong>永遠不 push</strong>，提交與否、推不推都由你決定。</p>
+
+<p>另外，要知道 <code>/test</code> 屬於哪一關。有效的流程等級以功能自己標的為準，沒標就用專案的預設。Prototype 在 <code>/develop</code> 就收尾、Alpha 在 <code>/check verify</code> 收尾，所以到 Beta 與 GA 才輪到 <code>/test</code> 當收尾者，之後才是換模型的審查。它會尊重你對等級的覆寫，永遠不會自己預設一條固定的流程鏈。</p>
+
+<p>最後一個小地方：這個 skill 在回報完就結束了，它不會去呼叫別的 skill。把結果交給你，就交回你手上。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/test</code> 每一輪都問一次「跑或不跑」，這個選擇不被存起來。跑的時候用精簡 reporter，重試只跑失敗的檔案。失敗分兩種：測試自己寫錯就修測試；程式真的錯就讓它紅著、記到 BUGS_FOUND，絕不改原碼或弱化斷言。報告格式跟著 RUN_AFTER 走，BUGS_FOUND 不空時要放最前面。最後勾 scope 的 Test it、鏡射 spec 為 Accepted，但 done 由工程師宣布，不自己決定；測試通過才建議清理上下文，並可提議提交但永不 push。
+</blockquote>
+
+<p>你已經把 <code>/test</code> 整條路走完了：從範圍、分類、偏好、寫作紀律，到跑與收尾。把它放回整條工作流來看，它接著 <code>/check verify</code> 的執行期驗證，交出這一條分支的回歸測試，再交給 <code>/check review</code> 做換模型的審查。下一次你自己的專案改動完成時，就可以真的跑一次，體會它怎麼守住「會過，而且真的抓得到 bug」這條線。</p>
+
+<div class="lesson-nav">
+  <div><a href="./write-with-discipline.html">← 上一步：寫測試的紀律：抓行為、不改原碼、可追到驗收條件</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="「跑還是不跑測試」這個選擇，/test 怎麼對待？" data-correct="1" data-explain="每一輪都重新問一次，不被存起來，因為要花多少時間跑和當下風險、時間預算有關。">
+  <button class="opt">第一次問完就寫進偏好檔長期沿用</button>
+  <button class="opt">每一輪都重新問一次，不存成偏好</button>
+  <button class="opt">一律自動跑，不讓工程師選擇</button>
+  <button class="opt">只在測試失敗時才問要不要跑</button>
+</div>
+
+<div class="quiz" data-question="測試紅掉，但原因是程式碼違反了規格。正確的處理是什麼？" data-correct="2" data-explain="這正是測試的職責；不要改原碼、不要弱化斷言，讓它紅著並記到 BUGS_FOUND。">
+  <button class="opt">修改原始碼讓這條測試通過</button>
+  <button class="opt">把斷言放寬到剛好能通過為止</button>
+  <button class="opt">保留紅色，記到 BUGS_FOUND</button>
+  <button class="opt">把這條測試先註解掉再繼續</button>
+</div>
+
+<div class="quiz" data-question="第一次跑完之後，重試迭代時應該怎麼跑？" data-correct="3" data-explain="只重跑剛剛失敗的那幾個檔案，讓每一輪輸出小、快、好讀。">
+  <button class="opt">每次都把整個測試套件從頭跑一遍</button>
+  <button class="opt">固定間隔重跑，直到紅燈自己消失</button>
+  <button class="opt">換一套更寬鬆的 reporter 再重跑</button>
+  <button class="opt">只重跑剛剛失敗的那幾個檔案</button>
+</div>
+
+<div class="quiz" data-question="BUGS_FOUND 不是空的時候，報告要怎麼排？" data-correct="0" data-explain="把它放在最前面，因為正確地在壞碼上失敗是真實的發現，不該被消音。">
+  <button class="opt">放在報告最前面，當成主要發現</button>
+  <button class="opt">附在最後面當成補充說明</button>
+  <button class="opt">整段刪掉，只留通過的結果</button>
+  <button class="opt">等工程師主動問的時候再提出</button>
+</div>
+
+<div class="quiz" data-question="套件通過後，關於把功能標成 done，/test 的角色是什麼？" data-correct="1" data-explain="它提議、它鏡射 spec 狀態，但 done 由工程師宣布，它不會自己按下去。">
+  <button class="opt">直接幫工程師設成 done 並往下走</button>
+  <button class="opt">提議標成 done，由工程師決定</button>
+  <button class="opt">一律拒絕標 done，留給 /sync</button>
+  <button class="opt">等到 /check review 通過才敢標</button>
+</div>
+
+<div class="quiz" data-question="如果這個功能還有覆蓋不全的區塊，Test it 這個格子應該怎麼處理？" data-correct="2" data-explain="覆蓋不完整就保持不打勾並如實回報，不營造已經完成的假象。">
+  <button class="opt">先打勾，等之後有時間再回頭補</button>
+  <button class="opt">打半勾，表示部分完成即可</button>
+  <button class="opt">保持不打勾，並如實回報缺口</button>
+  <button class="opt">直接標成 dropped 移出範圍</button>
+</div>
+
+<div class="quiz" data-question="關於提交這組測試，/test 的立場是什麼？" data-correct="1" data-explain="在整合開啟且非手動提交時可提議提交，但永遠不 push。">
+  <button class="opt">自動提交並自動推上遠端分支</button>
+  <button class="opt">可提議提交，但永遠不 push</button>
+  <button class="opt">測試一律不進版控，留在本機</button>
+  <button class="opt">提交前必須先跑過 /check review</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /test：為變更寫回歸測試 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

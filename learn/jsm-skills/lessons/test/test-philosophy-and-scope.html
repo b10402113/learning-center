@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>/test 的角色：只為這條分支的未提交變更寫回歸測試</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>/test 的角色：只為這條分支的未提交變更寫回歸測試</h1>
+<p class="meta">Step 1/5 · /test：為變更寫回歸測試</p>
+
+<h2>學習目標</h2>
+<p>能說出 <code>/test</code> 測什麼、不測什麼，為什麼「過了卻抓不到 bug 的測試比沒有更糟」，以及它和 <code>/develop</code>、<code>/check verify</code>、<code>/check review</code> 的分工。</p>
+
+<h2>前言：功能做完了，然後呢？</h2>
+
+<p>你想像自己剛用 <code>/develop</code> 把一個新功能寫完。你在瀏覽器裡手動點過一遍，畫面出來、按鈕會動、資料有寫進去，看起來沒問題。你準備把它合併進主線，然後就往下一個功能走。</p>
+
+<p>可是你心裡其實有一絲不確定。這次改動牽動的那幾個檔案，下個月被別人動到的時候，誰會提醒他「這裡原本是為了修某個 bug 才這樣寫的」？你自己過兩個禮拜再回來重構，還記得哪一行絕對不能碰嗎？手動點過的那一遍，只留在你的記憶裡，關掉瀏覽器就散了。</p>
+
+<p><code>/test</code> 就是來補這個洞的。它把「這次改動到底對不對」從一次性的手動確認，變成留在 repo 裡、以後每次都會重跑的一組測試。但在你真的開始用它之前，得先弄清楚它的角色與立場，因為它一些看起來很硬的規則（例如「測試永遠不准改動原始碼」）全都是從這個立場長出來的。</p>
+
+<h2>它測什麼：範圍由 git 決定，不由你回答</h2>
+
+<p><code>/test</code> 的目標很單純：這條分支上<strong>已經改動、但還沒提交</strong>的程式碼。它不會問你「這次要做什麼」，因為範圍不是你講出來的，是 git 的工作樹直接定義的。這是它和 <code>/scope</code> 最根本的差別：<code>/scope</code> 要問出你想做什麼，<code>/test</code> 只看你實際動了什麼。</p>
+
+<p>它實際收集的，是所有已追蹤檔案的 staged 與 unstaged 變更（排除刪除），再加上沒有被忽略的未追蹤檔案。如果這個 repo 還沒有任何 commit，它就改用已進索引的變更當範圍。拿到這份清單之後，它會先把明顯不能測的東西濾掉：測試檔本身、各種設定檔、lock 檔與建置產物、樣式檔與只有型別的宣告檔、以及文件、規格與 <code>test-preferences.json</code>。剩下來的，才是它要處理的對象。</p>
+
+<p>這件事定義了它的邊界：它只測這次變更，不會順手把整個 repo 重測一遍。範圍小是刻意的，因為它要回答的是「這一改有沒有壞掉什麼」，而不是「整個專案健不健康」。</p>
+
+<h2>它的產物與地盤</h2>
+
+<p><code>/test</code> 只擁有兩種檔案：各種測試檔（例如 <code>*.test.ts</code>、<code>*.spec.ts</code>、<code>test_*.py</code>、<code>*_test.go</code>），以及放在專案根目錄的 <code>test-preferences.json</code>。前者是它寫出來的成果，後者記住這個專案要用哪一套測試工具，下次就不必再問。</p>
+
+<p>它有兩塊明確不碰的地盤。第一，它不寫應用程式碼。第二，它不更新 <code>AGENTS.md</code> 或 <code>CLAUDE.md</code> 這類 context 檔，那是 <code>/sync</code> 的職責。把地盤劃清楚，是為了讓每個階段的產出可預期：你不會叫它去改功能，也不會在它跑完後發現專案說明被偷偷動過。</p>
+
+<h2>核心哲學：過了卻抓不到 bug，比沒有更糟</h2>
+
+<p>整份 skill 最重要的一句話是：<strong>一個會通過、卻抓不到真 bug 的測試，比根本沒有測試更糟糕。</strong> 這句話值得多想一下。沒有測試時，你至少知道自己在裸奔，會比較小心；但有了一個假綠的測試，你會以為有人在看門，於是放心地改，直到某天出事才發現那道門從來沒鎖上。</p>
+
+<p>所以它要你測的，是<strong>呼叫者真正依賴的行為</strong>，是「壞掉的時候會傷到誰」，而不是為了讓覆蓋率好看而補的行數。它也據此拒絕一種常見的測試：把「這一片本來就故意假裝的東西」鎖死成斷言。舉例來說，如果這個切片刻意用假資料撐起前端，好讓流程先跑通，那你就不該寫一條「後端真的回傳資料」的測試，去斷言一個計畫根本還沒要做的實作。測試鎖住的應該是這個切片真正承諾要做出來的行為。</p>
+
+<h2>它站在流程的哪一格</h2>
+
+<p><code>/test</code> 接在 <code>/develop</code> 後面。把相鄰的階段排出來，分工就很清楚：<code>/develop</code> 負責把規格變成能跑的碼；<code>/check verify</code> 真的把應用跑起來、證明行為符合規格，它是「執行期」的那一半；<code>/test</code> 則把你這次的變更寫成自動化的回歸測試，讓它在未來持續守著；最後 <code>/check review</code> 換一個模型對 diff 做資深審查，因為寫碼的模型審自己會有盲點。</p>
+
+<p>這裡要記得整套工作流的基調：除了 <code>/develop</code> 之外，後面的每一步都是<strong>建議</strong>，不是關卡，工程師可以自由跳過，<code>done</code> 也是自己宣布的，不是誰把盒子鎖住不給你。至於什麼時候會用到 <code>/test</code>，取決於這個功能的流程等級：<code>Prototype</code> 在建置完就收尾，<code>Alpha</code> 多跑一次 <code>/check verify</code>，到了 <code>Beta</code> 才加上 <code>/test</code>，<code>GA</code> 再加上換模型的審查與文件。</p>
+
+<h2>它什麼時候問、什麼時候直接動手</h2>
+
+<p>你會發現 <code>/test</code> 不太愛問問題，因為它的範圍本來就由 git 決定了。當 <code>test-preferences.json</code> 已經存在、選定的工具也裝好了、而且真的有未提交的檔案時，它會直接開始寫測試，不問你。</p>
+
+<p>但有一件事它<strong>每一輪都一定問</strong>：測試寫完之後，要不要順便幫你跑一遍，還是把指令交回你手上自己跑。這個選擇每次都要重新決定，它不會記住上一次的答案。</p>
+
+<p>除此之外，只有四種情況它才會開口：沒有 <code>test-preferences.json</code>（需要問你框架）、選定的工具還沒安裝、完全找不到未提交的變更、以及變更檔案超過 15 個。剩下的時間，它就是安靜地寫。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/test</code> 為這條分支的未提交變更寫回歸測試，範圍由 git 工作樹決定，不是由工程師回答。它只擁有測試檔與 <code>test-preferences.json</code>，不寫應用碼、不碰 context 檔。它的立場是：會過卻抓不到 bug 的測試比沒有更糟，所以要測呼叫者依賴的行為，而不是覆蓋率數字，也不把切片刻意假裝的 scaffolding 鎖進測試。它接在 <code>/develop</code> 之後，和 <code>/check verify</code>（執行期驗證）、<code>/check review</code>（換模型審查）分工，屬於 Beta 以上才會用到的環節，而且每輪都一定要問你「跑不跑」。
+</blockquote>
+
+<p>現在你知道它的立場與範圍了。但拿到一長串變更檔案之後，接下來要面對的是判斷：這些檔案分別是哪一種東西？該用哪一招測？下一節就來看它怎麼幫每個檔案分類，再挑對應的策略。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./classify-and-strategy.html">下一步：先分類再下手：五種檔案各自對應的測試策略 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="/test 決定要測哪些檔案的依據是什麼？" data-correct="1" data-explain="範圍由 git 工作樹決定：已改動但未提交的檔案，不必再回答一次要做什麼。">
+  <button class="opt">工程師用一句話描述的範圍</button>
+  <button class="opt">這條分支已改動但未提交的檔案</button>
+  <button class="opt">上一次 commit 動過的所有檔案</button>
+  <button class="opt">整個 repo 裡所有可以測的檔案</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項是 /test 會建立並維護的產物？" data-correct="2" data-explain="它只擁有測試檔與 test-preferences.json，其他檔案都有各自的階段負責。">
+  <button class="opt">專案根目錄的 AGENTS.md</button>
+  <button class="opt">功能對應的規格文件</button>
+  <button class="opt">根目錄的 test-preferences.json</button>
+  <button class="opt">應用程式的原始碼檔案</button>
+</div>
+
+<div class="quiz" data-question="為什麼說「會過卻抓不到 bug 的測試比沒有更糟」？" data-correct="3" data-explain="它給你錯誤的安全感，讓你以為有人在看門，其實那道門從沒鎖上。">
+  <button class="opt">因為它會拖慢整個測試套件的執行</button>
+  <button class="opt">因為它讓覆蓋率數字看起來過高</button>
+  <button class="opt">因為它佔用了原本該寫好測試的時間</button>
+  <button class="opt">因為它給你安全感，卻在改壞時放行</button>
+</div>
+
+<div class="quiz" data-question="如果這個切片刻意用假資料撐起前端，/test 應該怎麼做？" data-correct="0" data-explain="不要斷言計畫還沒要做的實作；鎖住這個切片真正承諾的行為。">
+  <button class="opt">不要斷言後端真的會回傳資料</button>
+  <button class="opt">直接改前端讓它接上真的後端</button>
+  <button class="opt">把假資料也一起寫進原始碼裡</button>
+  <button class="opt">完全跳過這個切片不寫測試</button>
+</div>
+
+<div class="quiz" data-question="/test 接在流程的哪個位置？" data-correct="1" data-explain="/develop 建置後，接 /check verify 的執行期驗證，再進 /test 寫回歸測試與 /check review。">
+  <button class="opt">在 /scope 之前，先擋住範圍</button>
+  <button class="opt">在 /develop 之後、/check 之間</button>
+  <button class="opt">在 /document 之後，最後一關</button>
+  <button class="opt">和 /architect 同時平行進行</button>
+</div>
+
+<div class="quiz" data-question="哪一件事是 /test 每一輪都一定要問的？" data-correct="3" data-explain="跑或不跑測試是每次都要重新決定的選擇，它不會記住上一輪的答案。">
+  <button class="opt">這次要測的範圍包含哪些檔案</button>
+  <button class="opt">這個功能要用哪一種切法實作</button>
+  <button class="opt">專案該採用哪一套測試框架</button>
+  <button class="opt">寫完後要不要順便跑一遍測試</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /test：為變更寫回歸測試 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

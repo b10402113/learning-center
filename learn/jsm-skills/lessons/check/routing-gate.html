@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>/check 入口：兩個模式，而且它不猜</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>/check 入口：兩個模式，而且它不猜</h1>
+<p class="meta">Step 1/4 · /check：合併前的驗證與審查</p>
+
+<h2>學習目標</h2>
+<p>能說出 /check 的兩個模式各自解決什麼問題、通常在流程的哪個位置跑，並解釋它為什麼在沒給模式時印出選項、停下來等，而不是自己挑一個。</p>
+
+<h2>前言：PR 要開了，但你真的看過它會動嗎？</h2>
+
+<p>想像這個畫面：你花了一個下午把功能寫完，測試檔也補了，指令一跑全部綠燈。你按下開 PR 的按鈕前，心裡閃過一個念頭，「這樣應該可以吧」。這個念頭很常見，卻也是最容易放過問題的地方。</p>
+
+<p>原因在於「測試綠」和「功能會動」是兩件不同的事。測試只能證明你想到要測的那些路徑是對的，它證明不了你沒想到的那條路，也證明不了你忘了套用的那支 migration。就算功能真的會動，也還有第三件事：這段程式碼經不經得起一位資深工程師的挑毛病。</p>
+
+<p><code>/check</code> 就是合併前把後面兩件事各檢查一次的關卡。它同時有兩個工作，所以問題來了：如果你只喊了一聲 <code>/check</code>，它要怎麼知道你想做哪一個？這一節先把入口講清楚，後面幾節再分別走進兩個模式。</p>
+
+<h2>兩個模式，各管一件事</h2>
+
+<p>第一個模式是 <code>verify</code>，可以理解成「實跑驗收」。它把真的應用啟動起來，照著規格一條一條操作，用現場看到的結果去證明這個改動符合規格。它要回答的問題很具體：每一個驗收條件都真的滿足了嗎？規格承諾要做的每一個畫面、路由、資料表，都真的建出來了嗎？這些是綠色測試永遠不會告訴你的事。</p>
+
+<p>第二個模式是 <code>review</code>，可以理解成「換一雙眼睛審查」。它把這次的 diff 交給一個<strong>沒有寫過這段程式碼的模型</strong>，用資深工程師的角度讀一遍，把發現按嚴重度排序後寫進 <code>docs/reviews/</code>。這裡的關鍵是「不同模型」，同一個模型審自己的輸出，會跟你共享同一套盲點，看再多遍也看不見。</p>
+
+<p>兩個模式在流程裡的位置也不一樣。<code>verify</code> 通常排在 <code>/develop</code> 之後，因為你要先有東西可以跑；<code>review</code> 通常排在開 PR 之前，因為審查的對象是「即將合併的整段 diff」。它們常一起用，順序是先 verify 再 review。</p>
+
+<h2>兩個模式都不改碼</h2>
+
+<p>這是初學者最容易誤會的一點：<code>/check</code> 只負責判斷，不負責修。<code>verify</code> 如果發現行為不對，會把問題指向 <code>/debug</code> 或 <code>/develop</code>；<code>review</code> 則是把發現寫成一份清單，交給寫程式的人去改。它自己不碰程式碼。</p>
+
+<p>把「驗」和「修」分開，有它的道理。如果一個工具同時有權限判斷又有權限修改，你很難分辨它到底是「證明給你看過了」還是「偷偷把東西改到過關」。<code>/check</code> 刻意把手綁起來，讓它產出的每一句話都只是觀察，不是動手。所以當你看到它報了一個問題，下一步永遠是拿著那個問題去對應的階段修，而不是期待它自己補好。</p>
+
+<h2>第一步是一個路由閘，不是開始做事</h2>
+
+<p>現在回到那個問題：只喊 <code>/check</code> 的時候怎麼辦？這個 skill 的第一步很特別，它還沒有讀任何模式檔，也還沒有碰你的 repo，而是先看斜線後面跟了什麼字。這一步就像車站入口的驗票閘，先決定你要去哪個月台，再談上車。</p>
+
+<p>規則只有三條。如果後面接著的是 <code>verify</code>（或它的別名 <code>run</code>），它就讀 <code>modes/verify.md</code>，完全照著跑。如果接著的是 <code>review</code>，它就讀 <code>modes/review.md</code>，並把你後面補的指示原封不動傳進去，例如 <code>/check review with opus</code> 或 <code>/check review uncommitted</code>。</p>
+
+<p>第三條是重點：如果沒有模式字，或者意思模糊，例如只有赤裸裸的 <code>/check</code>，或者你只寫了功能名像 <code>/check auth</code>，它<strong>不會猜，也不會預設</strong>。它會把選項用純文字列出來，然後停下來等你回答。就算你已經給了功能名，它也一樣會先問模式，因為功能名只決定「要檢查什麼」，不決定「要用哪種檢查」。</p>
+
+<h2>為什麼它寧可停下來問</h2>
+
+<p>你可能會想，隨便挑一個跑不就知道了？問題是，錯的模式跑起來並不會當機。它會照樣產出一份看起來很正經的結果，只是那份結果答的是另一個問題。你以為自己在確認功能有沒有符合規格，它卻在做程式碼審查；你以為自己在看 diff 品質，它卻在跑應用。這種錯不會報錯，只會默默誤導你。</p>
+
+<p>還有一個設計上的理由：<code>/check</code> 刻意不把兩個模式混在同一次執行裡。如果你選了「兩個都要」，它會先做 <code>verify</code>，跑完再把 <code>review</code> 當成下一步提供給你。順序不能顛倒，因為 review 要審的是「已經確認會動的程式碼」，先驗再審，這份審查才有意義。</p>
+
+<p>這背後其實是整套工作流的一貫態度：模型可以建議，但決定權在你。挑哪個模式、要不要跑，都是你的判斷。與其替你挑一個、再讓你在錯誤的結果上做決定，它選擇多問一句。這一句話換來的，是後面所有判斷都站在對的問題上。</p>
+
+<h2>為什麼用純文字，不用互動選單</h2>
+
+<p>它的「停下來問」，是印一段純文字面板，而不是彈出一個只能用滑鼠點的視窗。面板上寫的是三個選項：<code>verify</code> 跑真實應用、證明改動符合規格；<code>review</code> 讓新模型對 diff 做資深審查；<code>both</code> 先 verify 再 review。你只要打字回覆其中一個字，它再往下走。</p>
+
+<p>這個選擇是為了可攜性。彈出式視窗在某些 AI 工具能用，在某些工具根本叫不出來；但「顯示文字、等你打一個字」在任何工具裡行為都一樣。它的 frontmatter 裡雖然也寫了 <code>verify | review</code> 這個提示，那是給 Claude Code 的自動補齊用的，其他工具會直接忽略它。所以真正可靠、每台機器都走得到的路，就是這段純文字面板。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/check</code> 是合併前的關卡，分成兩個模式：<code>verify</code> 把真實應用跑起來，用規格驗收；<code>review</code> 讓一個沒寫過這段碼的模型做資深審查、產出嚴重度排序的發現。兩個模式都不改碼，只把問題指向 <code>/debug</code>、<code>/develop</code>，或寫成清單。它的第一步是一道路由閘：有 verify 就走 verify，有 review 就走 review，沒給模式就印出選項停下來等，因為跑錯模式不會報錯，只會讓你站在錯的問題上做決定。
+</blockquote>
+
+<p>入口認清楚了，接下來要真的走進去。下一節先看 <code>verify</code>：它怎麼把規格翻成一條一條可以親眼確認的行為，又怎麼在跑完之後，給出一個你不能捏造的判斷。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./verify-runtime-proof.html">下一步：verify：把應用跑起來，用證據下判斷 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="verify 通常在流程的哪個時間點跑？" data-correct="0" data-explain="verify 要跑真實應用，所以排在 /develop 之後、有東西可以跑的時候。">
+  <button class="opt">在 /develop 完成之後</button>
+  <button class="opt">在開 PR 被合併之後</button>
+  <button class="opt">在 /scope 開始之前</button>
+  <button class="opt">在 /audit 建立規範之前</button>
+</div>
+
+<div class="quiz" data-question="review 為什麼堅持要用不同的模型？" data-correct="1" data-explain="同一個模型審自己的輸出會共享盲點，換一個模型才能看見作者看不見的地方。">
+  <button class="opt">不同模型跑起來速度比較快</button>
+  <button class="opt">同模型審自己會共享盲點</button>
+  <button class="opt">不同模型的收費比較便宜</button>
+  <button class="opt">同模型不支援程式碼審查</button>
+</div>
+
+<div class="quiz" data-question="只打 /check 而不帶模式字時，它會怎麼做？" data-correct="2" data-explain="沒給模式就印出選項、停下來等，不猜也不預設。">
+  <button class="opt">直接預設執行 verify 模式</button>
+  <button class="opt">直接預設執行 review 模式</button>
+  <button class="opt">印出選項並停下來等你</button>
+  <button class="opt">兩個模式同時一起執行</button>
+</div>
+
+<div class="quiz" data-question="/check 的兩個模式對程式碼的權限是什麼？" data-correct="0" data-explain="兩個模式都只讀不改，發現問題只會指向 /debug、/develop 或寫成清單。">
+  <button class="opt">都只讀，不修改任何程式碼</button>
+  <button class="opt">都能改，順手修掉小問題</button>
+  <button class="opt">verify 可改，review 只讀</button>
+  <button class="opt">review 可改，verify 只讀</button>
+</div>
+
+<div class="quiz" data-question="選擇 both 時的執行順序是什麼？" data-correct="2" data-explain="先 verify 再 review，因為 review 要審的是已經確認會動的程式碼。">
+  <button class="opt">先 review 再接著 verify</button>
+  <button class="opt">兩個模式完全同時並行</button>
+  <button class="opt">先 verify 再接著 review</button>
+  <button class="opt">隨機挑一個先跑都可以</button>
+</div>
+
+<div class="quiz" data-question="它為什麼用純文字面板而不是互動選單？" data-correct="1" data-explain="純文字面板在每個 AI 工具裡行為一致，互動選單則不一定叫得出來。">
+  <button class="opt">純文字看起來比較專業</button>
+  <button class="opt">面板在每個工具行為一致</button>
+  <button class="opt">選單無法顯示程式碼片段</button>
+  <button class="opt">面板執行的速度比較快</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /check：合併前的驗證與審查 · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
+
+

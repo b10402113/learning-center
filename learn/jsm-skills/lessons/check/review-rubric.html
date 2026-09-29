@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>review 的尺：嚴重度、裁決與發現清單</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>review 的尺：嚴重度、裁決與發現清單</h1>
+<p class="meta">Step 4/4 · /check：合併前的驗證與審查</p>
+
+<h2>學習目標</h2>
+<p>能說出審查子代理用的那把尺：staff engineer 的心智、八大檢查優先序、四級嚴重度、四種裁決、發現檔的格式，以及測試訊號三態下怎麼判斷測試是否足夠。</p>
+
+<h2>前言：一句「有問題」，到底該不該合？</h2>
+
+<p>上一節把審查子代理叫起來了，它跑完回來，丟下一句「我發現一些問題」。你看著這句話，還是不知道下一步該做什麼，是要立刻停下來修，還是可以先合併再說？一句沒有輕重、沒有位置、沒有理由的「有問題」，對你幾乎沒有幫助。</p>
+
+<p>一份有用的審查，講的從來不是「我覺得不行」，而是「問題在這裡、為什麼重要、你想怎麼修、它有多嚴重」。這一節要看的，就是子代理手上那把用來做這些判斷的尺。它的每一個刻度都寫在評分標準裡，而且是可以拆解、可以模仿的，你看懂之後，也能拿同一把尺去審別人的程式碼。</p>
+
+<h2>心智：staff engineer 在看隊友的 PR</h2>
+
+<p>先講立場。審查子代理被設定成一個資深工程師，在看你隊友送來的 PR。它的任務是讓這個改動在出貨之前變得<strong>正確、安全、可維護</strong>，而不是把它改寫成自己偏好的樣子。這個區別很關鍵，因為「這行程式碼有 bug」和「我個人喜歡另一種寫法」是兩種完全不同等級的意見，混在一起講，作者就無法判斷哪些必須處理。</p>
+
+<p>所以每一個發現都必須滿足三個條件：<strong>具體</strong>（指出是哪個檔案的哪一行）、<strong>有理由</strong>（說明它為什麼重要）、<strong>可行動</strong>（告訴作者該往哪個方向修）。它也被要求講出真正做得好的地方。一份從頭到尾只有抱怨的審查並不誠實，因為任何真實的改動裡都一定有些地方是對的，把它們指出來，作者才知道哪些做法值得保留。最後再強調一次：它不改程式碼，只報告。</p>
+
+<h2>八大檢查優先序</h2>
+
+<p>讀 diff 的時候，子代理不是想到哪看到哪，而是照著一個固定的優先序逐項檢查。順序本身就是一種判斷，愈前面愈可能立刻造成傷害。</p>
+
+<table>
+<thead>
+<tr><th>順序</th><th>檢查面</th><th>典型問題</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>正確性</td><td>邏輯錯、off-by-one、漏處理 null、async/await 用錯、競態、狀態轉移破掉、回傳形狀不對</td></tr>
+<tr><td>2</td><td>安全性</td><td>未驗證的輸入、injection、缺少權限檢查、機密寫進程式碼或日誌、越權存取</td></tr>
+<tr><td>3</td><td>錯誤處理與韌性</td><td>吞掉錯誤、空的 catch、把內部細節洩漏給使用者、缺少逾時或重試、資源沒關</td></tr>
+<tr><td>4</td><td>效能與規模</td><td>N+1 查詢、無上限的迴圈或記憶體、該搬出熱迴圈的工作、缺少分頁、缺索引</td></tr>
+<tr><td>5</td><td>API 與合約設計</td><td>破壞公開介面、命名跟專案不一致、抽象洩漏、參數該收成物件</td></tr>
+<tr><td>6</td><td>可維護性</td><td>死碼、該抽的重複、函式做太多、命名不清、魔術數字、只解釋「做什麼」的註解</td></tr>
+<tr><td>7</td><td>慣例與決策遵循</td><td>違反 <code>AGENTS.md</code> 的規則、與相關規格矛盾（專案規則勝過個人偏好）</td></tr>
+<tr><td>8</td><td>測試是否足夠</td><td>新的分支邏輯沒有對應測試、斷言沒有意義、只測了 happy path</td></tr>
+</tbody>
+</table>
+
+<p>其中第一項值得多說一句。正確性檢查要追的是「不是顯而易見的那些路徑」，也就是除了主流程之外的分支、邊界與失敗情境，因為 bug 幾乎都躲在那些地方。看 diff 的一個片段很容易漏掉周邊脈絡，所以子代理會把每個改動檔案整份讀完，而不是只看那一小塊差異。</p>
+
+<h2>四級嚴重度</h2>
+
+<p>每一個發現都要標上嚴重度，這四級決定了「合併前是否必須處理」。</p>
+
+<table>
+<thead>
+<tr><th>級別</th><th>意義</th><th>對合併的影響</th></tr>
+</thead>
+<tbody>
+<tr><td>🔴 Blocker</td><td>bug、安全漏洞、資料遺失，或合約被破壞，會在正式環境造成錯誤</td><td>合併前必須修</td></tr>
+<tr><td>🟠 Major</td><td>明顯的正確性、效能或可維護性問題，很快會咬人</td><td>應該合併前修</td></tr>
+<tr><td>🟡 Minor</td><td>真實但不急：漏了邊界、一點低效、程式碼不清楚</td><td>儘快修，不擋合併</td></tr>
+<tr><td>⚪ Nit</td><td>風格、命名或個人偏好</td><td>作者自行決定</td></tr>
+</tbody>
+</table>
+
+<p>這裡的難處不是分類本身，而是誠實。把小毛病膨脹成 blocker，會很快磨掉你對這份審查的信任；反過來，把一個真的 bug 埋成 nit，後果更嚴重。評分標準因此特別要求：如果不確定某個東西算不算 bug，就明說「我不確定」，並解釋它可能造成的風險，而不是硬猜一個嚴重度。一個誠實的不確定，比一個假裝確定的分級有用得多。</p>
+
+<h2>四種裁決</h2>
+
+<p>把嚴重度最高的那幾個發現收攏起來，就得到一整份審查的裁決。裁決有四種：沒有任何 blocker 或 major，就是 <strong>Approve</strong>；沒有 blocker 或 major、但有幾個 minor 或 nit，是 <strong>Approve with nits</strong>，作者可以自行取捨；有一個以上的 major、但沒有 blocker，是 <strong>Changes requested</strong>；有一個以上的 blocker，就是 <strong>Blocked</strong>。</p>
+
+<p>這個裁決跟你接下來要做的事直接綁在一起。Approve 或 Approve with nits 可以往合併走；Changes requested 要先把 major 處理掉；Blocked 則是非修不可。它同時也是子代理回傳給母體模型的那份摘要的主角，讓對話最上面第一眼就看到「現在能不能合」。</p>
+
+<h2>測試充足度：看訊號三態</h2>
+
+<p>八大檢查的最後一項是測試，而這一項最容易被審錯。它的關鍵是：先看專案的測試訊號是哪一種，再決定用什麼標準去評。</p>
+
+<p>如果訊號是 <code>configured</code>，也就是專案有設定好的測試框架，那就正常評估。新增或改動的邏輯如果沒有測試，至少算 Minor；如果那是分支邏輯、錯誤處理或與安全相關，就要升到 Major。子代理也會去挑那些「有測但測不出東西」的測試，例如斷言沒有意義、只覆蓋 happy path、或只測 mock 而不是測行為。另外，改了既有行為卻沒有同步更新測試，本身就是一個發現。</p>
+
+<p>如果訊號是 <code>none-by-design</code>，代表專案刻意選擇不要測試框架，它的關卡是型別檢查加上 <code>/check verify</code>。這時候子代理<strong>不會</strong>提「缺少測試」或「應該加覆蓋率」，也不會說這個專案「沒有安全網」。因為安全網就是那個型別加驗證的關卡，把它當成測試的等效物來看待。硬要一個自己選擇不要測試套件的專案補測試，只是噪音。取而代之，它會就事論事地評正確性與安全性，並在風險處指出「這個關卡應該要抓到什麼」。</p>
+
+<p>如果訊號是 <code>none-yet</code>，也就是既沒有測試框架、也沒有明講任何慣例，那就是真的缺口。這種情況它會在裁決層提一次（不逐檔重複），並且因為少了安全網，把正確性相關的發現看得更重。至於動手補測試，那不是審查的工作，是 <code>/test</code> 的事。</p>
+
+<h2>發現檔與回傳的摘要</h2>
+
+<p>所有發現最後會寫成一份 markdown 檔，路徑由上一節的流程決定。檔案的開頭是基本資料（誰審的、審了幾個檔、裁決），接著是一段兩到四句的摘要，然後依嚴重度分節：Blocker、Major、Minor、Nits，每個發現都照「問題、為什麼重要、建議怎麼修」的結構寫。再下面還有兩個段落：一個列出這次改動真正的優點，一個評估測試覆蓋情況。沒有任何發現的嚴重度分節會直接省略，不會留下一個空的「Blockers」標題。</p>
+
+<p>檔案寫完後，子代理只回傳一段固定的精簡摘要給母體，內容包含審查者、範圍、檔案路徑、裁決、blocker 清單、major 清單、minor 與 nit 的數量，以及一兩句優點。它<strong>不會</strong>把整份 diff 或整份發現檔回貼過來，因為那些都已經在檔案裡，母體只需要知道結論與行動項。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+審查子代理是一個資深工程師，在讀隊友的 PR：目標是讓改動正確、安全、可維護，不是改成自己的口味，每個發現都要具體、有理由、可行動。它照八大優先序檢查，正確性與安全性排最前面。每個發現標上四級嚴重度（Blocker、Major、Minor、Nit），誠實拿捏，不確定就說不確定。整份審查給四種裁決之一（Approve、Approve with nits、Changes requested、Blocked），並把發現寫成固定格式的檔案，只回傳一段精簡摘要。
+</blockquote>
+
+<p>到這裡，<code>/check</code> 的兩條腿你都認得了：<code>verify</code> 用真的跑一遍來證明功能會動、符合規格；<code>review</code> 用換一個模型來補上驗收看不出來的品質問題。兩個都不改碼，都把問題精準地丟回該處理的那一關。試著在你的練習專案上，挑一個剛做完的功能，把這兩條各跑一次，你會對「合併前到底該確認什麼」有一組很具體的答案。</p>
+
+<div class="lesson-nav">
+  <div><a href="./review-cross-model.html">← 上一步：review：換一個模型，替你看見盲點</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="每個審查發現都必須滿足哪三個條件？" data-correct="0" data-explain="具體指出檔案行號、有理由說明為何重要、可行動說明該做什麼。">
+  <button class="opt">具體、有理由、可行動</button>
+  <button class="opt">快速、便宜、好懂</button>
+  <button class="opt">樂觀、正向、鼓勵</button>
+  <button class="opt">保密、匿名、客觀</button>
+</div>
+
+<div class="quiz" data-question="八大檢查面裡排在最前面的是哪一項？" data-correct="1" data-explain="正確性排第一，因為它最可能立刻造成傷害，連非主流程的路徑都要追。">
+  <button class="opt">可維護性</button>
+  <button class="opt">正確性</button>
+  <button class="opt">效能與規模</button>
+  <button class="opt">測試是否足夠</button>
+</div>
+
+<div class="quiz" data-question="會造成正式環境錯誤、合併前必須修的級別是什麼？" data-correct="0" data-explain="Blocker 是 bug、安全漏洞、資料遺失或合約破壞，必須合併前修。">
+  <button class="opt">🔴 Blocker</button>
+  <button class="opt">🟠 Major</button>
+  <button class="opt">🟡 Minor</button>
+  <button class="opt">⚪ Nit</button>
+</div>
+
+<div class="quiz" data-question="有一個以上 major 但沒有 blocker 時，裁決是什麼？" data-correct="2" data-explain="有 major 沒 blocker 就是 Changes requested，先把 major 處理掉。">
+  <button class="opt">Approve</button>
+  <button class="opt">Approve with nits</button>
+  <button class="opt">Changes requested</button>
+  <button class="opt">Blocked</button>
+</div>
+
+<div class="quiz" data-question="訊號是 none-by-design 時，審查者該怎麼評測試？" data-correct="2" data-explain="專案刻意不用測試框架，安全網是型別加驗證，所以不提缺測試，改評正確性與安全性。">
+  <button class="opt">在每一個檔案都提缺少測試</button>
+  <button class="opt">偶爾提一次應該補測試</button>
+  <button class="opt">不提缺測試，改評正確性</button>
+  <button class="opt">直接說這專案沒有安全網</button>
+</div>
+
+<div class="quiz" data-question="子代理寫完發現檔之後，回傳給母體的是什麼？" data-correct="2" data-explain="只回傳一段固定格式的精簡摘要，不貼 diff、也不貼整份發現檔。">
+  <button class="opt">完整的 git diff 內容</button>
+  <button class="opt">整份發現檔的全文</button>
+  <button class="opt">一段固定格式的精簡摘要</button>
+  <button class="opt">什麼都不回傳給母體</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /check：合併前的驗證與審查 · Step 4/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
+
+

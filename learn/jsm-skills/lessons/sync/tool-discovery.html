@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>新工具要不要找 Skill 與 MCP：先問再做</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>新工具要不要找 Skill 與 MCP：先問再做</h1>
+<p class="meta">Step 3/6 · /sync：把知識對回 repo</p>
+
+<h2>學習目標</h2>
+<p>能說明 Step 2.5 只在新增大工具時觸發、TOOL-CONSENT 的「問是義務、搜尋不是」規則，以及為什麼探索要丟進唯讀子代理並回傳精簡候選清單。</p>
+
+<h2>前言：你裝了 Stripe，agent 卻還照著三年前的舊寫法</h2>
+
+<p>這次的改動幫專案接上了金流，你在依賴清單裡加了 Stripe。程式碼你寫得順，但你心裡有個隱約的擔心：你的 agent 對 Stripe 的認識可能停在訓練資料的年代，而金流的東西寫錯一個欄位就可能出事。如果有一套現成的 Agent Skill，把 Stripe 的真實慣例餵給 agent，它就不會用過時的寫法。</p>
+
+<p>這正是 <code>/sync</code> 的 Step 2.5 想處理的事：當這次改動新增了「重量級的外部工具」，它會主動幫你想這件事。但這個動作有個很特別的規則，叫做「問是義務，搜尋不是」。這個岔路怎麼設計，值得單獨看一遍。</p>
+
+<h2>什麼時候會觸發：只在新增大工具時</h2>
+
+<p>這一步不是每次都跑。它只在你改了依賴清單，或 diff 明顯新增了一個重要的外部工具時，才會啟動。而且它刻意排除掉一般的工具函式庫，因為那些沒有什麼值得探索的長期工作流或整合。它關心的類別很具體：框架、router、樣式或 UI kit、資料庫、ORM 或查詢層、認證與 session、金流、email 與通知、儲存與上傳、搜尋、佇列與背景工作、AI provider 與向量資料庫、瀏覽器或 runtime 測試、observability、hosting 與部署。它會從 manifest 的差異裡找出這些新面孔，也會把套件名稱與常見別名一起放進來，而且不會在第一個技術就停手。</p>
+
+<p>找到候選之後，它會先過濾掉「已經有人處理過」的項目：已經安裝的 skill、已經連上的 MCP、或 <code>AGENTS.md</code> 裡已經記錄為「拒絕」的工具，都不再重複問。</p>
+
+<h2>核心規則：問是義務，搜尋不是</h2>
+
+<p>接下來是這個設計最花心思的地方。它不是直接去網路上搜一輪，而是先停下來問你。而且它把界線畫得很清楚：</p>
+
+<blockquote>
+<strong>提問是強制的，搜尋不是。</strong> 在你做出選擇之前，不會有任何東西被搜尋、抓取、安裝或啟動。它會給你四個選項：幫我找、我自己指名、不用並記錄拒絕、之後再說。只有第一個選項可以啟動搜尋指令。它永遠不會偷偷跳過這個詢問，也永遠不會在你同意之前先跑一次搜尋。
+</blockquote>
+
+<p>這個 <code>TOOL-CONSENT</code> 區塊不是 <code>/sync</code> 獨有的，它在 <code>/architect</code>、<code>/audit</code> 裡一模一樣地重複出現，而且註記寫著「要改就三份一起改，否則都別改」。之所以刻意重複而不是共用一份，是因為每個 skill 要能獨立散布與安裝，這是這個 repo 裡少數「明知重複也要留著」的例外。</p>
+
+<p>提問的內容也有固定形狀。它會先說出這次新增了哪些工具，用一句話解釋「Agent Skill 給的是這個工具的真實慣例，MCP server 給的是對真實系統的即時存取」，然後問：要不要幫你找這些工具的 Agent Skill 與 MCP server？選項包括「是，幫我找」（標為推薦）、「我自己指名要哪些」、「不用，跳過」、「之後再說」。只有在選「是」的時候，才會繼續往下。</p>
+
+<h2>為什麼要丟進唯讀子代理</h2>
+
+<p>假設你選了「幫我找」，它也不會在主線上自己搜。它會把清單交給一個<strong>唯讀</strong>的探索子代理去跑。這個子代理有幾個特徵：它設定一個明確、便宜又快的模型層級（不繼承你當下的模型），只回傳一份精簡的候選清單。</p>
+
+<p>這樣做是為了保護 <code>/sync</code> 自己的 context。搜尋網頁會帶回大量原始內容，如果這些東西全塞進主線，context 很快就會被稀釋成沒用的雜訊。把探索隔離出去，主線只拿到「哪些 skill 值得裝」這幾行結論就夠了。如果當下的 agent 不支援子代理，它才會退而在主線搜尋；如果連搜尋能力都沒有，就跳過並記下來。</p>
+
+<h2>搜尋的節制：有上限、有快取</h2>
+
+<p>即使開始搜了，它也守著預算。總共最多五次網頁搜尋、八個頁面，優先看官方 registry 與官方文件。搜尋用的指令是 <code>npx skills find &lt;tool-or-package&gt;</code>，如果結果太弱，就換套件或組織名稱的別名再試一次。MCP 的搜尋則是選配，不是必要。</p>
+
+<p>它還會把結果快取在 <code>docs/.agent-cache/tool-discovery/&lt;slug&gt;.md</code>，三十天內重複使用，並在啟用前再過濾一次已安裝與已拒絕的項目。這是個務實的省錢設計：同一個工具不需要反覆上網查。</p>
+
+<h2>最後一步：多選面板，而且絕不自動安裝</h2>
+
+<p>搜完之後，它會把找到的 Agent Skill 一次放進一個多選面板，依技術分組，問你「要安裝哪些？」並附上跳過與拒絕。MCP 則用另一個面板單獨問。這裡的鐵則是：<strong>永遠不會自動安裝或自動連線</strong>。</p>
+
+<p>你勾選的 skill 用 <code>npx skills add &lt;owner&gt;/&lt;repo&gt; -y</code> 安裝；MCP 則引導你去自己的 connector 或 MCP 設定裡連上，連上之後工具就會自動被使用。最後它把結果整理成三個欄位帶著走：這次裝了哪些 skill、哪些 MCP 被選中或推薦、哪些工具被拒絕或跳過。這些欄位會在寫入階段被記進對應的 <code>AGENTS.md</code>。如果什麼都沒找到、或這個環境根本沒有搜尋能力，就一律當成 <code>none</code>。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+Step 2.5 只在新增大工具時觸發，會從 manifest 差異裡辨識框架、資料庫、金流這類重量級依賴，並濾掉已被 skill／MCP／拒絕清單涵蓋的項目。它的核心是 <code>TOOL-CONSENT</code>：提問是義務，搜尋不是，四個選項裡只有「幫我找」能啟動搜尋，而且絕不靜默跳過或先搜後問。搜尋會隔離進一個便宜、唯讀的子代理，回傳精簡候選，並守著「最多 5 次搜尋、8 個頁面」與三十天快取的上限。最後用多選面板讓你決定，永遠不自動安裝或連線，結果以三個欄位帶進寫入階段。
+</blockquote>
+
+<p>到這裡，變更圈好了、新工具也問過了。接下來就是真正的對帳動筆。它分兩大類知識載體，先處理 <code>AGENTS.md</code>。下一節要看它怎麼「只加必要的一行」。</p>
+
+<div class="lesson-nav">
+  <div><a href="./scope-the-change.html">← 上一步：從 git 圈出這次要對的變更</a></div>
+  <div><a href="./reconcile-agents-md.html">下一步：把 AGENTS.md 對回 repo：只加必要的一行 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Step 2.5 的工具探索大約在什麼時候觸發？" data-correct="2" data-explain="只在依賴清單有變動，或 diff 明顯新增重要外部工具時才啟動。">
+  <button class="opt">每一次執行 /sync 時都會先跑一輪</button>
+  <button class="opt">只要有任何新檔案被加入就會觸發</button>
+  <button class="opt">依賴清單有變動或新增重要工具時</button>
+  <button class="opt">只有在工程師主動輸入指令時觸發</button>
+</div>
+
+<div class="quiz" data-question="TOOL-CONSENT 區塊把「問」與「搜」的關係定義成什麼？" data-correct="1" data-explain="提問是強制的，搜尋不是；沒得到同意前不會搜尋或安裝任何東西。">
+  <button class="opt">搜尋是義務，提問只是禮貌性的提醒</button>
+  <button class="opt">提問是義務，搜尋要等同意後才能做</button>
+  <button class="opt">兩者都交給子代理全權決定即可</button>
+  <button class="opt">先搜尋一輪，再把結果拿來問你</button>
+</div>
+
+<div class="quiz" data-question="來自 TOOL-CONSENT 的四個選項中，哪一個可以啟動搜尋？" data-correct="3" data-explain="只有「幫我找」會啟動搜尋；其餘三個都不跑任何搜尋指令。">
+  <button class="opt">我自己指名要哪些工具就好</button>
+  <button class="opt">不用了，直接跳過這個步驟</button>
+  <button class="opt">之後再說，先把候選記下來</button>
+  <button class="opt">是，幫我找這些工具的資源</button>
+</div>
+
+<div class="quiz" data-question="為什麼搜尋要隔離到一個唯讀子代理裡執行？" data-correct="0" data-explain="避免大量原始網頁內容塞進主線稀釋 context，子代理只回傳精簡候選結論。">
+  <button class="opt">避免原始網頁內容塞爆主線的 context</button>
+  <button class="opt">因為主線的模型比較貴不能跑搜尋</button>
+  <button class="opt">因為只有子代理才有辦法連上網路</button>
+  <button class="opt">因為子代理才能修改安裝的設定檔</button>
+</div>
+
+<div class="quiz" data-question="關於搜尋的上限與快取，下列敘述何者正確？" data-correct="2" data-explain="它有「最多 5 次搜尋、8 個頁面」的上限，並把結果快取約 30 天。">
+  <button class="opt">沒有上限，直到找到滿意結果才停</button>
+  <button class="opt">上限是每次只准搜尋同一個頁面</button>
+  <button class="opt">最多 5 次搜尋、8 頁，並快取 30 天</button>
+  <button class="opt">搜尋結果一定要即時連線、不得快取</button>
+</div>
+
+<div class="quiz" data-question="搜尋結束、你做出選擇之後，/sync 對安裝的態度是什麼？" data-correct="1" data-explain="它用多選面板讓你決定，永遠不會自動安裝或自動連線。">
+  <button class="opt">自動把最熱門的 skill 全部裝起來</button>
+  <button class="opt">依你的選擇安裝，絕不自動安裝</button>
+  <button class="opt">一律拒絕安裝，只留下文字紀錄</button>
+  <button class="opt">先裝再說，之後不喜歡可以移除</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /sync：把知識對回 repo · Step 3/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

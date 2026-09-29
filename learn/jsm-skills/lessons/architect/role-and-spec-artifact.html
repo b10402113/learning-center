@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>/architect 管什麼：一份規格的誕生</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>/architect 管什麼：一份規格的誕生</h1>
+<p class="meta">Step 1/5 · /architect：從請求到規格</p>
+
+<h2>學習目標</h2>
+<p>能說出 <code>/architect</code> 的角色與它擁有的產物，並指認一份 spec 的落點（<code>$SPEC_DIR</code>）、形狀（單檔或目錄）與 create / update / supersede 三個操作各自何時使用。</p>
+
+<h2>前言：當「決定」沒有被留下來</h2>
+
+<p>你對 AI 說「幫我設計登入功能」。它可能點點頭就開始寫程式：選了 cookie 存 session、挑了一套密碼雜湊演算法、順手決定了 token 的有效期限。你當下看過去覺得沒問題，可是三週後資安要求你說明「為什麼不用某一種做法」時，你才發現那個「為什麼」從沒被寫下來，只留在當時的對話裡。</p>
+
+<p>另一種常見的失敗是反向的：AI 丟給你一張二十題的清單，一題一題問完，你回答得很累，最後卻沒有得到一個明確的結論。它把問題都問了，但沒有替你把答案收攏成一個可以照著蓋的東西。</p>
+
+<p><code>/architect</code> 要解決的就是這件事。它把「決定」本身當成要交付的產物：陪你做完一輪有結構的訪談，比較過選項，給出清楚的推薦，然後把結論寫成一份規格。這份規格是它存在的理由，也是下一個階段 <code>/develop</code> 照著動工的依據。</p>
+
+<p>這一節先不談訪談怎麼進行，先把最底層的問題弄清楚：它到底產出什麼、放到哪裡、用什麼形狀放。</p>
+
+<h2>/architect 是什麼、不是什麼</h2>
+
+<p><code>/architect</code> 是一個「設計決定」的 skill。它把一句模糊的請求（「設計 auth」、「挑一套技術棧」、「統一錯誤處理」）變成一紙經過確認的建置規格，預設放在 <code>docs/specs/</code>。它的工作流程是：跑結構化探索、比較選項、給出明確推薦，然後自己把規格寫下來。</p>
+
+<p>它有四種模式，下一節會逐一拆開；這一節先記住它的本質是「一次面對一個承重的技術決定」。</p>
+
+<p>它刻意不碰某些東西。它不寫程式，也不更新 <code>AGENTS.md</code> 或 <code>CLAUDE.md</code>，那些是 <code>/sync</code> 的責任。它的產物就是規格本身，加上規格需要的佐證。</p>
+
+<p>還有一個分工值得先記住：<strong>規格由主執行緒親手寫，subagent 只負責讀。</strong>它會派出的幫手只有三種，全都是唯讀的：一個讀既有程式碼的 <code>scout</code>、一個上網查現況的 <code>researcher</code>，以及最後讀草稿做交叉檢查的那一位。而且它們一律用「最便宜又足以勝任」的模型，不會繼承你正在用的 session 模型。這樣分工有兩個好處：規格這種承重產物不會交到不可靠的手上，而掃碼、查網這類會灌進大量檔案的雜活，也不會把主對話的 context 撐爆。</p>
+
+<h2>四個操作：create、update、supersede</h2>
+
+<p>面對一個設計主題，<code>/architect</code> 先判斷這是哪一種操作，因為四種操作的流程不一樣。</p>
+
+<table>
+<thead>
+<tr><th>操作</th><th>什麼時候用</th><th>做什麼</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>create</strong></td><td>一個全新的決定</td><td>寫一份新規格，狀態從 <code>Proposed</code> 開始</td></tr>
+<tr><td><strong>update</strong></td><td>同一個決定要演化</td><td>就地編輯既有規格，跳過設計訪談</td></tr>
+<tr><td><strong>supersede</strong></td><td>要取代一個過去的決定</td><td>寫新規格，並把舊規格標成 <code>Superseded by [NNNN]</code></td></tr>
+<tr><td><strong>ratify</strong></td><td>要補課一份 <code>Assumed</code> 規格</td><td>把 <code>/develop</code> 先蓋後決的假設，補成正式決定</td></tr>
+</tbody>
+</table>
+
+<p><code>ratify</code> 比較特別，它對應的是 <code>/develop</code> 的「先蓋再說」逃生口，完整的故事留到第 5 步。這裡先知道有這個操作就好。</p>
+
+<p>在正式開始前，pre-flight 會掃描既有規格，找出明顯重疊的那些。如果找到，它不會擅自決定，而是先問你：這要當成一個新決定、就地更新既有規格，還是直接取代它？預設選項會依重疊程度給建議，幾乎一模一樣的偏向更新或取代，只是鄰近的則偏向開新規格。</p>
+
+<h2>規格歸誰、放哪裡</h2>
+
+<p>所有 spec 檔只有 <code>/architect</code> 能建立或更新。它順手產生的佐證（例如現況清單、審查紀錄）也有固定去處：目錄形狀的規格放進 <code>rationale.md</code>，單檔規格就寫在裡面，不會散落到 <code>docs/scope/</code>，因為那是 <code>/scope</code> 的地盤。</p>
+
+<p>規格放在哪，由 repo 的形狀決定：</p>
+
+<table>
+<thead>
+<tr><th>Repo 形狀</th><th>規格落點</th></tr>
+</thead>
+<tbody>
+<tr><td>單一 repo</td><td><code>docs/specs/</code></td></tr>
+<tr><td>Monorepo，某個 workspace 的決定</td><td><code>docs/specs/&lt;workspace&gt;/</code></td></tr>
+<tr><td>Monorepo，repo 層級的決定</td><td><code>docs/specs/_root/</code></td></tr>
+</tbody>
+</table>
+
+<p>編號是「每個位置各自算」的。它掃描該目錄裡最大的 <code>NNNN</code>，加一，補齊四位數。把解析出來的位置叫做 <code>$SPEC_DIR</code>，後面都用這個名字。</p>
+
+<p>還有一個底線：規格預設住在 <code>docs/</code> 底下，但如果 <code>docs/</code> 本身是一個發佈出去的說明網站（偵測到 Docusaurus、VitePress、MkDocs、Starlight 或 Nextra），就會改住 <code>.workflow/</code>，免得工作檔案混進要公開的內容裡。</p>
+
+<h2>形狀：單檔還是目錄</h2>
+
+<p>和落點無關，規格還有第二個獨立選擇：形狀。判斷依據是「這個決定有多大」。</p>
+
+<p>簡單的決定就是一顆單一檔案 <code>$SPEC_DIR/NNNN-title.md</code>，所有內容行內寫緊。當決定是<strong>保護傘</strong>（底下會拆出兩個以上相關子決定）、<strong>沉重或基礎的決定</strong>，或者你希望附一份 <code>verify.md</code>，就改用目錄形狀：<code>$SPEC_DIR/NNNN-title/</code>，裡面放一個 <code>index.md</code> 當主檔、一個 <code>rationale.md</code> 在旁邊，傘狀的話再加上幾個子規格 <code>NNNN-child.md</code>。</p>
+
+<p>兩個常見的錯誤要避開。第一，不要寫成 <code>NNNN-title/NNNN-title.md</code>，數字由目錄本身帶著，主檔的名字固定是 <code>index.md</code>。第二，不要預設就用目錄，<strong>能用單檔就用單檔</strong>，只有真的需要才升級。</p>
+
+<p>檔名規則是 kebab-case、全小寫、最多五個字、開頭不加冠詞。例如 <code>0001-adopt-relational-db-for-primary-storage.md</code>，講的是「採用關聯式資料庫當主要儲存」，而不是一串又長又含糊的描述。</p>
+
+<h2>為什麼目錄形狀要拆成兩個檔案</h2>
+
+<p>目錄形狀裡，<code>index.md</code> 是 <code>/develop</code> 要讀的建置規格，<code>rationale.md</code> 是給人看的決定記錄。這條分割是下一節的主角：一份規格同時服務兩個受眾，而它用檔案形狀把兩者分開，讓建置的時候只需要載入前者，不必背著整段推理。</p>
+
+<p>這和整個 skill 的設計手法是同一套。頂層的 <code>SKILL.md</code> 只當協調者，把冗長的操作細節丟進 <code>internal/</code> 底下的檔案，寫作指南這類只在寫入那一刻才需要的東西，也等到真的要寫規格時才讀。這樣在訪談過程中，context 裡不會一直躺著一份根本用不到的寫作手冊。這個手法叫做 progressive disclosure，你在 Tier 1 已經看過，這裡是它在一個真實 skill 裡的樣子。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/architect</code> 是設計決定的 skill，產物是一紙放進 <code>docs/specs/</code> 的規格。規格由主執行緒親手寫，subagent 只讀、只用最便宜的模型。四個操作是 create 開新規格、update 就地演化、supersede 取代舊決定、ratify 補課 Assumed。落點由 repo 形狀決定（單一 repo、monorepo workspace、_root），編號每個位置各自算，這個解析出來的位置叫 <code>$SPEC_DIR</code>；形狀由決定大小決定，預設單檔，遇到保護傘或基礎決定才升成目錄，並拆成 index.md 與 rationale.md。
+</blockquote>
+
+<p>你現在知道規格會落在哪、長什麼形狀。但它裡面到底寫了什麼？下一節要把規格拆開，看它的段落順序、兩個受眾各讀哪些段落，以及那條把所有東西串起來的 AC 主線。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./spec-template-and-audiences.html">下一步：規格的骨架：兩個受眾、一條 AC 主線 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="/architect 最主要的產物是什麼？" data-correct="1" data-explain="它的交付物是規格本身，程式碼留給 /develop，AGENTS.md 由 /sync 維護。">
+  <button class="opt">一份可以直接執行的程式碼</button>
+  <button class="opt">一紙放進 docs/specs/ 的規格</button>
+  <button class="opt">一份更新完成的 AGENTS.md</button>
+  <button class="opt">一組通過驗證的回歸測試</button>
+</div>
+
+<div class="quiz" data-question="哪一個操作會把舊規格標成 Superseded？" data-correct="2" data-explain="supersede 會寫一份新規格，並把被取代的舊規格狀態改成 Superseded by [NNNN]。">
+  <button class="opt">create，建立一份全新的決定</button>
+  <button class="opt">update，就地編輯原本的規格</button>
+  <button class="opt">supersede，用新規格取代舊的</button>
+  <button class="opt">ratify，補課一份未決的假設</button>
+</div>
+
+<div class="quiz" data-question="單一 repo 裡，$SPEC_DIR 預設指向哪個目錄？" data-correct="3" data-explain="單一 repo 的規格放 docs/specs/；monorepo 才細分成 workspace 或 _root。">
+  <button class="opt">專案根目錄底下的 docs/workflow</button>
+  <button class="opt">和 scope 放在同一個 docs/scope</button>
+  <button class="opt">規格自己的 docs/specs/_root</button>
+  <button class="opt">專案根目錄底下的 docs/specs</button>
+</div>
+
+<div class="quiz" data-question="什麼時候該把規格從單檔升級成目錄形狀？" data-correct="2" data-explain="保護傘、沉重或基礎的決定，或需要附 verify.md 時才升級，預設是單檔。">
+  <button class="opt">只要檔案超過一百行就該升級</button>
+  <button class="opt">只要決定會動到兩支檔案就升級</button>
+  <button class="opt">保護傘、基礎或需要 verify 時</button>
+  <button class="opt">只要決定同時涉及前後端就升級</button>
+</div>
+
+<div class="quiz" data-question="/architect 派出的 subagent 負責什麼？" data-correct="1" data-explain="subagent 一律唯讀：讀碼、查網、讀草稿做交叉檢查；規格本身由主執行緒撰寫。">
+  <button class="opt">草擬規格內容與逐句潤稿</button>
+  <button class="opt">只讀：掃碼、查網、讀草稿</button>
+  <button class="opt">直接編輯規格裡缺漏的段落</button>
+  <button class="opt">跑測試並回報有哪些失敗</button>
+</div>
+
+<div class="quiz" data-question="一份新規格的編號是怎麼決定的？" data-correct="0" data-explain="掃描該位置現有規格的最大 NNNN 後加一，四位數零填充，每個位置各自算。">
+  <button class="opt">掃該位置現有編號後加一</button>
+  <button class="opt">由全 repo 的規格總數決定</button>
+  <button class="opt">依建立日期換算成流水編號</button>
+  <button class="opt">沿用它所屬 scope 功能的編號</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · /architect：從請求到規格 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
