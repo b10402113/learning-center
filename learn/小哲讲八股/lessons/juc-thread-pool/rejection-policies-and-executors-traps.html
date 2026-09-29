@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>拒絕策略與 Executors 的坑｜執行緒池打滿、任務堆積</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>拒絕策略與 Executors 的坑：執行緒池滿了，任務該怎麼辦？</h1>
+<p class="meta">執行緒池打滿、任務堆積 · Step 5/6 · 學習目標：比較四種拒絕策略，理解 Executors 五種快捷執行緒池的風險，以及阿里手冊禁止直接使用它們的 OOM 原因。</p>
+
+<h2>前言：池子真的滿了，然後呢？</h2>
+<p>前面我們看過，一個任務會依序填入核心執行緒、工作佇列，以及非核心執行緒。可是，當佇列已經排滿，執行緒數也達到最大值時，新進來的任務就沒有位置了。</p>
+<p>這時候，執行緒池不能只是愣在原地。它必須做出選擇：是把任務退回去、讓提交者自己處理，還是乾脆丟掉？這個「滿載時的兜底規則」，就是<strong>拒絕策略</strong>。</p>
+<p>同樣的問題，也藏在看似方便的快捷方法裡。<code>Executors.newFixedThreadPool(10)</code> 寫起來很短，但為什麼阿里開發手冊卻禁止在生產環境直接使用？這一課會把兩件事放在一起看：執行緒池滿載時如何處理，以及為什麼資源上限不能交給快捷方法決定。</p>
+
+<h2>拒絕策略：滿載時的最後一道防線</h2>
+<p>當佇列已滿、執行緒數也達到最大值，<code>ThreadPoolExecutor</code> 就會觸發拒絕策略。JDK 提供了四種實作 <code>RejectedExecutionHandler</code> 的靜態內部類別。</p>
+<p>可以先用四句話記住它們的差別：<strong>AbortPolicy 報錯、CallerRunsPolicy 自己做、DiscardPolicy 直接丟、DiscardOldestPolicy 丟掉最舊的再收新的。</strong></p>
+
+<figure class="lesson-figure"><img src="./rejection-policies-and-executors-traps-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>AbortPolicy：直接報錯，讓上層知道系統滿了</h3>
+<p>這是執行緒池的預設策略。任務被拒絕時，它會丟出 <code>RejectedExecutionException</code> 執行時異常。</p>
+<p>這種做法看起來比較「不客氣」，但它有一個重要優點：問題不會被悄悄掩蓋。上層程式可以立刻知道執行緒池已經到達瓶頸，接著記錄錯誤、降級，或通知監控系統。</p>
+<p>如果任務遺失會造成嚴重業務問題，報錯通常比靜默丟棄安全。至少系統會把警報拉響，而不是讓任務像掉進黑洞一樣消失。</p>
+
+<h3>CallerRunsPolicy：提交任務的人自己做</h3>
+<p>這個策略不會再從執行緒池裡找執行緒，而是讓<strong>提交任務的那條執行緒</strong>自己執行任務。實務上，這通常就是提交任務的主執行緒。</p>
+<p>它解決了兩個問題。第一，任務不會因為執行緒池滿載而直接遺失。第二，提交者一旦被迫親自處理任務，就沒有辦法繼續高速提交下一批任務。</p>
+<p>這會形成一種負回饋：執行緒池越忙，提交速度就越慢，新的任務洪峰也會被壓低，讓執行緒池爭取到喘息的時間。因此，在不允許丟資料、又希望順便削峰的場景裡，<code>CallerRunsPolicy</code> 是相當穩健的選擇。</p>
+
+<figure class="lesson-figure"><img src="./rejection-policies-and-executors-traps-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>DiscardPolicy：安靜地丟掉新任務</h3>
+<p>它會直接丟棄剛提交的任務，不拋異常，也不執行。這對重要任務來說很危險，因為呼叫端可能完全不知道任務已經消失。</p>
+<p>但如果任務本來就只是輔助資訊，丟掉反而比拖垮整個系統合理。例如某些非核心的日誌採集或統計上報，即使少一部分資料，也不會造成主要業務損失，就可能使用這種策略。</p>
+
+<h3>DiscardOldestPolicy：丟掉排最久的，換進最新的</h3>
+<p>它會先丟棄佇列裡等待最久的任務，也就是隊頭任務，然後再把目前的新任務加入佇列。</p>
+<p>這適合「最新資料比舊資料更有價值」的場景。例如感測器持續送來即時數據時，太久以前的數據可能已經失去意義，保留最新狀態比完成每一筆歷史任務更重要。</p>
+<p>不過，這裡有一個容易踩到的陷阱：如果佇列使用的是優先級佇列，例如 <code>PriorityBlockingQueue</code>，隊頭不一定代表「等待最久」。它可能代表優先級最高的任務。此時丟掉的反而可能是最重要的任務，因此必須特別慎用。</p>
+
+
+<h2>四種策略放在一起比較</h2>
+<table>
+<thead>
+<tr><th>策略</th><th>行為</th><th>適用場景</th></tr>
+</thead>
+<tbody>
+<tr><td>AbortPolicy（預設）</td><td>拋出 <code>RejectedExecutionException</code></td><td>任務完整性要求高，需要即時感知系統瓶頸</td></tr>
+<tr><td>CallerRunsPolicy</td><td>由提交任務的執行緒自己執行</td><td>不允許丟資料，並希望透過提交者變慢來削峰</td></tr>
+<tr><td>DiscardPolicy</td><td>靜默丟棄新任務</td><td>可有可無的非核心任務</td></tr>
+<tr><td>DiscardOldestPolicy</td><td>丟棄隊頭任務，再加入新任務</td><td>只在乎最新資料的場景；使用優先級佇列時要慎用</td></tr>
+</tbody>
+</table>
+
+<h2>Executors 的五種快捷執行緒池</h2>
+<p>除了手動建立 <code>ThreadPoolExecutor</code>，JDK 也提供了 <code>Executors</code> 工廠類別。只要呼叫幾個方法，就能快速建立常見的執行緒池。</p>
+<p>問題是，快捷方法同時把一些重要設定藏了起來，例如佇列容量、最大執行緒數。這就像租一間已經裝潢好的店面：開門很快，但你不一定知道瓦斯管線和電線能承受多少負載。以下看它們各自的用途與風險。</p>
+
+<figure class="lesson-figure"><img src="./rejection-policies-and-executors-traps-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>newFixedThreadPool：固定人數，但佇列沒有上限</h3>
+<p><code>newFixedThreadPool</code> 的核心執行緒數等於最大執行緒數，可以把它想成「固定數量的正式員工，不另外招募臨時工」。它適合負載較重、任務量相對穩定的場景。</p>
+<p>真正的問題在於，它使用 <code>LinkedBlockingQueue</code>，而且沒有指定容量。在 Java 裡，沒有指定容量就等於使用 <code>Integer.MAX_VALUE</code>，實際上可以視為無界佇列。</p>
+<p>因此，當任務進來的速度比處理速度快時，任務會一直堆在佇列裡。執行緒數雖然固定，記憶體卻會持續被佇列裡的任務占用，最後可能因為任務堆積而發生 OOM。</p>
+
+<h3>newCachedThreadPool：來一個招一個，但數量沒有上限</h3>
+<p><code>newCachedThreadPool</code> 的核心執行緒數是 0，最大執行緒數是 <code>Integer.MAX_VALUE</code>。它像一個完全由臨時人員組成的服務站：任務來了就建立執行緒，執行緒閒置 60 秒後就被回收。</p>
+<p>它適合大量、短時間的異步任務，因為可以迅速建立執行緒來處理工作。</p>
+<p>但如果任務提交速度非常快，它也會迅速建立大量執行緒。每條執行緒都需要記憶體保存自己的堆疊，數量一多，就可能同時拖垮 CPU 與記憶體，甚至讓系統直接崩潰。</p>
+
+<h3>newSingleThreadExecutor：只有一個窗口，保證順序</h3>
+<p><code>newSingleThreadExecutor</code> 內部只有一條核心執行緒，因此所有任務會按照提交順序，也就是 FIFO 順序執行。需要嚴格維持先後順序的場景，可以考慮這種模型。</p>
+<p>不過，它和 <code>newFixedThreadPool</code> 有同一個問題：使用了沒有指定容量的無界佇列。如果任務持續進來、唯一的執行緒又處理不完，任務就會越積越多，最後仍然有 OOM 風險。</p>
+
+<h3>newScheduledThreadPool：處理定時與週期任務</h3>
+<p><code>newScheduledThreadPool</code> 用來執行定時或週期性任務，例如延遲一段時間後執行，或每隔固定時間重複執行。</p>
+<p>它可以作為老舊 <code>Timer</code> 類別的替代方案，整體上比 <code>Timer</code> 更安全可靠。</p>
+
+<h3>newWorkStealingPool：讓閒著的執行緒幫忙搬工作</h3>
+<p><code>newWorkStealingPool</code> 是 JDK 8 引入的執行緒池，底層基於 <code>ForkJoinPool</code>。每條執行緒都有自己的任務佇列；當某條執行緒已經沒有工作可做時，就會從其他忙碌執行緒的佇列中「偷」任務來執行。</p>
+<p>這種工作竊取機制適合非常耗時、可以拆成多個部分並行處理的計算任務。</p>
+
+<h2>阿里手冊為什麼禁止直接使用 Executors？</h2>
+<p>阿里開發手冊禁止直接使用 <code>Executors</code> 的快捷方法，核心原因是要避免<strong>資源耗盡</strong>。它希望開發者明確設定核心執行緒數、最大執行緒數、佇列容量與拒絕策略，而不是把這些關鍵決策交給預設值。</p>
+
+<h3>第一類風險：任務無限堆積，撐爆記憶體</h3>
+<p>這類風險主要出現在 <code>newFixedThreadPool</code> 與 <code>newSingleThreadExecutor</code>。它們使用的 <code>LinkedBlockingQueue</code> 沒有指定容量，因此等同於無界佇列。</p>
+<p>可以把它想成一間銀行：櫃檯數量固定，卻允許門外無限排隊。只要消費端處理變慢，或資料庫暫時卡住，等待中的任務就會持續增加。這些任務都需要記憶體保存，最後可能把伺服器記憶體填滿，拋出 <code>OutOfMemoryError</code>。</p>
+
+<h3>第二類風險：執行緒無限增加，撐爆記憶體</h3>
+<p>這類風險主要出現在 <code>newCachedThreadPool</code>。它把最大執行緒數設定為 <code>Integer.MAX_VALUE</code>，幾乎等於「來多少任務，就嘗試建立多少執行緒」。</p>
+<p>這就像大樓遇到人潮時，不是讓人排隊，而是每來一個人就蓋一個新的窗口。高併發時，它可能瞬間建立幾千甚至上萬條執行緒。每條執行緒都會占用堆疊記憶體，最終可能造成系統崩潰或 OOM。</p>
+
+<figure class="lesson-figure"><img src="./rejection-policies-and-executors-traps-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>正確做法：自己把資源上限寫清楚</h2>
+<p>生產環境中，應該手動使用 <code>ThreadPoolExecutor</code> 的建構子，明確指定核心執行緒數、最大執行緒數、有界佇列，以及拒絕策略。</p>
+<p>這樣做的重點，不是程式碼寫得比較長，而是把「系統最多能承受多少工作」這件事攤在檯面上。當負載超過上限時，系統會按照你選擇的規則降速、報錯或丟棄，而不是毫無限制地吃掉記憶體。</p>
+
+<h2>小結</h2>
+<blockquote>
+<p>拒絕策略有四種：<code>AbortPolicy</code> 預設拋出異常，讓上層立刻知道系統已滿；<code>CallerRunsPolicy</code> 由提交者自己執行，既避免任務遺失，也能透過降低提交速度來削峰；<code>DiscardPolicy</code> 靜默丟棄新任務；<code>DiscardOldestPolicy</code> 丟掉隊頭任務後再加入新任務，但搭配優先級佇列時要特別小心。</p>
+<p><code>Executors</code> 提供五種快捷執行緒池，但 <code>newFixedThreadPool</code> 與 <code>newSingleThreadExecutor</code> 使用無界佇列，任務可能一路堆到 OOM；<code>newCachedThreadPool</code> 的執行緒數幾乎沒有上限，可能在高峰期瞬間建立大量執行緒。因此，阿里手冊要求手動建立 <code>ThreadPoolExecutor</code>，用有界佇列與明確的拒絕策略把資源管住。</p>
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./submission-workflow.html">← 上一步：任務提交後的生死四關</a></div>
+  <div><a href="./virtual-threads.html">下一步：虛擬執行緒：把執行緒變便宜之後 →</a></div>
+</div>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="ThreadPoolExecutor 預設的拒絕策略是哪一個？" data-correct="0" data-explain="預設是 AbortPolicy，會拋出 RejectedExecutionException 提醒上層。">
+  <button class="opt">AbortPolicy</button>
+  <button class="opt">CallerRunsPolicy</button>
+  <button class="opt">DiscardPolicy</button>
+  <button class="opt">DiscardOldestPolicy</button>
+</div>
+<div class="quiz" data-question="CallerRunsPolicy 為什麼被認為能順帶達到「削峰」效果？" data-correct="2" data-explain="提交任務的執行緒自己去執行，提交速度自然變慢，形成負回饋給池子喘息。">
+  <button class="opt">因為它會把任務丟回佇列慢慢做</button>
+  <button class="opt">因為它會直接丟棄多餘的任務</button>
+  <button class="opt">因為提交者自己執行會拖慢提交</button>
+  <button class="opt">因為它會暫時關閉部分執行緒</button>
+</div>
+<div class="quiz" data-question="DiscardOldestPolicy 在優先級佇列下要慎用，原因是？" data-correct="1" data-explain="它丟的是隊頭，而在優先級佇列中隊頭是優先級最高的任務。">
+  <button class="opt">它會一次丟掉整條佇列的任務</button>
+  <button class="opt">它丟的隊頭是優先級最高的任務</button>
+  <button class="opt">它會讓新任務的優先級被降低</button>
+  <button class="opt">它會使執行緒數超過最大上限</button>
+</div>
+<div class="quiz" data-question="newFixedThreadPool 的 OOM 風險來自哪個設計？" data-correct="3" data-explain="它使用未指定容量的 LinkedBlockingQueue，等同無界佇列，任務會無限堆積。">
+  <button class="opt">它的核心執行緒數等於最大值</button>
+  <button class="opt">它的最大執行緒數設得太高</button>
+  <button class="opt">它的執行緒空閒六十秒被回收</button>
+  <button class="opt">它的任務佇列是無界的</button>
+</div>
+<div class="quiz" data-question="newCachedThreadPool 的主要隱患是什麼？" data-correct="2" data-explain="最大執行緒數是 Integer.MAX_VALUE，高峰時會瞬間建立海量執行緒。">
+  <button class="opt">它的佇列是無界的會堆積任務</button>
+  <button class="opt">它的核心執行緒無法被回收</button>
+  <button class="opt">它的執行緒數上限幾乎無限</button>
+  <button class="opt">它不支援非同步任務的提交</button>
+</div>
+<div class="quiz" data-question="阿里手冊要求手動建立執行緒池，核心用意是什麼？" data-correct="1" data-explain="強制開發者用有界佇列與明確參數，主動管控資源上限，避免 OOM。">
+  <button class="opt">因為 Executors 的執行速度比較慢</button>
+  <button class="opt">強制開發者主動管控資源的上限</button>
+  <button class="opt">因為手動建立可以避免鎖競爭</button>
+  <button class="opt">因為 Executors 已被標為廢棄方法</button>
+</div>
+<div class="quiz" data-question="哪一種 Executors 執行緒池底層基於 ForkJoinPool？" data-correct="0" data-explain="newWorkStealingPool 基於 ForkJoinPool，使用工作竊取調度任務。">
+  <button class="opt">newWorkStealingPool</button>
+  <button class="opt">newFixedThreadPool</button>
+  <button class="opt">newCachedThreadPool</button>
+  <button class="opt">newScheduledThreadPool</button>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

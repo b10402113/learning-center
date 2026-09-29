@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>類別載入七階段：從 .class 到 Class 物件｜JVM 執行時與類載入</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>類別載入七階段：從 <code>.class</code> 到 <code>Class</code> 物件</h1>
+<p class="meta">JVM 執行時與類別載入 · Step 4/5 · 學習目標：掌握類別載入的七個階段，分清準備階段的零值、初始化階段的真正賦值，以及 <code>static final</code> 編譯期常數的例外。</p>
+
+<h2>前言：<code>static int a = 666</code>，到底哪一刻才會變成 666？</h2>
+<p>你可能看過這樣的程式碼：<code>public static int a = 666;</code>。直覺上，宣告寫完的那一刻，<code>a</code> 好像就應該是 666。但 JVM 實際處理時，會先替 <code>a</code> 配置記憶體，再放入型別的預設值；真正把 666 寫進去，則是後面另一個階段的工作。</p>
+
+<p>也就是說，「準備好空間」和「執行賦值」不是同一件事。中間還隔著類別載入、驗證、解析等步驟。面試若問你：<code>static int a = 666</code> 在哪個階段變成 666？只背「類別載入會初始化」很容易答錯；你必須知道每個階段各自負責什麼。</p>
+
+<p>這一課就把這條流程攤開來看。JVM 不會把 <code>.class</code> 檔案讀進來後直接執行，而是像工廠流水線一樣，依序完成讀取、檢查、配置、解析，最後才執行靜態初始化。</p>
+
+<figure class="lesson-figure"><img src="./class-loading-phases-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>類別載入要解決什麼問題？</h2>
+<p>類別載入，簡單說就是：<strong>把磁碟上的 <code>.class</code> 檔案讀進記憶體，並為它建立一個 <code>java.lang.Class</code> 物件。</strong></p>
+
+<p>這個 <code>Class</code> 物件可以想成應用程式通往該類別的一把鑰匙。你要用反射取得方法、欄位或標註，都要透過它。至於類別的結構資訊，則會放在 JVM 管理的類別資訊區域；應用程式拿到的 <code>Class</code> 物件，則是存取這些資訊的入口。</p>
+
+<p>整個生命週期可以拆成七個階段：</p>
+
+<ol>
+  <li>加載</li>
+  <li>驗證</li>
+  <li>準備</li>
+  <li>解析</li>
+  <li>初始化</li>
+</ol>
+
+<p>這裡常說的「七個階段」，是因為<strong>連接（Linking）</strong>還可以再細分為驗證、準備、解析三個階段；連同加載與初始化來看，就是面試最常考的完整流程。接著依序拆開。</p>
+
+<h2>第一階段：加載（Loading）</h2>
+<p>加載是整個流程中，主要負責讀取類別檔案的階段。JVM 會根據類別的<strong>全限定名</strong>，也就是套件名稱加上類別名稱，找到對應的 <code>.class</code> 檔案，並把其中的二進位位元組流讀進記憶體。</p>
+
+<p>讀取完成後，JVM 會在堆中建立一個代表這個類別的 <code>java.lang.Class</code> 物件。這個物件就是之後使用反射或取得類別資訊的入口。</p>
+
+<figure class="lesson-figure"><img src="./class-loading-phases-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>可以這樣記：</p>
+
+<ul>
+  <li><code>.class</code>：磁碟上的類別檔案。</li>
+  <li>類別資訊：JVM 管理的類別結構資料。</li>
+  <li><code>Class</code> 物件：程式存取該類別資訊的入口。</li>
+</ul>
+
+<p>加載的重點不是「開始執行程式碼」，而是先把類別的原始材料搬進 JVM，讓後續階段有東西可以檢查與處理。</p>
+
+<h2>第二階段：連接（Linking）</h2>
+<p>連接可以想成正式使用類別前的施工階段。JVM 會先確認這份位元組碼能不能安全執行，再替靜態變數準備空間，最後把類別中尚未對應到實際目標的引用解析完成。</p>
+
+<h3>驗證（Verification）：先確認這份位元組碼能不能信任</h3>
+<p>驗證有點像替程式碼「查毒」和「驗身分」。JVM 必須確認這份位元組碼符合虛擬機規範，不能因為檔案損壞或內容不合法，就讓 JVM 執行到一半出現危險狀況。</p>
+
+<p>常見的檢查包括：</p>
+
+<ul>
+  <li>檔案開頭的魔數是否正確，也就是 <code>0xCAFEBABE</code>。</li>
+  <li>位元組碼中是否包含非法的跳轉指令。</li>
+  <li>型別檢查是否通過。</li>
+  <li>操作數堆疊的使用是否符合規則。</li>
+</ul>
+
+<p>如果驗證沒有通過，JVM 就不會放心讓這個類別繼續往下走。這一步解決的是「這份程式碼能不能安全交給 JVM 執行」的問題。</p>
+
+<h3>準備（Preparation）：先開空間，再放入預設值</h3>
+<p>準備階段會替類別變數，也就是使用 <code>static</code> 修飾的變數，分配記憶體並設定預設初始值。</p>
+
+<p>例如：</p>
+
+<pre><code>public static int a = 666;</code></pre>
+
+<p>在準備階段結束時，<code>a</code> 還不是 666，而是整數的預設值 <strong>0</strong>。因為這個階段只負責「把位置準備好」，不會執行程式碼中的賦值動作。</p>
+
+<p>不同型別會有不同的預設值：</p>
+
+<ul>
+  <li>整數型別：<code>0</code></li>
+  <li><code>boolean</code>：<code>false</code></li>
+  <li>物件參考：<code>null</code></li>
+</ul>
+
+<p>等到後面的初始化階段執行 <code>static int a = 666;</code>，<code>a</code> 才會從 0 變成 666。這就是準備與初始化最容易混淆的地方：前者負責配置與零值，後者才負責執行賦值。</p>
+
+
+<h3><code>static final</code> 編譯期常數：準備階段的例外</h3>
+<p>如果宣告的是編譯期就能確定的常數，例如：</p>
+
+<pre><code>static final int a = 666;</code></pre>
+
+<p>它可能在準備階段就直接被設定成 666，而不用等到初始化階段。</p>
+
+<p>原因在於，這種常數的值在編譯時就已經知道。編譯器可能會把它放進 <code>ConstantValue</code> 屬性，JVM 在準備階段就能直接套用這個值。</p>
+
+<p>所以面試時要分清楚兩種情況：</p>
+
+<ul>
+  <li><code>static int a = 666;</code>：準備階段先是 <code>0</code>，初始化階段才變成 <code>666</code>。</li>
+  <li><code>static final int a = 666;</code>：如果是編譯期常數，準備階段就可能直接是 <code>666</code>。</li>
+</ul>
+
+<h3>解析（Resolution）：把名稱線索換成真正目標</h3>
+<p>解析負責處理常數池中的引用。類別剛載入時，某些引用還只是「名稱線索」，稱為<strong>符號引用</strong>；JVM 需要把它換成可以直接找到目標的<strong>直接引用</strong>。</p>
+
+<p>例如，符號引用可能只是字串形式的 <code>com.test.User</code>。它就像一張只寫著店名的紙條，還沒有對應到實際位置。解析之後，JVM 會把它對應到記憶體中真正的類別或欄位位置，之後執行時就能更直接地找到目標。</p>
+
+<figure class="lesson-figure"><img src="./class-loading-phases-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>需要注意的是，解析不一定在所有情況下都一次完成。有些解析可以延後到真正使用該引用時才進行，但它解決的核心問題不變：把「名稱」轉成 JVM 能使用的實際引用。</p>
+
+<h2>第三階段：初始化（Initialization）</h2>
+<p>初始化是類別載入流程中，真正開始執行 Java 程式碼的階段。</p>
+
+<p>JVM 會執行類別的 <code>&lt;clinit&gt;()</code> 方法。這不是你在原始碼中直接寫出的方法，而是編譯器把類別中的靜態變數賦值與靜態程式碼區塊，依照原本的順序整理、合併後產生的類別初始化方法。</p>
+
+<p>例如：</p>
+
+<pre><code>public static int a = 666;</code></pre>
+
+<p>到了初始化階段，這個賦值動作才會被執行，<code>a</code> 才會從準備階段的 <code>0</code> 變成 <code>666</code>。如果類別中還有靜態程式碼區塊，也會按照原始碼出現的順序執行。</p>
+
+<p>因此可以用一句話記住兩個階段的差異：</p>
+
+<blockquote>
+  <p>準備階段先把靜態變數放好並填入零值；初始化階段才執行靜態賦值與靜態程式碼區塊。</p>
+</blockquote>
+
+<p>此外，JVM 會確保同一個類別的 <code>&lt;clinit&gt;()</code> 在多執行緒環境下只被正確執行一次。即使多個執行緒同時第一次使用這個類別，也不會讓靜態初始化被重複執行。這項保證也是靜態內部類別單例能安全延遲載入的基礎之一。</p>
+
+<h2>什麼時候會觸發初始化？</h2>
+<p>類別不一定要等到你執行 <code>new</code> 才開始被載入；而初始化也不是所有「看到類別名稱」的情況都會發生。常見的初始化觸發時機包括：</p>
+
+<ul>
+  <li>使用 <code>new</code> 建立這個類別的實例。</li>
+  <li>讀取或設定這個類別的靜態欄位，但編譯期常數通常是例外。</li>
+  <li>呼叫這個類別的靜態方法。</li>
+  <li>使用反射，例如 <code>Class.forName()</code> 主動載入類別。</li>
+  <li>初始化某個類別時，發現它的父類別還沒有初始化，會先初始化父類別。</li>
+  <li>啟動程式的主類別，也就是包含 <code>main</code> 方法的類別。</li>
+</ul>
+
+<p>這些規則說明了一件事：JVM 通常會在類別第一次被「實際使用」時，才推進到需要的載入或初始化階段，而不是程式一啟動，就把所有類別全部初始化。</p>
+
+<figure class="lesson-figure"><img src="./class-loading-phases-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>用一條流程線記住七個階段</h2>
+<p>遇到面試題時，可以沿著這條順序回答：</p>
+
+<p><strong>加載 → 驗證 → 準備 → 解析 → 初始化</strong></p>
+
+<p>其中，驗證、準備、解析合稱<strong>連接</strong>。真正容易被追問的是準備與初始化：</p>
+
+<ul>
+  <li>加載：讀取 <code>.class</code>，建立 <code>Class</code> 物件。</li>
+  <li>驗證：確認位元組碼合法且安全。</li>
+  <li>準備：替 <code>static</code> 變數配置空間，並設定零值。</li>
+  <li>解析：把符號引用對應成直接引用。</li>
+  <li>初始化：執行 <code>&lt;clinit&gt;</code>，真正執行靜態賦值與靜態程式碼區塊。</li>
+</ul>
+
+<p>因此，<code>static int a = 666</code> 在準備階段是 <code>0</code>，到了初始化階段才是 <code>666</code>；而編譯期可確定的 <code>static final</code> 常數，則可能在準備階段就直接設定完成。</p>
+
+<h2>小結</h2>
+<p>類別載入不是單一動作，而是一條從檔案到可執行類別的流水線。JVM 先加載 <code>.class</code> 並建立 <code>Class</code> 物件，再經過驗證、準備、解析等連接步驟，最後才進入初始化。</p>
+
+<p>記住最重要的分界：準備階段只替靜態變數配置空間並放入預設值；初始化階段才執行 <code>&lt;clinit&gt;</code>，讓靜態賦值與靜態程式碼區塊真正生效。唯一常見的例外，是值在編譯期就已經確定的 <code>static final</code> 常數。</p>
+
+<p>下一課會接著回答另一個問題：這些 <code>.class</code> 檔案，到底是由誰負責載入？答案是類別載入器，以及它背後的雙親委派模型。</p>
+
+<div class="lesson-nav">
+  <a href="./object-memory-layout.html">← 上一步：一個物件在記憶體裡長什麼樣</a>
+  <a href="./parent-delegation.html">下一步：雙親委派與它被打破的時候 →</a>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="類別載入中的「連接（Linking）」包含哪三個階段？" data-correct="1" data-explain="連接由驗證、準備、解析三個階段組成，加載與初始化則在它前後。">
+  <button class="opt">加載、準備、初始化</button>
+  <button class="opt">驗證、準備、解析</button>
+  <button class="opt">加載、驗證、解析</button>
+  <button class="opt">驗證、解析、初始化</button>
+</div>
+<div class="quiz" data-question="<code>public static int a = 666;</code> 在準備階段結束時，a 的值是多少？" data-correct="0" data-explain="準備階段只設型別零值，666 是賦值動作，要等初始化階段才執行。">
+  <button class="opt">0</button>
+  <button class="opt">666</button>
+  <button class="opt">null</button>
+  <button class="opt">不確定</button>
+</div>
+<div class="quiz" data-question="哪一個階段會把符號引用換成直接引用？" data-correct="2" data-explain="解析階段負責把常數池裡的符號引用替換成記憶體中的直接引用。">
+  <button class="opt">加載</button>
+  <button class="opt">準備</button>
+  <button class="opt">解析</button>
+  <button class="opt">初始化</button>
+</div>
+<div class="quiz" data-question="真正執行靜態程式碼塊、對靜態變數賦值的是哪個階段？" data-correct="3" data-explain="初始化階段執行 <clinit>()，靜態程式碼塊與賦值到此才真正發生。">
+  <button class="opt">加載</button>
+  <button class="opt">驗證</button>
+  <button class="opt">準備</button>
+  <button class="opt">初始化</button>
+</div>
+<div class="quiz" data-question="為什麼 <code>static final int a = 666;</code> 在準備階段就等於 666？" data-correct="1" data-explain="它是編譯期常量，值在編譯時已知並存入常數池，準備階段可直接套用。">
+  <button class="opt">因為 final 會自動提早執行</button>
+  <button class="opt">因為它是編譯期常量，值已確定</button>
+  <button class="opt">因為靜態變數一律先賦值</button>
+  <button class="opt">因為它會被放進堆裡</button>
+</div>
+<div class="quiz" data-question="加載階段在堆裡生成的 <code>java.lang.Class</code> 物件，作用是什麼？" data-correct="0" data-explain="它是應用程式存取該類別資料的入口，反射等操作都靠它。">
+  <button class="opt">作為存取該類別資料的入口</button>
+  <button class="opt">存放該類別的所有靜態變數</button>
+  <button class="opt">取代方法區存放類元資料</button>
+  <button class="opt">記錄當前執行到哪一行</button>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

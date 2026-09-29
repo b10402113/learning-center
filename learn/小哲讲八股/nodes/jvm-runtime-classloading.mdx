@@ -4,19 +4,42 @@ title: JVM 執行時與類載入：類別怎麼被載入、物件存在哪
 subject: 小哲讲八股
 tier: 1
 order: 2
-status: draft
+status: content-written
 goal: 講清楚位元組碼如何執行、五個執行時資料區各自裝什麼、物件佈局，以及類載入七階段與雙親委派
 sources:
-  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/4.JVM的运行内存区域是怎样的？.md]]"
-  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/6.Java对象的内存布局是怎样的.md]]"
-  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/8.JVM类加载的过程是怎样的.md]]"
-  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/9.双亲委派的过程是怎样的？目的是什么？.md]]"
-  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/10.什么情况下需要打破双亲委派.md]]"
-steps: []
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/1.Java是编译型还是解释型_.md#1.Java是编译型还是解释型?]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/2.什么是JIT？.md#2.什么是JIT？]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/3.如何理解JVM的内存逃逸？.md#3.如何理解JVM的内存逃逸？]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/4.JVM的运行内存区域是怎样的？.md#4.JVM的运行内存区域是怎样的？]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/5.JVM中堆和栈有什么区别？.md#5.JVM中堆和栈有什么区别？]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/6.Java对象的内存布局是怎样的.md#6.Java 对象的内存布局是怎样的]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/7.永久代为什么要改成元空间.md#7.永久代为什么要改成元空间]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/8.JVM类加载的过程是怎样的.md#8.JVM类加载的过程是怎样的]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/9.双亲委派的过程是怎样的？目的是什么？.md#9.双亲委派的过程是怎样的？目的是什么？]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/10.什么情况下需要打破双亲委派.md#10.什么情况下需要打破双亲委派]]"
+steps:
+  - id: bytecode-execution-jit
+    order: 1
+  - id: runtime-data-areas
+    order: 2
+    deps:
+      - bytecode-execution-jit
+  - id: object-memory-layout
+    order: 3
+    deps:
+      - runtime-data-areas
+  - id: class-loading-phases
+    order: 4
+    deps:
+      - runtime-data-areas
+  - id: parent-delegation
+    order: 5
+    deps:
+      - class-loading-phases
 prerequisites:
   - "[[learn/小哲讲八股/nodes/java-language-objects]]"
 created: 2026-09-26
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # JVM 執行時與類載入：類別怎麼被載入、物件存在哪
@@ -27,16 +50,33 @@ updated: 2026-09-26
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/小哲讲八股/nodes/jvm-runtime-classloading/bytecode-execution-jit|位元組碼怎麼跑：半編譯半解釋與 JIT]] — 從 .java 到機器碼的鏈路，以及逃逸分析帶來的最佳化
+2. [[learn/小哲讲八股/nodes/jvm-runtime-classloading/runtime-data-areas|五個執行時資料區與堆棧之別]] — 分清共享與私有區域，用四維度對比堆與棧（after step 1）
+3. [[learn/小哲讲八股/nodes/jvm-runtime-classloading/object-memory-layout|一個物件在記憶體裡長什麼樣]] — 對象頭、實例數據、對齊填充三塊怎麼拼（after step 2）
+4. [[learn/小哲讲八股/nodes/jvm-runtime-classloading/class-loading-phases|類別載入七階段：從 .class 到 Class 物件]] — 加載、連接、初始化的順序與靜態變數賦值時機（after step 2）
+5. [[learn/小哲讲八股/nodes/jvm-runtime-classloading/parent-delegation|雙親委派與它被打破的時候]] — 向上委託向下加載，以及 SPI 與 Tomcat 的例外（after step 4）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+這一課要回答一個很日常的問題：你寫的那一行 Java，最後到底在哪裡、以什麼形式被執行。答案拆成三層來看。
+
+第一層是「位元組碼怎麼跑」。`javac` 把你寫的 `.java` 編譯成平台無關的 `.class` 位元組碼，真正執行的是 JVM 裡的解釋器和 JIT 編譯器——冷門程式碼慢慢解釋、熱門程式碼編譯成機器碼，兼顧啟動速度與長期效能。
+
+第二層是「跑的時候記憶體長怎樣」。JVM 把執行時記憶體切成五塊：堆與方法區是所有執行緒共享的，虛擬機棧、本地方法棧、程式計數器則是每個執行緒自己一份。物件實例放在堆裡，而堆裡那一顆物件本身也不是一團模糊的資料，它由對象頭、實例數據、對齊填充三段組成，這正是後面理解鎖與 GC 的底層依據。
+
+第三層是「類別是怎麼被載進來的」。`.class` 要經過加載、驗證、準備、解析、初始化七個階段才能變成可用的 `Class` 物件，其中準備階段只給靜態變數零值、初始化階段才真正賦值，這個時間差是面試常考、也常被誤解的地方。載入順序由雙親委派模型決定，它用「向上委託、向下加載」換來核心類的安全與唯一性；但在 SPI 和 Web 容器這類場景裡，這個模型反而要被刻意打破。
+
+五步走完，你應該能對著「一個物件從哪來、存在哪、怎麼被執行」這條線，從編譯一路講到類載入而中間不缺環節。
 
 ## Sources
 
-- [[sources/小哲讲八股/20260926/Java面试题/JVM/4.JVM的运行内存区域是怎样的？.md]]
-- [[sources/小哲讲八股/20260926/Java面试题/JVM/6.Java对象的内存布局是怎样的.md]]
-- [[sources/小哲讲八股/20260926/Java面试题/JVM/8.JVM类加载的过程是怎样的.md]]
-- [[sources/小哲讲八股/20260926/Java面试题/JVM/9.双亲委派的过程是怎样的？目的是什么？.md]]
-- [[sources/小哲讲八股/20260926/Java面试题/JVM/10.什么情况下需要打破双亲委派.md]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/1.Java是编译型还是解释型_.md#1.Java是编译型还是解释型?]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/2.什么是JIT？.md#2.什么是JIT？]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/3.如何理解JVM的内存逃逸？.md#3.如何理解JVM的内存逃逸？]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/4.JVM的运行内存区域是怎样的？.md#4.JVM的运行内存区域是怎样的？]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/5.JVM中堆和栈有什么区别？.md#5.JVM中堆和栈有什么区别？]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/6.Java对象的内存布局是怎样的.md#6.Java 对象的内存布局是怎样的]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/7.永久代为什么要改成元空间.md#7.永久代为什么要改成元空间]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/8.JVM类加载的过程是怎样的.md#8.JVM类加载的过程是怎样的]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/9.双亲委派的过程是怎样的？目的是什么？.md#9.双亲委派的过程是怎样的？目的是什么？]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/10.什么情况下需要打破双亲委派.md#10.什么情况下需要打破双亲委派]]

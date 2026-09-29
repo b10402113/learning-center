@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>為什麼是 B+ 樹：從磁碟 I/O 反推索引結構｜索引與慢查詢優化</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>為什麼是 B+ 樹：從磁碟 I/O 反推索引結構</h1>
+<p class="meta">索引與慢查詢優化 · Step 1/6 · 學習目標：能從「資料存在磁碟上」這個前提，淘汰二叉樹、Hash、B 樹，講出 B+ 樹贏在哪，並用 16KB 頁反推樹高與實際磁碟 I/O 次數。</p>
+
+<h2>前言：面試官問「為什麼不用二叉樹」，你答得出來嗎？</h2>
+<p>你可能遇過這種對話。線上某張表查詢突然變慢，同事看了一眼說「索引沒走好吧」，你加了索引，情況好轉，但為什麼加了就有用、為什麼是這種資料結構，卻說不出所以然。更常見的是面試場景：面試官問「MySQL 為什麼用 B+ 樹當索引，而不是二叉樹、Hash 或 B 樹？」如果只回一句「因為 B+ 樹比較快」，這個問題的追問才正要開始。</p>
+<p>要答得漂亮，不能從「哪個資料結構比較酷」出發，而要從一個物理事實出發：<strong>資料存在磁碟上，而磁碟很慢</strong>。整個索引結構的選型，本質上都在回答同一個問題：怎樣用最少的磁碟讀取次數，找到你要的那筆資料。這一節就沿著這條線，把二叉樹、Hash、B 樹一個個請下場，最後看 B+ 樹憑什麼留下來，並且實際算給你看：一棵存了上千萬行的表，樹到底有多高。</p>
+
+<h2>先把前提講清楚：為什麼一次磁碟 I/O 這麼貴？</h2>
+<p>記憶體的讀取是奈秒等級，磁碟的一次隨機讀取卻是毫秒等級，兩者差了十萬倍以上。這代表只要一次查詢多讀幾次磁碟，時間就會被拖垮。資料庫因此把資料切成一頁一頁來管理，InnoDB 預設一頁是 <strong>16KB</strong>，每次讀寫至少以頁為單位。你只要記住這兩個數字：磁碟很慢、一頁 16KB。後面所有的推導都從這裡長出來。</p>
+<p>另外還要先認識一個詞：索引的<strong>樹高（Depth）</strong>。樹高有幾層，代表從根走到葉子要經過幾個節點。如果每個節點都放在磁碟上，樹高幾乎就等於「要讀幾次磁碟」。所以資料結構的目標很明確：<strong>把樹壓矮</strong>。</p>
+
+<h2>第一個被淘汰的：二叉樹（含紅黑樹、AVL 樹）</h2>
+<p>二叉樹的規則是每個節點最多分兩個叉，左邊小、右邊大，查詢時一層層往下比。它的邏輯很漂亮，問題出在「每個節點只能分兩個叉」這件事上。假設你有一千萬行資料，這棵樹會長成一個又瘦又高的形狀，樹高可能到 20 層。資料又在磁碟上，於是每查一次就要讀 20 次磁碟。就算一次只要 10 毫秒，20 次就是 0.2 秒，對資料庫來說這慢到無法接受。</p>
+<p>紅黑樹、AVL 樹這類平衡二叉樹只能讓樹「不歪」，沒辦法讓它「變矮」，因為分叉數被鎖死在 2。資料量一大，樹高就跟著漲，這是它天生的天花板。</p>
+
+<h2>第二個被淘汰的：Hash 表</h2>
+<p>Hash 表看起來很有希望，因為等值查詢極快。它把 key 丟進雜湊函式算出位置，直接跳過去，查 <code>WHERE id = 1</code> 是 O(1)，一步到位。既然如此，為什麼不用它當主流索引？</p>
+<p>因為真實業務不是只有等值查詢。你經常要寫 <code>WHERE age &gt; 18</code>、<code>WHERE create_time BETWEEN ... AND ...</code>，或者 <code>ORDER BY</code> 排序。Hash 的致命傷就在這裡：<strong>雜湊值本身是無序的</strong>。一個 key 算出來的位置和它的大小沒有任何關係，所以範圍查詢和排序完全借不上力，只能放棄索引、老老實實全表掃描。這就是 Hash 索引只能用在極少數等值場景、無法成為通用索引的原因。</p>
+
+<h2>最接近的對手：B 樹，為什麼還是輸給 B+ 樹？</h2>
+<p>B 樹已經解決了「樹太高」的問題，它是一種多路平衡查找樹，一個節點可以分很多叉，樹一下就變矮了。B+ 樹和它長得很像，但贏在兩個關鍵細節。</p>
+<p><strong>細節一：B+ 樹能存更多索引，所以更矮。</strong> B 樹的每個節點裡既存索引（key）又存真正的資料（value），一個 16KB 的頁塞不下幾個節點，樹就還是會偏高。B+ 樹則規定<strong>非葉子節點只存索引，不存資料</strong>，真正的資料全部放在葉子節點。少了資料佔位，同樣一頁就能塞進更多的 key，分叉數暴增，樹自然更扁，I/O 次數更少。</p>
+<p><strong>細節二：B+ 樹是範圍查詢的神器。</strong> B 樹的資料散落在樹的各層，你要查 id 從 10 到 100，就得在樹裡跳上跳下，產生大量隨機 I/O。B+ 樹把所有資料集中在葉子節點，而且葉子節點之間用<strong>雙向鏈表</strong>串起來。查範圍時只要先找到起點，之後順著鏈表往後拉就行了，這是高效的順序 I/O。一個隨機跳、一個順著拉，差距非常明顯。</p>
+
+<table>
+<thead>
+<tr><th>結構</th><th>致命傷</th><th>B+ 樹的優勢</th></tr>
+</thead>
+<tbody>
+<tr><td>二叉樹 / 紅黑樹</td><td>每層只分兩叉，樹太高，I/O 次數多</td><td>多路平衡，樹高壓到 3～4 層</td></tr>
+<tr><td>Hash 表</td><td>雜湊值無序，不支援範圍查詢與排序</td><td>索引有序，天生支援範圍與排序</td></tr>
+<tr><td>B 樹</td><td>非葉節點也存資料，樹偏高；範圍查詢要跳著找</td><td>非葉只存 key 更矮，葉子鏈表順序掃描</td></tr>
+</tbody>
+</table>
+
+<h2>算筆帳：一棵樹到底能存多少、要讀幾次</h2>
+<p>光說「B+ 樹很矮」還不夠，面試官要的是數字。我們用幾個合理假設來推：一頁 16KB；主鍵用 <code>BigInt</code> 佔 8 位元組，加上 InnoDB 的指標 6 位元組，一個索引項大約 <strong>14 位元組</strong>；一筆業務資料平均 <strong>1KB</strong>。</p>
+<p>先看非葉子節點能分幾個叉：<code>16384 ÷ 14 ≈ 1170</code>，所以一個目錄頁能指向 1170 個下一層節點。再看葉子節點能存幾行：<code>16384 ÷ 1024 ≈ 16</code>，一頁放 16 行。把這兩個數字乘起來，樹的容量就出來了。</p>
+<table>
+<thead>
+<tr><th>樹高</th><th>容量計算</th><th>大約能存</th></tr>
+</thead>
+<tbody>
+<tr><td>2 層</td><td>1170 × 16</td><td>約 1.8 萬行</td></tr>
+<tr><td>3 層</td><td>1170 × 1170 × 16</td><td>約 2000 萬行</td></tr>
+<tr><td>4 層</td><td>2000 萬 × 1170</td><td>約 200 億行</td></tr>
+</tbody>
+</table>
+<p>結論很直觀：只要資料在兩千萬行以內，樹高就是 3 層；就算是千億級的大表，4 層也綽綽有餘。所以生產環境裡 B+ 樹的高度通常落在 <strong>3 到 4 層</strong>。</p>
+<p>那是不是每次查詢都要讀 3、4 次磁碟？不一定。關鍵在於<strong>根節點幾乎永遠常駐在記憶體（Buffer Pool）裡</strong>。三層的樹，第一次查根節點是記憶體操作，第二次查目錄頁大概率也命中記憶體，只有第三次查葉子節點才可能真的碰磁碟。所以實際的<strong>物理磁碟 I/O 通常只有 1 次，甚至 0 次</strong>。這才是「為什麼 B+ 樹查得快」最完整的說法：結構矮是一半，另一半是熱門節點被快取住了。</p>
+
+<h2>小結</h2>
+<blockquote>
+索引結構的選型，本質是「減少磁碟 I/O」的競賽。二叉樹每層只分兩叉，樹太高；Hash 等值快但不支援範圍與排序；B 樹雖然多路，但非葉也存資料，樹仍偏高、範圍查詢是隨機 I/O。B+ 樹非葉只存 key 所以更矮，葉子用雙向鏈表串起所以範圍查詢變順序 I/O。以 16KB 頁推算，一棵 3 層的樹可存約 2000 萬行，根節點常駐記憶體後，實際物理 I/O 通常只有 1 次甚至 0 次。
+</blockquote>
+<p>懂了樹的形狀，下一步才有意義：這棵樹的葉子裡到底裝了什麼？為什麼透過普通索引查一筆完整資料，會需要「回表」多跑一趟？下一節要看 InnoDB 的聚簇索引與輔助索引，以及覆蓋索引如何省掉那一趟。</p>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="二叉樹（含紅黑樹）不適合當資料庫索引，最根本的原因是什麼？" data-correct="2" data-explain="每層只分兩叉，海量資料下樹太高，導致磁碟 I/O 次數過多。">
+  <button class="opt">因為它的插入與刪除速度實在太慢</button>
+  <button class="opt">因為它沒辦法保證左右子樹的高度平衡</button>
+  <button class="opt">因為它分叉太少導致樹太高、I/O 太多</button>
+  <button class="opt">因為它無法儲存整數以外的資料型別</button>
+</div>
+
+<div class="quiz" data-question="Hash 索引查等值很快，卻不被當成主流索引，原因是？" data-correct="1" data-explain="雜湊值無序，範圍查詢與排序都借不上力，只能全表掃描。">
+  <button class="opt">因為它的等值查詢其實比 B+ 樹還慢</button>
+  <button class="opt">因為雜湊值無序，不支援範圍查詢與排序</button>
+  <button class="opt">因為它無法保證同一把 key 對到同一個位置</button>
+  <button class="opt">因為它只能存放非常少量的資料筆數</button>
+</div>
+
+<div class="quiz" data-question="B+ 樹比 B 樹更「矮」的關鍵原因是什麼？" data-correct="3" data-explain="非葉子節點只存索引不存資料，同樣一頁能塞更多 key、分叉更多。">
+  <button class="opt">B+ 樹把節點大小設定得比 B 樹更大</button>
+  <button class="opt">B+ 樹限制了每一層最多只能有兩層</button>
+  <button class="opt">B+ 樹把主鍵換成了更短的整數型別</button>
+  <button class="opt">B+ 樹非葉只存 key，不存真正的資料</button>
+</div>
+
+<div class="quiz" data-question="B+ 樹的葉子節點用雙向鏈表串起來，主要帶來什麼好處？" data-correct="0" data-explain="範圍查詢找到起點後可順著鏈表掃，隨機 I/O 變成順序 I/O。">
+  <button class="opt">範圍查詢變成順序 I/O，不必在樹裡跳</button>
+  <button class="opt">讓每一筆資料的插入都不會產生頁分裂</button>
+  <button class="opt">讓樹的高度可以永遠固定在三層以內</button>
+  <button class="opt">讓等值查詢可以省略掉最後一次比較</button>
+</div>
+
+<div class="quiz" data-question="依 16KB 頁、14 位元組索引項、1KB 資料行推算，3 層 B+ 樹約能存多少行？" data-correct="2" data-explain="1170 × 1170 × 16 約等於 2000 萬行。">
+  <button class="opt">約一萬八千行</button>
+  <button class="opt">約一百二十萬行</button>
+  <button class="opt">約兩千萬行</button>
+  <button class="opt">約兩百億行</button>
+</div>
+
+<div class="quiz" data-question="3 層的 B+ 樹，實際物理磁碟 I/O 常只有 1 次甚至 0 次，為什麼？" data-correct="1" data-explain="根節點與高頻目錄頁常駐 Buffer Pool，多數層級是記憶體命中。">
+  <button class="opt">因為 B+ 樹每次查詢只會走一層節點</button>
+  <button class="opt">因為根節點等熱門頁常駐在記憶體裡</button>
+  <button class="opt">因為磁碟本身會把整棵樹一次讀完</button>
+  <button class="opt">因為 B+ 樹的葉子節點不會存在磁碟上</button>
+</div>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./clustered-secondary-covering.html">下一步：索引即資料：聚簇索引、輔助索引、回表與覆蓋索引 →</a></div>
+</div>
+
+<footer class="footer">
+  <p>索引與慢查詢優化 · Step 1/6 · 有任何問題，隨時問你的 agent 老師。</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

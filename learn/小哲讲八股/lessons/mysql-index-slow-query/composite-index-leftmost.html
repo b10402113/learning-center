@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>聯合索引與最左前綴：多級排序在哪裡斷掉｜索引與慢查詢優化</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>聯合索引與最左前綴：多級排序在哪裡斷掉</h1>
+<p class="meta">索引與慢查詢優化 · Step 3/6 · 學習目標：能用「多級排序」解釋最左前綴匹配原則，判斷 (a,b,c) 聯合索引在 WHERE b=1、WHERE a=1 AND c=1、WHERE a=1 AND b&gt;2 AND c=3 下各命中幾列。</p>
+
+<h2>前言：索引明明建了，某些查詢卻完全不買帳</h2>
+<p>上一節我們看到，一個輔助索引可以幫查詢省掉回表。於是很多人建索引的直覺是「把常一起出現的欄位都串成一個聯合索引」，例如給 <code>(a, b, c)</code> 建一個索引，想說這樣查 <code>a</code>、查 <code>b</code>、查 <code>c</code> 就都能用。結果上線後發現，只有某些查詢變快，其他照樣全表掃描。你打開 EXPLAIN 一看，key 是 NULL，滿臉問號。</p>
+<p>問題不在索引建錯了，而在聯合索引的運作方式跟單欄位索引很不一樣。聯合索引在 B+ 樹裡是靠「多級排序」組織起來的，這套排序有嚴格的先後順序，一旦你用查詢條件跳過了前面的欄位，後面的欄位就會變成無序、沒辦法二分查找。這條規則，就是傳說中的<strong>最左前綴匹配原則</strong>。這一節除了告訴你規則是什麼，也要讓你從排序的底層理解它為什麼成立。</p>
+
+<h2>先建立畫面：聯合索引就是一頁電話簿</h2>
+<p>聯合索引 <code>(a, b, c)</code> 可以想成一本電話簿，它先按「姓」排，姓一樣的再按「名」排。或者更精確地講，它是一層一層往下排的<strong>多級排序</strong>：</p>
+<ul>
+<li>全局先按 <code>a</code> 有序；</li>
+<li>在 <code>a</code> 相同的一群資料裡，按 <code>b</code> 有序；</li>
+<li>在 <code>b</code> 相同的一群資料裡，再按 <code>c</code> 有序。</li>
+</ul>
+<p>關鍵在最後一句的「反過來不成立」。你可以從 <code>a</code> 的秩序推出 <code>b</code> 的局部秩序，但如果你不知道 <code>a</code> 是什麼，直接看 <code>b</code>，它在全局就是亂的。用電話簿想像：翻到「張」那一頁，裡面的名字是有排序的；但如果你說「我要找所有名字叫『三』的人」，不管姓什麼，那這些「三」就散落在整本電話簿的各個角落，根本沒法快速翻。</p>
+
+<h2>規則一：不能跳過第一列</h2>
+<p>查詢條件必須從索引的最左欄位開始。對 <code>(a, b, c)</code> 來說：</p>
+<ul>
+<li><code>WHERE a = 1</code>：<strong>用到索引</strong>。因為 B+ 樹先按 <code>a</code> 排，你能直接二分定位到 <code>a = 1</code> 的區段。</li>
+<li><code>WHERE b = 2</code>：<strong>完全用不到索引</strong>，走全表掃描。因為在 <code>a</code> 未知的前提下，<code>b</code> 在全局是無序的，B+ 樹沒辦法二分查找。</li>
+</ul>
+<p>用圖書館比喻更好懂：書架號是按「樓層－書架－層數」編的，<code>a</code> 是樓層、<code>b</code> 是書架。現在你只說「我要找第 1 號書架」，卻不知道在第幾層，那你只能從一樓爬到頂樓，把每一層的第 1 號書架都看一遍，這就是全表掃描。</p>
+
+<h2>規則二：不能跳過中間列</h2>
+<p>如果查 <code>WHERE a = 1 AND c = 3</code>，結果是<strong>只走一半索引</strong>：<code>a</code> 用到了，<code>c</code> 沒用到。</p>
+<p>原因是索引的有序性是「連續」的。當 <code>a = 1</code> 確定後，在那個範圍內 <code>b</code> 是有序的，但你跳過了 <code>b</code>，直接看 <code>c</code>，此時 <code>c</code> 就是無序的。資料庫能靠索引快速找到所有 <code>a = 1</code> 的資料，但接下來只能把這些資料一筆一筆撈出來、逐個檢查 <code>c</code> 是不是 3。也就是說，<code>c</code> 在這裡的角色只是<strong>過濾條件</strong>，並沒有參與「快速定位」。這就是「只走一半」的意思：定位靠 <code>a</code>，過濾靠 <code>c</code>。</p>
+
+<h2>規則三：遇到範圍查詢就停止匹配（面試最大的坑）</h2>
+<p>最容易被忽略的是這一條。查 <code>WHERE a = 1 AND b &gt; 2 AND c = 3</code> 時，<code>a</code> 用到了，<code>b</code> 也用到了（因為它負責範圍查找），但 <strong><code>c</code> 用不到了</strong>，索引匹配會在 <code>b</code> 這裡斷掉。</p>
+<p>為什麼？因為在 <code>b &gt; 2</code> 的範圍裡，<code>c</code> 並不是全局有序的。打個比方：<code>b = 3</code> 時 <code>c</code> 可能是 5，<code>b = 4</code> 時 <code>c</code> 可能是 1，<code>b</code> 和 <code>c</code> 之間沒有統一的秩序。B+ 樹沒辦法在這種情況下用索引去直接定位 <code>c = 3</code>，只能先圈出 <code>b &gt; 2</code> 的一大段，再一筆筆檢查 <code>c</code>。所以實務上的結論是：<strong>聯合索引中一旦出現範圍條件，範圍之後的欄位通常就無法再用於定位。</strong></p>
+
+<h2>實戰演練：聯合索引 (a, b, c) 的兩種典型查詢</h2>
+<p>把上面的規則套到兩個常見題目上，答案就一目了然。</p>
+<p><strong>題目一：<code>WHERE b = 1</code> 會走索引嗎？</strong> 完全不走，全表掃描。因為跳過了最左的 <code>a</code>，<code>b</code> 在全局無序，B+ 樹無從二分。這裡有個加分的例外：如果你的 SQL 是 <code>SELECT b FROM t WHERE b = 1</code>，因為查詢只用到 <code>b</code>，符合覆蓋索引，MySQL 有可能掃描整棵索引樹（Index Full Scan）來避免掃表，但這仍然不是「透過索引快速定位」，本質上是把整棵索引從頭到尾看一遍。</p>
+<p><strong>題目二：<code>WHERE a = 1 AND c = 1</code> 會走索引嗎？</strong> 走一半。<code>a</code> 命中索引負責定位，<code>c</code> 因為跳過了中間的 <code>b</code> 而無序，只能當過濾條件。</p>
+<table>
+<thead>
+<tr><th>查詢條件</th><th>a</th><th>b</th><th>c</th><th>結果</th></tr>
+</thead>
+<tbody>
+<tr><td><code>WHERE a = 1</code></td><td>定位</td><td>—</td><td>—</td><td>走索引</td></tr>
+<tr><td><code>WHERE b = 1</code></td><td>—</td><td>—</td><td>—</td><td>全表掃描</td></tr>
+<tr><td><code>WHERE a = 1 AND c = 1</code></td><td>定位</td><td>跳過</td><td>過濾</td><td>只走 a</td></tr>
+<tr><td><code>WHERE a = 1 AND b = 2 AND c = 3</code></td><td>定位</td><td>定位</td><td>定位</td><td>三欄全命中</td></tr>
+<tr><td><code>WHERE a = 1 AND b &gt; 2 AND c = 3</code></td><td>定位</td><td>範圍</td><td>斷掉</td><td>只走 a、b</td></tr>
+</tbody>
+</table>
+<p>你可能會問：那被「斷掉」的 <code>c</code>，資料庫真的只能笨笨地逐筆過濾嗎？其實從 MySQL 5.6 開始有一個補救機制叫<strong>索引下推</strong>，它雖然不能讓 <code>c</code> 重新參與定位，卻能把「檢查 <code>c = 3</code>」這個動作下沉到引擎層先做，提早丟掉不合格的資料、減少回表。這個機制我們留到下一步連同索引失效一起講。</p>
+
+<h2>小結</h2>
+<blockquote>
+聯合索引在 B+ 樹裡是多級排序：先按 a 排，a 相同再按 b 排，b 相同再按 c 排。由此推出最左前綴匹配原則：查詢必須從最左欄位開始（WHERE b 用不上），中間不能斷層（WHERE a AND c 只有 a 有效），且遇到範圍條件後續欄位停止匹配（WHERE a AND b&gt;… AND c，c 斷掉）。判斷的關鍵永遠是同一個問題：在這個查詢確定的範圍內，下一個欄位到底有沒有序。
+</blockquote>
+<p>最左前綴是「用得對不對」的問題，但還有一類問題更常讓索引直接報廢：不是查詢順序不對，而是你對索引列動了手腳。下一節要整理讓索引失效的三大忌與兩個坑，並把索引下推講完。</p>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="聯合索引 (a, b, c)，查詢 WHERE b = 1 會發生什麼事？" data-correct="3" data-explain="跳過最左的 a，b 全局無序無法二分，通常走全表掃描。">
+  <button class="opt">三個欄位都會被索引完整命中</button>
+  <button class="opt">只有 b 與 c 兩個欄位會命中索引</button>
+  <button class="opt">b 會命中而 a、c 都不會命中</button>
+  <button class="opt">完全不走索引，通常變成全表掃描</button>
+</div>
+
+<div class="quiz" data-question="聯合索引 (a, b, c)，查詢 WHERE a = 1 AND c = 1 的結果是？" data-correct="1" data-explain="a 用於定位，c 因跳過 b 而無序，只能當過濾條件。">
+  <button class="opt">a、b、c 三個欄位全部都命中索引</button>
+  <button class="opt">只有 a 命中，c 僅能當過濾條件</button>
+  <button class="opt">a 與 c 都命中，b 沒有被用到</button>
+  <button class="opt">三個欄位都不命中，改走全表掃描</button>
+</div>
+
+<div class="quiz" data-question="WHERE a = 1 AND b &gt; 2 AND c = 3 時，索引為何在 b 之後斷掉？" data-correct="2" data-explain="在 b 的範圍內 c 不是全局有序，無法用索引定位，只能事後過濾。">
+  <button class="opt">因為範圍查詢會自動關閉整個索引</button>
+  <button class="opt">因為 c 的值根本沒有存在索引裡面</button>
+  <button class="opt">因為 b 的範圍內 c 不是全局有序的</button>
+  <button class="opt">因為 a 是等值查詢所以只允許一列</button>
+</div>
+
+<div class="quiz" data-question="最左前綴匹配原則的底層根據是什麼？" data-correct="0" data-explain="聯合索引在 B+ 樹中是多級排序，局部有序只能由更左欄位確定。">
+  <button class="opt">聯合索引在 B+ 樹裡是嚴格的多級排序</button>
+  <button class="opt">MySQL 優化器刻意限制了索引的使用欄位數</button>
+  <button class="opt">InnoDB 只允許每個索引最多命中三個欄位</button>
+  <button class="opt">只有主鍵索引才能同時使用多個查詢欄位</button>
+</div>
+
+<div class="quiz" data-question="如果查詢是 SELECT b FROM t WHERE b = 1，關於 (a, b, c) 索引，下列何者正確？" data-correct="1" data-explain="因只用到 b 符合覆蓋索引，MySQL 可能掃描整棵索引樹，但非快速定位。">
+  <button class="opt">依然完全無法使用索引，只能整表掃描</button>
+  <button class="opt">可能改掃整棵索引樹，但不算快速定位</button>
+  <button class="opt">會自動改用 a 作為定位並全程命中索引</button>
+  <button class="opt">會把索引重建為以 b 為最左的新索引</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="./clustered-secondary-covering.html">← 上一步：索引即資料：聚簇索引、輔助索引、回表與覆蓋索引</a></div>
+  <div><a href="./index-failure-pushdown.html">下一步：索引失效的三大忌與兩個坑，加上索引下推 →</a></div>
+</div>
+
+<footer class="footer">
+  <p>索引與慢查詢優化 · Step 3/6 · 有任何問題，隨時問你的 agent 老師。</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

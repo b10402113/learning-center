@@ -512,7 +512,11 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
     const outcomes = await Promise.allSettled(plan.map(async item => {
       const filename = `image-${item.index}.png`;
       const source = path.join(paths.assets, filename);
+      const destination = path.join(paths.imageAssets, filename);
+      // Check both places the image can already live — the output working dir and
+      // the published lesson assets — so a figure is never generated twice.
       let bytes = await fs.readFile(source).catch(() => null);
+      if (bytes == null) bytes = await fs.readFile(destination).catch(() => null);
       const reused = bytes != null;
       if (!reused) {
         manifest.imageRequests++;
@@ -527,7 +531,7 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
         if (!Buffer.isBuffer(bytes) || !bytes.length) throw new Error(`No image returned for figure ${item.index}`);
         await fs.writeFile(source, bytes);
       }
-      await fs.copyFile(source, path.join(paths.imageAssets, filename));
+      await fs.writeFile(destination, bytes);
       return { index: item.index, filename, reused };
     }));
     // Wait for every job to settle before failing, so no straggler overwrites

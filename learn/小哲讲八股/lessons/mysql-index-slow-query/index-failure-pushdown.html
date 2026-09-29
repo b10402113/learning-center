@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>索引失效的三大忌與兩個坑，加上索引下推｜索引與慢查詢優化</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>索引失效的三大忌與兩個坑，加上索引下推</h1>
+<p class="meta">索引與慢查詢優化 · Step 4/6 · 學習目標：能列出讓索引失效的三大忌（列加工、前置 %、隱式型別轉換）與兩個坑（違反最左前綴、OR），並解釋索引下推如何把過濾下沉到引擎層以減少回表。</p>
+
+<h2>前言：索引明明建好了，EXPLAIN 卻顯示全表掃描</h2>
+<p>上一節我們講了最左前綴，那是「查詢順序對不對」的問題。但還有一種更常見的狀況：索引欄位對、查詢順序也對，EXPLAIN 的 type 卻仍然是 <code>ALL</code>，掃描行數幾百萬。你反覆確認索引存在，卻找不到哪裡出了問題。</p>
+<p>這種情況，十之八九是你對索引欄位「動了手腳」，或踩到幾個很隱蔽的坑。索引失效的核心原因其實可以濃縮成一個字：<strong>「變」</strong>。只要讓資料庫覺得「原本有序的索引變得無序」，或者「必須先算出結果才能查找」，索引就廢了。這一節先把最常見的失效場景整理成「三大忌」和「兩個坑」，再補上一個專門用來救回表次數的機制：索引下推。</p>
+
+<h2>三大忌：這些寫法會讓索引直接報廢</h2>
+
+<h3>第一忌：對索引列做運算或加函數</h3>
+<p>最典型也最常見。例如：</p>
+<pre><code>-- 對索引列做數學運算
+SELECT * FROM t WHERE id + 1 = 10;
+
+-- 對索引列套用函數
+SELECT * FROM t WHERE LEFT(name, 3) = 'abc';</code></pre>
+<p>為什麼會失效？因為 B+ 樹裡存的是 <code>id</code> 的原始值，不是 <code>id + 1</code> 的值。你叫資料庫去找 <code>id + 1 = 10</code>，它沒辦法用樹直接定位，只能把全表每一行的 <code>id</code> 都撈出來、各自加一、再比對。把計算寫在索引列上，等於逼它放棄索引、逐行計算。正確的改法是移到等號右邊：<code>WHERE id = 10 - 1</code>，讓索引列保持乾淨。</p>
+
+<h3>第二忌：模糊查詢以 % 開頭</h3>
+<pre><code>SELECT * FROM t WHERE name LIKE '%劉';</code></pre>
+<p>索引是按字串的<strong>前綴</strong>排序的，就像電話簿按姓排。你查「姓劉的」（<code>LIKE '劉%'</code>），它能快速翻到「劉」那一頁；但你要查「名字最後一個字是劉的」，因為不知道前面是什麼，索引的排序完全幫不上忙，只能全表掃描。<strong>前置 <code>%</code> 破壞了前綴匹配的能力</strong>，這就是它失效的原因。</p>
+
+<h3>第三忌：隱式型別轉換（最隱蔽的坑）</h3>
+<p>這個坑很多人踩過卻不知道。假設 <code>phone</code> 欄位是 <code>VARCHAR</code>，存的是字串，但查詢時你忘了加單引號：</p>
+<pre><code>-- phone 是字串型別，卻傳入數字
+SELECT * FROM t WHERE phone = 13800000000;</code></pre>
+<p>MySQL 在後台會偷偷把每一行的字串轉成數字來比較。這相當於對索引列套用了一個型別轉換函數，於是就踩到第一忌，索引直接失效。正確寫法是加上引號：<code>WHERE phone = '13800000000'</code>。之所以說它隱蔽，是因為程式碼看起來完全沒有「計算」或「函數」，但型別轉換是悄悄發生的。</p>
+
+<h2>兩個坑：不那麼明顯，但一樣致命</h2>
+
+<h3>第一個坑：違反最左前綴</h3>
+<p>上一節已經詳細講過，簡短複習：聯合索引 <code>(a, b, c)</code> 只查 <code>WHERE b = 1</code>，跳過了最左的 <code>a</code>，在 B+ 樹裡 <code>b</code> 是無序的，無法定位，自然走全表掃描。</p>
+
+<h3>第二個坑：用 OR 連接條件</h3>
+<pre><code>-- 假設 id 有索引，age 沒有
+SELECT * FROM t WHERE id = 1 OR age = 18;</code></pre>
+<p>看你可能會想：「前面 <code>id = 1</code> 有索引，應該能利用吧？」但資料庫必須回傳同時滿足兩個條件的所有資料。就算它靠索引找到了 <code>id = 1</code> 的那一筆，它還是得為了 <code>age = 18</code> 再做一次全表掃描。既然橫豎都要掃全表，那個索引用了也是白用，乾脆放棄。解法是<strong>讓 OR 兩邊的欄位都有索引</strong>，否則通常還是失效。</p>
+
+<h2>還有一個隱形殺手：優化器主動放棄索引</h2>
+<p>前面講的都是「語法讓索引用不了」，但還有一類是索引明明能用，優化器卻選擇不用。原因是它會做<strong>成本估算</strong>：如果走索引要回表太多次、隨機 I/O 的開銷比直接順序掃全表還大，它就會主動選全表掃描。典型場景是表很小，或你要查的資料佔了整張表的很大比例（例如查一個有 50 萬行的狀態值）。這不是失效，而是權衡後的選擇。但它也提醒你，<strong>索引不是加了就一定被用</strong>。</p>
+
+<h2>索引下推：把過濾工作下沉到引擎層</h2>
+<p>講完失效，我們回頭補上一節欠的債。對於「被最左前綴或範圍查詢斷掉」的欄位，MySQL 5.6 引入了一個補救機制，叫<strong>索引下推（Index Condition Pushdown，簡稱 ICP）</strong>。它的目的只有一個：<strong>減少回表次數</strong>。它不改變任何索引的排序規則，只是換個地方做過濾。</p>
+<p>用一個倉庫比喻就很好懂。Server 層是老闆，儲存引擎層是倉庫管理員，兩者透過「回表」來傳遞完整資料。</p>
+<ul>
+<li><strong>沒有 ICP 時：</strong> 老闆說「把所有姓張的檔案拿給我」。管理員跑進倉庫，把所有姓張的檔案（假設 100 份）都搬出來，回表取出完整內容交給老闆。老闆一份份翻：「這個年齡不對、那個也不對……」最後只剩 2 份合格，扔掉 98 份。那 98 次回表全是白費力氣。</li>
+<li><strong>有了 ICP 之後：</strong> 老闆說「把所有姓張且 10 歲的檔案拿給我」。管理員在倉庫裡就能多看一眼：索引的葉子節點裡本來就存了 <code>age</code> 的值。他發現姓張的裡面只有 2 個是 10 歲，於是只搬這 2 份上樓。回表次數從 100 降到 2。</li>
+</ul>
+<p>把這個過程翻成 SQL 就清楚了。假設有聯合索引 <code>(name, age)</code>：</p>
+<pre><code>SELECT * FROM user WHERE name LIKE '張%' AND age = 10;</code></pre>
+<p>依照最左前綴，<code>name LIKE '張%'</code> 是範圍查詢，匹配到 <code>name</code> 就停了，<code>age</code> 理論上用不上索引定位。也就是說，光靠索引能找到所有「姓張」的人，卻沒辦法直接鎖定 <code>age = 10</code>。差別就在這裡：</p>
+<table>
+<thead>
+<tr><th></th><th>引擎層做什麼</th><th>回表次數</th></tr>
+</thead>
+<tbody>
+<tr><td>沒有 ICP</td><td>只找出所有姓張的，全部回表交給 Server 層過濾</td><td>100 次</td></tr>
+<tr><td>有 ICP</td><td>利用索引裡已存的 age 先在引擎層過濾，符合才回表</td><td>2 次</td></tr>
+</tbody>
+</table>
+<p>務必記住一句話：<strong>索引下推沒有改變索引的排序規則，<code>age</code> 依然不能拿去二分定位，它只是把「不符合就別回表」的判斷提前到引擎層。</strong>它是覆蓋索引之外的另一種減少回表的手段，兩者可以並存。</p>
+
+<h2>小結</h2>
+<blockquote>
+索引失效的核心是一個「變」字：對索引列做運算或函數（含隱式型別轉換）、LIKE 以 % 開頭、違反最左前綴、OR 一側無索引，都會讓 B+ 樹失去二分查找的能力而改走全表掃描；此外優化器也可能因成本主動放棄索引。索引下推（ICP）則是在不改變排序規則的前提下，把索引中已包含欄位的過濾下沉到引擎層，讓不符合的資料不必回表，典型能把回表從 100 次降到 2 次。
+</blockquote>
+<p>到目前為止，我們講的都是「怎麼寫會讓索引有效或失效」的原理。但實際排查慢查詢時，你不可能靠肉眼猜，你需要一個工具告訴你優化器到底打算怎麼跑。下一節就來學怎麼讀 EXPLAIN 的執行計畫，把前面這些概念變成看得見的欄位。</p>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="WHERE id + 1 = 10 為什麼會讓 id 索引失效？" data-correct="2" data-explain="B+ 樹存的是 id 原值，不是 id+1，無法直接定位只能逐行計算。">
+  <button class="opt">因為數學運算的優先順序比索引查找更高</button>
+  <button class="opt">因為 MySQL 不支援在 WHERE 中使用加號</button>
+  <button class="opt">因為索引存的是 id 原值而非 id 加一</button>
+  <button class="opt">因為加號會把整數欄位轉換成字串型別</button>
+</div>
+
+<div class="quiz" data-question="WHERE name LIKE '%劉' 為什麼無法使用 name 索引？" data-correct="1" data-explain="前置 % 讓索引無法用前綴排序定位，只能整表掃描。">
+  <button class="opt">因為 LIKE 關鍵字本身就不支援任何索引</button>
+  <button class="opt">因為前置 % 破壞了索引的前綴排序能力</button>
+  <button class="opt">因為中文字元無法被 B+ 樹正確地排序</button>
+  <button class="opt">因為欄位型別不是數字所以不能建索引</button>
+</div>
+
+<div class="quiz" data-question="phone 是 VARCHAR 欄位，查 WHERE phone = 13800000000 會怎樣？" data-correct="3" data-explain="隱式型別轉換等同對索引列套函數，索引失效，應加引號。">
+  <button class="opt">MySQL 會自動幫 phone 建立數字索引</button>
+  <button class="opt">查詢結果不變且效能完全不受影響</button>
+  <button class="opt">會直接編譯錯誤並拒絕執行這條 SQL</button>
+  <button class="opt">發生隱式轉換，等同對索引列加工而失效</button>
+</div>
+
+<div class="quiz" data-question="WHERE id = 1 OR age = 18，只有 id 有索引，為何通常失效？" data-correct="0" data-explain="age 無索引仍須全表掃描，既然都要掃，前面的索引就沒必要用。">
+  <button class="opt">age 仍需全表掃描，索引用了也白用</button>
+  <button class="opt">OR 會自動把兩個條件都翻成範圍查詢</button>
+  <button class="opt">MySQL 不允許在 OR 中混用不同欄位</button>
+  <button class="opt">id 的索引會被 age 的條件自動刪除</button>
+</div>
+
+<div class="quiz" data-question="索引下推（ICP）的核心作用是下列哪一項？" data-correct="2" data-explain="ICP 不改變排序規則，只是把過濾下沉到引擎層以減少回表次數。">
+  <button class="opt">重新排列索引的欄位順序以符合最左前綴</button>
+  <button class="opt">讓範圍查詢後面的欄位也能用來二分定位</button>
+  <button class="opt">把過濾下沉到引擎層以減少回表次數</button>
+  <button class="opt">自動把非覆蓋索引改造成覆蓋索引使用</button>
+</div>
+
+<div class="quiz" data-question="有索引 (name, age)，查 name LIKE '張%' AND age = 10 時，有 ICP 的回表次數為何？" data-correct="1" data-explain="引擎層先用索引中的 age 過濾，只有符合的才回表，從 100 降到 2。">
+  <button class="opt">仍然是 100 次，與沒有 ICP 時相同</button>
+  <button class="opt">降到 2 次，只有符合 age 的才回表</button>
+  <button class="opt">降為 0 次，因為完全不需回表查詢</button>
+  <button class="opt">變成 50 次，取姓張者的一半數量</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="./composite-index-leftmost.html">← 上一步：聯合索引與最左前綴：多級排序在哪裡斷掉</a></div>
+  <div><a href="./explain-execution-plan.html">下一步：用 EXPLAIN 讀懂優化器的執行計畫 →</a></div>
+</div>
+
+<footer class="footer">
+  <p>索引與慢查詢優化 · Step 4/6 · 有任何問題，隨時問你的 agent 老師。</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

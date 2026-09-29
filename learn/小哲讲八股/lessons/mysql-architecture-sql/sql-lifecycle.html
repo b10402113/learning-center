@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>一條 SQL 的生命週期：六道關卡走一遍｜MySQL 架構與一條 SQL 的生命週期</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一條 SQL 的生命週期：六道關卡走一遍</h1>
+<p class="meta">MySQL 架構與一條 SQL 的生命週期 · Step 2/4 · 學習目標：按順序說出一條 SQL 從客戶端送出到返回結果所經過的每一關，並理解各關的職責與常見問題。</p>
+
+<h2>前言：一句 SELECT 的幾毫秒裡，MySQL 做了什麼？</h2>
+<p>你在應用程式裡送出一條 <code>SELECT * FROM users WHERE id = 42</code>，畫面可能幾毫秒後就拿到資料。表面上看起來只是「送出 SQL、收到結果」，但 MySQL 其實在背後跑完了一條固定的生產線。</p>
+<p>這條生產線上的每一站，都有自己的工作，也有自己的故障方式。查詢變慢，原因可能是連線排隊、語法解析、選錯索引、鎖等待，或是磁碟 I/O 變慢。若只盯著 SQL 文字本身，很容易像在黑暗中亂摸；知道它經過哪些關卡，才有辦法把症狀對到正確的位置。</p>
+<p>這一課就沿著 SQL 的生命週期，從客戶端一路走到儲存引擎，看看每一關解決什麼問題、沒做好時又會發生什麼事。</p>
+
+<h2>整條鏈路長什麼樣？</h2>
+<p>一條 SQL 大致會經過六道關卡。前五關屬於 MySQL 的 Server 層，最後才由執行器把實際讀寫資料的工作交給儲存引擎。順序如下：</p>
+
+<table>
+  <tr><th>關卡</th><th>做什麼</th><th>常見問題</th></tr>
+  <tr><td>連接器</td><td>建立連線、驗證身分與權限</td><td>連線數打滿、連線逾時</td></tr>
+  <tr><td>查詢快取</td><td>用 SQL 文字查找結果快取（MySQL 8.0 已移除）</td><td>寫入即失效、命中率低</td></tr>
+  <tr><td>分析器</td><td>進行詞法與語法分析，建立語法樹</td><td>語法錯誤、欄位不存在</td></tr>
+  <tr><td>優化器</td><td>估算成本、選擇索引、安排連接順序</td><td>選錯索引、走全表掃描</td></tr>
+  <tr><td>執行器</td><td>複查權限，按照執行計畫呼叫儲存引擎</td><td>掃描行數過多、鎖等待</td></tr>
+  <tr><td>儲存引擎</td><td>實際讀寫資料並回傳結果</td><td>磁碟 I/O、Buffer Pool 未命中</td></tr>
+</table>
+
+<figure class="lesson-figure"><img src="./sql-lifecycle-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一關：連接器</h2>
+<p>客戶端必須先建立連線，才能把 SQL 送進 MySQL。連接器負責建立 TCP 連線、驗證帳號密碼，並確認這個使用者擁有哪些權限。</p>
+<p>權限通常會在連線建立時載入並固定下來。之後即使管理員修改了權限，已經存在的連線也不一定會立刻套用新設定，通常要重新建立連線才會生效。</p>
+<p>這一關最常見的問題，是連線數量失控。假設應用程式每次查詢都重新建立連線，或是從連線池借出連線後沒有歸還，就像餐廳的桌子被客人坐滿卻一直不離開。當連線數逼近上限，新的請求只能排隊，甚至直接被拒絕。</p>
+<p>所以，遇到「MySQL 掛了」時，未必是 SQL 寫錯了，也可能只是應用程式沒有做好連線池管理，或發生了連線洩漏。</p>
+
+<figure class="lesson-figure"><img src="./sql-lifecycle-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第二關：查詢快取（MySQL 8.0 已移除）</h2>
+<p>在 MySQL 8.0 以前，連線建立後還會先經過查詢快取。它的想法很直接：把完整的 SQL 文字當成 key，把查詢結果當成 value。下一次如果收到完全相同的 SQL，就可以直接回傳結果，不必重新分析與優化。</p>
+<p>這聽起來像是把常考的題目先寫在小抄上，下一次直接拿來用。但它的問題也正出在「失效」太粗糙。</p>
+<p>只要某張資料表發生任何寫入，和這張表相關的查詢快取就會整批失效。對頻繁更新的資料表來說，快取可能才剛建立，就因為一次寫入被清掉。結果是命中率很低，維護快取反而增加額外成本。</p>
+<p>因此，MySQL 8.0 直接移除了查詢快取。這個演進常被拿來考：</p>
+<p><strong>查詢快取的速度建立在很粗粒度的失效策略上；當資料表寫入頻繁時，以整句 SQL 為單位、以整張表為範圍失效，往往不划算。</strong></p>
+
+<h2>第三關：分析器</h2>
+<p>SQL 送進來後，分析器要先確認它「長得像不像一句合法的 SQL」，並弄清楚每個詞扮演什麼角色。這個過程可以分成兩步。</p>
+
+<p>第一步是<strong>詞法分析</strong>。分析器會把 <code>SELECT * FROM users WHERE id = 42</code> 拆成一個個詞，辨認出 <code>SELECT</code> 是關鍵字、<code>users</code> 是表名、<code>id</code> 是欄位。</p>
+
+<p>第二步是<strong>語法分析</strong>。它會檢查這些詞的排列方式是否符合 SQL 文法，並建立一棵語法樹。假設你把 <code>FROM</code> 打成 <code>FORM</code>，SQL 在這裡就會被攔下來，根本不會進入後面的優化階段。</p>
+
+<p>分析階段也會確認表與欄位是否存在。因此，「資料表不存在」或「欄位名稱打錯」這類錯誤，也會在這一關被發現。這時候還沒輪到優化器思考要走哪個索引，因為它連要查哪個欄位都還無法確認。</p>
+
+<figure class="lesson-figure"><img src="./sql-lifecycle-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第四關：優化器</h2>
+<p>語法正確之後，優化器才開始思考：「這句 SQL 要怎麼執行，成本最低？」</p>
+<p>同一條 SQL 往往不只有一種做法。例如，它可能選擇不同的索引；如果涉及多張表，也要決定哪張表先查、哪張表作為驅動表。優化器會根據統計資訊估算各種方案的成本，最後選出它認為最划算的方式，產生<strong>執行計畫</strong>。</p>
+
+<p>這裡一定要分清楚一件事：</p>
+
+<p><strong>優化器負責決定「怎麼做」，但不負責真的去做。</strong></p>
+
+<p>它產出的執行計畫，就是你使用 <code>EXPLAIN</code> 時看到的內容。優化器依賴的是統計資訊與成本估算，不是把每種方案都實際跑一遍。因此，當統計資訊過期，或資料分布和估算不同時，它可能會做出錯誤判斷。</p>
+
+<p>這就是「明明有索引，查詢卻還是很慢」的常見起點：索引可能存在，但優化器估算後認為另一種方案更便宜，最後選出了不理想的執行計畫。</p>
+
+<figure class="lesson-figure"><img src="./sql-lifecycle-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第五關：執行器</h2>
+<p>優化器產生計畫後，執行器才真正開始照著計畫做事。這一關有兩個重點。</p>
+
+<p>第一，執行器會再次確認權限。分析階段主要處理「表和欄位是否存在、SQL 文法是否正確」；到了執行階段，才會確認「這個使用者是否有權限查這張表」。</p>
+
+<p>第二，執行器會按照執行計畫，呼叫儲存引擎提供的介面，逐步取得符合條件的資料。可以把它想成現場指揮：優化器先畫好施工計畫，執行器則拿著這份計畫，實際向儲存引擎一批一批要資料。</p>
+
+<p>慢查詢日誌裡常見的 <code>rows_examined</code>，就是執行器在這一關總共掃描過的行數。如果這個數字遠大於最後回傳的行數，通常代表索引沒有用好，或查詢條件讓索引難以發揮作用。這時候，問題往往要回頭檢查優化器選出的執行計畫。</p>
+
+<h2>第六關：儲存引擎</h2>
+<p>執行器提出每一個讀取或寫入要求後，最後都會落到儲存引擎。儲存引擎負責真正讀寫資料、維護索引、處理事務與鎖，並把結果交回執行器。</p>
+
+<p>以 InnoDB 為例，它會先確認需要的資料頁是否已經在 Buffer Pool 裡。如果在，就可以直接從記憶體讀取；如果不在，才需要到磁碟上把資料撈回來。這也是為什麼同一條 SQL 第二次執行時，通常會比第一次快：第一次可能把資料載入了 Buffer Pool，第二次就能少碰一次磁碟。</p>
+
+<p>儲存引擎的效能瓶頸，常常和磁碟 I/O 有關。磁碟的速度比記憶體慢好幾個數量級，所以 MySQL 會透過 Buffer Pool 等機制，盡量把常用資料留在記憶體裡，減少碰磁碟的次數。</p>
+
+<figure class="lesson-figure"><img src="./sql-lifecycle-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>至於 Buffer Pool 如何運作，以及 InnoDB 為什麼需要這些機制，會在這個節點的最後一步再深入說明。</p>
+
+<h2>把六道關卡變成診斷地圖</h2>
+<p>知道生命週期的價值，不只是能背出六個名詞，而是可以把「慢」定位到比較具體的範圍。</p>
+
+<p>如果請求卡在建立連線，優先檢查連線池、連線數上限與是否有連線洩漏；如果 SQL 一直回報語法錯誤，問題多半在分析器；如果 <code>EXPLAIN</code> 顯示 <code>type=ALL</code>，表示可能正在進行全表掃描，應該回頭檢查優化器與索引選擇。</p>
+
+<p>如果 <code>rows_examined</code> 遠遠大於回傳行數，或請求卡在鎖等待，則要看執行器實際掃描了什麼，以及儲存引擎的鎖狀況。若 Buffer Pool 命中率降低、磁碟讀取突然增加，則應把注意力放到儲存引擎與 I/O。</p>
+
+<p>因此，「SQL 很慢」只是一個症狀，不代表問題一定出在 SQL 文字本身。把症狀放回這條鏈路，你才不會一看到慢查詢就只想重建索引，或一看到連線錯誤就誤以為資料庫已經掛掉。</p>
+
+<h2>小結</h2>
+<p>一條 SQL 的順序是：連接器建立連線並驗證身分，查詢快取比對整句 SQL（MySQL 8.0 已移除），分析器進行詞法與語法分析，優化器估算成本並產生執行計畫，執行器複查權限並按照計畫向儲存引擎要資料，最後由儲存引擎實際讀寫資料並回傳結果。</p>
+
+<p>每一關都有自己的職責，也有自己的故障模式。當你能把症狀對應到關卡，就能更有條理地回答「這條 SQL 為什麼慢」，而不是只停留在「資料庫效能不好」這種模糊結論。</p>
+
+<p>下一步我們暫時離開這條完整鏈路，聚焦在最後一關的兩個主角：InnoDB 與 MyISAM，看看它們在事務、鎖與儲存方式上到底差在哪裡。</p>
+
+<div class="lesson-nav">
+  <a href="./logical-architecture.html">← 上一步：邏輯架構：Server 層與儲存引擎層的腦手分工</a>
+  <a href="./innodb-vs-myisam.html">下一步：InnoDB 與 MyISAM：從五個維度講清本質差別 →</a>
+</div>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="一條 SQL 在 Server 層的處理順序，下列哪一個是正確的？" data-correct="1" data-explain="順序是連接器→查詢快取→分析器→優化器→執行器，最後才交給儲存引擎。">
+  <button class="opt">連接器→分析器→查詢快取→執行器→優化器</button>
+  <button class="opt">連接器→查詢快取→分析器→優化器→執行器</button>
+  <button class="opt">分析器→連接器→優化器→執行器→查詢快取</button>
+  <button class="opt">優化器→分析器→連接器→執行器→查詢快取</button>
+</div>
+<div class="quiz" data-question="把整句 SQL 文字當成 key、查詢結果當成 value 的快取機制叫什麼？" data-correct="2" data-explain="這就是查詢快取，因為寫入即整表失效、命中率低，MySQL 8.0 已移除。">
+  <button class="opt">Buffer Pool</button>
+  <button class="opt">Change Buffer</button>
+  <button class="opt">查詢快取</button>
+  <button class="opt">Redo Log</button>
+</div>
+<div class="quiz" data-question="負責產生執行計畫、決定要走哪個索引的是哪一關？" data-correct="3" data-explain="優化器依統計資訊估算成本，產出執行計畫；EXPLAIN 看的就是它的成果，但它不實際執行。">
+  <button class="opt">連接器</button>
+  <button class="opt">分析器</button>
+  <button class="opt">執行器</button>
+  <button class="opt">優化器</button>
+</div>
+<div class="quiz" data-question="「資料表不存在」這個錯誤通常在哪一關被發現？" data-correct="0" data-explain="分析器除了做語法分析，也會確認表與欄位是否存在，因此這類錯誤在分析階段就被攔下。">
+  <button class="opt">分析器</button>
+  <button class="opt">優化器</button>
+  <button class="opt">執行器</button>
+  <button class="opt">儲存引擎</button>
+</div>
+<div class="quiz" data-question="執行器在這一關主要負責做什麼？" data-correct="2" data-explain="執行器會複查權限，並依計畫逐行呼叫引擎介面取資料，慢查詢的 rows_examined 就在此累積。">
+  <button class="opt">決定要用哪個索引</button>
+  <button class="opt">把 SQL 拆成一個個 token</button>
+  <button class="opt">複查權限並逐行向引擎要資料</button>
+  <button class="opt">把資料頁寫回磁碟</button>
+</div>
+<div class="quiz" data-question="看到 EXPLAIN 的 type 是 ALL，通常代表問題出在哪一關？" data-correct="1" data-explain="type=ALL 表示全表掃描，是優化器的選擇或索引設計問題，屬於第四關。">
+  <button class="opt">連接器</button>
+  <button class="opt">優化器</button>
+  <button class="opt">執行器</button>
+  <button class="opt">儲存引擎</button>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

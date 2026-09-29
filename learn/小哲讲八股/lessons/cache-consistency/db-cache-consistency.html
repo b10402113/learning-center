@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MySQL 與 Redis 的一致性：為什麼先寫庫、後刪快取｜快取模式與資料一致性</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>MySQL 與 Redis 的一致性：為什麼先寫庫、後刪快取</h1>
+<p class="meta">快取模式與資料一致性 · Step 4/5 · 學習目標：講清楚旁路快取模式下為什麼刪除而非更新、為什麼先寫庫後刪快取，以及延遲雙刪、MQ 重試等最終一致性補償。</p>
+
+<h2>前言：明明改了資料庫，使用者卻還讀到舊值</h2>
+<p>你寫了一個更新商品的接口：先 <code>UPDATE</code> MySQL，再把新的商品資料寫進 Redis。邏輯看起來天衣無縫，但線上偶爾會出現一種鬼故事，使用者剛改完資料，重新整理頁面，看到的還是舊的那一筆，過了好幾秒才恢復正常。更糟的情況是，它再也沒恢復，一直停在錯誤的值上。</p>
+<p>問題不在 Redis 壞了，而在「寫資料庫」和「操作快取」這兩個動作之間有時間差。只要它們不是原子性的，中間就一定存在一個窗口，讓讀請求或另一個寫請求趁虛而入。這一課要講的，就是怎麼把這個窗口縮到最小，以及縮不掉時要怎麼兜底。</p>
+
+<h2>非強一致，而是最終一致</h2>
+<p>先把期待值放對。要讓 MySQL 和 Redis 永遠即時一致，等於要求跨兩個系統的強一致，代價極高、幾乎不可行。實務上的立場是：在非強一致場景下，我們追求<strong>最終一致性</strong>，允許短暫的窗口不一致，但要保證錯誤的資料最終一定會被修正。業界標準的做法叫<strong>旁路快取（Cache-Aside）</strong>模式，操作順序是「先更新資料庫，再刪除快取」。</p>
+<p>這短短一句話裡藏了兩個選擇：為什麼是「刪除」而不是「更新」？為什麼是「先寫庫」而不是「先刪快取」？把它們講清楚，這題就答得漂亮了。</p>
+
+<h2>選擇一：為什麼刪除快取，而不是更新快取</h2>
+<p>直覺上，「改了資料庫，順手把快取也改成新的」，感覺最有效率、快取也一直有值。但這在併發下非常危險。</p>
+<p>假設有兩個執行緒 A 和 B 同時修改同一筆資料。A 先改資料庫，B 後改資料庫；但等到它們要去更新快取時，因為網路波動，B 先更新了快取，A 反而後更新。結果就是：<strong>資料庫裡是 B 的新值，快取裡卻是 A 的舊值</strong>。而且這個錯誤不會自己修好，除非下一次有寫入把它覆蓋，否則快取會一直停在錯的值上，變成永久的不一致。</p>
+<p>刪除快取就能避開這個「後寫先至」的競態。因為刪除是「把值清掉」，沒有「用舊值覆蓋新值」這種事：兩個執行緒都只是把 Key 刪掉，順序誰先誰後都不影響最終結果，反正快取是空的，下一次讀取會直接從資料庫重新載入最新值。用一次讀取的代價，換掉永久髒資料的風險，這筆交易很划算。</p>
+
+<h2>選擇二：為什麼先寫庫、後刪快取</h2>
+<p>既然要刪，就只剩兩個順序可以選：先刪快取再寫庫，或先寫庫再刪快取。我們逐一檢查。</p>
+<p><strong>先刪快取、後寫庫，會踩到一個很大的坑。</strong>執行緒 A 先把快取刪了，但還沒來得及寫庫；這時執行緒 B 進來讀資料，發現快取是空的，就去讀資料庫，讀到的還是舊資料，然後把這個舊資料寫回快取；接著執行緒 A 終於把資料庫寫成了新值。結果是，資料庫是新的，快取卻被 B 填成了舊的，而且會一直錯下去。</p>
+<p><strong>先寫庫、後刪快取，就安全得多。</strong>它其實也存在一個理論上的極端窗口：假如一次讀操作卡了特別久，久到跨越了「寫庫」和「刪快取」這兩個動作。但實際上，寫資料庫是慢速的 IO 操作，比讀快取慢得多，這種時間差讓不一致的機率低到幾乎可以忽略。所以生產環境的標準答案就是這一個：先寫庫，後刪快取。</p>
+
+<h2>兜底方案：刪除失敗與極端併發怎麼補</h2>
+<p>「先寫庫、後刪快取」是主線，但它還留了兩個問題：萬一「刪快取」這一步失敗了怎麼辦？以及，想更進一步壓低極端併發下的不一致窗口，還有沒有招？這就是最終一致性補償要處理的。</p>
+<p><strong>第一招是延遲雙刪。</strong>做法是刪除一次，寫庫，然後休眠一小段時間，例如 500 毫秒，再刪除一次。第二次的延時刪除，是為了強制清掉那段時間內可能被讀請求重新填進去的髒資料。它適合對一致性比較敏感的業務，代價是多一次刪除、也讓寫入多等一下子。</p>
+<p><strong>第二招是消息佇列重試。</strong>如果刪除快取失敗了，就把這個 Key 發給 MQ，由消費者負責重試刪除，直到成功或超過重試上限。這保證了「刪除」這個動作不會因為一次網路抖動就永久丟失。</p>
+<p><strong>第三招是訂閱 Binlog 的非同步刪除。</strong>這一招最解耦，業務程式碼只管寫資料庫，完全不碰快取；另外有個元件（例如 Canal）偽裝成 MySQL 的從庫、監聽 Binlog，一旦發現資料變了，就發消息出去刪 Redis。快取維護的邏輯和業務邏輯徹底分開了，可靠性也最高。下一課會專門拆解 Canal 這套機制。</p>
+<p>所以完整的回答層次是：主線用旁路快取、先寫庫後刪快取；刪除可能失敗，所以用 MQ 重試兜底；併發窗口想再壓低，就加延遲雙刪；想要最解耦，就把刪除交給 Binlog 驅動的下游元件。</p>
+
+<h2>面試時怎麼講得清楚</h2>
+<p>被問到「怎麼保證 MySQL 和 Redis 的一致性」時，建議照這個順序講：先定調「非強一致場景追求最終一致性」，再講標準方案是旁路快取、先更新資料庫再刪除快取；接著解釋兩個選擇的理由，刪除能避開更新快取的「後寫先至」髒資料，先寫庫能把時間差縮到最小；最後補上兜底手段：刪除失敗用 MQ 重試，敏感的業務用延遲雙刪，最解耦的是用 Canal 監聽 Binlog。</p>
+<p>如果能再補一句「我們接受短暫的不一致，只要它最終會被修正」，對方會聽出你講的是取捨。</p>
+
+<h2>小結</h2>
+<blockquote>
+MySQL 與 Redis 的一致性標準答案是旁路快取，順序是「先更新資料庫，再刪除快取」。刪除而非更新，是為了避開併發下「後寫先至」造成的永久髒資料；先寫庫後刪快取，是因為資料庫寫入遠慢於快取讀取，時間差極小、不一致機率可忽略，而先刪快取會讓舊值被讀回填進快取。剩下的風險用最終一致性補償兜底：刪除失敗用 MQ 重試，敏感業務用延遲雙刪，要最解耦就用 Canal 監聽 Binlog 驅動刪除。
+</blockquote>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="在旁路快取模式下，資料變更時應該如何操作快取？" data-correct="0" data-explain="標準做法是刪除快取而非更新快取，避免併發更新造成的後寫先至髒資料。">
+  <button class="opt">刪除對應的快取</button>
+  <button class="opt">直接更新快取的值</button>
+  <button class="opt">什麼都不做等它過期</button>
+  <button class="opt">把整層快取清空</button>
+</div>
+
+<div class="quiz" data-question="為什麼選擇刪除快取而不是更新快取？" data-correct="2" data-explain="兩個寫請求併發時，更新快取可能後寫先至，讓舊值覆蓋新值，形成永久髒資料。">
+  <button class="opt">刪除的網路開銷比較小</button>
+  <button class="opt">更新快取會直接弄壞資料庫</button>
+  <button class="opt">更新會有後寫先至的競態</button>
+  <button class="opt">刪除能讓快取命中率更高</button>
+</div>
+
+<div class="quiz" data-question="為什麼推薦「先寫庫、後刪快取」的順序？" data-correct="1" data-explain="資料庫寫入遠慢於快取讀取，讓不一致的時間窗口極小；先刪快取則會讓舊值被讀回填。">
+  <button class="opt">先刪快取能保證更強的一致</button>
+  <button class="opt">寫庫慢、時間窗口極小</button>
+  <button class="opt">先寫庫能讓刪除一定成功</button>
+  <button class="opt">寫庫快，能立刻覆蓋舊值</button>
+</div>
+
+<div class="quiz" data-question="先刪快取、後寫庫可能導致什麼後果？" data-correct="3" data-explain="在寫庫完成前，讀請求會把舊資料重新載回快取，導致長時間不一致。">
+  <button class="opt">資料庫的事務會直接回滾</button>
+  <button class="opt">Redis 會立刻觸發淘汰</button>
+  <button class="opt">快取與資料庫同時被鎖住</button>
+  <button class="opt">舊值被讀回並長期殘留</button>
+</div>
+
+<div class="quiz" data-question="延遲雙刪策略中的第二次刪除，主要目的是什麼？" data-correct="0" data-explain="延時再刪一次，是為了清掉那段等待時間內可能被讀請求重新填進快取的髒資料。">
+  <button class="opt">清掉期間被回填的髒資料</button>
+  <button class="opt">降低資料庫的寫入負載</button>
+  <button class="opt">讓 Redis 重新啟動一次</button>
+  <button class="opt">通知所有本地快取失效</button>
+</div>
+
+<div class="quiz" data-question="刪除快取失敗時，常見的可靠性兜底手段是什麼？" data-correct="2" data-explain="把失敗的 Key 送進 MQ，由消費者重試刪除，避免一次失敗就永久遺漏。">
+  <button class="opt">把資料庫也一起回滾</button>
+  <button class="opt">永久關閉快取功能</button>
+  <button class="opt">交給 MQ 消費者重試刪</button>
+  <button class="opt">改成同步更新快取</button>
+</div>
+
+<div class="quiz" data-question="下列哪一種做法最能讓快取維護與業務邏輯解耦？" data-correct="1" data-explain="讓 Canal 監聽 Binlog、由下游元件刪快取，業務只管寫庫，是解耦且可靠的做法。">
+  <button class="opt">在業務程式碼裡雙寫更新</button>
+  <button class="opt">用 Canal 監聽 Binlog 刪除</button>
+  <button class="opt">把 TTL 調到最短</button>
+  <button class="opt">改用資料庫觸發器更新快取</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="./multi-level-cache.html">← 上一步：多級快取：L1 本地加 L2 Redis 的分工與代價</a></div>
+  <div><a href="./canal-binlog-sync.html">下一步：Canal 與 Binlog：把快取同步從業務程式碼裡拆出來 →</a></div>
+</div>
+
+<footer class="footer">
+  <p>快取模式與資料一致性 · Step 4/5 · 有任何問題，隨時問你的 agent 老師。</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

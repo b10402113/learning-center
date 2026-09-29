@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>物件是垃圾嗎？可達性分析與四種引用</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>物件什麼時候會變成垃圾？從可達性分析到四種引用</h1>
+<p class="meta">Step 1/4 · GC、記憶體壓力與線上排查</p>
+
+<h2>學習目標</h2>
+<p>這一節要帶你弄清楚三件事：JVM 為什麼採用可達性分析，而不是引用計數；哪些物件可以成為 GC Roots；以及四種引用強度，如何影響一個物件「什麼時候才會被回收」。</p>
+
+<h2>前言：記憶體一直漲，重啟就好嗎？</h2>
+
+<p>你可能遇過這種服務：剛上線時一切正常，記憶體卻慢慢往上爬。撐了三、五天之後，服務開始變慢甚至卡住；重啟一下，記憶體又恢復正常，但過幾天相同的問題再次出現。當同事問「到底是哪裡漏了」，你盯著程式碼，卻很難立刻說出答案。</p>
+
+<p>要找出記憶體問題，得先從一個更基本的問題開始：JVM 到底怎麼判斷一個物件「已經沒人用了，可以丟掉」？如果連物件生死的規則都不清楚，就很難解釋它為什麼沒有被回收。</p>
+
+<p>這一節會把這條規則拆開來看。JVM 的判斷不是「沒有人直接指向我，就把我丟掉」，而是「從幾個固定的根出發，如果一路走不到我，我才可能被回收」。</p>
+
+<h2>先看一個行不通的做法：引用計數</h2>
+
+<p>最直覺的想法，是替每個物件放一個計數器。有人引用這個物件，計數器就加一；引用斷開，計數器就減一。當計數器變成零，就代表沒有任何地方使用它，可以回收。</p>
+
+<p>這種方法叫做引用計數法。它的邏輯很簡單，問題卻出在一個始終無法解決的死角：循環引用。</p>
+
+<p>假設物件 A 持有物件 B，而物件 B 又持有物件 A。除此之外，外界已經沒有任何地方引用它們。A 和 B 明明都已經沒有用了，卻因為彼此互相指著對方，兩個計數器都會維持在 1，永遠不會歸零。</p>
+
+<p>結果就是：這兩個物件其實是垃圾，卻一直無法被回收，記憶體也因此被占住。正因為引用計數法有這個根本上的缺陷，HotSpot 這類工業級 JVM 並不採用它作為主要的垃圾判斷方式。</p>
+
+<figure class="lesson-figure"><img src="./reachability-and-references-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>JVM 真正使用的方法：可達性分析</h2>
+
+<p>JVM 採用的是可達性分析。你可以把記憶體裡的所有物件想成一張大型關係圖，物件之間的引用就是圖上的連線。</p>
+
+<p>接著，JVM 會選定幾個固定的起點，這些起點稱為 <strong>GC Roots</strong>。垃圾回收器會從 GC Roots 出發，沿著物件之間的引用一路往下走：</p>
+
+<ul>
+<li>從 GC Roots 走得到的物件，代表仍然可達，會被視為存活。</li>
+<li>從任何 GC Roots 都走不到的物件，代表已經不可達，便可能被回收。</li>
+</ul>
+
+<p>這有點像查看一張地鐵路線圖：只要能從家門口出發，沿著路線抵達某個車站，那個車站就還在可達範圍內；完全接不上任何路線的車站，就像被整張網路遺落的物件。</p>
+
+<p>因此，關鍵不是「有沒有其他物件指向我」，而是「從 GC Roots 出發，能不能走到我」。回頭看前面的 A 和 B，即使它們彼此互相引用，只要從任何 GC Root 都走不到它們，兩者仍然會被判定為垃圾。</p>
+
+
+<h3>哪些物件可以當作 GC Roots？</h3>
+
+<p>這是面試很常追問的細節。常見的 GC Roots 主要有四類：</p>
+
+<ol>
+<li>虛擬機棧中，區域變數所引用的物件。虛擬機棧是方法執行時使用的記憶體。例如方法裡寫了 <code>User u = new User();</code>，只要這個方法還沒有結束，<code>u</code> 就可以視為一個根；它所指向的 User 物件也就仍然可達。</li>
+<li>方法區中，靜態屬性（<code>static</code>）所引用的物件。例如 <code>public static User user;</code>，只要這個類別仍然被載入，這個 <code>user</code> 引用就可能成為根。</li>
+<li>方法區中，常數（<code>final</code>）所引用的物件，例如字串常量池裡保存的引用。</li>
+<li>本地方法棧中，JNI，也就是 Java 呼叫 C/C++ 原生方法時所引用的物件。</li>
+</ol>
+
+<p>記住這四類之後，你就多了一個判斷記憶體問題的方向：到底是哪個 GC Root 還牽著這個物件？排查記憶體洩漏時，MAT 工具裡的 <code>Path to GC Roots</code>，做的正是沿著引用關係反向追蹤，找出「是誰還沒有放手」。</p>
+
+<figure class="lesson-figure"><img src="./reachability-and-references-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>四種引用強度：決定物件什麼時候才會被回收</h2>
+
+<p>可達性分析回答的是「這個物件還能不能從 GC Roots 走到」。但即使物件看起來還活著，GC 對不同類型的引用，處理態度也不完全一樣。</p>
+
+<p>Java 提供了四種引用強度，讓程式可以表達物件的重要程度。它們最核心的差異，可以記成一句話：<strong>GC 到底要等到什麼情況，才願意回收它？</strong></p>
+
+<table>
+<thead>
+<tr><th>引用</th><th>寫法</th><th>GC 的態度</th><th>典型用途</th></tr>
+</thead>
+<tbody>
+<tr><td>強引用</td><td><code>Object o = new Object()</code></td><td>通常不會主動回收；記憶體不足時，寧願拋出 OutOfMemoryError</td><td>日常最普通的物件引用</td></tr>
+<tr><td>軟引用</td><td><code>SoftReference</code></td><td>記憶體充足時保留，記憶體快不足時才回收</td><td>對記憶體敏感的本地快取，例如圖片快取</td></tr>
+<tr><td>弱引用</td><td><code>WeakReference</code></td><td>只要發生 GC，不論當下記憶體是否充足，都會回收</td><td>ThreadLocal 的 key、WeakHashMap</td></tr>
+<tr><td>虛引用</td><td><code>PhantomReference</code></td><td>無法取回物件本身，只在物件即將被回收時發出通知</td><td>管理堆外記憶體的釋放</td></tr>
+</tbody>
+</table>
+
+<p><strong>強引用</strong>就是平常最常寫的引用。只要它仍然指向某個物件，GC 就不會輕易動它；即使記憶體快要撐爆，也可能先讓程式拋出 <code>OutOfMemoryError</code>。</p>
+
+<p><strong>軟引用</strong>代表「這個物件有用，但不是非留不可」。它很適合用在快取上：記憶體足夠時就先保留，讓後續可以快速重用；記憶體開始吃緊時，GC 再回收它，把空間讓給更重要的物件。這樣可以避免快取反過來把整個系統撐死。</p>
+
+<p><strong>弱引用</strong>比軟引用更短命。只要 GC 開始執行，不管當下還有沒有足夠的記憶體，弱引用所綁定的物件都可能被回收。常見例子包括 ThreadLocal 裡的 key，以及 WeakHashMap。</p>
+
+<p>當某個 key 不再被外部的強引用持有時，WeakHashMap 對應的鍵值對就能被自動清理，避免一堆不再使用的資料一直留在記憶體裡。</p>
+
+<p><strong>虛引用</strong>是最弱的一種引用。你無法透過 <code>get()</code> 取回原本的物件，呼叫後永遠會得到 <code>null</code>。它的用途不是讓你繼續使用物件，而是搭配引用隊列，在物件被回收時收到通知，通常用來協助處理堆外記憶體的清理。</p>
+
+<figure class="lesson-figure"><img src="./reachability-and-references-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+JVM 判斷物件是否可回收，靠的是可達性分析，而不是引用計數，因為引用計數無法處理循環引用。可達性分析會從四類 GC Roots 出發：能走得到的物件仍然存活，完全走不到的物件才可能被回收。至於物件什麼時候會被放手，則取決於引用強度：強引用很難放手，軟引用在記憶體不足時才放，弱引用遇到 GC 就放，虛引用則只負責通知回收事件。
+</blockquote>
+
+<p>現在你已經知道 JVM 如何判斷「誰是垃圾」。下一步就要繼續追問：這些垃圾實際上要怎麼被清走？下一節會介紹三種垃圾收集演算法與分代策略，也會說明為什麼不管怎麼優化，GC 都可能讓服務暫停一小段時間。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./collection-algorithms-and-stw.html">下一步：垃圾怎麼收？三種演算法、分代收集與 STW →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 HotSpot 不採用引用計數法？" data-correct="1" data-explain="兩個互相引用的物件，即使外界沒人用，計數器也永遠不會歸零。">
+  <button class="opt">因為它的執行速度實在太慢了</button>
+  <button class="opt">因為它解不掉物件互相引用的情況</button>
+  <button class="opt">因為它必須暫停所有使用者執行緒</button>
+  <button class="opt">因為它只能用在沒有垃圾的場合</button>
+</div>
+<div class="quiz" data-question="可達性分析判斷物件存活的標準是什麼？" data-correct="2" data-explain="從 GC Roots 出發沿引用鏈走，走得到就是存活。">
+  <button class="opt">看有幾個地方指向這個物件</button>
+  <button class="opt">看這個物件被建立的時間先後</button>
+  <button class="opt">看能不能從 GC Roots 走到它</button>
+  <button class="opt">看這個物件佔用多大的記憶體</button>
+</div>
+<div class="quiz" data-question="下列哪一項不算 GC Roots？" data-correct="3" data-explain="堆裡自己 new 出來的普通物件是分析的目標，不是根。">
+  <button class="opt">方法區裡 static 屬性的引用</button>
+  <button class="opt">虛擬機棧裡的區域變數引用</button>
+  <button class="opt">本地方法棧裡 JNI 的引用</button>
+  <button class="opt">堆裡自己 new 出來的物件</button>
+</div>
+<div class="quiz" data-question="想做一個記憶體吃緊時能自動讓位的快取，該用哪種引用？" data-correct="0" data-explain="軟引用在記憶體不足、快 OOM 時才被回收，正好適合快取。">
+  <button class="opt">軟引用 SoftReference</button>
+  <button class="opt">強引用直接 new 出來</button>
+  <button class="opt">弱引用 WeakReference</button>
+  <button class="opt">虛引用 PhantomReference</button>
+</div>
+<div class="quiz" data-question="ThreadLocal 的 key 用弱引用，主要是為了什麼？" data-correct="1" data-explain="key 不再被外部強引用時能被自動回收，避免拖著沒用的鍵值對。">
+  <button class="opt">讓 key 的讀取速度變得更快</button>
+  <button class="opt">讓沒人使用的 key 能被自動回收</button>
+  <button class="opt">讓多個執行緒能共用同一個 key</button>
+  <button class="opt">讓 key 的比較可以省略 hash 值</button>
+</div>
+<div class="quiz" data-question="虛引用實際上有什麼用處？" data-correct="2" data-explain="它無法取回物件，只在回收時透過引用隊列發出通知。">
+  <button class="opt">可以用來延長物件的存活時間</button>
+  <button class="opt">可以用 get 拿回被回收的物件</button>
+  <button class="opt">可以在回收時收到一個通知</button>
+  <button class="opt">可以讓物件永遠不被垃圾回收</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · GC、記憶體壓力與線上排查 · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

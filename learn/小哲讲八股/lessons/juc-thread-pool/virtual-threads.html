@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>虛擬執行緒：把執行緒變便宜之後｜執行緒池打滿、任務堆積</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>虛擬執行緒：把執行緒變便宜之後</h1>
+<p class="meta">執行緒池打滿、任務堆積 · Step 6/6 · 學習目標：理解虛擬執行緒與平台執行緒在映射模型、阻塞處理上的差別，以及它為什麼讓「一個請求一個執行緒」重新可行。</p>
+
+<h2>前言：為了撐住高併發，程式碼為什麼越寫越繞？</h2>
+<p>當服務需要同時處理大量請求時，第一個麻煩通常不是業務邏輯，而是執行緒不夠用。</p>
+<p>傳統做法是一條 Java 執行緒對應一條作業系統的內核執行緒。執行緒開得太少，請求會排隊；開得太多，又可能把記憶體與 CPU 撐爆。因此，傳統執行緒池通常只能開百來條執行緒。</p>
+<p>為了用少量執行緒服務大量請求，大家只好改用 WebFlux、Netty、CompletableFuture 等非同步框架。原本可以從頭寫到尾的同步程式碼，必須拆成回呼與階段，寫起來繞，除錯時也很難追蹤一個請求到底走到哪裡。</p>
+<p>JDK 21 正式推出虛擬執行緒，正是要處理這個矛盾：保留「一個請求配一條執行緒」的直覺寫法，同時讓系統具備高併發能力。接下來從三個角度看，它到底改變了什麼。</p>
+
+<h2>第一個差別：調度模型從 1:1 變成 M:N</h2>
+<p>傳統的 Java <code>Thread</code> 與作業系統的內核執行緒是<strong>1:1 綁定</strong>。每建立一條 Java 執行緒，作業系統就要替它準備對應的資源。光是執行緒堆疊空間，大約就需要 2MB；執行緒切換也涉及內核態，成本不低。</p>
+<p>所以，傳統執行緒不能無限制地建立。當執行緒數量增加到幾百條甚至更多時，記憶體壓力、排程成本與上下文切換都會變得明顯。</p>
+<p>虛擬執行緒採用的是<strong>M:N 模型</strong>。它是由 Java 與 JVM 管理的輕量級執行緒，不再和內核執行緒一對一綁定。大量虛擬執行緒會共用少數幾條作業系統執行緒，這些底層執行緒稱為<strong>載體執行緒</strong>（Carrier Thread）。</p>
+<p>虛擬執行緒的建立成本低到只有<strong>幾百位元組</strong>。因此，在一台機器上建立一百萬條虛擬執行緒，概念上就像建立大量普通物件一樣，不再需要像過去那樣小心計算執行緒數量。</p>
+<p>可以把兩種模型想成交通工具：傳統執行緒像是一台車固定配一名司機，車多了就要付出大量成本；虛擬執行緒則像許多乘客共用少數幾台車，JVM 負責安排誰在什麼時候上車。它把 Java 執行緒與內核執行緒之間的硬綁定拆開了。</p>
+
+<figure class="lesson-figure"><img src="./virtual-threads-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第二個差別：阻塞時，一個真的卡住，一個會先讓出載體</h2>
+<p>光是能建立大量執行緒還不夠，真正關鍵的是：請求等待資料時，底層執行緒會發生什麼事？</p>
+<p>以傳統執行緒執行 <code>socket.read()</code> 為例。當程式等待網路資料時，對應的作業系統執行緒會真的被<strong>阻塞</strong>。這就像計程車司機把車停在路邊等乘客：車沒有載客，司機也沒有接新的工作，但車與司機仍然被這件事占住。</p>
+<p>虛擬執行緒遇到阻塞操作時，JVM 會把這條虛擬執行緒<strong>卸載（unmount）</strong>下來，暫時放在堆記憶體中等待。原本承載它的載體執行緒則可以立刻抽身，去執行其他虛擬執行緒。</p>
+<p>等網路資料準備好之後，JVM 再把原本的虛擬執行緒<strong>掛載（mount）</strong>回載體執行緒，從剛才停下的位置繼續執行。</p>
+<p>這裡的重點不是「阻塞消失了」，而是「等待期間不必占住底層執行緒」。傳統執行緒像是司機被迫一直守著一位還沒出現的乘客；虛擬執行緒則讓司機先去接其他乘客，等原本的乘客出現後再回來處理。</p>
+
+
+<h2>把兩個差別放在一起：為什麼可以支撐大量併發？</h2>
+<p>虛擬執行緒能支撐百萬級併發，靠的是兩件事同時成立。</p>
+<p>第一，它夠便宜，可以大量建立。你不必再把每一條請求都塞進有限的傳統執行緒池裡排隊。</p>
+<p>第二，請求在等待網路資料時，不會一直占著底層載體執行緒。載體執行緒可以轉去處理其他正在執行的虛擬執行緒。</p>
+<p>因此，大量請求與少數內核執行緒之間的矛盾被拆開了：請求可以很多，但真正同時執行 Java 程式碼的載體執行緒，仍由 JVM 控制在合理數量。</p>
+
+<h2>第三個差別：程式設計模型可以回到直覺的同步寫法</h2>
+<p>這是虛擬執行緒最容易影響日常開發方式的地方。</p>
+<p>過去，為了提高併發能力，我們常被迫使用 WebFlux、Netty、CompletableFuture，把一段完整流程拆成多個回呼或非同步階段。這些工具很有用，但程式的控制流程會變得不容易閱讀，錯誤處理與除錯也更複雜。</p>
+<p>使用虛擬執行緒後，你可以直接寫同步阻塞程式碼。表面上看起來，每個請求都拿到一條執行緒，並在等待 I/O 時停住；但底層的載體執行緒並沒有一起被長時間占住，JVM 會在適當時機將虛擬執行緒卸載。</p>
+<p>換句話說，程式設計者可以使用比較直覺的寫法，系統仍能透過大量虛擬執行緒處理高併發請求。過去為了效能而不得不採用的複雜響應式程式設計，不再是唯一選項。</p>
+<p>這也是虛擬執行緒重要的地方：它不是單純多提供一種執行緒，而是讓「一個請求一個執行緒」重新成為可行的預設模型。</p>
+
+<figure class="lesson-figure"><img src="./virtual-threads-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>面試時怎麼回答：抓住兩個「不同」</h2>
+<p>如果面試官問虛擬執行緒與傳統執行緒的差別，可以先抓住兩個核心。</p>
+<p><strong>第一，映射關係不同。</strong>傳統執行緒是 1:1 映射到作業系統內核執行緒，建立與切換成本較高，堆疊通常是 MB 級，因此數量受到限制。虛擬執行緒則是 M:N 映射，由 JVM 在使用者態管理與調度，建立成本低到位元組級，單機可以支援百萬級併發。</p>
+<p><strong>第二，阻塞處理方式不同。</strong>傳統執行緒阻塞時，對應的內核執行緒也會被占住；虛擬執行緒在阻塞 I/O 時，JVM 會將它卸載，讓載體執行緒去執行其他任務，等資料準備好後再掛載回來。</p>
+
+<h2>那還需要執行緒池嗎？</h2>
+<p>如果面試官繼續追問這個問題，關鍵答案是：<strong>虛擬執行緒通常不應該被池化。</strong></p>
+<p>傳統執行緒池主要是為了解決「執行緒太貴」：先建立一批有限的執行緒，之後重複使用，避免不斷建立與銷毀的成本。</p>
+<p>但虛擬執行緒的價值，正是廉價、大量，而且可以短命。它通常應該為任務建立，用完即丟。若把它限制在一個固定大小的池子裡，反而可能重新引入排隊，削弱「一個請求一個執行緒」的優勢。</p>
+
+<figure class="lesson-figure"><img src="./virtual-threads-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+<blockquote>
+<p>虛擬執行緒與傳統執行緒的差別，可以從三個維度理解：調度模型從 1:1 的內核綁定變成 M:N 的 JVM 調度；建立成本從約 2MB 降到幾百位元組，單機可以建立百萬級虛擬執行緒；阻塞時，傳統執行緒會真的占住內核執行緒，虛擬執行緒則會被 JVM 卸載，讓載體執行緒先處理其他任務。</p>
+<p>這些改變讓同步阻塞的程式碼重新適合高併發場景。它的本質不是把阻塞變成不存在，而是把「等待中的請求」與「正在工作的底層執行緒」分開，讓執行緒不再昂貴到需要被小心池化。</p>
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./rejection-policies-and-executors-traps.html">← 上一步：拒絕策略與 Executors 的坑</a></div>
+  <div></div>
+</div>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="傳統執行緒與作業系統內核執行緒的映射關係是？" data-correct="1" data-explain="傳統 Java Thread 是 1:1 綁定到作業系統內核執行緒。">
+  <button class="opt">M:N 映射</button>
+  <button class="opt">1:1 映射</button>
+  <button class="opt">N:1 映射</button>
+  <button class="opt">1:N 映射</button>
+</div>
+<div class="quiz" data-question="虛擬執行緒遇到阻塞 I/O 時，JVM 會怎麼做？" data-correct="2" data-explain="JVM 把虛擬執行緒卸載到堆，底層載體執行緒立刻去執行其他虛擬執行緒。">
+  <button class="opt">把整條內核執行緒一併掛起</button>
+  <button class="opt">直接中斷並回收該執行緒</button>
+  <button class="opt">卸載它並讓載體執行緒去做別的</button>
+  <button class="opt">把它升級為重量級平台執行緒</button>
+</div>
+<div class="quiz" data-question="虛擬執行緒的建立成本大約是多少？" data-correct="0" data-explain="只需幾百位元組，可以像建立普通物件一樣廉價地大量建立。">
+  <button class="opt">幾百位元組</button>
+  <button class="opt">約 1MB</button>
+  <button class="opt">約 2MB</button>
+  <button class="opt">約 8MB</button>
+</div>
+<div class="quiz" data-question="虛擬執行緒對編程模型最大的改變是什麼？" data-correct="3" data-explain="可以回到最直覺的同步阻塞寫法，同時保有高併發能力，不必再用複雜的響應式框架。">
+  <button class="opt">讓所有任務都必須改成回呼式寫法</button>
+  <button class="opt">讓開發者必須手動管理執行緒池</button>
+  <button class="opt">讓執行緒之間不再需要任何同步</button>
+  <button class="opt">讓同步阻塞寫法也能撐高併發</button>
+</div>
+<div class="quiz" data-question="傳統執行緒阻塞時最大的問題是什麼？" data-correct="1" data-explain="內核執行緒被掛起卻仍占用資源，CPU 被晾著，造成浪費。">
+  <button class="opt">執行緒會被作業系統直接殺掉</button>
+  <button class="opt">內核執行緒被掛起仍占用資源</button>
+  <button class="opt">執行緒的堆疊會被自動擴大</button>
+  <button class="opt">之後的任務會全部被拒絕執行</button>
+</div>
+<div class="quiz" data-question="關於虛擬執行緒要不要池化，下列敘述何者正確？" data-correct="0" data-explain="虛擬執行緒本就廉價短命，池化反而破壞它用完即丟的特性，通常不需要池化。">
+  <button class="opt">通常不需要池化，用完即可丟棄</button>
+  <button class="opt">必須池化才能達到百萬併發</button>
+  <button class="opt">必須用固定大小池化才安全</button>
+  <button class="opt">池化後才能支援阻塞操作</button>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Buffer Pool 與 Change Buffer：記憶體裡的寫入緩衝</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Buffer Pool 與 Change Buffer：記憶體裡的寫入緩衝</h1>
+<p class="meta">Step 3/5 · 日誌、WAL、複製與主從</p>
+
+<h2>學習目標</h2>
+<p>能講清楚 Buffer Pool 如何用記憶體加速讀寫、為什麼它的 LRU 要分成新舊兩區，以及 Change Buffer 為什麼只對普通二級索引有效、對唯一索引無效。</p>
+
+<h2>前言：為什麼 UPDATE 不用每次等磁碟</h2>
+
+<p>前面兩節都在講日誌：Redo Log 讓交易提交後不怕斷電，兩階段提交讓主從不會各說各話。但你可能會好奇一個更前面的問題：當你執行一筆 UPDATE，InnoDB 到底在哪裡改資料？如果每次都要把磁碟上那頁 16KB 的資料讀出來、改完再寫回去，就算日誌再快，光等磁碟就夠你受了。事實上，你平常感受到的「更新完馬上就看到新值」，很多時候根本沒碰過磁碟。</p>
+
+<p>這是因為 InnoDB 在最前面放了一道記憶體防線，先擋掉絕大多數的磁碟往返。這道防線分成兩個元件：負責讀寫資料頁的 Buffer Pool，以及專門處理索引變更的 Change Buffer。這一節把這兩個元件講清楚，你就能回答「為什麼 InnoDB 的寫入比你想的輕、快取為什麼不容易被一次大查詢洗掉」這類問題。</p>
+
+<h2>Buffer Pool：用記憶體的速度補磁碟的慢</h2>
+
+<p><strong>Buffer Pool（緩衝池）</strong>是 InnoDB 最核心的一塊記憶體。它存在的理由很單純：磁碟太慢、記憶體很快，那就把常用的資料頁搬進記憶體，之後讀寫都先找記憶體。它的工作可以分成「加速讀」與「加速寫」兩半。</p>
+
+<p>先看讀。當你要查一筆資料，InnoDB 不會直接殺去磁碟，而是先看 Buffer Pool 裡有沒有這一頁。如果有，稱為<strong>命中（Hit）</strong>，直接從記憶體回傳，這是微秒級的速度；如果沒有，稱為<strong>未命中（Miss）</strong>，才去磁碟把這一頁載進來，載完順手放進 Buffer Pool，下次就能命中。它快取的東西不只是資料本身，還包括索引頁、實作回滾用的 Undo 頁，甚至鎖相關的資訊。</p>
+
+<p>再看寫。當你執行 UPDATE，InnoDB 並不會立刻把資料寫回磁碟，而是只修改 Buffer Pool 裡那一頁，並把這一頁標記成<strong>髒頁（Dirty Page）</strong>，然後就回報你「更新成功」。真正的刷盤交給背景執行緒，等它有機會再一次處理。這樣做的好處是：如果你連續改同一個頁好幾次，這些修改會合併成一次 I/O；如果有多個不連續的頁要寫，也能被合併成批次的 I/O 一起送出去。</p>
+
+<h2>為什麼 Buffer Pool 不能用普通 LRU</h2>
+
+<p>記憶體有限，Buffer Pool 裝滿了總得淘汰一些頁。最直覺的做法是 LRU（Least Recently Used，最近最少使用）：把頁排成一條鏈，有人用就移到最前面，要淘汰就從最後面丟。這個想法在一般快取裡很合理，但放到資料庫會出一個致命的問題：<strong>全表掃描</strong>。</p>
+
+<p>想像你偶爾跑一次「把整張大表掃一遍」的查詢。按普通 LRU 的規則，這一趟掃描碰到的每一頁都會被插到鏈的最前面，把原本天天在用的熱點資料一路擠到尾部，最後全被淘汰。等這個全表掃描結束，Buffer Pool 裡幾乎只剩那些只被讀過一次的冷資料，快取命中率瞬間崩掉。這種現象有時被形容成「熱資料被洗掉了」。</p>
+
+<p>InnoDB 的解法是把 LRU 鏈切成兩段：靠近頭部的<strong>新生代（New Sublist，約占 5/8）</strong>放真正的熱資料，尾部的<strong>老年代（Old Sublist，約占 3/8）</strong>負責緩衝。關鍵規則是：<strong>新讀進來的頁，一律先放在老年代的頭部，不是直接進新生代。</strong>只有當這一頁在老年代裡待得夠久、又被再次訪問時，才有資格被晉升到新生代。如此一來，全表掃描帶來的一次性冷資料只會堆在老年代、很快被淘汰，搆不到真正的熱點資料。這一套改良版 LRU，也順帶解掉了「偶發大查詢把快取洗掉」的線上抖動。</p>
+
+<h2>Change Buffer：把「欠帳」先記下來</h2>
+
+<p>Buffer Pool 解決了大部分讀寫，但還有一種寫入場景特別尷尬：假設你執行 <code>INSERT INTO user ...</code>，這筆新增要同時更新主鍵索引和幾個二級索引。如果相關的索引頁剛好不在 Buffer Pool 裡，那為了改它，InnoDB 就得先從磁碟把索引頁讀進記憶體（一次隨機 I/O），改完再讓它慢慢刷回去。對於寫多讀少的業務，這種「為了改而先讀」的開銷會不斷累積。</p>
+
+<p><strong>Change Buffer（變更緩衝）</strong>就是用來省掉這趟讀取。當要更新一個二級索引、而對應的索引頁不在記憶體時，InnoDB 不讀磁碟，而是先在 Change Buffer 裡記一筆「我要對第 X 頁做一個插入」。這動作像是先賒個帳。等之後有人真的查這個頁，或者背景執行緒空閒時，再把這些「欠帳」合併（Merge）進真正的索引頁。省下的正是一次又一次的隨機讀。</p>
+
+<p>但這裡有個面試最愛追的細節：Change Buffer <strong>只對「普通二級索引」有效</strong>，對唯一索引（包含主鍵）無效。原因和唯一索引的職責有關，它必須保證資料不重複。當你插入一筆新資料，唯一索引必須立刻確認「這個值是不是已經存在」，而要確認這件事，就非得把那個索引頁讀進記憶體來比對不可。既然頁已經被讀上來了，直接更新記憶體裡的頁就好，Change Buffer「避免讀取」的意義自然消失。所以不是不想用，是根本用不上。</p>
+
+<h3>兩個元件怎麼分工</h3>
+
+<table>
+<thead>
+<tr><th>元件</th><th>加速的對象</th><th>運作方式</th><th>適用限制</th></tr>
+</thead>
+<tbody>
+<tr><td>Buffer Pool</td><td>資料頁的讀與寫</td><td>讀命中直接回；寫只改記憶體、標髒頁後異步刷盤</td><td>記憶體有限，靠改良 LRU 管理</td></tr>
+<tr><td>Change Buffer</td><td>二級索引的變更寫入</td><td>頁不在記憶體時先記欠帳，之後再 Merge</td><td>僅普通二級索引；唯一索引無效</td></tr>
+</tbody>
+</table>
+
+<h2>小結</h2>
+
+<blockquote>
+Buffer Pool 是 InnoDB 最核心的記憶體，讀的時候先找它、命中就回，寫的時候只改它、把頁標成髒頁再交給後台異步刷盤，用合併 I/O 換效能。它的淘汰不能只靠普通 LRU，否則一次全表掃描就會把熱資料洗光，所以切成新生代與老年代，新頁先進老年代。Change Buffer 則專門快取「頁不在記憶體時」的二級索引變更，避免多餘的隨機讀；但它只對普通二級索引有效，因為唯一索引插入時本來就必須讀頁做去重檢查。
+</blockquote>
+
+<p>到這裡，單一實例內部的寫入鏈路就完整了：日誌保證不丟，記憶體緩衝保證夠快。接下來把視角拉到多台機器：同一筆交易要怎麼從主庫搬到從庫？下一節用三個線程與一條中繼日誌，講清楚主從複製的完整鏈路。</p>
+
+<div class="lesson-nav">
+  <div><a href="./two-phase-commit.html">← 上一步：兩階段提交：Redo 與 Binlog 怎麼保持同步</a></div>
+  <div><a href="./replication-threads.html">下一步：主從複製三線程 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Buffer Pool 在「寫」的時候做什麼？" data-correct="1" data-explain="它只改記憶體中的頁並標成髒頁，真正刷盤交給後台異步處理。">
+  <button class="opt">立刻把整頁寫回磁碟才算成功</button>
+  <button class="opt">改記憶體標髒頁再交給後台刷盤</button>
+  <button class="opt">先把 Undo Log 清空再開始改資料</button>
+  <button class="opt">把交易直接改成非同步才提交</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Buffer Pool 不用普通的 LRU 演算法？" data-correct="2" data-explain="一次全表掃描會把熱點資料全部擠出，命中率會瞬間掉下去。">
+  <button class="opt">因為普通 LRU 的實作難度實在太高</button>
+  <button class="opt">因為普通 LRU 沒辦法支援並發的存取</button>
+  <button class="opt">因為全表掃描會把熱資料擠出快取</button>
+  <button class="opt">因為普通 LRU 無法處理髒頁的標記</button>
+</div>
+
+<div class="quiz" data-question="InnoDB 改良 LRU 的關鍵規則是什麼？" data-correct="0" data-explain="新讀入的頁先放老年代頭部，待久且再被訪問才晉升到新生代。">
+  <button class="opt">新頁先進老年代再晉升新生代</button>
+  <button class="opt">新頁直接進新生代並立刻鎖定</button>
+  <button class="opt">新頁與舊頁平均分散在兩個區段</button>
+  <button class="opt">新頁一律放尾端等待被淘汰掉</button>
+</div>
+
+<div class="quiz" data-question="Change Buffer 主要想省下哪一種開銷？" data-correct="3" data-explain="它把變更先記下來，避免為了改索引頁而多做一次隨機讀取。">
+  <button class="opt">交易提交時寫 Redo Log 的順序寫入</button>
+  <button class="opt">主從複製時網路傳輸的等待時間</button>
+  <button class="opt">交易回滾時從 Undo Log 還原資料</button>
+  <button class="opt">為了改索引頁得先讀磁碟的隨機讀</button>
+</div>
+
+<div class="quiz" data-question="Change Buffer 為什麼對唯一索引無效？" data-correct="1" data-explain="唯一索引插入時必須讀頁確認唯一性，頁已被讀入就不需要再緩衝。">
+  <button class="opt">因為唯一索引的頁面體積比普通索引大</button>
+  <button class="opt">因為唯一索引本來就必須讀頁做去重檢查</button>
+  <button class="opt">因為唯一索引不允許多筆交易同時寫入</button>
+  <button class="opt">因為唯一索引的變更無法被合併到頁面</button>
+</div>
+
+<div class="quiz" data-question="Buffer Pool 快取的不只是資料，還包括什麼？" data-correct="2" data-explain="它同時快取索引頁、Undo 頁與鎖資訊等，不限於資料本身。">
+  <button class="opt">只快取查詢語句的執行計畫結果</button>
+  <button class="opt">只快取最近提交過的交易清單</button>
+  <button class="opt">索引頁、Undo 頁與鎖資訊等</button>
+  <button class="opt">只快取 Binlog 的檔案內容片段</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 日誌、WAL、複製與主從 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

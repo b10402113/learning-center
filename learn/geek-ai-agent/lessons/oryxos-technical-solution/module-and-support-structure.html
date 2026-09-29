@@ -8,21 +8,24 @@
 </head>
 <body>
 
-<h1>九個 Maven 模組與支撐層</h1>
+<h1>九個 Maven 模組：把 OryxOS 組成能運作的系統</h1>
 <p class="meta">Step 4/5 · OryxOS 技術方案</p>
 
-<h2>學習目標</h2>
-<p>能列出九個 Maven 模組與依賴方向，並說明 Profile、ContextLoader、Channel、三種運行模式、CLI 與 ConfigLoader 在支撐層的角色。</p>
+<p>看到四層架構圖時，系統好像已經分門別類；但真正開始寫程式，還是會遇到一個實際問題：每段程式到底該放在哪裡？如果模組切得太大，所有東西會黏成一團；切得太細，又會讓依賴關係像纏在一起的耳機線。OryxOS 用九個 Maven 模組把能力與支撐責任分開，讓核心保持穩定，入口與外部整合則可以替換。</p>
+
+<h2>這一篇要掌握什麼</h2>
+<p>讀完後，你應該能列出九個 Maven 模組與它們的依賴方向，並說明 <code>Profile</code>、<code>ContextLoader</code>、<code>Channel</code>、三種運行模式、CLI 與 <code>ConfigLoader</code> 在支撐層各自扮演的角色。</p>
 
 <h2>從架構到工程：模組怎麼切</h2>
-<p>四層架構是心智模型，到了工程上要落成實際的 Maven 模組。OryxOS 切成九個模組，其中<strong>五個對應core</strong>、<strong>四個是支撐</strong>：</p>
+<p>四層架構是用來理解系統的心智模型；到了工程實作，必須落成實際的 Maven 模組。OryxOS 分成九個模組：五個承擔核心能力，四個負責把系統啟動、接入並維持運作。</p>
+
 <table>
 <thead>
 <tr><th>類別</th><th>模組</th><th>職責</th></tr>
 </thead>
 <tbody>
 <tr><td rowspan="5">核心能力</td><td><code>oryxos-provider</code></td><td>對接 LLM</td></tr>
-<tr><td><code>oryxos-core</code></td><td>ReAct 引擎與所有抽象（大家都在依賴它）</td></tr>
+<tr><td><code>oryxos-core</code></td><td>ReAct 引擎與所有抽象，其他模組都依賴它</td></tr>
 <tr><td><code>oryxos-memory</code></td><td>記憶</td></tr>
 <tr><td><code>oryxos-tool</code></td><td>工具與沙箱</td></tr>
 <tr><td><code>oryxos-web</code></td><td>對外服務</td></tr>
@@ -32,37 +35,60 @@
 <tr><td><code>oryxos-channel-cli</code></td><td>CLI 渠道</td></tr>
 </tbody>
 </table>
-<p>依賴方向是刻意設計的：<strong>所有模組都依賴 <code>oryxos-core</code></strong>（引擎與介面定義都在那裡），再由 <code>oryxos-boot</code> 組裝成一個可執行 JAR。Provider、Memory、Tool 都只透過介面被引擎使用，所以未來要新增渠道或工具，只需要<strong>多一個模組</strong>，不需要改動 core。這正是四層架構留出來的接縫。</p>
+
+<p>依賴方向是刻意設計的：所有模組都依賴 <code>oryxos-core</code>，因為引擎與介面定義都集中在這裡；最後再由 <code>oryxos-boot</code> 把各個零件組裝成可執行 JAR。</p>
+
+<p><code>Provider</code>、<code>Memory</code> 與 <code>Tool</code> 都透過介面被引擎使用。這代表未來要新增渠道或工具時，只要增加一個模組，不必修改 <code>core</code>。這個介面就是四層架構刻意留下的接縫：核心負責規則，外部模組負責實作。</p>
+
+<figure class="lesson-figure"><img src="./module-and-support-structure-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>支撐層一：工作區初始化與 Profile</h2>
-<p><code>oryxos init</code> 會建立一個工作區 <code>.oryxos/</code>，內容包括：<code>profiles/</code>、<code>memory/MEMORY.md</code>、<code>skills/</code>、<code>mcp_servers.yaml</code>、<code>sessions/</code>、<code>logs/</code>、Bootstrap 檔（<code>AGENTS.md</code>／<code>SOUL.md</code>／<code>USER.md</code>）以及 <code>oryxos.db</code>，並寫入預設模板與一個預設 Profile。</p>
-<p>Profile 是 OryxOS 的「設定單元」。<code>ProfileLoader</code> 把 YAML 解析成 <code>ProfileRegistry</code>，並在啟動時驗證：provider 是否存在、引用的 tool 是否已註冊、channel 是否支援、bootstrap 檔是否存在。<strong>驗證不通過只記 log、不阻擋啟動</strong>——避免一個壞 Profile 讓整個系統起不來。</p>
-<p>多個 Profile 可以並存，各自有不同的身份、工具、技能與渠道。這就是核心階段「最小可用的作業系統」：同一套引擎，掛不同設定，跑不同 Agent。</p>
+<p><code>oryxos init</code> 會建立一個工作區 <code>.oryxos/</code>。裡面包含 <code>profiles/</code>、<code>memory/MEMORY.md</code>、<code>skills/</code>、<code>mcp_servers.yaml</code>、<code>sessions/</code>、<code>logs/</code>、Bootstrap 檔（<code>AGENTS.md</code>／<code>SOUL.md</code>／<code>USER.md</code>）以及 <code>oryxos.db</code>，同時寫入預設模板與一個預設 Profile。</p>
+
+<p>Profile 可以看成 OryxOS 的「設定單元」。<code>ProfileLoader</code> 會把 YAML 解析成 <code>ProfileRegistry</code>，並在啟動時檢查幾件關鍵事情：provider 是否存在、引用的 tool 是否已註冊、channel 是否支援，以及 bootstrap 檔是否存在。</p>
+
+<p>驗證失敗時只記錄 log，不阻擋整個系統啟動。這個取捨很重要：一個 Profile 壞掉，應該只讓該 Profile 不可用，而不是讓整台 OryxOS 都起不來。多個 Profile 也能並存，各自指定不同的身份、工具、技能與渠道。同一套引擎因此可以掛上不同設定，運行不同的 Agent。</p>
 
 <h2>支撐層二：ContextLoader 與 Channel</h2>
-<p><strong>ContextLoader</strong> 統一載入兩類東西：Bootstrap（<code>AGENTS.md</code>／<code>SOUL.md</code>／<code>USER.md</code>）與 Skill（<code>SKILL.md</code>）。之所以合併，是因為兩者本質相同——都是要注入 system prompt 的 markdown。而且它<strong>每次組 prompt 都重新載入、不快取</strong>，跟 Memory 的處理一致。這是一個重要的架構修正：<code>SKILL.md</code> 屬於 ContextLoader，而不是 Tool。</p>
-<p><strong>Channel</strong> 負責「訊息從哪來」。核心只有 <code>CliChannel</code>（<code>oryxos chat</code>，用 stdin/stdout，綁定當前 Session）。企業 IM（企業微信、飛書、釘釘、Slack）留到擴展階段，屆時是寫一個 Channel Adapter，呼叫 Web Service 的 Agent API——<strong>HTTP 接入屬於 Web Service，不屬於 Channel</strong>。</p>
+<p><strong>ContextLoader</strong> 統一載入兩類內容：Bootstrap（<code>AGENTS.md</code>／<code>SOUL.md</code>／<code>USER.md</code>）與 Skill（<code>SKILL.md</code>）。它們雖然用途不同，但在架構上有共同點：都是要注入 system prompt 的 markdown 內容。</p>
+
+<p>ContextLoader 每次組 prompt 時都重新載入，不使用快取，處理方式和 Memory 一致。這樣檔案內容一旦更新，下一次組 prompt 就能讀到最新版本。也因此，<code>SKILL.md</code> 應該屬於 ContextLoader，而不是 Tool；Skill 是上下文，Tool 才是可被呼叫的能力。</p>
+
+<p><strong>Channel</strong> 負責回答「訊息從哪裡來」。目前核心只有 <code>CliChannel</code>，也就是 <code>oryxos chat</code> 使用的 stdin/stdout，並綁定當前 Session。</p>
+
+<p>企業微信、飛書、釘釘與 Slack 等企業 IM 會留到擴展階段。屆時要做的是 Channel Adapter，讓它呼叫 Web Service 的 Agent API。HTTP 接入屬於 Web Service，不屬於 Channel；這條邊界能避免同一份接入邏輯散落在不同層。</p>
 
 <h2>支撐層三：三種運行模式</h2>
-<p>同一個核心，有三個入口：</p>
+<p>同一個核心可以從三個入口啟動。它們共用 Profile 設定與 Session 儲存，真正不同的只有訊息接入方式。</p>
+
 <table>
 <thead>
 <tr><th>模式</th><th>命令</th><th>用途</th></tr>
 </thead>
 <tbody>
-<tr><td>互動</td><td><code>oryxos chat</code></td><td>終端機一問一答</td></tr>
+<tr><td>互動</td><td><code>oryxos chat</code></td><td>在終端機中一問一答</td></tr>
 <tr><td>服務</td><td><code>oryxos serve</code></td><td>啟動 Web Service</td></tr>
-<tr><td>閘道</td><td><code>oryxos gateway</code></td><td>常駐守護，同時掛多個渠道</td></tr>
+<tr><td>閘道</td><td><code>oryxos gateway</code></td><td>常駐守護，同時掛載多個渠道</td></tr>
 </tbody>
 </table>
-<p>三者共用同一份 Profile 設定與 Session 儲存，<strong>差別只在接入層</strong>。這再次印證了分層的價值：核心完全不用知道自己被哪個入口喚醒。</p>
+
+<p>核心不需要知道自己是被終端機、HTTP 請求，還是常駐閘道喚醒。入口只負責把訊息送進來，核心則照同一套流程處理。這就是分層的實際價值：入口可以更換，Agent 的行為不必跟著重寫。</p>
+
+<figure class="lesson-figure"><img src="./module-and-support-structure-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>支撐層四：CLI 與 ConfigLoader</h2>
-<p><strong>CLI</strong> 用 Picocli 實作，主類別 <code>OryxOsCli</code> 註冊 12 個子命令（init／status／chat／serve／gateway／profile 系列／provider list／tool list／session list）。一個巧思是：<strong>不需要 Spring context 的命令（例如 init、profile list）直接執行</strong>，跳過啟動 Spring 的 2–4 秒，讓常用操作瞬間回應。</p>
-<p><strong>ConfigLoader</strong> 統一載入 LLM API key、provider 憑證、MCP 憑證。核心從環境變數或獨立的本地設定檔讀取，Profile 裡用 <code>${ENV_VAR}</code> 佔位；載入時驗證必填與格式，錯誤要講清楚。完整的加密、輪替、KMS（金鑰管理服務）留到擴展階段——但這個模組必須從第一天就存在，因為憑證載入跟審計一樣，是企業級的底線。</p>
+<p><strong>CLI</strong> 使用 Picocli 實作，主類別 <code>OryxOsCli</code> 註冊 12 個子命令，包括 <code>init</code>、<code>status</code>、<code>chat</code>、<code>serve</code>、<code>gateway</code>、<code>profile</code> 系列、<code>provider list</code>、<code>tool list</code> 與 <code>session list</code>。</p>
+
+<p>CLI 有一個實用的分流：不需要 Spring context 的命令，例如 <code>init</code> 與 <code>profile list</code>，可以直接執行，不必啟動 Spring。這能跳過 2–4 秒的啟動時間，讓常用的查詢與初始化操作立即回應。</p>
+
+<p><strong>ConfigLoader</strong> 統一載入 LLM API key、provider 憑證與 MCP 憑證。核心可以從環境變數或獨立的本地設定檔讀取這些資料，Profile 則使用 <code>${ENV_VAR}</code> 作為佔位符。載入時會驗證必填欄位與格式，發生錯誤時也要清楚說明原因。</p>
+
+<p>完整的加密、憑證輪替與 KMS（金鑰管理服務）會留到擴展階段。不過，<code>ConfigLoader</code> 從第一天就必須存在，因為憑證載入和審計一樣，都是企業級系統不能臨時補上的底線。</p>
 
 <h2>為什麼是九個，而不是更多或更少</h2>
-<p>模組數量的答案是架構推出來的：五個能力各給一個模組，加上啟動、命令列、儲存、渠道四個支撐。這個切法讓每個模組有單一職責，又不會切得太碎而互相糾纏。當你在實作階段不確定某段程式該放哪個模組時，回頭看這張表通常就有答案——而如果答案是「不知道放哪」，往往代表它其實屬於 <code>oryxos-core</code> 的抽象。</p>
+<p>九個模組不是任意湊出的數字。五個核心能力各自對應一個模組，再加上啟動、命令列、儲存與渠道四個支撐模組。這樣切分後，每個模組有清楚的單一職責，又不會細到彼此糾纏。</p>
+
+<p>實作時若不確定某段程式該放在哪裡，可以先回頭對照這張表。若怎麼看都找不到合適的位置，通常表示那段程式不是某個具體能力，而是應該放進 <code>oryxos-core</code> 的抽象。當模組邊界能回答「這段程式為什麼在這裡」，架構才真正落到工程上。</p>
 
 <div class="lesson-nav">
   <div><a href="./capability-design-tradeoffs.html">← 上一步：五大能力的設計取捨</a></div>
@@ -77,42 +103,36 @@
   <button class="opt">oryxos-core</button>
   <button class="opt">oryxos-web</button>
 </div>
-
 <div class="quiz" data-question="下列哪一個不是 OryxOS 的支撐模組？" data-correct="1" data-explain="oryxos-memory 屬核心能力五模組，支撐為 boot/cli/storage/channel-cli。">
   <button class="opt">oryxos-boot</button>
   <button class="opt">oryxos-memory</button>
   <button class="opt">oryxos-storage</button>
   <button class="opt">oryxos-channel-cli</button>
 </div>
-
 <div class="quiz" data-question="SKILL.md 應該由哪個元件載入？" data-correct="3" data-explain="架構修正後，SKILL.md 屬於 ContextLoader，與 Bootstrap 一起注入。">
   <button class="opt">ToolRegistry 統一註冊為工具</button>
   <button class="opt">SandboxChecker 在執行前載入</button>
   <button class="opt">McpClientService 連線後取得</button>
   <button class="opt">ContextLoader 與 Bootstrap 一起</button>
 </div>
-
 <div class="quiz" data-question="哪一種運行模式會同時掛載多個渠道？" data-correct="1" data-explain="oryxos gateway 常駐守護並同時掛多個渠道。">
   <button class="opt">oryxos chat</button>
   <button class="opt">oryxos gateway</button>
   <button class="opt">oryxos serve</button>
   <button class="opt">oryxos status</button>
 </div>
-
 <div class="quiz" data-question="CLI 為什麼讓某些命令跳過 Spring 啟動？" data-correct="0" data-explain="init、profile list 等不需 context，直接執行省下 2–4 秒。">
   <button class="opt">省下啟動 Spring 的數秒延遲</button>
   <button class="opt">因為 Picocli 無法整合 Spring</button>
   <button class="opt">為了繞過 Profile 的驗證流程</button>
   <button class="opt">因為這些命令不需要記錄日誌</button>
 </div>
-
 <div class="quiz" data-question="Profile 啟動驗證失敗時的處理為何？" data-correct="2" data-explain="只記 log、不阻擋啟動，避免一個壞設定讓系統起不來。">
   <button class="opt">中止整個應用程式的啟動</button>
   <button class="opt">自動刪除該份 YAML 設定檔</button>
   <button class="opt">記錄日誌但不阻擋啟動</button>
   <button class="opt">改用預設值強制覆寫欄位</button>
 </div>
-
 <div class="quiz" data-question="新增企業 IM 渠道時，正確的做法是哪一個？" data-correct="0" data-explain="寫 Channel Adapter，呼叫 Web Service 的 Agent API，不改引擎。">
   <button class="opt">寫 adapter 呼叫 Agent API</button>
   <button class="opt">直接修改 oryxos-core 引擎</button>

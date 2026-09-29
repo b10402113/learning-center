@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>一個物件在記憶體裡長什麼樣｜JVM 執行時與類載入</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一個物件在記憶體裡長什麼樣？</h1>
+<p class="meta">JVM 執行時與類載入 · Step 3/5 · 學習目標：拆解 HotSpot 物件的三個區塊，理解 Mark Word 為什麼會隨鎖狀態變化，並說明 8 位元組對齊與欄位重排序的用途。</p>
+
+<h2>前言：只有一個 int，為什麼不只佔 4 個位元組？</h2>
+<p>假設你寫了一個非常精簡的類別，裡面只有一個 <code>int</code> 欄位。照直覺想，它應該只需要 4 個位元組。但實際量測 HotSpot 中的物件時，你會發現它遠不只這麼大，而且大小通常還會被補成 8 的倍數。</p>
+<p>這些多出來的空間並不是單純浪費。裡面有些位元組記錄物件的執行狀態，有些用來指向物件所屬的類別，還有一些則是為了讓 CPU 更有效率地讀取記憶體。</p>
+<p>搞懂物件佈局，等於拿到一張 JVM 底層地圖。<code>synchronized</code> 為什麼能從輕量狀態逐步升級成重量級鎖？GC 怎麼知道物件經歷了幾次回收？欄位宣告順序為什麼可能影響記憶體用量？這些問題，都能在物件的這一小塊記憶體裡找到線索。</p>
+
+<h2>先看全貌：三塊拼圖</h2>
+<p>在 HotSpot 虛擬機裡，一個物件的記憶體佈局可以想成三塊依序排列的拼圖：</p>
+
+<table>
+  <tr><th>區塊</th><th>內容</th><th>是否必有</th></tr>
+  <tr><td><strong>物件頭</strong></td><td>Mark Word、Klass Pointer；陣列另外有長度欄位</td><td>必有</td></tr>
+  <tr><td><strong>實例資料</strong></td><td>類別裡定義的成員變數，也包含繼承而來的欄位</td><td>必有</td></tr>
+  <tr><td><strong>對齊填充</strong></td><td>沒有實際語意，只負責把大小補成 8 的倍數</td><td>不一定有</td></tr>
+</table>
+
+<p>可以先記住一個簡單口訣：<strong>「頭、資料、補齊」</strong>。其中最值得深入看的，是物件頭，因為它同時牽涉到類別資訊、GC 與鎖。</p>
+
+<figure class="lesson-figure"><img src="./object-memory-layout-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>物件頭：物件的身分證與狀態牌</h2>
+<p>物件頭就像物件隨身攜帶的身分證與狀態牌。JVM 不只需要知道「這是哪個類別的物件」，還要知道它目前的雜湊碼、GC 年齡，以及是否正被鎖定。</p>
+<p>物件頭主要包含以下幾個部分。</p>
+
+<p><strong>一、Mark Word：會隨情境變形的狀態欄位。</strong></p>
+<p>Mark Word 是物件頭裡最核心的欄位，會儲存物件在<strong>執行時</strong>的狀態資料，例如雜湊碼（HashCode）、GC 分代年齡、鎖狀態標誌、目前持有鎖的執行緒，以及偏向執行緒 ID。</p>
+<p>它特別的地方在於：<strong>大小固定，但內容的切法不固定。</strong>在 64 位元 JVM 上，Mark Word 通常是 64 位元；可是這些位元要如何解讀，會隨著物件目前的鎖狀態改變。</p>
+<p>例如，物件還沒有被鎖定時，這塊空間可能拿來存雜湊碼與 GC 年齡。當物件升級成重量級鎖後，Mark Word 可能改成存放指向 Monitor 的指標。原本存雜湊碼的空間，就被重新分配給新的用途。</p>
+<p>這種設計很像一間會改裝的儲藏室：平常只需要放少量物品，就不必額外蓋一間房；等到物件真的進入更複雜的鎖定狀態，再把同一塊空間拿來存更重要的資訊。如此一來，物件在大多數時間都能維持較低的額外開銷。</p>
+
+
+<p><strong>二、Klass Pointer：指向類別資訊的指標。</strong></p>
+<p>JVM 看到一個物件時，必須知道它究竟是 <code>Student</code>、<code>Person</code>，還是其他類別的實例。Klass Pointer 就負責把物件連到方法區中的<strong>類元資料</strong>。</p>
+<p>有了這個指標，JVM 才能找到物件所屬的類別，進一步知道它有哪些欄位與方法。你可以把它想成物件的「類別索引」：物件本身保存索引，JVM 再依索引找到完整的類別描述。這也說明了物件記憶體與方法區之間的關聯。</p>
+
+<p><strong>三、陣列長度：只有陣列物件才需要。</strong></p>
+<p>普通物件沒有這個欄位，只有陣列物件才會額外記錄陣列長度。這通常需要 4 個位元組。</p>
+<p>原因很直接：普通物件的欄位結構由類別定義，JVM 可以從類別資訊得知；陣列的元素數量則可能每次建立都不同，因此必須在物件本身記住長度。</p>
+
+<h2>實例資料：你真正寫進類別裡的欄位</h2>
+<p>物件頭之後，就是實例資料，也就是你在類別裡定義的欄位，例如 <code>int id</code>、<code>String name</code>、<code>long timestamp</code>。從父類別繼承而來的欄位，也會放在這一區。</p>
+<p>這裡有一個容易誤會的地方：<strong>欄位不一定會按照原始碼中的宣告順序，一個接一個排列。</strong>為了減少浪費，JVM 可能會重新安排欄位的位置。</p>
+
+<h2>欄位重排序：把零碎空間收整齊</h2>
+<p>欄位重排序的主要目的，是減少物件中不必要的空隙。通常會讓相同寬度的欄位盡量放在一起，例如把 <code>long</code> 和 <code>double</code> 放在一起，把 <code>int</code> 放在一起，再處理 <code>short</code> 與 <code>byte</code>。此外，父類別的欄位會排在子類別欄位之前。</p>
+<p>為什麼需要這樣做？想像兩個 8 位元組的 <code>long</code> 中間夾著一個 1 位元組的 <code>byte</code>。如果完全照宣告順序排列，中間或後面很可能留下零碎空間，最後還得靠填充補齊。欄位排得更緊密，就能少留下這些縫隙。</p>
+<p>因此，如果你特別在意記憶體用量，通常可以把欄位按照型別寬度由大到小宣告，減少可能的填充空間。不過在一般開發中，不需要過度手動調整，JIT 與 JVM 已經會處理大部分情況。</p>
+
+<figure class="lesson-figure"><img src="./object-memory-layout-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>對齊填充：為什麼物件大小要是 8 的倍數？</h2>
+<p>前面的物件頭與實例資料組合起來後，總大小不一定剛好是 8 的倍數。這時，HotSpot 會在物件尾端補上一些沒有實際語意的空位元組，這就是<strong>對齊填充（Padding）</strong>。</p>
+<p>它的任務很單純：確保物件的起始位址符合 8 位元組對齊。換句話說，物件會被放在適合 CPU 存取的位置上。</p>
+<p>這和 CPU 讀取記憶體的方式有關。CPU 通常不是每次只讀一個位元組，而是以較大的資料單位一次抓取一整塊。如果物件位置對齊，CPU 可能一次就能取得需要的資料；如果位置跨在兩個區塊之間，就可能要讀兩次，再把資料拼接起來，存取成本也會增加。</p>
+<p>所以，對齊填充是一種務實的交換：用少量空間，換取較規整的記憶體存取。</p>
+
+
+<h2>用空物件算一次：為什麼不是 0 位元組？</h2>
+<p>在 64 位元 JVM、開啟壓縮指標的情況下，一個沒有任何欄位的空物件，也不是 0 位元組。它的物件頭大約需要 12 個位元組：</p>
+
+<ul>
+  <li>Mark Word：8 個位元組</li>
+  <li>Klass Pointer：4 個位元組</li>
+</ul>
+<p>12 個位元組不是 8 的倍數，因此還要補齊到 16 個位元組。這就是為什麼「空物件」仍然會佔用記憶體。</p>
+
+<figure class="lesson-figure"><img src="./object-memory-layout-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>回到最開始那個只有一個 <code>int</code> 的物件，就能理解它為什麼不會只佔 4 個位元組：除了 <code>int</code> 本身，還要加上物件頭，最後可能還需要對齊填充。</p>
+
+<h2>小結：記住「頭、資料、補齊」</h2>
+<p>HotSpot 物件的記憶體佈局，可以拆成三部分：物件頭、實例資料與對齊填充。</p>
+<p>物件頭中的 Mark Word 會記錄雜湊碼、GC 分代年齡與鎖狀態，而且會隨著鎖升級而改變內容的解讀方式。Klass Pointer 則指向方法區中的類元資料，讓 JVM 知道物件屬於哪個類別；陣列物件另外還會記錄長度。</p>
+<p>實例資料存放你定義的欄位，以及從父類別繼承而來的欄位。JVM 可能重新安排欄位順序，讓相同寬度的欄位靠在一起，減少零碎空間。最後，對齊填充則把物件大小補成 8 的倍數，讓記憶體存取更有效率。</p>
+<p>掌握這三塊之後，往後理解鎖升級、GC 年齡、欄位配置與物件記憶體用量，就不會只是在背結論，而是知道每個結論從哪裡來。</p>
+
+<div class="lesson-nav">
+  <a href="./runtime-data-areas.html">← 上一步：五個執行時資料區與堆棧之別</a>
+  <a href="./class-loading-phases.html">下一步：類別載入七階段：從 .class 到 Class 物件 →</a>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="HotSpot 物件的記憶體佈局由哪三塊組成？" data-correct="2" data-explain="物件依序由對象頭、實例數據、對齊填充三塊組成。">
+  <button class="opt">方法區、堆、棧</button>
+  <button class="opt">Mark Word、常數池、鎖</button>
+  <button class="opt">對象頭、實例數據、對齊填充</button>
+  <button class="opt">對象頭、類元資料、監視器</button>
+</div>
+<div class="quiz" data-question="Mark Word 為什麼被說成「結構不固定」？" data-correct="1" data-explain="Mark Word 總大小固定，但位元怎麼解讀會隨鎖狀態改變，例如升級重量級鎖時改存 Monitor 指標。">
+  <button class="opt">它的大小會隨物件欄位增減</button>
+  <button class="opt">它存的內容會隨鎖狀態改變</button>
+  <button class="opt">它只在陣列物件上存在</button>
+  <button class="opt">它會被對齊填充覆蓋掉</button>
+</div>
+<div class="quiz" data-question="Klass Pointer 的作用是什麼？" data-correct="3" data-explain="Klass Pointer 指向方法區中的類元資料，讓物件知道自己屬於哪個類別。">
+  <button class="opt">記錄物件的 GC 分代年齡</button>
+  <button class="opt">記錄物件的雜湊碼</button>
+  <button class="opt">記錄陣列的長度</button>
+  <button class="opt">指向方法區的類元資料</button>
+</div>
+<div class="quiz" data-question="哪一種物件會在對象頭裡多出一個長度欄位？" data-correct="0" data-explain="只有陣列物件需要記錄長度，普通物件沒有這個欄位。">
+  <button class="opt">陣列物件</button>
+  <button class="opt">靜態物件</button>
+  <button class="opt">被鎖住的物件</button>
+  <button class="opt">繼承自父類的物件</button>
+</div>
+<div class="quiz" data-question="JVM 為什麼要對實例欄位做重排序？" data-correct="2" data-explain="把相同寬度的欄位排在一起能減少縫隙與填充，讓物件更小。">
+  <button class="opt">讓欄位讀取順序更直覺</button>
+  <button class="opt">讓父類欄位排到最後</button>
+  <button class="opt">減少縫隙、節省記憶體</button>
+  <button class="opt">加快類別載入的速度</button>
+</div>
+<div class="quiz" data-question="物件大小被要求是 8 位元組整數倍，主要原因是什麼？" data-correct="1" data-explain="對齊讓 CPU 一次就能抓取需要的資料，避免拆成兩次讀取，換取存取效率。">
+  <button class="opt">方便垃圾回收器標記</button>
+  <button class="opt">讓 CPU 讀取更有效率</button>
+  <button class="opt">讓 Mark Word 有空間擴充</button>
+  <button class="opt">配合常數池的定址方式</button>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>三種日誌與 WAL：Redo、Undo、Binlog 各司其職</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>三種日誌與 WAL：Redo、Undo、Binlog 各司其職</h1>
+<p class="meta">Step 1/5 · 日誌、WAL、複製與主從</p>
+
+<h2>學習目標</h2>
+<p>能講清楚 Redo Log、Undo Log、Binlog 各自負責什麼、記錄什麼內容、怎麼寫入，並說出 WAL「先寫日誌再寫磁碟」為什麼能同時換來效能與持久性。</p>
+
+<h2>前言：一句 Query OK，代價藏在哪裡</h2>
+
+<p>你在程式裡跑一句 <code>UPDATE user SET balance = balance - 100 WHERE id = 1;</code>，資料庫很快回你「Query OK, 1 row affected」。使用者只看到餘額變了，你大概也不會多想。但如果把鏡頭拉到磁碟這一層，事情並不輕鬆：這一行的資料其實藏在一個 16KB 的資料頁裡，而那個頁散落在磁碟的某個位置。改幾個位元組，卻要動一整頁；更麻煩的是，下一句 UPDATE 可能改的是另一頁，磁碟讀寫頭就得再次跳過去。這種東跳西跳的讀寫，叫做隨機 I/O，慢到會把整個系統的寫入吞吐量拖垮。</p>
+
+<p>可是反過來，如果為了避開磁碟，資料只改在記憶體裡就宣告成功，那伺服器一斷電，改動全部消失，這筆交易等於白做。效能和安全在這裡正面對撞。MySQL 解開這個死結的辦法，不是二選一，而是引進一套「日誌」：先把要做的事寫到日誌，資料本體晚點再慢慢處理。這一節先把三種日誌的角色認清楚，因為後面講兩階段提交、主從複製，全都建立在它們之上。</p>
+
+<h2>為什麼不能直接改磁碟：隨機寫與寫放大</h2>
+
+<p>在講日誌之前，先說清楚「直接寫磁碟」到底貴在哪裡。InnoDB 管理資料的最小單位是頁（Page），預設大小 16KB。假設你只把某個欄位從 1 改成 0，實際上只動了幾個位元組，但 InnoDB 沒辦法只寫這幾個位元組，它必須把整頁 16KB 讀進來、改完、再整頁寫回去。改了幾個位元組卻寫了一整頁，這種不成比例的開銷就叫<strong>寫放大</strong>。</p>
+
+<p>更糟的是，你要改的那些頁在磁碟上並不連續。如果同一筆交易碰了十個不同的頁，每次都要跑到不同位置去寫，這就是<strong>隨機 I/O</strong>。相對地，如果能把所有修改都「追加」到同一個檔案尾端，磁頭幾乎不用移動，這叫<strong>順序 I/O</strong>。在機械硬碟的年代，順序寫比隨機寫快上數十倍；就算換成 SSD，順序寫依然有明顯優勢。所以整個資料庫寫入鏈路的核心思路就是一句話：想辦法把隨機寫，換成順序寫。</p>
+
+<h2>WAL：先寫日誌，再寫磁碟</h2>
+
+<p>換掉隨機寫的技術叫 <strong>WAL（Write-Ahead Logging，預寫日誌）</strong>。它的規則只有一條：<strong>在你對資料做任何修改之前，必須先把「修改記錄」寫進日誌並落盤，就算真正的資料檔還沒動，這個交易也算提交成功。</strong></p>
+
+<p>你可以想像成老派掌櫃的記帳法。有客人來賒帳，掌櫃不會立刻翻開厚重的總帳一筆一筆找位置，而是先在手邊的「流水帳」上順手記一筆，等晚上打烊、有空了，再把流水帳慢慢謄到總帳上。如果哪天總帳不小心燒了，只要流水帳還在，照著重抄一遍就能補回來。這裡的流水帳就是日誌，總帳就是真正的資料檔。</p>
+
+<p>WAL 一次解決兩個難題。第一是效能：日誌是追加寫入，把慢的隨機寫換成快的順序寫。第二是安全：因為日誌已經先落盤，萬一真的斷電、記憶體裡的髒資料全沒了，重啟後只要拿日誌從頭重做一遍，資料就能回到斷電前。也因為這兩點，資料庫才敢把真正的資料頁交給背景執行緒，慢慢、批次地刷回磁碟。</p>
+
+<h2>Redo Log：把沒做完的事重做一遍</h2>
+
+<p>三種日誌裡，<strong>Redo Log（重做日誌）</strong>是 InnoDB 引擎特有的，職責是保證<strong>持久性（Durability）</strong>：交易一旦提交，就算下一秒斷電也不能丟。它的運作方式是這樣：資料改在記憶體（Buffer Pool）後，會先把修改寫進 Redo Log；只要 Redo Log 落盤，交易就算成功，真正的資料頁不急著刷。假如伺服器在此時斷電，重啟後 MySQL 會讀 Redo Log，把那些還沒寫進資料檔的操作「重做」一遍。</p>
+
+<p>Redo Log 的內容是<strong>物理日誌</strong>，記的是「在哪個資料頁、哪個偏移量做了什麼修改」，例如「把第 10 號頁偏移量 500 的位元組改成 1」。因為記的是最底層的頁面改動，恢復時直接照著覆蓋就行，速度非常快。它的寫入方式是<strong>循環寫</strong>：檔案大小固定（例如一組 <code>ib_logfile</code>），寫滿一圈就回到開頭覆蓋舊的。這也意味著 Redo Log 不會保存太久遠的歷史，它的任務只是撐過一次崩潰。</p>
+
+<h2>Undo Log：把做過的事倒回去，順便當歷史版本</h2>
+
+<p><strong>Undo Log（回滾日誌）</strong>負責另一件事：保證<strong>原子性（Atomicity）</strong>。原子性的意思是「一個交易要嘛全做、要嘛全不做」，但交易執行到一半可能失敗，或使用者主動 <code>ROLLBACK</code>，這時就需要把已經改過的資料還原。InnoDB 的做法是在修改資料前，先記一條「反向操作」：你 INSERT 一筆，它記一條對應的 DELETE；你把 <code>a</code> 從 1 改成 0，它就記下原本是 1。要回滾時，翻開這本帳照著倒著做，資料就回到交易開始前的樣子。</p>
+
+<p>Undo Log 是<strong>邏輯日誌</strong>，記的是「反向的 SQL 邏輯」而不是頁面位元組，所以回滾時是把資料「邏輯上改回去」。它的寫入方式是<strong>追加寫</strong>，不能像 Redo Log 那樣隨意覆蓋，因為它還有一份兼職：MVCC（多版本並發控制）正是靠 Undo Log 保存的舊版本，讓讀取的人能看到交易開始那一刻的資料快照。也因為這份兼職，Undo Log 必須等長交易結束、且沒有任何查詢還需要那些舊版本時，才會由背景的 Purge 執行緒清掉。</p>
+
+<h2>Binlog：屬於 Server 層的歸檔帳本</h2>
+
+<p>第三種是 <strong>Binlog（二進位日誌）</strong>，它和前兩者的最大差別是<strong>層級不同</strong>：Redo Log 與 Undo Log 都是 InnoDB 引擎特有的，而 Binlog 由 MySQL 的 Server 層實作，不管你用哪一種儲存引擎都能記錄。它記錄的是「語句的原始邏輯」，例如「把 id=2 這行的 Name 改成 ZhangSan」，屬於<strong>邏輯日誌</strong>。</p>
+
+<p>Binlog 採<strong>追加寫</strong>，寫滿一個檔案就切換到下一個，只要你不刪，它能把很久以前的變更都留著。它的用途因此是<strong>主從複製（Replication）</strong>與<strong>資料歸檔恢復（Data Recovery）</strong>：從庫要靠它同步資料，你也可以靠它把資料庫還原到過去某個時間點。</p>
+
+<p>常見的追問是：既然 Redo Log 也能恢復資料，為什麼還要 Binlog？答案有兩個。第一，Redo Log 是循環寫的，舊記錄會被覆蓋，根本無法把資料庫還原到「上個月的某一天」，這種時間點還原（PITR）只有全量保存的 Binlog 做得到。第二，主從同步與資料遷移需要一種跨引擎通用的格式，而 Redo Log 是 InnoDB 專屬的，不能拿來餵給其他系統。所以兩者不是替代關係，是各司其職。</p>
+
+<h3>三種日誌對照</h3>
+
+<table>
+<thead>
+<tr><th>日誌</th><th>層級</th><th>記錄型態</th><th>寫入方式</th><th>核心職責</th></tr>
+</thead>
+<tbody>
+<tr><td>Redo Log</td><td>InnoDB 引擎</td><td>物理日誌</td><td>循環寫</td><td>崩潰恢復、持久性</td></tr>
+<tr><td>Undo Log</td><td>InnoDB 引擎</td><td>邏輯日誌</td><td>追加寫</td><td>交易回滾、MVCC 舊版本</td></tr>
+<tr><td>Binlog</td><td>Server 層</td><td>邏輯日誌</td><td>追加寫</td><td>主從複製、歸檔恢復</td></tr>
+</tbody>
+</table>
+
+<h2>小結</h2>
+
+<blockquote>
+直接把資料頁寫回磁碟會撞上隨機 I/O 與寫放大，所以 InnoDB 用 WAL「先寫日誌、再寫磁碟」把隨機寫換成順序寫，同時保證崩潰可恢復。Redo Log 是引擎層的物理日誌、循環寫，負責持久性與崩潰重做；Undo Log 是引擎層的邏輯日誌、追加寫，負責原子性回滾，還兼職供 MVCC 讀取歷史版本；Binlog 是 Server 層的邏輯日誌、追加寫，負責主從複製與時間點還原。三者定位不同，缺一不可。
+</blockquote>
+
+<p>但這裡有個新問題：Redo Log 屬於 InnoDB，Binlog 屬於 Server 層，一筆交易卻要同時寫這兩份。如果寫了一份、另一份還沒寫就斷電，會發生什麼事？下一節要講的兩階段提交，就是用來保證這兩份日誌「要嘛一起成功、要嘛一起失敗」。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./two-phase-commit.html">下一步：兩階段提交：Redo 與 Binlog 怎麼保持同步 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="WAL 技術的核心規則是什麼？" data-correct="1" data-explain="先讓日誌落盤，即使資料檔還沒更新，交易也已經算成功。">
+  <button class="opt">先把資料檔寫好再補寫日誌</button>
+  <button class="opt">先寫日誌落盤再寫資料檔案</button>
+  <button class="opt">日誌與資料檔必須同時寫入</button>
+  <button class="opt">只在交易回滾的時候才寫日誌</button>
+</div>
+
+<div class="quiz" data-question="Redo Log 為什麼能提升寫入效能？" data-correct="2" data-explain="日誌是追加寫入，把原本的隨機 I/O 變成了順序 I/O。">
+  <button class="opt">因為它把資料頁都鎖在記憶體裡</button>
+  <button class="opt">因為它把交易改成非同步才提交</button>
+  <button class="opt">因為它把隨機寫變成順序追加寫</button>
+  <button class="opt">因為它讓每一頁的體積縮得更小</button>
+</div>
+
+<div class="quiz" data-question="Undo Log 除了回滾，還兼職做什麼？" data-correct="0" data-explain="它保存舊版本，讓 MVCC 的讀取能看到交易開始時的快照。">
+  <button class="opt">供 MVCC 讀取歷史版本使用</button>
+  <button class="opt">供主從複製同步資料使用</button>
+  <button class="opt">供崩潰後重做資料時使用</button>
+  <button class="opt">供存取時間點還原資料使用</button>
+</div>
+
+<div class="quiz" data-question="下列哪一種日誌屬於 MySQL 的 Server 層？" data-correct="3" data-explain="Binlog 由 Server 層實作，所有儲存引擎通用。">
+  <button class="opt">Redo Log 重做日誌檔案</button>
+  <button class="opt">Undo Log 回滾日誌檔案</button>
+  <button class="opt">Relay Log 中繼日誌檔案</button>
+  <button class="opt">Binlog 二進位歸檔日誌</button>
+</div>
+
+<div class="quiz" data-question="既然 Redo Log 能恢復資料，為何還需要 Binlog？" data-correct="2" data-explain="Redo Log 循環寫會覆蓋舊記錄，無法做到時間點還原與跨引擎複製。">
+  <button class="opt">因為 Redo Log 的讀取速度太慢</button>
+  <button class="opt">因為 Redo Log 無法保證持久性</button>
+  <button class="opt">因為 Redo Log 存不住長久歷史</button>
+  <button class="opt">因為 Redo Log 只能記錄查詢語句</button>
+</div>
+
+<div class="quiz" data-question="Redo Log 與 Binlog 的記錄型態分別是什麼？" data-correct="1" data-explain="Redo Log 記頁面物理改動，Binlog 記語句或行的邏輯變化。">
+  <button class="opt">兩者都是記錄頁面位元組的物理日誌</button>
+  <button class="opt">Redo 是物理日誌、Binlog 是邏輯日誌</button>
+  <button class="opt">Redo 是邏輯日誌、Binlog 是物理日誌</button>
+  <button class="opt">兩者都是記錄 SQL 語句的邏輯日誌</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 日誌、WAL、複製與主從 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

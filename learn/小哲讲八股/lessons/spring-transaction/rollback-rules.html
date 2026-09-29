@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>回滾規則：為什麼碰上受檢異常就不回滾</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>回滾規則：為什麼碰上受檢異常就不回滾</h1>
+<p class="meta">Step 2/4 · Spring 事務管理與失效場景</p>
+
+<h2>學習目標</h2>
+<p>能說出 Spring 預設只對 RuntimeException 與 Error 回滾這條規則、分辨受檢與非受檢異常的差別，並解釋為什麼 <code>rollbackFor</code> 在實務上幾乎是必加的設定。</p>
+
+<h2>前言：異常明明丟出來了，資料卻沒回滾</h2>
+<p>上一節我們確認了一件事：代理會看著方法有沒有丟出異常，來決定提交還是回滾。於是很多人就有一個直覺：「我只要在方法裡丟異常，交易就會回滾」。聽起來很合理，但實際上你很可能遇過這種情況：程式碼裡明明 <code>throw new IOException("檔案壞了")</code>，執行完去查資料庫，發現資料竟然已經提交、沒有撤銷。</p>
+<p>這不是 Spring 壞了，而是它的預設規則和你想的不一樣。這一節要把這條規則講清楚：<strong>Spring 預設只認某些種類的異常</strong>。搞懂它，你才知道為什麼有些異常丟了有用、有些丟了等於沒丟。</p>
+
+<h2>先分清楚：受檢異常與非受檢異常</h2>
+<p>要理解這條規則，得先回到 Java 的異常階層。所有可以被丟出的東西都繼承自 <code>Throwable</code>，它底下再分成兩大支：一支是 <code>Error</code>，一支是 <code>Exception</code>。而真正關鍵的分界，落在 <code>Exception</code> 這一支裡面，它又分成兩種個性完全不同的異常。</p>
+
+<table>
+<thead>
+<tr><th>分類</th><th>代表類別</th><th>編譯器會管嗎</th><th>典型情境</th></tr>
+</thead>
+<tbody>
+<tr><td>非受檢異常（unchecked）</td><td><code>RuntimeException</code> 及其子類，例如 <code>NullPointerException</code>、<code>IllegalArgumentException</code></td><td>不管，可以丟也可以不接</td><td>程式錯誤、參數不合法、狀態不對</td></tr>
+<tr><td>受檢異常（checked）</td><td><code>Exception</code> 底下非 RuntimeException 的類別，例如 <code>IOException</code>、<code>SQLException</code></td><td>會管，要嘛 catch 要嘛在方法上宣告</td><td>外部環境問題：檔案、網路、資料庫</td></tr>
+</tbody>
+</table>
+
+<p>兩者最大的差別在「編譯器管不管」。受檢異常被迫你要面對它：要嘛用 <code>try-catch</code> 接住，要嘛在方法簽章上寫 <code>throws</code> 把它往外丟。非受檢異常則沒有這個限制，程式設計師通常不會特地處理它，因為它代表的是「不該發生卻發生了」的狀況。</p>
+
+<h2>Spring 的預設規則：只認 RuntimeException 與 Error</h2>
+<p>現在回到那條讓很多人栽跟頭的規則：<strong>當 @Transactional 沒有特別設定時，Spring 只在方法丟出 RuntimeException 或 Error 時回滾。</strong>如果你丟的是受檢異常（例如 <code>IOException</code>、<code>SQLException</code>），而且沒有另外設定，Spring 會把這個方法當成「正常結束」，然後照常提交交易。</p>
+
+<p>為什麼會有這麼不直覺的預設？這背後是 Spring 對異常的一種設計假設。受檢異常在 Java 的定義裡，代表「這是方法契約的一部分、是可以預期發生的情況」；你既然在方法上宣告了它可能丟出，就表示呼叫方本來就該針對它做處理，也許補救、也許重試，不必然要整筆交易作廢。反過來，<code>RuntimeException</code> 通常代表「沒有預期到的錯誤」或「程式邏輯壞了」，這種狀況下繼續把交易提交下去是不安全的，所以預設回滾。也就是說，Spring 會這樣設計，是因為它判斷受檢異常不一定代表業務失敗。</p>
+
+<p>問題是，這個假設和實務常常對不上。很多團隊的業務異常，例如「庫存不足」、「帳戶已凍結」、「餘額不夠」，都被寫成自訂的受檢異常。這時候如果沒有額外設定，一筆該回滾的交易就會被默默提交，錯誤就此埋下。</p>
+
+<h2>解法：用 rollbackFor 把範圍畫大</h2>
+<p>要讓受檢異常也能觸發回滾，做法是在註解上明確指定。最常見的寫法是把回滾範圍擴大到整個 <code>Exception</code>：</p>
+
+<pre><code>@Transactional(rollbackFor = Exception.class)
+public void transfer(Long fromId, Long toId, BigDecimal amount) throws BusinessException {
+    deduct(fromId, amount);
+    if (amount.compareTo(BigDecimal.ZERO) &lt;= 0) {
+        throw new BusinessException("金額必須大於零");
+    }
+    add(toId, amount);
+}</code></pre>
+
+<p>這裡的 <code>rollbackFor</code> 意思很直接：「只要丟出 Exception 這個家族（含所有子類，當然也含各種受檢異常），就回滾」。既然 RuntimeException 本來就是 Exception 的子類，這個設定等於把「預設只認一部分」變成「全部都認」，因此實務上幾乎是標配。面試時如果只回答「預設只對 RuntimeException 回滾」，那只是講了規則；能補上「所以我們通常會加 <code>rollbackFor = Exception.class</code>」，才是把規則接到實務。</p>
+
+<p>反過來也有一個對應的設定叫 <code>noRollbackFor</code>，用來指定「就算丟出這個異常也不要回滾」。它適合那種「雖然丟了異常，但業務上仍想把已完成的資料保留」的特例。不過老實說，這種情境不多，真正天天會用到的是 <code>rollbackFor</code>。</p>
+
+<h2>還有一個容易被忽略的前提：異常要能「跑出來」</h2>
+<p>設定正確的回滾規則只是第一步。別忘了代理是怎麼判斷的：它在方法外面等，看有沒有異常穿過它的地盤往外跑。如果異常在到達代理之前就被你自己的程式碼攔下來了，代理根本不會知道出過事。</p>
+
+<p>換句話說，就算你加了 <code>rollbackFor</code>，只要你的 <code>catch</code> 區塊把異常吃掉、沒有再往外丟，交易照樣會提交。這個「異常被吞」的坑，會和自調用、型別不符、修飾符不對一起，在第四節完整展開。這裡先記住一句：<strong>回滾規則是「認哪些異常」，而異常必須真的被代理看見，規則才有機會啟動。</strong></p>
+
+<h2>小結</h2>
+
+<blockquote>
+Spring 宣告式事務預設只對 <strong>RuntimeException 與 Error</strong> 回滾，遇到受檢異常（如 <code>IOException</code>、<code>SQLException</code>）不會回滾，除非明確設定。這條規則背後是 Spring 對異常的假設：受檢異常算可預期的狀況，不一定代表業務失敗。實務上為了避免漏回滾，通常會直接在 <code>@Transactional(rollbackFor = Exception.class)</code> 把範圍擴大到全部異常；而無論怎麼設定，異常都必須真的往外丟到代理手上，回滾才會啟動。
+</blockquote>
+
+<p>到這裡，單一方法內「什麼情況會回滾」已經講完了。但真實的系統很少只有一個方法在動，服務 A 呼叫服務 B、B 再呼叫 C，如果每個方法都掛了 <code>@Transactional</code>，它們之間到底是共用一個交易，還是各開各的？這就是下一節要處理的傳播行為。</p>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Spring 宣告式事務預設對哪一類異常回滾？" data-correct="0" data-explain="預設只認 RuntimeException 與 Error，受檢異常不在預設範圍內。">
+  <button class="opt">RuntimeException 與 Error 這兩類</button>
+  <button class="opt">所有 Exception 的子類別全部</button>
+  <button class="opt">只有受檢異常這一種類別</button>
+  <button class="opt">任何被 catch 捕捉到的異常</button>
+</div>
+
+<div class="quiz" data-question="IOException 和 SQLException 屬於哪一類異常？" data-correct="2" data-explain="它們不是 RuntimeException 的子類，編譯器會強制你處理，屬於受檢異常。">
+  <button class="opt">非受檢的執行期異常種類</button>
+  <button class="opt">繼承自 Error 的系統級錯誤</button>
+  <button class="opt">編譯器會管的受檢異常種類</button>
+  <button class="opt">不屬於 Throwable 家族的例外</button>
+</div>
+
+<div class="quiz" data-question="要讓受檢異常也觸發回滾，最常見的設定是什麼？" data-correct="3" data-explain="把 rollbackFor 設成 Exception.class，等於把所有異常都納入回滾範圍。">
+  <button class="opt">把方法的回傳型別改成 void</button>
+  <button class="opt">把隔離級別調到最高一級</button>
+  <button class="opt">把傳播行為改成 REQUIRES_NEW</button>
+  <button class="opt">在註解加 rollbackFor = Exception.class</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Spring 預設不對受檢異常回滾？" data-correct="1" data-explain="Spring 假設受檢異常是可預期的狀況，不一定代表整筆業務失敗。">
+  <button class="opt">因為受檢異常根本無法被程式丟出</button>
+  <button class="opt">因為它假設受檢異常未必代表業務失敗</button>
+  <button class="opt">因為受檢異常一定會被編譯器消除</button>
+  <button class="opt">因為資料庫不支援受檢異常回滾</button>
+</div>
+
+<div class="quiz" data-question="noRollbackFor 這個設定的用途是什麼？" data-correct="0" data-explain="它用來指定丟出某異常時仍不回滾，適合少數想保留資料的特例。">
+  <button class="opt">指定丟出某異常時仍不回滾</button>
+  <button class="opt">指定回滾時要保留哪些資料列</button>
+  <button class="opt">指定交易要用哪一種隔離級別</button>
+  <button class="opt">指定方法要用哪一種傳播行為</button>
+</div>
+
+<div class="quiz" data-question="就算設定了 rollbackFor，下列哪種情況交易仍不會回滾？" data-correct="2" data-explain="異常被 catch 吞掉就傳不到代理，代理會以為方法正常結束而提交。">
+  <button class="opt">異常在事務代理之前被拋出到上層</button>
+  <button class="opt">異常是 RuntimeException 的子類別</button>
+  <button class="opt">異常在方法內被 catch 吞掉沒再丟</button>
+  <button class="opt">異常型別剛好寫在 rollbackFor 裡</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="./declarative-tx-and-aop-principle.html">← 上一步：從 JDBC 到 @Transactional：宣告式事務與 AOP 原理</a></div>
+  <div><a href="./propagation-behaviors.html">下一步：七種傳播行為：REQUIRED、REQUIRES_NEW 與 NESTED →</a></div>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · Spring 事務管理與失效場景 · Step 2/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

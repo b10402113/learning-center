@@ -4,20 +4,50 @@ title: 索引與慢查詢優化
 subject: 小哲讲八股
 tier: 2
 order: 8
-status: draft
+status: content-written
 goal: 面對慢查詢能解釋 B+ 樹選型、樹高與 IO、回表/覆蓋索引、最左前綴、索引失效、索引下推，並用 EXPLAIN/深分頁優化
 sources:
-  - "[[sources/小哲讲八股/20260926/MySQL/6.为什么MySQL使用B+树作为索引结构，而不是B树、哈希表红黑树或二叉搜索树？.md]]"
-  - "[[sources/小哲讲八股/20260926/MySQL/9.什么是回表操作？如何通过覆盖索引CoveringIndex来避免回表？.md]]"
-  - "[[sources/小哲讲八股/20260926/MySQL/11.解释最左前缀匹配原则.md]]"
-  - "[[sources/小哲讲八股/20260926/MySQL/13.哪些操作会导致索引失效.md]]"
-  - "[[sources/小哲讲八股/20260926/MySQL/20.MySQL中如何分析SQL语句的执行计划.md]]"
-  - "[[sources/小哲讲八股/20260926/MySQL/19.深分页有什么问题如何优化.md]]"
-steps: []
+  - "[[sources/小哲讲八股/20260926/MySQL/5.MyISAM和InnoDB在索引存储结构上有什么本质区别.md#5.MyISAM和InnoDB在索引存储结构上有什么本质区别]]"
+  - "[[sources/小哲讲八股/20260926/MySQL/6.为什么MySQL使用B+树作为索引结构，而不是B树、哈希表红黑树或二叉搜索树？.md#6.为什么 MySQL 使用 B+ 树作为索引结构，而不是 B 树、哈希表红黑树或二叉搜索树？]]"
+  - "[[sources/小哲讲八股/20260926/MySQL/7.在生产环境中B+树的高度通常是多少？这通过几次磁盘IO就能找到数据？.md#7.在生产环境中B+ 树的高度通常是多少？这通过几次磁盘 IO 就能找到数据？]]"
+  - "[[sources/小哲讲八股/20260926/MySQL/9.什么是回表操作？如何通过覆盖索引CoveringIndex来避免回表？.md#9.什么是回表操作？如何通过覆盖索引Covering Index来避免回表？]]"
+  - "[[sources/小哲讲八股/20260926/MySQL/11.解释最左前缀匹配原则.md#11.解释最左前缀匹配原则]]"
+  - "[[sources/小哲讲八股/20260926/MySQL/12.索引abc查询WHEREb=1会走索引吗WHEREa=1ANDc=1呢.md#12.索引 a b c查询 WHERE b=1 会走索引吗WHERE a=1 AND c=1 呢]]"
+  - "[[sources/小哲讲八股/20260926/MySQL/13.哪些操作会导致索引失效.md#13.哪些操作会导致索引失效]]"
+  - "[[sources/小哲讲八股/20260926/MySQL/14.什么是索引下推.md#14.什么是索引下推]]"
+  - "[[sources/小哲讲八股/20260926/MySQL/19.深分页有什么问题如何优化.md#19.深分页有什么问题如何优化]]"
+  - "[[sources/小哲讲八股/20260926/MySQL/20.MySQL中如何分析SQL语句的执行计划.md#20.MySQL中如何分析SQL语句的执行计划]]"
+  - "[[sources/小哲讲八股/20260926/MySQL/21.MySQL的Explain可以统计sql的rows，这个会导致全表扫描吗？如果不会是怎么统计的呢？.md#21.MySQL的Explain可以统计sql的rows，这个会导致全表扫描吗？如果不会是怎么统计的呢？]]"
+  - "[[sources/小哲讲八股/20260926/MySQL/25.如何分析慢sql.md#25.如何分析慢sql]]"
+  - "[[sources/小哲讲八股/20260926/MySQL/26.有没有可能走了索引，但是sql执行依然很慢.md#26.有没有可能走了索引，但是sql执行依然很慢]]"
+steps:
+  - id: bplus-tree-selection
+    order: 1
+  - id: clustered-secondary-covering
+    order: 2
+    deps:
+      - bplus-tree-selection
+  - id: composite-index-leftmost
+    order: 3
+    deps:
+      - clustered-secondary-covering
+  - id: index-failure-pushdown
+    order: 4
+    deps:
+      - composite-index-leftmost
+  - id: explain-execution-plan
+    order: 5
+    deps:
+      - index-failure-pushdown
+  - id: deep-pagination-slow-query
+    order: 6
+    deps:
+      - explain-execution-plan
+      - clustered-secondary-covering
 prerequisites:
   - "[[learn/小哲讲八股/nodes/mysql-architecture-sql]]"
 created: 2026-09-26
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # 索引與慢查詢優化
@@ -28,17 +58,35 @@ updated: 2026-09-26
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/小哲讲八股/nodes/mysql-index-slow-query/bplus-tree-selection|為什麼是 B+ 樹：從磁碟 I/O 反推索引結構]] — 從「資料在磁碟上」出發淘汰二叉樹、Hash、B 樹，用 16KB 頁反推樹高與 I/O
+2. [[learn/小哲讲八股/nodes/mysql-index-slow-query/clustered-secondary-covering|索引即資料：聚簇索引、輔助索引、回表與覆蓋索引]] — 講清楚兩種索引各存什麼、回表多一趟隨機 I/O，以及覆蓋索引如何省掉這一趟（after step 1）
+3. [[learn/小哲讲八股/nodes/mysql-index-slow-query/composite-index-leftmost|聯合索引與最左前綴：多級排序在哪裡斷掉]] — 用多級排序解釋最左前綴，判斷 (a,b,c) 各種 WHERE 各命中幾列（after step 2）
+4. [[learn/小哲讲八股/nodes/mysql-index-slow-query/index-failure-pushdown|索引失效的三大忌與兩個坑，加上索引下推]] — 列出三大忌與兩個坑，並解釋索引下推如何把過濾下沉以減少回表（after step 3）
+5. [[learn/小哲讲八股/nodes/mysql-index-slow-query/explain-execution-plan|用 EXPLAIN 讀懂優化器的執行計畫]] — 讀懂 type/key/key_len/rows/Extra，判斷全表掃描、命中列數與覆蓋索引（after step 4）
+6. [[learn/小哲讲八股/nodes/mysql-index-slow-query/deep-pagination-slow-query|深分頁與慢 SQL：走索引為什麼還是很慢]] — 解釋 LIMIT offset 的浪費、三種深分頁優化，以及走索引仍慢的四類成因與排查流程（after steps 5、2）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+資料庫的慢，十之八九先怪到索引頭上。但要講清楚「為什麼慢、怎麼救」，不能只背「記得加索引」，得先回到一個物理事實：資料存在磁碟上，而磁碟很慢。整個索引設計其實都在回答同一個問題——如何用最少的磁碟 I/O 找到資料。
+
+這個節點沿著這條線走六步。第一步先不碰 InnoDB，純粹從「資料放在磁碟」推導為什麼是 B+ 樹：它怎麼把樹壓矮，一棵三千萬行的表為什麼只有三層，以及根節點常駐記憶體後實際只剩幾次物理 I/O。懂了樹的形狀，第二步才有辦法講清楚 InnoDB 的兩種索引：聚簇索引的葉子就是完整的行，輔助索引的葉子只放主鍵，於是透過普通索引查完整行時必須「回表」；而當查詢要的欄位剛好全在索引裡，這趟回表就能省掉，這就是覆蓋索引。
+
+第三、四步把鏡頭拉近到聯合索引。聯合索引在 B+ 樹裡是多級排序，這就是最左前綴原則的來源；而一旦對索引列做加工、讓型別隱式轉換、或用前置 % 去查，原本有序的結構就失去二分查找的能力。第四步同時補上 MySQL 5.6 的索引下推——它在不改變排序規則的前提下，把過濾下沉到引擎層，直接減少回表次數。
+
+最後兩步是實戰。第五步學著用 EXPLAIN 讀優化器的計畫，從 type 看有沒有全表掃描、用 key_len 推聯合索引命中幾列、看 Extra 有沒有覆蓋索引或檔案排序。第六步處理兩個最容易被忽略的慢：深分頁的 LIMIT offset 會先讀出一百萬行再丟掉，而就算走了索引，回表太多、鎖等待、刷髒頁也照樣能拖慢查詢。走完這六步，你面對慢查詢時手上會有一套完整的話：先看結構、再看索引、再看計畫、最後看資源與鎖。
 
 ## Sources
 
-- [[sources/小哲讲八股/20260926/MySQL/6.为什么MySQL使用B+树作为索引结构，而不是B树、哈希表红黑树或二叉搜索树？.md]]
-- [[sources/小哲讲八股/20260926/MySQL/9.什么是回表操作？如何通过覆盖索引CoveringIndex来避免回表？.md]]
-- [[sources/小哲讲八股/20260926/MySQL/11.解释最左前缀匹配原则.md]]
-- [[sources/小哲讲八股/20260926/MySQL/13.哪些操作会导致索引失效.md]]
-- [[sources/小哲讲八股/20260926/MySQL/20.MySQL中如何分析SQL语句的执行计划.md]]
-- [[sources/小哲讲八股/20260926/MySQL/19.深分页有什么问题如何优化.md]]
+- [[sources/小哲讲八股/20260926/MySQL/5.MyISAM和InnoDB在索引存储结构上有什么本质区别.md#5.MyISAM和InnoDB在索引存储结构上有什么本质区别]]
+- [[sources/小哲讲八股/20260926/MySQL/6.为什么MySQL使用B+树作为索引结构，而不是B树、哈希表红黑树或二叉搜索树？.md#6.为什么 MySQL 使用 B+ 树作为索引结构，而不是 B 树、哈希表红黑树或二叉搜索树？]]
+- [[sources/小哲讲八股/20260926/MySQL/7.在生产环境中B+树的高度通常是多少？这通过几次磁盘IO就能找到数据？.md#7.在生产环境中B+ 树的高度通常是多少？这通过几次磁盘 IO 就能找到数据？]]
+- [[sources/小哲讲八股/20260926/MySQL/9.什么是回表操作？如何通过覆盖索引CoveringIndex来避免回表？.md#9.什么是回表操作？如何通过覆盖索引Covering Index来避免回表？]]
+- [[sources/小哲讲八股/20260926/MySQL/11.解释最左前缀匹配原则.md#11.解释最左前缀匹配原则]]
+- [[sources/小哲讲八股/20260926/MySQL/12.索引abc查询WHEREb=1会走索引吗WHEREa=1ANDc=1呢.md#12.索引 a b c查询 WHERE b=1 会走索引吗WHERE a=1 AND c=1 呢]]
+- [[sources/小哲讲八股/20260926/MySQL/13.哪些操作会导致索引失效.md#13.哪些操作会导致索引失效]]
+- [[sources/小哲讲八股/20260926/MySQL/14.什么是索引下推.md#14.什么是索引下推]]
+- [[sources/小哲讲八股/20260926/MySQL/19.深分页有什么问题如何优化.md#19.深分页有什么问题如何优化]]
+- [[sources/小哲讲八股/20260926/MySQL/20.MySQL中如何分析SQL语句的执行计划.md#20.MySQL中如何分析SQL语句的执行计划]]
+- [[sources/小哲讲八股/20260926/MySQL/21.MySQL的Explain可以统计sql的rows，这个会导致全表扫描吗？如果不会是怎么统计的呢？.md#21.MySQL的Explain可以统计sql的rows，这个会导致全表扫描吗？如果不会是怎么统计的呢？]]
+- [[sources/小哲讲八股/20260926/MySQL/25.如何分析慢sql.md#25.如何分析慢sql]]
+- [[sources/小哲讲八股/20260926/MySQL/26.有没有可能走了索引，但是sql执行依然很慢.md#26.有没有可能走了索引，但是sql执行依然很慢]]

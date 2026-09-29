@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InnoDB 的鎖：粒度、屬性與行鎖演算法</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>InnoDB 的鎖：粒度、屬性與行鎖演算法</h1>
+<p class="meta">Step 4/5 · 事務、MVCC 與鎖</p>
+
+<h2>學習目標</h2>
+<p>能用粒度、互斥屬性、行鎖演算法三個維度講清 MySQL 的鎖分類，並說明 RR 的 Next-Key Lock 為何讓它比 RC 更容易塞車與死鎖。</p>
+
+<h2>前言：改一行，為什麼卡住另一個不相干的查詢？</h2>
+
+<p>有個線上事故你一定聽過：某個工程師在業務低峰期執行了一條 <code>ALTER TABLE</code>，想幫一張大表加個欄位。指令送出去之後，那張表上的所有查詢突然全部卡住，接著整個服務開始超時，最後只能緊急重啟。他明明只是「改表結構」，為什麼會把讀取也一起鎖死？</p>
+
+<p>又或者，你的服務明明只 <code>UPDATE</code> 了 id=1 這一筆資料，另一個交易却在改 id=5 時被卡住。兩個交易操作的根本不是同一行，怎麼會互相妨礙？</p>
+
+<p>要回答這些問題，得先知道 MySQL 的鎖不是只有一種。它橫跨了「鎖多大範圍」「允不允許別人讀」「用什麼演算法鎖」，三個維度各自有不同種類。搞混其中任何一個，就會對線上行為做出錯誤的預測。這一節按這三個維度逐一拆解，這也是回答「MySQL 有哪些鎖」這道題的標準骨架。</p>
+
+<h2>維度一：按鎖的粒度分，從整棟大樓到單一房間</h2>
+
+<p>把鎖想成一棟大樓的門禁系統：有的鎖管整棟樓，有的鎖管一層樓，有的鎖只鎖一個房間。鎖的粒度就是這個概念，而粒度越細，能同時做事的人越多。</p>
+
+<table>
+<thead>
+<tr><th>粒度</th><th>範圍</th><th>常見形式</th><th>特點</th></tr>
+</thead>
+<tbody>
+<tr><td>全局鎖</td><td>整個資料庫實例</td><td><code>FLUSH TABLES WITH READ LOCK</code></td><td>全庫唯讀，多用於備份</td></tr>
+<tr><td>表級鎖</td><td>整張表</td><td>表鎖、MDL 元資料鎖</td><td>開銷小、加鎖快，衝突機率高</td></tr>
+<tr><td>行級鎖</td><td>單一索引記錄</td><td>InnoDB 的行鎖</td><td>開銷大，但併發度最高</td></tr>
+</tbody>
+</table>
+
+<p><strong>全局鎖</strong>讓整個資料庫進入唯讀狀態，其他連線的增刪改全部阻塞。它最典型的用途是做全庫的邏輯備份，確保備份期間資料不會被改動。實務上因為代價太高，已經很少直接使用。</p>
+
+<p><strong>表級鎖</strong>鎖住整張表，成本低、加鎖快，而且不會產生死鎖，但代價是鎖衝突的機率很高、併發度低。MyISAM 引擎就只支援表鎖。表級鎖裡除了顯式用 <code>LOCK TABLES ... READ/WRITE</code> 加的鎖，還有一個隱形卻極危險的角色：<strong>MDL（Metadata Lock，元資料鎖）</strong>。</p>
+
+<p>MDL 不用你手動加，它是自動的：執行 <code>SELECT</code> 時自動加上 MDL 讀鎖，修改表結構（<code>ALTER TABLE</code>）時自動加 MDL 寫鎖。問題在於讀鎖與寫鎖互斥，而 MDL 要等交易提交才釋放。所以只要有一個交易還在跑、還沒提交，它身上的 MDL 讀鎖就會擋住後面所有想 <code>ALTER TABLE</code> 的請求；而排隊等 MDL 寫鎖的 <code>ALTER</code>，又會反過來擋住它後面新進來的查詢。前言那個「改個表結構就把整張表鎖死」的事故，元凶就是它。這也是為什麼 DDL 要在離峰時段、用工具分批執行。</p>
+
+<p><strong>行級鎖</strong>是 InnoDB 最核心的特性，鎖的是具體的索引記錄，範圍最小、併發度最高。代價是加鎖開銷大、鎖管理複雜，也比較容易發生死鎖。要注意一個常見誤解：行鎖鎖的是<strong>索引記錄</strong>，不是「你以為的那一列資料」；如果查詢沒走到索引，InnoDB 可能得掃過大量記錄再一一上鎖，效果就接近鎖全表了。</p>
+
+<h2>維度二：按互斥屬性分，S 鎖與 X 鎖</h2>
+
+<p>第二個維度看的是「這把鎖允許別人做什麼」。最基本的兩種是共享鎖與排他鎖。</p>
+
+<ul>
+<li><strong>共享鎖（S 鎖，讀鎖）</strong>：我讀的時候，別人也只能讀，不能改。多個 S 鎖可以同時持有。</li>
+<li><strong>排他鎖（X 鎖，寫鎖）</strong>：我改的時候，別人既不能讀（指加鎖讀）也不能改。X 鎖與任何鎖都互斥。</li>
+</ul>
+
+<p>除此之外，InnoDB 還引入了一種<strong>意向鎖（Intention Lock）</strong>，它比較特別：它是<strong>表級鎖</strong>，但作用不是保護資料，而是為了提高「加表鎖」的效率。當你想對整張表加鎖時，如果沒有意向鎖，資料庫得一行一行去檢查有沒有人鎖了某筆記錄，非常沒效率。有了意向鎖，只要看表頭上有沒有標記，就知道這張表裡有沒有人正在鎖行。</p>
+
+<p>意向鎖分成兩種，剛好對應兩種行鎖：<strong>IS（意向共享鎖）</strong>表示「我打算在某行加 S 鎖」，<strong>IX（意向排他鎖）</strong>表示「我打算在某行加 X 鎖」。它們只在加表鎖與加行鎖的判斷上起作用，日常開發不會直接碰到。</p>
+
+<h2>維度三：按 InnoDB 行鎖演算法分，三種演算法</h2>
+
+<p>第三個維度最核心，也是面試區分高手的地方。InnoDB 在可重複讀（RR）級別下，為了處理併發問題，實作了三種行鎖演算法：</p>
+
+<ol>
+<li><strong>Record Lock（記錄鎖）</strong>：鎖住單一的索引記錄。例如 <code>UPDATE ... WHERE id = 1</code> 就把 id=1 那筆鎖住。</li>
+<li><strong>Gap Lock（間隙鎖）</strong>：鎖住索引記錄之間的<strong>空隙</strong>。例如鎖住 5 到 10 之間的區間，別人想在這裡插入 7 就會被擋住。它唯一的目的就是<strong>防止幻讀</strong>，因為幻讀來自 INSERT，而 INSERT 進來的正是某個空隙。</li>
+<li><strong>Next-Key Lock（臨鍵鎖）</strong>：Record Lock 加上 Gap Lock，也就是「鎖住記錄本身，加上它前面的空隙」，形成一個左開右閉的區間。這是 InnoDB 在 RR 級別下的<strong>預設加鎖單位</strong>。</li>
+</ol>
+
+<p>回到前言那個疑問：為什麼我改 id=1，卻可能卡住改 id=5 的交易？因為在 RR 下，加的往往是 Next-Key Lock，它不只鎖住 id=1 這筆記錄，還鎖住它前面的空隙。如果 id=5 正好落在某個被鎖住的間隙裡，即便不是同一行，插入或修改一樣會被擋下。這就是「操作不同行卻互相卡住」的原因。</p>
+
+<h2>為什麼 RC 的效能通常比 RR 好？</h2>
+
+<p>這裡可以回答前面埋的伏筆。RC 每次查詢都要重新生成 ReadView，理論上比 RR 多做工，但在高併發環境下，RC 的效能往往反而更好。原因幾乎全在鎖：</p>
+
+<table>
+<thead>
+<tr><th>比較點</th><th>RR（可重複讀）</th><th>RC（讀已提交）</th></tr>
+</thead>
+<tbody>
+<tr><td>行鎖算法</td><td>預設 Next-Key Lock（含間隙）</td><td>關閉間隙鎖，只用 Record Lock</td></tr>
+<tr><td>鎖衝突範圍</td><td>非同一行也可能因落在同間隙而衝突</td><td>只有真的動到同一行才衝突</td></tr>
+<tr><td>死鎖機率</td><td>高，間隙鎖讓等待關係變複雜</td><td>低，關係單純</td></tr>
+<tr><td>不匹配記錄的鎖</td><td>掃過就加鎖，到交易提交才釋放</td><td>不滿足條件的行立刻釋放鎖</td></tr>
+</tbody>
+</table>
+
+<p>第一，<strong>鎖的範圍不同</strong>。RR 為了防幻讀預設開啟 Next-Key Lock，連間隙一起鎖，於是兩個交易就算操作的不是同一行，只要落在同一個間隙裡也會衝突。RC 則<strong>關閉了間隙鎖</strong>，只用 Record Lock，你改 id=1 我就只鎖 id=1，不誤傷 id=2，鎖衝突機率大幅下降。</p>
+
+<p>第二，<strong>死鎖機率不同</strong>。RR 因為有間隙鎖，常出現「A 等 B 的間隙、B 等 A 的行鎖」這種複雜循環，是死鎖的高發區；資料庫偵測死鎖、回滾交易的代價並不小。RC 少了間隙鎖，死鎖機率低很多。</p>
+
+<p>第三，<strong>不匹配記錄的鎖釋放機制不同</strong>。假設執行 <code>UPDATE user SET age = 10 WHERE age &gt; 20</code>，掃描過程中會讀到一些不滿足條件的行。RR 會把這些掃過的行也鎖住，直到交易提交才放；RC 則做了優化：一旦引擎層發現某行不滿足 <code>WHERE</code> 條件，就<strong>立刻釋放它的鎖</strong>，不必等到交易結束。這讓 RC 的鎖持有時間更短。</p>
+
+<p>所以「RC 比較快」不是因為可見性判斷便宜，而是因為它少鎖了很多不必要的東西。這也是為什麼不少網路公司會把 MySQL 從預設的 RR 改成 RC，用「接受不可重複讀、但換取更高併發」的方式來調優。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+MySQL 的鎖可以從三個維度記：<strong>粒度</strong>分全局鎖、表級鎖（含危險的 MDL）、行級鎖；<strong>互斥屬性</strong>分共享鎖 S、排他鎖 X，以及只為加表鎖效率服務的意向鎖 IS／IX；<strong>行鎖演算法</strong>分 Record Lock、Gap Lock、Next-Key Lock，其中 Next-Key 是 RR 的預設單位。RR 比 RC 慢，是因為 Next-Key Lock 多鎖了間隙、拉長了鎖持有時間，而 RC 關掉間隙鎖並提早釋放不匹配的鎖。
+</blockquote>
+
+<p>鎖的範圍一旦擴大、等待關係一旦交錯，就很容易出現一種最棘手的狀況：兩個交易各握著對方想要的鎖，誰也不肯放。下一節就用一個轉帳場景把它復現出來，講清楚死鎖怎麼被檢測與回滾，以及實務上該怎麼預防；最後再補上「樂觀鎖」這個名字很反直覺的收尾。</p>
+
+<div class="lesson-nav">
+  <div><a href="./mvcc-version-chain-and-readview.html">← 上一步：MVCC 的版本鏈與 ReadView</a></div>
+  <div><a href="./deadlock-and-optimistic-lock.html">下一步：死鎖與樂觀鎖 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼執行 ALTER TABLE 可能把整張表的查詢都卡住？" data-correct="1" data-explain="它要拿 MDL 寫鎖，與讀取持有的 MDL 讀鎖互斥，且要等交易提交才釋放。">
+  <button class="opt">因為它會把整張表複製到暫存檔</button>
+  <button class="opt">因為它要拿 MDL 寫鎖與讀鎖互斥</button>
+  <button class="opt">因為它會把隔離級別改成串行化</button>
+  <button class="opt">因為它會清空該表所有的索引快取</button>
+</div>
+
+<div class="quiz" data-question="意向鎖（IS／IX）主要的作用是什麼？" data-correct="3" data-explain="它是表級鎖，讓加表鎖時不必逐行檢查，直接看表頭標記即可。">
+  <button class="opt">直接鎖住整張表的所有資料列</button>
+  <button class="opt">防止其他交易在間隙裡插入新資料</button>
+  <button class="opt">記錄一個交易已經修改過的欄位</button>
+  <button class="opt">讓加表鎖時不必逐行去檢查</button>
+</div>
+
+<div class="quiz" data-question="專門用來防止幻讀的是哪一種行鎖演算法？" data-correct="0" data-explain="Gap Lock 鎖住索引記錄之間的空隙，讓別人的 INSERT 插不進來。">
+  <button class="opt">Gap Lock 間隙鎖</button>
+  <button class="opt">Record Lock 記錄鎖</button>
+  <button class="opt">共享鎖 S 讀取鎖</button>
+  <button class="opt">意向鎖 IS 共享版本</button>
+</div>
+
+<div class="quiz" data-question="InnoDB 在 RR 級別下預設使用的加鎖單位是哪一個？" data-correct="2" data-explain="Next-Key Lock 是記錄鎖加上間隙鎖，形成左開右閉的區間。">
+  <button class="opt">全局鎖鎖住整個實例</button>
+  <button class="opt">表級鎖鎖住整張資料表</button>
+  <button class="opt">Next-Key Lock 臨鍵鎖</button>
+  <button class="opt">Intent Lock 意向鎖版本</button>
+</div>
+
+<div class="quiz" data-question="RC 相對於 RR 效能通常較好，最核心的原因是？" data-correct="1" data-explain="RC 關閉間隙鎖、只用記錄鎖，鎖衝突與死鎖機率都大幅降低。">
+  <button class="opt">RC 完全不需要生成任何 ReadView</button>
+  <button class="opt">RC 關閉間隙鎖只用記錄鎖</button>
+  <button class="opt">RC 會把資料列全部快取在記憶體</button>
+  <button class="opt">RC 讓所有交易改成串行地執行</button>
+</div>
+
+<div class="quiz" data-question="RC 在掃描不滿足 WHERE 條件的記錄時，會怎麼處理它們的鎖？" data-correct="0" data-explain="RC 發現該行不匹配就立即釋放鎖，不必等到整個交易提交。">
+  <button class="opt">發現不匹配就立即釋放該鎖</button>
+  <button class="opt">一律鎖到整個交易提交為止</button>
+  <button class="opt">把這些記錄升級成表級鎖保護</button>
+  <button class="opt">改用意向鎖取代原本的行鎖</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 事務、MVCC 與鎖 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -62,6 +62,10 @@ Each lesson should contain a reminder to ask followup questions to the agent. Th
 
 A lesson closes its teaching with a **summary section** — a short recap of the step's core points — placed immediately before the review quiz, so the learner meets the through-line once more before testing it.
 
+Because each step is one link in a sequence, it opens and closes with a **bridge** to its neighbours. In the 前言, briefly recall what the previous step established before raising the new problem (omit for the first step). After the summary, add one short paragraph previewing what the next step will cover (omit for the last step). The bridges keep the learner oriented from one step to the next.
+
+For a complete worked example of this structure — learning goal, 前言, body, summary before the quiz, next-step preview, prev/next navigation, and quiz markup — read [`example/lesson.html`](./example/lesson.html) before authoring a lesson.
+
 ## Assets
 
 Lessons are built from reusable **components**, stored in `./lessons/assets/`: stylesheets, quiz widgets, simulators, diagram helpers — anything a second lesson could reuse.

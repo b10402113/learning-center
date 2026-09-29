@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>synchronized 是怎麼上鎖的？Monitor、可重入與鎖升級</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1><code>synchronized</code> 到底怎麼上鎖？從 Monitor、可重入到鎖升級</h1>
+<p class="meta">Step 1/5 · 鎖、JMM 與無鎖原子</p>
+
+<h2>學習目標</h2>
+<p>這一節會從 <code>monitorenter</code>／<code>monitorexit</code> 開始，帶你看懂 Monitor 如何用 Owner 與計數器管理鎖，也會說明偏向鎖、輕量級鎖、重量級鎖分別在什麼競爭場景下派上用場。</p>
+
+<h2>前言：加了鎖就沒事，但這把鎖究竟在哪裡？</h2>
+
+<p>你可能遇過這種情境：兩條執行緒同時替同一個帳戶扣款。每條執行緒明明都先檢查餘額，最後的結果卻對不上，甚至只成功扣掉一筆。於是你把扣款程式包進 <code>synchronized</code>，問題就消失了。</p>
+
+<p>但面試官接著問：「它到底鎖住了什麼？為什麼同一時間只能讓一條執行緒進入？」如果只能回答「因為加了鎖」，後面的機制就很難說清楚。</p>
+
+<p>這一節會把 <code>synchronized</code> 拆開來看：JVM 用什麼記錄鎖的狀態、為什麼同一條執行緒可以重複取得同一把鎖，以及為什麼沒有競爭時，不需要立刻驚動作業系統。搞懂這三件事，<code>synchronized</code> 就不再只是黑盒子。</p>
+
+<h2>鎖首先要解決的問題：互斥</h2>
+
+<p>多條執行緒共用資料時，最容易出錯的不是單一讀取或單一寫入，而是「讀取、修改、寫回」這種由多個步驟組成的動作。</p>
+
+<p>以扣款為例，程式大致會先讀出目前餘額，再算出扣款後的金額，最後把結果寫回去。假設兩條執行緒在讀取與寫回之間互相穿插，兩邊可能都讀到同一個舊餘額。它們各自扣款後再寫回，後寫入的結果就會蓋掉前一筆，最後看起來只扣了一次，另一筆扣款彷彿憑空消失。</p>
+
+<figure class="lesson-figure"><img src="./synchronized-and-monitor-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>要避免這種穿插，就要把這段程式劃成一個同一時間只能讓一條執行緒進入的區域，這個區域叫做臨界區（critical section）。負責守住入口的機制，就是互斥鎖，而 Java 最原生的做法就是 <code>synchronized</code>。</p>
+
+<h2>同一條執行緒再次進入：可重入</h2>
+
+<p>接著會遇到另一個問題：一條執行緒已經拿到鎖，進入臨界區後，又呼叫了另一個同樣需要這把鎖的方法。</p>
+
+<p>如果規則是「就算鎖的持有者，也不能再次進入」，那這條執行緒就會把自己擋在門外，形成自我死鎖。因此，鎖必須記住目前是哪條執行緒持有它，並允許同一條執行緒重複進入。這種特性就叫做可重入（reentrant）。</p>
+
+<p>你可能早已用過這項能力，只是沒有特別注意。例如，一個 <code>synchronized</code> 方法裡又呼叫另一個 <code>synchronized</code> 方法，程式仍然可以正常執行，就是因為同一條執行緒可以重新取得自己已持有的鎖。</p>
+
+<figure class="lesson-figure"><img src="./synchronized-and-monitor-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>那麼，JVM 是怎麼記住「進來幾次、要出去幾次」的？答案會出現在 Monitor 的計數器裡。</p>
+
+<h2>字節碼層面：<code>monitorenter</code> 與 <code>monitorexit</code></h2>
+
+<p>把含有 <code>synchronized</code> 區塊的 class 檔反編譯後，會看到同步區塊的前後被插入兩個指令：</p>
+
+<pre><code>monitorenter   // 同步區塊開始：嘗試取得鎖
+...            // 臨界區程式碼
+monitorexit    // 同步區塊結束：釋放鎖</code></pre>
+
+<p><code>monitorenter</code> 出現在同步區塊開始的位置，負責嘗試取得鎖。<code>monitorexit</code> 通常不只出現一次：正常離開區塊時需要釋放鎖；如果區塊中途拋出例外，異常處理器裡也會再放一條，確保鎖不會被遺留下來。</p>
+
+<p>這也是 <code>synchronized</code> 的一個便利之處：即使臨界區執行失敗，鎖也會由 JVM 負責釋放。相較之下，之後會看到的 <code>ReentrantLock</code> 必須由開發者自行搭配 <code>finally</code> 釋放，否則就可能留下未釋放的鎖。</p>
+
+<p>如果 <code>synchronized</code> 是加在整個方法上，反編譯後不一定會看到這兩個指令，而是會在方法上加上 <code>ACC_SYNCHRONIZED</code> 標誌。表面形式不同，但底層仍然是透過 Monitor 達成同步，不需要把它們當成兩套完全不同的機制。</p>
+
+
+<h2>JVM 層面：負責管理鎖的 Monitor</h2>
+
+<p>每個 Java 物件在記憶體中都關聯著一個 Monitor，也就是監視器鎖，對應到 HotSpot 中的 <code>ObjectMonitor</code>。可以把它想成一位管理入口的管家：誰拿到鎖、同一個人進來幾次，以及其他人要去哪裡排隊，都由它記錄。</p>
+
+<ul>
+<li><strong>Owner</strong>：目前持有這把鎖的執行緒；沒有人持有時則為空。</li>
+<li><strong>計數器</strong>：記錄持有鎖的同一條執行緒重入了幾次。</li>
+<li><strong>EntryList</strong>：存放暫時搶不到鎖、需要在門外等待的執行緒。</li>
+</ul>
+
+<figure class="lesson-figure"><img src="./synchronized-and-monitor-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>當一條執行緒執行 <code>monitorenter</code> 時，如果計數器是 0，表示鎖目前沒有被持有。這條執行緒就會成為 Owner，計數器加 1。</p>
+
+<p>如果再次進入的是同一條執行緒，JVM 不會把它擋住，而是把計數器再加 1。這就是可重入的實作方式。</p>
+
+<p>執行 <code>monitorexit</code> 時，計數器會減 1。只有當計數器減到 0，才代表這條執行緒已經完全離開臨界區，鎖才會真正釋放，Owner 也會變回空值。其他搶不到鎖的執行緒，則會在 EntryList 中等待。</p>
+
+<h2>為什麼早期的 <code>synchronized</code> 被稱為重量級鎖？</h2>
+
+<p>在 JDK 1.6 之前，Monitor 底層會直接依賴作業系統提供的互斥量（mutex）。當執行緒需要等待或被喚醒時，通常要從使用者態（user mode）切換到核心態（kernel mode），再交給作業系統進行調度。</p>
+
+<p>這種切換本身就有成本，有時甚至比臨界區裡真正執行的業務程式碼還要久。更麻煩的是，很多鎖其實根本沒有競爭，卻仍然可能付出掛起與喚醒的代價，像是為了切一小塊蛋糕而搬出整套餐具。因此，早期的 <code>synchronized</code> 常被嫌慢，也被稱為重量級鎖。</p>
+
+<p>但 JVM 團隊觀察到，實際情況通常沒有那麼糟：很多鎖沒有競爭，或者只是同一條執行緒反覆取得。既然如此，就不必一開始便把問題交給作業系統處理。</p>
+
+<p>從 JDK 1.6 起，鎖會依照競爭程度按需升級，狀態由輕到重依序是：偏向鎖 → 輕量級鎖 → 重量級鎖。核心想法很簡單：能在 JVM 內部解決，就不要急著讓執行緒進入作業系統的掛起與喚醒流程。</p>
+
+<figure class="lesson-figure"><img src="./synchronized-and-monitor-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>三級鎖各自處理什麼場景？</h2>
+
+<h3>偏向鎖：幾乎只有一條執行緒在使用</h3>
+
+<p>如果一把鎖從頭到尾都只被同一條執行緒使用，JVM 其實不需要每次都重新做同步操作。偏向鎖會在物件頭中記下這條執行緒的 ID。</p>
+
+<p>之後這條執行緒再次取得鎖時，只要檢查物件頭中的 ID 是否仍然是自己。若是，就直接放行，連一次 CAS 都不需要執行。這讓它的成本幾乎等同於無鎖，是三種狀態中最快的。</p>
+
+<p>要注意的是，偏向鎖在 JDK 15 之後已預設關閉。不過，它針對「同一條執行緒反覆取得、幾乎沒有競爭」這種場景所採用的設計思路，仍然是面試常考的重點。</p>
+
+<h3>輕量級鎖：短暫交替或輕微競爭</h3>
+
+<p>當第二條執行緒開始競爭，原本的偏向鎖就不再適用，鎖會升級成輕量級鎖。</p>
+
+<p>這時 JVM 不會立刻把等待的執行緒掛起，而是讓它透過 CAS 自旋（spin）反覆嘗試取得鎖。如果目前持有鎖的執行緒很快就離開臨界區，等待者只要自旋幾次就能拿到鎖，整個過程仍可在使用者態完成，避開執行緒掛起與喚醒的切換成本。</p>
+
+<p>不過，自旋不是免費的。若持有鎖的執行緒很久都不釋放，等待者就會持續消耗 CPU 空轉。因此，自旋必須有合理的限度，不能把 CPU 浪費在無止境的嘗試上。</p>
+
+<h3>重量級鎖：高競爭或臨界區執行時間很長</h3>
+
+<p>如果自旋了很久仍然搶不到鎖，或是多條執行緒競爭激烈，而臨界區本身又需要執行很長時間，繼續自旋只是在消耗 CPU。</p>
+
+<p>這時鎖才會真正升級為重量級鎖，改用作業系統提供的互斥量，讓等待中的執行緒進入阻塞狀態。這種方式需要付出較高的切換成本，但至少不會讓執行緒一直佔用 CPU 空轉，因此是高競爭場景下的兜底方案。</p>
+
+<table>
+<thead>
+<tr><th>鎖狀態</th><th>適用場景</th><th>主要做法</th><th>成本</th></tr>
+</thead>
+<tbody>
+<tr><td>偏向鎖</td><td>單一執行緒反覆取得</td><td>物件頭記錄執行緒 ID，直接放行</td><td>幾乎為零</td></tr>
+<tr><td>輕量級鎖</td><td>執行緒交替或短暫競爭</td><td>CAS 自旋搶鎖，不掛起</td><td>低（可能空轉）</td></tr>
+<tr><td>重量級鎖</td><td>高競爭或長耗時</td><td>作業系統互斥量，掛起等待執行緒</td><td>高（態切換）</td></tr>
+</tbody>
+</table>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>synchronized</code> 的底層是與物件關聯的 Monitor。字節碼層面會使用 monitorenter／monitorexit；如果是同步方法，則會使用方法上的 ACC_SYNCHRONIZED 標誌。Monitor 透過 Owner 記住目前的持有者，透過計數器實現可重入，並使用 EntryList 安置等待中的執行緒。早期的 <code>synchronized</code> 直接依賴作業系統互斥量，因此被稱為重量級鎖；JDK 1.6 之後，JVM 會根據競爭程度，在偏向鎖、輕量級鎖與重量級鎖之間升級，避免沒有競爭時也付出態切換的成本。
+</blockquote>
+
+<p>這把鎖使用起來簡單，但提供的核心能力主要是互斥。下一節會換成 <code>ReentrantLock</code>，看看顯式鎖為什麼能提供可中斷、公平排隊、精準喚醒等 <code>synchronized</code> 沒有的能力，以及它的底層又是靠什麼機制撐起來的。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./reentrantlock-and-aqs.html">下一步：ReentrantLock 與 AQS →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="synchronized 同步區塊在字節碼層面被翻譯成哪兩個指令？" data-correct="1" data-explain="區塊開頭是 monitorenter，結尾與異常處理器裡各有一條 monitorexit。">
+  <button class="opt">lock 與 unlock 兩個指令</button>
+  <button class="opt">monitorenter 與 monitorexit</button>
+  <button class="opt">wait 與 notify 兩個指令</button>
+  <button class="opt">acquire 與 release 指令</button>
+</div>
+<div class="quiz" data-question="Monitor 靠哪個欄位支援同一條執行緒的可重入？" data-correct="2" data-explain="計數器在重入時加一、離開時減一，減到零才真正釋放鎖。">
+  <button class="opt">物件頭裡的雜湊碼欄位</button>
+  <button class="opt">EntryList 佇列長度欄位</button>
+  <button class="opt">記錄重入次數的計數器</button>
+  <button class="opt">指向 Class 物件的指標</button>
+</div>
+<div class="quiz" data-question="JDK 1.6 之前為什麼稱 synchronized 為重量級鎖？" data-correct="0" data-explain="它依賴作業系統互斥量，每次掛起喚醒都要在使用者態與核心態間切換。">
+  <button class="opt">它依賴作業系統互斥量，態切換成本高</button>
+  <button class="opt">它會把整個物件複製到核心空間去</button>
+  <button class="opt">它要求每次加鎖都建立一條新執行緒</button>
+  <button class="opt">它只能保護靜態方法不能保護實例</button>
+</div>
+<div class="quiz" data-question="偏向鎖主要針對哪一種場景做優化？" data-correct="3" data-explain="單一執行緒反覆取得同一把鎖時，只要比對物件頭裡的執行緒 ID 就能放行。">
+  <button class="opt">大量執行緒同時搶同一把鎖</button>
+  <button class="opt">執行緒需要長時間持有這把鎖</button>
+  <button class="opt">執行緒必須依先來後到公平排隊</button>
+  <button class="opt">同一條執行緒反覆取得同一把鎖</button>
+</div>
+<div class="quiz" data-question="輕量級鎖用什麼方式避免執行緒被掛起？" data-correct="1" data-explain="它用 CAS 自旋反覆嘗試搶鎖，若持有者很快釋放，就不必進核心態。">
+  <button class="opt">用作業系統的號誌量精準喚醒</button>
+  <button class="opt">用 CAS 自旋反覆嘗試搶鎖</button>
+  <button class="opt">用物件頭直接記錄執行緒編號</button>
+  <button class="opt">用額外的執行緒代為排隊等待</button>
+</div>
+<div class="quiz" data-question="什麼情況下鎖會升級為重量級鎖？" data-correct="2" data-explain="自旋很久仍拿不到，或競爭激烈且臨界區執行時間長，就改為掛起等待。">
+  <button class="opt">只要有第二條執行緒出現就立刻升級</button>
+  <button class="opt">只要臨界區裡呼叫了其他方法就升級</button>
+  <button class="opt">自旋很久或競爭激烈且臨界區長時</button>
+  <button class="opt">只有在系統記憶體不足的時候才升級</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 鎖、JMM 與無鎖原子 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -4,19 +4,37 @@ title: GC、記憶體壓力與線上排查
 subject: 小哲讲八股
 tier: 1
 order: 3
-status: draft
+status: content-written
 goal: 面對「記憶體一直漲、GC 頻繁」能講出可達性分析、引用類型、收集演算法與收集器演進，並給出排查路徑
 sources:
   - "[[sources/小哲讲八股/20260926/Java面试题/JVM/11.JVM是如何判断一个对象是可回收的.md]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/12.Java中的强引用、软引用、弱引用、虚引用有什么区别？.md]]"
   - "[[sources/小哲讲八股/20260926/Java面试题/JVM/13.常见的垃圾收集算法有哪些.md]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/14.什么是STW.md]]"
   - "[[sources/小哲讲八股/20260926/Java面试题/JVM/15.常见的垃圾收集器有哪些.md]]"
   - "[[sources/小哲讲八股/20260926/Java面试题/JVM/16.G1对比CMS优势在哪.md]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/17.Java中什么是三色标记算法.md]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JVM/18.GC频繁有可能是什么原因造成的.md]]"
   - "[[sources/小哲讲八股/20260926/Java面试题/JVM/19.如果线上出现了频繁GC的告警应该如何排查.md]]"
-steps: []
+steps:
+  - id: reachability-and-references
+    order: 1
+  - id: collection-algorithms-and-stw
+    order: 2
+    deps:
+      - reachability-and-references
+  - id: collectors-cms-to-g1
+    order: 3
+    deps:
+      - collection-algorithms-and-stw
+  - id: online-gc-troubleshooting
+    order: 4
+    deps:
+      - collectors-cms-to-g1
 prerequisites:
   - "[[learn/小哲讲八股/nodes/jvm-runtime-classloading]]"
 created: 2026-09-26
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # GC、記憶體壓力與線上排查
@@ -27,16 +45,27 @@ updated: 2026-09-26
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/小哲讲八股/nodes/jvm-gc-tuning/reachability-and-references|物件是垃圾嗎？可達性分析與四種引用]] — JVM 怎麼判斷一個物件還有人用，以及四種引用各自的回收時機
+2. [[learn/小哲讲八股/nodes/jvm-gc-tuning/collection-algorithms-and-stw|垃圾怎麼收？三種演算法、分代收集與 STW]] — 三種收集演算法、分代策略，以及為什麼 GC 一定要暫停世界（after step 1）
+3. [[learn/小哲讲八股/nodes/jvm-gc-tuning/collectors-cms-to-g1|收集器怎麼選？從 Serial/Parallel 到 CMS 與 G1]] — 收集器演進與選型，以及 G1 相對 CMS 的三點優勢（after step 2）
+4. [[learn/小哲讲八股/nodes/jvm-gc-tuning/online-gc-troubleshooting|線上 GC 頻繁怎麼查？成因與四步排查法]] — 從告警到定位洩漏來源的完整排查路徑（after step 3）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+這個節點處理的是後端工程師最常被追問、也最容易在生產踩坑的一塊：記憶體。問題的起點通常很生活化——監控跳出「GC 次數異常」的告警，服務開始卡頓，但你手上只有一個 PID，不知道該從哪裡下手。
+
+要回答這個問題，得先回到最底層：GC 是怎麼知道哪些物件可以丟的？這一步靠的是可達性分析，從一組稱為 GC Roots 的起點往下找，找不到的就當垃圾；而強、軟、弱、虛四種引用，則決定了同一個物件在不同記憶體壓力下會不會被留下來。理解這層之後，才會明白為什麼「明明設了很大的堆，卻還是頻繁回收」。
+
+接著往上，是不同的回收演算法與分代策略在時間、空間之間做取捨，以及所有收集器都躲不掉的 STW——它保證掃垃圾時物件關係不會邊掃邊變，代價是服務暫停。收集器的整部演進史，本質上就是一場「把 STW 盡量縮短」的競賽：從單執行緒的 Serial、吞吐量優先的 Parallel，到低延遲的 CMS，再到可用參數指定停頓目標的 G1。四個步驟走完，你應該能把理論接回操作面：拿到一台 GC 頻繁的機器，先分清是 Young GC 還是 Full GC，再用 jstat 看記憶體分布、jmap 保留現場、MAT 找出到底是哪個 static 集合或 ThreadLocal 沒清。
 
 ## Sources
 
 - [[sources/小哲讲八股/20260926/Java面试题/JVM/11.JVM是如何判断一个对象是可回收的.md]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/12.Java中的强引用、软引用、弱引用、虚引用有什么区别？.md]]
 - [[sources/小哲讲八股/20260926/Java面试题/JVM/13.常见的垃圾收集算法有哪些.md]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/14.什么是STW.md]]
 - [[sources/小哲讲八股/20260926/Java面试题/JVM/15.常见的垃圾收集器有哪些.md]]
 - [[sources/小哲讲八股/20260926/Java面试题/JVM/16.G1对比CMS优势在哪.md]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/17.Java中什么是三色标记算法.md]]
+- [[sources/小哲讲八股/20260926/Java面试题/JVM/18.GC频繁有可能是什么原因造成的.md]]
 - [[sources/小哲讲八股/20260926/Java面试题/JVM/19.如果线上出现了频繁GC的告警应该如何排查.md]]

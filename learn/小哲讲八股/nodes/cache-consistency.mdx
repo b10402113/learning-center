@@ -4,20 +4,38 @@ title: 快取模式與資料一致性
 subject: 小哲讲八股
 tier: 2
 order: 12
-status: draft
+status: content-written
 goal: 面對穿透/擊穿/雪崩能給出方案，並講清楚本地快取與 Redis、Redis 與 MySQL 之間的一致性策略
 sources:
-  - "[[sources/小哲讲八股/20260926/Redis/20.什么是缓存击穿、缓存雪崩和缓存穿透.md]]"
-  - "[[sources/小哲讲八股/20260926/Redis/21.什么是布隆过滤器原理是怎样的.md]]"
-  - "[[sources/小哲讲八股/20260926/Redis/23.如何保证MySQL和Redis的数据一致性.md]]"
-  - "[[sources/小哲讲八股/20260926/Redis/24.canal的工作原理是怎样的.md]]"
-  - "[[sources/小哲讲八股/20260926/Java面试题/系统设计题/16.如何设计多级缓存架构.md]]"
-steps: []
+  - "[[sources/小哲讲八股/20260926/Redis/20.什么是缓存击穿、缓存雪崩和缓存穿透.md#20.什么是缓存击穿、缓存雪崩和缓存穿透]]"
+  - "[[sources/小哲讲八股/20260926/Redis/21.什么是布隆过滤器原理是怎样的.md#21.什么是布隆过滤器原理是怎样的]]"
+  - "[[sources/小哲讲八股/20260926/Redis/23.如何保证MySQL和Redis的数据一致性.md#23.如何保证MySQL和Redis的数据一致性]]"
+  - "[[sources/小哲讲八股/20260926/Redis/24.canal的工作原理是怎样的.md#24.canal的工作原理是怎样的]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/系统设计题/16.如何设计多级缓存架构.md#二、 关键读写流程与一致性难题]]"
+steps:
+  - id: three-cache-failure-modes
+    order: 1
+  - id: bloom-filter
+    order: 2
+    deps:
+      - three-cache-failure-modes
+  - id: multi-level-cache
+    order: 3
+    deps:
+      - three-cache-failure-modes
+  - id: db-cache-consistency
+    order: 4
+    deps:
+      - multi-level-cache
+  - id: canal-binlog-sync
+    order: 5
+    deps:
+      - db-cache-consistency
 prerequisites:
   - "[[learn/小哲讲八股/nodes/redis-perf-datastructures]]"
   - "[[learn/小哲讲八股/nodes/mysql-architecture-sql]]"
 created: 2026-09-26
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # 快取模式與資料一致性
@@ -28,16 +46,26 @@ updated: 2026-09-26
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/小哲讲八股/nodes/cache-consistency/three-cache-failure-modes|快取失效三兄弟：穿透、擊穿與雪崩]] — 用三個維度分辨三種失效，並各給一組防禦方案
+2. [[learn/小哲讲八股/nodes/cache-consistency/bloom-filter|布隆過濾器：用位陣列換一個「一定不存在」]] — 防穿透的資料結構原理與工程取捨（after step 1）
+3. [[learn/小哲讲八股/nodes/cache-consistency/multi-level-cache|多級快取：L1 本地加 L2 Redis 的分工與代價]] — 分層架構、讀取回填與熱點保護（after step 1）
+4. [[learn/小哲讲八股/nodes/cache-consistency/db-cache-consistency|MySQL 與 Redis 的一致性：為什麼先寫庫、後刪快取]] — 旁路快取的寫入順序與最終一致性補償（after step 3）
+5. [[learn/小哲讲八股/nodes/cache-consistency/canal-binlog-sync|Canal 與 Binlog：把快取同步從業務程式碼裡拆出來]] — 訂閱 Binlog 驅動的非侵入式快取同步（after step 4）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+快取幫你把資料庫的壓力擋在前面，但快取本身也會出事。這一節圍繞兩個問題展開：當快取「失效或不存在」時，流量會怎麼打穿到資料庫；以及當資料真的變更時，本地快取、Redis 與 MySQL 這三層之間要怎麼收斂到一致。
+
+第一個問題的三種典型是穿透、擊穿與雪崩。它們看起來都像「請求打到資料庫」，但成因完全不同：穿透查的是根本不存在、連資料庫也沒有的資料；擊穿是單一熱點 Key 突然過期，瞬間把高併發放進資料庫；雪崩則是大量 Key 同時失效、或快取層本身掛掉，導致整面流量一起湧入。分清楚這三者，你才不會把「加隨機 TTL」這種雪崩解法拿去回答擊穿。防穿透最有力的工具是布隆過濾器——它用一個位陣列加上多個雜湊函式，換來「說不存在就一定不存在」的保證，代價是會誤判存在、而且不能刪除。
+
+第二個問題是快取一致性的主線。實務上很少去追強一致，而是用旁路快取（Cache-Aside）模式追求最終一致：變更時刪快取而不是更新快取，並且先寫庫、再刪快取。這套順序把併發下「後寫先至」的髒資料窗口縮到最小，但仍要靠延遲雙刪與 MQ 重試來兜底。更進一步，可以把刪快取的工作從業務程式碼裡拿出來，交給 Canal 訂閱 MySQL 的 Binlog，由它投遞事件、驅動下游清理，讓業務只管寫庫。
+
+把這些拼起來，你就能回答面試裡最常追問的一句話：「Redis 你可以刪，但一百台機器記憶體裡的本地快取，你要怎麼刪？」答案是廣播失效訊息加上短 TTL 兜底，而這正是下一步要拆的機制。
 
 ## Sources
 
-- [[sources/小哲讲八股/20260926/Redis/20.什么是缓存击穿、缓存雪崩和缓存穿透.md]]
-- [[sources/小哲讲八股/20260926/Redis/21.什么是布隆过滤器原理是怎样的.md]]
-- [[sources/小哲讲八股/20260926/Redis/23.如何保证MySQL和Redis的数据一致性.md]]
-- [[sources/小哲讲八股/20260926/Redis/24.canal的工作原理是怎样的.md]]
-- [[sources/小哲讲八股/20260926/Java面试题/系统设计题/16.如何设计多级缓存架构.md]]
+- [[sources/小哲讲八股/20260926/Redis/20.什么是缓存击穿、缓存雪崩和缓存穿透.md#20.什么是缓存击穿、缓存雪崩和缓存穿透]]
+- [[sources/小哲讲八股/20260926/Redis/21.什么是布隆过滤器原理是怎样的.md#21.什么是布隆过滤器原理是怎样的]]
+- [[sources/小哲讲八股/20260926/Redis/23.如何保证MySQL和Redis的数据一致性.md#23.如何保证MySQL和Redis的数据一致性]]
+- [[sources/小哲讲八股/20260926/Redis/24.canal的工作原理是怎样的.md#24.canal的工作原理是怎样的]]
+- [[sources/小哲讲八股/20260926/Java面试题/系统设计题/16.如何设计多级缓存架构.md#二、 关键读写流程与一致性难题]]

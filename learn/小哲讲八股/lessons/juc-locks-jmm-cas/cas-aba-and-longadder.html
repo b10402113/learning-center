@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CAS、ABA 與 LongAdder：無鎖原子與熱點分散</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>CAS、ABA 與 LongAdder：無鎖原子操作，如何避開熱點競爭</h1>
+<p class="meta">Step 5/5 · 鎖、JMM 與無鎖原子</p>
+
+<h2>學習目標</h2>
+<p>這一節會帶你看懂 CAS 的 V、A、B 邏輯與硬體基礎，理解 ABA 問題為什麼會發生，以及版本號如何解決它。接著，我們會比較 <code>AtomicInteger</code> 和 <code>LongAdder</code>，看清楚為什麼前者在高競爭下可能變慢，以及後者如何把單一熱點分散開來。</p>
+
+<h2>前言：不加鎖，也能安全地改值</h2>
+
+<p>前面幾節討論的做法，大多像是在入口處安排一位門衛：同一時間只讓一條執行緒進入，其他人先在外面等。這就是鎖的基本思路。它很可靠，但也有代價——搶不到鎖的執行緒可能被掛起，之後還要再被喚醒；當競爭不高時，這些成本或許不明顯，一旦執行緒數量增加，就可能變成效能瓶頸。</p>
+
+<p>因此，還有另一種思路：不先把人擋在門外，而是讓大家直接嘗試更新資料。只要更新時確認「我剛才讀到的值還沒被別人改過」，就可以安全地寫入；如果發現值變了，就重新讀取，再試一次。這就是 CAS，也是 Java 併發套件中許多原子類別的基礎。</p>
+
+<p>不過，CAS 也不是任何場景下都更快。你可能會看到一個很反直覺的現象：<code>AtomicInteger</code> 明明是為了高併發而設計，競爭非常激烈時，效能卻可能比單純加鎖還差，甚至讓 CPU 使用率飆高。</p>
+
+<p>原因不在於 <code>AtomicInteger</code> 不安全，而在於所有執行緒都在搶同一個變數。這一節會先把 CAS 的運作方式講清楚，再說明 ABA 問題與版本號解法，最後看 JDK 8 的 <code>LongAdder</code> 如何把這個單點熱點拆開。</p>
+
+<h2>CAS：先假設沒有衝突，失敗再重試</h2>
+
+<p>CAS 的全名是 Compare And Swap，也就是「比較並交換」。它是一種樂觀鎖的做法，不像 <code>synchronized</code> 那樣先把其他執行緒擋住，而是假設目前不太會發生衝突，先直接嘗試更新。</p>
+
+<p>CAS 有三個核心操作數：</p>
+
+<ul>
+<li><strong>V</strong>：記憶體中目前的值（Value）。</li>
+<li><strong>A</strong>：我預期的舊值（Expected）。</li>
+<li><strong>B</strong>：我想寫入的新值（New）。</li>
+</ul>
+
+<p>它的規則可以濃縮成一句話：<strong>只有當記憶體中的實際值 V 等於預期的舊值 A，才會把 V 更新成 B。</strong></p>
+
+<p>假設執行緒先讀到值 A，準備把它改成 B。在它真正寫入之前，如果另一條執行緒已經先改過資料，記憶體中的值就不再是 A。這時 CAS 會失敗，執行緒不會直接覆寫別人的結果，而是重新讀取目前的值，再試一次。</p>
+
+<figure class="lesson-figure"><img src="./cas-aba-and-longadder-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這種「失敗就再試」的做法叫做<strong>自旋</strong>。它和等待鎖的差別在於，執行緒不會立刻掛起，而是暫時留在 CPU 上反覆嘗試。</p>
+
+<p>CAS 的原子性不是 JVM 自己用 Java 程式碼拼出來的，而是依賴硬體提供的原子指令。Java 會透過 <code>Unsafe</code> 類別呼叫底層能力，最後在 x86 上對應到像 <code>cmpxchg</code> 這類 CPU 指令。</p>
+
+<p>因為整個比較與更新的動作由硬體保證不可分割，所以它不需要使用作業系統的互斥量，也能避開部分執行緒切換成本。當競爭不高時，CAS 通常能有很好的效能。</p>
+
+<h2>ABA 問題：值回來了，不代表過程沒變</h2>
+
+<p>CAS 有一個著名的陷阱：它比較的是「現在的值是否等於預期值」，卻不會自動檢查中間發生過什麼事。也就是說，它只看結果，不看過程。</p>
+
+<p>假設記憶體中的變數一開始是 A：</p>
+
+<ol>
+<li>執行緒 1 讀到 A，準備把它改成 C，但在寫入前因為 CPU 調度而暫停。</li>
+<li>執行緒 2 執行，先把 A 改成 B，再把 B 改回 A。</li>
+<li>執行緒 1 恢復執行，拿著原本讀到的 A 去和記憶體中的值比較。</li>
+<li>執行緒 1 發現目前仍然是 A，於是 CAS 通過，誤以為這段期間沒有人動過資料。</li>
+</ol>
+
+<p>這個過程就是 ABA：資料從 A 變成 B，又回到 A。對 CAS 來說，起點和終點看起來一樣，但中間其實發生過變更。</p>
+
+<figure class="lesson-figure"><img src="./cas-aba-and-longadder-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>如果操作的是單純數值，例如 <code>AtomicInteger</code> 的加減，ABA 通常不會造成實際問題，因為最後的值確實又回到原本的數字。但在<strong>鏈結串列或堆疊</strong>這類依賴節點參考的資料結構裡，情況就危險得多。</p>
+
+<p>例如某個節點被移除、回收，之後又被重新使用。此時 A 和 B 可能再次指向相同的記憶體位址。執行緒 1 看到熟悉的參考後，以為節點從未被動過，便可能在錯誤的前提下更新指標，最後讓整個資料結構失效。</p>
+
+<h2>加上版本號，讓 CAS 看見「中間發生過什麼」</h2>
+
+<p>處理 ABA 的標準方法，是不要只比較資料本身，也一起比較版本號。原本的變化可能是：</p>
+
+<p><code>A → B → A</code></p>
+
+<p>加上版本後，就會變成：</p>
+
+<p><code>1A → 2B → 3A</code></p>
+
+<p>執行緒 1 一開始拿到的是 <code>1A</code>。即使它恢復時看到的資料仍然是 A，版本已經變成 3，因此實際值是 <code>3A</code>。兩者不相等，CAS 就會失敗，執行緒 1 必須重新確認目前狀態。</p>
+
+
+<p>這個思路和資料庫樂觀鎖裡加入版本號或時間戳很像：資料內容可能回到原樣，但版本號會留下「它曾經被更新過」的痕跡。Java 的 <code>AtomicStampedReference</code> 就是這類解法的實作。</p>
+
+<h2><code>AtomicInteger</code> 為什麼在高競爭下可能變慢？</h2>
+
+<p>看到 CAS 這麼輕量，你可能會直覺認為：用 <code>AtomicInteger</code> 做計數器，既安全又不需要加鎖，應該永遠很快。</p>
+
+<p>低競爭時確實如此。但如果大量執行緒同時更新同一個計數器，情況會改變。問題出在 <code>AtomicInteger</code> 的內部只有<strong>一個</strong> <code>value</code> 變數。</p>
+
+<p>假設有 N 條執行緒同時對這個變數執行 <code>CAS(expect, update)</code>。硬體會保證同一時間只有一條執行緒成功，其餘 N-1 條執行緒都會失敗。</p>
+
+<p>失敗的執行緒不會立刻掛起，而是原地自旋、重新讀值、再次嘗試。當競爭越激烈，CAS 失敗次數就越多，執行緒花在重試上的時間也越多。CPU 看起來很忙，卻有大量運算只是徒勞地繞圈。</p>
+
+<figure class="lesson-figure"><img src="./cas-aba-and-longadder-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這就是<strong>單點熱點</strong>問題：所有人都擠在同一扇門前，而這扇門一次只能讓一個人通過。門本身沒有壞，但人一多，排隊與反覆嘗試就會吞掉效能。</p>
+
+<h2><code>LongAdder</code>：把一個熱點拆成很多個</h2>
+
+<p>JDK 8 引入了 <code>LongAdder</code>，以及用途相近的 <code>DoubleAdder</code>，用來改善高併發寫入時的競爭。</p>
+
+<p>它的核心想法是<strong>分治</strong>，也可以理解成「用空間換時間」。既然所有執行緒搶同一個變數會塞車，那就不要只準備一個變數，而是準備多個位置，讓執行緒分散更新。</p>
+
+<p><code>LongAdder</code> 內部維護一個 <code>Cell[]</code> 陣列，主要運作方式如下：</p>
+
+<ol>
+<li>沒有發生競爭時，直接更新 <code>base</code> 變數，這時的行為和 <code>AtomicInteger</code> 類似。</li>
+<li>一旦發生競爭，例如某次 CAS 失敗，就不再一直卡在 <code>base</code> 上，而是根據目前執行緒的雜湊值，映射到 <code>Cell</code> 陣列中的某個槽位，在那個槽位上執行 CAS。</li>
+<li>需要取得總數時，呼叫 <code>sum()</code>，把 <code>base</code> 和所有 <code>Cell</code> 的值加總後回傳。</li>
+</ol>
+
+<p>原本的狀況是多條執行緒搶同一個位置；改成 <code>LongAdder</code> 後，執行緒會分散到多個位置。衝突機率下降，自旋重試造成的浪費也會跟著減少。</p>
+
+<figure class="lesson-figure"><img src="./cas-aba-and-longadder-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>但這個設計有一個重要取捨：<code>sum()</code> 得到的是「最終一致」的結果，不保證是某個瞬間絕對精確的數字。如果加總進行到一半時，仍有執行緒正在更新某個 <code>Cell</code>，你拿到的結果可能不是當下最完整的值。</p>
+
+<p>對高併發的統計計數來說，這種取捨通常可以接受。例如統計請求數、累計事件數時，重點往往是讓大量寫入順利完成，而不是每一次讀取都必須看見絕對即時的數字。</p>
+
+<p>相對地，<code>AtomicInteger</code> 的 <code>get()</code> 取得的是即時且精確的值。這就是兩者選擇上的關鍵：你要的是即時精確的讀取，還是高競爭下更好的累加吞吐量？</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>AtomicInteger</th><th>LongAdder</th></tr>
+</thead>
+<tbody>
+<tr><td>底層結構</td><td>單一 <code>value</code> 變數</td><td><code>base</code> 加上 <code>Cell</code> 陣列</td></tr>
+<tr><td>高競爭表現</td><td>大量 CAS 失敗並自旋，CPU 可能花在空轉上</td><td>分散到多個槽位，降低彼此衝突</td></tr>
+<tr><td>取值精確度</td><td><code>get()</code> 取得即時精確值</td><td><code>sum()</code> 只保證最終一致</td></tr>
+<tr><td>適用場景</td><td>競爭不激烈，且需要即時精確讀值</td><td>高併發計數與統計類累加</td></tr>
+</tbody>
+</table>
+
+<h2>小結</h2>
+
+<blockquote>
+CAS 是一種樂觀鎖，透過 V（目前值）、A（預期舊值）與 B（新值）三個操作數進行更新。只有當 V 等於 A 時，才會把值改成 B；如果比較失敗，就自旋重試。它的底層依賴 <code>Unsafe</code> 呼叫 CPU 原子指令，因此能避開部分鎖與執行緒切換成本。<br><br>
+CAS 的陷阱是只看結果、不看過程，可能遇到 ABA 問題。加入版本號後，即使值從 A 變成 B 又回到 A，版本仍然不同，便能偵測出中間曾經發生過更新；<code>AtomicStampedReference</code> 就是這類解法。<br><br>
+<code>AtomicInteger</code> 在高競爭下可能變慢，原因是所有執行緒都搶同一個 <code>value</code>，失敗者又會大量自旋。<code>LongAdder</code> 則透過 <code>base</code> 加上 <code>Cell</code> 陣列，把單一熱點分散到多個位置；代價是 <code>sum()</code> 只保證最終一致，而不是每個瞬間都絕對精確。
+</blockquote>
+
+<p>到這裡，你手上已經有兩套不同方向的工具。一套是把人擋在門外的鎖，例如 <code>synchronized</code>、<code>ReentrantLock</code> 與 AQS；另一套是不先阻塞執行緒，而是讓它們分頭嘗試更新的無鎖原子機制，例如 CAS 與 <code>LongAdder</code>。</p>
+
+<p>至於可見性與有序性，則由 JMM、<code>volatile</code> 與 happens-before 這套記憶體規則一起兜住。接下來的節點會把這些工具往更高階的併發編排延伸，處理精準喚醒、<code>CountDownLatch</code> 與 <code>CompletableFuture</code> 等常見手寫題與實戰場景。</p>
+
+<div class="lesson-nav">
+  <div><a href="./happens-before-and-dcl.html">← 上一步：happens-before 與 DCL</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="CAS 三個操作數 V、A、B 各代表什麼？" data-correct="1" data-explain="V 是目前記憶體的值，A 是預期舊值，B 是想改成的新值。">
+  <button class="opt">V 是新值、A 是目前值、B 是舊值</button>
+  <button class="opt">V 是目前值、A 是預期舊值、B 是新值</button>
+  <button class="opt">V 是版本號、A 是數值、B 是執行緒編號</button>
+  <button class="opt">V 是鎖狀態、A 是擁有者、B 是等待者</button>
+</div>
+<div class="quiz" data-question="CAS 底層最終依賴什麼來保證原子性？" data-correct="3" data-explain="透過 Unsafe 呼叫 CPU 的原子指令，例如 x86 上的 cmpxchg。">
+  <button class="opt">作業系統提供的互斥量</button>
+  <button class="opt">JVM 內部的偏向鎖機制</button>
+  <button class="opt">GC 執行時的全域暫停</button>
+  <button class="opt">CPU 提供的原子指令</button>
+</div>
+<div class="quiz" data-question="ABA 問題的根本原因是什麼？" data-correct="0" data-explain="CAS 只比對最終值，無法感知中間值被改過又改回來。">
+  <button class="opt">它只比對結果不比對過程</button>
+  <button class="opt">它無法讀取記憶體中的舊值</button>
+  <button class="opt">它會在失敗時把執行緒掛起</button>
+  <button class="opt">它只能用在單執行緒的環境</button>
+</div>
+<div class="quiz" data-question="為什麼 ABA 在鏈結串列或堆疊場景特別危險？" data-correct="2" data-explain="節點被移除回收後又重用，可能讓指標指向錯誤位置、使結構崩壞。">
+  <button class="opt">因為這些結構無法使用基本型別</button>
+  <button class="opt">因為它們的比較一定需要加鎖</button>
+  <button class="opt">因為節點回收重用會讓指標錯亂</button>
+  <button class="opt">因為它們不支援 CAS 這種指令</button>
+</div>
+<div class="quiz" data-question="解決 ABA 問題的標準做法是什麼？" data-correct="1" data-explain="在比對值的同時也比對版本號或時間戳，值同但版本不同就視為失敗。">
+  <button class="opt">把 CAS 改成用 synchronized 加鎖</button>
+  <button class="opt">比對值時一併比對版本號</button>
+  <button class="opt">讓所有執行緒改用同一份快取</button>
+  <button class="opt">把更新操作改成非原子的形式</button>
+</div>
+<div class="quiz" data-question="AtomicInteger 在高競爭下變慢，主因是什麼？" data-correct="0" data-explain="所有執行緒搶同一個 value，失敗者大量自旋重試，浪費 CPU。">
+  <button class="opt">單點競爭讓失敗執行緒大量自旋</button>
+  <button class="opt">它每次更新都必須進入核心態</button>
+  <button class="opt">它會為每個執行緒建立新物件</button>
+  <button class="opt">它拿到的值不是最新的版本</button>
+</div>
+<div class="quiz" data-question="LongAdder 用什麼方式降低競爭？" data-correct="3" data-explain="用 base 加 Cell 陣列分治，把一個熱點攤成多個槽位。">
+  <button class="opt">把自旋次數限制在固定上限</button>
+  <button class="opt">把失敗的執行緒直接掛起等待</button>
+  <button class="opt">把版本號加在每次計數之後</button>
+  <button class="opt">用 base 加 Cell 陣列分散寫入</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 鎖、JMM 與無鎖原子 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

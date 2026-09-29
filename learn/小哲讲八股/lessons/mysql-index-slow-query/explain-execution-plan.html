@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用 EXPLAIN 讀懂優化器的執行計畫｜索引與慢查詢優化</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 EXPLAIN 讀懂優化器的執行計畫</h1>
+<p class="meta">索引與慢查詢優化 · Step 5/6 · 學習目標：能看懂 EXPLAIN 的 type、possible_keys/key、key_len、rows、Extra 五個核心指標，判斷一條 SQL 是不是全表掃描、聯合索引命中幾列，以及有沒有覆蓋索引或檔案排序。</p>
+
+<h2>前言：拿到一條慢 SQL，你要怎麼「看穿」它？</h2>
+<p>前面四節都在講原理：B+ 樹怎麼長、回表為什麼貴、最左前綴怎麼斷、哪些寫法會讓索引失效。但你到了生產現場，面對的是一條活生生、跑得很慢的 SQL。這時候光靠讀 SQL 用肉眼猜「大概是索引沒走」，並不夠可靠，你需要一個工具，把優化器「打算怎麼跑這條 SQL」攤開給你看。</p>
+<p>這個工具就是 <code>EXPLAIN</code>。它不會真的執行 SQL，而是列出這條語句的<strong>執行計畫</strong>：用哪個索引、掃多少行、還有哪些額外動作。EXPLAIN 的欄位很多，但真正需要盯住的只有五個。這一節把它們一個一個拆開，並順便破除一個常見誤解：EXPLAIN 印出來的 rows 會不會偷偷讓資料庫去掃全表。</p>
+
+<h2>第一步：讀 type，先判斷「是不是全表掃描」</h2>
+<p><code>type</code> 是最核心的性能指標，它告訴你 MySQL 是用什麼方式在找資料。它的效率由快到慢有一條明確的順序：</p>
+<pre><code>system &gt; const &gt; eq_ref &gt; ref &gt; range &gt; index &gt; ALL</code></pre>
+<table>
+<thead>
+<tr><th>type</th><th>意思</th><th>常見場景</th></tr>
+</thead>
+<tbody>
+<tr><td><code>system</code></td><td>表只有一行</td><td>系統表，幾乎不會遇到</td></tr>
+<tr><td><code>const</code></td><td>等值命中主鍵或唯一索引，一次定位</td><td><code>WHERE id = 1</code></td></tr>
+<tr><td><code>eq_ref</code></td><td>JOIN 時被驅動表用主鍵或唯一索引匹配</td><td>一對一關聯</td></tr>
+<tr><td><code>ref</code></td><td>普通索引的等值查找</td><td><code>WHERE name = '張三'</code></td></tr>
+<tr><td><code>range</code></td><td>索引上的範圍查找</td><td><code>WHERE age &gt; 18</code></td></tr>
+<tr><td><code>index</code></td><td>掃描整棵索引樹（比 ALL 好一些）</td><td>覆蓋索引但無定位條件</td></tr>
+<tr><td><code>ALL</code></td><td>全表掃描</td><td>沒有可用索引</td></tr>
+</tbody>
+</table>
+<p>實務上的底線是：<strong>生產環境至少要達到 <code>range</code> 或 <code>ref</code></strong>。一旦看到 <code>ALL</code>，就代表發生了全表掃描，得認真優化，除非這張表真的很小（幾百行）。看到 <code>const</code> 是最好的等值查詢，看到 <code>index</code> 則要留意：它雖然掃的是索引而不是表，但仍然是把整棵索引掃一遍，資料量大時一樣慢。</p>
+
+<h2>第二步：看 possible_keys 與 key，確認有沒有命中索引</h2>
+<p>這一組欄位是一對「備胎與正選」。</p>
+<ul>
+<li><code>possible_keys</code>：理論上<strong>可能</strong>用到的索引，是候選名單（備胎）。</li>
+<li><code>key</code>：實際上<strong>真正</strong>用到的索引（正選）。</li>
+</ul>
+<p>最需要警覺的情況是：<code>possible_keys</code> 有值，<code>key</code> 卻是 <code>NULL</code>。這代表 MySQL 明明有索引可選，最後卻決定不用。原因通常是兩類：一是你踩了上一節的索引失效（最左前綴斷了、隱式型別轉換等），讓索引失去作用；二是優化器算了成本，覺得走索引要回表太多次，不如直接全表掃描划得來。</p>
+
+<h2>第三步：用 key_len 判斷聯合索引到底命中幾列</h2>
+<p><code>key_len</code> 表示這個索引被使用了多少位元組。對單欄位索引來說意義不大，但對<strong>聯合索引</strong>它非常好用。比如索引是 <code>(a, b, c)</code>，如果 <code>key_len</code> 很短，可能只命中了 <code>a</code> 這一列，後面的 <code>b</code>、<code>c</code> 因為最左前綴斷掉而沒用上。你可以用它來驗證「我以為走了三列，實際上只走了一列」這種落差。</p>
+
+<h2>第四步：看 rows，估算要掃多少行</h2>
+<p><code>rows</code> 是 MySQL 估算為了找到結果需要掃描的行數，用來估計這個查詢的規模，數字越小越好。如果 <code>rows</code> 動輒幾十萬、幾百萬，通常意味著索引過濾性不好，或者需要回表的資料太多。</p>
+<h3>rows 是怎麼算的？會因此全表掃描嗎？</h3>
+<p>這裡有個很多人會誤會的地方。有人以為 EXPLAIN 既然能統計 rows，是不是偷偷把全表掃了一遍。答案是<strong>不會</strong>。InnoDB 探取的是<strong>採樣估算</strong>：它隨機抽取少量資料頁（預設約 8 頁），算出這些頁裡平均每頁有多少行、有多大的密度，再乘上總頁數，得到一個近似值。所以 rows 只是一個估計數字，不會因為執行 EXPLAIN 就觸發全表掃描。</p>
+<p>既然是採樣，就有不準的時候。當你懷疑統計資訊過期、優化器選錯了執行計畫時，可以執行 <code>ANALYZE TABLE</code> 重新採樣。但要注意，大表執行它會有一定成本，不要動不動就在生產環境跑。</p>
+
+<h2>第五步：看 Extra，這裡有最直白的紅綠燈</h2>
+<p><code>Extra</code> 是額外資訊欄，裡面藏著幾個一看就懂的關鍵字。</p>
+<table>
+<thead>
+<tr><th>Extra 內容</th><th>燈號</th><th>意思</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Using index</code></td><td>綠燈</td><td>用到覆蓋索引，不需要回表，性能最好</td></tr>
+<tr><td><code>Using filesort</code></td><td>紅燈</td><td>無法利用索引的順序，需要額外的檔案排序，耗 CPU</td></tr>
+<tr><td><code>Using temporary</code></td><td>紅燈</td><td>用到了臨時表，常見於 GROUP BY 或 DISTINCT，耗記憶體或磁碟</td></tr>
+</tbody>
+</table>
+<p>看到 <code>Using index</code> 就可以放心，這正是上一節講的覆蓋索引，查詢所需欄位全在索引裡，不必回表。相反的，只要出現 <code>Using filesort</code> 或 <code>Using temporary</code>，就要當成嚴重的效能訊號處理，通常得靠調整索引或重寫 SQL 來消除。</p>
+
+<h2>把五個指標串成一條判斷流程</h2>
+<p>實際排查時，不用一次看全部，照這個順序走就行：</p>
+<ol>
+<li>先看 <code>type</code>：是 <code>ALL</code> 或 <code>index</code> 就要警覺，目標是 <code>range</code> 或 <code>ref</code>。</li>
+<li>再看 <code>key</code>：是 <code>NULL</code> 就查是不是索引失效，或優化器放棄了索引。</li>
+<li>如果是聯合索引，看 <code>key_len</code>：確認到底命中了幾列。</li>
+<li>看 <code>rows</code>：評估掃描規模是否合理。</li>
+<li>最後看 <code>Extra</code>：有沒有 <code>Using index</code> 這個綠燈，或 <code>Using filesort</code>、<code>Using temporary</code> 這兩個紅燈。</li>
+</ol>
+<p>把這五個欄位練熟，你面對任何一條慢 SQL 都能說出一套具體的診斷，而不是只丟一句「好像沒走索引」。</p>
+
+<h2>小結</h2>
+<blockquote>
+EXPLAIN 展示優化器打算如何執行一條 SQL，重點看五個欄位：type 判斷存取方式（底線是 range/ref，看到 ALL 就是全表掃描）；possible_keys 與 key 判斷有沒有命中索引（possible 有值而 key 為 NULL 是警訊）；key_len 判斷聯合索引命中幾列；rows 是採樣估算的掃描行數，不會觸發全表掃描，可用 ANALYZE TABLE 重新採樣；Extra 裡 Using index 是覆蓋索引的綠燈，Using filesort 與 Using temporary 是必須處理的紅燈。
+</blockquote>
+<p>有了 EXPLAIN 這個工具，我們終於可以回頭處理最棘手的兩種慢查詢：一種是分頁翻到很後面就越來越慢，另一種是明明走了索引卻依然快不起來。下一節把深分頁的成因與三種優化講清楚，並串起完整的慢 SQL 排查流程。</p>
+
+<h2>隨堂測驗</h2>
+
+<div class="quiz" data-question="EXPLAIN 的 type 欄位顯示 ALL，代表什麼？" data-correct="3" data-explain="ALL 表示全表掃描，是 type 中效率最差的等級，通常必須優化。">
+  <button class="opt">查詢命中主鍵並只需要定位一次</button>
+  <button class="opt">查詢使用了覆蓋索引不需回表</button>
+  <button class="opt">查詢只在索引樹上做了範圍掃描</button>
+  <button class="opt">查詢發生了全表掃描效率最差</button>
+</div>
+
+<div class="quiz" data-question="possible_keys 有值、key 卻是 NULL，最可能的解釋是什麼？" data-correct="1" data-explain="可能因為索引失效，或優化器估算走索引成本更高而選擇全表掃描。">
+  <button class="opt">這個索引根本沒有被建立到資料表上</button>
+  <button class="opt">索引失效或優化器判定走索引不划算</button>
+  <button class="opt">EXPLAIN 的輸出格式出現了顯示錯誤</button>
+  <button class="opt">查詢牽涉到的欄位並不存在於該表</button>
+</div>
+
+<div class="quiz" data-question="為什麼 key_len 可以用來檢查聯合索引是否完全生效？" data-correct="2" data-explain="key_len 是索引被使用的位元組數，據此推算命中了幾列。">
+  <button class="opt">因為它記錄了索引建構時花費的總時間</button>
+  <button class="opt">因為它顯示了索引樹目前有多少層高度</button>
+  <button class="opt">因為它表示索引被使用了多少位元組</button>
+  <button class="opt">因為它列出優化器考慮過的所有候選索引</button>
+</div>
+
+<div class="quiz" data-question="關於 EXPLAIN 的 rows，下列說法何者正確？" data-correct="0" data-explain="rows 是採樣估算值，不會觸發全表掃描，可用 ANALYZE TABLE 更新。">
+  <button class="opt">它是採樣估算值，不會因此觸發全表掃描</button>
+  <button class="opt">它是精確值，執行時會完整掃描整張表</button>
+  <button class="opt">它代表查詢執行完實際回傳的列數</button>
+  <button class="opt">它只在使用了覆蓋索引時才會顯示出來</button>
+</div>
+
+<div class="quiz" data-question="Extra 欄位出現 Using filesort，代表什麼？" data-correct="1" data-explain="無法利用索引的順序，需要額外的檔案排序，會消耗大量 CPU。">
+  <button class="opt">查詢成功使用了覆蓋索引，不需要回表</button>
+  <button class="opt">查詢需要額外的檔案排序，消耗 CPU</button>
+  <button class="opt">查詢使用了臨時表來處理分組與去重</button>
+  <button class="opt">查詢改走了全表掃描而非索引查找</button>
+</div>
+
+<div class="quiz" data-question="在 EXPLAIN 的 Extra 中，那一項是好消息？" data-correct="3" data-explain="Using index 表示觸發覆蓋索引，不需回表，是性能最優的表現。">
+  <button class="opt">Using filesort</button>
+  <button class="opt">Using temporary</button>
+  <button class="opt">Using where</button>
+  <button class="opt">Using index</button>
+</div>
+
+<div class="lesson-nav">
+  <div><a href="./index-failure-pushdown.html">← 上一步：索引失效的三大忌與兩個坑，加上索引下推</a></div>
+  <div><a href="./deep-pagination-slow-query.html">下一步：深分頁與慢 SQL：走索引為什麼還是很慢 →</a></div>
+</div>
+
+<footer class="footer">
+  <p>索引與慢查詢優化 · Step 5/6 · 有任何問題，隨時問你的 agent 老師。</p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

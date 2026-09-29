@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>==、equals 與 hashCode 契約</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1><code>==</code>、<code>equals</code> 與 <code>hashCode</code>：先搞懂「相等」是哪一種</h1>
+<p class="meta">Step 2/6 · 分清數值、位址與內容，守住哈希集合的契約</p>
+
+<h2>前言：為什麼資料明明存在，程式卻找不到？</h2>
+
+<p>你可能遇過這種線上事故：<code>Student</code> 物件明明已經放進 <code>HashSet</code>，下一秒卻用一個學號相同的新物件呼叫 <code>contains</code>，結果得到 <code>false</code>。更奇怪的是，集合裡還可能出現兩筆你以為是同一位學生的資料。</p>
+
+<p>另一個場景是金額比較。前端傳來 <code>"100"</code>，後端拿到的是 <code>"100.00"</code>。如果直接用 <code>equals</code> 比對，數學上看似相同的金額，程式卻可能判定不相等，導致優惠券沒有發出去。</p>
+
+<p>這些問題的共同根源，是我們把不同層次的「相等」混在一起了。本節會從 <code>==</code>、<code>equals</code> 和 <code>hashCode</code> 開始，拆開數值、位址與內容這三種判斷方式，也會說明為什麼 <code>BigDecimal</code> 的金額比較不能隨手使用 <code>equals</code>。</p>
+
+<h2>第一層：<code>==</code> 比的是數值或位址</h2>
+
+<p><code>==</code> 是運算子，實際比較什麼，取決於兩邊的型別。</p>
+
+<p>如果兩邊都是基本型別，<code>==</code> 比的是<strong>數值</strong>，所以 <code>10 == 10.0</code> 會得到 <code>true</code>。</p>
+
+<p>如果兩邊是引用型別，<code>==</code> 比的是<strong>位址是否指向同一個物件</strong>。可以把它想成兩把鑰匙：只有兩把鑰匙真的開同一扇門，<code>==</code> 才會認為它們相等。即使兩個物件的內容完全一樣，只要是堆上的兩個獨立物件，結果仍然可能是 <code>false</code>。</p>
+
+<figure class="lesson-figure"><img src="./equality-and-hashcode-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第二層：<code>Object.equals</code> 預設仍然是 <code>==</code></h2>
+
+<p><code>equals()</code> 是 <code>Object</code> 定義的方法。若類別沒有自行重寫它，預設行為就是比較兩個引用是否指向同一個物件。換句話說，沒有重寫 <code>equals</code> 時，<code>s1.equals(s2)</code> 和 <code>s1 == s2</code> 的效果基本相同，仍然是在比位址。</p>
+
+<p><code>equals</code> 真正有用的地方，在於類別可以重寫它，改成比較物件的<strong>邏輯內容</strong>。例如 <code>String</code> 和 <code>Integer</code> 都已經重寫 <code>equals</code>，業務上的值物件通常也會根據自己的規則重寫它。</p>
+
+<pre><code>String a = new String("hello");
+String b = new String("hello");
+System.out.println(a == b);        // false：兩個不同的堆物件
+System.out.println(a.equals(b));   // true：String 重寫了 equals，比字元內容</code></pre>
+
+<p>這段程式裡，<code>a</code> 和 <code>b</code> 是兩個不同的物件，所以 <code>==</code> 回傳 <code>false</code>。但它們包含相同的字元內容，<code>String</code> 的 <code>equals</code> 因此回傳 <code>true</code>。</p>
+
+
+<h2>第三層：內容相等，還要配合 <code>hashCode</code></h2>
+
+<p>當 <code>equals</code> 被重寫成比較內容後，還不能立刻說大功告成。只要物件會放進 <code>HashMap</code> 或 <code>HashSet</code>，就必須同時理解 <code>hashCode()</code>。</p>
+
+<p>可以把 <code>HashMap</code> 想成一座檔案館。<code>hashCode()</code> 先決定資料要放進第幾號櫃子；找到櫃子後，<code>equals()</code> 才會逐一比對裡面的檔案，確認哪一份才是目標。</p>
+
+
+<p>因此，兩個方法要遵守一條重要契約：</p>
+
+<blockquote class="good-code">如果 <code>a.equals(b)</code> 為 true，那麼 <code>a.hashCode()</code> 必須等於 <code>b.hashCode()</code>。反過來，<code>hashCode</code> 相同時，<code>equals</code> 不一定為 true，這叫做哈希衝突。</blockquote>
+
+<p>為什麼契約這麼重要？假設兩個物件在邏輯上相等，卻算出不同的雜湊值。資料存入時可能被放進 A 櫃，查詢時卻依照另一個物件的雜湊值跑到 B 櫃，自然就找不到。</p>
+
+<p><code>Object</code> 預設提供的 <code>hashCode</code> 是以物件身分為基礎計算的。因此，即使兩個 <code>new</code> 出來的物件內容相同，只要是不同實例，預設的雜湊值也可能不同。</p>
+
+<h3>只重寫 <code>equals</code>，不重寫 <code>hashCode</code> 的後果</h3>
+
+<p>回到一開始的 <code>Student</code>。假設你建立了兩個學號相同的物件，並讓 <code>s1.equals(s2)</code> 回傳 <code>true</code>，但沒有同步重寫 <code>hashCode</code>。</p>
+
+<ul>
+  <li>你把 <code>s1</code> 存進 <code>HashMap</code>。Map 根據 <code>s1</code> 的預設雜湊值，把資料放進某個櫃子。</li>
+  <li>之後用 <code>s2</code> 查詢。Map 根據另一個預設雜湊值，可能前往不同的櫃子，結果拿到 <code>null</code>。</li>
+  <li>對 <code>HashSet</code> 來說，兩個物件也可能被分到不同位置，於是原本應該被視為同一筆資料的學生，最後被存成兩筆。</li>
+</ul>
+
+<p>正確做法是：<strong>重寫 <code>equals</code> 時，也要用同一組業務關鍵欄位重寫 <code>hashCode</code></strong>。如果學生的唯一識別是 <code>id</code>，兩個方法就都只使用 <code>id</code>。現代 IDE，以及 <code>record</code> 型別，通常都能協助產生這一對方法，目的就是降低破壞契約的機會。</p>
+
+
+<pre><code>@Override
+public boolean equals(Object o) {
+    if (this == o) return true;
+    if (!(o instanceof Student s)) return false;
+    return id == s.id;              // 只用 id 判斷
+}
+
+@Override
+public int hashCode() {
+    return Integer.hashCode(id);    // 也只用 id 算雜湊，契約才一致
+}</code></pre>
+
+<h2>金額比較的陷阱：為什麼 <code>equals</code> 可能讓你判錯？</h2>
+
+<p>小數是等值判斷裡很容易踩到的坑。計算機底層使用二進位儲存數字，整數通常可以精確表示，但像 <code>0.1</code> 這類小數在二進位中是無限循環小數。由於 <code>float</code> 和 <code>double</code> 的儲存空間有限，只能保存近似值。</p>
+
+<p>因此，<code>0.1 + 0.2</code> 可能不會得到精確的 <code>0.3</code>，而是出現 <code>0.30000000000000004</code>。在金額計算中，這種誤差可能讓帳務無法對平，所以不能把 <code>double</code> 當成金額的可靠表示方式。</p>
+
+<p>金額通常應該使用 <code>BigDecimal</code>。不過，<code>BigDecimal</code> 還有一個常見考點：它的 <code>equals</code> 不只比較數值，也會比較<strong>精度，也就是 scale</strong>。</p>
+
+<pre><code>BigDecimal a = new BigDecimal("1.0");
+BigDecimal b = new BigDecimal("1.00");
+System.out.println(a.equals(b));          // false！scale 不同（1 vs 2）
+System.out.println(a.compareTo(b) == 0);  // true：compareTo 只比數值</code></pre>
+
+<p><code>1.0</code> 和 <code>1.00</code> 的數學大小相同，但它們的 scale 不同，所以 <code>equals</code> 會回傳 <code>false</code>。如果你的需求是判斷兩個 <code>BigDecimal</code> 的<strong>數值是否相等</strong>，應該使用 <code>compareTo() == 0</code>。</p>
+
+<figure class="lesson-figure"><img src="./equality-and-hashcode-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>建立 <code>BigDecimal</code> 時，也要避免直接把 <code>double</code> 傳進建構子。請使用 <code>new BigDecimal("0.1")</code> 這種字串建構子，或使用 <code>BigDecimal.valueOf(0.1)</code>。如果直接使用 <code>new BigDecimal(0.1)</code>，原本 <code>double</code> 裡的不精確近似值也會一起被帶進去。</p>
+
+<h2>三層等值速查</h2>
+
+<table>
+<thead>
+<tr><th>層次</th><th>比較什麼</th><th>該用什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>數值</td><td>兩個基本型別的數字是否相同</td><td><code>==</code></td></tr>
+<tr><td>位址</td><td>兩個引用是否指向同一個物件</td><td><code>==</code></td></tr>
+<tr><td>內容</td><td>兩個物件的邏輯狀態是否相等</td><td>重寫 <code>equals</code>，並同步重寫 <code>hashCode</code></td></tr>
+<tr><td>金額數值</td><td>兩個 <code>BigDecimal</code> 的數學大小</td><td><code>compareTo() == 0</code></td></tr>
+</tbody>
+</table>
+
+<div class="lesson-nav">
+  <div><a href="./object-creation-passing.html">← 上一步：物件的建立、傳遞與複製</a></div>
+  <div><a href="./strings-and-immutability.html">下一步：String 不可變、常量池與拼接選型 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="當兩邊都是引用型別時，== 比較的是什麼？" data-correct="3" data-explain="引用型別的 == 比記憶體地址，只有指向同一隻物件才回傳 true。">
+  <button class="opt">兩個物件的字串內容</button>
+  <button class="opt">兩個物件的欄位總數</button>
+  <button class="opt">兩個物件的雜湊值大小</button>
+  <button class="opt">兩個引用是否指向同一隻物件</button>
+</div>
+<div class="quiz" data-question="沒有重寫 equals 的自訂類別，呼叫 equals 的預設行為是什麼？" data-correct="1" data-explain="Object 的 equals 預設直接呼叫 ==，也就是比地址。">
+  <button class="opt">比較所有欄位的內容是否相同</button>
+  <button class="opt">等同於 ==，比較記憶體地址</button>
+  <button class="opt">比較兩者的 hashCode 是否相等</button>
+  <button class="opt">直接回傳 true 不做任何比較</button>
+</div>
+<div class="quiz" data-question="hashCode 與 equals 的契約是什麼？" data-correct="0" data-explain="equals 為 true 的兩個物件，hashCode 必須相等；反之 hashCode 相同時 equals 不一定為 true。">
+  <button class="opt">equals 為 true 則 hashCode 必須相等</button>
+  <button class="opt">hashCode 相等則 equals 必須為 true</button>
+  <button class="opt">兩者必須同時被覆寫成回傳 true</button>
+  <button class="opt">equals 與 hashCode 之間沒有關係</button>
+</div>
+<div class="quiz" data-question="只重寫 equals 卻沒重寫 hashCode，最可能的後果是什麼？" data-correct="2" data-explain="預設 hashCode 依記憶體地址計算，存入與讀取會落在不同桶位，導致取不到資料或重複存入。">
+  <button class="opt">程式編譯時就會直接報錯</button>
+  <button class="opt">equals 會自動失去作用</button>
+  <button class="opt">HashMap 存得進卻取不出，還可能重複存入</button>
+  <button class="opt">物件會被 JVM 自動標記為不可變</button>
+</div>
+<div class="quiz" data-question="new BigDecimal(&quot;1.0&quot;).equals(new BigDecimal(&quot;1.00&quot;)) 的結果與原因？" data-correct="1" data-explain="BigDecimal 的 equals 同時比較數值與 scale，1.0 與 1.00 精度不同，所以回傳 false。">
+  <button class="opt">true，因為兩者數學上相等</button>
+  <button class="opt">false，因為 equals 會比較 scale 精度</button>
+  <button class="opt">true，因為 equals 會忽略精度差異</button>
+  <button class="opt">false，因為 BigDecimal 不能比小數</button>
+</div>
+<div class="quiz" data-question="要判斷兩個 BigDecimal 的數學數值是否相等，應該怎麼寫？" data-correct="0" data-explain="compareTo 忽略 scale 差異，只比數學大小，回傳 0 代表相等。">
+  <button class="opt">a.compareTo(b) == 0</button>
+  <button class="opt">a.equals(b)</button>
+  <button class="opt">a == b</button>
+  <button class="opt">a.scale() == b.scale()</button>
+</div>
+<div class="quiz" data-question="為什麼金額不該用 float 或 double 儲存？" data-correct="2" data-explain="許多十進位小數在二進位中是無限循環，浮點數只能存近似值，累加後會產生誤差。">
+  <button class="opt">因為浮點數佔用的記憶體太大</button>
+  <button class="opt">因為浮點數無法進行加減運算</button>
+  <button class="opt">因為十進位小數在二進位只能存近似值</button>
+  <button class="opt">因為浮點數不支援負數表示</button>
+</div>
+
+<div class="footer">
+  <p>有任何看不懂的地方，直接在對話裡問你的老師。追問，是這門課最歡迎的動作。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>五個執行時資料區與堆棧之別｜JVM 執行時與類載入</title>
+  <link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>JVM 五個執行時資料區：一次分清堆與棧</h1>
+<p class="meta">JVM 執行時與類載入 · Step 2/5 · 學習目標：畫出 JVM 五個執行時資料區，分清哪些區域由執行緒共享、哪些屬於執行緒私有，從四個維度比較堆與棧，並說明方法區為什麼從永久代走向元空間。</p>
+
+<h2>前言：都是「記憶體爆了」，症狀卻完全不同</h2>
+<p>線上服務半夜告警，你打開日誌，看到 <code>java.lang.OutOfMemoryError: Java heap space</code>。隔天另一個服務出事，訊息卻變成 <code>StackOverflowError</code>。</p>
+<p>這兩種錯誤常被籠統地叫作「記憶體爆了」，但它們壞掉的地方完全不同。一個是放物件的堆空間滿了；另一個則是方法呼叫疊得太深，把某個執行緒自己的棧撐爆了。</p>
+<p>如果分不清這兩者，排查方向就會整個歪掉。遇到堆空間不足時，你應該檢查物件為什麼回收不掉，或評估是否需要調整堆大小；遇到棧溢出時，則要先看是不是遞迴太深，或迴圈根本沒有出口。</p>
+<p>要看懂這些症狀，得先知道 JVM 在執行時把記憶體分成哪些區域、每一區負責什麼。這一課先把整張地圖畫出來，再放大比較最常被拿來一起考的堆與棧。</p>
+
+<h2>五個執行時資料區：先分共享與私有</h2>
+<p>依照 Java 虛擬機規範，JVM 的執行時資料區通常分成五塊。最重要的分類方式，是看它屬於「執行緒共享」還是「執行緒私有」。</p>
+<p>共享區域跟著整個虛擬機的生命週期存在；私有區域則跟著個別執行緒建立與消失。可以先用「兩塊共享、三塊私有」記住整體結構。</p>
+
+<table>
+  <tr><th>區域</th><th>歸屬</th><th>主要裝什麼</th><th>滿了會怎樣</th></tr>
+  <tr><td><strong>堆（Heap）</strong></td><td>執行緒共享</td><td>幾乎所有物件實例與陣列</td><td><code>OutOfMemoryError</code></td></tr>
+  <tr><td><strong>方法區（Method Area）</strong></td><td>執行緒共享</td><td>類別資訊、常數、靜態變數、編譯後程式碼</td><td>元空間耗盡時發生 OOM</td></tr>
+  <tr><td><strong>虛擬機棧</strong></td><td>執行緒私有</td><td>每個方法的棧框：局部變數、運算元棧等</td><td><code>StackOverflowError</code>／OOM</td></tr>
+  <tr><td><strong>本地方法棧</strong></td><td>執行緒私有</td><td>與虛擬機棧類似，服務 native 方法</td><td>同上</td></tr>
+  <tr><td><strong>程式計數器</strong></td><td>執行緒私有</td><td>目前執行到哪一行位元組碼</td><td>不會溢出</td></tr>
+</table>
+
+<p>堆與方法區由所有執行緒共用，因此其中一區出問題時，通常可能影響整個行程。虛擬機棧、本地方法棧與程式計數器則是每個執行緒各有一份；某個執行緒的私有區域出錯時，通常會先表現在該執行緒身上。</p>
+
+<figure class="lesson-figure"><img src="./runtime-data-areas-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>兩塊共享區域</h2>
+
+<p><strong>堆</strong>是 JVM 記憶體中最大的一塊，也是垃圾回收（GC）的主戰場，所以有時會直接稱為「GC 堆」。平常寫下的 <code>new User()</code>、<code>new int[100]</code>，物件本體和陣列通常都配置在這裡。</p>
+<p>因為所有執行緒都能存取堆裡的物件，所以多執行緒同時操作同一個物件時，就必須考慮同步問題。當堆已經放不下更多物件，又無法再擴張時，JVM 就會拋出 <code>OutOfMemoryError</code>。</p>
+
+<p><strong>方法區</strong>存放的是與「類別」有關的資料，包括已載入的類別資訊、常數、靜態變數，以及即時編譯器編譯後的程式碼。</p>
+<p>這裡有一段常被問到的演進歷史：JDK 7 及以前，方法區通常以「永久代（Permanent Generation）」實作，並且屬於堆的一部分；JDK 8 開始，則改稱為「元空間（Metaspace）」，並搬到<strong>本地記憶體</strong>中，不再受 JVM 堆大小的直接限制。至於為什麼要這樣改，後面會單獨說明。</p>
+
+<h2>三塊執行緒私有區域</h2>
+
+<p><strong>虛擬機棧</strong>可以看成 Java 方法執行時所使用的執行緒記憶體模型。每當一個方法被呼叫，JVM 就會在棧頂建立一個<strong>棧框（Stack Frame）</strong>，用來放這個方法執行時需要的資料，例如局部變數表、運算元棧、動態連結與方法出口。</p>
+<p>方法執行結束後，對應的棧框就會彈出，所占用的空間也會自動歸還，不需要 GC 介入。若遞迴太深，棧框一層層疊上去，超過深度限制，就會拋出 <code>StackOverflowError</code>。如果棧需要擴張，卻申請不到足夠的記憶體，則可能拋出 OOM。</p>
+
+<figure class="lesson-figure"><img src="./runtime-data-areas-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p><strong>本地方法棧</strong>的角色和虛擬機棧很接近，只是它專門服務 <code>native</code> 方法。這些方法通常使用 C、C++ 等非 Java 語言實作，再透過 JNI 提供 Java 呼叫。由於它們執行時不走 Java 位元組碼，因此需要自己的棧來支援執行。</p>
+
+<p><strong>程式計數器</strong>是五個區域中最小的一塊，但用途很關鍵。它記錄目前執行緒正在執行哪一行位元組碼。</p>
+<p>當執行緒被切換出去，之後又切換回來時，JVM 必須知道要從哪裡接著執行，程式計數器就像一個小小的書籤，記下了這個位置。分支、迴圈、跳躍與例外處理，都需要依靠這個位置資訊。</p>
+<p>它還有一個常考特性：程式計數器是 JVM 中<strong>唯一不會發生記憶體溢出</strong>的區域，因為它儲存的資訊非常少，而且大小相對固定。</p>
+
+<h2>堆與棧的四個維度對比</h2>
+
+<p>堆與棧是最常被放在一起比較的一組。可以先用一句話抓住核心：</p>
+<p><strong>棧是執行時的單位，負責「程式怎麼執行」；堆是儲存的單位，負責「資料怎麼存放」。</strong></p>
+<p>再往下拆，可以從四個維度把它們講清楚。</p>
+
+<h3>一、記憶體位置與分配方式</h3>
+
+<p>棧的記憶體通常是<strong>連續</strong>的，資料依照「先進後出」的方式一格一格進出。方法結束後，棧框就能直接彈出，分配與釋放速度很快，也不需要垃圾回收。</p>
+<p>堆的記憶體通常<strong>不連續</strong>。配置物件時，JVM 必須尋找可用空間；物件不再使用後，還要依靠 GC 的標記、清除或複製等機制回收。相較之下，堆的管理成本更高。</p>
+<p>這也是為什麼「能不能少建立一些堆上的物件」會影響效能：物件越多，配置與回收的工作就越多，GC 也可能更頻繁。</p>
+
+<h3>二、儲存什麼內容</h3>
+
+<p>棧主要存放局部變數、運算元棧與動態連結。不過，這裡有一個很常見的誤解需要釐清。</p>
+<p>如果變數是基本型別，例如 <code>int</code>，棧框裡通常放的是<strong>值本身</strong>；如果變數是物件，棧框裡放的則只是一個<strong>參考（reference）</strong>，物件本體仍然位於堆中。</p>
+<p>因此，<code>User u = new User();</code> 可以拆成兩個部分來看：<code>u</code> 這個參考位於棧框中，而 <code>new User()</code> 建立出的物件實例則位於堆中。</p>
+
+<figure class="lesson-figure"><img src="./runtime-data-areas-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>三、執行緒可見性</h3>
+
+<p>棧是執行緒私有的。每個執行緒都有自己的棧，彼此不會直接共用同一個棧框，因此棧上的局部資料通常不需要透過鎖來保護。</p>
+<p>堆則是執行緒共享的。所有執行緒都可能存取堆裡的同一個物件，所以當多個執行緒同時修改它時，就必須自行處理同步問題。堆本身是共享的，並不代表放在堆裡的物件自然就是執行緒安全。</p>
+
+<h3>四、可能出現的異常</h3>
+
+<p>棧空間不足，而且無法再擴張時，通常會拋出 <code>StackOverflowError</code>。最典型的原因是遞迴太深，讓棧框不斷累積。</p>
+<p>堆空間不足時，則會拋出 <code>OutOfMemoryError</code>。常見情況是建立了太多物件，或者物件一直被參考著，導致 GC 無法回收。</p>
+<p>回到開頭的兩個錯誤訊息：它們雖然都和記憶體有關，卻分別指向不同的區域。排查時先確認是哪一區出問題，才能找到正確的方向。</p>
+
+<h2>方法區為什麼從永久代改成元空間</h2>
+
+<p>這是一段由實際痛點推動的演進。JDK 8 之前，方法區通常以永久代實作。永久代在邏輯上是獨立區域，但在物理上仍屬於堆的一部分，而且大小通常透過 <code>-XX:MaxPermSize</code> 設定上限。</p>
+<p>問題在於，這個上限很難設定得剛剛好。現代框架，例如 Spring、Hibernate，會大量使用 CGLib 產生<strong>動態代理類</strong>。這些類別是在執行期間持續產生的，很容易把永久代撐爆，最後出現：</p>
+<pre><code>java.lang.OutOfMemoryError: PermGen space</code></pre>
+<p>當然可以把永久代調大，但究竟要設多大並不容易。設得太小，服務容易因為類別資料太多而出錯；設得太大，又可能白白保留一塊用不到的空間。</p>
+
+<p>JDK 8 將類別的元資料從堆裡搬到<strong>本地記憶體</strong>，並改由元空間管理。這樣一來，元空間不再直接受 JVM 堆上限限制，而是受到作業系統可用實體記憶體的限制，需要時也能自動擴張。</p>
+<p>這降低了永久代因固定容量不足而 OOM 的機率，但不代表元空間永遠不會滿。當載入了太多類別，或類別持續被動態產生而沒有被卸載，仍然可能看到元空間相關告警。這時出問題的不是堆，而是存放「類別資訊」的區域。</p>
+
+<figure class="lesson-figure"><img src="./runtime-data-areas-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<p>JVM 的執行時資料區分成五塊：堆與方法區是執行緒共享區域；虛擬機棧、本地方法棧與程式計數器則是執行緒私有區域。</p>
+<p>堆是最大的區域，主要存放物件實例與陣列，也是 GC 的主戰場。方法區存放類別相關資訊，JDK 8 之後從永久代改為位於本地記憶體的元空間。</p>
+<p>棧與堆最核心的差別，可以整理成四點：棧是執行單位、通常連續、執行緒私有，而且不需要 GC；堆是儲存單位、通常不連續、由執行緒共享，並且依賴 GC 管理。</p>
+<p>搞懂這張 JVM 記憶體地圖後，下一步就能放大查看堆裡的一顆物件，看看它究竟由哪些部分組成。</p>
+
+<div class="lesson-nav">
+  <a href="./bytecode-execution-jit.html">← 上一步：位元組碼怎麼跑：半編譯半解釋與 JIT</a>
+  <a href="./object-memory-layout.html">下一步：一個物件在記憶體裡長什麼樣 →</a>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="以下哪一組區域全部都是執行緒私有的？" data-correct="1" data-explain="虛擬機棧、本地方法棧、程式計數器都是執行緒私有；堆與方法區則是共享。">
+  <button class="opt">堆、方法區、虛擬機棧</button>
+  <button class="opt">虛擬機棧、本地方法棧、程式計數器</button>
+  <button class="opt">堆、本地方法棧、程式計數器</button>
+  <button class="opt">方法區、虛擬機棧、程式計數器</button>
+</div>
+<div class="quiz" data-question="JVM 中唯一不會發生記憶體溢出的區域是哪一塊？" data-correct="2" data-explain="程式計數器只需存當前位元組碼行號，資訊量固定，因此不會溢出。">
+  <button class="opt">堆</button>
+  <button class="opt">方法區</button>
+  <button class="opt">程式計數器</button>
+  <button class="opt">虛擬機棧</button>
+</div>
+<div class="quiz" data-question="執行 <code>User u = new User();</code> 時，參考 u 與物件本體分別在哪裡？" data-correct="0" data-explain="參考 u 存在棧上，new 出來的物件實例則配置在堆裡。">
+  <button class="opt">u 在棧，物件在堆</button>
+  <button class="opt">u 在堆，物件在棧</button>
+  <button class="opt">兩者都在堆裡</button>
+  <button class="opt">兩者都在棧裡</button>
+</div>
+<div class="quiz" data-question="堆與棧在執行緒可見性上的差別是什麼？" data-correct="3" data-explain="棧是執行緒私有、天然安全；堆是執行緒共享，需要自行處理同步。">
+  <button class="opt">兩者都是執行緒私有</button>
+  <button class="opt">兩者都是執行緒共享</button>
+  <button class="opt">堆私有安全，棧共享需同步</button>
+  <button class="opt">棧私有安全，堆共享需同步</button>
+</div>
+<div class="quiz" data-question="遞迴太深時，通常會抛出哪一種例外？" data-correct="1" data-explain="遞迴太深會撐爆虛擬機棧，抛出 StackOverflowError，而不是 OOM。">
+  <button class="opt">OutOfMemoryError</button>
+  <button class="opt">StackOverflowError</button>
+  <button class="opt">PermGen space 錯誤</button>
+  <button class="opt">Code Cache 溢出錯誤</button>
+</div>
+<div class="quiz" data-question="JDK 8 為什麼把永久代改成元空間？" data-correct="2" data-explain="永久代大小固定，動態代理類容易撐爆；元空間放到本地記憶體，可隨實體記憶體自動擴張。">
+  <button class="opt">讓 GC 回收速度變更快</button>
+  <button class="opt">讓位元組碼改放回堆裡</button>
+  <button class="opt">解開固定上限、降低 OOM 機率</button>
+  <button class="opt">讓方法區改成執行緒私有</button>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

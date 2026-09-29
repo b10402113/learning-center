@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>垃圾怎麼收？三種演算法、分代收集與 STW</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>垃圾怎麼收？三種演算法、分代收集與 STW</h1>
+<p class="meta">Step 2/4 · GC、記憶體壓力與線上排查</p>
+
+<h2>前言：知道誰是垃圾，接著要怎麼清？</h2>
+
+<p>上一節我們解決了「哪些物件可以丟」。但在 JVM 裡，判斷垃圾只是第一步；真正把它們清掉時，還得面對另一個問題：怎麼清，才不會讓記憶體變得坑坑洞洞，或讓服務停頓太久？</p>
+
+<p>假設記憶體裡還剩下不少空間，卻被切成東一塊、西一塊的碎片。這時候即使總空間足夠，也可能找不到一段連續區域來放入大物件，最後只好再次觸發 GC。這就像倉庫裡明明還有很多空位，卻全都散落在貨架縫隙中，放不下一件完整的大貨物。</p>
+
+<p>這一節會比較三種基礎垃圾收集演算法，接著看 JVM 為什麼採用分代收集，最後拆解後端工程師很在意的 <strong>STW</strong>。它代表服務暫時停下來，讓 GC 有機會安全地整理記憶體，也是各種收集器持續想縮短的停頓來源。</p>
+
+<h2>學習目標</h2>
+
+<p>學完這一節，你應該能比較標記-清除、標記-複製、標記-整理三種演算法的取捨，說明分代收集為什麼讓新生代使用複製、老年代使用清除或整理，也能解釋 STW 為什麼無法完全消除。</p>
+
+<h2>三種基礎演算法：其實是在交換時間與空間</h2>
+
+<h3>標記-清除：簡單，但容易留下碎片</h3>
+
+<p>標記-清除的流程很直接：先把垃圾標記出來，再把它們清掉；仍然存活的物件則留在原本的位置，不需要搬動。</p>
+
+<p>它的優點是做法簡單，也不必為了整理記憶體而搬移存活物件。不過，清除之後會留下許多不連續的空白區域。你可以把它想成一張被剪得千瘡百孔的紙：空白面積其實不少，但每一塊都太零碎，想畫一張大圖時，卻找不到完整的位置。</p>
+
+<p>對 JVM 來說，這就是記憶體碎片。明明還有可用記憶體，卻塞不下一個需要連續空間的大物件，最後可能被迫提前再次觸發 GC。</p>
+
+<figure class="lesson-figure"><img src="./collection-algorithms-and-stw-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>標記-複製：用額外空間換取連續記憶體</h3>
+
+<p>標記-複製是為了解決碎片問題而來。它會把記憶體切成兩半，平常只使用其中一半。這一半快滿時，就把仍然存活的物件全部搬到另一半，接著把原本使用中的那一半整塊清空。</p>
+
+<p>因為存活物件是集中搬到另一側的，新的記憶體空間自然會保持連續。之後配置物件時，只要把指標往後移動即可，速度很快，也不容易產生碎片。</p>
+
+<p>代價是需要準備額外空間。看起來就像花兩份錢，卻只有一半面積能在同一時間使用。不過，JVM 觀察到新生代的物件大多「朝生夕死」：它們通常活不過一次 GC。既然每次真正需要搬移的存活物件很少，就不必把空間嚴格切成一半。</p>
+
+<p>HotSpot 會把新生代分成 Eden 與兩塊 Survivor，比例是 Eden 比 Survivor 等於 8 比 1。這樣的設計只需要犧牲約 10% 的空間，就能保留複製演算法的優點。</p>
+
+<h3>標記-整理：適合存活率高的老年代</h3>
+
+<p>老年代的物件通常活得比較久，存活率也比較高。如果還使用標記-複製，就代表每次 GC 都要搬動大量物件，而且還需要額外的空間當作備份區，成本太高。</p>
+
+<p>標記-整理的做法是：先標記垃圾，但不急著直接清除；接著把所有存活物件往記憶體的一端推，讓它們集中排列，再把邊界以外的區域一次清掉。</p>
+
+<p>這樣做可以同時避免碎片，並充分利用記憶體空間。不過，整理的過程需要搬動物件。搬動期間，使用者執行緒必須暫停，因此整體開銷會比較大。</p>
+
+<figure class="lesson-figure"><img src="./collection-algorithms-and-stw-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>分代收集：讓不同年齡的物件，用不同方式處理</h2>
+
+<p>真實的 JVM 不會只押寶在單一演算法上，而是根據物件的年齡與存活特性，把堆分成不同區域，再分別採用適合的收集方式。這就是<strong>分代收集</strong>，也是商業虛擬機長期採用的主流策略。</p>
+
+<table>
+<thead>
+<tr><th>區域</th><th>物件特性</th><th>使用的演算法</th><th>原因</th></tr>
+</thead>
+<tbody>
+<tr><td>新生代</td><td>朝生夕死，存活率低</td><td>標記-複製</td><td>要複製的存活物件少，成本低</td></tr>
+<tr><td>老年代</td><td>存活久，沒有額外空間擔保</td><td>標記-清除（CMS）或標記-整理（Parallel Old、G1）</td><td>存活物件多，不適合整塊複製</td></tr>
+</tbody>
+</table>
+
+<p>這個分工可以用一句話理解：大部分物件很快就會死亡，所以新生代用複製演算法快速清理；少數撐過多次 GC 的物件，才會晉升到老年代，再用標記-清除或標記-整理處理。</p>
+
+
+<p>這樣做的好處，是不必用同一把工具處理所有物件。拿小掃把清理新生代的短命物件，拿更適合整理大型區域的方式處理老年代，整體成本才比較合理。</p>
+
+<h2>STW：為什麼 GC 總要讓程式停一下？</h2>
+
+<p>不管是標記存活物件，還是複製存活物件，只要 GC 正在判斷「哪些物件還活著」，使用者執行緒就不能毫無限制地繼續修改記憶體。這段讓應用程式暫停的狀態，就叫做 <strong>Stop The World</strong>，簡稱 <strong>STW</strong>。</p>
+
+<p>可以把 GC 想成在人來人往的廣場上打掃。如果清潔工一邊掃，行人一邊丟垃圾，甚至把已經掃到旁邊的東西又拿回來，那麼清潔工很難知道哪些東西真的已經清乾淨。更糟的是，他可能把人家正在使用的物品誤當成垃圾丟掉。</p>
+
+<figure class="lesson-figure"><img src="./collection-algorithms-and-stw-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>放到程式裡，就是 GC 可能把仍然存活的物件誤判成垃圾並回收。之後程式一旦存取那個物件，就可能發生錯誤，甚至因為空指標而崩潰。因此，在進行可達性分析時，尤其是根節點枚舉與最終標記等關鍵階段，必須先讓程式暫停，取得一個穩定的狀態，再完成掃描。</p>
+
+<h3>所有收集器都有 STW，只是停法不同</h3>
+
+<p>即使是標榜低延遲的 CMS 或 G1，也無法完全避開 STW。它們能做的是把工作切成更多階段，讓大部分耗時工作與應用程式並行，並把真正需要暫停的部分縮短，或分散到較短的停頓中。</p>
+
+<p>真正棘手的是 Full GC。它通常需要掃描整個堆，停頓時間可能比一般 GC 長得多，嚴重時會讓服務幾十秒，甚至幾分鐘無法正常回應。</p>
+
+<p>因此，線上排查 GC 問題時，第一步通常是先分清楚：到底是 Young GC 太頻繁，還是 Full GC 太頻繁。兩者的成因、影響與後續排查方向都不一樣，不能混在一起處理。</p>
+
+<h2>GC 調優：吞吐量與響應時間的取捨</h2>
+
+<p>JVM 調優的核心目標之一，是縮短 STW 停頓。不過，這不是單純把停頓時間降到越低越好，因為你通常得在<strong>吞吐量</strong>與<strong>響應時間</strong>之間做選擇。</p>
+
+<p>如果優先考慮吞吐量，策略可能是寧願每次停久一點、少停幾次，讓更多 CPU 時間留給真正的運算工作。這類取向比較適合後台運算。</p>
+
+<figure class="lesson-figure"><img src="./collection-algorithms-and-stw-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>如果優先考慮響應時間，策略則可能是允許多停幾次，但每次停頓都要非常短，讓使用者幾乎感覺不到卡頓。這類取向比較適合 Web 應用。</p>
+
+<p>兩種方向沒有絕對的好壞，重點在於這台機器服務的是誰，以及你的系統更在意整體處理量，還是單次請求的反應速度。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+三種演算法各有取捨：標記-清除做法簡單，但會產生碎片；標記-複製沒有碎片，但需要額外空間；標記-整理同樣能避免碎片，也比較省空間，卻必須搬動物件，開銷較大。分代收集把新生代的複製，與老年代的清除或整理接在一起使用。無論採用哪一種方式，GC 在分析存活物件時都需要某種程度的 STW。收集器一路演進，核心就是持續縮短這段停頓時間。
+</blockquote>
+
+<p>現在你已經掌握三種基礎演算法、分代收集，以及 STW 為什麼存在。下一節我們把鏡頭拉到實際運作的收集器：從單執行緒的 Serial，到低延遲的 CMS，再到能用參數指定停頓目標的 G1，看看它們各自解決了什麼問題。</p>
+
+<div class="lesson-nav">
+  <div><a href="./reachability-and-references.html">← 上一步：物件是垃圾嗎？可達性分析與四種引用</a></div>
+  <div><a href="./collectors-cms-to-g1.html">下一步：收集器怎麼選？從 Serial/Parallel 到 CMS 與 G1 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="標記-清除演算法最大的缺點是什麼？" data-correct="0" data-explain="清除後留下大量不連續的記憶體碎片，大物件可能塞不下。">
+  <button class="opt">回收後會留下大量記憶體碎片</button>
+  <button class="opt">回收時必須搬動所有存活物件</button>
+  <button class="opt">回收時只能使用一半的記憶體</button>
+  <button class="opt">回收時完全無法標記出垃圾</button>
+</div>
+<div class="quiz" data-question="為什麼新生代適合用標記-複製演算法？" data-correct="2" data-explain="新生代物件大多朝生夕死，存活少，複製成本低，又能避免碎片。">
+  <button class="opt">因為新生代的記憶體特別大</button>
+  <button class="opt">因為新生代的物件幾乎都活很久</button>
+  <button class="opt">因為新生代的存活物件很少</button>
+  <button class="opt">因為新生代不需要進行標記</button>
+</div>
+<div class="quiz" data-question="HotSpot 新生代 Eden 與 Survivor 的預設比例是多少？" data-correct="1" data-explain="Eden 比 Survivor 為 8 比 1，兩塊 Survivor 合計只浪費 10% 空間。">
+  <button class="opt">Eden 比 Survivor 為 1 比 1</button>
+  <button class="opt">Eden 比 Survivor 為 8 比 1</button>
+  <button class="opt">Eden 比 Survivor 為 2 比 1</button>
+  <button class="opt">Eden 比 Survivor 為 4 比 1</button>
+</div>
+<div class="quiz" data-question="老年代為什麼通常不使用複製演算法？" data-correct="3" data-explain="老年代存活率高、要複製的物件多，又沒有多餘空間當備份。">
+  <button class="opt">因為老年代的物件產生速度太快</button>
+  <button class="opt">因為複製演算法無法標記垃圾</button>
+  <button class="opt">因為老年代不能使用任何演算法</button>
+  <button class="opt">因為存活物件多且沒有備份空間</button>
+</div>
+<div class="quiz" data-question="GC 為什麼一定要 Stop The World？" data-correct="1" data-explain="若使用者執行緒同時改動引用，可能把還活著的物件誤判成垃圾。">
+  <button class="opt">因為要節省 CPU 的使用量</button>
+  <button class="opt">因為引用關係必須是固定的快照</button>
+  <button class="opt">因為停下來能讓磁碟寫得更快</button>
+  <button class="opt">因為使用者執行緒會拖慢標記速度</button>
+</div>
+<div class="quiz" data-question="吞吐量優先與響應時間優先的調優差在哪？" data-correct="0" data-explain="吞吐量優先容忍較長但較少的停頓，響應時間優先要求每次停頓極短。">
+  <button class="opt">前者容忍停久一點、次數少一些</button>
+  <button class="opt">前者要求每次都停極短的時間</button>
+  <button class="opt">前者完全不允許發生任何停頓</button>
+  <button class="opt">前者只在後台運算時才會生效</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · GC、記憶體壓力與線上排查 · Step 2/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

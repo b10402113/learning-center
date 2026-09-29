@@ -8,14 +8,17 @@
 </head>
 <body>
 
-<h1>五大能力</h1>
+<h1>五大能力：把 Agent 組成一條能跑的鏈</h1>
 <p class="meta">Step 2/5 · OryxOS 需求</p>
 
-<h2>學習目標</h2>
-<p>能逐一說出五大能力各自解決什麼問題、核心階段做到哪個程度、又把什麼推遲到擴展階段，並解釋這五個能力如何互相供養。</p>
+<p>一個 Agent 不只是「接上 LLM 就能聊天」。它還要知道該用哪個模型、如何反覆思考與執行、怎麼保留記憶、如何操作外部工具，以及外部系統要從哪裡呼叫它。少了其中一環，系統就可能只會回答，卻不能完成工作。</p>
 
-<h2>為什麼是這五個，而不是別的</h2>
-<p>把任何一個 Agent 系統拆開，零件永遠是那幾塊；OryxOS 只是把它們做成一個企業底座該有的樣子。核心階段只做最短可跑的一條鏈，剛好是五個能力：</p>
+<p>OryxOS 的核心階段不追求一次做完所有企業功能，而是先建立一條最短、真的能跑的鏈。這條鏈由五個能力組成，每個能力都處理一個明確問題。</p>
+
+<figure class="lesson-figure"><img src="./five-capabilities-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>為什麼是這五個能力？</h2>
+
 <table>
 <thead>
 <tr><th>能力</th><th>它在回答什麼問題</th><th>類比</th></tr>
@@ -29,12 +32,31 @@
 </tbody>
 </table>
 
+<p>這五個能力不是任意拼湊的零件，而是 Agent 從「能思考」走到「能被使用」所需的最短路徑。核心階段先把主幹做穩，再把降級、治理、即時通訊等擴展能力往後放。</p>
+
 <h2>能力一：Provider 抽象</h2>
-<p>Provider 把「呼叫一個模型」收斂成一個介面，用 Spring AI Alibaba 的 ChatClient 連接器去接各家模型。每個 Provider 有一組基本屬性：名稱、模型、API key、選填的 base URL；Profile 只用 <strong>Provider 名稱</strong>來引用它。</p>
-<p>核心階段的取捨很克制：<strong>不做失敗降級與競速（hedge racing）</strong>，模型出錯就往上拋；成本透明也只做基本盤——把 tokens、Provider、模型記進日誌。而 Provider 之所以排第一，是因為模型迭代的速度遠快於業務程式碼；把它做成插件，換一家供應商就不用動上層業務。</p>
+
+<p>Provider 把「呼叫模型」收斂成一個統一介面。上層程式不需要知道每家模型的連線細節，而是透過 Spring AI Alibaba 的 ChatClient 連接器使用不同模型。</p>
+
+<p>每個 Provider 具備幾項基本屬性：</p>
+
+<ul>
+<li>名稱</li>
+<li>模型</li>
+<li>API key</li>
+<li>選填的 base URL</li>
+</ul>
+
+<p>Profile 只需要引用<strong> Provider 名稱</strong>，不用把 API key 或模型設定散落在業務程式碼裡。這一層很重要，因為模型更換的速度通常比業務邏輯快。把 Provider 做成可替換的插件，換供應商時就不必連上層流程一起改。</p>
+
+<p>核心階段刻意保持簡單：<strong>不做失敗降級，也不做競速（hedge racing）</strong>。模型呼叫失敗就直接往上拋；成本資訊則先記錄基本資料，包括 tokens、Provider 與模型。</p>
 
 <h2>能力二：ReAct 迴圈</h2>
-<p>ReAct 迴圈是 Agent 的大腦，核心演算法就是 Reason + Act 反覆進行：把訊息附加進上下文 → 組裝 prompt → 呼叫 LLM → 如果 LLM 要呼叫工具，就執行工具並把結果附加回去 → 再問 LLM，直到它給出最終回覆或撞到最大迭代次數（預設 10 次）。</p>
+
+<p>ReAct 迴圈是 Agent 的大腦。它把 Reason（推理）與 Act（行動）交替串起來：先把訊息放進上下文，組裝 prompt 後呼叫 LLM；如果 LLM 要求工具，就執行工具，把結果放回上下文，再問一次 LLM。</p>
+
+<p>這個過程會持續到 LLM 產生最終回覆，或達到最大迭代次數。預設上限是 10 次，Profile 可以覆寫這個設定。</p>
+
 <pre><code>loop (max 10):
   resp = llm(prompt)
   if resp.hasToolCall:
@@ -42,10 +64,17 @@
       context.append(result)
   else:
       return resp</code></pre>
-<p>這段核心迴圈只有幾十行，而且<strong>自己手寫、不用框架黑盒</strong>。核心階段刻意不做的事：工具呼叫是<strong>循序</strong>的（不並行）、<strong>不做上下文壓縮</strong>、<strong>不做子 Agent 委派</strong>。最大迭代次數可在 Profile 覆寫。真正的工程重點不在演算法，而在可觀測性——每一輪的 Reason / Act / Observe 都要留下痕跡。</p>
+
+<p>核心迴圈只有幾十行，刻意<strong>自己手寫、不依賴框架黑盒</strong>。這樣做的價值不只是程式碼少，而是每一次 Reason、Act、Observe 都能被看見，出了問題才知道是模型判斷錯、工具執行錯，還是工具結果讓下一輪判斷偏掉。</p>
+
+<p>核心階段暫不處理三件事：工具呼叫採<strong>循序執行</strong>，不做並行；不做上下文壓縮；不做子 Agent 委派。這些功能會增加調度與除錯成本，先不放進最短可跑路徑。</p>
+
+<figure class="lesson-figure"><img src="./five-capabilities-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>能力三：Memory 三層記憶</h2>
-<p>設計上規劃了三層，但核心階段只做兩層：</p>
+
+<p>Agent 如果每次都從零開始，對話就像每一輪都把白板擦乾淨。因此 OryxOS 規劃三層記憶，但核心階段只先實作兩層。</p>
+
 <table>
 <thead>
 <tr><th>層</th><th>核心階段</th><th>做法</th></tr>
@@ -56,10 +85,28 @@
 <tr><td><strong>情景記憶</strong></td><td>推遲</td><td>核心階段不做</td></tr>
 </tbody>
 </table>
-<p>注意長期記憶在核心階段<strong>是一個檔案，不是一張資料庫表</strong>。也不做自動事實抽取、語義檢索、Memory Wiki、矛盾偵測。這裡的判斷標準很樸素：先讓 Agent「記得住上一句話」，跨會話的智慧留到後面。過度設計記憶比沒有記憶更糟——它會污染上下文。</p>
+
+<p>會話記憶解決的是「這一輪對話不要失憶」。它用 channel、user、profile 找到對應歷史，當內容超過上下文視窗時就截斷，避免 prompt 無限制膨脹。</p>
+
+<p>長期記憶則很直接：核心階段只使用一個 <code>MEMORY.md</code>，不是資料庫表。Agent 透過 <code>save_memory</code> 寫入，透過 <code>recall_memory</code> 召回，啟動時再把內容注入上下文，大小約限制在 4000 字。</p>
+
+<p>這裡刻意不做自動事實抽取、語義檢索、Memory Wiki 或矛盾偵測。理由很實際：記憶系統越聰明，越可能把不重要或錯誤的資訊塞進上下文，反而干擾模型判斷。先讓 Agent 穩定記住必要內容，跨會話的智慧留到擴展階段。</p>
 
 <h2>能力四：Tool 體系</h2>
-<p>工具分成兩類。一是<strong>內建工具</strong>：檔案讀寫與列目錄、帶白名單的 Shell、HTTP get/post、<code>save_memory</code> / <code>recall_memory</code>。二是<strong>Plugin Tool</strong>，依成本分三級：</p>
+
+<p>模型能提出建議，但不能直接讀檔、執行命令或呼叫外部系統。Tool 是 Agent 的手腳，負責把文字判斷轉成實際動作。</p>
+
+<p>核心階段的工具分成兩類。第一類是<strong>內建工具</strong>：</p>
+
+<ul>
+<li>檔案讀寫與列出目錄</li>
+<li>帶白名單的 Shell</li>
+<li>HTTP get/post</li>
+<li><code>save_memory</code> / <code>recall_memory</code></li>
+</ul>
+
+<p>第二類是<strong>Plugin Tool</strong>。依照客製化成本，分成三個級別：</p>
+
 <table>
 <thead>
 <tr><th>級別</th><th>形式</th><th>什麼時候用</th></tr>
@@ -70,20 +117,45 @@
 <tr><td>第三級</td><td>重程式碼：Java <code>@Tool</code> Bean</td><td>要深度接進企業系統時</td></tr>
 </tbody>
 </table>
-<p>選擇標準是<strong>能用第一級就別用第二級，能用第二級就別用第三級</strong>。安全上，核心階段靠<strong>應用層白名單</strong>（路徑、指令、網域三類檢查）擋住越權，不啟用 SecurityManager；完整的 Tool Policy 與容器沙箱留到擴展階段。</p>
+
+<p>選擇順序很明確：<strong>能用第一級就別用第二級，能用第二級就別用第三級</strong>。工具越深入企業系統，維護、部署與安全責任就越重；不需要寫程式時，就不要為了客製化而增加成本。</p>
+
+<p>安全方面，核心階段先靠<strong>應用層白名單</strong>阻擋越權，檢查三類內容：路徑、指令與網域。不啟用 SecurityManager，也不在這一階段加入完整 Tool Policy 或容器沙箱，這些留到擴展階段處理。</p>
 
 <h2>能力五：Web Service</h2>
-<p>Web Service 把引擎變成 REST 介面。核心階段先做 <strong>10 個端點</strong>，涵蓋六類操作：</p>
+
+<p>前四項能力讓 Agent 能運作，Web Service 則讓其他系統有入口可以使用它。它把引擎包成 REST 介面，讓外部能建立 session、送出訊息、查詢狀態，或直接 invoke Agent。</p>
+
+<p>核心階段先做 <strong>10 個端點</strong>，涵蓋這些操作：</p>
+
 <ul>
 <li>Session：建立、送訊息、取歷史、歸檔</li>
 <li>Agent：直接 invoke</li>
 <li>查詢：profiles、memory、tools</li>
 <li>維運：health、info</li>
 </ul>
-<p>另外 15 個端點推遲。核心階段<strong>不做認證</strong>（預設跑在內網）、不做 SSE / WebSocket / RBAC。它能支援的整合場景包含：同步呼叫、保持 session 的對話、webhook 觸發、跨語言呼叫。至於渠道，核心階段只有 CLI Channel（<code>oryxos chat</code>）；企業 IM（企業微信、飛書、釘釘、Slack）留到擴展階段，而且屆時是去呼叫 Web Service，不是重寫 Agent 邏輯。</p>
 
-<h2>五個能力如何互相供養</h2>
-<p>它們不是五個獨立模組，而是一條鏈：Provider 讓迴圈「有得想」，Tool 讓迴圈「能動手」，Memory 讓每輪「不必從頭」，ReAct 把前四者串成一個會自己迭代的過程，Web Service 再把整個過程開放給外界。缺任何一環，Agent 都會退化——沒有 Tool 只能動嘴，沒有 Memory 每次失憶，沒有 Provider 就沒有腦。</p>
+<p>另外 15 個端點推遲。核心階段預設執行在內網，因此<strong>不做認證</strong>；同時不做 SSE、WebSocket 或 RBAC。這不是表示它們不重要，而是先把同步 REST 呼叫這條主路徑跑通。</p>
+
+<p>這組介面可以支援同步呼叫、保持 session 的對話、webhook 觸發，以及跨語言呼叫。渠道方面，核心階段只有 CLI Channel，也就是 <code>oryxos chat</code>。企業微信、飛書、釘釘、Slack 等企業 IM 留到擴展階段；屆時它們應該呼叫 Web Service，而不是重新實作一套 Agent 邏輯。</p>
+
+<h2>五個能力如何互相供養？</h2>
+
+<p>這五個能力不是五座各自運作的孤島，而是一條從模型到外部使用者的鏈：</p>
+
+<ul>
+<li>Provider 讓迴圈「有得想」。</li>
+<li>Tool 讓迴圈「能動手」。</li>
+<li>Memory 讓每輪「不必從頭開始」。</li>
+<li>ReAct 把模型、工具與記憶串成可反覆迭代的流程。</li>
+<li>Web Service 把整個流程開放給外部系統。</li>
+</ul>
+
+<p>因此，缺少 Provider，Agent 沒有模型可用；缺少 ReAct，模型只能被動回答一次；缺少 Tool，它只能動嘴；缺少 Memory，每次都會失憶；缺少 Web Service，能力就只能困在本機或 CLI 裡。</p>
+
+<p>核心階段真正要完成的，不是五個漂亮的模組名稱，而是這條能跑通的路徑：外部送進一個請求，Web Service 建立上下文，ReAct 迴圈呼叫 Provider，需要時使用 Tool，再透過 Memory 保留資訊，最後回傳結果。</p>
+
+<figure class="lesson-figure"><img src="./five-capabilities-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <div class="lesson-nav">
   <div><a href="./what-oryxos-is.html">← 上一步：OryxOS 是什麼：定義與交付兩階段</a></div>
@@ -98,42 +170,36 @@
   <button class="opt">用名稱在 Profile 裡引用它</button>
   <button class="opt">用連接器接上各家模型供應商</button>
 </div>
-
 <div class="quiz" data-question="核心階段的 ReAct 迴圈預設最大迭代次數是多少？" data-correct="2" data-explain="預設 10 次，且可在 Profile 中覆寫。">
   <button class="opt">3 次</button>
   <button class="opt">5 次</button>
   <button class="opt">10 次</button>
   <button class="opt">100 次</button>
 </div>
-
 <div class="quiz" data-question="核心階段長期記憶用什麼形式保存？" data-correct="0" data-explain="長期記憶就是一個 MEMORY.md 檔案，不是資料庫表。">
   <button class="opt">一個 MEMORY.md 檔案</button>
   <button class="opt">一張 SQLite 的資料表</button>
   <button class="opt">一個向量資料庫集合</button>
   <button class="opt">一個 Redis 的雜湊結構</button>
 </div>
-
 <div class="quiz" data-question="Plugin Tool 的選擇標準是什麼？" data-correct="3" data-explain="能用零程式碼就不寫程式碼，能用輕量 MCP 就不寫 Java Bean。">
   <button class="opt">能用 Java Bean 就別用 MCP</button>
   <button class="opt">三級都做以確保功能完整</button>
   <button class="opt">優先選最靈活的重程式碼級</button>
   <button class="opt">能用低一級就不要用高一級</button>
 </div>
-
 <div class="quiz" data-question="核心階段 Web Service 的認證策略是什麼？" data-correct="1" data-explain="核心預設跑在內網，不做認證；RBAC 等留到擴展階段。">
   <button class="opt">支援 SSO 並整合企業目錄服務</button>
   <button class="opt">不做認證，預設跑在企業內網</button>
   <button class="opt">採用 JWT 並支援多租戶隔離</button>
   <button class="opt">用 API key 做基本的存取控制</button>
 </div>
-
 <div class="quiz" data-question="核心階段的渠道只有哪一種？" data-correct="0" data-explain="核心只有 CLI Channel，企業 IM 渠道留待擴展階段。">
   <button class="opt">CLI Channel</button>
   <button class="opt">企業微信 Channel</button>
   <button class="opt">飛書 Channel</button>
   <button class="opt">Slack Channel</button>
 </div>
-
 <div class="quiz" data-question="為什麼 Provider 被放在能力的第一位？" data-correct="2" data-explain="模型迭代速度遠快於業務程式碼，抽象它才能讓上層免於供應商鎖定。">
   <button class="opt">因為它是最難實作的模組</button>
   <button class="opt">因為它決定了工具的數量</button>

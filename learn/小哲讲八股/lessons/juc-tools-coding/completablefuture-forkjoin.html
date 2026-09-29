@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CompletableFuture 與 ForkJoinPool：非同步編排與分治</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>CompletableFuture 與 ForkJoinPool：把非同步任務串起來，也把工作分配好</h1>
+<p class="meta">Step 3/6 · 併發工具與手寫併發題</p>
+
+<h2>先抓住兩個問題：怎麼同時做事？做完後怎麼接著做？</h2>
+
+<p>假設首頁需要呼叫三個下游服務。如果一個接一個呼叫，總延遲就會變成三個服務耗時的總和。前一個服務還沒回來，後面的服務就只能在旁邊等，主線程也像站在櫃檯前排隊一樣，什麼都做不了。</p>
+
+<p>比較理想的方式，是把三個請求同時送出去，等結果全部回來後，再一次組合成首頁需要的資料。這裡其實有兩個問題：任務要如何並行執行？前一個任務完成後，下一步又要如何自動接上？</p>
+
+<p>你可能會先想到 <code>ExecutorService</code> 加 <code>Future</code>。它確實能把任務送出去，但取得結果時通常要呼叫 <code>get()</code>，這會讓目前的執行緒阻塞。如果要等待多個 <code>Future</code>，程式碼很快就會充滿等待、判斷與輪詢，任務之間的組合關係也不容易表達。</p>
+
+<p><code>CompletableFuture</code> 解決的正是這一段。它可以把「任務完成後，自動執行下一步」串成一條鏈，讓主線程不必停在原地等結果。</p>
+
+<figure class="lesson-figure"><img src="./completablefuture-forkjoin-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>另一個常見問題是分治。假設要統計一個很大的陣列，可以先把陣列切成幾段，再讓多個執行緒平行計算。這時候，執行緒池的任務分配方式就很重要。</p>
+
+<p>一般的 <code>ThreadPoolExecutor</code> 讓所有工作執行緒共用一個佇列；<code>ForkJoinPool</code> 則讓每條執行緒擁有自己的佇列，閒下來時還能向其他執行緒「偷」任務。這兩個主題也彼此相關，因為 <code>CompletableFuture</code> 沒有指定執行緒池時，預設使用的就是 <code>ForkJoinPool.commonPool()</code>。</p>
+
+<h2>CompletableFuture 的底層：用狀態機記錄結果，用無鎖棧接起回調</h2>
+
+<p>先看它如何管理「任務是否完成」。每個 <code>CompletableFuture</code> 內部都有一個 <code>volatile Object result</code>。這個欄位同時扮演兩種角色：它保存任務結果，也用來表示任務目前的狀態。</p>
+
+<p>當欄位仍是 null，或處在某個中間狀態時，代表任務尚未完成。當欄位被設定成正常結果或異常物件，就代表任務已經結束。換句話說，它把「結果」和「狀態」放進同一個位置管理，像在門口掛一個牌子：牌子還沒掛好，表示事情未定；牌子一旦掛上去，其他人就知道結果了。</p>
+
+<p>完成操作靠的是 CAS，也就是「比較並交換」。<code>complete()</code> 的核心工作，可以理解成嘗試使用 <code>Unsafe.compareAndSwapObject</code>，把 <code>result</code> 從 null 更新成實際結果。</p>
+
+<figure class="lesson-figure"><img src="./completablefuture-forkjoin-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>多條執行緒可能同時嘗試完成同一個任務，但只有一條執行緒能成功 CAS。成功的那條執行緒，就負責宣告任務完成。這樣可以避免多條執行緒同時改寫狀態，也不需要使用傳統鎖。</p>
+
+<h2>回調怎麼排隊：Treiber Stack 與 postComplete()</h2>
+
+<p>接著看 <code>.thenApply()</code>、<code>.thenAccept()</code> 這類操作。呼叫它們時，主線程不會停下來等前一個任務完成。CompletableFuture 會先把後續操作包裝成一個 <code>Completion</code> 節點。</p>
+
+<p>如果前一個任務還沒完成，這個節點就會被放進一個 <strong>Treiber Stack</strong>。它是一種以 CAS 維護的無鎖並發棧，可以把它想成「先登記，等前一個任務完成時再叫我」。</p>
+
+<p>如果前一個任務在註冊回調之前就已經完成，CompletableFuture 就不必再把節點放進棧裡，而是直接觸發後續操作。這避免了回調永遠掛著，也處理了「註冊時任務剛好完成」這種競爭情況。</p>
+
+<p>前序任務完成後，會先透過 CAS 成功更新 <code>result</code>，接著呼叫 <code>postComplete()</code>。這個方法會持續從棧中取出 <code>Completion</code> 節點，並呼叫每個節點的 <code>tryFire()</code>，讓下一個任務開始執行。</p>
+
+
+<p>因此，一個任務完成，就能自動觸發下一個任務；下一個任務完成，又能繼續觸發後續節點。整條鏈像骨牌一樣往下倒，但中間不需要主線程一直站著輪詢。</p>
+
+<p>面試時可以把它概括成一句話：<code>CompletableFuture</code> 以基於 CAS 的狀態管理結果，再用 Treiber Stack 維護待觸發的回調鏈，任務完成後透過 <code>postComplete()</code> 逐步推進後續操作。</p>
+
+<h2>預設執行緒池：方便，但別把阻塞任務丟進公共池</h2>
+
+<p>如果建立 <code>CompletableFuture</code> 時沒有指定執行緒池，非同步任務預設會使用全域共用的 <code>ForkJoinPool.commonPool()</code>。它的工作執行緒數量預設是 CPU 核數減一。</p>
+
+<p>這個預設值很方便，卻也埋著一個容易被忽略的問題：commonPool 是整個 JVM 共用的公共資源。你的程式碼、其他模組，甚至平行流，都可能使用同一個池。</p>
+
+<p>如果把大量阻塞式 IO 任務丟進去，工作執行緒就會長時間卡在網路或磁碟操作上。它們雖然沒有在計算，卻仍然佔著執行緒名額。結果是其他原本不相關、同樣依賴 commonPool 的任務，也可能拿不到執行緒。</p>
+
+<figure class="lesson-figure"><img src="./completablefuture-forkjoin-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>因此，判斷方式很簡單：如果任務會阻塞，就明確傳入自訂執行緒池，不要讓它和整個 JVM 的其他工作擠在同一個公共池裡。</p>
+
+<h2>ForkJoinPool 與 ThreadPoolExecutor：公共佇列，還是各自排隊再互相支援？</h2>
+
+<p>兩者都是執行緒池，但設計目標不同。關鍵差異不在名稱，而在「任務放在哪裡」以及「執行緒沒工作時怎麼辦」。</p>
+
+<h3>ThreadPoolExecutor：大家搶同一個公共佇列</h3>
+
+<p><code>ThreadPoolExecutor</code> 通常採用單一公共佇列。所有工作執行緒都從同一個地方取任務，就像多位店員共用一個待辦清單。</p>
+
+<p>這種設計很適合彼此獨立的任務：任務進來後，哪條執行緒拿到都可以直接執行，不需要處理子任務或等待其他工作。</p>
+
+<p>但當執行緒很多、任務也很多時，大家都要競爭同一個佇列。共享資料越集中，競爭就越容易成為瓶頸。</p>
+
+<h3>ForkJoinPool：先做自己的，再去幫忙偷任務</h3>
+
+<p><code>ForkJoinPool</code> 是為分治任務設計的。每條工作執行緒都有自己的雙端佇列，平常優先從自己的佇列取任務執行，因此不必每次都和其他執行緒爭搶同一個公共佇列。</p>
+
+<p>當某條執行緒把自己的任務做完、暫時無事可做時，它會到其他執行緒的佇列尾端「偷」一個任務回來執行。這就是工作竊取。</p>
+
+<p>為什麼要一個從頭部取、一個從尾部偷？因為這樣可以降低兩邊同時操作同一位置的機會。原本的佇列主人從頭部取自己的工作，來幫忙的執行緒則從尾部偷工作，彼此較少碰撞，鎖競爭也比較低。</p>
+
+<figure class="lesson-figure"><img src="./completablefuture-forkjoin-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這種設計特別適合可以不斷拆成子任務的遞迴分治。例如把大陣列切成多段，先平行處理各段，再合併結果。任務多的執行緒能繼續分割工作，任務少的執行緒則可以主動幫忙，讓 CPU 更不容易閒下來。</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>ThreadPoolExecutor</th><th>ForkJoinPool</th></tr>
+</thead>
+<tbody>
+<tr><td>佇列結構</td><td>單一公共佇列</td><td>每條執行緒一個雙端佇列</td></tr>
+<tr><td>任務分配</td><td>所有執行緒從同一個佇列搶任務</td><td>平常取自己的頭部，空閒時偷別人的尾部</td></tr>
+<tr><td>衝突程度</td><td>共享佇列，競爭較高</td><td>各自處理為主，衝突較低、CPU 利用率較高</td></tr>
+<tr><td>適用場景</td><td>彼此獨立的任務</td><td>可以切成子任務的遞迴分治</td></tr>
+</tbody>
+</table>
+
+<p>平行流，也就是 <code>stream().parallel()</code>，預設同樣使用 commonPool。它適合 CPU 密集的計算；如果在平行流裡進行阻塞式 IO，也可能長時間佔住公共池，影響其他使用者。</p>
+
+<h2>把整張圖串起來</h2>
+
+<blockquote>
+<code>CompletableFuture</code> 內部用 <code>volatile Object result</code> 同時保存結果與狀態，<code>complete()</code> 透過 CAS 更新它。<code>thenApply</code> 這類後續操作會被包成 <code>Completion</code> 節點，放進 Treiber Stack 這個無鎖棧；前序任務完成後，由 <code>postComplete()</code> 逐一取出節點並呼叫 <code>tryFire()</code>，把回調鏈往後推進。它預設使用全域共用的 <code>ForkJoinPool.commonPool()</code>，因此阻塞任務應該使用自訂執行緒池，避免拖慢其他工作。<code>ForkJoinPool</code> 透過每條執行緒的雙端佇列與工作竊取，適合可分治的遞迴任務；<code>ThreadPoolExecutor</code> 透過單一公共佇列，適合彼此獨立的任務。
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./countdownlatch-cyclicbarrier.html">← 上一步：CountDownLatch 與 CyclicBarrier</a></div>
+  <div><a href="./handwrite-producer-consumer.html">下一步：手寫生產者消費者 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="CompletableFuture 內部用來同時保存結果與狀態的欄位是什麼？" data-correct="1" data-explain="一個 volatile Object result，null 或中間態代表未完成。">
+  <button class="opt">一個 int 型別的狀態碼</button>
+  <button class="opt">一個 volatile Object result</button>
+  <button class="opt">一個 AtomicBoolean 完成旗標</button>
+  <button class="opt">一個 ReentrantLock 鎖物件</button>
+</div>
+<div class="quiz" data-question="CompletableFuture 的 complete() 靠什麼保證執行緒安全？" data-correct="0" data-explain="用 Unsafe 的 CAS 把 result 從 null 更新為結果值，成功者才算完成。">
+  <button class="opt">CAS 原子更新 result 欄位</button>
+  <button class="opt">synchronized 鎖住整個物件</button>
+  <button class="opt">ReentrantLock 的公平鎖模式</button>
+  <button class="opt">volatile 的直接寫入保證</button>
+</div>
+<div class="quiz" data-question="thenApply 這類後續操作在底層被包成什麼？" data-correct="3" data-explain="包成 Completion 節點，透過 CAS 壓入 Treiber Stack 無鎖棧。">
+  <button class="opt">一個新的 Thread 物件</button>
+  <button class="opt">一個 FutureTask 任務</button>
+  <button class="opt">一個 AQS 的 Node 節點</button>
+  <button class="opt">一個 Completion 節點</button>
+</div>
+<div class="quiz" data-question="CompletableFuture 沒有指定執行緒池時預設用哪個？" data-correct="2" data-explain="預設是 ForkJoinPool.commonPool()，其工作執行緒數為 CPU 核數減一。">
+  <button class="opt">newCachedThreadPool 快取池</button>
+  <button class="opt">newFixedThreadPool 固定池</button>
+  <button class="opt">ForkJoinPool.commonPool()</button>
+  <button class="opt">newSingleThreadExecutor</button>
+</div>
+<div class="quiz" data-question="把阻塞 IO 任務丟進 commonPool 的主要風險是什麼？" data-correct="1" data-explain="commonPool 是全域共用，阻塞會佔住執行緒，拖垮其他依賴它的業務。">
+  <button class="opt">會讓任務自動被取消掉</button>
+  <button class="opt">佔住執行緒，拖垮其他業務</button>
+  <button class="opt">會讓 result 的 CAS 全部失敗</button>
+  <button class="opt">會造成 Treiber Stack 記憶體洩漏</button>
+</div>
+<div class="quiz" data-question="ForkJoinPool 與 ThreadPoolExecutor 在佇列上的關鍵差異是什麼？" data-correct="0" data-explain="FJP 每條執行緒有自己的雙端佇列，TPE 是所有執行緒共用一個佇列。">
+  <button class="opt">FJP 每條執行緒一條自己的雙端佇列</button>
+  <button class="opt">FJP 使用無界佇列而 TPE 使用有界佇列</button>
+  <button class="opt">FJP 的佇列只放 Future 而 TPE 不是</button>
+  <button class="opt">FJP 的佇列放在堆外而 TPE 放在堆內</button>
+</div>
+<div class="quiz" data-question="工作竊取為什麼能降低衝突？" data-correct="3" data-explain="多數時間操作自己的佇列，空閒才去偷別人的尾部，碰頭機會小。">
+  <button class="opt">因為它把所有任務先排序再分派</button>
+  <button class="opt">因為它改用 AQS 的共享模式</button>
+  <button class="opt">因為它把佇列改成 lock-free 陣列</button>
+  <button class="opt">因為它平常只動自己的佇列</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 併發工具與手寫併發題 · Step 3/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

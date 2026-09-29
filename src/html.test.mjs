@@ -381,6 +381,29 @@ test('image: generates missing figures, reuses existing PNGs, never calls the te
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
+test('image: reuses figures already published in the lesson assets dir', async () => {
+  const root = await makeRoot();
+  try {
+    await fs.mkdir(outputDir(root), { recursive: true });
+    await fs.writeFile(path.join(outputDir(root), 'rewritten.html'), REWRITE2);
+    await fs.writeFile(path.join(outputDir(root), 'plan.input.json'), JSON.stringify(PLAN2));
+    await finalizeHtmlArticle({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root);
+    const published = path.join(root, 'learn', 'demo', 'lessons', 'demo-node', 'step-one-assets');
+    await fs.mkdir(published, { recursive: true });
+    await fs.writeFile(path.join(published, 'image-1.png'), Buffer.from('89504e47', 'hex'));
+    await fs.writeFile(path.join(published, 'image-2.png'), Buffer.from('89504e47', 'hex'));
+    let imageCalls = 0;
+    const result = await generateHtmlImages({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root, {
+      generateImage: async () => { imageCalls++; return Buffer.from('89504e470d0a1a0a', 'hex'); },
+    });
+    assert.equal(imageCalls, 0);
+    const manifest = JSON.parse(await fs.readFile(result.manifest, 'utf8'));
+    assert.equal(manifest.imageRequests, 0);
+    assert.ok(manifest.images.every(figure => figure.reused));
+    assert.equal(manifest.status, 'completed');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 test('buildBrief reads language and teaching preferences from MEMORY.md', async () => {
   const root = await makeRoot();
   try {
