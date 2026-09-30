@@ -4,7 +4,7 @@ import { prepareHtmlLesson, generateHtmlArticle, finalizeHtmlArticle, generateHt
 
 const usage = `Usage:
   node src/html-cli.mjs clean   --subject <s> --node <n> --step <t> [--root <dir>]
-  node src/html-cli.mjs article --subject <s> --node <n> --step <t> [--brief <text>] [--root <dir>]
+  node src/html-cli.mjs article --subject <s> --node <n> --step <t> [--brief <text>] [--type <t>] [--types-dir <dir>] [--root <dir>]
   node src/html-cli.mjs figures --subject <s> --node <n> --step <t> [--plan <file>] [--root <dir>]
   node src/html-cli.mjs image   --subject <s> --node <n> --step <t> [--root <dir>]`;
 
@@ -16,6 +16,8 @@ const { values, positionals } = parseArgs({
     step: { type: 'string' },
     plan: { type: 'string' },
     brief: { type: 'string' },
+    type: { type: 'string' },
+    'types-dir': { type: 'string' },
     root: { type: 'string' },
   },
   allowPositionals: true,
@@ -45,7 +47,7 @@ try {
         planInput: paths.planInput,
       }, null, 2));
     } else if (mode === 'article') {
-      const result = await generateHtmlArticle({ ...target, brief: values.brief }, root);
+      const result = await generateHtmlArticle({ ...target, brief: values.brief, type: values.type, typesDir: values['types-dir'] }, root);
       console.log(JSON.stringify(result, null, 2));
     } else if (mode === 'figures') {
       const imagePlan = values.plan ? JSON.parse(await fs.readFile(values.plan, 'utf8')) : undefined;

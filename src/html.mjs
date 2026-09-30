@@ -18,6 +18,8 @@ import {
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export const ILLUSTRATION_STATES = ['none', 'planned', 'done'];
+export const STEP_TYPES = ['concept', 'procedure', 'decision', 'reference'];
+export const DEFAULT_STEP_TYPE = 'concept';
 export const PENDING_CAPTION = index => `配圖 ${index} 待生成`;
 export const FIGURE_CAPTION = 'AI 生成示意圖';
 export const FIGURE_STYLES = `
@@ -322,6 +324,23 @@ export async function setStepIllustration(root, subject, node, step, state) {
   return true;
 }
 
+/** Read a step's `type` from its frontmatter; unknown or absent falls back to `concept`. */
+export async function resolveStepType(root, subject, node, step) {
+  const file = htmlPaths(root, subject, node, step).stepFile;
+  const text = await fs.readFile(file, 'utf8').catch(() => null);
+  if (text == null) return DEFAULT_STEP_TYPE;
+  const fm = text.match(/^---\n([\s\S]*?)\n---/);
+  const type = fm?.[1].match(/^type:\s*(.+)$/m)?.[1]?.trim();
+  return STEP_TYPES.includes(type) ? type : DEFAULT_STEP_TYPE;
+}
+
+/** Read the writing rules for a step type from `.opencode/skills/teach/types/<type>.md`. */
+export async function loadTypeRules(root, type, typesDir) {
+  const dir = typesDir || path.join(root, '.opencode', 'skills', 'teach', 'types');
+  const rules = await fs.readFile(path.join(dir, `${type}.md`), 'utf8').catch(() => null);
+  return rules ? rules.trim() : '';
+}
+
 // --- text / image clients --------------------------------------------------
 
 function httpStatus(error) {
@@ -395,7 +414,13 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
   const saveManifest = () => fs.writeFile(paths.manifest, JSON.stringify(manifest, null, 2));
   try {
     const client = injected.client ?? await createTextClient();
-    const systemPrompt = await fs.readFile(path.join(resolved, 'prompts', 'html-rewrite.txt'), 'utf8');
+    const basePrompt = await fs.readFile(path.join(resolved, 'prompts', 'html-rewrite.txt'), 'utf8');
+    const stepType = args.type ?? await resolveStepType(resolved, subject, node, step);
+    const typeRules = await loadTypeRules(resolved, stepType, args.typesDir ?? injected.typesDir);
+    const systemPrompt = typeRules
+      ? `${basePrompt}\n\n---\n\n## 本課型別規則（type: ${stepType}）\n\n${typeRules}\n`
+      : basePrompt;
+    manifest.stepType = stepType;
     const brief = args.brief ?? await buildBrief(resolved, subject);
     // Exactly one text call per run: a malformed reply fails hard instead of retrying.
     manifest.textRequests++;

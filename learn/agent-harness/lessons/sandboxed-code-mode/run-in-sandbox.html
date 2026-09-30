@@ -3,144 +3,294 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>實作 runInSandbox：node:vm 的沙箱邊界</title>
+<title>實作 runInSandbox：用 node:vm 劃出沙箱邊界</title>
 <link rel="stylesheet" href="../assets/shared.css">
 </head>
 <body>
 
 <h1>實作 runInSandbox：用 node:vm 劃出沙箱邊界</h1>
-<p class="meta">Step 2/4 · 用最小 context 執行 agent 寫的程式</p>
+<p class="meta">Step 2/4 · 沙箱與 Code Mode</p>
 
-<p>Agent 會產生程式碼，也可能要求呼叫工具。問題是：這段程式碼不能直接在 server 的環境裡奔跑，否則它可能碰到不該碰的 API，甚至一直執行不回來。這一步要做的，就是替它準備一間「只有必要物品的房間」：只放進允許使用的 <code>tools</code>、攔截輸出的 <code>console.log</code>，再加上執行時間限制。</p>
+<h2>前言：上一課講了「為什麼」，這一課把房間蓋出來</h2>
 
-<h2>學習目標</h2>
+<p>上一課說明了兩件事：agent 產生的程式碼不能直接跑在伺服器上，而 code mode 的價值，是用一段程式取代多次工具往返。不過那還停在「為什麼」。要讓這個做法真的成立，得有人把那個邊界實際蓋出來，一個能執行模型程式、卻又關得住它的地方。</p>
 
-<p>完成 <code>runInSandbox</code> 的完整流程：建立 context、只注入 <code>tools</code> 與 <code>console.log</code>、用 async IIFE 包住程式碼，再以 <code>Promise.race</code> 加上 timeout，最後回傳帶有 <code>ok</code> 的結果。</p>
+<p>這一課的工作就是把這個地方寫出來，也就是一支 <code>runInSandbox</code> 函式。做完之後，它會接收一段字串形式的程式碼，在幾乎空的環境裡執行，只讓它碰得到你允許的工具，限制它的等待時間，最後回傳一個模型看得懂的成敗結果。</p>
 
-<h2>函式的契約：三個輸入</h2>
+<p>動手前，先確認前置條件：你的 Node 版本要夠新，<code>node:vm</code> 才匯得進來；harness 是 TypeScript 專案，沿用之前的設定即可；另外，你心裡要先有一份「打算開放給沙箱的能力清單」。這一步還不需要真正的 API，下一步才會組出 <code>sandboxApi</code>，現在只要知道它是一張函式白名單就夠了。</p>
 
-<p>沙箱只有一個入口函式：<code>runInSandbox</code>。它的簽名先把邊界畫清楚，定義哪些東西能進來：</p>
+<h2>一、開檔、匯入 vm，先把型別定好</h2>
 
-<pre><code>runInSandbox(code: string, api: SandboxApi, options?: { timeoutMs?: number })</code></pre>
+<p>在 harness 資料夾新增一個 <code>sandbox.ts</code>，先從 Node 匯入 <code>vm</code>，並定義兩個型別。這一步還沒寫任何執行邏輯，但函式的輸入與輸出長什麼樣子，已經在型別裡定案。</p>
 
-<ul>
-<li><code>code</code>：模型產生的程式碼。對 <code>runInSandbox</code> 來說，它只是一段字串。</li>
-<li><code>api</code>：sandbox API，也就是一張函式白名單。沙箱內的程式只能呼叫這裡提供的能力。</li>
-<li><code>options.timeoutMs</code>：逾時毫秒數，預設為 2 秒（2000）。這是避免模型寫出無窮迴圈或其他長時間不結束的程式。</li>
-</ul>
+<pre><code>import vm from "node:vm";
 
-<p>函式也會維護一個 <code>logs: string[]</code>，把沙箱內所有 <code>console.log</code> 的內容收集起來，最後一併回傳。因為沙箱裡的輸出不應該直接混進 server 的終端機。</p>
+export type SandboxResult =
+  | { ok: true; result: unknown; logs: string[] }
+  | { ok: false; error: string; logs: string[] };
 
-<h2>建立 context：白名單之外，一無所有</h2>
+export type SandboxApi = Record&lt;string, (...args: any[]) =&gt; unknown&gt;;</code></pre>
 
-<p>先用 <code>vm.createContext</code> 建立隔離的執行環境。這裡最重要的規則是：<strong>context 裡放了什麼，沙箱裡才看得到什麼。</strong></p>
-
-<p>因此，這個最小 context 只提供兩樣東西：</p>
-
-<pre><code>const context = createContext({
-  tools: api,                // 白名單能力，暴露成 sandbox 內的 global `tools`
-  console: {
-    log: (...args: unknown[]) =&gt; {
-      logs.push(args.map((a) =&gt; String(a)).join(" "));
-    },
-  },
-});</code></pre>
-
-<p>這一層存在的原因，是把「能做什麼」從模型的程式碼裡抽離，改由 harness 明確決定。</p>
+<p>預期看到什麼：一個可以編譯、但還沒有函式的檔案。三個關鍵行分別是：</p>
 
 <ul>
-<li><strong>能力注入（capability injection）</strong>：沙箱能使用的東西，只有你主動放進去的東西。這裡沒有 <code>require</code>、<code>process</code> 或 <code>fetch</code>，所以模型即使寫出 <code>require("fs")</code>，也找不到這個能力。</li>
-<li><strong>攔截 console</strong>：這裡沒有使用真正的 <code>console.log</code>，而是放入一支假的 <code>console</code>。它會把每個參數轉成字串，用空白串起來，再推進 <code>logs</code>。</li>
+<li><code>import vm from "node:vm"</code>：<code>vm</code> 是 Node 內建模組，不需要安裝。如果這一行就編譯不過，通常代表你的 Node 版本太舊。</li>
+<li><code>SandboxResult</code>：用 union 描述兩種結局。成功時一定是 <code>ok: true</code> 配上 <code>result</code> 與 <code>logs</code>；失敗時一定是 <code>ok: false</code> 配上 <code>error</code> 與 <code>logs</code>。兩邊都留 <code>logs</code>，因為就算程式最後失敗，過程中印出的訊息也該留給模型看。</li>
+<li><code>SandboxApi</code>：一張「函式名稱 → 函式」的對照表。沙箱能呼叫的每一支工具，都會是這張表上的一項。</li>
 </ul>
 
-<p><code>args</code> 的型別是 <code>unknown[]</code>，所以必須先用 <code>String()</code> 轉換，才能交給 <code>join</code>。跑到這裡，你已經完成第一層邊界：沙箱只能看見白名單能力，輸出也會被 harness 收回來。</p>
+<h2>二、函式簽名：三個輸入，先把邊界畫清楚</h2>
 
-<figure class="lesson-figure"><img src="./run-in-sandbox-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p>接著寫 <code>runInSandbox</code> 本身。先只看最上面幾行，因為它們就是這個沙箱的合約。</p>
 
-<h2>async IIFE：讓模型可以寫頂層 await</h2>
+<pre><code>export async function runInSandbox(
+  code: string,
+  api: SandboxApi,
+  opts: { timeoutMs?: number } = {},
+): Promise&lt;SandboxResult&gt; {
+  const timeoutMs = opts.timeoutMs ?? 2000;
+  const logs: string[] = [];</code></pre>
 
-<p>模型很可能會寫出 <code>await tools.getCharges(...)</code>。但我們拿到的是一段程式碼字串，不是一個已經宣告好的 async 函式；如果直接把它交給 <code>runInContext(code)</code>，頂層 <code>await</code> 就會造成語法錯誤。</p>
+<ul>
+<li><code>code</code>：模型產生的程式碼。對這個函式來說，它只是一段字串。</li>
+<li><code>api</code>：白名單。沙箱裡看得到哪些工具，完全由它決定。</li>
+<li><code>opts.timeoutMs</code>：逾時上限，單位毫秒，預設 2000（兩秒）。寫法是 <code>??</code>，代表呼叫端沒給就用預設值；第三個參數有預設值，所以實際呼叫時可以只傳兩個參數。</li>
+<li><code>logs</code>：先開一個空陣列，之後攔截 <code>console.log</code> 時會往裡面塞東西。</li>
+</ul>
 
-<p>做法是把程式碼包進一個<strong>立即執行的 async 函式（async IIFE）</strong>：</p>
+<p>預期看到什麼：函式目前還是空的，但它的形狀已經固定：進去的是字串與白名單，出來的一定是 <code>SandboxResult</code>。</p>
 
-<pre><code>const wrapped = `(async () =&gt; { ${code} })()`;</code></pre>
+<h2>三、建立 context：只有 tools 和 console 的空房間</h2>
 
-<p>這樣模型不需要自己補函式外殼，直接在程式碼裡使用 <code>await</code> 即可。這一層只負責改善執行介面，<strong>不是安全機制</strong>；它只是把一段字串包成可以非同步執行的形式。</p>
+<p>現在蓋房間。用 <code>vm.createContext</code> 建立隔離的執行環境；這裡放進去的東西，就是沙箱裡看得見的全世界。</p>
 
-<h2>執行與 timeout：讓程式和倒數計時器競賽</h2>
+<pre><code>  const context = vm.createContext({
+    tools: api,
+    console: { log: (...args: unknown[]) =&gt; logs.push(args.map(String).join(" ")) },
+  });</code></pre>
 
-<p>接著用 <code>vm.runInContext</code> 執行包好的程式碼，並把 context 與 timeout 一起交給它。</p>
+<ul>
+<li><code>vm.createContext({ ... })</code>：建立一個新的 context。傳進去的物件會成為沙箱裡的全域物件；沒傳進去的，沙箱裡就不存在。</li>
+<li><code>tools: api</code>：把白名單掛成沙箱的 <code>tools</code>。所以當模型寫 <code>await tools.getCharges(...)</code>，它呼叫到的就是你在 <code>api</code> 裡給的那一支。</li>
+<li><code>console.log</code>：這裡刻意不放真正的 console，而是自己寫一支。它把傳進來的參數逐個 <code>String()</code> 轉成字串，再用空白 <code>join</code> 起來，最後 <code>push</code> 進 <code>logs</code>。沙箱的輸出因此被 harness 收回來，不會混進伺服器的終端機。</li>
+<li><code>args</code> 標成 <code>unknown[]</code>：因為 <code>console.log</code> 什麼都能收，型別上得老實說不知道是什麼，所以才需要先 <code>String()</code> 再 <code>join</code>。</li>
+</ul>
 
-<p>這裡不能直接無限期地 <code>await</code> 執行結果。假設程式進入無窮迴圈，或非同步工作一直沒有完成，呼叫端就可能永遠等下去。因此再加上一個 <code>withTimeout</code> helper，讓「程式結果」和「計時器」比賽，誰先完成就採用誰：</p>
+<p>預期看到什麼：context 建立之後，沙箱裡看得見的名字就只有兩個：<code>tools</code> 和 <code>console</code>。沒有 <code>require</code>、<code>process</code>，也沒有 <code>fetch</code>。模型就算寫出 <code>require("fs")</code>，也會因為找不到 <code>require</code> 而立刻報錯。</p>
+
+<p>這裡有一個可以用來檢查自己的判準：你把某支工具放進 <code>api</code>，它就會在沙箱裡存在；沒放進去的，就不存在。白名單的精神就這一句。</p>
+
+<h2>四、用 async IIFE 包住模型程式</h2>
+
+<p>模型很可能直接寫 <code>await tools.getCharges(...)</code>，但我們手上只有一段字串，不是一個已經宣告好的 async 函式。如果直接執行，頂層 <code>await</code> 會是語法錯誤。解法是把程式碼包一層。</p>
+
+<pre><code>  const wrapped = `(async () =&gt; { ${code} })()`;</code></pre>
+
+<ul>
+<li>這行把整段 <code>code</code> 塞進一個立即執行的 async 函式（async IIFE），最後的 <code>()</code> 讓它一建立就馬上被呼叫。</li>
+<li>模型因此不必自己補函式外殼，就能在程式裡使用 <code>await</code>，也能用 <code>return</code> 交回結果。</li>
+<li>要說清楚：這只是使用介面上的方便，不是安全機制。真正的邊界在上一段的 context，不在這裡。</li>
+</ul>
+
+<h2>五、執行，並和 timeout 賽跑</h2>
+
+<p>接著把包好的程式送進 context 執行，並替它加上時間限制。</p>
+
+<pre><code>  try {
+    const pending = vm.runInContext(wrapped, context, { timeout: timeoutMs }) as Promise&lt;unknown&gt;;
+    const result = await withTimeout(pending, timeoutMs);</code></pre>
+
+<ul>
+<li><code>vm.runInContext(wrapped, context, { timeout: timeoutMs })</code>：在剛剛的 context 裡執行 <code>wrapped</code>，並帶上 timeout。因為外層是 async IIFE，回傳的是一個 promise，先命名為 <code>pending</code>。</li>
+<li>這裡不要直接 <code>await pending</code>。如果模型寫出永不結束的程式，直接 await 會讓 harness 一起卡死，所以改成把它交給 <code>withTimeout</code> 去等。</li>
+</ul>
+
+<p><code>withTimeout</code> 是一支獨立的小 helper，做的事情就是讓「程式」和「計時器」賽跑：</p>
 
 <pre><code>function withTimeout&lt;T&gt;(promise: Promise&lt;T&gt;, ms: number): Promise&lt;T&gt; {
   return Promise.race([
     promise,
-    new Promise&lt;never&gt;((_, reject) =&gt;
-      setTimeout(() =&gt; reject(new Error("Timed out")), ms),
+    new Promise&lt;T&gt;((_, reject) =&gt;
+      setTimeout(() =&gt; reject(new Error(`execution timed out after ${ms}ms`)), ms),
     ),
   ]);
 }</code></pre>
 
-<p>程式先完成，就正常取得結果；計時器先觸發，就以 <code>reject</code> 結束等待，進入錯誤處理路徑。這層的重點不是讓程式「消失」，而是避免 harness 永遠卡在等待結果的狀態。</p>
+<ul>
+<li><code>Promise.race</code>：同時等兩個 promise，誰先完成就採用誰的結果。</li>
+<li>第一個是程式本身；第二個是一顆定時器，時間一到就 <code>reject</code>，錯誤訊息裡帶上毫秒數。</li>
+</ul>
 
-<figure class="lesson-figure"><img src="./run-in-sandbox-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p>這裡有幾種情況，值得分開講清楚：</p>
 
-<h2>用 ok 標記成敗：讓 AI 不必猜結果</h2>
+<ul>
+<li>如果程式在時限內正常結束：race 拿到結果，繼續往下走。</li>
+<li>如果程式是同步無窮迴圈（例如 <code>while (true) {}</code>）：<code>vm</code> 的內建 timeout 會直接把它終止，這裡會進到 catch。</li>
+<li>如果程式是非同步卡死（例如 <code>await</code> 一個永遠不 resolve 的 promise）：<code>vm</code> 的 timeout 攔不到它，會改由 <code>withTimeout</code> 的計時器結束等待，回報逾時。</li>
+</ul>
 
-<p>最後把執行結果包成清楚的成功／失敗 union：</p>
+<p>最後這點要誠實：<code>vm</code> 沒辦法真的「殺掉」已經外洩的非同步工作，它只是不讓 harness 繼續等下去，並把乾淨的錯誤交回給模型。完整的取捨留到第 4 步再談。</p>
 
-<pre><code>try {
-  const result = await withTimeout(runInContext(wrapped, context, { timeout: timeoutMs }), timeoutMs);
-  return { ok: true, result, logs };
-} catch (error) {
-  return { ok: false, error: error instanceof Error ? error.message : String(error) };
+<h2>六、用 ok 標記成敗，把結果交回去</h2>
+
+<pre><code>    return { ok: true, result, logs };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err), logs };
+  }
 }</code></pre>
 
-<p>為什麼要明確放一個 <code>ok</code>？因為讀取結果的可能不是人，而是下一個 AI 步驟。與其讓它自行猜測「有 <code>error</code> 欄位是否代表失敗」，不如直接用 <code>ok: true</code> 或 <code>ok: false</code> 標示狀態。成功時讀 <code>result</code> 與 <code>logs</code>；失敗時讀 <code>error</code>。</p>
+<ul>
+<li><code>ok: true</code> 這條路：程式正常結束，回傳 <code>result</code> 與收集到的 <code>logs</code>。</li>
+<li><code>catch</code> 這條路：任何錯誤（語法錯、執行期錯、逾時）都被收斂成同一種形狀，<code>ok: false</code>，<code>error</code> 是訊息字串。</li>
+<li><code>err instanceof Error ? err.message : String(err)</code>：丟出來的東西不一定是 Error 物件，先檢查再取值，才不會讀到 undefined。</li>
+<li>為什麼要特別放一個 <code>ok</code>：讀這個結果的常常不是人，而是下一個 AI 步驟。與其讓模型自己判斷「有 <code>error</code> 欄位是不是代表失敗」，不如直接給它 true 或 false。這是刻意對模型「講白話」。</li>
+</ul>
 
-<p>整支 <code>runInSandbox</code> 可以記成一個簡單模型：<strong>把程式碼字串放進只有 <code>tools</code> 和 <code>console.log</code> 的空房間，限制它的等待時間，再用 <code>ok</code> 回報成敗。</strong> 到這裡，沙箱的入口、能力白名單、輸出收集與結果判定都已經具備。</p>
+<p>預期看到什麼：整支函式此時已經完整。無論成功或失敗，呼叫端拿到的永遠是同一種形狀的物件。</p>
+
+<h2>組起來：完整的 sandbox.ts</h2>
+
+<p>把上面幾段接起來，就是這個檔案最後的樣子：</p>
+
+<pre><code>import vm from "node:vm";
+
+// The harness is the security boundary. When the agent writes code (Code Mode),
+// it runs HERE — never with raw access to the process.
+//
+// This is `node:vm`, which is deliberately minimal:
+//   · the context has NO `require`, `process`, `fs`, `fetch`, ... — only what we
+//     hand in (a small `tools` API + `console.log`)
+//   · the `timeout` option kills runaway SYNCHRONOUS code (e.g. `while(true){}`)
+//
+// Be honest about the limit: `vm` is NOT a true security sandbox, and its
+// timeout can't interrupt async code. That's exactly why production systems run
+// untrusted code in a hosted sandbox (e2b, Cloudflare's Sandbox SDK, Fly,
+// Vercel, Daytona). The harness's job is to MEDIATE the boundary; the strength
+// of the boundary is a deployment choice.
+
+export type SandboxResult =
+  | { ok: true; result: unknown; logs: string[] }
+  | { ok: false; error: string; logs: string[] };
+
+export type SandboxApi = Record&lt;string, (...args: any[]) =&gt; unknown&gt;;
+
+export async function runInSandbox(
+  code: string,
+  api: SandboxApi,
+  opts: { timeoutMs?: number } = {},
+): Promise&lt;SandboxResult&gt; {
+  const timeoutMs = opts.timeoutMs ?? 2000;
+  const logs: string[] = [];
+
+  // The ENTIRE global the code can see. Frozen so the code can't add to it.
+  const context = vm.createContext({
+    tools: api,
+    console: { log: (...args: unknown[]) =&gt; logs.push(args.map(String).join(" ")) },
+  });
+
+  // Run the model's code as the body of an async function so it can `await`
+  // tool calls and `return` a result.
+  const wrapped = `(async () =&gt; { ${code} })()`;
+
+  try {
+    // `timeout` bounds the SYNCHRONOUS portion (a sync infinite loop dies here).
+    const pending = vm.runInContext(wrapped, context, { timeout: timeoutMs }) as Promise&lt;unknown&gt;;
+    // Backstop for async hangs. (vm can't actually KILL the leaked async work —
+    // a real isolate can. We surface a clean error to the model regardless.)
+    const result = await withTimeout(pending, timeoutMs);
+    return { ok: true, result, logs };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err), logs };
+  }
+}
+
+function withTimeout&lt;T&gt;(promise: Promise&lt;T&gt;, ms: number): Promise&lt;T&gt; {
+  return Promise.race([
+    promise,
+    new Promise&lt;T&gt;((_, reject) =&gt;
+      setTimeout(() =&gt; reject(new Error(`execution timed out after ${ms}ms`)), ms),
+    ),
+  ]);
+}</code></pre>
+
+<h2>怎麼確認它真的能跑</h2>
+
+<p>先用一段最單純的程式，確認三個環節都到位：</p>
+
+<pre><code>const r = await runInSandbox(`console.log("hi"); return 6 * 7;`, {});
+// r = { ok: true, result: 42, logs: ["hi"] }</code></pre>
+
+<p>預期看到什麼：<code>ok</code> 是 true，<code>result</code> 是 42，<code>logs</code> 裡有 <code>"hi"</code>。這代表程式真的被執行了（<code>return</code> 的數字拿得到），<code>console.log</code> 也真的被攔截了（訊息進了 logs）。</p>
+
+<p>再故意弄壞一次，看看錯誤怎麼被回報：</p>
+
+<pre><code>const bad = await runInSandbox(`while (true) {}`, {});
+// bad = { ok: false, error: "Script execution timed out after 2000ms", logs: [] }</code></pre>
+
+<p>預期看到什麼：<code>ok</code> 是 false，<code>error</code> 是一段類似 <code>Script execution timed out after 2000ms</code> 的訊息，而不是整個 process 卡住。看到這個結果，就代表 timeout 那條防線確實在運作。</p>
+
+<h2>小結</h2>
+
+<blockquote>沙箱的邊界由 context 決定：只有你放進去的 <code>tools</code> 與攔截式的 <code>console</code>，沙箱裡才看得見。程式碼再包一層 async IIFE，讓模型能寫頂層 <code>await</code>。執行時不直接 await，而是用 <code>Promise.race</code> 和 timeout 賽跑。最後用 <code>ok</code> 明確標示成敗，讓讀結果的模型不必猜。</blockquote>
+
+<p>這支函式回答的是「模型寫的程式在哪裡跑、跑多久、結果長什麼樣」。至於「怎麼把模型導到這個工具」，那是下一步的事。</p>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="runInSandbox 的 api 參數，在沙箱裡代表什麼？" data-correct="0" data-explain="api 是白名單，沙箱裡只能呼叫你明確交出去的那幾支函式。">
+  <button class="opt">沙箱可呼叫的函式白名單</button>
+  <button class="opt">沙箱執行逾時的時間上限</button>
+  <button class="opt">沙箱每次執行的輸出紀錄</button>
+  <button class="opt">沙箱產生的程式碼原始字串</button>
+</div>
+
+<div class="quiz" data-question="vm.createContext 放進去的內容，等於沙箱裡的什麼？" data-correct="2" data-explain="傳進 context 的物件就是沙箱裡的全域物件，沒放的就不存在。">
+  <button class="opt">沙箱執行逾時的時間設定</button>
+  <button class="opt">沙箱回傳結果的型別定義</button>
+  <button class="opt">沙箱裡看得見的全域物件</button>
+  <button class="opt">沙箱紀錄輸出的日誌陣列</button>
+</div>
+
+<div class="quiz" data-question="為什麼要把模型程式碼包進 async IIFE？" data-correct="0" data-explain="包成 async IIFE 之後，模型就能在頂層寫 await 與 return。">
+  <button class="opt">讓模型能直接寫頂層 await</button>
+  <button class="opt">讓程式的執行速度明顯變快</button>
+  <button class="opt">讓程式無法存取 require</button>
+  <button class="opt">讓程式自動套用 timeout</button>
+</div>
+
+<div class="quiz" data-question="為什麼執行結果不能直接 await？" data-correct="1" data-explain="直接 await 一個卡死的程式，會讓 harness 永遠等不到結果。">
+  <button class="opt">await 的語法效能比較差</button>
+  <button class="opt">卡死的程式會讓等待回不來</button>
+  <button class="opt">await 無法接收 promise 物件</button>
+  <button class="opt">await 只支援同步的程式碼</button>
+</div>
+
+<div class="quiz" data-question="withTimeout 用哪個機制讓程式與計時器賽跑？" data-correct="3" data-explain="Promise.race 同時等程式與計時器，先完成的那一個勝出。">
+  <button class="opt">Promise.all</button>
+  <button class="opt">setInterval</button>
+  <button class="opt">try / catch</button>
+  <button class="opt">Promise.race</button>
+</div>
+
+<div class="quiz" data-question="SandboxResult 特別加上 ok 布林欄位，主要原因是？" data-correct="1" data-explain="讀結果的常常是模型，ok 讓它一眼分辨這一步成功還是失敗。">
+  <button class="opt">這是 TypeScript 新版的語法要求</button>
+  <button class="opt">讀結果的是模型，讓它一眼分辨成敗</button>
+  <button class="opt">ok 可以讓回傳的物件體積變小</button>
+  <button class="opt">ok 能避免 promise 被垃圾回收</button>
+</div>
+
+<h2>預覽下一步</h2>
+
+<p>沙箱已經能執行模型寫的程式，也能回傳結果與 logs；但對 agent 來說，它現在像一間沒有門牌的房間，房間存在，agent 卻不知道怎麼進去。下一課要把門牌掛上：定義 <code>run_code</code> 工具，並在 <code>runTool</code> 的 switch 裡把請求導向 <code>runInSandbox</code>，讓模型真的用得上這道邊界。</p>
 
 <div class="lesson-nav">
   <div><a href="./code-mode-why.html">← 上一步：Code Mode：一段程式取代多次往返</a></div>
   <div><a href="./run-code-tool.html">下一步：run_code 工具：把沙箱接進 harness →</a></div>
 </div>
 
-<h2>複習題</h2>
-
-<div class="quiz" data-question="runInSandbox 的 api 參數代表什麼？" data-correct="2" data-explain="api 是白名單函式對照表，沙箱只能呼叫它有給的東西。">
-  <button class="opt">沙箱能讀取的檔案路徑</button>
-  <button class="opt">沙箱連線的資料庫位址</button>
-  <button class="opt">沙箱可用的函式白名單</button>
-  <button class="opt">沙箱的程式語言版本</button>
-</div>
-<div class="quiz" data-question="為什麼要把模型程式碼包進 async IIFE？" data-correct="0" data-explain="包成 async IIFE，模型就能在頂層用 await。">
-  <button class="opt">讓程式能用頂層 await</button>
-  <button class="opt">讓程式跑得更快</button>
-  <button class="opt">讓程式無法存取 require</button>
-  <button class="opt">讓程式自動處理 timeout</button>
-</div>
-<div class="quiz" data-question="為什麼不直接 await 執行結果？" data-correct="1" data-explain="直接 await 一個卡死的程式會永遠回不來，必須跟 timeout race。">
-  <button class="opt">await 語法效能比較慢</button>
-  <button class="opt">卡死的程式會讓 await 永遠回不來</button>
-  <button class="opt">await 無法傳入 timeout</button>
-  <button class="opt">await 只支援同步程式</button>
-</div>
-<div class="quiz" data-question="withTimeout 用哪個機制讓程式和計時器比賽？" data-correct="3" data-explain="Promise.race 讓程式與倒數計時器比賽，先完成者勝。">
-  <button class="opt">Promise.all</button>
-  <button class="opt">setInterval</button>
-  <button class="opt">try/catch</button>
-  <button class="opt">Promise.race</button>
-</div>
-<div class="quiz" data-question="回傳值要多一個 ok 欄位，是因為？" data-correct="1" data-explain="讀結果的是模型不是人，ok 讓它一眼分辨成敗。">
-  <button class="opt">這是最新型的 TypeScript 語法</button>
-  <button class="opt">讀結果的是模型，ok 讓它一眼分辨成敗</button>
-  <button class="opt">ok 可以縮短回傳的字串</button>
-  <button class="opt">ok 能避免 promise 被回收</button>
-</div>
-
 <div class="footer">
   <p>agent-harness · 沙箱與 Code Mode · Step 2/4</p>
+  <p>讀到卡住的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>

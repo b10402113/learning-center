@@ -22,6 +22,8 @@ import {
   generateHtmlImages,
   buildBrief,
   setStepIllustration,
+  resolveStepType,
+  loadTypeRules,
   markerContexts,
 } from './html.mjs';
 
@@ -420,5 +422,52 @@ test('setStepIllustration writes the requested state and refreshes updated', asy
     assert.match(await fs.readFile(mdxPath(root), 'utf8'), /^illustration: done$/m);
     await setStepIllustration(root, 'demo', 'demo-node', 'step-one', 'planned');
     assert.match(await fs.readFile(mdxPath(root), 'utf8'), /^illustration: planned$/m);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('resolveStepType reads the step type and falls back to concept for absent or invalid values', async () => {
+  const root = await makeRoot();
+  try {
+    const mdx = await fs.readFile(mdxPath(root), 'utf8');
+    assert.equal(await resolveStepType(root, 'demo', 'demo-node', 'step-one'), 'concept');
+    assert.equal(await resolveStepType(root, 'demo', 'demo-node', 'missing'), 'concept');
+    await fs.writeFile(mdxPath(root), mdx.replace('subject: demo', 'subject: demo\ntype: procedure'));
+    assert.equal(await resolveStepType(root, 'demo', 'demo-node', 'step-one'), 'procedure');
+    await fs.writeFile(mdxPath(root), mdx.replace('subject: demo', 'subject: demo\ntype: bogus'));
+    assert.equal(await resolveStepType(root, 'demo', 'demo-node', 'step-one'), 'concept');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('loadTypeRules reads the type file and returns empty for unknown types or dirs', async () => {
+  const root = await makeRoot();
+  try {
+    const typesDir = path.join(root, 'types');
+    await fs.mkdir(typesDir, { recursive: true });
+    await fs.writeFile(path.join(typesDir, 'procedure.md'), 'TYPE-RULES-PROCEDURE\n');
+    assert.equal(await loadTypeRules(root, 'procedure', typesDir), 'TYPE-RULES-PROCEDURE');
+    assert.equal(await loadTypeRules(root, 'concept', typesDir), '');
+    assert.equal(await loadTypeRules(root, 'procedure', path.join(root, 'nope')), '');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('article: appends the step type rules to the system prompt and records the type', async () => {
+  const root = await makeRoot();
+  try {
+    const mdx = await fs.readFile(mdxPath(root), 'utf8');
+    await fs.writeFile(mdxPath(root), mdx.replace('subject: demo', 'subject: demo\ntype: procedure'));
+    const typesDir = path.join(root, 'types');
+    await fs.mkdir(typesDir, { recursive: true });
+    await fs.writeFile(path.join(typesDir, 'procedure.md'), 'TYPE-RULES-PROCEDURE\n');
+    let systemPrompt;
+    const client = textClient(REWRITE_NO_MARK, request => { systemPrompt = request.messages[0].content; });
+    const result = await generateHtmlArticle(
+      { subject: 'demo', node: 'demo-node', step: 'step-one', typesDir },
+      root,
+      { client },
+    );
+    assert.match(systemPrompt, /本課型別規則（type: procedure）/);
+    assert.match(systemPrompt, /TYPE-RULES-PROCEDURE/);
+    const manifest = JSON.parse(await fs.readFile(result.manifest, 'utf8'));
+    assert.equal(manifest.stepType, 'procedure');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

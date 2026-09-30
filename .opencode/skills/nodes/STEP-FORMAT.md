@@ -7,6 +7,7 @@
 id: <step-id>
 title: <Step title>
 subject: <subject>
+type: concept
 sources:
   - "[[sources/<subject>/<file>#<section>]]"
 created: YYYY-MM-DD
@@ -29,6 +30,7 @@ updated: YYYY-MM-DD
 ## Rules
 
 - Deps live in the node's `steps` DAG — not here. Omit `order`; the DAG sets it.
+- `type` is the step's knowledge form — `concept` | `procedure` | `decision` | `reference` — and must match the node DAG entry. It shapes how `/teach` writes the article (see `.opencode/skills/teach/types/`). Omit only on legacy steps, where it defaults to `concept`.
 - `<LearningGoal>` is always present, always first. One sentence.
 - MDX components are provided by the rendering framework and used naturally in `## Lesson` prose. See [teach-node STEP-WRITING.md](../../.opencode/skills/teach-node/STEP-WRITING.md) for available components and when to use them.
 - No separate polish pass — the article is written in teach-node style directly.

@@ -32,6 +32,8 @@ const ALLOWED_STATUS = new Set([
 
 const ALLOWED_ILLUSTRATION = new Set(["none", "planned", "done"]);
 
+const ALLOWED_STEP_TYPE = new Set(["concept", "procedure", "decision", "reference"]);
+
 const NODE_FM = ["id", "title", "subject", "tier", "order", "status", "goal", "sources", "steps", "created", "updated"];
 const STEP_FM = ["id", "title", "subject", "sources", "created", "updated"];
 const EDGE_FM = ["title", "type", "from", "to", "nodes", "created", "updated"];
@@ -216,7 +218,14 @@ function checkIllustration(report, path, fm) {
   }
 }
 
-function checkDag(report, path, nodeId, fm, stepFiles, stepIdsByNode) {
+function checkStepType(report, path, fm) {
+  if (fm.type === undefined || fm.type === null || fm.type === "") return;
+  if (!ALLOWED_STEP_TYPE.has(String(fm.type))) {
+    report.fail(path.replace(REPO_ROOT + "/", ""), 1, "fm-step-type", `invalid step type: ${fm.type}`);
+  }
+}
+
+function checkDag(report, path, nodeId, fm, stepFiles, stepIdsByNode, stepTypes) {
   const rel = path.replace(REPO_ROOT + "/", "");
   const dag = Array.isArray(fm.steps) ? fm.steps : [];
   const seenOrders = new Set();
@@ -225,6 +234,15 @@ function checkDag(report, path, nodeId, fm, stepFiles, stepIdsByNode) {
     if (!id) {
       report.fail(rel, 1, "dag-step-exists", "steps entry missing id");
       continue;
+    }
+    if (s?.type !== undefined && s?.type !== null && s?.type !== "") {
+      if (!ALLOWED_STEP_TYPE.has(String(s.type))) {
+        report.fail(rel, 1, "fm-step-type", `invalid type in DAG for step "${id}": ${s.type}`);
+      }
+      const fmType = stepTypes?.get(`${nodeId}/${id}`);
+      if (fmType !== undefined && fmType !== null && fmType !== "" && String(fmType) !== String(s.type)) {
+        report.fail(rel, 1, "dag-step-type", `step "${id}" frontmatter type "${fmType}" does not match DAG type "${s.type}"`);
+      }
     }
     if (!stepFiles.has(id)) {
       report.fail(rel, 1, "dag-step-exists", `step "${id}" has no step file under nodes/${nodeId}/`);
@@ -325,15 +343,18 @@ function runNodeChecks(report, subject, nodeId, scan, digestIdx, sourceNames, no
 
   const stepFiles = new Set();
   const stepIdsByNode = new Map();
+  const stepTypes = new Map();
   for (const s of scan.steps) {
     stepFiles.add(s.id);
     stepIdsByNode.set(s.id, s.nodeId);
+    const { data: sfm } = parse(s.path);
+    stepTypes.set(`${s.nodeId}/${s.id}`, sfm.type);
   }
 
   const { data: nodeFm, body: nodeBody } = parse(nodeFile.path);
   checkFrontmatter(report, nodeFile.path, nodeFm, NODE_FM);
   checkIdFilename(report, nodeFile.path, nodeFm.id, nodeFile.id);
-  checkDag(report, nodeFile.path, nodeId, nodeFm, stepFiles, stepIdsByNode);
+  checkDag(report, nodeFile.path, nodeId, nodeFm, stepFiles, stepIdsByNode, stepTypes);
   checkReferences(report, nodeFile.path, nodeBody, subject, nodeIds, stepKeys);
   checkSourceLinks(report, nodeFile.path, nodeBody, subject, sourceNames);
 
@@ -342,6 +363,7 @@ function runNodeChecks(report, subject, nodeId, scan, digestIdx, sourceNames, no
     const { data: fm, body } = parse(step.path);
     checkFrontmatter(report, step.path, fm, STEP_FM);
     checkIllustration(report, step.path, fm);
+    checkStepType(report, step.path, fm);
     checkIdFilename(report, step.path, fm.id, step.id);
     checkReferences(report, step.path, body, subject, nodeIds, stepKeys);
     checkSourceLinks(report, step.path, body, subject, sourceNames);
@@ -359,15 +381,19 @@ function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, nodeIds
 
   const stepFiles = new Set();
   const stepIdsByNode = new Map();
+  const stepTypes = new Map();
   for (const s of scan.steps) {
     stepFiles.add(s.id);
     stepIdsByNode.set(s.id, s.nodeId);
+    const { data: sfm } = parse(s.path);
+    stepTypes.set(`${s.nodeId}/${s.id}`, sfm.type);
   }
 
   for (const step of scan.steps) {
     const { data: fm, body } = parse(step.path);
     checkFrontmatter(report, step.path, fm, STEP_FM);
     checkIllustration(report, step.path, fm);
+    checkStepType(report, step.path, fm);
     checkIdFilename(report, step.path, fm.id, step.id);
     checkReferences(report, step.path, body, subject, nodeIds, stepKeys);
     checkSourceLinks(report, step.path, body, subject, sourceNames);
@@ -375,7 +401,7 @@ function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, nodeIds
 
   for (const node of scan.nodes) {
     const { data: fm } = parse(node.path);
-    checkDag(report, node.path, node.id, fm, stepFiles, stepIdsByNode);
+    checkDag(report, node.path, node.id, fm, stepFiles, stepIdsByNode, stepTypes);
   }
 
   for (const edge of scan.edges) {

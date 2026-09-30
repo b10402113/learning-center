@@ -3,169 +3,152 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>為何 code 勝 inference，與 vm 不是真正的邊界</title>
+<title>什麼時候讓 agent 寫程式？而 vm 為什麼不是安全邊界</title>
 <link rel="stylesheet" href="../assets/shared.css">
 </head>
 <body>
 
-<h1>為什麼 code 比 inference 可靠？而 <code>vm</code> 不是安全邊界</h1>
+<h1>什麼時候讓 agent 寫程式？而 vm 為什麼不是安全邊界</h1>
 <p class="meta">Step 4/4 · 沙箱與 Code Mode</p>
 
 <h2>學習目標</h2>
-<p>用一個 49 美元退款的 demo，觀察為什麼把算術交給程式碼，比交給模型推論可靠；找出 timeout 應該在哪一層設定；最後釐清：<code>node:vm</code> 可以協助隔離執行環境，卻不能當成真正的安全邊界。</p>
+<p>這一課要做的決定有兩層。第一層是面對一個任務時，該讓模型用推論直接回答，還是讓它寫一段程式丟進沙箱去跑；第二層是當你選了「寫程式」之後，這段程式該在哪裡執行：<code>node:vm</code> 這種輕量做法什麼時候夠用，什麼時候非換成託管沙箱不可。</p>
 
 <h2>前言</h2>
-<p>沙箱已經蓋好，工具也接上了，但還有兩個問題必須回答：<strong>模型會不會真的寫程式？寫出的結果又可靠嗎？</strong></p>
+<p>客服丟來一句話：「幫我找出重複的扣款，告訴我確切的退款金額。」模型面前有兩條路：在腦中想一想直接回答，或者寫一段程式去算。前一個做法可能吐出一個漂亮卻錯誤的數字；後一個做法則得先有個地方，能讓那段程式安全地跑起來。</p>
 
-<p>如果模型寧可自己「想一想」就報出退款金額，前面做的沙箱等於沒有派上用場。反過來說，就算模型寫了程式，我們也必須知道程式怎麼執行、timeout 由誰控制，以及執行環境是否真的安全。</p>
+<p>上一課把 <code>run_code</code> 接進了 harness：模型看得到這支工具，<code>runTool</code> 也知道要把程式交給 <code>runInSandbox</code>。工具備好了，真正的難題才浮上來：模型什麼時候該用它？</p>
 
-<p>這一課會用一個客服情境走完這條路：讓模型寫出程式，找出重複扣款，算出精確的 49 美元退款；接著檢查 timeout 與錯誤處理，最後說明為什麼 <code>node:vm</code> 只是中介點，而不是能放心上線的安全邊界。</p>
+<p>如果模型對每個問題都先「想一想」再回答，前面蓋的那間沙箱等於白做；但如果每件小事都丟進去寫程式，又會為了一點計算而多背一份執行的風險。這裡有兩股力量在拉扯：一邊是推論的彈性，另一邊是程式碼的可靠。更麻煩的是，就算你決定讓模型寫程式，底下還藏著一個問題：那段程式跑的地方，真的安全嗎？</p>
 
-<h2>一、先讓 agent 知道有這支工具</h2>
+<p>接線的事上一課做完了。這一課要把兩個決定講清楚：<strong>什麼時候該讓 agent 寫程式、什麼時候不該</strong>，以及<strong>選了「寫程式」之後，<code>node:vm</code> 什麼時候會不夠用</strong>。</p>
 
-<p>模型雖然看得到工具的 description，通常仍需要在 system prompt 裡補充這支工具的用途與使用時機。</p>
+<h2>一、選項只有兩個，取捨卻很具體</h2>
 
-<p>這裡要明確告訴模型：<strong>需要算術時，使用 <code>run_code</code> 撰寫 JavaScript，並在 async 包裝中執行；程式可以使用 <code>getCharges</code> 與 <code>searchKB</code> 這兩個 helper。</strong></p>
+<p>面對一個任務，能走的路大致就兩條。</p>
 
-<p>這也是一個小型的 prompt engineering 練習。工具能不能被模型發現，主要靠清楚的描述，不需要套用神祕模板；真正決定它能不能執行，則是 harness 有沒有把工具正確接起來。</p>
+<p>第一條是<strong>推論（inference）</strong>：模型在對話裡直接思考、直接給答案。它擅長理解語意、抓重點，也能對模糊的需求靈活應對。</p>
 
-<h2>二、Demo：找出重複扣款，算出精確退款</h2>
+<p>第二條是<strong>寫程式（code）</strong>：模型把解法寫成一段 JavaScript，交給沙箱執行，再從回傳的結果裡拿答案。模型的強項正好在這裡：讓模型寫程式，比讓它數數可靠得多。</p>
 
-<p>現在給 agent 一個需要實際計算的客服問題：</p>
+<p>兩條路沒有絕對的好壞，差別在任務的性質。把常見的差異並排出來，會看得比較清楚：</p>
 
-<blockquote>
-<p>幫我找出重複的扣款，並告訴我確切的退款金額是多少美元。</p>
-</blockquote>
+<table>
+  <thead>
+    <tr><th>面向</th><th>靠推論直接回答</th><th>寫程式交給沙箱跑</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>最擅長的事</td><td>語意理解、模糊判斷</td><td>精確算術、日期比對、資料整理</td></tr>
+    <tr><td>算術可靠度</td><td>機率性生成，可能出錯</td><td>輸入固定，輸出就固定</td></tr>
+    <tr><td>日期處理</td><td>位數一多就容易失手</td><td>交給程式計算，不受生成偏移影響</td></tr>
+    <tr><td>能不能重現</td><td>難以保證同一個答案</td><td>同一份輸入可重跑、可驗證</td></tr>
+    <tr><td>多步驟任務</td><td>拆成多次工具往返</td><td>一段程式一次串完</td></tr>
+    <tr><td>額外成本</td><td>幾乎不用設施</td><td>需要沙箱與 timeout</td></tr>
+    <tr><td>失敗的長相</td><td>悄悄給出一個錯數字</td><td>回傳 ok:false 與錯誤訊息</td></tr>
+  </tbody>
+</table>
 
-<p>送出請求後，模型先分類問題，接著呼叫 <code>run_code</code>。它產生的程式大致會完成幾件事：</p>
+<p>這張表不是抽象的。回到開頭那個客服問題，讓 agent 走 code 模式，它會先分類，接著呼叫 <code>run_code</code>，寫出一段真的程式：用 <code>await tools.getCharges(...)</code> 取回扣款紀錄、用 <code>console.log</code> 把資料印出來檢查、找出同一名顧客在同一天被扣兩次的紀錄、再 <code>searchKnowledgeBase</code> 查一次退款政策，最後把算好的數字 <code>return</code> 回去。</p>
 
-<ol>
-<li>使用 <code>await tools.getCharges(...)</code> 取得扣款紀錄。</li>
-<li>用 <code>console.log</code> 印出資料，方便檢查。</li>
-<li>找出同一名顧客在同一天被扣款兩次的紀錄。</li>
-<li>使用 <code>searchKB</code> 查詢退款政策。</li>
-<li>將計算後的退款金額 <code>return</code> 回去。</li>
-</ol>
+<p>結果是<strong>49 美元</strong>。這個金額來自程式回傳的結果，而不是模型憑印象猜的；對照假資料也對得上：同一名顧客，在同一天，因同一筆 49 美元被扣了兩次。如果改成讓模型一邊呼叫工具、一邊在對話裡自行拼湊與心算，除了比較慢，還多了「哪一步算錯」的風險。</p>
 
-<p>結果是<strong>49 美元的退款</strong>。這個數字不是模型憑印象猜出來的，而是程式執行後回傳的結果；對照假資料也能確認：同一名顧客在同一天，因同一筆 49 美元的金額被扣了兩次。</p>
+<p>問題出在推論的本質。模型有時會把你給的任何數字當成一個模板，然後代入隨機的值；算術一旦交給推論，遲早會在某一步幻覺，因為整個生成過程是機率性的。日期尤其不可靠，因為它牽涉的位數更多。把輸入強制交給程式執行，結果才會固定下來。</p>
 
-<figure class="lesson-figure"><img src="./code-beats-inference-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<h2>二、怎麼當場判斷：幾個可以問自己的問句</h2>
 
-<p>這種做法也比讓模型分別呼叫搜尋工具與算術工具，再自行拼湊答案更直接。模型負責提出程式，程式負責把資料算成結果。</p>
+<p>與其背那張表，不如記住幾個可以立刻問自己的問句。只要有一題答「是」，就值得讓模型寫程式。</p>
 
-<h2>三、為什麼 code 勝過 inference</h2>
+<p><strong>「這個結果需要精確的算術或金額嗎？」</strong>需要就交給程式。連人的心算都會出錯，模型在腦中做算術更是機率性的。</p>
 
-<p>這裡有一個容易反直覺的重點：<strong>模型很擅長寫程式，卻不適合在腦中做精確算術。</strong></p>
+<p><strong>「結果裡有日期嗎？需要比對、加減，或判斷是不是同一天嗎？」</strong>有就交給程式。日期是推論最容易失手的地方。</p>
 
-<p>模型的推論是機率性的。遇到數字時，它可能把某個數字當成熟悉的模式，再生成另一個看似合理、實際卻錯誤的值。只要把算術交給模型「想」，就很難避免某次出現幻覺。</p>
+<p><strong>「同一份輸入重跑一次，答案必須一模一樣嗎？」</strong>必須就交給程式。可重現是程式的基本性質，卻正是推論給不了的保證。</p>
 
-<p>日期更容易出錯，因為它同時涉及多個位數與不同格式。生成過程中的一點偏移，就可能讓日期改變，或讓模型在計算時採用錯誤的值。</p>
+<p><strong>「這個任務是不是一連串的組合：查資料、比對、計算、再查規則？」</strong>是的話，用一段程式一次串完，會比十幾次「呼叫、等待、推理、回傳」的往返快得多。</p>
 
-<figure class="lesson-figure"><img src="./code-beats-inference-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p><strong>「答案需要留下來讓人稽核嗎？」</strong>需要就交給程式。程式本身就是一份可以被讀、被重跑的解說。</p>
 
-<p>把輸入交給程式執行，結果就固定下來：同樣的輸入會得到同樣的輸出，而且可以重新執行、檢查與驗證。</p>
+<p>反過來說，如果這只是一次性的語意判斷，沒有精確數字要顧，那直接推論就好，不必為了一件小事蓋一座沙箱。</p>
 
-<p>因此，較務實的分工是：</p>
+<h2>三、規則會翻轉的時候：vm 不是安全邊界</h2>
 
-<ul>
-<li>讓模型做它擅長的事：理解需求、提出程式。</li>
-<li>讓程式做它擅長的事：執行規則與精確計算。</li>
-</ul>
-
-<h2>四、timeout 要設在哪裡？</h2>
-
-<p>模型產生的程式可能卡住，因此 timeout 是必要的安全帶。雖然預設值是兩秒，但目前只有設定預設值還不夠；真正要限制執行時間，必須在呼叫 <code>runInSandbox</code> 的地方，也就是 <code>runTool</code> 的對應 case，傳入 <code>options.timeoutMs</code>。</p>
-
-<p>它的運作方式在第二課已經看過：<code>withTimeout</code> 會建立一個「時間到就 reject」的新 promise，再用 <code>Promise.race</code> 和程式原本的 promise 比賽。</p>
-
-<p>程式先完成，就回傳程式結果；timeout 先到，則會走進錯誤流程，回傳 <code>{ ok: false, error }</code>。因此，像 <code>while (true) {}</code> 這種無窮迴圈，最多只能執行到時間上限，不會無限期拖住伺服器。</p>
-
-<p>可以直接執行一支不經 agent 的測試腳本，確認這層護欄處理四種情況：</p>
+<p>走到這裡，一切看起來很順：<code>runInSandbox</code> 擋掉了模組載入（context 裡根本沒有 <code>require</code>、<code>fs</code>、<code>process</code>、<code>fetch</code>），timeout 殺得掉寫壞的同步迴圈，錯誤也被包成模型讀得懂的結構化結果。測試腳本 <code>test-sandbox.ts</code> 就把這四道護欄直接展示了出來：</p>
 
 <ol>
-<li><strong>正常的 fetch-and-compute</strong>：程式透過 <code>tools</code> 取得資料，並完成計算。</li>
-<li><strong>無窮迴圈</strong>：<code>while (true) {}</code> 到達 timeout 後被終結。</li>
-<li><strong>禁止載入模組</strong>：<code>require("fs")</code> 會失敗，因為 context 裡沒有 <code>require</code>。</li>
-<li><strong>程式有 bug</strong>：錯誤會被包成結構化結果回傳，模型可以讀取後嘗試修正。</li>
+  <li><strong>code mode</strong>：程式透過 <code>tools.getCharges()</code> 取得資料並完成計算。</li>
+  <li><strong>無窮迴圈</strong>：<code>while (true) {}</code> 到達時間上限後被終結。</li>
+  <li><strong>禁止載入模組</strong>：<code>require("fs")</code> 失敗，因為 context 裡沒有 <code>require</code>。</li>
+  <li><strong>程式有 bug</strong>：例如讀取不存在的變數，錯誤會變成結構化結果回傳，模型能讀了再修。</li>
 </ol>
 
-<p>第四種情況尤其重要。錯誤不會直接把整個流程炸掉，而會變成一則<strong>模型能讀懂的訊息</strong>。這正是沙箱回傳結果中 <code>ok</code> 旗標的用途：模型可以先判斷執行是否成功，再決定要回覆、修正或重試。</p>
+<p>但這裡有一個必須誠實面對的限制：<code>node:vm</code> <strong>不是真正的安全邊界</strong>，它只是一個中介點。這行字就寫在 <code>sandbox.ts</code> 的註解裡。</p>
 
-<h2>五、最重要的警告：<code>vm</code> 不是真正的邊界</h2>
+<p>原因在於：<code>vm</code> 的 <code>timeout</code> 只能中斷<strong>同步</strong>的程式，殺不掉已經「漏出去」的 async 工作。也就是說，如果模型在沙箱裡啟動一個非同步任務，而主流程被 timeout 終止了，背景那個任務不一定會一起消失。<code>withTimeout</code> 只是用 <code>Promise.race</code> 做一個後備煞車，讓模型收到乾淨的錯誤訊息，但它沒辦法真的把那段工作殺掉。</p>
 
-<p>看到這裡，你可能會覺得沙箱已經很完整：能力注入能擋住模組載入，timeout 能處理卡死，錯誤也有結構化回傳。</p>
+<p>一個能被繞過的隔離層，就不算真正的邊界。而且這不是理論上的擔心。來源裡提到，<code>vm</code> 過去真的出現過可以逃逸的漏洞（可能已經修補，但這正說明它本質上不是拿來當安全邊界用的）。</p>
 
-<p>但整節課最重要的警告是：<strong><code>node:vm</code> 只是中介點，不是真正的安全邊界。</strong></p>
+<p>那什麼時候「丟進沙箱跑就好」這個規則會翻轉？當你要執行的是真正不受信任的輸入，或者你要把這個能力對外提供服務的時候。來源的判斷很直接：暴露一個 agent 到 production，就跟暴露一個陌生人到 production 一樣不明智；一旦出錯發生在 production 伺服器上，後果會比在自己的筆電上嚴重得多。</p>
 
-<p>原因在於，它管不到已經「漏出去」的 async 工作。如果模型在沙箱裡啟動一個非同步任務，接著 timeout 終止了主流程，背景中的工作不一定會一起消失。<code>vm</code> 沒有能力保證把這些工作殺掉。</p>
-
-<figure class="lesson-figure"><img src="./code-beats-inference-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
-
-<p>一個可以被繞過的隔離層，就不能算是真正的安全邊界。</p>
-
-<p>課堂使用 <code>node:vm</code>，是為了快速看清楚能力注入、timeout 與錯誤回傳的機制。若要正式部署，應該使用<strong>託管的隔離沙箱</strong>，例如 e2b、Cloudflare Sandbox SDK、Fly、Daytona 這類產品。它們透過真正的 process 或容器隔離，才有機會承受刻意攻擊。</p>
-
-<p>這個判斷可以搬回任何 runtime：不管是 OryxOS 還是 Java，分工都一樣——模型負責提出方案，harness 負責執行，而執行模型程式碼的地方，必須是一個不能任意逃出的房間。</p>
+<p>正式部署的答案，是把邊界交給<strong>託管的隔離沙箱</strong>，用真正的 process 或容器隔離，例如 e2b、Cloudflare Sandbox SDK、Fly、Daytona、Vercel 這類產品。在課堂裡用 <code>node:vm</code>，是因為它拿來學機制又快又好。harness 的責任是<strong>站在邊界上調解</strong>，至於這道邊界要多強，是一個部署選擇。</p>
 
 <h2>重點回顧</h2>
 <ul>
-<li><strong>Demo 的意義</strong>：模型主動寫程式，算出精確的 49 美元退款，證明 code mode 可用，也比多次工具往返更快。</li>
-<li><strong>算術幻覺</strong>：模型的推論具有機率性，數字與日期特別容易出錯；交給程式執行，結果才固定且可重現。</li>
-<li><strong>timeout 設定點</strong>：預設值是兩秒；實際執行時，要在 <code>runTool</code> 呼叫 <code>runInSandbox</code> 時傳入 <code>options.timeoutMs</code>。</li>
-<li><strong>四種護欄</strong>：正常計算、終結無窮迴圈、阻擋 <code>require</code>，以及將 bug 轉成模型可讀的結構化錯誤。</li>
-<li><strong><code>vm</code> 不是安全邊界</strong>：它無法保證終止漏出的 async 工作；正式部署應使用託管的隔離沙箱。</li>
+  <li><strong>先判斷，再選路</strong>：結果牽涉精確算術、日期或可重現性，就讓模型寫程式；只是語意判斷，就直接推論。</li>
+  <li><strong>為什麼要這樣分</strong>：推論是機率性的，數字會被當模板代換、日期特別容易錯；同一份輸入交給程式，輸出就固定。</li>
+  <li><strong>$49 demo</strong>：模型寫出真的程式，算出 49 美元退款，金額來自 <code>return</code> 的結果，也比多次工具往返更快。</li>
+  <li><strong>timeout 設定點</strong>：預設值是兩秒；實際生效要在 <code>runTool</code> 呼叫 <code>runInSandbox</code> 時，用 <code>options.timeoutMs</code> 傳入。</li>
+  <li><strong>規則會翻轉</strong>：<code>node:vm</code> 殺不掉漏出的 async 工作，只是中介點；要跑真正不受信任的程式或上線服務，就換成託管的隔離沙箱。</li>
 </ul>
 
-<p>到這裡，「沙箱與 Code Mode」就完成了。你現在有一個能執行模型程式碼的 <code>runInSandbox</code>、一支接進 harness 的 <code>run_code</code> 工具，也清楚知道這層隔離能處理什麼、不能保證什麼。</p>
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼讓模型「自己算」比讓它寫程式更容易出錯？" data-correct="0" data-explain="推論是機率性的，數字會被當模板代換，難免在某一步幻覺。">
+  <button class="opt">推論是機率性的，數字會幻覺</button>
+  <button class="opt">程式語言的浮點數其實不精確</button>
+  <button class="opt">沙箱會主動改寫計算的結果</button>
+  <button class="opt">模型的訓練資料裡沒有數字</button>
+</div>
+
+<div class="quiz" data-question="$49 退款 demo 裡，這個金額是怎麼來的？" data-correct="2" data-explain="金額來自程式回傳的結果，而且能對照假資料驗證。">
+  <button class="opt">模型從對話內容中猜出來的</button>
+  <button class="opt">使用者在題目裡事先指定的</button>
+  <button class="opt">程式執行後 return 的結果</button>
+  <button class="opt">知識庫文件裡面直接寫死的</button>
+</div>
+
+<div class="quiz" data-question="下面哪一種任務，最適合直接讓模型推論就好？" data-correct="1" data-explain="沒有精確數字要顧的語意判斷，用推論最省事。">
+  <button class="opt">比對同一顧客同一天的兩筆扣款</button>
+  <button class="opt">判斷一段客服訊息大概是什麼情緒</button>
+  <button class="opt">算出應該退還給顧客的精確金額</button>
+  <button class="opt">檢查兩個日期到底是不是同一天</button>
+</div>
+
+<div class="quiz" data-question="timeoutMs 要在哪裡設定，才真的會生效？" data-correct="3" data-explain="要在 runTool 呼叫 runInSandbox 時，用 options 把 timeoutMs 傳進去。">
+  <button class="opt">寫在 run_code 的 description 裡</button>
+  <button class="opt">寫在模型產生的程式碼裡面</button>
+  <button class="opt">寫在 sandboxApi 的物件裡面</button>
+  <button class="opt">呼叫 runInSandbox 時傳 options</button>
+</div>
+
+<div class="quiz" data-question="為什麼說 node:vm 的 timeout 不是真正的安全邊界？" data-correct="0" data-explain="它的 timeout 只中斷同步程式，殺不掉已經漏出去的 async 工作。">
+  <button class="opt">它殺不掉漏出的 async 工作</button>
+  <button class="opt">它完全無法執行任何程式碼</button>
+  <button class="opt">它會把錯誤全部吞掉不報告</button>
+  <button class="opt">它不支援 await 這類的語法</button>
+</div>
+
+<div class="quiz" data-question="如果要把 run_code 正式部署給外部使用，應該換成什麼？" data-correct="1" data-explain="改用真正以 process 或容器隔離的託管沙箱，例如 e2b。">
+  <button class="opt">把 timeout 的秒數調得更短</button>
+  <button class="opt">改用託管的隔離沙箱產品</button>
+  <button class="opt">把所有 console.log 都關掉</button>
+  <button class="opt">多包幾層 async IIFE 就好</button>
+</div>
+
+<p>到這裡，「沙箱與 Code Mode」整節就完成了。你手上有一個能在 <code>node:vm</code> 裡執行模型程式的 <code>runInSandbox</code>、一支接進 harness 的 <code>run_code</code> 工具，心裡也多了一套判斷依據：知道什麼時候該相信推論、什麼時候該讓程式去算，以及這層隔離能保證什麼、不能保證什麼。如果還有哪個環節不清楚，隨時回來問我。</p>
 
 <div class="lesson-nav">
   <div><a href="./run-code-tool.html">← 上一步：run_code 工具：把沙箱接進 harness</a></div>
   <div></div>
-</div>
-
-<h2>複習題</h2>
-
-<div class="quiz" data-question="更新 system prompt 告訴 agent 有 run_code，主要目的為何？" data-correct="1" data-explain="讓模型在需要算術時知道這支工具存在、也懂得怎麼用。">
-  <button class="opt">強制模型不准自己心算</button>
-  <button class="opt">讓模型知道工具存在與用法</button>
-  <button class="opt">限制沙箱只能執行算術</button>
-  <button class="opt">取代 run_code 的 description</button>
-</div>
-<div class="quiz" data-question="$49 這個退款金額是怎麼來的？" data-correct="2" data-explain="來自程式 return 的結果，並能對照假資料驗證。">
-  <button class="opt">模型直接從對話中猜出來的</button>
-  <button class="opt">使用者事先在題目裡指定的</button>
-  <button class="opt">程式回傳結果，且可對照驗證</button>
-  <button class="opt">知識庫文件裡直接寫死的</button>
-</div>
-<div class="quiz" data-question="為什麼算術交給 inference 容易出錯？" data-correct="0" data-explain="推論是機率的，模型可能把數字當模板代換，日期尤其不可靠。">
-  <button class="opt">推論是機率的，數字會幻覺</button>
-  <button class="opt">模型無法讀取工具的回傳值</button>
-  <button class="opt">程式語言的浮點數不精確</button>
-  <button class="opt">沙箱會主動改寫計算結果</button>
-</div>
-<div class="quiz" data-question="timeoutMs 實際上要在哪裡設定才有效？" data-correct="3" data-explain="在 runTool 呼叫 runInSandbox 時，以 options 傳入 timeoutMs。">
-  <button class="opt">寫在 sandboxApi 的物件裡</button>
-  <button class="opt">寫在 run_code 的 description</button>
-  <button class="opt">寫在模型產生的程式碼裡</button>
-  <button class="opt">呼叫 runInSandbox 時傳 options</button>
-</div>
-<div class="quiz" data-question="測試腳本中，require(&quot;fs&quot;) 為什麼會失敗？" data-correct="1" data-explain="context 裡根本沒有 require，模組載入被白名單擋掉。">
-  <button class="opt">fs 模組在 Node 已被移除</button>
-  <button class="opt">context 裡沒有 require 可用</button>
-  <button class="opt">timeout 太快來不及載入</button>
-  <button class="opt">沙箱把檔案系統加密了</button>
-</div>
-<div class="quiz" data-question="為什麼說 node:vm 不是真正的安全邊界？" data-correct="2" data-explain="它殺不掉漏出去的 async 工作，無法真正隔離。">
-  <button class="opt">它的執行速度比容器慢很多</button>
-  <button class="opt">它不支援 await 語法</button>
-  <button class="opt">它殺不掉漏出的 async 工作</button>
-  <button class="opt">它無法回傳執行結果</button>
-</div>
-<div class="quiz" data-question="正式部署時，建議改用什麼來隔離？" data-correct="0" data-explain="改用託管的隔離沙箱產品，如 e2b、Cloudflare Sandbox SDK 等。">
-  <button class="opt">託管隔離沙箱（e2b 等）</button>
-  <button class="opt">把 timeout 調得更短</button>
-  <button class="opt">把 console.log 全部移除</button>
-  <button class="opt">改用更多層的 async IIFE</button>
 </div>
 
 <div class="footer">

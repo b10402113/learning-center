@@ -107,3 +107,19 @@ updated: 2026-09-29
 - test-prompt-verify-context: unknown
 
 > probe skipped via /nodes claude-ecosystem-bootcamp/projects-and-context skip-probe on 2026-09-30
+
+## skills-basics — Skill 是什麼、安裝一個來用
+
+- skill-as-saved-instruction-package: unknown
+- claude-starts-fresh-every-conversation: unknown
+- skill-md-file-structure: unknown
+- project-context-vs-skill-process: unknown
+- description-as-auto-trigger: unknown
+- claude-announces-skill-read: unknown
+- when-to-use-skill-vs-prompt: unknown
+- reusable-vs-one-off: unknown
+- install-open-source-skill-workflow: unknown
+- humanizer-skill: unknown
+- skill-trigger-modes: unknown
+
+> probe skipped via /nodes claude-ecosystem-bootcamp/skills-basics skip-probe on 2026-09-30

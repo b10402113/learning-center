@@ -9,98 +9,151 @@
 <body>
 
 <h1>Code Mode：用一段程式取代多次工具往返</h1>
-<p class="meta">Step 1/4 · 為什麼 agent 產生的程式不能直接在機器上執行</p>
+<p class="meta">Step 1/4 · 為什麼 agent 產生的程式碼不能直接執行</p>
 
-<h2>先看 agent 為什麼會變慢、變脆弱</h2>
-<p>你已經有一個能呼叫工具的 agent：它描述需求、呼叫工具、等待結果、推理下一步，再呼叫下一個工具。簡單任務通常沒問題；但只要工作需要一連串計算，「呼叫─等待─推理─回傳」的迴圈就會變得又慢又容易出錯。</p>
+<h2>前言：一個回合，還是一打回合？</h2>
 
-<p>例如，客服 agent 要找出重複扣款的客戶，並算出應退款金額。它可能要查訂單、計算筆數、加總金額、查退款政策，再逐筆比對。整段流程可能產生<strong>十幾次</strong> sequential 的工具往返；每一次都會消耗一個 model turn 的 token 與時間。即使加入平行化，仍然擺脫不了許多 small round-trip。</p>
+<p>你手上有一個能呼叫工具的 agent。當任務只是「查一下這筆訂單的狀態」時，它很好用：呼叫工具、拿到結果、回答你，一氣呵成。可是當任務變成一串需要計算的流程，例如「找出重複扣款的客戶，算出每個人該退多少錢」，情況就不一樣了。它得先查訂單，再數筆數，再把金額加總，再核對退款政策，然後一筆一筆比對。</p>
 
-<p>這正是 code mode 要解決的問題：把一連串操作交給一支程式一次完成，而不是讓模型逐步盯著每個結果來回處理。</p>
+<p>每一步都要走一次「呼叫、等待、推理、回傳」。結果整件工作被拆成十幾次往返，每一次都吃掉一個 model turn 的時間與 token。就算把能並行的呼叫接在一起，往返的次數還是降不下來，流程一樣拖。</p>
 
-<figure class="lesson-figure"><img src="./code-mode-why-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p>這一課要回答兩個綁在一起的問題：有沒有一種做法，能讓 agent 一次就把這種工作做完？以及，如果 agent 開始自己寫程式，那段程式該在哪裡執行？</p>
 
-<h2>Code mode：一個回合內串起工具</h2>
-<p>與其讓模型在十幾次往返中逐步呼叫工具，不如讓它<strong>直接寫一支程式</strong>，把需要的工具串在一起，一次執行，最後只回傳結果。</p>
+<h2>Code mode：讓模型寫一支程式，而不是一直敲單一工具</h2>
 
-<blockquote class="good-code">code mode = 讓 LLM 寫一支程式來串工具，用「一個回合」取代「多次工具往返」，最後只回傳結果。</blockquote>
+<p>Code mode 的做法很直接：與其讓模型在十幾次往返裡逐步呼叫工具，不如請它<strong>直接寫一支程式</strong>，把需要的工具在程式裡串起來，執行一次，最後回傳結果。</p>
 
-<p>英文叫 <strong>code mode</strong>。這個詞最早由 Claude 使用，業界也有其他等價說法，例如 Small-Agents，以及 HuggingFace 的 CodeActs。</p>
+<p>換句話說，工具沒有消失，只是被包進程式裡。模型不再一個一個呼叫它們，而是在一個回合內寫出一段會呼叫它們的程式。這個詞最早由 Claude 使用，業界也有幾個等價的說法，例如 Small-Agents，以及 Hugging Face 的 CodeActs。</p>
 
-<p>它的核心不是讓模型變得更聰明，而是<strong>換一種工作方式</strong>：把複雜、跨多個步驟的計算交給一支確定性（deterministic）的程式完成。</p>
+<p>它處理的場景有明確的輪廓：<strong>一件必須更快得出答案、而且橫跨多個步驟的決策</strong>。如果只是單一次的查詢，用不著它。</p>
 
-<p>這種做法有效，是因為模型很擅長「寫程式」，卻不擅長「在心裡算數」。例如，求解二次方程式時，讓模型反覆呼叫計算器函式，容易在中途出錯；讓它寫一支 Python 腳本，再一次執行，通常更可靠。code mode 正好把「寫程式強、算術弱」這兩項特性對齊。</p>
+<h2>它不是什麼</h2>
 
-<h2>但模型寫的程式要在哪裡跑？</h2>
-<p>這是沙箱最核心的問題：<strong>程式是模型寫的嗎？是。那你信得過它嗎？</strong></p>
+<p>要說清楚 code mode，得先排除幾個容易混淆的想像。</p>
 
-<p>coding agent 可能想執行 Bash，分析 agent 可能想執行 SQL 或計算。這些由模型生成的程式碼，<strong>絕不該直接跑在開發機或生產伺服器上</strong>。它可能寫錯、讀取不該讀的檔案，或連到不該連的地方。</p>
+<p>它<strong>不是讓模型變聰明</strong>。模型本身的能力沒有改變，改變的是工作方式：把複雜的計算交給一段確定性的程式，而不是交給一次次的推理。它也<strong>不是平行化的另一種說法</strong>。平行化能讓往返從十幾次縮到幾次，但「呼叫、等待、推理、回傳」的迴圈還在；code mode 是把整串動作壓進一個回合，兩者解決的是不同層次的問題。</p>
 
-<p>把 agent 直接放進生產環境，就像把陌生人請進機房：程式在筆電上出錯，和在生產伺服器上出錯，後果完全不同。</p>
+<p>最後，它<strong>不是每個 agent 的標配</strong>。這是一種工具箱裡的選項，不是硬性架構。很多 agent 用單一工具呼叫就綽綽有餘，Claude Code 本身就是一個沒有這些東西、卻運作良好的單一 agent。只有當問題真的需要時，才值得為它加上這一層。</p>
 
-<figure class="lesson-figure"><img src="./code-mode-why-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<h2>對照一：多次往返 vs. 一段程式</h2>
 
-<p>因此，agent 可以保有<strong>生成並執行程式碼</strong>的能力，但執行位置必須是<strong>沙箱（sandbox）</strong>。沙箱的硬性要求只有一句話：</p>
+<p>先看沒有 code mode 的樣子。假設一個客服 agent 要處理「找出重複扣款、算出退款金額」：它會依序呼叫查詢訂單、計算筆數、加總金額、查退款政策、逐筆比對等工具，中間每一次都要停下來等下一個推理步驟。十幾次往返累積起來，時間與 token 都花在來回溝通上。</p>
 
-<blockquote class="bad-code">沙箱必須「逃不出去」。它是一道邊界，模型寫的程式只能碰沙箱裡提供給它的東西。</blockquote>
+<p>再看有 code mode 的樣子。同一件事，模型寫出一支程式，在程式裡依序或並行呼叫那些工具，跑完直接把最終數字回傳。整段工作從「十幾次往返」變成「寫程式、跑、拿結果」。</p>
 
-<h2>課堂做法與生產做法</h2>
-<p>市面上有許多沙箱方案，例如託管的隔離環境、獨立 process，以及專用 runtime。這門課先選擇容易理解、能快速實跑的做法：使用 Node 內建的 <code>node:vm</code>，在離線且最小的 context 中執行程式。</p>
+<table>
+<thead>
+<tr><th></th><th>沒有 code mode</th><th>有 code mode</th></tr>
+</thead>
+<tbody>
+<tr><td>工作單位</td><td>一次工具呼叫</td><td>一支程式</td></tr>
+<tr><td>往返次數</td><td>十幾次，平行化後仍要數個回合</td><td>一次</td></tr>
+<tr><td>工具怎麼用</td><td>模型逐步呼叫做決定</td><td>程式把工具串起來</td></tr>
+<tr><td>適合的任務</td><td>單一步驟、單純查詢</td><td>跨多步驟、需快速得答案的決策</td></tr>
+</tbody>
+</table>
 
-<p>但要記住一個重要的誠實聲明：<strong><code>vm</code> 不是真正的安全邊界</strong>。它過去曾經出現過可以被逃逸的漏洞。</p>
+<h2>對照二：反覆呼叫計算函式 vs. 一支腳本</h2>
 
-<p>所以，<code>vm</code> 很適合在課堂上示範「邊界」這個概念；真正部署到生產環境時，應改用託管的沙箱產品或獨立 process。課堂與生產之間的這條界線，是本節點最後要驗證的重點。</p>
+<p>另一組對照更能看出差別：數學計算。要解一個二次方程式，如果讓模型反覆呼叫一堆計算函式、每算一步就來回一次，很容易在某一步出錯。改成請它寫一支 Python 腳本，把計算寫成一個函式、執行一次，通常更可靠。一樣的工具能力，換成「一段程式」的形式，結果就穩定了。</p>
 
-<h2>這一課的交付物</h2>
-<p>本節點要在 harness 裡加入一個沙箱，並定義一個 <code>run_code</code> 工具。它負責讓 agent「寫一支程式、在沙箱裡執行、回傳結果」，再把這個工具暴露給 agent 使用。</p>
+<h2>機制：為什麼「寫程式」比「心算」可靠</h2>
 
-<p>接下來分成三步：</p>
-<ol>
-  <li>第二步：實作沙箱本體 <code>runInSandbox</code>。</li>
-  <li>第三步：把沙箱接成 <code>run_code</code> 工具。</li>
-  <li>第四步：用一個真的算出退款金額的 demo 驗證，並再次確認 <code>vm</code> 不是安全邊界。</li>
-</ol>
+<p>這背後有一個關鍵、也有點反直覺的事實：<strong>模型很會寫程式，卻不擅長在心裏算數。</strong></p>
+
+<p>模型的推理是機率性的。當它遇到數字，很容易把某個數字當成熟悉的樣式，再生成另一個看起來合理、實際卻錯誤的值。日期又比數字更容易出錯，因為它牽涉多個位數和多種格式，生成過程只要偏了一點，整個值就變了。</p>
+
+<p>程式正好補上這個缺口。同一段程式、同樣的輸入，永遠得到同樣的輸出，可以重跑、可以檢查，這就是所謂的確定性。code mode 的價值，不是把模型變強，而是把它的強項和弱項分開：需求交給模型，精確計算交給程式。</p>
+
+<p>你可以把 code mode 想成這樣：不要讓一個人在櫃檯邊查資料邊心算，而是請他先把規則寫成一張試算表公式，按下執行，讓表格把答案算出來。人負責決定「要算什麼」，公式負責「算得準」。</p>
+
+<p>不過這個類比有它的極限。試算表只會算你寫進去的公式，程式也只會做白名單裡提供給它的能力；它不會幫你判斷需求對不對，也不保證模型寫的程式沒有 bug。它只保證「一旦寫對了，執行結果穩定且可重現」。至於能力邊界要怎麼劃，就是後面幾步的事。</p>
+
+<h2>第二個問題：模型寫的程式要在哪裡跑？</h2>
+
+<p>這就帶到開頭的第二個問題，而且它比第一個更敏感。coding agent 可能想執行 Bash，分析 agent 可能想跑 SQL 或做計算。這些程式是模型寫的，你信得過它嗎？</p>
+
+<p>答案是不該直接信。這段程式可能寫錯、可能讀取不該讀的檔案，也可能連到不該連的地方。所以有一條規則很硬：<strong>模型寫的程式，不該直接跑在開發機或生產伺服器上。</strong></p>
+
+<p>把 agent 直接放進生產環境，就像把陌生人請進機房。程式在筆電上搞砸，和在生產伺服器上搞砸，代價完全不同。生產伺服器一出錯，受影響的是所有使用者。</p>
+
+<p>因此，agent 可以保有「生成並執行程式碼」的能力，但執行的地方必須是一個<strong>沙箱</strong>。而沙箱的硬性要求只有一句：<strong>它必須逃不出去。</strong>模型寫的程式只能碰到沙箱裡主動提供給它的東西，其他一概看不到、搆不著。</p>
+
+<h2>取捨：課堂的沙箱與生產的沙箱</h2>
+
+<p>這裡有個務實的取捨。市面上有許多沙箱方案，例如託管的隔離環境、獨立的 process，也有專用的 runtime。這門課為了能快速、離線地實跑，選的是 Node 內建的 <code>node:vm</code>，在一個最小的 context 裡執行程式。</p>
+
+<p>但必須誠實說清楚：<code>vm</code> 只是個方便的中介點，不是真正的安全邊界。它過去出現過可以逃逸的漏洞（也許已經修補）。用它來理解「邊界」這個觀念很好，真的要部署，就該換成專門的沙箱產品或獨立 process。這條課堂與生產之間的線，會在本節點最後再收一次。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+Code mode 讓模型一次寫出一支串接工具的程式，把十幾次「呼叫、等待、推理、回傳」壓成一次「寫程式、跑、拿結果」。它之所以可靠，是因為模型擅長寫程式卻不擅長心算，而程式是確定性的、同一輸入必得同一輸出。它只適用於需要快速得答案的多步驟決策，不是每個 agent 的標配。至於模型產生的程式碼，不能直接跑在你的機器或伺服器上，必須關進一個逃不出去的沙箱。
+</blockquote>
+
+<p>把這兩件事收在一起看：code mode 是「怎麼用」的問題，沙箱是「在哪裡跑」的問題。前者讓 agent 用一段程式取代多次往返，後者確保那段程式碰不到不該碰的東西。兩者合起來，才是一個能放心交給 agent 執行程式碼的環境。</p>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="code mode 的核心是什麼？" data-correct="1" data-explain="讓模型寫一支串接工具的程式，一個回合就拿最終結果。">
+  <button class="opt">讓模型變得更聰明、算得更準</button>
+  <button class="opt">用一段程式取代多次工具往返</button>
+  <button class="opt">把工具全部換成資料庫查詢</button>
+  <button class="opt">平行呼叫更多工具來加速</button>
+</div>
+
+<div class="quiz" data-question="相較於一步步呼叫工具，code mode 把工作從哪裡搬到哪裡？" data-correct="2" data-explain="整串工具呼叫被壓進一個回合：寫程式、執行、取結果。">
+  <button class="opt">從一次呼叫搬到多次並行呼叫</button>
+  <button class="opt">從寫程式搬到模型的心算推理</button>
+  <button class="opt">從多次往返搬到一次寫跑拿結果</button>
+  <button class="opt">從沙箱搬到正式的生產伺服器</button>
+</div>
+
+<div class="quiz" data-question="為什麼把算術交給模型心算容易出錯？" data-correct="1" data-explain="推理帶有機率性，數字與日期特別容易出現幻覺。">
+  <button class="opt">模型無法讀取工具的回傳值</button>
+  <button class="opt">模型的推理是機率性的</button>
+  <button class="opt">程式語言的浮點數不精確</button>
+  <button class="opt">沙箱會主動改寫計算結果</button>
+</div>
+
+<div class="quiz" data-question="模型「寫程式」和「心算」的能力相比如何？" data-correct="0" data-explain="模型極擅長寫程式，卻不適合在推理中做精確計算。">
+  <button class="opt">寫程式強、心算弱</button>
+  <button class="opt">心算強、寫程式弱</button>
+  <button class="opt">兩者一樣強</button>
+  <button class="opt">兩者一樣弱</button>
+</div>
+
+<div class="quiz" data-question="agent 產生的程式碼為什麼不該直接在伺服器上執行？" data-correct="1" data-explain="模型寫的程式不可全信，搞砸在生產伺服器的代價遠大於筆電。">
+  <button class="opt">因為沙箱的執行速度比較快</button>
+  <button class="opt">因為它可能讀或連不該碰的東西</button>
+  <button class="opt">因為伺服器只支援特定程式語言</button>
+  <button class="opt">因為伺服器的 Node 版本比較舊</button>
+</div>
+
+<div class="quiz" data-question="沙箱最關鍵的硬性要求是什麼？" data-correct="3" data-explain="沙箱是一道逃不出去的邊界，程式只能碰它被提供的東西。">
+  <button class="opt">跑得夠快、延遲要低</button>
+  <button class="opt">能存取生產資料庫</button>
+  <button class="opt">支援所有程式語言</button>
+  <button class="opt">讓程式逃不出去</button>
+</div>
+
+<div class="quiz" data-question="關於 code mode，下列哪個說法正確？" data-correct="2" data-explain="它是按需選用的工具，單一 agent 不用它也能運作良好。">
+  <button class="opt">它是每個 agent 都必備的架構</button>
+  <button class="opt">它能取代工具呼叫這個機制</button>
+  <button class="opt">它是工具箱裡的選項不是標配</button>
+  <button class="opt">它讓模型不必再理解需求</button>
+</div>
+
+<p>搞懂了「為什麼」，下一步就輪到「怎麼做」。第二課會動手實作沙箱本體 <code>runInSandbox</code>：用 <code>node:vm</code> 建立最小 context、只注入白名單 API 與攔截後的 <code>console.log</code>、用 async IIFE 包住程式碼，再加上 timeout，最後用 <code>ok</code> 回報成敗。</p>
 
 <div class="lesson-nav">
   <div></div>
   <div><a href="./run-in-sandbox.html">下一步：實作 runInSandbox：node:vm 的沙箱邊界 →</a></div>
 </div>
 
-<h2>複習題</h2>
-
-<div class="quiz" data-question="code mode 的本質是什麼？" data-correct="1" data-explain="用一段程式把多次工具呼叫串起來，一個回合拿最終結果。">
-  <button class="opt">讓模型變得更聰明、算得更準</button>
-  <button class="opt">用一段程式取代多次工具往返</button>
-  <button class="opt">平行呼叫更多工具以加速</button>
-  <button class="opt">把工具全部換成資料庫查詢</button>
-</div>
-<div class="quiz" data-question="為什麼 agent 產生的程式碼得跑在沙箱裡？" data-correct="2" data-explain="模型寫的程式靠不住，不能在開發機或生產伺服器上直接執行。">
-  <button class="opt">因為沙箱跑得比本機更快</button>
-  <button class="opt">因為沙箱能存取更多檔案</button>
-  <button class="opt">因為它可能在開發機或伺服器上搞砸</button>
-  <button class="opt">因為模型只認得沙箱的語法</button>
-</div>
-<div class="quiz" data-question="沙箱最關鍵的硬性要求是什麼？" data-correct="3" data-explain="沙箱必須讓模型寫的程式「逃不出去」。">
-  <button class="opt">跑得夠快、延遲要低</button>
-  <button class="opt">能存取生產資料庫</button>
-  <button class="opt">支援所有程式語言</button>
-  <button class="opt">必須逃不出去</button>
-</div>
-<div class="quiz" data-question="模型「寫程式 vs 做算術」哪個強？" data-correct="0" data-explain="模型極擅長寫程式，卻不擅長在推論裡做算術。">
-  <button class="opt">寫程式強、算術弱</button>
-  <button class="opt">算術強、寫程式弱</button>
-  <button class="opt">兩者都強</button>
-  <button class="opt">兩者都弱</button>
-</div>
-<div class="quiz" data-question="這門課用 node:vm 做沙箱，對它的正確態度是？" data-correct="1" data-explain="vm 只是課堂示範，不是真正的安全邊界，生產要換託管沙箱。">
-  <button class="opt">它是牢不可破的安全邊界</button>
-  <button class="opt">它是課堂示範、並非真正安全邊界</button>
-  <button class="opt">它比託管沙箱更適合生產</button>
-  <button class="opt">它不需要任何額外的防護</button>
-</div>
-
 <div class="footer">
   <p>agent-harness · 沙箱與 Code Mode · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>
