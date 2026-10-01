@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>端到端實跑：登入＋待辦 app</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>端到端實跑：登入＋待辦 app</h1>
+<p class="meta">Step 4/4 · 工程工作流全貌</p>
+
+<h2>先看一趟完整旅程</h2>
+<p>你可能已經看過九個工作站、主線與四個入口，也知道四種檢查深度各自負責什麼。但規則分開看，還是像只看過捷運圖，知道有轉乘站，卻不知道實際走起來會在哪裡換車。</p>
+
+<p>這一節用一個全新的「登入＋個人待辦清單」app，把整條路跑一次：從想法、選技術棧、建立專案，到功能出貨與檔案對齊。每一站都看三件事：跑了哪個 skill、它解決哪個問題，以及留下什麼能交給下一站的檔案。</p>
+
+<figure class="lesson-figure"><img src="./walkthrough-signin-todo-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>十個階段，先看全貌</h2>
+<p>先把整趟旅程攤開。後面再依階段拆解細節。</p>
+
+<table>
+<thead>
+<tr><th>階段</th><th>你跑什麼</th><th>它在做什麼／留下什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td><code>/scope</code></td><td>把想法變成計畫，選 delivery style 與 depth；寫進 <code>docs/scope/</code></td></tr>
+<tr><td>2</td><td><code>/architect</code>（stack 模式）</td><td>決定技術棧；寫出一份 <code>Proposed</code> 的 spec</td></tr>
+<tr><td>3</td><td>手動 scaffold ＋ <code>/audit</code></td><td>長出空專案；寫出 root <code>AGENTS.md</code> 與 <code>CLAUDE.md</code> 指標</td></tr>
+<tr><td>4</td><td><code>/architect</code>（feature 模式）</td><td>設計登入功能；寫出第二份 <code>Proposed</code> spec 並連結到 scope</td></tr>
+<tr><td>5</td><td><code>/develop</code></td><td>過 gate、分流、蓋後端與 UI；動 spec 狀態、更新 scope、寫 verify 步驟</td></tr>
+<tr><td>6</td><td><code>/check verify</code></td><td>驅動真的跑起來的 app，證明功能照 spec 運作</td></tr>
+<tr><td>7</td><td><code>/test</code></td><td>為剛改動的程式碼寫測試；spec 轉為 <code>Accepted</code></td></tr>
+<tr><td>8</td><td><code>/check review</code></td><td>換一個模型家族做資深審查；findings 寫進 <code>docs/reviews/</code></td></tr>
+<tr><td>9</td><td><code>/document</code></td><td>從真 diff 寫 PR 內文、changelog 等給人看的文字</td></tr>
+<tr><td>10</td><td><code>/sync</code></td><td>把 AGENTS.md、scope、spec 狀態對回程式碼真實的樣子</td></tr>
+</tbody>
+</table>
+
+<h2>階段 1–3：先決定方向，再讓專案站起來</h2>
+
+<h3>階段 1：<code>/scope</code> 把想法變成計畫</h3>
+<p>因為 repo 還是空的，<code>/scope</code> 會把這次工作視為全新專案，先規劃地基與第一個可交付的功能。這一站先不談要寫哪些檔案，真正要回答的是「你想用什麼方式交付成果」。</p>
+
+<ul>
+<li><strong>先拉一條細線（thin thread first）。</strong> 先做出一條從畫面穿到資料庫的窄路徑，讓整條鏈路先動起來，再逐步加厚。適合想早點看到端到端結果的情境。</li>
+<li><strong>先做最小可用版本（smallest usable thing first）。</strong> 先做出真人能使用的最小版本，再向上擴充。適合想快速出貨並取得回饋的情境。</li>
+<li><strong>先看再接（look first, wire later）。</strong> 先用假資料完成畫面，讓人先看到並操作產品，之後再接上真正的後端。適合原型或需要先確認視覺方向的情境。</li>
+<li><strong>一次完成一條完整旅程（one whole journey at a time）。</strong> 先把一條使用者路徑的所有狀態做完整，再開始下一條。適合每條路徑都必須有完整體驗的產品。</li>
+</ul>
+
+<p>選定的 delivery style 會成為專案預設值，之後單一功能仍可以覆寫它。接著，<code>/scope</code> 會請你選 workflow depth。這個待辦 app 選的是 <code>Beta</code>：完成 <code>develop</code> 後，還要跑 <code>/check verify</code> 和 <code>/test</code>。</p>
+
+<p>因此，階段 1 的真正產出是兩個決定：delivery style 與 depth。它們連同整份計畫一起寫進 <code>docs/scope/</code>，成為後續工作的入口。</p>
+
+<h3>階段 2：<code>/architect</code> 決定技術棧</h3>
+<p>此時 repo 還沒有 stack，所以第一次執行 <code>/architect</code> 會進入 stack 模式。它會先讀現有的 context 檔，再大致比較幾個技術選項，提出明確建議。</p>
+
+<p>它把問題分成三類：</p>
+
+<ul>
+<li>能從想法或程式碼<strong>推導出來</strong>的，就自行判斷，不浪費時間詢問。</li>
+<li><strong>只有你知道</strong>的內容，例如商業規則，才會請你決定。</li>
+<li><strong>專業上可以建議</strong>的內容，例如資料庫或登入套件，會提供建議、理由與備選，讓你保留覆寫權。</li>
+</ul>
+
+<p>如果某個決策可能需要外部連接器或現成 skill，它也會先詢問你是否同意搜尋；沒有你的允許，不會自行連網。</p>
+
+<p>對話結束後，技術棧決策會寫成 <code>docs/specs/</code> 裡的一份 spec，狀態是 <code>Proposed</code>。這表示「決定已經形成，但尚未建置」。從這一刻開始，spec 就是建置時要遵守的合約。</p>
+
+<h3>階段 3：scaffold，再用 <code>/audit</code> 認識專案</h3>
+<p>你先使用 stack 自己的工具建立空專案，讓磁碟上真的有程式碼。接著才執行 <code>/audit</code>。</p>
+
+<p><code>/audit</code> 讀的是剛 scaffold 完的真實 repo，因此能寫出 root 層的 <code>AGENTS.md</code>，並建立一份很薄的 <code>CLAUDE.md</code> 指標檔。裡面會記錄 stack、執行指令與它觀察到的專案慣例。</p>
+
+<p>順序不能顛倒：先決定 stack、再讓專案存在，<code>/audit</code> 才是在觀察事實，而不是對著空資料夾猜測。</p>
+
+<figure class="lesson-figure"><img src="./walkthrough-signin-todo-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>階段 4–5：把決策寫成 spec，再讓功能落地</h2>
+
+<h3>階段 4：用 feature 模式設計登入</h3>
+<p>第二次執行 <code>/architect</code> 時，目標從整個 stack 縮小成單一功能：登入。</p>
+
+<p>它仍然沿用同一套問題分流：能推導的自行推導，只有你知道的才詢問，專業判斷則提出建議。開始寫之前，它也會先檢查是否已有相近的 spec。若找到相似內容，會請你選擇要建立新決策、更新舊 spec，或取代舊 spec。</p>
+
+<p>接著它依決策規模決定 spec 的形狀：單純決策使用一個檔案，較大或包含多個部分的決策則使用一個小資料夾。登入功能會寫成 <code>Proposed</code> spec，並連回 scope 中對應的項目，讓「計畫」與「具體決策」彼此找得到。</p>
+
+<h3>階段 5：<code>/develop</code> 的 gate 先攔住未知決策</h3>
+<p><code>/develop</code> 不是收到指令就立刻寫程式。它先檢查一件事：要建置這個功能，還有哪個決定沒做？這就是 gate。</p>
+
+<p>登入已有 spec，所以可以通過 gate 開始建置。若決策缺席，<code>/develop</code> 會停下來，提供三條路：</p>
+
+<ul>
+<li>先回到 <code>/architect</code>，正式做出決策；這是建議路徑。</li>
+<li>判斷這裡沒有需要額外決策的內容，直接建置。</li>
+<li>先建置，但把假設記錄成狀態為 <code>Assumed</code> 的小 spec。</li>
+</ul>
+
+<p>第三條路的重點，是把「暫時這樣想」變成 repo 裡看得見的檔案，而不是只留在對話中。<code>/develop</code> 會把這個功能標記為欠 ratification，直到你回到 <code>/architect</code> 正式審議；不過這個旗標不會阻止你把功能標成 done。</p>
+
+<h3>建置時的兩條分流：後端與 UI</h3>
+<p>通過 gate 後，<code>/develop</code> 判斷工作屬於 UI、後端，或兩者都有。登入同時包含註冊與登入畫面，以及背後的 session 邏輯，因此兩條路都會執行。</p>
+
+<p><strong>後端</strong>依固定順序建置：</p>
+
+<ul>
+<li>先依 spec 建立資料層，實際執行資料庫變更，並確認資料表真的存在；migration 檔存在，不代表變更已經生效。</li>
+<li>再建立核心邏輯，讓重複請求保持安全，例如連點不會建立兩個帳號，並在邊界檢查每個輸入。</li>
+<li>接著依 spec 建立 endpoint。除了確認使用者是否登入，也要確認是否有權限操作目標資源，並限制公開 endpoint 的呼叫次數。</li>
+<li>若使用外部服務，金鑰從環境變數讀取，不寫進程式碼，並在邊界加入 log。</li>
+<li>若新建置取代了舊程式，就刪除舊程式，避免新舊兩套邏輯並存。</li>
+<li>最後對整體做安全掃描。</li>
+</ul>
+
+<p>如果建置中發現 spec 本身有問題，例如資料形狀根本無法容納需求，流程會停下來，把你送回 <code>/architect</code> 修正決策，而不是默默做出另一種實作。</p>
+
+<p><strong>UI</strong> 先確認設計來源：</p>
+
+<ul>
+<li>有設計工具，就直接接上並使用真實 frame。</li>
+<li>有參考圖片，就忠實照做，不自行添加裝飾。</li>
+<li>專案已有 <code>design.md</code> 與 CSS，就沿用既有系統。</li>
+<li>什麼都沒有，就先建立一套設計系統。</li>
+</ul>
+
+<p>若需要新建設計系統，會依序詢問參考方向與想要的氛圍，再定出主色、一階灰、字級、間距、圓角與動態。</p>
+
+<p>這裡有一道硬規則：寫任何 CSS 之前，先檢查文字與背景的可讀性是否符合無障礙標準，明暗模式都要驗證。不合格，就先修正，不能把問題留到出貨後。</p>
+
+<figure class="lesson-figure"><img src="./walkthrough-signin-todo-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>建置完成，但還不能直接宣告 done</h3>
+<p>功能落地後，<code>/develop</code> 會把 spec 從 <code>Proposed</code> 推進到 <code>In Progress</code>，勾選 scope 中確實完成的部分，並更新 scope。</p>
+
+<p>它不會在這裡把功能整體標成完成，因為還沒有驗證與測試。最後，它依 acceptance criteria 寫出具體的手工驗證步驟，並詢問你要把內容存成 spec 旁的 <code>verify.md</code>，還是只顯示給你看。</p>
+
+<h2>階段 6–10：從「寫好了」走到「可以交付」</h2>
+
+<h3>階段 6：<code>/check verify</code> 驗證真的運作</h3>
+<p><code>/check verify</code> 驅動真正跑起來的 app，逐一確認 spec 承諾的行為與畫面，而不是只看某個測試檔是否通過。</p>
+
+<p>對這個 app 來說，驗證的結果要能回答：使用者真的能註冊、登入，也看得到自己的待辦清單。</p>
+
+<h3>階段 7：<code>/test</code> 把行為鎖住</h3>
+<p>接著執行 <code>/test</code>，為剛才改動的程式碼建立真正的測試。它會先確認專案用哪個測試框架；第一次問過之後，它就會記住。</p>
+
+<p>測試涵蓋正常路徑、邊界情況、錯誤狀態與介面可及性。當驗證通過、測試也到位，功能才可以標成 done，spec 也從 <code>In Progress</code> 移到 <code>Accepted</code>。</p>
+
+<h3>階段 8：<code>/check review</code> 取得不同模型的審查</h3>
+<p><code>/check review</code> 會用不同於寫程式時的模型家族進行資深審查。原因很簡單：同一個模型很容易對自己的作品產生盲點。</p>
+
+<p>審查結果會寫進 <code>docs/reviews/</code>，依嚴重度排序，除了指出問題，也會記錄這次改動做得好的地方。這一站只讀程式碼，不修改程式碼。</p>
+
+<figure class="lesson-figure"><img src="./walkthrough-signin-todo-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>階段 9：<code>/document</code> 把 diff 寫成人看得懂的文字</h3>
+<p><code>/document</code> 讀取真實的 commit 與 diff，再依需求產出 PR 內文、changelog 條目或 release note，放到正確位置。</p>
+
+<p>它只負責溝通，不寫程式，也不寫 spec。</p>
+
+<h3>階段 10：<code>/sync</code> 讓檔案回到真實狀態</h3>
+<p>在 merge 前執行 <code>/sync</code>。它會對照目前的程式碼，更新存放專案知識的 durable 檔案：</p>
+
+<ul>
+<li>建置過程若形成新慣例，就更新 context 檔。</li>
+<li>讓 scope 與目前進度重新一致。</li>
+<li>標記這次改動造成過時的 spec。</li>
+</ul>
+
+<p><code>/sync</code> 只做小幅、精準的修改：補上它負責的行、修正它擁有的內容，不會整篇重寫你的文字。</p>
+
+<h2>這趟旅程真正交接的是檔案</h2>
+
+<p>走完十站後，功能已經完成驗證、測試、審查與文件化，專案知識也重新對齊。你可以清掉 session，下一個 session 只要重新讀取磁碟，就能知道 repo 目前走到哪裡。</p>
+
+<blockquote>
+這個 app 走的是 canonical pipeline 的一次具體演出：<code>/scope</code> 決定計畫與 depth；<code>/architect</code> 先決定 stack，再把登入決策寫成 spec；scaffold 後由 <code>/audit</code> 認識專案；<code>/develop</code> 通過 gate、分流並建置前後端；<code>/check verify</code> 用真的 app 證明行為；<code>/test</code> 鎖住行為；<code>/check review</code> 換模型審查；<code>/document</code> 寫給人看的內容；最後由 <code>/sync</code> 將檔案對回程式碼。每一站的產出，都是下一站的輸入。
+</blockquote>
+
+<p>這些交接能穩定運作，靠的是磁碟上的檔案：scope 交給 architect，spec 交給 develop，findings 留在 review，狀態最後由 sync 對齊。對話留下的印象不算數。</p>
+
+<figure class="lesson-figure"><img src="./walkthrough-signin-todo-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>下一節會把這四類檔案與固定的擁有權模型拆開來看，說清楚「狀態放在檔案裡」究竟代表什麼。現在先記住一個判斷方式：遇到任何狀況，先問自己「我目前在哪一站？」通常，這個答案就會指出下一個該跑的指令。</p>
+
+<div class="lesson-nav">
+  <div><a href="./pick-a-depth.html">← 上一步：替專案選一個 depth</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="在階段 1，/scope 要你做的兩個主要決定是什麼？" data-correct="1" data-explain="選一個 delivery style，以及一個 workflow depth，兩者都記成專案預設。">
+  <button class="opt">選資料庫與選登入套件版本</button>
+  <button class="opt">選 delivery style 與 workflow depth</button>
+  <button class="opt">選測試框架與選 CI 服務</button>
+  <button class="opt">選檔名慣例與選分支策略</button>
+</div>
+<div class="quiz" data-question="全新專案的 /architect（stack 模式）寫出的 spec 狀態是什麼？" data-correct="2" data-explain="新決策誕生時是 Proposed，代表決定了但還沒蓋。">
+  <button class="opt">Accepted，因為決策已經定案</button>
+  <button class="opt">Assumed，因為還沒被審議</button>
+  <button class="opt">Proposed，決定了但還沒蓋</button>
+  <button class="opt">Superseded，因為 stack 會換</button>
+</div>
+<div class="quiz" data-question="為什麼 stack 與 scaffold 要在 /audit 之前完成？" data-correct="0" data-explain="audit 要讀真實的專案，空資料夾沒有東西可讀，只會瞎猜。">
+  <button class="opt">讓 audit 讀到真專案而非空資料夾</button>
+  <button class="opt">讓 scaffold 能自動產生 AGENTS.md</button>
+  <button class="opt">讓 architect 可以跳過 stack 決策</button>
+  <button class="opt">讓 develop 不需要讀 spec 就開工</button>
+</div>
+<div class="quiz" data-question="develop 的閘門發現有個承重決策還沒做，而你選擇「先蓋、記下來」，會發生什麼？" data-correct="3" data-explain="它寫一份 Assumed 小 spec 記下假設並標記欠 ratification，然後照著蓋。">
+  <button class="opt">它直接猜一個做法，之後不再提起</button>
+  <button class="opt">它拒絕建置，直到決策被做出來</button>
+  <button class="opt">它把功能退回 scope 重新規劃</button>
+  <button class="opt">它寫一份 Assumed spec 再照著蓋</button>
+</div>
+<div class="quiz" data-question="為什麼 /check review 要刻意跑在跟寫程式不同的模型上？" data-correct="1" data-explain="同一個模型審自己的作品容易自我認同，換模型才能拿到不同視角。">
+  <button class="opt">因為不同模型跑得比較快也比較省</button>
+  <button class="opt">因為同模型審自己容易自我認同</button>
+  <button class="opt">因為不同模型才能讀取程式碼檔案</button>
+  <button class="opt">因為只有不同模型能修好錯誤</button>
+</div>
+<div class="quiz" data-question="整趟旅程裡，讓每個階段能順利接手的關鍵是什麼？" data-correct="2" data-explain="交接的是磁碟上的檔案（scope、spec、review 等），不是對話印象。">
+  <button class="opt">把每一次對話都完整保存下來</button>
+  <button class="opt">由同一個模型一路跑完所有階段</button>
+  <button class="opt">交接的是磁碟上的檔案不是對話</button>
+  <button class="opt">每一階段都先清空所有專案檔案</button>
+</div>
+
+<div class="footer">
+  <p>JSM 工程工作流 · 流程全貌 · Step 4/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

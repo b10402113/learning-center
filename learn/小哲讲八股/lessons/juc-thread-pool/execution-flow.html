@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>任務提交後發生什麼？四步執行流程</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>任務提交後怎麼走？照著四道關卡追蹤執行緒池</h1>
+<p class="meta">Step 4/6 · 執行緒池打滿、任務堆積</p>
+
+<h2>先搞清楚：這套流程要解決什麼問題</h2>
+
+<p>當服務突然湧進大量請求時，執行緒池不會把每個請求都立刻變成一條新執行緒。它會像車站閘門一樣，依序判斷：先由核心執行緒接手，忙不過來就讓任務排隊；佇列也滿了，才臨時增加執行緒；全部資源都用完，最後才拒絕新任務。</p>
+
+<p>如果你能照著這條路徑追蹤，看到一組執行緒池參數時，就能在紙上畫出任務會去哪裡，也能回答一個很常見的面試問題：為什麼核心執行緒滿了，不是立刻擴容，而是先排隊？</p>
+
+<h2>動手前，先確認這些前置條件</h2>
+
+<p>這一節是流程演練，不需要先背一大串原理。你只要知道上一節介紹的七個參數各自扮演什麼角色，尤其要分清楚 <code>corePoolSize</code>、<code>workQueue</code> 與 <code>maximumPoolSize</code>：</p>
+
+<ul>
+<li><code>corePoolSize</code>：核心執行緒數量。</li>
+<li><code>workQueue</code>：核心執行緒忙碌時，暫時存放任務的佇列。</li>
+<li><code>maximumPoolSize</code>：執行緒池允許存在的最大執行緒數量。</li>
+</ul>
+
+<p>接下來會用一組具體參數跑完整個流程。假設所有任務都執行很久，會一直佔住執行緒，讓我們清楚看到執行緒池在壓力下的極限行為。</p>
+
+<h2>主流程：任務依序通過四道關卡</h2>
+
+<p>呼叫 <code>execute(task)</code> 後，執行緒池會按照固定順序判斷，而不是隨機選一種處理方式。順序是：核心執行緒、任務佇列、最大執行緒數，最後才是拒絕策略。</p>
+
+<p>把 JDK 的判斷邏輯簡化成虛擬碼，大致如下：</p>
+
+<pre><code>public void execute(Runnable task) {
+    if (workerCountOf(c) &lt; corePoolSize) {
+        addWorker(task, true);        // 第一關：還沒滿，直接建核心執行緒
+    } else if (workQueue.offer(task)) {
+        // 第二關：核心滿了，先把任務塞進佇列排隊
+    } else if (workerCountOf(c) &lt; maximumPoolSize) {
+        addWorker(task, false);       // 第三關：佇列滿了，才建非核心執行緒
+    } else {
+        reject(task);                 // 第四關：通通滿了，執行拒絕策略
+    }
+}</code></pre>
+
+<p>這段程式碼可以先記成一句話：<strong>核心未滿就建立，核心已滿就排隊，佇列已滿才擴容，全部已滿才拒絕。</strong></p>
+
+<figure class="lesson-figure"><img src="./execution-flow-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>現在使用這組設定來實際追蹤：</p>
+
+<ul>
+<li><code>corePoolSize = 2</code></li>
+<li><code>maximumPoolSize = 5</code></li>
+<li><code>workQueue</code> 是容量為 3 的 <code>ArrayBlockingQueue</code></li>
+</ul>
+
+<h3>第一關：核心執行緒還沒滿，直接建立</h3>
+
+<p>第一個任務進來時，目前執行緒數是 0，小於 <code>corePoolSize</code> 的 2，所以直接建立核心執行緒 T1 來執行。</p>
+
+<p>第二個任務進來時，目前執行緒數是 1，仍然小於 2，因此再建立核心執行緒 T2。到這裡，兩條核心執行緒都在忙碌。</p>
+
+<p>這裡有一個容易答錯的細節：第一關只看「目前執行緒數是否小於核心數」，不會先檢查是否已經有空閒的核心執行緒。只要核心執行緒還沒建滿，即使現有執行緒剛好閒著，新任務仍可能建立新的核心執行緒。這就是 JDK「先把核心執行緒建滿」的實際行為。</p>
+
+<h3>第二關：核心已滿，先排隊而不是先擴容</h3>
+
+<p>第三個任務進來時，目前執行緒數是 2，已經等於 <code>corePoolSize</code>，所以第一關不成立。這時執行緒池不會立刻建立第三條執行緒，而是呼叫 <code>workQueue.offer(task)</code>，把任務放進佇列等待。</p>
+
+<p>第四個和第五個任務也會依序進入佇列。容量為 3 的佇列到這裡剛好填滿。</p>
+
+<figure class="lesson-figure"><img src="./execution-flow-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>為什麼不在核心執行緒忙碌時直接擴容？因為佇列本來就是用來吸收短暫的任務堆積。很多時候，核心執行緒只是暫時忙碌，等它們完成手上的工作，佇列裡的任務就能被接走。如果每次核心執行緒一忙就立刻新增執行緒，執行緒數會頻繁增加、銷毀，反而造成額外成本。</p>
+
+<p>因此，先排隊等一下，是用成本較低的緩衝空間，換取執行緒數的穩定。只有佇列也撐不住時，才進入下一關。</p>
+
+<h3>第三關：佇列滿了，才建立非核心執行緒</h3>
+
+<p>第六個任務進來時，核心執行緒已滿，佇列也沒有空間，前兩關都過不了。這時才檢查目前執行緒數是否小於 <code>maximumPoolSize</code>。</p>
+
+<p>目前執行緒數是 2，小於最大值 5，所以建立非核心執行緒 T3，處理剛剛提交的第六個任務。第七個和第八個任務也會照同樣的方式，分別建立 T4 和 T5。此時執行緒總數達到上限 5。</p>
+
+<p>請特別記住：新建立的非核心執行緒，處理的是<strong>剛剛提交的新任務</strong>，不是回頭把佇列裡較早的任務撈出來執行。</p>
+
+<p>換句話說，擴容是為了先接住眼前的新請求；佇列裡的舊任務，仍然要等某條執行緒完成工作後，才會被逐一消化。</p>
+
+<h3>第四關：核心、佇列、最大執行緒都滿了，只能拒絕</h3>
+
+<p>第九個任務進來時，核心執行緒已滿、佇列已滿，執行緒總數也已經達到 <code>maximumPoolSize</code>。三道門都關上了，因此會進入第四關，呼叫 <code>RejectedExecutionHandler.rejectedExecution()</code>。</p>
+
+<p>預設策略是拋出 <code>RejectedExecutionException</code>。也可以改成丟棄任務，或讓提交任務的執行緒自己執行這個任務。第十個任務會遇到相同情況。</p>
+
+<figure class="lesson-figure"><img src="./execution-flow-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>至於四種拒絕策略該如何選擇，會在下一節比較。</p>
+
+<h2>用表格再走一次</h2>
+
+<p>以下是「核心 2、佇列 3、最大 5」時，前十個任務的流向：</p>
+
+<table>
+<thead>
+<tr><th>任務</th><th>第一關：核心&lt;2？</th><th>第二關：入隊？</th><th>第三關：執行緒&lt;5？</th><th>結果</th></tr>
+</thead>
+<tbody>
+<tr><td>第 1 個</td><td>是（0&lt;2）</td><td>—</td><td>—</td><td>建核心執行緒 T1</td></tr>
+<tr><td>第 2 個</td><td>是（1&lt;2）</td><td>—</td><td>—</td><td>建核心執行緒 T2</td></tr>
+<tr><td>第 3 個</td><td>否</td><td>成功</td><td>—</td><td>進佇列排隊</td></tr>
+<tr><td>第 4、5 個</td><td>否</td><td>成功</td><td>—</td><td>進佇列排隊</td></tr>
+<tr><td>第 6、7、8 個</td><td>否</td><td>失敗（佇列滿）</td><td>是</td><td>各建非核心 T3、T4、T5</td></tr>
+<tr><td>第 9、10 個</td><td>否</td><td>失敗</td><td>否（已達 5）</td><td>觸發拒絕策略</td></tr>
+</tbody>
+</table>
+
+<p>所以，若真的提交十個任務，結果會是：</p>
+
+<ul>
+<li>第 1、2 個任務：由核心執行緒直接執行。</li>
+<li>第 3～5 個任務：進入佇列等待。</li>
+<li>第 6～8 個任務：由非核心執行緒接手。</li>
+<li>第 9 個之後：觸發拒絕策略。</li>
+</ul>
+
+<p>你可以把這個順序想成一個漏斗：先用固定容量的核心執行緒，再用佇列吸收波峰，接著用非核心執行緒救急，最後才把超出承載能力的任務擋在外面。</p>
+
+<h2>危險對照：無界佇列會讓最大執行緒數失效</h2>
+
+<p>如果把 <code>workQueue</code> 換成沒有指定容量的 <code>LinkedBlockingQueue</code>，情況就完全不同。</p>
+
+<p>無界佇列幾乎永遠不會因為塞滿而讓 <code>offer(task)</code> 失敗。因此，第二關會一直成功，第三關「建立非核心執行緒」就永遠走不到。即使 <code>maximumPoolSize</code> 設定為 5，實際上也不會發揮限制作用。</p>
+
+<p>結果是任務持續堆在佇列裡，記憶體可能被一步步吃光，最後以 OOM 結束。這不是單純的參數差異，而是整個執行緒池行為被改寫了：你以為設定了最大執行緒數，實際上卻只剩一個不會被用到的數字。</p>
+
+<figure class="lesson-figure"><img src="./execution-flow-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>因此，佇列容量不是可以隨手填寫的小設定。它會直接決定執行緒池何時擴容、何時拒絕任務，也是後面討論 Executors 快捷執行緒池陷阱的根源。</p>
+
+<h2>做完後，你應該能驗證什麼</h2>
+
+<p>拿到任意一組 <code>corePoolSize</code>、<code>workQueue</code> 和 <code>maximumPoolSize</code>，你應該能依序回答以下問題：</p>
+
+<ol>
+<li>核心執行緒還沒滿嗎？若是，就直接建立核心執行緒。</li>
+<li>核心執行緒已滿嗎？若是，就嘗試把任務放進 <code>workQueue</code>。</li>
+<li>佇列也滿了嗎？若是，再檢查是否還能建立非核心執行緒。</li>
+<li>最大執行緒數也到了嗎？若是，就執行拒絕策略。</li>
+</ol>
+
+<p>最終要記住的不是某一張表，而是這條固定順序：<strong>核心未滿就建立，核心已滿就排隊，佇列已滿才擴容，全部已滿才拒絕。</strong></p>
+
+<blockquote>
+任務提交後固定走四道關卡：一、核心執行緒未滿就直接建立核心執行緒，即使有閒置核心也照樣可能建立；二、核心滿了就先把任務放進 <code>workQueue</code> 排隊；三、佇列也滿了，才建立非核心執行緒來處理剛提交的新任務；四、核心、佇列、最大執行緒都滿了，才執行拒絕策略。核心與非核心分開設計，是為了讓執行緒數能隨流量彈性伸縮，同時避免頻繁建立與銷毀。若使用無界佇列，第三關永遠到不了，<code>maximumPoolSize</code> 也就失去意義。
+</blockquote>
+
+<p>當任務走到第四關，就會交給拒絕策略處理。池子真的滿了之後，新任務應該拋錯、丟棄，還是讓提交者自己執行？下一節會比較四種拒絕策略的取捨，也會說明為什麼阿里手冊直接禁止使用 Executors 提供的快捷執行緒池。</p>
+
+<div class="lesson-nav">
+  <div><a href="./seven-parameters.html">← 上一步：執行緒池的七個參數：用銀行網點一次記住</a></div>
+  <div><a href="./rejection-and-executors.html">下一步：拒絕策略怎麼選？Executors 為什麼被禁用 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="任務提交後，核心執行緒已滿時，下一步先做什麼？" data-correct="1" data-explain="第二關會先把任務放進 workQueue 排隊，而不是立刻擴容。">
+  <button class="opt">立刻建立一條非核心執行緒接住它</button>
+  <button class="opt">先把任務放進工作佇列裡面排隊</button>
+  <button class="opt">直接執行預設的任務拒絕策略</button>
+  <button class="opt">把現有的核心執行緒先中斷重來</button>
+</div>
+<div class="quiz" data-question="為什麼核心滿了要先排隊而不是直接擴容？" data-correct="2" data-explain="佇列吸收日常短暫堆積，能避免執行緒數頻繁震盪、擴容成本高。">
+  <button class="opt">因為建立非核心執行緒在 Java 中不合法</button>
+  <button class="opt">因為佇列裡任務的優先順序一定比較高</button>
+  <button class="opt">用便宜緩衝換資源穩定、減少震盪</button>
+  <button class="opt">因為核心執行緒其實完全不會變忙碌</button>
+</div>
+<div class="quiz" data-question="當佇列滿了而建立非核心執行緒時，它處理的是哪個任務？" data-correct="0" data-explain="非核心執行緒處理的是剛提交的新任務，不是佇列裡的舊任務。">
+  <button class="opt">剛剛提交進來的這一個新任務</button>
+  <button class="opt">佇列裡排隊最久的那個老任務</button>
+  <button class="opt">佇列裡優先級最高的那個任務</button>
+  <button class="opt">隨機從佇列裡面挑一個舊任務</button>
+</div>
+<div class="quiz" data-question="設定 core=2、max=5、queue=3，第 3 個任務會怎麼被處理？" data-correct="2" data-explain="前兩個建核心執行緒，第三個核心已滿，進佇列排隊。">
+  <button class="opt">建立第三條核心執行緒來執行它</button>
+  <button class="opt">直接建立非核心執行緒來執行它</button>
+  <button class="opt">放進容量為三的工作佇列排隊</button>
+  <button class="opt">立刻觸發拒絕策略把它拋出去</button>
+</div>
+<div class="quiz" data-question="下列哪個參數可以讓「建立非核心執行緒」這一步永遠走不到？" data-correct="3" data-explain="無界佇列永遠塞不滿，所以永遠不會進入第三關。">
+  <button class="opt">把 keepAliveTime 設定成一個很大的值</button>
+  <button class="opt">把 corePoolSize 設到跟最大執行緒一樣</button>
+  <button class="opt">把 threadFactory 換成預設的工廠</button>
+  <button class="opt">把 workQueue 換成無界的阻塞佇列</button>
+</div>
+<div class="quiz" data-question="為什麼要把核心與非核心執行緒分開設計？" data-correct="1" data-explain="分開設計能隨流量彈性伸縮，兼顧常態效能與突發資源節省。">
+  <button class="opt">讓每一條執行緒都能有各自獨立的鎖</button>
+  <button class="opt">隨流量彈性伸縮並避免頻繁重建</button>
+  <button class="opt">讓執行緒的建立速度可以快上好幾倍</button>
+  <button class="opt">讓任務的執行結果可以保證是唯一</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 執行緒池打滿、任務堆積 · Step 4/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

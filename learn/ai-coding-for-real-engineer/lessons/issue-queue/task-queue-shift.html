@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>為什麼讓 agent 自己挑任務</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>為什麼要讓 agent 自己挑任務？</h1>
+<p class="meta">Step 1/4 · issue 佇列驅動</p>
+
+<p>想像你有一個會自己工作好幾輪的 agent。它能讀 PRD、照著 plan 寫 code，完成後再跑測試。聽起來已經很接近「放著讓它跑」了，但每次啟動前，你仍然得親自告訴它：「今天做這一份計畫。」</p>
+
+<p>手上的工作一旦從一份計畫變成三個 PRD、五個小 bug，還有一堆「有空再整理」的測試債，這個做法就開始卡住。agent 能加快執行，卻不會自己回頭看下一件該做的事。</p>
+
+<p>這一節要看的，就是如何把輸入從「一份指定的計畫」換成「一整條任務佇列」，讓 agent 不只會做事，也能挑選下一件事。這一步，是從自動執行走向半自主工作流程。</p>
+
+<h2>學習目標</h2>
+
+<p>完成本節後，你應該能理解：為什麼要把指定 PRD 與 plan 的模式，改成讓 agent 自己從佇列挑任務；知道五級任務優先序；也能判斷這種做法適合多大的任務規模。</p>
+
+<h2>從「照計畫做」到「自己挑任務」</h2>
+
+<p>上一節的 AFK 迴圈會讀一份 PRD 和一份 plan，按照順序完成還沒做的階段，全部跑完就停止。這個模式很適合執行一件已經規劃好的工作，但有個明顯的限制：<strong>你仍然要在每次開始前指定它要做哪一份計畫。</strong></p>
+
+<p>因此，舊模式裡的 agent 比較像<strong>計畫執行者</strong>。你，或另一個規劃階段，決定要做什麼、按照什麼順序做；agent 負責思考「怎麼做」。它有執行上的自由，卻沒有選題的自由。</p>
+
+<p>新模式則把輸入換成一條任務佇列。agent 每次從佇列裡挑一件最該做的事，完成後再回頭挑下一件。它不只決定「怎麼做」，也開始參與決定「做什麼」。</p>
+
+<figure class="lesson-figure"><img src="./task-queue-shift-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這裡說的佇列，實務上就是 issue tracker。這門課使用 GitHub issues，但工具本身不是重點。任務必須放在一份可以查詢、挑選，也能在完成後收尾的清單裡。</p>
+
+<h2>讓 agent 挑對任務：先給它一把尺</h2>
+
+<p>把整疊任務交給 agent，最需要小心的是它可能挑錯。不能只對它說「找一件重要的來做」，再期待它和你有同樣的判斷。你需要在<strong>任務選擇 prompt（task-selection prompt）</strong>裡明確寫出優先序，讓它每次選任務時都有一把固定的尺。</p>
+
+<p>這門課採用五級優先序，從最該先處理的工作開始：</p>
+
+<table>
+<thead>
+<tr><th>順位</th><th>類型</th><th>為什麼排在這裡</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>重大 bug 修正（critical bug fixes）</td><td>系統已經壞了，其他事做得再多，都像在漏水的船上刷油漆。</td></tr>
+<tr><td>2</td><td>開發基礎設施（測試、型別、dev scripts）</td><td>可靠的回饋迴圈是後續功能的地基，沒有它，做出的結果就難以確認。</td></tr>
+<tr><td>3</td><td>新功能的 tracer bullets</td><td>先做出能看見的功能切片，讓進度更早得到回饋。</td></tr>
+<tr><td>4</td><td>打磨與快速見效的小事（polish / quick wins）</td><td>這些工作不急，但完成後能改善使用體驗。</td></tr>
+<tr><td>5</td><td>重構（refactors）</td><td>通常很有價值，卻最不急，可以等前面的事情穩定後再處理。</td></tr>
+</tbody>
+</table>
+
+<p>這份排序，其實就是技術主管每天在腦中做的判斷。假設桌上有三張票：一張是「首頁在手機上整個跑版」，一張是「專案沒有測試」，另一張是「把某個函式重寫得更乾淨」。你不會先做重構，因為它明天再做通常也不會讓系統更糟；你會先處理會直接影響使用者或開發可靠性的問題。</p>
+
+<figure class="lesson-figure"><img src="./task-queue-shift-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>其中第二級特別容易被低估。測試、型別檢查和 dev scripts 看起來不像新功能，卻是 agent 能不能可靠工作的基礎。<strong>沒有可靠的測試與型別檢查，agent 產出的每一段 code 都只能靠你用眼睛檢查。</strong>那樣一來，你還是得被綁回電腦前，所以基礎設施應該排在新功能之前。</p>
+
+<h2>任務不能無限增加：大約 20 到 30 件是合適範圍</h2>
+
+<p>讓 agent 自己從任務中排序，在大約 <strong>20 到 30 件任務</strong>的規模內運作得不錯。清單再繼續膨脹，任務本身就會變成新的負擔：agent 要從太多背景不同、狀態不同的 issue 裡找出下一件事，判斷品質也會跟著下降。</p>
+
+<p>這時可以用篩選條件，把「現在真的準備好要動」的任務挑出來。例如使用 <strong>GitHub labels（標籤）</strong>，只讓 agent 查看貼有 <code>ready-for-agent</code> 的 issue。另一種方式是使用<strong>指派（assignee）</strong>：被指派給自己的 issue 代表已經進入待辦，沒有被指派的任務則先略過。</p>
+
+<p>兩種方式的精神相同：<strong>不要讓佇列無限膨脹，只把目前要推進的那一段交給 agent。</strong></p>
+
+<p>這套做法也用在 Sandcastle 的開發上。它的 repo 累積了四百多張已關閉的 issue，並透過 <code>ready-for-agent</code> 標籤，標記哪些任務已經可以交給 agent 處理。</p>
+
+<h2>任務佇列如何形成良性循環？</h2>
+
+<p>agent 能自己從佇列挑任務之後，工作流程就不再是「你指定一份計畫，agent 做完後停止」。它會變成一個持續接續的循環：</p>
+
+<blockquote>
+agent 產出 code → 人來審查 → 把發現的問題或新想法開成 issue → agent 再從 issue 佇列挑下一個任務、產出更多 code。
+</blockquote>
+
+<p>在這個循環裡，你主要保留最需要人判斷的部分：review agent 的成果，然後決定是否要開新的 issue。任務的排序與執行，則交給 agent 處理。如此一來，你不必每次都親自挑下一個工作，而是可以同時推進多條工作線。</p>
+
+<figure class="lesson-figure"><img src="./task-queue-shift-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>不過，任務選擇 prompt 不是寫好一次就永遠不變。專案剛開始時，通常更需要先補齊基礎設施、讓主要流程站起來；進入穩定階段後，優先順序可能轉向打磨與重構。同一套規則放在不同時期，挑出的下一步也可能不同，所以要隨著專案狀態重新檢視、調整。</p>
+
+<h2>把這個觀念放回整體流程</h2>
+
+<p>把 AFK 迴圈的輸入從「一份指定計畫」換成「一條任務佇列」後，agent 就從單純的計畫執行者，變成能自己挑選下一個任務的執行者。</p>
+
+<p>它並不是毫無限制地自由決定，而是依照任務選擇 prompt 中寫好的優先序工作：重大 bug、開發基礎設施、新功能的 tracer bullets、打磨與快速見效的小事，最後才是重構。這套模式在 20 到 30 件任務的範圍內最合適；任務更多時，則用 label 或指派把佇列縮小。</p>
+
+<blockquote>
+把 AFK 迴圈接上任務佇列，真正改變的不是「一次可以做更多事」，而是 agent 開始參與判斷下一步。人負責審查與補充 issue，agent 負責依照優先序持續挑選和執行，兩者就形成一個會自己轉動的工作循環。
+</blockquote>
+
+<p>知道要讓 agent 自己挑任務後，下一個實際問題就是：這些 issue 要放在哪裡？如果直接沿用課程 repo，或隨手 fork 一份，可能會遇到什麼限制？下一節會先處理這個前置工作，準備一個只有你能動、agent 能安全取用的私有 issue repo。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./private-issue-repo.html">下一步：準備一個只有你能動的 issue repo →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="把 AFK agent 從「指定計畫」換成「佇列」，核心差別是什麼？" data-correct="2" data-explain="agent 不只負責做任務，還要自己挑下一個該做的任務。">
+  <button class="opt">它執行的速度會變成兩倍快</button>
+  <button class="opt">它不再需要讀任何計畫文件</button>
+  <button class="opt">它會自己挑下一個該做的任務</button>
+  <button class="opt">它會自動幫你寫好新的計畫</button>
+</div>
+<div class="quiz" data-question="任務選擇優先序的第一順位是什麼？" data-correct="0" data-explain="系統壞掉時，其他事做得再多都是在漏水的船上刷油漆。">
+  <button class="opt">重大 bug 的修正</button>
+  <button class="opt">新功能的垂直切片</button>
+  <button class="opt">程式的重構與整理</button>
+  <button class="opt">介面上的打磨小事</button>
+</div>
+<div class="quiz" data-question="為什麼開發基礎設施（測試、型別）要排在很前面？" data-correct="1" data-explain="回饋迴圈是後續功能的地基，沒有它 agent 的產出只能用眼睛看。">
+  <button class="opt">因為它比修 bug 還要緊急</button>
+  <button class="opt">因為它是後續功能的回饋地基</button>
+  <button class="opt">因為它最容易在一天內做完</button>
+  <button class="opt">因為新功能不需要寫測試</button>
+</div>
+<div class="quiz" data-question="這套「讓 agent 自己挑」的做法，大約在多少任務規模內表現良好？" data-correct="3" data-explain="大約 20 到 30 件；再多就該用 label 或指派把範圍縮小。">
+  <button class="opt">大約 2 到 3 件</button>
+  <button class="opt">大約 5 到 8 件</button>
+  <button class="opt">大約 100 到 200 件</button>
+  <button class="opt">大約 20 到 30 件</button>
+</div>
+<div class="quiz" data-question="在 GitHub 上貼一個 ready-for-agent 標籤，用意是什麼？" data-correct="1" data-explain="用標籤篩出真正準備好、可以交辦給 agent 的任務。">
+  <button class="opt">讓 agent 只能修改測試檔案</button>
+  <button class="opt">篩出準備好可以交辦的任務</button>
+  <button class="opt">強制 agent 先修所有重大 bug</button>
+  <button class="opt">把 issue 自動指派給某個人</button>
+</div>
+<div class="quiz" data-question="這個做法跑順之後，循環的內容是什麼？" data-correct="2" data-explain="agent 產 code、人 review、把發現開成 issue，agent 再挑下一件。">
+  <button class="opt">agent 寫計畫、人來執行、再交給 agent</button>
+  <button class="opt">人寫 code、agent 審查、人再修改</button>
+  <button class="opt">agent 產 code、人 review、再開成 issue</button>
+  <button class="opt">agent 自己 review 並直接合併上線</button>
+</div>
+
+<div class="footer">
+  <p>ai-coding-for-real-engineer · issue 佇列驅動 · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

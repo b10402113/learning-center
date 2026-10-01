@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>隔離到底隔離了什麼</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>隔離到底隔離了什麼？</h1>
+<p class="meta">Step 2/4 · 安全的沙盒</p>
+
+<h2>學習目標</h2>
+<p>Docker 沙盒靠三個核心機制運作：用 bind mount 只把 repo 交給 agent、讓所有 bash 指令都在容器內執行，以及用環境變數注入憑證。這三件事湊在一起，把 agent 能接觸的範圍縮到最小。</p>
+
+<h2>前言：隔離不是「不讓它做事」</h2>
+
+<p>上一課的結論是：想放心把工作交給 agent，就得有真正的隔離。隔離做到位，agent 就算想做壞事也碰不到容器外的東西。</p>
+
+<p>但如果把 agent 關進一個什麼都不能碰的盒子裡，它也就失去用途了。它仍然需要讀取你的 repo、執行測試、修改檔案，甚至建立 commit。</p>
+
+<p>「隔離」真正做的事，是替 agent 畫出活動範圍，而不是把它的能力整個砍掉：邊界內可以工作，邊界外完全碰不到。底下逐一拆開邊界上的三個機制，看它們怎麼同時滿足兩個看似矛盾的要求：agent 看得到專案，卻碰不到你的電腦。</p>
+
+<h2>機制一：用 bind mount 把 repo 掛進容器</h2>
+
+<p>第一個要理解的詞是 bind mount，也就是「綁定掛載」。容器預設擁有一套和外界隔離的檔案系統，裡面不會自動出現你的專案。若直接啟動 agent，它甚至不知道 repo 在哪裡。</p>
+
+<p>bind mount 的作用，是把主機上的某個目錄接到容器裡的某個路徑。對容器內的程式來說，被掛進來的目錄就像原本就在容器裡一樣。</p>
+
+<p>Sandcastle 的沙盒會把你的專案 repo bind mount 進容器。這會同時帶來兩個效果：agent 看得到 repo，能讀檔、改檔和跑測試；但它看不到 repo 以外的內容，也碰不到那些路徑。文件裡「it can still see the repo, but it can only edit files that we choose」這句話，描述的就是這個邊界。</p>
+
+<p>換個生活化的比喻：工作室裡放著這次工作需要的材料，工匠可以在裡面取用、加工；但工作室的牆是真的牆，他看不到客廳裡放了什麼。你的家目錄、其他專案和憑證，都不會因為 agent 進入容器就自動出現在它眼前。</p>
+
+<figure class="lesson-figure"><img src="./what-isolation-means-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>機制二：所有 bash 指令都在容器內執行</h2>
+
+<p>只把檔案掛進容器還不夠，因為 agent 能做的事裡，影響最大的就是執行 bash 指令。如果檔案在容器裡，bash 卻跑在主機上，那麼一行 <code>cd ~</code> 或一段刪除指令，就可能繞過前面建立的隔離。</p>
+
+<p>Sandcastle 的做法是讓所有 bash 指令都在容器內執行，而且以掛載進來的目錄作為工作範圍。agent 寫下的每一行 <code>pnpm test</code>、<code>git commit</code> 或 <code>rm</code>，實際上都由容器內的環境執行。容器看不到主機上的其他路徑，指令能接觸到的範圍就限制在交給它的內容之內。</p>
+
+<figure class="lesson-figure"><img src="./what-isolation-means-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這裡還有一個容易忽略的前提：容器必須有明確的工作目錄。Sandcastle 的 Dockerfile 將工作目錄設為 <code>/home/agent</code>，讓 agent 一進入容器就有固定的落腳處，所有相對路徑也都會以這個目錄為基準。</p>
+
+<p>工作目錄本身不是安全機制，但它讓「指令在容器內、從固定位置開始執行」這件事變得清楚且一致。</p>
+
+<h2>機制三：用環境變數注入憑證</h2>
+
+<p>第三個機制處理的是認證問題。這裡的 agent 是 Claude Code，它需要一組憑證才能呼叫模型。</p>
+
+<p>憑證不能直接寫進映像裡，否則映像一旦被 commit 或分享，憑證也可能跟著外流；也不應該放進 repo，因為 repo 會透過 bind mount 進入容器，憑證就可能一起被帶進去。</p>
+
+<p>Sandcastle 的做法是把環境變數放在一個 <code>.env</code> 檔，啟動容器時再注入。對 agent 來說，環境變數就是完成認證要用的資訊；對主機來說，憑證是用「餵」的送進容器，不是複製到映像或專案裡四處散落。</p>
+
+<figure class="lesson-figure"><img src="./what-isolation-means-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>課程錄製當下使用的是 Anthropic API key，選擇它的原因會在下一步說明。這裡先記住關鍵概念：<strong>憑證是注入的，不是內建的</strong>。所以憑證的生命週期會跟著沙盒的使用方式走。</p>
+
+<h2>容器映像裡放了什麼？</h2>
+
+<p>把三個機制放在一起，就能看見整條隔離界線。容器內有 Node 22、Claude Code、一個 <code>/home/agent</code> 工作目錄，以及你掛進來的 repo；容器外則是其他一切。</p>
+
+<p>Sandcastle 的 Dockerfile 做的事情也很集中：安裝 Node 22、安裝 Claude Code、把它加入 PATH，並設定工作目錄。完成後，這個環境就交由容器管理。</p>
+
+<p>Dockerfile 不是固定不動的黑盒子，可以照專案需求調整，例如加裝其他工具或變更版本。隔離邊界的形狀也受 Dockerfile 內容影響：你決定容器裡放什麼，就決定 agent 在邊界內能用什麼。</p>
+
+<h2>Docker 還是 Podman？</h2>
+
+<p>要執行這個容器，首先需要容器執行環境。課程列出兩個選擇：Docker Desktop 和 Podman。</p>
+
+<p>Docker Desktop 免費，但在大型組織裡可能受到授權限制，所以不能說它「到哪裡都免費」。Podman 是自由的開源版本，功能相近，也沒有同樣的授權顧慮，課程才會說「Podman 才是到哪都免費的那個」。</p>
+
+<p>對個人 side project 來說，兩者都能提供同樣的隔離效果。差別主要在於授權條件，以及你偏好的工具生態。</p>
+
+<p>如果你在公司環境中工作，可能會碰到 Docker Desktop 的授權條款，那麼 Podman 會是合適的選擇。如果是個人專案，想使用更普及的文件與生態，Docker Desktop 會比較方便。</p>
+
+<p>回到這一課的主題，兩者提供的核心模型是一樣的：用 bind mount 掛入 repo、在容器內執行指令，以及注入環境變數。不同之處主要不在隔離方式，而在授權問題。</p>
+
+<h2>小結</h2>
+
+<blockquote>容器隔離並沒有砍掉 agent 的能力，只是替它畫出清楚的邊界。這道邊界由三個機制一起撐起來：repo 用 bind mount 掛進容器，agent 看得到專案、看不到其他地方；所有 bash 都在容器內執行，指令能接觸的範圍就限制在交給它的內容；憑證用環境變數注入，不會被寫死在映像裡，也不會散落到 repo。Docker 和 Podman 提供的是同一套隔離模型，主要差別在授權。</blockquote>
+
+<p>現在可以把這三個機制收在同一張心智地圖上：repo 是 agent 能動的材料，容器是活動邊界，環境變數是暫時餵進去的認證資訊。搞懂這條界線之後，下一步就是把它實際蓋出來：從 Dockerfile 和 <code>.env</code> 開始，再把容器映像建起來。</p>
+
+<div class="lesson-nav">
+  <div><a href="./why-not-yolo.html">← 上一步：別在主機上開 YOLO</a></div>
+  <div><a href="./build-the-sandbox.html">下一步：建起沙盒：Dockerfile、.env 與 build image →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="bind mount 把 repo 掛進容器，帶來什麼效果？" data-correct="1" data-explain="agent 看得到並能編輯掛進來的 repo，但看不到 repo 以外的東西。">
+  <button class="opt">agent 可以讀寫主機上的任何目錄</button>
+  <button class="opt">agent 看得到 repo、看不到其他地方</button>
+  <button class="opt">agent 從此不需要任何憑證就能工作</button>
+  <button class="opt">agent 的執行速度會明顯提升很多</button>
+</div>
+<div class="quiz" data-question="為什麼所有 bash 指令都要在容器內執行？" data-correct="3" data-explain="如果 bash 跑在主機上，agent 一行指令就能繞過整個隔離。">
+  <button class="opt">因為容器內執行速度比較快</button>
+  <button class="opt">因為主機不支援長指令的執行</button>
+  <button class="opt">因為容器內才能安裝 Node 環境</button>
+  <button class="opt">否則一行指令就能繞過隔離</button>
+</div>
+<div class="quiz" data-question="Sandcastle 用什麼方式把憑證交給容器內的 agent？" data-correct="0" data-explain="憑證寫在 .env，執行時以環境變數注入容器，不寫死在映像裡。">
+  <button class="opt">用環境變數注入容器</button>
+  <button class="opt">直接寫死在 Dockerfile 裡面</button>
+  <button class="opt">放在 repo 中一起被掛載進去</button>
+  <button class="opt">執行時用對話輸入交給 agent</button>
+</div>
+<div class="quiz" data-question="Sandcastle 的 Dockerfile 把工作目錄設在哪裡？" data-correct="2" data-explain="工作目錄設在 /home/agent，讓 agent 有明確的落腳處。">
+  <button class="opt"><code>/root</code></button>
+  <button class="opt"><code>/app</code></button>
+  <button class="opt"><code>/home/agent</code></button>
+  <button class="opt"><code>/workspace</code></button>
+</div>
+<div class="quiz" data-question="Podman 相對 Docker Desktop 的主要差別是什麼？" data-correct="1" data-explain="Podman 是開源版本，沒有大型組織的授權限制，到哪都免費。">
+  <button class="opt">Podman 不支援 bind mount 的功能</button>
+  <button class="opt">Podman 沒有大型組織授權限制</button>
+  <button class="opt">Podman 只能在 Linux 系統上執行</button>
+  <button class="opt">Podman 無法執行 Claude Code</button>
+</div>
+<div class="quiz" data-question="隔離邊界的形狀主要由什麼決定？" data-correct="3" data-explain="邊界是你寫的 Dockerfile 決定出來的，可以依專案調整。">
+  <button class="opt">由模型的版本與參數決定</button>
+  <button class="opt">由 repo 的程式語言決定</button>
+  <button class="opt">由 GitHub 的權限設定決定</button>
+  <button class="opt">由你寫的 Dockerfile 決定</button>
+</div>
+
+<div class="footer">
+  <p>ai-coding-for-real-engineer · 安全的沙盒 · Step 2/4</p>
+  <p>讀到卡住的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

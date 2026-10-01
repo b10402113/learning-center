@@ -242,6 +242,7 @@ Skip-task mode assumes the learner will review the content offline or has alread
 
 After all steps are taught and written:
 
+- Unless this run was dispatched by `/batch-nodes` (which runs the pass itself), dispatch one `humanize-agent` per step to run `/speak-human-tw` on its `learn/<subject>/lessons/<node-id>/<step-id>.html`, so the AI-tell cleanup is its own pass.
 - Report all steps taught with `## Lesson` character counts.
 - Suggest running `/tackle <step-id>` per step for mastery verification.
 - Move the node to `content-written`.

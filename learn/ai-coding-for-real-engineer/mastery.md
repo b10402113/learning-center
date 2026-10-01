@@ -1,281 +1,100 @@
 ---
 subject: ai-coding-for-real-engineer
-created: 2026-09-02
-updated: 2026-09-02
+created: 2026-10-01
+updated: 2026-10-01
 ---
 
 # Mastery — ai-coding-for-real-engineer
 
-## process-overview
+## Summary
+Calibration data only — mastery never prunes content. Nodes built with skip-probe were not measured, so every strand is `unknown` and all steps are taught deep.
 
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| seven-phase-pipeline | unknown | probe skipped via /nodes ai-coding-for-real-engineer/process-overview skip-probe on 2026-09-02 |
-| process-rationale | unknown | probe skipped via /nodes ai-coding-for-real-engineer/process-overview skip-probe on 2026-09-02 |
-| model-subscription | unknown | probe skipped via /nodes ai-coding-for-real-engineer/process-overview skip-probe on 2026-09-02 |
-| course-support | unknown | probe skipped via /nodes ai-coding-for-real-engineer/process-overview skip-probe on 2026-09-02 |
+## Nodes
 
-## agent-control
+### kanban-backlog
+- Status: unknown
+- Notes: probe skipped via /nodes ai-coding-for-real-engineer/kanban-backlog skip-probe on 2026-10-01; teach every step deep.
+- Strands:
+  - PRD and plan stored as GitHub issues, one backlog for features and bugs — unknown
+  - HITL vs AFK division by taste (planning and QA stay human) — unknown
+  - Kanban dependency graph vs multi-phase plan — unknown
+  - PRD-to-issues skill: vertical slices, blocked-by, HITL/AFK tags, final QA issue — unknown
+  - Tracer-bullet check and merging thin slices — unknown
+  - Running the AFK Ralph loop and feeding manual QA back as new issues — unknown
+- Sources:
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson70.en.srt#lesson70]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson71.en.srt#lesson71]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson72.en.srt#lesson72]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson73.en.srt#lesson73]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson74.en.srt#lesson74]]
 
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| ide-diff-review | unknown | probe skipped via /nodes ai-coding-for-real-engineer/agent-control skip-probe on 2026-09-02 |
-| rewind-resume | unknown | probe skipped via /nodes ai-coding-for-real-engineer/agent-control skip-probe on 2026-09-02 |
-| bash-output-control | unknown | probe skipped via /nodes ai-coding-for-real-engineer/agent-control skip-probe on 2026-09-02 |
-| permissions-model | unknown | probe skipped via /nodes ai-coding-for-real-engineer/agent-control skip-probe on 2026-09-02 |
+### afk-interactive
+- Status: unknown
+- Notes: probe skipped via /nodes ai-coding-for-real-engineer/afk-interactive skip-probe on 2026-10-01; teach every step deep.
+- Strands:
+  - Multi-phase plans need a human to choose "do phase N" (HITL) — unknown
+  - "do phase N" is a for loop that can be automated — unknown
+  - December 2025 inflection: models good enough for well-defined delegated tasks; Ralph / AFK agents — unknown
+  - Sandcastle is agent- and sandbox-agnostic; interactive.ts vs main.ts — unknown
+  - Start interactive with no sandbox to watch and optimize prompt.md before unattended use — unknown
+  - prompt.md prompt expansion (! plus code block), cat, PRD/plan location args — unknown
+  - Single-task discipline keeps the run inside the smart zone — unknown
+  - First interactive run: permission requests, commit, tracer-bullet output — unknown
+- Sources:
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson59.en.srt#lesson59]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson60.en.srt#lesson60]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson61.en.srt#lesson61]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson62.en.srt#lesson62]]
 
-## context-economy
+### issue-queue
+- Status: unknown
+- Notes: probe skipped via /nodes ai-coding-for-real-engineer/issue-queue skip-probe on 2026-10-01; teach every step deep.
+- Strands:
+  - Queue replaces a fixed plan/PRD: the agent selects the next task, not just executes one — unknown
+  - Task-selection priority order: critical bug fixes → dev infrastructure → tracer bullets → polish/quick wins → refactors — unknown
+  - Never churn commits onto a broken CI or app — unknown
+  - Scaling to ~20–30 tasks and winnowing with labels/assignees (e.g. ready-for-agent) — unknown
+  - Provisioning a private issue repo: local copy, delete git history, create a new repo owned by you — unknown
+  - gh CLI as the LLM-to-GitHub interface; prompt expansion fetches open issues as JSON (number, title, body, comments) — unknown
+  - Close/comment lifecycle after commit; comments as a running record pulled back into context — unknown
+  - Injecting a PAT into the sandbox and scoping it to least privilege (read/comment/close, not create) — unknown
+- Sources:
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson66.en.srt#lesson66]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson67.en.srt#lesson67]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson68.en.srt#lesson68]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson69.en.srt#lesson69]]
 
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| context-monitoring | unknown | probe skipped via /nodes ai-coding-for-real-engineer/context-economy skip-probe on 2026-09-02 |
-| sub-agents | unknown | probe skipped via /nodes ai-coding-for-real-engineer/context-economy skip-probe on 2026-09-02 |
-| compacting | unknown | probe skipped via /nodes ai-coding-for-real-engineer/context-economy skip-probe on 2026-09-02 |
-| handoff | unknown | probe skipped via /nodes ai-coding-for-real-engineer/context-economy skip-probe on 2026-09-02 |
+### research-cache
+- Status: unknown
+- Notes: probe skipped via /nodes ai-coding-for-real-engineer/research-cache skip-probe on 2026-10-01; teach every step deep.
+- Strands:
+  - Explore is the most expensive context phase; caching external docs into research.md shrinks it across repeated Ralph loops — unknown
+  - Upfront research saves tokens and keeps the agent in the smart zone by not spending context on rediscovery — unknown
+  - Research is human-in-the-loop because taste guides direction and which option is chosen — unknown
+  - Not all tasks need research; growing codebases and precedent-less decisions benefit most — unknown
+  - A good research doc holds requirements, recommended approach, implementation design, integration points, and alternatives considered (usable as an ADR) — unknown
+  - Research lives as a local file in plans/ (not a GitHub issue) so the implementing AI can discover and reference it — unknown
+  - Research files rot; audit them like steering files and delete them after QA when the decision is obsolete (git history preserves them) — unknown
+  - For production, verify and investigate each service in depth rather than trusting the AI — unknown
+- Sources:
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson75.en.srt#lesson75]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson76.en.srt#lesson76]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson77.en.srt#lesson77]]
 
-## exploration
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| statelessness-exploration | unknown | probe skipped via /nodes ai-coding-for-real-engineer/exploration skip-probe on 2026-09-02 |
-| baseline-prompt-coverage | unknown | probe skipped via /nodes ai-coding-for-real-engineer/exploration skip-probe on 2026-09-02 |
-| explore-subagent-trigger | unknown | probe skipped via /nodes ai-coding-for-real-engineer/exploration skip-probe on 2026-09-02 |
-| mental-model-building | unknown | probe skipped via /nodes ai-coding-for-real-engineer/exploration skip-probe on 2026-09-02 |
-
-## why-agent-fails
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| context-window-scaling | unknown | probe skipped via /nodes ai-coding-for-real-engineer/why-agent-fails skip-probe on 2026-09-02 |
-| smart-dumb-zone | unknown | probe skipped via /nodes ai-coding-for-real-engineer/why-agent-fails skip-probe on 2026-09-02 |
-| unreliable-memory | unknown | probe skipped via /nodes ai-coding-for-real-engineer/why-agent-fails skip-probe on 2026-09-02 |
-| statelessness | unknown | probe skipped via /nodes ai-coding-for-real-engineer/why-agent-fails skip-probe on 2026-09-02 |
-| non-determinism | unknown | probe skipped via /nodes ai-coding-for-real-engineer/why-agent-fails skip-probe on 2026-09-02 |
-
-## project-memory
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| claude-md-nature | unknown | probe skipped via /nodes ai-coding-for-real-engineer/project-memory skip-probe on 2026-09-02 |
-| rule-steering | unknown | probe skipped via /nodes ai-coding-for-real-engineer/project-memory skip-probe on 2026-09-02 |
-| durable-rule-recipe | unknown | probe skipped via /nodes ai-coding-for-real-engineer/project-memory skip-probe on 2026-09-02 |
-| auto-memory | unknown | probe skipped via /nodes ai-coding-for-real-engineer/project-memory skip-probe on 2026-09-02 |
-| global-preferences | unknown | probe skipped via /nodes ai-coding-for-real-engineer/project-memory skip-probe on 2026-09-02 |
-
-## progressive-disclosure
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| progressive-disclosure-principle | unknown | probe skipped via /nodes ai-coding-for-real-engineer/progressive-disclosure skip-probe on 2026-09-02 |
-| agent-skills-format | unknown | probe skipped via /nodes ai-coding-for-real-engineer/progressive-disclosure skip-probe on 2026-09-02 |
-| skill-refactor-context-pointer | unknown | probe skipped via /nodes ai-coding-for-real-engineer/progressive-disclosure skip-probe on 2026-09-02 |
-
-## interview-not-plan
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| plan-mode-failure | unknown | probe skipped via /nodes ai-coding-for-real-engineer/interview-not-plan skip-probe on 2026-09-02 |
-| shared-design-concept | unknown | probe skipped via /nodes ai-coding-for-real-engineer/interview-not-plan skip-probe on 2026-09-02 |
-| grillme-mechanics | unknown | probe skipped via /nodes ai-coding-for-real-engineer/interview-not-plan skip-probe on 2026-09-02 |
-| grill-to-implement | unknown | probe skipped via /nodes ai-coding-for-real-engineer/interview-not-plan skip-probe on 2026-09-02 |
-
-## tracer-bullets
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| tracer-bullet-concept | unknown | probe skipped via /nodes ai-coding-for-real-engineer/tracer-bullets skip-probe on 2026-09-02 |
-| fair-experiment-comparison | unknown | probe skipped via /nodes ai-coding-for-real-engineer/tracer-bullets skip-probe on 2026-09-02 |
-| skill-propose-ask-workflow | unknown | probe skipped via /nodes ai-coding-for-real-engineer/tracer-bullets skip-probe on 2026-09-02 |
-| durable-decisions-only | unknown | probe skipped via /nodes ai-coding-for-real-engineer/tracer-bullets skip-probe on 2026-09-02 |
-
-## code-not-cheap
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| easy-to-change-definition | unknown | probe skipped via /nodes ai-coding-for-real-engineer/code-not-cheap skip-probe on 2026-09-02 |
-| software-entropy | unknown | probe skipped via /nodes ai-coding-for-real-engineer/code-not-cheap skip-probe on 2026-09-02 |
-| cludge-meter-and-ai-commit-volume | unknown | probe skipped via /nodes ai-coding-for-real-engineer/code-not-cheap skip-probe on 2026-09-02 |
-| codebase-as-source-of-truth | unknown | probe skipped via /nodes ai-coding-for-real-engineer/code-not-cheap skip-probe on 2026-09-02 |
-| agent-statelessness-sensitivity | unknown | probe skipped via /nodes ai-coding-for-real-engineer/code-not-cheap skip-probe on 2026-09-02 |
-| feedback-loop-defense | unknown | probe skipped via /nodes ai-coding-for-real-engineer/code-not-cheap skip-probe on 2026-09-02 |
-
-## phased-execution
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| phase-handoff-prompt | unknown | probe skipped via /nodes ai-coding-for-real-engineer/phased-execution skip-probe on 2026-09-02 |
-| phase-loop-cadence | unknown | probe skipped via /nodes ai-coding-for-real-engineer/phased-execution skip-probe on 2026-09-02 |
-| context-reset | unknown | probe skipped via /nodes ai-coding-for-real-engineer/phased-execution skip-probe on 2026-09-02 |
-| commit-as-signal | unknown | probe skipped via /nodes ai-coding-for-real-engineer/phased-execution skip-probe on 2026-09-02 |
-
-## two-documents
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| context-window-budget | unknown | probe skipped via /nodes ai-coding-for-real-engineer/two-documents skip-probe on 2026-09-02 |
-| two-documents-framing | unknown | probe skipped via /nodes ai-coding-for-real-engineer/two-documents skip-probe on 2026-09-02 |
-| grill-to-prd-flow | unknown | probe skipped via /nodes ai-coding-for-real-engineer/two-documents skip-probe on 2026-09-02 |
-| prd-scope-decisions | unknown | probe skipped via /nodes ai-coding-for-real-engineer/two-documents skip-probe on 2026-09-02 |
-
-## feedback-loops
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| feedback-loop-over-steering | unknown | probe skipped via /nodes ai-coding-for-real-engineer/feedback-loops skip-probe on 2026-09-02 |
-| do-work-skill-structure | unknown | probe skipped via /nodes ai-coding-for-real-engineer/feedback-loops skip-probe on 2026-09-02 |
-| light-steering | unknown | probe skipped via /nodes ai-coding-for-real-engineer/feedback-loops skip-probe on 2026-09-02 |
-| permission-allowlist | unknown | probe skipped via /nodes ai-coding-for-real-engineer/feedback-loops skip-probe on 2026-09-02 |
-| pre-commit-hooks | unknown | probe skipped via /nodes ai-coding-for-real-engineer/feedback-loops skip-probe on 2026-09-02 |
-
-## naive-plan-failure
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| naive-plan-shape | unknown | probe skipped via /nodes ai-coding-for-real-engineer/naive-plan-failure skip-probe on 2026-09-02 |
-| horizontal-slicing | unknown | probe skipped via /nodes ai-coding-for-real-engineer/naive-plan-failure skip-probe on 2026-09-02 |
-| over-specification | unknown | probe skipped via /nodes ai-coding-for-real-engineer/naive-plan-failure skip-probe on 2026-09-02 |
-| lost-traceability | unknown | probe skipped via /nodes ai-coding-for-real-engineer/naive-plan-failure skip-probe on 2026-09-02 |
-| vertical-slices | unknown | probe skipped via /nodes ai-coding-for-real-engineer/naive-plan-failure skip-probe on 2026-09-02 |
-
-## writing-prd
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| grill-then-capture | unknown | probe skipped via /nodes ai-coding-for-real-engineer/writing-prd skip-probe on 2026-09-02 |
-| scope-decisions | unknown | probe skipped via /nodes ai-coding-for-real-engineer/writing-prd skip-probe on 2026-09-02 |
-| prd-anatomy | unknown | probe skipped via /nodes ai-coding-for-real-engineer/writing-prd skip-probe on 2026-09-02 |
-| practice-and-commit | unknown | probe skipped via /nodes ai-coding-for-real-engineer/writing-prd skip-probe on 2026-09-02 |
-
-## kanban-backlog
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| prd-as-issue | unknown | probe skipped via /nodes ai-coding-for-real-engineer/kanban-backlog skip-probe on 2026-09-02 |
-| taste-hitl-afk | unknown | probe skipped via /nodes ai-coding-for-real-engineer/kanban-backlog skip-probe on 2026-09-02 |
-| kanban-dependency-graph | unknown | probe skipped via /nodes ai-coding-for-real-engineer/kanban-backlog skip-probe on 2026-09-02 |
-| prd-to-issues-skill | unknown | probe skipped via /nodes ai-coding-for-real-engineer/kanban-backlog skip-probe on 2026-09-02 |
-| qa-checklist-issue | unknown | probe skipped via /nodes ai-coding-for-real-engineer/kanban-backlog skip-probe on 2026-09-02 |
-
-## afk-loop
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| afk-loop-script | unknown | probe skipped via /nodes ai-coding-for-real-engineer/afk-loop skip-probe on 2026-09-02 |
-| termination-mechanisms | unknown | probe skipped via /nodes ai-coding-for-real-engineer/afk-loop skip-probe on 2026-09-02 |
-| resume-from-commits | unknown | probe skipped via /nodes ai-coding-for-real-engineer/afk-loop skip-probe on 2026-09-02 |
-| completion-and-result | unknown | probe skipped via /nodes ai-coding-for-real-engineer/afk-loop skip-probe on 2026-09-02 |
-
-## research-cache
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| exploration-token-cost | unknown | probe skipped via /nodes ai-coding-for-real-engineer/research-cache skip-probe on 2026-09-02 |
-| research-caching | unknown | probe skipped via /nodes ai-coding-for-real-engineer/research-cache skip-probe on 2026-09-02 |
-| hitl-judgment | unknown | probe skipped via /nodes ai-coding-for-real-engineer/research-cache skip-probe on 2026-09-02 |
-| research-doc-structure | unknown | probe skipped via /nodes ai-coding-for-real-engineer/research-cache skip-probe on 2026-09-02 |
-| research-stewardship | unknown | probe skipped via /nodes ai-coding-for-real-engineer/research-cache skip-probe on 2026-09-02 |
-
-## issue-queue
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| task-selection-priority | unknown | probe skipped via /nodes ai-coding-for-real-engineer/issue-queue skip-probe on 2026-09-02 |
-| issue-loop-review | unknown | probe skipped via /nodes ai-coding-for-real-engineer/issue-queue skip-probe on 2026-09-02 |
-| repo-isolation | unknown | probe skipped via /nodes ai-coding-for-real-engineer/issue-queue skip-probe on 2026-09-02 |
-| gh-issue-bridge | unknown | probe skipped via /nodes ai-coding-for-real-engineer/issue-queue skip-probe on 2026-09-02 |
-| least-privilege-token | unknown | probe skipped via /nodes ai-coding-for-real-engineer/issue-queue skip-probe on 2026-09-02 |
-
-## tdd-agents
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| red-green-refactor-loop | unknown | probe skipped via /nodes ai-coding-for-real-engineer/tdd-agents skip-probe on 2026-09-02 |
-| tdd-verification-value | unknown | probe skipped via /nodes ai-coding-for-real-engineer/tdd-agents skip-probe on 2026-09-02 |
-| tracer-bullet-integration | unknown | probe skipped via /nodes ai-coding-for-real-engineer/tdd-agents skip-probe on 2026-09-02 |
-| skill-weaving | unknown | probe skipped via /nodes ai-coding-for-real-engineer/tdd-agents skip-probe on 2026-09-02 |
-| run-observation | unknown | probe skipped via /nodes ai-coding-for-real-engineer/tdd-agents skip-probe on 2026-09-02 |
-
-## strategy-tactics
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| hitl-afk-split | unknown | probe skipped via /nodes ai-coding-for-real-engineer/strategy-tactics skip-probe on 2026-09-02 |
-| tactical-vs-strategic | unknown | probe skipped via /nodes ai-coding-for-real-engineer/strategy-tactics skip-probe on 2026-09-02 |
-| sdlc-collapse | unknown | probe skipped via /nodes ai-coding-for-real-engineer/strategy-tactics skip-probe on 2026-09-02 |
-| steer-with-review | unknown | probe skipped via /nodes ai-coding-for-real-engineer/strategy-tactics skip-probe on 2026-09-02 |
-| handoff-artifacts | unknown | probe skipped via /nodes ai-coding-for-real-engineer/strategy-tactics skip-probe on 2026-09-02 |
-
-## deep-modules
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| deep-modules-concept | unknown | probe skipped via /nodes ai-coding-for-real-engineer/deep-modules skip-probe on 2026-09-02 |
-| architecture-skill-workflow | unknown | probe skipped via /nodes ai-coding-for-real-engineer/deep-modules skip-probe on 2026-09-02 |
-| refactor-rfc | unknown | probe skipped via /nodes ai-coding-for-real-engineer/deep-modules skip-probe on 2026-09-02 |
-
-## review-pipeline
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| review-implementation-separation | unknown | probe skipped via /nodes ai-coding-for-real-engineer/review-pipeline skip-probe on 2026-09-02 |
-| coding-standards-sourcing | unknown | probe skipped via /nodes ai-coding-for-real-engineer/review-pipeline skip-probe on 2026-09-02 |
-| ux-dx-ax-axes | unknown | probe skipped via /nodes ai-coding-for-real-engineer/review-pipeline skip-probe on 2026-09-02 |
-| label-triggered-review-pipeline | unknown | probe skipped via /nodes ai-coding-for-real-engineer/review-pipeline skip-probe on 2026-09-02 |
-
-## sandboxing
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| yolo-risks | unknown | probe skipped via /nodes ai-coding-for-real-engineer/sandboxing skip-probe on 2026-09-02 |
-| builtin-sandbox-escapable | unknown | probe skipped via /nodes ai-coding-for-real-engineer/sandboxing skip-probe on 2026-09-02 |
-| docker-isolation | unknown | probe skipped via /nodes ai-coding-for-real-engineer/sandboxing skip-probe on 2026-09-02 |
-| sandbox-setup | unknown | probe skipped via /nodes ai-coding-for-real-engineer/sandboxing skip-probe on 2026-09-02 |
-| smoke-test | unknown | probe skipped via /nodes ai-coding-for-real-engineer/sandboxing skip-probe on 2026-09-02 |
-
-## afk-interactive
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| afk-loop-automation | unknown | probe skipped via /nodes ai-coding-for-real-engineer/afk-interactive skip-probe on 2026-09-02 |
-| interactive-first | unknown | probe skipped via /nodes ai-coding-for-real-engineer/afk-interactive skip-probe on 2026-09-02 |
-| sandcastle-basics | unknown | probe skipped via /nodes ai-coding-for-real-engineer/afk-interactive skip-probe on 2026-09-02 |
-| prompt-expansion | unknown | probe skipped via /nodes ai-coding-for-real-engineer/afk-interactive skip-probe on 2026-09-02 |
-| single-task-per-run | unknown | probe skipped via /nodes ai-coding-for-real-engineer/afk-interactive skip-probe on 2026-09-02 |
-| permission-gap | unknown | probe skipped via /nodes ai-coding-for-real-engineer/afk-interactive skip-probe on 2026-09-02 |
-
-## prototyping
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| prototype-flushes-unknowns | unknown | probe skipped via /nodes ai-coding-for-real-engineer/prototyping skip-probe on 2026-09-02 |
-| prototype-as-research | unknown | probe skipped via /nodes ai-coding-for-real-engineer/prototyping skip-probe on 2026-09-02 |
-| prototype-prompt-pattern | unknown | probe skipped via /nodes ai-coding-for-real-engineer/prototyping skip-probe on 2026-09-02 |
-| prototype-feedback-loop | unknown | probe skipped via /nodes ai-coding-for-real-engineer/prototyping skip-probe on 2026-09-02 |
-| prototype-archetypes | unknown | probe skipped via /nodes ai-coding-for-real-engineer/prototyping skip-probe on 2026-09-02 |
-
-## greenfield-ax
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| greenfield-vs-brownfield | unknown | probe skipped via /nodes ai-coding-for-real-engineer/greenfield-ax skip-probe on 2026-09-02 |
-| ax-before-ux | unknown | probe skipped via /nodes ai-coding-for-real-engineer/greenfield-ax skip-probe on 2026-09-02 |
-| adr-and-glossary | unknown | probe skipped via /nodes ai-coding-for-real-engineer/greenfield-ax skip-probe on 2026-09-02 |
-| greenfield-start-sequence | unknown | probe skipped via /nodes ai-coding-for-real-engineer/greenfield-ax skip-probe on 2026-09-02 |
-
-## playground-setup
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| clone-install-seed-dev | unknown | probe skipped via /nodes ai-coding-for-real-engineer/playground-setup skip-probe on 2026-09-02 |
-| db-sync-workflow | unknown | probe skipped via /nodes ai-coding-for-real-engineer/playground-setup skip-probe on 2026-09-02 |
-| git-state-control | unknown | probe skipped via /nodes ai-coding-for-real-engineer/playground-setup skip-probe on 2026-09-02 |
-
-## prevent-bad-arch
-
-| Strand | Rating | Notes |
-| --- | --- | --- |
-| prevent-vs-cure | unknown | probe skipped via /nodes ai-coding-for-real-engineer/prevent-bad-arch skip-probe on 2026-09-02 |
-| module-sketch-before-template | unknown | probe skipped via /nodes ai-coding-for-real-engineer/prevent-bad-arch skip-probe on 2026-09-02 |
-| deep-module-hunting | unknown | probe skipped via /nodes ai-coding-for-real-engineer/prevent-bad-arch skip-probe on 2026-09-02 |
-| module-expectation-check | unknown | probe skipped via /nodes ai-coding-for-real-engineer/prevent-bad-arch skip-probe on 2026-09-02 |
-| multi-session-afk-seams | unknown | probe skipped via /nodes ai-coding-for-real-engineer/prevent-bad-arch skip-probe on 2026-09-02 |
+### prototyping
+- Status: unknown
+- Notes: probe skipped via /nodes ai-coding-for-real-engineer/prototyping skip-probe on 2026-10-01; teach every step deep.
+- Strands:
+  - Prototype as a decades-old HITL technique that makes a plan concrete before the AFK loop runs — unknown
+  - Imposing taste before implementation; research + prototype combine, prototype the options and feed the best into the PRD — unknown
+  - Not useful for bug fixing (behavior known) or extending existing features; great when redesigning an entire system — unknown
+  - Keep the prototype close and human-driven (do-work skill) rather than delegating it AFK — unknown
+  - Prototype skill two branches: logic (tiny interactive terminal app stepping a data model through time with key presses) and UI (radically different variants on one route, switched by URL search param) — unknown
+  - Scope the prototype to a throwaway dev-only route and produce a reusable local asset for the eventual implementer — unknown
+  - Apply TDD and code standards so the later implementation copies production-ready code; export reusable components — unknown
+  - Verify a service prototype end to end: Ably API key with right scopes in .env, presence updating in real time across two browser sessions — unknown
+- Sources:
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson78.en.srt#lesson78]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson79.en.srt#lesson79]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson80.en.srt#lesson80]]
+  - [[sources/ai-coding-for-real-engineer/20261001/lesson81.en.srt#lesson81]]

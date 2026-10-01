@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>skill 何時碰 git：integration 開關、分支與動手前檢查</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>在碰到 git 前，先完成 integration、分支和狀態檢查</h1>
+<p class="meta">Step 3/4 · 情境→skill 導航與 git/commit 節奏</p>
+
+<h2>這一步要完成什麼</h2>
+<p>在執行 <code>/develop</code> 前，先確認 skill 會不會主動操作 git，接著選好分支，再檢查 repo 是不是最新、工作區乾不乾淨，以及目前的功能有沒有可能和別人重疊。</p>
+
+<p>前置條件只有兩個：專案是一個 git repo，而且你知道最近的 AGENTS.md 裡 <code>## Git</code> 區塊寫了什麼。完成後，你會得到一個明確的動手位置：知道能不能讓 skill 管 git，也知道這次改動應該落在哪條分支上。</p>
+
+<h2>第一步：讀設定，決定 skill 要不要碰 git</h2>
+
+<p>你準備跑 <code>/develop</code>，卻不知道它會不會直接改目前的分支、自己產生 commit，或在過期的程式碼上繼續工作。先不要按 Enter，先讀最近的 AGENTS.md 裡的 <code>## Git</code> 區塊。</p>
+
+<p>這個區塊決定所有 git 行為。先確認三個設定：</p>
+
+<table>
+<thead>
+<tr><th>設定</th><th>它決定什麼</th></tr>
+</thead>
+<tbody>
+<tr><td><code>integration</code></td><td><code>on</code> 代表 skill 會主動管理分支和 commit；<code>off</code> 或整個區塊不存在，代表不做主動 git。</td></tr>
+<tr><td><code>branch prefix</code></td><td>建立分支時使用的前綴，預設是 <code>feat/</code>。</td></tr>
+<tr><td><code>commit</code></td><td>提交節奏：<code>per-milestone</code>（預設）、<code>end-of-build</code>、<code>manual</code>。下一節會詳細說明。</td></tr>
+</tbody>
+</table>
+
+<p>接著做分流：</p>
+
+<ul>
+<li>如果 <code>integration</code> 是 <code>off</code>，或找不到 <code>## Git</code> 區塊，skill 就<strong>不做主動 git</strong>。分支和 commit 由工程師自己管理。</li>
+<li>即使不做主動 git，唯讀檢查還是可能執行，因為它們只看狀態、不改內容。</li>
+<li>如果專案根本不是 git repo，連這些檢查也會默默跳過。git 是流程的硬依賴，但不是每個專案都必須使用版本控制。</li>
+</ul>
+
+<p>做完這一步，你應該已經做出第一個決定：這次由 skill 管 git，還是由你自己管理。</p>
+
+<figure class="lesson-figure"><img src="./git-integration-and-branch-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第二步：確認專案真的在 git repo 裡</h2>
+
+<p>只有 <code>integration</code> 是 <code>on</code>，才需要確認 repo。先執行：</p>
+
+<pre><code>git rev-parse</code></pre>
+
+<p>這個指令只是在問：「我現在是不是在一個 git repo 裡？」</p>
+
+<p>如果指令失敗，先初始化 repo，再把既有檔案整理成第一個 commit：</p>
+
+<pre><code>git init
+# 接着把目前既有的檔案 stage 進第一個 commit</code></pre>
+
+<p>通常不會走到這一步，因為 <code>/audit</code> 往往會在你開啟 <code>integration</code> 時處理好。不過，如果專案已經做到一半才發現沒有版控，這就是補上的保險步驟。</p>
+
+<h2>第三步：在改檔案前，完成唯讀檢查</h2>
+
+<p>這是動手前最重要的檢查：先看現況，再決定要不要繼續。這些操作只讀不寫，所以即使 <code>integration</code> 是 <code>off</code>，只要專案是 git repo，又不是離線或單人環境，也會照跑；完全用不到時就默默跳過。</p>
+
+<h3>3.1 抓遠端，選定比較基準</h3>
+
+<p>先抓一次遠端資訊，再決定比較基準分支。有 <code>main</code> 就用 <code>main</code>，否則用 <code>master</code>：</p>
+
+<pre><code>git fetch
+BASE=main   # main 不存在時改用 master</code></pre>
+
+<h3>3.2 確認目前分支是否落後</h3>
+
+<p>用下面的指令查看目前分支落後基準分支幾個 commit：</p>
+
+<pre><code>git rev-list --count HEAD..origin/$BASE</code></pre>
+
+<p>如果結果大於零，代表你落後了。可能有同事已經修改，甚至已經出貨你準備動的那一段。這時要先停下來提出警告，不要直接在舊狀態上繼續蓋。</p>
+
+<h3>3.3 查看工作區是否有未提交變更</h3>
+
+<p>接著確認你要碰的範圍是否已經有人留下未提交的修改：</p>
+
+<pre><code>git status --short</code></pre>
+
+<p>如果相關區域有未提交變更，先 commit 或 stash，避免這次 build 和既有工作混在一起。這個狀況不會硬性擋住你，但你要清楚知道自己是在什麼狀態上繼續。</p>
+
+<h3>3.4 確認是否可能和其他作者衝突</h3>
+
+<p>如果某個 feature 在 scope 裡是 <code>in-progress</code>，而它對應的程式碼區塊最近又有其他作者的 commit，就先確認是否有人正在處理同一塊。可以用下面的指令查看作者：</p>
+
+<pre><code>git log --format='%an' -- &lt;area&gt;</code></pre>
+
+<p>如果看到別人的名字，代表這個功能可能已經有人在做。先協調，再決定要不要接手或繼續。</p>
+
+<table>
+<thead>
+<tr><th>你看到的狀況</th><th>該給的提醒</th><th>會擋住你嗎</th></tr>
+</thead>
+<tbody>
+<tr><td>落後 <code>origin/$BASE</code> 大於零</td><td>先 pull，再重跑，因為同事可能已經動過</td><td>會，先停下來</td></tr>
+<tr><td>要動的區域有未提交改動</td><td>先 commit 或 stash，避免糾纏</td><td>不會，堅持的話可以繼續</td></tr>
+<tr><td>in-progress 功能被別人改過</td><td>先協調，確認要不要接手</td><td>不會，但要先確認</td></tr>
+</tbody>
+</table>
+
+<p>這裡的差別要記清楚：只有「落後基準分支」會先擋住流程；其他狀況是提醒，不是硬性阻擋。它會把風險明確攤在你面前，最後由你做決定，而不是讓工具悄悄放行。</p>
+
+<figure class="lesson-figure"><img src="./git-integration-and-branch-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第四步：選分支，永遠不要直接改預設分支</h2>
+
+<p>唯讀檢查完成後，根據目前所在位置選擇分支：</p>
+
+<ol>
+<li><strong>如果你在預設分支（<code>main</code> 或 <code>master</code>）上：</strong>建立新的功能分支，名稱使用 <code>&lt;prefix&gt;&lt;feature-slug&gt;</code>，例如 <code>feat/accounts-sign-in</code>。永遠不要直接在預設分支上修改。</li>
+<li><strong>如果你已經在功能分支上：</strong>直接沿用目前分支，不要為同一件事再開一條。</li>
+<li><strong>如果你要續做一個做到一半的功能：</strong>先確認原本的功能分支存在。若存在而你目前不在上面，先 checkout 到那條分支，再繼續工作。</li>
+<li><strong>如果這不是 feature，而是修正或調整：</strong>使用對應類型的前綴，例如 <code>fix/</code> 或 <code>refine/</code>。沒有特別指定時，才使用設定裡的預設前綴。</li>
+</ol>
+
+<p>分支就像把這次改動暫時放進獨立工作區的容器：它把你的工作和別人的工作隔開，也讓後續 commit 有乾淨的落點。等到要合併時，你可以單獨檢視這次改動，而不會把其他工作的狀態混進來。</p>
+
+<figure class="lesson-figure"><img src="./git-integration-and-branch-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>完成這一步，你應該已經做出第二個決定：這次工作要沿用哪條分支，或建立哪條新分支。</p>
+
+<h2>做完後，你應該看到什麼</h2>
+
+<blockquote>
+先讀最近的 AGENTS.md <code>## Git</code> 區塊：<code>integration</code> 是 <code>off</code> 或不存在，就不做主動 git；是 <code>on</code> 才需要管理分支和 commit。動手前抓遠端、確認落後數量、檢查未提交改動，再查看要動的區塊最近是否由別人修改。這些大多是提醒，不是硬性阻擋。最後不要在預設分支上直接修改，要先在功能分支上落腳。
+</blockquote>
+
+<p>做完這一步，你就有一個確認好的工作起點：repo 狀態看過了，協作風險也攤開了，分支也選好了。接下來才處理 commit：什麼時候提交、三種 commit 模式怎麼選、訊息應該怎麼寫，以及為什麼 <code>push</code> 不在這一站執行。</p>
+
+<div class="lesson-nav">
+  <div><a href="./situation-to-skill-map.html">← 上一步：卡住時的地圖：從處境判斷該跑哪個 skill</a></div>
+  <div><a href="./commit-rhythm.html">下一步：commit 節奏：天然提交點、訊息格式與 push 的歸屬 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="什麼設定決定 skill 這個專案裡碰不碰 git？" data-correct="2" data-explain="最近的 AGENTS.md 裡 `## Git` 區塊的 integration 設定決定；off 或不存在就不做主動 git。">
+  <button class="opt">專案根目錄有沒有 <code>.gitignore</code></button>
+  <button class="opt">模型當下自己判斷風險高低</button>
+  <button class="opt">AGENTS.md 裡 <code>## Git</code> 的設定</button>
+  <button class="opt">scope 裡每條 feature 的優先順序</button>
+</div>
+<div class="quiz" data-question="落後基準分支好幾個 commit 時，正確反應是什麼？" data-correct="1" data-explain="落後代表同事可能已改過或出貨，先停下來提醒你 pull，再重跑。">
+  <button class="opt">照常繼續蓋，之後再一起處理</button>
+  <button class="opt">先停下來，提醒你 pull 再重跑</button>
+  <button class="opt">自動幫你把遠端改動合併進來</button>
+  <button class="opt">直接切到預設分支上繼續蓋</button>
+</div>
+<div class="quiz" data-question="發現要動的區域有未提交的改動，該怎麼做？" data-correct="3" data-explain="提醒你先 commit 或 stash；這不是硬阻擋，你堅持的話仍可繼續。">
+  <button class="opt">系統會自動丟棄那些未提交改動</button>
+  <button class="opt">系統會自動把它們變成一個 commit</button>
+  <button class="opt">直接跑 <code>git init</code> 重新開始</button>
+  <button class="opt">提醒你先 commit 或先 stash 起來</button>
+</div>
+<div class="quiz" data-question="當你已經站在 <code>main</code> 上，正確做法是什麼？" data-correct="0" data-explain="永遠不在預設分支上蓋東西，先開一個 <prefix><feature-slug> 功能分支。">
+  <button class="opt">先開一條功能分支再開始蓋</button>
+  <button class="opt">直接在 <code>main</code> 上蓋比較快</button>
+  <button class="opt">先把 <code>main</code> 刪掉重開一條</button>
+  <button class="opt">先 <code>git init</code> 建立新 repo</button>
+</div>
+<div class="quiz" data-question="如果專案根本不是 git repo，讀取檢查會怎麼做？" data-correct="2" data-explain="git 是唯一硬依賴，但沒有 repo 就靜靜跳過，不會強迫你初始化。">
+  <button class="opt">強制先跑 <code>git init</code> 才能繼續</button>
+  <button class="opt">跳出錯誤並中止整個流程</button>
+  <button class="opt">靜靜跳過，不強迫你初始化</button>
+  <button class="opt">改用它牌版本控制系統代替</button>
+</div>
+<div class="quiz" data-question="發現 in-progress 功能的程式碼區塊最近有別人 commit，該如何？" data-correct="1" data-explain="這代表可能有人在蓋，應先協調再繼續；警告之外仍由你決定。">
+  <button class="opt">直接接手繼續蓋，不必理會作者</button>
+  <button class="opt">先協調，確認是否由你接手</button>
+  <button class="opt">把對方的 commit 全部還原掉</button>
+  <button class="opt">把該功能直接標記成 done</button>
+</div>
+
+<div class="footer">
+  <p>jsm-skills · 情境→skill 導航與 git/commit 節奏 · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

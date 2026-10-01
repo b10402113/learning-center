@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>線上 GC 頻繁怎麼查？從告警到根因的四步法</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>線上 GC 頻繁怎麼查？照四步找出根因</h1>
+<p class="meta">Step 4/4 · GC、記憶體壓力與線上排查</p>
+
+<h2>先知道這一課要完成什麼</h2>
+
+<p>當監控平台跳出「服務 A 的 GC 次數異常」時，重啟服務通常是最直覺的反應。重啟後指標確實可能暫時恢復正常，但同時也把現場證據清掉了。過幾天告警再次出現，你還是不知道問題到底來自程式，還是來自 JVM 配置。</p>
+
+<p>這一課要帶你完成一條可以在線上照著走的排查流程：先從監控確認是哪一種 GC，再用命令列工具觀察記憶體分布；如果確定老年代持續維持高水位，就先隔離流量、保留堆快照，最後用 MAT 離線找出真正占住記憶體的物件。</p>
+
+<p>開始前，你需要先知道 Young GC 與 Full GC 的差別，也要理解為什麼 Full GC 對服務的影響通常更大。整個流程只有一條重要紀律：<strong>先確認病情，再決定要不要動刀</strong>。</p>
+
+<h2>動手前，先記住兩個警告</h2>
+
+<blockquote class="bad-code">
+<strong>不要一收到告警就重啟。</strong>重啟會清掉所有現場證據，根因無法被保留下來，問題也只會週期性復發。
+</blockquote>
+
+<blockquote class="bad-code">
+<strong>不要讓服務繼續承受流量時直接 Dump 堆記憶體。</strong>匯出快照期間 JVM 會暫停，堆越大，暫停時間可能越長，請求也可能因此逾時。正確順序是先從負載平衡摘除這個節點，再進行 Dump。
+</blockquote>
+
+<h2>第一步：觀測，先分清楚是哪一種 GC</h2>
+
+<p>面對「GC 很頻繁」的告警，第一個問題不是「要怎麼修」，而是「到底是哪一種 GC 在頻繁發生」。兩種情況的嚴重程度不同，處理方向也不一樣。</p>
+
+<ul>
+<li><strong>Young GC 頻繁，但每次回收都很快</strong>：通常代表併發量高，或物件產生速度很快。這種情況可能只是服務很忙，但整體仍然健康，可以往擴容或調整新生代比例的方向處理。</li>
+<li><strong>Full GC 頻繁，而且回收後老年代沒有明顯下降</strong>：這是需要優先處理的異常。代表有一批物件持續存活，可能是記憶體洩漏，也可能是大物件不斷堆積。</li>
+</ul>
+
+<p>同時記下兩個數字：<strong>CPU 使用率</strong>與<strong>單次 GC 耗時</strong>。GC 頻繁時，CPU 通常會跟著升高；如果單次 GC 超過 1 秒，業務請求多半已經能感受到延遲。這些資訊就是排查時的第一頁病歷。</p>
+
+<figure class="lesson-figure"><img src="./gc-frequent-diagnosis-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第二步：用 jstat 看記憶體分布</h2>
+
+<p>接著登入伺服器。此時先不要重啟，也不要急著 Dump，先用 <code>jstat</code> 持續觀察各記憶體區域的使用狀況。</p>
+
+<pre><code>jstat -gcutil &lt;pid&gt; 1000</code></pre>
+
+<p>其中，<code>&lt;pid&gt;</code> 要替換成 Java 程序的 PID；<code>1000</code> 表示每 1000 毫秒採樣一次。畫面會持續列出各記憶體區域的使用百分比，先看下面三個欄位：</p>
+
+<table>
+<thead>
+<tr><th>欄位</th><th>觀察重點</th><th>看到這個現象時怎麼判斷</th></tr>
+</thead>
+<tbody>
+<tr><td>E（Eden）</td><td>使用量變化速度</td><td>如果掉得特別快，代表物件建立速度很快，先往併發量過高或程式大量建立物件的方向查。</td></tr>
+<tr><td>O（Old）</td><td>Full GC 後能不能降下來</td><td>如果長時間維持 90% 以上，Full GC 後仍然降不下來，通常要優先懷疑記憶體洩漏或大物件持續存活。</td></tr>
+<tr><td>M（Metaspace）</td><td>是否持續接近滿載</td><td>如果使用量持續上升並接近上限，代表載入了大量類別，可能與反射或動態代理有關。</td></tr>
+</tbody>
+</table>
+
+<p>判斷分支可以這樣走：</p>
+
+<ul>
+<li>若老年代一直維持高水位，Full GC 後也沒有下降，進入第三步，保留現場並找出哪些物件還活著。</li>
+<li>若只是 Eden 快速變化，但老年代在 GC 後能正常下降，通常比較像是容量或併發量問題，可以往擴容或調整配置的方向處理。</li>
+</ul>
+
+<h2>第三步：先摘流量，再匯出堆快照</h2>
+
+<p>如果確認老年代持續偏高，就需要知道「到底是哪一些物件占著記憶體」。這時要匯出整個堆的內容，產生一個堆快照檔。</p>
+
+<p>這一步的順序不能顛倒：</p>
+
+<ol>
+<li><strong>先把問題節點從負載平衡摘除。</strong>讓新的請求不要再進入這個節點。</li>
+<li><strong>確認節點不再承受業務流量後，再執行 Dump。</strong></li>
+</ol>
+
+<pre><code>jmap -dump:format=b,file=heap.hprof &lt;pid&gt;</code></pre>
+
+<p>匯出期間 JVM 會暫停，堆越大，所需時間通常越長。以 8G 堆為例，可能需要幾十秒。若此時節點仍然承受流量，請求就可能大量逾時，原本只是 GC 異常，最後卻變成服務中斷。</p>
+
+<figure class="lesson-figure"><img src="./gc-frequent-diagnosis-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>匯出完成後，將 <code>heap.hprof</code> 下載回本機，再把節點重新掛回流量。線上服務恢復後，接下來的分析都可以離線進行，不必繼續對生產環境施加壓力。</p>
+
+<h2>第四步：用 MAT 離線找出元兇</h2>
+
+<p>用 MAT（Memory Analyzer Tool）開啟 <code>heap.hprof</code> 後，依序檢查三個地方。每一步都在回答不同的問題：有哪些物件很多、誰占用最多、又是誰讓它們一直活著。</p>
+
+<ol>
+<li><strong>先看直方圖（Histogram）。</strong>找出數量最多的類別。例如幾百萬個 <code>String</code>，或某個自訂類別數量異常暴增，這通常是第一條線索。</li>
+<li><strong>再看支配樹（Dominator Tree）。</strong>確認哪些物件實際占用了最多記憶體。例如某個 <code>List</code> 可能單獨占用 2G，這時就要追查它為什麼會累積到這麼大。</li>
+<li><strong>最後看 Path to GC Roots。</strong>沿著引用鏈往回追，找出是哪個靜態變數、哪個執行緒或哪段程式碼仍然持有這些物件。當引用鏈被定位後，才有機會回到具體業務程式碼修正。</li>
+</ol>
+
+<p>這一步的重點不是只看「哪個類別最多」，而是要繼續追問：「為什麼這些物件還沒有被回收？」只要能找到從 GC Roots 到問題物件的引用鏈，根因才算真正成立。</p>
+
+<figure class="lesson-figure"><img src="./gc-frequent-diagnosis-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>常見成因：從程式與配置兩層對照</h2>
+
+<p>MAT 分析完成後，結果通常會落在程式問題或 JVM 配置問題。可以用下面的表格整理線索，再回到程式碼與啟動參數逐一驗證。</p>
+
+<table>
+<thead>
+<tr><th>層面</th><th>常見成因</th><th>可能出現的現象與後果</th></tr>
+</thead>
+<tbody>
+<tr><td>程式</td><td>大物件直接進入老年代</td><td>超大陣列或百萬筆資料的 <code>List</code> 放不進 Eden，直接晉升到老年代，最後塞滿老年代並觸發 Full GC。</td></tr>
+<tr><td>程式</td><td>記憶體洩漏</td><td><code>static Map</code> 只新增、不刪除；<code>ThreadLocal</code> 沒有 <code>remove</code>；或連線沒有關閉。這些物件一直被引用，GC 無法回收，老年代可用空間會逐漸減少，最後可能 OOM。</td></tr>
+<tr><td>程式</td><td>不必要地建立大量物件</td><td>在高頻迴圈中反覆建立複雜物件，或誤用 <code>System.gc()</code> 顯式觸發 GC，讓回收頻率增加。</td></tr>
+<tr><td>配置</td><td>堆記憶體設定過小</td><td>分配給 JVM 的資源不足，物件一多就必須頻繁回收，GC 指標長期偏高。</td></tr>
+<tr><td>配置</td><td>新生代設定過小</td><td>Survivor 區域空間不足，物件「過早晉升」到老年代；原本很快會死亡的物件，也被擠進老年代。</td></tr>
+<tr><td>配置</td><td>元空間不足</td><td>大量動態代理，例如 Spring、CGLib 產生許多類別，元空間滿載後會觸發 Full GC 清理類別元資料。</td></tr>
+</tbody>
+</table>
+
+<h2>做完後，應該得到什麼結果？</h2>
+
+<p>完成這四步後，你不應該只得到一句「GC 很頻繁」，而應該能回答以下問題：</p>
+
+<ul>
+<li>頻繁的是 Young GC 還是 Full GC？</li>
+<li>GC 後老年代是否真的降下來？</li>
+<li>異常主要出現在 Eden、Old，還是 Metaspace？</li>
+<li>哪一類物件數量最多，或占用的記憶體最大？</li>
+<li>哪條引用鏈讓這些物件一直存活？</li>
+<li>問題最後落在大物件、記憶體洩漏、物件建立過多，還是 JVM 配置不足？</li>
+</ul>
+
+<blockquote>
+排查頻繁 GC 時，照著「觀測、隔離、分析、解決」四步走：先從監控分清 Young GC 與 Full GC，再用 <code>jstat -gcutil</code> 觀察 Eden、Old、Metaspace 的走向；若老年代高水位不降，就先摘除流量，再用 <code>jmap</code> 匯出堆快照，最後透過 MAT 的直方圖、支配樹與 Path to GC Roots 找出引用鏈。最重要的操作順序是：先確認病情，再動刀；最可能影響服務的 Dump，必須放在摘流量之後。
+</blockquote>
+
+<p>這套方法不只適用於 GC。遇到執行緒池打滿、MySQL 慢查詢等線上問題時，也可以先觀測現象，再隔離影響，接著保留證據並分析根因。把「先重啟」改成「先查清楚」，才不會每次都只把問題暫時藏起來。</p>
+
+<div class="lesson-nav">
+  <div><a href="./collector-evolution-and-selection.html">← 上一步：收集器怎麼選？從 Serial 到 ZGC 與三色標記</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="收到 GC 告警時，為什麼不該馬上重啟服務？" data-correct="2" data-explain="重啟會清掉現場證據，根因找不到，問題會週期性復發。">
+  <button class="opt">因為重啟會讓 JVM 的版本被更新</button>
+  <button class="opt">因為重啟之後 CPU 會一直維持在高點</button>
+  <button class="opt">因為重啟會清掉現場導致無從找根因</button>
+  <button class="opt">因為重啟會讓堆記憶體自動縮小一半</button>
+</div>
+<div class="quiz" data-question="下列哪一種情況最需要當成嚴重問題處理？" data-correct="1" data-explain="Full GC 頻繁且回收後老年代不降，通常是洩漏或大物件。">
+  <button class="opt">Young GC 頻繁但每次回收都很快</button>
+  <button class="opt">Full GC 頻繁且老年代回收後不降</button>
+  <button class="opt">Eden 區的使用率一直在快速變化</button>
+  <button class="opt">服務的 CPU 使用率偶爾稍微上升</button>
+</div>
+<div class="quiz" data-question="jstat -gcutil 看到 Old 一直維持在 90% 以上，最可能代表什麼？" data-correct="0" data-explain="老年代高水位且在回收後降不下來，通常指向記憶體洩漏或大物件。">
+  <button class="opt">可能有記憶體洩漏或大物件積壓</button>
+  <button class="opt">代表新生代設定得實在太小了</button>
+  <button class="opt">代表動態代理產生了太多類別</button>
+  <button class="opt">代表這個服務完全沒有任何問題</button>
+</div>
+<div class="quiz" data-question="執行 jmap dump 之前，最該先做的一件事是什麼？" data-correct="3" data-explain="Dump 會觸發 STW，必須先摘流量避免服務逾時。">
+  <button class="opt">先把 JVM 的最大堆調到更大</button>
+  <button class="opt">先把服務的版本升級到最新</button>
+  <button class="opt">先把 Metaspace 的設定改一改</button>
+  <button class="opt">先把該節點從負載平衡摘流量</button>
+</div>
+<div class="quiz" data-question="在 MAT 裡，用哪個功能找出占用記憶體最大的物件？" data-correct="1" data-explain="Dominator Tree 支配樹用來找出單一占用最大的物件。">
+  <button class="opt">Histogram 直方圖的功能</button>
+  <button class="opt">Dominator Tree 支配樹</button>
+  <button class="opt">Path to GC Roots 的功能</button>
+  <button class="opt">jstat 的即時採樣功能</button>
+</div>
+<div class="quiz" data-question="新生代設置得太小，最可能導致什麼後果？" data-correct="2" data-explain="Survivor 太小會讓物件過早晉升到老年代，加重 Full GC。">
+  <button class="opt">元空間會被動態代理的類別塞滿</button>
+  <button class="opt">Eden 區的物件永遠不會被回收</button>
+  <button class="opt">物件過早晉升而加重老年代壓力</button>
+  <button class="opt">堆內存的實體位址會變得不連續</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · GC、記憶體壓力與線上排查 · Step 4/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

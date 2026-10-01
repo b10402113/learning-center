@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DCL 單例：兩次檢查與 volatile 到底在防什麼</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>DCL 單例：照著寫對兩次檢查與 <code>volatile</code></h1>
+<p class="meta">Step 5/6 · 併發工具與手寫併發題</p>
+
+<p>當一個元件整個程式只需要一份實例時，你通常會希望它<strong>用到才建立</strong>，而不是類別一載入就先建立好。但如果兩條執行緒同時第一次呼叫，單純的懶加載可能會建立出兩個實例；如果把整個方法都鎖住，又會讓已經建立好的實例每次都排隊搶鎖。</p>
+
+<p>這一課的目標，是照著寫出標準的 DCL（Double-Checked Locking，雙重檢查鎖定）單例，並能說清楚三件事：外層檢查為什麼是為了效能、內層檢查為什麼是為了唯一性，以及 <code>volatile</code> 如何避免其他執行緒拿到半初始化的物件。</p>
+
+<h2>動手前：先確認兩個前置觀念</h2>
+
+<p>你需要先知道 <code>synchronized</code> 提供互斥與可見性，也要知道 <code>volatile</code> 可以禁止特定的指令重排序。這一課不展開介紹它們的全部細節，而是直接把焦點放在：<code>volatile</code> 在 DCL 裡究竟要擋住哪一次重排。</p>
+
+<p>所謂重排序，是編譯器和 CPU 為了讓程式跑得更快，在不改變單執行緒結果的前提下，調整指令執行順序。這個最佳化在一般情況下沒有問題，但 DCL 需要特別防範它。</p>
+
+<h2>步驟一：寫出標準的 DCL 結構</h2>
+
+<p>先準備三個角色：用 <code>volatile</code> 宣告實例欄位、把構造方法設為私有，並提供一個公開的靜態方法作為唯一訪問入口。</p>
+
+<pre><code>public class Singleton {
+    // 1. 必須是 volatile，禁止指令重排
+    private static volatile Singleton instance;
+
+    // 2. 構造方法私有化，防止外部 new
+    private Singleton() { }
+
+    // 3. 公共的靜態訪問點
+    public static Singleton getInstance() {
+        if (instance == null) {                 // 第一次檢查：先不加鎖
+            synchronized (Singleton.class) {
+                if (instance == null) {         // 第二次檢查：進鎖後再確認
+                    instance = new Singleton();
+                }
+            }
+        }
+        return instance;
+    }
+}</code></pre>
+
+<p>這段程式可以直接分成三個檢查點來看。每個部分少了，都會造成不同問題。</p>
+
+<h3>1. 外層檢查：先省下鎖的成本</h3>
+
+<p>第一次 <code>if (instance == null)</code> 在鎖外面。實例還不存在時，執行緒才需要繼續往同步區走；一旦實例建立完成，後續呼叫會在這裡直接拿到結果，不必每次都搶鎖。</p>
+
+<p>如果把整個 <code>getInstance()</code> 都標成 <code>synchronized</code>，雖然容易理解，但實例建立後仍然要進入同步機制。對大多數只是想取得既有實例的呼叫來說，這是多餘的成本。</p>
+
+<h3>2. 內層檢查：進鎖後重新確認</h3>
+
+<p>第二次檢查放在鎖裡，是為了保證唯一性。</p>
+
+<p>假設執行緒 A 和 B 同時通過外層檢查。A 先取得鎖並建立實例，接著釋放鎖；如果 B 取得鎖後不再檢查，就會以為自己也該建立一個新實例。這樣單例就失效了。</p>
+
+<p>因此，若外層檢查發現實例不存在，就進入鎖；進入鎖後，必須再確認一次。外層檢查負責降低成本，內層檢查負責避免重複建立。</p>
+
+<figure class="lesson-figure"><img src="./dcl-singleton-volatile-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>3. 私有構造方法：堵住外部 <code>new</code></h3>
+
+<p>構造方法必須是 <code>private</code>。否則即使 <code>getInstance()</code> 寫得完全正確，外部程式仍然可以直接執行 <code>new Singleton()</code>，從旁邊建立另一個實例，單例的規則就被繞過了。</p>
+
+<h2>步驟二：確認 <code>volatile</code> 防的是哪一次重排</h2>
+
+<p>這行程式：</p>
+
+<pre><code>instance = new Singleton();</code></pre>
+
+<p>看起來像一步完成，但在 JVM 層面可以拆成三個動作：</p>
+
+<ol>
+<li><strong>分配記憶體</strong>：為新物件配置空間。</li>
+<li><strong>初始化</strong>：呼叫構造方法，把物件內容建好。</li>
+<li><strong>賦值引用</strong>：讓 <code>instance</code> 指向這塊記憶體位址。</li>
+</ol>
+
+<p>我們期待的順序是 1 → 2 → 3。不過，編譯器或 CPU 可能為了最佳化，把第 3 步提前到第 2 步之前，形成 1 → 3 → 2。</p>
+
+<p>這時就會出現危險的時間差。執行緒 A 做完第 3 步後，<code>instance</code> 已經不是 <code>null</code>，但構造方法可能還沒完成。這代表其他執行緒看到的不是一個完整物件，而是一個<strong>半初始化物件</strong>。</p>
+
+<p>如果執行緒 B 此時進入外層檢查，看到 <code>instance != null</code>，就會直接把它當成完成品使用。結果可能是讀到尚未初始化的欄位，甚至造成程式錯誤。</p>
+
+<p><code>volatile</code> 的作用，是透過記憶體屏障禁止這種 1 → 3 → 2 的重排，確保初始化完成後才讓 <code>instance</code> 被其他執行緒看見。也就是說，看到 <code>instance != null</code> 時，才代表物件已經完成初始化，不會拿到半成品。</p>
+
+<figure class="lesson-figure"><img src="./dcl-singleton-volatile-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>警告：少了 <code>volatile</code> 的錯誤版本</h2>
+
+<blockquote class="bad-code">
+常見錯法：只寫 <code>synchronized</code> 雙重檢查，卻把 <code>instance</code> 宣告成普通欄位（沒加 <code>volatile</code>）。這種程式在多數測試環境看起來都正常，但在高併發下會偶發「拿到的物件欄位是預設值」的怪問題，而且極難重現——這正是面試官最想聽你講出來的那個點。
+</blockquote>
+
+<p>這類問題難抓，是因為它不是每次都發生。低併發或測試時可能完全看不出來，但一旦執行緒剛好撞上重排序造成的時間差，就可能使用到尚未完成初始化的物件。</p>
+
+<h2>步驟三：用三個條件驗證是否寫對</h2>
+
+<p>完成後，逐項確認以下結果：</p>
+
+<ol>
+<li>不論同時有幾條執行緒呼叫 <code>getInstance()</code>，最後取得的都應該是同一個物件。</li>
+<li>實例建立完成後，後續呼叫不應再進入同步區；可以從程式碼確認，也可以觀察鎖競爭情況。</li>
+<li><code>volatile</code>、外層檢查與內層檢查都必須存在，不能只保留其中一部分。</li>
+</ol>
+
+<p>少了外層檢查，正確性可能還在，但效能會退回每次都需要處理鎖的版本。少了內層檢查，兩條執行緒可能重複建立實例。少了 <code>volatile</code>，則可能在高併發下讀到半初始化物件。</p>
+
+<figure class="lesson-figure"><img src="./dcl-singleton-volatile-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>完成後應該得到什麼</h2>
+
+<blockquote>
+DCL 單例 = 兩次 <code>instance == null</code> 檢查 + 一個 <code>volatile</code>。<code>instance</code> 必須是 <code>volatile</code>，用來禁止 <code>new</code> 指令的 1→3→2 重排，避免執行緒拿到半初始化物件；第一次檢查在鎖外，是為了讓實例建好後免去搶鎖、提升效能；第二次檢查在鎖內，是為了防止兩條執行緒都通過外層檢查、其中一條重複建立、讓單例失效。構造方法也要記得私有化，否則外面的 <code>new</code> 會直接破壞單例。
+</blockquote>
+
+<p>做到這裡，你應該能從程式碼直接指出三個結果：實例只會建立一次、建立完成後的呼叫不必再搶鎖，以及其他執行緒不會看見半初始化物件。下一步可以觀察鎖的另一面：當執行緒彼此等待、誰也無法繼續時，就會形成死鎖。</p>
+
+<div class="lesson-nav">
+  <div><a href="./wait-notify-coding-questions.html">← 上一步：手寫等待與喚醒</a></div>
+  <div><a href="./deadlock-four-conditions.html">下一步：死鎖 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="DCL 中第一次檢查（鎖外）的主要目的是什麼？" data-correct="1" data-explain="實例建好後可在外層直接返回，避免每次呼叫都搶鎖，是效能考量。">
+  <button class="opt">保證多條執行緒不會重複建立實例</button>
+  <button class="opt">讓已建立的實例免除搶鎖的開銷</button>
+  <button class="opt">防止外部程式直接 new 出物件</button>
+  <button class="opt">禁止編譯器對 new 做指令重排</button>
+</div>
+<div class="quiz" data-question="DCL 中第二次檢查（鎖內）真正要防的是什麼？" data-correct="2" data-explain="A、B 都通過外層檢查後，B 拿到鎖時若不再確認，就會重複建立，單例失效。">
+  <button class="opt">防止執行緒在鎖內被中斷而卡住</button>
+  <button class="opt">防止 instance 被寫成 volatile</button>
+  <button class="opt">防止後來拿到鎖的執行緒重複建立</button>
+  <button class="opt">防止構造方法被外部反射呼叫</button>
+</div>
+<div class="quiz" data-question="instance = new Singleton() 在 JVM 層面大致分成哪三步？" data-correct="0" data-explain="依序是分配記憶體、初始化物件、把引用指向記憶體；重排就是 3 提前到 2 之前。">
+  <button class="opt">分配記憶體、初始化、賦值引用</button>
+  <button class="opt">初始化、分配記憶體、賦值引用</button>
+  <button class="opt">賦值引用、初始化、分配記憶體</button>
+  <button class="opt">加鎖、初始化、解鎖釋放</button>
+</div>
+<div class="quiz" data-question="沒有 volatile 時，1→3→2 重排可能造成什麼？" data-correct="3" data-explain="instance 已非 null 但物件未初始化完成，其他執行緒會拿到半成品。">
+  <button class="opt">單例物件會被建立兩次以上</button>
+  <button class="opt">鎖的釋放動作會被延後執行</button>
+  <button class="opt">構造方法永遠不會被呼叫</button>
+  <button class="opt">其他執行緒拿到半初始化物件</button>
+</div>
+<div class="quiz" data-question="volatile 在 DCL 中的具體作用是？" data-correct="1" data-explain="它插入記憶體屏障，禁止 new 的三步被重排，保證 1→2→3 的順序。">
+  <button class="opt">讓 instance 的讀寫自動加上互斥鎖</button>
+  <button class="opt">禁止 new 三步被重排、保證順序</button>
+  <button class="opt">讓 instance 快取到執行緒的工作記憶體</button>
+  <button class="opt">把靜態欄位提升成全域常數</button>
+</div>
+<div class="quiz" data-question="下列哪一個不是 DCL 正確性必要的條件？" data-correct="2" data-explain="volatile、雙重檢查與私有建構子都直接關係到單例的正確性；實作序列化介面與否不影響 DCL 的併發正確。">
+  <button class="opt">instance 欄位必須宣告為 volatile</button>
+  <button class="opt">同步區內要有第二次 null 檢查</button>
+  <button class="opt">單例類別必須實作序列化介面</button>
+  <button class="opt">構造方法必須宣告成私有</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 併發工具與手寫併發題 · Step 5/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

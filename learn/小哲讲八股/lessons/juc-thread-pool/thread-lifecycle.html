@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>執行緒有幾種狀態？六個狀態與容易搞混的三組</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>執行緒有幾種狀態？六個狀態與最容易搞混的三組</h1>
+<p class="meta">Step 1/6 · 執行緒池打滿、任務堆積</p>
+
+<h2>學習目標</h2>
+<p>看完這一節，你應該能說出 Java 六個執行緒狀態及其觸發條件，也能分辨 <code>RUNNABLE</code> 為什麼同時包含作業系統層面的「就緒」與「運行」，以及 <code>BLOCKED</code>、<code>WAITING</code>、<code>TIMED_WAITING</code> 到底差在哪裡。</p>
+
+<h2>前言：執行緒 dump 裡一堆 WAITING，到底在等什麼？</h2>
+
+<p>線上服務突然卡住，你請運維抓了一份執行緒 dump。打開之後，幾十個執行緒顯示 <code>WAITING</code>，另外幾個顯示 <code>BLOCKED</code>。你知道它們一定在「等」某件事，卻一時說不清楚：這是卡在鎖上，還是在等另一個執行緒通知？</p>
+
+<p>這種問題難查，正是因為「等」不是單一狀態。Java 把執行緒從建立到結束分成六種狀態，其中有三種都表示執行緒目前沒有繼續執行，但它們等待的對象和被喚醒的方式完全不同。</p>
+
+<p>如果分不清這些差異，看到 <code>WAITING</code> 或 <code>BLOCKED</code> 時，就很難判斷服務究竟是鎖競爭、等待通知，還是單純在等待一段時間或外部工作完成。這一節先把六個狀態和它們之間的關係釐清，因為後面談執行緒池、鎖，以及等待與通知時，都會反覆用到這組分類。</p>
+
+<h2>執行緒的一生：六個狀態</h2>
+
+<p>先把整體輪廓看清楚。一個 Java 執行緒從被 <code>new</code> 出來，到執行結束，會落在下面六種狀態之一：</p>
+
+<table>
+<thead>
+<tr><th>狀態</th><th>關鍵特徵</th><th>典型觸發</th></tr>
+</thead>
+<tbody>
+<tr><td><code>NEW</code></td><td>物件已建立，但還沒有啟動</td><td><code>new Thread()</code> 之後</td></tr>
+<tr><td><code>RUNNABLE</code></td><td>正在執行，或已準備好、正在等待 CPU</td><td>呼叫 <code>start()</code></td></tr>
+<tr><td><code>BLOCKED</code></td><td>被動等待一把鎖</td><td>進入 <code>synchronized</code> 失敗</td></tr>
+<tr><td><code>WAITING</code></td><td>主動掛起，等待別人喚醒</td><td><code>wait()</code>、<code>join()</code></td></tr>
+<tr><td><code>TIMED_WAITING</code></td><td>等待，但設定了時間限制</td><td><code>sleep(time)</code>、<code>wait(time)</code></td></tr>
+<tr><td><code>TERMINATED</code></td><td>已經結束，不能重新啟動</td><td><code>run()</code> 執行完</td></tr>
+</tbody>
+</table>
+
+<p>這張表可以先當成地圖。真正容易混淆的，是中間三個「目前沒有繼續執行」的狀態：<code>BLOCKED</code>、<code>WAITING</code> 和 <code>TIMED_WAITING</code>。接下來逐一看它們為什麼會出現。</p>
+
+<figure class="lesson-figure"><img src="./thread-lifecycle-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>NEW：此時還只是一個普通物件</h2>
+
+<p>當你寫下 <code>new Thread(runnable)</code>，Java 只是先在堆記憶體中建立一個 <code>Thread</code> 物件。它還沒有真正啟動，也還沒有和作業系統底層的執行環境連接起來。此時呼叫 <code>getState()</code>，得到的就是 <code>NEW</code>。</p>
+
+<p>只有呼叫 <code>start()</code> 之後，JVM 才會請作業系統建立對應的執行環境，讓這個執行緒進入可以被調度的狀態。要注意，<code>start()</code> 並不是直接在目前的執行緒裡呼叫 <code>run()</code>。</p>
+
+<p>它比較像是把選手送進候場區，而不是保證選手立刻上場。至於什麼時候真正取得 CPU、開始執行 <code>run()</code>，則由作業系統的排程器決定。因此，同一段程式執行兩次，執行緒之間的交錯順序可能並不相同。</p>
+
+<h2>RUNNABLE：Java 把「就緒」和「運行」合在一起</h2>
+
+<p><code>RUNNABLE</code> 是最容易讓人誤判的狀態。在作業系統層面，「已經準備好、正在排隊等 CPU」和「此刻正在 CPU 上執行」通常是兩個不同的概念；但 Java 的執行緒狀態沒有把它們拆開，而是都歸在 <code>RUNNABLE</code>。</p>
+
+<p>所以，執行緒 dump 顯示 <code>RUNNABLE</code>，不代表它此刻一定正在 CPU 上執行。它也可能只是已經準備好了，正在等待作業系統分配時間片。</p>
+
+<p>對 JVM 來說，只要執行緒不是正在等待鎖、等待通知，或等待一段指定時間，就仍然算是「可執行」的狀態，會顯示為 <code>RUNNABLE</code>。這也解釋了面試中常見的問題：為什麼看到執行緒是 <code>RUNNABLE</code>，服務卻好像沒有動？答案可能是它只是還沒被排到 CPU，而不是已經真的在持續執行。</p>
+
+<figure class="lesson-figure"><img src="./thread-lifecycle-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>三種「目前沒在跑」：BLOCKED、WAITING、TIMED_WAITING</h2>
+
+<p>這三種狀態都會讓執行緒暫停往下走，但停下來的原因和恢復條件不同。排查卡頓時，如果把它們當成同一種「等待」，很容易走錯方向。</p>
+
+<h3>BLOCKED：被動排隊等鎖</h3>
+
+<p><code>BLOCKED</code> 用來描述執行緒正在等待一把排他鎖。當執行緒想進入由 <code>synchronized</code> 修飾的方法或程式碼區塊，卻發現鎖已經被其他執行緒持有，它就會進入 <code>BLOCKED</code>。</p>
+
+<p>這時候的執行緒就像站在已經上鎖的門外。它不是自己決定要休息，而是因為進門需要的鎖被別人拿走了，只能等持有鎖的執行緒離開臨界區、釋放鎖之後，再嘗試取得鎖。</p>
+
+<p>因此，如果執行緒 dump 裡出現大量 <code>BLOCKED</code>，優先應該往鎖競爭的方向查：可能是某個臨界區執行太久，也可能是太多執行緒同時搶同一把鎖。</p>
+
+<h3>WAITING：主動掛起，無期限等待信號</h3>
+
+<p><code>WAITING</code> 的情況不同。這次是執行緒自己主動停下來，而且沒有設定超時。它會一直等待，直到另一個執行緒明確地把它喚醒。</p>
+
+<p>常見的觸發方式包括 <code>Object.wait()</code>、<code>Thread.join()</code> 和 <code>LockSupport.park()</code>。對應的喚醒方式則包括其他執行緒呼叫 <code>notify()</code>、<code>notifyAll()</code> 或 <code>unpark()</code>。</p>
+
+<p>這裡最重要的關鍵是「沒有期限」。如果始終沒有人發出正確的通知，它就可能一直等下去。因此，當服務卡住，而 dump 裡有一群執行緒停在 <code>WAITING</code>，就要進一步檢查：是不是漏了 <code>notify</code>，或通知的對象與時機不正確。</p>
+
+<h3>TIMED_WAITING：等待，但有一個鬧鐘</h3>
+
+<p><code>TIMED_WAITING</code> 和 <code>WAITING</code> 很像，差別在於它設定了等待時間。即使沒有其他執行緒發出通知，時間到了，執行緒也會自行醒來。</p>
+
+<p>常見的觸發方法都帶有時間參數，例如 <code>Thread.sleep(time)</code>、<code>Object.wait(time)</code>、<code>Thread.join(time)</code> 和 <code>LockSupport.parkNanos()</code>。</p>
+
+<p>可以用三句話記住它們：</p>
+
+<ul>
+<li><code>BLOCKED</code>：門被鎖住了，被動等別人釋放鎖。</li>
+<li><code>WAITING</code>：主動等一個信號，而且沒有期限。</li>
+<li><code>TIMED_WAITING</code>：主動等待，但設定了時間，時間到就會醒來。</li>
+</ul>
+
+<h3>用生活場景記住這三個狀態</h3>
+
+<p>如果名詞還是容易混淆，可以把三種狀態想成三種生活中的等待。</p>
+
+<p>第一種是排隊上廁所。門被裡面的人鎖住，你只能站在門外，等對方出來把門打開。這對應 <code>BLOCKED</code>：你被一把鎖擋住，是被動等待。</p>
+
+<p>第二種是等一通沒有約定時間的電話。對方只說「我晚點打給你」，卻沒有說幾點。你只能一直等，直到對方真的打來。這對應 <code>WAITING</code>：等待一個明確信號，但沒有時間上限。</p>
+
+<p>第三種是設定鬧鐘小睡。就算沒有人叫你，鬧鐘響了也會醒來。這對應 <code>TIMED_WAITING</code>：同樣是在等待，但手上多了一個會自動響起的鬧鐘。</p>
+
+<figure class="lesson-figure"><img src="./thread-lifecycle-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>TERMINATED：結束之後不能復生</h2>
+
+<p>當 <code>run()</code> 正常執行完，或因為未被捕捉的例外而中斷，執行緒就會進入 <code>TERMINATED</code>。這代表它的生命週期已經結束，不能再被重新啟動。</p>
+
+<p>如果你對已經結束的執行緒物件再次呼叫 <code>start()</code>，Java 會直接丟出例外。這也是執行緒池選擇「複用執行緒」而不是「重用同一個已結束的執行緒物件」的原因。</p>
+
+<p>執行緒池中的執行緒完成一個任務後，通常會回到等待新任務的狀態，而不是讓執行緒真正結束。這樣才能持續接手後續工作。</p>
+
+<h2>把六個狀態放回同一張圖裡</h2>
+
+<p>從生命週期來看，<code>NEW</code> 是尚未啟動，呼叫 <code>start()</code> 後進入 <code>RUNNABLE</code>。執行期間，如果遇到鎖、等待通知或指定時間，就可能分別進入 <code>BLOCKED</code>、<code>WAITING</code> 或 <code>TIMED_WAITING</code>。條件滿足後，它們又會回到可執行的狀態；工作完成後，最後進入 <code>TERMINATED</code>。</p>
+
+<figure class="lesson-figure"><img src="./thread-lifecycle-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>因此，看到 dump 裡的狀態時，不要只看「它有沒有在跑」，還要追問「它正在等什麼」：</p>
+
+<ul>
+<li>看到 <code>BLOCKED</code>，先查是不是卡在 <code>synchronized</code> 鎖競爭。</li>
+<li>看到 <code>WAITING</code>，先查是不是在等待某個執行緒發出通知。</li>
+<li>看到 <code>TIMED_WAITING</code>，先看它設定了多久的等待時間。</li>
+<li>看到 <code>RUNNABLE</code>，也不要直接認定它正在使用 CPU，因為它可能只是排隊等候調度。</li>
+</ul>
+
+<h2>小結</h2>
+
+<blockquote>
+Java 執行緒有六個狀態：NEW、RUNNABLE、BLOCKED、WAITING、TIMED_WAITING、TERMINATED。<code>RUNNABLE</code> 合併了作業系統層面的「就緒」與「運行」；只要執行緒不是在等待鎖、信號或時間，通常都會歸在這個狀態。三種最容易混淆的等待則要分清楚：<code>BLOCKED</code> 是被動等待 <code>synchronized</code> 鎖，<code>WAITING</code> 是主動且無期限地等待顯式喚醒，<code>TIMED_WAITING</code> 則是等待但設有超時，時間到了會自動醒來。
+</blockquote>
+
+<p>執行緒現在停在哪個狀態，能幫你判斷它卡住的原因；而執行緒池、鎖，以及等待通知，則會決定它接下來如何在這些狀態之間移動。下一節會從 <code>new Thread</code> 的真實成本談起，說明為什麼需要執行緒池，以及執行緒數量到底該怎麼決定。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./pool-why-and-sizing.html">下一步：為什麼不能一直 new Thread？池化與執行緒數設置 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="執行緒剛被 new Thread() 建立、還沒呼叫 start()，是哪個狀態？" data-correct="0" data-explain="NEW 只是堆裡的一個普通物件，還沒和作業系統執行緒掛鉤。">
+  <button class="opt">NEW，只是堆裡的普通物件</button>
+  <button class="opt">RUNNABLE，隨時可以被 CPU 執行</button>
+  <button class="opt">BLOCKED，正在等待取得監聽鎖</button>
+  <button class="opt">WAITING，已經主動掛起等待喚醒</button>
+</div>
+<div class="quiz" data-question="Java 的 RUNNABLE 狀態為什麼特別？" data-correct="2" data-explain="Java 把作業系統的就緒與運行合併成一個 RUNNABLE。">
+  <button class="opt">它只能由呼叫 start 方法進入</button>
+  <button class="opt">它代表執行緒已經完全執行完畢</button>
+  <button class="opt">它合併了就緒與運行兩種狀態</button>
+  <button class="opt">它只出現在單核心的處理器上面</button>
+</div>
+<div class="quiz" data-question="一個執行緒想進 synchronized 區塊卻發現鎖被別人拿走，會進入哪個狀態？" data-correct="1" data-explain="BLOCKED 專門描述正在被動等待排他鎖的情況。">
+  <button class="opt">WAITING，因為它在等一個信號</button>
+  <button class="opt">BLOCKED，因為它被鎖擋在門外</button>
+  <button class="opt">TIMED_WAITING，因為它會自動醒來</button>
+  <button class="opt">TERMINATED，因為它已經被中斷了</button>
+</div>
+<div class="quiz" data-question="下列哪一組呼叫會讓執行緒進入 WAITING？" data-correct="3" data-explain="wait 與 join 沒有超時參數，必須等別的執行緒顯式喚醒。">
+  <button class="opt">呼叫 sleep 並帶入毫秒數</button>
+  <button class="opt">呼叫 wait 並帶入毫秒數</button>
+  <button class="opt">呼叫 join 並帶入毫秒數</button>
+  <button class="opt">呼叫不帶參數的 object.wait</button>
+</div>
+<div class="quiz" data-question="WAITING 和 TIMED_WAITING 最關鍵的差別是什麼？" data-correct="2" data-explain="TIMED_WAITING 有超時，時間到會自動醒來；WAITING 沒有期限。">
+  <button class="opt">前者一定要持有鎖才能進入該狀態</button>
+  <button class="opt">前者只能由主執行緒才能夠進入</button>
+  <button class="opt">後者有超時時間可以自動地醒來</button>
+  <button class="opt">後者不需要任何執行緒來將它喚醒</button>
+</div>
+<div class="quiz" data-question="線上 dump 看到大量 BLOCKED，最該優先查什麼？" data-correct="1" data-explain="BLOCKED 專指等 synchronized 鎖，因此優先看是不是鎖競爭。">
+  <button class="opt">是不是執行緒呼叫了太多次的 sleep</button>
+  <button class="opt">是不是有嚴重的 synchronized 鎖競爭</button>
+  <button class="opt">是不是有執行緒忘記呼叫 notify 方法</button>
+  <button class="opt">是不是執行緒的堆疊記憶體設得太小了</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 執行緒池打滿、任務堆積 · Step 1/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

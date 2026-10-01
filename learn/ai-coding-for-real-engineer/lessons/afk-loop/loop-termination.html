@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>迴圈怎麼停：maxIterations 與 completion signal</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>迴圈怎麼停：<code>maxIterations</code> 與 completion signal</h1>
+<p class="meta">Step 2/4 · 自動化迴圈：<code>main.ts</code></p>
+
+<h2>學習目標</h2>
+<p>看完這一節，你會知道 AFK 迴圈靠哪兩個條件停止：<code>maxIterations</code> 與 completion signal <code>no more tasks</code>。而且你要能理解，為什麼要讓「完成訊號」負責正常收工，再用「次數上限」當最後一道保險。</p>
+
+<h2>先想像：一個永遠不停的迴圈</h2>
+
+<p>睡前，你按下 <code>main.ts</code>，打算讓它自己把剩下的 phase 做完。結果隔天早上醒來，程式還在執行，token 帳單多了一大截，專案裡甚至出現一堆重複、互相打架的 commit。</p>
+
+<p>這種失控通常不是因為迴圈會重複執行，而是因為它不知道什麼時候該停。上一節我們看到，<code>main.ts</code> 會反覆執行同一段 prompt；這一節要追問的是：它憑什麼判斷「已經做完」？又要如何避免判斷失準時一路跑下去？</p>
+
+<h2>兩個煞車：正常出口與最後保險</h2>
+
+<p><code>main.ts</code> 的迴圈同時設定了兩個停止條件。只要其中一個先成立，迴圈就會結束。</p>
+
+<p>第一個是 <code>maxIterations</code>，也就是迭代次數的硬上限。假設你把它設成 3，迴圈最多只會跑三輪。第三輪結束後，不管任務完成了沒有，都必須停下來。它像一座只認刻度的護欄：不理解工作內容，也不會評估進度，只會數「已經跑了幾輪」。</p>
+
+<p>第二個是 completion signal，也就是完成訊號。這裡約定使用的字串是 <code>no more tasks</code>。<code>prompt.md</code> 會告訴 agent：如果已經沒有更多任務，就輸出這段文字。每一輪結束時，runner 會檢查 agent 的輸出；只要看到 <code>no more tasks</code>，就判斷工作已完成，立即停止迴圈。</p>
+
+<p>因此，completion signal 不是 runner 自己猜出來的結果，而是 prompt 與 runner 之間約好的合約：prompt 負責在適當時機發出訊號，runner 負責聽到訊號後關門。</p>
+
+<blockquote>
+<p>兩個條件的關係是 OR：達到 <code>maxIterations</code>，停；提早看到 <code>no more tasks</code>，也停。哪一個先發生，就由哪一個結束迴圈。</p>
+</blockquote>
+
+<p>可以把它想成一台自動咖啡機。水位感測器發現沒水時，機器就能正常斷電，這就像 completion signal：工作完成了，由它決定何時收工。同時，機器還有一個定時器；時間到了就強制關機，不管感測器有沒有反應。這就是 <code>maxIterations</code>：感測器失效時，仍然有最後一道保險。</p>
+
+<figure class="lesson-figure"><img src="./loop-termination-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>取捨：相信訊號，還是先守住預算？</h2>
+
+<p>兩個停止條件都有了，接著就是一個很實際的問題：<code>maxIterations</code> 應該設多大？這個數字其實反映了你對 agent 的信任程度，以及你願意承擔多少 token 成本。</p>
+
+<p>第一種做法是「訊號優先」。講師自己執行時偏向這種方式，通常會把 <code>maxIterations</code> 設得很高，例如 10、15，有時甚至 50。背後的想法是：只要 agent 做完，就會輸出 <code>no more tasks</code>；這個上限平常不該派上用場，只是為了避免極端情況下失控。因此，上限設高一點，可以讓 agent 自己跑到完成。</p>
+
+<p>第二種做法是「預算優先」。課程示範刻意把 <code>maxIterations</code> 設得很小，例如 3，目的就是避免一次燒掉太多 token。先讓 agent 跑幾輪，確認方向與結果，再決定要不要繼續。這樣一來，「要不要再跑」的主導權仍然在你手上。</p>
+
+<table>
+<thead>
+<tr><th></th><th>訊號優先</th><th>預算優先</th></tr>
+</thead>
+<tbody>
+<tr><td>上限設定</td><td>設高，例如 10 到 50</td><td>設低，例如 3</td></tr>
+<tr><td>停止主因</td><td>由 <code>no more tasks</code> 決定</td><td>由 <code>maxIterations</code> 決定</td></tr>
+<tr><td>優點</td><td>真的做完才收工，不用手動續跑</td><td>成本可控，隨時可以停下來檢查</td></tr>
+<tr><td>風險</td><td>訊號若失效，可能持續消耗 token</td><td>可能做到一半就停，之後還要再執行一次</td></tr>
+</tbody>
+</table>
+
+<p>所以，調這個上限其實是在拿捏兩件事：願意放手多少，以及最多能花多少。你越相信 agent 能正確判斷何時完成，就越能把上限設高；你越不確定，就越應該先用較低的上限框住預算。</p>
+
+<p>這也不是一次決定就永遠不變。你可以先保守地跑一次，觀察 agent 在第幾輪輸出完成訊號，再依照實際結果調整下一次的上限。</p>
+
+<h2>把兩個煞車放回整張圖</h2>
+
+<p>把這個機制放回整條流程來看：<code>main.ts</code> 負責讓「一圈」反覆執行，而 <code>maxIterations</code> 與 completion signal 則共同決定這個 while 迴圈何時離開。</p>
+
+<p>它們處理的是兩件事。completion signal 回應的是「工作真的做完了嗎？」；<code>maxIterations</code> 回應的是「即使判斷不可靠，最多也只能跑幾輪？」前者讓迴圈能自然收工，後者則把失控的成本鎖在一個範圍內。</p>
+
+<figure class="lesson-figure"><img src="./loop-termination-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>還有一個關鍵連結：這兩個停止條件的可靠性，取決於 prompt 是否清楚寫出「什麼情況算做完」。如果 <code>prompt.md</code> 從未要求 agent 在沒有更多任務時輸出 <code>no more tasks</code>，completion signal 就不會觸發，迴圈只能等到硬上限才停止。</p>
+
+<p>換句話說，這不只是 runner 的設定問題，也是 prompt 設計問題。runner 提供了門，prompt 必須告訴 agent 什麼時候該走到門口。</p>
+
+<p>現在你已經知道迴圈靠什麼停止，下一步就是觀察它實際跑起來的樣子。下一節會啟動一次完整流程，從頭讀過執行日誌，看看這兩個條件在真實執行中如何發揮作用。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>AFK 迴圈有兩個終止條件：達到 <code>maxIterations</code>，或看到 completion signal <code>no more tasks</code>，哪一個先發生就停止。completion signal 是 prompt 與 runner 之間的合約，讓 agent 在確實完成工作時提早收工；<code>maxIterations</code> 則是不看情況的硬上限，用來防止迴圈失控。上限設高或設低，取決於你對 agent 的信任程度，以及你想如何控制 token 預算。</p>
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./main-runner.html">← 上一步：從 interactive 到 main.ts：無人值守的 runner</a></div>
+  <div><a href="./multi-phase-run.html">下一步：跑一次完整多階段實作（並讀懂日誌） →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="AFK 迴圈的兩個終止條件是什麼？" data-correct="1" data-explain="達到 maxIterations，或看到 completion signal，哪個先來就停。">
+  <button class="opt">測試全部通過，或 commit 數量夠多</button>
+  <button class="opt">達到迭代上限，或出現完成信號</button>
+  <button class="opt">沙箱建立成功，或 API 額度用完</button>
+  <button class="opt">使用者按下 Ctrl-C，或磁碟寫滿</button>
+</div>
+<div class="quiz" data-question="這個迴圈使用的 completion signal 字串是什麼？" data-correct="2" data-explain="prompt 要 agent 在沒有任務時輸出 no more tasks。">
+  <button class="opt">all done and ready</button>
+  <button class="opt">task queue empty</button>
+  <button class="opt">no more tasks</button>
+  <button class="opt">stop the loop now</button>
+</div>
+<div class="quiz" data-question="completion signal 實際上是誰產生的？" data-correct="0" data-explain="是 prompt 指示 agent 在沒任務時輸出，runner 負責偵測。">
+  <button class="opt">prompt 要 agent 在沒任務時輸出</button>
+  <button class="opt">runner 在迭代上限時自己印出</button>
+  <button class="opt">沙箱在關閉前自動輸出的訊息</button>
+  <button class="opt">Claude Code 預設就會吐出的字串</button>
+</div>
+<div class="quiz" data-question="講師自己跑的時候，通常怎麼設定 maxIterations？" data-correct="3" data-explain="他很信任完成信號，所以常設 10、15，甚至 50。">
+  <button class="opt">固定在 1，確保只跑一輪</button>
+  <button class="opt">調到 0，讓信號完全決定</button>
+  <button class="opt">設在 3，剛好對應 phase 數</button>
+  <button class="opt">設很高，例如 10 到 50</button>
+</div>
+<div class="quiz" data-question="課程示範為什麼把 maxIterations 設得比較小？" data-correct="1" data-explain="為了不要在一次練習中燒掉太多 token。">
+  <button class="opt">因為設太大 agent 會拒絕啟動</button>
+  <button class="opt">為了避免燒掉太多 token</button>
+  <button class="opt">因為設太小會讓信號無法觸發</button>
+  <button class="opt">為了讓沙箱可以重複使用</button>
+</div>
+<div class="quiz" data-question="如果拿掉 maxIterations、只留 completion signal，風險是什麼？" data-correct="2" data-explain="信號一旦沒有正確觸發，迴圈就可能一直跑下去。">
+  <button class="opt">agent 將無法讀取 plan 檔案</button>
+  <button class="opt">每一輪的 context 會自動清空</button>
+  <button class="opt">信號失效時可能無限跑下去</button>
+  <button class="opt">沙箱會拒絕重新建立與掛載</button>
+</div>
+
+<div class="footer">
+  <p>AI Coding for Real Engineers · 自動化迴圈：main.ts · Step 2/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

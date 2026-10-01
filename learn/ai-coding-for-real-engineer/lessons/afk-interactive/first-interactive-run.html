@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跑第一次：prompt.md 與單一任務</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>跑第一次：用 prompt.md 執行單一任務</h1>
+<p class="meta">Step 3/3 · 互動式 AFK：第一次放手</p>
+
+<h2>先確認目標與前置條件</h2>
+<p>這一節要做的事很單純：設定並執行 <code>interactive.ts</code>，看懂 <code>prompt.md</code> 如何把 PRD 與計畫展開成完整 prompt，最後確認 agent 只完成計畫中的第一個任務。</p>
+<p>動手前，請準備好一個已安裝 Node 與 pnpm 的專案、一份 PRD、一份對應的計畫檔，以及能執行 <code>npx</code> 的環境。這次先不需要沙箱，因為我們要觀察最基本的一回合執行流程。</p>
+
+<blockquote class="bad-code">
+警告：這個階段刻意不掛沙箱，代表 agent 對你的檔案系統有實際權限。請在可以犧牲的實驗環境裡跑，不要在放著重要資料又沒人看管的機器上執行。真正的隔離設定留到後面的沙箱節點。
+</blockquote>
+
+<h2>先看整體流程：這次只跑一回合</h2>
+<p>前兩步已經鋪好了路：你知道「do phase N」是一個迴圈，也知道第一次應該先在 interactive 模式、沒有沙箱的環境裡觀察。現在要真的跑一次。</p>
+<p>這次不追求做出完整功能，而是把迴圈拆到只剩一回合：讓一份 prompt 加上一份 PRD 與計畫進入 agent，接著看清楚它實際做了什麼、哪些地方符合預期，以及哪些地方會讓你想修改 prompt。</p>
+<p>跑完後，你應該得到兩樣東西：</p>
+<ul>
+<li>一個只完成第一階段的 commit。</li>
+<li>一份自己的觀察筆記，記下 agent 哪裡做對、哪裡需要調整 prompt。</li>
+</ul>
+
+<figure class="lesson-figure"><img src="./first-interactive-run-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟一：確認 interactive.ts 的三個設定</h2>
+<p>先打開 <code>interactive.ts</code>。這個檔案通常短得有點意外，因為它幾乎只負責三件事：選擇哪個 agent、使用哪個沙箱，以及把哪一段 prompt 餵給 agent。</p>
+
+<pre><code>// sandcastle/interactive.ts — 三個關鍵設定的示意
+// 1. 這次用 Claude Code；也可以換成 Codex 或 OpenCode
+agent = "claude-code"
+
+// 2. 第一次先用 none，之後才換成 docker
+sandbox = "none"
+
+// 3. 這一回合要跑的完整指令，放在同資料夾的 prompt.md
+promptFile = "sandcastle/prompt.md"</code></pre>
+
+<p>實際欄位名稱以你專案裡的檔案為準，但要掌握這三個設定彼此獨立：</p>
+<ul>
+<li><code>agent</code> 決定這次由哪個 agent 執行。</li>
+<li><code>sandbox</code> 決定 agent 在什麼隔離環境裡執行。</li>
+<li><code>promptFile</code> 決定這一回合要使用哪份指令。</li>
+</ul>
+<p>這次只調整 prompt，不動 agent 與沙箱。等 prompt 穩定後，再把 sandbox 換成 docker。一次只動一個變數，就像排查電路時一次只拔一條線；出了問題，你才知道是哪個設定造成的。</p>
+
+<h2>步驟二：拆解 prompt.md 的四個元素</h2>
+<p>真正控制這一回合行為的是 <code>prompt.md</code>。它和前面節點寫過的 do work skill 很像，但多了 Sandcastle 專屬的輸入語法。整份 prompt 可以拆成四個元素，逐一確認會比較容易。</p>
+
+<h3>元素一：prompt expansion</h3>
+<p>Sandcastle 提供了一個小巧但很實用的語法：如果反引號包住的程式碼區塊前面加上驚嘆號，這段內容就不會只被當成文字。Sandcastle 會先執行裡面的指令，再把執行結果原地放進 prompt。</p>
+<p>換句話說，你可以在 prompt 送給 agent 之前，先用 shell 準備好需要的資料。這就像先把食材切好、擺到料理台上，agent 開始工作時可以直接使用，而不用自己再花一輪時間準備。</p>
+
+<h3>元素二：用 cat 把 PRD 與計畫整份讀進來</h3>
+<p>這份 prompt 會搭配 <code>cat</code>，把 PRD 與計畫檔的完整內容讀進來。<code>prd</code> 與 <code>plan</code> 是 Sandcastle 內建的 prompt 參數，執行時可以傳入檔案路徑，prompt 就會在指定位置展開成完整文件。</p>
+<p>結構示意如下：</p>
+
+<pre><code>/tmp/prompt.md（結構示意）
+
+請完成 PRD 與計畫裡的下一個任務。
+
+PRD 全文：
+!```
+cat {{prd}}
+```
+
+計畫全文：
+!```
+cat {{plan}}
+```</code></pre>
+
+<p>這裡的重點不是「告訴 agent 去讀某個檔案」，而是檔案內容在 prompt 送進去之前，就已經被攤開在裡面。agent 一開始就能看到 PRD 與計畫全文，不必再自行執行 <code>cat</code>。</p>
+<p><code>cat</code> 看起來是很普通的指令，但在這裡是關鍵：它把外部文件餵進 agent 的 context，讓後續決策有完整的背景資料可用。</p>
+
+<figure class="lesson-figure"><img src="./first-interactive-run-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>元素三：結束訊號「no more tasks」</h3>
+<p>prompt 裡還有一個結束條件：如果已經沒有更多任務，就輸出「no more tasks」。這一節暫時用不到，因為 interactive 只執行一回合；不過請先記住這個字串。</p>
+<p>後面的 <code>main.ts</code> 會把它當成「可以收工了」的訊號，用來判斷是否還要繼續迴圈。</p>
+
+<h3>元素四：實作指令與單一任務限制</h3>
+<p>最後一大塊是給 agent 的行動指示。它會要求 agent：</p>
+<ul>
+<li>探索 repo。</li>
+<li>完成目前這個任務。</li>
+<li>跑回饋迴圈，例如 typecheck 與測試。</li>
+<li>完成後建立 commit。</li>
+</ul>
+<p>其中最重要的限制放在 prompt 最後：<strong>一次只做一個任務。</strong></p>
+<p>如果沒有這個限制，agent 很可能會試著在同一個 context window 裡一次完成整份多階段計畫。表面上看起來很有效率，實際上容易愈做愈亂，最後掉進 dumb zone。</p>
+<p>一次只做一個階段，可以讓每一回合都停在清楚、可檢查的狀態。你也能在回合之間觀察成果，再決定下一步要不要調整 prompt。</p>
+<p>目前這份 prompt 只是最低限度的骨架。之後你可以依專案需要補充內容，例如要求 agent 採用 red-green-refactor，或指定它先探索哪些目錄。</p>
+
+<h2>步驟三：執行 interactive.ts</h2>
+<p>打開一個新的終端機，執行：</p>
+
+<pre><code>npx tsx sandcastle/interactive.ts</code></pre>
+
+<p>這行指令可以拆成兩個部分：</p>
+<ul>
+<li><code>npx</code> 讓你直接執行 npm 上的程式，不必先把它安裝進專案。</li>
+<li><code>tsx</code> 讓你直接執行 TypeScript 檔案，省去手動編譯的步驟。</li>
+</ul>
+<p>程式啟動後，會出現一個小型互動介面，要求你輸入 PRD 與計畫的位置。以課程範例來說，填入：</p>
+<ul>
+<li><code>prd/admin-analytics.md</code></li>
+<li><code>plans/admin-analytics-plan.md</code></li>
+</ul>
+<p>實際路徑請依你的 repo 為準。輸入完成後，agent 就會在 repo 內、不掛沙箱地開始執行，而且只處理計畫的第一階段。</p>
+
+<figure class="lesson-figure"><img src="./first-interactive-run-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟四：觀察執行過程中的訊號</h2>
+<p>執行時，請把注意力放在下面幾個訊號。它們可以幫你確認 prompt 是否真的生效：</p>
+<ul>
+<li>prompt 裡已經包含完整的 PRD 與計畫，而不是只有檔案路徑。</li>
+<li>agent 把工作範圍限制在第一階段：完成 Analytics 摘要頁並加上路由。</li>
+<li>agent 開始寫程式碼，而回饋迴圈還沒有設定好。這是正常的，因為它才剛進入測試相關步驟。</li>
+<li>agent 請求權限來執行回饋迴圈。這表示目前還不是全自動流程，需要你按下允許。</li>
+<li>agent 建立 commit，並回報第一階段完成。</li>
+</ul>
+
+<h2>步驟五：驗收第一階段的成果</h2>
+<p>執行完成後，切到瀏覽器，用管理員身分登入。課程範例使用的是 Alex Rivera。進入 dashboard，再點選 analytics。</p>
+<p>你應該會在頁面上方看到幾張非常陽春的摘要卡片。這個成果算是個不錯的 tracer bullet：功能本身還很薄，但資料已經從資料庫一路穿到畫面，證明這條路徑是通的。</p>
+<p>這就是第一次「放手」的收穫。你不是直接把整份計畫交給 agent，而是先讓它完成一個範圍清楚、可以驗證的階段。</p>
+
+<figure class="lesson-figure"><img src="./first-interactive-run-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>如果結果不如預期，先調整 prompt</h2>
+<p>如果 agent 的行為不符合預期，先不要急著怪 agent。很多時候，問題出在 prompt 沒有把限制或驗收方式說清楚。</p>
+<ul>
+<li>若 agent 超做了不只一個階段，請檢查「一次只做一個任務」是否有正確傳達。</li>
+<li>若 agent 沒有跑測試，請在 prompt 裡更明確地寫出 typecheck 與 test 指令。</li>
+<li>若 agent 探索了不必要的範圍，請補上它應該優先查看的目錄或檔案。</li>
+</ul>
+<p>把這次觀察記下來。下一次調整 prompt 時，你就有實際行為可以依據，不必再憑感覺改。</p>
+
+<h2>完成後，你應該得到什麼</h2>
+<p>完成這次練習後，你應該看見一個第一階段產出的 commit，並在 admin analytics 頁面看到一組陽春但可用的摘要卡片。執行過程中，agent 會寫程式、請求權限執行回饋迴圈，最後完成 commit。</p>
+<blockquote>
+interactive.ts 把一回合執行需要的東西收斂成三個獨立設定：agent、sandbox、prompt。第一次刻意選 Claude Code 加上不掛沙箱，並用 prompt.md 當輸入。prompt.md 像 do work skill，但多了 prompt expansion：用驚嘆號加上反引號區塊，讓 shell 指令（例如 cat）的輸出在進 prompt 前就展開，把 PRD 與計畫全文直接攤在 agent 面前。它同時要求 agent 一次只做一個任務，避免一次吃掉整份計畫、掉進 dumb zone。執行後你會看到它寫程式、請求權限跑回饋迴圈、commit，最後在 admin analytics 留下一個陽春但可用的 tracer bullet。
+</blockquote>
+
+<p>你剛剛打通的是「一回合」流程。接下來還有兩件事：第一，把沒有隔離的執行環境換成真正安全的沙箱，避免 agent 在放手後動到不該動的檔案；第二，把同一份 prompt 放進會自動重複的迴圈，讓 agent 在你離開鍵盤時繼續推進下一階段。</p>
+<p>這一節先聚焦在第一次執行與驗收；至於沙箱與自動迴圈的原理和設定，留到後面的節點處理。</p>
+
+<div class="lesson-nav">
+  <div><a href="./sandcastle-runners.html">← 上一步：Sandcastle：先從 interactive 模式開始</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="第一次執行 interactive.ts 時，sandbox 應該設定成什麼？" data-correct="2" data-explain="先設成 none，把重點放在觀察與調 prompt，隔離留到後面的節點。">
+  <button class="opt">設定成遠端的 Vercel 供應商</button>
+  <button class="opt">設定成本機的 Docker 容器環境</button>
+  <button class="opt">設定成 none，先不掛任何沙箱</button>
+  <button class="opt">設定成 Podman 的預設隔離環境</button>
+</div>
+<div class="quiz" data-question="prompt expansion 的語法是什麼？" data-correct="1" data-explain="在反引號程式碼區塊前加一個驚嘆號，Sandcastle 會先執行它，再把輸出內嵌進 prompt。">
+  <button class="opt">在雙引號字串前面加上兩個錢字符號</button>
+  <button class="opt">在反引號程式碼區塊前面加一個驚嘆號</button>
+  <button class="opt">在檔案路徑前面加上一個井字號註解</button>
+  <button class="opt">在變數名稱後面加上兩組大括號包住</button>
+</div>
+<div class="quiz" data-question="prompt.md 用 cat 讀 PRD 與計畫的目的為何？" data-correct="3" data-explain="讓兩份文件的全文在進 agent 之前就展開，agent 不必再自己花一輪去讀。">
+  <button class="opt">讓 agent 知道檔案被放在硬碟的哪個位置</button>
+  <button class="opt">讓程式在執行結束後自動刪除這兩份文件</button>
+  <button class="opt">讓 cat 指令的執行速度比開啟檔案更快</button>
+  <button class="opt">讓文件全文在進 agent 前就展開成 prompt</button>
+</div>
+<div class="quiz" data-question="prompt 裡「一次只做一個任務」這句限制，主要是為了什麼？" data-correct="0" data-explain="避免 agent 把整份多階段計畫擠進同一個 context window，最後掉進 dumb zone。">
+  <button class="opt">避免它把整份計畫擠進同一個 context window</button>
+  <button class="opt">避免它把 commit 訊息寫得比程式碼還長</button>
+  <button class="opt">避免它一次向使用者要求太多的權限</button>
+  <button class="opt">避免它把測試檔案散落在不同的資料夾</button>
+</div>
+<div class="quiz" data-question="第一次執行時，看到 agent 跳出權限請求，代表什麼？" data-correct="2" data-explain="它還沒全自動，人仍然要授權；這也說明 interactive 模式還不是真正的 AFK。">
+  <button class="opt">代表 prompt expansion 的語法寫錯了</button>
+  <button class="opt">代表沙箱已經成功攔截了危險指令</button>
+  <button class="opt">代表它還沒全自動，仍要人授權才能繼續</button>
+  <button class="opt">代表它已經把整個多階段計畫做完了</button>
+</div>
+<div class="quiz" data-question="驗收時在 admin analytics 看到幾張陽春的摘要卡片，這代表什麼？" data-correct="1" data-explain="它是一條從資料層穿到畫面、可用但很薄的 tracer bullet，證明這條路是通的。">
+  <button class="opt">代表這個功能已經可以正式上線給所有使用者</button>
+  <button class="opt">代表一個薄但貫穿各層、可用的 tracer bullet</button>
+  <button class="opt">代表 agent 漏做了計畫裡的第一個階段</button>
+  <button class="opt">代表資料庫的 seed 資料已經全部損毀</button>
+</div>
+
+<div class="footer">
+  <p>ai-coding-for-real-engineer · 互動式 AFK：第一次放手 · Step 3/3</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

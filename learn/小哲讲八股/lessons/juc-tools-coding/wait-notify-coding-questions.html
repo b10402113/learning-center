@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>手寫等待與喚醒：生產者消費者、交替打印與 N 執行緒輪轉</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>手寫等待與喚醒：生產者消費者、交替打印與 N 執行緒輪轉</h1>
+<p class="meta">Step 4/6 · 併發工具與手寫併發題</p>
+
+<h2>這一節要完成什麼？</h2>
+
+<p>面試中常見的併發題，表面上各不相同：有時是生產者消費者，有時是多條執行緒輪流打印數字，也可能是三條執行緒依序印出 ABC。實際上，它們都在考同一件事：多條執行緒如何安全地共享資料，並在「還沒輪到自己」時先等待。</p>
+
+<p>這一節會一步步完成三個實作：</p>
+
+<ul>
+<li>用 <code>synchronized</code> 搭配 <code>wait/notifyAll</code> 完成生產者消費者。</li>
+<li>用取模搭配 <code>wait/notifyAll</code>，讓 N 條執行緒依序打印數字。</li>
+<li>用 <code>ReentrantLock</code> 搭配多個 <code>Condition</code>，讓三條執行緒交替打印 ABC。</li>
+</ul>
+
+<p>開始前，先確認你知道兩件事：<code>synchronized</code> 可以保護臨界區，讓同一時間只有一條執行緒進入；而物件鎖上的 <code>wait</code>／<code>notify</code>，會在等待時釋放鎖，醒來後再重新搶鎖。</p>
+
+<h2>先記住三個動手原則</h2>
+
+<p>這三題雖然長相不同，正確寫法都離不開下面三個原則。</p>
+
+<ol>
+<li><strong>共享資料要放進臨界區。</strong> 例如 <code>LinkedList</code> 本身不是執行緒安全的。多條執行緒會同時操作它時，必須用 <code>synchronized</code> 或 <code>Lock</code> 保護，避免同一時間有人放入、有人取出而造成狀態錯亂。</li>
+<li><strong>條件不滿足就等待，而且要釋放鎖。</strong> <code>wait()</code> 會暫停目前執行緒，同時把鎖讓出去。這樣其他執行緒才有機會進入臨界區，改變條件並把等待者叫醒。若等待時仍霸佔著鎖，其他執行緒就只能全部卡在門外。</li>
+<li><strong>判斷等待條件要用 <code>while</code>，不要用 <code>if</code>。</strong> 執行緒可能在沒有真正收到通知時醒來，這叫虛假喚醒；即使確實收到通知，醒來前也可能已經有另一條執行緒先改變了共享資料。因此，醒來後必須重新檢查條件。用 <code>while</code> 才能確保條件仍不滿足時，繼續等待。</li>
+</ol>
+
+<figure class="lesson-figure"><img src="./wait-notify-coding-questions-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>題一：生產者消費者</h2>
+
+<p>先處理最經典的情境：倉庫有固定容量。倉庫滿了，生產者不能再放；倉庫空了，消費者不能再取。有人完成工作後，就要通知可能正在等待的執行緒。</p>
+
+<pre><code>import java.util.LinkedList;
+
+class Storage {
+    private final int MAX_SIZE;
+    private final LinkedList&lt;Object&gt; list = new LinkedList&lt;&gt;();
+
+    public Storage(int maxSize) { this.MAX_SIZE = maxSize; }
+
+    public synchronized void produce() throws InterruptedException {
+        while (list.size() == MAX_SIZE) {   // 滿了就等，醒來再檢查
+            this.wait();
+        }
+        list.add(new Object());             // 幹活：放一個產品
+        this.notifyAll();                   // 通知：可能有人在等空的
+    }
+
+    public synchronized void consume() throws InterruptedException {
+        while (list.size() == 0) {          // 空了就等，醒來再檢查
+            this.wait();
+        }
+        list.removeFirst();                 // 幹活：取一個產品
+        this.notifyAll();                   // 通知：可能有人在等滿的
+    }
+}</code></pre>
+
+<p><code>produce()</code> 和 <code>consume()</code> 都宣告成 <code>synchronized</code>，所以同一時間只有一條執行緒能修改 <code>list</code>。</p>
+
+<p>生產者先檢查倉庫是否已滿。若已滿，就進入 <code>while</code>，呼叫 <code>wait()</code> 並釋放鎖；等消費者取走產品、有人通知後，再重新檢查容量。若還是滿的，就繼續等待。</p>
+
+<p>消費者的邏輯相反：倉庫是空的，就先等待；有產品可取時，才呼叫 <code>removeFirst()</code>。</p>
+
+<p>這裡不能把 <code>while</code> 改成 <code>if</code>。例如生產者被喚醒後，在它重新拿到鎖之前，可能已經有另一條生產者先把倉庫塞滿。若只檢查一次，醒來後就可能在滿倉庫中繼續放入產品，造成容量超限。消費者同樣可能醒來後發現倉庫又空了，因此也要重新判斷。</p>
+
+<h2>題二：N 執行緒順序打印數字</h2>
+
+<p>接著把問題改成輪流打印：有 N 條執行緒，編號從 0 到 N-1。它們要依序印出 0、1、2……直到指定上限，不能因為執行緒切換而打亂順序。</p>
+
+<pre><code>public class NumberPrinter {
+    private int currentNumber = 0;
+    private final int limit;
+    private final int threadCount;
+
+    public NumberPrinter(int limit, int threadCount) {
+        this.limit = limit;
+        this.threadCount = threadCount;
+    }
+
+    public void print(int threadId) {
+        while (currentNumber &lt;= limit) {
+            synchronized (this) {
+                if (currentNumber &gt; limit) return;   // 進鎖後再確認一次
+                if (currentNumber % threadCount == threadId) {
+                    System.out.println("Thread-" + threadId + " 印出 " + currentNumber);
+                    currentNumber++;
+                    this.notifyAll();                // 廣播，讓大家重算
+                } else {
+                    this.wait();                     // 不是我的活，讓鎖去睡
+                }
+            }
+        }
+    }
+}</code></pre>
+
+<p>這題的分工規則由取模決定：</p>
+
+<p><code>currentNumber % threadCount == threadId</code>。</p>
+
+<p>假設有三條執行緒：</p>
+
+<ul>
+<li>數字 0：<code>0 % 3 = 0</code>，交給 0 號執行緒。</li>
+<li>數字 1：<code>1 % 3 = 1</code>，交給 1 號執行緒。</li>
+<li>數字 2：<code>2 % 3 = 2</code>，交給 2 號執行緒。</li>
+<li>數字 3：<code>3 % 3 = 0</code>，再回到 0 號執行緒。</li>
+</ul>
+
+<p>取模就像一個自動循環的接力棒，不需要另外寫一大串 <code>if-else</code> 來記錄「現在輪到誰」。</p>
+
+<h3>為什麼這裡要用 notifyAll？</h3>
+
+<p>這題若使用 <code>notify()</code>，就可能隨機叫醒錯的執行緒，最後讓所有執行緒一起睡死。</p>
+
+<p>例如 0 號執行緒印完 0，將數字改成 1，接著呼叫 <code>notify()</code>。如果它剛好叫醒 2 號執行緒，2 號檢查後會發現 <code>1 % 3 = 1</code>，現在不是自己該做的工作，於是又回去等待。</p>
+
+<p>問題在於，真正該工作的 1 號執行緒可能從頭到尾都沒有被叫醒。結果是 0 號已經睡下去，1 號也在等待，2 號再次等待，程式便卡住了。</p>
+
+<p><code>notifyAll()</code> 則會把所有等待中的執行緒叫醒。2 號發現還沒輪到自己，就回去等待；1 號發現條件符合，便印出數字並把狀態往前推進。</p>
+
+<p>廣播會帶來一些額外的喚醒和上下文切換，但在「下一個合適的執行緒不固定」時，這是值得的代價。它保證真正該動的人有機會重新檢查條件，維持程式的<strong>活性</strong>。</p>
+
+<figure class="lesson-figure"><img src="./wait-notify-coding-questions-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>題三：三執行緒交替打印 ABC</h2>
+
+<p>最後把輪流打印改成固定順序：三條執行緒分別負責 A、B、C，輸出必須是 <code>ABCABC...</code>。</p>
+
+<p>這次不想把所有等待中的執行緒都叫醒，而是希望 A 印完只叫醒 B，B 印完只叫醒 C，C 印完再叫醒 A。這種「點名下一棒」的做法叫做<strong>精確喚醒</strong>。</p>
+
+<p><code>synchronized</code> 搭配 <code>notify()</code> 只能從同一個等待集合中隨機喚醒一條執行緒；搭配 <code>notifyAll()</code> 又會全部叫醒。因此，這裡改用 <code>ReentrantLock</code>，讓同一把鎖建立三個不同的 <code>Condition</code>。</p>
+
+<pre><code>import java.util.concurrent.locks.*;
+
+public class ABCPrinter {
+    private int state = 0;                 // 0=A, 1=B, 2=C
+    private static final int PRINT_COUNT = 10;
+    private final Lock lock = new ReentrantLock();
+    private final Condition conditionA = lock.newCondition();
+    private final Condition conditionB = lock.newCondition();
+    private final Condition conditionC = lock.newCondition();
+
+    private void print(String name, int targetState, Condition current, Condition next) {
+        for (int i = 0; i &lt; PRINT_COUNT; i++) {
+            lock.lock();
+            try {
+                while (state % 3 != targetState) {   // 不該我，就等
+                    current.await();
+                }
+                System.out.print(name);
+                state++;                             // 交棒
+                next.signal();                       // 精準叫下一個
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            } finally {
+                lock.unlock();                       // 一定要解鎖
+            }
+        }
+    }
+
+    public void printA() { print("A", 0, conditionA, conditionB); }
+    public void printB() { print("B", 1, conditionB, conditionC); }
+    public void printC() { print("C", 2, conditionC, conditionA); }
+}</code></pre>
+
+<p>三個 <code>Condition</code> 分別代表 A、B、C 的等待佇列。<code>conditionA</code> 上等待的是 A 執行緒，其他兩個 Condition 也是同樣的概念。</p>
+
+<p><code>state</code> 則是現在輪到誰的狀態機：</p>
+
+<ol>
+<li><code>state = 0</code> 時，A 通過檢查，印出 A，將 <code>state</code> 改成 1，再呼叫 <code>conditionB.signal()</code>。</li>
+<li><code>state = 1</code> 時，B 通過檢查，印出 B，將 <code>state</code> 改成 2，再呼叫 <code>conditionC.signal()</code>。</li>
+<li><code>state = 2</code> 時，C 通過檢查，印出 C，將 <code>state</code> 改成 3，再呼叫 <code>conditionA.signal()</code>。</li>
+<li>此時 <code>3 % 3 = 0</code>，輪次回到 A。</li>
+</ol>
+
+<p><code>state % 3</code> 讓狀態可以不斷循環，而三個 Condition 則把喚醒方向固定下來。<code>signal()</code> 不會叫醒其他 Condition 上的執行緒，因此不需要讓所有人一起起床競爭。</p>
+
+<figure class="lesson-figure"><img src="./wait-notify-coding-questions-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>即使使用了精確喚醒，<code>await()</code> 外面仍然要用 <code>while</code>。精確喚醒只代表「通常會叫對人」，不代表可以省略條件重查；防止虛假喚醒仍然是必要的標準寫法。</p>
+
+<blockquote class="good-code">
+做完後，你應該看到穩定而且可預期的結果：生產者消費者不會超出容量，也不會從空倉庫取資料；N 執行緒打印的數字會嚴格遞增；ABC 打印則會規律地重複 ABCABC。若程式偶爾卡住或順序錯亂，優先檢查等待條件是否用了 <code>while</code>，以及喚醒策略是否選對。
+</blockquote>
+
+<h2>三題放在一起看</h2>
+
+<blockquote>
+三題共用同一個骨架：先用鎖保護共享狀態，再在鎖內檢查「現在輪到我了嗎」或「條件滿足了嗎」。如果條件不成立，就用 <code>wait</code>／<code>await</code> 等待並讓出鎖；條件成立時，執行工作、更新狀態，再喚醒其他執行緒。生產者消費者使用 <code>synchronized</code> + <code>wait/notifyAll</code>；N 執行緒打印使用取模決定誰該動，並用 <code>notifyAll</code> 避免叫醒錯人後卡死；ABC 打印則使用 <code>ReentrantLock</code> 搭配多個 <code>Condition</code>，以 <code>state % 3</code> 傳遞接力棒。貫穿三題的鐵律是：等待條件一定要放在 <code>while</code> 裡。
+</blockquote>
+
+<p>這一節先聚焦在「怎麼組合工具，寫出正確的等待與喚醒」。<code>wait</code> 為什麼會釋放鎖、<code>Condition</code> 為什麼能分開等待佇列，以及 <code>AQS</code> 在背後如何排隊，會在鎖與 AQS 的內容中深入說明。</p>
+
+<p>等待與喚醒處理的是「誰先誰後」。下一節會換一種併發問題：物件本身是否被正確建立。DCL 單例的關鍵敵人是指令重排序，而用來阻止它的關鍵字是 <code>volatile</code>。</p>
+
+<div class="lesson-nav">
+  <div><a href="./completablefuture-and-forkjoin.html">← 上一步：CompletableFuture 與 ForkJoinPool</a></div>
+  <div><a href="./dcl-singleton-volatile.html">下一步：DCL 單例 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="生產者消費者裡，判斷倉庫滿不滿為什麼要用 while 而非 if？" data-correct="2" data-explain="wait 可能虛假喚醒，或醒來後鎖被搶、條件又變，醒來必須重新檢查。">
+  <button class="opt">因為 while 迴圈執行的速度比較快</button>
+  <button class="opt">因為 if 不能搭配 wait 一起使用</button>
+  <button class="opt">因為醒來後條件可能已經改變了</button>
+  <button class="opt">因為 while 會自動幫你加上鎖</button>
+</div>
+<div class="quiz" data-question="呼叫 wait() 時，執行緒會發生什麼事？" data-correct="1" data-explain="wait 會掛起執行緒並釋放它持有的鎖，讓其他執行緒能進入臨界區。">
+  <button class="opt">繼續持有鎖並在原地空轉等待</button>
+  <button class="opt">掛起並釋放鎖，讓別人進來</button>
+  <button class="opt">直接終止執行緒並回收資源</button>
+  <button class="opt">把鎖升級成重量級鎖再等待</button>
+</div>
+<div class="quiz" data-question="N 執行緒順序打印中，notify() 可能造成什麼後果？" data-correct="0" data-explain="隨機喚醒到不該動的執行緒，它會繼續睡，而該動的沒被叫到，形成死鎖。">
+  <button class="opt">隨機叫錯人導致真正該動的沒醒</button>
+  <button class="opt">一次喚醒太多執行緒造成顛簸</button>
+  <button class="opt">計數會直接跳到下一個數字</button>
+  <button class="opt">取模結果會被改成負數</button>
+</div>
+<div class="quiz" data-question="為什麼交替打印 ABC 適合用 ReentrantLock 而不是 synchronized？" data-correct="3" data-explain="ReentrantLock 能建立多個 Condition，做到點對點的精確喚醒。">
+  <button class="opt">因為 synchronized 不能被多條執行緒使用</button>
+  <button class="opt">因為 ReentrantLock 執行速度一定更快</button>
+  <button class="opt">因為 synchronized 不支援 try-finally</button>
+  <button class="opt">因為它能建立多個 Condition 精準喚醒</button>
+</div>
+<div class="quiz" data-question="ABC 印完後 state 加一併用 state % 3 判斷，主要作用是什麼？" data-correct="1" data-explain="取模形成閉環，讓 A→B→C→A 的接力棒自動輪轉。">
+  <button class="opt">避免三條執行緒同時被喚醒</button>
+  <button class="opt">讓接力棒在 ABC 之間形成閉環</button>
+  <button class="opt">加快每次打印的執行速度</button>
+  <button class="opt">記錄總共已經印了幾輪</button>
+</div>
+<div class="quiz" data-question="即使在精確喚醒下，await 仍包在 while 裡，理由是？" data-correct="0" data-explain="防虛假喚醒是併發程式的基本習慣，醒來後仍要重新檢查條件。">
+  <button class="opt">防止虛假喚醒後錯誤地繼續執行</button>
+  <button class="opt">讓 signal 可以一次喚醒多條執行緒</button>
+  <button class="opt">避免 state 變數出現競態條件</button>
+  <button class="opt">讓鎖有機會升級成偏向鎖</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 併發工具與手寫併發題 · Step 4/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

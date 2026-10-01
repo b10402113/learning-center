@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>位元組碼怎麼跑起來：半編譯、半解釋與 JIT</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>位元組碼怎麼跑起來：半編譯、半解釋與 JIT</h1>
+<p class="meta">Step 1/6 · JVM 執行時與類載入：類別怎麼被載入、物件存在哪</p>
+
+<h2>學習目標</h2>
+<p>看完這一節，你應該能說清楚 <code>.java</code> 如何變成 <code>.class</code>，再變成 CPU 能執行的機器碼；也能解釋 JIT 為什麼存在、怎麼透過熱點偵測挑出值得優化的程式碼，以及逃逸分析為什麼可能讓區域變數更省資源。</p>
+
+<h2>前言：Java 到底是編譯型，還是解釋型？</h2>
+
+<p>面試時，你可能被問過：「Java 是編譯型語言，還是解釋型語言？」如果回答編譯型，問題馬上就來了：<code>javac</code> 明明只產出不能直接交給 CPU 執行的 <code>.class</code> 檔。如果回答解釋型，又很難說明 Java 為什麼能在長時間執行後，擁有接近 C++ 的效能。</p>
+
+<p>這題背後其實是 Java 執行模型的地基。後面會遇到的堆、棧、GC、物件配置與類別載入，都和「程式碼最後如何變成 CPU 看得懂的指令」有關。這一層如果沒弄清楚，後面的名詞就像散落在桌上的拼圖，很難拼出完整畫面。</p>
+
+<p>所以這一節要沿著 Java 程式走過的路來看：先從原始碼變成位元組碼，再由 JVM 在執行期間使用解釋器與 JIT 編譯器，將位元組碼轉成真正的機器碼。</p>
+
+<h2>第一階段：<code>javac</code> 把原始碼編成平台無關的位元組碼</h2>
+
+<p>Java 執行的第一步是編譯。你使用 <code>javac</code> 將 <code>.java</code> 檔編譯成 <code>.class</code> 檔，裡面裝的是位元組碼（bytecode）。它位在原始碼與機器碼之間，是一組 JVM 看得懂的中間指令。</p>
+
+<p>這裡有個很重要的差別：位元組碼是給 JVM 執行的指令，不是給 CPU 直接執行的機器碼。</p>
+
+<p>以 C++ 為例，編譯後的執行檔通常會和特定的作業系統、CPU 架構綁在一起。換到另一個平台，往往需要重新編譯。Java 的位元組碼則與平台無關；同一份 <code>.class</code> 可以放到 Windows、Linux 或 Mac，交給各自平台上的 JVM 執行。</p>
+
+<p>因此，「一次編寫，到處運行」真正跨平台的是不同平台上的 JVM，不是 Java 程式本身。你可以把 <code>javac</code> 想成先把原始碼翻成一套大家都看得懂的世界語；等到了不同國家，再由當地的 JVM 翻譯成 CPU 能理解的語言。</p>
+
+<figure class="lesson-figure"><img src="./bytecode-execution-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第二階段：JVM 先用解釋器讓程式跑起來</h2>
+
+<p>程式啟動時，JVM 內部的解釋器（Interpreter）會讀取位元組碼，將它翻譯成目前平台的機器碼，再交給 CPU 執行。這種做法就是解釋執行。</p>
+
+<p>解釋器的優點是啟動快。它不需要在程式開始前，把所有程式碼完整翻譯一遍；程式執行到哪裡，就翻譯到哪裡。像是同步口譯，講到一句就翻一句，不必先把整場演講的稿子全部準備好。</p>
+
+<p>但這種方式也有明顯的代價：同一段程式碼每次執行時，都可能需要重新翻譯。對於會被反覆呼叫的方法或迴圈來說，這等於一直重做同一件事，效能自然比不上已經編譯好的機器碼。</p>
+
+<p>那麼，反過來採用 C++ 的方式，在程式啟動前把所有程式碼都編成機器碼，是否就能解決問題？也不完全行得通。這樣會拖慢啟動時間，佔用更多記憶體，而且程式裡有許多函式可能只執行一兩次，甚至根本不會執行。為了這些程式碼預先付出完整的編譯成本，並不划算。</p>
+
+<figure class="lesson-figure"><img src="./bytecode-execution-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>JIT：只編譯真正反覆執行的熱點程式碼</h2>
+
+<p>JIT（Just-In-Time compiler，即時編譯器）要解決的，就是啟動速度與長時間執行效能之間的取捨。</p>
+
+<p>它的基本策略是：大部分只執行一兩次的程式碼，交給解釋器處理；少數被反覆呼叫、真正影響效能的程式碼，才值得花成本編譯。這些被頻繁執行的程式碼，就叫做熱點程式碼（hot code）。</p>
+
+<p>JVM 會怎麼知道哪些程式碼是熱點？它會替方法或迴圈維護計數器。當某個方法的呼叫次數超過門檻，例如 Server 模式下預設約一萬次，JVM 就會將它標記為熱點。接著，JIT 會在背景把這段位元組碼編譯成本地機器碼，放進記憶體中的 Code Cache。</p>
+
+<p>之後再次呼叫這個方法時，就可以直接執行已經編好的機器碼，不必再逐次解釋。</p>
+
+<p>這就像一場會議裡的同步口譯：第一次聽到某段內容時，解釋器負責即時翻譯；如果發現這段內容接下來會不斷重複，JIT 就乾脆把整段講稿先翻好。這樣一來，程式啟動時不必等待全部編譯，執行時間拉長後，常用的部分又能跑得很快。</p>
+
+<figure class="lesson-figure"><img src="./bytecode-execution-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+<thead>
+<tr><th>執行方式</th><th>怎麼做</th><th>優點</th><th>缺點</th></tr>
+</thead>
+<tbody>
+<tr><td>純解釋</td><td>每次執行都逐行翻譯</td><td>啟動快，不用預先編譯</td><td>反覆執行的程式碼會很慢</td></tr>
+<tr><td>靜態編譯（如 C++）</td><td>啟動前全部編成機器碼</td><td>執行速度快</td><td>啟動慢、佔用記憶體，也可能編譯到根本用不到的程式碼</td></tr>
+<tr><td>JIT 即時編譯</td><td>只在執行期間編譯熱點程式碼</td><td>兼顧啟動速度與熱點效能</td><td>需要額外付出計數與編譯的成本</td></tr>
+</tbody>
+</table>
+
+<h2>JIT 不只是翻譯，也會依照實際執行狀況做最佳化</h2>
+
+<p>JIT 的工作不只是把位元組碼翻成機器碼。它是在程式實際執行時才編譯，所以能觀察程式平常是怎麼跑的，再做一些 <code>javac</code> 僅靠原始碼難以完成的最佳化。</p>
+
+<p>常見的最佳化包括以下幾種。</p>
+
+<p><strong>方法內聯（inlining）</strong>：如果一個小方法經常被呼叫，JIT 可能直接把方法內容複製到呼叫它的地方。這樣可以省下方法呼叫時進出棧的成本。這也是為什麼程式拆成許多小方法，不一定會帶來明顯的效能問題。</p>
+
+<p><strong>死程式碼消除</strong>：如果某段程式碼算出的結果從頭到尾都沒有被使用，JIT 就可能直接把這段程式碼移除，連計算都省下來。</p>
+
+<p><strong>逃逸分析（escape analysis）</strong>：JIT 會判斷一個物件是否會離開目前的方法，再決定是否能用更省成本的方式處理它。這也是下一段的重點。</p>
+
+<h2>逃逸分析：為什麼區域變數可能比較省</h2>
+
+<p>先看「逃逸」到底是什麼。</p>
+
+<p>假設你在方法 A 裡使用 <code>new</code> 建立一個物件。如果你把它當成回傳值 <code>return</code> 出去，或把它放進全域變數，讓方法 B 甚至其他執行緒也能取得，這個物件就算「逃逸」了。它已經不只屬於方法 A，JIT 就不能任意改變它的生命週期或儲存方式。</p>
+
+<p>相反地，如果物件只在方法 A 裡使用，方法結束後外部沒有任何地方能取得它，這個物件就「沒有逃逸」。它的活動範圍被限制在目前方法內，JIT 因此有更多最佳化空間。</p>
+
+<p>當 JIT 判定物件沒有逃逸時，可能採取幾種方式來降低堆的負擔：</p>
+
+<ol>
+<li><strong>棧上分配</strong>：既然物件不會離開方法，就不一定要放在堆上。它可以直接放進棧幀裡；方法結束、棧幀彈出後，物件也就跟著消失，不需要等 GC 回收。</li>
+<li><strong>純量替換（scalar replacement）</strong>：這是 HotSpot 目前實際採用的做法。它甚至不會真的在棧上建立完整物件，而是把物件拆成幾個基本型別的成員。例如有 <code>x</code>、<code>y</code> 兩個欄位的 <code>Point</code> 物件，最佳化後棧裡可能沒有完整的 <code>Point</code>，只剩下兩個 <code>int</code> 值。</li>
+<li><strong>同步消除</strong>：如果物件沒有逃逸，就代表它不可能被多個執行緒共用。這種情況下，加在該物件上的 <code>synchronized</code> 鎖就可能被安全地移除。</li>
+</ol>
+
+<p>把這些機制連起來，就能理解為什麼常聽到「能用區域變數就用區域變數」。區域變數指向的物件，比較容易被限制在目前的方法內，也比較容易通過逃逸分析。分析成功後，就可能省下堆配置、GC 回收，甚至鎖同步的成本。</p>
+
+<figure class="lesson-figure"><img src="./bytecode-execution-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這背後是物件生命週期與 JIT 最佳化機制一起作用的結果，不是單純的程式風格偏好。</p>
+
+<h2>小結：Java 為什麼是「半編譯、半解釋」</h2>
+
+<blockquote>
+Java 是「半編譯、半解釋」：<code>javac</code> 先把原始碼編成平台無關的位元組碼，執行時由解釋器逐行翻譯，再由 JIT 把熱點程式碼即時編成機器碼，放入 Code Cache。JIT 還會做方法內聯、死程式碼消除與逃逸分析；其中逃逸分析能讓沒有離開方法的物件使用棧上分配、純量替換與同步消除，減少堆配置與 GC 成本。
+</blockquote>
+
+<p>到這裡，我們看懂了程式碼如何從原始碼一路走到機器碼。下一個自然的問題是：這些指令執行時，資料到底放在哪裡？下一節會打開 JVM 的執行時資料區，看看堆、棧與方法區各自負責什麼。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./runtime-memory-areas.html">下一步：執行時資料區：五塊記憶體各裝什麼 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 Java 被稱為「半編譯、半解釋」？" data-correct="1" data-explain="先由 javac 編成位元組碼，執行時再由解釋器與 JIT 處理。">
+  <button class="opt">因為它只能編譯一部分的原始碼檔案</button>
+  <button class="opt">因為它先編成位元組碼，執行時解釋加即時編譯</button>
+  <button class="opt">因為它同時支援編譯與直譯兩種寫法語法</button>
+  <button class="opt">因為它只能解釋執行完全不能編譯程式碼</button>
+</div>
+<div class="quiz" data-question="JIT 為什麼只編譯「熱點程式碼」，不全部編譯？" data-correct="2" data-explain="大部分程式碼只跑一兩次，全部預先編譯會拖慢啟動又佔記憶體。">
+  <button class="opt">因為 JVM 的編譯器只能編譯很小段的程式</button>
+  <button class="opt">因為非熱點程式碼在編譯後會變成錯誤</button>
+  <button class="opt">因為全部預先編譯會拖慢啟動又佔記憶體</button>
+  <button class="opt">因為熱點程式碼以外的位元組碼無法讀取</button>
+</div>
+<div class="quiz" data-question="JIT 編譯好的機器碼會放在哪裡供後續直接執行？" data-correct="0" data-explain="編譯結果存放在 Code Cache，下次直接執行不必再解釋。">
+  <button class="opt">放在記憶體中的 Code Cache 區域</button>
+  <button class="opt">放回磁碟上的 .class 檔案裡面</button>
+  <button class="opt">放在方法區的常數池等待被呼叫</button>
+  <button class="opt">放在堆中由垃圾回收器管理釋放</button>
+</div>
+<div class="quiz" data-question="下列哪一項不是 JIT 會做的優化？" data-correct="3" data-explain="把原始碼編成位元組碼是 javac 在編譯階段做的，不是 JIT。">
+  <button class="opt">把小型方法內聯進呼叫端以省開銷</button>
+  <button class="opt">消除計算結果從未被使用的程式碼</button>
+  <button class="opt">分析物件是否逃出方法以減少配置</button>
+  <button class="opt">把 Java 原始碼編譯成平台無關位元組碼</button>
+</div>
+<div class="quiz" data-question="什麼情況下的物件會被判定為「沒有逃逸」？" data-correct="1" data-explain="只在方法內使用、外面拿不到，就沒有逃逸。">
+  <button class="opt">物件被當成回傳值交給其他方法使用</button>
+  <button class="opt">物件只在當前方法內使用，方法結束即無用</button>
+  <button class="opt">物件被賦值給類別的靜態全域變數保存</button>
+  <button class="opt">物件被放進佇列交由其他執行緒處理</button>
+</div>
+<div class="quiz" data-question="關於 HotSpot 的逃逸分析優化，下列何者正確？" data-correct="2" data-explain="HotSpot 以純量替換把物件拆成基本型別變數，而非真的在棧上造物件。">
+  <button class="opt">未逃逸的物件仍會完整地配置在堆記憶體</button>
+  <button class="opt">未逃逸物件的 synchronized 一律保留不動</button>
+  <button class="opt">以純量替換把物件拆成基本型別成員變數</button>
+  <button class="opt">逃逸分析是 javac 在編譯期完成的優化</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · JVM 執行時與類載入：類別怎麼被載入、物件存在哪 · Step 1/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

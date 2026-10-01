@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>收集器怎麼選？從 Serial 到 ZGC 與三色標記</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>收集器怎麼選？從 Serial 到 ZGC，延遲與吞吐量怎麼取捨</h1>
+<p class="meta">Step 3/4 · GC、記憶體壓力與線上排查</p>
+
+<h2>先想清楚：你要解決的是哪一種痛點？</h2>
+
+<p>線上服務突然出現 GC 頻繁、回應變慢的告警時，第一個念頭通常是：「要不要換一個垃圾收集器？」但 JVM 裡從 Serial、Parallel、CMS、G1 到 ZGC，每一個都有自己的代價。選錯了，可能只是把問題從停頓時間換成 CPU 開銷，或從吞吐量換成碎片。</p>
+
+<p>這一節不談「哪個收集器最強」，要談的是「什麼條件下該選哪一個」。你會先看到候選方案排開比較，接著用幾個判別問句做選擇，最後看這些規則什麼時候會失效。搞懂三色標記與寫屏障之後，你也說得出 CMS 為什麼會留下碎片，以及 G1 怎麼讓停頓時間更可控。</p>
+
+<p>學完後，你應該能依照吞吐量或延遲目標，在 Serial、Parallel、CMS、G1 與 ZGC 之間做選擇，並解釋它們在碎片與停頓控制上的底層差異。</p>
+
+<h2>候選方案比較：先把收集器排開</h2>
+
+<p>這些收集器大致沿著一條演進路線走：最早是單執行緒、停頓明顯但結構簡單；接著是多執行緒、以吞吐量為主；再往後，就是讓 GC 跟應用程式併發執行、想辦法把延遲壓下來的方案。</p>
+
+<figure class="lesson-figure"><img src="./collector-evolution-and-selection-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+<thead>
+<tr><th>收集器</th><th>型態與目標</th><th>核心特徵</th><th>適用場景</th></tr>
+</thead>
+<tbody>
+<tr><td>Serial + Serial Old</td><td>單執行緒，STW</td><td>結構簡單，單核心下沒有額外的執行緒協調負擔</td><td>記憶體很小的用戶端應用；伺服器端幾乎不用</td></tr>
+<tr><td>Parallel Scavenge + Parallel Old</td><td>多執行緒並行，吞吐量優先</td><td>JDK 8 預設，目標是降低 GC 佔用的總時間</td><td>背景運算、報表處理等互動較少的場景</td></tr>
+<tr><td>ParNew + CMS</td><td>併發，回應時間優先</td><td>GC 與使用者執行緒併發，停頓較短；但有碎片、對 CPU 敏感，且 JDK 14 已移除</td><td>對延遲敏感的老系統 Web 服務</td></tr>
+<tr><td>G1</td><td>併發，可預測停頓</td><td>JDK 9 起預設；以 Region 管理堆，並可用 <code>-XX:MaxGCPauseMillis</code> 設定停頓目標</td><td>6G 以上、多核心的伺服器端應用</td></tr>
+<tr><td>ZGC</td><td>幾乎全程併發，極低延遲</td><td>使用染色指標與讀屏障，停頓可壓在 10ms 內，且不會隨堆增大而明顯變長</td><td>32G 以上的超大堆，以及對延遲極度敏感的服務</td></tr>
+</tbody>
+</table>
+
+<p>這張表裡有三個轉折特別值得記住。</p>
+
+<p><strong>Parallel</strong> 的想法是：「可以接受單次停久一點，但不要讓 GC 反覆打斷工作。」它不追求每一次停頓都很短，而是盡量減少 GC 佔用的總時間。因此，批次工作、報表與離線計算通常比較適合它，因為沒有使用者一直在線上等回應。</p>
+
+<p><strong>CMS</strong> 是併發收集的早期代表。它讓 GC 執行緒與使用者執行緒同時執行，把單次停頓切短，所以曾經長期是老系統的常見選擇。不過，CMS 使用標記－清除，而且不搬動存活物件，久了容易留下碎片；它也會和應用程式搶 CPU。</p>
+
+<p><strong>G1</strong> 則把「希望停多久」變成可以設定的目標。它除了讓平均停頓變短，還會看每個 Region 的回收收益決定先收哪裡，所以比 CMS 更容易守住停頓上限。</p>
+
+<h2>為什麼 CMS 會有碎片、G1 比較能控制碎片？</h2>
+
+<p>CMS 和 G1 都要面對同一個難題：GC 在標記物件時，使用者執行緒並沒有停下來。GC 可能正在判斷物件是否存活，程式卻同時修改了物件之間的引用。為了處理這種「一邊盤點、一邊有人搬動物品」的情況，JVM 使用<strong>三色標記</strong>來描述物件的狀態。</p>
+
+<p>每個物件會被分成三種顏色：</p>
+
+<ul>
+<li><strong>白色</strong>：還沒有被掃描到。</li>
+<li><strong>灰色</strong>：自己已經被掃描，但指向的子物件還沒有全部處理完。</li>
+<li><strong>黑色</strong>：自己與所有子物件都已經掃描完成，確認仍然存活。</li>
+</ul>
+
+<p>標記會從 GC Roots 開始。GC 先把根直接指向的物件塗成灰色，再反覆取出灰色物件，將它指向的子物件塗灰，最後把自己塗成黑色。當灰色集合清空時，仍然是白色的物件就會被視為垃圾。</p>
+
+<p>麻煩在於，使用者執行緒可能在標記途中改變引用，造成所謂的<strong>物件消失</strong>。想像一下：一個黑色物件新增了指向白色物件的引用，同時原本指向這個白色物件的灰色物件又把引用切斷。白色物件就可能從 GC 的視野中消失，明明還活著，卻被誤判成垃圾。</p>
+
+<figure class="lesson-figure"><img src="./collector-evolution-and-selection-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>為了避免這種情況，JVM 會透過<strong>寫屏障</strong>攔截引用的修改。CMS 跟 G1 最主要的差別，就在它們採用了不同的處理策略。</p>
+
+<ul>
+<li><strong>增量更新（Incremental Update），CMS 採用</strong>：它破壞「黑色物件新增指向白色物件的引用」這個條件。只要黑色物件插入了指向白色物件的新引用，就把黑色物件重新標記為灰色，稍後再掃描一次。可以把它想成：「你新交了一個朋友，所以我把你拉回來重新審查。」</li>
+<li><strong>原始快照（SATB，Snapshot At The Beginning），G1 採用</strong>：它破壞「灰色物件刪除指向白色物件的引用」這個條件。當引用被刪除時，先把舊引用記錄下來，後續仍按照標記開始那一刻的關係來掃描。也就是：「不管你現在怎麼改，我先保留一份開始時的快照。」</li>
+</ul>
+
+<p>搞懂寫屏障之後，CMS 跟 G1 的差異就不是用背的了。</p>
+
+<p>CMS 採用標記－清除，而且不會把存活物件重新整理到一起。垃圾被清掉後，空間會留下大小不一的空洞。久而久之，即使堆裡還有足夠的總空間，大物件也可能找不到一塊連續空間放置，最後觸發 Full GC，帶來較長且難以預測的停頓。</p>
+
+<p>G1 則把整個堆切成許多 <strong>Region</strong>。它的整體策略是標記－整理，並在局部 Region 之間使用複製，把存活物件集中到新的空間，降低碎片問題。同時，G1 會估算不同 Region 的回收收益，優先挑更值得回收的區域下手，來配合停頓目標。</p>
+
+<h2>判別問句：你應該問自己什麼？</h2>
+
+<p>選收集器時，先別問「哪一個最先進」，問下面這幾題比較實在。答案會把你帶到不同的選項。</p>
+
+<figure class="lesson-figure"><img src="./collector-evolution-and-selection-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<ol>
+<li><strong>這個服務有人在線等回應嗎？</strong>如果是批次、報表或離線計算，沒有人直接等待結果，可以優先考慮 Parallel，讓吞吐量最大化。如果使用者正在等待，就要往低延遲的方向評估。</li>
+<li><strong>堆有多大？</strong>如果只有幾 GB，且服務對停頓不太敏感，Parallel 或 CMS 仍可能適用。6G 以上、又是多核心的伺服器端應用，通常優先看 G1。到了 32G 甚至 TB 級，而且延遲非常重要，才需要評估 ZGC。</li>
+<li><strong>能不能接受碎片？</strong>如果不能接受碎片，又希望停頓時間有上限，G1 通常比 CMS 合適，因為它透過 Region 與整理機制降低碎片累積。</li>
+<li><strong>JDK 版本夠新嗎？</strong>ZGC 在 JDK 11 引入、JDK 15 正式發布；JDK 21 的分代 ZGC 又進一步補強吞吐量。如果版本太舊，就不能只看理想方案，必須把相容性與升級成本算進來。</li>
+<li><strong>你願意用吞吐量換低延遲嗎？</strong>ZGC 的染色指標、寫屏障與讀屏障都會帶來額外成本，讀取資料時也要多做一次檢查。如果服務更在意總處理量，而不是極短延遲，使用 ZGC 未必划算。</li>
+</ol>
+
+<h2>反例：這些規則什麼時候會翻轉？</h2>
+
+<p>「大堆選 G1、超大堆選 ZGC」可以當作起點，但不能當成鐵律。</p>
+
+<p>如果真正的瓶頸在資料庫或下游服務，GC 可能只是被誤認的替罪羊。這時候換收集器不會讓系統變快，應該先找出真正消耗時間的地方。</p>
+
+<p>ZGC 的停頓很短，卻不是沒有代價。它的寫屏障、讀屏障與染色指標都會增加額外開銷。對延遲沒有那麼敏感、但 CPU 已經吃緊的服務來說，硬換 ZGC 可能讓吞吐量下降。</p>
+
+<p>老系統常常被特定 JDK 版本、框架或部署環境綁住。即使 CMS 已在 JDK 14 移除，現場仍可能有許多系統依賴它。此時貿然遷移到新收集器，升級風險可能比目前的碎片問題更大。</p>
+
+<p>參數也可能把好方案調成壞方案。例如把 G1 的停頓目標設得過於激進，G1 可能來不及完成回收，最後反而提早觸發 Full GC。問題不一定出在收集器本身，也可能是目標設定跟實際的工作負載對不上。</p>
+
+<figure class="lesson-figure"><img src="./collector-evolution-and-selection-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>可以直接套用的決策規則</h2>
+
+<blockquote>
+選收集器，就是在吞吐量與延遲之間放上不同重量的砝碼：批次工作優先考慮 Parallel；需要較低延遲、又能接受舊系統限制時評估 CMS；希望停頓可預測、降低碎片時優先看 G1；超大堆且對延遲極度敏感，才考慮 ZGC。實際決策前，依序確認「有沒有人在線等回應、堆有多大、能不能接受碎片、JDK 版本是否支援，以及是否願意用吞吐量換低延遲」。CMS 跟 G1 的底層差異，可以用三色標記跟寫屏障來解釋：CMS 使用增量更新，但標記－清除會留下碎片；G1 使用 SATB，再搭配 Region 整理與回收收益估算，讓碎片與停頓都更容易控制。
+</blockquote>
+
+<p>到這裡，你已經能回答「該選誰、為什麼」。但系統真正上線後，告警通常不會問你「請選一個收集器」，而是一句：「服務最近 GC 很頻繁，快來看看。」下一節會把這些概念接回實戰，整理一條從告警到根因的排查路徑。</p>
+
+<div class="lesson-nav">
+  <div><a href="./collection-algorithms-and-stw.html">← 上一步：垃圾怎麼收？三種演算法、分代收集與 STW</a></div>
+  <div><a href="./gc-frequent-diagnosis.html">下一步：線上 GC 頻繁怎麼查？從告警到根因的四步法 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="JDK 8 的預設垃圾收集器是哪一組？" data-correct="1" data-explain="Parallel Scavenge 加 Parallel Old，以吞吐量為目標。">
+  <button class="opt">Serial 加上 Serial Old 的組合</button>
+  <button class="opt">Parallel Scavenge 加上 Parallel Old</button>
+  <button class="opt">ParNew 加上 CMS 的組合</button>
+  <button class="opt">G1 這款可預測停頓的收集器</button>
+</div>
+<div class="quiz" data-question="G1 相較於 CMS 最關鍵的優勢是什麼？" data-correct="2" data-explain="G1 用 Region 與整理消除碎片，並能兌現停頓時間目標。">
+  <button class="opt">它的單執行緒回收速度明顯更快</button>
+  <button class="opt">它不需要任何寫屏障就能運作</button>
+  <button class="opt">它沒有碎片且停頓時間可預測</button>
+  <button class="opt">它可以把所有物件都放在堆外</button>
+</div>
+<div class="quiz" data-question="三色標記裡「黑色」物件代表什麼？" data-correct="0" data-explain="黑色代表自己與所有子物件都已掃完，確認存活。">
+  <button class="opt">自己和子物件都已掃描完成</button>
+  <button class="opt">已經被判定成垃圾的物件</button>
+  <button class="opt">正在等待被標記的根物件</button>
+  <button class="opt">剛剛才被建立出來的新物件</button>
+</div>
+<div class="quiz" data-question="G1 用哪一種寫屏障策略避免物件消失？" data-correct="3" data-explain="G1 採原始快照 SATB，記錄被刪除的引用，破壞第二個條件。">
+  <button class="opt">把白色物件直接重新塗成黑色</button>
+  <button class="opt">暫停所有使用者執行緒直到標記結束</button>
+  <button class="opt">增量更新，把黑色物件塗回灰色</button>
+  <button class="opt">原始快照，記錄被刪除的引用</button>
+</div>
+<div class="quiz" data-question="什麼情況下比較適合考慮 ZGC？" data-correct="1" data-explain="ZGC 在 32G 以上超大堆、對延遲零容忍的場景最有價值。">
+  <button class="opt">堆很小但希望 GC 完全不要發生</button>
+  <button class="opt">堆達數十 GB 且對延遲零容忍</button>
+  <button class="opt">伺服器只有單核心且記憶體吃緊</button>
+  <button class="opt">業務以離線批次運算為主不在乎延遲</button>
+</div>
+<div class="quiz" data-question="為什麼不能無腦說「堆大就一定換 ZGC」？" data-correct="2" data-explain="ZGC 的屏障有吞吐量成本，且版本、瓶頸位置都可能讓它不划算。">
+  <button class="opt">因為 ZGC 只能處理小於 32G 的堆</button>
+  <button class="opt">因為 ZGC 完全不支援多核心的機器</button>
+  <button class="opt">因為屏障有成本且瓶頸可能不在 GC</button>
+  <button class="opt">因為 ZGC 會讓所有物件都無法被回收</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · GC、記憶體壓力與線上排查 · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

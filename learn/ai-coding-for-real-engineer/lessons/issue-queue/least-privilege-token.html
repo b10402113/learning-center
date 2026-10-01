@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>只給 agent 剛好夠用的 token</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>只給 agent 剛好夠用的 token</h1>
+<p class="meta">Step 4/4 · issue 佇列驅動</p>
+
+<h2>先決定一件事：GitHub token 要開多大？</h2>
+
+<p>學到這裡，你可能會有個疙瘩：前面幾節一直理所當然地講「把 token 放進 <code>.env</code>」，可是<strong>把自己的 GitHub 存取權交給一段會自己判斷、自己行動的程式</strong>，聽起來就是件危險的事。</p>
+
+<p>這個擔心完全合理。agent 的速度比人快得多，一旦它的判斷偏了，或者在探索過程中讀到一段夾帶惡意指令的內容（prompt injection），手上又握著太大的權限，就有可能去動你不希望它動的東西。</p>
+
+<p>但反過來說，如果完全不給它憑證，它就沒辦法讀你的 issue，也沒辦法把票收掉，整條迴圈就像車子沒有輪子，根本跑不起來。</p>
+
+<p>所以真正的問題不是「給不給」，而是<strong>「給到什麼程度剛好夠用」</strong>。這一節要做的決定，就是用最小權限（least privilege）切出一個剛好的範圍：只給完成任務真正需要的那一點點，多一分都不給。</p>
+
+<figure class="lesson-figure"><img src="./least-privilege-token-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>學習目標</h2>
+
+<p>用最小權限原則決定 agent 的 GitHub token 該有哪些權限，並說出一次成功修復的完整流程，以及可觀測性從何而來。</p>
+
+<h2>選項比較：三種給法</h2>
+
+<table>
+<thead>
+<tr><th>做法</th><th>agent 能做什麼</th><th>風險</th></tr>
+</thead>
+<tbody>
+<tr><td>經典 token、開大範圍的 <code>repo</code> 權限</td><td>讀寫你所有 repo、建立與刪除 issue、推程式碼、碰設定</td><td>最高。一旦被誤用或外洩，影響面遍及整個帳號</td></tr>
+<tr><td>精細權限 token，限定單一 repo 的 issues</td><td>讀 issue、留言、關票（可依需求再加特定動詞）</td><td>低。就算出事，範圍被鎖在一個 repo 的 issue 上</td></tr>
+<tr><td>完全不給 token</td><td>無法呼叫 <code>gh</code>，碰不到 GitHub</td><td>無，但整條 issue 佇列迴圈無法運作</td></tr>
+</tbody>
+</table>
+
+<p>GitHub 提供的 <strong>fine-grained personal access token</strong>，正是為這種情境設計的。你可以指定它只能存取哪些 repo、只能做哪些動作。這門課要選的是中間那一列：一個範圍很窄、只夠跑完迴圈的 token。</p>
+
+<p>具體來說，這個修復迴圈需要 agent 做三件事：<strong>讀取 issue、在 issue 上留言、關閉 issue</strong>。</p>
+
+<p>清單裡特別沒有「建立 issue」。這是刻意的：在這個流程裡，開票是「人」或「規劃階段的 skill」在做的事；agent 只負責從既有佇列挑任務、動手、收尾。既然它的 prompt 用不到建立 issue，就不該把這個權限塞進 token 裡。</p>
+
+<h2>三個判別問句：先看它真的要做什麼</h2>
+
+<p>面對一個新專案或新流程，可以用下面三題把權限切出來。它們就像權限的濾網，讓不需要的能力留在外面。</p>
+
+<ol>
+<li><strong>這個 agent 的 prompt 裡，實際會用到哪些動詞？</strong>把它會打的 <code>gh</code> 指令列出來，指令用到什麼，才給什麼。讀、留言、關票，就只給這三個。</li>
+<li><strong>它需要建立新的 issue 嗎？</strong>如果流程是「人開票、agent 處理」，答案就是不需要，別給 create。只有當 agent 真的要自己產生待辦時，才把這個動詞打開。</li>
+<li><strong>它需要碰幾個 repo？</strong>把它限定在要處理的那一個，不要使用「全帳號」的範圍。範圍愈窄，出錯時能波及的面就愈小。</li>
+</ol>
+
+<h2>反例：最小權限不是永遠只開三個動詞</h2>
+
+<p>最小權限不是「一律只給讀取、留言、關票三個動詞」，而是「跟著 prompt 的動詞走」。流程真的改變時，權限也可能要跟著加。</p>
+
+<p>例如，之後如果你把規劃流程也接上佇列，讓 skill 用 <code>gh issue create</code> 把 PRD 變成一批任務，那麼執行這段流程的 agent 就<strong>確實需要建立 issue 的權限</strong>。這時才把 create 加上，而且仍然限定在那個 repo。</p>
+
+<p>同樣地，如果 agent 要開 pull request、推分支，就會需要 <code>contents</code> 或 PR 相關的寫入權限。規則沒有變：<strong>先看它要做什麼，再給對應的權限，能少則少。</strong></p>
+
+<figure class="lesson-figure"><img src="./least-privilege-token-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>最該避免的是「反正方便，先開到滿」的心態。權限一旦給大，就很難再收回；而在日常運作中，你往往也不會注意到它多拿了哪些能力。</p>
+
+<h2>一次完整的修復：權限如何收斂成一張被關掉的票</h2>
+
+<p>把鏡頭拉回實際跑一次，看看這套設定在最小權限下，如何完成一輪修復。</p>
+
+<p>這次的任務是一張很小的 bug 票，內容只有幾十個 token，大意是：「在 dev UI 的使用者選擇器裡，選完使用者後面板不會關閉。」</p>
+
+<p>agent 開跑後先探索 repo，找到對應的 dev UI 元件與 API 路由。接著它做出診斷：<strong>選了使用者之後，表單是用 client-side navigation（React Router）送出的，導致下拉選單的 open 狀態一直停在 true，所以永遠不會關。</strong></p>
+
+<p>它改好程式碼，跑過 pre-commit 檢查（全部通過），建立 commit，然後呼叫 <code>gh issue close</code> 並附上說明。最後，它吐出完成訊號 <code>no more tasks</code>，整輪用掉大約三萬 token 的 context。</p>
+
+<p>你回到瀏覽器，切換使用者、選了 Alex Rivera，面板這次乖乖關上了。修復確認。</p>
+
+<p>這次流程有兩點收穫。</p>
+
+<p>第一是<strong>可觀測性</strong>。你之所以知道它為什麼關掉這張票，是因為關票時它把原因寫在留言裡。你不需要重新翻 commit，猜測它做了什麼；它已經把判斷留下來。</p>
+
+<p>第二是<strong>範圍</strong>。整趟流程中，它只需要讀取這張票、處理這張票，再把這張票關掉，沒有能力去動你的其他 repo。這就是最小權限的價值：它做了對的事，同時沒有多餘的破壞面。</p>
+
+<figure class="lesson-figure"><img src="./least-privilege-token-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>結尾：一張可以立刻使用的檢查表</h2>
+
+<blockquote>
+<p>問題不是「要不要把 GitHub token 給 agent」，而是「給到什麼程度剛好夠用」。用 fine-grained token 限定單一 repo，只開放 prompt 實際用到的動詞，這門課是讀 issue、留言、關票，<strong>不含建立 issue</strong>。判準是三個問句：它會用哪些動詞、它需不需要開票、它要碰幾個 repo。當後續流程真的需要建立或推送時，再逐一加上對應權限，範圍仍鎖在單一 repo。一次順利的修復會留下關票留言，這就是可觀測性；而它全程只碰了該碰的那張票。</p>
+</blockquote>
+
+<p>走完這四步，你手上的迴圈已經完整：agent 會自己從你的私有佇列挑任務、動手實作、跑回饋、commit，最後把票收掉並留下說明。你從「每次指定一份計畫」前進到「維護一條佇列」。</p>
+
+<p>下一步的延伸，是把 PRD 與 plan 也整批變成佇列裡的 issue，讓規劃與實作可以平行進行，那會是下一個節點的主題。</p>
+
+<div class="lesson-nav">
+  <div><a href="./wire-agent-to-github.html">← 上一步：用 gh CLI 把 agent 接上 GitHub</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="「最小權限」原則的核心精神是什麼？" data-correct="2" data-explain="只給完成任務真正需要的那一點點權限，多一分都不給。">
+  <button class="opt">把所有權限都打開以方便除錯</button>
+  <button class="opt">完全不要給 agent 任何憑證</button>
+  <button class="opt">只給完成任務剛好夠用的權限</button>
+  <button class="opt">定期更換 token 的名稱就好</button>
+</div>
+<div class="quiz" data-question="這個修復迴圈裡，agent 其實不需要哪一項權限？" data-correct="1" data-explain="開票由人或規劃階段的 skill 負責，agent 只需讀、留言、關票。">
+  <button class="opt">讀取 issue 的內容</button>
+  <button class="opt">建立全新的 issue</button>
+  <button class="opt">在 issue 上留言</button>
+  <button class="opt">關閉已完成的 issue</button>
+</div>
+<div class="quiz" data-question="為什麼要避免使用開大範圍權限的經典 token？" data-correct="3" data-explain="一旦被誤用或外洩，影響面會遍及整個帳號，而不只一個 repo。">
+  <button class="opt">因為它的有效期限通常比較短</button>
+  <button class="opt">因為它無法用來讀取 issue</button>
+  <button class="opt">因為它每次都要人工重新輸入</button>
+  <button class="opt">因為影響面會遍及整個帳號</button>
+</div>
+<div class="quiz" data-question="當某個流程真的需要 agent 建立 issue 時，該怎麼做？" data-correct="0" data-explain="加上 create 權限，但仍限定在單一 repo，範圍能小則小。">
+  <button class="opt">加上該權限但仍限定單一 repo</button>
+  <button class="opt">直接改成開整個帳號的權限</button>
+  <button class="opt">改回用人工手動建立每張票</button>
+  <button class="opt">停用 token 改用匿名存取</button>
+</div>
+<div class="quiz" data-question="關票時附上的那則留言，主要提供了什麼價值？" data-correct="2" data-explain="它說明修了什麼、為什麼關票，讓修復過程可被理解與追溯。">
+  <button class="opt">讓 token 的有效期限延長</button>
+  <button class="opt">讓下一次執行會被自動略過</button>
+  <button class="opt">讓修復的判斷可被追溯理解</button>
+  <button class="opt">讓 issue 無法再被其他人開啟</button>
+</div>
+<div class="quiz" data-question="那次修復中，agent 診斷出的真正原因是什麼？" data-correct="1" data-explain="client-side navigation 送出表單後，下拉選單的 open 狀態沒被重設。">
+  <button class="opt">API 路由回傳了錯誤的狀態碼</button>
+  <button class="opt">客戶端導航後選單 open 狀態沒重設</button>
+  <button class="opt">使用者資料在資料庫中遭到刪除</button>
+  <button class="opt">pre-commit 檢查擋下了這次提交</button>
+</div>
+
+<div class="footer">
+  <p>ai-coding-for-real-engineer · issue 佇列驅動 · Step 4/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

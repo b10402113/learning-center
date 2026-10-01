@@ -4,76 +4,84 @@ title: 鎖、JMM 與無鎖原子
 subject: 小哲讲八股
 tier: 1
 order: 5
+duration: 60-75 minutes
 status: content-written
-goal: 講清楚 synchronized 的 Monitor 與鎖升級、ReentrantLock、AQS、volatile/JMM/happens-before、CAS/ABA 與 LongAdder
+goal: 講清楚 synchronized 的 Monitor 與鎖升級、ReentrantLock 與 AQS、volatile/JMM/happens-before，以及 CAS/ABA 與 LongAdder，能把「多執行緒為什麼出錯」與「JUC 怎麼補救」串成同一條因果鏈。
 sources:
   - "[[sources/小哲讲八股/20260926/Java面试题/JUC/16.synchronized是怎么实现的.md#16.synchronized是怎么实现的]]"
   - "[[sources/小哲讲八股/20260926/Java面试题/JUC/17.synchronized的锁升级的目的是什么.md#17.synchronized的锁升级的目的是什么]]"
-  - "[[sources/小哲讲八股/20260926/Java面试题/JUC/18.Java并发的三大原则是什么如何理解.md#18.Java并发的三大原则是什么如何理解]]"
-  - "[[sources/小哲讲八股/20260926/Java面试题/JUC/19.synchronized与ReentrantLock的区别有哪些.md#19.synchronized与ReentrantLock的区别有哪些]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JUC/19.synchronized与ReentrantLock的区别有哪些.md#19.synchronized 与 ReentrantLock 的区别有哪些]]"
   - "[[sources/小哲讲八股/20260926/Java面试题/JUC/20.AQS底层原理是怎样的.md#20.AQS底层原理是怎样的]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JUC/18.Java并发的三大原则是什么如何理解.md#18.Java并发的三大原则是什么如何理解]]"
   - "[[sources/小哲讲八股/20260926/Java面试题/JUC/26.Java中volatile是什么_如何理解JMM.md#26.Java中volatile是什么?如何理解JMM]]"
   - "[[sources/小哲讲八股/20260926/Java面试题/JUC/27.什么是happens-before.md#27.什么是happens-before]]"
   - "[[sources/小哲讲八股/20260926/Java面试题/JUC/28.为什么单例模式的DCL模式需要用volatile.md#28.为什么单例模式的DCL模式需要用volatile]]"
-  - "[[sources/小哲讲八股/20260926/Java面试题/JUC/29.什么是CAS_什么是ABA问题_如何解决ABA问题_.md#29.什么是CAS_什么是ABA问题_如何解决ABA问题_]]"
-  - "[[sources/小哲讲八股/20260926/Java面试题/JUC/30.Java中AtomicInteger适合高并发,但在竞争极其激烈的时候它的性能会下降,你知道为什么吗？有什么优化的方案吗？.md#30.Java中AtomicInteger适合高并发,但在竞争极其激烈的时候它的性能会下降,你知道为什么吗？有什么优化的方案吗？]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JUC/32.实现DCL的代码.md#32.实现DCL的代码]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JUC/29.什么是CAS_什么是ABA问题_如何解决ABA问题_.md#29.什么是CAS?什么是ABA问题?如何解决ABA问题?]]"
+  - "[[sources/小哲讲八股/20260926/Java面试题/JUC/30.Java中AtomicInteger适合高并发,但在竞争极其激烈的时候它的性能会下降,你知道为什么吗？有什么优化的方案吗？.md#30.Java中AtomicInteger 适合高并发,但在竞争极其激烈的时候它的性能会下降,你知道为什么吗？有什么优化的方案吗？]]"
 steps:
-  - id: synchronized-and-monitor
+  - id: synchronized-monitor-upgrade
     order: 1
+    type: concept
   - id: reentrantlock-and-aqs
     order: 2
     deps:
-      - synchronized-and-monitor
-  - id: jmm-and-volatile
+      - synchronized-monitor-upgrade
+    type: concept
+  - id: jmm-volatile-happens-before
     order: 3
     deps:
-      - synchronized-and-monitor
-  - id: happens-before-and-dcl
+      - reentrantlock-and-aqs
+    type: concept
+  - id: dcl-why-volatile
     order: 4
     deps:
-      - jmm-and-volatile
-  - id: cas-aba-and-longadder
+      - jmm-volatile-happens-before
+    type: concept
+  - id: cas-aba-longadder
     order: 5
     deps:
-      - reentrantlock-and-aqs
-      - happens-before-and-dcl
+      - dcl-why-volatile
+    type: concept
 prerequisites:
   - learn/小哲讲八股/nodes/juc-thread-pool
-created: 2026-09-26
-updated: 2026-09-27
+  - learn/小哲讲八股/nodes/jvm-runtime-classloading
+created: 2026-10-01
+updated: 2026-10-01
 ---
 
 # 鎖、JMM 與無鎖原子
 
 ## Learning goal
 
-講清楚 synchronized 的 Monitor 與鎖升級、ReentrantLock、AQS、volatile/JMM/happens-before、CAS/ABA 與 LongAdder。
+講清楚 synchronized 的 Monitor 與鎖升級、ReentrantLock 與 AQS、volatile/JMM/happens-before，以及 CAS/ABA 與 LongAdder，能把「多執行緒為什麼出錯」與「JUC 怎麼補救」串成同一條因果鏈。
 
 ## Steps
 
-1. [[learn/小哲讲八股/nodes/juc-locks-jmm-cas/synchronized-and-monitor|synchronized 是怎麼上鎖的？Monitor、可重入與鎖升級]] — 從 monitorenter/monitorexit 講到 Monitor 的 Owner 與計數器，並說明偏向、輕量級、重量級三級鎖各自解決哪種競爭場景
-2. [[learn/小哲讲八股/nodes/juc-locks-jmm-cas/reentrantlock-and-aqs|ReentrantLock 與 AQS：state、CLH 佇列與 CAS]] — 比較隱式鎖與顯式鎖的差異與三大高階功能，並拆解 AQS 的 volatile state、CLH 變體佇列與 CAS 如何管理排隊執行緒（after step 1）
-3. [[learn/小哲讲八股/nodes/juc-locks-jmm-cas/jmm-and-volatile|JMM 與 volatile：可見性、有序性與併發三大原則]] — 用主記憶體與工作記憶體解釋原子性、可見性、有序性三個問題，說明 volatile 為何保證可見性與有序性、卻不保證原子性（after step 1）
-4. [[learn/小哲讲八股/nodes/juc-locks-jmm-cas/happens-before-and-dcl|happens-before 與 DCL：為什麼單例要加 volatile]] — 講清 happens-before 的定義與六條規則，並用指令重排序解釋 DCL 不加 volatile 時為何會拿到半初始化物件（after step 3）
-5. [[learn/小哲讲八股/nodes/juc-locks-jmm-cas/cas-aba-and-longadder|CAS、ABA 與 LongAdder：無鎖原子與熱點分散]] — 說明 CAS 的 V/A/B 邏輯與硬體基礎、ABA 的問題與版本號解法，並解釋 AtomicInteger 高競爭變慢與 LongAdder 分治優化（after steps 2、4）
+1. [[learn/小哲讲八股/nodes/juc-locks-jmm-cas/synchronized-monitor-upgrade|synchronized 怎麼實現？Monitor、物件頭與鎖升級]] — 從字節碼與物件頭講到 Monitor、可重入與鎖升級四狀態
+2. [[learn/小哲讲八股/nodes/juc-locks-jmm-cas/reentrantlock-and-aqs|ReentrantLock 與 AQS：一個 state 加一條等待佇列]] — AQS 的 state、CLH 佇列與 CAS，以及 ReentrantLock 比 synchronized 多出的能力（after step 1）
+3. [[learn/小哲讲八股/nodes/juc-locks-jmm-cas/jmm-volatile-happens-before|JMM、volatile 與 happens-before：為什麼改了別的執行緒看不到]] — 用原子性、可見性、有序性串起 JMM、volatile 與 happens-before（after step 2）
+4. [[learn/小哲讲八股/nodes/juc-locks-jmm-cas/dcl-why-volatile|為什麼 DCL 單例一定要加 volatile？半初始化物件的陷阱]] — 用 new 三步與指令重排序解釋 DCL 的 volatile 為什麼不能省（after step 3）
+5. [[learn/小哲讲八股/nodes/juc-locks-jmm-cas/cas-aba-longadder|CAS、ABA 與 LongAdder：無鎖原子怎麼做到，又會在哪裡翻車]] — CAS 的 V／A／B、ABA 版本號解法，以及 LongAdder 分段累加（after step 4）
 
 ## Lesson
 
-多執行緒出錯的現場，往往長得很像：計數器少加了幾次、共享物件明明還沒初始化就被別條執行緒拿去用、兩個執行緒各等對方放手而一起卡死。這些現象看起來是三個不同的 bug，追到最底層其實是同一件事——當多條執行緒同時讀寫同一塊記憶體，如果沒有任何約定，誰先誰後、誰看得到誰的修改，全都沒有保障。
+這個節點要回答的是一個很具體的問題：多執行緒明明共用同一塊記憶體，為什麼還會「我看不到你改的值」「你的建立到一半就被我拿去用」？答案分兩層，一層是硬體與 JVM 為了效率偷偷做的事——CPU 快取、指令重排序、物件建立拆成好幾步；另一層是 Java 為了把這些偷做的手腳管住，提供的工具——鎖、volatile、CAS。
 
-這個節點就沿著「怎麼讓多條執行緒安全地共用記憶體」這條線走五步。第一步先看最經典的鎖：`synchronized` 靠物件頭裡的 Monitor 做到互斥與可重入，而 JVM 又用偏向、輕量級、重量級三級鎖，依照競爭激烈程度決定要不要驚動作業系統。第二步換到 `ReentrantLock`，看它如何用 AQS 這個「state 加排隊佇列」的框架，補上可中斷、公平鎖與多條件佇列這些原生鎖做不到的能力。第三、四步把鏡頭轉到記憶體模型：為什麼執行緒會讀到舊值、為什麼指令會被重排，以及 volatile 和 happens-before 如何用「承諾可見性」的方式把這些不確定性收斂掉——順便回答單例雙重檢查鎖為什麼非加 volatile 不可。最後一步則是硬幣的另一面：不加鎖的 CAS 怎麼靠 CPU 原子指令做到原子更新，它會踩到什麼 ABA 的坑，以及當熱點競爭太激烈時，LongAdder 如何用分治把壓力拆開。
+五個步驟照著「先出錯、再補救、後優化」的順序走。第 1、2 步先把兩把互斥鎖講清楚：synchronized 是 JVM 用物件頭 Monitor 做的原生鎖，靠鎖升級在無競爭時省下作業系統切換；ReentrantLock 則是站在 AQS 這個同步器框架上，用一個 state 加一條等待佇列換來公平、可中斷、多 Condition 的彈性。第 3 步換到另一個角度，把原子性、可見性、有序性三個問題擺出來，用 JMM 的主記憶體／工作記憶體模型解釋 volatile 到底保證了什麼、又保證不了什麼，並用 happens-before 當作判斷可見性的規則書。第 4 步把這些抽象概念押在一個經典案例上：DCL 單例為什麼少一個 volatile 就會拿到半初始化物件。第 5 步走到無鎖路線，看 CAS 如何用一條 CPU 原子指令取代鎖，以及它在高競爭與 ABA 場景下會在哪裡翻車，最後用 LongAdder 的分段累加收尾。
 
-走完之後，你應該能用「互斥、可見、有序、原子」四個詞，串起這一整組鎖與無鎖的取捨，而不是把每個 API 當成互不相干的孤立知識點。
+學完之後，你應該能把「多執行緒為什麼出錯」與「JUC 怎麼補救」講成同一條因果鏈，而不是背下一堆名詞。
 
 ## Sources
 
 - [[sources/小哲讲八股/20260926/Java面试题/JUC/16.synchronized是怎么实现的.md#16.synchronized是怎么实现的]]
 - [[sources/小哲讲八股/20260926/Java面试题/JUC/17.synchronized的锁升级的目的是什么.md#17.synchronized的锁升级的目的是什么]]
-- [[sources/小哲讲八股/20260926/Java面试题/JUC/18.Java并发的三大原则是什么如何理解.md#18.Java并发的三大原则是什么如何理解]]
-- [[sources/小哲讲八股/20260926/Java面试题/JUC/19.synchronized与ReentrantLock的区别有哪些.md#19.synchronized与ReentrantLock的区别有哪些]]
+- [[sources/小哲讲八股/20260926/Java面试题/JUC/19.synchronized与ReentrantLock的区别有哪些.md#19.synchronized 与 ReentrantLock 的区别有哪些]]
 - [[sources/小哲讲八股/20260926/Java面试题/JUC/20.AQS底层原理是怎样的.md#20.AQS底层原理是怎样的]]
+- [[sources/小哲讲八股/20260926/Java面试题/JUC/18.Java并发的三大原则是什么如何理解.md#18.Java并发的三大原则是什么如何理解]]
 - [[sources/小哲讲八股/20260926/Java面试题/JUC/26.Java中volatile是什么_如何理解JMM.md#26.Java中volatile是什么?如何理解JMM]]
 - [[sources/小哲讲八股/20260926/Java面试题/JUC/27.什么是happens-before.md#27.什么是happens-before]]
 - [[sources/小哲讲八股/20260926/Java面试题/JUC/28.为什么单例模式的DCL模式需要用volatile.md#28.为什么单例模式的DCL模式需要用volatile]]
-- [[sources/小哲讲八股/20260926/Java面试题/JUC/29.什么是CAS_什么是ABA问题_如何解决ABA问题_.md#29.什么是CAS_什么是ABA问题_如何解决ABA问题_]]
-- [[sources/小哲讲八股/20260926/Java面试题/JUC/30.Java中AtomicInteger适合高并发,但在竞争极其激烈的时候它的性能会下降,你知道为什么吗？有什么优化的方案吗？.md#30.Java中AtomicInteger适合高并发,但在竞争极其激烈的时候它的性能会下降,你知道为什么吗？有什么优化的方案吗？]]
+- [[sources/小哲讲八股/20260926/Java面试题/JUC/32.实现DCL的代码.md#32.实现DCL的代码]]
+- [[sources/小哲讲八股/20260926/Java面试题/JUC/29.什么是CAS_什么是ABA问题_如何解决ABA问题_.md#29.什么是CAS?什么是ABA问题?如何解决ABA问题?]]
+- [[sources/小哲讲八股/20260926/Java面试题/JUC/30.Java中AtomicInteger适合高并发,但在竞争极其激烈的时候它的性能会下降,你知道为什么吗？有什么优化的方案吗？.md#30.Java中AtomicInteger 适合高并发,但在竞争极其激烈的时候它的性能会下降,你知道为什么吗？有什么优化的方案吗？]]

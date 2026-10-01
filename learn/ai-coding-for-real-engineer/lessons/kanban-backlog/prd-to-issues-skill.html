@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跑 PRD-to-issues：把 PRD 切成垂直切片</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>跑 PRD-to-issues：把 PRD 切成可執行的垂直切片</h1>
+<p class="meta">Step 4/5 · 把 PRD 變成 Kanban backlog</p>
+
+<h2>這一輪要完成什麼</h2>
+<p>照著本節操作，你會把一份 PRD 轉成一整板 issue：每張票都能追溯回母 PRD，彼此用 <code>blocked by</code> 標示依賴，也會標上 HITL 或 AFK，最後再附上一張 QA checklist issue，留給人做最後驗收。</p>
+
+<h2>動手前先備好這些東西</h2>
+
+<p>整個流程不複雜，但以下條件少一項，執行到中途就可能卡住。</p>
+
+<ol>
+<li><strong>準備一份已放進 issue tracker 的 PRD。</strong>最常見的做法，是把 PRD 全文貼成一張新 issue。記下它的編號，稍後要把這個編號傳給 skill。</li>
+<li><strong>確認 agent 能讀寫 issue tracker。</strong>以 GitHub 為例，agent 需要有權限呼叫 <code>gh</code>，並使用一組範圍夠窄的 token。</li>
+<li><strong>確認 skill 的名稱與輸入方式。</strong>課程裡使用的版本叫 <code>PRD to issues</code>，需要先提供一份 PRD；作者自己的 repo 使用 <code>to issues</code>，可以直接讀取對話 context 裡的內容，也可以抓取指定的 issue。</li>
+</ol>
+
+<h2>整體流程先看一遍</h2>
+
+<p>你可以把這個流程想成一條裝配線：先把 PRD 放到 agent 拿得到的位置，再讓它讀懂 PRD 和 codebase，接著草擬垂直切片、標記 HITL/AFK，最後由你檢查顆粒度與依賴關係。只有你確認後，skill 才會真的建立 issue。</p>
+
+<figure class="lesson-figure"><img src="./prd-to-issues-skill-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<ol>
+<li>把 PRD 貼成一張 issue，記下編號。</li>
+<li>呼叫 PRD-to-issues skill。</li>
+<li>讓 skill 讀取 PRD，必要時探索 codebase。</li>
+<li>檢查它草擬的垂直切片、依賴關係與 HITL/AFK 標記。</li>
+<li>確認後建立 issue，並附上 QA issue。</li>
+<li>調整 Ralph prompt，讓它只處理 AFK 工作。</li>
+</ol>
+
+<h2>步驟一：把 PRD 放進一張 issue</h2>
+
+<p>先把需求從筆記或 gist 搬進 issue tracker。開一張新 issue，貼上 PRD 全文。有了這個編號，PRD 就變成 agent 抓得到、也引用得到的固定來源。</p>
+
+<p>貼完後記下 issue 編號。以下用 <strong>57</strong> 作為例子。</p>
+
+<h2>步驟二：呼叫 skill，讀取 PRD</h2>
+
+<p>回到 agent，將 PRD 的編號傳進去：</p>
+
+<pre><code>PRD to issues 57</code></pre>
+
+<p>收到編號後，skill 會先到 issue tracker 找出 <strong>#57</strong>，抓取它的完整內容和所有留言。這樣做可以確保後續切片是根據完整 PRD，而不是只看一段摘要。</p>
+
+<p>如果你使用的是 <code>to issues</code> 版本，而且沒有帶參數，它會改讀目前對話 context 裡已經存在的內容。也因此，PRD 必須先放到它讀得到的地方：不是 issue，就是對話 context。</p>
+
+<h2>步驟三：必要時先探索 codebase</h2>
+
+<p>讀完 PRD 後，skill 會判斷自己是否已經了解這個 codebase。</p>
+
+<ul>
+<li>若它對目前的程式碼不熟，就會先探索現有模組、資料表與畫面。</li>
+<li>若你之前已經完成探索，或目前的 context 已經包含足夠資訊，這一步就會跳過。</li>
+</ul>
+
+<p>這一步不用重讀整個專案，只要先確認需求該接在哪些現有結構上。少了這層現況，切片很容易變成看起來漂亮、實際上接不起來的票。</p>
+
+<h2>步驟四：檢查它草擬的垂直切片</h2>
+
+<p>掌握 PRD 和 codebase 後，skill 會把需求拆成一張張可以獨立認領、又能追溯回母 PRD 的 issue。</p>
+
+<p>這裡要檢查的重點是<strong>垂直切片</strong>。每一張切片都應該盡量從資料層一路連到使用者看得到的介面，而不是先把所有資料表做完，再做所有 API，最後才處理畫面。前者像是先蓋好一條可以通車的小路；後者則像把整座城市的地基挖完，卻還沒有任何一條路能走。</p>
+
+<figure class="lesson-figure"><img src="./prd-to-issues-skill-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>同時檢查每張票的 HITL/AFK 標記：</p>
+
+<ul>
+<li>若工作需要在多個都合理的方案中取捨，或需要人的感覺判斷，就標為 <strong>HITL</strong>。</li>
+<li>若工作可以依照規格與測試驗證，就標為 <strong>AFK</strong>。</li>
+</ul>
+
+<p>skill 會盡量把工作往 AFK 靠，因為只有這些才交得了自走迴圈。</p>
+
+<p>無論最後切出幾張工作票，skill 都會再補上一張固定的 <strong>QA issue</strong>，裡面放詳細的手動 QA 計畫。</p>
+
+<blockquote>
+QA issue 是整組工作的收尾。它會把需要人親自驗證的項目列成清單，讓 agent 完成前面的 AFK 工作後停下來，等你回來逐項檢查。
+</blockquote>
+
+<h2>步驟五：在建立 issue 前先做人工審查</h2>
+
+<p>票真正建立之前，skill 會把整份提案攤開，請你確認幾個關鍵問題：</p>
+
+<ul>
+<li>每張票的顆粒度是否合適？</li>
+<li>依賴關係是否正確？</li>
+<li>有沒有哪張票應該拆開？</li>
+<li>有沒有兩張票太薄，合併後更合理？</li>
+<li>HITL/AFK 是否標對？</li>
+</ul>
+
+<p>這一步不要直接跳過，因為切片的顆粒與方向需要人的判斷。尤其要先檢查第一張票：它應該是一個合格的 <strong>tracer bullet</strong>，也就是一條從資料到畫面的最小完整路徑，而不是只把某一層一次做到最底的「水平大爆炸」。</p>
+
+<p>若發現兩張票薄到單獨執行不划算，就在這裡把它們合併；若一張票大到無法清楚驗證，就把它拆開。</p>
+
+<h2>步驟六：確認後建立 issue</h2>
+
+<p>你確認提案後，skill 才會開始建立票。每張票都應該使用同一個模板，至少保留以下兩項資訊：</p>
+
+<ol>
+<li><strong>引用母 PRD 的編號。</strong>例如「本票源自 PRD #57」。這條引用讓每張工作票都能追溯回需求來源。</li>
+<li><strong>加入 <code>blocked by</code> 段落。</strong>清楚寫明這張票被哪些票擋住，例如「blocked by #58」。之後這些票會整批餵給 Ralph，Ralph 只看票面資訊，就能判斷哪些工作需要先完成。</li>
+</ol>
+
+<p>建立完成後，你會在 issue tracker 上看到一整板帶有依賴關係的工作票，以及最後那張 QA issue。母 PRD 通常會保持開啟，繼續作為整組工作的源頭。</p>
+
+<figure class="lesson-figure"><img src="./prd-to-issues-skill-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟七：調整 Ralph 的 prompt</h2>
+
+<p>票建立後，回頭調整 AFK 迴圈 Ralph 的 prompt。至少要加入兩項規則：</p>
+
+<ul>
+<li>只處理標記為 AFK 的票，不要處理 HITL 的票。</li>
+<li>如果所有 AFK 工作都完成，就輸出 <code>no more tasks</code>。</li>
+</ul>
+
+<p>這樣一來，迴圈會自動避開需要你判斷的工作；完成可自動處理的票後，也會自行停下來。</p>
+
+<p>如果你不想只依賴 prompt 的文字約束，可以再加一道機制上的保護：</p>
+
+<ul>
+<li>用 label 標記 HITL 的票。</li>
+<li>根本不要把 HITL 的票餵進迴圈。</li>
+</ul>
+
+<p>prompt 是軟性約束，多數情況下已經夠用；但如果某些票絕對不能讓它自己亂跑，就該優先靠這類機制擋住。</p>
+
+<h2>完成後如何驗證</h2>
+
+<p>這一輪完成時，你應該會看到以下結果：</p>
+
+<ul>
+<li>一整板由同一份 PRD 衍生出的 issue。</li>
+<li>每張票都標好了 HITL 或 AFK。</li>
+<li>票與票之間有清楚的 <code>blocked by</code> 依賴關係。</li>
+<li>最後有一張包含手動 QA 清單的 QA issue。</li>
+<li>Ralph 的 prompt 已設定為只做 AFK 工作，完成後輸出 <code>no more tasks</code>。</li>
+</ul>
+
+<p>這一板票就是接下來提供給 AFK 迴圈的工作佇列。至於為什麼要使用垂直切片，以及為什麼要把需要品味的工作標成 HITL，原理已在相鄰章節說明；本節就是把這些東西實際生出來，確認可以執行。</p>
+
+<p>下一節會把這板票交給 AFK 迴圈執行，再由人依照 QA 清單完成驗收。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+PRD-to-issues 的操作順序是：把 PRD 貼成 issue、記下編號、呼叫 skill、讓它讀懂 PRD 與 codebase、草擬垂直切片並標記 HITL/AFK、固定附上一張 QA issue、檢查顆粒度與依賴關係，確認後用「引用母 PRD + blocked by」的模板建立 issue，最後把 Ralph prompt 調整成只處理 AFK 工作。
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./kanban-over-phased-plan.html">← 上一步：用 Kanban 取代多階段計畫</a></div>
+  <div><a href="./run-and-qa-the-board.html">下一步：跑 AFK 迴圈與人工 QA →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="跑 PRD-to-issues 之前，PRD 通常要先變成什麼？" data-correct="1" data-explain="把 PRD 貼成一張 issue 並記下編號，skill 才有東西可以定位。">
+  <button class="opt">一個本機的 markdown 檔案</button>
+  <button class="opt">一張 issue，並記下它的編號</button>
+  <button class="opt">一段貼在聊天室裡的訊息</button>
+  <button class="opt">一個 git commit 的訊息</button>
+</div>
+<div class="quiz" data-question="skill 收到 PRD 編號後，第一件事是什麼？" data-correct="3" data-explain="它會去把該 issue 的完整內容與留言抓下來，這就是定位 PRD。">
+  <button class="opt">直接把所有票一次建出來</button>
+  <button class="opt">先刪掉原本的 PRD issue</button>
+  <button class="opt">先跑一次完整的測試套件</button>
+  <button class="opt">抓取該 issue 的全文與留言</button>
+</div>
+<div class="quiz" data-question="什麼是「垂直切片」？" data-correct="0" data-explain="每片從資料層一路穿到介面，是可獨立認領的最小完整路徑。">
+  <button class="opt">從資料層一路做到使用介面的完整小功能</button>
+  <button class="opt">先把某一層全部做完再做下一層</button>
+  <button class="opt">依照前後端工程師人數平均切開</button>
+  <button class="opt">依開發時間長短切成等長的段落</button>
+</div>
+<div class="quiz" data-question="skill 一定會補上的最後一張票是什麼？" data-correct="2" data-explain="一張帶詳細手動 QA 計畫的 issue，留給人親自驗收。">
+  <button class="opt">一張記錄部署步驟的維運票</button>
+  <button class="opt">一張重新寫 PRD 的規劃票</button>
+  <button class="opt">一張帶手動 QA 清單的驗收票</button>
+  <button class="opt">一張刪除舊分支的清理票</button>
+</div>
+<div class="quiz" data-question="issue 模板裡兩個不能少的欄位是什麼？" data-correct="1" data-explain="引用母 PRD 的編號維持可追溯，blocked by 段落交代依賴關係。">
+  <button class="opt">預估工時與指派的工程師</button>
+  <button class="opt">母 PRD 編號與 blocked by 段落</button>
+  <button class="opt">程式碼行數與測試覆蓋率</button>
+  <button class="opt">機密等級與存取權限名單</button>
+</div>
+<div class="quiz" data-question="為什麼要調整 Ralph 的 prompt 成「只做 AFK」？" data-correct="2" data-explain="避免自走迴圈去碰需要人參與的 HITL 票，全部 AFK 做完就輸出 no more tasks。"
+  <button class="opt">讓它一次可以處理更多張票</button>
+  <button class="opt">讓它自動幫你建立新的票</button>
+  <button class="opt">避免它去動需要人參與的票</button>
+  <button class="opt">讓它跳過所有的測試步驟</button>
+</div>
+
+<div class="footer">
+  <p>AI Coding for Real Engineers · PRD 變成 Kanban backlog · Step 4/5</p>
+  <p>讀到這裡有疑問，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

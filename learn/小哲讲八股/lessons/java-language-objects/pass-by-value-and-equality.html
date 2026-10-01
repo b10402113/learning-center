@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一行 Java 傳了什麼？值傳遞與等值判斷</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一行 Java 傳了什麼？值傳遞與等值判斷</h1>
+<p class="meta">Step 1/6 · Java 語言與物件：一行 Java 到底做了什麼</p>
+
+<h2>前言：明明傳進去了，為什麼外面沒變？</h2>
+
+<p>你可能寫過這樣的程式：把一個物件傳進方法，在方法裡修改它的欄位，回到外面一看，物件真的變了。於是你很自然地說：「物件是引用傳遞。」</p>
+
+<p>但換個情境，如果你在方法裡把參數重新 <code>new</code> 成另一個物件，回到外面時，原本的變數卻完全沒變。同一種參數，為什麼一下看起來像引用傳遞，一下又不像？</p>
+
+<p>這不只是 Java 面試常見的題目。當你在寫工具方法、回呼、<code>Map</code> 的 Key，或處理金額比較時，「到底複製了什麼」會直接決定程式是否正確。</p>
+
+<p>這一節會把四個容易混在一起的觀念拆開來看：參數傳遞、<code>==</code> 與 <code>equals</code>、<code>hashCode</code> 與 <code>equals</code> 的契約，以及 <code>BigDecimal</code> 的比較方式。它們其實都繞著同一個問題打轉：<strong>兩個東西，到底憑什麼算「一樣」？</strong></p>
+
+<h2>學習目標</h2>
+
+<p>看完這一節，你應該能說清楚 Java 為什麼只有值傳遞、<code>==</code> 與 <code>equals</code> 分別比較什麼，也能解釋 <code>hashCode</code>/<code>equals</code> 契約，以及 <code>BigDecimal</code> 比較時容易踩到的坑。</p>
+
+<h2>先建立底層畫面：堆疊、堆與堆疊框架</h2>
+
+<p>要理解「傳遞」到底發生了什麼，得先知道變數放在哪裡。JVM 的記憶體可以先用兩個區域來理解：<strong>堆（Heap）</strong>用來放物件本體，<strong>虛擬機堆疊（VM Stack）</strong>則用來放方法執行時的工作空間。</p>
+
+<p>每當一個方法被呼叫，JVM 就會在堆疊上壓入一個<strong>堆疊框架（Stack Frame）</strong>。堆疊框架裡有一張<strong>局部變數表（Local Variable Table）</strong>，用來放這個方法的參數與區域變數。</p>
+
+<p>可以把局部變數表想成一排置物櫃。每個格子只放一個值。對物件來說，格子裡放的<strong>不是物件本人</strong>，而是物件在堆裡的門牌號碼，也就是位址。這個位址，才是 Java 所說的「參考（reference）」。</p>
+
+<figure class="lesson-figure"><img src="./pass-by-value-and-equality-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>只要記住「格子裡放的是值，物件變數的值是一個位址」，後面看參數傳遞、<code>==</code> 和 <code>equals</code>，就會容易很多。</p>
+
+<h2>Java 只有值傳遞</h2>
+
+<p>Java 的規則其實只有一句：<strong>永遠是值傳遞，沒有引用傳遞。</strong></p>
+
+<p>所謂值傳遞，就是把呼叫者格子裡的內容完整複製一份，放進被呼叫方法的格子裡。至於那份內容是數字，還是物件的位址，則是另一回事。</p>
+
+<h3>傳基本型別：複製的是數值</h3>
+
+<p>假設有 <code>int a = 10;</code>，接著呼叫 <code>change(a)</code>。JVM 會把 <code>a</code> 格子裡的 <code>10</code> 複製一份，放進 <code>change</code> 的參數格子。</p>
+
+<p>之後 <code>change</code> 裡怎麼修改，改的都是那份複製品，和 <code>main</code> 裡的 <code>10</code> 沒有關係。這種情況很直觀，通常不容易搞混。</p>
+
+<h3>傳參考型別：複製的是位址的值</h3>
+
+<p>換成 <code>Dog myDog = new Dog("旺財"); change(myDog);</code>。<code>myDog</code> 這個格子裡放的，是那隻狗在堆裡的位址。假設這個位址是 <code>0x1234</code>。</p>
+
+<p>呼叫 <code>change</code> 時，Java 仍然照同一套規則處理：複製一份值。只不過這次複製的值不是狗的本體，而是 <code>0x1234</code> 這個<strong>位址的值</strong>，並把它放進 <code>change</code> 的參數 <code>d</code> 裡。</p>
+
+<p>因此，現在有兩個不同的格子、兩個不同的變數，但兩個格子裡的值相同，都是 <code>0x1234</code>。它們指向堆裡的同一隻狗。</p>
+
+<p>接下來要分清楚兩種完全不同的操作：</p>
+
+<ul>
+<li><strong>操作 A：透過位址修改物件屬性。</strong>例如 <code>d.setName("來福")</code>。這是在拿著 <code>0x1234</code> 找到堆裡的狗，直接把名字改掉。因為 <code>main</code> 裡的 <code>myDog</code> 也指向 <code>0x1234</code>，所以回到外面時，名字確實變了。<strong>這個現象很容易讓人誤以為 Java 使用引用傳遞。</strong></li>
+<li><strong>操作 B：把參數重新賦值。</strong>例如 <code>d = new Dog("二哈")</code>。這只是在 <code>change</code> 的格子裡，把值從 <code>0x1234</code> 換成新狗的位址 <code>0x5678</code>。<code>main</code> 裡的 <code>myDog</code> 完全不受影響，仍然指向 <code>0x1234</code>。<strong>這才是值傳遞的鐵證：如果真的是引用傳遞，<code>myDog</code> 也應該變成「二哈」，但它沒有。</strong></li>
+</ul>
+
+<figure class="lesson-figure"><img src="./pass-by-value-and-equality-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<blockquote>
+面試時可以一路追問到堆疊框架這一層：Java 會把呼叫者局部變數表裡的<strong>值</strong>複製到被呼叫者的局部變數表。基本型別複製的是數值，參考型別複製的是位址值。之所以能改到外面的物件，是因為兩份位址指向同一個物件；之所以重新賦值改不到外面，是因為你只換掉了自己格子裡的位址。這兩件事合在一起，正好說明 Java 只有值傳遞。
+</blockquote>
+
+<h2><code>==</code> 與 <code>equals</code>：比較的是不同維度</h2>
+
+<p>知道「傳了什麼」之後，下一個問題就是「怎麼判斷兩個東西一樣」。Java 提供了 <code>==</code> 和 <code>equals()</code>，但它們比較的維度不同。</p>
+
+<p><code>==</code> 是運算子。用在基本型別上，它比較的是<strong>數值</strong>，所以 <code>10 == 10</code> 會得到 <code>true</code>。</p>
+
+<p>用在參考型別上，<code>==</code> 比較的是<strong>記憶體位址</strong>。只有兩個參考指向堆裡同一個物件時，結果才是 <code>true</code>。可以把它想成兩把鑰匙：必須真的開同一扇門，<code>==</code> 才認為它們相同。即使兩個物件的內容完全一樣，只要位址不同，結果仍然是 <code>false</code>。</p>
+
+<p><code>equals()</code> 則是 <code>Object</code> 類別定義的方法。<strong>如果子類別沒有重寫它，實作本質上就是 <code>==</code></strong>，同樣比較物件位址。</p>
+
+<p>不過，Java 裡許多常用類別，例如 <code>String</code> 和 <code>Integer</code>，都重寫了 <code>equals()</code>，把比較方式改成<strong>比較內容</strong>。以 <code>String</code> 為例，只要兩個字串的字元序列完全相同，就會被視為相等，不必是同一個物件。</p>
+
+<p>看最經典的例子：</p>
+
+<pre><code>String a = new String("hello");
+String b = new String("hello");
+
+a == b        // false：堆裡是兩個不同物件
+a.equals(b)   // true：String 重寫了 equals，比內容</code></pre>
+
+<p>所以面試時不能只回答「<code>==</code> 比位址、<code>equals</code> 比內容」。更完整的說法是：<strong><code>equals</code> 比內容的前提，是該類別重寫了它；如果沒有重寫，<code>equals</code> 和 <code>==</code> 的結果一樣。</strong></p>
+
+<h2><code>hashCode</code> 與 <code>equals</code> 的契約</h2>
+
+<p>當物件被當成 <code>HashMap</code> 的 Key 時，<code>hashCode()</code> 和 <code>equals()</code> 會一起工作。這裡有兩條重要規則：</p>
+
+<ol>
+<li>如果 <code>a.equals(b)</code> 為 <code>true</code>，那麼 <code>a.hashCode()</code> <strong>必須</strong>等於 <code>b.hashCode()</code>。</li>
+<li>反過來，如果 <code>a.hashCode() == b.hashCode()</code>，<code>a.equals(b)</code> <strong>不一定</strong>為 <code>true</code>。這種雜湊值相同、但內容不一定相同的情況，叫作雜湊衝突。</li>
+</ol>
+
+<p>可以把 <code>HashMap</code> 想成一座大檔案館。<code>hashCode()</code> 先決定物件應該放進第幾號櫃子；找到櫃子後，<code>equals()</code> 再逐一比對裡面的檔案，確認哪一份才是你真正要找的。前者負責快速縮小範圍，後者負責確認是否真的相等。</p>
+
+<p>假設你自訂了 <code>Student</code> 類別，認為「學號一樣就是同一個人」。你重寫了 <code>equals</code>，卻忘了重寫 <code>hashCode</code>，問題就會出現。</p>
+
+<p><code>Object</code> 預設的 <code>hashCode</code> 是依物件的記憶體位置計算的。因此，兩個學號相同的 <code>new Student(1, "張三")</code>，仍可能得到不同的雜湊值，被放進不同的櫃子。</p>
+
+<p>你把 <code>s1</code> 存進去，再用內容相等的 <code>s2</code> 去取值時，<code>HashMap</code> 可能會前往另一個櫃子尋找，最後只回傳 <code>null</code>。更糟的是，同一個邏輯上的 Key 可能被存成好幾份，白白佔用記憶體。</p>
+
+<p>這就是「明明放進去了，卻怎麼也取不出來」的常見原因：<code>equals</code> 認為兩個物件相等，但 <code>hashCode</code> 卻把它們帶到了不同的櫃子。</p>
+
+<figure class="lesson-figure"><img src="./pass-by-value-and-equality-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2><code>BigDecimal</code>：<code>equals</code> 比的不只數值</h2>
+
+<p>等值比較的陷阱，到了金額場景會更危險。<code>BigDecimal</code> 的 <code>equals</code> 不只比較數值，也會比較<strong>精度（scale）</strong>。</p>
+
+<p>因此，<code>new BigDecimal("1.0")</code> 和 <code>new BigDecimal("1.00")</code> 在數學上相等，但前者的 scale 是 1，後者的 scale 是 2，使用 <code>equals</code> 比較時會得到 <code>false</code>。</p>
+
+<pre><code>BigDecimal a = new BigDecimal("1.0");
+BigDecimal b = new BigDecimal("1.00");
+
+a.equals(b)             // false：scale 不同
+a.compareTo(b) == 0     // true：只比數學數值</code></pre>
+
+<p>如果需求是判斷兩個金額的數值是否相等，應該使用 <code>compareTo() == 0</code>。若寫成 <code>price.equals(targetPrice)</code>，只要前端傳來的精度不同，即使金額在數學上相同，比較結果也可能不符合實際需求。</p>
+
+<figure class="lesson-figure"><img src="./pass-by-value-and-equality-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>另外，建立 <code>BigDecimal</code> 時也應該使用字串建構子，避免 <code>double</code> 本身的誤差一起被帶進來。</p>
+
+<h2>把這些觀念連在一起</h2>
+
+<blockquote>
+Java 只有值傳遞：基本型別複製數值，參考型別複製位址值。修改物件屬性會影響外面，是因為兩份位址指向同一個物件；重新賦值不會影響外面，則證明傳遞的是位址值的複製品。<code>==</code> 比較基本型別的數值，或參考型別的位址；<code>equals</code> 沒有重寫時等同於 <code>==</code>，重寫後才可能改成比較內容。物件當作 Key 使用時，<code>equals</code> 為 <code>true</code> 就必須讓 <code>hashCode</code> 相等；金額比較則應使用 <code>BigDecimal.compareTo() == 0</code>。
+</blockquote>
+
+<p>這幾個觀念可以放在同一張圖裡理解：先看參數傳遞複製的是什麼，再看兩個參考是否指向同一個物件，接著判斷類別是否把「相等」重新定義成內容相等。當物件進入 <code>HashMap</code>，這個相等定義還必須和 <code>hashCode</code> 配合；當資料是金額時，則要特別留意 <code>BigDecimal</code> 對 scale 的處理。</p>
+
+<p>下一節會從「物件如何被建立與複製」繼續往前，討論不可變設計、String 常數池與包裝類，也會回答一個常見問題：為什麼兩個內容相同的字串，<code>==</code> 有時是 <code>true</code>，有時卻是 <code>false</code>？</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./immutability-strings-wrappers.html">下一步：不可變、字串池與包裝類 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Java 的方法參數傳遞，本質上是什麼？" data-correct="1" data-explain="Java 一律把呼叫者局部變數表裡的值複製到被呼叫者，參考型別複製的是位址值。">
+  <button class="opt">基本型別是值傳遞，物件是引用傳遞</button>
+  <button class="opt">一律是值傳遞，物件傳的是位址的副本</button>
+  <button class="opt">一律是引用傳遞，連基本型別也傳位址</button>
+  <button class="opt">由編譯器依參數型別自動決定方式</button>
+</div>
+<div class="quiz" data-question="在方法裡修改參數物件的屬性，外面看得到變化，原因是什麼？" data-correct="2" data-explain="兩份位址指向同一顆物件，透過位址改屬性會反映到外面。">
+  <button class="opt">因為 Java 對物件採用引用傳遞</button>
+  <button class="opt">因為物件本身被複製了一份到方法裡</button>
+  <button class="opt">因為兩份位址副本指向同一個物件</button>
+  <button class="opt">因為區域變數預設就是全域可視的</button>
+</div>
+<div class="quiz" data-question="關於 equals 的預設行為，下列哪一句正確？" data-correct="0" data-explain="Object 的預設 equals 就是呼叫 ==，比的是位址，重寫後才比內容。">
+  <button class="opt">沒重寫時它等於 ==，一樣比位址</button>
+  <button class="opt">沒重寫時它自動比對物件內容</button>
+  <button class="opt">沒重寫時它會丟出例外提醒你</button>
+  <button class="opt">沒重寫時它比較兩者的 hashCode</button>
+</div>
+<div class="quiz" data-question="只重寫 equals 而沒重寫 hashCode，會造成什麼後果？" data-correct="3" data-explain="equals 相等的兩個 Key 落到不同桶，導致 HashMap 取不到、甚至重複存入。">
+  <button class="opt">編譯時期就會直接報錯無法通過</button>
+  <button class="opt">物件會自動被 JVM 標記成不可用</button>
+  <button class="opt">所有物件的 hashCode 都變成零</button>
+  <button class="opt">HashMap 可能存得進去卻取不出來</button>
+</div>
+<div class="quiz" data-question="為什麼 BigDecimal 的 equals 可能回傳 false？" data-correct="1" data-explain="equals 同時比較數值與 scale，1.0 與 1.00 的精度不同。">
+  <button class="opt">因為它底層其實是浮點數運算</button>
+  <button class="opt">因為它會連精度 scale 一起比較</button>
+  <button class="opt">因為它只支援整數不支援小數</button>
+  <button class="opt">因為它預設會忽略小數點後位數</button>
+</div>
+<div class="quiz" data-question="要判斷兩個 BigDecimal 的數學數值是否相等，該怎麼做？" data-correct="0" data-explain="compareTo 忽略精度差異，回傳 0 代表數學上相等。">
+  <button class="opt">用 compareTo() == 0 來判斷</button>
+  <button class="opt">用 == 運算子直接比較兩者</button>
+  <button class="opt">用 equals() 並忽略回傳值</button>
+  <button class="opt">用 toString() 比對字串內容</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · Java 語言與物件 · Step 1/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

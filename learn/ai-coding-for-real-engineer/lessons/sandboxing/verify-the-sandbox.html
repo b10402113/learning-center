@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>驗證沙盒：用 test.ts 跑一次 Hello</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>驗證沙盒：用 test.ts 跑一次 Hello</h1>
+<p class="meta">Step 4/4 · 安全的沙盒</p>
+
+<h2>先確認目標與前置條件</h2>
+
+<p>這一課要做的事很單純：執行 <code>npx tsx sandcastle/test.ts</code>，讓一個 agent 在容器裡完成一次最小對話，再從 logs 確認整條鏈路真的有跑通。</p>
+
+<p>完成後，你應該能在輸出中找到四個訊號：</p>
+
+<ul>
+<li>agent 在容器內回話。</li>
+<li>沙盒設定花費的時間被記錄下來。</li>
+<li>這次執行沒有留下任何 commit。</li>
+<li>大約使用了 19k context。</li>
+</ul>
+
+<p>動手前先確認兩件事：</p>
+
+<ol>
+<li>上一課建立的映像已經成功建好。</li>
+<li><code>.env</code> 裡已經填入有效的金鑰。</li>
+</ol>
+
+<p>這些條件都具備後，就可以開始驗證。沙盒「建好了」不代表「真的能用」；現在要像試車一樣，讓 agent 實際進去跑一圈。</p>
+
+<h2>第一步：執行最小測試</h2>
+
+<p>在終端機執行：</p>
+
+<pre><code>npx tsx sandcastle/test.ts</code></pre>
+
+<p>這行指令會啟動一個 AFK agent，並送出一句「hello how are you」。對話內容本身不重要，重要的是它能不能被啟動、能不能在容器裡執行，以及執行後留下哪些紀錄。</p>
+
+<p>正常情況下，終端機會開始出現 log，接著印出一行帶有連結的 agent log。你可以在 macOS 使用 command-click，或使用 control-click 開啟連結，查看容器內正在發生什麼事的 live logs。</p>
+
+<p><strong>注意：</strong>不要只看指令有沒有報錯，也不要只看終端機最後是否回到提示字元。真正的驗證依據是 logs 裡有沒有出現預期訊號。agent 在容器內執行，部分錯誤可能不會直接顯示在終端機上。</p>
+
+<h2>第二步：在 logs 找出四個訊號</h2>
+
+<p>一份成功的測試輸出，應該同時包含以下四個檢查點。請依序確認，不要只看到 agent 回話就判定全部正常。</p>
+
+<figure class="lesson-figure"><img src="./verify-the-sandbox-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<ol>
+<li>
+<strong>agent 回話了。</strong>
+<p>logs 裡會看到 agent 啟動，並回覆一句大意是「hello, I'm doing well, thanks for asking. How can I help you today?」的話。</p>
+<p>這表示容器已經跑起來，金鑰認證成功，prompt 也確實送到了 agent 手上。</p>
+</li>
+<li>
+<strong>沙盒設定耗時被記錄下來。</strong>
+<p>logs 會顯示設定沙盒花了多少時間。這個紀錄也提醒你，每次執行都得重新準備沙盒，每一輪都要付這筆成本。</p>
+</li>
+<li>
+<strong>沒有產生任何 commit。</strong>
+<p>測試會嘗試收集容器內產生的 commit，結果應該是「none were made」。這次 agent 只是打招呼，沒有修改任何檔案，所以沒有 commit 才是正確結果。</p>
+</li>
+<li>
+<strong>使用約 19k 的 context window。</strong>
+<p>logs 會回報這次執行大約消耗 19k tokens 的 context。這可以當成一個基準值，之後執行真正任務時，再拿來比較使用量。</p>
+</li>
+</ol>
+
+<p>你看到的輸出可能會因為介面或版本不同而有些差異，但大致會像這樣：</p>
+
+<pre><code>[agent] hello, I'm doing well, thanks for asking. How can I help you today?
+[sandbox] setting up sandbox… (耗時 X 秒)
+[commits] collected commits from sandbox: none
+[context] ~19k tokens used</code></pre>
+
+<p>判斷重點不是每個字都要一模一樣，而是四個訊號是否都出現：agent 有回話、沙盒設定耗時有紀錄、沒有 commit，以及 context 使用量約為 19k。</p>
+
+<h2>第三步：若失敗，依訊號位置往回查</h2>
+
+<p>如果沒有看到完整結果，請先判斷問題停在哪一個環節，再回頭檢查對應設定。</p>
+
+<ul>
+<li><strong>容器根本沒有起來：</strong>回到上一課，確認 Docker 或 Podman 正在執行，並確認映像已經成功建置。</li>
+<li><strong>agent 沒有回話，或出現認證錯誤：</strong>檢查 <code>sandcastle/.env</code> 裡的金鑰是否填寫正確，並確認它是有效的 Anthropic API key。</li>
+<li><strong>agent 有回話，但停在奇怪的地方：</strong>打開 live logs，查看 agent 的動作停在哪一步。這類問題有時只是環境或版本差異，不一定代表隔離設定出了問題。</li>
+</ul>
+
+<p>介面跟課程畫面不完全相同，並不代表你做錯了。課程錄製後，UI、欄位名稱或措辭都可能微調。這支測試真正要驗證的，是四個環節有沒有串起來，畫面像不像某一版倒是其次。</p>
+
+<figure class="lesson-figure"><img src="./verify-the-sandbox-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第四步：確認沙盒已經通過驗證</h2>
+
+<p>測試通過後，你手上就有一個走過基本驗證的執行環境，可以真的拿來用了，不只是個會回 hello 的玩具。</p>
+
+<p>你已經確認以下事情都能運作：</p>
+
+<ul>
+<li>agent 可以在容器裡啟動。</li>
+<li>金鑰認證可以通過。</li>
+<li>prompt 可以送到 agent 手上。</li>
+<li>執行過程會留下 logs。</li>
+</ul>
+
+<p>這四件事，正是之後 AFK 迴圈每次迭代都會重複做的事。未來接上多輪迴圈或 issue 佇列後，如果某個環節壞掉，你就能先用這支最小測試判斷：問題是在沙盒，還是在其他流程。</p>
+
+<h2>做完後，你應該看到什麼</h2>
+
+<p>完成驗證的標準，是 logs 中同時出現四個訊號：</p>
+
+<ol>
+<li>agent 回覆問候。</li>
+<li>沙盒設定耗時被記錄。</li>
+<li>收集到的 commit 顯示沒有任何變更。</li>
+<li>context 使用量約為 19k tokens。</li>
+</ol>
+
+<blockquote>驗證沙盒靠一支最小的測試：<code>npx tsx sandcastle/test.ts</code> 啟動 agent 並問一句 hello。成功的證據就在 logs 裡，共有四個訊號：agent 回話、沙盒設定耗時被記錄、沒有產生 commit、約 19k context 被使用。這四個訊號分別對應執行、準備、檔案變動與成本，把它們看成四個檢查點，你就能判斷沙盒是不是真的在運作。介面措辭可能不同，重點是四個訊號有沒有出現，畫面不必一模一樣。</blockquote>
+
+<p>走到這裡，你已經為自走流程備好一個安全的底座：agent 能在容器裡自由行動，卻碰不到容器外的世界。之後每一輪 AFK 執行都會在這個沙盒裡發生，而這支最小測試，就是你放手讓 agent 持續工作的基本檢查工具。</p>
+
+<div class="lesson-nav">
+  <div><a href="./build-the-sandbox.html">← 上一步：建起沙盒：Dockerfile、.env 與 build image</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="測試指令 <code>npx tsx sandcastle/test.ts</code> 會送出什麼？" data-correct="1" data-explain="它只送出一句 hello how are you，重點是驗證整條執行鏈路。">
+  <button class="opt">一份完整的多階段實作計畫</button>
+  <button class="opt">一句 hello how are you 的問候</button>
+  <button class="opt">一個 GitHub 上的真實 issue</button>
+  <button class="opt">一段刪除家目錄的測試指令</button>
+</div>
+<div class="quiz" data-question="logs 顯示 agent 用 19k context，代表什麼意義？" data-correct="3" data-explain="這是這次執行的 context 用量，可以當作後續任務的對照基準。">
+  <button class="opt">agent 已經用完了全部可用額度</button>
+  <button class="opt">沙盒映像的大小是 19k tokens</button>
+  <button class="opt">這次一共產生了十九個 commit</button>
+  <button class="opt">這是可拿來對照的用量基準</button>
+</div>
+<div class="quiz" data-question="為什麼這次測試「沒有 commit」才是正確結果？" data-correct="0" data-explain="它只打招呼、沒動任何檔案，所以沒有 commit 才符合預期。">
+  <button class="opt">它只打招呼、沒動任何檔案</button>
+  <button class="opt">它在容器外執行所以不能 commit</button>
+  <button class="opt">它的 git 權限被沙盒關掉了</button>
+  <button class="opt">它的 commit 被系統自動刪除了</button>
+</div>
+<div class="quiz" data-question="判斷測試是否成功，最可靠的依據是什麼？" data-correct="2" data-explain="agent 在容器內執行，錯誤容易被吞掉，要看 logs 裡的預期訊號。">
+  <button class="opt">終端機有沒有回到提示字元</button>
+  <button class="opt">指令的執行速度快不快</button>
+  <button class="opt">logs 裡有沒有出現預期訊號</button>
+  <button class="opt">整個畫面是不是跟課程一樣</button>
+</div>
+<div class="quiz" data-question="如果 agent 回報認證錯誤，應該先檢查哪裡？" data-correct="1" data-explain="認證錯誤通常指向 .env 裡的金鑰沒填對或已失效。">
+  <button class="opt">先重裝一次容器執行環境</button>
+  <button class="opt">先檢查 .env 裡的金鑰對不對</button>
+  <button class="opt">先把整個專案目錄刪掉重來</button>
+  <button class="opt">先把沙盒的網路連線關閉</button>
+</div>
+<div class="quiz" data-question="通過測試之後，你實際證明的是什麼？" data-correct="3" data-explain="你證明了啟動、認證、餵 prompt、記錄執行這四個環節都能串通。">
+  <button class="opt">證明 agent 不會再犯任何錯誤</button>
+  <button class="opt">證明容器不需要網路也能運作</button>
+  <button class="opt">證明專案程式碼已經全部完成</button>
+  <button class="opt">證明啟動認證與記錄都串得起來</button>
+</div>
+
+<div class="footer">
+  <p>ai-coding-for-real-engineer · 安全的沙盒 · Step 4/4</p>
+  <p>讀到卡住的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

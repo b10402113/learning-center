@@ -3,191 +3,263 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>反射、動態代理與泛型擦除</title>
+<title>反射、代理與泛型擦除：執行時才看穿的物件</title>
 <link rel="stylesheet" href="../assets/shared.css">
 </head>
 <body>
 
-<h1>反射、動態代理與泛型擦除</h1>
-<p class="meta">Step 4/6 · 看懂框架如何在執行時才決定要做什麼</p>
+<h1>反射、代理與泛型擦除：執行時才看穿的物件</h1>
+<p class="meta">Step 3/6 · Java 語言與物件：一行 Java 到底做了什麼</p>
 
-<h2>學習目標</h2>
-<p>學完這一節，你應該能說明框架為什麼需要反射與動態代理，也能分辨 JDK 動態代理和 CGLIB 的取捨，最後理解泛型擦除的原因，以及 Java 為什麼禁止建立泛型陣列。</p>
+<h2>這一課要看懂什麼？</h2>
+<p>你會學會說明三件事：反射為什麼比直接呼叫慢、動態代理如何在執行時生成，以及泛型擦除為什麼會限制泛型陣列。</p>
 
-<h2>前言：沒有實作類別的介面，為什麼也能執行？</h2>
+<h2>前言：沒有實作類別的介面，為什麼也能跑？</h2>
 
-<p>你使用 MyBatis 時，應該早已習慣這種寫法：先宣告一個 <code>UserMapper</code> 介面，寫好方法簽名，接著直接呼叫 <code>userMapper.selectById(1)</code>。奇怪的是，這個介面明明沒有實作類別，程式卻真的能把 SQL 發送出去。</p>
+<p>你可能遇過這些情境：只寫了一個 MyBatis 的 Mapper 介面，沒有親手建立實作類別，卻可以直接呼叫；在 Service 上加了 <code>@Transactional</code>，交易就自動生效；加入 MySQL 依賴後，連 <code>Class.forName</code> 都不用寫，驅動程式卻自己註冊完成。</p>
 
-<p>Spring 的 AOP 也有類似的魔法。你只要在 Service 方法上加上 <code>@Transactional</code>，不必修改業務程式碼，交易就會自動生效。框架究竟怎麼在程式執行到一半時，才決定要呼叫哪個方法、攔截哪個方法？</p>
-
-<p>這背後有三個關鍵字：<strong>反射</strong>、<strong>動態代理</strong>與<strong>泛型擦除</strong>。反射解決「如何在執行時找到類別」，動態代理解決「如何在執行時產生一個能夠額外做事的物件」，而泛型擦除則說明「為什麼編譯期有型別檢查，執行期卻可能缺少型別資訊」。</p>
-
-<h2>反射：把編譯期的確定，換成執行期的探索</h2>
-
-<p>一般程式碼是正向進行的：編譯時就知道要建立 <code>new User()</code>，也知道要呼叫 <code>user.setName()</code>。編譯器可以直接把這些呼叫關聯起來。</p>
-
-<p>反射則像是把流程倒過來。編譯時可能根本不知道是否存在一個 <code>User</code> 類別，直到程式執行後，才根據字串 <code>"com.example.User"</code> 找到對應的 <code>Class</code> 物件，再進一步查看它有哪些欄位和方法，最後動態呼叫它們。</p>
-
-<p>框架之所以需要反射，是因為框架作者不可能在編譯 Spring 或 MyBatis 時，就知道你未來會建立哪些 Controller、Service 或 Mapper。框架只能等程式啟動後，再讀取你的類別資訊、建立物件並注入依賴。</p>
+<p>這些行為看起來像框架變魔術，其實背後都有相同的核心：<strong>程式不是在編譯時就把所有物件決定好，而是等到執行時，才找到要操作的類別與方法。</strong></p>
 
 <figure class="lesson-figure"><img src="./reflection-proxy-generics-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h3>反射為什麼比較慢？</h3>
+<p>這一課會把這套機制拆成三個角度來看。反射讓程式在執行時看穿一個類別；代理讓框架可以攔截方法呼叫，在前後插入日誌、交易或權限檢查；泛型擦除則會說明，為什麼編譯器在編譯期檢查得很嚴格，到了執行時卻像失憶一樣。</p>
 
-<p>反射的成本，不只是那一次方法呼叫本身，而是每次呼叫前都可能需要重新準備與檢查：</p>
+<p>把這三件事串起來，你就能更容易看懂 Spring、MyBatis、JDBC 等框架究竟替你做了什麼。</p>
 
-<ul>
-  <li><strong>動態解析</strong>：程式需要透過字串尋找類別與方法，通常比直接使用已知的引用更慢。</li>
-  <li><strong>安全檢查</strong>：JVM 會檢查成員的可見性，例如它是 <code>public</code> 還是 <code>private</code>，以及目前呼叫者是否具備相應權限。</li>
-  <li><strong>參數包裝</strong>：<code>Method.invoke</code> 使用的是 <code>Object</code> 陣列。傳入 <code>int</code> 時，可能要先自動裝箱成 <code>Integer</code>，呼叫完成後再拆箱，因而增加額外的物件配置。</li>
-  <li><strong>JIT 難以最佳化</strong>：即時編譯器很難對反射呼叫進行方法內聯，因為它在編譯時還不知道實際要呼叫哪個方法。</li>
-</ul>
+<h2>反射：把「正向」的程式反過來寫</h2>
 
-<h3>如何降低反射的成本？</h3>
+<p>先看一般的 Java 程式，也就是<strong>正向使用</strong>。編譯時你已經知道要建立 <code>User</code>，所以可以直接寫 <code>new User()</code>，再呼叫 <code>user.setName()</code>。編譯器會把類別、方法與呼叫關係連結好，執行時照著已經準備好的路徑走即可。</p>
 
-<p>可以依照需求分成三個層次處理。</p>
+<p>反射則完全相反。編譯時，程式可能根本不知道是否存在一個叫做 <code>com.example.User</code> 的類別。等程式跑起來後，它才拿著這個字串找到對應的 <code>Class</code> 物件，再分析這個類別有哪些欄位與方法，最後才決定要呼叫哪一個。</p>
 
-<p>第一是<strong>快取</strong>。不要每次請求都重新執行 <code>Class.forName()</code> 或 <code>getMethod()</code>，可以把取得的 <code>Method</code>、<code>Field</code> 物件放進 Map。下次需要時直接取出，省掉重複查找。</p>
+<p>這種「執行時才決定」的能力，讓 Java 具備很強的動態特性，也是 Spring 依賴注入、MyBatis 映射與各種序列化框架的重要基礎。不過，彈性就像可調整的活動隔板：空間變靈活了，安裝與移動的成本也會增加。反射的效能代價，正是來自這些執行時的工作。</p>
 
-<p>第二是<strong>減少檢查</strong>。呼叫 <code>setAccessible(true)</code>，相當於告訴 JVM：「我清楚自己正在做什麼，請不要再進行這部分的權限檢查。」這能省下一些安全檢查成本。</p>
+<h3>反射為什麼慢？</h3>
 
-<p>第三是<strong>改用更快的機制</strong>。JDK 7 提供的 <code>MethodHandle</code> 可以視為較現代化的反射機制，效能通常比傳統反射好一些。若要再往前走，也可以使用 ASM、Javassist 或 CGLIB，在執行時直接產生位元組碼，讓產生出的程式更接近原生呼叫。Spring AOP 就是走這類路線。</p>
+<p>反射不一定是「呼叫那一行特別慢」，更大的問題是：每次使用時，往往都要重新做解析、檢查與參數處理。</p>
 
-<h2>代理：在目標物件外面加一位「經紀人」</h2>
+<ol>
+<li><strong>動態解析：</strong>程式要用字串名稱去方法區裡尋找類別與方法。這比直接沿著編譯器已經連結好的指標走，成本更高。</li>
+<li><strong>安全性檢查：</strong>JVM 需要確認反射操作是否符合可見性與存取權限，例如方法是 <code>public</code> 還是 <code>private</code>。取得方法與真正呼叫方法時，都可能需要檢查。</li>
+<li><strong>參數裝箱：</strong><code>Method.invoke(Object obj, Object... args)</code> 接收的是 <code>Object</code> 陣列。你傳入 <code>int</code> 時，必須先自動裝箱成 <code>Integer</code>；呼叫完成後再拆箱，過程中還可能伴隨物件建立與記憶體分配。</li>
+<li><strong>JIT 難以優化：</strong>即時編譯器（JIT）很難對反射呼叫做方法內聯等優化，因為在編譯這段程式碼時，還不知道最後真正要呼叫的是哪一個方法。</li>
+</ol>
 
-<p>假設你想在方法執行前後加入日誌、交易或權限檢查，但又不想把這些橫切邏輯塞進每一個業務方法。這時可以在目標物件外面包一層代理。</p>
-
-<p>代理物件對外看起來和目標物件相同。當呼叫者提出請求時，請求會先到代理手上，由代理決定要不要做額外處理，以及何時把請求轉交給真正的目標物件。</p>
+<p>直接呼叫像是走一條已經畫好路線的道路；反射則像每次出門都要先查地圖、確認門牌、檢查通行證，最後才真正上路。偶爾走一次沒有問題，但如果每個請求都重複做這些事，差距就會放大。</p>
 
 <figure class="lesson-figure"><img src="./reflection-proxy-generics-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p><strong>靜態代理</strong>是手動寫死的做法。你必須自行建立一個代理類別，實作與目標相同的介面，並在每個方法中加入增強邏輯。</p>
+<h3>反射怎麼優化？</h3>
 
-<p>這種方式一開始很直觀，但很快就會變得難以維護。假設有一百個 Service 都需要記錄日誌，你可能得手寫一百個代理類別；如果介面改了一個方法名稱，相關代理類別也都要一起修改。而且這些代理類別的 <code>.class</code> 檔案，在編譯期就已經固定下來了。</p>
+<p>既然開銷來自重複解析、檢查與動態呼叫，優化方向也很清楚：把能提前做的事情提前做，或改用更適合的工具。</p>
 
-<p><strong>動態代理</strong>則把這些重複工作自動化。你不需要為每個目標類別手寫一個具體代理，只要提供「攔截後要做什麼」的邏輯，代理類別的位元組碼會在程式執行時動態產生。</p>
+<ul>
+<li><strong>快取：</strong>這是最基礎，也通常最有效的方法。不要每次請求都呼叫 <code>Class.forName()</code> 或 <code>getMethod()</code>，而是把取得的 <code>Method</code>、<code>Field</code> 物件放進 Map。下次需要時直接取出，避免重複尋找。</li>
+<li><strong>關閉檢查：</strong>呼叫 <code>setAccessible(true)</code>，等於告訴 JVM：「我知道自己正在做什麼。」這可以省下部分存取權限檢查，但也代表程式必須自行承擔突破存取限制的風險。</li>
+<li><strong>改用替代方案：</strong>如果真的追求極致效能，可以使用 JDK 7 的 <code>MethodHandle</code>。它可以視為較現代化的反射呼叫方式。也可以使用 ASM、Javassist、CGLIB 等工具，在執行時產生位元組碼，讓後續執行更接近原生程式碼。Spring AOP 的代理機制也會使用這類路線。</li>
+</ul>
 
-<p>因此，不論有多少個類別需要加上日誌，都可以共用同一套攔截邏輯。這讓代理機制更通用，也讓業務程式和基礎功能彼此解耦。</p>
+<h2>代理：不改原始碼，也能插入額外邏輯</h2>
 
-<h3>JDK 動態代理與 CGLIB</h3>
+<p>假設你想在某個方法執行前後加入日誌、交易或權限檢查，但又不想修改原本的方法。這時可以在呼叫者與真正物件之間放入一個代理。</p>
 
-<p>兩者最大的差異，在於它們產生代理時依靠的方式不同：</p>
+<p>呼叫者以為自己拿到的是原始物件，實際上先經過代理。代理先做額外工作，再把呼叫轉交給真正的目標物件；方法回傳時，也可以再補上另一段邏輯。</p>
+
+<p>代理大致分成靜態代理與動態代理。兩者的差別，不在於能不能「代為呼叫」，而在於代理類別是誰、什麼時候產生的。</p>
+
+<h3>靜態代理：每一個代理都手動寫出來</h3>
+
+<p><strong>靜態代理</strong>在編譯期就已經寫死。你要手動建立代理類別，實作與目標類別相同的介面，再在代理裡呼叫真正的目標物件。</p>
+
+<p>這種方式很直觀，但維護成本會隨著類別數量一起上升。假設有 100 個 Service 都要加入日誌，你可能就得手寫 100 個代理類別。只要介面改了一個方法名稱，相關代理也必須全部修改。</p>
+
+<h3>動態代理：只寫規則，讓程式產生代理</h3>
+
+<p><strong>動態代理</strong>把代理類別的產生延後到執行期。你不需要為每個目標類別手寫一個代理，而是提供一段共用的處理邏輯。JVM 或代理工具會在程式執行時，於記憶體中產生代理類別的位元組碼。</p>
+
+<p>這就像從「每間店各自僱一位櫃檯人員」，改成「制定一套櫃檯服務規則，再由系統依店面自動配置」。不管要增強多少個類別，都可以重複使用同一套邏輯，這也是 Spring AOP 能夠大量套用的原因。</p>
+
+<h3>JDK 動態代理與 CGLIB 動態代理</h3>
+
+<p>兩種代理的核心差異，在於它們產生代理類別時依靠的方式不同：JDK 動態代理靠介面，CGLIB 則靠繼承。</p>
 
 <table>
 <thead>
 <tr><th>比較面向</th><th>JDK 動態代理</th><th>CGLIB 動態代理</th></tr>
 </thead>
 <tbody>
-<tr><td>核心機制</td><td>以介面為基礎，產生一個實作該介面的代理類別</td><td>以繼承為基礎，產生目標類別的子類別</td></tr>
-<tr><td>被代理類別的要求</td><td>必須有介面，沒有介面就無法使用</td><td>不需要介面，但目標類別不能是 <code>final</code></td></tr>
-<tr><td>底層依賴</td><td>使用 JDK 內建的 <code>java.lang.reflect</code></td><td>依賴第三方的 cglib 與 asm</td></tr>
-<tr><td>限制</td><td>無法代理沒有介面的類別</td><td>無法代理 <code>final</code> 類別或 <code>final</code> 方法</td></tr>
-<tr><td>效能</td><td>早期效能較慢，JDK 8 之後已有大幅改善</td><td>產生代理時較慢，但方法呼叫速度較快</td></tr>
+<tr><td>核心機制</td><td>基於介面。使用 <code>Proxy</code> 與 <code>InvocationHandler</code>，產生一個實作目標介面的類別</td><td>基於繼承。使用 ASM 位元組碼框架，產生目標類別的子類別</td></tr>
+<tr><td>對被代理類別的要求</td><td>必須有介面，沒有介面時會直接報錯</td><td>不需要介面，只要類別不是 <code>final</code> 即可</td></tr>
+<tr><td>底層依賴</td><td>只使用 JDK 內建的 <code>java.lang.reflect</code></td><td>需要第三方 cglib 與 asm</td></tr>
+<tr><td>限制</td><td>無法代理沒有介面的類別</td><td>無法代理 <code>final</code> 類別或 <code>final</code> 方法，因為它們不能被繼承或重寫</td></tr>
+<tr><td>效能現況</td><td>JDK 8 之後已有大幅優化，效能表現已經很強</td><td>產生代理時較慢，但方法呼叫通常較快，因為可以直接走生成的程式碼，而不是每次都走傳統反射</td></tr>
 </tbody>
 </table>
 
-<p>Spring 的傳統選擇規則是：目標物件有實作介面時，預設使用 JDK 動態代理；沒有介面時，才切換成 CGLIB。</p>
+<p>可以把兩者想成兩種不同的接手方式：</p>
 
-<p>不過，Spring Boot 2.0 之後，預設設定傾向直接使用 CGLIB。這樣可以避免部分因為代理物件以介面型別轉換時，可能產生的 <code>ClassCastException</code>。</p>
+<ul>
+<li>JDK 動態代理是「按照介面簽約」：只要目標提供介面，就能產生一個實作該介面的代理。</li>
+<li>CGLIB 是「複製並延伸原本的類別」：它產生目標類別的子類別，因此不需要介面，但會受到 <code>final</code> 的限制。</li>
+</ul>
 
-
-<h2>泛型擦除：編譯期的型別檢查，執行期的型別缺口</h2>
-
-<p>Java 泛型常被戲稱為「假泛型」，因為它主要只存在於編譯期。</p>
-
-<p>例如你寫下 <code>List&lt;String&gt;</code> 時，編譯器會檢查這個清單是否只放入 <code>String</code>。但是程式編譯成位元組碼並交給 JVM 執行後，尖括號中的泛型資訊會被擦除，最後回到裸型別 <code>List</code>。</p>
-
-<p>如果沒有指定上限，泛型型別 <code>T</code> 會被替換成 <code>Object</code>；如果宣告為 <code>extends Number</code>，則會被替換成 <code>Number</code>。這個過程就叫做<strong>型別擦除</strong>。</p>
+<p>Spring 的傳統選擇規則是：目標物件有實作介面時，預設使用 JDK 動態代理；沒有介面時，改用 CGLIB。不過 Spring Boot 2.0 之後，預設傾向直接使用 CGLIB，也就是 <code>proxy-target-class=true</code>。這樣做主要是為了避免某些介面轉型造成的 <code>ClassCastException</code>。</p>
 
 <figure class="lesson-figure"><img src="./reflection-proxy-generics-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h3>為什麼要採用型別擦除？</h3>
+<p>這裡要記住一個實務陷阱：CGLIB 依靠繼承產生代理，所以 <code>final</code> 類別無法代理，<code>final</code> 方法也無法被重寫。某個類別一旦加上 <code>final</code>，原本生效的交易或 AOP 就可能突然失效。</p>
 
-<p>主要原因是<strong>向後相容</strong>。</p>
+<h2>SPI：介面由官方定義，實作由第三方提供</h2>
 
-<p>泛型直到 Java 5 才加入，但在那之前，Java 已經存在大量使用裸型別的舊程式。如果泛型型別以具體形式保留到執行期，舊程式就可能無法在新的 JVM 上繼續執行。</p>
+<p>SPI（Service Provider Interface，服務提供者介面）同樣讓程式在執行時決定要使用哪個實作，但它關注的問題與代理不同。</p>
 
-<p>Java 選擇在編譯期進行型別檢查，執行期則擦除泛型資訊，讓新舊程式碼可以共存。代價是：程式執行時，往往拿不到泛型參數的具體型別。</p>
+<p>代理是在既有的呼叫路徑上插入額外邏輯；SPI 則是在多個實作之間發現與配對。它的核心精神是：<strong>介面由框架定義，實作由第三方提供，程式在執行時自動把兩者配對。</strong></p>
 
-<h3>為什麼 Java 不支援泛型陣列？</h3>
+<p>這種設計是 Java 外掛化與模組化的重要基礎。框架只需要依賴介面，不必把某個具體實作寫死在程式裡。</p>
 
-<p>問題出在陣列與泛型對型別的處理方式不同。</p>
+<h3>JDK 原生 SPI 怎麼找到實作？</h3>
 
-<p>陣列是<strong>協變</strong>且<strong>具體化</strong>的。<code>String[]</code> 在執行期知道自己只能存放 <code>String</code>。如果硬要把 <code>Integer</code> 放進去，會立即拋出 <code>ArrayStoreException</code>。</p>
+<p>JDK 原生 SPI 有一套固定規則：在 classpath 的 <code>META-INF/services/</code> 目錄下建立檔案，檔名使用介面的全限定名，例如 <code>java.sql.Driver</code>。檔案內容則填寫實作類別的全限定名。</p>
 
-<p>陣列也具有協變特性，因此下面這種賦值是合法的：<code>String[]</code> 可以指定給 <code>Object[]</code>。</p>
+<p>載入時，程式使用 <code>java.util.ServiceLoader</code>。它會掃描 classpath 下的 jar，找到這些設定檔，再透過反射載入並實例化實作類別。呼叫方只需要呼叫介面，不必在程式碼裡寫死具體的實作類別。</p>
 
-<p>泛型則不具備這種協變關係，而且型別資訊會在執行期被擦除。假設 Java 允許建立以下陣列：</p>
-
-<p><code>List&lt;String&gt;[] ls = new List&lt;String&gt;[10];</code></p>
-
-<p>接下來就可能發生這樣的問題：</p>
-
-<ol>
-  <li>因為陣列具有協變性，可以把 <code>ls</code> 指定給 <code>Object[] oa</code>，這在語言層面是合法的。</li>
-  <li>接著往 <code>oa</code> 裡放入一個 <code>List&lt;Integer&gt;</code>：<code>oa[0] = new ArrayList&lt;Integer&gt;();</code>。</li>
-  <li>由於泛型已經被擦除，執行期看到的 <code>List&lt;Integer&gt;</code> 與 <code>List&lt;String&gt;</code> 都只是 <code>List</code>。陣列會以為兩者相同，因此<strong>不會立刻報錯</strong>。</li>
-  <li>最後，當程式把 <code>oa[0]</code> 當成 <code>List&lt;String&gt;</code> 取出元素時，才會在型別轉換的那一刻爆炸，拋出 <code>ClassCastException</code>。</li>
-</ol>
-
-<p>換句話說，泛型陣列會讓陣列原本可靠的執行期型別檢查失效。與其允許一個到處可能出現漏洞的型別系統，Java 乾脆在編譯期禁止建立泛型陣列。</p>
-
-<p>這不是單純偷懶，而是因為「泛型的型別擦除」與「陣列的執行期具體化」本來就互相衝突。兩者無法同時完整保留時，Java 選擇禁止這種組合。</p>
+<p>JDBC 就是很典型的例子。JDBC 4.0 之後，你不需要再手動寫 <code>Class.forName("com.mysql.jdbc.Driver")</code>。因為 MySQL 的 jar 裡已經放入 <code>META-INF/services/java.sql.Driver</code>，<code>DriverManager</code> 初始化時呼叫 <code>ServiceLoader.load(Driver.class)</code>，就能自動找到並註冊驅動程式。</p>
 
 <figure class="lesson-figure"><img src="./reflection-proxy-generics-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>三個魔法，其實是一條線上的不同站點</h2>
+<h3>JDK SPI 的限制，以及 Dubbo 的改進</h3>
 
-<p>反射讓程式能在執行時取得類別與方法資訊；動態代理再利用這些能力，在執行時產生一個可以攔截與增強行為的物件；泛型擦除則提醒我們，編譯期的型別資訊不一定會完整保留到執行期。</p>
+<p>JDK SPI 雖然方便，但有三個明顯限制：</p>
 
-<p>把三者放在一起看，它們都在處理同一個矛盾：編譯期的程式結構是靜態且明確的，但框架的需求往往要等到執行時才知道。反射與動態代理選擇把部分決定延後到執行期；泛型擦除則以向後相容為代價，讓泛型型別資訊不再完整存在於執行期。</p>
+<ul>
+<li>它會<strong>一次性實例化設定檔中的所有實作類別</strong>。即使程式只需要其中一個，也可能把全部載入，浪費資源。</li>
+<li>它<strong>不支援別名</strong>。設定檔裡只有類別名稱，不能用像「random」這樣的名稱對應到隨機策略。</li>
+<li>它<strong>不支援 AOP 與 IOC</strong>，很難直接建立更完整的擴充與依賴管理能力。</li>
+</ul>
+
+<p>Dubbo 因此自行提供了 <code>ExtensionLoader</code>。它把設定檔改成 Key-Value 格式，做到<strong>按需載入</strong>；再透過 <code>@Adaptive</code>，根據執行時的 URL 參數<strong>動態決定</strong>要使用哪個實作；同時也支援自動包裝，讓 AOP 邏輯可以套在擴充點外層。</p>
+
+<p>換句話說，JDK SPI 比較像「把所有候選人先叫進來，再從中挑選」；Dubbo 的擴充機制則更像「需要哪個人，才叫哪個人進場」。這也是 Dubbo 微核心架構能保持彈性的原因。</p>
+
+<h2>泛型擦除：編譯期嚴格，執行期失憶</h2>
+
+<p>反射與代理都在討論「執行時才決定要做什麼」。泛型擦除則是另一種執行時差異：編譯器在編譯期看得到泛型資訊，但這些資訊不會完整保留到執行時。</p>
+
+<p>Java 的泛型常被稱為「偽泛型」，不是因為它沒有用，而是因為它主要只在編譯期發揮作用。你寫 <code>List&lt;String&gt;</code> 時，編譯器會利用這個資訊做型別檢查，確保你只能放入 <code>String</code>。但編譯成位元組碼後，尖括號裡的型別資訊會被抹掉，還原成裸型別 <code>List</code>。</p>
+
+<p>如果型別參數沒有指定上限，<code>T</code> 通常會被替換成 <code>Object</code>；如果指定了 <code>extends Number</code>，則會被替換成 <code>Number</code>。這個過程就叫做<strong>泛型擦除（type erasure）</strong>。</p>
+
+<h3>為什麼 Java 要擦除泛型？</h3>
+
+<p>主要原因是<strong>向後相容</strong>。Java 5 才加入泛型，但在那之前，Java 1.4 時期已經有大量程式碼與類別庫存在。為了讓舊程式碼仍然可以在新的 JVM 上執行，Java 選擇在編譯期提供泛型檢查，執行時則盡量維持舊有的類別模型。</p>
+
+<p>這是一種取捨：編譯器可以幫你擋下許多型別錯誤，但執行時不會保留完整的泛型標記。Java 沒有選擇像 C# 那樣把泛型資訊完整保留到執行時。</p>
+
+<h3>為什麼不能建立泛型陣列？</h3>
+
+<p>泛型擦除最容易直接碰到的限制，就是 Java 不允許你寫出 <code>new List&lt;String&gt;[10]</code>。</p>
+
+<p>原因要從陣列與泛型的設計差異看起。它們各自都合理，但放在一起時，執行時檢查的能力會互相衝突。</p>
+
+<ul>
+<li><strong>陣列是「具體化（reified）」且協變的：</strong>陣列在執行時必須知道自己的元素型別。你如果把一個 <code>Integer</code> 放進 <code>String[]</code>，執行時會立即丟出 <code>ArrayStoreException</code>。同時，子類別陣列可以賦值給父類別陣列引用，例如 <code>String[]</code> 可以當作 <code>Object[]</code> 使用。</li>
+<li><strong>泛型是「被擦除」且不協變的：</strong><code>List&lt;String&gt;</code> 在執行時只是一個 <code>List</code>。它不再保留「原本是 String」這個資訊，因此也不知道自己應該阻擋哪一種元素。</li>
+</ul>
+
+<p>假設 Java 允許建立泛型陣列，就可能出現下面的情況：</p>
+
+<pre><code>List&lt;String&gt;[] ls = new List&lt;String&gt;[10];  // 假設合法
+Object[] oa = ls;                          // 陣列協變，合法
+oa[0] = new ArrayList&lt;Integer&gt;();          // 塞進一個整數 List
+
+List&lt;String&gt; s = ls[0];                    // 取出來當字串 List 用
+String x = s.get(0);                       // 這裡才會炸：ClassCastException</code></pre>
+
+<p>真正危險的是第三步。因為泛型已經被擦除，<code>List&lt;Integer&gt;</code> 與 <code>List&lt;String&gt;</code> 在執行時都只是 <code>List</code>。陣列的執行時型別檢查無法分辨它們，因此不會在把錯誤放入陣列時阻擋。</p>
+
+<p>錯誤會一路延後，直到最後真正取出元素時才爆出 <code>ClassCastException</code>。這種錯誤出現的位置，通常距離真正造成問題的程式碼已經很遠，追查起來也格外困難。</p>
+
+<figure class="lesson-figure"><img src="./reflection-proxy-generics-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>因此，既然泛型擦除會讓陣列原本可靠的執行時檢查失效，Java 乾脆在編譯期禁止建立泛型陣列，避免這種型別安全被破壞的組合出現。</p>
+
+<h2>把三個觀念放在同一張圖上</h2>
+
+<p>反射、代理、SPI 與泛型擦除看似分散，其實都圍繞著同一個問題：<strong>哪些資訊在編譯期就決定，哪些資訊要留到執行時才決定？</strong></p>
+
+<table>
+<thead>
+<tr><th>機制</th><th>執行時做了什麼</th><th>換來的代價或限制</th></tr>
+</thead>
+<tbody>
+<tr><td>反射</td><td>執行時尋找類別、欄位與方法，再呼叫</td><td>需要動態解析、權限檢查與參數處理，JIT 也較難最佳化</td></tr>
+<tr><td>動態代理</td><td>執行時產生代理，攔截並轉發方法呼叫</td><td>JDK 代理受介面限制，CGLIB 受 <code>final</code> 限制</td></tr>
+<tr><td>SPI</td><td>執行時依設定檔發現並載入實作</td><td>JDK SPI 載入策略較粗略，缺少別名、按需載入與 AOP／IOC 能力</td></tr>
+<tr><td>泛型擦除</td><td>編譯期使用泛型檢查，執行時移除大部分泛型資訊</td><td>執行時無法完整辨識 <code>List&lt;String&gt;</code> 與 <code>List&lt;Integer&gt;</code></td></tr>
+</tbody>
+</table>
+
+<blockquote>
+反射讓程式在執行時才決定要操作哪個類別與方法；它慢在動態解析、安全檢查、參數裝箱，以及 JIT 難以把方法內聯。常見優化方式包括快取、<code>setAccessible(true)</code>，以及改用 MethodHandle 或位元組碼生成。代理則把增強邏輯插入呼叫鏈中：靜態代理在編譯期寫死，動態代理在執行期生成；JDK 動態代理依靠介面，CGLIB 依靠繼承，因此不能代理 <code>final</code>。SPI 用設定檔在執行時配對介面與實作，JDBC 與 Dubbo 都是實際應用。泛型主要只在編譯期存在，執行時會擦除成 <code>Object</code> 或上限型別；陣列具體化且協變，泛型則被擦除且不協變，兩者的執行時特性衝突，所以 Java 禁止泛型陣列。
+</blockquote>
+
+<p>到這裡，物件層的幾個重要機制就接上了：物件可以怎麼傳遞、怎麼比較、怎麼建立，也可以怎麼在執行時被找到、包裝與替換。</p>
+
+<p>接下來會把視線移到資料結構。下一節先建立集合框架的全景，再從隨機存取、增刪成本與 CPU 快取的角度，回答一個常見問題：ArrayList 和 LinkedList，到底該選哪一個。</p>
 
 <div class="lesson-nav">
-  <div><a href="./strings-and-immutability.html">← 上一步：String 不可變、常量池與拼接選型</a></div>
-  <div><a href="./collections-framework-and-list.html">下一步：集合框架地圖與 List 選型 →</a></div>
+  <div><a href="./immutability-strings-wrappers.html">← 上一步：不可變、字串池與包裝類</a></div>
+  <div><a href="./collections-overview-and-list.html">下一步：集合框架與 List 選型 →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="反射最主要的用途是什麼？" data-correct="1" data-explain="反射讓程式在執行時才取得類別資訊、建立物件與呼叫方法，是框架的基礎。">
-  <button class="opt">在編譯期就把所有方法連結好</button>
-  <button class="opt">在執行時動態取得類別資訊並呼叫方法</button>
-  <button class="opt">讓 JVM 跳過所有的安全檢查</button>
-  <button class="opt">把泛型資訊永久保存在位元組碼</button>
+<div class="quiz" data-question="下列哪一項不是反射效能開銷的主要來源？" data-correct="3" data-explain="反射是執行時解析，本來就無法在編譯期連結，所以「編譯期連結太慢」不是它的問題。">
+  <button class="opt">每次都要依名字動態查找類與方法</button>
+  <button class="opt">呼叫時要檢查可見性與存取權限</button>
+  <button class="opt">參數需要裝箱，且 JIT 難以內聯</button>
+  <button class="opt">編譯期就得把所有類別連結完成</button>
 </div>
-<div class="quiz" data-question="下列哪一項不是反射變慢的主要原因？" data-correct="3" data-explain="反射慢在動態解析、安全檢查、參數裝箱與 JIT 難內聯；物件不是在編譯期生成的。">
-  <button class="opt">每次都要動態解析類別與方法</button>
-  <button class="opt">每一步都要做可見性安全檢查</button>
-  <button class="opt">參數需要反覆裝箱拆箱</button>
-  <button class="opt">物件必須在編譯期先行生成</button>
+<div class="quiz" data-question="關於 JDK 動態代理與 CGLIB 的差別，下列何者正確？" data-correct="1" data-explain="JDK 代理基於介面，CGLIB 基於繼承並用 ASM 生成目標類的子類。">
+  <button class="opt">JDK 代理靠繼承，CGLIB 靠介面</button>
+  <button class="opt">JDK 代理靠介面，CGLIB 靠繼承</button>
+  <button class="opt">兩者都必須先有介面才能運作</button>
+  <button class="opt">兩者都無法代理 final 的方法</button>
 </div>
-<div class="quiz" data-question="JDK 動態代理與 CGLIB 最核心的機制差異是什麼？" data-correct="2" data-explain="JDK 代理基於介面生成實作類，CGLIB 基於繼承生成目標類的子類。">
-  <button class="opt">JDK 代理支援 final 類，CGLIB 不支援</button>
-  <button class="opt">CGLIB 只能代理有介面的類別</button>
-  <button class="opt">JDK 基於介面，CGLIB 基於繼承</button>
-  <button class="opt">兩者都只能代理靜態方法</button>
+<div class="quiz" data-question="CGLIB 動態代理無法處理下列哪一種情況？" data-correct="2" data-explain="CGLIB 靠生成子類並重寫方法，final 類或 final 方法無法被繼承重寫。">
+  <button class="opt">目標類別完全沒有實作介面</button>
+  <button class="opt">目標方法帶有多個參數</button>
+  <button class="opt">目標類別或方法被宣告為 final</button>
+  <button class="opt">目標類別位於第三方的 jar 裡</button>
 </div>
-<div class="quiz" data-question="CGLIB 動態代理無法代理哪一種目標？" data-correct="3" data-explain="CGLIB 靠生成子類並重寫方法，所以無法處理 final 類或 final 方法。">
-  <button class="opt">沒有實作任何介面的類別</button>
-  <button class="opt">欄位很多的龐大類別</button>
-  <button class="opt">只有單一方法的類別</button>
-  <button class="opt">被宣告成 final 的類或方法</button>
+<div class="quiz" data-question="JDK 原生 SPI 最主要的缺點之一是什麼？" data-correct="0" data-explain="ServiceLoader 會把設定檔中的實作全部實例化，無法按需只載入其中一個。">
+  <button class="opt">會一次性實例化所有實作類</button>
+  <button class="opt">完全不支援用反射載入類別</button>
+  <button class="opt">必須改寫 JVM 才能夠運作</button>
+  <button class="opt">只能在單執行緒環境下使用</button>
 </div>
-<div class="quiz" data-question="什麼是泛型擦除？" data-correct="0" data-explain="泛型只存在於編譯期，編譯後被替換成 Object 或指定的上限型別，執行期拿不到具體型別。">
-  <button class="opt">編譯後泛型被替換成 Object 或上限型別</button>
-  <button class="opt">執行期把物件轉成基本型別</button>
-  <button class="opt">JVM 在載入時刪除所有類別方法</button>
-  <button class="opt">泛型參數被自動轉成字串儲存</button>
+<div class="quiz" data-question="JDBC 4.0 之後不用寫 Class.forName 載入驅動，靠的是什麼？" data-correct="3" data-explain="驅動 jar 在 META-INF/services/java.sql.Driver 留下實作類，DriverManager 用 ServiceLoader 自動發現。">
+  <button class="opt">JVM 啟動時會掃描所有 jar 並執行 main</button>
+  <button class="opt">資料庫廠商改寫了 Java 的核心類別庫</button>
+  <button class="opt">編譯器把驅動類別直接寫進位元組碼</button>
+  <button class="opt">ServiceLoader 掃描 META-INF/services</button>
 </div>
-<div class="quiz" data-question="為什麼 Java 不支援建立泛型陣列？" data-correct="2" data-explain="陣列協變又具體化，泛型擦除後執行期無法檢查元素型別，兩者衝突會導致型別不安全。">
-  <button class="opt">因為泛型陣列的語法太複雜難實作</button>
-  <button class="opt">因為陣列的記憶體必須是連續的</button>
-  <button class="opt">因為擦除會讓陣列的執行期型別檢查失效</button>
-  <button class="opt">因為泛型只能用於集合不能用於陣列</button>
+<div class="quiz" data-question="Java 採用泛型擦除最主要的原因是？" data-correct="1" data-explain="Java 5 才引入泛型，擦除能讓舊版編譯的程式碼與新 JVM 保持二進位相容。">
+  <button class="opt">擦除能讓泛型的執行速度更快</button>
+  <button class="opt">為了與 Java 5 之前的舊程式碼相容</button>
+  <button class="opt">因為 JVM 沒有能力表示型別參數</button>
+  <button class="opt">為了讓泛型可以支援基本型別</button>
+</div>
+<div class="quiz" data-question="為什麼 Java 不允許建立 List&lt;String&gt;[] 這種泛型陣列？" data-correct="2" data-explain="陣列協變且執行時具體化，泛型卻被擦除，兩者衝突會讓執行時檢查失效。">
+  <button class="opt">因為泛型陣列會讓 JVM 無法啟動</button>
+  <button class="opt">因為陣列的容量無法在編譯期確定</button>
+  <button class="opt">因為擦除會讓陣列的執行時檢查失效</button>
+  <button class="opt">因為泛型只能用在單一元素而非陣列</button>
 </div>
 
 <div class="footer">
-  <p>有任何看不懂的地方，直接在對話裡問你的老師。追問，是這門課最歡迎的動作。</p>
+  <p>小哲讲八股 · Java 語言與物件 · Step 3/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>

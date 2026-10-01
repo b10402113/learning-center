@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跑一次完整多階段實作（並讀懂日誌）</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>跑完一次多階段實作，讀懂每一行日誌</h1>
+<p class="meta">Step 3/4 · 自動化迴圈：main.ts</p>
+
+<h2>這次要完成什麼</h2>
+<p>這一節會把整份多階段計畫交給 <code>main.ts</code> 執行，實際跑完一次 AFK 迴圈。你會看到 agent 如何跳過已完成的 phase，逐階段執行 typecheck、test 與 commit，也會學會從日誌判讀每一輪用了多少 context window。</p>
+
+<p>做完之後，你應該會得到三樣東西：一份已完成的計畫、每個 phase 對應的 commit，以及一段能看懂的執行紀錄。</p>
+
+<h2>動手前先確認環境</h2>
+
+<p>開始前，請確認以下項目都已準備好：</p>
+
+<ul>
+<li>一份寫好的 PRD。</li>
+<li>一份已經切成多個 phase 的 plan 檔。</li>
+<li>一個已建立好的 Docker 沙箱。</li>
+<li><code>.env</code> 裡已放好 API key。</li>
+</ul>
+
+<p>如果沙箱還沒建立，請執行：</p>
+
+<pre><code>pnpm sandcastle docker build image</code></pre>
+
+<p>另外，務必確認接下來是在沙箱裡執行，而不是在主機上使用略過權限的模式。這是放手讓 agent 自動工作的前提，不能省略。</p>
+
+<h2>步驟一：啟動 runner</h2>
+
+<p>在終端機輸入下面這行。兩個位置引數依序是 PRD 與 plan：</p>
+
+<pre><code>npx tsx sandcastle/main.ts prd/admin-analytics.md plans/admin-analytics-plan.md</code></pre>
+
+<p>執行後，agent 會立刻啟動。你可以按住 Control 再點擊日誌連結，把執行紀錄開起來查看。</p>
+
+<p>一開始預期會看到 agent 讀取 PRD 與 plan。這兩份檔案就像行程表：PRD 說明要完成什麼，plan 則把工作切成 agent 可以逐步處理的 phase。</p>
+
+<h2>步驟二：確認它會跳過已完成的工作</h2>
+
+<p>先看日誌開頭。這次 agent 會發現 phase one 已經完成，因為我們在互動式練習中已經做過這一階段。讀完 plan 後，它判斷不需要重做，於是直接前往 phase two。</p>
+
+<p><strong>再跑一次，agent 也不會把做過的事重做一遍。</strong></p>
+
+<p>每一輪開始時，agent 都會先探索 repo，再對照 plan，確認目前進度。找到第一個尚未完成的 phase 後，它才會從那裡接手。如果 plan 寫得夠清楚，agent 就能穩定續跑，不必每一輪都從頭來一遍。</p>
+
+<p>日誌也會標示目前是哪一輪，例如 <code>iteration 1 of 3</code>。這讓你知道目前進度，以及最多還允許跑幾輪。</p>
+
+<h2>步驟三：觀察每一輪的固定節奏</h2>
+
+<p>看懂一輪的內部結構後，你就能預測 agent 接下來會做什麼。每一輪大致都會依照同一套節奏進行：</p>
+
+<ol>
+<li>探索 repo，理解這個 phase 會碰到哪些檔案與模組。</li>
+<li>實作這個 phase 所需的功能。</li>
+<li>執行 typecheck；如果遇到型別或語法錯誤，就修正後再執行一次。</li>
+<li>執行測試，確認沒有破壞既有功能。</li>
+<li>用 <code>git add</code> 加入這個 phase 的變更，再用 <code>git commit</code> 建立提交。</li>
+</ol>
+
+<p>以這次的計畫為例，第一輪處理的是 phase two：在 admin analytics 儀表板加入 recharts 折線圖，呈現 revenue over time。</p>
+
+<p>日誌中會看到 agent 中途遇到語法錯誤，接著修正問題、重新執行測試，最後建立一個 commit。commit 是可以回溯的切點：之後 review 或追查變更，就從這裡切開來看。</p>
+
+<figure class="lesson-figure"><img src="./multi-phase-run-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟四：確認為什麼會進入第二輪</h2>
+
+<p>第一輪結束時，agent 還沒有輸出完成信號。因此，迴圈判斷仍有工作尚未完成，接著進入 <code>iteration 2 of 3</code>。</p>
+
+<p>每一輪開始時，沙箱都會重新設定一次，這是正常行為。第二輪中，agent 再次辨識出 phase one 與 phase two 都已完成，於是繼續處理 phase three：加入 per-course breakdown 表格，並提供依講師篩選的功能。</p>
+
+<p>這一輪仍然依序完成探索、實作、測試與建立 commit。最後，agent 輸出 <code>no more tasks</code>。看到這句話後，迴圈就會停止。</p>
+
+<blockquote>
+這次只跑了兩輪就收到完成信號，比 <code>maxIterations</code> 設定的 3 輪更早停止。這正是 completion signal 的作用：工作真的做完了，就不必把剩餘的額度全部跑完。
+</blockquote>
+
+<h2>步驟五：讀懂結尾的執行報告</h2>
+
+<p>日誌最後會整理整趟執行結果。請特別查看以下三個數字或項目：</p>
+
+<ul>
+<li><strong>收集到的 commits</strong>：這一趟總共留下哪些 commit，方便你逐一 review。</li>
+<li><strong>完成信號出現的輪次</strong>：這次在兩輪後觸發，表示計畫實際上兩輪就完成了。</li>
+<li><strong>每一輪的 context window 用量</strong>：這次第一輪是 64k，第二輪是 80k。</li>
+</ul>
+
+<p>這些 context 數字會提醒你：就算用了迴圈，單一輪能處理的內容還是有限。如果某個 phase 太大，或需要讀取的資料太多，該輪就可能衝出 smart zone，開始出現「變笨」的行為。</p>
+
+<figure class="lesson-figure"><img src="./multi-phase-run-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>因此，plan 是否切成適合單輪處理的垂直切片，會直接影響自動化迴圈的品質。</p>
+
+<h2>步驟六：回到畫面驗收成果</h2>
+
+<p>執行完成後，回到 dev UI 查看成果。這次應該會看到 revenue over time 折線圖，以及位於底部的 per-course breakdown 表格。表格可以依 Marcus Johnson 或 Sarah Chen 這類講師進行篩選。</p>
+
+<p>驗收時也要保留一個實務上的判斷：圖表的移動方式看起來有點怪，但講師沒有立刻修正，而是把問題留到 QA 再處理。</p>
+
+<p>「working code」還不到「完美成品」。AFK 迴圈的任務是把功能做出來；QA 與 review 還是得由你把關。</p>
+
+<p>完成這些步驟後，你就得到一個可驗證的結果：整份計畫從 phase one 之後一路做到結束，每個階段都有對應的 commit，而且整個過程不需要你一直坐在鍵盤前。</p>
+
+<p>至於為什麼規劃做得好，放手讓迴圈執行時才會更順利，會在下一個決定中處理。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+啟動時，把 PRD 與 plan 當成位置引數傳給 <code>main.ts</code>。每輪 agent 會先辨識已完成的工作，只處理下一個尚未完成的 phase，接著依序執行 explore → implement → typecheck/test → commit。若沒有完成信號，就進入下一輪，直到輸出 <code>no more tasks</code>。閱讀日誌時，請查看收集到的 commits、完成信號出現的輪次，以及每輪的 context window 用量。執行結束後，回到畫面驗收；working code 仍然需要 QA。
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./loop-termination.html">← 上一步：迴圈怎麼停：maxIterations 與 completion signal</a></div>
+  <div><a href="./parallelize-yourself.html">下一步：放手之後：規劃前提與平行化自己 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="啟動 AFK runner 的指令，位置引數順序是什麼？" data-correct="1" data-explain="npx tsx sandcastle/main.ts 後面先接 PRD 檔，再接 plan 檔。">
+  <button class="opt">先 plan 檔，再接 PRD 檔位置</button>
+  <button class="opt">先 PRD 檔，再接 plan 檔位置</button>
+  <button class="opt">先模型名稱，再接 plan 檔位置</button>
+  <button class="opt">先沙箱名稱，再接 PRD 檔位置</button>
+</div>
+<div class="quiz" data-question="第一輪日誌顯示 agent 做了什麼？" data-correct="3" data-explain="它辨識出 phase one 已完成，直接接續做 phase two。">
+  <button class="opt">它把 phase one 從頭重做了一遍</button>
+  <button class="opt">它停在原地等使用者下指令</button>
+  <button class="opt">它把整份計畫一次全部做完</button>
+  <button class="opt">它跳過 phase one 直接做 phase two</button>
+</div>
+<div class="quiz" data-question="一輪內部的固定節奏依序是什麼？" data-correct="0" data-explain="探索 repo、實作、typecheck 與測試、最後 commit。">
+  <button class="opt">explore → implement → 測試 → commit</button>
+  <button class="opt">commit → explore → implement → 測試</button>
+  <button class="opt">測試 → commit → explore → implement</button>
+  <button class="opt">implement → commit → 測試 → explore</button>
+</div>
+<div class="quiz" data-question="為什麼這次會進入第二輪？" data-correct="2" data-explain="第一輪結尾沒有出現完成信號，因此迴圈繼續。">
+  <button class="opt">因為第一輪的測試全部失敗了</button>
+  <button class="opt">因為第一輪的沙箱無法建立</button>
+  <button class="opt">因為第一輪沒有輸出完成信號</button>
+  <button class="opt">因為第一輪忘了建立任何 commit</button>
+</div>
+<div class="quiz" data-question="日誌最後顯示兩輪的 context window 用量是多少？" data-correct="1" data-explain="第一輪 64k，第二輪 80k。">
+  <button class="opt">第一輪 19k，第二輪 30k</button>
+  <button class="opt">第一輪 64k，第二輪 80k</button>
+  <button class="opt">第一輪 80k，第二輪 64k</button>
+  <button class="opt">第一輪 100k，第二輪 200k</button>
+</div>
+<div class="quiz" data-question="跑完之後回到 dev UI，應該看到什麼成品？" data-correct="3" data-explain="revenue over time 折線圖，以及可依講師篩選的 per-course breakdown 表格。">
+  <button class="opt">只有一個空白的路由頁面</button>
+  <button class="opt">一份自動產生的測試報告</button>
+  <button class="opt">一個全新的登入與權限系統</button>
+  <button class="opt">折線圖與可篩選的明細表格</button>
+</div>
+
+<div class="footer">
+  <p>AI Coding for Real Engineers · 自動化迴圈：main.ts · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

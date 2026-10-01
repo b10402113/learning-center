@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>不可變、字串池與包裝類：物件怎麼被建立與複製</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>不可變、字串池與包裝類：一行 Java 到底建立了什麼？</h1>
+<p class="meta">Step 2/6 · Java 語言與物件：一行 Java 到底做了什麼</p>
+
+<h2>學習目標</h2>
+<p>這一節要把幾個常在面試與實務中一起出現的問題串起來：不可變物件有什麼好處？String 常數池和 <code>intern()</code> 在不同 JDK 版本有什麼差異？StringBuilder 與 StringBuffer 該怎麼選？包裝類與自動裝箱有哪些陷阱？還有，物件複製時的深拷貝與淺拷貝到底差在哪裡？</p>
+
+<h2>前言：為什麼兩個一樣的字串，<code>==</code> 有時真、有時假？</h2>
+
+<p>上一節我們拆開了物件比較，知道 <code>==</code> 比較的是位址，而不是內容。但你可能很快就遇到一個更奇怪的現象：同樣是 <code>String</code>，有時候 <code>a == b</code> 是 <code>true</code>，有時候內容明明一樣，結果卻是 <code>false</code>。</p>
+
+<p>這不是 Java 壞掉了，而是你碰到了字串常數池。要理解常數池，就不能只背「String 是不可變物件」這句定義，還要看清楚物件是怎麼被建立、儲存與共用的。這也就是這一節要處理的問題。</p>
+
+<p>我們會沿著一條線往下看：先從「不可變」這個設計選擇開始，理解它為什麼讓 String 能被共用；接著看 String 常數池與 <code>intern()</code>；再比較 StringBuilder 和 StringBuffer 的取捨。之後換到包裝類，看看為什麼 <code>Integer</code> 也有快取池，以及自動裝箱在迴圈中為什麼可能拖慢系統。最後，再補上物件複製最常見的陷阱：淺拷貝。</p>
+
+<p>這些主題看起來互不相干，其實都在回答同一個問題：<strong>當你寫下一行 Java，JVM 到底建立了幾個物件？這些物件能不能被共用？</strong></p>
+
+<h2>不可變：先理解設計，再理解 String</h2>
+
+<p>所謂<strong>不可變（immutable）</strong>，是指物件建立之後，內容就不能再被修改。String 是最典型的例子。它的底層儲存陣列會被 <code>final</code> 修飾；Java 9 之後則改成使用 byte 陣列。無論採用哪種實作，字串建立完成後，裡面的內容就固定了。</p>
+
+<p>你可能會想：「我明明寫過 <code>s = s + \"abc\";</code>，<code>s</code> 不是變了嗎？」</p>
+
+<p>變的其實是變數 <code>s</code> 這個<strong>參考</strong>，不是原本的 String 物件。真正的過程是：JVM 另外建立一個新的 String，把舊內容和 <code>\"abc\"</code> 拼接起來，然後讓 <code>s</code> 改為指向這個新物件。舊的字串物件仍然存在，只是沒有變數再指向它，之後可能被垃圾回收。</p>
+
+<p>不可變帶來的好處很實在。因為內容不會改變，多個執行緒可以同時讀取同一個 String，不需要額外加鎖，所以它天生具備執行緒安全的特性。也因為內容不會變，同樣的字串才能放心放進常數池，讓許多地方共用同一個物件。</p>
+
+<p>可以把不可變物件想成列印好的文件，而不是還能反覆修改的白板。文件內容要改，不能直接在原件上擦掉重寫，只能重新印一份。</p>
+
+<figure class="lesson-figure"><img src="./immutability-strings-wrappers-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>String 常數池：<code>new String("abc")</code> 到底建立幾個物件？</h2>
+
+<p>既然字串內容不會改，JVM 就能做一件很省空間的事：把字串字面值集中管理，讓內容相同的字串共用同一份。這個集中管理的地方就是<strong>字串常數池（String Pool）</strong>。</p>
+
+<p>因此，下面這段程式的 <code>a == b</code> 會是 <code>true</code>：</p>
+
+<p><code>String a = "abc"; String b = "abc";</code></p>
+
+<p>原因不是 Java 把兩個字串內容拿來比較，而是兩個變數都指向常數池中同一個 String 物件。</p>
+
+<p>那麼，<code>new String("abc")</code> 會建立幾個物件？答案是<strong>一個或兩個</strong>，取決於執行到這行之前，常數池裡是否已經有 <code>"abc"</code>：</p>
+
+<ul>
+<li><strong>池裡沒有 <code>"abc"</code>：建立兩個物件。</strong>JVM 會先為字面值 <code>"abc"</code> 建立一個 String 物件，並把它的引用放進常數池，這是第一個物件。接著看到 <code>new</code>，又會在堆中建立第二個 String 物件，內容從池中的字串複製過來。</li>
+<li><strong>池裡已經有 <code>"abc"</code>：建立一個物件。</strong>字面值直接使用常數池裡既有的引用，不需要再建立新的字面值物件；只有 <code>new</code> 這一步會在堆中建立一個新物件。</li>
+</ul>
+
+<p>無論是哪一種情況，<code>new</code> 出來的物件都在堆中，而且和常數池中的物件不是同一個位址。</p>
+
+<figure class="lesson-figure"><img src="./immutability-strings-wrappers-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3><code>intern()</code>：手動把字串交給常數池管理</h3>
+
+<p><code>String.intern()</code> 可以看成是你手動把字串送進常數池的方法。它會先到池裡查找：</p>
+
+<ul>
+<li>如果池裡已經有相同內容的字串，就回傳池中的引用。</li>
+<li>如果池裡沒有，就把字串放進池中，再回傳池中的引用。</li>
+</ul>
+
+<p>它的實作會隨 JDK 版本演進。核心差異在於：入池時，是複製一個物件進去，還是只在池裡記錄堆中物件的引用。</p>
+
+<table>
+<thead>
+<tr><th>版本</th><th>常數池位置</th><th>入池策略</th><th><code>intern()</code> 回傳的引用</th></tr>
+</thead>
+<tbody>
+<tr><td>JDK 1.6</td><td>永久代（PermGen）</td><td>把堆中物件複製一份進去（深拷貝）</td><td>與原物件不同，一個是副本、一個是原件</td></tr>
+<tr><td>JDK 1.7</td><td>Java 堆</td><td>只在池裡存指向堆中物件的引用（淺拷貝）</td><td>與原物件相同，指向同一個物件</td></tr>
+<tr><td>JDK 1.8</td><td>Java 堆，邏輯上與 1.7 相同</td><td>與 1.7 完全一致</td><td>與原物件相同</td></tr>
+</tbody>
+</table>
+
+<p>JDK 1.7 把常數池搬到 Java 堆中，並改成主要保存引用，這也降低了舊版大量呼叫 <code>intern()</code> 時撞上 <code>OOM: PermGen space</code> 的機會。這條「記憶體區域搬遷」的線索，之後在 JVM 記憶體章節還會再遇到。</p>
+
+<h2>StringBuilder 與 StringBuffer：可變字串的兩種取捨</h2>
+
+<p>String 適合讀取，不適合反覆修改。如果你在迴圈裡使用 <code>+</code> 拼接字串，每次拼接都可能建立新的 String 物件。迴圈跑得越多，暫時物件就越多，記憶體配置與 GC 的壓力也會跟著上升。</p>
+
+<p>因此，Java 提供了兩個可變字串類別：StringBuilder 與 StringBuffer。它們底層都使用可擴容的陣列，繼承自 <code>AbstractStringBuilder</code>；呼叫 <code>append</code> 時，會直接在原本的物件上修改，而不是每次都建立新的 String。</p>
+
+<table>
+<thead>
+<tr><th>類別</th><th>可變性</th><th>執行緒安全</th><th>效能</th><th>適用場景</th></tr>
+</thead>
+<tbody>
+<tr><td>String</td><td>不可變，拼接會產生新物件</td><td>天生安全，因為內容不能改</td><td>反覆拼接時最差</td><td>常數、少量且不常變動的字串</td></tr>
+<tr><td>StringBuilder</td><td>可變</td><td>不安全，方法沒有加鎖</td><td>最好</td><td>單執行緒拼接，包含絕大多數業務程式</td></tr>
+<tr><td>StringBuffer</td><td>可變</td><td>安全，方法使用 <code>synchronized</code></td><td>較差，因為頻繁加鎖與解鎖</td><td>多執行緒同時修改同一個字串</td></tr>
+</tbody>
+</table>
+
+<p>可以這樣記：單執行緒拼接用 StringBuilder；只有在多執行緒真的共用同一個可變字串時，才考慮 StringBuffer。若以頻繁拼接的效能來看，大致是：</p>
+
+<p><code>StringBuilder &gt; StringBuffer &gt;&gt;&gt; String</code></p>
+
+<figure class="lesson-figure"><img src="./immutability-strings-wrappers-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>包裝類：讓基本型別也能當物件</h2>
+
+<p>Java 保留了八種基本型別，例如 <code>int</code> 和 <code>boolean</code>，讓常見的數值與真假判斷能以較低成本執行。不過，基本型別不是物件，不繼承 <code>Object</code>，也沒有方法。</p>
+
+<p>當某些 API 需要物件時，就要使用包裝類，例如用 <code>Integer</code> 包住 <code>int</code>。可以把包裝類想成替基本型別穿上一件「物件外套」。它主要解決三類問題：</p>
+
+<ol>
+<li><strong>泛型與集合只能裝引用型別。</strong>Java 泛型底層會擦除成 <code>Object</code>，所以 <code>List&lt;int&gt;</code> 不合法，只能寫成 <code>List&lt;Integer&gt;</code>。只要使用集合框架，就很難避開包裝類。</li>
+<li><strong>需要表示「沒有值」。</strong>基本型別有預設值，例如 <code>int</code> 的預設值是 0。但在資料庫映射或 API 傳參時，「使用者沒有填年齡」和「使用者填了 0 歲」是兩種不同情況。<code>Integer</code> 可以是 <code>null</code>，因此能表示資料缺失。</li>
+<li><strong>提供工具方法。</strong>包裝類提供許多靜態方法，例如 <code>Integer.parseInt("123")</code>、<code>Integer.toBinaryString(10)</code>，也提供 <code>Integer.MAX_VALUE</code> 這類常數。</li>
+</ol>
+
+<p>代價是，包裝類畢竟是物件，需要物件頭，也需要在堆中配置空間。因此，如果程式正在做大量數值運算，通常仍應優先使用基本型別。</p>
+
+<h3>自動裝箱與拆箱：編譯器替你補上的程式碼</h3>
+
+<p>自動裝箱與拆箱是 Java 5 引進的語法糖。它不是 JVM 在執行時突然施展魔法，而是編譯器在編譯階段先替你改寫程式碼。</p>
+
+<ul>
+<li><strong>裝箱：</strong><code>Integer a = 10;</code> 會被改寫成 <code>Integer a = Integer.valueOf(10);</code></li>
+<li><strong>拆箱：</strong><code>int b = a;</code> 會被改寫成 <code>int b = a.intValue();</code></li>
+</ul>
+
+<p>這讓程式碼更簡潔，但用得太頻繁，就會冒出三個問題。</p>
+
+<p>最常見的是<strong>效能問題</strong>。如果在迴圈裡不斷裝箱，可能瞬間建立成千上萬個暫時物件，讓 GC 忙著清理，甚至造成系統停頓。</p>
+
+<p>再來是<strong>空指標問題</strong>。拆箱本質上是呼叫 <code>xxxValue()</code>。如果包裝類的值是 <code>null</code>，呼叫這個方法就會拋出 <code>NullPointerException</code>。</p>
+
+<p>還有一個是 <code>==</code> 的比較陷阱，這和 <code>Integer</code> 的快取池有關。</p>
+
+<h3>Integer 快取池：-128 到 127 的享元</h3>
+
+<p><code>Integer</code> 的快取機制本質上是<strong>享元模式（Flyweight Pattern）</strong>：把常用而且重複的小物件先建立好，之後直接共用，而不是每次都重新配置。</p>
+
+<p><code>Integer</code> 裡有一個靜態內部類別 <code>IntegerCache</code>。類別第一次載入時，靜態區塊會執行一個迴圈，先建立 <strong>-128 到 127</strong> 的 256 個整數物件，並放進陣列中。</p>
+
+<p>之後呼叫 <code>Integer.valueOf(i)</code>，也就是自動裝箱時，程式會先檢查 <code>i</code> 是否位於這個區間：</p>
+
+<ul>
+<li>如果在區間內，就直接回傳陣列中已經存在的引用。因此，<code>Integer a = 100; Integer b = 100;</code> 的 <code>a == b</code> 會是 <code>true</code>。</li>
+<li>如果超出區間，就建立新的 Integer 物件。因此，<code>Integer a = 200; Integer b = 200;</code> 的 <code>a == b</code> 會是 <code>false</code>。</li>
+</ul>
+
+<p>這個範圍的下限 -128 是固定的，不能調整；上限預設是 127，可以透過 JVM 參數 <code>-XX:AutoBoxCacheMax=size</code> 調大，例如調整到 1000。若想把上限調得小於 127，JVM 會忽略這個設定。</p>
+
+<p>還有一個常見陷阱：只要明確寫出 <code>new Integer(100)</code>，就不會用到快取。JVM 一定會在堆中建立新的物件，所以它和自動裝箱產生的 <code>Integer a = 100;</code> 使用 <code>==</code> 比較時，結果會是 <code>false</code>。</p>
+
+<figure class="lesson-figure"><img src="./immutability-strings-wrappers-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>浮點數與金額：為什麼 <code>0.1 + 0.2</code> 不等於 <code>0.3</code>？</h2>
+
+<p>物件與數值處理中，另一個經典坑是浮點數精度。實際執行：</p>
+
+<p><code>System.out.println(0.1 + 0.2);</code></p>
+
+<p>輸出結果不是 0.3，而是 <code>0.30000000000000004</code>。</p>
+
+<p>原因是電腦使用二進位儲存數字。像 0.1 這種十進位小數，轉成二進位後會變成無限循環小數；但 <code>float</code> 只有 32 位、<code>double</code> 只有 64 位，儲存空間有限，只能截斷成一個近似值。兩個近似值相加後，自然不一定剛好等於 0.3。</p>
+
+<p>這在金融場景可能造成嚴重問題。單筆誤差看起來很小，但大量累加後，帳目可能對不上，甚至讓財報差上幾分錢。因此，浮點數不能直接使用 <code>==</code> 比較，也不適合直接拿來處理金額。</p>
+
+<p>正確做法是使用 <code>BigDecimal</code>。它會以能精確表示的方式處理十進位數值。不過，建立 BigDecimal 時也有一個重要細節：<strong>務必使用字串建構子 <code>new BigDecimal("0.1")</code>，或使用 <code>BigDecimal.valueOf(0.1)</code></strong>。</p>
+
+<p>不要寫成 <code>new BigDecimal(0.1)</code>。因為傳入的 <code>0.1</code> 早已是二進位浮點數的近似值，BigDecimal 只是把這個不精確的結果照實保存下來，等於一開始就把誤差帶進去了。</p>
+
+<h2>淺拷貝與深拷貝：複製物件時，複製的是內容還是位址？</h2>
+
+<p>再來看物件複製。<code>Object.clone()</code> 是一個 <code>native</code> 方法，預設採用的是<strong>淺拷貝</strong>：建立一個新物件，把原物件每個欄位的值按位複製過去。</p>
+
+<p>對基本型別欄位來說，複製的是數值本身，因此新舊物件彼此獨立。但對引用型別欄位來說，複製的是<strong>位址</strong>。結果就是，新物件與舊物件仍然指向堆中的同一個內部物件。</p>
+
+<p>例如，一個物件裡有一個 List。完成淺拷貝後，雖然外層物件不同，但兩個物件裡的 List 仍然是同一份。你往新物件的 List 加入一個元素，舊物件的 List 也會跟著多出這個元素，這就是淺拷貝最容易踩到的地方。</p>
+
+<p>如果希望新舊物件完全獨立，就需要深拷貝。常見方式有兩種：</p>
+
+<ol>
+<li><strong>逐層重寫 <code>clone()</code>：</strong>在 <code>clone()</code> 中手動複製每個引用欄位。如果內部物件還包含其他引用，就必須繼續往下複製。物件層級一深，程式碼就會變長，也很容易漏掉某個欄位，因此現在較少使用。</li>
+<li><strong>序列化再反序列化：</strong>先把物件轉成位元組流或 JSON 字串，再讀回成另一個物件。轉換成流的過程會建立新的物件結構，還原後就是一份獨立副本。生產環境常見的 JSON 工具包括 Jackson 與 Gson。</li>
+</ol>
+
+<figure class="lesson-figure"><img src="./immutability-strings-wrappers-assets/image-5.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>不可變是 String 的設計核心。因為內容不會改，字串可以安全共用，也天生具備執行緒安全的特性，常數池才有成立的基礎。</p>
+<p><code>new String("abc")</code> 會建立一個或兩個物件，取決於常數池中是否已經有這個字面值。<code>intern()</code> 則從 JDK 1.6 的「複製物件進永久代」，演變成 JDK 1.7 起主要在堆中保存引用。</p>
+<p>字串拼接時，單執行緒使用 StringBuilder；只有多執行緒共用同一個可變字串時，才考慮 StringBuffer。包裝類讓基本型別能放進集合、能表達 <code>null</code>，也能提供工具方法；但自動裝箱在迴圈裡可能製造大量物件，拆箱遇到 <code>null</code> 則會拋出 NPE。</p>
+<p><code>Integer</code> 的 -128 到 127 快取，會讓 <code>==</code> 的結果取決於數值是否位於快取範圍內。金額處理應使用 BigDecimal，並透過字串建構子或 <code>valueOf</code> 建立。物件複製預設是淺拷貝；若要讓內部物件也彼此獨立，就需要深拷貝。</p>
+</blockquote>
+
+<p>到這裡，我們處理的是平常直接寫在程式碼裡的物件。但框架替你完成的許多工作，往往不是靠普通語法完成的。下一節會換一個角度：看看反射如何讓程式在執行時才決定要呼叫誰，動態代理如何在執行時生成類別，以及泛型為什麼到了執行時會「消失」。</p>
+
+<div class="lesson-nav">
+  <div><a href="./pass-by-value-and-equality.html">← 上一步：一行 Java 傳了什麼？值傳遞與等值判斷</a></div>
+  <div><a href="./reflection-proxy-generics.html">下一步：反射、代理與泛型擦除 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="String 之所以能做到常量池共用，主要前提是什麼？" data-correct="1" data-explain="字串不可變，內容不會被偷改，才能安全地讓多個引用共用同一份。">
+  <button class="opt">它底層使用可自動擴容的陣列儲存</button>
+  <button class="opt">它不可變，內容建立後就不會再改</button>
+  <button class="opt">它繼承自 Object 並重寫了 clone</button>
+  <button class="opt">它在堆上永遠只有一個實例存在</button>
+</div>
+<div class="quiz" data-question="執行 new String("abc") 且池中還沒有 "abc" 時，共建立幾個物件？" data-correct="2" data-explain="先為字面量建立池物件，再為 new 建立新物件，共 2 個。">
+  <button class="opt">只建立 1 個，new 會直接複用池物件</button>
+  <button class="opt">建立 0 個，延遲到使用時才建立</button>
+  <button class="opt">建立 2 個，字面量與 new 各一個</button>
+  <button class="opt">建立 3 個，池、堆與棧各一個</button>
+</div>
+<div class="quiz" data-question="JDK 1.7 之後 String.intern() 的入池策略是？" data-correct="0" data-explain="常量池移到堆中，池裡只存指向堆中物件的引用，是淺拷貝。">
+  <button class="opt">只在池中存指向堆物件的引用</button>
+  <button class="opt">把堆物件完整複製一份到池中</button>
+  <button class="opt">把字串拆成字元陣列再重新組合</button>
+  <button class="opt">把字串寫到永久代後刪除原件</button>
+</div>
+<div class="quiz" data-question="在迴圈中用 + 拼接字串最主要的問題是什麼？" data-correct="3" data-explain="String 不可變，每次拼接都產生新物件，帶來大量記憶體與 GC 壓力。">
+  <button class="opt">編譯器會直接拒絕這種寫法</button>
+  <button class="opt">拼接結果的順序會被自動打亂</button>
+  <button class="opt">字串內容會在執行時被就地修改</button>
+  <button class="opt">每次拼接都產生新物件拖累 GC</button>
+</div>
+<div class="quiz" data-question="下列哪一項不是引入包裝類的主要理由？" data-correct="2" data-explain="包裝類反而有物件與堆分配的額外開銷，拿來省記憶體不是它的目的。">
+  <button class="opt">讓集合框架能儲存數值型別</button>
+  <button class="opt">表達資料缺失的 null 語意</button>
+  <button class="opt">比基本型別更省記憶體與更快</button>
+  <button class="opt">提供型別轉換等靜態工具方法</button>
+</div>
+<div class="quiz" data-question="Integer a = 200; Integer b = 200; 則 a == b 的結果是？" data-correct="1" data-explain="200 超出 -128~127 的緩存範圍，裝箱時各自 new，位址不同。">
+  <button class="opt">true，因為兩者數值相同</button>
+  <button class="opt">false，因為超出了緩存範圍</button>
+  <button class="opt">true，因為自動裝箱會去重</button>
+  <button class="opt">false，因為 Integer 不能比較</button>
+</div>
+<div class="quiz" data-question="Object.clone() 預設行為屬於哪一種複製？" data-correct="0" data-explain="它按位複製欄位，引用欄位複製的是位址，因此是淺拷貝。">
+  <button class="opt">淺拷貝，引用欄位仍指向同一物件</button>
+  <button class="opt">深拷貝，所有內部物件都會被重建</button>
+  <button class="opt">兩者皆非，clone 會回傳原物件本身</button>
+  <button class="opt">看情況，由 JVM 依物件大小決定</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · Java 語言與物件 · Step 2/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

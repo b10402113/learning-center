@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ThreadLocal 與跨執行緒上下文：隔離與透傳</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>ThreadLocal 與跨執行緒上下文：隔離與透傳</h1>
+<p class="meta">Step 1/6 · 併發工具與手寫併發題</p>
+
+<h2>學習目標</h2>
+<p>這一節要搞懂幾個彼此相連的問題：ThreadLocal 為什麼是「空間換時間」；資料為什麼實際存在 <code>Thread</code> 物件裡；弱 key、強 value 為什麼可能造成記憶體洩漏；以及 <code>InheritableThreadLocal</code> 為什麼在執行緒池裡會串號，<code>TransmittableThreadLocal</code> 又是怎麼補上這個缺口。</p>
+
+<h2>前言：為什麼資料總要一層一層傳下去？</h2>
+
+<p>想像你正在寫一個 Web 服務。請求進來後，你先從登入資訊裡解出 <code>userId</code> 和 <code>traceId</code>。接著請求一路經過 service、DAO，每一層的方法簽名都得帶上這兩個參數，只為了讓最底層的某一行程式碼能讀到它們。</p>
+
+<p>參數一多，方法簽名就像行李愈塞愈滿的旅行箱。於是你可能把這些資料包成一個 Context 物件繼續往下傳，但本質上仍然一樣：<strong>同一條執行緒上的程式明明共享著同一份請求資訊，卻只能靠參數接力。</strong></p>
+
+<p>ThreadLocal 就是用來處理這個問題的。它讓你把資料掛在「當前執行緒」身上，之後同一條執行緒上的程式碼都能直接取用，不必層層傳參數。</p>
+
+<p>不過，ThreadLocal 也常和兩個麻煩一起出現：有人說它可能造成記憶體洩漏，也有人遇過執行緒池裡拿到別人的資料。這些問題都是真的，而且都和同一個設計選擇有關：資料究竟放在哪裡，又是在什麼時機被複製與清理。先把這個核心機制弄懂，後面的坑就不會只剩下背誦。</p>
+
+<h2>空間換時間：ThreadLocal 解決的是哪一種共享問題？</h2>
+
+<p>多條執行緒要操作資料時，最直覺的做法是加鎖，例如使用 <code>synchronized</code>。同一時間只讓一條執行緒進入，其他執行緒在外面排隊。這種做法保住了同一份共享資料，但代價是等待時間增加，可以看成是<strong>用時間換空間</strong>。</p>
+
+<p>ThreadLocal 走的是另一條路：它不讓所有執行緒搶同一份資料，而是替每條執行緒準備一份<strong>獨立副本</strong>。A 執行緒修改自己的資料，B 執行緒修改自己的資料，兩者彼此看不到，自然也不必為了同一把鎖排隊。這就是<strong>用空間換時間</strong>：多占一些記憶體，換取較少的鎖競爭。</p>
+
+<figure class="lesson-figure"><img src="./threadlocal-and-context-propagation-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>因此，是否適合使用 ThreadLocal，關鍵不是「它能不能讓我少傳幾個參數」，而是要問：<strong>這份資料是不是每條執行緒各有一份，而且不應該互相看到？</strong></p>
+
+<p><code>userId</code>、交易上下文、Session 這類資料，通常符合這個條件。可是，如果資料是所有執行緒都必須看到同一份、而且要即時同步的庫存數字，ThreadLocal 就不適合。每條執行緒各自看一份副本，最後只會得到各說各話的結果。</p>
+
+<h2>最大的誤區：資料不是存在 ThreadLocal 裡</h2>
+
+<p>很多人第一次接觸 ThreadLocal 時，會想像成這樣：ThreadLocal 物件裡有一張 Map，key 是執行緒，value 是資料。這個模型剛好把方向想反了，而這個差異正是理解後續問題的關鍵。</p>
+
+<p>實際上，<strong>每個 <code>Thread</code> 物件裡都有一個名為 <code>threadLocals</code> 的成員變數，型別是 <code>ThreadLocalMap</code>。</strong> 換句話說，資料是掛在執行緒身上，不是掛在 ThreadLocal 物件身上。</p>
+
+<figure class="lesson-figure"><img src="./threadlocal-and-context-propagation-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>你可以把 <code>ThreadLocalMap</code> 想成一個簡化版的 HashMap，專門收納某一條執行緒自己的資料。當你呼叫：</p>
+
+<p><code>threadLocal.set("data")</code></p>
+
+<p>實際流程是先找到<strong>當前執行緒</strong>的 <code>threadLocals</code>，再把 <code>threadLocal</code> 這個物件本身當成 key，把 <code>"data"</code> 當成 value 存進去。呼叫 <code>get()</code> 時，也是一樣先找到當前執行緒的 Map，再用這個 ThreadLocal 當 key 取值。</p>
+
+<p>這種設計帶來一個好處：同一個 ThreadLocal 物件可以被很多條執行緒共用，但每條執行緒透過它存進去的資料仍然彼此獨立。</p>
+
+<p>可以把 ThreadLocal 想成「每條執行緒口袋上的同一張名牌」。名牌是同一張，但每條執行緒把自己的東西放進自己的口袋；A 執行緒摸不到 B 執行緒口袋裡的內容。</p>
+
+<h2>弱 key、強 value：記憶體洩漏是怎麼發生的？</h2>
+
+<p><code>ThreadLocalMap</code> 的 key 是<strong>弱引用（WeakReference）</strong>，value 則是<strong>強引用</strong>。一邊容易被回收，一邊牢牢抓住物件，這種不對稱就是問題的起點。</p>
+
+<p>當外部已經沒有任何地方引用某個 ThreadLocal 物件時，GC 可以把它回收。這時 Map 裡的 key 會變成 <code>null</code>，但 value 仍被 Map 強引用著，因此還無法被回收。</p>
+
+<p>結果就會出現一筆「key 不見了、value 卻還卡在 Map 裡」的資料。因為你已經找不到原本的 key，所以再也無法正常取用它；但在它被清掉以前，它又會持續占著記憶體。</p>
+
+<p>如果執行緒很快就結束，通常問題不大，因為整條執行緒和它的 Map 都會一起被回收。真正需要警惕的是<strong>執行緒池</strong>：池中的核心執行緒建立後會長時間存活，處理完一個任務後不會消失，而是回到池裡等待下一個任務。</p>
+
+<p>於是，殘留的 value 可能隨著任務增加而慢慢堆積，這就是 ThreadLocal 可能造成記憶體洩漏的原因。</p>
+
+<figure class="lesson-figure"><img src="./threadlocal-and-context-propagation-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>正規解法很簡單：<strong>誰設定，誰負責清理；用完就呼叫 <code>remove()</code>。</strong> 實務上通常放在 <code>finally</code> 裡：</p>
+
+<p><code>try { ... } finally { threadLocal.remove(); }</code></p>
+
+<p>這樣即使中途拋出例外，也能確保資料被清掉。雖然 ThreadLocalMap 在 <code>get</code> 或 <code>set</code> 時，可能順手清理部分 key 已經是 <code>null</code> 的項目，但那只是零星補救，不能當成清理策略。真正可靠的做法仍然是主動 <code>remove()</code>。</p>
+
+<h2>父子執行緒要共享上下文，怎麼辦？</h2>
+
+<p>ThreadLocal 強調的是「每條執行緒各自獨立」。但有時候我們又希望父執行緒的上下文能被子執行緒看見。</p>
+
+<p>例如，主執行緒先解出一個 <code>traceId</code>，接著建立子執行緒處理非同步日誌。若子執行緒拿不到同一個 <code>traceId</code>，原本的全鏈路追蹤就會在這裡斷掉。</p>
+
+<p>常見做法有兩種。第一種是使用<strong>共享變數</strong>：父子執行緒共用同一個物件或變數，再透過 <code>volatile</code> 保證可見性，或透過 <code>synchronized</code> 與其他鎖機制保證操作安全。</p>
+
+<p>這條路很直白，但資料必須顯式傳進去，某種程度上又回到了最開始那個「參數接力」的問題。</p>
+
+<p>第二種做法是<strong>InheritableThreadLocal（ITL）</strong>。它是 ThreadLocal 的子類別，會在<strong>建立子執行緒的那一刻</strong>，自動把父執行緒裡的 ThreadLocal 變數複製一份給子執行緒。子執行緒一出生就帶著父執行緒的上下文，因此適合用在直接建立執行緒的全鏈路追蹤場景。</p>
+
+<h3>ITL 為什麼在線上程池裡會串號？</h3>
+
+<p>ITL 在直接呼叫 <code>new Thread()</code> 的情境中通常能正常運作，但放進執行緒池後就可能出現嚴重問題。關鍵在於：<strong>ITL 的複製只在建立執行緒時發生一次，之後不會自動同步。</strong></p>
+
+<p>ITL 依賴的是「複製」，執行緒池依賴的是「複用」。這兩個機制的時機剛好對不上。</p>
+
+<ol>
+<li>請求 A 進來，主執行緒帶著 <code>User=張三</code>，並提交任務給執行緒池。池子建立 <code>Thread-1</code>，因為此時真的發生了「建立執行緒」，ITL 便把張三的資料複製給 <code>Thread-1</code>。</li>
+<li>請求 A 完成後，<code>Thread-1</code> 回到池裡等待下一個任務。但它身上仍然留著張三的資料，而且沒有被清除。</li>
+<li>請求 B 進來，主執行緒帶著 <code>User=李四</code> 提交任務。執行緒池發現 <code>Thread-1</code> 正好空閒，於是直接複用它。這次沒有建立新執行緒，因此 ITL 不會再次觸發複製。</li>
+<li><code>Thread-1</code> 開始處理請求 B 時，讀到的仍然是 <code>User=張三</code>。李四因此可能看到張三的資料，日誌中的 <code>traceId</code> 也可能跟著串號。</li>
+</ol>
+
+<p>這就是典型的<strong>上下文污染</strong>。問題不在 ITL 的複製本身，而在於它把複製時機綁在「執行緒建立」上；執行緒池卻把執行緒建立與任務執行分開，之後會反覆複用同一條執行緒。</p>
+
+<h3>業界解法：TransmittableThreadLocal</h3>
+
+<p>既然問題出在複製時機，解法就是把複製從執行緒生命週期移到任務生命週期。阿里巴巴開源的 <strong>TransmittableThreadLocal（TTL）</strong> 就是沿著這個方向設計的：它不再依賴執行緒建立，而是在<strong>任務提交或執行時</strong>處理上下文。</p>
+
+<table>
+<thead>
+<tr><th>階段</th><th>做什麼</th><th>解決的問題</th></tr>
+</thead>
+<tbody>
+<tr><td>Capture（捕獲）</td><td>任務提交或包裝時，抓取當前主執行緒的上下文</td><td>固定提交當下的值，不依賴子執行緒是否剛建立</td></tr>
+<tr><td>Replay（回放）</td><td>子執行緒開始執行任務前，把捕獲到的上下文放入執行環境</td><td>讓被複用的執行緒每次取得最新且正確的值</td></tr>
+<tr><td>Restore（還原）</td><td>任務執行完畢後，把子執行緒恢復成原本的狀態</td><td>避免這次任務的資料留給下一個任務，造成污染</td></tr>
+</tbody>
+</table>
+
+<p>這三個動作合在一起，等於把「複製」從執行緒的生命週期改綁到任務的生命週期。執行緒可以持續複用，但每次任務開始前都換上正確的上下文，結束後再還原原狀，因此上一個請求的資料不會被帶到下一個請求。</p>
+
+<figure class="lesson-figure"><img src="./threadlocal-and-context-propagation-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把幾個觀念接起來</h2>
+
+<blockquote>
+ThreadLocal 用「空間換時間」替每條執行緒準備一份私有副本，藉此避開鎖競爭。資料不是存在 ThreadLocal 裡，而是存在 <code>Thread.threadLocals</code> 這個 ThreadLocalMap 中，並以 ThreadLocal 物件本身作為 key。由於 key 是弱引用、value 是強引用，長時間存活的執行緒在複用任務時可能留下無法正常取出的 value，因此務必在使用完後呼叫 <code>remove()</code>。父子執行緒的上下文透傳可以靠 InheritableThreadLocal，但它只在建立執行緒時複製資料，放進執行緒池後就可能發生上下文污染；TTL 則透過 Capture、Replay、Restore，把複製時機改綁到任務本身。
+</blockquote>
+
+<p>到這裡，ThreadLocal 解決的是「每條執行緒如何擁有自己的上下文」，ITL 與 TTL 解決的則是「上下文如何跨執行緒傳遞」。下一節會把問題往前推一步：當執行緒之間不只要傳資料，還要等待彼此完成時，<code>CountDownLatch</code> 與 <code>CyclicBarrier</code> 分別代表什麼語義？這兩個名字很像，但它們等待的對象其實正好不同。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./latch-vs-barrier.html">下一步：CountDownLatch 與 CyclicBarrier →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="ThreadLocal 的資料實際上存放在哪裡？" data-correct="2" data-explain="每條執行緒的 Thread 物件內有 threadLocals（ThreadLocalMap），資料存在這裡。">
+  <button class="opt">存放在 ThreadLocal 實例內部的 Map</button>
+  <button class="opt">存放在一個全域的靜態 Map 裡面</button>
+  <button class="opt">存放在 Thread 物件自己的 ThreadLocalMap</button>
+  <button class="opt">存放在 JVM 的方法區常數池裡面</button>
+</div>
+<div class="quiz" data-question="ThreadLocal 的 key 與 value 引用強度分別是什麼？" data-correct="1" data-explain="key 是弱引用、value 是強引用，這種不對稱造成了無法存取又無法回收的殘留。">
+  <button class="opt">key 是強引用、value 也是強引用</button>
+  <button class="opt">key 是弱引用、value 是強引用</button>
+  <button class="opt">key 是強引用、value 是弱引用</button>
+  <button class="opt">key 是弱引用、value 也是弱引用</button>
+</div>
+<div class="quiz" data-question="為什麼 ThreadLocal 在執行緒池裡特別容易內存泄漏？" data-correct="3" data-explain="核心執行緒長期存活，殘留的 value 會隨任務復用不斷堆積。">
+  <button class="opt">因為執行緒池會強制复制每一份資料</button>
+  <button class="opt">因為執行緒池會把 ThreadLocal 設成靜態</button>
+  <button class="opt">因為執行緒池會定期清空所有變數</button>
+  <button class="opt">因為核心執行緒長期存活殘留 value</button>
+</div>
+<div class="quiz" data-question="InheritableThreadLocal 是在什麼時機把父執行緒的值傳給子執行緒？" data-correct="0" data-explain="它只線上程被建立的那一刻拷貝，之後不再同步。">
+  <button class="opt">在子執行緒被建立的那一刻拷貝</button>
+  <button class="opt">在每次子執行緒呼叫 get 時查父執行緒</button>
+  <button class="opt">在父執行緒每次呼叫 set 時同步</button>
+  <button class="opt">在子執行緒任務執行結束後回寫</button>
+</div>
+<div class="quiz" data-question="ITL 線上程池中造成上下文污染的根本原因是什麼？" data-correct="1" data-explain="執行緒池複用執行緒時不會重新建立，ITL 的拷貝也就不會觸發。">
+  <button class="opt">因為執行緒池不支援任何繼承行為</button>
+  <button class="opt">因為複用執行緒時不會重新拷貝</button>
+  <button class="opt">因為 ITL 的 key 使用了強引用</button>
+  <button class="opt">因為執行緒池把 traceId 清空了</button>
+</div>
+<div class="quiz" data-question="TTL 的 Replay 與 Restore 分別解決什麼問題？" data-correct="2" data-explain="Replay 在任務執行前刷入正確上下文，Restore 在結束後還原，避免留給下一個任務。">
+  <button class="opt">Replay 清空、Restore 重新捕獲</button>
+  <button class="opt">Replay 建立執行緒、Restore 回收執行緒</button>
+  <button class="opt">Replay 刷入上下文、Restore 還原現場</button>
+  <button class="opt">Replay 加鎖、Restore 解鎖</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 併發工具與手寫併發題 · Step 1/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 ---
-description: 撰寫課程內容的教學代理。用台灣繁體中文把 step 的 MDX 課文寫清楚、寫自然，再產生 HTML 課程，最後跑 /humanizer 去除 AI 味。當 /teach 或 /batch-nodes 需要寫某一課的內容時使用。
+description: 撰寫課程內容的教學代理。用台灣繁體中文把 step 的 MDX 課文寫清楚、寫自然，再產生 HTML 課程。當 /teach 或 /batch-nodes 需要寫某一課的內容時使用。
 mode: subagent
 temperature: 0.3
 ---
@@ -44,6 +44,5 @@ temperature: 0.3
 2. 根據確認過的資料撰寫初稿，不要編造事實或引述。
 3. 完成後進行一次文字編輯，只針對不自然的中文與艱澀詞彙修改；如果某段讀起來太擠，就把內容展開，不要愈改愈短。
 4. 編輯時保留原本的觀點、資訊與細節，不要為了簡化而刪除重要內容。
-5. **完成html後，必須使用 /humanizer skill 來去除AI味**
 
 如果專案有 writing-examples/ 目錄，寫作前先閱讀其中的範文，優先參考其語氣、節奏與用詞。

@@ -1,40 +1,42 @@
 ---
 subject: ai-coding-for-real-engineer
 language: zh-Hant
-created: 2026-08-18
-updated: 2026-08-19
+created: 2026-10-01
+updated: 2026-10-01
 ---
 
 # MEMORY — ai-coding-for-real-engineer
 
 ## Goal
-學會用 AI coding agent（Claude Code 或任何 CLI harness）把功能「離線交付」（AFK）：把規格/PRD 定清楚，把大塊實作交給 agent 放手執行，人走開，回來時拿到可以跑、有測試、已 commit 的程式碼。學會整套七階段流程：grill（訪談）→ research → prototype → PRD + plan → issues → implement（HITL 或 AFK）→ review。
+用 **AFK（away-from-keyboard）自走 agent 出貨功能**：把一個沙箱化的 coding agent 接上任務佇列（GitHub issue backlog），讓它無人值守地完成功能與修 bug，人在規劃與審查的閘門做判斷。最終能在自己的 side project 上端到端跑完整套流程，而不只是叫 agent 改零碎小東西。
 
 ## Why
-吞吐量動機：一個人做超過一個人的事。agent 專心寫程式時，人可以同時規劃下一批工作（"plan while the AI ships"）。這是學習卡住時（setup 摩擦、agent 亂搞）真正拉著往前走的動力。
+**一人當一個團隊，大幅提升出貨速度。** 想把自己從「一次只能做一件事」放大成能平行推進多條工作線；AFK agent 是達成這件事的槓桿。
 
 ## Prior experience
-- TypeScript / React / Node 熟悉 — 課程 playground 是 20k 行的 TS/React app，feedback loops（tsc + vitest）都用得上。
-- 用過 LLM 寫程式 / 修 bug（非重度）— 知道「agent 幫我生 code」是什麼感覺，但沒有系統化流程。
-- 未勾選：git/GitHub 進階流程、已日常使用 coding agent、軟體架構理論、Docker/sandbox。這些被當作新領域對待。
+- 全端 / 後端為主，日常寫 TypeScript / Node，能跟上課程的 TS 全端 repo。
+- 用過 coding agent（Claude Code / Cursor / Copilot 類），但多停在「叫它改一個小東西」的層次。
+- 還沒建過 skill、subagent、AFK 流程這類系統化用法 — 這正是本主題要補的斷層。
 
 ## Anchors
-- 曾讓 LLM 寫過或修過程式碼 — 每個「讓 agent 放手」的元素都可以接回「以前是我在逐字改、現在交給 agent」的對比。
-- 實際碰過 TS 專案（工作或 side project）— playground 的 repo 結構、migration、service + test 模式可對照。
-- 未勾選 bad codebase 的痛、沒跑過 Docker、暫時沒有自己的 repo 要套用 — 這些課程章節要當新知識帶。
+- 自己的 side project（TS/Node 全端），可自由實驗、拆開跑自走流程、建立 issue backlog。
+- 前端：React / Next.js。
+- 後端：Node（Express / Fastify / Hono / Nest 類）。
+- 資料：關聯式 DB + ORM（Postgres/MySQL + Prisma/Drizzle 類）— 對應課程的 schema/migration 與「agent 常忘記跑 migrate」。
+- 測試：Vitest / Jest / Playwright — 對應課程的 feedback loops 與 red-green-refactor。
+- GitHub + CI/CD — 對應 issue 驅動的 AFK 佇列、PR、Actions。
+- 容器 / 部署（Docker、Vercel、Fly 類）— 對應 Sandcastle 沙箱。
+- 環境：macOS，有 Docker 可用。
 
 ## Habits & constraints
-- 每週 1–2 小時，集中在週末/晚上的長段時間。
-- 可以在本機安裝並執行 agent 工具（Claude Code / 課程 repo）。
-- 未勾選 Docker/Podman 可用的選項 — 進入 AFK sandbox 章節時會是明顯門檻，需要先補環境。
-- 沒有自己的 codebase 要套用課程練習（用課程提供的 playground repo）。
+- 每週約 6–10 小時（一晚加週末零碎時間）。
+- 在 macOS 上開發，具備容器環境。
 
 ## Knowledge type
-Procedural — 以「做」為主。這是一門技能課（如何跑七階段流程），概念（context window、smart/dumb zone、feedback loops）是支撐，不是目的。
+procedural 主導、混合 declarative。核心是「練會一套做法」（grill → research → prototype → PRD → issues → implement → review，以及搭 AFK 流程、寫 skill、設回饋迴圈）；底下有一層必須理解的觀念（context window、smart/dumb zone、agent 非決定性、progressive disclosure、tracer bullet、deep module），不理解觀念就做不順。
 
 ## How to teach me
-- 先看完整實跑（worked run）：prompt → agent 行為 → 結果，一個完整的來龍去脈，再讓我上手。
-- 簡潔、密度高、不要廢話；不耐煩冗長鋪陳。
-- 要動手：在 playground repo 上做真實練習，不是讀過去。
-- 無聊的點：工具安裝/basics（TypeScript/React 已熟，不需要 tooling walkthrough）、重複已經懂的東西。
-- 講「為什麼」的機制（為什麼 context 會變笨、為什麼 feedback loop 有效）有助於記住「怎麼做」。
+- **直接在真實 side project 上動手做任務** — 每個概念都綁到實際操作，不要純讀。
+- **看真實 demo／操作拆解** — 一邊操作一邊解釋背後原因。
+- **先建立大圖再往下鑽** — 先讓我知道整體在做什麼、各階段如何相扣，再進入細節。
+- 因為目標偏 procedural，章節要能被「照著做」並在專案上驗證；觀念只講到足以支撐決策的深度即可。

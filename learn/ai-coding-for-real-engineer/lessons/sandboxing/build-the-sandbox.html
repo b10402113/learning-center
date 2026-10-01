@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>建起沙盒：Dockerfile、.env 與 build image</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>建起沙盒：設定 Dockerfile、<code>.env</code> 與映像</h1>
+<p class="meta">Step 3/4 · 安全的沙盒</p>
+
+<h2>這一課要完成什麼</h2>
+
+<p>這一課會把 Sandcastle 的容器沙盒實際建起來。完成後，你會有一個可以執行的 Docker 映像，裡面包含 Node 22、Claude Code，以及 <code>/home/agent</code> 工作目錄；同時，沙盒也能在執行時從 <code>.env</code> 取得 Anthropic API key。</p>
+
+<p>開始前，先確認你準備好三樣東西：</p>
+
+<ol>
+<li>已安裝 Docker Desktop 或 Podman 的機器。</li>
+<li>課程提供的專案 repo，或你自己的專案 repo。</li>
+<li>一組 Anthropic API key。</li>
+</ol>
+
+<p>接下來會依序完成四件事：準備容器執行環境、建立 <code>.env</code>、建置 Docker 映像，最後確認沙盒已經可以進入下一步測試。</p>
+
+<h2>第一步：安裝容器執行環境</h2>
+
+<p>Sandcastle 的沙盒跑在容器裡，因此第一步是讓你的機器可以跑容器。你可以選擇 Docker Desktop 或 Podman。</p>
+
+<ul>
+<li><strong>Docker Desktop</strong>：免費下載，生態系最普及，但大型組織使用時要留意授權限制。</li>
+<li><strong>Podman</strong>：自由開源的對應方案，沒有上述授權顧慮；課程把它形容成「到哪都免費的那個」。</li>
+</ul>
+
+<p>安裝完成後，終端機應該可以執行容器相關指令，例如確認版本或列出映像。個人專案使用哪一個都可以；如果之後要在公司環境重現這套流程，Podman 可以少一個授權上的麻煩。</p>
+
+<h2>第二步：建立 <code>.env</code> 並準備金鑰</h2>
+
+<p>接著進入專案裡的 <code>sandcastle</code> 目錄。裡面會有一個 <code>.env.example</code>，它是環境變數範本，列出沙盒執行時需要注入的設定。先把它複製成正式使用的 <code>.env</code>：</p>
+
+<pre><code>cd sandcastle
+cp .env.example .env
+# 打開 .env，填入你的 Anthropic API key</code></pre>
+
+<p>執行後，預期會看到 <code>sandcastle/</code> 目錄下多出一個 <code>.env</code>。打開它，填入你的 Anthropic API key。</p>
+
+<p>這個檔案就像沙盒啟動時才交給它的鑰匙：金鑰不會進入版控，也不會被寫進 Docker 映像，而是在容器執行時透過環境變數注入，用來認證你選用的 coding agent。課程錄製當下使用的是 Anthropic API key。</p>
+
+<figure class="lesson-figure"><img src="./build-the-sandbox-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<blockquote class="bad-code">
+<strong>警告：</strong><code>.env</code> 裡放的是真實金鑰。不要把它 commit 進 git，也不要貼給別人。使用環境變數注入，而不是把金鑰寫死在 Dockerfile，正是為了避免金鑰跟著映像和程式碼到處流動。
+</blockquote>
+
+<h3>金鑰與訂閱方案的取捨</h3>
+
+<p>你手上可能同時有 Claude 訂閱和 Anthropic API key。<code>.env.example</code> 裡也有 GitHub token 欄位，但目前還不用處理；那個欄位要等之後接上 issue 佇列時才會使用。</p>
+
+<p>至於能不能用訂閱方案執行沙盒，課程錄製當下仍沒有穩定的做法，因為牽涉到 Anthropic 的授權問題。當時最實際的選擇是先使用 Anthropic API key：這樣可以立刻把沙盒跑起來，但每次模型呼叫都會按照用量計費。</p>
+
+<p>訂閱方案理論上可能更省，不過當時還沒有一條可靠的路徑。等你閱讀這份教材時，官方情況可能已經改變；如果已有官方指南，再重新評估即可。</p>
+
+<h2>第三步：建置 Docker 映像</h2>
+
+<p>設定好 <code>.env</code> 後，回到可以執行 pnpm 的位置，執行以下指令：</p>
+
+<pre><code>pnpm sandcastle docker build image</code></pre>
+
+<p>這個指令會按照專案裡的 Dockerfile，建立 Sandcastle 使用的 Docker 映像。建置內容包括：</p>
+
+<ul>
+<li>安裝 Node 22。</li>
+<li>安裝 Claude Code。</li>
+<li>把 Claude Code 加進 PATH。</li>
+<li>將工作目錄設定為 <code>/home/agent</code>。</li>
+</ul>
+
+<p>因此，建好的映像就像一個整理好的沙盒模板：之後啟動容器時，就照這個模板準備執行環境。</p>
+
+<figure class="lesson-figure"><img src="./build-the-sandbox-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>預期看到的結果是，終端機會逐步輸出建置過程，最後顯示建置完成。如果中途失敗，先確認 Docker 或 Podman 正在執行，再確認網路能正常拉取映像層，之後重新嘗試。</p>
+
+<p>Dockerfile 也可以依照專案需求調整。預設設定已經能配合 Claude Code 使用；如果你要加裝其他工具、調整 Node 版本，或變更工作目錄，就從這個檔案修改。</p>
+
+<h2>第四步：確認沙盒已經就緒</h2>
+
+<p>建置成功後，請確認兩件事：</p>
+
+<ol>
+<li>Docker 映像已經存在。</li>
+<li>本機的 <code>.env</code> 已經建立，並填入 Anthropic API key。</li>
+</ol>
+
+<p>兩者都具備時，沙盒就進入「ready to go」的狀態，下一步可以用測試程式把 agent 實際放進容器裡執行。</p>
+
+<p>這裡先不要急著跑真正的任務。映像建好了，只代表容器的外觀已經準備完成，還不能證明 agent 能順利在裡面運作。接下來還要驗證容器執行、認證與 logs；這些才是下一步 hello-world 測試要確認的事情。</p>
+
+<h2>完成檢查</h2>
+
+<blockquote>完成這一課後，你應該已經安裝 Docker Desktop 或 Podman，將 <code>sandcastle/.env.example</code> 複製成 <code>.env</code> 並填入 Anthropic API key，然後執行 <code>pnpm sandcastle docker build image</code>。建好的映像包含 Node 22、Claude Code，以及 <code>/home/agent</code> 工作目錄。此時沙盒已經就緒，但還沒有證明 agent 能真的在其中運作。</blockquote>
+
+<p>現在，映像和金鑰都準備好了。下一步會用一支 hello-world 測試把 agent 跑起來，再從 logs 判斷這個沙盒是否真的正常運作。</p>
+
+<div class="lesson-nav">
+  <div><a href="./what-isolation-means.html">← 上一步：隔離到底隔離了什麼</a></div>
+  <div><a href="./verify-the-sandbox.html">下一步：驗證沙盒：用 test.ts 跑一次 Hello →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="建模擬前，Sandcastle 的沙盒需要先安裝什麼？" data-correct="1" data-explain="沙盒跑在容器裡，所以要先有 Docker Desktop 或 Podman 這類容器執行環境。">
+  <button class="opt">一套影像編輯或剪輯軟體</button>
+  <button class="opt">Docker Desktop 或 Podman</button>
+  <button class="opt">一個新的 GitHub 組織帳號</button>
+  <button class="opt">一份付費的資料庫服務</button>
+</div>
+<div class="quiz" data-question="<code>.env</code> 裡放的金鑰，最後會去哪個地方？" data-correct="0" data-explain="金鑰在執行時被注入容器，用來認證 agent，不寫進映像。">
+  <button class="opt">執行時被注入容器內使用</button>
+  <button class="opt">被複製一份寫進 Dockerfile</button>
+  <button class="opt">被上傳到課程的共享倉庫中</button>
+  <button class="opt">被存進 repo 的 commit 紀錄</button>
+</div>
+<div class="quiz" data-question="為什麼要把 <code>.env.example</code> 複製成 <code>.env</code>？" data-correct="3" data-explain="以範本為底填上自己的金鑰，正式檔不入版控也比較安全。">
+  <button class="opt">因為範本檔的內容是加密過的</button>
+  <button class="opt">因為 .env 的讀取速度比較快</button>
+  <button class="opt">因為範本檔沒有容器需要的欄位</button>
+  <button class="opt">以範本為底填入自己的金鑰</button>
+</div>
+<div class="quiz" data-question="課程錄製當下，為什麼建議用 API key 而不是訂閱？" data-correct="2" data-explain="訂閱搭配沙盒牽涉 Anthropic 的授權問題，當時還沒解決。">
+  <button class="opt">因為訂閱完全無法呼叫任何模型</button>
+  <button class="opt">因為 API key 的回應速度比較快</button>
+  <button class="opt">訂閱方案當時還沒解決、先求可用</button>
+  <button class="opt">因為 API key 不需要輸入到 .env</button>
+</div>
+<div class="quiz" data-question="建置映像的指令是哪一行？" data-correct="1" data-explain="用 pnpm 執行 sandcastle 的 docker build image 來建置映像。">
+  <button class="opt"><code>npx tsx sandcastle/test.ts</code></button>
+  <button class="opt"><code>pnpm sandcastle docker build image</code></button>
+  <button class="opt"><code>pnpm db:generate &amp;&amp; pnpm db:migrate</code></button>
+  <button class="opt"><code>gh issue list --label ready-for-agent</code></button>
+</div>
+<div class="quiz" data-question="建置成功之後，還不能算驗證完成，原因是什麼？" data-correct="3" data-explain="映像建好不等於 agent 真能在容器內執行、認證與輸出 logs。">
+  <button class="opt">因為映像預設是損毀的狀態</button>
+  <button class="opt">因為金鑰還沒被寫進映像裡</button>
+  <button class="opt">因為 Dockerfile 還沒被執行過</button>
+  <button class="opt">建好不等於 agent 真能跑</button>
+</div>
+
+<div class="footer">
+  <p>ai-coding-for-real-engineer · 安全的沙盒 · Step 3/4</p>
+  <p>讀到卡住的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CountDownLatch 與 CyclicBarrier：一個等多還是互相等</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>CountDownLatch 與 CyclicBarrier：該一個等多，還是大家互相等？</h1>
+<p class="meta">Step 2/6 · 併發工具與手寫併發題</p>
+
+<h2>先釐清：到底是誰在等誰？</h2>
+
+<p>在併發程式裡，「等待」看起來只有一種，實際上卻可能是兩種完全不同的場景。</p>
+
+<p>想像火箭發射。指揮官按下點火前，要等引擎檢查、燃料注入、天氣確認這三件事都完成。這裡的角色很清楚：<strong>一個人在等，其他人負責把工作做完</strong>。</p>
+
+<p>再想像公司出遊搭巴士。每個人從不同地方出發，到了集合點後，必須等所有人到齊，司機才發車。這時沒有一個特別的指揮官，<strong>每個人都在等其他人</strong>。</p>
+
+<p>Java 的 <code>CountDownLatch</code> 和 <code>CyclicBarrier</code>，正好分別對應這兩種等待方式。選錯工具時，程式不一定立刻報錯，卻可能在多輪同步時失去等待效果，或因為永遠少一個參與者而全部卡住。</p>
+
+<figure class="lesson-figure"><img src="./latch-vs-barrier-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這一課的判斷重點有兩個：<strong>誰在等誰</strong>，以及<strong>這個同步點只使用一次，還是會重複很多輪</strong>。</p>
+
+<h2>選項比較：兩個工具差在哪裡？</h2>
+
+<p>先把差異攤開來看。這張表的第一列和第三列，是最值得記住的線索。</p>
+
+<table>
+<thead>
+<tr><th>比較點</th><th>CountDownLatch</th><th>CyclicBarrier</th></tr>
+</thead>
+<tbody>
+<tr><td>等待模式</td><td>一個或多個執行緒等其他工作完成</td><td>所有執行緒互相等到齊，再一起繼續</td></tr>
+<tr><td>誰呼叫等待</td><td>主執行緒呼叫 <code>await()</code>，工作執行緒呼叫 <code>countDown()</code></td><td>每一條參與同步的執行緒都呼叫 <code>await()</code></td></tr>
+<tr><td>可複用性</td><td>一次性；計數歸零後就不能重置</td><td>可循環；一輪到齊並放行後會自動重置</td></tr>
+<tr><td>底層實作</td><td>直接基於 AQS 的共享模式，<code>state</code> 就是計數</td><td>基於 ReentrantLock + Condition，計數是受鎖保護的普通變數</td></tr>
+<tr><td>典型場景</td><td>等待多個初始化工作完成、彙總並行任務結果</td><td>分階段的多輪計算，每輪結束後讓所有執行緒重新對齊</td></tr>
+</tbody>
+</table>
+
+<p><code>CountDownLatch</code> 是<strong>單向的等待</strong>：有人負責等待，其他人完成工作後倒數。計數降到 0，等待者全部放行，這次同步就結束了。</p>
+
+<p><code>CyclicBarrier</code> 則是<strong>對稱的等待</strong>：每個執行緒都是參與者，也都必須抵達同一個同步點。人數到齊後，大家一起通過；接著屏障會重新準備好，迎接下一輪。</p>
+
+<h2>判別問句：用兩個問題選工具</h2>
+
+<p>遇到需求時，不要先背 API 名稱。先問自己下面兩個問題。</p>
+
+<p><strong>問題一：是「一個人在等大家」，還是「大家互相等」？</strong></p>
+
+<p>如果有一個主執行緒負責等待結果，而其他執行緒各自完成工作並回報，使用 <code>CountDownLatch</code> 比較自然。例如啟動服務時，主執行緒等待多個初始化任務完成；或所有平行任務做完後，再由某個執行緒彙總結果。</p>
+
+<p>如果所有執行緒地位相同，每個人都必須抵達某個階段，缺一個就不能往下走，使用 <code>CyclicBarrier</code>。例如分階段計算：每一輪各自處理資料，等所有人完成後一起進入下一輪。</p>
+
+<p><strong>問題二：同步只需要一輪，還是會重複很多輪？</strong></p>
+
+<p>只做一次時，兩個工具都有可能適用；但如果同一批執行緒要反覆在多個階段集合，就優先考慮 <code>CyclicBarrier</code>。它在一輪結束後會自動重置，不需要另外建立新的同步器。</p>
+
+<p><code>CountDownLatch</code> 沒有這種能力。計數從初始值降到 0 後，所有後續的 <code>await()</code> 都會直接通過。若硬要用它做多輪同步，就必須在每輪開始前重新建立 <code>new CountDownLatch(n)</code>；少做一步，第二輪就會像沒有門的檢查站，大家直接通過。</p>
+
+<figure class="lesson-figure"><img src="./latch-vs-barrier-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>為什麼底層實作也不同？</h2>
+
+<p>兩者的底層設計，正是由「是否需要重置」這個需求決定的。</p>
+
+<p><code>CountDownLatch</code> 的規則很單純：計數從 N 開始往下減，減到 0 後永久放行。這和 AQS 的<strong>共享模式</strong>很吻合。它把計數放在 AQS 的 <code>state</code> 中；每次呼叫 <code>countDown()</code>，就嘗試用 CAS 將 <code>state</code> 減一。當計數降到 0，就喚醒所有正在 <code>await()</code> 上等待的執行緒。</p>
+
+<p>這裡不需要把狀態恢復成原本的數字，因此實作可以維持單向前進：從 N 走到 0，完成後就結束。</p>
+
+<p><code>CyclicBarrier</code> 多了一個要求：這一輪放行後，下一輪還要從原本的人數重新開始。它需要同時處理「有人抵達」「還差幾人」「最後一人抵達時如何切換到下一輪」等狀態，因此使用 <strong>ReentrantLock + Condition</strong>。</p>
+
+<p>每個執行緒進入 <code>await()</code> 時，會在鎖的保護下更新計數。尚未到達門檻的執行緒在 Condition 上等待；最後一個抵達的執行緒負責完成這一輪的切換、重置計數，再喚醒其他等待者。</p>
+
+<p>所以，兩者雖然都在處理「等待」，卻不是同一種等待：一個只需要把倒數做到 0，另一個則要在每一輪的等待、放行與重置之間循環。</p>
+
+<h2>反例：選錯工具時，規則會怎麼翻轉？</h2>
+
+<p>先看把 <code>CyclicBarrier</code> 用在「一個等多」的情況。</p>
+
+<p>假設主執行緒只是想等待三個工作執行緒完成，卻改用需要四人到齊的屏障。這時主執行緒也必須呼叫一次 <code>await()</code>，否則屏障永遠少一人，三個工作執行緒會一直等下去。主執行緒原本只是等待結果，卻被迫變成同步參與者，設計就變得彆扭，也容易造成死等。</p>
+
+<p>再看把 <code>CountDownLatch</code> 用在多輪計算。</p>
+
+<p>第一輪結束後，計數已經是 0。到了第二輪，新的工作即使再次呼叫 <code>countDown()</code>，也不會把計數恢復成初始值；此時 <code>await()</code> 會直接通過，無法再阻擋執行緒等待其他人。程式表面上還在呼叫同步 API，實際上大家已經各跑各的。</p>
+
+<figure class="lesson-figure"><img src="./latch-vs-barrier-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這個反例有一個例外：如果每一輪本來就是獨立的一次性任務，而且你願意在每輪開始時明確建立新的 <code>CountDownLatch</code>，那它仍然可以使用。問題不在於「CountDownLatch 絕對不能多輪」，而在於它不會替你自動重置。</p>
+
+<h2>最後的決策規則</h2>
+
+<blockquote>
+先問「誰等誰、要不要重複」。如果是一個執行緒等待一批任務完成，而且只需要放行一次，使用 CountDownLatch；如果所有執行緒都要等彼此，並且會在多個階段反覆集合，使用 CyclicBarrier。前者以 AQS 共享模式和 state 實作一次性倒數，後者以 ReentrantLock + Condition 實作可重複的到齊與重置。
+</blockquote>
+
+<p>可以在寫程式前快速檢查三件事：等待者是不是和工作者不同？所有參與者是不是都要抵達同一個同步點？同步點是不是會重複使用？答案若分別指向「一個等多」「大家互等」「需要多輪」，就選 <code>CountDownLatch</code> 或 <code>CyclicBarrier</code> 時不容易走錯。</p>
+
+<p>工具能處理執行緒之間的等待與會合後，下一個問題就是：任務本身要怎麼串起來。下一節會看到 <code>CompletableFuture</code> 如何用 CAS 和無鎖棧接起一連串非同步步驟，以及 <code>ForkJoinPool</code> 為什麼適合處理可以拆解的大型任務。</p>
+
+<div class="lesson-nav">
+  <div><a href="./threadlocal-and-context-propagation.html">← 上一步：ThreadLocal 與跨執行緒上下文</a></div>
+  <div><a href="./completablefuture-and-forkjoin.html">下一步：CompletableFuture 與 ForkJoinPool →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="CountDownLatch 的等待模式最貼近哪一句描述？" data-correct="1" data-explain="它是一個（或多個）執行緒等其他人完成任務，呼叫 countDown 的角色是工作方。">
+  <button class="opt">所有執行緒到齊後一起往前走的對稱等待</button>
+  <button class="opt">一個執行緒等其他人完成任務的單向等待</button>
+  <button class="opt">兩個執行緒互相交換資料的雙向等待</button>
+  <button class="opt">每個執行緒各自獨立不需等待對方</button>
+</div>
+<div class="quiz" data-question="CountDownLatch 直接基於 AQS 的哪一種模式？" data-correct="2" data-explain="它用 AQS 的共享模式，state 本身就是計數，減到 0 就喚醒所有等待者。">
+  <button class="opt">基於 AQS 的獨佔模式與自旋鎖</button>
+  <button class="opt">基於 AQS 的讀寫分離模式</button>
+  <button class="opt">基於 AQS 的共享模式並以 state 計數</button>
+  <button class="opt">基於 AQS 的條件佇列與公平鎖</button>
+</div>
+<div class="quiz" data-question="CyclicBarrier 的計數變數是如何被保護的？" data-correct="0" data-explain="它用 ReentrantLock 當互斥，計數是受鎖保護的普通變數，等待靠 Condition。">
+  <button class="opt">用 ReentrantLock 保護的一般變數</button>
+  <button class="opt">用 AQS 的 state 以 CAS 更新</button>
+  <button class="opt">用 volatile 直接讀寫不需鎖</button>
+  <button class="opt">用 AtomicInteger 做無鎖累加</button>
+</div>
+<div class="quiz" data-question="如果你需要在多輪分階段計算中每輪都重新對齊，該用哪個？" data-correct="3" data-explain="CyclicBarrier 到齊後會自動重置，能直接支援多輪。">
+  <button class="opt">CountDownLatch，因為它可以重複喚醒</button>
+  <button class="opt">CountDownLatch，每次 await 會自動重置</button>
+  <button class="opt">CyclicBarrier，但它只能用一次</button>
+  <button class="opt">CyclicBarrier，因為它會自動重置</button>
+</div>
+<div class="quiz" data-question="用 CountDownLatch 做多輪同步卻忘記重新 new，會發生什麼？" data-correct="1" data-explain="計數歸零後無法重置，之後的 await 不再攔人，同步失效。">
+  <button class="opt">每輪都會拋出中斷例外</button>
+  <button class="opt">計數無法重置導致等待失效</button>
+  <button class="opt">執行緒會被永久阻塞無法繼續</button>
+  <button class="opt">計數會自動變回初始值</button>
+</div>
+<div class="quiz" data-question="拿 CyclicBarrier 硬做「一個等多」，常見的麻煩是什麼？" data-correct="2" data-explain="屏障要求全員到齊，等待的主執行緒也得一起 await，否則永遠差一人。">
+  <button class="opt">主執行緒會被自動排除在屏障之外</button>
+  <button class="opt">屏障會把計數重置成執行緒數</button>
+  <button class="opt">等待的主執行緒也得一起進入屏障</button>
+  <button class="opt">工作執行緒會跳過 await 直接前進</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 併發工具與手寫併發題 · Step 2/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

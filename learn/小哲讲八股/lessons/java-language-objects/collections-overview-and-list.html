@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>集合框架與 List 選型：ArrayList、LinkedList 怎麼選</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>集合框架與 List 選型：ArrayList、LinkedList 怎麼選</h1>
+<p class="meta">Step 4/6 · Java 語言與物件：一行 Java 到底做了什麼</p>
+
+<h2>前言：把 List 全換成 LinkedList，為什麼反而更慢？</h2>
+
+<p>你可能聽過這句經典口訣：「ArrayList 查詢快、增刪慢；LinkedList 增刪快、查詢慢。」於是有人把專案裡需要頻繁插入的 List 全部換成 <code>LinkedList</code>，結果上線後程式不只沒有變快，記憶體占用還增加了。</p>
+
+<p>教科書沒有說錯，只是那句話描述的是理想化的複雜度。真實程式還會受到資料配置、CPU 快取與記憶體存取方式影響。就像兩條路的地圖距離一樣，紙上看起來較短的路，實際開車時可能因為路況更慢。</p>
+
+<p>這一課要把 List 的選擇整理成一套可以當場使用的判斷方式。我們會先比較三種常見的 List，再用幾個問題判斷需求，最後看哪些反例會讓「LinkedList 增刪快」這類直覺失效。學完後，你應該能看著一段程式碼，說出為什麼該選某個 List，而不只是背口訣。</p>
+
+<h2>學習目標</h2>
+
+<p>能在 <code>ArrayList</code>、<code>LinkedList</code> 與 <code>CopyOnWriteArrayList</code> 之間做出有理由的選擇，並解釋擴容成本與 CPU 快取如何造成實際效能差異。</p>
+
+<h2>選項比較：三種 List 擺在一起</h2>
+
+<table>
+<thead>
+<tr><th>維度</th><th>ArrayList</th><th>LinkedList</th><th>CopyOnWriteArrayList</th></tr>
+</thead>
+<tbody>
+<tr><td>底層結構</td><td>連續的 Object 陣列</td><td>雙向鏈表（Node 含 prev/next）</td><td>volatile 陣列引用 + 寫時複製</td></tr>
+<tr><td>隨機存取</td><td>O(1)，算偏移量直達</td><td>O(N)，從頭或尾逐個找</td><td>O(1)，讀取無鎖</td></tr>
+<tr><td>尾部新增</td><td>均攤 O(1)</td><td>O(1)</td><td>O(N)，每次複製整個陣列</td></tr>
+<tr><td>中間插入／刪除</td><td>O(N)，需搬移後續元素</td><td>指標操作 O(1)，但按索引要先花 O(N) 找位置</td><td>O(N)，複製整個陣列</td></tr>
+<tr><td>記憶體</td><td>較省，元素連續</td><td>較耗，每節點多兩個引用（64 位元系統約 16 位元組）</td><td>寫時同時存在新舊兩份陣列</td></tr>
+<tr><td>執行緒安全</td><td>不安全</td><td>不安全</td><td>安全（讀寫分離）</td></tr>
+<tr><td>適用場景</td><td>通用首選，查多改少</td><td>頭尾頻繁增刪（其實更常用 ArrayDeque）</td><td>讀多寫少，如白名單、監聽器列表</td></tr>
+</tbody>
+</table>
+
+<p>先抓住這張表的核心：<code>ArrayList</code> 用連續陣列換取快速讀取，<code>LinkedList</code> 用節點與指標換取頭尾操作的彈性，而 <code>CopyOnWriteArrayList</code> 則把成本放在寫入，換取讀取時不必加鎖。</p>
+
+<figure class="lesson-figure"><img src="./collections-overview-and-list-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>先看地圖：集合框架的兩大派系</h2>
+
+<p>Java 集合框架可以先分成兩大根介面。這個分法比死背每個實作類別更重要。</p>
+
+<p><code>Collection</code> 負責存放「單一物件」，下面有三個主要分支：<code>List</code> 有順序、允許重複，也能依索引存取；<code>Set</code> 不允許重複；<code>Queue</code> 則是佇列，常見概念是先進先出。</p>
+
+<p><code>Map</code> 是另一派，負責存放 Key-Value。<strong><code>Map</code> 不繼承 <code>Collection</code></strong>，這是很常見的考題陷阱。</p>
+
+<figure class="lesson-figure"><img src="./collections-overview-and-list-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+<thead>
+<tr><th>派系</th><th>代表</th><th>底層結構</th><th>一句話定位</th></tr>
+</thead>
+<tbody>
+<tr><td>List</td><td>ArrayList</td><td>動態陣列</td><td>隨機存取快，最常用</td></tr>
+<tr><td>List</td><td>LinkedList</td><td>雙向鏈表</td><td>頭尾增刪快，查詢與記憶體吃虧</td></tr>
+<tr><td>List</td><td>CopyOnWriteArrayList</td><td>寫時複製的陣列</td><td>讀多寫少的執行緒安全 List</td></tr>
+<tr><td>Set</td><td>HashSet / TreeSet</td><td>雜湊表 / 紅黑樹</td><td>去重；後者能自動排序</td></tr>
+<tr><td>Queue</td><td>PriorityQueue / ArrayDeque</td><td>二元堆 / 雙端佇列</td><td>優先級與 FIFO 場景</td></tr>
+<tr><td>Map</td><td>HashMap / TreeMap / ConcurrentHashMap</td><td>陣列+鏈表+紅黑樹 / 紅黑樹</td><td>鍵值查找；後兩者分別為有序與執行緒安全</td></tr>
+</tbody>
+</table>
+
+<p>還有兩個容易混淆的名字。<code>Collections</code>（有 s）不是集合，而是操作集合的工具類別，提供 <code>sort</code>、<code>shuffle</code> 等靜態方法；<code>Iterator</code> 則是遍歷集合的標準方式。至於 <code>HashMap</code> 與 <code>ConcurrentHashMap</code> 的內部結構，會在下一節再詳細拆解。</p>
+
+<h2>判別問句：先問自己這幾題</h2>
+
+<p>比起背「LinkedList 增刪快」，更可靠的方法是把需求拆成幾個可以回答的問題。</p>
+
+<ol>
+<li><strong>我會用索引隨機讀取元素嗎？</strong>只要答案是「會」，通常就優先考慮 <code>ArrayList</code>。它的 <code>get(i)</code> 是 O(1)，而 <code>LinkedList</code> 需要從頭或尾逐步尋找，成本是 O(N)，資料量越大，差距越明顯。</li>
+<li><strong>我的增刪集中在頭尾，還是散布在中間？</strong>如果操作集中在頭尾，<code>LinkedList</code> 的指標操作才有意義。如果你指定的是「第 i 個位置」，一樣要先花 O(N) 找到那個位置。</li>
+<li><strong>會有多個執行緒同時讀寫這個 List 嗎？</strong>如果會，<code>ArrayList</code> 與 <code>LinkedList</code> 都不能直接當成執行緒安全的集合使用。讀多寫少時可以考慮 <code>CopyOnWriteArrayList</code>；如果寫入頻繁，就要改用鎖或其他併發結構。</li>
+<li><strong>我事先知道大概要放幾筆嗎？</strong>如果知道，可以在建立 <code>ArrayList</code> 時指定初始容量，例如 <code>new ArrayList&lt;&gt;(1000)</code>，減少陣列擴容與資料搬移的次數。</li>
+</ol>
+
+<h2>反例：三個會讓直覺翻車的地方</h2>
+
+<h3>反例一：按索引插入，LinkedList 並不快</h3>
+
+<p>鏈表在「已經拿到目標節點」的前提下，插入只需要調整幾個指標，因此是 O(1)。但實務上常見的寫法通常是「在第 i 個位置插入」，而不是手上已經有那個節點。</p>
+
+<p>這時候，<code>LinkedList</code> 必須先從頭或尾走過去，找到第 i 個節點，這段定位成本是 O(N)。所以它真正適合的是頭尾操作；而在只需要把資料當成佇列或堆疊使用的情況，<code>ArrayDeque</code> 往往更合適。</p>
+
+<h3>反例二：CPU 快取讓 ArrayList 在遍歷時碾壓 LinkedList</h3>
+
+<p>這正是實際效能差這麼多的底層原因。CPU 不會每次只向記憶體索取一個位元組，而是一次載入一整塊連續資料，通常是 64 位元組，這一塊資料稱為一個 <strong>Cache Line</strong>。</p>
+
+<p><code>ArrayList</code> 的元素位在連續空間中。當 CPU 載入 <code>arr[0]</code> 時，附近的 <code>arr[1]</code>、<code>arr[2]</code> 也可能一起被帶進 L1 快取。後續存取就有機會直接從快取取得，不必再次等待較慢的記憶體。</p>
+
+<p><code>LinkedList</code> 則不同。它的節點是分散在堆積區裡、透過 <code>new</code> 建立的物件。存取完 <code>node1</code> 後，<code>node2</code> 可能位在很遠的地方，CPU 只能重新到較慢的記憶體取資料，造成大量 <strong>Cache Miss</strong>，也就是必須停下來等待資料。</p>
+
+<p>資料密度也會放大這個差距。同樣一個 64 位元組的 Cache Line，<code>ArrayList</code> 可以放下 8 個 <code>long</code>；<code>LinkedList</code> 還要扣掉每個節點的 <code>prev</code> 與 <code>next</code> 兩個指標，可能只放得下 2 個資料。這也是為什麼在真實機器上，即使 <code>ArrayList</code> 需要搬移元素，某些情況下仍然可能比 <code>LinkedList</code> 更快。</p>
+
+<figure class="lesson-figure"><img src="./collections-overview-and-list-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>反例三：CopyOnWriteArrayList 不是「安全的 ArrayList」</h3>
+
+<p><code>CopyOnWriteArrayList</code> 的寫入流程是：先加鎖，複製整個陣列，在新陣列上修改，最後把 volatile 引用指向新陣列。讀取則可以直接使用目前的陣列，不需要加鎖。</p>
+
+<p>這種設計很適合讀多寫少的場景，例如白名單或監聽器列表。但如果資料量很大、寫入又頻繁，每次寫入都複製整個陣列，會同時增加複製成本與記憶體壓力，還可能不斷觸發 GC，最後拖慢整個系統。</p>
+
+<p>它的迭代器在建立時就握住舊陣列的快照，所以遍歷時不會拋出 <code>ConcurrentModificationException</code>。代價是，遍歷過程可能讀到已經被刪除的舊資料。這就是它所謂的「弱一致性」：讀取穩定，但不保證看見最新內容。</p>
+
+<p>因此，<code>CopyOnWriteArrayList</code> 是針對特定讀寫比例做出的取捨，不是所有併發場景都能直接套用的萬用解。</p>
+
+<h2>決策檢核表：現在該選誰？</h2>
+
+<table>
+<thead>
+<tr><th>你的情況</th><th>選誰</th></tr>
+</thead>
+<tbody>
+<tr><td>一般用途，會用索引讀取，單執行緒</td><td>ArrayList（首選）</td></tr>
+<tr><td>只在頭尾頻繁插入刪除，當佇列／堆疊用</td><td>ArrayDeque，其次才是 LinkedList</td></tr>
+<tr><td>多執行緒、讀遠多於寫，能接受短暫讀到舊值</td><td>CopyOnWriteArrayList</td></tr>
+<tr><td>多執行緒、寫入也很頻繁</td><td>不要用 COW，改用鎖或其它併發結構</td></tr>
+<tr><td>已經知道資料量上限</td><td>建構時指定初始容量，減少擴容</td></tr>
+</tbody>
+</table>
+
+<h2>小結：把選擇規則帶走</h2>
+
+<blockquote>
+集合框架先分成 Collection 與 Map 兩派，Map 不繼承 Collection。List 的選擇不能只背「查詢快」或「增刪快」：ArrayList 用連續陣列換來 O(1) 隨機存取與較高的快取命中率，但中間增刪需要搬移元素；LinkedList 的指標操作只有在頭尾或已經取得節點時真正划算，按索引操作仍要先花 O(N) 定位，節點分散也會帶來 Cache Miss 與額外記憶體開銷；CopyOnWriteArrayList 讀取無鎖、寫入時複製，適合讀多寫少，但必須接受弱一致性與較高的寫入成本。若事先知道資料量，建立集合時指定初始容量，是減少擴容的實用習慣。
+</blockquote>
+
+<p>可以把最後的決策規則記成一句話：<strong>一般情況先選 ArrayList；只有在頭尾操作、併發讀多寫少等條件明確成立時，才改選其他 List。</strong></p>
+
+<figure class="lesson-figure"><img src="./collections-overview-and-list-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>熟悉 List 之後，下一個問題自然會出現：那張負責鍵值查找的 Map，內部到底長什麼樣子？下一節會打開 <code>HashMap</code> 這個黑盒子，看看它從 JDK 1.7 到 1.8 的結構如何改變，以及紅黑樹、負載因子這些設計是怎麼來的。</p>
+
+<div class="lesson-nav">
+  <div><a href="./reflection-proxy-generics.html">← 上一步：反射、代理與泛型擦除</a></div>
+  <div><a href="./hashmap-internals.html">下一步：HashMap 內核：從 1.7 到 1.8 的結構與擴容 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="關於 Collection 與 Map 的關係，下列哪一句正確？" data-correct="2" data-explain="Map 是獨立的根接口，並不繼承 Collection，這是常考的陷阱。">
+  <button class="opt">Map 繼承 Collection，屬於它的子介面</button>
+  <button class="opt">Map 是 Collection 的一種特殊實作</button>
+  <button class="opt">Map 不繼承 Collection，是獨立的一派</button>
+  <button class="opt">Collection 繼承 Map，並多了 List 分支</button>
+</div>
+<div class="quiz" data-question="為什麼「LinkedList 增刪快」在按索引插入時不成立？" data-correct="1" data-explain="插入本身是 O(1)，但要先從頭尾走 O(N) 找到第 i 個節點。">
+  <button class="opt">因為 LinkedList 的節點無法被修改</button>
+  <button class="opt">因為要先花 O(N) 走到指定位置</button>
+  <button class="opt">因為 LinkedList 不允許在中間插入</button>
+  <button class="opt">因為插入時必須複製整個鏈表結構</button>
+</div>
+<div class="quiz" data-question="Cache Line 通常一次載入多少位元組的連續資料？" data-correct="0" data-explain="現代 CPU 的 Cache Line 通常是 64 位元組，一次抓一整塊連續資料。">
+  <button class="opt">64 位元組</button>
+  <button class="opt">8 位元組</button>
+  <button class="opt">128 位元組</button>
+  <button class="opt">256 位元組</button>
+</div>
+<div class="quiz" data-question="為什麼 LinkedList 遍歷時容易發生 Cache Miss？" data-correct="3" data-explain="節點散落在堆各處，指標跳到下一個節點時那塊記憶體往往不在快取裡。">
+  <button class="opt">因為它的節點體積太小裝不滿快取</button>
+  <button class="opt">因為它每次讀取都必須呼叫系統呼叫</button>
+  <button class="opt">因為它強制把資料加密後才放進記憶體</button>
+  <button class="opt">因為節點散落在堆中，指標跳躍跳很遠</button>
+</div>
+<div class="quiz" data-question="關於 CopyOnWriteArrayList 的寫入流程，下列何者正確？" data-correct="1" data-explain="寫入先加鎖，複製整個陣列後在新陣列修改，再替換 volatile 引用。">
+  <button class="opt">直接在原陣列上改，只是加上 synchronized</button>
+  <button class="opt">加鎖後複製整個陣列，改完再換掉引用</button>
+  <button class="opt">把寫入排進佇列，由背景執行緒稍後處理</button>
+  <button class="opt">寫入時先鎖住所有讀取執行緒再修改</button>
+</div>
+<div class="quiz" data-question="CopyOnWriteArrayList 被稱為「弱一致性」的原因是？" data-correct="2" data-explain="迭代器持有建立當下的舊陣列快照，遍歷時讀到的可能是已過期的資料。">
+  <button class="opt">它完全不保證任何執行緒安全</button>
+  <button class="opt">它每次讀取都會向各節點重新同步</button>
+  <button class="opt">迭代器持有舊陣列快照，可能讀到舊值</button>
+  <button class="opt">它只保證寫入順序，不保證讀取順序</button>
+</div>
+<div class="quiz" data-question="已知大概要放 1000 筆資料，最好的做法是什麼？" data-correct="0" data-explain="在建立時指定初始容量，能避免多次擴容與複製的成本。">
+  <button class="opt">new ArrayList&lt;&gt;(1000) 指定初始容量</button>
+  <button class="opt">用 LinkedList 避免任何擴容的發生</button>
+  <button class="opt">用 CopyOnWriteArrayList 最省記憶體</button>
+  <button class="opt">什麼都不做，讓它自動慢慢長大</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · Java 語言與物件 · Step 4/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

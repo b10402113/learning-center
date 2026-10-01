@@ -3,179 +3,192 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ReentrantLock 與 AQS：state、CLH 佇列與 CAS</title>
+<title>ReentrantLock 與 AQS：一個 state 加一條等待佇列</title>
 <link rel="stylesheet" href="../assets/shared.css">
 </head>
 <body>
 
-<h1>ReentrantLock 與 AQS：state、CLH 佇列與 CAS</h1>
+<h1>ReentrantLock 與 AQS：一個 state，加上一條等待佇列</h1>
 <p class="meta">Step 2/5 · 鎖、JMM 與無鎖原子</p>
 
 <h2>學習目標</h2>
-<p>這一課會比較 <code>synchronized</code> 與 <code>ReentrantLock</code> 的差異，並釐清它們各自適合的場景。你也會看懂 AQS 如何透過 <code>volatile state</code>、CLH 變體佇列與 CAS，管理共享資源和等待中的執行緒。</p>
+<p>這一節要帶你看懂 AQS 的三個核心零件：<code>volatile state</code>、CLH 變體佇列，以及 CAS。接著，你會看到 ReentrantLock 如何利用這套骨架，提供可重入、公平鎖、可中斷等待，以及多個 <code>Condition</code>。</p>
 
-<h2>前言：鎖不夠用的時候</h2>
+<h2>前言：自動擋不夠用時，你需要一台手動擋</h2>
 
-<p>想像一下，服務啟動時有一條執行緒正在等待一把鎖。這時使用者按下取消，但如果它使用的是 <code>synchronized</code>，這條執行緒通常只能繼續等，無法在等待期間回應中斷。</p>
+<p>上一節可以把 <code>synchronized</code> 想成一台「自動擋」：加鎖、解鎖都交給 JVM 處理，就算區塊裡拋出例外，JVM 也會幫你把鎖釋放掉。這種寫法省心，也因此成為多數情境下的預設選擇。</p>
 
-<p>另一個常見場景是生產者與消費者共用一個緩衝區。當緩衝區出現新資料時，你只想喚醒消費者，不想把生產者也一起叫醒。可是，<code>synchronized</code> 搭配 <code>wait/notify</code> 只有一個等待集合，沒辦法精準區分要喚醒哪一群執行緒。</p>
+<p>但自動擋也代表你少了一些控制權。你不能指定鎖要不要公平排隊，不能讓正在等鎖的執行緒主動放棄，也不能只喚醒某一群等待中的執行緒。</p>
 
-<p>這些需求不是少見的例外，因此 JDK 提供了 <code>ReentrantLock</code>。不過，<code>ReentrantLock</code> 更重要的價值，還在於它是 <code>java.util.concurrent</code> 同步器家族共同地基 AQS 的第一個具體入口。看懂它如何使用 AQS，之後再遇到 <code>CountDownLatch</code> 或 <code>Semaphore</code>，就不必把每個工具當成獨立知識硬背。</p>
+<p>當需求變成「搶不到鎖的執行緒應該可以被中斷」，或是「我只想喚醒消費者，不想把生產者也叫醒」時，就需要一台手動擋。這台手動擋就是 <code>ReentrantLock</code>；而支撐它、也支撐許多 JUC 工具的地基，叫做 AQS。</p>
 
-<h2>一個是關鍵字，一個是 API 類別</h2>
+<p>先把 AQS 的三件套看清楚，再回頭看 ReentrantLock 如何長在這套骨架上。這樣你記住的就不只是 API，而是它為什麼能提供這些能力。</p>
 
-<p>兩者最根本的差異，在於它們所處的層級不同。<code>synchronized</code> 是 Java 關鍵字，由 JVM 直接支援，底層使用上一節提到的 Monitor。加鎖與解鎖都是隱式進行：你寫好同步區塊，剩下的工作交給 JVM 處理。即使區塊中途拋出例外，JVM 也會保證鎖被釋放。</p>
+<h2>AQS 是什麼：JUC 的同步器地基</h2>
 
-<p><code>ReentrantLock</code> 則是 JDK 提供的類別，建立在 AQS 之上。加鎖與解鎖都是顯式操作：你必須自行呼叫 <code>lock()</code>，也必須在最後呼叫 <code>unlock()</code>。這份自由帶來更多功能，但同時也把正確釋放鎖的責任交給了開發者。</p>
+<p>AQS（AbstractQueuedSynchronizer，抽象佇列同步器）不是一把可以直接拿來使用的鎖，而是一個用來建構鎖與同步器的框架。</p>
+
+<p>它主要處理兩件事：第一，管理共享資源目前的狀態；第二，管理那些暫時拿不到資源、需要排隊等待的執行緒。</p>
+
+<p>這套架構可以濃縮成三件套：</p>
+
+<ul>
+<li>一個 <code>volatile int state</code>，代表共享資源的狀態。</li>
+<li>一條 CLH 變體佇列，讓競爭失敗的執行緒排隊等待。</li>
+<li>CAS 原子操作，負責在多執行緒競爭時安全地搶奪資源。</li>
+</ul>
+
+<p><code>ReentrantLock</code>、<code>CountDownLatch</code>、<code>Semaphore</code> 等工具，都是沿用這副骨架，再套上各自的規則。AQS 提供的是共同的交通系統；每個同步器則自行決定「什麼叫拿到資源」以及「資源狀態該如何變化」。</p>
+
+<figure class="lesson-figure"><img src="./reentrantlock-and-aqs-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>三件套之一：<code>volatile int state</code></h2>
+
+<p><code>state</code> 代表共享資源目前的狀態，但它沒有固定的業務含義。換一個工具，同一個數字就可能代表完全不同的事情。</p>
+
+<table>
+<thead>
+<tr><th>工具</th><th><code>state</code> 的意義</th></tr>
+</thead>
+<tbody>
+<tr><td>ReentrantLock</td><td>0 表示鎖空閒，1 表示被佔用，大於 1 表示重入次數</td></tr>
+<tr><td>CountDownLatch</td><td>還需要倒數的次數</td></tr>
+<tr><td>Semaphore</td><td>還剩下幾張許可證</td></tr>
+</tbody>
+</table>
+
+<p>因此，AQS 不會替你決定「<code>state</code> 等於多少才算成功」。它只負責安全地讀寫這個狀態，至於狀態的意義，以及從一個數字變成另一個數字的規則，則交給具體的子類別定義。</p>
+
+<h2>三件套之二：用 CAS 搶奪 <code>state</code></h2>
+
+<p><code>state</code> 是多個執行緒共同競爭的資源，不能只用普通賦值修改。否則，兩個執行緒可能同時看到「目前是 0」，接著都以為自己可以成功取得鎖。</p>
+
+<p>AQS 使用 CAS（Compare And Swap，比較並交換）來完成原子更新。它的規則很簡單：只有當記憶體中的舊值，仍然等於執行緒預期的值時，才把它換成新值；如果中途已被其他執行緒改過，這次 CAS 就會失敗。</p>
+
+<p>以搶鎖為例，可以把過程想成這樣：執行緒嘗試用 CAS 把 <code>state</code> 從 0 改成 1。誰成功完成這次交換，誰就取得了鎖。</p>
+
+<p>在競爭不激烈時，CAS 可以直接完成搶鎖，不需要作業系統介入，因此速度很快。不過，CAS 失敗後還要有後續安排；否則所有執行緒都留在原地重試，CPU 就會被大量消耗。</p>
+
+<h2>三件套之三：用 CLH 變體佇列排隊</h2>
+
+<p>那麼，CAS 失敗、暫時搶不到鎖的執行緒要去哪裡？AQS 不會讓它們一直在原地空轉，而是把每個執行緒包成一個 <code>Node</code> 節點，串進一條雙向鏈表中等待。</p>
+
+<p>這條佇列是 CLH 鎖的變體。排在後面的節點通常會被阻塞，等前面的節點釋放資源並喚醒它，才重新嘗試 CAS。</p>
+
+<p>這樣一來，系統就把「大家一起在門口推擠」改成「排好隊，輪到自己再試」。競爭激烈時，這能減少大量沒有意義的 CPU 空轉，也讓等待鎖的執行緒有比較明確的秩序。</p>
+
+<figure class="lesson-figure"><img src="./reentrantlock-and-aqs-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>ReentrantLock 怎麼站在 AQS 上</h2>
+
+<p>有了 AQS 的骨架，<code>ReentrantLock</code> 要做的就是定義自己的狀態規則：</p>
+
+<ul>
+<li><code>state</code> 為 0，表示鎖目前空閒。</li>
+<li>第一次取得鎖時，透過 CAS 把 <code>state</code> 從 0 改成 1。</li>
+<li>同一個執行緒再次取得這把鎖時，就把 <code>state</code> 再加一，這就是重入。</li>
+<li>釋放鎖時，讓 <code>state</code> 減一；直到回到 0，才代表鎖真正空閒。</li>
+</ul>
+
+<p>這就是它和 <code>synchronized</code> 都能支援可重入的原因：同一個執行緒進入臨界區後，還可以再次取得同一把鎖。差別在於，<code>synchronized</code> 使用 JVM Monitor 內部的計數機制，而 <code>ReentrantLock</code> 則使用 AQS 的 <code>state</code>。</p>
+
+<figure class="lesson-figure"><img src="./reentrantlock-and-aqs-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>在這個共同骨架上，<code>ReentrantLock</code> 又多提供了幾項 <code>synchronized</code> 沒有的控制能力。</p>
+
+<ol>
+<li><strong>公平鎖：</strong>建構子傳入 <code>true</code> 後，可以改成先來後到的排隊方式。代價是每次取得鎖時，都要確認佇列中是否有人排在自己前面，因此效能可能下降。<code>synchronized</code> 沒有公平鎖選項，使用上是非公平的。</li>
+<li><strong>等待可中斷：</strong><code>lockInterruptibly()</code> 讓正在等待鎖的執行緒可以回應中斷，主動放棄等待。這適合用來避免執行緒無止境地卡住。使用 <code>synchronized</code> 搶鎖時，則沒有這種等待中的中斷能力。</li>
+<li><strong>多個條件變數：</strong>透過 <code>newCondition()</code> 可以建立多條條件佇列，將不同類型的等待者分組。這樣就能只喚醒消費者，或只喚醒生產者。<code>synchronized</code> 只有一個等待集合，<code>notify()</code> 叫醒其中一個，<code>notifyAll()</code> 則全部叫醒，無法做這種分組喚醒。</li>
+</ol>
+
+<p>不過，手動擋的代價就是收尾工作要自己負責。<code>ReentrantLock</code> 必須在 <code>finally</code> 中解鎖，否則臨界區一旦在解鎖前拋出例外，鎖就可能永遠卡住，其他執行緒也只能一直等下去。</p>
 
 <pre><code>ReentrantLock lock = new ReentrantLock();
 lock.lock();
 try {
-    // 臨界區
+    // 臨界區：安全地操作共享資源
 } finally {
-    lock.unlock();   // 一定要放在 finally，否則鎖可能永遠不釋放
+    lock.unlock(); // 一定要在 finally 釋放
 }</code></pre>
 
-<p>這段 <code>try-finally</code> 不是可有可無的程式風格，而是標準且必要的寫法。假設臨界區中途拋出例外，而 <code>unlock()</code> 沒有放在 <code>finally</code> 裡，執行緒就可能永遠不釋放鎖，其他執行緒也會跟著卡住。</p>
-
-<p>這正是 <code>synchronized</code> 常被認為「比較安全」的原因：釋放鎖的工作由 JVM 負責，而不是要求開發者自己記得處理。</p>
-
-<h2>ReentrantLock 多出來的三項能力</h2>
-
-<p>既然 <code>synchronized</code> 使用簡單，還能由 JVM 自動釋放鎖，為什麼仍然需要 <code>ReentrantLock</code>？因為在某些實際場景裡，光是「能加鎖」還不夠。<code>ReentrantLock</code> 多出的三項能力，剛好對應了三種常見痛點。</p>
-
-<figure class="lesson-figure"><img src="./reentrantlock-and-aqs-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
-
-<h3>等待可以被中斷</h3>
-
-<p><code>synchronized</code> 一旦開始等待鎖，通常就只能繼續等，無法在等待期間取消。<code>ReentrantLock</code> 提供 <code>lockInterruptibly()</code>，讓正在等待鎖的執行緒可以回應中斷，選擇放棄等待。</p>
-
-<p>這對「等不到就取消」的流程很重要。例如某個操作有逾時限制，執行緒不應該因為一直拿不到鎖，就無限期卡在那裡。可中斷的等待能讓系統及時收回這條執行緒，而不是讓它慢慢累積成新的壓力。</p>
-
-<h3>支援公平鎖</h3>
-
-<p><code>synchronized</code> 只能使用非公平鎖，也就是不保證先來先得。哪條執行緒先搶到，哪條就先取得鎖。</p>
-
-<p><code>ReentrantLock</code> 可以在建構時傳入 <code>true</code>，開啟公平鎖，讓執行緒大致按照排隊順序取得鎖。公平鎖在極端情況下有助於避免某些執行緒長期搶不到資源，也就是避免飢餓；但它通常會犧牲一部分吞吐量，因此只在確實需要時才值得使用。</p>
-
-<h3>可以綁定多個條件佇列</h3>
-
-<p><code>synchronized</code> 搭配 <code>wait/notify</code> 時，只有一個等待集合。喚醒時只能選擇喚醒一條執行緒，或把所有等待中的執行緒都叫醒，無法精準指定是哪一類等待者。</p>
-
-<p><code>ReentrantLock</code> 則可以透過 <code>newCondition()</code> 建立多個 <code>Condition</code>，把不同用途的執行緒分開排隊。以生產者與消費者為例，緩衝區出現新資料時，可以只喚醒消費者；緩衝區有空間時，也可以只喚醒生產者，不必把另一邊的執行緒一起叫醒。</p>
-
-<h2>藏在這一切底下的 AQS</h2>
-
-<p>不論功能看起來多複雜，<code>ReentrantLock</code> 本質上都在處理兩個問題：目前共享資源是否被佔用？沒有搶到資源的執行緒要排在哪裡？</p>
-
-<p>這兩個問題不只 <code>ReentrantLock</code> 需要處理，<code>CountDownLatch</code> 與 <code>Semaphore</code> 也一樣需要。因此，JDK 把共通的部分抽出來，形成 AQS（AbstractQueuedSynchronizer，抽象佇列同步器）。AQS 負責管理共享資源的狀態，以及等待中的執行緒如何排隊；不同同步器只需要定義自己的資源規則即可。</p>
-
-<p>AQS 的結構可以先記成一句話：<strong>state（資源狀態）＋ CLH 變體佇列（執行緒排隊）＋ CAS（原子操作）</strong>。下面分成三部分來看。</p>
-
-<figure class="lesson-figure"><img src="./reentrantlock-and-aqs-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
-
-<h3>核心資源：volatile int state</h3>
-
-<p>AQS 內部維護一個變數：</p>
-
-<pre><code>private volatile int state;</code></pre>
-
-<p>它代表共享資源目前的狀態，但具體意義會依照使用它的同步器而改變。</p>
-
-<p>在 <code>ReentrantLock</code> 裡，<code>state</code> 為 0 代表鎖目前沒有被佔用；為 1 代表鎖已被取得；大於 1 則代表同一條執行緒重入了多次。這個角色，正好對應上一節 Monitor 中的計數器。</p>
-
-<p>到了 <code>CountDownLatch</code>，同一個 <code>state</code> 會表示還剩多少次倒數；到了 <code>Semaphore</code>，則會表示還剩多少張許可證。這就是 AQS 抽象之處：框架負責管理狀態的讀寫與排隊，至於狀態代表什麼，交由子類別自行定義。</p>
-
-<figure class="lesson-figure"><img src="./reentrantlock-and-aqs-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
-
-<h3>修改機制：CAS</h3>
-
-<p>多條執行緒可能同時搶同一個 <code>state</code>，因此修改動作必須是原子的。否則可能出現兩條執行緒同時讀到「鎖是空的」，最後都以為自己成功取得鎖的問題。</p>
-
-<p>AQS 使用 CAS 指令修改 <code>state</code>。哪一條執行緒的 CAS 成功，真的把 <code>state</code> 從舊值改成新值，哪一條執行緒就取得了資源。</p>
-
-<p>CAS 的細節會留到第五節再展開。這裡先記住它解決的問題：「只有當目前值等於我預期的舊值時，才幫我改成新值。」這是一個不會在中途被其他執行緒插入的硬體級原子操作。</p>
-
-<h3>排隊機制：CLH 變體佇列</h3>
-
-<p>那些 CAS 失敗、沒有搶到鎖的執行緒要去哪裡？AQS 不會讓它們一直留在原地空轉，而是會把每條執行緒包裝成一個 <code>Node</code>，再接到雙向鏈結串列中排隊。</p>
-
-<p>這條佇列是以 CLH 鎖——一種以串列為基礎的自旋鎖——為基礎改造而來，因此通常稱為 CLH 佇列。AQS 的做法並不是讓所有執行緒同時瘋狂重試，而是讓排隊中的節點先被掛起。</p>
-
-<p>等到前一個節點釋放資源並喚醒它，它才會再次使用 CAS 嘗試取得 <code>state</code>。整個流程可以想成：「搶不到就排隊，被前一個節點喚醒後再搶。」這比讓所有執行緒無止境空轉更有效率。</p>
-
-<figure class="lesson-figure"><img src="./reentrantlock-and-aqs-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
-
-<h2>把兩者放在一起看</h2>
+<h2>ReentrantLock 和 synchronized 差在哪</h2>
 
 <table>
 <thead>
-<tr><th>面向</th><th>synchronized</th><th>ReentrantLock</th></tr>
+<tr><th>比較面向</th><th>synchronized</th><th>ReentrantLock</th></tr>
 </thead>
 <tbody>
-<tr><td>層級</td><td>Java 關鍵字，JVM 底層的 Monitor</td><td>JDK 的 API 類，基於 AQS</td></tr>
-<tr><td>加解鎖方式</td><td>隱式，JVM 自動處理</td><td>顯式，須手動 lock／unlock</td></tr>
-<tr><td>異常時釋放</td><td>JVM 保證自動釋放</td><td>須寫在 finally，否則可能死鎖</td></tr>
-<tr><td>等待可中斷</td><td>不支援</td><td>支援 lockInterruptibly</td></tr>
-<tr><td>公平鎖</td><td>只有非公平</td><td>可透過建構子設為公平</td></tr>
-<tr><td>條件佇列</td><td>單一 wait／notify 集合</td><td>可建立多個 Condition</td></tr>
+<tr><td>層級</td><td>Java 關鍵字，JVM 層實現</td><td>JDK 的 API 類，基於 AQS</td></tr>
+<tr><td>加解鎖</td><td>隱式，JVM 自動管理</td><td>顯式，要自己 lock／unlock</td></tr>
+<tr><td>公平性</td><td>只有非公平</td><td>可選公平或非公平</td></tr>
+<tr><td>等待中斷</td><td>不支援</td><td>支援 lockInterruptibly</td></tr>
+<tr><td>條件喚醒</td><td>單一等待集合</td><td>可綁定多個 Condition</td></tr>
+<tr><td>解鎖安全</td><td>出例外也會自動釋放</td><td>忘記 unlock 就會卡死</td></tr>
+<tr><td>效能</td><td colspan="2">JDK 1.6 之後，兩者在一般情境下已經相差不多</td></tr>
 </tbody>
 </table>
 
-<p>效能方面，JDK 1.6 以前，<code>synchronized</code> 確實常被認為比較慢。不過，後來加入偏向鎖、輕量級鎖等最佳化後，兩者在一般使用情況下已經相當接近。</p>
+<h2>到底該選哪一個</h2>
 
-<p>因此，選擇哪一個時，重點不該只是「誰比較快」，而是先問自己：是否需要可中斷等待、公平鎖或多條件佇列？如果不需要，<code>synchronized</code> 往往已經足夠；如果需要這些控制能力，才考慮使用 <code>ReentrantLock</code>。</p>
+<p>如果沒有特殊需求，預設先使用 <code>synchronized</code>。它寫法較短，不需要自己記得解鎖，而且 JVM 還能進行優化。對絕大多數一般的互斥場景來說，這已經足夠。</p>
 
-<h2>小結</h2>
+<p>只有在你明確需要公平排隊、等待可中斷、多組條件精準喚醒，或嘗試取得鎖等能力時，才考慮改用 <code>ReentrantLock</code>。</p>
+
+<p>一旦選了 <code>ReentrantLock</code>，就要把解鎖放進 <code>finally</code>。你換取的是更多控制力，但同時也放棄了 <code>synchronized</code> 自動釋放鎖的保險。</p>
+
+<h2>小結：把這套關係掛回腦中</h2>
 
 <blockquote>
-<code>synchronized</code> 是 JVM 層級的隱式鎖，使用簡單，並且會自動釋放；<code>ReentrantLock</code> 是建立在 AQS 上的顯式鎖，換來可中斷等待、公平鎖與多條件佇列三項能力，但也要求開發者用 <code>try-finally</code> 正確釋放鎖。AQS 的核心則是由 volatile state 表示共享資源、由 CAS 決定誰成功取得資源，再用 CLH 變體佇列安置搶輸的執行緒。至於 state 具體代表什麼，則會隨著同步器而改變，這正是它成為 JUC 同步器共同地基的原因。
+AQS 是 JUC 的同步器地基，核心只有三件套：<code>volatile int state</code> 代表共享資源狀態、CAS 負責原子搶奪、CLH 變體佇列負責讓失敗的執行緒排隊等待。<code>state</code> 的具體意義由各個工具自行定義。<code>ReentrantLock</code> 就建立在這套骨架上，因此能提供可重入能力，還比 <code>synchronized</code> 多了公平鎖、可中斷等待與多個 <code>Condition</code>；代價是必須手動解鎖，忘記呼叫 <code>unlock</code> 就可能讓鎖永遠不釋放。日常情境預設使用 <code>synchronized</code>，真的需要這些彈性時，再選擇 <code>ReentrantLock</code>。
 </blockquote>
 
-<p>這一課處理的是「多條執行緒如何互斥」。但即使完全不共用鎖，一條執行緒修改了變數，另一條執行緒仍然可能讀到舊值。這不是鎖本身能解決的問題，而是記憶體模型層級的問題。下一節就從主記憶體與工作記憶體開始，看看這種可見性差異是怎麼發生的。</p>
+<p>到這裡，AQS 解決的是「同一時間只讓一個執行緒進入臨界區」的問題。但多執行緒程式還有另一種常見錯誤：即使沒有互斥衝突，一條執行緒修改了值，另一條執行緒也可能根本看不到最新結果。</p>
+
+<p>下一節要談的 JMM 與 <code>volatile</code>，處理的正是這個「看不到」的問題。把 AQS 的「排隊與搶資源」接上 JMM 的「可見性與記憶體規則」，你才會真正看懂 Java 多執行緒的整張地圖。</p>
 
 <div class="lesson-nav">
-  <div><a href="./synchronized-and-monitor.html">← 上一步：synchronized 是怎麼上鎖的？</a></div>
-  <div><a href="./jmm-and-volatile.html">下一步：JMM 與 volatile →</a></div>
+  <div><a href="./synchronized-monitor-upgrade.html">← 上一步：synchronized 怎麼實現？Monitor、物件頭與鎖升級</a></div>
+  <div><a href="./jmm-volatile-happens-before.html">下一步：JMM、volatile 與 happens-before：為什麼改了別的執行緒看不到 →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="ReentrantLock 與 synchronized 最根本的層級差異是什麼？" data-correct="2" data-explain="synchronized 是 JVM 支援的關鍵字，ReentrantLock 是架在 AQS 上的 JDK API 類。">
-  <button class="opt">一個是可重入的，一個是互斥的</button>
-  <button class="opt">一個支援泛型，一個不支援泛型</button>
-  <button class="opt">一個是關鍵字，一個是 API 類</button>
-  <button class="opt">一個能在方法上用，一個不行</button>
+<div class="quiz" data-question="AQS 的三件套是哪三個？" data-correct="0" data-explain="volatile int state、CLH 變體佇列與 CAS 原子操作，是 AQS 的骨架。">
+  <button class="opt">state、CLH 佇列與 CAS</button>
+  <button class="opt">Owner、EntryList 與計數器</button>
+  <button class="opt">偏向鎖、輕量級與重量級</button>
+  <button class="opt">base、Cell 陣列與 sum</button>
 </div>
-<div class="quiz" data-question="為什麼 ReentrantLock 的 unlock() 必須寫在 finally 裡？" data-correct="1" data-explain="它是顯式鎖，若中途拋出例外而沒釋放，其他執行緒就會永遠卡住。">
-  <button class="opt">因為 unlock 只能被 JVM 自動呼叫</button>
-  <button class="opt">因為顯式鎖沒有 JVM 幫你自動釋放</button>
-  <button class="opt">因為 finally 的執行速度比其他區塊快</button>
-  <button class="opt">因為不寫 finally 就無法支援可重入</button>
+<div class="quiz" data-question="AQS 的 state 在 ReentrantLock 裡代表什麼？" data-correct="2" data-explain="0 是空閒、1 是被佔用、大於 1 是同一執行緒的重入次數。">
+  <button class="opt">佇列中正在等待的執行緒數</button>
+  <button class="opt">這把鎖已經被使用的總次數</button>
+  <button class="opt">鎖空閒或佔用以及重入次數</button>
+  <button class="opt">還有多少張許可證可以發放</button>
 </div>
-<div class="quiz" data-question="下列哪一項不是 ReentrantLock 相對 synchronized 多出的能力？" data-correct="3" data-explain="可重入是兩者都有的特性，不是 ReentrantLock 獨有的加分項。">
-  <button class="opt">等待鎖的時候可以回應中斷</button>
-  <button class="opt">可以設定成嚴格先來後到的公平鎖</button>
-  <button class="opt">可以綁定多個 Condition 精準喚醒</button>
-  <button class="opt">可以讓同一條執行緒重複取得鎖</button>
+<div class="quiz" data-question="CAS 失敗、沒搶到鎖的執行緒會去哪裡？" data-correct="1" data-explain="AQS 把它們包成 Node 節點，放進 CLH 變體佇列等待被喚醒。">
+  <button class="opt">繼續在原地不停自旋搶鎖</button>
+  <button class="opt">被包成節點進佇列等待</button>
+  <button class="opt">立刻被作業系統直接掛起</button>
+  <button class="opt">直接拋出中斷相關的例外</button>
 </div>
-<div class="quiz" data-question="AQS 用什麼變數表示共享資源的狀態？" data-correct="0" data-explain="private volatile int state，語義隨使用它的同步器而改變。">
-  <button class="opt">一個 volatile int 型別的 state</button>
-  <button class="opt">一個 volatile boolean 的 flag</button>
-  <button class="opt">一個 AtomicInteger 型的 owner</button>
-  <button class="opt">一個指向 Monitor 的物件參考</button>
+<div class="quiz" data-question="下列哪一項是 ReentrantLock 有、而 synchronized 沒有的能力？" data-correct="3" data-explain="ReentrantLock 可設定公平鎖、可中斷等待、可綁定多個 Condition。">
+  <button class="opt">讓同一條執行緒重複取得同一把鎖</button>
+  <button class="opt">在發生例外時自動把鎖釋放掉</button>
+  <button class="opt">用物件當作鎖來保護臨界區</button>
+  <button class="opt">設定公平排隊與多個條件變數</button>
 </div>
-<div class="quiz" data-question="在 ReentrantLock 裡，state 大於 1 代表什麼？" data-correct="3" data-explain="state 表示被佔用，大於 1 表示同一條執行緒的重入次數。">
-  <button class="opt">代表鎖已經被永久佔用</button>
-  <button class="opt">代表有兩條執行緒同時持鎖</button>
-  <button class="opt">代表這把鎖已進入公平模式</button>
-  <button class="opt">代表同一條執行緒重入了幾次</button>
+<div class="quiz" data-question="使用 ReentrantLock 時，解鎖為什麼一定要放在 finally？" data-correct="0" data-explain="若在解鎖前拋出例外，沒放進 finally 就會讓鎖永遠不被釋放。">
+  <button class="opt">避免例外時鎖永遠不被釋放</button>
+  <button class="opt">這樣才能讓鎖變成公平鎖</button>
+  <button class="opt">這樣才能讓 state 自動歸零</button>
+  <button class="opt">避免執行緒在等待時被中斷</button>
 </div>
-<div class="quiz" data-question="AQS 如何處理 CAS 失敗、沒搶到鎖的執行緒？" data-correct="2" data-explain="把它們包成 Node 接進 CLH 變體佇列，掛起並等前驅釋放後喚醒。">
-  <button class="opt">讓它們不斷原地重試直到成功</button>
-  <button class="opt">直接丟棄並回傳失敗給呼叫端</button>
-  <button class="opt">包成 Node 排進 CLH 變體佇列</button>
-  <button class="opt">把它們交給作業系統互斥量排隊</button>
+<div class="quiz" data-question="日常開發沒有特殊需求時，一般建議先用哪一個？" data-correct="2" data-explain="預設用 synchronized，需要公平、可中斷或多條件時再改用 ReentrantLock。">
+  <button class="opt">一律用 ReentrantLock 比較安全</button>
+  <button class="opt">用哪一個其實效能都一樣差</button>
+  <button class="opt">預設用 synchronized 就夠了</button>
+  <button class="opt">兩個都不用，改用 volatile</button>
 </div>
 
 <div class="footer">

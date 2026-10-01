@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sandcastle：先從 interactive 模式開始</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Sandcastle：先從 interactive 模式開始</h1>
+<p class="meta">Step 2/3 · 互動式 AFK：第一次放手</p>
+
+<h2>先建立全貌：這一節要解決什麼問題</h2>
+<p>當你想讓 coding agent 自己工作，第一個問題通常不是「要不要放手」，而是「它到底要在哪裡跑、用什麼跑」。如果一開始就把 agent、沙箱、長時間迴圈全部接上，設定可能還沒完成，你也還不知道 agent 會怎麼理解任務，問題卻已經混在一起了。</p>
+<p>這一節會介紹 Sandcastle 和它提供的兩種執行模式。我們會先看懂 agent、sandbox 和 prompt 如何彼此分工，再比較 <code>interactive.ts</code> 與 <code>main.ts</code>。第一次操作時，先選擇能讓你看見 agent 行為的組合：跑單一回合，而且先不掛沙箱。</p>
+
+<h2>從看著跑開始，別急著放手</h2>
+<p>上一節拆穿了「do phase N」這個說法，知道它其實可以寫成一個 <code>for</code> 迴圈，重複執行同一類動作。但知道原理，和真的把它跑起來，中間還隔著幾個很實際的問題：</p>
+<ul>
+<li>這個迴圈要在哪個環境裡執行？</li>
+<li>要使用哪一個 coding agent？</li>
+<li>如果 agent 半夜亂改檔案，該怎麼處理？</li>
+</ul>
+<p>這些問題很難一次全部回答。硬是一步到位，常見的結果是設定花了很久，卻還沒看見 agent 真正執行過任何事情。</p>
+<p>AFK agent 最大的風險，就是你看不到它出錯。你交代一件事，讓它在你不在場時跑上一、兩個小時，最後它只回報「做完了」；但如果你事前沒有盯著它跑過幾次，就不會知道它中間做了什麼，也不知道它在哪一步走偏。</p>
+<p>因此，較穩妥的學習曲線是先看緊，再慢慢放鬆：先和 agent 互動、定期檢查它的行為，觀察它怎麼理解任務，再根據這些觀察修改 prompt 和工作流程。這段時間的目的很單純，就是不要讓錯誤悄悄發生在你背後。</p>
+
+<figure class="lesson-figure"><img src="./sandcastle-runners-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>Sandcastle：把幾個變數分開</h2>
+<p>Sandcastle 是作者為了補上生態系缺口而寫的函式庫。它想提供的是一個不綁定特定 agent、也不綁定特定沙箱的執行器。</p>
+<p>換句話說，你可以放入不同的 agent，例如作者常用的 Claude Code，也可以使用 Codex 或 OpenCode；沙箱則可以選擇本機的 Docker、Podman，或使用 Vercel 等遠端隔離環境。最後，再餵給它一段 prompt。</p>
+<p>可以把 Sandcastle 想成旅行時的萬用轉接頭。電器是哪個品牌、當地插座是哪種規格，都不需要因此換掉整台電器；只要更換適合的插頭，就能讓兩邊接起來。Sandcastle 提供的，就是這種把不同元件接在一起的彈性。</p>
+<p>一次執行 agent 時，Sandcastle 主要認得三個東西：</p>
+<ul>
+<li><strong>agent</strong>：實際動手工作的人。</li>
+<li><strong>sandbox</strong>：agent 可以活動的範圍。</li>
+<li><strong>prompt</strong>：這一回合希望 agent 完成的任務。</li>
+</ul>
+<p>把三者拆開的好處，是你可以一次只改一個變數。你可以先固定 prompt，再更換 agent；也可以先固定 agent，等真的需要隔離時，再加上沙箱。這樣除錯時，就像一次只換一條線，不會同時面對三個未知數。</p>
+
+<h2>兩種執行模式：interactive 與 main</h2>
+<p>Sandcastle 提供兩個入口，剛好對應先觀察、再放手的學習曲線：<code>interactive.ts</code> 和 <code>main.ts</code>。</p>
+
+<table>
+<thead>
+<tr><th></th><th>interactive.ts</th><th>main.ts</th></tr>
+</thead>
+<tbody>
+<tr><td>跑幾次</td><td>只跑單一回合，完成後停止</td><td>用迴圈反覆執行，直到結束</td></tr>
+<tr><td>人在不在旁邊</td><td>人在，全程盯著看</td><td>人可以先離開，之後再回來查看</td></tr>
+<tr><td>主要用途</td><td>調整 prompt、理解 agent 的行為</td><td>真正放手執行</td></tr>
+<tr><td>適合什麼時候使用</td><td>現在，作為第一步</td><td>之後，等觀察足夠再使用</td></tr>
+</tbody>
+</table>
+
+<p><code>interactive.ts</code> 的關鍵價值，是它只執行一回合。因為時間範圍短，你可以從頭到尾看著 agent：它怎麼讀 prompt、怎麼決定下一步、在哪些地方停下來。</p>
+<p>這些觀察會成為你修改 prompt 的材料。相反地，如果一開始就使用 <code>main.ts</code> 的迴圈，等三個階段都跑完才回頭查看，你可能早已錯過發現問題的時機。</p>
+
+<figure class="lesson-figure"><img src="./sandcastle-runners-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>為什麼第一次先不掛沙箱</h2>
+<p>直覺上，執行 agent 前似乎應該先把沙箱準備好。但作者刻意把順序反過來：第一次先在不掛沙箱的環境中執行。</p>
+<p>原因不是沙箱不重要，而是沙箱本身的設定有些麻煩。若一開始就處理隔離環境，注意力很容易被設定細節帶走，反而沒有先確認最重要的事：prompt 能不能讓 agent 正確完成任務。</p>
+<p>因此，第一次會使用 <code>prompt.md</code> 來執行，而且這份 prompt 刻意模仿之後真正的 AFK agent 會收到的內容。你可以待在旁邊觀察它怎麼理解任務、為什麼採取某個行動、在哪裡卡住，或是哪裡做得太多；接著，再把這些觀察寫回 prompt。</p>
+<p>等 prompt 變得穩定，而且你已經大致知道 agent 會做出什麼行為，再花力氣把它放進沙箱。這樣沙箱是在保護一個你已經理解的流程，而不是拿來遮住一個你還沒看懂的流程。</p>
+
+<figure class="lesson-figure"><img src="./sandcastle-runners-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>邊界：interactive 還不是真正的 AFK</h2>
+<p>這裡有一個容易混淆的地方：<code>interactive</code> 模式即使跑得很順，也不代表你已經真正放手。</p>
+<p>它雖然只執行單一回合，但 agent 在過程中仍可能提出權限請求，等你按下允許後才繼續。換句話說，人還是卡在迴圈裡，只是需要介入的次數比較少。</p>
+<p>這也正是它適合當第一步的原因。你可以近距離看見 agent 想執行什麼、打算修改哪些內容，還有它什麼時候需要你的同意。</p>
+<p>要變成真正的 AFK，後面還需要移除這些停頓、換上隔離環境，再把單一回合包進迴圈。那些是後續節點要處理的事；現在先把觀察做好，讓你知道 agent 究竟在做什麼。</p>
+
+<h2>把這些元件放回同一張圖</h2>
+<blockquote>
+Sandcastle 是一個不綁定特定 agent、也不綁定特定沙箱的執行器。它把 agent、sandbox、prompt 三個變數拆開，讓你一次只替換一個元件，除錯時不必同時面對多個未知。它提供兩種模式：<code>interactive.ts</code> 只跑單一回合，適合人在旁邊觀察並調整 prompt；<code>main.ts</code> 才會用迴圈反覆執行。第一次刻意不掛沙箱，是為了先把注意力放在觀察與修 prompt，而不是先處理隔離環境。不過，interactive 仍然會要求人工授權，所以它還不是真正的 AFK。
+</blockquote>
+
+<p>這幾個元件的分工，可以先這樣記：<code>interactive.ts</code> 負責讓你看懂一個回合，<code>main.ts</code> 才負責把回合重複跑起來；prompt 決定 agent 要做什麼，sandbox 則決定它能在哪裡做。</p>
+<p>下一步就是打開 <code>interactive.ts</code> 和它的 <code>prompt.md</code>，實際跑一次單一任務。接著，我們會拆解 prompt expansion 這個 Sandcastle 專屬的語法，看看 PRD 和計畫是怎麼被放進 agent 收到的 prompt 裡。</p>
+
+<div class="lesson-nav">
+  <div><a href="./do-phase-n-is-a-loop.html">← 上一步：「do phase N」是一個 for 迴圈</a></div>
+  <div><a href="./first-interactive-run.html">下一步：跑第一次：prompt.md 與單一任務 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Sandcastle 最核心的主張是什麼？" data-correct="1" data-explain="它不綁定特定 agent、也不綁定特定沙箱，讓執行方式可以自由替換。">
+  <button class="opt">它是一個專門訓練 coding agent 的模型</button>
+  <button class="opt">它不綁定特定 agent 與特定沙箱供應商</button>
+  <button class="opt">它是一個只用來管理 GitHub issue 的工具</button>
+  <button class="opt">它是一種取代 TypeScript 的新型程式語言</button>
+</div>
+<div class="quiz" data-question="interactive.ts 和 main.ts 最關鍵的差別是什麼？" data-correct="0" data-explain="interactive 只跑單一回合，main 會用迴圈反覆跑到結束。">
+  <button class="opt">前者跑單一回合，後者用迴圈反覆跑</button>
+  <button class="opt">前者執行速度快，後者執行速度慢很多</button>
+  <button class="opt">前者只能讀 PRD，後者只能讀計畫文件</button>
+  <button class="opt">前者需要沙箱，後者不需要任何沙箱</button>
+</div>
+<div class="quiz" data-question="作者為什麼建議第一次先不要掛沙箱？" data-correct="2" data-explain="設定沙箱麻煩，會把注意力從「觀察並修 prompt」這件更重要的事上拉走。">
+  <button class="opt">因為沙箱會讓 agent 的產出品質明顯變差</button>
+  <button class="opt">因為沙箱功能在這個階段根本還沒做出來</button>
+  <button class="opt">因為設定沙箱麻煩，會拉走觀察與調 prompt 的注意力</button>
+  <button class="opt">因為不掛沙箱的執行費用比掛沙箱便宜很多</button>
+</div>
+<div class="quiz" data-question="第一次使用的那份 prompt.md，為什麼刻意模仿之後的 AFK agent？" data-correct="3" data-explain="先看清楚它會怎麼做，才能把觀察寫回 prompt，之後才敢真的放手。">
+  <button class="opt">因為 Sandcastle 規定只能用這一份 prompt 檔</button>
+  <button class="opt">因為這樣可以讓 agent 的執行速度提升一倍</button>
+  <button class="opt">因為這樣能自動跳過所有權限請求的步驟</button>
+  <button class="opt">因為先看清它怎麼做，才能回頭把 prompt 修好</button>
+</div>
+<div class="quiz" data-question="為什麼 AFK agent 需要一段「先看緊再放鬆」的學習曲線？" data-correct="1" data-explain="它的錯誤往往發生在你看不到的時候，所以要先觀察，避免看不見的錯誤。">
+  <button class="opt">因為這樣可以讓 API 的訂閱費用降下來</button>
+  <button class="opt">因為它的錯誤常發生在你沒看到的時候</button>
+  <button class="opt">因為不這樣做就無法通過 TypeScript 型別檢查</button>
+  <button class="opt">因為沙箱供應商要求先跑滿一定的次數</button>
+</div>
+<div class="quiz" data-question="interactive 模式跑得很順，可以說你已經完成真正的 AFK 了嗎？" data-correct="2" data-explain="它仍會跳出權限請求等你允許，人還留在迴圈裡，所以不算真正放手。">
+  <button class="opt">可以，因為它已經完全不需人力介入</button>
+  <button class="opt">可以，因為它會自動把多階段一次做完</button>
+  <button class="opt">不行，因為它仍會要求人工授權權限</button>
+  <button class="opt">不行，因為它一次只能讀取一份文件</button>
+</div>
+
+<div class="footer">
+  <p>ai-coding-for-real-engineer · 互動式 AFK：第一次放手 · Step 2/3</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

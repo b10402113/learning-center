@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 gh CLI 把 agent 接上 GitHub</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 gh CLI 把 agent 接上 GitHub</h1>
+<p class="meta">Step 3/4 · issue 佇列驅動</p>
+
+<h2>這一節要完成什麼</h2>
+<p>這一節會把 agent 接上 GitHub，讓它能從 Issues 佇列取得任務、挑選下一件工作、完成修改並 commit，最後依結果關閉 issue 或留下進度留言。</p>
+
+<p>開始前，請先確認兩件事：你已經有能執行的 <code>main.ts</code> AFK 迴圈，也已經準備好上一節建立的私有 repo。另外，你還需要一組 GitHub personal access token；這一節先講怎麼把 token 注入沙箱，權限範圍下一節再說明。</p>
+
+<h2>先看完整流程：四個節拍接成一圈</h2>
+
+<p>把這次的工作想成一個會反覆運轉的 issue 迴圈。agent 每次被喚醒後，依序做四件事：</p>
+
+<ol>
+<li>抓下所有開放中的 issue。</li>
+<li>依優先順序挑出一件要做的任務。</li>
+<li>修改程式、執行檢查與測試，然後建立 commit。</li>
+<li>任務完成就關閉 issue；尚未完成就留下進度留言。</li>
+</ol>
+
+<p>接下來照這四拍把 <code>main.ts</code> 接起來。核心不是再寫一套 GitHub API，而是讓 agent 使用它已經熟悉的 GitHub CLI，也就是 <strong><code>gh</code></strong>。對這個流程來說，<code>gh</code> 就像一支現成的扳手：agent 只要呼叫指令，就能讀取 issue 或更新 issue 狀態。</p>
+
+<figure class="lesson-figure"><img src="./wire-agent-to-github-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一步：把開放 issue 抓進 prompt</h2>
+
+<p>先在 <code>main.ts</code> 的 prompt 中加入 Sandcastle 的 <strong>prompt expansion</strong>。這是一段以驚嘆號 <code>!</code> 開頭、用反引號包住的程式碼；執行時，指令輸出會直接嵌入 prompt。</p>
+
+<pre><code>!`gh issue list --state open --json number,title,body,comments`</code></pre>
+
+<p>這行會抓回目前所有開放 issue 的 JSON。輸出的欄位包括：</p>
+
+<ul>
+<li><code>number</code>：issue 編號。</li>
+<li><code>title</code>：issue 標題。</li>
+<li><code>body</code>：issue 內容，也就是任務描述。</li>
+<li><code>comments</code>：issue 留言。</li>
+</ul>
+
+<p>前三個欄位讓 agent 知道有哪些任務；<code>comments</code> 則是接續工作的關鍵。上一輪留下的進度會跟著 issue 一起帶回來，下一輪的 agent 才能知道之前做過什麼。</p>
+
+<h2>第二步：讓 agent 挑選下一件任務</h2>
+
+<p>取得完整 JSON 後，接著使用第一步建立的任務選擇 prompt。讓 agent 依照這個順序判斷優先權：</p>
+
+<ol>
+<li>重大 bug。</li>
+<li>開發基礎設施。</li>
+<li>tracer bullets。</li>
+<li>打磨。</li>
+<li>重構。</li>
+</ol>
+
+<p>這一步的結果，是從整份 issue 清單中挑出這一輪真正要處理的一件。若佇列裡同時有多張票，agent 會拿這把尺做取捨，不會照清單順序盲目執行。</p>
+
+<h2>第三步：完成任務、取得回饋並 commit</h2>
+
+<p>選定 issue 後，讓 agent 按照原本的工作流程處理它：先探索 repo，再實作修改，接著執行型別檢查與測試，最後建立 commit。</p>
+
+<p>這裡的流程和先前用 <code>main.ts</code> 執行單一任務時相同。差別只在任務來源：以前是 prompt 直接指定計畫，現在則是 agent 從 GitHub 的 issue 佇列自行挑選。</p>
+
+<h2>第四步：依結果關閉 issue 或留下留言</h2>
+
+<p>commit 之後，要求 agent 回到原本那張 issue，根據工作結果執行對應指令：</p>
+
+<pre><code># 任務完成
+gh issue close &lt;issue-number&gt; --comment "說明你做了什麼"
+
+# 任務未完成
+gh issue comment &lt;issue-number&gt; --body "目前進度到哪裡、還有什麼沒做"</code></pre>
+
+<p>若任務已完成，就關閉 issue，並在關閉時附上說明。若任務還沒做完，就只留下目前進度，讓 issue 保持開啟。</p>
+
+<p>這個分支很重要。issue 除了當待辦清單，也會慢慢變成一份工作紀錄：完成時記下做了什麼，未完成時記下卡在哪裡。之後回頭看留言串，就能掌握 agent 每個階段的進展。</p>
+
+<figure class="lesson-figure"><img src="./wire-agent-to-github-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>而且第一步的 <code>gh issue list</code> 會再次抓取 <code>comments</code>，所以這些留言會被帶回下一輪 agent 的 context。你可以把多階段計畫放在同一張 issue 裡，讓 agent 每輪完成一段、留下一次紀錄，下一輪再讀回前面的留言繼續執行。</p>
+
+<h2>第五步：把 token 注入沙箱</h2>
+
+<p>agent 要在沙箱裡呼叫 <code>gh</code>，必須先取得 GitHub 憑證。請把申請到的 <strong>personal access token</strong> 放進專案的 <code>.env</code>，Sandcastle 啟動沙箱時會把它注入成環境變數。</p>
+
+<p>GitHub CLI 已經預先安裝在 Dockerfile 中，因此不需要另外處理 <code>gh</code> 的安裝。</p>
+
+<blockquote>
+<strong>警告：換了 repo 後，要先重建沙箱映像檔。</strong>切換到新的 repo 後，先執行以下指令，讓映像檔對應到新的專案：
+<pre><code>pnpm sandcastle docker build image</code></pre>
+<p>映像檔重建完成後，再啟動迴圈：</p>
+<pre><code>npx tsx sandcastle/main.ts</code></pre>
+</blockquote>
+
+<h2>第六步：實際試跑並驗證結果</h2>
+
+<p>建議先用一張小型 bug issue 試跑。正常情況下，你會依序看到以下結果：</p>
+
+<ol>
+<li><code>gh issue list</code> 的輸出出現在 prompt 開頭。這是一份可能只有幾十個 token 的 JSON。</li>
+<li>agent 探索 repo，找出相關元件與路由。</li>
+<li>agent 修改程式，並通過 pre-commit 檢查。</li>
+<li>agent 建立 commit。</li>
+<li>agent 呼叫 <code>gh issue close</code>，並附上修改說明。</li>
+<li>agent 輸出完成訊號 <code>no more tasks</code>，迴圈結束。</li>
+</ol>
+
+<p>最後到 GitHub 查看那張 issue：它應該已經被關閉，關閉留言中也會寫著 agent 修正了哪些內容。</p>
+
+<h2>完成後，你應該得到什麼</h2>
+
+<p>做到這裡，agent 已經能把 GitHub issue 當成自己的任務佇列：先讀取開放票券，再挑選一件、完成修改並 commit，最後用關閉或留言回報結果。留言會持續累積，也會在下一輪重新進入 context，因此同一張 issue 可以承載多階段計畫。</p>
+
+<blockquote>
+<p>整條接線流程可以記成四拍：用 prompt expansion 的 <code>!`gh issue list …`</code> 把開放 issue 抓成包含 <code>number</code>、<code>title</code>、<code>body</code>、<code>comments</code> 的 JSON；用任務選擇 prompt 挑出一件工作；實作、取得回饋並 commit；最後完成就執行 <code>gh issue close</code> 並留言，未完成就執行 <code>gh issue comment</code>。token 透過 <code>.env</code> 注入沙箱，<code>gh</code> 已內建在 Dockerfile 中。換 repo 後，記得先重建映像檔，再執行 <code>main.ts</code>。</p>
+</blockquote>
+
+<p>現在 agent 已經能讀取佇列、執行任務並留下紀錄。下一個需要確認的問題是 token 的權限大小：把 GitHub 存取權交給會自行行動的 agent 前，應該只給它完成工作所需的最小權限。這會在下一節處理。</p>
+
+<div class="lesson-nav">
+  <div><a href="./private-issue-repo.html">← 上一步：準備一個只有你能動的 issue repo</a></div>
+  <div><a href="./least-privilege-token.html">下一步：只給 agent 剛好夠用的 token →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼這門課用 GitHub CLI 當 agent 與 GitHub 之間的介面？" data-correct="1" data-explain="LLM 對 gh 指令非常熟、幾乎不出錯，是可靠又現成的介面。">
+  <button class="opt">因為 gh 的執行速度比 API 快</button>
+  <button class="opt">因為 LLM 對 gh 指令非常熟練</button>
+  <button class="opt">因為 gh 不需要任何憑證就能用</button>
+  <button class="opt">因為 gh 只能讀取不能修改資料</button>
+</div>
+<div class="quiz" data-question="prompt expansion 裡的 ! 加上反引號區塊，作用是什麼？" data-correct="2" data-explain="它會執行那段指令，並把輸出直接內嵌進 prompt。">
+  <button class="opt">把整段 prompt 註解掉不執行</button>
+  <button class="opt">強制 agent 立刻停止這一輪</button>
+  <button class="opt">執行指令並把輸出嵌進 prompt</button>
+  <button class="opt">把指令存成一個新的 issue</button>
+</div>
+<div class="quiz" data-question="抓取開放 issue 時，為什麼一定要帶上 comments 這個欄位？" data-correct="0" data-explain="留言是累積的工作紀錄，要在下一輪被讀回 agent 的 context。">
+  <button class="opt">因為留言要在下一輪讀回 context</button>
+  <button class="opt">因為沒有它 gh 指令會直接失敗</button>
+  <button class="opt">因為它會自動關閉已完成的票</button>
+  <button class="opt">因為它記錄了誰有權限修改</button>
+</div>
+<div class="quiz" data-question="任務還沒做完時，agent 應該怎麼處理那張 issue？" data-correct="3" data-explain="未完成就留言報告進度，票保持開啟，讓下一輪接續。">
+  <button class="opt">直接把它關閉以免干擾下一輪</button>
+  <button class="opt">刪除它並重新開一張新的票</button>
+  <button class="opt">改成 assignee 指派給自己</button>
+  <button class="opt">留言報告進度並保持開啟</button>
+</div>
+<div class="quiz" data-question="為什麼多階段的計畫可以整份放進同一張 issue？" data-correct="1" data-explain="每輪留言會被下一輪讀回，agent 能接續前面的進度。">
+  <button class="opt">因為 issue 會自動拆分所有階段</button>
+  <button class="opt">因為每輪留言會被下一輪讀回</button>
+  <button class="opt">因為 issue 的 body 不能超過一行</button>
+  <button class="opt">因為這樣可以省下沙箱的憑證</button>
+</div>
+<div class="quiz" data-question="切換到新 repo 之後，跑 main.ts 前要先做什麼？" data-correct="0" data-explain="換 repo 要重建沙箱映像檔，讓它對應到新專案。">
+  <button class="opt">重建 sandcastle 的 Docker 映像檔</button>
+  <button class="opt">刪掉本機所有的 git 歷史</button>
+  <button class="opt">把 token 改成完整權限</button>
+  <button class="opt">重新申請一個 GitHub 帳號</button>
+</div>
+
+<div class="footer">
+  <p>ai-coding-for-real-engineer · issue 佇列驅動 · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

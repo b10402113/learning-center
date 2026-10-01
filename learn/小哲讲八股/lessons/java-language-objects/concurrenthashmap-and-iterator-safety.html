@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>併發容器選型：ConcurrentHashMap 與 fail-fast/fail-safe</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>併發容器怎麼選：ConcurrentHashMap 與 fail-fast、fail-safe</h1>
+<p class="meta">Step 6/6 · Java 語言與物件：一行 Java 到底做了什麼</p>
+
+<h2>前言：那個偶爾才炸一次的 bug</h2>
+
+<p>多個執行緒共用同一個 Map 時，選錯容器，問題往往不會每次都出現。它可能只是偶爾覆蓋資料，或在某次遍歷集合時突然拋出 <code>ConcurrentModificationException</code>，讓你很難重現，也很難追查。</p>
+
+<p>上一節提過，HashMap 在併發下可能覆蓋資料；JDK 1.7 甚至可能把鏈表接成環。這時直接換成 <code>Collections.synchronizedMap</code>，或把每個方法都包上一層 <code>synchronized</code>，雖然比較安全，卻也可能讓所有執行緒排隊，吞吐量低到無法接受。</p>
+
+<p>所以選容器的重點，是在目前的讀寫情境下，<strong>哪個容器能用合理的成本提供足夠的安全性</strong>，而不是「哪個最安全」。接著比較不同容器的取捨，看 ConcurrentHashMap 怎麼縮小鎖粒度、怎麼協助擴容，又為什麼禁止 <code>null</code>；最後釐清 fail-fast 與 fail-safe，避免把「不拋例外」誤認成「資料一定最新」。</p>
+
+<h2>要做的決定：安全性與吞吐量怎麼取捨</h2>
+
+<p>併發容器的選擇，像是在決定一條道路要設幾個收費站。整張表只放一把鎖，管理簡單、資料也容易保護，但所有執行緒都得排隊；完全不上鎖，速度可能很快，卻可能讀到錯誤資料或互相覆蓋。</p>
+
+<p>ConcurrentHashMap 的做法，是把鎖的範圍縮小，讓不同位置的操作盡量並行，同時維持基本的執行緒安全。真正要選哪個容器，還是要看資料結構、讀寫比例，以及你能不能接受弱一致性。</p>
+
+<figure class="lesson-figure"><img src="./concurrenthashmap-and-iterator-safety-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>選項比較</h2>
+
+<table>
+<thead>
+<tr><th>選項</th><th>執行緒安全</th><th>鎖粒度</th><th>讀取一致性</th><th>適用場景</th></tr>
+</thead>
+<tbody>
+<tr><td>HashMap</td><td>不安全</td><td>無</td><td>—</td><td>單執行緒，或確定不會共用</td></tr>
+<tr><td>Collections.synchronizedMap / Hashtable</td><td>安全</td><td>整張表一把鎖</td><td>強，但吞吐量差</td><td>併發很低的場合</td></tr>
+<tr><td>ConcurrentHashMap</td><td>安全</td><td>鎖單個桶的頭節點（1.8）</td><td>弱一致，讀不阻塞</td><td>高併發讀寫 Map</td></tr>
+<tr><td>CopyOnWriteArrayList</td><td>安全</td><td>寫時整表複製並加鎖</td><td>弱一致，迭代器讀快照</td><td>讀多寫少的 List</td></tr>
+<tr><td>ArrayBlockingQueue</td><td>安全</td><td>單鎖，讀寫互斥</td><td>—</td><td>有界佇列、GC 友善</td></tr>
+<tr><td>LinkedBlockingQueue</td><td>安全</td><td>putLock／takeLock 鎖分離</td><td>—</td><td>高吞吐佇列，但要記得設容量</td></tr>
+</tbody>
+</table>
+
+<h3>ConcurrentHashMap 的鎖粒度：從分段鎖到單一桶</h3>
+
+<p>JDK 1.7 的 ConcurrentHashMap 使用<strong>分段鎖</strong>。整個 Map 被切成 16 個 <code>Segment</code>，每個 Segment 是一把 <code>ReentrantLock</code>，裡面再放一個小型的 <code>HashEntry</code> 陣列。</p>
+
+<p>這比整張表只用一把鎖好，但粒度仍然偏粗。只要某個 Segment 被鎖住，裡面幾千個 <code>HashEntry</code> 都會一起被擋住。而且 Segment 數量固定，併發度上限就是 16；初始化完成後，也無法再擴充 Segment。</p>
+
+<p>JDK 1.8 拿掉 Segment，改用和 HashMap 1.8 類似的「陣列＋鏈表＋紅黑樹」結構。查詢時少了一層 hash，也少了一次指標跳轉。鎖的粒度則縮小到<strong>單個桶（bucket）</strong>。</p>
+
+<p>如果目標槽位是空的，ConcurrentHashMap 會直接用 <strong>CAS</strong> 嘗試放入資料，連鎖都不需要。如果槽位已經有資料，才對那條鏈表的<strong>頭節點</strong>使用 <code>synchronized</code>。</p>
+
+<p>這裡沒有使用 <code>ReentrantLock</code>，是因為 JDK 1.6 之後，<code>synchronized</code> 已經經過偏向鎖、輕量級鎖等優化。在低競爭情況下，它的速度足夠，而且不需要額外維護 AQS 佇列，記憶體成本也較低。</p>
+
+<p>因此，JDK 1.8 的併發度不再固定卡在 16，會隨著陣列長度增加。理論上，不同桶可以同時被不同執行緒寫入。</p>
+
+<figure class="lesson-figure"><img src="./concurrenthashmap-and-iterator-safety-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>協助擴容：一方有難，八方支援</h3>
+
+<p>ConcurrentHashMap 1.8 擴容時，不會只讓一個執行緒搬完整張表，而是讓多個執行緒合作完成。</p>
+
+<p>它使用 <code>transferIndex</code> 把整個陣列切成一段一段的工作區，預設步長（stride）是 16。執行緒透過 CAS 領取還沒被處理的區段，接著各自搬運，避免多個執行緒重複處理同一段資料。</p>
+
+<p>那執行緒怎麼知道某個槽位正在擴容？答案是特殊節點 <code>ForwardingNode</code>，簡稱 fwd。某個槽位搬完後，會放入 fwd 節點；它的 hash 值是 <code>MOVED</code>（-1）。</p>
+
+<p>假設執行緒 B 要執行 <code>put</code>，結果發現目標槽位是 fwd，就知道這裡正在擴容，而且資料已經被搬走。它不會阻塞等待，而是呼叫 <code>helpTransfer()</code>，主動領取一段工作來協助搬運。</p>
+
+<p>搬遷演算法和 HashMap 1.8 相同：檢查 <code>hash &amp; oldCap</code>，結果是 0 就留在原本的下標，結果是 1 就移到「原下標 + oldCap」。搬完一段後插入 fwd，其他執行緒便能知道這段已經處理完成。</p>
+
+<p>讀操作如果遇到 fwd，會直接轉往新陣列查找。因此，擴容期間讀寫不必全部停下來。</p>
+
+<h3>為什麼不准 Key 或 Value 是 null？</h3>
+
+<p>HashMap 允許 <code>null</code>，ConcurrentHashMap 卻禁止 Key 和 Value 使用 <code>null</code>。關鍵原因是：在多執行緒環境裡，<code>map.get(key)</code> 回傳 <code>null</code> 時，你無法判斷這代表「Key 不存在」，還是「Key 存在，但 Value 就是 null」。</p>
+
+<p>單執行緒時，可以先呼叫 <code>containsKey</code> 確認。不過在多執行緒環境中，<code>get</code> 和 <code>containsKey</code> 之間可能剛好有另一個執行緒刪除或修改資料。這個「先檢查、再動作」的複合操作不是原子的，第二次確認的結果，可能已經不代表第一次讀取的狀態。</p>
+
+<p>與其讓呼叫端面對這種難以解釋的結果，ConcurrentHashMap 乾脆在 API 層面禁止 <code>null</code>，消除這個二義性。</p>
+
+<h3>size() 在高併發下怎麼算？</h3>
+
+<p>如果只用一個 <code>AtomicLong</code> 計數，幾百個執行緒同時執行 <code>put</code> 時，大家都會搶同一個變數。CAS 可能頻繁失敗，執行緒不斷自旋，CPU 也跟著被浪費。</p>
+
+<p>ConcurrentHashMap 採用類似 <code>LongAdder</code> 的<strong>熱點分散</strong>策略。內部有一個 <code>baseCount</code>，以及一組 <code>CounterCell</code> 陣列。</p>
+
+<p>併發不高時，執行緒直接用 CAS 更新 <code>baseCount</code>。如果 CAS 失敗，就不再一直搶同一個位置，而是依照探針雜湊值映射到某個 Cell，改更新那個 Cell。</p>
+
+<p>這就像超市原本只有一個結帳櫃檯，人一多便開出多個臨時櫃檯分流。執行 <code>size()</code> 時，再把 <code>baseCount</code> 和所有非空 Cell 的值加總，不需要加鎖。</p>
+
+<p>代價是，這只能提供<strong>弱一致的近似值</strong>。例如剛算出 100，下一毫秒可能就已經變成 101。不過在高併發環境下，如果需求只是取得目前的大概數量，這種短暫誤差通常可以接受。</p>
+
+<figure class="lesson-figure"><img src="./concurrenthashmap-and-iterator-safety-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>判別問句：先問自己這五件事</h2>
+
+<ol>
+<li><strong>這個 Map 會被多個執行緒同時讀寫嗎？</strong>如果不會，使用 HashMap 即可；如果會，再繼續判斷。</li>
+<li><strong>寫入頻率高嗎？</strong>寫入頻繁時，優先考慮 ConcurrentHashMap。如果它只是唯讀快取，幾乎不會寫入，一般 Map 加上適當的發布時機控制也可以。</li>
+<li><strong>我需要的是 Map 還是 List？</strong>如果是併發 List，而且讀遠多於寫，才適合考慮 CopyOnWriteArrayList；如果寫入也不少，就不該使用它。</li>
+<li><strong>遍歷時可能修改集合嗎？</strong>如果會，先決定你要的是「立刻報錯」，還是「安全地繼續執行」。這會影響你選 fail-fast 還是 fail-safe 的容器。</li>
+<li><strong>這是佇列場景嗎？</strong>如果是，ArrayBlockingQueue 有界且 GC 友善；LinkedBlockingQueue 吞吐量較高，但預設容量是 <code>Integer.MAX_VALUE</code>，忘記設定容量，可能造成 OOM。</li>
+</ol>
+
+<h2>反例：三個容易選錯的地方</h2>
+
+<h3>反例一：fail-fast 不是加了鎖就沒事</h3>
+
+<p>fail-fast 是 <code>java.util</code> 普通集合，例如 ArrayList、HashMap、HashSet 的預設行為。</p>
+
+<p>它靠 <code>modCount</code> 運作。迭代器建立時，會把當下的 <code>modCount</code> 記錄為 <code>expectedModCount</code>。每次呼叫 <code>next()</code>，迭代器都會檢查兩者是否相等。只要發現集合曾經被結構性修改，就立即丟出 <code>ConcurrentModificationException</code>。</p>
+
+<p>不過，fail-fast 是防禦式設計，<strong>不保證 100% 抓到</strong>所有併發修改，它只是盡量提早提醒你集合狀態可能有問題。</p>
+
+<p>因此，在外層包上 <code>synchronized</code>，並不代表 fail-fast 一定不會發生。只要修改發生在迭代器預期之外，仍然可能拋出例外。</p>
+
+<h3>反例二：fail-safe 的代價是容忍不一致</h3>
+
+<p>fail-safe 常用來描述 JUC 併發容器，例如 CopyOnWriteArrayList 和 ConcurrentHashMap 的迭代機制。它們的迭代器不會因為集合被修改就拋出例外，但代價是迭代器可能讀到舊資料。</p>
+
+<p>CopyOnWriteArrayList 採用寫時複製。迭代器建立的那一刻，就握住當時的舊陣列快照，因此遍歷期間不會受到後續修改干擾。</p>
+
+<p>ConcurrentHashMap 的迭代器則是弱一致的。遍歷期間可以修改集合，但不保證一定看得到最新變更。</p>
+
+<p>所以 fail-safe 換來的是「不因修改而報錯」，不是「讀到的資料一定最新」。如果業務需要強一致的遍歷結果，就不能只因為它不拋例外便直接選用。</p>
+
+<figure class="lesson-figure"><img src="./concurrenthashmap-and-iterator-safety-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>反例三：ConcurrentHashMap 也不是萬能的強一致</h3>
+
+<p>ConcurrentHashMap 能保證單一操作的原子性，例如 <code>putIfAbsent</code> 和 <code>computeIfAbsent</code>。但如果把「先 get、再 put」拆成兩步，這個複合操作仍然不是原子的，中間可能被其他執行緒插入。</p>
+
+<p>需要原子地完成檢查與寫入時，應該使用 <code>compute</code> 系列方法，或使用 <code>putIfAbsent</code> 這類容器已經提供的原子操作，不要自行拆成兩個步驟。</p>
+
+<h2>決策檢核表</h2>
+
+<table>
+<thead>
+<tr><th>你的情況</th><th>選誰／怎麼做</th></tr>
+</thead>
+<tbody>
+<tr><td>單執行緒使用 Map</td><td>HashMap</td></tr>
+<tr><td>多執行緒讀寫 Map</td><td>ConcurrentHashMap</td></tr>
+<tr><td>需要「檢查後再寫入」的原子複合操作</td><td>使用 compute／putIfAbsent，不要拆成兩步</td></tr>
+<tr><td>併發 List，而且讀遠多於寫</td><td>CopyOnWriteArrayList</td></tr>
+<tr><td>遍歷時可能被修改，且不能接受例外</td><td>使用 fail-safe 容器，並接受可能讀到舊值</td></tr>
+<tr><td>阻塞佇列，而且記憶體敏感</td><td>ArrayBlockingQueue（有界、GC 友善）</td></tr>
+<tr><td>阻塞佇列，而且追求吞吐量</td><td>LinkedBlockingQueue，但務必指定容量</td></tr>
+</tbody>
+</table>
+
+<h2>最後的決策規則</h2>
+
+<p>可以把選型順序記成三個問題：</p>
+
+<ol>
+<li>會不會有多執行緒同時讀寫？</li>
+<li>讀寫比例與資料一致性要求是什麼？</li>
+<li>需要的複合操作，容器能不能用單一原子方法完成？</li>
+</ol>
+
+<blockquote>
+併發容器是在一致性與吞吐量之間取捨。ConcurrentHashMap 從 JDK 1.7 的 Segment 分段鎖演進到 JDK 1.8 的 CAS 加上 synchronized 鎖頭節點，把鎖粒度從 Segment 縮小到單一桶；它也透過 transferIndex 分配擴容工作，並利用 ForwardingNode 讓多個執行緒協助搬遷，讓擴容期間的讀寫不必全部停下來。它禁止 null，是為了消除 get 回傳 null 時的二義性；size() 則透過 baseCount 與 CounterCell 分散更新熱點，因此只能提供弱一致的近似值。fail-fast 用 modCount 盡早拋出 ConcurrentModificationException，但不保證抓到所有問題；fail-safe 則透過快照或弱一致迭代避免例外，代價是可能讀到舊資料。實際選擇時，先看併發程度，再看讀寫比例，最後確認複合操作是否能由容器原子地支援。
+</blockquote>
+
+<p>到這裡，「Java 語言與物件」這個節點就完整了：從一行程式傳遞了什麼、物件如何比較與建立，到執行時如何觀察，再一路走到集合選型與併發容器。之後閱讀 Spring、MyBatis 或 JUC 時，許多看似神奇的框架行為，拆開來都能回到這些底層機制。</p>
+
+<div class="lesson-nav">
+  <div><a href="./hashmap-internals.html">← 上一步：HashMap 內核：從 1.7 到 1.8 的結構與擴容</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="ConcurrentHashMap 1.7 的並發度受什麼限制？" data-correct="1" data-explain="1.7 用 Segment 分段鎖，並發度等於 Segment 個數，預設 16 且初始化後無法擴容。">
+  <button class="opt">受 CPU 核心數與執行緒池大小限制</button>
+  <button class="opt">受 Segment 個數限制，預設為 16</button>
+  <button class="opt">受陣列長度限制，隨擴容而成長</button>
+  <button class="opt">受 Key 的雜湊值分佈完全決定</button>
+</div>
+<div class="quiz" data-question="ConcurrentHashMap 1.8 在槽位為空時如何插入？" data-correct="2" data-explain="空槽位不需加鎖，直接用 CAS 嘗試放入，失敗就重試。">
+  <button class="opt">先對整張表上鎖再插入新節點</button>
+  <button class="opt">對整個鏈表頭節點加 synchronized</button>
+  <button class="opt">用 CAS 無鎖嘗試放入，失敗就重試</button>
+  <button class="opt">交給協助擴容的執行緒代為插入</button>
+</div>
+<div class="quiz" data-question="擴容時發現某槽位是 ForwardingNode，執行緒會怎麼做？" data-correct="0" data-explain="fwd 節點代表該槽位已遷移、Map 正在擴容，執行緒會 helpTransfer 領任務一起搬。">
+  <button class="opt">呼叫 helpTransfer 領任務協助搬遷</button>
+  <button class="opt">原地自旋等待擴容完成再繼續</button>
+  <button class="opt">直接丟出 ConcurrentModificationException</button>
+  <button class="opt">把該槽位的資料複製一份到自己執行緒</button>
+</div>
+<div class="quiz" data-question="ConcurrentHashMap 禁止 Key 或 Value 為 null，主要原因是？" data-correct="3" data-explain="多執行緒下 get 回傳 null 無法區分鍵不存在或值為 null，check-then-act 又不原子。">
+  <button class="opt">null 會讓紅黑樹的旋轉邏輯失效</button>
+  <button class="opt">null 會讓 hash 計算丟出例外中斷</button>
+  <button class="opt">null 會佔用額外的桶空間浪費記憶體</button>
+  <button class="opt">null 會造成 get 結果的二義性問題</button>
+</div>
+<div class="quiz" data-question="ConcurrentHashMap 的 size() 採用什麼策略？" data-correct="1" data-explain="用 baseCount 加 CounterCell 陣列分散熱點，求和得到弱一致的近似值。">
+  <button class="opt">對整張表上鎖後逐一清點所有元素</button>
+  <button class="opt">用 baseCount 加 CounterCell 分散計數</button>
+  <button class="opt">用單一 AtomicLong 讓所有執行緒競爭</button>
+  <button class="opt">維護一棵平衡樹來精確統計節點數</button>
+</div>
+<div class="quiz" data-question="fail-fast 集合偵測到結構被修改時會怎麼做？" data-correct="0" data-explain="迭代器比對 modCount 與 expectedModCount，不同就拋 ConcurrentModificationException。">
+  <button class="opt">比對 modCount 後拋出例外終止</button>
+  <button class="opt">自動複製一份集合繼續安全遍歷</button>
+  <button class="opt">默默忽略修改並回傳舊的資料</button>
+  <button class="opt">重新啟動迭代器從頭再遍歷一次</button>
+</div>
+<div class="quiz" data-question="關於 fail-safe 迭代器，下列敘述何者正確？" data-correct="2" data-explain="它不會因修改而報錯，但可能讀到舊資料，因為基於快照或弱一致性。">
+  <button class="opt">它保證一定能讀到集合的最新資料</button>
+  <button class="opt">它遇到併發修改會立即拋出例外</button>
+  <button class="opt">它不報錯，但可能讀到較舊的資料</button>
+  <button class="opt">它會自動替所有修改加上全域鎖</button>
+</div>
+<div class="quiz" data-question="使用 LinkedBlockingQueue 時最需要留意什麼？" data-correct="3" data-explain="不指定容量時預設為 Integer.MAX_VALUE，生產快於消費就容易 OOM。">
+  <button class="opt">它的讀寫共用一把鎖所以吞吐較低</button>
+  <button class="opt">它底層是陣列所以無法動態成長</button>
+  <button class="opt">它不支援多個生產者同時寫入</button>
+  <button class="opt">不指定容量時預設極大容易 OOM</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · Java 語言與物件 · Step 6/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

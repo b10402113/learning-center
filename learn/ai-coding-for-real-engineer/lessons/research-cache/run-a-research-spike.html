@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跑一次研究：把未知問成一份文件</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>跑一次研究：把未知問成一份文件</h1>
+<p class="meta">Step 2/4 · 快取昂貴的探索</p>
+
+<h2>這一節要完成什麼</h2>
+<p>這一節會帶你照著一個可重複使用的研究 prompt，完成一次 HITL（Human-in-the-Loop，人類參與決策）研究。你會要求 Claude Code 提出多個方案、透過提問反覆收斂需求、上網驗證假設，最後把結果寫成 <code>plans/</code> 目錄底下的一份研究文件。</p>
+
+<p><strong>動手前需要準備：</strong>一個可以開 Claude Code 的 repo、一個用來存放研究文件的 <code>plans/</code> 目錄，以及一段你能留在旁邊回答問題、拍板取捨的時間。這裡<strong>不需要任何 skill</strong>，直接使用 Claude Code 就可以。</p>
+
+<h2>先看整體流程</h2>
+<p>我們會用一個實際需求貫穿整節：在課程頁面加上一個「誰正在看這堂課」的即時 presence 指示器。整個流程可以想成五個動作：</p>
+
+<ol>
+<li>交代專案情境，以及目前真正未知的地方。</li>
+<li>要求多個可行方案，不讓 agent 只交出第一個想到的答案。</li>
+<li>請 agent 主動反問，把還沒決定的規格攤開來。</li>
+<li>要求它上網查證 API、額度與限制。</li>
+<li>指定把結論寫進 <code>plans/</code>，留下可重複查看的研究文件。</li>
+</ol>
+
+<figure class="lesson-figure"><img src="./run-a-research-spike-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>接下來就照這個順序跑一次。</p>
+
+<h2>步驟一：把情境與未知說清楚</h2>
+
+<p>上一節說明了為什麼要把探索快取下來。但真的坐到電腦前，你可能會先卡在一個很具體的問題：<strong>我到底該怎麼問，才能問出一份有用的研究？</strong></p>
+
+<p>如果只把「幫我研究一下即時通訊服務」丟給 agent，通常只會拿回一段泛泛的介紹。那段文字既不能直接拿來做決定，也不能直接拿來實作。</p>
+
+<p>所以第一步先別急著問「哪個服務最好」，先把 agent 放進正確的情境裡。告訴它目前的技術棧、已經有什麼、還缺什麼，以及你想研究的具體功能。</p>
+
+<h2>步驟二：寫出研究 prompt</h2>
+
+<p>好的研究 prompt 通常是一組要求，不是一句話。這些要求合起來，會讓 agent 從給答案的機器，變成跟你一起收斂方向的研究夥伴。一份可重複使用的 prompt，至少要包含以下五個要件：</p>
+
+<ol>
+<li><strong>先講清楚情境與未知。</strong>交代目前的技術棧、已經具備的東西，以及還缺少的基礎設施。沒有這些背景，agent 只能在真空裡猜。</li>
+<li><strong>要求多個可行方案，而不是一個答案。</strong>你要比較不同做法，而不是直接接受 agent 第一個想到的方案。選項攤開來，才有東西可以取捨。</li>
+<li><strong>請它反問你，用問題收斂需求。</strong>明確告訴它：「有需要我拍板的取捨就直接問。」這些問題常常會逼出原本還沒想清楚的規格。</li>
+<li><strong>要求上網驗證假設。</strong>模型對 API、額度與限制的記憶可能已經過時，因此要它查證，不要只憑印象作答。</li>
+<li><strong>指定輸出一份研究文件。</strong>要求它把結果放進 <code>plans/</code>，並聚焦在「怎麼實作」與「我們打算怎麼用它」。</li>
+</ol>
+
+<figure class="lesson-figure"><img src="./run-a-research-spike-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>把這五點寫進 prompt，大概會長這樣：</p>
+
+<pre><code>我要在 lesson 頁面加上「誰正在看這堂課」的即時 presence 指示器。
+我們的 stack 是 React Router v7 全端 SSR，目前沒有任何即時通訊基礎設施。
+
+請你不要只給一個答案，先列出幾種可行的做法讓我比較。
+過程中有需要我拍板的取捨（例如規模多大、要多即時），直接問我。
+請上網查證你的假設，不要只憑印象。
+最後把結論寫成一份 research 文件，放在 plans/live-presence-indicator，
+內容聚焦在「怎麼實作」與「我們打算怎麼用它」。</code></pre>
+
+<p>這段 prompt 的每一部分都有明確任務。</p>
+
+<p>第一段先把場景釘牢：這是 React Router v7 全端 SSR 的專案，而且目前沒有即時通訊基礎設施。agent 必須在這個前提下思考，而不是端出一個跟你的 stack 無關的方案。</p>
+
+<p>第二段加上「不要只給一個答案」，是為了逼出選項與比較。第三段把發球權交回給你，要求 agent 主動詢問規格。第四段的「上網查證」則像一道品質保險，避免把過時資訊當成事實。</p>
+
+<p>最後一段則把產出要求成一份留在 repo 裡的文件，免得只是一段做完就消失的聊天回覆。</p>
+
+<h2>步驟三：讓 agent 先檢查專案</h2>
+
+<p>把 prompt 送出去後，agent 會<strong>先探你的 stack</strong>，不會馬上丟出方案。它會查看專案用了哪些框架，以及目前是否已經有即時通訊基礎設施。</p>
+
+<p>在這個例子裡，它會發現專案是 React Router v7 的全端 SSR，而且完全沒有即時通訊的地基。不論最後選哪一條路，都得從零接入一套即時通訊方案。</p>
+
+<h2>步驟四：回答 agent 的規格問題</h2>
+
+<p>接著，agent 會把規格問題丟回來。這些問題其實已經很接近 PRD 的內容，請依序回答尚未決定的取捨：</p>
+
+<ul>
+<li>同時大約有多少人上線？</li>
+<li>需要多即時？是知道「大概有誰在」就好，還是真的要秒級同步？</li>
+<li>presence 資料需要留下來，還是使用者離開後就消失？</li>
+<li>偏好自己架設，還是使用外部服務？</li>
+</ul>
+
+<p>在這個例子裡，需求收斂成以下答案：大約二十個學生同時上線、需要真正的即時更新、資料是短暫的，而且傾向使用外部服務。</p>
+
+<p>這一步不要假裝自己已經知道答案。若某個取捨還沒決定，就讓 agent 把問題問出來；人要在旁邊拍板，研究才會對實際專案有用。</p>
+
+<h2>步驟五：讓 agent 並行比較服務</h2>
+
+<p>規格清楚後，agent 就可以開始並行研究。它會一次派出好幾個背景 agent，各自比較一個服務：PartyKit、Pusher、Ably、LiveBlocks，各有人負責。</p>
+
+<p>這裡有一個很實用的做法：當你的未知是「該選哪個服務」時，讓不同的背景 agent 分頭查，比由一個 agent 排隊慢慢查更快。每個 agent 各自研究一個選項，最後再把結果放在一起比較。</p>
+
+<figure class="lesson-figure"><img src="./run-a-research-spike-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>把比較結果和「免費額度要夠用」這個現實條件放在一起後，最後選了 Ably。主要原因是，以這個規模來說，它提供的免費方案相當寬裕。</p>
+
+<h2>步驟六：確認研究文件是否產出</h2>
+
+<p>研究跑完後，你手上會多一份大約三百行的研究文件。裡頭除了結論，也把整段過程記了下來，包括：</p>
+
+<ul>
+<li>需求。</li>
+<li>推薦做法。</li>
+<li>實作設計。</li>
+<li>需要接進現有程式碼的地方。</li>
+<li>被比較、但最後沒有採用的其他選項。</li>
+</ul>
+
+<p>下一節會把這份文件拆開來看，進一步說明一份好的研究文件應該有哪些區塊。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+研究 prompt 的五個要件：講清楚情境與未知、要求多個方案、請它反問你來收斂、要求上網驗證、指定輸出到 plans/ 的一份文件。實際跑起來，agent 會先探 stack，再把規格問題丟回來；規格定了，它會派出多個背景 agent 並行比較服務，最後產出一份完整的紀錄。整段流程不需要 skill，用 Claude Code 就能做，但人要在旁邊拍板。
+</blockquote>
+
+<p>完成這些步驟後，你已經有了一份研究文件。不過，「有寫」和「寫得好」是兩件事：一份堆滿連結、卻沒有告訴你該選什麼的文件，跟沒有文件差不多。</p>
+
+<p>下一節會拆解一份好文件的骨架，以及它為什麼應該是 repo 裡的檔案，而不是開成一張 GitHub issue。</p>
+
+<div class="lesson-nav">
+  <div><a href="./why-cache-research.html">← 上一步：為什麼要把探索快取下來</a></div>
+  <div><a href="./anatomy-of-a-research-doc.html">下一步：好的 research 文件長什麼樣 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="研究 prompt 的第一個要件是什麼？" data-correct="1" data-explain="先把技術棧與未知交代清楚，agent 才不會在真空裡猜。">
+  <button class="opt">先要求它直接給出唯一的答案</button>
+  <button class="opt">先講清楚情境與目前的未知</button>
+  <button class="opt">先叫它把所有服務都安裝好</button>
+  <button class="opt">先指定最後要 commit 的訊息</button>
+</div>
+<div class="quiz" data-question="為什麼要在 prompt 裡要求「列出幾種可行做法」？" data-correct="2" data-explain="有選項攤開來比較，你才有東西可以挑、可以取捨。">
+  <button class="opt">因為這樣可以讓 agent 跑得比較快</button>
+  <button class="opt">因為只能列三個，不能列第四個</button>
+  <button class="opt">因為有比較才看得出取捨在哪裡</button>
+  <button class="opt">因為選項愈多實作起來愈簡單</button>
+</div>
+<div class="quiz" data-question="為什麼 prompt 要明講「請上網查證，不要只憑印象」？" data-correct="0" data-explain="模型對 API、額度與限制的記憶可能過時，查證是品質保險。">
+  <button class="opt">因為模型的記憶可能已經過時了</button>
+  <button class="opt">因為上網查資料一定比較便宜</button>
+  <button class="opt">因為不查證就會被平台收費</button>
+  <button class="opt">因為查證能讓程式自動上線</button>
+</div>
+<div class="quiz" data-question="agent 收到研究 prompt 後，第一個動作通常是什麼？" data-correct="3" data-explain="它會先探你的 stack，搞懂現有框架與基礎設施，再往下想方案。">
+  <button class="opt">直接把第一名的服務安裝進去</button>
+  <button class="opt">馬上寫一份三百行的文件</button>
+  <button class="opt">先開一張 GitHub issue 追蹤</button>
+  <button class="opt">先探你的技術棧與現況</button>
+</div>
+<div class="quiz" data-question="當未知是「在幾個服務之間選一個」時，為什麼要派多個背景 agent？" data-correct="1" data-explain="不同 agent 分頭查各自的服務，可以並行比較，比排隊快得多。">
+  <button class="opt">因為只有一個 agent 不能上網查資料</button>
+  <button class="opt">因為分頭並行查比排隊慢慢查快</button>
+  <button class="opt">因為多開 agent 才不會被平台收費</button>
+  <button class="opt">因為背景 agent 可以自動幫你付款</button>
+</div>
+<div class="quiz" data-question="這次研究流程需不需要先寫一個 skill？" data-correct="2" data-explain="不需要，直接用 Claude Code 就能做，重點在 prompt 的問法。">
+  <button class="opt">需要，而且要寫三個不同的 skill</button>
+  <button class="opt">需要，否則 agent 不會讀檔案</button>
+  <button class="opt">不需要，用 Claude Code 就能做</button>
+  <button class="opt">不需要，但要先買一個付費方案</button>
+</div>
+
+<div class="footer">
+  <p>ai-coding-for-real-engineer · 快取昂貴的探索 · Step 2/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

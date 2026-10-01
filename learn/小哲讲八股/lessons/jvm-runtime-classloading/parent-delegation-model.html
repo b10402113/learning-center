@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>雙親委派：向上委託、向下載入</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>雙親委派：為什麼你的類別不能隨便取代 JDK 類別？</h1>
+<p class="meta">Step 5/6 · JVM 執行時與類別載入：類別怎麼被載入、物件存在哪</p>
+
+<h2>學習目標</h2>
+<p>讀完這一節，你應該能說明三個核心類別載入器各自負責什麼、雙親委派的完整流程，以及這套機制如何換來兩個重要結果：沙箱安全與避免類別重複載入。</p>
+
+<h2>前言：自己寫一個 java.lang.String，會生效嗎？</h2>
+
+<p>上一節我們走過了類別載入的流程，但還有一個關鍵問題：到底是誰負責把 <code>.class</code> 檔案讀進 JVM？</p>
+
+<p>假設你在自己專案的 Classpath 下，放了一個自製的 <code>java.lang.String</code>。JVM 會採用你的版本，還是 JDK 內建的版本？</p>
+
+<p>答案是：JDK 內建的 <code>String</code> 會優先被載入，你寫的版本不會生效。這不是碰巧發生，而是雙親委派模型刻意設計出來的結果。它像是核心 API 門口的保全：不管外面有人帶著什麼版本的 <code>String</code> 來，先確認 JDK 自己有沒有，只有上層找不到時，才讓下層處理。</p>
+
+<p>有了這道防線，Java 的核心類別才不會被專案裡的其他類別隨意覆蓋，整個生態系也才能在相對穩定、安全的基礎上運作。</p>
+
+<h2>三個核心類別載入器</h2>
+
+<p>要理解「委派」是怎麼發生的，得先認識負責載入類別的三個主要角色。它們形成一個由下往上的層級：</p>
+
+<p><strong>Bootstrap ClassLoader（啟動類別載入器）</strong>位在最頂層，由 C++ 實作，對 Java 程式碼來說通常看不到它。它負責載入 JDK 的核心類別庫，例如早期的 <code>rt.jar</code>，以及新版的 <code>java.base</code> 模組。你每天使用的 <code>String</code>、<code>Object</code>，都是由它載入。</p>
+
+<p><strong>Extension ClassLoader（擴充類別載入器）</strong>位在中間，負責載入 JDK 擴充目錄中的類別，例如 <code>jre/lib/ext</code> 裡的類別。</p>
+
+<p><strong>Application ClassLoader（應用類別載入器）</strong>位在最下層，負責載入 Classpath 下的自有類別與第三方函式庫。你專案裡那些 <code>com.example.*</code> 的類別，預設就是由它載入。</p>
+
+<figure class="lesson-figure"><img src="./parent-delegation-model-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>委派流程：先向上詢問，再由下層處理</h2>
+
+<p>雙親委派的核心可以濃縮成八個字：<strong>向上委託、向下載入</strong>。</p>
+
+<p>當某個類別載入器收到載入請求時，它不會馬上自己找檔案，而是先把請求交給父載入器。父載入器也採取同樣做法，繼續往上交，直到最頂層的 Bootstrap ClassLoader。</p>
+
+<p>只有當父載入器在自己的負責範圍內找不到這個類別時，請求才會往回傳，最後由原本收到請求的子載入器嘗試載入。這就像在公司裡找資料：先問主管，再問主管的主管；一路問到最高層都沒有，才回頭由最初接到問題的人自己處理。</p>
+
+<p>假設應用程式要載入 <code>User.class</code>，流程會是這樣：</p>
+
+<ol>
+<li>Application ClassLoader 收到請求，先查自己的快取。找不到後，它不會立刻動手，而是把請求往上交給 Extension ClassLoader。</li>
+<li>Extension ClassLoader 也先查自己的快取。找不到後，再把請求往上交給 Bootstrap ClassLoader。</li>
+<li>Bootstrap ClassLoader 到自己的負責範圍，也就是 JDK 核心類別庫中尋找。找到就直接回傳；找不到，就告訴下層「我這裡沒有」。</li>
+<li>請求往回傳，Extension ClassLoader 接著到自己的擴充目錄尋找。仍然找不到時，才輪到 Application ClassLoader 到 Classpath 下實際載入 <code>User.class</code>。</li>
+</ol>
+
+<figure class="lesson-figure"><img src="./parent-delegation-model-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>所以，完整流程不是「誰先收到就誰先載入」，而是「一路向上詢問，直到沒有人認領，才由最初的請求者處理」。</p>
+
+<p>這也解釋了為什麼你自訂的 <code>java.lang.String</code> 不會生效。請求一路傳到 Bootstrap ClassLoader 後，它發現核心類別庫裡早就有 <code>java.lang.String</code>，便直接回傳 JDK 的版本。你放在 Classpath 裡的那個版本，從頭到尾都沒有真正取得載入機會。</p>
+
+<h2>雙親委派換來什麼：安全與唯一性</h2>
+
+<p>雙親委派不是為了讓載入流程看起來整齊，而是為了解決兩個很實際的問題：核心 API 不能被任意取代，以及同一個類別不應該被重複當成不同類別載入。</p>
+
+<h2>第一個目的：沙箱安全，防止核心 API 被竄改</h2>
+
+<p>假設有人寫了一個惡意的 <code>java.lang.String</code>，在類別裡植入病毒碼，再把它放進專案的 Classpath。如果沒有雙親委派，Application ClassLoader 可能直接載入這個偽造版本，整個系統就可能被污染。</p>
+
+<p>有了雙親委派，載入請求會先一路傳到 Bootstrap ClassLoader。它發現核心類別庫中已經有真正的 <code>java.lang.String</code>，便優先載入 JDK 的版本。惡意版本因此沒有機會取代核心類別。</p>
+
+<p>這就是雙親委派像「核心 API 保全」的地方：不是禁止下層載入器載入所有類別，而是先確保核心類別由更可信任的上層載入器處理。對高度依賴標準類別庫與第三方函式庫的 Java 生態系來說，這道防線不可或缺。</p>
+
+<h2>第二個目的：避免類別重複載入</h2>
+
+<p>雙親委派還解決了另一個容易被忽略的問題：JVM 判斷兩個類別是不是「同一個類」，看的不只是類全名，還要加上<strong>載入它的類別載入器</strong>。</p>
+
+<p>也就是說，判定規則是：</p>
+
+<p><strong>類全名 + 載入該類別的類別載入器</strong></p>
+
+<p>假設同一個 <code>String</code> 先被 Bootstrap ClassLoader 載入一次，之後又被 Application ClassLoader 載入一次。即使兩者的類全名相同，JVM 仍然會把它們視為兩個不同的類別。</p>
+
+<p>這可能造成兩個結果：記憶體中同時存在兩份類別定義，也可能在型別轉換時出現異常。對程式來說，名稱看起來一樣，不代表它們真的能互相替代；載入器不同，就像拿著兩張不同系統簽發的身分證。</p>
+
+<figure class="lesson-figure"><img src="./parent-delegation-model-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>雙親委派讓核心類別優先由最頂層的載入器載入，避免同一個核心類別被不同載入器各自載入。這不只是節省記憶體，更是維持 Java 型別系統正常運作的前提。</p>
+
+<h2>小結：把雙親委派放回 JVM 的全貌</h2>
+
+<blockquote>
+雙親委派是「向上委託、向下載入」：類別載入請求先交給父載入器，一路傳到最頂層的 Bootstrap；只有父層找不到時，子載入器才會自己載入。三個核心載入器由下而上是 Application（Classpath 中的自有類別）、Extension（擴充目錄）、Bootstrap（JDK 核心類別庫）。這套機制帶來兩個重要結果：沙箱安全，防止核心 API 被覆蓋；避免重複載入，因為判斷類別是否相同時，要看「類全名 + 載入器」，從而確保同名核心類別只載入一份。
+</blockquote>
+
+<p>雙親委派解決了核心類別的安全與唯一性，但它也有一個天生限制：可見性是單向的，上層載入器看得到自己的類別，卻看不到下層載入器的類別。</p>
+
+<p>那麼，當 JDK 的核心介面需要呼叫第三方實作，或同一個容器必須同時執行多個版本的函式庫時，這套規則還能直接套用嗎？下一節會看到兩種不得不打破雙親委派的場景，也會理解為什麼這些例外不是設計失誤，而是為了讓 Java 的擴充能力真正可用。</p>
+
+<div class="lesson-nav">
+  <div><a href="./class-loading-lifecycle.html">← 上一步：類別載入七階段：從 .class 到 Class 物件</a></div>
+  <div><a href="./breaking-delegation.html">下一步：什麼時候該打破雙親委派 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="雙親委派的核心規則是什麼？" data-correct="1" data-explain="請求先向上委託到頂層，父層找不到時子載入器才自己載入。">
+  <button class="opt">向下委託、向上載入</button>
+  <button class="opt">向上委託、向下載入</button>
+  <button class="opt">每個載入器各自載入自己的類別</button>
+  <button class="opt">由最底層載入器優先嘗試載入</button>
+</div>
+<div class="quiz" data-question="下列哪個載入器負責載入 JDK 的核心類庫？" data-correct="0" data-explain="Bootstrap ClassLoader 位在最頂層，由 C++ 實作，載入核心類庫。">
+  <button class="opt">Bootstrap ClassLoader</button>
+  <button class="opt">Extension ClassLoader</button>
+  <button class="opt">Application ClassLoader</button>
+  <button class="opt">Context ClassLoader</button>
+</div>
+<div class="quiz" data-question="Java 判斷兩個類別是否相同，依據是什麼？" data-correct="2" data-explain="類別全名加上載入它的類別載入器，兩者都相同才算同一個類。">
+  <button class="opt">只看類別的完整全限定名稱</button>
+  <button class="opt">只看類別檔案的檔案大小與雜湊</button>
+  <button class="opt">類別全名加上載入它的類別載入器</button>
+  <button class="opt">只看類別載入器的記憶體位址</button>
+</div>
+<div class="quiz" data-question="自己寫一個 java.lang.String 放在 Classpath，結果會如何？" data-correct="3" data-explain="委派讓 Bootstrap 優先載入 JDK 內建的 String，自寫版本不會被載入。">
+  <button class="opt">會取代 JDK 內建的 String 並生效</button>
+  <button class="opt">會與內建 String 同時存在造成衝突</button>
+  <button class="opt">會讓 JVM 啟動時直接拒絕執行</button>
+  <button class="opt">不會生效，Bootstrap 會優先載入內建版本</button>
+</div>
+<div class="quiz" data-question="雙親委派帶來的第一個主要目的是什麼？" data-correct="1" data-explain="沙箱安全，防止核心 API 被惡意類別覆蓋。"> 
+  <button class="opt">加快類別載入時的磁碟讀取速度</button>
+  <button class="opt">沙箱安全，防止核心 API 被篡改覆蓋</button>
+  <button class="opt">讓每個執行緒擁有獨立的類別副本</button>
+  <button class="opt">讓類別可以在不同 JVM 之間共享</button>
+</div>
+<div class="quiz" data-question="Application ClassLoader 主要負責載入哪裡的類別？" data-correct="2" data-explain="它負責 Classpath 下自己寫的類與第三方函式庫。">
+  <button class="opt">JDK 核心類庫中的基礎類別</button>
+  <button class="opt">擴展目錄 jre/lib/ext 中的類別</button>
+  <button class="opt">Classpath 下自己寫的類與第三方庫</button>
+  <button class="opt">本地方法所呼叫的 C 語言函式</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · JVM 執行時與類載入：類別怎麼被載入、物件存在哪 · Step 5/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

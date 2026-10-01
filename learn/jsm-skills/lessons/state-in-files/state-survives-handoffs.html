@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>狀態如何跨 session、跨團隊存活</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>讓狀態跨 session、跨團隊繼續存活</h1>
+<p class="meta">Step 4/4 · 狀態在檔案：四種檔案與固定擁有權</p>
+
+<h2>學習目標</h2>
+<p>你將能說明：audit 如何從真實專案寫入狀態、sync 如何把文件對回程式碼，以及「不覆寫手寫內容」為什麼能讓檔案在換 session、換人之後仍然可信。</p>
+
+<h2>前言：兩個月後回來，檔案還說得準嗎？</h2>
+
+<p>前面三步已經定下兩件事：有哪些狀態檔，以及誰擁有修改它們的權限。但規則能不能成立，要看時間過去之後還準不準，寫下的當天看不出來。</p>
+
+<p>如果檔案只在建立當天正確，過了一個月就和程式碼脫節，那麼再嚴格的擁有權也救不了它。真正有用的狀態檔，應該能讓你三個月後重新打開專案時，仍然看見接近真實的工程脈絡。</p>
+
+<figure class="lesson-figure"><img src="./state-survives-handoffs-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這套工作流靠三個機制維持這份可信度：<code>audit</code> 從真實專案讀取並寫入狀態；巢狀 context 讓每個 workspace 保有自己的事實；<code>sync</code> 則持續把文件對回正在變動的程式碼。</p>
+
+<h2><code>audit</code> 讀真實專案，不靠猜測</h2>
+
+<p>context 檔之所以可靠，是因為內容是從專案讀出來的，不是憑空生成。<code>audit</code> 會實際檢查專案結構、技術棧，以及 <code>architect</code> 已經做過的決定，接著按照專案「實際存在的樣子」寫下 context。</p>
+
+<p>這個先後順序很重要。全新專案必須先選好技術棧、建立基本骨架，<code>audit</code> 才有真實內容可以讀。如果只給它一個空資料夾，它沒有事實可依據，只能猜。</p>
+
+<p>接手舊專案時，先跑 <code>audit</code> 更重要。既有程式碼庫的文件可能缺漏或過時，你甚至不一定知道它使用什麼技術棧。brownfield（既有程式碼庫）的標準做法，就是先讓 <code>audit</code> 讀專案目前的實際狀態，再寫下它現在如何運作。</p>
+
+<p>它記錄的是工程脈絡，跟用哪個框架無關。因此，即使是十五年前、完全沒有 JavaScript 的 PHP 專案，也能整理出可用的 context。</p>
+
+<h2>不覆寫手寫內容，保留人的判斷</h2>
+
+<p>讓檔案值得信任的另一個關鍵，是 <code>audit</code> 不會把你的手寫內容整份蓋掉。它只補上缺少的部分。</p>
+
+<p>如果程式碼呈現的現況和文件說法互相衝突，<code>audit</code> 會把衝突標出來，交給你判斷；它不會擅自把文件改成自己認為正確的版本。這就像在地圖上插一支「這裡有落差」的旗子，而不是趁你不注意時重畫整張地圖。</p>
+
+<p>因此，文件裡的人類判斷還看得見、也追得到，不會被 AI 靜悄悄地取代。</p>
+
+<h2>巢狀 context：讓每個 workspace 保有自己的事實</h2>
+
+<p>專案變大後，把所有事實塞進單一檔案，就像把整個城市的地圖、門牌和施工紀錄疊在同一張紙上：內容越多，越難找到眼前真正需要的資訊。</p>
+
+<p>巢狀 context 解決的就是範圍問題。在 monorepo（一個 repo 裡放好幾個專案）中，每個 workspace 都有自己的巢狀 context 檔、scope、spec 和指令。</p>
+
+<p>任何 skill 都在目前的 workspace 裡工作，並使用這個 workspace 的命令。修改其中一個 app，它不會順手伸進另一個 app。於是，新的 session 如果在 workspace X 裡啟動，讀到的就是 X 的事實，不會拿到把整個 monorepo 混成一團的模糊描述。</p>
+
+<figure class="lesson-figure"><img src="./state-survives-handoffs-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這裡的核心關係很簡單：<strong>狀態放在哪裡，事實的範圍就到哪裡。</strong></p>
+
+<h2><code>sync</code> 把文件重新對回程式碼</h2>
+
+<p>檔案在寫下的那一刻可能是準確的，但程式碼還會繼續變動。負責補回這段落差的是 <code>sync</code>。</p>
+
+<p><code>sync</code> 在合併前的收尾階段執行，檢查程式碼目前的樣子，再把長期使用的檔案對回現況。它可能在你新增工程慣例時更新 context、把 scope 對回真實範圍，或標記因這次改動而過期的 spec。</p>
+
+<p>它像外科手術，只動該動的地方，不會整份重寫：只新增必要的幾行，或修正它負責的部分，絕不改寫你親手寫下的文字。</p>
+
+<p>整套工作流都遵守同一條界線：沒有 skill 會改寫你的文章，也不會伸手修改另一個 skill 擁有的檔案。這條界線讓檔案即使經過幾個月、換過幾輪人，仍然能保留原本的判斷與責任歸屬。</p>
+
+<h2>真正換手時，狀態如何接續</h2>
+
+<p>把這些機制放在一起看，就能明白為什麼這套設計強調「檔案」而不是「對話」。你可以在任何交接點清掉 session，之後再回來時，重要狀態仍然留在檔案裡。</p>
+
+<p>例如，<code>develop</code> 接手一個做到一半的功能時，它會讀出哪些任務已經完成，直接從第一個尚未完成的地方繼續，不會把已經出貨的部分重新蓋一次。</p>
+
+<p>團隊換手時也是同樣道理。<code>develop</code> 在開始修改前，會先檢查並提醒幾件事：</p>
+
+<ul>
+<li>目前分支是否落後共用分支，可能已有隊友修改或出貨。</li>
+<li>準備修改的區域是否存在未提交的變更。</li>
+<li>是否有隊友看起來正在處理同一個功能。</li>
+</ul>
+
+<p>這些提醒是警告，不是禁止通行的牆。但它們會在任何人寫下程式碼之前出現，讓你先判斷要不要繼續，而不是事後才發現撞上別人的工作。</p>
+
+<figure class="lesson-figure"><img src="./state-survives-handoffs-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<blockquote>
+檔案能在換手後仍然可信，靠的是三層保護：<code>audit</code> 讀取真實專案，並且不覆寫手寫內容；事實的範圍跟著 workspace 走，讓 monorepo 中每個 workspace 各自擁有 context、scope 和 spec；<code>sync</code> 則在收尾時把知識重新對回程式碼，只做外科手術式的小修改。狀態住在檔案裡，所以清掉對話不等於丟掉狀態。
+</blockquote>
+
+<p>回看這四步，關係就連起來了：先確立狀態要放在檔案裡，再分清四種檔案各自保存什麼，接著用固定擁有權保護它們，最後用 <code>audit</code> 與 <code>sync</code> 讓內容在時間和換手中持續接近真實。</p>
+
+<p>這張底層地圖之後會反覆用到。下一個節點會把它接到實際判斷上：卡住時該跑哪個 skill，以及 git 應該在什麼時機 commit。</p>
+
+<div class="lesson-nav">
+  <div><a href="./who-owns-which-file.html">← 上一步：誰建立、誰讀、誰改：固定擁有權</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="在全新專案裡，audit 為什麼要等技術棧選好、專案建好骨架之後才跑？" data-correct="2" data-explain="audit 是讀真實專案來寫 context；太早跑只讀到空資料夾，就只能靠猜。">
+  <button class="opt">因為先跑 audit 會讓後續的 skill 無法安裝</button>
+  <button class="opt">因為 architect 規定只能在最後一步執行</button>
+  <button class="opt">因為它要讀真實專案，太早跑只能靠猜</button>
+  <button class="opt">因為技術棧要由 audit 讀出來後才能決定</button>
+</div>
+<div class="quiz" data-question="當程式碼顯示的實情和文件說法衝突時，audit 會怎麼做？" data-correct="1" data-explain="它只補缺的部分、不覆寫手寫內容，並把衝突標出來讓你決定。">
+  <button class="opt">以程式碼為準，直接改掉文件上的說法</button>
+  <button class="opt">把衝突標出來，交給你決定怎麼處理</button>
+  <button class="opt">忽略程式碼，維持文件原本的內容</button>
+  <button class="opt">兩份都保留，讓之後的 sync 自行選一份</button>
+</div>
+<div class="quiz" data-question="在 monorepo 裡，每個 workspace 各自擁有什麼？" data-correct="3" data-explain="每個 workspace 有自己的巢狀 context、scope、spec 與指令，改一個 app 不會伸進另一個。">
+  <button class="opt">只需要一份共用的 context 檔，計畫則由全部專案共用</button>
+  <button class="opt">只有指令是分開的，其餘 context 與 spec 都共用</button>
+  <button class="opt">隨便哪個 workspace 都可以讀寫另一個 workspace 的檔</button>
+  <button class="opt">自己的巢狀 context、scope、spec 與自己的指令</button>
+</div>
+<div class="quiz" data-question="sync 的編輯方式有什麼特徵？" data-correct="0" data-explain="它只做外科手術式的加行與修正，絕不改寫你寫的文字，也不伸手進別的 skill 的檔。">
+  <button class="opt">只加行與修正它負責的行，不改寫你的文字</button>
+  <button class="opt">會整份重寫，確保內容風格統一好讀</button>
+  <button class="opt">會把所有過期檔案直接刪除再重新生成</button>
+  <button class="opt">會同時改寫其他 skill 擁有的檔案來對齊</button>
+</div>
+<div class="quiz" data-question="為什麼可以放心清掉 session 再回來繼續做？" data-correct="2" data-explain="狀態住在檔案裡，新的 session 讀磁碟現況即可接續；develop 也會跳過已完成的部分。">
+  <button class="opt">因為 AI 會把整個對話自動存在雲端可以還原</button>
+  <button class="opt">因為清掉 session 後系統會重新生成一份計畫</button>
+  <button class="opt">因為狀態住在檔案裡，新 session 讀現況即可接續</button>
+  <button class="opt">因為只要不關掉終端機就不會遺失任何內容</button>
+</div>
+<div class="quiz" data-question="團隊情境下，develop 在動手改程式碼之前會先做什麼？" data-correct="1" data-explain="它先檢查分支是否落後、是否有未提交變更、是否有人在做同一功能，並提醒你。">
+  <button class="opt">直接開始寫程式，有衝突再請你手動解</button>
+  <button class="opt">檢查分支落後、未提交變更、隊友是否在做同一件事</button>
+  <button class="opt">先把共用分支強制覆蓋成你本地最新的版本</button>
+  <button class="opt">先把所有變更提交，避免之後發生衝突</button>
+</div>
+
+<div class="footer">
+  <p>JSM 工程工作流 · 狀態在檔案：四種檔與固定擁有權 · Step 4/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

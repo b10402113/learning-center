@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>從 interactive 到 main.ts：無人值守的 runner</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>從 interactive 到 main.ts：讓 runner 自己一路跑下去</h1>
+<p class="meta">Step 1/4 · 自動化迴圈：main.ts</p>
+
+<h2>前言：跑完一個 phase 之後呢？</h2>
+
+<p>上一節我們用 <code>interactive.ts</code> 跑完了第一個 phase。你看著 agent 探索、寫程式、執行測試，最後完成 commit；但它停下來、控制權回到命令列之後，問題就來了：第二個 phase 要怎麼開始？</p>
+
+<p>如果每個 phase 都要你手動重新執行一次，五個 phase 就得坐在螢幕前操作五次。這樣雖然能跑，但離「無人值守」還有一段距離。</p>
+
+<p>你真正想要的情境是：把整份計畫交給它，去泡杯茶，回來時它已經往下完成好幾個 phase。要做到這件事，就得把「只跑一次」的 harness，改造成「會自己反覆執行」的 runner。這一節要認識的 <code>sandcastle/main.ts</code>，就是這個 runner。</p>
+
+<h2>學習目標</h2>
+
+<p>學完這一節，你應該能說出 <code>sandcastle/main.ts</code> 這個 AFK runner 和 <code>interactive.ts</code> 的三個差異，也能用位置引數傳入 PRD 與 plan，啟動它執行。</p>
+
+<h2>main.ts 是什麼：同一台車，換成自動駕駛</h2>
+
+<p>先講一個重要前提：<code>main.ts</code> 不是另一套全新的系統。它用的還是同一支 Claude Code、同一個 Docker 沙箱，以及同一份 <code>prompt.md</code>。前一節學到的沙箱設定與 prompt 寫法，在這裡都可以繼續用。</p>
+
+<p>真正改變的是「要跑幾次」。你可以把 <code>interactive.ts</code> 想成手排車：你踩一次油門，它跑完一圈，接著停下來等你下一個指令。<code>main.ts</code> 則像是同一台車裝上自動導航，會沿著同一段航程持續前進，直到抵達終點或觸發停止條件，中途不需要你一直回來操作。</p>
+
+<figure class="lesson-figure"><img src="./main-runner-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這個差異可以收斂成三個地方。第一，核心呼叫從 <code>interactive</code> 換成 <code>run</code>。<code>interactive</code> 跑完一輪就把控制權交還給你；<code>run</code> 則會把同一段 prompt 放進迴圈，反覆執行。</p>
+
+<p>第二，<code>main.ts</code> 加入 <code>maxIterations</code>，也就是迭代次數上限。它像里程表上的安全上限，避免 runner 沒有完成工作時，仍然無止境地繼續跑。</p>
+
+<p>第三，它加入 completion signal，也就是完成訊號。agent 回報「沒事了」，runner 就知道工作完成了，不必硬是跑滿所有迭代次數。</p>
+
+<table>
+<thead>
+<tr><th></th><th><code>interactive.ts</code></th><th><code>main.ts</code></th></tr>
+</thead>
+<tbody>
+<tr><td>跑幾輪</td><td>一輪，跑完就停</td><td>多輪，跑到停止條件出現</td></tr>
+<tr><td>核心函式</td><td><code>interactive</code></td><td><code>run</code></td></tr>
+<tr><td>停止方式</td><td>這一輪完成後結束</td><td><code>maxIterations</code> 或 completion signal</td></tr>
+<tr><td>輸入方式</td><td>互動式詢問檔案位置</td><td>命令列的兩個位置引數</td></tr>
+</tbody>
+</table>
+
+<h2>怎麼呼叫：把 PRD 與 plan 放進位置引數</h2>
+
+<p><code>interactive.ts</code> 會在執行過程中詢問你「PRD 在哪裡」。但 <code>main.ts</code> 的目標是無人值守，因此不能等你中途回答；你必須在命令列啟動它時，就把兩份文件的位置傳入。</p>
+
+<p>這兩個引數有固定順序：第一個是 PRD 檔，第二個是 plan 檔。</p>
+
+<pre><code>npx tsx sandcastle/main.ts prd/admin-analytics.md plans/admin-analytics-plan.md</code></pre>
+
+<p>程式內部會把第一個引數存成 <code>prd</code> 變數，第二個存成 <code>plan</code> 變數，再把這兩個變數放進 prompt 裡的「PRD 位置」與「plan 位置」欄位，讓 agent 知道該去哪裡讀取這兩份文件。</p>
+
+<p>因此，這一行命令的意思很直接：拿指定的 PRD 和 plan，啟動一個會自行往下執行的 runner。</p>
+
+<figure class="lesson-figure"><img src="./main-runner-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>agent 和模型也可以替換。你想使用哪個模型，可以直接傳給 Claude Code。課程錄製時最新的模型是 4.7，但講師自己偏好 4.6；這部分是使用者的選擇，不會改變 runner 的基本運作方式。</p>
+
+<h2>這一步在整條線上站在哪裡</h2>
+
+<p>把它放回整體流程來看，<code>interactive.ts</code> 是「跑一圈」，<code>main.ts</code> 則是「跑一圈，再把這一圈放進迴圈裡」。我們沒有重新發明一套執行方式，而是把上一節已經驗證過的流程，包進一個能持續重複執行的外殼。</p>
+
+<p>這也讓下一個問題變得很清楚：這個迴圈究竟靠什麼停下來？如果它一直跑下去，最先撐不住的可能不是程式，而是你的錢包。下一節會拆開這兩個煞車：<code>maxIterations</code> 與 completion signal。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>main.ts</code> 是 Sandcastle 的 AFK runner。它沿用 <code>interactive.ts</code> 的 Claude Code、Docker 沙箱與同一份 prompt，主要差在三個地方：用 <code>run</code> 取代 <code>interactive</code>、加入 <code>maxIterations</code>，以及加入 completion signal。啟動時，把 PRD 與 plan 當成兩個位置引數傳入；agent 與模型則可以依需求自訂。
+</blockquote>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./loop-termination.html">下一步：迴圈怎麼停：maxIterations 與 completion signal →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="main.ts 和 interactive.ts 最核心的差別是什麼？" data-correct="2" data-explain="interactive 只跑一輪，main.ts 把同一段 prompt 放進迴圈反覆執行。">
+  <button class="opt">main.ts 改用另一套更強的模型</button>
+  <button class="opt">main.ts 改成不需要沙箱隔離</button>
+  <button class="opt">main.ts 把單次執行改成重複迴圈</button>
+  <button class="opt">main.ts 改成不需要 prompt 檔案</button>
+</div>
+<div class="quiz" data-question="main.ts 用哪個函式取代了 interactive？" data-correct="1" data-explain="run 會把 prompt 放進迴圈執行，interactive 則只跑一圈。">
+  <button class="opt">它改用 loop 這個函式</button>
+  <button class="opt">它改用 run 這個函式</button>
+  <button class="opt">它改用 start 這個函式</button>
+  <button class="opt">它改用 watch 這個函式</button>
+</div>
+<div class="quiz" data-question="呼叫 main.ts 時，兩個位置引數的順序是什麼？" data-correct="0" data-explain="第一個是 PRD 檔位置，第二個是 plan 檔位置。">
+  <button class="opt">先 PRD 檔位置，再 plan 檔位置</button>
+  <button class="opt">先 plan 檔位置，再 PRD 檔位置</button>
+  <button class="opt">先模型名稱，再 PRD 檔位置</button>
+  <button class="opt">先沙箱名稱，再 plan 檔位置</button>
+</div>
+<div class="quiz" data-question="main.ts 沿用了 interactive 的哪些東西？" data-correct="3" data-explain="同一支 Claude Code、同一個 Docker 沙箱、同一份 prompt 檔。">
+  <button class="opt">換了新模型，但沙箱完全不一樣</button>
+  <button class="opt">換了新沙箱，但 prompt 完全不一樣</button>
+  <button class="opt">全部重寫，和 interactive 沒有共用</button>
+  <button class="opt">同一支 agent、沙箱與 prompt 檔</button>
+</div>
+<div class="quiz" data-question="main.ts 比 interactive 額外加入了哪兩個機制？" data-correct="1" data-explain="maxIterations 管上限，completion signal 讓它提前收工。">
+  <button class="opt">多個 agent 與多個沙箱並行</button>
+  <button class="opt">迭代上限與完成信號兩個機制</button>
+  <button class="opt">自動 merge 與自動部署兩個機制</button>
+  <button class="opt">即時翻譯與語音輸入兩個機制</button>
+</div>
+<div class="quiz" data-question="為什麼說 main.ts 只是把「一圈」變成「迴圈」？" data-correct="2" data-explain="它沿用互動模式已驗證的那一圈，只在外層加上重複執行。">
+  <button class="opt">因為它取消了所有的人工審查</button>
+  <button class="opt">因為它把程式碼自動部署上線</button>
+  <button class="opt">因為同一段流程被反覆執行多次</button>
+  <button class="opt">因為它把多個專案合併成一個</button>
+</div>
+
+<div class="footer">
+  <p>AI Coding for Real Engineers · 自動化迴圈：main.ts · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

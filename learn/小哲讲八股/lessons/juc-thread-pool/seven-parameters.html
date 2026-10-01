@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>執行緒池的七個參數：用銀行網點一次記住</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>執行緒池的七個參數：用銀行網點一次看懂</h1>
+<p class="meta">Step 3/6 · 執行緒池打滿、任務堆積</p>
+
+<h2>先想像一個忙碌的銀行網點</h2>
+
+<p>面試問到執行緒池，常見的第一題是：「<code>ThreadPoolExecutor</code> 有哪些核心參數？」你也許能順利背出 <code>corePoolSize</code>、<code>maximumPoolSize</code>、<code>keepAliveTime</code> 和 <code>workQueue</code>。但如果接著被問：「<code>workQueue</code> 和 <code>maximumPoolSize</code>，哪一個會先發揮作用？」很多人就會卡住。</p>
+
+<p>問題通常不在於記不住名稱，而是還沒看懂這些參數如何一起運作。它們不是散落在建構子裡的七個選項，而像是一間銀行裡互相配合的人員、窗口、候客區和保安。</p>
+
+<p>這一節先用銀行網點建立整體畫面，理解每個參數解決什麼問題、如果配置不當又會發生什麼事。下一節再讓任務實際走過執行緒池，看看它提交進來後，究竟會先找誰、再找誰。</p>
+
+<h2>執行緒池就是一間銀行</h2>
+
+<p>想像你走進一間銀行。櫃檯後有幾位正式員工，門口有候客區讓人排隊；客人突然變多時，銀行可以臨時加開窗口。當所有窗口和候客區都滿了，門口還需要有人決定接下來怎麼處理。</p>
+
+<p>這幾個角色，正好對應到 <code>ThreadPoolExecutor</code> 的七個參數。為了比較容易記憶，可以把它們分成三類：人員數量、等待區，以及兜底與輔助。</p>
+
+<figure class="lesson-figure"><img src="./seven-parameters-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一類：配置人員數量</h2>
+
+<p>這一類回答三個問題：平常有幾位固定員工？最多能開幾個窗口？臨時加開的窗口閒置多久後要關閉？</p>
+
+<p><code>corePoolSize</code> 是核心執行緒數，可以想成銀行的「正式員工」。這些員工平常就坐在櫃檯後待命，即使一段時間沒有客人，也不會因為空閒而被辭退。</p>
+
+<p>放到執行緒池裡，就是池子會維持的核心執行緒數量。這些執行緒建立後會持續等待任務，不必等到任務來了才重新建立執行緒，因此通常能更快接手工作。</p>
+
+<p><code>maximumPoolSize</code> 是最大執行緒數，代表銀行所有窗口的數量上限。它包含正式員工與臨時加開的窗口。</p>
+
+<p>這裡很容易搞錯：它是執行緒的「總上限」，不是額外還能增加多少條執行緒。例如 <code>corePoolSize</code> 是 2、<code>maximumPoolSize</code> 是 5，意思是最多同時有 5 條執行緒，其中 2 條是核心執行緒，另外 3 條是可以被回收的非核心執行緒，不是 2 加 5 等於 7 條。</p>
+
+<p><code>keepAliveTime</code> 和它的單位 <code>unit</code>，可以看成臨時員工的保活時間。當目前執行緒數超過核心數，多出來的非核心執行緒如果閒置超過這段時間，仍然沒有接到新任務，就會被回收，等於把臨時加開的窗口關掉。</p>
+
+<p>預設情況下，這個回收規則只套用在非核心執行緒，核心執行緒即使空閒也會保留。如果希望核心執行緒也能在閒置後被回收，必須另外呼叫 <code>allowCoreThreadTimeOut(true)</code>。</p>
+
+<h2>第二類：配置等待區</h2>
+
+<p><code>workQueue</code> 是工作佇列，可以想成銀行的候客區。當所有正式窗口都在處理客人時，新來的客人不會立刻讓銀行加開臨時窗口，而是先到候客區排隊，等窗口空出來再接受服務。</p>
+
+<p>執行緒池也是如此：當核心執行緒都在忙，新提交的任務會先放進這個阻塞佇列，等待核心執行緒完成手上的工作後再取出處理。常見的實作包括 <code>LinkedBlockingQueue</code> 和 <code>ArrayBlockingQueue</code>。</p>
+
+<p><code>workQueue</code> 的容量設定，會大幅改變執行緒池的行為。若使用無界佇列，候客區就像永遠坐不滿，任務會持續堆在裡面。因為佇列一直沒有滿，執行緒池也就不會走到「加開非核心執行緒」這一步。</p>
+
+<p>表面上看起來，任務沒有被拒絕似乎很安全；但如果任務持續湧入，佇列可能不斷成長，最後把記憶體吃光。這也是為什麼 <code>workQueue</code> 絕不是配角。它的容量，會決定執行緒池是在排隊、擴張，還是最終拒絕任務。</p>
+
+<figure class="lesson-figure"><img src="./seven-parameters-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第三類：兜底與輔助</h2>
+
+<p>最後兩個參數不直接決定執行緒數量，但它們會影響可觀測性，以及資源用盡時的處理方式。</p>
+
+<p><code>threadFactory</code> 是執行緒工廠，可以想成人力資源部。它負責建立執行緒，也可以替每條執行緒設定有意義的名稱，例如加上業務模組名稱。</p>
+
+<p>這個設定在平常可能不顯眼，但出問題時非常有用。當你抓執行緒 dump 或查看日誌，如果每條執行緒都有清楚的名稱，就能快速判斷它屬於哪個執行緒池，排查問題會容易很多。</p>
+
+<p><code>handler</code> 是拒絕策略，可以想成銀行門口的保安。當所有窗口都滿了，候客區也坐滿了，再有客人進來時，保安必須決定怎麼處理。</p>
+
+<p>這個決定可能是直接擋回去，也就是拋出例外；可能是請提交任務的執行緒自己執行，讓提交方承擔處理成本；也可能是直接丟棄任務。JDK 內建了四種拒絕策略，具體取捨會在第五節展開。現在先記住它的定位：<code>handler</code> 是資源全部用盡後的最後一道防線。</p>
+
+<figure class="lesson-figure"><img src="./seven-parameters-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>七個參數，放回同一張地圖</h2>
+
+<table>
+<thead>
+<tr><th>參數</th><th>分類</th><th>銀行比喻</th><th>作用</th></tr>
+</thead>
+<tbody>
+<tr><td><code>corePoolSize</code></td><td>人員數量</td><td>正式員工</td><td>常駐的核心執行緒數，空閒時也不回收</td></tr>
+<tr><td><code>maximumPoolSize</code></td><td>人員數量</td><td>所有窗口</td><td>執行緒總數上限，包含核心與非核心執行緒</td></tr>
+<tr><td><code>keepAliveTime</code>＋<code>unit</code></td><td>人員數量</td><td>臨時工保活時間</td><td>非核心執行緒空閒超過此時間就回收</td></tr>
+<tr><td><code>workQueue</code></td><td>等待區</td><td>候客區</td><td>核心執行緒都忙碌時，任務排隊使用的阻塞佇列</td></tr>
+<tr><td><code>threadFactory</code></td><td>兜底輔助</td><td>人力資源部</td><td>負責建立執行緒，也可以自訂執行緒名稱</td></tr>
+<tr><td><code>handler</code></td><td>兜底輔助</td><td>保安</td><td>佇列與執行緒都滿時，決定如何拒絕任務</td></tr>
+</tbody>
+</table>
+
+<p>表格中把 <code>keepAliveTime</code> 和 <code>unit</code> 放在同一列，是因為兩者必須一起使用：前者表示時間長度，後者表示這個長度的單位。若以建構子的參數來算，七個參數就是核心執行緒數、最大執行緒數、存活時間、時間單位、工作佇列、執行緒工廠，以及拒絕策略。</p>
+
+<p>實際建立 <code>ThreadPoolExecutor</code> 時，大致會長這樣。程式中的數字只是示例：</p>
+
+<pre><code>ThreadPoolExecutor pool = new ThreadPoolExecutor(
+    2,                                  // corePoolSize：正式員工 2 位
+    5,                                  // maximumPoolSize：最多開 5 個窗口
+    60L, TimeUnit.SECONDS,              // keepAliveTime + unit：臨時工閒置 60 秒就收
+    new ArrayBlockingQueue&lt;&gt;(10),       // workQueue：候客區可排 10 個人
+    new CustomThreadFactory("order"),   // threadFactory：幫執行緒取好名字
+    new ThreadPoolExecutor.AbortPolicy() // handler：滿了就拋出例外
+);</code></pre>
+
+<p>把每一行翻回銀行的畫面，就是 2 位正式員工、最多 5 個窗口、臨時員工閒置 60 秒後回收、候客區最多排 10 個人，再由人力資源部負責招募，並由保安在資源用盡時拋出例外。</p>
+
+<h2>把這個觀念掛回執行緒池</h2>
+
+<blockquote>
+<code>ThreadPoolExecutor</code> 的七個參數，可以分成三類。人員數量類包括 <code>corePoolSize</code>（常駐的正式員工）、<code>maximumPoolSize</code>（執行緒總數上限，不是額外名額），以及 <code>keepAliveTime</code> 與 <code>unit</code>（非核心執行緒的保活時間）。等待區類是 <code>workQueue</code>，負責在核心執行緒都忙碌時暫存任務。兜底與輔助類則包括 <code>threadFactory</code>（建立執行緒並可自訂名稱）和 <code>handler</code>（資源全部用盡時的拒絕策略）。</blockquote>
+
+<p>現在先把它們記成一間銀行：正式員工是核心執行緒，所有窗口是最大執行緒數，臨時工的保活時間對應非核心執行緒的回收條件，候客區是工作佇列，人力資源部是執行緒工廠，保安則是拒絕策略。</p>
+
+<p>這些參數不是靜態擺在建構子裡的設定。任務提交進來後，會依照固定的運作邏輯依次碰到它們。下一節就讓任務實際走過這間銀行，看看執行緒池到底先使用核心執行緒、工作佇列，還是最大執行緒數。</p>
+
+<div class="lesson-nav">
+  <div><a href="./pool-why-and-sizing.html">← 上一步：為什麼不能一直 new Thread？池化與執行緒數設置</a></div>
+  <div><a href="./execution-flow.html">下一步：任務提交後發生什麼？四步執行流程 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="maximumPoolSize 指的是什麼？" data-correct="2" data-explain="它是執行緒總數上限，包含核心與非核心執行緒。">
+  <button class="opt">核心執行緒之外還能再增加的名額</button>
+  <button class="opt">佇列裡最多可以排隊的任務數量</button>
+  <button class="opt">執行緒池允許存在的執行緒總數</button>
+  <button class="opt">同一時間最多能提交的任務數量</button>
+</div>
+<div class="quiz" data-question="keepAliveTime 管的是哪一種執行緒？" data-correct="1" data-explain="它是非核心執行緒閒置多久後被回收的保活時間。">
+  <button class="opt">所有核心執行緒的常駐存活時間</button>
+  <button class="opt">超出核心數的那些非核心執行緒</button>
+  <button class="opt">正在佇列裡等待的任務的逾時</button>
+  <button class="opt">提交任務的主執行緒的最長等待</button>
+</div>
+<div class="quiz" data-question="workQueue 在銀行比喻裡對應什麼？" data-correct="3" data-explain="它對應候客區，核心執行緒忙碌時讓任務排隊等待。">
+  <button class="opt">坐在櫃檯後面的那群正式員工</button>
+  <button class="opt">忙起來才臨時加開的那些窗口</button>
+  <button class="opt">站在門口負責擋人的那位保安</button>
+  <button class="opt">讓客人拿號等待的候客排隊區</button>
+</div>
+<div class="quiz" data-question="為什麼建議自訂 threadFactory？" data-correct="0" data-explain="自訂執行緒名稱後，dump 與日誌一眼就能認出執行緒屬於哪個池子。">
+  <button class="opt">能替執行緒取有意義的名字方便排查</button>
+  <button class="opt">能讓核心執行緒建立的速度變得快</button>
+  <button class="opt">能讓每一條執行緒都保證不會回收</button>
+  <button class="opt">能讓拒絕策略不再需要被呼叫到</button>
+</div>
+<div class="quiz" data-question="handler 參數在什麼時機才會被觸發？" data-correct="2" data-explain="只有當佇列滿了、執行緒也達到最大數時才會執行拒絕策略。">
+  <button class="opt">只要核心執行緒正在忙碌就會觸發它</button>
+  <button class="opt">只要有任務進入等待佇列就會觸發</button>
+  <button class="opt">佇列滿且執行緒已達最大值時觸發</button>
+  <button class="opt">只要執行緒池一被建立起來就觸發</button>
+</div>
+<div class="quiz" data-question="核心執行緒預設會在空閒時被 keepAliveTime 回收嗎？" data-correct="1" data-explain="預設不回收；要另外呼叫 allowCoreThreadTimeOut(true) 才會。">
+  <button class="opt">會，只要閒置超過設定值就會被收</button>
+  <button class="opt">不會，除非另外開啟核心逾時回收</button>
+  <button class="opt">會，但只在佇列完全空的時候才收</button>
+  <button class="opt">不會，且完全沒有任何方式能開啟</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · 執行緒池打滿、任務堆積 · Step 3/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
