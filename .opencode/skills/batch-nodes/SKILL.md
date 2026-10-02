@@ -49,7 +49,7 @@ Stop stage 1 after the node container is written and verified. Proceed immediate
 
 ### Stage 2 — Content
 
-Load the /teach skill via the skill tool (name: "teach"). Follow it for node <NODE-ID> with skip-task. The skeleton step files already exist from stage 1 — fill each step's MDX lesson body and generate the HTML lesson files. Skip-task means no check questions, no user confirmation. Write in Taiwan Traditional Chinese per the teach-agent writing rules. Do not run `/zh-tw-humanizer` and do not dispatch any subagents — the batch orchestrator runs the humanize pass itself after you return.
+Load the /teach skill via the skill tool (name: "teach"). Follow it for node <NODE-ID> with skip-task. The skeleton step files already exist from stage 1 — fill each step's MDX lesson body and generate the HTML lesson files. Skip-task means no check questions, no user confirmation. Write in Taiwan Traditional Chinese per the teach-agent writing rules. Read each step's located source and mark every `<pre>` block's provenance (`docs/reference/source-reading.md` §Source-grounded teaching). Do not run `/zh-tw-humanizer` and do not dispatch any subagents — the batch orchestrator runs the humanize pass itself after you return.
 
 #### Asset verification (mandatory, after all HTML written)
 
@@ -71,6 +71,7 @@ Workspace context:
 - Step files: learn/<SUBJECT>/nodes/<NODE-ID>/
 - MEMORY.md: learn/<SUBJECT>/MEMORY.md
 - Digests: learn/<SUBJECT>/digests/
+- Step sources: each step's `sources` locators (read the located slice; `docs/reference/source-reading.md` §Source-grounded teaching)
 - Canonical shared.css: .opencode/skills/teach/assets/shared.css
 - Canonical quiz.js: assets/quiz.js
 

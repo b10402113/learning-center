@@ -43,6 +43,8 @@ Exit code: `0` = no failures, `1` = at least one failure. A non-zero exit is a h
 | `elem-nodes-ref` | element `nodes` reference existing nodes |
 | `src-path` | source link subject matches; source file exists |
 | `src-locator` | locator resolves in a digest (containment match) |
+| `code-provenance` | every `<pre>` in a `procedure`/`reference` lesson carries `data-source` or `data-provenance="derived"` |
+| `sources-empty` | node/step has at least one source link (flag) |
 | `elem-connections` | Connections section present with ≥2 element links |
 | `elem-questions` | Questions section present |
 

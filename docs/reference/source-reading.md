@@ -152,6 +152,29 @@ When a node's element extraction needs detail beyond the digest:
 2. Dispatch one sub-agent to run `pdftotext` and extract that section's original text.
 3. The sub-agent returns the excerpt in its message — one-off reads, no file. Only pull when the digest is genuinely insufficient.
 
+## Source-grounded teaching (`teach`)
+
+`teach` is the one stage that reads raw source, because a lesson that shows code must show the real code. `nodes` stays digest-only (above); `teach` pulls the located slice on demand. A `teach-agent` does the read, so the raw text stays in its own context and never enters the main one.
+
+A step's `sources` locators are the entry points. For a step with a source:
+
+1. Locate the section or code file from the step's `sources` locators.
+2. Read only that slice — a `pdftotext` section, a source file, a transcript range — never the whole source. When a locator is absent or stale, fall back to the digest and mark the gap (below).
+3. Write the lesson with code provenance.
+
+### Code provenance
+
+Read the source before writing code. When the source carries code, quote it verbatim: drop whole lines or elide a run with `…` if needed, but never rewrite a line. When the source carries no code, write it from the prose, faithful to what the source says. Either way, mark every `<pre>` block in a `procedure` or `reference` lesson with an invisible provenance attribute:
+
+- quoted from source: `<pre data-source="sources/<subject>/<file>#<locator>">`
+- written from the prose: `<pre data-provenance="derived">`
+
+The attribute adds no visible text, so the page reads the same; `scripts/verify.mjs` reads it to confirm a procedure lesson never ships an unmarked block.
+
+### Missing source
+
+A step whose source cannot be read — no `sources`, a stale locator, a moved code file, a digest without its raw — is still written. Mark the gap `[needs source]` at the claim and list it in the run's report; never invent a citation to cover it.
+
 ## Node count formula
 
 ```text

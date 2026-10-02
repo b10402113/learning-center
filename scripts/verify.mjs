@@ -332,6 +332,39 @@ function checkLocator(report, rel, locator) {
   }
 }
 
+// A step with no source link anywhere (frontmatter or body) is a gap, not a
+// failure: the lesson was still written, marked [needs source].
+function checkSourcesPresent(report, path, kind) {
+  const rel = path.replace(REPO_ROOT + "/", "");
+  if (!/\[\[\s*sources\//.test(readFileSync(path, "utf8"))) {
+    report.flag(rel, "sources-empty", `${kind} has no source link`);
+  }
+}
+
+// Every code block in a procedure/reference lesson must carry its provenance:
+// data-source for verbatim source code, data-provenance="derived" for code
+// written from the prose. The lesson HTML is the published artifact.
+function checkStepProvenance(report, subject, step) {
+  const { data: fm } = parse(step.path);
+  const type = fm.type ? String(fm.type) : "concept";
+  if (type !== "procedure" && type !== "reference") return;
+  const htmlPath = join(LEARN_ROOT, subject, "lessons", step.nodeId, `${step.id}.html`);
+  if (!existsSync(htmlPath)) return;
+  const html = readFileSync(htmlPath, "utf8");
+  const rel = htmlPath.replace(REPO_ROOT + "/", "");
+  const re = /<pre\b[^>]*>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const tag = m[0];
+    const marked =
+      /\bdata-source\s*=/.test(tag) || /\bdata-provenance\s*=\s*["']derived["']/i.test(tag);
+    if (!marked) {
+      const line = html.slice(0, m.index).split("\n").length;
+      report.fail(rel, line, "code-provenance", `${type} step code block missing data-source or data-provenance="derived"`);
+    }
+  }
+}
+
 // --- scope runners ---------------------------------------------------------
 
 function runNodeChecks(report, subject, nodeId, scan, digestIdx, sourceNames, nodeIds, stepKeys) {
@@ -357,6 +390,7 @@ function runNodeChecks(report, subject, nodeId, scan, digestIdx, sourceNames, no
   checkDag(report, nodeFile.path, nodeId, nodeFm, stepFiles, stepIdsByNode, stepTypes);
   checkReferences(report, nodeFile.path, nodeBody, subject, nodeIds, stepKeys);
   checkSourceLinks(report, nodeFile.path, nodeBody, subject, sourceNames);
+  checkSourcesPresent(report, nodeFile.path, "node");
 
   const nodeSteps = scan.steps.filter((s) => s.nodeId === nodeId);
   for (const step of nodeSteps) {
@@ -367,6 +401,8 @@ function runNodeChecks(report, subject, nodeId, scan, digestIdx, sourceNames, no
     checkIdFilename(report, step.path, fm.id, step.id);
     checkReferences(report, step.path, body, subject, nodeIds, stepKeys);
     checkSourceLinks(report, step.path, body, subject, sourceNames);
+    checkSourcesPresent(report, step.path, "step");
+    checkStepProvenance(report, subject, step);
   }
 }
 
@@ -377,6 +413,7 @@ function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, nodeIds
     checkIdFilename(report, node.path, fm.id, node.id);
     checkReferences(report, node.path, body, subject, nodeIds, stepKeys);
     checkSourceLinks(report, node.path, body, subject, sourceNames);
+    checkSourcesPresent(report, node.path, "node");
   }
 
   const stepFiles = new Set();
@@ -397,6 +434,8 @@ function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, nodeIds
     checkIdFilename(report, step.path, fm.id, step.id);
     checkReferences(report, step.path, body, subject, nodeIds, stepKeys);
     checkSourceLinks(report, step.path, body, subject, sourceNames);
+    checkSourcesPresent(report, step.path, "step");
+    checkStepProvenance(report, subject, step);
   }
 
   for (const node of scan.nodes) {
