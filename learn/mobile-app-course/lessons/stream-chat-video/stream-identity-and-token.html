@@ -12,52 +12,65 @@
 <p class="meta">Step 1/5 · Stream 即時聊天與視訊</p>
 
 <h2>學習目標</h2>
-<p>學完這一節，你應該能說出 Stream 的身分模型：為什麼 Stream 的 user id 一定要由 server 從登入 session 推導、為什麼 Chat 與 Video 共用同一個身分與 token，以及為什麼 API secret 絕對不能跑進 app 裡。</p>
+<p>能說出為什麼 Stream 的 user id 必須由 server 從 Clerk session 推導，以及 Chat 與 Video 為什麼共用同一個 token。</p>
 
-<h2>前言：聊天功能碰到的第一個問題，不是訊息，是「你是誰」</h2>
+<h2>前言：如果手機能自己說「我是誰」</h2>
 
-<p>先想像你打開 Dentify 的病人 app，點進 Messages。畫面上要出現你和診所的對話，主機那端必須知道「現在連線的這個人是誰」，才能把正確的對話推給你。這件事聽起來很理所當然，卻藏著整個功能最關鍵的一個決定：這個身分，由誰說了算？</p>
+<p>先想像一個很誘人的做法。你的 app 要接上聊天和視訊，於是你讓手機在連線時自己報上一個名字：「嗨，我是 <code>staff-001</code>，這是我的通行證。」聽起來很省事，因為身分由前端自己決定，server 不必多做事。</p>
 
-<p>如果答案是由 app 自己報上名號，那任何一個已登入的病人，只要把程式改一改、把自己的 user id 換成某位員工的 id，就能拿到那位員工的通行證，然後讀完整間診所的對話。這不是誇張的假設，而是「token endpoint 接受 client 傳來的 user id」這個寫法必然的後果。</p>
+<p>但這個做法只要被人看穿一次，整個診所的對話就門戶洞開。任何人只要下載你的 app，改幾行程式讓它報上員工的 id，就能拿到一張員工的通行證，然後把整間診所的病人對話全部讀走。問題不在於加密做得好不好，而在於「誰有權決定你是誰」這條界線一開始就畫錯了。</p>
 
-<p>這一節先不寫功能。我們要把 Stream 這套託管服務的身分規則講清楚，因為後面四個步驟的每一段程式碼，都建立在同一條規則上：身分由 server 決定，client 只能使用它。</p>
+<p>這一節要把 Stream 的身分模型講清楚。Stream 是一個託管的聊天與視訊服務，我們不自己碰 WebRTC、也不自己開 socket，只負責在 server 端回答一個問題：這個人是誰？把這個問題答對，後面所有的聊天與通話功能才有安全的地基。</p>
 
-<h2>聊天與視訊為什麼通常不自己蓋</h2>
+<h2>聊天與視訊不是自己刻的：Stream 負責什麼</h2>
 
-<p>即時聊天和視訊通話背後是一整套很難的基礎設施。聊天要維護長連線、處理訊息送達順序、已讀狀態與推播；視訊更麻煩，要處理 WebRTC 的連線協商、把多路影像在伺服器端混流（SFU），還要撐住網路不穩時的斷線重連。這些東西自己蓋不是不行，但對一個一人團隊來說，光是把視訊接通就會吃掉整個專案的預算和時間。</p>
+<p>串流通訊這種東西，自己從零刻會踩到非常多坑：WebRTC 的連線協商、NAT 穿透、裝置權限、推播喚醒、已讀狀態、打字提示……任何一項都能吃掉好幾個禮拜。所以這個專案選擇把這些交給 Stream。Stream 提供聊天、視訊、動態牆與內容審核的 SDK，Bumble、Strava、Adobe、Walmart 這類產品都在用，它也提供免費方案讓你起步。</p>
 
-<p>Stream 就是這類需求的託管服務：你付錢，它幫你保管連線、訊息與通話狀態。我們自己在伺服器端只做兩件事——決定「這個登入者是誰」，以及發一張短效通行證給 app。剩下的即時功能，交給 Stream 的 SDK 處理。知道這條分工線之後，接下來就來看這張通行證到底長什麼樣子。</p>
+<p>導入的方式不是進 dashboard 慢慢點，而是在終端機跑 <code>stream login</code>，選好應用程式後由 CLI 幫你產生 <code>stream/</code> 資料夾並更新 <code>.gitignore</code>，接著安裝 Stream 的 agent skills。這些 skill 是一包 markdown 檔，會直接告訴 AI agent 這個 API 該怎麼用，agent 就不必靠猜。之後你只要對 agent 說「用 Stream 幫我做視訊通話」，它就知道要套哪一套寫法。</p>
 
-<h2>Stream 的四個角色：app、api key、secret、token</h2>
+<p>但無論工具多方便，有一件事永遠是我們自己的責任：決定「誰能用這套服務」。Stream 負責傳輸與功能，我們負責身分。</p>
 
-<p>要聽懂身分模型，得先認識四個名詞。它們的角色差別很大，混在一起就會出錯。</p>
+<h2>一個看似方便、其實危險的做法</h2>
+
+<p>最直覺的作法，是讓手機在請求 token 時順便附上自己的 user id，或更糟，讓手機自己拿著 API secret 去簽名。這樣寫起來很快，但等於把身分的決定權交到使用者手上。</p>
+
+<p>這裡的關鍵差別是：<strong>一個「登入證明」和一個「服務憑證」是兩回事。</strong>使用者透過 Clerk 登入，那是他證明「我是這個帳號」的方式；但 Stream 的 API secret 是「我可以代表整個應用程式發言」的鑰匙，權限高得多。如果把 secret 放進手機 app，任何反編譯的人都拿得到，這把鑰匙能簽出任何人的 token。</p>
+
+<p>兩種做法的後果差很多：</p>
 
 <table>
 <thead>
-<tr><th>角色</th><th>是什麼</th><th>放在哪</th></tr>
+<tr><th>做法</th><th>user id 從哪來</th><th>後果</th></tr>
 </thead>
 <tbody>
-<tr><td>Stream user id</td><td>Stream 世界裡代表某個人的識別碼</td><td>由 server 依我方 user id 推導</td></tr>
-<tr><td>API key</td><td>你的 Stream 應用程式代號，可以公開</td><td>server 與 app 都能有</td></tr>
-<tr><td>API secret</td><td>用來簽發 token 的私密金鑰</td><td>只存在 server 的環境變數</td></tr>
-<tr><td>token</td><td>用 secret 簽出的通行證，證明「這個 id 是我方認可的」</td><td>server 簽好後才傳給 app</td></tr>
+<tr><td>讓 client 自己報 id</td><td>請求內容（可被任意修改）</td><td>病人可偽造員工 token，讀光所有對話</td></tr>
+<tr><td>把 API secret 放進 app</td><td>任何人都能反編譯取得</td><td>整把萬用鑰匙外流，形同門戶洞開</td></tr>
+<tr><td>由 server 從 session 推導</td><td>Clerk session，無法被 client 改寫</td><td>你只能拿到自己的 token</td></tr>
 </tbody>
 </table>
 
-<p>這裡的關鍵是：token 不是使用者密碼，而是「這個 user id 已經被我們驗證過」的簽章證明。因為它是由 API secret 簽出來的，任何人只要沒有 secret，就無法替別人的 user id 偽造一張 token。所以 secret 的存在位置就等於整個系統的安全邊界。</p>
+<h2>正確的身分模型：server 推導、token 短效</h2>
 
-<h2>user id 由 server 推導，而不是由 client 提供</h2>
+<p>正確的作法反過來：手機永遠不說自己是誰，它只會送出一段「我已登入」的請求；server 收到後，從 Clerk 的 session 裡讀出這個帳號，再決定對應的 Stream user id。這個 id 不是新發明的，就直接用我們資料庫裡的使用者 id，一對一對應。</p>
 
-<p>在 Dentify 裡，Stream user id 直接等於資料庫的使用者 id，函式只有一行：</p>
-
-<pre><code>/** One Stream identity per account, keyed by our own users.id. */
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/stream.ts"><code>/**
+ * One Stream identity per account, keyed by our own `users.id`. Chat and Video
+ * share it — a single token authenticates both products on the same API key.
+ */
 export function streamUserId(user: AppUser): string {
   return user.id;
+}
+
+export function mintToken(user: AppUser): string {
+  const exp = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS;
+  return streamServer().createToken(streamUserId(user), exp);
 }</code></pre>
 
-<p>注意這個 <code>user</code> 從哪裡來。token endpoint 裡，它是 <code>requireAuth()</code> 的回傳值，也就是從 Clerk 的登入 session 解出來的，不是從請求內容讀出來的：</p>
+<p><code>streamUserId</code> 短到只有一行，但它是整個安全模型的支點：id 的來源是 <code>AppUser</code>，而 <code>AppUser</code> 是 server 從 session 驗證後才拿到的，不是 client 送上來的。接著 <code>mintToken</code> 用這個 id 加上一個到期時間簽出 token。這裡的 token 有效期限是四小時，屬於短效憑證；過期之後 app 再打一次同一支端點換新的，所以這支端點同時也是「刷新」端點。</p>
 
-<pre><code>export const POST = route(async () =&gt; {
+<p>來看看實際回傳什麼。端點的路徑是 <code>POST /api/stream/token</code>：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/api/stream/token/route.ts"><code>export const POST = route(async () => {
   const user = await requireAuth();
   const name = await syncStreamUser(user);
 
@@ -70,93 +83,82 @@ export function streamUserId(user: AppUser): string {
   });
 });</code></pre>
 
-<p>對照一下壞做法，你就會明白差在哪。假設端點改成 <code>const { userId } = await req.json()</code>，那 token 就會被簽給任何一個 client 報上來的 id。這個漏洞不需要很高明的手法，只要會改一顆按鈕送出的參數就能利用。把身分來源換成 session 之後，client 根本沒有機會指定自己是誰，這條攻擊路徑就整條消失。</p>
+<p>回傳的五個欄位各自有意義。<code>apiKey</code> 是可以公開的應用程式識別碼（對應環境變數裡的 <code>NEXT_PUBLIC_STREAM_API_KEY</code>），拿它配 token 才能連上你這個 app；<code>userId</code>、<code>name</code>、<code>role</code> 是這個人的身分與顯示資訊；<code>token</code> 才是那張短期通行證。注意這裡從頭到尾沒有出現 API secret，secret 只留在 server 行程裡，永遠不進到手機。</p>
 
-<blockquote class="bad-code">
-   絕對不要在 token 端點讀取 client 傳來的 user id。使用者身分只能從登入 session 推導；否則任何已登入的人都能簽出員工的 token。
-</blockquote>
+<p>手機端的註解把這個契約寫得很白：</p>
 
-<h2>Chat 與 Video 共用同一個身分與 token</h2>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code> * Both clients authenticate with one token from `POST /api/stream/token`. The
+ * app never names its own Stream user id and never sees the API secret — the
+ * server derives the id from the Clerk session, which is what stops a patient
+ * minting a token for a staff member.</code></pre>
 
-<p>Stream Chat 和 Stream Video 雖然是兩個產品，卻可以掛在同一個應用程式的同一組憑證底下。這代表我們不需要為聊天和視訊各做一套身分，只要一個 user id、一張 token，就能同時連上兩邊。</p>
+<h2>Chat 與 Video 為什麼共用一張通行證</h2>
 
-<pre><code>/**
- * One Stream identity per account, keyed by our own `users.id`. Chat and Video
- * share it — a single token authenticates both products on the same API key.
- */</code></pre>
+<p>Stream 的聊天和視訊雖然是兩個 SDK、兩個 client，但在身分這一層是同一件事。一行註解說得很清楚：<em>One Stream identity per account... a single token authenticates both products on the same API key.</em> 同一個 API key、同一個 user id、同一張 token，就能同時登入 Chat 與 Video。</p>
 
-<p>這個設計省下的不只是程式碼。如果聊天與視訊各有一套身分，你就得確保兩邊的 id 一一對應、登入登出時同步斷開、權限也各驗一次。共用身分之後，這些都變成同一個問題。第四、第五步會看到，同一個 <code>auth</code> 拿到的 token 會同時餵給 Chat client 和 Video client。</p>
+<p>這帶來一個很實際的好處：整張 app 只需要管理一條憑證的生命週期。登入時打一次 token 端點，把同一張 token 交給兩個 client；token 快過期時，兩個 client 都指向同一個刷新函式。如果 Chat 和 Video 各自要一套不同帳號、不同憑證，就得處理「其中一個登入成功、另一個失敗」這種半殘狀態，複雜度會高很多。</p>
 
-<h2>短效 token 與自動更新：把「一直驗身分」變成常態</h2>
+<h2>邊界的一個例外：病人名字</h2>
 
-<p>Dentify 簽發的 token 只活四小時：</p>
+<p>到這裡你可能會問：既然身分抓得這麼緊，那病人的名字是怎麼出現在員工的收件匣裡的？答案是，這是一個刻意開的例外。Stream 只擁有通話與訊息的內容，但員工需要看得懂「這是哪位病人傳來的」，所以顯示名稱會送給 Stream。這個 app 對第三方服務的通則是「PHI 絕不外流」，Sentry、log、推播都嚴格遵守；Stream 之所以能例外，是因為它簽了 BAA（商業夥伴協議），處理受保護的健康資訊是被允許的。</p>
 
-<pre><code>/** Tokens are short-lived; the app re-hits /api/stream/token to refresh. */
-const TOKEN_TTL_SECONDS = 60 * 60 * 4;</code></pre>
-
-<p>短效的好處是，即使 token 真的外流，它的可用時間也有限。而當 token 快過期時，app 不是自己想辦法續約，而是再打一次同一個 token 端點。這個端點每次都會重新跑 <code>requireAuth()</code>，所以「驗身分」這件事情從來沒有被跳過，只是用重新發一張新 token 的形式發生。這也讓這個端點同時是「發 token」和「換 token」兩個角色，實作只需要一份。</p>
-
-<h2>一個刻意的例外：名字會過界到 Stream</h2>
-
-<p>在醫療類的 app 裡，通常有一條鐵律——病患資料不離開自己的系統。但托管的聊天服務需要能讓員工在收件匣裡看到「這是哪位病人」，所以病人的名字會刻意送到 Stream。這是一個有意識的取捨：Stream 在可簽署商業夥伴協議（BAA）的名單上，才讓這件事可以被接受；相較之下，Sentry、一般 log 或推播內容，就完全不允許出現病患資訊。</p>
-
-<p>重點不是「永遠不准外送」，而是「每一種外送都要先確認對方是否有相應的合規承諾」。這個判斷會在整個後端反覆出現。</p>
+<p>換句話說，這是一個經過判斷、也寫在計畫裡的取捨。什麼資料給誰，取決於對方有沒有能力和義務保護它。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-<p>Stream 是託管的聊天與視訊後端，我們在 server 端只負責決定身分與簽發短效 token。Stream user id 由登入 session 推導，絕不接受 client 傳來的值；API secret 只留在 server；Chat 與 Video 共用同一個身分與一張 token。短效 token 過期時，app 回頭打同一個端點換新，順便再驗一次身分。</p>
+Stream 是託管的聊天與視訊後端，我們不碰底層傳輸，只負責在 server 決定「你是誰」。手機不能自己報上 user id，也不能持有 API secret；正確的作法是 server 從 Clerk session 推導 Stream user id，再簽出一張短效、可刷新的 token。Chat 與 Video 共用同一個 user id 與同一張 token，整張 app 只需管理一條憑證生命週期；而病人名字之所以能送到 Stream，是因為它簽了 BAA，是一個被允許、也經過判斷的例外。
 </blockquote>
 
-<p>身分規則講清楚了，但規則還停在紙上。下一步要把這條規則變成兩個真的端點：一個發 token，一個回傳這位病人該進的對話，並把 Stream 的伺服器端邏輯收進一個方便重用的 wrapper。</p>
+<p>畫好了「誰能用這套服務」這條界線，下一步就是把它做成真的端點。下一節要動手寫出兩支 API：一支發 token，一支順便告訴病人他該進哪個診所對話，並在 server 端把聊天用的 channel 準備好。</p>
 
 <div class="lesson-nav">
   <div></div>
-  <div><a href="./token-and-channel-endpoints.html">下一步：Token endpoint 與 channel endpoint：server wrapper 與短效憑證 →</a></div>
+  <div><a href="./token-and-channel-endpoints.html">下一步：token 與 channel 端點 →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="為什麼 token endpoint 不能讀取 client 傳來的 user id？" data-correct="1" data-explain="若由 client 指定身分，任何已登入的人都能替別人（例如員工）簽出可用 token。">
-  <button class="opt">因為讀取請求內容會讓回應速度變慢</button>
-  <button class="opt">因為那樣任何人都能替別人簽出 token</button>
-  <button class="opt">因為 Clerk 的 session 規定不能用來驗證</button>
-  <button class="opt">因為 Stream 只接受數字型態的識別碼</button>
+<div class="quiz" data-question="為什麼不能讓手機 app 自己決定 Stream 的 user id？" data-correct="1" data-explain="client 可任意改寫請求，改成員工 id 就能冒充員工讀走所有對話。">
+  <button class="opt">因為這樣會讓連線的速度變得很慢</button>
+  <button class="opt">因為病人可偽造成員工並讀走對話</button>
+  <button class="opt">因為 Stream 的 SDK 不支援這種用法</button>
+  <button class="opt">因為 Clerk 會拒絕所有未登入請求</button>
 </div>
 
-<div class="quiz" data-question="Stream 的 API secret 應該存在哪裡？" data-correct="2" data-explain="secret 用來簽 token，只能留在 server 的環境變數，一旦進入 client 就等於人人可偽造身分。">
-  <button class="opt">放在 app 的常數檔方便兩邊共用</button>
-  <button class="opt">跟 API key 一起打包進 app 裡</button>
-  <button class="opt">只放在 server 的環境變數之中</button>
-  <button class="opt">存在 token 裡面一起傳給使用者端</button>
+<div class="quiz" data-question="為什麼 API secret 絕對不能放進手機 app？" data-correct="3" data-explain="secret 能簽出任何人的 token，放進 app 等於把萬用鑰匙發給每個下載的人。">
+  <button class="opt">因為它會讓 app 的檔案變得太大</button>
+  <button class="opt">因為手機沒有辦法儲存字串變數</button>
+  <button class="opt">因為 Stream 只允許在瀏覽器使用它</button>
+  <button class="opt">因為它等於可以簽任何人的 token</button>
 </div>
 
-<div class="quiz" data-question="為什麼 Dentify 讓 Chat 與 Video 共用一個身分？" data-correct="0" data-explain="同一個 user id 與 token 可同時認證兩個產品，不必維護兩套身分與兩套同步邏輯。">
-  <button class="opt">一張 token 就能同時認證兩個產品</button>
-  <button class="opt">因為視訊功能其實是聊天的一部分</button>
-  <button class="opt">因為這樣可以少付一份 Stream 費用</button>
-  <button class="opt">因為 Clerk 只允許綁定一個服務</button>
+<div class="quiz" data-question="Stream 的 user id 在這個專案裡是怎麼決定的？" data-correct="0" data-explain="直接沿用我們資料庫的使用者 id，由 server 從 Clerk session 推導出來。">
+  <button class="opt">沿用資料庫的 user id，由 server 推導</button>
+  <button class="opt">由手機在第一次連線時隨機產生</button>
+  <button class="opt">由 Stream 在註冊時自動指派一組</button>
+  <button class="opt">由 Clerk 在每一次請求時重新命名</button>
 </div>
 
-<div class="quiz" data-question="Stream token 只活四小時的主要用意是什麼？" data-correct="3" data-explain="短效讓外流 token 的可用時間有限，而過期後重新打端點也順便再驗一次身分。">
-  <button class="opt">逼迫使用者每四小時重新登入一次</button>
-  <button class="opt">降低 Stream 伺服器的儲存成本負擔</button>
-  <button class="opt">讓 token 的簽章運算可以變得更快</button>
-  <button class="opt">就算外流，能被使用的時間也有限</button>
+<div class="quiz" data-question="Chat 與 Video 共用同一張 token，最直接的好處是什麼？" data-correct="2" data-explain="整張 app 只需管理一條憑證生命週期，不必處理兩個 client 各自登入的半殘狀態。">
+  <button class="opt">可以讓兩個功能的畫面長得一樣</button>
+  <button class="opt">可以省下 Stream 的訂閱費用支出</button>
+  <button class="opt">只需管理一條憑證的生命週期</button>
+  <button class="opt">可以讓聊天訊息自動變成視訊通話</button>
 </div>
 
-<div class="quiz" data-question="token 過期時，app 應該怎麼做？" data-correct="1" data-explain="重新打同一個 token 端點，端點會再跑一次 requireAuth，換發新 token 的同時也重新驗身分。">
-  <button class="opt">沿用舊 token 直到伺服器主動拒絕</button>
-  <button class="opt">重打同一個端點換發並重新驗身分</button>
-  <button class="opt">請使用者登出後再重新登入一次</button>
-  <button class="opt">改用 API secret 自己在本機續約</button>
+<div class="quiz" data-question="為什麼病人名字可以送到 Stream，卻不能送到 Sentry？" data-correct="1" data-explain="Stream 簽了 BAA，處理受保護健康資訊被允許；Sentry、log、推播則不在這個範圍內。">
+  <button class="opt">因為 Sentry 的伺服器不在美國境內</button>
+  <button class="opt">因為 Stream 簽了 BAA 被允許處理 PHI</button>
+  <button class="opt">因為 Sentry 的免費方案不能存文字</button>
+  <button class="opt">因為 Stream 要求一定要收到真實姓名</button>
 </div>
 
-<div class="quiz" data-question="為什麼病患名字會刻意傳送到 Stream，其他資料卻不行？" data-correct="2" data-explain="收件匣需要可讀的名字，而 Stream 在可簽署 BAA 的名單上；Sentry 或 log 沒有同樣承諾，仍禁止放入病患資訊。">
-  <button class="opt">因為 Stream 的儲存空間比 Sentry 來得大</button>
-  <button class="opt">因為病患名字不算是需要保護的資料</button>
-  <button class="opt">因為 Stream 有合規承諾可接受這項資料</button>
-  <button class="opt">因為名字只會在視訊通話時才被使用</button>
+<div class="quiz" data-question="token 之所以設計成短效、可刷新，主要是為了什麼？" data-correct="3" data-explain="短效憑證即使外流，可用時間也有限；每次刷新都重跑一次身分驗證。">
+  <button class="opt">讓 Stream 可以統計使用者的上線時間</button>
+  <button class="opt">讓手機每次都要重新輸入一次密碼</button>
+  <button class="opt">讓聊天內容可以自動壓縮得更小</button>
+  <button class="opt">憑證外流時能用的時間也很有限</button>
 </div>
 
 <div class="footer">

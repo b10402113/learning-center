@@ -11,65 +11,68 @@
 <h1>修完、驗證、合併</h1>
 <p class="meta">Step 5/5 · 大規模 PR 安全審查</p>
 
-<h2>這一節要完成什麼？</h2>
+<h2>學習目標</h2>
+<p>平行套用修復、二次 commit，驗證後合併回 master。</p>
 
-<p>前面四節鋪完了整條線：知道規模會讓審查失效、認得七類安全問題、真的把 PR 開起來讓 CodeRabbit 掃過、也對每一則 finding 做了修或保留的判斷。現在，你手上有幾批「要修」的修正，以及一條已經推上 GitHub 的 <code>web-and-api</code> 分支。這一節要把這些修復套用、驗證，然後安全地合併回 <code>master</code>。</p>
+<h2>前言：把判斷變成真的改動</h2>
 
-<p>做完後你會得到：安全問題已被修掉、修正以第二個 commit 落在同一條分支上、PR 在確認可運作之後合併進主分支，而你本機的 master 是最新的。前置條件是前四節的產物都在——分支、PR、以及分好類的修正清單。</p>
+<p>上一步你已經把 CodeRabbit 的 finding 分成兩堆：要修的和要保留的。現在要把「要修」的那堆，實際套用進程式碼，收成第二個 commit，驗證之後把這個 PR 合併回 master。</p>
 
-<h2>第一步：讓平行 session 各自修完一批</h2>
+<p>這一步的關鍵不是寫修復，而是「怎麼不排隊」。十幾則修復如果依序跑，你會坐在那裡等一輪又一輪；但如果你把它們拆成獨立的 session 同時進行，你只花一次「貼 prompt」的時間，它們卻並行完成。做完之後，PR 上會有兩個 commit：第一個是原始的一萬五千行，第二個是審查後的修復。動手前請確認：你已經決定好要修的清單與對應的修復 prompt，而且你還在同一個 branch 上。</p>
 
-<p>把「要修」的那堆依模組或檔案分組，開多個 agent session 同時處理。每個 session 拿到的是它自己那批的彙整 prompt，改動的範圍盡量不要和其他 session 重疊，避免之後合併時衝突。</p>
+<h2>第 1 步：平行套用修復</h2>
 
-<pre><code># 概念示意：不同 session 負責不同模組
-# session A → app/api/webhooks/*
-# session B → app/api/appointments/*
-# session C → lib/auth/*</code></pre>
+<p>替每一則要修的問題開一個獨立的 agent session，各自貼上那則問題的修復 prompt。核心心法是：不要讓後面的修復等前面的修復跑完。作者在示範裡就是這樣做的：把每一則 prompt 分別貼進不同的 session，讓它們同時運行。下面這個結構只是節奏示意，實際請依你手上那幾則 finding 的內容替換：</p>
 
-<p>如果兩個 session 非改到同一個檔案不可，就把它們排成先後，不要同時進行。分派前先看一眼每則問題落在哪個檔案，是避免這件事最省力的動作。</p>
+<pre data-provenance="derived">Session A：貼上 finding #1 的修復 prompt
+Session B：貼上 finding #2 的修復 prompt
+Session C：貼上 finding #3 的修復 prompt
+...其餘要修的問題以此類推</pre>
 
-<h2>第二步：逐批檢查 diff，再 commit</h2>
+<p>這樣做的另一個好處是隔離。每一則修復只動它該動的地方，若某一則改壞了，你能一眼看出是哪一則造成的，而不是十幾則混在同一個 diff 裡。</p>
 
-<p>session 改完不等於可以直接送出去。翻一下它改的 diff，確認內容真的對應到那則 finding，而且沒有順手改掉不相關的地方。</p>
+<h2>第 2 步：確認每一則修復都符合預期</h2>
 
-<pre><code>git diff
+<p>等所有 session 完成後，逐一確認改動。至少要做到兩件事：確認它真的修掉了那則 finding，以及確認它沒有動到不該動的地方。如果某則修復會改變功能行為，就在合併前把功能再跑一次。安全修復偶爾會不小心收緊到正常流程也被擋掉，這在合併前抓出來最省事。</p>
 
-git add .
-git commit -m "fix: 依安全審查修正授權與輸入驗證問題"
-git push</code></pre>
+<h2>第 3 步：在同一個 branch 上收成第二個 commit</h2>
 
-<p>這第二個 commit 會直接更新原本那個 PR——你不需要另開一個 PR。課程裡的流程就是：同一條分支、修正集中成第二個 commit、推回遠端，PR 自動更新。</p>
+<p>確認完畢後，在<strong>同一個 branch</strong>（也就是原本那個 <code>web-and-api</code>）上，把修復 stage、產生新的 commit message、commit，然後 sync 推回同一條 branch：</p>
 
-<h2>第三步：合併前先驗證</h2>
+<pre data-provenance="derived">git add -A
+git commit -m "Fix security and review findings from CodeRabbit"
+git push</pre>
 
-<p>合併是會改變主分支狀態的動作，而且不容易乾淨地退回。所以在按下 merge 之前，至少確認這幾件事：</p>
+<p>推上去之後回到 PR 頁面，你會看到 commit 數從一個變成兩個：一個是原始的實作，一個是審查後的修復。這樣 PR 的歷史就很清楚：「這一版做了什麼」和「這一版被審查後修了什麼」分開記錄。</p>
 
-<ul>
-<li>PR 的變更清單與你的預期一致，沒有意外的檔案被帶進來。</li>
-<li>修正過的程式能跑——重新啟動 app，走一遍最關鍵的流程。</li>
-<li>你刻意保留的那些 finding（例如 <code>masks: false</code>）沒有在修正過程中被一起改掉。</li>
-</ul>
+<h2>第 4 步：要不要等 CodeRabbit 再掃一次？</h2>
 
-<p>課程中提到，修正完成、commit、push 之後，<strong>不需要特地等 CodeRabbit 再跑第二輪</strong>才能合併。因為這批修正本來就是針對它已經指出的問題；真正該做的驗證，是把程式實際跑起來確認行為正確。</p>
+<p>新的 commit 推上去後，CodeRabbit 會再對它跑一輪審查。你可以選擇等它跑完，看修復有沒有被接受；但這不是必要步驟。示範裡的選擇是不等：修完自己的修復之後，不需要為了 AI 的二次複審而卡住流程。你可以把這當成預設：修完、確認過，就往下合併；除非這則 PR 特別敏感，才值得多等一輪。</p>
 
-<h2>第四步：合併 PR，切回 master 同步</h2>
+<h2>第 5 步：合併 PR</h2>
 
-<p>確認無誤後，在 PR 頁面按下合併，把整條分支的成果併回 <code>master</code>。合併完成後，切回 master，把最新的內容拉下來，確保本機與遠端一致。</p>
+<p>回到 PR 頁面，執行 merge，確認畫面顯示 successfully merged。合併代表這兩個 commit 正式進入主線。這一步是不可逆的，所以先確認：PR 的目標分支是 master、你要合併的內容就是這兩個 commit、而且沒有未提交的本地改動還沒處理。</p>
 
-<pre><code>git checkout master
-git pull</code></pre>
+<h2>第 6 步：切回 master 並同步</h2>
 
-<p>這一步常被忽略：如果只合併、不同步，你的本機還停留在舊版本，接著開新分支時就會從過時的起點出發。切回 master 並 pull 一次，是這個流程的收尾儀式。</p>
+<p>合併後切回 master，把遠端的最新改動拉回本地：</p>
 
-<h2>第五步：合併後，在 master 上再確認一次</h2>
+<pre data-provenance="derived">git switch master
+git pull</pre>
 
-<p>合併之後，切到 master 上把 app 再跑一次。重點是確認「合併這個動作本身」沒有帶來問題——例如兩批平行修正雖然各自正確，合在一起卻互相衝突。確認沒問題，這批上萬行的改動才算真正落地。</p>
+<p>完成後，本地 master 就包含剛剛那兩個 commit。整個循環到此結束：從一萬五千行無人能審的 diff，到一輪 AI 安全審查、一份經你判斷的修復，最後安全地落地到主線。</p>
+
+<h2>做完長什麼樣</h2>
+
+<p>驗證方式很直接：PR 頁面顯示兩個 commit 且狀態為 merged；切到 master 後，本機 <code>git log</code> 看得到那兩筆提交；先前 CodeRabbit 標記的 major security findings，在你選擇修的那些上已經消失或標為已解。至於每個類別背後的原理，屬第 2 步；怎麼判斷該修哪些，屬第 4 步；這裡只負責把程序安全地走完。</p>
+
+<h2>小結</h2>
 
 <blockquote>
-做完的結果：要修的 finding 已由平行 session 修完、以第二個 commit 落在同一條分支；驗證通過後 PR 合併回 master；本機 master 已同步；刻意保留的 finding 維持原狀。到這裡，一個上萬行的初始 PR 在安全把關後合併完成。
+替每一則要修的問題開獨立 session、平行套用修復，避免依序排隊。確認每則修復符合預期後，在同一個 branch 上 stage、產生新 commit message、commit 並 push，讓 PR 累積成兩個 commit。CodeRabbit 的二次複審可等可不等，預設不等。接著 merge PR、確認成功，切回 master 並 pull，把最新改動同步回本地。
 </blockquote>
 
-<p>整套流程的道理，其實收束在最前面那一節：當改動大到人眼放棄，安全靠的不是更努力地看，而是一張好地圖（嚴重度排序、分類堆疊、安全清單）、加上你在關鍵處做的判斷、以及一個能重複套用的合併流程。把這三步固定下來，下次 AI 再一次生成整個後端時，你就有辦法把它安全地帶進主線。</p>
+<p>你已經走完這個節點的完整循環：建立規模的觀念、拿到分類地圖、跑一次大型 PR 審查、做出修與留的判斷、把修復落地並合併。下一次面對「AI 一次生成整個後端」，你已經有一套能重複的做法，而不是把危險直接合併進主分支。</p>
 
 <div class="lesson-nav">
   <div><a href="./triage-findings-fix-or-keep.html">← 上一步：哪些 finding 該修、哪些該保留</a></div>
@@ -78,41 +81,39 @@ git pull</code></pre>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="修正完成後，第二個 commit 應該落在哪裡？" data-correct="2" data-explain="直接 commit 到同一條 web-and-api 分支，原本的 PR 會自動更新。">
-  <button class="opt">另開一條全新的分支再開新 PR</button>
-  <button class="opt">直接 commit 到 master 跳過 PR</button>
-  <button class="opt">commit 到同一條分支更新原 PR</button>
-  <button class="opt">先建一個新的 repo 再推上去</button>
+<div class="quiz" data-question="為什麼要把每一則修復拆成獨立的 agent session？" data-correct="1" data-explain="獨立 session 可以同時進行，不必等前一則跑完，也讓每則改動互相隔離。">
+  <button class="opt">因為同一個 session 沒有足夠的 token 處理多則修復</button>
+  <button class="opt">獨立 session 能平行進行，也讓改動互相隔離</button>
+  <button class="opt">因為 CodeRabbit 只會把 prompt 送到第一個 session</button>
+  <button class="opt">拆開後每一則修復都會自動附上對應的測試</button>
 </div>
-<div class="quiz" data-question="合併之前，課程建議的驗證方式是什麼？" data-correct="1" data-explain="不必等第二輪 CodeRabbit，而是把程式實際跑起來確認行為正確。">
-  <button class="opt">等 CodeRabbit 再跑滿第二輪十分鐘</button>
-  <button class="opt">把程式跑起來確認關鍵流程正確</button>
-  <button class="opt">把 PR 關掉重新開一個新的</button>
-  <button class="opt">把所有 review 意見全部再讀一次</button>
+
+<div class="quiz" data-question="修復完成後，第二個 commit 應該收在哪裡？" data-correct="2" data-explain="收在同一個 branch 上，PR 才會顯示兩個 commit，歷史清楚。">
+  <button class="opt">另外開一個新的 branch，再各自開一個 PR</button>
+  <button class="opt">直接 commit 到本機 master，跳過 PR 流程</button>
+  <button class="opt">收在原本同一個 branch，讓 PR 累積兩個 commit</button>
+  <button class="opt">不收成 commit，讓改動留在工作目錄即可</button>
 </div>
-<div class="quiz" data-question="修正完成並 push 後，需要等 CodeRabbit 第二輪才能合併嗎？" data-correct="3" data-explain="修正是針對已指出的問題，可直接合併，實際驗證才是重點。">
-  <button class="opt">需要，而且要等它跑滿十分鐘</button>
-  <button class="opt">需要，否則 GitHub 會拒絕合併</button>
-  <button class="opt">需要，而且必須再開一次 PR</button>
-  <button class="opt">不需要，可直接合併並驗證</button>
+
+<div class="quiz" data-question="推上修復 commit 後，是否一定要等 CodeRabbit 再掃一輪？" data-correct="0" data-explain="不是必要步驟；預設可以不等，除非這個 PR 特別敏感才值得多等一輪。">
+  <button class="opt">不必要，預設可不等，敏感 PR 再考慮等</button>
+  <button class="opt">一定要，否則 GitHub 會拒絕合併這個 PR</button>
+  <button class="opt">一定要，否則修復不會被計入 commit 歷史</button>
+  <button class="opt">不必要，因為 CodeRabbit 只會掃描第一次</button>
 </div>
-<div class="quiz" data-question="合併 PR 之後，立刻該做的一件事是什麼？" data-correct="0" data-explain="切回 master 並 pull，讓本機與遠端保持同步，避免從過時的起點開新分支。">
-  <button class="opt">切回 master 並 pull 同步</button>
-  <button class="opt">把整條分支從遠端刪掉</button>
-  <button class="opt">立刻再開一條新的功能分支</button>
-  <button class="opt">把 repo 的歷史紀錄清空</button>
+
+<div class="quiz" data-question="合併 PR 前，下列哪一項最需要先確認？" data-correct="3" data-explain="合併不可逆，要先確認目標分支、要合併的內容與本地狀態都正確。">
+  <button class="opt">確認 CodeRabbit 的訂閱方案還沒有過期</button>
+  <button class="opt">確認 PR 的標題是否包含正確的關鍵字</button>
+  <button class="opt">確認 branch 名稱符合團隊的命名規範</button>
+  <button class="opt">確認目標分支正確、內容無誤、本地已處理</button>
 </div>
-<div class="quiz" data-question="為什麼要避免多個平行 session 同時改同一個檔案？" data-correct="2" data-explain="同時改同一檔案在合併時容易衝突，讓範圍不重疊是分派前的關鍵動作。">
-  <button class="opt">因為同一時間只能開一個 session</button>
-  <button class="opt">因為 AI 會忘記自己改過什麼</button>
-  <button class="opt">同時改同檔會讓合併時互相衝突</button>
-  <button class="opt">因為 GitHub 會限制平行 session</button>
-</div>
-<div class="quiz" data-question="合併後還要在 master 上再跑一次 app，主要目的是？" data-correct="1" data-explain="確認合併本身沒帶來問題，例如兩批各自正確的修正合在一起卻衝突。">
-  <button class="opt">重新產生一次 CodeRabbit 的報告</button>
-  <button class="opt">確認合併本身沒有帶來新問題</button>
-  <button class="opt">把之前保留的 finding 全部改掉</button>
-  <button class="opt">讓 master 的 commit 數量變少</button>
+
+<div class="quiz" data-question="合併之後切回 master，還要做什麼才能讓本地同步？" data-correct="1" data-explain="切回 master 後執行 pull，把遠端最新的改動拉回本地。">
+  <button class="opt">重新建立一次 branch，避免本地落後遠端</button>
+  <button class="opt">切回 master 後執行 pull，拉回最新改動</button>
+  <button class="opt">刪除原本的 branch，並重新 clone 整個 repo</button>
+  <button class="opt">把本地 master 強制 push，覆蓋遠端內容</button>
 </div>
 
 <div class="footer">

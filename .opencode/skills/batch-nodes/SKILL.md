@@ -24,11 +24,11 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 1. **Resolve.** Parse `subject`, `-max-subagents N` (default 3), the flags, and the scope (`tier<N>` | explicit slugs | all) per `docs/reference/skill-scope.md`. Validate each slug's container at `learn/<subject>/nodes/<slug>.mdx`. Nodes already `content-written` or `edges-written` leave the teaching batches but stay in scope for the generation phases. Gate the prereqs here, so a missing key ends the run before any subagent fires.
 2. **Teach.** Batch the teaching nodes into groups of `max-subagents`; run batches sequentially and nodes within a batch in parallel. For each batch dispatch one `task` call per node — all calls in one message, each with `subagent_type: teach-agent` so the writing rules (Taiwan Traditional Chinese, plain wording, no AI tells) apply. Each subagent receives [NODES-AND-TEACH-PROMPT](#nodes-and-teach-prompt) with `<NODE-ID>` and `<SUBJECT>` filled in and runs `/nodes` then `/teach` for its node. Wait for every subagent to return, record each outcome, show a progress line, and continue.
 3. **Article** (`-gen-article` only). Run the `/to-article` flow (`.opencode/skills/to-article/SKILL.md`) over the resolved scope — one `article-agent` per step runs the rewrite and then the plan, reusing this skill's `-max-subagents`. One delta from that skill: a step whose `illustration` is already `planned` or `done` and which has `output/<node>/<step>/plan.json` is skipped, unless `-force`.
-4. **Humanize** (skip with `-skip-humanize`). One `task` call per step, batched by `max-subagents`, with `subagent_type: humanize-agent` and the [Humanize-prompt](#humanize-prompt) filled in. Target each step's published `lessons/<node>/<step>.html`; run this after the Article step, so with `-gen-article` it cleans the article Article just planned and without it — Article skipped — it cleans the lesson Teach just wrote. Exactly one humanize-agent per step; `/to-article` itself stays unaware of it.
+4. **Humanize** (skip with `-skip-humanize`). One `task` call per node, batched by `max-subagents`, with `subagent_type: humanize-agent` and the [Humanize-prompt](#humanize-prompt) filled in. Each call cleans every step HTML file in that node's published `lessons/<node>/` directory; run this after the Article step, so with `-gen-article` it cleans the article Article just planned and without it — Article skipped — it cleans the lesson Teach just wrote. Exactly one humanize-agent per node; `/to-article` itself stays unaware of it.
 5. **Image** (`-gen-image` only). Run the `/to-image` flow (`.opencode/skills/to-image/SKILL.md`) over every in-scope step that has a `plan.json` and whose `illustration` is not `done` — one `article-agent` per step, unless `-force`. The flag is the consent: generate without the confirmation prompt.
 6. **Report.** Summarise the teaching nodes (completed / failed / skipped, with reasons) and, when run, each generation phase (rewritten / planned / humanized / generated / failed / skipped). List failures with their errors and suggest re-running `/batch-nodes <subject> <failed-slug>`, or running `/edges <subject>/<node-id>` on completed nodes.
 
-Completion: every in-scope node and step was dispatched to its own subagent (exactly one humanize-agent per step, unless `-skip-humanize`), every subagent returned, every outcome recorded, and the final report delivered.
+Completion: every in-scope node and step was dispatched to its owning subagent (exactly one humanize-agent per node, unless `-skip-humanize`), every subagent returned, every outcome recorded, and the final report delivered.
 
 ## Nodes-and-teach-prompt
 
@@ -80,15 +80,15 @@ Report back: step count, DAG confirmed, skeleton files created, which steps comp
 
 ## Humanize-prompt
 
-Run this one `task` call per step in the Humanize step; dispatch every call with `subagent_type: humanize-agent`. Fill `<NODE-ID>`, `<STEP-ID>` and `<SUBJECT>` before dispatching.
+Run this one `task` call per node in the Humanize step; dispatch every call with `subagent_type: humanize-agent`. Fill `<NODE-ID>` and `<SUBJECT>` before dispatching.
 
 ```
-Run /zh-tw-humanizer on exactly one file. Subject: <SUBJECT>. Node: <NODE-ID>. Step: <STEP-ID>.
+Run /zh-tw-humanizer over the step HTML lessons of one node. Subject: <SUBJECT>. Node: <NODE-ID>.
 
-Target file: learn/<SUBJECT>/lessons/<NODE-ID>/<STEP-ID>.html
+Target directory: learn/<SUBJECT>/lessons/<NODE-ID>/
 
-Follow your humanize-agent instructions exactly: load the `zh-tw-humanizer` skill, run it in 非互動「跳過確認、事後摘要」mode on that file, change only the Chinese prose, and preserve all HTML markup, code, links, quiz markup and marker lines byte-for-byte.
+Process every `.html` file in that directory, one file at a time. For each file, follow your humanize-agent instructions exactly: load the `zh-tw-humanizer` skill, run it in 非互動「跳過確認、事後摘要」mode, change only the Chinese prose, and preserve all HTML markup, code, links, quiz markup and marker lines byte-for-byte. Do not touch files outside this node's directory.
 
-Report the file, the edit count, a one-line summary, and any error.
+Report per file: filename, edit count, one-line summary; then any errors.
 ```
 

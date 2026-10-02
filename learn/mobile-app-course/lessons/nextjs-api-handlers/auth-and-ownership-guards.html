@@ -12,32 +12,44 @@
 <p class="meta">Step 3/5 · Next.js API Route Handlers</p>
 
 <h2>學習目標</h2>
-<p>能分辨 <code>requireAuth</code>、<code>requireStaff</code>、<code>requireOwnedPatient</code> 各自的職責，並說明為什麼身分必須由伺服器從 session 推導，以及別人的資料為什麼要回 404 而不是 403。</p>
+<p>能解釋 requireAuth、requireStaff 與 requireOwnedPatient 各自擋下什麼，並說出身分為什麼只能從 session 推導、不能相信 client 傳來的任何欄位。</p>
 
-<h2>前言：一個看起來很方便、卻會出事的寫法</h2>
-<p>手機要拿自己的預約，最直覺的 API 設計是：讓手機在請求裡帶上自己的使用者 id，伺服器拿這個 id 去查資料。像是 <code>GET /api/appointments?userId=abc</code>。寫起來很順，測試也很快。</p>
-<p>問題是，任何人只要改一下那個字串，就能查別人的預約。伺服器完全沒有能力分辨「這個 id 是手機自己的，還是它掰出來的」。同樣的漏洞也會出現在寫入端：如果建立預約時由 client 決定 patientId，那 attacker 就能替別人掛號。</p>
-<p>正確的做法是把身分交給伺服器判斷。手機證明「我是誰」的方式，是帶著登入後拿到的 token；伺服器驗證 token，從中得到使用者 id，其餘一律不信。這一節要看的，就是包住這套判斷的三個守衛。</p>
+<h2>前言：一個容易踩的陷阱</h2>
 
-<h2>requireAuth：確認「你是誰」</h2>
-<p>第一個守衛 <code>requireAuth</code> 是幾乎每個病人端路由的入口。它做兩件事：向 Clerk 要出目前 session 的使用者 id，沒有的話就丟 401；有的話，確保資料庫裡有一列對應的使用者，再把它回傳。</p>
-<pre><code>export async function requireAuth(): Promise&lt;AppUser&gt; {
-  const { userId } = await auth();      // 由 Clerk middleware 驗 token
+<p>假設你要寫一個「讀取我的預約」的端點。最直覺的寫法是讓手機把使用者 id 一起送上來，然後你拿這個 id 去查資料。這在很多教學範例裡都看得到，看起來也沒什麼問題。反正 app 是我寫的，它當然會送自己的 id。</p>
+
+<p>問題在於：API 是公開的。只要有人拿得到網址，就可以用 curl 或 Postman 送出任何他想送的 id。你相信 client 傳來的 userId，等於把「我可以查誰的資料」這件事交給對方決定。攻擊者只要把 id 換成別人的，就能看到別人的病歷。這就是所謂的冒充漏洞。它最可怕的地方是，程式碼「看起來」完全正常，因為那個 id 確實是使用者自己送來的。</p>
+
+<p>這一節要建立的紀律很簡單，但非常關鍵：身分只能從 session 推導。session 是伺服器驗證過 token 之後產生的，使用者改不了；client 傳來的任何欄位都只是「請求資料」，一律不能當成身分依據。</p>
+
+<h2>requireAuth：把「你是誰」變成一個函式</h2>
+
+<p>這個 app 用 Clerk 當身分供應商，並把「登入」包成一個所有端點都會呼叫的函式 <code>requireAuth()</code>。它回傳的是資料庫裡的使用者列，而不是 Clerk 的原始物件，因為後續的查詢都需要我們的 <code>users.id</code>。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/auth.ts"><code>/** Every patient-facing route starts here. Accepts the Expo Bearer token via clerkMiddleware. */
+export async function requireAuth(): Promise&lt;AppUser&gt; {
+  const { userId } = await auth();
   if (!userId) throw unauthorized();
   return ensureUser(userId);
 }</code></pre>
-<p>這裡的 <code>auth()</code> 來自 <code>@clerk/nextjs/server</code>，它會驗證請求攜帶的 token；手機端則是在每次 <code>fetch</code> 時把 Clerk 的 Bearer token 放進 header。注意：函式裡完全沒有出現任何來自 request body 或 query 的 id。使用者的身分只有一個來源，就是被驗證過的 session。</p>
 
-<h2>為什麼 requireAuth 順便要 upsert？</h2>
-<p><code>ensureUser</code> 的名字聽起來只是「取得使用者」，但它其實帶了一個重要的設計。回想 Clerk 與資料庫同步那一課：webhook 建立使用者資料是「最終一致」的，可能比第一次 API 請求晚到。如果 API 只會讀資料庫，新使用者登入後立刻打 API，就會找不到自己的那一列。</p>
-<p>所以 <code>requireAuth</code> 選擇不等 webhook，直接從 session 補上：</p>
-<pre><code>async function ensureUser(clerkId: string): Promise&lt;AppUser&gt; {
+<p>看它做事的順序。先跟 Clerk 要當下這個請求的 <code>userId</code>，這個值來自請求帶的 token，是伺服器驗證過的，不是請求 body 裡的欄位。如果沒有 <code>userId</code>，直接 <code>throw unauthorized()</code>，也就是上一節學到的 401。如果有，交給 <code>ensureUser()</code> 把它對應到資料庫裡的那一列。</p>
+
+<p>手機端是 Expo，跟網頁的登入方式不同，它帶的是 Bearer token。這裡之所以能拿到同一份 <code>userId</code>，是因為專案的 <code>proxy</code>（新版 Next.js 已把 middleware 改名）會把 Clerk 的驗證結果掛到每個請求上，所以不管你從網頁還是手機來，<code>auth()</code> 都讀得到。這是「在一個地方把身分準備好」的價值：handler 不需要各自處理 token 的差異。</p>
+
+<h2>ensureUser：跟 webhook 的最終一致性打一架</h2>
+
+<p><code>requireAuth()</code> 最後呼叫的 <code>ensureUser()</code>，處理的是一個很真實的時序問題。這個專案原本靠 Clerk 的 webhook，在使用者建立時把資料同步進自己的 <code>users</code> 表。但 webhook 是「最終一致」的：一個剛註冊的使用者，很可能在 <code>user.created</code> 這個事件送達之前，就已經打開 app 打了第一個 API。</p>
+
+<p>如果這時 handler 只會去 <code>users</code> 表找資料，就會找不到人，然後回一個使用者根本看不懂的錯誤。解法是不要等 webhook，直接從 session 的資料 upsert：找不到就建立，找到就回傳。webhook 則退居後援，負責之後的更新與刪除。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/auth.ts"><code>async function ensureUser(clerkId: string): Promise&lt;AppUser&gt; {
   const existing = await db.select().from(users).where(eq(users.clerkId, clerkId));
   if (existing[0]) return existing[0];
 
   const clerkUser = await currentUser();
   const email = clerkUser?.primaryEmailAddress?.emailAddress ?? null;
-  const role  = roleFromMetadata(clerkUser?.publicMetadata);
+  const role = roleFromMetadata(clerkUser?.publicMetadata);
 
   const [created] = await db
     .insert(users)
@@ -46,91 +58,124 @@
     .returning();
   return created;
 }</code></pre>
-<p>這個做法讓請求路徑本身就能保證資料存在，webhook 則退居成「後續更新與刪除的備援」。<code>onConflictDoUpdate</code> 是關鍵：就算 webhook 剛好同時插入，也不會撞成兩列。</p>
 
-<h2>requireStaff：角色判斷，兩邊都信</h2>
-<p>員工 dashboard 與員工專屬端點需要更高的權限，這時用 <code>requireStaff</code>。它同樣先確認登入、確保使用者存在，接著判斷角色是不是 staff 或 dentist，不是的話丟 403。</p>
-<p>比較特別的是判斷邏輯。角色可能來自兩個地方：session token 裡的 <code>publicMetadata</code>，或資料庫 <code>users</code> 表裡的 role。當管理員在 Clerk 後台把某人改成 staff，這個變更可能還沒同步到資料庫；反過來，資料庫也可能有 Clerk metadata 還沒反映的狀態。這支程式的選擇是「只要任一邊說是 staff 就算」：</p>
-<pre><code>const claimRole = roleFromMetadata(sessionClaims?.publicMetadata);
-const isStaff =
-  claimRole === 'staff' || claimRole === 'dentist' ||
-  user.role === 'staff' || user.role === 'dentist';
-if (!isStaff) throw forbidden('Staff access only');</code></pre>
-<p>通過之後，它還會把 database 的 role 更新成 token 裡的版本，讓 dashboard 那些直接讀 Drizzle 的頁面看到一致的角色。判斷角色的預設值是 <code>patient</code>：<code>roleFromMetadata</code> 只認得 <code>'staff'</code> 與 <code>'dentist'</code>，其他一律當病人，避免有人塞一個怪字串就拿到權限。</p>
+<p>這裡有一個值得學的設計：<code>onConflictDoUpdate</code> 讓這個 upsert 是冪等的。就算兩個請求幾乎同時到達、都決定要建立同一個使用者，資料庫的唯一鍵也會讓其中一次變成更新，而不是撞出重複資料。這種「不確定誰先誰後，但結果一定一樣」的寫法，是分散式系統裡的基本功。</p>
 
-<h2>requireOwnedPatient：這筆資料是不是你的</h2>
-<p>確認了身分之後，還有最後一層：這支路由要操作的病人資料，屬於呼叫者嗎？這個問題每支帶 <code>patientId</code> 的路由都會遇到，所以它被收斂成一個守衛 <code>requireOwnedPatient</code>。</p>
-<pre><code>export async function requireOwnedPatient(user: AppUser, patientId: string) {
+<h2>requireStaff：角色判斷要信哪一邊</h2>
+
+<p>不是每個端點都給病人用，員工 dashboard 的功能就只有員工能碰。<code>requireStaff()</code> 比 <code>requireAuth()</code> 多一層角色檢查，但它的難處在於：角色有兩個來源，一個是 Clerk 的 <code>publicMetadata</code>，一個是我們自己資料庫的 <code>users.role</code>。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/auth.ts"><code>export async function requireStaff(): Promise&lt;AppUser&gt; {
+  const { userId, sessionClaims } = await auth();
+  if (!userId) throw unauthorized();
+
+  const user = await ensureUser(userId);
+  const claimRole = roleFromMetadata(
+    (sessionClaims as { publicMetadata?: unknown } | null)?.publicMetadata
+  );
+
+  // Trust whichever side says "staff" — the DB row may lag a Clerk change.
+  const isStaff =
+    claimRole === 'staff' ||
+    claimRole === 'dentist' ||
+    user.role === 'staff' ||
+    user.role === 'dentist';
+  if (!isStaff) throw forbidden('Staff access only');</code></pre>
+
+<p>它的判斷原則是「哪邊說是員工就信哪邊」。為什麼不用嚴格交集，兩邊都說是員工才放行？因為資料庫那列可能落後於 Clerk 的變更，管理員剛把某人升成員工，但同步還沒跑完。反過來說，如果資料庫還留著舊的員工角色、Clerk 已經降回病人，這條規則會偏寬，但這裡選擇的是「避免把合法的員工擋在門外」。角色判斷的寬嚴取捨，取決於哪一種錯更痛；對員工入口來說，誤擋的痛通常大於短暫誤放。</p>
+
+<h2>requireOwnedPatient：真正的那道所有權鎖</h2>
+
+<p>最常見的越權情境不是「沒有登入」，而是「有登入，但想碰別人的資料」。一個診所帳號可能同時管理全家人的病歷，所以「有登入」和「能碰這筆病人資料」完全是兩件事。這個 app 用一個函式把這道鎖收在一起，所有帶 <code>patientId</code> 的端點都得過這一關。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/auth.ts"><code>/**
+ * Resolves a patient the caller is actually allowed to touch. Every route that
+ * takes a patientId goes through here — that is the whole ownership check, so
+ * it is never re-implemented per route.
+ */
+export async function requireOwnedPatient(user: AppUser, patientId: string) {
   const [patient] = await db
     .select()
     .from(patients)
-    .where(and(
-      eq(patients.id, patientId),
-      eq(patients.accountUserId, user.id)   // 關鍵：同時比對擁有者
-    ));
+    .where(and(eq(patients.id, patientId), eq(patients.accountUserId, user.id)));
   if (!patient) throw notFound('Patient not found');
   return patient;
 }</code></pre>
-<p>查詢條件是「id 等於傳入值」而且「accountUserId 等於目前使用者」。只要不是自己的，查詢就找不到，於是回傳 404。這裡的擁有權判斷只寫一次，所有病歷相關路由都呼叫它，不需要各自複製一段權限檢查——也就不會出現「有一支路由忘記檢查」的破口。</p>
-<p>另外還有一個 <code>selfPatient</code>，用來取得帳號本人那一列（資料庫裡以 <code>isSelf</code> 標記）。它和 <code>requireOwnedPatient</code> 的差別是：前者用於「我只能操作我自己」，後者用於「我可以操作我名下的任何一位家人」。</p>
 
-<h2>把「別人的資料」當成不存在</h2>
-<p>你可能注意到，<code>requireOwnedPatient</code> 對「不是你的病人」回的是 404，而不是「你無權存取」的 403。這不是偷懶，而是一個一致的資安選擇。如果傳別人的 id 回 403、傳一個根本不存在的 id 回 404，攻擊者就能拿這兩個回應的差別，逐一探測「哪些病人 id 真的存在」。回 404 讓「不存在」和「不屬於你」在外部看起來一模一樣，洩漏的資訊最少。</p>
-<p>同樣的原則也出現在 AI 對話的擁有權檢查：一個屬於別人的 conversation id，回的是 404，不是 403。</p>
+<p>它的查詢條件同時包含「病人 id 等於傳進來的」和「這筆病人的帳號 id 等於你的」。兩個條件缺一不可：只有前者，你就能讀任何人的病歷；只有後者，你會撈到全家人而不是指定的那一個。這種「擁有權就是查詢條件的一部分」的寫法，比先查出來再在程式裡比對更安全，因為你根本不會把不該看的資料載進記憶體。</p>
+
+<h2>找不到時，為什麼回 404 而不是 403？</h2>
+
+<p>這裡有個容易被忽略、但很值得記住的選擇：當所有權檢查失敗，回的是 <code>notFound()</code> 而不是 <code>forbidden()</code>。原因是 403 等於在告訴對方「這筆資料存在，只是你沒權限」。攻擊者可以拿這句回饋來探測：「太好了，這個 id 真的有資料，我再試下一個。」把回應改成 404，存在與不存在長得一模一樣，對方就無從得知自己猜中了什麼。</p>
+
+<table>
+<thead>
+<tr><th>守衛</th><th>回答的問題</th><th>失敗時</th></tr>
+</thead>
+<tbody>
+<tr><td><code>requireAuth()</code></td><td>你是誰？有登入嗎？</td><td>401（Sign in required）</td></tr>
+<tr><td><code>requireStaff()</code></td><td>你是員工或牙醫嗎？</td><td>403（Staff access only）</td></tr>
+<tr><td><code>requireOwnedPatient()</code></td><td>這筆病人資料是你的嗎？</td><td>404（Patient not found）</td></tr>
+</tbody>
+</table>
+
+<p>把這些守衛放在 <code>lib/auth.ts</code>、而不是每個 handler 各寫一次，還有另一個好處：規則只有一處，要改的時候不用擔心漏了哪個端點。這也是這個 app 一再出現的模式：把判斷收進一個有名字的函式，讓每個使用的地方都變成一行呼叫。</p>
 
 <h2>小結</h2>
+
 <blockquote>
-身分唯一的來源是 session：<code>requireAuth</code> 驗 token、拿 userId，並順手從 session upsert 使用者，補上 webhook 的延遲。<code>requireStaff</code> 在此之上判斷角色，token metadata 與資料庫任一邊說是 staff 就算，預設一律是病人。<code>requireOwnedPatient</code> 把「這筆資料是不是你的」收斂成一個查詢，找不到就回 404，讓「不存在」與「不是你的」在外部無法區分。三者的共同原則是：永遠不信任 client 傳來的身分，擁有權只判斷一次。
+身分只能從 session 推導，client 傳來的欄位一律不算數。<code>requireAuth()</code> 確認有登入並用 <code>ensureUser()</code> 補上 webhook 的時序落差；<code>requireStaff()</code> 檢查員工角色，角色兩邊來源取寬；<code>requireOwnedPatient()</code> 把「這筆資料是不是你的」直接寫進查詢條件，失敗時回 404 以免洩漏資料存在與否。守衛集中在 lib，每個 handler 只呼叫一行，就不會有人漏掉或寫錯。
 </blockquote>
-<p>守衛解決了「誰能碰這筆資料」，但還沒處理「你送來的內容長什麼樣子」。如果 body 裡少一個必填欄位，或格式根本不對，handler 不該直接拿去查資料庫。下一節要看 Zod 怎麼當入口的城門，以及為什麼像服務長度、通話 id 這些欄位必須由伺服器自己算。</p>
+
+<p>到這裡，我們解決了「誰可以進來」與「能不能碰這筆資料」。但還有一個入口沒守住：請求 body 裡的欄位本身。就算身分正確，client 還是可能送來格式錯誤、超長、或乾脆偽造的欄位。下一節要在 handler 一開頭放一道 Zod 城門，把不合法的輸入全部擋在外面。</p>
 
 <div class="lesson-nav">
   <div><a href="./error-envelope-and-wrapper.html">← 上一步：route() 包裝與錯誤信封</a></div>
-  <div><a href="./typed-request-boundary.html">下一步：Zod 請求邊界 →</a></div>
+  <div><a href="./typed-request-boundary.html">下一步：Zod 請求邊界：不信任 client 傳來的欄位 →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="為什麼 API 不該讓手機在請求裡帶上自己的 userId？" data-correct="2" data-explain="client 可以任意改字串，伺服器無法分辨那是自己的 id 還是掰出來的，等於門戶洞開。">
-  <button class="opt">因為查詢字串的長度有嚴格限制</button>
-  <button class="opt">因為 Clerk 不支援 userId 這種參數</button>
-  <button class="opt">因為伺服器無法驗證那是真的身分</button>
-  <button class="opt">因為這樣會讓資料庫查詢變得很慢</button>
+<div class="quiz" data-question="為什麼不能相信 client 傳來的 userId？" data-correct="2" data-explain="API 是公開的，攻擊者可以改名別人的 id，相信它就等於任人指定要查誰的資料。">
+  <button class="opt">因為 client 傳來的資料格式一定是錯的</button>
+  <button class="opt">因為 userId 在行動網路上會被壓縮</button>
+  <button class="opt">因為攻擊者可以換成別人的 id</button>
+  <button class="opt">因為 Clerk 不支援用 id 查詢使用者</button>
 </div>
 
-<div class="quiz" data-question="requireAuth 為什麼要在讀不到使用者時順便 upsert？" data-correct="1" data-explain="Clerk webhook 是最終一致，可能比第一次請求晚到，所以在請求路徑上補寫可以保證資料存在。">
-  <button class="opt">為了在請求時同步更新 Clerk 的頭像</button>
-  <button class="opt">為了補上 webhook 可能晚到的延遲</button>
-  <button class="opt">為了強制使用者每次重新登入一次</button>
-  <button class="opt">為了把資料庫的所有使用者重新整理</button>
+<div class="quiz" data-question="requireAuth() 在沒有登入時會做什麼？" data-correct="0" data-explain="直接 throw unauthorized()，也就是回一個 401。">
+  <button class="opt">丟出 unauthorized，回一個 401</button>
+  <button class="opt">建立一個新的匿名使用者帳號</button>
+  <button class="opt">放行請求但不回傳任何資料</button>
+  <button class="opt">回一個 500 請使用者稍後再試</button>
 </div>
 
-<div class="quiz" data-question="requireStaff 判斷角色時，為什麼採用「token 或資料庫任一邊算」？" data-correct="3" data-explain="Clerk 的變更與資料庫可能互相落後，任一邊說是 staff 就放行，才不會被同步延遲卡住。">
-  <button class="opt">因為 Clerk 的 token 完全不可信任</button>
-  <button class="opt">因為資料庫的 role 欄位常常是空的</button>
-  <button class="opt">因為這樣可以省略一次資料庫查詢</button>
-  <button class="opt">因為兩邊的同步可能有時間差</button>
+<div class="quiz" data-question="ensureUser 為什麼要用 upsert 而不是等 webhook 建立資料？" data-correct="1" data-explain="webhook 最終一致，新使用者可能比 user.created 先到 API，從 session upsert 才不會找不到人。">
+  <button class="opt">因為 webhook 的執行成本比 upsert 高</button>
+  <button class="opt">因為新使用者可能比 webhook 先到</button>
+  <button class="opt">因為 upsert 可以順便驗證密碼強度</button>
+  <button class="opt">因為 webhook 沒有辦法刪除使用者</button>
 </div>
 
-<div class="quiz" data-question="roleFromMetadata 對無法辨識的角色值會怎麼處理？" data-correct="0" data-explain="它只認 staff 與 dentist，其餘一律當作 patient，避免怪字串意外取得權限。">
-  <button class="opt">一律當成最低權限的病人</button>
-  <button class="opt">丟出錯誤並拒絕這個請求</button>
-  <button class="opt">把它當成 staff 放行以免擋錯</button>
-  <button class="opt">保留原字串交給路由判斷</button>
+<div class="quiz" data-question="requireStaff 判斷員工角色時，原則是什麼？" data-correct="3" data-explain="哪邊說是員工就信哪邊，因為資料庫的列可能落後於 Clerk 的變更。">
+  <button class="opt">只有 Clerk 說是員工才算數</button>
+  <button class="opt">只有資料庫說是員工才算數</button>
+  <button class="opt">兩邊都必須說是員工才可以</button>
+  <button class="opt">哪邊說是員工就信任哪一邊</button>
 </div>
 
-<div class="quiz" data-question="requireOwnedPatient 的查詢條件同時包含哪兩件事？" data-correct="2" data-explain="它同時比對 patient id 與 accountUserId，不是自己的就查不到。">
-  <button class="opt">病人的 id 與他的醫療保險編號</button>
-  <button class="opt">病人的 id 與目前預約的狀態</button>
-  <button class="opt">病人的 id 與目前登入者 id</button>
-  <button class="opt">病人的 id 與診所的營業時間</button>
+<div class="quiz" data-question="requireOwnedPatient 的查詢條件包含哪兩項？" data-correct="1" data-explain="病人 id 符合，且該病人的帳號 id 等於呼叫者，兩者缺一不可。">
+  <button class="opt">病人 id 符合，或帳號 id 等於呼叫者</button>
+  <button class="opt">病人 id 符合，且帳號 id 等於呼叫者</button>
+  <button class="opt">病人 id 符合，且病人的生日等於今天</button>
+  <button class="opt">帳號 id 等於呼叫者，不管病人 id</button>
 </div>
 
-<div class="quiz" data-question="為什麼拿別人的資料 id 去查，回的是 404 而不是 403？" data-correct="1" data-explain="若兩者狀態碼不同，攻擊者能用差異探測哪些 id 存在；一致回 404 洩漏最少。">
-  <button class="opt">因為資料庫找不到時一律回傳 404</button>
-  <button class="opt">因為不想洩漏那筆資料是否存在</button>
-  <button class="opt">因為 403 只能用在員工的 dashboard</button>
-  <button class="opt">因為手機端只看得懂 404 的回應</button>
+<div class="quiz" data-question="所有權檢查失敗時回 404 而不是 403，主要為了什麼？" data-correct="2" data-explain="403 等於承認資料存在，404 讓存在與不存在長得一樣，無法被用來探測。">
+  <button class="opt">讓錯誤訊息看起來比較友善</button>
+  <button class="opt">減少伺服器產生回應的成本</button>
+  <button class="opt">避免洩漏資料到底存不存在</button>
+  <button class="opt">讓手機端能自動重試請求</button>
 </div>
 
 <div class="footer">
@@ -139,6 +184,5 @@ if (!isStaff) throw forbidden('Staff access only');</code></pre>
 </div>
 
 <script src="../assets/quiz.js"></script>
-
 </body>
 </html>

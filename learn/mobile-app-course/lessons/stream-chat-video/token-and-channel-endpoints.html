@@ -12,24 +12,28 @@
 <p class="meta">Step 2/5 · Stream 即時聊天與視訊</p>
 
 <h2>學習目標</h2>
-<p>做完這一節，你會得到兩個可用的 Next.js Route Handler：<code>POST /api/stream/token</code> 回傳一包含 token 的 session，<code>GET /api/stream/channel</code> 回傳這位病人該進的對話。前置是你要先有可用的 <code>requireAuth()</code> 守衛，以及 Stream 應用程式的 API key 與 secret。</p>
+<p>能在 Next.js 後端寫出 mint token 與取得 patient clinic channel 的兩個端點，並說明短效 token 為什麼要設計成可重複刷新。</p>
 
-<h2>前言：規則要變成兩個端點</h2>
+<h2>前言：把「誰能用」變成兩支真的 API</h2>
 
-<p>上一節把規則講完了：身分由 server 決定、secret 只留 server、token 短效。但規則不會自己生效，它得落在兩個實際的請求端點上。第一個負責「你是誰、這張通行證給你」，第二個負責「那你該進哪一個對話」。</p>
+<p>上一節把身分模型的規則講清楚了：手機不能自己報身分，一切由 server 決定。但規則不能只寫在紙上，得有人真的去簽那張通行證，也得有人告訴病人「你該進哪個對話」。這一節要做的就是這兩件事，寫成兩支 Next.js 的 Route Handler。</p>
 
-<p>這一節的骨幹是程式碼，但請留意每個決定背後都對應上一節的原則。例如 token 端點完全不碰請求內容，就是「不信任 client 身分」的直接落實；channel 端點對員工回傳 <code>null</code>，則是「病人一人一對話、員工有共享收件匣」的模型差異。把這兩件事寫對，第四步的畫面才有正確的資料可用。</p>
+<p>動手前先確認你具備什麼。你應該已經懂 Route Handler 的檔案位置與方法匯出慣例，也知道 <code>requireAuth()</code> 與 <code>route()</code> 包裝各自負責什麼；如果這兩件事還有點模糊，先回去看 Next.js API Route Handlers 那個節點。另外，Stream 應用程式要已經透過 <code>stream login</code> 建好，環境變數也放進 <code>apps/web/.env</code>。這節結束時，你會得到兩支可以實際呼叫的端點，而且它們回傳的內容正是下一步 app root 要用的。</p>
 
-<h2>先把 Stream 的伺服器邏輯收進一個 wrapper</h2>
+<h2>第一步：放好環境變數</h2>
 
-<p>不要讓每個 Route Handler 各自呼叫 Stream SDK。Dentify 把所有伺服器端邏輯集中在一支 <code>apps/web/src/lib/stream.ts</code>，其他檔案只依賴它輸出的函式。這樣 secret 只被讀取一次，身分推導也只有一個地方，日後要改不用追很多檔。</p>
+<p>先確認 web 專案讀得到兩個值。一個是可以公開的應用程式 key，另一個是絕對不能外流的 secret：</p>
 
-<p>第一步是建立唯一的 client 並讀取環境變數：</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/stream.ts"><code>export const STREAM_API_KEY = process.env.NEXT_PUBLIC_STREAM_API_KEY;
+const STREAM_API_SECRET = process.env.STREAM_API_SECRET;</code></pre>
 
-<pre><code>export const STREAM_API_KEY = process.env.NEXT_PUBLIC_STREAM_API_KEY;
-const STREAM_API_SECRET = process.env.STREAM_API_SECRET;
+<p>命名上的 <code>NEXT_PUBLIC_</code> 前綴不是裝飾，它是 Next.js 的規則：有這個前綴的變數才會被打包進前端程式碼，所以 key 可以讓手機拿到。相對地，<code>STREAM_API_SECRET</code> 沒有前綴，它只存在於 server 的環境裡。這裡就是你「有沒有把萬用鑰匙留在 server」的實際檢查點。改完環境變數記得重啟 web server，否則舊行程讀不到新值。</p>
 
-let cached: StreamChat | null = null;
+<h2>第二步：寫一個 server 端的 Stream 入口</h2>
+
+<p>不要讓每個檔案各自 <code>new</code> 一個 Stream 物件。集中寫一個 wrapper，第一次呼叫時建立、之後重複使用，而且缺設定時立刻給出清楚的錯誤：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/stream.ts"><code>let cached: StreamChat | null = null;
 
 export function streamServer(): StreamChat {
   if (!STREAM_API_KEY || !STREAM_API_SECRET) {
@@ -39,24 +43,62 @@ export function streamServer(): StreamChat {
   return cached;
 }</code></pre>
 
-<p>這裡有兩件事值得停下來看。第一，<code>STREAM_API_KEY</code> 用 <code>NEXT_PUBLIC_</code> 前綴，代表它可以被前端看到，因為它只是一個應用程式代號；secret 則完全沒有這個前綴，只會被 server 讀到。第二，client 用 module 層的 <code>cached</code> 變數快取，避免每次請求都重建一個 Stream 連線。</p>
+<p>這裡有三個手法值得記住。<code>cached ??= ...</code> 的意思是「如果 cached 還是空的，才建立並存起來」，也就是單例（singleton）；重複呼叫不會一直開新連線。<code>StreamChat.getInstance(...)</code> 是 Stream SDK 提供的取得實例方法。最後，如果兩個環境變數少了任何一個，就 <code>throw badRequest</code>，讓錯誤在呼叫端被 <code>route()</code> 包裝成乾淨的 JSON，而不是等到真正要用時才出現看不懂的崩潰。</p>
 
-<p>接著是簽 token 的核心。它的時間戳是以秒為單位的現在時間，加上四小時的有效期：</p>
+<h2>第三步：簽一張短效 token</h2>
 
-<pre><code>const TOKEN_TTL_SECONDS = 60 * 60 * 4;
+<p>token 的有效期限寫在檔案上方，四小時：</p>
 
-export function mintToken(user: AppUser): string {
-  const exp = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS;
-  return streamServer().createToken(streamUserId(user), exp);
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/stream.ts"><code>/** Tokens are short-lived; the app re-hits /api/stream/token to refresh. */
+const TOKEN_TTL_SECONDS = 60 * 60 * 4;</code></pre>
+
+<p>為什麼不簽一張永久有效的就好？因為憑證一旦外流，永久有效的代表永遠有效；短效憑證即使被偷，能用的時間也有限，而且每一次刷新都會重新跑一次身分驗證，等於定期重新確認「你還是你」。這也是為什麼刷新端點不能繞過驗證，它必須跟第一次簽發走完全一樣的守衛。</p>
+
+<p>簽名的動作在 <code>mintToken</code> 裡：把現在的秒數加上 TTL 當到期時間，再交給 <code>createToken</code>。實際的程式碼上一節看過，重點是它永遠只接受一個 <code>AppUser</code>，而 <code>AppUser</code> 來自 session。</p>
+
+<h2>第四步：讓 Stream 先認識這個人</h2>
+
+<p>Stream 有一個脾氣：它不接受「不存在的成員」。如果 token 指向一個 Stream 還不認識的 user id，之後建立 channel、加入成員都會失敗。所以在簽 token 之前，要先把這個人的身分同步過去。顯示名稱的產生方式依角色而異：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/stream.ts"><code>/** What a Stream user looks like to the other side of a conversation. */
+async function displayName(user: AppUser): Promise&lt;string&gt; {
+  if (isStaff(user.role)) {
+    const [dentist] = await db.select().from(dentists).where(inArray(dentists.userId, [user.id]));
+    return dentist?.displayName ?? 'Clinic Team';
+  }
+  const self = await selfPatient(user);
+  return self ? `${self.firstName} ${self.lastName}` : 'Patient';
+}
+
+/** Stream rejects members that don't exist yet, so every id is upserted first. */
+async function upsertParticipants(accountUsers: AppUser[]) {
+  const named = await Promise.all(
+    accountUsers.map(async (u) => ({
+      id: streamUserId(u),
+      name: await displayName(u),
+      // Read by the mobile app to label a caller as clinic vs patient.
+      staff: isStaff(u.role),
+    }))
+  );
+  await streamServer().upsertUsers(named);
 }</code></pre>
 
-<p><code>streamUserId(user)</code> 就是上一節那個「回傳 <code>user.id</code>」的函式。整條 token 的簽發完全建立在「user 物件來自登入 session」這個前提上。</p>
+<p>員工會去 <code>dentists</code> 表查顯示名稱，找不到就退回 <code>'Clinic Team'</code>；病人則用自己檔案裡的名字。每個 upsert 的物件還帶了一個 <code>staff: true/false</code>，這是自訂欄位，之後手機可以靠它判斷來電者是診所還是病人，不必再多查一次資料庫。<code>upsertUsers</code> 是「有就更新、沒有就新增」，所以重複呼叫是安全的。</p>
 
-<h2>端點一：POST /api/stream/token</h2>
+<p>把上面兩個動作包成一個函式，就是簽 token 時要順便做的事：</p>
 
-<p>有了 wrapper，token 端點本體短到只有幾行：</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/stream.ts"><code>/** Sync the caller's Stream identity. Called on every token mint. */
+export async function syncStreamUser(user: AppUser): Promise&lt;string&gt; {
+  const name = await displayName(user);
+  await upsertParticipants([user]);
+  return name;
+}</code></pre>
 
-<pre><code>export const POST = route(async () =&gt; {
+<h2>第五步：token 端點本身</h2>
+
+<p>有了前面的零件，端點就只剩組裝。檔案是 <code>apps/web/src/app/api/stream/token/route.ts</code>，只匯出一個 <code>POST</code>：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/api/stream/token/route.ts"><code>export const POST = route(async () => {
   const user = await requireAuth();
   const name = await syncStreamUser(user);
 
@@ -69,110 +111,112 @@ export function mintToken(user: AppUser): string {
   });
 });</code></pre>
 
-<p>注意第一行就是 <code>requireAuth()</code>，而且整段程式沒有任何一處讀取 <code>req</code>。這正是上一節強調的：client 送來什麼都不重要，身分只從 session 來。<code>syncStreamUser()</code> 負責在每次發 token 時，順手把這個使用者更新到 Stream，因為 Stream 不允許對一個「不存在的人」發 token。</p>
+<p>預期看到的結果是：帶著有效 Clerk 登入去打這支端點，會拿到一包 JSON，裡面有可公開的 <code>apiKey</code>、這個人的 <code>userId</code>、<code>name</code>、<code>role</code>，以及重點 <code>token</code>。你可以在這裡做一個小驗證：故意把 Clerk 登入拿掉再打一次，應該被 <code>requireAuth()</code> 擋下。這證明「刷新」和「簽發」走的是同一支端點、同一道守衛。</p>
 
-<p>回傳的欄位都有用途：<code>apiKey</code> 讓 app 初始化 client，<code>userId</code> 與 <code>name</code> 是這張 token 的身分，<code>role</code> 讓 app 決定要顯示病人介面還是員工介面，而 <code>token</code> 則是真正的通行證。這個端點同時也是更新端點——token 過期時 app 再 POST 一次即可，因為 <code>requireAuth()</code> 每次都會重跑。</p>
+<h2>第六步：channel 端點與 id 的推導</h2>
 
-<h2>端點二：GET /api/stream/channel</h2>
+<p>聊天需要一個「房間」。這個專案有一個刻意的設計決定：一個病人只跟診所有一個對話，而且這個對話的 id 直接從病人 id 推導出來，不另外開一張資料表記錄。</p>
 
-<p>第二個端點負責回答「這位使用者該進哪個對話」。它依角色分岔：</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/stream.ts"><code>/** PLAN.md A9: one channel per patient, id derived — no channel table. */
+export function clinicChannelId(patientId: string): string {
+  return `patient-${patientId}`;
+}
 
-<pre><code>export const GET = route(async () =&gt; {
+export const isStaff = (role: AppUser['role']) => role === 'staff' || role === 'dentist';</code></pre>
+
+<p>注意 <code>isStaff</code> 把 <code>staff</code> 和 <code>dentist</code> 都算成員工。這個判斷等一下會決定端點要回傳一個對話，還是回傳「你自己去收件匣看」。真正準備房間的函式是 <code>ensureClinicChannel</code>：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/stream.ts"><code>export async function ensureClinicChannel(user: AppUser) {
+  const self = await selfPatient(user);
+  if (!self) throw badRequest('Finish onboarding before messaging the clinic');
+
+  const staff = await staffUsers();
+  await upsertParticipants([user, ...staff]);
+
+  const memberIds = [streamUserId(user), ...staff.map(streamUserId)];
+  const channel = streamServer().channel('messaging', clinicChannelId(self.id), {
+    members: memberIds,
+    created_by_id: streamUserId(user),
+    // Staff see a shared inbox, so the channel has to name the patient.
+    name: `${self.firstName} ${self.lastName}`,
+  });
+  await channel.create();
+
+  // Staff hired after the channel was created are not members yet.
+  const existing = new Set(Object.keys(channel.state.members));
+  const missing = memberIds.filter((id) => !existing.has(id));
+  if (missing.length) await channel.addMembers(missing);
+
+  return { channelId: channel.id!, memberIds };
+}</code></pre>
+
+<p>這段程式碼有幾個關鍵。<code>selfPatient(user)</code> 要求病人已完成 onboarding，還沒完成就丟 <code>badRequest</code>，因為沒有病人檔案就沒有對話可言。成員清單是「這個病人 + 所有員工」，所以病人一開 app，診所所有人都已經在房間裡。建立時的 <code>name</code> 要放病人姓名，因為員工端看到的是共用收件匣，需要靠名字分辨是哪一位。<code>channel.create()</code> 是 idempotent 的，第一次呼叫真的建立，之後呼叫只會取回同一個；最後再補上新進員工，讓後來才到職的人也能加入。</p>
+
+<p>最後把這些接進端點。檔案是 <code>stream/channel/route.ts</code>，只匯出 <code>GET</code>：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/api/stream/channel/route.ts"><code>export const GET = route(async () => {
   const user = await requireAuth();
   if (isStaff(user.role)) return json({ channelId: null, memberIds: [] });
   return json(await ensureClinicChannel(user));
 });</code></pre>
 
-<p>員工回傳 <code>null</code>，不是因為他們不能聊天，而是因為他們沒有「一個」對話，他們面對的是一整個共享收件匣。病人則回傳一個固定的對話 id 與成員清單，成員清單同時也是「要打視訊電話時該敲誰」的名單，所以通話不需要再另外查一次。</p>
-
-<p>真正的建立邏輯在 <code>ensureClinicChannel()</code>。它的對話 id 是從病人 id 推導出來的，不另外開表儲存：</p>
-
-<pre><code>/** PLAN.md A9: one channel per patient, id derived — no channel table. */
-export function clinicChannelId(patientId: string): string {
-  return `patient-${patientId}`;
-}</code></pre>
-
-<p>「推導」而不是「查表」帶來一個很實用的性質：同一個病人永遠只會命中同一個對話，不需要擔心重複建立。建立時把整個診所的員工都拉進成員，最後再補上新進員工：</p>
-
-<pre><code>const memberIds = [streamUserId(user), ...staff.map(streamUserId)];
-const channel = streamServer().channel('messaging', clinicChannelId(self.id), {
-  members: memberIds,
-  created_by_id: streamUserId(user),
-  name: `${self.firstName} ${self.lastName}`,
-});
-await channel.create();
-
-const existing = new Set(Object.keys(channel.state.members));
-const missing = memberIds.filter((id) =&gt; !existing.has(id));
-if (missing.length) await channel.addMembers(missing);
-
-return { channelId: channel.id!, memberIds };</code></pre>
-
-<p>這整段是冪等的：第一次呼叫會建立對話，之後再呼叫只會把後來加入的員工補進成員名單。名字用的是病人全名，這是為了讓員工在共享收件匣裡認得出是誰在對話。</p>
-
-<blockquote>
-   部署前要確認 <code>NEXT_PUBLIC_STREAM_API_KEY</code> 與 <code>STREAM_API_SECRET</code> 都放進 <code>apps/web/.env</code>，並且改完環境變數後重啟 web server。安裝 Stream 這類含原生模組的套件之後，app 也必須重新 build 一次，否則裝置上跑的是沒有這個模組的舊版本。
-</blockquote>
-
-<h2>做完會看到什麼</h2>
-
-<p>用已登入的帳號打 <code>POST /api/stream/token</code>，會拿到一包 JSON，裡面的 <code>token</code> 是一長串簽章字串，<code>role</code> 反映該帳號的身分。用病人帳號打 <code>GET /api/stream/channel</code>，會拿到 <code>{ channelId, memberIds }</code>；同一個請求換成員工帳號，則拿到 <code>{ channelId: null, memberIds: [] }</code>。兩個端點都受 <code>requireAuth()</code> 保護，未登入會直接被擋下。</p>
+<p>預期結果分成兩種角色。病人會拿到 <code>{ channelId, memberIds }</code>，其中 <code>memberIds</code> 同時也是「可以打給誰」的名單，所以開通話不需要再多繞一趟。員工會拿到 <code>{ channelId: null, memberIds: [] }</code>，因為員工沒有單一對話，他有的是收件匣；下一節的畫面會直接用 SDK 依成員身分查詢，不需要這支端點幫忙。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-<p>這兩個端點把身分規則落到實處。<code>POST /api/stream/token</code> 只從登入 session 取身分，簽發四小時的 token，同時回傳 apiKey、userId、name 與 role；而且因為每次都會重跑 requireAuth，它本身就是更新端點。<code>GET /api/stream/channel</code> 依角色分岔：病人拿到推導出的 clinic channel 與成員名單，員工拿到 null 去用共享收件匣。背後由 <code>lib/stream.ts</code> 集中管理 secret、token 與冪等的對話建立，讓其他程式碼不必碰 Stream SDK 的細節。</p>
+這個節點把身分模型做成兩支端點。server wrapper <code>streamServer()</code> 用單例集中管理 Stream 連線，缺設定就立刻報錯。<code>POST /api/stream/token</code> 先 <code>requireAuth()</code> 確認身分、<code>syncStreamUser()</code> 把使用者 upsert 進 Stream，再回傳可公開的 apiKey 與短效 token；同一支端點也負責刷新。<code>GET /api/stream/channel</code> 則對病人推導出 <code>patient-{id}</code> 的對話並回傳成員名單，對員工回傳 null。整條路徑上，API secret 從不離開 server。
 </blockquote>
 
-<p>到這裡，後端可以發身分、也可以指出對話了，但手機端還沒有任何東西去接。下一步要回到 Expo app，在整個應用程式的最上層建立 Chat 與 Video 兩個 client。</p>
+<p>端點備好了，但現在手機還不知道怎麼用它。下一節要在 app 的 root 建立 Stream 的 Chat 與 Video 兩個 client，讓它們共用同一張 token，並且在 Stream 連不上時優雅降級，不讓整個 app 卡在轉圈圈。</p>
 
 <div class="lesson-nav">
-  <div><a href="./stream-identity-and-token.html">← 上一步：Stream 的身分與 token：為什麼 user id 只能由 server 決定</a></div>
-  <div><a href="./wire-stream-at-root.html">下一步：在 app root 接上兩個 client：一個 token、Chat 與 Video →</a></div>
+  <div><a href="./stream-identity-and-token.html">← 上一步：Stream 的身分與 token</a></div>
+  <div><a href="./wire-stream-at-root.html">下一步：在 app root 接上兩個 client →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="為什麼 token 端點完全不讀取請求內容？" data-correct="2" data-explain="身分只從 requireAuth() 的 session 推導，client 送來的任何欄位都不該影響簽發結果。">
-  <button class="opt">因為讀取請求內容會讓回應變慢</button>
-  <button class="opt">因為 Stream SDK 不支援額外參數</button>
-  <button class="opt">因為身分只能從登入 session 推導</button>
-  <button class="opt">因為 Clerk 會封鎖帶 body 的請求</button>
+<div class="quiz" data-question="STREAM_API_SECRET 為什麼不能加 NEXT_PUBLIC_ 前綴？" data-correct="1" data-explain="有前綴的變數才會被打包進前端，secret 必須只留在 server。">
+  <button class="opt">因為加了前綴會讓變數名稱變得太長</button>
+  <button class="opt">因為有前綴才會被打包進前端程式碼</button>
+  <button class="opt">因為 Stream 規定 secret 要用大寫命名</button>
+  <button class="opt">因為 Next.js 會自動忽略所有 secret</button>
 </div>
 
-<div class="quiz" data-question="streamServer() 用 module 層快取 client 的目的是什麼？" data-correct="0" data-explain="避免每次請求都重建 Stream 連線，同時讓 secret 只在一個地方被讀取。">
-  <button class="opt">避免每次請求都重建 Stream 連線</button>
-  <button class="opt">讓 API secret 可以被前端重複使用</button>
-  <button class="opt">讓簽出來的 token 永久有效不會過期</button>
-  <button class="opt">讓不同使用者可以共用同一張 token</button>
+<div class="quiz" data-question="streamServer() 裡的 cached ??= ... 手法是為了什麼？" data-correct="3" data-explain="達成單例：第一次才建立，之後重複使用，不會一直開新連線。">
+  <button class="opt">讓每次呼叫都建立一個全新的連線</button>
+  <button class="opt">把錯誤訊息快取起來重複使用</button>
+  <button class="opt">避免缺少環境變數時丟出錯誤</button>
+  <button class="opt">只建立一次實例並重複使用它</button>
 </div>
 
-<div class="quiz" data-question="GET /api/stream/channel 對員工帳號回傳什麼？" data-correct="1" data-explain="員工沒有單一對話，他們用共享收件匣，所以回傳 channelId 為 null。">
-  <button class="opt">回傳診所裡所有病人的對話清單</button>
-  <button class="opt">回傳空值，因為員工使用共享收件匣</button>
-  <button class="opt">回傳一個自動建立的員工專屬對話</button>
-  <button class="opt">回傳錯誤，因為員工不能使用聊天</button>
+<div class="quiz" data-question="簽 token 之前為什麼要先用 syncStreamUser？" data-correct="2" data-explain="Stream 不接受不存在的成員，必須先 upsert 這個 user id。">
+  <button class="opt">因為這樣 token 的有效期限可以更長</button>
+  <button class="opt">因為 Clerk 要求每次請求都要同步</button>
+  <button class="opt">因為 Stream 不接受還不存在的成員</button>
+  <button class="opt">因為這樣可以少打一次資料庫查詢</button>
 </div>
 
-<div class="quiz" data-question="clinicChannelId 用推導而不是查表，帶來什麼好處？" data-correct="3" data-explain="同一病人永遠命中同一 id，不需要額外的表也不必擔心重複建立。">
-  <button class="opt">可以讓對話 id 看起來比較像亂碼</button>
-  <button class="opt">可以省下 Stream 的訊息儲存費用</button>
-  <button class="opt">可以讓員工一次看到所有病人對話</button>
-  <button class="opt">同一病人永遠命中同一個對話</button>
+<div class="quiz" data-question="clinicChannelId 用 patient-{id} 推導，最大的好處是什麼？" data-correct="0" data-explain="id 可從病人 id 直接算出，不必額外開一張表記錄對話。">
+  <button class="opt">不必額外開一張表記錄對話</button>
+  <button class="opt">可以讓對話 id 每次都不一樣</button>
+  <button class="opt">可以讓員工自動變成病人身分</button>
+  <button class="opt">可以省下 Clerk 的登入驗證步驟</button>
 </div>
 
-<div class="quiz" data-question="ensureClinicChannel 為什麼最後要呼叫 addMembers？" data-correct="1" data-explain="對話建立後才加入的員工還不是成員，補上他們讓新進員工也能看到對話。">
-  <button class="opt">為了把不參與的員工從對話中移除</button>
-  <button class="opt">對話建立後才加入的員工要補進來</button>
-  <button class="opt">為了把病人重複加入以避免漏訊息</button>
-  <button class="opt">為了在每次呼叫時重建整個對話</button>
+<div class="quiz" data-question="channel 端點對員工回傳 null，原因是什麼？" data-correct="1" data-explain="員工沒有單一對話，他有多筆病人的對話，走的是共用收件匣。">
+  <button class="opt">因為員工的帳號還沒有完成 onboarding</button>
+  <button class="opt">因為員工有的是共用收件匣而非單一對話</button>
+  <button class="opt">因為員工沒有通過 requireAuth 的驗證</button>
+  <button class="opt">因為員工被禁止使用任何聊天功能</button>
 </div>
 
-<div class="quiz" data-question="回傳的 memberIds 除了開對話，還有什麼用途？" data-correct="2" data-explain="它同時是即時通話的 ring 名單，讓撥打時不必再多查一次要打給誰。">
-  <button class="opt">用來決定哪個員工可以刪除訊息</button>
-  <button class="opt">用來計算這個對話有幾則未讀</button>
-  <button class="opt">當作即時通話要敲的 ring 名單</button>
-  <button class="opt">用來驗證病人是否完成 onboarding</button>
+<div class="quiz" data-question="token 端點同時也是刷新端點，這代表什麼？" data-correct="3" data-explain="刷新和第一次簽發走同一支端點、同一道守衛，驗證不會被跳過。">
+  <button class="opt">刷新時可以跳過 requireAuth 加快速度</button>
+  <button class="opt">刷新後舊 token 會自動永久失效</button>
+  <button class="opt">刷新需要另外再寫一支新的端點</button>
+  <button class="opt">刷新和簽發走同一支端點與守衛</button>
 </div>
 
 <div class="footer">

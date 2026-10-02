@@ -11,70 +11,99 @@
 <h1>CodeRabbit 安全掃描的七大類問題</h1>
 <p class="meta">Step 2/5 · 大規模 PR 安全審查</p>
 
-<h2>前言</h2>
+<h2>學習目標</h2>
+<p>認出 injection、authz bypass、XSS、SSRF、CSRF、broken auth、misconfiguration 各防哪種攻擊。</p>
 
-<p>上一節我們說，面對上萬行的 PR，你要靠一張「地圖」來決定看哪裡；而地圖上最要緊的一塊，是安全掃描清單。現在問題來了：當 CodeRabbit 在清單上寫下 <em>authorization bypass</em> 或 <em>SSRF</em>，你分得出這是嚴重問題，還是可有可無的提醒嗎？</p>
+<h2>前言：清單上那些看不懂的名詞</h2>
 
-<p>這七個詞是後端安全的基本字彙。它們不只是縮寫，每一個都對應一種真實的攻擊方式，也對應你程式碼裡某個特定的錯誤寫法。這一節是一份查閱表：把每個詞的定義、它防的是什麼、以及它通常出現在哪裡，一次列齊。你不需要在這裡背下來，但當審查清單出現某個詞時，你要能立刻知道它指的是哪一類危險。</p>
+<p>上一節你接受了「規模本身就是問題」，也同意要改用結構化的工具。現在你把 PR 交給 CodeRabbit，它掃完之後，安全區塊列出幾個英文字：injection、authorization bypass、XSS、SSRF、CSRF、broken authentication、security misconfiguration。</p>
 
-<p>這七類問題的英文與縮寫沿用原始掃描報告，方便你對照。定義各自獨立，可以跳著查。</p>
+<p>問題來了。如果這些名詞在你腦中只是一團模糊的「聽過、好像很危險」，你就沒辦法判斷哪一則該緊張、哪一則可以先放。這一節是一份查閱表：把這七類問題並排，說清楚每一類在防哪種攻擊、攻擊者實際怎麼利用它、以及在程式碼裡通常長什麼樣子。你不需要背下來，但要能在看到 finding 時，立刻知道它屬於哪一類、可能造成什麼後果。這是下一節「讀懂審查輸出」的前置配備。</p>
 
-<h2>總覽</h2>
+<h2>CodeRabbit Security 是什麼</h2>
+
+<p><strong>CodeRabbit Security</strong> 是 CodeRabbit 內建的功能，把程式碼審查與安全掃描合併在同一個 AI 平台上：它在每個 PR 上掃描整個 codebase，找出各類安全問題，並把每一則標上嚴重度與修復建議。這份清單就是「七大類」的來源。它掃的範圍比這七類更廣，但這七類是最常在大型 AI 生成 PR 上出現、也最容易造成實際損害的頭幾名。</p>
+
+<h2>七大類速查表</h2>
 
 <table>
 <thead>
-<tr><th>名稱</th><th>一句定義</th><th>最常出現的位置</th></tr>
+<tr><th>類別</th><th>在防什麼</th><th>攻擊者怎麼利用</th><th>常見長相</th></tr>
 </thead>
 <tbody>
-<tr><td>Injection（注入）</td><td>把使用者輸入當成指令或查詢語法的一部分執行</td><td>資料庫查詢、系統指令、動態字串拼接</td></tr>
-<tr><td>Authorization bypass（授權繞過）</td><td>通過了身分檢查，卻能存取不屬於自己的資源</td><td>API 端點、資源讀取與寫入</td></tr>
-<tr><td>XSS（跨站腳本）</td><td>把未處理的使用者內容輸出到網頁，被瀏覽器當成腳本執行</td><td>Web dashboard、任何渲染使用者內容的頁面</td></tr>
-<tr><td>SSRF（伺服器端請求偽造）</td><td>讓伺服器代為請求攻擊者指定的位址</td><td>抓取圖片、webhook、任何「幫你連外」的功能</td></tr>
-<tr><td>CSRF（跨站請求偽造）</td><td>借用使用者已登入的憑證，在不知情下送出變更請求</td><td>以 cookie 為憑證的表單與 API</td></tr>
-<tr><td>Broken authentication（身分驗證失效）</td><td>登入、session 或 token 的處理有缺陷，可被繞過</td><td>登入流程、token 驗證、密碼重設</td></tr>
-<tr><td>Security misconfiguration（安全設定錯誤）</td><td>安全相關的設定沒關好，暴露出多餘的攻擊面</td><td>環境變數、CORS、錯誤訊息、除錯模式</td></tr>
+<tr>
+<td>Injection（注入）</td>
+<td>使用者輸入被當成程式指令或 SQL 執行</td>
+<td>送出帶有指令片段的輸入，讓資料庫或系統執行非預期動作</td>
+<td>把字串拼進 SQL，而非用參數化查詢</td>
+</tr>
+<tr>
+<td>Authorization bypass（授權繞過）</td>
+<td>沒確認「這個人有沒有權利做這件事」</td>
+<td>直接拿別人的資源 id、或改一個 role 參數，取得不該有的存取</td>
+<td>只驗登入、不驗擁有權（典型是 IDOR）</td>
+</tr>
+<tr>
+<td>XSS（跨站腳本）</td>
+<td>攻擊者的腳本被當成網站內容，在別人的瀏覽器執行</td>
+<td>把惡意 script 塞進留言或欄位，等其他人打開頁面時觸發</td>
+<td>使用者內容直接塞進 HTML，沒有轉義</td>
+</tr>
+<tr>
+<td>SSRF（伺服器端請求偽造）</td>
+<td>伺服器被誘導去請求攻擊者指定的位址</td>
+<td>指定內網位址或雲端 metadata 端點，讓伺服器代為取得機密</td>
+<td>使用者可控的 URL 直接餵給 fetch</td>
+</tr>
+<tr>
+<td>CSRF（跨站請求偽造）</td>
+<td>冒用使用者已登入的身分，發出他沒同意的請求</td>
+<td>引誘已登入的使用者點連結，借他的 cookie 送出狀態改變請求</td>
+<td>改資料的端點只靠 cookie 驗身分，沒有 token 或 SameSite</td>
+</tr>
+<tr>
+<td>Broken authentication（身分驗證失效）</td>
+<td>登入、session、token 的實作有洞，讓人冒充他人</td>
+<td>偽造或重用憑證，直接變成另一個使用者</td>
+<td>token 沒驗簽章、session 可預測、密碼處置不當</td>
+</tr>
+<tr>
+<td>Security misconfiguration（安全設定錯誤）</td>
+<td>預設值、除錯開關、過寬的權限設定留下破口</td>
+<td>利用除錯模式、外洩的錯誤訊息或過寬的 CORS 取得資訊</td>
+<td>生產環境開著 debug、錯誤頁吐出完整 stack trace</td>
+</tr>
 </tbody>
 </table>
 
-<h2>Injection（注入）</h2>
+<h2>每一類再多一句</h2>
 
-<p>當使用者輸入被直接拼進一段有語法的字串——最典型的是 SQL 查詢——輸入裡的內容就不只是「資料」，而會被當成「指令」執行。參數化查詢（parameterized query）是標準的防線：把查詢語法和資料分開傳，資料永遠不會被當成語法。</p>
+<p><strong>Injection</strong> 的關鍵字是「把資料當指令」。資料庫看到的應該是「一段文字」，但如果你的程式把使用者輸入直接接到 SQL 字串後面，資料庫會把它當成語法的一部分。下面這組對照就是最典型的樣子（示意用，非課程原始碼）：</p>
 
-<pre><code>// 危險：輸入直接拼進字串
-db.query(`SELECT * FROM users WHERE email = '${email}'`);
+<pre data-provenance="derived">// 危險：使用者輸入直接拼進查詢
+const q = `SELECT * FROM users WHERE email = '${email}'`;
+// 輸入 ' OR '1'='1 就能改變查詢邏輯
 
-// 安全：語法與資料分開
-db.query("SELECT * FROM users WHERE email = $1", [email]);</code></pre>
+// 安全：參數化查詢，輸入永遠只是資料
+const q = sql`SELECT * FROM users WHERE email = ${email}`;</pre>
 
-<h2>Authorization bypass（授權繞過）</h2>
+<p><strong>Authorization bypass</strong> 和 broken authentication 常被混在一起，但兩者防的東西不同。後者問「你是誰、你真的登入了嗎」；前者問「你登入了，但這件事你有權做嗎」。實務上很常見的破口是：API 只檢查「有沒有登入」，卻沒有檢查「這筆資料是不是你的」，於是改一下網址裡的 id 就能讀到別人的預約紀錄。</p>
 
-<p>這類問題不是「沒登入」，而是「登入了，但看到了不該看的」。端點只確認請求帶有有效的登入憑證，卻沒有確認這個資源屬於這位使用者。症狀是：把網址裡的資源編號改成別人的，一樣拿得到資料。防線是每一次資源存取都從登入身分推出「你是誰」，再比對「這筆資料是不是你的」。</p>
+<p><strong>XSS</strong> 是前端版的 injection：把使用者的內容當成程式碼。它的傷害發生在「別人」的瀏覽器上，所以一個被注入的留言欄位，可能影響所有打開該頁面的人。<strong>SSRF</strong> 則是讓你的伺服器變成攻擊者的代理：你的伺服器通常處在內網、握有雲端憑證，攻擊者只要控制它去請求一個 URL，就能借它的身分碰到它不該碰的東西。<strong>CSRF</strong> 的重點在「借用你已經登入的事實」：攻擊者不需要偷你的密碼，只要讓你在已登入的狀態下送出一個請求。</p>
 
-<h2>XSS（跨站腳本）</h2>
+<p><strong>Broken authentication</strong> 是身分驗證本身的實作瑕疵，例如 token 只解碼、不驗簽章，或 session 識別碼可以被猜出來。<strong>Security misconfiguration</strong> 則不是程式邏輯的洞，是設定留下的門：開發用的除錯模式忘了關、CORS 開放成星號、錯誤訊息把內部路徑與版本號都吐出來，這些都能幫攻擊者更快找到入口。</p>
 
-<p>當一段含有 HTML 或 JavaScript 的使用者內容，沒有被轉義（escape）就送進網頁，瀏覽器會把它當成頁面的一部分執行。它主要影響有網頁介面的部分，例如員工 dashboard。防線是輸出時一律轉義，或使用框架預設會轉義的方式渲染，避免直接插入未處理的 HTML。</p>
+<h2>怎麼用這張表</h2>
 
-<h2>SSRF（伺服器端請求偽造）</h2>
+<p>當 CodeRabbit 丟出一則 finding，先用這張表定位它屬於哪一類，你就會同時知道兩件事：這件事最壞的後果是什麼，以及它是不是那種「不影響功能、但可以被利用」的問題。定位之後，修不修、先修哪一則，就交給第 4 步的判斷準則；至於實際怎麼把 PR 開起來、怎麼讓 CodeRabbit 產出這份清單，是下一步的操作範圍。</p>
 
-<p>如果一個功能會「用伺服器的身分去連某個網址」，而那個網址使用者可以控制，攻擊者就能借用伺服器去探測它自己的內部網路、或讀取雲端環境的 metadata 端點。它常出現在「幫你抓一張遠端圖片」這類看似無害的功能裡。防線是限制可連線的目標（白名單），而不是照單全收使用者給的位址。</p>
-
-<h2>CSRF（跨站請求偽造）</h2>
-
-<p>當網站用 cookie 當作登入憑證，而變更狀態的請求又沒有額外驗證來源，攻擊者就能引導已登入的瀏覽器在背後送出請求。防線是使用 SameSite cookie、CSRF token，或改用不會被瀏覽器自動附帶的憑證（例如放在 header 的 Bearer token）。</p>
-
-<h2>Broken authentication（身分驗證失效）</h2>
-
-<p>這是登入與 session 機制本身的缺陷，例如 token 沒有驗簽章、密碼重設的判斷可被猜中、登入端點沒有速率限制而能被暴力破解。它和 authorization bypass 的差別在於：這裡壞掉的是「證明你是誰」的過程，而不是「證明你有權存取這筆資料」。</p>
-
-<h2>Security misconfiguration（安全設定錯誤）</h2>
-
-<p>程式邏輯沒有錯，但設定留下了缺口：CORS 開放成所有來源、生產環境還開著除錯模式、錯誤訊息把內部路徑或資料庫細節吐給使用者、忘記加上該有的安全標頭。它通常是「預設值沒有依實際情境收緊」造成的。</p>
+<h2>小結</h2>
 
 <blockquote>
-這七個詞的共同點是：程式都能正常運作。它們描述的不是「壞掉」，而是「可以被利用」。認得名稱，只是為了在清單出現時，知道該往哪個方向查。
+CodeRabbit Security 把程式碼審查與安全掃描合併在一個平台。最常見的七類問題是：injection（把資料當指令）、authorization bypass（登入了但無權限）、XSS（把使用者內容當程式碼）、SSRF（讓伺服器代打內網）、CSRF（冒用已登入身分）、broken authentication（驗身分有洞）、security misconfiguration（設定留了門）。看到 finding 先定位是哪一類，就知道最壞後果與該不該緊張。
 </blockquote>
 
-<p>名詞認得之後，下一節要動手了：把上萬行的改動真的開成一條分支與 PR，讓 CodeRabbit 跑完審查與安全掃描，再把它的輸出讀成一張能用的清單。</p>
+<p>你手上現在有分類地圖了。下一步要把抽象的類別變成實際的畫面：開一個 branch、把上萬行改動推成 PR，讓 CodeRabbit 掃完，然後讀懂它的 summary、Change Stack 與安全區塊。</p>
 
 <div class="lesson-nav">
   <div><a href="./scale-breaks-manual-review.html">← 上一步：為什麼上萬行的 PR 不能靠人眼審</a></div>
@@ -83,41 +112,46 @@ db.query("SELECT * FROM users WHERE email = $1", [email]);</code></pre>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="Injection 問題的核心是什麼？" data-correct="1" data-explain="使用者輸入被當成指令或查詢語法的一部分執行，而不是當成純資料。">
-  <button class="opt">輸入的長度超過了資料庫的限制</button>
-  <button class="opt">輸入被當成語法的一部分去執行</button>
-  <button class="opt">輸入裡含有大量表情符號與特殊字</button>
-  <button class="opt">輸入沒有被存進資料庫就消失了</button>
+<div class="quiz" data-question="Authorization bypass 和 broken authentication 的差別是什麼？" data-correct="1" data-explain="後者問「你真的登入了嗎」，前者問「你登入了，但這件事你有權做嗎」。">
+  <button class="opt">前者只發生在前端，後者只發生在後端伺服器</button>
+  <button class="opt">後者問你有沒有登入，前者問你有沒有權限</button>
+  <button class="opt">前者防資料庫攻擊，後者防瀏覽器的腳本</button>
+  <button class="opt">兩者其實是同一件事，只是名稱不同而已</button>
 </div>
-<div class="quiz" data-question="Authorization bypass 與 broken authentication 的差別在哪？" data-correct="3" data-explain="前者是有登入卻能存取別人的資源；後者是登入證明機制本身有缺陷。">
-  <button class="opt">前者發生在瀏覽器，後者發生在伺服器</button>
-  <button class="opt">前者只影響網頁，後者只影響手機</button>
-  <button class="opt">前者是設定錯誤，後者是程式邏輯錯誤</button>
-  <button class="opt">前者是有登入卻看到別人的資源</button>
+
+<div class="quiz" data-question="為什麼「把使用者輸入直接拼進 SQL 字串」很危險？" data-correct="2" data-explain="資料庫會把輸入當成語法的一部分，攻擊者能藉此改變查詢邏輯。">
+  <button class="opt">因為這樣查詢速度會變慢，最後導致服務中斷</button>
+  <button class="opt">因為資料庫會自動把特殊字元全部清空刪除</button>
+  <button class="opt">因為輸入會被當成語法，能改變查詢的邏輯</button>
+  <button class="opt">因為這樣會讓連線字串外洩到瀏覽器端</button>
 </div>
-<div class="quiz" data-question="SSRF 最常出現在哪一種功能裡？" data-correct="0" data-explain="例如幫你抓取遠端圖片或呼叫 webhook，伺服器會依使用者給的位址連外。">
-  <button class="opt">伺服器依使用者給的位址去連外</button>
-  <button class="opt">使用者在網頁上輸入很長的密碼</button>
-  <button class="opt">資料庫回傳了太多的查詢結果</button>
-  <button class="opt">前端把使用者輸入直接畫在畫面上</button>
+
+<div class="quiz" data-question="SSRF 為什麼對伺服器特別危險？" data-correct="3" data-explain="伺服器通常位在內網、握有憑證，被誘導去請求 URL 時等於幫攻擊者代打。">
+  <button class="opt">因為它會讓前端頁面變得完全無法載入</button>
+  <button class="opt">因為它專門竊取使用者瀏覽器裡存的 cookie</button>
+  <button class="opt">因為它會把整個資料庫的資料複製到外部</button>
+  <button class="opt">因為伺服器在內網又有憑證，會被借去打內網</button>
 </div>
-<div class="quiz" data-question="XSS 主要影響的是哪一部分？" data-correct="2" data-explain="它影響渲染使用者內容的網頁，例如員工 dashboard。">
-  <button class="opt">手機 app 的原生程式碼執行速度</button>
-  <button class="opt">資料庫的索引與查詢效能</button>
-  <button class="opt">會渲染使用者內容的網頁介面</button>
-  <button class="opt">伺服器與外部服務之間的網路延遲</button>
+
+<div class="quiz" data-question="CSRF 的攻擊為什麼不需要偷到你的密碼？" data-correct="0" data-explain="它借用你已經登入的狀態，讓你送出一個你沒同意的請求。">
+  <button class="opt">因為它借用你已登入的狀態送出請求</button>
+  <button class="opt">因為它會直接破解網站的加密連線協定</button>
+  <button class="opt">因為它會在使用者電腦上安裝後門程式</button>
+  <button class="opt">因為它假造一封寄給資料庫管理員的信</button>
 </div>
-<div class="quiz" data-question="CSRF 能成立，通常需要哪個條件？" data-correct="1" data-explain="網站以 cookie 當憑證，變更狀態的請求又沒驗證來源，瀏覽器會自動附帶 cookie。">
-  <button class="opt">使用者把密碼寫在瀏覽器的書籤裡</button>
-  <button class="opt">以 cookie 當憑證且未驗證請求來源</button>
-  <button class="opt">伺服器完全沒有開啟 HTTPS 加密</button>
-  <button class="opt">資料庫允許任何人從遠端連線</button>
+
+<div class="quiz" data-question="Security misconfiguration 指的是什麼？" data-correct="1" data-explain="它不是程式邏輯的洞，而是設定留下的門，例如除錯沒關、CORS 過寬、錯誤訊息外洩。">
+  <button class="opt">程式邏輯寫錯，導致功能在正式環境當掉</button>
+  <button class="opt">設定留下的門，如除錯沒關、CORS 過寬</button>
+  <button class="opt">第三方套件版本太舊，缺少最新的功能</button>
+  <button class="opt">資料庫沒有建立索引，導致查詢效能低落</button>
 </div>
-<div class="quiz" data-question="下列哪一項屬於 security misconfiguration？" data-correct="3" data-explain="CORS 開放成所有來源屬於設定沒收緊，而不是程式邏輯本身寫錯。">
-  <button class="opt">查詢字串把輸入直接拼進 SQL</button>
-  <button class="opt">端點沒檢查資源是不是本人的</button>
-  <button class="opt">token 沒有驗證簽章就放行</button>
-  <button class="opt">CORS 開放成所有來源都能存取</button>
+
+<div class="quiz" data-question="看到一則 finding 時，先做哪一件事最有幫助？" data-correct="2" data-explain="先定位它屬於哪一類，就知道最壞後果與該不該優先處理。">
+  <button class="opt">立刻把所有相關的程式碼刪掉重寫一遍</button>
+  <button class="opt">先關掉 CodeRabbit 以免它一直跳出提醒</button>
+  <button class="opt">先定位屬於哪一類，判斷最壞後果為何</button>
+  <button class="opt">直接把它標記成已解決，之後有空再看</button>
 </div>
 
 <div class="footer">

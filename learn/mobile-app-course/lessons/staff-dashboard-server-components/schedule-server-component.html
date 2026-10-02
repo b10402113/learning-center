@@ -12,150 +12,163 @@
 <p class="meta">Step 3/5 · 員工 Dashboard（Server Components）</p>
 
 <h2>學習目標</h2>
-<p>照著 dashboard 首頁的程式碼，用 async Server Component 讀取 typed searchParams、算出診所日時間窗，join 出當日行程並渲染成表格。</p>
+<p>能照著寫出一個讀 searchParams、把診所當地的一天換成 UTC 時間窗、再用 join 撈出當天行程的 Server Component。</p>
 
-<h2>前言：把「今天」變成資料庫聽得懂的問題</h2>
+<h2>動手前：你會得到什麼</h2>
 
-<p>經過前兩步，你已經知道 Server Component 可以直接查資料庫，也知道整個後台被 layout 的守衛好好包住。現在要動手做第一個真正的畫面：今日行程。看起來只是「列出今天的預約」，但要讓它正確，需要先回答一串很具體的問題：今天是指哪一個時區的今天？使用者按「前一天」時，參數從哪裡來？一筆預約要顯示病人、牙醫師、療程，怎麼在一次查詢裡湊齊？</p>
+<p>做完這一節，你會有一個完整的今日行程頁：網址上帶著日期（<code>/dashboard?date=2026-10-03</code>），頁面顯示那一天的每一筆預約，附上「前一天／今天／後一天」的切換，以及三格統計數字。你要先具備的，是上一節那個已經被守衛保護好的 <code>/dashboard</code>，以及對 Drizzle 基本查詢的認識。</p>
 
-<p>這個步驟的成品，是一個打開 <code>/dashboard</code> 就能看到當日所有預約的頁面：上方三格統計、下方一張表格，還有「前一天／今天／後一天」的切換。前置條件是你已經走過前兩步，並且對 Drizzle 的 <code>select</code>、<code>innerJoin</code> 有基本認識。動手前先把目標記住：全程不寫任何 API，資料直接從 Postgres 到畫面。</p>
+<p>這一節的主角是「怎麼做」，所以會按著真實程式碼的順序走。每一段我都會說清楚它在做什麼，以及你應該看到什麼結果。</p>
 
-<h2>第一步：宣告一個 async 的頁面元件</h2>
+<h2>第一步：先守衛，再讀網址參數</h2>
 
-<pre><code>export default async function DashboardPage({ searchParams }: PageProps&lt;'/dashboard'&gt;) {
-  await requireStaff();</code></pre>
+<p>頁面的函式一開頭，先做兩件事：確認身分，然後把網址上的查詢字串讀出來。這個世代 Next.js 的頁面 props 是非同步的，所以 <code>searchParams</code> 要用 <code>await</code> 拿。</p>
 
-<p>頁面元件的型別寫成 <code>PageProps&lt;'/dashboard'&gt;</code>，這是 Next.js 針對每個路由自動產生的型別。它的好處是：<code>searchParams</code> 這個 prop 的形狀由路由本身推導，你打錯欄位名稱時編輯器會直接報錯，不必自己維護一份介面。函式前面的 <code>async</code> 是關鍵——它讓你在元件裡直接 <code>await</code>，把「查資料」寫成看似同步的一行。第一行仍然先 <code>requireStaff()</code>，守衛永遠在最前面。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/page.tsx"><code>export default async function DashboardPage({ searchParams }: PageProps&lt;'/dashboard'&gt;) {
+  await requireStaff();
 
-<h2>第二步：等 searchParams，決定要看哪一天</h2>
-
-<pre><code>  const params = await searchParams;
+  const params = await searchParams;
   const dateParam = typeof params.date === 'string' ? params.date : undefined;
   const day = dateParam ? parseDay(dateParam) : clinicDayOf(new Date());</code></pre>
 
-<p>在新版的 Next.js 裡，<code>searchParams</code> 是一個 Promise，所以要先 <code>await</code> 再讀。這裡的 <code>date</code> 查詢參數是網址上的 <code>?date=YYYY-MM-DD</code>，也就是「切換日期」按鈕傳進來的值；如果沒有帶，就退回「診所當地的今天」。</p>
+<p>這裡的型別 <code>PageProps&lt;'/dashboard'&gt;</code> 是這個 Next 版本提供的頁面 props 型別，它知道這個路徑的參數長什麼樣，所以你在裡面打錯欄位名稱編譯器會直接抱怨。另一個重點是那個 <code>typeof ... === 'string'</code> 的檢查：<code>searchParams</code> 的每個值可能是字串、字串陣列，或<strong>根本不存在</strong>。先把它收斂成「字串或 undefined」，後面的邏輯才不會被奇怪的型別偷襲。</p>
 
-<p>要注意 <code>parseDay</code> 回傳的不是一個 <code>Date</code>，而是一個 <code>{ year, month, day }</code> 的結構。為什麼不直接用 <code>new Date('2026-10-02')</code>？因為那個寫法會被當成 UTC 的午夜來解析，在時區偏移下常常變成「前一天」或「後一天」。把一天表示成純粹的日曆三欄，後續做加減與比較時就不會偷渡時區進來了。</p>
+<p>如果網址沒有帶日期，就預設今天是診所當地的今天。注意，這裡用的是 <code>clinicDayOf(new Date())</code>，而不是隨便 <code>new Date()</code> 之後切字串。原因等一下會講。</p>
 
-<h2>第三步：把診所的一天換成時間窗</h2>
+<h2>第二步：把「診所的一天」變成一個日曆結構</h2>
 
-<pre><code>  const dayStart = clinicInstant(day, 0, 0);
-  const dayEnd = new Date(dayStart.getTime() + 24 * 3600_000);</code></pre>
+<p><code>parseDay()</code> 與 <code>clinicDayOf()</code> 回傳的不是 JavaScript 的 <code>Date</code>，而是一個 <code>CalendarDay</code>：一個只有 <code>{ year, month, day }</code> 三個欄位的結構。這是一個刻意的設計。</p>
 
-<p><code>clinicInstant(day, 0, 0)</code> 把「診所當地時區的某日 00:00」轉成一個真正的 UTC 時間點，這才是資料庫裡 <code>starts_at</code> 能比較的值。<code>dayEnd</code> 則是它的 24 小時之後。於是這一頁要查的區間，就是這個時間窗。</p>
+<p>用 <code>new Date('2026-10-03')</code> 這種寫法處理日期，是個經典的坑：它會被當成 UTC 午夜來解讀，於是在診所當地時區把日期印出來，可能已經變成前一天或後一天。<code>CalendarDay</code> 把「一個日曆上的日子」和「時間軸上的一個瞬間」徹底分開：日子就是日子，沒有時區，也就不會不小心被換算。<code>clinicInstant()</code> 才是真的把某一天、某個時刻的牆上時間，換算成真正的 UTC 瞬間。</p>
 
-<p>接下來的查詢用半開區間 <code>gte(dayStart) &amp;&amp; lt(dayEnd)</code> 來表達「從當天午夜起、到隔天午夜前」。用 <code>&lt;</code> 而不是 <code>&lt;=</code>，可以避免剛好在午夜整點的那筆預約同時落進兩天，這是處理時間區間時很常見的小心機。</p>
+<h2>第三步：建出當天的 UTC 時間窗</h2>
 
-<h2>第四步：一次 join 出表格要的所有欄位</h2>
+<p>有了 <code>day</code>，接著要把「診所當地的一天」變成資料庫查得懂的範圍：</p>
 
-<pre><code>  const rows = await db
-    .select({
-      id: appointments.id,
-      startsAt: appointments.startsAt,
-      status: appointments.status,
-      patientId: patients.id,
-      firstName: patients.firstName,
-      lastName: patients.lastName,
-      dentist: dentists.displayName,
-      service: services.name,
-      isTeleconsult: services.isTeleconsult,
-    })
-    .from(appointments)
-    .innerJoin(patients, eq(patients.id, appointments.patientId))
-    .innerJoin(dentists, eq(dentists.id, appointments.dentistId))
-    .innerJoin(services, eq(services.id, appointments.serviceId))
-    .where(and(gte(appointments.startsAt, dayStart), lt(appointments.startsAt, dayEnd)))
-    .orderBy(asc(appointments.startsAt), asc(dentists.displayName));</code></pre>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/page.tsx"><code>const dayStart = clinicInstant(day, 0, 0);
+const dayEnd = new Date(dayStart.getTime() + 24 * 3600_000);</code></pre>
 
-<p>這一段有三個設計點值得記住。第一，<strong>只選需要的欄位</strong>：表格要顯示什麼，select 就列什麼，不必把整張預約表拉進來。第二，<strong>用 innerJoin</strong>：每一筆預約必定屬於一位病人、一位牙醫師、一項療程，這三個關聯是資料庫保證存在的，所以用 innerJoin 是對的；如果是「可能沒有」的關聯，才需要用 leftJoin。第三，<strong>排序</strong>先按開始時間、再按牙醫師名字，讓同一時段的預約有穩定順序，畫面不會每次重新整理就跳來跳去。</p>
+<p><code>clinicInstant(day, 0, 0)</code> 把「這一天的 00:00（診所當地時間）」轉成 UTC 的瞬間。因為診所有日光節約時間，這一步不能自己用手算，得交給那層專門處理時區的程式（這正是先前預約領域節點裡 <code>time.ts</code> 的職責）。而 <code>dayEnd</code> 是起點加 24 小時。</p>
 
-<h2>第五步：從同一批資料算出統計數字</h2>
+<p>你可能會想：日光節約時間那天不是 23 或 25 小時嗎？這裡刻意用「加 24 小時」而不是「隔天同一時刻」，是因為這個查詢要的是連續的 24 小時窗口。查詢用了<strong>半開區間</strong>：<code>startsAt &gt;= dayStart</code> 且 <code>startsAt &lt; dayEnd</code>。左邊包含、右邊不包含，所以剛好落在下一日 00:00 的預約不會被重複算進今天，也不會被漏掉。</p>
 
-<pre><code>  const dentistCount = new Set(rows.map((r) =&gt; r.dentist)).size;
-  const teleconsults = rows.filter((r) =&gt; r.isTeleconsult).length;</code></pre>
+<h2>第四步：join 出當天的行程</h2>
 
-<p>上方的三格統計不需要再查一次資料庫——它們全部可以從已經拿到的 <code>rows</code> 現算。牙醫師人數用 <code>Set</code> 去重，因為同一位牙醫師今天可能有多筆預約；視訊門診數則直接篩選。能在記憶體裡用幾行算完的東西，就不要多打一次資料庫。</p>
+<p>接著是核心查詢。它從 <code>appointments</code> 出發，沿途接到病人、牙醫、服務三張表：</p>
 
-<h2>第六步：日期切換按鈕</h2>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/page.tsx"><code>const rows = await db
+  .select({
+    id: appointments.id,
+    startsAt: appointments.startsAt,
+    status: appointments.status,
+    patientId: patients.id,
+    firstName: patients.firstName,
+    lastName: patients.lastName,
+    dentist: dentists.displayName,
+    dentistPhoto: dentists.photoUrl,
+    service: services.name,
+    isTeleconsult: services.isTeleconsult,
+  })
+  .from(appointments)
+  .innerJoin(patients, eq(patients.id, appointments.patientId))
+  .innerJoin(dentists, eq(dentists.id, appointments.dentistId))
+  .innerJoin(services, eq(services.id, appointments.serviceId))
+  .where(and(gte(appointments.startsAt, dayStart), lt(appointments.startsAt, dayEnd)))
+  .orderBy(asc(appointments.startsAt), asc(dentists.displayName));</code></pre>
 
-<pre><code>  const shift = (days: number) =&gt; {
-    const d = new Date(Date.UTC(day.year, day.month - 1, day.day));
-    d.setUTCDate(d.getUTCDate() + days);
-    return `/dashboard?date=${d.toISOString().slice(0, 10)}`;
-  };</code></pre>
+<p>幾個值得留意的選擇。第一，<code>select</code> 裡只挑畫面真正要用的欄位，而不是把整列撈回來：病歷可能很敏感，能少碰就少碰。第二，三個 join 都是 <code>innerJoin</code>：一筆預約一定屬於某位病人、某位牙醫、某項服務，這是由外鍵保證的，所以用 inner join 不會有錯，也不需要處理「找不到關聯」的情況。第三，<code>orderBy</code> 先用時間、再按牙醫名字，這樣同一時段的預約會聚在一起、比較好讀。</p>
 
-<p>「前一天」與「後一天」其實只是連結，指向帶了不同 <code>date</code> 參數的同一個頁面。這裡刻意用 UTC 來做加減，因為 <code>day</code> 本身是沒有時區的日曆三欄；用 UTC 運算可以確保加一天就是日曆上的下一天，不會被本地時區的日光節約時間干擾。最後 <code>toISOString().slice(0, 10)</code> 取出的 <code>YYYY-MM-DD</code>，正好就是 <code>parseDay</code> 讀得懂的格式，形成一個閉環。</p>
+<p>執行完你應該看到：<code>rows</code> 就是當天所有預約的陣列，每一列都已經帶著病人姓名、牙醫、服務名稱，可以直接餵給 JSX 渲染。</p>
 
-<h2>第七步：渲染成統計格與表格</h2>
+<h2>第五步：算出「前一天／後一天」的連結</h2>
 
-<p>拿到的 <code>rows</code> 會被畫成三格 <code>StatTile</code>（預約數、牙醫師數、視訊數），下面接一張表格。表格的幾欄各有對應的格式化：開始時間用 <code>formatClinicTime</code> 轉成診所當地的時鐘時間；病人姓名做成連結，指到 <code>/dashboard/patients/&lt;id&gt;</code>；牙醫師欄位帶一個小頭像；狀態欄則用 <code>StatusPill</code>。</p>
+<p>頁面上有切換日期的按鈕，它們的網址是怎麼算出來的？靠一個小函式：</p>
 
-<p>狀態欄有一個小分支：如果這筆預約是視訊門診、而且狀態還是已預約，就顯示成 <code>video</code> 這個狀態；否則顯示資料庫裡真正的狀態。這類「顯示用的衍生值」放在伺服器端算，能讓前端只要負責畫，不必自己重新判斷業務規則。若當天沒有任何預約，則改顯示一個空狀態，而不是一張空表格。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/page.tsx"><code>const shift = (days: number) =&gt; {
+  const d = new Date(Date.UTC(day.year, day.month - 1, day.day));
+  d.setUTCDate(d.getUTCDate() + days);
+  return `/dashboard?date=${d.toISOString().slice(0, 10)}`;
+};</code></pre>
 
-<h2>做完長什麼樣</h2>
+<p>注意這裡用 <code>Date.UTC</code> 建構一個日期。這不是要把 <code>CalendarDay</code> 變成時間軸上的瞬間，而是把它<em>借來當一個日曆計算機</em>：在 UTC 的世界裡加減天數，不會有時區干擾，也不會碰到日光節約。<code>day.month - 1</code> 是因為 <code>Date</code> 的月份從 0 開始；<code>toISOString().slice(0, 10)</code> 則是把結果格式化成 <code>YYYY-MM-DD</code>。最後產出的就是像 <code>/dashboard?date=2026-10-04</code> 這樣的網址。</p>
 
-<p>打開 <code>/dashboard</code>，你會看到今天的日期標題、三格統計與當日預約表；點「前一天／後一天」會換日、點「Today」回到今天，全部都由同一個 Server Component 依查詢參數重新查詢、重新渲染。整個過程沒有出現任何 API 端點——資料從 Postgres 直接進到 HTML。這一步的目的是把「怎麼查、怎麼組」，為什麼要這樣分工則回到第一步的觀念。</p>
+<p>「今天」那一顆按鈕則直接連到 <code>/dashboard</code>，不帶日期，讓頁面回到預設值。</p>
+
+<h2>第六步：渲染統計與表格</h2>
+
+<p>最後把資料鋪上畫面。上方三格統計數字，分別是預約數、當天有排班的牙醫數、以及視訊門診數：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/page.tsx"><code>const dentistCount = new Set(rows.map((r) =&gt; r.dentist)).size;
+const teleconsults = rows.filter((r) =&gt; r.isTeleconsult).length;</code></pre>
+
+<p>牙醫數是用 <code>Set</code> 去掉重複的名字算出來的，而不是再多跑一次資料庫查詢，資料都已經在 <code>rows</code> 裡了，在記憶體裡算就好。表格的每一列則顯示時間、病人（連到病歷頁的連結）、服務、牙醫、狀態。</p>
+
+<p>狀態欄有個小細節：如果這筆預約是視訊門診、而且還沒看診（<code>booked</code>），就顯示成 <code>video</code> 這個狀態：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/page.tsx"><code>&lt;StatusPill status={r.isTeleconsult &amp;&amp; r.status === 'booked' ? 'video' : r.status} /&gt;</code></pre>
+
+<p>這種「把某個組合條件對應到一個顯示狀態」的判斷，放在伺服器端做，用戶端就只需要把結果畫出來，不必再懂業務規則。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-今日行程頁示範了一個 async Server Component 的基本功：用 typed <code>PageProps</code> 讀 <code>searchParams</code>、把診所日換成 UTC 半開時間窗，再用 <code>innerJoin</code> 與 <code>gte</code>／<code>lt</code> 一次撈出病人、牙醫師、療程與狀態，並用同一批 <code>rows</code> 現算統計。日期切換只是帶不同 <code>date</code> 參數的同一個頁面，全程不經 API。
+今日行程頁的骨架是：先 <code>requireStaff()</code>，再 <code>await searchParams</code> 讀日期；把日期解析成 <code>CalendarDay</code>，用 <code>clinicInstant</code> 建出當天 00:00 到 +24 小時的 UTC 半開區間；從 <code>appointments</code> 對病人、牙醫、服務做三個 <code>innerJoin</code>，用 <code>gte</code>／<code>lt</code> 過濾後按時間排序；切換日期的網址則靠 UTC 日期加減天數算出來。所有查詢都直接在伺服器完成，型別一路帶進 JSX。
 </blockquote>
 
-<p>行程表會連到病患頁，所以下一步要往資料的另一端走：病患名冊的聚合查詢，以及單一病患病歷頁要怎麼只讀「這一位」的資料，還留下稽核紀錄。</p>
+<p>「今天有哪些預約」解決了，但櫃檯常常要問的是更深一層的問題：這位病人過去看過幾次？他的病歷、過往的術後筆記、上傳的 X 光片在哪？下一節要處理的是聚合查詢，以及一個更嚴肅的課題：病歷屬於高度敏感資料，每一次讀取都必須留下紀錄。</p>
 
 <div class="lesson-nav">
-  <div><a href="./dashboard-shell-guard.html">← 上一步：Dashboard 外殼與守衛</a></div>
-  <div><a href="./patient-roster-and-chart.html">下一步：病患名冊與病歷頁 →</a></div>
+  <div><a href="./dashboard-shell-guard.html">← 上一步：Dashboard 外殼與守衛：把 requireStaff 放在資料旁邊</a></div>
+  <div><a href="./patient-roster-and-chart.html">下一步：病患名冊與病歷頁：聚合查詢與 PHI 讀取紀錄 →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="為什麼頁面要用 async 函式來宣告？" data-correct="1" data-explain="async 讓元件能直接 await 查詢，把非同步的資料取得寫成看似同步的一行。">
-  <button class="opt">因為 async 能讓元件自動快取結果</button>
-  <button class="opt">因為 async 才能在元件裡 await 查詢</button>
-  <button class="opt">因為 async 會自動加上權限守衛</button>
-  <button class="opt">因為 async 能讓畫面變得更互動</button>
+<div class="quiz" data-question="為什麼頁面的 searchParams 要用 await 拿？" data-correct="1" data-explain="這個版本的 Next.js 把頁面 props 設計成非同步資源，取用前要先 await。">
+  <button class="opt">因為 searchParams 存放在遠端伺服器</button>
+  <button class="opt">因為這個版本的頁面 props 是非同步的</button>
+  <button class="opt">因為 await 會自動幫值做型別轉換</button>
+  <button class="opt">因為不 await 就沒辦法通過守衛</button>
 </div>
 
-<div class="quiz" data-question="查詢用 gte(dayStart) 搭配 lt(dayEnd) 表達的是什麼？" data-correct="2" data-explain="半開區間從當天午夜含起、到隔天午夜前止，避免午夜整點的資料落進兩天。">
-  <button class="opt">一段包含頭尾兩天的封閉區間</button>
-  <button class="opt">只查開始時間大於今天的資料</button>
-  <button class="opt">含頭不含尾的半開區間</button>
-  <button class="opt">一段以本地時區為單位的區間</button>
+<div class="quiz" data-question="為什麼 dateParam 要先檢查 typeof 是不是 string？" data-correct="3" data-explain="searchParams 的值可能是字串、字串陣列或不存在，先收斂型別才不會被奇怪的輸入偷襲。">
+  <button class="opt">因為型別檢查可以加快頁面渲染</button>
+  <button class="opt">因為字串以外的型別無法被解析</button>
+  <button class="opt">因為 Drizzle 只接受字串當條件</button>
+  <button class="opt">因為它可能是陣列或根本不存在</button>
 </div>
 
-<div class="quiz" data-question="為什麼病人、牙醫師、療程這三個關聯用 innerJoin？" data-correct="0" data-explain="每一筆預約必定有這三個關聯，是資料庫保證存在的。">
-  <button class="opt">因為這三個關聯是必定存在的</button>
+<div class="quiz" data-question="為什麼日期要用 CalendarDay 而不是 new Date('2026-10-03')？" data-correct="0" data-explain="後者會被當成 UTC 午夜，印出來可能變成前一天，CalendarDay 把日子和瞬間分開。">
+  <button class="opt">前者把日子和時間軸瞬間分開處理</button>
+  <button class="opt">前者可以直接拿來做資料庫排序</button>
+  <button class="opt">前者在瀏覽器裡的執行速度更快</button>
+  <button class="opt">前者會自動幫你處理日光節約時間</button>
+</div>
+
+<div class="quiz" data-question="查詢為什麼使用 gte 加上 lt 的組合？" data-correct="2" data-explain="這是半開區間，左含右不含，剛好落在下一日 00:00 的預約不會被重複或遺漏。">
+  <button class="opt">因為這樣可以同時包含開始與結束那筆</button>
+  <button class="opt">因為 Drizzle 不支援單一的比較運算子</button>
+  <button class="opt">因為這是一個左含右不含的半開區間</button>
+  <button class="opt">因為這樣能自動加入缺漏的索引</button>
+</div>
+
+<div class="quiz" data-question="shift() 裡用 Date.UTC 的目的是什麼？" data-correct="1" data-explain="它只是借 UTC 當日曆計算機來加減天數，避開時區與日光節約的干擾。">
+  <button class="opt">把診所當地時間換算成真正的瞬間</button>
+  <button class="opt">借 UTC 當日曆計算機來加減天數</button>
+  <button class="opt">把日期字串還原成系統時區的午夜</button>
+  <button class="opt">讓產生的網址可以通過身分驗證</button>
+</div>
+
+<div class="quiz" data-question="三個 join 為什麼選 innerJoin 而不是 leftJoin？" data-correct="0" data-explain="一筆預約一定屬於某位病人、牙醫與服務，外鍵保證關聯存在，不會有落空。">
+  <button class="opt">因為關聯由外鍵保證、一定找得到</button>
   <button class="opt">因為 innerJoin 的查詢速度比較快</button>
-  <button class="opt">因為 leftJoin 不支援 where 條件</button>
-  <button class="opt">因為這三張表都放在同一欄位</button>
-</div>
-
-<div class="quiz" data-question="為什麼 parseDay 回傳的是 {year, month, day} 而不是 Date 物件？" data-correct="3" data-explain="純日曆三欄不會被 UTC 解析偷渡時區，做日期加減時更安全。">
-  <button class="opt">因為 Date 物件無法被 JSON 序列化</button>
-  <button class="opt">因為資料庫只接受這種物件格式</button>
-  <button class="opt">因為 React 不允許在元件裡 new Date</button>
-  <button class="opt">因為純日曆數值不會夾帶時區</button>
-</div>
-
-<div class="quiz" data-question="shift() 裡為什麼刻意用 UTC 來做日期加減？" data-correct="1" data-explain="日期是無時區的日曆值，用 UTC 運算可避免本地日光節約時間干擾。">
-  <button class="opt">因為 UTC 的世界標準時間比較準確</button>
-  <button class="opt">因為可避免本地日光節約時間干擾</button>
-  <button class="opt">因為 toISOString 只能用 UTC 輸出</button>
-  <button class="opt">因為診所的伺服器固定在格林威治</button>
-</div>
-
-<div class="quiz" data-question="視訊門診的狀態 pill 為什麼要在伺服器端決定？" data-correct="0" data-explain="把業務規則留在伺服器，前端只需依結果渲染，不必重複判斷邏輯。">
-  <button class="opt">讓前端只負責畫、不必重判規則</button>
-  <button class="opt">讓統計數字的計算可以更精確</button>
-  <button class="opt">讓資料庫可以省下一次 join 查詢</button>
-  <button class="opt">讓瀏覽器可以少下載一些 CSS</button>
+  <button class="opt">因為 leftJoin 不支援多表串接查詢</button>
+  <button class="opt">因為這樣才能顯示沒有預約的病人</button>
 </div>
 
 <div class="footer">
-  <p>mobile-app-course · 員工 Dashboard（Server Components） · Step 3/5</p>
-  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+  <p>mobile-app-course · 員工 Dashboard（Server Components）· Step 3/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>

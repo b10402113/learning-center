@@ -12,150 +12,209 @@
 <p class="meta">Step 5/5 · Stream 即時聊天與視訊</p>
 
 <h2>學習目標</h2>
-<p>學完這一節，你應該能分辨兩種視訊通話入口的差別：排程好的 teleconsult 用一個由 server 推導的固定 call id，讓雙方不用協調就進到同一間房；即時 ring 則每次都建立一個新的 call id，並以覆蓋在最上層的畫面呈現，所以使用者不管在哪一頁都收得到來電。</p>
+<p>能分辨排程通話的固定 call id 與即時 ring 的一次性 call id，並說明 ring overlay 為什麼要掛在 root 而不是各畫面。</p>
 
-<h2>前言：一顆按鈕，其實通往兩種完全不同的情境</h2>
+<h2>前言：兩種叫得上人的時機</h2>
 
-<p>上一節最後，共用的聊天 header 上有一顆視訊按鈕。但 Dentify 裡的視訊通話其實有兩個完全不同的入口，只是使用者看起來都像在「打視訊電話」。</p>
+<p>視訊在診所 app 裡有兩種完全不同的使用時機。第一種是事先約好的遠距看診：病人跟診所敲定了時間，時間一到，雙方都要進到「同一個房間」，不能各自跑到不同的通話裡。第二種是臨時的來電：診所看診到一半，想立刻打給病人問一件事，於是直接按下通話鍵，對方的手機就響了。</p>
 
-<p>第一個入口是預約好的視訊看診。病人在某個時間有一場 appointment，時間到了，他按下卡片上的 Join，診所的牙醫也從自己那一端加入，兩個人要進到同一間虛擬診間。第二個入口是即時鈴聲：病人可能在 AI 助理畫面，甚至在預約流程中，突然收到診所打來的視訊來電。一個是「約好時間、各自赴約」，另一個是「想到就打、對方可能在任何地方」。這一節要把這兩條路徑講清楚，因為它們用同一個 Video client，但進場方式和畫面呈現完全不同。</p>
+<p>這兩種情境看起來只是同一顆通話鍵的兩種用法，但在 Stream 裡，它們對「通話 id 從哪裡來」的答案剛好相反。搞懂這個差別，才不會遇到「明明約好同一時間，卻進了不同房間」或「每次打過去都看到上一通通話的殘影」這種鬼問題。這一節就把兩種入口講清楚，並說明來電畫面為什麼要掛在整個 app 的最外層。</p>
 
-<h2>排程通話：call id 由 server 在預約時決定</h2>
+<h2>通話在 Stream 裡是一個「房間」</h2>
 
-<p>排程看診的第一個難題是：雙方怎麼知道要進哪一間房？如果由客戶端自己想一個房間名稱，兩邊就會各進各的，永遠碰不到。Dentify 的解法是把這件事交給 server：預約建立時，就由 appointment 的 id 推導出 call id，寫成 <code>appointment-{id}</code>。之後不管是病人或牙醫，只要知道 appointment id，就能算出同一間房，完全不需要互相協調。</p>
+<p>先建立一個核心觀念：在 Stream 的視訊模型裡，一個 call id 代表一個可以重複進出的房間，而不是一次通話事件。這個特性很方便：你只要知道房間號碼，就能隨時進去，不必先協調誰先開房。但它也有一個副作用：如果重複使用同一個 id，Stream 會把那個房間先前的狀態接回來，於是新的一通電話可能一開場就帶著上一通的參與者或畫面。</p>
 
-<p>病人端按下 Join 後，畫面用這個 id 取得 call 物件：</p>
+<p>所以這個專案的規則很簡單：需要「固定房間」的情境就用推導出來的穩定 id；需要「一次性通話」的情境就每次產生新的 id。兩種需求、兩種 id 策略。</p>
 
-<pre><code>const call = useMemo(
-  () =&gt; (client &amp;&amp; id ? client.call('default', id, { reuseInstance: true }) : undefined),
-  [client, id]
-);</code></pre>
+<h2>排程看診：固定房間，id 由 server 推導</h2>
 
-<p><code>reuseInstance: true</code> 是一個重要細節。SDK 可能已經在別的地方建立過這個 <code>(type, id)</code> 組合，例如來電鈴聲或推播喚醒。如果這裡再建第二個實例，就會洩漏一條連線。加上這個選項，SDK 會沿用既有實例，整個畫面剛好只擁有一個。</p>
+<p>約好的遠距看診屬於前者。它的房間 id 是 <code>appointment-{id}</code>，在預約建立時就由 server 算好，不是手機自己發明的。這帶來兩個好處：同一個預約的醫病雙方一定會算到同一個房間；而且 id 不是 client 提供的，病人無法自己指定要去哪個房間。</p>
 
-<p>加入時，先設定一個較寬鬆的斷線容忍時間，再嘗試加入：</p>
+<p>手機端的畫面在 <code>app/call/[id].tsx</code>，它拿到的 id 就是這個推導出來的值：</p>
 
-<pre><code>call.setDisconnectionTimeout(120);
-call.join({ create: true }).then(...);</code></pre>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/app/call/[id].tsx"><code>export default function CallScreen() {
+  const { id } = useLocalSearchParams&lt;{ id: string }&gt;();
+  const client = useStreamVideoClient();
+  const [error, setError] = useState&lt;string | null&gt;(null);
 
-<p><code>setDisconnectionTimeout(120)</code> 讓通話在網路短暫中斷時能撐過去，而不是病人走進電梯、訊號一閃就結束整場看診。成功加入與失敗都會寫一筆 log，而失敗訊息只會記錄 WebRTC 的錯誤字串，不會帶任何病人的資料。</p>
+  // reuseInstance: the SDK may already hold this (type, id) from a ring or a
+  // push wake-up; constructing a second one leaks the SFU connection. The call
+  // is derived rather than held in state so this screen owns exactly one.
+  const call: Call | undefined = useMemo(
+    () => (client && id ? client.call('default', id, { reuseInstance: true }) : undefined),
+    [client, id]
+  );</code></pre>
 
-<p>離開畫面時則要掛斷，但必須先確認還沒離開：</p>
+<p>進房之前先設一個斷線容忍時間，然後才加入：</p>
 
-<pre><code>return () =&gt; {
-  if (call.state.callingState !== CallingState.LEFT) call.leave().catch(() =&gt; {});
-};</code></pre>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/app/call/[id].tsx"><code>useEffect(() => {
+  if (!call) return;
+  // Ride out a lift or a tunnel instead of ending the consultation.
+  call.setDisconnectionTimeout(120);
+  const startedAt = Date.now();
+  call.join({ create: true }).then(
+    () =>
+      Sentry.logger.info('teleconsult joined', {
+        call_type: 'default',
+        join_duration_ms: Date.now() - startedAt,
+      }),
+    (err) => {
+      // A consultation nobody could join is the worst failure this app has —
+      // the patient is sat waiting and the dentist is billing the slot.
+      Sentry.logger.error('teleconsult join failed', {
+        call_type: 'default',
+        reason: err instanceof Error ? err.message : 'unknown',
+        duration_ms: Date.now() - startedAt,
+      });
+      setError('Could not join the consultation. Check your connection and try again.');
+    }
+  );
 
-<p>因為 <code>CallContent</code> 自己的掛斷按鈕也可能已經讓通話離開，重複離開會拋錯，所以要先檢查狀態。真正畫出畫面的是 <code>CallContent</code>，它內建了靜音、開關鏡頭、掛斷等通話控制，我們不需要自己刻這些按鈕。</p>
+  return () => {
+    // Guarded: CallContent's hangup already left, and leaving twice throws.
+    if (call.state.callingState !== CallingState.LEFT) call.leave().catch(() => {});
+  };
+}, [call]);</code></pre>
 
-<h2>即時 ring：每次鈴響都是一個新房間</h2>
+<p>這裡有幾個判斷要看清楚。<code>setDisconnectionTimeout(120)</code> 讓使用者走進電梯或穿過隧道時，通話可以撐過短暫的斷線，而不是立刻結束看診。加入成功與失敗都寫進 Sentry，因為「約好的看診沒人能加入」是這個 app 最嚴重的故障之一：病人坐在那裡等，診所的時段也被佔住了。最後清理時要先確認狀態不是 <code>LEFT</code>，因為 <code>CallContent</code> 的掛斷按鈕可能已經離開過了，重複離開會丟錯。</p>
 
-<p>即時通話的邏輯和排程通話剛好相反。排程通話需要「固定」的 call id，即時鈴聲則需要「每次都不同」。原因藏在 Stream 對 call id 的定義：一個 call id 被當成一間持久的房間，重複使用同一個 id，會把上一次通話的殘留狀態一起帶回來。所以每次發動鈴聲都要用一個全新的識別碼：</p>
+<h2>即時來電：一次性的房間，id 每次重來</h2>
 
-<pre><code>const call = client.call('default', randomUUID(), { reuseInstance: true });
-await call.getOrCreate({
-  ring: true,
-  video: true,
-  data: { members: memberIds.map((user_id) =&gt; ({ user_id })) },
-});</code></pre>
+<p>臨時要打給對方的情境屬於後者。它沒有預約、沒有事先談好的時間，所以不能沿用固定的房間號碼，否則會把上一通的狀態帶進來。這個專案的做法是：每次按下通話都產生一個全新的隨機 id。</p>
 
-<p><code>getOrCreate</code> 帶上 <code>ring: true</code>，就是告訴 Stream「這是一通要響鈴的來電」，SDK 會負責讓被叫的那一端跳出來電畫面。<code>members</code> 是要邀請的人；如果名單裡只有自己一個人，那就沒有對象可打，函式會直接回傳 false，畫面再顯示「目前沒有人可以通話」。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code>/**
+ * Places a ringing call. A fresh id per ring: Stream treats a call id as a
+ * durable room, so reusing one replays the previous call's state.
+ */
+export function useRingCall() {
+  const client = useStreamVideoClient();
 
-<p>前一節的聊天 header 按鈕和 home 畫面的 Video Consult 按鈕，呼叫的都是同一支 <code>useRingCall</code>，差別只在成員名單從哪裡來：聊天按鈕用對話的成員，home 畫面用 <code>GET /api/stream/channel</code> 回傳的 <code>memberIds</code>。</p>
+  return useCallback(
+    async (memberIds: string[]) => {
+      // A call needs someone on the other end; one member is just yourself.
+      if (!client || memberIds.length &lt; 2) return false;
+      const call = client.call('default', randomUUID(), { reuseInstance: true });
+      await call.getOrCreate({
+        ring: true,
+        video: true,
+        data: { members: memberIds.map((user_id) => ({ user_id })) },
+      });
+      return true;
+    },
+    [client]
+  );
+}</code></pre>
 
-<h2>來電為什麼要畫在最上層，而不是一個畫面</h2>
+<p>這段程式碼藏了三個設計決定。第一，<code>randomUUID()</code> 每次產生新的 id，對應到「這是一通新電話」。第二，<code>memberIds.length &lt; 2</code> 就放棄，因為通話至少要有一個人接，成員只有自己等於沒人能接。第三，<code>getOrCreate</code> 的參數裡帶了 <code>ring: true</code> 和 <code>video: true</code>，前者讓它變成會響鈴的來電、後者指定用視訊，而 <code>data.members</code> 就是要把鈴聲送到哪些人手上。</p>
 
-<p>即時鈴聲最難的地方不是撥出去，而是「被叫的那一端要怎麼被看見」。如果來電只是一個特定的畫面，那麼使用者只要不在那個畫面就收不到。病人可能正在填預約表單、正在跟 AI 助理對話、甚至手機剛從背景喚醒，來電都必須跳出來。</p>
+<p>在對話畫面的標題列上，那顆視訊按鈕就是呼叫這個函式。它從目前對話的成員名單取得要打給誰，然後回傳的布林值決定要不要提示「目前沒人可打」：</p>
 
-<p>Dentify 的做法是把來電渲染成蓋在所有畫面之上的覆蓋層，而且掛在導覽器旁邊，而不是某個畫面裡：</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/components/chat.tsx"><code>const memberIds = Object.keys(channel?.state.members ?? {});
+const started = await ring(memberIds);
+if (!started) Alert.alert('Nobody to call', 'There is no one else in this conversation yet.');</code></pre>
 
-<pre><code>function RingingCalls() {
-  const ringingCall = useCalls().filter((c) =&gt; c.ringing)[0];
+<p>這也解釋了為什麼對話畫面裡有 <code>CallButton</code>、而看診畫面是獨立的一頁：來電是從對話發起的，所以按鈕長在對話裡；排程看診是從預約進去的，所以是一條獨立的 route。</p>
+
+<h2>來電畫面為什麼掛在 root，而不是某個畫面裡</h2>
+
+<p>還有一個很容易被忽略、但體感差很多的細節：當有人打電話進來時，不管使用者當下在哪一頁，都應該看到響鈴畫面。如果來電畫面只掛在訊息頁，那麼病人正在填預約、或正在跟 AI 助理對話時，來電就會被吃掉。</p>
+
+<p>所以 <code>RingingCalls</code> 被放在最外層，和導覽器並排：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code>function RingingCalls() {
+  const ringingCall = useCalls().filter((c) => c.ringing)[0];
   if (!ringingCall) return null;
 
   return (
     &lt;StreamCall call={ringingCall}&gt;
       &lt;View style={StyleSheet.absoluteFill}&gt;
+        {/* Routes itself between incoming, outgoing and accepted UI. */}
         &lt;RingingCallContent /&gt;
       &lt;/View&gt;
     &lt;/StreamCall&gt;
   );
 }</code></pre>
 
-<p><code>useCalls()</code> 會拿到目前所有通話，篩出正在響鈴的那一通。真的有來電時，<code>RingingCallContent</code> 會自己在「收到來電」「撥出中」「已接聽」這幾種介面之間切換，我們不需要自己判斷該顯示哪一個。因為它掛在 root，任何畫面都能被它蓋住，這就是為什麼來電永遠不會漏接。</p>
+<p><code>useCalls()</code> 會拿到目前所有的通話，這裡只挑第一個正在響鈴的；沒有就回傳 null，什麼都不渲染。<code>StreamCall</code> 提供這通電話的情境，<code>RingingCallContent</code> 則是一組現成的 UI，會自己判斷現在該顯示「有人來電」、「正在撥出」還是「已接通」三種畫面。包在 <code>absoluteFill</code> 裡，讓它蓋滿整個畫面，也就是蓋在當前任何頁面之上。</p>
 
-<h2>兩種入口的對照</h2>
+<h2>通話控制：SDK 已經做好，你只要別擋它</h2>
+
+<p>接通之後，畫面是由 <code>CallContent</code> 負責的。它已經內建了一組通話控制：靜音／解除靜音、開關鏡頭、掛斷，以及顯示對方離開、參與者狀態等。你在測試時會看到的就是這些：按一下麥克風就能消音，按一下鏡頭就能關閉視訊，這些都不需要自己寫。</p>
+
+<p>有一個實作上的小陷阱要記得：<code>CallContent</code> 會自己從主題裡的 insets 去加安全區域的內距，所以通話畫面<strong>不要再包一層 SafeAreaView</strong>，否則內距會被加兩次，按鈕與視訊畫面就會被推到奇怪的位置。這也是前一節在 root 把 safe area 的值放進 <code>videoTheme</code> 的原因。</p>
+
+<p>把兩種入口並排，差別就很清楚：</p>
 
 <table>
 <thead>
-<tr><th></th><th>排程 teleconsult</th><th>即時 ring</th></tr>
+<tr><th>面向</th><th>排程 teleconsult</th><th>即時 ring</th></tr>
 </thead>
 <tbody>
-<tr><td>觸發時機</td><td>預約時間到了，按 Join</td><td>隨時想到就打</td></tr>
-<tr><td>call id</td><td><code>appointment-{id}</code>，server 決定</td><td>每次 <code>randomUUID()</code>，全新</td></tr>
-<tr><td>雙方如何進同一間房</td><td>都由 appointment id 推導</td><td>由 SDK 依 ring 事件配對</td></tr>
-<tr><td>畫面在哪裡</td><td>獨立的 call 畫面</td><td>覆蓋在目前畫面上的覆蓋層</td></tr>
-<tr><td>主要元件</td><td><code>CallContent</code></td><td><code>RingingCallContent</code></td></tr>
+<tr><td>觸發時機</td><td>預約時間到，兩邊各自進入</td><td>從對話按下通話鍵的當下</td></tr>
+<tr><td>call id</td><td>固定：<code>appointment-{id}</code></td><td>每次新的 <code>randomUUID()</code></td></tr>
+<tr><td>id 從哪來</td><td>server 在預約時推導</td><td>client 按下時產生</td></tr>
+<tr><td>房間語意</td><td>可重複進入的同一個房間</td><td>一次性的通話事件</td></tr>
+<tr><td>畫面位置</td><td>獨立的 <code>/call/[id]</code> 頁</td><td>root 的響鈴 overlay</td></tr>
 </tbody>
 </table>
 
-<p>兩者最大的共同點是：通話控制（靜音、鏡頭開關、掛斷）都由 SDK 內建提供，開發者要處理的是「怎麼進到這通電話」以及「進來之後畫面蓋在哪裡」。</p>
+<p>這張表的核心其實只有一句話：<strong>固定的目的用固定 id，一次的事件用一次性 id。</strong> 排程看診要的是「同一個房間」，即時來電要的是「一通全新的電話」，兩者對 id 的需求正好相反，所以實作也分開。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-<p>同一套 Stream Video client 支援兩種通話入口。排程看診用 server 推導的固定 call id <code>appointment-{id}</code>，雙方不約而同進到同一間房，並用 <code>CallContent</code> 呈現內建的通話控制；即時鈴聲每次用一個新的 id，透過 <code>getOrCreate({ ring: true })</code> 通知對方，並以掛在 root 的 <code>RingingCalls</code> 覆蓋層呈現，所以人在任何畫面都接得到。排程要固定、鈴聲要唯一，這是兩條路徑最根本的差別。</p>
+在 Stream 裡，call id 代表一個可以重複進出的房間。排程的遠距看診用 server 在預約時推導出的固定 id <code>appointment-{id}</code>，雙方不必協調就會進到同一個房間；即時來電則每次用 <code>randomUUID()</code> 產生新 id，避免把上一通的狀態接回來。<code>RingingCallContent</code> 掛在 root、蓋在任何畫面之上，所以使用者在哪一頁都能收到來電；接通後的靜音、鏡頭、掛斷等控制由 <code>CallContent</code> 內建，只要記得不要再包一層 SafeAreaView，以免內距被重複計算。
 </blockquote>
 
-<p>到這裡，Dentify 的即時聊天與視訊就完成了：身分由 server 決定，token 短效且會自動更新，兩個 client 在 root 接上，訊息與通話各自有清楚的入口。接下來你可以把同一套模式套回自己的 app，並思考一個問題：你的產品裡，聊天與視訊是「約好時間的功能」還是「隨時可打的功能」？答案會決定 call id 該由誰決定、該不該用覆蓋層。</p>
+<p>走到這裡，這個節點的五步都完成了：你有了安全的身分模型、兩支後端端點、root 上的兩個 client、兩種角色的訊息畫面，以及兩種不同語意的視訊通話。它們其實共用同一條主軸：server 決定身分，client 只負責使用它；而聊天與視訊，只是同一套身分的兩種用法。</p>
 
 <div class="lesson-nav">
-  <div><a href="./chat-inbox-and-conversation.html">← 上一步：訊息畫面：patient 的單一對話與 staff 的收件匣</a></div>
+  <div><a href="./chat-inbox-and-conversation.html">← 上一步：訊息畫面與收件匣</a></div>
   <div></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="排程看診的 call id 為什麼由 server 決定？" data-correct="2" data-explain="由 appointment id 推導出固定 call id，雙方不必互相協調就會進入同一間房。">
-  <button class="opt">因為 client 沒有產生亂數字串的能力</button>
-  <button class="opt">因為 Stream 規定 id 必須是整數格式</button>
-  <button class="opt">讓雙方不必協調就能進入同一間房</button>
-  <button class="opt">這樣才能隱藏病患的實際身分</button>
+<div class="quiz" data-question="Stream 的 call id 在概念上代表什麼？" data-correct="2" data-explain="它是一個可以重複進出的房間，而不是單一次通話事件。">
+  <button class="opt">一次電話帳單的收費單位</button>
+  <button class="opt">一個使用者在線上的時間長度</button>
+  <button class="opt">一個可以重複進出的固定房間</button>
+  <button class="opt">一段隨機產生的加密金鑰</button>
 </div>
 
-<div class="quiz" data-question="即時鈴聲為什麼每次都要用 new 的 call id？" data-correct="0" data-explain="call id 是持久房間，重複使用會把上一次通話的狀態一起帶回來。">
-  <button class="opt">重複使用會把上次通話狀態帶回來</button>
-  <button class="opt">因為亂數 id 的連線速度比較快</button>
-  <button class="opt">因為 Stream 會自動封鎖舊的 id</button>
-  <button class="opt">這樣才能同時打好幾通電話</button>
+<div class="quiz" data-question="排程看診為什麼要用 appointment-{id} 這種固定 id？" data-correct="1" data-explain="雙方都能從預約算出同一個房間，不必事先協調，且 id 不是 client 自行指定。">
+  <button class="opt">因為固定 id 可以讓通話品質更穩定</button>
+  <button class="opt">因為雙方會算到同一房間且非 client 指定</button>
+  <button class="opt">因為隨機 id 沒有辦法被 Stream 接受</button>
+  <button class="opt">因為固定 id 可以省下伺服器的資源</button>
 </div>
 
-<div class="quiz" data-question="call/reuseInstance 有什麼作用？" data-correct="1" data-explain="SDK 可能已建立過同一組合，沿用既有實例可避免洩漏第二條連線。">
-  <button class="opt">強制每次都重新建立一個乾淨的連線</button>
-  <button class="opt">沿用既有實例避免洩漏第二條連線</button>
-  <button class="opt">讓通話可以同時支援多個裝置登入</button>
-  <button class="opt">把通話記錄自動存進聊天室裡</button>
+<div class="quiz" data-question="即時 ring 為什麼每次都要用新的隨機 id？" data-correct="3" data-explain="既有 id 會被視為同一個房間，沿用會把上一通通話的狀態接回來。">
+  <button class="opt">因為隨機 id 可以讓通話更難被竊聽</button>
+  <button class="opt">因為 Stream 限制每人只能建立一個 id</button>
+  <button class="opt">因為這樣才能同時打給很多個人</button>
+  <button class="opt">避免沿用舊房間而接回上通狀態</button>
 </div>
 
-<div class="quiz" data-question="RingingCalls 為什麼要掛在導覽器旁邊而不是某個畫面裡？" data-correct="3" data-explain="掛在 root 才能讓來電覆蓋在任何畫面上，使用者不管在哪一頁都收得到。">
-  <button class="opt">因為掛在畫面裡會讓記憶體用量變大</button>
-  <button class="opt">因為 Stream 規定鈴聲元件只能有一個</button>
-  <button class="opt">因為這樣可以省下一次畫面重新渲染</button>
-  <button class="opt">讓來電能覆蓋任何畫面而不被漏接</button>
+<div class="quiz" data-question="useRingCall 在成員少於兩人時直接回傳 false，為什麼？" data-correct="0" data-explain="只有自己一個人不算通話，至少要有一位其他人可以接。">
+  <button class="opt">因為只有自己一人時沒有人可以接</button>
+  <button class="opt">因為成員超過兩人時會比較穩定</button>
+  <button class="opt">因為 Stream 一次只能處理一通電話</button>
+  <button class="opt">因為這樣可以省下一次 API 呼叫</button>
 </div>
 
-<div class="quiz" data-question="setDisconnectionTimeout(120) 是為了解決什麼情境？" data-correct="1" data-explain="讓網路短暫中斷能撐過去，例如走進電梯訊號一閃，而不會直接結束整場看診。">
-  <button class="opt">讓通話超過兩小時後自動掛斷</button>
-  <button class="opt">讓短暫斷網不至於直接結束看診</button>
-  <button class="opt">限制單次通話最多只能有兩人</button>
-  <button class="opt">在對方未接時自動重撥兩次</button>
+<div class="quiz" data-question="RingingCalls 掛在 root 而非訊息頁，主要解決什麼問題？" data-correct="2" data-explain="來電時使用者可能在任何一頁，掛 root 才能蓋在當前畫面之上。">
+  <button class="opt">讓響鈴的聲音可以變得比較大聲</button>
+  <button class="opt">讓通話的連線速度可以更快一點</button>
+  <button class="opt">來電時使用者在任何頁面都能收到</button>
+  <button class="opt">讓通話畫面可以同時顯示多個對話</button>
 </div>
 
-<div class="quiz" data-question="兩種通話各自用哪個元件呈現主要畫面？" data-correct="0" data-explain="排程通話用 CallContent，即時鈴聲用 RingingCallContent 在 root 覆蓋。">
-  <button class="opt">排程用 CallContent，鈴聲用 RingingCallContent</button>
-  <button class="opt">排程用 RingingCallContent，鈴聲用 CallContent</button>
-  <button class="opt">兩者都用 MessageList 加上通話按鈕</button>
-  <button class="opt">兩者都用 Channel 元件包住通話畫面</button>
+<div class="quiz" data-question="接通後的控制項（靜音、鏡頭、掛斷）是從哪裡來的？" data-correct="1" data-explain="CallContent 已內建這些控制，實作時只要別再包一層 SafeAreaView 擋到它的內距。">
+  <button class="opt">需要自己用按鈕與狀態逐一實作</button>
+  <button class="opt">由 CallContent 內建，不必自己寫</button>
+  <button class="opt">由 RingingCallContent 在響鈴時提供</button>
+  <button class="opt">由 Clerk 的登入元件自動附帶提供</button>
 </div>
 
 <div class="footer">

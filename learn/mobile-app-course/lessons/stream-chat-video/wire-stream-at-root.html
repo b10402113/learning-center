@@ -12,25 +12,19 @@
 <p class="meta">Step 3/5 · Stream 即時聊天與視訊</p>
 
 <h2>學習目標</h2>
-<p>做完這一節，你的 Expo app 最上層會多一層 <code>StreamProvider</code>：它用 <code>POST /api/stream/token</code> 拿到的那張 token，同時建立 Stream Chat 與 Stream Video 兩個 client，並且在 12 秒內連不上時自動放棄，讓預約與 AI 助理等其他功能照常運作。</p>
+<p>能在 app root 用同一張 server token 建立 Stream Chat 與 Video 兩個 client，並加上連線逾時降級，讓非即時功能不被拖垮。</p>
 
-<h2>前言：token 有了，但要種在哪裡？</h2>
+<h2>前言：client 該在哪裡活著？</h2>
 
-<p>上一節的後端已經能發 token，也能指出病人該進哪個對話。但這個 token 要在 app 的哪一層被使用，是一個會影響全app的決定。如果每個畫面各自去打端點、各自建 client，你會很快遇到兩個問題：同一個使用者可能同時存在好幾條 Stream 連線，而登出時有些 client 沒被斷開，下一個使用者就沿用了上一個人的身分。</p>
+<p>上一節把兩支端點寫好了：一支發 token，一支給病人的對話。現在手機知道要跟誰拿憑證了，但還沒有一個地方真的去拿、去連線。接下來的問題是：這兩個 client 該放在哪裡、由誰啟動、連不上時又該怎麼辦？</p>
 
-<p>解法是把兩個 client 接到整個應用的最上層，只建立一次，登出時一起拆掉。這一節就是那個最上層的 <code>StreamProvider</code>。它除了接線，還處理一件很容易被忽略的事：當 Stream 掛掉時，app 要怎麼活下來。</p>
+<p>如果你把連線邏輯放在訊息畫面裡，會遇到一連串麻煩：病人一進到別的頁面，client 就被卸載、連線中斷、未讀狀態亂掉；而當 Stream 掛掉時，整張 app 會卡在一顆轉不停的圈圈，連跟聊天無關的預約、AI 助理都不能用。所以正確的位置是 app 的 root，一生只建立一次，並且把「連不上」當成一個正常的狀態來處理。這一節要做的就是這件事：在 root 建立兩個 client、共用同一張 token，並替連線加上逾時。</p>
 
-<h2>為什麼兩個 client 都放在 root</h2>
+<h2>第一步：先定義這個 session 長什麼樣子</h2>
 
-<p>聊天與視訊的狀態要在整個 app 都拿得到。病人在 home 畫面按「Video Consult」要能撥號、在 messages 分頁要能收訊息、在 booking 流程中還可能被來電打斷。這些畫面彼此不相關，唯一共同的地方就是它們都在 root 底下。</p>
+<p>root 的檔案是 <code>apps/mobile/src/lib/stream.tsx</code>。先把 server 回的 token 回應定型，並定義一個逾時常數：</p>
 
-<p>把兩個 client 放在 root 還有一個更實際的理由：登出。Chat 與 Video client 都綁著「目前登入的人是誰」，只要把它們的生命週期綁在一個會在登出時被卸載的元件上，斷線就會自動發生，不必手動記得去斷。</p>
-
-<h2>第一步：拿到 token 並存成 session</h2>
-
-<p>Provider 先向自己的 token 端點要身分，把回應存成 state：</p>
-
-<pre><code>type StreamSession = {
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code>type StreamSession = {
   apiKey: string;
   userId: string;
   name: string;
@@ -38,24 +32,93 @@
   token: string;
 };
 
-useEffect(() =&gt; {
+/**
+ * How long to wait for Stream before giving up and running without it.
+ * Neither wait below is self-limiting — `fetch` has no timeout, and
+ * `useCreateChatClient` retries a failing connection indefinitely — so without
+ * this the whole app sits behind a spinner whenever the API or Stream is
+ * unreachable. Messaging is a feature; booking and the assistant are not
+ * allowed to die with it.
+ */
+const CONNECT_TIMEOUT_MS = 12_000;</code></pre>
+
+<p><code>StreamSession</code> 的欄位正好對上上一節 token 端點回傳的內容。逾時訂在 12 秒，理由是註解裡那句話：這條鏈上有兩段等待本身不會自己結束，<code>fetch</code> 沒有預設逾時，<code>useCreateChatClient</code> 會在連線失敗時不斷重試。少了這個上限，只要 API 或 Stream 不可達，整個 app 就會永遠停在載入畫面。這個專案選擇的立場很明確：聊天是一個功能，但預約和 AI 助理不該陪它一起死。</p>
+
+<h2>第二步：建立祖先元件，決定要連線還是放行</h2>
+
+<p><code>StreamProvider</code> 是掛在最外層的元件。它先讀 Clerk 的登入狀態，並準備一個放 session 的 state：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code>export function StreamProvider({ children }: { children: ReactNode }) {
+  const { isLoaded, isSignedIn } = useAuth();
+  const call = useApiClient();
+  const [session, setSession] = useState&lt;StreamSession | null&gt;(null);
+  const [failed, setFailed] = useState(false);</code></pre>
+
+<p>接著是「放棄連線」的處理。它不只是把狀態設成失敗，還要把是哪一段等待逾時記錄下來，方便日後在 Sentry 分辨是 token 出問題還是 socket 出問題：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code>const giveUpAt = useCallback((stage: 'token' | 'socket', reason: 'error' | 'timeout') => {
+  Sentry.logger.warn('stream unavailable, app running without messaging', {
+    stage,
+    reason,
+    timeout_ms: CONNECT_TIMEOUT_MS,
+  });
+  setFailed(true);
+}, []);</code></pre>
+
+<p>然後是實際去拿 token 的 effect。注意它是用 <code>useApiClient()</code> 包好的 <code>call</code>，所以 Clerk 的 token 會自動帶上，不需要自己手動塞標頭：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code>useEffect(() => {
   if (!isLoaded || !isSignedIn) return;
   let cancelled = false;
   call&lt;StreamSession&gt;('/api/stream/token', { method: 'POST' }).then(
-    (next) =&gt; !cancelled &amp;&amp; setSession(next),
-    () =&gt; !cancelled &amp;&amp; giveUpAt('token', 'error')
+    (next) => !cancelled && setSession(next),
+    () => !cancelled && giveUpAt('token', 'error')
   );
-  return () =&gt; { cancelled = true; };
+  return () => {
+    cancelled = true;
+  };
 }, [call, isLoaded, isSignedIn, giveUpAt]);</code></pre>
 
-<p>只有登入後才會打這支端點。拿到的 session 裡同時有 <code>apiKey</code> 與 <code>token</code>，接下來的兩個 client 都會用到它。</p>
+<p>這裡的 <code>cancelled</code> 是用來處理「元件已卸載但請求才回來」的情況，避免對已經不存在的畫面設定狀態。成功就存下 session，失敗就呼叫 <code>giveUpAt('token', 'error')</code>。</p>
 
-<h2>第二步：建立 Chat client</h2>
+<h2>第三步：替兩段等待各設一個截止時間</h2>
 
-<p>Chat 用 SDK 提供的 hook 建立，只需要 api key、一個會回傳 token 的函式，以及使用者資料：</p>
+<p>剛剛處理的是 token 請求「失敗」的情況，但還有一種更常見的狀況：請求既沒有成功、也沒有失敗，就只是卡著。所以除了錯誤處理，還要替等待時間設上限。第一段是 token POST：</p>
 
-<pre><code>const userData = useMemo(
-  () =&gt; ({ id: session.userId, name: session.name }),
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code>// Stage 1 deadline: the token POST. Stops once a session lands.
+useEffect(() => {
+  if (!isSignedIn || failed || session) return;
+  const timer = setTimeout(() => giveUpAt('token', 'timeout'), CONNECT_TIMEOUT_MS);
+  return () => clearTimeout(timer);
+}, [isSignedIn, failed, session, giveUpAt]);</code></pre>
+
+<p>第二段的等待發生在稍後的 <code>ConnectedStream</code> 裡，是聊天 socket 的連線；元件卸載前要記得 <code>clearTimeout</code>，否則會對已經結束的流程誤報逾時。最後由 render 的條件決定畫面：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code>if (!isLoaded) return &lt;Connecting /&gt;;
+if (!isSignedIn || failed) return &lt;&gt;{children}&lt;/&gt;;
+if (!session) return &lt;Connecting /&gt;;
+
+return (
+  &lt;ConnectedStream session={session} onUnavailable={giveUp}&gt;
+    {children}
+  &lt;/ConnectedStream&gt;
+);</code></pre>
+
+<p>這三行的差別很重要。還在讀登入狀態時顯示 <code>Connecting</code>；沒登入或已經放棄連線時，直接回傳 <code>children</code>，也就是讓整個 app 照常運作，只是沒有聊天；有 session 才進入 <code>ConnectedStream</code>。這就是「優雅降級」的實作：聊天不在，其他功能照跑。</p>
+
+<h2>第四步：在同一個地方建立兩個 client</h2>
+
+<p><code>ConnectedStream</code> 是真正把兩個 client 生出來的地方。先做一個可重複使用的刷新函式，再把同一份使用者資料交給 Chat 與 Video：</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code>// Re-hits the same authenticated endpoint on expiry. Stable, because
+// `useApiClient` holds Clerk's getToken in a ref.
+const tokenProvider = useCallback(
+  () => call&lt;StreamSession&gt;('/api/stream/token', { method: 'POST' }).then((s) => s.token),
+  [call]
+);
+
+const userData = useMemo(
+  () => ({ id: session.userId, name: session.name }),
   [session.userId, session.name]
 );
 
@@ -65,21 +128,15 @@ const chatClient = useCreateChatClient({
   userData,
 });</code></pre>
 
-<p>注意 <code>tokenOrProvider</code> 傳的不是 token 本身，而是一個 <code>tokenProvider</code> 函式。這是為了讓 SDK 在 token 快過期時自己去更新，而更新的方式就是再打一次同一個端點：</p>
+<p>這裡又一次看到「刷新就是再打同一支端點」。Chat client 由 <code>useCreateChatClient</code> 建立，傳入 apiKey、使用者資料與 <code>tokenOrProvider</code>；<code>tokenOrProvider</code> 這個名字的意思是：你可以直接給 token，也可以給一個會在需要時去拿 token 的函式。這裡給函式，所以過期時 SDK 會自己呼叫它換新的。</p>
 
-<pre><code>const tokenProvider = useCallback(
-  () =&gt; call&lt;StreamSession&gt;('/api/stream/token', { method: 'POST' }).then((s) =&gt; s.token),
-  [call]
-);</code></pre>
+<p>Video client 則刻意不用 <code>new</code>：</p>
 
-<p>這個函式是穩定的，因為 <code>useApiClient</code> 把 Clerk 的 <code>getToken</code> 放在 ref 裡，所以它的依賴不會每次 render 都變，也就不會讓 Chat client 反覆重建。</p>
-
-<h2>第三步：建立 Video client，而且只建立一次</h2>
-
-<p>Video client 不能用 <code>new</code>，要用 <code>getOrCreateInstance</code>：</p>
-
-<pre><code>const videoClient = useMemo(
-  () =&gt;
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code>// getOrCreateInstance, never `new`: a second instance breaks ringing state
+// and push wake-ups. Idempotent for the same user, which is what makes it
+// safe to derive here rather than through an effect + setState.
+const videoClient = useMemo(
+  () =>
     StreamVideoClient.getOrCreateInstance({
       apiKey: session.apiKey,
       user: userData,
@@ -90,117 +147,93 @@ const chatClient = useCreateChatClient({
   [session.apiKey, session.token, userData, tokenProvider]
 );</code></pre>
 
-<p>差別在哪裡？第二個 client 實例會破壞來電鈴聲的狀態，也會讓推播喚醒對不上正確的連線。同一個使用者呼叫 <code>getOrCreateInstance</code> 是冪等的，所以放在 <code>useMemo</code> 裡重算也安全。<code>options.rejectCallWhenBusy</code> 則表示這個人正在講電話時，新來電會被自動拒絕，而不是兩個通話互搶。</p>
+<p>為什麼不能用 <code>new</code>？因為一個使用者只能有一個 Video client，如果畫面重整或元件重繪時又建了第二個，來電響鈴的狀態和推播喚醒都會壞掉。<code>getOrCreateInstance</code> 保證同一個使用者拿到同一個實例，所以放在 <code>useMemo</code> 裡、用 session 當依賴是安全的。<code>rejectCallWhenBusy: true</code> 則表示通話中再有來電會被拒接，避免同時接兩通。</p>
 
-<p>最後，在元件卸載時把 video client 斷開，這就是登出時的自動清理：</p>
+<h2>第五步：處理登出，並把 client 傳下去</h2>
 
-<pre><code>useEffect(
-  () =&gt; () =&gt; {
-    videoClient.disconnectUser().catch(() =&gt; {});
-  },
-  [videoClient]
-);</code></pre>
+<p>登出或換帳號時，最怕舊使用者的 token 還留著，導致新使用者短暫用錯身分連上。這個專案在 render 期間就把它清掉：</p>
 
-<h2>第四步：12 秒的耐心——連不上就讓 app 先活著</h2>
-
-<p>Stream 是一個外部服務，它有可能連不上。如果 app 傻傻地等它，整個介面會卡在轉圈圈，連跟聊天無關的預約功能都一起停擺。Dentify 的處理方式是設一個 12 秒的上限：</p>
-
-<pre><code>const CONNECT_TIMEOUT_MS = 12_000;
-
-const giveUpAt = useCallback((stage: 'token' | 'socket', reason: 'error' | 'timeout') =&gt; {
-  Sentry.logger.warn('stream unavailable, app running without messaging', {
-    stage,
-    reason,
-    timeout_ms: CONNECT_TIMEOUT_MS,
-  });
-  setFailed(true);
-}, []);</code></pre>
-
-<p>這裡的 <code>stage</code> 區分了兩種失敗：<code>token</code> 代表連後端拿 token 就失敗，<code>socket</code> 代表 token 拿到了、但聊天連線沒開起來。分開記錄是為了在監控上能分辨是後端問題還是 Stream 問題。<code>reason</code> 則區分是直接錯誤還是等超過時間。</p>
-
-<p>當失敗發生時，Provider 不再包住 Chat 與 Video，直接把子元件原樣渲染：</p>
-
-<pre><code>if (!isLoaded) return &lt;Connecting /&gt;;
-if (!isSignedIn || failed) return &lt;&gt;{children}&lt;/&gt;;
-if (!session) return &lt;Connecting /&gt;;</code></pre>
-
-<p>結果就是：聊天與視訊消失，但預約、AI 助理、個人資料全部照常。Messaging 是一個功能，不是整個 app 的地基。</p>
-
-<h2>第五步：登出時不留下上一個人的 token</h2>
-
-<p>還有一個容易漏掉的情境：使用者切換帳號。如果舊的 session state 還留著，而新的 token 還在路上，app 可能短暫用上一個人的身分連上 Stream。Dentify 在 render 期間比對登入狀態，一發現變化就清掉 session：</p>
-
-<pre><code>if (wasSignedIn !== isSignedIn) {
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code>// Signing out — or switching account — must not leave the previous user's
+// Stream token in play while the next one is still in flight, or the app
+// briefly connects to Stream as the wrong person. Adjusted during render,
+// matching MeProvider. https://react.dev/learn/you-might-not-need-an-effect
+if (wasSignedIn !== isSignedIn) {
   setWasSignedIn(isSignedIn);
   setSession(null);
   setFailed(false);
 }</code></pre>
 
-<p>把 session 清掉之後，<code>ConnectedStream</code> 會被卸載，兩個 client 也一起斷開。等新身分登入，一切從乾淨的狀態重建。</p>
+<p>最後是 provider 的 render 結構。Video 包在最外層，Chat 在裡面，而 <code>RingingCalls</code> 放在導覽器旁邊：</p>
 
-<h2>第六步：把主題接上，避免看起來像外掛的 SDK</h2>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/stream.tsx"><code>&lt;StreamVideo client={videoClient} style={videoTheme}&gt;
+  &lt;OverlayProvider value={{ style: chatTheme }}&gt;
+    &lt;Chat client={chatClient}&gt;
+      &lt;ClinicContext.Provider value={{ ready: true, ...clinic }}&gt;
+        {children}
+      &lt;/ClinicContext.Provider&gt;
+    &lt;/Chat&gt;
+  &lt;/OverlayProvider&gt;
+  {/* Sibling of the navigator so a ring covers whatever screen is open. */}
+  &lt;RingingCalls /&gt;
+&lt;/StreamVideo&gt;</code></pre>
 
-<p>最後一步是外觀。Stream 的預設主題是通用的，如果直接沿用，聊天畫面會和 app 的其他部分明顯不同。Dentify 把 Stream 的主題色改成自己的水藍與深藍，並把安全區域的 insets 接進 video 主題，讓通話畫面自己處理留白：</p>
-
-<pre><code>const videoTheme = { variants: { insets: { top, right, bottom, left } } };</code></pre>
-
-<p>原則是：聊天與通話要讀起來像同一個產品，而不是兩個硬塞進來的功能。這也是為什麼通話畫面不再自己包 <code>SafeAreaView</code>，否則會多留一次空白。</p>
+<p>這個巢狀順序不是隨便排的：<code>StreamVideo</code> 提供視訊情境，<code>OverlayProvider</code> 帶入聊天的佈景主題，<code>Chat</code> 提供聊天情境，<code>ClinicContext.Provider</code> 再把「ready、channelId、成員名單」往下傳，讓任何畫面都能用 <code>useClinic()</code> 拿到。而 <code>RingingCalls</code> 放在導覽器旁邊，是為了讓來電覆蓋任何畫面，這在下一節講通話時會再看到。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-<p>StreamProvider 在 app root 只做一次接線：用 server 發的 token 建立 Chat 與 Video 兩個 client，Video 用 getOrCreateInstance 確保只有一個實例。連線設 12 秒上限，失敗時把畫面交還給 app，讓聊天以外的功能照常運作。登出或切換帳號時清掉 session，兩個 client 一起斷開。主題則接上 app 的配色，讓即時功能不像是外掛。</p>
+Stream 的兩個 client 應該在 app root 建立，而不是綁在某個畫面上。<code>StreamProvider</code> 用 Clerk 的登入狀態決定要不要連線，並替 token POST 與聊天 socket 各設一個 12 秒的截止時間，任一段放棄就讓 app 以「沒有聊天」的模式照常運作。<code>ConnectedStream</code> 用同一張 token 建立 Chat client 與 Video client，Video 用 <code>getOrCreateInstance</code> 保證單例，兩者共用一個 tokenProvider 負責過期刷新；登出時立刻清掉舊 session，避免用錯身分連上。
 </blockquote>
 
-<p>現在聊天與通話的「引擎」已經裝好，但沒有任何畫面用它。下一步要做出訊息分頁：病人直接進入唯一對話，員工則從共享收件匣開啟個別對話。</p>
+<p>client 就緒之後，終於可以碰使用者真正看到的畫面了。下一節要在同一個訊息頁面上，做出兩種角色截然不同的體驗：病人直接進入唯一的診所對話，員工則看到每一筆病人對話組成的收件匣。</p>
 
 <div class="lesson-nav">
-  <div><a href="./token-and-channel-endpoints.html">← 上一步：Token endpoint 與 channel endpoint：server wrapper 與短效憑證</a></div>
-  <div><a href="./chat-inbox-and-conversation.html">下一步：訊息畫面：patient 的單一對話與 staff 的收件匣 →</a></div>
+  <div><a href="./token-and-channel-endpoints.html">← 上一步：token 與 channel 端點</a></div>
+  <div><a href="./chat-inbox-and-conversation.html">下一步：訊息畫面與收件匣 →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="為什麼兩個 client 要建立在 app root，而不是各自的畫面裡？" data-correct="1" data-explain="root 讓聊天與通話狀態在整個 app 都拿得到，登出時也會一起被卸載斷開。">
-  <button class="opt">因為放在畫面裡會讓程式碼檔案太多</button>
-  <button class="opt">讓狀態共用且登出時一起被斷開</button>
-  <button class="opt">因為 Stream 規定只能在最上層初始化</button>
-  <button class="opt">因為這樣可以省下 Stream 的連線費用</button>
+<div class="quiz" data-question="為什麼 Stream 的兩個 client 要放在 app root，而不是訊息畫面裡？" data-correct="2" data-explain="放畫面裡會隨畫面卸載而斷線，未讀狀態與來電都容易亂掉。">
+  <button class="opt">因為 root 的程式碼執行速度比較快</button>
+  <button class="opt">因為畫面元件不能匯入 Stream 的 SDK</button>
+  <button class="opt">因為放畫面會隨卸載而中斷連線</button>
+  <button class="opt">因為只有 root 能讀取 Clerk 的狀態</button>
 </div>
 
-<div class="quiz" data-question="Video client 為什麼要用 getOrCreateInstance 而不是 new？" data-correct="2" data-explain="第二個實例會破壞 ringing 狀態與推播喚醒，getOrCreateInstance 確保同一個使用者只有一個 client。">
-  <button class="opt">因為 new 在這個 SDK 版本已被移除</button>
-  <button class="opt">因為 new 沒有辦法設定 api key</button>
-  <button class="opt">避免第二個實例破壞鈴聲與喚醒</button>
-  <button class="opt">因為 new 會自動建立一個聊天連線</button>
+<div class="quiz" data-question="CONNECT_TIMEOUT_MS 存在的目的是什麼？" data-correct="0" data-explain="fetch 無逾時、聊天連線會無限重試，沒有上限會讓整個 app 卡在載入畫面。">
+  <button class="opt">避免 app 因為無限等待而卡在載入</button>
+  <button class="opt">強制使用者每 12 秒重新登入一次</button>
+  <button class="opt">限制聊天訊息的長度最多 12 秒</button>
+  <button class="opt">讓 token 的有效期限延長到 12 秒</button>
 </div>
 
-<div class="quiz" data-question="12 秒逾時後的行為是什麼？" data-correct="3" data-explain="放棄 Stream 後直接渲染子元件，聊天消失但預約與 AI 助理等其餘功能照常運作。">
-  <button class="opt">整個 app 停在轉圈圈畫面等待重連</button>
-  <button class="opt">自動改用 Expo Go 的替代通訊功能</button>
-  <button class="opt">把使用者登出並要求重新登入一次</button>
-  <button class="opt">照常顯示 app，只是沒有聊天功能</button>
+<div class="quiz" data-question="當 Stream 連不上時，StreamProvider 會怎麼做？" data-correct="3" data-explain="直接回傳 children，讓 app 照常運作，只是沒有聊天功能。">
+  <button class="opt">讓整個 app 停留在轉圈圈的畫面</button>
+  <button class="opt">自動把使用者的帳號登出</button>
+  <button class="opt">改用另一套備援的聊天服務</button>
+  <button class="opt">回傳 children，讓其他功能照常運作</button>
 </div>
 
-<div class="quiz" data-question="giveUpAt 記錄 stage 與 reason 的用處是什麼？" data-correct="0" data-explain="stage 區分 token 或 socket 失敗，reason 區分錯誤或逾時，讓監控能分辨問題出在哪。">
-  <button class="opt">分辨後端問題與 Stream 連線問題</button>
-  <button class="opt">決定要顯示哪一種顏色的錯誤畫面</button>
-  <button class="opt">通知使用者是哪一位員工的連線壞了</button>
-  <button class="opt">計算這次連線花了多少 Stream 費用</button>
+<div class="quiz" data-question="Video client 為什麼用 getOrCreateInstance 而不用 new？" data-correct="1" data-explain="第二個實例會破壞響鈴狀態與推播喚醒，單例才能保證同一個使用者只有一個 client。">
+  <button class="opt">因為 new 的語法在 React 中被禁止使用</button>
+  <button class="opt">因為第二個實例會破壞響鈴與推播</button>
+  <button class="opt">因為 getOrCreateInstance 的速度快很多</button>
+  <button class="opt">因為 new 沒有辦法帶入 apiKey 參數</button>
 </div>
 
-<div class="quiz" data-question="tokenProvider 為什麼是傳函式而不是直接傳 token 字串？" data-correct="1" data-explain="SDK 需要 token 過期時自行更新，傳函式讓它能在需要時再打一次端點。">
-  <button class="opt">因為 token 字串太長沒有辦法塞進參數</button>
-  <button class="opt">讓 SDK 能在過期時自行重新取得</button>
-  <button class="opt">因為函式可以把 secret 一起加密帶上</button>
-  <button class="opt">讓同一個 token 可以給多個使用者用</button>
+<div class="quiz" data-question="tokenProvider 這個函式的作用是什麼？" data-correct="2" data-explain="讓 SDK 在 token 過期時自己呼叫它，重新打同一支端點換新的 token。">
+  <button class="opt">在登入時顯示一個載入中的提示</button>
+  <button class="opt">決定使用者能不能使用聊天功能</button>
+  <button class="opt">讓 SDK 在 token 過期時換新的</button>
+  <button class="opt">把聊天訊息加密後再送出去</button>
 </div>
 
-<div class="quiz" data-question="切換帳號時清掉 session 是為了避免什麼？" data-correct="2" data-explain="避免新的 token 還在路上時，app 用上一個人的身分短暫連上 Stream。">
-  <button class="opt">避免使用者看到兩份重複的對話列表</button>
-  <button class="opt">避免 Stream 對同一個帳號重複收費</button>
-  <button class="opt">避免短暫用上一個人的身分連線</button>
-  <button class="opt">避免舊的訊息被錯誤地標記成已讀</button>
+<div class="quiz" data-question="為什麼登出時要在 render 期間就清掉 session？" data-correct="3" data-explain="否則舊 token 還留著，下一個使用者可能短暫用錯身分連上 Stream。">
+  <button class="opt">因為 React 規定 state 只能在 render 時更新</button>
+  <button class="opt">因為這樣可以讓登出的速度加快一點</button>
+  <button class="opt">因為舊的聊天記錄會佔用太多記憶體</button>
+  <button class="opt">避免用錯身分連上造成短暫的錯亂</button>
 </div>
 
 <div class="footer">

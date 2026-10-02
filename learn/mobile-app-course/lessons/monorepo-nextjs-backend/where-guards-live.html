@@ -12,67 +12,99 @@
 <p class="meta">Step 5/5 · Monorepo 與 Next.js 後端骨架</p>
 
 <h2>學習目標</h2>
-<p>能用判準決定路由保護該寫在 proxy 的 matcher 還是 resource-based guard（<code>requireStaff</code>／<code>requireAuth</code>），並說出為什麼 Clerk Core 3 放棄 <code>createRouteMatcher</code>。</p>
+<p>用一套判準決定路由保護要寫在 proxy 的 matcher 還是資料旁邊的 resource-based guard，並說明 Clerk Core 3 為什麼放棄 <code>createRouteMatcher</code>。</p>
 
-<h2>前言：同一道鎖，要裝在大門還是房門？</h2>
+<h2>前言：身分已經認出來了，那誰來擋人？</h2>
 
-<p>上一節我們讓 <code>proxy.ts</code> 負責辨識身分，但它不做授權。於是一個很自然的問題就來了：那「只有員工能進 <code>/dashboard</code>」、「只有登入的人能打這支 API」這種規則，到底要寫在哪裡？</p>
+<p>上一節的 <code>proxy.ts</code> 解決了「你是誰」的問題：它透過 <code>clerkMiddleware</code> 把每個請求的身分脈絡準備好，讓後面的程式碼讀得到 <code>userId</code>。但知道你是誰，不等於知道你能進哪裡。病人和診所員工都是合法的登入者，可是病人不該看到全診所的排班，也不能讀別人的病歷。</p>
 
-<p>這個選擇之所以值得停下來想，是因為兩條路看起來都能達到目的，但失手的後果完全不同。一條是把規則集中寫進 proxy 的路徑 matcher，像在大門貼一張名單；另一條是寫在每一段資料存取旁邊，像每個房間自己上鎖。選錯了，你不會馬上發現——直到某天有人繞過大門，走進了一間你以為鎖著的房間。這一節要把兩股張力攤開，給你一套當場能用的判準。</p>
+<p>於是問題來了：這些「誰可以看什麼」的判斷，到底要寫在哪裡？傳統做法是在 proxy 裡用路徑比對，例如「凡是 <code>/dashboard</code> 開頭的都擋起來」。Dentify 卻反其道而行，把守衛全部搬到資料旁邊。這個選擇不是隨口決定的，有它想過的取捨。這一節要把兩個選項攤開來比較，讓你以後遇到類似情境時，知道怎麼選。</p>
 
-<h2>兩個選項長什麼樣子</h2>
+<h2>兩個選項：在門口比對路徑，還是貼著資料檢查</h2>
 
-<p><strong>選項 A：proxy 路徑 matcher。</strong>在 <code>proxy.ts</code> 裡用一段樣式比對網址，例如「凡是 <code>/dashboard</code> 開頭的請求，沒登入就攔下來」。舊版 Clerk 就是用 <code>createRouteMatcher(['/dashboard(.*)'])</code> 搭配 <code>auth.protect()</code> 做這件事。</p>
+<p>第一種做法叫 <strong>path-based（以路徑為準）</strong>。你在 proxy 裡定義一份「受保護路徑」的清單，請求進來時比對網址，符合就要求登入或特定角色。它通常搭配 Clerk 舊版的 <code>createRouteMatcher</code>，寫起來很直覺：把 <code>/dashboard(.*)</code> 這種樣式列出來就好。</p>
 
-<p><strong>選項 B：resource-based guard。</strong>把守衛寫在你「真正要動那筆資料」的地方旁邊：後台的 layout 裡呼叫 <code>requireStaff()</code>，每一支 API route 裡呼叫 <code>requireAuth()</code>。也就是說，存取資料的路徑上一定會先經過守衛。</p>
+<p>第二種做法叫 <strong>resource-based（以資源為準）</strong>，也就是 Dentify 採用的方式。守衛不放在門口，而是放在真正需要它的地方：需要檢查角色的地方呼叫 <code>requireStaff()</code>，需要檢查登入的地方呼叫 <code>requireAuth()</code>，需要確認「這筆病歷是不是你的」的地方呼叫 <code>requireOwnedPatient()</code>。每個守衛都緊貼著它保護的那筆資料。</p>
 
 <table>
 <thead>
-<tr><th>比較點</th><th>proxy 路徑 matcher</th><th>資料旁的 guard</th></tr>
+<tr><th>面向</th><th>path-based（matcher 比對路徑）</th><th>resource-based（守衛貼著資料）</th></tr>
 </thead>
 <tbody>
-<tr><td>放在哪</td><td>集中在 <code>proxy.ts</code> 一個檔案</td><td>貼在每個 layout／route 的資料存取旁</td></tr>
-<tr><td>守的是什麼</td><td>一串 URL 樣式</td><td>你真正要拿的那個資源</td></tr>
-<tr><td>能不能判斷角色／擁有權</td><td>很難，它只看得到網址</td><td>能，資料就在手邊</td></tr>
-<tr><td>失手的方式</td><td>樣式與實際路由分岔，資源變成可達（門戶大開）</td><td>新路由忘了加守衛（但可靠設計讓它必經）</td></tr>
-<tr><td>怎麼測</td><td>偏整合，要整條請求跑起來</td><td>可單元測試，貼著函式測</td></tr>
+<tr><td>判斷依據</td><td>請求的網址字串</td><td>實際要操作的那筆資料</td></tr>
+<tr><td>放在哪</td><td>集中在 proxy 的 matcher</td><td>分散在 layout 與每個 route</td></tr>
+<tr><td>擅長什麼</td><td>「整區需要登入」這種粗粒度規則</td><td>「這是我的資料嗎」這種細粒度規則</td></tr>
+<tr><td>風險</td><td>路由方式改變時，比對可能失準</td><td>守衛分散，必須記得每個入口都放</td></tr>
+<tr><td>Clerk 立場</td><td><code>createRouteMatcher</code> 已 deprecated</td><td>Core 3 建議的做法</td></tr>
 </tbody>
 </table>
 
-<h2>為什麼 Core 3 放棄 createRouteMatcher</h2>
+<p>兩者的根本差別在「判斷的對象」。網址是一串字，而資料是一筆真實存在的紀錄。當你要回答的問題是「這個人能不能讀這份病歷」，答案不在網址裡，而在那筆病歷的擁有者是誰。用網址去推論資料層級的權限，等於多隔了一層猜測。</p>
 
-<p>Clerk Core 3 把 <code>createRouteMatcher</code> 淘汰了，理由正是上表第三、第四列。路徑 matcher 用的是字串比對，但 Next.js 有 route group、動態段、layout、rewrite，最後實際被路由到的位置，未必長得跟你比對的字串一樣。只要兩邊一分岔，你以為鎖上的資源就可能有人走得到。這種「規則寫在 A，實際路由在 B」的落差，是路徑比對天生的弱點，不是設定沒調好。</p>
+<h2>為什麼 Clerk Core 3 放棄 createRouteMatcher</h2>
 
-<p>所以 Dentify 的 <code>proxy.ts</code> 把職責縮到最小：只附掛身分。真正的把關，交給每一段資料自己的守衛。</p>
+<p>Dentify 的 <code>proxy.ts</code> 註解把理由寫得很直接：<code>createRouteMatcher</code> 被 deprecated，改用 resource-based 檢查，因為<strong>路徑比對可能和 Next 實際的路由結果不一致，而這種不一致會讓某個受保護的資源被摸到</strong>。</p>
 
-<h2>三個判別問句</h2>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/proxy.ts"><code> * This does no route matching on purpose. Clerk Core 3 deprecated
+ * `createRouteMatcher` in favour of resource-based checks, because path
+ * matching can diverge from how Next actually routes and leave a protected
+ * resource reachable. So every guard lives next to the data it protects:
+ * `requireStaff()` in the dashboard layout, `requireAuth()` in each API route.</code></pre>
 
-<p>面對一個新的保護需求，先問自己這三題：</p>
+<p>「路徑比對可能和實際路由不一致」聽起來抽象，但後果很具體。你寫的比對規則是一種「我以為 Next 會這樣路由」的猜測；只要有一條路徑的實際解析和你的正規表達式不同，那道門就形同虛設，而你不會收到任何錯誤訊息。安全機制最怕的就是「看起來有裝，其實沒裝」。把守衛貼在資料旁邊，就不需要猜路由。不管請求從哪條路徑進來，要動到那筆資料，就一定得通過那道守衛。</p>
+
+<h2>判別問句：三個問題幫你決定守衛放哪</h2>
+
+<p>面對一個新的保護需求，先問自己這三個問題，答案會直接指向做法。</p>
 
 <ol>
-<li><strong>這個判斷需要知道「角色」或「擁有權」嗎？</strong>例如「他是不是員工」、「這筆預約是不是他的」。需要 → 一定放資料旁邊；proxy 看不到這些。只問「有沒有登入」→ proxy 也許能勝任。</li>
-<li><strong>被保護的東西，用網址就認得出來，還是要先把資料撈出來才知道？</strong>如果得先讀到那筆資料才能判斷能不能給，那守衛自然要跟在那筆資料旁邊。</li>
-<li><strong>明天多一條 API 路由時，哪種設計會「忘了就破功」？</strong>如果忘了加 matcher 的後果是資源直接可達，那就是一個危險的預設；要讓系統在忘記時「進不去」，而不是「全部都給你」。</li>
+<li><strong>這個守衛要判斷的是「網址」還是「一筆資料」？</strong>如果答案是資料（這份病歷、這個預約、這則訊息），那它必須放在碰得到那筆資料的地方，也就是 route 或 layout 裡，因為只有那裡才讀得到資料。</li>
+<li><strong>如果不看網址，這個判斷做得出來嗎？</strong>角色（是不是員工）與登入狀態可以不靠網址；擁有權（這筆資料是不是你的）更是只能靠資料。只有「整區都要登入」這種規則，才勉強可以靠路徑。</li>
+<li><strong>如果 Next 明天改變路由方式，這個守衛還對嗎？</strong>如果你的保護會因此失效，那它就不該只依賴路徑。</li>
 </ol>
 
-<h2>反例：matcher 也不是完全不能用</h2>
+<p>在 Dentify 裡，這三個問題的答案分別把守衛推向了不同的位置。員工後台的門檻是角色，於是 <code>requireStaff()</code> 放在 <code>app/dashboard/layout.tsx</code>：那個 layout 是整個後台區塊的共同入口，放一次就能擋住底下所有頁面。</p>
 
-<p>這條規則會翻轉的地方在於「用途」。proxy 的 matcher 不是不能用，而是<strong>不能拿它當安全邊界</strong>。它適合做兩種事：</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/layout.tsx"><code>export default async function DashboardLayout({ children }: LayoutProps&lt;'/dashboard'&gt;) {
+  const { userId } = await auth();
+  if (!userId) redirect('/');
 
-<ul>
-<li><strong>純 UX 轉址：</strong>讓沒登入的人從後台被導去登入頁，體驗順一點。這只是禮貌，不是鎖——真正的鎖還在資料旁。</li>
-<li><strong>便宜地擋掉明顯匿名的流量：</strong>在請求一進來就擋掉大量沒帶 token 的呼叫，省後端資源。同樣地，它不能取代授權判斷。</li>
-</ul>
+  try {
+    await requireStaff();
+  } catch (err) {
+    if (err instanceof ApiError &amp;&amp; err.status === 403) return &lt;NotStaff /&gt;;
+    throw err;
+  }
+  …</code></pre>
 
-<p>反過來，也不是每個路由都需要守衛。像官網首頁、隱私政策、服務條款這種本來就要給所有人看的頁面，硬加一道登入反而擋掉了潛在客戶。守衛要加在「有東西要保護」的地方，不是加好加滿。</p>
+<p>而「這筆病患資料是不是你的」這種擁有權問題，就被收斂到單一一個守衛 <code>requireOwnedPatient()</code>。任何帶有 <code>patientId</code> 的路由都經過它，所以這條規則只實作一次，不會有某支端點忘了檢查。</p>
 
-<h2>小結</h2>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/auth.ts"><code>export async function requireOwnedPatient(user: AppUser, patientId: string) {
+  const [patient] = await db
+    .select()
+    .from(patients)
+    .where(and(eq(patients.id, patientId), eq(patients.accountUserId, user.id)));
+  if (!patient) throw notFound('Patient not found');
+  return patient;
+}</code></pre>
+
+<h2>反例：這條規則什麼時候會翻轉</h2>
+
+<p>「一律用 resource-based」不是無條件成立的鐵律，有幾種情況會讓你重新考慮。</p>
+
+<p>第一種是<strong>連資料都還不存在</strong>的入口。例如一個全新的使用者第一次打 API，資料庫裡根本沒有他的 row；<code>requireAuth()</code> 這時不是去比對網址，而是先確認登入、再順手把使用者的資料補上（Dentify 的 <code>ensureUser()</code> 就是做這件事）。這裡的重點仍然是「以狀態為準」，而不是「以路徑為準」。</p>
+
+<p>第二種是<strong>公開頁面</strong>。首頁、隱私政策、服務條款本來就不需要登入，也不該被任何守衛攔住。如果你用路徑式的「全部都要登入」再開白名單，很容易在新增公開頁面時忘了放行，反而製造 bug。Dentify 把公開頁面放進 <code>(site)</code> 群組、後台放進 <code>dashboard</code>，讓「需要守衛」這件事自然地跟著資料夾走，而不是靠一份容易過期的清單。</p>
+
+<p>第三種是<strong>角色可能來自多個來源</strong>。員工角色的判斷，理論上以 Clerk 的 <code>publicMetadata</code> 為準，但資料庫的鏡射 row 可能因為同步延遲而落後。Dentify 的 <code>requireStaff()</code> 選擇「兩邊任一邊說是員工就算」，寧可暫時放行也不要誤擋，這是實務上的取捨。這種邏輯放在守衛裡可以寫清楚，塞進 proxy 的路徑比對則無處安放。</p>
+
+<h2>小結：一句話的決策規則</h2>
 
 <blockquote>
-授權判斷（角色、擁有權）一律放在資料旁邊的 resource-based guard，例如後台 layout 的 <code>requireStaff()</code>、每支 API route 的 <code>requireAuth()</code>。proxy 的 matcher 只拿來做 UX 轉址或擋匿名流量，不當安全邊界。Core 3 放棄 <code>createRouteMatcher</code>，就是因為路徑比對可能和實際路由分岔而漏掉保護。判斷時問三件事：需要角色嗎？要撈資料才知道嗎？忘了加會 fail open 還是 fail closed？
+先用一個問題分類：<strong>這個守衛要判斷的是「一筆資料」還是「一個網址」？</strong>是資料，就放它旁邊；是範圍性的登入門檻，就放共同的 layout。<strong>proxy 只負責辨識身分，不負責決定放行</strong>；任何需要看資料才能下的判斷，都不要寫在 matcher 裡。
 </blockquote>
 
-<p>到這裡，後端骨架的四塊拼圖都到齊了：一個 repo 裝兩個 app、npm workspaces 擺好位置、Next.js 用 App Router 同時當後台與 API、proxy 負責辨識身分、守衛貼在資料旁邊。下一站是把 API 真正寫出來——Route Handlers、<code>route()</code> 包裝與 <code>requireAuth</code>／<code>requireStaff</code> 守衛，讓手機有一個有型別、受保護的後端可以呼叫。</p>
+<p>把這條規則帶著走，你以後不管是接 Clerk、Auth.js 還是自製的驗證，都不會再糾結「守衛到底該放 middleware 還是 route」。你也會發現，這個節點走完的其實是一個更通用的後端骨架：一個 repo 放兩個 app、一個 Next.js 部署同時當網站與 API、一道在正確位置把關的保護層。接下來，這套骨架就可以開始長出真正的功能：預約、病歷、聊天。每一支 API 都會沿用你在這裡學到的守衛紀律。</p>
 
 <div class="lesson-nav">
   <div><a href="./proxy-attaches-auth-context.html">← 上一步：proxy.ts：讓每個請求都帶著身分</a></div>
@@ -81,50 +113,50 @@
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="需要判斷角色或擁有權的授權，應該放在哪裡？" data-correct="1" data-explain="角色與擁有權只有貼著資料的 resource-based guard 才看得到。">
-  <button class="opt">集中寫在 proxy 的路徑 matcher 裡</button>
-  <button class="opt">寫在資料旁邊的 resource-based guard</button>
-  <button class="opt">交給前端在畫面顯示前先擋掉</button>
-  <button class="opt">交給 Clerk 儀表板的自動設定</button>
+<div class="quiz" data-question="resource-based 守衛和 path-based 保護最根本的差別在哪？" data-correct="2" data-explain="前者以實際那筆資料為判斷對象，後者以請求的網址字串為判斷對象。">
+  <button class="opt">前者執行速度比較快，後者比較慢</button>
+  <button class="opt">前者只能用在 API，後者只能用在頁面</button>
+  <button class="opt">前者判斷資料，後者判斷網址</button>
+  <button class="opt">前者需要 log，後者不需要</button>
 </div>
 
-<div class="quiz" data-question="Clerk Core 3 為什麼放棄 createRouteMatcher 這種做法？" data-correct="2" data-explain="路徑字串比對可能和實際路由分岔，讓以為鎖住的資源變成可達。">
-  <button class="opt">因為它會讓每個請求都多花十秒處理</button>
-  <button class="opt">因為它無法搭配任何第三方的登入</button>
-  <button class="opt">因為路徑比對可能和實際路由分岔</button>
-  <button class="opt">因為它只支援舊版的 Next.js 路由</button>
+<div class="quiz" data-question="Clerk Core 3 為什麼不再建議 createRouteMatcher？" data-correct="1" data-explain="路徑比對可能和 Next 實際路由不一致，導致受保護資源仍可被觸及。">
+  <button class="opt">因為它的執行成本比資料庫查詢還高</button>
+  <button class="opt">因為它可能與實際路由不一致而漏擋</button>
+  <button class="opt">因為它不支援 Bearer token 的請求</button>
+  <button class="opt">因為它只能在 Next 15 以前的版本運作</button>
 </div>
 
-<div class="quiz" data-question="proxy 的 matcher 還適合拿來做什麼？" data-correct="0" data-explain="它適合 UX 轉址或便宜地擋掉匿名流量，但不能當安全邊界。">
-  <button class="opt">做 UX 轉址或擋掉匿名流量</button>
-  <button class="opt">決定某位員工能不能看特定病歷</button>
-  <button class="opt">取代每一支 API route 的守衛</button>
-  <button class="opt">保管使用者的密碼與登入憑證</button>
+<div class="quiz" data-question="在 Dentify 裡，requireStaff() 為什麼放在 dashboard/layout.tsx？" data-correct="3" data-explain="layout 是整個後台區塊的共同入口，放一次就能涵蓋底下所有頁面。">
+  <button class="opt">因為 layout 讀取資料庫的速度最快</button>
+  <button class="opt">因為 proxy 無法載入 lib/auth 的函式</button>
+  <button class="opt">因為 Clerk 只允許在 layout 呼叫 auth()</button>
+  <button class="opt">因為它涵蓋整個後台區塊的所有頁面</button>
 </div>
 
-<div class="quiz" data-question="判別問句中的「fail open 還是 fail closed」在問什麼？" data-correct="3" data-explain="在問忘記加規則時，系統是預設進不去（closed）還是門戶大開（open）。">
-  <button class="opt">伺服器當機時要不要繼續提供服務</button>
-  <button class="opt">使用者忘記密碼時能不能重新登入</button>
-  <button class="opt">API 回傳錯誤時要不要顯示細節</button>
-  <button class="opt">忘記加規則時會進不去還是大開</button>
+<div class="quiz" data-question="「這筆病歷是不是你的」這類判斷為什麼不能只靠路徑？" data-correct="0" data-explain="擁有權的答案在那筆資料的欄位裡，不在請求的網址裡。">
+  <button class="opt">因為擁有權資訊在資料裡，不在網址裡</button>
+  <button class="opt">因為病歷的網址每次都不一樣</button>
+  <button class="opt">因為病歷是由手機端加密後上傳</button>
+  <button class="opt">因為 Clerk 不管理病歷的權限</button>
 </div>
 
-<div class="quiz" data-question="下列哪一種頁面最不需要加登入守衛？" data-correct="1" data-explain="隱私政策本來就要給所有人看，加守衛反而擋掉了需要的使用者。">
-  <button class="opt">列出所有病人資料的後台頁</button>
-  <button class="opt">給所有人看的隱私政策頁</button>
-  <button class="opt">顯示單一病人病歷的頁面</button>
-  <button class="opt">讓員工修改排班的後台頁</button>
+<div class="quiz" data-question="下列哪一個問題最適合用三個判別問句來決定守衛位置？" data-correct="1" data-explain="先問守衛判斷的是網址還是資料，是決定放 proxy 或放資料旁的關鍵。">
+  <button class="opt">這個功能要不要做快取以降低延遲</button>
+  <button class="opt">這個守衛判斷的是網址還是一筆資料</button>
+  <button class="opt">這個頁面要用淺色還是深色主題</button>
+  <button class="opt">這個 API 要回傳 JSON 還是 HTML</button>
 </div>
 
-<div class="quiz" data-question="依照這個節點的結論，proxy 的職責應該是什麼？" data-correct="2" data-explain="proxy 只附掛身分，真正的授權交給貼著資料的守衛。">
-  <button class="opt">同時負責辨識身分與所有授權判斷</button>
-  <button class="opt">只在有人回報問題時才需要啟用</button>
-  <button class="opt">只附掛身分，授權交給資源守衛</button>
-  <button class="opt">把資料庫的所有規則集中起來執行</button>
+<div class="quiz" data-question="關於 proxy 與守衛的分工，下列哪個說法正確？" data-correct="2" data-explain="proxy 只辨識身分，是否放行由貼著資料的守衛決定。">
+  <button class="opt">proxy 負責放行，守衛只負責記錄</button>
+  <button class="opt">兩者都負責路徑比對，只是寫法不同</button>
+  <button class="opt">proxy 辨識身分，守衛決定放行</button>
+  <button class="opt">守衛辨識身分，proxy 決定放行</button>
 </div>
 
 <div class="footer">
-  <p>mobile-app-course · Monorepo 與 Next.js 後端骨架 · Step 5/5</p>
+  <p>Dentify 後端骨架 · Monorepo 與 Next.js 後端骨架 · Step 5/5</p>
   <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
 </div>
 

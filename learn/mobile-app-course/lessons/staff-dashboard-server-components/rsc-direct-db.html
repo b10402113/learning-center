@@ -12,152 +12,140 @@
 <p class="meta">Step 1/5 · 員工 Dashboard（Server Components）</p>
 
 <h2>學習目標</h2>
-<p>說出為什麼手機 App 只能繞 HTTP API、而網頁後台卻能直接用 Server Component 查資料庫，並認得這條分界對型別、密鑰與互動性的影響。</p>
+<p>能說出同樣一個 Next.js 專案裡，為什麼手機 app 只能走 API、員工 dashboard 卻可以直接 import db 查 Postgres，並分辨 Server Component 與 client component 的邊界。</p>
 
-<h2>前言：同一天，兩個畫面</h2>
+<h2>前言：同一個後端，兩條完全不同的資料路</h2>
 
-<p>先想像診所裡的一個下午。櫃檯同事的電腦開著員工後台，畫面上是今天一整排預約；與此同時，另一位護理師用手機打開病人端的 App，看到自己今天要處理的那幾筆。兩個畫面背後是同一份資料，卻是用兩套完全不同的方式拿到的。</p>
+<p>先想像一個很具體的場景。病房的護理師在手機上打開 app，想看某位病人今天的預約；同一個時刻，櫃檯的員工用筆電打開診所的後台網頁，也在看同一批預約。這兩邊畫面上長得很像，但它們拿到資料的方式完全不一樣。</p>
 
-<p>手機 App 得先呼叫一支 API，請伺服器幫忙查，再把結果用 JSON 送回來；網頁後台則大方地把資料庫連線直接 <code>import</code> 進來，當場就查。為什麼會有這種差別？這不是誰偷懶，而是因為這兩個前端「站在不同的地方」。這一節要把這條分界線講清楚，因為後面四個步驟——守衛、行程頁、病歷頁、Server Actions——全都掛在這條線上。</p>
+<p>手機 app 是 Expo 寫的，跑在病人或護理師自己的裝置裡。那台裝置跟診所的伺服器之間隔著網路，誰都可以假裝自己是 app 送請求，所以手機只能透過公開的 API 端點拿資料。而員工 dashboard 是一個 Next.js 網頁，它跟資料庫住在同一台伺服器上。它其實就是「在伺服器裡面」的那個程式，根本沒有必要先繞出去打一支 API、再走回來。</p>
 
-<h2>手機在信任邊界外，網頁在前端的另一側</h2>
+<p>如果你沒把這條分界線想清楚，會發生兩種錯：一種是把明明可以直接查的資料，硬是包成一支 API，多寫了一堆沒必要的程式；另一種更危險，是把「可以直讀資料庫」誤解成「這個頁面是公開的」，於是把病歷赤裸裸地攤在網路上。這一節先把第一種錯講清楚，下一節再來處理第二種。</p>
 
-<p>手機 App 的程式碼被安裝在病人的裝置上。裝置在使用者手上，網路可以被人攔截，App 的內容也可以被人反組譯。因此它絕不能持有資料庫的連線字串或任何伺服器密鑰，否則等於把診所的資料庫鑰匙複製一份發給每個人。它唯一能做的事，就是隔著網路、帶著登入憑證，去敲伺服器的大門，請伺服器代為查詢。</p>
+<h2>React Server Component：只跑在伺服器的那半邊</h2>
 
-<p>網頁後台就不一樣了。它跑的 Next.js 伺服器，和瀏覽器看到的那個頁面是兩件事：真正執行頁面邏輯的地方，就是那台已經握有資料庫連線的伺服器。既然程式本來就住在資料庫旁邊，就沒有必要再繞出去、打自己家的 API、再走回來。</p>
+<p>要理解這條分界，得先認識 React 這幾年最大的一次觀念轉變：<strong>Server Component（伺服器元件）</strong>。傳統的 React 元件全部會被編譯、打包成 JavaScript，送到瀏覽器裡執行。Server Component 不一樣：它的程式碼只會在伺服器上執行，永遠不會被打包進瀏覽器。</p>
 
-<blockquote>
-用餐廳比喻：手機 App 像坐在位子上的客人，想吃什麼只能舉手請服務生（API）進廚房拿；網頁後台像廚師本人，他本來就站在廚房裡，直接打開冰箱拿就好，不需要先寫一張點菜單再請人送進來。
-</blockquote>
+<p>這個「永遠不會進瀏覽器」的保證非常關鍵，因為它解除了好幾種長年以來的限制。既然程式碼不會被使用者下載，它就可以安心地碰到那些不能外流的東西：資料庫連線字串、API 金鑰、後端服務的憑證。它也可以直接 <code>import { db }</code>，當場把查詢送進 Postgres，再把結果渲染成 HTML。</p>
 
-<h2>React Server Component 到底是什麼</h2>
+<p>當然，天下沒有白吃的午餐。Server Component 沒有 <code>useState</code>、沒有事件處理函式、也碰不到任何瀏覽器 API（像是 <code>window</code> 或 <code>localStorage</code>）。它是一段「跑完就結束、把畫面吐出來」的程式，不是一個會在使用者裝置上持續反應的元件。所以真正需要互動的地方（按鈕、輸入框、下拉選單）仍然得切出來，寫成 <strong>client component（用戶端元件）</strong>。</p>
 
-<p><strong>Server Component（伺服器元件）</strong>是 React 元件的一種。它的程式碼只會在伺服器上執行，<strong>永遠不會被打包進送到瀏覽器的那份 JavaScript</strong>。這件事有兩個直接後果：第一，它可以安全地引用只有伺服器才有的東西，例如資料庫 client、密鑰、檔案系統；第二，它可以是一個 <code>async</code> 函式，直接 <code>await</code> 一個查詢，等結果回來再繼續往下渲染。</p>
+<h3>兩條路，同一批資料</h3>
 
-<p>相對地，我們熟悉的、能用 <code>useState</code>、<code>useEffect</code>、<code>onClick</code> 的元件叫 <strong>Client Component</strong>，需要檔案最上方寫 <code>'use client'</code>。它才會被送進瀏覽器執行、才處理得了互動。同一個頁面裡，兩者可以混用：外層用 Server Component 把資料查好，需要點擊的那一小塊再切出去當 Client Component。</p>
-
-<h2>直接查 DB 長什麼樣</h2>
-
-<p>下面這段就是 dashboard 首頁的骨架。注意它沒有 <code>fetch</code>、沒有 API 路徑，只有一個 <code>async</code> 元件、一次身分檢查、一次 Drizzle 查詢：</p>
-
-<pre><code>import { db } from '@/db';
-import { appointments } from '@/db/schema';
-import { requireStaff } from '@/lib/auth';
-
-export default async function DashboardPage() {
-  await requireStaff();
-
-  const rows = await db.select().from(appointments);
-
-  // rows 的欄位型別是由 schema 推導出來的，
-  // 直接帶進下面的 JSX，不需要另外宣告。
-  return &lt;AppointmentTable rows={rows} /&gt;;
-}</code></pre>
-
-<p>這裡有兩個值得停下來看的細節。第一，<code>requireStaff()</code> 被放在查詢之前。直接查資料庫不代表頁面公開，它仍然是一頁員工限定內容，只是檢查身分的方式從「路由守衛」換成了「在頁面裡呼叫函式」。第二，這裡的 <code>db</code> 和 <code>requireStaff</code>，跟 <code>app/api/</code> 底下那些 Route Handler 用的是同一套。程式碼重用了，差別只差在一個回傳 JSON、一個回傳 HTML。</p>
-
-<h2>另一條路：手機走 HTTP</h2>
-
-<p>手機端走的是傳統路線。伺服器先提供一支 API，例如列出預約的端點，裡面同樣做身分檢查與查詢，但最後把結果序列化成 JSON：</p>
-
-<pre><code>// app/api/appointments/route.ts（給手機用的版本）
-export const GET = route(async () =&gt; {
-  const user = await requireAuth();
-  const rows = await db.select().from(appointments);
-  return json(rows);
-});</code></pre>
-
-<p>手機再透過 <code>fetch</code> 呼叫這個端點。整條路是：App → 網路 → Route Handler → 資料庫，查完再原路折返。把兩條路並排，差別就一目了然：</p>
+<p>於是同一個專案裡，就出現了兩種很不一樣的「前端」。把它們並排看，差異一目了然：</p>
 
 <table>
 <thead>
-<tr><th>面向</th><th>手機 App（Expo）</th><th>網頁後台（RSC）</th></tr>
+<tr><th></th><th>手機 app（Expo）</th><th>員工 dashboard（Next.js）</th></tr>
 </thead>
 <tbody>
-<tr><td>程式執行位置</td><td>病人的裝置</td><td>持有 DB 連線的伺服器</td></tr>
-<tr><td>取得資料</td><td>fetch 一支 API 端點</td><td>直接 import db 查詢</td></tr>
-<tr><td>身分檢查</td><td>Route Handler 裡的 requireAuth</td><td>頁面或 layout 的 requireStaff</td></tr>
-<tr><td>跨越網路的是</td><td>JSON</td><td>渲染好的 HTML</td></tr>
-<tr><td>能用互動 hook</td><td>可以</td><td>不行，要切 client component</td></tr>
+<tr><td>程式碼跑在哪</td><td>使用者的裝置</td><td>診所自己的伺服器</td></tr>
+<tr><td>怎麼拿資料</td><td>呼叫 <code>app/api/</code> 的 Route Handler</td><td>直接 <code>import { db }</code> 查 Postgres</td></tr>
+<tr><td>為什麼</td><td>裝置在網路另一端，碰不到資料庫</td><td>跟資料庫同一台機器，沒有必要繞路</td></tr>
+<tr><td>信任邊界</td><td>公開，要有身分驗證與輸入驗證</td><td>仍在伺服器內，但也絕非公開</td></tr>
 </tbody>
 </table>
 
-<h2>這條分界買到了什麼</h2>
+<p>dashboard 這一條路常被形容成「沒有 HTTP hop」：沒有那種「自己打自己」的來回。傳統做法裡，前端要跟同一台伺服器要資料，還是得 <code>fetch('/api/appointments')</code>，走一輪序列化與反序列化。Server Component 直接呼叫函式、直接拿回型別化的結果，中間那段手寫的 API 合約就整個省下來了。</p>
 
-<p><strong>型別一路到底。</strong>當查詢與 JSX 在同一個檔案、同一次執行裡，Drizzle 從 schema 推導出來的欄位型別會直接跟著 <code>rows</code> 走進畫面。你不用再手寫一份 API 回應的型別，也不用擔心後端改了欄位名稱、前端還停在上一個版本。</p>
+<p>打個比方：手機 app 像是在電話裡點餐，它只能透過話筒把需求講給廚房聽；而 dashboard 就是廚房本身，它可以直接伸手進冰箱拿食材，不需要先打電話給自己。同樣一道菜（同一筆資料），路徑卻因為「站在哪裡」而不同。</p>
 
-<p><strong>少一層搬運。</strong>資料不必先變成 JSON、穿過網路、再被前端解析回物件。它從 Postgres 出來之後，就直接被伺服器拿去組 HTML。</p>
+<h2>看一段真實的程式碼</h2>
 
-<p><strong>不必為了自己的 UI 另外開 API。</strong>如果這些資料只有這個後台會用，就沒有理由再多維護一組對外端點。端點是給「外部呼叫者」用的，而頁面自己就是內部呼叫者。</p>
+<p>Dentify 的今日行程頁，就是一個標準的 Server Component。它開頭那段查詢，把上面講的觀念全部落實了：</p>
 
-<p><strong>密鑰與病人資料留在伺服器。</strong>只有最後的 HTML 會送進瀏覽器；資料庫連線、查詢字串、原始的病人資料列，全部停在伺服器這一側。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/page.tsx"><code>/** Server Component hitting Drizzle directly — no HTTP hop (PLAN.md architecture). */
+export default async function DashboardPage({ searchParams }: PageProps&lt;'/dashboard'&gt;) {
+  await requireStaff();
 
-<h2>代價與邊界：直讀不是萬能</h2>
+  const params = await searchParams;
+  const dateParam = typeof params.date === 'string' ? params.date : undefined;
+  const day = dateParam ? parseDay(dateParam) : clinicDayOf(new Date());
 
-<p>天下沒有白吃的午餐，直接查資料庫也有它的限制。最明顯的是<strong>互動性</strong>：Server Component 沒有狀態、沒有事件處理、沒有瀏覽器 API。一個會展開收合的選單、一個按下就送出表單的按鈕，都必須切成一塊 Client Component 才行。實務上的分法是：能用伺服器做的（查資料、組版面）留給 Server Component；非互動不可的一小塊才交棒給瀏覽器。</p>
+  const dayStart = clinicInstant(day, 0, 0);
+  const dayEnd = new Date(dayStart.getTime() + 24 * 3600_000);
 
-<p>其次，<strong>直讀不等於免檢查</strong>。每個會碰到病人資料的頁面，仍然要在最前面呼叫 <code>requireStaff()</code>。少了它，這一頁就會變成任何人都能打開的資料外洩入口。至於「查完之後畫面怎麼更新」，是另一個要留到最後一節處理的問題：寫入資料後要用 <code>revalidatePath</code> 讓伺服器重新查一次，畫面才會帶上新資料。</p>
+  const rows = await db
+    .select({ /* … */ })
+    .from(appointments)
+    .innerJoin(patients, eq(patients.id, appointments.patientId))
+    .innerJoin(dentists, eq(dentists.id, appointments.dentistId))
+    .innerJoin(services, eq(services.id, appointments.serviceId))
+    .where(and(gte(appointments.startsAt, dayStart), lt(appointments.startsAt, dayEnd)))
+    .orderBy(asc(appointments.startsAt), asc(dentists.displayName));</code></pre>
+
+<p>注意幾個地方。這個函式被宣告成 <code>async</code>，因為它要等資料庫。它回傳的是 JSX，不是 JSON。它在伺服器上就把查詢結果排版成 HTML 了。而它 <code>import</code> 進來的 <code>db</code> 與 <code>schema</code>，是貨真價實的資料庫連線，這在瀏覽器裡是不可能執行的；它之所以能存在，正因為這段程式碼永遠不會被送到瀏覽器。</p>
+
+<p>還有一個容易被忽略的好處：Drizzle 從 schema 推導出來的型別，會一路帶進 JSX。<code>rows</code> 裡每個欄位的名稱與型別，編譯器都知道。你不用在兩端各寫一份 TypeScript interface，也不用擔心 API 改了欄位而某個頁面悄悄壞掉，因為根本沒有那個「中間的 API」。</p>
+
+<h2>邊界在哪：什麼時候得切出 client component</h2>
+
+<p>Server Component 很方便，但它不能處理互動。一個頁面往往是「伺服器先把資料查好、渲染成 HTML，再把一小塊互動元件交棒給瀏覽器」的組合。以病患病歷頁為例，整頁的病歷、時間軸、附件都是在伺服器讀好的，但「新增術後衛教」的表單、「標記完成」的按鈕，必須是 client component，因為它們要處理打字、點擊和載入狀態。</p>
+
+<p>這條邊界不是用「重要／不重要」來分的，而是用「這個東西需不需要在使用者的裝置上活著」來分。查資料是伺服器的事；互動是瀏覽器的事。下一節會看到，互動元件呼叫伺服器的那條線，正是 Chapter 最後一節要講的 Server Action。</p>
+
+<p>另外，這個世代 Next.js 的頁面 props 是 <strong>非同步</strong>的。你會看到 <code>await searchParams</code>、之後在病歷頁會看到 <code>await params</code>。這是框架的新約定，把 URL 參數也當成需要等待的資源；寫法上先記得「要用之前先 await」就好，細節留到下一節親手寫時再說。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-手機 App 執行在信任邊界之外，只能帶著憑證呼叫 API；網頁後台的 Server Component 與資料庫同住一台伺服器，所以可以 <code>import db</code> 直讀。直讀讓你拿到端到端的型別、少一層序列化、不必自建 API、密鑰不外流，但代價是它不能互動（要切 Client Component），而且每一個頁面仍須自己做身分檢查。
+Server Component 的程式碼只跑在伺服器，永遠不會被打包進瀏覽器，所以它能安全地 import db、碰金鑰，並把 Drizzle 推導的型別帶進 JSX。代價是它沒有 useState、事件處理與瀏覽器 API，需要互動的地方得切出 client component。手機 app 在裝置上跑，只能走公開 API；員工 dashboard 跟資料庫同機，可以直接查、省掉那趟 HTTP 來回。但「可以直讀」不等於「公開」。誰能看到這些資料，是下一個要處理的問題。
 </blockquote>
 
-<p>現在你知道了「為什麼可以直接查」。但一個後台不是單一頁面，而是一整個子樹：行程、名冊、病歷頁都要守住。下一節要處理的就是這道門該放在哪裡——為什麼 Dentify 把守衛放在 layout，而不是塞進 proxy 做路徑比對。</p>
+<p>既然 dashboard 能直接讀到全診所的資料，那下一個問題就很自然了：誰有資格打開這個後台？總不能每個登入的人都看得到病歷。下一節要把守衛放在對的位置，讓它跟它保護的資料待在一起。</p>
 
 <div class="lesson-nav">
   <div></div>
-  <div><a href="./dashboard-shell-guard.html">下一步：Dashboard 外殼與守衛 →</a></div>
+  <div><a href="./dashboard-shell-guard.html">下一步：Dashboard 外殼與守衛：把 requireStaff 放在資料旁邊 →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="手機 App 不能直接連 Postgres 的最根本原因是什麼？" data-correct="1" data-explain="裝置在使用者手上，不在信任邊界內，不能持有資料庫密鑰。">
-  <button class="opt">因為手機的行動網路速度太慢</button>
-  <button class="opt">因為裝置在信任邊界之外不安全</button>
-  <button class="opt">因為 iOS 系統沒有資料庫驅動</button>
-  <button class="opt">因為手機的記憶體容量不夠大</button>
+<div class="quiz" data-question="為什麼手機 app 不能像 dashboard 一樣直接查資料庫？" data-correct="1" data-explain="app 跑在跟伺服器不同台的使用者裝置上，碰不到診所內部的資料庫，只能透過公開 API。">
+  <button class="opt">因為手機的處理器效能不夠快</button>
+  <button class="opt">因為它跑在另一台裝置上碰不到資料庫</button>
+  <button class="opt">因為 Expo 不支援任何資料庫套件</button>
+  <button class="opt">因為 Postgres 只允許網頁連線</button>
 </div>
 
-<div class="quiz" data-question="Server Component 與 Client Component 最關鍵的差別是什麼？" data-correct="2" data-explain="Server Component 只在伺服器執行，程式碼不會進瀏覽器的 bundle。">
-  <button class="opt">Server Component 的檔案一定要用 TypeScript</button>
-  <button class="opt">Server Component 的執行速度一定比較快</button>
-  <button class="opt">Server Component 只在伺服器執行不進瀏覽器</button>
-  <button class="opt">Server Component 只能回傳純文字的字串</button>
+<div class="quiz" data-question="Server Component 的程式碼最終會被打包進瀏覽器嗎？" data-correct="3" data-explain="它只在伺服器上執行，永遠不會被下載到使用者裝置。">
+  <button class="opt">會，但只打包被使用到的部分</button>
+  <button class="opt">會，只是經過加密處理過</button>
+  <button class="opt">只有開發模式下才會被打包</button>
+  <button class="opt">不會，它只在伺服器上執行</button>
 </div>
 
-<div class="quiz" data-question="一個頁面改成直接查資料庫之後，還需要身分檢查嗎？" data-correct="0" data-explain="直接查 DB 不代表公開，每個接觸病人資料的頁面仍要 requireStaff。">
-  <button class="opt">需要，每個頁面仍要呼叫 requireStaff</button>
-  <button class="opt">不需要，Direct DB 本身就已經隔離</button>
-  <button class="opt">不需要，只有 API 端點才要驗身分</button>
-  <button class="opt">需要，但可以改由瀏覽器端來檢查</button>
+<div class="quiz" data-question="下列哪一件事 Server Component 做不到？" data-correct="0" data-explain="它沒有 useState，也沒有事件處理，需要用互動時得切出 client component。">
+  <button class="opt">用 useState 記住輸入框的內容</button>
+  <button class="opt">直接 import 資料庫連線來查詢</button>
+  <button class="opt">從 schema 帶出推導好的型別</button>
+  <button class="opt">在伺服器上把查詢結果排成 HTML</button>
 </div>
 
-<div class="quiz" data-question="為什麼 dashboard 不需要為自己的 UI 另外開一支 API？" data-correct="3" data-explain="頁面自己就是內部呼叫者，端點是留給邊界外的外部呼叫者用的。">
-  <button class="opt">因為 API 端點會讓型別變得不安全</button>
-  <button class="opt">因為 Next.js 不支援在頁面裡寫查詢</button>
-  <button class="opt">因為 API 回應的格式無法通過驗證</button>
-  <button class="opt">因為頁面本身就是內部的呼叫者</button>
+<div class="quiz" data-question="「沒有 HTTP hop」指的是什麼？" data-correct="2" data-explain="同一台伺服器內直接呼叫查詢，不必再 fetch 一次自己的 API 端點。">
+  <button class="opt">這個頁面完全不需要網路連線</button>
+  <button class="opt">資料庫被換成了記憶體快取</button>
+  <button class="opt">直接呼叫查詢而不用打自己的 API</button>
+  <button class="opt">每一次查詢都會跳過身分驗證</button>
 </div>
 
-<div class="quiz" data-question="若 Server Component 裡需要一個「按下就展開」的按鈕，該怎麼做？" data-correct="1" data-explain="互動需要狀態與事件，要把那一小塊切成 Client Component。">
-  <button class="opt">在 Server Component 裡直接使用 useState</button>
-  <button class="opt">把那一小塊切成 Client Component</button>
-  <button class="opt">改成用 setInterval 在伺服器輪詢</button>
-  <button class="opt">把整頁都改成靜態的 HTML 檔案</button>
+<div class="quiz" data-question="什麼時候必須把元件切出來當 client component？" data-correct="1" data-explain="需要在使用者裝置上處理互動、狀態或瀏覽器 API 的部分，才必須是 client component。">
+  <button class="opt">只要這個元件需要讀取資料庫</button>
+  <button class="opt">需要互動、狀態或瀏覽器 API 時</button>
+  <button class="opt">只要這個元件會回傳 JSX 時</button>
+  <button class="opt">只要這個元件會用到 async 時</button>
 </div>
 
-<div class="quiz" data-question="直接查資料庫對「型別」最大的好處是什麼？" data-correct="0" data-explain="schema 推導出的型別會跟著 rows 一路走進 JSX，不必手寫重複的介面。">
-  <button class="opt">查詢結果的型別會直接流進畫面</button>
-  <button class="opt">資料庫會自動修正型別上的錯誤</button>
-  <button class="opt">瀏覽器可以事先知道資料的形狀</button>
-  <button class="opt">TypeScript 會自動產生 SQL 語法</button>
+<div class="quiz" data-question="dashboard 直讀 Drizzle 的型別一路帶進 JSX，最大的好處是什麼？" data-correct="2" data-explain="沒有中間那層 API，就不用在兩端各維護一份型別或 interface。">
+  <button class="opt">查詢的執行速度會明顯變快</button>
+  <button class="opt">資料庫會自動幫你加上索引</button>
+  <button class="opt">不必在兩端各維護一份 API 型別</button>
+  <button class="opt">瀏覽器也能直接執行資料庫查詢</button>
 </div>
 
 <div class="footer">
-  <p>mobile-app-course · 員工 Dashboard（Server Components） · Step 1/5</p>
-  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+  <p>mobile-app-course · 員工 Dashboard（Server Components）· Step 1/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>

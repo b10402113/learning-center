@@ -12,165 +12,169 @@
 <p class="meta">Step 3/5 · 串流 AI 助理</p>
 
 <h2>學習目標</h2>
-<p>學完這一節，你應該能在 React Native 端做出逐字浮現的助理對話：用 <code>useApiStream</code> 送出帶有 Clerk token 的請求、一邊收字一邊更新畫面、用防重入機制避免重複送出，並處理空狀態、輸入區與錯誤降級。</p>
+<p>能用 useApiStream 邊收邊畫，分辨 JSON 分支與串流分支，並用 pending 閘門與錯誤降級避免過期回應蓋掉畫面。</p>
 
-<h2>前言：水管已經接好，但水龍頭還沒開</h2>
+<h2>前言：伺服器會串了，畫面還是空白</h2>
 
-<p>上一節把伺服器端的串流端點寫好了：它會逐段吐出助理的回答，對話編號放在 <code>X-Conversation-Id</code> 標頭。可是如果你現在拿一支手機打這個端點，看到的只會是一串文字慢慢出現在終端機裡——畫面還是空的。</p>
+<p>上一節我們把伺服器端的串流端點寫好了，它會一段一段把文字推出來。但如果手機端還是用原本那種「等整個回應結束才更新」的寫法，使用者看到的依然是轉圈圈。串流是一條水管，伺服器那一頭開了，接水的那一頭也得一邊流一邊接才行。</p>
 
-<p>這一節要處理的是水管的另一頭。手機端要做三件事：把請求送出去、把一段一段抵達的文字接起來、然後在畫面上讓它像有人在打字一樣長出來。前置條件是上一節的端點已經能運作，而且 app 已經有 Clerk 的登入狀態可以拿 token。</p>
+<p>這一節要做的就是接水的那一頭。我們會看 <code>useApiStream</code> 這個 hook 怎麼發出請求、怎麼分辨「這次是錯誤 JSON 還是模型在串流」，然後回到 <code>assistant.tsx</code> 看畫面怎麼先把氣泡放上去、再讓尾端那一顆原地長大。動筆前你要先有一個會串流的端點，因為這裡的邏輯全是繞著它設計的。</p>
 
-<p>做完之後，你會有一個助理畫面：使用者送出問題後，一個空白的 AI 氣泡先出現，答案從裡面逐字長出來，最後停在完整的回覆上。</p>
+<h2>整體順序</h2>
 
-<h2>第一步：用對的 fetch，才有得讀</h2>
+<ol>
+<li>用 Expo 的 <code>streamingFetch</code> 帶著登入 token 發出請求。</li>
+<li>先看回應的內容型別：是 JSON 就當一般回應處理，否則進入串流分支。</li>
+<li>串流分支裡用 reader 逐塊讀，累積成目前為止的完整文字，每次回呼都送整份出去。</li>
+<li>畫面在使用者送出時，同時放上自己的氣泡與一個空的 AI 氣泡。</li>
+<li>每一段文字抵達時，改寫尾端那個 AI 氣泡的內容，讓它原地長大。</li>
+<li>用 <code>pending</code> 當閘門，一次只允許一個請求在飛，並把載入歷史限制在進畫面時一次。</li>
+<li>錯誤（包含伺服器的 503 文案）直接寫進氣泡，而不是跳一個對話框擋住。</li>
+</ol>
 
-<p>React Native 內建的 <code>fetch</code> 不支援讀取串流回應的 body。要逐段讀取，得改用 Expo 提供的版本：</p>
+<h2>第 1 步：用 streamingFetch 發出請求</h2>
 
-<pre><code>import { fetch as streamingFetch } from 'expo/fetch';</code></pre>
+<p>手機端用 Expo 提供的 <code>streamingFetch</code>，而不是一般的 <code>fetch</code>，因為它才能讓你在回應還沒結束前就一段一段讀取 body。請求本身帶上登入 token 與 JSON 標頭，body 就是對話 id 與這句問話。</p>
 
-<p>這個版本的 <code>fetch</code> 回傳的 <code>res.body</code> 是一個可以 <code>getReader()</code> 的串流，這是整個逐字渲染的起點。如果用了錯的 <code>fetch</code>，你會發現 <code>res.body</code> 是空的，或根本沒有 <code>getReader</code> 可用，程式會直接壞在半路。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/api.tsx">        const token = await tokenRef.current();
+        const res = await streamingFetch(`${BASE}${path}`, {
+          method: 'POST',
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : null),
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });</pre>
 
-<h2>第二步：帶著 Clerk token 把請求送出去</h2>
+<h2>第 2 步：先分辨 JSON 還是串流</h2>
 
-<p>助理的請求和其他 API 一樣，必須帶著登入身分。做法是從 Clerk 取出 token，放進 <code>Authorization</code> 標頭；token 用 ref 快取，避免每次 render 都重新取一次而讓 effect 反覆觸發。</p>
+<p>拿到回應後，第一件事是看 <code>Content-Type</code>。還記得步驟 2 的設計嗎？緊急回覆與各種 503 都是 JSON，只有模型生成的那條路是純文字。所以客戶端也用同一個判準分岔。</p>
 
-<pre><code>async function stream(): Promise&lt;string&gt; {
-  const token = await tokenRef.current();
-  const res = await streamingFetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : null),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });</code></pre>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/api.tsx">        if (res.headers.get('content-type')?.includes('application/json')) {
+          const data = await res.json().catch(() => null);
+          if (!res.ok) {
+            throw new ApiError(res.status, data?.error ?? 'Something went wrong', data?.code);
+          }
+          // The body is the other side of a network boundary, not a guarantee:
+          // a proxy error page with a JSON content-type must not reach `.content`.
+          if (typeof data?.message?.content !== 'string' || typeof data?.conversationId !== 'string') {
+            throw new ApiError(res.status, 'The assistant sent back an unreadable reply');
+          }
+          onText(data.message.content);
+          return data.conversationId;
+        }
 
-<p>這裡沒有用 <code>useApiClient</code>，而是寫成一個獨立的 <code>useApiStream</code>。原因是它要處理的是串流，不能套用一般請求那套「等 JSON 回來」的邏輯。但也因為如此，它少了共用的錯誤回報，所以實作裡特別補上一段：助理失敗時要主動寫進 Sentry，但只記錄路徑、狀態碼、錯誤代碼與耗時，絕不記錄 prompt 或回覆內容，因為那是病患自己打的字。</p>
+        const conversationId = res.headers.get('X-Conversation-Id');
+        if (!res.body || !conversationId) {
+          throw new ApiError(res.status, 'The assistant sent back an unreadable reply');
+        }</pre>
 
-<h2>第三步：先看內容型別，決定走哪條路</h2>
+<p>JSON 分支裡有兩個動作要看。第一，如果狀態不是 2xx，就丟出一個帶狀態碼與錯誤代碼的 <code>ApiError</code>，把伺服器準備好的文案保留下來，等下在畫面上顯示。第二，就算狀態是 200，也不能直接相信 body。回應的另一頭是一個網路邊界，可能是一頁內容型別剛好標成 JSON 的代理錯誤頁。所以這裡會實際檢查 <code>message.content</code> 和 <code>conversationId</code> 是不是字串，不是就當作讀不懂的回應。</p>
 
-<p>還記得上一節的分岔點嗎？回應可能是 JSON（錯誤、緊急訊息），也可能是純文字流（真的在生成）。手機端要自己判斷：</p>
+<p>這一段的最後兩行是進入串流分支的通行證：對話 id 不在 body 裡，而在回應標頭 <code>X-Conversation-Id</code>；如果連 response body 都沒有，就沒得讀，直接報錯。</p>
 
-<pre><code>if (res.headers.get('content-type')?.includes('application/json')) {
-  const data = await res.json().catch(() =&gt; null);
-  if (!res.ok) {
-    throw new ApiError(res.status, data?.error ?? 'Something went wrong', data?.code);
-  }
-  if (typeof data?.message?.content !== 'string' || typeof data?.conversationId !== 'string') {
-    throw new ApiError(res.status, 'The assistant sent back an unreadable reply');
-  }
-  onText(data.message.content);
-  return data.conversationId;
-}
+<h2>第 3 步：逐段讀純文字串流</h2>
 
-const conversationId = res.headers.get('X-Conversation-Id');
-if (!res.body || !conversationId) {
-  throw new ApiError(res.status, 'The assistant sent back an unreadable reply');
-}</code></pre>
+<p>確認是串流之後，用 body 的 reader 一塊一塊讀。每次讀到一塊就解碼、接在目前累積的文字後面，然後把「目前為止的完整文字」交給回呼 <code>onText</code>。</p>
 
-<p>JSON 那條路很單純：如果是錯誤就丟出去，如果是正常內容（例如緊急卡片）就直接用 <code>onText</code> 一次交出全文。這裡有一道防線值得注意：即使內容型別是 JSON，也不代表 body 一定是我們預期的形狀——中間可能夾著代理伺服器的錯誤頁。所以檢查 <code>message.content</code> 與 <code>conversationId</code> 是不是字串，是必要的。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/lib/api.tsx">        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let text = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          text += decoder.decode(value, { stream: true });
+          onText(text);
+        }
+        return conversationId;</pre>
 
-<h2>第四步：逐段讀，永遠回報「目前為止的全文」</h2>
+<p>這裡有一個容易被忽略、但讓畫面端變得非常簡單的設計：<code>onText</code> 每次拿到的是「累積到現在的整份文字」，不是「這一塊的增量」。所以畫面端不需要自己拼貼增量，只要拿這份完整文字把氣泡內容覆蓋掉就好。最後函式回傳對話 id，讓呼叫端更新模組層級的 <code>conversationId</code>，下一輪才能接回同一串。</p>
 
-<p>純文字流這條路，就是用 reader 一段一段讀，並在每次讀到新片段時回報給畫面：</p>
+<h2>第 4 步：送出時，先把兩個氣泡放上去</h2>
 
-<pre><code>const reader = res.body.getReader();
-const decoder = new TextDecoder();
-let text = '';
-for (;;) {
-  const { value, done } = await reader.read();
-  if (done) break;
-  text += decoder.decode(value, { stream: true });
-  onText(text);
-}
-return conversationId;</code></pre>
+<p>回到 <code>assistant.tsx</code> 的 <code>send()</code>。使用者一送出，畫面不會等第一個字，而是立刻做出兩件事：加上使用者自己的氣泡，以及一個內容空白的 AI 氣泡。</p>
 
-<p>注意這裡累積成 <code>text</code> 之後，是把「目前為止的全文」交給 <code>onText</code>，而不是只交出這次的片段。這個設計會讓畫面端的程式碼變得非常單純：它不需要自己把片段接起來，只要把收到的字串直接畫成訊息就好。哪一端負責累積，是一個可以選擇的設計；Dentify 選擇讓 hook 累積、讓畫面變笨。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/app/assistant.tsx">  const send = async (q: string) => {
+    const t = q.trim();
+    if (!t || pending) return;
+    setText('');
+    setMsgs((m) => [
+      ...m,
+      { from: 'me', paras: [t], time: now() },
+      { from: 'ai', paras: [], time: now() },
+    ]);
+    setPending(true);
+    try {
+      conversationId = await stream(
+        '/api/ai/chat',
+        { conversationId: conversationId ?? undefined, message: t },
+        setReply
+      );
+    } catch (err) {
+      setReply(err instanceof Error ? err.message : 'Something went wrong.');
+    } finally {
+      setPending(false);
+    }
+  };</pre>
 
-<h2>第五步：先放一個空氣泡，讓答案有地方長</h2>
+<p>為什麼要先放一個空的 AI 氣泡？因為答案需要有個地方「長出來」。在第一批文字抵達之前，這個空氣泡可以顯示轉圈圈；文字一到，它就變成內容的容器。第一行的 <code>if (!t || pending) return;</code> 看似只是防止送出空白訊息，其實它同時是最重要的競態防線，下一段會說。</p>
 
-<p>送出問題時，畫面要同時把使用者的訊息和一個空白的 AI 氣泡放上去。這個空氣泡是關鍵——它是答案接下來要長進去的地方。</p>
+<h2>第 5 步：讓尾端氣泡原地長大</h2>
 
-<pre><code>setMsgs((m) =&gt; [
-  ...m,
-  { from: 'me', paras: [t], time: now() },
-  { from: 'ai', paras: [], time: now() },
-]);
-setPending(true);</code></pre>
+<p>每個串流區塊抵達時，回呼 <code>setReply</code> 會改寫最後一顆 AI 氣泡。它只換掉陣列最後一項，前面不動，所以畫面看起來就是同一顆氣泡在長大，而不是一直新增氣泡。</p>
 
-<p>在收到第一個字之前，這個空氣泡會顯示一顆小小的載入圖示；一旦第一個字抵達，就換成文字並開始長大。每一輪 <code>onText</code> 都重寫最後那個 AI 氣泡：</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/app/assistant.tsx">  /** Rewrites the trailing AI bubble — the one this turn is filling in. */
+  const setReply = (content: string) =>
+    setMsgs((m) => [
+      ...m.slice(0, -1),
+      { ...m[m.length - 1], paras: content.split(/\n{2,}/).filter(Boolean) },
+    ]);</pre>
 
-<pre><code>const setReply = (content: string) =&gt;
-  setMsgs((m) =&gt; [
-    ...m.slice(0, -1),
-    { ...m[m.length - 1], paras: content.split(/\n{2,}/).filter(Boolean) },
-  ]);</code></pre>
+<p>文字會依空行切成段落，所以助理回覆的兩段文字在畫面上仍然是兩段。正在串流的那顆氣泡還會多做兩件事：最後一行的尾端放一個游標，讓文字看起來是「長出來」的；以及暫時不顯示時間戳。</p>
 
-<p>它只動陣列裡最後一則訊息，也就是這一輪正在填的氣泡。回覆裡用連續換行分段，所以直接把字串切成一串段落交給氣泡渲染。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/app/assistant.tsx">            {/* Caret sits on the last line, so the answer grows in front of it. */}
+            {streaming &amp;&amp; i === all.length - 1 ? (
+              &lt;Text style={{ color: A.blue }}&gt;▍&lt;/Text&gt;
+            ) : null}</pre>
 
-<h2>第六步：讓「還在寫」被看見</h2>
+<p>時間戳則等串流結束才出現。原始碼的理由很直白：在一則寫到一半的答案上蓋時間，是說謊，因為它其實還沒完成。</p>
 
-<p>AI 氣泡接受一個 <code>streaming</code> 旗標。當這一輪還在串流時，最後一段文字的尾端會顯示一個閃爍的游標；同時，時間戳記會暫時隱藏。</p>
+<h2>第 6 步：過期回應與競態</h2>
 
-<pre><code>{streaming &amp;&amp; i === all.length - 1 ? (
-  &lt;Text style={{ color: A.blue }}&gt;▍&lt;/Text&gt;
-) : null}
+<p>串流最怕的一件事，是上一輪的回應還沒結束，下一輪又開始，兩串文字互搶同一顆氣泡。這個 app 的解法很樸素：用一個 <code>pending</code> 狀態當閘門，一次只讓一個請求在飛。</p>
 
-{/* A timestamp on a half-written answer is a lie — it lands when it lands. */}
-{streaming ? null : (
-  &lt;Text className="mt-[10px] text-[12.5px]"&gt;{m.time}&lt;/Text&gt;
-)}</code></pre>
+<p>送出前檢查 <code>pending</code>，輸入框在 pending 期間設為不可編輯，送出與附件按鈕也一併停用。因為新請求根本無法在使用中啟動，就不會出現「舊回應蓋掉新畫面」的情境。相關的還有載入歷史的時機：</p>
 
-<p>這兩行處理的是感受問題。游標讓使用者知道系統還在動，不是卡住了；隱藏時間是因為一段還沒寫完的回答標上時間是一種假資訊，時間要等答案落定才出現。另外，氣泡的進場動畫在串流時會被關掉——每一段文字都觸發一次動畫，會讓畫面看起來一頓一頓的。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/app/assistant.tsx">  // Load once per mount, not on every focus: a refetch mid-stream would fight
+  // the bubble being written. A failure just leaves the empty state up.
+  useEffect(() => {
+    call&lt;{ conversationId: string | null; messages: StoredMsg[] }&gt;('/api/ai/chat')
+      .then((h) =&gt; {
+        conversationId = h.conversationId;
+        setMsgs(h.messages.map(toMsg));
+      })
+      .catch(() =&gt; {});
+  }, [call]);</pre>
 
-<h2>第七步：把錯誤寫進氣泡，而不是彈窗</h2>
+<p>歷史只在進入畫面時抓一次，不在每次畫面重新取得焦點時抓。原因是：如果在串流進行中重新抓取，抓回來的資料會跟你正在寫的那顆氣泡打架。同樣的道理也反映在自動捲動上：內容變高時會捲到底部，但當串流進行中就不做動畫，因為每個字都觸發一次動畫會讓畫面抖動。這些小決定合起來，才讓「一次只處理一輪」這條規則真的站得住。</p>
 
-<p>送出流程用 <code>try / catch / finally</code> 包起來。失敗時，錯誤訊息會被寫進那個已經在畫面上的 AI 氣泡；<code>finally</code> 則負責把 <code>pending</code> 關掉。</p>
+<h2>第 7 步：錯誤降級</h2>
 
-<pre><code>const send = async (q: string) =&gt; {
-  const t = q.trim();
-  if (!t || pending) return;
-  // ...先把氣泡放上去
-  setPending(true);
-  try {
-    conversationId = await stream(
-      '/api/ai/chat',
-      { conversationId: conversationId ?? undefined, message: t },
-      setReply
-    );
-  } catch (err) {
-    setReply(err instanceof Error ? err.message : 'Something went wrong.');
-  } finally {
-    setPending(false);
-  }
-};</code></pre>
+<p>最後是失敗路徑。還記得 <code>send()</code> 的 catch 嗎？它呼叫的是 <code>setReply</code>，也就是把錯誤訊息寫進那顆 AI 氣泡。這是刻意的：伺服器的 503 文案本身就有意義（例如「這個環境目前不開放助理」），用一個跳出來的對話框蓋住它，反而讓使用者得多按一下才能看到內容。把文案直接放進氣泡，使用者讀到的就是伺服器真正想說的話。</p>
 
-<p>為什麼不跳一個錯誤彈窗？因為伺服器回傳的 503 訊息本身就是有意義的文案，例如「這個環境目前無法使用助理」。彈窗會把它蓋在一個使用者得先關掉才能繼續的對話框裡，反而更差。把它直接寫進氣泡，使用者看得到、也能繼續讀上面的對話。</p>
-
-<p>而 <code>if (!t || pending) return</code> 這一行，是防止使用者在等待時又按一次送出。串流還沒結束前，<code>pending</code> 都是 true，重複的請求就會被擋掉。這和一般列表頁用「請求序號」處理過期回應的機制不同：助理一次只有一輪在跑，用一個簡單的旗標就夠了。</p>
-
-<h2>第八步：歷史載入的策略也要配合串流</h2>
-
-<p>助理載入歷史的方式，和一般畫面不一樣。一般的資料畫面用「回到前景就重新抓」來保持最新，但助理刻意只在畫面掛載時抓一次：</p>
-
-<pre><code>// Load once per mount, not on every focus: a refetch mid-stream would fight
-// the bubble being written. A failure just leaves the empty state up.
-useEffect(() =&gt; {
-  call&lt;{ conversationId: string | null; messages: StoredMsg[] }&gt;('/api/ai/chat')
-    .then((h) =&gt; {
-      conversationId = h.conversationId;
-      setMsgs(h.messages.map(toMsg));
-    })
-    .catch(() =&gt; {});
-}, [call]);</code></pre>
-
-<p>如果每次回到前景都重抓歷史，而使用者正好在等回覆，一次重新載入就會把你正在寫的那個氣泡蓋掉。所以策略是：進畫面時抓一次歷史就好，之後由串流自己維護畫面。載入失敗也不要彈窗，維持空狀態即可。</p>
+<p>這裡也有一個例外，屬於照片附件的路徑：照片送出失敗時，因為失敗當下根本還沒放任何氣泡，沒有地方可以寫入，所以只能用一個對話框提示。這會在步驟 5 講到。</p>
 
 <h2>做完長什麼樣</h2>
 
-<p>完成後，這個畫面的行為可以逐項驗證：送出一句問題，空白的 AI 氣泡先出現並顯示載入指示；第一個字抵達後開始逐字成長，尾端有閃爍游標；完成後游標消失、時間出現。收到緊急訊息時，文字一次出現（因為那不是串流）。伺服器回 503 時，訊息直接寫進氣泡而不是彈窗。等待期間再按送出不會產生第二個請求。</p>
+<p>驗收方式很直接：送出一個問題，你的氣泡立刻出現，AI 氣泡先顯示載入中，接著第一個字很快出現，文字持續補上，最後一行跟著一個游標，完成後時間戳才出現。串流期間輸入框與按鈕是停用狀態。故意把閘門關起來再送一次，錯誤文案會直接出現在 AI 氣泡裡，而不是彈出對話框。</p>
 
-<p>畫面會長了，但每次重開 app 對話就消失——因為我們還沒把歷史接上去。下一步要把這條對話持久化到資料庫，讓重新打開 app 時看得到之前的往來。</p>
+<h2>小結</h2>
+
+<blockquote>
+客戶端用 Expo 的 <code>streamingFetch</code> 發請求，先看 <code>Content-Type</code>：JSON 走一般分支（錯誤帶狀態與代碼、驗證 body 形狀），純文字則進入 reader 逐塊讀取。回呼 <code>onText</code> 送的是累積後的完整文字，畫面端因此只需覆蓋尾端氣泡。送出時先放兩個氣泡，再讓最後一顆原地長大並顯示游標；<code>pending</code> 當閘門、歷史只載入一次、串流期間不做捲動動畫，合起來避免過期回應互搶畫面。錯誤（含 503 文案）直接寫進氣泡。
+</blockquote>
+
+<p>到這裡，使用者已經能即時看到回覆了，但關掉 app 再打開，對話就消失了。下一步要處理資料層：把對話歷史持久化到資料庫，還要確保每個人只拿得到自己的那段對話。</p>
 
 <div class="lesson-nav">
   <div><a href="./server-ai-endpoint.html">← 上一步：在 Next.js Route Handler 串出 AI 回應</a></div>
@@ -179,51 +183,51 @@ useEffect(() =&gt; {
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="手機端為什麼要改用 expo/fetch 而不是 React Native 內建的 fetch？" data-correct="2" data-explain="只有 expo 版回傳的 body 可以 getReader，內建 fetch 不支援讀取串流回應。">
-  <button class="opt">因為內建 fetch 沒有辦法送出 JSON 格式</button>
-  <button class="opt">因為 expo 版才會自動附上 Clerk token</button>
-  <button class="opt">因為只有 expo 版的 body 可以逐段讀取</button>
-  <button class="opt">因為內建 fetch 不能設定自訂的標頭</button>
+<div class="quiz" data-question="客戶端為什麼要用 Expo 的 streamingFetch 而不是一般 fetch？" data-correct="2" data-explain="它讓回應在結束之前就能一段一段讀取 body，這是逐字渲染的前提。">
+  <button class="opt">它會自動把請求內容壓縮後再送出</button>
+  <button class="opt">它能在沒有登入 token 時也完成請求</button>
+  <button class="opt">它能讓回應還沒結束就逐段讀取 body</button>
+  <button class="opt">它能把純文字自動轉換成 JSON 物件</button>
 </div>
 
-<div class="quiz" data-question="onText 每次收到的是什麼？" data-correct="1" data-explain="hook 內部累積後回報目前為止的全文，畫面只需直接把字串畫成訊息，不用自己拼片段。">
-  <button class="opt">只有這一次讀到的最新片段內容</button>
-  <button class="opt">到目前為止累積起來的完整文字</button>
-  <button class="opt">模型回覆所對應的 token 用量數字</button>
-  <button class="opt">這次串流總共會產生的段落數量</button>
+<div class="quiz" data-question="onText 回呼拿到的文字是什麼？" data-correct="0" data-explain="每次都是累積到目前的完整文字，畫面端直接覆蓋即可，不必自己拼接增量。">
+  <button class="opt">累積到目前的完整文字，覆蓋即可</button>
+  <button class="opt">這一塊新增的增量文字片段</button>
+  <button class="opt">模型回覆結束後的最終完整文字</button>
+  <button class="opt">經過 JSON 解析後的消息物件</button>
 </div>
 
-<div class="quiz" data-question="送出問題時先放一個空白 AI 氣泡的用意是什麼？" data-correct="3" data-explain="空氣泡是答案要長進去的地方，收到第一個字之前顯示載入指示，之後就換成逐字成長的文字。">
-  <button class="opt">讓使用者以為系統已經回答完畢了</button>
-  <button class="opt">避免畫面在等待時看起來像是壞掉</button>
-  <button class="opt">讓每一輪對話都能有固定的顯示高度</button>
-  <button class="opt">讓答案有地方可以逐字長出來</button>
+<div class="quiz" data-question="串流期間為什麼把輸入框與按鈕設為停用？" data-correct="1" data-explain="一次只允許一個請求在飛，避免前後兩輪互搶同一顆氣泡、造成過期覆蓋。">
+  <button class="opt">為了讓伺服器可以少接幾個並行請求</button>
+  <button class="opt">一次只允許一個請求，避免兩輪互搶氣泡</button>
+  <button class="opt">因為 React Native 不支援並行輸入事件</button>
+  <button class="opt">為了強迫使用者等答案完整結束再問</button>
 </div>
 
-<div class="quiz" data-question="串流進行中為什麼不顯示 AI 氣泡的時間戳記？" data-correct="0" data-explain="還沒寫完的回答標上時間是假資訊，時間要等答案落定才出現。">
-  <button class="opt">因為還沒寫完就標時間是假資訊</button>
-  <button class="opt">因為時間戳記會拖慢串流的速度</button>
-  <button class="opt">因為時間戳記的欄位在串流時是空的</button>
-  <button class="opt">因為使用者不在意回答發生的時間</button>
+<div class="quiz" data-question="歷史訊息為什麼只在進入畫面時抓一次？" data-correct="3" data-explain="串流進行中重新抓取會跟正在寫入的氣泡打架，所以不在每次取得焦點時重抓。">
+  <button class="opt">因為每次重抓都會被伺服器回傳 429</button>
+  <button class="opt">因為歷史訊息一旦載入就不能再更新</button>
+  <button class="opt">因為重抓會讓對話 id 被伺服器重設</button>
+  <button class="opt">因為中途重抓會跟正在寫的氣泡打架</button>
 </div>
 
-<div class="quiz" data-question="助理畫面為什麼只在掛載時載入歷史，而不是每次回前景都重抓？" data-correct="1" data-explain="回到前景時重抓歷史，可能在使用者等待回覆時蓋掉正在被寫入的氣泡。">
-  <button class="opt">因為歷史資料的查詢會讓資料庫過載</button>
-  <button class="opt">因為重抓會蓋掉正在寫入的氣泡</button>
-  <button class="opt">因為 Clerk 的 token 在回前景時失效</button>
-  <button class="opt">因為助理的歷史資料不會再有任何變動</button>
+<div class="quiz" data-question="伺服器的 503 文案為什麼要寫進氣泡，而不是跳 Alert？" data-correct="1" data-explain="503 文案本身有資訊價值，寫進氣泡讓使用者直接讀到，不必多按一下關掉對話框。">
+  <button class="opt">因為 Alert 在 Android 上無法顯示中文</button>
+  <button class="opt">因為文案有資訊價值，寫進氣泡更直接</button>
+  <button class="opt">因為 Alert 會在串流期間自動關閉自己</button>
+  <button class="opt">因為氣泡可以自動重試同一個請求</button>
 </div>
 
-<div class="quiz" data-question="伺服器回傳 503 時，為什麼把訊息寫進氣泡而不是顯示彈窗？" data-correct="2" data-explain="503 的文案本身有意義，直接寫進氣泡使用者看得到；彈窗會把它藏在得先關掉的對話框裡。">
-  <button class="opt">因為 React Native 的彈窗在串流時會失效</button>
-  <button class="opt">因為氣泡可以自動把錯誤訊息翻譯成中文</button>
-  <button class="opt">因為錯誤文案本身值得直接顯示給使用者</button>
-  <button class="opt">因為彈窗只能顯示固定的標題與按鈕文字</button>
+<div class="quiz" data-question="正在串流的氣泡為什麼暫時不顯示時間戳？" data-correct="2" data-explain="答案還沒寫完，蓋上完成時間是假資訊，等串流結束才顯示。">
+  <button class="opt">因為時間戳會佔用太多畫面寬度</button>
+  <button class="opt">因為時間戳會讓文字無法被選取複製</button>
+  <button class="opt">因為還在寫的答案蓋上時間是假資訊</button>
+  <button class="opt">因為每更新一次時間都要重新計算</button>
 </div>
 
 <div class="footer">
   <p>mobile-app-course · 串流 AI 助理 · Step 3/5</p>
-  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>

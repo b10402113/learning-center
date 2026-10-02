@@ -12,138 +12,124 @@
 <p class="meta">Step 1/5 · 預約領域模型（Drizzle + Neon）</p>
 
 <h2>學習目標</h2>
-<p>能說出 <code>new Date('YYYY-MM-DD')</code> 與「時間加 24 小時」為什麼會讓預約跑到錯的一天，並用 CalendarDay 與 <code>clinicInstant</code> 把診所當地牆鐘時間正確換成 UTC 瞬間。</p>
+<p>能說出「日期字串」與「跨日加減」為什麼會出錯，並用 CalendarDay 與 clinicInstant 把診所牆上的時間正確換算成真正的 UTC 瞬間。</p>
 
-<h2>前言：週三早上九點，到底是哪一刻？</h2>
+<h2>前言：一句「下週三早上九點」藏了多少陷阱</h2>
 
-<p>診所網站上寫著「週三 09:00 開始看診」。病人按下預約，選了週三早上九點。這聽起來理所當然，但如果你把「週三早上九點」這幾個字直接送進資料庫，某一天它就會變成週二晚上八點——而你不會發現，直到有人跑錯診所。</p>
+<p>想像診所櫃檯跟病人說：「下週三早上九點，幫你排在張醫師那裡。」你在程式裡把這個時間存成 <code>'2026-03-11T09:00'</code>，看起來再合理不過。結果到了當天，病人的通知寫著下午一點，櫃檯一臉困惑，醫師也一頭霧水。</p>
 
-<p>問題出在：「週三早上九點」其實混了兩種完全不同的東西。一種是診所牆上時鐘顯示的數字，另一種是世界上一瞬即逝、所有人都同意的那個時間點。前者在冬天和夏天可能剛好差一小時，後者永遠不會變。把兩者當成同一件事，就是預約系統最常見的翻車原因。</p>
+<p>這種錯誤不是手滑打錯字，而是把兩種完全不同的東西混在一起：一種是「牆上時鐘顯示的時間」，另一種是「宇宙裡真正發生的那個瞬間」。診所說的九點，預設是診所當地牆上時鐘的九點；但電腦要存進資料庫、要跨手機、跨伺服器傳遞，靠的是絕對瞬間。這一節就是把這兩者分清楚，並且讓時區換算只發生在一個地方。因為只要換算散落在各處，總有一天會有一處漏了，而時間的錯誤最麻煩的地方在於：它平常看起來都對，只在特定日子出錯。</p>
 
-<p>這一節要建立一個很小、但非常關鍵的檔案：診所的時區層。它專門負責把「診所牆上的時間」翻譯成「真正的瞬間」，而且只由它一個人負責。往後所有排班、可預約時段的計算，都會站在這一層上面。</p>
+<h2>先看一個很多人踩過的坑：把日期字串直接丟給 Date</h2>
 
-<h2>兩種時間：牆鐘時間與絕對瞬間</h2>
+<p>先講一個看起來很無害的寫法。你拿到 API 傳來的 <code>'2026-03-11'</code>，很直覺地寫 <code>new Date('2026-03-11')</code>，想說這不就代表那天嗎？問題是 JavaScript 對這種「只有日期、沒有時間」的字串，會用 UTC 的午夜來解讀。所以在紐約的診所，這個瞬間其實是當地 3 月 10 日的晚上七點。你以為拿到 3 月 11 日，實際上拿到的是 3 月 10 日。日期就這樣默默少了一天。</p>
 
-<p>先把這兩種時間分清楚，後面所有規則都會變得直觀。</p>
+<p>診所程式碼的解法很乾脆：不要讓字串直接變成 Date，而是先解析成一個結構化的「日曆日」。</p>
 
-<p><strong>牆鐘時間（wall-clock time）</strong>是「某地牆上時鐘顯示的數字」。診所營業時間就是牆鐘時間：每週三 09:00 開門、17:00 關門，不管那天是冬天還是夏天，牆上的鐘就是這樣顯示。它描述的是診所的作息，不是一個世界共通的時間點。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/time.ts"><code>export type CalendarDay = { year: number; month: number; day: number };
 
-<p><strong>絕對瞬間（instant）</strong>是世界時間軸上的一個點，例如「2025 年 6 月 16 日 13:00 UTC」。一個預約發生的那一刻就是絕對瞬間，不論你從台北、紐約還是倫敦看，都是同一刻。資料庫裡要存的就是這個。</p>
-
-<p>你可以這樣記：牆鐘時間是手錶上的指針，絕對瞬間是「事情真正發生的那一刻」。營業時間用指針表達，預約則必須記住真正的時刻。</p>
-
-<table>
-<thead>
-<tr><th>問題</th><th>牆鐘時間</th><th>絕對瞬間</th></tr>
-</thead>
-<tbody>
-<tr><td>這是什麼</td><td>某地時鐘顯示的數字</td><td>世界時間軸上的一個點</td></tr>
-<tr><td>診所營業時間</td><td>是，週三 09:00–17:00</td><td>不是，換時區就變</td></tr>
-<tr><td>一筆預約</td><td>不是</td><td>是，必須唯一且無歧義</td></tr>
-<tr><td>用例</td><td>working_hours 表</td><td>appointments 表</td></tr>
-</tbody>
-</table>
-
-<h2>第一個陷阱：把日期字串交給 Date 解析</h2>
-
-<p>很多人的第一直覺是這樣寫：把 API 收到的 <code>"2025-06-16"</code> 丟進 <code>new Date()</code>，得到一個日期物件，然後開始算。</p>
-
-<pre><code>// 危險：看似單純，其實偷藏了一個時區假設
-const d = new Date("2025-06-16");
-// 在 UTC 環境是 2025-06-16T00:00:00Z
-// 在 UTC-4 的環境，同一個瞬間顯示成 2025-06-15 20:00</code></pre>
-
-<p>當字串只有日期、沒有時間時，JavaScript 會把它當成 UTC 的午夜來解析。結果就是：同一段程式在不同時區的機器上，可能得到日曆上的前後兩天。預約系統最怕的就是這種「差一天」。</p>
-
-<p>所以這裡刻意不使用 <code>Date</code> 解析日期，而是用正規表示式把 <code>YYYY-MM-DD</code> 拆成一個純粹的日曆日結構：</p>
-
-<pre><code>export type CalendarDay = { year: number; month: number; day: number };
-
+/** 'YYYY-MM-DD' → calendar day. Deliberately not `new Date(str)`, which is UTC-parsed. */
 export function parseDay(iso: string): CalendarDay {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   if (!m) throw new Error(`Expected YYYY-MM-DD, got "${iso}"`);
   return { year: +m[1], month: +m[2], day: +m[3] };
 }</code></pre>
 
-<p><code>CalendarDay</code> 代表「日曆上的某一天」，它沒有時間、沒有任何時區偏移，就是一個你能用手指在月曆上點出來的日子。把日期先存成這種結構，就沒有機會在解析階段被偷偷搬走一天。</p>
+<p><code>CalendarDay</code> 只是三個數字：年、月、日。它不帶時區，也不帶時間，因為它代表的是「日曆上那一格」，而不是某個瞬間。把日期限制成這個形狀之後，後面所有跟日期有關的運算就不會不小心沾到時區。</p>
 
-<h2>第二個陷阱：以為一天永遠是 24 小時</h2>
+<h2>核心工具：clinicInstant 把牆鐘時間變成真正的瞬間</h2>
 
-<p>另一個常見寫法是：從今天開始，往後加 <code>24 * 60 * 60 * 1000</code> 毫秒，就算出下一天，重複十次得到十天的候選日期。</p>
+<p>把「日曆日」想成一張掛在診所牆上的紙本月曆，你要在上面圈出「3 月 11 日」。但圈完之後，電腦還需要知道：3 月 11 日早上九點，換算成全球共通的時間點，到底是哪一刻？這件事由 <code>clinicInstant</code> 負責。</p>
 
-<p>平常這樣寫沒事，但日光節約（DST）切換的那一天不是 24 小時。美國在春天會把時鐘往前撥一小時，那天只有 23 小時；秋天往後撥，那天有 25 小時。用加毫秒的方式「加一天」，跨過切換點時就會少走或多走一格，日期序列開始漂移。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/time.ts"><code>/** Single clinic, single timezone (PLAN.md A1). */
+export const CLINIC_TZ = process.env.CLINIC_TZ ?? 'America/New_York';
 
-<p>正確做法是用<strong>日曆算術</strong>，而不是加固定毫秒。這裡借用 UTC 只當成一個方便加減的曆法工具，避免日光節約干擾：</p>
-
-<pre><code>export function eachDay(from: CalendarDay, to: CalendarDay, maxDays = 62): CalendarDay[] {
-  const days: CalendarDay[] = [];
-  const cursor = new Date(Date.UTC(from.year, from.month - 1, from.day));
-  const end = Date.UTC(to.year, to.month - 1, to.day);
-  while (cursor.getTime() <= end && days.length < maxDays) {
-    days.push({
-      year: cursor.getUTCFullYear(),
-      month: cursor.getUTCMonth() + 1,
-      day: cursor.getUTCDate(),
-    });
-    cursor.setUTCDate(cursor.getUTCDate() + 1); // 加「一天」，不是加 86400000
-  }
-  return days;
-}</code></pre>
-
-<p>關鍵在最後一行：它呼叫 <code>setUTCDate</code> 把日期加一，這是曆法上的「下一天」，不是時間軸上的「過 24 小時」。這樣即使中間夾了一個只有 23 小時的日子，序列依然正確。</p>
-
-<h2>唯一套用時區的地方：clinicInstant</h2>
-
-<p>現在有了乾淨的日曆日，還缺一步：把「某一天的診所當地幾點幾分」換成真正的瞬間。這個轉換只寫在一個函式裡，全專案只有它知道診所在哪個時區：</p>
-
-<pre><code>export const CLINIC_TZ = process.env.CLINIC_TZ ?? 'America/New_York';
-
+/**
+ * A clinic-local wall-clock time → the UTC instant it actually happens at.
+ * This is the only place the timezone is applied, so DST lives here alone.
+ */
 export function clinicInstant(day: CalendarDay, hours: number, minutes: number): Date {
   const t = new TZDate(day.year, day.month - 1, day.day, hours, minutes, 0, 0, CLINIC_TZ);
   return new Date(t.getTime());
 }</code></pre>
 
-<p><code>TZDate</code> 來自 <code>@date-fns/tz</code>，它讓你「把時間建構成某個時區的牆鐘時間」，再取回真正的 UTC 瞬間。以 <code>CLINIC_TZ = America/New_York</code> 為例：</p>
+<p>這裡用了 <code>@date-fns/tz</code> 套件提供的 <code>TZDate</code>。它做的事是：你給它一個「診所當地的牆鐘時間」（年、月、日、時、分），再加上診所時區 <code>CLINIC_TZ</code>，它會回傳那個時刻真正對應的絕對時間點。函式回傳的是標準的 <code>Date</code>，所以後續的比較、排序、存進資料庫，用的都是同一個絕對瞬間。</p>
 
-<pre><code>clinicInstant({ year: 2025, month: 3, day: 10 }, 9, 0)
-// 春天日光節約已經切換 → 2025-03-10T13:00:00.000Z（UTC-4）
+<p>註解裡那句「the only place the timezone is applied」是整個設計的重點。時區換算是一件很容易錯、而且錯了很難查的事，所以他們選擇只留一個入口：所有牆鐘時間要變成瞬間，都走 <code>clinicInstant</code>。這樣日光節約時間（daylight saving time，簡稱 DST）的數學只活在這個檔案裡，要檢查、要寫測試都只有一處。</p>
 
-clinicInstant({ year: 2025, month: 3, day: 7 }, 9, 0)
-// 切換之前的週五 → 2025-03-07T14:00:00.000Z（UTC-5）</code></pre>
+<h3>反過來：從瞬間問「這是診所當地的哪一天」</h3>
 
-<p>兩者都是診所牆上的「早上九點」，但對應到的 UTC 瞬間差了一小時。這正是為什麼不能寫死一個 ±5 或 ±4 的偏移量——偏移量會隨季節改變，唯一可靠的做法是交給時區資料庫判斷。</p>
+<p>有時候你手上已經有一個瞬間，卻需要知道它在診所當地是星期幾、算哪一天。例如客人想預約的那個時間，到底是週三還是週四？這種反推由 <code>clinicDayOf</code> 處理。</p>
 
-<p>把時區運算通通收進 <code>clinicInstant</code>、<code>clinicDayOf</code>、<code>formatClinicTime</code> 這幾個函式，好處是日光節約的複雜度只活在一個檔案裡。其他地方完全不用碰時區，出錯的範圍也就被鎖住了。</p>
-
-<h3>反向轉換：一個瞬間落在診所的哪一天</h3>
-
-<p>寫入預約時，你需要知道某個瞬間在診所當地是星期幾、是不是工作日，所以也需要反方向的轉換：</p>
-
-<pre><code>export function clinicDayOf(instant: Date): CalendarDay & { weekday: number } {
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/time.ts"><code>/** The clinic-local calendar day an instant falls on, plus its weekday (0 = Sunday). */
+export function clinicDayOf(instant: Date): CalendarDay & { weekday: number } {
   const t = new TZDate(instant.getTime(), CLINIC_TZ);
   return {
     year: t.getFullYear(),
     month: t.getMonth() + 1,
     day: t.getDate(),
-    weekday: t.getDay(), // 0 = 星期日
+    weekday: t.getDay(),
   };
 }</code></pre>
 
-<p>之後的排班引擎要驗證一筆預約時，就是先用 <code>clinicDayOf</code> 把使用者送來的瞬間轉回診所當地的日曆日，再去比對那天的營業時間。</p>
+<p>它一樣靠 <code>TZDate</code>，只是方向相反：這次是拿一個絕對瞬間，放進診所時區裡看它落在哪一天。<code>weekday</code> 用 0 代表星期日、6 代表星期六，之後查工作時段時會用到。</p>
 
-<h2>為什麼營業時間反而是字串，不用瞬間</h2>
+<h2>為什麼「加一天」不能寫成「加 24 小時」</h2>
 
-<p>這裡有一個很容易搞反的細節：診所的 <code>working_hours</code> 存的是像 <code>'09:00'</code>、<code>'17:00'</code> 這樣的字串，而不是時間戳記。原因就是前面那條分界——營業時間是牆鐘時間。</p>
+<p>接下來看一個更隱蔽的錯誤。如果你要列出從今天到下週的每一天，最直覺的寫法是「每次把時間戳加 24 小時」。平常這樣做沒事，但碰到日光節約時間切換的那一天就會出錯：那天只有 23 小時或 25 小時，於是你會漏掉一天，或把同一天數了兩次。</p>
 
-<p>「每週三 09:00 開門」這句話在時間軸上沒有對應的單一瞬間；它是一個每週重複的作息。若硬把它存成瞬間，就等於偷偷綁定了某個時區偏移，一旦日光節約切換或診所搬家，這筆資料就得全部重算。反之，把牆鐘數字原封不動存成字串，需要換算時再交給 <code>clinicInstant</code>，才是乾淨的做法。</p>
+<p>診所的 <code>eachDay</code> 選擇用「日曆運算」而不是「加 24 小時」：它用 UTC 的年月日當作純粹的數字，每次只把日期加一。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/time.ts"><code>/**
+ * Inclusive range of clinic-local calendar days. Steps by calendar arithmetic,
+ * not by adding 24h, so a DST day doesn't shift the sequence.
+ */
+export function eachDay(from: CalendarDay, to: CalendarDay, maxDays = 62): CalendarDay[] {
+  const days: CalendarDay[] = [];
+  const cursor = new Date(Date.UTC(from.year, from.month - 1, from.day));
+  const end = Date.UTC(to.year, to.month - 1, to.day);
+  while (cursor.getTime() &lt;= end &amp;&amp; days.length &lt; maxDays) {
+    days.push({
+      year: cursor.getUTCFullYear(),
+      month: cursor.getUTCMonth() + 1,
+      day: cursor.getUTCDate(),
+    });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return days;
+}</code></pre>
+
+<p>注意這裡雖然用了 <code>Date</code>，但全程只看 UTC 欄位、只用 <code>setUTCDate</code> 加減。它把 <code>Date</code> 當成一台「只會數日期」的計算機，刻意的避開時區資訊，所以日光節約讓某天變成 23 小時或 25 小時，都動不了這個序列。</p>
+
+<h2>顯示的時候，才把時間轉成人看得懂的格式</h2>
+
+<p>資料庫和運算都用絕對瞬間，但最後要給病人看的時候，一定要轉回診所當地的時間。<code>Intl.DateTimeFormat</code> 可以指定 <code>timeZone</code>，而診所選擇在 API 回傳時就先把標籤格式好，讓手機 app 完全不需要知道 <code>CLINIC_TZ</code> 是什麼。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/time.ts"><code>/** Clinic-local "3:00 PM" for display in API responses the mobile app renders verbatim. */
+export function formatClinicTime(instant: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: CLINIC_TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  }).format(instant);
+}</code></pre>
+
+<p>這行 <code>timeZone: CLINIC_TZ</code> 是關鍵。如果不指定，它會用伺服器或手機的時區，那就又回到「每台裝置顯示的時間都不一樣」的老問題。指定之後，不管伺服器架在哪裡、病人手機設成哪個時區，顯示出來的永遠是診所當地時間。</p>
+
+<h2>這個觀念和後面的排班引擎怎麼接上</h2>
+
+<p>到這裡，你手上有了兩個基本積木：用 <code>CalendarDay</code> 表示「日曆上的一天」，用 <code>clinicInstant</code> 把牆鐘時間變成絕對瞬間。下一節會把「誰什麼時候有空」建成資料表，而工作時段存的就是診所當地的牆鐘時間；到了第三步，排班引擎會用 <code>clinicInstant</code> 把每個工作天轉成區間，因此就算遇到日光節約切換，診所實際工作的時數也不會被算錯。</p>
+
+<p>把時區集中在一層，回報很直接：你在這裡把換算測對一次，後面所有跟時間有關的功能就都站在對的基礎上。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-預約系統要分清楚兩種時間：牆鐘時間（診所營業時間，用 CalendarDay 與 'HH:MM' 字串表達）與絕對瞬間（一筆預約，用 UTC 儲存）。不要用 <code>new Date('YYYY-MM-DD')</code> 解析日期，因為它會被當成 UTC 而差一天；不要用加 24 小時來推進日期，因為日光節約日不是 24 小時。把「牆鐘轉瞬間」收斂到唯一的 <code>clinicInstant</code>，日光節約的數學就只存在一個檔案裡。
+「日曆上的一天」和「宇宙裡的瞬間」是兩回事，混用就會出現少一天、多幾小時的錯。診所用 <code>CalendarDay</code>（只有年月日的結構）表示一天，用 <code>clinicInstant</code> 把診所牆鐘時間換成真正的 <code>Date</code>，而且所有時區換算只集中在 <code>time.ts</code> 一個檔案。跨日加減用日曆運算而不是加 24 小時，顯示則用帶 <code>timeZone</code> 的 <code>Intl.DateTimeFormat</code>。
 </blockquote>
 
-<p>有了這層時區地基，下一個問題就變成：到底要拿哪些資料來算可預約時段？診所不是單一行事曆，而是好幾位醫師、不同服務、各自的營業時間與請假。下一節會把「誰什麼時候有空」建成一組資料表。</p>
+<p>時間有了正確的表示方式，下一步才有意義：把「誰在什麼時候有空」變成資料表，讓排班引擎有東西可以算。下一節會看 <code>working_hours</code>、<code>time_off</code>、<code>services</code> 與 <code>appointments</code> 這幾張表怎麼分工。</p>
 
 <div class="lesson-nav">
   <div></div>
@@ -152,46 +138,46 @@ clinicInstant({ year: 2025, month: 3, day: 7 }, 9, 0)
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="為什麼不該用 new Date('2025-06-16') 解析只有日期的字串？" data-correct="1" data-explain="純日期字串會被當成 UTC 午夜，在不同時區的機器上可能顯示成前後兩天。">
-  <button class="opt">因為它會直接丟出例外的錯誤</button>
-  <button class="opt">因為它會把日期當成 UTC 而差一天</button>
-  <button class="opt">因為它只能解析西元兩千年後的日期</button>
-  <button class="opt">因為它會把日期自動加上目前時間</button>
+<div class="quiz" data-question="為什麼診所不直接把日期字串丟給 new Date()？" data-correct="2" data-explain="new Date('YYYY-MM-DD') 會用 UTC 午夜解讀，在診所當地可能變成前一天晚上。">
+  <button class="opt">因為它的執行速度比 parseDay 慢</button>
+  <button class="opt">因為它只能解析有時分的字串</button>
+  <button class="opt">因為它會把純日期當成 UTC 午夜</button>
+  <button class="opt">因為它不接受四位數的年份</button>
 </div>
 
-<div class="quiz" data-question="「每週三 09:00 開門」屬於哪一種時間？" data-correct="2" data-explain="它是診所牆上時鐘的作息，每週重複，不是時間軸上的單一瞬間。">
-  <button class="opt">一個由資料庫產生的絕對瞬間</button>
-  <button class="opt">一個帶有 UTC 偏移的時間戳記</button>
-  <button class="opt">一種診所當地牆鐘時間</button>
-  <button class="opt">一種只存在記憶體的快取值</button>
+<div class="quiz" data-question="CalendarDay 這個型別為什麼刻意不帶時區與時間？" data-correct="1" data-explain="它代表日曆上的某一格，不是某個瞬間，所以不需要時區與時分。">
+  <button class="opt">因為資料庫欄位只允許存數字</button>
+  <button class="opt">因為它代表日曆上的一格而非瞬間</button>
+  <button class="opt">因為時區欄位已經存在別張表裡</button>
+  <button class="opt">因為 JavaScript 沒辦法表示時區</button>
 </div>
 
-<div class="quiz" data-question="為什麼用加 24 小時的方式推進日期會出錯？" data-correct="0" data-explain="日光節約切換那一天只有 23 或 25 小時，加固定毫秒會讓日期漂移。">
-  <button class="opt">因為日光節約那一天不是 24 小時</button>
-  <button class="opt">因為資料庫不支援毫秒的加減</button>
-  <button class="opt">因為 JavaScript 的整數會溢位</button>
-  <button class="opt">因為每個月天數其實不固定</button>
+<div class="quiz" data-question="clinicInstant 在整個系統裡的角色是什麼？" data-correct="0" data-explain="它是把診所牆鐘時間換成絕對瞬間的唯一入口，時區換算只發生在這裡。">
+  <button class="opt">唯一把牆鐘時間換成真實瞬間的地方</button>
+  <button class="opt">把絕對瞬間格式化成人看得懂的字串</button>
+  <button class="opt">檢查病人的預約有沒有跟醫師重疊</button>
+  <button class="opt">把資料庫的時區欄位轉成台北時間</button>
 </div>
 
-<div class="quiz" data-question="clinicInstant 的主要責任是什麼？" data-correct="3" data-explain="它把診所當地牆鐘時間換成真正的 UTC 瞬間，是全專案唯一套用時區的地方。">
-  <button class="opt">把 UTC 瞬間換算成使用者裝置時間</button>
-  <button class="opt">把日期字串拆成年月日三個數字</button>
-  <button class="opt">產生一段日期區間的所有日曆日</button>
-  <button class="opt">把牆鐘時間換成真正的 UTC 瞬間</button>
+<div class="quiz" data-question="eachDay 為什麼用日曆運算而不是每次加 24 小時？" data-correct="3" data-explain="日光節約切換那一天只有 23 或 25 小時，用 24 小時步進會漏日或重複。">
+  <button class="opt">因為日曆運算的程式碼比較簡短</button>
+  <button class="opt">因為加 24 小時會讓日期多一天</button>
+  <button class="opt">因為 UTC 欄位在瀏覽器裡讀不到</button>
+  <button class="opt">因為 DST 那天不是剛好 24 小時</button>
 </div>
 
-<div class="quiz" data-question="診所的 working_hours 為什麼存成 '09:00' 這種字串？" data-correct="1" data-explain="營業時間是每週重複的牆鐘時間，存成瞬間會綁死某個時區偏移；需要時再用 clinicInstant 換算。">
-  <button class="opt">因為字串比時間戳記更節省空間</button>
-  <button class="opt">因為它是每週重複的牆鐘時間</button>
-  <button class="opt">因為資料庫不支援 time 型別欄位</button>
-  <button class="opt">因為它可以避免使用者輸入錯誤</button>
+<div class="quiz" data-question="formatClinicTime 為什麼要指定 timeZone 參數？" data-correct="2" data-explain="不指定就會用伺服器或手機的時區，指定後才能固定顯示診所當地時間。">
+  <button class="opt">讓輸出時間自動加上日光節約偏移</button>
+  <button class="opt">讓函式可以接受 Date 以外的型別</button>
+  <button class="opt">避免顯示時間跟著裝置時區跑掉</button>
+  <button class="opt">把 24 小時制強制轉成 12 小時制</button>
 </div>
 
-<div class="quiz" data-question="把時區運算全部集中到 time.ts，最大的好處是什麼？" data-correct="2" data-explain="日光節約的複雜度只活在一個檔案，出錯範圍被鎖住，其餘程式完全不必碰時區。">
-  <button class="opt">可以讓 API 的回應速度變得更快</button>
-  <button class="opt">可以讓資料庫節省一顆硬碟空間</button>
-  <button class="opt">可以讓時區出錯的範圍被鎖住</button>
-  <button class="opt">可以讓前端不需要處理任何時區</button>
+<div class="quiz" data-question="這節課的核心設計原則是什麼？" data-correct="1" data-explain="把牆鐘時間與絕對瞬間分清楚，並讓時區換算只集中在 time.ts 一個檔案。">
+  <button class="opt">把所有時間都先轉成台北時間再處理</button>
+  <button class="opt">分清牆鐘與瞬間，換算只留一處</button>
+  <button class="opt">完全不要在程式裡使用 Date 型別</button>
+  <button class="opt">讓每個畫面自己處理時區轉換</button>
 </div>
 
 <div class="footer">

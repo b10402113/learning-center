@@ -12,21 +12,30 @@
 <p class="meta">Step 4/5 · 預約領域模型（Drizzle + Neon）</p>
 
 <h2>學習目標</h2>
-<p>能照著把 <code>GET /api/availability</code> 與 <code>POST /api/appointments</code> 接到同一份 <code>loadSchedulingInputs</code> 與 <code>classifySlot</code>，讓 API 提供的時段與它接受的時段不會分岔，並正確回傳 409 與 400。</p>
+<p>能說明 GET /api/availability 與 POST /api/appointments 為什麼要共用同一份 loadSchedulingInputs 與 classifySlot，並把這個接線做出來。</p>
 
-<h2>前言：會算，不代表有人聽它的話</h2>
+<h2>動手前先確認</h2>
 
-<p>上一步的排班引擎是一台很可靠的計算機，但它有兩個天生的限制：它沒有資料，而且它不會攔人。純函式只負責「給輸入、算答案」，至於資料從哪來、有沒有人想偷偷送一個不存在的時間——那都是 API 這一層的事。</p>
+<p>這是一個程序型的小節，做完之後你會得到：一個讀取端點與一個寫入端點，兩者對「什麼時間可以預約」的判斷完全一致，因此使用者無法繞過前端、自己捏造一個時間送進資料庫。動手前請先具備兩樣東西：上一節的純函式引擎 <code>availableSlots</code> 與 <code>classifySlot</code>，以及第二步建好的 <code>working_hours</code>、<code>time_off</code>、<code>appointments</code>、<code>services</code>、<code>dentist_services</code> 等表。</p>
 
-<p>這一節要把引擎接進兩條路徑，而且是一條讀、一條寫。<code>GET /api/availability</code> 負責把可約時段列給病人看；<code>POST /api/appointments</code> 負責真的把預約寫進資料庫。最危險的作法是兩條路徑各寫一套規則，因為它們總有一天會分岔：畫面上顯示可以約，送出去卻被拒絕，或是反過來，一個明明不存在的時間被接受了。</p>
+<h2>問題在哪裡：兩個端點，兩套規則</h2>
 
-<p>動手前請先確認你具備三樣東西：上一節的 <code>availableSlots</code> 與 <code>classifySlot</code>、之前建好的五張表，以及一個能寫 Route Handler 並用 <code>route()</code> 包裝、用 <code>requireAuth()</code> 守衛的 API 骨架。如果你還沒看過 Route Handler 那條線，先去看隔壁節點，這裡不重講包裝與授權的細節。</p>
+<p>先看看最直覺、但也最容易出事的寫法。讀取端點 <code>GET /api/availability</code> 讀資料庫、算出可預約時段，傳給 app 顯示。寫入端點 <code>POST /api/appointments</code> 收到病人選的時間，直接把它存進資料庫。</p>
 
-<h2>步驟一：先寫一個兩邊共用的輸入載入器</h2>
+<p>這樣寫在正常情況下能動，但它埋了一個洞：兩個端點各有一套規則。讀取端點的規則是「載入 working hours、扣掉忙碌、濾掉前置期、以 15 分鐘產生」，寫入端點卻只剩「收到什麼存什麼」。只要使用者不透過 app，而是自己發一個請求、帶上凌晨三點的時間，寫入端點也照收。想補救就得在寫入端點把讀取端點那一整套規則重抄一遍，而兩份規則總有一天會不同步。</p>
 
-<p>整個接線的關鍵，是不要讓讀與寫各自去撈資料。先寫一個函式，專門把引擎需要的輸入從 Postgres 撈出來：</p>
+<p>這一節的做法是把規則抽成一份，讓兩個端點都呼叫它。</p>
 
-<pre><code>export async function loadSchedulingInputs(
+<h2>第一步：做一個共用的輸入載入器</h2>
+
+<p>先處理「把資料庫的列轉成引擎看得懂的形狀」這件事。<code>loadSchedulingInputs</code> 是唯一負責這項工作的函式，讀與寫都呼叫它。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/booking.ts"><code>/**
+ * Loads everything the scheduling engine needs for a date range.
+ * Shared by `GET /api/availability` and the booking write path, so what the
+ * API offers and what it accepts can never drift apart.
+ */
+export async function loadSchedulingInputs(
   dentistIds: string[],
   from: CalendarDay,
   to: CalendarDay,
@@ -34,115 +43,164 @@
 ): Promise&lt;{ workingHours: WorkingHour[]; busy: BusyInterval[] }&gt; {
   if (dentistIds.length === 0) return { workingHours: [], busy: [] };
 
-  // 前後各放寬一天，讓跨午夜的預約也落在查詢範圍內。
+  // Widen by a day each side so a booking straddling midnight still counts.
   const rangeStart = clinicInstant(from, 0, 0);
   const rangeEnd = new Date(clinicInstant(to, 23, 59).getTime() + 24 * 3600_000);
 
   const [hours, booked, off] = await Promise.all([
     db.select().from(workingHours).where(inArray(workingHours.dentistId, dentistIds)),
-    db.select({ /* startsAt, endsAt, dentistId */ })
+    db
+      .select({
+        dentistId: appointments.dentistId,
+        startsAt: appointments.startsAt,
+        endsAt: appointments.endsAt,
+      })
       .from(appointments)
-      .where(and(
-        inArray(appointments.dentistId, dentistIds),
-        eq(appointments.status, 'booked'),
-        lte(appointments.startsAt, rangeEnd),
-        gte(appointments.endsAt, rangeStart),
-        options.excludeAppointmentId
-          ? ne(appointments.id, options.excludeAppointmentId)
-          : undefined
-      )),
-    db.select({ /* startsAt, endsAt, dentistId */ })
+      .where(
+        and(
+          inArray(appointments.dentistId, dentistIds),
+          eq(appointments.status, 'booked'),
+          lte(appointments.startsAt, rangeEnd),
+          gte(appointments.endsAt, rangeStart),
+          // A reschedule must not be blocked by the appointment it is moving.
+          options.excludeAppointmentId
+            ? ne(appointments.id, options.excludeAppointmentId)
+            : undefined
+        )
+      ),
+    db
+      .select({
+        dentistId: timeOff.dentistId,
+        startsAt: timeOff.startsAt,
+        endsAt: timeOff.endsAt,
+      })
       .from(timeOff)
-      .where(and(
-        inArray(timeOff.dentistId, dentistIds),
-        lte(timeOff.startsAt, rangeEnd),
-        gte(timeOff.endsAt, rangeStart)
-      )),
+      .where(
+        and(
+          inArray(timeOff.dentistId, dentistIds),
+          lte(timeOff.startsAt, rangeEnd),
+          gte(timeOff.endsAt, rangeStart)
+        )
+      ),
   ]);
 
   return {
-    workingHours: hours.map((h) =&gt; ({ /* ... */ })),
-    busy: [...booked, ...off], // 已約與請假，對引擎而言是同一種不可用
+    workingHours: hours.map((h) =&gt; ({
+      dentistId: h.dentistId,
+      weekday: h.weekday,
+      startTime: h.startTime,
+      endTime: h.endTime,
+    })),
+    // A booked appointment and a block of time off are the same to the engine.
+    busy: [...booked, ...off],
   };
 }</code></pre>
 
-<p>做了什麼：用 <code>Promise.all</code> 並行讀三組資料——工作時段、已約的門診、請假；把後兩者合併成 <code>busy</code>。預期看到什麼：呼叫者拿到的形狀，剛好就是上一節 <code>availableSlots</code> 要的輸入。</p>
+<p>這個函式有三個地方要看。</p>
 
-<p>這裡有兩個容易漏的細節。第一，時間範圍前後各放寬一天，因為一筆跨越午夜的預約，只查「當天」會漏掉它。第二，選擇性排除某一筆預約（<code>excludeAppointmentId</code>）是為了改期：當你把一筆預約往後移到新時間時，不能讓它自己擋住自己。</p>
+<ol>
+<li><p><strong>範圍左右各放寬一天。</strong> 查詢用的 <code>rangeStart</code> 是起始日的診所午夜，<code>rangeEnd</code> 則是結束日 23:59 再加 24 小時。為什麼要多這一天？因為一筆預約可能跨過午夜，如果只查當天，午夜另一側的忙碌就會被漏掉。放寬一天是為了安全邊界，多撈到的資料引擎自己會忽略。</p></li>
+<li><p><strong>三個查詢用 <code>Promise.all</code> 並行。</strong> 工作時段、已預約、請假三者彼此獨立，沒有先後依賴，同時發出可以省下等待時間。</p></li>
+<li><p><strong><code>booked</code> 與 <code>off</code> 直接合併成 <code>busy</code>。</strong> 這就是上一節那句「對引擎來說兩者是同一件事」的落實處。函式回傳的輸入形狀，正好就是 <code>availableSlots</code> 要的形狀。</p></li>
+</ol>
 
-<h2>步驟二：GET /api/availability 把時段列出來</h2>
+<p>選項裡的 <code>excludeAppointmentId</code> 是為改期準備的：當你在移動一筆預約時，那筆預約不該被自己擋住，所以查忙碌區間時把它排除。這個參數在第五步的守衛會用到。</p>
 
-<pre><code>export const GET = route(async (req: Request) =&gt; {
-  await requireAuth();
+<h2>第二步：讀取端點呼叫引擎</h2>
 
-  const url = new URL(req.url);
-  const query = availabilityQuerySchema.parse({
-    serviceId: url.searchParams.get('serviceId') ?? undefined,
-    dentistId: url.searchParams.get('dentistId') ?? undefined,
-    from: url.searchParams.get('from') ?? undefined,
-    to: url.searchParams.get('to') ?? undefined,
-  });
+<p>有了共用載入器，讀取端點的邏輯就變得很薄。它先驗證查詢參數、找出所有提供這項服務的醫師，然後把載入器與引擎串起來。</p>
 
-  const [service] = await db.select().from(services).where(eq(services.id, query.serviceId));
-  if (!service || !service.isActive) throw notFound('Service not found');
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/api/availability/route.ts"><code>const from = parseDay(query.from);
+const to = parseDay(query.to ?? query.from);
 
-  const from = parseDay(query.from);
-  const to = parseDay(query.to ?? query.from);
-
-  const offering = await db
-    .select({ dentistId: dentistServices.dentistId })
-    .from(dentistServices)
-    .innerJoin(dentists, eq(dentists.id, dentistServices.dentistId))
-    .where(and(
+// Which dentists are in play.
+const offering = await db
+  .select({ dentistId: dentistServices.dentistId })
+  .from(dentistServices)
+  .innerJoin(dentists, eq(dentists.id, dentistServices.dentistId))
+  .where(
+    and(
       eq(dentistServices.serviceId, service.id),
       eq(dentists.isActive, true),
       query.dentistId ? eq(dentists.id, query.dentistId) : undefined
-    ));
+    )
+  );
 
-  const dentistIds = offering.map((d) =&gt; d.dentistId);
-  if (dentistIds.length === 0) return json({ service, slots: [] });
+const dentistIds = offering.map((d) =&gt; d.dentistId);
+if (dentistIds.length === 0) return json({ service, slots: [] });
 
-  const { workingHours: hours, busy } = await loadSchedulingInputs(dentistIds, from, to);
-  const slots = availableSlots({
-    workingHours: hours,
-    busy,
-    durationMinutes: service.durationMinutes,
-    from,
-    to,
-    now: new Date(),
-  });
+const { workingHours: hours, busy } = await loadSchedulingInputs(dentistIds, from, to);
 
-  return json({
-    service: { id: service.id, name: service.name, durationMinutes: service.durationMinutes },
-    slots: slots.map((s) =&gt; ({
-      dentistId: s.dentistId,
-      startsAt: s.startsAt.toISOString(),
-      endsAt: s.endsAt.toISOString(),
-      label: formatClinicTime(s.startsAt), // 診所當地時間字串，前端不必知道時區
-    })),
-  });
+const slots = availableSlots({
+  workingHours: hours,
+  busy,
+  durationMinutes: service.durationMinutes,
+  from,
+  to,
+  now: new Date(),
 });</code></pre>
 
-<p>做了什麼：驗證查詢參數、確認服務存在且啟用、透過 <code>dentist_services</code> 找出會做這個療程的醫師，再把他們的資料餵進引擎。預期看到什麼：回應裡每個時段都帶著 <code>dentistId</code>（因為手機流程是先選時間、之後才需要知道醫師），以及一個已經格式化的 <code>label</code>。</p>
+<p>查詢參數由 Zod schema（<code>availabilityQuerySchema</code>）驗證，其中 <code>from</code> 與 <code>to</code> 都必須是 <code>YYYY-MM-DD</code>。醫師清單是透過 <code>dentist_services</code> 連接 <code>dentists</code> 過濾出來的，只留 <code>isActive</code> 的醫師。</p>
 
-<p>那個 <code>label</code> 是刻意的：時區換算只發生在後端，前端拿到的就是診所當地的「09:00 AM」。手機完全不需要知道 <code>CLINIC_TZ</code> 是什麼，也就不可能用裝置時區把診所時間算到別的一天。</p>
+<p>拿到 <code>slots</code> 之後，端點會把每個時段轉成 API 回應：<code>dentistId</code>、<code>startsAt</code>、<code>endsAt</code>，以及一個 <code>label</code>。那個 <code>label</code> 是用 <code>formatClinicTime</code> 算出來的診所當地時間字串，讓手機 app 直接顯示、不必自己處理時區。</p>
 
-<p>如果沒有任何醫師提供這個服務，直接回空陣列，而不是丟錯。空時段在 UI 上是「這個日期沒有可約時段」，是很正常的一種狀態。</p>
+<h2>第三步：寫入端點重跑同一套判斷</h2>
 
-<h2>步驟三：寫入前，重跑同一套判準</h2>
+<p>現在看寫入。這一步是整個接線的核心。端點收到病人選的時間後，並不直接相信它。</p>
 
-<p>這一步是整節的核心。病人送出預約時，你不能只相信他送來的時間，因為客戶端可以捏造時間——就算它平常只是把手機拿到的 <code>startsAt</code> 原封不動傳回來。要在寫入前，用同一套規則再判一次：</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/api/appointments/route.ts"><code>const startsAt = new Date(body.startsAt);
+const endsAt = new Date(startsAt.getTime() + service.durationMinutes * 60_000);
 
-<pre><code>export async function assertSlotBookable({
-  dentistId, serviceId, durationMinutes, startsAt, excludeAppointmentId,
-}: { /* ... */ }): Promise&lt;void&gt; {
+// The client never gets to invent a time: this re-runs the same engine that
+// produced the slot list and rejects anything it would not have offered.
+await assertSlotBookable({
+  dentistId: dentist.id,
+  serviceId: service.id,
+  durationMinutes: service.durationMinutes,
+  startsAt,
+});
+
+try {
+  const [created] = await db
+    .insert(appointments)
+    .values({
+      patientId: patient.id,
+      dentistId: dentist.id,
+      serviceId: service.id,
+      startsAt,
+      endsAt,
+    })
+    .returning();</code></pre>
+
+<p>有兩個關鍵動作。第一，<code>endsAt</code> 是伺服器自己算的：從 <code>startsAt</code> 加上服務的 <code>durationMinutes</code>。<code>createAppointmentSchema</code> 裡病人只送 <code>startsAt</code>，<strong>從來不送時長</strong>。如果讓前端送時長，壞心的人就能送一個很短的長度，把預約擠進原本放不下的空檔。</p>
+
+<p>第二，寫入前呼叫 <code>assertSlotBookable</code>。這個名字叫「斷言」的函式就是寫入守衛，它會重跑讀取端點用的同一套引擎；只要這個時間不是讀取端點會給出的時段，就直接擋下。註解把意圖寫得很清楚：「the client never gets to invent a time」。</p>
+
+<h2>第四步：寫入守衛檢查什麼</h2>
+
+<p>把守衛展開來看。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/booking.ts"><code>export async function assertSlotBookable({
+  dentistId,
+  serviceId,
+  durationMinutes,
+  startsAt,
+  excludeAppointmentId,
+}: {
+  dentistId: string;
+  serviceId: string;
+  durationMinutes: number;
+  startsAt: Date;
+  excludeAppointmentId?: string;
+}): Promise&lt;void&gt; {
   if (Number.isNaN(startsAt.getTime())) throw badRequest('Invalid appointment time');
 
-  const [offers] = await db.select().from(dentistServices)
-    .where(and(
-      eq(dentistServices.dentistId, dentistId),
-      eq(dentistServices.serviceId, serviceId)
-    ));
+  const [offers] = await db
+    .select()
+    .from(dentistServices)
+    .where(
+      and(eq(dentistServices.dentistId, dentistId), eq(dentistServices.serviceId, serviceId))
+    );
   if (!offers) throw badRequest('That dentist does not offer this service.');
 
   const day = clinicDayOf(startsAt);
@@ -151,7 +209,12 @@
   });
 
   const verdict = classifySlot({
-    workingHours: hours, busy, durationMinutes, dentistId, startsAt, now: new Date(),
+    workingHours: hours,
+    busy,
+    durationMinutes,
+    dentistId,
+    startsAt,
+    now: new Date(),
   });
 
   if (verdict === 'taken') {
@@ -162,76 +225,67 @@
   }
 }</code></pre>
 
-<p>做了什麼：先擋掉無效日期，再確認這位醫師真的做這個服務，然後用 <code>clinicDayOf</code> 把瞬間轉回診所日曆日，重新載入輸入並呼叫 <code>classifySlot</code>。預期看到什麼：只有 <code>'ok'</code> 會讓流程繼續，<code>'taken'</code> 丟 409、<code>'invalid'</code> 丟 400。</p>
+<p>它依序做四件事：先排除不合法的時間字串；再確認這位醫師確實提供這項服務（<code>dentist_services</code> 查不到就擋）；接著載入這位醫師當天的排班輸入；最後把判斷交給 <code>classifySlot</code>，並依判決轉成不同的錯誤。</p>
 
-<p>為什麼 <code>classifySlot</code> 要把 <code>'taken'</code> 和 <code>'invalid'</code> 分開？因為對病人來說，這兩件事的意義完全不同。<code>'taken'</code> 是一格「真的存在、但剛剛被別人搶走」的時段，值得回一句「剛剛被約走，換一個」；<code>'invalid'</code> 則是「這根本不是時段」——凌晨三點、不在十五分鐘格線上、落在前置期內，或是醫師不做的服務，這些都該回 400，而不是讓病人以為是別人搶走的。</p>
+<h3>判決分三種，因為病人的感受不同</h3>
 
-<p>還有一個實作上的小細節：<code>classifySlot</code> 判斷 <code>'taken'</code> 的方式，是先用完整忙碌清單算一次、再用空忙碌清單算一次。若第一次沒有、第二次有，代表它本來是合法時段，只是被佔用了。同一個純函式既能回答「可不可以」，也能分辨「為什麼不行」。</p>
+<p><code>classifySlot</code> 是讀與寫真正共用的那顆大腦。它會回傳三種判決：<code>ok</code>、<code>taken</code>、<code>invalid</code>。</p>
 
-<h2>步驟四：POST /api/appointments 真的寫入</h2>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/scheduling.ts"><code>export type SlotVerdict = 'ok' | 'taken' | 'invalid';
 
-<pre><code>export const POST = route(async (req: Request) =&gt; {
-  const user = await requireAuth();
-  const body = createAppointmentSchema.parse(await req.json());
-  const patient = await requireOwnedPatient(user, body.patientId);
+export function classifySlot({
+  workingHours,
+  busy,
+  durationMinutes,
+  dentistId,
+  startsAt,
+  now,
+}: {
+  workingHours: WorkingHour[];
+  busy: BusyInterval[];
+  durationMinutes: number;
+  dentistId: string;
+  startsAt: Date;
+  now: Date;
+}): SlotVerdict {
+  const day = clinicDayOfInstant(startsAt);
+  const matches = (slots: Slot[]) =&gt;
+    slots.some((s) =&gt; s.dentistId === dentistId &amp;&amp; s.startsAt.getTime() === startsAt.getTime());
 
-  const [service] = await db.select().from(services).where(eq(services.id, body.serviceId));
-  if (!service || !service.isActive) throw notFound('Service not found');
+  const input = { workingHours, durationMinutes, from: day, to: day, now };
 
-  const [dentist] = await db.select().from(dentists)
-    .where(and(eq(dentists.id, body.dentistId), eq(dentists.isActive, true)));
-  if (!dentist) throw notFound('Dentist not found');
+  if (matches(availableSlots({ ...input, busy }))) return 'ok';
+  // Real slot, just occupied — worth a different message than "not a slot".
+  if (matches(availableSlots({ ...input, busy: [] }))) return 'taken';
+  return 'invalid';
+}</code></pre>
 
-  const startsAt = new Date(body.startsAt);
-  const endsAt = new Date(startsAt.getTime() + service.durationMinutes * 60_000);
+<p>它的作法很聰明：把病人送來的時間當成「只有一天」的查詢，丟進同一個 <code>availableSlots</code>，看它會不會出現在結果裡。第一次用真實的忙碌區間算：如果這個時間在結果裡，代表它是合法的、而且當下有空，判為 <code>ok</code>。第二次刻意把忙碌區間清空再算：如果這次出現了、但第一次沒有，代表這個時間本來是個合法時段，只是剛好被佔走，判為 <code>taken</code>。兩次都沒有，代表它從頭到尾就不該存在（凌晨三點、不在 15 分鐘級距上、太接近現在），判為 <code>invalid</code>。</p>
 
-  // 重跑同一套引擎：客戶端不能自己發明一個時間。
-  await assertSlotBookable({
-    dentistId: dentist.id, serviceId: service.id,
-    durationMinutes: service.durationMinutes, startsAt,
-  });
+<p>為什麼要分開？因為對病人來說這兩種失敗的意義完全不同。<code>taken</code> 是「有人比你快一步」，應該回一個 409，請他改選別的時段；<code>invalid</code> 是「這個時間本來就不存在」，應該回 400，告訴他這不是系統提供的選項。守衛依判決分別丟出 <code>conflict(...)</code> 與 <code>badRequest(...)</code>。</p>
 
-  try {
-    const [created] = await db.insert(appointments).values({
-      patientId: patient.id, dentistId: dentist.id, serviceId: service.id,
-      startsAt, endsAt,
-    }).returning();
-    // ... teleconsult 時由伺服器推導 streamCallId
-    return json({ appointment: serialize({ /* ... */ }) }, 201);
-  } catch (err) {
-    if (isExclusionViolation(err)) {
-      throw conflict('That time was just taken. Please pick another.', 'slot_taken');
-    }
-    throw err;
+<h3>還有最後一道防線</h3>
+
+<p>寫入端點在 <code>insert</code> 外面包了一層 <code>try/catch</code>，攔截資料庫丟出的排除約束違反。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/api/appointments/route.ts"><code>} catch (err) {
+  if (isExclusionViolation(err)) {
+    throw conflict('That time was just taken. Please pick another.', 'slot_taken');
   }
-});</code></pre>
+  throw err;
+}</code></pre>
 
-<p>做了什麼：授權、驗證、確認病人屬於這位使用者、確認服務與醫師有效，然後由伺服器用服務時長算出 <code>endsAt</code>，呼叫守衛，最後才 insert。預期看到什麼：成功時回 201 與完整預約；資料庫發生排除約束違反時，回一個乾淨的 409。</p>
+<p>守衛擋得住「不該存在的時間」，卻擋不住「兩個請求在同一瞬間都通過檢查」。那個更細緻的競態，要交給第五步的資料庫約束來處理，這裡先把違反轉成乾淨的 409。</p>
 
-<p>兩個地方要特別注意。第一，<code>endsAt</code> 由伺服器算，前端只送 <code>startsAt</code>；否則前端就能偷偷拉長療程，佔用不屬於它的時間。第二，<code>insert</code> 包在 <code>try/catch</code> 裡，並用 <code>isExclusionViolation</code> 認出 Postgres 的 23P01 錯誤——這是下一步要談的資料庫防線，現在只要先把接點留好。</p>
-
-<h2>步驟五：改期時排除自己</h2>
-
-<p>改期（reschedule）走的是另一條路徑，但守衛是一樣的，只多傳一個參數：</p>
-
-<pre><code>await assertSlotBookable({
-  dentistId, serviceId, durationMinutes, startsAt,
-  excludeAppointmentId: appointment.id, // 不要被自己擋住
-});</code></pre>
-
-<p>少了這一行，當你把一筆 14:00 的預約改到 14:30，載入忙碌區間時會把自己也算進去，於是「14:00 已被佔用」，改期莫名其妙失敗。把目前這筆預約排除，它才能被移動到新時間。</p>
-
-<h2>做完長什麼樣</h2>
-
-<p>接線完成後，你應該能驗證這幾件事：<code>GET /api/availability</code> 列出的時段，拿同一個 <code>startsAt</code> 去 <code>POST /api/appointments</code> 會成功；捏造凌晨三點、09:07（不在格線上）、或明天早上九點（落在兩小時前置期內）會被回 400；兩個人搶同一個時段，先到的成功、後到的收到 409 與 <code>slot_taken</code>。</p>
-
-<p>最重要的是，讀與寫現在共用同一份 <code>loadSchedulingInputs</code> 與同一個 <code>classifySlot</code>。只要有人改了規則，兩條路徑會一起改，不可能分岔。至於那個 409 為什麼會從「兩個地方」冒出來、以及資料庫到底怎麼仲裁競態，留給下一步的取捨。</p>
-
-<h2>小結</h2>
+<h2>小結：做完之後，你應該得到什麼？</h2>
 
 <blockquote>
-先寫一個共用的 <code>loadSchedulingInputs</code>，把工作時段、已約門診與請假撈成引擎要的輸入（改期時排除自己）。<code>GET /api/availability</code> 用它加 <code>availableSlots</code> 列出時段，並回傳診所當地時間的 label；<code>POST /api/appointments</code> 在寫入前用 <code>assertSlotBookable</code> 重跑同一套判準，把 <code>'taken'</code> 轉成 409、<code>'invalid'</code> 轉成 400。endsAt 一律由伺服器算，前端不能自己送。
+讀與寫現在共用同一份 <code>loadSchedulingInputs</code> 與同一個 <code>classifySlot</code>。<code>GET /api/availability</code> 把資料庫載成引擎輸入、算出時段；<code>POST /api/appointments</code> 在寫入前重跑同一套引擎，只接受讀取端點會提供的時間，並把 <code>taken</code> 轉成 409、<code>invalid</code> 轉成 400。因為時長由伺服器推導、時間由引擎驗證，使用者無法自己捏造一個預約。
 </blockquote>
+
+<p>課後你可以自己驗證：用一個不在 15 分鐘級距上的時間送出 <code>POST</code>，應該拿到 400；用一個合法但已被預約的時間，應該拿到 409。原理層面的純函式與測試留給第三步，資料庫層面的仲裁在下一步。</p>
+
+<p>下一節要處理最後一個、也最現實的漏洞：當兩個請求真的在同一瞬間通過守衛時，誰來決定誰贏？</p>
 
 <div class="lesson-nav">
   <div><a href="./pure-slot-engine.html">← 上一步：純函式排班引擎：從 working hours 算出可預約時段</a></div>
@@ -240,46 +294,46 @@
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="為什麼讀時段與寫預約要共用 loadSchedulingInputs？" data-correct="1" data-explain="共用同一份輸入與判準，API 提供的時段與它接受的時段才不會分岔。">
-  <button class="opt">因為可以讓資料庫的查詢次數減半</button>
-  <button class="opt">因為兩者要用同一套輸入與判準</button>
-  <button class="opt">因為前端只能呼叫一個 API 端點</button>
-  <button class="opt">因為 Postgres 不允許重複的查詢</button>
+<div class="quiz" data-question="為什麼讀取與寫入要共用 loadSchedulingInputs？" data-correct="2" data-explain="共用同一份載入器，API 提供什麼與 API 接受什麼就不會各自漂移。">
+  <button class="opt">因為這樣可以少寫一個 Zod schema</button>
+  <button class="opt">因為資料庫規定只能有一個查詢</button>
+  <button class="opt">讓提供的與接受的不會各自漂移</button>
+  <button class="opt">讓預約可以跳過前端直接寫入</button>
 </div>
 
-<div class="quiz" data-question="availability 回傳的每個時段為什麼都附帶 label？" data-correct="2" data-explain="後端先換算好診所當地時間字串，前端就不必知道 CLINIC_TZ，也無法用裝置時區算錯。">
-  <button class="opt">因為資料庫的時區設定常常出錯</button>
-  <button class="opt">因為前端需要自行換算成當地時間</button>
-  <button class="opt">因為前端不必也不該知道診所時區</button>
-  <button class="opt">因為 ISO 字串無法表示上午下午</button>
+<div class="quiz" data-question="createAppointmentSchema 為什麼不讓前端送結束時間或時長？" data-correct="0" data-explain="時長由服務決定、由伺服器推導，避免前端送短時長硬塞進空檔。">
+  <button class="opt">避免前端用假時長硬塞進空檔</button>
+  <button class="opt">因為資料庫欄位不接受時長</button>
+  <button class="opt">因為 Zod 無法驗證數字欄位</button>
+  <button class="opt">因為服務時長每天都會改變</button>
 </div>
 
-<div class="quiz" data-question="assertSlotBookable 為什麼要重跑一次排班引擎？" data-correct="3" data-explain="客戶端可以捏造時間，而資料庫排除約束只擋重疊，擋不了 3am、非格線或前置期內。">
-  <button class="opt">因為可以讓寫入的速度顯著變快</button>
-  <button class="opt">因為讀取時算出來的結果會過期</button>
-  <button class="opt">因為資料庫不允許直接寫入時間</button>
-  <button class="opt">因為客戶端可能自己捏造時間</button>
+<div class="quiz" data-question="classifySlot 第二次用 busy: [] 重算，是為了分辨什麼？" data-correct="1" data-explain="第一次沒有、清空忙碌後出現，代表是合法時段但被佔走，即 taken。">
+  <button class="opt">分辨醫師今天有沒有上班</button>
+  <button class="opt">分辨被佔走與根本不存在的時間</button>
+  <button class="opt">分辨前端與後端的時區是否一致</button>
+  <button class="opt">分辨服務是否屬於遠距視訊</button>
 </div>
 
-<div class="quiz" data-question="classifySlot 為什麼要把 taken 與 invalid 分成兩種結果？" data-correct="0" data-explain="兩者對病人意義不同：taken 是真實時段被搶走（409），invalid 根本不是時段（400）。">
-  <button class="opt">因為兩種情況該給不同的狀態碼</button>
-  <button class="opt">因為一種要重算時區另一種不用</button>
-  <button class="opt">因為 taken 需要寫入 invalid 不用</button>
-  <button class="opt">因為 invalid 一定發生在週末</button>
+<div class="quiz" data-question="寫入守衛判定 invalid 時，應該回哪一種狀態碼？" data-correct="3" data-explain="invalid 代表這個時間本來就不存在，屬於請求錯誤，回 400。">
+  <button class="opt">201，因為預約已經被建立</button>
+  <button class="opt">404，因為找不到這個醫師</button>
+  <button class="opt">409，因為時間已經被別人搶走</button>
+  <button class="opt">400，因為這個時間本不存在</button>
 </div>
 
-<div class="quiz" data-question="POST 預約時為什麼 endsAt 由伺服器算，不接受前端傳？" data-correct="2" data-explain="若前端能自訂結束時間，就能偷偷拉長療程、佔用不屬於它的時段。">
-  <button class="opt">因為前端算不出毫秒的加減</button>
-  <button class="opt">因為資料庫不接受時間戳記</button>
-  <button class="opt">因為前端可能偷改療程佔用長度</button>
-  <button class="opt">因為服務目錄只存在後端快取</button>
+<div class="quiz" data-question="loadSchedulingInputs 為什麼把查詢範圍左右各放寬一天？" data-correct="1" data-explain="避免漏掉跨過午夜、另一端落在查詢範圍外的忙碌區間。">
+  <button class="opt">讓 Promise.all 可以同時發三個查詢</button>
+  <button class="opt">避免漏掉跨過午夜的忙碌區間</button>
+  <button class="opt">讓工作時段的星期判斷更精準</button>
+  <button class="opt">避免 service 的時長被重複計算</button>
 </div>
 
-<div class="quiz" data-question="改期時傳 excludeAppointmentId 的目的是什麼？" data-correct="1" data-explain="把目前這筆預約排除在忙碌清單外，它才不會擋住自己要被移過去的新時間。">
-  <button class="opt">讓被改期的預約自動變成取消狀態</button>
-  <button class="opt">讓這筆預約不會擋住自己的新時間</button>
-  <button class="opt">讓其他病人的預約一併被重新排</button>
-  <button class="opt">讓舊時間可以立刻被別人預約</button>
+<div class="quiz" data-question="assertSlotBookable 會先確認哪一件事？" data-correct="2" data-explain="它會先查 dentist_services，確認這位醫師確實提供這項服務。">
+  <button class="opt">確認病人有沒有欠費紀錄</button>
+  <button class="opt">確認診所當天是否為假日</button>
+  <button class="opt">確認醫師確實提供這項服務</button>
+  <button class="opt">確認通話用的 Stream 頻道存在</button>
 </div>
 
 <div class="footer">

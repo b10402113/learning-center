@@ -11,71 +11,110 @@
 <h1>Agent tracing：看得見 AI 功能的成本與延遲</h1>
 <p class="meta">Step 4/5 · 觀測深化：Logs / Tracing / Agent Tracing</p>
 
+<h2>前言：AI 功能最貴、最慢的那一段，錯誤列表看不到</h2>
+
+<p>上一節你把敏感資料擋在邊界內，現在可以放心地問下一個問題：你的 app 開始呼叫 AI 了，但你知道它到底表現如何嗎？一則「助理回覆」在使用者眼裡只是幾秒鐘的等待，對你來說卻是一連串成本與效能的決定：這次用了哪個模型、吃掉多少 token、花了多少錢、等了幾秒、有沒有呼叫工具、回覆過程中有沒有出錯。</p>
+
+<p>這些疑問，錯誤列表一題都答不了。因為 AI 功能最貴、最慢、最容易失控的那一段，通常不是「壞掉」，而是「勉強能跑但代價很高」。使用者不會回報「這次回答貴了三倍」，但月底的帳單會。這一節要講的 agent tracing，就是把這一整段從黑箱變成看得見的數字。</p>
+
 <h2>學習目標</h2>
-<p>學完這一節，你能解釋 Sentry 的 agent tracing 捕捉哪些東西——token 用量、延遲、工具呼叫、錯誤率、使用者輸入——以及它為什麼要用獨立的 Next.js Sentry 專案、又要關掉哪些資料收集，才不會把病歷一起送出去。</p>
 
-<h2>前言：AI 沒出錯，但帳單和等待時間悄悄失控</h2>
+<p>學完後，你應該能說明 agent tracing 追蹤哪些指標（token、成本、延遲、工具呼叫、錯誤率），為什麼 AI 功能要用獨立的 Sentry 專案來接，以及怎麼在保留這些指標的同時，把病歷內容擋在 gen_ai span 之外。</p>
 
-<p>上一節處理完敏感資料的去識別化，我們終於可以放心把觀測延伸到 AI 功能。這裡有個新的盲點：傳統的錯誤監控只在你「失敗」時才出聲，可是 AI 功能最常見的問題不是失敗，而是「成功，但很慢、很貴」。使用者按了助理，等了八秒才開始回話；某一天 OpenAI 的費用突然翻倍，你卻不知道是哪個功能、哪個模型造成的。</p>
+<h2>Agent tracing 到底在追什麼</h2>
 
-<p>一般的 tracing 能告訴你「這趟請求花了幾秒」，但它看不見 AI 特有的東西：這次用了多少 token、呼叫了哪個模型、有沒有動用工具、輸入被餵了什麼。要回答「AI 為什麼貴、為什麼慢」，你需要的是專門為 AI 設計的觀測，也就是這一節的主角：agent tracing。</p>
-
-<h2>AI 功能需要另一種儀表板</h2>
-
-<p>先把 agent tracing 和前面學過的 tracing 分開。一般 tracing 的對象是「一段程式執行」，例如一個 API 請求，它把時間拆成 span，讓你看見哪一段慢。agent tracing 的對象則是「一次 AI 代理的運作」，它除了時間，還加上了模型與代理相關的維度。兩者能接在同一條時間軸上，但關注的指標不同。</p>
-
-<p>為什麼需要多這層？因為 AI 呼叫有幾個一般 tracing 量不到的成本來源。第一是 token：同一個功能，提示詞寫得囉唆一點，成本可能差好幾倍。第二是模型選擇：換一個模型，延遲與單價都會變。第三是工具呼叫：代理如果中途去查了資料庫、呼叫了外部 API，這些步驟會拉長整體時間。第四是使用者輸入：什麼樣的問題會讓代理繞遠路。這些都是「成功路徑」上的問題，錯誤列表看不到，只有 agent tracing 看得見。</p>
-
-<h2>Agent tracing 實際上捕捉什麼</h2>
-
-<p>接上之後，Sentry 的 AI agents 總覽會把這些維度攤開。它捕捉的核心指標包括：</p>
+<p>Agent tracing 是 Sentry 針對 AI 功能設計的一種觀測。它把每一次 LLM 呼叫變成一條 span，並在 span 上掛一組數字。你在 Dashboard 上看到的，大致是這幾類：</p>
 
 <table>
 <thead>
-<tr><th>指標</th><th>回答的問題</th></tr>
+<tr><th>指標</th><th>看什麼</th><th>拿來回答什麼問題</th></tr>
 </thead>
 <tbody>
-<tr><td>Token 用量</td><td>這次對話花了多少輸入與輸出的 token</td></tr>
-<tr><td>延遲</td><td>從送出請求到模型回完，總共等了多久</td></tr>
-<tr><td>工具呼叫</td><td>代理中途動用了哪些工具、次數多少</td></tr>
-<tr><td>錯誤率</td><td>AI 相關的請求有多少比例失敗</td></tr>
-<tr><td>使用者輸入</td><td>使用者問了什麼類型的問題（在去識別化前提下）</td></tr>
+<tr><td>Token 用量</td><td>prompt 與 completion 各用了多少 token</td><td>這段 prompt 是不是越長越肥</td></tr>
+<tr><td>成本</td><td>依模型單價換算的每次花費</td><td>哪個功能在燒錢</td></tr>
+<tr><td>延遲</td><td>從送出到完成的毫秒數</td><td>使用者為什麼等了那麼久</td></tr>
+<tr><td>模型</td><td>這次呼叫的是哪個模型</td><td>不同模型的用量與表現如何分布</td></tr>
+<tr><td>工具呼叫</td><td>模型有沒有觸發工具、呼叫了哪些</td><td>助理的行為是否符合預期</td></tr>
+<tr><td>錯誤率</td><td>模型呼叫失敗的比例</td><td>供應商是不是在鬧脾氣</td></tr>
 </tbody>
 </table>
 
-<p>在總覽頁面上，這些會聚合成跑次數、成本、執行時間、各模型的 LLM 呼叫次數與 token 數量。你可以把它想成 AI 功能的「油耗表」：不是告訴你車子有沒有拋錨，而是告訴你每一趟開下來花了多少油、塞在哪一段路。當你調整整段提示詞或換模型時，這張表就是你判斷划不划算的依據。</p>
+<p>把這些數字放在一起，還能回答一個更高階的問題：這條 AI 功能值不值得留？當你看到某個捷徑回答平均要三秒、每次兩分錢，而使用者其實很少用，這個資訊會直接影響你的產品決策。Agent tracing 的定位就在這裡：它不是除錯工具，而是 AI 功能的成本與效能儀表板。</p>
 
 <h2>為什麼要另開一個 Sentry 專案</h2>
 
-<p>這個 app 是 monorepo：行動端在 Expo，AI 的 API route 在 Next.js 的網頁專案裡。當你把 agent tracing 接進 AI 功能，追蹤的對象其實跑在伺服器端，而不是手機上。因此做法是：在同一個 Sentry 組織底下，另外建立一個 Next.js 平台的專案，取得它自己的 DSN，再把設定補齊。</p>
+<p>Dentify 的做法是為 agent tracing 建立一個獨立的 Sentry 專案，平台選 Next.js。原因是架構決定的：AI 的 API route 跑在 Next.js 的 web 專案裡，而不是 mobile app 裡。mobile 的錯誤、session replay 由 mobile 專案收；AI 的 token、成本與 gen_ai span 由 web 專案收。分成兩個專案，兩邊的資料不會互相稀釋，各自的取樣與額度也能分開控制。</p>
 
-<p>多專案的結構反映的是架構的事實：行動端與網頁端是兩套部署、兩種執行環境。好處是各自的錯誤、log、trace 不會混在一起，你可以針對「網頁後端」單獨看 AI 的成本與延遲。這也是為什麼前面在 Explore Logs 時要不斷提醒「先選對專案」——專案就是觀測的邊界。</p>
+<p>要讓這條線成立，前提是伺服器端的 tracing 是開著的。設定檔裡有一行註解說得很明白：agent tracing 是搭在 tracing 之上的，所以 <code>tracesSampleRate</code> 必須大於 0，否則 span 根本不會產生。</p>
 
-<h2>去識別化的 context：追得到，但看不到內容</h2>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/sentry.server.config.ts">  // ponytail: every transaction is sampled. Fine at this traffic — drop it to
+  // ~0.1 (or a tracesSampler that keeps gen_ai traces at 1.0) once there is
+  // real load. Agent tracing rides on tracing, so this must stay &gt; 0.
+  tracesSampleRate: 1.0,</pre>
 
-<p>agent tracing 最有價值的矛盾在這裡：你希望追蹤一次對話的完整足跡，卻不希望在雲端留下任何病歷。解法是把「身分」與「內容」拆開。身分用 id 表示，內容則整類關閉。</p>
+<h2>怎麼接：包住 OpenAI client，再綁上對話與使用者</h2>
 
-<p>在 AI route 裡，典型做法是先設定使用者與對話，再把 OpenAI 客戶端包起來讓它自動產生 span。使用者只帶 id，不帶姓名或 email；對話用一個 <code>conversationId</code> 標記，讓同一次對話的多輪請求能被串在一起。示意如下：</p>
+<p>接線的動作只有兩步。第一步是在呼叫模型前，把使用者和對話標上。使用者只放 id，因為 email 也是一種識別碼，分組用一個穩定值就夠；對話則用 <code>setConversationId</code> 綁定。這個 id 同時也是 thread id，所以同一條對話在不同時間、不同請求進來的每一輪，都會落在同一個 Sentry conversation 裡，而不是散成好幾條孤立的 trace。</p>
 
-<pre><code>Sentry.setUser({ id: userId });            // 只留 id，不帶姓名或 email
-Sentry.setConversationId(conversationId);  // 把同一次對話的多輪請求串起來
-instrumentOpenAiClient(openai);            // 讓 OpenAI 呼叫自動產生 span</code></pre>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/api/ai/chat/route.ts">  // Agent tracing. Both are scoped to this request, and both have to be set
+  // before the model call below or the span is orphaned.
+  //
+  // The thread id doubles as the conversation id, so every turn of one chat
+  // lands in a single Sentry conversation across separate requests and traces.
+  // The user is id-only on purpose: a patient's email is an identifier, and
+  // the User column only needs something stable to group by.
+  Sentry.setUser({ id: user.id });
+  Sentry.setConversationId(conversation.id);</pre>
 
-<p>接著在伺服器端的收集設定裡，把生成式 AI 的輸入與輸出整類關閉。這樣一來，你在總覽上仍然看得到「這次對話花了多少 token、等了幾秒、有沒有出錯」，但看不到對話的實際文字。搭配前面的 <code>dataCollection</code> 設定——關閉 AI 輸入輸出、資料庫查詢內容與堆疊變數——病歷就不會被夾帶進 trace。YouTube 上的示範就是這個組合：追得到足跡，但看不到內容。</p>
+<p>第二步是讓 Sentry 包住 OpenAI 的 client，並用它來發請求。真正的 span 是這個 wrapper 產生的，所以如果你直接 <code>new OpenAI()</code> 而不經過 <code>instrumentOpenAiClient</code>，模型照樣會回話，但你不會得到 token 與成本。另外，串流回覆要記得加上 <code>stream_options: { include_usage: true }</code>，因為 OpenAI 預設不會在串流結果裡附上 token 數量，沒有這個選項，gen_ai span 就沒有用量、也就沒有成本估算。</p>
 
-<h2>這張儀表板能回答什麼</h2>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/api/ai/chat/route.ts">  // The wrapper is what produces the gen_ai span — model, tokens, cost and
+  // latency. Not the prompt or the reply; see the PHI note at the top.
+  //
+  // ponytail: `openai@7` is past the range Sentry documents as supported
+  // (&gt;=4 &lt;7); the wrapper only touches `chat.completions.create`, which has
+  // not changed, and spans were verified landing. Recheck on an openai major.
+  const openai = Sentry.instrumentOpenAiClient(
+    new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  );
+  const completion = await openai.chat.completions.create({
+    model: AI_MODEL,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...history.map((m) => ({ role: m.role, content: m.content }) as const),
+    ],
+    max_tokens: 400,
+    temperature: 0.3,
+    stream: true,
+    // OpenAI omits token counts from streamed responses unless asked. Without
+    // this the gen_ai span has no usage, and so no cost estimate.
+    stream_options: { include_usage: true },
+  });</pre>
 
-<p>接好之後，最實用的幾種問法包括：哪一個模型在這條路徑上最慢；過去一週的成本趨勢是不是在漲；某一批對話為什麼錯誤率偏高；代理是不是常常繞去呼叫工具。這些問題都不是「有沒有壞」，而是「好不好、貴不貴、慢不慢」，正好補上錯誤監控的空白。</p>
+<h2>保護病歷：留下指標，關掉內容</h2>
 
-<p>值得一提的是，agent tracing 的資料本身沒有內容，所以你不需要為了除錯而在 trace 裡看病人說了什麼。當你懷疑是提示詞或資料造成的問題，會改用 log 的 id 與計數去對照，而不是把原文撈回來。觀測與隱私在這裡不是互相妥協，而是靠「指標歸指標、內容歸內容」分工。</p>
+<p>這裡有一個張力：agent tracing 預設會擷取 prompt 與回覆，讓你在 Dashboard 上重播整段對話。但在醫療情境裡，病人自己打的症狀描述正是最敏感的內容。Sentry 的 Conversations 檢視就是靠這些輸入輸出重建出來的，如果照預設開著，等於把病歷整段送上雲端。</p>
+
+<p>解法是把 <code>genAI</code> 的 inputs 與 outputs 關掉。關掉之後，你仍然拿得到 token、成本、延遲、模型與錯誤，只是 span 上不帶 prompt 與回覆；Conversations 還是能列出這條對話與它的輪次，但不會重播任何訊息內容。也就是說，指標全數保留，內容一個字都不進去。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/sentry.server.config.ts">    genAI: { inputs: false, outputs: false },</pre>
+
+<p>route 檔開頭的註解把這個取捨講得最清楚：那段自由文字不會進 Sentry，但 token、成本、延遲、模型與錯誤都會留下；只有當你確定跑的是假病人時，才可以考慮把兩個開關打開。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/api/ai/chat/route.ts"> * That same free text does NOT go to Sentry: `genAI: { inputs: false, outputs:
+ * false }` in sentry.server.config.ts keeps the prompt and the reply off the
+ * gen_ai span, so Conversations lists the thread and its turns but replays no
+ * message content. Tokens, cost, latency, model and errors all survive that.
+ * Flip the two flags to true only if PLAN.md A15 (seeded fake patients) is
+ * still what is running — a real patient's symptoms are PHI.</pre>
 
 <h2>小結</h2>
 
 <blockquote>
-<p>AI 功能的典型問題是「成功但很慢、很貴」，錯誤監控看不到，要用 agent tracing。它捕捉 token 用量、延遲、工具呼叫、錯誤率與使用者輸入，並在 AI agents 總覽上聚合成成本、執行時間與各模型的呼叫次數。因為 AI 跑在 Next.js 網頁專案，所以要另開一個 Sentry 專案與 DSN，形成行動端加網頁端的多專案結構。最重要的是把身分與內容拆開：用 id 當使用者、用 conversationId 串對話、包住 OpenAI 客戶端產生 span，同時把生成式 AI 的輸入輸出整類關閉，讓病歷留在系統裡，只把可追蹤的骨架送上雲端。</p>
+<p>Agent tracing 把每一次 AI 呼叫變成帶數字的 gen_ai span：token 用量、成本、延遲、模型、工具呼叫與錯誤率。它用在 Next.js 專案，因為 AI 的 API route 跑在 web 端，所以另開一個 Sentry 專案接住這些資料，而且 <code>tracesSampleRate</code> 必須大於 0 才會有 span。接法是呼叫前先 <code>setUser</code>（只放 id）與 <code>setConversationId</code>，再用 <code>instrumentOpenAiClient</code> 包住 client，串流時加上 <code>include_usage</code>。最關鍵的取捨是把 <code>genAI</code> 的 inputs / outputs 關掉，指標全留、內容不進，讓 AI 功能看得見成本，又不讓病歷外流。</p>
 </blockquote>
 
-<p>到這裡，你已經能看見錯誤、查到 log、追蹤 AI 的成本與延遲。但這些都是「應用程式內部」的視角。使用者真正感受到的，往往是另一回事：在他那台舊手機、在那個訊號很差的地鐵上，app 到底開得夠不夠快？下一節要把視角拉到真實使用者，看 Expo Observe 怎麼量這件事。</p>
+<p>到這裡，你已經能在錯誤、事件、效能與 AI 成本四個層面看見 app 的內部狀態。但這些全部都是「應用程式自己回報的數字」。最後還有一塊拼圖：真實使用者在數千台不同裝置上，實際感受到的啟動與載入速度。下一節要講的 Expo Observe，處理的正是這件應用程式無法自己回答的事。</p>
 
 <div class="lesson-nav">
   <div><a href="./scrub-before-send.html">← 上一步：敏感資料該在哪一層被擋下</a></div>
@@ -84,46 +123,46 @@ instrumentOpenAiClient(openai);            // 讓 OpenAI 呼叫自動產生 span
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="AI 功能最常見、但傳統錯誤監控看不到的問題是什麼？" data-correct="2" data-explain="AI 多半不是失敗，而是成功卻很慢、很貴，需要另一種指標才看得見。">
-  <button class="opt">應用程式在啟動時直接閃退</button>
-  <button class="opt">使用者的登入憑證被伺服器拒絕</button>
-  <button class="opt">請求成功但延遲很長、成本很高</button>
-  <button class="opt">資料庫連線字串忘記設定而中斷</button>
+<div class="quiz" data-question="下列哪一項不是 agent tracing 主要追蹤的指標？" data-correct="3" data-explain="agent tracing 追 token、成本、延遲、模型與錯誤率，不追使用者的帳單地址。">
+  <button class="opt">token 用量與換算後的成本</button>
+  <button class="opt">每次呼叫的延遲毫秒數</button>
+  <button class="opt">模型種類與錯誤率</button>
+  <button class="opt">使用者的帳單收件地址</button>
 </div>
-<div class="quiz" data-question="下列哪一項屬於 agent tracing 特有、一般 tracing 較少呈現的維度？" data-correct="1" data-explain="token 用量、工具呼叫與模型選擇是 AI 代理特有的維度。">
-  <button class="opt">某個 API 請求的總執行時間</button>
-  <button class="opt">token 用量與工具呼叫的次數</button>
-  <button class="opt">裝置上的畫面更新率與掉幀</button>
-  <button class="opt">伺服器回應的 HTTP 狀態碼</button>
+<div class="quiz" data-question="為什麼 agent tracing 要另開一個 Next.js 的 Sentry 專案？" data-correct="1" data-explain="AI 的 API route 跑在 Next.js 的 web 專案裡，所以由 web 專案接住 AI 的 span。">
+  <button class="opt">因為 Sentry 規定每個 app 只能有一個專案</button>
+  <button class="opt">因為 AI 的 API route 跑在 web 端</button>
+  <button class="opt">因為 mobile 端無法安裝任何 SDK</button>
+  <button class="opt">因為 Next.js 專案完全免費</button>
 </div>
-<div class="quiz" data-question="為什麼 agent tracing 要另外建立一個 Next.js 的 Sentry 專案？" data-correct="3" data-explain="AI 的 API route 跑在網頁專案，屬不同部署與執行環境，用獨立專案才能清楚觀測。">
-  <button class="opt">因為 Sentry 只支援 Next.js 平台</button>
-  <button class="opt">因為行動端無法安裝 Sentry SDK</button>
-  <button class="opt">因為免費額度只夠開一個專案</button>
-  <button class="opt">因為 AI 跑在網頁端是不同執行環境</button>
+<div class="quiz" data-question="如果沒有包 instrumentOpenAiClient，會發生什麼事？" data-correct="2" data-explain="模型照樣回話，但不會產生 gen_ai span，也就沒有 token 與成本。">
+  <button class="opt">OpenAI 會拒絕所有的請求</button>
+  <button class="opt">助理會改用手機端直接推論</button>
+  <button class="opt">有回覆，但沒有 token 與成本</button>
+  <button class="opt">Sentry 會自動補上所有用量</button>
 </div>
-<div class="quiz" data-question="setUser 只傳 id、不傳姓名或 email，主要為了什麼？" data-correct="0" data-explain="身分只用 id 表示，避免姓名與 email 這類個資進入 trace。">
-  <button class="opt">避免個資隨著 trace 被送上雲端</button>
-  <button class="opt">讓使用者載入速度可以變得更快</button>
-  <button class="opt">讓 OpenAI 的呼叫次數大幅減少</button>
-  <button class="opt">讓 Sentry 免費用戶也能看到成本</button>
+<div class="quiz" data-question="為什麼串流請求要加上 stream_options 的 include_usage？" data-correct="0" data-explain="OpenAI 預設不在串流結果附 token 數，沒有它 span 就沒有用量與成本估計。">
+  <button class="opt">讓串流回覆附上 token 數量</button>
+  <button class="opt">讓串流回覆的速度變得更快</button>
+  <button class="opt">讓模型改用更便宜的版本</button>
+  <button class="opt">讓錯誤訊息自動被清洗掉</button>
 </div>
-<div class="quiz" data-question="把生成式 AI 的輸入與輸出整類關閉後，你還能觀察到什麼？" data-correct="2" data-explain="內容關閉後，token 數、延遲、模型與錯誤率這些非內容指標仍然保留。">
-  <button class="opt">完整的提示詞與模型回答的逐字內容</button>
-  <button class="opt">病人病歷裡所有欄位的原始數值</button>
-  <button class="opt">token 數、延遲與模型等非內容指標</button>
-  <button class="opt">資料庫查詢時綁定的每一筆參數</button>
+<div class="quiz" data-question="把 genAI 的 inputs 與 outputs 關掉之後，還會留下什麼？" data-correct="3" data-explain="token、成本、延遲、模型與錯誤都會留下，只是 span 不帶 prompt 與回覆內容。">
+  <button class="opt">只剩一條完全空白的 span</button>
+  <button class="opt">只剩使用者的完整對話內容</button>
+  <button class="opt">只剩模型的版本號碼</button>
+  <button class="opt">token、成本、延遲與錯誤</button>
 </div>
-<div class="quiz" data-question="setConversationId 在 agent tracing 裡的作用是什麼？" data-correct="1" data-explain="它讓同一次對話的多輪請求被標記在一起，方便沿著對話追蹤。">
-  <button class="opt">把使用者的真實姓名顯示在儀表板上</button>
-  <button class="opt">把同一次對話的多輪請求串在一起</button>
-  <button class="opt">決定這次對話要使用哪一個 AI 模型</button>
-  <button class="opt">把對話的內容加密後保存到雲端</button>
+<div class="quiz" data-question="setConversationId 主要解決什麼問題？" data-correct="1" data-explain="同一條對話的每一輪會落在同一個 Sentry conversation，而不是散成孤立 trace。">
+  <button class="opt">讓每次請求都使用全新的模型</button>
+  <button class="opt">把同一條對話的各輪串在一起</button>
+  <button class="opt">自動刪除太舊的對話紀錄</button>
+  <button class="opt">把使用者 email 加密後上傳</button>
 </div>
 
 <div class="footer">
   <p>mobile-app-course · 觀測深化：Logs / Tracing / Agent Tracing · Step 4/5</p>
-  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>

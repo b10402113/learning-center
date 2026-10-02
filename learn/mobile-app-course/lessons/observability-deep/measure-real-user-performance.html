@@ -11,62 +11,65 @@
 <h1>用 Expo Observe 看上線後的效能</h1>
 <p class="meta">Step 5/5 · 觀測深化：Logs / Tracing / Agent Tracing</p>
 
+<h2>前言：在我手機上明明跑很順</h2>
+
+<p>前面幾節談的錯誤、log、trace、AI 成本，全部都是「應用程式自己回報的數字」。你設定好、觸發它、它就乖乖把資料送上雲端。但有一件事，app 自己答不出來：真實使用者在他們自己的裝置上，實際等了多少秒才看到畫面。</p>
+
+<p>你大概聽過這句話：「在我手機上跑很順啊」。問題是，你的手機是新的、網路是好的、快取是熱的，而你的使用者可能拿的是三年前的中階機、在捷運上訊號斷斷續續、而且還是當天第一次打開 app。第一次啟動要載入多少 JavaScript、多久才顯示第一個畫面、多久才能互動，在這些條件下會跟你的體驗完全不同。這一節要講的 Expo Observe，就是用來量這件 app 自己看不到的事。</p>
+
 <h2>學習目標</h2>
-<p>學完這一節，你能說明 Expo Observe 量哪些真實使用者指標——app 開啟時間、JS 載入、首屏出現、可互動時間——並解釋為什麼在自己手機上測不出其他裝置與網路條件下的效能差異。</p>
 
-<h2>前言：你的手機，是全世界上最好的那台裝置</h2>
+<p>學完後，你應該能說出 Expo Observe 量的是哪幾個真實使用者指標：啟動時間、JavaScript 載入、首屏時間、可互動時間，並解釋為什麼「在我手機上很順」不能代表數千台裝置上線後沒問題，以及為什麼效能退步要靠「隨時間變化」才看得出來。</p>
 
-<p>走到這裡，你已經能看見錯誤、查到 log、追蹤 AI 的成本與延遲。不過這些視角有一個共同點：它們大多發生在應用程式「內部」。而使用者實際感受到的，往往是另一件事——在他那台用了三年的手機上、在那個只剩一格訊號的地鐵裡，這個 app 到底開得夠不夠快。</p>
+<h2>開發者手機的偏差</h2>
 
-<p>而你用來開發的裝置，剛好是全世界上最好的那台：最新的手機、穩定的 Wi-Fi、系統快取還是熱的、離伺服器也近。你測起來一切流暢，很容易得出「效能沒問題」的結論。問題是，這個結論只對你成立。這一節要處理的，就是怎麼看見「真實使用者」的效能，而不是實驗室裡的效能。</p>
+<p>為什麼不能只靠自己的裝置判斷效能？因為你的測試環境是整個分布裡最好的那一端。你的手機型號新、記憶體大；你的網路是穩定的 Wi-Fi；你反覆測試時，很多資源早就被快取住。這三個條件同時成立，你就會得到一個樂觀到不真實的印象。</p>
 
-<h2>為什麼開發機測不出真實效能</h2>
+<p>當 app 真的散到幾千台裝置上，分布會攤開：舊機 CPU 慢、記憶體小，冷啟動時要重新載入整個 JS bundle；弱網使用者下載資源的時間可能是你的十倍。這些情境在你的手機上根本不會發生，但它們才是多數使用者每天面對的現實。你需要的不是「最好的那一台跑起來怎樣」，而是「這幾千台跑起來，分布長什麼樣」。</p>
 
-<p>想像你在無風的室內放風箏。因為沒有風，你會誤以為這隻風箏根本飛不起來；但真實世界的變數從來不只一種。效能也是一樣：你的裝置、網路、作業系統版本、背景程式數量，全都和幾千名使用者不同。有人用入門機、有人開著省電模式、有人在跨國漫遊。同一個版本，在這些條件下可以差到好幾秒。</p>
+<h2>Expo Observe 量的是哪幾個真實使用者指標</h2>
 
-<p>而且效能會「隨時間改變」。今天是好的，可能因為你新增了一個函式庫，明天啟動就慢了一截。開發機上的單點測試抓不到這種回歸，因為它只是一個瞬間、一個環境的數字。你需要的是持續、跨裝置、能看出變化的量測。</p>
-
-<h2>Expo Observe 量哪些指標</h2>
-
-<p>Expo 推出的 Observe 就是用來補這塊的：它在 app 上線後，追蹤真實使用者感受到的體驗。因為它跟 Expo／EAS 在同一個生態系裡，設定與發佈流程綁在一起。它量的核心指標有四項：</p>
+<p>Expo Observe 是 Expo 推出的觀測工具，專門量 app 上線後在真實使用者端的效能。它關注四個關鍵時間點，沿著使用者從點開 app 到能操作它的那條線：</p>
 
 <table>
 <thead>
-<tr><th>指標</th><th>白話解釋</th></tr>
+<tr><th>指標</th><th>量的是什麼</th><th>使用者感受到的對應體驗</th></tr>
 </thead>
 <tbody>
-<tr><td>App 開啟時間</td><td>從使用者點下圖示到 app 真的動起來的整體時間</td></tr>
-<tr><td>JS 載入時間</td><td>JavaScript 程式碼被下載與執行的時間，這是最容易隨版本變動的一段</td></tr>
-<tr><td>首屏出現時間</td><td>使用者第一次看到有意義的畫面（不是白畫面）要等多久</td></tr>
-<tr><td>可互動時間</td><td>畫面出現了，但什麼時候才真的能點、能滑、能操作</td></tr>
+<tr><td>App open time</td><td>從點下圖示到 app 開始運作</td><td>「我按了，它到底有沒有反應」</td></tr>
+<tr><td>JavaScript load time</td><td>bundle 下載與執行的時間</td><td>從啟動到畫面出現前的那段等待</td></tr>
+<tr><td>Time to first screen</td><td>多久之後看到第一個畫面</td><td>「是不是卡住了」的第一印象</td></tr>
+<tr><td>Time until interactive</td><td>多久之後畫面真的能操作</td><td>看得到但按了沒反應的挫折感</td></tr>
 </tbody>
 </table>
 
-<p>這四個指標的順序，正好對應使用者心中「app 到底啟動了沒」的四個階段。從點圖示、到程式碼載入、到畫面出現、到可以操作，任何一段變慢，使用者的體感就會打折扣。分開量它們的用意，是讓你能定位「慢在哪一段」，而不是只有一個籠統的「啟動很慢」。</p>
+<p>這四個指標合起來，描述的就是使用者對「這個 app 快不快」的全部感受。尤其是最後一個，很多人只看「有沒有畫面出現」，但如果畫面出現了、按鈕卻還沒反應，使用者的體驗一樣是卡。這也是為什麼要把它拆成四個指標，而不是只看一個總時間。</p>
 
-<h2>它和 Sentry tracing 有什麼不同</h2>
+<h2>為什麼它和 Expo / EAS 同一條生態特別有用</h2>
 
-<p>你可能會問：前面不是已經學過 tracing 了嗎，為什麼還要 Observe？差別在觀測的範圍。Sentry tracing 的強項是「把一次操作拆開」，讓你看見某個請求、某個流程內部的每一段耗時，適合抓「這一次為什麼慢」。Expo Observe 看的則是「上線後整體使用者體驗的海量數據」，它把幾千台裝置上的同一個指標聚合起來，讓你看趨勢、看分佈、看某個版本上線後有沒有變。一個是顯微鏡，一個是氣象圖，兩者互補。</p>
+<p>Expo Observe 的第一個優勢是它長在你原本的 Expo / EAS 生態裡。你不需要再另外接一套效能監控、另外學一套 SDK 與 Dashboard，它就跟著你出 build、發版的那條流程。這聽起來像小事，但它決定了你會不會真的去用：工具和你既有的工作流越近，你開啟它的頻率就越高。</p>
 
-<p>實際使用時，你會兩邊一起看。先用 Observe 發現「這個版本的啟動變慢了」，再用 tracing 與 log 去追是哪一行改動造成的。少了 Observe，你甚至不知道要追；少了 tracing，你只知道變慢卻找不到原因。</p>
+<p>第二個優勢更關鍵。因為它跨裝置、跨作業系統、跨網路條件持續收集，你可以把效能看成「隨時間變化的曲線」，而不是「某一天的一個數字」。這一前一後的差別，正是抓效能回歸的關鍵。</p>
 
-<h2>為什麼「變化」比「絕對值」重要</h2>
+<h2>效能退步是「變化」，不是「狀態」</h2>
 
-<p>效能數字本身常常很難判斷好壞：首屏兩秒算快還是慢？不同裝置、不同地區的標準都不一樣。相對地，「變化」永遠有意義。Observe 會把指標隨時間畫成趨勢，所以你最該盯的是：某個新版本發佈之後，這些線有沒有明顯往上跳。</p>
+<p>假設你的 app 啟動要 1.8 秒。這個數字本身沒有好壞，它只是一個狀態。但如果上週是 1.2 秒，這週變成 1.8 秒，那就是一個明確的訊號：某次更新做了什麼，讓啟動慢了 50%。</p>
 
-<p>舉例來說，你在某次更新加了三個新的函式庫，發佈後發現「可互動時間」比上一版多了一秒。這個變化會出現在跨裝置的聚合圖上，因為它不是你的裝置特別慢，而是所有裝置一起變慢。這種「回歸」如果沒有持續量測，通常要等到客服收到抱怨才會發現，而那時候使用者已經開始流失了。</p>
+<p>效能回歸幾乎都是這樣被抓到的。它不是某一天 app 突然壞掉，而是某個新功能、某個新依賴、某段沒注意的初始化程式碼，悄悄讓每一步都慢了一點。只看單點快照，你只會覺得「好像還行」；看時間軸，你才會看到那條線在某個版本之後翹起來。有了這個對照，你就能直接回頭查那次改動，而不需要在模糊的「最近好像變慢」裡瞎猜。</p>
 
-<h2>怎麼用它做判斷</h2>
+<h2>它和 Sentry 是互補的兩隻眼睛</h2>
 
-<p>實務上，把它當成版本的健康檢查表。每次發版後，比較啟動四個階段的中位數與前幾版，如果有明顯上升，再切到不同裝置、作業系統與網路條件去看，確認是普遍變慢還是特定族群受影響。必要時對照 Sentry 的 tracing 與 log，把範圍收斂到某一個功能或依賴。觀察的順序是「先看趨勢、再切維度、最後才鑽進單一操作」，這正好和前面 log 的操作順序相反——一個從全局往細節，一個從細節找特定事件。</p>
+<p>走完這個節點，你手上其實有兩套互補的觀測。Sentry 負責「內部發生了什麼」：錯誤、結構化 log、trace、session replay，以及 AI 功能的 token 與成本。Expo Observe 負責「使用者在外面實際等多久」：啟動、載入、首屏、可互動時間在數千台裝置上的分布。</p>
+
+<p>兩者的問題不一樣，所以不能互相取代。Sentry 告訴你某個 API 花了三秒，Observe 告訴你使用者從點開到能用等了四秒。你必須兩個都有，才能把「哪一段慢」和「使用者感受到多慢」對起來。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-<p>開發機是全世界上最好的裝置，測不出真實世界的效能差異；上線後要看的是跨裝置、跨網路、隨時間變化的數據。Expo Observe 量四個指標：app 開啟、JS 載入、首屏出現、可互動時間，各自對應使用者啟動體驗的一個階段。它和 Sentry tracing 互補——Observe 負責發現「哪個版本變慢了」，tracing 與 log 負責追「為什麼」。判讀時先看變化而不是絕對值，因為同樣的秒數在不同裝置上意義不同，而回歸趨勢永遠值得追。</p>
+<p>「在我手機上跑很順」不是證據，因為開發者的裝置剛好是整個分布裡最快的那一端。Expo Observe 量的是真實使用者的四個時間點：app 啟動、JavaScript 載入、首屏出現，以及真正能互動。它長在 Expo / EAS 生態裡，跨裝置、跨 OS、跨網路持續收集，所以效能退步會以「隨時間變化的曲線」呈現。某次改版後啟動悄悄變慢，你才看得見。它和 Sentry 是兩隻互補的眼睛：Sentry 看內部發生了什麼，Observe 看使用者在外面等多久。</p>
 </blockquote>
 
-<p>這個節點到這裡告一段落。你現在手上有一套完整的觀測：用 Sentry 抓錯誤與結構化 log，用 beforeSendLog 一類的機制守住隱私，用 agent tracing 看 AI 的成本與延遲，再用 Expo Observe 掌握真實使用者的效能。把這套東西接進你自己的 app，你就不會再靠「使用者有沒有來信」來判斷它過得好不好。</p>
+<p>到這裡，這個節點的觀測地圖就完整了。你從結構化 log 學會把「發生了什麼」變成可查詢的資料，用 Explore Logs 把問題圈出來，用三層防線把敏感內容擋在邊界內，用 agent tracing 看見 AI 的成本與延遲，最後用 Expo Observe 接住真實使用者的效能感受。這五塊合起來，就是 app 上線之後你眼睛能看到的全部範圍。</p>
 
 <div class="lesson-nav">
   <div><a href="./agent-tracing.html">← 上一步：Agent tracing：看得見 AI 功能的成本與延遲</a></div>
@@ -75,46 +78,46 @@
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="為什麼在自己手機上測出來的效能，不能代表所有使用者？" data-correct="1" data-explain="開發機通常是新裝置與穩定網路，和真實使用者的裝置、網路、OS 條件差很多。">
-  <button class="opt">因為開發機的處理器通常比使用者更慢</button>
-  <button class="opt">因為你的裝置與網路條件遠比多數人好</button>
-  <button class="opt">因為模擬器上的數字完全是隨機產生</button>
-  <button class="opt">因為使用者不會在意 app 的啟動速度</button>
+<div class="quiz" data-question="為什麼「在我手機上跑很順」不能當作效能證據？" data-correct="1" data-explain="開發者的裝置、網路與快取剛好是最好的那一端，無法代表數千台裝置的分布。">
+  <button class="opt">因為開發者的手機通常跑不動 app</button>
+  <button class="opt">因為開發者環境是最好的那一端</button>
+  <button class="opt">因為 Sentry 會遮蔽開發者的數據</button>
+  <button class="opt">因為模擬器無法量測任何時間</button>
 </div>
-<div class="quiz" data-question="下列哪一項不是 Expo Observe 的核心指標？" data-correct="3" data-explain="Observe 量的是啟動四個階段；伺服器錯誤率不是它的核心指標。">
-  <button class="opt">app 開啟時間與 JS 載入時間</button>
-  <button class="opt">首屏出現時間與可互動時間</button>
-  <button class="opt">從點圖示到真的能操作的流程</button>
-  <button class="opt">後端伺服器的錯誤率與吞吐量</button>
+<div class="quiz" data-question="下列哪一項不是 Expo Observe 關注的指標？" data-correct="3" data-explain="它量啟動、JS 載入、首屏與可互動時間，不量 AI 的 token 成本。">
+  <button class="opt">app 從點擊到開始運作的時間</button>
+  <button class="opt">JavaScript bundle 的載入時間</button>
+  <button class="opt">第一個畫面出現與可互動的時間</button>
+  <button class="opt">AI 助理每次回答的 token 成本</button>
 </div>
-<div class="quiz" data-question="「首屏出現時間」和「可互動時間」的差別是什麼？" data-correct="2" data-explain="首屏是有畫面出現，可互動是畫面真的能點能操作。">
-  <button class="opt">兩者完全一樣，只是同一個指標的別名</button>
-  <button class="opt">前者量 Android，後者只量 iOS 裝置</button>
-  <button class="opt">前者是看到畫面，後者是能實際操作</button>
-  <button class="opt">前者量網路，後者量手機的處理器速度</button>
+<div class="quiz" data-question="為什麼效能退步要用「隨時間變化」才看得出來？" data-correct="2" data-explain="單點數字只是狀態，和上週對照才知道某次改版讓它變慢了多少。">
+  <button class="opt">因為單一數字一定是被偽造的</button>
+  <button class="opt">因為 App Store 只允許上傳曲線</button>
+  <button class="opt">因為要有前後對照才知道變慢</button>
+  <button class="opt">因為 Observe 只能儲存七天資料</button>
 </div>
-<div class="quiz" data-question="Expo Observe 和 Sentry tracing 的關係，最貼近下列哪一句？" data-correct="0" data-explain="Observe 負責發現哪個版本變慢，tracing 與 log 負責追為什麼變慢。">
-  <button class="opt">一個發現變慢，一個追查為什麼變慢</button>
-  <button class="opt">兩者功能重複，選其中一個用就好</button>
-  <button class="opt">前者抓錯誤，後者只負責抓 log</button>
-  <button class="opt">前者免費，後者只能用在網頁專案</button>
+<div class="quiz" data-question="「畫面出現了、但按鈕還沒反應」對應哪個指標？" data-correct="1" data-explain="這正是 time until interactive 在量的東西，比首屏更貼近實際可用性。">
+  <button class="opt">app open time</button>
+  <button class="opt">time until interactive</button>
+  <button class="opt">JavaScript load time</button>
+  <button class="opt">App Store 審核時間</button>
 </div>
-<div class="quiz" data-question="判讀效能數據時，為什麼「變化」比「絕對值」更值得注意？" data-correct="1" data-explain="同一個秒數在不同裝置與地區意義不同，但突然變慢的趨勢永遠是警訊。">
-  <button class="opt">因為絕對值一定是錯的，不能拿來參考</button>
-  <button class="opt">因為變慢的趨勢通常代表功能發生回歸</button>
-  <button class="opt">因為 Sentry 只會保存變化的那一筆資料</button>
-  <button class="opt">因為使用者只在乎版本號有沒有更新</button>
+<div class="quiz" data-question="Expo Observe 和 Sentry 的關係是什麼？" data-correct="0" data-explain="一個看使用者實際等多久，一個看內部發生什麼，兩者互補而非取代。">
+  <button class="opt">互補的兩隻眼睛，各有各的問題</button>
+  <button class="opt">完全重複，裝其中一個就夠</button>
+  <button class="opt">Sentry 是 Observe 的付費版本</button>
+  <button class="opt">Observe 只能取代 session replay</button>
 </div>
-<div class="quiz" data-question="發現某版本啟動變慢後，適當的下一步是什麼？" data-correct="3" data-explain="先用 Observe 鎖定版本與階段，再切裝置維度並用 tracing 與 log 找原因。">
-  <button class="opt">直接把所有新加的函式庫全部刪掉</button>
-  <button class="opt">忽略它，等使用者寄信來抱怨再說</button>
-  <button class="opt">把 Observe 關掉避免看到更多數字</button>
-  <button class="opt">切維度並用 tracing 與 log 追原因</button>
+<div class="quiz" data-question="Expo Observe 長在 Expo / EAS 生態裡，最大的好處是什麼？" data-correct="3" data-explain="不必另外接一套工具，貼近既有出 build 流程，就更容易真的持續使用。">
+  <button class="opt">可以讓 app 的體積自動變小</button>
+  <button class="opt">可以取代整個 Sentry 的功能</button>
+  <button class="opt">可以自動修好所有效能問題</button>
+  <button class="opt">貼近既有流程，更容易持續使用</button>
 </div>
 
 <div class="footer">
   <p>mobile-app-course · 觀測深化：Logs / Tracing / Agent Tracing · Step 5/5</p>
-  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>

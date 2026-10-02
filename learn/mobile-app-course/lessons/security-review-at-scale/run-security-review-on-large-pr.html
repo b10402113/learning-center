@@ -11,76 +11,89 @@
 <h1>在大型 PR 上跑安全審查</h1>
 <p class="meta">Step 3/5 · 大規模 PR 安全審查</p>
 
-<h2>這一節要完成什麼？</h2>
+<h2>學習目標</h2>
+<p>把上萬行改動開成 PR，讓 CodeRabbit 產出安全清單與 Change Stack。</p>
 
-<p>前一節認識了七類安全問題，這一節要真的把它們找出來。做完之後，你會有一個開在 GitHub 上的 PR，裡面是那批上萬行的後端與 API 改動，而 CodeRabbit 已經幫你完成逐行審查與安全掃描，回傳一份分類好的問題清單。</p>
+<h2>前言：現在要把「審查」真的跑一次</h2>
 
-<p>開始前需要具備三件事：一，後端與 API 的改動都已完成，app 能跑；二，這個 repo 是放在 GitHub 上、而且你已經把 CodeRabbit 連上這個 repository；三，<strong>確認 <code>.env</code> 已經在 <code>.gitignore</code> 裡</strong>。第三點是動手的門檻，因為這一步會把所有改動一次推上遠端，如果金鑰還被追蹤，它就會一起被推出去。若 <code>.env</code> 還沒排除，先把它加進 <code>.gitignore</code> 並從版控移除，再繼續。</p>
+<p>前兩步建立了兩個基礎：你知道規模會讓逐行審查失效，也有了七大類問題的分類地圖。但地圖不是現場。這一節要動的是手，不是腦：把一萬五千行的改動從本機推到 GitHub，開成一個 PR，交給 CodeRabbit 掃，然後讀懂它回來的東西。</p>
 
-<h2>第一步：把所有改動集中到一條分支</h2>
+<p>做完之後，你手上會有一份依照類別與嚴重度整理好的安全清單，以及每一則問題對應的修復建議；其中「給 AI agent 的修復指令」整段可以直接複製。動手前請先確認：功能已經完成並且你手動測過會動、CodeRabbit 已經連上你的 GitHub repo、你目前停在 master、而且本機的改動是乾淨的。</p>
 
-<p>大改動一律走分支，不要直接推上 main。分支的作用是隔離：在審查完成之前，這些程式碼都還不算是主線的一部分。</p>
+<h2>先看整體流程</h2>
 
-<pre><code># 建立並切到這條分支（課程用的名稱是 web-and-api）
-git checkout -b web-and-api</code></pre>
+<p>把這次要跑的步驟攤開，順序如下。先掃一遍，知道等一下每個動作會在哪裡發生：</p>
 
-<p>為什麼要一條專門的分支？因為這個 PR 的規模大到一旦出錯就很難收拾。隔離在分支上，你隨時能重來、能比較，也不會讓主分支在審查期間處於不穩定狀態。</p>
+<ol>
+<li>建一個描述這次改動的 branch，不要直接在 master 上做。</li>
+<li>把改動 stage、產生 commit message、commit、publish。</li>
+<li>在 GitHub 上建立 pull request。</li>
+<li>確認這次 PR 的規模。</li>
+<li>等 CodeRabbit 掃描完成，讀它的 summary 與逐檔 walkthrough。</li>
+<li>打開 Change Stack，看它怎麼把改動分類。</li>
+<li>看安全區塊的 major findings。</li>
+<li>複製「給 AI agent 的修復指令」，留給第 4、5 步使用。</li>
+</ol>
 
-<h2>第二步：stage、產生 commit message、commit</h2>
+<h2>第 1 步：開一個 branch</h2>
 
-<p>把這批改動加入暫存區，再提交。commit message 交給 agent 產生即可，它會讀過改動後給一句摘要。</p>
+<p>即使只有你一個人，也不要把這麼大的改動直接推進 master。開一個描述性 branch，萬一審查發現問題，整個改動可以獨立檢視或丟掉，不會污染主線。這個例子的 branch 叫做 <code>web-and-api</code>，因為這次改動主要是 web 應用與 API 後端：</p>
 
-<pre><code>git add .
+<pre data-provenance="derived">git switch -c web-and-api</pre>
 
-# 讓 agent 產生 commit message，或自己下一個清楚的標題
-git commit -m "feat: 建立 web dashboard 與後端 API"</code></pre>
+<p>名字本身不重要，能描述這次改動在做什麼就好。若你習慣用編輯器的指令面板，也可以用「create a new branch」的指令來完成同一件事。</p>
 
-<p>課程中的這個 PR 大約是 <strong>11,000 行新增、4,000 行刪除</strong>。在按下去之前，先快速確認推出去的內容裡沒有密鑰檔。如果看到 <code>.env</code> 出現在變更清單裡，停下來處理，不要 commit。</p>
+<h2>第 2 步：stage、commit、publish</h2>
 
-<h2>第三步：推上遠端，開 PR</h2>
+<p>依序把全部改動加進暫存區、產生 commit message、commit，然後 publish 這個 branch。commit message 可以由 AI 依 diff 產生，這是這個流程裡少數可以放心交給 AI 的地方。它讀得到全部改動，你只要確認描述合理即可：</p>
 
-<p>把分支推上 GitHub，然後建立 Pull Request。來源是 <code>web-and-api</code>，目標是 <code>main</code>。</p>
+<pre data-provenance="derived">git add -A
+git commit -m "Add web app and API backend for the clinic app"
+git push -u origin web-and-api</pre>
 
-<pre><code>git push -u origin web-and-api</code></pre>
+<h2>第 3 步：建立 pull request</h2>
 
-<p>推上去之後，GitHub 通常會直接顯示 <em>compare &amp; pull request</em> 的提示；按下它，確認來源與目標分支，填好標題，就能開 PR。從 VS Code 操作時，順序會是建立分支、stage、commit、publish、建立 PR。</p>
+<p>回到 GitHub，這個新 branch 會出現「Compare &amp; create pull request」的按鈕。點下去、確認它要比對的是 master，送出。PR 建立之後，CodeRabbit 會自動接手開始掃描，你不需要額外觸發什麼。</p>
 
-<h2>第四步：等 CodeRabbit 跑完 review 與安全掃描</h2>
+<h2>第 4 步：先確認規模</h2>
 
-<p>PR 一開好，CodeRabbit 就會被觸發，逐行審查這個 PR 的改動，同時執行安全掃描。改動量大的時候需要一點時間——課程裡的範例約 <strong>十分鐘</strong>。這段時間不需要盯在螢幕前，可以去處理別的事，回來再看結果。</p>
+<p>在 PR 頁面上先看它顯示的數字。這個例子的結果是 <strong>11,000 行新增、約 4,000 行刪除，總計約 15,000 行、橫跨 54 個檔案</strong>。看到這個量級，就再次確認你為什麼不是用手審：15,000 行要在十分鐘內看完，平均每行 0.04 秒，人眼做不到。這也是為什麼這一節要把判斷交給工具產出的結構化清單。</p>
 
-<p>萬一你想在等待時去忙別的，記得：掃描是在 GitHub 上進行的，跟你本機的終端機無關，所以關掉編輯器也不會中斷。等它跑完再回到 PR 頁面即可。</p>
+<h2>第 5 步：讀 CodeRabbit 的 summary 與逐檔 walkthrough</h2>
 
-<h2>第五步：把輸出讀成一張清單</h2>
+<p>等大約十分鐘，CodeRabbit 回來的第一塊是快速摘要，包含整體改動在幹嘛，以及它對每一個更新檔案的重點說明。先讀這一塊，讓自己重新拿到「這次 PR 在做什麼」的整體感。這正是大型 PR 最難維持的東西。如果摘要裡出現你沒預期的模組被改動，這裡就會看到。</p>
 
-<p>處理完之後，PR 頁面上會多出幾種輸出。這一節的重點不是修，而是<strong>讀懂它給了什麼</strong>：</p>
+<h2>第 6 步：打開 Change Stack，看它怎麼分類</h2>
 
-<table>
-<thead>
-<tr><th>輸出</th><th>你要從裡面拿到什麼</th></tr>
-</thead>
-<tbody>
-<tr><td>PR 摘要</td><td>一句話掌握這批改動在做什麼，先有全貌</td></tr>
-<tr><td>逐檔導覽</td><td>每個檔案改了哪些地方，需要時下鑽</td></tr>
-<tr><td>嚴重度排序的行內註解</td><td>critical / major / minor 分級，最該處理的排在前面</td></tr>
-<tr><td>Change Stack</td><td>依改動性質分成十幾個類別，能按主題讀</td></tr>
-<tr><td>安全掃描清單</td><td>把 injection、授權繞過等安全問題獨立列出</td></tr>
-</tbody>
-</table>
+<p>接著進到 <strong>Change Stack</strong>。這是 CodeRabbit 把整包改動整理成可瀏覽結構的地方，也是它和一般 Git 平台最大的差別。GitHub 或 GitLab 面對一萬五千行的 diff，通常只能讓你一個檔一個檔手動翻；Change Stack 則把改動依主題分成一群一群（這個例子大約 12 類，例如 Next.js authentication guidance、Expo setup、onboarding、profile、home tab 等），並依字母排序。</p>
 
-<p>讀的時候有一個實用順序：先看安全清單，因為那是「可以被攻擊」的問題；再看 critical 等級的行內註解；最後才依 Change Stack 的分類把其餘的看過。不要把清單從第一個字讀到最後一個字，而是先挑最危險的。</p>
+<p>你可以逐類展開，每一類旁邊會標示它涉及哪些檔案、增減了幾行，點進去看細節。這個介面真正的價值是：它把「54 個檔案」變成「十幾個你可以分別消化的主題」。如果某一類特別大、或特別敏感，你一眼就能看出來。</p>
 
-<h2>第六步：先別動手修，把彙整 prompt 留下來</h2>
+<h2>第 7 步：看安全區塊的 major findings</h2>
 
-<p>看到一長串意見，很容易想立刻一則一則修。先忍住。CodeRabbit 提供一個功能，能把所有 review 意見彙整成「給 AI agent 的完整 prompt」。這一節先把那份 prompt 複製下來，因為下一步要做的判斷，是「哪些該修、哪些該保留」，判斷完再分派出去修。</p>
+<p>Change Stack 之外，捲到安全掃描的區塊。這個例子裡 CodeRabbit 抓到數個 <strong>major security issues</strong>，類別落在第 2 步那份地圖上：injection、authorization bypass、XSS、SSRF、CSRF、broken authentication、security misconfiguration。每一則都會附上問題說明，以及它建議的修法。</p>
+
+<p>當問題很多時，CodeRabbit 會把最嚴重的（critical）以內嵌註解的方式直接標在對應的程式碼行上，讓你不用在一長串清單裡自己找。掃過去時，先鎖定 major／critical，minor 可以先放著；這個取捨是下一步的主題。</p>
+
+<h2>第 8 步：複製修復指令</h2>
+
+<p>CodeRabbit 對每一則問題都提供「給 AI agent 的修復指令」。除了逐則複製，它也能產生一段總結全部 review comments 的 prompt。把這段先複製下來放著，下一步會用它來一口氣把該修的問題交給 agent 處理。先講清楚：這一節只負責讓清單出現，修不修、要不要全部修，留到下一步判斷。</p>
 
 <blockquote>
-做完這一節，你應該看到：一條名為 <code>web-and-api</code> 的分支已推上 GitHub，PR 開好且目標是 main，CodeRabbit 已完成審查與安全掃描，輸出裡有一份分類好的安全清單與 Change Stack，而你手上留著一份彙整好的 review prompt。程式還沒改動——那是下一步的事。
+複製修復 prompt 之前，先讀懂那則問題在講什麼。這不是形式要求，AI 產生的 finding 本身也需要你的判斷，下一步會說明哪些該修、哪些該保留。
 </blockquote>
 
-<p>為什麼原理留給別處？這一節是操作，目標是「把審查跑起來並拿到可用的輸出」。至於那七類安全問題各自是什麼，上一節已經交代；拿到清單後怎麼判斷，下一節處理。</p>
+<h2>做完長什麼樣</h2>
 
-<p>現在你有一份清單了，但清單上的每一則都該照做嗎？下一節要處理這個最容易做錯的判斷：AI 的審查意見也是 AI 生成的，有些要修，有些其實是你刻意設計的結果。</p>
+<p>回到 PR 頁面，成功的狀態長這樣：這個 PR 上多了一輪 CodeRabbit 的審查紀錄，裡面有一份整體摘要、一份依主題分類的 Change Stack、一組標好類別與嚴重度的安全 findings，以及幾段可以直接貼給 agent 的修復指令。你還沒有修改任何程式碼，只是先把「看不完的一大包」變成「可處理的清單」。至於每個類別背後在防什麼，屬第 2 步的範圍；哪一則該修、哪一則該留，屬第 4 步的範圍。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+在 master 之外開一個描述性 branch（如 <code>web-and-api</code>），stage、commit、publish，再於 GitHub 建立 pull request。先確認規模（示例為約 15,000 行／54 檔），等 CodeRabbit 約十分鐘，依序讀 summary 與逐檔 walkthrough、打開 Change Stack 看分類、進安全區塊鎖定 major findings，最後複製給 AI agent 的修復指令。整段流程只把清單生出來，還沒有決定要修什麼。
+</blockquote>
+
+<p>清單已經在手上，但清單不是答案。下一步要面對這個節點最核心的判斷：CodeRabbit 列的每一則 finding，你都要修嗎？哪些該修、哪些其實該保留？</p>
 
 <div class="lesson-nav">
   <div><a href="./security-finding-taxonomy.html">← 上一步：CodeRabbit 安全掃描的七大類問題</a></div>
@@ -89,41 +102,39 @@ git commit -m "feat: 建立 web dashboard 與後端 API"</code></pre>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="動手之前，關於 .env 的必要確認是什麼？" data-correct="0" data-explain="這一步會把改動推上遠端，.env 必須已在 .gitignore 裡，才不會把金鑰推出去。">
-  <button class="opt">確認 .env 已被 .gitignore 排除</button>
-  <button class="opt">確認 .env 也一起 commit 上去</button>
-  <button class="opt">把 .env 改名成 env 再提交</button>
-  <button class="opt">把 .env 貼進 commit message</button>
+<div class="quiz" data-question="為什麼要為這次改動另開一個 branch，而不是直接推到 master？" data-correct="1" data-explain="審查若發現問題，整包改動可以獨立檢視或丟棄，不會污染主線。">
+  <button class="opt">因為 GitHub 規定只有 branch 才能執行 AI 審查</button>
+  <button class="opt">審查發現問題時，改動可獨立處理不污染主線</button>
+  <button class="opt">因為 branch 的 commit 不會佔用 repo 的儲存空間</button>
+  <button class="opt">開 branch 可以讓 CodeRabbit 掃描的速度變快</button>
 </div>
-<div class="quiz" data-question="為什麼這麼大的改動要先開一條分支？" data-correct="2" data-explain="分支把尚未驗證的改動隔離在 main 之外，審查期間主線仍保持穩定。">
-  <button class="opt">因為 GitHub 規定一定要有分支</button>
-  <button class="opt">因為分支能讓 commit 次數變多</button>
-  <button class="opt">把未驗證改動隔離在 main 之外</button>
-  <button class="opt">因為分支會自動修好安全問題</button>
+
+<div class="quiz" data-question="看到 PR 顯示約 15,000 行、54 個檔案時，正確的反應是什麼？" data-correct="3" data-explain="這個量級不可能人眼在十分鐘內審完，正是不該手審、要交給結構化工具的理由。">
+  <button class="opt">立刻關掉 PR，把功能拆成一百個小 PR 再重做</button>
+  <button class="opt">先 Approve，之後有空再回頭補看每一行程式</button>
+  <button class="opt">花整個週末硬讀，反正工程師本來就該看程式</button>
+  <button class="opt">確認它超出人眼可審的量級，交給工具產清單</button>
 </div>
-<div class="quiz" data-question="課程範例中，CodeRabbit 掃描這個大型 PR 大約要多久？" data-correct="3" data-explain="改動量大時約十分鐘；較小的 PR 會更快。">
-  <button class="opt">大約三秒鐘就會完成分析</button>
-  <button class="opt">大約需要整整一個工作天</button>
-  <button class="opt">需要等人工按下確認才開始</button>
-  <button class="opt">大約十分鐘左右完成掃描</button>
+
+<div class="quiz" data-question="Change Stack 最主要的價值是什麼？" data-correct="0" data-explain="它把大量 diff 依主題分類，讓 54 個檔案變成十幾個可分開消化的群組。">
+  <button class="opt">把大量 diff 依主題分類，方便分群消化</button>
+  <button class="opt">自動幫你把所有改動直接合併進主分支</button>
+  <button class="opt">把程式碼改寫成執行速度更快的版本</button>
+  <button class="opt">在掃描前先刪掉它認為多餘的程式碼</button>
 </div>
-<div class="quiz" data-question="讀輸出時，建議的優先順序是什麼？" data-correct="1" data-explain="先看安全清單，再看 critical 行內註解，最後才依 Change Stack 分類看其餘的。">
-  <button class="opt">從第一個檔案依序滑到最後一個</button>
-  <button class="opt">先看安全清單與 critical 註解</button>
-  <button class="opt">先看 minor 建議再回頭看安全</button>
-  <button class="opt">只看 PR 摘要其他全部略過</button>
+
+<div class="quiz" data-question="當 CodeRabbit 抓到很多問題時，為什麼 critical 會直接用內嵌註解顯示？" data-correct="2" data-explain="問題量大時，最嚴重的直接標在對應程式碼行上，省去逐項搜尋。">
+  <button class="opt">因為內嵌註解的解說比其他地方都要詳細</button>
+  <button class="opt">因為只有內嵌註解能被複製到 AI agent</button>
+  <button class="opt">問題多時把最嚴重的標在程式碼行較省事</button>
+  <button class="opt">因為內嵌註解會自動修掉該行的安全問題</button>
 </div>
-<div class="quiz" data-question="開完 PR 後，CodeRabbit 的掃描是在哪裡進行的？" data-correct="2" data-explain="它是在 GitHub 上對 PR 執行，與你本機終端機無關，關掉編輯器不會中斷。">
-  <button class="opt">在你本機的 VS Code 編輯器裡</button>
-  <button class="opt">在手機的 Expo 開發伺服器上</button>
-  <button class="opt">在 GitHub 上針對 PR 執行</button>
-  <button class="opt">在資料庫伺服器的內部網路裡</button>
-</div>
-<div class="quiz" data-question="看到一長串 review 意見時，這一節建議先做什麼？" data-correct="1" data-explain="先保留彙整好的 prompt，等做完「哪些該修」的判斷再分派。">
-  <button class="opt">立刻一則一則手動修改到完</button>
-  <button class="opt">先留下彙整 prompt，還不要修</button>
-  <button class="opt">把所有意見全部忽略直接合併</button>
-  <button class="opt">把每則意見都開一條分支處理</button>
+
+<div class="quiz" data-question="複製 CodeRabbit 的 AI 修復 prompt 之前，應該先做什麼？" data-correct="1" data-explain="先讀懂那則問題在講什麼，因為 AI finding 本身也需要你的判斷，不能無腦套用。">
+  <button class="opt">先確認 agent 的訂閱方案有沒有包含修復功能</button>
+  <button class="opt">先讀懂問題內容，因為 finding 也要你判斷</button>
+  <button class="opt">先把 PR 關掉，避免 CodeRabbit 重複掃描</button>
+  <button class="opt">先刪掉所有相關程式碼再讓 agent 重寫</button>
 </div>
 
 <div class="footer">

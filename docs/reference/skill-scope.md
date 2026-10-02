@@ -1,6 +1,6 @@
 # Skill scope and batching
 
-Shared by the skills that operate over a subject's nodes in batches (`/batch-nodes`, `/to-article`, `/to-image`). A skill points here instead of restating the parsing, so the rules have one home.
+Shared by the skills that operate over a subject's nodes by scope (`/batch-nodes`, `/to-article`, `/to-image`, `/reset-nodes`). A skill points here instead of restating the parsing, so the rules have one home.
 
 ## Parse the arguments
 

@@ -11,68 +11,133 @@
 <h1>敏感資料該在哪一層被擋下</h1>
 <p class="meta">Step 3/5 · 觀測深化：Logs / Tracing / Agent Tracing</p>
 
+<h2>前言：log 送出去之前，誰來把關</h2>
+
+<p>你在前兩節學會了寫出可查詢的結構化 log，也學會在 Explore Logs 裡把問題圈出來。但只要你開始把真實使用者的資料送進雲端，就會撞上一個不能妥協的問題：姓名、生日、病歷、病人自己打進助理的症狀描述，這些東西一旦離開你的系統邊界，就再也收不回來。</p>
+
+<p>常見的直覺是「寫個函式把名字遮掉就好」。但實際上，敏感資料會從好幾個地方溜出去：你自己寫的 log 屬性、SDK 自動複製到每一則 log 的使用者資訊、失敗請求的 request body、資料庫查詢的綁定參數，甚至是 session replay 錄下來的畫面。要在哪一層攔、要用什麼工具攔，是一組真正的取捨。這一節把選項攤開來比，讓你能為每一種資料挑對那一層。</p>
+
 <h2>學習目標</h2>
-<p>學完這一節，你能在三個位置之間做選擇——寫 log 時就只記 id／數量／耗時、用 <code>beforeSendLog</code> 或 <code>beforeSend</code> 鉤子去識別化、在 instrumentation 的 <code>dataCollection</code> 關掉整類收集——並說出什麼時候該用哪一個。</p>
 
-<h2>前言：查得到的東西，也代表流得出去的</h2>
+<p>學完後，你應該能在「寫入時就不記」、「用 <code>beforeSend</code> / <code>beforeSendLog</code> 鉤子去識別化」與「在 instrumentation 關掉整類收集」這三層之間做選擇，並能說出每一層各自擋下什麼、又放過了什麼。</p>
 
-<p>前兩節我們努力讓 log 更好查，欄位愈豐富、關聯愈完整，除錯就愈方便。但同一件事換個角度看就變成風險：log 是上傳到第三方雲端服務的。當你為了還原現場，把病歷、姓名、email 一起寫進去，這些資料就離開了你的伺服器。對醫療或金融類的 app 來說，這不只是技術問題，而是法律與合規問題。</p>
+<h2>三個選項，先並排比較</h2>
 
-<p>於是你被兩股力量拉扯：一邊是「要能除錯，資料愈完整愈好」，另一邊是「要能合規，敏感資料愈少愈好」。真正的問題不是「要不要去識別化」——那一定要做——而是「到底該在哪一層把它擋下來」。這一節要幫你把這個決定講清楚。</p>
-
-<h2>學習目標回顧與情境</h2>
-
-<p>這個節點的 app 是一個牙醫診所系統：行動端給病患、網頁端跑員工 dashboard。系統會出現真正的病歷（PHI，protected health information，受保護的健康資訊），也會呼叫 OpenAI 做助理對話。也就是說，錯誤、log、trace 三條觀測管道，每一條都有機會夾帶病歷。我們要在這三條管道上，決定攔截點。</p>
-
-<h2>三個候選位置放在同一張桌上</h2>
-
-<p>去識別化不是單一動作，而是一組可以在不同層級做的事。先把它們並排比較：</p>
+<p>先不要急著選。把三層防線放在同一張表上，差異就很清楚：</p>
 
 <table>
 <thead>
-<tr><th>攔截位置</th><th>做法</th><th>優點</th><th>代價</th></tr>
+<tr><th>層</th><th>做法</th><th>擋下什麼</th><th>放過什麼</th><th>什麼時候用</th></tr>
 </thead>
 <tbody>
-<tr><td>寫入端（source）</td><td>寫 log 時就只放 id、數量、耗時，不放內容</td><td>最便宜、最直接，資料從沒離開過裝置</td><td>靠紀律，漏寫一個欄位就破功</td></tr>
-<tr><td>送出鉤子（hook）</td><td>用 <code>beforeSendLog</code>／<code>beforeSend</code> 在上傳前改寫或刪除欄位</td><td>集中一道關卡，能處理多處來源</td><td>要預期各種資料形狀，改壞會影響判讀</td></tr>
-<tr><td>收集設定（dataCollection）</td><td>在 instrumentation 關掉整類收集，如 genAI inputs/outputs、資料庫查詢內容、堆疊變數</td><td>最強的保證，整類資料根本不會被蒐集</td><td>除錯資訊也一起少掉，範圍要拿捏</td></tr>
+<tr><td>第一層：寫入時不記</td><td>呼叫 logger 前就不放內容，屬性只留 id、數量、耗時</td><td>從源頭就沒有，根本沒東西可外流</td><td>你原本想留的除錯內容</td><td>不需要內容也能判斷問題時，一律優先</td></tr>
+<tr><td>第二層：hook 攔截</td><td><code>beforeSend</code> / <code>beforeSendLog</code> 在送出前刪欄位、縮減 user、清洗訊息</td><td>email、name、資料庫綁定參數等已知欄位</td><td>你忘了刪的欄位、hook 沒涵蓋的事件類型</td><td>資料結構固定、能精準指名要刪什麼</td></tr>
+<tr><td>第三層：關閉整類收集</td><td><code>dataCollection</code> 關掉 genAI、db 參數、stack variables；關 console breadcrumb、關 replay 遮罩</td><td>整類高風險資料一起不收集</td><td>沒被列到的其他類別</td><td>一整類都不該離開邊界時</td></tr>
 </tbody>
 </table>
 
-<p>行動端與網頁端的實作各自展示了不同層次的組合。行動端的 <code>Sentry.init</code> 以「不主動送個資」為原則：關閉預設的 PII 傳送、過濾掉 console 的 breadcrumb，並用 <code>beforeSend</code> 與 <code>beforeSendLog</code> 把使用者資訊縮減到最小；行動端的 replay 仍保留，但預設遮罩。網頁端更嚴格：因為員工 dashboard 畫面上就是病歷，客戶端乾脆不開 session replay，並在伺服器端的收集設定裡把 AI 輸入輸出、資料庫查詢內容與堆疊變數整類關掉。</p>
+<p>這三層不是替代關係，而是同一條防線上不同的門。實務上通常是「預設第一層、需要保留欄位時用第二層、整類高風險的直接用第三層關掉」。</p>
 
-<h2>判別問句：用四個問題挑位置</h2>
+<h2>第二層長什麼樣：兩個鉤子各管一種事件</h2>
 
-<p>與其背規則，不如每次拿這四個問題問自己：</p>
+<p>先看 app 端的鉤子。Dentify 的根 layout 在 <code>Sentry.init</code> 裡同時設定了 <code>beforeSend</code> 與 <code>beforeSendLog</code>。前者處理錯誤事件，把 user 縮成只剩 id；後者處理 log，因為 SDK 會把 scope 上的 user 複製到每一則 log，所以要手動刪掉 email 與 name。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/app/_layout.tsx">  // PHI never leaves the boundary. A console breadcrumb carries whatever was
+  // logged, so drop the category wholesale rather than pattern-matching a name,
+  // and let an event carry the Clerk id but never an email or a display name.
+  beforeBreadcrumb: (b) => (b.category === 'console' ? null : b),
+  beforeSend: (event) => {
+    if (event.user) event.user = { id: event.user.id };
+    return event;
+  },
+  // `beforeSend` does not run on logs, and the SDK copies the scope's user onto
+  // every one as `user.id` / `user.email` / `user.name` — a display name is a
+  // patient name. Same reduction, second door.
+  beforeSendLog: (log) => {
+    delete log.attributes?.['user.email'];
+    delete log.attributes?.['user.name'];
+    return log;
+  },</pre>
+
+<p>這裡藏著兩個很容易忽略的判別點。第一，<code>beforeSend</code> <strong>不會</strong>在 log 上執行。如果你只設了它，log 裡的使用者資訊仍然會照樣出去。第二，console breadcrumb 的處理方式不是「把名字濾掉」，而是直接按 category 整類丟棄，因為一則 console 可能帶任何東西，用 pattern 去猜名字永遠猜不完。</p>
+
+<p>同一份 <code>Sentry.init</code> 上方還有一行 <code>sendDefaultPii: false</code>，意思是不要預設附上個人身分資訊。這是把預設值關掉，和上面兩個鉤子是互補的：一個管預設，一個管例外。</p>
+
+<h2>第三層長什麼樣：整類資料直接不收集</h2>
+
+<p>有些資料不是「刪掉某個欄位」能解決的，而是一整類都不該被收集。伺服器端的 <code>sentry.server.config.ts</code> 就是用 <code>dataCollection</code> 處理這種情況。它把 request body 設成空陣列，並明確關掉三個會夾帶病歷的類別：<code>genAI</code> 的 inputs / outputs（病人自己打的症狀）、<code>databaseQueryData</code>（資料庫 span 的綁定參數）、<code>stackFrameVariables</code>（失敗處理函式裡的所有區域變數）。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/sentry.server.config.ts">  dataCollection: {
+    // The one category we do NOT want: request bodies. `/api/patients/[id]`
+    // and `/api/patients/[id]/medical-history` carry records, and no error is
+    // easier to debug for having a medical history attached to it.
+    httpBodies: [],
+    // Every category left unset above defaults to permissive, so the three that
+    // would carry PHI have to be named. `genAI` is the assistant thread — what
+    // the patient typed about their own symptoms, which is exactly the content
+    // Sentry's Conversations view is reconstructed from (see the PHI note in
+    // `src/app/api/ai/chat/route.ts`). `databaseQueryData` is the bound
+    // parameters on a db span: a name, a DOB, a medical-history row.
+    // `stackFrameVariables` is every local in a failing handler, which is the
+    // same data one frame up.
+    genAI: { inputs: false, outputs: false },
+    databaseQueryData: false,
+    stackFrameVariables: false,
+  },</pre>
+
+<p>註解點出了一個非常重要的陷阱：只要你有傳入 <code>dataCollection</code>，所有你<strong>沒有</strong>列出的類別都會回到「寬鬆的預設值」。換句話說，你以為自己只調了幾個開關，實際上可能把沒提到的類別全部打開了，其中就包含 <code>genAI</code> 的 prompt 與回覆擷取。這正是為什麼那三個類別必須被逐一指名關掉，而不是靠「應該預設就是關的」這種假設。</p>
+
+<p>就算 span 屬性關掉了，還有一條路會漏：Drizzle 會把綁定參數放進它所拋出錯誤的訊息裡，而那個訊息會變成 Sentry 的事件標題。所以伺服器端還有一層 <code>beforeSend</code>，專門把例外訊息裡的參數洗掉。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/sentry.server.config.ts">  beforeSend: (event) => {
+    for (const e of event.exception?.values ?? []) {
+      if (e.value) e.value = scrubQuery(e.value);
+    }
+    return event;
+  },</pre>
+
+<p>而這些伺服器端設定要真的被載入，靠的是 Next.js 的 instrumentation 鉤子。<code>instrumentation.ts</code> 在 node runtime 下動態匯入 <code>sentry.server.config</code>，並用 <code>onRequestError</code> 攔住那些在 route handler 之前就被 Next.js 處理掉的錯誤。也就是說，第三層防線是「設定檔 + 載入時機 + 錯誤攔截」三者一起才成立。</p>
+
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/instrumentation.ts">export async function register() {
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    await import('../sentry.server.config');
+  }
+}
+
+/** Catches server errors Next.js handles before a route handler can. */
+export const onRequestError = Sentry.captureRequestError;</pre>
+
+<h2>判別問句：這筆資料需要離開邊界嗎？</h2>
+
+<p>與其背規則，不如每次都問自己三個問題，順序就是由內到外。</p>
 
 <ol>
-<li><strong>這個欄位是我自己指定要寫的嗎？</strong>如果是你手寫的 log，最乾淨的做法就是在寫入端只放 id、數量、耗時，根本不要讓內容進入字串。能在源頭解決，就不要留到後面攔。</li>
-<li><strong>這類資料是否整批都不該出現？</strong>如果你的 app 有明確的敏感類別，例如「任何 AI 的輸入與輸出都不該上雲」，那就用 <code>dataCollection</code> 把它整類關掉，而不是逐筆靠 hook 判斷。整類禁止，用開關；個別例外，用鉤子。</li>
-<li><strong>資料是第三方 SDK 自動收集的嗎？</strong>有些 breadcrumb、網路請求內容、console 訊息，不是你寫的，而是 SDK 自動夾帶的。這種你控制不到寫入點，只能靠 hook 或收集設定來擋。</li>
-<li><strong>把它拿掉之後，我還 debug 得動嗎？</strong>去識別化的代價是失去資訊。請確認留下的 id 與耗時仍足以追查，否則你會把問題一起關掉。</li>
+<li><strong>沒有這筆內容，我還能不能判斷問題？</strong>如果光靠 id、數量與耗時就能知道發生什麼，就在第一層處理，根本不要寫進 log。這是最乾淨、也最不會出錯的一層。</li>
+<li><strong>如果非留這類欄位不可，它的結構固定嗎？</strong>結構固定、可以精準指名要刪哪個 key，就用第二層 <code>beforeSend</code> / <code>beforeSendLog</code>。但要記得檢查所有路徑：error 事件走 <code>beforeSend</code>，log 走 <code>beforeSendLog</code>，兩者不互通。</li>
+<li><strong>這一整類資料是不是根本不該被收集？</strong>如果答案是「對，連存在都不該存在」，就用第三層：在 <code>dataCollection</code> 裡明確關掉，或在 replay、console breadcrumb 的層級直接停用。前提是要把所有要關的類別都列出來，因為沒列的會回到寬鬆預設。</li>
 </ol>
 
-<h2>反例：單靠一層為什麼會破功</h2>
+<blockquote>
+<p><strong>能不記就不記（第一層）；非記不可，就在送出前用 hook 精準刪除（第二層）；整類都不該收，就用 dataCollection 明確關閉並逐一指名（第三層）。</strong></p>
+</blockquote>
 
-<p><strong>只靠寫入端。</strong>你很有紀律，每行 log 都只放 id，但某個第三方 SDK 自動把 API 回應的內容塞進 breadcrumb，或在崩潰時附上區域變數。這些不是你寫的，寫入端的紀律管不到。</p>
+<h2>反例：這條規則什麼時候會翻車</h2>
 
-<p><strong>只靠 hook。</strong><code>beforeSendLog</code> 確實是集中關卡，但它的邏輯要能預期資料的形狀。當 SDK 版本更新、多了一個新欄位，或物件結構改變，你的刪除條件可能就失準，敏感欄位悄悄溜過去。鉤子是補網，不是唯一防線。</p>
+<p>第一，<strong>只設 <code>beforeSend</code> 就以為 log 也安全</strong>。log 不經過 <code>beforeSend</code>，這是這整套設定最容易中的一個錯。看到 log 裡出現 email，多數人第一個反應是去改 <code>beforeSend</code>，但那份鉤子根本不會被呼叫。</p>
 
-<p><strong>把一切都關掉。</strong>如果為了安全，把 log、trace、replay 全部關閉，你確實不會外洩，但也等於放棄整個觀測體系。去識別化的目標是「留下能追查的骨架」，不是「什麼都不留」。像 AI 監控這種情況，關的是輸入與輸出的內容，但 token 數、延遲、模型名稱這些非內容的指標仍要保留——它們才是你診斷成本與效能的依據。</p>
+<p>第二，<strong>用 pattern 去猜名字</strong>。有人會想「我把所有看起來像姓名的字串過濾掉就好」。但姓名沒有固定格式，病歷欄位更是五花八門，這種做法註定漏。正確的做法是源頭分類：console 整類丟棄、genAI 整類關閉，而不是逐一比對。</p>
+
+<p>第三，<strong>忘了 replay 的遮罩</strong>。mobile replay 如果關掉遮罩，畫面上的姓名、生日、病歷列、聊天訊息會以影片形式整段進 Sentry。Dentify 的範例刻意在開發時關遮罩，是為了用假病人驗證流程；註解也明講，真實病人登入前必須把遮罩打開，或把取樣率降到 0。這是一個「規則會翻轉」的典型：開發環境的方便設定，到了 production 就是一個資安洞。</p>
+
+<p>第四，<strong>以為關了 span 屬性就萬無一失</strong>。錯誤訊息裡的綁定參數是另一條路，必須靠第二層的 <code>beforeSend</code> 再洗一次。三層各管各的縫隙，缺一層都會漏。</p>
 
 <h2>可以直接套用的決策規則</h2>
 
 <blockquote>
-<p>能在寫入端就不記的，就不要記，只留 id、數量、耗時。有整類資料永遠不該上雲的，用 <code>dataCollection</code> 整批關閉，而不是靠逐筆判斷。第三方 SDK 自動夾帶、你控制不到來源的，交給 <code>beforeSend</code>／<code>beforeSendLog</code> 這道集中鉤子去識別化。三層一起用，並在每次新增資料欄位時回頭問第四個問題：拿掉之後，我還查得下去嗎？</p>
+<p>看到一筆可能敏感的資料，先問「不記它我能不能除錯」：能，就在寫入時就別寫（第一層）。非留不可，就用 <code>beforeSend</code> 管錯誤、<code>beforeSendLog</code> 管 log，把 user 縮成 id 並刪掉 email / name（第二層）。整類都不該存在，就在 <code>dataCollection</code> 裡明確關掉 genAI、databaseQueryData、stackFrameVariables 與 http bodies，並記得未列出的類別會回到寬鬆預設（第三層）。最後檢查 replay 遮罩與 instrumentation 載入時機，因為這兩處各有自己的縫。</p>
 </blockquote>
 
-<h2>小結</h2>
-
-<blockquote>
-<p>去識別化不是單一設定，而是三層分工：能在寫入端就不記的，只留 id、數量與耗時；整類永遠不該上雲的，用 <code>dataCollection</code> 一次關掉；第三方 SDK 自動夾帶、你控制不到來源的，交給 <code>beforeSendLog</code> 與 <code>beforeSend</code> 集中攔截。判斷位置時問四個問題：欄位是不是我寫的、這類資料是否整批都不該出現、來源是不是 SDK 自動產生、拿掉後我還能不能追查。最後記得，去識別化的目標是留下可追查的骨架，而不是把觀測全部關掉。</p>
-</blockquote>
-
-<p>當敏感資料確定被擋住，我們才敢放心把觀測往 AI 功能延伸。下一節會講 Sentry 的 agent tracing：它怎麼追蹤 token 用量、延遲與工具呼叫，又為什麼要另開一個 Next.js 專案、並搭配這一節剛建立的去識別化紀律。</p>
+<p>把資料擋在邊界內之後，你終於可以放心地往 AI 功能加觀測了。下一節要處理的正是：當 app 呼叫 LLM，你要怎麼知道它花了多少 token、等了多久、哪個工具被呼叫，同時又不讓病人的對話內容流進 Sentry。</p>
 
 <div class="lesson-nav">
   <div><a href="./explore-logs-dashboard.html">← 上一步：在 Sentry Logs 視圖裡把問題圈出來</a></div>
@@ -81,46 +146,46 @@
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="如果某類資料是「任何情況都不該上雲」，最適合用哪一層處理？" data-correct="2" data-explain="整類禁止用收集設定整批關閉最乾淨，逐筆判斷反而容易漏。">
-  <button class="opt">在寫入端每一行手動記得別寫</button>
-  <button class="opt">用 beforeSendLog 逐筆判斷刪除</button>
-  <button class="opt">在 dataCollection 把整類收集關掉</button>
-  <button class="opt">把整個 Sentry SDK 從專案移除</button>
+<div class="quiz" data-question="在這三層防線裡，最優先、最不容易出錯的是哪一層？" data-correct="0" data-explain="能在寫入時就不記內容，就從源頭沒有東西可外流，是最乾淨的一層。">
+  <button class="opt">寫入時就不記錄內容</button>
+  <button class="opt">在 beforeSend 裡刪除欄位</button>
+  <button class="opt">在 dataCollection 關類別</button>
+  <button class="opt">事後請客服幫忙刪除</button>
 </div>
-<div class="quiz" data-question="為什麼「只靠寫入端紀律」不足以保護敏感資料？" data-correct="1" data-explain="第三方 SDK 會自動夾帶 breadcrumb 或區域變數，這些不是你手寫的 log。">
-  <button class="opt">因為寫入端的程式碼根本不會被執行</button>
-  <button class="opt">因為 SDK 會自動夾帶你沒寫的資料</button>
-  <button class="opt">因為寫入端一定比 hook 更慢更耗電</button>
-  <button class="opt">因為寫入端沒有辦法記錄任何欄位</button>
+<div class="quiz" data-question="為什麼設定了 beforeSend 之後，log 裡仍可能出現 email？" data-correct="2" data-explain="beforeSend 只處理錯誤事件，不會在 log 上執行，log 需要 beforeSendLog。">
+  <button class="opt">因為 email 一定大寫所以比對不到</button>
+  <button class="opt">因為 log 會被加密後才送出</button>
+  <button class="opt">因為 beforeSend 不在 log 上執行</button>
+  <button class="opt">因為 email 屬於系統內建欄位</button>
 </div>
-<div class="quiz" data-question="beforeSendLog 這類鉤子的定位，最貼近下列哪一句？" data-correct="0" data-explain="它是集中的最後一道補網，但仍要能預期資料形狀，不是唯一防線。">
-  <button class="opt">集中的一道補網，但不是唯一防線</button>
-  <button class="opt">唯一且萬無一失的敏感資料防線</button>
-  <button class="opt">取代所有寫入端紀律的萬用方法</button>
-  <button class="opt">專門用來壓縮 log 檔案大小的工具</button>
+<div class="quiz" data-question="為什麼 console breadcrumb 用整類丟棄而不是逐一過濾姓名？" data-correct="1" data-explain="一則 console 可能帶任何東西，逐一猜名字永遠不完整，整類丟棄才可靠。">
+  <button class="opt">因為逐一過濾會讓程式碼變太長</button>
+  <button class="opt">因為內容沒有固定格式，猜不完</button>
+  <button class="opt">因為整類丟棄能省下 Sentry 費用</button>
+  <button class="opt">因為姓名欄位在 SDK 裡不存在</button>
 </div>
-<div class="quiz" data-question="為了保護病歷而把 log、trace、replay 全部關掉，問題在哪裡？" data-correct="3" data-explain="全關等於放棄觀測體系，目標應是留下能追查的非內容骨架。">
-  <button class="opt">會讓 Sentry 的帳單費用變得更高</button>
-  <button class="opt">會讓 app 在裝置上無法正常啟動</button>
-  <button class="opt">會讓使用者無法登入這個應用程式</button>
-  <button class="opt">等於放棄觀測，失去追查問題的能力</button>
+<div class="quiz" data-question="傳入 dataCollection 時，沒有被列出的類別會怎樣？" data-correct="3" data-explain="只要傳入 dataCollection，未設定的類別會回到寬鬆預設，所以必須逐一指名要關的類別。">
+  <button class="opt">全部自動變成完全關閉的狀態</button>
+  <button class="opt">全部被移到另一個 Sentry 專案</button>
+  <button class="opt">全部只在本機顯示不上傳雲端</button>
+  <button class="opt">全部回到寬鬆的預設值</button>
 </div>
-<div class="quiz" data-question="關掉 AI 的輸入與輸出內容後，仍應保留哪些資料？" data-correct="1" data-explain="token 數、延遲、模型名稱等非內容指標才是診斷成本與效能的依據。">
-  <button class="opt">完整的使用者提問與模型回答全文</button>
-  <button class="opt">token 數、延遲與模型名稱等指標</button>
-  <button class="opt">病人的姓名、生日與完整病歷內容</button>
-  <button class="opt">資料庫查詢時綁定的每一筆參數</button>
+<div class="quiz" data-question="span 屬性都關掉了，為什麼還要再用 beforeSend 洗一次？" data-correct="1" data-explain="Drizzle 會把綁定參數放進錯誤訊息，而訊息會變成事件標題，需要另外清洗。">
+  <button class="opt">因為 beforeSend 可以加快事件傳送速度</button>
+  <button class="opt">因為錯誤訊息裡還帶著綁定參數</button>
+  <button class="opt">因為 dataCollection 只能用在手機端</button>
+  <button class="opt">因為 span 屬性其實沒有真的關掉</button>
 </div>
-<div class="quiz" data-question="員工 dashboard 畫面本身就是病歷時，常見的取捨是什麼？" data-correct="2" data-explain="因為畫面即病歷，客戶端乾脆不開 session replay，並在伺服器端整類關閉。">
-  <button class="opt">把 dashboard 的所有權限都開放給病人</button>
-  <button class="opt">把 replay 的遮罩全部關掉看得更清楚</button>
-  <button class="opt">客戶端不開 replay，伺服器端整類關閉</button>
-  <button class="opt">把病歷改存在使用者的手機本機端</button>
+<div class="quiz" data-question="開發時把 mobile replay 遮罩關掉，上線前該怎麼處理？" data-correct="0" data-explain="開發時可以靠假病人驗證，但真實病人登入前必須重開遮罩或把取樣率降到 0。">
+  <button class="opt">重開遮罩，或把取樣率降到 0</button>
+  <button class="opt">維持原樣，因為遮罩不影響隱私</button>
+  <button class="opt">改成只錄音、不錄製畫面</button>
+  <button class="opt">把 replay 換成 console.log</button>
 </div>
 
 <div class="footer">
   <p>mobile-app-course · 觀測深化：Logs / Tracing / Agent Tracing · Step 3/5</p>
-  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>

@@ -11,75 +11,72 @@
 <h1>在 Sentry Logs 視圖裡把問題圈出來</h1>
 <p class="meta">Step 2/5 · 觀測深化：Logs / Tracing / Agent Tracing</p>
 
+<h2>前言：資料送出去了，然後呢</h2>
+
+<p>上一節你已經知道結構化 log 該長什麼樣：訊息、severity 等級，加上一組只放 id、數量與耗時的屬性。但 log 送進 Sentry 之後，真正的功夫才開始：當畫面上是一萬行事件，你要怎麼在幾秒內圈出「昨天下午、錯誤等級、跟付款有關」的那一小塊？</p>
+
+<p>這一節是一份操作程序。做完之後，你會得到一個具體的結果：能在 Explore Logs 裡用條件把問題縮小、能看出時間軸上的異常尖峰，並把這套查詢存下來或匯出，讓下一次同樣的排查不用從零開始。</p>
+
 <h2>學習目標</h2>
-<p>這一節結束時，你能在 Sentry 的 Explore Logs 裡，用 severity 與 property 條件把幾千筆紀錄縮到幾筆，做出多條件搜尋，讀懂時間軸上的尖峰是怎麼回事，並把常用查詢存下來或匯出成 CSV／JSON。</p>
 
-<h2>前言：log 有了，但幾千筆要從哪一筆看起？</h2>
+<p>能照著步驟在 Sentry 的 Explore Logs 裡選對專案、讀懂一則 log 的細節，用 severity 與 property 條件逐層篩選、疊成多條件搜尋，讀出時間軸的尖峰，最後把查詢存成監控或匯出成 CSV / JSON。</p>
 
-<p>上一節我們確認了結構化 log 該長什麼樣：訊息、severity 等級，加上可查詢的 tag。現在假設資料已經送上去了，你打開 Sentry 的 Logs 視圖，迎接你的卻是一條長長的流水——幾千筆事件在同一分鐘內湧入，有正常紀錄，也有出錯的。這時候你可能會想：我明明有 log 了，為什麼還是找不到那筆關鍵紀錄？</p>
+<h2>動手前需要具備什麼</h2>
 
-<p>問題出在「查」這個動作需要方法。結構化 log 的好處不是自動的，它要你下對條件才釋放出來。這一節就是動手操作：把「瀏覽」變成「下查詢」，一步一步把範圍從幾千筆縮到你能盯著看的那幾筆。</p>
+<p>這份程序假設你已經完成兩件事：app 端已接好 Sentry，而且 <code>Sentry.init</code> 開了 <code>enableLogs: true</code>；同時，現實中已經有 log 被送進某個 Sentry 專案。如果 log 還是空的，先回到上一節確認 <code>enableLogs</code> 有沒有開，再回來走這幾步。</p>
 
-<h2>動手前先確認的三件事</h2>
+<h2>步驟一：進 Explore Logs，選對專案</h2>
 
-<p>這是程序型的一節，先確認前置條件都到位，後面才不會卡住。你需要：(1) app 端的 <code>Sentry.init</code> 已經開啟 <code>enableLogs</code>，否則 log 根本不會送出；(2) 有一批可查的資料，可以來自開發用的 log 測試頁，或你剛剛在真機上操作的紀錄；(3) 能進到 Sentry 專案的 Explore Logs，並且選得到正確的專案。</p>
+<p>打開 Sentry，進到 <strong>Explore</strong> 底下的 <strong>Logs</strong> 檢視。第一件事是選對專案。如果你同時有 mobile 與 web 兩個 Sentry 專案，這裡選錯就會看到完全不相關的資料。選好之後，log 不一定會立刻出現，因為 SDK 是把 log 緩衝起來、定時才批次送出，稍等一下或重新整理即可。</p>
 
-<h2>第一步：先用測試工具把資料灌進去</h2>
+<p>在 Dentify 的範例裡，還有一個刻意設計的小幫手：測試頁下方會顯示剛剛那一批的 <code>batch_id</code>，提示你把它貼進 Logs 搜尋欄，一次把那批執行完整撈出來。</p>
 
-<p>真實世界不會等你準備好才出錯，所以這個節點用一個開發用的 log 測試頁來演練。它準備了幾種情境：booking 正常與搶位衝突、助理對話、第三方服務降級、刪帳號後留下的孤兒資料，還有一顆會一次送出上百筆的批次按鈕。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/mobile/src/app/sentry-logs.tsx">Paste the batch_id into the Logs search bar to isolate one run. Every line also
+carries a scenario, so `scenario:&quot;Morning rush — 60 bookings&quot;` pulls back a
+whole rush across runs.</pre>
 
-<p>按下去之後，預期會看到 log 陸續出現在 Dashboard。這裡有個容易忽略的細節：手機上的 log 是批次、非同步上傳的，程式關得太快可能就沒送出去。所以在送出後要主動觸發一次 flush，強制把緩衝區清空：</p>
+<h2>步驟二：先讀懂一則 log 的內容</h2>
 
-<pre><code>await Sentry.flush();  // 確保這批 log 真的送到 Sentry，而不是還沒送出就被關掉</code></pre>
+<p>在篩選之前，隨手點開一則 log，先看清楚它包含哪些資訊。你會看到兩類資料疊在一起：一類是你自己在程式裡寫的屬性，例如 <code>dentist_id</code>、<code>duration_ms</code>、<code>service</code>；另一類是 Sentry 自動補上的 context，例如作業系統、app 版本、environment、裝置型號。</p>
 
-<p>先送出一批，再進 Dashboard。沒有資料的儀表板是空的，先造出可查的東西，後面每一步才看得到效果。</p>
+<p>更關鍵的是，log 旁邊通常會帶著連結，可以跳到同一時刻的 trace 與 session replay。也就是說，當你看到一則「appointment booked 但 duration 特別久」的 log，可以直接往下追到那一次的效能 span，或看回放確認當下畫面的狀態。這是結構化 log 和錯誤、trace、replay 綁在同一條時間軸上的價值。</p>
 
-<h2>第二步：選對專案與時間範圍</h2>
+<h2>步驟三：用 severity 把範圍砍一半</h2>
 
-<p>進到 Explore Logs 後，第一件事是選對專案。這個節點的 app 有兩個 Sentry 專案——行動端一個、Next.js 網頁後端一個——log 會落在各自所屬的專案底下。選錯專案，你會以為「怎麼一筆都沒有」。</p>
+<p>接著開始篩選。最省力的一刀是砍在 severity 上：如果你想找壞掉的事，先只留下 error 等級；想同時看警告，就把 warning 也納入。在搜尋欄打上一個 property 條件，例如 <code>severity:error</code>，結果就會從上萬行瞬間縮到幾十行。範例演示裡，這個條件把結果收斂到 22 筆。</p>
 
-<p>接著把時間範圍拉到剛剛送 log 的區間。範圍太大，幾週的紀錄會把畫面塞滿；範圍太小，可能剛好錯過你送出的那一批。養成「先縮時間，再縮條件」的順序，因為時間是最便宜、最沒有爭議的過濾器。</p>
+<pre data-provenance="derived">severity:error</pre>
 
-<h2>第三步：先過 severity，把雜訊切掉</h2>
+<p>鬆一點的寫法是用 contains，意思是「這個欄位裡有出現 error 這個字」，適合欄位值不固定的情況；精確一點就用等號指定某個值。先用寬的條件確認資料長相，再逐步收緊，通常是比較順手的節奏。</p>
 
-<p>時間範圍內一定混著各種等級的事件。<code>info</code> 是正常的紀錄，例如餐點已建立；真正要處理的是 <code>error</code> 與 <code>fatal</code>。在 Explore Logs 的查詢列，你可以用 property 條件把範圍限縮，例如：</p>
+<h2>步驟四：疊成多條件搜尋</h2>
 
-<pre><code>severity contains error</code></pre>
+<p>單一條件不夠精準時，就往下疊。你可以組合不同欄位，例如「severity 是 error、而且 service 是 cleaning」；也可以對同一個欄位下多個可能值，例如同時要 info 與 error 兩種等級。除了字串條件，還能加上數值與日期條件，例如「<code>duration_ms</code> 大於 2000」或「發生在最近 24 小時」。條件的數量沒有限制，重點是每一步都讓結果更接近你心中那個問題。</p>
 
-<p>這個查詢只留下等級欄位含 error 的紀錄。在示範資料裡，這一步可能就把幾千筆砍到幾十筆。預期看到的是列表縮短，而你要的錯誤類型開始浮出來。判讀 normalize 後的等級、把 warning 與 error 分開看，是這裡的主要動作。</p>
+<pre data-provenance="derived">severity:error service:cleaning
+severity:info OR severity:error
+duration_ms:&gt;2000
+batch_id:8f2a41</pre>
 
-<h2>第四步：用 property 把範圍再切細</h2>
+<p>這裡有一個判讀上的細節：條件下得太多，可能一筆都不剩，但這不代表問題不存在，只代表你的條件彼此矛盾。遇到空結果時，先用兩個條件試，再慢慢加第三個，藉此確認資料本身符合預期。</p>
 
-<p>只靠 severity 還不夠精準。回想上一節的欄位設計：我們在 log 上帶了 <code>feature</code>、<code>scenario</code>、<code>batch_id</code>。這些就是第二層條件。例如你想專注在預約流程的搶位衝突：</p>
+<h2>步驟五：拉時間軸找尖峰</h2>
 
-<pre><code>feature = booking
-scenario = race</code></pre>
+<p>結果列表上方通常有一張隨時間變化的圖。當某個時間點突然湧入一批事件，圖上會翹起一個尖峰。你可以直接在那個區間上拖曳，把時間範圍縮到尖峰附近，再回頭看這一段裡的 log 有什麼共同特徵：是同一個 <code>error_code</code>、同一台裝置型號，還是同一個版本。尖峰本身不告訴你原因，但它幫你把「一整天的資料」縮成「那五分鐘的資料」，這正是後續判讀的起點。</p>
 
-<p>每加一個條件，結果就更接近你真正要問的問題。這就是為什麼欄位命名要一致——如果這次寫 <code>feature</code>、下次寫 <code>module</code>，條件就對不起來，log 再結構化也查不動。</p>
+<h2>步驟六：把查詢存下來、匯出去</h2>
 
-<h2>第五步：多條件搜尋與時間軸尖峰</h2>
+<p>如果你發現某組條件值得常常回來看，例如「付款相關的 error」，就把它存成 saved query，之後一鍵重跑；也可以進一步設成 monitor 或 widget，讓它在超過門檻時主動提醒你。需要離線分析或拿給同事時，Sentry 也支援把查詢結果匯出成 CSV 或 JSON。</p>
 
-<p>實務問題常常需要同時滿足好幾個條件，甚至要跨等級比較。Sentry 的查詢支援把條件疊起來，例如同時看 info 與 error：</p>
-
-<pre><code>severity = info AND severity = error</code></pre>
-
-<p>也可以加上數值或日期條件，例如只看 <code>duration_ms</code> 超過 1000 的紀錄，或限定最近兩小時。除了列表，畫面上方有一條隨時間變化的統計圖。當某個時間點的長條突然拉高，那通常代表一次集中的故障或尖峰。你可以直接在圖上拖曳一個區間，把它當成新的時間過濾器，只保留那段時間的 log。</p>
-
-<p>拖曳時間軸這個動作，是把「什麼時候壞的」變成可操作的條件。很多線上事故不是慢慢累積，而是在某一分鐘突然爆發；能在圖上框出那一分鐘，就等於直接跳到案發現場。</p>
-
-<h2>第六步：把有用的查詢存起來、匯出</h2>
-
-<p>當你調出一組好用的條件——例如「severity 是 error 且 feature 是 booking」——不必每次重打。你可以把它存成已儲存的查詢，掛成 Dashboard 上的監控或小工具，之後一打開就看到這個數字。團隊還會把常見查詢固定下來，變成值班時的標準檢查表。</p>
-
-<p>需要拿資料去跟別人討論或做後續分析時，Sentry 也支援把查詢結果匯出成 CSV 或 JSON。匯出的是你當下篩選後的資料集，所以請先確認條件正確，否則很容易把錯誤的範圍帶去開會。</p>
+<p>這一步常被忽略，但它是把一次性排查變成可重複流程的關鍵。下一次同一種問題再發生，你不用重新摸索條件，只要打開存好的查詢就好。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-<p>Explore Logs 的操作順序是：先選對專案與時間範圍，再用 severity 切掉雜訊，接著用 property 條件一層層收斂，需要時疊成多條件搜尋，並用時間軸的尖峰定位事故發生的那一刻。找到好用的條件就存成查詢與監控，要帶走資料就用 CSV／JSON 匯出。整個過程的關鍵心法只有一句：不要用眼睛翻，要用條件撈。</p>
+<p>在 Explore Logs 裡的順序是：先選對專案、等 log 進來；點開一則確認它同時帶著自訂屬性與 Sentry 補上的 context，並能連到 trace 與 replay；再用 severity 砍掉大部分雜訊；不夠精準就疊成多條件搜尋，必要時加上數值與時間條件；遇到異常就拖曳時間軸、把範圍縮到尖峰附近找共同特徵；最後把常用條件存成查詢或監控，需要時匯出 CSV / JSON。整套動作的目的只有一個：用條件代替捲動，把問題圈到肉眼可讀的大小。</p>
 </blockquote>
 
-<p>到這裡，你已經知道怎麼把有用的 log 查出來。但查得到的同時也代表一件事：log 是上傳到雲端的，如果裡面夾著不該外流的資料，你查得到，別人也可能查得到。下一節要處理的就是這條界線——敏感資料到底該在哪一層被擋下。</p>
+<p>你現在能在資料裡把問題圈出來了。但圈出問題之後，下一個更根本的疑問會冒出來：這些 log 裡的資訊，有些根本不該被送上雲端。姓名、生日、病歷這類敏感資料，到底該在哪一層被擋下？下一節要處理的就是這件事。</p>
 
 <div class="lesson-nav">
   <div><a href="./logs-that-scale.html">← 上一步：結構化 log：讓五萬個使用者的問題查得到</a></div>
@@ -88,46 +85,46 @@ scenario = race</code></pre>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="進到 Explore Logs 後，最適合先做哪一步來縮小範圍？" data-correct="1" data-explain="時間是最便宜又沒有爭議的過濾器，先縮時間再縮條件最有效率。">
-  <button class="opt">先把所有 log 匯出成 CSV 檔</button>
-  <button class="opt">先選專案並縮小時間範圍</button>
-  <button class="opt">先修改 app 的 log 欄位命名</button>
-  <button class="opt">先把專案裡所有查詢刪掉重來</button>
+<div class="quiz" data-question="進到 Explore Logs 之後，第一件該做的事是什麼？" data-correct="1" data-explain="先選對專案，否則可能看到完全不相關的資料。">
+  <button class="opt">先刪掉昨天以前的全部 log</button>
+  <button class="opt">先選對要查詢的 Sentry 專案</button>
+  <button class="opt">先把所有 log 匯出成 CSV</button>
+  <button class="opt">先把 severity 全部設成 error</button>
 </div>
-<div class="quiz" data-question="送出 log 後呼叫 Sentry.flush() 的目的是什麼？" data-correct="2" data-explain="log 是批次非同步上傳，flush 會強制把緩衝區清空、確保資料送出。">
-  <button class="opt">把雲端上舊的 log 全部刪除</button>
-  <button class="opt">把 log 的等級自動升級成 error</button>
-  <button class="opt">強制把緩衝的 log 立刻送出去</button>
-  <button class="opt">把 log 從雲端下載回手機裡</button>
+<div class="quiz" data-question="為什麼 log 剛進到 Sentry 時不一定馬上出現？" data-correct="3" data-explain="SDK 先把 log 緩衝起來、定時批次送出，所以需要稍等一下。">
+  <button class="opt">因為只有付費方案才看得到 log</button>
+  <button class="opt">因為 log 必須先經過人工審核</button>
+  <button class="opt">因為 log 會被隨機抽樣丟棄</button>
+  <button class="opt">因為 SDK 會緩衝後才批次送出</button>
 </div>
-<div class="quiz" data-question="想只看預約流程裡的搶位衝突，該怎麼下條件？" data-correct="0" data-explain="用 feature 與 scenario 這兩個既有 property 疊加，就能精準圈出這個情境。">
-  <button class="opt">feature = booking 且 scenario = race</button>
-  <button class="opt">把時間範圍拉成最近三十天</button>
-  <button class="opt">只搜尋訊息裡出現過的文字</button>
-  <button class="opt">把 severity 全部改成 info</button>
+<div class="quiz" data-question="一則 log 除了自訂屬性，通常還會附帶什麼？" data-correct="0" data-explain="Sentry 會自動補上 OS、版本、environment 等 context，並連到 trace 與 replay。">
+  <button class="opt">Sentry 補上的環境 context 與跳轉連結</button>
+  <button class="opt">這台裝置完整的使用者通訊錄</button>
+  <button class="opt">同一時間所有使用者的聊天訊息</button>
+  <button class="opt">下一次啟動才會產生的預測資料</button>
 </div>
-<div class="quiz" data-question="在時間軸上拖曳一段區間，實際上做了什麼？" data-correct="3" data-explain="拖曳等於用那段時間當新的過濾條件，只保留該時段的 log。">
-  <button class="opt">把整張統計圖匯出成圖片檔</button>
-  <button class="opt">把 log 的 severity 重新分級</button>
-  <button class="opt">刪除那一段時間以外的所有專案</button>
-  <button class="opt">用該時段當條件過濾出 log</button>
+<div class="quiz" data-question="要找「最近 24 小時內、耗時超過兩秒」的事件，需要用到哪類條件？" data-correct="2" data-explain="除了字串屬性，還能加上數值條件與日期條件來縮小範圍。">
+  <button class="opt">只能靠肉眼慢慢捲動列表</button>
+  <button class="opt">只能把整份資料匯出後離線查</button>
+  <button class="opt">數值條件加上日期時間條件</button>
+  <button class="opt">只能刪掉其他所有條件的內容</button>
 </div>
-<div class="quiz" data-question="把常用查詢存下來或掛成監控，最直接的好處是什麼？" data-correct="2" data-explain="存起來後不必每次重打條件，一打開就能看到那個指標。">
-  <button class="opt">可以讓 log 自動被永久保存下來</button>
-  <button class="opt">可以讓 Sentry 自動修好那些錯誤</button>
-  <button class="opt">不必每次重打條件就能重複查看</button>
-  <button class="opt">可以讓查詢結果不再佔用任何額度</button>
+<div class="quiz" data-question="在時間軸上拖曳一個尖峰區間，主要的目的是什麼？" data-correct="1" data-explain="把一整天的資料縮到尖峰附近，才能找出那批事件的共同特徵。">
+  <button class="opt">把尖峰的事件直接全部刪掉</button>
+  <button class="opt">把範圍縮到尖峰附近找共同點</button>
+  <button class="opt">讓整張圖表的顏色變得一致</button>
+  <button class="opt">自動把 log 升級成 fatal 等級</button>
 </div>
-<div class="quiz" data-question="匯出查詢結果成 CSV／JSON 前，最該先確認什麼？" data-correct="1" data-explain="匯出的是當下篩選後的資料集，條件錯了就會帶著錯誤範圍去討論。">
-  <button class="opt">確定 CSV 的檔名有照規範命名</button>
-  <button class="opt">確定目前套用的篩選條件正確</button>
-  <button class="opt">確定已經把 log 全部砍掉重送</button>
-  <button class="opt">確定同事的帳號也已經被加入</button>
+<div class="quiz" data-question="把常用查詢存成 saved query 或 monitor 的價值是什麼？" data-correct="3" data-explain="下次同類問題發生時可直接重跑，甚至主動提醒，不必重新摸索條件。">
+  <button class="opt">可以讓 Sentry 的月費立刻歸零</button>
+  <button class="opt">可以讓 log 的內容完全不同</button>
+  <button class="opt">可以讓手機的耗電量下降</button>
+  <button class="opt">讓同類問題下次能一鍵重跑</button>
 </div>
 
 <div class="footer">
   <p>mobile-app-course · 觀測深化：Logs / Tracing / Agent Tracing · Step 2/5</p>
-  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>

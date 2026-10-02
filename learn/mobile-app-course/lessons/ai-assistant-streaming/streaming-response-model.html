@@ -12,69 +12,69 @@
 <p class="meta">Step 1/5 · 串流 AI 助理</p>
 
 <h2>學習目標</h2>
-<p>學完這一節，你應該能說清楚兩件事：為什麼 AI 助理的回應要用逐字串流，而不是轉圈圈等到整包好再顯示；以及串流發生在請求／回應邊界的哪一層，為什麼它和一般回傳 JSON 的端點根本不是同一種東西。</p>
+<p>能講清楚逐字串流與一般 JSON 端點在資料傳輸上的差別，並說明它解決了 AI 助理體驗裡的哪個問題。</p>
 
-<h2>前言：一個讓人想直接關掉 app 的等待</h2>
+<h2>前言：你盯著的那顆圈圈</h2>
 
-<p>想像你在 Dentify 的助理畫面裡打了一句「我牙齦這幾天一直流血，是什麼原因？」。按下送出之後，畫面只出現一顆轉圈圈的載入圖示。你盯著它，一秒、兩秒、五秒……。</p>
+<p>想像你打開診所 app 的 AI 助理，輸入「牙齦流血大概三天了」，然後按下送出。畫面中央開始轉圈圈。一秒、兩秒、五秒過去，你開始懷疑是不是自己網路有問題，手指已經移到關閉鍵上。就在第八秒，整段回覆忽然一次跳出來。</p>
 
-<p>其實模型早就開始思考了，甚至在第三秒就吐出了第一個字。問題是這個端點的回應方式，讓那些字全部卡在伺服器裡，要等整段話都生成完、包成一份完整的 JSON，才一次送到你手機上。你在等的不是模型，而是「整包一起送」這個設計。</p>
+<p>同樣一個問題，如果丟進 ChatGPT，感覺卻快很多。奇怪的是，兩邊用的其實是同一家模型，算一段答案所需的時間差不多。差別不在模型算得多快，而在它「什麼時候把字交出來」。這一節要建立的，就是這個心智模型：回應不一定要等整包做完才給你，它可以一邊產生、一邊送到畫面上。搞懂這件事，後面四個步驟才有意義，因為診所助理的整個技術選擇都是繞著它長出來的。</p>
 
-<p>把等待從十幾秒縮短成一兩秒當然有幫助，但真正的關鍵不是變快，而是改變等待的形狀：讓字一個一個浮出來。這一節先不寫程式，先把「逐字串流到底是什麼、它改變了哪條界線」講清楚，因為後面四個步驟的每一段程式碼，都建立在同一個畫面上。</p>
+<h2>兩種回應：一次送達，還是邊產生邊送</h2>
 
-<h2>先分清楚兩種回應：一次送完，還是邊產邊送</h2>
+<p>先看一般的 API 端點。你送出請求，伺服器把資料查一查、算一算，組成一包 JSON（一種資料交換格式），然後一次送出。瀏覽器或手機的 <code>fetch</code> 會等到這一整包都到齊，才把 Promise 結算掉，你的程式才第一次拿到資料。在那之前，畫面上什麼都沒有。</p>
 
-<p>一般的 API 端點，例如「取得我的預約清單」，走的是同一個節奏：伺服器把資料準備好、組成一份 JSON、設定好狀態碼與標頭，然後一次性送出。對手機來說，這個回應就是一個完整、可預期的物件；拿到之後 <code>res.json()</code> 解析一下就有結果了。</p>
+<p>你可以把這種模式想成叫一桌外送。廚房要等每一道菜都做好、裝箱、一起送出，餐點才會出現在你家門口。在那一刻之前，桌上完全是空的。這種模式很適合「查一份資料、算一個結果」的情境，因為答案本來就是一個完整的物件，早拿到一半也沒有意義。</p>
 
-<p>這種模型的前提是「答案可以先準備好」。但 LLM 的回答不是查表查出來的，而是模型一個 token（詞元）接著一個 token 生成出來的。你可以把模型想成一個很會寫字但寫得慢的人：它不是先想好整段再抄給你，而是邊想邊寫，寫完一個字才想下一個字。既然答案本來就是一點一點長出來的，硬要等全部寫完才交出去，就等於把已經寫好的字通通鎖在抽屜裡。</p>
-
-<p>串流做的事，是把伺服器的回應體從「一個寫死的字串」換成「一條隨時可以再塞東西進來的水管」。模型吐出一個字，水管就送一個字；手機那一端則是每收到一點就更新畫面。這是兩個截然不同的傳輸形狀，不是同一個東西調快或調慢。</p>
-
-<h2>串流的界線在哪一層：內容型別是分岔點</h2>
-
-<p>要聽懂後面的實作，得先記住一個判別依據：這個端點這次回的是 JSON，還是一條純文字流？</p>
+<p>串流是另一種節奏。伺服器回應的不是一個定型的物件，而是一條資料通道。它產生一小段、就推出一小段；客戶端收到一小段，就先畫一小段。這像接了一根水管：水還沒流完，但你已經可以開始喝，而不是提著一整桶水回家才喝。答案從「全部到齊才算完成」變成「先看到開頭，後面慢慢長出來」。</p>
 
 <table>
 <thead>
-<tr><th>回應型別</th><th>什麼時候出現</th><th>client 怎麼處理</th></tr>
+<tr><th></th><th>一般 JSON 端點</th><th>串流端點</th></tr>
 </thead>
 <tbody>
-<tr><td><code>application/json</code></td><td>錯誤、助理未設定、被擋下、緊急訊息</td><td>當普通物件一次讀完</td></tr>
-<tr><td><code>text/plain</code></td><td>模型真的開始生成、要逐字送出</td><td>用 reader 一段一段讀、邊讀邊更新</td></tr>
+<tr><td>資料何時可用</td><td>整包到齊才可用</td><td>每一小段到就可用</td></tr>
+<tr><td>回應內容型別</td><td><code>application/json</code></td><td><code>text/plain</code> 或 <code>text/event-stream</code></td></tr>
+<tr><td>畫面能不能中途更新</td><td>不能，只能等</td><td>能，邊收邊畫</td></tr>
+<tr><td>使用者感受</td><td>先空白，再一次全部出現</td><td>很快看到第一個字，然後持續增長</td></tr>
 </tbody>
 </table>
 
-<p>在 Dentify 的實作裡，這個分岔是刻意保留的。所有「還沒碰到模型」的分支——設定缺失、被環境關掉、偵測到緊急狀況——都仍然回傳 JSON，而且內容很短、沒有什麼好串的。只有當請求真的通過了層層關卡、要送進模型時，回應才會變成 <code>text/plain; charset=utf-8</code> 的串流。所以客戶端只要看內容型別，就能判斷這次拿到的是「一則通知」還是「一段正在長出來的回覆」，兩邊的程式碼走不同條路。</p>
+<h2>為什麼 LLM 特別需要串流</h2>
 
-<p>這裡有個容易忽略的細節：串流的回應沒有 JSON 的欄位可以放對話編號，所以 Dentify 把它放進標頭 <code>X-Conversation-Id</code>。這也提醒你，串流不是「把 JSON 換成另一種 JSON」，而是換了一種完全不同的回應體。</p>
+<p>對「查一筆訂單」這種端點來說，串流沒有太大好處，因為資料庫一回就是完整一列，沒有「先給你一半」這種事。但大型語言模型（LLM）不一樣：它是逐個詞元（token，模型輸出的最小文字單位）生成答案的。生成一整段話，本來就是一個持續好幾秒的過程。</p>
 
-<h2>為什麼不用 SSE 或 WebSocket</h2>
+<p>如果你用一般 JSON 端點包住模型，使用者感受到的延遲會是「首字時間」加上「整段生成時間」，全部加起來。回覆越長，等待越久，而且等待期間畫面完全沒動靜。串流把這段等待拆開：第一個詞元一產生就送出去，使用者零點幾秒內就看到第一個字，接下來的字陸續補上。總時間其實差不多，但「已經開始回答」的感覺完全不同。對一個放在醫療情境、使用者正在焦慮的助理來說，這個差別會直接決定它會不會被用下去。</p>
 
-<p>你可能聽過另外兩種常見的「即時」做法：Server-Sent Events（SSE，伺服器推送事件）與 WebSocket（全雙工長連線）。它們確實也能做到逐字送出，但用在這個場景有點殺雞用牛刀。</p>
+<p>附帶一個實務觀察：如果模型設定成最多只回兩段短文，答案很短，串流的效果看起來會不明顯，因為整段話本來就幾乎是瞬間完成。串流的價值在長回覆上最明顯。</p>
 
-<p>SSE 會替每一段資料加上事件的框線格式，而且需要有對應的事件來源解析器；WebSocket 則要另外維護一條長連線與連線狀態。相較之下，這個助理的需求很單純：使用者送出一句話，伺服器在同一個請求裡把回覆的字流回來，結束就斷開。這種「一次請求、串流回應」的形狀，用一般的 HTTP 回應體就夠了，不需要額外的長連線，也不需要一個事件解析器。Dentify 的選擇就是把模型的原始輸出直接寫進純文字流，讓手機端一行 reader 迴圈處理完。</p>
+<h2>串流在 HTTP 上長什麼樣子</h2>
 
-<h2>串流改變的不只是速度，還有三個地方</h2>
+<p>串流不是什麼新協定，它就是 HTTP 回應的一種型態。伺服器不把 <code>Content-Length</code> 寫死，而是用分塊傳輸（chunked transfer）一段一段送出，連線保持開著，直到伺服器說結束。常見有兩種做法：一種是 SSE（Server-Sent Events，伺服器推送事件），內容型別是 <code>text/event-stream</code>，每一則訊息有固定的欄位格式；另一種是直接送純文字，內容型別是 <code>text/plain</code>。</p>
 
-<p>第一個是等待的感受。就算總時間一樣，先看到第一個字、再看到它慢慢長成一句話，和盯著一顆轉圈圈圖示十秒，心理感受差距很大。Dentify 的助理還特別加了一個閃爍的游標，讓「還在寫」這件事被看見，而不是讓使用者懷疑程式是不是壞了。</p>
+<p>這個診所 app 選了後者。為什麼？因為手機端根本不需要事件來源解析器，它只是要把文字一段一段接到畫面上，沒必要多一層格式包袱。原始碼裡把這個決定寫得很清楚：</p>
 
-<p>第二個是錯誤的時機。非串流的端點，錯誤一定發生在「還沒開始回」的時候，所以很單純。串流則可能在傳到一半才出錯——例如模型生成到一半、連線斷了。這件事逼你決定：已經送到使用者眼前的半段話，要保留還是丟掉？Dentify 的答案是保留，因為那些字對使用者已經有意義了；錯誤只寫進 log，不會把整個回應炸掉。</p>
+<pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/ai.ts"> * Turns a chat-completion stream into a plain-text response body: raw deltas,
+ * no SSE framing, because the phone has no event-source parser and does not
+ * need one. `onDone` receives the assembled reply BEFORE the stream closes, so
+ * persistence cannot be lost to the response finishing first — but a failure to
+ * persist never takes the delivered answer with it.</pre>
 
-<p>第三個是持久化的順序。既然回應邊產生邊送，那「把這輪對話寫進資料庫」就不能等串流結束後才做，否則回應一旦先關閉，這輪可能就來不及存。因此實作把「存檔」安排在關閉串流之前，確保歷史不會漏掉這一輪。</p>
+<p>這段註解同時透露另一個重點：串流結束之前，伺服器會先拿到拼好的完整回覆，用來存進資料庫。所以「顯示給使用者」和「保存歷史」是兩件事，可以在同一條串流裡各走各的。這個安排會在步驟 2 和步驟 4 再展開。</p>
 
-<h2>串流不是萬靈丹：什麼時候它幫不上忙</h2>
+<h2>一個關鍵取捨：不是每個分支都能串</h2>
 
-<p>有兩種情況，串流看起來很多餘。第一種是回覆本來就很短。Dentify 的系統提示要求助理最多回答兩個短段落，所以當問題簡單時，模型可能幾乎是瞬間就吐出全部內容，你根本感覺不到「逐字」——這不是串流沒生效，而是沒有足夠的字可以慢慢流。</p>
+<p>串流不是萬靈丹，也不是每個回應都該用它。在這個助理裡，只有「模型正在生成答案」這一條路走串流；其他情況，包括緊急狀況的制式回覆、環境沒設定好、外送未經核准，全部維持原本的 JSON 一次送出。</p>
 
-<p>第二種是工作根本不需要使用者在線等。如果某件事要跑好幾分鐘、又容易失敗，正確的做法是把它丟到背景任務，讓使用者先離開、稍後再回來看結果。串流適合的是「使用者正在等、而且答案可以邊想邊給」的互動；需要長時間運算、或要在背景重試的工作，屬於另一個節點的主題。分清楚這兩種，才不會把所有 AI 功能都硬做成串流。</p>
+<p>原因很直覺。緊急回覆是一段固定的文字，內容每次完全相同，沒有任何「邊產生」可言，而且它必須在模型之前就決定、不依賴模型，用串流只是多繞一圈。錯誤則需要攜帶結構化欄位，例如錯誤代碼，用 JSON 才放得下。把這兩類和串流分開之後，客戶端就能靠回應的內容型別判斷自己拿到的是哪一種：看到 <code>application/json</code> 就當一般回應處理，看到純文字就當作正在串流的答案。這個判斷會是步驟 3 的核心。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-<p>一般端點是「答案準備好再一次送出」，而 LLM 的答案本質上是一點一點生成的，串流就是把這兩件事對齊：答案是水管，不是箱子。實作上用回應型別當分岔點——還沒碰到模型的錯誤與緊急訊息走 JSON，真正要生成的回覆走 <code>text/plain</code> 串流，對話編號改放標頭。串流不只讓等待感覺更短，也改變了錯誤處理與持久化的時機。</p>
+一般 JSON 端點要等整包資料到齊才交出來，串流則是一產生就送、客戶端邊收邊畫。LLM 逐詞元生成、耗時好幾秒，如果等到整段完成才顯示，使用者會先面對一段沒動靜的空白；串流把首字時間和總生成時間拆開，讓「已經開始回答」的感覺提早出現。這個 app 用純文字串流、不用 SSE 格式，並且只讓模型生成那一條路串流，緊急回覆與錯誤仍走 JSON，讓客戶端用內容型別分辨兩者。
 </blockquote>
 
-<p>心智模型建立好了，但界線還停在紙上。下一步要把這條水管接到真的 AI 上：在 Next.js 的 Route Handler 裡，用領域 system prompt 框住助理、在模型之前先攔下緊急訊息、用一個預設關閉的傳輸閘門決定要不要送 OpenAI，最後把模型的輸出轉成一條純文字流。</p>
+<p>心智模型建立起來之後，下一步就可以動手了。我們會進到 Next.js 的 Route Handler，把 system prompt、緊急短路、外送閘門和 OpenAI 的串流一層一層接起來，寫出真正會串的那個端點。</p>
 
 <div class="lesson-nav">
   <div></div>
@@ -83,51 +83,51 @@
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="為什麼 LLM 的回答適合用串流送出？" data-correct="2" data-explain="回答本身是逐個 token 生成出來的，串流讓已生成的內容立刻送到使用者眼前，不必等整段完成。">
-  <button class="opt">因為串流可以讓模型的生成速度變得更快</button>
-  <button class="opt">因為串流能省下伺服器端大量的記憶體</button>
-  <button class="opt">因為答案本來就是一邊生成一邊長出來的</button>
-  <button class="opt">因為手機瀏覽器不支援一次讀完的回應</button>
+<div class="quiz" data-question="一般 JSON 端點和串流端點最根本的差別是什麼？" data-correct="1" data-explain="一般端點要等整個回應體到齊，串流則是一產生就送出、客戶端邊收邊用。">
+  <button class="opt">一般端點只能用在伺服器端，串流只能用在手機端</button>
+  <button class="opt">一般端點等整包到齊，串流一產生就送出</button>
+  <button class="opt">一般端點會壓縮資料，串流則完全不壓縮</button>
+  <button class="opt">一般端點一定比較慢，串流一定比較快</button>
 </div>
 
-<div class="quiz" data-question="在 Dentify 的助理端點裡，client 用什麼判斷這次是不是串流？" data-correct="1" data-explain="錯誤、緊急訊息等分支回 JSON，真正要生成的回覆才是 text/plain 串流，兩種內容型別各走一條路。">
-  <button class="opt">用回應標頭裡的狀態碼判斷是成功還是失敗</button>
-  <button class="opt">用回應的內容型別是 JSON 還是純文字</button>
-  <button class="opt">用請求裡有沒有帶 conversationId 欄位</button>
-  <button class="opt">用伺服器有沒有回傳 X-Conversation-Id 標頭</button>
+<div class="quiz" data-question="為什麼 LLM 回覆特別適合用串流呈現？" data-correct="2" data-explain="模型逐詞元生成、需要好幾秒，串流能先把開頭送出來，降低等待的空白感。">
+  <button class="opt">因為模型的答案通常很短，需要盡快送完</button>
+  <button class="opt">因為串流能讓模型生成得更快更省錢</button>
+  <button class="opt">因為模型逐詞元生成，等待時間較長</button>
+  <button class="opt">因為串流可以省略伺服器端的資料庫</button>
 </div>
 
-<div class="quiz" data-question="為什麼 Dentify 不採用 SSE 或 WebSocket？" data-correct="3" data-explain="這個需求是單次請求、串流回應，用一般 HTTP 回應體即可，不需要長連線或事件解析器。">
-  <button class="opt">因為 SSE 與 WebSocket 都無法傳送純文字</button>
-  <button class="opt">因為這兩種做法在行動網路上完全不可用</button>
-  <button class="opt">因為它們不支援 OpenAI 回傳的資料格式</button>
-  <button class="opt">因為單次請求搭配串流回應已經足夠</button>
+<div class="quiz" data-question="這個 app 的串流為什麼不採用 SSE 格式？" data-correct="0" data-explain="手機端只需要把文字一段段接起來，沒有事件來源解析器，也不需要那層格式。">
+  <button class="opt">手機端不需要事件來源解析器，純文字就夠</button>
+  <button class="opt">SSE 格式在 iOS 上完全無法被瀏覽器支援</button>
+  <button class="opt">SSE 會讓模型無法正確產生逐字內容</button>
+  <button class="opt">純文字傳輸比 SSE 更省伺服器成本</button>
 </div>
 
-<div class="quiz" data-question="串流中途發生錯誤時，已送出的半段回覆該怎麼處理？" data-correct="0" data-explain="已經到使用者眼前的內容仍有價值，Dentify 選擇保留它，只把錯誤寫進 log，不讓整個回應炸掉。">
-  <button class="opt">保留已送出的內容，只把錯誤記錄下來</button>
-  <button class="opt">立刻清空畫面並重新送出整個請求</button>
-  <button class="opt">把錯誤訊息接在回覆後面一起顯示</button>
-  <button class="opt">丟棄整段回覆並要求使用者重問一次</button>
+<div class="quiz" data-question="串流端點的內容型別通常是哪一種？" data-correct="3" data-explain="純文字串流用 text/plain，事件推送用 text/event-stream，兩者都不是 application/json。">
+  <button class="opt">application/json</button>
+  <button class="opt">application/octet-stream</button>
+  <button class="opt">multipart/form-data</button>
+  <button class="opt">text/plain 或 text/event-stream</button>
 </div>
 
-<div class="quiz" data-question="為什麼持久化這一輪對話要安排在串流關閉之前？" data-correct="1" data-explain="若要等串流關閉後才寫入，回應可能已經先結束，這一輪就來不及被存進歷史。">
-  <button class="opt">因為資料庫的寫入速度會隨著串流變慢</button>
-  <button class="opt">因為回應一旦先關閉，這輪就可能漏存</button>
-  <button class="opt">因為串流關閉後就無法取得對話編號</button>
-  <button class="opt">因為模型的輸出必須先存才能顯示出來</button>
+<div class="quiz" data-question="緊急狀況的制式回覆為什麼不跟著串流？" data-correct="1" data-explain="它是每次相同的固定文字、必須在模型之前決定，用 JSON 一次送出最直接可靠。">
+  <button class="opt">因為它太長，串流會導致畫面卡住</button>
+  <button class="opt">因為它是固定文字且在模型之前決定</button>
+  <button class="opt">因為串流無法攜帶任何醫療相關文字</button>
+  <button class="opt">因為客戶端不支援同時接收兩種內容</button>
 </div>
 
-<div class="quiz" data-question="下列哪一種工作最不適合用串流，而該交給背景任務？" data-correct="3" data-explain="需要長時間運算、又容易失敗的工作適合移到背景執行並重試；串流適合使用者在線等待的互動。">
-  <button class="opt">使用者問一句牙齦流血原因的即時問答</button>
-  <button class="opt">緊急訊息要立刻顯示的制式提醒卡片</button>
-  <button class="opt">使用者送出問題後逐字浮現的助理回覆</button>
-  <button class="opt">要跑數分鐘且可能失敗的長時分析工作</button>
+<div class="quiz" data-question="客戶端靠什麼分辨自己拿到的是錯誤 JSON 還是串流答案？" data-correct="2" data-explain="回應的 Content-Type：application/json 走 JSON 分支，純文字則進入串流讀取。">
+  <button class="opt">靠 HTTP 狀態碼是不是 200</button>
+  <button class="opt">靠回應長度是否大於一千位元</button>
+  <button class="opt">靠回應的 Content-Type 內容型別</button>
+  <button class="opt">靠請求裡帶的 conversationId 欄位</button>
 </div>
 
 <div class="footer">
   <p>mobile-app-course · 串流 AI 助理 · Step 1/5</p>
-  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>
