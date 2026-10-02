@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>測權限與不變量</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>測權限與不變量</h1>
+<p class="meta">Step 4/5 · 寫實 Seed 與後端測試</p>
+
+<h2>學習目標</h2>
+<p>用匿名／不同身分的測試找出越權，並用重複呼叫驗證冪等、計數器與唯一性等不變量。</p>
+
+<h2>前言：最危險的 bug，是「只有某些身分才踩得到」的那種</h2>
+
+<p>你自己手動測後端時，永遠是登入狀態、永遠是自己的資料。所以按讚、留言、刪除全都正常，你很有信心地宣布功能完成。但真實世界不是這樣運作的：有人沒登入就亂打 API，有人想刪別人的貼文，有人因為網路不穩把同一個請求送了兩次。這些情境你一個都沒手動試過，而它們恰好是最容易出事的地方。</p>
+
+<p>這一節談測試的兩個核心主題。第一是<strong>權限</strong>：用不同的身分去呼叫同一支函式，確認該被擋的都擋住了。第二是<strong>不變量</strong>：那些「不管呼叫幾次、誰來呼叫，都必須永遠成立」的性質，例如重複送出只會留下一筆、計數器永遠等於真實數量。把這兩類測好，後端才真的站得住。</p>
+
+<h2>權限測試：切換身分，看誰被擋</h2>
+
+<p>測權限不需要複雜的技巧，核心就是「同一個動作，換不同身分再試一次」。有三種典型身分要輪流上場。</p>
+
+<h3>匿名訪客：完全不該通過</h3>
+
+<p>前面提過，沒有掛 identity 的原始 <code>t</code> 代表未登入。所有需要身分的函式，對它都應該直接拒絕：</p>
+
+<pre><code>await expect(t.query(api.profiles.me, {})).rejects.toThrow('sign in');
+await expect(t.query(api.posts.get, { id: postId })).rejects.toThrow('sign in');</code></pre>
+
+<p>這裡用的是 <code>rejects.toThrow(...)</code>，意思是「我預期這個呼叫會丟出錯誤，而且錯誤訊息包含某段字」。如果後端忘記檢查身分、讓匿名訪客讀到了資料，這個斷言就會失敗，成為一個被你提早抓到的漏洞。</p>
+
+<h3>非擁有者：身分合法，但不能碰別人的東西</h3>
+
+<p>比匿名更陰險的是「已登入但不是主人」。bob 是一個完全合法的使用者，但他不該能刪 alice 的貼文、不能取消 alice 的上傳、也不能改 alice 的留言。這類測試要把擁有者與外來者分開建立：</p>
+
+<pre><code>await expect(bob.mutation(api.posts.remove, { id: postId }))
+  .rejects.toThrow('Not authorized');
+await expect(bob.mutation(api.uploads.cancel, { id: uploadId }))
+  .rejects.toThrow('Not authorized');</code></pre>
+
+<p>注意它的錯誤訊息刻意和匿名的 <code>sign in</code> 不同。這是很好的實務習慣：<strong>「你沒登入」和「你登入了但沒權限」是兩種不同的失敗</strong>，訊息分開，除錯時才分得清是哪一層出了問題。</p>
+
+<h3>偽造身分：不同 issuer 不能混充</h3>
+
+<p>還有一種攻擊是拿一個看起來很像、但其實來自別的驗證來源的身分。測試可以直接造一個 <code>tokenIdentifier</code> 指向不同網域的假身分，確認系統不會認帳：</p>
+
+<pre><code>const foreignIssuer = t.withIdentity({
+  subject: 'alice',
+  tokenIdentifier: 'https://different.test|alice',
+});
+expect(await foreignIssuer.query(api.profiles.me, {})).toBeNull();</code></pre>
+
+<p>就算 <code>subject</code> 也叫 alice，只要 issuer 不對，後端就查不到對應的 profile。這條測試守住的是「身分必須來自可信任的來源」，而不是「名字對就放行」。</p>
+
+<h2>不變量測試：重複呼叫，結果必須一樣</h2>
+
+<p><strong>不變量（invariant）</strong>是指某個在你系統裡永遠成立的性質。它不會因為呼叫一次或十次而改變，也不會因為誰來呼叫而不同。後端有幾種最常見的不變量，值得一一用測試釘住。</p>
+
+<h3>冪等：重複的請求只留下一個結果</h3>
+
+<p>建立 profile、發布貼文、送出留言，這些動作在網路重試時可能被執行兩次。正確的行為是「第二次回傳和第一次相同的結果，而不是再建一筆」。測試就是連呼兩次，然後斷言回傳值相同：</p>
+
+<pre><code>expect(await alice.mutation(api.profiles.create, {
+  username: 'different', name: 'Changed',
+})).toBe(aliceId);
+
+const commentId = await bob.mutation(api.social.addComment,
+  { postId, text: 'Nice!', requestId: 'one' });
+expect(await bob.mutation(api.social.addComment,
+  { postId, text: 'Nice!', requestId: 'one' })).toBe(commentId);</code></pre>
+
+<p>第一次建立 profile 回傳 <code>aliceId</code>；第二次即使傳了完全不同的 username，也應該回傳同一個 <code>aliceId</code>。留言則靠 <code>requestId</code> 認出「這是同一個請求的重試」，所以回傳同一則留言的 id。這些斷言確保了：重試不會製造重複資料。</p>
+
+<h3>唯一性與計數器：一個讚只能算一次</h3>
+
+<p>按讚是一個 toggle，而且背後的關聯表有唯一索引保證一個人對一篇貼文只能有一筆讚。把這個性質測出來，順便驗證畫面上的計數器沒有被重複加：</p>
+
+<pre><code>await bob.mutation(api.social.setLike, { postId, liked: true });
+await bob.mutation(api.social.setLike, { postId, liked: true });
+expect((await alice.query(api.posts.get, { id: postId }))?.likesCount).toBe(1);</code></pre>
+
+<p>連按兩次「讚」，<code>likesCount</code> 仍然是一，而不是二。這條測試一次守住了兩件事：唯一索引確實發揮作用，以及 denormalized counter 沒有在重複呼叫下失準。追蹤（follow）的測試也是同樣的道理。</p>
+
+<h3>Seed 的冪等：跑兩次，summary 相同</h3>
+
+<p>上一節的冪等 seeder 本身就是一個不變量。用測試把它固定下來：第一次跑與第二次跑之後呼叫 <code>summary</code>，兩次的統計必須完全相同；第二次的 <code>populate</code> 回傳應該是 <code>{ created: 0, skipped: 3 }</code>。同時還要驗證環境守衛——把環境變數改成正式環境的網址，執行 seed 必須直接失敗。這等於把「不能對正式環境 seed」這條規則寫成了一條會自動重跑的測試。</p>
+
+<h2>為什麼這些要交給測試，而不是靠人工檢查</h2>
+
+<p>權限與不變量有一個共同點：它們都是「只要有一條路徑沒守住，整個系統的信任就破了」。而人腦不擅長記住所有路徑，改一次程式碼就可能不小心打開一個缺口。把它們寫成測試後，每次改動都會自動把這張安全網重跑一次；你要做的不是記得每個洞在哪，而是把洞補起來並留下一個會盯著它的測試。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+權限測試用三種身分輪流上場：匿名訪客應該被拒絕、已登入的非擁有者應該收到「未授權」、不同 issuer 的偽造身分應該查不到資料。不變量測試則用重複呼叫驗證冪等（重試只留一筆）、唯一性（一個讚只算一次）與計數器正確。Seed 的「跑兩次結果相同」與「只能在開發環境跑」也都能用同一套方式釘住。
+</blockquote>
+
+<p>到這裡，你已經能測身分與資料的正確性了。最後一塊拼圖是那些「不是立刻發生」的行為：分頁要跨好幾次請求才看得出問題，清理要等排程時間到才會執行。下一節要學會控制和驗證這些非同步的過程。</p>
+
+<div class="lesson-nav">
+  <div><a href="./convex-test-harness.html">← 上一步：用 convex-test 與 vitest 建立測試</a></div>
+  <div><a href="./test-pagination-and-cleanup.html">下一步：測分頁、排程與清理 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="測「未登入訪客讀取個人資料」，預期結果應該是什麼？" data-correct="2" data-explain="需要身分的函式對匿名訪客應該直接拒絕，測試會用 rejects.toThrow 斷言。">
+  <button class="opt">回傳一筆空白的個人資料</button>
+  <button class="opt">回傳所有使用者的公開資料</button>
+  <button class="opt">直接拒絕並丟出未登入錯誤</button>
+  <button class="opt">自動建立一個新的匿名帳號</button>
+</div>
+
+<div class="quiz" data-question="為什麼「未登入」與「已登入但未授權」要用不同的錯誤訊息？" data-correct="1" data-explain="兩種失敗代表不同的層次，訊息分開才容易判斷問題出在哪一層。">
+  <button class="opt">因為不同的訊息可以節省伺服器資源</button>
+  <button class="opt">因為兩者屬於不同層次，分開才好除錯</button>
+  <button class="opt">因為使用者介面需要顯示不同的顏色</button>
+  <button class="opt">因為資料庫不允許重複的錯誤訊息</button>
+</div>
+
+<div class="quiz" data-question="測試偽造身分時，把 tokenIdentifier 換成不同 issuer 是為了驗證什麼？" data-correct="3" data-explain="就算 subject 名稱對，來源不對就不該被接受，守住身分必須來自可信任來源。">
+  <button class="opt">驗證使用者名稱的長度限制是否正確</button>
+  <button class="opt">驗證密碼的雜湊演算法是否夠安全</button>
+  <button class="opt">驗證不同網域的網路延遲是否穩定</button>
+  <button class="opt">驗證身分必須來自可信任的來源</button>
+</div>
+
+<div class="quiz" data-question="送出留言時重複使用同一個 requestId，正確的行為是什麼？" data-correct="0" data-explain="系統應認出這是同一次請求的重試，回傳同一則留言而不是再建一筆。">
+  <button class="opt">回傳同一則留言而不是新增一筆</button>
+  <button class="opt">再新增一則內容完全相同的留言</button>
+  <button class="opt">刪除第一則留言再重新建立一則</button>
+  <button class="opt">直接回傳錯誤並拒絕這次請求</button>
+</div>
+
+<div class="quiz" data-question="連按兩次讚之後，likesCount 應該是多少？" data-correct="1" data-explain="唯一索引保證一筆讚，計數器也應維持在 1，不會被重複累加。">
+  <button class="opt">2，因為呼叫了兩次就該算兩次</button>
+  <button class="opt">1，因為唯一索引讓它只算一次</button>
+  <button class="opt">0，因為第二次呼叫是取消的意思</button>
+  <button class="opt">無法判斷，要等使用者重新整理</button>
+</div>
+
+<div class="quiz" data-question="把環境變數改成正式環境後執行 seed 並預期失敗，這條測試守住了什麼？" data-correct="2" data-explain="它把「只能對開發環境 seed」變成一條會自動重跑的規則，防止誤寫正式資料庫。">
+  <button class="opt">守住 seed 產生的資料筆數永遠正確</button>
+  <button class="opt">守住 seed 的執行時間不會超時</button>
+  <button class="opt">守住 seed 不會對正式環境寫入資料</button>
+  <button class="opt">守住 seed 使用的圖片大小不超標</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 寫實 Seed 與後端測試 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>測分頁、排程與清理</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>測分頁、排程與清理</h1>
+<p class="meta">Step 5/5 · 寫實 Seed 與後端測試</p>
+
+<h2>學習目標</h2>
+<p>驗證 cursor 分頁不重疊不漏資料，並用 fake timers 與 finishAllScheduledFunctions 確認排程清理真的把關聯資料與檔案清乾淨。</p>
+
+<h2>前言：資料只有一頁、清理還沒到時間，看起來都正常</h2>
+
+<p>有兩種 bug 特別會躲過你的手動測試。第一種是分頁：當資料只有兩三筆時，列表一頁就載完了，你根本不會去捲下一頁，也就永遠不會發現「第二頁和第一頁重複了同一筆」或「最後一筆怎麼消失了」。第二種是清理：刪除貼文後，系統其實是排一個背景工作晚點把相關資料清掉；你當下重新整理畫面看到貼文不見了，就以為清完了，卻沒發現底層的按讚、留言、檔案還留著。</p>
+
+<p>這兩種行為的共同點是「不是立刻發生、也不是在少量資料下才看得出來」。要測它們，就得學會兩件事：用 cursor 把分頁從頭走到尾，以及用<strong>假時間</strong>把未來才會執行的排程工作立刻推完。這一節走完，你就有辦法把這些隱形行為固定在測試裡。</p>
+
+<h2>分頁測試：把 cursor 一路走到底</h2>
+
+<p>Convex 的分頁回傳兩個東西：這一頁的 <code>page</code>，以及下一頁要用的 <code>continueCursor</code>。傳 <code>null</code> 當 cursor 代表從頭開始；拿到回傳的 <code>continueCursor</code> 再問一次，就得到下一頁。測試的做法是刻意把頁面切小，逼系統分多次回傳，再把所有頁面收集起來檢查。</p>
+
+<pre><code>const first = await alice.query(api.posts.list, {
+  feed: 'explore',
+  paginationOpts: { numItems: 2, cursor: null },
+});
+const second = await alice.query(api.posts.list, {
+  feed: 'explore',
+  paginationOpts: { numItems: 2, cursor: first.continueCursor },
+});
+expect(new Set([...first.page, ...second.page].map(p =&gt; p._id)).size).toBe(4);</code></pre>
+
+<p>這裡先建立 4 篇貼文，卻一次只要求 2 篇，所以必定分成兩頁。最後那行把兩頁的貼文 id 全部放進一個 <code>Set</code>——<code>Set</code> 會自動去掉重複項——然後斷言它的數量是 4。如果分頁有 bug，讓同一篇貼文同時出現在兩頁，集合大小就會小於 4；如果漏掉了某一篇，大小也會不對。用集合大小當斷言，一次同時檢查「不重複」與「不漏資料」兩件事。</p>
+
+<p>這種「把大列表切成小頁、逼測試真的跨頁」的手法，是驗證分頁唯一可靠的方式。只要求一頁、然後檢查裡面的內容，是測不出跨頁錯亂的。</p>
+
+<h2>排程清理：用假時間把未來的工作推完</h2>
+
+<p>刪除貼文不是一個瞬時動作。後端會先把貼文標記為刪除或移除，然後排一個（或好幾個）背景工作，去清掉它底下的按讚、留言、留言讚、書籤，以及儲存媒體的檔案。這些工作在真實世界要等排程時間到才會跑，但在測試裡我們不想真的等，於是使用 <code>vitest</code> 的假時鐘：</p>
+
+<pre><code>vi.useFakeTimers();        // 在 setup() 裡：把時間換成可控制的假時鐘
+// ...在測試裡執行刪除...
+await t.finishAllScheduledFunctions(() =&gt; vi.runAllTimers());</code></pre>
+
+<p><code>vi.useFakeTimers()</code> 讓時間不再自己往前走，而是由你控制。<code>t.finishAllScheduledFunctions</code> 則會反覆執行「把所有排定的函式叫起來」，<code>vi.runAllTimers()</code> 負責把時間推進到觸發點。兩者搭配，等於把未來所有該發生的清理一次跑完。這樣你就能在測試裡立刻檢查清理的最終結果。</p>
+
+<h2>驗證清理：貼文、關聯資料、檔案都要消失</h2>
+
+<p>刪除貼文之後，測試會逐一確認每一種殘留都不見了：</p>
+
+<pre><code>await alice.mutation(api.posts.remove, { id: postId });
+await t.finishAllScheduledFunctions(() =&gt; vi.runAllTimers());
+
+expect(await alice.query(api.posts.get, { id: postId })).toBeNull();
+expect(await t.run(ctx =&gt; ctx.storage.get(storageId))).toBeNull();
+expect(await t.run(ctx =&gt;
+  ctx.db.query('likes').withIndex('by_postId', q =&gt; q.eq('postId', postId)).take(1)
+)).toHaveLength(0);</code></pre>
+
+<p>第一行確認貼文本身查不到了，第二行用 <code>t.run</code> 直接檢查檔案是否真的從 storage 消失，第三行直接查關聯的讚表，確認沒有任何一筆還指著這篇貼文。留言、留言讚、書籤也都有對應的檢查。這幾條合起來，才叫「清乾淨」——不是畫面看不到，而是底層不留垃圾。</p>
+
+<p>還有一條很值得測的邊界：清理完成之後，如果又有人想對這篇已刪除的貼文留言，必須被拒絕。</p>
+
+<pre><code>await expect(bob.mutation(api.social.addComment,
+  { postId, text: 'late', requestId: 'two' }))
+  .rejects.toThrow('deleted');</code></pre>
+
+<p>這條測試防止的是「刪除與寫入的競賽」：資料已經被清掉，但因為某個慢來的請求而復活。用 <code>rejects.toThrow('deleted')</code> 確保系統在寫入前會先確認目標還在。</p>
+
+<h2>同一招也能測過期與逾時</h2>
+
+<p>假時間不只用在刪文清理。系統中還有兩種「時間到了要做某件事」的行為：上傳到一半、最後沒有完成的上傳，過了一小時要自動清掉；限時動態（story）滿 24 小時要過期消失。測試的方式完全一樣——先製造出那個狀態，再用 <code>finishAllScheduledFunctions</code> 把時間推過期限，最後斷言資料與檔案都不見了。學會控制時間之後，這些原本「要等很久才看得到」的行為，全都能在幾毫秒內測完。</p>
+
+<h2>為什麼非測不可</h2>
+
+<p>非同步清理的 bug 有個討厭的特性：它們在開發者的小資料量、短時間內幾乎不會出現，卻會在正式環境累積。刪掉的貼文留下的讚與檔案會慢慢吃掉儲存空間，過期的上傳會變成永遠沒人處理的孤兒。等到你發現時，通常已經累積了一大堆。把這些行為寫成會自動重跑的測試，等於替未來的自己省下一場很難追查的清理工作。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+分頁測試要刻意用小頁面跨頁走完，再用集合大小斷言「不重複也不漏資料」。排程清理測試用 <code>vi.useFakeTimers()</code> 與 <code>t.finishAllScheduledFunctions(() =&gt; vi.runAllTimers())</code> 把未來的工作一次推完，然後用 <code>t.run</code> 直接確認貼文、關聯資料與檔案都消失，並驗證對已刪除資料的寫入會被拒絕。同一套手法也能測上傳逾時與限時動態過期。
+</blockquote>
+
+<p>走到這裡，這條「寫實 Seed 與後端測試」的主線就完整了：先用冪等的 seeder 逼近真實資料量，再用記憶體後端把它連同權限、不變量、分頁與清理一起驗證。你現在擁有的是兩份可以重跑的資產——一份能重現真實規模的資料，一套能替你守住後端行為的測試。回到你自己的 app，把它們當成每個新後端功能收尾時的固定動作。</p>
+
+<div class="lesson-nav">
+  <div><a href="./test-permissions-and-invariants.html">← 上一步：測權限與不變量</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="測分頁時為什麼要刻意把 numItems 設得比資料量小？" data-correct="1" data-explain="這樣系統才會真的分多頁回傳，才測得出跨頁重複或漏資料。">
+  <button class="opt">這樣可以讓測試的執行速度變得比較快</button>
+  <button class="opt">這樣才會真的分成多頁，測出跨頁問題</button>
+  <button class="opt">這樣可以驗證資料庫的容量上限</button>
+  <button class="opt">這樣可以避免測試寫入任何資料</button>
+</div>
+
+<div class="quiz" data-question="用 Set 收集兩頁貼文 id 後檢查 size 為 4，同時驗證了什麼？" data-correct="3" data-explain="Set 去重，若大小為 4 代表既不重複（否則變小）也不漏（否則變小）。">
+  <button class="opt">只驗證了貼文的建立時間排序正確</button>
+  <button class="opt">只驗證了伺服器的回應速度正常</button>
+  <button class="opt">只驗證了資料庫沒有超出儲存上限</button>
+  <button class="opt">同時驗證不重複與不漏資料</button>
+</div>
+
+<div class="quiz" data-question="finishAllScheduledFunctions(() => vi.runAllTimers()) 的作用是什麼？" data-correct="0" data-explain="它把排定的函式叫起來、把假時間推到觸發點，一次跑完未來所有清理工作。">
+  <button class="opt">把未來排定的清理工作一次推完</button>
+  <button class="opt">把測試的錯誤自動重試直到通過</button>
+  <button class="opt">把資料庫的計數器即時重新計算</button>
+  <button class="opt">把測試檔編譯成正式環境版本</button>
+</div>
+
+<div class="quiz" data-question="刪除貼文後，為什麼還要用 t.run 直接查 storage 與關聯表？" data-correct="2" data-explain="介面可能只是查不到，底層的檔案與關聯資料要用 t.run 才能確認真的清乾淨。">
+  <button class="opt">因為介面查詢在測試裡一定會失敗</button>
+  <button class="opt">因為關聯表只能透過檔案系統存取</button>
+  <button class="opt">因為要確認底層真的沒有殘留資料</button>
+  <button class="opt">因為 t.run 會自動修復損壞的資料</button>
+</div>
+
+<div class="quiz" data-question="清理完成後又對已刪除的貼文留言，預期應該如何？" data-correct="1" data-explain="系統應在寫入前確認目標仍存在，對已刪除資料的寫入要直接拒絕。">
+  <button class="opt">留言成功，並把貼文重新建立起來</button>
+  <button class="opt">被拒絕，因為目標已經被刪除</button>
+  <button class="opt">留言成功，但不會更新任何計數器</button>
+  <button class="opt">被忽略，並回傳一個空的成功結果</button>
+</div>
+
+<div class="quiz" data-question="為什麼非同步清理的 bug 特別容易躲過開發時的檢查？" data-correct="0" data-explain="小資料量與短時間內看不出來，卻會在正式環境慢慢累積成孤兒資料。">
+  <button class="opt">因為小資料量與短時間內通常看不出問題</button>
+  <button class="opt">因為正式環境不會執行任何排程工作</button>
+  <button class="opt">因為測試環境的資料庫欄位比較少</button>
+  <button class="opt">因為刪除功能在正式環境會被停用</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 寫實 Seed 與後端測試 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

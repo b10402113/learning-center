@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>媒體驗證該信誰？MIME、magic bytes 與尺寸限制</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>媒體驗證該信誰？MIME、magic bytes 與尺寸限制</h1>
+<p class="meta">Step 3/5 · Convex 檔案儲存與上傳</p>
+
+<h2>學習目標</h2>
+<p>能在「信任 client 帶來的檔名與型別」和「server 端重新驗證」之間做出選擇，並為不同用途挑對格式、尺寸與時長限制。</p>
+
+<h2>前言：client 說這是 JPEG，你就信嗎？</h2>
+
+<p>上一節把上傳拆成開單與核銷兩個階段，單子裡也記下了用途與限制。現在檔案真的要送進來了，client 會順手附上一些資訊：檔名叫做 <code>photo.jpg</code>、Content-Type 是 <code>image/jpeg</code>、大小大約兩 MB。這些資訊看起來很合理，也讓 server 很方便判斷。</p>
+
+<p>但請記得，client 是使用者手上的裝置，上面跑的程式可以被改、請求也可以用 <code>curl</code> 自己發。那串 Content-Type 不來自檔案本身，而是發送者自己填的字串；檔名更是隨手就能改。於是一個很實際的決定擺在眼前：驗證到底該放在哪一側、又可以信任哪些資訊？這個決定做錯，輕則使用者體驗差，重則有人能塞進一個超大檔案把後端打爆。</p>
+
+<h2>兩股張力：體驗和安全</h2>
+
+<p>在 client 端驗證的好處很直觀。使用者一選完檔案，app 立刻就能說「這張圖太大了，換一張」，不必先花三十秒把檔案傳上去、再被 server 拒絕。它省頻寬、反應快，是好的使用者體驗。</p>
+
+<p>但 client 端驗證有一個致命弱點：它只在你的 app 裡成立。任何人打開終端機，對著 <code>/upload</code> 直接發請求，就跳過了所有 app 端的檢查。所以 client 端的驗證是一種「善意提示」，不是安全邊界。</p>
+
+<p>server 端驗證相反。它擋不掉使用者選錯檔，但沒有人能繞過它。它是唯一能保證「不管請求從哪來、長什麼樣，都必須遵守規則」的地方。代價是發現問題時，檔案往往已經傳進來了，頻寬已經花了。</p>
+
+<p>所以這不是二選一，而是分工：<strong>client 端做早期回饋，server 端做強制執行</strong>。兩邊都做同一套規則，只是角色不同。</p>
+
+<h2>三個判別問句</h2>
+
+<p>每當你不確定某個檢查該放哪一側，問自己這三個問題：</p>
+
+<ol>
+<li><strong>這個檢查如果被繞過，會發生什麼事？</strong> 如果後果是「塞爆儲存空間」、「讓 action 記憶體爆掉」、「塞進惡意內容」，那它必須在 server 端。如果後果只是「使用者選了一張不好看的圖」，client 端提示就夠了。</li>
+<li><strong>這個值 client 能不能改？</strong> 只要是請求裡的值——檔名、Content-Type、宣稱的寬高——都能改。凡是能改的值，都不能當成安全判斷的依據。</li>
+<li><strong>這個檢查需要讀檔案內容嗎？</strong> 如果需要（例如確認它真的是 JPEG），那只有 server 端能可靠地做，因為 client 宣稱的型別與內容是兩回事。</li>
+</ol>
+
+<h2>為什麼 MIME、副檔名和 Content-Type 都不可信</h2>
+
+<p>先把「不可信」說清楚。當 client 送出上傳請求，它會帶一個 Content-Type 標頭。這個標頭是發送者自己填的，不是系統從檔案內容推出來的。同樣地，圖片選擇器回傳的 <code>mimeType</code> 也可能只是依照副檔名猜的。把一個文字檔改名成 <code>movie.mp4</code>，再配上 <code>video/mp4</code> 的標頭，這些欄位看起來就完全正常。</p>
+
+<p>要驗真正的格式，只能讀檔案的開頭幾個位元組，這叫做 magic bytes（檔頭簽章）。每種格式在一開始都有固定的位元組特徵，變不了：</p>
+
+<table>
+<thead>
+<tr><th>格式</th><th>檔頭特徵</th></tr>
+</thead>
+<tbody>
+<tr><td>JPEG</td><td>前三 bytes 是 <code>FF D8 FF</code></td></tr>
+<tr><td>PNG</td><td>第一 byte 是 <code>89</code>，接著是 <code>PNG</code></td></tr>
+<tr><td>WebP</td><td>開頭是 <code>RIFF</code>，第 8 到 12 bytes 是 <code>WEBP</code></td></tr>
+<tr><td>MP4 / MOV</td><td>第 4 到 8 bytes 是 <code>ftyp</code></td></tr>
+</tbody>
+</table>
+
+<p>實務上只需要讀開頭 32 個 bytes 就夠了。Codexgram 的 <code>/upload</code> 就是這樣做：它把 blob 切出前 32 bytes，轉成字元，再按照宣稱的型別去比對對應的簽章。比對不通過就回一個錯誤，檔案從頭到尾沒有真的被存下來。</p>
+
+<h2>為每個用途挑限制值</h2>
+
+<p>再來是「限制的內容」。因為 <code>uploads</code> 有 <code>purpose</code>，同一套驗證可以依用途給不同上限。Codexgram 的選擇如下：</p>
+
+<table>
+<thead>
+<tr><th>用途</th><th>允許格式</th><th>大小上限</th><th>時長上限</th></tr>
+</thead>
+<tbody>
+<tr><td><code>avatar</code></td><td>JPEG、PNG、WebP、HEIC、HEIF</td><td>5MB</td><td>不適用</td></tr>
+<tr><td><code>post</code>（圖片）</td><td>JPEG、PNG、WebP、HEIC、HEIF</td><td>10MB</td><td>不適用</td></tr>
+<tr><td><code>post</code>（影片）</td><td>MP4、QuickTime</td><td>50MB</td><td>30 秒</td></tr>
+<tr><td><code>story</code></td><td>JPEG、PNG、WebP、HEIC、HEIF</td><td>10MB</td><td>不適用</td></tr>
+</tbody>
+</table>
+
+<p>這些數字不是什麼定律，而是產品決策。頭像在畫面上只佔一小塊，5MB 已經很夠；貼文圖片要能被放大觀看，給到 10MB；影片無論如何都比圖片大，給 50MB。換成你的 app，這些值完全可以調整。真正不變的是那條原則：<strong>限制要在 server 端強制，而且依用途分開</strong>。</p>
+
+<p>影片時長特別值得一提。client 端可以讀取影片長度，選完檔就能立刻顯示「這支太長了」。但這個長度也是裝置算出來的，必須在 server 端用檔案的內容重新確認。第 4 步會看 server 怎麼只讀 MP4 的檔頭就得到真實時長，完全不必解碼整支影片。</p>
+
+<h2>規則會翻轉的反例</h2>
+
+<p>把限制寫死的時候，要小心它對真實裝置的影響。假設你的允許清單只列了 JPEG 和 PNG，看起來很標準。但 iPhone 預設拍出來的格式是 HEIC，於是一堆 iOS 使用者會發現「我手機裡的照片全部上傳失敗」。這就是為什麼上面那張表一定要把 HEIC、HEIF 放進去。驗證規則要跟著真實世界的檔案格式走，而不是跟著你的直覺走。</p>
+
+<p>另一個反例是時長。30 秒對社群貼文是合理的，但如果你做的是短影音或教學平台，這個限制會直接砍掉大量正當內容。同樣地，5MB 的頭像上限對一般照片很夠，但如果你的 app 主打高解析度專業作品展示，這個值就太低了。限制值是可調的旋鈕，不是道德律令；該堅持的是「兩側都有檢查、server 做最後一道」。</p>
+
+<h2>決策規則：一張可以帶著走的檢查表</h2>
+
+<blockquote>
+凡是安全邊界，一律在 server 端重新驗證；client 端只做早期回饋。能從檔案內容驗證的（magic bytes），就不要信任 client 宣稱的型別、檔名或 Content-Type。大小與時長依用途分開設定，且影片時長必須由 server 重新解析。限制值是產品決策，可以調；但「server 是最後一道」這條不能調。
+</blockquote>
+
+<p>驗證規則定好了，下一步就是把規則寫進真正接收檔案的 <code>/upload</code> HTTP action，並且在串流與記憶體的現實限制下，把它做得又快又安全。</p>
+
+<div class="lesson-nav">
+  <div><a href="./two-phase-upload.html">← 上一步：兩階段上傳：pending → ready → published 的生命週期</a></div>
+  <div><a href="./upload-http-action.html">下一步：實作 POST /upload：串流限流、時長解析與綁定 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 client 端的驗證不能當成安全邊界？" data-correct="1" data-explain="任何人用 curl 直接打 API 就能跳過 app 的檢查，所以它只是善意提示。">
+  <button class="opt">因為 client 端的程式執行速度太慢會延遲</button>
+  <button class="opt">因為請求可以繞過 app 直接打在 API</button>
+  <button class="opt">因為手機的相機權限一定會被拒絕</button>
+  <button class="opt">因為 Content-Type 只有 server 讀得到</button>
+</div>
+<div class="quiz" data-question="判斷要不要在 server 重驗的第一個問題是什麼？" data-correct="3" data-explain="先問這個檢查被繞過會有什麼後果，後果嚴重就必須在 server 強制。">
+  <button class="opt">這個檢查的程式碼總共會寫多少行</button>
+  <button class="opt">這個檢查執行起來會花多少毫秒</button>
+  <button class="opt">這個檢查會不會讓使用者不開心</button>
+  <button class="opt">這個檢查被繞過會發生什麼後果</button>
+</div>
+<div class="quiz" data-question="想知道上傳的檔案是不是真的 JPEG，該看什麼？" data-correct="0" data-explain="Content-Type 和副檔名都是可改的字串，只有檔頭 magic bytes 來自內容本身。">
+  <button class="opt">讀取檔頭開頭的 magic bytes</button>
+  <button class="opt">讀取請求的 Content-Type 標頭</button>
+  <button class="opt">讀取檔案名稱的副檔名部分</button>
+  <button class="opt">讀取 client 回報的檔案大小</button>
+</div>
+<div class="quiz" data-question="下列哪個格式的檔頭以 ftyp 作為特徵？" data-correct="2" data-explain="MP4 與 MOV 這類 ISO BMFF 容器在第 4 到 8 bytes 是 ftyp。">
+  <button class="opt">JPEG 這類常見的圖片格式</button>
+  <button class="opt">PNG 這類無損的圖片格式</button>
+  <button class="opt">MP4 與 MOV 這類影片容器</button>
+  <button class="opt">WebP 這類網頁圖片格式</button>
+</div>
+<div class="quiz" data-question="為什麼允許清單一定要放進 HEIC 與 HEIF？" data-correct="1" data-explain="iPhone 預設拍 HEIC，若不在清單裡，大量 iOS 使用者會上傳失敗。">
+  <button class="opt">因為這兩種格式的檔案體積最小</button>
+  <button class="opt">因為 iPhone 預設拍出來的格式</button>
+  <button class="opt">因為只有這兩種格式支援影片</button>
+  <button class="opt">因為瀏覽器只看得懂這兩種格式</button>
+</div>
+<div class="quiz" data-question="關於限制值，下列哪個說法是對的？" data-correct="2" data-explain="數字是產品決策可以調，但 server 做最後一道強制這條原則不能調。">
+  <button class="opt">限制值一旦決定就永遠不該再改動</button>
+  <button class="opt">限制值應該只寫在 client 端就足夠</button>
+  <button class="opt">限制值是產品決策但 server 要強制</button>
+  <button class="opt">限制值應該對所有用途都完全相同</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Convex 檔案儲存與上傳 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>

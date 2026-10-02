@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>樂觀送出與重試：pending outbox 與 requestId 對帳</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>樂觀送出與重試：pending outbox 與 requestId 對帳</h1>
+<p class="meta">Step 4/5 · 即時私訊</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你能在前端先顯示 pending 訊息、用 <code>requestId</code> 與後端訊息對帳，並在失敗時提供可重試的狀態。</p>
+
+<h2>前言：為什麼訊息要「先出現」</h2>
+
+<p>前一節把伺服器端的 <code>send</code> 準備好了，它不怕你重送。現在鏡頭切到手機這一端。</p>
+
+<p>使用者在對話框打完字、按下送出。從按下到後端回覆，可能只要兩百毫秒，也可能在訊號不好時拖好幾秒。如果畫面堅持「等後端確認才顯示訊息」，那幾秒裡輸入框清空了、對話卻沒有任何動靜，使用者會以為訊息沒送出去，於是再按一次。這種不確定的感覺，是聊天體驗裡最傷的一種。</p>
+
+<p>解法叫樂觀更新：按下送出的那一刻，就先讓訊息出現在畫面上，假裝它已經成功；同時在背景真的把它送出去。如果成功，畫面幾乎無縫接軌；如果失敗，才把狀態改成「未送出」並提供重試。這一節要處理的，就是這個「假裝」要怎麼收尾才會乾淨。</p>
+
+<h2>動手前你需要具備什麼</h2>
+
+<p>這一節用到三個現成零件：一個跨畫面共用的 outbox（負責存待送訊息）、對話歷史的即時查詢（負責提供後端正式訊息），以及顯示訊息的聊天畫面（負責把 pending 與正式訊息一起畫出來）。後端的 <code>send</code> 必須支援 <code>requestId</code> 去重——也就是上一節完成的東西。</p>
+
+<h2>第一步：按下送出，先在本地佔一個位</h2>
+
+<pre><code>type Pending = {
+  id: string; conversationId: Id&lt;'conversations'&gt;;
+  text: string; createdAt: number;
+  status: 'pending' | 'failed';
+};
+
+function send(conversationId, text) {
+  const item = {
+    id: randomUUID(), conversationId, text,
+    createdAt: Date.now(), status: 'pending',
+  };
+  setPending(items =&gt; [...items, item]);
+  void retry(item);
+}</code></pre>
+
+<p>待送訊息存成一個陣列，每一項都有自己的 <code>id</code>。這個 <code>id</code> 是用 <code>randomUUID()</code> 現產的，而它同時就是等等要傳給後端的 <code>requestId</code>。先用本地的 UUID 佔位，是整個對帳機制的起點：本地知道「我送的是哪一則」，後端也用同一把鑰匙去重。</p>
+
+<p><code>send</code> 只做兩件事——把項目丟進 pending 陣列、然後呼叫 <code>retry</code>。注意它沒有直接呼叫後端 mutation，而是繞了一手。這是刻意的。</p>
+
+<h2>第二步：讓「第一次送」與「重試」走同一條路</h2>
+
+<pre><code>async function retry(item) {
+  if (busy.current.has(item.id)) return;
+  busy.current.add(item.id);
+  setPending(items =&gt; items.map(row =&gt;
+    row.id === item.id ? { ...row, status: 'pending' } : row));
+  try {
+    await mutate({
+      id: item.conversationId, text: item.text, requestId: item.id,
+    });
+    setPending(items =&gt; items.filter(row =&gt; row.id !== item.id));
+  } catch {
+    setPending(items =&gt; items.map(row =&gt;
+      row.id === item.id ? { ...row, status: 'failed' } : row));
+  } finally {
+    busy.current.delete(item.id);
+  }
+}</code></pre>
+
+<p><code>retry</code> 是唯一真正呼叫後端的地方。成功時把項目從 pending 移除——因為接下來它會以正式訊息的身分出現在歷史查詢裡；失敗時把它留在陣列裡，狀態改成 <code>failed</code>。由於第一次送出也是呼叫它，兩條路徑的行為天生一致，不會有「重試走另一套比較容易出錯的邏輯」這種事。</p>
+
+<p>開頭的 <code>busy</code> 集合用來擋掉重複點擊。雖然後端的去重會確保資料不會重複，但前端也不該濫發請求；有人連續猛點「重試」時，這個集合會讓第二次之後的點擊直接返回。</p>
+
+<blockquote>
+<p>狀態只有三種：pending（正在送）、failed（送失敗，可重試），以及「已經不在陣列裡」（後端已收到）。畫面的責任，就是把這三種狀態誠實地呈現出來。</p>
+</blockquote>
+
+<h2>第三步：把 pending 疊到歷史訊息上</h2>
+
+<p>聊天畫面同時有兩份資料。一份是後端的歷史訊息，由訂閱取得，裡面是「已經正式存在」的訊息；另一份是本地 outbox 的 pending 陣列，裡面是「還沒被後端確認」的訊息。畫面要把它們合併成一個列表來顯示。</p>
+
+<pre><code>const history = usePaginatedQuery(
+  api.messaging.history, { id }, { initialNumItems: 30 });
+const outbox = useMessages();
+
+// 歷史查詢是新的在前，畫面要舊的在前，所以先反轉。
+const messages = history.results.slice().reverse().map(item =&gt; ({
+  id: item._id, text: item.text, outgoing: item.outgoing,
+  time: messageTime(item._creationTime),
+}));
+
+// 把還沒被後端確認的 pending 疊上去。
+for (const item of outbox.pending) {
+  const alreadySaved = item.conversationId === id &amp;&amp;
+    history.results.some(saved =&gt;
+      saved.outgoing &amp;&amp; saved.requestId === item.id);
+  if (alreadySaved) continue;
+
+  messages.push({
+    id: item.id, text: item.text, outgoing: true,
+    time: messageTime(item.createdAt),
+    status: item.status, retry: () =&gt; outbox.retry(item),
+  });
+}</code></pre>
+
+<p>關鍵在那個 <code>alreadySaved</code> 判斷。歷史訊息裡每一則都帶著當初送出的 <code>requestId</code>，而 pending 項目的 <code>id</code> 就是同一個值。所以只要歷史查詢裡出現了一則 <code>outgoing</code> 且 <code>requestId</code> 相符的訊息，就代表這則訊息已經被後端收下了，本地那個 pending 版本不該再顯示。這一比對就是所謂的「對帳」：把本地的臨時版本，換成後端的正式版本。</p>
+
+<p>如果少了這個判斷，畫面會同時畫出 pending 與正式訊息，使用者就會看到同一句「明天見」出現兩次——一個寫著「Sending…」，一個寫著正式時間。後端的去重保證資料庫裡只有一則；前端的對帳則保證螢幕上也只顯示一則。兩邊各管一件事。</p>
+
+<h2>第四步：把狀態誠實地畫出來</h2>
+
+<pre><code>&lt;Text&gt;
+  {message.status === 'pending' ? 'Sending…' : message.time}
+&lt;/Text&gt;
+{message.status === 'failed' &amp;&amp; (
+  &lt;Pressable onPress={message.retry}&gt;
+    &lt;Text&gt;Not sent · Tap to retry&lt;/Text&gt;
+  &lt;/Pressable&gt;
+)}</code></pre>
+
+<p>聊天畫面根據 <code>status</code> 決定要顯示什麼。還在送，就顯示「Sending…」，讓使用者知道它正在路上；失敗了，就顯示「Not sent · Tap to retry」，並把點擊接回 <code>retry</code>。因為 <code>retry</code> 用的還是原本那個 <code>requestId</code>，這次重試就算後端其實早就收過，也只會拿回同一則訊息，不會產生第二則。</p>
+
+<h2>完整流程走一次</h2>
+
+<p>使用者打出「明天見」並按下送出。<code>send</code> 立刻用一個新的 UUID 建立 pending 項目，畫面出現一顆寫著「Sending…」的藍色泡泡。同時 <code>retry</code> 在背景呼叫 <code>send</code> mutation。</p>
+
+<p>如果一切順利，後端寫入訊息並回傳。後端的即時歷史查詢更新，帶著同一個 UUID 的正式訊息出現在 <code>history.results</code> 裡。下一次畫面重繪時，<code>alreadySaved</code> 成立，pending 不再被疊上去；泡泡上的「Sending…」換成正式時間。使用者幾乎感覺不到中間發生過什麼。</p>
+
+<p>如果請求失敗，項目留在陣列裡、狀態變成 <code>failed</code>，泡泡下面出現「Not sent · Tap to retry」。使用者點一下，<code>retry</code> 用同一個 UUID 重送。這次成功後，它就跟前面那條路徑匯流，pending 被移除、正式訊息接手。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>樂觀送出是三個零件的合作：前端用 <code>randomUUID()</code> 在本地先建一個 pending 項目並立刻顯示；同一個 UUID 當作 <code>requestId</code> 傳給後端；當即時歷史查詢裡出現相同 <code>requestId</code> 的正式訊息時，就把 pending 版本移除。後端的去重防止資料重複，前端的對帳防止畫面重複，重試則讓失敗有第二條路可以走。</p>
+</blockquote>
+
+<p>訊息可以送了，還剩下最後一塊拼圖：對方怎麼知道有未讀、而讀過之後那個標記又是怎麼消失的。下一步會回到 inbox 上的兩個序號，把「未讀」講清楚。</p>
+
+<div class="lesson-nav">
+  <div><a href="./server-side-send.html">← 上一步：伺服器端送出：用 sequence 排序、用 requestId 去重</a></div>
+  <div><a href="./unread-and-read-state.html">下一步：未讀與已讀：用 sequence 比對，而不是布林旗標 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="樂觀送出時，本地 pending 項目的 id 有什麼用途？" data-correct="1" data-explain="它同時就是傳給後端的 requestId，讓後端去重、也讓前端能把正式訊息跟 pending 對上。">
+  <button class="opt">它只是 React 列表需要的畫面 key</button>
+  <button class="opt">它同時是傳給後端的 requestId</button>
+  <button class="opt">它是這條對話在資料庫的正式編號</button>
+  <button class="opt">它是使用者的 profile 識別碼</button>
+</div>
+
+<div class="quiz" data-question="為什麼 send 不直接呼叫後端，而是呼叫 retry？" data-correct="3" data-explain="讓第一次送出與手動重試共用同一段邏輯，行為一致，也不會有一套沒被測到的重試路徑。">
+  <button class="opt">因為 retry 比較省電，適合手機環境</button>
+  <button class="opt">因為直接呼叫會被後端的安全規則擋下</button>
+  <button class="opt">因為 send 不能使用非同步的函式</button>
+  <button class="opt">因為第一次送與重試共用同一段邏輯</button>
+</div>
+
+<div class="quiz" data-question="alreadySaved 判斷要避免畫面上出現什麼？" data-correct="2" data-explain="若不去除已進到歷史查詢的 pending，同一句訊息會同時以臨時版與正式版顯示兩次。">
+  <button class="opt">避免使用者把同一則訊息送給錯誤的人</button>
+  <button class="opt">避免後端把同一則訊息寫入兩次資料庫</button>
+  <button class="opt">避免同一則訊息在畫面上出現兩次</button>
+  <button class="opt">避免未讀的小藍點過早被標記為已讀</button>
+</div>
+
+<div class="quiz" data-question="busy 集合在前端負責什麼？" data-correct="0" data-explain="它擋掉重複點擊，避免同一個 pending 同時發出多個請求；資料不重複仍由後端去重保證。">
+  <button class="opt">擋掉重複點擊避免同時發出多個請求</button>
+  <button class="opt">記錄哪些使用者已經讀過這條對話</button>
+  <button class="opt">決定訊息泡泡要顯示在哪一側</button>
+  <button class="opt">計算對話列表要由新到舊怎麼排序</button>
+</div>
+
+<div class="quiz" data-question="pending 項目成功送出後，會怎麼從畫面消失？" data-correct="1" data-explain="成功後它從 pending 陣列移除，改由即時歷史查詢帶著同一 requestId 的正式訊息接手顯示。">
+  <button class="opt">它會一直留著，只是把文字改成已送達</button>
+  <button class="opt">它從 pending 移除，由正式訊息接手</button>
+  <button class="opt">它會被存進另一個獨立的已送訊息表</button>
+  <button class="opt">它會等使用者下次開啟 App 才更新</button>
+</div>
+
+<div class="quiz" data-question="失敗的訊息要能重試，最關鍵的條件是什麼？" data-correct="2" data-explain="重試必須沿用原本的 requestId，後端才能認出這是同一則，回傳原訊息而非新增第二則。">
+  <button class="opt">重試時要順便更新使用者的頭像</button>
+  <button class="opt">重試要換一個全新的 requestId</button>
+  <button class="opt">重試要沿用原本的 requestId</button>
+  <button class="opt">重試前要先刪掉後端可能有的訊息</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 即時私訊 · Step 4/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

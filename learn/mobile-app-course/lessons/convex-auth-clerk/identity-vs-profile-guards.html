@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>requireIdentity 還是 requireProfile？</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>requireIdentity 還是 requireProfile？</h1>
+<p class="meta">Step 4/5 · Convex × Clerk 身分驗證</p>
+
+<h2>學習目標</h2>
+<p>完成這一節後，你能依「這個操作需不需要 app profile」來判斷該用 <code>requireIdentity</code> 還是 <code>requireProfile</code>，並說出 <code>requireProfile</code> 會擋下哪三種情況。</p>
+
+<h2>前言：登入了，然後呢？</h2>
+
+<p>上一節你已經能穩定地從 token 拿到 identity，知道呼叫者是 Clerk 的哪個使用者。但接下來的問題是：你的 app 並不認識每一個人。使用者第一次登入時，profile 根本還不存在——你得先請他取一個 username。另外，資料庫裡可能還有幾筆示範用的假帳號，以及一個正在進行刪除流程、暫時不該被當成正常使用者的帳號。</p>
+
+<p>所以「有登入」跟「能用這個 app 的功能」是兩件不同的事。專案把這兩件事包成兩個 helper：<code>requireIdentity</code> 只確認有人登入，<code>requireProfile</code> 進一步確認這個人有可用的 profile。這一節要決定的，就是每個操作該用哪一個。</p>
+
+<h2>兩個 helper 在做什麼</h2>
+
+<p>先看它們的實作，差異會很清楚：</p>
+
+<pre><code>export async function requireIdentity(ctx: Pick&lt;QueryCtx, 'auth'&gt;) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new ConvexError('Please sign in to continue.');
+  return identity;
+}
+
+export async function requireProfile(ctx: QueryCtx | MutationCtx) {
+  const identity = await requireIdentity(ctx);
+  const profile = await ctx.db
+    .query('profiles')
+    .withIndex('by_tokenIdentifier', (q) =&gt; q.eq('tokenIdentifier', identity.tokenIdentifier))
+    .unique();
+  if (profile?.deletionRequested) throw new ConvexError('Account deletion is in progress.');
+  if (profile?.isDemo) throw new ConvexError('Fictional demo profiles cannot sign in.');
+  if (!profile) throw new ConvexError('Choose your username to continue.');
+  return profile;
+}</code></pre>
+
+<p><code>requireIdentity</code> 只做一件事：跟 <code>ctx.auth</code> 要身分，要不到就丟出「請先登入」。<code>requireProfile</code> 則先呼叫前者，再用 <code>tokenIdentifier</code> 去 profiles 表查資料，然後依序檢查三種不能放行的情況：正在刪帳號、是示範帳號、以及根本還沒有 profile。三者之外的正常使用者，才會拿到 profile 物件繼續往下做。</p>
+
+<h2>選項比較</h2>
+
+<table>
+<thead>
+<tr><th>面向</th><th>requireIdentity</th><th>requireProfile</th></tr>
+</thead>
+<tbody>
+<tr><td>回傳</td><td>identity 物件</td><td>profile 文件</td></tr>
+<tr><td>確認的事</td><td>有人登入</td><td>這個人有可用的 app profile</td></tr>
+<tr><td>資料庫查詢</td><td>不需要</td><td>多一次 profiles 查詢</td></tr>
+<tr><td>新使用者尚未建 profile</td><td>放行</td><td>擋下並要求取 username</td></tr>
+<tr><td>示範 / 刪帳中帳號</td><td>不特別處理</td><td>明確拒絕</td></tr>
+<tr><td>適合的場合</td><td>只記錄事件、公開但可登入的查詢</td><td>貼文、追蹤、私訊等掛在 profile 上的操作</td></tr>
+</tbody>
+</table>
+
+<h2>三個判別問句</h2>
+
+<p>不確定該用哪個時，依序問自己三個問題：</p>
+
+<ol>
+<li><strong>這個操作讀寫的資料，是不是掛在某個 profile 上？</strong>如果它要建立貼文、追蹤別人、送訊息，答案幾乎都是「是」，用 <code>requireProfile</code>。</li>
+<li><strong>如果把 profile 拿掉，這個操作還成立嗎？</strong>例如純粹記錄一個系統事件、或某個不需要個人資料的查詢，可能只需要 <code>requireIdentity</code>。</li>
+<li><strong>新使用者還沒建 profile 時，這個操作該成功還是被擋？</strong>如果它不該成功（例如貼文），就用 <code>requireProfile</code>，讓使用者先完成 onboarding。</li>
+</ol>
+
+<h2>規則會翻轉的情況</h2>
+
+<p><strong>只用 requireIdentity，然後自己拿 identity 去查 profile。</strong>這樣做等於把「profile 不存在」的處理散落在每個函式裡，有的地方忘了檢查就變成 bug。<code>requireProfile</code> 的價值就是把這些檢查集中在一個地方。</p>
+
+<p><strong>把 requireProfile 用在公開功能上。</strong>如果你的探索頁、公開貼文在未登入時也該看得到，硬套 <code>requireProfile</code> 會把整個功能鎖死給登入者。這種情況應該提供不需要登入的查詢，或是在查詢裡「可以選擇」地讀 <code>ctx.auth</code>，而不是強制要求 profile。</p>
+
+<p><strong>通過 guard 之後又相信 client 傳來的 profileId。</strong>很多人前面乖乖呼叫了 <code>requireProfile</code>，後面卻用參數裡的 id 去寫入資料，等於門鎖裝了卻把鑰匙留在門上。guard 回傳的 profile 才是唯一可信的來源，後面所有操作都要用它。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>requireIdentity</code> 只保證「有人登入」，適合不需要 app 資料的操作；<code>requireProfile</code> 會再查一次 profiles，並擋下刪帳中、示範帳號與尚未建立 profile 這三種情況，適合所有掛在 profile 上的功能。判準是：這個操作需不需要一個真實可用的 profile。選擇之後，後續一律使用 guard 回傳的物件，不再相信 client 傳來的識別碼。
+</blockquote>
+
+<p>知道該用哪個 guard 之後，最後一步就是把它套進實際的 query 與 mutation，並用三種身分情境確認它真的在把關。</p>
+
+<div class="lesson-nav">
+  <div><a href="./jwt-verification-and-identity.html">← 上一步：JWT 驗證與 identity 物件</a></div>
+  <div><a href="./guard-and-verify.html">下一步：把 guard 套進 query/mutation 並驗證 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="requireIdentity 與 requireProfile 最核心的差別是什麼？" data-correct="1" data-explain="前者只確認有人登入，後者進一步確認這個人已有可用的 app profile。">
+  <button class="opt">前者會過期而後者永遠不會過期</button>
+  <button class="opt">後者會確認已有可用的 app profile</button>
+  <button class="opt">前者只能用於 mutation 不能用於 query</button>
+  <button class="opt">後者不需要經過 token 的驗證流程</button>
+</div>
+
+<div class="quiz" data-question="下列哪一種情況 requireProfile 會明確擋下？" data-correct="2" data-explain="正在進行帳號刪除的 profile 會被拒絕，避免刪除期間又被寫入資料。">
+  <button class="opt">剛完成 onboarding 的普通新使用者</button>
+  <button class="opt">已經登入且資料完整的正式使用者</button>
+  <button class="opt">正在進行帳號刪除的使用者</button>
+  <button class="opt">剛剛更換過使用者名稱的帳號</button>
+</div>
+
+<div class="quiz" data-question="一個純粹記錄系統事件、不需要個人資料的操作，比較適合用哪個？" data-correct="0" data-explain="它不需要 profile 存在，只確認呼叫者已登入即可。">
+  <button class="opt">requireIdentity 就足以把關</button>
+  <button class="opt">requireProfile 一定比較安全</button>
+  <button class="opt">兩者都不需要直接跳過檢查</button>
+  <button class="opt">改用 client 傳來的 userId 判斷</button>
+</div>
+
+<div class="quiz" data-question="為什麼不該把 requireProfile 硬套在公開的探索頁查詢上？" data-correct="3" data-explain="公開功能在未登入時也該可用，強制要求 profile 會把功能鎖死。">
+  <button class="opt">因為它會讓查詢的結果永遠是空的</button>
+  <button class="opt">因為它會把公開資料加密起來看不到</button>
+  <button class="opt">因為它每次都會重新簽發新的 token</button>
+  <button class="opt">因為未登入者也會被擋在門外</button>
+</div>
+
+<div class="quiz" data-question="呼叫了 requireProfile 之後，後續寫入該用哪個身分來源？" data-correct="2" data-explain="要使用 guard 回傳的 profile，client 傳來的 id 一律不可信。">
+  <button class="opt">參數裡 client 附上的 profileId</button>
+  <button class="opt">identity 物件裡的姓名欄位</button>
+  <button class="opt">guard 回傳的那個 profile 物件</button>
+  <button class="opt">上一次請求快取下來的識別碼</button>
+</div>
+
+<div class="footer">
+  <p>行動開發實戰 · Convex × Clerk 身分驗證 · Step 4/5</p>
+  <p>讀到這裡有想追問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

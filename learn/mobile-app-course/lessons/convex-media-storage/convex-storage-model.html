@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Convex 的檔案儲存：_storage 與 storageId</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Convex 的檔案儲存：_storage 與 storageId</h1>
+<p class="meta">Step 1/5 · Convex 檔案儲存與上傳</p>
+
+<h2>學習目標</h2>
+<p>能說出 Convex 內建檔案儲存（<code>_storage</code>）如何運作、<code>storageId</code> 與資料庫文件的關係，以及它跟 S3／ImageKit 這類外部物件儲存的根本差異。</p>
+
+<h2>前言：照片到底存在哪裡？</h2>
+
+<p>你正在做一個社群 app，貼文要能附照片和影片。第一直覺通常是：開一個 S3 bucket，把檔案傳上去，拿回一串網址，再把網址存進資料庫。聽起來很順，但真正動手後你會撞上一連串問題：bucket 的權限怎麼設？簽章網址過期了怎麼辦？某個檔案是屬於哪個使用者的？使用者刪帳號時，那些檔案要從哪裡找出來一起刪掉？</p>
+
+<p>Convex 把這一整層收進平台裡。它內建一個檔案儲存區，檔案本體存在那裡，資料庫文件裡只留下一個識別碼當指標。這一節要先把這個模型講清楚：檔案存哪、<code>storageId</code> 是什麼、為什麼文件裡看不到檔案本體，以及它和外部物件儲存放一起比時，差別在哪。</p>
+
+<h2>檔案本體與資料庫文件是分開的</h2>
+
+<p>在 Convex 裡，上傳一個檔案會呼叫 <code>ctx.storage.store(blob)</code>，它回傳一個 <code>storageId</code>。這個 id 的型別是 <code>Id&lt;'_storage'&gt;</code>，代表「在檔案庫裡的某一個檔案」。你可以把它想成圖書館的索書號：資料庫文件是一張借書紀錄，上面寫著索書號；真正的書放在書庫裡，不放在紀錄紙上。</p>
+
+<pre><code>// 存檔：把二進位內容放進檔案庫，拿回一個 storageId
+const storageId = await ctx.storage.store(blob);
+
+// 讀檔：用 storageId 取回 Blob
+const blob = await ctx.storage.get(storageId);
+
+// 刪檔：用 storageId 刪掉本體
+await ctx.storage.delete(storageId);</code></pre>
+
+<p>整個檔案儲存的介面就只有這三個動作。要注意的是，<code>_storage</code> 是平台的系統表，不是你的 schema 裡宣告的一般資料表。想讀它的 metadata（例如檔案大小 <code>size</code>、型別 <code>contentType</code>），要用系統查詢 <code>ctx.db.system.get('_storage', storageId)</code>，而不是一般的 <code>ctx.db.get</code>。</p>
+
+<h3>所以文件裡只會出現 v.id('_storage')</h3>
+
+<p>回到 Codexgram 的 schema：<code>profiles</code> 有大頭貼欄位 <code>avatarId</code>、<code>posts</code> 有 <code>storageId</code>、<code>uploads</code> 與 <code>stories</code> 也都各有一個 <code>storageId</code>。它們的型別全都是 <code>v.id('_storage')</code>。這就像關聯式資料庫的 foreign key，只是它指向的不是另一張表，而是檔案庫。</p>
+
+<p>把指標和本體分開，帶來一個直接的好處：文件維持得很小。查詢貼文列表時，你搬動的是文字、計數和一個短 id，不是幾 MB 的圖片。資料庫的讀取與即時訂閱不會因為媒體而變重。</p>
+
+<h3>為什麼不把檔案直接塞進文件</h3>
+
+<p>你可能會想，乾脆把圖片轉成 base64 字串，當成文件的一個欄位存起來不就好了？技術上做得到，但會踩到三個問題。第一，Convex 文件是給結構化資料用的，塞進大量二進位內容會讓文件暴漲，每次讀取都要把整包搬出來。第二，文件有大小上限，影片幾乎不可能過關。第三，二進位內容沒辦法串流處理，也就無法支援影片的分段播放。把本體留在 <code>_storage</code>、文件只存 <code>storageId</code>，就是為了避開這三個問題。</p>
+
+<h2>storageId 不是公開網址</h2>
+
+<p>知道檔案存在檔案庫後，下一個直覺問題是：那我要怎麼把圖片顯示在 app 上？是不是有 <code>storageId</code> 就能組出一條網址？Convex 確實提供了 <code>ctx.storage.getUrl(storageId)</code>，它會回傳一條可以直接讀取的網址。但這裡有個關鍵差別：那條網址是一種「能力（capability）」——任何人只要拿到它，不需要登入、不需要是檔案的擁有者，就能讀取。</p>
+
+<p>對於本來就該公開的內容，這樣很方便。但如果檔案是私訊附件、還沒發佈的貼文、或只給特定人看的東西，把 <code>getUrl</code> 直接交給 client 就等於把門打開，因為你沒辦法在每次讀取時重新檢查「這個人現在還有權看嗎」。他一旦把網址複製出去，或轉貼到別的地方，你也收不回來。</p>
+
+<p>所以 Codexgram 沒有走這條路。它只把 <code>storageId</code> 留在 server，自己開一個授權端點 <code>/media</code>，每次有人要讀檔案時，都先從登入身分重新驗一次。這個端點的細節會在第 5 步講，但現在請先記住這句：<strong>得到了 URL，不代表得到了權限。</strong></p>
+
+<h2>跟 S3、ImageKit 這類外部物件儲存放一起比</h2>
+
+<p>把兩種做法並排看，會更清楚 Convex 這個選擇的位置：</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>Convex <code>_storage</code></th><th>S3 / ImageKit 等外部服務</th></tr>
+</thead>
+<tbody>
+<tr><td>佈署位置</td><td>與資料庫同一個 Convex 部署</td><td>獨立的外部服務</td></tr>
+<tr><td>存取授權</td><td>用 <code>ctx</code> 與登入身分</td><td>自管 key、policy 與簽章網址</td></tr>
+<tr><td>檔案指標</td><td>不透明的 <code>storageId</code></td><td>object key 或檔案路徑</td></tr>
+<tr><td>媒體處理</td><td>沒有內建轉檔、縮圖或 CDN</td><td>常內建即時轉檔與 CDN</td></tr>
+<tr><td>刪除方式</td><td><code>ctx.storage.delete(storageId)</code></td><td>呼叫服務的刪除 API</td></tr>
+</tbody>
+</table>
+
+<p>兩邊沒有絕對的好壞。Convex 內建的版本，少掉一整套要自己保管的 credentials 和同步邏輯——檔案歸屬跟資料庫交易是同一個系統，刪帳號時可以在同一筆邏輯裡處理。代價是媒體處理能力比較陽春，縮圖、壓縮、CDN 這些要自己來。外部物件儲存則相反：媒體能力強，但你得多維護一條信任邊界，還要小心不要把 private key 打包進 app。</p>
+
+<p>對一個 side project 來說，「少一個會出錯的地方」往往比「多一個很強的功能」更有價值。當你之後換到需要大量圖片轉檔的產品時，再把它換成外部服務也不遲。重點是你現在理解了：Convex 的檔案儲存不是黑盒子，它的模型就只有「檔案庫 + 指標」這一組概念。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+Convex 內建一個檔案儲存區 <code>_storage</code>，檔案本體放在那裡，資料庫文件只留一個 <code>storageId</code> 當指標。整個介面只有 store、get、delete 三個動作，metadata 要走 <code>ctx.db.system.get</code> 讀。把本體和文件分開，是為了讓文件保持精簡、避開大小上限，也讓二進位內容可以獨立處理。<code>storageId</code> 本身不是公開網址；<code>ctx.storage.getUrl</code> 產生的是「有連結就能讀」的能力網址，只適合公開內容。私人媒體要靠自己的授權端點，每次讀取都重新驗身分。
+</blockquote>
+
+<p>知道了檔案放在哪裡，下一個問題就變成「一次上傳要經過哪些狀態，才能從開始安全走到發佈」。下一步會用一張 <code>uploads</code> 資料列，把 pending、ready、published 這段生命週期串起來。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./two-phase-upload.html">下一步：兩階段上傳：pending → ready → published 的生命週期 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Convex 的檔案本體實際上存在哪裡？" data-correct="1" data-explain="檔案本體放在內建的 _storage 檔案庫，資料庫文件只存一個 storageId。">
+  <button class="opt">存在資料庫文件的某個欄位裡面</button>
+  <button class="opt">存在內建 _storage 檔案庫裡面</button>
+  <button class="opt">存在你自己的 S3 bucket 裡面</button>
+  <button class="opt">存在 client 裝置的本機快取裡面</button>
+</div>
+<div class="quiz" data-question="文件裡的 storageId 扮演什麼角色？" data-correct="2" data-explain="它是指向檔案庫某一檔案的指標，像索書號而不是書本本身。">
+  <button class="opt">它是檔案的 base64 編碼內容</button>
+  <button class="opt">它是檔案對外的公開下載網址</button>
+  <button class="opt">它是指向檔案庫的索引指標</button>
+  <button class="opt">它是使用者登入後的授權簽章</button>
+</div>
+<div class="quiz" data-question="為什麼不把 base64 直接塞進資料庫文件？" data-correct="0" data-explain="文件會暴漲、撞到大小上限，而且二進位內容無法串流處理。">
+  <button class="opt">文件會膨脹且無法串流處理</button>
+  <button class="opt">base64 編碼會讓圖片失真變模糊</button>
+  <button class="opt">Convex 不支援字串型別的欄位</button>
+  <button class="opt">查詢時會自動把檔案刪除掉</button>
+</div>
+<div class="quiz" data-question="ctx.storage.getUrl 產生的網址有什麼特性？" data-correct="3" data-explain="它是能力網址，拿到的人不需登入就能讀，撤銷也很困難。">
+  <button class="opt">只有檔案擁有者登入後才能讀取</button>
+  <button class="opt">每次讀取都會自動重新驗證身分</button>
+  <button class="opt">它只對影片型別的檔案有效</button>
+  <button class="opt">拿到的人不需登入就能讀取</button>
+</div>
+<div class="quiz" data-question="想讀 _storage 的檔案大小與型別，該用什麼？" data-correct="1" data-explain="_storage 是系統表，metadata 要走 ctx.db.system.get 讀取。">
+  <button class="opt">用一般的 ctx.db.get 查詢文件</button>
+  <button class="opt">用 ctx.db.system.get 讀系統表</button>
+  <button class="opt">直接把 Blob 解碼後目測大小</button>
+  <button class="opt">呼叫外部服務查詢檔案資訊</button>
+</div>
+<div class="quiz" data-question="Codexgram 為什麼不直接把 getUrl 交給 client？" data-correct="2" data-explain="私人內容需要每次讀取都重新驗身分，能力網址做不到撤銷與複驗。">
+  <button class="opt">因為 getUrl 的讀取速度實在太慢</button>
+  <button class="opt">因為 getUrl 只能用在圖片檔案上</button>
+  <button class="opt">因為私人內容要每次重新驗身分</button>
+  <button class="opt">因為 getUrl 會自動把檔案公開</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Convex 檔案儲存與上傳 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>

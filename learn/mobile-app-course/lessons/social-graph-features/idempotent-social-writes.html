@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>可重試的寫入：toggle、計數器與 requestId 冪等</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>可重試的寫入：toggle、計數器與 requestId 冪等</h1>
+<p class="meta">Step 4/5 · 社交圖與貼文功能</p>
+
+<h2>學習目標</h2>
+<p>能實作可重試也不出錯的社交寫入：用 toggle 語意做 like / follow / bookmark、正確維護反正規化計數器，並用 requestId 讓留言在重試時不會變成兩則。</p>
+
+<h2>前言：使用者連點兩下，你的資料庫就多一筆</h2>
+
+<p>前三節都在處理「讀」。現在換到「寫」，而行動 app 的寫入天生就會重試。使用者在捷運上按讚，網路不好，畫面沒有反應，他就再按一次；兩個請求最後都到了 server。如果按讚的程式碼是「insert 一筆 like」，資料庫裡就會出現兩筆一模一樣的讚，畫面上的數字也會多一跳。</p>
+
+<p>這不是使用者的錯，也不是網路不穩的意外，而是寫入 API 的介面設計問題。一個好的寫入，應該在「同一個意圖被送出兩次」時，結果跟送出一次一樣——這種性質叫 idempotent（冪等）。這一節要看 Codexgram 怎麼用兩種手法達到它，以及別讓反正規化計數器在過程中失準。</p>
+
+<h2>動手前先具備什麼</h2>
+
+<p>你需要記得第一節的索引設計（尤其是 <code>by_userId_and_postId</code> 這種複合索引），以及第二節的 <code>withIndex(...).unique()</code> 讀法。另外要記得：Convex 的 <code>mutation</code> 是可讀可寫的交易（transaction），同一個 deployment 上的多個 mutation 會序列化執行，不會有兩個同時改到同一份資料。</p>
+
+<h2>手法一：把「動作」換成「設定想要的狀態」</h2>
+
+<p>按讚的 API 不叫「按讚（like）」，而是 <code>setLike(postId, liked: boolean)</code>。它表達的不是「請幫我加一個讚」，而是「請把這篇貼文對我的讚狀態，設成 liked 這個值」。差別在於：重複送出「設成 true」，結果仍然是 true，不會變成兩倍。</p>
+
+<p>實作的三步是：先查現況，再看是否需要改變，最後才寫入並維護計數器。</p>
+
+<pre><code>export const setLike = mutation({
+  args: { postId: v.id('posts'), liked: v.boolean() },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    const post = await ctx.db.get('posts', args.postId);
+    if (!post) throw new ConvexError('This post has been deleted.');
+
+    const existing = await ctx.db.query('likes')
+      .withIndex('by_userId_and_postId', q => q.eq('userId', me._id).eq('postId', post._id))
+      .unique();
+
+    if (args.liked && !existing) {
+      await ctx.db.insert('likes', { userId: me._id, postId: post._id });
+      await ctx.db.patch('posts', post._id, { likesCount: post.likesCount + 1 });
+    }
+    if (!args.liked && existing) {
+      await ctx.db.delete('likes', existing._id);
+      await ctx.db.patch('posts', post._id, { likesCount: Math.max(0, post.likesCount - 1) });
+    }
+    return null;
+  },
+});</code></pre>
+
+<p>因為插入與計數器加一分別寫在兩個 <code>if</code> 裡面，只有「狀態真的改變」時才動數字，重複呼叫不會讓 <code>likesCount</code> 亂跳。減法外層包了 <code>Math.max(0, ...)</code>，是防禦性的下限，避免任何異常情況讓數字變成負的。</p>
+
+<p><code>setFollow</code> 也是同樣的形狀，而且更嚴格：它有兩個守衛（不能追蹤自己、目標不能被標記刪除），並且在確定「現況等於目標狀態」時提早 return：</p>
+
+<pre><code>if (target._id === me._id) throw new ConvexError('You cannot follow yourself.');
+if (!!existing === args.following) return null;   // 狀態沒變，直接結束
+
+if (existing) await ctx.db.delete('follows', existing._id);
+else await ctx.db.insert('follows', { followerId: me._id, followingId: target._id });
+
+const delta = args.following ? 1 : -1;
+await ctx.db.patch('profiles', me._id, { followingCount: Math.max(0, me.followingCount + delta) });
+await ctx.db.patch('profiles', target._id, { followersCount: Math.max(0, target.followersCount + delta) });</code></pre>
+
+<p>追蹤會同時改到兩個人的計數器：我這邊的 <code>followingCount</code> 加一，對方那邊的 <code>followersCount</code> 加一，取消時各減一，一樣都有下限保護。bookmark 的 <code>setBookmark(postId, saved)</code> 是同一招，只是不需要計數器。</p>
+
+<p>你可能會擔心：如果兩個 <code>setLike</code> 幾乎同時執行，會不會都查到 <code>existing = null</code>，然後各插一筆？在 Convex 裡不會，因為 mutation 是序列化的交易——第一個跑完、資料落地之後，第二個才會看到更新後的 <code>existing</code>。這正是把「查現況」與「寫入」放進同一個 mutation 的意義。</p>
+
+<h2>手法二：用 requestId 讓「建立」也能重試</h2>
+
+<p>toggle 適合「設定狀態」型的操作，但留言不一樣。留言是「建立一筆新資料」，沒有哪個布林值可以代表它。使用者送出留言後網路斷線、client 重送，你要怎麼知道「這則留言是不是我剛剛送的那一則」？</p>
+
+<p>解法是讓 client 在送出前產生一個 UUID 當 <code>requestId</code>，之後不管重試幾次都帶同一個值。server 端把 <code>(authorId, requestId)</code> 當成一組唯一鍵去查；如果已經存在，就直接回傳既有留言的 id，不再新增。</p>
+
+<pre><code>export const addComment = mutation({
+  args: { postId: v.id('posts'), text: v.string(), requestId: v.string() },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    const text = args.text.trim();
+    if (!text || text.length > 2000 || !args.requestId || args.requestId.length > 100)
+      throw new ConvexError('Comments must contain 1–2,000 characters.');
+
+    const existing = await ctx.db.query('comments')
+      .withIndex('by_authorId_and_requestId',
+        q => q.eq('authorId', me._id).eq('requestId', args.requestId))
+      .unique();
+    if (existing) {
+      if (existing.postId !== args.postId || existing.text !== text)
+        throw new ConvexError('Retry does not match the original comment.');
+      return existing._id;                       // 同一則重試 → 回傳既有留言
+    }
+
+    const id = await ctx.db.insert('comments', { authorId: me._id, postId: post._id, text, requestId: args.requestId });
+    await ctx.db.patch('posts', post._id, { commentsCount: post.commentsCount + 1 });
+    return id;
+  },
+});</code></pre>
+
+<p>這裡有個容易被忽略的細節：找到既有留言後，還要檢查它的 <code>postId</code> 和 <code>text</code> 是否跟這次的請求一致。如果不一致，代表這個 <code>requestId</code> 被錯誤地重複使用了，應該報錯而不是默默回傳舊資料。這道檢查讓 requestId 的語意保持誠實。</p>
+
+<p>這個模式就是第二節提到的 <code>by_authorId_and_requestId</code> 複合索引的用途。同一個技巧也用在私訊（<code>messages</code> 的 <code>by_senderId_and_requestId</code>），因為「送訊息」同樣是建立型、同樣會重試。</p>
+
+<h2>既然要維護計數器，就不能有漏掉的寫入路徑</h2>
+
+<p>第一節提到，<code>likesCount</code>、<code>commentsCount</code>、<code>followersCount</code> 是反正規化計數器。這裡要補上它的代價：每一個會改變這些數字的寫入路徑，都要記得同步 patch。上面的 <code>setLike</code> 加讚時 <code>likesCount + 1</code>、<code>addComment</code> 時 <code>commentsCount + 1</code>、<code>setFollow</code> 時兩個 profile 各動一個數字，都是同一條紀律。</p>
+
+<p>反過來說，任何繞過這條路徑、直接改 likes 或 comments 的程式碼，都會讓計數器漂移。而且漂移不會報錯，只會讓顯示的數字慢慢跟真實資料不一致。這也是為什麼後面會需要測試，來把這些不變量（invariant）釘住。</p>
+
+<h2>刪除與串聯清理：分批接力，不硬幹</h2>
+
+<p>寫入不只有新增。刪除一則留言時，它底下的按讚也要一起清掉；刪除一篇貼文時，likes、comments、bookmarks、commentLikes 全部都要清。這種「跟著主資料一起消失」的清理叫 cascade（串聯刪除）。</p>
+
+<p>作法是把清理排在排程器裡非同步執行，並且每次只刪一批：</p>
+
+<pre><code>// deleteComment：驗證作者、刪留言，然後排程清掉它的 commentLikes
+await ctx.scheduler.runAfter(0, internal.postInteractions.cleanupComment, { commentId: comment._id });
+await ctx.db.patch('posts', post._id, { commentsCount: Math.max(0, post.commentsCount - 1) });
+
+// cleanupComment：一次 take(100)，還有就再排一次
+const rows = await ctx.db.query('commentLikes')
+  .withIndex('by_commentId', q => q.eq('commentId', args.commentId)).take(100);
+for (const row of rows) await ctx.db.delete('commentLikes', row._id);
+if (rows.length === 100) await ctx.scheduler.runAfter(0, internal.postInteractions.cleanupComment, args);</code></pre>
+
+<p>為什麼不一次刪完？因為單一 mutation 有交易大小與執行時間的限制，一則熱門貼文的關聯資料可能有上萬列，硬刪會讓交易爆掉。把工作切成每批 100 列、刪完再排下一次，就不受單次上限影響。刪貼文的 <code>posts.remove → posts.cleanup</code> 用的是同一個模式，只是要清四張表，所以只要有任何一張剛好刪滿 100 列，就再排一輪。</p>
+
+<p>注意刪除時也要維護計數器：刪留言讓 <code>commentsCount</code> 減一，刪貼文讓作者的 <code>postsCount</code> 減一。這些都跟「新增」時對稱。</p>
+
+<h2>做完長什麼樣</h2>
+
+<p>完成這一節後，你的 like / follow / bookmark 都是「設定狀態」的 toggle，重複呼叫不會產生重複資料或讓計數器亂跳；留言帶上 requestId，重送不會變成兩則；刪除會串聯清掉關聯資料，而且用分批排程避開交易上限。驗證方式是刻意對同一個 API 連送兩次相同請求，觀察資料列數與計數器是否維持不變。</p>
+
+<p>社交圖的讀、寫、分頁都完成了。最後一節要處理使用者名稱的搜尋：當「精確比對」不夠用時，什麼時候該搬出全文搜尋索引，什麼時候一般索引就好。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+寫入要假設它一定會被重試。設定狀態型的操作（like、follow、bookmark）用 toggle 語意：先查現況，狀態沒變就 no-op，變了才寫入並同步計數器，減法一律加下限保護。建立型的操作（留言、私訊）用 client 產生的 requestId 當唯一鍵，重試時回傳既有資料。反正規化計數器必須在每一條寫入路徑同步維護。刪除則用 scheduler 分批做串聯清理，避免超過單一交易的限制。
+</blockquote>
+
+<p>最後一節要講全文搜尋。當使用者想在 explore 打幾個字找出某個人時，一般索引的等值比對幫不上忙，這時需要的是另一種索引；但如果用錯地方，反而會失去時間排序或精確命中的能力。下一節會給你判斷的準則。</p>
+
+<div class="lesson-nav">
+  <div><a href="./cursor-pagination.html">← 上一步：Cursor 分頁：從列表到可持續捲動的 feed</a></div>
+  <div><a href="./fulltext-search.html">下一步：全文搜尋：什麼時候該用 searchIndex →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼按讚的 API 設計成 setLike(postId, liked) 而不是 like(postId)？" data-correct="1" data-explain="設定想要的狀態讓重複呼叫結果一致，不會因為重試而多插一筆讚。">
+  <button class="opt">因為 boolean 參數能讓查詢走得比較快</button>
+  <button class="opt">因為設定狀態讓重複呼叫的結果一致</button>
+  <button class="opt">因為這樣可以省略檢查貼文是否存在</button>
+  <button class="opt">因為 Convex 不支援沒有參數的 mutation</button>
+</div>
+<div class="quiz" data-question="setFollow 在偵測到狀態沒有改變時，為什麼要提早 return？" data-correct="3" data-explain="提早結束可以避免重複對計數器加減，讓粉絲與追蹤數字保持正確。">
+  <button class="opt">提早結束可以讓查詢跳過授權的檢查</button>
+  <button class="opt">提早結束可以清掉目標使用者的資料</button>
+  <button class="opt">提早結束可以讓對方收到即時的通知</button>
+  <button class="opt">提早結束避免計數器被重複加減而失準</button>
+</div>
+<div class="quiz" data-question="留言用 requestId 的主要目的是什麼？" data-correct="0" data-explain="requestId 讓重送的同一次請求能被認出，回傳既有留言而不是新增一則。">
+  <button class="opt">讓重送的請求被認出而不重複建立</button>
+  <button class="opt">讓留言可以依照相關度重新排序</button>
+  <button class="opt">讓留言可以自動被翻譯成其他語言</button>
+  <button class="opt">讓留言的文字可以超過兩千個字元</button>
+</div>
+<div class="quiz" data-question="為什麼刪除留言的關聯資料要用 scheduler 分批執行？" data-correct="2" data-explain="單一 mutation 有交易大小與時間限制，分批可以避開上限並接力完成。">
+  <button class="opt">因為 scheduler 執行刪除的速度比直接刪更快</button>
+  <button class="opt">因為只有 scheduler 才有刪除資料的權限</button>
+  <button class="opt">因為單一交易有大小限制，分批才不會爆</button>
+  <button class="opt">因為刪除必須等所有使用者都離線之後做</button>
+</div>
+<div class="quiz" data-question="為什麼 Convex 的 mutation 能讓「先查現況再寫入」是安全的？" data-correct="1" data-explain="mutation 是序列化的交易，第二個執行時會看到第一個已落地的更新。">
+  <button class="opt">因為它會自動幫每個資料列上鎖一段時間</button>
+  <button class="opt">因為 mutation 是序列化的交易不會交錯</button>
+  <button class="opt">因為它會把重複的寫入自動合併成一筆</button>
+  <button class="opt">因為它禁止不同使用者同時寫同一張表</button>
+</div>
+<div class="quiz" data-question="記帳式的計數器（likesCount 等）最大的維護風險是什麼？" data-correct="3" data-explain="只要有一條寫入路徑忘記同步計數器，數字就會默默漂移且不會報錯。">
+  <button class="opt">它會占用比實際資料還多的儲存空間</button>
+  <button class="opt">它會讓資料庫的查詢速度變得比較慢</button>
+  <button class="opt">它會自動把重複的按讚合併成同一筆</button>
+  <button class="opt">漏掉任何一條寫入路徑數字就會漂移</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 社交圖與貼文功能 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

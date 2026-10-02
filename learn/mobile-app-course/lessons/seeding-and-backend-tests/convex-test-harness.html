@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 convex-test 與 vitest 建立測試</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 convex-test 與 vitest 建立測試</h1>
+<p class="meta">Step 3/5 · 寫實 Seed 與後端測試</p>
+
+<h2>學習目標</h2>
+<p>用 convexTest 與 import.meta.glob 起一個記憶體後端，並用 withIdentity、t.run、t.fetch 寫出第一個測試。</p>
+
+<h2>前言：不需要真的連上資料庫，也能測後端</h2>
+
+<p>上一節我們做出了一份可以重跑的 seeder，但要說「這個後端是對的」，光靠 seed 跑得起來還不夠。你可能會想：測後端不就得先開一個測試用的資料庫、準備一堆資料、測完再清掉嗎？那樣又慢又麻煩，而且很容易互相污染。</p>
+
+<p>幸好 Convex 提供了一套 <code>convex-test</code>，它可以在記憶體裡起一個完整的後端實例：你的 schema、你的所有 query/mutation/action 都在裡面跑，每個測試拿到一個乾淨的資料庫，測完就消失。搭配 <code>vitest</code> 當測試框架，你就能用一般的 <code>test()</code>、<code>expect()</code> 寫後端測試。這一節把這個測試環境搭起來，並走過你會用到的每一種呼叫方式。前置條件是你已經熟悉 Convex 的 query 與 mutation。</p>
+
+<h2>第一步：安裝與取得所有後端模組</h2>
+
+<p>在專案裡安裝 <code>convex-test</code> 與 <code>vitest</code> 之後，測試檔的開頭要先把 schema 與「全部後端檔案」載入。關鍵是這一行：</p>
+
+<pre><code>const modules = import.meta.glob('./**/*.ts');</code></pre>
+
+<p>它告訴測試框架：「把這個資料夾底下所有 <code>.ts</code> 檔都收集起來」。Convex 的函式是靠檔案路徑對應到 API 名稱的，所以測試實例必須看得見每一支你寫的後端檔案，才能正確解析 <code>api.profiles.create</code> 這類呼叫。少載入一支檔案，就會在呼叫它時找不到。</p>
+
+<h2>第二步：用 convexTest 起一個記憶體後端</h2>
+
+<p>接著呼叫 <code>convexTest</code>，把 schema 與剛剛收集到的 modules 傳進去，就得到一個獨立的後端實例：</p>
+
+<pre><code>import { convexTest } from 'convex-test';
+import schema from './schema';
+
+const t = convexTest(schema, modules);</code></pre>
+
+<p>這個 <code>t</code> 就是你操作後端的入口。它是一個全新、空白的資料庫，每個測試都應該自己建一個，才能保證測試之間互不影響。測試跑完後這個實例會被丟掉，不會留下任何痕跡，所以你可以盡情在裡面建立、刪除、搞爛資料。</p>
+
+<h2>第三步：用 withIdentity 模擬登入身分</h2>
+
+<p>後端最常需要驗證的就是「誰在呼叫」。在真實世界這個身分來自 Clerk 簽發的 JWT，但在測試裡不需要真的走一次登入流程。<code>withIdentity</code> 讓你直接冒充一個已驗證的使用者：</p>
+
+<pre><code>const alice = t.withIdentity({
+  subject: 'alice',
+  tokenIdentifier: 'https://clerk.test|alice',
+});
+const bob = t.withIdentity({
+  subject: 'bob',
+  tokenIdentifier: 'https://clerk.test|bob',
+});</code></pre>
+
+<p>之後你用 <code>alice</code> 呼叫的每個函式，在後端眼中都會是「alice 本人」；用 <code>bob</code> 呼叫則是 bob。這裡的 <code>tokenIdentifier</code> 是最重要的欄位，因為後端的授權邏輯通常以它為鍵。至於沒有掛上 identity 的原始 <code>t</code>，就代表一位<strong>匿名、未登入</strong>的訪客——這一點在測權限時非常關鍵。</p>
+
+<h2>第四步：用 mutation、query、action 呼叫後端函式</h2>
+
+<p>有了身分之後，就可以像前端一樣呼叫後端。語氣幾乎和 app 裡一模一樣：</p>
+
+<pre><code>const aliceId = await alice.mutation(api.profiles.create, {
+  username: 'alice', name: 'Alice',
+});
+const me = await alice.query(api.profiles.me, {});
+const totals = await t.query(internal.seed.summary, { username: 'alice' });</code></pre>
+
+<p><code>mutation</code> 用來寫資料、<code>query</code> 用來讀資料、<code>action</code> 用來執行需要對外呼叫的動作，參數就是你在函式上宣告的 args。注意 <code>internal</code> 開頭的函式（例如 <code>internal.seed.summary</code>）也能在測試裡直接呼叫——這正是為什麼 seeder 那些不對外開放的函式仍然測得到。</p>
+
+<h2>第五步：用 t.run 直接檢查資料庫與檔案</h2>
+
+<p>有時候你想確認的不是「介面回傳什麼」，而是「底層的資料庫長什麼樣」。例如貼文刪除後，按下讚的紀錄是不是真的清掉了。這時用 <code>t.run</code> 拿到原始的 <code>ctx</code>，直接查表或查檔案：</p>
+
+<pre><code>const storageId = await t.run(async ctx =&gt; {
+  const post = await ctx.db.get('posts', postId);
+  return post!.storageId;
+});
+
+// 之後可以確認檔案是否真的被清掉
+expect(await t.run(ctx =&gt; ctx.storage.get(storageId))).toBeNull();</code></pre>
+
+<p><code>t.run</code> 是測試的 X 光機。正常的介面可能刻意隱藏某些欄位（例如不外洩的 storageId），但測試可以繞過介面直接驗證內部的真實狀態。要小心的是：它能做到的檢查不代表你該用它取代所有介面測試，通常只在需要確認「底層有沒有殘留」時才出動。</p>
+
+<h2>第六步：用 t.fetch 測 HTTP action</h2>
+
+<p>上傳與讀取媒體是走 HTTP 路由的（例如 <code>/upload</code>、<code>/media</code>），不是一般的 query/mutation。要測它們，用 <code>t.fetch</code> 發一個請求，拿回標準的 Response 物件：</p>
+
+<pre><code>const result = await alice.fetch(`/upload?id=${uploadId}`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'image/jpeg' },
+  body: new Uint8Array([255, 216, 255]),
+});
+expect(result.status).toBe(200);</code></pre>
+
+<p>因為它回傳的是真的 Response，你可以檢查 <code>result.status</code>、<code>result.headers</code>，甚至用 <code>await result.arrayBuffer()</code> 讀出內容。於是「未登入上傳要回 401」、「非擁有者要回 404」、「超過大小要回 413」這些 HTTP 層的行為，全都能自動化驗證。</p>
+
+<h2>把重複的設定抽成 setup()</h2>
+
+<p>幾乎每個測試都需要「兩個已登入的使用者」。與其每次重寫，不如抽成一個 <code>setup()</code>：</p>
+
+<pre><code>async function setup() {
+  vi.useFakeTimers();
+  const t = convexTest(schema, modules);
+  const alice = t.withIdentity({ subject: 'alice', tokenIdentifier: 'https://clerk.test|alice' });
+  const bob = t.withIdentity({ subject: 'bob', tokenIdentifier: 'https://clerk.test|bob' });
+  const aliceId = await alice.mutation(api.profiles.create, { username: 'alice', name: 'Alice' });
+  const bobId = await bob.mutation(api.profiles.create, { username: 'bob', name: 'Bob' });
+  return { t, alice, bob, aliceId, bobId };
+}</code></pre>
+
+<p>這裡先鋪了 <code>vi.useFakeTimers()</code>，是為了之後能控制「假時間」（排程清理的測試會用到，下一節細講）。另外用 <code>afterEach(() =&gt; vi.useRealTimers())</code> 在每個測試結束後把時間還原，避免影響其他測試。回傳的物件讓每個測試都能拿到乾淨的 <code>t</code> 與兩個現成使用者，測試本身就能直接聚焦在要驗證的行為上。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+用 <code>import.meta.glob</code> 收集所有後端模組、交給 <code>convexTest(schema, modules)</code>，就得到一個乾淨的記憶體後端。用 <code>withIdentity</code> 冒充登入者，原始的 <code>t</code> 代表匿名訪客；用 <code>mutation/query/action</code> 呼叫介面、<code>t.run</code> 檢查底層資料、<code>t.fetch</code> 測 HTTP action。把共同設定抽成 <code>setup()</code>，測試就能保持精簡。
+</blockquote>
+
+<p>工具搭好了，接下來就是用它來找 bug。下一節要談測試的兩個核心主題：怎麼用不同身分抓出越權，以及怎麼用重複呼叫驗證「不管跑幾次都該成立」的不變量。</p>
+
+<div class="lesson-nav">
+  <div><a href="./build-idempotent-seeder.html">← 上一步：拆解冪等的寫實 Seeder</a></div>
+  <div><a href="./test-permissions-and-invariants.html">下一步：測權限與不變量 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="modules = import.meta.glob('./**/*.ts') 在測試裡的作用是什麼？" data-correct="1" data-explain="它收集所有後端檔案，讓測試實例能解析每一支函式。">
+  <button class="opt">它會自動把資料庫壓縮以節省空間</button>
+  <button class="opt">它收集所有後端檔案供測試實例使用</button>
+  <button class="opt">它會把測試檔編譯成執行檔再執行</button>
+  <button class="opt">它負責在測試失敗時自動重試一次</button>
+</div>
+
+<div class="quiz" data-question="在測試中，沒有掛上 withIdentity 的原始 t 代表什麼身分？" data-correct="3" data-explain="它就是未登入的匿名訪客，很適合用來測授權是否正確擋下。">
+  <button class="opt">代表系統管理員的最高權限</button>
+  <button class="opt">代表上一個測試留下的使用者</button>
+  <button class="opt">代表 seed 產生的其中一個帳號</button>
+  <button class="opt">代表未登入的匿名訪客</button>
+</div>
+
+<div class="quiz" data-question="想確認刪文後底層的 storage 檔案是否真的消失，該用哪個工具？" data-correct="2" data-explain="t.run 讓你拿到原始 ctx 直接查檔案，繞過介面驗證內部狀態。">
+  <button class="opt">用 t.fetch 發一個 GET 請求檢查</button>
+  <button class="opt">用 query 呼叫取得貼文列表即可</button>
+  <button class="opt">用 t.run 直接查 ctx.storage</button>
+  <button class="opt">用 withIdentity 換一個身分再查</button>
+</div>
+
+<div class="quiz" data-question="要測「未登入的人呼叫 /upload 會回 401」，應該用什麼方式？" data-correct="0" data-explain="HTTP 路由要用 t.fetch 發請求，才能檢查回傳的 status 與 headers。">
+  <button class="opt">用 t.fetch 發出請求並檢查 status</button>
+  <button class="opt">用 t.run 直接改資料庫中的資料</button>
+  <button class="opt">用 query 呼叫 uploads.begin 即可</button>
+  <button class="opt">用 vi.useFakeTimers 推進時間檢查</button>
+</div>
+
+<div class="quiz" data-question="為什麼把共同設定抽成 setup() 有助於寫測試？" data-correct="2" data-explain="它讓每個測試拿到乾淨實例與現成使用者，測試本身聚焦在要驗的行為。">
+  <button class="opt">它會讓測試執行的總時間變得更短</button>
+  <button class="opt">它讓測試可以在正式環境安全地執行</button>
+  <button class="opt">它讓每個測試都能專注在驗證行為</button>
+  <button class="opt">它會自動產生所有測試需要的斷言</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 寫實 Seed 與後端測試 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

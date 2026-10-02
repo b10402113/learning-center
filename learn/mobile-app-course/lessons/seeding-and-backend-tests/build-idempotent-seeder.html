@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>拆解冪等的寫實 Seeder</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>拆解冪等的寫實 Seeder</h1>
+<p class="meta">Step 2/5 · 寫實 Seed 與後端測試</p>
+
+<h2>學習目標</h2>
+<p>用 seedKey、確定性的 postPlan 與分批 action 拆解出一個可重複執行、不重複資料也不弄壞計數器的 seeder。</p>
+
+<h2>前言：把「跑一次就加一批」改造成可以反覆跑的流程</h2>
+
+<p>你已經知道 seed 必須冪等。現在的問題是：一支會產生 24 個 profile、上百篇貼文、以及每篇貼文上幾十個讚與留言的程式，要怎麼寫才不會在第二次執行時爆走？直覺的寫法是在一個迴圈裡 insert，但這樣一重跑就全部重複。</p>
+
+<p>這一節要拆解的 <code>convex/seed.ts</code> 給出了答案。它不是一坨迴圈，而是一組各司其職的內部函式：有的建立帳號、有的註冊媒體、有的分批產生貼文、最後有一個彙總查詢讓你驗收。跟著這條線走完，你會看到一個可以穩定重跑的資料產生流程該長什麼樣子。動手前的前提是：schema、profiles、posts、social 這些模組已經存在，因為 seeder 會直接對它們產生的表寫入。</p>
+
+<h2>第一步：用環境檢查守住「只能在開發環境跑」</h2>
+
+<p>整份檔案的第一個守衛，是一支被每個函式呼叫的檢查函式。它比對當下的部署網址，不是指定的開發 deployment 就立刻丟錯中止。</p>
+
+<pre><code>function requireDevelopment() {
+  if (env.CONVEX_CLOUD_URL !== 'https://savory-raven-325.eu-west-1.convex.cloud')
+    throw new Error('Seeding is restricted to the codexgram development deployment.');
+}</code></pre>
+
+<p>把它放在每個 <code>internal</code> 函式的開頭，就等於在整支 seeder 前面裝了一道閘門。即使有人誤把指令指向正式環境，第一行就會失敗，不會有任何一筆假資料被寫進去。這種「先驗環境再做事」是會被寫入資料的維運腳本的基本禮貌。</p>
+
+<h2>第二步：給每筆資料一個穩定身分 seedKey</h2>
+
+<p>冪等的核心是「寫入前先認身分」。身分不能是每次執行都不同的隨機值，必須是根據位置算出來、永遠一樣的字串。Codexgram 用一個小函式替第 <code>i</code> 個成員產生 key：</p>
+
+<pre><code>const seedKey = (i: number) =&gt; `${SEED_VERSION}:member:${i}`;</code></pre>
+
+<p>這裡的 <code>SEED_VERSION</code> 是像 <code>community-v1</code> 這樣的版本字串。它讓同一批資料有自己的命名空間；未來如果你想整批換掉舊種子資料，只要把版本號往上跳，舊的 key 就不會再被認到，新資料自然接上。接著在 <code>initialize</code> 裡，每個成員插入前都會先用這個 key 查一次：</p>
+
+<pre><code>const existing = await ctx.db
+  .query('profiles')
+  .withIndex('by_seedKey', q =&gt; q.eq('seedKey', seedKey(i)))
+  .unique();
+if (existing) { ids.push(existing._id); continue; }</code></pre>
+
+<p>如果查到了，就沿用既有的 <code>_id</code> 並直接跳過，完全不做多餘的寫入；只有查不到時才真的 insert。這樣第二次執行時每一位成員都「已經存在」，整段就變成只收集 id、不新增任何東西。貼文的 <code>by_seedKey</code> 查詢與跳過也是同一招。</p>
+
+<h2>第三步：讓資料的產生是「確定性」的</h2>
+
+<p>只認 key 還不夠。如果每次執行產生的貼文內容不同（例如作者、圖片、文字隨機挑），就算沒重複，同一篇貼文的長相也會換來換去，難以比對。所以 seeder 把「第幾篇貼文長什麼樣」寫成一個純函式 <code>postPlan(index)</code>：</p>
+
+<pre><code>export function postPlan(index: number) {
+  const author = index % 6 === 0 ? 0 : 1 + index % 23;
+  const image = (index * 7 + author) % captions.length;
+  return {
+    key: `${SEED_VERSION}:post:${index}`,
+    author,
+    asset: `photo-${image + 1}`,
+    caption: captions[image][Math.floor(index / 9) % 3],
+  };
+}</code></pre>
+
+<p>同樣的 <code>index</code> 進去，永遠得到同樣的 key、作者、圖片與文案。這種「輸入相同、輸出必相同」的性質叫<strong>確定性（determinism）</strong>。它讓 seed 的結果可預測、可重現：第一個人跑出來的第 42 篇貼文，跟你在自己機器上跑出來的第 42 篇完全一樣。</p>
+
+<h2>第四步：把產生貼文拆成 action，並且分批做</h2>
+
+<p>建立貼文需要先取得圖片檔案，而讀寫檔案要用到 <code>ctx.storage</code>，那是 action 才能做的事。所以整條流程被拆成：<code>populate</code> 是一個 internalAction，負責跑迴圈與存取檔案；真正寫入資料庫的工作則用 <code>runMutation</code> 交給內部的 mutation。這個 action 有一個很硬的限制——它是分批執行的：</p>
+
+<pre><code>if (!Number.isInteger(args.count) || args.count &lt; 1 || args.count &gt; 12)
+  throw new Error('Use batches of 1–12 posts.');</code></pre>
+
+<p>一次只做 1 到 12 篇，而不是把一百多篇塞進同一個動作。這在 serverless 環境裡很重要：action 有執行時間與記憶體上限，把工作切成小批，可以避免單次執行過久或吃光記憶體。實際使用時，你會叫它「從第 0 篇開始做 3 篇」，下一次再叫下一批，而不是一次全做完。</p>
+
+<p>每一批裡面最重要的一句，是它會先問「這篇是不是已經有了」：</p>
+
+<pre><code>if (await ctx.runQuery(internal.seed.existingPost, { index: i })) {
+  skipped++; continue;
+}</code></pre>
+
+<p>已經存在的貼文直接記為 skipped，只有真正新建的才記為 created。所以重跑時你得到的回傳會是 <code>{ created: 0, skipped: 3 }</code>，而不是又建了三篇。</p>
+
+<h2>第五步：每篇貼文擁有自己的檔案</h2>
+
+<p>媒體檔案有一個容易忽略的陷阱：如果多篇貼文共用同一個 <code>storageId</code>，那麼刪掉其中一篇時，清理邏輯會把檔案刪掉，其他還在的貼文就一起破圖了。Codexgram 的解法是讓每篇貼文在建立時各自複製一份檔案：</p>
+
+<pre><code>const blob = await ctx.storage.get(asset.storageId);
+// Every post owns its file, so deleting one can never break another's media.
+const storageId = await ctx.storage.store(blob);</code></pre>
+
+<p>如果後續的寫入沒有接受這個檔案（例如已經被別人搶先建立），程式會把自己剛存的那份刪掉，避免留下孤兒檔案。這個「自己存、自己負責刪」的模式，讓刪除操作可以安全地只清掉屬於該貼文的資源。</p>
+
+<h2>第六步：計數器只在真的寫入時更新</h2>
+
+<p>貼文上的 <code>likesCount</code>、<code>commentsCount</code>，以及會員的 <code>postsCount</code>、<code>followersCount</code> 都是重複計算的欄位（denormalized counters）。它們必須和實際的關聯資料數量一致，否則畫面顯示的數字就是錯的。seeder 的做法是：只有在真的插入貼文的分支裡，才會去累加作者的 <code>postsCount</code>；重跑時因為整篇都跳過了，這些累加根本不會執行，計數器自然不會被加第二次。</p>
+
+<p>留言的冪等則靠 <code>requestId</code>。每一則種子留言都用像 <code>${plan.key}:comment:1</code> 這樣穩定且唯一的識別碼，即使重複執行，資料層也只會認到同一則留言。</p>
+
+<h2>第七步：用 summary 驗收，而不是用眼睛</h2>
+
+<p>最後一支 internalQuery 叫 <code>summary</code>，它會回傳這次 seed 的成果統計：有幾個 profile、幾篇貼文、多少讚與留言，以及你這個觀眾帳號的追蹤數。它存在的意義是讓「測試」可以斷言結果，而不是靠你打開 dashboard 用眼睛數。一個健康的冪等 seeder，跑第一次與跑第二次之後呼叫 summary，應該得到完全相同的數字。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+冪等 seeder 靠四個手法撐起來：用 <code>seedKey</code> 當穩定身分，寫入前先查、存在就跳過；用確定性的 <code>postPlan</code> 保證每次產生同樣的資料；用 internal action 分批（1–12 篇）存取檔案並複製出每篇專屬的媒體；以及只在真的寫入時才更新計數器。整支流程包在 <code>requireDevelopment()</code> 的環境檢查裡，並用 <code>summary</code> 讓結果可被斷言。
+</blockquote>
+
+<p>現在你有一份可以反覆執行、結果穩定的種子資料了。但「跑起來看起來對」還不夠，接下來要讓它和後端的其他行為一起被自動驗證。下一節會搭建測試環境：用 <code>convex-test</code> 在記憶體裡起一個後端，並學會用不同身分呼叫它的函式。</p>
+
+<div class="lesson-nav">
+  <div><a href="./why-realistic-seed.html">← 上一步：為什麼要寫實 Seed 與後端測試</a></div>
+  <div><a href="./convex-test-harness.html">下一步：用 convex-test 與 vitest 建立測試 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 seeder 要在每個函式開頭呼叫 requireDevelopment()？" data-correct="2" data-explain="先驗環境再做事，避免 seed 被誤指向正式環境而寫入假資料。">
+  <button class="opt">為了讓 seed 的執行速度更快一些</button>
+  <button class="opt">為了在沒有網路時也能產生資料</button>
+  <button class="opt">為了防止對正式環境寫入假資料</button>
+  <button class="opt">為了自動把舊的種子資料刪乾淨</button>
+</div>
+
+<div class="quiz" data-question="seedKey 的主要作用是什麼？" data-correct="1" data-explain="它是穩定的身分，讓寫入前能先查是否已存在、存在就跳過。">
+  <button class="opt">讓每筆資料擁有隨機且唯一的身分</button>
+  <button class="opt">讓寫入前能先認出資料是否已存在</button>
+  <button class="opt">讓資料庫自動加密每一筆種子資料</button>
+  <button class="opt">讓 seeder 可以略過環境檢查直接跑</button>
+</div>
+
+<div class="quiz" data-question="postPlan(index) 是「確定性」函式，代表什麼？" data-correct="3" data-explain="相同 index 永遠產生相同內容，因此 seed 結果可重現、可預測。">
+  <button class="opt">它每次都會產生不同的作者與圖片</button>
+  <button class="opt">它會依執行當下的時間挑選內容</button>
+  <button class="opt">它會把貼文平均分散到不同資料表</button>
+  <button class="opt">相同輸入永遠產生相同的貼文內容</button>
+</div>
+
+<div class="quiz" data-question="populate 限制一次只處理 1 到 12 篇貼文，主要原因是什麼？" data-correct="1" data-explain="action 有執行時間與記憶體上限，分批可避免單次負擔過大。">
+  <button class="opt">因為資料庫一次只准寫入十二筆</button>
+  <button class="opt">因為 action 有時間與記憶體上限</button>
+  <button class="opt">因為超過十二筆圖片會全部損毀</button>
+  <button class="opt">因為 UI 一次只能顯示十二篇貼文</button>
+</div>
+
+<div class="quiz" data-question="為什麼每篇貼文要各自複製一份媒體檔案，而不是共用同一個 storageId？" data-correct="0" data-explain="共用時刪掉一篇會連帶刪掉檔案，害其他貼文破圖；各存一份才安全。">
+  <button class="opt">避免刪一篇時連帶刪掉別人的圖</button>
+  <button class="opt">避免圖片在資料庫裡佔用太多空間</button>
+  <button class="opt">讓貼文的上傳速度可以變得比較快</button>
+  <button class="opt">讓每篇貼文可以自動產生不同縮圖</button>
+</div>
+
+<div class="quiz" data-question="重跑 seed 時，為什麼計數器不會被重複累加？" data-correct="2" data-explain="貼文已存在就被跳過，只有真的插入時才會執行累加，重跑自然不加。">
+  <button class="opt">因為計數器會在每次執行前被重設為零</button>
+  <button class="opt">因為計數器存在瀏覽器而不是資料庫</button>
+  <button class="opt">因為只有真的寫入時才會執行累加</button>
+  <button class="opt">因為 summary 會自動修正所有計數器</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 寫實 Seed 與後端測試 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

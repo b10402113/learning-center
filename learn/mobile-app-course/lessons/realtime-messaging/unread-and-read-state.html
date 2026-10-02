@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>未讀與已讀：用 sequence 比對，而不是布林旗標</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>未讀與已讀：用 sequence 比對，而不是布林旗標</h1>
+<p class="meta">Step 5/5 · 即時私訊</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你能解釋未讀為何由 <code>latestIncomingSequence</code> 與 <code>lastReadSequence</code> 比較得出，以及 <code>markRead</code> 在什麼時機被觸發、收件匣的未讀篩選怎麼運作。</p>
+
+<h2>前言：那個小藍點，什麼時候該消失？</h2>
+
+<p>前四步走完，你已經能開對話、送訊息，而且訊息會即時出現在對方的畫面上。最後剩下一件很日常、卻很容易做壞的事：對方要怎麼知道有未讀？而當他真的讀了，那個提示又要怎麼正確地消失？</p>
+
+<p>最直覺的答案是在訊息上掛一個 <code>read</code> 布林值：收到時設 false，讀了設 true。可是很快你就會遇到麻煩。訊息一多，是每一則各記一個布林，還是整條對話記一個？如果是整條對話記一個，那「讀完之後又來一則新訊息」要怎麼處理？如果使用者只讀到一半，剩下的算不算未讀？這些問題會逼你不斷在各種時機手動翻轉那個布林值，只要漏掉一個地方，未讀就會顯示錯誤。</p>
+
+<p>這個節點選擇另一條路：不記「讀了沒」，改記兩個數字，讓「未讀」永遠是算出來的結果，而不是需要小心維護的狀態。</p>
+
+<h2>兩個數字，取代一個布林值</h2>
+
+<p>回到第一步的 inbox 表。每個使用者的那一列上，有兩個序號欄位：</p>
+
+<table>
+<thead>
+<tr><th>欄位</th><th>意思</th></tr>
+</thead>
+<tbody>
+<tr><td><code>latestIncomingSequence</code></td><td>我收到的最新訊息，是第幾號</td></tr>
+<tr><td><code>lastReadSequence</code></td><td>我已經讀到的位置，是第幾號</td></tr>
+</tbody>
+</table>
+
+<p>當一則新訊息送達，<code>send</code> 會把收件者的 <code>latestIncomingSequence</code> 更新為這則訊息的 <code>sequence</code>。而當使用者真的讀了，<code>markRead</code> 會把 <code>lastReadSequence</code> 往前推。於是「有沒有未讀」就只是一個比較：</p>
+
+<pre><code>unread = latestIncomingSequence &gt; lastReadSequence</code></pre>
+
+<p>這個算法最大的好處是<strong>可以重複計算</strong>。不管你在什麼時候、重算幾次、兩次事件誰先到，只要這兩個數字當下是多少，答案就是多少。你不需要記得「上一次有沒有把 unread 翻成 true」，也不需要擔心漏掉某個時機會讓標記永遠卡住。未讀變成一個從資料推導出來的結論，而不是一份需要同步的副本。</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>布林旗標</th><th>兩個序號比對</th></tr>
+</thead>
+<tbody>
+<tr><td>狀態來源</td><td>手動翻轉，需要記得每個時機</td><td>由資料推導，隨時重算</td></tr>
+<tr><td>漏掉一次更新</td><td>標記可能永遠錯誤</td><td>下次重算就修正</td></tr>
+<tr><td>只讀到一半</td><td>難以表達「讀到哪」</td><td>用序號精確表達位置</td></tr>
+<tr><td>事件順序顛倒</td><td>可能把新訊息誤標已讀</td><td>比大小，與順序無關</td></tr>
+</tbody>
+</table>
+
+<h2>markRead：把「讀到哪」往前推</h2>
+
+<p>使用者讀訊息時，前端會呼叫 <code>markRead</code>。它的工作是把 <code>lastReadSequence</code> 更新到「這次確實看到的最新序號」，然後重算未讀。</p>
+
+<pre><code>export const markRead = mutation({
+  args: { id: v.id('conversations'), throughSequence: v.number() },
+  returns: v.null(),
+  handler: async (ctx, args) =&gt; {
+    const { me, conversation } = await requireConversation(ctx, args.id);
+    if (!Number.isInteger(args.throughSequence) ||
+        args.throughSequence &lt; 0 ||
+        args.throughSequence &gt; conversation.latestSequence)
+      throw new ConvexError('Invalid read position.');
+
+    const row = /* 我的 inbox 列 */;
+    const lastReadSequence =
+      Math.max(row.lastReadSequence, args.throughSequence);
+    if (lastReadSequence !== row.lastReadSequence)
+      await ctx.db.patch('inbox', row._id, {
+        lastReadSequence,
+        unread: row.latestIncomingSequence &gt; lastReadSequence,
+      });
+    return null;
+  },
+});</code></pre>
+
+<p>這裡有兩個細節值得注意。第一，<code>throughSequence</code> 是「我讀到第幾號」，不是「全部已讀」。這讓讀取可以精準：如果使用者在讀的過程中，又有新訊息（第 9 號）進來，而他只看到第 7 號，那 <code>lastReadSequence</code> 只推到 7，第 8、9 號仍然算未讀。如果用「全部標已讀」，剛到的新訊息就會被誤清成已讀。</p>
+
+<p>第二，<code>Math.max</code> 讓 <code>lastReadSequence</code> 只前進、不後退。就算重複呼叫、或兩個請求幾乎同時到達，讀取位置也不會被拉回去。而且只有在真的改變時才寫入，避免無意義的資料庫寫入。</p>
+
+<h2>什麼時候才算「讀了」？</h2>
+
+<p>既然要把讀取位置往前推，就得定義「怎樣算讀」。聊天畫面用了三個條件同時成立才觸發 <code>markRead</code>：畫面是聚焦的、App 在前景、而且使用者滾到了底部。</p>
+
+<pre><code>useFocusEffect(useCallback(() =&gt; {
+  setFocused(true);
+  return () =&gt; setFocused(false);
+}, []));
+
+useEffect(() =&gt; {
+  const sub = AppState.addEventListener('change', state =&gt;
+    setActive(state === 'active'));
+  return () =&gt; sub.remove();
+}, []);
+
+const latest = history.results[0]?.sequence;
+useEffect(() =&gt; {
+  if (focused &amp;&amp; active &amp;&amp; atBottom &amp;&amp; latest)
+    void markRead({ id, throughSequence: latest });
+}, [id, latest, markRead, focused, active, atBottom]);</code></pre>
+
+<p>為什麼要三個條件？如果只要畫面開著就標已讀，那使用者在列表上滑過、或 App 在背景時收到訊息，都可能把未讀清掉，而他其實根本沒看到內容。要求「前景 + 聚焦 + 在底部」，才符合「他真的看到最新的訊息了」這個語意。</p>
+
+<p><code>atBottom</code> 是從滾動事件算出來的：當捲動位置加上可視高度，已經接近內容底部（差距在 40 點以內）就算在底部。只有當使用者停在最新訊息附近，才把讀取位置推到最新那一則的序號。</p>
+
+<h2>收件匣怎麼只顯示未讀</h2>
+
+<p>未讀算出來之後，最後要把它用在對話列表上。列表的查詢接受一個 <code>unreadOnly</code> 參數，決定要不要只回傳未讀的對話。</p>
+
+<pre><code>const result = args.unreadOnly
+  ? await ctx.db.query('inbox')
+      .withIndex('by_userId_and_hasMessages_and_unread_and_lastMessageAt', q =&gt;
+        q.eq('userId', me._id)
+         .eq('hasMessages', true)
+         .eq('unread', true))
+      .order('desc')
+      .paginate(args.paginationOpts)
+  : await ctx.db.query('inbox')
+      .withIndex('by_userId_and_hasMessages_and_lastMessageAt', q =&gt;
+        q.eq('userId', me._id).eq('hasMessages', true))
+      .order('desc')
+      .paginate(args.paginationOpts);</code></pre>
+
+<p>兩個分支都用不同的複合索引，這是第一步替 inbox 建好索引的用途。要看全部時，用「使用者 + 有沒有訊息 + 最後時間」的索引，依最後訊息時間由新到舊排出列表；要看未讀時，改用「使用者 + 有沒有訊息 + 未讀 + 最後時間」的索引，把未讀的對話挑出來。兩者都帶上 <code>hasMessages: true</code>，所以剛建立、還沒開始的對話不會出現在列表上。</p>
+
+<p>畫面上對應的是一排篩選標籤。當使用者切到「未讀」，畫面把 <code>unreadOnly</code> 設為 true 重新訂閱查詢；每一列的右側則依 <code>unread</code> 顯示一個小藍點。</p>
+
+<pre><code>const rows = usePaginatedQuery(
+  api.messaging.list, { unreadOnly: unread }, { initialNumItems: 20 });</code></pre>
+
+<h2>外送訊息的勾勾，和真正的已讀狀態</h2>
+
+<p>聊天畫面裡，自己送出的訊息旁邊會有一個勾勾圖示。這個勾勾是「已送出」的視覺表示，屬於呈現層。真正被完整使用、也是這個節點著力的已讀狀態，是收件匣上那組序號的比對：誰的 <code>lastReadSequence</code> 有沒有追上 <code>latestIncomingSequence</code>。</p>
+
+<p>換句話說，你在這一節學到的「已讀」，重點是使用者自己那一側的未讀怎麼被消除，以及對話列表如何反映它。至於對方讀到哪、要不要在氣泡上顯示雙勾，則可沿用同一組序號，只是目前這個實作選擇把力氣放在收件匣的未讀正確性上。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>未讀不是一個要小心維護的布林值，而是 <code>latestIncomingSequence</code> 與 <code>lastReadSequence</code> 這兩個數字的比較結果。送出時只推收件者的「收到位置」；讀取時用 <code>Math.max</code> 把「讀到位置」單向前推，並只在真的改變時才寫入。觸發已讀的條件是前景、聚焦、且滾到底部，收件匣則用對應的複合索引只撈未讀。因為未讀是算出來的，漏掉一次更新也不會讓它永遠錯誤。</p>
+</blockquote>
+
+<p>走完這五步，你手上有一個完整的一對一私訊：三張表各司其職，對話的唯一性由資料形狀保證，送出用 <code>requestId</code> 去重、用 <code>sequence</code> 定序，前端先顯示再對帳，未讀則是兩個序號的比較。把這條線收進自己的 app 時，你只需要換掉「誰可以對話」與「訊息長什麼樣」，其餘的骨架都可以照搬。</p>
+
+<div class="lesson-nav">
+  <div><a href="./optimistic-send-and-retry.html">← 上一步：樂觀送出與重試：pending outbox 與 requestId 對帳</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="這個設計用什麼判斷一條對話有沒有未讀？" data-correct="2" data-explain="未讀由 latestIncomingSequence 是否大於 lastReadSequence 推導，不需要額外的布林狀態。">
+  <button class="opt">訊息本身掛著一個已讀的布林值</button>
+  <button class="opt">計算還沒讀的訊息一共有幾則</button>
+  <button class="opt">收到位置是否大於已讀位置</button>
+  <button class="opt">看對方最近一次上線的時間</button>
+</div>
+
+<div class="quiz" data-question="markRead 用 Math.max 的用意是什麼？" data-correct="0" data-explain="它讓已讀位置單向前進，重複或亂序呼叫都不會把讀取位置拉回去。">
+  <button class="opt">讓已讀位置只前進不會被拉回去</button>
+  <button class="opt">讓未讀的訊息可以被批次刪除掉</button>
+  <button class="opt">限制一次最多只能標記一則已讀</button>
+  <button class="opt">把訊息內容壓縮後再寫入資料庫</button>
+</div>
+
+<div class="quiz" data-question="為什麼 markRead 帶的是 throughSequence 而不是「全部標已讀」？" data-correct="3" data-explain="若讀取期間又來新訊息，用讀到第幾號才不會把剛到的新訊息誤清成已讀。">
+  <button class="opt">因為資料庫不支援一次更新多列資料</button>
+  <button class="opt">因為前端拿不到全部訊息的序號</button>
+  <button class="opt">因為這樣可以減少一次網路來回</button>
+  <button class="opt">避免把讀取期間新到的訊息誤標已讀</button>
+</div>
+
+<div class="quiz" data-question="畫面在哪三個條件同時成立時才觸發 markRead？" data-correct="1" data-explain="要前景、聚焦、且滾到底部，才符合「真的看到最新訊息」的語意。">
+  <button class="opt">登入、連線、且開啟通知的時候</button>
+  <button class="opt">前景、聚焦、且滾到列表底部</button>
+  <button class="opt">收到訊息、震動、且螢幕亮著時</button>
+  <button class="opt">送出訊息、對方上線、且已讀取</button>
+</div>
+
+<div class="quiz" data-question="收件匣要看未讀時，查詢會帶上哪個條件？" data-correct="0" data-explain="它用未讀專用索引，並以 hasMessages 與 unread 為真來篩選，只回傳真的未讀對話。">
+  <button class="opt">hasMessages 為真且 unread 為真</button>
+  <button class="opt">lastMessageAt 大於今天凌晨零點</button>
+  <button class="opt">latestIncomingSequence 大於零</button>
+  <button class="opt">participantB 等於目前使用者</button>
+</div>
+
+<div class="quiz" data-question="未讀用序號比對而非布林值，最大的好處是什麼？" data-correct="2" data-explain="它是由資料推導、可重複計算的結論，就算漏掉一次更新，下次重算也能回到正確狀態。">
+  <button class="opt">可以少存一個欄位節省資料庫空間</button>
+  <button class="opt">能讓訊息的傳送速度變得更快</button>
+  <button class="opt">可重算，漏一次更新也不會永久錯</button>
+  <button class="opt">能自動把未讀的訊息加密保護</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 即時私訊 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

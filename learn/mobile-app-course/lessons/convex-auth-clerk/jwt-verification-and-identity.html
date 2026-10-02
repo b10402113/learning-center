@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JWT 驗證與 identity 物件：Convex 怎麼知道是你</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>JWT 驗證與 identity 物件：Convex 怎麼知道是你</h1>
+<p class="meta">Step 3/5 · Convex × Clerk 身分驗證</p>
+
+<h2>學習目標</h2>
+<p>完成這一節後，你應該能解釋 Convex 如何用 issuer 與公開金鑰驗證 Clerk 簽發的 JWT，說出驗證後拿到的 identity 物件裡有哪些欄位，並分辨 <code>subject</code> 與 <code>tokenIdentifier</code> 的差別與用途。</p>
+
+<h2>前言：一張字串憑什麼代表一個人？</h2>
+
+<p>上一節的 <code>auth.config.ts</code> 只做了一件事：告訴 Convex「這個 issuer 簽的 token 我認」。但這裡有個值得追問的細節——token 不過是一串文字，任何人複製之後都能重送，Convex 憑什麼相信它上面寫的身分是真的？</p>
+
+<p>如果你不知道背後的機制，很容易做出錯誤的推論，例如以為「token 不能外流就等於安全」，或是把 token 當成可以直接信任的使用者資料。這一節要把這串文字拆開，看清楚它到底裝了什麼、驗證是怎麼發生的，以及驗證完成之後，你手上那個 identity 物件是什麼形狀。</p>
+
+<h2>JWT 的三個部分</h2>
+
+<p>JWT（JSON Web Token，一種帶簽章的數位通行證）字面上會看到用兩個點分隔的三段字串，長得像 <code>xxxxx.yyyyy.zzzzz</code>。這三段各有工作：</p>
+
+<ul>
+<li><strong>header</strong>：描述這個 token 用什麼演算法簽的，例如 RS256。</li>
+<li><strong>payload</strong>：一組稱為 claims 的欄位，裡面有 <code>iss</code>（issuer，誰發的）、<code>sub</code>（subject，發給誰）、<code>aud</code>（audience，簽給哪個用途）、<code>exp</code>（到期時間）等。</li>
+<li><strong>signature</strong>：Clerk 用只有自己握有的私鑰，對前兩段算出的簽章。</li>
+</ul>
+
+<p>要注意的是，header 和 payload 只是 base64url 編碼，不是加密。任何人把 token 貼進解碼工具都讀得到內容，所以別把機密資料塞進 claims。真正提供保護的是第三段簽章：內容一旦被改過，簽章就會對不上。</p>
+
+<h2>驗證是怎麼發生的</h2>
+
+<p>關鍵在於簽章用的是非對稱金鑰。Clerk 用私鑰簽發，並公開一組對應的公鑰。任何人都能拿到公鑰去驗證「這是不是 Clerk 簽的」，但沒有私鑰的人做不出有效的簽章。Convex 就是這樣驗的：它會到 <code>auth.config.ts</code> 指定的 issuer 位址取得公開金鑰（一般走 OIDC 的 JWKS 端點），並且把公鑰快取起來，避免每個請求都去抓一次。</p>
+
+<p>驗證時，Convex 至少會確認三件事：簽章是不是真的、<code>iss</code> 是不是自己認可的那個 issuer、<code>aud</code> 是不是對應你設的 <code>applicationID</code>。三關都過，它才把 payload 裡的身分資訊整理成 identity 物件交給你。這也是為什麼 <code>auth.config.ts</code> 裡的 <code>domain</code> 和 <code>applicationID</code> 缺一不可：domain 決定去哪抓公鑰、核對 issuer，applicationID 決定要接受哪一種用途的 token。</p>
+
+<p>因為驗證靠的是數學與快取的公鑰，不是每次回頭問 Clerk，所以它很快。而 Clerk 的 SDK 會在使用者登入期間自動更新短效期的 token，你的 server 端只要負責驗，不需要自己管理更新。</p>
+
+<h2>驗證通過後：identity 物件</h2>
+
+<p>驗證成功之後，<code>ctx.auth.getUserIdentity()</code> 回傳的是一個 identity 物件。裡面最常被用到的兩個欄位是 <code>subject</code> 和 <code>tokenIdentifier</code>：</p>
+
+<table>
+<thead>
+<tr><th>欄位</th><th>內容</th><th>特性</th></tr>
+</thead>
+<tbody>
+<tr><td><code>subject</code></td><td>Clerk 內的使用者識別碼，例如 <code>user_2abc...</code></td><td>簡短，但單獨看不知道是誰發的</td></tr>
+<tr><td><code>tokenIdentifier</code></td><td>issuer 加上 subject 組成的完整識別字串</td><td>帶了發照者，跨來源也不會撞號</td></tr>
+</tbody>
+</table>
+
+<p>除了這兩個，identity 通常還會帶著 issuer，以及你在 Clerk 範本裡加入的自訂 claims，例如姓名或大頭貼網址。原則是：只拿你真的需要的欄位，身分以外的資料（像個人簡介、追蹤關係）屬於你自己的 app 資料，不該期待它出現在 token 裡。</p>
+
+<h2>為什麼偏好 tokenIdentifier</h2>
+
+<p>既然 <code>subject</code> 又短又好讀，為什麼要用比較長的 <code>tokenIdentifier</code>？原因是 uniqueness（唯一性）。<code>subject</code> 只在某一個 issuer 的範圍內保證不重複；如果你之後又接了第二個身分來源，兩個系統各有自己的 <code>user_1</code> 是完全可能的，光看 <code>subject</code> 就分不出誰是誰。<code>tokenIdentifier</code> 把 issuer 一起帶上，等於寫清楚「哪個機關發的、號碼是多少」。</p>
+
+<p>這就像在一個小村子裡喊「小明」大家都知道是誰，但跨國時就得加上國家與證件號碼。專案裡的 profiles 資料表就是用 <code>tokenIdentifier</code> 當索引鍵，正是為了讓身分在加入更多登入方式之後仍然穩定。把這個習慣記住，你之後就不容易踩到「換了 provider 之後使用者認錯人」的坑。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+JWT 是由 header、payload、signature 三段組成的簽章憑證，payload 只編碼不加密。Convex 用 <code>auth.config.ts</code> 指定的 issuer 取得公鑰，驗證簽章、issuer 與 audience 之後，把 claims 整理成 identity 物件。物件裡的 <code>subject</code> 是 Clerk 的使用者識別碼，<code>tokenIdentifier</code> 則帶有 issuer 前綴、跨來源唯一，因此適合當資料表的身分索引鍵。
+</blockquote>
+
+<p>到這裡，你已經能從 token 穩定地拿到「這個呼叫者是誰」。但那是 Clerk 視角的身分，你的 app 還有自己的 profile——而且不是每個登入者都已經有 profile。下一步要做的，就是在兩種 guard 之間做選擇：什麼時候只需要 identity，什麼時候非得有 profile 不可。</p>
+
+<div class="lesson-nav">
+  <div><a href="./enable-clerk-convex-integration.html">← 上一步：開通 Clerk↔Convex 整合並寫 auth.config</a></div>
+  <div><a href="./identity-vs-profile-guards.html">下一步：requireIdentity 還是 requireProfile？ →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="JWT 的 payload 是怎麼被保護的？" data-correct="2" data-explain="payload 只做 base64url 編碼不是加密，真正的保護來自第三段簽章。">
+  <button class="opt">用對稱金鑰把整段內容加密起來</button>
+  <button class="opt">用使用者的密碼雜湊後再包進去</button>
+  <button class="opt">只編碼不加密靠簽章防竄改</button>
+  <button class="opt">用一次性亂碼讓外界完全讀不到</button>
+</div>
+
+<div class="quiz" data-question="Convex 驗證 JWT 時，主要拿 issuer 做什麼？" data-correct="1" data-explain="issuer 決定去哪取得公開金鑰，也讓 Convex 核對 token 是不是自己認可的來源。">
+  <button class="opt">拿來當成使用者在資料庫裡的主鍵</button>
+  <button class="opt">拿來取得公鑰並核對來源身分</button>
+  <button class="opt">拿來決定 token 還能再活幾秒鐘</button>
+  <button class="opt">拿來向 Clerk 索取使用者的密碼</button>
+</div>
+
+<div class="quiz" data-question="為什麼非對稱金鑰能讓 Convex 驗證簽章？" data-correct="3" data-explain="Clerk 用私鑰簽、公開公鑰，任何人可用公鑰驗證但無法偽造簽章。">
+  <button class="opt">因為公鑰和私鑰的内容其實完全相同</button>
+  <button class="opt">因為 Convex 自己保管了 Clerk 的私鑰</button>
+  <button class="opt">因為簽章只對第一個讀取的人有效</button>
+  <button class="opt">因為私鑰簽的能用公鑰驗但無法偽造</button>
+</div>
+
+<div class="quiz" data-question="subject 和 tokenIdentifier 最主要的差別在哪裡？" data-correct="1" data-explain="tokenIdentifier 帶了 issuer 前綴，跨多個來源時仍能保持唯一。">
+  <button class="opt">subject 會過期而 tokenIdentifier 永久有效</button>
+  <button class="opt">tokenIdentifier 帶有 issuer 前綴較為唯一</button>
+  <button class="opt">subject 是加密的而 tokenIdentifier 不是</button>
+  <button class="opt">tokenIdentifier 只能由 Convex 事後生成</button>
+</div>
+
+<div class="quiz" data-question="為什麼 profiles 資料表用 tokenIdentifier 當索引鍵？" data-correct="2" data-explain="帶 issuer 的識別字串在加入其他登入來源後仍不會與別人撞號。">
+  <button class="opt">因為它比 subject 的長度還要短</button>
+  <button class="opt">因為它可以省略資料庫索引的需求</button>
+  <button class="opt">因為它跨來源唯一不會認錯人</button>
+  <button class="opt">因為它會自動同步使用者的頭像</button>
+</div>
+
+<div class="footer">
+  <p>行動開發實戰 · Convex × Clerk 身分驗證 · Step 3/5</p>
+  <p>讀到這裡有想追問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

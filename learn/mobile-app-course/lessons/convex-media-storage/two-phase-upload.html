@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>兩階段上傳：pending → ready → published 的生命週期</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>兩階段上傳：pending → ready → published 的生命週期</h1>
+<p class="meta">Step 2/5 · Convex 檔案儲存與上傳</p>
+
+<h2>學習目標</h2>
+<p>能描述 <code>uploads</code> 資料列從 pending 到 ready 再到 published 的狀態機，並說出擁有者如何從登入身分推導、purpose 為何要分離，以及一小時過期與排程清理在防什麼。</p>
+
+<h2>前言：檔案還沒到，資料庫要先寫什麼？</h2>
+
+<p>上一節我們知道檔案本體存在 <code>_storage</code>，文件只留一個 <code>storageId</code>。現在把鏡頭拉到使用者按下「發佈」的那一刻。照片還在手機上、影片可能幾十 MB、網路還可能中途斷掉。如果等到檔案完全上傳成功才寫資料庫，你在接收檔案的當下，根本不知道這個請求屬於誰、要拿來做貼文還是頭像，也就無法判斷「他有沒有資格上傳」。但如果你反過來，先寫資料庫再收檔案，那中途失敗時又會留下一筆永遠等不到檔案的紀錄。</p>
+
+<p>解法是把一次上傳拆成兩個階段：先開一張「單子」記下意圖與擁有者，再把檔案送進來核銷這張單子。Codexgram 用一張 <code>uploads</code> 資料列來當那張單子，狀態就在 pending、ready、published 之間移動。</p>
+
+<h2>一次上傳會經過的三個狀態</h2>
+
+<p>先看全貌，再拆細節：</p>
+
+<table>
+<thead>
+<tr><th>狀態</th><th>代表的意思</th><th>怎麼進入</th></tr>
+</thead>
+<tbody>
+<tr><td><code>pending</code></td><td>有人打算上傳，但檔案還沒到</td><td>client 呼叫 <code>begin</code></td></tr>
+<tr><td><code>ready</code></td><td>檔案已存進 <code>_storage</code>，並綁定 <code>storageId</code></td><td>HTTP action 呼叫 <code>finish</code></td></tr>
+<tr><td><code>published</code></td><td>檔案已被貼文、頭像或限動正式採用</td><td>發佈動作呼叫對應的 mutation</td></tr>
+</tbody>
+</table>
+
+<p>之所以要區分 ready 和 published，是因為「檔案傳完了」和「檔案正在被使用」是兩件事。傳完但還沒被採用的檔案，是隨時可以被清掉的暫存品；一旦被貼文採用，它就有了存在的理由，清理機制必須放過它。這個區分正是後面過期與取消邏輯的判準。</p>
+
+<h2>第一步：begin 先開一張 pending 單</h2>
+
+<p>流程從 <code>begin</code> 這個 mutation 開始。它接受用途、型別、寬高，以及影片才需要的時長，先做基本檢查，然後插入一筆狀態為 <code>pending</code> 的資料列：</p>
+
+<pre><code>export const begin = mutation({
+  args: {
+    purpose: v.union(v.literal('post'), v.literal('avatar'), v.literal('story')),
+    kind: mediaKind,
+    width: v.number(),
+    height: v.number(),
+    duration: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    // 寬高必須是合理範圍內的正整數
+    if (![args.width, args.height].every(n =&gt; Number.isInteger(n) &amp;&amp; n &gt; 0 &amp;&amp; n &lt;= 30000))
+      throw new ConvexError('Invalid media dimensions.');
+    // 影片只能是貼文，且長度在 0 到 30 秒之間
+    if (args.kind === 'video' &amp;&amp; (args.purpose !== 'post' || !args.duration
+        || !Number.isFinite(args.duration) || args.duration &gt; 30 || args.duration &lt;= 0))
+      throw new ConvexError('Videos must be 30 seconds or shorter.');
+
+    const id = await ctx.db.insert('uploads', {
+      ...args, ownerId: me._id, state: 'pending',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+    });
+    await ctx.scheduler.runAfter(60 * 60 * 1000, internal.uploads.expire, { id });
+    return id;
+  },
+});</code></pre>
+
+<p>這段程式有幾個值得留意的設計。首先，擁有者不是從參數傳進來的，而是用 <code>requireProfile(ctx)</code> 從登入身分查出來的；client 無法假裝自己是別人。其次，檢查的是「寬高是不是整數、有沒有超過三萬」這類範圍，而不是精確值，因為真正的檔案內容還沒到，這裡只能先擋掉明顯不合理的意圖。最後，資料列一建立就排定一小時後的 <code>expire</code>，這是清理孤兒的第一道保險。</p>
+
+<p>回傳的 <code>id</code> 會被 client 帶去下一步的 <code>/upload</code>。有了這張單子，接收檔案的那一端才知道「這個請求屬於誰、上限是多少、要存成什麼用途」。</p>
+
+<h2>第二步：finish 綁定 storageId，狀態變 ready</h2>
+
+<p>檔案透過 HTTP action 存進 <code>_storage</code> 後，會呼叫一個 internal mutation <code>finish</code>，把剛剛拿到的 <code>storageId</code> 綁回那張 <code>pending</code> 單子：</p>
+
+<pre><code>export const finish = internalMutation({
+  args: { id: v.id('uploads'), tokenIdentifier: v.string(),
+          storageId: v.id('_storage'), duration: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const upload = await ctx.db.get('uploads', args.id);
+    const owner = upload &amp;&amp; await ctx.db.get('profiles', upload.ownerId);
+    if (!upload || owner?.deletionRequested
+        || owner?.tokenIdentifier !== args.tokenIdentifier
+        || upload.expiresAt &lt;= Date.now())
+      throw new ConvexError('Upload expired.');
+    if (upload.storageId) return upload.storageId; // 幂等：已綁過就直接回傳
+    await ctx.db.patch('uploads', upload._id, {
+      storageId: args.storageId, state: 'ready',
+      ...(args.duration ? { duration: args.duration } : {}),
+    });
+    return args.storageId;
+  },
+});</code></pre>
+
+<p>這裡有兩個關鍵。第一是身分複驗：單子上的擁有者 <code>tokenIdentifier</code> 要跟這次請求的身分一致，帳號也不能正在刪除中。第二是冪等（idempotent）：如果這張單子已經綁過 <code>storageId</code>，就直接回傳原本那個，不要重複寫入。上傳這種動作很容易因為網路重試而送達兩次，冪等設計讓重送不會產生第二個檔案。</p>
+
+<p>另外，<code>finish</code> 是 <code>internalMutation</code>，不是一般的 mutation。意思是它只能被 server 端的其他函式呼叫，client 不能直接觸發。這樣就把「綁定 storageId」這個動作牢牢鎖在 <code>/upload</code> 的流程裡，別人無法跳過驗證自己亂綁。</p>
+
+<h2>第三步：published 才代表正式採用</h2>
+
+<p>檔案變成 <code>ready</code> 之後，還要等真正被使用時，才推進到 <code>published</code>。以頭像為例，<code>setAvatar</code> 會檢查這筆上傳的用途確實是 <code>avatar</code>、型別是圖片、狀態是 ready 且未過期，然後把使用者的 <code>avatarId</code> 指過去，並把上傳狀態改成 <code>published</code>：</p>
+
+<pre><code>if (me.avatarId) await ctx.storage.delete(me.avatarId); // 舊頭像當場刪
+await ctx.db.patch('profiles', me._id, {
+  avatarId: upload.storageId, avatarUrl: undefined, avatarUpdatedAt: Date.now(),
+});
+await ctx.db.patch('uploads', upload._id, { state: 'published' });</code></pre>
+
+<p>貼文與限動也是同樣的模式：發佈時把 <code>storageId</code> 寫進 <code>posts</code> 或 <code>stories</code>，並把對應的 upload 標成 <code>published</code>。這個標記的用處，在下一段就會看到。</p>
+
+<h2>過期與取消：不讓孤兒檔案留下來</h2>
+
+<p>使用者按了上傳又中途放棄，是再正常不過的事。如果沒有清理機制，<code>pending</code> 和 <code>ready</code> 的資料列與檔案就會一直堆著。Codexgram 用兩條路徑處理：</p>
+
+<ul>
+<li><code>expire</code>（internal）：由 <code>begin</code> 排定的一小時後執行。如果這筆上傳還沒 <code>published</code>，就刪掉檔案本體與資料列。</li>
+<li><code>cancel</code>（一般 mutation）：使用者主動取消時觸發，只有擁有者能呼叫，同樣會刪掉檔案與資料列，但 <code>published</code> 的不動。</li>
+</ul>
+
+<p>兩個清理路徑都有一個共同前提：<strong>狀態是 <code>published</code> 就放過它</strong>。因為那代表檔案已經被某則貼文或某個頭像正式引用，刪掉會讓畫面開天窗。至於排程清理為什麼可靠，是因為它由 server 的 scheduler 觸發，就算 client 早就關掉 app，時間到了照樣會執行。</p>
+
+<h2>為什麼要分 post、avatar、story 三種用途</h2>
+
+<p><code>uploads</code> 資料列上有一個 <code>purpose</code> 欄位，值只能是 <code>post</code>、<code>avatar</code>、<code>story</code>。這不是分類好看而已，而是把三種媒體的規則分開：</p>
+
+<table>
+<thead>
+<tr><th>用途</th><th>允許的型別</th><th>特殊規則</th></tr>
+</thead>
+<tbody>
+<tr><td><code>avatar</code></td><td>只有圖片</td><td>檔案較小（上限 5MB），只能有圖片</td></tr>
+<tr><td><code>post</code></td><td>圖片或影片</td><td>影片上限 30 秒、50MB</td></tr>
+<tr><td><code>story</code></td><td>只有圖片</td><td>24 小時後過期</td></tr>
+</tbody>
+</table>
+
+<p>有了這個欄位，系統就能在接收檔案時拒絕「影片被當成頭像」這種錯誤組合。試想如果沒有 <code>purpose</code>，<code>/upload</code> 收到的只是一個檔案，它無法判斷現在該套用影片的 50MB 上限、還是頭像的 5MB 上限，也無法決定要不要解析時長。用途就是讓規則有地方落腳。</p>
+
+<h2>擁有者一律從登入身分推導</h2>
+
+<p>回頭看整個生命週期，擁有者從來沒有出現在 client 傳來的參數裡。<code>begin</code> 用 <code>requireProfile(ctx)</code> 取得目前使用者，把 <code>ownerId</code> 寫進單子；<code>/upload</code> 則把登入身分裡的 <code>tokenIdentifier</code> 帶進 <code>forUpload</code> 查詢，比對單子擁有者的 <code>tokenIdentifier</code> 是否一致。</p>
+
+<p>這個原則值得單獨記住：<strong>身分只能從 server 端的登入狀態推導，不能信任 request 送來的值</strong>。如果把擁有者當成參數，攻擊者只要改一個欄位，就能把檔案掛到別人名下，或用別人的單子上傳。這也是為什麼單子上要存 <code>tokenIdentifier</code>，而不是只在 client 快取一個使用者 id。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+一次上傳被拆成三個狀態：<code>begin</code> 先開一張 <code>pending</code> 單子（記錄擁有者、用途與一小時後到期），<code>/upload</code> 收完檔案後用 internal <code>finish</code> 綁上 <code>storageId</code> 變成 <code>ready</code>，正式被貼文或頭像採用時才變 <code>published</code>。擁有者一律從登入身分推導；<code>purpose</code> 讓三種用途各自套用不同規則；<code>expire</code> 與 <code>cancel</code> 會清掉未發佈的孤兒檔案，但放過已 <code>published</code> 的檔案。
+</blockquote>
+
+<p>到這裡，單子開好了、狀態機也清楚了，但檔案還沒真的進來。接下來最關鍵的一步，是判斷「送進來的到底是什麼」。下一步要處理驗證問題：型別、大小與時長，該信 client 還是 server？</p>
+
+<div class="lesson-nav">
+  <div><a href="./convex-storage-model.html">← 上一步：Convex 的檔案儲存：_storage 與 storageId</a></div>
+  <div><a href="./media-validation-limits.html">下一步：媒體驗證該信誰？MIME、magic bytes 與尺寸限制 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="begin 為什麼要先插入一筆 pending 資料列？" data-correct="1" data-explain="有了單子才有 id、擁有者與限制，接收檔案時才能判斷這個請求屬於誰。">
+  <button class="opt">因為 pending 狀態的讀取速度比較快</button>
+  <button class="opt">因為要先記下擁有者和上傳限制</button>
+  <button class="opt">因為資料庫不允許直接插入檔案</button>
+  <button class="opt">因為這樣可以省下一次網路來回</button>
+</div>
+<div class="quiz" data-question="finish 的冪等設計是為了處理什麼？" data-correct="3" data-explain="上傳容易因重試而送達兩次，冪等讓重送不會產生第二份綁定。">
+  <button class="opt">讓同一張單子可以重複上傳多個檔案</button>
+  <button class="opt">讓使用者可以取消已經發布的貼文</button>
+  <button class="opt">讓過期的單子自動延長一小時期限</button>
+  <button class="opt">讓網路重試不會產生第二份綁定</button>
+</div>
+<div class="quiz" data-question="ready 和 published 的差別是什麼？" data-correct="0" data-explain="ready 只是檔案傳完，可能被清掉；published 代表已被採用，清理要放過它。">
+  <button class="opt">published 代表已被採用不能被清掉</button>
+  <button class="opt">ready 代表檔案已經過期要刪除了</button>
+  <button class="opt">published 代表檔案還沒真正上傳</button>
+  <button class="opt">ready 代表檔案已經被貼文採用了</button>
+</div>
+<div class="quiz" data-question="expire 排程的用處是什麼？" data-correct="2" data-explain="client 放棄後，server 的一小時排程仍會清掉未發布的檔案與資料列。">
+  <button class="opt">把已發布的貼文在一小時後刪除</button>
+  <button class="opt">把使用者的登入狀態在一小時後登出</button>
+  <button class="opt">清掉 client 放棄後留下的未發布檔案</button>
+  <button class="opt">把 ready 的檔案在一小時後升為 published</button>
+</div>
+<div class="quiz" data-question="uploads 的 purpose 欄位主要用來做什麼？" data-correct="1" data-explain="讓貼文、頭像、限動各自套用不同的型別、大小與時長規則。">
+  <button class="opt">記錄這個檔案被下載了多少次</button>
+  <button class="opt">讓不同用途各自套用不同規則</button>
+  <button class="opt">決定檔案要存在哪一個資料中心</button>
+  <button class="opt">標記檔案是由哪一台裝置上傳的</button>
+</div>
+<div class="quiz" data-question="為什麼擁有者不能當成 client 傳來的參數？" data-correct="3" data-explain="身分必須由 server 從登入狀態推導，否則改一個欄位就能冒充他人。">
+  <button class="opt">因為參數的型別沒辦法通過驗證</button>
+  <button class="opt">因為這樣會讓上傳速度變得比較慢</button>
+  <button class="opt">因為使用者可能同時登入兩個裝置</button>
+  <button class="opt">因為改一個欄位就能冒充別人上傳</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Convex 檔案儲存與上傳 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>

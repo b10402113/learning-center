@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GET /media：授權讀取與 Range 串流</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>GET /media：授權讀取與 Range 串流</h1>
+<p class="meta">Step 5/5 · Convex 檔案儲存與上傳</p>
+
+<h2>學習目標</h2>
+<p>能解釋為什麼「拿到 URL」不等於「有權讀取」，以及 <code>/media</code> 如何從登入身分推導可讀的檔案、用 HTTP Range 分段回傳影片。</p>
+
+<h2>前言：檔案給了網址，就等於給了權限嗎？</h2>
+
+<p>上一節結束時，照片和影片已經安全地躺進 Convex 的 <code>_storage</code>，也綁好了單子。剩下的最後一哩路，是讓 app 把這些媒體顯示出來。最直覺的做法，是把 <code>storageId</code> 或一條 <code>getUrl</code> 產生的網址直接交給 client，讓它塞進圖片元件或影片播放器就好——方便、快，也幾乎不用寫後端。</p>
+
+<p>但第一節已經埋了一個伏筆：那種網址是一種能力，拿到的人不必登入就能讀。對一則公開貼文或許沒差，可是社群 app 裡有大量不該公開的媒體：還沒發佈的草稿、只有朋友看得到的內容、私訊附件、使用者刪帳號後理當消失的東西。如果每次都只發一條無法撤銷的網址，你就再也沒有機會說「這個人現在不能看了」。這一節要把讀取端點 <code>/media</code> 講清楚，它解決的就是這個問題。</p>
+
+<h2>兩種讀取模型</h2>
+
+<p>讀取檔案大致有兩種模型，差別在「授權在什麼時候決定」：</p>
+
+<table>
+<thead>
+<tr><th>模型</th><th>授權時機</th><th>適合的情境</th></tr>
+</thead>
+<tbody>
+<tr><td>公開能力 URL</td><td>發出網址的那一刻</td><td>本來就該公開的素材，例如網站 logo</td></tr>
+<tr><td>授權端點</td><td>每一次讀取請求</td><td>私人、會變動、需要撤銷的內容</td></tr>
+</tbody>
+</table>
+
+<p>公開能力 URL 的問題在於「發出去就收不回來」。使用者把圖片網址複製到別的地方，或轉傳給朋友，你無法阻止。授權端點則相反：每一次有人要讀，server 都重新檢查一次。群組成員被移除了、帳號正在刪除、限動過期了，這些狀態變化都能在下一次請求時立刻生效。</p>
+
+<p>判斷該用哪一種，可以問自己三個問題：這個內容本來就該公開嗎？外流的話能不能接受？需要撤銷或逐次驗證嗎？只要有一題的答案偏向「不行」，就該用授權端點。Codexgram 的媒體大多是私人內容，所以選了後者。</p>
+
+<h2>請求長什麼樣子</h2>
+
+<p><code>/media</code> 是一個 GET 端點，它長這個樣子：</p>
+
+<pre><code>GET /media?kind=post&amp;id=&lt;貼文 id&gt;
+Authorization: Bearer &lt;Clerk token&gt;</code></pre>
+
+<p>注意 client 傳的是「貼文 id」、「個人檔 id」或「限動 id」，不是 <code>storageId</code>。這是一個刻意的設計。讓 client 傳業務層級的 id，server 才有機會判斷「這個人能不能看這則貼文」，再自己把 id 解成 <code>storageId</code>。<code>storageId</code> 是內部實作，不需要、也不應該讓 client 知道。</p>
+
+<h2>第一步：從登入身分查出可讀的檔案</h2>
+
+<p>端點進來後，跟 <code>/upload</code> 一樣先認身分，然後交給一個 internal query 去解析：</p>
+
+<pre><code>const identity = await ctx.auth.getUserIdentity();
+if (!identity) return response('Sign in required.', 401);
+
+const url = new URL(req.url);
+const kind = url.searchParams.get('kind') === 'avatar' ? 'avatar'
+  : url.searchParams.get('kind') === 'story' ? 'story' : 'post';
+
+const storageId = await ctx.runQuery(internal.uploads.media, {
+  id: url.searchParams.get('id') ?? '',
+  kind, now: Date.now(), tokenIdentifier: identity.tokenIdentifier,
+});
+if (!storageId) return response('Media unavailable.', 404);
+
+const blob = await ctx.storage.get(storageId);
+if (!blob) return response('Media unavailable.', 404);</code></pre>
+
+<p>真正判斷授權的是 <code>internal.uploads.media</code> 這個查詢。它的邏輯是先按 <code>tokenIdentifier</code> 找到目前的使用者，如果帳號正在刪除中就一律回 <code>null</code>；接著依 <code>kind</code> 走不同分支：</p>
+
+<ul>
+<li><code>post</code>：把 id 解成貼文，回傳它的 <code>storageId</code>。</li>
+<li><code>avatar</code>：把 id 解成個人檔，回傳它的 <code>avatarId</code>。</li>
+<li><code>story</code>：把 id 解成限動，只有在 <code>expiresAt &gt; now</code>（還沒過期）時才回傳。</li>
+</ul>
+
+<p>任何一個分支找不到、或條件不符，就回 <code>null</code>，端點便回應 404。這裡有一個重要觀念：授權判斷發生在「id 對應到 storageId」的過程中，而不是比對 URL。就算有人猜中了某則貼文的 id，他仍然得先登入、且通過刪帳號等檢查，才拿得到內容。</p>
+
+<h2>第二步：影片用 Range 分段回傳</h2>
+
+<p>找到 blob 之後，直接把整個檔案回傳，對小圖片沒問題，對影片就很糟。一支 50MB 的影片，如果使用者只想先看前幾秒、或想拖動進度條跳到中間，卻得先把 50MB 全部下載完，播放體驗會很糟，也浪費頻寬。HTTP 的 <code>Range</code> 請求就是為此而存在：client 可以指定「我要第幾個到第幾個位元組」。</p>
+
+<p>實作時，先解析 Range 標頭：</p>
+
+<pre><code>const headers = { ...cors, 'Content-Type': blob.type,
+  'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-store' };
+const range = req.headers.get('Range');
+
+if (range) {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (!match || (!match[1] &amp;&amp; !match[2])) return response('Invalid range.', 416);
+  const start = match[1] ? Number(match[1]) : Math.max(0, blob.size - Number(match[2]));
+  const requestedEnd = match[1] &amp;&amp; match[2] ? Math.min(Number(match[2]), blob.size - 1) : blob.size - 1;
+  const end = Math.min(requestedEnd, start + 8 * 1024 * 1024 - 1);
+  if (start &gt; end || start &gt;= blob.size)
+    return new Response(null, { status: 416,
+      headers: { ...headers, 'Content-Range': `bytes */${blob.size}` } });
+  return new Response(blob.slice(start, end + 1), { status: 206,
+    headers: { ...headers, 'Content-Range': `bytes ${start}-${end}/${blob.size}`,
+      'Content-Length': String(end - start + 1) } });
+}</code></pre>
+
+<p>有幾點值得拆開看。回應的狀態碼是 <code>206 Partial Content</code>，不是 200，並附上 <code>Content-Range</code> 告訴 client「這次給的是整份檔案的第幾段到第幾段、整份有多大」。即使 client 一次要一大段，這裡也把單次回傳上限壓在 8MB（<code>start + 8MB - 1</code>），避免某個請求一次把大檔整包拉走。如果範圍不合理、或起點已經超過檔案大小，就回 416。</p>
+
+<p>還有一種常見情況：client 根本沒帶 Range，但這是一支超過 8MB 的影片。這時候不該硬塞整包，而是先回前面 8MB，並標成 206：</p>
+
+<pre><code>if (blob.size &gt; 8 * 1024 * 1024 &amp;&amp; blob.type.startsWith('video/')) {
+  const end = 8 * 1024 * 1024 - 1;
+  return new Response(blob.slice(0, end + 1), { status: 206,
+    headers: { ...headers, 'Content-Range': `bytes 0-${end}/${blob.size}`,
+      'Content-Length': String(end + 1) } });
+}
+return new Response(blob, { headers: { ...headers, 'Content-Length': String(blob.size) } });</code></pre>
+
+<p>這樣播放器能立刻拿到開頭、開始播放，之後再按需要抓後面。小於 8MB 的檔案（大部分圖片）則直接整包回傳，狀態碼 200。無論哪條路徑，回應都帶 <code>Accept-Ranges: bytes</code>，等於告訴 client「這個資源支援分段讀取，你隨時可以指定範圍」。</p>
+
+<h2>第三步：client 端怎麼配合</h2>
+
+<p>在 app 這一側，讀取媒體的方式是把 token 放進標頭。Codexgram 的 <code>useMediaSource</code> 會組出一個帶 bearer token 的 <code>/media</code> 網址，交給 <code>expo-image</code> 或影片元件。因為頭像會更新，它還會在網址上加一個 <code>v=revision</code> 的參數，讓圖片快取在頭像換掉時失效、不會一直顯示舊圖。</p>
+
+<p>這裡也呼應了為什麼 <code>Cache-Control</code> 要設成 <code>private, no-store</code>。私人媒體本來就不該被共用快取保存，畢竟同一條路徑對不同使用者可能回傳不同內容。把它標成不儲存，能避免代理伺服器或中間層不小心把某個人的照片快取起來、之後餵給另一個人。CORS 標頭則把 <code>Content-Range</code> 等資訊暴露出去，讓瀏覽器端的播放器能正確處理分段回應。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/media</code> 是一個授權端點：每次請求都先從登入身分查出使用者，再由 <code>internal.uploads.media</code> 依 <code>kind</code> 把貼文、頭像或限動 id 解成 <code>storageId</code>，同時檢查帳號狀態與限動是否過期。網址不會帶著 <code>storageId</code>，所以猜到 id 也不能直接讀。影片支援 HTTP <code>Range</code>，以 206、<code>Content-Range</code> 分段回傳、單次上限 8MB，讓播放器可以邊播邊抓、拖動進度；沒有 Range 的大影片先回前 8MB。回應設定 <code>private, no-store</code>，不讓私人媒體被共用快取。
+</blockquote>
+
+<p>走完這五步，你有一套完整的媒體管線：檔案存在 <code>_storage</code>、文件只留 <code>storageId</code>；上傳走 pending → ready → published 的狀態機；格式、大小與時長都在 server 端用檔案內容驗證；讀取則由授權端點把關。把用途與限制值換成你 app 的設定，這套流程就能直接搬過去用。</p>
+
+<div class="lesson-nav">
+  <div><a href="./upload-http-action.html">← 上一步：實作 POST /upload：串流限流、時長解析與綁定</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="公開能力 URL 和授權端點最大的差別是什麼？" data-correct="1" data-explain="能力 URL 在發出的那一刻就決定了權限，授權端點則是每次請求都重新檢查。">
+  <button class="opt">能力 URL 一定會比授權端點來得安全</button>
+  <button class="opt">授權端點每次請求都重新檢查權限</button>
+  <button class="opt">能力 URL 只能用在影片型別的檔案</button>
+  <button class="opt">授權端點只能由 server 端主動發起</button>
+</div>
+<div class="quiz" data-question="為什麼 client 傳給 /media 的是貼文 id 而不是 storageId？" data-correct="3" data-explain="讓 server 用業務層級的 id 自行判斷授權，storageId 是內部實作不用外露。">
+  <button class="opt">因為 storageId 的長度太長不好傳輸</button>
+  <button class="opt">因為貼文 id 的查詢速度比較快</button>
+  <button class="opt">因為 storageId 只能用來上傳不能讀</button>
+  <button class="opt">因為 server 才能決定能不能讀它</button>
+</div>
+<div class="quiz" data-question="internal.uploads.media 在授權判斷中做了什麼？" data-correct="0" data-explain="它先找登入使用者、檢查帳號狀態，再把業務 id 解成可讀的 storageId。">
+  <button class="opt">把業務 id 解成可讀的 storageId</button>
+  <button class="opt">把 storageId 轉成公開的能力網址</button>
+  <button class="opt">把影片重新編碼成較小的格式</button>
+  <button class="opt">把上傳的檔案標記成已發布</button>
+</div>
+<div class="quiz" data-question="影片讀取回傳 206 與 Content-Range 是為了什麼？" data-correct="2" data-explain="206 表示這次只回一部分，讓播放器能先播開頭、邊播邊抓後面的內容。">
+  <button class="opt">讓整個檔案會被強制壓縮後回傳</button>
+  <button class="opt">讓瀏覽器自動把網址加入書籤</button>
+  <button class="opt">讓播放器能分段抓取與拖動進度</button>
+  <button class="opt">讓伺服器免除登入身分的檢查</button>
+</div>
+<div class="quiz" data-question="單次 Range 回傳為什麼要把上限壓在 8MB？" data-correct="1" data-explain="避免某個請求一次把整份大檔拉走，兼顧後端負載與記憶體。">
+  <button class="opt">因為 HTTP 協定規定單次不能超過 8MB</button>
+  <button class="opt">避免一次請求把整份大檔拉走</button>
+  <button class="opt">因為影片的每個片段都是 8MB</button>
+  <button class="opt">因為超過就會觸發強制的重新編碼</button>
+</div>
+<div class="quiz" data-question="Cache-Control 設成 private, no-store 是為了什麼？" data-correct="2" data-explain="私人媒體不該被共用快取保存，避免同一路徑的內容被餵給其他使用者。">
+  <button class="opt">讓使用者的下載速度可以變得更快</button>
+  <button class="opt">讓影片的分段請求可以被合併</button>
+  <button class="opt">避免私人媒體被共用快取保存</button>
+  <button class="opt">讓圖片在裝置上永遠不會重新載入</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Convex 檔案儲存與上傳 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>

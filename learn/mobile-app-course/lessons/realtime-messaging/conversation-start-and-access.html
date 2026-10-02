@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>開啟對話與存取守衛：start 與 requireConversation</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>開啟對話與存取守衛：start 與 requireConversation</h1>
+<p class="meta">Step 2/5 · 即時私訊</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你能用 <code>start</code> 建立或重用唯一的對話，並用 <code>requireConversation</code> 擋下非參與者與不可用帳號。</p>
+
+<h2>前言：按下「傳訊息」的那一刻</h2>
+
+<p>上一節把三張表的位置擺好了：對話、訊息、收件匣。這一節要讓它們真的動起來。使用者在搜尋名單裡點了一個人的名字、按下「傳訊息」，App 必須先回答一個問題：「我和這個人之間，已經有一條對話了嗎？」如果有，就沿用；如果沒有，才建立一條，並替雙方各鋪一列收件匣。</p>
+
+<p>聽起來簡單，但這裡出錯的後果不小。如果沒有擋好，同樣兩個人可能生出兩條對話，訊息從此分岔；如果存取權沒守好，任何知道對話 id 的人都能偷看或冒充別人送訊息。所以這一節有兩個主角：負責開門的 <code>start</code>，和負責守門的 <code>requireConversation</code>。</p>
+
+<h2>動手前你需要具備什麼</h2>
+
+<p>這段程式建立在兩個前提上。第一，schema 裡已經有 conversations、messages、inbox 三張表（含上一節提到的複合索引）。第二，你的後端已經接好身分驗證，有一個 <code>requireProfile</code> 會從登入憑證推導出「現在這個使用者是哪一列 profile」——它絕不接受前端自己傳來的 id。若這兩件事還沒就緒，先回去看 Convex 後端模型與 Convex × Clerk 身分驗證。</p>
+
+<p>完成之後你會得到兩個可驗證的結果：同一組人重複呼叫 <code>start</code> 永遠拿到同一條對話；非參與者呼叫任何對話操作都會被拒絕。</p>
+
+<h2>start：只做「找到或建立」這一件事</h2>
+
+<p>先看整段程式，再逐段拆。</p>
+
+<pre><code>export const start = mutation({
+  args: { profileId: v.id('profiles') },
+  returns: v.id('conversations'),
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    const other = await ctx.db.get('profiles', args.profileId);
+    if (!other || other.isDemo || other.deletionRequested)
+      throw new ConvexError('Fictional demo profiles cannot receive messages.');
+    if (other._id === me._id)
+      throw new ConvexError('You cannot message yourself.');
+
+    const [participantA, participantB] = [me._id, other._id].sort();
+    const existing = await ctx.db
+      .query('conversations')
+      .withIndex('by_participantA_and_participantB', q =>
+        q.eq('participantA', participantA).eq('participantB', participantB))
+      .unique();
+    if (existing) return existing._id;
+
+    const id = await ctx.db.insert('conversations', {
+      participantA, participantB, latestSequence: 0,
+    });
+    for (const userId of [participantA, participantB]) {
+      await ctx.db.insert('inbox', {
+        userId, conversationId: id,
+        otherId: userId === participantA ? participantB : participantA,
+        hasMessages: false, unread: false,
+        lastReadSequence: 0, latestIncomingSequence: 0,
+        lastMessageAt: 0, preview: '',
+      });
+    }
+    return id;
+  },
+});</code></pre>
+
+<p>第一行 <code>requireProfile(ctx)</code> 先在伺服器端確定「我是誰」。這件事不能靠前端傳參數，因為任何人都能偽造。接著載入對方，並用一個條件擋掉三種人：不存在、是種子產生的虛構帳號、或是已申請刪除帳號。虛構帳號的訊息沒人會回，對它開對話只會讓使用者困惑，所以這裡直接拒絕。第三個條件則擋下「傳訊息給自己」。</p>
+
+<p>通過檢查後，就把兩個 id 排序，寫進 <code>participantA</code> 與 <code>participantB</code>。然後用上一節的複合索引去查有沒有已存在的對話。<code>.unique()</code> 的意思是「我斷言這裡最多只會有一筆」；如果真的有，直接回傳它的 id。這一步就是「重用」。</p>
+
+<p>只有查不到時才建立。建立時會做兩件事：插入一條 <code>latestSequence</code> 為 0 的對話，以及替雙方各插入一列 inbox。注意這兩列的初始值：<code>hasMessages</code> 是 false、預覽是空字串、序號都是 0。它們是刻意留下的「空對話」，收件匣列表會靠 <code>hasMessages</code> 把這種還沒開始的對話藏起來。這也呼應一個設計決定：<code>start</code> 不是 <code>create</code>，它被呼叫很多次也沒關係，結果永遠是同一條對話。</p>
+
+<blockquote>
+<p>如果你只記得一句：對話的「唯一」是由排序後的兩個參與者加上唯一索引擔保的，不是靠前端記得先查再建。前者不會出錯，後者只要兩台裝置同時按就會破功。</p>
+</blockquote>
+
+<h2>requireConversation：每個讀寫動作前的守門員</h2>
+
+<p>對話建好之後，任何要碰它的動作——讀取、載入歷史、送訊息、標記已讀——都得先過一道關。這道關被收斂成一個小函式，避免每個 mutation 各自寫一次授權邏輯、然後某一個不小心漏掉。</p>
+
+<pre><code>async function requireConversation(ctx, id) {
+  const me = await requireProfile(ctx);
+  const conversation = await ctx.db.get('conversations', id);
+  if (!conversation ||
+      (conversation.participantA !== me._id &&
+       conversation.participantB !== me._id))
+    throw new ConvexError('Not authorized to access this conversation.');
+
+  const other = await ctx.db.get('profiles',
+    conversation.participantA === me._id
+      ? conversation.participantB
+      : conversation.participantA);
+  if (!other || other.deletionRequested)
+    throw new ConvexError('This member is unavailable.');
+
+  return { me, conversation };
+}</code></pre>
+
+<p>它依序做四件事。先確認我是誰；再把對話撈出來；接著檢查我的 id 有沒有出現在兩個參與者欄位裡，只要不是其中之一就擋掉。最後把對方的 profile 一起載入，如果對方已申請刪除，就回報「成員不可用」。這樣一來，就算某個使用者從別處拿到了對話 id，只要他不是參與者，什麼都讀不到、也寫不了。</p>
+
+<p>回頭看上一節的 <code>get</code>、<code>history</code>，以及下一節的 <code>send</code>、之後的 <code>markRead</code>，開頭都是這一行 <code>requireConversation</code>。唯一例外是對話列表 <code>list</code>，因為它是「列出我的收件匣」，只需要知道我是誰，用 <code>requireProfile</code> 就夠了。</p>
+
+<h2>get：把對話變成畫面要的樣子</h2>
+
+<p><code>start</code> 回傳的只是一個 id，畫面還需要對方的名字、頭像與其他公開資訊。於是 <code>get</code> 查詢會組合出一個給畫面用的物件：<code>{ _id, other, latestSequence }</code>。其中 <code>other</code> 是經過 <code>publicProfile</code> 投影後的結果——只保留可以公開的欄位，並附上相對於觀看者的狀態。這種「回傳前先塑形」的習慣，讓內部欄位（例如 storage id、Clerk 識別碼）不會不小心流到前端。</p>
+
+<h2>畫面上的流程：NewConversation</h2>
+
+<p>在手機這一端，建立對話的入口是一個「新訊息」畫面。它先讓使用者搜尋成員，過濾掉自己與種子帳號，然後在點擊時呼叫 <code>start</code>，成功就導到該對話。</p>
+
+<pre><code>const members = result.results.filter(item => !item.isOwn && !item.isDemo);
+
+onPress={async () => {
+  setOpening(true);
+  try {
+    const id = await start({ profileId: item._id });
+    close();
+    router.push({ pathname: '/chat/[id]', params: { id } });
+  } catch (e) {
+    Alert.alert('Could not open chat', errorMessage(e));
+  } finally {
+    setOpening(false);
+  }
+}}</code></pre>
+
+<p>這段有兩個值得帶回自己 app 的習慣。第一，名單在前端就先過濾掉不該傳的人，但真正的拒絕仍然在後端——前端過濾只是體驗，不是安全。第二，<code>start</code> 是非同步的，畫面用一個 <code>opening</code> 狀態避免使用者連點兩次；就算真的連點了，後端的唯一性也會讓第二次回傳同一條對話。</p>
+
+<p>完成的樣子是這樣：第一次對某人按下「傳訊息」，資料庫會多一條 conversation 與兩列 inbox，畫面直接進入對話頁；第二次對同一個人按，任何事情都不會多出來，只會回到那條既有的對話。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p><code>start</code> 的價值在於「找到或建立」而不是「建立」：排序後的參與者配對加上唯一索引，讓同一組人永遠只有一條對話，並替雙方鋪好收件匣。<code>requireConversation</code> 則把存取權收斂成一道必經的守衛，所有讀寫都先確認你是參與者，也順手擋掉已不存在或已刪除的對象。開門與守門分開，功能才有安全的地基。</p>
+</blockquote>
+
+<p>有了對話，就可以開始講話了。下一步要寫伺服器端的 <code>send</code>：它不只是把文字存起來，還要處理重複送出的可能，並讓收件匣的摘要同步更新。</p>
+
+<div class="lesson-nav">
+  <div><a href="./messaging-data-model.html">← 上一步：私訊的三張表：一對對話、訊息流與每人一份收件匣</a></div>
+  <div><a href="./server-side-send.html">下一步：伺服器端送出：用 sequence 排序、用 requestId 去重 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="start 為什麼要先排序兩個參與者再查資料庫？" data-correct="2" data-explain="排序後 A 找 B 與 B 找 A 查的是同一組值，唯一索引才能保證一組人只有一條對話。">
+  <button class="opt">排序能讓資料庫查詢的索引自動生效</button>
+  <button class="opt">排序是為了決定誰的名字顯示在上面</button>
+  <button class="opt">讓兩個方向都命中同一條既有對話</button>
+  <button class="opt">讓 non-participant 沒有辦法猜出對話 id</button>
+</div>
+
+<div class="quiz" data-question="start 拒絕對哪一種 profile 建立對話？" data-correct="1" data-explain="虛構的種子帳號不會回訊，對它開對話只會誤導使用者，因此直接拒絕。">
+  <button class="opt">還沒有上傳頭像圖片的 profile</button>
+  <button class="opt">種子產生的虛構帳號 isDemo</button>
+  <button class="opt">追蹤人數還很少的新手帳號</button>
+  <button class="opt">最近才剛修改過使用者名稱的人</button>
+</div>
+
+<div class="quiz" data-question="新建對話時，兩列 inbox 的初始值代表什麼？" data-correct="3" data-explain="hasMessages 為 false、預覽與序號皆空，是還沒開始的空對話，列表會依 hasMessages 把它藏起來。">
+  <button class="opt">代表雙方都已經讀過這條對話</button>
+  <button class="opt">代表這條對話已被標記為已刪除</button>
+  <button class="opt">代表這是一條還沒被搜尋到的對話</button>
+  <button class="opt">代表還沒開始的空對話，列表先隱藏</button>
+</div>
+
+<div class="quiz" data-question="requireConversation 最主要在檢查什麼？" data-correct="0" data-explain="它確認呼叫者的 id 出現在對話的兩個參與者之中，非參與者一律拒絕。">
+  <button class="opt">呼叫的人是不是這條對話的參與者</button>
+  <button class="opt">這條對話總共已經有幾則訊息</button>
+  <button class="opt">對方的頭像是不是最新的版本</button>
+  <button class="opt">前一次讀取發生在什麼時間點</button>
+</div>
+
+<div class="quiz" data-question="為什麼 list 查詢不需要用 requireConversation？" data-correct="2" data-explain="list 是列出「我的」收件匣，只需要知道我是誰，用 requireProfile 就足夠。">
+  <button class="opt">因為 list 回傳的資料不含任何個資</button>
+  <button class="opt">因為 list 只能在對話頁面裡被呼叫</button>
+  <button class="opt">因為它列出的是我自己的收件匣資料</button>
+  <button class="opt">因為對話列表已經在前端過濾過權限</button>
+</div>
+
+<div class="quiz" data-question="前端在 NewConversation 過濾掉 isDemo 與 isOwn，這樣就安全了嗎？" data-correct="1" data-explain="前端過濾只是體驗；真正阻擋的仍是後端 start 的檢查，前端永遠可以被繞過。">
+  <button class="opt">是，前端已經把不安全的名單都濾掉了</button>
+  <button class="opt">不是，後端仍必須自己再檢查一次</button>
+  <button class="opt">是，因為使用者無法修改前端程式</button>
+  <button class="opt">不是，因為 isDemo 欄位其實不存在</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 即時私訊 · Step 2/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

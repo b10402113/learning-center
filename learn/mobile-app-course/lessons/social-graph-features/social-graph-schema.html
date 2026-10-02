@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>社交圖的資料模型：用表與索引表達關係</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>社交圖的資料模型：用表與索引表達關係</h1>
+<p class="meta">Step 1/5 · 社交圖與貼文功能</p>
+
+<h2>學習目標</h2>
+<p>這一節要能說出：一則貼文、一個讚、一次追蹤，為什麼不塞進同一張表就好，而要拆成 posts、likes、comments、follows、bookmarks 這些獨立的關聯表；以及每張表上的複合索引，到底在保證什麼。</p>
+
+<h2>前言：按讚聽起來很簡單，為什麼會寫壞？</h2>
+
+<p>「按讚」大概是最容易讓人低估的功能。你第一次聽到需求，腦中浮現的做法可能是：一篇貼文就是資料庫裡的一列，欄位裡再放一個陣列 <code>likedBy: [userId]</code>，誰按讚就把 id 推進陣列。按讚就是把 id 加進去，取消就是把 id 拿掉。看起來兩行程式碼就結束了。</p>
+
+<p>這個做法在小 demo 上不會出事，但一上線就會遇到麻煩。使用者連點兩下，陣列裡就出現兩個一樣的 id；手機和網頁同時送出，兩個請求各自讀到舊陣列、各自寫回，後寫的那次把前一次的結果蓋掉了。更麻煩的是，當你想回答「這篇貼文有哪些人按過讚」時，資料庫得把這一整條陣列讀出來、逐一比對，完全沒辦法只挑出你要的那幾筆。</p>
+
+<p>問題的根源不是「陣列不好」，而是我們把「關係」當成「屬性」在存。這一節先把社交圖正確的骨架搭好；後面四步的查詢、分頁與寫入，全都建立在這個骨架上。骨架錯了，後面每一動都會歪。</p>
+
+<h2>把「誰對誰做了什麼」變成一列獨立的關係</h2>
+
+<p>正確的方向是：每一次互動，就是資料庫裡的一列。你按了一次讚，就新增一列 likes；你追蹤了某人，就新增一列 follows。這種表在關聯式資料庫裡叫 association table（關聯表），也有人叫 junction table（中介表），概念就是你熟悉的「多對多要用中間表」。在 Convex 這種文件式資料庫裡，它一樣適用，只是每張表存的是一份文件。</p>
+
+<p>這樣拆之後，每一列都只描述一次關係，於是「同一個人對同一篇貼文最多只能有一列」就變成一條可以檢查的規則。資料庫不需要去翻一條長陣列，只要沿著索引查「有沒有一列 (userId = 我, postId = 這篇)」就好。</p>
+
+<p>Codexgram 的社交資料被拆成下面這幾張表，每張表負責一組關係：</p>
+
+<table>
+<thead>
+<tr><th>表</th><th>一列代表什麼</th><th>關鍵欄位</th></tr>
+</thead>
+<tbody>
+<tr><td><code>profiles</code></td><td>一個人（身分＋個人資料）</td><td>tokenIdentifier、username、searchText、三個計數器</td></tr>
+<tr><td><code>posts</code></td><td>一篇貼文</td><td>authorId、media 資訊、likesCount、commentsCount</td></tr>
+<tr><td><code>likes</code></td><td>某人對某篇貼文按了一次讚</td><td>userId、postId</td></tr>
+<tr><td><code>comments</code></td><td>某人對某篇貼文留了一則留言</td><td>authorId、postId、text、requestId</td></tr>
+<tr><td><code>commentLikes</code></td><td>某人對某則留言按了一次讚</td><td>userId、commentId、postId</td></tr>
+<tr><td><code>follows</code></td><td>A 追蹤了 B，有方向性</td><td>followerId、followingId</td></tr>
+<tr><td><code>bookmarks</code></td><td>某人收藏了某篇貼文</td><td>userId、postId</td></tr>
+</tbody>
+</table>
+
+<p>這樣一來，貼文本身只放貼文的內容與媒體，人與人之間的關係全部外移到獨立的表。你之後想加「檢舉」「封鎖」或「通知」，也是同一種拆法：多一張表，而不是往 posts 裡再塞一個陣列。</p>
+
+<h2>索引：讓「查關係」不用掃整張表</h2>
+
+<p>光有表還不夠。實驗「這篇貼文有哪些讚」或「我追蹤了誰」，如果沒有索引，資料庫只能把整張 likes 或 follows 讀出來逐列比對。索引的作用，就是預先告訴資料庫「你會常用哪些欄位組合來找資料」，讓它把資料照那個順序排好，查詢時直接跳到對的位置。</p>
+
+<p>如果寫過 SQL，這個概念你已經有了：<code>UNIQUE(user_id, post_id)</code> 加索引，查詢就能用 <code>WHERE user_id = ? AND post_id = ?</code>。Convex 的寫法是把同樣的欄位組合宣告在 <code>defineTable(...).index(...)</code> 裡。Codexgram 的社交表幾乎都掛了不只一條索引：</p>
+
+<pre><code>likes: defineTable({ userId, postId })
+  .index('by_userId_and_postId', ['userId', 'postId'])   // 查「我對這篇有沒有按讚」
+  .index('by_postId', ['postId']),                        // 查「這篇的所有讚」
+
+follows: defineTable({ followerId, followingId })
+  .index('by_followerId_and_followingId', ['followerId', 'followingId']) // 查「我有沒有追蹤他」
+  .index('by_followingId', ['followingId']),                             // 查「誰追蹤我」
+
+bookmarks: defineTable({ userId, postId })
+  .index('by_userId_and_postId', ['userId', 'postId'])
+  .index('by_postId', ['postId']),
+
+comments: defineTable({ authorId, postId, text, requestId })
+  .index('by_postId', ['postId'])              // 查「這篇的留言」
+  .index('by_authorId_and_requestId', ['authorId', 'requestId']), // 重試去重
+
+commentLikes: defineTable({ userId, commentId, postId })
+  .index('by_userId_and_commentId', ['userId', 'commentId'])
+  .index('by_commentId', ['commentId'])
+  .index('by_postId', ['postId']),</code></pre>
+
+<p>這裡有兩個值得記住的模式。第一，<strong>兩欄的複合索引</strong>（例如 <code>by_userId_and_postId</code>）是為了回答「這兩個條件同時成立的唯一一列」；查詢時用 <code>.unique()</code> 找到它就是「我的讚」或「我的追蹤」。第二，<strong>反向的一欄索引</strong>（例如 <code>by_postId</code>、<code>by_followingId</code>）是為了回答「這篇貼文的讚有誰」「誰追蹤我」這種從另一頭出發的查詢。同一個關係，兩邊都要能查，所以通常兩條索引都留。</p>
+
+<p>有一個容易誤會的地方：在 Convex 裡，索引是「查詢路線」，不是資料庫幫你強制執行的 UNIQUE 約束。也就是說，<code>by_userId_and_postId</code> 能讓你很快地檢查有沒有重複，但「最多一列」這個保證，是由 mutation 的邏輯（先查再寫）做出來的。這件事第 4 步會專門處理。</p>
+
+<h2>反正規化計數器：拿空間換時間</h2>
+
+<p>畫面上「❤️ 128」這個數字從哪來？最直接的想法是每次要顯示就去 count 一次 likes。但 count 是一種掃描，一則熱門貼文有上萬個讚，每次開畫面都掃一遍並不划算。Codexgram 的選擇是在 posts 上直接放一個 <code>likesCount</code>，在 profiles 上放 <code>followersCount</code>、<code>followingCount</code>、<code>postsCount</code>。顯示時讀一個數字就好，不必掃表。</p>
+
+<p>這種把「可由其他表算出來的值」先算好存著的技巧，叫 denormalization（反正規化）。它拿空間和「維護成本」去換讀取速度：你省下了每次 count，代價是每一條會改變這個數字的寫入路徑，都要記得同步更新計數器。漏掉任何一條，數字就會慢慢漂移，而且漂移不會報錯，只會讓使用者覺得「讚數怪怪的」。這也解釋了為什麼第 4 步的寫入程式碼裡，計數器的加減會跟 like 的插入刪除黏在一起。</p>
+
+<h2>搜尋索引是另一種東西</h2>
+
+<p>這一節最後先埋一個伏筆。profiles 上除了 <code>by_username</code> 這種精確比對的索引，還有一條特別的宣告：</p>
+
+<pre><code>profiles: defineTable({ ..., username, name, searchText: string })
+  .index('by_username', ['username'])
+  .searchIndex('search_profiles', { searchField: 'searchText' }),</code></pre>
+
+<p>一般的索引只能回答「等於某個完整值」或「落在某個範圍」，所以用 <code>by_username</code> 只能精準找到某個使用者名稱。但使用者搜尋時想打「and」就找到 Andy，這是模糊、分詞的比對，需要的是 full-text search index（全文搜尋索引），那是完全不同的機制。它為什麼存在、什麼時候該用、什麼時候不該用，留到第 5 步。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+社交圖的正確骨架是：把每一次互動存成一列獨立的關係（likes、follows、comments、bookmarks），而不是塞進陣列欄位。接著為每個關係掛上兩類索引——複合索引回答「這兩個條件是否同時成立」，反向單欄索引回答「從另一頭有哪些關係」——讓查詢走索引而不是掃整張表。能被算出來的數字（讚數、追蹤數）用反正規化計數器先存好，換取讀取速度，但要在每一條寫入路徑同步維護。精確比對用一般索引，模糊文字搜尋則要另一條全文搜尋索引。
+</blockquote>
+
+<p>骨架搭好後，下一步要把它變成畫面：同一張 posts 表要服務 home、explore、profile 三種不同的 feed，還有人與人之間的追蹤清單。下一節會看到索引實際被用在哪幾條查詢上，以及為什麼「先掃描、再用關係過濾」是首頁 feed 的關鍵手法。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./indexed-feeds-and-relations.html">下一步：用索引查 feed 與社交關係 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼不把按讚的人存成 posts 裡的一個陣列就好？" data-correct="2" data-explain="陣列難以保證不重複、並發寫入會互相覆蓋，查詢時也只能整條讀出來比對。">
+  <button class="opt">因為陣列欄位會占用太多硬碟的儲存空間</button>
+  <button class="opt">因為資料庫規定一篇貼文只能有一列資料</button>
+  <button class="opt">因為無法保證唯一，也難以只查其中一筆關係</button>
+  <button class="opt">因為陣列沒有辦法儲存使用者的識別碼</button>
+</div>
+<div class="quiz" data-question="likes 上的複合索引 by_userId_and_postId 是為了回答什麼問題？" data-correct="1" data-explain="它讓「我對這篇貼文有沒有按讚」能用 .unique() 快速找到至多一列。">
+  <button class="opt">這篇貼文總共有多少個使用者按過讚</button>
+  <button class="opt">我對這篇貼文到底有沒有按過讚</button>
+  <button class="opt">最近一篇被按讚的貼文是哪一篇</button>
+  <button class="opt">按讚數最多的貼文排在哪個位置</button>
+</div>
+<div class="quiz" data-question="為什麼 follows 同時需要 by_followerId_and_followingId 與 by_followingId 兩條索引？" data-correct="3" data-explain="一個關係有兩個方向：一頭查「我追蹤誰」，另一頭查「誰追蹤我」，各自需要一條索引。">
+  <button class="opt">因為複合索引可以節省一半的儲存成本</button>
+  <button class="opt">因為 Convex 要求每張表至少要有兩條索引</button>
+  <button class="opt">因為這樣才能同時記錄追蹤與被封鎖的關係</button>
+  <button class="opt">因為關係有兩個方向，兩頭都要能查</button>
+</div>
+<div class="quiz" data-question="把 likesCount 直接存在 posts 上，主要的好處是什麼？" data-correct="0" data-explain="讀取時只要拿一個現成數字，不必每次掃過所有 likes 去 count。">
+  <button class="opt">顯示數字時不必掃整張表去計算數量</button>
+  <button class="opt">按讚的寫入速度可以變得無限快</button>
+  <button class="opt">可以省下 likes 這張關聯表不用建</button>
+  <button class="opt">可以自動防止同一個人重複按讚</button>
+</div>
+<div class="quiz" data-question="關於 Convex 的索引，下面哪個說法正確？" data-correct="2" data-explain="索引是查詢時的路線，不強制資料唯一；唯一性要靠 mutation 先查再寫來保證。">
+  <button class="opt">索引會自動擋掉所有重複的資料列</button>
+  <button class="opt">索引就是資料表本身的一種備份檔案</button>
+  <button class="opt">索引是查詢路線，不保證資料唯一</button>
+  <button class="opt">索引只能用在單一欄位不能多欄組合</button>
+</div>
+<div class="quiz" data-question="為什麼 by_username 這條索引沒有辦法支援「打幾個字找出相符的人」？" data-correct="1" data-explain="一般索引做的是完整值或範圍比對，模糊與分詞要找全文搜尋索引。">
+  <button class="opt">因為 username 欄位在資料庫裡沒有被建立</button>
+  <button class="opt">因為它只能做完整值或範圍，不支援模糊</button>
+  <button class="opt">因為它被 searchText 這個欄位取代掉了</button>
+  <button class="opt">因為搜尋必須在手機端而不能在後端做</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 社交圖與貼文功能 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

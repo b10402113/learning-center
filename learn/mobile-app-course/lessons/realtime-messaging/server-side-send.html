@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>伺服器端送出：用 sequence 排序、用 requestId 去重</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>伺服器端送出：用 sequence 排序、用 requestId 去重</h1>
+<p class="meta">Step 3/5 · 即時私訊</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你能寫出 <code>send</code> mutation：驗證文字與 requestId、用索引去重、配發遞增的 sequence，並同步更新雙方 inbox。</p>
+
+<h2>前言：送出，從來不只是「存起來」</h2>
+
+<p>上一節結束時，你已經能替兩個人開好一條對話。這一節要送出第一則訊息。</p>
+
+<p>如果一切都在完美的網路裡，送出就是把文字寫進 <code>messages</code>，收工。但真實情況是：使用者在電梯裡按下送出，請求逾時，前端決定重試；或者畫面很貼心地先顯示了訊息，然後在背景補送。同一則訊息，很可能被送到後端不只一次。如果後端每次都乖乖新增一列，對方的對話就會出現兩句一模一樣的「明天見」。</p>
+
+<p>所以伺服器端的送出，核心其實是兩個問題：怎麼讓重複送出的同一則訊息只留下一次，以及怎麼讓兩邊的收件匣都正確更新。這一節把 <code>send</code> 拆成四個動作來看。</p>
+
+<h2>動手前你需要具備什麼</h2>
+
+<p>這一節延續前兩節：schema 裡的三張表與索引已就緒，<code>requireConversation</code> 已能確認呼叫者是參與者，messages 上也有 <code>by_senderId_and_requestId</code> 這個複合索引。完成之後，你會得到一個可重複呼叫而不會產生重複訊息的送出流程。</p>
+
+<h2>第一步：先在後端檢查輸入</h2>
+
+<p>任何寫入都從驗證開始。<code>send</code> 的處理器一開頭就做三件事：確認我是這條對話的參與者、把文字前後空白去掉、然後檢查格式。</p>
+
+<pre><code>export const send = mutation({
+  args: { id: v.id('conversations'), text: v.string(), requestId: v.string() },
+  returns: v.id('messages'),
+  handler: async (ctx, args) => {
+    const { me, conversation } = await requireConversation(ctx, args.id);
+    const text = args.text.trim();
+    if (!text || text.length > 2000 || !args.requestId || args.requestId.length > 100)
+      throw new ConvexError('Write a message of 1–2,000 characters.');
+    // ...</code></pre>
+
+<p><code>text</code> 去空白後不能是空的，長度上限 2000；<code>requestId</code> 不能是空的，長度上限 100。你可能想問：前端不是已經用 <code>maxLength</code> 限制過了嗎？是，但前端限制只是體驗，任何人都能繞過它直接呼叫 mutation。後端是唯一值得信任的邊界，所以同一套規則要在這裡再站一次崗。</p>
+
+<blockquote>
+<p><code>requestId</code> 是整個去重機制的前提。它由前端在產生訊息的那一刻創造，通常是 UUID。只要同一則訊息帶著同一個 <code>requestId</code> 重送，後端就能認出「這是同一次送出」。</p>
+</blockquote>
+
+<h2>第二步：用 requestId 去重</h2>
+
+<pre><code>    const existing = await ctx.db
+      .query('messages')
+      .withIndex('by_senderId_and_requestId', q =>
+        q.eq('senderId', me._id).eq('requestId', args.requestId))
+      .unique();
+    if (existing) {
+      if (existing.conversationId !== args.id || existing.text !== text)
+        throw new ConvexError('Retry does not match the original message.');
+      return existing._id;
+    }
+    // ...</code></pre>
+
+<p>這裡用索引查「同一個寄件人、同一個 requestId」。索引把「寄件人 + requestId」組合起來，所以不同人之間不會互相干擾：A 的 <code>requestId</code> 是 abc，B 的也可以是 abc。查到既有訊息就直接回傳它的 id，不新增、不修改。重試於是變成一個安全操作——送幾次，資料庫都只有一則。</p>
+
+<p>但如果查到的既有訊息，內容或對話跟這次不一樣呢？那代表前端用了同一個 <code>requestId</code> 去送不同的內容，這是程式邏輯錯誤。這種情況不回傳、也不覆蓋，而是直接報錯。把「同一 id 必須對應同一件事」寫成檢查，能讓錯誤早一點浮現，而不是默默寫進一筆矛盾的資料。</p>
+
+<h2>第三步：配發 sequence，把訊息寫成流水帳</h2>
+
+<pre><code>    const sequence = conversation.latestSequence + 1;
+    const id = await ctx.db.insert('messages', {
+      conversationId: args.id, senderId: me._id,
+      text, requestId: args.requestId, sequence,
+    });
+    await ctx.db.patch('conversations', args.id, { latestSequence: sequence });
+    // ...</code></pre>
+
+<p>序號是從對話上的 <code>latestSequence</code> 加一得來的。這裡刻意不去<code>count()</code> 現有訊息數量，因為計數查詢會隨訊息變多而變慢，而且在並發送出時，兩次請求可能各自數到同一個數字。把序號的唯一來源放在 conversation 的 <code>latestSequence</code>，就只需要讀一個數字、加一、寫回去。</p>
+
+<p>新增訊息與更新 <code>latestSequence</code> 是在同一個 mutation 裡完成的。這很重要：mutation 是交易性的，代表「訊息寫入」與「對話計數器前進」會一起成功或一起失敗，不會出現序號重複，也不會出現計數器領先訊息的情況。你不需要自己寫鎖。</p>
+
+<h2>第四步：更新雙方 inbox，但只有收件者算未讀</h2>
+
+<pre><code>    for (const userId of [conversation.participantA, conversation.participantB]) {
+      const row = await ctx.db.query('inbox')
+        .withIndex('by_userId_and_conversationId', q =>
+          q.eq('userId', userId).eq('conversationId', args.id))
+        .unique();
+      if (!row) throw new Error('Missing inbox entry.');
+      await ctx.db.patch('inbox', row._id, {
+        hasMessages: true,
+        preview: text.slice(0, 200),
+        lastMessageAt: Date.now(),
+        ...(userId !== me._id
+          ? { unread: true, latestIncomingSequence: sequence }
+          : {}),
+      });
+    }
+    return id;
+  },
+});</code></pre>
+
+<p>最後一步是把摘要寫回雙方的收件匣。因為列表是「各自讀自己的 inbox」，同一則訊息必須同時反映在兩列上：寄件人的那一列與收件人的那一列。迴圈走訪兩個參與者，各自找到自己的 inbox 列，然後更新三個共同的欄位——<code>hasMessages</code> 設為 true（對話已經開始，列表不該再隱藏它）、<code>preview</code> 存前 200 個字、<code>lastMessageAt</code> 更新為現在時間。</p>
+
+<p>差別在後面那一行展開。只有當 <code>userId</code> 不等於我自己時，才把 <code>unread</code> 設為 true、並更新 <code>latestIncomingSequence</code>。寄件人自己的那一列不會被標成未讀，因為沒有人會想看自己剛送出的訊息顯示「未讀」。這個小小的條件，就是「同一則訊息，對兩人是兩種狀態」在程式裡的落點。</p>
+
+<h2>走一次實際的流程</h2>
+
+<p>假設 A 送出「明天見」，前端產生 <code>requestId = 'abc'</code>。伺服器檢查輸入、查不到 abc 的既有訊息，於是配發 <code>sequence = 5</code>、寫入訊息、把對話的 <code>latestSequence</code> 更新為 5。接著更新兩列 inbox：A 那列有新的預覽與時間，B 那列除了預覽與時間，還多了 <code>unread = true</code> 與 <code>latestIncomingSequence = 5</code>。</p>
+
+<p>現在想像網路斷了，前端帶著同一個 abc 重送。伺服器在第二步就查到既有訊息，確認對話與內容都相符，直接回傳原本的訊息 id——它不會再配發一次序號，也不會再動 inbox。訊息仍然只有一則，B 的未讀也仍然只有一份。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>伺服器端的送出由四段組成：先在後端驗證輸入，再用 <code>by_senderId_and_requestId</code> 去重，接著從對話的 <code>latestSequence</code> 配發序號並以交易寫入，最後把摘要 fan-out 到雙方的 inbox，而且只把收件者標成未讀。<code>requestId</code> 讓重送安全，<code>sequence</code> 讓順序可信，兩者合起來才撐得起下一步的樂觀送出。</p>
+</blockquote>
+
+<p>後端現在已經準備好接受重複的呼叫。下一步會走到手機這一端：怎麼在使用者按下送出的瞬間就讓訊息出現在畫面上，就算請求還沒回來；以及當它真的失敗時，如何用同一個 <code>requestId</code> 重試並與後端對帳。</p>
+
+<div class="lesson-nav">
+  <div><a href="./conversation-start-and-access.html">← 上一步：開啟對話與存取守衛：start 與 requireConversation</a></div>
+  <div><a href="./optimistic-send-and-retry.html">下一步：樂觀送出與重試：pending outbox 與 requestId 對帳 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="send 為什麼要在後端再驗一次文字長度？" data-correct="2" data-explain="前端限制只是體驗，任何人都能繞過直接呼叫 mutation，後端才是唯一可信的邊界。">
+  <button class="opt">因為前端無法正確計算中文字的長度</button>
+  <button class="opt">因為後端驗證可以讓訊息顯示得更快</button>
+  <button class="opt">因為前端限制能被繞過，後端才可信</button>
+  <button class="opt">因為資料庫規定字串欄位必須有上限</button>
+</div>
+
+<div class="quiz" data-question="同一個 requestId 再次送出相同內容時，send 會怎麼做？" data-correct="1" data-explain="它查到既有訊息後直接回傳原 id，不新增列，也不重新配發序號。">
+  <button class="opt">新增第二則訊息並警告使用者重複</button>
+  <button class="opt">回傳原本那則訊息的 id 不新增</button>
+  <button class="opt">把原本的訊息刪掉再寫入新的</button>
+  <button class="opt">更新原訊息的時間戳記後回傳</button>
+</div>
+
+<div class="quiz" data-question="sequence 為什麼取自 conversation.latestSequence，而不是 count 訊息數量？" data-correct="3" data-explain="count 會隨資料量變慢，並發時也可能算出同一個數字；對話上的計數器是單一可信來源。">
+  <button class="opt">因為 count 在資料庫裡是完全不能呼叫的</button>
+  <button class="opt">因為 conversation 沒有欄位可以存計數值</button>
+  <button class="opt">因為 count 算出來的數字通常會比較小</button>
+  <button class="opt">因為 count 較慢且並發時可能重複</button>
+</div>
+
+<div class="quiz" data-question="送出訊息時，哪一列 inbox 會被標成未讀？" data-correct="0" data-explain="只有收件者那列會設 unread 與 latestIncomingSequence；寄件人自己的列不標未讀。">
+  <button class="opt">只有收件者的那一列被標成未讀</button>
+  <button class="opt">雙方的兩列都會被標成未讀狀態</button>
+  <button class="opt">只有寄件者自己的那一列被標未讀</button>
+  <button class="opt">兩列都不會被標記，未讀另外計算</button>
+</div>
+
+<div class="quiz" data-question="為什麼訊息寫入與 latestSequence 更新要放在同一個 mutation？" data-correct="1" data-explain="mutation 具交易性，兩者一起成功或一起失敗，序號不會重複，計數器也不會領先訊息。">
+  <button class="opt">因為這樣可以讓訊息內容自動被加密</button>
+  <button class="opt">因為交易性保證兩者一致不會各寫各的</button>
+  <button class="opt">因為分開寫會讓資料庫拒絕這次請求</button>
+  <button class="opt">因為這樣前端才能拿到新的序號顯示</button>
+</div>
+
+<div class="quiz" data-question="若前端用同一個 requestId 送出不同內容，後端會怎麼反應？" data-correct="3" data-explain="既有訊息與這次內容不符代表程式邏輯錯誤，後端直接報錯，而不是默默覆蓋或新增。">
+  <button class="opt">照樣新增一則訊息並保留兩份內容</button>
+  <button class="opt">把舊訊息內容更新成新送來的內容</button>
+  <button class="opt">回傳舊訊息並忽略新的內容差異</button>
+  <button class="opt">直接報錯，因為同一 id 應對應同一事</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 即時私訊 · Step 3/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

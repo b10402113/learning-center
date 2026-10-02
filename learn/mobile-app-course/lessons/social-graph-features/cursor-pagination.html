@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cursor 分頁：從列表到可持續捲動的 feed</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Cursor 分頁：從列表到可持續捲動的 feed</h1>
+<p class="meta">Step 3/5 · 社交圖與貼文功能</p>
+
+<h2>學習目標</h2>
+<p>能替一個查詢加上 cursor 分頁、看懂 Convex 回傳的 <code>page / isDone / continueCursor</code>，並解釋為什麼「先分頁、再過濾」的稀疏 feed 一定要保留原本的 cursor。</p>
+
+<h2>前言：feed 一往下滑，就開始出錯</h2>
+
+<p>前兩節把查詢寫好了，但每一支都用 <code>collect()</code> 一次把資料撈完。真實的社群 app 不能這樣：一個使用者的首頁可能有幾千篇貼文，全部回傳給手機，既慢又耗記憶體。所以列表必須分頁，一次只給一小段，使用者往下滑再拿下一段。</p>
+
+<p>如果你寫過 REST API，第一個想到的可能是 <code>limit</code> 加 <code>offset</code>：第一頁拿 1 到 20 筆，第二頁拿 21 到 40 筆。但在社群 feed 上，這招會出事。想像你正在看第一頁，此時有人發了一篇新貼文，插在最前面，於是所有貼文的「位置」都往後移了一格。當你接著要第二頁時，原本排在第 21 筆的那篇已經被擠到第 22 筆，你就漏看它了；反過來，如果有人刪文，你又會看到重複的內容。</p>
+
+<p>問題的根源是 offset 假設「列表內容不會變」，但社群 feed 恰恰是一直在變的。這一節要講的 cursor 分頁，就是為了處理這件事。</p>
+
+<h2>動手前先具備什麼</h2>
+
+<p>你需要記得前兩節建立的查詢骨架：<code>withIndex</code> 指定索引、<code>order</code> 指定排序。分頁只是接在查詢尾端的一個方法，不會改變前面查詢怎麼走索引。另外，client 端會用到 Convex 的 <code>usePaginatedQuery</code> hook，但這一節的重點在後端契約，前端只是把它接起來。</p>
+
+<h2>核心：paginate 與它回傳的三個欄位</h2>
+
+<p>把 <code>.collect()</code> 換成 <code>.paginate(opts)</code>，並且在參數與回傳上都掛 validator，就是分頁的骨幹：</p>
+
+<pre><code>import { paginationOptsValidator, paginationResultValidator } from 'convex/server';
+
+export const list = query({
+  args: { feed: ..., paginationOpts: paginationOptsValidator },
+  returns: paginationResultValidator(postView),
+  handler: async (ctx, args) => {
+    const result = await ctx.db.query('posts')
+      .withIndex('by_creation_time').order('desc')
+      .paginate(args.paginationOpts);
+    return { ...result, page: /* 塑形、過濾後的陣列 */ };
+  },
+});</code></pre>
+
+<p><code>paginationOpts</code> 由 client 傳入，裡面是兩個東西：<code>numItems</code>（這一頁要幾筆）與 <code>cursor</code>（從哪裡接下去）。回傳的 <code>paginationResult</code> 有三個關鍵欄位：</p>
+
+<table>
+<thead>
+<tr><th>欄位</th><th>意義</th></tr>
+</thead>
+<tbody>
+<tr><td><code>page</code></td><td>這一頁的資料陣列</td></tr>
+<tr><td><code>isDone</code></td><td>是否已經沒有下一頁了</td></tr>
+<tr><td><code>continueCursor</code></td><td>下一頁要帶回來的游標；沒有下一頁時是空字串</td></tr>
+</tbody>
+</table>
+
+<p>注意 <code>cursor</code> 是資料庫層級的位置記號，通常對應到「某個欄位值＋文件 id」。它指向的是「我上次讀到哪裡」，而不是「我讀了幾筆」。所以當新貼文插入最前面時，它不會像 offset 那樣被往後推——你只是從上次那個位置繼續往後讀而已。這就是它比 offset 穩的原因。</p>
+
+<p>回頭看第二節的 feed 查詢，其實每一支都在用分頁：explore 用 <code>by_creation_time</code>、profile 用 <code>by_authorId</code>、追蹤清單用 follows 的索引，尾端都是 <code>.paginate(args.paginationOpts)</code>。</p>
+
+<h2>關鍵陷阱：先分頁、再過濾，cursor 不能重算</h2>
+
+<p>home feed 是最容易踩坑的地方。它的流程是「先 <code>paginate</code> 拿到一頁最新貼文，再把沒追蹤的作者過濾掉」。這代表一個 <code>page</code> 進來可能有很多筆、出去只剩兩筆，甚至一筆都不剩。</p>
+
+<p>這時候有個直覺但錯誤的修法：既然過濾後只剩兩篇，那我就再抓下一頁來補滿，直到補到 20 篇為止。這個做法會讓 cursor 亂掉——你已經為了補滿而偷偷前進了，卻沒有把前進後的位置正確交還給 client，結果就是漏資料或重複。</p>
+
+<p>正確做法是：<strong>分頁只做一次，然後照著那一次的結果前進；過濾後就算 <code>page</code> 變少，也不去動 <code>continueCursor</code>。</strong> 原始碼的註解把這件事講得很白：</p>
+
+<blockquote>
+Scan a bounded page, then test indexed relationships. Preserve the cursor even when no rows match so sparse following feeds can continue through all pages.
+</blockquote>
+
+<pre><code>const page = await Promise.all(result.page.map(async post => {
+  if (args.feed === 'home' && post.authorId !== me._id) {
+    const follow = await /* follows 索引檢查 */;
+    if (!follow) return null;
+  }
+  return publicPost(ctx, post, me);
+}));
+// result 仍帶著原本的 continueCursor，原封不動回傳
+return { ...result, page: page.filter(p => p !== null) };</code></pre>
+
+<p>換句話說，稀疏 feed 的每一頁可能「不滿」，但這不是 bug，而是設計上的必然。使用者往下滑時，client 依然帶回同一個 <code>continueCursor</code>，繼續往舊資料掃，總有一天會掃完（<code>isDone</code> 變 true）。這樣的體驗是「這一頁可能少一點，但不會卡住，也不會漏」。</p>
+
+<h2>Client 端怎麼接：usePaginatedQuery</h2>
+
+<p>後端把契約定義好，前端只要照契約使用。Convex 的 <code>usePaginatedQuery</code> 會自動管理 cursor 與載入下一頁：</p>
+
+<pre><code>const { results, status, loadMore } = usePaginatedQuery(
+  api.posts.list,
+  { feed: 'home' },
+  { initialNumItems: 20 },
+);
+
+// status 會是 'LoadingFirstPage' | 'CanLoadMore' | 'LoadingMore' | 'Exhausted'</code></pre>
+
+<p>前端只要判斷 <code>status</code>：還能不能載入更多、是否正在載入、是不是已經到底。使用者的動作對應到 <code>loadMore(20)</code>，把下一頁接在現有結果後面。Codexgram 的 home feed 就是用這個 hook 實作「下拉載入更多」，並在最上方接上 stories，中間做影片的自動播放偵測。</p>
+
+<h2>做完長什麼樣</h2>
+
+<p>完成這一節後，每個列表查詢都改用 <code>paginate</code>，回傳 <code>page</code>、<code>isDone</code>、<code>continueCursor</code>；home feed 即使在過濾後只剩少量資料，也能穩定地一頁一頁往下讀，不會漏、不會重複。驗證方式是想像（或實測）在 feed 頂端插入一篇新貼文，然後連續載入好幾頁，檢查有沒有貼文被跳過或重複出現。</p>
+
+<p>分頁處理完，讀取路徑就完整了。接下來要換到另一側：寫入。下一節會說明為什麼像按讚、追蹤這種寫入必須設計成「重試也安全」，以及計數器與串聯刪除要怎麼維護。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+社群列表要用 cursor 分頁，不要用 offset/limit，因為內容一直在變，offset 會造成漏看或重複。Convex 的 paginate 回傳 page、isDone 與 continueCursor，cursor 指向資料庫中的位置而非第幾筆。最關鍵的陷阱是「先分頁再過濾」：home feed 過濾後頁面變少是正常的，務必保留上游回傳的 cursor，不要為了補滿而重算，否則稀疏 feed 會壞掉。
+</blockquote>
+
+<p>下一節要把注意力從「讀」轉到「寫」。使用者按讚時可能連點好幾下、網路重試可能送出重複請求，所以寫入必須設計成可重試而不出錯；你會看到 toggle 語意、反正規化計數器的維護，以及留言用 requestId 去重的做法。</p>
+
+<div class="lesson-nav">
+  <div><a href="./indexed-feeds-and-relations.html">← 上一步：用索引查 feed 與社交關係</a></div>
+  <div><a href="./idempotent-social-writes.html">下一步：可重試的寫入：toggle、計數器與 requestId 冪等 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="社群 feed 為什麼不適合用 offset / limit 分頁？" data-correct="1" data-explain="列表內容會變動，插入或刪除會讓項目位移，造成漏看或重複。">
+  <button class="opt">因為 offset 的數字沒有辦法被瀏覽器讀取</button>
+  <button class="opt">因為內容變動會讓項目位移造成漏看</button>
+  <button class="opt">因為 offset 分頁只能用在單一資料表上</button>
+  <button class="opt">因為 offset 需要使用者手動輸入頁碼</button>
+</div>
+<div class="quiz" data-question="Convex paginate 回傳的 continueCursor 代表什麼？" data-correct="3" data-explain="它是一個資料庫層級的位置記號，指出下一頁該從哪裡繼續讀。">
+  <button class="opt">這一頁總共回傳了幾筆資料的數量</button>
+  <button class="opt">使用者上一次瀏覽這一頁的時間</button>
+  <button class="opt">這張資料表還剩下多少頁沒有讀</button>
+  <button class="opt">下一頁要從資料庫哪個位置接著讀</button>
+</div>
+<div class="quiz" data-question="home feed 過濾掉沒追蹤的作者後，為什麼不能重抓下一頁來補滿？" data-correct="0" data-explain="重抓會讓 cursor 提前前進卻沒正確交還，導致漏資料或重複。">
+  <button class="opt">重抓會讓 cursor 亂掉，造成漏或重複</button>
+  <button class="opt">重抓會讓資料庫的索引需要重新建立</button>
+  <button class="opt">重抓會讓其他使用者的 feed 也一起改變</button>
+  <button class="opt">重抓會讓按讚的數字出現負數的情況</button>
+</div>
+<div class="quiz" data-question="稀疏 home feed 的某一頁資料比 numItems 少，代表什麼？" data-correct="2" data-explain="一頁不滿是正常現象，只要照原 cursor 繼續往舊資料掃，最終仍會掃完。">
+  <button class="opt">代表資料庫已經損壞需要重新修復</button>
+  <button class="opt">代表應該立刻回到第一頁重新載入</button>
+  <button class="opt">代表稀疏 feed 的正常結果可以繼續掃</button>
+  <button class="opt">代表追蹤關係的索引沒有建立成功</button>
+</div>
+<div class="quiz" data-question="usePaginatedQuery 的 status 為 Exhausted 時是什麼意思？" data-correct="1" data-explain="Exhausted 表示所有資料都已載入，沒有下一頁可以再拿。">
+  <button class="opt">代表後端查詢剛剛發生了一個錯誤</button>
+  <button class="opt">代表所有資料載完已經沒有下一頁</button>
+  <button class="opt">代表目前正在載入第一頁的內容</button>
+  <button class="opt">代表使用者需要重新整理整個頁面</button>
+</div>
+<div class="quiz" data-question="paginationOpts 裡的 numItems 代表什麼？" data-correct="3" data-explain="numItems 是這一頁要求回傳的資料筆數上限。">
+  <button class="opt">資料庫總共擁有的資料筆數</button>
+  <button class="opt">使用者已經滑過的所有頁數</button>
+  <button class="opt">索引裡面包含的欄位個數</button>
+  <button class="opt">這一頁最多要回傳幾筆資料</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 社交圖與貼文功能 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

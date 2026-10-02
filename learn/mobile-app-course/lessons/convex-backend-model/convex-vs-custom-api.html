@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Convex 或自寫 API server：怎麼選</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Convex 或自寫 API server：怎麼選</h1>
+<p class="meta">Step 5/5 · Convex 後端模型</p>
+
+<h2>學習目標</h2>
+<p>能在 Convex 與自寫 API server（例如 Next.js Route Handlers 搭配 Postgres）之間做出有理由的選擇：說清楚各自的取捨與適用條件，並用一份檢查表判斷下一個功能該用哪一邊。</p>
+
+<h2>前言：下一個專案，後端要怎麼開始？</h2>
+
+<p>前四節把 Convex 這套模型看完了：schema 定義資料、query 與 mutation 處理讀寫、reactive 查詢自動更新畫面。你可能已經覺得這套東西很好用，甚至想「以後每個 app 都用 Convex 就好」。但先別急著下結論。</p>
+
+<p>同樣是這個課程，Cal AI 用的是完全不同的組合：Next.js 的 Route Handlers 當 API、Neon 的 Postgres 當資料庫、Drizzle 當 ORM，再另外用 trigger.dev 跑背景 AI 工作。Dentify 甚至還多了一個網頁 dashboard，直接讀同一份 Postgres。這些專案不是「還沒進化到用 Convex」，而是它們的需求本來就更適合自寫 API。這一節要處理的就是這個抉擇：到底什麼時候該用 Convex，什麼時候該自己寫後端。</p>
+
+<h2>兩條路線的取捨</h2>
+
+<p>先把它們並排看清楚。這裡的「自寫 API server」指的是你在 Next.js 之類的框架裡自己開端點，接上關聯式資料庫，例如 Cal AI 與 Dentify 的做法。</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>Convex 全託管後端</th><th>自寫 API server + Postgres</th></tr>
+</thead>
+<tbody>
+<tr><td>即時更新</td><td>查詢天生是訂閱，開箱即用</td><td>要自己接 WebSocket 或輪詢</td></tr>
+<tr><td>API 端點</td><td>寫函式，不必設計路由</td><td>自己定義與維護每個路由</td></tr>
+<tr><td>型別同步</td><td>由 validator 自動產生</td><td>要自己維護前後端型別</td></tr>
+<tr><td>關聯查詢</td><td>用索引與反正規化，彈性較小</td><td>SQL 的 join、聚合、報表隨你用</td></tr>
+<tr><td>外部服務整合</td><td>用 action，較受框架限制</td><td>任何 Node 套件與 API 都能直接用</td></tr>
+<tr><td>網頁後台共用</td><td>要再經過 Convex 這一層</td><td>Server Component 可直讀資料庫</td></tr>
+<tr><td>維運與可攜性</td><td>託管、省事，但綁定平台</td><td>自己管，掌控與可搬遷性高</td></tr>
+</tbody>
+</table>
+
+<p>最直觀的分水嶺是「即時」與「查詢彈性」。如果你的功能核心是很多人同時在線、資料一動大家都要看到——聊天、動態牆、協作、通知——Convex 幫你省下的不只是打字量，而是整條即時同步的工程難題。反過來說，如果你的功能核心是複雜的資料分析，例如「上個月各地區的回購率排名」，那正是關聯式資料庫與 SQL 的強項，硬用 Convex 的索引模型去拼會又慢又痛苦。</p>
+
+<p>還有一個容易被忽略的差異，是「誰要跟這份資料共用」。Cal AI 和 Dentify 都有網頁端需求：背景 task 要讀寫同一份資料、員工 dashboard 要直接查資料做報表。這種情況下，把 Postgres 當成唯一真相、讓手機與網頁都透過它工作，會比讓大家繞過一層託管服務更直接。</p>
+
+<h2>判別問句：問自己這幾題</h2>
+
+<p>不需要背哪個技術「比較好」，只要在下決定前，誠實地回答下面幾個問題。</p>
+
+<ol>
+<li><strong>這個功能需要多人即時同步嗎？</strong>如果使用者會盯著別人的動作看（聊天、按讚數跳動、協作編輯），Convex 的現成即時更新會替你省下大量時間。</li>
+<li><strong>你的查詢需要複雜的關聯、聚合或報表嗎？</strong>如果需要跨多張表統計、做排行、算趨勢，關聯式資料庫的 SQL 會比 Convex 的索引加反正規化好用得多。</li>
+<li><strong>你已經有一份既有的資料庫或資料倉儲要接嗎？</strong>若資料主體本來就在 Postgres 或既有的系統裡，自寫 API 直接接上去最省事；硬搬進 Convex 往往得不償失。</li>
+<li><strong>有沒有網頁端或背景服務要共用同一份資料？</strong>如果手機 app、網頁 dashboard、背景 task 都要讀同一份資料，讓它們都接同一個資料庫通常最單純。</li>
+<li><strong>會不會需要把後端搬走或做深度客製？</strong>如果未來可能換雲、或需要自己掌握底層，託管服務的綁定就要先列入考量。</li>
+</ol>
+
+<p>把這幾題當成一條連續的光譜。愈往「即時、互動為主、快速迭代」那一端靠，Convex 的優勢愈明顯；愈往「複雜查詢、多端共用、資料既有」那一端靠，自寫 API 加關聯式資料庫愈合適。</p>
+
+<h2>反例：規則什麼時候會翻轉</h2>
+
+<p>任何「就用某個技術」的直覺都有例外，這裡舉三個常見的反例，幫你避免把判準用死。</p>
+
+<p>第一個反例是「社群 app 就一定用 Convex」。如果這個社群 app 真正的價值在於推薦演算法、趨勢分析、廣告投放成效這類需要大量跨表計算的功能，那麼 Convex 的查詢模型反而會處處綁手綁腳。即時互動可以外包給 Convex，但分析型的資料處理仍可能需要另一套關聯式或分析型資料庫並存。</p>
+
+<p>第二個反例是「自寫 API 比較能掌控，所以一定比較好」。如果你的功能只是聊天與動態牆，自己接 WebSocket、處理斷線重連、維護前後端即時狀態，工程成本很可能遠高於直接用 Convex。可掌控是一項優點，但優點不是免費的，它得用時間換。</p>
+
+<p>第三個反例是「既然已有 Postgres，就絕對不能用 Convex」。這兩者不必然互斥。實務上常見的組合是：以即時互動為主的行動功能放在 Convex，需要長時 CPU 或對外呼叫的工作交給專門的背景任務服務，而既有資料庫繼續服務網頁後台。重點不是選邊站，而是把對的資料放在對的地方，並想清楚它們之間怎麼同步。</p>
+
+<h2>決策規則與檢查表</h2>
+
+<blockquote>
+先用一句話定調：<strong>以即時互動為主、且沒有複雜 SQL 需求的新功能，預設用 Convex；牽涉複雜關聯查詢、既有資料庫、或多端共用同一份真相的功能，預設自寫 API + 關聯式資料庫。</strong>
+接著用檢查表確認。<br>
+☐ 需不需要多人的即時同步？是 → 偏 Convex。<br>
+☐ 查詢有沒有大量 join、聚合、報表？是 → 偏自寫 API + SQL。<br>
+☐ 資料主體是否已經在既有的 Postgres 或其他系統？是 → 偏自寫 API。<br>
+☐ 手機、網頁、背景服務是否要共用同一份資料？是 → 偏自寫 API。<br>
+☐ 主要功能是不是即時動態與聊天？是 → 偏 Convex。<br>
+☐ 兩邊各有需求？可以並存，用背景任務或同步機制把資料接起來。
+</blockquote>
+
+<p>這份檢查表不是要你二選一，而是幫你在每次開新功能時，都能說出「我為什麼選這一邊」。把理由講得出來，就是這一整節要教你的能力。</p>
+
+<div class="lesson-nav">
+  <div><a href="./reactive-queries-and-realtime.html">← 上一步：Reactive 查詢：為什麼不用手動重抓資料</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="哪一種功能最能凸顯 Convex 全託管後端的優勢？" data-correct="1" data-explain="多人即時同步是 Convex 開箱即用的強項，自寫則要處理 WebSocket 等工程。">
+  <button class="opt">每月產生一張跨表統計報表</button>
+  <button class="opt">多人即時聊天與動態牆更新</button>
+  <button class="opt">把資料定期備份到資料倉儲</button>
+  <button class="opt">對外提供穩定的公開資料 API</button>
+</div>
+
+<div class="quiz" data-question="哪一種需求最適合自寫 API server 搭配關聯式資料庫？" data-correct="2" data-explain="複雜的 join 與聚合是 SQL 的強項，Convex 的索引模型會較吃力。">
+  <button class="opt">即時顯示在線人數與已讀狀態</button>
+  <button class="opt">把使用者的按讚即時同步給所有人</button>
+  <button class="opt">跨多張表統計各地區的訂單趨勢</button>
+  <button class="opt">讓聊天訊息在斷線後自動補齊</button>
+</div>
+
+<div class="quiz" data-question="為什麼說「已有 Postgres」是偏向自寫 API 的一個訊號？" data-correct="0" data-explain="資料主體本來就在既有系統時，直接接上比硬搬進託管服務更單純。">
+  <button class="opt">既有資料庫直接接上通常比搬遷單純</button>
+  <button class="opt">因為 Postgres 沒有辦法和託管服務共存</button>
+  <button class="opt">因為 Convex 不支援任何關聯式查詢</button>
+  <button class="opt">因為這樣就不需要處理任何身分驗證</button>
+</div>
+
+<div class="quiz" data-question="手機 app、網頁 dashboard 與背景 task 要共用同一份資料時，哪個做法最直接？" data-correct="3" data-explain="多方透過同一個資料庫工作，通常比繞一層託管服務更直接。">
+  <button class="opt">讓每一端各自維護一份複製的資料</button>
+  <button class="opt">全部改用瀏覽器的本機儲存空間</button>
+  <button class="opt">把資料拆成三份放在不同服務</button>
+  <button class="opt">讓大家都接同一個資料庫工作</button>
+</div>
+
+<div class="quiz" data-question="「社群 app 就一定該用 Convex」這個說法會在什麼情況下翻轉？" data-correct="1" data-explain="當真正價值在推薦、趨勢、成效這類跨表分析時，Convex 查詢模型會綁手綁腳。">
+  <button class="opt">當這個社群 app 的使用者少於一千人</button>
+  <button class="opt">當價值在推薦與趨勢等跨表分析時</button>
+  <button class="opt">當這個 app 的介面需要深色模式時</button>
+  <button class="opt">當它的貼文數量每天不到一百筆時</button>
+</div>
+
+<div class="quiz" data-question="課程中 Cal AI 與 Dentify 的後端加總起來，最接近哪一句結論？" data-correct="2" data-explain="不是選邊站，而是依需求把對的資料放在對的服務，必要時讓兩者並存。">
+  <button class="opt">Convex 全面取代自寫 API 的舊做法</button>
+  <button class="opt">自寫 API 永遠比託管服務更可掌控</button>
+  <button class="opt">依需求選擇，必要時讓兩者並存</button>
+  <button class="opt">所有 app 都應該同時使用兩套後端</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Convex 後端模型 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

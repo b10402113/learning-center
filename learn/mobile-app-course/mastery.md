@@ -215,3 +215,118 @@ updated: 2026-10-02
 - pre-submission-checklist: unknown
 
 > probe skipped via /nodes mobile-app-course/appstore-compliance-legal skip-probe on 2026-10-02
+
+## convex-media-storage — Convex 檔案儲存與上傳
+
+- convex-storage-model: unknown
+- storage-id-vs-document: unknown
+- two-phase-upload-state: unknown
+- upload-ownership-from-auth: unknown
+- purpose-separation: unknown
+- upload-expiry-cleanup: unknown
+- http-upload-action: unknown
+- mime-and-magic-byte-validation: unknown
+- streamed-size-limiting: unknown
+- action-memory-budget: unknown
+- video-duration-box-parsing: unknown
+- media-size-duration-limits: unknown
+- authenticated-media-reads: unknown
+- http-range-requests: unknown
+- url-possession-vs-authorization: unknown
+
+> probe skipped via /nodes mobile-app-course/convex-media-storage skip-probe on 2026-10-02
+
+## social-graph-features — 社交圖與貼文功能
+
+- social-tables-model: unknown
+- compound-unique-index: unknown
+- denormalized-counters: unknown
+- search-index-declared: unknown
+- feed-query-with-index: unknown
+- avoid-filter-scan: unknown
+- per-viewer-derived-fields: unknown
+- cursor-pagination: unknown
+- sparse-feed-post-filter: unknown
+- toggle-idempotent-write: unknown
+- comment-requestid-idempotency: unknown
+- cascade-cleanup-scheduler: unknown
+- fulltext-vs-equality-index: unknown
+
+> probe skipped via /nodes mobile-app-course/social-graph-features skip-probe on 2026-10-02
+
+## realtime-messaging — 即時私訊
+
+- three-table-separation: unknown
+- canonical-participant-pair: unknown
+- conversation-start-reuse: unknown
+- participant-only-authorization: unknown
+- monotonic-sequence: unknown
+- requestid-idempotent-send: unknown
+- inbox-denormalization: unknown
+- optimistic-outbox-reconciliation: unknown
+- sequence-based-unread: unknown
+- read-receipt-trigger: unknown
+
+> probe skipped via /nodes mobile-app-course/realtime-messaging skip-probe on 2026-10-02
+
+## convex-auth-clerk — Convex × Clerk 身分驗證
+
+- server-derived-identity: unknown
+- client-supplied-identity-forgery: unknown
+- clerk-convex-integration-toggle: unknown
+- auth-config-issuer-domain: unknown
+- jwt-signature-verification: unknown
+- identity-object-shape: unknown
+- token-identifier-vs-subject: unknown
+- require-identity-vs-profile: unknown
+- profile-guard-rejections: unknown
+- protected-function-verification: unknown
+- auto-sync-profile-from-clerk: unknown
+
+> probe skipped via /nodes mobile-app-course/convex-auth-clerk skip-probe on 2026-10-02
+
+## convex-backend-model — Convex 後端模型
+
+- backend-prerequisite-for-social: unknown
+- convex-dev-two-terminals: unknown
+- convex-folder-layout: unknown
+- query-vs-mutation: unknown
+- convex-generated-ai-files: unknown
+- realtime-out-of-the-box: unknown
+- clerk-convex-integration-toggle: unknown
+- convex-schema-validators: unknown
+- composite-indexes: unknown
+- search-index: unknown
+- denormalized-counters: unknown
+- avoid-unbounded-arrays: unknown
+- feed-pagination: unknown
+- publish-from-upload: unknown
+- idempotent-retry: unknown
+- cascade-cleanup: unknown
+- server-side-media-limits: unknown
+- reactive-subscription-mechanism: unknown
+- optimistic-update-vs-realtime: unknown
+- convex-vs-custom-api-choice: unknown
+
+> probe skipped via /nodes mobile-app-course/convex-backend-model skip-probe on 2026-10-02
+
+## seeding-and-backend-tests — 寫實 Seed 與後端測試
+
+- seed-realistic-volume: unknown
+- seed-optional-polish: unknown
+- seed-dev-only-gating: unknown
+- seed-idempotent-seedkey: unknown
+- deterministic-post-plan: unknown
+- demo-vs-real-profile: unknown
+- batched-populate-action: unknown
+- per-post-file-ownership: unknown
+- convex-test-harness: unknown
+- withidentity-auth-testing: unknown
+- test-permission-boundaries: unknown
+- test-idempotent-retry: unknown
+- test-counter-correctness: unknown
+- test-pagination-no-overlap: unknown
+- fake-timers-scheduled-cleanup: unknown
+- cascade-delete-cleanup: unknown
+
+> probe skipped via /nodes mobile-app-course/seeding-and-backend-tests skip-probe on 2026-10-02

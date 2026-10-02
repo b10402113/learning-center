@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 schema.ts 定義資料模型與索引</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 schema.ts 定義資料模型與索引</h1>
+<p class="meta">Step 2/5 · Convex 後端模型</p>
+
+<h2>學習目標</h2>
+<p>能讀懂 Convex 的 <code>schema.ts</code>：用 <code>defineTable</code> 與 validator 定義每張表，用索引與複合索引支撐查詢，並說出為什麼要避免無界陣列、以及 denormalized counter 在 Convex 裡為什麼幾乎是必要的。</p>
+
+<h2>前言：先決定資料長什麼樣子，再談怎麼查</h2>
+
+<p>上一節我們知道 Convex 的後端是由一堆函式組成的，query 負責讀、mutation 負責寫。但你很快就會撞到一個更前面的問題：這些函式到底在讀什麼、寫什麼？貼文有哪些欄位？按讚要記哪幾筆資料？如果資料的樣子沒先講清楚，那查詢和寫入根本無從下手。</p>
+
+<p>在傳統的關聯式資料庫裡，你可能習慣用圖形介面點一點建表，或另外寫一段 SQL migration。Convex 走的是「schema 即程式碼」這條路：所有的資料表、欄位、索引，都寫在一個叫 <code>schema.ts</code> 的檔案裡。這一節要把這個檔案讀懂，尤其是「為什麼有些欄位看起來冗餘、卻非留不可」這件事。</p>
+
+<h2>用 defineTable 描述一張表</h2>
+
+<p>打開 <code>convex/schema.ts</code>，你會看到兩個主要的匯入：<code>defineSchema</code> 和 <code>defineTable</code> 來自 <code>convex/server</code>，而 <code>v</code> 來自 <code>convex/values</code>。整個檔案的骨架，就是把 <code>defineSchema</code> 交給一份物件，物件的每個鍵是一張表，值則是那張表的欄位定義。</p>
+
+<p>以貼文這張表為例，它大致長這樣：</p>
+
+<pre><code>posts: defineTable({
+  seedKey: v.optional(v.string()),
+  authorId: v.id('profiles'),
+  uploadId: v.id('uploads'),
+  storageId: v.id('_storage'),
+  kind: mediaKind,
+  width: v.number(),
+  height: v.number(),
+  duration: v.optional(v.number()),
+  caption: v.string(),
+  likesCount: v.number(),
+  commentsCount: v.number(),
+}).index('by_seedKey', ['seedKey']).index('by_authorId', ['authorId']),</code></pre>
+
+<p>每個欄位後面接的那個 <code>v.string()</code>、<code>v.number()</code> 或 <code>v.id('profiles')</code>，叫做 <strong>validator（驗證器）</strong>。它同時做兩件事。第一，它是型別的來源：Convex 會根據這些定義，知道你查出來的 post 物件有哪些欄位。第二，它是執行期的守門員：任何寫入這張表的 mutation，如果欄位型別不對，寫入就會被擋下來。這跟純靠 TypeScript 型別不一樣，因為 TypeScript 型別在程式跑起來之後就消失了，validator 還留在後端幫你檢查。</p>
+
+<p>幾個常見的 validator 可以這樣理解：<code>v.string()</code> 是字串，<code>v.number()</code> 是數字，<code>v.boolean()</code> 是布林，<code>v.id('profiles')</code> 是「指向 profiles 表某一筆的識別碼」，<code>v.optional(...)</code> 表示這個欄位可以不存在。你也可以像 Codexgram 那樣自訂一個共用 validator，例如把圖片或影片的格式定義成一個 union，讓多張表共用同一套定義。</p>
+
+<h3>為什麼欄位裡看不到陣列？</h3>
+
+<p>如果你翻遍 <code>schema.ts</code>，會發現像「這篇貼文的所有留言」或「這個人的所有追蹤者」這種資料，都不是用陣列欄位存的，而是各自獨立成一張表，例如 <code>comments</code>、<code>follows</code>。這是一個刻意的設計。</p>
+
+<p>在 Convex 裡，一筆文件如果帶了一個會不斷長大的陣列，問題會很嚴重。每次有人留言，你都要把整篇貼文的文件讀出來、把新留言塞進陣列、再整份寫回去。留言越多，這份文件越大，每次寫入就越慢，而且兩則同時進來的留言還可能互相覆蓋。這種「長度沒有上限的陣列」是 Convex 文件明講要避免的。正確的做法是把留言拆成自己的表，用欄位指向它屬於哪篇貼文，這樣新增一則留言就是單純插一筆小資料。</p>
+
+<h2>索引：讓查詢不必掃過每筆資料</h2>
+
+<p>假設 <code>comments</code> 表裡有一百萬則留言，現在你要查「某篇貼文底下的所有留言」。如果你只能從第一筆讀到最後一筆、逐筆檢查它屬於哪篇貼文，那會非常慢。索引（index）就是為了解決這件事：它替某個欄位另外建一份排序好的對照表，讓你能直接跳到符合條件的那一段。</p>
+
+<p>在 schema 裡宣告索引，就是在表的後面接上 <code>.index('索引名稱', ['欄位'])</code>。例如貼文表用 <code>.index('by_authorId', ['authorId'])</code>，讓「查某個作者的所有貼文」可以直接從索引定位。Convex 官方的寫法指南有一條原則叫「prefer indexes over filters」：能用索引就用索引，不要讓查詢先把資料撈出來再用 <code>filter</code> 篩。你可以把索引想成書的目錄，沒有目錄，你只能一頁一頁翻；有了目錄，你直接翻到要的那一章。</p>
+
+<h2>複合索引：一組欄位合起來當條件</h2>
+
+<p>很多查詢的條件不只一個欄位。例如「我對這篇貼文按過讚了嗎」，需要同時比對 <code>userId</code> 和 <code>postId</code>。這種時候就適合用<strong>複合索引</strong>，也就是把多個欄位綁進同一個索引：</p>
+
+<pre><code>likes: defineTable({ userId: v.id('profiles'), postId: v.id('posts') })
+  .index('by_userId_and_postId', ['userId', 'postId'])
+  .index('by_postId', ['postId']),</code></pre>
+
+<p><code>by_userId_and_postId</code> 這個複合索引，讓「同時指定某個使用者和某篇貼文」的查詢很快。它在社群 app 裡還有一個常見用途：搭配只取一筆的查詢，讓「同一個人對同一篇貼文只能有一筆讚」變成可檢查的規則。做法是先照這組索引去查，如果查到一筆，就表示已經按過讚，不要再插一筆。索引本身不會像關聯式資料庫那樣自動擋重複，真正把重複擋下來的是「先查再寫」這個動作；但有了複合索引，這個檢查才夠快、才能在交易裡安全地完成。同樣的手法也用在「一個人只能追蹤另一個人一次」。</p>
+
+<p>除了複合索引，還有一種<strong>搜尋索引</strong>。以 profiles 表為例，它把使用者名稱、姓名、簡介等文字合併成一個 <code>searchText</code> 欄位，然後對這個欄位建立 <code>searchIndex</code>：</p>
+
+<pre><code>profiles: defineTable({
+  // ...其他欄位
+  searchText: v.string(),
+}).searchIndex('search_profiles', { searchField: 'searchText' }),</code></pre>
+
+<p>有了這個搜尋索引，探索頁那種「輸入關鍵字找人」的功能才能實作。要注意的是，搜尋走的是文字比對，跟前面那種精確比對的索引是不同用途。</p>
+
+<h2>Denormalized counter：為什麼數字要重複存一份</h2>
+
+<p>看到 <code>posts</code> 表裡的 <code>likesCount</code>、<code>commentsCount</code>，或 <code>profiles</code> 表裡的 <code>followersCount</code>，你可能會想：這些數字不是可以從 likes、comments、follows 那幾張表數出來嗎？為什麼要多存一份，而且還要自己維護、冒著對不上的風險？</p>
+
+<p>原因是 Convex 的查詢模型。一個 query 的執行速度，最好和各表資料量無關；如果你每次顯示貼文都要去 likes 表數「這篇有幾個讚」，那貼文一多，讀取就會拖慢。把計數直接存成貼文文件上的一個欄位，前端讀貼文時順便就拿到數字，速度是固定的。這種「把可以算出來的結果先存起來」的做法叫 <strong>denormalization（反正規化）</strong>，而存下來的欄位就叫 denormalized counter。</p>
+
+<p>它的代價是你必須在每次按讚或取消讚時，同時更新這個計數。所以 mutation 裡常會看到「插入一筆 like，然後把貼文的 <code>likesCount</code> 加一」這兩個動作綁在一起。這裡的設計原則很簡單：計數是拿來讀的、是快取的性質，真正的事實仍然是 likes 表裡的那幾筆資料；萬一哪天數字對不上，以明細為準。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>schema.ts</code> 是 Convex 後端的資料骨架，用 <code>defineTable</code> 與 validator 定義每張表的欄位與型別。查詢要用索引，複合索引處理多欄位條件；文字搜尋另用 searchIndex。不要把會無限成長的資料塞成陣列欄位，要拆成獨立表。像按讚數、追蹤數這種可算出來的數字，要故意多存一份 denormalized counter，換取穩定的讀取速度，但記得在寫入時同步維護它。
+</blockquote>
+
+<p>資料骨架有了，接著就是實際在上面動手。下一節要照著 <code>posts.ts</code> 的模式，走一次寫 query 與 mutation 的流程：怎麼宣告參數、怎麼用索引查、怎麼在後端認身分、又怎麼把結果整理成前端要的形狀。</p>
+
+<div class="lesson-nav">
+  <div><a href="./convex-serverless-model.html">← 上一步：Convex 是什麼：把後端變成雲端上的函式</a></div>
+  <div><a href="./write-queries-and-mutations.html">下一步：寫 query 與 mutation：從 posts.ts 走一次 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="schema.ts 裡的 validator 相較於 TypeScript 型別，多了什麼作用？" data-correct="1" data-explain="型別在執行期消失，validator 還會在後端實際檢查寫入的資料。">
+  <button class="opt">可以讓程式碼執行得比原本更快</button>
+  <button class="opt">可以在執行期實際檢查寫入的資料</button>
+  <button class="opt">可以把資料自動備份到另一台機器</button>
+  <button class="opt">可以把欄位名稱自動翻成中文</button>
+</div>
+
+<div class="quiz" data-question="為什麼貼文的留言不建議存成貼文文件裡的一個陣列？" data-correct="2" data-explain="陣列會無限成長，每次寫入都要重寫整份文件，還可能互相覆蓋。">
+  <button class="opt">因為陣列會讓欄位無法被索引查詢</button>
+  <button class="opt">因為陣列不能存放文字的內容</button>
+  <button class="opt">因為陣列會無限成長拖慢每次寫入</button>
+  <button class="opt">因為陣列會自動複製所有留言</button>
+</div>
+
+<div class="quiz" data-question="by_userId_and_postId 這種複合索引最適合用在哪種查詢？" data-correct="0" data-explain="複合索引讓同時指定多個欄位條件的查詢能直接定位。">
+  <button class="opt">同時指定使用者與貼文的查詢</button>
+  <button class="opt">只依照貼文建立時間排序的清單</button>
+  <button class="opt">對整張表做全文關鍵字搜尋</button>
+  <button class="opt">把所有使用者的名稱一次列出</button>
+</div>
+
+<div class="quiz" data-question="「一個人對一篇貼文只能按一次讚」是靠什麼機制保證的？" data-correct="3" data-explain="索引本身不會自動擋重複，要用索引先查再寫，把重複檢查做在交易裡。">
+  <button class="opt">資料庫會自動拒絕第二筆相同的資料</button>
+  <button class="opt">按讚按鈕在介面上被停用兩次</button>
+  <button class="opt">前端用雜湊把重複的請求合併</button>
+  <button class="opt">先用索引查、查到就不再寫入</button>
+</div>
+
+<div class="quiz" data-question="為什麼 likesCount 這種數字要存在貼文上，而不是每次查詢時數一遍？" data-correct="1" data-explain="存一份計數讓讀取速度和資料量無關，代價是寫入時要同步維護。">
+  <button class="opt">因為 Convex 不允許查詢其他資料表</button>
+  <button class="opt">因為存一份計數讓讀取維持穩定速度</button>
+  <button class="opt">因為計數欄位會自動保持絕對正確</button>
+  <button class="opt">因為前端不能顯示動態計算的數字</button>
+</div>
+
+<div class="quiz" data-question="哪一項是 Convex 官方建議的查詢原則？" data-correct="2" data-explain="能用索引就用索引，不要把資料撈出來後再用 filter 篩。">
+  <button class="opt">先過濾再查表可以省下索引空間</button>
+  <button class="opt">所有查詢都應該掃過整張表才準</button>
+  <button class="opt">優先使用索引而不是用 filter 篩選</button>
+  <button class="opt">索引愈多愈好，不必考慮寫入成本</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Convex 後端模型 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用索引查 feed 與社交關係</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用索引查 feed 與社交關係</h1>
+<p class="meta">Step 2/5 · 社交圖與貼文功能</p>
+
+<h2>學習目標</h2>
+<p>能用 <code>withIndex</code> 寫出 home、explore、profile 三種 feed 的查詢，以及 followers / following 清單；並說清楚像 <code>isLiked</code>、<code>isFollowing</code> 這種「因人而異」的欄位是從哪裡算出來的。</p>
+
+<h2>前言：同一張表，為什麼要長出三種 feed？</h2>
+
+<p>上一節把社交圖的資料建模好了，索引也掛上了。現在要把它變成畫面。但你很快會發現，光是「貼文列表」就有三種完全不同的意思：</p>
+
+<ul>
+<li><strong>Home feed</strong>：只顯示我追蹤的人（加上我自己）的貼文。</li>
+<li><strong>Explore</strong>：顯示所有人的最新貼文，讓我發掘新內容。</li>
+<li><strong>Profile</strong>：只顯示某一個人的貼文。</li>
+</ul>
+
+<p>三種都是「讀 posts 表」，卻要用不同的方式篩選與排序。而每一篇貼文顯示時，又要根據「你是誰」決定愛心是不是亮著、是不是你自己的貼文。這一節要做的就是：把這些查詢通通寫成一條條走索引的路徑。</p>
+
+<h2>動手前先具備什麼</h2>
+
+<p>你需要記得兩個前提。第一，這裡的每個查詢都在 Convex 的 <code>query</code> 裡執行，而 query 是唯讀的，所有 DB 存取都經過 <code>ctx.db</code>。第二，使用者身分已經由 <code>requireProfile(ctx)</code> 在 server 端解析完成，回傳當下的 profile 文件；query 絕對不接受 client 傳來的「我是誰」。</p>
+
+<h2>核心手法：withIndex 指定查詢走哪條路</h2>
+
+<p>Convex 查詢的基本形狀是從一張表出發，指定一條索引，再給等值或範圍條件：</p>
+
+<pre><code>ctx.db.query('likes')
+  .withIndex('by_userId_and_postId', q => q.eq('userId', me._id).eq('postId', post._id))
+  .unique();</code></pre>
+
+<p><code>withIndex</code> 的第一個參數是索引名稱，第二個參數裡的 <code>q.eq</code> 是等值條件。因為這條索引的前兩欄正好是 <code>userId</code> 與 <code>postId</code>，資料庫能直接跳到那一列，用 <code>.unique()</code> 取回（或回傳 null）。</p>
+
+<p>這裡要刻意對比一個錯誤做法：</p>
+
+<blockquote class="bad-code">
+<strong>弱做法</strong>：<code>ctx.db.query('likes').filter(q => q.eq(q.field('postId'), id)).collect()</code>——這會先把資料取出來，再到記憶體裡篩選，資料一多就慢，而且吃交易資源。
+</blockquote>
+
+<blockquote class="good-code">
+<strong>強做法</strong>：<code>ctx.db.query('likes').withIndex('by_postId', q => q.eq('postId', id)).collect()</code>——篩選在查詢層用索引完成，只讀出需要的列。
+</blockquote>
+
+<p>一句話記住：<strong>能用索引回答的問題，就不要用 filter。</strong> 這也是為什麼上一節要替每個關係留兩條索引——一條對應一個查詢方向。</p>
+
+<h2>三種 feed 怎麼寫</h2>
+
+<p><code>posts.list</code> 用一個 <code>feed</code> 參數分流，每一支都走索引：</p>
+
+<pre><code>const result = args.feed === 'profile'
+  ? await ctx.db.query('posts')
+      .withIndex('by_authorId', q => q.eq('authorId', args.profileId ?? me._id))
+      .order('desc').paginate(args.paginationOpts)          // 某人的貼文，新的在前
+  : await ctx.db.query('posts')
+      .withIndex('by_creation_time')                         // 全部貼文，新的在前
+      .order('desc').paginate(args.paginationOpts);</code></pre>
+
+<p>Explore 與 Profile 很直觀：前者用內建的 <code>by_creation_time</code> 索引拿全部貼文，後者用 <code>by_authorId</code> 限定作者，兩者都用 <code>order('desc')</code> 讓最新的排前面。分頁的細節留到下一節，這裡先看它確實有走索引。</p>
+
+<p>真正的難題是 home feed。它要「我追蹤的作者的貼文」，但「我追蹤誰」在 follows 表、「貼文」在 posts 表，兩張表之間沒有單一索引可以直接串起來。Codexgram 的解法是：<strong>先掃一頁最新貼文，再逐篇用索引檢查作者是不是我追蹤的人。</strong></p>
+
+<pre><code>const page = await Promise.all(result.page.map(async post => {
+  if (args.feed === 'home' && post.authorId !== me._id) {
+    const follow = await ctx.db.query('follows')
+      .withIndex('by_followerId_and_followingId',
+        q => q.eq('followerId', me._id).eq('followingId', post.authorId))
+      .unique();
+    if (!follow) return null;          // 沒有追蹤這個作者 → 這篇不進 home
+  }
+  return publicPost(ctx, post, me);    // 有追蹤或作者是我自己 → 塑形後回傳
+}));
+return { ...result, page: page.filter(p => p !== null) };</code></pre>
+
+<p>每一篇貼文的檢查，都是沿著 <code>by_followerId_and_followingId</code> 這條索引做一次「我 vs 作者」的 unique 查詢。這感覺像 N+1 查詢，但在 Convex 的交易式 query 裡，這些讀取都在同一個快照、本機完成，速度非常快。程式碼的註解特別提醒：即使過濾後這一頁可能只剩兩篇，也要保留原本分頁回傳的 cursor，這樣稀疏的追蹤 feed 才不會卡住。這個坑下一節會完整解釋。</p>
+
+<h2>追蹤清單與留言列表</h2>
+
+<p>人與人之間的清單用的是同一招。<code>social.connections</code> 依照 <code>kind</code> 選索引：</p>
+
+<pre><code>const result = args.kind === 'followers'
+  ? await ctx.db.query('follows')
+      .withIndex('by_followingId', q => q.eq('followingId', args.profileId))   // 誰追蹤我
+      .order('desc').paginate(args.paginationOpts)
+  : await ctx.db.query('follows')
+      .withIndex('by_followerId_and_followingId', q => q.eq('followerId', args.profileId)) // 我追蹤誰
+      .paginate(args.paginationOpts);</code></pre>
+
+<p>查到 follows 的列之後，還要把它轉成 profiles：<code>followers</code> 拿的是 <code>row.followerId</code>，<code>following</code> 拿的是 <code>row.followingId</code>，各自 <code>ctx.db.get('profiles', ...)</code>。留言列表也一樣，<code>social.comments</code> 用 <code>by_postId</code> 取某篇的所有留言，並支援 <code>asc</code> / <code>desc</code> 兩種排序。</p>
+
+<h2>為什麼要「塑形」：publicPost 與 publicProfile</h2>
+
+<p>查出來的資料不是直接丟給前端。每個結果都會經過 <code>lib/views.ts</code> 裡的 builder，例如 <code>publicPost(ctx, post, me)</code>：</p>
+
+<pre><code>export async function publicPost(ctx, post, me) {
+  const author = await ctx.db.get('profiles', post.authorId);
+  const like = await ctx.db.query('likes')
+    .withIndex('by_userId_and_postId', q => q.eq('userId', me._id).eq('postId', post._id))
+    .unique();
+  return {
+    _id: post._id, _creationTime: post._creationTime,
+    author: await publicProfile(ctx, author, me),
+    kind: post.kind, caption: post.caption,
+    likesCount: post.likesCount, commentsCount: post.commentsCount,
+    isLiked: !!like, isOwn: post.authorId === me._id,
+  };
+}</code></pre>
+
+<p>這支函式做了兩件事，都值得記下來。</p>
+
+<p>第一，它把內部欄位藏起來。posts 文件裡有 <code>storageId</code>、<code>uploadId</code>，profiles 文件裡有 <code>tokenIdentifier</code>，這些不該出現在 API 回傳值裡。builder 只挑公開欄位，搭配 validator（例如 <code>postView</code>）固定形狀，前端拿到的型別就跟後端同步。</p>
+
+<p>第二，它計算「因人而異」的衍生欄位。<code>isLiked</code> 不是存在 posts 裡的欄位，而是查「當下的 me 有沒有按過這篇」算出來的；<code>isOwn</code> 是比對作者是不是我；<code>isFollowing</code> 同理，是查 follows 得到的。同一篇貼文，對你和對我，<code>isLiked</code> 可能不同，所以它必須在回傳前用「你」的身分算一次，而不是存在資料列上。</p>
+
+<p>這樣的分工很乾淨：資料庫存客觀事實（誰按過讚、誰追蹤誰），查詢時再依 viewer 組出主觀視角。</p>
+
+<h2>做完長什麼樣</h2>
+
+<p>完成這一節後，你會有三條真的走索引的 feed 查詢、一份雙向的追蹤清單，以及一組能依 viewer 產生 <code>isLiked</code> / <code>isFollowing</code> / <code>isOwn</code> 的塑形函式。驗證方式很直接：在 Convex dashboard 看這些 query 的回傳形狀是否符合 validator，並確認資料量變大時查詢仍然只讀取需要的列，而不是把整張表拉出來。</p>
+
+<p>至於為什麼這裡每支列表都出現 <code>paginate</code> 而不是 <code>collect</code>，以及稀疏 home feed 為什麼要保留 cursor，原理留給下一節專門講。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+查詢的原則是「用索引回答，不要用 filter 掃」。三種 feed 都能走索引：explore 用 by_creation_time、profile 用 by_authorId、home 則是先掃一頁再用 follows 的複合索引逐篇檢查作者。追蹤清單靠兩條方向不同的 follows 索引。回傳前用 publicPost / publicProfile 塑形，藏住內部欄位，並依當下的 viewer 即時算出 isLiked、isFollowing、isOwn 這些衍生欄位。
+</blockquote>
+
+<p>下一步要處理列表躲不掉的問題：當資料有幾千筆，一次全撈會爆，於是要用 cursor 分頁。你會看到 Convex 的 <code>paginate</code> 回傳什麼、client 怎麼接，以及為什麼「先分頁再過濾」的 home feed 一定要保留原始 cursor。</p>
+
+<div class="lesson-nav">
+  <div><a href="./social-graph-schema.html">← 上一步：社交圖的資料模型：用表與索引表達關係</a></div>
+  <div><a href="./cursor-pagination.html">下一步：Cursor 分頁：從列表到可持續捲動的 feed →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="相較於 withIndex，用 .filter() 過濾資料的主要缺點是什麼？" data-correct="2" data-explain="filter 是先取回資料再到記憶體篩選，資料量大時不只慢，還很吃交易資源。">
+  <button class="opt">它完全不能用在 Convex 的查詢函式裡</button>
+  <button class="opt">它只能用在使用者自己建立的資料表上</button>
+  <button class="opt">它取回後才在記憶體篩選，量大就慢</button>
+  <button class="opt">它會自動把不符合的資料列刪除掉</button>
+</div>
+<div class="quiz" data-question="explore feed 是用哪一條索引取得全部貼文的？" data-correct="0" data-explain="Convex 內建的 by_creation_time 索引，讓貼文能依建立時間新到舊排序。">
+  <button class="opt">內建的 by_creation_time，新的排前面</button>
+  <button class="opt">posts 上的 by_authorId，依作者分組</button>
+  <button class="opt">likes 上的 by_postId，依按讚數排序</button>
+  <button class="opt">profiles 上的 by_username，依名稱排序</button>
+</div>
+<div class="quiz" data-question="home feed 為什麼不能只用一條索引就取出我追蹤者的貼文？" data-correct="1" data-explain="追蹤關係在 follows 表、貼文在 posts 表，兩張表沒有單一索引可直接串接。">
+  <button class="opt">因為首頁只能顯示固定數量的貼文內容</button>
+  <button class="opt">因為關係與貼文分屬兩張表，索引串不起來</button>
+  <button class="opt">因為追蹤清單的資料格式與貼文不相容</button>
+  <button class="opt">因為 Convex 不允許在查詢裡使用兩張表</button>
+</div>
+<div class="quiz" data-question="social.connections 查「我追蹤誰」時，用的是哪一條索引？" data-correct="3" data-explain="以 followerId 出發查我自己的追蹤，走 by_followerId_and_followingId。">
+  <button class="opt">by_followingId，條件是 followingId 等於我</button>
+  <button class="opt">by_postId，條件是貼文編號等於我</button>
+  <button class="opt">by_username，條件是使用者名稱等於我</button>
+  <button class="opt">by_followerId_and_followingId，followerId 是我</button>
+</div>
+<div class="quiz" data-question="isLiked 這個欄位為什麼不在 posts 資料列上直接存？" data-correct="2" data-explain="同篇貼文對不同 viewer 的 isLiked 不同，必須用當下 viewer 的身分即時查 likes 算出來。">
+  <button class="opt">因為資料庫不允許欄位名稱帶有大寫字母</button>
+  <button class="opt">因為儲存 isLiked 會讓貼文無法被搜尋</button>
+  <button class="opt">因為它因人而異，要用當下的 viewer 算</button>
+  <button class="opt">因為它會和 likesCount 的數字互相衝突</button>
+</div>
+<div class="quiz" data-question="publicPost 這類 builder 拿掉 storageId、tokenIdentifier，是為了什麼？" data-correct="1" data-explain="只回傳公開欄位，避免內部識別資訊外洩，並讓回傳形狀由 validator 固定。">
+  <button class="opt">加快資料庫從硬碟讀取貼文的速度</button>
+  <button class="opt">避免內部欄位外洩並固定回傳形狀</button>
+  <button class="opt">讓使用者可以自行編輯這些欄位內容</button>
+  <button class="opt">減少貼文在資料庫裡占用的容量</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 社交圖與貼文功能 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

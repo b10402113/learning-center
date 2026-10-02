@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把 guard 套進 query/mutation 並驗證</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>把 guard 套進 query/mutation 並驗證</h1>
+<p class="meta">Step 5/5 · Convex × Clerk 身分驗證</p>
+
+<h2>學習目標</h2>
+<p>你會在 Convex 的 query 與 mutation 開頭套用 <code>requireProfile</code>，把參數裡的身分欄位拿掉，並用「未登入」「已登入但未建 profile」「已登入且有 profile」三種情境驗證授權真的生效。動手前，<code>auth.config.ts</code> 已設好，<code>lib/auth.ts</code> 也已經有這兩個 helper。</p>
+
+<h2>前言：門鎖裝好了，鑰匙交出去沒？</h2>
+
+<p>前面四步都在建立「可信的身分」：從理解為什麼不能信 client、接好 Convex 與 Clerk 的信任、看懂 token 如何被驗證，到決定用哪一個 guard。現在只剩最後一哩路，就是把 guard 真的放進每一支會動到資料的函式，並且確認它確實在把關。</p>
+
+<p>這一步最常出錯的地方，不是 guard 本身，而是「套了 guard 之後又相信參數」。只要函式還留著一個 <code>userId</code> 參數當寫入依據，前面所有的努力都會白費。所以我們會從這個壞習慣開始改起。</p>
+
+<h2>步驟一：把參數裡的身分欄位拿掉</h2>
+
+<p>先看一段錯誤的寫法。它讓 client 傳入 <code>userId</code>，並直接拿來當貼文的作者：</p>
+
+<pre><code>export const createPost = mutation({
+  args: { userId: v.id('profiles'), caption: v.string() },
+  handler: async (ctx, args) =&gt; {
+    await ctx.db.insert('posts', {
+      userId: args.userId,
+      caption: args.caption,
+    });
+  },
+});</code></pre>
+
+<p>正確的版本是：參數只留下真正的資料（caption），作者身分由 server 自己推導：</p>
+
+<pre><code>export const createPost = mutation({
+  args: { caption: v.string() },
+  handler: async (ctx, args) =&gt; {
+    const profile = await requireProfile(ctx);
+    await ctx.db.insert('posts', {
+      userId: profile._id,
+      caption: args.caption,
+    });
+  },
+});</code></pre>
+
+<p>兩個版本只差幾行，但安全性完全不同。當 <code>args</code> 裡不再有 <code>userId</code>，攻擊者就算想冒充也沒有欄位可以填；而 <code>profile</code> 是經過 token 驗證、再查過資料庫才拿到的，改不動也換不了。</p>
+
+<h2>步驟二：讓每個受保護函式從 guard 開始</h2>
+
+<p>把這個模式套到所有需要 profile 的函式上。原則是：<strong>handler 的第一件事就是取得 profile，後面所有寫入與查詢都用它。</strong></p>
+
+<pre><code>export const deleteMyPost = mutation({
+  args: { postId: v.id('posts') },
+  handler: async (ctx, args) =&gt; {
+    const profile = await requireProfile(ctx);
+    const post = await ctx.db.get(args.postId);
+    if (!post || post.userId !== profile._id) {
+      throw new ConvexError('You can only delete your own posts.');
+    }
+    await ctx.db.delete(args.postId);
+  },
+});</code></pre>
+
+<p>注意這裡的重點：<code>postId</code> 可以由 client 指定，因為那是一筆「資料」的識別碼，不是身分；但「這筆資料是不是你的」要用 guard 回傳的 <code>profile._id</code> 來判斷。身分不能被指定，資料可以被指定——這條界線要抓穩。</p>
+
+<h2>步驟三：唯讀 query 也用 profile 做範圍限制</h2>
+
+<p>query 一樣需要把關。不要讓查詢接受 client 傳來的使用者 id，而是用 guard 得到的 profile 去限制查詢範圍：</p>
+
+<pre><code>export const myDrafts = query({
+  args: {},
+  handler: async (ctx) =&gt; {
+    const profile = await requireProfile(ctx);
+    return await ctx.db
+      .query('posts')
+      .withIndex('by_userId', (q) =&gt; q.eq('userId', profile._id))
+      .take(50);
+  },
+});</code></pre>
+
+<p>如此一來，這個 query 只可能回傳「呼叫者自己的」草稿。少了這一步，任何人只要換一個 id 就能讀別人的資料。</p>
+
+<h2>步驟四：只需要登入的操作改用 requireIdentity</h2>
+
+<p>如果你正在寫的函式不需要 profile，例如記錄一個系統事件，就改用 <code>requireIdentity</code>，避免強迫使用者先去建立 profile 才能觸發：</p>
+
+<pre><code>export const logEvent = mutation({
+  args: { name: v.string() },
+  handler: async (ctx, args) =&gt; {
+    const identity = await requireIdentity(ctx);
+    await ctx.db.insert('events', {
+      tokenIdentifier: identity.tokenIdentifier,
+      name: args.name,
+    });
+  },
+});</code></pre>
+
+<h2>步驟五：把錯誤訊息交回 UI</h2>
+
+<p><code>requireIdentity</code> 與 <code>requireProfile</code> 丟出的都是 <code>ConvexError</code>，它可以把訊息安全地傳回 client。你的畫面應該依訊息分流：看到「請先登入」就導向登入，看到「請取一個 username」就導向 onboarding，而不是把錯誤吞掉、讓使用者卡在一個沒有反應的按鈕上。</p>
+
+<h2>步驟六：用三種情境驗證</h2>
+
+<ol>
+<li><strong>未登入</strong>：呼叫受保護的 mutation，應該收到 <code>Please sign in to continue.</code>。</li>
+<li><strong>已登入但還沒建 profile</strong>：應該收到 <code>Choose your username to continue.</code>，畫面導去 onboarding。</li>
+<li><strong>已登入且有 profile</strong>：操作成功。到 Convex dashboard 看 <code>posts</code> 表，新資料的 <code>userId</code> 應該等於你的 profile，而不是任何 client 指定的值。</li>
+</ol>
+
+<p>再補一個偽造測試：檢查 mutation 的參數清單，確認它根本沒有 <code>userId</code> 這種欄位。如果沒有，攻擊者就沒有下手的地方。</p>
+
+<p>最後做一次即時驗證：在另一個模擬器或裝置登入同一個 app，貼文完成後，那邊應該不重新載入就看到新內容。這同時證明兩件事：身分正確，而且資料真的落地了。</p>
+
+<blockquote>
+通過 guard 之後，千萬不要再回頭相信任何 client 傳來的識別碼。guard 回傳的物件是你唯一的寫入依據；只要函式裡還有第二個身分來源，等於門鎖裝好卻把鑰匙留在門上。
+</blockquote>
+
+<h2>小結</h2>
+
+<blockquote>
+把守護資料的做法收斂成一條規則：受保護的函式從 <code>requireProfile(ctx)</code> 開始，參數裡不留任何身分欄位，所有寫入與查詢都使用 guard 回傳的 profile。只需要登入、不需要 profile 的操作才用 <code>requireIdentity</code>。最後用未登入、未建 profile、正常使用三種情境驗證，並確認例外訊息能正確引導使用者。
+</blockquote>
+
+<p>走到這裡，你已經有一條完整的身分鏈路：client 出示 Clerk 簽發的 token，Convex 驗證後推導出呼叫者，guard 再把它接回 app 的 profile，並在每次操作前把關。這套模式會貫穿 Codexgram 後端所有的社交功能，也是「UI 驅動真後端」時最不該省略的一層。</p>
+
+<div class="lesson-nav">
+  <div><a href="./identity-vs-profile-guards.html">← 上一步：requireIdentity 還是 requireProfile？</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="套用 requireProfile 之後，mutation 的參數該如何處理？" data-correct="1" data-explain="參數只留真正的資料，作者身分由 guard 回傳的 profile 決定。">
+  <button class="opt">保留 userId 但改成選填欄位</button>
+  <button class="opt">移除身分欄位只留資料欄位</button>
+  <button class="opt">保留 userId 但加上簽章驗證</button>
+  <button class="opt">改成從前端加密後再傳送</button>
+</div>
+
+<div class="quiz" data-question="刪除貼文時，判斷「這是不是你的貼文」該依據什麼？" data-correct="2" data-explain="比對 post.userId 與 guard 回傳的 profile._id，而不是相信 client 指定的身分。">
+  <button class="opt">client 請求裡附帶的使用者名稱</button>
+  <button class="opt">貼文建立時暫存的裝置編號</button>
+  <button class="opt">guard 回傳 profile 的識別碼</button>
+  <button class="opt">上一層快取留下來的登入狀態</button>
+</div>
+
+<div class="quiz" data-question="為什麼唯讀的 query 也要套用 requireProfile？" data-correct="3" data-explain="不套用的話，任何人只要換一個 id 就能讀到別人的私人資料。">
+  <button class="opt">因為 query 一定比 mutation 慢很多</button>
+  <button class="opt">因為 query 沒辦法使用資料庫索引</button>
+  <button class="opt">因為 query 的結果會自動公開出去</button>
+  <button class="opt">因為換個 id 就能讀到別人資料</button>
+</div>
+
+<div class="quiz" data-question="驗證授權是否生效時，「已登入但未建 profile」應該看到什麼？" data-correct="0" data-explain="requireProfile 會丟出要求先取 username 的訊息，讓畫面導向 onboarding。">
+  <button class="opt">提示請先取一個 username 的錯誤</button>
+  <button class="opt">直接成功並自動建立空白 profile</button>
+  <button class="opt">提示 token 已經過期的登入錯誤</button>
+  <button class="opt">沒有任何回應讓按鈕停在原處</button>
+</div>
+
+<div class="quiz" data-question="通過 guard 之後，為什麼還要再做一次即時驗證？" data-correct="1" data-explain="它能同時確認身分正確、資料真的落地，並在其他裝置立即看到更新。">
+  <button class="opt">因為即時驗證可以取代所有的自動測試</button>
+  <button class="opt">因為它能同時確認身分與資料落地</button>
+  <button class="opt">因為 Convex 預設不會保存寫入的資料</button>
+  <button class="opt">因為 guard 只在使用者重新登入時生效</button>
+</div>
+
+<div class="footer">
+  <p>行動開發實戰 · Convex × Clerk 身分驗證 · Step 5/5</p>
+  <p>讀到這裡有想追問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

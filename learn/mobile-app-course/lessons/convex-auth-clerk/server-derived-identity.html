@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>為什麼不能相信 client 傳來的 identity</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>為什麼不能相信 client 傳來的 identity</h1>
+<p class="meta">Step 1/5 · Convex × Clerk 身分驗證</p>
+
+<h2>學習目標</h2>
+<p>完成這一節後，你應該能說出為什麼把 client 傳來的 <code>userId</code> 當成身分會出錯，並解釋 server 端如何從一個驗證過的 token，推導出可信的呼叫者。</p>
+
+<h2>前言：這則貼文真的是本人發的嗎？</h2>
+
+<p>假設你的 app 已經能貼文了。你在 Convex 寫了一個 mutation，簽名大概長這樣：<code>createPost({ userId, caption })</code>。client 那邊也很順，反正使用者登入之後，Clerk 已經知道他是誰，把 <code>userId</code> 一起傳進來就好。功能測起來完全正常，貼文會出現在牆上。</p>
+
+<p>問題是，這段程式碼在「功能正常」的表象下，藏了一個很常見、但後果很嚴重的漏洞。任何一個登入的使用者，只要稍微改一下請求內容，就能用你的名字貼文、讀你的私訊、甚至刪掉你的資料。這一節要處理的，就是這個漏洞從哪裡來，以及正確的修法為什麼一定跟 token 有關。</p>
+
+<h2>最直覺但錯的做法：讓 client 決定自己是誰</h2>
+
+<p>把 <code>userId</code> 放在 mutation 的參數裡，本質上是讓「呼叫方」自己聲明「我是誰」。你會這樣寫，通常是因為客戶端真的知道答案：Clerk 的 SDK 在使用者登入後會拿到使用者資料，順手把它塞進請求裡看起來很自然。</p>
+
+<p>但 server 收到這個 <code>userId</code> 時，它其實只是一段普通的資料，跟 <code>caption</code> 這種文字欄位沒有兩樣。server 沒有任何辦法分辨「這是本人填的」還是「這是攻擊者手動填的」。換句話說，你等於把門禁卡交給訪客，讓他自己寫上要進哪一戶。</p>
+
+<h2>為什麼 client 不能信</h2>
+
+<p>關鍵在於：client 是使用者完全掌控的環境。你的 app 安裝在他的手機上，他能看到你送出的每一個請求，也能用工具改寫它們，再原封不動地送到你的 server。對 server 來說，一份經過改寫的請求，跟一份正常的請求長得一模一樣。</p>
+
+<p>所以只要身分是以參數的形式傳進來，攻擊者要冒充誰都行。他不需要破解你的密碼，也不用拿到你的 session，只要把 <code>userId</code> 換成別人的識別碼就好。這類「使用者可以自由指定自己身分」的破損存取控制，是後端最常見的安全問題之一，而且多半在功能驗收時完全看不出來。</p>
+
+<h2>正確的做法：由 server 從驗證過的 token 推導身分</h2>
+
+<p>修法的方向只有一句話：身分不能是輸入，必須是推導出來的結果。要推導，就需要一個 client 無法偽造的憑證。這個憑證就是 Clerk 簽發的 JWT（JSON Web Token，一種帶簽章的數位通行證）。</p>
+
+<p>你可以把整個流程想成出入境：Clerk 是發照機關，負責確認申請人的身分，並且簽發一本別人偽造不了的護照。Convex 則是查驗護照的移民官，它會檢查這本護照的簽章是不是真的、是不是由它認可的機關發出，確認無誤之後，才在系統裡登記「這個人就是護照上的那個人」。client 的角色只是把護照帶在身上、在每次請求時出示，它不能自己決定護照上要寫誰。</p>
+
+<p>實作上，使用者登入後，Clerk 的 SDK 會把 JWT 放在每個 Convex 請求裡送出。Convex 在執行你的函式之前先驗證這個 token；驗證通過，你的函式就能透過 <code>ctx.auth.getUserIdentity()</code> 取得呼叫者的身分。也就是說，在你程式碼裡唯一能信任的身分來源，是 <code>ctx.auth</code>，而不是函式的參數。</p>
+
+<table>
+<thead>
+<tr><th></th><th>參數裡的 userId（錯）</th><th>ctx.auth 推導的身分（對）</th></tr>
+</thead>
+<tbody>
+<tr><td>身分從哪來</td><td>呼叫方自己填</td><td>server 驗證 token 後推導</td></tr>
+<tr><td>能不能冒充別人</td><td>可以，改個識別碼就行</td><td>不行，token 的簽章改不了</td></tr>
+<tr><td>server 怎麼識別</td><td>把參數當事實</td><td>先驗簽，再看結果</td></tr>
+<tr><td>出錯時的症狀</td><td>功能正常，但可被濫用</td><td>未驗證的請求直接被擋下</td></tr>
+</tbody>
+</table>
+
+<h2>小結</h2>
+
+<blockquote>
+身分不能當成參數傳，因為 client 是使用者能完全掌控的環境，任何傳進來的 <code>userId</code> 都可能是偽造的。正確做法是讓 client 出示 Clerk 簽發的 JWT，由 Convex 在 server 端驗證並推導出呼叫者，程式碼只信任 <code>ctx.auth</code>，不信任參數。
+</blockquote>
+
+<p>不過，<code>ctx.auth</code> 不會自己長出東西。要讓 Convex 認得 Clerk 的 token、讓 <code>getUserIdentity()</code> 不再回傳 null，你得先完成一件接線工作。下一步就來看怎麼開通 Clerk↔Convex 整合，並寫下那份關鍵的 <code>auth.config.ts</code>。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./enable-clerk-convex-integration.html">下一步：開通 Clerk↔Convex 整合並寫 auth.config →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼不該讓 client 在呼叫 mutation 時自己帶 userId？" data-correct="1" data-explain="參數只是普通資料，client 可以任意改寫，於是能冒充任何使用者。">
+  <button class="opt">因為 client 端的網路速度不夠穩定</button>
+  <button class="opt">因為 client 能任意改寫參數冒充別人</button>
+  <button class="opt">因為 client 拿不到自己的登入狀態</button>
+  <button class="opt">因為 client 無法序列化 userId 欄位</button>
+</div>
+
+<div class="quiz" data-question="server 端唯一能信任的「你是誰」，應該從哪裡取得？" data-correct="2" data-explain="只有經過驗證的 token，才由 server 自己推導出可信的身分。">
+  <button class="opt">client 在請求裡附上的電子郵件</button>
+  <button class="opt">client 裝置上隨機產生的 UUID</button>
+  <button class="opt">驗證過的 token 由 server 推導</button>
+  <button class="opt">上一層快取裡暫存的使用者頭像</button>
+</div>
+
+<div class="quiz" data-question="為什麼「使用者已經在 app 登入」還不足以讓 mutation 安全？" data-correct="2" data-explain="登入只證明 client 拿得到 token；若身分改由參數傳，請求仍能被偽造。">
+  <button class="opt">因為登入狀態每隔一天就會過期</button>
+  <button class="opt">因為登入只會發生在瀏覽器分頁裡</button>
+  <button class="opt">因為請求仍能被偽造成別人身分</button>
+  <button class="opt">因為登入不會產生任何可用憑證</button>
+</div>
+
+<div class="quiz" data-question="把身分比喻成護照時，Clerk 最接近下列哪個角色？" data-correct="2" data-explain="Clerk 負責確認身分並簽發無法偽造的憑證，就像發照機關。">
+  <button class="opt">幫你保管應用資料的倉庫管理員</button>
+  <button class="opt">檢查行李有沒有違禁品的探測門</button>
+  <button class="opt">簽發並背書證件的發照機關</button>
+  <button class="opt">負責把文件翻成外語的隨行口譯</button>
+</div>
+
+<div class="quiz" data-question="在 Convex 函式裡，ctx.auth 代表什麼？" data-correct="1" data-explain="它是已驗證的呼叫者身分，是函式中唯一可信的身分來源。">
+  <button class="opt">一個可以由 client 直接覆寫的欄位</button>
+  <button class="opt">已驗證的呼叫者身分可安全使用</button>
+  <button class="opt">一份由使用者自行填寫的個人簡介</button>
+  <button class="opt">server 每次隨機生成的匿名識別碼</button>
+</div>
+
+<div class="footer">
+  <p>行動開發實戰 · Convex × Clerk 身分驗證 · Step 1/5</p>
+  <p>讀到這裡有想追問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

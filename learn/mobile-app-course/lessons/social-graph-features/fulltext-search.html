@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>全文搜尋：什麼時候該用 searchIndex</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>全文搜尋：什麼時候該用 searchIndex</h1>
+<p class="meta">Step 5/5 · 社交圖與貼文功能</p>
+
+<h2>學習目標</h2>
+<p>能判斷一個查詢該用一般複合索引，還是該動用全文搜尋索引；並知道把兩者用錯地方時，會各自失去什麼能力。</p>
+
+<h2>前言：使用者打「and」，你卻找不到 Andy</h2>
+
+<p>四步走完，社交圖的讀、寫、分頁都齊了。最後一個缺口出現在 explore 的搜尋框。使用者想找一個人，在框裡打了「and」，預期會看到 Andy Chen；但如果你用第一節建的 <code>by_username</code> 索引去查，查詢條件只能是「username 等於某個完整值」，打「and」完全對不上，因為資料庫裡存的是完整的「andychen」。</p>
+
+<p>這裡的張力在於：一般的索引很擅長「精確命中」與「照順序排列」，但它不會拆字、不會模糊比對；而使用者對搜尋框的期待，恰恰是模糊的。這一節要決定的是——什麼時候該為搜尋換一套索引，什麼時候維持原本的就好。</p>
+
+<h2>兩個選項擺在一起比</h2>
+
+<p>Codexgram 的 profiles 同時掛了兩種索引，正好可以對照：</p>
+
+<pre><code>profiles: defineTable({ ..., username, name, searchText })
+  .index('by_username', ['username'])                                  // 一般索引
+  .searchIndex('search_profiles', { searchField: 'searchText' }),      // 全文搜尋索引</code></pre>
+
+<table>
+<thead>
+<tr><th>面向</th><th>一般複合索引（withIndex）</th><th>全文搜尋索引（withSearchIndex）</th></tr>
+</thead>
+<tbody>
+<tr><td>查詢方式</td><td><code>q.eq</code> 等值、<code>q.gt</code> / <code>q.lt</code> 範圍</td><td><code>q.search('searchText', 文字)</code> 分詞比對</td></tr>
+<tr><td>適合什麼</td><td>精確鍵、時間軸排序、關聯查詢</td><td>名稱、標題、內文的模糊搜尋</td></tr>
+<tr><td>排序</td><td>用 <code>order()</code> 指定，如最新在前</td><td>依文字相關度排序</td></tr>
+<tr><td>你要先做什麼</td><td>宣告索引的欄位順序</td><td>宣告 searchIndex 與要搜尋的欄位</td></tr>
+<tr><td>不支援什麼</td><td>子字串、拆字、相關度</td><td>精確的關聯鍵與自訂時間排序</td></tr>
+</tbody>
+</table>
+
+<p>全文搜尋索引要能運作，得先有一個「可以被搜尋的文字欄位」。profiles 的 <code>searchText</code> 是在建立或更新 profile 時組好的：<code>`${username} ${name}`</code>。也就是把使用者名稱和顯示名稱串成一段文字，讓搜尋索引去拆字。查詢時寫成：</p>
+
+<pre><code>const result = text
+  ? await ctx.db.query('profiles')
+      .withSearchIndex('search_profiles', q => q.search('searchText', text))
+      .paginate(args.paginationOpts)
+  : await ctx.db.query('profiles')
+      .withIndex('by_creation_time').order('desc')
+      .paginate(args.paginationOpts);</code></pre>
+
+<p>注意這裡的分流：<strong>有輸入文字才走全文搜尋索引，沒有輸入時退回一般索引拿最新的人。</strong> 因為搜尋索引是為「文字相關度」設計的，不適合當成預設清單的時間軸。</p>
+
+<h2>三個判別問句</h2>
+
+<p>面對一個新的查詢需求，先問自己這三題：</p>
+
+<ol>
+<li><strong>使用者是要「精確找到某一筆」，還是「打幾個字找相關的東西」？</strong> 精確 → 一般索引；模糊找相關 → 全文搜尋。</li>
+<li><strong>查詢條件是某個欄位的完整值，還是它的一部分（子字串、多個關鍵字）？</strong> 完整值 → 一般索引；只記得片段 → 全文搜尋。</li>
+<li><strong>結果要按什麼排序？</strong> 按時間或自訂順序 → 一般索引的 <code>order()</code>；按文字相關度 → 全文搜尋。</li>
+</ol>
+
+<p>三題都指向同一邊，答案就很清楚。如果兩邊各中一半，通常是「兩個查詢分開寫、依輸入分流」，而不是硬把一個索引當兩個用。</p>
+
+<h2>反例：用錯地方會怎樣</h2>
+
+<p><strong>反例一：拿全文搜尋索引來排 feed。</strong> 假設你想讓 explore 的貼文按相關度排，於是把貼文也接上搜尋索引。但 feed 要的是「最新的在前」，那是 <code>by_creation_time</code> 的 <code>order('desc')</code> 擅長的事。搜尋索引按的是文字相關度，不是時間，硬用會讓時間軸失去意義。</p>
+
+<p><strong>反例二：以為全文搜尋等於 LIKE '%字%'。</strong> 搜尋索引會對文字分詞，它不保證任意子字串都能命中，而且你只能搜尋有被納入 <code>searchText</code> 的欄位。如果想讓人們用 bio 搜尋，就得把 bio 也組進 <code>searchText</code>（並重新索引），不是寫個查詢就自動生效。</p>
+
+<p><strong>反例三：以為一般索引可以「湊合」當搜尋。</strong> 有人會想用 <code>by_username</code> 加前綴範圍（找開頭是「and」的）來模擬。這對「從頭開始打」的情境勉強可行，但遇到「只記得名字中間幾個字」就無能為力，而且也沒有相關度排序。當需求真的是模糊搜尋時，就該老老實實建全文搜尋索引。</p>
+
+<h2>決策規則</h2>
+
+<p>把上面的判斷收斂成一張可以當場用的檢查表：</p>
+
+<blockquote>
+<strong>需要子字串、多關鍵字、相關度排序 → 用 <code>withSearchIndex</code>。</strong><br>
+<strong>需要精確鍵、時間軸或關聯查詢 → 用 <code>withIndex</code> 的複合索引。</strong><br>
+<strong>兩者都需要 → 分成兩個 query，依輸入有沒有文字來分流。</strong><br>
+<strong>無論走哪一種，回傳前都要 <code>publicProfile</code> 塑形，並且要 <code>paginate</code>。</strong>
+</blockquote>
+
+<p>Codexgram 的 <code>profiles.search</code> 就是這條規則的具體實作：輸入 trimmed、去掉開頭的 <code>@</code>、截斷超長文字，有字才走 search index，沒字就走最新清單，兩條路最後都經過同樣的塑形與分頁。這也回應了前幾節的主題——不管查詢走哪條索引，都要維持一致的輸出形狀與分頁契約。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+一般索引擅長精確命中、範圍與時間排序；全文搜尋索引擅長分詞、模糊比對與相關度。判斷的關鍵是「使用者要精確找到，還是打幾個字找相關的」，以及「結果要按時間排，還是按相關度排」。要搜尋的文字必須先組成一個可被索引的欄位（如 searchText）。實務上兩者常常並存在同一張表，並用「有沒有輸入文字」來分流，最後都用同一套塑形與分頁收尾。
+</blockquote>
+
+<p>走到這裡，這個節點的五步都完成了：從 schema 的關係拆解與索引設計，到索引查詢、cursor 分頁、可重試寫入，最後是全文搜尋的取捨。你手上現在有一套能支撐社群 feed 的完整後端模式。接下來可以往即時私訊與後端測試前進，把同一套「唯一索引＋衍生欄位＋可重試寫入」的手法，搬到對話與 inbox 的 unread 判定上。</p>
+
+<div class="lesson-nav">
+  <div><a href="./idempotent-social-writes.html">← 上一步：可重試的寫入：toggle、計數器與 requestId 冪等</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="使用者想在搜尋框打幾個字找出相關的人，該用哪一種索引？" data-correct="2" data-explain="模糊、分詞、多關鍵字的需求要用 searchIndex 做全文搜尋。">
+  <button class="opt">用 by_username 做完整值的等值比對</button>
+  <button class="opt">用 by_creation_time 排出最新的人</button>
+  <button class="opt">用 withSearchIndex 做全文的模糊搜尋</button>
+  <button class="opt">用 by_tokenIdentifier 找出登入的人</button>
+</div>
+<div class="quiz" data-question="searchText 這個欄位存在的目的是什麼？" data-correct="1" data-explain="全文搜尋要有一段可被索引的文字，searchText 就是預先組好的 username 加 name。">
+  <button class="opt">用來儲存使用者上傳的個人頭像網址</button>
+  <button class="opt">提供一段可被搜尋索引拆字的文字</button>
+  <button class="opt">紀錄使用者最後一次登入裝置的時間</button>
+  <button class="opt">存放使用者的追蹤者與追蹤中數量</button>
+</div>
+<div class="quiz" data-question="profiles.search 在輸入為空字串時，為什麼改用一般索引？" data-correct="3" data-explain="搜尋索引按相關度排，不適合當預設清單；空輸入時退回 by_creation_time 拿最新的人。">
+  <button class="opt">因為空字串會讓資料庫的索引損壞</button>
+  <button class="opt">因為空字串在搜尋索引中會找所有人</button>
+  <button class="opt">因為一般索引的回傳速度一定比較快</button>
+  <button class="opt">因為搜尋索引不適合當時間軸的預設清單</button>
+</div>
+<div class="quiz" data-question="想讓 explore 的貼文按時間新到舊排列，該用什麼？" data-correct="0" data-explain="時間軸排序是一般索引的 order('desc') 擅長的，不是全文搜尋的相關度。">
+  <button class="opt">by_creation_time 索引搭配 order desc</button>
+  <button class="opt">searchIndex 搭配 q.search 的文字查詢</button>
+  <button class="opt">by_authorId 索引限定單一的作者</button>
+  <button class="opt">by_username 索引做完整值的比對</button>
+</div>
+<div class="quiz" data-question="哪一個不是全文搜尋索引的長處？" data-correct="3" data-explain="精確的關聯鍵與自訂時間排序是一般索引的長處，不是全文搜尋。">
+  <button class="opt">把文字拆成詞並做模糊的比對</button>
+  <button class="opt">可以依照文字的相關程度排序</button>
+  <button class="opt">支援多個關鍵字的組合查詢</button>
+  <button class="opt">精確命中關聯鍵並按時間排序</button>
+</div>
+<div class="quiz" data-question="如果有人想用「只記得名字中間幾個字」來搜尋，正確做法是什麼？" data-correct="2" data-explain="真正模糊的搜尋要建 searchIndex，用前綴範圍只是湊合且不支援中間片段。">
+  <button class="opt">用 by_username 做前綴範圍的查詢就好</button>
+  <button class="opt">把整張 profiles 表撈回前端慢慢篩</button>
+  <button class="opt">建立 searchIndex 並把欄位組進 searchText</button>
+  <button class="opt">改用 by_tokenIdentifier 來查詢使用者</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 社交圖與貼文功能 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

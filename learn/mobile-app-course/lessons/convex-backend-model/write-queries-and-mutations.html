@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>寫 query 與 mutation：從 posts.ts 走一次</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>寫 query 與 mutation：從 posts.ts 走一次</h1>
+<p class="meta">Step 3/5 · Convex 後端模型</p>
+
+<h2>學習目標</h2>
+<p>能照著 <code>posts.ts</code> 的模式寫出一個 query 與一個 mutation：宣告 args validator、用索引查資料、在 server 端推導身分、回傳前端要的 view，並替寫入加上 idempotent 判斷與背景清理。</p>
+
+<h2>這一節要完成什麼？動手前需要什麼？</h2>
+
+<p>這一節要帶你走一次「新增一個後端功能」的實際流程。做完之後，你會得到兩個可以運作的函式：一個查詢，負責把貼文清單讀出來；一個變更，負責把一筆上傳正式發布成貼文。這兩個剛好涵蓋查詢型與寫入型的核心模式，之後社群、訊息等模組也都是同一套手法。</p>
+
+<p>動手前，請先確認兩件事已經就緒。第一，上一節的 <code>schema.ts</code> 已經定義好 <code>posts</code>、<code>uploads</code>、<code>follows</code>、<code>likes</code> 等表。第二，專案裡已經有一個共用的身分輔助函式（在 Codexgram 裡是 <code>lib/auth.ts</code> 的 <code>requireProfile</code>），它會從已驗證的登入資訊找出目前的使用者。<code>requireProfile</code> 的內部實作會留到身分驗證那個節點再拆，這裡先把它當成「給我目前使用者」的黑盒。</p>
+
+<h2>第一步：宣告 query 的參數與回傳型別</h2>
+
+<p>每個 Convex 函式都是先寫外框，再寫內容。外框包含 <code>args</code>（這個函式接受什麼參數）、可選的 <code>returns</code>（它保證回傳什麼形狀），以及 <code>handler</code>（真正做事的地方）。貼文清單的 query 外框長這樣：</p>
+
+<pre><code>export const list = query({
+  args: {
+    feed: v.union(v.literal('home'), v.literal('explore'), v.literal('profile')),
+    profileId: v.optional(v.id('profiles')),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    // ...
+  },
+});</code></pre>
+
+<p>這裡有三個參數。<code>feed</code> 用一個 union 限制只能傳入三種字串之一，避免前端亂傳一個不存在的分頁名稱。<code>profileId</code> 是選填的，只有在看某個人的個人頁時才會用到。<code>paginationOpts</code> 用的是 Convex 提供的分頁參數驗證器，負責控制每次拿幾筆、從哪裡接續。最後那個 <code>returns: paginationResultValidator(postView)</code> 則是向呼叫端保證：我回傳的東西一定是一頁貼文，而且每一筆都符合 <code>postView</code> 的形狀。</p>
+
+<p>先把外框寫清楚有個實際的好處：當你之後在手機端呼叫 <code>api.posts.list</code> 時，編輯器會直接告訴你該傳哪些參數、回傳值有哪些欄位。這份型別是從你的 validator 自動推出來的，不必自己手寫。</p>
+
+<h2>第二步：用索引查出這一頁資料</h2>
+
+<p>接著進到 handler。查詢的核心是 <code>ctx.db.query(...)</code>，然後一定要指定用哪個索引、怎麼排序、怎麼分頁。首頁與探索頁要的是全站最新的貼文，所以用 <code>by_creation_time</code> 這個內建索引倒序排列；個人頁則要某個作者自己的貼文，改用 <code>by_authorId</code>：</p>
+
+<pre><code>const me = await requireProfile(ctx);
+const result = args.feed === 'profile'
+  ? await ctx.db.query('posts')
+      .withIndex('by_authorId', q => q.eq('authorId', args.profileId ?? me._id))
+      .order('desc')
+      .paginate(args.paginationOpts)
+  : await ctx.db.query('posts')
+      .withIndex('by_creation_time')
+      .order('desc')
+      .paginate(args.paginationOpts);</code></pre>
+
+<p>這裡出現一個分支，直接寫成三元運算式：<strong>若</strong> <code>feed</code> 是 <code>'profile'</code>，就照作者索引查指定對象；<strong>否則</strong>就照建立時間查最新的。注意個人頁的 <code>args.profileId ?? me._id</code>：如果前端沒指定看誰，就預設看自己。<code>.order('desc')</code> 是「由新到舊」，<code>.paginate()</code> 則回傳一頁結果加上一個游標。</p>
+
+<p>預期看到什麼？執行這個 query，你會拿到一個物件，裡面有 <code>page</code>（這一頁的資料陣列）、<code>isDone</code>（是否還有下一頁）和 <code>continueCursor</code>（下次從哪裡接著拿）。前端的分頁清單就是靠這三個值運作的。</p>
+
+<h2>第三步：在 server 端推導身分，別相信前端</h2>
+
+<p>你可能注意到上一段第一行就是 <code>const me = await requireProfile(ctx)</code>。這一行很重要。社群 app 的每個查詢和寫入，幾乎都得知道「現在是誰在做這件事」。但這個「誰」，絕對不能由手機端自己傳一個 userId 過來，因為那樣任何人都能偽造。</p>
+
+<p>正確做法是用 <code>ctx</code> 裡已驗證的身分，在後端查出對應的使用者資料。手機端只需要帶著有效的登入憑證，剩下的由 server 端決定。<code>requireProfile</code> 就是做這件事：它拿到驗證過的身分，找出對應的 profile；如果沒有登入、或這個帳號已經在刪除流程中，就丟出錯誤。你在後續每個需要權限的函式裡都會看到它開頭。</p>
+
+<h2>第四步：把資料庫的文件整理成前端要的 view</h2>
+
+<p>從 <code>ctx.db</code> 直接讀出來的文件，會包含一些不該給前端看到的欄位，例如內部的 <code>storageId</code> 或身分識別碼。首頁功能還需要知道「我是否已追蹤這篇的作者」，那是一個相對於觀看者而變的布林值，資料庫裡並沒有這一欄。所以資料讀出來之後，通常不是直接回傳，而是經過一層整理：</p>
+
+<pre><code>const page = await result.page.map(async post => {
+  if (args.feed === 'home' && post.authorId !== me._id) {
+    const follow = await ctx.db.query('follows')
+      .withIndex('by_followerId_and_followingId', q =>
+        q.eq('followerId', me._id).eq('followingId', post.authorId))
+      .unique();
+    if (!follow) return null;
+  }
+  return publicPost(ctx, post, me);
+});
+return { ...result, page: page.filter(p => p !== null) };</code></pre>
+
+<p>這一段做了兩件事。第一，首頁只該看到自己追蹤的人，所以對每篇別人的貼文，用 <code>by_followerId_and_followingId</code> 這個複合索引查一下我到底有沒有追蹤他；沒追蹤就回傳 <code>null</code>，稍後過濾掉。第二，不管是哪種 feed，最後都交給 <code>publicPost</code> 這個函式，把資料庫文件轉成只含公開欄位的 <code>postView</code>，並附上「這是不是我發的」這類相對於觀看者的資訊。</p>
+
+<p>這裡有個容易踩雷的細節：過濾掉追蹤名單以外的貼文時，要保留原本的分頁游標，就算這一頁全被濾掉了，也要讓前端能繼續往下翻。這就是為什麼程式碼不是直接 <code>filter</code> 掉結果，而是先保留 <code>...result</code>、只替換 <code>page</code>。稀疏的追蹤 feed 才不會翻到一半停住。</p>
+
+<h2>第五步：寫一個 mutation 把上傳發布成貼文</h2>
+
+<p>查詢講完了，換寫入。發布貼文的 mutation 外框只有兩個參數：上傳的識別碼和說明文字，回傳新貼文的識別碼。</p>
+
+<pre><code>export const publish = mutation({
+  args: { uploadId: v.id('uploads'), caption: v.string() },
+  returns: v.id('posts'),
+  handler: async (ctx, args) => {
+    // ...
+  },
+});</code></pre>
+
+<p>寫入型函式的第一件事永遠是驗證。先確認這筆上傳存在、屬於目前使用者、而且用途是貼文；再處理重複呼叫。這裡藏了一個很實用的設計：如果這筆上傳已經有對應的貼文，就直接回傳那個貼文，而不是再插一筆。</p>
+
+<pre><code>const me = await requireProfile(ctx);
+const upload = await ctx.db.get('uploads', args.uploadId);
+if (!upload || upload.ownerId !== me._id || upload.purpose !== 'post')
+  throw new ConvexError('Not authorized to publish this upload.');
+
+if (upload.postId) {
+  if (!await ctx.db.get('posts', upload.postId))
+    throw new ConvexError('This post has been deleted.');
+  return upload.postId;
+}</code></pre>
+
+<p>這種「同樣的請求送第二次，結果仍然只有一筆」的行為叫 <strong>idempotent（冪等）</strong>。它很重要，因為手機網路不穩時，前端可能會不小心重送。有了這段判斷，重送不會變成兩篇重複貼文。接著檢查上傳是否已經完成、有沒有過期，以及說明文字長度：</p>
+
+<pre><code>if (upload.state !== 'ready' || !upload.storageId || upload.expiresAt <= Date.now())
+  throw new ConvexError('Upload is incomplete or expired. Please select your media again.');
+if (args.caption.length > 2200)
+  throw new ConvexError('Captions can contain up to 2,200 characters.');</code></pre>
+
+<p>再往下一層，還要去查這份檔案的實際大小，確保它沒有超過限制。圖片上限是 10 MB，影片是 50 MB：</p>
+
+<pre><code>const metadata = await ctx.db.system.get('_storage', upload.storageId);
+if (!metadata || metadata.size > (upload.kind === 'image' ? 10 : 50) * 1024 * 1024)
+  throw new ConvexError('Invalid media.');</code></pre>
+
+<p>驗證都過了，才真正寫入。注意這裡不是只寫一筆，而是一個小型的交易：插入貼文、把上傳標記成已發布、再把作者的貼文數加一。三個動作綁在一起，任何一個出錯，整批回滾，不會留下「貼文建了但作者計數沒加」這種半殘狀態。</p>
+
+<pre><code>const postId = await ctx.db.insert('posts', {
+  authorId: me._id, uploadId: upload._id, storageId: upload.storageId,
+  kind: upload.kind, width: upload.width, height: upload.height,
+  duration: upload.duration, caption: args.caption.trim(),
+  likesCount: 0, commentsCount: 0,
+});
+await ctx.db.patch('uploads', upload._id, { state: 'published', postId });
+await ctx.db.patch('profiles', me._id, { postsCount: me.postsCount + 1 });
+return postId;</code></pre>
+
+<p>這裡的 <code>postsCount</code> 就是上一節講的 denormalized counter，所以新增貼文時要順手維護它。插入貼文時把兩個計數欄位都先設為 0，之後按讚和留言再各自去加。</p>
+
+<h2>第六步：刪除貼文與背景清理</h2>
+
+<p>刪除是寫入型功能裡最需要小心的一個，因為它不可逆。刪除貼文的 mutation 會先確認這篇貼文存在、而且作者就是目前使用者，接著刪掉貼文本身、把作者計數減一、再刪掉儲存在雲端的媒體檔。</p>
+
+<pre><code>export const remove = mutation({
+  args: { id: v.id('posts') },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const me = await requireProfile(ctx);
+    const post = await ctx.db.get('posts', args.id);
+    if (!post) return null;
+    if (post.authorId !== me._id)
+      throw new ConvexError('Not authorized to delete this post.');
+
+    await ctx.db.delete('posts', post._id);
+    await ctx.db.patch('profiles', me._id, { postsCount: Math.max(0, me.postsCount - 1) });
+    await ctx.storage.delete(post.storageId);
+    await ctx.scheduler.runAfter(0, internal.posts.cleanup, { postId: post._id });
+    return null;
+  },
+});</code></pre>
+
+<p>難題在最後一行。貼文底下還有按讚、留言、書籤、留言的讚，這些資料也得一起清掉。但如果一篇熱門貼文有上萬筆互動，想在一次 mutation 裡全部刪完，會超過單次執行的限制。所以這裡的做法是把清理<strong>排進背景</strong>：<code>ctx.scheduler.runAfter(0, ...)</code> 會在這次 mutation 結束後，另外執行一個內部函式 <code>cleanup</code>。清理函式每次只抓一批（例如一百筆）刪掉，如果發現數量還有剩，就再排下一次，直到清空為止。</p>
+
+<pre><code>export const cleanup = internalMutation({
+  args: { postId: v.id('posts') },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const likes = await ctx.db.query('likes')
+      .withIndex('by_postId', q => q.eq('postId', args.postId)).take(100);
+    // comments / bookmarks / commentLikes 同理
+    for (const row of likes) await ctx.db.delete('likes', row._id);
+    if (likes.length === 100)
+      await ctx.scheduler.runAfter(0, internal.posts.cleanup, args);
+    return null;
+  },
+});</code></pre>
+
+<p>稱它為 <code>internalMutation</code>，是刻意不讓手機端直接呼叫它——它只該由後端自己排程觸發。<code>.take(100)</code> 則限制一次只取一批，避免單次交易過重；當一批剛好取滿一百筆，就表示可能還有，於是再排一次。這種「分批處理、自己排下一次」的模式，是 Convex 裡處理大量資料的標準手法。</p>
+
+<h2>完成後，你應該得到什麼？</h2>
+
+<blockquote>
+一個 query 的骨架是：宣告 args 與 returns，用 <code>ctx.db.query</code> 搭配索引與分頁讀資料，在開頭用 <code>requireProfile(ctx)</code> 取得可信身分，最後把文件整理成 view 再回傳。一個 mutation 的骨架是：先驗證擁有權與狀態，用 idempotent 判斷處理重送，通過後才在單一交易裡寫入並維護計數。刪除這種不可逆動作要排成背景、分批清理。把資料驗證綁在與寫入同一個交易裡，是這些函式能安全重複執行的關鍵；背後為什麼可行，屬於前一節資料模型的範疇。
+</blockquote>
+
+<p>驗證方式很直接：在手機端呼叫 <code>api.posts.publish</code>，然後打開 Convex 的儀表板，應該會看到 <code>posts</code> 多了一筆、對應的 <code>uploads</code> 變成 <code>published</code>、作者的 <code>postsCount</code> 加一。刪除貼文後，過一下子再看，相關的按讚與留言也應該被清光。這些函式寫好之後，還有一個 Convex 特有的好處會自動發生：任何人打開的貼文清單，都會跟著資料變動即時更新。下一節就要解釋這個機制是怎麼運作的。</p>
+
+<div class="lesson-nav">
+  <div><a href="./define-schema-and-indexes.html">← 上一步：用 schema.ts 定義資料模型與索引</a></div>
+  <div><a href="./reactive-queries-and-realtime.html">下一步：Reactive 查詢：為什麼不用手動重抓資料 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="query 的 args 裡用 union 限制 feed 只能是三種字串，主要目的是什麼？" data-correct="1" data-explain="validator 會在執行期擋下不合法的參數，避免前端傳入不存在的分頁名稱。">
+  <button class="opt">讓查詢速度比不使用限制更快</button>
+  <button class="opt">在執行期擋下不合法的參數值</button>
+  <button class="opt">讓回傳的資料自動去除重複</button>
+  <button class="opt">讓前端不用再顯示載入狀態</button>
+</div>
+
+<div class="quiz" data-question="為什麼查詢資料一定要搭配索引，而不是整張表逐筆檢查？" data-correct="2" data-explain="索引讓查詢直接定位到符合條件的區段，不必掃過所有資料。">
+  <button class="opt">因為沒有索引就無法連上資料庫</button>
+  <button class="opt">因為索引會自動修改查詢的結果</button>
+  <button class="opt">因為索引能直接定位不必逐筆掃</button>
+  <button class="opt">因為索引能讓寫入完全不需驗證</button>
+</div>
+
+<div class="quiz" data-question="為什麼目前使用者要由 requireProfile(ctx) 在後端決定，而不是前端傳 userId？" data-correct="0" data-explain="前端傳來的識別碼可以被偽造，只有後端從登入憑證推導才可信。">
+  <button class="opt">因為前端傳來的識別碼可以被偽造</button>
+  <button class="opt">因為前端沒有能力取得自己的識別碼</button>
+  <button class="opt">因為後端推導可以讓查詢速度快一倍</button>
+  <button class="opt">因為這樣可以省略分頁的游標設定</button>
+</div>
+
+<div class="quiz" data-question="publish 裡先檢查 upload.postId 再決定回傳，是為了達成什麼？" data-correct="3" data-explain="同樣的請求重送時只會得到同一篇貼文，不會建立重複貼文。">
+  <button class="opt">讓貼文可以同時由多人共同編輯</button>
+  <button class="opt">讓上傳的媒體檔案能自動壓縮</button>
+  <button class="opt">讓說明文字可以超過原本的限制</button>
+  <button class="opt">讓重複送出的請求不會多建貼文</button>
+</div>
+
+<div class="quiz" data-question="刪除貼文時把互動資料交給背景 cleanup 分批刪，主要原因是什麼？" data-correct="1" data-explain="一次刪完可能超過單次交易的負荷，分批並自己排下一次更安全。">
+  <button class="opt">因為背景刪除的資料不會算進配額</button>
+  <button class="opt">因為一次刪完可能超過交易負荷</button>
+  <button class="opt">因為背景函式自動具有管理員權限</button>
+  <button class="opt">因為這樣可以讓貼文先從畫面消失</button>
+</div>
+
+<div class="quiz" data-question="cleanup 使用 internalMutation 而不是普通 mutation，理由是？" data-correct="2" data-explain="internal 函式不能由手機端直接呼叫，只讓後端自己排程觸發較安全。">
+  <button class="opt">因為它執行速度比普通 mutation 快</button>
+  <button class="opt">因為它不需要任何參數與驗證器</button>
+  <button class="opt">因為它不該被手機端直接呼叫</button>
+  <button class="opt">因為它可以在多台伺服器上平行執行</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Convex 後端模型 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

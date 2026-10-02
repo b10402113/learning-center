@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>開通 Clerk↔Convex 整合並寫 auth.config</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>開通 Clerk↔Convex 整合並寫 auth.config</h1>
+<p class="meta">Step 2/5 · Convex × Clerk 身分驗證</p>
+
+<h2>學習目標</h2>
+<p>你會在 Clerk dashboard 打開 Convex 整合、把 issuer domain 設進 Convex 的環境變數、寫出 <code>auth.config.ts</code>，最後確認 <code>ctx.auth.getUserIdentity()</code> 不再回傳 null。動手前，你應該已經有一個 Clerk app、一個 Convex 專案，以及一個能登入的畫面。</p>
+
+<h2>前言：為什麼 getUserIdentity 一直是 null</h2>
+
+<p>上一節的結論是：身分只能由 server 從驗證過的 token 推導。當你興沖沖打開 Convex 的函式，想用 <code>ctx.auth.getUserIdentity()</code> 看看登入者，卻發現它不管怎樣都回傳 null。這不是你程式寫錯，而是因為 Convex 還不認識你信任的那個發照機關。</p>
+
+<p>Convex 要驗證 token，得先知道「該相信誰」。這份信任關係分成兩半：一半在 Clerk 那邊，你要允許它把 Convex 當成一個可以簽發 token 的對象；另一半在 Convex 這邊，你要用一個設定檔告訴它「這個 issuer 簽的 token 我認」。兩邊都接好，<code>getUserIdentity()</code> 才會回傳東西。這一節就是來把這條線接完。</p>
+
+<h2>步驟一：在 Clerk dashboard 打開 Convex 整合</h2>
+
+<p>先到 Clerk dashboard，進到你的應用，沿著左側選單找到 <strong>Configure → Integrations → Developers</strong>，在這裡把 Convex 整合打開。</p>
+
+<p>這一步在 Clerk 內部會建立一個名為 <code>convex</code> 的 JWT 範本。範本的概念類似「我要簽發哪一種通行證」——之後 Convex 送出的請求會附上這個範本簽出的 token，而 Convex 端也會用同一個名稱來對應。如果這裡沒開，後面的設定寫得再對，Convex 也拿不到可驗證的 token。</p>
+
+<p>打開之後，順手把 Clerk 應用頁面上的 issuer 網址記下來。它的長相類似 <code>https://你的app.clerk.accounts.dev</code>，這是 Clerk 對外宣告「我簽的 token 是我發的」的位址，下一步要用到。</p>
+
+<h2>步驟二：把 issuer domain 設進 Convex 環境變數</h2>
+
+<p>回到 Convex 專案，在 dashboard 的 <strong>Settings → Environment Variables</strong>（部署環境的設定，不是你本機的 <code>.env</code>）新增一個變數：</p>
+
+<pre><code>CLERK_JWT_ISSUER_DOMAIN=https://你的app.clerk.accounts.dev</code></pre>
+
+<p>這裡要特別注意放的位置。Convex 的函式是在雲端執行的，它們讀的是部署環境的變數，而不是你電腦上那份 <code>.env</code>。很多人把值寫進本機檔案、測試一直失敗，就是因為 server 端根本沒看到這個值。當這個變數不存在時，<code>process.env.CLERK_JWT_ISSUER_DOMAIN</code> 會是 <code>undefined</code>，驗證一定不會通過。</p>
+
+<h2>步驟三：寫下 convex/auth.config.ts</h2>
+
+<p>接著在 <code>convex/</code> 資料夾建立一個檔案 <code>auth.config.ts</code>。它的內容不長，但每一行都在回答「我相信誰」：</p>
+
+<pre><code>import type { AuthConfig } from 'convex/server';
+
+export default {
+  providers: [{ domain: process.env.CLERK_JWT_ISSUER_DOMAIN!, applicationID: 'convex' }],
+} satisfies AuthConfig;</code></pre>
+
+<ul>
+<li><code>AuthConfig</code> 是從 <code>convex/server</code> 匯入的型別，讓編輯器能檢查這個設定物件的形狀，寫錯欄位會立刻報錯。</li>
+<li><code>providers</code> 是一個陣列，代表「我認可的發照機關」。以後如果同時接兩種身分服務，就是往這個陣列再加一筆。</li>
+<li><code>domain</code> 指向剛剛設定的 issuer 網址。Convex 會到這個網址底下抓公開金鑰，用來驗證簽章。</li>
+<li><code>applicationID: 'convex'</code> 對應步驟一在 Clerk 建立的那個範本名稱，用來確認 token 是簽給這個用途的。</li>
+</ul>
+
+<p>這個檔案就是整條信任鏈的開關。把它刪掉，<code>ctx.auth.getUserIdentity()</code> 會立刻回到永遠 null 的狀態。</p>
+
+<h2>步驟四：讓設定生效</h2>
+
+<p>檔案存好後，重新執行專案的開發指令（例如 <code>npx convex dev</code>），讓 Convex 把新的 config 推上部署環境。終端機會顯示它重新讀取了設定。如果這一步跳過，雲端上的 Convex 用的還是舊的、沒有 provider 的設定。</p>
+
+<h2>步驟五：確認身分真的進來了</h2>
+
+<p>驗證的時候，寫一個臨時的 query，回傳這個值就好：</p>
+
+<pre><code>import { query } from './_generated/server';
+
+export const whoAmI = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    return { signedIn: identity !== null, subject: identity?.subject ?? null };
+  },
+});</code></pre>
+
+<p>然後從你的 app（已經接好 Clerk 登入的那個畫面）呼叫它。未登入時應該拿到 <code>signedIn: false</code>，登入後應該拿到 <code>signedIn: true</code>，而且 <code>subject</code> 有一串使用者識別碼。</p>
+
+<blockquote>
+測試請從 app 發起，不要直接在 Convex dashboard 的函式測試器裡按執行。dashboard 的測試請求不會帶著你 app 的登入 token，在那裡呼叫 <code>getUserIdentity()</code> 永遠是 null，容易讓你誤判設定沒生效。
+</blockquote>
+
+<h2>小結</h2>
+
+<blockquote>
+要讓 Convex 認得 Clerk 的 token，得接兩條線：在 Clerk dashboard 打開 Convex 整合（建立 <code>convex</code> 範本），再於 Convex 設定 <code>CLERK_JWT_ISSUER_DOMAIN</code> 並寫下 <code>auth.config.ts</code>。設定要放在 Convex 的部署環境變數，且要重新部署才會生效。完成後，從 app 呼叫 <code>getUserIdentity()</code> 就會拿到身分。
+</blockquote>
+
+<p>現在 server 拿得到身分了，但那個 token 裡面到底裝了什麼、Convex 又是怎麼判斷它沒被動過手腳？下一步我們把驗證機制與 identity 物件拆開來看。</p>
+
+<div class="lesson-nav">
+  <div><a href="./server-derived-identity.html">← 上一步：為什麼不能相信 client 傳來的 identity</a></div>
+  <div><a href="./jwt-verification-and-identity.html">下一步：JWT 驗證與 identity 物件 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="在 Clerk dashboard 打開 Convex 整合，主要的作用是什麼？" data-correct="1" data-explain="它建立 Convex 對應的 JWT 範本，讓 Clerk 願意簽發這個用途的 token。">
+  <button class="opt">把 Clerk 的使用者資料匯出成檔案</button>
+  <button class="opt">建立 Convex 對應的 JWT 簽發範本</button>
+  <button class="opt">把 Convex 的資料表複製回 Clerk 裡</button>
+  <button class="opt">讓 Convex 直接讀取 Clerk 的登入密碼</button>
+</div>
+
+<div class="quiz" data-question="CLERK_JWT_ISSUER_DOMAIN 應該設定在哪裡？" data-correct="2" data-explain="Convex 函式在雲端執行，讀的是部署環境變數，不是本機的 .env。">
+  <button class="opt">Clerk dashboard 的整合頁面欄位</button>
+  <button class="opt">手機 app 的 Metro 設定檔案</button>
+  <button class="opt">Convex 的部署環境變數設定</button>
+  <button class="opt">專案根目錄的 README 說明檔</button>
+</div>
+
+<div class="quiz" data-question="auth.config.ts 裡的 applicationID 代表什麼？" data-correct="0" data-explain="它對應 Clerk 建立的 JWT 範本名稱，用來確認 token 是簽給這個用途的。">
+  <button class="opt">對應 Clerk 那個 JWT 範本的名稱</button>
+  <button class="opt">你的 Convex 專案的隨機流水號</button>
+  <button class="opt">使用者在資料庫裡的主要鍵值</button>
+  <button class="opt">Apple 開發者帳號的團隊識別碼</button>
+</div>
+
+<div class="quiz" data-question="為什麼不該在 Convex dashboard 的函式測試器裡驗證登入身分？" data-correct="3" data-explain="測試器的請求不帶你 app 的 token，getUserIdentity 永遠是 null，會誤導你。">
+  <button class="opt">因為測試器不支援非同步的函式</button>
+  <button class="opt">因為測試器會自動改寫函式參數</button>
+  <button class="opt">因為測試器會讓部署環境重新啟動</button>
+  <button class="opt">因為測試請求不帶你 app 的 token</button>
+</div>
+
+<div class="quiz" data-question="寫完 auth.config.ts 之後，為什麼還要重新部署？" data-correct="1" data-explain="雲端上的 Convex 要重新讀取設定，才會採用新的 provider 信任清單。">
+  <button class="opt">因為舊的檔案會被 Clerk 鎖住不能讀</button>
+  <button class="opt">因為雲端要重新讀取新的信任設定</button>
+  <button class="opt">因為不部署就無法建立 Clerk 帳號</button>
+  <button class="opt">因為部署會順便重建手機的登入畫面</button>
+</div>
+
+<div class="footer">
+  <p>行動開發實戰 · Convex × Clerk 身分驗證 · Step 2/5</p>
+  <p>讀到這裡有想追問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

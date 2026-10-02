@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reactive 查詢：為什麼不用手動重抓資料</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Reactive 查詢：為什麼不用手動重抓資料</h1>
+<p class="meta">Step 4/5 · Convex 後端模型</p>
+
+<h2>學習目標</h2>
+<p>能解釋 Convex reactive query 的運作機制：前端為什麼不用輪詢或手動重抓，資料變動如何自動推送，以及樂觀更新和 reactive 之間是什麼關係。</p>
+
+<h2>前言：留言出現了，但畫面怎麼知道要更新？</h2>
+
+<p>上一節你寫好了 <code>posts.list</code> 這個查詢，手機端一打開就拿到一頁貼文。現在想像一個情境：A 同學正在看一篇貼文，B 同學在同一時間按了讚、留了言。A 的手機要怎麼知道畫面該更新？</p>
+
+<p>如果照傳統直覺，你可能會想辦法「定時去問後端有沒有新資料」，也就是每隔幾秒重打一次 API；或者叫使用者自己下拉重新整理。這些做法都能動，但都要你額外寫很多協調的程式，而且很容易出現「明明資料變了，畫面還是舊的」的落差。</p>
+
+<p>Convex 的查詢不是「問一次就拿一次答案」，而是<strong>訂閱</strong>。你用同一個查詢，資料一變，畫面自己就變，完全不用寫輪詢或重新整理的邏輯。這一節要把這個機制拆開，因為理解它之後，你才會知道為什麼 Convex 的 query 有一些特別的規則。</p>
+
+<h2>從「拉」到「推」的轉變</h2>
+
+<p>傳統的 API 呼叫是「拉（pull）」：前端主動去後端要資料，要完就結束。之後資料怎麼變，前端不知道。要維持即時，通常得靠下面幾種補救方式。</p>
+
+<table>
+<thead>
+<tr><th>做法</th><th>怎麼運作</th><th>代價</th></tr>
+</thead>
+<tbody>
+<tr><td>手動重抓</td><td>使用者下拉或切換頁面時再呼叫一次 API</td><td>資料可能早就過期，體驗也差</td></tr>
+<tr><td>輪詢</td><td>每隔幾秒自動重打一次 API</td><td>多數請求都是白問的，浪費流量與資源</td></tr>
+<tr><td>自己接 WebSocket</td><td>前後端維護一條長連線，後端主動推事件</td><td>要自己設計事件格式、斷線重連、狀態同步</td></tr>
+<tr><td>Reactive 查詢</td><td>前端訂閱查詢，後端在資料變動時自動推送新結果</td><td>幾乎不用寫協調程式，但查詢必須是確定性的</td></tr>
+</tbody>
+</table>
+
+<p>Convex 屬於最後一種：前端訂閱、後端推送。它的關鍵差別在於，你不用自己定義「什麼事件要推給誰」，只要把查詢寫成「我想要這段資料」，剩下的由 Convex 處理。你可以把它想成訂雜誌與每天跑書店的差別：輪詢是你每天特地跑一趟書店問「新的一期到了嗎」；reactive 查詢是你訂了雜誌，一出版就送到你家。</p>
+
+<h2>機制：Convex 怎麼知道你該更新了</h2>
+
+<p>要理解 reactive，關鍵是「追蹤依賴」這四個字。當一個前端元件訂閱了某個 query，Convex 在後端執行這個 query 時，會記下它實際讀取了哪些資料。以貼文清單為例，這個查詢讀了 <code>posts</code> 表的一頁資料，還可能讀了 <code>follows</code> 表來判斷追蹤關係。這些被讀到的範圍，就是這個查詢的依賴。</p>
+
+<p>接下來，只要有任何一個 mutation 改動了這些依賴裡的資料，Convex 就知道「這個查詢的結果可能不一樣了」，於是自動重新執行它，再把新的結果推給所有訂閱這個查詢的前端。整個過程對你來說是透明的：你沒有寫任何「請更新畫面」的程式，只是把查詢掛上去，畫面就跟著資料走。</p>
+
+<p>把這個流程拆成步驟看：</p>
+
+<ol>
+<li>手機端訂閱 <code>api.posts.list</code>，Convex 執行查詢並回傳第一頁。</li>
+<li>Convex 記住這次查詢讀過哪些資料。</li>
+<li>另一支手機呼叫 <code>api.posts.publish</code> 或 <code>social.setLike</code>，改動了 posts 或 likes。</li>
+<li>Convex 發現受影響的查詢，重新執行，把新結果推給所有訂閱者。</li>
+<li>A 同學的畫面自動更新，不必下拉，也不必重新進入頁面。</li>
+</ol>
+
+<p>這也是為什麼課程裡說 Convex 的即時更新是「開箱即用」的。你什麼都沒設定，貼文一發布、留言一送出，畫面上的清單就自己變了。</p>
+
+<h2>為什麼 query 不能有副作用</h2>
+
+<p>理解了剛才的機制，就能明白一條硬規則：query 不能修改資料，也不該做出每次結果都不同的行為（例如讀取當下的系統時間當結果）。原因是 Convex 會在很多時機重複執行你的查詢——訂閱時跑一次、依賴的資料變動時再跑一次。如果 query 裡藏了寫入，那「只是重新看一下畫面」就可能意外改到資料；如果 query 的結果不確定，那麼即使資料沒變，畫面也可能每次顯示不同內容，reactive 的追蹤就失去意義。</p>
+
+<p>所以 query 只能是「給定同一份資料，就得到同一個結果」的純函式。這不是風格建議，而是讓自動重跑這件事能成立的前提。真正需要寫入的動作，一律走 mutation；真正需要對外呼叫、有副作用的，走 action。</p>
+
+<h2>樂觀更新：reactive 之前的那一小段空白</h2>
+
+<p>Reactive 聽起來很完美，但它有一個本質上的時間差。使用者在手機上按下愛心，你呼叫 mutation；mutation 要送到後端、寫入資料、再觸發查詢重跑、把新結果傳回來。這中間可能經過幾百毫秒。人的眼睛等不了那麼久——如果愛心要等半秒才變紅，用起來會覺得卡。</p>
+
+<p>所以社群 app 通常會搭配<strong>樂觀更新（optimistic update）</strong>：使用者一按，前端就先把本機畫面的愛心變成紅的、數字加一，假裝寫入已經成功。等後端真的處理完、reactive 查詢把權威資料推回來，畫面再對齊一次。如果後端失敗，就回滾成原本的樣子。</p>
+
+<p>這裡的順序很重要：樂觀更新是「先騙一下眼睛」，reactive 查詢才是「最後的事實」。兩者搭配起來，使用者感覺是即時的，但資料的正確性仍然以後端為準。寫入時還要處理重送的風險，例如用一個 <code>requestId</code> 讓同一則留言重送兩次也只會存下一筆，這和上一節 publish 的 idempotent 判斷是同一個思路。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+Convex 的查詢是訂閱，不是問一次。後端會追蹤每個查詢讀了哪些資料，資料一被 mutation 改動，就自動重跑查詢並推給所有訂閱的前端——所以畫面不用輪詢、不用手動重抓。這個機制的前提是 query 必須是確定性的、不能有副作用，這就是 query 只管讀的原因。至於使用者按下按鈕到後端回傳之間的短暫空窗，則用樂觀更新先讓畫面反應，再讓 reactive 查詢把權威資料補上。
+</blockquote>
+
+<p>到這裡，你已經看懂 Convex 這一整套模型：用 schema 定義資料、寫 query 與 mutation、靠 reactive 自動更新畫面。最後一個問題回到選擇本身——什麼情況下該用 Convex，什麼情況下反而該自己寫一台 API server？下一節會用取捨與判準，幫你做出這個決定。</p>
+
+<div class="lesson-nav">
+  <div><a href="./write-queries-and-mutations.html">← 上一步：寫 query 與 mutation：從 posts.ts 走一次</a></div>
+  <div><a href="./convex-vs-custom-api.html">下一步：Convex 或自寫 API server：怎麼選 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Convex reactive 查詢和傳統輪詢最根本的差別是什麼？" data-correct="2" data-explain="輪詢是前端反覆去問；reactive 是後端在資料變動時主動推送。">
+  <button class="opt">reactive 每次都會掃過整張資料表</button>
+  <button class="opt">reactive 不需要任何後端資料庫</button>
+  <button class="opt">reactive 由後端在變動時主動推送</button>
+  <button class="opt">reactive 只能用在單一使用者的畫面</button>
+</div>
+
+<div class="quiz" data-question="Convex 是靠什麼知道某個查詢需要重新執行？" data-correct="1" data-explain="它記下查詢讀過哪些資料，這些依賴被改動時就重跑查詢。">
+  <button class="opt">靠前端每次主動通知後端要更新</button>
+  <button class="opt">靠記錄查詢讀過哪一些資料作為依賴</button>
+  <button class="opt">靠每個查詢固定每幾秒重跑一次</button>
+  <button class="opt">靠使用者手動按下重新整理按鈕</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Convex 的 query 被規定不能修改資料？" data-correct="0" data-explain="query 會在訂閱與依賴變動時被重複執行，若藏寫入就會意外改資料。">
+  <button class="opt">因為它會被自動重複執行很多次</button>
+  <button class="opt">因為它回傳的資料不能大於一頁</button>
+  <button class="opt">因為它只能讀取公開的欄位資料</button>
+  <button class="opt">因為它沒有辦法取得執行環境變數</button>
+</div>
+
+<div class="quiz" data-question="樂觀更新在 reactive 查詢之前扮演什麼角色？" data-correct="3" data-explain="它先讓畫面立即反應，等到後端權威資料回來再對齊。">
+  <button class="opt">它負責把資料真正寫進後端資料庫</button>
+  <button class="opt">它會阻止後端的查詢自動重新執行</button>
+  <button class="opt">它讓前端可以完全省略 mutation 呼叫</button>
+  <button class="opt">它先讓畫面立即反應再等資料對齊</button>
+</div>
+
+<div class="quiz" data-question="下列哪一種寫法會違反 query 應為純函式的原則？" data-correct="2" data-explain="在查詢裡直接寫入資料，會在每次重跑時意外改動資料。">
+  <button class="opt">在 query 裡用索引讀取某一頁貼文</button>
+  <button class="opt">在 query 裡回傳整理過的公開欄位</button>
+  <button class="opt">在 query 裡順手把瀏覽次數加一</button>
+  <button class="opt">在 query 裡依照身分組出相對欄位</button>
+</div>
+
+<div class="quiz" data-question="如果後端寫入失敗，樂觀更新的畫面應該怎麼處理？" data-correct="1" data-explain="失敗時要把先前假裝成功的本機狀態回滾，不能讓錯誤結果留在畫面上。">
+  <button class="opt">保持樂觀狀態直到使用者自己重開 app</button>
+  <button class="opt">回滾成本來狀態並讓使用者知道失敗</button>
+  <button class="opt">把錯誤訊息寫進後端資料庫的紀錄</button>
+  <button class="opt">改成每隔幾秒自動重送一次請求</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Convex 後端模型 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

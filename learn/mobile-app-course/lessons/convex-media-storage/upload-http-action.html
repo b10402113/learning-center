@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>實作 POST /upload：串流限流、時長解析與綁定</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>實作 POST /upload：串流限流、時長解析與綁定</h1>
+<p class="meta">Step 4/5 · Convex 檔案儲存與上傳</p>
+
+<h2>學習目標</h2>
+<p>能寫出一個通過驗證的 <code>/upload</code> HTTP action：在不超過 action 記憶體上限的前提下串流檔案、用 magic bytes 認出真正格式、解析 MP4/MOV 時長，最後把 blob 存進 Convex 並以 internal mutation 綁定。</p>
+
+<h2>開始前的目標與前置條件</h2>
+
+<p>做完這一節，你會得到一條完整的上傳端點：client 帶著上一節 <code>begin</code> 拿到的上傳 id，把檔案 POST 到 <code>/upload</code>；server 驗完身分、內容格式與大小後，把檔案存進 Convex 的 <code>_storage</code>，並把該筆 <code>uploads</code> 資料列的狀態推進到 <code>ready</code>。成功時回應會是 <code>Upload complete.</code>，失敗時則是對應的 4xx 錯誤。</p>
+
+<p>動手前，你應該已經有 <code>uploads</code> 這張資料列與它的驗證規則，也理解 <code>ctx.storage.store</code> 會回傳 <code>storageId</code>。這一段會用到 Convex 的 HTTP action 機制，如果還不熟，先把它想成「一個掛在某條路徑上的 server 函式，收得到原始 HTTP 請求」就可以了。</p>
+
+<h2>HTTP action 為什麼適合接檔案</h2>
+
+<p>Convex 一般的 query 和 mutation 是給結構化資料用的，它們走的是 JSON 形式的遠端呼叫，處理二進位檔並不順手。HTTP action 就不一樣：它直接面對原始請求，可以讀標頭、看 HTTP 方法、處理二進位 body，也能回應特定的狀態碼。接收檔案需要這些能力，所以 <code>/upload</code> 用 HTTP action 來寫。</p>
+
+<p>在檔案層級，先建立 router 與幾個共用的小工具：</p>
+
+<pre><code>const http = httpRouter();
+
+const cors = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, Range',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
+};
+
+const response = (message: string, status: number) =>
+  new Response(message, { status, headers: cors });
+
+// 瀏覽器送出跨網域請求前會先打 OPTIONS，兩條路徑都要回應
+http.route({ path: '/upload', method: 'POST', handler: httpAction(async (ctx, req) => {
+  // ...
+}) });</code></pre>
+
+<p>這段先準備好 CORS 標頭與一個方便回傳訊息的 helper，並註冊 <code>POST /upload</code>。實際的邏輯會依序走下面六個步驟。</p>
+
+<h2>步驟 1：認出身分，把單子找回來</h2>
+
+<p>進到 handler 後，第一件事是確認來的人已經登入，然後用上傳 id 與這個身分把 <code>pending</code> 單子查出來：</p>
+
+<pre><code>const identity = await ctx.auth.getUserIdentity();
+if (!identity) return response('Sign in required.', 401);
+
+const upload = await ctx.runQuery(internal.uploads.forUpload, {
+  id: new URL(req.url).searchParams.get('id') ?? '',
+  tokenIdentifier: identity.tokenIdentifier,
+});
+if (!upload || upload.expiresAt &lt;= Date.now())
+  return response('Upload missing or expired.', 404);
+if (upload.storageId) return response('Upload complete.', 200);</code></pre>
+
+<p>有幾個細節值得說明。HTTP action 的 <code>ctx</code> 不能像 query 那樣直接讀資料庫，所以要用 <code>ctx.runQuery</code> 呼叫一個 internal query <code>forUpload</code>；這個查詢會比對單子擁有者的 <code>tokenIdentifier</code> 跟請求身分是否一致，不一致就回 <code>null</code>，這裡一律當成找不到。另外，查到的單子如果已經有 <code>storageId</code>，代表這個檔案之前就成功上傳過，直接回 200，這也是讓重試變得安全的一步。</p>
+
+<h2>步驟 2：先用型別與大小做早期拒絕</h2>
+
+<p>在開始收檔案之前，先讀請求的 Content-Type 與 Content-Length，能早一步拒絕就早一步：</p>
+
+<pre><code>const type = (req.headers.get('Content-Type') ?? '').split(';')[0].toLowerCase();
+const allowed = upload.kind === 'image'
+  ? ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
+  : ['video/mp4', 'video/quicktime'];
+const max = (upload.purpose === 'avatar' ? 5 : upload.kind === 'image' ? 10 : 50) * 1024 * 1024;
+
+if (!allowed.includes(type)) return response('Unsupported media format.', 415);
+if (Number(req.headers.get('Content-Length')) &gt; max) return response('File is too large.', 413);</code></pre>
+
+<p>這裡要記得上一節的原則：Content-Type 與 Content-Length 都是 client 填的，只能拿來做早期拒絕，不能當成最終事實。Content-Length 就算沒超標或根本沒填，真正的大小限制還是得靠下一步的串流來守。先把明顯不合格的請求擋掉，只是省下一些之後的工。</p>
+
+<h2>步驟 3：串流限流，別把 50MB 組進 JS 陣列</h2>
+
+<p>這一步是整支端點最容易被寫壞的地方。最直覺的寫法是 <code>await req.arrayBuffer()</code>，一次把整個檔案收進記憶體再處理。問題是 Convex 的 action 有記憶體預算（大約 64MB），而影片上限就有 50MB。如果還把收到的內容切成許多 JS 小塊、再拼成 Blob，中間的複製品很容易讓記憶體衝破上限。</p>
+
+<p>正確的做法是邊收邊檢查，而且只保留一份參考：</p>
+
+<pre><code>if (!req.body) return response('Empty file.', 400);
+
+let size = 0;
+const limited = req.body.pipeThrough(new TransformStream&lt;Uint8Array, Uint8Array&gt;({
+  transform(chunk, controller) {
+    size += chunk.byteLength;
+    if (size &gt; max) throw new Error('File is too large.');
+    controller.enqueue(chunk);
+  },
+}));
+
+let blob: Blob;
+try {
+  blob = await new Response(limited, { headers: { 'Content-Type': type } }).blob();
+} catch {
+  return response('Upload interrupted or file too large.', size &gt; max ? 413 : 400);
+}
+if (!blob.size) return response('Empty file.', 400);</code></pre>
+
+<p>這段用一個 <code>TransformStream</code> 夾在請求 body 與 Blob 之間。每當有一小塊資料通過，就把它的大小累加；一旦總和超過上限，立刻拋出錯誤中斷整個串流。因為資料是邊流邊轉存成 Blob，而不是先堆成一大包 JS 陣列，記憶體的峰值就被壓在可控的範圍內。外層的 <code>try/catch</code> 負責分辨是中斷還是超標，超標就回 413。</p>
+
+<h2>步驟 4：用 magic bytes 確認內容真的是那個格式</h2>
+
+<p>檔案收完後，讀它最前面的 32 個位元組，按照宣稱的型別比對簽章：</p>
+
+<pre><code>const head = new Uint8Array(await blob.slice(0, 32).arrayBuffer());
+const ascii = (start: number, end: number) =&gt;
+  String.fromCharCode(...head.slice(start, end));
+
+const valid =
+  type === 'image/jpeg' ? head[0] === 255 &amp;&amp; head[1] === 216 &amp;&amp; head[2] === 255
+  : type === 'image/png' ? head[0] === 137 &amp;&amp; ascii(1, 4) === 'PNG'
+  : type === 'image/webp' ? ascii(0, 4) === 'RIFF' &amp;&amp; ascii(8, 12) === 'WEBP'
+  : ascii(4, 8) === 'ftyp'; // MP4 / MOV
+
+if (!valid) return response('File content does not match its media type.', 400);</code></pre>
+
+<p>注意最後那條：影片的判斷寫成 <code>ascii(4, 8) === 'ftyp'</code>。MP4 和 QuickTime 都屬於 ISO BMFF 容器，它們的檔頭有共通的結構，其中第 4 到 8 個位元組固定是 <code>ftyp</code>。到這裡，client 宣稱的型別已經被檔案內容驗證過一次，不再只是字串。</p>
+
+<h2>步驟 5：只讀檔頭，算出影片的真實時長</h2>
+
+<p>影片還多一道關卡：確認長度。最貴的做法是把整支影片解碼，但那完全沒必要。MP4/MOV 的時長資訊就寫在檔頭的一個區塊裡，只要沿著結構找到它、做個除法就好。<code>lib/video.ts</code> 的 <code>videoDuration</code> 就是這個邏輯：</p>
+
+<pre><code>export async function videoDuration(blob: Blob): Promise&lt;number | null&gt; {
+  // 在指定範圍內走訪 box，找到指定型別的 box 的內容範圍
+  async function find(start: number, end: number, wanted: string) {
+    for (let count = 0, offset = start; count &lt; 1000 &amp;&amp; offset + 8 &lt;= end; count++) {
+      const bytes = await blob.slice(offset, Math.min(offset + 16, end)).arrayBuffer();
+      const data = new DataView(bytes);
+      const type = String.fromCharCode(...new Uint8Array(bytes, 4, 4));
+      let size = data.getUint32(0); let header = 8;
+      if (size === 1) { size = Number(data.getBigUint64(8)); header = 16; }
+      if (size === 0) size = end - offset;
+      if (type === wanted) return { start: offset + header, end: offset + size };
+      offset += size;
+    }
+    return null;
+  }
+  const moov = await find(0, blob.size, 'moov'); if (!moov) return null;
+  const mvhd = await find(moov.start, moov.end, 'mvhd'); if (!mvhd) return null;
+  const data = new DataView(await blob.slice(mvhd.start, Math.min(mvhd.start + 32, mvhd.end)).arrayBuffer());
+  const version = data.getUint8(0);
+  const scale = data.getUint32(version === 1 ? 20 : 12);
+  const ticks = version === 1 ? Number(data.getBigUint64(24)) : data.getUint32(16);
+  const seconds = ticks / scale;
+  return Number.isFinite(seconds) &amp;&amp; seconds &gt; 0 ? seconds : null;
+}</code></pre>
+
+<p>逐段看。MP4 檔是由一連串「box」組成的，每個 box 開頭 4 個位元組是它的大小，接著 4 個位元組是它的型別。<code>find</code> 做的事就是從頭一個一個往前跳，直到遇到想要的型別，回傳它的內容範圍。先找整體的 <code>moov</code>，再從裡面找媒體標頭 <code>mvhd</code>。找到之後，讀它的版本（version 0 或 1，欄位位置不同），再讀 <code>timescale</code> 與時長刻度 <code>ticks</code>，兩者相除就是秒數。整個過程只看幾個位元組，從頭到尾沒有解碼任何一格畫面。</p>
+
+<pre><code>const duration = upload.kind === 'video' ? await videoDuration(blob) : undefined;
+if (upload.kind === 'video' &amp;&amp; (!duration || duration &gt; 30))
+  return response('Choose a valid MP4/MOV video no longer than 30 seconds.', 400);</code></pre>
+
+<p>解析不出時長、或超過 30 秒，都在這裡被拒絕。這樣 server 對影片長度的判斷就完全來自檔案內容，而不是 client 回報的數字。</p>
+
+<h2>步驟 6：存檔、綁定，失敗時回滾</h2>
+
+<p>驗證都通過後，把 blob 存進 <code>_storage</code>，再呼叫 internal mutation <code>finish</code> 把它綁回單子：</p>
+
+<pre><code>const storageId = await ctx.storage.store(blob);
+try {
+  const accepted = await ctx.runMutation(internal.uploads.finish, {
+    id: upload._id, tokenIdentifier: identity.tokenIdentifier, storageId,
+    ...(duration ? { duration } : {}),
+  });
+  if (accepted !== storageId) await ctx.storage.delete(storageId);
+  return response('Upload complete.', 200);
+} catch {
+  await ctx.storage.delete(storageId);
+  return response('Upload expired. Please retry.', 409);
+}</code></pre>
+
+<p>為什麼要這麼囉嗦地處理？因為 <code>ctx.storage.store</code> 是一個已經造成結果的動作，只要它成功，檔案就真的在檔案庫裡了。如果之後的 <code>finish</code> 失敗——例如這張單子在這一瞬間剛好過期——那個剛存進去的檔案就沒有人認領，會變成孤兒。所以 <code>catch</code> 裡一定要把它刪掉。</p>
+
+<p>還有一種情況：如果同一張單子有兩個請求同時送達，第二個請求呼叫 <code>finish</code> 時，因為單子已經有 <code>storageId</code>，<code>finish</code> 會回傳第一個請求綁定的 id，而不是這次新存的。這時 <code>accepted !== storageId</code> 成立，代表這次多存的檔案沒有人要，也要刪掉。這一行比對，就是把「冪等」跟「不留孤兒」兩個目標同時顧到的關鍵。</p>
+
+<h2>做完應該看到什麼</h2>
+
+<ul>
+<li>未登入的請求回 401；單子不存在或過期回 404。</li>
+<li>格式不在允許清單回 415；明顯超過大小回 413；內容與型別不符回 400。</li>
+<li>影片長度解析不出、或超過 30 秒，回 400。</li>
+<li>合法檔案成功後回 <code>Upload complete.</code>，該筆 uploads 變成 <code>ready</code> 並帶著 <code>storageId</code>。</li>
+<li>過程中任何失敗，剛存進去的檔案都會被刪掉，檔案庫不留下孤兒。</li>
+</ul>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/upload</code> 用 HTTP action 接收二進位檔。它先從登入身分與上傳 id 找回單子，用 Content-Type 與 Content-Length 做早期拒絕，再用 <code>TransformStream</code> 串流並在超標時中斷——這是為了不讓 50MB 檔案把 action 記憶體撐爆。收完後以 32 bytes 的 magic bytes 驗證真正格式，影片再用 <code>videoDuration</code> 只讀 box 檔頭算出時長。<code>ctx.storage.store</code> 存檔後呼叫 internal <code>finish</code> 綁定；綁定失敗或回傳的是別的檔案時，刪掉這次多存的 blob，避免孤兒。
+</blockquote>
+
+<p>檔案現在安全地進到檔案庫、也綁上了單子。最後一個問題是：當 app 要顯示這些照片和影片時，該怎麼確保只有有權限的人讀得到？下一節會看 <code>/media</code> 這個讀取端點，以及影片分段讀取的機制。</p>
+
+<div class="lesson-nav">
+  <div><a href="./media-validation-limits.html">← 上一步：媒體驗證該信誰？MIME、magic bytes 與尺寸限制</a></div>
+  <div><a href="./authenticated-media-reads.html">下一步：GET /media：授權讀取與 Range 串流 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 /upload 要用 HTTP action 而不是一般 mutation？" data-correct="2" data-explain="HTTP action 直接面對原始請求，能處理二進位 body、標頭與狀態碼。">
+  <button class="opt">因為 HTTP action 的執行速度比較快</button>
+  <button class="opt">因為一般 mutation 不能寫入資料庫</button>
+  <button class="opt">因為它直接處理二進位與原始請求</button>
+  <button class="opt">因為 HTTP action 才能使用排程器</button>
+</div>
+<div class="quiz" data-question="為什麼不直接用 req.arrayBuffer() 一次收完檔案？" data-correct="1" data-explain="50MB 檔案加上中間複製品，很容易超過 action 大約 64MB 的記憶體預算。">
+  <button class="opt">因為 arrayBuffer 會把影片格式損毀</button>
+  <button class="opt">因為大檔會撐爆 action 記憶體預算</button>
+  <button class="opt">因為 arrayBuffer 不支援跨網域請求</button>
+  <button class="opt">因為這樣會跳過登入身分的檢查</button>
+</div>
+<div class="quiz" data-question="Content-Length 的檢查為什麼只能算早期拒絕？" data-correct="3" data-explain="標頭由 client 填寫，可以少報或省略，真正上限必須靠串流時累加。">
+  <button class="opt">因為它只有在影片檔案才會出現</button>
+  <button class="opt">因為它會隨網路狀況自動變化</button>
+  <button class="opt">因為它是由 server 自己計算的</button>
+  <button class="opt">因為標頭由 client 填寫可以少報</button>
+</div>
+<div class="quiz" data-question="videoDuration 是怎麼得到影片長度的？" data-correct="0" data-explain="它沿著 MP4 的 box 結構找到 mvhd，讀 timescale 與 ticks 相除，不解碼畫面。">
+  <button class="opt">讀取 mvhd 的刻度與時間單位</button>
+  <button class="opt">把整支影片解碼後計算格數</button>
+  <button class="opt">讀取 client 回報的檔案長度</button>
+  <button class="opt">用檔案大小除以平均位元率</button>
+</div>
+<div class="quiz" data-question="finish 回傳的 id 不等於這次存的 storageId，代表什麼？" data-correct="2" data-explain="單子已被另一個請求綁走，這次多存的檔案沒人要，必須刪掉。">
+  <button class="opt">這次上傳的檔案格式驗證沒有通過</button>
+  <button class="opt">這次上傳的影片長度超過了上限</button>
+  <button class="opt">單子已被別的請求綁走該刪掉它</button>
+  <button class="opt">這張單子已經被標記成 published</button>
+</div>
+<div class="quiz" data-question="finish 失敗時為什麼一定要刪掉剛存的 blob？" data-correct="1" data-explain="store 已經造成結果，finish 失敗就沒人認領，不刪就成孤兒檔案。">
+  <button class="opt">因為 Convex 會對每個檔案收月租費</button>
+  <button class="opt">因為沒人認領會變成孤兒檔案</button>
+  <button class="opt">因為同一個 storageId 不能重複使用</button>
+  <button class="opt">因為刪掉才能讓使用者重新上傳</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Convex 檔案儲存與上傳 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>

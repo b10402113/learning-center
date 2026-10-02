@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>私訊的三張表：一對對話、訊息流與每人一份收件匣</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>私訊的三張表：一對對話、訊息流與每人一份收件匣</h1>
+<p class="meta">Step 1/5 · 即時私訊</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你應該能說出 conversations、messages、inbox 三張表各自負責什麼，以及為什麼一對一私訊要拆成「唯一的對話配對、單調遞增的訊息流、每人一份的收件匣」。</p>
+
+<h2>前言：一條訊息，為什麼要動到三張表？</h2>
+
+<p>先想像一個很普通的畫面。使用者 A 在對話裡送出「明天見」，使用者 B 的手機幾乎同時跳出通知：訊息列表最上面那一列跳到最前面、預覽文字換成「明天見」、右邊多一個未讀的小藍點。過一會 B 點進對話、滑到底，那個藍點才消失。</p>
+
+<p>這整段體驗，其實是同一條訊息造成的三個不同後果：對話要存在、訊息要留下、而 B 的收件匣要更新。如果你只用一張 <code>messages</code> 表來裝，就會發現每個後果都在逼這張表做它不擅長的事。列出 B 的對話列表時，你得把所有訊息掃過一遍、按對方分組、挑出每組最新的一則；算未讀時，又得在訊息上掛一個「已讀」布林值，然後祈禱每個地方都記得改它。</p>
+
+<p>這一節不寫程式，先建立資料模型。當你知道三張表各自在管什麼，後面四個步驟的每一行程式碼都會有地方可以掛。</p>
+
+<h2>一張表撐不住的三個需求</h2>
+
+<p>把需求攤開來看，會發現它們天生互相拉扯。對話列表要的是「摘要」：最新的時間、預覽、有沒有未讀。歷史訊息要的是「完整內容」，而且只增不改。未讀狀態是「每個人各自一份」的，同一條訊息對 A 是已送出，對 B 是未讀。</p>
+
+<p>這三種東西如果擠在同一張表，每次列表查詢都要為「摘要」付出掃描全部訊息的代價；每次送訊息又會去改動大量列，讓高頻寫入和穩定資料綁在一起。拆表的目的不是為了表多，而是讓每種查詢只碰它真正需要的那一份資料。</p>
+
+<table>
+<thead>
+<tr><th>需求</th><th>只有一張表時</th><th>拆成三張表後</th></tr>
+</thead>
+<tbody>
+<tr><td>列出對話列表</td><td>掃描全部訊息再分組取最新</td><td>直接讀 inbox 摘要，依時間排序</td></tr>
+<tr><td>計算未讀</td><td>訊息上掛布林值，容易漏改</td><td>兩個序號比大小，重算也安全</td></tr>
+<tr><td>載入歷史訊息</td><td>和列表資料混在一起</td><td>只查 messages，依序號分頁</td></tr>
+<tr><td>高頻送訊息</td><td>改動整張大表</td><td>只動 messages 與 inbox 的摘要列</td></tr>
+</tbody>
+</table>
+
+<p>接下來的三節，就分別看這三張表。</p>
+
+<h2>conversations：一對參與者，只能有一條對話</h2>
+
+<p>對話表記錄的是「誰和誰在對話」這個身分，以及一條用來排序訊息的計數器。它的欄位很少：</p>
+
+<table>
+<thead>
+<tr><th>欄位</th><th>型別</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr><td><code>participantA</code></td><td>profiles 的 id</td><td>參與者之一</td></tr>
+<tr><td><code>participantB</code></td><td>profiles 的 id</td><td>另一位參與者</td></tr>
+<tr><td><code>latestSequence</code></td><td>number</td><td>這條對話目前最大的訊息序號</td></tr>
+</tbody>
+</table>
+
+<p>這裡藏了一個很重要的設計：兩個參與者要先用排序固定下來，再寫進 <code>participantA</code> 與 <code>participantB</code>。程式裡就寫成 <code>[me._id, other._id].sort()</code>。原因是資料庫要能保證「A 找 B」和「B 找 A」命中同一條對話，否則同一組人會生出兩條平行對話，訊息從此各走各的。</p>
+
+<pre><code>const [participantA, participantB] = [me._id, other._id].sort();
+const existing = await ctx.db
+  .query('conversations')
+  .withIndex('by_participantA_and_participantB', q =>
+    q.eq('participantA', participantA).eq('participantB', participantB))
+  .unique();
+if (existing) return existing._id;</code></pre>
+
+<p>排序之後再搭配複合索引 <code>by_participantA_and_participantB</code>，查詢就能用 <code>.unique()</code> 直接斷言「這組人最多只會有一條」。這個唯一性不是靠應用層自律，而是靠資料形狀本身擔保。</p>
+
+<h2>messages：只增不改的流水帳</h2>
+
+<p>訊息表是對話的內容本體，而且設計成一條只增不改的流水帳。每送出一則訊息，就新增一列，不回頭修改舊列。</p>
+
+<table>
+<thead>
+<tr><th>欄位</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr><td><code>conversationId</code></td><td>這則訊息屬於哪條對話</td></tr>
+<tr><td><code>senderId</code></td><td>誰送的</td></tr>
+<tr><td><code>text</code></td><td>訊息內容</td></tr>
+<tr><td><code>requestId</code></td><td>客戶端產生的識別碼，用來去重</td></tr>
+<tr><td><code>sequence</code></td><td>這條對話裡的排序號，從 1 開始遞增</td></tr>
+</tbody>
+</table>
+
+<p>為什麼不用時間戳排序，而要另外做一個 <code>sequence</code>？因為兩台裝置的時鐘可能不同步，同一秒也可能送出好幾則訊息。序號由伺服器在寫入時統一配發，就能給出一個沒有歧義的順序：<code>sequence</code> 比較大的一定比較晚。這個序號同時也是後面「未讀」要靠的基準。</p>
+
+<p>訊息表上有兩個關鍵索引。第一個是 <code>by_conversationId_and_sequence</code>，讓歷史訊息可以按對話查、按序號排序與分頁。第二個是 <code>by_senderId_and_requestId</code>，它讓「同一個人、同一個 requestId」只能有一則訊息，這是重試安全的基礎。</p>
+
+<h2>inbox：每個人的那一份摘要</h2>
+
+<p>如果說 conversations 是兩人的共同事實，inbox 就是「每個人各自看到的版本」。一條對話會產生兩列 inbox，一人一列，專門服務對話列表與未讀。</p>
+
+<table>
+<thead>
+<tr><th>欄位</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr><td><code>userId</code></td><td>這列屬於誰</td></tr>
+<tr><td><code>conversationId</code></td><td>指向哪條對話</td></tr>
+<tr><td><code>otherId</code></td><td>對話另一個人，列表要顯示對方名字與頭像</td></tr>
+<tr><td><code>hasMessages</code></td><td>是否已有訊息，用來隱藏剛建立、還空著的對話</td></tr>
+<tr><td><code>unread</code></td><td>這個人有沒有未讀</td></tr>
+<tr><td><code>lastReadSequence</code></td><td>這個人讀到哪個序號</td></tr>
+<tr><td><code>latestIncomingSequence</code></td><td>這個人收到的最新訊息序號</td></tr>
+<tr><td><code>lastMessageAt</code></td><td>最後訊息時間，列表用它由新到舊排</td></tr>
+<tr><td><code>preview</code></td><td>預覽文字，列表不必再去讀 messages</td></tr>
+</tbody>
+</table>
+
+<p>有了這些欄位，對話列表的查詢就變得非常單純：找出我的 inbox 列、只留 <code>hasMessages</code> 為真的、按 <code>lastMessageAt</code> 由新到舊排。想看未讀，就再加上 <code>unread</code> 為真。這些條件各自都有對應的複合索引，所以列表不必掃描任何一則訊息內容。</p>
+
+<p>你可能已經注意到 <code>lastReadSequence</code> 和 <code>latestIncomingSequence</code> 這一對欄位。未讀不是一個要小心維護的布林值，而是「我收到的最新序號」減去「我讀到的序號」：只要前者大於後者，就是有未讀。這個算法即使重複執行、順序顛倒，結果都一樣。第五步會把它的細節講完，現在只要記得這兩個欄位是為它準備的。</p>
+
+<h2>「即時」其實是訂閱查詢，不是一直輪詢</h2>
+
+<p>到目前為止講的都是資料怎麼放，但這個功能叫「即時私訊」，你一定會問：B 的手機是怎麼在 A 送出訊息的瞬間就知道的？</p>
+
+<p>答案不在資料表，而在查詢方式。對話列表、對話資訊與歷史訊息，在這套後端裡都是 <code>query</code>：<code>list</code> 回傳收件匣、<code>get</code> 回傳對話與對方資訊、<code>history</code> 回傳分頁後的訊息。前端用 <code>usePaginatedQuery</code> 訂閱它們。當 <code>messages</code> 或 <code>inbox</code> 有任何寫入，後端會重新計算受影響的查詢，並把新結果推給所有訂閱中的畫面。</p>
+
+<p>換句話說，這裡沒有「每三秒問一次好了沒」的輪詢。畫面之所以會動，是因為它訂閱的資料變了。這也是為什麼拆表不會拖慢即時性：送訊息時只寫 messages 與 inbox，被影響的查詢就那幾個，推送自然又快又精準。若你想複習這套機制，可以回到 Convex 後端模型的 reactive 查詢那一節。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>一對一私訊被拆成三份責任：conversations 保存「這一對人的唯一對話」與序號計數器；messages 是只增不改的訊息流，靠伺服器配發的 sequence 排序；inbox 則是一人一份的摘要，讓對話列表、預覽與未讀都能不碰訊息內容就算出來。資料拆對了，後面建立對話、送出訊息、樂觀更新與未讀回條，才會各自有乾淨的落點。</p>
+</blockquote>
+
+<p>資料表只是舞台，還沒有人上台。下一步要建立第一條對話：用 <code>start</code> 讓同一組人永遠命中同一條對話，並且用一道存取守衛擋住不是參與者的人。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./conversation-start-and-access.html">下一步：開啟對話與存取守衛：start 與 requireConversation →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 conversations 的兩個參與者要先排序再寫入？" data-correct="1" data-explain="排序後 A 找 B 與 B 找 A 會命中同一組值，搭配唯一索引就保證一組人只有一條對話。">
+  <button class="opt">排序能讓資料庫寫入速度變快</button>
+  <button class="opt">確保同一組人只會有一條對話</button>
+  <button class="opt">排序後才能顯示對方的頭像名字</button>
+  <button class="opt">排序是為了讓訊息自動依時間排列</button>
+</div>
+
+<div class="quiz" data-question="messages 表為什麼需要一個 sequence 欄位？" data-correct="3" data-explain="裝置時鐘可能不同步，由伺服器配發的序號才能給出沒有歧義的訊息順序。">
+  <button class="opt">因為資料庫規定每張表都要有數字欄位</button>
+  <button class="opt">因為這樣才能把訊息加密保護起來</button>
+  <button class="opt">因為可以讓訊息的搜尋速度變得更快</button>
+  <button class="opt">因為裝置時鐘不同步，需要可信的順序</button>
+</div>
+
+<div class="quiz" data-question="同一條對話會有幾列 inbox 資料？" data-correct="0" data-explain="inbox 是每人一份的摘要，一條兩人對話會有兩列，各自記錄自己的未讀與已讀位置。">
+  <button class="opt">兩列，一人一列各自的未讀狀態</button>
+  <button class="opt">一列，兩個人共用同一份狀態</button>
+  <button class="opt">零列，inbox 是用查詢即時算出來的</button>
+  <button class="opt">三列，再多一列記錄系統的通知</button>
+</div>
+
+<div class="quiz" data-question="為什麼對話列表不必去讀 messages 的內容？" data-correct="2" data-explain="inbox 已存好預覽、最後時間與未讀，列表只讀這份摘要就夠，不必掃描訊息。">
+  <button class="opt">因為 message 內容被加密後無法讀取</button>
+  <button class="opt">因為列表只需要對話的參與者名稱</button>
+  <button class="opt">因為 inbox 已存好預覽時間與未讀</button>
+  <button class="opt">因為訊息會在讀取後立刻被刪除掉</button>
+</div>
+
+<div class="quiz" data-question="by_senderId_and_requestId 這個索引是為了支持什麼？" data-correct="1" data-explain="它讓同一個人用同一個 requestId 重試時只會有一則訊息，是重試安全的基礎。">
+  <button class="opt">讓歷史訊息可以按對話分頁載入</button>
+  <button class="opt">讓同一次送出的重試不會產生重複</button>
+  <button class="opt">讓對話列表可以依最後時間排序</button>
+  <button class="opt">讓未讀可以過濾出還沒有讀的對話</button>
+</div>
+
+<div class="quiz" data-question="這個功能的「即時」主要靠什麼達成？" data-correct="0" data-explain="前端訂閱 query，資料一變後端就推送新結果，不需要前端固定間隔輪詢。">
+  <button class="opt">前端訂閱查詢，資料變動就收到推送</button>
+  <button class="opt">前端每三秒重新抓一次整份對話列表</button>
+  <button class="opt">使用者手動下拉重新整理才會更新</button>
+  <button class="opt">伺服器用電子郵件通知使用者有新訊</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 即時私訊 · Step 1/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
