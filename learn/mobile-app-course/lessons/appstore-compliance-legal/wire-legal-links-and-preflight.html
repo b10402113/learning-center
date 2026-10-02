@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把法律頁接進 app：開啟方式與送審前檢查</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>把法律頁接進 app：開啟方式與送審前檢查</h1>
+<p class="meta">Step 5/5 · App Store 合規與法律頁</p>
+
+<h2>先做一個關鍵決定：法律頁要放哪裡、怎麼開</h2>
+
+<p>前面幾節已經完成了幾個重要產出：法律頁有了 live 網址，app 裡也有能真的刪除帳號的流程。現在還差最後一哩路：讓使用者和審核人員都能找到這些內容。</p>
+
+<p>設定頁上的「隱私政策」和「服務條款」如果只是按鈕，卻沒有接到任何頁面，就像商店掛了招牌，入口卻被牆封住。這一節要處理的，正是這條連線。</p>
+
+<p>這裡有兩個選擇需要分開判斷：</p>
+
+<ul>
+<li>法律內容要<strong>打包進 app</strong>，還是<strong>留在 server 上</strong>？</li>
+<li>使用者點擊後，要用<strong>外部 Safari</strong> 開啟，還是用<strong>app 內的瀏覽器</strong>開啟？</li>
+</ul>
+
+<p>答案會同時影響 App Store 審核，以及使用者讀完頁面後能不能順利回到 app。</p>
+
+<figure class="lesson-figure"><img src="./wire-legal-links-and-preflight-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>選擇一：法律內容放在哪裡</h2>
+
+<p>先決定法律頁的「家」。常見做法有兩種：把 HTML 當成靜態資源，打包進 app 的 binary；或把內容放在 server 上，app 只保留一個網址。</p>
+
+<table>
+<thead>
+<tr><th>做法</th><th>優點</th><th>缺點</th></tr>
+</thead>
+<tbody>
+<tr><td>打包進 app（bundled）</td><td>離線可讀，不受網路影響</td><td>內容會過時；改一次政策就要重新送審</td></tr>
+<tr><td>放 server（live URL）</td><td>改一次全部生效；符合公開存取要求</td><td>離線時打不開</td></tr>
+</tbody>
+</table>
+
+<p>如果你的 app 要送上 App Store，這個選擇其實有一個明確底線：<strong>server-hosted 的 live URL 是必須的</strong>。因為 App Store Connect 要填的欄位本質上就是網址，而且該網址必須公開可存取。</p>
+
+<p>因此，打包進 app 可以作為額外的離線版本，卻不能取代 live URL。法律內容可能會修改，例如新增收集的資料類型或更換第三方服務。放在 server 上，改一次就能對所有版本生效，不必為了一句條文重新送審。</p>
+
+<h2>用這個問題判斷：審核人員不登入，也找得到嗎？</h2>
+
+<p>法律頁的入口必須在<strong>不用登入</strong>的情況下就能開啟。這是一個很實際的判準：如果審核人員沒有帳號，是否仍然能從 app 找到隱私政策與服務條款？</p>
+
+<p>有些 app 把隱私政策放在登入後的設定頁。這樣一來，沒有帳號的人根本點不到，頁面就算真的存在，也可能因為難以存取而被退回。</p>
+
+<p>所以，法律頁的入口應該放在登入畫面，或放在未登入也能到達的地方。不要讓登入成為閱讀法律內容的門檻。</p>
+
+<h2>選擇二：法律頁要怎麼開啟</h2>
+
+<p>內容放在 server 上之後，還要決定 app 如何開啟這個網址。最直接的做法是交給系統，用外部 Safari 開啟；另一種做法是在 app 內顯示一個從底部升起的瀏覽器面板，也就是 sheet。</p>
+
+<table>
+<thead>
+<tr><th>方式</th><th>使用者體驗</th><th>適用時機</th></tr>
+</thead>
+<tbody>
+<tr><td>外部瀏覽器（Safari）</td><td>離開 app，回來要自己切回</td><td>需要下載、登入或複雜互動的網頁</td></tr>
+<tr><td>App 內 sheet 瀏覽器</td><td>停在 app 內，讀完關掉就回來</td><td>法律頁、說明頁這類純閱讀內容</td></tr>
+<tr><td>自訂 WebView</td><td>完全自行控制，但要多寫維護</td><td>需要高度客製的網頁體驗</td></tr>
+</tbody>
+</table>
+
+<p>判斷方式可以很簡單：這個頁面是要讓使用者完成複雜任務，還是只需要「點開、讀一下、關掉」？</p>
+
+<p>隱私政策和服務條款屬於後者，因此 app 內的 sheet 通常更順。使用者不必被丟到 Safari，讀完也不用另外找路回到 app。</p>
+
+<figure class="lesson-figure"><img src="./wire-legal-links-and-preflight-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>在 Expo 裡，可以使用 <code>expo-web-browser</code> 的 <code>openBrowserAsync</code>，並指定 <code>PAGE_SHEET</code>，讓頁面從底部升起：</p>
+
+<pre><code>import * as WebBrowser from 'expo-web-browser';
+
+await WebBrowser.openBrowserAsync('https://myapp-legal.pages.dev/privacy', {
+  presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
+  dismissButtonStyle: 'done',
+  controlsColor: '#007AFF',
+});</code></pre>
+
+<h2>反例：哪些情況會讓規則翻轉</h2>
+
+<p>「法律頁放 server、用 app 內 sheet」是適合多數情況的選擇，但不是不必思考的死規則。</p>
+
+<p>第一種反例是 app 的核心場景<strong>完全離線</strong>，例如登山或經常在飛航模式下使用。使用者可能真的會在沒有網路時想查看政策。這時可以把一份靜態版本打包進 app，作為離線備援。</p>
+
+<p>不過，這份離線版本仍然不能取代 App Store Connect 所需的 live URL；兩者可以同時存在。</p>
+
+<p>第二種反例是網址開啟失敗。沒有網路或網址暫時掛掉時，不要讓使用者卡在持續轉圈的畫面。用 <code>try/catch</code> 捕捉失敗，跳出提示，並顯示網址，讓使用者可以自行複製到瀏覽器：</p>
+
+<pre><code>try {
+  await WebBrowser.openBrowserAsync(url, { presentationStyle: 'pageSheet' });
+} catch {
+  Alert.alert('無法開啟頁面', '請稍後再試，或手動開啟這個網址：\n' + url);
+}</code></pre>
+
+<p>第三種反例是為了「統一體驗」，把法律頁塞進需要登入的流程。這會直接提高存取門檻，因此仍然應該重新檢查：使用者和審核人員在未登入時，是否能找到並開啟這些頁面？</p>
+
+<h2>送審前檢查表</h2>
+
+<p>送出審核前，把下面每一列都實際走過一次。只要有一項不能打勾，就先不要按 Submit。</p>
+
+<table>
+<thead>
+<tr><th>項目</th><th>檢查重點</th></tr>
+</thead>
+<tbody>
+<tr><td>隱私政策</td><td>live URL、沒有 placeholder、免登入可開啟</td></tr>
+<tr><td>服務條款</td><td>live URL、可從 app 與 landing page 點到</td></tr>
+<tr><td>Support URL</td><td>可存取、有真的客服 email</td></tr>
+<tr><td>刪帳號</td><td>設定頁可達、有確認框、能真的刪三層資料</td></tr>
+<tr><td>Sign in with Apple</td><td>有 Google／其他社群登入時，選單裡也有它</td></tr>
+<tr><td>App Store Connect 欄位</td><td>Privacy／Support URL 填入正確網址</td></tr>
+<tr><td>App Privacy 問卷</td><td>申報的資料類型與隱私政策一致</td></tr>
+<tr><td>連結開啟</td><td>用 in-app sheet、失敗有 fallback</td></tr>
+</tbody>
+</table>
+
+<p>這張表也定義了「完成」的樣子：不是功能在本機會動就算結束，而是每一個合規入口都能被找到、被開啟，申報內容也彼此一致。</p>
+
+<p>可以把最後的決策規則記成一句話：<strong>法律內容放 server、用 live URL；app 內優先用 in-app sheet 開啟；刪帳號與 Apple 登入依條件補齊，並在失敗時提供 fallback。</strong></p>
+
+<figure class="lesson-figure"><img src="./wire-legal-links-and-preflight-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+法律頁的內容要放在 server 上、以公開的 live URL 提供，因為 App Store Connect 的欄位本身就需要公開存取，而且放 server 才能改一次全版本生效；打包進 app 只能當離線備援。開啟方式優先選 app 內的 sheet 瀏覽器（expo-web-browser 的 PAGE_SHEET），讓使用者讀完就回到 app，並用 try/catch 在失敗時顯示網址當 fallback。法律頁必須免登入可達。最後用送審前檢查表逐項核對：隱私政策與條款、support URL、能真的刪三層資料的刪帳號、條件觸發的 Apple 登入、App Store Connect 欄位與 App Privacy 問卷的一致性。
+</blockquote>
+
+<p>走到這裡，這個節點的五步就完成了：你有了合規的心智模型、生成好的法律頁、部署好的 live 網址、能真的刪資料的刪帳號流程，以及一張送審前檢查表。</p>
+
+<p>換成你自己的 app 時，把這套流程重新跑一次即可。之後在整個課程收尾的節點裡，這份清單會和其他階段的產出一起收斂成一份可重複使用的上架 playbook。</p>
+
+<div class="lesson-nav">
+  <div><a href="./in-app-account-deletion.html">← 上一步：實作刪帳號：確認、串接 Clerk 與 DB、cascade 清理</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="法律頁的內容主要應該放在哪裡，才符合審核要求？" data-correct="2" data-explain="App Store Connect 欄位需要公開存取的網址，放 server 才能改一次全版本生效。">
+  <button class="opt">打包進 app 的 binary，確保永遠可以離線閱讀</button>
+  <button class="opt">只放在 App Store 的商品描述頁面裡面</button>
+  <button class="opt">放在 server 上，以公開的 live URL 提供</button>
+  <button class="opt">存在使用者的手機本機資料庫私人空間</button>
+</div>
+<div class="quiz" data-question="為什麼打包進 app 的法律頁不能取代 App Store Connect 的網址欄位？" data-correct="0" data-explain="那個欄位要的是公開可存取的網址，審核人員與沒安裝 app 的人都要能點開。">
+  <button class="opt">欄位要公開網址，未安裝 app 的人也要能開</button>
+  <button class="opt">打包的頁面無法在手機上正確顯示排版</button>
+  <button class="opt">打包會讓 app 的檔案大小超過上限被拒</button>
+  <button class="opt">打包的頁面無法使用 app 現有的樣式主題</button>
+</div>
+<div class="quiz" data-question="對隱私政策這種純閱讀頁面，為什麼偏好用 app 內 sheet 開啟？" data-correct="3" data-explain="使用者在 app 內讀完關掉就回來，不會被丟到外部瀏覽器還要自己切回。">
+  <button class="opt">因為外部瀏覽器無法正確顯示 HTTPS 的網頁</button>
+  <button class="opt">因為 Apple 明文禁止用外部瀏覽器開法律頁</button>
+  <button class="opt">因為 app 內 sheet 的載入速度一定會比較快</button>
+  <button class="opt">讀完關掉就回到 app，不需要自己切換回來</button>
+</div>
+<div class="quiz" data-question="如果法律頁只在登入後才看得到，可能造成什麼問題？" data-correct="1" data-explain="審核人員若沒有帳號就點不到，法律頁應該免登入即可存取。">
+  <button class="opt">會讓頁面的載入速度變慢影響審核評分</button>
+  <button class="opt">審核人員沒帳號就點不到，可能因此被退</button>
+  <button class="opt">會讓刪帳號的功能連帶無法正常執行</button>
+  <button class="opt">會導致 App Store Connect 無法儲存網址</button>
+</div>
+<div class="quiz" data-question="開啟 app 內法律連結失敗時，正確的處理方式是什麼？" data-correct="2" data-explain="用 try/catch 接住錯誤，顯示提示與網址，讓使用者仍能自己開啟。">
+  <button class="opt">直接把使用者登出，回到登入畫面重試一次</button>
+  <button class="opt">自動改用外部瀏覽器並忽略原本的錯誤</button>
+  <button class="opt">用 try/catch 顯示提示與網址當作 fallback</button>
+  <button class="opt">把該連結隱藏起來，避免使用者看到錯誤</button>
+</div>
+<div class="quiz" data-question="下列哪一項不是這份送審前檢查表的必要項目？" data-correct="3" data-explain="精美的行銷插圖不影響合規；必要的是能存取的 live 法律頁、支援網址、刪帳號與條件觸發的 Apple 登入。">
+  <button class="opt">隱私政策與服務條款都有可存取的 live 網址</button>
+  <button class="opt">設定頁有能真的刪掉三層資料的刪帳號功能</button>
+  <button class="opt">有提供其他社群登入時也提供 Apple 登入</button>
+  <button class="opt">landing page 上要有精美的手機情境插圖</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · App Store 合規與法律頁 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

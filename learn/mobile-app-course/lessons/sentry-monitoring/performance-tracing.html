@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 tracing 找出慢在哪一段</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 tracing 找出慢在哪一段</h1>
+<p class="meta">Step 5/6 · Sentry 錯誤監控</p>
+
+<h2>使用者說「好慢」，但慢在哪裡？</h2>
+
+<p>想像你做完拍照分析餐點的功能。使用者按下按鈕後，畫面轉了大約十秒才出現結果。十秒很久，你決定優化，但打開程式碼一看，這條流程其實包含好幾件事：先壓縮照片、上傳到圖床、呼叫 AI 模型分析，最後再把結果寫進資料庫。</p>
+
+<p>問題是，你不知道這十秒究竟耗在哪裡。可能是模型本來就慢，也可能是上傳塞車，甚至可能是資料庫寫入卡住。若只憑感覺猜，很可能花了一整天改錯地方，真正的瓶頸卻原封不動。</p>
+
+<p>這正是 tracing（追蹤）要解決的問題。它會把一次操作沿著時間拆成一連串步驟，分別記下每一段花了多久。於是「使用者說好慢」不再只是模糊的抱怨，而能變成一個可以定位、可以處理的問題。</p>
+
+<figure class="lesson-figure"><img src="./performance-tracing-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>學習目標</h2>
+
+<p>完成這一節後，你應該能分辨 tracing 與 error reporting 的差別，理解 span 與 transaction 的階層關係，也知道在 Expo app 裡開啟 tracing 所需的取樣率與 wrapper 設定。</p>
+
+<h2>Error reporting 回答「壞了沒」，tracing 回答「花多久」</h2>
+
+<p>這兩種觀測很容易混在一起，但它們關心的方向不同。</p>
+
+<p>Error reporting（錯誤監控）想知道的是「有沒有出錯、錯在哪裡」。它通常在異常發生時被觸發。相對地，tracing 想知道的是「一次操作由哪些步驟組成、每個步驟花了多久」。它可以記錄每一次執行，包括那些順利完成、完全沒有報錯的操作。</p>
+
+<p>可以把 error reporting 想成大樓的警報器：只有起火時才會響。Tracing 則像每部電梯裡的計時器，平常就默默記下從一樓到十樓需要幾秒，讓你察覺某部電梯是不是最近越來越慢。</p>
+
+<p>所以，error reporting 告訴你「哪裡壞了」，tracing 則告訴你「哪裡拖慢了整趟流程」。兩者看的不是同一件事，也不能互相取代。</p>
+
+<h2>Span 與 transaction：把一次操作切成階層</h2>
+
+<p>Tracing 的資料主要由 <strong>transaction</strong>（交易）與 <strong>span</strong>（區段）組成。</p>
+
+<p>一個 transaction 代表一整趟操作，例如「分析這張餐點照片」。這趟操作底下會有好幾個 span，每個 span 都代表一段有開始時間與結束時間的工作，例如「壓縮圖片」、「上傳到 ImageKit」或「呼叫 vision 模型」。</p>
+
+<p>Span 還可以彼此嵌套，形成一棵有階層的樹。你不只看得到整趟操作花了多久，也能看出每個子工作被包在哪一層，以及是哪一段佔掉最多時間。</p>
+
+<pre><code>await Sentry.startSpan({ name: 'Analyze meal photo', op: 'meal.analyze' }, async () => {
+  await Sentry.startSpan({ name: 'Compress image', op: 'image.compress' }, () => sleep(180));
+  await Sentry.startSpan({ name: 'Upload to ImageKit', op: 'http.client' }, () => sleep(520));
+  await Sentry.startSpan({ name: 'Vision model', op: 'gen_ai.chat' }, async (span) => {
+    span.setAttribute('model', 'gpt-4o-mini');
+    await sleep(1400);
+  });
+});</code></pre>
+
+<p>在這段示意程式碼裡，最外層是一個名為「Analyze meal photo」的 transaction，裡面包含三個子 span。實際執行後，壓縮花約 180 毫秒、上傳花 520 毫秒、模型呼叫花 1400 毫秒。</p>
+
+<p>答案就很清楚了：這趟流程裡，最慢的是模型呼叫。其他步驟相較之下只是零頭。如果沒有 tracing，你可能會盯著壓縮函式修改半天，但它根本不是瓶頸。</p>
+
+<figure class="lesson-figure"><img src="./performance-tracing-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>每個 span 上的 <code>op</code>（operation，操作類型）與其他屬性，例如 <code>model</code>，也能幫助你之後依類型彙總資料。你可以進一步查看所有 <code>gen_ai</code> 操作的平均耗時，找出某一類工作是否普遍偏慢。</p>
+
+<h2>在 Expo app 裡開啟 tracing</h2>
+
+<p>在 Expo 裡開啟 tracing，不需要重寫整個 app，主要會調整初始化設定。這裡有兩個關鍵：</p>
+
+<ul>
+<li><code>tracesSampleRate</code>：決定有多少比例的 trace 會真的送出。</li>
+<li><code>Sentry.wrap</code>：把 app 包起來，讓 SDK 能在應用程式中掛上追蹤。</li>
+</ul>
+
+<pre><code>Sentry.init({
+  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+  // 小規模時全收方便觀察；量變大、額度吃緊時調低，例如 0.1
+  tracesSampleRate: 1.0,
+  integrations: [
+    Sentry.reactNavigationIntegration({
+      // 把每次換頁變成一個 transaction
+      enableTimeToInitialDisplay: true,
+    }),
+  ],
+});
+
+export default Sentry.wrap(RootLayout);</code></pre>
+
+<p>Expo Router 底層使用 React Navigation，因此換頁的效能追蹤可以透過 React Navigation 的整合來完成。每次畫面切換都能自動記成一條 transaction，讓你觀察「使用者從首頁點進掃描頁需要多久」這類實際可感知的延遲。</p>
+
+<h2>取樣率是成本槓桿，不是越高越好</h2>
+
+<p><code>tracesSampleRate</code> 設成 1.0，代表每一條 trace 都送出去。這樣資料最完整，適合開發或早期階段，方便你熟悉資料長什麼樣子、學會判讀效能問題。</p>
+
+<p>但當使用者變多，每個人多滑幾頁，就可能累積成千上萬條 trace。資料量與 Sentry 額度都會跟著增加。這時可以把一般 trace 的比例降到 0.1 左右，只抽樣一部分執行紀錄。雖然不再收集每一筆資料，仍能透過統計趨勢看出問題。</p>
+
+<p>這和前一節提到的 log 取樣、replay 取樣，是同一套思路：用比例控制資料量與成本。取樣率不是「越高越專業」，而是要根據你目前想觀察的問題，以及能負擔的成本來調整。</p>
+
+<blockquote class="bad-code">
+注意：有些效能指標（例如 native frame timing、畫面初始顯示時間）需要原生層支援，在 Expo Go 這個沙盒裡拿不到。要完整量測，得用 dev build。這也是「真功能要用 dev build」在觀測上的一個實際例子。
+</blockquote>
+
+<h2>Dashboard 上你看到什麼</h2>
+
+<p>資料進到 Sentry 之後，Performance 頁面會提供幾種觀察角度。</p>
+
+<p>你可以先看整體吞吐量（throughput），也就是單位時間內處理了多少操作；再看延遲分布（latency），特別是 p95，也就是最慢的那 5% 操作有多慢。你也能觀察錯誤如何影響這些操作。</p>
+
+<figure class="lesson-figure"><img src="./performance-tracing-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>點進單一條 trace 後，畫面會呈現前面那棵 span 樹，以及每個區段各自花了多久。這時，「使用者說好慢」就能被翻譯成具體資訊：是哪一種操作、哪一個步驟、慢了多少。</p>
+
+<h2>三種觀測湊成一套</h2>
+
+<p>到這裡，你的 app 有了三個互補的觀測角度：</p>
+
+<table>
+<thead>
+<tr>
+<th>觀測方式</th>
+<th>它回答的問題</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Error reporting</td>
+<td>什麼壞了？錯誤在哪裡？</td>
+</tr>
+<tr>
+<td>Structured logs</td>
+<td>錯誤發生前後，發生了什麼事？</td>
+</tr>
+<tr>
+<td>Tracing</td>
+<td>每一段操作花了多久？慢在哪裡？</td>
+</tr>
+</tbody>
+</table>
+
+<p>它們不是三個互不相干的工具，而是同一個問題的不同切面。使用者可能只會說「它壞了」或「它好慢」，但你可以透過 error、logs 與 tracing，逐步把這句話拆成能夠動手處理的細節。</p>
+
+<h2>把觀念掛回你的 app</h2>
+
+<p>當你要處理一個效能問題時，可以先問自己：我現在需要知道的是「有沒有壞」，還是「哪一段花太久」？前者靠 error reporting，後者靠 tracing；如果還需要理解錯誤前後的上下文，再把 logs 接上。</p>
+
+<p>在這個架構裡，transaction 是整趟使用者操作，span 是其中一段具體工作。它們一起把原本模糊的等待時間，變成一棵可以閱讀的時間結構。取樣率則像水龍頭，決定你要收集多少資料，也決定觀測成本。</p>
+
+<blockquote>
+Error reporting 只在出錯時出聲，tracing 則在每次正常執行時記錄效能，回答「慢在哪一段」。一個 transaction 是一整趟操作，裡面由多個 span 組成，span 可嵌套成一棵樹，讓你看見每一段耗時；範例中「分析餐點」最慢的是 1400 毫秒的模型呼叫。在 Expo 裡開啟 tracing 主要靠 <code>tracesSampleRate</code>、React Navigation 整合與 <code>Sentry.wrap</code>。取樣率是成本槓桿，量大有成本後要調低。部分指標需要 dev build 才能完整量測。error、logs、tracing 三者互補，湊成一套完整的觀測。
+</blockquote>
+
+<p>到這裡，問題仍然需要你主動查看資料才能發現。如果使用者遇到問題時，能直接從 app 內送出自己的感受與描述，資訊就會更完整。下一節會接上 Sentry 的 feedback widget，把使用者的聲音也接進同一套系統。</p>
+
+<div class="lesson-nav">
+  <div><a href="./structured-logs-vs-console.html">← 上一步：Sentry logs 與 console.log：什麼時候用哪個</a></div>
+  <div><a href="./user-feedback-widget.html">下一步：把使用者回饋接進 Sentry →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="tracing 與 error reporting 最根本的差別是什麼？" data-correct="2" data-explain="error reporting 只在異常時觸發；tracing 在每次執行時都記錄效能與流程。">
+  <button class="opt">tracing 只能用在網頁，不能用在 app</button>
+  <button class="opt">error reporting 需要付費，tracing 免費</button>
+  <button class="opt">error 只在出錯時出聲，tracing 記錄每次執行</button>
+  <button class="opt">兩者其實是同一件事的不同名稱</button>
+</div>
+<div class="quiz" data-question="在 tracing 的詞彙裡，一個 transaction 代表什麼？" data-correct="0" data-explain="transaction 是一整趟操作，例如「分析這張餐點照片」，底下由多個 span 組成。">
+  <button class="opt">一整趟完整的操作，例如分析一張照片</button>
+  <button class="opt">單一函式裡的一行程式碼執行時間</button>
+  <button class="opt">一則被 Sentry 捕捉到的錯誤事件</button>
+  <button class="opt">使用者登入後建立的一個 session</button>
+</div>
+<div class="quiz" data-question="範例中「分析餐點」最慢的是哪一個 span，說明了什麼？" data-correct="3" data-explain="vision 模型花了約 1400 毫秒最久；tracing 讓瓶頸一眼可見，不必憑感覺猜。">
+  <button class="opt">壓縮圖片，說明圖片格式是最大問題</button>
+  <button class="opt">上傳圖床，說明網路速度是瓶頸</button>
+  <button class="opt">寫入資料庫，說明索引沒有建好</button>
+  <button class="opt">vision 模型，說明瓶頸一眼可見</button>
+</div>
+<div class="quiz" data-question="tracesSampleRate 調低的目的是什麼？" data-correct="1" data-explain="它決定多少比例的 trace 被送出，調低可控制額度成本與資料量，靠抽樣仍看得出趨勢。">
+  <button class="opt">讓 app 在低階手機上跑得更快</button>
+  <button class="opt">控制 trace 資料量與額度成本</button>
+  <button class="opt">讓錯誤的堆疊顯示得更清楚</button>
+  <button class="opt">把多條 trace 合併成一條減少雜訊</button>
+</div>
+<div class="quiz" data-question="為什麼部分效能指標在 Expo Go 裡量不到？" data-correct="2" data-explain="native frame timing、畫面初始顯示等指標需要原生層支援，Expo Go 沙盒拿不到，需用 dev build。">
+  <button class="opt">因為 Expo Go 不支援任何資料庫連線</button>
+  <button class="opt">因為 Expo Go 的網路速度被系統限制</button>
+  <button class="opt">因為部分指標需要原生層，dev build 才有</button>
+  <button class="opt">因為 Expo Go 只能執行 JavaScript 檔案</button>
+</div>
+<div class="quiz" data-question="在 Performance 頁面上，p95 這個數字代表什麼？" data-correct="0" data-explain="p95 是第 95 百分位，代表最慢的那 5% 操作有多慢，比平均值更能反映真實體感。">
+  <button class="opt">最慢的那 5% 操作有多慢</button>
+  <button class="opt">所有操作的平均花費時間</button>
+  <button class="opt">最快的那 5% 操作有多快</button>
+  <button class="opt">95% 的操作完全沒有錯誤</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Sentry 錯誤監控 · Step 5/6</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

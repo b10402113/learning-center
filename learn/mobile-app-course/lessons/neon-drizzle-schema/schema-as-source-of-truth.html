@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Schema 是共同真相：為什麼資料模型要用程式碼定義</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Schema：讓 app 與背景 task 共用同一份真相</h1>
+<p class="meta">Step 1/5 · Neon + Drizzle 資料建模</p>
+
+<h2>學習目標</h2>
+<p>看完這一節，你應該能說明：為什麼資料模型要用 TypeScript 定義成 schema，以及為什麼這份 schema 會成為 mobile app 與背景 task 共用的單一真相。</p>
+
+<h2>先問一個問題：資料庫裡到底該有什麼？</h2>
+
+<p>接著前面的進度來看。你已經把 Clerk 的 webhook 接起來，也知道使用者註冊時，會有一筆資料同步進 Postgres。可是，先別急著往下寫功能，想想一個很基本的問題：這筆資料的形狀，究竟是誰規定的？</p>
+
+<p>「使用者」這張表有哪些欄位、每個欄位是什麼型別、哪些欄位必填，都需要有明確答案。否則幾天後就可能出現這種狀況：mobile app 以為身高放在 <code>height</code>，背景 task 卻寫進 <code>height_cm</code>；或者 app 讀取一個根本不存在的欄位，畫面上只剩莫名其妙的空值。</p>
+
+<p>更麻煩的是，這類錯誤通常不會在你寫程式時立刻亮紅燈，而是等到真的有人使用，才在某個流程裡突然爆開。</p>
+
+<p>這一節要處理的，就是把「資料長什麼樣子」收斂到唯一一個地方。這個地方叫做 <strong>schema</strong>，而在這個專案裡，它是用 TypeScript 寫成的。</p>
+
+<figure class="lesson-figure"><img src="./schema-as-source-of-truth-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>兩條線：身分與應用資料</h2>
+
+<p>要理解 schema 的角色，先回頭看這個專案的分工。Claude 課程裡把後端拆成兩條線：<strong>Clerk 負責身分（identity），Neon 負責應用資料（app data）</strong>。</p>
+
+<p>Clerk 知道你是誰：你的登入方式、email，以及 session。但它不該知道你昨天吃了幾公克蛋白質。真正屬於這個 app 的商業資料，例如體重、目標熱量，以及一餐一餐的紀錄，都應該住在 Neon 的 Postgres 裡。</p>
+
+<p><strong>Neon</strong> 是一套託管的雲端 Postgres。你不需要自己準備機器、安裝 Postgres 或處理備份，只要在網站上建立專案，它就會提供一串連線字串。這串字串通常放進環境變數 <code>DATABASE_URL</code>，程式再透過它連上資料庫。</p>
+
+<p>課程選 Neon 的理由很實際：它有免費方案、設定快速，也能和 serverless 執行環境搭配使用。</p>
+
+<h2>如果不用 schema，會發生什麼事？</h2>
+
+<p>最直覺的做法，是打開資料庫管理介面，用滑鼠一張一張建立資料表；欄位名稱和型別都在介面上點選。另一種做法，則是直接寫 SQL 建表。</p>
+
+<p>這兩種方式在單人、單一程式的專案裡通常沒問題。但這個專案同時有兩個地方會使用同一批資料：</p>
+
+<ul>
+<li>手機 app 背後的 API route</li>
+<li>在 trigger.dev 上執行的背景 task</li>
+</ul>
+
+<p>它們是兩個獨立的程式，卻要讀寫同一組資料表。只要表的定義沒有放在一個雙方都看得到的地方，兩邊就很容易各自記住一份「我以為的欄位」，久而久之便開始對不上。</p>
+
+<p>這就像兩個部門靠口頭約定合作。今天你說欄位叫 A，明天他記成 B，短期內可能沒人發現，因為大家各做各的；直到兩邊真正要對接，才發現根本接不起來。</p>
+
+<p>schema 的作用，就是把這份口頭約定變成正式合約：它是一張寫下來的資料設計圖，app 和背景 task 都必須照著同一份內容走。</p>
+
+<h2>用程式碼描述 schema：Drizzle 的角色</h2>
+
+<p><strong>Drizzle</strong> 是一套 TypeScript 的 ORM（Object-Relational Mapping，把資料庫資料表對應成程式物件的工具）。它最關鍵的主張是 <strong>schema-as-code</strong>：你不需要只依賴資料庫管理介面，也不必直接手寫建表 SQL，而是用 TypeScript 描述資料表。</p>
+
+<pre><code>import { pgTable, uuid, text, timestamp } from "drizzle-orm/pg-core";
+
+export const users = pgTable("users", {
+  id: uuid().primaryKey().defaultRandom(),
+  clerkUserId: text().notNull().unique(),
+  createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+});</code></pre>
+
+<p>這段程式碼只描述一件事：有一張叫做 <code>users</code> 的表，裡面有三個欄位。</p>
+
+<p>但它的價值不只在於「把欄位寫出來」。Drizzle 可以根據這份描述產生建表 SQL，也可以從中推導出 TypeScript 型別。如此一來，程式在開發階段就能知道每一列資料長什麼樣子，而不是等到資料真的進了資料庫，才靠運氣找錯。</p>
+
+<figure class="lesson-figure"><img src="./schema-as-source-of-truth-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>「共同真相」到底是什麼？</h2>
+
+<p>把剛才的例子放回這個專案，你會看到同一個檔案 <code>src/db/schema.ts</code> 被兩個地方 import。</p>
+
+<p>第一個地方是 mobile app 的 API route。當 app 要列出某一天的餐點時，schema 提供的型別會告訴它：一筆 meal 有 <code>calories</code>、有 <code>status</code>，也有 <code>loggedAt</code>。</p>
+
+<p>如果有人把欄位改了名字，程式碼卻沒有一起更新，TypeScript 就能在編譯時先報錯。問題會在開發階段被看見，而不是等到真機執行後，才變成使用者眼中的空白畫面。</p>
+
+<p>第二個地方是在 trigger.dev 上執行的背景 task。這些 task 負責比較耗時、也比較容易失敗的工作，例如呼叫 OpenAI 分析食物照片。它們同樣需要知道 meal 的欄位，才能把分析結果寫回資料庫。</p>
+
+<p>背景 task 的打包方式和 mobile app 不一樣，因此它使用相對路徑 import；但它讀取的仍然是同一個 <code>schema.ts</code>。</p>
+
+<p>所以，「schema 是共同真相」不是說有一份「app 的資料庫」，再加上一份「task 的資料庫」。真正的意思是：<strong>一份定義，兩個消費者</strong>。只要 schema 改了，兩邊都會看到同一個變更。</p>
+
+<figure class="lesson-figure"><img src="./schema-as-source-of-truth-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>兩個容易混淆的分工</h2>
+
+<p>schema 和 migration 常常一起出現，但它們負責的事情不同。</p>
+
+<table>
+<thead>
+<tr><th>東西</th><th>負責什麼</th><th>什麼時候用到</th></tr>
+</thead>
+<tbody>
+<tr><td>schema.ts</td><td>描述表與欄位的形狀</td><td>app 與 task 執行時，以及產生 migration 時</td></tr>
+<tr><td>migration 檔</td><td>把 schema 的變更實際套用到資料庫</td><td>你執行 migrate 指令時（下一節細講）</td></tr>
+</tbody>
+</table>
+
+<p>改了 <code>schema.ts</code>，資料庫不會自動跟著改。這就像你修改了房子的設計圖，房子不會在下一秒自己長出一面牆。</p>
+
+<p>把設計圖轉成施工內容，再實際套用到資料庫，這是 migration 的工作。這一節先釐清「為什麼要有這張設計圖，以及誰要看它」；至於如何施工，留到後面再處理。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+Clerk 管身分，Neon 管應用資料，兩者分開。應用資料的形狀由 TypeScript 寫成的 schema 定義，而不是散落在資料庫介面或各個程式裡。schema-as-code 讓同一份定義同時被 app 與背景 task import，改一次兩邊一起更新，型別錯誤也能在編譯期現形。schema 決定的是「資料長什麼樣子」；真正讓資料庫改變的則是 migration，這兩件事要分開看。
+</blockquote>
+
+<p>現在你可以把 schema 放在這個位置理解：它是 app 與背景 task 共同依循的資料契約，負責說明資料應該長什麼樣子。</p>
+
+<p>下一個問題自然會出現：在 Cal AI 這個 app 裡，這份 schema 到底長什麼樣子？為什麼使用者表要放這些欄位，餐點表又要放那些欄位？下一節會逐欄拆解 <code>users</code> 與 <code>meals</code> 兩張表，看看每個設計決定背後解決了什麼問題。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./model-users-and-meals.html">下一步：建 users 與 meals：欄位、關聯、索引與時間的設計 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="這個專案裡，身分（identity）與應用資料（app data）分別由誰負責？" data-correct="1" data-explain="Clerk 管身分，Neon 的 Postgres 管應用資料，這個分工讓兩件事不互相糾纏。">
+  <button class="opt">Neon 管身分，Clerk 管應用資料</button>
+  <button class="opt">Clerk 管身分，Neon 管應用資料</button>
+  <button class="opt">Clerk 同時負責身分與所有資料</button>
+  <button class="opt">Neon 同時負責身分與所有資料</button>
+</div>
+<div class="quiz" data-question="為什麼不用資料庫管理介面直接點出表，而要寫 schema？" data-correct="2" data-explain="app 與背景 task 是兩個獨立程式，需要一份共同且可推導型別的定義才不會各記一份。">
+  <button class="opt">因為資料庫介面無法建立任何索引</button>
+  <button class="opt">因為資料庫介面不能連線到雲端</button>
+  <button class="opt">因為兩個程式需要一份共同的定義</button>
+  <button class="opt">因為介面建出的表無法寫入資料</button>
+</div>
+<div class="quiz" data-question="「schema-as-code」在這個專案裡最直接的好處是什麼？" data-correct="3" data-explain="改一次 schema，app 與 task 同時看到，型別不符在編譯期就被抓到。">
+  <button class="opt">讓資料庫的查詢速度自動變快</button>
+  <button class="opt">讓雲端資料庫的月費降到零</button>
+  <button class="opt">讓使用者登入流程變得更安全</button>
+  <button class="opt">改一次定義，兩個程式同時更新</button>
+</div>
+<div class="quiz" data-question="Drizzle 這套工具的核心主張是什麼？" data-correct="0" data-explain="schema-as-code：用 TypeScript 描述表，再從描述產生 SQL 與型別。">
+  <button class="opt">用 TypeScript 描述表並產生型別</button>
+  <button class="opt">用滑鼠介面管理每一張資料表</button>
+  <button class="opt">把資料庫整包搬到手機裡執行</button>
+  <button class="opt">自動幫你把後端程式碼寫完</button>
+</div>
+<div class="quiz" data-question="改了 schema.ts 之後，資料庫會發生什麼事？" data-correct="2" data-explain="改 schema 不會自動改資料庫，要把變更變成 migration 並實際執行才會套用。">
+  <button class="opt">資料庫會立刻同步新的欄位</button>
+  <button class="opt">資料庫會先鎖住不讓人讀取</button>
+  <button class="opt">資料庫不會變，要跑 migration</button>
+  <button class="opt">資料庫會自動刪掉多餘的欄位</button>
+</div>
+<div class="quiz" data-question="為什麼背景 task 也要讀同一份 schema.ts？" data-correct="1" data-explain="task 要寫入分析結果，必須知道欄位形狀；同一份定義才不會和 app 對不上。">
+  <button class="opt">因為 task 需要拿到使用者的密碼</button>
+  <button class="opt">因為 task 也要知道欄位的形狀</button>
+  <button class="opt">因為 task 會取代資料庫的角色</button>
+  <button class="opt">因為 task 只能在瀏覽器裡執行</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Neon + Drizzle 資料建模 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

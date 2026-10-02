@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>長工作不能塞在請求裡：為什麼要背景任務</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>長工作別塞在請求裡：為什麼需要背景任務</h1>
+<p class="meta">Step 1/5 · trigger.dev 背景任務與 Retry</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你應該能辨認哪些 AI 工作既耗時又容易失敗，也能說明：把它們從請求路徑移到背景任務，究竟解決了哪些問題。</p>
+
+<h2>前言：按下按鈕後，那個轉圈圈從哪裡來？</h2>
+
+<p>使用者在 onboarding 的最後按下「建立我的計畫」，畫面開始轉圈圈；或者他在掃描頁拍下一張便當照，畫面顯示「分析中」。這兩個動作背後都要呼叫 AI：前者要生成每天的熱量與三大營養素目標，後者要從照片估算這餐吃了多少。</p>
+
+<p>最直覺的寫法是：API route 收到請求後，直接在裡面呼叫 OpenAI，等它回傳結果，再把結果包成 response 傳回去。程式碼短短的，看起來也很乾淨。</p>
+
+<p>但這樣一來，使用者按下按鈕的那一刻，整個系統就得開始等待一個「可能很慢、也可能失敗」的工作。原本只是一次請求，最後卻變成使用者、連線與伺服器一起陪 AI 等候。</p>
+
+<p>這一節要建立的是一種判斷力：哪些工作可以在請求路徑裡當場完成，哪些工作應該搬出去，交給背景任務處理。先理解這個分界，後面學 task、retry 和 logs 時，才會知道它們是在解決什麼問題。</p>
+
+<h2>請求路徑是一條又短又窄的路</h2>
+
+<p>先把「請求路徑」說清楚。使用者按下按鈕，App 發出 HTTP 請求；伺服器上的 route handler 開始執行；工作完成後，伺服器回傳 response，連線結束。從頭到尾這段流程，就是請求路徑。</p>
+
+<p>它的特性是同步而且短命：使用者正在等，連線保持開啟，伺服器也必須在合理時間內產生答案。因此，適合放在這條路上的工作通常具備三個條件：快、可靠、可預期。</p>
+
+<p>例如查一筆資料、驗證一個 token，或把一小段文字寫進資料庫。這些工作通常幾十毫秒就能完成，而且不太容易失敗。就算偶爾出錯，重新執行整個請求通常也很安全。</p>
+
+<p>AI 工作卻常常剛好相反。一次呼叫可能花上好幾秒到數十秒；同一個輸入也可能得到格式不正確的內容，甚至完全拿不到結構化結果。再加上它依賴外部服務，OpenAI 可能逾時、受到限流，或短暫無法使用。</p>
+
+<p>把這種工作塞進請求路徑，就像叫一位必須準時交件的窗口，去等一個不知道何時回來、而且可能空手而歸的供應商。</p>
+
+<figure class="lesson-figure"><img src="./why-background-jobs-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把 AI 塞在請求裡，會發生哪四件事？</h2>
+
+<ol>
+<li><strong>使用者被卡住。</strong> 畫面轉圈圈的每一秒，都是使用者在等伺服器把 AI 工作跑完。手機網路逾時、App 的前景限制，都可能在伺服器還沒回完之前，先把請求切斷。</li>
+<li><strong>伺服器被佔住。</strong> 每個請求都要保留一份資源，一路等 AI 回應。一次來十個人，就有十條請求一起停在那裡等待，而且還沒有真正完成其他工作。</li>
+<li><strong>失敗時沒有乾淨的重試單位。</strong> 如果 AI 跑到一半失敗，你要嘛回傳錯誤，讓使用者再按一次；要嘛在 route 裡自己寫重試迴圈。前者讓使用者承擔不好的體驗，後者則等於在 request 的生命週期裡重新發明一套重試系統。</li>
+<li><strong>已完成的工作可能白費或重複。</strong> 假設 route 已經把圖片上傳完成，資料庫也建立了一列紀錄，結果 AI 呼叫才失敗。若重新執行整個請求，就必須小心處理已經發生的副作用，避免再上傳一次圖片，或建立第二份資料。</li>
+</ol>
+
+<p>把這四件事放在一起看，問題就不在 AI 本身，而在於<strong>工作被放錯了位置</strong>。慢又容易失敗的工作，不該和「使用者正在等、連線還開著、伺服器必須準時回應」的請求綁在同一條生命週期裡。</p>
+
+<h2>換個擺法：請求做快的事，慢的事交給背景任務</h2>
+
+<p>比較好的分工是：請求路徑只做它擅長的工作——驗證輸入、完成快速且可靠的動作，例如把照片上傳到圖床，或在資料庫建立一列狀態為「分析中」的紀錄。接著，請求把慢的 AI 工作<strong>交給獨立的背景任務</strong>，自己盡快回應。</p>
+
+<p>背景任務不是把同一個 <code>async function</code> 換個檔案放置而已。它是一個被登記、被追蹤、被執行的獨立單位：有自己的編號、執行紀錄與重試規則。請求回應之後，任務仍能在背景繼續執行；即使第一次失敗，也能由任務層自行重試，不必要求使用者再按一次，更不會讓原本的請求繼續卡住。</p>
+
+<p>可以把它想成餐廳。服務生代表請求，負責帶位、點餐和送餐；他把訂單送進廚房，也就是背景任務後，就能回頭招呼下一桌。客人拿到的是號碼牌，也就是 run 的編號，餐點完成後再收到通知。</p>
+
+<p>如果服務生點完餐，卻一直站在廚房裡等廚師把燉菜燉上三小時，整間餐廳的動線很快就會堵住。服務生不該站在廚房裡等待，不代表餐廳不需要廚房；只是兩種工作應該分開，讓各自負責的角色都能繼續運作。</p>
+
+<figure class="lesson-figure"><img src="./why-background-jobs-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+<thead>
+<tr><th>面向</th><th>塞在請求路徑裡</th><th>交給背景任務</th></tr>
+</thead>
+<tbody>
+<tr><td>誰在等</td><td>使用者與連線一起等</td><td>沒有人持續等待，任務自行執行</td></tr>
+<tr><td>適合的工作</td><td>快、可靠、可預期</td><td>慢、容易失敗、依賴外部服務</td></tr>
+<tr><td>失敗時</td><td>重跑整個請求，副作用要自行處理</td><td>由任務層獨立重試，重試範圍只限於這項工作</td></tr>
+<tr><td>執行紀錄</td><td>分散在 server log 中</td><td>保留每次 run 的輸入、輸出與嘗試紀錄</td></tr>
+</tbody>
+</table>
+
+<h2>課程裡的兩個真實案例</h2>
+
+<p>第一個案例是生成飲食計畫。使用者填完九題 onboarding 後，route 會先驗證答案，再把工作交給名為 <code>generate-plan</code> 的任務。</p>
+
+<p>這個案例裡，外層流程仍然會等到結果可供 App 使用，但真正執行 AI 的，是一個獨立的 run。它有自己的執行紀錄，最多嘗試兩次；即使 AI 完全失敗，也會退回使用公式算出的數字，讓使用者仍然能拿到一份計畫。</p>
+
+<p>第二個案例是分析餐點照片。掃描頁把 base64 圖片送到 route 後，route 會做三件事：上傳圖片、建立一列狀態為「分析中」的紀錄，再觸發名為 <code>analyze-meal</code> 的任務。完成這些快速工作後，route 就<strong>立刻回應</strong>一個 run 編號與一段授權 token。</p>
+
+<p>App 拿著這組資訊訂閱該 run 的即時狀態。任務完成或失敗時，畫面會自行更新，不需要使用者重新整理頁面。</p>
+
+<p>兩個案例的等待方式不同，但共同的骨架相同：慢又容易失敗的 AI 工作，被移出請求的執行生命週期，成為一個可追蹤、可重試，也能在事後除錯的獨立任務。</p>
+
+<figure class="lesson-figure"><img src="./why-background-jobs-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+請求路徑的設計前提是「快、可靠，而且使用者正在等」。AI 工作卻可能很慢、結果不確定，還依賴外部服務，兩者天生不合。把 AI 工作移到背景任務，不是為了讓程式看起來更漂亮，而是讓請求能準時回應、讓失敗擁有乾淨的重試單位，也讓每次執行都留下可以追查的紀錄。判斷的起點很簡單：如果這件事失敗或執行很久，你希望使用者跟著一起等嗎？
+</blockquote>
+
+<p>既然要把工作交出去，就得先知道交出去的「東西」長什麼樣子。下一個步驟會拆開一個 Trigger.dev task，看看它的 id、schema 與 run 各自負責什麼，以及它和一般 <code>async function</code> 在生命週期上有什麼根本差別。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./task-anatomy.html">下一步：Task 是什麼：schemaTask 的 id、schema 與 run →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="AI 工作不適合塞在請求路徑裡，最根本的原因是什麼？" data-correct="2" data-explain="AI 呼叫慢、不確定又依賴外部服務，跟請求的短命、可靠需求相衝突。">
+  <button class="opt">它使用的程式語言跟伺服器不同</button>
+  <button class="opt">它的程式碼行數通常比較多</button>
+  <button class="opt">它慢、不確定又依賴外部服務</button>
+  <button class="opt">它一定需要用到使用者的相機</button>
+</div>
+<div class="quiz" data-question="把 AI 工作移出請求路徑，最直接改善的是哪一件事？" data-correct="1" data-explain="請求可以準時回應，不必等慢工作跑完，使用者與連線都不用被卡住。">
+  <button class="opt">AI 模型產生的答案會更準確</button>
+  <button class="opt">請求能準時回應不被慢工作卡住</button>
+  <button class="opt">資料庫裡的資料會自動被加密</button>
+  <button class="opt">App 的下載檔案會變得更小</button>
+</div>
+<div class="quiz" data-question="下列哪一種工作最適合留在請求路徑裡當場做完？" data-correct="3" data-explain="驗證輸入是快速、可靠、可預期的動作，很適合放在請求路徑。">
+  <button class="opt">呼叫 AI 產生一份落落長的內容</button>
+  <button class="opt">等待外部服務回傳一張圖片</button>
+  <button class="opt">跑一個要好幾分鐘的批次運算</button>
+  <button class="opt">驗證請求帶進來的輸入格式</button>
+</div>
+<div class="quiz" data-question="「服務生不該站在廚房等燉菜」這個比喻，對應到哪個技術分工？" data-correct="0" data-explain="請求只做快的部分，慢的工作交給背景任務，客人用編號等待通知。">
+  <button class="opt">請求做快的事，慢工作交給背景任務</button>
+  <button class="opt">所有工作都應該在同一條請求完成</button>
+  <button class="opt">背景任務應該改成同步的函式呼叫</button>
+  <button class="opt">使用者應該自己輪詢資料庫的結果</button>
+</div>
+<div class="quiz" data-question="在課程的分析餐點案例中，API route 觸發任務後會回傳什麼？" data-correct="2" data-explain="route 建立分析中的紀錄、觸發任務，然後回傳 run 編號與授權 token。">
+  <button class="opt">直接回傳分析完成的熱量與巨量營養素</button>
+  <button class="opt">回傳使用者剛剛上傳的那張原始照片</button>
+  <button class="opt">回傳 run 編號與一段授權用的 token</button>
+  <button class="opt">回傳一個錯誤要使用者稍後再試一次</button>
+</div>
+<div class="quiz" data-question="背景任務相對單純 async function 的關鍵差別是什麼？" data-correct="1" data-explain="任務有獨立編號、執行紀錄與重試規則，是能被追蹤與重試的獨立單位。">
+  <button class="opt">它只能用來執行資料庫的寫入工作</button>
+  <button class="opt">它有獨立編號、紀錄與重試規則</button>
+  <button class="opt">它會讓 AI 的回應速度大幅變快</button>
+  <button class="opt">它不需要任何輸入就能直接執行</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · trigger.dev 背景任務與 Retry · Step 1/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

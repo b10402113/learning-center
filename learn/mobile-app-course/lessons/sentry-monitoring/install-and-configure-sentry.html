@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>安裝並設定 Sentry：DSN、source map 與 native rebuild</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>安裝並設定 Sentry：DSN、source map 與 native rebuild</h1>
+<p class="meta">Step 2/6 · Sentry 錯誤監控</p>
+
+<h2>完成這一節，你會得到什麼？</h2>
+<p>你會在 Expo app 裡建立 Sentry 專案，取得 DSN，並把 DSN 放進 <code>.env</code>。接著，你會設定 Organization Auth Token，讓 EAS 在建置時上傳 source map；如果新增了 native module，也會知道為什麼必須重新建立 dev build。</p>
+
+<p>做完後，app 就具備「發生錯誤時自動回報」的能力。至於如何確認錯誤真的送到 Sentry，會在下一節用測試頁實際驗證。</p>
+
+<h2>開始前的兩個條件</h2>
+<p>你需要先準備好兩樣東西：</p>
+
+<ul>
+  <li>一個能在模擬器或真機上執行的 Expo 專案，而且使用的是 dev build，不是 Expo Go。</li>
+  <li>一個 Sentry 帳號。</li>
+</ul>
+
+<p>這一節的重點不是只把套件安裝進專案，而是把整條管線接起來：Sentry 專案提供 DSN，SDK 使用 DSN 回報錯誤，source map 讓錯誤位置讀得懂，而重新 build 則把 native module 真正放進 app。</p>
+
+<h2>步驟一：建立 Sentry 專案並取得 DSN</h2>
+
+<p>先到 Sentry 網站建立一個 project。建立時，平台請選 <strong>React Native</strong>，讓 Sentry 知道這是一個行動應用，後續提供的 SDK 與設定說明也會對應到這個平台。免費方案就足以完成本課程；課程也提到，透過推薦連結可以取得額外額度。</p>
+
+<p>專案建立後，找到 <strong>DSN</strong>（Data Source Name，資料來源名稱）。它通常看起來像一條網址，位置在 Settings → Projects → Client Keys (DSN)。</p>
+
+<p>可以把 DSN 想成「這支 app 要把錯誤寄到哪裡」的地址。SDK 拿到 DSN，才知道錯誤該送往哪個 Sentry project。每個 project 都有自己的 DSN，因此行動 app 和日後可能拆出的網頁或後端服務，通常會使用不同的 DSN。</p>
+
+<figure class="lesson-figure"><img src="./install-and-configure-sentry-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟二：安裝 SDK，讓 coding agent 依照 wizard 操作</h2>
+
+<p>Sentry 的安裝頁會提供 Sentry Wizard 的安裝指示。你可以直接把這份官方指示交給 coding agent，並明確要求它把 SDK 安裝在行動專案對應的資料夾中。</p>
+
+<p>這種做法就像把施工圖交給施工團隊：版本與設定細節由官方文件負責，你則要確認 agent 沒有把套件裝到錯的專案位置。</p>
+
+<p>安裝完成後，SDK 的初始化通常會放在 app 的 root layout。以下是精簡過的 <code>Sentry.init</code> 範例；每個欄位旁的註解，說明了它的用途：</p>
+
+<pre><code>Sentry.init({
+  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN!,   // 錯誤要送到哪個專案
+  environment: __DEV__ ? 'development' : 'production',
+  debug: __DEV__,              // dev 時把 SDK 送出的內容印到 Metro console
+  sendDefaultPii: true,        // 附上使用者與裝置資訊（正式環境要視隱私政策調整）
+  enableLogs: true,            // 啟用結構化 logs（下一節會用到）
+  tracesSampleRate: 1.0,       // 效能 trace 的取樣率，先用 100% 方便觀察
+  replaysSessionSampleRate: 0.1,  // 一般 session 錄 10%
+  replaysOnErrorSampleRate: 1.0,  // 出錯的 session 一定錄
+  integrations: [
+    Sentry.mobileReplayIntegration({
+      maskAllImages: false,
+      maskAllText: false,
+      maskAllVectors: false,
+    }),
+  ],
+});</code></pre>
+
+<p>這段設定裡，有兩個 sample rate（取樣率）特別值得先看懂。它們決定有多少比例的資料會真的送到 Sentry，因為每個 session 和每條 trace 都完整保存，會消耗方案額度。</p>
+
+<p>開發階段可以先把錯誤相關的取樣率設為 <code>1.0</code>，方便確認整條管線是否正常。等使用者增加、額度開始吃緊，再降低一般 session 的比例。</p>
+
+<h2>步驟三：把 DSN 放進 <code>.env</code></h2>
+
+<p>DSN 是設定值，不是密碼，但仍然不建議直接硬寫在程式碼裡。請把 DSN 放進 mobile 專案的 <code>.env</code>，並確認 <code>.env</code> 已經被 git 忽略。</p>
+
+<p>這樣本機可以讀到設定，卻不會不小心把 DSN 連同 repo 一起提交上去。初始化程式則透過 <code>process.env.EXPO_PUBLIC_SENTRY_DSN</code> 讀取它。</p>
+
+<h2>步驟四：建立 Organization Auth Token，準備上傳 source map</h2>
+
+<p>除了 DSN，Sentry 還需要一把 <strong>Organization Auth Token</strong>（組織授權權杖）。請到 Organization Tokens 頁面建立這把 token。</p>
+
+<p>這把 token 的用途，是讓建置流程自動上傳 <strong>source map</strong>（原始碼對照表）。上線後的 app 通常會經過壓縮與最小化處理，因此錯誤堆疊可能只剩下一些難以閱讀的變數名稱與位址。</p>
+
+<p>source map 就像一張對照表，能把壓縮後的位址對回你實際寫的原始檔與行號。沒有它，Sentry 可能只顯示一串亂碼；有了它，才有機會看到「錯誤發生在第 42 行」這類可讀資訊。</p>
+
+<figure class="lesson-figure"><img src="./install-and-configure-sentry-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>在 Expo 專案中，這把 token 會透過 EAS 指令存成專案 secret，讓建置流程在打包時使用。</p>
+
+<h2>步驟五：新增 native module 後，重新建立 dev build</h2>
+
+<blockquote class="bad-code">
+只重新整理（reload）Metro 是不夠的。Sentry 是一個 native module（原生模組），它含有必須被編進 app 的原生程式碼。只 reload 的話，JavaScript 那邊看起來裝好了，原生那一半卻根本不存在，於是 SDK 默默不動作——這是最常見的「裝了卻沒回報」原因。
+</blockquote>
+
+<p>這是整個安裝流程中最容易漏掉的一步。只要新增了 native module，就必須重新建置 dev build，讓原生程式碼真的被編進 app 裡。</p>
+
+<p>可以執行：</p>
+
+<pre><code>npx expo run:ios</code></pre>
+
+<p>或者使用專案提供的腳本：</p>
+
+<pre><code>npm run iOS</code></pre>
+
+<p>這次建置會比單純 reload 花更久，但不能跳過。若只 reload Metro，JavaScript 可能已經看起來「安裝完成」，原生端卻還沒有 Sentry，結果就是 app 不會正常回報錯誤。</p>
+
+<p>等重建完成並重新啟動 app，才算把 native module 真正裝進 dev build。</p>
+
+<h2>步驟六：先決定 Session Replay 要遮住哪些資料</h2>
+
+<p>Session Replay（工作階段重播）會記錄使用者當時看到的畫面。發生錯誤時，你可以回看那個 session，了解使用者是在什麼情況下遇到問題。</p>
+
+<p>但畫面裡也可能出現姓名、email、病歷或付款資訊。因此 Sentry 預設會把文字與圖片遮起來，這是隱私保護的一部分。</p>
+
+<p>開發階段，為了確認錄影確實運作，也為了看清楚測試畫面，常會暫時關閉遮罩，例如範例中的 <code>maskAllText: false</code>。不過正式上線前，務必把遮罩重新開啟。</p>
+
+<p>開發機上的假資料可以用來除錯，真實使用者的資料則不能用同樣的寬鬆設定處理。請記住這個原則：<strong>dev 可以放寬，production 必須收緊</strong>。後續設定其他 Sentry 能力時，也會反覆用到這個原則。</p>
+
+<figure class="lesson-figure"><img src="./install-and-configure-sentry-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>完成後，應該確認哪些結果？</h2>
+
+<ol>
+  <li>你已建立 React Native 類型的 Sentry project，並取得該 project 的 DSN。</li>
+  <li>DSN 已放在 mobile 專案的 <code>.env</code>，且 <code>.env</code> 不會被提交到 git。</li>
+  <li>SDK 已初始化，取樣率與 Session Replay 設定符合目前的開發階段需求。</li>
+  <li>Organization Auth Token 已建立，並由 EAS 以 project secret 的方式提供給建置流程，用來上傳 source map。</li>
+  <li>新增 native module 後，已重新建立並啟動 dev build，而不是只 reload Metro。</li>
+</ol>
+
+<blockquote>
+安裝 Sentry 的流程可以照這條路走：先建立 React Native 專案並取得 DSN；再把 wizard 指示交給 agent 安裝 SDK；把 DSN 放進 mobile 專案的 <code>.env</code>；建立 Organization Auth Token，交給 EAS 在建置時上傳 source map；初始化時用取樣率控制資料量，並在 dev 放寬、production 收緊 replay 遮罩。最容易被忽略的關鍵是：Sentry 含有 native module，安裝完成後一定要重新 build dev build，不能只 reload。</blockquote>
+
+<p>SDK 裝好、dev build 也重建完成，仍然只能代表安裝步驟完成，還不能證明錯誤真的已經送到 Sentry。下一節會建立測試頁，故意丟出一個錯誤，再到 Dashboard 確認整條回報管線是否正常。</p>
+
+<div class="lesson-nav">
+  <div><a href="./why-monitoring-matters.html">← 上一步：為什麼上線後一定要有錯誤監控</a></div>
+  <div><a href="./verify-and-triage-errors.html">下一步：用測試頁驗證並在 Dashboard 判讀錯誤 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="DSN 在 Sentry 裡的角色是什麼？" data-correct="1" data-explain="DSN 是連接字串，告訴 SDK 要把錯誤事件送到哪一個 Sentry 專案。">
+  <button class="opt">使用者登入 Sentry 用的帳號密碼</button>
+  <button class="opt">告訴 SDK 錯誤要送往哪個專案</button>
+  <button class="opt">壓縮上線程式碼所用的加密金鑰</button>
+  <button class="opt">App Store 上架需要的簽章憑證</button>
+</div>
+<div class="quiz" data-question="Organization Auth Token 主要是為了完成什麼？" data-correct="2" data-explain="它讓建置流程能把 source map 上傳到 Sentry，錯誤堆疊才能還原成原始檔與行號。">
+  <button class="opt">讓使用者可以用 Google 帳號登入</button>
+  <button class="opt">把資料庫連線字串加密保存</button>
+  <button class="opt">上傳 source map 以還原錯誤行號</button>
+  <button class="opt">在 app 內顯示付費訂閱方案</button>
+</div>
+<div class="quiz" data-question="裝完 Sentry 後，為什麼一定要重新 build 而不是只 reload？" data-correct="0" data-explain="Sentry 是 native module，原生程式碼必須被編進 app；只 reload 的話原生那半不會存在。">
+  <button class="opt">因為 Sentry 是 native module，要先編進 app</button>
+  <button class="opt">因為 DSN 只有在重建時才會生效</button>
+  <button class="opt">因為 reload 會清掉整個資料庫的資料</button>
+  <button class="opt">因為模擬器不支援熱更新這個功能</button>
+</div>
+<div class="quiz" data-question="設定 tracesSampleRate 與 replaysSessionSampleRate 的用意是什麼？" data-correct="3" data-explain="取樣率控制多少比例的資料真的被送出，是控制額度成本與資料量的槓桿。">
+  <button class="opt">決定錯誤通知要寄到哪個信箱</button>
+  <button class="opt">決定哪些使用者可以登入 app</button>
+  <button class="opt">決定 source map 要壓縮到多小</button>
+  <button class="opt">控制多少比例的資料真的被送出</button>
+</div>
+<div class="quiz" data-question="Session replay 的遮罩在開發與正式環境應該怎麼處理？" data-correct="1" data-explain="開發時可暫時關閉遮罩方便確認，正式上線前一定要恢復遮罩以保護使用者隱私。">
+  <button class="opt">兩個環境都保持全開，绝不調整</button>
+  <button class="opt">dev 可放寬，production 要恢復遮罩</button>
+  <button class="opt">兩個環境都關掉，錄得越清楚越好</button>
+  <button class="opt">只遮圖片，文字一律不遮蔽</button>
+</div>
+<div class="quiz" data-question="source map 解決的是什麼問題？" data-correct="2" data-explain="上線程式碼經過壓縮最小化，source map 把壓縮位址對回原始檔與行號，堆疊才看得懂。">
+  <button class="opt">讓 app 在低階手機上跑得更順</button>
+  <button class="opt">把使用者資料加密後再上傳</button>
+  <button class="opt">把壓縮後的位址對回原始碼行號</button>
+  <button class="opt">把多個 Sentry 專案合併成一個</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Sentry 錯誤監控 · Step 2/6</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

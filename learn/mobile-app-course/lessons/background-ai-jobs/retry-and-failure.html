@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>失敗之後：重試語意、退路與標記失敗</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>失敗之後怎麼選：重試、退路，還是標記失敗？</h1>
+<p class="meta">Step 4/5 · trigger.dev 背景任務與 Retry</p>
+
+<h2>先決定：失敗之後要走哪條路？</h2>
+<p>把慢工作交給背景任務之後，事情不會從此一帆風順。OpenAI 可能逾時、回傳格式可能不對，圖片也可能根本不是食物。真正需要設計的是：任務失敗時，要不要再試一次？要不要改用保底答案？還是應該直接把結果標記成失敗？</p>
+
+<p>本節的目標，是讓你能依照工作的性質，選擇重試次數與失敗處理方式，並分辨哪些錯誤值得重試、哪些情況應該走退路，哪些結果則應該直接標記失敗。</p>
+
+<p>「重試就好」聽起來簡單，卻不是萬靈丹。網路短暫抖動、服務冷啟動或 API 限流，屬於<strong>暫時性失敗</strong>，重新執行可能就能成功。相反地，如果輸入本身就不可能成功，例如一張椅子的照片，不管重試幾次都還是椅子。這種<strong>必然失敗</strong>若一直重試，只是在浪費時間與 API 費用。</p>
+
+<figure class="lesson-figure"><img src="./retry-and-failure-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>還有一個更危險的情況：工作已經產生部分副作用時，重試可能讓同一件事發生兩次，例如重複扣款或重複寄信。因此，失敗處理不是在幾個按鈕裡隨便挑一個，而是要看失敗的性質與任務的合約。</p>
+
+<h2>四個選項，放在一起比較</h2>
+<p>先把常見的處理方式攤開來看，差異會比較清楚：</p>
+
+<table>
+<thead>
+<tr><th>策略</th><th>在做什麼</th><th>適合的失敗</th><th>課程例子</th></tr>
+</thead>
+<tbody>
+<tr><td>自動重試</td><td>由任務層重新執行，並加入退避間隔</td><td>暫時性問題，例如逾時、限流、冷啟動</td><td>analyze-meal 的 <code>maxAttempts: 2</code></td></tr>
+<tr><td>應用層退路</td><td>改用一個確定性的替代答案</td><td>有保底解法，而且使用者一定需要結果</td><td>generate-plan 退回公式計畫</td></tr>
+<tr><td>標記失敗</td><td>把任務狀態寫成 failed，讓 UI 能顯示正確結果</td><td>失敗是合法結局，不能讓任務一直懸著</td><td><code>onFailure</code> 把餐點標成 analysis_failed</td></tr>
+<tr><td>不重試的成功</td><td>任務執行成功，但判斷結果是不符合需求</td><td>結果本身就是必然不符合，重跑也不會改變</td><td>照片不是食物，直接刪除該列</td></tr>
+</tbody>
+</table>
+
+<p>專案的 <code>trigger.config.ts</code> 先定義了所有任務共用的重試預設值：最多 3 次，每次間隔會以 2 倍成長，退避時間從 1 秒開始，最多到 10 秒。</p>
+
+<p>單一任務也能覆寫這個設定。分析餐點的任務只使用 <code>retry: { maxAttempts: 2 }</code>，因為它只需要多一次機會來處理暫時性錯誤，不需要無止境地重試。</p>
+
+<h2>判別問句：先問自己這四件事</h2>
+
+<ol>
+<li><strong>這個失敗是暫時的，還是必然的？</strong> 逾時、限流與連線抖動通常屬於暫時問題，重試有機會成功。照片不是食物、欄位缺漏等輸入問題，則是必然失敗，重試不會改變結果。</li>
+<li><strong>有沒有確定性的替代答案？</strong> 如果有，而且使用者無論如何都需要一個結果，就應該設計退路。generate-plan 就是這種情況：AI 無法產生計畫時，改用 Mifflin-St Jeor 公式算出一份計畫。</li>
+<li><strong>重跑會不會造成重複的副作用？</strong> 如果可能重複扣款或寄信，重試前要先讓操作具備<strong>冪等性</strong>。也就是同樣的輸入執行多次，最後結果仍然一致。</li>
+<li><strong>使用者需要知道這次結果嗎？</strong> 如果需要，每種結束狀態都必須寫回資料庫，不能讓資料永遠停在「處理中」。否則 Home 畫面上就會出現一個永遠轉不完的圈圈。</li>
+</ol>
+
+<figure class="lesson-figure"><img src="./retry-and-failure-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>兩個任務，為什麼做出相反選擇？</h2>
+
+<p><strong>generate-plan 選擇「有限重試，最後一定給答案」。</strong> 它的 <code>run</code> 裡有一個最多執行兩次的迴圈。第一次呼叫 AI 後，如果回傳的數字不合理，也就是 <code>isPlausible</code> 為 false，就記錄警告並再試一次。如果連呼叫本身都失敗，也會記錄錯誤後再試一次。</p>
+
+<p>兩次都無法取得可用結果時，任務就改用公式產生計畫，並標上 <code>source: "formula"</code>。這個任務的合約是「永遠不丟錯」，因為它位在 onboarding 的最後一關，使用者必須拿到一份計畫，才能繼續往下走。</p>
+
+<p>這裡還有一個容易忽略的取捨：重試是寫在任務自己的迴圈裡，而不是完全交給任務層的 retry。這個 route 會用 <code>runs.poll</code> 等待結果；如果把重試交給任務層，退避間隔變長時，route 的輪詢也會跟著被拖住。把重試限制為兩次，失敗後立即退回公式，等待時間才比較可預期。</p>
+
+<p><strong>analyze-meal 則選擇「重試一次，失敗就標記」。</strong> 它設定 <code>retry: { maxAttempts: 2 }</code>，因為圖片分析可能只是暫時遇到服務問題，值得再給一次機會。</p>
+
+<p>但如果兩次都失敗，<code>onFailure</code> 就會把資料庫中的那一列更新成 <code>status: "failed"</code>，並寫入 <code>errorReason: "analysis_failed"</code>。這一步不能省略：route 在觸發任務前就先建立了資料列，初始狀態是「分析中」。如果任務失敗後沒有人更新它，這筆餐點就會永遠停在「分析中」。</p>
+
+<blockquote class="bad-code">
+任務失敗不會自動替你更新資料庫狀態。任務啟動時資料列是什麼狀態、失敗後要變成什麼狀態，都必須在 run 與 onFailure 裡明確寫出來。
+</blockquote>
+
+<h2>反例：有些「失敗」其實不該重試</h2>
+
+<p>照片不是食物，就是最值得記住的反例。使用者可能上傳桌子、椅子，或一張模糊的風景照。模型回傳 <code>is_food: false</code> 後，任務會記錄一筆警告，刪除資料庫裡的那一列，最後回傳 <code>{ status: "failed", errorReason: "not_food" }</code>。</p>
+
+<p>這裡要分清楚兩件事。從<strong>執行</strong>角度看，這次 run 其實成功了：它順利呼叫模型、拿到結構化輸出，也做出了正確判斷。從<strong>結果</strong>角度看，這張照片的餐點分析失敗了。</p>
+
+<p>正因為模型已經正確判斷出「這不是食物」，所以它<strong>不該被重試</strong>。椅子的照片重試一百次，仍然會是椅子。若把這種結果當成一般任務失敗，就會浪費資源，還可能讓已經刪除的資料列再次被處理。</p>
+
+<figure class="lesson-figure"><img src="./retry-and-failure-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>另外，<code>onFailure</code> 只處理「重試次數耗盡」的失敗，不涵蓋 <code>CRASHED</code>、<code>SYSTEM_FAILURE</code> 這類非預期中斷。遇到這些狀況時，資料庫可能仍然留著一列「分析中」的資料。</p>
+
+<p>實務上，還需要另外安排一個排程任務，定期掃描並清理這些卡住的資料。這也說明了：先建立資料列、再執行分析的設計，必須搭配失敗狀態的落地處理，否則 UI 很容易留下永遠不會完成的任務。</p>
+
+<h2>把判斷變成一句規則</h2>
+
+<blockquote>
+先問：「這個失敗重跑一次，結果會不會不同？」<br>
+會，而且失敗是暫時的 → 設定自動重試，並加入退避間隔，避免持續打爆對端。<br>
+會，但使用者一定要拿到答案 → 限制重試次數，之後改用確定性的替代方案。<br>
+不會，而且失敗是合法結局 → 將狀態寫回資料庫並標記失敗，不要讓 UI 永遠轉圈。<br>
+不會，因為結果本身就不是你要的，例如照片不是食物 → 讓 run 成功結束，但把資料與 UI 帶到正確結果，不要重試。
+</blockquote>
+
+<p>當失敗策略決定好之後，還有一個問題：任務在背景執行時，你要怎麼知道它實際發生了什麼？下一步會進入 Trigger.dev 的 Runs 與 logs，學會把一次失敗的執行追溯回程式碼中的具體位置。</p>
+
+<div class="lesson-nav">
+  <div><a href="./write-and-trigger-task.html">← 上一步：寫 task 並從 API route 觸發：generate-plan 實作</a></div>
+  <div><a href="./debug-with-runs-logs.html">下一步：用 runs 與 logs 除錯：從 dashboard 追回程式碼 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="判斷要不要重試，第一個該問的問題是什麼？" data-correct="2" data-explain="先問這個失敗重跑一次是否可能不同；必然失敗重試只會浪費資源。">
+  <button class="opt">這個任務的程式碼總共有幾行</button>
+  <button class="opt">這個任務花了多少錢在 API 上</button>
+  <button class="opt">重跑一次結果是否可能不同</button>
+  <button class="opt">這個任務由幾個人負責維護</button>
+</div>
+<div class="quiz" data-question="generate-plan 在 AI 生成失敗時會怎麼做？" data-correct="1" data-explain="重試兩次後退回 Mifflin-St Jeor 公式算出的保底計畫，讓使用者一定有結果。">
+  <button class="opt">回傳錯誤要求使用者重新填答一次</button>
+  <button class="opt">退回公式計畫，讓使用者一定有結果</button>
+  <button class="opt">把任務標成失敗並刪除使用者資料</button>
+  <button class="opt">無限期地一直重試直到成功為止</button>
+</div>
+<div class="quiz" data-question="analyze-meal 的 onFailure 為什麼一定要把資料列改成 failed？" data-correct="3" data-explain="否則那一列會永遠停在分析中，Home 畫面上永遠是一個轉不完的圈。">
+  <button class="opt">因為資料庫不允許資料列保持原狀</button>
+  <button class="opt">因為失敗的列會占用額外的儲存空間</button>
+  <button class="opt">因為 Trigger.dev 要求一定要這樣做</button>
+  <button class="opt">否則該列永遠停在分析中並一直轉圈</button>
+</div>
+<div class="quiz" data-question="照片不是食物時，為什麼任務不應該被重試？" data-correct="0" data-explain="這是必然的結果，重試不會改變判斷，還可能重複處理已刪除的資料。">
+  <button class="opt">重試不會改變結果且可能重複處理</button>
+  <button class="opt">因為模型辨識不是食物的準確率很低</button>
+  <button class="opt">因為刪除資料後就無法再觸發任務</button>
+  <button class="opt">因為這種情形會讓 worker 直接崩潰</button>
+</div>
+<div class="quiz" data-question="generate-plan 為什麼把重試寫在自己的迴圈，而不是交給任務層？" data-correct="2" data-explain="route 會輪詢結果，任務層的退避會讓等待變長，自帶有限迴圈讓等待可預期。">
+  <button class="opt">因為任務層的重試功能需要額外付費</button>
+  <button class="opt">因為 Trigger.dev 不支援自動重試</button>
+  <button class="opt">避免任務層退避把輪詢的等待拉長</button>
+  <button class="opt">因為迴圈寫法能讓 AI 回應更準確</button>
+</div>
+<div class="quiz" data-question="下列哪一種情況最適合用「確定性退路」而不是「標記失敗」？" data-correct="1" data-explain="當使用者無論如何都需要一個結果、且有可用的替代算法時，退路比標記失敗更合適。">
+  <button class="opt">使用者只是想要看到錯誤的提示訊息</button>
+  <button class="opt">使用者一定要拿到答案且有替代算法</button>
+  <button class="opt">失敗的原因確定是輸入資料本身錯誤</button>
+  <button class="opt">這個任務完全沒有任何副作用會產生</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · trigger.dev 背景任務與 Retry · Step 4/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

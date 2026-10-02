@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Seed 測試資料：可重複執行與時區正確的寫法</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Seed 測試資料：可重複執行，時區也不出錯</h1>
+<p class="meta">Step 5/5 · Neon + Drizzle 資料建模</p>
+
+<h2>先確認目標與前置條件</h2>
+<p>這一節要完成的是一支可以反覆執行的 seed 腳本：它會把測試用的 users 與 meals 寫進 Neon，而且不會因為重跑就產生重複資料，也不會把使用者的本地時間誤存成錯誤的 UTC 時間。</p>
+
+<p>開始前，請先確認上一節已經完成：Neon 裡存在 <code>users</code> 與 <code>meals</code> 資料表，專案也能從環境變數取得 <code>DATABASE_URL</code>。完成後，你應該能在資料庫裡看到一位 demo 使用者，以及今天三筆、昨天兩筆餐點；重新執行腳本，資料筆數仍然不會增加。</p>
+
+<h2>為什麼需要 seed？</h2>
+
+<p>表建立好了，資料庫卻還是空的。首頁的熱量圈圈沒有數字，餐點列表沒有內容，背景分析 task 也沒有任何一筆 meal 可以處理。開發時需要一組寫實的測試資料，才能看見畫面的真實樣子，也才能確認查詢與日期篩選是否正確。</p>
+
+<figure class="lesson-figure"><img src="./seed-local-data-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這就是 seed：把固定的測試資料灌進資料庫。看似只是幾個 <code>insert</code>，實際上要守住三件事：</p>
+
+<ul>
+  <li><strong>可重複執行</strong>：今天跑一次、明天再跑一次，不會堆出重複資料。</li>
+  <li><strong>安全</strong>：資料值不能直接拼接進 SQL，否則可能造成 SQL injection。</li>
+  <li><strong>時區正確</strong>：使用者當地的早上 8:15，必須轉成正確的 UTC 瞬間。</li>
+</ul>
+
+<p>接下來就照著 <code>scripts/seed.ts</code> 的順序做。每一步都會說明實際做了什麼，以及完成後應該看到什麼。</p>
+
+<h2>第一步：執行 TypeScript 腳本</h2>
+
+<p>這支腳本使用 TypeScript，但開發階段不必先另外編譯。直接執行：</p>
+
+<pre><code>node --experimental-strip-types scripts/seed.ts</code></pre>
+
+<p><code>--experimental-strip-types</code> 會讓 Node 直接讀取 TypeScript 檔案，先移除型別標註，再執行剩下的 JavaScript。如此一來，修改腳本後可以直接重跑，不需要為了工具腳本維護另一套編譯流程。</p>
+
+<h2>第二步：讀取環境變數並建立 Neon 連線</h2>
+
+<pre><code>import { neon } from "@neondatabase/serverless";
+
+process.loadEnvFile();
+const sql = neon(process.env.DATABASE_URL!);</code></pre>
+
+<p>這三行先完成連線準備：</p>
+
+<ol>
+  <li><code>process.loadEnvFile()</code> 讀取 <code>.env</code>。</li>
+  <li><code>process.env.DATABASE_URL</code> 取得 Neon 的資料庫連線網址。</li>
+  <li><code>neon()</code> 建立可以直接執行 SQL 的 <code>sql</code> 函式。</li>
+</ol>
+
+<p>這裡沒有透過 ORM 撰寫 seed，而是直接使用 SQL。對 seed 來說，這樣反而容易看清楚每個 <code>insert</code>、衝突處理與刪除條件。</p>
+
+<h2>第三步：先定義固定的 fixtures</h2>
+
+<p>不要在腳本執行時隨機產生所有資料。先把要灌入的內容寫成固定常數，這些固定的測試資料就叫做 fixtures。</p>
+
+<p>使用者資料分成固定的 id 與 <code>clerkUserId</code>：</p>
+
+<pre><code>const USER = {
+  id: "02352420-5673-44cc-8b31-bf7211d46ffa",
+  clerkUserId: "user_3HAVVFFsIEoyK2RwMZfjrlJDMaK",
+  email: "devburakork@gmail.com",
+  timezone: "Asia/Makassar",
+  // 身體數據與 AI 目標省略
+};</code></pre>
+
+<p>這些 key 必須每次都一樣，因為稍後要使用 upsert，也就是「存在就更新，不存在就新增」。固定的 key 像是資料的門牌號碼，腳本才能認出這是上次灌入的同一位使用者。</p>
+
+<p>如果每次執行都隨機產生 id，第二次執行時資料庫只會以為來了一位新使用者，結果表裡會越來越多人，而不是更新原本那一列。</p>
+
+<p>餐點則使用相對日期描述，讓資料永遠貼近執行當天：</p>
+
+<pre><code>// dayOffset 0 = today, 1 = yesterday — as dates in the user's timezone, not UTC.
+const MEALS = [
+  { dayOffset: 0, time: "08:15", name: "Greek Yogurt Parfait", calories: 420, /* … */ },
+  { dayOffset: 0, time: "12:45", name: "Chicken Burrito Bowl", calories: 780, /* … */ },
+  { dayOffset: 0, time: "19:30", name: "Salmon with Roasted Potatoes", calories: 690, /* … */ },
+  { dayOffset: 1, time: "09:00", name: "Avocado Toast with Eggs", calories: 520, /* … */ },
+  { dayOffset: 1, time: "13:30", name: "Beef Pho", calories: 610, /* … */ },
+];</code></pre>
+
+<p><code>dayOffset: 0</code> 代表今天，<code>dayOffset: 1</code> 代表昨天。這樣不論你哪一天執行腳本，最後都會得到「今天三筆、昨天兩筆」的資料，不必每次手動修改日期。</p>
+
+<h2>第四步：用 upsert 寫入使用者</h2>
+
+<p>接著把使用者寫入資料庫。這段 SQL 是整支腳本能安全重跑的核心：</p>
+
+<pre><code>await sql`
+  insert into users (id, clerk_user_id, email, timezone, /* … */)
+  values (
+    ${USER.id}, ${USER.clerkUserId}, ${USER.email}, ${USER.timezone}, /* … */
+  )
+  on conflict (clerk_user_id) do update set
+    timezone = excluded.timezone,
+    daily_calories = excluded.daily_calories,
+    protein_g = excluded.protein_g
+    /* … */
+`;</code></pre>
+
+<p>先看查詢安全性。雖然這裡看起來像是在 template literal 裡插入 <code>${USER.email}</code>，但它不是把文字直接拼進 SQL，而是使用<strong>參數化查詢</strong>。值會以參數形式交給 Neon driver 綁定，因此即使內容包含引號，也只會被當成資料，不會突然變成 SQL 指令。</p>
+
+<p>再看重複執行的行為。<code>on conflict (clerk_user_id) do update set ...</code> 表示：</p>
+
+<ul>
+  <li>如果這組 <code>clerk_user_id</code> 尚不存在，就新增一列。</li>
+  <li>如果已經存在，就更新指定欄位，而不是回報錯誤。</li>
+</ul>
+
+<p>第一次執行會新增 demo 使用者，之後再執行則會把資料更新成 fixtures 的內容，表裡仍然只有這一列。</p>
+
+<p>相反地，如果只使用普通的 <code>insert</code>，第二次執行可能撞上 <code>clerk_user_id</code> 的 unique 限制而失敗；如果資料庫沒有這項限制，則會留下多筆重複使用者。upsert 就像一扇有門牌辨識功能的入口，讓腳本知道該新增誰、該更新誰。</p>
+
+<figure class="lesson-figure"><img src="./seed-local-data-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第五步：清除舊餐點，再灌入新餐點</h2>
+
+<p>使用者處理好後，開始處理餐點。這裡採用一個簡單而可靠的做法：只刪除這位 demo 使用者的舊餐點，再重新灌入 fixtures。</p>
+
+<pre><code>// Re-runnable: wipe this user's meals rather than piling up duplicates.
+await sql`delete from meals where user_id = ${USER.id}`;
+
+for (const m of MEALS) {
+  const at = loggedAt(m.dayOffset, m.time);
+  await sql`
+    insert into meals (user_id, image_url, status, name, calories, /* … */, logged_at, created_at)
+    values (
+      ${USER.id}, ${`https://images.unsplash.com/${m.image}`}, 'completed',
+      ${m.name}, ${m.calories}, /* … */, ${at}, ${at}
+    )
+  `;
+}</code></pre>
+
+<p>執行順序很重要：</p>
+
+<ol>
+  <li>用 <code>delete from meals where user_id = ${USER.id}</code> 清除這位使用者的舊餐點。</li>
+  <li>逐筆走訪 <code>MEALS</code>。</li>
+  <li>用 <code>loggedAt()</code> 把相對日期與本地時間轉成正確的時間值。</li>
+  <li>將每筆餐點插入 <code>meals</code>。</li>
+</ol>
+
+<p>這樣第二次執行時，舊資料會先被清掉，再建立同樣的五筆餐點，不會越跑越多。刪除條件只限定在這個 <code>user_id</code>，因此不會誤刪其他使用者的資料。這也是比「猜哪些資料是上次 seed 的」更穩定的做法。</p>
+
+<figure class="lesson-figure"><img src="./seed-local-data-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第六步：把使用者的本地時間轉成 UTC</h2>
+
+<p>時間是最容易悄悄出錯的地方。假設使用者位於 <code>Asia/Makassar</code>，在當地早上 8:15 吃早餐，資料庫的 schema 規定儲存 UTC，那麼不能直接把 <code>"2026-07-29T08:15:00"</code> 當成 UTC 存入。</p>
+
+<p>那串文字代表的是使用者當地的時間，不一定代表 UTC 的同一個瞬間。正確的換算必須知道使用者所在時區的 UTC 偏移量，而且這個偏移量可能會因日光節約時間（DST）而在一年中改變。</p>
+
+<p>腳本使用 <code>Intl.DateTimeFormat</code> 動態取得時區資訊，而不是把偏移量寫死：</p>
+
+<pre><code>function loggedAt(dayOffset, time) {
+  const day = new Date(Date.now() - dayOffset * 86_400_000);
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: USER.timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZoneName: "longOffset",
+  }).formatToParts(day);
+
+  const get = (t) => parts.find((p) => p.type === t).value;
+  const offset = get("timeZoneName").replace("GMT", "") || "+00:00";
+
+  return new Date(`${get("year")}-${get("month")}-${get("day")}T${time}:00${offset}`);
+}</code></pre>
+
+<p>這個函式可以拆成幾個動作：</p>
+
+<ol>
+  <li><code>Date.now() - dayOffset * 86_400_000</code> 先算出今天往回推指定天數的時間點。<code>86_400_000</code> 是一天的毫秒數。</li>
+  <li><code>Intl.DateTimeFormat</code> 搭配 <code>timeZone: USER.timezone</code>，把時間點轉換成使用者時區裡的年、月、日。</li>
+  <li><code>en-CA</code> 讓日期容易整理成 <code>YYYY-MM-DD</code> 的順序。</li>
+  <li><code>timeZoneName: "longOffset"</code> 取得該時區在當下的 UTC 偏移，例如 <code>GMT+08:00</code>。</li>
+  <li>把日期、餐點時間與偏移量組成帶時區的字串，例如 <code>2026-07-29T08:15:00+08:00</code>。</li>
+  <li>交給 <code>new Date()</code> 解析，得到真正代表 UTC 瞬間的日期值。</li>
+</ol>
+
+<p>不要直接寫死 <code>+08:00</code>。Makassar 沒有 DST，但其他時區可能有；而且這個函式應該能在不同使用者與日期下重複使用。從同一個 formatter 取得年月日與偏移量，能確保兩者來自同一份時區計算，也會自動反映 DST 規則。</p>
+
+<figure class="lesson-figure"><img src="./seed-local-data-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>時間錯誤通常不會讓程式立刻崩潰，而是讓資料安靜地出現在錯誤日期。例如早餐被算到前一天，或晚餐在使用者的時區邊界上消失。當 app 依使用者時區查詢某一天的餐點時，這種錯誤就會直接變成錯誤的畫面結果。</p>
+
+<h2>第七步：驗證 seed 是否成功</h2>
+
+<p>執行：</p>
+
+<pre><code>node --experimental-strip-types scripts/seed.ts</code></pre>
+
+<p>終端機會印出每筆餐點的名稱與換算後的 ISO 時間，最後一行會顯示總共 seed 了幾筆資料。</p>
+
+<p>接著打開 <code>db:studio</code> 或 Neon dashboard，確認以下結果：</p>
+
+<ul>
+  <li><code>users</code> 裡有一列 demo 使用者。</li>
+  <li><code>meals</code> 裡有五筆餐點。</li>
+  <li>其中三筆屬於今天，兩筆屬於昨天。</li>
+  <li>再次執行腳本後，資料總數沒有增加。</li>
+</ul>
+
+<p>最後一項是關鍵驗證。如果重跑後仍然是一位使用者與五筆餐點，就代表這支 seed 腳本真的具備可重複執行的特性。</p>
+
+<h2>完成後，你應該得到什麼</h2>
+
+<blockquote>
+Seed 是把固定的測試資料寫進資料庫，但一支可用的 seed 腳本必須通過三關。可重複執行：用 upsert 讓使用者維持單一資料列，並在灌入餐點前清除該使用者的舊資料。安全：使用 <code>sql</code> 的 template literal 進行參數化查詢，讓資料值不會被當成 SQL。時區正確：儲存 UTC 瞬間，因此要用 <code>Intl.DateTimeFormat</code> 從使用者的 IANA 時區取得當下偏移量，再把本地時間組成帶偏移的字串交給 <code>new Date()</code> 解析。偏移量不能寫死，才能正確反映 DST。
+</blockquote>
+
+<p>完成這一步後，資料底盤就接起來了：schema 定義共同的資料形狀，client 連上 Neon，migration 建立資料表，seed 則灌入第一組能支撐畫面的寫實資料。接上背景 AI 分析任務時，它需要寫入的欄位與要訂閱的 <code>triggerRunId</code>，也都已經準備好了。</p>
+
+<p>換成你自己的 app 時，可以沿用同一個順序：先定義資料形狀，建立連線，執行 migration，最後 seed 一組能讓畫面與查詢立即運作的測試資料。</p>
+
+<div class="lesson-nav">
+  <div><a href="./run-drizzle-migrations.html">← 上一步：跑 migration：edit schema → generate → migrate</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="seed 腳本用固定的 clerkUserId，主要目的是什麼？" data-correct="2" data-explain="固定 key 才能用 upsert 認出同一個使用者，重複執行時更新而不是新增。">
+  <button class="opt">讓腳本執行時可以跳過連線步驟</button>
+  <button class="opt">讓餐點的圖片網址可以自動生成</button>
+  <button class="opt">讓 upsert 認得是同一筆使用者</button>
+  <button class="opt">讓資料庫自動產生更快的索引</button>
+</div>
+<div class="quiz" data-question="on conflict ... do update 這種寫法解決了什麼問題？" data-correct="1" data-explain="它讓同一筆資料存在就更新、不存在才新增，腳本因此可以重複執行。">
+  <button class="opt">讓查詢的速度比一般 insert 更快</button>
+  <button class="opt">讓腳本重複執行不會產生重複資料</button>
+  <button class="opt">讓資料庫自動備份整張使用者表</button>
+  <button class="opt">讓欄位的型別可以自動轉換成文字</button>
+</div>
+<div class="quiz" data-question="腳本在插入餐點前先 delete 該使用者的舊餐點，是為了什麼？" data-correct="3" data-explain="先清乾淨再重灌，避免每跑一次就多累積一批重複的餐點。">
+  <button class="opt">讓使用者表的主鍵可以重新編號</button>
+  <button class="opt">讓背景 task 可以重新啟動一次</button>
+  <button class="opt">讓資料庫的索引可以重新建立</button>
+  <button class="opt">避免重複執行時累積重複餐點</button>
+</div>
+<div class="quiz" data-question="為什麼不能把使用者當地的早上八點直接當成 UTC 存進資料庫？" data-correct="0" data-explain="當地時間不是 UTC 瞬間，兩者差一個時區偏移量，直接存會讓日期對錯。">
+  <button class="opt">因為當地時間和 UTC 差一個時區偏移</button>
+  <button class="opt">因為資料庫不接受任何時間字串寫入</button>
+  <button class="opt">因為早上八點一定落在日光節約時段內</button>
+  <button class="opt">因為餐點時間必須由 AI 分析後決定</button>
+</div>
+<div class="quiz" data-question="loggedAt 函式為什麼要用 Intl 取得偏移量，而不是寫死 +08:00？" data-correct="2" data-explain="偏移量會隨時區與日光節約時間改變，動態取得才能對應真實規則。">
+  <button class="opt">因為寫死的字串會讓資料庫拒絕寫入</button>
+  <button class="opt">因為 Intl 可以順便幫圖片網址加密</button>
+  <button class="opt">因為偏移量會隨 DST 等因素改變</button>
+  <button class="opt">因為寫死的偏移量會讓查詢變慢</button>
+</div>
+<div class="quiz" data-question="seed 腳本選擇用 sql 的 template literal 而不是拼字串，原因是什麼？" data-correct="1" data-explain="它是參數化查詢，值會以參數綁定，不會被當成 SQL 指令，能避免 injection。">
+  <button class="opt">因為 template literal 的執行速度比較快</button>
+  <button class="opt">因為它是參數化查詢、能避免 injection</button>
+  <button class="opt">因為它可以直接跳過使用者資料的驗證</button>
+  <button class="opt">因為它會自動幫你把資料轉成公制單位</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Neon + Drizzle 資料建模 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

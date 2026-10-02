@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把使用者回饋接進 Sentry</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>把使用者回饋接進 Sentry</h1>
+<p class="meta">Step 6/6 · Sentry 錯誤監控</p>
+
+<h2>完成後，你會得到什麼？</h2>
+<p>完成這一節後，使用者可以直接在 app 裡送出姓名、email 與問題描述。你則能在 Sentry Dashboard 的 User Feedback 找到這些回饋，並查看它們是否和錯誤事件連在一起。</p>
+
+<p>開始前，請先確認 app 已經完成前面的錯誤監控與 logs 設定。使用者回饋是加在觀測系統上的一扇窗，不是地基；先確定錯誤抓得到，再接上這層資訊。</p>
+
+<h2>為什麼要接使用者回饋？</h2>
+
+<p>想像使用者遇到問題：他可能想說「我希望可以一次上傳多張照片」，也可能覺得「這個付費方案我搞不懂」，或只是單純抱怨「畫面好卡」。這些話不會自動變成 exception，也不會出現在 log 裡。</p>
+
+<p>如果 app 沒有提供出口，這些聲音就會和使用者一起消失。錯誤監控能告訴你「程式在客觀上壞了」，但只有使用者回饋能告訴你「他怎麼感受、他真正想要什麼」。兩者像一張地圖的座標和註記：一個指出問題發生在哪裡，另一個補上使用者為什麼在意。</p>
+
+<figure class="lesson-figure"><img src="./user-feedback-widget-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>Sentry 可以把這兩種資訊掛在一起。使用者送出回饋後，你可以查看它是否連到某一則錯誤事件，進一步判斷這是個人偏好，還是確實踩到了 bug。</p>
+
+<h2>步驟一：初始化 feedback widget</h2>
+
+<p>Sentry 提供兩種使用方式。第一種是在初始化時加入 feedback 整合，之後再透過 Sentry API 顯示表單。先在 <code>Sentry.init</code> 裡完成設定：</p>
+
+<pre><code>Sentry.init({
+  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+  integrations: [
+    Sentry.feedbackIntegration({
+      colorScheme: 'light',
+      formTitle: 'Share your feedback',
+      messageLabel: 'What’s on your mind?',
+      messagePlaceholder: 'Tell us what you love, what could be better, or what went wrong…',
+      nameLabel: 'Name (optional)',
+      emailLabel: 'Email (optional)',
+      submitButtonLabel: 'Send feedback',
+      isNameRequired: false,
+      isEmailRequired: false,
+      successMessageText: 'Thanks for helping us improve!',
+    }),
+  ],
+});</code></pre>
+
+<p>這段程式做了三件事：</p>
+
+<ol>
+  <li>使用 <code>Sentry.feedbackIntegration</code> 把 feedback 功能接進 Sentry。</li>
+  <li>設定表單的標題、提示文字、欄位名稱、送出按鈕與成功訊息，讓表單語氣和 app 保持一致。</li>
+  <li>透過 <code>isNameRequired: false</code> 與 <code>isEmailRequired: false</code>，把姓名和 email 設為選填。</li>
+</ol>
+
+<p>姓名和 email 通常不必一開始就設成必填。欄位越多，願意送出的人可能越少；先讓使用者方便留下問題，需要追問時，再透過 email 聯絡。</p>
+
+<h2>步驟二：在使用者找得到的地方放入口</h2>
+
+<p>完成初始化後，還要讓使用者知道從哪裡送出回饋。常見做法是在設定頁或個人頁放一列「Send feedback」，按下後顯示表單：</p>
+
+<pre><code>// 放在 profile / settings 的某一列
+&lt;Row
+  label="Send feedback"
+  onPress={() => Sentry.showFeedbackWidget()}
+/&gt;</code></pre>
+
+<p>這裡的關鍵是 <code>Sentry.showFeedbackWidget()</code>。它會叫出前一步設定好的 feedback 表單。</p>
+
+<p>若這顆按鈕放在設定頁或個人頁，使用者遇到問題時通常比較找得到。反過來，若把它藏在測試頁或幾乎沒人會進去的角落，實際效果就像沒有提供回饋功能。</p>
+
+<p>若 X 是使用者正在查看的設定頁或個人頁，就把回饋入口放在 X；若 X 是使用者剛遇到錯誤的畫面，也可以在當下提示他送出回饋，讓錯誤事件與使用者的描述更容易連在一起。</p>
+
+<h2>步驟三：到 Dashboard 確認回饋</h2>
+
+<p>使用者送出表單後，前往 Sentry 的 <code>Issues → User Feedback</code>。在這裡可以查看：</p>
+
+<ul>
+  <li>是哪位使用者送出的回饋。</li>
+  <li>使用者寫了什麼內容。</li>
+  <li>這則回饋是否連到某一則錯誤事件。</li>
+</ul>
+
+<p>測試時送出的假回饋，Sentry 會自動判定為 spam（垃圾訊息），因此不會和真實使用者的聲音混在一起。真實回饋則會進到 inbox，等待你處理。</p>
+
+<h2>把回饋接回整個觀測流程</h2>
+
+<p>當你把「錯誤 → 看 replay → 讀 log → 查 trace → 收使用者回饋」串起來，就形成了一個完整的閉環。</p>
+
+<figure class="lesson-figure"><img src="./user-feedback-widget-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>你不只知道系統哪裡出錯，也能理解使用者當時怎麼感受，接著判斷應該修 bug，還是新增某個功能。這正是使用者回饋和錯誤報告互補的地方。</p>
+
+<h2>警告：收到回饋後要真的處理</h2>
+
+<p>回饋功能最常見的失敗，不是技術接錯，而是「收了卻沒人看」。既然接上了，就把 Sentry 通知接到你每天真的會看的地方，例如 email 或 Slack，並定期查看 inbox。</p>
+
+<p>使用者的抱怨如果能被快速回應，往往比單純修好一個 bug 更有機會留住使用者。不要把按鈕藏起來，也不要讓送進來的回饋在 Dashboard 裡悄悄堆積。</p>
+
+<h2>完成檢查</h2>
+
+<ol>
+  <li>在 <code>Sentry.init</code> 裡加入 <code>feedbackIntegration</code>。</li>
+  <li>確認表單文字符合 app 的語氣。</li>
+  <li>確認姓名與 email 是否要設為選填。</li>
+  <li>在設定頁或個人頁放置按鈕，並呼叫 <code>Sentry.showFeedbackWidget()</code>。</li>
+  <li>實際送出一則測試回饋。</li>
+  <li>到 <code>Issues → User Feedback</code> 確認回饋是否出現，並檢查測試回饋是否被歸類為 spam。</li>
+</ol>
+
+<h2>小結</h2>
+
+<blockquote>
+錯誤報告與使用者回饋是互補的：前者說「程式壞了」，後者說「使用者怎麼想」。在 <code>Sentry.init</code> 裡掛上 <code>feedbackIntegration</code>，自訂表單文字，姓名與 email 盡量設為選填；再於設定頁或個人頁放一顆按鈕呼叫 <code>Sentry.showFeedbackWidget()</code>。回饋會出現在 Issues → User Feedback，並可連結到對應的錯誤事件，測試回饋會被自動歸類為 spam。別把按鈕藏在測試頁，也別忘了定期處理收到的回饋——接了不看，等於沒接。
+</blockquote>
+
+<p>完成這六節後，你的 app 就從「本機能跑」走到「上線後看得見」：錯誤會自己找上你，log 可以查，效能有跡可循，使用者的聲音也有出口。把這套觀測能力帶回自己的 app，讓它成為每次開發時都會自然接上的基本配備。</p>
+
+<div class="lesson-nav">
+  <div><a href="./performance-tracing.html">← 上一步：用 tracing 找出慢在哪一段</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="錯誤報告與使用者回饋最大的差別是什麼？" data-correct="1" data-explain="錯誤報告描述程式客觀上壞了；使用者回饋描述主觀感受與想要的功能，兩者互補。">
+  <button class="opt">錯誤報告一定比較準確、回饋沒有價值</button>
+  <button class="opt">錯誤說程式壞了，回饋說使用者想什麼</button>
+  <button class="opt">回饋只能由工程師送出、使用者不能送</button>
+  <button class="opt">兩者是完全相同的資料，只是名稱不同</button>
+</div>
+<div class="quiz" data-question="在 Sentry.init 裡要用哪個整合來啟用使用者回饋表單？" data-correct="2" data-explain="feedbackIntegration 提供可自訂的回饋表單，也可搭配 showFeedbackWidget 觸發。">
+  <button class="opt">mobileReplayIntegration</button>
+  <button class="opt">reactNavigationIntegration</button>
+  <button class="opt">feedbackIntegration</button>
+  <button class="opt">browserTracingIntegration</button>
+</div>
+<div class="quiz" data-question="為什麼姓名與 email 通常建議設為選填？" data-correct="0" data-explain="要求越多欄位願意填的人越少；先降低門檻，需要追問時再靠 email 聯絡。">
+  <button class="opt">降低門檻，讓更多人願意送出回饋</button>
+  <button class="opt">因為 Sentry 技術上無法接收這些欄位</button>
+  <button class="opt">因為填了會增加 Sentry 的收費</button>
+  <button class="opt">因為 Apple 審核禁止收集 email</button>
+</div>
+<div class="quiz" data-question="回饋按鈕適合放在 app 的什麼位置？" data-correct="3" data-explain="設定頁或個人頁是使用者有問題時直覺會去找的地方；藏在測試頁等於沒有做。">
+  <button class="opt">藏在開發用的測試頁最深處</button>
+  <button class="opt">放在啟動畫面，每次開 app 都跳</button>
+  <button class="opt">只放在程式碼註解裡不出現</button>
+  <button class="opt">設定頁或個人頁這種直覺的位置</button>
+</div>
+<div class="quiz" data-question="Sentry 如何處理你測試時送出的假回饋？" data-correct="1" data-explain="測試回饋會被自動判定成 spam 分類，不會混進真實使用者的回饋 inbox。">
+  <button class="opt">自動把整則回饋刪除不留痕跡</button>
+  <button class="opt">自動判定成 spam，與真實回饋分開</button>
+  <button class="opt">自動寄一封道歉信給測試者</button>
+  <button class="opt">自動轉成一張新的錯誤事件</button>
+</div>
+<div class="quiz" data-question="使用者回饋功能最常見的失敗原因是什麼？" data-correct="2" data-explain="最常見的不是技術問題，而是收了回饋卻沒有人定期去看、去處理。">
+  <button class="opt">表單太漂亮，使用者不敢填寫</button>
+  <button class="opt">SDK 安裝後佔用太多手機儲存空間</button>
+  <button class="opt">收了回饋卻沒有人定期去看與處理</button>
+  <button class="opt">回饋只能在 Wi-Fi 環境下送出</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Sentry 錯誤監控 · Step 6/6</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

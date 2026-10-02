@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>接上 Neon：Drizzle client 與 drizzle.config 的設定</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>接上 Neon：設定 Drizzle client 與 drizzle.config</h1>
+<p class="meta">Step 3/5 · Neon + Drizzle 資料建模</p>
+
+<h2>這一節要完成什麼？</h2>
+
+<p>這一節的目標，是把 app 和 Neon 資料庫真正接起來。完成後，伺服器端的 API route 與背景 task 都能使用同一個 <code>db</code> 物件存取資料，<code>drizzle-kit</code> 也能找到你的 schema，為後續建立與更新資料表做好準備。</p>
+
+<p>你會完成三件事：把 Neon 的連線字串放進環境變數、建立 Drizzle client，最後設定 <code>drizzle.config.ts</code>，讓命令列工具知道 schema 在哪裡，以及 migration 要輸出到哪裡。</p>
+
+<p>動手前先確認兩樣東西都已經準備好：</p>
+
+<ul>
+  <li>一個已建立的 Neon 專案，以及從中取得的 Postgres 連線字串。</li>
+  <li>上一節完成的 <code>schema.ts</code>，也就是 users 與 meals 的資料表定義。</li>
+</ul>
+
+<h2>先看整體：把藍圖、程式與資料庫接成一條線</h2>
+
+<p>上一節讀完了 users 與 meals 兩張表，你手上已經有一份資料藍圖。不過，藍圖只是檔案裡的定義，還沒有連線把程式和 Neon 接起來。</p>
+
+<p>這一節就像替房子接上水電：<code>DATABASE_URL</code> 是管線位置，<code>db</code> 是程式實際使用的入口，而 <code>drizzle.config.ts</code> 則是告訴 <code>drizzle-kit</code> 該去哪裡找藍圖、該把施工紀錄放在哪裡。</p>
+
+<figure class="lesson-figure"><img src="./connect-drizzle-to-neon-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一步：把連線字串放進 DATABASE_URL</h2>
+
+<p>到 Neon 的專案頁面，在 Connect 面板複製 Postgres 連線字串。它大致會長這樣：</p>
+
+<pre><code>postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?sslmode=require</code></pre>
+
+<p>接著在專案根目錄建立或編輯 <code>.env</code>，把連線字串放到名為 <code>DATABASE_URL</code> 的環境變數中。</p>
+
+<p>同時，請把 <code>.env</code> 加進 <code>.gitignore</code>。這個檔案裡有資料庫密鑰，不能提交到版控；一旦跟著程式碼流出去，就等於把資料庫的鑰匙一起交給別人。</p>
+
+<p>完成後，預期結果是：任何會讀取環境變數的指令，都能從 <code>process.env.DATABASE_URL</code> 取得這串連線字串。若讀不到，下一步建立 client 時就會直接報錯。</p>
+
+<h2>第二步：建立共用的 Drizzle client</h2>
+
+<p>在 <code>src/db/index.ts</code> 建立資料層入口。之後伺服器端程式只要 import 這個檔案，就能使用同一個 <code>db</code> 物件：</p>
+
+<pre><code>import { neon } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/neon-http";
+
+import * as schema from "./schema";
+
+// Server-only. Never import this from a screen or component — Metro would
+// bundle the driver into the app.
+const url = process.env.DATABASE_URL;
+if (!url) throw new Error("DATABASE_URL is not set");
+
+export const db = drizzle({ client: neon(url), schema, casing: "snake_case" });
+
+export * from "./schema";</code></pre>
+
+<p>這段程式可以分成幾個動作來看。</p>
+
+<ol>
+  <li>
+    <p><code>neon(url)</code> 建立 Neon 的 serverless HTTP driver。它不是維持傳統的長連線，而是透過 HTTP 傳送查詢，適合 serverless 環境。</p>
+  </li>
+  <li>
+    <p><code>schema</code> 匯入整包資料表定義。把它交給 Drizzle 後，Drizzle 才知道有哪些表，也能根據這些定義提供相對應的型別。</p>
+  </li>
+  <li>
+    <p><code>drizzle({ client: neon(url), schema, casing: "snake_case" })</code> 把連線、schema 與命名規則組合起來，產生程式真正會使用的 <code>db</code>。</p>
+  </li>
+  <li>
+    <p><code>export * from "./schema"</code> 讓其他檔案從同一個 <code>index.ts</code> 就能同時取得 <code>db</code> 和資料表定義，少一層轉手。</p>
+  </li>
+</ol>
+
+<h3>為什麼要設定 casing？</h3>
+
+<p>TypeScript 的屬性通常使用 camelCase，例如 <code>clerkUserId</code>、<code>loggedAt</code>；Postgres 的欄位則常使用 snake_case，例如 <code>clerk_user_id</code>、<code>logged_at</code>。</p>
+
+<p><code>casing: "snake_case"</code> 會替你處理這個命名落差。程式碼可以維持容易閱讀的 camelCase，Drizzle 則會用 snake_case 對應到資料庫欄位。沒有這項設定時，你可能得在每個欄位上手動標明資料庫名稱。</p>
+
+<h3>讓設定錯誤立刻失敗</h3>
+
+<p>這兩行是刻意安排的快速失敗（fail fast）：</p>
+
+<pre><code>const url = process.env.DATABASE_URL;
+if (!url) throw new Error("DATABASE_URL is not set");</code></pre>
+
+<p>如果連線字串不存在，程式會在 import 這個檔案時立刻報錯，而不是過了好幾個步驟後才出現一個模糊的資料庫錯誤。錯得早、錯得清楚，通常比錯得晚、錯得難追好處理。</p>
+
+<h3>警告：<code>db</code> 是 server-only</h3>
+
+<p><strong>不要在畫面或元件裡 import <code>src/db/index.ts</code>。</strong></p>
+
+<p>手機 app 使用 Metro 這個打包器。只要畫面 import 了 <code>db</code>，相關的 Neon driver 就可能被打包進 app bundle，讓資料庫連線能力出現在手機端程式碼中。</p>
+
+<p>因此，這個 <code>db</code> 只能在 API route、背景 task 等伺服器端位置使用。若 X 是畫面或元件，則不要 import <code>db</code>；若 X 是伺服器端程式，才可以透過它查詢資料。</p>
+
+<h2>第三步：設定 drizzle.config.ts</h2>
+
+<p>接著建立或編輯 <code>drizzle.config.ts</code>。這個檔案是給 <code>drizzle-kit</code> 命令列工具使用的，不是 app 執行時的資料庫 client：</p>
+
+<pre><code>import { defineConfig } from "drizzle-kit";
+
+process.loadEnvFile(); // Node built-in, no dotenv needed
+
+export default defineConfig({
+  schema: "./src/db/schema.ts",
+  out: "./drizzle",
+  dialect: "postgresql",
+  casing: "snake_case", // must match src/db/index.ts
+  dbCredentials: { url: process.env.DATABASE_URL! },
+});</code></pre>
+
+<p>請逐項確認這份設定：</p>
+
+<ul>
+  <li><code>schema</code>：告訴工具去哪裡讀取資料表定義。</li>
+  <li><code>out</code>：指定產生的 migration 檔案要放在哪個資料夾。</li>
+  <li><code>dialect: "postgresql"</code>：指定使用的資料庫種類。</li>
+  <li><code>dbCredentials</code>：提供連線 Neon 所需的 URL。</li>
+</ul>
+
+<p>這裡的 <code>casing: "snake_case"</code> 必須和 <code>src/db/index.ts</code> 裡的設定一致。若 runtime 使用 snake_case，但產生 migration 的工具採用另一套規則，兩邊推算出的欄位名稱就可能不同，最後會變成很難追查的錯誤。</p>
+
+<p>另外，<code>process.loadEnvFile()</code> 是 Node 內建的功能，可以用來讀取 <code>.env</code>，因此不需要另外安裝 <code>dotenv</code>。</p>
+
+<h2>第四步：確認資料庫指令已接上</h2>
+
+<p>打開 <code>package.json</code>，確認 scripts 至少包含以下資料庫指令：</p>
+
+<pre><code>"db:generate": "drizzle-kit generate",
+"db:migrate": "drizzle-kit migrate",
+"db:push": "drizzle-kit push",
+"db:studio": "drizzle-kit studio"</code></pre>
+
+<p>這一節不用先把所有指令都背起來。現在先記住兩個重點：</p>
+
+<ul>
+  <li><code>db:generate</code> 與 <code>db:migrate</code> 會在下一節成為主角。</li>
+  <li><code>db:studio</code> 會開啟圖形介面，讓你查看資料庫中的表與資料，也適合用來驗證連線是否成功。</li>
+</ul>
+
+<h2>驗證：確認這條線真的通了</h2>
+
+<p>執行 <code>db:studio</code>。如果連線設定正確，應該會開啟資料庫瀏覽介面，並讀得到 Neon 上的資料庫。</p>
+
+<p>此時畫面可能還是空的，這不代表設定失敗。因為資料表還沒建立，資料也還沒灌入；這些工作會在後面的章節完成。這一節只驗證一件事：程式能不能透過設定好的連線找到 Neon。</p>
+
+<figure class="lesson-figure"><img src="./connect-drizzle-to-neon-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>完成後，你應該得到什麼？</h2>
+
+<blockquote>
+接上 Neon 分成三個檔案。把連線字串放進 <code>DATABASE_URL</code> 並排除在版控外；在 <code>src/db/index.ts</code> 用 <code>neon()</code> 加上 <code>drizzle()</code> 建立 <code>db</code>，設定 <code>casing: "snake_case"</code> 對齊兩邊的命名，並在缺少環境變數時立刻報錯；在 <code>drizzle.config.ts</code> 告訴 drizzle-kit 去哪裡讀 schema、產生的 migration 放哪裡。切記這個 <code>db</code> 是 server-only，不能被畫面 import。設定完成後，用 <code>db:studio</code> 驗證連線。
+</blockquote>
+
+<p>完成後，你應該能在伺服器端程式中 import <code>db</code>，也能用 <code>db:studio</code> 連到 Neon。資料庫裡暫時沒有表是正常的，因為目前只完成了連線與工具設定。</p>
+
+<p>下一節會把 <code>schema.ts</code> 的資料表定義真正套用到資料庫，走一次 <code>edit schema → generate → migrate</code> 的流程，並檢查過程中產生的 SQL 與 meta 檔。</p>
+
+<div class="lesson-nav">
+  <div><a href="./model-users-and-meals.html">← 上一步：建 users 與 meals：欄位、關聯、索引與時間的設計</a></div>
+  <div><a href="./run-drizzle-migrations.html">下一步：跑 migration：edit schema → generate → migrate →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="src/db/index.ts 裡 client 設定 casing 為 snake_case，是為了解決什麼？" data-correct="1" data-explain="TypeScript 慣用 camelCase、Postgres 慣用 snake_case，這個設定讓兩邊自動對應。">
+  <button class="opt">讓 UUID 主鍵可以自動產生數值</button>
+  <button class="opt">讓 camelCase 屬性對到 snake_case 欄位</button>
+  <button class="opt">讓背景 task 可以共用同一份程式碼</button>
+  <button class="opt">讓資料庫連線改用 HTTP 而不用 TCP</button>
+</div>
+<div class="quiz" data-question="為什麼連線字串缺失時要立刻 throw，而不是等到查詢才處理？" data-correct="3" data-explain="快速失敗讓錯誤在最早、最清楚的地方出現，不用追查後續一連串莫名的症狀。">
+  <button class="opt">因為 throw 可以讓程式跑得更快</button>
+  <button class="opt">因為 throw 會自動把密鑰加密保存</button>
+  <button class="opt">因為資料庫規定連線前必須丟出錯誤</button>
+  <button class="opt">因為錯誤要早點出現、早點講清楚</button>
+</div>
+<div class="quiz" data-question="為什麼 src/db/index.ts 不能被畫面或元件 import？" data-correct="0" data-explain="Metro 會把 import 到的東西打包進 app，driver 一旦進去就有暴露資料庫連線的風險。">
+  <button class="opt">因為打包器會把資料庫 driver 塞進 app</button>
+  <button class="opt">因為畫面元件不支援 import 任何檔案</button>
+  <button class="opt">因為這樣會讓資料庫自動刪除所有資料</button>
+  <button class="opt">因為 Neon 只允許工具連線不允許 app</button>
+</div>
+<div class="quiz" data-question="drizzle.config.ts 主要是給誰讀的？" data-correct="2" data-explain="它給 drizzle-kit 命令列工具讀，用來找 schema 與決定 migration 輸出位置。">
+  <button class="opt">給手機 app 的畫面元件在執行時讀取</button>
+  <button class="opt">給 Neon 的網頁管理介面自動讀取</button>
+  <button class="opt">給 drizzle-kit 命令列工具讀取</button>
+  <button class="opt">給 Clerk 的 webhook 驗證流程讀取</button>
+</div>
+<div class="quiz" data-question="為什麼 drizzle.config.ts 的 casing 必須和 src/db/index.ts 一致？" data-correct="1" data-explain="兩者若用不同命名規則，算出的欄位名會不同；runtime 與 migration 必須對齊。">
+  <button class="opt">因為兩邊不一致會讓資料庫無法啟動</button>
+  <button class="opt">因為兩邊不一致會讓欄位名對不上</button>
+  <button class="opt">因為這樣會讓資料庫自動改成英制</button>
+  <button class="opt">因為設定檔規定要重複同一組參數</button>
+</div>
+<div class="quiz" data-question="db:studio 這個指令在這一步的用途是什麼？" data-correct="3" data-explain="它開出圖形介面，可以直接看表與資料，最適合驗證連線是否成功。">
+  <button class="opt">自動把所有資料複製到手機本機</button>
+  <button class="opt">把 schema 轉換成 App Store 的設定</button>
+  <button class="opt">產生所有背景 task 需要的程式碼</button>
+  <button class="opt">開圖形介面查看資料庫並驗證連線</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Neon + Drizzle 資料建模 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

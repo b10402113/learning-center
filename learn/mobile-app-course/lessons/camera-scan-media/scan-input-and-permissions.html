@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>開相機與選圖：權限、拍照與相簿輸入</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>開相機與選圖：處理權限、拍照與相簿輸入</h1>
+<p class="meta">Step 1/5 · 拍照掃描與媒體上傳</p>
+
+<h2>先看整體：這一節要完成什麼</h2>
+
+<p>你正在做一個 scan 畫面：使用者可以直接拍照，也可以從相簿挑一張照片，兩條路最後都交給同一段後續處理。這看起來像是放兩顆按鈕，但真正接上手機後，還要處理權限、相機生命週期，以及使用者拒絕權限時的替代方案。</p>
+
+<p>想像你照著設計稿刻出 scan 畫面：一個大大的快門圓鈕、底下寫著「把整盤食物放進畫面」。模擬器上跑起來漂漂亮亮，你按下快門——什麼都沒發生。換到真機，系統跳出一個權限視窗，你選了「不允許」，整個畫面就此卡死，連「改用相簿」這條路都沒有。</p>
+
+<p>這不是單純哪一行寫錯，而是行動裝置的輸入本來就有門檻。相機、相簿、麥克風、定位，都要先通過權限這道關卡。通過之後，還有另一個容易被忽略的問題：Expo 的原生分頁可能會先把所有頁面渲染好，導致使用者明明還在首頁，相機卻已經掛著、甚至持續開啟。</p>
+
+<p>這一節會帶你完成兩件事：讓 scan 畫面同時支援拍照與選圖，以及在相機權限被拒絕或分頁失焦時，仍然維持正確的使用流程。</p>
+
+<figure class="lesson-figure"><img src="./scan-input-and-permissions-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>前置條件：開始前先確認</h2>
+
+<p>動手前，請先確認專案已經 scaffold 好，也知道新增 native module 之後必須重建 app。這裡要使用相機與相簿套件，因此要執行 <code>npx expo run iOS</code>，不能只靠重新整理 JS 或熱重載來查看結果。</p>
+
+<p>完成後，scan 畫面會得到一個形狀一致的結果：<code>{ uri, base64 }</code>。<code>uri</code> 用來預覽本機照片，<code>base64</code> 則交給後續上傳流程。</p>
+
+<h2>第一步：在 app.json 宣告權限與說明文案</h2>
+
+<p>權限的第一個落點不是元件程式碼，而是 <code>app.json</code>。相機與相簿要在這裡掛上對應的 Expo plugin，並附上給使用者看的說明。</p>
+
+<p>這在 iOS 上是必要設定：系統權限彈窗必須告訴使用者，這個 app 為什麼需要相機。如果沒有提供這段說明，權限就不會正常生效。</p>
+
+<pre><code>[
+  "expo-camera",
+  {
+    "cameraPermission": "Bulky AI uses the camera to read the calories and macros in your meal."
+  }
+],
+[
+  "expo-image-picker",
+  {
+    "photosPermission": "Bulky AI reads the calories and macros from meal photos you pick."
+  }
+]</code></pre>
+
+<p>Android 則要在 <code>android.permissions</code> 明確列出 <code>android.permission.CAMERA</code>。</p>
+
+<p>文案不是裝飾。若只寫「需要相機權限」，使用者很難知道允許之後能得到什麼；寫清楚用途，例如用照片讀出餐點的熱量與營養素，使用者才比較能做出有根據的選擇。</p>
+
+<h2>第二步：在真正使用相機時請求權限</h2>
+
+<p>完成宣告後，程式仍要在真的需要相機時請求權限。<code>expo-camera</code> 提供 <code>useCameraPermissions()</code> hook，它回傳的 <code>permission</code> 可能有三種狀態：</p>
+
+<ul>
+  <li>若為 <code>null</code>，代表權限狀態仍在載入。</li>
+  <li>若 <code>granted</code> 為 <code>true</code>，代表使用者已允許相機。</li>
+  <li>若未授權，則要根據 <code>canAskAgain</code> 決定下一步。</li>
+</ul>
+
+<p>不要把 <code>null</code> 當成「使用者拒絕」。那只是狀態還沒準備好；若太早顯示拒絕畫面，使用者會看到錯誤的提示。</p>
+
+<pre><code>const [permission, requestPermission] = useCameraPermissions();
+
+if (!permission) return &lt;Screen /&gt;; // 權限狀態還在載入
+
+if (!permission.granted) {
+  return (
+    &lt;Screen&gt;
+      &lt;Pressable
+        onPress={() =&gt;
+          permission.canAskAgain ? requestPermission() : Linking.openSettings()
+        }&gt;
+        &lt;Text&gt;
+          {permission.canAskAgain ? 'Allow camera' : 'Open Settings'}
+        &lt;/Text&gt;
+      &lt;/Pressable&gt;
+    &lt;/Screen&gt;
+  );
+}</code></pre>
+
+<p>這段程式的判斷順序很重要。</p>
+
+<ol>
+  <li>若 <code>permission</code> 還不存在，先顯示載入中的畫面。</li>
+  <li>若尚未取得權限，檢查 <code>permission.canAskAgain</code>。</li>
+  <li>若還能再次詢問，就呼叫 <code>requestPermission()</code>。</li>
+  <li>若不能再詢問，就呼叫 <code>Linking.openSettings()</code>，把使用者帶到系統設定。</li>
+</ol>
+
+<p>使用者第一次拒絕時，系統通常還允許 app 再問一次，所以按鈕可以顯示「Allow camera」。但當使用者拒絕到系統不再顯示彈窗時，再按一次請求權限也不會有反應；這時按鈕應該改成「Open Settings」。按鈕文字跟著狀態改變，使用者才不會以為 app 壞掉了。</p>
+
+<figure class="lesson-figure"><img src="./scan-input-and-permissions-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第三步：拍照並統一輸出格式</h2>
+
+<p>權限通過後，才渲染 <code>CameraView</code>。拍照時要先用 ref 抓住相機元件，再呼叫 <code>takePictureAsync</code>。</p>
+
+<pre><code>const cameraRef = useRef&lt;CameraView&gt;(null);
+
+const capture = async () =&gt; {
+  const picture = await cameraRef.current?.takePictureAsync({
+    quality: 0.5,
+    base64: true,
+  });
+  if (picture?.base64) setShot({ uri: picture.uri, base64: picture.base64 });
+};</code></pre>
+
+<p><code>quality: 0.5</code> 是刻意降低壓縮品質。手機相機原始 JPEG 可能有很大的尺寸與檔案大小，但掃描餐點通常不需要保留完整相機畫質。降低品質後，網路傳輸與後續處理都會輕一些。</p>
+
+<p><code>base64: true</code> 會讓結果包含可以直接放進 JSON 的字串版本。拍照完成後，<code>shot</code> 同時保存本機 <code>uri</code> 與 <code>base64</code>：前者用來顯示預覽，後者留給上傳流程。</p>
+
+<h2>第四步：從相簿選圖，保留替代路徑</h2>
+
+<p>相簿選擇器與直接讀取整個相簿不同。現代系統的選擇器只會把使用者親手挑選的照片交給 app，因此 iOS 與 Android 都不需要事先取得相簿的執行時權限。</p>
+
+<p>這讓 scan 畫面多了一條重要的替代路徑：即使使用者拒絕相機權限，仍然可以按「Choose from gallery」選擇照片，不會整頁卡在權限提示上。</p>
+
+<pre><code>const pickFromGallery = async () =&gt; {
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images'],
+    quality: 0.5,
+    base64: true,
+  });
+  const asset = result.assets?.[0];
+  if (asset?.base64) setShot({ uri: asset.uri, base64: asset.base64 });
+};</code></pre>
+
+<p>這裡要注意，相機與相簿回傳的資料形狀不同：</p>
+
+<ul>
+  <li>相機直接回傳一張 picture。</li>
+  <li>相簿回傳的是 <code>result.assets</code> 陣列，因此要取第一筆資產。</li>
+</ul>
+
+<p>兩邊最後都用 <code>setShot</code> 收斂成 <code>{ uri, base64 }</code>。這樣下一段處理上傳時，就不必再分辨照片是拍出來的，還是從相簿選出來的。</p>
+
+<p>在相機權限被拒絕的畫面中，請把「Choose from gallery」放在主要按鈕下方。若 <code>canAskAgain</code> 為 true，主要按鈕負責重新請求相機權限；若為 false，主要按鈕帶使用者前往系統設定，而相簿按鈕則始終提供可用的替代方案。</p>
+
+<h2>第五步：離開分頁時卸載相機</h2>
+
+<p>最後要處理的是 native tabs 的生命週期。Expo 的原生分頁會預先渲染所有分頁，因此使用者明明正在 Home，scan 分頁的 <code>CameraView</code> 仍可能掛著，持續占用相機與電力。</p>
+
+<p>先用 <code>useIsFocused()</code> 判斷目前分頁是否真的可見，只有可見時才渲染相機：</p>
+
+<pre><code>const isFocused = useIsFocused();
+
+// ...
+{isFocused ? (
+  &lt;CameraView ref={cameraRef} style={{ flex: 1 }} facing="back" /&gt;
+) : null}</code></pre>
+
+<p>當 <code>isFocused</code> 為 true 時，畫面才會掛載 <code>CameraView</code>。切換到其他分頁後，<code>CameraView</code> 會被卸載，相機也會隨之釋放。</p>
+
+<p>這是使用 native tabs 時要特別留意的地方。一般的 tab 導航不一定會遇到相同情況，但只要你的導航方式會預先渲染分頁，就必須把相機的掛載條件綁在目前是否可見。</p>
+
+<figure class="lesson-figure"><img src="./scan-input-and-permissions-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>完成後應該看到什麼</h2>
+
+<p>現在可以用下面的流程驗證結果：</p>
+
+<ol>
+  <li>進入 scan 分頁，若尚未授權，看到相機權限請求畫面。</li>
+  <li>若可以再次詢問，按鈕會重新呼叫權限請求。</li>
+  <li>若系統不再允許詢問，按鈕會改為開啟系統設定。</li>
+  <li>即使相機被拒絕，也能按「Choose from gallery」選取照片。</li>
+  <li>拍照或選圖成功後，都能得到包含 <code>uri</code> 與 <code>base64</code> 的 <code>shot</code>。</li>
+  <li>離開 scan 分頁後，<code>CameraView</code> 不再掛載。</li>
+</ol>
+
+<blockquote>
+相機與相簿輸入要處理兩道關卡。第一道是權限：在 app.json 用 plugin 宣告權限與說明文案，執行時用 useCameraPermissions 分辨載入中、已允許與被拒絕，再用 canAskAgain 決定要重新請求，或帶使用者前往系統設定。相簿選擇器不需要執行時權限，因此相機被拒絕時仍能提供選圖這條路。第二道是生命週期：native tabs 會預先渲染分頁，必須用 useIsFocused 只在畫面可見時掛載 CameraView，避免相機在背景持續開啟。拍照與選圖最後都整理成同一個 { uri, base64 }，交給下一段處理。
+</blockquote>
+
+<p>做完這些設定後，scan 畫面就具備兩種輸入方式，也能面對權限被拒與分頁切換。下一節會處理照片上傳：把這份 <code>base64</code> 送進 ImageKit，並說明為什麼上傳一定要發生在 server 端。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./imagekit-upload.html">下一步：照片進 ImageKit：server-side 上傳與尺寸策略 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼相機權限的說明文案要寫在 app.json，而不是程式碼裡？" data-correct="1" data-explain="iOS 的系統權限彈窗會顯示這段說明，沒有它權限就不會生效。">
+  <button class="opt">因為程式碼無法讀取使用者當下的語言設定</button>
+  <button class="opt">因為系統彈窗要顯示用途說明，沒寫就不生效</button>
+  <button class="opt">因為 app.json 能同時控制 Android 的權限開關</button>
+  <button class="opt">因為寫在程式碼裡會讓 app 的檔案變得太過龐大</button>
+</div>
+<div class="quiz" data-question="useCameraPermissions() 回傳 null 代表什麼？" data-correct="3" data-explain="null 只表示權限狀態還在載入，不等於被拒絕，這時不該顯示拒絕畫面。">
+  <button class="opt">使用者已經永久拒絕了相機權限</button>
+  <button class="opt">裝置的相機硬體目前無法使用</button>
+  <button class="opt">app 還沒有在 app.json 宣告權限</button>
+  <button class="opt">權限狀態還在載入，尚未確定結果</button>
+</div>
+<div class="quiz" data-question="使用者拒絕相機後，什麼時候該用 Linking.openSettings()？" data-correct="0" data-explain="當 canAskAgain 為 false 時系統不會再跳窗，只能引導使用者去設定頁手動開啟。">
+  <button class="opt">當 canAskAgain 為 false、系統不再跳窗時</button>
+  <button class="opt">當 canAskAgain 為 true、還能再問一次時</button>
+  <button class="opt">第一次請求權限之前就該先跳設定頁</button>
+  <button class="opt">只要 permission 是 null 就立刻跳設定頁</button>
+</div>
+<div class="quiz" data-question="為什麼相機被拒絕時，畫面仍可以保留「從相簿選擇」？" data-correct="2" data-explain="系統相簿選擇器只回傳使用者點選的那張照片，不需要事先取得相簿權限。">
+  <button class="opt">因為相簿權限預設就是永遠允許的</button>
+  <button class="opt">因為相機與相簿其實共用同一組權限</button>
+  <button class="opt">因為系統選擇器只回傳使用者點的照片</button>
+  <button class="opt">因為 expo-image-picker 會自動繞過系統限制</button>
+</div>
+<div class="quiz" data-question="拍照時設定 base64: true，是為了得到什麼？" data-correct="1" data-explain="base64 是一份可直接放進 JSON 的字串版本，用來跨網路傳到自己的 API。">
+  <button class="opt">讓照片自動加上浮水印和拍攝時間</button>
+  <button class="opt">得到一份可以直接放進 JSON 的字串</button>
+  <button class="opt">把照片直接存進手機的相簿資料夾</button>
+  <button class="opt">讓照片在預覽時自動壓縮成縮圖</button>
+</div>
+<div class="quiz" data-question="為什麼只有在 useIsFocused() 為 true 時才渲染 CameraView？" data-correct="3" data-explain="native tabs 會預先渲染所有分頁；不判斷焦點的話，鏡頭會在使用者坐在別頁時一直開著耗電。">
+  <button class="opt">因為 CameraView 在背景會讓畫面整個變黑</button>
+  <button class="opt">因為 Expo 規定每個分頁只能有一個相機</button>
+  <button class="opt">因為這樣才能拿到拍照用的 ref 參照</button>
+  <button class="opt">因為避免鏡頭在其他分頁被開著耗電</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 拍照掃描與媒體上傳 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

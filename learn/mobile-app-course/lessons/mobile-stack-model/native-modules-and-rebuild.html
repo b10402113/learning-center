@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>native module 與重建：為什麼裝個套件要重新編譯</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>native module 與重建：為什麼裝個套件還要重新編譯？</h1>
+<p class="meta">Step 4/5 · Expo / React Native 心智模型</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你會知道 native module 是什麼，理解為什麼新增 native module 後必須重新執行原生建置，也能分辨 Metro 的 JS 熱更新與原生重建，分別更新了 app 的哪一層。</p>
+
+<h2>前言：為什麼只是裝套件，卻要整包重建？</h2>
+
+<p>你可能遇過這種情況：照著文件裝好套件，重新載入 app，畫面卻完全沒有變。終端機還吐出一段看不懂的錯誤。你問旁邊的人怎麼辦，得到的答案只有一句：「你要 rebuild。」</p>
+
+<p>但問題是，明明只是多裝了一個套件，為什麼不能像平常改 JavaScript 一樣，重新整理就好？</p>
+
+<p>關鍵是，React Native app 不只一層。它同時有 JavaScript 和原生程式碼，兩層的更新方式不一樣。搞懂「rebuild」背後的機制，你就能判斷哪些修改可以即時生效、哪些一定得重新建置，不用再靠猜。</p>
+
+<h2>native module：把原生能力包成 JS 介面</h2>
+
+<p>先回到 JS 與手機原生能力之間的那條界線。</p>
+
+<p>你可以在 JS 這一側撰寫畫面與邏輯，但手機有些能力位在另一側，例如相機、登入流程或系統層級的功能。要讓 JS 使用這些能力，就需要有人用原生語言撰寫程式：iOS 通常是 Swift，Android 通常是 Kotlin。接著，再把這段原生程式包成 JS 可以呼叫的介面。</p>
+
+<p>這個「原生程式加上 JS 呼叫介面」的組合，就是 <strong>native module</strong>。</p>
+
+<p>它其實比想像中常見。課程裡的 Sentry 是 native module，所以安裝後需要重建；相機權限那組 API 也是 native module。Clerk 的原生登入功能，以及 Expo 的 native tabs，同樣都站在原生這一側。</p>
+
+<figure class="lesson-figure"><img src="./native-modules-and-rebuild-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>你在程式裡可能只看到一行 <code>import</code> 和幾個函式呼叫，但 app 背後其實多了一段原生碼。這段程式得先編譯、再連結進 app 的 binary，才能真的在手機上跑起來。</p>
+
+<h2>兩層更新：JS 層與 binary 層</h2>
+
+<p>為什麼有些修改一存檔就出現，有些卻要等很久？因為 app 裡同時有兩層東西，更新方式就像兩種施工：一種只要換內容，另一種得拆開結構重新組裝。</p>
+
+<table>
+<thead>
+<tr><th>層</th><th>裡面有什麼</th><th>怎麼更新</th></tr>
+</thead>
+<tbody>
+<tr><td>JS 層</td><td>你寫的元件、state、畫面邏輯</td><td>由 Metro 打包成 JS bundle，改完後透過熱更新／fast refresh 幾乎即時套用</td></tr>
+<tr><td>Native／binary 層</td><td>已連結進 app 的原生模組、原生專案設定</td><td>重新編譯整個原生專案，產生新的 app binary</td></tr>
+</tbody>
+</table>
+
+<p><strong>Metro</strong> 是 Expo 生態裡負責打包 JavaScript 的工具。當你修改一個 <code>.tsx</code> 檔案，Metro 會重新打包 JS。手機上的 app 再透過 dev server 取得新的 bundle，畫面就更新了。</p>
+
+<p>這個過程很快，是因為你只改了 JS 層，沒有碰到原生程式。</p>
+
+<p>但新增 native module 就不一樣了。這個模組的原生碼得先編譯、再連結進 app binary。手機上原本裝好的 binary 裡，並沒有這段新程式。</p>
+
+<p>JS 熱更新只能替換 JavaScript bundle，沒辦法順便把新的原生碼塞進既有的 app。所以你得重新建置，做出一個「已經包含新模組」的 binary，再重新安裝到裝置上。</p>
+
+<figure class="lesson-figure"><img src="./native-modules-and-rebuild-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<blockquote class="good-code">記法：JS 熱更新換的是「字幕」，原生重建換的是「舞台上的機械」。字幕可以隨時替換；機械要停工施工，才能裝上新的零件。</blockquote>
+
+<h2>實際動手時，整條鏈會怎麼接起來？</h2>
+
+<p>把專案從 Expo Go 帶到 development build 時，會先安裝 dev client 套件：</p>
+
+<p><code>npx expo install expo-dev-client</code></p>
+
+<p>接著執行原生建置。以 iOS 為例，指令是：</p>
+
+<p><code>npx expo run ios</code></p>
+
+<p>Android 則使用對應的平台指令。建置完成後，專案會多出原生的 <code>ios/</code> 資料夾；如果也建置 Android，則會有 <code>android/</code> 資料夾。可以把它們想成 app 的原生外殼，裡面包含原生專案與要連結進 binary 的模組。</p>
+
+<p>所以之後每次新增或移除 native module，都要再跑一次 <code>npx expo run ios</code>，讓新的 binary 編譯出來。</p>
+
+<p>這也解釋了你常感受到的速度差異：第一次建置特別慢，因為它正在編譯原生專案；之後如果只改 JS，通常只需要更新 JS bundle，所以反應會快很多。</p>
+
+<p>如果要把 build 裝到自己的實體手機，可以用 USB 連線執行 <code>npx expo run iOS --device</code>。也可以使用 Expo EAS 進行雲端建置，之後再讓手機上的 app 連回本機的 dev server。</p>
+
+<p>那為什麼不每次修改都重建，省得判斷？因為原生重建本身很慢，而日常開發大多數時候只是在調整 JS。比較實際的節奏是：平常讓 Metro 負責熱更新；只有真的動到原生那一層，才付出一次重建的成本。</p>
+
+<h2>對照 web：為什麼網頁通常沒有這一層麻煩？</h2>
+
+<p>如果你熟悉 Next.js，可能會覺得 React Native 的重建流程特別陌生。原因是，在網頁世界裡，瀏覽器就是那個已經準備好的執行容器。</p>
+
+<p>你不需要自己編譯瀏覽器，也不需要把新的原生模組裝進使用者的瀏覽器。只要替換伺服器上的檔案或 bundle，使用者重新整理後，就能取得新版程式。</p>
+
+<p>React Native 的情況不一樣。它的 app 本身就是容器，而這個容器裡裝了哪些原生模組，是由你的專案決定的。容器裡的內容一改，例如多了一個 native module，就得重新把容器做出來。</p>
+
+<p>換句話說，網頁的「原生層」由瀏覽器廠商維護，更新與你無關；React Native 的原生層則由你的專案維護。所以當你新增原生模組，重新建置就是你要自己負責的事。</p>
+
+<figure class="lesson-figure"><img src="./native-modules-and-rebuild-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把這個觀念接回整個心智模型</h2>
+
+<blockquote>
+<p>native module 是用原生語言寫好、再包成 JS 介面的模組。你的 app 同時有 JS 層與 native／binary 層：JS 層由 Metro 打成 bundle，可以透過熱更新快速替換；native／binary 層則包含已連結的原生模組。只要新增或移除 native module，就得用 <code>npx expo run ios</code> 重新編譯並重新安裝。</p>
+</blockquote>
+
+<p>第一次建置比較慢、之後只改 JS 卻很快，是因為這兩層的更新成本本來就不一樣，不是 Expo 故意找麻煩。</p>
+
+<p>到這裡，心智模型的三塊拼圖已經接上：渲染終點換了、Expo 提供整條工具鏈，而 native module 決定你什麼時候必須重建。最後一節會把這些觀念放進真實專案的檔案裡，打開 Codexgram 的 <code>_layout.tsx</code>，看看它們在程式碼中實際長什麼樣子。</p>
+
+<div class="lesson-nav">
+  <div><a href="./expo-go-vs-dev-build.html">← 上一步：Expo Go 還是 dev build：什麼時候非真機建置不可</a></div>
+  <div><a href="./expo-router-app-shell.html">下一步：從 _layout.tsx 看 Expo Router 的 App Shell →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="native module 本質上是什麼？" data-correct="1" data-explain="它是用原生語言寫好、包成 JS 可呼叫介面的模組，用來取得手機的原生能力。">
+  <button class="opt">一段被自動轉譯成原生的 JavaScript</button>
+  <button class="opt">原生語言寫好、包給 JS 呼叫的模組</button>
+  <button class="opt">一種專門用來管理套件版本的設定檔</button>
+  <button class="opt">一個只在瀏覽器裡執行的 Web API</button>
+</div>
+<div class="quiz" data-question="Metro 負責的是哪一層？" data-correct="0" data-explain="Metro 把 JavaScript 打包成 bundle，改 JS 可以熱更新，不涉及原生碼。">
+  <button class="opt">把 JavaScript 打包成可熱更新的 bundle</button>
+  <button class="opt">把原生模組編譯進 app binary</button>
+  <button class="opt">把 App Store 的上架資料送出審核</button>
+  <button class="opt">把資料庫 schema 同步到雲端</button>
+</div>
+<div class="quiz" data-question="為什麼新增 native module 一定要重新建置？" data-correct="2" data-explain="新的原生碼必須被編譯並連結進 app binary，而熱更新只換 JS bundle。">
+  <button class="opt">因為 Expo 規定每次都要重新登入</button>
+  <button class="opt">因為舊的 JavaScript 檔案會全部失效</button>
+  <button class="opt">因為原生碼得重新連結進 app binary</button>
+  <button class="opt">因為 App Store 要求每次改版都重建</button>
+</div>
+<div class="quiz" data-question="為什麼第一次原生建置特別慢，之後卻快很多？" data-correct="3" data-explain="第一次在編譯整包原生專案，之後多數時候只是換 JS bundle。">
+  <button class="opt">因為第一次要把整個 App Store 下載下來</button>
+  <button class="opt">因為之後的程式碼會自動變成原生語言</button>
+  <button class="opt">因為之後所有修改都不需要執行 build</button>
+  <button class="opt">因為第一次在編譯原生專案，之後多改 JS</button>
+</div>
+<div class="quiz" data-question="要把 build 裝到自己的實體 iPhone，課程提到哪些方式？" data-correct="1" data-explain="可以直接 USB 連線跑 --device，也可以走 Expo EAS 的雲端建置。">
+  <button class="opt">只能透過 App Store 正式上架取得</button>
+  <button class="opt">USB 連線 --device 或走 EAS 雲端</button>
+  <button class="opt">只能把手機寄回 Expo 公司安裝</button>
+  <button class="opt">一定要先付 Apple Developer 年費才行</button>
+</div>
+<div class="quiz" data-question="為什麼瀏覽器裡的 Next.js 沒有「新增原生模組要重建」的問題？" data-correct="2" data-explain="瀏覽器是使用者裝好的原生容器，原生層由瀏覽器廠商維護，開發者不用管。">
+  <button class="opt">因為 Next.js 完全不使用原生程式碼</button>
+  <button class="opt">因為瀏覽器會自動下載缺少的原生模組</button>
+  <button class="opt">因為原生容器由瀏覽器廠商維護，與你無關</button>
+  <button class="opt">因為網頁的 JavaScript 不需要被編譯</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Expo / React Native 心智模型 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

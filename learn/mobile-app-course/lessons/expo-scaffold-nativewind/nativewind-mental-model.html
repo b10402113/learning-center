@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NativeWind 是什麼：Tailwind 怎麼跑進 React Native</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>NativeWind 是什麼：Tailwind 如何跑進 React Native</h1>
+<p class="meta">Step 3/5 · 建立 Expo 專案與 NativeWind</p>
+
+<h2>學習目標</h2>
+<p>讀完這一節，你應該能說明 React Native 為什麼沒有網頁那種 CSS，也能解釋 NativeWind 如何把 Tailwind 的 <code>className</code> 轉成 React Native（RN）使用的 <code>style</code> 物件。你還會知道，為什麼這件事需要 Babel、Metro、Tailwind 設定與 <code>global.css</code> 一起配合。</p>
+
+<h2>前言：那行 class，為什麼完全沒反應？</h2>
+
+<p>你剛把專案清成空白。上一節那張白紙上，<code>index.tsx</code> 用 <code>StyleSheet.create</code> 把一行字置中，你可能已經感受到那股囉唆：明明只是置中，卻得先寫一整個 style 物件。</p>
+
+<p>於是你很自然地寫下這行：</p>
+
+<pre><code>&lt;View className="flex-1 items-center justify-center bg-blue-500"&gt;</code></pre>
+
+<p>在網頁上，這樣寫就像點餐一樣俐落：藍色背景、內容置中，還要撐滿可用空間，一串 class 就全部交代了。可是存檔之後，模擬器裡的畫面紋風不動。沒有錯誤、沒有警告，就是什麼都沒發生。</p>
+
+<p>這不是你打錯字，也不是 NativeWind 壞了；它只是根本還沒裝上。更重要的問題是：<strong>為什麼網頁上理所當然的 className，到了 React Native，卻得先接好一整套工具鏈才能運作？</strong></p>
+
+<p>弄懂這個原因，後面看到設定檔時，你就不必只是照文件複製貼上。每個檔案在處理什麼、哪裡接錯會出問題，也會變得有跡可循。</p>
+
+<h2>根本差異：React Native 沒有 DOM，也沒有 CSS</h2>
+
+<p>在網頁上，JSX 最後會變成瀏覽器裡的 DOM 節點。CSS 則是另一套語言，專門描述這些節點該長什麼樣子。</p>
+
+<p>Tailwind 可以想成幫你快速寫 CSS 的工具。它掃描程式碼裡的 class 名稱，產生對應的 CSS 規則，再交給瀏覽器套用。整條路徑是：</p>
+
+<p><strong>你寫 class → Tailwind 產生 CSS → 瀏覽器把 CSS 套到 DOM 上。</strong></p>
+
+<p>React Native 走的是另一條路。它最後渲染的是 iOS 與 Android 的原生元件，中間沒有 DOM，也沒有瀏覽器替你套用 CSS。RN 描述樣式的方式，是把一個 JavaScript 物件透過 <code>style</code> prop 傳給元件：</p>
+
+<pre><code>&lt;View style={{ flex: 1, alignItems: 'center', backgroundColor: '#3b82f6' }}&gt;</code></pre>
+
+<p>這裡沒有 CSS 選擇器、沒有串接（cascade），也沒有 <code>:hover</code> 或 media query。樣式就是物件中的鍵值，直接對應到原生層的屬性。</p>
+
+<p>所以，把 Tailwind 的 CSS 檔直接丟進 RN，根本行不通。RN 沒有瀏覽器，也沒有地方可以把那份 CSS 套上去。它需要的是能轉成 RN style 物件的結果。</p>
+
+<figure class="lesson-figure"><img src="./nativewind-mental-model-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>NativeWind 的角色：把 class 翻成 style 的翻譯官</h2>
+
+<p>NativeWind 就像放在你和 React Native 之間的翻譯官。你可以用 Tailwind 的方式表達需求：</p>
+
+<p><code>className="bg-blue-500 p-4"</code></p>
+
+<p>NativeWind 再把它轉成 RN 能理解的樣式物件：</p>
+
+<p><code>{ backgroundColor: '#3b82f6', padding: 16 }</code></p>
+
+<p>表面上你仍然在寫 <code>className</code>，但最後真正傳進元件、交給原生層處理的，其實是 <code>style</code>。</p>
+
+<p>關鍵在於：這個翻譯不是等 app 畫面出現時，才臨時找一本字典來查。它會在建置階段、程式碼被打包之前就先處理好。因為 RN 的執行環境沒有瀏覽器，不能在執行時臨時把 CSS 變成樣式，所以這件事必須由工具鏈提前完成。</p>
+
+<p>也因此，安裝 NativeWind 不只是多裝一個套件。Babel 和 Metro 這兩個負責處理程式碼與打包的環節，也必須知道 NativeWind 要如何加入這條路徑。</p>
+
+<p>可以把它想成同一台編譯器，換了不同的交貨對象：</p>
+
+<ul>
+<li>網頁版 Tailwind：把 class 編成 CSS，交給瀏覽器。</li>
+<li>NativeWind：把 class 編成 RN 的 style 物件，交給原生元件。</li>
+</ul>
+
+<p>輸入看起來相似，但目的地不同，背後需要的處理方式自然也不同。</p>
+
+<h2>四個檔案，各站哪一班崗</h2>
+
+<p>NativeWind 的設定分散在幾個檔案裡。第一次看到時，可能會覺得像一堆互不相干的接線；但如果把它們看成同一條生產線，每個檔案其實各自負責一個環節。</p>
+
+<table>
+<thead>
+<tr><th>檔案</th><th>它負責的環節</th></tr>
+</thead>
+<tbody>
+<tr><td><code>tailwind.config.js</code></td><td>告訴 Tailwind 要掃描哪些檔案裡的 class（content glob），並載入 <code>nativewind/preset</code> 這組「class 對應到 RN 屬性」的規則與主題設定。</td></tr>
+<tr><td><code>global.css</code></td><td>Tailwind 的入口檔，裡面是 <code>@tailwind base/components/utilities</code> 三行指令。它就是被編譯的那份來源。</td></tr>
+<tr><td><code>babel.config.js</code></td><td>設定 <code>jsxImportSource: 'nativewind'</code> 與 <code>nativewind/babel</code>，讓 JSX 轉換階段就認得 <code>className</code> 這個 prop，知道要把它接進 NativeWind 的處理。</td></tr>
+<tr><td><code>metro.config.js</code></td><td>用 <code>withNativeWind(config, { input })</code> 包住 Metro 設定，讓 Metro 的 CSS 流程去編譯 <code>global.css</code>，並把 NativeWind 掛進打包管線。</td></tr>
+</tbody>
+</table>
+
+<p>除此之外，還會有一個小小的 <code>nativewind-env.d.ts</code>。它只有一行型別參照，作用是讓 TypeScript 認得 <code>className</code>，不在 app 的執行路徑上。</p>
+
+<p><code>global.css</code> 也必須在 app 的根 layout 被 import 一次，確保這份樣式確實被載入。少了這個連結，即使其他設定看起來都正確，樣式仍可能沒有進入打包流程。</p>
+
+<p>把整條生產線串起來，可以這樣看：</p>
+
+<p><strong>Babel 讓 JSX 認得 className → Metro 編譯 global.css 並接上 NativeWind → tailwind.config 決定要掃描哪些檔案、使用哪些規則 → NativeWind 根據這些資訊，把 className 轉成 style 物件。</strong></p>
+
+<figure class="lesson-figure"><img src="./nativewind-mental-model-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>和網頁版 Tailwind 的差異</h2>
+
+<p>如果你原本熟悉網頁版 Tailwind，最容易搞錯的地方，就是以為同一個 class 在 React Native 裡都會照樣有效。實際上，兩者的輸出目標和執行環境不同：</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>網頁 Tailwind</th><th>React Native + NativeWind</th></tr>
+</thead>
+<tbody>
+<tr><td>輸出目標</td><td>CSS 規則，交給瀏覽器</td><td>JS style 物件，交給原生元件</td></tr>
+<tr><td>誰負責套用</td><td>瀏覽器（執行時）</td><td>Babel / Metro（建置時）</td></tr>
+<tr><td>可用的 class</td><td>幾乎全部</td><td>只對應得到 RN 樣式屬性的那部分</td></tr>
+<tr><td>偽類與互動</td><td><code>:hover</code>、<code>:focus</code> 等齊全</td><td>沒有滑鼠概念，互動樣式要用別的方式做</td></tr>
+</tbody>
+</table>
+
+<p>例如，React Native 沒有瀏覽器的滑鼠概念，因此網頁上的 <code>:hover</code> 不能直接照搬。NativeWind 能處理的是那些能對應到 RN 樣式屬性的 class；網頁 CSS 裡的所有能力，並不會自動出現在 RN。</p>
+
+<p>另一個常見問題，是動態拼接 class。Tailwind 仰賴靜態掃描找出 class，因此像 <code>`bg-${color}-500`</code> 這種寫法，掃描器很可能看不出完整的 class 名稱，最後就漏掉對應樣式。這是網頁 Tailwind 會遇到的問題，在 NativeWind 裡也一樣存在。</p>
+
+<h2>把這個觀念掛回你的 app</h2>
+
+<p>當你在自己的 app 裡寫下 <code>className</code> 時，可以先問自己一個問題：這串文字最後要怎麼變成 RN 看得懂的 style？</p>
+
+<p>RN 本身並不支援 Tailwind，真正在做轉譯的是 NativeWind 和整條建置工具鏈。<code>tailwind.config.js</code> 決定哪些 class 會被找到，<code>global.css</code> 提供 Tailwind 的入口，Babel 接住 JSX 裡的 <code>className</code>，Metro 則把相關流程接進打包管線。</p>
+
+<figure class="lesson-figure"><img src="./nativewind-mental-model-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<blockquote>
+React Native 沒有 DOM、沒有瀏覽器，樣式只能是傳給元件的 JavaScript 物件，所以網頁的 CSS / Tailwind 不能直接搬過來。NativeWind 是一個建置階段的翻譯官，把 Tailwind 的 className 翻成 RN 的 style 物件。因為 RN 沒有瀏覽器幫忙在執行時套用樣式，這個翻譯必須提前在 Babel 與 Metro 完成，這也解釋了為什麼要動到 tailwind.config.js、global.css、babel.config.js、metro.config.js 這幾個檔案，它們各站生產線上的一班崗。
+</blockquote>
+
+<p>下一節會把這條線實際接起來：安裝套件、建立 <code>tailwind.config.js</code>、加入 <code>global.css</code>，再調整 <code>babel.config.js</code> 與 <code>metro.config.js</code>，最後在根 layout 載入樣式。</p>
+
+<p>你也可以把 NativeWind 官方文件交給 agent，請它協助完成設定。不過，先理解每個檔案在生產線上的位置，你才有辦法檢查它是否真的接對，而不是只看見畫面動了就以為一切沒問題。</p>
+
+<p>延伸閱讀：NativeWind 官方文件 <a href="https://www.nativewind.dev/">nativewind.dev</a>，以及 Expo 的 NativeWind 安裝說明。</p>
+
+<div class="lesson-nav">
+  <div><a href="./reset-to-blank.html">← 上一步：reset-project：把範例清成空白</a></div>
+  <div><a href="./nativewind-setup.html">下一步：安裝與接線 NativeWind →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="網頁的 Tailwind 不能直接用在 React Native，最根本的原因是什麼？" data-correct="2" data-explain="RN 沒有 DOM 也沒有瀏覽器，樣式是 JS 物件，沒有地方套用產生出來的 CSS。">
+  <button class="opt">因為 Tailwind 授權不允許行動裝置使用</button>
+  <button class="opt">因為 React Native 不支援 JavaScript 語法</button>
+  <button class="opt">因為 RN 沒有 DOM 與瀏覽器可套用 CSS</button>
+  <button class="opt">因為行動裝置的螢幕尺寸種類太多</button>
+</div>
+<div class="quiz" data-question="NativeWind 本質上替你做的是哪一件事？" data-correct="0" data-explain="它在建置階段把 className 翻譯成 RN 的 style 物件。">
+  <button class="opt">把 className 翻成 RN 的 style 物件</button>
+  <button class="opt">把 CSS 檔即時注入模擬器的 DOM</button>
+  <button class="opt">把原生元件轉換成 HTML 標籤</button>
+  <button class="opt">把 JavaScript 編譯成原生程式碼</button>
+</div>
+<div class="quiz" data-question="tailwind.config.js 裡的 content glob 在做什麼？" data-correct="1" data-explain="它告訴 Tailwind 要掃描哪些檔案裡出現的 class 名稱，才能產生對應樣式。">
+  <button class="opt">指定 app 啟動時第一個載入的畫面</button>
+  <button class="opt">指定 Tailwind 要掃描哪些檔案裡的 class</button>
+  <button class="opt">指定 Metro 打包後輸出的資料夾位置</button>
+  <button class="opt">指定模擬器要使用哪一種螢幕尺寸</button>
+</div>
+<div class="quiz" data-question="metro.config.js 用 withNativeWind 包住設定，主要作用為何？" data-correct="3" data-explain="它讓 Metro 的 CSS 流程編譯 global.css，並把 NativeWind 掛進打包管線。">
+  <button class="opt">把 TypeScript 型別檢查關掉以加快速度</button>
+  <button class="opt">把原生資料夾自動生成到專案目錄下</button>
+  <button class="opt">把 app 的圖示與啟動畫面一併壓縮</button>
+  <button class="opt">讓 Metro 編譯 global.css 並接上 NativeWind</button>
+</div>
+<div class="quiz" data-question="babel.config.js 設定 jsxImportSource 為 nativewind 是為了什麼？" data-correct="1" data-explain="讓 JSX 轉換階段就認得 className 這個 prop，並接進 NativeWind 的處理。">
+  <button class="opt">讓所有元件自動套用深色模式</button>
+  <button class="opt">讓 JSX 轉換認得 className 這個 prop</button>
+  <button class="opt">讓 Babel 把 JSX 轉成原生程式碼</button>
+  <button class="opt">讓編輯器能自動補齊 className 值</button>
+</div>
+<div class="quiz" data-question="為什麼 NativeWind 的轉譯一定得發生在建置階段？" data-correct="2" data-explain="因為 RN 執行環境裡沒有瀏覽器能在顯示畫面時臨時把 CSS 變成樣式。">
+  <button class="opt">因為建置階段才能存取使用者的相機</button>
+  <button class="opt">因為執行階段無法讀取任何設定檔</button>
+  <button class="opt">因為執行環境沒有瀏覽器可即時轉換</button>
+  <button class="opt">因為建置階段的轉換速度比較快</button>
+</div>
+<div class="quiz" data-question="下列哪一種 class 用法在 NativeWind 裡最可能失效？" data-correct="1" data-explain="Tailwind 靠靜態掃描找 class，動態拼出來的完整字串常掃不到。">
+  <button class="opt">靜態寫死的文字顏色 class</button>
+  <button class="opt">用變數即時拼出的 class 字串</button>
+  <button class="opt">寫在 tailwind.config 的 preset</button>
+  <button class="opt">同時寫上間距與背景色 class</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 建立 Expo 專案與 NativeWind · Step 3/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

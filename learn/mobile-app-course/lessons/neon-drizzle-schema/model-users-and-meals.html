@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>建 users 與 meals：欄位、關聯、索引與時間的設計</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>建 users 與 meals：從欄位到索引，看懂資料模型的設計</h1>
+<p class="meta">Step 2/5 · Neon + Drizzle 資料建模</p>
+
+<h2>學習目標</h2>
+<p>讀完這一節，你會看懂 <code>users</code> 與 <code>meals</code> 兩張表的欄位、關聯、索引與時間設計，也能說明每個設計決定正在解決什麼問題。</p>
+
+<h2>前言：一張會透露決策的資料藍圖</h2>
+
+<p>當使用者上傳一張餐點照片，app 需要知道這張照片屬於誰、AI 是否正在分析、分析出了多少熱量，以及這筆紀錄應該出現在使用者哪一天的餐點清單裡。這些需求最後都會落在資料模型上。</p>
+
+<p>上一節確立了一件事：資料模型要用 TypeScript 寫成 schema，而且它是 app 與背景 task 共用的唯一事實。現在把鏡頭拉近，看看 Cal AI 的 schema 實際長什麼樣子。</p>
+
+<p>讀 schema 時，不要只是把欄位名稱從頭唸到尾。可以把它看成作者留給你的決策清單：為什麼身分欄位要唯一？為什麼生日不用時間戳記、體重卻用數字？為什麼餐點表要特別做索引？每個看似普通的欄位，通常都對應一個已經踩過，或是想先避開的坑。</p>
+
+<p>這個 app 的主線很單純：一個使用者會記錄很多餐。因此資料模型由兩張表組成，<code>users</code> 和 <code>meals</code> 之間是<strong>一對多</strong>關聯。接下來看到的 enum、外鍵、可空欄位與索引，都可以放回這條主線來理解。</p>
+
+<figure class="lesson-figure"><img src="./model-users-and-meals-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>先把值限制住：enum</h2>
+
+<p>schema 開頭定義了五個 enum，也就是「只允許特定幾個值」的欄位。與其讓欄位接受任意文字，不如先把合法選項寫清楚，讓不合法的資料在進入資料庫前就被擋下來。</p>
+
+<pre><code>export const unitPreferenceEnum = pgEnum("unit_preference", ["metric", "imperial"]);
+export const goalEnum = pgEnum("goal", ["lose", "maintain", "gain"]);
+export const activityLevelEnum = pgEnum("activity_level", ["sedentary", "light", "moderate", "very", "extra"]);
+export const dietPreferenceEnum = pgEnum("diet_preference", ["classic", "keto", "vegan", "vegetarian"]);
+export const mealStatusEnum = pgEnum("meal_status", ["analyzing", "completed", "failed"]);</code></pre>
+
+<p>以 <code>meal_status</code> 為例，一筆餐點只可能處於三種狀態之一：</p>
+
+<ul>
+<li><code>analyzing</code>：AI 正在分析。</li>
+<li><code>completed</code>：分析已完成。</li>
+<li><code>failed</code>：分析失敗。</li>
+</ul>
+
+<p>如果這裡使用一般文字，某天程式不小心把 <code>completed</code> 拼成 <code>complete</code>，資料庫可能照收不誤，但首頁查詢如果只尋找 <code>completed</code>，這筆資料就會像突然蒸發一樣被漏掉。使用 enum 後，錯誤的值會直接被資料庫拒絕。</p>
+
+<p>這裡也埋了一個伏筆：<code>activity_level</code> 裡的 <code>extra</code> 並不是最初建表時就存在，而是後來才加入。這會在下一節介紹 migration 時看到，正好可以用來理解 schema 如何隨需求演進。</p>
+
+<h2>users 表：自己的主鍵，外部身分的連結</h2>
+
+<p><code>users</code> 表可以分成幾個區塊。最先要看的是它如何和 Clerk 對接：</p>
+
+<pre><code>export const users = pgTable("users", {
+  id: uuid().primaryKey().defaultRandom(),
+  clerkUserId: text().notNull().unique(), // Clerk is source of truth for identity
+  email: text(),
+  timezone: text(), // IANA, e.g. "America/New_York"
+  unitPreference: unitPreferenceEnum(), // display only</code></pre>
+
+<p><code>id</code> 是這張表自己的主鍵，由資料庫透過 <code>defaultRandom()</code> 產生 UUID，不依賴外部傳入的值。</p>
+
+<p><code>clerkUserId</code> 則是和外部身分系統接上的那條線。它存放 Clerk 提供的使用者 id，並標記為 <code>unique</code>，代表同一個 Clerk 身分在表中只能對應一列資料。註解也說得很明白：Clerk 是身分的來源，這張表負責保存對應關係。</p>
+
+<p>為什麼不直接把 Clerk 的 id 當成主鍵？因為這會把內部資料模型綁死在特定的身分供應商上。現在是 Clerk，未來如果更換供應商，外部 id 可能需要調整；自己的 <code>id</code> 則可以繼續留在系統內，其他表的關聯也不用跟著重做。這就是「內部主鍵」和「外部身分 id」分開的價值。</p>
+
+<figure class="lesson-figure"><img src="./model-users-and-meals-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p><code>timezone</code> 存的是 IANA 時區名稱，例如 <code>Asia/Taipei</code>。後面的 seed 與查詢都會用到它，因為「今天吃了什麼」不是只看 UTC 日期，而是取決於使用者在哪個時區度過這一天。</p>
+
+<h2>users 表裡的資料，分別在描述什麼</h2>
+
+<p>除了身分連結，<code>users</code> 表還包含身體數據、目標設定，以及建立與更新時間。把這些欄位放在一起看，會比較容易理解它們各自的角色：</p>
+
+<table>
+<thead>
+<tr><th>欄位</th><th>型別</th><th>設計用意</th></tr>
+</thead>
+<tbody>
+<tr><td>gender / dateOfBirth</td><td>text / date</td><td>生日用 date，不用時間，因為生日沒有時區</td></tr>
+<tr><td>heightCm / weightKg</td><td>numeric(mode: number)</td><td>體重有小數，用 numeric 並轉成 number 方便運算</td></tr>
+<tr><td>goal / activityLevel / dietPreference</td><td>enum</td><td>限制成問卷提供的選項</td></tr>
+<tr><td>paceKgPerWeek</td><td>numeric</td><td>每週想減或增幾公斤，供計算目標熱量</td></tr>
+<tr><td>dailyCalories / proteinG / carbsG / fatG</td><td>integer</td><td>AI 算出的每日目標，以整數克與大卡儲存</td></tr>
+<tr><td>planRationale / planGeneratedAt</td><td>text / timestamp</td><td>目標產生的理由與時間，方便回溯</td></tr>
+<tr><td>onboardingCompletedAt</td><td>timestamp</td><td>是否完成 onboarding 的判準</td></tr>
+</tbody>
+</table>
+
+<p>其中最值得停下來看的是 <code>dateOfBirth</code>。它使用 <code>date({ mode: "string" })</code>，在 TypeScript 裡會是日期字串，而不是 <code>Date</code> 物件。</p>
+
+<p>原因很簡單：生日是一個日曆上的日子，不是一個需要精確到某個時區的時間點。如果把生日存成時間戳記，系統就可能開始處理「這是幾點的生日」，使用者跨時區後，生日甚至可能在畫面上往前或往後跳一天。這種麻煩完全沒有必要，所以用日期字串表達最直接。</p>
+
+<p>體重則是另一種情況。<code>70.5</code> 公斤是合理值，因此使用 <code>numeric</code> 而不是整數，並轉成 number 方便後續運算。至於 AI 算出的熱量與三大營養素，畫面上的目標本來就是整數大卡與整數公克，就沒有必要保留小數。</p>
+
+<h2>共用的時間戳記：記住資料何時發生</h2>
+
+<p>兩張表共用同一組時間欄位：</p>
+
+<pre><code>const timestamps = {
+  createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp({ withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+};</code></pre>
+
+<p><code>withTimezone: true</code> 對應到 Postgres 的 <code>timestamptz</code>。它表達的是一個絕對的時間點，而不是某個地區牆上時鐘顯示的模糊時間。</p>
+
+<p><code>defaultNow()</code> 會在新增資料時自動填入建立時間。<code>$onUpdate</code> 則會在資料更新時刷新 <code>updatedAt</code>。這組設定抽成共用區塊，讓兩張表使用同一套規則，不必各自重複撰寫。</p>
+
+<h2>meals 表：先建立紀錄，再逐步填入分析結果</h2>
+
+<p><code>meals</code> 表是 app 持續累積的核心資料。除了要連回哪個使用者，還要描述一筆餐點目前分析到哪裡：</p>
+
+<pre><code>export const meals = pgTable(
+  "meals",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    imageUrl: text().notNull(), // ImageKit URL
+    status: mealStatusEnum().notNull().default("analyzing"),
+
+    name: text(),
+    calories: integer(),
+    proteinG: integer(),
+    carbsG: integer(),
+    fatG: integer(),
+
+    errorReason: text(), // "not_food" | "parse_failed" | …
+    triggerRunId: text(), // for Realtime subscribe / debugging
+
+    loggedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    ...timestamps,
+  },
+  (t) => [index("meals_user_logged_at_idx").on(t.userId, t.loggedAt.desc())],
+);</code></pre>
+
+<p><code>userId</code> 是外鍵，指向 <code>users.id</code>。它設定了 <code>onDelete: "cascade"</code>，表示刪除一列使用者時，底下相關的 meals 也會一併刪除。</p>
+
+<p>這正好對應刪除帳號的需求：使用者按下刪除後，資料庫本身就能確保不會留下沒有主人的餐點紀錄。與其事後再靠程式逐筆清理，不如把這條資料完整性規則交給資料庫執行。</p>
+
+<h2>可空欄位，其實是在描述資料生命週期</h2>
+
+<p><code>status</code> 的預設值是 <code>analyzing</code>。照片一上傳，app 可以立刻建立餐點紀錄並顯示「分析中」，不用等 AI 花上幾秒到十幾秒回應後，才讓使用者看到這筆資料。</p>
+
+<p>因此，<code>name</code>、<code>calories</code>、<code>proteinG</code> 等分析結果欄位都允許空值。當狀態還是 <code>analyzing</code> 時，這些欄位本來就還沒有結果；如果分析失敗，也可能不會有完整的營養資料。</p>
+
+<p>這裡的可空性不是「先放著，以後再說」，而是在反映資料的生命週期：餐點先被建立，接著進入分析，最後才可能填入完整結果。</p>
+
+<figure class="lesson-figure"><img src="./model-users-and-meals-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p><code>errorReason</code> 用來記錄失敗原因，例如照片裡沒有食物的 <code>not_food</code>，或解析失敗的 <code>parse_failed</code>。<code>triggerRunId</code> 則保存背景 task 的執行 id，前端可以用它訂閱即時進度，也能在發生問題時協助除錯。</p>
+
+<h2>為什麼 meals 需要索引</h2>
+
+<p>schema 的最後一行建立了這個索引：</p>
+
+<p><code>index("meals_user_logged_at_idx").on(t.userId, t.loggedAt.desc())</code></p>
+
+<p>它同時使用<strong>使用者</strong>與<strong>記錄時間</strong>兩個欄位，而且時間採遞減排序。這完全對應首頁最常見的查詢：「找出這個使用者某一天的餐點，新的排在前面。」</p>
+
+<p>如果沒有索引，資料庫可能每次都得掃過整張 <code>meals</code> 表，再找出符合條件的紀錄。資料量小時也許感覺不出差異，但資料持續增加後，查詢就會越來越慢。</p>
+
+<p>索引就像書末的索引頁。你不會為了找一個名詞，把整本書從第一頁重新讀一遍；你會先查索引，再直接翻到相關頁面。資料庫也是同樣的道理。</p>
+
+<figure class="lesson-figure"><img src="./model-users-and-meals-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>欄位順序也不是隨便排的：先放 <code>userId</code>，再放 <code>loggedAt</code>。因為查詢通常會先鎖定某個使用者，再按照時間排序，所以索引順序要貼近實際查詢條件，才能有效命中。</p>
+
+<h2>儲存使用 metric 與 UTC，顯示時才換算</h2>
+
+<p>schema 檔開頭的註解，其實抓住了整體設計的核心原則：<strong>儲存用公制與 UTC，換算只發生在顯示的那一刻。</strong></p>
+
+<p>不論使用者偏好公制或英制，也不論使用者住在哪個時區，資料庫裡一律儲存公制單位與 UTC 時間。使用者看到的英制數值與在地時間，則是在 app 準備顯示資料前才換算。</p>
+
+<p>這個規則像是替資料庫訂出一把統一的尺。若資料庫裡同時混著公制與英制、各地當地時間，每次查詢都得先確認「這筆資料到底採用哪種單位或時區」，久了就很容易出錯。</p>
+
+<p>把標準集中在儲存層，並把換算收斂到顯示層，資料庫就只需要維持一種可靠的內部格式；不同使用者的顯示偏好，也不會反過來污染原始資料。</p>
+
+<h2>把這張藍圖掛回 app</h2>
+
+<blockquote>
+Cal AI 的資料模型只有兩張表：users 一對多 meals。用 enum 鎖住合法值，用 clerkUserId 對應外部身分並保留自己的主鍵，用 date 存沒有時區的生日，用 timestamptz 存絕對時間點。meals 用外鍵加上 cascade，讓刪除使用者時餐點自動清乾淨；分析結果欄位允許空值，反映「先建立、後填滿」的生命週期；再用一個 (userId, loggedAt desc) 的索引服務首頁最常見的查詢。整體原則是儲存公制加 UTC，換算只在顯示時發生。
+</blockquote>
+
+<p>現在可以把這份 schema 當成一張完整的資料藍圖來看：<code>users</code> 負責身分與個人設定，<code>meals</code> 負責一筆筆餐點紀錄；外鍵把兩者接起來，enum 和可空性描述資料的邊界與生命週期，索引則照顧 app 最常見的查詢。</p>
+
+<p>下一個問題是：這份寫在 TypeScript 裡的藍圖，要怎麼和真實的 Neon 資料庫連上線，讓程式真的能存取它？下一節會設定 Drizzle 的連線與 config，把 schema 從檔案接到雲端的 Postgres。</p>
+
+<div class="lesson-nav">
+  <div><a href="./schema-as-source-of-truth.html">← 上一步：Schema 是共同真相：為什麼資料模型要用程式碼定義</a></div>
+  <div><a href="./connect-drizzle-to-neon.html">下一步：接上 Neon：Drizzle client 與 drizzle.config 的設定 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="users 表為什麼要同時有 id 和 clerkUserId 兩個欄位？" data-correct="2" data-explain="保留自己的主鍵，把對外身分放在獨立欄位，未來換供應商時比較不會牽動整張表的關聯。">
+  <button class="opt">因為 uuid 欄位在查詢時速度比較快</button>
+  <button class="opt">因為 clerkUserId 不能設定為唯一值</button>
+  <button class="opt">因為要把對外身分和自己的主鍵分開</button>
+  <button class="opt">因為 Postgres 規定每張表要兩個編號</button>
+</div>
+<div class="quiz" data-question="dateOfBirth 用 date 字串而不是時間戳記，主要理由是什麼？" data-correct="0" data-explain="生日只是日曆上的一天，沒有時區；用時間戳記會在跨時區時偏移。">
+  <button class="opt">因為生日只是一個沒有時區的日子</button>
+  <button class="opt">因為字串比數字節省儲存空間</button>
+  <button class="opt">因為時間戳記無法存到西元兩千年前</button>
+  <button class="opt">因為資料庫不支援日期的比較運算</button>
+</div>
+<div class="quiz" data-question="meals 的 userId 設定 onDelete cascade，效果是什麼？" data-correct="1" data-explain="刪除使用者時，屬於他的 meals 會由資料庫自動一起刪除，不會留下孤兒資料。">
+  <button class="opt">刪除餐點時會一併刪除該使用者</button>
+  <button class="opt">刪除使用者時會一起刪掉他的餐點</button>
+  <button class="opt">刪除使用者時會先把餐點改成空值</button>
+  <button class="opt">刪除餐點時會封鎖對應的帳號登入</button>
+</div>
+<div class="quiz" data-question="為什麼 meal 的 calories、proteinG 等欄位允許空值？" data-correct="3" data-explain="照片先建立成 analyzing 狀態，分析結果要等 AI 回來才填，所以這些欄位天生需要可空。">
+  <button class="opt">因為使用者可以選擇不要填寫這些欄位</button>
+  <button class="opt">因為資料庫不允許整數欄位設為必填</button>
+  <button class="opt">因為 AI 算出來的值常常超過整數範圍</button>
+  <button class="opt">因為先建立紀錄、之後才由 AI 填滿</button>
+</div>
+<div class="quiz" data-question="meals_user_logged_at_idx 這個索引主要服務哪種查詢？" data-correct="0" data-explain="它依 (使用者, 記錄時間遞減) 排列，正好服務首頁列出某使用者餐點、新的排前面的查詢。">
+  <button class="opt">某使用者的餐點依時間新到舊列出</button>
+  <button class="opt">全站所有餐點依圖片網址排序</button>
+  <button class="opt">找出所有尚未完成分析的使用者</button>
+  <button class="opt">依 email 網域統計註冊的人數</button>
+</div>
+<div class="quiz" data-question="「儲存用公制與 UTC，換算只在顯示時」是為了解決什麼？" data-correct="2" data-explain="若同時存在多種單位與當地時間，每個查詢都要猜是哪一種；統一一種標準能把混亂收斂在顯示層。">
+  <button class="opt">讓資料庫的硬碟容量可以節省一半</button>
+  <button class="opt">讓使用者的登入驗證變得更嚴格</button>
+  <button class="opt">避免同一筆資料存在多種版本</button>
+  <button class="opt">讓 AI 分析食物的速度大幅提升</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Neon + Drizzle 資料建模 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

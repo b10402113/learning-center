@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>實作同步：signature → task → upsert/delete，並端到端驗證</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>實作同步：從 signature 到 task，再到 upsert/delete 的端到端驗證</h1>
+<p class="meta">Step 5/5 · Clerk 與資料庫同步（Webhook）</p>
+
+<h2>先確認目標與前置條件</h2>
+
+<p>這一課要把前面四步接成一條真正能執行的同步鏈路：Clerk 發生事件，送到你的 endpoint；endpoint 驗證 signature 後，觸發 Trigger.dev 背景任務；任務再依事件內容執行 upsert 或 delete。</p>
+
+<p>完成後，使用者註冊時，資料庫會自動建立對應資料；使用者更新時，資料會同步；使用者刪除時，相關資料也會依 cascade 規則清理。你還能在 Trigger.dev dashboard 看到每一次任務的執行結果。</p>
+
+<p>開始前，請確認以下項目都已就緒：</p>
+
+<ul>
+  <li>Clerk webhook endpoint 已建立，並訂閱 <code>user.created</code>、<code>user.updated</code>、<code>user.deleted</code> 三個事件。</li>
+  <li>ngrok 正在執行。</li>
+  <li><code>CLERK_WEBHOOK_SIGNING_SECRET</code> 已放入 <code>.env</code>。</li>
+  <li>資料庫已經有 <code>users</code> 表。</li>
+  <li>Trigger.dev 專案已建立，secret key 也已放入 <code>.env</code>。</li>
+  <li>Expo、ngrok、Trigger.dev 三個終端機都能正常開啟。</li>
+</ul>
+
+<h2>整體流程先看一遍</h2>
+
+<p>這次實作會依序完成五個部分：</p>
+
+<ol>
+  <li>建立 <code>trigger.config.ts</code>，設定任務位置、逾時與重試。</li>
+  <li>把 Expo 的輸出模式設成 <code>server</code>，讓 API route 真正存在。</li>
+  <li>撰寫 webhook handler，完成驗簽、建立冪等鍵並觸發任務。</li>
+  <li>撰寫同步任務，用 upsert 處理建立與更新，用 cascade delete 處理刪除。</li>
+  <li>刪除測試帳號後重新註冊，從 Clerk、資料庫與 Trigger.dev dashboard 驗證整條鏈路。</li>
+</ol>
+
+<p>接下來照順序做。每一步都會說明「做了什麼」以及「應該看到什麼」。</p>
+
+<figure class="lesson-figure"><img src="./implement-and-verify-sync-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟一：建立 <code>trigger.config.ts</code></h2>
+
+<p>先在專案根目錄新增 Trigger.dev 設定檔。這個檔案像是任務的交通指揮中心：它告訴 Trigger.dev 要去哪裡找 task、每個 task 最多執行多久，以及失敗後要如何重試。</p>
+
+<pre><code>// trigger.config.ts
+import { defineConfig } from "@trigger.dev/sdk";
+
+export default defineConfig({
+  project: "proj_xxxxxxxxxxxx",   // 從 Trigger.dev dashboard 複製
+  dirs: ["./src/trigger"],        // 掃描這個資料夾裡的 task
+  maxDuration: 60,                // 這些任務只有一次資料庫 round-trip，超過就是卡住
+  retries: {
+    enabledInDev: true,
+    default: {
+      maxAttempts: 3,             // 最多嘗試 3 次
+      factor: 2,                  // 間隔每次乘 2
+      minTimeoutInMs: 1000,       // 從 1 秒開始退避
+      maxTimeoutInMs: 10000,      // 最多等 10 秒
+    },
+  },
+});</code></pre>
+
+<p>這裡有四個設定值得確認：</p>
+
+<ul>
+  <li><code>project</code> 是 Trigger.dev 專案識別碼，請從 dashboard 複製。</li>
+  <li><code>dirs</code> 指向任務所在的資料夾。之後放進這個資料夾的 task，Trigger.dev 才能自動發現。</li>
+  <li><code>maxDuration</code> 是單一任務的逾時上限。這裡設為 60 秒；同步一列資料不應該拖到這麼久，超過通常表示連線卡住。</li>
+  <li><code>retries</code> 設定失敗後的重試規則。這裡最多嘗試三次，並使用指數退避，避免服務暫時不穩時立刻連續重打。</li>
+</ul>
+
+<h2>步驟二：把 Expo 的輸出切成 server</h2>
+
+<p>Expo 的 API routes 必須明確開啟 server 輸出模式。請打開 <code>app.json</code>，確認 <code>web.output</code> 設為 <code>server</code>：</p>
+
+<pre><code>// app.json
+"web": {
+  "bundler": "metro",
+  "output": "server"
+}</code></pre>
+
+<p>如果少了這一行，<code>/api/webhooks/clerk</code> 這個 route 就不會存在。Clerk 送來的 webhook 會直接收到 404。這是設定檔中很小、但很容易漏掉的一個開關。</p>
+
+<h2>步驟三：撰寫 webhook handler</h2>
+
+<p>接著建立接收事件的檔案。handler 要保持精簡，只做四件事：</p>
+
+<ol>
+  <li>驗證 Clerk webhook 的 signature。</li>
+  <li>建立冪等鍵，避免同一事件重複觸發。</li>
+  <li>依事件類型觸發對應的 Trigger.dev task。</li>
+  <li>處理完後回應 HTTP status。</li>
+</ol>
+
+<p>請建立以下檔案：</p>
+
+<pre><code>// src/app/api/webhooks/clerk+api.ts
+import type { UserJSON } from "@clerk/backend";
+import { verifyWebhook } from "@clerk/backend/webhooks";
+import { idempotencyKeys, tasks } from "@trigger.dev/sdk";
+
+// 只做型別匯入：把任務實例 import 進來會讓它們被打包進 server
+import type { clerkUserCreated, clerkUserDeleted, clerkUserUpdated } from "@/trigger/clerk-users";
+
+function primaryEmail(data: UserJSON): string | null {
+  const emails = data.email_addresses ?? [];
+  const primary = emails.find((e) =&gt; e.id === data.primary_email_address_id);
+  return primary?.email_address ?? emails[0]?.email_address ?? null;
+}
+
+export async function POST(request: Request) {
+  let evt;
+  try {
+    // 讀 CLERK_WEBHOOK_SIGNING_SECRET；簽章錯誤或被重播都會 throw
+    evt = await verifyWebhook(request);
+  } catch (err) {
+    console.error("Clerk webhook verification failed:", err);
+    return new Response("Invalid signature", { status: 400 });
+  }
+
+  // Svix 重送時帶同一個 svix-id；global scope = 一個事件永遠只觸發一次
+  const svixId = request.headers.get("svix-id");
+  const idempotencyKey = svixId
+    ? await idempotencyKeys.create(svixId, { scope: "global" })
+    : undefined;
+
+  switch (evt.type) {
+    case "user.created": {
+      await tasks.trigger&lt;typeof clerkUserCreated&gt;(
+        "clerk-user-created",
+        { clerkUserId: evt.data.id, email: primaryEmail(evt.data) },
+        { idempotencyKey },
+      );
+      break;
+    }
+    case "user.updated": {
+      await tasks.trigger&lt;typeof clerkUserUpdated&gt;(
+        "clerk-user-updated",
+        { clerkUserId: evt.data.id, email: primaryEmail(evt.data) },
+        { idempotencyKey },
+      );
+      break;
+    }
+    case "user.deleted": {
+      if (!evt.data.id) break;   // 刪除事件的 id 是選填的
+      await tasks.trigger&lt;typeof clerkUserDeleted&gt;(
+        "clerk-user-deleted",
+        { clerkUserId: evt.data.id },
+        { idempotencyKey },
+      );
+      break;
+    }
+  }
+
+  // 已驗證就回 200，包含你不處理的事件——
+  // 回非 2xx 會讓 Svix 對你故意忽略的事件無限重試
+  return new Response("OK", { status: 200 });
+}</code></pre>
+
+<h3>逐段確認 handler 做了什麼</h3>
+
+<p><code>verifyWebhook</code> 負責讀取 <code>CLERK_WEBHOOK_SIGNING_SECRET</code> 並驗證請求。如果 signature 不正確，或事件可能是被重播的內容，它會丟出錯誤；handler 就回傳 <code>400</code>，而不是讓未驗證的資料繼續往下走。</p>
+
+<p>任務使用 <code>import type</code> 匯入。這只提供 TypeScript 型別，不會把 task 的實作打包進 webhook server。真正的任務會交給 Trigger.dev worker 執行，handler 不會在收到請求時直接操作資料庫。</p>
+
+<p><code>primaryEmail</code> 用來處理多個 email 的情況。陣列第一筆不一定是使用者目前的主要 email，因此程式會先找出符合 <code>primary_email_address_id</code> 的項目；找不到時，才退回第一筆 email。</p>
+
+<p>接著從 <code>svix-id</code> 建立冪等鍵。Svix 重送同一個事件時會帶著相同的 <code>svix-id</code>，設定 <code>scope: "global"</code> 後，同一事件就不會重複觸發任務。</p>
+
+<p>最後，依照 <code>evt.type</code> 觸發三種 task：</p>
+
+<ul>
+  <li><code>user.created</code> 觸發 <code>clerk-user-created</code>。</li>
+  <li><code>user.updated</code> 觸發 <code>clerk-user-updated</code>。</li>
+  <li><code>user.deleted</code> 觸發 <code>clerk-user-deleted</code>。由於刪除事件的 <code>id</code> 是選填的，沒有 id 時就跳過。</li>
+</ul>
+
+<p>要特別記住這個回應規則：<strong>驗簽成功就回 200；驗簽失敗才回 400。</strong>即使事件類型是你目前不處理的事件，也要回 200。否則 Svix 會以為你的 endpoint 失敗，持續重試那些你原本有意忽略的事件。</p>
+
+<figure class="lesson-figure"><img src="./implement-and-verify-sync-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟四：撰寫同步任務</h2>
+
+<p>handler 只負責接收事件和觸發任務，真正碰資料庫的程式碼放在 task 檔案中。這裡會建立三個任務，分別對應建立、更新與刪除。</p>
+
+<pre><code>// src/trigger/clerk-users.ts
+import { task } from "@trigger.dev/sdk";
+import { eq, sql } from "drizzle-orm";
+
+// 相對路徑，不是 "@/db"：這些任務由 Trigger.dev 打包，不是 Metro
+import { db, users } from "../db";
+
+type SyncUserPayload = { clerkUserId: string; email: string | null };
+
+function upsertUser({ clerkUserId, email }: SyncUserPayload) {
+  return db
+    .insert(users)
+    .values({ clerkUserId, email })
+    .onConflictDoUpdate({
+      target: users.clerkUserId,
+      set: {
+        // 不能把已知的 email 覆蓋成 null
+        email: sql`coalesce(excluded.email, ${users.email})`,
+        // $onUpdate 不會在 conflict-update 時觸發，要手動設
+        updatedAt: new Date(),
+      },
+    })
+    .returning({ id: users.id });
+}
+
+export const clerkUserCreated = task({
+  id: "clerk-user-created",
+  run: async (payload: SyncUserPayload) =&gt; {
+    const [user] = await upsertUser(payload);
+    return { userId: user.id };
+  },
+});
+
+export const clerkUserUpdated = task({
+  id: "clerk-user-updated",
+  run: async (payload: SyncUserPayload) =&gt; {
+    const [user] = await upsertUser(payload);
+    return { userId: user.id };
+  },
+});
+
+export const clerkUserDeleted = task({
+  id: "clerk-user-deleted",
+  run: async (payload: { clerkUserId: string }) =&gt; {
+    // meals 會透過外鍵的 onDelete: "cascade" 一起被刪掉
+    const deleted = await db
+      .delete(users)
+      .where(eq(users.clerkUserId, payload.clerkUserId))
+      .returning({ id: users.id });
+    return { deleted: deleted.length };
+  },
+});</code></pre>
+
+<h3>建立與更新：共用同一個 upsert</h3>
+
+<p><code>upsertUser</code> 使用 <code>insert ... onConflictDoUpdate</code>。衝突目標是 <code>users.clerkUserId</code>，也就是 Clerk 使用者 id。</p>
+
+<p>為什麼不單純使用 <code>insert</code>？因為 <code>POST /api/profile</code> 可能比 webhook 更早抵達。兩條路徑都可能嘗試建立同一位使用者；只要都以 <code>clerk_user_id</code> 為唯一鍵，無論誰先到，最後都只會有一列資料，不會因競爭而產生兩筆。</p>
+
+<p>這個 upsert 只更新 <code>email</code> 與 <code>updatedAt</code>。身高、目標和 onboarding 答案屬於 <code>/api/profile</code> 管理，不應該由 Clerk 同步任務整列覆蓋。否則使用者剛填完 onboarding，下一個 webhook 就可能把答案清掉。</p>
+
+<p><code>coalesce(excluded.email, users.email)</code> 則避免新事件的 email 是 <code>null</code> 時，把資料庫裡原本已知的 email 覆蓋掉。<code>updatedAt</code> 也要手動設定，因為 ORM 的自動更新機制不會在 conflict-update 這條路徑上自動觸發。</p>
+
+<h3>刪除：讓資料庫執行 cascade</h3>
+
+<p>刪除任務只要依 <code>clerk_user_id</code> 刪除 <code>users</code> 中的那一列。相關的 meals 資料會透過外鍵的 <code>onDelete: "cascade"</code> 一起刪除，不需要在 task 裡逐筆清理。</p>
+
+<p>如果任務回傳 <code>{ deleted: 0 }</code>，也不代表失敗。使用者可能從未完成 onboarding，因此資料庫原本就沒有對應的列。</p>
+
+<figure class="lesson-figure"><img src="./implement-and-verify-sync-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟五：啟動 worker 並做端到端驗證</h2>
+
+<p>程式寫完後，先啟動 Trigger.dev worker。請在第三個終端機執行：</p>
+
+<pre><code># 終端機 3：啟動 Trigger.dev worker
+npx trigger.dev@latest dev</code></pre>
+
+<p>接著做一次完整測試：</p>
+
+<ol>
+  <li>確認 Expo、ngrok 與 Trigger.dev worker 都正在執行。</li>
+  <li>到 Clerk 後台刪除測試使用者。</li>
+  <li>在模擬器重新註冊。</li>
+  <li>到 Clerk 後台確認有新的使用者。</li>
+  <li>檢查資料庫的 <code>users</code> 表，確認多出一列相同的 <code>clerk_user_id</code>。</li>
+  <li>打開 Trigger.dev dashboard，確認出現對應的 task run。</li>
+</ol>
+
+<p>正常情況下，Clerk 會先產生事件，webhook handler 驗證後觸發 <code>clerk-user-created</code>，worker 再執行 upsert。這時你應該能在 dashboard 看到任務 id、每次嘗試、執行時間與錯誤資訊。</p>
+
+<table>
+<thead>
+<tr><th>症狀</th><th>先檢查什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>資料庫沒有新的一列</td><td>Trigger.dev worker 有沒有在跑？<code>TRIGGER_SECRET_KEY</code> 有沒有設進 <code>.env</code>？</td></tr>
+<tr><td>Trigger.dev dashboard 沒看到 run</td><td>handler 有沒有真的觸發任務？Clerk 的 delivery log 回應碼是多少？</td></tr>
+<tr><td>同一使用者出現兩列</td><td>upsert 的衝突目標是否設在 <code>clerk_user_id</code>；冪等鍵有沒有帶上</td></tr>
+<tr><td>Clerk 一直重送同一個事件</td><td>handler 是不是回了非 2xx，或回應逾時</td></tr>
+</tbody>
+</table>
+
+<p>排查時，可以把 Trigger.dev dashboard 和 Clerk 的 webhook delivery log 並排查看。前者告訴你任務有沒有被觸發、執行了幾次；後者則能確認 Clerk 送出事件後，endpoint 回了什麼。兩邊對起來，整條鏈路就不再像黑盒子。</p>
+
+<h2>完成後，你應該看到什麼</h2>
+
+<p>完成這次測試後，應該會得到以下結果：</p>
+
+<ul>
+  <li>Clerk 後台有重新註冊的測試使用者。</li>
+  <li>資料庫的 <code>users</code> 表有一列相同 <code>clerk_user_id</code> 的資料。</li>
+  <li>Trigger.dev dashboard 有對應的 <code>clerk-user-created</code> run。</li>
+  <li>重新送出相同事件時，冪等鍵能避免同一事件重複觸發。</li>
+  <li>更新事件只會同步 email，不會覆蓋 profile 或 onboarding 欄位。</li>
+  <li>刪除使用者時，相關 meals 資料會由資料庫外鍵的 cascade 一起清除。</li>
+</ul>
+
+<blockquote>
+整條同步鏈路由五個零件組成：<code>trigger.config.ts</code> 負責任務掃描、逾時與重試；<code>app.json</code> 的 <code>output: "server"</code> 讓 API route 存在；webhook handler 負責驗簽、建立冪等鍵、依事件觸發任務並回應 200；任務檔用 <code>upsertUser</code> 以 <code>clerk_user_id</code> 為衝突目標，只更新 email，刪除時則交給 cascade 清理關聯資料；最後用刪除帳號再註冊的方式，同時檢查 Clerk 與資料庫。核心順序就是：事件進來 → 驗簽 → 觸發 → 冪等寫入。
+</blockquote>
+
+<p>這樣一來，「登入」和「資料」之間原本的斷點就接起來了。之後資料庫即使增加更多表、外鍵、migration 與 seed 資料，新使用者仍會從這條同步鏈路進入系統；其他關聯到使用者的表，也能沿著 <code>clerk_user_id</code> 繼續建立。</p>
+
+<p>延伸閱讀：Trigger.dev 的任務定義 <a href="https://trigger.dev/docs/tasks/overview">trigger.dev/docs/tasks/overview</a>、Clerk 的 verifyWebhook <a href="https://clerk.com/docs/webhooks/overview">clerk.com/docs/webhooks/overview</a>。</p>
+
+<div class="lesson-nav">
+  <div><a href="./handler-to-background-task.html">← 上一步：Webhook 收到之後：直接寫 DB 還是丟背景任務？</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="handler 裡的任務為什麼要用 import type 匯入，而不是一般 import？" data-correct="1" data-explain="只匯入型別才不會把任務實例打包進 server；任務是由 Trigger.dev 的 worker 執行的。">
+  <button class="opt">因為 TypeScript 不允許一般匯入</button>
+  <button class="opt">避免把任務打包進 server</button>
+  <button class="opt">為了讓驗簽的速度變得更快</button>
+  <button class="opt">因為 Clerk 要求只匯入型別</button>
+</div>
+<div class="quiz" data-question="upsertUser 為什麼用 upsert 而不是單純 insert？" data-correct="2" data-explain="/api/profile 可能比 webhook 先寫入，兩邊都以 clerk_user_id 為鍵，upsert 才能保證任何順序都只有一列。">
+  <button class="opt">insert 的語法在 Postgres 已被移除</button>
+  <button class="opt">upsert 可以跳過外鍵的檢查</button>
+  <button class="opt">兩條路徑可能以不同順序抵達</button>
+  <button class="opt">insert 無法回傳新增的資料列</button>
+</div>
+<div class="quiz" data-question="為什麼 upsert 只更新 email 欄位，而不覆蓋整列？" data-correct="0" data-explain="其他欄位由 /api/profile 擁有；盲目覆蓋會把使用者的 onboarding 答案清掉。">
+  <button class="opt">避免清掉 onboarding 的答案</button>
+  <button class="opt">因為 email 是唯一的必要欄位</button>
+  <button class="opt">因為資料庫不允許更新多欄位</button>
+  <button class="opt">為了讓查詢語法變得更簡短</button>
+</div>
+<div class="quiz" data-question="刪除使用者時，他的餐點資料是怎麼被清掉的？" data-correct="3" data-explain="透過 users 外鍵上的 onDelete: cascade，刪除使用者會連帶刪除關聯的餐點列。">
+  <button class="opt">由 handler 手動逐筆刪除</button>
+  <button class="opt">由 Clerk 在雲端代為刪除</button>
+  <button class="opt">由 trigger.config 自動清理</button>
+  <button class="opt">外鍵的 cascade 連帶刪除</button>
+</div>
+<div class="quiz" data-question="重新註冊後資料庫沒有新的一列，最該先檢查什麼？" data-correct="2" data-explain="最常見是 Trigger.dev worker 沒在跑，或 TRIGGER_SECRET_KEY 沒設進 .env。">
+  <button class="opt">Clerk 的 Google 登入是否啟用</button>
+  <button class="opt">模擬器是否更新到最新版本</button>
+  <button class="opt">worker 是否在跑與金鑰是否設定</button>
+  <button class="opt">ngrok 的免費額度是否用完</button>
+</div>
+<div class="quiz" data-question="要確認任務真的被執行、每次嘗試的結果，應該看哪裡？" data-correct="1" data-explain="Trigger.dev dashboard 的 run 清單會列出每次觸發、嘗試次數、耗時與錯誤。">
+  <button class="opt">瀏覽器的開發者工具 Network 面板</button>
+  <button class="opt">Trigger.dev dashboard 的 run 清單</button>
+  <button class="opt">手機模擬器的系統設定頁面</button>
+  <button class="opt">Clerk 後台的使用者頭像清單</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Clerk 與資料庫同步（Webhook） · Step 5/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

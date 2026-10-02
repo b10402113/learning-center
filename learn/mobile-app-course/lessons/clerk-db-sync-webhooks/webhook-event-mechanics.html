@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Webhook 是什麼：事件、簽章與重送</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Webhook 是什麼：事件、簽章與重送</h1>
+<p class="meta">Step 2/5 · Clerk 與資料庫同步（Webhook）</p>
+
+<h2>學習目標</h2>
+<p>完成這一節後，你應該能說明 webhook 的事件模型，理解簽章驗證如何確認事件確實來自 Clerk，也知道為什麼每個已驗證的事件都要回應 <code>200</code>，並用冪等鍵避免重送造成重複處理。</p>
+
+<h2>前言：與其一直問，不如讓對方主動通知</h2>
+
+<p>上一節我們找出了同步資料時的缺口：有人註冊之後，你的資料庫不會自動多出一列，必須先有人把這件事通知你的 app。</p>
+
+<p>最直覺的做法是輪詢（polling）。你的伺服器每隔一段時間就問 Clerk：「有沒有新使用者？」但多數時候答案都是「沒有」，伺服器卻仍然得一直發出查詢。這種做法不即時，也會浪費兩邊的資源。</p>
+
+<p>付款完成、包裹送達、程式碼推送成功，都是相同類型的需求。如果每件事都靠輪詢，系統就像每五分鐘打一次電話確認包裹到了沒，明明沒新消息，還是得不停確認。</p>
+
+<p>Webhook 則把方向反過來：<strong>事情發生的那一方，主動把訊息送到你指定的網址。</strong> 這一節會拆開這則通知，看看它包含哪些資訊、如何確認它不是假冒的，以及為什麼同一則訊息可能會送到你這裡兩次。</p>
+
+<h2>Webhook：事件發生時的主動通知</h2>
+
+<p>當某個事件（event）在服務上發生時，服務會對你事先登記好的網址送出一個 HTTP 請求。這個請求通常是 <code>POST</code>，內容則包含事件名稱與相關資料。這套機制叫做 <strong>webhook</strong>，你登記的網址叫做 <strong>endpoint</strong>（端點）。</p>
+
+<p>用宅配來比喻：</p>
+
+<ul>
+<li>輪詢像是你每五分鐘打電話問：「我的包裹到了嗎？」</li>
+<li>Webhook 像是你留下手機號碼，貨運公司一送到就主動傳簡訊給你。</li>
+</ul>
+
+<p>你不需要一直追問，只要準備好收到通知後要執行的邏輯即可。</p>
+
+<figure class="lesson-figure"><img src="./webhook-event-mechanics-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+<thead>
+<tr><th></th><th>輪詢（Polling）</th><th>Webhook</th></tr>
+</thead>
+<tbody>
+<tr><td>誰發起</td><td>你，固定間隔去問</td><td>來源，事件發生時送來</td></tr>
+<tr><td>即時性</td><td>最多延遲一個間隔</td><td>通常近乎即時</td></tr>
+<tr><td>成本</td><td>大量空查詢</td><td>只在有事時才送</td></tr>
+<tr><td>你的準備</td><td>寫輪詢迴圈</td><td>開一個公開 endpoint</td></tr>
+</tbody>
+</table>
+
+<h2>事件有名字：created、updated、deleted</h2>
+
+<p>Webhook 不是只送來一團沒有分類的資料。每則通知都會標明「發生了什麼事」，你的程式才能依事件類型採取不同處理方式。</p>
+
+<p>Clerk 的使用者生命週期主要會產生三種事件。設定 endpoint 時，你可以勾選要訂閱哪些事件：</p>
+
+<ul>
+<li><code>user.created</code>——有人第一次註冊。</li>
+<li><code>user.updated</code>——使用者修改資料，例如更換 email。</li>
+<li><code>user.deleted</code>——帳號被刪除。</li>
+</ul>
+
+<p>每個事件送到 endpoint 時，都會帶著一個 JSON 物件。當中最重要的是兩個欄位：</p>
+
+<ul>
+<li><code>type</code>：這是哪一種事件。</li>
+<li><code>data</code>：事件的主角與相關資料，例如使用者的 id 和 email。</li>
+</ul>
+
+<p>因此，handler 的工作就像郵件分揀員：先讀取 <code>type</code>，再把訊息交給對應的處理邏輯。</p>
+
+<figure class="lesson-figure"><img src="./webhook-event-mechanics-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>還有一個容易被忽略的細節：事件不一定會按照發生順序抵達。網路傳送與佇列重排，可能讓 <code>user.updated</code> 比 <code>user.created</code> 更早到。這也是後面會選用 upsert，而不是單純 insert 的原因之一——無論哪個事件先抵達，最後都應該只留下正確的一列資料。</p>
+
+<h2>驗簽：確認訊息真的來自 Clerk</h2>
+
+<p>你的 endpoint 網址是公開的，代表任何人都可能對它送出 <code>POST</code>。如果 handler 收到什麼就照做，攻擊者便可能偽造一則 <code>user.deleted</code> 事件，刪除使用者資料，或大量灌入假帳號。</p>
+
+<p>所以，收到 webhook 後不能只看內容，還要先確認寄件者是誰。這個步驟叫做<strong>簽章驗證（signature verification）</strong>。</p>
+
+<p>Clerk 送出 webhook 時，會使用一把只有你和 Clerk 知道的密鑰，也就是 signing secret，根據訊息內容計算出一組簽章，並放進請求的 header。你的 handler 再用同一把密鑰重新計算一次。兩邊結果一致，才代表訊息確實來自 Clerk，而且內容沒有在傳送途中被竄改。</p>
+
+<figure class="lesson-figure"><img src="./webhook-event-mechanics-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>在程式裡，這件事通常被包裝成一行：<code>verifyWebhook(request)</code> 會讀取環境變數 <code>CLERK_WEBHOOK_SIGNING_SECRET</code>。驗證成功時，它會回傳解析好的事件物件；驗證失敗時，則會拋出錯誤。你的 handler 應該把這段包在 <code>try/catch</code> 中，驗證失敗就回應 <code>400</code>。</p>
+
+<blockquote class="bad-code">
+沒有驗簽的 webhook handler，就像把「刪除使用者」和「建立使用者」這些高權限按鈕直接放在公開網路上。任何人都可能按下它們。
+</blockquote>
+
+<h2>重送：同一則通知可能來第二次</h2>
+
+<p>Clerk 送出 webhook 時，背後使用的是 Svix 這套投遞服務。它有一個重要行為：<strong>如果沒有收到成功回應，就會按照時程重試。</strong></p>
+
+<p>網路短暫中斷、你的伺服器剛好重啟，或處理時間超過限制，都可能讓同一則事件再次送達。</p>
+
+<p>這就帶來一個不能忽略的問題：第一次處理已經把使用者寫入資料庫，第二次重試又寫一次，會不會多出兩列相同的資料？</p>
+
+<p>「同一個操作執行兩次，結果仍然和執行一次相同」的性質，叫做<strong>冪等（idempotent）</strong>。它就像門牌號碼：同一封信即使送來兩次，郵差仍然知道它們是同一個地址的同一件事，而不是兩位不同的收件人。</p>
+
+<p>你可以在兩個層次處理冪等。</p>
+
+<p>第一個是投遞層。Svix 每次重試都會帶上相同的 <code>svix-id</code> header。使用 <code>idempotencyKeys.create(svixId, { scope: "global" })</code>，就能讓同一個 svix-id 只觸發一次任務。即使通知被重送，也不會讓同一個任務重複執行。</p>
+
+<p>第二個是資料層。寫入資料庫時使用 upsert，也就是「有資料就更新，沒有資料就新增」，而不是單純使用 insert。這樣即使同一事件真的被處理兩次，資料庫最後仍然只會有一列。</p>
+
+<p>兩層一起使用會更穩：</p>
+
+<ul>
+<li>idempotency key 負責擋掉重複執行。</li>
+<li>upsert 負責確保即使真的執行兩次，結果仍然一致。</li>
+</ul>
+
+<p>後續實作時，你會看到這兩個機制同時出現。它們不是重複做同一件事，而是分別在投遞層與資料層提供保護。</p>
+
+<figure class="lesson-figure"><img src="./webhook-event-mechanics-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>為什麼幾乎每個事件都要回 200</h2>
+
+<p>既然 Svix 是根據「有沒有收到成功回應」決定是否重試，回什麼狀態碼就成了一個重要決定。原則其實很簡單：<strong>只要簽章驗證通過，就回應 <code>200</code>。</strong></p>
+
+<p>即使事件類型是你刻意不處理的，也應該回 <code>200</code>。因為回傳非 2xx 會讓 Svix 判定「你還沒成功收到」，接著依照時程持續重試。對一個你根本不打算處理的事件來說，這些重試只會變成背景噪音，浪費資源，也污染紀錄。</p>
+
+<table>
+<thead>
+<tr><th>情況</th><th>回應</th><th>為什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>簽章驗證失敗</td><td><code>400</code></td><td>訊息不是真正來自 Clerk，應該擋掉</td></tr>
+<tr><td>已驗證，且你處理了</td><td><code>200</code></td><td>告訴 Svix 任務已完成</td></tr>
+<tr><td>已驗證，但你不處理這類事件</td><td><code>200</code></td><td>避免無意義的持續重試</td></tr>
+</tbody>
+</table>
+
+<p>可以把這件事拆成兩個獨立判斷：</p>
+
+<ul>
+<li>簽章有沒有驗證通過？這決定回 <code>200</code> 還是 <code>400</code>。</li>
+<li>你想不想處理這種事件？這不影響回應碼。</li>
+</ul>
+
+<p>分開看，才不會把「我不處理這個事件」誤認成「這次投遞失敗」。回應碼的責任，是告訴投遞服務訊息是否已被安全地收到；至於要不要採取業務動作，是另一件事。</p>
+
+<h2>小結：把 webhook 掛在正確的位置</h2>
+
+<blockquote>
+Webhook 是事件發生時由來源主動送出的 HTTP 通知，取代低效的輪詢。Clerk 的使用者事件主要有 created、updated、deleted 三種；每則訊息都必須先用 signing secret 驗簽，確認它真的來自 Clerk。由於投遞服務可能重送，你需要用 <code>svix-id</code> 作為冪等鍵，並用 upsert 寫入資料。回應碼則遵循一個清楚的規則：驗簽失敗回 <code>400</code>，其他已驗證的情況一律回 <code>200</code>。
+</blockquote>
+
+<p>現在，事件模型、驗簽、重送與回應碼之間的關係已經接起來了。下一個現實問題是：你的 app 目前跑在 <code>localhost</code>，而 Clerk 的伺服器位於網際網路上，根本連不到你的電腦。下一節要處理的，就是把本機變成一個外部可以連到的網址。</p>
+
+<p>延伸閱讀：Clerk 官方文件 <a href="https://clerk.com/docs/webhooks/overview">clerk.com/docs/webhooks/overview</a>、Svix 的投遞與重試說明 <a href="https://docs.svix.com/retries">docs.svix.com/retries</a>。</p>
+
+<div class="lesson-nav">
+  <div><a href="./identity-vs-app-data.html">← 上一步：身分歸 Clerk，資料歸你：為什麼登入了 DB 還是空的</a></div>
+  <div><a href="./local-webhook-with-ngrok.html">下一步：本機接 Clerk Webhook：ngrok 與簽章密鑰 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="webhook 和輪詢最主要的差別是什麼？" data-correct="1" data-explain="webhook 由事件來源主動送出，輪詢則是你固定間隔去問，前者更即時也更省資源。">
+  <button class="opt">webhook 只能在夜間執行批次工作</button>
+  <button class="opt">webhook 由來源主動推送事件</button>
+  <button class="opt">webhook 需要使用者手動重新整理</button>
+  <button class="opt">webhook 一定比輪詢更慢但更省錢</button>
+</div>
+<div class="quiz" data-question="為什麼 webhook handler 一定要做簽章驗證？" data-correct="3" data-explain="endpoint 網址公開，任何人都能 POST 假事件；驗簽才能確認訊息來自 Clerk 且未被竄改。">
+  <button class="opt">為了讓事件送達的速度更快</button>
+  <button class="opt">為了把 JSON 自動轉成資料庫欄位</button>
+  <button class="opt">為了減少 Clerk 的月費支出</button>
+  <button class="opt">為了擋掉偽造與竄改的事件</button>
+</div>
+<div class="quiz" data-question="Svix 什麼情況下會重送同一則 webhook？" data-correct="0" data-explain="只要它沒收到成功的回應（2xx），就會照時程重試，所以同一事件可能來第二次。">
+  <button class="opt">沒收到成功的回應時</button>
+  <button class="opt">每次使用者重新登入時</button>
+  <button class="opt">Clerk 後台按下重新整理時</button>
+  <button class="opt">每天固定凌晨重送一次</button>
+</div>
+<div class="quiz" data-question="「冪等」在這裡是什麼意思？" data-correct="2" data-explain="同一個操作執行一次或多次，結果都一樣，所以重送不會長出重複的使用者。">
+  <button class="opt">事件一定會照發生順序送達</button>
+  <button class="opt">每個事件只能被處理一毫秒</button>
+  <button class="opt">同一操作做多次結果相同</button>
+  <button class="opt">事件內容一定會被加密傳送</button>
+</div>
+<div class="quiz" data-question="收到一個簽章正確、但你不想處理的事件類型，應該回什麼？" data-correct="1" data-explain="已驗證就回 200；非 2xx 會讓 Svix 對你不想處理的事件無限重試。">
+  <button class="opt">回 400 表示拒絕處理</button>
+  <button class="opt">回 200 表示已收到</button>
+  <button class="opt">回 500 讓對方稍後再試</button>
+  <button class="opt">不回任何回應直接關閉</button>
+</div>
+<div class="quiz" data-question="為什麼 handler 會用 upsert 而不是單純 insert？" data-correct="3" data-explain="事件可能亂序或重送，upsert 讓任何順序、重複執行都只留下一列正確資料。">
+  <button class="opt">因為資料庫不支援 insert 語法</button>
+  <button class="opt">因為 upsert 的執行速度最快</button>
+  <button class="opt">因為 Clerk 要求一定要用 upsert</button>
+  <button class="opt">因為事件可能亂序或重送</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Clerk 與資料庫同步（Webhook） · Step 2/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

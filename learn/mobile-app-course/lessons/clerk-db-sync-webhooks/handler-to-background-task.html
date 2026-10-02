@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Webhook 收到之後：直接寫 DB 還是丟背景任務？</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Webhook 收到之後：直接寫進資料庫，還是交給背景任務？</h1>
+<p class="meta">Step 4/5 · Clerk 與資料庫同步（Webhook）</p>
+
+<h2>學習目標</h2>
+<p>你會學會判斷：webhook 收到事件後，資料庫工作應該在 handler 裡直接完成，還是交給 trigger.dev 背景任務處理；同時也能說明 retry 語意與失敗處理的判準。</p>
+
+<h2>先決定工作該放在哪裡</h2>
+
+<p>你的 endpoint 已經能收到事件，也通過驗簽了。接下來要做的事很直白：把那位使用者寫進資料庫。</p>
+
+<p>最直接的寫法，是在 handler 裡執行一次 insert 或 upsert，完成後回傳 200。多數時候，這樣確實能順利運作。</p>
+
+<p>真正棘手的是剩下的那一小部分情況。資料庫可能暫時變慢，服務可能正在重啟，任務也可能第一次執行就遇到冷啟動。這時，如果寫入失敗，你得在兩個選項中做決定：</p>
+
+<ul>
+<li>回傳非 2xx，讓 webhook 投遞服務整包重送。</li>
+<li>回傳 200，把後續工作交給另一個機制處理。</li>
+</ul>
+
+<p>第一種做法可能讓已經完成一半的副作用再次發生；第二種做法如果沒有補救機制，則可能讓使用者資料悄悄消失。</p>
+
+<p>所以這一節真正要決定的，不是程式碼寫在哪一行，而是這份工作要放在哪個執行邊界：<strong>在 handler 內直接做完，還是驗簽後立刻回 200，再把工作交給背景任務？</strong></p>
+
+<p>這是可靠性的選擇，不只是程式風格的選擇。</p>
+
+<figure class="lesson-figure"><img src="./handler-to-background-task-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>兩個選項：速度、重試與複雜度的取捨</h2>
+
+<p>直接在 handler 裡處理，像是把包裹交到櫃檯後，站在現場等它完成。好處是流程短、容易理解，而且當下就知道資料庫寫入成功或失敗；但一旦失敗，你沒有一個乾淨、獨立的重試單位。</p>
+
+<p>把工作交給背景任務，則像是先拿到收件證明，再由另一個工作站負責配送。webhook 可以快速回應，任務也能擁有自己的重試、退避與執行紀錄；代價是系統多了一個 worker，除錯時也要多看一個 dashboard。</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>Handler 內直接寫</th><th>丟背景任務（trigger.dev）</th></tr>
+</thead>
+<tbody>
+<tr><td>回應速度</td><td>等資料庫完成後才回應</td><td>觸發任務後立刻回 200</td></tr>
+<tr><td>失敗處理</td><td>回非 2xx，讓 webhook 重送整包</td><td>由任務層自動重試，只重跑這一步</td></tr>
+<tr><td>重試粒度</td><td>整個 webhook 重跑</td><td>單一任務重跑</td></tr>
+<tr><td>額外成本</td><td>沒有</td><td>多一個常駐 worker 與 dashboard</td></tr>
+<tr><td>可觀測性</td><td>查看 server log</td><td>查看 run history、每次嘗試與錯誤</td></tr>
+<tr><td>適合的情境</td><td>單次、快速、冪等，而且失敗可以接受</td><td>執行較慢、容易失敗、有副作用，或需要獨立重試</td></tr>
+</tbody>
+</table>
+
+<p>trigger.dev 在這裡最重要的價值，是提供清楚的<strong>重試語意</strong>。它的設定是預設最多嘗試 3 次，間隔時間以 2 倍成長，從 1 秒開始退避，最多到 10 秒。</p>
+
+<p>這些重試由任務層負責，和 webhook 的投遞完全分開。也就是說，webhook 早已回傳 200，背景任務仍然可以在自己的執行流程中安靜重試，直到成功或達到重試上限。</p>
+
+<figure class="lesson-figure"><img src="./handler-to-background-task-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>判別問句：用四個問題做選擇</h2>
+
+<p>你不需要死背哪種情境一定對應哪種做法。實際開發時，逐一問自己下面四個問題即可。</p>
+
+<ol>
+<li><strong>這份工作重跑一次，會不會產生副作用？</strong> 如果不會，例如單純 upsert 一列，直接做也可以；如果會，例如重複寄信或重複扣款，就應該丟給任務，並在任務內用冪等方式處理。</li>
+<li><strong>這份工作夠快嗎？</strong> 如果只是一次資料庫 round-trip，幾十毫秒內就能完成，直接做通常沒問題；如果會呼叫外部 API、執行 AI 或處理多個步驟，就交給任務，別讓 webhook 一直等。</li>
+<li><strong>失敗時，你想重跑什麼？</strong> 如果你希望整個 webhook 被重新投遞，可以直接在 handler 裡處理；如果你只想重跑失敗的這一步，就交給背景任務。</li>
+<li><strong>是否已經有另一條路徑保證資料會存在？</strong> 如果有，webhook 只是備援，直接做就可以；如果沒有，而 webhook 是唯一建立資料的路徑，就交給任務，讓重試有明確保障。</li>
+</ol>
+
+<h2>反例：規則會翻轉的時候</h2>
+
+<p>這套判斷有趣的地方在於：課程裡的兩個 app 做了相反的選擇，但兩種選擇都合理。</p>
+
+<p>預約 app 的 Clerk webhook route，會在 handler 裡<strong>直接</strong> upsert 資料庫。它之所以可以這樣做，是因為同一套後端還有一道 <code>requireAuth()</code> 守衛：使用者第一次呼叫 API 時，也會再 upsert 一次。</p>
+
+<p>因此，webhook 在這裡是「備援」，不是唯一的關鍵路徑。即使 webhook 暫時失敗，使用者下一次發出請求時，資料仍然有機會被補上。這正好對應到第 4 個判別問句：只要存在另一條能保證資料建立的路徑，直接在 handler 裡處理就完全合理。</p>
+
+<p>熱量追蹤 app 則選擇把工作丟給 trigger.dev。它把 webhook 視為<strong>唯一的自動同步路徑</strong>，不希望資料庫暫時中斷時，使用者就因此漏掉資料。</p>
+
+<p>此外，重試交給任務層處理後，webhook 端可以維持又薄又快。這對應到第 3 個判別問句：它需要的是只重試失敗的那一步，而不是讓整個 webhook 再跑一遍。</p>
+
+<blockquote class="good-code">
+兩個做法都不是「錯的」。差別在於：這個 webhook 是不是唯一會建立這筆資料的路徑，以及你希望失敗時重跑多大的範圍。
+</blockquote>
+
+<figure class="lesson-figure"><img src="./handler-to-background-task-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結：一句可以直接拿來用的決策規則</h2>
+
+<blockquote>
+問自己：「失敗時，我想重跑整個 webhook，還是只重跑這一步？」<br>
+如果想重跑整個 webhook，而且工作快速、具備冪等性，或本來就有其他保證路徑，就在 handler 內直接做。<br>
+如果只想重跑這一步，或工作較慢、容易失敗，需要獨立的重試與觀測，就丟給 trigger.dev，並在任務內使用冪等鍵加上 upsert，確保重複執行仍然安全。
+</blockquote>
+
+<p>決定完成後，這個課程會採用背景任務路線。下一節會把整條流程真正寫出來：驗簽後要觸發哪個任務、任務如何 upsert、刪除事件怎麼處理，以及如何確認整條鏈路確實正在執行。</p>
+
+<p>延伸閱讀：trigger.dev 的重試與退避設定 <a href="https://trigger.dev/docs/runs/retries">trigger.dev/docs/runs/retries</a>。</p>
+
+<div class="lesson-nav">
+  <div><a href="./local-webhook-with-ngrok.html">← 上一步：本機接 Clerk Webhook：ngrok 與簽章密鑰</a></div>
+  <div><a href="./implement-and-verify-sync.html">下一步：實作同步：signature → task → upsert/delete，並端到端驗證 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="把同步工作丟給背景任務，最核心的好處是什麼？" data-correct="1" data-explain="任務有獨立的重試、退避與執行紀錄，失敗時只重跑這一步，不會拖住 webhook。">
+  <button class="opt">可以完全不用做簽章驗證</button>
+  <button class="opt">重試與失敗處理獨立於 webhook</button>
+  <button class="opt">資料庫的查詢速度會變快</button>
+  <button class="opt">使用者就不需要重新登入</button>
+</div>
+<div class="quiz" data-question="handler 內直接寫 DB，失敗時回非 2xx 的風險是什麼？" data-correct="3" data-explain="投遞服務會重送整包 webhook，若第一次已產生部分副作用，就可能重複執行。">
+  <button class="opt">Clerk 會直接刪除你的應用程式</button>
+  <button class="opt">資料庫會自動回滾所有資料</button>
+  <button class="opt">ngrok 的隧道會立即中斷</button>
+  <button class="opt">整個 webhook 重跑可能重複副作用</button>
+</div>
+<div class="quiz" data-question="預約 app 選擇在 handler 內直接 upsert，關鍵理由是什麼？" data-correct="0" data-explain="因為 requireAuth() 在首次請求也會 upsert，webhook 只是備援，不是唯一建立資料的路徑。">
+  <button class="opt">有另一條路徑保證資料會存在</button>
+  <button class="opt">它的資料庫永遠不會故障</button>
+  <button class="opt">它不需要做任何簽章驗證</button>
+  <button class="opt">它的使用者數量非常少</button>
+</div>
+<div class="quiz" data-question="下列哪一種工作最適合直接放在 handler 內完成？" data-correct="2" data-explain="單一、快速、冪等的資料庫寫入，失敗可接受，放 handler 內最簡單。">
+  <button class="opt">呼叫外部 AI 產生內容的長工作</button>
+  <button class="opt">需要重複寄送通知信的流程</button>
+  <button class="opt">單次且冪等的資料庫寫入</button>
+  <button class="opt">要跑好幾分鐘的批次運算</button>
+</div>
+<div class="quiz" data-question="如果一份工作重跑一次會產生副作用（例如重複扣款），應該怎麼做？" data-correct="1" data-explain="移到任務層並做冪等處理，避免重試時造成重複副作用。">
+  <button class="opt">直接放在 handler 並回 200</button>
+  <button class="opt">移到任務層並做冪等處理</button>
+  <button class="opt">忽略失敗不要重試就好</button>
+  <button class="opt">改成用手動方式補資料</button>
+</div>
+<div class="quiz" data-question="決定工作擺放位置時，最實用的第一個問題是什麼？" data-correct="3" data-explain="先問「失敗時我想重跑整個 webhook，還是只重跑這一步」，就能推導出該放哪裡。">
+  <button class="opt">這個任務的程式碼有幾行</button>
+  <button class="opt">團隊裡有幾個人會維護它</button>
+  <button class="opt">trigger.dev 的月費多少錢</button>
+  <button class="opt">失敗時想重跑多大的範圍</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Clerk 與資料庫同步（Webhook） · Step 4/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

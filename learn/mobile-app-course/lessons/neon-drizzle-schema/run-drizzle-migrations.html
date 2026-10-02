@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跑 migration：edit schema → generate → migrate</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>跑 migration：edit schema → generate → migrate</h1>
+<p class="meta">Step 4/5 · Neon + Drizzle 資料建模</p>
+
+<h2>這一節要完成什麼</h2>
+<p>上一節已經把 Drizzle 接到 Neon，資料庫連線也確認正常。這一節要再往前一步：把 <code>src/db/schema.ts</code> 裡的資料模型，真正變成 Neon 上的資料表。</p>
+
+<p>完成後，你會得到一個可以重複執行、也能留下變更紀錄的流程：</p>
+
+<ol>
+<li>修改 schema。</li>
+<li>執行 <code>npm run db:generate</code>，產生 migration。</li>
+<li>執行 <code>npm run db:migrate</code>，把 migration 套用到資料庫。</li>
+</ol>
+
+<p>你也會知道怎麼閱讀 Drizzle 產生的 SQL，以及 <code>drizzle/meta/</code> 裡的 journal 和 snapshot 在記錄什麼。</p>
+
+<h2>先記住整個迴圈：edit → generate → migrate</h2>
+
+<p><code>schema.ts</code> 比較像是資料庫的藍圖。你把藍圖畫好，房子不會自己長出來；還需要把藍圖轉成施工圖，再實際施工。</p>
+
+<ol>
+<li><strong>edit</strong>：修改 <code>src/db/schema.ts</code>，例如新增一個欄位或一張表。</li>
+<li><strong>generate</strong>：執行 <code>npm run db:generate</code>。Drizzle 會比較目前的 schema 和上一次的 snapshot，算出差異，並產生新的 SQL migration。</li>
+<li><strong>migrate</strong>：執行 <code>npm run db:migrate</code>。Drizzle 會依序執行尚未套用的 migration，真正建立或修改資料庫中的表。</li>
+</ol>
+
+<p>這裡最容易混淆的是後兩步。<strong>generate 只是在產生施工圖，migrate 才是真的動工。</strong>因此，改完 <code>schema.ts</code> 後直接查看資料庫，發現裡面沒有變化，是正常的；你還必須完成 generate 和 migrate。</p>
+
+<figure class="lesson-figure"><img src="./run-drizzle-migrations-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一步：確認 schema 變更</h2>
+
+<p>先在 <code>src/db/schema.ts</code> 編輯資料模型。這個專案目前會建立 <code>users</code> 和 <code>meals</code> 兩張表，並包含 enum、外鍵、預設值與索引等設定。</p>
+
+<p>只要你新增欄位、新增資料表，或調整既有欄位，就要把這次變更交給 Drizzle 產生 migration。不要直接手動修改資料庫，否則 schema、migration 和實際資料庫可能會逐漸對不起來。</p>
+
+<h2>第二步：產生 migration</h2>
+
+<p>在專案中執行：</p>
+
+<pre><code>npm run db:generate</code></pre>
+
+<p>第一次對空的資料庫模型執行 generate 時，Drizzle 會產生一個帶編號的 SQL 檔，例如 <code>drizzle/0000_foamy_shatterstar.sql</code>。檔案內容是標準的 Postgres DDL，會先建立 enum 型別：</p>
+
+<pre><code>CREATE TYPE "public"."activity_level" AS ENUM('sedentary', 'light', 'moderate', 'very');
+--> statement-breakpoint
+CREATE TYPE "public"."meal_status" AS ENUM('analyzing', 'completed', 'failed');
+--> statement-breakpoint
+CREATE TYPE "public"."unit_preference" AS ENUM('metric', 'imperial');</code></pre>
+
+<p>接著，migration 會建立資料表。先看 <code>meals</code>：</p>
+
+<pre><code>CREATE TABLE "meals" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"user_id" uuid NOT NULL,
+	"image_url" text NOT NULL,
+	"status" "meal_status" DEFAULT 'analyzing' NOT NULL,
+	"name" text,
+	"calories" integer,
+	"protein_g" integer,
+	"error_reason" text,
+	"logged_at" timestamp with time zone DEFAULT now() NOT NULL
+);</code></pre>
+
+<p>讀這段 SQL 時，可以逐項對回原本的 schema：</p>
+
+<ul>
+<li><code>id</code> 是 UUID 主鍵，預設使用 <code>gen_random_uuid()</code> 產生。</li>
+<li><code>user_id</code> 和 <code>image_url</code> 使用 <code>NOT NULL</code>，代表不能省略。</li>
+<li><code>status</code> 使用 <code>meal_status</code> enum，預設值是 <code>analyzing</code>。</li>
+<li><code>name</code>、<code>calories</code>、<code>protein_g</code> 和 <code>error_reason</code> 沒有 <code>NOT NULL</code>，因此可以是空值。</li>
+<li><code>logged_at</code> 使用帶時區的 timestamp，預設值是目前時間。</li>
+</ul>
+
+<p>接著檢查外鍵與索引。它們通常會出現在 SQL 檔案後段：</p>
+
+<pre><code>ALTER TABLE "meals" ADD CONSTRAINT "meals_user_id_users_id_fk"
+  FOREIGN KEY ("user_id") REFERENCES "public"."users"("id")
+  ON DELETE cascade ON UPDATE no action;
+--> statement-breakpoint
+CREATE INDEX "meals_user_logged_at_idx"
+  ON "meals" USING btree ("user_id","logged_at" DESC NULLS LAST);</code></pre>
+
+<p>在 TypeScript schema 裡設定的 <code>onDelete: "cascade"</code>，在 SQL 裡就變成 <code>ON DELETE cascade</code>。而 <code>index(...).on(...)</code> 則變成資料庫中的索引。</p>
+
+<p>命名也會依照設定轉換。TypeScript 裡的 <code>userId</code>、<code>imageUrl</code> 和 <code>loggedAt</code>，會在資料庫中變成 <code>user_id</code>、<code>image_url</code> 和 <code>logged_at</code>，這就是 <code>casing: "snake_case"</code> 發揮作用的地方。</p>
+
+<h2>讀懂 migration 檔名與分隔線</h2>
+
+<p>檔名中間的 <code>foamy_shatterstar</code> 是 Drizzle 隨機產生的名稱，主要用來讓 migration 有一個容易辨識的標籤。真正影響順序的是前面的編號，例如 <code>0000</code>。</p>
+
+<p>檔案中的 <code>--> statement-breakpoint</code> 是 Drizzle 用來標記 SQL 語句邊界的分隔線。看到它時，可以把前後內容理解成兩個分開執行的 SQL 區段。</p>
+
+<h2>同步檢查 meta 檔</h2>
+
+<p>generate 不只會產生 SQL，也會更新 <code>drizzle/meta/</code> 裡的檔案。這些檔案不是多餘的產物，而是 Drizzle 下一次計算差異時需要的紀錄。</p>
+
+<p>第一類是 <code>_journal.json</code>。它記錄 migration 的順序：</p>
+
+<pre><code>{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    { "idx": 0, "tag": "0000_foamy_shatterstar", "breakpoints": true },
+    { "idx": 1, "tag": "0001_narrow_bishop", "breakpoints": true }
+  ]
+}</code></pre>
+
+<p>可以把它想成 migration 的流水帳：每產生一份 migration，就登錄一筆。<code>idx</code> 表示順序，<code>tag</code> 對應 migration 名稱。</p>
+
+<p>第二類是 snapshot，例如 <code>0000_snapshot.json</code>。它記錄某個時間點上，schema 的完整樣子。下一次執行 generate 時，Drizzle 會拿目前的 schema 和最近的 snapshot 比對，找出這次新增或修改的部分，然後只產生對應的差異。</p>
+
+<p>因此，<strong>snapshot 必須進版控</strong>。它不是可以刪掉的暫存檔，而是下一次 generate 判斷差異的依據。少了它，Drizzle 可能會誤以為資料表都是新的。</p>
+
+<figure class="lesson-figure"><img src="./run-drizzle-migrations-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第三步：執行 migrate</h2>
+
+<p><strong>警告：只有在確認產生出的 SQL 符合預期後，才執行 migrate。</strong>這一步會真的修改 Neon 上的資料庫。</p>
+
+<p>執行：</p>
+
+<pre><code>npm run db:migrate</code></pre>
+
+<p>Drizzle 會參考 <code>_journal.json</code> 的順序，把尚未執行的 migration 送到 Neon 執行。它也會記錄哪些 migration 已經套用，因此重複執行 migrate 是安全的，不會把同一份 migration 套用兩次。</p>
+
+<p>執行完成後，回到 Neon dashboard，或開啟 <code>db:studio</code> 檢查結果。你應該會看到：</p>
+
+<ul>
+<li><code>users</code> 和 <code>meals</code> 兩張表已經存在。</li>
+<li>欄位名稱與型別符合 schema。</li>
+<li>外鍵已經建立。</li>
+<li>索引已經建立。</li>
+</ul>
+
+<h2>模型變更時：新增 migration，不要改舊檔</h2>
+
+<p>資料模型會持續演進，不會一次定案。這個專案就有一個例子：<code>activity_level</code> 後來需要加入 <code>extra</code>，但最初的 migration <code>0000</code> 只建立到 <code>very</code>。</p>
+
+<p>這時不要回頭修改已經存在的 <code>0000</code>，而是新增一份 migration：</p>
+
+<pre><code>ALTER TYPE "public"."activity_level" ADD VALUE 'extra';</code></pre>
+
+<p>這就是 <code>0001_narrow_bishop.sql</code> 的全部內容。它沒有重寫第一份 migration，而是使用新的 migration 擴充既有 enum。</p>
+
+<p>原因是 <code>0000</code> 可能早已在某個環境執行過。這時即使你回頭修改檔案，已經建立好的資料庫也不會重新執行它；不同環境反而可能因為看到不同版本的 migration 而產生落差。</p>
+
+<p>因此，規則很簡單：<strong>已經套用的 migration 不要回頭改；新的資料庫變更就新增一份 migration。</strong></p>
+
+<figure class="lesson-figure"><img src="./run-drizzle-migrations-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>另外也要留意 enum 的限制。新增值通常是安全的 append 操作，但移除或重新命名既有值就複雜得多，通常需要重建型別。因此設計 enum 時，最好先想清楚可能會用到哪些值。</p>
+
+<h2><code>db:push</code>：只適合丟棄式原型</h2>
+
+<p>Drizzle 也提供 <code>db:push</code>。它會直接把 schema 同步到資料庫，跳過產生 migration 檔。</p>
+
+<p>如果你正在做一次性的原型實驗，或資料庫隨時可以丟棄，<code>db:push</code> 確實很方便。但這個專案的正式流程應該使用 <code>generate</code> 加 <code>migrate</code>。</p>
+
+<p>原因是 <code>db:push</code> 不會留下完整的變更紀錄。當資料庫改動沒有對應到可以檢查、可以進版控的 SQL 檔時，你就很難回答「這次到底改了什麼」。正式環境需要可追溯的 migration 歷史，因此把 <code>db:push</code> 留給原型，正式流程則固定走：</p>
+
+<pre><code>edit schema → npm run db:generate → npm run db:migrate</code></pre>
+
+<h2>完成檢查</h2>
+
+<p>做完這一節後，請確認以下結果：</p>
+
+<ol>
+<li><code>src/db/schema.ts</code> 已經描述目前的資料模型。</li>
+<li><code>drizzle/</code> 裡有帶編號的 SQL migration。</li>
+<li><code>drizzle/meta/_journal.json</code> 記錄了 migration 順序。</li>
+<li>snapshot 檔已經保留並加入版控。</li>
+<li><code>npm run db:migrate</code> 已成功執行。</li>
+<li>Neon 或 <code>db:studio</code> 中可以看到 <code>users</code> 和 <code>meals</code>，以及對應的欄位、外鍵和索引。</li>
+</ol>
+
+<blockquote>
+改 <code>schema.ts</code> 不會自動改變資料庫，要走 edit → <code>db:generate</code> → <code>db:migrate</code> 這個迴圈。generate 會比對 schema 與最近快照，產生一份帶編號的 SQL migration；migrate 才依序把變更套用到資料庫，而且重複執行是安全的。meta 裡的 <code>_journal.json</code> 記錄順序、snapshot 記錄每個時間點的完整 schema，是下一次算差異的依據，必須進版控。模型要演進時，不要改舊的 migration，而是新增一份，就像 <code>0001</code> 用 <code>ALTER TYPE ... ADD VALUE</code> 替 enum 加上 <code>extra</code> 那樣。
+</blockquote>
+
+<p>現在，兩張表已經真實存在於 Neon 上。不過它們還是空的，首頁看不到任何資料，背景 task 也沒有資料可分析。下一節會寫一個 seed 腳本，灌入一組寫實的測試資料，並讓腳本可以重複執行、使用參數化查詢，還能把使用者的本地時間正確轉換成 UTC。</p>
+
+<div class="lesson-nav">
+  <div><a href="./connect-drizzle-to-neon.html">← 上一步：接上 Neon：Drizzle client 與 drizzle.config 的設定</a></div>
+  <div><a href="./seed-local-data.html">下一步：Seed 測試資料：可重複執行與時區正確的寫法 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="編輯完 schema.ts 之後，為什麼還要跑 generate 和 migrate？" data-correct="1" data-explain="schema 只是描述；generate 產生 SQL，migrate 才把變更實際套用到資料庫。">
+  <button class="opt">因為編輯 schema 會自動鎖住資料庫</button>
+  <button class="opt">因為描述不等於施工，要產生並執行</button>
+  <button class="opt">因為 migrate 會把 schema 備份到雲端</button>
+  <button class="opt">因為 generate 會刪除舊的資料表</button>
+</div>
+<div class="quiz" data-question="db:generate 是怎麼知道你這次改了什麼？" data-correct="3" data-explain="它拿現在的 schema 和最近一次 snapshot 比對，算出差異並只產生那段 SQL。">
+  <button class="opt">它會詢問你手動輸入這次的變更</button>
+  <button class="opt">它會連線到 Clerk 讀取使用者的設定</button>
+  <button class="opt">它會把整份 schema 重新重建一次</button>
+  <button class="opt">它和最近的 snapshot 比對算出差異</button>
+</div>
+<div class="quiz" data-question="_journal.json 這類 meta 檔的主要用途是什麼？" data-correct="0" data-explain="它記錄 migration 的順序與時間點 schema，讓下一次 generate 能正確算差異。">
+  <button class="opt">記錄 migration 的順序與 schema 快照</button>
+  <button class="opt">儲存使用者每天實際吃下的餐點</button>
+  <button class="opt">當成手機 app 的離線快取資料來源</button>
+  <button class="opt">取代 package.json 來管理套件版本</button>
+</div>
+<div class="quiz" data-question="模型要新增一個 enum 值時，正確的做法是什麼？" data-correct="2" data-explain="保留已套用的舊 migration，新增一份去擴充，避免不同環境狀態兜不起來。">
+  <button class="opt">直接改寫最初的 0000 號 migration 檔</button>
+  <button class="opt">把整張表刪掉再用新定義重建</button>
+  <button class="opt">新增一份 migration 去擴充既有型別</button>
+  <button class="opt">用 db:push 蓋掉伺服器上所有紀錄</button>
+</div>
+<div class="quiz" data-question="為什麼這個專案正式流程不用 db:push？" data-correct="1" data-explain="push 不留 migration 檔，失去可檢視、可追溯的變更歷史。">
+  <button class="opt">因為 push 的執行速度永遠比 migrate 慢</button>
+  <button class="opt">因為 push 不會留下可追溯的變更紀錄</button>
+  <button class="opt">因為 push 會把資料庫還原成空白狀態</button>
+  <button class="opt">因為 push 不支援 Postgres 的資料庫</button>
+</div>
+<div class="quiz" data-question="重複執行 db:migrate 會發生什麼事？" data-correct="3" data-explain="Drizzle 會記錄哪些 migration 已套用，重複執行不會把同一份再跑一次，是安全的。">
+  <button class="opt">會把整張 users 表刪掉重新建立</button>
+  <button class="opt">會產生一份內容重複的 SQL 檔</button>
+  <button class="opt">會讓資料庫出現兩套相同的欄位</button>
+  <button class="opt">已套用的不會再跑，重複執行安全</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Neon + Drizzle 資料建模 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>安裝與接線 NativeWind</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>安裝與接線 NativeWind</h1>
+<p class="meta">Step 4/5 · 建立 Expo 專案與 NativeWind</p>
+
+<h2>這一節要完成什麼</h2>
+<p>完成本節後，你的 Expo 專案就能使用 NativeWind：在 React Native 元件上寫 <code>className</code>，並讓 Tailwind CSS 的工具類別轉成對應的原生樣式。</p>
+
+<p>你會依序完成這些工作：</p>
+<ol>
+  <li>安裝 <code>nativewind</code> 與 Tailwind CSS v3。</li>
+  <li>建立 <code>tailwind.config.js</code> 與 <code>global.css</code>。</li>
+  <li>接好 Babel、Metro 與 root layout。</li>
+  <li>清除快取並重啟 Expo，確認設定已被讀取。</li>
+</ol>
+
+<h2>開始前先確認專案狀態</h2>
+<p>請使用第二節清理完成的空白專案，並確認終端機目前位在專案根目錄。<code>src/app/</code> 裡應該只剩下 <code>index.tsx</code> 和 <code>_layout.tsx</code>，而專案根目錄已經有 create-expo-app 產生的 <code>package.json</code>。</p>
+
+<h2>為什麼要看懂每條接線</h2>
+<p>上一節已經說明過，NativeWind 可以想成建置階段的翻譯官：你寫下 Tailwind 的 class，Babel 與 Metro 會在打包過程中把它接到 React Native 的樣式系統。</p>
+
+<p>實務上，你也可以把 NativeWind 官方文件整份交給 coding agent，請它照文件設定。這確實能省下逐一比對版本的時間，但前提是你看得出設定是否正確。</p>
+
+<p>少一個 preset、<code>content</code> 掃錯資料夾，或忘記 import 樣式，都可能造成「沒有紅字錯誤，但畫面完全沒反應」的沉默失敗。接下來我們把安裝拆成幾個可檢查的步驟，讓每個檔案都像電路上的接點一樣清楚。</p>
+
+<figure class="lesson-figure"><img src="./nativewind-setup-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟一：安裝套件</h2>
+
+<pre><code>npx expo install nativewind
+npm install --save-dev tailwindcss@^3.4.17</code></pre>
+
+<p>這裡要特別留意版本。安裝 <code>tailwindcss</code> 時，請指定 v3，不要直接安裝最新版。NativeWind v4 目前搭配的是 Tailwind v3 的規則與 preset，兩個版本的設定格式並不完全相容。</p>
+
+<p>第一行使用 <code>npx expo install</code>，是讓 Expo 根據目前的 Expo SDK 選擇相容的 <code>nativewind</code> 版本。第二行則把 <code>tailwindcss</code> 放進 <code>devDependencies</code>，因為它只在建置階段使用，不會成為 app 執行時的依賴。</p>
+
+<h2>步驟二：建立 tailwind.config.js</h2>
+
+<p>在專案根目錄新增 <code>tailwind.config.js</code>：</p>
+
+<pre><code>// tailwind.config.js
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: ['./src/**/*.{js,jsx,ts,tsx}'],
+  presets: [require('nativewind/preset')],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+};</code></pre>
+
+<p>這個檔案有兩個關鍵設定。</p>
+
+<p>第一個是 <code>content</code>。它告訴 Tailwind 要去哪裡掃描 class 名稱。這裡會掃描 <code>src/</code> 底下所有 JavaScript 與 TypeScript 原始碼。如果日後把元件移到其他資料夾，這個 glob 也要一併更新；否則新位置的 class 可能被漏掉。</p>
+
+<p>第二個是 <code>presets</code>。<code>nativewind/preset</code> 提供 NativeWind 所需的對照規則，讓 Tailwind class 能轉成 React Native 樣式。少了這個 preset，就像翻譯官沒有字典，許多 class 便無法正確對應。</p>
+
+<figure class="lesson-figure"><img src="./nativewind-setup-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟三：建立 global.css</h2>
+
+<p>在 <code>src/</code> 底下新增 <code>global.css</code>：</p>
+
+<pre><code>/* src/global.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;</code></pre>
+
+<p>這三行是 Tailwind 的標準入口指令，分別載入基礎樣式、元件層與工具類層。</p>
+
+<p>檔案本身很簡單，真正重要的是它必須交給 Metro 編譯。下一步的 Metro 設定會指定這個檔案，讓它成為 NativeWind 的 CSS 入口。</p>
+
+<h2>步驟四：接上 babel.config.js</h2>
+
+<p>專案原本應該已經有 <code>babel.config.js</code>，請把內容改成：</p>
+
+<pre><code>// babel.config.js
+module.exports = function (api) {
+  api.cache(true);
+  return {
+    presets: [
+      ['babel-preset-expo', { jsxImportSource: 'nativewind' }],
+      'nativewind/babel',
+    ],
+  };
+};</code></pre>
+
+<p>這個檔案負責 JSX 的轉換。請確認兩個設定都存在：</p>
+
+<ul>
+  <li><code>jsxImportSource: 'nativewind'</code>：讓 JSX 轉換知道要由 NativeWind 處理 <code>className</code>。React Native 原生元件本身沒有這個 prop，必須透過這條設定接進來。</li>
+  <li><code>nativewind/babel</code>：把 <code>className</code> 的處理流程接到 NativeWind。</li>
+</ul>
+
+<blockquote class="bad-code">
+注意：修改 Babel 設定後，單純存檔觸發的 hot reload 不會重新載入這些設定。你必須完整重啟 Metro，新的 Babel 設定才會生效。
+</blockquote>
+
+<h2>步驟五：接上 metro.config.js</h2>
+
+<p>預設的 Expo 專案不一定會有 <code>metro.config.js</code>。如果沒有，請在專案根目錄新增；如果已經有，則調整成這個階段需要的形式：</p>
+
+<pre><code>// metro.config.js
+const { getDefaultConfig } = require('expo/metro-config');
+const { withNativeWind } = require('nativewind/metro');
+
+const config = getDefaultConfig(__dirname);
+
+module.exports = withNativeWind(config, { input: './src/global.css' });</code></pre>
+
+<p>這裡的核心是最後一行。<code>withNativeWind()</code> 會包住 Expo 原本的 Metro 設定，而 <code>input</code> 則明確指定 CSS 入口：</p>
+
+<ul>
+  <li>若使用 NativeWind，就用 <code>withNativeWind(config, ...)</code> 包裝設定。</li>
+  <li>若 CSS 檔案位於 <code>src/global.css</code>，就把 <code>input</code> 設為 <code>'./src/global.css'</code>。</li>
+</ul>
+
+<p>這個路徑必須和步驟三實際建立的檔案完全一致。少打一個資料夾名稱，NativeWind 就找不到要編譯的來源。</p>
+
+<p>日後在完成版的 Cal AI 專案中，你可能會看到更複雜的 <code>metro.config.js</code>：外層可能包了 Sentry 設定，也可能加入給 trigger.dev 使用的 resolver 條件。那些是後面加入原生模組後才需要的設定，目前不用處理。無論外層包了幾層，NativeWind 的核心接線仍然是最後那個 <code>withNativeWind</code>。</p>
+
+<h2>步驟六：補上型別宣告</h2>
+
+<p>在專案根目錄新增 <code>nativewind-env.d.ts</code>：</p>
+
+<pre><code>/// &lt;reference types="nativewind/types" /&gt;</code></pre>
+
+<p>這個檔案只有一行。它不參與 app 的執行流程，而是告訴 TypeScript 認得 NativeWind 的型別，包含 <code>className</code> 這個 prop。沒有它時，編輯器可能會把你寫的 <code>className</code> 標成錯誤。</p>
+
+<p>如果你使用的是純 JavaScript 專案，可以略過這一步。</p>
+
+<h2>步驟七：在 root layout 載入樣式</h2>
+
+<p>這是最容易漏掉的一步。即使套件、Tailwind、Babel 與 Metro 都設定正確，如果沒有在會被載入的地方 import <code>global.css</code>，畫面仍然不會有任何變化。</p>
+
+<p>請修改 <code>src/app/_layout.tsx</code>：</p>
+
+<pre><code>// src/app/_layout.tsx
+import '@/global.css';
+import { Stack } from 'expo-router';
+
+export default function RootLayout() {
+  return &lt;Stack /&gt;;
+}</code></pre>
+
+<p>這裡的 <code>@/</code> 是專案別名，對應到 <code>src/</code>，因此 <code>@/global.css</code> 實際上指向 <code>src/global.css</code>。</p>
+
+<p>如果專案沒有設定這個別名，也可以改用相對路徑 <code>../global.css</code>。重點只有一個：這份 CSS 必須在某個會被載入的地方 import 一次。</p>
+
+<h2>步驟八：清除快取並重啟</h2>
+
+<pre><code>npx expo start -c</code></pre>
+
+<p><code>-c</code> 會清除 Metro 快取。因為這次修改了 Babel 與 Metro 設定，而這些設定通常只會在啟動時讀取一次，所以舊快取可能仍然保留先前的打包結果。</p>
+
+<p>若看到 Metro 正常啟動，且終端機沒有紅字錯誤，就代表這次接線已經完成。此時畫面仍然是一張空白頁也沒關係；className 套到畫面上是不是真的有效，下一節再驗證。</p>
+
+<h2>完成後逐項檢查</h2>
+
+<p>請對照下表確認每個檔案與設定都已到位：</p>
+
+<table>
+<thead>
+<tr><th>檔案</th><th>完成狀態</th></tr>
+</thead>
+<tbody>
+<tr><td><code>package.json</code></td><td>有 <code>nativewind</code>（dependencies）與 Tailwind CSS v3（devDependencies）</td></tr>
+<tr><td><code>tailwind.config.js</code></td><td><code>content</code> 指向 <code>./src/**</code>，<code>presets</code> 載入 <code>nativewind/preset</code></td></tr>
+<tr><td><code>src/global.css</code></td><td>包含三行 <code>@tailwind</code> 指令</td></tr>
+<tr><td><code>babel.config.js</code></td><td>包含 <code>jsxImportSource: 'nativewind'</code> 與 <code>nativewind/babel</code></td></tr>
+<tr><td><code>metro.config.js</code></td><td>使用 <code>withNativeWind(config, { input: './src/global.css' })</code></td></tr>
+<tr><td><code>nativewind-env.d.ts</code></td><td>包含一行 NativeWind 型別參照</td></tr>
+<tr><td><code>src/app/_layout.tsx</code></td><td>import 了 <code>@/global.css</code></td></tr>
+</tbody>
+</table>
+
+<h2>你現在應該得到的結果</h2>
+
+<blockquote>
+完成 NativeWind 設定可以分成三組動作：安裝 <code>nativewind</code> 與 Tailwind CSS v3；建立 <code>tailwind.config.js</code> 與 <code>global.css</code>；接好 Babel 的 <code>jsxImportSource</code> 與 preset、Metro 的 <code>withNativeWind</code>，以及 root layout 的 <code>global.css</code> import。都完成後，執行 <code>npx expo start -c</code> 清除快取並重啟。每個設定都對應 NativeWind 建置流程中的一個接點，漏掉任何一個，都可能出現「不報錯，但 className 沒反應」的結果。
+</blockquote>
+
+<figure class="lesson-figure"><img src="./nativewind-setup-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>做到這裡，專案已經具備使用 NativeWind 的條件。不過，「檔案設定正確」和「樣式真的生效」是兩件事。下一節會在 <code>index.tsx</code> 寫入一段 className，直接觀察畫面是否變成藍底白字；如果沒有，再依照這些接點逐一排查。</p>
+
+<p>延伸閱讀：NativeWind 官方文件 <a href="https://www.nativewind.dev/docs/getting-started/installation">nativewind.dev/docs/getting-started/installation</a>。</p>
+
+<div class="lesson-nav">
+  <div><a href="./nativewind-mental-model.html">← 上一步：NativeWind 是什麼：Tailwind 怎麼跑進 React Native</a></div>
+  <div><a href="./run-and-verify-styling.html">下一步：跑起來並確認樣式生效 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="安裝 tailwindcss 時為什麼要指定 v3，而不是直接裝最新版？" data-correct="1" data-explain="NativeWind v4 搭配的是 Tailwind v3 的規則與 preset，兩代設定不完全相容。">
+  <button class="opt">因為 v3 的授權比較寬鬆可以商用</button>
+  <button class="opt">因為 NativeWind v4 搭配 Tailwind v3</button>
+  <button class="opt">因為 Expo 只支援舊版的 Node.js</button>
+  <button class="opt">因為 v4 已經被官方停止維護了</button>
+</div>
+<div class="quiz" data-question="tailwind.config.js 裡的 content 欄位應該指向哪裡？" data-correct="2" data-explain="要指向你的原始碼目錄，Tailwind 才知道去哪些檔案掃描 class 名稱。">
+  <button class="opt">指向 node_modules 以便掃描套件</button>
+  <button class="opt">指向模擬器的輸出快取資料夾</button>
+  <button class="opt">指向專案的原始碼目錄 src</button>
+  <button class="opt">指向 assets 內所有圖片檔案</button>
+</div>
+<div class="quiz" data-question="src/global.css 裡面通常放什麼內容？" data-correct="0" data-explain="放三行 @tailwind base、components、utilities 指令，作為 Tailwind 的入口。">
+  <button class="opt">三行 @tailwind 的入口指令</button>
+  <button class="opt">所有畫面的完整樣式物件</button>
+  <button class="opt">app 名稱與圖示路徑設定</button>
+  <button class="opt">依賴套件的版本號清單</button>
+</div>
+<div class="quiz" data-question="babel.config.js 裡的 jsxImportSource 設成 nativewind 是為了什麼？" data-correct="3" data-explain="讓 JSX 轉換階段就認得 className，並接上 NativeWind 的處理。">
+  <button class="opt">讓 Metro 可以編譯 TypeScript 檔案</button>
+  <button class="opt">讓 app 的啟動速度變得比較快</button>
+  <button class="opt">讓原生元件自動變成 HTML 標籤</button>
+  <button class="opt">讓 JSX 轉換認得 className prop</button>
+</div>
+<div class="quiz" data-question="metro.config.js 裡 NativeWind 真正關鍵的是哪一行？" data-correct="1" data-explain="最後用 withNativeWind 包住設定並指定 input CSS 路徑，這才是 NativeWind 需要的。">
+  <button class="opt">const config = getDefaultConfig(__dirname);</button>
+  <button class="opt">module.exports = withNativeWind(config, …)</button>
+  <button class="opt">const { getDefaultConfig } = require(…);</button>
+  <button class="opt">module.exports = config; 直接輸出設定</button>
+</div>
+<div class="quiz" data-question="改完 Babel 與 Metro 設定後，啟動指令該怎麼下？" data-correct="2" data-explain="用 -c 清掉 Metro 快取再重啟，新的設定與打包結果才會生效。">
+  <button class="opt">npx expo start 不必加任何參數</button>
+  <button class="opt">npx expo export 先匯出再啟動</button>
+  <button class="opt">npx expo start -c 清快取後重啟</button>
+  <button class="opt">npm run reset-project 先清空專案</button>
+</div>
+<div class="quiz" data-question="如果所有設定都對，但畫面樣式就是沒反應，最常見的疏漏是什麼？" data-correct="0" data-explain="最常見是忘了在 root layout import global.css，樣式根本沒被載入。">
+  <button class="opt">忘了在 root layout 匯入 global.css</button>
+  <button class="opt">忘了在模擬器重新登入帳號</button>
+  <button class="opt">忘了把 app 提交到 App Store</button>
+  <button class="opt">忘了安裝 Node.js 到電腦上</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 建立 Expo 專案與 NativeWind · Step 4/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

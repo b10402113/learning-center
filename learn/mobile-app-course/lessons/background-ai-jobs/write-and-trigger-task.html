@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>寫 task 並從 API route 觸發：generate-plan 實作</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>寫 task 並從 API route 觸發：generate-plan 實作</h1>
+<p class="meta">Step 3/5 · trigger.dev 背景任務與 Retry</p>
+
+<h2>學習目標</h2>
+<p>能照著寫出一個 schemaTask，從 API route 觸發它、拿到 run 與 runId，並說出每個關鍵設定在做什麼。</p>
+
+<h2>前言：動手前，先確認你站在哪裡</h2>
+
+<p>你要做的東西是這樣：onboarding 的使用者送出九題答案，後端把答案交給一個背景任務生成每日熱量與三大營養素，任務跑完後回傳一份計畫。做完之後，你會得到一個能跑的 <code>generate-plan</code> 任務，以及一條知道怎麼觸發它、把結果接回來的 route。</p>
+
+<p>動手前需要先具備三樣東西。第一，輸入的欄位已經被定義成一份 schema，而且有可以驗證結果是否合理的邏輯；第二，任務的資料夾與 <code>trigger.config.ts</code> 已經存在；第三，你的 Trigger.dev worker 與 secret key 之後要能跑起來（最後一步會交代）。前兩樣屬於資料層與專案設定，這裡不重講，只把它們當接點。</p>
+
+<h2>步驟一：把輸入合約與輔助邏輯放在一起</h2>
+
+<p>先讓任務與 route 共用同一份輸入定義。把使用者的答案寫成一個 Zod schema，放在共用的 lib 裡，例如 <code>lib/plan.ts</code>。這樣 route 用它驗證請求、task 用它驗證輸入，兩邊只認一份合約。</p>
+
+<p>同一個檔案裡也放任務會用到的兩個輔助函式。一個是 <code>isPlausible</code>，判斷 AI 回的數字是否落在合理範圍：熱量要在 1200 到 5000 之間，而且「蛋白質 × 4 + 碳水 × 4 + 脂肪 × 9」換算出來的熱量要和宣稱的熱量誤差在 15% 以內。另一個是 <code>formulaPlan</code>，用 Mifflin-St Jeor 公式算出一份保底計畫，當 AI 怎麼試都不行時可以退回去用。</p>
+
+<blockquote class="good-code">
+把「什麼算合理」與「保底答案是什麼」定義在任務之外、可以被單獨測試的地方。任務負責流程，規則本身不該埋在流程裡。
+</blockquote>
+
+<h2>步驟二：建立任務檔，定義 AI 的輸出格式</h2>
+
+<p>在 <code>src/trigger/</code> 底下建立 <code>generate-plan.ts</code>。先匯入需要的東西：從 <code>@trigger.dev/sdk</code> 拿 <code>schemaTask</code> 與 <code>logger</code>，從 OpenAI 拿 client 與結構化輸出的輔助函式，從 <code>zod</code> 拿 <code>z</code>。</p>
+
+<pre><code>import { logger, schemaTask } from "@trigger.dev/sdk";
+import OpenAI from "openai";
+import { zodTextFormat } from "openai/helpers/zod";
+import { z } from "zod";
+
+// 相對路徑，不是 "@/"：這個任務由 Trigger.dev 打包，不是 Metro。
+import { ageFrom, formulaPlan, isPlausible, planInputSchema } from "../lib/plan";</code></pre>
+
+<p>接著定義 AI 必須遵守的輸出格式。模型被要求用 snake_case（底線分隔的小寫）命名欄位，所以 schema 也用同樣的名字，回傳後再轉成 App 慣用的 camelCase（駝峰式）。這一步是關鍵：不要讓模型自由吐一段文字，再自己用字串切割去猜，而是用結構化輸出把它的回覆鎖進你定義的形狀裡。</p>
+
+<pre><code>const aiPlanSchema = z.object({
+  calories: z.number().int(),
+  protein_g: z.number().int(),
+  carbs_g: z.number().int(),
+  fat_g: z.number().int(),
+  rationale: z.string(),
+});</code></pre>
+
+<p>然後寫實際呼叫 AI 的函式。有兩個刻意的設計要說明：第一，OpenAI client 在<strong>每次呼叫時才建立</strong>，不是放在模組最上層。這樣如果缺少 API key，錯誤會發生在任務的 <code>try</code> 裡面，可以被捕捉；如果放在最上層，錯誤會在匯入模組時就爆掉，任務根本進不到自己的錯誤處理。第二，client 設 <code>maxRetries: 0</code>，把重試這件事完全交給任務層，不要兩套重試系統疊在一起。</p>
+
+<pre><code>async function askOpenAI(input) {
+  const openai = new OpenAI({ timeout: 25_000, maxRetries: 0 });
+
+  const response = await openai.responses.parse({
+    model: MODEL,
+    input: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: JSON.stringify({ ...input, age: ageFrom(input.dateOfBirth) }) },
+    ],
+    text: { format: zodTextFormat(aiPlanSchema, "daily_plan") },
+  });
+
+  const out = response.output_parsed;
+  if (!out) throw new Error("OpenAI returned no structured output");
+  return { calories: out.calories, protein: out.protein_g, /* ... */ };
+}</code></pre>
+
+<h2>步驟三：用 schemaTask 把工作包起來</h2>
+
+<p>現在把上面的東西組成一個任務。<code>id</code> 就是之後觸發時要指名的字串，<code>schema</code> 用剛剛共用的輸入合約，<code>maxDuration</code> 給它 120 秒的上限，<code>run</code> 裡寫流程。</p>
+
+<pre><code>export const generatePlan = schemaTask({
+  id: "generate-plan",
+  schema: planInputSchema,
+  maxDuration: 120,
+  run: async (input) =&gt; {
+    // 一次生成、一次重試，再不行就用公式退路
+    for (let attempt = 1; attempt &lt;= 2; attempt++) {
+      try {
+        const plan = await askOpenAI(input);
+        if (isPlausible(plan)) return { ...plan, source: "ai" };
+        logger.warn("Implausible plan, discarding", { attempt, plan });
+      } catch (error) {
+        logger.error("OpenAI plan generation failed", { attempt, error: String(error) });
+      }
+    }
+    return { ...formulaPlan(input), source: "formula" };
+  },
+});</code></pre>
+
+<p>注意兩個地方。第一，日誌用的是 <code>logger</code> 而不是 <code>console.log</code>。任務跑在 Trigger.dev 的 worker 上，這些 log 會跟著這次 run 保存下來，之後在 dashboard 上可以直接從 run 追回程式碼，這是下一步除錯的基礎。第二，這個任務的設計目標是「<strong>永遠不丟錯</strong>」：不管是 AI 回的數字不合理，還是呼叫直接失敗，跑完兩次之後都會退回公式，讓使用者一定拿得到一份計畫。</p>
+
+<h2>步驟四：從 API route 觸發，把結果接回來</h2>
+
+<p>route 的地方在 <code>app/api/plan+api.ts</code>。先驗證請求，再觸發任務。匯入 task 時只匯入型別，避免把任務實例打包進 server：</p>
+
+<pre><code>import { runs, tasks } from "@trigger.dev/sdk";
+import { planInputSchema } from "@/lib/plan";
+import type { generatePlan } from "@/trigger/generate-plan"; // 只匯入型別</code></pre>
+
+<p>觸發時用 <code>tasks.trigger</code>，並把 task 的型別傳進泛型，讓 payload 受到 TypeScript 檢查。回傳的 handle 帶著 run 編號：</p>
+
+<pre><code>const handle = await tasks.trigger&lt;typeof generatePlan&gt;("generate-plan", parsed.data);</code></pre>
+
+<p>接下來有兩種把結果接回來的方式，課程裡兩種都用了。</p>
+
+<p><strong>第一種是輪詢（poll）。</strong> 生成計畫的 route 用 <code>runs.poll</code> 每隔 500 毫秒問一次這次 run 好了沒，好了就把輸出回傳，失敗就回 502。這種做法把等待留在 route，換來最單純的體驗：一個 request、一個 response，不用前端額外訂閱。</p>
+
+<pre><code>const run = await runs.poll(handle, { pollIntervalMs: 500 });
+
+if (run.status !== "COMPLETED" || !run.output) {
+  console.error("generate-plan did not complete:", run.status, run.error);
+  return Response.json({ error: "Could not build your plan" }, { status: 502 });
+}
+return Response.json(run.output);</code></pre>
+
+<p><strong>第二種是即時訂閱（realtime）。</strong> 分析餐點的 route 完全不等待，它把任務觸發後，把 run 編號寫回資料庫，立刻回傳編號與 handle 附帶的 <code>publicAccessToken</code>：</p>
+
+<pre><code>const handle = await tasks.trigger&lt;typeof analyzeMeal&gt;("analyze-meal", { mealId: meal.id, imageUrl });
+await db.update(meals).set({ triggerRunId: handle.id }).where(eq(meals.id, meal.id));
+
+return Response.json({ meal, runId: handle.id, publicAccessToken: handle.publicAccessToken });</code></pre>
+
+<p>前端拿到這兩個值後，用 <code>useRealtimeRun</code> 訂閱這次 run，任務狀態或輸出一更新，畫面就跟著更新，使用者不需要手動重新整理。什麼時候用輪詢、什麼時候用即時訂閱，取決於這個等待發生在哪裡：如果 route 本來就要等結果（例如 onboarding 最後一頁的固定動畫），輪詢簡單；如果 App 是要在畫面上一邊顯示進度一邊等（例如掃描分析），即時訂閱體驗更好。</p>
+
+<h2>步驟五：把 worker 跑起來，確認任務真的執行</h2>
+
+<p>任務寫好之後，本機要有一個 Trigger.dev 的 worker 在跑，任務才會真的被執行。用 Trigger.dev 的開發指令啟動它（<code>npx trigger.dev@latest dev</code>），並確認 <code>.env</code> 裡有正確的 secret key。這個 worker 沒開，是你之後最常遇到、也最容易誤判的症狀——route 會看起來成功，但資料庫永遠等不到那一列，因為根本沒有人在執行任務。</p>
+
+<p><strong>做完會看到什麼：</strong> 送出一組 onboarding 答案後，Trigger.dev dashboard 的 Runs 頁面會出現一次 <code>generate-plan</code> 的 run，狀態變成 <code>COMPLETED</code>，輸出裡帶著 calories、protein、carbs、fat 與 rationale，並且標示這次是 <code>ai</code> 還是 <code>formula</code>。看到這個，就代表整條「route → 觸發 → 任務 → 輸出」的鏈路通了。</p>
+
+<blockquote class="good-code">
+程序到這裡結束，原理留在別處：為什麼要重試、退路該怎麼設計、失敗時要留下什麼狀態，是下一步這個決定要處理的事，這裡先把鏈路打通。
+</blockquote>
+
+<h2>小結</h2>
+
+<blockquote>
+寫一個 task 是五件事：共用輸入 schema、把 AI 的輸出鎖進結構化格式、用 schemaTask 包起流程、從 route 用 tasks.trigger 觸發、再決定用 poll 還是 realtime 把結果接回來。每個關鍵設定都有理由：client 每次建立是為了讓缺 key 可以被捕捉、maxRetries 設 0 是把重試交給任務層、logger 是為了留下可追查的紀錄、型別匯入是為了不讓伺服器多背一份任務程式碼。
+</blockquote>
+
+<p>鏈路打通之後，你馬上會撞到一個每個背景任務都躲不掉的問題：失敗了怎麼辦？下一步要決定重試幾次、什麼時候該有退路、什麼時候要把狀態標成失敗。</p>
+
+<div class="lesson-nav">
+  <div><a href="./task-anatomy.html">← 上一步：Task 是什麼：schemaTask 的 id、schema 與 run</a></div>
+  <div><a href="./retry-and-failure.html">下一步：失敗之後：重試語意、退路與標記失敗 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 OpenAI client 要在每次呼叫時才建立，而不是放在模組最上層？" data-correct="1" data-explain="缺 key 的錯誤會落在任務的 try 裡被捕捉，而不是匯入模組時就爆掉。">
+  <button class="opt">這樣每次呼叫會比較省錢</button>
+  <button class="opt">缺 key 的錯誤能落在任務的 try 裡</button>
+  <button class="opt">放在最上層會讓 model 不能設定</button>
+  <button class="opt">每次建立可以讓回應速度變快</button>
+</div>
+
+<div class="quiz" data-question="askOpenAI 裡把 maxRetries 設成 0 的目的是什麼？" data-correct="3" data-explain="把重試完全交給任務層，避免 OpenAI 與任務兩套重試系統疊在一起。">
+  <button class="opt">讓 OpenAI 完全不要回傳錯誤</button>
+  <button class="opt">讓結構化輸出變得更穩定</button>
+  <button class="opt">降低每次呼叫使用的 token 數</button>
+  <button class="opt">避免兩套重試系統疊在一起</button>
+</div>
+
+<div class="quiz" data-question="route 匯入 task 時使用 import type，主要避免什麼？" data-correct="0" data-explain="避免把由 Trigger.dev 打包的任務實例，額外打包進 server 程式碼。">
+  <button class="opt">把任務實例打包進 server 程式碼</button>
+  <button class="opt">讓 route 無法驗證進來的資料</button>
+  <button class="opt">讓任務沒有辦法被觸發執行</button>
+  <button class="opt">讓 TypeScript 完全失去型別檢查</button>
+</div>
+
+<div class="quiz" data-question="generate-plan 的 run 為什麼刻意設計成永遠不丟錯？" data-correct="2" data-explain="AI 失敗時退回公式答案，讓使用者一定拿得到一份計畫。">
+  <button class="opt">因為 Trigger.dev 不允許任務丟出錯誤</button>
+  <button class="opt">因為丟錯會讓資料庫直接損毀</button>
+  <button class="opt">讓使用者永遠拿得到一份保底計畫</button>
+  <button class="opt">因為丟錯會讓 worker 無法重新啟動</button>
+</div>
+
+<div class="quiz" data-question="分析餐點的 route 觸發任務後，立刻回傳哪兩個值給前端？" data-correct="1" data-explain="回傳 run 編號與 publicAccessToken，前端才能訂閱這次 run 的即時狀態。">
+  <button class="opt">回傳照片網址與分析完成的熱量</button>
+  <button class="opt">回傳 run 編號與 publicAccessToken</button>
+  <button class="opt">回傳使用者的 Clerk 身分與 email</button>
+  <button class="opt">回傳任務的原始程式碼與 schema</button>
+</div>
+
+<div class="quiz" data-question="如果 worker 沒有啟動，最可能看到什麼症狀？" data-correct="3" data-explain="任務根本沒有被執行，route 看似成功，但資料庫等不到那一列。">
+  <button class="opt">TypeScript 在編譯階段直接失敗</button>
+  <button class="opt">schema 驗證會拒絕所有輸入</button>
+  <button class="opt">OpenAI 會拒絕所有的 API 呼叫</button>
+  <button class="opt">route 看似成功但資料庫等不到資料</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · trigger.dev 背景任務與 Retry · Step 3/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sentry logs 與 console.log：什麼時候用哪個</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Sentry logs 與 <code>console.log</code>：什麼時候該用哪一個？</h1>
+<p class="meta">Step 4/6 · Sentry 錯誤監控</p>
+
+<h2>先決定：這行 log 上線後還要不要找得到？</h2>
+
+<p>上一節你已經能抓到錯誤，但錯誤本身往往不足以還原現場。使用者回報「餐點分析一直轉圈圈」，你在 Sentry 只看到一則逾時錯誤，訊息只有「request timed out」。到底是圖片太大、AI 回傳格式不對，還是網路中斷？答案通常藏在錯誤前後的幾行 log 裡。</p>
+
+<p>這時你會遇到一個很實際的選擇：要用熟悉的 <code>console.log</code> 隨手印出來，還是用 Sentry 提供的結構化 logger 送出去？兩者在開發時看起來很像，但 app 上線後，它們的命運完全不同。這一節要幫你建立一條清楚的判準，不再只是憑習慣打 log。</p>
+
+<h2>學習目標</h2>
+
+<p>學完後，你應該能判斷什麼情況適合使用 <code>console.log</code>，什麼情況該使用 Sentry 的結構化 logs，也能說明 log level、tag，以及把 logs 連回 errors、traces、replays 在實務上解決了什麼問題。</p>
+
+<h2>兩個選項，先放在同一張桌上比較</h2>
+
+<p>先不要急著選。把兩種 log 並排比較，差異就會很清楚：</p>
+
+<table>
+<thead>
+<tr><th>比較項目</th><th><code>console.log</code></th><th>Sentry 結構化 log</th></tr>
+</thead>
+<tbody>
+<tr><td>存在哪裡</td><td>只在使用者裝置上</td><td>送到 Sentry 雲端保存</td></tr>
+<tr><td>app 關閉後</td><td>消失，沒有任何痕跡</td><td>仍留在後台，之後查得到</td></tr>
+<tr><td>能不能搜尋</td><td>不行，只能肉眼查看</td><td>可以依 level、tag、訊息搜尋</td></tr>
+<tr><td>結構化</td><td>純文字</td><td>可以帶 key-value 欄位與標籤</td></tr>
+<tr><td>跟錯誤的關聯</td><td>沒有，只能比對時間</td><td>會自動連到 error、trace、replay</td></tr>
+<tr><td>成本</td><td>免費</td><td>會佔用 Sentry 額度</td></tr>
+</tbody>
+</table>
+
+<p>最關鍵的是「跟錯誤的關聯」。Sentry 的 log 不是散落在角落的一份文字紀錄，而是會被綁進當下的 session 與 trace。當你點開一則錯誤，就能在旁邊看到那一刻 app 印出了哪些 log。錯誤和 log 排在同一條時間軸上，就像把案發現場的監視器畫面和報案紀錄放在一起；這是單靠 <code>console.log</code> 做不到的。</p>
+
+<figure class="lesson-figure"><img src="./structured-logs-vs-console-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>判別問句：這行 log 是給誰看的？</h2>
+
+<p>與其背一大串規則，不如每次都問自己三個問題：</p>
+
+<ol>
+<li><strong>這行 log 只有在開發時我會看嗎？</strong>如果它只是幫你確認某個函式有被呼叫，或查看某個變數的值，使用 <code>console.log</code> 就夠了，不必浪費 Sentry 額度。</li>
+<li><strong>上線後使用者出問題時，我會需要回頭查這行 log 嗎？</strong>如果答案是會，例如分析失敗、付款失敗或權限被拒，就該使用 Sentry logger，因為你才有機會在事後找到它。</li>
+<li><strong>這行 log 會不會帶到敏感資料？</strong>不論使用哪一種方式，姓名、email、病歷和付款資訊都不該放進 log。差別在於，<code>console.log</code> 留在使用者手機上，而 Sentry log 會上傳到雲端，因此外洩風險更高。</li>
+</ol>
+
+<p>三個問題合起來，判準就很明確：</p>
+
+<blockquote>
+<p><strong>開發時用來除錯的訊息交給 <code>console.log</code>；上線後需要回頭查的事件交給 Sentry logger；任何敏感內容，兩者都不要送。</strong></p>
+</blockquote>
+
+<h2>用 log level 表達事件的輕重</h2>
+
+<p>決定要送到 Sentry 後，還要決定它有多嚴重。Sentry logger 支援六個等級，從最不嚴重到最嚴重依序是 trace、debug、info、warning、error、fatal。這些等級不只是分類，也會影響你在 Dashboard 上篩選結果。</p>
+
+<table>
+<thead>
+<tr><th>等級</th><th>什麼時候用</th><th>例子</th></tr>
+</thead>
+<tbody>
+<tr><td>trace / debug</td><td>開發與細節追蹤</td><td>快取命中、圖片壓縮後的大小</td></tr>
+<tr><td>info</td><td>正常但值得記錄的事件</td><td>餐點已記錄、計畫已產生</td></tr>
+<tr><td>warning</td><td>還能繼續執行，但已偏離預期</td><td>AI 回傳不合理，改用公式退路</td></tr>
+<tr><td>error</td><td>某個操作失敗</td><td>餐點上傳回 502</td></tr>
+<tr><td>fatal</td><td>核心功能整片失效</td><td>資料庫連不上，所有寫入都失敗</td></tr>
+</tbody>
+</table>
+
+<figure class="lesson-figure"><img src="./structured-logs-vs-console-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>實際寫法可以是：</p>
+
+<p><code>Sentry.logger.error('Meal upload failed', { reason: 'HTTP 502 from /api/meals', image_bytes: 2184302 })</code></p>
+
+<p>第二個參數是結構化欄位，會變成可搜尋的 tag。使用前也要確認 <code>Sentry.init</code> 已經開啟 <code>enableLogs: true</code>，否則 logs 不會真的送出去。</p>
+
+<h2>Tag 是讓你查得到的關鍵</h2>
+
+<p>log 的訊息主要是給人讀的，tag 則是給系統查詢的。你可以在 log 上標記 <code>feature: 'meal-analysis'</code>、<code>model: 'gpt-4o-mini'</code>、<code>meal_id: 'meal_8f2a41'</code>。</p>
+
+<p>當使用者只有十個時，直接閱讀訊息也許還應付得來。但當使用者變成五萬個、每天有五百筆結帳，你不可能一則一則翻。這時可以在 Dashboard 設定條件，例如找出「level 是 error、訊息包含 payment、發生在最近 24 小時，而且限定某個城市」的紀錄，幾秒內就能圈出受影響的範圍。能做到這件事，靠的就是可查詢的 tag。</p>
+
+<figure class="lesson-figure"><img src="./structured-logs-vs-console-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>反例：上線後也不是每一行都該送到 Sentry</h2>
+
+<p>「上線後要查，就用 Sentry log」是一條好規則，但不能毫無節制地套用。以下情況，規則反而需要踩煞車。</p>
+
+<p><strong>第一，高頻迴圈。</strong>如果動畫每一幀，或每秒觸發數十次的事件都送一則 Sentry log，額度可能很快被用光，app 效能也會受到拖累。這種地方要嘛不下 log，要嘛降到 trace 或 debug 等級，並且注意取樣。</p>
+
+<p><strong>第二，包含敏感資料。</strong>Sentry log 會送到雲端，因此病歷、個資和付款資訊絕對不能直接放進去。需要時應該先去識別化，或只記錄 id 與數量。</p>
+
+<p><strong>第三，只是開發時想看一眼的臨時訊息。</strong>這類訊息留在 <code>console.log</code> 就好。不要因為「反正有額度」就把所有暫時性的除錯內容都上傳。</p>
+
+<h2>可以直接套用的決策規則</h2>
+
+<blockquote>
+<p>這行 log 如果只是開發時給自己看的，就用 <code>console.log</code>；如果是上線後出事時需要回頭查的，就用 Sentry 結構化 logger。Sentry log 會存在雲端，可以依 level 和 tag 搜尋，也會自動連到 error、trace、replay，這是它勝過 console 的地方。用 trace 到 fatal 六個等級表達輕重，用 key-value 欄位協助查詢，並記得開啟 <code>enableLogs</code>。但高頻迴圈、含敏感資料，或只是臨時除錯的訊息，不該無腦送上雲端。</p>
+</blockquote>
+
+<p>你現在已經能抓到錯誤，也能查到錯誤前後的 log。接下來還有一個問題：使用者抱怨「變慢了」時，你要怎麼知道慢在哪一段？這需要第三種觀測方式——tracing。下一節會把一次操作拆成好幾段，讓你一眼看出是哪個環節拖慢了整體流程。</p>
+
+<div class="lesson-nav">
+  <div><a href="./verify-and-triage-errors.html">← 上一步：用測試頁驗證並在 Dashboard 判讀錯誤</a></div>
+  <div><a href="./performance-tracing.html">下一步：用 tracing 找出慢在哪一段 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="下列哪一項是 Sentry 結構化 log 勝過 console.log 的關鍵能力？" data-correct="2" data-explain="Sentry log 會自動連到當下的 error、trace 與 replay，console.log 完全做不到這種關聯。">
+  <button class="opt">輸入的語法比較短、比較好打</button>
+  <button class="opt">在開發時的顯示速度比較快</button>
+  <button class="opt">自動連到同時間的 error 與 trace</button>
+  <button class="opt">完全免費，不會佔用任何額度</button>
+</div>
+<div class="quiz" data-question="判斷該不該把某行 log 送進 Sentry，最實用的問句是哪一個？" data-correct="1" data-explain="核心判準是「上線後使用者出事時，我會需要查這行 log 嗎」。">
+  <button class="opt">這行 log 的英文字數會不會太多？</button>
+  <button class="opt">上線後出事時我會需要查這行嗎？</button>
+  <button class="opt">這行程式碼有沒有通過型別檢查？</button>
+  <button class="opt">同事會不會覺得這行 log 很專業？</button>
+</div>
+<div class="quiz" data-question="「資料庫連不上、所有寫入都失敗」最適合用哪個 log 等級？" data-correct="3" data-explain="核心功能整片失效屬於 fatal 等級。">
+  <button class="opt">trace 等級，因為它只是背景細節</button>
+  <button class="opt">debug 等級，因為它只在開發時出現</button>
+  <button class="opt">info 等級，因為連線是正常狀態</button>
+  <button class="opt">fatal 等級，因為核心功能已失效</button>
+</div>
+<div class="quiz" data-question="要讓 Sentry logger 真的送出 logs，初始化時必須開啟什麼？" data-correct="0" data-explain="Sentry.init 要設 enableLogs: true，logs 才會被送出。">
+  <button class="opt">enableLogs 設為 true</button>
+  <button class="opt">tracesSampleRate 設為 0</button>
+  <button class="opt">sendDefaultPii 設為 false</button>
+  <button class="opt">debug 設為 false</button>
+</div>
+<div class="quiz" data-question="log 上的 tag（例如 feature、meal_id）最大的用途是什麼？" data-correct="2" data-explain="tag 是給機器查的，讓你在大量 log 中依條件快速篩選出受影響範圍。">
+  <button class="opt">讓 log 的訊息讀起來更通順</button>
+  <button class="opt">把 log 加密，避免被看到</button>
+  <button class="opt">當篩選條件，快速撈出相關紀錄</button>
+  <button class="opt">自動決定 log 要保存多久</button>
+</div>
+<div class="quiz" data-question="下列哪種情況最不適合大量送出 Sentry log？" data-correct="1" data-explain="高頻迴圈裡每幀都送會瞬間吃光額度並拖慢效能，應避免或大幅降級。">
+  <button class="opt">使用者按下付款失敗的那一刻</button>
+  <button class="opt">每秒觸發數十次的高頻迴圈</button>
+  <button class="opt">餐點分析失敗的錯誤事件</button>
+  <button class="opt">登入權限被拒的例外狀況</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Sentry 錯誤監控 · Step 4/6</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

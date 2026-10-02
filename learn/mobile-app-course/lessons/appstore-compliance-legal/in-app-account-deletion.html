@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>實作刪帳號：確認、串接 Clerk 與 DB、cascade 清理</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>實作刪帳號：確認、串接 Clerk 與 DB，完整清理關聯資料</h1>
+<p class="meta">Step 4/5 · App Store 合規與刪帳號流程</p>
+
+<h2>完成後，你會得到什麼？</h2>
+<p>這一節會做出一個真正合規的 in-app 刪帳號流程：使用者先確認，server 再從已驗證的身分判斷要刪誰，接著依序處理 Clerk、應用程式資料庫與媒體儲存，最後驗證資料確實消失。</p>
+
+<p>開始前，請先確認你的 app 已經有設定頁或個人檔案頁，也能在 server 取得登入者的驗證身分。若使用關聯式資料庫，還需要能修改 schema，為關聯資料設定 cascade 刪除。</p>
+
+<h2>先看完整流程：刪除不是只按一個按鈕</h2>
+
+<p>常見的假版本是：使用者在設定頁按下「刪除帳號」，跳出確認框，按下確認後回到登入頁。畫面看起來像完成了，但使用者的資料可能還躺在資料庫裡，上傳過的照片也可能仍留在圖床資料夾中。</p>
+
+<p>要做得正確，至少要處理三個獨立系統：</p>
+
+<ul>
+  <li><strong>身分供應商</strong>：刪除 Clerk 裡的帳號。</li>
+  <li><strong>應用資料庫</strong>：清除使用者的主資料與所有關聯資料。</li>
+  <li><strong>媒體儲存</strong>：刪除使用者上傳過的檔案。</li>
+</ul>
+
+<p>這三層各自獨立，而且任何一步都可能因為網路中斷、Clerk 回傳 429，或資料庫只更新到一半而失敗。因此，這個流程的重點不只是「怎麼刪」，而是要讓一連串可能失敗的操作，最後仍能回到乾淨、可驗證的狀態。</p>
+
+<figure class="lesson-figure"><img src="./in-app-account-deletion-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一步：加入刪除按鈕與確認框</h2>
+
+<p>先在設定頁或個人檔案頁放一個明確標示為危險操作的刪除帳號按鈕。按下後不要立刻送出刪除請求，而是先顯示原生確認框，清楚說明這是永久操作。</p>
+
+<pre><code>Alert.alert(
+  "Delete account?",
+  "This is permanent. Your profile and all of your data will be removed.",
+  [
+    { text: "Cancel", style: "cancel" },
+    { text: "Delete", style: "destructive", onPress: handleDelete },
+  ]
+);</code></pre>
+
+<p>這裡有兩個行為必須確認：</p>
+
+<ol>
+  <li>若使用者按下取消，不得發出任何請求。取消就代表什麼都沒有發生。</li>
+  <li>使用者確認後，立刻將按鈕 disable，避免連點造成重複送出。</li>
+</ol>
+
+<p>確認框像是最後一道門：它不是裝飾，而是讓使用者在不可逆操作前，再看一次自己即將失去什麼。</p>
+
+<h2>第二步：由 server 判斷要刪哪個帳號</h2>
+
+<p><strong>警告：不要接受 client 傳來的 user id。</strong>刪除請求抵達 server 後，應該從已驗證的身分推導要刪除的帳號。如果 endpoint 接受 <code>req.body.userId</code>，攻擊者就可能把別人的 id 傳進來，讓「刪除自己的帳號」變成「刪除任何人的帳號」。</p>
+
+<pre><code>const auth = getAuth(req);
+if (!auth?.userId) return new Response("Unauthorized", { status: 401 });
+
+// 用 auth.userId，而不是 req.body.userId
+const clerkUserId = auth.userId;</code></pre>
+
+<p>這段程式做了三件事：</p>
+
+<ol>
+  <li>從請求取得 server 已驗證的身分。</li>
+  <li>若沒有 <code>auth.userId</code>，立即回傳 401，不執行刪除。</li>
+  <li>使用 <code>auth.userId</code> 作為刪除對象，而不是相信 client 自稱的 <code>userId</code>。</li>
+</ol>
+
+<p>這是身分驗證的基本原則：誰是使用者，要由 server 從 token 推導，不能交給 client 自己宣告。刪帳號時尤其重要，因為一旦做錯，就等於公開了一個可以刪除其他人資料的功能。</p>
+
+<figure class="lesson-figure"><img src="./in-app-account-deletion-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第三步：按照安全順序執行刪除</h2>
+
+<p>三層資料不能隨意排列順序。假設你先清空 app 資料，接著才發現 Clerk 刪不掉，使用者下次登入時可能會看到帳號還在，但所有內容都消失了。這種「身分還活著、資料卻被清空」的半成品狀態，通常比完全沒有刪除更糟。</p>
+
+<p>建議依照下面的順序執行：</p>
+
+<table>
+<thead>
+<tr><th>順序</th><th>動作</th><th>理由</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>UI 顯示確認框，送出刪除請求</td><td>避免誤觸；使用者取消時不發請求</td></tr>
+<tr><td>2</td><td>鎖定該帳號，擋掉新的寫入與上傳</td><td>刪除進行中不再產生新資料</td></tr>
+<tr><td>3</td><td>刪除或停用 Clerk 帳號</td><td>先讓身分失效，防止再次登入</td></tr>
+<tr><td>4</td><td>cascade 清理 DB 關聯資料與媒體</td><td>確認身分刪除後，再清理應用資料</td></tr>
+<tr><td>5</td><td>留下最小化的刪除記錄，並讓 client 登出</td><td>避免舊 token 重建帳號</td></tr>
+</tbody>
+</table>
+
+<p>Clerk 的刪除請求必須設計成可重試：</p>
+
+<ul>
+  <li>若是網路錯誤、HTTP 429 或伺服器 5xx，應該自動重試。</li>
+  <li>若回傳 404，代表帳號已經不存在，應視為「已完成」。</li>
+  <li>若是其他無法重試的錯誤，應在清理資料前停止，讓前端顯示可重試的畫面。</li>
+</ul>
+
+<p>寧可暫停在「身分還在、資料尚未清理」，也不要停在「資料已經刪掉，但身分仍然可以登入」。</p>
+
+<p>最後留下的刪除記錄要盡量小，只記錄「這個 Clerk id 已被刪除」，不要保存密碼、email 或其他內容。使用者的登入 token 可能尚未過期；如果資料庫裡完全沒有痕跡，他拿著舊 token 回來時，系統可能會混淆，甚至重建出一個幽靈帳號。</p>
+
+<h2>第四步：用 cascade 清掉資料庫關聯資料</h2>
+
+<p>刪除帳號的重點不只是刪除主帳號那一列。使用者的餐點紀錄、貼文、留言、按讚、追蹤與對話訊息，通常都透過外鍵指向使用者資料。如果只刪主帳號，資料庫裡就會留下指向不存在使用者的孤兒資料。</p>
+
+<p>若使用的是關聯式資料庫，例如 Postgres + Drizzle，可以直接在 schema 宣告關聯刪除：</p>
+
+<pre><code>export const meals = pgTable("meals", {
+  id: uuid().primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  // ...
+});</code></pre>
+
+<p><code>onDelete: "cascade"</code> 的意思是：當 <code>users</code> 的某一列被刪除，所有 <code>userId</code> 指向它的 <code>meals</code> 列也會自動刪除。</p>
+
+<p>請把每一張與使用者有關的資料表都檢查一次。只要關聯設定完整，刪除使用者就像推倒第一張骨牌，其他關聯資料會依照資料庫規則一起清理。</p>
+
+<figure class="lesson-figure"><img src="./in-app-account-deletion-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第五步：另外清理媒體儲存</h2>
+
+<p>媒體儲存不在資料庫裡，因此資料庫的 cascade 管不到它。圖床，例如 ImageKit，或物件儲存，例如 Convex storage，都必須使用各自的 API 清理。</p>
+
+<p>一個實用做法，是讓每個使用者的檔案都帶有可辨識的前綴或資料夾。以下範例使用 user id 作為檔名前綴：</p>
+
+<pre><code>// 檔名帶上 user id 前綴，刪除時就能整批處理
+await uploadToImageKit(file, `meal-${userId}-${Date.now()}.jpg`);
+
+// 刪帳號時，清掉這個使用者的所有媒體
+await deleteImageKitFilesByPrefix(`meal-${userId}-`);</code></pre>
+
+<p>跨系統清理時，要容忍「檔案其實已經不存在」的情況。刪除一個不存在的檔案，不應該讓整個刪帳號流程失敗。</p>
+
+<p>整個清理流程也要做到 <strong>idempotent</strong>，也就是可以安全地重複執行。若流程中途被中斷，重新執行時不應因為某些資料已經刪過，就卡在錯誤狀態。</p>
+
+<h2>第六步：在模擬器裡驗證三層結果</h2>
+
+<p>不要只看畫面是否回到登入頁。請實際跑過完整流程，並在三個地方確認結果。</p>
+
+<ol>
+  <li>先按取消，確認沒有發出刪除請求，也沒有任何資料被改動。</li>
+  <li>再按確認，等待刪除流程完成。</li>
+  <li>在 Clerk 的 users 表中確認找不到這個使用者。</li>
+  <li>在資料庫中確認該使用者的關聯資料列都已消失。</li>
+  <li>在媒體資料夾中確認該使用者的檔案已清空。</li>
+  <li>用同一個 email 重新註冊，確認使用者會重新走 onboarding，而不是看到上一個帳號留下的內容。</li>
+</ol>
+
+<p>若後端已有測試，也應補上以下情境：</p>
+
+<ul>
+  <li>未登入或偽造身分時，請求會被擋下。</li>
+  <li>重試、HTTP 429、伺服器 5xx 與 404 的處理符合預期。</li>
+  <li>大量資料需要分成多批次清理時，流程仍能完成。</li>
+  <li>媒體檔案會被移除。</li>
+  <li>計數資料會正確修復，例如其他使用者的追蹤數需要扣除。</li>
+  <li>只刪除目標使用者，不影響其他人的資料。</li>
+</ul>
+
+<figure class="lesson-figure"><img src="./in-app-account-deletion-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>弱做法 vs 強做法</h2>
+
+<p>以下是三種常見的弱做法：</p>
+
+<ul>
+  <li>只把使用者登出，實際資料完全沒刪。</li>
+  <li>只刪除主帳號，留下大量孤兒資料。</li>
+  <li>讓 client 決定要刪除哪一個 id，造成嚴重的越權漏洞。</li>
+</ul>
+
+<p>強做法則是把每個關鍵點都鎖好：</p>
+
+<ul>
+  <li>由 server 從已驗證的身分推導刪除對象。</li>
+  <li>先鎖住寫入，再讓身分失效。</li>
+  <li>Clerk 的刪除支援重試，404 視為已完成。</li>
+  <li>流程具備 idempotent 特性，可以安全重跑。</li>
+  <li>使用 schema 的 <code>onDelete: "cascade"</code> 清除 DB 關聯資料。</li>
+  <li>使用 user id 前綴整批刪除媒體。</li>
+  <li>留下最小化刪除記錄，避免舊 token 重建帳號。</li>
+  <li>最後在 Clerk、DB 與媒體儲存三處驗證。</li>
+</ul>
+
+<h2>完成檢查</h2>
+
+<blockquote>
+合格的刪帳號流程要處理三層：Clerk 的身分、資料庫的關聯資料，以及媒體儲存。流程應先顯示原生確認框，取消時不送請求；確認後 disable 按鈕，避免重複送出。Server 必須從已驗證的身分推導刪除對象，絕不能相信 client 傳來的 id。接著鎖定寫入、刪除或停用身分，再 cascade 清理 DB 與媒體。Clerk 刪除要能重試，404 視為已完成；其他失敗則停在清理前並顯示重試選項。最後在 Clerk、DB 與媒體三處驗證，並確認重新註冊會重新走 onboarding。
+</blockquote>
+
+<p>完成後，app 就具備一條能真正刪除帳號的流程。下一節會把部署好的隱私政策與條款頁接進 app，決定入口位置與開啟方式，並在送審前逐項核對整份清單。</p>
+
+<div class="lesson-nav">
+  <div><a href="./deploy-legal-site.html">← 上一步：部署 legal site：Cloudflare Pages、support URL 與 App Store Connect</a></div>
+  <div><a href="./wire-legal-links-and-preflight.html">下一步：把法律頁接進 app：開啟方式與送審前檢查 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="刪帳號的 server endpoint 應該根據什麼來決定要刪哪個帳號？" data-correct="2" data-explain="要從已驗證的身分推導，絕不接受 client 傳來的 user id，否則任何人都能刪別人帳號。">
+  <button class="opt">由 client 在請求內容裡帶上要刪除的帳號 id</button>
+  <button class="opt">由前端畫面目前顯示的個人檔案來決定</button>
+  <button class="opt">從已驗證身分推導，不信 client 傳來的 id</button>
+  <button class="opt">由資料庫自動選擇最近登入的那個帳號</button>
+</div>
+<div class="quiz" data-question="為什麼建議先讓身分失效（刪除 Clerk 帳號），再清理應用資料？" data-correct="1" data-explain="先讓身分失效可防止使用者再次登入或寫入，也避免資料清光後身分還在的錯亂。">
+  <button class="opt">因為 Clerk 的 API 比資料庫的刪除速度快上許多</button>
+  <button class="opt">先讓身分失效可防止再次登入與寫入資料</button>
+  <button class="opt">因為資料庫刪除一定要等身分供應商通知</button>
+  <button class="opt">因為先刪資料會讓 Clerk 的帳號無法移除</button>
+</div>
+<div class="quiz" data-question="Clerk 的刪除請求回傳 404，正確的處理方式是什麼？" data-correct="3" data-explain="404 代表帳號已經不在了，應視為已完成，而不是當成錯誤重試。">
+  <button class="opt">立刻中止流程並顯示錯誤，請使用者稍後再試</button>
+  <button class="opt">改為停用帳號，等待人工客服來手動處理</button>
+  <button class="opt">重新建立該帳號，再嘗試刪除一次確認</button>
+  <button class="opt">視為已完成，因為該帳號已經不存在了</button>
+</div>
+<div class="quiz" data-question="為什麼清理步驟要設計成可重複執行（idempotent）？" data-correct="0" data-explain="刪除可能中斷，重跑時不能因為檔案已刪或資料已清就報錯，才能安全恢復。">
+  <button class="opt">中斷後重跑不會因資料已刪而報錯失敗</button>
+  <button class="opt">可以讓多個使用者同時刪除時不必排隊等待</button>
+  <button class="opt">可以加快每一次刪除請求的整體執行速度</button>
+  <button class="opt">可以省略掉前端確認框直接完成刪除流程</button>
+</div>
+<div class="quiz" data-question="資料庫的關聯資料（餐點、貼文、留言等）最乾淨的刪除方式是什麼？" data-correct="2" data-explain="在 schema 的關聯上宣告 onDelete cascade，刪主帳號時關聯列會自動一起被刪。">
+  <button class="opt">在前端逐一列出所有資料並逐筆送出刪除請求</button>
+  <button class="opt">保留所有關聯資料但把它們標記成已停用狀態</button>
+  <button class="opt">在 schema 宣告 onDelete cascade 自動連帶刪除</button>
+  <button class="opt">定期用排程任務在夜間批次清理孤兒資料</button>
+</div>
+<div class="quiz" data-question="要驗證刪帳號真的成功，應該去哪裡查核？" data-correct="1" data-explain="要在 Clerk 的 users 表、資料庫關聯列與媒體儲存三處都確認查不到該使用者。">
+  <button class="opt">只要在 app 裡確認畫面有回到登入頁就足夠</button>
+  <button class="opt">Clerk users、資料庫關聯列與媒體儲存三處</button>
+  <button class="opt">只要看伺服器的終端機有沒有印出錯誤訊息</button>
+  <button class="opt">只要確認 Clerk 的後台顯示刪除成功即可</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · App Store 合規與法律頁 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

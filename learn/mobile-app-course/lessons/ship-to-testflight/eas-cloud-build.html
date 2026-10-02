@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 EAS 在雲端出 dev build：從 eas.json 到掃 QR 安裝</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 EAS 在雲端產生 dev build：從 <code>eas.json</code> 到掃 QR code 安裝</h1>
+<p class="meta">Step 2/6 · EAS Build、真機與 TestFlight</p>
+
+<h2>這一節要完成什麼</h2>
+<p>這一節要把 Expo 專案的「外殼」裝進你的 iPhone：先準備 EAS 設定、註冊裝置，再讓 EAS 在雲端產生一份 development build，最後掃描 QR code 安裝到真機。</p>
+
+<p>完成後，你會在 iPhone 主畫面看到一個 app 圖示。不過，點開它時畫面還不會自己跑起來，因為 dev build 比較像一個準備好的外殼；真正的介面要等下一節接上開發伺服器。這一節先把外殼裝好，啟動問題留到下一節處理。</p>
+
+<figure class="lesson-figure"><img src="./eas-cloud-build-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>開始前的準備</h2>
+<p>動手前請確認你有以下三樣東西：</p>
+
+<ul>
+  <li>一個已經納入 git 版控的 Expo 專案。</li>
+  <li>一個 EAS 帳號，可以免費註冊。</li>
+  <li>一台 iPhone。</li>
+</ul>
+
+<p>如果你的專案放在 monorepo 裡，行動 app 通常位於類似 <code>apps/mobile</code> 的子資料夾。接下來的 EAS 指令都要在這個資料夾裡執行，別讓指令跑錯地方。</p>
+
+<h2>第一步：切進行動專案，產生 <code>eas.json</code></h2>
+
+<p>先切換到行動 app 的目錄。假設你的專案結構如下，指令會是：</p>
+
+<pre><code>cd apps/mobile</code></pre>
+
+<p>接著在這個資料夾裡產生名為 <code>eas.json</code> 的設定檔。這是 EAS 在雲端建置時使用的「施工圖」；沒有它，就沒有可依設定執行的雲端 build。</p>
+
+<p>第一次使用時，先登入 EAS，再執行初始化流程。它會引導你建立這個檔案，並詢問幾個平台與方案相關的設定。這份檔案的用途，是告訴 EAS 專案有哪些建置設定，例如開發用、預覽用，以及正式上線用。</p>
+
+<p>下面是一份精簡的 <code>eas.json</code>。通常初始化流程會幫你產生，不一定要手動輸入；但看得懂它，之後遇到問題才知道要從哪裡調整：</p>
+
+<pre><code>{
+  "build": {
+    "development": {
+      "developmentClient": true,   // 這份 build 內含 dev client，會連回你的開發伺服器
+      "distribution": "internal"   // 用內部散布：直接裝進你註冊過的裝置
+    },
+    "preview": {
+      "distribution": "internal"   // 給測試者用的預覽版，一樣走內部散布
+    },
+    "production": {}               // 正式版設定，之後送審時用
+  }
+}</code></pre>
+
+<p>這裡先記住兩個關鍵設定：</p>
+
+<ul>
+  <li><code>developmentClient</code>：讓 build 具備連接開發伺服器的能力，這是開發模式會用到的那條線。</li>
+  <li><code>distribution</code>：決定 build 如何送到裝置。<code>internal</code> 代表內部散布，直接提供給已註冊的裝置安裝，不需要經過 App Store。</li>
+</ul>
+
+<h2>第二步：註冊你的 iPhone</h2>
+
+<p>使用內部散布前，EAS 必須知道你要安裝到哪一台裝置。因此，下一步是執行裝置註冊指令，並依照 EAS 的引導完成登記。</p>
+
+<p>這通常只需要做一次，因為 EAS 會記住已註冊的裝置。若你換了手機，或要讓第二位測試者安裝，就必須替新的裝置再註冊一次。</p>
+
+<p>如果註冊時遇到看不懂的畫面，可以直接截圖，並把「我現在卡在裝置註冊」一起交給你的 coding agent。讓它根據畫面一步步帶你操作，通常比自己在陌生選項裡猜測更快。之後除錯 build 時，也能沿用這個方法。</p>
+
+<h2>第三步：在雲端產生 development build</h2>
+
+<p>裝置註冊完成後，就可以送出 iOS 的雲端建置：</p>
+
+<pre><code>eas build --profile development --platform ios</code></pre>
+
+<p>執行這個指令後，專案會上傳到 EAS 雲端，編譯工作也會在雲端完成；你的 Mac 不需要負責實際建置。你可以到 Expo 的儀表板 <code>expo.dev</code> 查看進度，看它依序經過排隊、編譯，以及各個步驟的完成狀態。</p>
+
+<p>第一次執行時，終端機可能會連續詢問幾個設定問題。若你還沒有特殊需求，可以先依照預設值一路按 Enter，讓建置流程開始。</p>
+
+<blockquote class="bad-code">
+不要把「build 失敗」當成壞事。真實世界很少一次就整排綠燈，設定的細節非常多，第一次失敗幾乎是常態。關鍵是失敗之後要怎麼處理，那正是 <a href="./debug-eas-failures.html">最後一節</a>要教的：把完整 log 交給 AI，讓它讀出是哪個設定壞掉。這一節先把成功的流程走順。
+</blockquote>
+
+<p>若要建置 Android，流程相同，只要把平台參數改成 <code>android</code>：</p>
+
+<pre><code>eas build --profile development --platform android</code></pre>
+
+<p>Expo 的方便之處就在這裡：兩個平台共用大部分流程，只需要在少數地方指定差異。</p>
+
+<h2>第四步：掃 QR code，把 build 安裝到手機</h2>
+
+<p>建置完成後，終端機會顯示 QR code，Expo 儀表板上也會出現這份 build。拿起 iPhone，用相機掃描 QR code，接著依照系統引導完成安裝。</p>
+
+<p>安裝完成後，iPhone 主畫面會多出一個 app 圖示。看到這個圖示，表示 dev build 已經成功進到真機。</p>
+
+<h2>先確認：為什麼打開後沒有畫面？</h2>
+
+<p>這裡有一個容易誤判的地方：不要期待 dev build 像一般 app 一樣，打開後立刻顯示完整介面。</p>
+
+<p>第一次點開時，你多半只會看到 app 的 logo 與名稱，並顯示正在尋找開發伺服器。這不是安裝失敗，而是 dev build 的設計：它本身主要是外殼，介面並不直接放在安裝檔裡，而是等待你電腦上執行的開發伺服器提供。</p>
+
+<figure class="lesson-figure"><img src="./eas-cloud-build-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>下一節會啟動 Metro 開發伺服器，讓 app 真的顯示畫面；如果一般連線方式不通，也會改用 tunnel，或把 dev server 的網址手動貼進手機裡的 app。</p>
+
+<h2>完成檢查</h2>
+
+<p>做到這裡，可以依序確認以下結果：</p>
+
+<ol>
+  <li>你已經切進行動 app 的資料夾。</li>
+  <li>專案裡已經有 EAS 使用的 <code>eas.json</code>，而且 development profile 啟用了 <code>developmentClient</code> 與 <code>distribution: internal</code>。</li>
+  <li>你的 iPhone 已完成裝置註冊。</li>
+  <li>EAS 已經完成 development build，或至少已在 <code>expo.dev</code> 顯示建置進度與結果。</li>
+  <li>你已掃描 QR code，並在 iPhone 主畫面看到 app 圖示。</li>
+</ol>
+
+<blockquote>
+雲端建置的流程是：<code>cd</code> 進行動專案、產生 EAS 需要的設定檔 <code>eas.json</code>（開發設定用 <code>developmentClient</code> 加 <code>distribution: internal</code>）、註冊你的 iPhone、執行 <code>eas build --profile development --platform ios</code>、在 expo.dev 儀表板看著它完成，最後掃 QR code 安裝。Android 只差把 platform 換掉。第一次跑會被問幾個設定問題，失敗也是常態；build 裝好後 app 不會自己顯示畫面，因為它還缺一個開發伺服器。
+</blockquote>
+
+<p>現在外殼已經在手機上了，還缺把 JavaScript 介面送進去的那條線。下一節就來啟動 Metro 開發伺服器，讓這個 dev build 從「裝好了」變成「真的能看到 app 畫面」。</p>
+
+<div class="lesson-nav">
+  <div><a href="./why-real-device.html">← 上一步：從模擬器到真機：Expo、EAS、TestFlight 各在做什麼</a></div>
+  <div><a href="./connect-dev-server.html">下一步：讓真機上的 app 連上 Metro →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="eas.json 在雲端建置流程裡的角色是什麼？" data-correct="2" data-explain="eas.json 是 EAS 在雲端建置時讀取的設定檔，沒有它就無法取得雲端 build。">
+  <button class="opt">存放使用者登入後拿到的權杖憑證</button>
+  <button class="opt">記錄 App Store 審核後留下的評語</button>
+  <button class="opt">告訴 EAS 這個專案要如何建置</button>
+  <button class="opt">存檔 iPhone 上安裝過的 build 清單</button>
+</div>
+<div class="quiz" data-question="distribution 設成 internal 代表什麼？" data-correct="1" data-explain="internal 是內部散布，把 build 直接給你註冊過的裝置安裝，不經過 App Store。">
+  <button class="opt">把 build 自動公開到 App Store 上架</button>
+  <button class="opt">把 build 直接給已註冊裝置安裝</button>
+  <button class="opt">把 build 只存在 Expo 雲端不給下載</button>
+  <button class="opt">把 build 加密後寄到開發者信箱</button>
+</div>
+<div class="quiz" data-question="想在雲端產生 iOS 的 development build，該執行哪個指令？" data-correct="0" data-explain="eas build 加上 profile development 與 platform ios，就會在 EAS 雲端產生開發版 build。">
+  <button class="opt">eas build --profile development --platform ios</button>
+  <button class="opt">eas submit --profile production --platform ios</button>
+  <button class="opt">npx expo start --tunnel --platform ios</button>
+  <button class="opt">npx expo run ios --device --build cloud</button>
+</div>
+<div class="quiz" data-question="為什麼內部散布前要先註冊 iPhone？" data-correct="3" data-explain="內部散布只允許已登記的裝置安裝，所以新裝置要先註冊過才能拿到 build。">
+  <button class="opt">沒有註冊就無法連上 Expo 的網路</button>
+  <button class="opt">註冊後才能使用手機的相機功能</button>
+  <button class="opt">註冊會自動幫你建立 App Store 頁面</button>
+  <button class="opt">內部散布只允許已登記的裝置安裝</button>
+</div>
+<div class="quiz" data-question="建置完成、掃 QR 安裝後，app 第一次打開通常會顯示什麼？" data-correct="2" data-explain="dev build 的介面由開發伺服器提供，還沒接上時只會顯示 logo 與正在尋找伺服器。">
+  <button class="opt">直接進入首頁，所有功能正常運作</button>
+  <button class="opt">跳出 App Store 的購買確認視窗</button>
+  <button class="opt">顯示 logo 並尋找開發伺服器</button>
+  <button class="opt">顯示建置失敗的完整錯誤訊息</button>
+</div>
+<div class="quiz" data-question="把同一個流程改成產生 Android build，需要改動什麼？" data-correct="1" data-explain="整套流程幾乎相同，只要把建置指令裡的 platform 從 ios 改成 android。">
+  <button class="opt">必須重新建立一個新的 EAS 帳號</button>
+  <button class="opt">只把 platform 由 ios 改成 android</button>
+  <button class="opt">必須改用完全不同的設定檔格式</button>
+  <button class="opt">要先把 iPhone 的註冊全部刪除</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · EAS Build、真機與 TestFlight · Step 2/6</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

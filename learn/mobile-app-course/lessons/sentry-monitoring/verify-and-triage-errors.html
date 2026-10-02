@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用測試頁驗證並在 Dashboard 判讀錯誤</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用測試頁驗證回報，並在 Dashboard 判讀錯誤</h1>
+<p class="meta">Step 3/6 · Sentry 錯誤監控</p>
+
+<h2>這一節要完成什麼</h2>
+<p>上一節你已經裝好 Sentry SDK，也重新 build 了 app。這一節要把整條回報管線實際走過一次：建立一個只在開發環境出現的測試頁，按下按鈕後刻意製造不同類型的錯誤，確認錯誤與 session replay 確實進到 Sentry，接著在 Issue 頁面讀懂裝置、程式碼區塊、breadcrumbs、replay 與 trace。驗證完成後，再把測試頁移除。</p>
+
+<p>開始前，請先確認 SDK 已安裝、DSN 已設定，而且 app 已經完成上一節要求的 rebuild。這些前置條件若有任何一項不成立，測試頁就可能只是把錯誤丟出去，卻沒有任何東西抵達 Dashboard。</p>
+
+<h2>先建立測試頁，再逐一核對結果</h2>
+<p>真實專案裡，你不會想等到使用者真的遇到問題，才發現 DSN 填錯、native module 沒編進去，或環境變數根本沒有被讀取。測試頁就像消防演習：它不是正式功能，而是一組按鈕，讓你在受控環境下製造真實錯誤，並把「我按了哪一顆」和「Sentry 出現什麼」逐一對上。</p>
+
+<p>測試頁只應該在 <code>__DEV__</code> 時掛上，正式版不應該看得到。每一顆按鈕負責一種錯誤情境。先準備幾個有代表性的錯誤：</p>
+
+<pre><code>// 讓 Sentry 的 issue 標題不只是 "Error"，而是看得懂的名字
+class MealAnalysisError extends Error {
+  name = 'MealAnalysisError';
+}
+
+// 1. render 期間丟錯，畫面會進入錯誤邊界
+function crashInRender(): never {
+  throw new Error("Cannot read property 'calories' of undefined");
+}
+
+// 2. 逃出 onPress 的呼叫堆疊，落到全域 uncaught handler
+function uncaughtHandlerError() {
+  setTimeout(() => {
+    throw new MealAnalysisError('Meal analysis worker returned a malformed macro payload');
+  }, 0);
+}
+
+// 3. 故意不加 .catch()，重現「忘了 await 的錯誤」
+function unhandledRejection() {
+  Promise.reject(new Error('POST /api/meals timed out after 30000ms'));
+}</code></pre>
+
+<p>這三個按鈕測試的是不同路徑：</p>
+<ul>
+<li>若錯誤發生在 render 期間，畫面會進入錯誤邊界。</li>
+<li>若錯誤從 <code>setTimeout</code> 裡拋出，它會離開 <code>onPress</code> 的呼叫堆疊，落到全域 uncaught handler。</li>
+<li>若建立 rejected promise 卻沒有加上 <code>.catch()</code>，就能重現未處理的 promise rejection。</li>
+</ul>
+
+<p>不要把所有錯誤都寫成預設的 <code>Error</code>。替錯誤取一個有意義的 <code>name</code>，可以讓 Sentry 的 issue 標題直接說明發生了哪一類問題。否則幾十則錯誤都只叫做 <code>Error</code>，你很難分辨哪一則是餐點分析失敗，哪一則是付款失敗。</p>
+
+<figure class="lesson-figure"><img src="./verify-and-triage-errors-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟一：為錯誤補上發生當下的背景</h2>
+<p>錯誤訊息只能告訴你「什麼壞了」。如果還想知道它發生在哪個功能、使用了哪個 model，以及當時處理的是哪筆資料，就要用 tag（標籤）和 context（情境資料）。這對「已經被 catch、不會讓 app 崩潰」的錯誤特別有用：</p>
+
+<pre><code>Sentry.withScope((scope) => {
+  scope.setTag('feature', 'meal-analysis');
+  scope.setTag('model', 'gpt-4o-mini');
+  scope.setLevel('error');
+  scope.setContext('meal', {
+    meal_id: 'meal_8f2a41',
+    image_bytes: 2_184_302,
+    retry_count: 2,
+  });
+  Sentry.captureException(
+    new MealAnalysisError('Vision model returned calories outside the plausible range (11840)'),
+  );
+});</code></pre>
+
+<p><code>captureException</code> 會把錯誤送到 Sentry。外層的 <code>withScope</code> 則讓這些 tag 和 context 只跟著這一則錯誤，不會意外套用到其他事件。</p>
+
+<p>tag 也能成為 Dashboard 上的篩選條件。例如設定 <code>feature</code> 為 <code>meal-analysis</code> 後，日後就能快速找出所有餐點分析相關的錯誤。</p>
+
+<p>如果你需要控制錯誤如何分群，可以使用 <strong>fingerprint</strong>（指紋）。Sentry 預設會將相似錯誤歸在同一則 issue；若希望「付款被拒」和「付款逾時」分開，就可以用 <code>scope.setFingerprint(['paywall', 'purchase-failed', 'payment_declined'])</code> 強制分成不同 issue。分群清楚，後續判斷影響範圍會更準。</p>
+
+<h2>步驟二：按下按鈕，確認事件真的抵達</h2>
+<p>在 app 上逐一按下測試頁的按鈕，接著開啟 Sentry 的 Issues 列表。正常情況下，錯誤應該會在幾秒內出現。</p>
+
+<p>請特別確認一件事：不一定要讓 app 崩潰，錯誤才會被捕捉。由 <code>captureException</code> 主動送出的錯誤，即使 app 還在執行，也會出現在 Dashboard。</p>
+
+<p>若按了一輪卻完全沒有事件，請回頭檢查上一節的三個前置條件：</p>
+<ol>
+<li>DSN 是否正確。</li>
+<li>native module 是否已經 rebuild。</li>
+<li>環境變數是否真的被 app 讀取。</li>
+</ol>
+
+<p>如果送出事件後 app 很快就要關閉，可以呼叫 <code>Sentry.flush()</code>，要求 Sentry 立即把佇列中的事件送出。這能避免 app 在事件完成上傳前關閉，導致事件消失。</p>
+
+<h2>步驟三：打開 Issue，從訊息一路讀到 replay</h2>
+<p>點開剛送出的 Issue，不要只看第一行錯誤訊息。每個區塊回答的問題不同，可以依照下面的順序核對：</p>
+
+<table>
+<thead>
+<tr><th>區塊</th><th>它回答的問題</th></tr>
+</thead>
+<tbody>
+<tr><td>錯誤訊息與時間</td><td>壞了什麼？什麼時候發生？發生幾次？</td></tr>
+<tr><td>裝置與 OS</td><td>是哪一款手機、哪個系統版本？</td></tr>
+<tr><td>程式碼區塊</td><td>錯誤落在哪個檔案、哪一行？</td></tr>
+<tr><td>Breadcrumbs</td><td>出錯前使用者依序做了哪些事、app 發生過什麼？</td></tr>
+<tr><td>Session replay</td><td>出錯當下，螢幕上實際的畫面與操作是什麼？</td></tr>
+<tr><td>Logs 與 traces</td><td>當下印了哪些 log？關聯到哪一條效能追蹤？</td></tr>
+</tbody>
+</table>
+
+<p>其中，breadcrumbs（麵包屑）是一條「錯誤發生前，app 做過哪些關鍵動作」的時間軸。例如你可能會看到「token 更新了 → 使用者點了送出 → API 回 500 → 丟錯」。它讓你能還原錯誤前的情境，而不是只看到最後那一聲爆炸。</p>
+
+<p>session replay 則補上視覺資訊：你可以看到使用者當時位於哪一頁，以及實際按了什麼。把 breadcrumbs 和 replay 放在一起看，通常比單看 stack trace 更容易理解問題是怎麼發生的。</p>
+
+<figure class="lesson-figure"><img src="./verify-and-triage-errors-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟四：需要時使用 SEER 協助找原因</h2>
+<p>Sentry 內建的 SEER 是 AI 審查工具。將 Sentry 連上程式碼 repo 後，它可以讀取堆疊與程式碼，協助分析可能原因，甚至提出修復計畫。</p>
+
+<p>SEER 不會替你直接修好問題；它的價值在於省下「從堆疊反推完整脈絡」這段時間。最後仍要由你確認分析是否符合 app 的實際行為。</p>
+
+<h2>步驟五：驗證完成後移除測試頁</h2>
+<p>測試頁的任務是驗證管線，任務完成後就應該收掉。你可以直接刪除它，也可以把它限制在 <code>__DEV__</code> 環境，並從正式版的使用者介面移除入口。</p>
+
+<p>Cal AI 的做法是在開發用的 profile 頁放一列連到測試頁的按鈕，並在程式註解裡提醒自己：確認 alerts、issue 分群與 log 檢視都正常後就刪掉。</p>
+
+<p>請不要讓測試頁留在正式版。每一顆按鈕都會製造假錯誤，正式版若保留入口，就會污染錯誤報表，讓真正的問題更難被看見。</p>
+
+<figure class="lesson-figure"><img src="./verify-and-triage-errors-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>完成後，你應該看到什麼</h2>
+<p>完成這一節後，你應該能在測試頁觸發不同類型的錯誤，並在 Sentry Issues 中找到對應事件。Issue 標題應能透過命名過的錯誤類別辨識；事件中也應該看得到相應的裝置、程式碼區塊、breadcrumbs，以及可用時的 session replay、logs 與 traces。</p>
+
+<p>若錯誤是由 <code>captureException</code> 主動送出，即使 app 沒有崩潰，也應該能在 Dashboard 找到。驗證結果正確後，移除測試頁，避免之後的報表被假錯誤干擾。</p>
+
+<blockquote>
+裝好 SDK 不等於會回報。要用刻意丟錯的測試頁，把從 app 到 Dashboard 的整條管線走通。測試頁應涵蓋 render、事件處理與 promise rejection 等不同形狀的錯誤，並用命名過的錯誤類別讓 issue 標題清楚可辨識。用 tag、context 與 fingerprint 補上錯誤發生當下的背景，也控制事件如何分群。<code>captureException</code> 能捕捉不讓 app 崩潰的錯誤，<code>flush()</code> 則確保事件來得及送出。驗證完成後，記得把測試頁移除，或限制在開發環境。
+</blockquote>
+
+<p>現在你已經能抓到「壞掉」的時刻。不過，很多問題不是 app 當掉，而是你不知道錯誤發生前後做了什麼。下一節會比較 <code>console.log</code> 與 Sentry logs，並說明什麼時候該使用哪一個。</p>
+
+<div class="lesson-nav">
+  <div><a href="./install-and-configure-sentry.html">← 上一步：安裝並設定 Sentry：DSN、source map 與 native rebuild</a></div>
+  <div><a href="./structured-logs-vs-console.html">下一步：Sentry logs 與 console.log：什麼時候用哪個 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼測試頁要涵蓋多種不同形狀的錯誤？" data-correct="2" data-explain="真實錯誤有 render、事件處理、promise rejection 等不同形狀，只測一種驗證不到整條管線。">
+  <button class="opt">因為 Sentry 限制每頁最多只能有一種錯誤</button>
+  <button class="opt">因為不同錯誤必須送到不同的 Sentry 專案</button>
+  <button class="opt">因為真實錯誤形狀多元，只測一種驗證不足</button>
+  <button class="opt">因為每一種錯誤都要用不同的 DSN 才能送出</button>
+</div>
+<div class="quiz" data-question="替錯誤類別取一個有意義的 name，解決了什麼問題？" data-correct="0" data-explain="若全用預設 Error，issue 標題會長得一樣，難以分辨；命名後標題可辨識、便於分類。">
+  <button class="opt">讓 Dashboard 上的 issue 標題可辨識</button>
+  <button class="opt">讓錯誤的執行速度變得比較快</button>
+  <button class="opt">讓錯誤不會讓 app 進入崩潰狀態</button>
+  <button class="opt">讓 Sentry 自動把錯誤修正完畢</button>
+</div>
+<div class="quiz" data-question="scope.setTag('feature', 'meal-analysis') 的 tag 在 Dashboard 上有什麼用？" data-correct="3" data-explain="tag 可以當成篩選條件，日後能一鍵撈出所有這個 feature 的錯誤。">
+  <button class="opt">把錯誤自動寄給標籤裡指定的使用者</button>
+  <button class="opt">替錯誤加上密碼，避免外人看到</button>
+  <button class="opt">決定錯誤要保存幾天後自動刪除</button>
+  <button class="opt">當成篩選條件，撈出同類的錯誤</button>
+</div>
+<div class="quiz" data-question="breadcrumbs 提供的資訊是什麼？" data-correct="1" data-explain="它是錯誤發生前一小段時間內 app 做過的關鍵動作時間軸，能還原整個情境。">
+  <button class="opt">壓縮後程式碼對應的原始行號</button>
+  <button class="opt">出錯前 app 依序做過的關鍵動作</button>
+  <button class="opt">使用者所有裝置的完整清單</button>
+  <button class="opt">應用商店審核的歷史紀錄</button>
+</div>
+<div class="quiz" data-question="SEER 這個工具的角色是什麼？" data-correct="2" data-explain="它是 Sentry 內建的 AI 審查工具，連上 repo 後能分析錯誤原因並提出修復計畫。">
+  <button class="opt">替 app 自動產生 App Store 文案</button>
+  <button class="opt">在使用者手機上自動修復當機</button>
+  <button class="opt">分析錯誤原因並提出修復計畫</button>
+  <button class="opt">把多個錯誤合併成一張工單</button>
+</div>
+<div class="quiz" data-question="驗證完測試頁之後，為什麼要把它刪掉或限制在開發環境？" data-correct="0" data-explain="它每次按下都製造假錯誤，留在正式版會污染真實的錯誤報表。">
+  <button class="opt">避免假錯誤污染正式的錯誤報表</button>
+  <button class="opt">因為它會佔用大量手機儲存空間</button>
+  <button class="opt">因為它會讓 Sentry 停止免費方案</button>
+  <button class="opt">因為測試頁無法在真機上執行</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Sentry 錯誤監控 · Step 3/6</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

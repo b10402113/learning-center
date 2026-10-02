@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 runs 與 logs 除錯：從 dashboard 追回程式碼</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 runs 與 logs 除錯：從 dashboard 追回程式碼</h1>
+<p class="meta">Step 5/5 · trigger.dev 背景任務與 Retry</p>
+
+<h2>完成這一節，你會做到什麼？</h2>
+<p>你將能在 Trigger.dev dashboard 中，根據一次 run 的 <code>payload</code>、<code>logs</code>、<code>output</code> 與歷次 <code>attempts</code>，找出背景任務失敗的原因，並一路追到程式碼中實際出錯的分支。</p>
+
+<p>開始前，請先確認兩件事：你的 app 已經使用 Trigger.dev 觸發背景任務，而且任務有設定重試與失敗處理。接下來會以 <code>analyze-meal</code> 為例，示範如何從一筆 run 開始調查。</p>
+
+<h2>先看全貌：除錯動線會經過哪裡？</h2>
+
+<p>當背景任務出問題時，建議依照這條順序處理：</p>
+
+<ol>
+<li>確認本機 worker 與必要的 secret 是否正常運作。</li>
+<li>從資料庫或 dashboard 找到正確的 run。</li>
+<li>查看這次 run 收到的 <code>payload</code>。</li>
+<li>閱讀 <code>logs</code>、<code>output</code> 與 <code>error</code>。</li>
+<li>比較不同 <code>attempts</code> 的結果，判斷重試是否有效。</li>
+<li>最後把 run 的狀態和資料庫中的資料狀態放在一起比對。</li>
+</ol>
+
+<p>這樣做的好處是，不會一看到錯誤就直接鑽進程式碼。你會先確認「任務有沒有啟動」，再確認「它拿到什麼資料」，最後才判斷「哪一段邏輯出了問題」。</p>
+
+<figure class="lesson-figure"><img src="./debug-with-runs-logs-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟一：先確認 worker 和 secret 都在</h2>
+
+<p>遇到「任務完全沒動靜」時，先檢查最基本的兩件事，不要急著讀程式碼。</p>
+
+<p>第一，確認本機的 Trigger.dev worker 有沒有在執行。沒有 worker，任務根本不會被處理；但 route 仍可能看起來成功，因為 route 做的只是把資料送出去。</p>
+
+<p>第二，確認 <code>.env</code> 裡的 secret key 是否正確、是否有漏掉任務需要的環境變數，例如資料庫連線字串。</p>
+
+<p>這兩種問題的症狀很像：任務沒有出現在 Runs，或任務無法讀取環境變數。不過它們都還不是程式邏輯錯誤。先排除這些前置問題，可以省下很多時間。</p>
+
+<h2>步驟二：找到對應的那一次 run</h2>
+
+<p>打開 Trigger.dev dashboard 的 Runs 檢視。這裡會列出每一次任務執行，你可以依照 task 的 <code>id</code>、執行時間或 run 編號來搜尋。例如，餐點分析任務的 task id 可能是 <code>analyze-meal</code>。</p>
+
+<p>run 編號通常可以從資料庫取得。route 觸發任務後，會把 <code>handle.id</code> 寫進該筆資料的 <code>trigger_run_id</code>。因此，你可以先從資料庫找到這次餐點對應的 run 編號，再拿到 dashboard 比對。</p>
+
+<p>這樣就能鎖定唯一一次執行，不必在一大堆相似的 run 裡逐筆翻找。</p>
+
+<h2>步驟三：讀懂一個 run 的三塊內容</h2>
+
+<p>鎖定 run 後，先依序查看以下三個區塊。它們分別回答三個問題：任務收到了什麼、執行時發生什麼事，以及最後得到什麼結果。</p>
+
+<ol>
+<li><strong>payload（輸入）</strong>：這次任務收到的參數。分析餐點的 payload 只有 <code>mealId</code> 與 <code>imageUrl</code>。如果輸入本身就不對，後面的分析再正確也沒有用。</li>
+<li><strong>logs（過程）</strong>：任務執行期間由 <code>logger</code> 印出的訊息。這是你觀察任務內部進度與分支的主要窗口。</li>
+<li><strong>output / error（結果）</strong>：任務成功時回傳的物件，或失敗時留下的錯誤內容與狀態。</li>
+</ol>
+
+<p>另外還要查看 <strong>attempts（歷次嘗試）</strong>。任務設定重試後，同一次 run 底下可能會有好幾次 attempt；每次嘗試的 log 與錯誤都會分開保存。</p>
+
+<p>如果你看到第一次失敗、第二次成功，代表重試機制正在運作。若每一次都失敗在同一行，則表示這比較可能是固定的邏輯或格式錯誤，單靠重試無法解決。</p>
+
+<figure class="lesson-figure"><img src="./debug-with-runs-logs-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟四：用 logger 讓失敗可被看見</h2>
+
+<p>如果任務裡完全沒有 log，dashboard 上可能只會顯示一個紅色的 <code>FAILED</code>，卻不會告訴你它在哪個分支停止。關鍵的條件判斷與失敗處理，都應該留下足夠的訊息。</p>
+
+<p>例如，<code>analyze-meal</code> 遇到模型判定照片不是食物時，可以記錄餐點 id，接著刪除資料並回傳失敗原因：</p>
+
+<pre><code>if (!out.is_food) {
+  logger.warn("Photo is not food, discarding meal", { mealId });
+  await db.delete(meals).where(eq(meals.id, mealId));
+  return { status: "failed", errorReason: "not_food" };
+}</code></pre>
+
+<p>當所有重試都用完，也要在 <code>onFailure</code> 中留下錯誤，並把資料庫狀態更新為失敗：</p>
+
+<pre><code>onFailure: async ({ payload, error }) =&gt; {
+  logger.error("analyze-meal exhausted retries", { mealId: payload.mealId, error: String(error) });
+  await db.update(meals).set({ status: "failed", errorReason: "analysis_failed" }).where(eq(meals.id, payload.mealId));
+},</code></pre>
+
+<p>印 log 時，請把 <code>mealId</code>、<code>attempt</code> 和錯誤內容這類可辨識的欄位一起記錄。這些欄位就像追蹤包裹的編號，能讓你從 dashboard 上的一句訊息，直接對回程式碼裡的某一行 <code>logger</code>，判斷是哪個分支正在說話。</p>
+
+<h2>步驟五：分辨 run 狀態與資料庫狀態</h2>
+
+<p>這是最容易混淆、也最重要的一步。任務成功，不代表使用者看到的資料一定正確；任務失敗，也不代表資料庫完全沒有被修改。</p>
+
+<p>兩種狀態描述的是不同事情：</p>
+
+<ul>
+<li>run 的狀態，例如 <code>COMPLETED</code>、<code>FAILED</code>、<code>CRASHED</code>，描述的是「這段程式有沒有跑完」。</li>
+<li>資料庫那一列的 <code>status</code>，例如 <code>analyzing</code>、<code>completed</code>、<code>failed</code>，描述的是「這一餐目前處於什麼狀態」。</li>
+</ul>
+
+<p>因此，除錯時兩邊都要看。</p>
+
+<p>若任務回報成功，但資料庫那一列仍停在 <code>analyzing</code>，表示程式可能漏了更新狀態。若任務回報失敗，而資料庫已經是 <code>failed</code>，則可能正是預期的失敗處理結果。</p>
+
+<p>以下這張表可以幫你先從症狀縮小範圍：</p>
+
+<table>
+<thead>
+<tr><th>你看到的症狀</th><th>最可能的原因</th><th>去哪看</th></tr>
+</thead>
+<tbody>
+<tr><td>任務完全沒出現在 Runs</td><td>worker 沒跑，或 secret 沒設</td><td>本機終端機、<code>.env</code></td></tr>
+<tr><td>每次嘗試都敗在同一行</td><td>邏輯或格式錯誤，不是暫時性問題</td><td>該 run 的 error 與 log</td></tr>
+<tr><td>畫面一直停在「分析中」</td><td>狀態沒落地，或 run 意外中斷</td><td>資料庫那一列、run 狀態</td></tr>
+<tr><td>顯示「不是食物」但你拍的是食物</td><td>模型判斷錯誤</td><td>run output 的 <code>is_food</code></td></tr>
+<tr><td>第一次失敗、第二次成功</td><td>重試正常運作，屬預期行為</td><td>attempts 的歷次紀錄</td></tr>
+</tbody>
+</table>
+
+<figure class="lesson-figure"><img src="./debug-with-runs-logs-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>做完後，你應該能說出什麼？</h2>
+
+<p>完成這套流程後，面對一筆失敗的 run，你應該能清楚回答：</p>
+
+<ul>
+<li>它收到了什麼輸入？</li>
+<li>目前是第幾次 attempt？</li>
+<li>哪一則 log 對應到失敗分支？</li>
+<li>錯誤發生在程式的哪個階段？</li>
+<li>最後資料庫那一列變成了什麼狀態？</li>
+</ul>
+
+<p>這就完成了從 dashboard 追到程式碼的背景任務除錯動線。至於為什麼要這樣設計背景任務、重試與狀態管理，則留給其他單元深入說明；在實作上，先能從一筆 run 找到真正的失敗位置，才是你把這套流程接回自己 app 的第一步。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+除錯背景任務時，先確認 worker 與 secret 正常，再從 dashboard 依 task id 或 run 編號鎖定那一次 run。接著查看 payload、logs、output 與歷次 attempts，利用 logger 把失敗追回程式碼中的那一行，最後比對 run 狀態與資料庫狀態是否一致。請記住：任務的成敗描述的是程式，資料庫的狀態描述的是使用者看到的結果，兩者必須分開確認。
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./retry-and-failure.html">← 上一步：失敗之後：重試語意、退路與標記失敗</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="任務完全沒有出現在 Runs 頁面時，最該先檢查什麼？" data-correct="1" data-explain="worker 是否在跑、secret 是否設好，是任務根本沒執行的兩大常見原因。">
+  <button class="opt">AI 模型是不是換了一個版本</button>
+  <button class="opt">worker 有沒有跑、secret 有沒有設好</button>
+  <button class="opt">資料庫的欄位型別是不是正確</button>
+  <button class="opt">前端的畫面排版是不是正確</button>
+</div>
+<div class="quiz" data-question="為什麼要把 trigger_run_id 寫回資料庫的資料列？" data-correct="2" data-explain="之後可以從資料庫那列查到 run 編號，再到 dashboard 鎖定同一次執行來除錯。">
+  <button class="opt">因為資料庫沒有這個欄位就無法儲存</button>
+  <button class="opt">因為這樣可以讓任務執行得比較快</button>
+  <button class="opt">之後能從資料庫查到編號並鎖定該次 run</button>
+  <button class="opt">因為 Trigger.dev 會自動讀取這個欄位</button>
+</div>
+<div class="quiz" data-question="一個 run 的 attempts 區塊在告訴你什麼？" data-correct="0" data-explain="它顯示同一次 run 底下每次重試的紀錄，可以看出是暫時性失敗還是每次都壞同一處。">
+  <button class="opt">同一次 run 底下每次重試的紀錄</button>
+  <button class="opt">這個任務被幾個人觸發過</button>
+  <button class="opt">資料庫總共寫入了幾筆資料</button>
+  <button class="opt">這個模型每次呼叫的費用</button>
+</div>
+<div class="quiz" data-question="任務回報 COMPLETED，但資料庫那一列還是 analyzing，代表什麼？" data-correct="3" data-explain="程式跑完了，但你漏了把結果對應的狀態寫回資料庫那一列。">
+  <button class="opt">Trigger.dev 的狀態回報一定是錯的</button>
+  <button class="opt">資料庫已經自動把那一列刪除了</button>
+  <button class="opt">模型這次沒有回傳任何結構化輸出</button>
+  <button class="opt">程式跑完但狀態沒有寫回那一列</button>
+</div>
+<div class="quiz" data-question="看到「第一次嘗試失敗、第二次成功」，該怎麼解讀？" data-correct="1" data-explain="這是重試機制正常運作的預期行為，屬於暫時性失敗被救回。">
+  <button class="opt">這是嚴重錯誤，應立刻關閉重試功能</button>
+  <button class="opt">這是重試正常運作的預期行為</button>
+  <button class="opt">表示資料庫的連線設定有問題</button>
+  <button class="opt">表示 schema 驗證把輸入擋掉了</button>
+</div>
+<div class="quiz" data-question="在任務裡使用 logger 而不是 console.log，最大的好處是什麼？" data-correct="2" data-explain="logger 的訊息會跟著這次 run 保存在 dashboard，能直接從 run 追回程式碼。">
+  <button class="opt">log 的內容會自動幫你翻譯成中文</button>
+  <button class="opt">log 會即時傳送到使用者的手機上</button>
+  <button class="opt">訊息跟著 run 保存，能追回程式碼</button>
+  <button class="opt">log 會自動把錯誤修好並重新執行</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · trigger.dev 背景任務與 Retry · Step 5/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

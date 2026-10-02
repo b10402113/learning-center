@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一條流程串起 N 頁：動態 renderer 與共用版型</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一條流程串起 N 頁：用動態 renderer 與共用版型完成 onboarding</h1>
+<p class="meta">Step 3/5 · Welcome 與 Onboarding 流程</p>
+
+<h2>先確認目標與前置條件</h2>
+
+<p>這一節的目標，是照著做出一條由單一動態頁面渲染 N 個步驟的 onboarding 流程。完成後，你會有九個可以實際點擊、填答、前進的畫面，而且每一頁都會共用同一套視覺骨架。</p>
+
+<p>開始前，你需要準備兩樣東西：上一節建立的 <code>steps</code> 陣列，以及暫時存放答案的 <code>answers</code> 物件。<code>steps</code> 描述每一題要問什麼、使用哪種回答方式，以及答案要存到哪個欄位；<code>answers</code> 則像一份共用的答案草稿，讓每一頁都能讀寫同一份資料。</p>
+
+<p>如果每一題都開一個檔案，標題位置、按鈕大小和進度條很快就可能各自走樣。這次我們改用一個動態 renderer，再搭配共用版型與作答元件，把「題目資料」和「畫面長相」接起來。</p>
+
+<h2>第一步：用一個動態頁面接住所有步驟</h2>
+
+<p>直覺的做法，是為九頁問卷各開一個檔案。這樣雖然一開始容易理解，之後只要調整題目順序或增加步驟，就得回頭修改許多頁面。</p>
+
+<p>這裡改用一個動態路由 <code>[step].tsx</code>。它像一位櫃台人員：先看網址裡的 step 參數，再從 <code>steps</code> 陣列找出目前該顯示的題目。</p>
+
+<figure class="lesson-figure"><img src="./dynamic-step-flow-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>核心邏輯可以濃縮成下面這樣：</p>
+
+<pre><code>export default function OnboardingStep() {
+  const { step } = useLocalSearchParams();
+  const index = stepIndex(String(step));
+  const config = steps[index];
+
+  // 依照 config.kind 決定要渲染哪一種回答介面
+  // cards  → &lt;OptionCard /&gt;
+  // ruler  → &lt;RulerPicker /&gt;
+  // date   → 原生日期選擇器
+
+  return (
+    &lt;OnboardingScreen
+      progress={index / steps.length}
+      title={config.title}
+      subtitle={config.subtitle}
+      onNext={() =&gt; router.push(`/onboarding/${steps[index + 1].key}`)}
+    &gt;
+      {/* 依照 kind 放進對應的作答元件 */}
+    &lt;/OnboardingScreen&gt;
+  );
+}</code></pre>
+
+<p>接著逐一確認這段程式在做什麼。</p>
+
+<ol>
+  <li><code>useLocalSearchParams</code> 先從網址取出 <code>step</code>。</li>
+  <li><code>stepIndex(String(step))</code> 把網址上的 key 換成 <code>steps</code> 陣列裡的位置。程式因此知道目前是第幾題，也能算出進度。</li>
+  <li><code>const config = steps[index]</code> 取出這一題的設定，包括標題、副標題、答案欄位與回答類型。</li>
+  <li><code>config.kind</code> 決定要放哪一種作答介面：<code>cards</code> 使用 <code>OptionCard</code>，<code>ruler</code> 使用 <code>RulerPicker</code>，<code>date</code> 使用原生日期選擇器。</li>
+  <li><code>onNext</code> 使用 <code>steps[index + 1].key</code> 動態算出下一頁，而不是把網址寫死。日後調整陣列順序時，這段邏輯不用跟著改。</li>
+</ol>
+
+<p>使用者作答時，答案會寫回共用的 <code>answers</code> 物件。例如選中一張選項卡，就把 <code>answers[config.field]</code> 設成該選項的值。每一頁都在操作同一份答案草稿，只負責其中一個欄位，因此不需要各自保存一份獨立狀態。</p>
+
+<h2>第二步：用共用版型固定每一頁的骨架</h2>
+
+<p>動態 renderer 解決了「現在要顯示哪一題」，但每一頁還需要一個穩定的外殼。這就是 <code>OnboardingScreen</code> 的工作：把標題、副標題、進度、返回按鈕、主要按鈕與作答內容放在一致的位置。</p>
+
+<p>它接受的參數不多，但會直接影響整條流程的使用感：</p>
+
+<ul>
+  <li><code>progress</code>：零到一之間的目前進度。</li>
+  <li><code>title</code> 與 <code>subtitle</code>：當頁顯示的文字。</li>
+  <li><code>onNext</code>：按下主要按鈕後要執行的動作。</li>
+  <li><code>disabled</code>：決定主要按鈕目前能不能按。</li>
+  <li><code>children</code>：放入中間的作答區。</li>
+</ul>
+
+<p>進度條不是一條連續伸縮的長條，而是固定顯示四段橫條。程式用下面這行算出目前要亮幾段：</p>
+
+<pre><code>const filled = 1 + Math.floor(progress * (SEGMENTS - 1));</code></pre>
+
+<p>當 <code>progress</code> 從零走到一，<code>filled</code> 就會從一段增加到四段。固定四段的好處是，使用者在手機上瞄一眼就能數出還剩幾格，不需要比較一條長條目前伸長了多少。</p>
+
+<figure class="lesson-figure"><img src="./dynamic-step-flow-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p><code>OnboardingScreen</code> 也集中處理兩個常被漏掉的細節：左上角的返回按鈕，以及瀏海、底部手勢列等安全區域所需要的內距。這些共用功能放在同一處後，九個步驟就只需要專心描述自己的題目。</p>
+
+<h2>第三步：依照 kind 放入正確的作答元件</h2>
+
+<p>接下來，把 <code>config.kind</code> 對應到實際的回答介面。三種輸入各自負責一種互動，不要讓每一頁自己重新發明一套寫法。</p>
+
+<h3>若 kind 是 cards，使用 OptionCard</h3>
+
+<p><code>OptionCard</code> 負責顯示選項卡。它接收標題、副標、圖示，以及一個 <code>selected</code> 狀態。</p>
+
+<p>若選項被選中，邊框會從細的淺灰色變成粗的黑色，右側也會出現打勾圓標。這種明顯的視覺回饋，能讓使用者立刻知道自己的選擇已經生效，不必猜「我到底選了沒」。</p>
+
+<h3>若 kind 是 ruler，使用 RulerPicker</h3>
+
+<p><code>RulerPicker</code> 負責數字題。它是一座會吸附的捲尺，使用垂直的 <code>ScrollView</code>，再設定 <code>snapToInterval</code>，讓捲動一次剛好停在一格。</p>
+
+<p>每當使用者滑動，元件就把目前的偏移量換算成數字，並透過 <code>onChange</code> 回報出去。為了讓它看起來像真正的尺，刻度會由高到低排列；兩端再疊上好幾層淡化色塊，讓刻度在邊緣逐漸消失。</p>
+
+<blockquote>
+小提醒：數字題的吸附與換算很容易差一格，或差一個小數點。完成後，務必手動滑到最小值與最大值，確認畫面顯示的數字和實際回報的數字一致。
+</blockquote>
+
+<h3>若 kind 是 date，使用原生日期選擇器</h3>
+
+<p>生日這類輸入交給系統原生的日期選擇器，通常比自己製作一套日期介面更不容易出錯。因此，<code>date</code> 不需要另外造輪子。</p>
+
+<h2>第四步：把答案與下一頁接起來</h2>
+
+<p>完成作答元件後，確認每一種輸入都會把值寫回共用的 <code>answers</code> 物件。</p>
+
+<p>若使用者選擇選項卡，就把選中的值寫入 <code>answers[config.field]</code>；若使用捲尺，就在 <code>RulerPicker</code> 的 <code>onChange</code> 中寫入換算後的數字；若使用日期選擇器，也同樣把結果存到這一題設定的欄位。</p>
+
+<figure class="lesson-figure"><img src="./dynamic-step-flow-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>若目前不是最後一步，按下下一步就依照 <code>steps[index + 1].key</code> 前往下一個網址。若目前已經是最後一步，則要依你的流程處理完成狀態；這一節的重點，是讓每個步驟能依照陣列順序正確渲染與前進。</p>
+
+<h2>做完後如何驗證</h2>
+
+<p>在瀏覽器或模擬器打開某一個 <code>/onboarding/&lt;key&gt;</code>，確認畫面顯示的是該 key 對應的題目。</p>
+
+<ul>
+  <li>若更換網址中的 key，應該看到對應的步驟。</li>
+  <li>按下一步時，應該依照 <code>steps</code> 陣列的順序前進。</li>
+  <li>選擇 <code>OptionCard</code> 後，選項應該亮起並顯示選取狀態。</li>
+  <li>滑動 <code>RulerPicker</code> 時，刻度應該吸附在每一格，回報的數字也要正確。</li>
+  <li>答案應該持續寫入同一份 <code>answers</code> 草稿。</li>
+  <li>九頁的字體、按鈕、進度條與安全區域內距應該保持一致。</li>
+</ul>
+
+<h2>完成後的樣子</h2>
+
+<p>完成之後，你只要打開某一個 <code>/onboarding/&lt;key&gt;</code>，就能看到對應的一頁。按下一頁會依照陣列順序前進；選項卡會亮起；捲尺會吸附；答案會寫進同一份草稿。</p>
+
+<p>九頁共用同一層 <code>OnboardingScreen</code> 外殼，因此不會出現某一頁按鈕特別大、另一頁進度條位置不同的情況。這一節先專注在把流程實作出來；為什麼採用資料驅動畫面，而不是一頁一個元件，屬於設計取捨，上一節已經交代過。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+用一個動態頁面 <code>[step].tsx</code> 配上一份 <code>steps</code> 陣列，就能渲染出任意數量的步驟：<code>stepIndex</code> 決定現在第幾題，<code>kind</code> 決定使用哪種作答介面，<code>onNext</code> 動態算出下一頁。畫面骨架由 <code>OnboardingScreen</code> 統一提供，選項、數字、日期三種輸入則交給 <code>OptionCard</code>、<code>RulerPicker</code> 與原生選擇器。
+</blockquote>
+
+<p>現在你已經有一條能跑的 onboarding 流程。不過，「能跑」和「一次把十頁做得漂亮又一致」是兩回事。下一節會換到建造手法：怎麼把大量頁面分批交給 agent，再用驗證迴圈把品質收斂到設計稿的水準。</p>
+
+<div class="lesson-nav">
+  <div><a href="./declarative-questionnaire.html">← 上一步：把問卷寫成資料：steps.ts 的宣告式步驟</a></div>
+  <div><a href="./batch-build-and-verify.html">下一步：批次建造 onboarding：設計參考與驗證迴圈 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="動態頁面靠什麼知道現在該顯示哪一題？" data-correct="1" data-explain="網址帶的 step 參數經 stepIndex 換算成陣列位置，就知道是哪一題。">
+  <button class="opt">使用者上一題填了什麼答案</button>
+  <button class="opt">網址帶的參數換算出的位置</button>
+  <button class="opt">手機現在的螢幕尺寸大小</button>
+  <button class="opt">伺服器回傳的使用者編號</button>
+</div>
+<div class="quiz" data-question="主按鈕的下一頁網址為什麼不用寫死？" data-correct="2" data-explain="用 steps 陣列動態算出下一頁，之後調整順序就不必改這段程式。">
+  <button class="opt">因為寫死的網址在手機上無法開啟</button>
+  <button class="opt">因為動態網址的載入速度比較快</button>
+  <button class="opt">因為調整順序時這段完全不用改</button>
+  <button class="opt">因為寫死網址會讓型別檢查失效</button>
+</div>
+<div class="quiz" data-question="OnboardingScreen 的 progress 參數主要控制什麼？" data-correct="0" data-explain="progress 決定四段進度條目前亮起幾段。">
+  <button class="opt">頂端四段進度條亮起幾段</button>
+  <button class="opt">目前這一頁的捲動位置</button>
+  <button class="opt">主按鈕的圓角半徑大小</button>
+  <button class="opt">返回按鈕能不能被按下</button>
+</div>
+<div class="quiz" data-question="RulerPicker 的 snapToInterval 是為了達到什麼效果？" data-correct="3" data-explain="讓滾動一次吸附一格，讀數才不會停在兩個刻度中間。">
+  <button class="opt">讓刻度在畫面上自動放大縮小</button>
+  <button class="opt">讓使用者無法滑到範圍以外</button>
+  <button class="opt">讓數字以動畫方式慢慢浮現</button>
+  <button class="opt">讓滾動一次剛好吸附一格</button>
+</div>
+<div class="quiz" data-question="使用者的每一題答案實際存在哪裡？" data-correct="1" data-explain="所有步驟共用同一份 answers 草稿，各自只寫入自己負責的欄位。">
+  <button class="opt">各自存在每一個頁面的本機狀態</button>
+  <button class="opt">共用的 answers 草稿物件裡</button>
+  <button class="opt">直接寫進伺服器的資料庫欄位</button>
+  <button class="opt">暫存在手機的通知中心裡面</button>
+</div>
+<div class="quiz" data-question="為什麼 OptionCard 被選中時要改變邊框並顯示打勾？" data-correct="2" data-explain="明顯的選中回饋能減少使用者「我到底選了沒」的猶豫。">
+  <button class="opt">因為蘋果審核要求所有按鈕都要變色</button>
+  <button class="opt">因為這樣可以減少程式的執行時間</button>
+  <button class="opt">因為要讓使用者確定自己已經選中</button>
+  <button class="opt">因為沒選中的卡片無法被程式讀取</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Welcome 與 Onboarding 流程 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

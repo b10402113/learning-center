@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Task 是什麼：schemaTask 的 id、schema 與 run</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Task 是什麼：看懂 schemaTask 的 id、schema 與 run</h1>
+<p class="meta">Step 2/5 · trigger.dev 背景任務與 Retry</p>
+
+<h2>先問一個實際問題：你交出去的工作，到底是什麼？</h2>
+
+<p>上一步，我們把「慢工作搬出請求路徑」。但把程式碼從 route 剪下來，貼到另一個檔案，再從某處呼叫它，真的就完成了嗎？接下來你需要知道：搬出去的不是一段孤零零的程式碼，而是一個可以被平台辨認、追蹤並重新執行的工作單位。</p>
+
+<p>一般的 <code>async function</code> 跟著呼叫它的 process 一起活著。process 結束、當掉或重啟，這段工作可能就消失了，也沒有人記得它曾經做到哪裡。Trigger.dev 的 task 則像一張送進中央廚房的訂單：有訂單編號、有輸入內容、有處理紀錄，廚房中途出問題時，還能依照紀錄重新處理。</p>
+
+<p>這一節會拆解一個 task 的三個核心零件：<code>id</code>、<code>schema</code> 與 <code>run</code>。看懂它們之後，你就能理解 task 為什麼不只是「換個地方執行的 async function」。</p>
+
+<figure class="lesson-figure"><img src="./task-anatomy-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>學習目標</h2>
+<p>完成這一節後，你應該能說清楚一個 Trigger.dev task 如何由 <code>id</code>、<code>schema</code> 與 <code>run</code> 組成，並解釋它和一般 <code>async function</code> 在執行生命週期上的差別。</p>
+
+<h2>一個 task 的三個零件</h2>
+
+<p>Trigger.dev 提供一個叫 <code>schemaTask</code> 的工廠函式。你把設定交給它，它就會回傳一個 task。以課程中的 <code>generate-plan</code> 為例，骨架如下：</p>
+
+<pre><code>export const generatePlan = schemaTask({
+  id: "generate-plan",
+  schema: planInputSchema,
+  maxDuration: 120,
+  run: async (input) =&gt; {
+    // 真正的工作：呼叫 AI、驗證、必要時退回公式
+  },
+});</code></pre>
+
+<h3><code>id</code>：這個工作的穩定名字</h3>
+
+<p><code>id</code> 是 task 的固定識別名稱。它會顯示在 dashboard 上，也是在 route 觸發 task 時用來指定目標的名稱。平台會靠這個 id 找到對應的 task 程式碼。</p>
+
+<p>因此，<code>id</code> 不只是方便閱讀的變數名稱。task 上線後不要隨意更改，因為外部觸發與歷史紀錄都要靠它建立對應關係。</p>
+
+<h3><code>schema</code>：輸入資料的合約</h3>
+
+<p><code>schema</code> 定義 task 接受哪些資料，以及每個欄位應該符合什麼格式。這裡放的是 Zod schema，平台會在 task 開始前先檢查輸入內容。</p>
+
+<p>例如，生成計畫的輸入可能包含使用者的性別、生日、身高、體重、目標、活動量與飲食偏好。分析餐點時，輸入則可能只有餐點的資料庫 id 與圖片網址：</p>
+
+<pre><code>schema: z.object({
+  mealId: z.string().uuid(),
+  imageUrl: z.string().url(),
+}),</code></pre>
+
+<p>有了 schema，<code>run</code> 裡拿到的 <code>input</code> 就是已經通過格式檢查、也具備型別資訊的物件。你不需要在工作內容裡再重複防守一次基本格式錯誤。</p>
+
+<p>這份合約也會一路延伸到觸發端。TypeScript 可以協助檢查你傳入的資料；如果少傳必填欄位，問題有機會在編譯階段就被抓出來，而不是等任務啟動後才發現。</p>
+
+<h3><code>run</code>：真正執行工作的地方</h3>
+
+<p><code>run</code> 是一個接收 <code>input</code>、並回傳輸出的 async 函式。它就是訂單上的工作內容：呼叫 AI、驗證結果，或在必要時退回公式處理，都會寫在這裡。</p>
+
+<p>同一個 task 還可以搭配其他設定。例如，<code>maxDuration</code> 限制最多執行多久，<code>retry</code> 覆寫重試次數，<code>onFailure</code> 則定義重試耗盡後要做什麼。這些設定會在後面的步驟進一步說明。</p>
+
+<h2>真正的差別：durable execution</h2>
+
+<p>如果只把 task 想成「有名字的 async function」，還是漏掉最重要的部分。關鍵在於它們的<strong>執行生命週期</strong>不同。</p>
+
+<p>一般的 async function 活在呼叫它的 process 裡。當你在 route 中寫下 <code>await askOpenAI(input)</code>，這個 promise 就綁在該次請求的記憶體與連線上。請求結束或 process 重啟後，這次執行可能就此消失；出了錯，也必須由呼叫端自行決定要不要再跑一次。</p>
+
+<p>Trigger.dev task 的每次執行則稱為一次 <strong>run</strong>。當你觸發 task，Trigger.dev 會先把這份工作登記下來，再交給 worker 執行。這次 run 的輸入、每一次嘗試、過程中輸出的 log，以及最後的輸出或錯誤，都會被保存。</p>
+
+<p>因此，即使 worker 中途掛掉，平台仍然知道有一個 run 尚未完成，也能依照設定重新嘗試。這就是 <strong>durable</strong> 的意思：它不是保證工作永遠不會失敗，而是讓工作在失敗或重啟後，仍保有紀錄與重試的能力。</p>
+
+<figure class="lesson-figure"><img src="./task-anatomy-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+<thead>
+<tr><th>面向</th><th>一般 async function</th><th>Trigger.dev task</th></tr>
+</thead>
+<tbody>
+<tr><td>命名與識別</td><td>只是變數名稱</td><td>有穩定 id，dashboard 可查</td></tr>
+<tr><td>輸入合約</td><td>靠型別，執行時不驗證</td><td>schema 在執行前驗證</td></tr>
+<tr><td>執行紀錄</td><td>沒有，跑完就散</td><td>run 的輸入、log、輸出都留存</td></tr>
+<tr><td>失敗後</td><td>由呼叫端自己想辦法</td><td>平台可自動重試</td></tr>
+<tr><td>壽命</td><td>綁在呼叫它的行程上</td><td>獨立於請求，可被追蹤</td></tr>
+</tbody>
+</table>
+
+<p>可以把兩者想成不同的廚房。一般 async function 像在家裡現做一道菜：你離開廚房，火可能就關了。Trigger.dev task 則像送進中央廚房的訂單：訂單有編號、有單據，也有出餐紀錄。即使廚房暫停工作，之後仍能按照同一張訂單繼續或重做。</p>
+
+<h2>觸發 task 後，拿回來的是什麼？</h2>
+
+<p>從 route 觸發 task 時，回傳的不是最終結果，而是一個 <strong>handle</strong>，也就是之後用來追蹤這次工作的「握把」。其中最重要的欄位是 <code>id</code> 與 <code>publicAccessToken</code>。</p>
+
+<p><code>id</code> 是這次 run 的編號；<code>publicAccessToken</code> 則是一段授權 token，讓前端可以訂閱這次 run 的狀態。因為結果不會在觸發當下立刻出現，你需要靠這些資訊稍後取回結果，或持續接收它的更新：</p>
+
+<pre><code>const handle = await tasks.trigger&lt;typeof generatePlan&gt;("generate-plan", parsed.data);
+// handle.id               → 這次 run 的編號
+// handle.publicAccessToken → 讓前端能訂閱這次 run 的授權</code></pre>
+
+<p>每個 run 都會有自己的狀態。常見狀態包括執行中的 <code>EXECUTING</code>、成功完成的 <code>COMPLETED</code>，以及不同類型的失敗：<code>FAILED</code>、<code>CRASHED</code>、<code>TIMED_OUT</code>、<code>SYSTEM_FAILURE</code> 等。</p>
+
+<figure class="lesson-figure"><img src="./task-anatomy-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這些狀態會直接影響 app 的行為。前端要根據狀態顯示成功、失敗，或繼續等待；當你需要除錯時，狀態也會成為追查 run 的入口。</p>
+
+<h2>為什麼 route 只匯入型別？</h2>
+
+<p>還有一個容易忽略的細節：route 匯入 task 時，只匯入<strong>型別</strong>，不要匯入 task 實例。寫法如下：</p>
+
+<p><code>import type { generatePlan } from "@/trigger/generate-plan"</code></p>
+
+<p>原因是 task 由 Trigger.dev 自己打包與執行。它可能使用相對路徑匯入自己的資料庫，例如 <code>../db</code>；這和 App 使用的 Metro 打包是兩套系統。</p>
+
+<p>如果 route 把 task 實例一起打包進 server，就會多背一份不該由 route 負責的程式碼。型別匯入只在編譯時存在，不會產生執行期負擔。換句話說，route 只需要知道「怎麼正確呼叫它」，不需要把整個 task 搬進自己的執行環境。</p>
+
+<h2>整個專案的共同規則：trigger.config</h2>
+
+<p>單一 task 有自己的設定，專案根目錄還有一個 <code>trigger.config.ts</code>，負責定義所有 task 共用的規則。</p>
+
+<p>這些規則包括專案編號、task 所在的資料夾、預設最長執行時間，以及預設的 retry 策略。課程中的預設策略是最多重試 3 次，每次間隔以 2 倍成長，退避時間從 1 秒開始，最多到 10 秒。</p>
+
+<p>單一 task 可以覆寫這些預設值。這會在下一節的實作，以及再下一節的 retry 決策中看到。</p>
+
+<h2>把這些觀念接回你的 app</h2>
+
+<p>當你的 app 有一個需要較長時間完成的工作，例如生成計畫或分析餐點，可以用下面這條關係來理解它：</p>
+
+<ul>
+<li><code>id</code> 告訴平台「這是哪一種工作」。</li>
+<li><code>schema</code> 告訴平台「這份工作需要哪些輸入，而且輸入格式是否正確」。</li>
+<li><code>run</code> 負責「實際完成工作，並產生結果」。</li>
+<li>觸發後取得的 handle，讓 app 能「找到這一次執行，並追蹤它的狀態」。</li>
+</ul>
+
+<p>這些零件彼此相扣：沒有穩定的 <code>id</code>，平台無法準確辨認工作；沒有 <code>schema</code>，輸入合約就不清楚；沒有獨立的 run 紀錄，失敗後也無從追蹤與重試。</p>
+
+<blockquote>
+一個 Trigger.dev task 由三個零件組成：<code>id</code> 是它的名字，<code>schema</code> 是輸入的合約，<code>run</code> 是真正的工作。它和一般 async function 的根本差別，是每次執行都是一次被登記、被保存、可被重試的 run，而不是綁在請求行程上、跑完就散的程式碼。觸發它拿回來的是 handle，你得靠 run 編號與 token 稍後把結果取回或訂閱。
+</blockquote>
+
+<p>現在你已經看懂 task 的組成，以及它和一般 async function 的邊界。下一步就是把這些零件組起來：實際寫出一個 <code>schemaTask</code>，從 API route 觸發它，再決定要用輪詢或即時訂閱把結果接回 app。</p>
+
+<div class="lesson-nav">
+  <div><a href="./why-background-jobs.html">← 上一步：長工作不能塞在請求裡：為什麼要背景任務</a></div>
+  <div><a href="./write-and-trigger-task.html">下一步：寫 task 並從 API route 觸發：generate-plan 實作 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="在 schemaTask 的設定裡，schema 欄位的用途是什麼？" data-correct="1" data-explain="schema 是輸入合約，平台在任務開始前就用它驗證進來的資料。">
+  <button class="opt">定義任務完成後要回傳的內容</button>
+  <button class="opt">驗證任務開始前進來的輸入資料</button>
+  <button class="opt">決定任務最多可以重試幾次</button>
+  <button class="opt">指定任務要使用哪一個 AI 模型</button>
+</div>
+<div class="quiz" data-question="task 的 durable execution 指的是什麼？" data-correct="2" data-explain="run 的輸入、嘗試、log 與輸出都被保存，失敗或重啟後仍可重試。">
+  <button class="opt">任務一定不會發生任何失敗或錯誤</button>
+  <button class="opt">任務會比一般函式執行得更快</button>
+  <button class="opt">執行的紀錄與重試能力在失敗後仍留著</button>
+  <button class="opt">任務會自動幫你把結果寫進資料庫</button>
+</div>
+<div class="quiz" data-question="從 route 觸發 task 之後，回傳的 handle 主要拿來做什麼？" data-correct="0" data-explain="handle 帶著 run 編號與 token，讓你稍後取回結果或讓前端訂閱。">
+  <button class="opt">取得 run 編號與 token 以便稍後取結果</button>
+  <button class="opt">直接取得任務執行後的完整輸出</button>
+  <button class="opt">取消掉剛剛觸發的那個任務</button>
+  <button class="opt">把任務的程式碼複製到 route 裡</button>
+</div>
+<div class="quiz" data-question="為什麼 route 匯入 task 時要用型別匯入（import type）？" data-correct="3" data-explain="task 由 Trigger.dev 自己打包，型別匯入不會把實例打包進 server。">
+  <button class="opt">因為 task 的檔案裡沒有可用的程式碼</button>
+  <button class="opt">因為型別匯入能讓 AI 回應得更快</button>
+  <button class="opt">因為這樣就不需要填寫 schema 欄位</button>
+  <button class="opt">避免把 task 實例打包進 server 程式碼</button>
+</div>
+<div class="quiz" data-question="下列哪一個不是 run 的狀態？" data-correct="1" data-explain="ACTIVE 不是 run 的狀態；其餘都是實際會出現的執行結果狀態。">
+  <button class="opt">COMPLETED 代表任務成功完成</button>
+  <button class="opt">ACTIVE 代表任務正在等待輸入</button>
+  <button class="opt">TIMED_OUT 代表任務超過時間</button>
+  <button class="opt">CRASHED 代表任務執行時崩潰</button>
+</div>
+<div class="quiz" data-question="trigger.config.ts 的角色是什麼？" data-correct="2" data-explain="它定義整個專案的共用設定，例如專案編號、目錄與預設重試策略。">
+  <button class="opt">定義單一任務的輸入 Zod schema</button>
+  <button class="opt">存放所有任務的資料庫連線字串</button>
+  <button class="opt">定義所有任務共用的專案層級設定</button>
+  <button class="opt">取代 App 裡的 API route 功能</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · trigger.dev 背景任務與 Retry · Step 2/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

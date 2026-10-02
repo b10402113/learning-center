@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>從 _layout.tsx 看 Expo Router 的 App Shell</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>從 <code>_layout.tsx</code> 看懂 Expo Router 的 App Shell</h1>
+<p class="meta">Step 5/5 · Expo / React Native 心智模型</p>
+
+<h2>學習目標</h2>
+<p>讀完這一節，你應該能看懂 Expo Router 專案的 root layout：檔案式路由如何對應畫面、Provider 為什麼要一層包一層，以及 <code>Stack.Protected</code> 如何依登入狀態分流。</p>
+
+<h2>先把抽象機制放進真實檔案</h2>
+
+<p>前面四節建立了幾個重要觀念：React Native 的渲染終點是原生畫面、Expo 提供從開發到建置的工具鏈，而 native module 會決定你什麼時候必須重新建置。這些觀念如果只停在腦中，很容易彼此接不起來。</p>
+
+<p>最有效的做法，是打開一個真實專案，看看它們如何一起出現在程式碼裡。這一節要讀的是 Codexgram 的 <code>src/app/_layout.tsx</code>。它就像整間房子的門廳：登入狀態、後端連線、錯誤監控、全域狀態容器等共用能力，都先在這裡準備好，接著才輪到各個畫面。</p>
+
+<p>所以 <code>_layout.tsx</code> 不只是路由檔案，它把前面那些抽象觀念固定下來，也是整個 app 的 App Shell。</p>
+
+<h2>檔案式路由：資料夾結構就是導覽地圖</h2>
+
+<p>Expo Router 的第一個規則很直觀：<code>app/</code> 目錄底下的檔案，就是 app 的路由。<code>index.tsx</code> 代表首頁，<code>post/[id].tsx</code> 代表帶有參數的動態頁面，而每一層的 <code>_layout.tsx</code> 則是那一層的共同外框。</p>
+
+<p>這個外框可以決定該層共用哪些 Provider，以及使用哪一種導覽容器。至於像 <code>(tabs)/</code> 這樣用括號包起來的資料夾，則是一種分組：裡面的畫面可以共用 layout，但資料夾名稱不會出現在路徑中。</p>
+
+<p>Codexgram 的結構正是這樣展開的。最外層的 <code>_layout.tsx</code> 是 root layout；<code>(tabs)/</code> 裡放著四個分頁；<code>compose</code> 與 <code>story-compose</code> 是全螢幕 modal；<code>post/[id]</code>、<code>member/[id]</code>、<code>chat/[id]</code> 則是動態頁面。</p>
+
+<p>你未必會在網址列直接看到所有資料夾名稱，但檔案結構本身已經畫出一張導覽地圖。讀懂這張地圖，比在每個畫面裡追一堆分散的導覽邏輯更可靠。</p>
+
+<figure class="lesson-figure"><img src="./expo-router-app-shell-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>逐段讀 root layout</h2>
+
+<p>打開檔案後，最上面先初始化 Sentry：</p>
+
+<pre><code>Sentry.init({
+  dsn: '...',
+  sendDefaultPii: false,
+  enableLogs: true,
+  integrations: [Sentry.feedbackIntegration({ ... })],
+});</code></pre>
+
+<p>這幾行會在 app 啟動時執行。Sentry 是一個 native module，因此它在 JavaScript 這一側的入口，就會出現在這個 layout 裡。這也呼應前面提過的概念：JS 端負責呼叫與包裝，native 端負責實際提供能力。</p>
+
+<p>接著，root layout 讀取環境變數：</p>
+
+<pre><code>const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? '';
+if (!publishableKey) {
+  throw new Error('Set EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY in .env and restart Expo.');
+}
+
+const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL;
+if (!convexUrl) throw new Error('Set EXPO_PUBLIC_CONVEX_URL in .env.local and restart Expo.');
+const convex = new ConvexReactClient(convexUrl);</code></pre>
+
+<p>這裡採用的是「早失敗」的做法。設定不存在時，程式立刻丟出錯誤，而不是等到某個畫面需要登入或呼叫後端時才壞掉。</p>
+
+<p>兩種做法放在一起看：把錯誤拖到深處，開發者得沿著畫面和請求一路猜；在 App Shell 啟動時就檢查，環境問題第一秒就看到了。對需要多個設定才能啟動的 app 來說，這就像進門先檢查鑰匙，而不是到了房間門口才發現根本沒帶。</p>
+
+<h2>Provider 為什麼要一層一層疊起來</h2>
+
+<p>接下來是真正的核心：<code>RootLayout</code>。</p>
+
+<pre><code>function RootLayout() {
+  return (
+    &lt;ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}&gt;
+      &lt;ConvexProviderWithClerk client={convex} useAuth={useAuth}&gt;
+        &lt;AuthenticatedRoutes /&gt;
+      &lt;/ConvexProviderWithClerk&gt;
+    &lt;/ClerkProvider&gt;
+  );
+}</code></pre>
+
+<p>這個順序有它的原因：能力之間有依賴關係。</p>
+
+<p>Clerk 負責身分與登入狀態；Convex 則需要知道目前登入的是誰，才能以正確的身分連到後端。所以 <code>ConvexProviderWithClerk</code> 必須放在 <code>ClerkProvider</code> 裡面，並把 <code>useAuth</code> 傳給它。</p>
+
+<p>這樣一來，內層的 <code>AuthenticatedRoutes</code> 才能同時取得登入狀態，以及已經連好的 Convex client。Provider 疊法可以想成一組由外往內傳遞的能力：外層先準備環境，內層再取用這些環境。</p>
+
+<figure class="lesson-figure"><img src="./expo-router-app-shell-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>如果把它們全部平放在同一層，畫面元件就得自己處理登入、後端連線與依賴順序。這會讓每個畫面各自長出一套判斷，最後變成難以維護的分散式 App Shell。</p>
+
+<h2><code>Stack.Protected</code>：依登入狀態分流</h2>
+
+<p>再往裡看 <code>AuthenticatedRoutes</code>。它先透過 <code>useAuth()</code> 取得登入資訊：</p>
+
+<pre><code>const { isLoaded, isSignedIn, userId } = useAuth();
+if (!isLoaded) {
+  return &lt;View style={styles.loading}&gt;&lt;ActivityIndicator ... /&gt;&lt;/View&gt;;
+}</code></pre>
+
+<p>登入狀態還沒準備好以前，先顯示載入畫面。這一步很重要，因為此時程式還不知道使用者是誰；如果太早渲染受保護的畫面，就可能先做出錯誤的路由判斷。</p>
+
+<p>狀態準備好之後，再用一個 <code>Stack</code> 定義路由，並透過 <code>Stack.Protected</code> 的 <code>guard</code> 把畫面分成兩組：</p>
+
+<pre><code>&lt;Stack.Protected guard={!isSignedIn}&gt;
+  &lt;Stack.Screen name="index" /&gt;
+&lt;/Stack.Protected&gt;
+
+&lt;Stack.Protected guard={!!isSignedIn}&gt;
+  &lt;Stack.Screen name="(tabs)" /&gt;
+  &lt;Stack.Screen name="compose" options={{ presentation: 'fullScreenModal' }} /&gt;
+  &lt;Stack.Screen name="post/[id]" /&gt;
+  &lt;Stack.Screen name="chat/[id]" /&gt;
+&lt;/Stack.Protected&gt;</code></pre>
+
+<p>未登入時可以看到 <code>index</code>，也就是登入畫面；登入後，才可以進入分頁、發文與聊天。這裡還有一組使用 <code>__DEV__</code> 作為 guard 的 <code>design-preview</code>，只會在開發模式出現。</p>
+
+<p>弱一點的做法，是把登入判斷散落在每個畫面裡：這個頁面檢查一次，那個按鈕再檢查一次。強一點的做法，則是在 App Shell 集中表達路由規則。誰能看到哪一組畫面，在同一個地方就能讀懂，不必到處搜尋 if。</p>
+
+<figure class="lesson-figure"><img src="./expo-router-app-shell-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>換使用者時，為什麼要改變 <code>key</code></h2>
+
+<p>檔案最後還有一個容易被忽略的細節：<code>MessagesProvider</code> 使用 <code>key={userId ?? "signed-out"}</code>。</p>
+
+<p>在 React 裡，當 <code>key</code> 改變時，React 會把這個子樹整個重新掛載。換句話說，使用者從 A 切換成 B 時，訊息相關的狀態不會繼續留在原本的子樹裡，避免新使用者看到上一位使用者留下的狀態。</p>
+
+<p>最後，<code>export default Sentry.wrap(RootLayout)</code> 將整個 layout 交給 Sentry 包裝與監控。從啟動、環境檢查、Provider 疊加，到路由守衛與錯誤監控，root layout 就像把 app 的骨架和公共設施集中在同一個入口。</p>
+
+<h2>和熟悉的 Next.js App Router 對照</h2>
+
+<p>如果你用過 Next.js 的 <code>layout.tsx</code>，Expo Router 的概念並不陌生。兩者都是共用外框，也都適合放全域 Provider 與導覽相關設定。</p>
+
+<p>差別在於它們面對的邊界不同。Next.js 的 layout 涉及 server component 與 client component 的分界，許多事情會發生在伺服器；Expo Router 的 layout 則是原生導覽的分界，整個 app 都在手機上執行，沒有 server component 這一層。</p>
+
+<p>因此，可以把 Expo Router 的 <code>_layout.tsx</code> 理解成：把 Next.js 的 layout 概念搬到原生導覽的世界。它同樣是共用外框，但裡面承載的是手機 app 的登入、原生能力、後端連線與畫面切換。</p>
+
+<h2>把這個觀念掛回你的 app</h2>
+
+<blockquote>
+<code>_layout.tsx</code> 是 Expo Router 的 App Shell：<code>app/</code> 底下的檔案結構就是路由地圖，每一層的 <code>_layout.tsx</code> 是那層共用的外框。Root layout 把 Sentry、Clerk、Convex 一層層疊起來，讓內層取用；再用 <code>Stack.Protected</code> 依登入狀態決定看得到哪些畫面。之後每個 app 都會從這個骨架上長出來，只要知道 auth、後端、監控、全域狀態該掛在哪裡。
+</blockquote>
+
+<p>讀自己的 Expo app 時，可以先從 root layout 開始問幾個問題：路由地圖如何分組？哪些 Provider 必須放在外層？哪些畫面需要登入後才能進入？哪些 native module 在 app 啟動時就要初始化？</p>
+
+<p>這樣看 <code>_layout.tsx</code>，它就是整個 app 的結構說明書，不只是 Expo Router 的特殊檔名。到這裡，這個節點的五步完成了：你知道 React Native 的渲染終點、Expo 的工具鏈、native module 與重建之間的關係，也能在動手前判斷一個功能是否會逼你離開 Expo Go。下一個節點，會把這個骨架真正搭起來，看看 agent 如何協助完成實作。</p>
+
+<div class="lesson-nav">
+  <div><a href="./native-modules-and-rebuild.html">← 上一步：native module 與重建：為什麼裝個套件要重新編譯</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Expo Router 的檔案式路由，導覽地圖從哪裡來？" data-correct="2" data-explain="app/ 目錄底下的檔案結構本身就是路由，存放的檔案對應畫面。">
+  <button class="opt">從一個集中管理的路由設定檔</button>
+  <button class="opt">從 App Store 的上架設定檔案</button>
+  <button class="opt">從 app/ 目錄底下的檔案結構</button>
+  <button class="opt">從資料庫裡的頁面權限資料表</button>
+</div>
+<div class="quiz" data-question="每一層的 <code>_layout.tsx</code> 主要負責什麼？" data-correct="1" data-explain="它是那一層的外框，決定該層共用的 Provider 與導覽容器。">
+  <button class="opt">負責把整個 app 送上 App Store</button>
+  <button class="opt">決定該層共用的 Provider 與導覽容器</button>
+  <button class="opt">儲存後端資料庫的 schema 定義</button>
+  <button class="opt">管理使用者的付款與訂閱狀態</button>
+</div>
+<div class="quiz" data-question="為什麼 <code>ConvexProviderWithClerk</code> 要包在 <code>ClerkProvider</code> 裡面？" data-correct="3" data-explain="Convex 需要知道登入的是誰，必須能取用 Clerk 提供的身分。">
+  <button class="opt">因為外層元件一定比內層先被銷毀</button>
+  <button class="opt">因為這樣可以減少原生建置的時間</button>
+  <button class="opt">因為 Convex 只能在 iOS 上執行</button>
+  <button class="opt">因為 Convex 需要取用 Clerk 的身分</button>
+</div>
+<div class="quiz" data-question="<code>Stack.Protected guard={!!isSignedIn}</code> 這一段的作用是什麼？" data-correct="0" data-explain="它把登入後才能看的畫面集中保護起來，未登入時不放行。">
+  <button class="opt">把登入後才能看的畫面集中保護</button>
+  <button class="opt">把 Sentry 的錯誤監控關閉起來</button>
+  <button class="opt">把 JavaScript bundle 預先載入</button>
+  <button class="opt">把原生模組連結進 app binary</button>
+</div>
+<div class="quiz" data-question="<code>MessagesProvider</code> 的 <code>key={userId}</code> 是為了什麼？" data-correct="2" data-explain="key 改變會讓子樹重掛，換使用者時舊的訊息狀態不會殘留。">
+  <button class="opt">讓訊息傳送的速度變得更快</button>
+  <button class="opt">讓畫面自動套用深色模式</button>
+  <button class="opt">換使用者時不殘留舊的訊息狀態</button>
+  <button class="opt">讓 Sentry 可以記錄使用者的身分</button>
+</div>
+<div class="quiz" data-question="Expo Router 的 layout 與 Next.js 的 layout 最大的差別是什麼？" data-correct="1" data-explain="Next.js 的 layout 是 server/client 邊界，Expo Router 的 layout 是原生導覽邊界，全部在手機上跑。">
+  <button class="opt">前者只能用在 Android，後者用在 iOS</button>
+  <button class="opt">前者是原生導覽邊界，後者是 server/client 邊界</button>
+  <button class="opt">前者不能放 Provider，後者才可以放</button>
+  <button class="opt">兩者完全沒有相同之處可以對照</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Expo / React Native 心智模型 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

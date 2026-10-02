@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>身分歸 Clerk，資料歸你：為什麼登入了 DB 還是空的</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>身分歸 Clerk，資料歸你：為什麼登入成功後 DB 還是空的？</h1>
+<p class="meta">Step 1/5 · Clerk 與資料庫同步（Webhook）</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你應該能說明 Clerk 和 app 資料庫為什麼是兩個獨立的身分與資料來源，也能解釋為什麼使用者明明登入成功，DB 卻仍然沒有資料。</p>
+
+<h2>前言：登入成功，資料庫卻一列都沒有</h2>
+
+<p>你在模擬器按下「Continue with Google」，登入流程順順完成，畫面也進到首頁。你打開 Clerk 後台，新使用者的頭像和 email 都在，看起來一切正常。</p>
+
+<p>接著你切到 Neon 的資料庫儀表板，打開 <code>users</code> 表，卻發現裡面空空如也，一列資料都沒有。</p>
+
+<p>第一個反應通常是：「是不是哪裡壞掉了？」但這其實不一定是 bug，而是兩個系統正照著各自的設計運作。Clerk 本來就沒有要替你寫入應用程式資料庫；你的資料庫也不會自動知道有人剛剛登入。</p>
+
+<p>這一節要先釐清一個後面每一節都會用到的觀念：<strong>身分（identity）和應用資料（application data）是兩座獨立的倉庫，中間那條連線需要由你自己建立。</strong></p>
+
+<p>先看懂問題的本質，後面才會知道 webhook 到底是在補哪個洞。</p>
+
+<h2>兩座倉庫：一個管你是誰，一個管你有什麼</h2>
+
+<p>整條登入流程背後，其實有兩個不同的儲存來源。</p>
+
+<p>第一個是 <strong>Clerk</strong>，也就是身分來源（identity provider）。它負責保管「你是誰」：帳號本身、email、你選擇 Google 還是 Apple 登入、目前有效的 session token、登入裝置，以及多因子驗證設定。</p>
+
+<p>這些資料屬於「驗證」範圍，也是安全敏感的領域。把它交給專門處理身分驗證的服務，通常比自己從頭打造一套登入系統可靠。</p>
+
+<p>第二個是你自己的 <strong>Postgres</strong>，本課程使用的是 Neon。它是應用資料來源（application data store），負責保管「你在這個 app 裡有什麼」：使用者填寫的身高、體重與減重目標，拍下的餐點照片與熱量分析，之後的預約紀錄、角色權限設定，以及所有需要查詢、關聯或製作報表的資料。</p>
+
+<p>可以把它想成大樓門禁和你家的關係。Clerk 像大廳櫃檯，負責確認你的身分並發給你門禁卡；你的資料庫則像家裡的房間，裡面放著你的家具。櫃檯登記了「你是誰」，但不會自動把家具搬進你家。這是兩件不同的事。</p>
+
+<figure class="lesson-figure"><img src="./identity-vs-app-data-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+<thead>
+<tr><th>項目</th><th>Clerk（身分來源）</th><th>你的 Postgres（應用資料來源）</th></tr>
+</thead>
+<tbody>
+<tr><td>核心問題</td><td>你是誰、怎麼證明</td><td>你在這個 app 裡有什麼</td></tr>
+<tr><td>典型資料</td><td>帳號、email、登入方式、session、2FA</td><td>profile、餐點、預約、role</td></tr>
+<tr><td>誰負責安全</td><td>供應商（Clerk）</td><td>你（權限、PHI、外鍵）</td></tr>
+<tr><td>能不能 join</td><td>不是設計來當關聯式資料庫</td><td>正是為 join 與查詢而生</td></tr>
+</tbody>
+</table>
+
+<p>你可能會問：「那為什麼不乾脆全部放在 Clerk？」原因是 Clerk 不是你的 app 資料庫。你需要用外鍵把「使用者」和「他的餐點」關聯起來，也需要對自己的資料進行查詢、建立索引和製作報表；這些事情都超出驗證服務原本的範圍。</p>
+
+<p>如果把所有應用資料都塞進 auth 供應商，就像把整間店的商業邏輯鎖在一個不能輕易搬家的櫃子裡。未來想更換服務時，遷移成本會很高。</p>
+
+<p>反過來也一樣。不要只為了省事，就自己刻一套登入系統。OAuth 流程、token 輪替和 Apple 的審核規則，每一項都比表面上更容易出錯。</p>
+
+<h2>橋樑是 clerk_user_id，不是 id</h2>
+
+<p>既然兩座倉庫要互相對應，就需要一個共同的識別碼。你的 <code>users</code> 表通常會長這樣：</p>
+
+<pre><code>users
+  id             ← 你資料庫自己的主鍵
+  clerk_user_id  ← Clerk 的使用者 id，唯一值
+  email
+  role
+  created_at
+  updated_at</code></pre>
+
+<p>關鍵就在 <code>clerk_user_id</code>。Clerk 發出事件時，帶的是它自己的使用者 id；你的資料表則把這個 id 存成外部識別碼。如此一來，你就能回答：「這個 Clerk 帳號，對應到我資料庫裡的哪一列？」</p>
+
+<figure class="lesson-figure"><img src="./identity-vs-app-data-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>之後不論是同步使用者、刪除資料，還是查詢 profile，都會靠這個欄位把兩邊串起來。</p>
+
+<p>不過，<code>id</code> 和 <code>clerk_user_id</code> 的工作不一樣。<code>id</code> 是你資料庫自己的主鍵；<code>clerk_user_id</code> 則是身分來源的識別碼。兩個欄位都可以存在，而且各自負責不同的事情。</p>
+
+<p>如果你只存 Clerk 的 id，就等於把資料庫的識別責任也交給外部服務。這也是為什麼後面設計同步時，upsert 的衝突目標會放在 <code>clerk_user_id</code>。</p>
+
+<h2>為什麼「DB 是空的」其實是預設狀態</h2>
+
+<p>回到一開始的畫面。使用者登入成功時，發生的事情主要都在 Clerk 那一側：Clerk 驗證 Google 的憑證、建立自己的使用者記錄，並把 session token 發給手機。</p>
+
+<p>在這個過程中，你的伺服器可能完全沒有參與，更不用說你的資料庫了。</p>
+
+<p>所以「Clerk 有人、DB 沒人」不代表一定有設定錯誤。真正的原因是：目前沒有任何東西負責把 A 倉庫的資料複製到 B 倉庫。要讓資料庫多出一列，總得有某個程式明確執行寫入。</p>
+
+<p>當然，你可以自己做這件事：在 Clerk 後台看到新使用者後，手動到資料庫 insert 一列。只有一個人時還能接受，十個人就開始勉強；等到一萬個人，這種做法一定會崩潰。</p>
+
+<p>而且使用者修改 email 時，你還要再手動更新一次；使用者刪除帳號時，也要記得刪掉資料庫中的對應資料。手動同步最大的問題，不只是麻煩，而是規模一大就很難維持一致。</p>
+
+<p>比較可靠的做法，是讓這件事自動發生：Clerk 在事件發生時主動通知你的 app，你的 app 收到通知後，再把資料寫入資料庫。</p>
+
+<p><strong>這種「事情發生時主動送出的訊息」就是 webhook。</strong>下一節會把它拆開來看。</p>
+
+<h2>一個現實的補充：同步不是瞬間完成的</h2>
+
+<p>即使你已經接好 webhook，事件送達仍然屬於「最終一致」（eventually consistent）。它通常很快，但網路或佇列都可能造成延遲。</p>
+
+<p>因此，如果新使用者登入後立刻呼叫 API 取得資料，而 webhook 還沒有送到，資料庫可能仍然沒有他的那一列。</p>
+
+<figure class="lesson-figure"><img src="./identity-vs-app-data-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>成熟一點的做法，是在真正需要資料的請求路徑上再做一次 upsert。如此一來，webhook 的角色是「補上同步」，而不是唯一的資料建立路徑。</p>
+
+<p>課程裡的預約 app 就採用這個模式：webhook 是備援，而真正保證資料存在的，是使用者第一次發出請求時執行的 upsert。這個模式之後還會再遇到，現在先記住一件事：<strong>webhook 不代表即時保證。</strong></p>
+
+<h2>小結：把兩個觀念接在一起</h2>
+
+<blockquote>
+Clerk 是身分來源，管「你是誰」；你的 Postgres 是應用資料來源，管「你在 app 裡有什麼」。兩者預設互不干涉，所以登入成功後 DB 仍是空的。把兩邊接起來的鑰匙是 <code>clerk_user_id</code>，而自動同步的工具是 webhook。手動複製在小規模可行，在真實產品規模會崩。
+</blockquote>
+
+<p>現在你已經知道問題缺在哪裡：缺的不是資料庫，也不是登入功能，而是「有人通知你的 app，把資料寫入資料庫」這條連線。</p>
+
+<p>下一節會打開 webhook 的引擎蓋，看看事件長什麼樣子、如何確認訊息真的來自 Clerk，以及為什麼同一則通知可能會送來第二次。</p>
+
+<p>延伸閱讀：Clerk 官方文件 <a href="https://clerk.com/docs/webhooks/overview">clerk.com/docs/webhooks/overview</a>。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./webhook-event-mechanics.html">下一步：Webhook 是什麼：事件、簽章與重送 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼登入成功後，自己的 Postgres 資料庫仍是空的？" data-correct="2" data-explain="Clerk 只負責身分驗證，不會主動寫入你的應用資料庫，所以預設兩邊是不同步的。">
+  <button class="opt">因為資料庫連線字串設定錯誤</button>
+  <button class="opt">因為 iOS 沙盒阻止寫入遠端資料</button>
+  <button class="opt">因為兩座倉庫本來就各自獨立</button>
+  <button class="opt">因為 Clerk 的免費方案不支援資料庫</button>
+</div>
+<div class="quiz" data-question="下列哪一項最適合放在你自己的 Postgres，而不是放在 Clerk？" data-correct="1" data-explain="餐點紀錄屬於應用資料，需要關聯與查詢；帳號、登入方式、session 才是 Clerk 的身分範疇。">
+  <button class="opt">使用者的 Google 登入方式</button>
+  <button class="opt">使用者拍下的餐點紀錄</button>
+  <button class="opt">目前有效的 session token</button>
+  <button class="opt">帳號的多因子驗證設定</button>
+</div>
+<div class="quiz" data-question="要把 Clerk 使用者對應到資料庫的那一列，靠的是哪個欄位？" data-correct="3" data-explain="以 clerk_user_id 當唯一外部識別碼，兩邊才能對得起來；id 只是你資料庫自己的主鍵。">
+  <button class="opt">資料庫自動遞增的整數 id</button>
+  <button class="opt">隨機產生的 session 字串</button>
+  <button class="opt">使用者自己填的 email 地址</button>
+  <button class="opt">Clerk 的使用者識別碼欄位</button>
+</div>
+<div class="quiz" data-question="為什麼不建議長期用手動方式把 Clerk 使用者複製進資料庫？" data-correct="0" data-explain="使用者一多，新增、更新、刪除都必須手動跟上，規模和一致性都會崩掉。">
+  <button class="opt">人數一多就無法維持一致</button>
+  <button class="opt">手動 insert 會違反資料庫授權</button>
+  <button class="opt">Clerk 不允許使用者被手動複製</button>
+  <button class="opt">手動寫入會讓 Clerk 帳號失效</button>
+</div>
+<div class="quiz" data-question="「webhook 不是即時保證」是什麼意思？" data-correct="2" data-explain="事件送達是最終一致，可能短暫延遲；因此有時需要在請求路徑上補一次 upsert。">
+  <button class="opt">webhook 只能在白天時段送達</button>
+  <button class="opt">webhook 一定要人工按下才會觸發</button>
+  <button class="opt">事件送達可能短暫延遲</button>
+  <button class="opt">webhook 只送得出刪除的事件</button>
+</div>
+<div class="quiz" data-question="為什麼不把應用資料全部塞進 Clerk，省得同步？" data-correct="1" data-explain="Clerk 是驗證服務，不是你的關聯式資料庫；應用資料需要 join、查詢與自己的商業邏輯。">
+  <button class="opt">Clerk 的儲存空間通常比 Postgres 小</button>
+  <button class="opt">驗證服務不適合當應用資料庫</button>
+  <button class="opt">Clerk 明文儲存會違反 App Store 規則</button>
+  <button class="opt">把資料放 Clerk 會讓登入變慢</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Clerk 與資料庫同步（Webhook） · Step 1/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

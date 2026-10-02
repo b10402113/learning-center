@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把登入接進 Expo：SDK 設定與登入按鈕</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>把登入接進 Expo：設定 Clerk SDK 與登入按鈕</h1>
+<p class="meta">Step 4/5 · Clerk 多供應商登入</p>
+
+<h2>這一節要完成什麼</h2>
+<p>這一節的目標，是把 Clerk 的 Expo SDK 接進 app，並在 onboarding 的最後一頁放上真正能使用的 Google 與 Apple 登入按鈕。完成後，使用者會先完成 onboarding，再進入登入流程。</p>
+
+<p>你也會學會如何把設定工作交給 AI agent，以及怎麼驗收 agent 是否做對。最後，還要決定登入畫面要自己刻，還是先使用 Clerk 的預製 UI。</p>
+
+<h2>動手前先確認前置條件</h2>
+
+<p>開始之前，請確認以下項目都已經完成：</p>
+
+<ul>
+<li>Clerk application 已建立。</li>
+<li>Google 與 Apple 登入已啟用。</li>
+<li>Native applications 已開啟。</li>
+<li><code>.env</code> 已填入 <code>EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY</code>。</li>
+<li>Onboarding 畫面已在前一個節點完成。</li>
+</ul>
+
+<p>另外，這個 app 之後要用 dev build 執行，而不是 Expo Go。Clerk 的原生登入流程依賴原生模組，需要 <code>expo-dev-client</code>，並透過 <code>npx expo run ios</code> 產生開發用建置。這一節先把程式接好，實際測試留到下一節。</p>
+
+<h2>先看整體流程：從設定到可登入</h2>
+
+<p>上一節完成的是 Clerk 後台設定：Google 與 Apple 已經打開，publishable key 也放進 <code>.env</code>。但這時候 app 還不知道 Clerk 的存在，就像家裡已經裝好網路，卻還沒有把路由器接上。</p>
+
+<p>這一節會依序做四件事：</p>
+
+<ol>
+<li>把 Clerk SDK 安裝並接到 app 的根層。</li>
+<li>讓 onboarding 最後一頁的按鈕可以啟動 Google 與 Apple 登入。</li>
+<li>把登入按鈕放到正確的位置，並調整成符合 app 主題的樣子。</li>
+<li>根據設計需求，選擇自製原生登入畫面或 Clerk 預製 UI。</li>
+</ol>
+
+<figure class="lesson-figure"><img src="./wire-auth-ui-expo-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一步：把 SDK 設定交給 agent</h2>
+
+<p>把上一節從 Expo quick start 複製的 prompt，貼進你的 agent，例如 Codex 或 Claude。請 agent 完成三件事：安裝 Clerk 的 Expo 套件、在 app 根層使用 Clerk 的 Provider 包住整個 app，並從環境變數讀取 publishable key。</p>
+
+<p>根層的關鍵程式碼，概念上會長這樣。實際語法可能會依 SDK 版本略有差異，請讓 agent 依照最新文件處理：</p>
+
+<pre><code>// app/_layout.tsx
+import { ClerkProvider } from "@clerk/clerk-expo";
+
+export default function RootLayout() {
+  return (
+    &lt;ClerkProvider publishableKey={process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY}&gt;
+      &lt;Stack /&gt;
+    &lt;/ClerkProvider&gt;
+  );
+}</code></pre>
+
+<p>這段程式碼有兩個驗收重點。</p>
+
+<ul>
+<li><code>ClerkProvider</code> 要放在根層，包住整個 app。</li>
+<li><code>publishableKey</code> 要從 <code>process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY</code> 讀取。</li>
+</ul>
+
+<p>Provider 可以想成登入狀態的總開關。它放在元件樹最上層，之後任何畫面都能從同一個來源取得登入狀態。如果只把 Provider 放在某個內頁，其他頁面就可能問不到 Clerk。</p>
+
+<figure class="lesson-figure"><img src="./wire-auth-ui-expo-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<blockquote class="bad-code">
+<p><strong>不好的做法：</strong>把 publishable key 直接寫死在程式碼裡，例如 <code>publishableKey="pk_test_..."</code>。這會讓金鑰跟著程式碼進入版控，切換環境時也必須修改程式。</p>
+<p><strong>正確做法：</strong>從 <code>process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY</code> 讀取。</p>
+</blockquote>
+
+<h2>第二步：讓登入按鈕啟動 Google 與 Apple 流程</h2>
+
+<p>Provider 接好後，接著要讓按鈕真的能發起登入。Clerk 的 Expo SDK 提供現成的 hook，可以處理社群登入流程，包括開啟授權畫面、接收回傳結果，以及更新 Provider 裡的登入狀態。</p>
+
+<p>把需求交給 agent 時，先只描述這個行為：</p>
+
+<p>「請在 onboarding 最後一頁加入 Continue with Google 與 Continue with Apple 兩顆按鈕。點擊後使用 Clerk 啟動對應的登入流程，登入成功後進入 app 主畫面。」</p>
+
+<p>如果 agent 需要更具體的實作方式，再把 quick start 的程式片段一併附上。先讓按鈕能正確啟動登入，再處理外觀，會比較容易驗收。</p>
+
+<p>若一開始就把功能、版面、陰影、logo 和動畫全部塞進同一個 prompt，agent 很可能在美化畫面時順手改動流程邏輯。比較穩定的做法是一次完成一個行為：先確認登入流程能啟動，再調整視覺呈現。</p>
+
+<h2>第三步：把按鈕放在 onboarding 尾端</h2>
+
+<p>這個 app 的 onboarding 是一道硬 gate：使用者必須完成問卷，才會進入登入。因此，登入按鈕應該放在 onboarding 的最後一頁底部，而不是直接放在 app 首頁。</p>
+
+<p>整體流程會變成：</p>
+
+<ol>
+<li>使用者先認識 app。</li>
+<li>使用者填寫偏好。</li>
+<li>使用者完成 onboarding。</li>
+<li>使用者在最後一頁選擇 Google 或 Apple 登入。</li>
+<li>登入成功後進入 app 主畫面。</li>
+</ol>
+
+<p>這樣登入要求出現得比較自然，不會讓使用者一打開 app 就先被擋在登入頁。</p>
+
+<h2>第四步：再調整按鈕的視覺呈現</h2>
+
+<p>功能確認後，再處理登入按鈕的外觀。課程裡反覆調整過幾個細節：</p>
+
+<ul>
+<li>按鈕要有 box shadow。</li>
+<li>社交平台 logo 要清楚可見。</li>
+<li>「Continue with Apple」與「Continue with Google」的文字要夠大。</li>
+<li>Google 的 icon 需要自行補上。</li>
+<li>Apple 的 logo 通常由系統按鈕提供。</li>
+</ul>
+
+<p>這些細節會直接影響使用者是否注意到登入入口。登入按鈕就像門口的招牌，功能再完整，如果字太小、logo 不清楚，使用者仍然可能找不到或不想按。</p>
+
+<h2>第五步：選擇自製登入畫面或 Clerk 預製 UI</h2>
+
+<p>接下來要做一個實際決定：登入畫面要自己刻，還是直接使用 Clerk 的預製 UI 元件？這不是固定的對錯題，而是取決於你目前的設計與開發目標。</p>
+
+<table>
+<thead>
+<tr><th>做法</th><th>優點</th><th>代價</th><th>適合的情況</th></tr>
+</thead>
+<tbody>
+<tr><td>自製原生登入畫面（課程採用的做法）</td><td>與 design system 完全一致、控制權最高</td><td>要自己處理 loading、錯誤、邊界狀態</td><td>品牌感重、設計已有明確規範</td></tr>
+<tr><td>Clerk 預製 UI 元件</td><td>快、內建各種狀態與流程</td><td>外觀受元件限制，客製要繞路</td><td>想先求有、之後再美化</td></tr>
+</tbody>
+</table>
+
+<p>Cal AI、Codexgram 與 Dentify 三條路線都選擇自製原生畫面，因為它們在設計階段已經有明確的畫面參考。這時使用預製 UI，反而可能和既有設計互相衝突。</p>
+
+<figure class="lesson-figure"><img src="./wire-auth-ui-expo-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>如果你目前只是想先確認登入流程能不能跑通，Clerk 預製 UI 會是很快的起點。可以用這個問題做決定：</p>
+
+<p><strong>我已經有一份必須長成的登入畫面設計了嗎？</strong></p>
+
+<ul>
+<li>如果有，就自製原生登入畫面。</li>
+<li>如果沒有，就先用預製 UI 跑通流程，之後再美化。</li>
+</ul>
+
+<h2>完成後怎麼驗收</h2>
+
+<p>打開模擬器，走完 onboarding。最後一頁底部應該會出現兩顆按鈕：</p>
+
+<ul>
+<li>Continue with Apple</li>
+<li>Continue with Google</li>
+</ul>
+
+<p>按下按鈕後，應該會開啟對應的授權流程。你可以在終端機與 Clerk 後台看到活動；至於登入是否真的成功，下一節會再透過 dashboard 的 users 清單確認。</p>
+
+<p>這一節完成的結果，是 app 已經接上 Clerk、按鈕也能發起登入。下一節才會完整跑過登入流程，並處理模擬器上很常見的 Apple 登入錯誤。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>使用 Clerk 的 Expo quick start prompt，讓 agent 安裝套件，並在根層用 Provider 包住整個 app。這樣所有畫面才問得到登入狀態。publishable key 要從 <code>EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY</code> 讀取，不要寫死在程式碼裡。</p>
+<p>登入按鈕放在 onboarding 最後一頁，使用 SDK 的 hook 發起 Google 與 Apple 登入流程。功能確認後，再調整 logo、字級與按鈕樣式。</p>
+<p>如果手上已有明確的登入畫面設計，就自製原生登入畫面；如果只是想先驗證流程，則可以先使用 Clerk 預製 UI。</p>
+</blockquote>
+
+<p>按鈕看起來能按，和登入真的成功，是兩件不同的事。下一節會把整個流程跑一遍，並說明 Apple 登入在模擬器上為什麼容易報錯，以及什麼時候不值得繼續硬修模擬器。</p>
+
+<div class="lesson-nav">
+  <div><a href="./create-clerk-app-providers.html">← 上一步：建立 Clerk 專案並打開 Google / Apple</a></div>
+  <div><a href="./verify-login-logout.html">下一步：實測登入 / 登出與模擬器的 Apple 限制 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Clerk 的 Provider 為什麼要放在 app 的根層？" data-correct="1" data-explain="放在根層才能成為登入狀態的源頭，讓所有畫面都查得到目前的登入狀態。">
+  <button class="opt">放在根層才能自動產生 Google 的憑證</button>
+  <button class="opt">放在根層才能讓所有畫面查得到登入狀態</button>
+  <button class="opt">放在根層才能壓縮 app 的打包檔案大小</button>
+  <button class="opt">放在根層才能避免環境變數被讀取到</button>
+</div>
+<div class="quiz" data-question="publishable key 正確的取用方式是什麼？" data-correct="3" data-explain="從環境變數讀取，避免金鑰寫死在程式碼裡跟著進版控。">
+  <button class="opt">直接寫在 Provider 的字串參數裡</button>
+  <button class="opt">放在 README 讓團隊成員複製使用</button>
+  <button class="opt">存在使用者裝置的檔案裡動態讀取</button>
+  <button class="opt">從 EXPO_PUBLIC_ 開頭的環境變數讀取</button>
+</div>
+<div class="quiz" data-question="登入按鈕建議放在 app 的哪個位置？" data-correct="0" data-explain="放在 onboarding 最後一頁，讓使用者先認識 app、填完偏好再登入，時機較合理。">
+  <button class="opt">放在 onboarding 流程的最後一頁</button>
+  <button class="opt">放在 app 啟動後的第一個畫面</button>
+  <button class="opt">藏在設定頁的深處選單裡面</button>
+  <button class="opt">放在每個分頁的右上角固定位置</button>
+</div>
+<div class="quiz" data-question="課程在登入畫面上採用哪一種做法？" data-correct="2" data-explain="三條路線都已先有明確設計，因此選擇自製原生登入畫面以維持品牌一致。">
+  <button class="opt">直接使用 Clerk 預設的整頁登入 UI</button>
+  <button class="opt">使用 Google 提供的現成登入按鈕</button>
+  <button class="opt">自製原生登入畫面並套用設計系統</button>
+  <button class="opt">用系統內建的第三方登入選單</button>
+</div>
+<div class="quiz" data-question="什麼情況下先用 Clerk 預製 UI 是合理的選擇？" data-correct="1" data-explain="當手上還沒有明確登入畫面設計、想先驗證流程能通時，預製 UI 是快又實用的起點。">
+  <button class="opt">已經有非常完整的登入設計規範時</button>
+  <button class="opt">還想先驗證流程能不能跑通時</button>
+  <button class="opt">品牌對外觀一致性要求極高時</button>
+  <button class="opt">需要完全掌控每個邊界狀態時</button>
+</div>
+<div class="quiz" data-question="為什麼登入按鈕的 logo 與字級值得特別調整？" data-correct="3" data-explain="登入按鈕是使用者第一眼看到品牌的地方，太小或被忽略會直接影響轉換。">
+  <button class="opt">因為 Apple 審核會檢查按鈕的像素大小</button>
+  <button class="opt">因為字級太小會讓 App 無法啟動</button>
+  <button class="opt">因為 logo 越大 Clerk 收費就越低</button>
+  <button class="opt">因為它是使用者第一眼的品牌接觸點</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Clerk 多供應商登入 · Step 4/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>訂閱還是輪詢：前端怎麼知道分析完成了？</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>訂閱還是輪詢：前端怎麼知道分析完成了？</h1>
+<p class="meta">Step 4/5 · 拍照掃描與媒體上傳</p>
+
+<h2>先搞清楚：你要等的是哪一種變化？</h2>
+<p>上一節已經把管線接起來了：照片上傳後，背景 task 開始執行，分析結果也會寫回資料庫。可是對使用者來說，畫面可能還停在「Analyzing your meal…」。前端需要一個明確訊號，才能知道什麼時候該停止轉圈、顯示結果，或告訴使用者分析失敗。</p>
+
+<p>這時有兩條路：<strong>訂閱</strong>單一背景 run 的即時狀態，或是<strong>輪詢</strong>一整批資料。訂閱像是在某個房間裝一支專線，只要那個房間有變化，server 就主動通知你；輪詢則像隔幾秒探頭問一次：「好了嗎？」</p>
+
+<p>兩種方式都能用，但用錯地方就會付出代價。訂閱太多目標，可能維護一堆不必要的連線；輪詢整個列表，則可能不斷送出其實沒有新變化的請求。Cal AI 兩種方式都用了，關鍵在於它們分工清楚。</p>
+
+<h2>先比較兩個選項</h2>
+<p>先不要急著記 API 名稱。把它們放在一起比較，你會看到真正的取捨不只是速度，還包含關注對象、連線成本與實作方式。</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>Realtime 訂閱</th><th>輪詢（polling）</th></tr>
+</thead>
+<tbody>
+<tr><td>關注對象</td><td>單一 run 的狀態變化</td><td>一整批資料中有沒有還在跑的</td></tr>
+<tr><td>延遲</td><td>幾乎即時（server 主動推）</td><td>最多等一個間隔（例如 3 秒）</td></tr>
+<tr><td>即時性成本</td><td>一個目標一條連線</td><td>每個間隔一次請求</td></tr>
+<tr><td>需要的憑證</td><td>runId + publicAccessToken</td><td>一般的身分驗證（Bearer token）</td></tr>
+<tr><td>適合的畫面</td><td>掃描結果頁（等這一次）</td><td>首頁餐點列表（等其中幾筆）</td></tr>
+</tbody>
+</table>
+
+<p>因此，掃描頁適合訂閱「剛剛按下分析的那一次 run」；首頁餐點列表則適合查詢「今天有哪些餐點還在分析」。前者是一個目標，後者是一批資料。</p>
+
+<p>如果把訂閱套在首頁，每張餐點卡片都可能需要一條連線。假設畫面上有二十筆餐點，就得維護二十條連線，即使其中十九筆早已完成。反過來，如果掃描頁固定每 3 秒輪詢一次，又會在即時性與請求浪費之間拉扯。</p>
+
+<figure class="lesson-figure"><img src="./realtime-vs-polling-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>判別問句：在自己的 app 裡問這三題</h2>
+<p>下面三個問題，可以幫你判斷該選哪一條路。</p>
+
+<ol>
+<li><strong>你盯著的是一個 run，還是一批資料？</strong> 如果問題是「這次分析好了沒」，關注的是單一目標，適合用訂閱；如果問題是「今天有哪些餐點還在跑」，面對的是一批資料，適合用輪詢。這一題通常就能決定大方向。</li>
+<li><strong>你的資料裡有沒有「還在進行中」的旗標？</strong> 例如 <code>status === 'analyzing'</code>。如果有，就能做出條件式輪詢，只在真的需要時重新請求；如果沒有，輪詢很容易變成不斷送出的空問。</li>
+<li><strong>你需要的是「完成了」，還是 run 的 output 本身？</strong> 如果畫面需要直接取得這次 run 的 output，訂閱會比較直接；如果只想知道資料是否完成，輪詢資料列的狀態通常就夠了。</li>
+</ol>
+
+<h2>掃描頁的選擇：訂閱單一 run</h2>
+<p>掃描頁的問題很單純：「我剛剛按下分析，這一筆結果什麼時候好？」這個畫面已經握有 API route 回傳的 <code>runId</code> 與 <code>publicAccessToken</code>，所以可以直接訂閱這一次 run。</p>
+
+<pre><code>const { run, error } = useRealtimeRun&lt;typeof analyzeMeal&gt;(logged.runId, {
+  accessToken: logged.publicAccessToken,
+  skipColumns: ['payload'], // payload 只是一些 id，畫面要的是 output
+});
+
+const output = run?.output;
+const notFood = output?.status === 'failed';</code></pre>
+
+<p>這裡有兩個值得帶回自己 app 的設計。</p>
+
+<p>第一，訂閱只需要 <code>runId</code> 與 <code>publicAccessToken</code>。這枚 token 是 <code>tasks.trigger</code> 回傳的 handle 自帶的，不必再另外呼叫一次 <code>auth.createPublicToken</code>。觸發 task 的同時，也把後續訂閱所需的授權資訊一起拿到了。</p>
+
+<p>第二，<code>skipColumns: ['payload']</code> 是刻意設定的。payload 只是傳入的 id，畫面真正需要的是 output。省掉不需要的欄位，就能讓每次狀態更新更輕。</p>
+
+<p>取得 output 後，畫面可以分成三種狀態：</p>
+
+<ul>
+<li>還在執行：顯示「Analyzing your meal…」。</li>
+<li><code>completed</code>：顯示餐名、熱量與三大營養素。</li>
+<li><code>failed</code>，也就是 not_food：顯示「That doesn't look like food」。</li>
+</ul>
+
+<p>注意，這裡讀的是 <code>run.output</code>，不是資料庫裡的那一列。因此，即使 not_food 那列已經被刪除，畫面仍然能從 run 的 output 知道該顯示什麼。</p>
+
+<h2>首頁列表的選擇：只在需要時輪詢</h2>
+<p>首頁面對的是一整天的餐點，可能同時有好幾筆正在分析。這種情境不適合為每張卡片各開一條 Realtime 連線，因此改用輪詢。</p>
+
+<p>但重點不是「使用輪詢」，而是<strong>不要無條件輪詢</strong>。首頁只有在確實存在 <code>analyzing</code> 的餐點時，才需要再次查詢。</p>
+
+<pre><code>return useQuery({
+  queryKey: [...MEALS_KEY, date],
+  queryFn: async () =&gt; { /* GET /api/meals?date=... */ },
+  // 正在背景分析的列，是這個畫面唯一看不到變化的東西。
+  // 只在這種情況輪詢，勝過每張卡片各開一條 Realtime 訂閱。
+  refetchInterval: (query) =&gt;
+    query.state.data?.some((meal) =&gt; meal.status === 'analyzing') ? 3000 : false,
+});</code></pre>
+
+<p><code>refetchInterval</code> 不是固定寫死的秒數，而是一個會檢查目前資料的函式。只要有任何一筆仍是 <code>analyzing</code>，就每 3 秒重新查詢；當所有餐點都完成後，就回傳 <code>false</code>，完全停止輪詢。</p>
+
+<p>這樣的做法把成本集中在真正需要更新的時候。首頁不需要為每張卡片維護即時連線，也不會在所有分析都結束後繼續送出請求。</p>
+
+<p>另外，登入新餐點成功後，還要主動讓首頁查詢失效：</p>
+
+<pre><code>onSuccess: () =&gt; queryClient.invalidateQueries({ queryKey: MEALS_KEY }),</code></pre>
+
+<p>原因是首頁在原生分頁架構下可能一直掛在背景，不會因為你切回去就自動重新整理。如果不上這一行，畫面可能延遲顯示已經有數字的餐點，甚至漏掉剛新增的那一筆。</p>
+
+<h2>反例：兩種方式用錯時會怎麼壞</h2>
+<p><strong>把訂閱套在整個首頁列表。</strong> 假設每一張餐點卡片都使用 <code>useRealtimeRun</code>，使用者有二十筆餐點，就會有二十條連線需要維護。即使十九筆早已完成，這些連線仍可能造成額外負擔。行動裝置的網路與電池，會很快反映出這個代價。</p>
+
+<p><strong>把固定輪詢套在掃描頁。</strong> 如果掃描頁每 3 秒問一次「好了沒」，而 AI 只花 2 秒就完成，使用者仍要等到下一次輪詢才看見結果；如果 AI 花了 15 秒，前端又會送出五次請求，其中多數只是重複確認還沒完成。</p>
+
+<p><strong>兩者都不使用。</strong> 如果畫面既沒有訂閱，也沒有輪詢，那個 spinner 就可能永遠轉下去。背景 task 也許早就完成了，但沒有任何訊號把結果送回畫面。</p>
+
+<p>不過，這套判準也不是死規則。若首頁只顯示一筆正在追蹤的 run，訂閱可能反而合理；若某個單一 run 沒有可用的 Realtime 授權，短時間輪詢也可能是務實的替代方案。真正要看的，是畫面目前需要追蹤的對象數量、更新頻率，以及手上能取得的資料。</p>
+
+<h2>可以直接套用的決策規則</h2>
+<blockquote>
+<p>如果畫面正在等待一個特定 run 的結果，就用 Realtime 訂閱，並直接讀取 <code>run.output</code>。如果畫面要觀察一整批資料，就用條件式輪詢，只在資料中仍有 <code>status === 'analyzing'</code> 時重新請求。觸發 task 時一併保留 handle 附帶的 <code>publicAccessToken</code>，並在新增餐點成功後讓首頁查詢失效。</p>
+</blockquote>
+
+<figure class="lesson-figure"><img src="./realtime-vs-polling-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>現在畫面已經能從「分析中」正確變成結果。但「能跑」不代表「跑對」：背景任務失敗時你可能看不到，env var 遺漏時可能在意外的地方炸掉，資料也不一定真的寫回去了。下一節會建立一組觀察與驗證的習慣，讓你能從一次失敗的掃描，一路追到它究竟死在哪一行。</p>
+
+<div class="lesson-nav">
+  <div><a href="./pending-then-analyze.html">← 上一步：先存 pending 再背景分析：非同步管線的狀態機</a></div>
+  <div><a href="./debug-and-verify.html">下一步：除錯與驗證：runs/logs、retry 與資料落地 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="這個 app 為什麼掃描頁用訂閱、首頁用輪詢？" data-correct="2" data-explain="掃描頁等的是單一 run；首頁面對多筆餐點，開多條訂閱不划算，條件式輪詢更合適。">
+  <button class="opt">因為掃描頁的程式比較新，首頁比較舊</button>
+  <button class="opt">因為訂閱比較快，輪詢只是備用方案</button>
+  <button class="opt">因為一個是單一 run，一個是一批資料</button>
+  <button class="opt">因為首頁沒有拿到 publicAccessToken</button>
+</div>
+<div class="quiz" data-question="useRealtimeRun 的 publicAccessToken 從哪裡來？" data-correct="1" data-explain="它由觸發 task 的 handle 自帶，不必另外呼叫 auth.createPublicToken。">
+  <button class="opt">前端登入時由 Clerk 發下來的 JWT</button>
+  <button class="opt">tasks.trigger 回傳的 handle 自帶的</button>
+  <button class="opt">在 app.json 裡設定的固定字串</button>
+  <button class="opt">從 ImageKit 上傳回應裡取出的</button>
+</div>
+<div class="quiz" data-question="useRealtimeRun 設定 skipColumns: ['payload'] 的作用是什麼？" data-correct="3" data-explain="payload 只是傳進去的 id，畫面要的是 output，略過它能讓更新更輕。">
+  <button class="opt">讓訂閱只追蹤失敗的 run，跳過成功的</button>
+  <button class="opt">阻止 payload 被寫進資料庫的 meals 表</button>
+  <button class="opt">讓 task 的輸入不要經過結構描述驗證</button>
+  <button class="opt">不接收無用的 payload，只取需要的欄位</button>
+</div>
+<div class="quiz" data-question="首頁的 refetchInterval 回傳 false 代表什麼？" data-correct="0" data-explain="當所有餐點都不再是 analyzing 時就停止輪詢，避免無止盡的空問。">
+  <button class="opt">沒有正在分析的餐點，停下輪詢</button>
+  <button class="opt">查詢失敗了，需要使用者手動重試</button>
+  <button class="opt">改成即時訂閱模式繼續等待結果</button>
+  <button class="opt">每三秒輪詢一次直到畫面關閉</button>
+</div>
+<div class="quiz" data-question="為什麼新增餐點成功後要 invalidateQueries(MEALS_KEY)？" data-correct="2" data-explain="首頁在原生分頁背後一直掛著，不會自己重抓，需要主動讓它的查詢失效。">
+  <button class="opt">因為這樣才能觸發 Trigger.dev 的背景任務</button>
+  <button class="opt">因為 ImageKit 要求每次上傳後清快取</button>
+  <button class="opt">因為首頁不會自己更新，需主動通知它</button>
+  <button class="opt">因為要做這個動作才能完成身分驗證</button>
+</div>
+<div class="quiz" data-question="下列哪一種情況最適合用「條件式輪詢」？" data-correct="1" data-explain="一批資料中只有幾筆還在跑，且有 status 這種進行中旗標，就可以只在需要時輪詢。">
+  <button class="opt">等待單一背景 run 的分析輸出結果</button>
+  <button class="opt">一批資料中只有幾筆還在處理中</button>
+  <button class="opt">需要即時接收伺服器主動推送的訊息</button>
+  <button class="opt">要訂閱多個不同的使用者同時上線</button>
+</div>
+<div class="quiz" data-question="若對首頁每張卡片都開一條 Realtime 訂閱，最可能的後果是什麼？" data-correct="3" data-explain="連線數隨餐點數成長，多數早已完成的 run 根本不會再變，白白耗掉網路與電力。">
+  <button class="opt">Trigger.dev 會自動把這些查詢合併</button>
+  <button class="opt">畫面會比輪詢更慢才顯示結果</button>
+  <button class="opt">資料庫會因為查詢過多而鎖住</button>
+  <button class="opt">連線數暴增，白白耗網路與電力</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 拍照掃描與媒體上傳 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

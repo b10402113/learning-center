@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>本機接 Clerk Webhook：ngrok 與簽章密鑰</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 ngrok 把本機 Clerk Webhook 接起來</h1>
+<p class="meta">Step 3/5 · Clerk 與資料庫同步（Webhook）</p>
+
+<h2>完成後，你會得到什麼？</h2>
+<p>完成這一節後，Clerk 發生使用者事件時，就能把 webhook 送到你正在本機執行的 app。你會建立一個訂閱 user 事件的 endpoint，用 ngrok 公開本機 URL，將 signing secret 放進 <code>.env</code>，並同時啟動 Expo、ngrok 與相關背景程序。</p>
+
+<h2>開始前先確認</h2>
+<p>動手前，請先確認以下條件都成立：</p>
+
+<ul>
+<li>Clerk 應用程式已建立。</li>
+<li>Google 或 Apple 登入能在模擬器中正常執行。</li>
+<li>專案可以正常啟動。</li>
+<li>專案根目錄有 <code>.env</code>，而且 <code>.env</code> 已加入 <code>.gitignore</code>。</li>
+</ul>
+
+<p><code>.env</code> 會放入 webhook 的 signing secret。它就像驗證來信真偽的印章，不能跟著程式碼一起進入公開版控。</p>
+
+<h2>先看整體流程</h2>
+
+<p>這次會把三個角色接在一起：</p>
+
+<ol>
+<li><strong>Clerk</strong>：發生 user 事件後，向 webhook endpoint 發送 <code>POST</code>。</li>
+<li><strong>ngrok</strong>：提供一個公開網址，再把請求轉送到你電腦上的 8081 port。</li>
+<li><strong>你的 app</strong>：在 <code>/api/webhooks/clerk</code> 接收事件，並用 signing secret 驗證請求。</li>
+</ol>
+
+<p>問題在於，<code>http://localhost:8081</code> 只有你自己的電腦看得見。Clerk 的伺服器在網際網路上，無法直接連到這個位址。ngrok 就像替本機打開一扇臨時的對外大門，讓 Clerk 有路可以走進來。</p>
+
+<figure class="lesson-figure"><img src="./local-webhook-with-ngrok-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟一：在本機啟動 ngrok</h2>
+
+<p>先開一個新的終端機視窗。第一次使用 ngrok 時，先安裝工具並設定 authtoken，接著把本機的 8081 port 公開出去：</p>
+
+<pre><code># macOS，第一次安裝
+brew install ngrok/ngrok/ngrok
+
+# 到 ngrok 官網登入後取得 authtoken，設定一次
+ngrok config add-authtoken &lt;你的 token&gt;
+
+# 把本機 8081 port 公開出去
+ngrok http 8081</code></pre>
+
+<p>最後一行會啟動一個持續執行的前景程序，並印出轉發位址：</p>
+
+<pre><code>Forwarding   https://a1b2-203-0-113-5.ngrok-free.app -&gt; http://localhost:8081</code></pre>
+
+<p>這表示送到 <code>https://a1b2-....ngrok-free.app</code> 的請求，都會被轉送到你電腦的 8081 port。對 Clerk 來說，它是一個公開網址；對你的 app 來說，請求仍然是送進本機。</p>
+
+<p><strong>不要關掉這個終端機視窗。</strong>ngrok 程序一旦停止，隧道就會中斷，Clerk 也就無法送入 webhook。</p>
+
+<h2>步驟二：在 Clerk 建立 webhook endpoint</h2>
+
+<p>回到 Clerk 後台，依序選擇 <strong>Configure → Developers → Webhooks</strong>，再按 <strong>Add Endpoint</strong>。</p>
+
+<p>你會看到 Endpoint URL 與 events 兩個必要設定。先把 ngrok 顯示的公開網址加上你的 webhook route，填入 Endpoint URL。這個課程使用的路徑是 <code>/api/webhooks/clerk</code>：</p>
+
+<pre><code>https://a1b2-203-0-113-5.ngrok-free.app/api/webhooks/clerk</code></pre>
+
+<p>不能只填 ngrok 的網域；少了 route 路徑，請求就不會到正確的 handler。</p>
+
+<p>接著訂閱以下三個事件：</p>
+
+<ul>
+<li><code>user.created</code></li>
+<li><code>user.updated</code></li>
+<li><code>user.deleted</code></li>
+</ul>
+
+<p>建立 endpoint 後，Clerk 會提供一組 <strong>signing secret</strong>，通常長得像 <code>whsec_...</code>。下一步要把它放進專案，讓 webhook handler 能驗證事件來源。</p>
+
+<blockquote class="bad-code">
+ngrok 免費版的轉發網址每次重啟都會換一組。網址一換，Clerk 那邊的 endpoint URL 就失效，事件會送不進來。這是最常見的「昨天還能跑、今天就不動」原因——重新啟動 ngrok 後，記得回 Clerk 更新 URL。
+</blockquote>
+
+<h2>步驟三：把 signing secret 放進 .env</h2>
+
+<p>複製 Clerk 提供的 signing secret，加入專案根目錄的 <code>.env</code>。變數名稱必須和程式讀取的名稱一致：</p>
+
+<pre><code>CLERK_WEBHOOK_SIGNING_SECRET=whsec_xxxxxxxxxxxxxxxxxxxx</code></pre>
+
+<p>接著再次確認 <code>.env</code> 已經寫在 <code>.gitignore</code> 裡。這組密鑰是驗證 webhook 真偽的唯一憑證；如果它被提交到公開 repo，其他人就可能偽造能通過驗簽的事件。</p>
+
+<p>修改 <code>.env</code> 後，請<strong>重啟正在執行的 web server</strong>。環境變數通常會在程序啟動時載入，單純儲存檔案不會讓已經啟動的 server 自動更新。</p>
+
+<h2>步驟四：確認 Expo 真的提供 API route</h2>
+
+<p>Expo 的 API routes 需要把 <code>app.json</code> 的 <code>web.output</code> 設成 <code>"server"</code>。如果沒有這項設定，<code>/api/webhooks/clerk</code> 不會被提供，Clerk 送來的請求就會得到 404。</p>
+
+<pre><code>// app.json
+"web": {
+  "bundler": "metro",
+  "output": "server"
+}</code></pre>
+
+<p>如果你剛修改 <code>app.json</code> 或 <code>.env</code>，請先重啟 app server，再進行測試。</p>
+
+<h2>步驟五：分開啟動三個終端機程序</h2>
+
+<p>現在本機會有幾個需要持續執行的程序。建議各自使用不同的終端機視窗，這樣每個程序的 log 都容易查看：</p>
+
+<table>
+<thead>
+<tr><th>終端機</th><th>跑什麼</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>Expo / app server</td><td>提供 app 與 API routes，接收轉發進來的 webhook</td></tr>
+<tr><td>2</td><td><code>ngrok http 8081</code></td><td>把本機 port 公開給 Clerk</td></tr>
+<tr><td>3</td><td>trigger.dev 的背景 worker</td><td>執行同步任務（下一節才會用到）</td></tr>
+</tbody>
+</table>
+
+<p>這三個視窗可以想成三段接力：app server 負責接球，ngrok 負責把球送進來，背景 worker 則會在下一節處理後續同步工作。</p>
+
+<figure class="lesson-figure"><img src="./local-webhook-with-ngrok-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟六：用登入流程驗證 webhook</h2>
+
+<p>現在做一次端到端測試：</p>
+
+<ol>
+<li>確認 Expo、ngrok 與需要的背景程序都在執行。</li>
+<li>在模擬器登出。</li>
+<li>重新登入一次，觸發一則 <code>user.created</code> 事件。</li>
+<li>檢查 Clerk 後台與本機終端機的紀錄。</li>
+</ol>
+
+<p>預期會看到以下結果：</p>
+
+<ol>
+<li><strong>Clerk 後台的 webhook delivery log</strong>：有一筆 <code>user.created</code>，回應碼是 200。</li>
+<li><strong>本機終端機的 log</strong>：看到 handler 收到事件，例如顯示已接收 <code>user.created</code>。</li>
+</ol>
+
+<h2>沒有成功時，照症狀排查</h2>
+
+<p>如果事件沒有進來，先不要同時亂改設定。依照回應症狀逐項檢查：</p>
+
+<table>
+<thead>
+<tr><th>症狀</th><th>可能原因</th></tr>
+</thead>
+<tbody>
+<tr><td>404</td><td>路徑拼錯，或 <code>app.json</code> 沒設 <code>output: "server"</code>，或 server 沒重啟</td></tr>
+<tr><td>400</td><td><code>CLERK_WEBHOOK_SIGNING_SECRET</code> 貼錯，或改了 <code>.env</code> 沒重啟</td></tr>
+<tr><td>完全沒紀錄</td><td>ngrok 沒在跑，或它的網址換了但 Clerk 還是舊的</td></tr>
+</tbody>
+</table>
+
+<p>如果是 Clerk 後台設定畫面卡住，可以把畫面截圖，再補上一句「我想讓這個 endpoint 收到 <code>user.created</code>」交給你的 AI agent。儀表板上的設定位置，通常用畫面比用文字描述更精確。</p>
+
+<h2>做完後，應該長什麼樣？</h2>
+
+<p>完成設定後，Clerk 的 webhook endpoint 應該使用「ngrok 公開網址 + <code>/api/webhooks/clerk</code>」；它訂閱 <code>user.created</code>、<code>user.updated</code> 與 <code>user.deleted</code>；signing secret 則存放在 <code>.env</code>，而不是程式碼或公開 repo。</p>
+
+<p>當你重新登入觸發事件時，Clerk delivery log 應該回傳 200，本機終端機也應該看得到 handler 收到事件。這就代表請求已經成功穿過 ngrok，抵達你的本機 endpoint。</p>
+
+<blockquote>
+本機收不到 Clerk webhook，是因為 <code>localhost</code> 不是公開網址。解法是用 ngrok 開一條隧道，把本機 port 對外公開；在 Clerk 建立 endpoint，URL 填「ngrok 網址 + route 路徑」，訂閱三個 user 事件；把 signing secret 寫進 <code>.env</code> 並重啟 server；最後用 Expo、ngrok、trigger.dev 三個終端機一起跑，登入一次驗證事件有進來。ngrok 免費網址會變動，是常見的失效來源。
+</blockquote>
+
+<p>到這裡，你已經有一個能收到事件、也能驗證簽章的 endpoint。但「收到」不代表「處理完成」。資料庫寫入這種可能失敗的工作，應該放在哪裡執行，正是下一節要做的決定。</p>
+
+<p>延伸閱讀：ngrok 快速上手 <a href="https://ngrok.com/docs/getting-started/">ngrok.com/docs/getting-started</a>。</p>
+
+<div class="lesson-nav">
+  <div><a href="./webhook-event-mechanics.html">← 上一步：Webhook 是什麼：事件、簽章與重送</a></div>
+  <div><a href="./handler-to-background-task.html">下一步：Webhook 收到之後：直接寫 DB 還是丟背景任務？ →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 Clerk 無法直接送 webhook 到你的 localhost？" data-correct="2" data-explain="localhost 只在你自己的電腦內有意義，公網上的伺服器無法路由到它，所以需要公開網址。">
+  <button class="opt">因為 Clerk 封鎖了本機位址</button>
+  <button class="opt">因為 localhost 沒有安裝 HTTPS</button>
+  <button class="opt">因為本機位址不是公開網址</button>
+  <button class="opt">因為 Expo 不接受外來的請求</button>
+</div>
+<div class="quiz" data-question="ngrok http 8081 這行指令實際上做了什麼？" data-correct="1" data-explain="它開一條隧道，把公開網址的請求轉發到本機的 8081 port。">
+  <button class="opt">把 app 部署到正式環境主機</button>
+  <button class="opt">把公開網址轉發到本機 port</button>
+  <button class="opt">在本機啟動一個 Docker 容器</button>
+  <button class="opt">把 Clerk 的事件存進資料庫</button>
+</div>
+<div class="quiz" data-question="Clerk endpoint 的 URL 應該填什麼？" data-correct="3" data-explain="要填 ngrok 的公開網址再加上 route 路徑 /api/webhooks/clerk。">
+  <button class="opt">只填 ngrok 給的網域本身</button>
+  <button class="opt">填 Clerk 後台的預設網址</button>
+  <button class="opt">填 localhost 加上 route 路徑</button>
+  <button class="opt">填 ngrok 網址加 route 路徑</button>
+</div>
+<div class="quiz" data-question="改完 .env 的簽章密鑰後，下一步必須做什麼？" data-correct="0" data-explain="環境變數在程序啟動時載入，必須重啟正在跑的 web server 才會生效。">
+  <button class="opt">重啟正在跑的 web server</button>
+  <button class="opt">重新安裝所有 npm 套件</button>
+  <button class="opt">把 .env 提交到版控保存</button>
+  <button class="opt">重新產生 Clerk 的應用程式</button>
+</div>
+<div class="quiz" data-question="Clerk webhook 回傳 404，最可能是哪裡出問題？" data-correct="2" data-explain="404 通常代表找不到 route，例如路徑拼錯或 app.json 沒設 output: server，導致 API route 不存在。">
+  <button class="opt">signing secret 貼成舊的密鑰</button>
+  <button class="opt">ngrok 的隧道剛剛被關掉</button>
+  <button class="opt">route 路徑或 server 設定不對</button>
+  <button class="opt">使用者沒有完成 email 驗證</button>
+</div>
+<div class="quiz" data-question="ngrok 免費版最常見的「昨天能用今天失效」原因是什麼？" data-correct="3" data-explain="免費版轉發網址每次重啟都會換，換了之後 Clerk 的 endpoint URL 就失效。">
+  <button class="opt">Clerk 每天會自動刪除 endpoint</button>
+  <button class="opt">Signing secret 每天自動輪替</button>
+  <button class="opt">資料庫連線每天會逾時一次</button>
+  <button class="opt">轉發網址每次重啟都會換</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Clerk 與資料庫同步（Webhook） · Step 3/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

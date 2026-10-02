@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Onboarding 硬 gate：為什麼一定要先於登入</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Onboarding 硬 gate：為什麼一定要先於登入</h1>
+<p class="meta">Step 5/5 · Welcome 與 Onboarding 流程</p>
+
+<h2>先決定：登入和問卷，誰應該先出現？</h2>
+
+<p>想像一個很常見的情境：使用者沒有按 welcome 的主按鈕進入 onboarding，而是直接從登入頁用 Apple 帳號登入，順利抵達首頁。技術上看起來一切正常，但資料庫裡沒有性別、身高、體重或目標，app 根本算不出應該顯示多少卡路里。</p>
+
+<p>這時候畫面該顯示什麼？如果使用者關掉 app 後再打開，要不要重新問一次？如果個人資料還在載入，是要顯示空白，還是直接把他送回問卷？</p>
+
+<p>這些問題其實都指向同一個抉擇：onboarding 和登入，誰先發生？以及登入之後，是否要用一道硬性的 <strong>gate</strong> 擋住還沒完成問卷的人。</p>
+
+<h2>兩種順序，兩種代價</h2>
+
+<p>最直覺的做法是「先登入、再問卷」。使用者先建立帳號，之後填寫的答案自然知道要綁定到誰。另一種做法是 Cal AI 採用的「先問卷、再登入」：使用者先以匿名狀態填完問卷，看到根據答案算出的計畫，覺得有價值後，再用 Apple 或 Google 登入，把結果存進帳號。</p>
+
+<p>兩種順序都能成立，但它們把代價放在不同位置：</p>
+
+<table>
+<thead>
+<tr><th>順序</th><th>流程</th><th>好處</th><th>代價</th></tr>
+</thead>
+<tbody>
+<tr><td>先登入再問卷</td><td>註冊 → 問卷 → 進首頁</td><td>答案一開始就有帳號歸屬，資料不容易遺失</td><td>註冊門檻擋在價值之前，使用者還沒看到好處，就得先交出帳號</td></tr>
+<tr><td>先問卷再登入</td><td>問卷 → 看計畫 → 登入儲存</td><td>先給使用者一個「原來如此」的成果，用結果換取註冊意願</td><td>必須先在登入前算好計畫，暫時保存，登入後再把它綁到帳號</td></tr>
+</tbody>
+</table>
+
+<p>「先問卷再登入」之所以可行，靠的是前面提過的 <code>draft</code>。匿名狀態下算出的計畫，先放在這個暫時物件裡；等使用者登入後，再把計畫和個人檔案一起送到伺服器，存進資料庫。</p>
+
+<p>換句話說，使用者是「先看到成果，再決定要不要留下」，而不是「先註冊，再祈禱結果值得」。</p>
+
+<figure class="lesson-figure"><img src="./onboarding-as-hard-gate-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這兩種順序也不一定只能二選一。它們可以同時存在於同一個 app：第一次造訪的人由 welcome 的主按鈕帶進問卷，已經有帳號的人則可以從次要連結直接登入。真正需要處理的，不是 welcome 頁面上放哪一顆按鈕，而是登入之後「有帳號、沒填問卷」的情況。</p>
+
+<h2>用這幾個問題做判斷</h2>
+
+<p>在決定順序之前，可以先問自己下面幾個問題。答案會告訴你，onboarding 應該是可略過的步驟，還是一道必須通過的門。</p>
+
+<ol>
+<li><strong>核心價值是否需要問卷資料才能算出來？</strong>如果首頁的內容，例如熱量目標或個人化建議，完全建立在問卷答案上，那問卷就是硬需求，不能讓使用者跳過。</li>
+<li><strong>匿名狀態下能不能先算出結果？</strong>如果可以，可以採用先問卷再登入，用成果換取註冊；如果不行，就必須讓登入先發生。</li>
+<li><strong>使用者用其他方式登入時，會不會出現「有帳號、沒答案」？</strong>只要有任何一條路徑可能造成這種狀態，就需要設計一道守衛，把使用者導回問卷。</li>
+<li><strong>重新載入時，能不能分辨「已完成」和「還沒載入」？</strong>如果分不出來，使用者可能每次開 app 都被問一次。這通常比顯示空狀態更傷體驗。</li>
+</ol>
+
+<p>以 Cal AI 的情況來看，核心價值需要問卷資料，匿名狀態又能先算出計畫，而且確實存在「登入但沒完成問卷」的路徑。因此它採用先問卷再登入，同時在登入後的分頁區加上守衛。</p>
+
+<h2>登入後的 gate 應該放在哪裡？</h2>
+
+<p>把守衛放在登入後分頁區的 <code>_layout.tsx</code>，是一個關鍵的結構選擇。這個檔案是所有分頁共同的入口，因此只要在這裡判斷一次，就能一起管住首頁、掃描和個人檔案，不必每一頁都重複寫登入檢查。</p>
+
+<p>這個入口可以像漏斗一樣逐層篩選：</p>
+
+<ul>
+<li>先等待 Clerk，也就是負責身分驗證的服務，回報登入狀態。</li>
+<li>還沒登入的人，送回 welcome。</li>
+<li>個人資料請求失敗時，顯示重試畫面，不要把錯誤吞掉，假裝資料不存在。</li>
+<li>已登入但沒有完成問卷紀錄的人，例如缺少 <code>onboardingCompletedAt</code> 這個完成時間戳，送回問卷。</li>
+<li>全部通過後，才真正渲染底部的分頁列。</li>
+</ul>
+
+<p>這樣一來，每一個分頁都不必再自己猜「我現在該不該檢查登入或 onboarding」。所有人先經過同一個入口，通過門檻後才進得來。</p>
+
+<figure class="lesson-figure"><img src="./onboarding-as-hard-gate-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>規則會翻轉的情況：看起來像未完成，其實只是還沒載入</h2>
+
+<p>「登入但沒完成問卷，就導回問卷」是一條好規則，但它不能粗暴地套用在所有空值上。gate 必須分辨兩種完全不同的狀態：<strong>未完成</strong>，以及<strong>資料還沒載入</strong>。</p>
+
+<p>兩者在畫面上可能都像是一片空白，處理方式卻相反：</p>
+
+<ul>
+<li>如果確認使用者尚未完成問卷，就導回 onboarding。</li>
+<li>如果資料還在載入，就顯示載入狀態。</li>
+<li>如果請求失敗，就顯示重試畫面。</li>
+</ul>
+
+<p>如果把「還沒載入」誤判成「未完成」，使用者每次開啟 app 都會被丟回問卷。這就像門衛還沒查完名單，就先把所有人趕回入口，體驗當然會很糟。</p>
+
+<p>因此，Cal AI 的判斷是：資料載入失敗時顯示重試畫面，只有在資料已經確認回來、卻缺少完成時間戳時，才導回問卷。</p>
+
+<figure class="lesson-figure"><img src="./onboarding-as-hard-gate-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>另一個反例：完成狀態只存在記憶體</h2>
+
+<p>還有一個常見的翻車點：把「是否填過問卷」存在畫面上的變數裡。這種做法在目前這次開啟 app 時看似有效，但使用者一旦關掉 app，這個狀態就會消失。</p>
+
+<p>結果是，使用者下次重新載入時，onboarding 又跑了一次。這通常代表完成狀態只存在記憶體，或程式用了寫死的旗標，而沒有真正記錄到帳號資料。</p>
+
+<p>正確的做法是把「完成問卷」持久化，例如在帳號資料上保存一個完成時間。下次登入時讀出這個時間，gate 才能分辨使用者是已經完成，還是真的從未完成。</p>
+
+<blockquote>
+小提醒：如果 gate 反覆觸發，問題不一定在 gate 的判斷邏輯。也可能是環境變數沒有設好，導致資料儲存失敗，讓「應該已完成」看起來像「從未完成」。偵錯時，先確認儲存請求到底成功還是失敗，再回頭檢查判斷條件。
+</blockquote>
+
+<h2>帶回 app 的決策規則</h2>
+
+<p>可以用下面這條規則做最後檢查：</p>
+
+<blockquote>
+如果核心功能需要問卷資料，匿名狀態又能先算出結果，就先讓使用者填問卷、看計畫，再登入儲存。無論使用者從哪條路登入，登入後都要由共同入口執行硬 gate：確認登入狀態、等待資料載入、處理錯誤，只有在確認缺少完成紀錄時才導回問卷。完成狀態必須持久化，不能只放在記憶體裡。
+</blockquote>
+
+<p>也可以把它濃縮成四個檢查點：</p>
+
+<ul>
+<li>問卷是不是核心價值的必要輸入？</li>
+<li>匿名狀態能不能先產生計畫？</li>
+<li>登入後是否有一個統一的 gate 管住所有分頁？</li>
+<li>程式能不能分辨未完成、載入中和請求失敗？</li>
+</ul>
+
+<p>其中「載入中」和「重試畫面」並不是小細節。資料還沒回來時畫面該呈現什麼，本身就需要設計；onboarding gate 只是其中一個例子，後面的內容會繼續處理更多空狀態與錯誤狀態。</p>
+
+<div class="lesson-nav">
+  <div><a href="./batch-build-and-verify.html">← 上一步：批次建造 onboarding：設計參考與驗證迴圈</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="「先問卷再登入」最大的好處是什麼？" data-correct="1" data-explain="讓使用者在匿名時先看到算好的成果，用價值換取註冊意願。">
+  <button class="opt">可以省下建立使用者帳號的伺服器成本</button>
+  <button class="opt">先給價值再要求註冊，轉換意願較高</button>
+  <button class="opt">問卷答案會自動同步到所有裝置</button>
+  <button class="opt">登入流程可以完全不需要用密碼</button>
+</div>
+<div class="quiz" data-question="draft 物件在「先問卷再登入」流程裡的角色是什麼？" data-correct="3" data-explain="匿名時算好的計畫先暫放 draft，登入後再連同個人檔案存進資料庫。">
+  <button class="opt">在使用者登入後刪除所有問卷答案</button>
+  <button class="opt">負責驗證使用者輸入的答案是否合法</button>
+  <button class="opt">決定登入頁要顯示 Google 還是 Apple</button>
+  <button class="opt">暫存匿名時算好的計畫以供登入後綁定</button>
+</div>
+<div class="quiz" data-question="守衛放在登入後分頁區的 _layout，主要好在哪裡？" data-correct="0" data-explain="它是所有分頁共同入口，一段判斷就能管住全部畫面。">
+  <button class="opt">一段判斷就能管住所有分頁畫面</button>
+  <button class="opt">可以讓每一頁的載入速度都變快</button>
+  <button class="opt">可以自動產生每一頁的單元測試</button>
+  <button class="opt">可以讓登入頁不再需要任何驗證</button>
+</div>
+<div class="quiz" data-question="把「未完成問卷」與「資料還沒載入」分開處理，是為了避免什麼？" data-correct="2" data-explain="若把載入中誤判成未完成，使用者每次開 app 都會被丟回問卷。">
+  <button class="opt">避免使用者不小心跳過太多問卷題目</button>
+  <button class="opt">避免伺服器同時收到太多重複請求</button>
+  <button class="opt">避免每次開 app 都被丟回問卷</button>
+  <button class="opt">避免問卷答案在傳送途中被攔截</button>
+</div>
+<div class="quiz" data-question="重新載入後 onboarding 又跑一次，通常來自什麼？" data-correct="1" data-explain="完成狀態若只存在記憶體或寫死了一個旗標，重開就會忘了。">
+  <button class="opt">伺服器的資料庫在夜間會自動清空</button>
+  <button class="opt">完成狀態沒有被持久化保存下來</button>
+  <button class="opt">使用者的 Apple 帳號沒有綁定成功</button>
+  <button class="opt">問卷陣列的順序在重新載入時被打亂</button>
+</div>
+<div class="quiz" data-question="遇到 onboarding gate 反覆觸發，課程建議先檢查什麼？" data-correct="3" data-explain="有時不是判斷邏輯錯，而是資料儲存失敗，讓已完成看起來像未完成。">
+  <button class="opt">使用者的手機是否安裝了最新版本系統</button>
+  <button class="opt">問卷畫面的字型是否正確載入顯示</button>
+  <button class="opt">底部分頁的圖示是否使用原生元件</button>
+  <button class="opt">資料儲存的請求究竟是成功還是失敗</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Welcome 與 Onboarding 流程 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

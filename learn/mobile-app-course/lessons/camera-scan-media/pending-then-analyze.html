@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>先存 pending 再背景分析：非同步管線的狀態機</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>先存下 pending，再交給背景分析：非同步管線的狀態機</h1>
+<p class="meta">Step 3/5 · 拍照掃描與媒體上傳</p>
+
+<h2>學習目標</h2>
+<p>這一節要看懂：為什麼餐點照片要先在資料庫建立一列，標記為 <code>analyzing</code>，再交給背景 task 分析；也要能追蹤每個出口，最後如何把狀態收斂到 <code>completed</code> 或 <code>failed</code>。</p>
+
+<h2>為什麼不能讓 HTTP 請求一路等 AI</h2>
+
+<p>想像使用者剛上傳照片，按下「Analyze the food」。接下來，視覺模型要辨識盤子裡的食物、估算份量，再換算熱量與三大營養素。這個過程可能要好幾秒，而且中間不一定順利：模型可能回傳格式不正確的內容，網路可能中斷，OpenAI 也可能暫時忙線。</p>
+
+<p>如果我們讓按鈕背後的 HTTP 請求一直等到 AI 回覆，使用者會先遇到三個問題：畫面可能長時間停在不知道是否有進度的狀態；手機切到其他 app 或連線中斷後，整次分析可能白費；只要其中一次失敗，使用者最後拿到的就只有錯誤訊息。</p>
+
+<p>比較穩妥的做法，是把「送出照片」和「等待分析結果」拆成兩件事。使用者按下按鈕時，server 只做幾個很快的動作，接著立刻回覆：「我收到了，正在分析。」真正耗時的 AI 工作在背景執行，完成後再更新資料庫；畫面則透過另一條通道即時收到結果。</p>
+
+<p>這條管線可以想成一台狀態機。每一列餐點先從 <code>analyzing</code> 出發，最後應該走到 <code>completed</code> 或 <code>failed</code>。就像包裹從「配送中」開始，最後必須變成「已送達」或「配送失敗」；如果一直停在「配送中」，使用者就永遠不知道到底發生了什麼。</p>
+
+<figure class="lesson-figure"><img src="./pending-then-analyze-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>三個零件，靠一支 API route 接起來</h2>
+
+<p>這條管線有三個各自獨立的零件：ImageKit 負責存照片，Postgres 的 <code>meals</code> 表負責記錄餐點狀態，Trigger.dev 負責執行耗時的 AI task。它們彼此不需要知道太多對方的內部細節，真正負責接線的是 API route。</p>
+
+<table>
+<thead>
+<tr><th>零件</th><th>它負責什麼</th><th>它不知道什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>ImageKit</td><td>保管照片，回傳照片網址</td><td>這張照片屬於哪一餐，也不知道分析進行到哪裡</td></tr>
+<tr><td>meals 資料列</td><td>記錄餐點狀態與分析結果</td><td>照片是如何上傳的，也不知道 task 執行到哪一步</td></tr>
+<tr><td>Trigger.dev task</td><td>呼叫視覺模型，再把結果寫回資料庫</td><td>是哪個使用者發起，也不知道畫面要怎麼呈現</td></tr>
+</tbody>
+</table>
+
+<p>這樣切分職責的好處，是每個零件都可以單獨替換。想更換圖床時，不必重寫 AI task；想換另一顆模型時，也不必讓前端跟著改；前端改版時，ImageKit 同樣可以維持不動。API route 就像轉運站，把照片、資料列與背景 task 接在同一條路線上。</p>
+
+<figure class="lesson-figure"><img src="./pending-then-analyze-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>按下按鈕後：四個快速動作</h2>
+
+<p>使用者按下 Analyze 後，前端會把 base64 照片送到 <code>POST /api/meals</code>。這支 route 會先驗證身分、確認照片格式，再查出使用者。接著才進入管線的四個關鍵動作：上傳照片、建立資料列、觸發背景 task，以及記錄這次執行的識別碼。</p>
+
+<pre><code>// 1. 照片進 ImageKit，拿回網址
+const imageUrl = await uploadToImageKit(parsed.data.image, `meal-${user.id}-${Date.now()}.jpg`);
+
+// 2. 先在 DB 建一列，狀態預設就是 analyzing
+const [meal] = await db.insert(meals).values({ userId: user.id, imageUrl }).returning();
+
+// 3. 觸發背景 task，把這列交給它
+const handle = await tasks.trigger&lt;typeof analyzeMeal&gt;('analyze-meal', {
+  mealId: meal.id,
+  imageUrl,
+});
+
+// 4. 記下這次 run 的 id，方便前端訂閱與除錯
+await db.update(meals).set({ triggerRunId: handle.id }).where(eq(meals.id, meal.id));
+
+return Response.json({ meal, runId: handle.id, publicAccessToken: handle.publicAccessToken });</code></pre>
+
+<p>這個順序不能任意交換。照片要先上傳，因為背景 task 需要一個網址；資料列也要先建立，因為 task 需要 <code>mealId</code>，才知道結果應該寫回哪一列。</p>
+
+<figure class="lesson-figure"><img src="./pending-then-analyze-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>API 回傳給前端的內容有三樣：這一列 <code>meal</code>、這次執行的 <code>runId</code>，以及 <code>publicAccessToken</code>。前兩樣是資料，第三樣則像一張門票，讓前端稍後能訂閱這次 run 的狀態。我們會在下一節處理這張門票如何派上用場。</p>
+
+<p>還有一個容易被忽略的細節：<code>analyzing</code> 不是在 route 裡硬寫上去，而是由 schema 的預設值提供。</p>
+
+<pre><code>export const mealStatusEnum = pgEnum("meal_status", ["analyzing", "completed", "failed"]);
+
+// ...
+status: mealStatusEnum().notNull().default("analyzing"),</code></pre>
+
+<p>因此，一列餐點建立的那一刻，就自然處於 <code>analyzing</code>。這個預設值不是方便省事而隨手選的，而是狀態機的起點：結果尚未回來之前，最準確的事實就是「正在分析」。</p>
+
+<h2>背景 task：呼叫模型，依結果分流</h2>
+
+<p>背景這一側由 Trigger.dev 的 <code>schemaTask</code> 負責。可以把它理解成一個有輸入合約的背景工作：它先宣告輸入資料必須長什麼樣子，也宣告遇到暫時性錯誤時要怎麼重試。</p>
+
+<pre><code>export const analyzeMeal = schemaTask({
+  id: "analyze-meal",
+  schema: z.object({
+    mealId: z.string().uuid(),
+    imageUrl: z.string().url(),
+  }),
+  retry: { maxAttempts: 2 }, // 一次transient／parse 重試，之後才判失敗
+  maxDuration: 120,
+  run: async ({ mealId, imageUrl }) =&gt; {
+    // ...
+  },
+});</code></pre>
+
+<p><code>retry: { maxAttempts: 2 }</code> 表示這個 task 最多嘗試兩次。第一次如果因為暫時性錯誤而失敗，系統會自動再跑一次，使用者不需要介入。<code>maxDuration: 120</code> 則設定兩分鐘的時間上限，避免任務一直卡住。</p>
+
+<p>這裡的重點是：失敗重試不必由我們自己寫一個迴圈。把策略交給背景執行的基礎設施，task 本身就能專心處理「如何分析一張照片」。</p>
+
+<p>進入 <code>run</code> 後，task 會建立 OpenAI client，並用結構化輸出的方式請模型看圖。</p>
+
+<pre><code>const response = await openai.responses.parse({
+  model: MODEL,
+  input: [
+    { role: "system", content: SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: [
+        { type: "input_image", image_url: imageUrl + VISION_TRANSFORM, detail: "auto" },
+      ],
+    },
+  ],
+  text: { format: zodTextFormat(visionSchema, "meal") },
+});</code></pre>
+
+<p>這段設計有兩個值得留意的地方。第一，送給模型的網址接上了 <code>VISION_TRANSFORM</code>，使用的是縮到 1024 寬的副本；原圖仍然保留在那列資料中，供畫面使用。這就像把原始檔留在倉庫，分析時則拿一份適合處理的工作副本。</p>
+
+<p>第二，<code>zodTextFormat(visionSchema, "meal")</code> 把模型應該回傳的內容變成可驗證的合約。模型必須填入 <code>is_food</code>、<code>name</code>、<code>calories</code>、<code>protein_g</code>、<code>carbs_g</code>、<code>fat_g</code> 這些欄位，而不是自由發揮寫一段難以解析的文字。</p>
+
+<h2>三種出口：每一條路都要離開 analyzing</h2>
+
+<p>模型回覆後，task 會根據結果走向不同出口。無論走哪一條，都不能讓資料列一直留在 <code>analyzing</code>。</p>
+
+<p>否則，首頁看到的就會是一個永遠轉不停的 spinner。這是非同步系統最常見、也最容易被忽略的問題：工作可能已經結束了，但資料庫沒有留下結束狀態，畫面只好一直猜它是不是還在跑。</p>
+
+<h3>出口一：照片裡不是食物</h3>
+
+<pre><code>if (!out.is_food) {
+  logger.warn("Photo is not food, discarding meal", { mealId });
+  await db.delete(meals).where(eq(meals.id, mealId));
+  return { status: "failed" as const, errorReason: "not_food" as const };
+}</code></pre>
+
+<p>當模型用 <code>is_food: false</code> 表示照片裡沒有食物時，這列資料會直接被刪除。</p>
+
+<p>這裡為什麼不是把它標成 <code>failed</code>？因為椅子的照片不是「分析失敗的餐點」，而是「根本不是餐點」。如果把它留下來，首頁餐點列表、每日總熱量和連續記錄天數，都必須額外處理這個特例；直接刪除後，這些地方就不用各自加一層判斷。</p>
+
+<p>那畫面要怎麼知道該顯示「這不是食物」？它讀的是這次 run 的 output，而不是那一列資料。這個看似錯位的設計，會在下一節說明。</p>
+
+<h3>出口二：成功辨識</h3>
+
+<pre><code>const result = {
+  name: out.name,
+  calories: out.calories,
+  proteinG: out.protein_g,
+  carbsG: out.carbs_g,
+  fatG: out.fat_g,
+};
+
+await db.update(meals).set({ ...result, status: "completed" }).where(eq(meals.id, mealId));
+
+return { status: "completed" as const, ...result };</code></pre>
+
+<p>成功時，task 會把模型回傳的六個欄位寫進資料列，並把狀態改成 <code>completed</code>。</p>
+
+<p>同一份結果還會從 task 的回傳值送出去。這樣一來，掃描畫面可以直接讀取 run 的 output 來顯示數字，不必為了剛建立的資料列再查一次資料庫。資料庫負責留下長期結果，run output 則負責快速把這次分析的結果交給正在等待的畫面。</p>
+
+<h3>出口三：重試用完後仍然失敗</h3>
+
+<pre><code>onFailure: async ({ payload, error }) =&gt; {
+  logger.error("analyze-meal exhausted retries", { mealId: payload.mealId, error: String(error) });
+  await db
+    .update(meals)
+    .set({ status: "failed", errorReason: "analysis_failed" })
+    .where(eq(meals.id, payload.mealId));
+},</code></pre>
+
+<p>如果兩次嘗試都用完，task 仍然無法完成，<code>onFailure</code> 會被呼叫。它會把資料列標成 <code>failed</code>，並記下 <code>analysis_failed</code> 這個原因。</p>
+
+<p>不過，這裡有個需要誠實面對的邊界：<code>onFailure</code> 處理的是「重試耗盡」，但不一定涵蓋 <code>CRASHED</code>、<code>SYSTEM_FAILURE</code> 這類 task 本身無法正常收尾的狀況。遇到這些情形，資料列可能仍停在 <code>analyzing</code>。</p>
+
+<p>這不代表狀態機的設計失敗，而是提醒我們：設計目標是讓每條路都收斂，但實作仍可能存在需要補強的縫隙。之後可以透過排程任務，定期清理長時間沒有進展的資料列。</p>
+
+<figure class="lesson-figure"><img src="./pending-then-analyze-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把這個觀念接回你的 app</h2>
+
+<blockquote>
+耗時的 AI 分析不能卡在請求路徑上等待，因此要拆成非同步管線。使用者按下 Analyze 時，API route 只做四件快速的事：把照片上傳到 ImageKit、建立一列預設為 analyzing 的 meals、觸發 analyze-meal task、記下 run id，並回傳 meal、runId 與 publicAccessToken。背景 task 使用結構化輸出請視覺模型分析照片，接著走三條出口之一：不是食物就刪除資料列並回傳 not_food；成功就寫回六個欄位並標記 completed；重試耗盡就由 onFailure 標記 failed。無論走哪一條，都必須讓資料列離開 analyzing，否則首頁會留下永遠轉不停的 spinner。
+</blockquote>
+
+<p>這個設計的核心，不只是「把工作丟到背景執行」，而是讓資料庫狀態、背景 task 與前端畫面各自扮演清楚的角色：API route 負責快速收件，資料列負責記錄目前狀態，背景 task 負責完成耗時工作，而 run output 則負責把結果送回正在等待的畫面。</p>
+
+<p>到這裡，照片進入管線、狀態離開管線的路徑已經完整。不過前端此時手上只有一個 <code>runId</code> 和一枚 token，還不知道結果什麼時候準備好。下一節會比較兩種等待方式：針對單一 run 開啟即時訂閱，或針對一整批餐點進行輪詢，並說明為什麼這個 app 會同時使用兩條路。</p>
+
+<div class="lesson-nav">
+  <div><a href="./imagekit-upload.html">← 上一步：照片進 ImageKit：server-side 上傳與尺寸策略</a></div>
+  <div><a href="./realtime-vs-polling.html">下一步：訂閱還是輪詢：前端怎麼知道分析完成了？ →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 meals 的 status 預設值是 analyzing，而不是先寫 completed？" data-correct="1" data-explain="資料列在照片剛上傳、AI 還沒回覆時就建立了，那個當下的事實就是「正在分析」。">
+  <button class="opt">因為 Postgres 規定狀態欄位要有預設值</button>
+  <button class="opt">因為建立當下 AI 還沒回覆，事實就是分析中</button>
+  <button class="opt">因為 analyzing 的查詢速度比 completed 快</button>
+  <button class="opt">因為這樣才能觸發 Trigger.dev 的背景任務</button>
+</div>
+<div class="quiz" data-question="API route 的四步裡，為什麼一定要先建立 meals 資料列才能觸發 task？" data-correct="3" data-explain="task 需要 mealId 才知道要更新哪一列，所以列必須先存在。">
+  <button class="opt">因為 ImageKit 只接受已登記的檔案編號</button>
+  <button class="opt">因為 Trigger.dev 規定要先有資料庫交易</button>
+  <button class="opt">因為前端需要 meal 才能顯示分析結果</button>
+  <button class="opt">因為 task 需要 mealId 才知道要更新哪一列</button>
+</div>
+<div class="quiz" data-question="模型回傳 is_food 為 false 時，為什麼是刪掉資料列而不是標成 failed？" data-correct="0" data-explain="那張照片根本不是餐，刪掉它讓列表、熱量與連續天數都不必再過濾這個特例。">
+  <button class="opt">因為它不是失敗的餐，只是根本不是餐</button>
+  <button class="opt">因為 failed 狀態會讓資料庫無法寫入</button>
+  <button class="opt">因為畫面需要用它來顯示錯誤訊息</button>
+  <button class="opt">因為 ImageKit 會自動刪除對應的圖片</button>
+</div>
+<div class="quiz" data-question="analyze-meal 的 retry.maxAttempts 設為 2，代表什麼？" data-correct="2" data-explain="暫時性失敗時系統自動再試一次，兩次都失敗才由 onFailure 收尾。">
+  <button class="opt">同時啟動兩個 task 平行處理同一張照片</button>
+  <button class="opt">任務最多可以執行兩分鐘後強制結束</button>
+  <button class="opt">失敗時系統自動再試一次，之後才判失敗</button>
+  <button class="opt">資料庫可以接受兩次相同的分析結果</button>
+</div>
+<div class="quiz" data-question="成功出口為什麼在寫回資料庫之外，還要把結果當成回傳值送出？" data-correct="1" data-explain="掃描畫面直接讀 run 的 output 來顯示，不必為了剛建立的那一列再查一次資料庫。">
+  <button class="opt">因為資料庫的 update 其實不會成功</button>
+  <button class="opt">因為畫面直接讀 run output，不必再查一次</button>
+  <button class="opt">因為 Trigger.dev 規定 task 必須有回傳值</button>
+  <button class="opt">因為要讓 onFailure 讀得到這些欄位</button>
+</div>
+<div class="quiz" data-question="為什麼要讓每一列都「移出 analyzing」？" data-correct="3" data-explain="留在 analyzing 的列在首頁就是一個永遠轉不停的 spinner，狀態機必須收斂。">
+  <button class="opt">因為 analyzing 狀態不能儲存圖片網址</button>
+  <button class="opt">因為 Postgres 會自動刪除過期的狀態</button>
+  <button class="opt">因為 Trigger.dev 會拒絕重複的狀態</button>
+  <button class="opt">因為留在 analyzing 的列會永遠顯示轉圈</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 拍照掃描與媒體上傳 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

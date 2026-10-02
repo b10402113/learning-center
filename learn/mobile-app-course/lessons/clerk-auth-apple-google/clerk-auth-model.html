@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clerk 與多供應商登入：身分放在哪裡</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Clerk 與多供應商登入：身分應該放在哪裡？</h1>
+<p class="meta">Step 1/5 · Clerk 多供應商登入</p>
+
+<h2>學習目標</h2>
+<p>完成這一節後，你應該能說明 Clerk 這類身分驗證服務負責什麼、OAuth 供應商（Google / Apple）在登入流程中扮演什麼角色，以及為什麼「登入成功」不代表你的 app 已經拿到完整的使用者資料。</p>
+
+<h2>先想像一個你可能遇過的登入需求</h2>
+
+<p>假設你的 app 畫面和 onboarding 都已經完成，現在只差讓使用者註冊。你可能會想：「登入嘛，開一張 <code>users</code> 表，存 email 和密碼，不就好了？」</p>
+
+<p>這個想法看起來直接，但只要多問幾個問題，麻煩就會像排隊進場一樣一個接一個出現。</p>
+
+<p>密碼要用什麼演算法雜湊？忘記密碼的寄信流程誰來做？session 或 token 要怎麼簽發、過期與撤銷？如果使用者想用 Google 登入，你還得申請憑證、處理授權跳轉、接收回傳內容，再驗證 token。Apple 則有另一套規格，而且要求更嚴格。</p>
+
+<p>這些功能做得好，通常沒有人特別稱讚；但只要做錯一次，就可能變成嚴重的安全問題。</p>
+
+<p>所以這一節要建立的，不是某一個指令，而是一個心智模型：把「身分」交給專門的服務處理，同時弄清楚這個服務保管了什麼，以及它沒有保管什麼。這條分工如果沒有先想清楚，後面的實作很容易全部打結。</p>
+
+<h2>為什麼登入通常不該自己刻？</h2>
+
+<p>可以先用一個問題判斷：登入是你的產品差異化功能，還是所有 app 都該有的基本配備？</p>
+
+<p>如果你的 app 是用來約診、記錄熱量或瀏覽社群動態，登入比較像水電。使用者期待它一定存在，而且要穩定、安全，但登入本身不是你真正要賣的東西。把大量工程力氣花在這裡，投報率通常不高。</p>
+
+<p>更現實的原因是安全。自己刻登入時，最容易漏掉的往往不是主要流程，而是那些平常不容易想到的角落：</p>
+
+<ul>
+<li>密碼重設連結會不會被猜中？</li>
+<li>同一個帳號同時登入時，token 要怎麼處理？</li>
+<li>離職員工的 session 要怎麼失效？</li>
+<li>OAuth 的 <code>state</code> 參數有沒有正確驗證？</li>
+</ul>
+
+<p>這些問題平常像地板下的裂縫，看不見不代表不存在。真正遭遇攻擊時，通常一次就足以造成很大的損失。與其從零開始處理所有細節，不如交給每天專門處理身分安全的服務。</p>
+
+<h2>Clerk 是什麼：把「你是誰」交給專門服務</h2>
+
+<p>Clerk 是一套身分驗證服務（authentication service）。你可以在 Clerk 後台建立一個 application，讓 Clerk 保管使用者的登入身分，並透過現成的程式庫提供 app 呼叫。</p>
+
+<p>這代表你不需要自己撰寫密碼雜湊，也不需要自己處理 OAuth 的完整流程。</p>
+
+<p>但這裡有一個很重要的界線：<strong>Clerk 不是你的資料庫。</strong></p>
+
+<p>Clerk 保管的是「這個人是誰，以及他用什麼方式證明過身分」，也就是 <strong>identity</strong>。至於 app 真正在意的資料，例如使用者約了幾點、吃了幾大卡、追蹤了誰，仍然要放在你自己的資料庫。</p>
+
+<p>可以把它想成一棟大樓：</p>
+
+<ul>
+<li>Clerk 像一樓櫃檯，負責確認你是不是本人，並給你進入大樓的資格。</li>
+<li>你的資料庫像管委會的住戶資料表，記錄你住幾樓、家裡有幾個人，以及其他 app 需要知道的資料。</li>
+</ul>
+
+<p>櫃檯確認你是誰，不代表管委會已經認識你。這正是「登入成功」和「app 已經有使用者資料」之間的差別。</p>
+
+<figure class="lesson-figure"><img src="./clerk-auth-model-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>Google 與 Apple 的角色：OAuth 供應商</h2>
+
+<p>那 Google 和 Apple 在這套架構裡做什麼？它們是 OAuth 供應商（OAuth provider）。</p>
+
+<p>當使用者按下「Continue with Google」，你的 app 並不是要求使用者把 Google 密碼交出來，而是把驗證工作交給 Google。使用者會在 Google 的畫面上登入，Google 確認身分後，再回傳一個憑證，告訴系統：「這個人確實是 Google 帳號 X。」</p>
+
+<p>整個過程中，你的 app 看不到使用者的 Google 密碼，只會收到 Google 發出的通行證。這也是第三方登入在安全上比較省心的地方：你的系統不需要直接保管另一個服務的密碼。</p>
+
+<p>Clerk 的價值就在這裡變得明顯。Google 和 Apple 的流程與規格各不相同，但 Clerk 可以支援多個供應商，並把它們收斂成同一套介面。</p>
+
+<p>你在 Clerk 後台啟用 Google 和 Apple 後，跳轉、回傳與驗證等對接工作就由 Clerk 協助處理。這種「同一套帳號系統，搭配多個登入入口」的方式，就叫做多供應商登入（multi-provider authentication）。</p>
+
+<figure class="lesson-figure"><img src="./clerk-auth-model-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>兩個一定要分清楚的 key</h2>
+
+<p>Clerk 會提供兩種性質完全不同的金鑰。它們放置的位置、能否公開，以及可以執行的操作都不一樣。</p>
+
+<table>
+<thead>
+<tr><th>金鑰</th><th>放在哪</th><th>能不能公開</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr><td>Publishable key（可公開金鑰）</td><td>client，例如 app 的環境變數</td><td>可以，本來就要給前端</td><td>讓 app 知道要連哪個 Clerk application</td></tr>
+<tr><td>Secret key（密鑰）</td><td>server，例如後端環境變數</td><td>絕對不行</td><td>在後端代表你的應用做特權操作</td></tr>
+</tbody>
+</table>
+
+<p>可以用一間店來記憶它們的差別：</p>
+
+<ul>
+<li><strong>Publishable key</strong> 像店家的地址和招牌，貼在門口沒有問題，因為客人本來就需要知道要去哪裡。</li>
+<li><strong>Secret key</strong> 像收銀機的鑰匙，只能由店員保管在櫃檯後方，不能交給客人。</li>
+</ul>
+
+<p>目前這個階段，app 只需要 publishable key。下一個節點要做後端同步時，secret key 才會登場。先把這條界線記住，之後就不容易把密鑰放到前端。</p>
+
+<h2>登入成功後，真正的問題才開始</h2>
+
+<p>把前面的概念接起來，你會看到一個很容易被忽略的落差：</p>
+
+<p>使用者按下 Google 登入，通過 Clerk，app 也顯示「已登入」。可是這時候打開你自己的資料庫，裡面可能還是空的，完全沒有這位使用者的紀錄。</p>
+
+<p>這不是 bug。原因是 Clerk 只負責回答「你是誰」，不會自動把使用者寫進你的資料庫。</p>
+
+<table>
+<thead>
+<tr><th>系統</th><th>負責的問題</th></tr>
+</thead>
+<tbody>
+<tr><td>Clerk</td><td>這個人是誰？他用什麼方式證明身分？</td></tr>
+<tr><td>你的資料庫</td><td>這個人在 app 裡有哪些資料與活動？</td></tr>
+</tbody>
+</table>
+
+<p>這是兩個系統、兩份職責。只要先知道這個落差，測試時就不會因為「明明登入了，為什麼資料庫還沒有人」而感到困惑。</p>
+
+<figure class="lesson-figure"><img src="./clerk-auth-model-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>至於要怎麼把 Clerk 的身分自動鏡射到你的資料庫，會是下一個節點要處理的 webhook 問題。這一節先把兩者的責任範圍分清楚。</p>
+
+<h2>把這個觀念掛回你的 app</h2>
+
+<blockquote>
+登入是基本配備，不是差異化功能，所以外包給專門的身分服務，通常比自行刻登入更安全，也更省力。Clerk 保管的是「你是誰」（身分），你的資料庫保管的是「你在 app 裡做了什麼」（app data），兩者必須分開看。Google / Apple 是 OAuth 供應商，負責證明身分；Clerk 把多家供應商收斂成同一套介面，就是多供應商登入。publishable key 可以放在 app 裡，secret key 只能留在後端。最後，登入成功不等於資料庫已有資料——那個落差要等 webhook 來補上。
+</blockquote>
+
+<p>現在可以把這幾個觀念連成一條線：OAuth 供應商負責證明使用者是誰，Clerk 負責統一管理這些登入身分，而你的資料庫負責保存 app 自己需要的資料。</p>
+
+<p>觀念站穩後，下一個問題就會出現：供應商到底要開哪幾個？這裡藏著一條 Apple 的審核規則。組合開錯，可能讓你的 app 連上架都被擋下來。下一節會把這條規則的判準講清楚。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./apple-vs-google-rule.html">下一步：有 Google 就一定要有 Apple：審核規則怎麼判 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼課程建議登入不要自己從零實作？" data-correct="2" data-explain="登入是基本配備而非差異化功能，自刻容易在安全細節上出錯，外包更安全也更省力。">
+  <button class="opt">因為自己寫的登入畫面一定比較醜</button>
+  <button class="opt">因為 Apple 不允許 app 自行處理登入</button>
+  <button class="opt">因為登入是基本配備且安全細節繁多</button>
+  <button class="opt">因為第三方服務的收費比工程師便宜</button>
+</div>
+<div class="quiz" data-question="Clerk 主要負責保管的是哪一種資料？" data-correct="0" data-explain="Clerk 保管的是登入身分，app 自己的業務資料仍放在你的資料庫。">
+  <button class="opt">使用者的登入身分與驗證方式</button>
+  <button class="opt">使用者在 app 裡的所有業務資料</button>
+  <button class="opt">app 畫面的設計稿與元件清單</button>
+  <button class="opt">app 部署用的伺服器與網域名稱</button>
+</div>
+<div class="quiz" data-question="在使用 Google 登入的流程中，你的 app 會拿到使用者的什麼？" data-correct="3" data-explain="app 看不到使用者的 Google 密碼，只會拿到 Google 發出、證明身分的憑證。">
+  <button class="opt">使用者的 Google 帳號與明文密碼</button>
+  <button class="opt">使用者 Google 帳號的完整通訊錄</button>
+  <button class="opt">直接存取 Google 伺服器的權限</button>
+  <button class="opt">Google 發出、可用來證明身分的憑證</button>
+</div>
+<div class="quiz" data-question="「多供應商登入」這個詞指的是什麼？" data-correct="1" data-explain="同一套帳號系統提供多個登入入口，例如同時有 Google 與 Apple。">
+  <button class="opt">同一個帳號可以在多台裝置同時登入</button>
+  <button class="opt">同一套帳號系統提供多個登入入口</button>
+  <button class="opt">同一個 app 可以部署到多個應用商店</button>
+  <button class="opt">同一位使用者可以建立多組不同密碼</button>
+</div>
+<div class="quiz" data-question="下列哪一把金鑰可以安全地放在 app 的 client 端？" data-correct="0" data-explain="publishable key 本來就是要給前端使用，secret key 則必須留在後端。">
+  <button class="opt">Clerk 的 publishable key</button>
+  <button class="opt">Clerk 的 secret key</button>
+  <button class="opt">資料庫的連線字串</button>
+  <button class="opt">背景任務的觸發金鑰</button>
+</div>
+<div class="quiz" data-question="使用者剛完成 Google 登入，為什麼你自己的資料庫可能還是空的？" data-correct="2" data-explain="Clerk 只回答身分，不會主動把使用者寫進你的資料庫；同步要靠後續機制。">
+  <button class="opt">因為 Google 登入其實沒有成功完成</button>
+  <button class="opt">因為資料庫的連線字串填錯了</button>
+  <button class="opt">因為身分服務不會主動寫入你的資料庫</button>
+  <button class="opt">因為 Clerk 的帳號還沒有付費開通</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Clerk 多供應商登入 · Step 1/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

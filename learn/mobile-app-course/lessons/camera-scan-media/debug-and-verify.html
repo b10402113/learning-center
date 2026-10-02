@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>除錯與驗證：runs/logs、retry 與資料落地</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>除錯與驗證：從 runs、logs 到資料落地</h1>
+<p class="meta">Step 5/5 · 拍照掃描與媒體上傳</p>
+
+<h2>完成這一步，你會得到什麼</h2>
+<p>這一步的目標，是建立一套可以重複使用的背景任務除錯流程。你會學會用 Trigger.dev 的 runs 與 logs 找出任務為什麼失敗，分辨「正在自動重試」和「真的失敗了」，最後再確認分析結果是否確實寫回資料庫。</p>
+
+<p>開始前，拍照掃描管線的三個零件都應該已經接好，而且你知道 Trigger.dev dashboard 在哪裡。完成後，當一次掃描結果不對，你就能沿著 <code>run → log → 程式碼 → 資料庫</code> 往回追，說清楚它究竟卡在哪一站。</p>
+
+<h2>先建立正確的除錯觀念：能跑，不代表跑對</h2>
+
+<p>管線接好了，畫面也會更新。你按下最後一次掃描，看見數字跳出來，很容易就以為任務完成了。</p>
+
+<p>但背景任務最麻煩的地方是：它不在你的終端機裡。任務失敗時，畫面可能只是不斷轉圈，你卻不知道原因。可能是 OpenAI 暫時忙碌、回傳格式不符合預期，也可能是背景環境少了一個必要的環境變數。</p>
+
+<p>所以，驗證不能只看畫面有沒有更新，也不能只看 task 顯示綠燈。你要一路確認：這次執行留下了什麼紀錄、程式走了哪個分支，以及資料庫最後到底存了什麼。</p>
+
+<h2>第一步：到 Runs 找出這次執行</h2>
+
+<p>每一次 <code>analyze-meal</code> 被觸發，都會在 Trigger.dev 的 Runs 檢視留下執行紀錄。打開對應的 run，你可以看到它收到的輸入（payload）、產生的輸出（output），以及執行過程中寫出的每一行 log。</p>
+
+<p>因此，只要畫面顯示的結果和預期不符，第一個動作就是到 Runs 找到對應的那筆紀錄。通常，run 的 output 就能對應畫面正在顯示的結果。例如畫面說「這不是食物」，run 的 output 可能會是：</p>
+
+<pre><code>{ status: "failed", errorReason: "not_food" }</code></pre>
+
+<p>這條對應關係就像在包裹上貼追蹤編號：你可以從畫面反查到是哪一次執行出了問題，而不是在所有程式碼裡盲目搜尋。</p>
+
+<figure class="lesson-figure"><img src="./debug-and-verify-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第二步：用 logger 把 run 拉回程式碼</h2>
+
+<p>Run 告訴你「這次執行發生了什麼」，但要知道它走到哪個分支，還需要看 log。<code>logger</code> 就是背景任務裡的探照燈。上一節的 task 放了兩處關鍵紀錄，分別對應兩種失敗情境。</p>
+
+<pre><code>if (!out.is_food) {
+  logger.warn("Photo is not food, discarding meal", { mealId });
+  await db.delete(meals).where(eq(meals.id, mealId));
+  return { status: "failed" as const, errorReason: "not_food" as const };
+}</code></pre>
+
+<pre><code>onFailure: async ({ payload, error }) =&gt; {
+  logger.error("analyze-meal exhausted retries", { mealId: payload.mealId, error: String(error) });
+  // ...
+},</code></pre>
+
+<p>如果看到 <code>Photo is not food</code>，表示流程走到了 not-food 分支。這時資料列會被刪除，這不是系統故障，而是預期行為。</p>
+
+<p>如果看到 <code>analyze-meal exhausted retries</code>，表示任務已經重試到上限仍然失敗。接著查看同一行附帶的 <code>error</code> 欄位，就能進一步了解底層錯誤。</p>
+
+<p>這也是背景 task 不該省略 logger 的原因。沒有 log，你只看得到「失敗」，卻看不到它為什麼失敗。</p>
+
+<h2>第三步：分辨自動重試與真正失敗</h2>
+
+<p>Trigger.dev 會在 task 失敗時自動重試。設定 <code>retry: { maxAttempts: 2 }</code> 後，第一次遇到暫時性錯誤時，任務還有第二次機會，而且使用者通常不會察覺。</p>
+
+<p>若要觀察這個行為，可以刻意讓第一次嘗試失敗，接著回到 Runs 檢視，確認它是否自動執行第二次。</p>
+
+<p>但請把下面這個區分牢牢記住：</p>
+
+<blockquote>
+task 執行成功，和資料庫狀態正確，是兩回事。
+</blockquote>
+
+<p>task 可能順利跑完並回傳結果，但更新資料庫的動作沒有生效。反過來，task 顯示失敗時，資料庫中的資料也可能早已由另一條路徑處理完成。</p>
+
+<p>所以看完 run 後，若要確認功能真的完成，還必須回到資料庫查證。不要看到綠燈就收工；綠燈只代表這次執行的結果，不一定代表資料已經正確落地。</p>
+
+<figure class="lesson-figure"><img src="./debug-and-verify-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第四步：檢查背景任務自己的環境變數</h2>
+
+<p>背景 task 使用自己的執行環境，不會自動繼承你在 Expo dev server 裡設定的變數。這是很常見、也很容易誤判的失敗：app 本身一切正常，背景任務卻在起跑點就掛掉。</p>
+
+<p>例如背景 task 少了 <code>DATABASE_URL</code>，它就無法連線到資料庫，整個分析流程也會因此停止。這種錯誤通常不會出現在 app 的終端機，而會出現在該次 run 的 log 裡。</p>
+
+<p>模型金鑰也要用同樣的方式檢查。task 刻意把 OpenAI client 建在 <code>run</code> 函式內部，而不是放在模組頂層，是為了讓「缺少 key」在 run 執行時才發生。錯誤出現在正確的執行位置，你才有機會從 run 和 log 追蹤它。</p>
+
+<p>因此，每次要把新的背景任務推上線時，請確認它需要的環境變數在 Trigger.dev 的環境裡也都有設定。</p>
+
+<h2>第五步：直接到資料庫驗證結果</h2>
+
+<p>最後一步是打開資料庫，直接查詢 <code>meals</code> 表。這一步最能建立信心，因為你不再只是猜測畫面是否正確，而是直接檢查資料的實際狀態。</p>
+
+<p>成功的資料列應該符合以下條件：<code>status</code> 是 <code>completed</code>，而且 <code>name</code>、<code>calories</code>、<code>proteinG</code>、<code>carbsG</code>、<code>fatG</code> 都有值。這表示模型分析結果確實寫回資料庫。</p>
+
+<p>失敗的資料列則會有 <code>status</code> 為 <code>failed</code>，並在 <code>errorReason</code> 記下失敗原因。</p>
+
+<p>如果分析結果是 not-food，資料列可能根本不存在，因為 task 已經在 not-food 分支中將它刪除。這時「查不到資料」不是漏寫，而是流程設計好的結果。</p>
+
+<h2>刪除帳號時，也要驗證資料是否真的清乾淨</h2>
+
+<p>直接查資料的習慣，在刪除帳號時尤其重要。刪除流程會依序處理三個地方：</p>
+
+<ol>
+  <li>先刪除 ImageKit 的照片。</li>
+  <li>再刪除資料庫中的資料列。</li>
+  <li>最後刪除 Clerk 的使用者。</li>
+</ol>
+
+<p>驗證方式是重新註冊一次，接著到這三個地方確認舊資料都已經不存在。前面提過的孤兒檔，也是在這個檢查階段透過前綴搜尋找出並清理。</p>
+
+<h2>補查特殊狀態：CRASHED 與 SYSTEM_FAILURE</h2>
+
+<p>還要留意一個已知的縫隙：<code>onFailure</code> 能處理重試耗盡，但處理不到 <code>CRASHED</code>、<code>SYSTEM_FAILURE</code> 這類連收尾都來不及執行的狀況。</p>
+
+<p>遇到這些情況時，資料列可能會一直停在 <code>analyzing</code>。平常不一定會發生，但如果你在資料庫裡看見這種殘留，就表示需要補上一個排程任務，定期清掃這些卡住的資料。</p>
+
+<figure class="lesson-figure"><img src="./debug-and-verify-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>完成檢查</h2>
+
+<p>一次完整的背景任務除錯，可以照這個順序進行：</p>
+
+<ol>
+  <li>到 Trigger.dev 的 Runs 找到這次執行，查看 payload、output 與 log。</li>
+  <li>用 logger 訊息對照程式碼分支：<code>Photo is not food</code> 代表 not-food 分支，<code>exhausted retries</code> 代表重試耗盡。</li>
+  <li>確認這是正在自動重試，還是已經真正失敗。</li>
+  <li>檢查背景任務自己的環境變數，例如 <code>DATABASE_URL</code> 與模型金鑰。</li>
+  <li>回到 <code>meals</code> 表驗證資料是否落地：<code>completed</code> 要有完整數值，<code>failed</code> 要有失敗原因。</li>
+  <li>若發現 <code>CRASHED</code> 或 <code>SYSTEM_FAILURE</code> 造成資料停在 <code>analyzing</code>，再安排排程任務清掃。</li>
+</ol>
+
+<p>做到這裡，拍照掃描管線就從輸入、上傳、狀態機、即時更新，一路驗證到除錯與資料落地。你手上的不只是一段能跑的程式，而是一套可以接回自己 app 的實作模式：凡是「使用者提供一張圖，AI 非同步給答案」的功能，都能沿用這個骨架來設計與驗證。</p>
+
+<div class="lesson-nav">
+  <div><a href="./realtime-vs-polling.html">← 上一步：訂閱還是輪詢：前端怎麼知道分析完成了？</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="失敗的掃描要從哪裡開始查？" data-correct="1" data-explain="Trigger.dev 的 Runs 檢視會留下每次執行的 payload、output 與 log，是背景任務的入口。">
+  <button class="opt">從 app 的終端機重新啟動整個專案</button>
+  <button class="opt">從 Trigger.dev 的 Runs 檢視那筆執行</button>
+  <button class="opt">從 ImageKit 後台看照片還在不在</button>
+  <button class="opt">從手機的系統設定裡查看網路狀態</button>
+</div>
+<div class="quiz" data-question="看到 run 的 log 寫著「Photo is not food」，代表什麼？" data-correct="3" data-explain="流程走到 not-food 分支，資料列被刪除，這是預期行為而不是故障。">
+  <button class="opt">OpenAI 的 API key 設定錯誤導致失敗</button>
+  <button class="opt">背景任務重試兩次之後仍然失敗</button>
+  <button class="opt">資料庫連線少了 DATABASE_URL 變數</button>
+  <button class="opt">走到 not-food 分支，列已被刪除</button>
+</div>
+<div class="quiz" data-question="「task 執行成功」和什麼是兩回事？" data-correct="0" data-explain="task 跑完不代表資料庫的更新一定生效，驗證永遠要落到實際的資料上。">
+  <button class="opt">資料庫狀態是否真的正確更新</button>
+  <button class="opt">使用者是否看到分析中的轉圈</button>
+  <button class="opt">照片是否成功上傳到 ImageKit</button>
+  <button class="opt">前端是否拿到 publicAccessToken</button>
+</div>
+<div class="quiz" data-question="為什麼背景任務少了 DATABASE_URL 特別難察覺？" data-correct="2" data-explain="背景 task 用自己的一套環境，不會繼承 dev server 的變數，錯誤只出現在 run 的 log 裡。">
+  <button class="opt">因為它會讓整個 app 在啟動時就崩潰</button>
+  <button class="opt">因為 Postgres 會自動補上一個預設值</button>
+  <button class="opt">因為它的環境獨立，錯只出現在 run log</button>
+  <button class="opt">因為畫面會顯示錯誤，只是訊息被截斷</button>
+</div>
+<div class="quiz" data-question="驗證一次成功分析，最好的做法是什麼？" data-correct="1" data-explain="直接查 meals 表，completed 的列應該有完整數值；光看畫面不足以確認落地。">
+  <button class="opt">確認畫面上的 spinner 有沒有消失</button>
+  <button class="opt">查 meals 表確認列有完整數值</button>
+  <button class="opt">看 ImageKit 後台照片的檔案大小</button>
+  <button class="opt">重新觸發一次相同的背景任務</button>
+</div>
+<div class="quiz" data-question="onFailure 涵蓋不到哪一種情況？" data-correct="3" data-explain="註解明說 onFailure 涵蓋重試耗盡，但不涵蓋 CRASHED、SYSTEM_FAILURE 這類 run。">
+  <button class="opt">模型回傳 is_food 為 false 的照片</button>
+  <button class="opt">重試兩次後仍然失敗的執行</button>
+  <button class="opt">使用者上傳了一張太大的照片</button>
+  <button class="opt">CRASHED 或 SYSTEM_FAILURE 的 run</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 拍照掃描與媒體上傳 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
