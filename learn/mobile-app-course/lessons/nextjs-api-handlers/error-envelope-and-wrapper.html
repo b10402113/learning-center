@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>route() 包裝與錯誤信封：讓每個 handler 只留商業邏輯</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>route() 包裝與錯誤信封：讓每個 handler 只留商業邏輯</h1>
+<p class="meta">Step 2/5 · Next.js API Route Handlers</p>
+
+<h2>學習目標</h2>
+<p>能說出 <code>route()</code> 包裝把 <code>ApiError</code>、Zod 的驗證錯誤與未知例外各自轉成什麼回應，並解釋 <code>json()</code> 為何一律加上 <code>no-store</code>，以及為什麼原始錯誤訊息不能原樣回傳給 client。</p>
+
+<h2>前言：每個端點都自己 try/catch，很快就會崩</h2>
+<p>上一節我們把端點開了出來，但還沒有處理「出錯的時候會發生什麼事」。如果什麼都不做，某個 handler 裡丟出一個例外，Next.js 會回一個 HTML 錯誤頁或一段堆疊。手機端拿到這種東西，根本沒辦法判斷「是沒登入？輸入錯了？還是伺服器壞了」，只能一律顯示「發生錯誤」。</p>
+<p>更麻煩的是，如果放任每個 handler 自己寫 try/catch，你會得到十幾種不同的錯誤格式，每加一個端點就多一次重複。這一節要示範的做法，是把錯誤處理集中到一個包裝函式裡，讓 handler 本體只留下它真正該做的事。</p>
+
+<h2>先定義一種「可被翻譯的錯誤」：ApiError</h2>
+<p>要讓錯誤能被統一處理，第一件事是給它一個一致的類型。這支 API 自訂了一個 <code>ApiError</code>，帶著 HTTP 狀態碼、訊息，以及選用的錯誤代碼：</p>
+<pre><code>export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly code?: string
+  ) {
+    super(message);
+  }
+}
+
+export const unauthorized = (m = 'Sign in required') =&gt; new ApiError(401, m);
+export const forbidden    = (m = 'Not allowed')      =&gt; new ApiError(403, m);
+export const notFound     = (m = 'Not found')        =&gt; new ApiError(404, m);
+export const badRequest   = (m: string)              =&gt; new ApiError(400, m);
+export const conflict     = (m: string, code?: string) =&gt; new ApiError(409, m, code);</code></pre>
+<p>這些 helper 讓 handler 可以用一句 <code>throw badRequest('Invalid appointment time')</code> 表達「這是使用者的輸入問題」，而不必當場決定要回什麼 JSON。錯誤被丟出去之後，由外層的包裝接手。</p>
+<p>這裡的 <code>code</code> 欄位值得注意。它是一個給程式看的短字串，例如預約被搶走時會帶 <code>'slot_taken'</code>。訊息是給人看的，code 是給手機端判斷分支用的——手機可以根據 code 決定要不要提示「重新選一個時段」。</p>
+
+<h2>三種錯誤，三種出口</h2>
+<p>包裝函式 <code>route()</code> 的工作，就是接住任何被丟出來的東西，判斷它是哪一類，再轉成對應的回應。它會遇到三種情況。</p>
+<p>第一種是自己丟出的 <code>ApiError</code>。這種最好處理，因為狀態碼和訊息本來就寫好了，直接包成 JSON 回傳。第二種是 Zod 的 <code>ZodError</code>，也就是請求輸入沒有通過 schema 驗證；這種一律回 400，並附上每個欄位錯在哪裡。第三種是其他所有意料之外的例外：記錄到 Sentry、寫一行 log、回一個不含細節的 500。</p>
+<pre><code>export function route&lt;Args extends unknown[]&gt;(
+  fn: (...args: Args) =&gt; Promise&lt;Response&gt;
+): (...args: Args) =&gt; Promise&lt;Response&gt; {
+  return async (...args: Args) =&gt; {
+    try {
+      return await fn(...args);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        return Response.json(
+          { error: err.message, code: err.code },
+          { status: err.status }
+        );
+      }
+      if (err instanceof ZodError) {
+        return Response.json(
+          { error: 'Invalid request', issues: err.issues },
+          { status: 400 }
+        );
+      }
+      Sentry.captureException(err);
+      console.error('[api] unhandled error', scrubQuery(err.message));
+      return Response.json({ error: 'Something went wrong' }, { status: 500 });
+    }
+  };
+}</code></pre>
+<p>寫出來的 handler 就會長成這樣，整個函式只保留商業邏輯，看不到半個 try/catch：</p>
+<pre><code>export const POST = route(async (req: Request) =&gt; {
+  const user = await requireAuth();
+  const body = createAppointmentSchema.parse(await req.json());
+  // ...真正的工作
+  return json({ appointment }, 201);
+});</code></pre>
+<p>換句話說，<code>route()</code> 是錯誤唯一會穿越邊界的地方。handler 內部愛丟什麼就丟什麼，丟出去之後的行為是統一的。</p>
+
+<h2>狀態碼的意義要固定</h2>
+<p>錯誤信封能運作的前提，是每個狀態碼都有一致的意義。這組 helper 把約定固定下來，手機端就能靠狀態碼做決策：</p>
+<table>
+<thead><tr><th>helper</th><th>狀態碼</th><th>代表的意思</th><th>手機可以怎麼反應</th></tr></thead>
+<tbody>
+<tr><td><code>unauthorized()</code></td><td>401</td><td>沒有有效的登入憑證</td><td>導回登入</td></tr>
+<tr><td><code>forbidden()</code></td><td>403</td><td>登入了，但這個角色不能做</td><td>顯示「沒有權限」</td></tr>
+<tr><td><code>notFound()</code></td><td>404</td><td>沒有這筆資料，或不屬於你</td><td>回到上一頁</td></tr>
+<tr><td><code>badRequest()</code></td><td>400</td><td>輸入本身不合法</td><td>提示使用者修正</td></tr>
+<tr><td><code>conflict()</code></td><td>409</td><td>狀態衝突，例如時段被搶走</td><td>重新整理可選時段</td></tr>
+</tbody>
+</table>
+<p>把「不存在」和「不是你的」都收斂成 404，是一個刻意的安全選擇。如果別人的病歷回 403、不存在的病歷回 404，攻擊者就能用兩者的差別去探測「哪些 id 真的存在」。一致回 404，等於不洩漏任何存在性資訊。下一節講守衛時會再看到同一個原則。</p>
+
+<h2>把資料庫的例外翻譯成 app 的語言</h2>
+<p>有些錯誤不是你的程式丟的，而是資料庫丟的。預約系統靠 Postgres 的排除約束（exclusion constraint）防止重複預約；當兩個請求幾乎同時搶同一時段，其中一個會被資料庫擋下，丟出錯誤碼 <code>23P01</code>。這個碼對手機毫無意義，所以 API 用一個小函式認出它，再翻譯成乾淨的 409：</p>
+<pre><code>export function isExclusionViolation(err: unknown): boolean {
+  const code = err?.code ?? err?.cause?.code;
+  return code === '23P01';
+}
+
+// 在 handler 裡：
+catch (err) {
+  if (isExclusionViolation(err)) {
+    throw conflict('That time was just taken. Please pick another.', 'slot_taken');
+  }
+  throw err;
+}</code></pre>
+<p>注意這裡的 catch 只攔一種例外，其他一律再丟出去，交給外層的 <code>route()</code>。這是一個好的分工：handler 只翻譯它懂的那一種，其餘的不要吃掉。</p>
+
+<h2>500 不能把內部細節說出來</h2>
+<p>未知例外回的那句 <code>{ error: 'Something went wrong' }</code> 看起來很敷衍，但它其實是刻意的。Drizzle 在查詢失敗時，錯誤訊息會長成「<code>Failed query: &lt;SQL&gt;</code>」後面接著「<code>params: &lt;綁定的值&gt;</code>」，而那些綁定的值就是病歷的欄位——姓名、生日、病史。如果把原始訊息回給 client，等於把 PHI（受保護的健康資訊）送了出去。</p>
+<p>所以這支 API 做了兩層防護。回給 client 的，永遠是固定的泛用訊息；寫進 log 與 Sentry 的，則先經過 <code>scrubQuery()</code> 把參數那一段塗掉，只留下能定位 bug 的 SQL：</p>
+<pre><code>export function scrubQuery(message: string): string {
+  return message.replace(/\nparams: [\s\S]*/, '\nparams: [scrubbed]');
+}</code></pre>
+<p>原則是：內部看得到的，保留能除錯的部分；外部看得到的，只給最少的資訊。log 本身也算「內部」，但因為 log 只要被匯出一次就不再是內部的，所以它也一起被塗掉。</p>
+
+<h2>回應預設不快取</h2>
+<p>最後一個小地方是 <code>json()</code> 這個回傳 helper。它做的事情很單純，但有一個關鍵設定：</p>
+<pre><code>export function json(data: unknown, status = 200) {
+  return Response.json(data, {
+    status,
+    headers: { 'Cache-Control': 'no-store' },
+  });
+}</code></pre>
+<p>為什麼每一則回應都加上 <code>no-store</code>？因為這些回應都是「針對呼叫者」的：某個病人的預約、會過期的簽章附件網址。這種資料一旦被任何中間的快取存下來，就可能被下一個人拿到。對身分相關的回應來說，快取不是優化，而是風險，所以一律關掉。</p>
+
+<h2>小結</h2>
+<blockquote>
+錯誤處理集中在 <code>route()</code> 一個地方：<code>ApiError</code> 轉成對應狀態碼的 JSON、<code>ZodError</code> 轉成 400、其他例外記到 Sentry 後回泛用的 500。<code>code</code> 欄位給程式判斷分支，狀態碼的意義固定。資料庫的 <code>23P01</code> 被翻譯成 409，500 不回傳內部細節並用 <code>scrubQuery()</code> 擋掉 PHI，<code>json()</code> 一律 <code>no-store</code>。判斷的原則是：把錯誤集中在一處翻譯，把內部資訊留在內部。
+</blockquote>
+<p>有了統一的錯誤語言，下一步是把「你是誰」也交給同一層守衛來判斷。下一節要看 <code>requireAuth</code>、<code>requireStaff</code> 與 <code>requireOwnedPatient</code>，以及為什麼身分只能從 session 推導、不能相信 client 傳來的任何 id。</p>
+
+<div class="lesson-nav">
+  <div><a href="./route-handler-basics.html">← 上一步：手機要的 API：Next.js Route Handler 入門</a></div>
+  <div><a href="./auth-and-ownership-guards.html">下一步：requireAuth 與守衛：身分只從 session 來 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="route() 包裝遇到自己丟出的 ApiError 時，會回傳什麼？" data-correct="1" data-explain="ApiError 自帶狀態碼與訊息，包裝直接把它包成 JSON 回傳，並帶上選用的 code。">
+  <button class="opt">一律轉成狀態碼 500 的錯誤回應</button>
+  <button class="opt">用它的狀態碼回對應的 JSON 信封</button>
+  <button class="opt">把錯誤原樣往上丟給 Next.js 處理</button>
+  <button class="opt">重新執行一次原本的 handler 函式</button>
+</div>
+
+<div class="quiz" data-question="為什麼未知例外的回應只寫 Something went wrong？" data-correct="3" data-explain="原始訊息可能含有 SQL 與綁定的病人欄位，回給 client 等於洩漏 PHI。">
+  <button class="opt">因為 Next.js 規定 500 不能帶訊息</button>
+  <button class="opt">因為 Sentry 會改寫錯誤訊息的內容</button>
+  <button class="opt">因為這樣可以讓伺服器執行得更快</button>
+  <button class="opt">因為原始訊息可能夾帶病人資料</button>
+</div>
+
+<div class="quiz" data-question="scrubQuery() 被用來做什麼？" data-correct="0" data-explain="它把 Drizzle 錯誤訊息中 params 那段綁定值塗掉，只留下能定位問題的 SQL。">
+  <button class="opt">塗掉錯誤訊息裡的綁定參數值</button>
+  <button class="opt">把錯誤訊息翻譯成繁體中文</button>
+  <button class="opt">把 SQL 語法轉成 Drizzle 查詢</button>
+  <button class="opt">在 Sentry 上建立一筆新的錯誤</button>
+</div>
+
+<div class="quiz" data-question="為什麼 json() 回傳的每一則回應都加上 no-store？" data-correct="2" data-explain="這些回應是針對特定呼叫者、且可能含簽章網址，被快取就有外洩風險。">
+  <button class="opt">因為這樣可以減少資料庫的查詢次數</button>
+  <button class="opt">因為 Safari 不支援其他的快取標頭</button>
+  <button class="opt">因為回應是身分專屬、不該被快取</button>
+  <button class="opt">因為 Next.js 預設會封鎖所有快取</button>
+</div>
+
+<div class="quiz" data-question="Postgres 的 23P01 在這支 API 裡被翻譯成什麼？" data-correct="1" data-explain="它代表排除約束被觸發（時段重複），被轉成 409 並帶上 slot_taken。">
+  <button class="opt">401 的未登入錯誤</button>
+  <button class="opt">409 的時段已被搶走</button>
+  <button class="opt">400 的輸入格式錯誤</button>
+  <button class="opt">500 的伺服器未知錯誤</button>
+</div>
+
+<div class="quiz" data-question="為什麼「不是你的資料」和「不存在的資料」都回 404？" data-correct="3" data-explain="若兩者回不同狀態碼，攻擊者就能用差異探測哪些 id 真的存在。">
+  <button class="opt">因為 403 只有員工帳號才能觸發</button>
+  <button class="opt">因為手機端無法辨識 403 的回應</button>
+  <button class="opt">因為資料庫查不到時一定回傳 404</button>
+  <button class="opt">因為不想洩漏資料是否存在</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Next.js API Route Handlers · Step 2/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>

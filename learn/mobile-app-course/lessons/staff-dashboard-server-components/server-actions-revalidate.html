@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Server Actions：不用寫 API 也能寫入，revalidatePath 自動更新</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Server Actions：不用寫 API 也能寫入，revalidatePath 自動更新</h1>
+<p class="meta">Step 5/5 · 員工 Dashboard（Server Components）</p>
+
+<h2>學習目標</h2>
+<p>用 'use server' 寫出 addVisitNote 與 completeAppointment 兩個 Server Action，在裡面完成授權、驗證、稽核與 revalidatePath，並用 useActionState／useTransition 從 client 呼叫。</p>
+
+<h2>前言：最後一哩是「寫入」</h2>
+
+<p>前四步處理的都是「讀」：把行程、名冊、病歷查到畫面上。但診所後台不只是看板，醫師看完診要寫術後醫囑、要把某筆預約標記為完成。這是一個真正的寫入動作：它要改資料庫、要留下「是誰改的」的紀錄、還要讓剛剛那頁立刻反映新狀態。</p>
+
+<p>過去做這種事，我們會開一支 <code>POST</code> 的 API Route Handler，前端再用 <code>fetch</code> 去打它。但在這個後台裡，還有一條更短的路：<strong>Server Action</strong>。它讓你在伺服器端寫一個普通函式，client 端的元件就能像呼叫本地函式一樣呼叫它，中間不必自己維護 API 路徑與請求／回應格式。這一節要把這條路走完，並強調一件不能省的事——少了授權，再方便的捷徑都會變成漏洞。</p>
+
+<h2>第一步：用 'use server' 宣告一個 Server Action</h2>
+
+<pre><code>'use server';
+
+import { eq } from 'drizzle-orm';
+import { revalidatePath } from 'next/cache';
+
+import { db } from '@/db';
+import { appointments, patients, visitNotes } from '@/db/schema';
+import { audit } from '@/lib/audit';
+import { requireStaff } from '@/lib/auth';
+import { visitNoteSchema } from '@/lib/validation';</code></pre>
+
+<p>檔案開頭的 <code>'use server'</code> 是關鍵。它告訴 Next.js：這個檔案裡匯出的函式都是 Server Action，只能在伺服器執行。這些函式看起來就像普通的 async 函式，但 Next.js 會在背後把它們編譯成可被呼叫的伺服器端點；client 元件 <code>import</code> 之後呼叫，請求就會自動送到伺服器。因為函式在伺服器執行，它自然可以 <code>import db</code>、寫資料庫、讀環境變數。</p>
+
+<h2>第二步：addVisitNote，把醫囑寫進去</h2>
+
+<pre><code>export async function addVisitNote(_prev: unknown, formData: FormData) {
+  const staff = await requireStaff();
+
+  const parsed = visitNoteSchema.safeParse({
+    appointmentId: formData.get('appointmentId'),
+    body: formData.get('body'),
+  });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Invalid note' };
+  }</code></pre>
+
+<p>第一行再一次是 <code>requireStaff()</code>。這點必須反覆強調：<strong>Server Action 是一個可以被呼叫的端點，不是只有你的按鈕能碰到的內部函式。</strong>把按鈕藏起來不是安全措施，任何人都可能直接送出這個動作。所以每個 action 都要自己重新驗身分，不能假設「使用者是從員工頁面按的」。</p>
+
+<p>接著用 Zod 驗證輸入。表單傳進來的一切都是不可信的：長度、型別、必填欄位都要檢查。驗證失敗時<strong>回傳</strong>一個帶錯誤訊息的物件，而不是丟出例外——因為這個回傳值要回到 client，讓表單顯示提示。注意函式的第一個參數 <code>_prev</code>，那是 <code>useActionState</code> 用來傳入「上一次結果」的，這裡用不到，所以以底線開頭命名。</p>
+
+<pre><code>  const [appointment] = await db
+    .select()
+    .from(appointments)
+    .where(eq(appointments.id, parsed.data.appointmentId));
+  if (!appointment) return { error: 'Appointment not found' };
+
+  await db.insert(visitNotes).values({
+    appointmentId: appointment.id,
+    body: parsed.data.body,
+    createdBy: staff.id,
+  });
+  await audit(staff.id, 'create', 'visit_notes', appointment.id);
+
+  revalidatePath(`/dashboard/patients/${appointment.patientId}`);
+  return { ok: true as const };
+}</code></pre>
+
+<p>驗證過後，先確認這筆預約真的存在，再把醫囑寫入。<code>createdBy</code> 用的是 <code>staff.id</code>，也就是從登入 session 推導出來的伺服器端身分——不是 client 傳來的任何值。寫入之後立刻 <code>audit</code>，記錄「誰建立了哪一筆 <code>visit_notes</code>」。最後呼叫 <code>revalidatePath</code>，告訴 Next.js「這個病患頁的快取已經過期了，下次請求重新查資料」。這一招讓畫面自動更新，不需要前端自己重抓。</p>
+
+<h2>第三步：completeAppointment，改狀態也更新最後看診日</h2>
+
+<pre><code>export async function completeAppointment(appointmentId: string) {
+  const staff = await requireStaff();
+
+  const [updated] = await db
+    .update(appointments)
+    .set({ status: 'completed' })
+    .where(eq(appointments.id, appointmentId))
+    .returning();
+  if (!updated) return { error: 'Appointment not found' };
+
+  await db
+    .update(patients)
+    .set({ lastVisitAt: updated.startsAt })
+    .where(eq(patients.id, updated.patientId));
+  await audit(staff.id, 'update', 'appointments', appointmentId);
+
+  revalidatePath(`/dashboard/patients/${updated.patientId}`);
+  revalidatePath('/dashboard');
+  return { ok: true as const };
+}</code></pre>
+
+<p>這個 action 做了兩個關聯的更新：把預約狀態改成 <code>completed</code>，並把病患的「最後看診時間」更新成這筆預約的開始時間。<code>.returning()</code> 讓你可以拿到更新後的資料列，好用來知道要更新哪一位病患、以及要 revalidate 哪些路徑。這裡要注意<code>revalidatePath</code> 被呼叫了兩次：一次是病患頁，一次是 <code>/dashboard</code> 行程頁——因為標記完成同時會影響這兩個畫面的內容。</p>
+
+<h2>第四步：client 端用 useActionState 接表單</h2>
+
+<pre><code>'use client';
+
+import { useActionState } from 'react';
+import { addVisitNote } from './actions';
+
+export function AddNoteForm({ appointmentId }: { appointmentId: string }) {
+  const [state, action, pending] = useActionState(addVisitNote, null);
+
+  return (
+    &lt;form action={action}&gt;
+      &lt;input type="hidden" name="appointmentId" value={appointmentId} /&gt;
+      &lt;textarea name="body" required maxLength={5000} /&gt;
+      &lt;button disabled={pending}&gt;{pending ? 'Saving…' : 'Add note'}&lt;/button&gt;
+      {state &amp;&amp; 'error' in state &amp;&amp; state.error &amp;&amp; &lt;span&gt;{state.error}&lt;/span&gt;}
+      {state &amp;&amp; 'ok' in state &amp;&amp; state.ok &amp;&amp; &lt;span&gt;Saved&lt;/span&gt;}
+    &lt;/form&gt;
+  );
+}</code></pre>
+
+<p>表單所在的元件是 Client Component，因為它需要 <code>useActionState</code> 這個 hook。這個 hook 回傳三樣東西：目前的狀態 <code>state</code>、要綁到 <code>&lt;form action&gt;</code> 的動作、以及一個 <code>pending</code> 布林值。把 <code>action</code> 直接接到表單的 <code>action</code> 屬性，Next.js 就會在送出時呼叫對應的 Server Action，並把表單欄位包成 <code>FormData</code> 傳進去。</p>
+
+<p>這裡有一個順帶的好處：即使 JavaScript 還沒載入，這個表單也能送出，因為它用的就是瀏覽器原生的表單提交。這種「漸進增強」讓頁面在弱網或腳本載入失敗時仍然可用。</p>
+
+<h2>第五步：用 useTransition 處理按鈕</h2>
+
+<pre><code>'use client';
+
+import { useState, useTransition } from 'react';
+import { completeAppointment } from './actions';
+
+export function CompleteButton({ appointmentId }: { appointmentId: string }) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState&lt;string | null&gt;(null);
+
+  return (
+    &lt;button
+      type="button"
+      disabled={pending}
+      onClick={() =&gt; start(async () =&gt; {
+        const result = await completeAppointment(appointmentId);
+        setError(result.error ?? null);
+      })}
+    &gt;{pending ? 'Saving…' : 'Mark complete'}&lt;/button&gt;
+  );
+}</code></pre>
+
+<p>不是每個動作都來自表單。「標記完成」是一顆按鈕，沒有欄位要送，所以用 <code>useTransition</code>：在 <code>start</code> 裡呼叫 Server Action，呼叫期間 <code>pending</code> 為真，按鈕變灰並顯示「Saving…」。回傳的結果若有錯誤就存進 state 顯示。這種寫法和表單版的差別只在「觸發方式」——一個靠送出、一個靠點擊——但兩者呼叫的都是同一個在伺服器上執行的 action。</p>
+
+<h2>為什麼可以不用 API：以及不能省的那一步</h2>
+
+<p>Server Action 之所以能取代一支 API，是因為它把「端點」隱形化了：你不用想路徑叫什麼、請求要送 JSON 還是 <code>FormData</code>、回應怎麼包。但方便並不等於可以放鬆紀律。每個 action 仍然要：<strong>驗身分</strong>（<code>requireStaff</code>）、<strong>驗輸入</strong>（Zod）、<strong>留稽核</strong>（<code>audit</code>）。這三件事在 API 版本裡你做過的，在這裡一樣都不能少。只要你把 action 當成「內部函式」而不是「公開端點」，就會漏掉授權，然後在某一天收到一份不該被寫入的醫囑。</p>
+
+<h2>revalidatePath 是最後一塊拼圖</h2>
+
+<p>資料寫入之後，畫面為什麼會更新？因為 <code>revalidatePath</code> 讓 Next.js 知道先前快取的某個路徑已經失效，下一次請求會重新執行伺服器端的查詢。這正好把第一步到第四步串成一個完整迴圈：Server Component 負責讀、Server Action 負責寫、<code>revalidatePath</code> 負責讓讀的那一端知道「該重來了」。你不需要在前端手動重抓，也不需要把資料複製一份到 client 的 state。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+Server Action 是標了 <code>'use server'</code> 的伺服器函式，client 元件可以像呼叫本地函式一樣呼叫它，因此後台不必為自己的寫入再開一支 API。每個 action 都必須自己做 <code>requireStaff</code>、Zod 驗證與 <code>audit</code>；做完寫入後用 <code>revalidatePath</code> 讓對應路徑重新查資料。client 端表單用 <code>useActionState</code>、按鈕用 <code>useTransition</code>，並用 pending 狀態給使用者即時回饋。
+</blockquote>
+
+<p>走完這五步，你已經看完整個員工後台的資料流：Server Component 直讀 Drizzle，守衛與資料同層，讀取留下稽核，寫入走 Server Action 並自動重新整理。之後無論是回頭讀 Dentify 的程式，或替自己的專案長出一個後台，你都有一套可以照著搭的骨架了。</p>
+
+<div class="lesson-nav">
+  <div><a href="./patient-roster-and-chart.html">← 上一步：病患名冊與病歷頁</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼每個 Server Action 都要自己呼叫 requireStaff？" data-correct="2" data-explain="Server Action 是可被直接呼叫的端點，把按鈕藏起來不是安全措施。">
+  <button class="opt">因為這樣可以讓寫入的速度比較快</button>
+  <button class="opt">因為 client 元件無法傳遞登入狀態</button>
+  <button class="opt">因為它其實是可被呼叫的公開端點</button>
+  <button class="opt">因為 Next.js 規定每個檔案都要檢查</button>
+</div>
+
+<div class="quiz" data-question="addVisitNote 為什麼在驗證失敗時「回傳」錯誤而不是丟出例外？" data-correct="0" data-explain="回傳值會回到 client，讓表單能直接顯示提示，而不會整頁崩掉。">
+  <button class="opt">因為錯誤值要回到 client 顯示提示</button>
+  <button class="opt">因為 Zod 只能搭配回傳值使用</button>
+  <button class="opt">因為丟出例外會讓資料庫連線中斷</button>
+  <button class="opt">因為回傳的速度比丟例外快很多</button>
+</div>
+
+<div class="quiz" data-question="revalidatePath 的作用是什麼？" data-correct="3" data-explain="它讓該路徑的快取失效，下次請求會重新執行伺服器端查詢。">
+  <button class="opt">它會把整個瀏覽器的頁面重新載入</button>
+  <button class="opt">它會把資料庫的資料表清空重建</button>
+  <button class="opt">它會把使用者強制登出目前的頁面</button>
+  <button class="opt">它讓該路徑的快取失效以重新查詢</button>
+</div>
+
+<div class="quiz" data-question="completeAppointment 為什麼要 revalidate 兩個路徑？" data-correct="1" data-explain="標記完成同時影響病患頁與行程頁，兩邊的內容都會改變。">
+  <button class="opt">因為一次只能讓一個路徑重新查詢</button>
+  <button class="opt">因為病患頁與行程頁的內容都變了</button>
+  <button class="opt">因為需要同時重新整理兩個瀏覽器分頁</button>
+  <button class="opt">因為資料庫的更新需要兩次確認</button>
+</div>
+
+<div class="quiz" data-question="AddNoteForm 的表單即使 JavaScript 尚未載入也能送出，原因是什麼？" data-correct="2" data-explain="它用的是瀏覽器原生表單提交，屬於漸進增強。">
+  <button class="opt">因為 Server Action 會定時自動重送</button>
+  <button class="opt">因為 CSS 已經預先把表單送出去</button>
+  <button class="opt">因為它用瀏覽器原生的表單提交</button>
+  <button class="opt">因為資料庫會主動來抓取新資料</button>
+</div>
+
+<div class="quiz" data-question="addVisitNote 裡 createdBy 的值應該從哪裡來？" data-correct="0" data-explain="要用伺服器端從 session 推導的 staff.id，不能採用 client 傳來的任何值。">
+  <button class="opt">從伺服器 session 推導的 staff 身分</button>
+  <button class="opt">從表單 hidden 欄位帶進來的使用者</button>
+  <button class="opt">從瀏覽器 localStorage 讀取的使用者</button>
+  <button class="opt">從 URL 查詢參數傳入的使用者編號</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 員工 Dashboard（Server Components） · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

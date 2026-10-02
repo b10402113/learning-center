@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>病患名冊與病歷頁：聚合查詢與 PHI 讀取紀錄</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>病患名冊與病歷頁：聚合查詢與 PHI 讀取紀錄</h1>
+<p class="meta">Step 4/5 · 員工 Dashboard（Server Components）</p>
+
+<h2>學習目標</h2>
+<p>用 count 加 groupBy 做病患名冊的聚合查詢，並在單一病患病歷頁把筆記與附件鎖在該病患的預約上，同時為每次讀取病人資料留下稽核紀錄。</p>
+
+<h2>前言：讀一眼名冊，也是一次病歷存取</h2>
+
+<p>在一般專案裡，「列出所有病患」聽起來就像一個普通的清單頁。但在診所後台，這張清單裡的每一列都是可辨識的個人資料，翻開某一位的完整病歷，更是最敏感的操作。所以這一頁不只是查詢而已，還有兩個容易被忽略的責任：一是查詢要能用一次資料庫往返就湊齊每位病患的看診次數；二是每一次「讀」，都要在稽核表留下紀錄——因為在醫療情境裡，「誰在什麼時候看了誰的資料」本身就是要能被追查的。</p>
+
+<p>前置條件是前三步：Server Component 的觀念、layout 的守衛、以及一次用 Drizzle 搭配 join 查詢的手法。這一節會做兩個頁面：病患名冊 <code>/dashboard/patients</code>，以及點進去的單一病患病歷頁 <code>/dashboard/patients/&lt;id&gt;</code>。</p>
+
+<h2>名冊：一次往返、帶上看診次數</h2>
+
+<pre><code>export default async function PatientsPage() {
+  const staff = await requireStaff();
+
+  // A roster read is still a read of the patients table.
+  await audit(staff.id, 'read', 'patients', null);</code></pre>
+
+<p>第一行先確認身分，第二行立刻寫稽核。注意這裡的註解：「讀名冊仍然是在讀 patients 表。」目標對象傳 <code>null</code>，因為這是一次範圍性的讀取，不是針對某一位。把稽核寫在最前面，是一個刻意養成的習慣——不要等到查完資料、渲染到一半才想起來要記錄。</p>
+
+<pre><code>  const rows = await db
+    .select({
+      id: patients.id,
+      firstName: patients.firstName,
+      lastName: patients.lastName,
+      dateOfBirth: patients.dateOfBirth,
+      phone: patients.phone,
+      isSelf: patients.isSelf,
+      lastVisitAt: patients.lastVisitAt,
+      accountEmail: users.email,
+      visits: count(appointments.id),
+    })
+    .from(patients)
+    .innerJoin(users, eq(users.id, patients.accountUserId))
+    .leftJoin(appointments, eq(appointments.patientId, patients.id))
+    .groupBy(patients.id, users.email)
+    .orderBy(asc(patients.lastName), asc(patients.firstName));</code></pre>
+
+<p>這個查詢藏了兩個不同性質的 join。對 <code>users</code> 用 <strong>innerJoin</strong>，因為每位病患一定掛在某一個帳號底下（家庭成員共用一個帳號），這個關聯必定存在。對 <code>appointments</code> 用 <strong>leftJoin</strong>，因為病患可能一次都沒看診過，如果硬用 innerJoin，那些「尚未有預約」的人會整列消失。leftJoin 搭配 <code>count(appointments.id)</code>，讓沒有預約的人數到 0，而不是被漏掉。</p>
+
+<p><code>count</code> 是聚合函式，資料庫會把同一位病患的多筆預約收攏成一列；既然用了聚合，就要用 <code>groupBy</code> 告訴資料庫「用哪些欄位分組」——這裡是病患 id 與帳號 email。排序則按姓氏、名字，讓名冊穩定。</p>
+
+<h2>名冊上的三個數字與版面</h2>
+
+<pre><code>  const households = new Set(rows.map((r) =&gt; r.accountEmail)).size;</code></pre>
+
+<p>名冊上方同樣有三格統計：病患總數、家庭數、未成年人數。病患總數就是 <code>rows.length</code>；家庭數用 <code>Set</code> 對帳號 email 去重；未成年人數則數 <code>!isSelf</code> 的那些——在 Dentify 的模型裡，一個帳號底下只有一位 <code>isSelf</code> 的家長本人，其餘都是無法自行登入的受撫養者，所以在名冊上會標一個「Dependent」小標籤。</p>
+
+<p>表格每一列顯示姓名、生日、電話、看診次數與上次看診日期。沒有值的欄位（例如沒填生日）用破折號呈現，而不是硬把空字串塞進畫面。姓名做成連到單一病患頁的連結，這就是「從名冊進到病歷」的入口。</p>
+
+<h2>病歷頁：先把範圍縮到「這一位」</h2>
+
+<pre><code>export default async function PatientPage({ params }: PageProps&lt;'/dashboard/patients/[id]'&gt;) {
+  const staff = await requireStaff();
+  const { id } = await params;
+
+  const [patient] = await db.select().from(patients).where(eq(patients.id, id));
+  if (!patient) notFound();</code></pre>
+
+<p>單一病患頁的動態參數同樣是 Promise，要 <code>await params</code> 才拿得到 <code>id</code>。查不到這位病患時呼叫 <code>notFound()</code>，讓 Next.js 走 404 流程，而不是回傳一個空白頁或把錯誤細節洩漏出去。</p>
+
+<p>接著是兩個稽核紀錄，順序與目標都很講究：</p>
+
+<pre><code>  await audit(staff.id, 'read', 'patients', patient.id);
+  await audit(staff.id, 'read', 'medical_histories', patient.id);</code></pre>
+
+<p>第一筆記錄「讀了病患基本資料」，第二筆記錄「讀了醫療史」。醫療史那張表是整個模型裡最敏感的一張，裡面的過敏、用藥、慢性病都是 PHI（受保護的健康資訊）。所以打開一位病患的頁面，在稽核表上就是兩筆，指定對象是這位病患的 id。</p>
+
+<h2>把筆記與附件鎖在這位病患的預約上</h2>
+
+<pre><code>  const visits = await db
+    .select({ id: appointments.id, startsAt: appointments.startsAt, /* … */ })
+    .from(appointments)
+    .where(eq(appointments.patientId, patient.id))
+    .orderBy(desc(appointments.startsAt));
+
+  // Scoped to THIS patient's appointments.
+  const notes = visits.length
+    ? await db
+        .select()
+        .from(visitNotes)
+        .where(inArray(visitNotes.appointmentId, visits.map((v) =&gt; v.id)))
+        .orderBy(desc(visitNotes.createdAt))
+    : [];</code></pre>
+
+<p>這裡是整節最重要的一段。術後醫囑存在 <code>visit_notes</code> 表，但它只帶 <code>appointmentId</code>，沒有直接帶 <code>patientId</code>。如果偷懶寫成「把 <code>visit_notes</code> 全部查出來」，就會把<strong>全院所有病患</strong>的醫囑一次載進記憶體，既浪費又極度危險——那些資料根本不該出現在這一頁。正確做法先查出「這位病患的所有預約 id」，再用 <code>inArray</code> 把筆記限定在這些預約上。程式碼的註解直接點明：unscoped 的 select 會把每一位病患的筆記都拉進來。</p>
+
+<p>還有一個容易忽略的細節：當 <code>visits</code> 是空陣列時，就<strong>跳過這次查詢</strong>，直接給空陣列。原因是對空的 id 清單做 <code>inArray</code> 通常沒有意義，而且能省下一次不必要的資料庫往返。附件查詢用的是完全一樣的<strong>範圍縮小</strong>手法，只是把 <code>visit_notes</code> 換成 <code>appointment_attachments</code>。</p>
+
+<h2>私密附件：每次讀取都重新簽名</h2>
+
+<pre><code>  const filesFor = (appointmentId: string) =&gt;
+    files
+      .filter((f) =&gt; f.appointmentId === appointmentId)
+      .map((f) =&gt; ({ id: f.id, ...signedAttachment(f.path) }));</code></pre>
+
+<p>病患上傳的 X 光、處方、轉診單存在私有空間，不能直接給一條永久網址。所以每次有人讀取這一頁時，程式才用 <code>signedAttachment</code> 針對檔案路徑簽出一組<strong>會過期的網址</strong>，同時提供縮圖與原圖。這代表同一張圖在不同時間被打開，拿到的網址都不一樣；就算網址外流，過了期限也失效。這是把「擁有連結」和「有權觀看」分開的典型做法。</p>
+
+<h2>渲染醫療史與看診時間軸</h2>
+
+<p>醫療史區塊用現成的設計系統元件組出來：過敏、用藥、慢性病各自用一排 <code>Chip</code>；抽菸與懷孕用 <code>ToggleRow</code> 顯示；焦慮程度用 <code>LevelMeter</code>；醫師另外補的文字說明放在一個底色區塊。如果病患在 onboarding 時跳過了醫療史，這裡就顯示空狀態，而不是硬撐出一個空表格。這裡也體現了常見的區分：<strong>「沒有填」和「填了沒有」</strong>是兩件不同的事，畫面要分得出來。</p>
+
+<p>下方的看診時間軸把預約依時間由新到舊排好。狀態仍是「已預約」的項目旁邊會出現「標記完成」按鈕；每筆預約底下也會掛一個新增術後醫囑的表單。這兩個互動元件本身是 Client Component，但它們呼叫的寫入動作——也就是下一步的主角 Server Actions——會在伺服器端執行。</p>
+
+<h2>做完長什麼樣</h2>
+
+<p>打開名冊，你會看到每位病患連同看診次數與家庭標記；點一個名字進到病歷頁，會看到基本資料、醫療史、以及依時間排序的看診時間軸，時間軸上能開啟附件的縮圖、閱讀既有醫囑。整個過程同樣沒有 API：查詢全在 Server Component 裡完成。而每一次進到病歷頁，稽核表就多兩筆紀錄。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+名冊用一次查詢搭配 <code>innerJoin</code>（帳號）、<code>leftJoin</code>（預約）與 <code>count</code>／<code>groupBy</code>，就算出每位病患的看診次數，而且讀取本身也寫稽核。病歷頁把筆記與附件用 <code>inArray</code> 嚴格鎖在該病患的預約 id 上，並為讀取 <code>patients</code> 與 <code>medical_histories</code> 各留一筆 <code>audit</code>；私有附件則在每次讀取時現場簽出會過期的網址。
+</blockquote>
+
+<p>讀取都做好了，最後一塊缺口是寫入。下一節要看：不寫 API、不寫 Route Handler，怎麼用 Server Action 把醫囑寫進資料庫，並讓畫面自動更新。</p>
+
+<div class="lesson-nav">
+  <div><a href="./schedule-server-component.html">← 上一步：今日行程 Server Component</a></div>
+  <div><a href="./server-actions-revalidate.html">下一步：Server Actions →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼對 appointments 用的是 leftJoin 而不是 innerJoin？" data-correct="2" data-explain="病患可能一次都沒看診，innerJoin 會把這些沒有預約的人整列濾掉。">
+  <button class="opt">因為 leftJoin 的查詢語法比較簡短</button>
+  <button class="opt">因為 appointments 表的欄位比較多</button>
+  <button class="opt">因為要保留還沒有任何預約的病患</button>
+  <button class="opt">因為 leftJoin 才能使用聚合函式</button>
+</div>
+
+<div class="quiz" data-question="查詢裡 groupBy 的目的是什麼？" data-correct="0" data-explain="用了 count 聚合後，要指定用哪些欄位分組，才能把每位病患的多筆預約收成一列。">
+  <button class="opt">指定用哪些欄位把列收攏成組</button>
+  <button class="opt">指定查詢結果要用什麼方式排序</button>
+  <button class="opt">指定哪些欄位不可以出現在結果中</button>
+  <button class="opt">指定要限制最多回傳多少筆資料</button>
+</div>
+
+<div class="quiz" data-question="為什麼「讀病患名冊」也要寫稽核紀錄？" data-correct="1" data-explain="名冊本身包含可辨識的個人資料，讀取也屬於一次病歷存取。">
+  <button class="opt">因為這樣可以加快下一次查詢速度</button>
+  <button class="opt">因為讀名冊也屬於一次資料存取</button>
+  <button class="opt">因為稽核可以取代身分權限檢查</button>
+  <button class="opt">因為資料庫規定每次查詢都要寫入</button>
+</div>
+
+<div class="quiz" data-question="把 visit_notes 全部查出來的寫法，主要風險是什麼？" data-correct="3" data-explain="它會把全院所有病患的醫囑都載進記憶體，是嚴重的資料暴露與浪費。">
+  <button class="opt">它會讓 SQL 的語法變得無法編譯</button>
+  <button class="opt">它會讓資料庫的索引完全失效</button>
+  <button class="opt">它會讓病患的看診次數計算錯誤</button>
+  <button class="opt">它會把其他病患的醫囑也載進來</button>
+</div>
+
+<div class="quiz" data-question="附件為什麼要用 signedAttachment 現場產生網址？" data-correct="1" data-explain="私有檔案需要一組會過期的簽名網址，就算外流也會失效。">
+  <button class="opt">因為這樣可以讓圖片自動壓縮變小</button>
+  <button class="opt">因為要產生會過期的簽名網址</button>
+  <button class="opt">因為瀏覽器不能顯示私有的檔案</button>
+  <button class="opt">因為資料庫不允許儲存檔案路徑</button>
+</div>
+
+<div class="quiz" data-question="visits 是空陣列時為什麼要跳過筆記查詢？" data-correct="2" data-explain="對空清單做 inArray 沒有意義，也省下一次不必要的資料庫往返。">
+  <button class="opt">因為空陣列會讓程式直接當掉</button>
+  <button class="opt">因為沒有預約就代表病患不存在</button>
+  <button class="opt">因為沒有 id 可查也省一次往返</button>
+  <button class="opt">因為空陣列會回傳其他病患的資料</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 員工 Dashboard（Server Components） · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

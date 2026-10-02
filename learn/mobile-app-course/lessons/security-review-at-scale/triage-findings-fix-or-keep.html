@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>哪些 finding 該修、哪些該保留</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>哪些 finding 該修、哪些該保留</h1>
+<p class="meta">Step 4/5 · 大規模 PR 安全審查</p>
+
+<h2>前言</h2>
+
+<p>你的畫面上現在是一份安全清單，外加一長串 review 意見。接著你會面對一個很直覺、卻很容易做錯的問題：這些東西，是不是全部照著改就對了？</p>
+
+<p>答案是「不一定」。這裡有一股張力：一方面，安全問題不能輕忽，漏掉一個授權繞過就可能出事；另一方面，這份清單本身也是 AI 生成的，AI 會誤報、會把「風格偏好」講得像是缺陷，也會建議你改掉某段其實是刻意設計的程式碼。如果照單全收，你可能刪掉一個故意留著的行為；如果全部忽略，你又把真正的風險一起放掉了。這一節要給你的，是一套判斷每一則 finding 的方法。</p>
+
+<p>課程裡有個很具體的例子：Sentry 的 session replay 設定中有一個 <code>masks: false</code>，AI 審查認為這是隱私問題而建議改掉，但它是使用者刻意保留的設計。那則意見就屬於「該保留」——你若盲從，反而改壞了原意。</p>
+
+<h2>三種做法，只有一種同時顧到安全與正確</h2>
+
+<table>
+<thead>
+<tr><th>做法</th><th>會發生什麼</th><th>問題</th></tr>
+</thead>
+<tbody>
+<tr><td>全部照單全收</td><td>把彙整 prompt 直接丟給 agent 一次改完，不逐則看</td><td>會改掉刻意的設計，也可能引入 AI 幻想出來的「修正」</td></tr>
+<tr><td>全部人工逐則處理</td><td>每一則都自己讀、自己改、自己決定</td><td>在上萬行的規模下耗時又容易疲乏，最後還是漏</td></tr>
+<tr><td>分類判斷後分派（建議）</td><td>先對每則做「修 / 保留」的判斷，再把要修的批次交給 agent</td><td>需要你花一點時間判斷，但這正是你不可取代的地方</td></tr>
+</tbody>
+</table>
+
+<p>建議的做法把「判斷」和「執行」分開：判斷由你做，因為只有你知道哪些行為是刻意的；執行交給 agent，因為那是重複、耗時、可以平行的工作。這樣既不盲從，也不會被規模淹沒。</p>
+
+<h2>判斷每一則的三個問句</h2>
+
+<p>面對清單上的任何一則，依序問這三個問題：</p>
+
+<ol>
+<li><strong>這是不是安全等級的問題？</strong>如果它落在 injection、授權繞過、XSS、SSRF、CSRF、broken auth、misconfiguration 這七類裡，預設立場是「要修」，除非你有明確理由說明它是刻意的。</li>
+<li><strong>這個「修正」會不會破壞刻意的設計？</strong>回頭看那則 <code>masks: false</code>：它被標成隱私問題，但它是有意保留的行為。凡是你在寫的時候「故意這樣做」的地方，就要特別小心 AI 的下意識糾正。</li>
+<li><strong>我理解這則在講什麼嗎？</strong>如果一則 critical finding 你看不懂，先問清楚它的攻擊路徑，再決定。看不懂就照改，等於把判斷權整包交出去。</li>
+</ol>
+
+<p>大致上可以濃縮成一個判準：<strong>安全類、且不確定 → 修；風格類、且影響到你刻意的設計 → 先保留並記錄理由。</strong>嚴重度標成 minor 的多半是可改可不改的品味問題，不該佔用你在 critical 上的注意力。</p>
+
+<h2>反例：規則什麼時候會翻轉</h2>
+
+<p>這套判準不是叫你「安全類一律修」。下面兩種情況會讓它翻轉：</p>
+
+<ul>
+<li><strong>刻意的例外。</strong>像 <code>masks: false</code> 這種你明明知道後果、也刻意選擇的行為。此時正確動作不是改，而是在 PR 上回覆說明「這是刻意的」，讓記錄留下來。</li>
+<li><strong>修正本身有風險。</strong>有些建議雖然方向對，但改動範圍很大，可能在這個 PR 的階段引入新問題。這時可以保留原狀、開一則後續待辦（例如記進 <code>plan.md</code>），而不是硬塞進這次的合併。</li>
+</ul>
+
+<p>換句話說，判斷的最終標準不是「AI 說了什麼」，而是「這樣改對這個專案是不是真的更好」。AI 只是提供線索，決定權在你。</p>
+
+<h2>判斷完之後：批次分派給平行 session</h2>
+
+<p>當你把清單分成「要修」和「保留」兩堆，接著就不必自己一則一則改了。課程的做法是把要修的彙整 prompt 依模組或問題分批，<strong>同時開多個 agent session 平行處理</strong>，而不是讓一個 session 序列修完十幾則。這樣可以避免「改一則、等一則」的空轉。</p>
+
+<p>分派時記得：每個 session 負責的範圍要盡量不重疊（不同檔案或不同模組），否則多個 session 同時改同一個檔案，很容易在合併時打架。分派前先看一眼那則問題在哪個檔案，是避免衝突的關鍵動作。</p>
+
+<blockquote>
+AI 的 review 意見是線索，不是命令。你要做的是分類判斷——安全且不確定就修，會破壞刻意設計的就先保留並說明；判斷完，再把要修的批次平行分派出去執行。
+</blockquote>
+
+<p>清單分好了、批次也分派出去了，但「修完」還不等於「可以合併」。下一節要把最後一哩路走完：套用修復、二次 commit、驗證，然後把這個上萬行的 PR 安全地合併回 master。</p>
+
+<div class="lesson-nav">
+  <div><a href="./run-security-review-on-large-pr.html">← 上一步：在大型 PR 上跑安全審查</a></div>
+  <div><a href="./heal-and-merge-large-pr.html">下一步：修完、驗證、合併 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼不建議把 review 意見全部照單全收？" data-correct="1" data-explain="清單本身是 AI 生成的，可能誤報，或建議改掉你刻意設計的行為。">
+  <button class="opt">因為這樣做會讓 commit 次數太少</button>
+  <button class="opt">因為 AI 會誤報或改掉刻意的設計</button>
+  <button class="opt">因為 GitHub 會拒絕自動套用的修改</button>
+  <button class="opt">因為安全問題其實都不需要修正</button>
+</div>
+<div class="quiz" data-question="課程中用來提醒「不要盲從」的例子是什麼？" data-correct="2" data-explain="Sentry session replay 裡刻意保留的 masks: false，被 AI 當成隱私問題。">
+  <button class="opt">資料庫連線字串外洩到前端</button>
+  <button class="opt">登入端點缺少速率限制</button>
+  <button class="opt">刻意保留的 masks: false 設定</button>
+  <button class="opt">CORS 沒有設定任何來源限制</button>
+</div>
+<div class="quiz" data-question="判斷一則 finding 時，第一個該問的問句是什麼？" data-correct="0" data-explain="先確認它是不是落在七大安全類別裡，是的話預設立場就是要修。">
+  <button class="opt">這是不是落在安全等級的七類裡</button>
+  <button class="opt">這則意見總共佔了幾行程式碼</button>
+  <button class="opt">這則意見是哪個工具產生的</button>
+  <button class="opt">這則意見有沒有附上圖片</button>
+</div>
+<div class="quiz" data-question="「分類判斷後分派」這個做法，把什麼和什麼分開？" data-correct="3" data-explain="判斷由你做，因為你知道哪些是刻意的；執行交給 agent，因為可重複又能平行。">
+  <button class="opt">把前端和後端的工作分開處理</button>
+  <button class="opt">把 commit 和 PR 分成兩個步驟</button>
+  <button class="opt">把安全掃描和風格檢查分開跑</button>
+  <button class="opt">把判斷留給你、執行交給 agent</button>
+</div>
+<div class="quiz" data-question="為什麼要平行開多個 agent session 修問題？" data-correct="1" data-explain="避免一個 session 序列修十幾則的等待，提升修正效率。">
+  <button class="opt">因為同一時間只能用一個 session</button>
+  <button class="opt">避免序列等待、讓修正能同時進行</button>
+  <button class="opt">因為平行 session 會自動合併 PR</button>
+  <button class="opt">因為 AI 一次只能記住一則意見</button>
+</div>
+<div class="quiz" data-question="分派多個平行 session 時，最需要避免的是？" data-correct="2" data-explain="若多個 session 同時改同一個檔案，合併時很容易打架，所以要讓範圍不重疊。">
+  <button class="opt">讓某個 session 一次修太多問題</button>
+  <button class="opt">讓 session 使用同一套工具鏈</button>
+  <button class="opt">多個 session 同時改同一個檔案</button>
+  <button class="opt">讓 session 讀取同一份 review 清單</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 大規模 PR 安全審查 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -330,3 +330,147 @@ updated: 2026-10-02
 - cascade-delete-cleanup: unknown
 
 > probe skipped via /nodes mobile-app-course/seeding-and-backend-tests skip-probe on 2026-10-02
+
+## staff-dashboard-server-components — 員工 Dashboard（Server Components）
+
+- rsc-runs-on-server: unknown
+- direct-db-vs-http-hop: unknown
+- client-vs-server-component-boundary: unknown
+- resource-guard-in-layout: unknown
+- not-staff-fallback: unknown
+- typed-page-props-searchparams: unknown
+- clinic-day-utc-window: unknown
+- drizzle-join-gte-lt: unknown
+- roster-count-groupby: unknown
+- audit-phi-reads: unknown
+- scope-notes-attachments-to-patient: unknown
+- signed-attachment-urls: unknown
+- server-action-use-server: unknown
+- revalidate-path-after-mutation: unknown
+- useactionstate-usetransition: unknown
+
+> probe skipped via /nodes mobile-app-course/staff-dashboard-server-components skip-probe on 2026-10-02
+
+## stream-chat-video — Stream 即時聊天與視訊
+
+- stream-service-role: unknown
+- server-derived-identity: unknown
+- shared-chat-video-token: unknown
+- token-ttl-and-refresh: unknown
+- derived-channel-id: unknown
+- staff-inbox-vs-patient-channel: unknown
+- root-client-singleton: unknown
+- connect-timeout-degradation: unknown
+- chat-built-in-features: unknown
+- scheduled-call-derivation: unknown
+- ringing-overlay: unknown
+- call-controls: unknown
+
+> probe skipped via /nodes mobile-app-course/stream-chat-video skip-probe on 2026-10-02
+
+## nextjs-api-handlers — Next.js API Route Handlers
+
+- route-handler-file-method-mapping: unknown
+- api-vs-server-component-boundary: unknown
+- web-standards-request-response: unknown
+- error-envelope-route-wrapper: unknown
+- api-error-helpers-status: unknown
+- no-store-identity-responses: unknown
+- exclusion-violation-409: unknown
+- error-scrubbing-phi: unknown
+- session-derived-identity: unknown
+- require-auth-upsert-eventual-consistency: unknown
+- role-from-metadata-and-db: unknown
+- require-owned-patient-404-over-403: unknown
+- zod-request-boundary: unknown
+- discriminated-union-cancel-reschedule: unknown
+- server-derived-fields: unknown
+- booking-write-guard-rerun: unknown
+- server-shaped-response: unknown
+
+> probe skipped via /nodes mobile-app-course/nextjs-api-handlers skip-probe on 2026-10-02
+
+## monorepo-nextjs-backend — Monorepo 與 Next.js 後端骨架
+
+- monorepo-two-apps-why: unknown
+- web-owns-dashboard-api-webhooks: unknown
+- business-logic-lives-in-web: unknown
+- npm-workspaces-layout: unknown
+- root-scripts-run-from-root: unknown
+- expo-metro-npm-vs-pnpm: unknown
+- app-router-file-conventions: unknown
+- root-layout-clerk-provider: unknown
+- route-handler-vs-page: unknown
+- proxy-renamed-middleware: unknown
+- auth-context-attachment: unknown
+- bearer-token-for-expo: unknown
+- create-route-matcher-deprecated: unknown
+- resource-based-guards: unknown
+- guard-placement-next-to-data: unknown
+
+> probe skipped via /nodes mobile-app-course/monorepo-nextjs-backend skip-probe on 2026-10-02
+
+## drizzle-neon-booking-domain — 預約領域模型（Drizzle + Neon）
+
+- calendar-day-vs-instant: unknown
+- dst-math-in-one-file: unknown
+- working-hours-wall-clock: unknown
+- time-off-and-appointments-as-busy: unknown
+- half-open-interval-overlap: unknown
+- slot-granularity-and-lead-time: unknown
+- read-write-share-one-engine: unknown
+- exclusion-constraint-arbitration: unknown
+- taken-vs-invalid-classification: unknown
+
+> probe skipped via /nodes mobile-app-course/drizzle-neon-booking-domain skip-probe on 2026-10-02
+
+## observability-deep — 觀測深化：Logs / Tracing / Agent Tracing
+
+- structured-log-anatomy: unknown
+- severity-levels: unknown
+- queryable-tags-properties: unknown
+- batch-volume-simulation: unknown
+- dashboard-multi-condition-search: unknown
+- timeline-spike-saved-query-export: unknown
+- before-send-log-scrubbing: unknown
+- mobile-vs-web-data-collection: unknown
+- genai-input-output-disabling: unknown
+- agent-tracing-metrics: unknown
+- multi-project-sentry: unknown
+- expo-observe-metrics: unknown
+- performance-regression-over-time: unknown
+
+> probe skipped via /nodes mobile-app-course/observability-deep skip-probe on 2026-10-02
+
+## ai-assistant-streaming — 串流 AI 助理
+
+- streaming-vs-blocking-spinner: unknown
+- request-response-content-type: unknown
+- openai-stream-to-readablestream: unknown
+- domain-scoped-system-prompt: unknown
+- emergency-classifier-shortcircuit: unknown
+- fail-closed-transmission-gate: unknown
+- sentry-agent-tracing-phi: unknown
+- client-useapistream: unknown
+- request-sequencing-stale: unknown
+- bubble-streaming-render: unknown
+- conversation-resolver-ownership: unknown
+- get-rehydrate-history: unknown
+- delete-history-cleanup: unknown
+- history-limit-blank-photo-filter: unknown
+- module-level-conversation-id: unknown
+- imagekit-photo-attachment: unknown
+- photo-canned-turn-no-openai: unknown
+- imagekit-blur-transform: unknown
+
+> probe skipped via /nodes mobile-app-course/ai-assistant-streaming skip-probe on 2026-10-02
+
+## security-review-at-scale — 大規模 PR 安全審查
+
+- scale-breaks-manual-review: unknown
+- security-finding-taxonomy: unknown
+- run-security-review-on-large-pr: unknown
+- triage-findings-fix-or-keep: unknown
+- heal-and-merge-large-pr: unknown
+
+> probe skipped via /nodes mobile-app-course/security-review-at-scale skip-probe on 2026-10-02

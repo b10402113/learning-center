@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>在 app root 接上兩個 client：一個 token、Chat 與 Video</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>在 app root 接上兩個 client：一個 token、Chat 與 Video</h1>
+<p class="meta">Step 3/5 · Stream 即時聊天與視訊</p>
+
+<h2>學習目標</h2>
+<p>做完這一節，你的 Expo app 最上層會多一層 <code>StreamProvider</code>：它用 <code>POST /api/stream/token</code> 拿到的那張 token，同時建立 Stream Chat 與 Stream Video 兩個 client，並且在 12 秒內連不上時自動放棄，讓預約與 AI 助理等其他功能照常運作。</p>
+
+<h2>前言：token 有了，但要種在哪裡？</h2>
+
+<p>上一節的後端已經能發 token，也能指出病人該進哪個對話。但這個 token 要在 app 的哪一層被使用，是一個會影響全app的決定。如果每個畫面各自去打端點、各自建 client，你會很快遇到兩個問題：同一個使用者可能同時存在好幾條 Stream 連線，而登出時有些 client 沒被斷開，下一個使用者就沿用了上一個人的身分。</p>
+
+<p>解法是把兩個 client 接到整個應用的最上層，只建立一次，登出時一起拆掉。這一節就是那個最上層的 <code>StreamProvider</code>。它除了接線，還處理一件很容易被忽略的事：當 Stream 掛掉時，app 要怎麼活下來。</p>
+
+<h2>為什麼兩個 client 都放在 root</h2>
+
+<p>聊天與視訊的狀態要在整個 app 都拿得到。病人在 home 畫面按「Video Consult」要能撥號、在 messages 分頁要能收訊息、在 booking 流程中還可能被來電打斷。這些畫面彼此不相關，唯一共同的地方就是它們都在 root 底下。</p>
+
+<p>把兩個 client 放在 root 還有一個更實際的理由：登出。Chat 與 Video client 都綁著「目前登入的人是誰」，只要把它們的生命週期綁在一個會在登出時被卸載的元件上，斷線就會自動發生，不必手動記得去斷。</p>
+
+<h2>第一步：拿到 token 並存成 session</h2>
+
+<p>Provider 先向自己的 token 端點要身分，把回應存成 state：</p>
+
+<pre><code>type StreamSession = {
+  apiKey: string;
+  userId: string;
+  name: string;
+  role: 'patient' | 'staff' | 'dentist';
+  token: string;
+};
+
+useEffect(() =&gt; {
+  if (!isLoaded || !isSignedIn) return;
+  let cancelled = false;
+  call&lt;StreamSession&gt;('/api/stream/token', { method: 'POST' }).then(
+    (next) =&gt; !cancelled &amp;&amp; setSession(next),
+    () =&gt; !cancelled &amp;&amp; giveUpAt('token', 'error')
+  );
+  return () =&gt; { cancelled = true; };
+}, [call, isLoaded, isSignedIn, giveUpAt]);</code></pre>
+
+<p>只有登入後才會打這支端點。拿到的 session 裡同時有 <code>apiKey</code> 與 <code>token</code>，接下來的兩個 client 都會用到它。</p>
+
+<h2>第二步：建立 Chat client</h2>
+
+<p>Chat 用 SDK 提供的 hook 建立，只需要 api key、一個會回傳 token 的函式，以及使用者資料：</p>
+
+<pre><code>const userData = useMemo(
+  () =&gt; ({ id: session.userId, name: session.name }),
+  [session.userId, session.name]
+);
+
+const chatClient = useCreateChatClient({
+  apiKey: session.apiKey,
+  tokenOrProvider: tokenProvider,
+  userData,
+});</code></pre>
+
+<p>注意 <code>tokenOrProvider</code> 傳的不是 token 本身，而是一個 <code>tokenProvider</code> 函式。這是為了讓 SDK 在 token 快過期時自己去更新，而更新的方式就是再打一次同一個端點：</p>
+
+<pre><code>const tokenProvider = useCallback(
+  () =&gt; call&lt;StreamSession&gt;('/api/stream/token', { method: 'POST' }).then((s) =&gt; s.token),
+  [call]
+);</code></pre>
+
+<p>這個函式是穩定的，因為 <code>useApiClient</code> 把 Clerk 的 <code>getToken</code> 放在 ref 裡，所以它的依賴不會每次 render 都變，也就不會讓 Chat client 反覆重建。</p>
+
+<h2>第三步：建立 Video client，而且只建立一次</h2>
+
+<p>Video client 不能用 <code>new</code>，要用 <code>getOrCreateInstance</code>：</p>
+
+<pre><code>const videoClient = useMemo(
+  () =&gt;
+    StreamVideoClient.getOrCreateInstance({
+      apiKey: session.apiKey,
+      user: userData,
+      token: session.token,
+      tokenProvider,
+      options: { rejectCallWhenBusy: true },
+    }),
+  [session.apiKey, session.token, userData, tokenProvider]
+);</code></pre>
+
+<p>差別在哪裡？第二個 client 實例會破壞來電鈴聲的狀態，也會讓推播喚醒對不上正確的連線。同一個使用者呼叫 <code>getOrCreateInstance</code> 是冪等的，所以放在 <code>useMemo</code> 裡重算也安全。<code>options.rejectCallWhenBusy</code> 則表示這個人正在講電話時，新來電會被自動拒絕，而不是兩個通話互搶。</p>
+
+<p>最後，在元件卸載時把 video client 斷開，這就是登出時的自動清理：</p>
+
+<pre><code>useEffect(
+  () =&gt; () =&gt; {
+    videoClient.disconnectUser().catch(() =&gt; {});
+  },
+  [videoClient]
+);</code></pre>
+
+<h2>第四步：12 秒的耐心——連不上就讓 app 先活著</h2>
+
+<p>Stream 是一個外部服務，它有可能連不上。如果 app 傻傻地等它，整個介面會卡在轉圈圈，連跟聊天無關的預約功能都一起停擺。Dentify 的處理方式是設一個 12 秒的上限：</p>
+
+<pre><code>const CONNECT_TIMEOUT_MS = 12_000;
+
+const giveUpAt = useCallback((stage: 'token' | 'socket', reason: 'error' | 'timeout') =&gt; {
+  Sentry.logger.warn('stream unavailable, app running without messaging', {
+    stage,
+    reason,
+    timeout_ms: CONNECT_TIMEOUT_MS,
+  });
+  setFailed(true);
+}, []);</code></pre>
+
+<p>這裡的 <code>stage</code> 區分了兩種失敗：<code>token</code> 代表連後端拿 token 就失敗，<code>socket</code> 代表 token 拿到了、但聊天連線沒開起來。分開記錄是為了在監控上能分辨是後端問題還是 Stream 問題。<code>reason</code> 則區分是直接錯誤還是等超過時間。</p>
+
+<p>當失敗發生時，Provider 不再包住 Chat 與 Video，直接把子元件原樣渲染：</p>
+
+<pre><code>if (!isLoaded) return &lt;Connecting /&gt;;
+if (!isSignedIn || failed) return &lt;&gt;{children}&lt;/&gt;;
+if (!session) return &lt;Connecting /&gt;;</code></pre>
+
+<p>結果就是：聊天與視訊消失，但預約、AI 助理、個人資料全部照常。Messaging 是一個功能，不是整個 app 的地基。</p>
+
+<h2>第五步：登出時不留下上一個人的 token</h2>
+
+<p>還有一個容易漏掉的情境：使用者切換帳號。如果舊的 session state 還留著，而新的 token 還在路上，app 可能短暫用上一個人的身分連上 Stream。Dentify 在 render 期間比對登入狀態，一發現變化就清掉 session：</p>
+
+<pre><code>if (wasSignedIn !== isSignedIn) {
+  setWasSignedIn(isSignedIn);
+  setSession(null);
+  setFailed(false);
+}</code></pre>
+
+<p>把 session 清掉之後，<code>ConnectedStream</code> 會被卸載，兩個 client 也一起斷開。等新身分登入，一切從乾淨的狀態重建。</p>
+
+<h2>第六步：把主題接上，避免看起來像外掛的 SDK</h2>
+
+<p>最後一步是外觀。Stream 的預設主題是通用的，如果直接沿用，聊天畫面會和 app 的其他部分明顯不同。Dentify 把 Stream 的主題色改成自己的水藍與深藍，並把安全區域的 insets 接進 video 主題，讓通話畫面自己處理留白：</p>
+
+<pre><code>const videoTheme = { variants: { insets: { top, right, bottom, left } } };</code></pre>
+
+<p>原則是：聊天與通話要讀起來像同一個產品，而不是兩個硬塞進來的功能。這也是為什麼通話畫面不再自己包 <code>SafeAreaView</code>，否則會多留一次空白。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>StreamProvider 在 app root 只做一次接線：用 server 發的 token 建立 Chat 與 Video 兩個 client，Video 用 getOrCreateInstance 確保只有一個實例。連線設 12 秒上限，失敗時把畫面交還給 app，讓聊天以外的功能照常運作。登出或切換帳號時清掉 session，兩個 client 一起斷開。主題則接上 app 的配色，讓即時功能不像是外掛。</p>
+</blockquote>
+
+<p>現在聊天與通話的「引擎」已經裝好，但沒有任何畫面用它。下一步要做出訊息分頁：病人直接進入唯一對話，員工則從共享收件匣開啟個別對話。</p>
+
+<div class="lesson-nav">
+  <div><a href="./token-and-channel-endpoints.html">← 上一步：Token endpoint 與 channel endpoint：server wrapper 與短效憑證</a></div>
+  <div><a href="./chat-inbox-and-conversation.html">下一步：訊息畫面：patient 的單一對話與 staff 的收件匣 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼兩個 client 要建立在 app root，而不是各自的畫面裡？" data-correct="1" data-explain="root 讓聊天與通話狀態在整個 app 都拿得到，登出時也會一起被卸載斷開。">
+  <button class="opt">因為放在畫面裡會讓程式碼檔案太多</button>
+  <button class="opt">讓狀態共用且登出時一起被斷開</button>
+  <button class="opt">因為 Stream 規定只能在最上層初始化</button>
+  <button class="opt">因為這樣可以省下 Stream 的連線費用</button>
+</div>
+
+<div class="quiz" data-question="Video client 為什麼要用 getOrCreateInstance 而不是 new？" data-correct="2" data-explain="第二個實例會破壞 ringing 狀態與推播喚醒，getOrCreateInstance 確保同一個使用者只有一個 client。">
+  <button class="opt">因為 new 在這個 SDK 版本已被移除</button>
+  <button class="opt">因為 new 沒有辦法設定 api key</button>
+  <button class="opt">避免第二個實例破壞鈴聲與喚醒</button>
+  <button class="opt">因為 new 會自動建立一個聊天連線</button>
+</div>
+
+<div class="quiz" data-question="12 秒逾時後的行為是什麼？" data-correct="3" data-explain="放棄 Stream 後直接渲染子元件，聊天消失但預約與 AI 助理等其餘功能照常運作。">
+  <button class="opt">整個 app 停在轉圈圈畫面等待重連</button>
+  <button class="opt">自動改用 Expo Go 的替代通訊功能</button>
+  <button class="opt">把使用者登出並要求重新登入一次</button>
+  <button class="opt">照常顯示 app，只是沒有聊天功能</button>
+</div>
+
+<div class="quiz" data-question="giveUpAt 記錄 stage 與 reason 的用處是什麼？" data-correct="0" data-explain="stage 區分 token 或 socket 失敗，reason 區分錯誤或逾時，讓監控能分辨問題出在哪。">
+  <button class="opt">分辨後端問題與 Stream 連線問題</button>
+  <button class="opt">決定要顯示哪一種顏色的錯誤畫面</button>
+  <button class="opt">通知使用者是哪一位員工的連線壞了</button>
+  <button class="opt">計算這次連線花了多少 Stream 費用</button>
+</div>
+
+<div class="quiz" data-question="tokenProvider 為什麼是傳函式而不是直接傳 token 字串？" data-correct="1" data-explain="SDK 需要 token 過期時自行更新，傳函式讓它能在需要時再打一次端點。">
+  <button class="opt">因為 token 字串太長沒有辦法塞進參數</button>
+  <button class="opt">讓 SDK 能在過期時自行重新取得</button>
+  <button class="opt">因為函式可以把 secret 一起加密帶上</button>
+  <button class="opt">讓同一個 token 可以給多個使用者用</button>
+</div>
+
+<div class="quiz" data-question="切換帳號時清掉 session 是為了避免什麼？" data-correct="2" data-explain="避免新的 token 還在路上時，app 用上一個人的身分短暫連上 Stream。">
+  <button class="opt">避免使用者看到兩份重複的對話列表</button>
+  <button class="opt">避免 Stream 對同一個帳號重複收費</button>
+  <button class="opt">避免短暫用上一個人的身分連線</button>
+  <button class="opt">避免舊的訊息被錯誤地標記成已讀</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Stream 即時聊天與視訊 · Step 3/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

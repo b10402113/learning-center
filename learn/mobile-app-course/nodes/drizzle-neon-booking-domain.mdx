@@ -4,14 +4,40 @@ title: 預約領域模型（Drizzle + Neon）
 subject: mobile-app-course
 tier: 4
 order: 24
-status: draft
+duration: 75-100 minutes
+status: content-written
 goal: 建正確的預約領域模型：時區、working hours、availability、防重複預約的寫入守衛
 sources:
   - "[[sources/mobile-app-course/20261001/How to build mobile apps for local businesses with Claude Code - FULL COURSE.srt]]"
   - "[[sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/scheduling.ts]]"
   - "[[sources/mobile-app-course/20261001/dental-app-master/apps/web/src/lib/booking.ts]]"
-steps: []
-prerequisites: []
+steps:
+  - id: clinic-timezone-layer
+    order: 1
+    type: concept
+  - id: model-availability-domain
+    order: 2
+    deps:
+      - clinic-timezone-layer
+    type: concept
+  - id: pure-slot-engine
+    order: 3
+    deps:
+      - model-availability-domain
+    type: concept
+  - id: wire-read-and-write
+    order: 4
+    deps:
+      - pure-slot-engine
+    type: procedure
+  - id: double-booking-defense
+    order: 5
+    deps:
+      - wire-read-and-write
+    type: decision
+prerequisites:
+  - learn/mobile-app-course/nodes/neon-drizzle-schema
+  - learn/mobile-app-course/nodes/nextjs-api-handlers
 created: 2026-10-02
 updated: 2026-10-02
 ---
@@ -20,15 +46,25 @@ updated: 2026-10-02
 
 ## Learning goal
 
-建正確的預約領域模型：時區、working hours、availability、防重複預約的寫入守衛
+建正確的預約領域模型：時區、working hours、availability、防重複預約的寫入守衛。
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/mobile-app-course/nodes/drizzle-neon-booking-domain/clinic-timezone-layer|診所時區層：把牆上的時間換成真正的瞬間]] — 說出日期字串與跨日加減為什麼會出錯，並用 CalendarDay 與 clinicInstant 正確換算
+2. [[learn/mobile-app-course/nodes/drizzle-neon-booking-domain/model-availability-domain|把「誰什麼時候有空」建成資料]] — 讀懂 working_hours、time_off、services、dentist_services 與 appointments 的關聯（after step 1）
+3. [[learn/mobile-app-course/nodes/drizzle-neon-booking-domain/pure-slot-engine|純函式排班引擎：從 working hours 算出可預約時段]] — 用半開區間、粒度、前置期與服務長度產出時段（after step 2）
+4. [[learn/mobile-app-course/nodes/drizzle-neon-booking-domain/wire-read-and-write|讓讀與寫共用同一個引擎]] — 把 availability 讀取與 booking 寫入接到同一份輸入與同一套判準（after step 3）
+5. [[learn/mobile-app-course/nodes/drizzle-neon-booking-domain/double-booking-defense|防重複預約守在哪一層？]] — 分辨應用層守衛與 Postgres 排除約束各自擋下什麼（after step 4）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+預約功能看起來只是「讓使用者選一個時段、按下確認」，但它其實是整個 app 裡最容易出錯的一段：時間要跨時區、跨日光節約、診所的營業時間是一週一週排的、服務有長有短、同一位醫師不能被重複預約，而且兩個病人可能在同一秒搶同一個時段。這一節把這些問題拆成一個可測試的領域模型，而不是散在畫面與 API 裡的判斷。
+
+整體設計有一個核心原則：**把「診所的牆上時間」與「絕對時間點」分清楚，並讓可預約時段的計算只發生在一個純函式裡。** 第一步先建立單一診所的時區層，用日曆日（CalendarDay）代表一天，用 `clinicInstant` 把「週三早上九點」換成真正的 UTC 瞬間，讓日光節約的數學只活在一個檔案裡。第二步把「誰什麼時候有空」變成資料表：working_hours 存的是診所當地的牆鐘時間，time_off 與已預約的 appointments 都只是讓醫師不可用的區間，services 與 dentist_services 描述誰能做什麼、要做多久。
+
+第三步把這兩個輸入餵進一個純函式 `availableSlots`：它掃過每個工作天、以固定粒度產生候選起始時間、扣掉與忙碌區間重疊的候選、跳過太接近現在的前置期，最後回傳可預約時段。因為這個引擎不碰資料庫，日光節約與前置期的邊界可以用單元測試釘死。第四步是關鍵接線：`GET /api/availability` 與 `POST /api/appointments` 共用同一份 `loadSchedulingInputs` 與同一個 `classifySlot`，讓「API 願意提供」與「API 願意接受」永遠是同一套規則，使用者無法自己捏造一個時間送進來。
+
+最後一步處理最現實的競態：應用層守衛再怎麼完整，兩個請求仍可能在同一瞬間通過檢查，所以資料庫還需要一道手寫的 Postgres 排除約束（EXCLUDE USING gist），由它仲裁真正的衝突，API 再把違反轉成乾淨的 409。走完這五步，你手上會是一套能直接搬到自己預約型產品上的領域層，而不只是看懂 Dentify 的某幾個檔案。
 
 ## Sources
 

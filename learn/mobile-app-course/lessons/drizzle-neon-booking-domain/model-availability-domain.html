@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把「誰什麼時候有空」建成資料</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>把「誰什麼時候有空」建成資料</h1>
+<p class="meta">Step 2/5 · 預約領域模型（Drizzle + Neon）</p>
+
+<h2>學習目標</h2>
+<p>能讀懂 <code>working_hours</code>、<code>time_off</code>、<code>services</code>、<code>dentist_services</code> 與 <code>appointments</code> 的欄位與關聯，並說明每個設計正在解決預約系統的哪個問題。</p>
+
+<h2>前言：診所不是一本行事曆</h2>
+
+<p>上一節建好了時區層，讓「診所牆上的時間」能正確換成真正的瞬間。接下來的問題是：要拿哪些資料來算可預約時段？如果你腦中浮現的是一本行事曆，可能就低估了這件事。</p>
+
+<p>一間診所不是「一張」行事曆，而是好幾位醫師共用一個空間。每位醫師一週的營業時間可能不同，有人週三休、有人只看上午；不是每個醫師都會做所有療程，植牙可能只有院長做；服務本身也有長有短，洗牙三十分鐘、根管治療可能要一個半小時。再加上請假、午休、已經排進去的病人——這些全部疊起來，才決定某個時段到底能不能約。</p>
+
+<p>這一節要把上面那些話變成一組資料表。讀 schema 的時候不要只把欄位從頭唸到尾，把它當成作者留下的決策清單：為什麼這個欄位不需要時區？為什麼要有 <code>dentist_services</code> 這張多對多的表？為什麼移除服務要用 restrict、不能連著預約一起刪？每個選擇通常都對應一個踩過的坑。</p>
+
+<h2>三組資料：可約性、能力、事實</h2>
+
+<p>這組表可以分成三組，各自回答一個問題。</p>
+
+<table>
+<thead>
+<tr><th>組別</th><th>表</th><th>回答的問題</th></tr>
+</thead>
+<tbody>
+<tr><td>可約性的來源</td><td>working_hours、time_off</td><td>這位醫師什麼時候本來就有空？</td></tr>
+<tr><td>能做什麼</td><td>services、dentist_services</td><td>這個療程多久？誰會做？</td></tr>
+<tr><td>已經發生什麼</td><td>appointments</td><td>哪些時段已經被佔走了？</td></tr>
+</tbody>
+</table>
+
+<p>後面你會看到，排班引擎其實只吃兩種輸入：每位醫師的「工作時段」與「忙碌區間」。其他表都是為了把這兩種輸入算出來而存在的。</p>
+
+<h2>working_hours：一週重複的牆鐘作息</h2>
+
+<pre><code>export const workingHours = pgTable(
+  'working_hours',
+  {
+    id: id(),
+    dentistId: uuid('dentist_id')
+      .notNull()
+      .references(() => dentists.id, { onDelete: 'cascade' }),
+    weekday: smallint('weekday').notNull(), // 0 = Sunday .. 6 = Saturday
+    startTime: time('start_time').notNull(),
+    endTime: time('end_time').notNull(),
+  },
+  (t) => [index('working_hours_dentist_idx').on(t.dentistId, t.weekday)]
+);</code></pre>
+
+<p>這張表描述「哪位醫師、星期幾、從幾點到幾點看診」。<code>weekday</code> 用 0 到 6 表示（0 是星期日），<code>startTime</code> 與 <code>endTime</code> 則是 <code>time</code> 型別——注意，不是時間戳記。</p>
+
+<p>這正是上一節的分界線：營業時間是牆鐘時間。「每週三 09:00 開門」不是時間軸上的某個瞬間，而是一個每週重複的作息，所以用純粹的時刻字串儲存。要換成真實瞬間時，再交給 <code>clinicInstant</code> 處理。</p>
+
+<p>這個索引 <code>(dentistId, weekday)</code> 是為了最常見的查詢：「給我某位醫師某一天的工作時段」。有了它，查詢不必掃過整張表。</p>
+
+<h2>time_off：請假與午休，是真正的瞬間</h2>
+
+<pre><code>export const timeOff = pgTable(
+  'time_off',
+  {
+    id: id(),
+    dentistId: uuid('dentist_id')
+      .notNull()
+      .references(() => dentists.id, { onDelete: 'cascade' }),
+    startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+    endsAt: timestamp('ends_at', { withTimezone: true }).notNull(),
+    reason: text('reason'),
+  },
+  (t) => [index('time_off_dentist_idx').on(t.dentistId, t.startsAt)]
+);</code></pre>
+
+<p>請假和這裡的 <code>working_hours</code> 剛好相反：它描述的是「某月某日某段時間不進診所」，是一個一次性的、發生在時間軸上的區間，所以用 <code>timestamptz</code>（帶時區的時間戳記）儲存。</p>
+
+<p>午休也可以放進這張表，因為對排班引擎來說，「醫師請假」和「醫師午休」是同一件事——這段時間不能看診。把兩者合併成同一種資料，引擎就不用為它們各寫一套邏輯。</p>
+
+<h2>services 與 dentist_services：療程與能力</h2>
+
+<pre><code>export const services = pgTable('services', {
+  id: id(),
+  key: text('key').notNull().unique(), // checkup, cleaning, pain, white, ortho, resto
+  name: text('name').notNull(),
+  description: text('description'),
+  durationMinutes: integer('duration_minutes').notNull(),
+  isTeleconsult: boolean('is_teleconsult').notNull().default(false),
+  isActive: boolean('is_active').notNull().default(true),
+});</code></pre>
+
+<p><code>services</code> 是療程目錄。<code>durationMinutes</code> 是最重要的一個欄位：它決定一筆預約要佔用醫師多久，也決定候選時段要留多少空間。少了它，排班引擎根本不知道一個「洗牙」是半小時還是一小時。</p>
+
+<p><code>key</code> 是一個穩定的英文鍵（例如 <code>cleaning</code>），讓手機端的畫面可以對應到固定選項；即使之後有人改了顯示名稱，鍵也不會變。<code>isActive</code> 則讓診所可以「下架」某個療程，而不是直接刪掉它——因為已經有預約指向它。</p>
+
+<p>接著是容易被忽略、但少了會出事的關聯表：</p>
+
+<pre><code>export const dentistServices = pgTable(
+  'dentist_services',
+  {
+    dentistId: uuid('dentist_id')
+      .notNull()
+      .references(() => dentists.id, { onDelete: 'cascade' }),
+    serviceId: uuid('service_id')
+      .notNull()
+      .references(() => services.id, { onDelete: 'cascade' }),
+  },
+  (t) => [primaryKey({ columns: [t.dentistId, t.serviceId] })]
+);</code></pre>
+
+<p>這是一張多對多的連接表：一位醫師會做多種療程，一種療程也可能有多位醫師會做。<code>(dentistId, serviceId)</code> 當複合主鍵，天然保證同一組配對不會重複。</p>
+
+<p>為什麼這張表非有不可？想像沒有它的世界：病人選了「植牙」，系統列出所有醫師的可約時段，結果排到一位不做植牙的醫師。預約成功了，但到場才發現做不了。<code>dentist_services</code> 的存在，就是讓「誰有能力做這件事」變成可查詢的事實，而不是藏在某個人的記憶裡。</p>
+
+<h2>appointments：已發生的事實</h2>
+
+<pre><code>export const appointments = pgTable(
+  'appointments',
+  {
+    id: id(),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id, { onDelete: 'cascade' }),
+    dentistId: uuid('dentist_id')
+      .notNull()
+      .references(() => dentists.id, { onDelete: 'restrict' }),
+    serviceId: uuid('service_id')
+      .notNull()
+      .references(() => services.id, { onDelete: 'restrict' }),
+    startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+    endsAt: timestamp('ends_at', { withTimezone: true }).notNull(),
+    status: appointmentStatusEnum('status').notNull().default('booked'),
+    streamCallId: text('stream_call_id'),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    cancelledBy: uuid('cancelled_by').references(() => users.id, { onDelete: 'set null' }),
+    reminder24hSentAt: timestamp('reminder_24h_sent_at', { withTimezone: true }),
+    reminder1hSentAt: timestamp('reminder_1h_sent_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('appointments_dentist_starts_idx').on(t.dentistId, t.startsAt),
+    index('appointments_patient_starts_idx').on(t.patientId, t.startsAt),
+  ]
+);</code></pre>
+
+<p>這張表是一筆筆真正發生的預約，也是排班引擎眼中的「忙碌區間」來源。幾個設計值得停下來看：</p>
+
+<p><code>startsAt</code> 和 <code>endsAt</code> 都是 <code>timestamptz</code>，因為預約是絕對瞬間。<code>endsAt</code> 不讓使用者填，而是由伺服器用服務時長算出來——如果讓前端自己送結束時間，就等於讓它偷偷改掉療程長度，佔用超過它該佔的時段。</p>
+
+<p><code>status</code> 是一個 enum，只允許 <code>booked</code>、<code>cancelled</code>、<code>completed</code>、<code>no_show</code> 四個值。沒有 enum 的話，某天有人把 <code>cancelled</code> 拼錯成 <code>canceled</code>，資料庫照收，但排班查詢只認得正確拼法，那筆預約就會像幽靈一樣同時「存在」又「不被計算」。</p>
+
+<p>外鍵的刪除策略也不一樣：<code>patientId</code> 用 <code>cascade</code>，刪除病人時他的預約一併清掉；<code>dentistId</code> 與 <code>serviceId</code> 則用 <code>restrict</code>，只要還有預約指向這位醫師或這個療程，就不准刪除。這是在用資料庫保護歷史紀錄——你不會希望刪掉一位離職醫師，就讓所有他看過的預約憑空消失。</p>
+
+<p>最後兩個索引分別服務「某醫師某天的預約」與「某病人某天的預約」，也就是排班與病人查詢最常走的路。</p>
+
+<h2>把事實接回引擎：忙碌區間怎麼來</h2>
+
+<p>排班引擎不需要知道「這是一個預約」還是「這是一段請假」，它只需要一串「某位醫師在某段時間不可用」的區間。所以實作上會把 <code>appointments</code>（狀態為 <code>booked</code> 的那些）和 <code>time_off</code> 合併成同一種 <code>busy</code> 區間：</p>
+
+<pre><code>// 對排班引擎而言，一筆已約的門診和一塊請假是同一件事：醫師不可用。
+busy: [...booked, ...off]</code></pre>
+
+<p>這個「在對的地方合併」的決定，讓後面那顆引擎可以保持單純：它只認一種不可用區間，不必為不同來源寫不同分支。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+預約領域由三組表組成。<code>working_hours</code> 存每位醫師一週重複的牆鐘作息（所以用 time 字串，不是時間戳記）；<code>time_off</code> 與已約的 <code>appointments</code> 都是絕對瞬間，實作時合併成同一種「忙碌區間」；<code>services</code> 提供療程長度，<code>dentist_services</code> 用多對多關係回答「誰會做這個療程」；<code>appointments</code> 用 enum 鎖住狀態、由伺服器算 endsAt，並用 restrict 外鍵保護歷史。整套表的目的，就是替排班引擎準備兩種輸入：工作時段與忙碌區間。
+</blockquote>
+
+<p>現在資料齊了，但「怎麼算」還沒寫。下一節要把這些輸入交給一個不碰資料庫、不看系統時鐘的純函式，讓它產出所有可預約時段——也因為它夠純，日光節約與前置期這些邊界才能被單元測試牢牢釘住。</p>
+
+<div class="lesson-nav">
+  <div><a href="./clinic-timezone-layer.html">← 上一步：診所時區層：把牆上的時間換成真正的瞬間</a></div>
+  <div><a href="./pure-slot-engine.html">下一步：純函式排班引擎：從 working hours 算出可預約時段 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="working_hours 的 startTime 用 time 字串而不是 timestamp，原因是什麼？" data-correct="1" data-explain="營業時間是每週重複的牆鐘作息，不是時間軸上的單一瞬間，所以用時刻字串。">
+  <button class="opt">因為 time 型別查詢起來比較快</button>
+  <button class="opt">因為它是每週重複的牆鐘作息</button>
+  <button class="opt">因為 timestamp 無法存到上午時間</button>
+  <button class="opt">因為每個醫師的時區都不同</button>
+</div>
+
+<div class="quiz" data-question="為什麼需要 dentist_services 這張多對多的表？" data-correct="2" data-explain="它記錄哪位醫師會做哪個療程，避免病人約到不提供該療程的醫師。">
+  <button class="opt">因為可以加快查詢療程名稱的速度</button>
+  <button class="opt">因為要記錄每位醫師的請假時間</button>
+  <button class="opt">因為要記錄誰會做哪個療程</button>
+  <button class="opt">因為要存放每位醫師的大頭貼</button>
+</div>
+
+<div class="quiz" data-question="appointments 的 endsAt 為什麼由伺服器計算，不讓前端送？" data-correct="3" data-explain="若前端能自訂結束時間，就等於能偷偷拉長療程、佔用不屬於它的時段。">
+  <button class="opt">因為前端拿不到目前的時間資訊</button>
+  <button class="opt">因為資料庫不允許前端寫入欄位</button>
+  <button class="opt">因為時區換算只能在後端進行</button>
+  <button class="opt">因為前端可能偷改療程佔用長度</button>
+</div>
+
+<div class="quiz" data-question="services 的外鍵用 restrict 而不是 cascade，是為了什麼？" data-correct="0" data-explain="只要還有預約指向這個療程就不准刪除，避免歷史預約憑空消失。">
+  <button class="opt">保護還有預約在使用的歷史資料</button>
+  <button class="opt">讓刪除療程時順便取消所有預約</button>
+  <button class="opt">讓療程可以自動複製到新醫師</button>
+  <button class="opt">讓查詢療程時可以略過權限檢查</button>
+</div>
+
+<div class="quiz" data-question="在排班引擎眼中，預約與請假被合併成什麼？" data-correct="2" data-explain="兩者對引擎而言都是「醫師在這段時間不可用」的忙碌區間。">
+  <button class="opt">兩種不同型別的日曆事件</button>
+  <button class="opt">兩筆都可以自由刪除的紀錄</button>
+  <button class="opt">同一種醫師不可用的區間</button>
+  <button class="opt">兩種需要不同時區的瞬間</button>
+</div>
+
+<div class="quiz" data-question="status 用 enum 而不是一般文字，主要避免什麼問題？" data-correct="1" data-explain="拼錯的狀態字串會被資料庫擋下，不會出現「存在卻不被查詢算到」的幽靈預約。">
+  <button class="opt">避免查詢狀態時需要額外索引</button>
+  <button class="opt">避免拼錯的值混進資料庫</button>
+  <button class="opt">避免狀態欄位占用太多空間</button>
+  <button class="opt">避免前端需要自行驗證狀態</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 預約領域模型（Drizzle + Neon） · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

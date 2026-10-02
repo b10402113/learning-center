@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monorepo 的形狀：為什麼一個 repo 裝兩個 app</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Monorepo 的形狀：為什麼一個 repo 裝兩個 app</h1>
+<p class="meta">Step 1/5 · Monorepo 與 Next.js 後端骨架</p>
+
+<h2>學習目標</h2>
+<p>能說出 <code>apps/mobile</code> 與 <code>apps/web</code> 各自負責什麼、為什麼 web 要同時是 dashboard、API 與 webhook 的唯一部署，以及 business logic 為什麼集中在 web。</p>
+
+<h2>前言：一張病歷，兩種人要用</h2>
+
+<p>想像你正在做 Dentify 這個診所 app。手機上，病人用它預約看診、跟診所傳訊息；診所裡，員工登入一個網頁後台，看今天的排班、翻病歷、補上診後叮嚀。這兩個介面差別很大，一個是直式的手機畫面，一個是橫式的桌面後台，但它們回答的其實是同一組問題：同一位病人、同一段時間、同一份病歷。</p>
+
+<p>最直覺的做法是開兩個專案：一個放手機 app，一個放網頁後台。但這樣做不用多久就會出事。後台定義「病人」有姓名、生日、電話三個欄位，手機 app 卻自己記成「病人有姓名和電話」；後台改了欄位，手機那邊不知道。同一條預約規則，你在兩個地方各寫一次，改了一個忘了另一個，兩邊就開始給出不同的答案。這一節要先把整個 repo 的形狀想清楚，因為後面所有程式碼都會蓋在這個形狀上。</p>
+
+<h2>一個 repo 裝兩個 app：monorepo</h2>
+
+<p>這個專案選的是 <strong>monorepo（單一倉庫）</strong>：一個 git repo 裡裝著不只一個應用程式。以 Dentify 來說，根目錄底下有一個 <code>apps</code> 資料夾，裡面住著兩個獨立的 app：</p>
+
+<table>
+<thead>
+<tr><th>位置</th><th>它是什麼</th><th>誰在用</th></tr>
+</thead>
+<tbody>
+<tr><td><code>apps/mobile</code></td><td>Expo（React Native）寫的手機 app</td><td>病人</td></tr>
+<tr><td><code>apps/web</code></td><td>Next.js 寫的網頁，同時是後端 API</td><td>診所員工，以及手機 app 背後的呼叫</td></tr>
+</tbody>
+</table>
+
+<p>右邊那格是這個形狀的關鍵：<code>apps/web</code> 不只是「員工用的網站」，它同時是整個系統的大腦。這是 monorepo 在這裡真正要解決的問題，而不只是把兩個資料夾放在一起而已。</p>
+
+<h2>apps/web 的三個身分</h2>
+
+<p>把 <code>apps/web</code> 打開，你會發現它一次扮演三個角色，而且只部署一次：</p>
+
+<table>
+<thead>
+<tr><th>身分</th><th>它是什麼</th><th>例子</th></tr>
+</thead>
+<tbody>
+<tr><td>員工後台</td><td>給人看的網頁</td><td>排班表、病人清單、病歷頁面</td></tr>
+<tr><td>手機要呼叫的 API</td><td>回傳資料的端點</td><td>預約、可預約時段、目前使用者、AI 助理</td></tr>
+<tr><td>Webhook 接收端</td><td>第三方服務主動打進來的端點</td><td>Clerk 的 <code>user.created</code> 事件</td></tr>
+</tbody>
+</table>
+
+<p>為什麼要把三件事綁在同一個部署裡？因為它們讀的是同一份資料庫、同一份 schema、同一組環境變數。如果 API 是另一個獨立服務，手機和後台就可能對「一個預約有哪些欄位」有不同版本的理解。放在一起，改 schema 的人、寫 API 的人、畫後台的人，改到的是同一個 commit。這就是一句話：<strong>一個部署、一份 schema</strong>。</p>
+
+<p>你可以把這個專案想成一間診所：病人走前門（手機 app），員工走側門（網頁後台），但兩扇門通往的櫃台後面是同一間病歷室。門有兩個，資料只有一份。</p>
+
+<h2>商業邏輯只能有一個家</h2>
+
+<p>有兩個入口，就會想問：規則寫在哪？答案是 <strong>business logic 一律留在 <code>apps/web</code>，手機 app 只負責把 API 回傳的內容畫出來</strong>。也就是說，手機 app 是一個「顯示器」，不是第二個真相來源。它不自己判斷這段時間能不能預約、不自己算價格、不自己決定誰能看哪筆資料；這些問題它都問 API。</p>
+
+<p>為什麼要這麼嚴格？因為同一條規則如果手機和網頁各實作一次，就一定會有分岔的一天。假設「看診前 24 小時內不能取消」，手機端寫成 24 小時、網頁端寫成 48 小時，那病人和櫃台就會看到不同的答案，而且沒人知道哪個才對。把規則收在一個地方，任何入口都得到同一個答案。</p>
+
+<h3>那共用程式碼要不要抽成 package？</h3>
+
+<p>monorepo 常會附帶一個 <code>packages/</code> 資料夾，用來放兩個 app 共用的型別或工具。但 Dentify 這裡刻意沒有建立 <code>packages/shared</code>，原因是「今天只有一個消費者」。手機還不需要匯入 web 的型別，所以先讓驗證用的 schema 留在 <code>apps/web</code> 裡就好；等到手機真的需要匯入一個共用型別的那一天，再把它升成 package。這是一個可以帶走的習慣：<strong>共用層要等真的有第二個使用者才抽，不要預先為了對稱而建。</strong></p>
+
+<h2>小結</h2>
+
+<blockquote>
+monorepo 把 <code>apps/mobile</code>（病人用）與 <code>apps/web</code>（員工後台 + API + webhook）放進同一個 repo。<code>apps/web</code> 的三個身分共用一個部署與一份 schema，所以手機和後台不可能對資料有不同版本的理解。商業邏輯集中在 web，手機只渲染 API 回傳的內容；共用 package 則等真的有第二個消費者再抽。
+</blockquote>
+
+<p>形狀想清楚了，接著就是實際動手把它擺出來。下一節要用 npm workspaces 把 Expo app 移進 <code>apps/mobile</code>、把 Next.js 專案放進 <code>apps/web</code>，並用根目錄的指令一次啟動兩個 app。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./npm-workspaces-layout.html">下一步：用 npm workspaces 擺好 apps/mobile 與 apps/web →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Dentify 為什麼把 apps/mobile 與 apps/web 放進同一個 repo？" data-correct="2" data-explain="同一個 repo 讓兩個 app 共用同一份 schema 與商業邏輯，不會各寫一份而分岔。">
+  <button class="opt">因為這樣 EAS 雲端建置會自動變快</button>
+  <button class="opt">因為 Expo 只能安裝在 monorepo 裡面</button>
+  <button class="opt">因為要讓兩個 app 共用同一份資料與邏輯</button>
+  <button class="opt">因為 git 不支援同時存在多個倉庫</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不是 apps/web 扮演的身分？" data-correct="3" data-explain="apps/web 是後台、API 與 webhook 接收端；手機推播的傳送是另一個環節。">
+  <button class="opt">員工每天使用的網頁後台</button>
+  <button class="opt">手機 app 呼叫的後端 API</button>
+  <button class="opt">接收 Clerk 事件的 webhook 端點</button>
+  <button class="opt">負責傳送手機原生推播的服務</button>
+</div>
+
+<div class="quiz" data-question="這個專案把商業邏輯放在哪裡？" data-correct="1" data-explain="business logic 集中在 apps/web，手機只呈現 API 回傳的結果。">
+  <button class="opt">手機端，因為使用者直接面對它</button>
+  <button class="opt">web 端，手機只負責渲染畫面</button>
+  <button class="opt">兩邊各寫一份，互相比對驗證</button>
+  <button class="opt">資料庫的 stored procedure 裡</button>
+</div>
+
+<div class="quiz" data-question="如果同一條預約規則手機和網頁各寫一次，最可能發生什麼？" data-correct="0" data-explain="兩份實作會逐漸分岔，病人和櫃台看到不同答案，還分不清哪個才對。">
+  <button class="opt">兩份實作會分岔，兩邊答案不一致</button>
+  <button class="opt">系統會自動合併成一份正確的版本</button>
+  <button class="opt">編譯器會擋下重複的邏輯並報錯</button>
+  <button class="opt">執行速度會因為重複而慢一倍</button>
+</div>
+
+<div class="quiz" data-question="為什麼 Dentify 沒有先建立 packages/shared？" data-correct="2" data-explain="共用層要等真的有第二個消費者再抽，現在只有 web 用得到。">
+  <button class="opt">因為 npm workspaces 不支援共用套件</button>
+  <button class="opt">因為 packages 資料夾會拖慢建置速度</button>
+  <button class="opt">因為目前只有一個消費者，還不需要抽</button>
+  <button class="opt">因為 Expo 會拒絕匯入外部套件</button>
+</div>
+
+<div class="quiz" data-question="「兩個入口、一份資料」帶來的核心好處是什麼？" data-correct="1" data-explain="不管從哪個入口進來，讀到的都是同一份 schema 與同一套規則。">
+  <button class="opt">手機和後台的介面可以長得一模一樣</button>
+  <button class="opt">任何入口對同一筆資料得到相同答案</button>
+  <button class="opt">兩個 app 可以完全不需要彼此溝通</button>
+  <button class="opt">資料庫可以省下一半的儲存空間</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Monorepo 與 Next.js 後端骨架 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把對話歷史持久化到資料庫</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>把對話歷史持久化到資料庫</h1>
+<p class="meta">Step 4/5 · 串流 AI 助理</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你應該能設計出對話持久化的最小模型：用一個受 ownership 檢查的 resolver 取得對話、讓 GET 重新灌回歷史、用 DELETE 清乾淨歷史與附件，並知道歷史要限制長度、空白的圖片回合要過濾。</p>
+
+<h2>前言：關掉 app 再打開，對話不能人間蒸發</h2>
+
+<p>前兩節做完，助理已經會逐字回答了。但只要把 app 關掉再打開，畫面就會回到一片空白的初始狀態——不是資料不見了，而是我們根本沒把它顯示出來、也沒把「這是同一條對話」的線索留下來。使用者問了一輪、得到答案、過幾分鐘回來想接著問，卻發現前面全部消失了，這種體驗比沒有助理還糟。</p>
+
+<p>這一節要做的事，是替這條對話接上記憶。前置條件是上一節的串流端點已經能運作，而且資料庫裡有放對話與訊息的兩張表。做完之後，重新打開 app 會看到之前的往來，按下清除也會乾淨地刪掉整條歷史與附帶的照片。</p>
+
+<p>聽起來只是「把訊息存起來」，但要存得對，得先想清楚：對話的邊界是什麼、誰有權讀它、刪除時要連帶清掉什麼。這三個問題處理好，持久化才算完整。</p>
+
+<h2>第一步：資料模型——一條對話，底下掛著很多訊息</h2>
+
+<p>最基本的形狀是一張對話表與一張訊息表。<code>aiConversations</code> 代表「一條對話」，只記所屬的使用者與建立時間；<code>aiMessages</code> 代表對話裡的每一則訊息，用 <code>conversationId</code> 指回對話，並記角色（user 或 assistant）、內容與建立時間。</p>
+
+<p>訊息表的外鍵要設成 <code>on delete cascade</code>。這樣刪掉一條對話時，底下所有訊息會由資料庫一併清掉，不會留下孤兒資料列。這個 cascade 會在第四步的刪除功能裡派上用場。</p>
+
+<pre><code>// aiMessages
+conversationId  → aiConversations.id   (on delete cascade)
+role            text
+content         text
+imagePath       text | null
+
+// aiConversations
+userId          text
+createdAt       timestamp</code></pre>
+
+<p>至於「一位使用者可以有幾條對話」，Dentify 的選擇是：一位病人只有一條助理對話，而且每次取用時都拿最新建立的那條。這個簡化讓畫面不必處理對話列表，也讓「開啟 app 時要顯示什麼」有一個明確答案。</p>
+
+<h2>第二步：一個受檢查的 resolver，讓對話編號換回資料列</h2>
+
+<p>整個功能裡，凡是「把使用者傳來的對話編號變成資料庫裡的一條對話」的地方，都共用同一個函式：</p>
+
+<pre><code>export async function getOrCreateConversation(userId: string, conversationId?: string) {
+  if (!conversationId) {
+    const [created] = await db.insert(aiConversations).values({ userId }).returning();
+    return created;
+  }
+
+  const [found] = await db
+    .select()
+    .from(aiConversations)
+    .where(and(eq(aiConversations.id, conversationId), eq(aiConversations.userId, userId)));
+  if (!found) throw notFound('Conversation not found');
+  return found;
+}</code></pre>
+
+<p>這個函式有兩個很重要的性質。第一，查詢條件同時包含 <code>id</code> 與 <code>userId</code>，所以別人傳來的對話編號根本查不到——ownership 檢查只存在這裡一份，其他路由不會漏寫。第二，查不到時回的是 404，不是 403。差別在於：403 等於承認「這條對話存在，只是你不能看」，那反而洩漏了別人的對話編號是有效的；404 則讓存在與不存在看起來一模一樣。</p>
+
+<p>當 <code>conversationId</code> 是空的（例如第一輪對話），它就建一條新的。這就是「沒有就建、有就驗證後回傳」的 get-or-create 語意。</p>
+
+<h2>第三步：每一輪都先寫入，並回傳對話編號</h2>
+
+<p>還記得上一節的 POST 流程嗎？在呼叫模型之前，使用者的訊息就已經被寫進資料庫了。這是持久化的第一半——不論模型最後成不成功，使用者問了什麼都會留下來。</p>
+
+<pre><code>await db.insert(aiMessages).values({
+  conversationId: conversation.id,
+  role: 'user',
+  content: body.message,
+});</code></pre>
+
+<p>而助理的回答，則是在串流關閉之前、由 <code>onDone</code> 寫入。這樣一來，一輪對話的兩個角色都不會漏，而且使用者拿到回答的同時，這輪也已經在歷史裡了。</p>
+
+<p>對話編號是怎麼回到手機上的？如果走串流，它放在 <code>X-Conversation-Id</code> 標頭；如果走 JSON 分支（例如緊急卡片），它放在回傳物件的 <code>conversationId</code> 欄位。手機端拿到之後會記住它，下一輪才能接續同一條對話。</p>
+
+<h2>第四步：GET 重新灌回歷史</h2>
+
+<p>重新打開 app 時，畫面呼叫 <code>GET /api/ai/chat</code>，由伺服器回傳最新那條對話與它的所有訊息。</p>
+
+<pre><code>export const GET = route(async () =&gt; {
+  const user = await requireAuth();
+
+  const [conversation] = await db
+    .select()
+    .from(aiConversations)
+    .where(eq(aiConversations.userId, user.id))
+    .orderBy(desc(aiConversations.createdAt))
+    .limit(1);
+  if (!conversation) return json({ conversationId: null, messages: [] });
+
+  const messages = await db
+    .select()
+    .from(aiMessages)
+    .where(eq(aiMessages.conversationId, conversation.id))
+    .orderBy(asc(aiMessages.createdAt));
+
+  return json({
+    conversationId: conversation.id,
+    messages: messages.map((m) =&gt; ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      image: m.imagePath ? signedPhoto(m.imagePath) : null,
+      createdAt: m.createdAt.toISOString(),
+    })),
+  });
+});</code></pre>
+
+<p>三個細節值得停下來看。第一，沒有對話時回的是 <code>{ conversationId: null, messages: [] }</code>，而不是報錯——「還沒聊過」是正常狀態，不是異常。第二，照片的網址是每次讀取時才用 <code>signedPhoto</code> 重新簽出來的，不是存下來的。因為私人檔案的簽名網址會過期，存下來的網址很快就會變成死連結；存的是路徑，讀的時候才換成當下的有效網址。第三，訊息的排序固定用建立時間遞增，畫面上的先後才會與實際往來一致。</p>
+
+<h2>第五步：DELETE 清乾淨歷史與附件</h2>
+
+<p>清除歷史不能只清畫面，要真的把伺服器上的對話刪掉。</p>
+
+<pre><code>export const DELETE = route(async () =&gt; {
+  const user = await requireAuth();
+  await db.delete(aiConversations).where(eq(aiConversations.userId, user.id));
+
+  try {
+    await imagekit().deleteFolder(photoFolder(user.id));
+  } catch (err) {
+    console.error('[ai] photo folder cleanup failed', err instanceof Error ? err.message : err);
+  }
+
+  return json({ ok: true });
+});</code></pre>
+
+<p>第一步是刪掉對話列，訊息會因為 <code>on delete cascade</code> 自動跟著消失。第二步是刪掉 ImageKit 上的照片資料夾——否則資料庫的紀錄沒了，照片卻還留在雲端，等於「對使用者是刪掉了、對我們卻還留著」。因為每位使用者的照片都放在以 user id 命名的單一資料夾裡，這一步只需要一次呼叫。</p>
+
+<p>這個資料夾刪除是刻意的 best-effort（盡力而為）：資料列早就刪掉了，如果這時候因為刪資料夾失敗而讓整個請求回錯誤，反而會告訴使用者「刪除沒成功」，但實際上大部分都成功了。所以失敗只寫 log。附帶一提，從未上傳過照片的使用者沒有資料夾，這種情況會回 404，是正常的，不該當成錯誤處理。</p>
+
+<h2>第六步：歷史要限長，空白要濾掉</h2>
+
+<p>把歷史存起來之後，下一個問題是「要送多少歷史給模型」。如果照單全收，對話愈長，每一次請求帶的內容就愈多，成本與延遲都會失控。所以組 prompt 的時候只取最近三十則：</p>
+
+<pre><code>.limit(30)
+// ...
+.filter((m) =&gt; m.content.trim())</code></pre>
+
+<p><code>limit(30)</code> 是長度的上限，而 <code>filter</code> 處理的是另一種污染：圖片回合是用空字串存進去的，因為照片本身不會送給模型。一則空白的訊息塞進 prompt，比沒有這則還糟，所以送出去前要先濾掉。這也說明持久化的資料與送進模型的資料不必然相同——存的是完整歷史，送的是一份清理過的子集。</p>
+
+<h2>第七步：手機端記住對話編號，並用確認框保護刪除</h2>
+
+<p>手機端把對話編號放在一個模組層級的變數，而不是畫面狀態裡。這樣即使離開助理畫面再回來，編號還在，下一輪就能接上同一條對話。</p>
+
+<pre><code>let conversationId: string | null = null;</code></pre>
+
+<p>畫面掛載時呼叫 GET 把歷史灌進來，同時把 <code>conversationId</code> 指向伺服器回傳的那條。清除歷史則是先請使用者確認，再打 DELETE；伺服器成功之後才清空畫面。</p>
+
+<pre><code>const confirmClear = () =&gt;
+  Alert.alert(
+    'Delete chat history?',
+    'This permanently deletes your conversation with the assistant.',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: clearHistory },
+    ]
+  );</code></pre>
+
+<p>注意清除的順序是「先伺服器、再畫面」。如果反過來先清空畫面、但刪除失敗了，使用者會以為資料沒了，其實還在——那等於在騙使用者。所以成功之後才清畫面，失敗則跳出提示。這是一個刪除類功能很常見的取捨：畫面必須誠實反映伺服器的狀態。</p>
+
+<h2>做完長什麼樣</h2>
+
+<p>完成後可以逐項驗證：傳幾輪訊息，關掉 app 再打開，之前的往來會重新出現；畫面上每一則訊息的角色與順序都正確；按下清除並確認後，歷史消失，重新開啟也不復見；有照片的對話，清除後照片的資料夾也一起被刪掉；還沒聊過的新使用者打開畫面，看到的是空狀態而不是錯誤。</p>
+
+<p>到這裡，助理已經有記憶了。但使用者能傳的還只有文字。下一步要讓照片也能進到對話裡——而且會看到，照片的處理方式和文字完全不同，因為助理被禁止判讀影像，而照片也永遠不會送給模型。</p>
+
+<div class="lesson-nav">
+  <div><a href="./client-streaming-ui.html">← 上一步：手機端逐字渲染與對話介面</a></div>
+  <div><a href="./image-attachments.html">下一步：圖片附件：存進 ImageKit 的助理回合 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="getOrCreateConversation 的查詢為什麼要同時帶上 userId？" data-correct="1" data-explain="條件含 id 與 userId 後，別人傳來的對話編號根本查不到，ownership 檢查只需存在這一處。">
+  <button class="opt">因為只看對話編號會讓查詢速度變慢</button>
+  <button class="opt">因為這樣別人的對話編號就查不到</button>
+  <button class="opt">因為 userId 是資料庫的主鍵欄位</button>
+  <button class="opt">因為使用者可以同時擁有多條對話</button>
+</div>
+
+<div class="quiz" data-question="對話不存在時為什麼回 404 而不是 403？" data-correct="2" data-explain="403 等於承認對話存在、只是不能看，反而洩漏別人編號有效；404 讓存在與否看起來一樣。">
+  <button class="opt">因為 404 的處理速度比 403 來得快</button>
+  <button class="opt">因為 403 只能用在管理員的權限上</button>
+  <button class="opt">因為 403 會承認這條對話其實存在</button>
+  <button class="opt">因為 404 才能觸發前端的重新登入</button>
+</div>
+
+<div class="quiz" data-question="GET 回傳歷史時，照片的網址為什麼要每次重新簽？" data-correct="0" data-explain="私人檔案的簽名網址會過期，存下來會變死連結，所以只存路徑、讀取時才簽出當下的有效網址。">
+  <button class="opt">因為簽名網址會過期，存下來會失效</button>
+  <button class="opt">因為每次簽名可以順便壓縮圖片大小</button>
+  <button class="opt">因為照片的內容每次都會被重新產生</button>
+  <button class="opt">因為資料庫沒有適合存網址的欄位型別</button>
+</div>
+
+<div class="quiz" data-question="DELETE 歷史時，為什麼還要刪 ImageKit 的照片資料夾？" data-correct="3" data-explain="只刪資料列會讓照片仍留在雲端，形成對使用者已刪、對我們卻保留的落差，因此要一併清除。">
+  <button class="opt">因為 ImageKit 會對超過容量的資料夾收費</button>
+  <button class="opt">因為資料庫的 cascade 會連帶刪掉照片</button>
+  <button class="opt">因為照片的簽名網址需要重新產生一次</button>
+  <button class="opt">因為只刪資料列會把照片留在雲端</button>
+</div>
+
+<div class="quiz" data-question="組 prompt 時把空白訊息濾掉的規則是為了什麼？" data-correct="1" data-explain="圖片回合以空字串儲存、照片不送模型；空白訊息塞進 prompt 比沒有更糟，送前要先濾掉。">
+  <button class="opt">因為空白訊息會讓歷史的排序變得不正確</button>
+  <button class="opt">因為圖片回合的空訊息對 prompt 沒用</button>
+  <button class="opt">因為空白訊息會被計入付費的 token 用量</button>
+  <button class="opt">因為使用者可能送出只有空白的問題</button>
+</div>
+
+<div class="quiz" data-question="清除歷史時為什麼要「先伺服器、再畫面」？" data-correct="2" data-explain="若先清畫面但刪除失敗，使用者會誤以為資料已刪；成功之後才清畫面，畫面才誠實反映伺服器狀態。">
+  <button class="opt">因為先清畫面會讓刪除請求失去身分驗證</button>
+  <button class="opt">因為畫面的清空一定要在動畫結束之後</button>
+  <button class="opt">因為先清畫面會讓失敗時誤以為已刪除</button>
+  <button class="opt">因為伺服器的刪除需要先清空本機快取</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 串流 AI 助理 · Step 4/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

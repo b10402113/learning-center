@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>走一遍 POST /api/appointments：受保護的預約寫入</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>走一遍 POST /api/appointments：受保護的預約寫入</h1>
+<p class="meta">Step 5/5 · Next.js API Route Handlers</p>
+
+<h2>學習目標</h2>
+<p>能照順序寫出一個受保護的寫入 handler：驗身分、驗輸入、驗擁有權、重跑可預約檢查、寫入，最後把資料庫例外轉成 409，並回傳由伺服器組好的形狀。</p>
+
+<h2>前言：把零件組成一個端點</h2>
+<p>前四節分別講了端點、錯誤信封、守衛與型別邊界。現在把它們放進同一支 <code>POST /api/appointments</code>，跟著一筆預約從手機送出到寫進資料庫的順序走一遍。你不需要懂排程引擎的內部演算法，這一節的重點是「每一層在什麼時機被呼叫、它擋掉什麼」。真正難的時區與可預約計算，屬於另一個節點。</p>
+<p>動手前的前置條件：你已經有 <code>route()</code>、<code>json()</code> 與 <code>conflict()</code> 這些 helper，有 <code>requireAuth</code> 與 <code>requireOwnedPatient</code> 守衛，以及 <code>createAppointmentSchema</code>。函式的外框長這樣：</p>
+<pre><code>export const POST = route(async (req: Request) =&gt; {
+  // 以下逐步填入
+});</code></pre>
+
+<h2>步驟 1：確認身分</h2>
+<p>第一行永遠是身分。沒有任何參數來自 client，身分只從 session 推導；沒有登入就丟 401，由 <code>route()</code> 翻譯成回應。</p>
+<pre><code>const user = await requireAuth();</code></pre>
+<p>預期結果：這行通過後，<code>user</code> 是一個資料庫裡真實存在的使用者，而且 webhook 來不及建立的那一列也被補上了。</p>
+
+<h2>步驟 2：驗證輸入</h2>
+<p>接著把 request body 交給 schema。這一步同時做兩件事：確認格式，並把未知的 JSON 轉成可信任的型別。<code>parse</code> 失敗會丟 <code>ZodError</code>，你不需要在這裡處理，外層包裝會回 400。</p>
+<pre><code>const body = createAppointmentSchema.parse(await req.json());</code></pre>
+<p>預期結果：<code>body</code> 裡有合法的 <code>patientId</code>、<code>serviceId</code>、<code>dentistId</code>、<code>startsAt</code>。少了任何一個或格式錯誤，請求在這一關被擋下。</p>
+
+<h2>步驟 3：確認這筆病人資料是你的</h2>
+<p>格式對不代表有權限。這裡呼叫擁有權守衛，把「傳入的 patientId」與「目前登入者」一起比對。不是自己的，守衛丟 404。</p>
+<pre><code>const patient = await requireOwnedPatient(user, body.patientId);</code></pre>
+<p>預期結果：<code>patient</code> 是呼叫者名下的病人。這一關確保了攻擊者不能替別人掛號，也不能用亂猜的 patientId 建立資料。</p>
+
+<h2>步驟 4：確認醫師與服務存在且啟用</h2>
+<p>接下來兩個查詢把選項查實。服務與醫師都可能是停用的，或根本不存在；兩者都用 <code>notFound</code> 擋掉。這裡刻意不直接相信 client 傳來的 id 組合。</p>
+<pre><code>const [service] = await db.select().from(services)
+  .where(eq(services.id, body.serviceId));
+if (!service || !service.isActive) throw notFound('Service not found');
+
+const [dentist] = await db.select().from(dentists)
+  .where(and(eq(dentists.id, body.dentistId), eq(dentists.isActive, true)));
+if (!dentist) throw notFound('Dentist not found');</code></pre>
+<p>預期結果：拿到了這個服務的長度與是否為視訊，以及一位有效醫師。若有人用已下架的療程 id，請求在這裡就被拒絕。</p>
+
+<h2>步驟 5：由服務長度算出結束時間</h2>
+<p>client 只送了開始時間。結束時間由伺服器用資料庫裡的服務長度算出來，這樣療程長度就無法被竄改。</p>
+<pre><code>const startsAt = new Date(body.startsAt);
+const endsAt = new Date(
+  startsAt.getTime() + service.durationMinutes * 60_000
+);</code></pre>
+<p>預期結果：<code>startsAt</code> 與 <code>endsAt</code> 都是伺服器算出的時間，而不是 client 宣稱的值。</p>
+
+<h2>步驟 6：重跑一次可預約引擎</h2>
+<p>這一步是整個寫入路徑的核心。手機在選擇時段時，是打 <code>GET /api/availability</code> 拿到一份清單；但到了送出預約時，client 完全可能送一個不在清單上的時間。所以伺服器在這裡把同一套排程引擎再跑一次，拒絕任何它在查詢時不會提供、但在寫入時卻被送來的時間。</p>
+<pre><code>await assertSlotBookable({
+  dentistId: dentist.id,
+  serviceId: service.id,
+  durationMinutes: service.durationMinutes,
+  startsAt,
+});</code></pre>
+<p>它內部的判斷會回兩種結果，各自對應不同的錯誤：</p>
+<ol>
+<li>若判定為 <code>taken</code>（時段已被佔用），丟出 <code>conflict(..., 'slot_taken')</code>，也就是 409。</li>
+<li>若判定為 <code>invalid</code>（凌晨三點、不在排班內、還在預約前置時間內、或醫師根本不做這個療程），丟出 <code>badRequest</code>，也就是 400。</li>
+</ol>
+<p>預期結果：只有「讀取時會提供、且現在仍可預約」的時間能通過。少了這個守衛，唯一的防線只剩下資料庫的排除約束，而它只擋重疊，擋不了凌晨三點或療程不符。</p>
+
+<h2>步驟 7：寫入，並攔住搶位子的例外</h2>
+<p>前面都是檢查，這裡才是真正寫入。因為兩個請求可能在幾乎同一瞬間通過步驟 6，最後由 Postgres 的排除約束仲裁誰先。失敗的那一個會丟出錯誤碼 <code>23P01</code>，我們把它翻譯成乾淨的 409。</p>
+<pre><code>try {
+  const [created] = await db
+    .insert(appointments)
+    .values({
+      patientId: patient.id,
+      dentistId: dentist.id,
+      serviceId: service.id,
+      startsAt,
+      endsAt,
+    })
+    .returning();
+
+  // 步驟 8 ...
+} catch (err) {
+  if (isExclusionViolation(err)) {
+    throw conflict('That time was just taken. Please pick another.', 'slot_taken');
+  }
+  throw err;
+}</code></pre>
+<p>警告：這個 <code>catch</code> 只攔一種例外，其餘一律再丟出去。不要把整個資料庫錯誤都吞成 409，否則真正的程式 bug 會被誤導成「時段被搶走」。另外要記得，重複預約的防線是資料庫的排除約束，不是應用層的檢查；不要用一段「先查再寫」的程式碼取代它，那在併發下一定失效。</p>
+
+<h2>步驟 8：若是視訊，由伺服器推導通話 id</h2>
+<p>寫入成功、拿到資料庫產生的 id 之後，如果這個服務是視訊門診，才補上通話 id。它是由預約 id 推導的，client 無法指定。</p>
+<pre><code>if (service.isTeleconsult) {
+  await db.update(appointments)
+    .set({ streamCallId: `appointment-${created.id}` })
+    .where(eq(appointments.id, created.id));
+  created.streamCallId = `appointment-${created.id}`;
+}</code></pre>
+<p>預期結果：視訊預約多了一個由伺服器產生的 <code>streamCallId</code>；非視訊預約則保持為 <code>null</code>。</p>
+
+<h2>步驟 9：回傳伺服器組好的形狀</h2>
+<p>最後把資料庫的列交給 <code>serialize()</code>，讓它算好 <code>canCancel</code>、<code>canJoin</code> 與診所時區的日期標籤，再用 <code>json()</code> 以 201 回傳。手機拿到的是已經能直接渲染的物件。</p>
+<pre><code>return json(
+  { appointment: serialize({ appointment: created, patient, dentist, service }) },
+  201
+);</code></pre>
+<p>預期結果：手機收到一個 201 與完整的預約物件。之後它依 <code>canCancel</code>、<code>canJoin</code> 決定按鈕，不需要自己判斷任何規則。</p>
+
+<h2>同一個檔案裡的 GET</h2>
+<p>這支 route 檔案同時匯出了 <code>GET</code>，用來列出整個家庭的預約。它的分支邏輯值得看一眼：讀取 <code>?scope=</code> 參數決定要看 <code>upcoming</code> 或 <code>past</code>，再把這個值同時用在查詢條件與排序方向上——未來用「開始時間大於等於現在」並遞增排序，過去看「小於現在」並遞減排序。若是過去，還會把就診後的醫囑（visit notes）一起 join 進來。這些都驗證了同一件事：查詢條件的形狀由伺服器決定，client 只表達它要看哪一種。</p>
+
+<h2>小結</h2>
+<blockquote>
+一支受保護的寫入 handler 有固定的順序：<code>requireAuth</code> 確認身分 → Zod <code>parse</code> 驗輸入 → <code>requireOwnedPatient</code> 驗擁有權 → 載入服務與醫師 → 伺服器算 <code>endsAt</code> → <code>assertSlotBookable</code> 重跑可預約引擎 → 寫入並攔 <code>23P01</code> 轉 409 → 視訊補 <code>streamCallId</code> → <code>serialize</code> 後回 201。每一層只做一件事，錯誤由 <code>route()</code> 統一翻譯。做完之後，你得到的不是一支端點，而是一個可以複製到任何新資源的模板。
+</blockquote>
+<p>這五節從「端點長什麼樣」一路走到「一筆預約怎麼被安全地寫入」。你現在手上有一組可以重複套用的模式：先把身分與輸入收在邊界，再讓商業邏輯在伺服器裡跑完，最後把結果的形狀也留在伺服器。換成你自己的 app 時，改的是資源與查詢，這套骨架不需要重寫。</p>
+
+<div class="lesson-nav">
+  <div><a href="./typed-request-boundary.html">← 上一步：Zod 請求邊界</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="POST 的第一行為什麼是 requireAuth？" data-correct="2" data-explain="身分是後續所有授權與寫入的前提，必須先確認；而且身分只從 session 來，不看 client 參數。">
+  <button class="opt">因為資料庫連線必須先建立才能查詢</button>
+  <button class="opt">因為 Zod 需要在身分之後才能執行</button>
+  <button class="opt">因為所有授權都建立在這一步之上</button>
+  <button class="opt">因為 Clerk 規定每個路由都要先登入</button>
+</div>
+
+<div class="quiz" data-question="步驟 3 的 requireOwnedPatient 主要防止什麼？" data-correct="1" data-explain="它確認傳入的 patientId 真的屬於呼叫者，避免替別人掛號或讀別人的資料。">
+  <button class="opt">防止使用者在同一時段預約兩次</button>
+  <button class="opt">防止使用者操作別人的病人資料</button>
+  <button class="opt">防止醫師被分配到錯誤的療程</button>
+  <button class="opt">防止手機重複送出同一筆請求</button>
+</div>
+
+<div class="quiz" data-question="assertSlotBookable 為什麼要在寫入前再跑一次？" data-correct="3" data-explain="client 可能送一個不在可預約清單上的時間，重跑同一套引擎才能擋掉凌晨、非排班或療程不符。">
+  <button class="opt">因為資料庫的查詢結果可能已被快取</button>
+  <button class="opt">因為這樣可以順便計算服務的長度</button>
+  <button class="opt">因為手機端沒有實作時區的換算</button>
+  <button class="opt">因為 client 可能送不合法的時間</button>
+</div>
+
+<div class="quiz" data-question="當 assertSlotBookable 判定 invalid 時，應該回哪個狀態碼？" data-correct="0" data-explain="invalid 代表這個時間從來不是一個可預約時段（時段錯誤），屬於輸入問題，回 400。">
+  <button class="opt">400，因為那是輸入的時段問題</button>
+  <button class="opt">409，因為那代表時段被人搶走</button>
+  <button class="opt">404，因為那筆預約並不存在</button>
+  <button class="opt">500，因為排程引擎發生錯誤</button>
+</div>
+
+<div class="quiz" data-question="寫入時攔截 23P01 的用意是什麼？" data-correct="1" data-explain="它是 Postgres 排除約束被觸發，代表併發下有人先搶到同時段，翻譯成 409 slot_taken。">
+  <button class="opt">把資料庫的連線錯誤重新嘗試一次</button>
+  <button class="opt">把搶位子的併發失敗轉成 409</button>
+  <button class="opt">把 Zod 的驗證錯誤轉成 400</button>
+  <button class="opt">把未知的例外記錄到 Sentry 上</button>
+</div>
+
+<div class="quiz" data-question="為什麼 streamCallId 要等寫入成功後才推導？" data-correct="2" data-explain="它由資料庫產生的預約 id 組成，寫入前還拿不到 id；由伺服器推導也讓 client 無法指定。">
+  <button class="opt">因為通話服務需要先啟動會議室</button>
+  <button class="opt">因為非視訊的預約不需要這個欄位</button>
+  <button class="opt">因為它要用資料庫給的預約 id</button>
+  <button class="opt">因為要等 Clerk 驗證完身分為止</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Next.js API Route Handlers · Step 5/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>

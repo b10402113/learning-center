@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 npm workspaces 擺好 apps/mobile 與 apps/web</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 npm workspaces 擺好 apps/mobile 與 apps/web</h1>
+<p class="meta">Step 2/5 · Monorepo 與 Next.js 後端骨架</p>
+
+<h2>學習目標</h2>
+<p>能把 Expo app 移進 <code>apps/mobile</code>、建立 <code>apps/web</code>，用根目錄的 npm workspaces 與 scripts 從根目錄啟動兩個 app，並說出 Expo 為何選 npm 而不是 pnpm。</p>
+
+<h2>前言：兩個 app，指令該從哪裡下？</h2>
+
+<p>上一節確定了形狀：一個 repo，<code>apps/mobile</code> 給病人用，<code>apps/web</code> 當後台加 API。現在問題很實際——你要怎麼讓這兩個 app 同時活著？總不能每次開發都開兩個終端機、各自 <code>cd</code> 進去、各自 <code>npm install</code>，然後還得記得哪個資料夾裝了哪些套件。這一節要做的就是把它們「擺好」，讓你在根目錄下一條指令就能啟動其中一個。</p>
+
+<h2>動手前先確認的前置條件</h2>
+
+<ul>
+<li>你已經有一個用 Expo 建好、可以在模擬器跑起來的手機 app（上一節的前提）。</li>
+<li>Node 版本至少 22，npm 已經裝好。</li>
+<li>目前的進度已經 commit 過一次。大搬家之前先留下一個乾淨的 git 快照，出錯才好回頭。</li>
+</ul>
+
+<h2>步驟一：把 Expo app 移進 apps/mobile</h2>
+
+<p>如果你還沒建，先在一個空資料夾用官方指令就地生成，並選最新的 SDK：</p>
+
+<pre><code>npx create-expo-app@latest .
+# 選單出現時選最新 SDK（錄製當下是 57）</code></pre>
+
+<p>接著把整個 App 移進 <code>apps/mobile</code>，替未來的 <code>apps/web</code> 騰出位置。搬完之後，在 mobile 裡執行 reset 腳本，把範例畫面與示範樣式清掉，得到一個乾淨的起點：</p>
+
+<pre><code>mkdir -p apps
+mv &lt;剛剛生成的那些檔案&gt; apps/mobile
+cd apps/mobile
+npm run reset-project</code></pre>
+
+<p>預期結果：<code>apps/mobile</code> 底下只剩 Expo 的專案骨架，沒有預設的 demo 分頁。</p>
+
+<h2>步驟二：在 apps/web 建立 Next.js 專案</h2>
+
+<p>後端與後台都住在 <code>apps/web</code>。用 Next.js 官方指令在該路徑生成，或在已經有 <code>plan.md</code> 的情況下，請 agent 照著 plan 建出這個資料夾。重點是它必須是一個獨立的 app，有自己的 <code>package.json</code>。</p>
+
+<pre><code>npx create-next-app@latest apps/web</code></pre>
+
+<h2>步驟三：在根目錄宣告 workspaces</h2>
+
+<p>這一步是讓兩個 app 變成「同一個 npm 專案家庭」的關鍵。根目錄放一份 <code>package.json</code>，用 <code>workspaces</code> 告訴 npm，哪些資料夾裡的專案都算這個 repo 的一部分：</p>
+
+<pre><code>{
+  "name": "dental-app",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": "&gt;=22"
+  }
+}</code></pre>
+
+<p><code>apps/*</code> 代表 <code>apps</code> 底下的每一個資料夾都是 workspace，所以 <code>apps/mobile</code> 與 <code>apps/web</code> 都會被認得；<code>packages/*</code> 先留著，是給未來共用套件的位置。注意 <code>private</code> 一定要是 <code>true</code>，這個根專案不會被發佈到 npm 上。</p>
+
+<h2>步驟四：用 -w 把指令接到根目錄</h2>
+
+<p>有了 workspaces，就可以在根目錄的 scripts 裡用 <code>-w</code>（workspace）指定要把指令轉發給哪個 app。這樣你人在根目錄，也能指揮任意一個子專案：</p>
+
+<pre><code>{
+  "scripts": {
+    "mobile": "npm run start -w apps/mobile",
+    "web": "npm run dev -w apps/web",
+    "test": "npm run test -w apps/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:generate": "npm run db:generate -w apps/web",
+    "db:migrate": "npm run db:migrate -w apps/web",
+    "db:seed": "npm run db:seed -w apps/web"
+  }
+}</code></pre>
+
+<p>每一條都只是「進到某個 workspace、跑它自己 package.json 裡的 script」。以 <code>db:generate</code> 為例，它其實就是去 <code>apps/web</code> 跑 <code>drizzle-kit generate</code>，因為只有 web 管資料庫。反過來，<code>typecheck</code> 用的是 <code>--workspaces --if-present</code>，意思是「每一個 workspace 都跑，沒有這個 script 的就跳過」。</p>
+
+<h3>子專案自己的 scripts 長什麼樣</h3>
+
+<p>根目錄只是轉發，真正的指令定義在各自的 <code>package.json</code>。<code>apps/web</code> 大致是這樣：</p>
+
+<pre><code>{
+  "name": "web",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  }
+}</code></pre>
+
+<p><code>apps/mobile</code> 則帶著 Expo 與 EAS 的指令：</p>
+
+<pre><code>{
+  "name": "mobile",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "build:ios": "npx eas-cli build --profile development --platform ios"
+  }
+}</code></pre>
+
+<h2>步驟五：只在根目錄 npm install 一次</h2>
+
+<p>workspaces 的重點之一就是依賴統一安裝。你不需要分別進兩個資料夾各裝一次；在根目錄跑一次就好，npm 會把共用的套件提升到根目錄的 <code>node_modules</code>，並幫你把兩個 app 的依賴都裝齊。</p>
+
+<pre><code>npm install</code></pre>
+
+<p>這也代表根目錄的 <code>.gitignore</code> 要涵蓋兩個 app 會產生的東西，才不會把雜物 commit 進去：</p>
+
+<pre><code>node_modules/
+.env
+.expo/
+.next/
+dist/
+apps/mobile/ios/
+apps/mobile/android/
+.DS_Store</code></pre>
+
+<h2>步驟六：從根目錄啟動，開兩個終端機</h2>
+
+<p>擺好之後，日常開發就是兩個終端機、兩條指令：一條跑手機 app，一條跑 web 與 API。手機要拿資料時，web 必須開著，否則 API 沒人回應。</p>
+
+<pre><code># 終端機 A
+npm run mobile     # 啟動 Expo，按 i 開 iOS 模擬器
+
+# 終端機 B
+npm run web        # 啟動 Next.js，含後台與 API</code></pre>
+
+<p>預期結果：A 終端機跑起 Expo、模擬器出現你的 app；B 終端機跑起 Next.js、瀏覽器打開後台。兩邊都從根目錄一條指令搞定。</p>
+
+<h2>為什麼是 npm，不是 pnpm？</h2>
+
+<p>很多人會直覺想用 pnpm，因為它的 <code>node_modules</code> 佈局更嚴格、更省空間。但 Expo 的打包器 Metro 沒辦法解析 pnpm 那種符號連結的佈局，你得額外設定把連結改成「提升」版本，而那一步正好丟掉 pnpm 最大的優點。npm 原生就會提升依賴，而且你電腦裡本來就有，所以這個專案選 npm。也不需要 Turborepo 或 Nx 這類建置協調工具——只有兩個 app，還不到需要它們的規模。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+把 Expo app 放進 <code>apps/mobile</code>、Next.js 放進 <code>apps/web</code>，根目錄用 <code>workspaces</code> 認得它們，再用 <code>-w</code> 把常用指令接到根目錄。依賴只在根目錄 <code>npm install</code> 一次，日常就是兩個終端機跑 <code>npm run mobile</code> 與 <code>npm run web</code>。選 npm 是因為 Metro 對 pnpm 的連結佈局不友善，而不是 npm 比較潮。
+</blockquote>
+
+<p>骨架擺好了，兩個 app 也都能啟動。但 <code>apps/web</code> 這個 Next.js 專案到底是怎麼把「後台、API、webhook」三種身分裝進同一個資料夾的？下一節要打開 <code>app/</code> 目錄，看懂它的檔案慣例與那層 <code>ClerkProvider</code> 外殼。</p>
+
+<div class="lesson-nav">
+  <div><a href="./repo-shape-mobile-plus-web.html">← 上一步：Monorepo 的形狀：為什麼一個 repo 裝兩個 app</a></div>
+  <div><a href="./nextjs-app-shell.html">下一步：Next.js App Router 外殼：一個部署，三種身分 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="根目錄 package.json 裡的 workspaces 欄位在做什麼？" data-correct="1" data-explain="它讓 npm 認得 apps 底下的每個資料夾都是這個 repo 的一部分。">
+  <button class="opt">把所有子專案的程式碼合併成一份</button>
+  <button class="opt">讓 npm 認得哪些資料夾是同一家庭的專案</button>
+  <button class="opt">自動把專案發佈到 npm 的公開倉庫</button>
+  <button class="opt">替每個子專案各自安裝一份依賴</button>
+</div>
+
+<div class="quiz" data-question="根目錄 script 裡的 -w apps/web 是什麼意思？" data-correct="2" data-explain="它把指令轉發給 apps/web 這個 workspace 執行。">
+  <button class="opt">只在本機而不在雲端執行這個指令</button>
+  <button class="opt">把 apps/web 的原始碼複製一份出來</button>
+  <button class="opt">把指令轉發給 apps/web 這個 workspace</button>
+  <button class="opt">監看 apps/web 的檔案改動並重載</button>
+</div>
+
+<div class="quiz" data-question="這個 monorepo 的依賴要在哪裡安裝？" data-correct="0" data-explain="workspaces 會統一安裝，根目錄跑一次 npm install 就夠。">
+  <button class="opt">根目錄跑一次 npm install 就好</button>
+  <button class="opt">每個 app 資料夾各跑一次 install</button>
+  <button class="opt">先裝根目錄，再各自裝一次</button>
+  <button class="opt">不需要安裝，npm 會自動下載</button>
+</div>
+
+<div class="quiz" data-question="這個專案選擇 npm 而不是 pnpm 的主要原因是什麼？" data-correct="3" data-explain="Expo 的 Metro 無法解析 pnpm 的符號連結佈局，得改成提升版本才動得了。">
+  <button class="opt">因為 npm 安裝的套件版本比較新</button>
+  <button class="opt">因為 pnpm 不支援 TypeScript 專案</button>
+  <button class="opt">因為 npm 執行 script 的速度快得多</button>
+  <button class="opt">因為 Metro 解不了 pnpm 的連結佈局</button>
+</div>
+
+<div class="quiz" data-question="為什麼這個專案不需要 Turborepo 或 Nx？" data-correct="1" data-explain="只有兩個 app，還不到需要建置協調工具的規模。">
+  <button class="opt">因為 Next.js 已經內建了相同功能</button>
+  <button class="opt">因為只有兩個 app，還不到需要的規模</button>
+  <button class="opt">因為這些工具不支援 npm workspaces</button>
+  <button class="opt">因為 Expo 會和它們互相衝突</button>
+</div>
+
+<div class="quiz" data-question="平常開發時，為什麼通常需要開兩個終端機？" data-correct="2" data-explain="手機端要拿資料時，web 與 API 必須同時開著回應請求。">
+  <button class="opt">因為一個終端機一次只能安裝一個 app</button>
+  <button class="opt">因為 npm workspaces 限制同時跑一個指令</button>
+  <button class="opt">因為手機端要呼叫的 API 得同時開著</button>
+  <button class="opt">因為 Expo 會佔用 Next.js 的連接埠</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Monorepo 與 Next.js 後端骨架 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

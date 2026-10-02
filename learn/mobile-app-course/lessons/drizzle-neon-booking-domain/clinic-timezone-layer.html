@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>診所時區層：把牆上的時間換成真正的瞬間</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>診所時區層：把牆上的時間換成真正的瞬間</h1>
+<p class="meta">Step 1/5 · 預約領域模型（Drizzle + Neon）</p>
+
+<h2>學習目標</h2>
+<p>能說出 <code>new Date('YYYY-MM-DD')</code> 與「時間加 24 小時」為什麼會讓預約跑到錯的一天，並用 CalendarDay 與 <code>clinicInstant</code> 把診所當地牆鐘時間正確換成 UTC 瞬間。</p>
+
+<h2>前言：週三早上九點，到底是哪一刻？</h2>
+
+<p>診所網站上寫著「週三 09:00 開始看診」。病人按下預約，選了週三早上九點。這聽起來理所當然，但如果你把「週三早上九點」這幾個字直接送進資料庫，某一天它就會變成週二晚上八點——而你不會發現，直到有人跑錯診所。</p>
+
+<p>問題出在：「週三早上九點」其實混了兩種完全不同的東西。一種是診所牆上時鐘顯示的數字，另一種是世界上一瞬即逝、所有人都同意的那個時間點。前者在冬天和夏天可能剛好差一小時，後者永遠不會變。把兩者當成同一件事，就是預約系統最常見的翻車原因。</p>
+
+<p>這一節要建立一個很小、但非常關鍵的檔案：診所的時區層。它專門負責把「診所牆上的時間」翻譯成「真正的瞬間」，而且只由它一個人負責。往後所有排班、可預約時段的計算，都會站在這一層上面。</p>
+
+<h2>兩種時間：牆鐘時間與絕對瞬間</h2>
+
+<p>先把這兩種時間分清楚，後面所有規則都會變得直觀。</p>
+
+<p><strong>牆鐘時間（wall-clock time）</strong>是「某地牆上時鐘顯示的數字」。診所營業時間就是牆鐘時間：每週三 09:00 開門、17:00 關門，不管那天是冬天還是夏天，牆上的鐘就是這樣顯示。它描述的是診所的作息，不是一個世界共通的時間點。</p>
+
+<p><strong>絕對瞬間（instant）</strong>是世界時間軸上的一個點，例如「2025 年 6 月 16 日 13:00 UTC」。一個預約發生的那一刻就是絕對瞬間，不論你從台北、紐約還是倫敦看，都是同一刻。資料庫裡要存的就是這個。</p>
+
+<p>你可以這樣記：牆鐘時間是手錶上的指針，絕對瞬間是「事情真正發生的那一刻」。營業時間用指針表達，預約則必須記住真正的時刻。</p>
+
+<table>
+<thead>
+<tr><th>問題</th><th>牆鐘時間</th><th>絕對瞬間</th></tr>
+</thead>
+<tbody>
+<tr><td>這是什麼</td><td>某地時鐘顯示的數字</td><td>世界時間軸上的一個點</td></tr>
+<tr><td>診所營業時間</td><td>是，週三 09:00–17:00</td><td>不是，換時區就變</td></tr>
+<tr><td>一筆預約</td><td>不是</td><td>是，必須唯一且無歧義</td></tr>
+<tr><td>用例</td><td>working_hours 表</td><td>appointments 表</td></tr>
+</tbody>
+</table>
+
+<h2>第一個陷阱：把日期字串交給 Date 解析</h2>
+
+<p>很多人的第一直覺是這樣寫：把 API 收到的 <code>"2025-06-16"</code> 丟進 <code>new Date()</code>，得到一個日期物件，然後開始算。</p>
+
+<pre><code>// 危險：看似單純，其實偷藏了一個時區假設
+const d = new Date("2025-06-16");
+// 在 UTC 環境是 2025-06-16T00:00:00Z
+// 在 UTC-4 的環境，同一個瞬間顯示成 2025-06-15 20:00</code></pre>
+
+<p>當字串只有日期、沒有時間時，JavaScript 會把它當成 UTC 的午夜來解析。結果就是：同一段程式在不同時區的機器上，可能得到日曆上的前後兩天。預約系統最怕的就是這種「差一天」。</p>
+
+<p>所以這裡刻意不使用 <code>Date</code> 解析日期，而是用正規表示式把 <code>YYYY-MM-DD</code> 拆成一個純粹的日曆日結構：</p>
+
+<pre><code>export type CalendarDay = { year: number; month: number; day: number };
+
+export function parseDay(iso: string): CalendarDay {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) throw new Error(`Expected YYYY-MM-DD, got "${iso}"`);
+  return { year: +m[1], month: +m[2], day: +m[3] };
+}</code></pre>
+
+<p><code>CalendarDay</code> 代表「日曆上的某一天」，它沒有時間、沒有任何時區偏移，就是一個你能用手指在月曆上點出來的日子。把日期先存成這種結構，就沒有機會在解析階段被偷偷搬走一天。</p>
+
+<h2>第二個陷阱：以為一天永遠是 24 小時</h2>
+
+<p>另一個常見寫法是：從今天開始，往後加 <code>24 * 60 * 60 * 1000</code> 毫秒，就算出下一天，重複十次得到十天的候選日期。</p>
+
+<p>平常這樣寫沒事，但日光節約（DST）切換的那一天不是 24 小時。美國在春天會把時鐘往前撥一小時，那天只有 23 小時；秋天往後撥，那天有 25 小時。用加毫秒的方式「加一天」，跨過切換點時就會少走或多走一格，日期序列開始漂移。</p>
+
+<p>正確做法是用<strong>日曆算術</strong>，而不是加固定毫秒。這裡借用 UTC 只當成一個方便加減的曆法工具，避免日光節約干擾：</p>
+
+<pre><code>export function eachDay(from: CalendarDay, to: CalendarDay, maxDays = 62): CalendarDay[] {
+  const days: CalendarDay[] = [];
+  const cursor = new Date(Date.UTC(from.year, from.month - 1, from.day));
+  const end = Date.UTC(to.year, to.month - 1, to.day);
+  while (cursor.getTime() <= end && days.length < maxDays) {
+    days.push({
+      year: cursor.getUTCFullYear(),
+      month: cursor.getUTCMonth() + 1,
+      day: cursor.getUTCDate(),
+    });
+    cursor.setUTCDate(cursor.getUTCDate() + 1); // 加「一天」，不是加 86400000
+  }
+  return days;
+}</code></pre>
+
+<p>關鍵在最後一行：它呼叫 <code>setUTCDate</code> 把日期加一，這是曆法上的「下一天」，不是時間軸上的「過 24 小時」。這樣即使中間夾了一個只有 23 小時的日子，序列依然正確。</p>
+
+<h2>唯一套用時區的地方：clinicInstant</h2>
+
+<p>現在有了乾淨的日曆日，還缺一步：把「某一天的診所當地幾點幾分」換成真正的瞬間。這個轉換只寫在一個函式裡，全專案只有它知道診所在哪個時區：</p>
+
+<pre><code>export const CLINIC_TZ = process.env.CLINIC_TZ ?? 'America/New_York';
+
+export function clinicInstant(day: CalendarDay, hours: number, minutes: number): Date {
+  const t = new TZDate(day.year, day.month - 1, day.day, hours, minutes, 0, 0, CLINIC_TZ);
+  return new Date(t.getTime());
+}</code></pre>
+
+<p><code>TZDate</code> 來自 <code>@date-fns/tz</code>，它讓你「把時間建構成某個時區的牆鐘時間」，再取回真正的 UTC 瞬間。以 <code>CLINIC_TZ = America/New_York</code> 為例：</p>
+
+<pre><code>clinicInstant({ year: 2025, month: 3, day: 10 }, 9, 0)
+// 春天日光節約已經切換 → 2025-03-10T13:00:00.000Z（UTC-4）
+
+clinicInstant({ year: 2025, month: 3, day: 7 }, 9, 0)
+// 切換之前的週五 → 2025-03-07T14:00:00.000Z（UTC-5）</code></pre>
+
+<p>兩者都是診所牆上的「早上九點」，但對應到的 UTC 瞬間差了一小時。這正是為什麼不能寫死一個 ±5 或 ±4 的偏移量——偏移量會隨季節改變，唯一可靠的做法是交給時區資料庫判斷。</p>
+
+<p>把時區運算通通收進 <code>clinicInstant</code>、<code>clinicDayOf</code>、<code>formatClinicTime</code> 這幾個函式，好處是日光節約的複雜度只活在一個檔案裡。其他地方完全不用碰時區，出錯的範圍也就被鎖住了。</p>
+
+<h3>反向轉換：一個瞬間落在診所的哪一天</h3>
+
+<p>寫入預約時，你需要知道某個瞬間在診所當地是星期幾、是不是工作日，所以也需要反方向的轉換：</p>
+
+<pre><code>export function clinicDayOf(instant: Date): CalendarDay & { weekday: number } {
+  const t = new TZDate(instant.getTime(), CLINIC_TZ);
+  return {
+    year: t.getFullYear(),
+    month: t.getMonth() + 1,
+    day: t.getDate(),
+    weekday: t.getDay(), // 0 = 星期日
+  };
+}</code></pre>
+
+<p>之後的排班引擎要驗證一筆預約時，就是先用 <code>clinicDayOf</code> 把使用者送來的瞬間轉回診所當地的日曆日，再去比對那天的營業時間。</p>
+
+<h2>為什麼營業時間反而是字串，不用瞬間</h2>
+
+<p>這裡有一個很容易搞反的細節：診所的 <code>working_hours</code> 存的是像 <code>'09:00'</code>、<code>'17:00'</code> 這樣的字串，而不是時間戳記。原因就是前面那條分界——營業時間是牆鐘時間。</p>
+
+<p>「每週三 09:00 開門」這句話在時間軸上沒有對應的單一瞬間；它是一個每週重複的作息。若硬把它存成瞬間，就等於偷偷綁定了某個時區偏移，一旦日光節約切換或診所搬家，這筆資料就得全部重算。反之，把牆鐘數字原封不動存成字串，需要換算時再交給 <code>clinicInstant</code>，才是乾淨的做法。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+預約系統要分清楚兩種時間：牆鐘時間（診所營業時間，用 CalendarDay 與 'HH:MM' 字串表達）與絕對瞬間（一筆預約，用 UTC 儲存）。不要用 <code>new Date('YYYY-MM-DD')</code> 解析日期，因為它會被當成 UTC 而差一天；不要用加 24 小時來推進日期，因為日光節約日不是 24 小時。把「牆鐘轉瞬間」收斂到唯一的 <code>clinicInstant</code>，日光節約的數學就只存在一個檔案裡。
+</blockquote>
+
+<p>有了這層時區地基，下一個問題就變成：到底要拿哪些資料來算可預約時段？診所不是單一行事曆，而是好幾位醫師、不同服務、各自的營業時間與請假。下一節會把「誰什麼時候有空」建成一組資料表。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./model-availability-domain.html">下一步：把「誰什麼時候有空」建成資料 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼不該用 new Date('2025-06-16') 解析只有日期的字串？" data-correct="1" data-explain="純日期字串會被當成 UTC 午夜，在不同時區的機器上可能顯示成前後兩天。">
+  <button class="opt">因為它會直接丟出例外的錯誤</button>
+  <button class="opt">因為它會把日期當成 UTC 而差一天</button>
+  <button class="opt">因為它只能解析西元兩千年後的日期</button>
+  <button class="opt">因為它會把日期自動加上目前時間</button>
+</div>
+
+<div class="quiz" data-question="「每週三 09:00 開門」屬於哪一種時間？" data-correct="2" data-explain="它是診所牆上時鐘的作息，每週重複，不是時間軸上的單一瞬間。">
+  <button class="opt">一個由資料庫產生的絕對瞬間</button>
+  <button class="opt">一個帶有 UTC 偏移的時間戳記</button>
+  <button class="opt">一種診所當地牆鐘時間</button>
+  <button class="opt">一種只存在記憶體的快取值</button>
+</div>
+
+<div class="quiz" data-question="為什麼用加 24 小時的方式推進日期會出錯？" data-correct="0" data-explain="日光節約切換那一天只有 23 或 25 小時，加固定毫秒會讓日期漂移。">
+  <button class="opt">因為日光節約那一天不是 24 小時</button>
+  <button class="opt">因為資料庫不支援毫秒的加減</button>
+  <button class="opt">因為 JavaScript 的整數會溢位</button>
+  <button class="opt">因為每個月天數其實不固定</button>
+</div>
+
+<div class="quiz" data-question="clinicInstant 的主要責任是什麼？" data-correct="3" data-explain="它把診所當地牆鐘時間換成真正的 UTC 瞬間，是全專案唯一套用時區的地方。">
+  <button class="opt">把 UTC 瞬間換算成使用者裝置時間</button>
+  <button class="opt">把日期字串拆成年月日三個數字</button>
+  <button class="opt">產生一段日期區間的所有日曆日</button>
+  <button class="opt">把牆鐘時間換成真正的 UTC 瞬間</button>
+</div>
+
+<div class="quiz" data-question="診所的 working_hours 為什麼存成 '09:00' 這種字串？" data-correct="1" data-explain="營業時間是每週重複的牆鐘時間，存成瞬間會綁死某個時區偏移；需要時再用 clinicInstant 換算。">
+  <button class="opt">因為字串比時間戳記更節省空間</button>
+  <button class="opt">因為它是每週重複的牆鐘時間</button>
+  <button class="opt">因為資料庫不支援 time 型別欄位</button>
+  <button class="opt">因為它可以避免使用者輸入錯誤</button>
+</div>
+
+<div class="quiz" data-question="把時區運算全部集中到 time.ts，最大的好處是什麼？" data-correct="2" data-explain="日光節約的複雜度只活在一個檔案，出錯範圍被鎖住，其餘程式完全不必碰時區。">
+  <button class="opt">可以讓 API 的回應速度變得更快</button>
+  <button class="opt">可以讓資料庫節省一顆硬碟空間</button>
+  <button class="opt">可以讓時區出錯的範圍被鎖住</button>
+  <button class="opt">可以讓前端不需要處理任何時區</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 預約領域模型（Drizzle + Neon） · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

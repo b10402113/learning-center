@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Next.js App Router 外殼：一個部署，三種身分</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Next.js App Router 外殼：一個部署，三種身分</h1>
+<p class="meta">Step 3/5 · Monorepo 與 Next.js 後端骨架</p>
+
+<h2>學習目標</h2>
+<p>能讀懂 App Router 的檔案慣例（layout、page、route handler），說出 root layout 用 <code>ClerkProvider</code> 包住整棵樹的意義，以及一個 Next.js 部署如何同時扮演 dashboard、API 與 webhook。</p>
+
+<h2>前言：一個資料夾，怎麼同時當網站和後端？</h2>
+
+<p>上一節我們把兩個 app 擺好了，也證明了 <code>npm run web</code> 真的能啟動 Next.js。但你可能還沒細看：這個 <code>apps/web</code> 明明只有一份程式碼，為什麼可以既給員工看網頁、又回答手機 app 的資料請求、還要收 Clerk 打進來的 webhook？</p>
+
+<p>答案藏在它採用的 <strong>App Router</strong>。它把「路由」這件傳統上要另外設定的東西，直接變成資料夾結構：你開一個資料夾，就等於開一段網址；你在資料夾裡放什麼檔名的檔案，就決定那個位置是「給人看的頁面」還是「回資料的端點」。這一節要把 <code>app/</code> 底下的規則讀懂，因為後面無論是後台、API 還是 webhook，都是照同一套規則長出來的。</p>
+
+<h2>App Router 的四種關鍵檔案</h2>
+
+<p>Next.js 的 App Router 用檔案名稱決定這個檔案的角色。你只要記住底下幾種：</p>
+
+<table>
+<thead>
+<tr><th>檔案</th><th>角色</th><th>回傳什麼</th></tr>
+</thead>
+<tbody>
+<tr><td><code>layout.tsx</code></td><td>包住某一段路徑的外殼，可以巢狀</td><td>共用版型（HTML 骨架、Provider）</td></tr>
+<tr><td><code>page.tsx</code></td><td>某段網址的畫面</td><td>給人看的 HTML</td></tr>
+<tr><td><code>route.ts</code></td><td>HTTP 端點（Route Handler）</td><td>給程式呼叫的資料</td></tr>
+<tr><td><code>(資料夾)</code></td><td>route group，只是分類，不影響網址</td><td>例如 <code>(site)</code> 放官網、放隱私政策</td></tr>
+</tbody>
+</table>
+
+<p>最外層的那個 <code>layout.tsx</code> 稱為 root layout，它負責整棵樹最底層的框架：裡面的 <code>&lt;html&gt;</code> 與 <code>&lt;body&gt;</code> 標籤就是從這裡出來的。路徑更深的 <code>layout</code> 會一層一層被包進去，所以共用版型只要寫一次。</p>
+
+<h2>Root layout：把 Provider 掛在整棵樹的最外層</h2>
+
+<p>打開 <code>apps/web/src/app/layout.tsx</code>，內容很短，但每一個 import 都有意思：</p>
+
+<pre><code>import { ClerkProvider } from '@clerk/nextjs';
+import type { Metadata } from 'next';
+
+import './globals.css';
+
+export const metadata: Metadata = {
+  title: 'DentaCare — Staff Dashboard',
+  description: 'Schedule, patient records and post-op notes for the clinic.',
+};
+
+export default function RootLayout({ children }: LayoutProps&lt;'/'&gt;) {
+  return (
+    &lt;html lang="en"&gt;
+      &lt;body className="antialiased"&gt;
+        &lt;ClerkProvider&gt;{children}&lt;/ClerkProvider&gt;
+      &lt;/body&gt;
+    &lt;/html&gt;
+  );
+}</code></pre>
+
+<p>逐一拆開看。<code>metadata</code> 是這個頁面的靜態詮釋資料，會變成 HTML 的 <code>&lt;title&gt;</code> 與描述。<code>globals.css</code> 是整站共用的樣式。而 <code>RootLayout</code> 這個函式回傳的，就是每個頁面都會套用的最外層結構。</p>
+
+<p>最關鍵的是 <code>&lt;ClerkProvider&gt;</code> 把 <code>{children}</code> 整個包住。意思是：不管下面哪一個頁面、哪一個 server component 被渲染，它都在 Clerk 的身分環境裡。這是「登入狀態」能一路傳到最底層頁面的原因。你可以把 root layout 想成診所大樓的一樓大廳：所有要進到不同房間的人，都得先經過這裡，而 <code>ClerkProvider</code> 就是大廳櫃台，先確認你是誰，再把身分帶進後面的每一個房間。</p>
+
+<p>附帶一提，layout 預設是 Server Component，也就是它在伺服器上渲染，不會把多餘的程式碼送到瀏覽器。像掛 Provider、讀 metadata 這種不需要互動的事，放在這裡最自然。</p>
+
+<h2>page 與 route handler：給人看 vs 給程式用</h2>
+
+<p>同樣在 <code>app/</code> 底下，<code>page.tsx</code> 和 <code>route.ts</code> 是兩種不同的出口。<code>page.tsx</code> 產出的是畫面——員工打開 <code>/dashboard</code> 看到的病人清單，就是某個 <code>page.tsx</code>。<code>route.ts</code> 產出的則是資料，它匯出 <code>GET</code>、<code>POST</code> 這些函式，對應到不同的 HTTP 方法：</p>
+
+<pre><code>// apps/web/src/app/api/appointments/route.ts
+export async function GET() {
+  // 回傳預約清單給呼叫端
+}
+
+export async function POST() {
+  // 建立一筆新預約
+}</code></pre>
+
+<p>注意：<code>page.tsx</code> 是給「人」用的，它回傳的是 HTML；<code>route.ts</code> 是給「程式」用的，手機 app 就是打這一種。兩者都住在 <code>app/</code> 底下、共用同一套路由規則，只差在檔名決定它是畫面還是端點。</p>
+
+<h2>三種身分怎麼對應到資料夾</h2>
+
+<p>把上一節講的三個身分，對回來看資料夾就一目了然了：</p>
+
+<ul>
+<li>員工後台 → <code>app/dashboard/...</code> 底下的 <code>page.tsx</code>。</li>
+<li>手機呼叫的 API → <code>app/api/...</code> 底下的 <code>route.ts</code>，例如預約、可預約時段、目前使用者、AI 助理。</li>
+<li>Webhook 接收端 → <code>app/api/webhooks/clerk/route.ts</code>，等 Clerk 主動打進來。</li>
+</ul>
+
+<p>它們全部在一個 Next.js 專案裡，所以只需要部署一次。建置設定也在這裡，例如 <code>next.config.ts</code> 會把 Sentry 的設定包進 Next 的設定裡。這也是為什麼「一個部署、一份 schema」說得通：後台和 API 是同一個程式，改動一起上線，不會有其中一邊落後。</p>
+
+<h2>一個容易踩的坑：這不是你想像的 Next.js</h2>
+
+<p>Dentify 用的是 Next.js 16，這個版本和很多人的訓練資料、或網路上舊教學裡的版本並不一致。連 layout 的型別都變了——範例裡的 <code>LayoutProps&lt;'/'&gt;</code> 就是新版的寫法。所以這個 repo 的 <code>apps/web/AGENTS.md</code> 開頭就寫著：動手寫任何程式碼之前，先讀這個版本隨附的官方文件，不要憑記憶。<strong>版本會動，記憶會過期，文件才是準的。</strong></p>
+
+<h2>小結</h2>
+
+<blockquote>
+Next.js 的 App Router 用檔名決定角色：<code>layout.tsx</code> 是外殼、<code>page.tsx</code> 是畫面、<code>route.ts</code> 是端點、括號資料夾只是分類。root layout 是最外層，用 <code>ClerkProvider</code> 包住整棵樹，讓每個頁面都拿得到登入狀態。後台、API 與 webhook 都只是 <code>app/</code> 底下不同的檔案，因此共用同一個部署。這個版本的 Next.js 與舊教學不同，動手前先讀版本對應的文件。
+</blockquote>
+
+<p>外殼有了，但這個外殼目前是「誰都能敲門」。要怎麼在請求真正進到頁面或 API 之前，先確認來的人帶了身分？下一節要打開 <code>proxy.ts</code>，看它如何在每個請求上附掛 Clerk 的身分脈絡。</p>
+
+<div class="lesson-nav">
+  <div><a href="./npm-workspaces-layout.html">← 上一步：用 npm workspaces 擺好 apps/mobile 與 apps/web</a></div>
+  <div><a href="./proxy-attaches-auth-context.html">下一步：proxy.ts：讓每個請求都帶著身分 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="在 App Router 裡，哪一種檔案代表「給人看的畫面」？" data-correct="0" data-explain="page.tsx 產出畫面，route.ts 則是給程式呼叫的端點。">
+  <button class="opt">page.tsx 這個檔案</button>
+  <button class="opt">route.ts 這個檔案</button>
+  <button class="opt">layout.tsx 這個檔案</button>
+  <button class="opt">next.config.ts 這個檔案</button>
+</div>
+
+<div class="quiz" data-question="route.ts 裡匯出的 GET、POST 函式代表什麼？" data-correct="2" data-explain="它們是 Route Handler，對應不同的 HTTP 方法，回傳資料給呼叫端。">
+  <button class="opt">這個頁面會被瀏覽器快取的次數</button>
+  <button class="opt">這個檔案被其他模組匯入的順序</button>
+  <button class="opt">對應不同 HTTP 方法的資料端點</button>
+  <button class="opt">這個路由需要幾層 layout 外殼</button>
+</div>
+
+<div class="quiz" data-question="為什麼 ClerkProvider 要放在 root layout 的最外層？" data-correct="1" data-explain="包住整棵樹之後，底下每個頁面與 component 都能取得登入狀態。">
+  <button class="opt">因為只有 root layout 能執行資料庫查詢</button>
+  <button class="opt">讓底下每個頁面都拿得到登入狀態</button>
+  <button class="opt">因為其他位置會讓 Next.js 無法啟動</button>
+  <button class="opt">這樣可以減少瀏覽器下載的程式碼量</button>
+</div>
+
+<div class="quiz" data-question="app 底下 (site) 這種括號資料夾的作用是什麼？" data-correct="3" data-explain="route group 只是把檔案分類，不會出現在網址上。">
+  <button class="opt">讓這段路徑必須登入才能存取</button>
+  <button class="opt">把這段路徑改成動態的參數</button>
+  <button class="opt">強制這段路徑加上網址前綴</button>
+  <button class="opt">只是把檔案分類，不影響網址</button>
+</div>
+
+<div class="quiz" data-question="為什麼員工後台與手機 API 可以只部署一次？" data-correct="1" data-explain="它們都是同一個 Next.js 專案裡的不同檔案，自然一起上線。">
+  <button class="opt">因為 Vercel 自動把每個頁面拆開部署</button>
+  <button class="opt">因為它們是同一個 Next.js 專案的檔案</button>
+  <button class="opt">因為 webhook 會幫忙轉發所有請求</button>
+  <button class="opt">因為資料庫會快取整份前端程式碼</button>
+</div>
+
+<div class="quiz" data-question="這個 repo 的 AGENTS.md 提醒你動手前先做什麼？" data-correct="0" data-explain="這個 Next.js 版本與舊教學不同，要先讀版本隨附的官方文件，不要憑記憶。">
+  <button class="opt">先讀這個版本隨附的官方文件</button>
+  <button class="opt">先移除所有舊的 layout 檔案</button>
+  <button class="opt">先把 Provider 全部改成 client</button>
+  <button class="opt">先把專案降級到舊版 Next.js</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Monorepo 與 Next.js 後端骨架 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent tracing：看得見 AI 功能的成本與延遲</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Agent tracing：看得見 AI 功能的成本與延遲</h1>
+<p class="meta">Step 4/5 · 觀測深化：Logs / Tracing / Agent Tracing</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你能解釋 Sentry 的 agent tracing 捕捉哪些東西——token 用量、延遲、工具呼叫、錯誤率、使用者輸入——以及它為什麼要用獨立的 Next.js Sentry 專案、又要關掉哪些資料收集，才不會把病歷一起送出去。</p>
+
+<h2>前言：AI 沒出錯，但帳單和等待時間悄悄失控</h2>
+
+<p>上一節處理完敏感資料的去識別化，我們終於可以放心把觀測延伸到 AI 功能。這裡有個新的盲點：傳統的錯誤監控只在你「失敗」時才出聲，可是 AI 功能最常見的問題不是失敗，而是「成功，但很慢、很貴」。使用者按了助理，等了八秒才開始回話；某一天 OpenAI 的費用突然翻倍，你卻不知道是哪個功能、哪個模型造成的。</p>
+
+<p>一般的 tracing 能告訴你「這趟請求花了幾秒」，但它看不見 AI 特有的東西：這次用了多少 token、呼叫了哪個模型、有沒有動用工具、輸入被餵了什麼。要回答「AI 為什麼貴、為什麼慢」，你需要的是專門為 AI 設計的觀測，也就是這一節的主角：agent tracing。</p>
+
+<h2>AI 功能需要另一種儀表板</h2>
+
+<p>先把 agent tracing 和前面學過的 tracing 分開。一般 tracing 的對象是「一段程式執行」，例如一個 API 請求，它把時間拆成 span，讓你看見哪一段慢。agent tracing 的對象則是「一次 AI 代理的運作」，它除了時間，還加上了模型與代理相關的維度。兩者能接在同一條時間軸上，但關注的指標不同。</p>
+
+<p>為什麼需要多這層？因為 AI 呼叫有幾個一般 tracing 量不到的成本來源。第一是 token：同一個功能，提示詞寫得囉唆一點，成本可能差好幾倍。第二是模型選擇：換一個模型，延遲與單價都會變。第三是工具呼叫：代理如果中途去查了資料庫、呼叫了外部 API，這些步驟會拉長整體時間。第四是使用者輸入：什麼樣的問題會讓代理繞遠路。這些都是「成功路徑」上的問題，錯誤列表看不到，只有 agent tracing 看得見。</p>
+
+<h2>Agent tracing 實際上捕捉什麼</h2>
+
+<p>接上之後，Sentry 的 AI agents 總覽會把這些維度攤開。它捕捉的核心指標包括：</p>
+
+<table>
+<thead>
+<tr><th>指標</th><th>回答的問題</th></tr>
+</thead>
+<tbody>
+<tr><td>Token 用量</td><td>這次對話花了多少輸入與輸出的 token</td></tr>
+<tr><td>延遲</td><td>從送出請求到模型回完，總共等了多久</td></tr>
+<tr><td>工具呼叫</td><td>代理中途動用了哪些工具、次數多少</td></tr>
+<tr><td>錯誤率</td><td>AI 相關的請求有多少比例失敗</td></tr>
+<tr><td>使用者輸入</td><td>使用者問了什麼類型的問題（在去識別化前提下）</td></tr>
+</tbody>
+</table>
+
+<p>在總覽頁面上，這些會聚合成跑次數、成本、執行時間、各模型的 LLM 呼叫次數與 token 數量。你可以把它想成 AI 功能的「油耗表」：不是告訴你車子有沒有拋錨，而是告訴你每一趟開下來花了多少油、塞在哪一段路。當你調整整段提示詞或換模型時，這張表就是你判斷划不划算的依據。</p>
+
+<h2>為什麼要另開一個 Sentry 專案</h2>
+
+<p>這個 app 是 monorepo：行動端在 Expo，AI 的 API route 在 Next.js 的網頁專案裡。當你把 agent tracing 接進 AI 功能，追蹤的對象其實跑在伺服器端，而不是手機上。因此做法是：在同一個 Sentry 組織底下，另外建立一個 Next.js 平台的專案，取得它自己的 DSN，再把設定補齊。</p>
+
+<p>多專案的結構反映的是架構的事實：行動端與網頁端是兩套部署、兩種執行環境。好處是各自的錯誤、log、trace 不會混在一起，你可以針對「網頁後端」單獨看 AI 的成本與延遲。這也是為什麼前面在 Explore Logs 時要不斷提醒「先選對專案」——專案就是觀測的邊界。</p>
+
+<h2>去識別化的 context：追得到，但看不到內容</h2>
+
+<p>agent tracing 最有價值的矛盾在這裡：你希望追蹤一次對話的完整足跡，卻不希望在雲端留下任何病歷。解法是把「身分」與「內容」拆開。身分用 id 表示，內容則整類關閉。</p>
+
+<p>在 AI route 裡，典型做法是先設定使用者與對話，再把 OpenAI 客戶端包起來讓它自動產生 span。使用者只帶 id，不帶姓名或 email；對話用一個 <code>conversationId</code> 標記，讓同一次對話的多輪請求能被串在一起。示意如下：</p>
+
+<pre><code>Sentry.setUser({ id: userId });            // 只留 id，不帶姓名或 email
+Sentry.setConversationId(conversationId);  // 把同一次對話的多輪請求串起來
+instrumentOpenAiClient(openai);            // 讓 OpenAI 呼叫自動產生 span</code></pre>
+
+<p>接著在伺服器端的收集設定裡，把生成式 AI 的輸入與輸出整類關閉。這樣一來，你在總覽上仍然看得到「這次對話花了多少 token、等了幾秒、有沒有出錯」，但看不到對話的實際文字。搭配前面的 <code>dataCollection</code> 設定——關閉 AI 輸入輸出、資料庫查詢內容與堆疊變數——病歷就不會被夾帶進 trace。YouTube 上的示範就是這個組合：追得到足跡，但看不到內容。</p>
+
+<h2>這張儀表板能回答什麼</h2>
+
+<p>接好之後，最實用的幾種問法包括：哪一個模型在這條路徑上最慢；過去一週的成本趨勢是不是在漲；某一批對話為什麼錯誤率偏高；代理是不是常常繞去呼叫工具。這些問題都不是「有沒有壞」，而是「好不好、貴不貴、慢不慢」，正好補上錯誤監控的空白。</p>
+
+<p>值得一提的是，agent tracing 的資料本身沒有內容，所以你不需要為了除錯而在 trace 裡看病人說了什麼。當你懷疑是提示詞或資料造成的問題，會改用 log 的 id 與計數去對照，而不是把原文撈回來。觀測與隱私在這裡不是互相妥協，而是靠「指標歸指標、內容歸內容」分工。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>AI 功能的典型問題是「成功但很慢、很貴」，錯誤監控看不到，要用 agent tracing。它捕捉 token 用量、延遲、工具呼叫、錯誤率與使用者輸入，並在 AI agents 總覽上聚合成成本、執行時間與各模型的呼叫次數。因為 AI 跑在 Next.js 網頁專案，所以要另開一個 Sentry 專案與 DSN，形成行動端加網頁端的多專案結構。最重要的是把身分與內容拆開：用 id 當使用者、用 conversationId 串對話、包住 OpenAI 客戶端產生 span，同時把生成式 AI 的輸入輸出整類關閉，讓病歷留在系統裡，只把可追蹤的骨架送上雲端。</p>
+</blockquote>
+
+<p>到這裡，你已經能看見錯誤、查到 log、追蹤 AI 的成本與延遲。但這些都是「應用程式內部」的視角。使用者真正感受到的，往往是另一回事：在他那台舊手機、在那個訊號很差的地鐵上，app 到底開得夠不夠快？下一節要把視角拉到真實使用者，看 Expo Observe 怎麼量這件事。</p>
+
+<div class="lesson-nav">
+  <div><a href="./scrub-before-send.html">← 上一步：敏感資料該在哪一層被擋下</a></div>
+  <div><a href="./measure-real-user-performance.html">下一步：用 Expo Observe 看上線後的效能 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="AI 功能最常見、但傳統錯誤監控看不到的問題是什麼？" data-correct="2" data-explain="AI 多半不是失敗，而是成功卻很慢、很貴，需要另一種指標才看得見。">
+  <button class="opt">應用程式在啟動時直接閃退</button>
+  <button class="opt">使用者的登入憑證被伺服器拒絕</button>
+  <button class="opt">請求成功但延遲很長、成本很高</button>
+  <button class="opt">資料庫連線字串忘記設定而中斷</button>
+</div>
+<div class="quiz" data-question="下列哪一項屬於 agent tracing 特有、一般 tracing 較少呈現的維度？" data-correct="1" data-explain="token 用量、工具呼叫與模型選擇是 AI 代理特有的維度。">
+  <button class="opt">某個 API 請求的總執行時間</button>
+  <button class="opt">token 用量與工具呼叫的次數</button>
+  <button class="opt">裝置上的畫面更新率與掉幀</button>
+  <button class="opt">伺服器回應的 HTTP 狀態碼</button>
+</div>
+<div class="quiz" data-question="為什麼 agent tracing 要另外建立一個 Next.js 的 Sentry 專案？" data-correct="3" data-explain="AI 的 API route 跑在網頁專案，屬不同部署與執行環境，用獨立專案才能清楚觀測。">
+  <button class="opt">因為 Sentry 只支援 Next.js 平台</button>
+  <button class="opt">因為行動端無法安裝 Sentry SDK</button>
+  <button class="opt">因為免費額度只夠開一個專案</button>
+  <button class="opt">因為 AI 跑在網頁端是不同執行環境</button>
+</div>
+<div class="quiz" data-question="setUser 只傳 id、不傳姓名或 email，主要為了什麼？" data-correct="0" data-explain="身分只用 id 表示，避免姓名與 email 這類個資進入 trace。">
+  <button class="opt">避免個資隨著 trace 被送上雲端</button>
+  <button class="opt">讓使用者載入速度可以變得更快</button>
+  <button class="opt">讓 OpenAI 的呼叫次數大幅減少</button>
+  <button class="opt">讓 Sentry 免費用戶也能看到成本</button>
+</div>
+<div class="quiz" data-question="把生成式 AI 的輸入與輸出整類關閉後，你還能觀察到什麼？" data-correct="2" data-explain="內容關閉後，token 數、延遲、模型與錯誤率這些非內容指標仍然保留。">
+  <button class="opt">完整的提示詞與模型回答的逐字內容</button>
+  <button class="opt">病人病歷裡所有欄位的原始數值</button>
+  <button class="opt">token 數、延遲與模型等非內容指標</button>
+  <button class="opt">資料庫查詢時綁定的每一筆參數</button>
+</div>
+<div class="quiz" data-question="setConversationId 在 agent tracing 裡的作用是什麼？" data-correct="1" data-explain="它讓同一次對話的多輪請求被標記在一起，方便沿著對話追蹤。">
+  <button class="opt">把使用者的真實姓名顯示在儀表板上</button>
+  <button class="opt">把同一次對話的多輪請求串在一起</button>
+  <button class="opt">決定這次對話要使用哪一個 AI 模型</button>
+  <button class="opt">把對話的內容加密後保存到雲端</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 觀測深化：Logs / Tracing / Agent Tracing · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

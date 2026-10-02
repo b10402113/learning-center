@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>在 Next.js Route Handler 串出 AI 回應</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>在 Next.js Route Handler 串出 AI 回應</h1>
+<p class="meta">Step 2/5 · 串流 AI 助理</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你應該能在 Next.js 的 Route Handler 寫出一個會串流的 AI 端點：用領域提示框住助理的範圍、在模型之前先攔截緊急訊息、用預設關閉的傳輸閘門決定要不要送 OpenAI，最後把 OpenAI 的串流轉成一條純文字回應體。</p>
+
+<h2>前言：上一節的水管，現在要接上真的模型</h2>
+
+<p>上一節我們把「串流是什麼」講清楚了：一般端點把答案準備好才一次送出，而 LLM 的答案本來就是一點一點長出來的，串流就是把這兩件事對齊。但那個模型還停在紙上，接下來要動手把它變成一個真的能回應的端點。</p>
+
+<p>動手之前，先確認你手上已經有幾樣東西：一個 Next.js 專案、已經接好的 Clerk 身分驗證（也就是 <code>requireAuth()</code> 這類會從登入 session 推導使用者的函式）、一個 OpenAI API key 放在伺服器端的環境變數、以及資料庫裡已經有放對話與訊息的兩張表。這些屬於前面節點的成果，這一節不重講。</p>
+
+<p>做完之後，你會得到一個 <code>POST /api/ai/chat</code> 端點：對它送出一句話與對話編號，它會逐字串回助理的回答。而且它同時要處理好幾種「還不能碰模型」的情況，因為在敏感的醫療情境裡，順序錯了會出大事。</p>
+
+<h2>第一步：先驗身分，再驗輸入</h2>
+
+<p>端點的第一件事永遠是確認「你是誰」。使用者身分只能從登入 session 推導，不能從請求內容讀；有了身分之後，才用 Zod 驗證請求的形狀。</p>
+
+<pre><code>export const POST = route(async (req: Request) =&gt; {
+  const user = await requireAuth();
+  const body = aiChatSchema.parse(await req.json());
+
+  const conversation = await getOrCreateConversation(user.id, body.conversationId);</code></pre>
+
+<p><code>getOrCreateConversation</code> 是整個節點裡唯一把「對話編號」換回資料列的地方。它帶著 <code>userId = me</code> 的條件去查，所以別人的對話編號根本查不到，會直接變成 404。把這個檢查集中在一個函式裡，其他路由就不用各寫一次，也不會有人漏寫。</p>
+
+<h2>第二步：在呼叫模型之前，先把該記的記下來</h2>
+
+<p>接下來要寫入使用者這一句話，並設定 Sentry 的 agent tracing。順序很重要：tracing 必須在模型呼叫之前設定，否則產生的 span 會變成孤兒、接不回這輪對話。</p>
+
+<pre><code>Sentry.setUser({ id: user.id });
+Sentry.setConversationId(conversation.id);
+
+await db.insert(aiMessages).values({
+  conversationId: conversation.id,
+  role: 'user',
+  content: body.message,
+});</code></pre>
+
+<p>注意 <code>setUser</code> 只傳了 <code>id</code>，沒有 email 或其他可識別資訊——User 欄位只需要一個穩定值來分組事件。而 <code>setConversationId</code> 讓同一個對話的每一輪，即使跨了好幾個請求與 trace，都能在 Sentry 裡被歸到同一條對話。這兩個設定本身監控用的，不是功能邏輯，但少了它們，之後在 Sentry 上就看不到 AI 功能的成本與延遲。</p>
+
+<h2>第三步：緊急訊息要在模型之前短路</h2>
+
+<p>這是整段程式碼最不能馬虎的地方。如果使用者描述的症狀可能危及生命，助理必須給出制式的處理指示，而且這件事絕對不能交給 LLM 判斷。理由很直白：模型的判斷力不適合用在「答錯會影響呼吸」的路上。</p>
+
+<pre><code>if (isEmergency(body.message)) {
+  const [saved] = await db
+    .insert(aiMessages)
+    .values({ conversationId: conversation.id, role: 'assistant', content: EMERGENCY_REPLY })
+    .returning();
+
+  return json({
+    conversationId: conversation.id,
+    emergency: true,
+    message: { id: saved.id, role: 'assistant', content: EMERGENCY_REPLY },
+  });
+}</code></pre>
+
+<p><code>isEmergency</code> 是一組寫死的正規表達式，比對「呼吸／吞嚥困難、臉頸腫脹、止不住的出血、牙齒被打掉、下巴受傷、發燒合併牙齒或臉部問題」這幾類描述。<code>EMERGENCY_REPLY</code> 則是每次都一模一樣的固定文字，內容包含叫救護車或去急診、以及時間敏感處置的提醒。</p>
+
+<blockquote class="good-code">
+緊急路徑在模型之前短路，而且完全不依賴模型。這代表即使 OpenAI 掛掉、或這個環境根本沒設定金鑰，緊急卡片照樣能回。
+</blockquote>
+
+<p>也因為它回的是 JSON，客戶端能用內容型別分辨「這是一則通知」還是「這是一段串流回覆」，對應到上一節講的分岔點。</p>
+
+<h2>第四步：金鑰與傳輸閘門，預設要關</h2>
+
+<p>通過緊急檢查之後，才輪到檢查「這件事到底能不能做」。這裡有兩道關卡，順序不能顛倒。</p>
+
+<pre><code>if (!process.env.OPENAI_API_KEY) {
+  throw new ApiError(503, 'The assistant is not configured yet.', 'ai_unconfigured');
+}
+
+if (!externalTransmissionApproved()) {
+  throw new ApiError(
+    503,
+    'The assistant is unavailable in this environment.',
+    'ai_transmission_blocked'
+  );
+}</code></pre>
+
+<p>第一道是金鑰有沒有設定，沒有就回 503。第二道才是關鍵：<code>externalTransmissionApproved()</code> 只有在環境變數 <code>OPENAI_TRANSMISSION_APPROVED</code> 明確等於字串 <code>'true'</code> 時才回 true。任何其他值——沒設、<code>"false"</code>、<code>"1"</code>、<code>"TRUE"</code>——一律視為不准。</p>
+
+<pre><code>export function externalTransmissionApproved(): boolean {
+  return process.env.OPENAI_TRANSMISSION_APPROVED === 'true';
+}</code></pre>
+
+<p>這種寫法叫 fail-closed（失敗時關閉）：預設是不傳，要傳得先有人明確打開。為什麼要這麼嚴？因為「沒有病人的病歷被送出去」和「沒有任何病患資訊到達 OpenAI」是兩件不同的事——病患親手打的那段症狀描述，只要綁定到某個使用者，就已經是可識別資訊；病患也可能自己把名字或生日打進去。沒有任何 system prompt 能阻止這件事，也不該相信任何分類器能偵測它。所以傳不傳是一個部署決策，不是程式能從內容推斷的。</p>
+
+<blockquote class="bad-code">
+不要因為「模型需要看訊息才能回答」就把閘門預設打開。預設值一旦是開的，任何一次部署失誤都會直接把病患文字送進第三方。
+</blockquote>
+
+<h2>第五步：組出要送進模型的歷史</h2>
+
+<p>真正要送給 OpenAI 的內容只有兩部分：system prompt，以及這條對話的訊息。沒有病歷、沒有預約紀錄，什麼額外的資料列都不掛。</p>
+
+<pre><code>const history = (
+  await db
+    .select({ role: aiMessages.role, content: aiMessages.content })
+    .from(aiMessages)
+    .where(eq(aiMessages.conversationId, conversation.id))
+    .orderBy(asc(aiMessages.createdAt))
+    .limit(30)
+).filter((m) =&gt; m.content.trim());</code></pre>
+
+<p>這裡有兩個細節。第一是 <code>limit(30)</code>：只帶最近三十則，避免對話愈長、每一次請求送出的內容愈多而失控。第二是 <code>filter</code>：把內容空白的訊息濾掉。為什麼會有空白訊息？因為圖片附件的回合是用空字串存進去的（照片本身不會送給模型），一則空白的回合塞進 prompt 比沒有還糟。這兩件事都是為了讓送出去的內容保持乾淨。</p>
+
+<h2>第六步：要求串流，並保留 token 用量</h2>
+
+<pre><code>const completion = await openai.chat.completions.create({
+  model: AI_MODEL,
+  messages: [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...history.map((m) =&gt; ({ role: m.role, content: m.content }) as const),
+  ],
+  max_tokens: 400,
+  temperature: 0.3,
+  stream: true,
+  stream_options: { include_usage: true },
+});</code></pre>
+
+<p>幾個欄位值得說明。<code>stream: true</code> 是這個端點的核心，它讓回傳的不再是一份完整結果，而是一個可以逐段取用的非同步迭代器。<code>SYSTEM_PROMPT</code> 定義了助理的範圍與規矩：只能做牙科衛教與分流、絕不診斷、不開藥、不判讀影像、不宣稱自己是牙醫或真人，回答最多兩個短段落，而且超出牙科範圍要明說。<code>max_tokens: 400</code> 與 <code>temperature: 0.3</code> 把回答長度與發散程度壓在保守範圍。最後的 <code>stream_options: { include_usage: true }</code> 是給監控用的——串流回應預設不附 token 用量，少了它，Sentry 上的成本估算就沒有數字。</p>
+
+<p>還有一行包住 OpenAI client 的呼叫：<code>Sentry.instrumentOpenAiClient(...)</code>。它產生 gen_ai 的 span，記錄模型、token、成本與延遲；但 Sentry 設定裡的 <code>genAI: { inputs: false, outputs: false }</code> 會把 prompt 與回覆關掉，所以 Sentry 只看得到這條對話的輪廓，看不到任何訊息內容。</p>
+
+<h2>第七步：把迭代器轉成一條純文字流</h2>
+
+<p>OpenAI 給的是一串 chunk，每個 chunk 裡有當次生成的片段。我們要把它變成一個 ReadableStream，並在關閉之前把完整回答存進資料庫。</p>
+
+<pre><code>export function replyStream(
+  chunks: AsyncIterable&lt;StreamChunk&gt;,
+  onDone: (reply: string) =&gt; Promise&lt;unknown&gt;
+): ReadableStream&lt;Uint8Array&gt; {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    async start(controller) {
+      let reply = '';
+      for await (const chunk of chunks) {
+        const delta = chunk.choices?.[0]?.delta?.content;
+        if (!delta) continue;
+        reply += delta;
+        controller.enqueue(encoder.encode(delta));
+      }
+      if (!reply.trim()) {
+        reply = AI_FALLBACK_REPLY;
+        controller.enqueue(encoder.encode(reply));
+      }
+      try {
+        await onDone(reply);
+      } catch (err) {
+        console.error('[ai] persist failed', err);
+      }
+      controller.close();
+    },
+  });
+}</code></pre>
+
+<p>這個函式把串流包成幾個清楚的規則：每收到一段文字就 <code>enqueue</code> 出去；如果整段回答都是空白，就用一句 <code>AI_FALLBACK_REPLY</code> 補上，避免使用者看到空氣；然後才呼叫 <code>onDone(reply)</code> 把完整回答寫入資料庫，最後關閉串流。</p>
+
+<p>還有兩個容易被忽略的保護。第一，迴圈裡的錯誤不會被往外丟，而是只寫進 log——因為錯誤訊息可能引用 prompt，而 prompt 是病患自己打的字，不能讓它出現在使用者眼前。第二，<code>onDone</code> 即使失敗，也只是這一輪沒存進歷史，已送到使用者眼前的答案不會被收回。串流中途失敗時，已經送出的半段話同樣選擇保留。</p>
+
+<h2>第八步：回傳純文字流，對話編號放標頭</h2>
+
+<pre><code>const stream = replyStream(completion, (reply) =&gt;
+  db.insert(aiMessages).values({
+    conversationId: conversation.id,
+    role: 'assistant',
+    content: reply,
+  })
+);
+
+return new Response(stream, {
+  headers: {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Conversation-Id': conversation.id,
+  },
+});</code></pre>
+
+<p>純文字流沒有 JSON 欄位可以放對話編號，所以它放在 <code>X-Conversation-Id</code> 標頭；客戶端之後要繼續同一條對話，就靠這個值。<code>Cache-Control: no-store</code> 則是因為每一條對話都是特定使用者的內容，不該被任何快取留存。</p>
+
+<h2>做完長什麼樣</h2>
+
+<p>完成後，這個端點會有幾種可驗證的行為。送一句普通問題，回應的內容型別是 <code>text/plain</code>，文字會逐段抵達。送一句符合緊急樣式的訊息，回應是 JSON 且帶 <code>emergency: true</code> 與制式文字，完全沒有碰模型。當環境沒設金鑰或閘門沒開，回應是 503 的 JSON，帶著可以顯示給使用者的訊息。這三種結果互斥而且可預測，就是這個步驟要做到的成果。</p>
+
+<p>至於「為什麼要這樣設計」的來龍去脈，屬於上一節的心智模型；這一節刻意只講怎麼做。水管接好了，下一步要處理的是水管的另一頭：手機端怎麼一邊收字、一邊把畫面長出來。</p>
+
+<div class="lesson-nav">
+  <div><a href="./streaming-response-model.html">← 上一步：串流回應的心智模型：為什麼 AI 助理不該只轉圈圈</a></div>
+  <div><a href="./client-streaming-ui.html">下一步：手機端逐字渲染與對話介面 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="緊急訊息為什麼要在呼叫模型之前就用寫死的規則處理？" data-correct="1" data-explain="在答錯可能危及呼吸的路徑上，LLM 的判斷不是可接受的控制，必須用固定的規則與文字處理。">
+  <button class="opt">因為這樣可以減少 OpenAI 的 token 花費</button>
+  <button class="opt">因為這種路徑不能交給模型的判斷</button>
+  <button class="opt">因為模型看不懂病患描述的症狀內容</button>
+  <button class="opt">因為緊急文字必須用中文才能顯示出來</button>
+</div>
+
+<div class="quiz" data-question="OPENAI_TRANSMISSION_APPROVED 要設成哪個值才會放行？" data-correct="2" data-explain="函式只認字串 'true'，其餘未設定、false、1、TRUE 都被視為不准，是 fail-closed 設計。">
+  <button class="opt">設成字符串大寫的 TRUE 最保險</button>
+  <button class="opt">設成數字 1 表示已經開啟</button>
+  <button class="opt">設成小寫字符串 true 才會放行</button>
+  <button class="opt">只要環境變數存在就代表通過</button>
+</div>
+
+<div class="quiz" data-question="送進 OpenAI 的歷史為什麼要 filter 掉空白內容？" data-correct="0" data-explain="圖片回合是用空字串存的，照片不會送給模型；空白回合塞進 prompt 比沒有更糟。">
+  <button class="opt">因為圖片回合的空訊息對 prompt 沒有意義</button>
+  <button class="opt">因為空白訊息會讓資料庫查詢速度變慢</button>
+  <button class="opt">因為模型會把空白誤判成使用者的提問</button>
+  <button class="opt">因為過濾後才能正確計算 token 的用量</button>
+</div>
+
+<div class="quiz" data-question="stream_options 的 include_usage 是做什麼用的？" data-correct="3" data-explain="串流回應預設不附 token 用量，開啟後 gen_ai span 才有數字可做成本估算。">
+  <button class="opt">讓模型把回答拆成比較多的段落顯示</button>
+  <button class="opt">讓串流在偵測到緊急內容時自動中止</button>
+  <button class="opt">讓歷史訊息可以一併送進去模型裡</button>
+  <button class="opt">讓串流回應一併附上 token 的使用量</button>
+</div>
+
+<div class="quiz" data-question="replyStream 裡的 onDone 為什麼要在 controller.close 之前呼叫？" data-correct="1" data-explain="要趁回應關閉前把完整回答寫入資料庫，否則這一輪可能來不及存進歷史。">
+  <button class="opt">因為資料庫寫入一定要發生在編碼之前</button>
+  <button class="opt">因為關閉之後這一輪就可能來不及存</button>
+  <button class="opt">因為 onDone 需要讀取串流裡的每個片段</button>
+  <button class="opt">因為先關閉會讓使用者看不到回覆內容</button>
+</div>
+
+<div class="quiz" data-question="為什麼串流中的錯誤不往外丟，只寫進 log？" data-correct="0" data-explain="錯誤訊息可能引用病患自己打的 prompt，不能讓它出現在使用者眼前；已送出的內容也選擇保留。">
+  <button class="opt">因為錯誤訊息可能引用病患打的內容</button>
+  <button class="opt">因為往外丟會讓 OpenAI 重複收費一次</button>
+  <button class="opt">因為 Next.js 不允許串流中拋出例外</button>
+  <button class="opt">因為使用者不需要知道任何失敗的原因</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 串流 AI 助理 · Step 2/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

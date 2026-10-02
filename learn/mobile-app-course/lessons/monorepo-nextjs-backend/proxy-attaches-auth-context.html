@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>proxy.ts：讓每個請求都帶著身分</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>proxy.ts：讓每個請求都帶著身分</h1>
+<p class="meta">Step 4/5 · Monorepo 與 Next.js 後端骨架</p>
+
+<h2>學習目標</h2>
+<p>能解釋 Next 16 為何把 <code>middleware.ts</code> 改名為 <code>proxy.ts</code>、<code>clerkMiddleware()</code> 在請求上附掛了什麼，以及為什麼 Route Handler 讀得到 Expo 帶來的 Bearer token。</p>
+
+<h2>前言：門開著，但警衛怎麼知道你是誰？</h2>
+
+<p>上一節我們把 <code>apps/web</code> 的外殼組好了：頁面、API、webhook 都在 <code>app/</code> 底下，而且 <code>ClerkProvider</code> 也掛在最外層。但外殼掛好不代表安全——現在的網頁和 API 其實是誰敲門都回應。員工後台不能隨便給人看，手機 app 打 API 時也得先表明身分，問題是：伺服器要怎麼在請求一進來的時候，就知道「來的人是誰」？</p>
+
+<p>手機 app 跟瀏覽器不一樣，它不是靠瀏覽器自動帶上的 cookie，而是自己帶著一張 token 來敲門。如果伺服器沒有在門口先把這張 token 讀懂、驗證，後面的 API 根本無從判斷身分。這一節要看的 <code>proxy.ts</code>，就是站在門口處理這件事的那一層。</p>
+
+<h2>middleware 是什麼，又為什麼改名成 proxy</h2>
+
+<p>在 Next.js 裡，有一種函式會在請求「還沒到達目標路由」之前先跑，傳統上叫 <strong>middleware（中介層）</strong>，檔案名稱是 <code>middleware.ts</code>。Next.js 16 把它改名為 <code>proxy.ts</code>。這是整個節點最容易讓人誤會的一點：它不是新功能、也不是新的架構，只是同一個東西換了檔名，行為完全一樣。</p>
+
+<p>也因為這樣，如果你憑舊印象記著「要去改 <code>middleware.ts</code>」，在 Dentify 裡會找不到那個檔案——它現在叫 <code>proxy.ts</code>。</p>
+
+<h2>整份 proxy.ts 在做什麼</h2>
+
+<p>這個檔案很短，只有十幾行，但每一行都值得看：</p>
+
+<pre><code>import { clerkMiddleware } from '@clerk/nextjs/server';
+
+export default clerkMiddleware();
+
+export const config = {
+  matcher: [
+    '/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)',
+    '/(api|trpc)(.*)',
+  ],
+};</code></pre>
+
+<p>核心只有一行：<code>export default clerkMiddleware()</code>。這個函式做的事情是——在每一個符合條件的請求上，<strong>附掛 Clerk 的身分脈絡（auth context）</strong>。所謂的脈絡，就是一個「這個請求代表哪個使用者」的資訊包，掛上去之後，後面接手的程式才拿得到。檔案裡的註解講得很白：這是你之所以能在 Route Handler 裡讀到 Expo app 送來的 <code>Authorization: Bearer &lt;session token&gt;</code> 的原因。</p>
+
+<h2>matcher：哪些請求要走這道門</h2>
+
+<p>如果每個請求都跑一次這個檢查，那連圖片、字型、CSS 都要白白繞一圈。所以下面用 <code>config.matcher</code> 限定了範圍。兩條規則分別是：</p>
+
+<ul>
+<li>第一條是一段「排除法」的正則：除了 Next.js 內部的 <code>_next</code> 路徑，以及各種靜態檔（html、css、js、圖片、字型、ico、csv、zip……）之外，其餘都套用。</li>
+<li>第二條是明確把 <code>/api</code> 與 <code>/trpc</code> 開頭的請求也納進來——因為手機 app 打的正是 API，這些請求一定要經過身分附掛。</li>
+</ul>
+
+<p>換句話說，matcher 決定的不是「誰可以通過」，而是「哪些請求要經過這一關」。它是一道篩選，不是一道判決。</p>
+
+<h2>它刻意不檢查路徑，只負責附掛身分</h2>
+
+<p>這是 <code>proxy.ts</code> 裡最重要、也最容易寫錯的觀念。舊版的 Clerk 讓你用 <code>createRouteMatcher(['/dashboard(.*)'])</code> 直接在 middleware 裡比對路徑、當場攔下沒登入的人。但 Dentify 這裡刻意不做任何路徑比對，原因有兩個：</p>
+
+<ol>
+<li>Clerk Core 3 已經淘汰了 <code>createRouteMatcher</code> 這種做法。</li>
+<li>更根本的是，靠路徑字串比對來做保護並不可靠。Next.js 有 route group、動態段、layout、rewrite，路徑比對的字串很可能和實際路由長得不一樣；一旦兩者分岔，你以為鎖住的資源就可能被人走到。</li>
+</ol>
+
+<p>所以這個檔案的職責被縮到最小：只把身分附掛上去。真正的把關（誰是員工、誰能看哪筆資料）交給每一個資源自己的守衛。這件事下一節會專門談，這裡先記住一句話：<strong>proxy 只辨識身分，不做授權。</strong></p>
+
+<p>打個比方：<code>proxy.ts</code> 像大樓門口的刷卡機，它讀你的識別證、發一張訪客證，讓你知道「你是誰」；但它不決定你能進哪幾個房間。每個房間門上還有自己的鎖，那才是真正的授權。</p>
+
+<h2>Bearer token 的完整旅程</h2>
+
+<p>把整個流程串起來，你會更清楚為什麼這一層非存在不可：</p>
+
+<ol>
+<li>使用者在手機 app 上用 Clerk 登入。</li>
+<li>Clerk 發給 app 一張 session token。</li>
+<li>app 每次呼叫 API，都在標頭帶上 <code>Authorization: Bearer &lt;token&gt;</code>。</li>
+<li>請求進到 Next.js 時，先經過 <code>proxy.ts</code> 的 <code>clerkMiddleware()</code>，token 被驗證、身分被附掛到請求上。</li>
+<li>Route Handler 接手，用 Clerk 提供的 <code>auth()</code> 取得「現在是誰在呼叫」，再決定要不要放行。</li>
+</ol>
+
+<p>少了第 4 步，第 5 步的 <code>auth()</code> 就什麼都讀不到，手機端的每一次呼叫都會被當成匿名。這就是為什麼註解會說這個檔案「必須留著」。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>proxy.ts</code> 是 Next 16 對 <code>middleware.ts</code> 的改名，行為不變。它用 <code>clerkMiddleware()</code> 在每個請求上附掛 Clerk 的身分脈絡，並用 <code>config.matcher</code> 排除靜態檔、納入 <code>/api</code>，決定哪些請求要經過。它刻意不做路徑比對，因為那不可靠、而且已被 Core 3 淘汰；它只辨識身分，授權留給資源自己的守衛。少了它，手機 app 帶來的 Bearer token 就沒人讀得到。
+</blockquote>
+
+<p>現在你知道 proxy 只會辨識身分，那真正的把關要寫在哪裡？在 proxy 的 matcher 裡？還是貼在資料旁邊？下一節要把這個選擇攤開來比，給出一套可操作的判準。</p>
+
+<div class="lesson-nav">
+  <div><a href="./nextjs-app-shell.html">← 上一步：Next.js App Router 外殼：一個部署，三種身分</a></div>
+  <div><a href="./where-guards-live.html">下一步：路由保護要放在哪裡：matcher 還是資料旁邊 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Next.js 16 對 middleware.ts 做了什麼？" data-correct="2" data-explain="它被改名為 proxy.ts，行為完全一樣，不是新功能。">
+  <button class="opt">把它拆成兩個各自負責讀寫的檔案</button>
+  <button class="opt">把它從專案裡整個移除不再支援</button>
+  <button class="opt">把它改名為 proxy.ts，行為不變</button>
+  <button class="opt">把它改成只能在伺服器啟動時執行</button>
+</div>
+
+<div class="quiz" data-question="clerkMiddleware() 在 proxy 這一層的核心作用是？" data-correct="1" data-explain="它把 Clerk 的身分脈絡附掛到每個請求上，讓後面的程式讀得到。">
+  <button class="opt">把每個請求的內容加密後再轉發</button>
+  <button class="opt">在請求上附掛 Clerk 的身分脈絡</button>
+  <button class="opt">替每個請求建立一筆新的資料庫紀錄</button>
+  <button class="opt">把靜態檔案快取到使用者的裝置</button>
+</div>
+
+<div class="quiz" data-question="config.matcher 決定的是什麼？" data-correct="3" data-explain="它決定哪些請求要經過這一層，不是誰可以通過。">
+  <button class="opt">哪一個使用者可以進入後台</button>
+  <button class="opt">資料庫裡哪些資料需要加密</button>
+  <button class="opt">哪些 API 需要回傳 JSON 格式</button>
+  <button class="opt">哪些請求要經過這一層處理</button>
+</div>
+
+<div class="quiz" data-question="為什麼 proxy.ts 刻意不做任何路徑比對？" data-correct="0" data-explain="路徑比對可能和實際路由分岔而漏掉保護，而且 Core 3 已淘汰這種做法。">
+  <button class="opt">比對可能和實際路由分岔而漏保護</button>
+  <button class="opt">比對會讓每個請求的速度變慢十倍</button>
+  <button class="opt">Clerk 禁止在 proxy 裡匯入任何函式</button>
+  <button class="opt">Next.js 的路由不支援中文字元路徑</button>
+</div>
+
+<div class="quiz" data-question="如果少了 proxy 這一層，最直接的後果是什麼？" data-correct="1" data-explain="Route Handler 讀不到身分，手機端帶的 token 沒人解讀，呼叫全被當匿名。">
+  <button class="opt">靜態圖片會全部載入失敗</button>
+  <button class="opt">Route Handler 讀不到呼叫者的身分</button>
+  <button class="opt">Next.js 會無法啟動開發伺服器</button>
+  <button class="opt">Clerk 會自動登出所有使用者</button>
+</div>
+
+<div class="quiz" data-question="下列哪一句最能描述 proxy 這一層的角色？" data-correct="2" data-explain="它只辨識身分、發訪客證，授權交給每個資源自己的守衛。">
+  <button class="opt">它是唯一決定誰能看資料的地方</button>
+  <button class="opt">它把資料庫的內容直接寫進快取</button>
+  <button class="opt">它只辨識身分，授權交給各資源</button>
+  <button class="opt">它替使用者建立並保管所有密碼</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Monorepo 與 Next.js 後端骨架 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

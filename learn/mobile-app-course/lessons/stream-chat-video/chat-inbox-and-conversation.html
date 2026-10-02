@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>訊息畫面：patient 的單一對話與 staff 的收件匣</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>訊息畫面：patient 的單一對話與 staff 的收件匣</h1>
+<p class="meta">Step 4/5 · Stream 即時聊天與視訊</p>
+
+<h2>學習目標</h2>
+<p>做完這一節，你會有一個同時服務兩種角色的 Messages 分頁：病人一打開就進入他和診所唯一的那個對話，員工則看到所有病人對話組成的收件匣，點進去開啟個別對話。你也會知道 typing、已讀、圖片與相機附件這些體驗，是 SDK 直接內建、不需要自己實作的。</p>
+
+<h2>前言：同一支程式，兩種完全不同的使用場景</h2>
+
+<p>病人打開 Messages 分頁時，心裡想的是「跟診所講話」。他跟診所只有一條對話，所以最合理的設計就是直接把他丟進那個對話，不用先看到一個只有一列的清單。但同一支 app 給診所員工使用時，情境完全相反：員工要面對的是幾十位病人，需要的是一份能依最新訊息排序的收件匣，點進某一列才看到那個病人的對話。</p>
+
+<p>這兩個場景如果硬要共用同一個畫面，會變得很彆扭。Dentify 的做法是讓同一個分頁依角色分岔，但底層的對話元件共用。這樣改一行 header、加一顆通話按鈕，兩邊會同時生效，不會各自漂移。</p>
+
+<h2>第一步：一個分頁，三種結果</h2>
+
+<p>Messages 分頁的判斷其實就是三個分支：Stream 沒開起來、員工、病人。先把「不能用」的情況處理掉，畫面才不會因為缺少 Chat context 而崩潰：</p>
+
+<pre><code>const { ready, channelId } = useClinic();
+const isStaff = me?.role === 'staff' || me?.role === 'dentist';
+
+if (!ready) {
+  return &lt;ChatUnavailable message="Messaging is offline right now. Everything else still works." /&gt;;
+}
+if (isStaff) return &lt;StaffInbox /&gt;;
+if (!channelId) {
+  return &lt;ChatUnavailable message="Finish setting up your profile and the clinic will be able to message you." /&gt;;
+}</code></pre>
+
+<p><code>ready</code> 來自上一節的 <code>StreamProvider</code>：連不上 Stream 時它會是 false，這裡就顯示一段說明文字，而不是讓畫面爛掉。病人沒有 <code>channelId</code> 的情況，通常代表還沒完成 onboarding，所以先請他完成個人資料。</p>
+
+<h2>第二步：病人的畫面就是那個唯一對話</h2>
+
+<p>病人分支最後直接渲染共用元件，並帶入對話 id 與顯示用的標題副標：</p>
+
+<pre><code>&lt;Conversation
+  channelId={channelId}
+  title="Clinic Team"
+  subtitle="DentaCare · usually replies same day"
+/&gt;</code></pre>
+
+<p>這個 <code>channelId</code> 是上一節由 <code>clinicChannelId(patientId)</code> 推導來的，所以病人永遠只會進到自己的對話。</p>
+
+<h2>第三步：員工的收件匣——ChannelList</h2>
+
+<p>員工分支渲染一份清單，資料由 SDK 依成員身分查詢：</p>
+
+<pre><code>const filters = useMemo(
+  () =&gt; ({ type: 'messaging', members: { $in: [userId!] } }),
+  [userId]
+);
+const sort = useMemo(() =&gt; [{ last_message_at: -1 as const }], []);
+const options = useMemo(() =&gt; ({ limit: 20, messages_limit: 30 }), []);</code></pre>
+
+<p>這裡的 <code>useMemo</code> 不是化妝，而是必要的。如果每次 render 都產生一個新的 <code>filters</code> 物件，SDK 會以為查詢條件變了，於是每一次 render 都重新查一次。<code>filters</code> 只依賴 <code>userId</code>，所以把它記住就能讓查詢穩定下來。</p>
+
+<p>點選清單某一列時，傳進路由的是對話的 id，不是對話實例：</p>
+
+<pre><code>onSelect={(channel) =&gt; router.push(`/channel/${channel.id}`)}</code></pre>
+
+<p>理由跟後面其他地方一樣：路由參數必須是可序列化的，把一個帶方法的 SDK 物件塞進導覽狀態會出問題。</p>
+
+<h2>第四步：開啟個別對話</h2>
+
+<p>員工從收件匣點進來後，畫面用 id 重新取得對話，標題則從 client 的快取拿病人名字：</p>
+
+<pre><code>const name = client.activeChannels[`messaging:${id}`]?.data?.name;
+
+return (
+  &lt;Conversation
+    channelId={id}
+    title={name ?? 'Patient'}
+    subtitle="Patient conversation"
+    onBack={goBackToInbox}
+  /&gt;
+);</code></pre>
+
+<p>為什麼不直接把對話物件傳過來？因為導覽參數必須能被序列化，對話實例不行。反正這個對話剛剛才在收件匣查詢裡出現過，client 的快取裡就有它的名字，重新用 id 取得一次不需要再多打一趟 API。</p>
+
+<h2>第五步：共用對話元件</h2>
+
+<p>兩種角色最後都收斂到同一個 <code>Conversation</code>。它由對話 id 重建 channel，再用 SDK 的 <code>Channel</code> 包住訊息列表與輸入框：</p>
+
+<pre><code>const channel = useMemo(() =&gt; client.channel('messaging', channelId), [channelId, client]);
+
+return (
+  &lt;Channel channel={channel} keyboardVerticalOffset={0} topInset={0}&gt;
+    &lt;View style={{ flex: 1, backgroundColor: PAGE.bg }}&gt;
+      &lt;Header title={title} subtitle={subtitle} onBack={onBack} /&gt;
+      &lt;MessageList /&gt;
+      &lt;MessageComposer /&gt;
+    &lt;/View&gt;
+  &lt;/Channel&gt;
+);</code></pre>
+
+<p><code>keyboardVerticalOffset={0}</code> 與 <code>topInset={0}</code> 這兩個 0 是刻意的。SDK 會用這兩個值調整鍵盤與頂部的留白，但 Dentify 的 header 是畫在 <code>Channel</code> 裡面，上面已經沒有別的東西，所以一定要明確傳 0；如果省略，SDK 會拿到 <code>undefined</code>，版面就會偏移。</p>
+
+<h2>第六步：通話按鈕住在 header 裡</h2>
+
+<p>共用 header 的右側有一顆通話按鈕，它必須在 <code>Channel</code> 內部才能讀到這個對話的成員名單：</p>
+
+<pre><code>function CallButton() {
+  const { channel } = useChannelContext();
+  const ring = useRingCall();
+  ...
+  const memberIds = Object.keys(channel?.state.members ?? {});
+  const started = await ring(memberIds);
+  if (!started) Alert.alert('Nobody to call', 'There is no one else in this conversation yet.');
+}</code></pre>
+
+<p>成員名單直接從 SDK 已經載入的狀態拿，不必額外查一次 API。這顆按鈕就是下一節要講的「即時 ring」入口。</p>
+
+<h2>第七步：這些體驗 SDK 已經內建，你只要學會用</h2>
+
+<p>課程 demo 裡展示了打字指示、已讀狀態、圖片與相機附件、訊息 threads、表情回應、編輯、置頂與刪除。這些不是 Dentify 自己寫的，而是 Stream Chat SDK 預設就有的功能。真正要做的是把它們接進畫面，而不是重新發明：</p>
+
+<table>
+<thead>
+<tr><th>體驗</th><th>來源</th></tr>
+</thead>
+<tbody>
+<tr><td>打字指示、已讀狀態</td><td>SDK 內建，隨訊息事件更新</td></tr>
+<tr><td>圖片與相機附件</td><td>SDK 的 composer 提供</td></tr>
+<tr><td>threads、表情回應</td><td>SDK 內建訊息操作</td></tr>
+<tr><td>編輯、置頂、刪除</td><td>SDK 內建訊息操作</td></tr>
+<tr><td>依最新訊息排序的收件匣</td><td>SDK 的 ChannelList 查詢</td></tr>
+</tbody>
+</table>
+
+<p>用託管服務最大的價值就在這裡：這些 UX 是別人已經打磨過、能上線的預設行為，你要付的成本主要是「學會怎麼用」，而不是「從零做一套」。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>Messages 分頁依角色分岔：病人直接進入唯一對話，員工看到共享收件匣再點進個別對話。兩個角色最後共用同一個 Conversation 元件，由對話 id 重建 channel，再包上 <code>Channel</code>、<code>MessageList</code> 與 <code>MessageComposer</code>。清單的 filters 要 memoize，路由只傳可序列化的對話 id。打字、已讀、附件、threads、回應、編輯等常見聊天體驗，全部由 Stream SDK 內建提供。</p>
+</blockquote>
+
+<p>訊息功能完成了。但共用 header 裡那顆通話按鈕還只是一個入口，按下去之後會發生什麼還沒交代。下一步要處理兩條完全不同的通話路徑：排程好的視訊看診，以及想到就打的即時鈴聲。</p>
+
+<div class="lesson-nav">
+  <div><a href="./wire-stream-at-root.html">← 上一步：在 app root 接上兩個 client：一個 token、Chat 與 Video</a></div>
+  <div><a href="./video-calls-and-ringing.html">下一步：視訊通話：排程 teleconsult 與即時 ring 的兩種入口 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="病人打開 Messages 分頁時會看到什麼？" data-correct="1" data-explain="病人和診所只有一條對話，所以直接進入那個唯一對話，不必先看清單。">
+  <button class="opt">一份診所內所有員工的清單</button>
+  <button class="opt">直接進入他和診所的唯一對話</button>
+  <button class="opt">一份其他病人的公開聊天室列表</button>
+  <button class="opt">一個提示他先預約看診的空白畫面</button>
+</div>
+
+<div class="quiz" data-question="ChannelList 的 filters 為什麼要用 useMemo 記住？" data-correct="2" data-explain="若每次 render 都建立新的 filters 物件，SDK 會以為條件變了而每次重查。">
+  <button class="opt">因為 useMemo 可以讓畫面顏色保持一致</button>
+  <button class="opt">因為 filters 裡面含有不能公開的金鑰</button>
+  <button class="opt">避免每次 render 都被當成條件變更重查</button>
+  <button class="opt">因為不這樣寫 Stream 會直接拒絕查詢</button>
+</div>
+
+<div class="quiz" data-question="從收件匣點進對話時，路由參數傳的是什麼？" data-correct="0" data-explain="只傳可序列化的對話 id，再用 id 從 client 快取重建對話，避免把 SDK 實例塞進路由。">
+  <button class="opt">可以序列化的對話 id 字串</button>
+  <button class="opt">帶有方法的對話 SDK 實例</button>
+  <button class="opt">整包該對話的歷史訊息陣列</button>
+  <button class="opt">病人的完整個人資料物件</button>
+</div>
+
+<div class="quiz" data-question="Channel 的 keyboardVerticalOffset 與 topInset 為什麼要明確傳 0？" data-correct="3" data-explain="SDK 會用這兩個值算留白，省略會傳入 undefined 造成偏移；header 畫在 Channel 內，所以基準是 0。">
+  <button class="opt">因為 0 可以讓鍵盤完全不出現</button>
+  <button class="opt">因為不傳 0 就無法載入歷史訊息</button>
+  <button class="opt">因為這樣可以省下一次畫面重繪</button>
+  <button class="opt">省略會拿到 undefined 而讓版面偏移</button>
+</div>
+
+<div class="quiz" data-question="通話按鈕為什麼要放在 Channel 內部？" data-correct="1" data-explain="放在 Channel 內部才能直接讀到 SDK 已載入的成員名單，不必再多打一次 API。">
+  <button class="opt">放在外面會被系統的安全區域裁掉</button>
+  <button class="opt">才能直接讀到已載入的成員名單</button>
+  <button class="opt">放在裡面才能使用相機的權限</button>
+  <button class="opt">因為 SDK 規定按鈕必須是子元件</button>
+</div>
+
+<div class="quiz" data-question="關於打字、已讀、附件這些體驗，下列敘述何者正確？" data-correct="2" data-explain="它們是 SDK 內建功能，開發者主要是接進畫面並學會使用，不是從零打造。">
+  <button class="opt">必須自己用 socket 逐一從頭實作</button>
+  <button class="opt">是瀏覽器內建而行動裝置沒有的</button>
+  <button class="opt">由 SDK 內建，主要是學會怎麼用</button>
+  <button class="opt">要另外付費才會被啟用的功能</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Stream 即時聊天與視訊 · Step 4/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CodeRabbit 安全掃描的七大類問題</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>CodeRabbit 安全掃描的七大類問題</h1>
+<p class="meta">Step 2/5 · 大規模 PR 安全審查</p>
+
+<h2>前言</h2>
+
+<p>上一節我們說，面對上萬行的 PR，你要靠一張「地圖」來決定看哪裡；而地圖上最要緊的一塊，是安全掃描清單。現在問題來了：當 CodeRabbit 在清單上寫下 <em>authorization bypass</em> 或 <em>SSRF</em>，你分得出這是嚴重問題，還是可有可無的提醒嗎？</p>
+
+<p>這七個詞是後端安全的基本字彙。它們不只是縮寫，每一個都對應一種真實的攻擊方式，也對應你程式碼裡某個特定的錯誤寫法。這一節是一份查閱表：把每個詞的定義、它防的是什麼、以及它通常出現在哪裡，一次列齊。你不需要在這裡背下來，但當審查清單出現某個詞時，你要能立刻知道它指的是哪一類危險。</p>
+
+<p>這七類問題的英文與縮寫沿用原始掃描報告，方便你對照。定義各自獨立，可以跳著查。</p>
+
+<h2>總覽</h2>
+
+<table>
+<thead>
+<tr><th>名稱</th><th>一句定義</th><th>最常出現的位置</th></tr>
+</thead>
+<tbody>
+<tr><td>Injection（注入）</td><td>把使用者輸入當成指令或查詢語法的一部分執行</td><td>資料庫查詢、系統指令、動態字串拼接</td></tr>
+<tr><td>Authorization bypass（授權繞過）</td><td>通過了身分檢查，卻能存取不屬於自己的資源</td><td>API 端點、資源讀取與寫入</td></tr>
+<tr><td>XSS（跨站腳本）</td><td>把未處理的使用者內容輸出到網頁，被瀏覽器當成腳本執行</td><td>Web dashboard、任何渲染使用者內容的頁面</td></tr>
+<tr><td>SSRF（伺服器端請求偽造）</td><td>讓伺服器代為請求攻擊者指定的位址</td><td>抓取圖片、webhook、任何「幫你連外」的功能</td></tr>
+<tr><td>CSRF（跨站請求偽造）</td><td>借用使用者已登入的憑證，在不知情下送出變更請求</td><td>以 cookie 為憑證的表單與 API</td></tr>
+<tr><td>Broken authentication（身分驗證失效）</td><td>登入、session 或 token 的處理有缺陷，可被繞過</td><td>登入流程、token 驗證、密碼重設</td></tr>
+<tr><td>Security misconfiguration（安全設定錯誤）</td><td>安全相關的設定沒關好，暴露出多餘的攻擊面</td><td>環境變數、CORS、錯誤訊息、除錯模式</td></tr>
+</tbody>
+</table>
+
+<h2>Injection（注入）</h2>
+
+<p>當使用者輸入被直接拼進一段有語法的字串——最典型的是 SQL 查詢——輸入裡的內容就不只是「資料」，而會被當成「指令」執行。參數化查詢（parameterized query）是標準的防線：把查詢語法和資料分開傳，資料永遠不會被當成語法。</p>
+
+<pre><code>// 危險：輸入直接拼進字串
+db.query(`SELECT * FROM users WHERE email = '${email}'`);
+
+// 安全：語法與資料分開
+db.query("SELECT * FROM users WHERE email = $1", [email]);</code></pre>
+
+<h2>Authorization bypass（授權繞過）</h2>
+
+<p>這類問題不是「沒登入」，而是「登入了，但看到了不該看的」。端點只確認請求帶有有效的登入憑證，卻沒有確認這個資源屬於這位使用者。症狀是：把網址裡的資源編號改成別人的，一樣拿得到資料。防線是每一次資源存取都從登入身分推出「你是誰」，再比對「這筆資料是不是你的」。</p>
+
+<h2>XSS（跨站腳本）</h2>
+
+<p>當一段含有 HTML 或 JavaScript 的使用者內容，沒有被轉義（escape）就送進網頁，瀏覽器會把它當成頁面的一部分執行。它主要影響有網頁介面的部分，例如員工 dashboard。防線是輸出時一律轉義，或使用框架預設會轉義的方式渲染，避免直接插入未處理的 HTML。</p>
+
+<h2>SSRF（伺服器端請求偽造）</h2>
+
+<p>如果一個功能會「用伺服器的身分去連某個網址」，而那個網址使用者可以控制，攻擊者就能借用伺服器去探測它自己的內部網路、或讀取雲端環境的 metadata 端點。它常出現在「幫你抓一張遠端圖片」這類看似無害的功能裡。防線是限制可連線的目標（白名單），而不是照單全收使用者給的位址。</p>
+
+<h2>CSRF（跨站請求偽造）</h2>
+
+<p>當網站用 cookie 當作登入憑證，而變更狀態的請求又沒有額外驗證來源，攻擊者就能引導已登入的瀏覽器在背後送出請求。防線是使用 SameSite cookie、CSRF token，或改用不會被瀏覽器自動附帶的憑證（例如放在 header 的 Bearer token）。</p>
+
+<h2>Broken authentication（身分驗證失效）</h2>
+
+<p>這是登入與 session 機制本身的缺陷，例如 token 沒有驗簽章、密碼重設的判斷可被猜中、登入端點沒有速率限制而能被暴力破解。它和 authorization bypass 的差別在於：這裡壞掉的是「證明你是誰」的過程，而不是「證明你有權存取這筆資料」。</p>
+
+<h2>Security misconfiguration（安全設定錯誤）</h2>
+
+<p>程式邏輯沒有錯，但設定留下了缺口：CORS 開放成所有來源、生產環境還開著除錯模式、錯誤訊息把內部路徑或資料庫細節吐給使用者、忘記加上該有的安全標頭。它通常是「預設值沒有依實際情境收緊」造成的。</p>
+
+<blockquote>
+這七個詞的共同點是：程式都能正常運作。它們描述的不是「壞掉」，而是「可以被利用」。認得名稱，只是為了在清單出現時，知道該往哪個方向查。
+</blockquote>
+
+<p>名詞認得之後，下一節要動手了：把上萬行的改動真的開成一條分支與 PR，讓 CodeRabbit 跑完審查與安全掃描，再把它的輸出讀成一張能用的清單。</p>
+
+<div class="lesson-nav">
+  <div><a href="./scale-breaks-manual-review.html">← 上一步：為什麼上萬行的 PR 不能靠人眼審</a></div>
+  <div><a href="./run-security-review-on-large-pr.html">下一步：在大型 PR 上跑安全審查 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Injection 問題的核心是什麼？" data-correct="1" data-explain="使用者輸入被當成指令或查詢語法的一部分執行，而不是當成純資料。">
+  <button class="opt">輸入的長度超過了資料庫的限制</button>
+  <button class="opt">輸入被當成語法的一部分去執行</button>
+  <button class="opt">輸入裡含有大量表情符號與特殊字</button>
+  <button class="opt">輸入沒有被存進資料庫就消失了</button>
+</div>
+<div class="quiz" data-question="Authorization bypass 與 broken authentication 的差別在哪？" data-correct="3" data-explain="前者是有登入卻能存取別人的資源；後者是登入證明機制本身有缺陷。">
+  <button class="opt">前者發生在瀏覽器，後者發生在伺服器</button>
+  <button class="opt">前者只影響網頁，後者只影響手機</button>
+  <button class="opt">前者是設定錯誤，後者是程式邏輯錯誤</button>
+  <button class="opt">前者是有登入卻看到別人的資源</button>
+</div>
+<div class="quiz" data-question="SSRF 最常出現在哪一種功能裡？" data-correct="0" data-explain="例如幫你抓取遠端圖片或呼叫 webhook，伺服器會依使用者給的位址連外。">
+  <button class="opt">伺服器依使用者給的位址去連外</button>
+  <button class="opt">使用者在網頁上輸入很長的密碼</button>
+  <button class="opt">資料庫回傳了太多的查詢結果</button>
+  <button class="opt">前端把使用者輸入直接畫在畫面上</button>
+</div>
+<div class="quiz" data-question="XSS 主要影響的是哪一部分？" data-correct="2" data-explain="它影響渲染使用者內容的網頁，例如員工 dashboard。">
+  <button class="opt">手機 app 的原生程式碼執行速度</button>
+  <button class="opt">資料庫的索引與查詢效能</button>
+  <button class="opt">會渲染使用者內容的網頁介面</button>
+  <button class="opt">伺服器與外部服務之間的網路延遲</button>
+</div>
+<div class="quiz" data-question="CSRF 能成立，通常需要哪個條件？" data-correct="1" data-explain="網站以 cookie 當憑證，變更狀態的請求又沒驗證來源，瀏覽器會自動附帶 cookie。">
+  <button class="opt">使用者把密碼寫在瀏覽器的書籤裡</button>
+  <button class="opt">以 cookie 當憑證且未驗證請求來源</button>
+  <button class="opt">伺服器完全沒有開啟 HTTPS 加密</button>
+  <button class="opt">資料庫允許任何人從遠端連線</button>
+</div>
+<div class="quiz" data-question="下列哪一項屬於 security misconfiguration？" data-correct="3" data-explain="CORS 開放成所有來源屬於設定沒收緊，而不是程式邏輯本身寫錯。">
+  <button class="opt">查詢字串把輸入直接拼進 SQL</button>
+  <button class="opt">端點沒檢查資源是不是本人的</button>
+  <button class="opt">token 沒有驗證簽章就放行</button>
+  <button class="opt">CORS 開放成所有來源都能存取</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 大規模 PR 安全審查 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

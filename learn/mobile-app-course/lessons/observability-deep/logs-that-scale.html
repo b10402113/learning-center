@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>結構化 log：讓五萬個使用者的問題查得到</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>結構化 log：讓五萬個使用者的問題查得到</h1>
+<p class="meta">Step 1/5 · 觀測深化：Logs / Tracing / Agent Tracing</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你能說出結構化 log 的三個組成——訊息本體、severity 等級、可查詢的 tag／property——並解釋為什麼只有當使用者與事件數量放大之後，這種寫法才真正勝過你熟悉的 <code>console.log</code>。</p>
+
+<h2>前言：使用者說壞了，你卻什麼都看不到</h2>
+
+<p>上一節你已經能抓到錯誤，但真實回報常常長得不像「錯誤」。使用者傳訊來說「餐點分析一直轉圈圈，後來就放棄了」，你在 Sentry 只看得到一則逾時，訊息只有一行 request timed out。到底是圖片太大、AI 回傳格式不對，還是他當下網路斷了？光看那則錯誤，你猜不出來。</p>
+
+<p>於是你打開自己的模擬器重跑一次，順手加了幾行 <code>console.log</code>。問題是，這些 log 只活在「你的」模擬器上，而壞掉的是「他的」手機。app 一旦上線，使用者手機上的 console 不會連到你這裡，他關掉 app，那些字就跟著消失。也就是說，開發時用來除錯的那一招，到了上線之後完全失效。</p>
+
+<p>這一節要處理的，就是這個落差：把 log 從「當下印出來給自己看」變成「事後查得到的證據」。做法叫做結構化 log，而它的價值，要等使用者變多之後才會真正爆發。</p>
+
+<h2>開發機上的 log 與上線後的 log，命運完全不同</h2>
+
+<p>先分清楚兩種情境。在開發時，<code>console.log</code> 其實很好用：即時、免費、不用設定，你想看什麼就印什麼。但它的設計前提是「有人正在盯著終端機看」。</p>
+
+<p>上線後，這個前提消失了。使用者的 log 留在他的裝置上，你看不到；app 一被關閉，緩衝區清空，紀錄就沒了；就算你請使用者截圖給你，那也只是一個瞬間、一個人的畫面。當你面對的是幾千幾萬個使用者，這種「一份文字、只能肉眼讀」的紀錄根本無法查。</p>
+
+<p>結構化 log 走的是另一條路：訊息不再只是丟到終端機的純文字，而是帶著明確欄位、送到雲端保存的一筆資料。它會在伺服器上留下來，讓你在事後用條件把它撈出來。差別就像「把紙條丟進抽屜」和「把資料寫進資料庫」——前者只有翻抽屜的人看得到，後者可以下查詢條件。</p>
+
+<h2>結構化 log 的三個組成</h2>
+
+<p>一筆結構化 log 可以拆成三塊。弄清楚這三塊，你之後在 Dashboard 上的每一個操作才有依據。</p>
+
+<h3>第一塊：訊息本體</h3>
+
+<p>訊息本體是給人讀的那句話，例如 <code>booking_failed</code> 或「餐點上傳失敗」。它的角色是讓你在掃過列表時，一眼知道發生什麼事。訊息要短、要能辨識，不要塞進一堆變數——變數應該放到第三塊的欄位裡。</p>
+
+<h3>第二塊：severity 等級</h3>
+
+<p>severity 是這筆事件的嚴重程度。Sentry logger 提供六個等級，從最不嚴重到最嚴重依序是 trace、debug、info、warning、error、fatal。它不只是分類標籤，而是你之後最常用的篩選維度：出事了，你通常會先把畫面過濾成只看 error 與 fatal。</p>
+
+<h3>第三塊：tag 與 property</h3>
+
+<p>第三塊是結構化 log 真正的核心。除了那句話，你可以附上一組 key-value 欄位，例如 <code>feature: 'booking'</code>、<code>scenario: 'race'</code>、<code>duration_ms: 1840</code>。這些欄位會被存成可查詢的維度，讓你之後能用「feature 是 booking 且 duration_ms 大於 1000」這種條件把它們圈出來。</p>
+
+<p>大原則是：只放 id、數量、耗時這類非內容的資料。以下是這個節點示範用的寫法：</p>
+
+<pre><code>Sentry.logger.error('booking_failed', {
+  feature: 'booking',
+  scenario: 'race',
+  batch_id: 'burst-2026-10-02',
+  duration_ms: 1840,
+  attempt: 2,
+});</code></pre>
+
+<p>第二個參數就是結構化欄位，它們會變成可以搜尋的 tag。訊息本體負責讓人看懂，欄位負責讓機器查得到，兩者分工不同，不要互相取代。</p>
+
+<h2>為什麼要「很多」才顯出價值</h2>
+
+<p>如果 app 只有十個使用者，一天出錯三次，你其實可以直接讀訊息，結構化的好處不明顯。真正拉開差距的是規模：想像一個五萬使用者的電商 app，每天有五百筆結帳，其中一部分失敗。你不可能一則一則翻，只能下條件——「level 是 error、訊息包含 payment、發生在最近 24 小時、而且限定某個城市」——幾秒內圈出受影響的範圍。要能做到這件事，靠的就是可以查詢的欄位。</p>
+
+<p>這個節點的測試工具刻意模擬了這種規模：它不是只送一則 log，而是提供「批次送出上百筆」的按鈕，把 booking 正常與搶位衝突、助理對話、第三方服務降級、刪帳號後的孤兒資料等情境一次灌進去，讓 Logs 視圖裡有真正可以查的資料。這就像消防演練：平常沒有火警，你不可能等到真的失火才第一次拉水線。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>開發時的 <code>console.log</code> 只活在裝置上、關閉即消失、無法搜尋；結構化 log 則把每一筆事件拆成「訊息本體 + severity 等級 + 可查詢的 tag／property」，送到雲端保存。它的關鍵價值不在單一使用者，而在規模放大後，你能用條件一次圈出受影響的範圍。因此欄位只放 id、數量、耗時，絕不放內容——這條紀律我們下一節之後還會再談。</p>
+</blockquote>
+
+<p>知道 log 該長什麼樣之後，下一個問題是：資料送上去之後，實際上要怎麼在 Sentry 裡把它撈出來？下一節會帶你走一遍 Explore Logs 的操作——用 severity 與 property 過濾、做多條件搜尋、看懂時間軸上的尖峰，並把常用查詢存起來。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./explore-logs-dashboard.html">下一步：在 Sentry Logs 視圖裡把問題圈出來 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="下列哪一項最貼近結構化 log 勝過 console.log 的根本原因？" data-correct="2" data-explain="結構化 log 會送到雲端保存並帶可查詢欄位，讓你在事後能下條件撈出資料。">
+  <button class="opt">它的輸入語法比 console 更短更好打</button>
+  <button class="opt">它在開發機上顯示的速度明顯更快</button>
+  <button class="opt">它會上傳保存而且可以用欄位查詢</button>
+  <button class="opt">它會自動幫你把程式碼的錯誤修好</button>
+</div>
+<div class="quiz" data-question="結構化 log 的三個組成，不包括下列哪一項？" data-correct="3" data-explain="原始碼行號不是結構化 log 的欄位設計，重點是訊息、等級與可查詢的 tag。">
+  <button class="opt">給人讀的訊息本體本身</button>
+  <button class="opt">表達嚴重程度的 severity 等級</button>
+  <button class="opt">可以搜尋的 tag 與 property 欄位</button>
+  <button class="opt">這段程式碼在檔案裡的行號</button>
+</div>
+<div class="quiz" data-question="「核心功能整片失效、所有寫入都失敗」最適合標成哪個等級？" data-correct="3" data-explain="核心功能整片失效屬於 fatal，是六個等級裡最嚴重的一級。">
+  <button class="opt">trace 等級，因為它只是背景雜訊</button>
+  <button class="opt">debug 等級，因為它只在開發時出現</button>
+  <button class="opt">info 等級，因為它算是正常事件</button>
+  <button class="opt">fatal 等級，因為核心已經失效</button>
+</div>
+<div class="quiz" data-question="為什麼欄位只放 id、數量、耗時，而不放實際內容？" data-correct="1" data-explain="log 會送到雲端，姓名、病歷等內容一旦寫入就有外洩風險。">
+  <button class="opt">因為內容欄位的查詢效率比較差</button>
+  <button class="opt">因為內容上傳雲端會有隱私風險</button>
+  <button class="opt">因為欄位只能接受數字型的資料</button>
+  <button class="opt">因為放內容會讓 log 訊息變太長</button>
+</div>
+<div class="quiz" data-question="「批次送出上百筆 log」的測試按鈕，主要是為了模擬什麼？" data-correct="0" data-explain="批次按鈕模擬真實 app 有大量使用者時的事件量，讓 Logs 視圖有可查資料。">
+  <button class="opt">真實 app 大量使用者產生的事件量</button>
+  <button class="opt">單一使用者在開發機上的操作歷程</button>
+  <button class="opt">Sentry 伺服器端自己的維運紀錄</button>
+  <button class="opt">App Store 審核時會送出的測試資料</button>
+</div>
+<div class="quiz" data-question="要讓 Sentry logger 真的送出 logs，初始化時通常要開啟什麼？" data-correct="0" data-explain="Sentry.init 要設 enableLogs 為 true，logger 的資料才會送出。">
+  <button class="opt">enableLogs 設為 true</button>
+  <button class="opt">tracesSampleRate 設為零</button>
+  <button class="opt">sendDefaultPii 也設為 true</button>
+  <button class="opt">debug 選項設定為 true</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 觀測深化：Logs / Tracing / Agent Tracing · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

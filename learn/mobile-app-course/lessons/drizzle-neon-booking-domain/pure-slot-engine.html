@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>純函式排班引擎：從 working hours 算出可預約時段</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>純函式排班引擎：從 working hours 算出可預約時段</h1>
+<p class="meta">Step 3/5 · 預約領域模型（Drizzle + Neon）</p>
+
+<h2>學習目標</h2>
+<p>能說明 <code>availableSlots</code> 如何用半開區間、15 分鐘粒度、2 小時前置期與服務長度，從 working hours 與 busy 區間算出可預約時段。</p>
+
+<h2>前言：資料有了，那「怎麼算」呢？</h2>
+
+<p>上一節準備好了兩種輸入：每位醫師一週的牆鐘作息，以及一組「不可用」的忙碌區間。現在問題很具體——給定一個週三、一個三十分鐘的洗牙療程，要怎麼列出所有可以選的起始時間？</p>
+
+<p>最直覺的寫法是在 API 裡直接查資料庫、當場一邊查一邊判斷。這種寫法能動，但很快會失控：日光節約的邊界、前置期的最後一分鐘、剛好接在別人後面的時段，全部散在查詢與迴圈之間，沒有一處可以單獨驗證。於是你會發現自己只能靠「手動選幾個時間試試看」來確認邏輯對不對。</p>
+
+<p>這裡刻意反過來做：把整個計算抽成一個<strong>純函式</strong>。資料由呼叫者準備好再餵進來，答案由它算出來，它自己不去碰資料庫，也不偷看系統時鐘。這一節就來看這個函式怎麼運作，以及它為什麼能讓最難測的邊界變成幾行斷言。</p>
+
+<h2>「純」是什麼意思，為什麼要這樣設計</h2>
+
+<p>純函式的定義很簡單：同樣的輸入，永遠得到同樣的輸出；而且過程中不產生副作用。它不看 <code>Date.now()</code>、不查資料庫、不改外部狀態。</p>
+
+<p>在這個設計裡，連「現在幾點」都當成參數傳進去，而不是讓函式自己去讀時鐘。這一點很關鍵：如果函式內部偷看真實時間，測試就會隨執行時間不同而時好時壞。把 <code>now</code> 變成輸入之後，測試可以假裝現在是六月一日，穩定地驗證任何時間點的行為。</p>
+
+<p>你可以把純函式想成一台計算機：你把數字按進去，它算出答案，不會自己打開抽屜翻資料。<code>availableSlots</code> 就是這台計算機。</p>
+
+<pre><code>export type AvailableSlotsInput = {
+  workingHours: WorkingHour[];
+  busy: BusyInterval[];
+  durationMinutes: number;
+  from: CalendarDay;
+  to: CalendarDay;
+  now: Date;
+};</code></pre>
+
+<h2>先搞懂「重疊」：半開區間</h2>
+
+<p>整個引擎最常做的判斷是「這個候選時段有沒有撞到某個忙碌區間」。看起來只要比較兩個區間有沒有交集就好，但魔鬼在端點。</p>
+
+<p>這裡採用的是<strong>半開區間（half-open interval）</strong>：一段時間包含起點、不包含終點。判斷重疊的函式只有一行：</p>
+
+<pre><code>export function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
+  return aStart.getTime() &lt; bEnd.getTime() &amp;&amp; bStart.getTime() &lt; aEnd.getTime();
+}</code></pre>
+
+<p>注意兩邊都是嚴格的「小於」，不是「小於等於」。所以一段 13:00–13:30 的候選，和一段 13:30–14:00 的既有預約，<strong>不算重疊</strong>。這在診所是完全合理的：前一位病人 13:30 離開椅子，下一位 13:30 坐上去，中間不需要緩衝。</p>
+
+<p>如果把條件寫成「小於等於」，端點相接就會被判定為衝突。結果是整個下午的時段會互相排擠，可預約的數量少得莫名其妙——而且很難看出原因，因為每一段單獨看都「好像有道理」。先用一行把重疊定義對，後面所有判斷才站得住。</p>
+
+<table>
+<thead>
+<tr><th>候選時段</th><th>既有忙碌</th><th>半開判定</th></tr>
+</thead>
+<tbody>
+<tr><td>13:00–13:30</td><td>13:30–14:00</td><td>不重疊（端點相接）</td></tr>
+<tr><td>13:00–13:30</td><td>13:15–14:00</td><td>重疊（交錯）</td></tr>
+<tr><td>13:00–13:45</td><td>13:30–14:00</td><td>重疊（跨入）</td></tr>
+<tr><td>13:00–13:30</td><td>12:00–13:00</td><td>不重疊（前後相接）</td></tr>
+</tbody>
+</table>
+
+<h2>引擎的輸入與三個常數</h2>
+
+<p>先把幾個規則寫成常數，而不是散落的魔法數字：</p>
+
+<pre><code>export const SLOT_GRANULARITY_MINUTES = 15; // 候選時段每隔 15 分鐘產生一個
+export const MIN_LEAD_TIME_MINUTES = 120;   // 距離現在太近的時段不能約（2 小時）
+export const CANCEL_CUTOFF_HOURS = 24;      // 取消/改期的截止線（後續會用到）</code></pre>
+
+<p>第一個常數決定「格線」：可預約時間只能是 09:00、09:15、09:30 這種十五分鐘的倍數，不會出現 09:07。第二個常數是前置期：病人不能預約兩小時內就要開始的診，因為診所需要時間準備。第三個常數今天用不到，但它和其他規則放在一起，是因為它們都屬於「診所的時間規則」。</p>
+
+<h2>演算法逐段拆解</h2>
+
+<p>現在看主體。它做的事其實很樸素：走過每一天，為每種工作時段產生候選起點，把不該出現的濾掉。分幾段看會更清楚。</p>
+
+<h3>第一段：準備前置期與分組</h3>
+
+<pre><code>if (durationMinutes &lt;= 0) return [];
+
+const earliest = now.getTime() + MIN_LEAD_TIME_MINUTES * MINUTE;
+const duration = durationMinutes * MINUTE;
+const step = SLOT_GRANULARITY_MINUTES * MINUTE;
+
+// 把忙碌區間依醫師分組，讓每個候選只掃自己的醫師。
+const busyByDentist = new Map&lt;string, BusyInterval[]&gt;();
+for (const b of busy) {
+  const list = busyByDentist.get(b.dentistId);
+  if (list) list.push(b);
+  else busyByDentist.set(b.dentistId, [b]);
+}</code></pre>
+
+<p>先把服務時長換成毫秒、算出前置期的最早可約時間，並把忙碌區間按醫師分堆。分堆的用意是效能與清晰：當我們在檢查「王醫師的某個候選」時，只需要翻王醫師自己的忙碌清單，不必掃過所有醫師的資料。</p>
+
+<h3>第二段：走過每一天與每個工作時段</h3>
+
+<pre><code>for (const day of eachDay(from, to)) {
+  const weekday = weekdayOf(day);
+
+  for (const wh of workingHours) {
+    if (wh.weekday !== weekday) continue;
+
+    const [startH, startM] = parseClockTime(wh.startTime);
+    const [endH, endM] = parseClockTime(wh.endTime);
+
+    // 兩端都經過診所時區轉換，日光節約日也會得到診所實際工作的分鐘數。
+    const windowStart = clinicInstant(day, startH, startM).getTime();
+    const windowEnd = clinicInstant(day, endH, endM).getTime();
+    if (windowEnd &lt;= windowStart) continue;
+
+    const dentistBusy = busyByDentist.get(wh.dentistId) ?? [];</code></pre>
+
+<p>這裡是上一節時區層派上用場的地方：<code>clinicInstant</code> 把「某天 09:00」換成真正的瞬間。因為兩端都經過時區轉換，遇到春天往前撥的那一天，視窗是診所實際工作的分鐘數，而不是剛好八小時的錯覺。</p>
+
+<h3>第三段：以固定步長產生並過濾候選</h3>
+
+<pre><code>    for (let t = windowStart; t + duration &lt;= windowEnd; t += step) {
+      if (t &lt; earliest) continue;
+
+      const startsAt = new Date(t);
+      const endsAt = new Date(t + duration);
+
+      const blocked = dentistBusy.some((b) =&gt;
+        overlaps(startsAt, endsAt, b.startsAt, b.endsAt)
+      );
+      if (blocked) continue;
+
+      slots.push({ dentistId: wh.dentistId, startsAt, endsAt });
+    }
+  }
+}</code></pre>
+
+<p>迴圈條件 <code>t + duration &lt;= windowEnd</code> 保證候選不會超出打烊時間：一個三十分鐘的療程，最後可約的起點必須讓它剛好在 17:00 前結束。接著三個過濾條件依序是：太接近現在（前置期）、與忙碌區間重疊、以及不成立就跳過。全部通過的，才是一格可預約時段。</p>
+
+<h3>第四段：排序後回傳</h3>
+
+<pre><code>return slots.sort(
+  (a, b) =&gt; a.startsAt.getTime() - b.startsAt.getTime() || a.dentistId.localeCompare(b.dentistId)
+);</code></pre>
+
+<p>先按時間排、時間相同再按醫師排，讓 API 回傳的順序穩定可預期。</p>
+
+<h2>用具體數字感受一下</h2>
+
+<p>假設週一工作時段是 09:00–17:00，服務三十分鐘，粒度十五分鐘。候選起點從 09:00 開始，每十五分鐘一個：09:00、09:15、09:30⋯⋯。但最後一個起點必須讓服務在 17:00 前結束，所以 16:30 可以（16:30–17:00），16:45 不行（會拖到 17:15）。從 09:00 到 16:30，每十五分鐘一個，剛好是 <strong>31 個</strong>時段。</p>
+
+<p>如果這段時間裡已經有一筆 10:00–10:30 的預約，哪些起點會被擋掉？候選 09:45 會跑到 10:15，撞上既有預約——擋掉；10:00 與 10:15 也擋掉。但 09:30 剛好在 10:00 結束（端點相接，不重疊），10:30 則緊接在既有預約後開始，兩者都仍然可約。這正是半開區間在實務上的樣子。</p>
+
+<p>同一時間若兩位醫師都有空，引擎會回傳兩個時段（一位一個）。前端拿到後會依顯示標籤去重，只讓病人看到一格「09:00」，但底層其實保留了「哪一位醫師」這個選擇。</p>
+
+<h2>為什麼這些邊界非測不可</h2>
+
+<p>因為這個引擎是純的，日光節約與前置期這些最難手動重現的情況，可以用單元測試釘死。測試裡有幾個值得記住的案例：</p>
+
+<ul>
+<li><code>now</code> 距離 09:00 剛好兩小時，09:00 可以約；差一分鐘，最早只能約 09:15。</li>
+<li>春天往前撥之後的週一 09:00 是 UTC 13:00，切換前的週五 09:00 是 UTC 14:00，兩者顯示的都是「09:00 AM」，時段數也一樣。</li>
+<li>一個九十分鐘的療程，最後可約起點是 15:30（15:30 加九十分鐘剛好 17:00）。</li>
+<li>一個九小時的療程在 09:00–17:00 的視窗裡完全排不下，回傳空陣列。</li>
+</ul>
+
+<p>這些案例如果用手動點畫面來測，大概要等到某一年日光節約切換才會發現錯了。抽成純函式之後，它們只是幾個穩定的斷言。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>availableSlots</code> 是一台純計算機：輸入 working hours、busy 區間、服務時長、日期範圍與「現在」，輸出所有可預約時段。它用半開區間定義重疊（端點相接不算衝突），以 15 分鐘為步長產生候選，用服務時長確保不超時，用 2 小時前置期濾掉太近的時段，並把不同醫師的忙碌區間分開處理。因為它不碰資料庫也不看時鐘，日光節約與各種邊界都能被單元測試牢牢釘住。
+</blockquote>
+
+<p>引擎會算，但它不會自己擋人。下一步要把它接進兩條 API：一條負責列出可預約時段，一條負責真的寫入預約，而且兩條要用同一份輸入與同一套判準——否則「系統說可以約」和「系統真的讓你約」就會是兩套規則。</p>
+
+<div class="lesson-nav">
+  <div><a href="./model-availability-domain.html">← 上一步：把「誰什麼時候有空」建成資料</a></div>
+  <div><a href="./wire-read-and-write.html">下一步：讓讀與寫共用同一個引擎 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 13:00–13:30 和 13:30–14:00 兩段時間不算重疊？" data-correct="1" data-explain="半開區間不包含終點，端點相接不算交集，這讓前後病人可以緊接著使用檯台。">
+  <button class="opt">因為兩段時間的長度完全一樣</button>
+  <button class="opt">因為端點相接在半開區間不算交集</button>
+  <button class="opt">因為引擎會自動合併相鄰時段</button>
+  <button class="opt">因為資料庫把兩段時間對齊了</button>
+</div>
+
+<div class="quiz" data-question="把 now 當成參數傳進函式，而不是在函式裡讀時鐘，主要好處是？" data-correct="2" data-explain="讓輸出可重現，測試能穩定驗證任何時間點的行為，不會隨執行時間不同而改變。">
+  <button class="opt">可以讓函式的執行速度變得更快</button>
+  <button class="opt">可以讓前置期的長度自動調整</button>
+  <button class="opt">可以讓測試結果穩定可重現</button>
+  <button class="opt">可以省去把日期轉成時區的步驟</button>
+</div>
+
+<div class="quiz" data-question="迴圈條件 t + duration <= windowEnd 保證了什麼？" data-correct="3" data-explain="候選時段加上服務長度不能超過打烊時間，避免排到關門之後。">
+  <button class="opt">保證每個時段間隔剛好十五分鐘</button>
+  <button class="opt">保證醫師一定沒有請假紀錄</button>
+  <button class="opt">保證前置期不會被超過</button>
+  <button class="opt">保證服務不會排到打烊之後</button>
+</div>
+
+<div class="quiz" data-question="MIN_LEAD_TIME_MINUTES = 120 的效果是什麼？" data-correct="0" data-explain="距離現在兩小時內的時段不會出現，因為診所需要時間準備。">
+  <button class="opt">距離現在兩小時內的時段不可約</button>
+  <button class="opt">每個時段之間會空出兩小時</button>
+  <button class="opt">醫師每天最多看兩小時的診</button>
+  <button class="opt">預約最多只能提前兩小時建立</button>
+</div>
+
+<div class="quiz" data-question="為什麼要把忙碌區間依醫師分組？" data-correct="1" data-explain="檢查某位醫師的候選時，只需掃他自己的忙碌清單，不必掃全部醫師的資料。">
+  <button class="opt">因為資料庫要求按醫師分開存放</button>
+  <button class="opt">因為候選只需比對自己醫師的忙碌</button>
+  <button class="opt">因為這樣可以自動排除請假紀錄</button>
+  <button class="opt">因為前端只會顯示一位醫師</button>
+</div>
+
+<div class="quiz" data-question="春天日光節約切換後，為什麼週一 09:00 的時段數量仍和平常一樣？" data-correct="2" data-explain="working hours 的兩端都經過 clinicInstant，得到的是診所實際工作的分鐘數，所以時段數不受 DST 影響。">
+  <button class="opt">因為引擎會自動補回少掉的一小時</button>
+  <button class="opt">因為日光節約不影響北美時區</button>
+  <button class="opt">因為兩端都經過診所時區轉換</button>
+  <button class="opt">因為 working hours 存的是 UTC</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 預約領域模型（Drizzle + Neon） · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

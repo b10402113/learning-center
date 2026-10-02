@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>防重複預約守在哪一層？</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>防重複預約守在哪一層？</h1>
+<p class="meta">Step 5/5 · 預約領域模型（Drizzle + Neon）</p>
+
+<h2>學習目標</h2>
+<p>能分辨應用層守衛與 Postgres 排除約束各自擋下哪一類問題，並說出為什麼同一個「防重複預約」要兩層都留。</p>
+
+<h2>前言：兩個病人，同一秒，同一個時段</h2>
+
+<p>上一節把可預約時段的讀與寫接到了同一個引擎，看起來已經很完整了。但設想一個場景：兩位病人在同一秒看到早上九點可以約，同時按下確認。兩邊的請求幾乎同時到達伺服器，都先通過了「這個時段可以約嗎」的檢查，然後都送出了寫入。你的應用層檢查有辦法阻止第二筆嗎？</p>
+
+<p>答案通常是沒有。因為「檢查」和「寫入」之間有一段時間差，兩個請求可以在時間差裡都看到「可以約」，這是最經典的 TOCTOU（檢查後才使用，Time-Of-Check to Time-Of-Use）問題。這也帶出這一節要做的決定：防重複預約，到底該交給應用層的程式，還是交給資料庫的約束？</p>
+
+<p>張力在於兩者性格相反。應用層是你讀得到、能測試、能給出好錯誤訊息的程式；資料庫約束是你幾乎看不見、錯誤訊息很硬、但無論如何都不會說謊的最後一道牆。這一節不選邊，而是把它們放回各自擅長的問題上。</p>
+
+<h2>兩個選項，各自擅長什麼</h2>
+
+<table>
+<thead>
+<tr><th>比較項目</th><th>應用層守衛（assertSlotBookable）</th><th>Postgres 排除約束（EXCLUDE USING gist）</th></tr>
+</thead>
+<tbody>
+<tr><td>它懂什麼</td><td>營業時間、服務長度、前置期、醫師能力</td><td>只有「同一位醫師的兩個時段是否重疊」</td></tr>
+<tr><td>擋下什麼</td><td>3am、非 15 分格、塞不下的服務、醫師不做的療程、前置期內</td><td>任何時間重疊的兩筆預約，不管誰送、何時送</td></tr>
+<tr><td>錯誤訊息</td><td>可自訂 400／409，帶明確訊息與 code</td><td>丟出 23P01，需要自己轉成 409</td></tr>
+<tr><td>並行安全</td><td>不是，check 與 insert 之間有時間差</td><td>是，資料庫在寫入那一刻仲裁</td></tr>
+<tr><td>可測試性</td><td>高，純函式可單元測試</td><td>低，要真的對資料庫跑才有意義</td></tr>
+<tr><td>能表達「這不是時段」嗎</td><td>可以，靠 classifySlot 的 invalid</td><td>不行，它只認得重疊</td></tr>
+</tbody>
+</table>
+
+<p>先看應用層。它知道所有商業規則：週三有沒有看診、這個療程要多久、現在距離預約時間夠不夠兩小時、這位醫師會不會做植牙。它也有一個很實用的能力——把「不可約」拆成兩種：<code>'invalid'</code>（根本不是時段）與 <code>'taken'</code>（是真時段但被佔用），因此能給病人精準的回饋。</p>
+
+<p>再看資料庫約束。它很笨，只懂一件事：同一位醫師、時間區間重疊的兩筆預約不許同時存在。但正因為它笨，它快、可靠，而且在「兩個請求同時寫入」這種應用層看不清楚的時刻，它是最終的裁判。</p>
+
+<h2>三個判別問句</h2>
+
+<p>遇到一條「防重複」規則時，可以先問自己三個問題，決定它該住在哪裡：</p>
+
+<ol>
+<li><strong>這條規則需要知道營業時間、服務或前置期嗎？</strong>需要，就屬於應用層。資料庫約束沒有這些知識，也不該為了塞進去而把商業規則複製一份到 SQL 裡。</li>
+<li><strong>這條規則本質上是「同一個資源不能被佔用兩次」這種資料完整性嗎？</strong>是，就屬於資料庫。這是約束最擅長、也最不會出錯的地方。</li>
+<li><strong>兩個請求同時發生時，我在應用層的檢查還成立嗎？</strong>不成立，就必須有資料庫這一層兜底。</li>
+</ol>
+
+<p>用這三題檢查「同一位醫師不能同時看兩位病人」：它不需要營業時間（第 1 題否），它是典型的資源不可重複佔用（第 2 題是），而它在並行時會失效（第 3 題成立）。三個訊號都指向資料庫約束。相對地，「凌晨三點不能預約」不需要考慮並行（第 3 題否），純粹是商業規則，留在應用層即可。</p>
+
+<h2>為什麼不能只留一層</h2>
+
+<p>這裡的關鍵是：兩層擋的是不同種類的錯誤，不是同一件事的兩種寫法。</p>
+
+<p><strong>只留資料庫約束會怎樣？</strong>凌晨三點的預約不會和任何時段重疊，所以約束會放行。病人成功約到診所沒開的時間，系統卻完全沒有意見。同樣地，「醫師不做的療程」「服務塞不進營業時間」都不會觸發重疊，全部漏接。而且錯誤訊息只剩一個籠統的衝突，病人分不清是「被搶走了」還是「你選的時間根本不對」。</p>
+
+<p><strong>只留應用層守衛會怎樣？</strong>兩個請求同時通過檢查，然後幾乎同時寫入。因為兩者都沒有看到對方，兩筆預約都成功了——這正是 TOCTOU。應用層的檢查再怎麼完整，也改變不了「檢查與寫入不是原子操作」這件事。</p>
+
+<p>所以正確的答案不是二選一，而是分工：<strong>商業規則交給應用層，資料完整性交給資料庫，並用同一組輸入確保兩者不分岔。</strong></p>
+
+<h2>兩層怎麼接起來</h2>
+
+<p>寫入的程式碼會同時用到兩層。應用層守衛先跑；通過之後 insert，insert 若踩到排除約束，就把它轉成乾淨的 409：</p>
+
+<pre><code>await assertSlotBookable({
+  dentistId, serviceId, durationMinutes, startsAt,
+});
+
+try {
+  const [created] = await db.insert(appointments).values({
+    patientId, dentistId, serviceId, startsAt, endsAt,
+  }).returning();
+  return json({ appointment: serialize({ /* ... */ }) }, 201);
+} catch (err) {
+  // Postgres 的排除約束違反，代碼是 23P01
+  if (isExclusionViolation(err)) {
+    throw conflict('That time was just taken. Please pick another.', 'slot_taken');
+  }
+  throw err;
+}</code></pre>
+
+<p><code>isExclusionViolation</code> 做的事情很單純：檢查錯誤物件身上的 <code>code</code>（或 <code>cause.code</code>）是不是 <code>23P01</code>。是的話，代表資料庫那一層擋下了並行衝突，把它轉成 409 與 <code>slot_taken</code>。</p>
+
+<p>於是「剛剛被約走，請換一個」這個訊息，可能來自兩個地方：應用層 <code>classifySlot</code> 回報的 <code>'taken'</code>，或是資料庫約束攔下的 <code>23P01</code>。對病人而言體驗一致，但其實是兩道不同防線各自盡責。</p>
+
+<h2>一個不能省略的細節：約束要手寫</h2>
+
+<p>這個排除約束不是 Drizzle 自動生成的，它是一段手寫的 migration：</p>
+
+<pre><code>-- 手寫在 migration 裡，Drizzle 產不出來
+ALTER TABLE appointments
+  ADD CONSTRAINT appointments_no_overlap
+  EXCLUDE USING gist (
+    dentist_id WITH =,
+    tstzrange(starts_at, ends_at) WITH &amp;&amp;
+  );</code></pre>
+
+<p>意思是「同一位醫師（<code>dentist_id</code> 相等），且時間區間重疊（<code>&amp;&amp;</code>）的兩筆資料不許並存」。因為 ORM 不會替你產生這種約束，它特別容易被忽略——一旦漏了，程式照樣能跑，只有在真正併發的那一瞬間才會出錯，而那一刻往往已經在正式環境。</p>
+
+<h2>決策規則與檢查表</h2>
+
+<blockquote>
+商業規則（營業時間、服務長度、前置期、醫師能力、非格線時間）放在應用層的純函式，這樣可以測試、能給精確錯誤。資料完整性（同一資源不可重疊）放在 Postgres 排除約束，讓它仲裁並行寫入，這是應用層看不到的死角。兩者共用同一組輸入，寫入時一定要 catch 23P01 並轉成 409。不要用「先 SELECT 再 INSERT」取代約束，也不要因為有了約束就拿掉應用層守衛——它們擋的是不同種類的錯誤。
+</blockquote>
+
+<p>把這五步合起來看：時區層確保時間不會差一天，資料表定義了可約性與事實，純函式引擎算出時段，讀寫共用同一個引擎，而資料庫約束在最底層接住競態。這才是預約領域模型完整的樣子——不是一個聰明的大函式，而是各層守住各自職責的組合。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+防重複預約不是二選一。需要營業時間、服務長度與前置期的商業規則，放在應用層純函式；「同一資源不可重疊」的資料完整性，交給 Postgres 排除約束。應用層負責給精確的 400／409，資料庫負責仲裁並行寫入，兩者在寫入時用 <code>try/catch</code> 與 <code>23P01</code> 接起來。不要只用 SELECT 加 INSERT 取代約束，也不要因為有了約束就拿掉應用層守衛。
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./wire-read-and-write.html">← 上一步：讓讀與寫共用同一個引擎</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼應用層守衛無法單獨防止兩筆並行的重複預約？" data-correct="2" data-explain="檢查與寫入之間有時間差，兩個請求可能都看到可以約，這是典型的 TOCTOU。">
+  <button class="opt">因為它看不懂醫師的營業時間</button>
+  <button class="opt">因為它無法產生正確錯誤訊息</button>
+  <button class="opt">因為檢查與寫入之間有時間差</button>
+  <button class="opt">因為它只能處理白天的預約</button>
+</div>
+
+<div class="quiz" data-question="Postgres 排除約束最擅長擋下哪一類問題？" data-correct="0" data-explain="它懂的是同一位醫師的時間區間重疊，正是資料完整性層面的防護。">
+  <button class="opt">同一位醫師的時間區間重疊</button>
+  <button class="opt">凌晨三點的預約與前置期</button>
+  <button class="opt">醫師是否會做某個療程</button>
+  <button class="opt">服務長度是否超過營業時間</button>
+</div>
+
+<div class="quiz" data-question="只留資料庫約束、拿掉應用層守衛，會漏掉什麼？" data-correct="3" data-explain="3am、醫師不做的療程、塞不下的服務都不會重疊，約束會直接放行。">
+  <button class="opt">會漏掉兩筆預約時間重疊的情況</button>
+  <button class="opt">會漏掉醫師請假期間的重複預約</button>
+  <button class="opt">會漏掉資料庫的並行寫入衝突</button>
+  <button class="opt">會漏掉不重疊但根本不該約的時間</button>
+</div>
+
+<div class="quiz" data-question="isExclusionViolation 檢查的 23P01 代表什麼？" data-correct="1" data-explain="它是 Postgres 排除約束的違反代碼，代表資料庫在寫入那一刻擋下了重疊。">
+  <button class="opt">代表查詢語法發生了錯誤</button>
+  <button class="opt">代表排除約束被違反的錯誤</button>
+  <button class="opt">代表資料庫連線已經中斷</button>
+  <button class="opt">代表欄位型別轉換失敗</button>
+</div>
+
+<div class="quiz" data-question="「這條規則需要知道營業時間或服務長度嗎？」是用來判斷什麼？" data-correct="2" data-explain="需要商業知識的規則留在應用層，資料完整性則交給資料庫約束。">
+  <button class="opt">判斷要不要把規則寫成資料庫索引</button>
+  <button class="opt">判斷這條規則是否值得寫單元測試</button>
+  <button class="opt">判斷規則該放應用層還是資料庫</button>
+  <button class="opt">判斷要不要把規則交給前端處理</button>
+</div>
+
+<div class="quiz" data-question="為什麼排除約束特別容易被漏掉？" data-correct="1" data-explain="Drizzle 產不出這種約束，必須手寫 migration；漏了程式照跑，只有併發那一刻才錯。">
+  <button class="opt">因為它的語法在各地區版本不同</button>
+  <button class="opt">因為 ORM 不會自動產生它</button>
+  <button class="opt">因為它只能用在 MySQL 資料庫</button>
+  <button class="opt">因為它需要額外的雲端服務</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 預約領域模型（Drizzle + Neon） · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

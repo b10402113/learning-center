@@ -4,14 +4,44 @@ title: 員工 Dashboard（Server Components）
 subject: mobile-app-course
 tier: 4
 order: 25
-status: draft
+status: content-written
 goal: 用 Server Components 直讀 Drizzle（不繞 HTTP）做員工 dashboard 與 Server Actions
 sources:
   - "[[sources/mobile-app-course/20261001/How to build mobile apps for local businesses with Claude Code - FULL COURSE.srt]]"
   - "[[sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/page.tsx]]"
+  - "[[sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/layout.tsx]]"
   - "[[sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/patients/page.tsx]]"
-steps: []
-prerequisites: []
+  - "[[sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/patients/[id]/page.tsx]]"
+  - "[[sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/patients/[id]/actions.ts]]"
+steps:
+  - id: rsc-direct-db
+    order: 1
+    type: concept
+  - id: dashboard-shell-guard
+    order: 2
+    deps:
+      - rsc-direct-db
+    type: concept
+  - id: schedule-server-component
+    order: 3
+    deps:
+      - rsc-direct-db
+      - dashboard-shell-guard
+    type: procedure
+  - id: patient-roster-and-chart
+    order: 4
+    deps:
+      - schedule-server-component
+    type: procedure
+  - id: server-actions-revalidate
+    order: 5
+    deps:
+      - patient-roster-and-chart
+    type: procedure
+prerequisites:
+  - learn/mobile-app-course/nodes/monorepo-nextjs-backend
+  - learn/mobile-app-course/nodes/nextjs-api-handlers
+  - learn/mobile-app-course/nodes/drizzle-neon-booking-domain
 created: 2026-10-02
 updated: 2026-10-02
 ---
@@ -24,14 +54,29 @@ updated: 2026-10-02
 
 ## Steps
 
-{/_ /nodes fills this step-DAG — step ids + order + deps — and gets confirmation. _/}
+1. [[learn/mobile-app-course/nodes/staff-dashboard-server-components/rsc-direct-db|Server Component 直接查 DB：為什麼不用繞 HTTP]] — 分清楚 mobile 走 API、web dashboard 直讀 DB 的兩條資料路徑（deep）
+2. [[learn/mobile-app-course/nodes/staff-dashboard-server-components/dashboard-shell-guard|Dashboard 外殼與守衛：把 requireStaff 放在資料旁邊]] — 守衛放在 layout 而非 proxy，處理未登入與非員工（after step 1, deep）
+3. [[learn/mobile-app-course/nodes/staff-dashboard-server-components/schedule-server-component|今日行程 Server Component：typed params 與診所日查詢]] — 讀 searchParams、算時間窗、join 出當日行程（after steps 1–2, deep）
+4. [[learn/mobile-app-course/nodes/staff-dashboard-server-components/patient-roster-and-chart|病患名冊與病歷頁：聚合查詢與 PHI 讀取紀錄]] — groupBy 聚合、稽核每次讀取、把資料鎖在該病患（after step 3, deep）
+5. [[learn/mobile-app-course/nodes/staff-dashboard-server-components/server-actions-revalidate|Server Actions：不用寫 API 也能寫入，revalidatePath 自動更新]] — 'use server' 寫入與 revalidatePath，client 端用 useActionState／useTransition（after step 4, deep）
 
 ## Lesson
 
-{/_ /nodes writes the main lesson here; step articles live under this node's folder. _/}
+同一個 Next.js 專案，同時住著兩種很不一樣的「前端」。手機上的 Expo app 在病人的裝置裡跑，隔著網路，只能呼叫 `app/api/` 底下的 Route Handler；而員工用的網頁 dashboard 跟資料庫住在同一台伺服器上，所以它的頁面可以直接 `import { db }`、當場把查詢送進 Postgres。這個節點要建立的就是這條分界線的心智模型，然後沿著它把 Dentify 的員工後台拆開：今日行程、病患名冊、單一病患病歷，以及最後一哩的 Server Actions 寫入。
+
+先講大圖。React Server Component 的程式碼只跑在伺服器，永遠不會被打包進瀏覽器，所以它可以安全地碰密鑰、碰資料庫連線，也能把 Drizzle 推導出來的型別一路帶進 JSX。代價是它沒有 `useState`、沒有事件處理、沒有瀏覽器 API——需要互動的地方得切出 client component。dashboard 的每個頁面都是「伺服器先把資料查好、渲染成 HTML、再把一小塊互動元件交棒給瀏覽器」的組合，這就是它和 mobile app「先拿資料、再在裝置上畫」的根本差異。
+
+第二個重點是權限。Server Component 直讀 DB 不代表它公開，反而因為它就站在資料旁邊，最適合把 `requireStaff()` 這種資源守衛放在同一層。Dentify 把守衛放在 `dashboard/layout.tsx`，而不是塞進 `proxy.ts` 做路徑比對：layout 包住整個 `/dashboard` 子樹，一次檢查就守住所有子頁面，而且守衛與它保護的資料放在一起，看程式碼時不會失聯。未登入的人被 `redirect('/')` 請出去，登入但不是員工的人看到一段 `NotStaff` 說明，告訴管理員去 Clerk 的 public metadata 補上 `{"role":"staff"}`。
+
+有了這兩個底座，剩下三節就是把 Dentify 的伺服器元件一段一段讀懂。今日行程那一頁示範如何在 async 元件裡等 `searchParams`、把診所當地的一天換成 UTC 時間窗，再用 Drizzle 的 `innerJoin` 與 `gte`／`lt` 撈出當天的預約並渲染成表格。病患名冊展示聚合查詢：`count()` 搭配 `groupBy` 算出每位病患的看診次數，而「只是讀一眼名冊」也照樣寫進稽核表。單一病患病歷頁則把筆記與附件嚴格鎖在該病患的預約 id 上，並在每次讀取時留下 `audit` 紀錄。最後一節換到寫入路徑：用 `'use server'` 的 Server Action 直接寫 DB、跑完 `revalidatePath`，畫面就自動帶著新資料重繪，不必另外寫一支 API。
+
+走完五步，你手上會有一張完整的「員工後台資料流」地圖：RSC 讀、Server Action 寫、守衛放在資源旁、稽核不漏。之後無論是接手別人的 Next.js 後台，或替自己的 side project 長出一個 admin 頁，你都能判斷哪些東西該直讀、哪些該切 client、哪些一定要留紀錄。
 
 ## Sources
 
 - [[sources/mobile-app-course/20261001/How to build mobile apps for local businesses with Claude Code - FULL COURSE.srt]]
 - [[sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/page.tsx]]
+- [[sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/layout.tsx]]
 - [[sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/patients/page.tsx]]
+- [[sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/patients/[id]/page.tsx]]
+- [[sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/dashboard/patients/[id]/actions.ts]]

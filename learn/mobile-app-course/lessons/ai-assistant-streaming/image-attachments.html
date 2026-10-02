@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>圖片附件：存進 ImageKit 的助理回合</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>圖片附件：存進 ImageKit 的助理回合</h1>
+<p class="meta">Step 5/5 · 串流 AI 助理</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你應該能替助理加上圖片附件：把照片上傳到 ImageKit 的私人資料夾、用一個不呼叫模型的固定回合回覆使用者，並用 URL 轉換參數做出預設模糊、點一下才顯示的效果。</p>
+
+<h2>前言：使用者最想傳的，往往是一張照片</h2>
+
+<p>前面四節做完，助理已經能逐字回答、也能記住歷史了。但真實情境裡，病人的第一反應常常是「我拍給你看」——牙齦腫起來的地方、掉了一角的牙齒，用一張照片比打字快得多。如果畫面只有輸入框，使用者只能勉強用文字描述，體驗就差了一截。</p>
+
+<p>這一節要把照片加進對話。前置條件是上一節的歷史持久化已經完成，因為照片在資料庫裡也是一則訊息，必須掛在同一條對話底下。做完之後，使用者可以從相簿選一張照片送出，畫面會出現他自己和助理的一輪對話，而重新打開 app 時那張照片還在。</p>
+
+<p>不過照片在醫療助理裡有兩條不能踩的線：助理被明文禁止判讀影像，而照片本身也永遠不會送給模型。這一節的實作形狀，很大一部分就是為了遵守這兩條線。</p>
+
+<h2>第一步：先想清楚為什麼照片不進模型</h2>
+
+<p>直覺會想：既然助理要看圖才能回答，那就把照片也一起送進 OpenAI 不就好了？但這個專案的 system prompt 第一條硬規則就是「絕不判讀影像、X 光或檢驗結果」。如果還把照片送進去，等於要求一個被禁止看圖的模型對圖說話——它只會憑空編造出一個答案。</p>
+
+<p>所以照片走的是一條完全不同的路：照片會存進私人儲存空間、顯示在對話裡，但思想的來源不是模型，而是一段寫死的固定回覆。這也讓這個回合不需要串流——它不是「生成出來的」，而是一張卡片。</p>
+
+<blockquote class="good-code">
+照片的回合是「一則圖片訊息 + 一則固定回覆」，一次請求就完成，沒有模型、沒有串流。
+</blockquote>
+
+<h2>第二步：端點先驗對話所有權，再上傳檔案</h2>
+
+<p>照片端點的第一步不是收檔案，而是驗身分與對話歸屬：</p>
+
+<pre><code>export const POST = route(async (req: Request) =&gt; {
+  const user = await requireAuth();
+
+  const form = await req.formData().catch(() =&gt; null);
+
+  const conversationId = form?.get('conversationId');
+  const conversation = await getOrCreateConversation(
+    user.id,
+    typeof conversationId === 'string' &amp;&amp; conversationId ? conversationId : undefined
+  );
+
+  const path = await uploadPrivateImage(form?.get('photo'), photoFolder(user.id));</code></pre>
+
+<p>順序在這裡是安全關鍵。<code>getOrCreateConversation</code> 是唯一會驗證「這個對話編號屬於這個使用者」的地方，它不通過就會丟出錯誤。如果先上傳檔案、後驗所有權，一個帶著別人對話編號的請求就會在 ImageKit 留下一張私人檔案，卻沒有任何資料列會引用它——一個沒人看得到、也永遠不會被清掉孤兒檔案。</p>
+
+<p><code>photoFolder(user.id)</code> 把這位使用者的照片集中到以 user id 命名的資料夾，這也是上一節 DELETE 能一次清乾淨的前提。</p>
+
+<h2>第三步：一次寫入兩則訊息，圖片那則的內容留空</h2>
+
+<pre><code>await db.insert(aiMessages).values([
+  { conversationId: conversation.id, role: 'user', content: '', imagePath: path },
+  { conversationId: conversation.id, role: 'assistant', content: PHOTO_REPLY },
+]);
+
+return json({
+  conversationId: conversation.id,
+  image: signedPhoto(path),
+  reply: PHOTO_REPLY,
+});</code></pre>
+
+<p>這一段有兩個看似奇怪、其實刻意的設計。第一，圖片訊息是 <code>role: 'user'</code>，因為對對話來說，這一步就是「使用者的發話」，只是用圖片代替文字。第二，它的 <code>content</code> 是空字串，圖片路徑放在另一個欄位 <code>imagePath</code>。為什麼要空著？因為送進模型的歷史是讀 <code>content</code> 這一欄，而照片不進模型；空的內容會在前一節看到的 <code>filter</code> 被濾掉，照片因此不會在 prompt 裡留下一個沒有內容的空洞。</p>
+
+<p>助理那一則則直接寫入固定的 <code>PHOTO_REPLY</code>。它的內容大意是：沒辦法看照片，判讀影像是牙醫的工作；如果改用文字描述位置、時間、什麼情況會更嚴重，就能說明一般性的可能，並詢問是否要預約。這段文字是寫死的，和緊急卡片同一個道理——一個被要求回答它看不到的東西的模型，只會開始編故事。</p>
+
+<h2>第四步：手機端用 multipart 送出，並給上傳更長的逾時</h2>
+
+<p>手機端的做法和文字訊息完全不同：文字走 JSON，照片走 multipart 表單。</p>
+
+<pre><code>const [photo] = await pickPhotos();
+if (!photo) return;
+
+const form = new FormData();
+if (conversationId) form.append('conversationId', conversationId);
+form.append('photo', photo.file);
+
+const sent = await call&lt;{ conversationId: string; image: Photo; reply: string }&gt;(
+  '/api/ai/attachments',
+  { method: 'POST', body: form, timeoutMs: UPLOAD_TIMEOUT_MS }
+);</code></pre>
+
+<p><code>pickPhotos</code> 會從相簿挑圖並先縮小尺寸，回傳的是 Expo 的 <code>File</code> 物件。這裡不能沿用一般請求的短逾時：上傳檔案本來就比讀一段文字久，所以改用 <code>UPLOAD_TIMEOUT_MS</code> 這個給上傳用的逾時值，避免大圖上傳還沒完成就被判為逾時。</p>
+
+<p>拿到回應之後，把兩則訊息補進畫面：一則是自己、帶照片；一則是助理、帶固定回覆。</p>
+
+<pre><code>conversationId = sent.conversationId;
+setMsgs((m) =&gt; [
+  ...m,
+  { from: 'me', paras: [], time: now(), photo: sent.image },
+  { from: 'ai', paras: sent.reply.split(/\n{2,}/).filter(Boolean), time: now() },
+]);</code></pre>
+
+<p>因為這個回合不會串流，所以沒有一個會邊長大的氣泡；兩則訊息在回應抵達時一次出現。這也讓錯誤處理方式不同：文字訊息的錯誤可以寫進那個已經存在的空氣泡，但照片如果在上傳階段就失敗了，畫面上根本沒有一個對應的氣泡可以寫，所以只能用彈窗提示。</p>
+
+<h2>第五步：預設模糊，點一下才顯示</h2>
+
+<p>敏感的照片不該一打開就攤在螢幕上。做法不是上傳兩張圖，而是用 ImageKit 的 URL 轉換參數，對同一張圖產生兩個網址：一個模糊版、一個完整版。兩個網址在送出回應時就一起交給手機，所以「顯示」只是換一個圖片來源，不需要再等任何下載。</p>
+
+<pre><code>function PhotoAttachment({ photo }: { photo: Photo }) {
+  const [revealed, setRevealed] = useState(false);
+
+  return (
+    &lt;Pressable onPress={() =&gt; setRevealed((r) =&gt; !r)}&gt;
+      &lt;Image source={{ uri: revealed ? photo.full : photo.blurred }} /&gt;
+      {revealed ? null : (
+        &lt;View&gt;
+          &lt;SymbolView name="eye" size={15} /&gt;
+          &lt;Text&gt;Tap to view&lt;/Text&gt;
+        &lt;/View&gt;
+      )}
+    &lt;/Pressable&gt;
+  );
+}</code></pre>
+
+<p>這裡要小心一個觀念：模糊不是權限控制。它防的是「背後有人瞄到」或「快速滑過被看到」，而不是防止有人取得照片。真正讓照片保持私密的，是它放在私人資料夾、以及網址上的簽名。把模糊當成安全機制會誤判它的強度；把它當成體貼使用者的介面設計，才是它真正的定位。</p>
+
+<blockquote class="bad-code">
+不要用「反正有模糊」來說服自己照片是安全的。模糊只是畫面上的廉價遮蔽；隱私來自私人儲存與簽名網址。
+</blockquote>
+
+<h2>做完長什麼樣</h2>
+
+<p>完成後可以逐項驗證：送出照片後，畫面出現自己的照片訊息與助理的固定回覆；照片預設是模糊的，點一下才變清楚、再點一下又遮回去；重新打開 app，這張照片與回覆仍在對話裡；按下清除歷史後，照片與它的資料夾一起消失；如果照片上傳失敗，會跳出提示而不是新增一則殘缺的訊息。整個功能從上傳到顯示，完全沒有碰 OpenAI。</p>
+
+<h2>小結與收尾</h2>
+
+<blockquote>
+<p>圖片附件之所以走一條和文字不同的路，是因為助理被禁止判讀影像，而照片也永遠不進模型。因此它是一個一次完成的「圖片訊息 + 固定回覆」回合，不串流、不生成。端點先驗對話所有權再上傳，避免留下孤兒檔案；圖片訊息以空內容儲存，讓它不污染送進模型的歷史；顯示時用 ImageKit 的 URL 轉換做出模糊版與完整版，點擊只是換來源。模糊是體貼，隱私則來自私人資料夾與簽名網址。</p>
+</blockquote>
+
+<p>走完這五步，你就有一個完整的 app 內 AI 助理：會逐字回答、記得歷史、能接照片，並且被領域提示與安全閘門框在正確的範圍裡。接著可以回到這個節點的清單，執行 <code>/tackle</code> 逐項驗證自己對每個步驟的掌握；如果你想換成自己的 app，記住這裡的主軸——串流是為了對齊「答案邊產生邊送出」的本質，而其餘的設計都是為了讓 AI 功能在真實場域裡可以被信任。</p>
+
+<div class="lesson-nav">
+  <div><a href="./conversation-history.html">← 上一步：把對話歷史持久化到資料庫</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼照片回合不呼叫 OpenAI，而是用寫死的回覆？" data-correct="2" data-explain="system prompt 明文禁止判讀影像，照片也不送模型；要求看不到圖的模型回答只會編造，所以用固定回覆。">
+  <button class="opt">因為上傳照片到 OpenAI 的成本太高了</button>
+  <button class="opt">因為 OpenAI 的模型不支援讀取手機照片</button>
+  <button class="opt">因為助理被禁止判讀且照片不進模型</button>
+  <button class="opt">因為照片回合必須比文字回覆顯示得更快</button>
+</div>
+
+<div class="quiz" data-question="照片端點為什麼要先取得對話、再上傳檔案？" data-correct="1" data-explain="先驗對話所有權，不通過就擋掉；若先上傳，帶別人對話編號的請求會留下沒人引用的孤兒檔案。">
+  <button class="opt">因為上傳檔案前必須先知道圖片的尺寸</button>
+  <button class="opt">因為先上傳會留下沒人引用的孤兒檔</button>
+  <button class="opt">因為 ImageKit 要求先有對話才能上傳</button>
+  <button class="opt">因為這樣可以省下一次資料庫的查詢</button>
+</div>
+
+<div class="quiz" data-question="圖片訊息的 content 為什麼留空字串？" data-correct="3" data-explain="送進模型的歷史讀的是 content 欄，照片不進模型；空內容會在送 prompt 前被濾掉，不留下空洞。">
+  <button class="opt">因為空字串可以讓圖片載入的速度變快</button>
+  <button class="opt">因為資料庫的 content 欄位不能存中文</button>
+  <button class="opt">因為圖片的路徑已經存在另一個欄位裡</button>
+  <button class="opt">因為空內容會被濾掉、不污染 prompt</button>
+</div>
+
+<div class="quiz" data-question="照片上傳為什麼要用比一般請求更長的逾時？" data-correct="0" data-explain="上傳檔案本來就比讀文字久，若沿用一般短逾時，大圖還沒上傳完就會被判逾時。">
+  <button class="opt">因為上傳檔案本來就比讀文字更久</button>
+  <button class="opt">因為 ImageKit 的伺服器回應特別緩慢</button>
+  <button class="opt">因為照片必須先壓縮才能開始上傳</button>
+  <button class="opt">因為較長的逾時可以省下傳輸的流量</button>
+</div>
+
+<div class="quiz" data-question="點擊照片才顯示完整版的實作方式是什麼？" data-correct="1" data-explain="同一張圖用 ImageKit 的 URL 參數產生模糊版與完整版兩個網址，切換只是換圖片來源，不需重新下載。">
+  <button class="opt">點擊時才向伺服器重新下載完整照片</button>
+  <button class="opt">兩個版本的網址一起拿到、切換來源</button>
+  <button class="opt">點擊時用本機演算法把模糊即時解開</button>
+  <button class="opt">預設只下載模糊版，顯示後再從頭抓圖</button>
+</div>
+
+<div class="quiz" data-question="關於照片的模糊效果，下列哪個說法正確？" data-correct="3" data-explain="模糊防的是被旁人瞄到或快速滑過，不是權限控制；真正的隱私來自私人資料夾與簽名網址。">
+  <button class="opt">模糊等同於權限控制，能防止照片被下載</button>
+  <button class="opt">模糊是把原始檔案銷毀後產生的替代品</button>
+  <button class="opt">模糊版本會存成另一個永久檔案在雲端</button>
+  <button class="opt">模糊是體貼的遮蔽，隱私靠儲存與簽名</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · 串流 AI 助理 · Step 5/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

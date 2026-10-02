@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zod 請求邊界：不信任 client 傳來的欄位</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Zod 請求邊界：不信任 client 傳來的欄位</h1>
+<p class="meta">Step 4/5 · Next.js API Route Handlers</p>
+
+<h2>學習目標</h2>
+<p>能用 Zod schema 在 handler 入口擋掉不合法的輸入，並說明為什麼像服務長度、通話 id 這類欄位要由伺服器推導，而不是讓 client 傳。</p>
+
+<h2>前言：TypeScript 的型別到了 runtime 就消失了</h2>
+<p>你寫了一個 interface <code>CreateAppointment</code>，TypeScript 會在編譯時幫你檢查形狀。但請求是從網路進來的，那段 JSON 在 runtime 完全不受型別約束。手機可以送出少一個欄位的物件、把 uuid 換成一段亂碼、或故意塞一個超大的數字。TypeScript 的型別在這裡幫不上忙，因為它根本不存在於執行中的伺服器記憶體裡。</p>
+<p>換句話說，<code>req.json()</code> 拿到的東西，在驗證之前都只是「未知」。這一節要看的是：如何在 handler 的第一行，把這團未知變成可信任的型別。</p>
+
+<h2>把 schema 當成入口的城門</h2>
+<p>這支 API 把所有請求的形狀集中在 <code>lib/validation.ts</code>，用 Zod 定義。Zod 是一套「執行時」的驗證工具：它產生的 schema 物件同時是驗證器與型別來源。handler 在拿到 body 後，第一件事就是 <code>parse</code>：</p>
+<pre><code>export const POST = route(async (req: Request) =&gt; {
+  const user = await requireAuth();
+  const body = createAppointmentSchema.parse(await req.json());
+  // 到這裡，body 已經是通過驗證的型別
+  // ...
+});</code></pre>
+<p><code>parse</code> 成功時，它回傳一個被轉換、被信任的物件；失敗時，它丟出 <code>ZodError</code>。上一節的 <code>route()</code> 包裝認得這個錯誤型別，會自動把它轉成 400，並附上每個欄位錯在哪裡。所以 handler 本身不需要寫任何「檢查有沒有缺欄位」的 if。</p>
+<p>以建立預約的 schema 為例，它規定三個必填的 uuid 與一個帶時區的 ISO 時間字串：</p>
+<pre><code>export const createAppointmentSchema = z.object({
+  patientId: z.string().uuid(),
+  serviceId: z.string().uuid(),
+  dentistId: z.string().uuid(),
+  /** client 不送 duration，ends_at 由伺服器自己算 */
+  startsAt: z.string().datetime({ offset: true }),
+});</code></pre>
+<p>查詢參數一樣要驗。可預約時段的端點收 <code>serviceId</code>、選填的 <code>dentistId</code>，以及兩個日期：</p>
+<pre><code>export const availabilityQuerySchema = z.object({
+  serviceId: z.string().uuid(),
+  dentistId: z.string().uuid().optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  to:   z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});</code></pre>
+
+<h2>同一個端點、兩種動作：discriminatedUnion</h2>
+<p>預約的 <code>PATCH</code> 可以「取消」也可以「改期」，兩者需要的欄位不同：取消不用帶時間，改期要帶新的時間。用一個寬鬆的物件、把所有欄位都設成 optional，會讓「取消卻帶了時間」這種矛盾狀態通過驗證。</p>
+<p>比較嚴謹的做法是用 <code>z.discriminatedUnion</code>，以一個共同的 <code>action</code> 欄位當判別鍵，只有對應的分支會被接受：</p>
+<pre><code>export const patchAppointmentSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('cancel') }),
+  z.object({
+    action: z.literal('reschedule'),
+    startsAt: z.string().datetime({ offset: true }),
+    dentistId: z.string().uuid().optional(),
+  }),
+]);</code></pre>
+<p>在 TypeScript 這一側，它還會自動窄化型別：當你判斷 <code>body.action === 'reschedule'</code>，編譯器就知道 <code>body.startsAt</code> 一定存在。驗證與型別安全在同一個地方解決。</p>
+
+<h2>schema 也能做正規化</h2>
+<p>Zod 不只驗證，還能轉換。手機的生日欄位用 <code>MM/DD/YYYY</code> 輸入，但資料庫要存 <code>YYYY-MM-DD</code>。這支 schema 先驗證兩種格式都接受，再用 <code>transform</code> 統一轉成後者，最後再確認它是一個真實存在的日期：</p>
+<pre><code>const dateOfBirth = z.string().trim()
+  .refine((v) =&gt; /^\d{2}\s*\/\s*\d{2}\s*\/\s*\d{4}$/.test(v)
+              || /^\d{4}-\d{2}-\d{2}$/.test(v))
+  .transform((v) =&gt; {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+    const [mm, dd, yyyy] = v.split('/').map((s) =&gt; s.trim());
+    return `${yyyy}-${mm}-${dd}`;
+  })
+  .refine((v) =&gt; !Number.isNaN(Date.parse(v)));</code></pre>
+<p>這樣做的效果是：混亂的輸入在邊界就被收斂成單一格式，資料庫與後面所有邏輯都只需要處理乾淨的值。</p>
+
+<h2>能自己算的，就不要讓 client 送</h2>
+<p>驗證只保證「送來的東西符合格式」，不保證「送來的東西是對的」。一個通過 uuid 驗證的 patientId，仍然可能是別人的；一個合法的時間字串，仍然可能不是可預約的時段。所以除了驗格式，還要刻意區分：哪些欄位 client 有資格決定，哪些必須由伺服器自己算。</p>
+<table>
+<thead><tr><th>欄位</th><th>誰決定</th><th>如果交給 client 會怎樣</th></tr></thead>
+<tbody>
+<tr><td>startsAt（開始時間）</td><td>client 送，但仍要通過可預約檢查</td><td>送到不合法的時段（由下一節的寫入守衛擋下）</td></tr>
+<tr><td>endsAt（結束時間）</td><td>伺服器，用服務長度算</td><td>client 把 30 分鐘的療程改成 8 小時</td></tr>
+<tr><td>streamCallId（視訊通話 id）</td><td>伺服器，由預約 id 推導</td><td>client 傳別人的通話 id，混進他人的視訊</td></tr>
+<tr><td>canCancel / canJoin</td><td>伺服器，依當下時間判斷</td><td>規則散在手機端，改一條要重發 app</td></tr>
+<tr><td>durationMinutes</td><td>伺服器，從資料庫的服務讀</td><td>client 自己宣稱療程長度，繞過排程引擎</td></tr>
+</tbody>
+</table>
+<p>實際的程式碼就是這樣。client 只送 <code>startsAt</code>，伺服器從資料庫讀出這個服務的長度，自己乘出結束時間：</p>
+<pre><code>const startsAt = new Date(body.startsAt);
+const endsAt = new Date(
+  startsAt.getTime() + service.durationMinutes * 60_000
+);</code></pre>
+<p>視訊通話 id 也是。它不是由 client 指定，而是在預約寫入成功、拿到資料庫產生的 id 之後，才由伺服器推導出來：</p>
+<pre><code>if (service.isTeleconsult) {
+  await db.update(appointments)
+    .set({ streamCallId: `appointment-${created.id}` })
+    .where(eq(appointments.id, created.id));
+}</code></pre>
+<p>這樣做同時解決了兩種問題。第一是正確性：療程多長、通話屬於哪一筆預約，這些事實的來源是資料庫，不是手機。第二是安全：如果通話 id 可以由 client 決定，那它就能指定別人的通話室，直接混進去。刻意讓它無法指定，這個攻擊面就不存在。</p>
+
+<h2>回應的形狀也在伺服器決定</h2>
+<p>同樣的原則往回應方向延伸。手機的預約卡片需要顯示「能不能取消」「能不能加入通話」，但這兩個問題的答案隨時間改變，規則也屬於商業邏輯。這支 API 不讓手機自己判斷，而是在序列化時就先算好：</p>
+<pre><code>return {
+  id: a.id,
+  startsAt: a.startsAt.toISOString(),
+  canCancel: a.status === 'booked' && canCancel(a.startsAt, new Date()),
+  canJoin: a.status === 'booked'
+    && Boolean(row.service?.isTeleconsult)
+    && Boolean(a.streamCallId)
+    && canJoinCall(a.startsAt, new Date()),
+  // 時間標籤也先格式化成診所時區
+  dateLabel: formatClinicDate(a.startsAt),
+  timeLabel: formatClinicTime(a.startsAt),
+  // ...
+};</code></pre>
+<p>這樣一來，手機只是「把伺服器給的結果畫出來」，它不需要知道自己位於哪個時區，也不需要知道取消的分界是幾小時。規則要調整時，改伺服器就好，不用等 app 重新上架。這個原則其實是整個專案的非協商條款：商業邏輯住在 web，mobile 只渲染 API 回傳的東西。</p>
+
+<h2>小結</h2>
+<blockquote>
+TypeScript 型別在 runtime 不存在，所以請求進到 handler 時必須當成未知，用 Zod 在入口 <code>parse</code>。<code>parse</code> 失敗丟出 <code>ZodError</code>，由 <code>route()</code> 轉成 400。<code>discriminatedUnion</code> 讓同一個端點的取消與改期各自帶對的欄位，schema 也能用 <code>transform</code> 正規化輸入。驗證之外還要區分欄位主權：endsAt、streamCallId、canCancel 這些能由伺服器算的，一律不要讓 client 送，既保正確性也關掉攻擊面。
+</blockquote>
+<p>到這裡，四個零件都齊了：端點、錯誤信封、守衛、型別邊界。下一節把它們全部放進同一支 <code>POST /api/appointments</code>，照著順序走一遍，看看一筆預約從手機送出到寫進資料庫、再到被拒絕的 409，每一層各自負責什麼。</p>
+
+<div class="lesson-nav">
+  <div><a href="./auth-and-ownership-guards.html">← 上一步：requireAuth 與守衛</a></div>
+  <div><a href="./booking-endpoint-walkthrough.html">下一步：走一遍 POST /api/appointments →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼請求進來時不能直接信任 TypeScript 型別？" data-correct="3" data-explain="型別只存在於編譯階段，runtime 的 JSON 不受約束，必須在執行時驗證。">
+  <button class="opt">因為 Next.js 會把型別資訊加密處理</button>
+  <button class="opt">因為伺服器無法讀取 TypeScript 檔案</button>
+  <button class="opt">因為手機端送出的型別永遠正確</button>
+  <button class="opt">因為型別在 runtime 已經不存在</button>
+</div>
+
+<div class="quiz" data-question="Zod 的 parse 失敗時會發生什麼事？" data-correct="1" data-explain="它丟出 ZodError，由 route() 包裝轉成 400，並附上每個欄位的問題。">
+  <button class="opt">回傳 null，讓 handler 自己判斷</button>
+  <button class="opt">丟出 ZodError，由包裝轉成 400</button>
+  <button class="opt">自動把錯誤的欄位補成預設值</button>
+  <button class="opt">直接中斷伺服器的整個行程</button>
+</div>
+
+<div class="quiz" data-question="PATCH 預約為什麼用 discriminatedUnion 而不是寬鬆物件？" data-correct="2" data-explain="以 action 當判別鍵，取消與改期各自只接受自己的欄位，避免矛盾組合通過驗證。">
+  <button class="opt">因為這樣可以讓驗證的執行速度變快</button>
+  <button class="opt">因為 Zod 不支援 optional 的欄位</button>
+  <button class="opt">因為兩種動作需要的欄位並不相同</button>
+  <button class="opt">因為資料庫只接受單一形狀的輸入</button>
+</div>
+
+<div class="quiz" data-question="endsAt 為什麼由伺服器算，而不是讓 client 送？" data-correct="0" data-explain="療程長度是資料庫的事實，交給 client 就可能被改成任意長度，繞過排程。">
+  <button class="opt">避免 client 任意更動療程的長度</button>
+  <button class="opt">因為 ISO 時間字串太長不好傳送</button>
+  <button class="opt">因為手機的時區設定通常不正確</button>
+  <button class="opt">因為資料庫不允許寫入時間欄位</button>
+</div>
+
+<div class="quiz" data-question="streamCallId 由伺服器從預約 id 推導，主要防的是什麼？" data-correct="3" data-explain="若通話 id 能由 client 指定，它就能指向別人的通話室；由伺服器產生就沒有這個攻擊面。">
+  <button class="opt">手機因為網路不穩而重複送出請求</button>
+  <button class="opt">通話 id 太長導致資料庫寫不進去</button>
+  <button class="opt">不同預約之間的通話品質互相干擾</button>
+  <button class="opt">client 指定別人的通話 id 混入</button>
+</div>
+
+<div class="quiz" data-question="canCancel 在伺服器端先算好，對手機端有什麼好處？" data-correct="1" data-explain="手機只負責渲染伺服器給的結果，取消規則調整時改伺服器即可，不必等 app 重新上架。">
+  <button class="opt">可以讓手機減少一次資料庫連線</button>
+  <button class="opt">規則改變時不必重新上架 app</button>
+  <button class="opt">可以省略 Clerk 的身分驗證步驟</button>
+  <button class="opt">讓預約卡片的載入速度變快</button>
+</div>
+
+<div class="footer">
+  <p>mobile-app-course · Next.js API Route Handlers · Step 4/5</p>
+  <p>讀到這裡如果還有卡住的地方，直接把問題丟給你的 AI 助教，它可以針對這個節點再往下展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>
