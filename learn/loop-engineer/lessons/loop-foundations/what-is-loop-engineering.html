@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>什麼是 Loop Engineering？</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>什麼是 Loop Engineering？</h1>
+<p class="meta">Step 1/4 · Loop Engineering 基礎與四層堆疊</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你應該能用「受控執行器」的角度理解 agent，說明 Loop Engineering 到底在設計什麼，並辨認模型周圍六個控制層各自解決的問題。</p>
+
+<h2>前言：為什麼一個 prompt 不夠用？</h2>
+
+<p>想像你請模型幫忙修一個 bug。你貼上錯誤訊息，模型回了一段看起來很合理的修改建議；你把它貼回程式碼，結果程式仍然壞掉。接著，你得重新查看錯誤訊息、再問一次、再改一次。</p>
+
+<p>這時真正發生的工作不是「取得一個答案」。它其實是一圈又一圈地反覆：回答、動手、看結果，再決定下一步。</p>
+
+<p>許多生產環境的任務本來就無法靠一次回答完成，例如除錯 repo、準備 pull request、驗證設定，或從多個系統蒐集證據。這些任務都需要反覆採取行動，等真實結果回來後，才能知道下一步該往哪裡走。</p>
+
+<p>如果沒有專門的設計來管理這種循環，過程很快就會變成一連串臨時起意的嘗試：不知道什麼時候該停、不知道失敗發生在哪裡，也不知道這一圈是否真的比上一圈更接近目標。Loop Engineering 要處理的，正是這個問題。</p>
+
+<h2>核心圖像：agent 是受控執行器</h2>
+
+<p>提到 agent，很多人會先想到一個更聰明的模型。但更精確的理解是：agent 是一套<strong>執行控制（execution control）</strong>，也就是一個<strong>受控執行器（controlled executor）</strong>。</p>
+
+<p>它把「思考」與「動手」分給不同角色負責：</p>
+
+<ul>
+<li><strong>模型</strong>提供推理與語言，決定接下來想做什麼。</li>
+<li><strong>工具</strong>提供實際行動，讓系統能讀檔、呼叫 API 或執行指令。</li>
+<li><strong>記憶與 context</strong>保存連續性，讓系統知道前面發生過什麼，不會反覆做同一件事或弄丟進度。</li>
+<li><strong>驗證</strong>讓系統保持接地，透過真實輸出、測試與規則確認事情真的完成，而不是只接受模型口頭宣稱「完成了」。</li>
+</ul>
+
+<p>把這四件事拆開來看，agent 就不再像魔法。它比較像一台由模型負責思考、由外圍機制負責約束的機器。</p>
+
+<h2>核心循環：plan → act → observe → improve</h2>
+
+<p>這台機器反覆運作的節奏，就是 Loop Engineering 的核心。它從目標出發，先規劃下一步（plan），再實際執行（act），接著觀察真實結果（observe），最後根據結果調整下一步（improve）。這個循環會持續進行，直到任務完成，或碰到某個停止條件。</p>
+
+<p>有一點很容易被忽略：<strong>觀察和行動一樣重要。</strong></p>
+
+<p>工具回傳的結果可能代表成功，也可能揭露資訊不足、回傳錯誤，或觸發某條護欄。Agent 和固定自動化流程的差別，就在於它會把這些觀察結果帶回下一圈的決策，而不是不管實際情況，悶著頭走完事先排好的步驟。</p>
+
+<figure class="lesson-figure"><img src="./what-is-loop-engineering-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>圍繞模型的六個控制層</h2>
+
+<p>真正讓 loop 可靠的，通常不是模型單獨的能力。關鍵在包在模型外圍的一整組控制機制。可以把它想成模型周遭的控制堆疊，共有六層：</p>
+
+<table>
+<thead>
+<tr><th>控制層</th><th>它解決什麼問題</th></tr>
+</thead>
+<tbody>
+<tr><td>Prompt 與 policy</td><td>定義角色、限制與成功標準，說明這一圈的目標應該長什麼樣子。</td></tr>
+<tr><td>Context</td><td>提供 agent 完成當前工作所需的知識，例如專案指示與 codebase 地圖。</td></tr>
+<tr><td>Tools</td><td>讓 agent 能執行真正的工作，例如使用 MCP server、API、shell 指令或編輯器整合。</td></tr>
+<tr><td>Memory 與 state</td><td>記錄已經發生的事情，避免重複同一個動作或遺失進度。</td></tr>
+<tr><td>Validation</td><td>透過測試、商業規則與 LSP 訊號檢查輸出，避免模型只靠自己宣稱成功。</td></tr>
+<tr><td>Control</td><td>設定預算、核准機制、停止規則與升級路徑，決定什麼時候必須踩煞車。</td></tr>
+</tbody>
+</table>
+
+<p>這六層共同回答了 Loop Engineering 中最實際的問題：模型能看到什麼？可以呼叫哪些工具？狀態要怎麼追蹤？哪些護欄能阻止不安全或浪費的動作？</p>
+
+<p>因此，agent 的品質很少只取決於模型本身，而是取決於這些層是否被一起設計好。每一層都在縮小模糊地帶，替 loop 鋪出一條更安全、更容易追蹤的路。</p>
+
+<figure class="lesson-figure"><img src="./what-is-loop-engineering-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>三個可靠性閘門</h2>
+
+<p>六個控制層比較像系統的固定結構；而讓 loop 不至於變成「一連串失控的工具呼叫」的，則是三個會在執行過程中發揮作用的可靠性閘門：</p>
+
+<ol>
+<li><strong>行動前</strong>：確認選中的工具能安全使用，包括權限、schema 與代價。</li>
+<li><strong>行動後</strong>：把實際結果拿回來與目標比對，而不是直接假設動作成功。</li>
+<li><strong>信心低或影響大時</strong>：要求人類核准，確認後才能繼續往下走。</li>
+</ol>
+
+<p>這三道閘門，正是 demo agent 和工程系統之間的差別。可靠的 loop 必須<strong>可觀察、有界、可復原</strong>：我們看得懂它剛才做了什麼，也能在出現問題時把它導回正軌。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+Loop Engineering 設計的是讓系統「像 agent」的重複決策循環：plan → act → observe → improve。Agent 不是魔法，而是受控執行器。模型負責推理，工具負責行動，記憶維持連續，驗證讓結果回到真實世界。真正讓它可靠的，是圍繞模型的六個控制層，以及行動前、行動後、低信心或高影響時的三道可靠性閘門。
+</blockquote>
+
+<p>要設計這個循環，下一步就是知道每個部件該在哪一層負責什麼。接下來會把這台執行器拆成 model、harness、tools、execution environment 四個層次，逐層追問：它被允許做什麼、必須回傳什麼，以及失敗時該怎麼處理。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./four-layer-stack.html">下一步：Model、Harness、Tools 與 Execution Environment →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Loop engineering 主要設計的是什麼？" data-correct="1" data-explain="它設計的是讓系統像 agent 的那個重複決策循環，以及圍繞模型的各種控制。">
+  <button class="opt">一顆推理能力更強的語言模型</button>
+  <button class="opt">一個可重複執行、受控制的決策循環</button>
+  <button class="opt">一套能取代工程師的完整系統</button>
+  <button class="opt">一份更精簡更省 token 的提示詞</button>
+</div>
+<div class="quiz" data-question="課程用哪個說法形容 agent 的本質？" data-correct="2" data-explain="Agent 不是魔法，而是一個受控執行器：模型推理、外圍機制負責約束。">
+  <button class="opt">一個會自己成長的智慧體</button>
+  <button class="opt">一顆被微調過的專用模型</button>
+  <button class="opt">一個受控制的執行器</button>
+  <button class="opt">一個更大型的知識資料庫</button>
+</div>
+<div class="quiz" data-question="核心循環的四個階段是哪一組？" data-correct="0" data-explain="目標、行動、觀察、評估（改進）是這個循環的主幹。">
+  <button class="opt">plan、act、observe、improve</button>
+  <button class="opt">train、test、deploy、monitor</button>
+  <button class="opt">read、write、review、merge</button>
+  <button class="opt">prompt、parse、cache、log</button>
+</div>
+<div class="quiz" data-question="為什麼說「觀察」和「行動」一樣重要？" data-correct="3" data-explain="觀察到的結果會回饋進下一圈決策，讓 agent 能修正而不是盲目走完步驟。">
+  <button class="opt">因為觀察能讓模型跑得更快</button>
+  <button class="opt">因為觀察可以省下工具的成本</button>
+  <button class="opt">因為觀察會取代模型的推理</button>
+  <button class="opt">因為觀察會回饋成下一步的決策</button>
+</div>
+<div class="quiz" data-question="下列哪一項不屬於圍繞模型的六個控制層？" data-correct="1" data-explain="模型的參數訓練屬於模型本身的範疇，不在 loop engineering 的控制層裡。">
+  <button class="opt">Context 與 memory 狀態</button>
+  <button class="opt">模型的參數預訓練</button>
+  <button class="opt">Validation 與 control 規則</button>
+  <button class="opt">Tools 與 prompt 政策</button>
+</div>
+<div class="quiz" data-question="「行動後」那道可靠性閘門在檢查什麼？" data-correct="2" data-explain="它把工具回傳的結果拿來跟目標比對，而不是假設動作成功。">
+  <button class="opt">確認模型這個月還有額度</button>
+  <button class="opt">確認選中的工具可以安全使用</button>
+  <button class="opt">把結果拿回來跟目標比對</button>
+  <button class="opt">把整段對話壓縮成摘要</button>
+</div>
+
+<div class="footer">
+  <p>loop-engineer · Loop Engineering 基礎與四層堆疊 · Step 1/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

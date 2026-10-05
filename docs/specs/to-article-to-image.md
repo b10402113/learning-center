@@ -11,7 +11,7 @@
 在 learning-center 引入兩支新 skill，並把 `article-agent` 的 pipeline 攤進來改成支援 HTML：
 
 1. 複製 `article-agent/src/` 與 `article-agent/prompts/` 到 repo 根 `src/`、`prompts/`，原 Markdown 流程保留，另加 HTML 流程。
-2. `/to-article <subject> [tier<N> | node-slug ...] [-max-subagents N]`：對範圍內每個 step，去掉 quiz/nav/footer 後把 HTML 正文交給文字 LLM 改寫成 HTML（照範本）；改寫完成後由 agent 讀成稿決定配圖位置、插入 `<!--image:N-->` 標記；程式驗證標記後寫回正式 HTML（佔位框形式）並記錄配圖計畫。
+2. `/to-article <subject> [tier<N> | node-slug ...] [-max-subagents N] [-max-parallel N]`：對範圍內每個節點，去掉 quiz/nav/footer 後把每個 step 的 HTML 正文交給文字 LLM 改寫成 HTML（照範本），一批內以有限並行送出（每步恰好一次呼叫）；改寫完成後由 agent 逐 step 讀成稿決定配圖位置、插入 `<!--image:N-->` 標記；程式驗證標記後寫回正式 HTML（佔位框形式）並記錄配圖計畫。
 3. `/to-image <subject> [tier<N> | node-slug ...] [-max-subagents N] [-skip-ask]`：讀配圖計畫逐張生圖，插入 `<figure>`，完成文章。
 4. step MDX frontmatter 新增選填 `illustration: none | planned | done` 記錄進度；node `status` 梯子不動。
 
@@ -31,14 +31,14 @@
 比照 `batch-nodes` 的輸入風格：
 
 ```
-/to-article <subject> [tier<N> | node-slug ...] [-max-subagents N]
+/to-article <subject> [tier<N> | node-slug ...] [-max-subagents N] [-max-parallel N]
 /to-image   <subject> [tier<N> | node-slug ...] [-max-subagents N] [-skip-ask]
 ```
 
 - 不給 scope → 全 roadmap 節點；`tier<N>`（如 `tier2`）→ 該 tier 所有節點；給 slug → 指定節點。
 - 解析出的節點內**所有 step** 都處理。
-- 分批：每批 `max-subagents`（預設 3）節點，批次內平行（`task` subagent，`subagent_type: teach-agent`），批次間循序；結束後回報完成 / 失敗 / 跳過。
-- 跳過並回報：`/to-article` 跳過沒有 HTML 的 step；`/to-image` 跳過沒有 `plan.json` 的 step。
+- 分批：`/to-article` 每批 `max-subagents`（預設 3）**節點**，批次內平行（`task` subagent，`subagent_type: article-agent`），批次間循序；每個節點內以 `max-parallel`（預設 2）為上限並行改寫各 step。`/to-image` 仍以 step 為批次單位。結束後回報完成 / 失敗 / 跳過。
+- 跳過並回報：`/to-article` 跳過沒有 HTML 的 step（`--skip-existing` 時另跳過已 `planned`/`done` 且有 `plan.json` 的 step）；`/to-image` 跳過沒有 `plan.json` 的 step。
 - 兩支 skill 皆 `disable-model-invocation: true`，置於 `.opencode/skills/to-article/SKILL.md` 與 `.opencode/skills/to-image/SKILL.md`，內含比照 batch-nodes 的 embedded subagent prompt。
 
 Prereqs：`learn/<subject>/MEMORY.md`、`learn/<subject>/ROADMAP.md` 存在；`src/` 已 npm install；`.env` 有金鑰。
@@ -103,13 +103,13 @@ learn/<subject>/
 - 複製 `article-agent/src/`（`pipeline.mjs`、`cli.mjs`、`pipeline.test.mjs`、`test.ts`）與 `article-agent/prompts/`（`publisher.txt`、`rewrite.txt`、`image.txt`）到 repo 根 `src/`、`prompts/`。
 - 新增根 `package.json`（依賴 `openai`）、`.env`（複製自 article-agent 並填金鑰）；於根目錄 `npm install`。原 Markdown 流程與 `cli.mjs` 保持可用。
 - 新增 `src/html.mjs`（HTML pipeline：清理、改寫呼叫、驗證、組裝、生圖插入）與 `prompts/html-rewrite.txt`；`prompts/image.txt` 沿用。
-- 新增薄 CLI `src/html-cli.mjs` 供兩支 skill 呼叫（每次處理一個 step，模式 `article`（改寫）、`figures`（驗證標記並組裝）、`image`（生圖），並接受 subject/node/step 路徑與 scope 參數）。
+- 新增薄 CLI `src/html-cli.mjs` 供兩支 skill 呼叫（模式 `article`（單步改寫）、`article-batch`（一節點多步並行改寫，`--max-parallel`／`--skip-existing`）、`figures`（驗證標記並組裝）、`image`（生圖），並接受 subject/node/step 路徑與 scope 參數）。
 - 根 `.gitignore` 補：`node_modules/`、`.env`、`.env.*`、`!*.env.example`、`learn/*/output/`。
 
 ## Testing Decisions
 
-- 沿用 `article-agent/src/pipeline.test.mjs` 的 mock API 測試思路，為 `src/html.mjs` 新增單元測試：清理（去 quiz/nav/footer）、標記解析與驗證、code/連結保留驗證、組裝（接回 quiz/nav/footer/script、`<figure><img>` 路徑與舊版佔位框遷移）、resume（既有 original/plan/assets 行為）。
-- 以 mock 文字 / 圖片 API 驗證「每次 /to-article 只呼叫一次文字模型」「改寫階段不寫 lesson / plan / 標記」「agent 標記與計畫不符即失敗」「生圖後不再呼叫文字模型」「改寫失敗不留 plan.json」。
+- 沿用 `article-agent/src/pipeline.test.mjs` 的 mock API 測試思路，為 `src/html.mjs` 新增單元測試：清理（去 quiz/nav/footer）、標記解析與驗證、code/連結保留驗證、組裝（接回 quiz/nav/footer/script、`<figure><img>` 路徑與舊版佔位框遷移）、resume（既有 original/plan/assets 行為）、節點批次（DAG 解析、`--skip-existing` 跳過、併發上限、失敗隔離）。
+- 以 mock 文字 / 圖片 API 驗證三條不變量：「每個被改寫的 step 恰好一次文字呼叫」「`skipped`／未及呼叫就失敗的 step 零次」「批次至多同時 `max-parallel` 個呼叫，且某 step 失敗不影響其他 step」；另驗證「改寫階段不寫 lesson / plan / 標記」「agent 標記與計畫不符即失敗」「生圖後不再呼叫文字模型」「改寫失敗不留 plan.json」。
 - 端到端手動驗證：對一個真實 node 跑 `/to-article`，確認審稿 HTML 正常以 shared.css 呈現、`<img>` 路徑已指向未來圖片；再跑 `/to-image`，確認圖出現在 `<step>-assets/` 且頁面正常、quiz 仍在。
 - `node scripts/verify.mjs --subject <subject>` 需通過（`illustration` 欄位合法）。
 

@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>兩種抓資料的方式：useEffect 還是 RSC？</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>抓資料要放哪裡？比較 client 的 <code>useEffect</code> 與 RSC</h1>
+<p class="meta">Step 1/4 · 在 RSC 裡抓資料：何時 server、何時 client</p>
+
+<h2>先看全貌：資料是在瀏覽器抓，還是在 server 先準備好？</h2>
+
+<p>你請 AI 生一個 Next.js 首頁，打開瀏覽器後，畫面先是一片空白，或是中間出現一個轉圈圈的 spinner；過了一兩秒，內容才一筆一筆跳出來。看起來像是「有在跑」，但如果這時按右鍵檢視網頁原始碼，會發現 HTML 裡幾乎什麼都沒有。把瀏覽器的 JavaScript 關掉再看一次，頁面甚至會直接失去作用。</p>
+
+<p>這種情況通常來自同一個熟悉模板：元件開頭加上 <code>"use client"</code>，用 <code>useState</code> 管理資料，再用 <code>useEffect</code> 在畫面掛載後執行 <code>fetch</code>。它之所以常見，是因為我們從純 React 轉過來時，往往就是這樣寫。</p>
+
+<p>但 Next.js 預設提供了另一條路。每個元件原本就是 React Server Component（RSC，也就是在伺服器上執行的元件），你可以像寫一般的 async 函式一樣，直接在 server 把資料抓好，再交出一段已經有內容的 HTML。</p>
+
+<p>這一節要回答的不是「哪種寫法比較潮」，而是：為什麼資料常常應該先在 server 準備好？答案牽涉到好幾件事：首屏顯示速度、SEO、request dedup、金鑰安全，以及 network waterfall。先把這些關係看清楚，後面才知道什麼時候不該反射性地加上 <code>"use client"</code>。</p>
+
+<h2>AI 常犯版：先讓 client render，再用 useEffect 補資料</h2>
+
+<p>先攤開最熟悉的寫法。這是一個 client component：元件掛載後才抓資料，並用 loading 與 error 兩個狀態控制畫面。</p>
+
+<pre data-source="sources/next-js/20261004/EBOOK.pdf#Data Fetching"><code>import React, { useState, useEffect } from 'react';
+
+function App() {
+  const [data, setData] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const response = await fetch('https://api.example.com/data');
+        const jsonData = await response.json();
+        setData(jsonData);
+      } catch (error) {
+        setError(error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
+
+  if (isLoading) {
+    return &lt;div&gt;Loading...&lt;/div&gt;;
+  }
+
+  if (error) {
+    return &lt;div&gt;Error: {error.message}&lt;/div&gt;;
+  }
+
+  return (
+    &lt;div&gt;
+      &lt;h1&gt;Data from API:&lt;/h1&gt;
+      &lt;pre&gt;{JSON.stringify(data, null, 2)}&lt;/pre&gt;
+    &lt;/div&gt;
+  );
+}
+
+export default App;</code></pre>
+
+<p>這段程式碼的順序是：</p>
+
+<ol>
+<li>元件先渲染一次，但此時還沒有資料。</li>
+<li>瀏覽器先把這個空殼或 loading 畫面顯示出來。</li>
+<li><code>useEffect</code> 在元件掛載後執行，送出網路請求。</li>
+<li>等回應回來後，<code>setData</code> 觸發重新渲染。</li>
+<li>畫面最後才出現真正的內容。</li>
+</ol>
+
+<p>換句話說，資料像是搬家工人：頁面先把空房子交到使用者眼前，資料才從瀏覽器裡慢慢搬進來。這不一定完全不能用，但它會讓使用者第一眼看到空白或 spinner，也會把資料抓取責任全部推到 client。</p>
+
+<figure class="lesson-figure"><img src="./rsc-vs-client-fetching-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>正解版：讓 RSC 在 server 先把資料準備好</h2>
+
+<p>同樣的事情換成 RSC，可以直接把元件寫成 async 函式。不需要 hook，也不需要自己維護 loading 狀態。</p>
+
+<pre data-source="sources/next-js/20261004/EBOOK.pdf#Data Fetching"><code>import React from 'react';
+
+async function App() {
+  const response = await fetch('https://api.example.com/data');
+  const jsonData = await response.json();
+
+  return (
+    &lt;div&gt;
+      &lt;h1&gt;Data from API:&lt;/h1&gt;
+      &lt;pre&gt;{JSON.stringify(jsonData, null, 2)}&lt;/pre&gt;
+    &lt;/div&gt;
+  );
+}
+
+export default App;</code></pre>
+
+<p>這裡的關鍵差異，不只是程式碼少了幾行，而是資料抓取的位置不同。RSC 會先在伺服器上取得資料，等元件準備好之後才渲染成 HTML。HTML 送到瀏覽器時，內容已經在裡面了。</p>
+
+<p>因此，使用者看到的第一版畫面就有資料，搜尋引擎爬蟲收到的也會是完整內容。原本由 client 管理的 <code>useEffect</code>、<code>useState</code>、loading 與 error 狀態，在這個簡單情境中都不再需要。</p>
+
+<h2>RSC 的邊界：不只可以呼叫 API，也能查資料庫</h2>
+
+<p>RSC 跑在伺服器上，所以它能接觸的資料來源不只有 HTTP API。你也可以直接呼叫 ORM（例如 Prisma）或 MongoDB／Mongoose，省掉「先開一支 API，再由自己的 server component fetch 那支 API」的中間層。</p>
+
+<pre data-source="sources/next-js/20261004/EBOOK.pdf#Data Fetching"><code>import React from 'react';
+import prisma from './prisma';
+
+async function App() {
+  const users = await prisma.user.findMany();
+
+  return (
+    &lt;div&gt;
+      &lt;h1&gt;Data from Prisma:&lt;/h1&gt;
+      &lt;pre&gt;{JSON.stringify(users, null, 2)}&lt;/pre&gt;
+    &lt;/div&gt;
+  );
+}
+
+export default App;</code></pre>
+
+<p>這件事在 client component 裡做不到，因為瀏覽器不應該直接連到資料庫，也不該拿到資料庫連線字串。把資料抓取邏輯和資料源留在 server，就像把保險箱放在辦公室內，而不是搬到街上讓每個路人都能碰到：程式碼更短，敏感資訊也不會跟著送進瀏覽器。</p>
+
+<figure class="lesson-figure"><img src="./rsc-vs-client-fetching-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把 AI 常犯版與正解版放在一起比較</h2>
+
+<p>兩種寫法的差異，可以從幾個面向一起看。左邊是 client 的 <code>useEffect</code> 抓法，右邊是 RSC 在 server 抓資料。</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>client 的 useEffect</th><th>RSC 在 server 抓</th></tr>
+</thead>
+<tbody>
+<tr><td>首屏（FCP）</td><td>先看到空頁或 spinner，資料後補</td><td>HTML 送出時內容已就緒，首屏就有東西</td></tr>
+<tr><td>SEO</td><td>爬蟲可能只看到空殼</td><td>爬蟲直接讀到完整 HTML</td></tr>
+<tr><td>request dedup</td><td>同一份資料被多處用到時容易重複請求</td><td>Next.js 同一次渲染內自動合併相同請求</td></tr>
+<tr><td>金鑰安全</td><td>API 金鑰打包進瀏覽器，可能外洩</td><td>金鑰只留在 server，不會進到 client</td></tr>
+<tr><td>network waterfall</td><td>請求依賴畫面掛載，容易串成一條鏈</td><td>server 端可平行化多個請求</td></tr>
+<tr><td>程式碼複雜度</td><td>要自己管 loading／error／state</td><td>async/await 直接寫，少了三種狀態</td></tr>
+</tbody>
+</table>
+
+<h2>為什麼 server 抓資料通常更有利？</h2>
+
+<h3>首屏：不要先把空殼交給使用者</h3>
+
+<p>FCP（First Contentful Paint，首次內容繪製）指的是畫面第一次出現內容的時間。server 抓資料時，頁面在被渲染的時候，資料就已經包在裡面，因此使用者更快看到真正的內容。</p>
+
+<p>client 抓資料則要等瀏覽器載入 JavaScript、執行元件、送出請求，再等回應回來。這一連串工作完成之前，使用者通常只能看到空畫面或 spinner。</p>
+
+<h3>SEO：爬蟲收到的是完整頁面，還是空殼？</h3>
+
+<p>搜尋引擎爬蟲比較容易索引伺服器渲染好的內容，因為它收到的就是已經成形的 HTML。client 抓資料時，爬蟲一開始可能只看到空殼，必須等抓取與渲染完成後才看得到內容，這對排名不利。</p>
+
+<h3>request dedup：同一份資料不要重複搬運</h3>
+
+<p>request dedup，也就是請求去重，指的是把同一時間、對同一份資料發出的重複請求合併起來。Next.js 在 server 抓資料時，會自動合併同一時間對同一份資料的重複請求，只送出一次。</p>
+
+<p>少了這層處理，如果不同元件各自需要同一份資料，就可能各送各的請求，像是同一箱貨被不同卡車重複運送。</p>
+
+<h3>金鑰安全：放在 server 才不會變成公開資訊</h3>
+
+<p>把 API 呼叫留在 server，API 金鑰這類敏感資訊就能留在伺服器，不會出現在瀏覽器裡。client 端的程式碼對使用者是透明的，因此任何寫進 client 程式碼的金鑰，都等於公開。</p>
+
+<h3>network waterfall：不要讓請求排成一條長隊伍</h3>
+
+<p>network waterfall（網路瀑布）描述的是請求一個接一個排隊的情況。client 抓資料時，常常要先等畫面掛載，接著送出第一個請求；等第一個回應回來，才知道下一步要抓什麼，整體就容易串成一條鏈。</p>
+
+<p>server 端則能把彼此不相關的請求平行送出，縮短整條等待鏈。這也是後續內容會再展開的重點。</p>
+
+<figure class="lesson-figure"><img src="./rsc-vs-client-fetching-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>這個觀念要記在哪裡？</h2>
+
+<blockquote>
+傳統 React 的 <code>useEffect</code> 抓資料，會讓首屏先空著、SEO 吃虧、請求容易重複、金鑰可能外洩，還可能排成一條 network waterfall。RSC 讓你在伺服器上直接 async 抓資料（甚至直接查資料庫），HTML 送出時內容已就緒，同時解掉 FCP、SEO、dedup、安全與瀑布這幾個問題。這也是為什麼在 Next.js 裡，預設應該讓 server component 負責資料，而不是反射性地加 <code>"use client"</code> 再 <code>useEffect</code>。
+</blockquote>
+
+<p>這裡的核心連結是：資料抓取的位置，會連動影響首屏、SEO、安全與請求效率。client component 並不是永遠不能使用；但如果元件只是為了抓資料而加上 <code>"use client"</code>，就應該先問自己：這份資料是否可以在 RSC 裡先準備好？</p>
+
+<p>知道「為什麼」之後，下一步是把這件事寫進真實專案。下一節會打開首頁，看一個 async server component 怎麼接 <code>searchParams</code>、呼叫 server action、把資料交給子元件，並在找不到資料時優雅地轉到 404。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./fetching-in-rsc.html">下一步：在 server component 裡抓資料：async、await 與直接查 DB →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="client component 用 useEffect 抓資料時，使用者第一眼通常看到什麼？" data-correct="1" data-explain="元件先渲染空殼，資料要等 effect 執行、請求回來才補上。">
+  <button class="opt">已經填好資料的完整頁面</button>
+  <button class="opt">空白畫面或載入中的提示</button>
+  <button class="opt">搜尋引擎的快取版本</button>
+  <button class="opt">上一個頁面的殘留內容</button>
+</div>
+<div class="quiz" data-question="為什麼 server 抓資料對 SEO 比較有利？" data-correct="2" data-explain="爬蟲收到的是已經含資料的 HTML，不必等 client 端抓取與渲染。">
+  <button class="opt">因為它會自動幫頁面加上 meta 標籤</button>
+  <button class="opt">因為它讓網址變得比較短又好記</button>
+  <button class="opt">因為爬蟲直接讀到完整的 HTML 內容</button>
+  <button class="opt">因為它會把頁面主動推送到搜尋引擎</button>
+</div>
+<div class="quiz" data-question="自動 request dedup 主要在解決什麼問題？" data-correct="3" data-explain="同一時間對同一份資料的重複請求會被合併，只送一次。">
+  <button class="opt">把舊的快取內容自動清掉</button>
+  <button class="opt">把 API 金鑰加密後再送出</button>
+  <button class="opt">把 client 狀態同步到伺服器</button>
+  <button class="opt">避免相同資料被重複請求多次</button>
+</div>
+<div class="quiz" data-question="把 API 呼叫留在 server，最主要的資安好處是什麼？" data-correct="0" data-explain="client 程式碼對使用者透明，金鑰放在 server 才不會被打包進瀏覽器外洩。">
+  <button class="opt">API 金鑰不會出現在瀏覽器裡</button>
+  <button class="opt">請求會自動通過所有防火牆</button>
+  <button class="opt">使用者完全不需要登入授權</button>
+  <button class="opt">資料庫會自動備份所有紀錄</button>
+</div>
+<div class="quiz" data-question="什麼是 network waterfall？" data-correct="2" data-explain="請求一個接一個排隊等待，形成一條拖長整體時間的鏈。">
+  <button class="opt">把多個請求同時平行送出去</button>
+  <button class="opt">把請求全部塞進同一個封包</button>
+  <button class="opt">請求一個接一個排隊等待回應</button>
+  <button class="opt">把請求結果永久快取在 CDN</button>
+</div>
+<div class="quiz" data-question="在 RSC 裡直接呼叫 ORM 查資料，為什麼 client component 做不到？" data-correct="1" data-explain="瀏覽器連不到資料庫，也不該持有資料庫連線資訊。">
+  <button class="opt">因為 ORM 的語法在瀏覽器無法解析</button>
+  <button class="opt">因為瀏覽器連不到資料庫也不該有連線</button>
+  <button class="opt">因為 async 函式不能寫在 client 元件裡</button>
+  <button class="opt">因為資料庫一次只允許一個連線</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 在 RSC 裡抓資料：何時 server、何時 client · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

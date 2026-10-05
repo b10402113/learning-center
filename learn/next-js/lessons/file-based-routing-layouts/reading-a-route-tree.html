@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>由 URL 反推檔案樹：抓出 AI 路由結構的錯</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>由 URL 反推檔案樹：抓出 AI 路由結構的錯</h1>
+<p class="meta">Step 5/5 · 檔案式路由、layout 與 route groups</p>
+
+<h2>學習目標</h2>
+<p>你將能在「URL」與「<code>app/</code> 檔案樹」之間雙向推理，找出會造成錯誤網址、404、路徑衝突或重複 layout 的結構問題。</p>
+
+<h2>前言：驗收 AI 專案，先確認網址和檔案樹對不對</h2>
+
+<p>前面四步，你已經看過資料夾如何對應網址、動態段如何表示不固定的值、layout 如何一層層套上去，以及 route group 如何分區卻不改變網址。現在把這些規則放在一起，處理一個很實際的場景：驗收 AI 產出的 Next.js 專案。</p>
+
+<p>AI 很會補出程式邏輯，卻常在路由結構上踩雷。它可能把括號用錯、漏掉 <code>page.tsx</code>，或把同一條路徑放進兩個 route group。這些問題未必會讓 build 失敗，網站甚至還能正常啟動；但網址可能和需求不同，畫面也可能莫名多出一層外框。</p>
+
+<p>所以真正要做的決定是：看到一個路徑時，這裡該用一般資料夾、動態資料夾，還是 route group？而看到一棵檔案樹時，它實際會產生哪些 URL？接下來用兩個方向互相驗證，讓錯誤像藏在地圖上的岔路一樣，自動浮出來。</p>
+
+<h2>先比較：三種資料夾，各自該負責什麼</h2>
+
+<table>
+<thead>
+<tr><th>寫法</th><th>會不會出現在 URL</th><th>適合用在什麼情況</th><th>判斷方式</th></tr>
+</thead>
+<tbody>
+<tr><td>一般資料夾，例如 <code>questions/</code></td><td>會</td><td>這一段本身就是網址的一部分，例如 <code>/questions</code></td><td>問自己：需求中的 URL 是否真的需要這個名稱？</td></tr>
+<tr><td>動態資料夾，例如 <code>[id]/</code></td><td>會，但內容可變</td><td>每次 URL 都可能不同，例如 <code>/questions/123</code></td><td>問自己：這一段是不是每次都不同的值？</td></tr>
+<tr><td>route group，例如 <code>(auth)/</code></td><td>不會</td><td>想把頁面分區或共用外框，但不想讓區域名稱出現在網址</td><td>問自己：這個名稱只是給檔案結構和 layout 使用嗎？</td></tr>
+</tbody>
+</table>
+
+<p>這三種寫法外表只差一對括號或中括號，結果卻完全不同。一般資料夾會把名稱帶進 URL；中括號代表「這裡是一個可變值」；圓括號則像檔案樹裡的透明隔板，只影響分組與 layout，不會留下網址痕跡。</p>
+
+<figure class="lesson-figure"><img src="./reading-a-route-tree-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>從 URL 反推檔案樹：先決定每一段要不要留下</h2>
+
+<p>拿到需求或 API 清單裡的網址時，可以逐條還原。先看 URL 的每一段，在 <code>app/</code> 底下依序建立同名資料夾；最後在該路徑最內層放入 <code>page.tsx</code>。</p>
+
+<p>如果某一段是每次都不同的值，例如 <code>/tags/react</code> 裡的 <code>react</code>，或 <code>/questions/123</code> 裡的 <code>123</code>，就不要為它建立實際名稱的資料夾，而是用 <code>[id]</code> 這種動態資料夾表示可變的一段。</p>
+
+<p>如果某一整區的頁面需要共用外框，但區域名稱不該出現在網址，就使用 route group，把名稱放進括號。假設需求是：</p>
+
+<ul>
+<li>首頁、問題列表、問題詳情共用主站外框。</li>
+<li>網址分別是 <code>/</code>、<code>/questions</code>、<code>/questions/123</code>。</li>
+<li>登入與註冊不使用主站外框。</li>
+<li>登入與註冊的網址是 <code>/sign-in</code>、<code>/sign-up</code>。</li>
+</ul>
+
+<p>從這些 URL 和 layout 需求反推，檔案樹會是：</p>
+
+<pre data-provenance="derived"><code>app/
+├── layout.tsx
+├── (root)/
+│   ├── layout.tsx
+│   ├── page.tsx
+│   └── questions/
+│       ├── page.tsx          → /questions
+│       └── [id]/page.tsx     → /questions/123
+└── (auth)/
+    ├── layout.tsx
+    ├── sign-in/page.tsx      → /sign-in
+    └── sign-up/page.tsx      → /sign-up</code></pre>
+
+<p>這裡的 <code>(root)</code> 和 <code>(auth)</code> 都不會出現在網址中。它們像收納盒的標籤，只用來整理頁面與安排外框；真正的 URL 只由一般資料夾和動態資料夾組成。</p>
+
+<h2>從檔案樹反推 URL：沿路往上讀</h2>
+
+<p>反過來看一棵檔案樹時，找到每個 <code>page.tsx</code>，再把它所在路徑由外到內讀一遍。一般資料夾名稱照抄；有括號的 route group 直接跳過；有中括號的動態資料夾，還原成一個可變的值。</p>
+
+<p>例如看到：</p>
+
+<p><code>app/(root)/questions/[id]/page.tsx</code></p>
+
+<p>就可以判斷它對應的是 <code>/questions/任意值</code>。前面的 <code>(root)</code> 是 route group，因此不會出現在 URL 裡。</p>
+
+<p>熟悉這個反推動作後，拿到任何一份 AI 產出的 <code>app/</code> 樹，都能很快列出它實際提供哪些頁面，再逐條和需求單比對。這比只看資料夾名稱、猜 AI 原本想做什麼可靠得多。</p>
+
+<figure class="lesson-figure"><img src="./reading-a-route-tree-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>判別問句：看到 AI 的結構，先問這幾件事</h2>
+
+<p>驗收時不要只問「這棵樹看起來像不像正確答案」，而要問一些可以直接驗證的問題：</p>
+
+<ol>
+<li><strong>這個資料夾名稱應該出現在 URL 嗎？</strong> 如果應該出現，就不能誤用 route group；如果不該出現，才考慮使用括號。</li>
+<li><strong>這一段是固定名稱，還是每次都不同的值？</strong> 固定名稱用一般資料夾；可變值用 <code>[id]</code> 這類動態資料夾。</li>
+<li><strong>這條路徑的最內層有 <code>page.tsx</code> 嗎？</strong> 資料夾存在，不代表它本身就是可拜訪的頁面。</li>
+<li><strong>同一條 URL 是否被兩個檔案同時解析？</strong> 特別要檢查不同 route group 裡是否各放了一個對應同一路徑的頁面。</li>
+<li><strong>navbar 或其他外框是否在兩層 layout 都出現？</strong> layout 是往下疊加，不是二選一；同一個元件放在 root layout 和區塊 layout，畫面就可能重複。</li>
+<li><strong>動態資料夾的名稱和程式讀取的 key 一致嗎？</strong> 資料夾叫 <code>[id]</code>，程式卻讀 <code>params.slug</code>，就可能拿到 <code>undefined</code>。</li>
+</ol>
+
+<h2>常見的 AI 路由結構錯誤</h2>
+
+<table>
+<thead>
+<tr><th>症狀</th><th>錯誤結構</th><th>實際結果 / 問題</th></tr>
+</thead>
+<tbody>
+<tr><td>網址多了一段或少了一段</td><td>想要 <code>/auth/sign-in</code>，卻寫成 <code>(auth)/sign-in/</code></td><td>括號讓 <code>auth</code> 消失，實際變成 <code>/sign-in</code></td></tr>
+<tr><td>整條網址 404</td><td>資料夾存在，但裡面沒有 <code>page.tsx</code></td><td>那一層不是可拜訪的網址，單獨進去會 404</td></tr>
+<tr><td>同一條路徑衝突</td><td>首頁 <code>page.tsx</code> 同時出現在兩個 route group</td><td>兩個檔案都想對到 <code>/</code>，路徑解析衝突</td></tr>
+<tr><td>動態值讀不到</td><td>資料夾叫 <code>[id]</code>，程式卻讀 <code>params.slug</code></td><td>key 名稱對不上，取到 undefined</td></tr>
+<tr><td>外框重複套了兩層</td><td>navbar 同時放在 root layout 與區塊 layout</td><td>畫面出現兩份 navbar 或版型互相擠壓</td></tr>
+</tbody>
+</table>
+
+<p>其中 layout 的問題特別容易被忽略。layout 是「疊」上去的，不是「二選一」。如果 AI 在 <code>app/layout.tsx</code> 放了一次 navbar，又在 <code>app/(root)/layout.tsx</code> 放一次，主站頁面就會同時吃到兩層 layout，結果自然出現兩份 navbar。</p>
+
+<p>比較穩妥的分工是：全站都需要的關注點放在 root layout；只有某個區塊需要的外框，才放在區塊 layout。不要讓同一個 navbar 兩邊都負責。</p>
+
+<h2>反例：看起來有分區，其實把 URL 段吃掉了</h2>
+
+<p>假設 AI 想讓登入頁位於 <code>/auth</code> 底下，同時又想讓登入區和主站使用不同的外框。它可能寫成：</p>
+
+<pre data-provenance="derived"><code>app/
+├── layout.tsx
+├── (root)/
+│   ├── layout.tsx
+│   └── page.tsx
+└── (auth)/                 ← 用 route group 想表達 "auth"
+    └── sign-in/
+        └── page.tsx</code></pre>
+
+<p>問題在於，<code>auth</code> 被包成了 <code>(auth)</code>，所以它不會出現在網址裡。這棵樹實際產生的是 <code>/sign-in</code>，不是 AI 以為的 <code>/auth/sign-in</code>。</p>
+
+<p>但這不代表這棵樹永遠是錯的。如果需求要的是乾淨的 <code>/sign-in</code>，這份結構反而是對的；如果需求要的是帶有 <code>auth</code> 的網址，就必須拿掉括號，改成一般資料夾 <code>auth/sign-in/</code>。</p>
+
+<p>同一棵檔案樹是否正確，取決於它是否符合原本要的 URL。這也是驗收時最重要的順序：先確認「我要的網址長什麼樣子」，再回頭檢查資料夾結構，而不是看到括號就直接判定對或錯。</p>
+
+<figure class="lesson-figure"><img src="./reading-a-route-tree-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>結尾：用一條規則驗收整棵路由樹</h2>
+
+<blockquote>
+驗收路由結構時，先列出需求中的每一條 URL，再由 URL 畫出檔案樹：可變段用 <code>[id]</code>，只想分組與共用外框、又不想改變網址時用 <code>(group)</code>。接著反過來從每個 <code>page.tsx</code> 推回 URL，確認兩邊完全吻合。最後檢查三個地雷：括號是否吃掉了該保留的路徑段、某一層是否缺少 <code>page.tsx</code>、同一條路徑是否被兩個檔案解析。
+</blockquote>
+
+<p>你也可以把這套檢查濃縮成一句話：<strong>先問「這個檔案實際會產生哪個 URL？」再問「它的 layout 會和哪些父層疊在一起？」</strong> 只要這兩題答得出來，AI 的路由樹就很難躲過驗收。</p>
+
+<p>這個節點的五步到這裡結束。你已經能從資料夾讀出網址、用動態段表示不確定的路徑、用 layout 疊出不同外框、用 route group 分區而不弄髒網址，最後把這些規則合在一起檢查 AI 的架構。接著的節點會往「元件」那條線走，繼續判斷 server shell 和 client island。你可以回到課程目錄選下一個節點，或先跑 <code>/tackle</code> 驗收這幾步。</p>
+
+<div class="lesson-nav">
+  <div><a href="./route-groups.html">← 上一步：route group：何時該分組、何時不該</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="由一份 app/ 檔案樹回推 URL 時，遇到有括號的 route group 資料夾該怎麼處理？" data-correct="2" data-explain="route group 不出現在 URL 裡，回推時直接跳過它。">
+  <button class="opt">把它當成一段固定路徑寫進 URL</button>
+  <button class="opt">把它還原成一個動態參數</button>
+  <button class="opt">跳過它，不寫進 URL</button>
+  <button class="opt">把它改成中括號再寫進 URL</button>
+</div>
+<div class="quiz" data-question="一份資料夾存在、但裡面沒有 page.tsx 的路由，會發生什麼事？" data-correct="1" data-explain="那一層不會成為可拜訪的網址，單獨進入會得到 404。">
+  <button class="opt">Next.js 會自動補一個空白頁</button>
+  <button class="opt">該層不是網址，單獨進去 404</button>
+  <button class="opt">會改顯示上一層的頁面</button>
+  <button class="opt">整個 app 的路由都會失效</button>
+</div>
+<div class="quiz" data-question="navbar 同時放在 root layout 與區塊 layout，會出現什麼問題？" data-correct="3" data-explain="layout 是套疊的，兩層都放同一樣東西就會重複顯示。">
+  <button class="opt">Next.js 會自動去重只留一份</button>
+  <button class="opt">build 階段會直接報錯失敗</button>
+  <button class="opt">只有 root layout 那份會生效</button>
+  <button class="opt">畫面會重複出現兩份 navbar</button>
+</div>
+<div class="quiz" data-question="動態資料夾命名為 [id]，程式裡卻寫 params.slug，結果是什麼？" data-correct="0" data-explain="params 的 key 必須和資料夾名稱一致，讀錯 key 會拿到 undefined。">
+  <button class="opt">取到 undefined，因為名稱對不上</button>
+  <button class="opt">Next.js 會自動改讀成 id</button>
+  <button class="opt">build 時會擋下來並報錯</button>
+  <button class="opt">仍能正確取到 URL 的值</button>
+</div>
+<div class="quiz" data-question="驗收 AI 的路由結構時，第一步應該先做什麼？" data-correct="1" data-explain="先確定需求要的每一條 URL，再回頭比對檔案樹結構是否吻合。">
+  <button class="opt">先數一共建了幾個資料夾</button>
+  <button class="opt">先確定需求要哪些 URL</button>
+  <button class="opt">先檢查每個元件的型別</button>
+  <button class="opt">先跑一次 production build</button>
+</div>
+<div class="quiz" data-question="一份檔案樹是對或錯，最終取決於什麼？" data-correct="3" data-explain="結構沒有絕對對錯，要看你當初要的網址是什麼，再比對是否吻合。">
+  <button class="opt">資料夾的層數是不是最少</button>
+  <button class="opt">有沒有用到 route group</button>
+  <button class="opt">有沒有用到動態路由</button>
+  <button class="opt">是否符合需求要的 URL</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 檔案式路由、layout 與 route groups · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

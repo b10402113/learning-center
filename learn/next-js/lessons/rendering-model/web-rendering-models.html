@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>從請求到畫面：三種送頁面的模型</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>從請求到畫面：三種送頁面的模型</h1>
+<p class="meta">Step 1/5 · 渲染模型：CSR / SSR / RSC / hydration</p>
+
+<h2>先想像一次打開網站的經驗</h2>
+
+<p>你應該有過這種經驗：打開某個網站，畫面先是一片空白，過了一兩秒，內容才突然「跳」出來；換成另一個網站，卻是一點進去，文字和圖片幾乎立刻就排好了。</p>
+
+<p>同樣叫網站，為什麼體感會差這麼多？關鍵不只在網路速度，而在於：<strong>渲染</strong>這件事由誰做、什麼時候做，以及 server 到底送了什麼過來。</p>
+
+<p>這一節先把三種送頁面的模型攤開來看：傳統的 vanilla 網站、React 的客戶端渲染，以及 Next.js 的混合做法。先看完整張地圖，後面談 CSR、SSR、RSC 與 hydration 時，才知道每個名詞應該掛在哪個位置。</p>
+
+<h2>學習目標</h2>
+
+<p>看完這一節，你應該能根據兩個問題，分辨三種模型的差異：</p>
+
+<ul>
+<li>server 送了什麼給瀏覽器？</li>
+<li>使用者的瀏覽器需要自己完成多少工作？</li>
+</ul>
+
+<p>接著，你也能把 vanilla、React CSR、Next.js 各自解決了什麼問題，以及留下了哪些代價，連成一條完整的脈絡。</p>
+
+<h2>先定義兩個角色：client 與 server</h2>
+
+<p><strong>client</strong> 指的是你正在使用的裝置，可能是手機或電腦。它負責送出請求，也負責把最後的畫面顯示出來，讓你能點擊、輸入和操作。</p>
+
+<p><strong>server</strong> 則是一台持續運作、通常規格較強的電腦。應用程式的程式碼放在那裡；當 client 送出請求，server 會執行必要的運算，再把結果送回去。</p>
+
+<p>可以把兩者想成廚房和餐桌：server 像廚房，負責準備內容；client 像餐桌，負責把內容擺出來，讓你真正使用。三種模型的差別，就在於這道菜是在廚房先做好，還是把材料送到餐桌後才由 client 自己組裝。</p>
+
+<figure class="lesson-figure"><img src="./web-rendering-models-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>模型一：vanilla，server 把完整檔案送過來</h2>
+
+<p>最傳統的做法，是直接使用 HTML、CSS、JavaScript 這三個網頁的基本元素來寫網站。</p>
+
+<p>當你造訪這類網站，瀏覽器會向 server 要求內容。server 回應時，會把 HTML、CSS，以及需要的話再加上 JavaScript，這些檔案一起送過來。</p>
+
+<p>瀏覽器收到之後，會先解析 HTML，再套用 CSS 的樣式，最後執行 JavaScript，完成事件處理和其他動態行為。如果網站有很多頁，每換一頁，client 就要重新送出請求，server 也會把對應頁面的檔案再送一次。</p>
+
+<h3>常見誤解：vanilla 就是「瀏覽器什麼都不用做」</h3>
+
+<p>這是很容易出現的誤會。雖然 server 送來的是完整檔案，但真正把內容解析、套上樣式、執行 JavaScript 的，仍然是 client。server 像是把整份食譜和食材送來，瀏覽器還是得在自己的桌面上完成準備工作。</p>
+
+<h3>vanilla 留下的三個代價</h3>
+
+<p><strong>處理負擔集中在 client。</strong> 瀏覽器要自己解析 HTML、執行 JavaScript，才能把畫面完整呈現出來。網站越複雜，對裝置的負擔就越大，規格較弱的裝置也會越吃力。</p>
+
+<p><strong>頻寬用量較大。</strong> 每一次頁面請求，server 都可能送回完整檔案。頁面越多、影音素材越多，使用的頻寬就越可觀。</p>
+
+<p><strong>首次載入需要等待。</strong> server 要先把必要檔案送完，瀏覽器也要完成解析，你才看得到內容。等待時間，就是傳輸與解析所花時間的總和。</p>
+
+<h2>模型二：React CSR，把畫面組裝工作交給 client</h2>
+
+<p>React 換了一個方向。當你造訪 React 網站，server 通常只送回一個最小的 HTML 檔，作為整個應用程式的進入點，再加上一個打包好的 JavaScript 檔。</p>
+
+<p>真正把畫面組出來的，是瀏覽器自己。它執行這包 JavaScript，使用 React 做<strong>客戶端渲染</strong>（CSR，client-side rendering）。因此，剛開始看到的可能只是一個空殼；等 JavaScript 載入並執行後，內容才在 client 上產生出來。</p>
+
+<h3>React CSR 的核心：virtual DOM 與 client-side routing</h3>
+
+<p>React 的關鍵角色之一是 <strong>virtual DOM</strong>（虛擬 DOM）。React 不會每次都直接大幅修改真實的 DOM，而是先更新虛擬 DOM，再比對前後差異，最後只把必要的變更套用到真實 DOM 上。</p>
+
+<p>換頁時，React 可以透過客戶端路由庫 <strong>React Router</strong> 來切換。整個過程不需要向 server 重新要求一份完整頁面，因此不會整頁重新載入。如果新的頁面需要資料，則由對應的元件自己發請求取得。</p>
+
+<h3>常見誤解：CSR 只是「比較快的 vanilla」</h3>
+
+<p>CSR 不只是把 vanilla 加速而已，它是把主要的渲染工作移到 client。這樣做讓後續換頁和互動更流暢，但也把更多責任交給瀏覽器與前端程式碼。</p>
+
+<p>因此，CSR 需要開發者理解元件、管理 state 與 props，也要理解 virtual DOM。對使用者來說，首次載入時還得等待 JavaScript 下載與執行；在較慢的裝置上，首次渲染和互動都可能被拖慢。</p>
+
+<p>另外，因為頁面內容主要靠 JavaScript 在客戶端產生，搜尋引擎的爬蟲不一定能完整讀到內容，這也會帶來 SEO 風險。</p>
+
+<figure class="lesson-figure"><img src="./web-rendering-models-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>模型三：Next.js，server 先把 HTML 算好</h2>
+
+<p>前兩種模型各有取捨：vanilla 讓 client 處理完整檔案，React CSR 則讓 client 執行一大包 JavaScript 來組畫面。Next.js 的做法，是把選擇權交還給開發者：</p>
+
+<p><strong>內容可以依需求在 server 或 client 渲染。</strong></p>
+
+<p>一般情況下，使用者造訪 Next.js 網站時，client 會把請求送到 server。server 執行 React 元件，產生 HTML、CSS、JavaScript，再把已經渲染完成的 HTML 送回去。這份 HTML 已經包含初始內容、抓好的資料與元件標記，因此瀏覽器不必等 JavaScript 完整下載並執行後，才第一次看到畫面。</p>
+
+<h3>常見誤解：SSR 就是 server 做完全部工作</h3>
+
+<p>SSR 並不代表 client 從此不需要 JavaScript。server 先把畫面準備好，讓瀏覽器能盡快顯示；互動所需的 JavaScript 仍然會送到 client。</p>
+
+<p>接著，Next.js 會在 client 執行 <strong>hydration</strong>（注水）：把 JavaScript 裡的事件處理器與互動能力，接到那份已經預先渲染好的 HTML 上。就像舞台布景已經搭好，演員和燈光設備之後才進場，讓原本看得到的畫面真正能被操作。</p>
+
+<figure class="lesson-figure"><img src="./web-rendering-models-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>所以，Next.js 的首次造訪可以走 <strong>server-side rendering</strong>（SSR，伺服器端渲染）；後續請求則能依情況選擇在 server 使用 SSR，或在 client 使用 CSR。</p>
+
+<h2>三種模型放在一起看</h2>
+
+<table>
+<thead>
+<tr><th>模型</th><th>server 送什麼</th><th>誰負責渲染</th><th>換頁方式</th><th>留下的問題</th></tr>
+</thead>
+<tbody>
+<tr><td>vanilla</td><td>完整 HTML、CSS、JavaScript</td><td>client</td><td>整頁重新請求</td><td>頻寬大、首次載入慢、處理負擔集中在 client</td></tr>
+<tr><td>React CSR</td><td>最小 HTML + 一大包 JavaScript</td><td>client</td><td>透過 React Router，不整頁重新載入</td><td>首次渲染慢、SEO 有風險、開發複雜度較高</td></tr>
+<tr><td>Next.js</td><td>已渲染完成的 HTML，之後再補 JavaScript</td><td>server 與 client 混合</td><td>首次使用 SSR，後續可依情況選擇</td><td>需要理解 server 與 client 的分工</td></tr>
+</tbody>
+</table>
+
+<h2>怎麼判斷三者的關係？</h2>
+
+<p>不要只記住「vanilla、React、Next.js」這些名稱。更有用的判斷方式，是沿著兩個問題往下問：</p>
+
+<ol>
+<li>server 送來的是完整可顯示的 HTML，還是一個等待 JavaScript 組裝的空殼？</li>
+<li>畫面主要由 server 產生，還是由 client 執行 JavaScript 後產生？</li>
+</ol>
+
+<p>用這個角度看，三種模型就會變得清楚：</p>
+
+<ul>
+<li><strong>vanilla：</strong>server 送來完整檔案，但 client 負責解析與呈現。</li>
+<li><strong>React CSR：</strong>server 送來最小 HTML 和 JavaScript，client 負責把應用程式組起來。</li>
+<li><strong>Next.js：</strong>server 先送出已經渲染好的 HTML，再由 client 透過 hydration 補上互動能力。</li>
+</ul>
+
+<h2>小結：渲染是一場分工</h2>
+
+<blockquote>
+這三種模型其實是一條演進線：vanilla 把完整檔案送到 client，讓瀏覽器自己解析並組出畫面；React CSR 把更多組畫面的工作交給 client 執行的 JavaScript，換來流暢的互動，卻留下首次渲染與 SEO 的代價；Next.js 則讓 server 先把 HTML 算好送出去，再把互動工作交給 client 的 hydration。
+</blockquote>
+
+<p>因此，這些名詞最後都指向同一個核心問題：<strong>渲染要在什麼時候完成、由誰負責，server 又該送什麼過來？</strong></p>
+
+<p>這個問題也會把下一節自然接上來：我們會把 React CSR 單獨拆開，看看那包 JavaScript、virtual DOM 和 React Router 各自在做什麼，以及 CSR 為什麼會在首次載入和 SEO 上付出代價。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./csr-and-virtual-dom.html">下一步：CSR：最小 HTML、JS bundle 與 virtual DOM →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="vanilla 網站每次請求，server 通常會送回什麼？" data-correct="0" data-explain="傳統模型對每個頁面請求都送回完整的 HTML、CSS，以及需要的話再加上 JavaScript。">
+  <button class="opt">完整的 HTML、CSS 與 JavaScript 檔</button>
+  <button class="opt">最小 HTML 與一大包 JavaScript</button>
+  <button class="opt">已經渲染完成的 HTML 字串</button>
+  <button class="opt">一份讓前端組畫面的資料</button>
+</div>
+<div class="quiz" data-question="下列哪一項是 vanilla 模型的主要代價？" data-correct="2" data-explain="每換一頁就重送完整檔案，讓頻寬與首次載入時間都變差。">
+  <button class="opt">開發者必須先學會 React 元件</button>
+  <button class="opt">搜尋引擎完全無法讀取內容</button>
+  <button class="opt">每次換頁都要重送完整檔案</button>
+  <button class="opt">伺服器端完全不會執行運算</button>
+</div>
+<div class="quiz" data-question="React CSR 模型下，真正組出畫面的是誰？" data-correct="1" data-explain="瀏覽器執行那包 JavaScript，用 React 在客戶端渲染出畫面。">
+  <button class="opt">遠端的伺服器預先算好 HTML</button>
+  <button class="opt">瀏覽器執行 JavaScript 自己組</button>
+  <button class="opt">CDN 邊緣節點即時渲染出來</button>
+  <button class="opt">資料庫在查詢時順便產生 HTML</button>
+</div>
+<div class="quiz" data-question="virtual DOM 的用途是什麼？" data-correct="3" data-explain="它先比對虛擬樹的差異，只把必要變更套用到真實 DOM。">
+  <button class="opt">把 JavaScript 檔案壓縮得更小</button>
+  <button class="opt">讓搜尋引擎爬蟲讀到完整內容</button>
+  <button class="opt">取代瀏覽器原本的真實 DOM</button>
+  <button class="opt">比對差異後只套用必要變更</button>
+</div>
+<div class="quiz" data-question="Next.js 在 client 執行的 hydration 是什麼？" data-correct="0" data-explain="hydration 是把事件處理器與互動能力接到已預先渲染好的 HTML 上。">
+  <button class="opt">把互動能力接到已渲染的 HTML</button>
+  <button class="opt">把 HTML 轉換回 React 元件樹</button>
+  <button class="opt">把資料庫的內容預先抓下來</button>
+  <button class="opt">把 CSS 樣式注入到頁面裡面</button>
+</div>
+<div class="quiz" data-question="Next.js 首次造訪頁面時，預設走的是哪一種渲染？" data-correct="2" data-explain="server 先執行 React 元件產生完整 HTML，這就是 SSR；後續請求才可自選。">
+  <button class="opt">完全交給瀏覽器的客戶端渲染</button>
+  <button class="opt">在 CDN 上完成的前端渲染</button>
+  <button class="opt">伺服器端渲染的 SSR 流程</button>
+  <button class="opt">在資料庫層完成的渲染流程</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 渲染模型：CSR / SSR / RSC / hydration · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

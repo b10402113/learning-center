@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 React 的 cache() 幫 server action 去重</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 React 的 <code>cache()</code> 幫 server action 去重</h1>
+<p class="meta">Step 3/4 · Fetch 快取與 request dedup</p>
+
+<h2>先確認目標與前置條件</h2>
+<p>這一節要處理的情境很具體：同一個問題詳情頁中，<code>generateMetadata</code> 為了組出頁面標題查了一次資料，頁面元件又為了顯示內容查了一次。最後畫面雖然正確，資料庫卻多做了一次工作。</p>
+
+<p>完成後，你會知道如何用 React 的 <code>cache()</code> 包住 server action 或資料庫查詢，讓同一次 render 中、使用相同參數的第二次呼叫直接重用第一次的結果。</p>
+
+<p>開始前，請先確認你理解兩件事：自動 request dedup 只發生在同一輪 render 內，而且這裡的資料來源是 server action 或直接的資料庫查詢，不是遠端 <code>fetch</code>。動手修改前，先找出重複查詢，再加上快取。</p>
+
+<h2>先看全貌：哪裡重複、要改哪裡</h2>
+
+<p>整個修正流程可以想成三步：</p>
+
+<ol>
+  <li>找出同一輪 render 中，使用相同參數重複呼叫的函式。</li>
+  <li>從 <code>react</code> 匯入 <code>cache</code>。</li>
+  <li>用 <code>cache()</code> 包住原本的函式，呼叫端維持不變。</li>
+</ol>
+
+<p>這次要包起來的是 <code>getQuestion</code>。它原本是 server action，不是 <code>fetch</code>，所以 React 不會自動幫它去重。</p>
+
+<figure class="lesson-figure"><img src="./memoize-non-fetch-with-react-cache-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟一：先把重複的地方指出來</h2>
+
+<p>不要一看到資料庫查詢就急著加快取。先確認同一份資料到底被誰拿了幾次。</p>
+
+<p>打開問題詳情頁，第一個呼叫點在 <code>generateMetadata</code>。它需要問題資料來組出 metadata 的 title：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/app/(root)/questions/[id]/page.tsx"><code>export async function generateMetadata({
+  params,
+}: RouteParams): Promise&lt;Metadata&gt; {
+  const { id } = await params;
+
+  const { success, data: question } = await getQuestion({ questionId: id });</code></pre>
+
+<p>接著往下看頁面元件。頁面本身也用同一個 <code>id</code> 呼叫 <code>getQuestion</code>：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/app/(root)/questions/[id]/page.tsx"><code>const QuestionDetails = async ({ params, searchParams }: RouteParams) =&gt; {
+  const { id } = await params;
+  const { page, pageSize, filter } = await searchParams;
+  const { success, data: question } = await getQuestion({ questionId: id });</code></pre>
+
+<p>這兩次呼叫有兩個關鍵特徵：</p>
+
+<ul>
+  <li>呼叫的是同一個函式：<code>getQuestion</code>。</li>
+  <li>傳入的是相同參數：<code>{ questionId: id }</code>。</li>
+</ul>
+
+<p>因此，同一輪 render 中，這份資料會被查兩次。上一節提過，React 會自動合併重複的 <code>fetch</code>，但不會自動處理 server action 或直接的資料庫查詢。這就是本節要補上的缺口。</p>
+
+<h2>步驟二：從 <code>react</code> 匯入 <code>cache</code></h2>
+
+<p><code>cache</code> 是 React 內建的工具，不是 Next.js 專屬 API。請在 server action 檔案的頂端加入：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/lib/actions/question.action.ts"><code>import { cache } from "react";</code></pre>
+
+<p>這一步只是把工具準備好，還不會改變查詢行為。真正的去重會發生在下一步：把原本的函式交給 <code>cache()</code> 管理。</p>
+
+<h2>步驟三：用 <code>cache()</code> 包住原本的函式</h2>
+
+<p>原本的寫法是直接 export 一個 async 函式：</p>
+
+<pre data-provenance="derived"><code>// 改動前：直接匯出，沒有去重
+export async function getQuestion(params: GetQuestionParams) {
+  // …
+}</code></pre>
+
+<p>這是常見的「AI 常犯版」：函式本身可以正常執行，但 React 不知道它的結果能在同一輪 render 中重用。</p>
+
+<p>正解不是重寫驗證、資料庫查詢或錯誤處理，而是在函式外面多包一層 <code>cache()</code>。專案中的完整寫法如下：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/lib/actions/question.action.ts"><code>export const getQuestion = cache(async function getQuestion(
+  params: GetQuestionParams
+): Promise&lt;ActionResponse&lt;Question&gt;&gt; {
+  const validationResult = await action({
+    params,
+    schema: GetQuestionSchema,
+  });
+
+  if (validationResult instanceof Error) {
+    return handleError(validationResult) as ErrorResponse;
+  }
+
+  const { questionId } = validationResult.params!;
+
+  try {
+    const question = await Question.findById(questionId)
+      .populate("tags", "_id name")
+      .populate("author", "_id name image");
+
+    if (!question) throw new Error("Question not found");
+
+    return { success: true, data: JSON.parse(JSON.stringify(question)) };
+  } catch (error) {
+    return handleError(error) as ErrorResponse;
+  }
+});</code></pre>
+
+<p>請特別看第一行的變化：</p>
+
+<ul>
+  <li>原本是 <code>export async function getQuestion</code>。</li>
+  <li>現在改成 <code>export const getQuestion = cache(async function getQuestion</code>。</li>
+</ul>
+
+<p>也就是把原本的 async 函式傳進 <code>cache()</code>，再把包裝後的結果 export 出去。函式裡的參數驗證、<code>Question.findById</code>、資料 populate，以及錯誤處理都不用改。</p>
+
+<p>可以把它想成在查詢門口放了一個小記事本：第一次用某個參數查詢時，照常執行；同一輪 render 又拿著相同參數來一次，就直接拿前一次的結果，不必再次走進資料庫。</p>
+
+<figure class="lesson-figure"><img src="./memoize-non-fetch-with-react-cache-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟四：呼叫端不用改，直接確認結果</h2>
+
+<p>這次修改的好處是，<code>generateMetadata</code> 和頁面元件都不需要調整。它們仍然照原本的方式呼叫：</p>
+
+<p><code>await getQuestion({ questionId: id })</code></p>
+
+<p>差別藏在 <code>getQuestion</code> 內部：</p>
+
+<ol>
+  <li>同一輪 render 中，第一次呼叫會真的執行資料庫查詢。</li>
+  <li>第二次以相同參數呼叫時，React 會直接回傳第一次的結果。</li>
+  <li>metadata 的 title 與頁面內容仍然可以正常取得。</li>
+</ol>
+
+<p>最直接的驗證方式，是觀察資料庫 log 中的查詢次數，或暫時在函式內印出訊息。相同問題在同一輪 render 中應該只查詢一次，而畫面上的 title 與內容仍然存在。</p>
+
+<p>也可以用更直觀的方式觀察去重效果：讓一個函式產生隨機數，分別測試「有包 <code>cache</code>」與「沒有包 <code>cache</code>」的版本，各呼叫兩次。有包的版本兩次會拿到同一個數字；沒有包的版本則會拿到不同數字。</p>
+
+<h2>步驟五：確認 <code>cache()</code> 的使用邊界</h2>
+
+<p><code>cache()</code> 解決的是「同一輪 render 裡不要重複做同一件事」，不是永久保存資料。它的有效範圍是：</p>
+
+<ul>
+  <li>同一輪 render。</li>
+  <li>同一個 route。</li>
+</ul>
+
+<p>它不會跨請求，也不會跨 route 共用結果。換到另一個 route 後，前一輪的記憶就清空，函式會重新執行。若需求是跨 route 共用同一份結果，那是另一種快取問題，需要使用像 <code>unstable_cache</code> 這類工具；這會留到 revalidation 與多層快取的主題再處理。</p>
+
+<figure class="lesson-figure"><img src="./memoize-non-fetch-with-react-cache-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>另外，也不要因為擔心重複就把所有函式都包上 <code>cache()</code>。如果函式只會被呼叫一次，包起來不會帶來效果；如果每次傳入的參數都不同，也沒有相同結果可以重用。</p>
+
+<p>判斷方式很簡單：若某個函式在同一輪 render 中，被多個地方用相同參數呼叫，就適合考慮 <code>cache()</code>。</p>
+
+<h2>做完後，你應該看到什麼</h2>
+
+<p>完成修改後，<code>getQuestion</code> 的函式本體與所有呼叫端都維持原本的邏輯。不同的是，同一個問題在同一輪 render 中只會觸發一次資料庫查詢；<code>generateMetadata</code> 和頁面元件則共同重用那次查詢的結果。</p>
+
+<blockquote>
+當資料來源是 server action 或直接的資料庫查詢時，React 不會自動去重，同一次 render 裡呼叫兩次就是查兩次。修法很簡單：從 <code>react</code> 匯入 <code>cache</code>，用它包住原本的 async 函式，再匯出包好的版本，函式本體與所有呼叫端都不用改。這樣同參數的第二次呼叫就會直接拿到第一次的結果。但要記得，這個記憶只在同一輪 render、同一 route 內有效，跨 route 共用要換另一種工具。
+</blockquote>
+
+<p>到這裡，你已經把三層機制串起來：跨請求的持久 fetch 快取、單輪 render 內的 request dedup，以及用來補上非 fetch 查詢缺口的手動 <code>cache()</code>。</p>
+
+<p>下一節會把這些機制放進同一個判斷流程：當你遇到「資料不更新」或「同一份資料被重複抓取」時，先判斷問題卡在哪一層，再選對工具。</p>
+
+<div class="lesson-nav">
+  <div><a href="./request-dedup-in-one-render.html">← 上一步：Request dedup：同一次 render 內的請求只發一次</a></div>
+  <div><a href="./diagnose-cache-behavior.html">下一步：這段 fetch 的快取行為符合預期嗎？ →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 getQuestion 在 metadata 和頁面各呼叫一次會查兩次？" data-correct="1" data-explain="server action 不是 fetch，React 不會自動幫它做請求去重。">
+  <button class="opt">因為資料庫連線沒有正確地建立起來</button>
+  <button class="opt">因為 server action 不會被自動去重</button>
+  <button class="opt">因為 metadata 一定會排在頁面之後跑</button>
+  <button class="opt">因為兩個檔案沒有共用同一個模組</button>
+</div>
+<div class="quiz" data-question="用 cache() 包函式時，函式本體需要跟著改嗎？" data-correct="2" data-explain="只用 cache() 包住原本的函式即可，本體與呼叫端都不需要改。">
+  <button class="opt">需要把驗證邏輯搬進去 function 的外面</button>
+  <button class="opt">需要把查詢改成用 fetch 才有效果</button>
+  <button class="opt">不需要，只把函式包進 cache 就好</button>
+  <button class="opt">需要先把函式改成同步版本才行</button>
+</div>
+<div class="quiz" data-question="cache() 是從哪裡匯入的？" data-correct="0" data-explain="cache 是 React 內建功能，從 react 匯入，不是 Next.js 專屬。">
+  <button class="opt">從 react 匯入，是 React 內建功能</button>
+  <button class="opt">從 next/cache 匯入，屬於 Next.js</button>
+  <button class="opt">從 next/server 匯入，屬於 Next.js</button>
+  <button class="opt">從 axios 匯入，是第三方套件</button>
+</div>
+<div class="quiz" data-question="cache() 記住的結果會存活多久、跨到哪裡？" data-correct="3" data-explain="它只在同一輪 render、同一 route 內有效，換 route 就重新執行。">
+  <button class="opt">跨請求與跨使用者一直保留到快取過期</button>
+  <button class="opt">永久保留在資料庫的快取資料表裡面</button>
+  <button class="opt">只保留在瀏覽器端的記憶體直到關閉</button>
+  <button class="opt">只在同一輪 render、同一 route 內有效</button>
+</div>
+<div class="quiz" data-question="如果想跨 route 共用同一份快取結果，該往哪找工具？" data-correct="1" data-explain="跨 route 共用是另一層機制，需要 unstable_cache 這類工具。">
+  <button class="opt">繼續用 cache 並把參數調成相同</button>
+  <button class="opt">改用 unstable_cache 這類工具</button>
+  <button class="opt">把函式改成 client component 就好</button>
+  <button class="opt">在 fetch 加上 no-store 選項即可</button>
+</div>
+<div class="quiz" data-question="下列哪一種函式最適合用 cache() 包起來？" data-correct="0" data-explain="同一輪 render 內被多處以相同參數呼叫的函式，正是去重的目標。">
+  <button class="opt">同輪 render 被多處同參數呼叫的函式</button>
+  <button class="opt">整輪 render 只會被呼叫一次的函式</button>
+  <button class="opt">每次參數都不一樣的隨機查詢函式</button>
+  <button class="opt">只用來產生 CSS class 的純函式</button>
+</div>
+
+<div class="footer">
+  <p>next-js · Fetch 快取與 request dedup · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

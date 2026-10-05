@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>端到端追蹤一個 Agent Loop：從 Goal 到四種終止狀態</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>把 Agent Loop 跑到底：從 Goal 到四種終止狀態</h1>
+<p class="meta">Step 4/4 · 入門實作：Tool Dispatcher 與 Loop Map</p>
+
+<h2>先確認目標與前置條件</h2>
+
+<p>這一節會把前面準備好的 tool call、執行限制、dispatcher 與 evaluation 接成一個完整的 expense-claim agent loop。完成後，你會得到一個 <code>agent_loop.py</code>：它能審核費用報銷，留下可查核的 trace，並且只會停在四種明確結果中的一種：</p>
+
+<ul>
+<li><code>APPROVED</code>：符合自動核准規則。</li>
+<li><code>ESCALATED</code>：需要轉人工處理。</li>
+<li><code>FAILED</code>：必要資料取得失敗，安全停止。</li>
+<li><code>LIMIT_REACHED</code>：用完執行回合上限。</li>
+</ul>
+
+<figure class="lesson-figure"><img src="./map-agent-loop-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這裡的重點不是讓 agent「想出一個答案」，而是讓它沿著可檢查的流程前進：先取得資料，再檢查資格，最後只有在證據齊全時才能結束。</p>
+
+<p>開始前需要 Python 3.10 以上、終端機、編輯器，以及 Python 函式、字典與類別的基本概念。這個 lab 不需要雲端服務、外部套件或 API key，所有資料都在本機，方便你重複驗證。</p>
+
+<p>先建立資料夾與程式檔：</p>
+
+<pre data-provenance="derived"><code>mkdir lab01_agent_loop
+cd lab01_agent_loop
+touch agent_loop.py</code></pre>
+
+<h2>Step 1：準備場景與輸入資料</h2>
+
+<p>財務團隊希望在報銷送到真人複核前，先由 agent 做第一輪判斷。自動核准必須同時滿足五個條件：申請存在、費用類別被允許、有收據、金額不超過上限，而且最後的決定附有支持證據。</p>
+
+<p>只要條件不符合，就轉人工；如果連必要資料都拿不到，就安全失敗。這個差別很重要：資料不存在時，agent 不能自行補出一筆申請。</p>
+
+<p>把兩筆模擬資料放進程式。一筆是符合條件的小額設備費，另一筆金額超限且缺少收據：</p>
+
+<pre data-source="sources/loop-engineer/20261003/1 - Understand the Agentic Loop/6. Lab Map an Agent Loop from Goal to Completion.html#lab-map-an-agent-loop"><code>import json
+import sys
+from dataclasses import dataclass, field
+from typing import Any
+
+CLAIMS = {
+    "CLM-1042": {
+        "employee": "Maya",
+        "amount": 850.00,
+        "category": "equipment",
+        "receipt_present": True,
+    },
+    "CLM-2048": {
+        "employee": "Noah",
+        "amount": 1650.00,
+        "category": "equipment",
+        "receipt_present": False,
+    },
+}
+
+EXPENSE_POLICY = {
+    "version": "2026.1",
+    "allowed_categories": ["travel", "equipment", "training"],
+    "automatic_approval_limit": 1000.00,
+    "receipt_required": True,
+}</code></pre>
+
+<h2>Step 2：建立能記住進度的 state</h2>
+
+<p>Agent 每一回合都要回答三個問題：目前知道什麼、還缺什麼、這次做了什麼。若沒有集中管理這些資訊，它可能重複呼叫工具、忘記已取得的證據，或在條件未完成時提早宣布結束。</p>
+
+<p><code>ToolResult</code> 統一工具的成功與失敗格式；<code>AgentState</code> 則保存目標、輸入、進度、證據、目前狀態與完整 trace。<code>max_turns</code> 是防止 loop 無限執行的防線。</p>
+
+<pre data-source="sources/loop-engineer/20261003/1 - Understand the Agentic Loop/6. Lab Map an Agent Loop from Goal to Completion.html#lab-map-an-agent-loop"><code>@dataclass
+class ToolResult:
+    ok: bool
+    data: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+
+@dataclass
+class AgentState:
+    goal: str
+    claim_id: str
+    max_turns: int = 5
+    turn: int = 0
+    status: str = "RUNNING"
+    claim: dict[str, Any] | None = None
+    policy: dict[str, Any] | None = None
+    eligibility: dict[str, Any] | None = None
+    evidence: list[str] = field(default_factory=list)
+    trace: list[dict[str, Any]] = field(default_factory=list)</code></pre>
+
+<h2>Step 3：定義一次只做一件事的工具</h2>
+
+<p>每個工具都只負責一個動作，並以 <code>ToolResult</code> 回報結果。特別是 <code>fetch_claim</code>：查不到申請時，它回傳失敗結果，而不是把例外丟到 loop 外面。這樣「資料查不到」就會成為 evaluator 可以處理的 observation。</p>
+
+<pre data-source="sources/loop-engineer/20261003/1 - Understand the Agentic Loop/6. Lab Map an Agent Loop from Goal to Completion.html#lab-map-an-agent-loop"><code>def fetch_claim(claim_id: str) -&gt; ToolResult:
+    claim = CLAIMS.get(claim_id)
+
+    if claim is None:
+        return ToolResult(
+            ok=False,
+            error=f"Claim {claim_id} was not found.",
+        )
+
+    return ToolResult(ok=True, data=claim)
+
+def fetch_policy() -&gt; ToolResult:
+    return ToolResult(ok=True, data=EXPENSE_POLICY)</code></pre>
+
+<p>接著讓 <code>check_eligibility</code> 逐項檢查政策。它不只回傳是否符合，也累積不符合的原因，並把判斷使用的原始事實放進 <code>evidence</code>。</p>
+
+<pre data-source="sources/loop-engineer/20261003/1 - Understand the Agentic Loop/6. Lab Map an Agent Loop from Goal to Completion.html#lab-map-an-agent-loop"><code>def check_eligibility(
+    claim: dict[str, Any],
+    policy: dict[str, Any],
+) -&gt; ToolResult:
+    reasons = []
+
+    if claim["category"] not in policy["allowed_categories"]:
+        reasons.append("The expense category is not allowed.")
+
+    if policy["receipt_required"] and not claim["receipt_present"]:
+        reasons.append("The required receipt is missing.")
+
+    if claim["amount"] &gt; policy["automatic_approval_limit"]:
+        reasons.append(
+            "The amount exceeds the automatic-approval limit."
+        )
+
+    return ToolResult(
+        ok=True,
+        data={
+            "eligible": len(reasons) == 0,
+            "reasons": reasons,
+            "evidence": [
+                f"category={claim['category']}",
+                f"receipt_present={claim['receipt_present']}",
+                f"amount={claim['amount']}",
+                f"policy_version={policy['version']}",
+                (
+                    "approval_limit="
+                    f"{policy['automatic_approval_limit']}"
+                ),
+            ],
+        },
+    )</code></pre>
+
+<p>為什麼證據要跟著結果一起保存？因為 <code>APPROVED</code> 或 <code>ESCALATED</code> 只是標籤，不足以說明判斷是否合理。<code>evidence</code> 讓人可以回頭核對：這次決定到底根據哪些資料。</p>
+
+<h2>Step 4：用 <code>select_action()</code> 決定下一步</h2>
+
+<p>下一步不是憑空決定，而是檢查 state 還缺哪一塊資料。若沒有申請，先取申請；若沒有政策，先讀政策；若還沒算資格，先檢查資格；全部完成後才進入 <code>finish</code>。</p>
+
+<pre data-source="sources/loop-engineer/20261003/1 - Understand the Agentic Loop/6. Lab Map an Agent Loop from Goal to Completion.html#lab-map-an-agent-loop"><code>def select_action(state: AgentState) -&gt; str:
+    if state.claim is None:
+        return "fetch_claim"
+
+    if state.policy is None:
+        return "fetch_policy"
+
+    if state.eligibility is None:
+        return "check_eligibility"
+
+    return "finish"</code></pre>
+
+<p>這段函式的價值，在於把 action selection 變成清楚可讀的規則。下一步不藏在模型的黑盒判斷裡，而是可以直接檢查 state 後推導出來。</p>
+
+<figure class="lesson-figure"><img src="./map-agent-loop-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>Step 5：用 <code>execute_action()</code> 管住可執行的動作</h2>
+
+<p><code>select_action()</code> 只回答「應該做什麼」；「哪個函式可以被執行」則由 <code>execute_action()</code> 管。這一層就像一道 dispatcher 關卡：它把 action 名稱對應到工具，檢查必要參數，遇到未知 action 時也回傳失敗結果，不讓程式直接失控。</p>
+
+<pre data-source="sources/loop-engineer/20261003/1 - Understand the Agentic Loop/6. Lab Map an Agent Loop from Goal to Completion.html#lab-map-an-agent-loop"><code>def execute_action(
+    action: str,
+    state: AgentState,
+) -&gt; ToolResult:
+    if action == "fetch_claim":
+        return fetch_claim(state.claim_id)
+
+    if action == "fetch_policy":
+        return fetch_policy()
+
+    if action == "check_eligibility":
+        if state.claim is None or state.policy is None:
+            return ToolResult(
+                ok=False,
+                error="Claim and policy data are required.",
+            )
+
+        return check_eligibility(
+            state.claim,
+            state.policy,
+        )
+
+    if action == "finish":
+        return ToolResult(
+            ok=True,
+            data={"ready_to_finish": True},
+        )
+
+    return ToolResult(
+        ok=False,
+        error=f"Unknown action: {action}",
+    )</code></pre>
+
+<h2>Step 6：用 <code>evaluate_observation()</code> 判斷能否繼續</h2>
+
+<p>工具只回報「發生了什麼」，evaluator 才把 observation 放回整體 goal 中解讀。它會把成功結果寫進 state，也會在收尾時檢查兩件事：資格結果是否存在，以及證據是否存在。</p>
+
+<p>若工具失敗，立即進入 <code>FAILED</code>。若資格符合且證據齊全，進入 <code>APPROVED</code>；若資格不符合，進入 <code>ESCALATED</code>。如果有人要求完成，卻沒有證據，仍然必須 <code>FAILED</code>，不能只因為流程走到最後就宣布成功。</p>
+
+<pre data-source="sources/loop-engineer/20261003/1 - Understand the Agentic Loop/6. Lab Map an Agent Loop from Goal to Completion.html#lab-map-an-agent-loop"><code>def evaluate_observation(
+    action: str,
+    observation: ToolResult,
+    state: AgentState,
+) -&gt; str:
+    if not observation.ok:
+        state.status = "FAILED"
+        return f"Stop safely: {observation.error}"
+
+    if action == "fetch_claim":
+        state.claim = observation.data
+        return "Claim loaded; policy is still required."
+
+    if action == "fetch_policy":
+        state.policy = observation.data
+        return "Policy loaded; eligibility must be checked."
+
+    if action == "check_eligibility":
+        state.eligibility = observation.data
+        state.evidence.extend(observation.data["evidence"])
+        return "Eligibility checked; evidence is ready."
+
+    if action == "finish":
+        if state.eligibility is None or not state.evidence:
+            state.status = "FAILED"
+            return (
+                "Stop safely: completion was requested "
+                "without evidence."
+            )
+
+        if state.eligibility["eligible"]:
+            state.status = "APPROVED"
+            return (
+                "Goal complete: the claim meets "
+                "the approval rules."
+            )
+
+        state.status = "ESCALATED"
+        reasons = "; ".join(state.eligibility["reasons"])
+
+        return (
+            "Goal complete: human review is required. "
+            f"{reasons}"
+        )
+
+    state.status = "FAILED"
+
+    return (
+        "Stop safely: the observation "
+        "could not be evaluated."
+    )</code></pre>
+
+<h2>Step 7：接起主迴圈與終止規則</h2>
+
+<p>現在把選擇、執行與評估接成 loop。每一回合固定做四件事：</p>
+
+<ol>
+<li>由 <code>select_action()</code> 選出 action。</li>
+<li>由 <code>execute_action()</code> 執行工具。</li>
+<li>由 <code>evaluate_observation()</code> 更新 state 並判斷是否停止。</li>
+<li>把本回合的 action、observation、evaluation 與 status 寫進 <code>trace</code>。</li>
+</ol>
+
+<p>loop 只有在狀態仍是 <code>RUNNING</code> 且回合數尚未達到 <code>max_turns</code> 時才會繼續。若回合用完仍沒有終止，改成 <code>LIMIT_REACHED</code>，並把停止原因也寫入 trace。</p>
+
+<pre data-source="sources/loop-engineer/20261003/1 - Understand the Agentic Loop/6. Lab Map an Agent Loop from Goal to Completion.html#lab-map-an-agent-loop"><code>def run_agent(claim_id: str) -&gt; AgentState:
+    state = AgentState(
+        goal=(
+            "Review the expense claim and approve it, "
+            "escalate it, or fail safely."
+        ),
+        claim_id=claim_id,
+    )
+
+    while (
+        state.status == "RUNNING"
+        and state.turn &lt; state.max_turns
+    ):
+        state.turn += 1
+
+        action = select_action(state)
+        observation = execute_action(action, state)
+        evaluation = evaluate_observation(
+            action,
+            observation,
+            state,
+        )
+
+        state.trace.append(
+            {
+                "turn": state.turn,
+                "action": action,
+                "observation": {
+                    "ok": observation.ok,
+                    "data": observation.data,
+                    "error": observation.error,
+                },
+                "evaluation": evaluation,
+                "status": state.status,
+            }
+        )
+
+    if state.status == "RUNNING":
+        state.status = "LIMIT_REACHED"
+
+        state.trace.append(
+            {
+                "turn": state.turn,
+                "action": "stop",
+                "observation": {
+                    "ok": False,
+                    "error": "Turn limit reached.",
+                },
+                "evaluation": "Execution budget exhausted.",
+                "status": state.status,
+            }
+        )
+
+    return state</code></pre>
+
+<h2>Step 8：輸出可查核的結果</h2>
+
+<p>最後把 state 輸出成 JSON。除了最終狀態與使用回合數，結果還包含證據和完整 trace。這樣你看到的不只是「核准」或「轉人工」，還能追蹤 agent 如何走到那個結論。</p>
+
+<pre data-source="sources/loop-engineer/20261003/1 - Understand the Agentic Loop/6. Lab Map an Agent Loop from Goal to Completion.html#lab-map-an-agent-loop"><code>def print_result(state: AgentState) -&gt; None:
+    result = {
+        "goal": state.goal,
+        "claim_id": state.claim_id,
+        "final_status": state.status,
+        "turns_used": state.turn,
+        "evidence": state.evidence,
+        "trace": state.trace,
+    }
+
+    print(json.dumps(result, indent=2))
+
+if __name__ == "__main__":
+    claim_id = (
+        sys.argv[1]
+        if len(sys.argv) &gt; 1
+        else "CLM-1042"
+    )
+
+    final_state = run_agent(claim_id)
+    print_result(final_state)</code></pre>
+
+<h2>Step 9：驗證四條路徑</h2>
+
+<p>不要只確認程式「有輸出」。請確認它是因為正確的理由停下來。依序執行下面四條路徑：</p>
+
+<ol>
+<li>
+<p><strong>核准路徑</strong>：執行 <code>python3 agent_loop.py</code>。</p>
+<p>預期結果是 <code>"final_status": "APPROVED"</code>、<code>"turns_used": 4</code>。四回合的 action 順序應為 <code>fetch_claim</code>、<code>fetch_policy</code>、<code>check_eligibility</code>、<code>finish</code>。</p>
+</li>
+<li>
+<p><strong>轉人工路徑</strong>：執行 <code>python3 agent_loop.py CLM-2048</code>。</p>
+<p>預期結果是 <code>"final_status": "ESCALATED"</code>。trace 中應能看到收據缺失與金額超過自動核准上限。這仍然算成功，因為 agent 完成了自己的 goal：把有風險的申請交給人，並附上原因與證據。</p>
+</li>
+<li>
+<p><strong>安全失敗路徑</strong>：執行 <code>python3 agent_loop.py CLM-9999</code>。</p>
+<p>這筆申請不存在，因此預期結果是 <code>"final_status": "FAILED"</code>，trace 只應有失敗的 <code>fetch_claim</code>。agent 不應繼續讀政策、編造申請資料，或在工具失敗後繼續往前跑。</p>
+</li>
+<li>
+<p><strong>回合上限路徑</strong>：暫時把 <code>max_turns</code> 改成 <code>2</code>，再執行預設申請。</p>
+<p>預期結果是 <code>"final_status": "LIMIT_REACHED"</code>。兩回合足以取得申請與政策，卻還來不及檢查資格與收尾。測試後，記得把 <code>max_turns</code> 改回 <code>5</code>。</p>
+</li>
+</ol>
+
+<figure class="lesson-figure"><img src="./map-agent-loop-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>完成檢查：每個抽象概念都要落到程式</h2>
+
+<blockquote>
+<p>這個 lab 的成果，不只是讓一筆報銷跑完，而是把 agent loop 的每個抽象元素對到具體程式：</p>
+<ul>
+<li>goal 是 <code>AgentState</code> 裡的目標文字。</li>
+<li>state 是 <code>AgentState</code>。</li>
+<li>action selection 是 <code>select_action()</code>。</li>
+<li>tool execution 是 <code>execute_action()</code> 與各個工具函式。</li>
+<li>observation 是 <code>ToolResult</code>。</li>
+<li>evaluation 是 <code>evaluate_observation()</code>。</li>
+<li>完成條件是通過資格檢查，並且保有證據。</li>
+<li>終止狀態是 <code>APPROVED</code>、<code>ESCALATED</code>、<code>FAILED</code>、<code>LIMIT_REACHED</code>。</li>
+<li>執行上限是 <code>max_turns</code>。</li>
+<li>可審計的執行軌跡是 <code>state.trace</code>。</li>
+</ul>
+<p>當四條路徑都得到預期結果，你就驗證了這個 loop 會在明確、可查核的終點停止，而不是只產生一段看起來像答案的回覆。</p>
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./build-tool-dispatcher.html">← 上一步：實作 Python Tool Dispatcher</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="AgentState 裡的 max_turns 主要用來做什麼？" data-correct="1" data-explain="它是執行上限，防止 loop 在沒有明確終點時永遠跑下去。">
+  <button class="opt">記錄這筆申請總共有多少金額</button>
+  <button class="opt">當作執行上限，防止 loop 永遠跑</button>
+  <button class="opt">決定自動核准的金額上限是多少</button>
+  <button class="opt">統計這次 run 總共花了多少錢</button>
+</div>
+<div class="quiz" data-question="select_action() 決定下一步的邏輯是什麼？" data-correct="2" data-explain="它檢查 state 還缺哪一項，缺申請先取申請，全齊了就準備 finish。">
+  <button class="opt">隨機挑一個工具，增加探索的多樣性</button>
+  <button class="opt">問模型哪一個工具看起來最有希望</button>
+  <button class="opt">看 state 還缺哪一項，缺什麼補什麼</button>
+  <button class="opt">一律依照工具註冊表的固定順序跑</button>
+</div>
+<div class="quiz" data-question="為什麼要把工具執行與評估拆成兩個函式？" data-correct="0" data-explain="工具只報告發生什麼，evaluator 才決定那個結果對 goal 是什麼意思。">
+  <button class="opt">工具只報告發生什麼，評估才判讀意義</button>
+  <button class="opt">因為一個檔案只能放得下一個函式</button>
+  <button class="opt">因為這樣可以讓程式執行的速度更快</button>
+  <button class="opt">因為工具永遠不該回傳任何錯誤訊息</button>
+</div>
+<div class="quiz" data-question="CLM-2048 最後得到 ESCALATED，為什麼這算成功？" data-correct="2" data-explain="agent 完成了 goal：把有風險的申請轉人工，並附上原因與證據。">
+  <button class="opt">因為它其實偷偷核准了這一筆申請</button>
+  <button class="opt">因為它讓程式跑滿了所有回合上限</button>
+  <button class="opt">因為它把有風險的申請轉人工並附證據</button>
+  <button class="opt">因為它成功避開了所有工具呼叫動作</button>
+</div>
+<div class="quiz" data-question="CLM-9999 查到一筆不存在的申請後，loop 應該怎麼做？" data-correct="3" data-explain="fetch_claim 失敗就安全停下，不應該再讀政策或編造資料。">
+  <button class="opt">自己編一筆看起來合理的申請資料</button>
+  <button class="opt">跳過查詢，直接繼續讀政策與收尾</button>
+  <button class="opt">不斷重試同一個查詢直到它成功為止</button>
+  <button class="opt">安全停下，trace 只留這次失敗的查詢</button>
+</div>
+<div class="quiz" data-question="什麼情況下 loop 最後會停在 LIMIT_REACHED？" data-correct="1" data-explain="跑完上限仍是 RUNNING，代表預算用盡，狀態改成 LIMIT_REACHED。">
+  <button class="opt">當資格檢查的結果是不符合規則時</button>
+  <button class="opt">當回合跑完仍停在 RUNNING 時</button>
+  <button class="opt">當工具回傳一個失敗的 ToolResult 時</button>
+  <button class="opt">當申請的收據欄位標記為缺少時</button>
+</div>
+<div class="quiz" data-question="為什麼 check_eligibility() 除了 eligible 之外還要回傳 evidence？" data-correct="2" data-explain="最終狀態不足以說服人，必須保留支持決定的事實，供後續查核。">
+  <button class="opt">因為 evidence 能讓程式執行的速度更快</button>
+  <button class="opt">因為這樣就不需要再讀取任何政策資料</button>
+  <button class="opt">因為決定需要有事實支撐，才禁得起查核</button>
+  <button class="opt">因為 eligible 這個欄位其實是多餘的</button>
+</div>
+
+<div class="footer">
+  <p>loop-engineer · 入門實作：Tool Dispatcher 與 Loop Map · Step 4/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

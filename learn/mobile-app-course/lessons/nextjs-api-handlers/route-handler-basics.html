@@ -8,23 +8,30 @@
 </head>
 <body>
 
-<h1>手機要的 API：Next.js Route Handler 入門</h1>
+<h1>手機怎麼拿到資料？從 Next.js Route Handler 認識 API</h1>
 <p class="meta">Step 1/5 · Next.js API Route Handlers</p>
 
-<h2>學習目標</h2>
-<p>能說出 Route Handler 的檔案位置與 HTTP method 匯出慣例，並解釋手機為什麼只能透過 HTTP API 拿到資料。</p>
+<h2>先看全貌：手機和資料庫之間，少不了一扇門</h2>
 
-<h2>前言：手機不在你的 server 裡</h2>
+<p>想像你的診所 app 要顯示「今天的預約」。在 dashboard 裡，資料似乎很容易出現：頁面程式碼和資料庫都在同一台伺服器、同一個執行環境裡，程式可以直接呼叫資料庫，像在同一個房間裡伸手拿東西。</p>
 
-<p>先想一個很日常的場景。你的診所後台 dashboard 要顯示「今天的預約」，你打開頁面，資料就出來了。這很自然，因為 dashboard 的程式碼和資料庫跑在同一台伺服器、同一個行程裡，它可以直接伸手去資料庫拿資料，中間不用繞路。</p>
+<p>手機 app 卻在使用者的口袋裡，和你的伺服器隔著整個網際網路。它沒有你的 server 程式碼，也不能直接碰你的資料庫。手機能做的事，是送出 HTTP 請求；伺服器則回傳 HTTP 回應。</p>
 
-<p>但手機 app 完全不是這樣。手機在使用者的口袋裡，跟你隔著整個網際網路。它沒有你的程式碼，也碰不到你的資料庫，它唯一會講的語言就是 HTTP。所以「手機要顯示今天有誰預約」這件事，實際上是手機送出一段 HTTP 請求、你的伺服器回一段 HTTP 回應。這一節要做的，就是蓋出那個伺服器端的入口：Next.js 的 Route Handlers。</p>
+<p>因此，手機和資料庫之間需要一扇門：手機把請求送到這扇門，server 在門內查詢資料，再把結果整理成手機看得懂的回應。Next.js 的 <strong>Route Handler</strong>，就是用來建立這扇門的入口。</p>
 
-<p>如果沒有這層入口，手機就只能把資料硬寫在程式碼裡，改一次要重新上架一次，而且每個使用者看到的都一樣。課程裡就是先做出這種硬寫資料的版本，後來才用一個 prompt「把整個 app 接上已經做好的 web 和 API routes」，一次改了二十幾個檔案，手機才開始顯示真的資料。這一步只是要讓「手機說 HTTP，server 聽得懂」這件事成立。</p>
+<figure class="lesson-figure"><img src="./route-handler-basics-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>如果沒有這層 API，手機只能把資料硬寫在 app 裡。資料一改，就得重新上架；而且每個使用者看到的內容都會一樣。這個課程先從硬寫資料的版本開始，後來再用一個 prompt「把整個 app 接上已經做好的 web 和 API routes」，一次修改二十幾個檔案，讓手機真正顯示 server 上的資料。這一步的核心很單純：讓手機用 HTTP 說話，讓 server 有地方可以接住它。</p>
+
+<h2>這一節要建立的觀念</h2>
+
+<p>讀完後，你應該能辨認三件事：Route Handler 放在哪裡、檔案怎麼對應到網址，以及不同的 HTTP method 要怎麼匯出。你也要能說明，為什麼手機不能像 dashboard 一樣直接讀資料庫。</p>
 
 <h2>Route Handler 是什麼：網址與方法的對應表</h2>
 
-<p>Route Handler 說穿了很樸素。在 Next.js 的 App Router 裡，你把一個叫 <code>route.ts</code> 的檔案放在 <code>app/api</code> 底下，它對應到的就是一個 API 端點。檔案放在哪個資料夾，就決定網址長什麼樣子。</p>
+<p>在 Next.js 的 App Router 裡，Route Handler 是一個放在 <code>app/api</code> 底下、名稱為 <code>route.ts</code> 的檔案。它會對應到一個 API 端點。</p>
+
+<p>可以把資料夾結構想成一張地址地圖：檔案放在哪個資料夾，就決定 API 的網址長什麼樣子。</p>
 
 <pre data-provenance="derived"><code>apps/web/src/app/api/
 ├── services/route.ts              →  GET /api/services
@@ -32,13 +39,17 @@
 ├── appointments/route.ts          →  GET、POST /api/appointments
 └── appointments/[id]/route.ts     →  GET、PATCH /api/appointments/:id</code></pre>
 
-<p>最關鍵的慣例是：檔案裡「匯出什麼名字」，就對應到「哪個 HTTP method」。你寫 <code>export const GET</code>，這個端點就接受 GET；寫 <code>export const POST</code>，就接受 POST。同一個檔案可以同時匯出好幾個，也就是一個端點可以支援多種方法，各自處理不同的事。方括號的資料夾像是 <code>[id]</code> 代表動態區段，實際的 id 會從網址傳進來。</p>
+<p>檔案裡匯出的名稱，則決定它接受哪一種 HTTP method。匯出 <code>export const GET</code>，代表端點接受 GET；匯出 <code>export const POST</code>，代表端點接受 POST。同一個 <code>route.ts</code> 可以匯出多個 method，因此同一個網址可以分別處理查詢與建立資料。</p>
 
-<p>還有一個心態要換掉：這裡不 import 任何 Next.js 專屬的東西。handler 收到的 <code>Request</code> 和回出去的 <code>Response</code>，都是瀏覽器、Node 都認得的標準 Web 物件。所以同一套寫法不會綁死在 Next.js 上，你之後換框架，這些 handler 的骨架大部分可以整段帶走。</p>
+<p>像 <code>[id]</code> 這種用方括號包起來的資料夾，代表動態區段。實際的 id 會從網址傳進來，所以 <code>/api/appointments/123</code> 可以對應到 <code>/api/appointments/[id]/route.ts</code>。</p>
 
-<h2>一個最簡單的 handler 長什麼樣子</h2>
+<p>這裡還有一個值得記住的邊界：handler 不需要 import Next.js 專屬的 Request 或 Response。它收到的 <code>Request</code> 和回傳的 <code>Response</code>，都是瀏覽器與 Node 都認得的標準 Web 物件。也就是說，這套 handler 的基本骨架不會完全綁死在 Next.js 上，未來更換框架時，大部分概念仍然可以沿用。</p>
 
-<p>先看一個幾乎沒有邏輯的端點，服務清單。它做的事只有三件：確認呼叫的人有登入、從資料庫撈出還啟用中的服務、把結果包成 JSON 回傳。</p>
+<figure class="lesson-figure"><img src="./route-handler-basics-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>一個最簡單的 handler：三件事完成一次查詢</h2>
+
+<p>先看服務清單這個端點。它的工作很集中：先確認使用者已登入，再從資料庫撈出仍在啟用中的服務，最後把結果包成 JSON 回傳。</p>
 
 <pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/api/services/route.ts"><code>import { asc, eq } from 'drizzle-orm';
 
@@ -58,9 +69,13 @@ export const GET = route(async () => {
   return json({ services: rows });
 });</code></pre>
 
-<p>這裡有兩個之後會一直被用到的名字。<code>requireAuth()</code> 是守衛，負責確認身分，沒有登入就當場擋掉（第 3 步會細講）。<code>route(...)</code> 是包裝器，把整個 handler 包起來，讓裡面丟出的錯誤最後會變成乾淨的 JSON，而不是一團 500（第 2 步會細講）。現在你只要先記得：每個 handler 外面幾乎都套著 <code>route()</code>，裡面開頭幾乎都先呼叫一個守衛。</p>
+<p>這段程式裡有兩個之後會反覆出現的角色。<code>requireAuth()</code> 是守衛，負責確認呼叫者的身分；如果沒有登入，就會擋下請求。<code>route(...)</code> 是包裝器，負責把 handler 裡發生的錯誤整理成乾淨的 JSON，而不是讓錯誤一路冒出去，最後只剩一個難以理解的 500。</p>
 
-<p>再對照一個支援多個方法的端點。預約端點同一個檔案裡就有 GET 和 POST，GET 負責列出全家人的預約，POST 負責真正建立一筆預約。</p>
+<p>現在先不用急著深入這兩個工具的內部實作。先建立一個閱讀 handler 的習慣：外層通常會套上 <code>route()</code>，內容一開始通常會先經過身分驗證，接著才執行資料庫查詢或其他商業邏輯。</p>
+
+<h2>同一個端點，也可以處理不同方法</h2>
+
+<p>再看預約端點。它和服務清單不同，同一個檔案同時支援 GET 與 POST。GET 用來列出整個家庭的預約；POST 則用來真正建立一筆預約。</p>
 
 <pre data-source="sources/mobile-app-course/20261001/dental-app-master/apps/web/src/app/api/appointments/route.ts"><code>/** GET /api/appointments?scope=upcoming|past — across the whole family. */
 export const GET = route(async (req: Request) => {
@@ -76,11 +91,17 @@ export const POST = route(async (req: Request) => {
   …
 });</code></pre>
 
-<p>看到 Query 參數也是從 <code>req.url</code> 自己解析，例如 GET 會把 <code>?scope=past</code> 讀出來決定要抓過去還是未來的預約。這也是標準 Web API 的好處：你不需要學一套框架專屬的參數取出方法。</p>
+<p>GET 的查詢範圍也可以放在網址的 Query 參數裡。例如 <code>?scope=past</code> 會被從 <code>req.url</code> 解析出來，用來決定要查過去的預約，還是未來的預約。</p>
 
-<h2>為什麼不讓手機直接讀資料庫就好？</h2>
+<p>這裡再次看見標準 Web API 的好處：你直接從 <code>Request</code> 讀取網址，不必另外學一套框架專用的參數取出方式。Route Handler 就像一個翻譯站，負責把手機送來的 HTTP 請求，接到 server 既有的資料與邏輯上。</p>
 
-<p>你可能會想，既然 dashboard 可以直接讀資料庫，為什麼不讓手機也這樣？除了「手機根本連不到你的資料庫」這個物理限制外，還有一個安全理由：資料庫連線字串等於整個資料庫的鑰匙。把它放進手機 app，等於把鑰匙發給每一個下載 app 的人，任何人反編譯就能拿走。</p>
+<h2>弱做法：讓手機直接讀資料庫</h2>
+
+<p>你可能會想：既然 dashboard 可以直接讀資料庫，手機為什麼不行？第一個原因是實際上的連線限制——手機不在你的 server 裡，根本不能像 Server Component 一樣直接呼叫資料庫。</p>
+
+<p>第二個原因更重要：安全性。資料庫連線字串等於整個資料庫的鑰匙。如果把它放進手機 app，就等於把鑰匙發給每一個下載 app 的人。只要有人反編譯 app，就可能把這把鑰匙拿走。</p>
+
+<p>所以，讓手機直接連資料庫是弱做法；把資料庫留在 server，由 Route Handler 代為查詢並回傳必要資料，才是較安全、也更容易控制的分工。</p>
 
 <table>
 <thead>
@@ -94,15 +115,21 @@ export const POST = route(async (req: Request) => {
 </tbody>
 </table>
 
-<p>所以這個 app 的分工很明確：dashboard 走 Server Component 直讀資料庫，手機走 Route Handler 打 API，而商業邏輯（例如「這筆預約可不可以取消」）只寫一份，放在 <code>lib</code> 裡，兩邊共用。這樣同一條規則不會因為兩個入口而各寫一次、慢慢走鐘。</p>
+<p>在這個 app 裡，兩種入口各自負責不同的工作：dashboard 使用 Server Component，直接讀取資料庫；手機則呼叫 Route Handler，透過 API 取得 JSON。至於「這筆預約能不能取消」這類商業邏輯，只寫一份，放在 <code>lib</code> 裡讓兩邊共用。</p>
 
-<h2>小結</h2>
+<p>這個安排很像把交通規則放在同一份法規裡，而不是讓兩個城市各自抄一份。入口可以不同，但判斷規則必須一致，才不會因為 dashboard 和手機各寫一次，最後產生兩套互相矛盾的結果。</p>
+
+<h2>Route Handler 應該掛在哪裡？</h2>
 
 <blockquote>
-Route Handler 就是 <code>app/api</code> 底下的一組檔案，資料夾路徑決定網址，匯出的名字（<code>GET</code>、<code>POST</code>、<code>PATCH</code>）決定接受的 HTTP method，收送的 <code>Request</code>／<code>Response</code> 都是標準 Web 物件。手機不在伺服器裡，唯一能碰資料的方式就是打這些 HTTP 端點；而把資料庫鑰匙留在 server 端，正是這層 API 存在的主要理由。
+Route Handler 就是 <code>app/api</code> 底下的一組檔案：資料夾路徑決定網址，匯出的名稱（<code>GET</code>、<code>POST</code>、<code>PATCH</code>）決定接受的 HTTP method，而收送的 <code>Request</code>／<code>Response</code> 都是標準 Web 物件。手機不在伺服器裡，唯一能碰到資料的方式就是呼叫這些 HTTP 端點；把資料庫的鑰匙留在 server 端，正是這層 API 存在的主要理由。
 </blockquote>
 
-<p>現在你知道怎麼開一個端點了，但端點開著就會出事。假設 <code>requireAuth()</code> 發現你沒登入，它丟出一個錯誤，然後呢？如果就這樣讓它冒出去，使用者會收到一個看不懂的 500，甚至可能夾帶資料庫的原始錯誤訊息。下一步要把這件事收乾淨：用 <code>route()</code> 把錯誤統一變成一致的 JSON 信封。</p>
+<p>現在可以把這個觀念和前面的 app 分工接起來：Server Component 適合在 server 內部直接拿資料；手機則需要一個對外的 HTTP 入口。Route Handler 就是這個入口，不是另一套資料庫，也不是把商業邏輯重寫一次，而是把 server 裡的資料與規則，以手機能理解的方式送出去。</p>
+
+<figure class="lesson-figure"><img src="./route-handler-basics-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>不過，入口開出來只是第一關。假設 <code>requireAuth()</code> 發現使用者沒有登入，它丟出一個錯誤之後，這個錯誤要怎麼回到手機？如果直接讓錯誤冒出去，使用者可能只收到看不懂的 500，甚至看到資料庫的原始錯誤訊息。下一步會處理這個邊界：用 <code>route()</code> 把錯誤統一包成一致的 JSON 信封。</p>
 
 <div class="lesson-nav">
   <div></div>
@@ -117,35 +144,30 @@ Route Handler 就是 <code>app/api</code> 底下的一組檔案，資料夾路�
   <button class="opt">由 Next.js 設定檔裡的 routes 陣列決定</button>
   <button class="opt">由資料庫 schema 的資料表名稱決定</button>
 </div>
-
 <div class="quiz" data-question="為什麼不讓手機 app 直接連線資料庫，而要透過 API？" data-correct="2" data-explain="資料庫連線字串是鑰匙，放進 app 等於發給每個下載的人。">
   <button class="opt">因為手機的網路速度比伺服器慢很多</button>
   <button class="opt">因為資料庫不支援手機的作業系統</button>
   <button class="opt">因為等於把資料庫的鑰匙發給所有人</button>
   <button class="opt">因為手機沒有辦法解析 SQL 的語法</button>
 </div>
-
 <div class="quiz" data-question="Route Handler 收送的 Request 與 Response 有什麼特別之處？" data-correct="0" data-explain="它們是瀏覽器與 Node 都認得的標準 Web 物件，不是框架專屬型別。">
   <button class="opt">它們是標準 Web 物件，不綁定特定框架</button>
   <button class="opt">它們是 Next.js 自己發明的專屬型別</button>
   <button class="opt">它們只能在瀏覽器環境中被使用</button>
   <button class="opt">它們必須先轉成資料庫的資料列才能用</button>
 </div>
-
 <div class="quiz" data-question="動態區段 [id] 出現在資料夾名稱上，代表什麼意思？" data-correct="3" data-explain="它是網址裡的變數，實際的值會在請求進來時由網址帶入。">
   <button class="opt">代表這個端點永遠不需要登入驗證</button>
   <button class="opt">代表這個端點只接受 POST 方法</button>
   <button class="opt">代表這個資料夾會被 Next.js 忽略</button>
   <button class="opt">代表網址這一段是會變動的參數</button>
 </div>
-
 <div class="quiz" data-question="在這個 app 裡，dashboard 與手機拿到資料的方式有何不同？" data-correct="1" data-explain="dashboard 用 Server Component 直讀 Drizzle，手機則打 Route Handler API。">
   <button class="opt">兩者都直接呼叫 Drizzle 讀取資料庫</button>
   <button class="opt">dashboard 直讀 DB，手機打 HTTP API</button>
   <button class="opt">dashboard 打 API，手機直接讀資料庫</button>
   <button class="opt">兩者都只讀硬寫在程式裡的假資料</button>
 </div>
-
 <div class="quiz" data-question="這個 app 為什麼把商業邏輯放在 lib，而不是分別寫在兩個入口？" data-correct="2" data-explain="同一條規則只寫一份，dashboard 與手機共用，才不會因兩個入口而各自走鐘。">
   <button class="opt">因為 lib 的程式碼執行速度比 route 快</button>
   <button class="opt">因為 Next.js 不允許在 route 裡寫邏輯</button>

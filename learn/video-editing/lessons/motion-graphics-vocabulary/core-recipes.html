@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>五個最常重複使用的 recipe</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>五個最常重複使用的 recipe</h1>
+<p class="meta">Step 2/4 · 動態圖像語彙庫</p>
+
+<h2>前言：把調好的樣式留成可以貼上的片段</h2>
+
+<p>上一節確認了一件事：想讓下一支影片更快，就得把做過的元素登記下來。這一節要看的，是其中最花時間、也最值得先收進語彙庫的一類：recipe。它們是寫在 composition 裡的程式碼片段，調好一次之後，就能直接貼到下一個作品。</p>
+
+<p>這裡挑出五個出場率最高的 recipe：讓卡片有玻璃質感的液態玻璃、把綠幕去掉的 chroma key、用 D3 畫的線框地球儀、像素風的 agent 圖示，以及旁白講到數字時跳出來的 count-up。以下每一項都用同樣的格式呈現：一行定義、關鍵參數、限制，以及一段最小範例。範例都可以直接複製進 composition，改幾個變數就能用。</p>
+
+<h2>一覽表</h2>
+
+<table>
+<thead>
+<tr><th>recipe</th><th>用途</th><th>關鍵參數</th><th>主要限制</th></tr>
+</thead>
+<tbody>
+<tr><td>液態玻璃卡片</td><td>疊在影片上的半透明卡片</td><td><code>blur(24px)</code>、<code>saturate(160%)</code>、底色透明度</td><td>底色太重會擋住後方影片</td></tr>
+<tr><td>chroma key 去背</td><td>移除綠幕，留下主體</td><td><code>feColorMatrix</code> 的 12% despill 與軟邊 alpha</td><td>別用 <code>type="discrete"</code>，邊緣會鋸齒</td></tr>
+<tr><td>D3 線框地球儀</td><td>可旋轉的地球，常配文字浮出</td><td><code>scale(360)</code>、<code>clipAngle(90)</code>、每秒 30 度</td><td>要用 <code>clearRect</code> 讓背景透明</td></tr>
+<tr><td>像素 agent 圖示</td><td>一排像素風的小圖示</td><td>4 欄輸入、8 欄鏡射、48×48 viewBox</td><td>鏡射要從輸入 4 欄展開</td></tr>
+<tr><td>數字 count-up</td><td>旁白講到數字時跳出的大字</td><td>0.5 秒跑完、停住、主色、短標籤</td><td>只放真的數字，別編造總數</td></tr>
+</tbody>
+</table>
+
+<h2>1 · 液態玻璃卡片（frosted iOS 風格）</h2>
+
+<p>用途：把卡片疊在影片上，仍能看見後方畫面。核心是 <code>backdrop-filter</code>，它只模糊卡片背後的內容，因此卡片會透出底下的影片，而不是變成一塊不透明的色塊。關鍵參數是 <code>blur(24px)</code> 與 <code>saturate(160%)</code>；玻璃的亮邊則由 <code>border</code> 與內陰影做出來。</p>
+
+<pre data-source="sources/video-editing/20261003/hyperframes-helper-main/.claude/skills/hyperframes-helper/templates/recipes.md"><code>.glass {
+  position: absolute;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.04) 50%, rgba(255,255,255,0.08) 100%),
+    rgba(20,22,30,0.28);            /* lighter — keeps video visible */
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 22px;
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.22),
+              inset 0 -1px 0 rgba(0,0,0,0.2),
+              0 16px 48px -12px rgba(0,0,0,0.5);
+  overflow: hidden;
+}</code></pre>
+
+<p>限制：底色的第二層（範例中的 <code>rgba(20,22,30,0.28)</code>）控制卡片多不透明。數字愈大，背後的影片愈看不見；要配合字幕條的深色版本，就把這一層換成不透明度更高的深色。範例另外還有 <code>::before</code> 與 <code>::after</code> 兩個偽元素，分別負責頂部反光與對角折射線，可以視需要增減。</p>
+
+<h2>2 · chroma key：用 SVG 濾鏡去背</h2>
+
+<p>用途：把綠幕素材（例如生成在純綠背景上的圖示）去背，留下主體。做法是一個 SVG <code>feColorMatrix</code> 濾鏡，它同時做兩件事：把綠色稍微壓低（despill），並依紅、綠、藍的組合算出軟邊的 alpha，讓去背邊緣保持平滑。</p>
+
+<pre data-source="sources/video-editing/20261003/hyperframes-helper-main/.claude/skills/hyperframes-helper/templates/recipes.md"><code>&lt;svg width="0" height="0" style="position:absolute;pointer-events:none;"&gt;
+  &lt;filter id="green-key"&gt;
+    &lt;feColorMatrix type="matrix" values="
+      1 0    0 0 0
+      0 0.88 0 0 0
+      0 0    1 0 0
+      1 -1.6 1 0 0.6"/&gt;
+  &lt;/filter&gt;
+&lt;/svg&gt;</code></pre>
+
+<pre data-source="sources/video-editing/20261003/hyperframes-helper-main/.claude/skills/hyperframes-helper/templates/recipes.md"><code>#claudeFlipVideo { filter: url(#green-key) drop-shadow(0 16px 40px rgba(0,0,0,0.5)); }</code></pre>
+
+<p>參數解讀：矩陣第二列 <code>0.88</code> 代表綠色只保留 88%，也就是 12% 的綠色去溢色；最後一列 <code>1 -1.6 1 0 0.6</code> 則是以紅、綠、藍算出軟邊的 alpha。限制是<strong>不要用 <code>feComponentTransfer</code> 搭配 <code>type="discrete"</code></strong>，那會產生非黑即白的 alpha，邊緣出現階梯狀鋸齒。這個去背技巧也用在把綠幕生成的 3D logo 放進影片：模型先在綠幕上生出圖像，再用 color keying 去背。</p>
+
+<h2>3 · D3 線框地球儀</h2>
+
+<p>用途：畫一顆可旋轉的線框地球，常搭配文字由左或右浮出。它用 D3 的正交投影（orthographic projection，一種把球面壓到平面的投影方式）畫出球體與陸地輪廓，再用 Canvas 點出陸地上的半調網點。</p>
+
+<pre data-source="sources/video-editing/20261003/hyperframes-helper-main/.claude/skills/hyperframes-helper/templates/recipes.md"><code>const projection = d3.geoOrthographic().scale(360).translate([400, 400]).clipAngle(90);
+const path = d3.geoPath(projection, ctx);
+const graticule = d3.geoGraticule().step([15, 15]);
+…</code></pre>
+
+<pre data-source="sources/video-editing/20261003/hyperframes-helper-main/.claude/skills/hyperframes-helper/templates/recipes.md"><code>function drawGlobe(time) {
+  const t = time * 30.0;       // 30 deg/sec
+  projection.rotate([t, -10, 0]);
+  ctx.clearRect(0, 0, W, H);   // transparent — black-keyed!
+  …
+}
+
+tl.eventCallback('onUpdate', () => drawGlobe(tl.time()));</code></pre>
+
+<p>關鍵參數：<code>scale(360)</code> 決定地球大小，<code>clipAngle(90)</code> 只畫面向鏡頭的那半球，旋轉速度由 <code>time * 30.0</code>（每秒 30 度）控制。限制有兩個：第一，畫布要用 <code>clearRect</code> 清空而不是塗黑，這樣地球才能「浮」在任何背景上；第二，重繪要掛在時間軸的 <code>onUpdate</code> 上，而不是用 <code>requestAnimationFrame</code>，否則它不會跟著確定的時間軸走。陸地資料需要一份 Natural Earth 的 GeoJSON，包成 <code>window.NE_LAND</code> 後匯入。</p>
+
+<h2>4 · 像素風 agent 圖示</h2>
+
+<p>用途：做出一排風格一致的像素小圖示。每個圖示的輸入只有 4 欄的像素資料，渲染時把每一欄鏡射到第 8 欄，就會得到左右對稱的 8×8 圖像。圖示用 <code>viewBox="0 0 8 8"</code> 的 SVG 輸出，因此縮放到 24 像素仍清楚。</p>
+
+<pre data-source="sources/video-editing/20261003/hyperframes-helper-main/.claude/skills/hyperframes-helper/templates/recipes.md"><code>function agentSvg(a) {
+  const cols = 8;
+  let rects = '';
+  for (let y = 0; y &lt; a.pixels.length; y++) {
+    for (let x = 0; x &lt; a.pixels[y].length; x++) {
+      if (a.pixels[y][x]) {
+        rects += `&lt;rect x="${x}" y="${y}" width="1" height="1" fill="${a.color}"/&gt;`;
+        rects += `&lt;rect x="${cols - 1 - x}" y="${y}" width="1" height="1" fill="${a.color}"/&gt;`;
+      }
+    }
+  }
+  return `&lt;svg viewBox="0 0 8 8"&gt;${rects}&lt;/svg&gt;`;
+}</code></pre>
+
+<p>限制與脈絡：輸入資料是 4 欄，<code>cols - 1 - x</code> 這一行才是把圖案鏡射成 8 欄的關鍵；如果只寫 4 欄，圖示會少一半。官方範例的圖示資料來自專案的 <code>SIDEBAR_ICON_DATA</code>，每個圖示另外帶一個顏色與名字，方便整排排開時維持一致的視覺語言。</p>
+
+<h2>5 · 數字 count-up（hero number）</h2>
+
+<p>用途：當旁白講到一個數字，畫面同時跳出一顆又大又置中的數字，在你指定時間內從零跑到目標值，然後停住不跳動。這是讓口說數字與畫面同步的標準做法，常用於「四個外掛」「節省三小時」這類句子。</p>
+
+<pre data-provenance="derived"><code>&lt;!-- 最小示意：實際秒數與顏色依 DESIGN.md 設定 --&gt;
+&lt;div class="hero-number clip" data-start="6.0" data-duration="2.2" data-track-index="3"&gt;
+  &lt;span id="count"&gt;0&lt;/span&gt;
+  &lt;span class="label"&gt;個外掛&lt;/span&gt;
+&lt;/div&gt;
+
+&lt;!-- GSAP：0.5 秒跑到 4，之後 hold，不再變動 --&gt;
+tl.fromTo('#count', { innerText: 0 }, { innerText: 4, duration: 0.5, snap: { innerText: 1 } }, 6.0);</code></pre>
+
+<p>參數與限制：跑完的時間以 0.5 秒為準，數字用主色（accent color），下方配一行短標籤。最重要的原則是誠實：只放旁白真的講出來的數字，概略的說法就維持概略（例如「數千」），不要自己算一個總數填上去。這道限制的理由很簡單：畫面上的數字比口頭承諾更像事實，一旦編造，觀眾會當真。</p>
+
+<h2>一個容易踩到的限制：無限動畫不會被算進影片</h2>
+
+<p>收進語彙庫之前，先記住一個跨 recipe 的共同限制。像 pulse border 這種用 CSS <code>@keyframes</code> 加上 <code>infinite</code> 的連續動畫，在預覽時看起來很漂亮，但確定性算圖器<strong>不會</strong>把它跟著時間軸 seek。要放進正式影片的版本，得改寫成 GSAP 的有限次重複（<code>repeat</code> 給一個算得出來的次數）。這條規則和上一課的 composition 契約一致：任何一格畫面都必須能從時間軸算出來。</p>
+
+<h2>小結：五個可以直接貼上的樣式片段</h2>
+
+<blockquote>
+液態玻璃靠 <code>backdrop-filter: blur(24px) saturate(160%)</code> 做出能透出影片的卡片；chroma key 用 <code>feColorMatrix</code> 做軟邊去背與 12% despill，別用 <code>type="discrete"</code>；D3 地球儀用正交投影加上 <code>clearRect</code> 與 <code>onUpdate</code>；像素圖示從 4 欄輸入鏡射成 8 欄；數字 count-up 在 0.5 秒內跑到目標值再停住，而且只能用真實數字。凡是 CSS 無限動畫，都要改寫成有限次重複，才進得了確定性算圖。
+</blockquote>
+
+<p>這些 recipe 都是「已知要做什麼」時的查閱資料。但很多時候，你要的東西市面上不一定有現成的。下一節要處理的，就是這個選擇：一個新元素，該去 21st.dev 借現成元件，還是請模型自己做一個。</p>
+
+<div class="lesson-nav">
+  <div><a href="./library-vs-folder.html">← 上一步：語彙庫和資料夾差在哪裡</a></div>
+  <div><a href="./source-or-generate.html">下一步：借現成元件，還是自己生一個 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="液態玻璃卡片能透出後方影片，靠的是哪個屬性？" data-correct="2" data-explain="backdrop-filter 只模糊卡片背後的內容，因此仍看得見影片。">
+  <button class="opt">用 text-shadow 疊出多層亮光</button>
+  <button class="opt">用 conic-gradient 畫出邊框</button>
+  <button class="opt">用 backdrop-filter 模糊背景</button>
+  <button class="opt">用 feColorMatrix 算出 alpha</button>
+</div>
+<div class="quiz" data-question="chroma key 去背為何不建議用 type=&quot;discrete&quot;？" data-correct="1" data-explain="離散 alpha 非黑即白，去背邊緣會出現階梯狀鋸齒。">
+  <button class="opt">它會讓主體的顏色整個跑掉</button>
+  <button class="opt">它會讓去背邊緣出現鋸齒</button>
+  <button class="opt">它會讓影片的長度變得不確定</button>
+  <button class="opt">它會讓 SVG 濾鏡無法被引用</button>
+</div>
+<div class="quiz" data-question="D3 地球儀為什麼要用 clearRect 清空畫布？" data-correct="3" data-explain="clearRect 讓畫布保持透明，地球才能浮在任何背景上。">
+  <button class="opt">因為它可以加快地球的旋轉</button>
+  <button class="opt">因為它會自動匯入陸地資料</button>
+  <button class="opt">因為它能讓網點變成半調子</button>
+  <button class="opt">因為它讓畫布背景保持透明</button>
+</div>
+<div class="quiz" data-question="像素圖示的 4 欄輸入是怎麼變成 8 欄的？" data-correct="0" data-explain="渲染時把每一欄水平鏡射到對稱位置，形成左右對稱的 8 欄。">
+  <button class="opt">把每一欄水平鏡射到對側</button>
+  <button class="opt">把輸入直接複製一份貼上</button>
+  <button class="opt">用 feColorMatrix 放大兩倍</button>
+  <button class="opt">用 clipAngle 裁掉一半圖案</button>
+</div>
+<div class="quiz" data-question="數字 count-up 最重要的內容原則是什麼？" data-correct="2" data-explain="畫面上的數字要忠於旁白，概略的說法就維持概略。">
+  <button class="opt">數字一定要愈大愈有說服力</button>
+  <button class="opt">數字要同時搭配音效才有效</button>
+  <button class="opt">數字要忠於旁白不能編造</button>
+  <button class="opt">數字最好每秒都重新跳動</button>
+</div>
+<div class="quiz" data-question="pulse border 這種無限動畫為何不能直接進正式算圖？" data-correct="1" data-explain="確定性算圖不會 seek CSS 無限動畫，得改寫成有限次重複。">
+  <button class="opt">因為它的顏色不符合設計系統</button>
+  <button class="opt">因為它不會被算圖器 seek</button>
+  <button class="opt">因為它只能用在沒有影格的畫面</button>
+  <button class="opt">因為它需要額外付費才能使用</button>
+</div>
+
+<div class="footer">
+  <p>video-editing · 動態圖像語彙庫 · Step 2/4</p>
+  <p>讀到這裡有疑問，直接問你的 AI 助教；它可以針對這一節再展開，或用你自己的素材舉例。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>

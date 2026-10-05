@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>props-in / JSX-out：不需要 "use client" 的純展示元件</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>props-in / JSX-out：不需要「use client」的純展示元件</h1>
+<p class="meta">Step 2/4 · 元件組合模式：server shell + client island</p>
+
+<h2>先看整張地圖：功能多，不代表需要 client</h2>
+
+<p>想像你正在做一個問答平台。畫面上的 <code>QuestionCard</code> 會顯示標題連結、標籤、作者頭像、發問時間，還有按讚、回答與瀏覽數字。看起來像一張「很忙」的卡片，但它從頭到尾都沒有 <code>"use client"</code>。</p>
+
+<p>這不是漏寫，而是正確的設計。上一節把整個畫面分成一大片 server shell，再放進幾座需要互動的 client island。現在把鏡頭拉近：shell 裡的許多元件，其實只是把資料排成畫面。它們不需要記住狀態，也不需要回應點擊，因此可以留在 server。</p>
+
+<p>這一節要建立的判斷力是：不要看元件「顯示了多少東西」，要看它「自己有沒有互動行為」。</p>
+
+<h2>什麼是 props-in / JSX-out？</h2>
+
+<p>純展示元件的形狀很單純：接收 props，回傳 JSX。你可以把它想成一台印表機：餵進一份資料，它就按照固定版面印出畫面。它不會自己保存資料，也不會因為使用者點擊而改變狀態。</p>
+
+<figure class="lesson-figure"><img src="./presentational-components-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>因此，這種元件不需要被送到瀏覽器執行，也就不需要 <code>"use client"</code>。它在伺服器完成渲染，將 JSX 轉成 HTML 後，工作就告一段落。</p>
+
+<p>判斷時，可以先檢查幾個訊號：</p>
+
+<ul>
+  <li>有沒有自己的 <code>useState</code>？</li>
+  <li>有沒有使用 <code>useEffect</code>？</li>
+  <li>有沒有處理 <code>onClick</code> 等事件？</li>
+  <li>有沒有直接呼叫 <code>window</code> 或 <code>document</code>？</li>
+</ul>
+
+<p>如果都沒有，它很可能就是純展示元件。相反地，使用 <code>.map()</code> 把陣列排成清單、使用 <code>Link</code> 建立超連結、用條件判斷決定要不要顯示某個區塊，這些都只是渲染資料，不代表元件本身需要互動。</p>
+
+<h2>AI 常犯版 vs 正解版</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>AI 常犯版</th>
+      <th>正解版</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>看到 <code>Link</code>、<code>.map()</code> 或許多子元件，就在檔案頂端加上 <code>"use client"</code>。</td>
+      <td>先檢查元件自己是否使用 state、事件或瀏覽器 API；只有需要互動時才成為 client component。</td>
+    </tr>
+    <tr>
+      <td>把「畫面看起來很動態」誤認成「必須在瀏覽器執行」。</td>
+      <td>分清楚資料呈現與使用者互動：渲染當下能算完的內容，可以留在 server。</td>
+    </tr>
+    <tr>
+      <td>只要子元件是 client component，就把整個父元件也標成 client。</td>
+      <td>讓 server component 包住需要互動的 client island；父元件不必因此改變身分。</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>用 QuestionCard 看清楚這個模式</h2>
+
+<p>以下是 DevFlow 的 <code>QuestionCard</code>。它接收一個 <code>question</code> 物件，以及一個可選的 <code>showActionBtns</code>，接著回傳卡片的 JSX：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/components/cards/QuestionCard.tsx"><code>import Link from "next/link";
+import React from "react";
+
+import ROUTES from "@/constants/routes";
+import { getTimeStamp } from "@/lib/utils";
+
+import TagCard from "./TagCard";
+import Metric from "../Metric";
+import EditDeleteAction from "../user/EditDeleteAction";
+
+interface Props {
+  question: Question;
+  showActionBtns?: boolean;
+}
+
+const QuestionCard = ({
+  question: { _id, title, tags, author, createdAt, upvotes, answers, views },
+  showActionBtns = false,
+}: Props) =&gt; {
+  return (
+    &lt;div className="card-wrapper rounded-[10px] p-9 sm:px-11"&gt;
+      &lt;div className="flex flex-col-reverse items-center justify-between gap-5 sm:flex-row"&gt;
+        &lt;div className="flex-1"&gt;
+          &lt;span className="subtle-regular text-dark400_light700 line-clamp-1 flex sm:hidden"&gt;
+            {getTimeStamp(createdAt)}
+          &lt;/span&gt;
+
+          &lt;Link href={ROUTES.QUESTION(_id)}&gt;
+            &lt;h3 className="sm:h3-semibold base-semibold text-dark200_light900 line-clamp-1 flex-1"&gt;
+              {title}
+            &lt;/h3&gt;
+          &lt;/Link&gt;
+        &lt;/div&gt;
+
+        {showActionBtns &amp;&amp; &lt;EditDeleteAction type="Question" itemId={_id} /&gt;}
+      &lt;/div&gt;
+
+      &lt;div className="mt-3.5 flex w-full flex-wrap gap-2"&gt;
+        {tags.map((tag: Tag) =&gt; (
+          &lt;TagCard key={tag._id} _id={tag._id} name={tag.name} compact /&gt;
+        ))}
+      &lt;/div&gt;
+
+      &lt;div className="flex-between mt-6 w-full flex-wrap gap-3"&gt;
+        &lt;Metric
+          imgUrl={author.image}
+          alt={author.name}
+          value={author.name}
+          title={`• asked ${getTimeStamp(createdAt)}`}
+          href={ROUTES.PROFILE(author._id)}
+          textStyles="body-medium text-dark400_light700"
+          isAuthor
+          titleStyles="max-sm:hidden"
+        /&gt;
+
+        &lt;div className="flex items-center gap-3 max-sm:flex-wrap max-sm:justify-start"&gt;
+          &lt;Metric
+            imgUrl="/icons/like.svg"
+            alt="like"
+            value={upvotes}
+            title=" Votes"
+            textStyles="small-medium text-dark400_light800"
+          /&gt;
+          &lt;Metric
+            imgUrl="/icons/message.svg"
+            alt="answers"
+            value={answers}
+            title=" Answers"
+            textStyles="small-medium text-dark400_light800"
+          /&gt;
+          &lt;Metric
+            imgUrl="/icons/eye.svg"
+            alt="views"
+            value={views}
+            title=" Views"
+            textStyles="small-medium text-dark400_light800"
+          /&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+  );
+};
+
+export default QuestionCard;</code></pre>
+
+<p>先看元件的外形：它是一個普通的同步函式，沒有 <code>async</code>、沒有 hook，也沒有事件處理器。傳入的 <code>question</code> 已經包含 <code>title</code>、<code>tags</code>、<code>author</code>、<code>upvotes</code> 等資料，元件只需要把它們排成卡片。</p>
+
+<p>這就是 <strong>props-in / JSX-out</strong>：資料從 props 進來，畫面以 JSX 出去。卡片不需要知道資料從哪裡取得，也不在乎這筆資料來自首頁清單、標籤頁，還是使用者的個人頁。</p>
+
+<figure class="lesson-figure"><img src="./presentational-components-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>看起來動態，仍然可以留在 server</h2>
+
+<p>這張卡片裡有幾個地方，很容易讓人誤判。</p>
+
+<ul>
+  <li><code>Link</code> 負責建立標題連結。</li>
+  <li><code>tags.map()</code> 把標籤陣列展開成多個 <code>TagCard</code>。</li>
+  <li><code>getTimeStamp()</code> 把時間轉成容易閱讀的文字。</li>
+  <li>條件判斷決定是否顯示 <code>EditDeleteAction</code>。</li>
+</ul>
+
+<p>這些工作都能在渲染當下完成。它們沒有要求瀏覽器持續保存狀態，也沒有等待使用者操作後才執行某個事件。因此，這些「看起來有變化」的內容，並不等於 client 互動。</p>
+
+<p>判斷的重點不是「畫面上有沒有連結或清單」，而是「這個元件自己是否需要在瀏覽器裡持續運作」。<code>QuestionCard</code> 沒有這個需求。</p>
+
+<h2>props 就是元件的合約</h2>
+
+<p>純展示元件的價值，在於它把「資料來源」和「畫面呈現」切開。<code>QuestionCard</code> 只認得自己的 props：給它一個 <code>Question</code>，它就負責把資料排成一張卡片。</p>
+
+<p>至於資料是首頁清單抓來的、標籤頁篩出來的，還是某個使用者的個人頁撈到的，卡片一概不處理。這就像餐廳的固定餐盤：廚房從不同地方送來食材，但餐盤只負責按照同一套方式呈現。</p>
+
+<p>因此，同一個 <code>QuestionCard</code> 可以在首頁、標籤頁、個人檔案頁與收藏頁重複使用。每個頁面負責取得資料，再把資料交給卡片；卡片則用同一套版面呈現。這種「一個元件、多處重用」，正是 server shell 能維持一致的原因。</p>
+
+<h2>server 元件裡，也能放一座 client island</h2>
+
+<p>仔細看程式碼，<code>QuestionCard</code> import 了 <code>EditDeleteAction</code>。這個子元件需要開啟對話框並處理點擊，所以它是 client component。</p>
+
+<p>但 <code>QuestionCard</code> 本身仍然沒有 <code>"use client"</code>。只有在 <code>showActionBtns</code> 為真的時候，它才會把 <code>EditDeleteAction</code> 渲染出來。這就是「server 包 client」：卡片這層殼留在 server，只有編輯／刪除那顆小按鈕跨到 client。</p>
+
+<p>所以，純展示元件不是指「底下整棵樹都不能有 client」。它只表示這個元件自己不需要 client 身分。真正會讓卡片需要 client 的，是卡片本身加入了互動，例如滑鼠移過去時用 JavaScript 改變顏色，或點擊卡片任何地方都要觸發行為。</p>
+
+<p>只要這些需求存在於子元件，就把互動收進子元件；不要因為樹上有一座 client island，就把整個 server shell 一起改造成 client。</p>
+
+<figure class="lesson-figure"><img src="./presentational-components-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>一個常見的錯誤：為了保險而加上 use client</h2>
+
+<p>新手看到 <code>QuestionCard</code> 使用了 <code>Link</code>、<code>.map()</code>，又 import 了好幾個子元件，很容易在檔案頂端補上一行 <code>"use client"</code>，心想「先標起來比較保險」。</p>
+
+<p>問題是，這會讓卡片以及它 import 的 <code>TagCard</code>、<code>Metric</code> 一起被打包進瀏覽器，即使它們沒有任何互動程式碼。原本可以在 server 完成的資料呈現，反而被推到 client。</p>
+
+<p>比較可靠的做法，是把兩件事分開看：資料呈現是一回事，互動能力是另一回事。<code>QuestionCard</code> 只負責前者，所以不需要 <code>"use client"</code>。</p>
+
+<h2>把這個觀念掛回整體架構</h2>
+
+<blockquote>
+純展示元件只做兩件事：接收 props、回傳 JSX。它沒有 state、沒有事件，也不碰瀏覽器 API，因此不需要 <code>"use client"</code>，可以留在 server。<code>QuestionCard</code> 會把 <code>question</code> 排成標題、標籤與 metrics，靠 props 這份合約在不同頁面重複使用。它本身是 server 元件，卻可以在需要時渲染一顆 client 子元件；判斷關鍵永遠是「這個元件自己需不需要互動」。
+</blockquote>
+
+<p>現在可以把兩種零件放回同一張圖裡：server shell 由許多純展示磚塊組成，互動需求則集中在少數 client island。下一步，這些零件會被組成完整的列表畫面，並用一個泛型 renderer 把「有資料、沒資料、出錯」三種狀態收進同一個元件，避免每個列表頁都重新撰寫一次狀態 UI。</p>
+
+<div class="lesson-nav">
+  <div><a href="./server-shell-client-island.html">← 上一步：server shell + client island：一個畫面是怎麼拼起來的</a></div>
+  <div><a href="./generic-renderer-composition.html">下一步：用一個泛型 renderer 收斂列表畫面：DataRenderer 的 render prop →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="「props-in / JSX-out」的元件最準確的特徵是什麼？" data-correct="2" data-explain="它只接收 props、回傳 JSX，沒有自己的狀態或事件。">
+  <button class="opt">一定要寫 async 才能運作</button>
+  <button class="opt">一定要搭配 useState 管理資料</button>
+  <button class="opt">只接收 props 並回傳 JSX</button>
+  <button class="opt">一定要在檔案頂端加 use client</button>
+</div>
+<div class="quiz" data-question="下列哪一項會讓 QuestionCard 非得變成 client component？" data-correct="1" data-explain="元件自己有 state 或事件才需要 client；map、Link、時間格式化都不用。">
+  <button class="opt">用 tags.map 展開標籤清單</button>
+  <button class="opt">卡片自己用 state 記展開狀態</button>
+  <button class="opt">用 Link 包住標題做連結</button>
+  <button class="opt">用 getTimeStamp 格式化時間</button>
+</div>
+<div class="quiz" data-question="QuestionCard 為什麼能在好幾個頁面重複使用？" data-correct="0" data-explain="它只認 props 這個合約，不關心資料從哪個頁面取得。">
+  <button class="opt">它只認 props，不問資料來源</button>
+  <button class="opt">它會自己向伺服器重新抓資料</button>
+  <button class="opt">它把每個頁面的資料存在 state</button>
+  <button class="opt">它會依網址自動切換資料來源</button>
+</div>
+<div class="quiz" data-question="QuestionCard 渲染 EditDeleteAction，代表什麼？" data-correct="3" data-explain="server 元件可以渲染 client 子元件，只有那顆按鈕跨到 client。">
+  <button class="opt">代表 QuestionCard 一定是 client 元件</button>
+  <button class="opt">代表 EditDeleteAction 也是 server 元件</button>
+  <button class="opt">代表整張卡片都會被打包進瀏覽器</button>
+  <button class="opt">代表 server 殼裡可以嵌 client 小島</button>
+</div>
+<div class="quiz" data-question="看到元件裡有 .map()、Link、條件判斷，該怎麼判斷要不要 use client？" data-correct="1" data-explain="這些都是渲染時就算完的事；看的是元件自己有沒有互動需求。">
+  <button class="opt">只要有 map 就該標 use client</button>
+  <button class="opt">看它自己有沒有互動需求</button>
+  <button class="opt">只要有 Link 就該標 use client</button>
+  <button class="opt">看它 import 了幾個子元件</button>
+</div>
+<div class="quiz" data-question="把純展示元件的資料與畫面切開，帶來的主要好處是什麼？" data-correct="2" data-explain="它只認 props，因此能被多個頁面重用，版面也能保持一致。">
+  <button class="opt">讓元件一定能通過型別檢查</button>
+  <button class="opt">讓元件自動變成 client 元件</button>
+  <button class="opt">讓同一元件能被多處重用</button>
+  <button class="opt">讓資料自動快取在瀏覽器裡</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 元件組合模式：server shell + client island · Step 2/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

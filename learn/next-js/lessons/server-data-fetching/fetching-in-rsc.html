@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>在 server component 裡抓資料：async、await 與直接查 DB</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>在 Server Component 裡抓資料：從 async、await 到直接查 DB</h1>
+<p class="meta">Step 2/4 · 在 RSC 裡抓資料：何時用 server、何時用 client</p>
+
+<h2>這一節要完成什麼</h2>
+<p>你會建立一個能正常抓資料的 App Router 頁面：在 server component 裡使用 <code>async/await</code> 取得查詢參數，呼叫 server action 或直接查詢資料庫，最後把結果交給子元件渲染。</p>
+
+<p>單筆資料頁還要多做一步：如果查不到資料，就轉到 404，而不是讓頁面一路往下執行，直到存取不存在的欄位時才崩潰。</p>
+
+<h2>動手前需要什麼</h2>
+<p>你需要一個 App Router 頁面，例如 <code>app/page.tsx</code>，以及一個資料來源。這個資料來源可以是直接查資料庫的 ORM 或 Mongoose，也可以是像 <code>getQuestions</code> 這樣的 server action。</p>
+
+<p>只要頁面是 server component，也就是沒有加入 <code>"use client"</code>，這兩種資料來源都可以直接使用 <code>await</code>。</p>
+
+<h2>先看整體骨架：資料怎麼從網址走到畫面</h2>
+<p>server component 抓資料的流程，可以先記成一條清楚的路徑：</p>
+
+<ol>
+  <li>把頁面元件宣告成 <code>async</code>。</li>
+  <li>先解開 <code>searchParams</code> 或 <code>params</code>。</li>
+  <li>把網址中的字串參數轉成查詢需要的型別。</li>
+  <li>呼叫 server action 或直接查詢資料庫。</li>
+  <li>確認查詢成功，查不到單筆資料時轉到 404。</li>
+  <li>把結果交給子元件渲染。</li>
+</ol>
+
+<p>這套骨架就像餐廳的出餐流程：先拿到客人的訂單，再整理成廚房看得懂的格式，接著查資料、確認餐點存在，最後交給畫面端端上桌。任何一步漏掉，最後看到的可能就是空白、錯誤，或一個不該出現的頁面。</p>
+
+<figure class="lesson-figure"><img src="./fetching-in-rsc-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟一：把頁面元件宣告成 async</h2>
+
+<p>先從頁面元件本身開始。打開首頁，你可能會看到這樣的寫法：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/app/(root)/page.tsx"><code>async function Home({ searchParams }: RouteParams) {
+  const { page, pageSize, query, filter } = await searchParams;
+
+  const { success, data, error } = await getQuestions({
+    page: Number(page) || 1,
+    pageSize: Number(pageSize) || 10,
+    query,
+    filter,
+  });
+
+  const { questions, isNext } = data || {};</code></pre>
+
+<p>第一行的 <code>async function Home(...)</code> 是整個流程的起點。因為這是 server component，Next.js 允許元件函式回傳 Promise；它會等待函式裡的資料準備完成，再進行渲染。</p>
+
+<p>這和 client component 的處理方式不同。若頁面是 client component，通常要等元件掛載後，再透過 <code>useEffect</code> 抓資料。那樣就像先把空盒子送到畫面上，再從遠方補寄內容；server component 則能在渲染前先把資料準備好。</p>
+
+<h2>步驟二：先解開 searchParams</h2>
+
+<p>接著處理網址上的查詢參數。這一行是關鍵：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/app/(root)/page.tsx"><code>async function Home({ searchParams }: RouteParams) {
+  const { page, pageSize, query, filter } = await searchParams;
+
+  const { success, data, error } = await getQuestions({
+    page: Number(page) || 1,
+    pageSize: Number(pageSize) || 10,
+    query,
+    filter,
+  });
+
+  const { questions, isNext } = data || {};</code></pre>
+
+<p><code>searchParams</code> 代表網址上的查詢參數，例如 <code>?page=2&amp;filter=popular</code>。在新版 Next.js 中，<code>searchParams</code> 和動態路由的 <code>params</code> 都是 Promise，所以必須先 <code>await</code>，才能取得裡面的值。</p>
+
+<p>常見的錯誤寫法，是直接把它當成普通物件解構。這樣拿到的不是參數內容，而是一個還沒解開的 Promise；後續的欄位就可能全都變成 <code>undefined</code>，查詢條件也會跟著失效。</p>
+
+<p>還要注意，<code>searchParams</code> 裡的值全部都是字串。網址寫成 <code>?page=2</code> 時，取得的是字串 <code>"2"</code>，不是數字 2。因此範例才會使用：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/app/(root)/page.tsx"><code>async function Home({ searchParams }: RouteParams) {
+  const { page, pageSize, query, filter } = await searchParams;
+
+  const { success, data, error } = await getQuestions({
+    page: Number(page) || 1,
+    pageSize: Number(pageSize) || 10,
+    query,
+    filter,
+  });
+
+  const { questions, isNext } = data || {};</code></pre>
+
+<p><code>Number(page) || 1</code> 會把頁碼轉成數字；如果沒有頁碼，就使用第 1 頁。<code>pageSize</code> 也用同樣方式，沒有值時預設為 10。少了這層轉換，分頁運算可能會出現把字串接起來，而不是進行數字加減的怪結果。</p>
+
+<h2>步驟三：await 資料來源</h2>
+
+<p>參數整理好後，才進入真正的查詢。範例裡呼叫的是 <code>getQuestions</code>：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/app/(root)/page.tsx"><code>async function Home({ searchParams }: RouteParams) {
+  const { page, pageSize, query, filter } = await searchParams;
+
+  const { success, data, error } = await getQuestions({
+    page: Number(page) || 1,
+    pageSize: Number(pageSize) || 10,
+    query,
+    filter,
+  });
+
+  const { questions, isNext } = data || {};</code></pre>
+
+<p>這裡把剛剛整理好的參數傳給 <code>getQuestions</code>，再用 <code>await</code> 等待結果。回傳值固定採用 <code>{ success, data, error }</code> 這種形狀，因此可以直接解構成 <code>{ success, data, error }</code>，接著從 <code>data</code> 取出 <code>questions</code> 和 <code>isNext</code>。</p>
+
+<p>如果資料來源是資料庫，也可以直接等待查詢。單筆詳情頁通常會使用像 <code>getQuestion</code> 這樣的 action；它的底層可能直接查詢一筆資料，並且一併帶出相關資料：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/lib/actions/question.action.ts"><code>const question = await Question.findById(questionId)
+  .populate("tags", "_id name")
+  .populate("author", "_id name image");
+
+if (!question) throw new Error("Question not found");
+
+return { success: true, data: JSON.parse(JSON.stringify(question)) };</code></pre>
+
+<p>這段查詢有兩個重點。</p>
+
+<p>第一個是 <code>.populate()</code>。資料庫裡的 <code>author</code> 欄位可能只存著使用者 ID，<code>populate</code> 會依照這個 ID 找到真正的作者文件。第二個參數 <code>"_id name image"</code> 則限制只取作者的 ID、名字和頭像。</p>
+
+<p>限制欄位就像打包行李：詳情頁只需要這幾樣東西，就不要把整個使用者文件都塞進回傳結果。資料量較小，傳輸就不會白白變肥、變慢。</p>
+
+<figure class="lesson-figure"><img src="./fetching-in-rsc-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>第二個重點是：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/lib/actions/question.action.ts"><code>const question = await Question.findById(questionId)
+  .populate("tags", "_id name")
+  .populate("author", "_id name image");
+
+if (!question) throw new Error("Question not found");
+
+return { success: true, data: JSON.parse(JSON.stringify(question)) };</code></pre>
+
+<p><code>JSON.parse(JSON.stringify(question))</code> 會把 Mongoose 的複雜物件轉成純資料。當結果要透過 server action 傳給畫面時，先做這個轉換，可以避免大型 payload 傳遞時出現問題。</p>
+
+<h2>步驟四：查不到資料就轉到 404</h2>
+
+<p>單筆查詢最容易被 AI 漏掉的，不是 <code>await</code>，而是「查不到怎麼辦」。正解會在拿到結果後立刻檢查：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/app/(root)/questions/[id]/page.tsx"><code>const { success, data: question } = await getQuestion({ questionId: id });
+
+if (!success || !question) return redirect("/404");</code></pre>
+
+<p>這裡先等待 <code>getQuestion</code> 回傳，再檢查兩件事：</p>
+
+<ul>
+  <li>如果 <code>success</code> 是 false，代表查詢沒有成功。</li>
+  <li>如果 <code>question</code> 不存在，代表找不到這筆資料。</li>
+</ul>
+
+<p>只要其中一項成立，就執行 <code>redirect("/404")</code>。若漏掉這個判斷，使用者輸入不存在的 ID 時，頁面可能繼續往下渲染，等到程式存取 <code>question.title</code> 等欄位才崩潰。對使用者來說，看到的就不是清楚的 404，而是一個難以理解的錯誤頁。</p>
+
+<figure class="lesson-figure"><img src="./fetching-in-rsc-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這裡的 <code>id</code> 也要先透過 <code>await params</code> 取得，規則和 <code>searchParams</code> 相同：它們都是新版 Next.js 中需要等待解開的 Promise。</p>
+
+<p><code>data: question</code> 是解構時的重新命名。它把回傳物件中的 <code>data</code> 欄位命名為 <code>question</code>，讓後續程式更容易閱讀。判斷也要放在取用資料之前：先確認資料真的存在，再去解構或存取 <code>title</code>、<code>author</code> 等欄位。</p>
+
+<h2>步驟五：把資料交給子元件渲染</h2>
+
+<p>資料抓好後，頁面本身通常不需要塞滿各種成功、錯誤和空資料的 <code>if</code>。可以把結果交給可重用的 <code>DataRenderer</code>：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/app/(root)/page.tsx"><code>&lt;DataRenderer
+  success={success}
+  error={error}
+  data={questions}
+  empty={EMPTY_QUESTION}
+  render={(questions) =&gt; (
+    &lt;div className="mt-10 flex w-full flex-col gap-6"&gt;
+      {questions.map((question) =&gt; (
+        &lt;QuestionCard key={question._id} question={question} /&gt;
+      ))}
+    &lt;/div&gt;
+  )}
+/&gt;</code></pre>
+
+<p><code>DataRenderer</code> 負責處理成功、錯誤和空資料等狀態。頁面只需要把查詢結果、錯誤資訊、空資料提示，以及「一筆資料要怎麼畫」的 <code>render</code> 函式交給它。</p>
+
+<p>這樣頁面的職責就很清楚：先 <code>await</code> 資料、確認資料狀態，再把資料交給元件渲染。資料取得和畫面呈現各自負責自己的工作，程式就不會像把廚房、櫃檯和送餐路線全部擠在同一張桌子上。</p>
+
+<h2>做完之後，應該看到什麼</h2>
+
+<p>完成後，你應該得到一個 async 的 server component，並且具備以下流程：</p>
+
+<ol>
+  <li>使用 <code>await searchParams</code> 或 <code>await params</code> 取得網址參數。</li>
+  <li>把需要計算的字串參數轉成數字。</li>
+  <li>使用 <code>await</code> 呼叫 server action 或直接查詢 DB。</li>
+  <li>用 <code>{ success, data, error }</code> 的形狀處理回傳值。</li>
+  <li>單筆資料不存在時，轉到 404。</li>
+  <li>查詢成功後，把資料交給子元件渲染。</li>
+</ol>
+
+<p>打開瀏覽器時，首屏應該直接帶著資料出現。若在網址後面放入不存在的 ID，應該看到 404，而不是頁面當掉。這兩個結果都符合預期，就代表資料抓取的骨架接對了。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+在 server component 抓資料的骨架是：把元件宣告成 async，先 <code>await searchParams</code>／<code>await params</code> 拿到（並轉型）參數，再 <code>await</code> 資料來源（server action 或直接查 DB），用 <code>{ success, data, error }</code> 的形狀解構，查不到就 <code>redirect</code> 到 404，最後把資料交給子元件渲染。單筆查詢常用 <code>.populate()</code> 帶出關聯並限制欄位，跨 server action 傳大物件時用 <code>JSON.parse(JSON.stringify(...))</code> 轉成純資料。
+</blockquote>
+
+<p>現在先把「能正確抓到資料」這副骨架站穩。下一節會再處理速度問題：一條條 <code>await</code> 排成直線形成的 network waterfall，以及先抓清單、再逐筆查關聯造成的 N+1。這些問題在 AI 產出的程式碼裡很常見，學會辨認後，才能把不必要的等待收掉。</p>
+
+<div class="lesson-nav">
+  <div><a href="./rsc-vs-client-fetching.html">← 上一步：兩種抓資料的方式：useEffect 還是 RSC？</a></div>
+  <div><a href="./waterfalls-and-n-plus-one.html">下一步：瀑布與 N+1：資料為什麼抓得慢 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="新版 Next.js 裡，頁面的 searchParams 與 params 要怎麼取得？" data-correct="2" data-explain="它們現在是 Promise，必須 await 之後才能解構出值。">
+  <button class="opt">直接解構，不需要任何額外處理</button>
+  <button class="opt">用 useState 存起來再讀取使用</button>
+  <button class="opt">先 await 再解構出裡面的值</button>
+  <button class="opt">用 useEffect 在掛載後非同步讀取</button>
+</div>
+<div class="quiz" data-question="為什麼範例要把 searchParams 的 page 轉成 Number？" data-correct="1" data-explain="searchParams 的值一律是字串，不做轉型會讓分頁計算出錯。">
+  <button class="opt">因為數字在網址裡比較容易被看懂</button>
+  <button class="opt">因為查詢參數一律是字串要先轉型</button>
+  <button class="opt">因為不轉型就會觸發伺服器錯誤</button>
+  <button class="opt">因為轉成數字可以省下一次請求</button>
+</div>
+<div class="quiz" data-question="查不到單筆資料時，範例怎麼處理？" data-correct="3" data-explain="檢查 success 與資料是否存在，不成立就 redirect 到 404。">
+  <button class="opt">回傳一張空白的元件畫面</button>
+  <button class="opt">自動重新抓取直到找到為止</button>
+  <button class="opt">把錯誤訊息直接印在畫面上</button>
+  <button class="opt">redirect 到 404 頁面</button>
+</div>
+<div class="quiz" data-question=".populate() 的第二個參數（例如「_id name image」）作用是什麼？" data-correct="0" data-explain="它限制只回傳指定的欄位，避免帶回整份關聯文件。">
+  <button class="opt">限制只回傳指定的那幾個欄位</button>
+  <button class="opt">指定要排序的欄位與方向</button>
+  <button class="opt">指定要用哪個資料庫連線</button>
+  <button class="opt">指定快取要保留多少秒</button>
+</div>
+<div class="quiz" data-question="在 server action 回傳結果前做 JSON.parse(JSON.stringify(...)) 是為了什麼？" data-correct="2" data-explain="把 Mongoose 物件轉成純資料，避免大型 payload 傳遞時出錯。">
+  <button class="opt">把資料加上快取標籤方便重新驗證</button>
+  <button class="opt">把資料壓縮以減少傳輸的體積</button>
+  <button class="opt">把複雜物件轉成純資料避免傳遞錯誤</button>
+  <button class="opt">把欄位名稱轉成伺服器端慣用格式</button>
+</div>
+<div class="quiz" data-question="在 server component 直接呼叫一個 server action，會發生什麼事？" data-correct="1" data-explain="從 server 呼叫只是直接執行函式；只有從 client 呼叫才會變成 POST 請求。">
+  <button class="opt">會被轉成一包 POST 請求送出</button>
+  <button class="opt">就是直接執行該函式，不是請求</button>
+  <button class="opt">會被 Next.js 拒絕而丟出錯誤</button>
+  <button class="opt">會自動改成在瀏覽器裡執行</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 在 RSC 裡抓資料：何時 server、何時 client · Step 2/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

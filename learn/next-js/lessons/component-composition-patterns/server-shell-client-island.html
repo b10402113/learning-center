@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>server shell + client island：一個畫面是怎麼拼起來的</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>server shell + client island：一個畫面是怎麼拼起來的</h1>
+<p class="meta">Step 1/4 · 元件組合模式：server shell + client island</p>
+
+<h2>先看全貌：一個畫面不必整頁都交給 client</h2>
+
+<p>你請 AI 生一個問答平台的側邊欄，它回傳的檔案第一行寫著 <code>"use client"</code>。功能看起來沒問題，畫面也能正常跑，但你可能會開始懷疑：這行真的必要嗎？還是 AI 只是習慣性地加上去？如果整頁都掛著它，又會發生什麼事？</p>
+
+<p>這不是小題大作。在 App Router 裡，<code>"use client"</code> 會影響元件樹裡有多少程式碼需要送進使用者的瀏覽器。放對位置，頁面可以又快又輕；放錯位置，整個頁面的 JavaScript 可能一起塞進瀏覽器，讓首屏變慢、bundle 變大，而且問題不一定會立刻浮現。</p>
+
+<p>可以先把畫面想成一棟房子：大部分是穩固的外框，由 server component 組成；只有少數需要操作的地方，才像房間裡的小島一樣使用 client component。這就是 <strong>server shell + client island</strong> 的核心模型。先看懂這張地圖，之後才有辦法判斷 AI 產生的元件樹到底合理不合理。</p>
+
+<figure class="lesson-figure"><img src="./server-shell-client-island-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>學習目標</h2>
+
+<p>這一節要建立一個清楚的心智模型：一個畫面通常由 server component 當大範圍外框，只在需要互動的地方放入小塊的 client component。你也要能解釋，為什麼不應該為了幾個互動按鈕，就讓整頁都掛上 client。</p>
+
+<h2>App Router 的預設：元件先是 server component</h2>
+
+<p>先記住最重要的規則：在 <code>app/</code> 目錄底下，除非你明確宣告，否則每個元件預設都是 server component。它的程式碼會在伺服器上執行，不會整份送進瀏覽器。</p>
+
+<p>這和過去「React 元件預設都在瀏覽器執行」的直覺不同，所以剛接觸 App Router 時，很容易把「沒有寫 <code>"use client"</code>」誤認成「這個元件少了設定」。其實剛好相反：server component 才是預設狀態。</p>
+
+<p>server component 能做的事情其實很多。它可以宣告成 <code>async</code>，直接在元件裡使用 <code>await</code> 抓資料；可以讀取環境變數與資料庫連線等不應外洩的資源；也可以 import 體積很大的套件，因為這些程式碼不會被送到瀏覽器。</p>
+
+<p>它不能直接處理的，是需要瀏覽器互動的工作，例如綁定 <code>onClick</code>、使用 <code>useState</code> 或 <code>useEffect</code>，以及存取 <code>window</code> 這類瀏覽器 API。</p>
+
+<p>當某個元件真的需要這些能力時，才在檔案最上方加上 <code>"use client"</code>。這行不是普通的註解，而是一條分界線：從這個模組開始，相關程式碼會被當成瀏覽器端程式碼打包。</p>
+
+<h2>server shell 與 client island：整間房子不用都插電</h2>
+
+<p>把一個頁面想成一間房子。牆壁、地板和家具占了大部分空間，這些東西可以先在工廠做好，再直接搬到現場。它們不需要等使用者進門後才開始組裝，這就是 <strong>server shell</strong>。</p>
+
+<p>房間裡真正需要插電、需要人操作的，可能只有一盞檯燈或一台音響。這些小範圍的互動區，就是 <strong>client island</strong>。</p>
+
+<p>合理的做法，是整間房子照常蓋好，只在檯燈所在的位置拉一條電線。你不會因為要讓一盞檯燈亮起來，就把每面牆都埋滿電線。同樣地，在 Next.js 裡，應該讓大部分元件留在 server，只把需要互動的葉節點標成 client。</p>
+
+<p>實際上，一個頁面可能有九成是 server component，只有幾個按鈕、篩選器或編輯區是 client component。這種「把 client 推到最外圍」的習慣，正是 server shell + client island 模式的重點。</p>
+
+<figure class="lesson-figure"><img src="./server-shell-client-island-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+<thead>
+<tr><th></th><th>server component</th><th>client component</th></tr>
+</thead>
+<tbody>
+<tr><td>預設身分</td><td>App Router 預設</td><td>在檔案頂端加上 <code>"use client"</code></td></tr>
+<tr><td>執行位置</td><td>伺服器，不會以原始程式碼形式下載到瀏覽器</td><td>會在瀏覽器執行，也會先在伺服器預先渲染</td></tr>
+<tr><td>能做的事</td><td>使用 <code>async</code> 抓資料、讀取 secret、使用大型套件</td><td>處理事件、state、effect，以及瀏覽器 API</td></tr>
+<tr><td>對成本的影響</td><td>幾乎不佔用瀏覽器端 JavaScript</td><td>會增加瀏覽器 bundle 的大小</td></tr>
+</tbody>
+</table>
+
+<h2>AI 常犯版：為了互動，把整個外框都變成 client</h2>
+
+<p>AI 很容易看到側邊欄裡有一個「展開更多標籤」的按鈕，就直接把整個 <code>RightSidebar</code> 加上 <code>"use client"</code>。這樣通常能跑，卻把不需要互動的資料抓取、標題、清單和卡片也一起推進了 client bundle。</p>
+
+<p>問題不在於 client component 不能出現在側邊欄，而在於它的範圍太大。你只是需要一個可以點擊的按鈕，卻讓整個房間都接上電。</p>
+
+<h2>正解版：外框留在 server，只把互動區切成 island</h2>
+
+<p>較好的分法是，側邊欄本身繼續當 server shell；只有「展開更多標籤」這類真正需要互動的按鈕或區塊，才獨立成 client component。這樣，server shell 仍然負責取得資料與安排版型，而 client island 只負責那一小段互動。</p>
+
+<p>這個切法也讓元件的責任更清楚：不需要互動的部分，不必為了其他元件一起付出瀏覽器 JavaScript 的成本。</p>
+
+<figure class="lesson-figure"><img src="./server-shell-client-island-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>用真實專案的側邊欄看 server shell</h2>
+
+<p>DevFlow 的 <code>RightSidebar</code> 是一個很標準的 server shell。它負責取得「熱門問題」和「熱門標籤」兩份資料，再把資料排成右側欄位。</p>
+
+<p>注意這段程式碼有兩個特徵：它是一個 <code>async</code> 函式，而且整個檔案沒有 <code>"use client"</code>：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/components/navigation/RightSidebar.tsx"><code>const RightSidebar = async () =&gt; {
+  const [
+    { success, data: hotQuestions, error },
+    { success: tagSuccess, data: tags, error: tagError },
+  ] = await Promise.all([getHotQuestions(), getTopTags()]);</code></pre>
+
+<p>這段開頭已經透露出 shell 的工作方式：它直接呼叫 server action 取得資料，等 <code>await</code> 完成後，再繼續組出畫面。查詢邏輯在伺服器上執行，瀏覽器看不到這些細節，也不需要為了抓資料再多繞一次請求。</p>
+
+<p>後面的 JSX 只要把資料排成標題、清單和卡片。當畫面送到瀏覽器時，這部分已經可以先以 HTML 呈現出來。</p>
+
+<h2>為什麼 shell 要留在 server？</h2>
+
+<p>第一個原因是瀏覽器不用下載不必要的程式碼。沒有送到瀏覽器的程式碼，就不會佔用頻寬，bundle 也會比較小；在慢速網路下，這種差異尤其明顯。</p>
+
+<p>第二個原因是伺服器產生的 HTML 對搜尋引擎與社群預覽比較友善。使用者提出請求後，內容可以直接出現在回應裡，而不是先等一大包 JavaScript 下載、執行，畫面才慢慢長出來。</p>
+
+<p>第三個原因是安全性。資料庫連線、API 金鑰和其他 secret，本來就應該只留在伺服器。讓 shell 留在 server，可以避免把這些東西帶進瀏覽器。</p>
+
+<p>第四個原因是資料取得與畫面渲染可以在伺服器附近完成，少掉瀏覽器與伺服器之間的一趟來回。</p>
+
+<h2>一個容易混淆的地方：client component 也會先在 server 出現</h2>
+
+<p>這裡有一個常見誤會：client component 並不是「完全不在伺服器上執行」。為了讓首屏更快，Next.js 會先在伺服器把 client component 預先渲染成 HTML，送到瀏覽器後，再進行 <strong>hydration</strong>，也就是補上互動能力。</p>
+
+<p>因此，client component 裡的 <code>console.log</code> 可能會同時出現在終端機和瀏覽器；server component 裡的 log 則只會出現在終端機。</p>
+
+<p>預先渲染的目標是讓使用者先看見畫面；hydration 的目標，才是讓這個畫面開始可以操作。兩者是不同階段，不要把「先在 server 產生 HTML」誤認成「它就是 server component」。</p>
+
+<h2>組合方向是單向的</h2>
+
+<p>server component 和 client component 並不是完全對等的兩種零件，它們的組合方向有明確限制。</p>
+
+<p>server component 可以 import client component，也可以把資料當成 props 傳進去，或把一段 JSX 當作 <code>children</code> 傳進去。這就像房子的外框可以容納一座需要插電的小島。</p>
+
+<p>反過來，client component 不能直接 import server component。因為一旦 server component 被 import 進 client 模組，那段程式碼就會被當成 client code 打包，原本的 server component 身分也就失去了。</p>
+
+<p>這條單向規則，是之後判斷 AI 元件樹是否合理的關鍵。到了 Step 4 談「邊界該畫在哪裡」時，還會再回頭使用它。</p>
+
+<figure class="lesson-figure"><img src="./server-shell-client-island-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把判斷掛回整體模型</h2>
+
+<blockquote>
+在 App Router 裡，每個元件預設都是 server component；只有真的需要互動時，才在檔案頂端加上 <code>"use client"</code>，把它變成一塊 client island。理想的畫面是一大片 server shell 加上少數 client island：shell 負責抓資料與決定版型，island 只負責互動。這樣能讓瀏覽器收到的 JavaScript 盡量少，首屏更快，也能讓秘密留在伺服器。組合方向是單向的：server 可以包 client，client 不能反過來包 server。
+</blockquote>
+
+<p>現在可以把這些關係放在同一張圖裡理解：server component 是頁面的主要外框，負責資料與結構；client component 是嵌在外框裡、專門處理互動的小區域。下一節會把鏡頭再拉近，看看構成 shell 的那些「磚塊」——只接收 props、輸出 JSX 的純展示元件，以及它們為什麼能安穩地留在 server。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./presentational-components.html">下一步：props-in / JSX-out：不需要 "use client" 的純展示元件 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="在 App Router 裡，一個沒有標記的元件預設是什麼身分？" data-correct="1" data-explain="除非加上 &quot;use client&quot;，否則 App Router 裡的元件預設都是 server component。">
+  <button class="opt">一律是 client component</button>
+  <button class="opt">預設是 server component</button>
+  <button class="opt">由檔名大小寫來決定</button>
+  <button class="opt">由資料夾層數來決定</button>
+</div>
+<div class="quiz" data-question="下列哪一件事是 server component 做不到的？" data-correct="2" data-explain="綁定 onClick、用 useState 這類互動能力屬於 client component。">
+  <button class="opt">在函式裡直接 await 抓資料</button>
+  <button class="opt">import 一個體積很大的套件</button>
+  <button class="opt">綁定 onClick 並使用 useState</button>
+  <button class="opt">讀取只在伺服器的環境變數</button>
+</div>
+<div class="quiz" data-question="「server shell + client island」這個比喻想強調什麼？" data-correct="0" data-explain="大部分畫面留在 server，只有少數需要互動的地方才變成 client。">
+  <button class="opt">只有少數互動處才用 client</button>
+  <button class="opt">整頁都應該標成 client 元件</button>
+  <button class="opt">server 與 client 各占畫面一半</button>
+  <button class="opt">client 元件只能放在頁面最上層</button>
+</div>
+<div class="quiz" data-question="為什麼 client component 的 console.log 在終端機也看得到？" data-correct="3" data-explain="Next.js 會先在伺服器把 client component 預渲染成 HTML，之後才在瀏覽器 hydrate。">
+  <button class="opt">因為它其實是 server component</button>
+  <button class="opt">因為瀏覽器把 log 轉送回伺服器</button>
+  <button class="opt">因為終端機顯示的是快取的舊紀錄</button>
+  <button class="opt">因為它先在伺服器被預先渲染一次</button>
+</div>
+<div class="quiz" data-question="關於 server 與 client component 的組合方向，下列何者正確？" data-correct="2" data-explain="server component 可以 import 並包住 client component，反過來則不行。">
+  <button class="opt">client 可以 import 任意 server 元件</button>
+  <button class="opt">兩者可以互相 import 不限方向</button>
+  <button class="opt">server 可以 import client 元件</button>
+  <button class="opt">兩者都不能彼此 import 使用</button>
+</div>
+<div class="quiz" data-question="RightSidebar 直接 await 抓資料，這說明了什麼？" data-correct="1" data-explain="它是一個 async server component，抓資料在伺服器完成，瀏覽器不需要多做一趟。">
+  <button class="opt">它是一個需要 hydration 的 client 元件</button>
+  <button class="opt">shell 能在伺服器直接抓資料再組畫面</button>
+  <button class="opt">它必須搭配 useEffect 才能取得資料</button>
+  <button class="opt">它會把資料庫金鑰帶進瀏覽器裡</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 元件組合模式：server shell + client island · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

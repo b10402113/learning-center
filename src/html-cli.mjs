@@ -1,10 +1,11 @@
 import fs from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { prepareHtmlLesson, generateHtmlArticle, finalizeHtmlArticle, generateHtmlImages } from './html.mjs';
+import { prepareHtmlLesson, generateHtmlArticle, generateNodeArticle, finalizeHtmlArticle, generateHtmlImages } from './html.mjs';
 
 const usage = `Usage:
   node src/html-cli.mjs clean   --subject <s> --node <n> --step <t> [--root <dir>]
   node src/html-cli.mjs article --subject <s> --node <n> --step <t> [--brief <text>] [--type <t>] [--types-dir <dir>] [--root <dir>]
+  node src/html-cli.mjs article-batch --subject <s> --node <n> [--max-parallel <n>] [--skip-existing] [--brief <text>] [--types-dir <dir>] [--root <dir>]
   node src/html-cli.mjs figures --subject <s> --node <n> --step <t> [--plan <file>] [--root <dir>]
   node src/html-cli.mjs image   --subject <s> --node <n> --step <t> [--root <dir>]`;
 
@@ -18,6 +19,8 @@ const { values, positionals } = parseArgs({
     brief: { type: 'string' },
     type: { type: 'string' },
     'types-dir': { type: 'string' },
+    'max-parallel': { type: 'string' },
+    'skip-existing': { type: 'boolean' },
     root: { type: 'string' },
   },
   allowPositionals: true,
@@ -32,11 +35,17 @@ function requireTarget() {
     if (!target[key]) throw new Error(`--${key} is required\n\n${usage}`);
 }
 
+function requireSubjectNode() {
+  for (const key of ['subject', 'node'])
+    if (!target[key]) throw new Error(`--${key} is required\n\n${usage}`);
+}
+
 try {
   if (!mode || mode === 'help' || mode === '--help' || mode === '-h') {
     console.log(usage);
   } else {
-    requireTarget();
+    if (mode === 'article-batch') requireSubjectNode();
+    else requireTarget();
     if (mode === 'clean') {
       const { paths } = await prepareHtmlLesson(target, root);
       console.log(JSON.stringify({
@@ -48,6 +57,13 @@ try {
       }, null, 2));
     } else if (mode === 'article') {
       const result = await generateHtmlArticle({ ...target, brief: values.brief, type: values.type, typesDir: values['types-dir'] }, root);
+      console.log(JSON.stringify(result, null, 2));
+    } else if (mode === 'article-batch') {
+      const result = await generateNodeArticle({
+        subject: target.subject, node: target.node,
+        brief: values.brief, type: values.type, typesDir: values['types-dir'],
+        maxParallel: values['max-parallel'], skipExisting: values['skip-existing'],
+      }, root);
       console.log(JSON.stringify(result, null, 2));
     } else if (mode === 'figures') {
       const imagePlan = values.plan ? JSON.parse(await fs.readFile(values.plan, 'utf8')) : undefined;

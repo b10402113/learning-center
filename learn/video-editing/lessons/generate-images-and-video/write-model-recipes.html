@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一模型一 recipe：五個模型與三種認證</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一模型一 recipe：五個模型與三種認證</h1>
+<p class="meta">Step 4/5 · 用 /generate 生圖生影</p>
+
+<h2>學習目標</h2>
+<p>這一節是查閱用的參考。讀完後，你能照著範本為一個模型寫出 recipe 檔，並能查表找到五個推薦模型的 id、供應商與價位，分辨三種認證形狀，以及每個模型是同步還是非同步。</p>
+
+<h2>前言：agent 要怎麼知道怎麼呼叫一顆模型？</h2>
+<p>上一節的 `SKILL.md` 在 Models 表裡寫著「Video (default)：your video model，recipe 在 models/video-model.md」。那個 recipe 檔就是這一節的主角。</p>
+<p>你可以把 recipe 想成一本「模型的說明書」：端點在哪、要用哪把 key、request 的 JSON 長什麼樣、回應要從哪個欄位拿檔案。少了它，agent 空有路由規則卻不知道怎麼打電話。這一節先把範本與五顆值得接的模型列清楚，做法是把供應商的 API 文件打開，照著填，一顆模型大約十分鐘，填過一次就不用再填。</p>
+
+<h2>recipe 範本：一顆模型一份 Markdown</h2>
+<p>每個模型在 `models/` 底下有自己的檔案，內容照這個模板填：</p>
+<pre data-source="sources/video-editing/20261003/generate-skill-guide.pdf#the-recipes"><code># Model Name
+
+
+One line on what this model is best at and when to pick it.
+
+
+| Field | Value |
+|---|---|
+| Model ID | the-exact-model-id |
+| Provider | Kie AI / fal.ai / WaveSpeed AI |
+| Method | Sync (instant reply) or Async (submit, then poll) |
+| Type | Image or Video |
+| API key | .env -&gt; KEY_NAME |
+| Docs | link to the provider's page for this model |
+| Cost | rough price per image / per second |
+
+
+## Endpoint
+POST https://...
+
+
+## Request format
+(the exact JSON body from the docs, with prompt, aspect ratio,
+resolution, reference image fields)
+
+## Response handling
+(where the image/video lives in the reply: base64 field, or a URL
+to download. For async: the status endpoint and the field that
+says "done".)
+
+## Notes
+(gotchas: rate limits, max sizes, content rules, upload quirks)</code></pre>
+<p>幾個欄位值得先講清楚：<strong>Model ID</strong> 要填供應商文件上的精確字串，不能靠記憶；<strong>Method</strong> 要標明是同步還是非同步，因為弄反是第一次嘗試「看起來卡住」最常見的原因；<strong>Response handling</strong> 則要寫明圖或影片出現在回應的哪個欄位（可能是 base64，也可能是下載網址）。</p>
+
+<h3>非同步的標準流程</h3>
+<p>多數影片模型都不是「叫了馬上回」，而是走非同步。這套流程固定得像食譜，背下來就好：</p>
+<pre data-source="sources/video-editing/20261003/generate-skill-guide.pdf#the-recipes"><code>1. POST the job             -&gt; the reply contains a task id
+2. Poll the status URL       -&gt; every 5 to 10 seconds, patiently
+3. Status says complete      -&gt; the reply now contains a file URL
+4. Download immediately      -&gt; result URLs often expire in hours
+5. Save into your generations folder, then write the log</code></pre>
+<p>先送工作、拿到 task id，接著每隔幾秒去問狀態，等它說完成，回覆裡就會出現檔案網址。這裡有個容易吃虧的地方：結果網址常常幾小時後就失效，所以拿到要立刻下載，存進 generations 資料夾再寫 log。建議先接兩份 recipe，一顆便宜的圖片模型、一顆影片模型，之後需要再加。</p>
+
+<h2>五個值得先接的模型</h2>
+<p>以下五顆幾乎涵蓋所有工作，兩顆圖片、三顆影片。每一列就是填 recipe 所需的資訊：</p>
+<table>
+<thead>
+<tr><th>模型</th><th>擅長</th><th>供應商</th><th>Model ID 與大約價格</th></tr>
+</thead>
+<tbody>
+<tr><td>Nano Banana 2</td><td>日常圖片；便宜、快、對參考圖很強</td><td>Google AI Studio（fal.ai 也有）</td><td><code>gemini-3.1-flash-image-preview</code>；Lite 版 <code>gemini-3.1-flash-lite-image</code>，約 $0.034／1K 圖</td></tr>
+<tr><td>GPT Image 2</td><td>圖中含有文字：招牌、海報、菜單、包裝、UI 稿</td><td>fal.ai</td><td><code>openai/gpt-image-2</code>；編輯端點加 <code>/edit</code>，約 $0.05／圖（medium）</td></tr>
+<tr><td>Kling 3.0</td><td>通用影片的合理預設：動態不錯、價格公道</td><td>Kie AI</td><td><code>kling-3.0/video</code>；<code>std</code> 為 720p、<code>pro</code> 為 1080p，3–15 秒</td></tr>
+<tr><td>Veo 3.1</td><td>從起始畫格生成較高品質影片，較慢</td><td>Google AI Studio</td><td><code>veo-3.1-generate-preview</code>；8 秒片段、720p，每次可生 1–4 個樣本</td></tr>
+<tr><td>Seedance 2.0 Fast</td><td>參考圖轉影片：餵最多 9 張圖，讓它動起來</td><td>fal.ai</td><td><code>bytedance/seedance-2.0/fast/reference-to-video</code>；720p 每秒 $0.24，5 秒約 $1.21</td></tr>
+</tbody>
+</table>
+
+<h3>三種認證形狀：同一件事，三種寫法</h3>
+<p>這是新手最常卡住的地方。三家的認證方式不同，但只要每家搞懂一次，該家所有模型就都能用：</p>
+<table>
+<thead>
+<tr><th>供應商</th><th>形狀</th><th>放法</th></tr>
+</thead>
+<tbody>
+<tr><td>Google AI Studio</td><td>key 放在網址裡</td><td><code>POST .../models/{model-id}:generateContent?key={GOOGLE_KEY}</code></td></tr>
+<tr><td>fal.ai</td><td>標頭，用 <code>Key</code> 這個字</td><td><code>POST https://fal.run/{model-id}</code>，標頭 <code>Authorization: Key {FAL_KEY}</code></td></tr>
+<tr><td>Kie AI</td><td>標頭，用 <code>Bearer</code> 這個字</td><td><code>POST api.kie.ai/api/v1/jobs/createTask</code>，標頭 <code>Authorization: Bearer {KIE_KEY}</code></td></tr>
+</tbody>
+</table>
+
+<h3>同步還是非同步，一顆一顆看</h3>
+<p>GPT Image 2、Nano Banana 與 Seedance 屬於同步：一次呼叫就回傳完成的結果。Kling 與 Veo 屬於非同步：先給你一個 job id，之後每 10–15 秒去問狀態端點，直到它說 done。務必把每顆模型用的是哪一種寫進它的 recipe，因為弄反，正是第一次嘗試看似當掉的最常見原因。</p>
+
+<h3>不要第一天就把五顆全接上</h3>
+<p>建議先接 <strong>Nano Banana 2 Lite</strong>（圖片）與 <strong>Kling 3.0</strong>（影片）。這兩顆是各自領域裡最便宜的，剛好又能讓你練習兩種模式，一個同步、一個非同步。之後再視需求擴充：第一次需要圖內可讀文字時接上 GPT Image 2；當 Kling 的動態不夠好、需要一張主視覺時接上 Veo 3.1；想把參考圖動起來時再接 Seedance 2.0 Fast。</p>
+
+<h3>之後怎麼加新模型</h3>
+<p>模型會隨供應商改版而變動。當呼叫回傳「model not found」，就到該供應商的模型頁複製最新 id，更新 recipe 檔即可，這也是整套系統唯一需要的日常維護。要加入一顆全新的模型，例如 Google 的 Omni Flash，做法是到 fal.ai 點右上角的「Copy content for LLMs」，把複製到的內容連同一句「把這個加進 /generate skill」交給 Claude，agent 就會照著文件建立新的 recipe。</p>
+
+<h2>這份參考怎麼用</h2>
+<blockquote>
+需要呼叫一顆模型時，答案都在它的 recipe 檔裡：Model ID 用精確字串、Provider 決定路由、Method 標明 sync 或 async、Response handling 指明檔案在回應的哪個欄位。五顆推薦模型與三種認證形狀查上面的表就好。先從 Nano Banana 2 Lite 與 Kling 3.0 開始，其餘按需求再補。
+</blockquote>
+<p>把模型接上之後，剩下的問題就是「怎麼花錢花得安全」。下一節會談五條成本護欄、每張圖旁邊那份 sidecar log，以及把所有成果自動收進 gallery 牆的做法。</p>
+
+<div class="lesson-nav">
+  <div><a href="./set-up-keys-and-skill-file.html">← 上一步：取得金鑰並寫出 SKILL.md</a></div>
+  <div><a href="./guardrails-log-and-gallery.html">下一步：成本護欄、sidecar log 與 gallery →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="recipe 檔裡的 Method 欄位為什麼不能弄錯？" data-correct="2" data-explain="同步與非同步的處理方式不同，弄反會讓第一次呼叫看似當掉。">
+  <button class="opt">弄錯會讓模型的金額變成兩倍</button>
+  <button class="opt">弄錯會讓圖片自動變成低畫質</button>
+  <button class="opt">弄反會讓呼叫看起來像當掉</button>
+  <button class="opt">弄錯會讓 API 金鑰立刻失效</button>
+</div>
+<div class="quiz" data-question="非同步流程中，拿到結果網址後為什麼要立刻下載？" data-correct="1" data-explain="結果網址常常幾小時後就失效，慢一步可能就拿不到檔案。">
+  <button class="opt">因為下載速度會隨時間變慢</button>
+  <button class="opt">因為結果網址通常很快失效</button>
+  <button class="opt">因為供應商會重複收下載費</button>
+  <button class="opt">因為晚下載畫質會被壓縮</button>
+</div>
+<div class="quiz" data-question="fal.ai 的認證方式是哪一種？" data-correct="0" data-explain="fal.ai 把 key 放在標頭，並使用 Key 這個字。">
+  <button class="opt">標頭使用 Key 這個字放金鑰</button>
+  <button class="opt">標頭使用 Bearer 這個字放金鑰</button>
+  <button class="opt">把金鑰直接接在網址的查詢參數</button>
+  <button class="opt">不需要金鑰只要帳號密碼登入</button>
+</div>
+<div class="quiz" data-question="下列哪一顆模型屬於非同步、需要輪詢狀態？" data-correct="3" data-explain="Kling 與 Veo 是非同步，先拿 job id 再輪詢狀態端點。">
+  <button class="opt">Nano Banana 2 一次呼叫即回</button>
+  <button class="opt">GPT Image 2 一次呼叫即回</button>
+  <button class="opt">Seedance 2.0 Fast 一次呼叫即回</button>
+  <button class="opt">Kling 3.0 先拿 job id 再輪詢</button>
+</div>
+<div class="quiz" data-question="建議一開始先接哪兩顆模型？" data-correct="1" data-explain="Nano Banana 2 Lite 與 Kling 3.0 最便宜，且能練習同步與非同步兩種模式。">
+  <button class="opt">GPT Image 2 與 Veo 3.1</button>
+  <button class="opt">Nano Banana 2 Lite 與 Kling 3.0</button>
+  <button class="opt">Veo 3.1 與 Seedance 2.0 Fast</button>
+  <button class="opt">五顆一起接才能互通有無</button>
+</div>
+<div class="quiz" data-question="呼叫回傳「model not found」時，正確的處理是什麼？" data-correct="2" data-explain="到供應商模型頁複製最新 id，更新 recipe 檔即可。">
+  <button class="opt">重建整個 SKILL.md 檔案</button>
+  <button class="opt">申請一組全新的 API 金鑰</button>
+  <button class="opt">複製最新 id 更新 recipe 檔</button>
+  <button class="opt">放棄該模型改用付費訂閱</button>
+</div>
+
+<div class="footer">
+  <p>AI 影片剪輯實戰 · 用 /generate 生圖生影 · Step 4/5</p>
+  <p>讀到這裡有想追問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

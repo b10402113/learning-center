@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SSR 與 hydration：先送 HTML，再接手互動</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>SSR 與 hydration：先送 HTML，再接手互動</h1>
+<p class="meta">Step 3/5 · 渲染模型：CSR / SSR / RSC / hydration</p>
+
+<h2>學習目標</h2>
+<p>能解釋 Next.js 首次請求時，server 如何執行 React 元件、回傳完整 HTML，再由 client 進行 hydration，接回事件處理器與互動能力；也能說明 hydration mismatch 是怎麼發生的。</p>
+
+<h2>先看全貌：畫面可以先到，互動稍後再接</h2>
+
+<p>想像使用者打開一個 Next.js 網站。如果採用 CSR，瀏覽器一開始拿到的可能只是最小 HTML 和 JavaScript，必須等 bundle 下載並執行後，畫面內容才真正出現。這會讓首次畫面變慢，也可能讓搜尋引擎爬蟲讀不到完整內容。</p>
+
+<p>那能不能先把畫面送到使用者眼前，互動能力再稍後補上？Next.js 的 SSR 就是在處理這個問題：先由 server 執行 React 元件，把結果算成 HTML 送出去；瀏覽器收到後立刻畫出內容。接著，JavaScript 到達 client，再透過 hydration 把按鈕、輸入框等互動能力接回去。</p>
+
+<p>整條流程可以先記成兩個階段：</p>
+
+<table>
+<thead>
+<tr><th>階段</th><th>主要工作</th><th>使用者看到的結果</th></tr>
+</thead>
+<tbody>
+<tr><td>SSR</td><td>server 執行 React 元件，產生並回傳 HTML</td><td>畫面先出現，搜尋引擎也能讀到內容</td></tr>
+<tr><td>hydration</td><td>client 將 JavaScript 的事件處理器接回 HTML</td><td>按鈕、輸入框等互動開始生效</td></tr>
+</tbody>
+</table>
+
+<p>這不是「server 和 client 各做一半、隨便拼起來」，而是先由 server 交付第一版畫面，再由 client 接手互動。真正的難題也藏在這裡：兩邊對第一版畫面的理解必須一致。</p>
+
+<figure class="lesson-figure"><img src="./ssr-and-hydration-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>首次請求：server 先跑一次 React 元件</h2>
+
+<p>當使用者造訪 Next.js 網站，client 會把請求送到 server。這時的流程和 CSR 很不一樣：server 會開始執行你的 React 元件，產生 HTML、CSS 與 JavaScript，接著把一份<strong>已經渲染完成</strong>的 HTML 回傳給瀏覽器。</p>
+
+<p>這份 HTML 不是只放著一個空殼。它已經包含初始內容、抓好的資料，以及元件的標記。因此，瀏覽器一收到 HTML，就可以先把畫面畫出來，不必等 JavaScript 下載並執行完成。</p>
+
+<p>這就是 server-side rendering（SSR，伺服器端渲染）的重點：使用者能更早看到內容，搜尋引擎爬蟲也能直接讀到完整 HTML。</p>
+
+<h2>AI 常犯版 vs 正解版：SSR 不是「完全不送 JavaScript」</h2>
+
+<table>
+<thead>
+<tr><th>說法</th><th>問題或重點</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>AI 常犯版：</strong>SSR 把所有東西都在 server 做完，所以 client 不需要 JavaScript。</td><td>SSR 只代表首次畫面由 server 產生，不代表互動程式碼消失。</td></tr>
+<tr><td><strong>正解版：</strong>server 先送出已渲染的 HTML，互動需要的 JavaScript 之後仍會送到 client。</td><td>畫面先出現靠 HTML；按鈕能不能按、輸入框能不能互動，則要等 JavaScript 接手。</td></tr>
+</tbody>
+</table>
+
+<p>所以，SSR 解決的是「內容何時出現」；它沒有單獨解決「互動何時生效」。這兩件事要分開看。</p>
+
+<h2>hydration：把互動接回已渲染的 HTML</h2>
+
+<p>HTML 送達、畫面出現之後，Next.js 會在 client 做 hydration（注水）。它的工作，是<strong>把 JavaScript 的事件處理器和互動能力，接到那份已經預先渲染好的 HTML 上</strong>。</p>
+
+<p>可以把 server 送來的 HTML 想成一尊已經雕好的石膏像。你看得到它的形狀，但它本身不會動。hydration 就像接上神經與肌肉：石膏像沒有被整尊換掉，而是從這一刻開始具備反應能力。</p>
+
+<figure class="lesson-figure"><img src="./ssr-and-hydration-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>因此，在 hydration 完成前，頁面雖然已經看得見，卻可能還不能按按鈕或在輸入框打字。畫面「先出現」和互動「已經生效」是兩個不同時間點。</p>
+
+<h2>AI 常犯版 vs 正解版：hydration 不是重新畫一張完全無關的頁面</h2>
+
+<table>
+<thead>
+<tr><th>說法</th><th>正確理解</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>AI 常犯版：</strong>hydration 就是 client 收到 HTML 後，重新做一份新的畫面。</td><td>hydration 的核心是把 client 的互動能力接到既有 HTML 上。</td></tr>
+<tr><td><strong>正解版：</strong>server 先產生 HTML，client 再用 JavaScript 接回事件處理器。</td><td>兩邊必須認得同一份第一版畫面，互動才能穩定接上。</td></tr>
+</tbody>
+</table>
+
+<h2>hydration mismatch：兩邊算出的第一版畫面不一致</h2>
+
+<p>hydration 要順利，前提是 server 算出的 HTML，和 client 重新渲染時預期的結果必須一致。如果兩邊對不上，就會出現 hydration error，也就是 hydration mismatch（注水不一致）。</p>
+
+<p>Next.js 在 server 渲染時，對於依賴瀏覽器或需要互動的部分，會先留下佔位元素，例如 <code>div</code>、<code>form</code> 或 <code>span</code>。當 client 重新渲染的結果，和 server 留下的內容對不起來，錯誤就會出現。</p>
+
+<p>最容易理解的例子，是把「現在時間」直接印進畫面：</p>
+
+<pre data-provenance="derived">// server 渲染時算出的 HTML
+&lt;time&gt;2026-10-04 10:00&lt;/time&gt;
+
+// client 重新渲染時，時間已經往前走了一點
+&lt;time&gt;2026-10-04 10:00:01&lt;/time&gt;</pre>
+
+<p>server 算出的是 <code>10:00</code>，client 重新渲染時卻變成 <code>10:00:01</code>。對人來說只差一秒，對 hydration 來說卻是兩份不同的第一版畫面。</p>
+
+<figure class="lesson-figure"><img src="./ssr-and-hydration-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>時間只是其中一個例子。只要某段邏輯讓 server 和 client 算出不同結果，就可能造成 mismatch。要掌握這個問題，不必先背下所有錯誤訊息；先記住 hydration 的基本假設就好：<strong>server 和 client 的第一版畫面應該長一樣。</strong></p>
+
+<h2>AI 常犯版 vs 正解版：問題不在「有兩邊」，而在「兩邊結果不同」</h2>
+
+<table>
+<thead>
+<tr><th>說法</th><th>正確理解</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>AI 常犯版：</strong>只要用了 SSR 和 hydration，就一定會發生 mismatch。</td><td>SSR 與 hydration 本身是正常的分工；問題出在 server 和 client 算出的內容不一致。</td></tr>
+<tr><td><strong>正解版：</strong>只要兩邊的第一版結果一致，client 就能把互動能力接回 server 產生的 HTML。</td><td>依賴當下時間、瀏覽器狀態等會變動結果的邏輯，特別容易破壞這個前提。</td></tr>
+</tbody>
+</table>
+
+<h2>首次請求之後：渲染位置可以由開發者選擇</h2>
+
+<p>SSR 主要描述首次請求時發生的事。到了後續請求，Next.js 把選擇權交回開發者：內容可以繼續在 server 渲染，也可以改由 client 渲染。</p>
+
+<p>因此，一個應用程式裡可以同時存在 SSR 與 CSR。不是整個網站只能選一種模式，而是要依照內容與互動需求，決定哪些部分由 server 處理、哪些部分由 client 處理。</p>
+
+<h2>SSR 與 CSR 的首次載入差在哪？</h2>
+
+<table>
+<thead>
+<tr><th>面向</th><th>CSR</th><th>SSR</th></tr>
+</thead>
+<tbody>
+<tr><td>第一個請求拿到什麼</td><td>最小 HTML + JavaScript</td><td>已渲染完成的 HTML + 之後補上的 JavaScript</td></tr>
+<tr><td>首次畫面</td><td>等 JavaScript 執行完</td><td>HTML 一到就能畫</td></tr>
+<tr><td>SEO</td><td>爬蟲不一定讀到內容</td><td>爬蟲直接讀到完整 HTML</td></tr>
+<tr><td>互動生效時間</td><td>隨首次渲染一起</td><td>hydration 完成之後</td></tr>
+<tr><td>可能要修的坑</td><td>首次載入慢</td><td>hydration mismatch</td></tr>
+</tbody>
+</table>
+
+<h2>把這些概念掛在一起</h2>
+
+<blockquote>
+Next.js 首次請求時，server 執行 React 元件、產生並回傳完整的 HTML，讓瀏覽器立刻畫出畫面；互動所需的 JavaScript 隨後才到，並由 client 的 <strong>hydration</strong> 把事件處理器接到那份已渲染的 HTML 上。如果 server 與 client 算出的第一版畫面不一致，就會發生 hydration mismatch，尤其當內容依賴瀏覽器或當下時間的時候。之後的請求，開發者可以自行選擇在 server 或 client 渲染。
+</blockquote>
+
+<p>到這裡，渲染還停留在「整個頁面」的層級：server 負責先算出畫面，client 再接回互動。但 Next.js 的 App Router 把這種分工推進到了元件層級，每個元件都可以自己決定要在 server 還是 client 執行。下一節就來看，這條界線是怎麼劃出的。</p>
+
+<div class="lesson-nav">
+  <div><a href="./csr-and-virtual-dom.html">← 上一步：CSR：最小 HTML、JS bundle 與 virtual DOM</a></div>
+  <div><a href="./server-and-client-components.html">下一步：RSC 與 Client Component：「use client」邊界 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Next.js 首次請求時，server 會先做什麼？" data-correct="2" data-explain="server 執行 React 元件，產生並回傳已經渲染完成的 HTML。">
+  <button class="opt">只送出最小 HTML 與 JavaScript</button>
+  <button class="opt">等瀏覽器送來要渲染的資料</button>
+  <button class="opt">執行 React 元件並產生 HTML</button>
+  <button class="opt">把整個應用打包成一個檔案</button>
+</div>
+<div class="quiz" data-question="為什麼 server 送來 HTML 後，還要再送 JavaScript？" data-correct="0" data-explain="HTML 只有畫面，互動能力要靠 JavaScript 之後接手。">
+  <button class="opt">因為互動能力要靠 JavaScript 接手</button>
+  <button class="opt">因為 HTML 檔本身其實無法顯示</button>
+  <button class="opt">因為搜尋引擎要求一定要有 JS</button>
+  <button class="opt">因為 CSS 樣式藏在 JS 檔案裡</button>
+</div>
+<div class="quiz" data-question="hydration 實際做的事情是什麼？" data-correct="1" data-explain="它把事件處理器與互動能力，接到已經預先渲染好的 HTML 上。">
+  <button class="opt">把資料庫內容抓進瀏覽器暫存</button>
+  <button class="opt">把事件與互動接上已渲染的 HTML</button>
+  <button class="opt">把整份 HTML 重新算過再換掉</button>
+  <button class="opt">把 CSS 樣式注入到頁面裡面</button>
+</div>
+<div class="quiz" data-question="hydration mismatch 通常是因為什麼而發生？" data-correct="3" data-explain="server 與 client 對第一版畫面算出不同結果時，就會對不起來。">
+  <button class="opt">JavaScript 檔案下載的順序錯了</button>
+  <button class="opt">伺服器的處理器速度比較慢</button>
+  <button class="opt">使用者太快點下了按鈕與連結</button>
+  <button class="opt">兩邊對第一版畫面算出不同值</button>
+</div>
+<div class="quiz" data-question="為什麼把當下時間直接印在畫面上容易出錯？" data-correct="2" data-explain="server 與 client 取到的時間點不同，算出的畫面自然對不起來。">
+  <button class="opt">因為時間的格式在瀏覽器無法解析</button>
+  <button class="opt">因為時間會讓 HTML 檔案體積變大</button>
+  <button class="opt">因為兩邊取到的時間點不一樣</button>
+  <button class="opt">因為時間沒辦法被 JavaScript 讀取</button>
+</div>
+<div class="quiz" data-question="SSR 主要描述的是哪一段的情況？" data-correct="0" data-explain="SSR 講的是首次請求由 server 渲染；之後的請求開發者可自行選擇。">
+  <button class="opt">首次請求由 server 渲染的情況</button>
+  <button class="opt">應用內每次換頁都必經的流程</button>
+  <button class="opt">hydration 完成之後的所有請求</button>
+  <button class="opt">只有資料庫查詢會走的那條路</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 渲染模型：CSR / SSR / RSC / hydration · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

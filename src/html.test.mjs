@@ -18,11 +18,15 @@ import {
   ensureFigure,
   prepareHtmlLesson,
   generateHtmlArticle,
+  generateNodeArticle,
   finalizeHtmlArticle,
   generateHtmlImages,
   buildBrief,
   setStepIllustration,
   resolveStepType,
+  resolveStepIllustration,
+  resolveNodeSteps,
+  mapWithConcurrency,
   loadTypeRules,
   markerContexts,
 } from './html.mjs';
@@ -149,6 +153,27 @@ function textClient(content, onCall) {
       },
     },
   };
+}
+
+async function makeBatchRoot(stepIds, { planned = [] } = {}) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'html-batch-test-'));
+  await fs.cp(new URL('../prompts', import.meta.url), path.join(root, 'prompts'), { recursive: true });
+  const subjectRoot = path.join(root, 'learn', 'demo');
+  await fs.mkdir(path.join(subjectRoot, 'nodes', 'demo-node'), { recursive: true });
+  await fs.mkdir(path.join(subjectRoot, 'lessons', 'demo-node'), { recursive: true });
+  await fs.mkdir(path.join(subjectRoot, 'lessons', 'assets'), { recursive: true });
+  await fs.writeFile(path.join(subjectRoot, 'MEMORY.md'), '---\nsubject: demo\nlanguage: zh-Hant\n---\n');
+  await fs.writeFile(path.join(subjectRoot, 'lessons', 'assets', 'shared.css'), ':root { --border: #eee; --muted: #888; --code-bg: #f3f4f6; }\n');
+  const dag = stepIds.map((id, i) => `  - id: ${id}\n    order: ${i + 1}`).join('\n');
+  await fs.writeFile(path.join(subjectRoot, 'nodes', 'demo-node.mdx'),
+    `---\nid: demo-node\ntitle: Demo\nsubject: demo\nsteps:\n${dag}\n---\n\n# Demo\n`);
+  for (const id of stepIds) {
+    await fs.writeFile(path.join(subjectRoot, 'lessons', 'demo-node', `${id}.html`), LESSON.replace('Step 1/2 · 測試節點', `Step ${id}`));
+    const illustration = planned.includes(id) ? '\nillustration: planned' : '';
+    await fs.writeFile(path.join(subjectRoot, 'nodes', 'demo-node', `${id}.mdx`),
+      `---\nid: ${id}\ntitle: 測試課程\nsubject: demo\ncreated: 2026-01-01\nupdated: 2026-01-01${illustration}\n---\n\n# 測試課程\n\n## Lesson\n\n一句摘要。\n`);
+  }
+  return root;
 }
 
 test('stripLessonChrome removes quiz, nav, footer and script but keeps content', () => {
@@ -469,5 +494,103 @@ test('article: appends the step type rules to the system prompt and records the 
     assert.match(systemPrompt, /TYPE-RULES-PROCEDURE/);
     const manifest = JSON.parse(await fs.readFile(result.manifest, 'utf8'));
     assert.equal(manifest.stepType, 'procedure');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('resolveNodeSteps returns the node DAG ids in order', async () => {
+  const root = await makeBatchRoot(['first', 'second', 'third']);
+  try {
+    assert.deepEqual(await resolveNodeSteps(root, 'demo', 'demo-node'), ['first', 'second', 'third']);
+    await assert.rejects(resolveNodeSteps(root, 'demo', 'nope'), /No node container/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('resolveStepIllustration reads the state and falls back to none', async () => {
+  const root = await makeBatchRoot(['s1'], { planned: ['s1'] });
+  try {
+    assert.equal(await resolveStepIllustration(root, 'demo', 'demo-node', 's1'), 'planned');
+    assert.equal(await resolveStepIllustration(root, 'demo', 'demo-node', 'missing'), 'none');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('mapWithConcurrency keeps at most `limit` in flight and preserves order', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const results = await mapWithConcurrency([1, 2, 3, 4, 5], 2, async n => {
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    inFlight--;
+    return n * 10;
+  });
+  assert.equal(peak, 2);
+  assert.deepEqual(results, [10, 20, 30, 40, 50]);
+});
+
+test('article-batch rewrites each step once, in DAG order, without exceeding max-parallel', async () => {
+  const root = await makeBatchRoot(['s1', 's2', 's3', 's4']);
+  try {
+    let inFlight = 0;
+    let peak = 0;
+    let calls = 0;
+    const client = { chat: { completions: { create: async () => {
+      calls++;
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      inFlight--;
+      return { id: 'test', choices: [{ message: { content: REWRITE_NO_MARK } }] };
+    } } } };
+    const result = await generateNodeArticle({ subject: 'demo', node: 'demo-node', maxParallel: 2 }, root, { client });
+    assert.equal(calls, 4);
+    assert.equal(peak, 2);
+    assert.equal(result.mode, 'article-batch');
+    assert.equal(result.maxParallel, 2);
+    assert.deepEqual(result.counts, { rewritten: 4, failed: 0, skipped: 0 });
+    assert.deepEqual(result.steps.map(s => s.step), ['s1', 's2', 's3', 's4']);
+    assert.deepEqual(result.steps.map(s => s.status), ['rewritten', 'rewritten', 'rewritten', 'rewritten']);
+    for (const step of result.steps) assert.match(await fs.readFile(step.rewritten, 'utf8'), /改寫後的第一段/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('article-batch skips steps without HTML and, with skip-existing, already-planned steps', async () => {
+  const root = await makeBatchRoot(['s1', 's2', 's3'], { planned: ['s2'] });
+  try {
+    await fs.rm(path.join(root, 'learn', 'demo', 'lessons', 'demo-node', 's3.html'));
+    const planDir = path.join(root, 'learn', 'demo', 'output', 'demo-node', 's2');
+    await fs.mkdir(planDir, { recursive: true });
+    await fs.writeFile(path.join(planDir, 'plan.json'), '[]');
+    let calls = 0;
+    const client = { chat: { completions: { create: async () => {
+      calls++;
+      return { id: 'test', choices: [{ message: { content: REWRITE_NO_MARK } }] };
+    } } } };
+    const result = await generateNodeArticle({ subject: 'demo', node: 'demo-node', skipExisting: true }, root, { client });
+    assert.equal(calls, 1);
+    assert.deepEqual(result.counts, { rewritten: 1, failed: 0, skipped: 2 });
+    const byStep = Object.fromEntries(result.steps.map(s => [s.step, s]));
+    assert.equal(byStep.s1.status, 'rewritten');
+    assert.equal(byStep.s2.status, 'skipped');
+    assert.equal(byStep.s2.reason, 'already-planned');
+    assert.equal(byStep.s3.status, 'skipped');
+    assert.equal(byStep.s3.reason, 'no-html');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('article-batch: one failing step does not abort the others', async () => {
+  const root = await makeBatchRoot(['good', 'bad']);
+  try {
+    let calls = 0;
+    const client = { chat: { completions: { create: async () => {
+      calls++;
+      if (calls === 2) throw new Error('boom');
+      return { id: 'test', choices: [{ message: { content: REWRITE_NO_MARK } }] };
+    } } } };
+    const result = await generateNodeArticle({ subject: 'demo', node: 'demo-node', maxParallel: 1 }, root, { client });
+    assert.deepEqual(result.counts, { rewritten: 1, failed: 1, skipped: 0 });
+    const byStep = Object.fromEntries(result.steps.map(s => [s.step, s]));
+    assert.equal(byStep.good.status, 'rewritten');
+    assert.equal(byStep.bad.status, 'failed');
+    assert.match(byStep.bad.error, /Article rewrite failed/);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

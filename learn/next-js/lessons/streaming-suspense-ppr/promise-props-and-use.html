@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>傳遞 promise：server 不 await、client 用 use() 解</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>傳遞 promise：server 不 await，client 用 use() 解開</h1>
+<p class="meta">Step 3/4 · 串流、Suspense、PPR 與 after()</p>
+
+<h2>這一節要完成什麼？</h2>
+<p>你會把尚未 <code>await</code> 的 promise，從 server component 傳給 client component，再由 client 使用 React 19 的 <code>use()</code> 解開。完成後，頁面可以先顯示已經準備好的內容，較慢的資料則在 Suspense 的 fallback 後補上，而不必讓整個 server 渲染停在原地。</p>
+
+<p>動手前，先確認你已經理解上一節的 Suspense 邊界：慢的子樹需要有一個可以暫時顯示 fallback 的位置。否則 promise 傳下去之後，畫面沒有地方接住等待狀態。</p>
+
+<h2>先看整體資料流</h2>
+<p>這個模式可以拆成四步：</p>
+
+<ol>
+  <li>server 呼叫 server action，取得 promise，但<strong>不要 await</strong>。</li>
+  <li>把 promise 當成 prop 傳給 client component。</li>
+  <li>在 client component 的 props 型別中宣告這是一個 promise。</li>
+  <li>用 React 19 的 <code>use()</code> 解開 promise，讓元件取得結果。</li>
+</ol>
+
+<p>可以把它想成把一張「取貨單」交給 client：server 先把取貨流程啟動，自己不用站在櫃台前乾等；client 拿到取貨單後，再在需要資料的地方讀取結果。等待期間，Suspense 負責顯示 fallback。</p>
+
+<figure class="lesson-figure"><img src="./promise-props-and-use-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一步：在 server 建立 promise，但不要 await</h2>
+
+<p>先看 server 端的寫法。在問題詳情頁裡，投票與收藏狀態各自透過 server action 取得。這裡只呼叫 action、接住它回傳的 promise，完全不使用 <code>await</code>：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/app/(root)/questions/[id]/page.tsx"><code>const hasVotedPromise = hasVoted({
+  targetId: question._id,
+  targetType: "question",
+});
+
+const hasSavedQuestionPromise = hasSavedQuestion({
+  questionId: question._id,
+});</code></pre>
+
+<p>變數名稱刻意加上 <code>Promise</code>，因為它現在還不是投票結果，也不是最後的布林值。這兩行執行完時，請求才剛啟動，資料可能還在路上。</p>
+
+<p>這裡最重要的效果是：<strong>promise 沒有被 await，就不會讓 server 渲染停下來等待它</strong>。頁面可以繼續處理標題、內文與標籤，先把已經能渲染的內容送出去。</p>
+
+<h3>壞寫法：讓整頁陪著慢</h3>
+<p>如果把程式改成下面這樣，語意看起來直接，卻會讓 server 停在這一行，直到投票狀態回來：</p>
+
+<pre class="bad-code" data-provenance="derived"><code>// 不要這樣：這裡的 await 會讓整頁卡住
+const hasVoted = await hasVotedAction({
+  targetId: question._id,
+  targetType: "question",
+});</code></pre>
+
+<h3>正解：只讓慢的資料自己慢</h3>
+<p>前一段程式與這段程式的差別，幾乎只有一個 <code>await</code>，結果卻完全不同：</p>
+
+<ul>
+  <li>使用 <code>await</code>：整頁要等投票狀態回來，才能繼續渲染。</li>
+  <li>不使用 <code>await</code>：server 先啟動請求，頁面繼續渲染其他內容。</li>
+</ul>
+
+<p>簡單說，一種寫法讓慢的部分自己慢；另一種寫法則讓全頁陪著慢。</p>
+
+<h2>第二步：把 promise 當 prop 傳下去</h2>
+
+<p>promise 接住之後，把它透過 props 傳給真正會使用資料的 client component。上一節的 Suspense 區塊中，<code>hasVotedPromise={hasVotedPromise}</code> 就是在做這件事。</p>
+
+<p>這裡傳下去的不是解開後的結果，而是「尚未完成的 promise」。React 允許 server component 把這個 promise 傳遞給 client component，因此 server 不需要為了等結果而重新停住。</p>
+
+<p>server 的工作到「把 promise 交出去」為止。接下來由 client 負責讀取結果；在結果尚未準備好時，Suspense 顯示 fallback。這就是整頁可以先往前走的原因。</p>
+
+<h2>第三步：在 client 宣告型別，並用 use() 解開</h2>
+
+<p>接著換到 client 端。接收 promise 的元件必須是 client component，檔案最上方會有 <code>"use client"</code>，例如 DevFlow 的 <code>Votes.tsx</code>。</p>
+
+<p>先在 props 型別中，清楚標示這個欄位是一個 promise：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/components/votes/Votes.tsx"><code>interface Params {
+  targetType: "question" | "answer";
+  targetId: string;
+  upvotes: number;
+  downvotes: number;
+  hasVotedPromise: Promise&lt;ActionResponse&lt;HasVotedResponse&gt;&gt;;
+}</code></pre>
+
+<p>這裡的 <code>Promise&lt;...&gt;</code> 表示：這個 prop 目前不是最後的資料，而是未來會產生 <code>ActionResponse&lt;HasVotedResponse&gt;</code> 的 promise。</p>
+
+<p>型別準備好後，用 React 19 的 <code>use()</code> 讀取它：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/components/votes/Votes.tsx"><code>const { success, data } = use(hasVotedPromise);</code></pre>
+
+<p><code>use()</code> 不是一般意義上只能放在元件頂端的 hook。它是用來讀取資源的 API：傳入一個 promise，取得 promise 解開後的值。</p>
+
+<p>這段程式執行後，<code>data</code> 裡就是 server 算好的投票狀態。元件可以根據它，決定箭頭是否顯示成已投票的樣式。</p>
+
+<p>到這裡，完整資料流就接起來了：</p>
+
+<ol>
+  <li>server 啟動 promise，但不等待。</li>
+  <li>server 把 promise 當 prop 交給 client。</li>
+  <li>client 用 <code>use()</code> 讀取 promise。</li>
+  <li>等待期間由 Suspense 顯示 fallback，完成後再顯示實際內容。</li>
+</ol>
+
+<h2>為什麼不用 useEffect？</h2>
+
+<p>看到「client 取得資料」，很容易立刻想到 <code>useEffect</code> 加 <code>useState</code>。但在這個場景中，<code>use()</code> 的位置不一樣。</p>
+
+<h3>常見想法：等 client 掛載後才請求</h3>
+<p>如果讓 client 在 <code>useEffect</code> 裡才呼叫 server action，請求要等到 client 掛載後才會啟動。這會多一個往返，也可能形成請求瀑布。</p>
+
+<h3>正解：server 先啟動，client 後讀取</h3>
+<p>現在的做法是 server 先啟動 promise，再把它交給 client。因此 client 不需要自己重新發出一次請求，能省掉一趟往返，也避開 <code>useEffect</code> 常見的請求瀑布。</p>
+
+<figure class="lesson-figure"><img src="./promise-props-and-use-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>另外，<code>use()</code> 能自然地和 Suspense 及 error boundary 配合：</p>
+
+<ul>
+  <li>promise 尚未完成時，交給 Suspense 顯示 fallback。</li>
+  <li>promise 解開失敗時，交給 error boundary 處理。</li>
+</ul>
+
+<p>還要記住一件事：<code>use()</code> 不是「發起請求」，而是「讀取已經存在的資源」。這個資源可以是 promise，也可以是 context。這正是它適合「server 先啟動、client 後解開」模式的原因。</p>
+
+<p>如果改成由 client 在 <code>useEffect</code> 中呼叫 server action，promise 就會等到 client 才啟動，server 提早開始處理、讓工作並行的優勢也就消失了。</p>
+
+<h2>第四步：投票之後，讓畫面即時更新</h2>
+
+<p>首次顯示正確只是第一關。使用者按下投票後，畫面也應該立刻反映新的狀態，而不是等重新整理才更新。</p>
+
+<p>DevFlow 的做法是在投票的 server action 中呼叫 <code>revalidatePath</code>，重新驗證該問題頁面的資料。這樣頁面不用整頁重載，也能顯示更新後的狀態。</p>
+
+<p>這和前面的「不 await」並不衝突：</p>
+
+<ul>
+  <li>不使用 <code>await</code>，是為了讓首次渲染不要被慢資料卡住。</li>
+  <li>使用 <code>revalidatePath</code>，是為了讓資料變更後的畫面保持正確。</li>
+</ul>
+
+<h2>小心欄位命名不一致</h2>
+
+<p>這個模式本身不複雜，但兩端的資料契約一定要對齊。DevFlow 整合時曾遇到一個很實際的錯誤：投票成功後畫面沒有即時更新，還出現「action type / action ID / author is required」。</p>
+
+<p>原因是 server action 內部期待的欄位名稱是 <code>actionId</code>、<code>actionType</code>、<code>author</code>，但元件實際傳入的是 <code>targetId</code>、<code>targetType</code>。同一件事在兩端使用不同名稱，直到 runtime 才爆出錯誤。</p>
+
+<figure class="lesson-figure"><img src="./promise-props-and-use-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>因此，若遇到類似問題，請依條件檢查：</p>
+
+<ul>
+  <li>若 server action 期待 <code>actionId</code>，client 就必須傳送同名欄位。</li>
+  <li>若 server action 期待 <code>actionType</code>，不要只因為 client 端習慣而改成 <code>targetType</code>。</li>
+  <li>若 server action 需要 <code>author</code>，請確認 client 傳入的資料中確實有這個欄位。</li>
+</ul>
+
+<p>promise 傳遞與 <code>use()</code> 本身不難；真正容易出錯的地方，往往是 server 與 client 之間的欄位契約沒有對齊。</p>
+
+<h2>做完後，你應該能驗證什麼？</h2>
+
+<p>完成後，可以用以下結果檢查實作是否正確：</p>
+
+<ol>
+  <li>server 端變數保留的是 promise，而不是使用 <code>await</code> 後的結果。</li>
+  <li>promise 透過 props 傳給 client component。</li>
+  <li>client component 的 props 型別寫成 <code>Promise&lt;...&gt;</code>。</li>
+  <li>client 使用 <code>use()</code> 取得解開後的資料。</li>
+  <li>promise 尚未完成時，Suspense 顯示 fallback，而不是讓整頁卡住。</li>
+  <li>投票後，<code>revalidatePath</code> 讓頁面在不整頁重載的情況下更新。</li>
+  <li>server action 需要的欄位名稱，與 client 傳送的欄位名稱一致。</li>
+</ol>
+
+<blockquote>
+模式只有四步：server 呼叫 action 但<strong>不 await</strong>，把 promise 接住；把 promise 當 prop 傳給 client component；client 宣告 <code>Promise&lt;...&gt;</code> 型別；用 <code>use()</code> 解開。關鍵理由是 <code>await</code> 會阻塞 server 渲染，而不 await 的 promise 把等待移到 Suspense 邊界上。用 <code>use()</code> 而非 <code>useEffect</code>，還能省掉一趟往返、避免請求瀑布。
+</blockquote>
+
+<p>這一節處理的是「畫面上要顯示的資料」。但有些工作使用者根本看不到，卻也不該讓他等，例如增加瀏覽數、寫入 analytics，或記錄互動 log。下一節會以 view counter 為例，判斷這類副作用應該放在哪裡，以及 <code>after()</code> 什麼時候才是正解。</p>
+
+<div class="lesson-nav">
+  <div><a href="./suspense-boundaries.html">← 上一步：用 Suspense 切出可串流的邊界</a></div>
+  <div><a href="./after-post-response-effects.html">下一步：after()：把副作用延到回應之後 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼在 server component 呼叫 action 後刻意不 await？" data-correct="1" data-explain="await 會阻塞 server 渲染；不 await 才能把等待移到 Suspense 邊界。">
+  <button class="opt">因為 server action 不能在伺服器上被呼叫</button>
+  <button class="opt">因為 await 會阻塞 server 渲染整頁都等它</button>
+  <button class="opt">因為 promise 傳給 client 會被自動加上快取</button>
+  <button class="opt">因為不 await 才能讓查詢結果被自動去重</button>
+</div>
+<div class="quiz" data-question="接收 promise 的元件需要具備什麼條件？" data-correct="3" data-explain="它必須是 client component，檔案最上方要有「use client」。">
+  <button class="opt">必須是 async server component 才能接收</button>
+  <button class="opt">必須用 useEffect 才能讀取 promise</button>
+  <button class="opt">必須是 route handler 才接收得到 promise</button>
+  <button class="opt">必須是帶有 "use client" 的 client component</button>
+</div>
+<div class="quiz" data-question="use(hasVotedPromise) 做的是哪一件事？" data-correct="0" data-explain="它解讀一個已經存在的 promise，回傳解開後的值。">
+  <button class="opt">解讀一個已存在的 promise 並取得值</button>
+  <button class="opt">重新發送一次請求到伺服器拿資料</button>
+  <button class="opt">把 promise 自動轉成可序列化的物件</button>
+  <button class="opt">訂閱 promise 並在變化時重新渲染</button>
+</div>
+<div class="quiz" data-question="相較於 useEffect 抓資料，use() 的主要優勢是什麼？" data-correct="2" data-explain="它讀的是 server 已啟動的 promise，省一趟往返、避免請求瀑布。">
+  <button class="opt">它可以在伺服器端直接修改資料庫內容</button>
+  <button class="opt">它會自動把結果存進瀏覽器本機快取</button>
+  <button class="opt">讀取已啟動的 promise，避免請求瀑布</button>
+  <button class="opt">它讓元件不再需要 Suspense 邊界</button>
+</div>
+<div class="quiz" data-question="DevFlow 投票整合時欄位命名不一致，造成了什麼？" data-correct="1" data-explain="client 傳 targetId，server 期望 actionId，執行時才跳錯誤。">
+  <button class="opt">建置階段就編譯失敗無法部署上線</button>
+  <button class="opt">投票成功但狀態沒更新且執行時報錯</button>
+  <button class="opt">promise 永遠不會解開讓畫面卡在 fallback</button>
+  <button class="opt">資料庫連線被重複建立導致連線爆掉</button>
+</div>
+<div class="quiz" data-question="投票後要讓畫面即時反映新狀態，靠的是什麼？" data-correct="3" data-explain="在 action 裡呼叫 revalidatePath，重新驗證該路徑的資料。">
+  <button class="opt">在 client 用 useEffect 重新載入整個頁面</button>
+  <button class="opt">把整份投票資料塞進瀏覽器的 localStorage</button>
+  <button class="opt">把 action 改成 route handler 再輪詢狀態</button>
+  <button class="opt">在 action 裡呼叫 revalidatePath 重新驗證</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 串流、Suspense、PPR 與 after() · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -8,101 +8,89 @@
 </head>
 <body>
 
-<h1>native module 與重建：為什麼裝個套件還要重新編譯？</h1>
+<h1>native module 與重建：為什麼裝個套件就要重新編譯？</h1>
 <p class="meta">Step 4/5 · Expo / React Native 心智模型</p>
 
+<h2>先想像一個一定會遇到的卡點</h2>
+
+<p>你照著文件裝好一個套件，重新載入 app，畫面卻完全沒變，終端機還吐出一段看不懂的錯誤。旁邊的人只說：「你要 rebuild。」</p>
+
+<p>問題來了：明明只是多裝了一個套件，為什麼不能像修改一般的 JavaScript 一樣，重新整理就好？</p>
+
+<p>這一節要補上 <strong>rebuild</strong> 背後的機制。理解之後，你會知道它不是 Expo 額外訂出的規矩，而是 JavaScript 與 native 分層後自然產生的結果。哪些改動可以即時生效、哪些改動一定要等原生建置，也就不用再靠猜。</p>
+
 <h2>學習目標</h2>
-<p>學完這一節，你會知道 native module 是什麼，理解為什麼新增 native module 後必須重新執行原生建置，也能分辨 Metro 的 JS 熱更新與原生重建，分別更新了 app 的哪一層。</p>
 
-<h2>前言：為什麼只是裝套件，卻要整包重建？</h2>
-
-<p>你可能遇過這種情況：照著文件裝好套件，重新載入 app，畫面卻完全沒有變。終端機還吐出一段看不懂的錯誤。你問旁邊的人怎麼辦，得到的答案只有一句：「你要 rebuild。」</p>
-
-<p>但問題是，明明只是多裝了一個套件，為什麼不能像平常改 JavaScript 一樣，重新整理就好？</p>
-
-<p>關鍵是，React Native app 不只一層。它同時有 JavaScript 和原生程式碼，兩層的更新方式不一樣。搞懂「rebuild」背後的機制，你就能判斷哪些修改可以即時生效、哪些一定得重新建置，不用再靠猜。</p>
+<p>完成這一節後，你應該能解釋什麼是 native module，說明為什麼新增 native module 後必須重新執行原生建置，並分辨 Metro 的 JavaScript 熱更新與原生重建各自更新了哪一層。</p>
 
 <h2>native module：把原生能力包成 JS 介面</h2>
 
-<p>先回到 JS 與手機原生能力之間的那條界線。</p>
+<p>先回到 JS 與手機原生能力之間的界線。你可以在 JavaScript 這一側撰寫畫面與邏輯，但手機的相機、權限、通知等能力，往往存在於另一側。</p>
 
-<p>你可以在 JS 這一側撰寫畫面與邏輯，但手機有些能力位在另一側，例如相機、登入流程或系統層級的功能。要讓 JS 使用這些能力，就需要有人用原生語言撰寫程式：iOS 通常是 Swift，Android 通常是 Kotlin。接著，再把這段原生程式包成 JS 可以呼叫的介面。</p>
+<p>要讓 JavaScript 使用這些能力，就需要有人用原生語言撰寫程式：iOS 常見的是 Swift，Android 常見的是 Kotlin。這段原生程式再被包裝成 JavaScript 可以呼叫的介面，這個被包好的模組就是 <strong>native module</strong>。</p>
 
-<p>這個「原生程式加上 JS 呼叫介面」的組合，就是 <strong>native module</strong>。</p>
+<p>它並不是少見的特殊元件。課程中幾個重要的套件都會碰到這一層：Sentry 是 native module，所以安裝後需要重建；相機權限那組 API 是 native module；Clerk 的原生登入功能，以及 Expo 的 native tabs，也都依賴原生程式。</p>
 
-<p>它其實比想像中常見。課程裡的 Sentry 是 native module，所以安裝後需要重建；相機權限那組 API 也是 native module。Clerk 的原生登入功能，以及 Expo 的 native tabs，同樣都站在原生這一側。</p>
+<p>因此，你在程式碼裡可能只看見一行 <code>import</code> 和幾個函式呼叫，但 app 背後其實多了一段原生程式。這段程式必須被編譯，並連結進 app 的 binary。</p>
 
 <figure class="lesson-figure"><img src="./native-modules-and-rebuild-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>你在程式裡可能只看到一行 <code>import</code> 和幾個函式呼叫，但 app 背後其實多了一段原生碼。這段程式得先編譯、再連結進 app 的 binary，才能真的在手機上跑起來。</p>
-
 <h2>兩層更新：JS 層與 binary 層</h2>
 
-<p>為什麼有些修改一存檔就出現，有些卻要等很久？因為 app 裡同時有兩層東西，更新方式就像兩種施工：一種只要換內容，另一種得拆開結構重新組裝。</p>
+<p>為什麼有些修改幾乎立刻生效，有些卻得重新建置？因為你的 app 其實同時包含兩層內容，而這兩層的更新方式不同。</p>
 
 <table>
 <thead>
 <tr><th>層</th><th>裡面有什麼</th><th>怎麼更新</th></tr>
 </thead>
 <tbody>
-<tr><td>JS 層</td><td>你寫的元件、state、畫面邏輯</td><td>由 Metro 打包成 JS bundle，改完後透過熱更新／fast refresh 幾乎即時套用</td></tr>
-<tr><td>Native／binary 層</td><td>已連結進 app 的原生模組、原生專案設定</td><td>重新編譯整個原生專案，產生新的 app binary</td></tr>
+<tr><td>JS 層</td><td>你寫的元件、state 與畫面邏輯</td><td>由 Metro 打包成 JS bundle，修改後透過熱更新／fast refresh，幾乎可以即時看到結果</td></tr>
+<tr><td>Native／binary 層</td><td>已連結進 app 的原生模組與原生專案設定</td><td>重新編譯整個原生專案，產生新的 app binary</td></tr>
 </tbody>
 </table>
 
-<p><strong>Metro</strong> 是 Expo 生態裡負責打包 JavaScript 的工具。當你修改一個 <code>.tsx</code> 檔案，Metro 會重新打包 JS。手機上的 app 再透過 dev server 取得新的 bundle，畫面就更新了。</p>
+<p><strong>Metro</strong> 是 Expo 生態裡負責打包 JavaScript 的工具。當你修改一個 <code>.tsx</code> 檔案，Metro 會重新整理 JS bundle；手機上的 app 再透過 dev server 取得新版 bundle，畫面就跟著更新。因為這個過程只處理 JavaScript，所以速度很快。</p>
 
-<p>這個過程很快，是因為你只改了 JS 層，沒有碰到原生程式。</p>
+<p>但新增 native module 時，改變的是另一層。新模組的原生碼必須先被編譯，再被連結進 app binary。原本已經安裝在手機上的 binary 並沒有這段程式，因此 JS 熱更新無法把它補進去。</p>
 
-<p>但新增 native module 就不一樣了。這個模組的原生碼得先編譯、再連結進 app binary。手機上原本裝好的 binary 裡，並沒有這段新程式。</p>
-
-<p>JS 熱更新只能替換 JavaScript bundle，沒辦法順便把新的原生碼塞進既有的 app。所以你得重新建置，做出一個「已經包含新模組」的 binary，再重新安裝到裝置上。</p>
+<p>換句話說，熱更新只會替換 JavaScript bundle，不會順手改造手機裡已經安裝好的原生 app。你必須重新建置，產生一個「包含新模組」的 binary，然後重新安裝到裝置上。</p>
 
 <figure class="lesson-figure"><img src="./native-modules-and-rebuild-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<blockquote class="good-code">記法：JS 熱更新換的是「字幕」，原生重建換的是「舞台上的機械」。字幕可以隨時替換；機械要停工施工，才能裝上新的零件。</blockquote>
+<blockquote class="good-code">記法：JS 熱更新換的是「字幕」，原生重建換的是「舞台上的機械」。字幕隨時可以替換，機械則得停工施工。</blockquote>
 
-<h2>實際動手時，整條鏈會怎麼接起來？</h2>
+<h2>實際動手時會做什麼</h2>
 
-<p>把專案從 Expo Go 帶到 development build 時，會先安裝 dev client 套件：</p>
+<p>課程裡要把專案從 Expo Go 帶到 development build，大致會經過以下幾個階段：</p>
 
-<p><code>npx expo install expo-dev-client</code></p>
+<ol>
+<li>安裝 dev client 套件：<code>npx expo install expo-dev-client</code>。</li>
+<li>執行原生建置：<code>npx expo run ios</code>；如果是 Android，就換成對應的平台指令。</li>
+<li>建置完成後，專案會多出原生的 <code>ios/</code> 資料夾，以及 Android 對應的 <code>android/</code> 資料夾。這些資料夾就是 app 的原生外殼。</li>
+<li>之後每次新增或移除 native module，就再執行一次 <code>npx expo run ios</code>，產生包含最新原生內容的 binary。</li>
+</ol>
 
-<p>接著執行原生建置。以 iOS 為例，指令是：</p>
+<p>這也解釋了為什麼第一次建置通常特別慢，但之後只修改 JS 時又會很快。第一次是在編譯原生專案；後面大多數時間，你只是在替換 JS bundle。</p>
 
-<p><code>npx expo run ios</code></p>
+<p>如果要把 build 安裝到自己的實體手機，除了用 USB 連線執行 <code>npx expo run iOS --device</code>，也可以使用 Expo EAS 進行雲端建置，之後再讓手機上的 app 連回本機的 dev server。</p>
 
-<p>Android 則使用對應的平台指令。建置完成後，專案會多出原生的 <code>ios/</code> 資料夾；如果也建置 Android，則會有 <code>android/</code> 資料夾。可以把它們想成 app 的原生外殼，裡面包含原生專案與要連結進 binary 的模組。</p>
+<p>那為什麼不乾脆每次都重建，省下判斷的麻煩？因為重建本身很慢，而日常開發大多只是修改 JavaScript。實務上的節奏通常是：平常交給 Metro 熱更新；只有真的動到原生層時，才支付一次重建的成本。</p>
 
-<p>所以之後每次新增或移除 native module，都要再跑一次 <code>npx expo run ios</code>，讓新的 binary 編譯出來。</p>
+<h2>對照 web：為什麼網頁沒有這一層？</h2>
 
-<p>這也解釋了你常感受到的速度差異：第一次建置特別慢，因為它正在編譯原生專案；之後如果只改 JS，通常只需要更新 JS bundle，所以反應會快很多。</p>
+<p>如果你熟悉 Next.js，可能會覺得 React Native 的重建很不直覺。網頁通常不需要你處理這種原生 binary，是因為瀏覽器本身就是那個執行容器。瀏覽器由使用者安裝與維護，你只要更新伺服器上的檔案或 bundle，使用者重新整理後就能取得新版本。</p>
 
-<p>如果要把 build 裝到自己的實體手機，可以用 USB 連線執行 <code>npx expo run iOS --device</code>。也可以使用 Expo EAS 進行雲端建置，之後再讓手機上的 app 連回本機的 dev server。</p>
+<p>React Native 的情況不同。它的 app 本身就是執行容器，而容器裡裝了哪些原生模組，是由你的專案決定的。當容器的內容物改變，就必須重新把這個容器建出來。</p>
 
-<p>那為什麼不每次修改都重建，省得判斷？因為原生重建本身很慢，而日常開發大多數時候只是在調整 JS。比較實際的節奏是：平常讓 Metro 負責熱更新；只有真的動到原生那一層，才付出一次重建的成本。</p>
+<p>換句話說，網頁的「原生層」由瀏覽器廠商維護，更新與你無關；React Native 的原生層則由你的專案維護。因此，新增原生模組時，重建 binary 的責任也就在你身上。</p>
 
-<h2>對照 web：為什麼網頁通常沒有這一層麻煩？</h2>
-
-<p>如果你熟悉 Next.js，可能會覺得 React Native 的重建流程特別陌生。原因是，在網頁世界裡，瀏覽器就是那個已經準備好的執行容器。</p>
-
-<p>你不需要自己編譯瀏覽器，也不需要把新的原生模組裝進使用者的瀏覽器。只要替換伺服器上的檔案或 bundle，使用者重新整理後，就能取得新版程式。</p>
-
-<p>React Native 的情況不一樣。它的 app 本身就是容器，而這個容器裡裝了哪些原生模組，是由你的專案決定的。容器裡的內容一改，例如多了一個 native module，就得重新把容器做出來。</p>
-
-<p>換句話說，網頁的「原生層」由瀏覽器廠商維護，更新與你無關；React Native 的原生層則由你的專案維護。所以當你新增原生模組，重新建置就是你要自己負責的事。</p>
-
-<figure class="lesson-figure"><img src="./native-modules-and-rebuild-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
-
-<h2>把這個觀念接回整個心智模型</h2>
+<h2>把觀念接回整個心智模型</h2>
 
 <blockquote>
-<p>native module 是用原生語言寫好、再包成 JS 介面的模組。你的 app 同時有 JS 層與 native／binary 層：JS 層由 Metro 打成 bundle，可以透過熱更新快速替換；native／binary 層則包含已連結的原生模組。只要新增或移除 native module，就得用 <code>npx expo run ios</code> 重新編譯並重新安裝。</p>
+native module 是用原生語言寫好、再包成 JS 介面的模組。你的 app 有兩層：JS 層由 Metro 打成 bundle，可以透過熱更新取得變更；native／binary 層則包含已連結的原生模組。只要新增模組改變了這一層，就必須用 <code>npx expo run ios</code> 重新編譯並重新安裝。第一次建置慢、之後只改 JS 就快，正是「什麼時候該重建」的完整答案。
 </blockquote>
 
-<p>第一次建置比較慢、之後只改 JS 卻很快，是因為這兩層的更新成本本來就不一樣，不是 Expo 故意找麻煩。</p>
-
-<p>到這裡，心智模型的三塊拼圖已經接上：渲染終點換了、Expo 提供整條工具鏈，而 native module 決定你什麼時候必須重建。最後一節會把這些觀念放進真實專案的檔案裡，打開 Codexgram 的 <code>_layout.tsx</code>，看看它們在程式碼中實際長什麼樣子。</p>
+<p>到這裡，心智模型的三塊拼圖就接起來了：渲染終點換了、Expo 提供整條工具鏈，而 native module 決定你何時必須重建。下一節會把這些觀念放進真實的專案檔案裡，打開 Codexgram 的 <code>_layout.tsx</code>，看看它們在程式碼中實際長成什麼樣子。</p>
 
 <div class="lesson-nav">
   <div><a href="./expo-go-vs-dev-build.html">← 上一步：Expo Go 還是 dev build：什麼時候非真機建置不可</a></div>

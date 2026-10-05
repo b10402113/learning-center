@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>四階段控制迴圈：Goal → Act → Observe → Evaluate</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>四階段控制迴圈：Goal → Act → Observe → Evaluate</h1>
+<p class="meta">Step 1/4 · 最小可執行 Loop 與 Goal 契約</p>
+
+<h2>前言：它說「完成了」，你信嗎？</h2>
+
+<p>請一個 agent 幫你修壞掉的測試。它想了一下、跑了一條指令，接著回你一句「已完成」。但你打開終端機一看，測試還是紅的。</p>
+
+<p>這不一定是 agent 故意說謊，而是它的迴圈少了一塊：它動了手，卻沒有確認結果，也沒有拿結果對照「什麼才算完成」。這種「看起來一直在做事，卻沒人說得清楚到底有沒有完成」的情況，是 agent 很常見的失敗方式。</p>
+
+<p>要讓 agent 從「持續動作」變成「朝目標收斂」，靠的不是更聰明的模型，而是一個可以畫在白板上的控制迴圈：<strong>Goal</strong> 定義成功，<strong>Act</strong> 執行能力，<strong>Observe</strong> 取得真實證據，<strong>Evaluate</strong> 根據證據決定繼續、調整或停止。</p>
+
+<figure class="lesson-figure"><img src="./four-stage-control-cycle-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這一節先建立四個階段的關係與契約。後面三節才會把它寫成程式，並補上 goal 契約與操作界線。</p>
+
+<h2>學習目標</h2>
+
+<p>完成本節後，你應該能說明 Goal、Act、Observe、Evaluate 各自負責什麼，知道它們交接時需要哪些資訊，也能解釋為什麼「停下來」和「繼續」同樣重要。</p>
+
+<h2>它和單一次呼叫差在哪裡</h2>
+
+<p>單次大型語言模型呼叫是「問一句、答一句」。模型回應之後，流程通常就結束了；它不會再回頭確認外部世界是否真的改變。</p>
+
+<p>控制迴圈則把目標一直保留下來。每一輪都會決定下一步、實際執行、讀取真實結果，再根據結果判斷是否需要繼續。模型不再只是產生文字，而是選擇動作、讀取動作結果，並判斷下一步。</p>
+
+<p>這不是誰取代誰的問題。單次呼叫適合一次就能回答的自足任務，速度快、成本低，也比較容易測試。迴圈則適合那些必須先看到結果，才知道下一步該怎麼走的任務，例如需要使用外部工具、根據測試結果修正程式，或依照過程中的發現調整方向。</p>
+
+<p>判斷標準很簡單：<strong>這件事是否需要看到結果之後，才能決定下一步？</strong>如果需要，就不該只靠一次呼叫。</p>
+
+<h2>四個階段，四份契約</h2>
+
+<p>這個迴圈能支撐可靠行為，是因為每個階段都有清楚的輸入與輸出，而不是把一切交給模型「自己想辦法」。可以把每個階段想成一個介面：它要拿到什麼、要交出什麼，以及失敗時如何表示。</p>
+
+<p>少了任何一份契約，迴圈就可能變成一台很忙的跑步機：動作很多，卻無法判斷自己是否真的前進。</p>
+
+<table>
+<thead>
+<tr><th>階段</th><th>它回答的問題</th><th>最小契約</th></tr>
+</thead>
+<tbody>
+<tr><td>Goal（目標）</td><td>成功長什麼樣子？</td><td>驗收條件、限制與 done 條件。缺少這些，agent 可能一直做事，卻永遠不知道何時完成。</td></tr>
+<tr><td>Act（行動）</td><td>這一步要動用哪個能力？</td><td>選出正確操作，例如一次 tool call、一次程式碼編輯或一次查詢，讓任務狀態產生可追蹤的變化。</td></tr>
+<tr><td>Observe（觀察）</td><td>實際發生了什麼？</td><td>取得真實輸出，而不是猜測：成功結果、錯誤、警告，以及動作造成的狀態變化。</td></tr>
+<tr><td>Evaluate（評估）</td><td>現在要不要繼續？</td><td>拿觀察結果對照 goal，衡量風險，再決定 continue、adjust 或 stop。</td></tr>
+</tbody>
+</table>
+
+<h2>Goal：先說清楚什麼叫完成</h2>
+
+<p>使用者丟進來的一句話通常只是請求，還不是一份可驗收的 goal。迴圈需要把請求轉成目標狀態，說清楚想得到什麼，以及要用什麼標準判斷成功。</p>
+
+<p>沒有這一步，模型可以一直規劃、呼叫工具、修改檔案，卻不知道自己是在靠近目標，還是在原地打轉。Goal 就像地圖上的終點；沒有終點，走得再勤快也無法判斷是否抵達。</p>
+
+<h2>Act：選擇能改變狀態的動作</h2>
+
+<p>Act 的本質，是選一個能改變任務狀態的操作，例如呼叫 MCP 工具、發出一次 LSP 查詢、執行 repository 指令、修改檔案，或呼叫一支 API。</p>
+
+<p>光是「模型動手了」還不夠，它選的操作必須<strong>被允許</strong>，而且<strong>結果可被觀察</strong>。真正的執行與驗證應該由 harness 負責，不能只靠模型自己宣稱動作已經成功。</p>
+
+<h2>Observe：拿回證據，不要只收承諾</h2>
+
+<p>Observe 是最容易被偷懶的一步。它的工作是取得「實際發生的事」，而不是假設動作應該會成功。</p>
+
+<p>合格的觀察可以包含成功輸出、錯誤、警告，以及動作造成的狀態變化，例如測試結果、診斷訊息，或檔案修改前後的差異。若只讓模型說「我已經把檔案改好了」，你拿到的只是承諾，不是證據。</p>
+
+<p>這也是為什麼 agent 不能只看自己的文字回應。真正重要的是外部系統回傳了什麼，以及環境是否真的出現預期變化。</p>
+
+<h2>Evaluate：根據證據決定下一步</h2>
+
+<p>Evaluate 是工程紀律真正進場的地方。它把觀察結果拿來對照 goal，同時把風險算進去，然後選擇下一步：繼續、調整，或停止。</p>
+
+<p>這裡有一個容易被忽略的觀念：<strong>停止和繼續一樣重要</strong>。好的迴圈不會無限執行；當目標達成、預算用完，或需要人類覆核時，它都應該退出。</p>
+
+<p>只會往前衝、不會收手的迴圈，在正式環境裡稱不上積極，只會變成負債。它可能重複修改、反覆重試，甚至在沒有足夠證據的情況下擴大影響範圍。</p>
+
+<figure class="lesson-figure"><img src="./four-stage-control-cycle-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>停下來有三種理由</h2>
+
+<p>把「停」講清楚，往往比把「繼續」講清楚更能保護系統。受控迴圈的退出通常有三類理由：</p>
+
+<ul>
+<li><strong>目標達成：</strong>驗收條件成立，安全地停止並回傳最終答案。</li>
+<li><strong>界線到了：</strong>步數、時間或成本等預算已經用完。</li>
+<li><strong>需要人類介入：</strong>動作具有高影響、涉及敏感內容，或情況仍然模稜兩可，因此進入覆核。</li>
+</ul>
+
+<p>第三類不應被當成例外處理。高影響或敏感的動作，本來就可能需要在執行前先取得人類核准。人類介入不是迴圈失敗，而是系統設計的一部分。</p>
+
+<h2>迴圈不是孤島：它需要專案上下文</h2>
+
+<p>在真實的 repository 裡，迴圈不是憑空運作。它需要理解專案的慣例、架構、權限與工具偏好，才有辦法做出合理的動作。</p>
+
+<p>這些資訊通常會寫在幾個檔案裡：<code>CLAUDE.md</code> 記錄操作規則，<code>codebase-map.md</code> 說明重要邏輯的位置，<code>claude-settings.json</code> 定義本機的權限與工具行為。先讓迴圈讀懂這些上下文，再讓它動手，動作品質會有很大的差異。</p>
+
+<h2>驗證是迴圈的安全邊界</h2>
+
+<p>讓迴圈保持安全的，是測試、權限檢查與人類核准這些邊界，不是裝飾品。模型可以觀察測試結果、讀取診斷訊息、修正計畫，但最終變更仍然要通過對應的檢查。</p>
+
+<p>這也是控制迴圈適合企業環境的原因：我們可以追蹤它使用了哪些上下文、呼叫了哪些工具、看到了哪些證據，以及它為什麼選擇繼續或停止。可被檢查、可被限制，也可依照結果改善，才是可靠行為的基礎。</p>
+
+<figure class="lesson-figure"><img src="./four-stage-control-cycle-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+Goal、Act、Observe、Evaluate 是 agent 的核心控制週期。Goal 把請求轉成含有成功條件的目標；Act 選擇一個被允許、且結果可觀察的操作；Observe 取得真實證據，而不是猜測；Evaluate 對照目標與風險，決定繼續、調整或停止。停止不是失敗，而是設計的一部分；權限、逾時、步數上限、重試上限與人類核准，都應該從一開始就放進迴圈。
+</blockquote>
+
+<p>現在你已經有了迴圈的骨架，但 Goal 那一格仍然需要更具體的內容：模糊需求要如何轉成可驗收的條件？下一節會把這個問題整理成一份 goal 契約，讓 Evaluate 真的有標準可以對照。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./goal-as-executable-contract.html">下一步：把模糊需求寫成 Goal 契約與完成條件 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="控制迴圈和單一次模型呼叫最根本的差別是什麼？" data-correct="2" data-explain="單次呼叫拿到一個回應就結束，迴圈會持續看結果再決定下一步。">
+  <button class="opt">迴圈用的模型通常比較大也比較聰明</button>
+  <button class="opt">迴圈一定要連接外部網路才能運作</button>
+  <button class="opt">迴圈會持續觀察結果再決定下一步</button>
+  <button class="opt">迴圈回覆的文字通常比單次呼叫長</button>
+</div>
+<div class="quiz" data-question="Observe 階段最重要的契約是什麼？" data-correct="1" data-explain="觀察要拿回真的發生的事，包含成功、錯誤與狀態變化，不能靠假設。">
+  <button class="opt">把模型的計畫用漂亮格式重述一次</button>
+  <button class="opt">擷取真實輸出，而不是假設成功</button>
+  <button class="opt">確認模型的回答符合使用者的語氣</button>
+  <button class="opt">提前決定下一輪要用哪一個工具</button>
+</div>
+<div class="quiz" data-question="下列哪一種「停下來」不是受控迴圈的正常退出理由？" data-correct="3" data-explain="做不出來就假裝完成，正好是迴圈要避免的假性收尾。">
+  <button class="opt">目標已經達成，回傳最終答案</button>
+  <button class="opt">步數、時間或成本的預算用完</button>
+  <button class="opt">風險太高，需要人類介入覆核</button>
+  <button class="opt">模型覺得累了，於是直接假裝完成</button>
+</div>
+<div class="quiz" data-question="為什麼真實 repo 裡的迴圈需要讀 CLAUDE.md 或 codebase-map.md？" data-correct="0" data-explain="這些檔案把專案慣例、架構與權限提供給迴圈，讓動作不離譜。">
+  <button class="opt">讓迴圈理解專案慣例、架構與權限</button>
+  <button class="opt">讓迴圈可以跳過所有的測試與檢查</button>
+  <button class="opt">讓模型的回應速度變得比較穩定</button>
+  <button class="opt">讓工具呼叫的費用自動降到最低</button>
+</div>
+<div class="quiz" data-question="Evaluate 階段除了對照目標，還必須把什麼一起納入判斷？" data-correct="2" data-explain="評估同時衡量風險，才決定繼續、調整或停止。">
+  <button class="opt">模型的版本編號與訓練資料年份</button>
+  <button class="opt">使用者的帳號等級與付費方案</button>
+  <button class="opt">這一步帶來的風險高低</button>
+  <button class="opt">畫面上剩餘的排版與字數空間</button>
+</div>
+<div class="quiz" data-question="為什麼測試、權限與人類核准要從第一天就長進迴圈裡？" data-correct="1" data-explain="它們是讓迴圈保持安全與可審計的一部分，不是上線前才補的裝飾。">
+  <button class="opt">因為法規要求每個專案都要有這些檔案</button>
+  <button class="opt">因為它們是安全與可審計的一部分</button>
+  <button class="opt">因為它們能讓模型推理速度變快</button>
+  <button class="opt">因為沒有它們模型就無法產生文字</button>
+</div>
+
+<div class="footer">
+  <p>loop-engineer · 最小可執行 Loop 與 Goal 契約 · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

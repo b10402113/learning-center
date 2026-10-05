@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tool Call 是 Loop 的 Action：模型出請求，Harness 才是執行邊界</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Tool Call 是 Loop 的 Action：模型提出請求，Harness 才是執行邊界</h1>
+<p class="meta">Step 1/4 · 入門實作：Tool Dispatcher 與 Loop Map</p>
+
+<h2>學習目標</h2>
+<p>這一節要建立一個核心觀念：模型送出的是結構化請求，實際執行工具的是 harness。學完後，你應該能說明 tool call 的可控邊界，並列出安全工具必備的四個部分，以及 governed execution pipeline 的四道關卡。</p>
+
+<h2>前言：模型突然能動你的系統了</h2>
+
+<p>想像你正在做一個會自己修 bug 的 agent。你對它說：「把這個檔案改好。」下一秒，它真的翻了檔案、執行測試，甚至改寫了內容。</p>
+
+<p>這時你可能會問：模型不是只會產生文字嗎？它究竟怎麼碰到我的檔案？如果它判斷錯了，又是誰讓那個動作真的發生？</p>
+
+<p>這一節要補上的就是這塊。前兩節我們已經搭好 loop 的骨架和 goal 契約，但那個 loop 還沒有「手」：它能做決定、能評估結果，卻還不能改變外部世界。</p>
+
+<p>所以，這一節先不急著寫程式，而是先把接上這雙手時的規矩講清楚。tool call 不是模型偷偷伸出去的手，而是一張由模型交出的結構化請求單；這張單子能不能執行，由 loop 外面的 harness 決定。</p>
+
+<p>只要搞懂這條邊界，你才知道 agent 什麼時候仍在你的控制之下，以及哪些動作必須先經過檢查。</p>
+
+<h2>Tool call 就是 loop 的 action step</h2>
+
+<p>agent 之所以有用，是因為它能做的不只是產生一段文字。在 agent loop 裡，工具呼叫就是那個 action step：每一次迭代中，agent 透過它實際查詢或改變世界。</p>
+
+<p>但這裡有一個很容易被忽略的分工。模型本身不會直接編輯檔案、查詢資料庫，也不會自己執行測試。它負責的是三件事：</p>
+
+<ul>
+<li>從允許使用的工具中挑選一個。</li>
+<li>送出結構化的引數。</li>
+<li>等待工具的結果回來，並把結果當成 observation。</li>
+</ul>
+
+<p>換句話說，模型負責「判斷要做什麼」，但「這件事究竟能不能執行」則由另一層負責。這一層就是 harness。</p>
+
+<p>harness 是 prompt、policy、工具、狀態與控制邏輯的所在，也是整個 agent 系統裡實際可控的執行邊界。</p>
+
+<blockquote>
+模型可以推理、可以做決定；但 harness 決定哪些事情真的能被執行。這條界線，就是你能不能信任這個 agent 的關鍵。
+</blockquote>
+
+<p>可以把它想成公司的簽核流程。模型像一位幕僚：它讀完資料後寫出一張簽呈，清楚說明「要做什麼」以及「需要哪些條件」。</p>
+
+<p>但簽呈本身不是命令。它仍然要經過核章，確認這件事是否獲得授權、金額是否超出限制、是否踩到不能碰的紅線，通過後才會真正執行。</p>
+
+<p>你不會因為幕僚很聰明，就讓他自己拿公司的錢去匯款。tool call 也是一樣：模型可以提出請求，但不能繞過執行邊界。</p>
+
+<figure class="lesson-figure"><img src="./tool-call-as-action-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>一次工具呼叫的完整生命週期</h2>
+
+<p>把剛才的簽呈流程拆開，一次 tool call 通常會依序經過以下階段：</p>
+
+<ol>
+<li><strong>意圖</strong>：使用者或系統的 goal 產生「現在該做點什麼」的需求。</li>
+<li><strong>選工具</strong>：模型從可用工具中，挑選一個看起來與這個意圖相關的工具。</li>
+<li><strong>結構化引數</strong>：模型不只是送出模糊指令，而是提供結構化的引數，通常是 JSON，裡面寫明要使用哪個工具，以及要帶入哪些輸入。</li>
+<li><strong>harness 驗證</strong>：在實際執行前，harness 會拿這些引數對照工具的 schema 與安全規則。</li>
+<li><strong>執行</strong>：只有通過驗證後，工具才會在被允許的環境裡執行。</li>
+<li><strong>observation</strong>：工具結果會被捕捉成 observation，其中包含有用的資料、狀態，以及錯誤。</li>
+<li><strong>決定下一步</strong>：模型根據 observation，決定要再呼叫另一個工具、請使用者補充資訊、換一組引數重試，或直接收尾。</li>
+</ol>
+
+<p>這條流程讓工具使用變得可審計、可重複。最重要的是，模型的行動不該被當成魔法；它是一個經過系統驗證的結構化請求，交給工具執行，再透過 observation 回到模型解讀。</p>
+
+<p>少了這條鏈，當一次 run 失敗時，你很難判斷問題究竟出在模型選錯工具、引數不正確、工具執行失敗，還是環境本身阻擋了動作。</p>
+
+<figure class="lesson-figure"><img src="./tool-call-as-action-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>一個安全的工具需要四個部分</h2>
+
+<p>光有工具名稱還不夠。一個可以被安全呼叫的工具，需要四樣東西一起支撐。缺少其中任何一樣，除錯時都可能像在沒有地圖的黑暗房間裡找出口。</p>
+
+<table>
+<thead>
+<tr><th>部分</th><th>它回答什麼問題</th><th>弱掉的時候會怎樣</th></tr>
+</thead>
+<tbody>
+<tr><td>schema</td><td>這個工具做什麼，以及接受哪些引數？</td><td>模型不知道該怎麼帶參數，可能亂選工具、亂填欄位。</td></tr>
+<tr><td>runtime boundary</td><td>它被允許在哪裡操作，例如檔案系統、shell、網路、資料庫或外部服務？</td><td>工具可能跑到不該碰的地方，而且沒有人攔得住。</td></tr>
+<tr><td>input validation</td><td>執行前，這些輸入值是否合理，例如必填欄位、允許範圍與允許的操作？</td><td>離譜的參數可能照樣被執行，直到很後面才發生錯誤。</td></tr>
+<tr><td>observation contract</td><td>工具執行後，哪些內容會回到 agent，例如成功結果、失敗狀態、錯誤訊息與足夠的 metadata？</td><td>你分不清楚問題是模型選錯、工具故障，還是環境擋住了動作。</td></tr>
+</tbody>
+</table>
+
+<p>這四個部分如果都做得扎實，工具呼叫就不再是靠感覺運作的黑盒子，而會變成一個可以測試、監控與改進的工程介面。</p>
+
+<p>反過來說，只要其中一部分很弱，agent 就會變得難以除錯。每次結果不如預期時，你只能猜測是哪個環節出了問題。</p>
+
+<h2>Governed execution pipeline：每張簽呈都要過四道關卡</h2>
+
+<p>企業環境的設計原則很直接：每一次工具呼叫，都應該被視為一個需要治理的動作。</p>
+
+<p>所謂治理，具體來說就是讓每個請求依序通過四道關卡：</p>
+
+<ol>
+<li><strong>policy check</strong>：這個意圖本身是否被允許？</li>
+<li><strong>schema validation</strong>：這些輸入是否符合工具契約？</li>
+<li><strong>execution sandbox</strong>：限制這個工具可以碰到的範圍。</li>
+<li><strong>audit log</strong>：記錄誰要求了什麼、實際執行了什麼、回傳了什麼，以及 agent 如何回應。</li>
+</ol>
+
+<p>這條管線不只是資安團隊才需要。對工程師來說，它也是做出「能被除錯的 agent」的方法。</p>
+
+<p>當任務失敗時，你可以沿著這條管線逐段檢查：模型選了哪個工具、帶了什麼引數、驗證是否通過、執行輸出是什麼、最後形成的 observation 又長什麼樣子。有了這些線索，失敗才有機會被定位與修正。</p>
+
+<p>這條執行邊界也讓高風險動作可以被分開處理。寫入 repo 之外的檔案、刪除檔案、執行網路指令、安裝套件，都不應該和一般查詢混在一起，而應該額外經過驗證或核准。</p>
+
+<p>如此一來，agent 可以保有生產力，卻不會把每一項能力都變成不受限制的權力。你可以給它一雙有用的手，但這雙手必須受到明確的權限、可觀察的結果與審查閘門約束。</p>
+
+<figure class="lesson-figure"><img src="./tool-call-as-action-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+tool call 是 loop 的 action step，但模型只負責送出結構化請求，決定能不能執行的是 harness。一個安全的工具需要 schema、runtime boundary、input validation 與 observation contract 四個部分；每一次呼叫都應該通過 policy、schema validation、sandbox 與 audit log 四道關卡。可靠的 agent 透過有界、可觀察的工具行動，而不是依賴隱形的副作用。
+</blockquote>
+
+<p>現在，模型與外部世界之間的關係就清楚了：模型提出請求，harness 掌握邊界，工具負責執行，observation 把結果帶回 loop。</p>
+
+<p>接下來的問題是：當一張請求單送到你面前時，怎麼判斷該放行、打回，還是重試？下一節會用幾個具體情境，把這個判斷拆成可以實際使用的規則。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./judge-tool-safety.html">下一步：判斷一次 Tool Call 能不能跑、能不能重試 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="模型決定要刪掉某個檔案，最後是誰決定這個動作能不能真的被執行？" data-correct="1" data-explain="模型只送出結構化請求，實際能不能執行由 harness 依規則決定。">
+  <button class="opt">發出請求的模型自己決定</button>
+  <button class="opt">負責驗證與執行的 harness</button>
+  <button class="opt">被指定要刪掉的那個檔案</button>
+  <button class="opt">提出需求的那位終端使用者</button>
+</div>
+<div class="quiz" data-question="工具真正執行之前，harness 應該先做哪一件事？" data-correct="2" data-explain="harness 要先拿引數去對照 schema 與安全規則，通過後才執行。">
+  <button class="opt">先估算模型對這個答案的信心</button>
+  <button class="opt">先把工具的最大回合數調高</button>
+  <button class="opt">先對照 schema 與安全規則驗證引數</button>
+  <button class="opt">先把剛剛的錯誤訊息全部清掉</button>
+</div>
+<div class="quiz" data-question="下面哪一項不是一個安全工具必備的四個部分？" data-correct="3" data-explain="模型信不信心不是工具契約的一部分；schema、runtime boundary、validation、observation contract 才是。">
+  <button class="opt">工具自己的 schema 定義</button>
+  <button class="opt">工具可以操作的 runtime 邊界</button>
+  <button class="opt">執行前的輸入驗證規則</button>
+  <button class="opt">模型對這次選擇的信心分數</button>
+</div>
+<div class="quiz" data-question="一次工具呼叫走過治理管線時，正確的關卡順序是什麼？" data-correct="0" data-explain="先查意圖是否被允許，再驗證輸入，然後在沙箱執行，最後留下審計紀錄。">
+  <button class="opt">policy → schema 驗證 → 沙箱 → 審計紀錄</button>
+  <button class="opt">schema 驗證 → policy → 審計紀錄 → 沙箱</button>
+  <button class="opt">沙箱 → policy → schema 驗證 → 審計紀錄</button>
+  <button class="opt">審計紀錄 → 沙箱 → policy → schema 驗證</button>
+</div>
+<div class="quiz" data-question="為什麼「模型自己說它做好了」不能當成 agent 完成的證據？" data-correct="1" data-explain="完成要看工具執行後回來的 observation，而不是模型對自己表現的敘述。">
+  <button class="opt">因為模型講話通常都特別冗長</button>
+  <button class="opt">因為完成要看 observation 的真實證據</button>
+  <button class="opt">因為 observation 一定比模型更聰明</button>
+  <button class="opt">因為模型沒有辦法產生任何文字</button>
+</div>
+<div class="quiz" data-question="下面哪一種動作最該被獨立拉出來、額外經過驗證或核准？" data-correct="2" data-explain="寫到 repo 之外、刪檔、網路指令、安裝套件這類高風險動作，應有額外的驗證或核准。">
+  <button class="opt">讀取一份公開的說明文件</button>
+  <button class="opt">查詢目前的系統時間</button>
+  <button class="opt">刪除 repo 之外的重要檔案</button>
+  <button class="opt">格式化一段本機的純文字</button>
+</div>
+
+<div class="footer">
+  <p>loop-engineer · 入門實作：Tool Dispatcher 與 Loop Map · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

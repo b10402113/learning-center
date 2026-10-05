@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>為什麼 Next.js 的 fetch 會自動快取</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>為什麼 Next.js 的 fetch 會自動快取？</h1>
+<p class="meta">Step 1/4 · Fetch 快取與 request dedup</p>
+
+<h2>前言：我沒寫快取，資料為什麼還是舊的？</h2>
+
+<p>你請 AI 寫了一個頁面，裡面只有一行 <code>fetch</code>，用來抓某個 API。功能正常，畫面也成功顯示。幾天後，你更新了後端資料，重新整理頁面，看到的卻還是舊內容。</p>
+
+<p>你回頭檢查程式碼：沒有快取套件、沒有 CDN，也沒有任何熟悉的快取設定。這時很容易懷疑，是不是後端其實沒有更新。</p>
+
+<p>如果把同一段程式碼放進純 React 專案，通常不會有這種落差。瀏覽器原生的 <code>fetch</code> 每次呼叫都會真的送出請求；但在 Next.js 裡，<code>fetch</code> 多了一層 Next.js 的處理。這一層會改變它的預設行為，也正是「明明沒寫快取，資料卻是舊的」的原因。</p>
+
+<h2>先看大圖：Next.js 在 fetch 外面加了一層什麼？</h2>
+
+<p>可以把瀏覽器原生的 <code>fetch</code> 想成一個每次都會跑到郵局寄信的人：你呼叫一次，它就送出一次網路請求，拿回回應，工作結束。它不會主動記住上一封信的內容，也不會替你判斷下次能不能重用。</p>
+
+<p>Next.js 則像是在郵局門口加了一個收發櫃檯。你送出 <code>fetch</code> 前，它會先檢查 Data Cache 裡有沒有相同請求的結果。如果有，就直接把結果交給你；如果沒有，才真的送出請求，並把回應存起來。</p>
+
+<figure class="lesson-figure"><img src="./extended-fetch-and-auto-cache-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>所以兩者的差別可以這樣看：</p>
+
+<table>
+<thead>
+<tr><th>環境</th><th><code>fetch</code> 的直覺行為</th><th>是否會主動使用 Next.js 的 Data Cache</th></tr>
+</thead>
+<tbody>
+<tr><td>瀏覽器原生 fetch</td><td>每次呼叫都送出網路請求</td><td>不會</td></tr>
+<tr><td>Next.js 的 fetch</td><td>先檢查快取，有需要才送出請求</td><td>會</td></tr>
+</tbody>
+</table>
+
+<p>這也是為什麼在 Next.js 專案裡，大家常用 <code>fetch</code> 而不是 axios。重點不是 <code>fetch</code> 的語法比較漂亮，而是 Next.js 能攔截並擴充它，讓它和自己的快取系統合作。axios 是第三方套件，Next.js 管不到同一層，因此用 axios 抓取的資料不會進入這套快取機制。</p>
+
+<h2>AI 常犯版 vs 正解版：不要把 Next.js fetch 當成瀏覽器 fetch</h2>
+
+<p><strong>AI 常犯版：</strong>看到 <code>fetch(url)</code>，就直接套用瀏覽器的直覺，認為每次重新整理都會重新向 API 要資料。</p>
+
+<p><strong>正解版：</strong>先問自己：「這個 <code>fetch</code> 是在哪裡執行的？」如果它是在 Next.js 中執行，就要把 Data Cache 算進來。相同請求可能不會再次打到來源，而是直接拿到先前存下來的回應。</p>
+
+<p>這個判斷是後面所有設定的起點。你如果把 Next.js 的 <code>fetch</code> 當成原生版本，遇到舊資料時，就會一直在 API、瀏覽器或 CDN 之間猜原因，卻漏掉真正的快取層。</p>
+
+<h2>預設行為：什麼都不寫，也可能快取</h2>
+
+<p>最容易讓人踩到的地方是：你不需要寫任何快取設定，這層機制就可能生效。</p>
+
+<p>一個沒有選項的 <code>fetch</code>，Next.js 會把它視為可以重複使用的資料。第一次請求時，快取裡還沒有內容，所以它會真的去呼叫來源，並把回應存起來。下一次頁面或元件呼叫相同 URL 時，就可能直接從快取取回，不再重新打來源。</p>
+
+<p>觀察開發者工具或伺服器 log 時，通常會看到兩種狀態：</p>
+
+<ul>
+<li><strong>cache skip</strong>：跳過快取，真的去抓資料。</li>
+<li><strong>cache hit</strong>：命中快取，直接回傳既有結果。</li>
+</ul>
+
+<p>「第一次 miss，後面 hit」就是 Next.js Data Cache 運作時的典型樣子。它之所以朝這個方向設計，是因為 Next.js 預設會把頁面視為適合重用的內容。部落格、文件、商品列表這類不常變動的頁面，使用快取通常能讓回應更快，也能減少不必要的來源請求。</p>
+
+<figure class="lesson-figure"><img src="./extended-fetch-and-auto-cache-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>但如果頁面要求每次都顯示最新資料，這個預設值就會變成陷阱。<strong>AI 常犯版</strong>是把「我沒有寫快取」理解成「一定不會快取」；<strong>正解版</strong>則是先確認 Next.js 的預設策略，再依資料的新鮮度需求明確設定。</p>
+
+<h2>三個旋鈕：決定是否快取，以及可以舊多久</h2>
+
+<p>快取設定其實在回答兩個問題：</p>
+
+<ol>
+<li>這份資料要不要存進快取？</li>
+<li>如果要存，可以保留多久？</li>
+</ol>
+
+<p><code>cache</code> 主要處理第一個問題。<code>revalidate</code> 則是在資料可以被重用的前提下，處理第二個問題。</p>
+
+<h3><code>cache: 'no-store'</code>：每次都拿最新資料</h3>
+
+<p><code>no-store</code> 的意思是完全不要使用這層快取。Next.js 不從自己的快取取資料，也不把這次拿到的結果存起來；每次請求都直接到來源取得最新內容。</p>
+
+<p>這適合即時股價、聊天訊息等不能接受舊資料的情境。當然，代價是每次都要重新發出請求，來源也必須承擔相應的流量與處理成本。</p>
+
+<pre data-source="sources/next-js/20261004/EBOOK.pdf#Data Fetching"><code>cache: 'no-store',</code></pre>
+
+<h3><code>cache: 'force-cache'</code>：有可用快取就先重用</h3>
+
+<p><code>force-cache</code> 的方向相反：只要有可用的快取，就優先使用。快取不存在或已經過期時，Next.js 才會回到來源取得新資料，並把新結果存回去。</p>
+
+<p>這種行為和「什麼都不寫」的預設方向幾乎一樣，因為 Next.js 預設就是盡量重用能重用的資料。</p>
+
+<p><strong>AI 常犯版：</strong>看見 <code>force-cache</code> 就以為它是某種額外的特殊快取功能。</p>
+
+<p><strong>正解版：</strong>把它理解成清楚寫出的意圖：「這份資料可以重用，有快取就先用。」它特別適合不常變動的內容。</p>
+
+<h3><code>revalidate</code>：讓快取定期更新</h3>
+
+<p>有些資料不需要每秒都是最新，但也不能永遠停留在第一次抓到的版本。這時就需要第三個維度：快取多久後重新取得資料。</p>
+
+<p><code>revalidate</code> 有兩種寫法。一種放在頁面或 route 的最上層，會影響整個路由；另一種放在單一個 <code>fetch</code> 的選項裡，只影響那一次請求。</p>
+
+<pre data-source="sources/next-js/20261004/EBOOK.pdf#Data Fetching"><code>export const revalidate = false | 0 | number;
+fetch(`https://...`, { next: { revalidate: false | 0 | number } });</code></pre>
+
+<p>這三種值可以想成三種不同的保鮮策略：</p>
+
+<ul>
+<li><code>false</code>：盡可能一直保留快取。實際上，HTTP 快取仍可能在很久以後被清除。</li>
+<li><code>0</code>：不使用快取，每次重新產生，行為上接近 <code>no-store</code>。</li>
+<li>數字：把快取保留指定的秒數。時間到了，Next.js 才回來源取得新版本，再把新版本存回快取。</li>
+</ul>
+
+<p>因此，數字型的 <code>revalidate</code> 不是「每隔幾秒主動更新一次」，而比較像一個保鮮期限：有人再次需要這份資料，而且期限已到時，才會進入更新循環。</p>
+
+<figure class="lesson-figure"><img src="./extended-fetch-and-auto-cache-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把三個設定放在一起比較</h2>
+
+<table>
+<thead>
+<tr><th>設定</th><th>行為</th><th>適合的資料</th></tr>
+</thead>
+<tbody>
+<tr><td><code>cache: 'no-store'</code></td><td>完全不快取，每次都打來源</td><td>即時、不能舊的資料</td></tr>
+<tr><td><code>cache: 'force-cache'</code></td><td>有新鮮快取就用，沒有才去抓</td><td>不常變的資料，也是預設方向</td></tr>
+<tr><td><code>next: { revalidate: N }</code></td><td>快取 N 秒後才更新一次</td><td>偶爾變動、容許幾分鐘延遲的資料</td></tr>
+<tr><td><code>next: { revalidate: 0 }</code></td><td>等同不快取，每次重算</td><td>需要即時資料，但仍使用 fetch 的場景</td></tr>
+<tr><td><code>next: { revalidate: false }</code></td><td>盡量永久保留快取</td><td>幾乎不變的資料</td></tr>
+</tbody>
+</table>
+
+<p>選設定時，不要只問「哪一個最好」。真正要問的是：「這份資料最多可以舊多久？」如果答案是完全不能舊，就選擇不快取；如果幾分鐘的延遲可以接受，就用指定秒數的 <code>revalidate</code>；如果內容幾乎不變，就讓它盡量被重用。</p>
+
+<h2>這層機制叫 Data Cache，但不要和 request dedup 混在一起</h2>
+
+<p>這整層機制通常稱為 <strong>Data Cache</strong>，也常被口語地叫作 fetch 快取。它有兩個重要特徵。</p>
+
+<p>第一，它是由 Next.js 擴充過的 <code>fetch</code> 驅動。只有透過這個 <code>fetch</code> 抓取的資料，才會使用這套機制。</p>
+
+<p>第二，它可以跨請求、跨使用者存活。只要資料還沒有過期，不同次瀏覽、不同使用者的請求，都可能共用同一份快取資料。</p>
+
+<p>這裡先記住「跨請求、可持久保留」這兩個關鍵字。下一節會介紹另一層看起來很像、但範圍完全不同的機制：<strong>request dedup</strong>。它只在單一次 render 內避免重複請求，不是用來長期保存資料的 Data Cache。</p>
+
+<figure class="lesson-figure"><img src="./extended-fetch-and-auto-cache-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p><strong>AI 常犯版：</strong>看到同一個 URL 沒有被打兩次，就直接說那是 Data Cache。</p>
+
+<p><strong>正解版：</strong>先分辨問題的範圍：資料是否跨請求、跨使用者保存？如果是，談的是 Data Cache；如果只是在同一次 render 中合併重複請求，才是 request dedup。</p>
+
+<h2>把這個觀念掛回整體架構</h2>
+
+<blockquote>
+Next.js 把瀏覽器原生的 <code>fetch</code> 換成擴充版，讓它自動和 Data Cache 合作。所以一個沒寫任何設定的 <code>fetch</code>，預設就會快取：第一次去來源抓，之後直接命中快取。要控制它就調三個地方：<code>cache: 'no-store'</code> 完全不快取、<code>cache: 'force-cache'</code> 有快取就用、<code>next: { revalidate }</code> 決定快取活多久。也因為只有擴充版 <code>fetch</code> 吃得到這層，Next.js 專案才偏好 fetch 而非 axios。
+</blockquote>
+
+<p>現在可以把這個觀念放回整體架構裡：Next.js 的 <code>fetch</code> 不是單純把請求送出去，而是先經過 Data Cache 這道門。<code>cache</code> 決定要不要使用這道門，<code>revalidate</code> 決定快取內容能保留多久。</p>
+
+<p>接下來的問題則不同：如果同一次 render 裡，兩個地方不小心呼叫了相同 URL，Next.js 會打兩次，還是只打一次？那不是 Data Cache 在處理，而是另一層叫做 request dedup 的機制。把這兩層分開，才不會再把「資料被保存」和「重複請求被合併」混成同一件事。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./request-dedup-in-one-render.html">下一步：Request dedup：同一次 render 內的請求只發一次 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 Next.js 專案裡常看到 fetch 而不是 axios？" data-correct="2" data-explain="只有 Next.js 擴充過的 fetch 會接上自動快取，axios 不在這套機制裡。">
+  <button class="opt">因為 fetch 的語法比 axios 更簡潔好寫</button>
+  <button class="opt">因為 axios 已經被官方正式停止維護</button>
+  <button class="opt">因為擴充版 fetch 才吃得到自動快取</button>
+  <button class="opt">因為 axios 只能用在瀏覽器端的元件</button>
+</div>
+<div class="quiz" data-question="一個完全沒有設定選項的 fetch，Next.js 預設怎麼對待它？" data-correct="1" data-explain="預設會把回應存進 Data Cache，後續相同請求直接命中快取。">
+  <button class="opt">每次呼叫都真的打一次來源伺服器</button>
+  <button class="opt">存進快取並在後續請求中重複使用</button>
+  <button class="opt">隨機決定這次要不要使用快取結果</button>
+  <button class="opt">直接回傳錯誤直到你補上快取設定</button>
+</div>
+<div class="quiz" data-question="cache: 'no-store' 的作用是什麼？" data-correct="0" data-explain="no-store 表示完全不快取，每次都直接去來源拿最新資料。">
+  <button class="opt">完全不快取，每次都去來源拿新資料</button>
+  <button class="opt">有新鮮快取就用，過期才去抓新的</button>
+  <button class="opt">只快取這一次請求產生的回應結果</button>
+  <button class="opt">把快取永久保留直到你手動清除</button>
+</div>
+<div class="quiz" data-question="cache: 'force-cache' 的行為最接近下列哪一句？" data-correct="3" data-explain="有新鮮快取就直接用，沒有或過期才去來源抓並存回。">
+  <button class="opt">完全不檢查快取，每次重新抓到飽</button>
+  <button class="opt">只快取錯誤的回應而不快取成功</button>
+  <button class="opt">強制把舊快取刪掉再重新抓一次</button>
+  <button class="opt">有新鮮快取就用，沒有才去來源抓</button>
+</div>
+<div class="quiz" data-question="next: { revalidate: 0 } 大致等同下列哪一種行為？" data-correct="2" data-explain="revalidate 設 0 表示不快取、每次重新產生，效果接近 no-store。">
+  <button class="opt">把這份資料永久保留在快取裡面</button>
+  <button class="opt">每二十秒才更新一次快取內容</button>
+  <button class="opt">等於不快取，每次請求都重新算</button>
+  <button class="opt">只在第一次請求時才快取該回應</button>
+</div>
+<div class="quiz" data-question="在 fetch 裡寫 next: { revalidate: false } 代表什麼？" data-correct="1" data-explain="false 等於 Infinity，意思是盡可能一直保留快取、不要主動更新。">
+  <button class="opt">表示這個請求無論如何都不能快取</button>
+  <button class="opt">表示盡可能一直保留快取不更新</button>
+  <button class="opt">表示每秒都去來源重新抓一次資料</button>
+  <button class="opt">表示只快取失敗的回應以便重試</button>
+</div>
+
+<div class="footer">
+  <p>next-js · Fetch 快取與 request dedup · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>挑 runtime：Node 還是 Edge</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>挑 runtime：Node 還是 Edge？</h1>
+<p class="meta">Step 4/5 · 執行環境與渲染策略：Node / Edge、SSG / ISR / SSR / PPR</p>
+
+<h2>先看你要做的決定</h2>
+<p>同一段 route 程式碼，究竟該放在 Node.js runtime，還是切到 Edge runtime？這不是單純的「哪個比較快」問題，而是兩股需求在拉扯：你想讓回應離使用者更近、降低延遲；同時又不能犧牲程式需要的環境能力。</p>
+
+<p>這一節的目標，是讓你能根據兩個條件做選擇：這個任務是否對延遲敏感，以及它是否會碰到 Edge 的限制。你也會分清楚 Edge 與 serverless function 的差異，避免只看見「快」就把所有 route 都搬到 Edge。</p>
+
+<h2>前言：同一段程式碼，搬個位置就可能快一秒</h2>
+
+<p>前面幾節談的是「內容什麼時候產生」。這一節換一條軸來看：同一段 route 程式碼，要在哪裡執行？Next.js 預設把 server 程式放在 Node.js runtime，但你可以在檔案頂端加上一行設定，將它切換到 Edge runtime。切換之後，程式會分散到離使用者更近的節點執行。</p>
+
+<p>乍看之下，這像是一個免費的效能升級，實際上卻不是。有人做過對照實驗：兩段內容完全相同的 API，一段跑 Node，另一段跑 Edge。Edge 版本確實快了不少，但快的原因是「伺服器離使用者比較近」，不是因為 Edge 的運算能力更強。</p>
+
+<p>換一個情境，Edge 可能反而更慢，甚至直接執行失敗。因此真正要回答的問題是：什麼時候該用 Edge，什麼時候應該留在 Node？</p>
+
+<h2>選項比較：Edge 與 Node</h2>
+
+<p>可以把 Edge 想成「把一台迷你電腦放到使用者身邊」。傳統做法是把所有請求送到遠方的大型伺服器處理；Edge 則把部分任務放到網路邊緣，就近完成。對網站、智慧裝置等需要快速回應的服務，這種距離差異特別明顯。</p>
+
+<p>兩者的主要差異如下：</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>Edge Runtime</th><th>Node Runtime</th></tr>
+</thead>
+<tbody>
+<tr><td>位置</td><td>在網路邊緣執行，離使用者較近</td><td>通常在伺服器、雲端或本機執行</td></tr>
+<tr><td>實作</td><td>為分散式環境快速執行程式而特化，例如 Vercel Edge Runtime 建構於 V8 與 WebAssembly 引擎</td><td>使用 Node.js 環境，廣泛用於 server-side scripting 與開發</td></tr>
+<tr><td>用途</td><td>瞄準低延遲、內容傳遞，以及就近快速處理任務</td><td>通用型，從 web server 到命令列工具、server-side JavaScript 應用都能處理</td></tr>
+</tbody>
+</table>
+
+<p>一句話記住：Edge 的強項是「近」，Node 的強項是「廣」。Edge 比較像一把輕巧的瑞士刀，拿在手邊很快，但功能有限；Node 則像完整工具箱，什麼都能做，卻不一定就在你身旁。</p>
+
+<figure class="lesson-figure"><img src="./node-vs-edge-runtime-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>AI 常犯版 vs 正解版：不要只看「哪個比較快」</h2>
+
+<p><strong>AI 常犯版：</strong>「Edge 比 Node 快，所以所有 route 都應該改用 Edge。」</p>
+
+<p><strong>正解版：</strong>「先確認任務是否對延遲敏感，再確認它是否能在 Edge 的限制下正常執行。兩個條件都符合，才有理由選 Edge。」</p>
+
+<p>Edge 的效能優勢，主要來自執行位置靠近使用者。如果資料庫仍然集中在很遠的單一地區，Edge 節點最後還是得跨很遠的網路去拿資料；這時候，Edge 的「近」就可能被資料來源的距離抵銷。</p>
+
+<figure class="lesson-figure"><img src="./node-vs-edge-runtime-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>代價比較：兩邊各自犧牲什麼</h2>
+
+<p>Edge 的優點很鮮明，限制也同樣鮮明。它是為分散式環境特化的 runtime，能使用的能力比完整 server 少，適合的應用類型也比通用 runtime 窄。由於程式分散在全球各處，網路狀況也會影響它的表現。</p>
+
+<p>Node 並非沒有代價。採用 serverless 形式的 Node 可能遇到 cold start（冷啟動）：第一次呼叫函式時，需要先準備執行環境，因此會增加一些延遲。除此之外，還要留意資源用量；如果場景要求超低延遲，Node 集中在某個位置執行，也可能比 Edge 更慢。</p>
+
+<p>因此，這不是「優勝者通吃」的選擇：</p>
+
+<ul>
+<li>Edge：反應可以很快，但環境範圍較窄。</li>
+<li>Node：能力完整、用途廣，但不一定離使用者近。</li>
+</ul>
+
+<h2>另一個容易混淆的選擇：Edge function 還是 serverless function？</h2>
+
+<p>Edge function 與 serverless function 常被混在一起，但它們不是同義詞。Edge function 在網路邊緣、靠近使用者的伺服器上執行；serverless function 則通常跑在集中式雲端服務上。</p>
+
+<table>
+<thead>
+<tr><th>面向</th><th>Edge Functions</th><th>Serverless Functions</th></tr>
+</thead>
+<tbody>
+<tr><td>位置</td><td>靠近使用者，在網路邊緣</td><td>通常跑在集中式雲端伺服器</td></tr>
+<tr><td>執行環境</td><td>特化的 runtime，例如 Vercel Edge Runtime</td><td>雲端供應商的 serverless 服務，如 AWS Lambda、Azure Functions、Vercel</td></tr>
+<tr><td>啟動速度</td><td>啟動快，沒有 cold boot 延遲</td><td>可能有 cold boot 延遲，因為要先準備環境</td></tr>
+<tr><td>部署</td><td>散布於全球資料中心網路</td><td>部署在供應商管理的雲端伺服器上</td></tr>
+<tr><td>適用</td><td>低延遲、快速送出動態內容</td><td>用途廣泛，尤其是不需要超低延遲的應用</td></tr>
+</tbody>
+</table>
+
+<p>Edge function 的賣點是「靠近使用者、啟動快、全球部署」；serverless function 的賣點則是「用途廣泛，不需要自己管理伺服器」。它們反映的仍是同一組取捨：速度與距離，對上完整性與通用性。</p>
+
+<h2>判別問句：先問這兩題</h2>
+
+<p>不要一看到 Edge 就急著切換。請依照下面的順序自問：</p>
+
+<ol>
+<li><strong>這個功能對延遲敏感嗎？</strong> 如果不敏感，使用 Node.js runtime 或 serverless function 通常就足夠，不需要為了速度採用 Edge。</li>
+<li><strong>如果它對延遲敏感，會不會碰到 Edge 的限制？</strong> 如果會，就回到 Node 或 serverless；只有在不會碰到限制時，才考慮 Edge。</li>
+</ol>
+
+<p>以下幾項限制要特別確認：</p>
+
+<ul>
+<li>必須在最初 25 秒內回應完畢。</li>
+<li>能處理的資料量，包括程式碼本身，上限約為 4 MB。</li>
+<li>如果資料來源離 Edge function 很遠，取得資料的網路往返可能吃掉原本省下的延遲。</li>
+<li>不是所有標準 JavaScript API 都支援，Edge 的工具箱比一般 JavaScript 少。</li>
+</ul>
+
+<figure class="lesson-figure"><img src="./node-vs-edge-runtime-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>反例：什麼時候規則會翻轉？</h2>
+
+<h3>資料庫集中在單一區域</h3>
+
+<p>假設資料庫只放在一個地區，卻把 route 切到 Edge。使用者雖然能連到附近的 Edge 節點，但這些節點仍然得跨半個地球，回到那台主資料庫取資料。</p>
+
+<p>此時，「伺服器靠近使用者」省下的時間，可能會被「資料來源很遠」全部吃掉，甚至比直接留在 Node 更慢。這種情況下，Node 反而更單純。</p>
+
+<h3>依賴 Node 專屬能力</h3>
+
+<p>如果程式使用 Node API，或依賴只能在 Node 環境運作的套件，例如某些資料庫連線與加密工具，Edge 可能不支援。程式在本機執行得好好的，部署到 Edge 卻直接失敗，問題不一定在業務邏輯，而可能只是執行環境沒有提供所需能力。</p>
+
+<h3>長時間或重運算工作</h3>
+
+<p>需要長時間處理或大量記憶體的任務，會受到 25 秒回應上限與 4 MB 大小限制影響。這類工作天生就不適合放在 Edge。</p>
+
+<p>反過來看，Edge 真正適合的場景也很明確：即時推送通知、在邊緣就近處理身分驗證與授權以降低登入延遲、處理地理位置相關服務，以及 CDN 式的內容傳遞。</p>
+
+<h2>可操作的決策規則</h2>
+
+<p>最後可以用這張檢查表做決定：</p>
+
+<ul>
+<li>任務對延遲不敏感 → 使用 <strong>Node.js runtime 或 serverless function</strong>。</li>
+<li>任務對延遲敏感，但會碰到 Edge 的限制，例如 25 秒、4 MB、Node API 或資料來源太遠 → 回到 <strong>Node 或 serverless</strong>。</li>
+<li>任務對延遲敏感，而且不會碰到上述限制 → 才使用 <strong>Edge runtime 或 Edge function</strong>。</li>
+<li>最後確認你需要的是 <strong>Edge function</strong> 還是 <strong>serverless function</strong>，不要把兩個名稱當成同義詞。</li>
+</ul>
+
+<blockquote>
+runtime 決定程式在哪裡執行。Edge 離使用者近，延遲低、啟動快，但環境受限，部分 Node API 不支援，還有約 25 秒與 4 MB 的上限；Node 功能完整、用途廣，但在超低延遲場景可能吃虧，採用 serverless 形式時也可能遇到 cold start。實際選擇時，先問「延遲敏不敏感」，再問「會不會踩到 Edge 的限制」；兩關都通過，才選 Edge。
+</blockquote>
+
+<p>把這條規則放在每次切換 runtime 前面：<strong>先看延遲，再查限制，最後才決定要不要靠近 Edge。</strong></p>
+
+<div class="lesson-nav">
+  <div><a href="./choosing-a-rendering-strategy.html">← 上一步：挑渲染策略：內容多久變一次、要不要即時</a></div>
+  <div><a href="./strategy-and-runtime-in-code.html">下一步：用程式碼打開策略與 runtime →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Edge runtime 的主要優勢來自哪裡？" data-correct="2" data-explain="Edge 把程式放在離使用者較近的網路邊緣執行，優勢來自地理位置造成的低延遲。">
+  <button class="opt">它的運算能力比 Node 更強</button>
+  <button class="opt">它支援更多 Node.js API</button>
+  <button class="opt">它在靠近使用者的地方執行</button>
+  <button class="opt">它不需要任何伺服器資源</button>
+</div>
+<div class="quiz" data-question="下列哪一項不是 Edge runtime 的限制？" data-correct="3" data-explain="Edge 支援的是網頁標準 API，而不是「所有 Node 套件」；對 Node API 的支援其實有限。">
+  <button class="opt">需在最初 25 秒內回應完畢</button>
+  <button class="opt">資料含程式碼上限約 4 MB</button>
+  <button class="opt">資料來源太遠時延遲被吃掉</button>
+  <button class="opt">支援完整的 Node.js 套件生態</button>
+</div>
+<div class="quiz" data-question="Edge function 與 serverless function 的關鍵差別是什麼？" data-correct="0" data-explain="Edge function 在網路邊緣、靠近使用者執行；serverless function 跑在集中式雲端。">
+  <button class="opt">一個在邊緣、一個在集中雲端</button>
+  <button class="opt">一個免費、一個一定要付費</button>
+  <button class="opt">一個寫 JavaScript、一個只能寫 Python</button>
+  <button class="opt">一個不支援 HTTP、一個才支援</button>
+</div>
+<div class="quiz" data-question="資料庫只放在單一區域時，把 route 切到 Edge 可能發生什麼？" data-correct="1" data-explain="Edge 節點雖靠近使用者，但都要遠端連回集中資料庫，資料距離可能抵銷甚至超過省下的延遲。">
+  <button class="opt">資料庫會自動複製到每個邊緣節點</button>
+  <button class="opt">資料距離可能把省下的延遲吃回去</button>
+  <button class="opt">查詢速度一定比 Node 快很多</button>
+  <button class="opt">Edge 會自動改用關聯式資料庫</button>
+</div>
+<div class="quiz" data-question="選擇 runtime 時，正確的判斷順序是什麼？" data-correct="3" data-explain="先問是否對延遲敏感，再問是否踩到 Edge 的限制，兩關都過才選 Edge。">
+  <button class="opt">先看團隊偏好，再決定要不要 Edge</button>
+  <button class="opt">一律先選 Edge，卡住再退回 Node</button>
+  <button class="opt">先比較價格，再挑運算能力最強的那個</button>
+  <button class="opt">先問延遲敏不敏感，再問是否踩限制</button>
+</div>
+<div class="quiz" data-question="下列哪一種工作最不適合放在 Edge？" data-correct="2" data-explain="長時間或重運算的工作會撞上 25 秒與 4 MB 的限制，不適合 Edge。">
+  <button class="opt">依使用者位置推播通知</button>
+  <button class="opt">在邊緣就近處理登入驗證</button>
+  <button class="opt">需要跑好幾分鐘的批次運算</button>
+  <button class="opt">把靜態內容就近從 CDN 送出</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 執行環境與渲染策略：Node / Edge、SSG / ISR / SSR / PPR · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

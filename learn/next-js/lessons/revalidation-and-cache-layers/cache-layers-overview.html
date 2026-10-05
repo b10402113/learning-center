@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多層快取：四層快取各自的壽命與範圍</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>多層快取：四層快取各自的壽命與範圍</h1>
+<p class="meta">Step 1/5 · Revalidation 與多層快取</p>
+
+<h2>學習目標</h2>
+<p>能說出 Next.js 四層快取——Request Memoization、Data Cache、Full Route Cache、Router Cache——各自的壽命與範圍，並分辨 revalidation 到底是在刷新哪一層。</p>
+
+<h2>前言：為什麼「加了快取」反而更亂？</h2>
+
+<p>你請 AI 加了一段資料查詢，頁面一開始跑得很順。幾天後，後台資料明明改了，你重新整理，畫面卻還是舊的。回頭翻程式碼，才發現裡面不知道什麼時候多了一層快取；但它是哪一層、會活多久、為什麼沒有更新，完全看不出來。</p>
+
+<p>你繼續查資料，又看到幾種互相矛盾的建議：有人叫你加 <code>no-store</code>，有人叫你用 <code>revalidate</code>，也有人說要呼叫 <code>revalidatePath</code>。問題是，這些答案可能都沒錯，只是它們處理的快取層不同。</p>
+
+<p>Next.js 的「快取」不是單一機制，而是好幾層疊在一起。同一個頁面從請求進來、經過伺服器渲染，到使用者在瀏覽器裡換頁，中間可能會穿過四層不同的快取。每一層的壽命、範圍，以及控制它的方法都不一樣。</p>
+
+<p>所以這一節先不急著背 API。先把整張地圖攤開，知道每一層負責什麼，後面才有辦法判斷「資料為什麼沒更新」，也才能看出 AI 是把快取放錯層，還是只是用了不適合目前情境的更新方式。</p>
+
+<h2>一台 Next.js app 裡，快取其實有四層</h2>
+
+<p>可以把一個頁面想像成一份外送餐點。餐點從廚房做好，接著放進保溫箱，送到大樓管理室，最後才交到你手上。這四個環節都可能各自放一個保溫箱；只要其中一個保溫箱沒有清掉，你吃到的就可能是放了一陣子的餐點。</p>
+
+<p>Next.js 的四層快取，就像這四個保溫箱：</p>
+
+<table>
+<thead>
+<tr><th>快取層</th><th>存在哪裡</th><th>壽命／範圍</th><th>由什麼驅動</th></tr>
+</thead>
+<tbody>
+<tr><td>Request Memoization</td><td>伺服器，單一輪 render 的記憶體</td><td>只活一次 render，render 結束就沒了</td><td>同一次 render 內、相同 URL 與 options 的請求</td></tr>
+<tr><td>Data Cache</td><td>伺服器，持久儲存</td><td>跨請求、跨使用者，直到被作廢或過期</td><td><code>fetch</code>（擴充版）與 <code>unstable_cache</code></td></tr>
+<tr><td>Full Route Cache</td><td>伺服器／CDN，整個 route 的成品</td><td>跨請求，直到 route 被重新產生</td><td>route 是否為靜態、<code>revalidate</code>、<code>dynamic</code></td></tr>
+<tr><td>Router Cache</td><td>使用者的瀏覽器</td><td>單一瀏覽 session 內的換頁資料</td><td>client 端換頁（<code>&lt;Link&gt;</code> 導覽）</td></tr>
+</tbody>
+</table>
+
+<p>先記住一個大方向：越往外層，越接近使用者看到的畫面；越往內層，越接近一次伺服器 render 裡的資料請求。接下來一層一層看，會更容易分辨它們的差異。</p>
+
+<figure class="lesson-figure"><img src="./cache-layers-overview-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一層：Request Memoization，只記一輪 render 的事</h2>
+
+<p>最內層、也最短命的是 Request Memoization。它處理的情境是：同一次 render 裡，不小心把同一個請求發了兩次。</p>
+
+<p>例如，一個頁面元件和它底下的子元件都呼叫同一支 <code>fetch</code>，而且 URL 與參數完全相同。Next.js 不會真的送出兩次請求，第二次會直接使用第一次的結果。這就是前一個節點提過的 request dedup。</p>
+
+<p>它的關鍵限制是壽命。Request Memoization 只活在「這一輪 render」裡；render 一結束，這份記憶就清空。下一個請求進來時，又會從頭開始。</p>
+
+<h3>AI 常犯版：把它當成長期資料快取</h3>
+
+<p>如果 AI 告訴你：「這筆資料被 Request Memoization 快取了，所以後台更新後一直不會變。」這個判斷就把快取層搞錯了。Request Memoization 連一個請求都活不過，不可能跨請求保存過期資料。</p>
+
+<h3>正解版：它只負責避免同一輪的重複浪費</h3>
+
+<p>Request Memoization 的用途很單純：讓同一次 render 裡的相同請求不要重複執行。它不是造成資料過期的元兇；如果你遇到「資料一直沒更新」，應該往壽命更長的 Data Cache、Full Route Cache 或 Router Cache 查。</p>
+
+<h2>第二層：Data Cache，跨請求的資料倉庫</h2>
+
+<p>第二層是 Data Cache。大家平常說「fetch 被快取」時，通常真正指的是這一層。</p>
+
+<p>它比 Request Memoization 長命得多：資料存進去後，可以跨請求、跨使用者保留。只要這筆資料還沒有過期或被作廢，下一位使用者也可能拿到同一份資料。</p>
+
+<p>Data Cache 只認得 Next.js 的擴充版 <code>fetch</code>，以及 <code>unstable_cache</code>。當你替 <code>fetch</code> 加上選項時，其實就是在對這一層下指令：</p>
+
+<ul>
+<li><code>cache: 'no-store'</code>：不要把這份資料存起來。</li>
+<li><code>next: { revalidate: 60 }</code>：六十秒後允許重新抓取。</li>
+<li><code>next: { tags: ['posts'] }</code>：替這份資料掛上一個名為 <code>posts</code> 的標籤，之後可以依標籤精準作廢。</li>
+</ul>
+
+<pre data-provenance="derived"><code>// 把回應存進 Data Cache，掛上 "posts" 這個 tag
+fetch("https://api.example.com/posts", {
+  next: { tags: ["posts"], revalidate: 60 },
+});</code></pre>
+
+<h3>AI 常犯版：只看到 fetch，就以為畫面一定會跟著更新</h3>
+
+<p>如果 AI 只把注意力放在 <code>fetch</code> 上，告訴你加了 <code>no-store</code> 就能解決所有「舊資料」問題，這個答案可能只處理到 Data Cache。它不一定能清掉整個 route 的成品，也不一定能立刻換掉使用者瀏覽器裡已經保存的 Router Cache。</p>
+
+<h3>正解版：先確認資料本身被存在哪裡</h3>
+
+<p>Data Cache 是後面討論 revalidation 的主要戰場。當你看到 <code>revalidatePath</code> 或 <code>revalidateTag</code> 時，它們通常是在處理 Data Cache 裡的資料，也可能連帶影響依賴這些資料的 Full Route Cache。</p>
+
+<figure class="lesson-figure"><img src="./cache-layers-overview-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第三層：Full Route Cache，整個頁面的成品</h2>
+
+<p>第三層是 Full Route Cache。它存的已經不只是資料，而是「整個 route 渲染完成後的結果」，包含 HTML 和 React Server Component 的 payload。</p>
+
+<p>當一個 route 是靜態的，例如沒有動態資料，或你設定了 <code>revalidate</code>，Next.js 就可以在 build 時或第一次請求時，把這個頁面的成品整份存起來。之後遇到相同 route，便能直接拿成品回覆，不必重新執行所有元件函式。</p>
+
+<p>如果 Data Cache 像是「食材」的快取，Full Route Cache 就像是「整份餐點」的快取。兩層常常會連動：當 Data Cache 裡的資料被作廢，依賴它的 Full Route Cache 通常也會跟著重新產生。</p>
+
+<h3>AI 常犯版：以為只要重新抓資料，畫面成品就一定會重做</h3>
+
+<p>這種寫法只盯著資料來源，卻忽略頁面本身可能也有一份成品快取。結果是 Data Cache 處理了，Full Route Cache 卻還留著舊的 HTML 和 payload，使用者看到的畫面自然可能還是舊的。</p>
+
+<h3>正解版：把資料快取和 route 成品分開看</h3>
+
+<p>遇到「資料已經更新，但頁面看起來沒變」時，要同時問兩個問題：Data Cache 裡的資料是否已經換掉？依賴這份資料的 Full Route Cache 是否也重新產生？這兩層雖然常常一起變動，卻不是同一個東西。</p>
+
+<h2>第四層：Router Cache，住在瀏覽器裡的換頁記憶</h2>
+
+<p>最外層、也最容易被忽略的是 Router Cache。它存在使用者的瀏覽器裡。</p>
+
+<p>當使用者在站內透過 <code>&lt;Link&gt;</code> 換頁時，Next.js 會把造訪過的 route 結果暫存在 client 端。這樣使用者按上一頁，或再切回剛才的頁面時，畫面可以很快出現，不必每次都等待伺服器回應。</p>
+
+<p>這也解釋了常見的矛盾情境：你明明已經在 Server 端更新了資料，使用者卻要重新整理頁面才看得到。原因可能不是伺服器還沒更新，而是瀏覽器裡的 Router Cache 還握著舊畫面。</p>
+
+<p>Router Cache 的壽命是這次瀏覽 session。關掉分頁後，這份記憶就會重來。因為它住在使用者的瀏覽器裡，伺服器端的 <code>revalidatePath</code> 不一定能立刻叫它清掉。因此，排查「資料不更新」時，不能只看伺服器上的快取。</p>
+
+<h3>AI 常犯版：以為 Server 端作廢後，所有使用者畫面都會立刻消失</h3>
+
+<p>這種想法把 Server 端的快取和瀏覽器端的快取當成同一層。即使伺服器已經重新產生資料或 route 成品，使用者目前瀏覽器裡保存的換頁資料仍可能沒有立即換掉。</p>
+
+<h3>正解版：把瀏覽器的記憶也列入排查範圍</h3>
+
+<p>只要問題描述包含「站內換頁後仍然是舊資料」，就要想到 Router Cache。它和 Data Cache、Full Route Cache 的位置不同，清理方式與更新時機也不同。</p>
+
+<figure class="lesson-figure"><img src="./cache-layers-overview-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>「快取」和「更新快取」是兩件不同的事</h2>
+
+<p>四層攤開後，就能分清楚兩個常被混在一起的概念。</p>
+
+<p><strong>設定快取</strong>，是在決定「這份資料要不要存，以及存在哪一層」；<strong>更新快取</strong>，也就是 revalidation，則是在決定「這份資料什麼時候該被丟掉、重新產生」。</p>
+
+<p>會存，才有可能變舊；要處理變舊的資料，就需要 revalidation。</p>
+
+<h3>AI 常犯版：把 revalidation 當成單一的清除按鈕</h3>
+
+<p>如果只記得「資料不更新就加 revalidate」，卻沒有確認是哪一層沒有更新，仍然可能無法解決問題。不同的 revalidation 方法，處理的範圍並不相同。</p>
+
+<h3>正解版：先分辨兩條更新路線</h3>
+
+<p>revalidation 有兩條路，剛好對應後面的課程內容：</p>
+
+<ul>
+<li><strong>time-based</strong>：設定一段時間，時間到了才重新計算。</li>
+<li><strong>on-demand</strong>：資料真的變動時，主動使用 <code>revalidatePath</code> 或 <code>revalidateTag</code> 作廢快取。</li>
+</ul>
+
+<p>這兩條路不是哪一種才「正確」的信仰選擇，而是要看資料的變化方式：它是固定週期更新，還是只有被某個事件觸發時才改變。</p>
+
+<figure class="lesson-figure"><img src="./cache-layers-overview-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>為什麼「快取放錯」總是發生？</h2>
+
+<p>所謂「快取放錯」，十之八九不是語法寫錯，而是把某一層的壽命記到了另一層身上。</p>
+
+<p>例如，有人以為 <code>no-store</code> 可以解決「換頁後還是舊的」。但 <code>no-store</code> 管的是 Data Cache，動不了瀏覽器裡的 Router Cache。也有人以為 <code>revalidatePath</code> 只會影響某一支 fetch，實際上它可能連整個 route 的成品一起重新產生。</p>
+
+<p>這些誤判就像把廚房的保鮮盒、外送箱和家裡冰箱當成同一個容器。只要先確認資料在哪裡保存、會保存多久，以及誰能控制它，就能少掉大半排查時的猜測。</p>
+
+<h2>小結：把四層快取掛在同一張地圖上</h2>
+
+<blockquote>
+Next.js 的快取是四層疊起來的：只活一輪 render 的 Request Memoization、跨請求存資料的 Data Cache、存整個 route 成品的 Full Route Cache，以及住在瀏覽器裡的 Router Cache。每一層的壽命與範圍都不同，設定快取和更新快取也是兩件事。日後要除錯「資料不更新」，第一件事就是先問：到底是哪一層的資料沒被換掉。
+</blockquote>
+
+<p>這四層之間的關係，可以先這樣記：Request Memoization 避免同一輪 render 重複請求；Data Cache 保存資料；Full Route Cache 保存頁面成品；Router Cache 則讓瀏覽器內的站內換頁更快。當你知道問題位在哪一層，<code>no-store</code>、<code>revalidate</code>、<code>revalidatePath</code> 和 <code>revalidateTag</code> 才不會再像四個互相矛盾的答案。</p>
+
+<p>有了這張地圖，下一節先處理最單純的一條更新路線：什麼都不主動做，只設定「時間到了就重算」。我們會把 <code>revalidate</code> 的每種值，以及寫在頁面層和寫在單支 fetch 上的差別講清楚。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./time-based-revalidation.html">下一步：時間到了才更新：time-based revalidation →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="哪一層快取只活在同一輪 render 之內？" data-correct="0" data-explain="Request Memoization 只在單輪 render 內記住重複請求，render 結束就清空。">
+  <button class="opt">Request Memoization 這一層</button>
+  <button class="opt">Data Cache 這一層</button>
+  <button class="opt">Full Route Cache 這一層</button>
+  <button class="opt">Router Cache 這一層</button>
+</div>
+<div class="quiz" data-question="Data Cache 和 Full Route Cache 最大的差別是什麼？" data-correct="2" data-explain="Data Cache 存的是資料本身，Full Route Cache 存的是整個 route 渲染完的成品。">
+  <button class="opt">一個存在瀏覽器，一個存在伺服器端</button>
+  <button class="opt">一個只在開發環境，一個只在正式環境</button>
+  <button class="opt">一個存資料，一個存整個頁面成品</button>
+  <button class="opt">一個會被自動清除，一個永遠不會清</button>
+</div>
+<div class="quiz" data-question="Router Cache 住在哪裡？" data-correct="3" data-explain="Router Cache 存在使用者的瀏覽器裡，用來加速站內換頁。">
+  <button class="opt">存在 Next.js 的建置產物資料夾裡</button>
+  <button class="opt">存在遠端 CDN 的邊緣伺服器上面</button>
+  <button class="opt">存在伺服器行程的長駐記憶體裡面</button>
+  <button class="opt">存在使用者的瀏覽器端記憶體裡面</button>
+</div>
+<div class="quiz" data-question="只有哪一層快取吃得到擴充版 fetch 的選項？" data-correct="1" data-explain="Data Cache 由擴充版 fetch 驅動，no-store、revalidate、tags 都是對它下指令。">
+  <button class="opt">Request Memoization 才吃得到設定</button>
+  <button class="opt">Data Cache 是 fetch 驅動的那層</button>
+  <button class="opt">Full Route Cache 由 fetch 選項決定</button>
+  <button class="opt">Router Cache 由 fetch 選項決定</button>
+</div>
+<div class="quiz" data-question="「設定快取」和「更新快取」的差別是什麼？" data-correct="0" data-explain="設定快取決定要不要存，revalidation 決定它何時被丟掉重新產生。">
+  <button class="opt">一個決定要不要存，一個決定何時更新</button>
+  <button class="opt">一個給開發用，一個只給使用者操作</button>
+  <button class="opt">一個是語法，一個是執行時期的行為</button>
+  <button class="opt">一個管資料，一個管使用者登入狀態</button>
+</div>
+<div class="quiz" data-question="為什麼只加 no-store 可能解決不了「換頁後還是舊的」？" data-correct="2" data-explain="no-store 管的是伺服器端 Data Cache，動不了瀏覽器裡的 Router Cache。">
+  <button class="opt">因為 no-store 只對 client component 生效</button>
+  <button class="opt">因為 no-store 會讓整個專案建置失敗</button>
+  <button class="opt">因為它管 Data Cache，動不了 Router Cache</button>
+  <button class="opt">因為它只能用在 route handler 的檔案裡</button>
+</div>
+
+<div class="footer">
+  <p>next-js · Revalidation 與多層快取 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

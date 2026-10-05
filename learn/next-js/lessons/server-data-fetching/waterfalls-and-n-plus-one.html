@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>瀑布與 N+1：資料為什麼抓得慢</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>瀑布與 N+1：資料為什麼抓得慢</h1>
+<p class="meta">Step 3/4 · 在 RSC 裡抓資料：何時 server、何時 client</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你應該能辨認 <code>sequential await</code> 造成的 <code>network waterfall</code> 與 <code>N+1 query</code>，也能說明如何用 <code>Promise.all</code> 和 <code>.populate()</code> 消除它們。</p>
+
+<h2>前言：程式碼都對，頁面卻慢慢轉圈圈</h2>
+
+<p>上一節已經把抓資料的骨架接好了：頁面是 <code>async</code>，用 <code>await</code> 取得資料，再交給元件渲染。功能看起來一切正常，頁面卻總是慢半拍，載入畫面像卡在轉圈圈。</p>
+
+<p>打開 DevTools 的 Network 面板後，通常會看到兩種不太妙的景象：請求一個接一個、像階梯一樣往右排；或者明明只要顯示幾筆資料，資料庫卻收到一長串查詢。</p>
+
+<p>這一節要處理的兩個兇手，就是 <code>network waterfall</code>（網路瀑布）與 <code>N+1 query</code>。它們都不一定會報錯，也不會立刻讓頁面崩潰，卻會默默拖慢整個系統。因此，它們特別容易出現在「能跑」的 AI 產出程式碼裡。</p>
+
+<h2>先看大圖：兩種慢，其實都是依賴關係判錯</h2>
+
+<p>把整體架構攤開來看，問題其實很像兩種排隊方式：</p>
+
+<ul>
+  <li><code>network waterfall</code>：明明互不相干的請求，卻排成一列，一個完成後才換下一個。</li>
+  <li><code>N+1 query</code>：明明可以一次取回的關聯資料，卻先抓清單，再逐筆查詢。</li>
+</ul>
+
+<p>前者讓時間一段一段累加，後者讓查詢數量隨資料筆數增加。兩者背後都該先問同一個問題：「這些動作之間，真的有依賴關係嗎？」</p>
+
+<figure class="lesson-figure"><img src="./waterfalls-and-n-plus-one-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>兇手一：network waterfall</h2>
+
+<p><code>network waterfall</code> 指的是請求一個接一個排隊，後面的請求必須等前面的請求完成才能出發。它就像一條只有單線道的路：前車不走，後車就只能全部停在後面。</p>
+
+<p>回想上一節第一個版本的資料抓取，就是典型例子：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/lib/actions/question.action.ts"><code>const totalQuestions = await Question.countDocuments(filterQuery);
+
+const questions = await Question.find(filterQuery)
+  .populate("tags", "name")
+  .populate("author", "name image")
+  .lean()
+  .sort(sortCriteria)
+  .skip(skip)
+  .limit(limit);</code></pre>
+
+<p>第一行會先等待 <code>countDocuments</code> 回來，第二個查詢才會開始執行。於是總時間大約是兩個查詢時間相加。</p>
+
+<p>但仔細看，這兩個查詢其實互不相干。一個負責計算總數，另一個負責取得目前頁面的資料；它們都只需要同一個 <code>filterQuery</code>，沒有誰需要誰的結果。既然沒有依賴關係，就不必一個等一個。</p>
+
+<h2>AI 常犯版：把所有事情依序 await</h2>
+
+<p>這種寫法很直覺，也很容易被 AI 產生出來：先做第一件事，等它完成，再做第二件事。對需要前一個結果的流程來說，這是正確的；但對彼此獨立的查詢來說，就像讓兩台可以同時出發的車，共用同一個發車時間。</p>
+
+<p>在 client 端，瀑布通常會更明顯。例如流程是「先抓題目，知道作者後再抓作者資料，再抓這題的答案」，三個請求就會排成一條鏈。每個請求都要等前一個結果，總時間自然變成全部加總。</p>
+
+<h2>正解版：把獨立請求平行送出</h2>
+
+<p>當兩個請求彼此獨立、誰都不需要誰的結果時，就應該讓它們一起出發。<code>Promise.all</code> 會接收一個 Promise 陣列，等所有 Promise 完成後，再回傳一個結果陣列；結果的順序會對應原本傳入的順序。</p>
+
+<pre class="good-code" data-provenance="derived"><code>const [totalQuestions, questions] = await Promise.all([
+  Question.countDocuments(filterQuery),
+  Question.find(filterQuery)
+    .populate("tags", "name")
+    .populate("author", "name image")
+    .lean()
+    .sort(sortCriteria)
+    .skip(skip)
+    .limit(limit),
+]);</code></pre>
+
+<p>改寫後，兩個查詢會同時送出。總花費時間不再是兩者相加，而是取兩者之中較慢的那一個。原本像兩段接力賽，現在比較像兩條跑道同時起跑。</p>
+
+<figure class="lesson-figure"><img src="./waterfalls-and-n-plus-one-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>判斷該不該使用 <code>Promise.all</code>，可以先問一句：「B 需要等待 A 的結果嗎？」</p>
+
+<ul>
+  <li>如果不需要，就可以放進同一個 <code>Promise.all</code>，讓它們平行執行。</li>
+  <li>如果需要，就必須維持先後順序，因為那是真正的依賴關係。</li>
+</ul>
+
+<p>平行執行也不代表可以隨意把所有動作塞在一起。例如「先寫入、再讀取」有明確的先後意義，硬要平行處理就可能形成競態條件（<code>race condition</code>），最後讀到的資料可能還是舊的。</p>
+
+<h2>兇手二：N+1 query</h2>
+
+<p>第二個兇手不是請求排隊，而是查詢數量突然膨脹。假設頁面要顯示 10 題問題，而且每題都要顯示作者姓名，最直覺的寫法可能是先抓題目，再逐題查作者：</p>
+
+<pre class="bad-code" data-provenance="derived"><code>const questions = await Question.find(query);
+
+for (const question of questions) {
+  question.author = await User.findById(question.author);
+}</code></pre>
+
+<p>這段程式碼的查詢次數是：先用 1 次查詢抓題目清單，再為每一題各查 1 次作者。</p>
+
+<ul>
+  <li>10 題會產生 11 次查詢。</li>
+  <li>100 題會產生 101 次查詢。</li>
+</ul>
+
+<p>這個「1 + N」的形狀，就是 <code>N+1 query</code>。資料量很小時，問題不一定明顯；一旦清單變長，查詢次數就會跟著線性增加，資料庫和整體延遲也會一起承受壓力。</p>
+
+<h2>AI 常犯版 vs 正解版：不要逐筆追著關聯資料跑</h2>
+
+<p>AI 常犯版是先取得主資料，再在迴圈裡逐筆查詢關聯資料。程式碼看起來容易理解，代價卻是每多一筆資料，就多一次查詢。</p>
+
+<p>正解版是讓資料庫一次帶回需要的關聯。Mongoose 的 <code>.populate()</code> 就是為此而存在：原本欄位裡存的是 ID，<code>populate</code> 會把它換成真正的文件，讓你不必自己寫迴圈逐筆查詢。</p>
+
+<p>回到真實專案中的寫法：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/lib/actions/question.action.ts"><code>const questions = await Question.find(filterQuery)
+  .populate("tags", "name")
+  .populate("author", "name image")
+  .lean()
+  .sort(sortCriteria)
+  .skip(skip)
+  .limit(limit);</code></pre>
+
+<p>這裡同樣要顯示每一題的作者，但不需要自己對每一題呼叫 <code>User.findById</code>。<code>.populate("author", "name image")</code> 會把作者關聯帶回來，而且只取 <code>name</code> 和 <code>image</code> 這些需要的欄位。</p>
+
+<p>這個欄位選擇也很重要。既然畫面只需要作者名稱和頭像，就不必把整份使用者文件都塞進回傳結果。換句話說，這裡同時處理了兩個效率問題：避免逐筆查詢，也避免回傳不需要的資料。</p>
+
+<figure class="lesson-figure"><img src="./waterfalls-and-n-plus-one-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>兩個兇手的對照</h2>
+
+<table>
+<thead>
+<tr><th>症狀</th><th>AI 常犯寫法</th><th>代價</th><th>正解</th></tr>
+</thead>
+<tbody>
+<tr><td>network waterfall</td><td>無依賴的請求卻一條條 await</td><td>時間變成各段相加</td><td>用 Promise.all 平行送出</td></tr>
+<tr><td>N+1 query</td><td>先抓清單，再逐筆查關聯</td><td>查詢次數膨脹成 1 + N</td><td>用 .populate() 一次帶回需要的關聯</td></tr>
+</tbody>
+</table>
+
+<h2>不是所有事情都該平行或合併</h2>
+
+<p>看到效能問題後，另一個常見誤區是反過來把所有事情都平行化，或把所有關聯資料都一次載入。這同樣可能造成錯誤或浪費。</p>
+
+<p>如果兩個請求之間真的有先後依賴，B 需要 A 的結果，那麼硬要平行只會拿到錯的資料。如果關聯資料很龐大，而目前畫面又不需要全部內容，把它們全部 <code>populate</code> 進來也會增加不必要的負擔。</p>
+
+<p>所以判準不是「平行一定比較好」，而是先確認兩件事：</p>
+
+<ul>
+  <li>這些動作之間有沒有真正的依賴？</li>
+  <li>目前真的需要這些關聯資料嗎？</li>
+</ul>
+
+<p>沒有依賴的工作，可以平行；需要的關聯資料，可以一次帶回；有明確先後關係的工作，則應該保留順序。</p>
+
+<h2>小結：把這個觀念掛回依賴關係</h2>
+
+<blockquote>
+network waterfall 是「無依賴的請求卻排隊」，把總時間變成各段相加，用 <code>Promise.all</code> 平行化後，時間可以縮成取最慢的那一段；N+1 query 是「先抓清單、再逐筆查關聯」，讓查詢次數變成 1 + N，用 <code>.populate()</code> 就能讓資料庫一次帶回需要的關聯。兩者的判準其實相同：先問「這兩個動作有沒有真正的依賴」，再決定要平行、要合併，還是維持順序。
+</blockquote>
+
+<p>到這裡，你已經能分辨「抓得對」和「抓得快」之間的差別。下一節會把視角拉回最上層：面對一段資料，到底該讓它在 server 抓，還是交給 client？那不只是效能問題，更是邊界與取捨的判斷，也是 AI 最常畫錯的一條架構線。</p>
+
+<div class="lesson-nav">
+  <div><a href="./fetching-in-rsc.html">← 上一步：在 server component 裡抓資料：async、await 與直接查 DB</a></div>
+  <div><a href="./when-server-when-client.html">下一步：何時 server、何時 client：畫出資料邊界 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="什麼是 network waterfall？" data-correct="2" data-explain="請求一個接一個排隊等待，總時間是各段相加。">
+  <button class="opt">多個請求同時送出並同時完成</button>
+  <button class="opt">把請求結果快取起來重複利用</button>
+  <button class="opt">請求一個接一個排隊等待回應</button>
+  <button class="opt">把請求合併成同一個大請求</button>
+</div>
+<div class="quiz" data-question="Promise.all 適合用在哪種情況？" data-correct="1" data-explain="彼此沒有依賴、可同時進行的請求，才適合放進 Promise.all。">
+  <button class="opt">B 一定要等 A 的結果才能開始</button>
+  <button class="opt">多個請求彼此獨立可同時進行</button>
+  <button class="opt">請求必須嚴格照順序一個接一個</button>
+  <button class="opt">想把請求結果自動寫回快取</button>
+</div>
+<div class="quiz" data-question="顯示 100 題問題、每題都要作者資料，N+1 寫法會送出幾次查詢？" data-correct="3" data-explain="1 次抓清單，加上每題各 1 次查作者，共 1 + 100 = 101 次。">
+  <button class="opt">固定 1 次查詢就全部完成</button>
+  <button class="opt">固定 2 次查詢就全部完成</button>
+  <button class="opt">大約 100 次查詢</button>
+  <button class="opt">1 加 100，共 101 次查詢</button>
+</div>
+<div class="quiz" data-question=".populate() 為什麼能消除 N+1？" data-correct="0" data-explain="它讓資料庫一次帶回關聯資料，而不是你逐筆再查一次。">
+  <button class="opt">讓資料庫一次帶回需要的關聯資料</button>
+  <button class="opt">把查詢結果存進瀏覽器的本機快取</button>
+  <button class="opt">自動把重複的請求合併成一個</button>
+  <button class="opt">把查詢改成平行送出以節省時間</button>
+</div>
+<div class="quiz" data-question="下列哪一種情況「不該」硬用 Promise.all 平行處理？" data-correct="2" data-explain="有真正先後依賴的動作必須維持順序，平行會變成競態條件。">
+  <button class="opt">同時查總數與查當頁資料</button>
+  <button class="opt">同時抓兩份互不相關的設定</button>
+  <button class="opt">先寫入資料再讀取該筆資料</button>
+  <button class="opt">同時載入兩個獨立的外部 API</button>
+</div>
+<div class="quiz" data-question="network waterfall 與 N+1 的共同判準是什麼？" data-correct="1" data-explain="兩者都在問：這些動作之間有沒有真正的依賴關係。">
+  <button class="opt">資料庫的版本是不是最新</button>
+  <button class="opt">動作之間有沒有真正的依賴關係</button>
+  <button class="opt">程式碼的行數夠不夠精簡</button>
+  <button class="opt">伺服器的記憶體夠不夠用</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 在 RSC 裡抓資料：何時 server、何時 client · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>什麼是 composition 契約：讓 HTML 能被穩定算成影片</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>什麼是 composition 契約：讓 HTML 穩定算成影片</h1>
+<p class="meta">Step 1/4 · 用 HyperFrames 算圖與品管</p>
+
+<h2>前言：同一份檔案，為什麼每次算出的影片會不一樣？</h2>
+
+<p>想像你把一個 composition 交給 agent。第一次渲染很順利：字幕準時出現，卡片也在台詞講到那一句時滑進畫面。接著你只把畫質調高，再算一次，卻發現卡片早了一拍，某個元素也停在不該停的位置。台詞完全沒改，最後卻得到兩支不同的影片。</p>
+
+<p>這種差異在瀏覽器裡並不罕見。一般網頁可能受到載入順序、當下時間或亂數影響，每次顯示得不太一樣；影片卻不能接受這種不確定性。影片是一格一格記錄下來的，只要其中一格的畫面浮動，整支影片就可能前後對不上，甚至直接跳到第 30 秒 seek 時，看到錯誤的狀態。</p>
+
+<p>HyperFrames 能把 HTML 穩定算成 MP4，靠的不是運氣，而是一套寫 composition 時必須遵守的規則。這套規則就是「composition 契約」。你可以把它想成影片的入場檢查：只有符合規則的 HTML，才有資格被框架逐格記錄。</p>
+
+<h2>先看完整心智模型：HyperFrames 到底在做什麼？</h2>
+
+<p>整條 pipeline 可以先記成一句話：你寫 HTML、CSS 與 JavaScript，瀏覽器把它們畫成畫面，HyperFrames 再把每個時間點的畫面逐格記錄成影片。</p>
+
+<figure class="lesson-figure"><img src="./composition-contract-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>HyperFrames 是 HeyGen 推出的開源工具，免費使用，在 GitHub 上已累積大約四萬九千顆星。它做的事情很直接：把 HTML 元素變成影片。這些元素，就是你平常在網頁上看到的那些標題、卡片、圖片與其他介面元件。換個生活化的說法，它有點像把自己做好的網站螢幕錄影下來。</p>
+
+<p>這個工具還特別為 agent 設計，因此支援把 HTML 元素疊在影片上、執行動畫、調色，以及加入各種視覺效果。也因為 HyperFrames 運作在 HTML 裡，你可以用 21st.dev 上原本為網站設計的元件作為靈感：網站元件與影片畫面，使用的是同一套語言。</p>
+
+<p>這裡最重要的連結是：畫面不是模型憑空生成的，而是瀏覽器按照你的程式碼實際畫出來，再一格一格記錄。因此，每一格畫面都必須只由程式碼與指定的時間決定，不能依賴現在幾點、瀏覽器跑得多快，或亂數剛好抽到了什麼。</p>
+
+<h2>為什麼「確定性」是整份契約的核心？</h2>
+
+<p>可以把影片想成一本動畫書。動畫書能穩定播放，是因為每一頁都事先畫好了；翻到第幾頁，就應該看到固定的內容。如果每次翻頁時，都重新抽一次人物的位置，那這本書就沒辦法穩定拍成影片。</p>
+
+<p>HyperFrames 算圖時，會逐格詢問 composition：「在時間 T，畫面應該長什麼樣子？」因此 composition 最理想的狀態，就像一個純函式：給它時間 T，它就回傳固定的一格畫面。</p>
+
+<p>如果元素狀態取決於「現在的真實時間」，今天算與明天算就可能不同；如果狀態由亂數決定，每次計算也可能得到不同結果。契約要求的確定性，就是要把這些浮動因素排除。</p>
+
+<p>這也和 <em>seek</em> 有關。算圖時，框架不一定會從頭播放到尾，也可能直接跳到第 18.5 秒，取出那一刻的畫面。如果動畫必須靠從頭播放、累積經過的時間才能進入正確狀態，直接跳過去時就可能看見它還沒開始的樣子。</p>
+
+<figure class="lesson-figure"><img src="./composition-contract-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>所以 composition 裡的動畫，必須能從任意時間點還原狀態。它不能只在「從頭播放」這條路徑上算得對。</p>
+
+<h2>契約的三條核心規則</h2>
+
+<p>把剛才的原理轉成可以檢查的條件，主要有三條規則。第一條處理元素如何被時間控制；第二條處理動畫時間軸如何交給框架；第三條則限制程式碼裡不能出現哪些不確定因素。</p>
+
+<p>三條規則合在一起，才會讓一份原本像網頁的 composition，變成能被逐格記錄的影片腳本。</p>
+
+<h3>規則一：每個帶時間的元素，都要有 clip 與三個時間屬性</h3>
+
+<p>在 HyperFrames 裡，畫面上每個會出現或消失的東西，都是一個片段（clip）。框架不需要猜你的動畫怎麼寫，而是直接讀取元素上的屬性：它何時開始、持續多久，以及位在哪一條軌道。</p>
+
+<p>因此，這四個標記缺一不可：代表片段的 <code>class="clip"</code>，以及 <code>data-start</code>、<code>data-duration</code>、<code>data-track-index</code>。漏掉任何一個，lint 就會直接報錯。</p>
+
+<table>
+<thead>
+<tr><th>屬性</th><th>代表的意思</th></tr>
+</thead>
+<tbody>
+<tr><td><code>class="clip"</code></td><td>宣告這個元素是由框架管理時間的片段。</td></tr>
+<tr><td><code>data-start</code></td><td>這個片段從第幾秒開始出現。</td></tr>
+<tr><td><code>data-duration</code></td><td>這個片段持續幾秒，時間到就自動收掉。</td></tr>
+<tr><td><code>data-track-index</code></td><td>片段位在第幾條軌道；同時可見的元素要分開擺。</td></tr>
+</tbody>
+</table>
+
+<p>還有一個很容易漏看的細節：同一條軌道上的片段不能重疊，就算只差 0.001 秒也不行。</p>
+
+<p>原因在於浮點數可能產生誤差。你寫下 <code>start=23.85, duration=4.55</code>，實際結束時間可能會變成 <code>28.400000002</code>，於是撞上下一段從 <code>28.40</code> 開始的片段。畫面上未必立刻看得出來，但 lint 會把這種碰撞抓出來。</p>
+
+<figure class="lesson-figure"><img src="./composition-contract-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>規則二：GSAP 時間軸要暫停，並註冊給框架</h3>
+
+<p>動畫通常交給 GSAP 這類時間軸函式庫安排。這裡的關鍵不是讓時間軸自己播放，而是讓框架能夠在需要時，把它撥到指定的時間點。</p>
+
+<p>因此，GSAP 時間軸建立時必須設為暫停，並用固定名稱註冊到全域的 <code>window.__timelines</code>。框架會拿到這條時間軸，再詢問它：「在這個刻度，畫面應該長什麼樣子？」名稱也要和 composition 的 id 對上；這裡使用的是 <code>main</code>。</p>
+
+<pre data-source="sources/video-editing/20261003/hyperframes-helper-main/.claude/skills/hyperframes-helper/SKILL.md"><code>window.__timelines = window.__timelines || {};
+const tl = gsap.timeline({ paused: true });
+// ... tl.from(...) ...
+window.__timelines["main"] = tl;  // matches data-composition-id</code></pre>
+
+<p>這段程式的重點有兩個。第一是 <code>paused: true</code>：如果沒有暫停，時間軸會跟著瀏覽器的時鐘自行往前跑，結果就會重新受到計算當下時間的影響。</p>
+
+<p>第二是最後一行的註冊。如果沒有把時間軸放進 <code>window.__timelines["main"]</code>，框架就找不到它，也就無法把時間撥到指定刻度來取畫面。</p>
+
+<h3>規則三：只做確定性的運算</h3>
+
+<p>第三條規則最直接：程式碼不能使用會讓結果浮動的東西。契約明確禁止三個項目：<code>Math.random()</code>、<code>Date.now()</code> 與 <code>fetch()</code>。</p>
+
+<p><code>Math.random()</code> 每次可能抽到不同的值；<code>Date.now()</code> 會隨計算當下的時間改變；<code>fetch()</code> 則會從網路取得資料，而回應的時間與內容都不受 composition 控制。只要用了其中一個，同一份 HTML 就不可能保證每次都算出同一格。</p>
+
+<p>同樣的原則也適用於動畫重複播放。無窮迴圈式的 <code>repeat: -1</code> 被列為禁止項，因為它沒有可預期的結束狀態。</p>
+
+<p>如果你想讓元素來回閃動，應該使用有限的重複次數，而且次數要從畫面需要停留的時間反推出來。比如停留 6 秒、每次循環 1.6 秒，就自己算出最多能重複幾次，而不是交給無限迴圈。這樣一來，時間軸在任何時間點被抽出來時，狀態都能被明確算出來。</p>
+
+<h2>把契約想成一張「可被逐格錄影」的入場券</h2>
+
+<p>這些規則看起來像三張不同的檢查表，其實都在保護同一件事：框架必須能在任意時間點，可靠地重建同一個畫面。</p>
+
+<p>第一條規則讓框架知道「誰在什麼時候出現」；第二條規則提供一條可以自由撥動的時間軸；第三條規則則確保撥到任何一刻時，元素狀態都能算得出來。</p>
+
+<p>所以，這一課不是先教你怎麼做出最華麗的卡片動畫，而是先確認作品具備「能被算成影片」的資格。先拿到入場券，再談舞台上的表演。</p>
+
+<figure class="lesson-figure"><img src="./composition-contract-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結：讓 composition 成為可重播的影片腳本</h2>
+
+<blockquote>
+HyperFrames 會先讓瀏覽器畫出 HTML，再把畫面逐格錄成 MP4。因此 composition 必須具備確定性：同一份檔案在任何時間點，都要算出同一格畫面。每個帶時間的元素都要有 <code>class="clip"</code>、<code>data-start</code>、<code>data-duration</code> 與 <code>data-track-index</code>；GSAP 時間軸要設成暫停，並註冊到 <code>window.__timelines["main"]</code>；程式碼不能使用 <code>Math.random()</code>、<code>Date.now()</code> 或 <code>fetch()</code>，也不能使用無限次重複的動畫。
+</blockquote>
+
+<p>把這張入場券準備好，下一步才是實際動手：把剪好的 <code>cut.mp4</code> 與逐字稿交給 agent，讓它長出和時間對齊的動態圖像。下一節會走過「Animate the cut」指令，並用一頁 storyboard 先定下版面與卡片出現的節奏。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./build-transcript-aligned-graphics.html">下一步：把動態圖像對齊逐字稿 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="HyperFrames 算圖的基本原理是什麼？" data-correct="2" data-explain="它把 HTML 在瀏覽器畫出來，再逐格記錄成影片。">
+  <button class="opt">用生成模型重新畫出每一格畫面</button>
+  <button class="opt">把整段影片先下載到本機儲存</button>
+  <button class="opt">把網頁畫面逐格記錄成影片</button>
+  <button class="opt">把文字腳本直接轉成語音旁白</button>
+</div>
+<div class="quiz" data-question="為什麼 composition 的每一格都必須是確定性的？" data-correct="1" data-explain="算圖是逐格 seek，撥到同一時間點必須得到同一格畫面。">
+  <button class="opt">因為這樣檔案體積才會比較小</button>
+  <button class="opt">因為撥到同一時間就要同一格</button>
+  <button class="opt">因為瀏覽器不支援隨機亂數</button>
+  <button class="opt">因為 GSAP 只能播放固定動畫</button>
+</div>
+<div class="quiz" data-question="每個帶時間的元素都必須具備哪一組屬性？" data-correct="3" data-explain="clip 加上三個時間屬性：開始、長度、軌道，缺一不可。">
+  <button class="opt">class、id、style 與 title</button>
+  <button class="opt">src、alt、width 與 height</button>
+  <button class="opt">track、start、end 與 layer</button>
+  <button class="opt">clip、起點、長度與軌道索引</button>
+</div>
+<div class="quiz" data-question="GSAP 時間軸要怎麼設定才算符合契約？" data-correct="0" data-explain="建立時先暫停，再以 main 為名註冊到 window.__timelines。">
+  <button class="opt">先暫停，並註冊到 __timelines</button>
+  <button class="opt">設成自動播放，讓它自己跑完</button>
+  <button class="opt">用亂數決定每段動畫的長度</button>
+  <button class="opt">每次算圖都重新建立一條時間軸</button>
+</div>
+<div class="quiz" data-question="下列哪一種寫法會破壞 composition 的確定性？" data-correct="2" data-explain="Date.now() 取決於當下真實時間，每次算圖結果都不同。">
+  <button class="opt">把片段長度寫成固定的數字</button>
+  <button class="opt">用固定的字串當作時間軸名稱</button>
+  <button class="opt">用當下時間決定元素的位置</button>
+  <button class="opt">把元素拆到不同軌道避免重疊</button>
+</div>
+<div class="quiz" data-question="為什麼 repeat: -1 這種無限重複被禁止？" data-correct="1" data-explain="無限重複沒有可預期的結束狀態，任何時間點都算不準。">
+  <button class="opt">因為它會讓影片的檔案變得太大</button>
+  <button class="opt">因為無限重複沒有可預期的狀態</button>
+  <button class="opt">因為它會讓音訊出現嚴重的回音</button>
+  <button class="opt">因為它只能用在沒有影格的畫面</button>
+</div>
+
+<div class="footer">
+  <p>video-editing · 用 HyperFrames 算圖與品管 · Step 1/4</p>
+  <p>讀到這裡有疑問，直接問你的 AI 助教；它可以針對這一節再展開，或用你自己的素材舉例。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

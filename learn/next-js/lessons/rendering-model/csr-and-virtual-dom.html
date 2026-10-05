@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CSR：最小 HTML、JS bundle 與 virtual DOM</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>CSR：瀏覽器如何用 JavaScript 組出畫面</h1>
+<p class="meta">Step 2/5 · 渲染模型：CSR / SSR / RSC / hydration</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你應該能說明 CSR 的完整運作鏈：server 先送出最小 HTML 與 JavaScript bundle，瀏覽器執行 React，再由 virtual DOM 比對差異、更新畫面，最後透過 React Router 在 client 端切換頁面。同時，你也要看得出 CSR 在首次載入與 SEO 上付出的代價。</p>
+
+<h2>先看全貌：為什麼畫面要等 JavaScript？</h2>
+
+<p>上一節我們把三種送頁面的模型攤開，看到 React 的客戶端渲染（CSR）把組畫面的工作交給了瀏覽器。這種做法讓後續互動與換頁很流暢，但也留下兩個問題：第一次打開頁面時，使用者可能要先等一段空白；搜尋引擎也不一定能讀到真正的內容。</p>
+
+<p>你可能看過這種情況：React 網站第一次開啟時，畫面先閃過一片空白，接著內容才一次冒出來。這不一定只是網路慢，而是因為 server 送來的東西，本來就不是「已經看得見的畫面」。它比較像一間剛蓋好的空屋：地址、入口和施工材料都到了，但家具還要等瀏覽器自己搬進來。</p>
+
+<figure class="lesson-figure"><img src="./csr-and-virtual-dom-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>要理解這個現象，可以沿著 CSR 的運作鏈往下看：第一個請求拿到什麼、瀏覽器接著做什麼，以及 React 如何處理後續更新。</p>
+
+<h2>第一個請求：server 只送空殼與一包 JavaScript</h2>
+
+<p>當你造訪一個 React CSR 網站，client 會把請求送到 server。server 回應的核心內容有兩樣：一個最小的 HTML 檔，以及一包打包好的 JavaScript，也就是 bundle。</p>
+
+<p>這個 HTML 檔的工作很單純。它是整個應用的進入點，通常只有一個掛載點，例如空的 <code>&lt;div id="root"&gt;</code>，再加上一個引入 JavaScript 的 <code>script</code> 標籤。第一個請求拿到的內容大概長這樣：</p>
+
+<pre data-provenance="derived">&lt;!-- index.html：React CSR 的進入點 --&gt;
+&lt;!DOCTYPE html&gt;
+&lt;html&gt;
+  &lt;body&gt;
+    &lt;div id="root"&gt;&lt;/div&gt;
+    &lt;script src="/bundle.js"&gt;&lt;/script&gt;
+  &lt;/body&gt;
+&lt;/html&gt;</pre>
+
+<p>注意這個 HTML 裡沒有標題、清單或卡片。它只準備好一個位置，等 React 把內容放進去。也就是說，HTML 雖然已經抵達瀏覽器，真正的畫面卻還沒有被組出來。</p>
+
+<h2>AI 常犯版 vs 正解版：把「拿到 HTML」當成「看得到畫面」</h2>
+
+<table>
+<thead>
+<tr><th>看法</th><th>問題在哪裡</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>AI 常犯版：</strong>server 回傳 HTML，所以瀏覽器一拿到回應就能顯示完整內容。</td><td>CSR 的 HTML 通常只是空殼，實際內容要等 JavaScript 執行後才會出現。</td></tr>
+<tr><td><strong>正解版：</strong>server 先送出掛載點與 bundle，瀏覽器執行 bundle 後，React 才把畫面組進掛載點。</td><td>這能解釋為什麼首次載入可能先空白，也能連到 CSR 的首次渲染代價。</td></tr>
+</tbody>
+</table>
+
+<h2>瀏覽器接手：React 在 client 端渲染</h2>
+
+<p>瀏覽器下載並執行 bundle 後，React 才開始做客戶端渲染。它會依照元件的定義，把畫面一層一層組起來，最後掛到剛才那個空的掛載點上。到了這個時刻，使用者才真正看到標題、清單與其他介面內容。</p>
+
+<p>這裡的關鍵在於：CSR 把「組畫面」這件事交給了 client。server 的工作先告一段落，後續的渲染與互動則要依賴瀏覽器的處理器和 JavaScript 執行環境。</p>
+
+<h2>核心機制：virtual DOM 先比對，再套用</h2>
+
+<p>React 能有效率地更新畫面，靠的是 virtual DOM，也就是虛擬 DOM。你可以把它想成一份畫面的草稿。</p>
+
+<p>當資料改變時，React 不會立刻拿著工具到真實 DOM 上到處施工。它會先產生新版的 virtual DOM，再拿新版和上一版比對，找出真正不同的地方。比對完成後，React 只把必要的變更套用到真實 DOM。</p>
+
+<p>這樣做是因為直接修改真實 DOM 的成本可能很高。假設一個清單只有一筆資料改變，如果每次都把整份清單刪掉重建，瀏覽器就得重新處理許多其實沒有變動的內容，還可能觸發不必要的重排與重繪。</p>
+
+<p>有了 virtual DOM，React 可以把注意力集中在那一筆變動上，其餘內容維持原樣。它就像校對一份文件：不會因為第十行改了一個字，就把整份文件重新打掉，而是先找出差異，再只修正需要修改的地方。</p>
+
+<figure class="lesson-figure"><img src="./csr-and-virtual-dom-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>AI 常犯版 vs 正解版：virtual DOM 不是「完全不碰 DOM」</h2>
+
+<table>
+<thead>
+<tr><th>看法</th><th>正確理解</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>AI 常犯版：</strong>React 使用 virtual DOM，所以完全不會修改真實 DOM。</td><td>React 仍然會更新真實 DOM；virtual DOM 的作用是先比對差異，再把必要變更套用上去。</td></tr>
+<tr><td><strong>正解版：</strong>virtual DOM 是更新前的比較層，協助 React 避免把沒有改變的內容全部重建。</td><td>重點不是「完全不更新」，而是「只更新需要變動的部分」。</td></tr>
+</tbody>
+</table>
+
+<h2>換頁：React Router 不整頁重新載入</h2>
+
+<p>一個網站通常不只一頁。CSR 的換頁方式，是使用 React 的客戶端路由庫 React Router。</p>
+
+<p>當你在應用程式內點擊連結時，React Router 會根據新的 URL 改變目前的路由，並讓對應的元件重新渲染。它不需要向 server 重新索取一整份 HTML，因此瀏覽器也不會整頁重新載入。</p>
+
+<p>如果新頁面需要資料，對應的元件可以在瀏覽器裡另外向 server 發出請求。整個換頁過程主要在 client 端完成，頁面不必重新白閃一次，這也是單頁應用（SPA）讓人覺得切換流暢的原因。</p>
+
+<h2>AI 常犯版 vs 正解版：SPA 不是「完全不和 server 溝通」</h2>
+
+<table>
+<thead>
+<tr><th>看法</th><th>正確理解</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>AI 常犯版：</strong>React Router 讓 SPA 完全不需要 server。</td><td>React Router 避免的是整頁重新載入；新頁面的資料仍可能由元件向 server 發出請求取得。</td></tr>
+<tr><td><strong>正解版：</strong>路由切換主要由 client 處理，必要資料仍可從 server 取得。</td><td>因此「不整頁重載」和「不需要 server」是兩件不同的事。</td></tr>
+</tbody>
+</table>
+
+<h2>代價：CSR 把工作全壓在 client</h2>
+
+<p>CSR 把後續互動與換頁交給瀏覽器，換來了流暢的 SPA 體驗。但這份便利不是免費的，主要有三個代價。</p>
+
+<p><strong>複雜度提高。</strong> 開發 React 應用比撰寫傳統 HTML、CSS、JavaScript 複雜。你需要用元件的方式思考，也要理解 state、props 與 virtual DOM。對新手來說，這會形成一段學習曲線。</p>
+
+<p><strong>首次渲染與互動被延後。</strong> CSR 主要依賴 JavaScript 在瀏覽器中執行。初始渲染和後續更新都落在 client；如果使用者的處理器較慢或裝置資源有限，畫面出現與變得可互動的時間就可能拉長。這正是「先白一下，接著才跳出內容」的來源。</p>
+
+<p><strong>SEO 有風險。</strong> 因為內容全靠 JavaScript 在客戶端渲染，搜尋引擎的爬蟲不一定能完整執行 JavaScript，也不一定能讀到頁面內容。當內容被讀取得不完整，網站在搜尋結果中的能見度就可能受到影響。</p>
+
+<figure class="lesson-figure"><img src="./csr-and-virtual-dom-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>CSR 換到了什麼、付出了什麼</h2>
+
+<table>
+<thead>
+<tr><th>面向</th><th>CSR 的表現</th></tr>
+</thead>
+<tbody>
+<tr><td>換頁體驗</td><td>不整頁重載，切換流暢（SPA）</td></tr>
+<tr><td>更新效率</td><td>virtual DOM 只套用必要變更</td></tr>
+<tr><td>首次畫面</td><td>要等 JavaScript 下載並執行完才看得到</td></tr>
+<tr><td>較弱裝置</td><td>渲染與互動容易被拖慢</td></tr>
+<tr><td>SEO</td><td>爬蟲不一定讀得到 JS 渲染的內容</td></tr>
+<tr><td>開發複雜度</td><td>需理解元件、state、props、virtual DOM</td></tr>
+</tbody>
+</table>
+
+<h2>把 CSR 掛回整體渲染模型</h2>
+
+<p>CSR 的核心不是單一技術，而是一條彼此相連的鏈：server 先送出最小 HTML，瀏覽器下載並執行 JavaScript bundle，React 在 client 端組出畫面；資料改變時，React 透過 virtual DOM 找出差異；使用者換頁時，React Router 在 client 端切換對應元件。</p>
+
+<blockquote>
+CSR 的運作鏈是：server 只送最小 HTML 與一包 JavaScript，瀏覽器執行 bundle，React 用 virtual DOM 比對差異、只更新必要部分來組出畫面；換頁則由 React Router 在 client 端處理，不整頁重新載入。它把渲染工作從 server 搬到了 client，換到流暢的互動，代價是首次畫面必須等 JavaScript，以及 SEO 的風險。
+</blockquote>
+
+<p>所以，CSR 的優勢與代價其實來自同一個選擇：把更多工作放到瀏覽器。這讓後續互動與換頁更靈活，卻也讓首次畫面必須等待 JavaScript。下一節要看的 Next.js，正是從這個缺口出發：先用伺服器端渲染把完整 HTML 送出去，再用 hydration 把互動接回來。</p>
+
+<div class="lesson-nav">
+  <div><a href="./web-rendering-models.html">← 上一步：從請求到畫面：三種送頁面的模型</a></div>
+  <div><a href="./ssr-and-hydration.html">下一步：SSR 與 hydration：先送 HTML，再接手互動 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="React CSR 的第一個請求，server 主要送回什麼？" data-correct="1" data-explain="server 只送一個最小 HTML 進入點，加上一包打包好的 JavaScript。">
+  <button class="opt">完整 HTML、CSS 與 JavaScript 檔</button>
+  <button class="opt">最小 HTML 與一包 JavaScript</button>
+  <button class="opt">已渲染完成的整份 HTML</button>
+  <button class="opt">一份用來組畫面的資料</button>
+</div>
+<div class="quiz" data-question="瀏覽器還在執行 bundle 時，畫面通常處於什麼狀態？" data-correct="3" data-explain="HTML 是空殼，內容要靠 JavaScript 組出來，所以畫面還沒出現。">
+  <button class="opt">已經顯示完整的頁面內容</button>
+  <button class="opt">只顯示瀏覽器預設的首頁</button>
+  <button class="opt">顯示伺服器送來的靜態內容</button>
+  <button class="opt">仍是空白、內容還沒被組出</button>
+</div>
+<div class="quiz" data-question="virtual DOM 更新畫面的正確順序是什麼？" data-correct="0" data-explain="先更新虛擬樹並比對差異，再只把必要變更套用到真實 DOM。">
+  <button class="opt">先比對虛擬樹差異再套用變更</button>
+  <button class="opt">先清空真實 DOM 再整個重建</button>
+  <button class="opt">先送出請求再等伺服器回新畫面</button>
+  <button class="opt">先把 CSS 重載再重新繪製畫面</button>
+</div>
+<div class="quiz" data-question="React Router 在應用內換頁時做了什麼？" data-correct="2" data-explain="它只改路由並重新渲染對應元件，不向 server 重新要一整份頁面。">
+  <button class="opt">重新整理整頁並向 server 要頁面</button>
+  <button class="opt">把路由工作交回伺服器去處理</button>
+  <button class="opt">改路由並重新渲染對應元件</button>
+  <button class="opt">只換瀏覽器網址但不換畫面</button>
+</div>
+<div class="quiz" data-question="為什麼 CSR 對 SEO 可能不利？" data-correct="1" data-explain="內容靠 JavaScript 在客戶端渲染，爬蟲不一定能完整執行並讀到內容。">
+  <button class="opt">因為 HTML 檔案體積實在太大</button>
+  <button class="opt">爬蟲不一定執行 JS 讀到內容</button>
+  <button class="opt">因為它無法被 CDN 快取起來</button>
+  <button class="opt">因為它每次都要查一次資料庫</button>
+</div>
+<div class="quiz" data-question="CSR 在規格較弱的裝置上，最明顯的缺點是什麼？" data-correct="3" data-explain="首次渲染與互動都落在 client，慢裝置處理器弱，會被明顯拖慢。">
+  <button class="opt">伺服器的工作量會變得更大</button>
+  <button class="opt">換頁時一定會整頁重新載入</button>
+  <button class="opt">資料庫的查詢次數會暴增</button>
+  <button class="opt">首次渲染與互動被拖慢</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 渲染模型：CSR / SSR / RSC / hydration · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

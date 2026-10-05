@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>非 fetch 的資料要自己包：unstable_cache 與 React cache</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>非 fetch 的資料也要自己包：分清楚 unstable_cache 與 React.cache</h1>
+<p class="meta">Step 4/5 · Revalidation 與多層快取</p>
+
+<h2>先從一個常見場景開始</h2>
+<p>你用 Mongoose 查 MongoDB，頁面也確實拿到了資料，卻發現每次 render 都重新查一次。更麻煩的是，當資料更新時，你想用 <code>revalidateTag</code> 精準作廢快取，卻找不到可以掛 tag 的地方。</p>
+
+<p>這不是資料庫查詢寫錯，而是資料根本沒有走過 Next.js 會自動管理的 <code>fetch</code> 快取。這一節要補上的，就是非 <code>fetch</code> 資料的快取方式，並分清楚兩個名字很像、實際壽命卻差很多的工具：<code>React.cache()</code> 與 <code>unstable_cache</code>。</p>
+
+<h2>學習目標</h2>
+<p>學完後，你應該能比較 <code>unstable_cache</code>（跨請求、可用 tag 作廢）與 <code>React.cache()</code>（只活在單輪 render）的壽命與適用時機，並用 tag 把 <code>unstable_cache</code> 接上 <code>revalidateTag</code>。</p>
+
+<h2>先回顧：自動快取只認得 fetch</h2>
+
+<p>在 Data Cache 這一層，Next.js 只會自動介入擴充版 <code>fetch</code>。它會攔下請求、儲存結果、掛上 tag，並套用 <code>revalidate</code> 設定。</p>
+
+<p>但這套機制的邊界也很清楚：它只對 <code>fetch</code> 生效。如果資料來自 ORM、資料庫查詢，或直接呼叫一個 server action，Next.js 不會自動替你建立同樣的快取。這時候，快取和作廢都得自己設計。</p>
+
+<p>常見的 AI 常犯版是：看到「要避免重複查詢」，就把所有東西都包進 <code>React.cache()</code>。正解要先問的是：你要避免的是同一輪 render 內的重複呼叫，還是要讓結果跨請求保存？答案不同，工具就不同。</p>
+
+<h2>React.cache()：只處理同一輪 render 的重複呼叫</h2>
+
+<p>第一種工具是 React 內建的 <code>cache()</code>，從 <code>react</code> 匯入。它的工作很單純：在同一輪 render 裡，如果同一個函式收到同一組參數被呼叫多次，就把重複工作合併成一次。</p>
+
+<p>例如，<code>generateMetadata</code> 和頁面本身都需要同一筆資料。這時候 <code>React.cache()</code> 可以像在同一輪會議裡共用筆記，避免兩個人各自再查一次。</p>
+
+<p>看看專案裡實際的寫法，這裡把一個查詢資料庫的 server action 包了起來：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/lib/actions/question.action.ts"><code>export const getQuestion = cache(async function getQuestion(
+  params: GetQuestionParams
+): Promise&lt;ActionResponse&lt;Question&gt;&gt; {
+  // …查詢、驗證、錯誤處理…
+});</code></pre>
+
+<p>這段程式的重點不是「資料會被長期保存」，而是「這一輪 render 不要重複執行同一個查詢」。render 結束後，這份記憶也就結束；下一個請求進來，函式仍然會重新執行。</p>
+
+<figure class="lesson-figure"><img src="./unstable-cache-and-react-cache-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>AI 常犯版：把 React.cache() 當成跨請求快取</h3>
+
+<p>如果你的問題是「資料庫太遠，每個請求都要重查」，只使用 <code>React.cache()</code> 並不能解決它。它不會跨請求，也不會跨使用者，更不會把結果放進 Data Cache。</p>
+
+<p>所以，<code>React.cache()</code> 適合處理的是「同一輪 render 的重複呼叫」，不是「讓查詢結果在下一個請求繼續使用」。</p>
+
+<h2>unstable_cache：讓非 fetch 的結果也能跨請求保存</h2>
+
+<p>第二種工具是 <code>unstable_cache</code>，它從 <code>next/cache</code> 匯入。它的角色，是把原本不是 <code>fetch</code> 的資料結果也放進 Data Cache，讓結果可以跨請求、跨 route 保存。</p>
+
+<p>它也能設定多久過期，並掛上 tag。用法是把原本的 async 函式包一層，再匯出包好的版本：</p>
+
+<pre data-provenance="derived"><code>import { unstable_cache } from "next/cache";
+
+export const getCachedPosts = unstable_cache(
+  async () =&gt; {
+    return db.post.findMany();
+  },
+  ["posts"],                              // 這份快取的識別 key
+  { revalidate: 3600, tags: ["posts"] }  // 多久過期、掛上什麼 tag
+);</code></pre>
+
+<p>這裡有三個部分。第一個參數是要被快取的函式；第二個是一組識別用的 key，Next.js 會用它辨認這份快取；第三個是選項，可以設定 <code>revalidate</code> 的過期時間，也可以用 <code>tags</code> 掛上名牌。</p>
+
+<p>有了這個 tag，資料變動時就能呼叫 <code>revalidateTag("posts")</code>，把這一整份快取作廢。這正是上一節學到的 API，只是這次的 tag 不是寫在 <code>fetch</code> 選項裡，而是由你掛在 <code>unstable_cache</code> 上。</p>
+
+<figure class="lesson-figure"><img src="./unstable-cache-and-react-cache-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>正解版：依照資料來源與壽命選工具</h3>
+
+<p>第一次呼叫時，<code>unstable_cache</code> 會真的查詢資料庫；之後，只要 key 相同，其他請求就能使用快取結果。即使切換到另一個 route，只要使用相同的 key，也能取得同一份快取資料。</p>
+
+<p>它和 <code>fetch</code> 快取的效果相近，差別在於：<code>fetch</code> 的快取由 Next.js 自動處理，而 <code>unstable_cache</code> 是你為 ORM、DB 或其他非 <code>fetch</code> 資料來源手動包出來的。</p>
+
+<h2>三個工具放在一起比較</h2>
+
+<table>
+<thead>
+<tr><th>工具</th><th>匯入來源</th><th>壽命／範圍</th><th>能不能用 revalidateTag</th><th>適合解決</th></tr>
+</thead>
+<tbody>
+<tr><td>擴充版 <code>fetch</code></td><td>全域</td><td>跨請求、跨使用者（Data Cache）</td><td>可以，tag 寫在 fetch 選項</td><td>遠端 API 的資料</td></tr>
+<tr><td><code>React.cache()</code></td><td><code>react</code></td><td>只在一輪 render、一個 route 內</td><td>不能，它不進 Data Cache</td><td>同一輪 render 的重複呼叫</td></tr>
+<tr><td><code>unstable_cache</code></td><td><code>next/cache</code></td><td>跨請求、跨 route（Data Cache）</td><td>可以，tag 寫在選項裡</td><td>DB／ORM／server action 的結果</td></tr>
+</tbody>
+</table>
+
+<p>判斷時，先看你要的壽命，而不是先看工具名稱。如果你要的是「同一輪 render 不要查兩次」，用 <code>React.cache()</code>；如果你要的是「查詢結果可以跨請求重複使用，資料變動時還能精準作廢」，用 <code>unstable_cache</code>。</p>
+
+<p>這兩個工具不是互相取代的關係。很多時候，它們可以一起出現：外層用 <code>unstable_cache</code> 保存跨請求的結果，內層再用 <code>React.cache()</code> 避免同一輪 render 重複呼叫。</p>
+
+<figure class="lesson-figure"><img src="./unstable-cache-and-react-cache-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>name 裡的 unstable 代表什麼？</h2>
+
+<p>看到 <code>unstable_cache</code> 這個名字，很多人會以為它不能放進正式環境。這個前綴確實表示 API 還在演進，未來可能改名或調整，Next.js 團隊也仍在持續開發。</p>
+
+<p>但「API 還在演進」不等於「完全不能使用」。它在實務上已經被採用，連 Next.js 官方相關人士也在正式站台上使用。比較務實的做法是：知道它的穩定性仍在演進，升級 Next.js 時留意 API 是否有變化；不要把它誤解成只能放在實驗室裡的玩具。</p>
+
+<h2>小結：把「去重」和「快取」掛在不同位置</h2>
+
+<blockquote>
+Next.js 的自動快取只認擴充版 <code>fetch</code>；當資料來源是 DB、ORM 或 server action 時，得自己包。兩個工具壽命不同：<code>React.cache()</code> 從 <code>react</code> 匯入，只在同一輪 render 內去重；<code>unstable_cache</code> 從 <code>next/cache</code> 匯入，把結果存進 Data Cache、跨請求存在，還能掛 tag，讓 <code>revalidateTag</code> 作廢它。選哪個，看你要的是「去重」還是「快取」。
+</blockquote>
+
+<p>把這個觀念放回整體架構來看：<code>React.cache()</code> 解決的是單一 render 裡的重複工作，<code>unstable_cache</code> 解決的是跨請求保存非 <code>fetch</code> 資料。前者像同一張桌上的共用筆記，後者像可以被不同請求取用的資料櫃。</p>
+
+<p>到這裡，你已經湊齊診斷所需的零件：四層快取、兩種 revalidation，以及三種快取工具。最後一節不再介紹新東西，而是把它們放回實際程式碼裡——當資料不更新，或同一份資料被重複抓取時，你要能判斷問題卡在哪一層，再選出正確的修正方向。</p>
+
+<div class="lesson-nav">
+  <div><a href="./on-demand-revalidation.html">← 上一步：事件發生就更新：revalidatePath 與 revalidateTag</a></div>
+  <div><a href="./diagnose-stale-data.html">下一步：資料不更新，到底卡在哪一層？ →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="React.cache() 的快取記憶存活多久？" data-correct="1" data-explain="React.cache() 只在同一輪 render、同一 route 內有效，render 結束就沒了。">
+  <button class="opt">跨請求跨使用者一直保留到過期為止</button>
+  <button class="opt">只在同一輪 render、同一 route 內</button>
+  <button class="opt">永久保存在使用者的瀏覽器裡面</button>
+  <button class="opt">保存到下次伺服器重新啟動為止</button>
+</div>
+<div class="quiz" data-question="unstable_cache 是從哪裡匯入的？" data-correct="2" data-explain="unstable_cache 屬於 Next.js 的快取 API，從 next/cache 匯入。">
+  <button class="opt">從 react 匯入，是 React 內建功能</button>
+  <button class="opt">從 react-dom 匯入，屬於渲染層</button>
+  <button class="opt">從 next/cache 匯入，屬於 Next.js</button>
+  <button class="opt">從 next/server 匯入，屬於伺服器層</button>
+</div>
+<div class="quiz" data-question="想讓一個資料庫查詢能被 revalidateTag 作廢，該怎麼做？" data-correct="3" data-explain="用 unstable_cache 包住查詢並在選項掛 tags，之後即可用 revalidateTag 作廢。">
+  <button class="opt">用 React.cache 包起來就會自動掛上 tag</button>
+  <button class="opt">在查詢字串裡面加一個 tags 參數就好</button>
+  <button class="opt">把查詢改寫成 fetch 就會有內建 tag</button>
+  <button class="opt">用 unstable_cache 包住並在選項掛 tags</button>
+</div>
+<div class="quiz" data-question="React.cache() 和 unstable_cache 最核心的差別是什麼？" data-correct="0" data-explain="React.cache() 只管單輪 render 的去重，unstable_cache 才跨請求持久。">
+  <button class="opt">一個只去重單輪，一個跨請求持久</button>
+  <button class="opt">一個能掛 tag，一個完全不能掛 tag</button>
+  <button class="opt">一個在伺服器，一個在瀏覽器執行</button>
+  <button class="opt">一個要收費，一個屬於免費的功能</button>
+</div>
+<div class="quiz" data-question="下列哪一種需求最適合用 unstable_cache 而不是 React.cache？" data-correct="2" data-explain="要跨請求重用同一份查詢結果，屬於持久快取，該用 unstable_cache。">
+  <button class="opt">同一輪 render 裡兩處呼叫同一支查詢</button>
+  <button class="opt">想避免 generateMetadata 重複查一次</button>
+  <button class="opt">同一份查詢結果想跨請求重用並能作廢</button>
+  <button class="opt">只想讓某個純函式少算幾次而已</button>
+</div>
+<div class="quiz" data-question="名字裡的 unstable 代表什麼？" data-correct="1" data-explain="代表 API 還在演進、可能調整，但實務上已被大量採用，不是不能用。">
+  <button class="opt">代表它只能在開發環境使用不能上線</button>
+  <button class="opt">代表 API 還在演進、可能被調整</button>
+  <button class="opt">代表它只支援某一個特定資料庫</button>
+  <button class="opt">代表它每次都會回傳不穩定結果</button>
+</div>
+
+<div class="footer">
+  <p>next-js · Revalidation 與多層快取 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

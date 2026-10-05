@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用一個泛型 renderer 收斂列表畫面：DataRenderer 的 render prop</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用一個泛型 renderer 收斂列表畫面：DataRenderer 的 render prop</h1>
+<p class="meta">Step 3/4 · 元件組合模式：server shell + client island</p>
+
+<h2>這一節要完成什麼</h2>
+<p>你會做出一顆泛型 <code>DataRenderer</code>，把列表常見的四種情況集中處理：請求成功、有資料、資料為空，以及請求失敗。完成後，列表頁只需要描述「有資料時要怎麼畫」，不必每次重新撰寫狀態判斷。</p>
+
+<p>開始前，請先具備兩個前置概念：server shell，以及負責純展示的元件。接下來的 <code>DataRenderer</code> 就像一個小型 server shell，負責把資料狀態與畫面組合起來。</p>
+
+<h2>先看整體架構：誰負責什麼</h2>
+<p>可以把這顆元件想成列表頁的交通指揮。它先確認請求是否成功，再確認資料是不是空的；只有真的有資料時，才把「資料要長什麼樣」的決定交給呼叫端。</p>
+
+<ol>
+  <li>若請求失敗，顯示錯誤狀態。</li>
+  <li>若請求成功但沒有資料，顯示空狀態。</li>
+  <li>若請求成功且有資料，呼叫 <code>render</code> 畫出列表。</li>
+</ol>
+
+<p>狀態處理集中在 <code>DataRenderer</code>，版面呈現則留在各個列表頁。這樣既能避免重複，也不會讓 renderer 變成只能服務某一種資料的專用元件。</p>
+
+<figure class="lesson-figure"><img src="./generic-renderer-composition-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一步：定義元件要接收的資料</h2>
+<p>先從對外介面開始。這是一個泛型元件，型別參數 <code>T</code> 代表列表中的資料型別，因此同一顆元件可以套用在問題、標籤、使用者或其他資料上。</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/components/DataRenderer.tsx"><code>interface Props&lt;T&gt; {
+  success: boolean;
+  error?: {
+    message: string;
+    details?: Record&lt;string, string[]&gt;;
+  };
+  data: T[] | null | undefined;
+  empty: {
+    title: string;
+    message: string;
+    button?: {
+      text: string;
+      href: string;
+    };
+  };
+  render: (data: T[]) =&gt; React.ReactNode;
+}</code></pre>
+
+<p>這五個 props 各自負責不同工作：</p>
+
+<ul>
+  <li><code>success</code>：告訴元件請求是否成功。</li>
+  <li><code>error</code>：提供錯誤訊息與可選的錯誤細節。</li>
+  <li><code>data</code>：提供資料陣列，也可能是 <code>null</code> 或 <code>undefined</code>。</li>
+  <li><code>empty</code>：描述沒有資料時要顯示的標題、訊息與按鈕。</li>
+  <li><code>render</code>：描述有資料時要如何產生畫面。</li>
+</ul>
+
+<p>其中最關鍵的是 <code>render</code>。它接收 <code>T[]</code>，回傳一段 React 節點。換句話說，<code>DataRenderer</code> 不需要知道 <code>T</code> 究竟是問題、標籤還是使用者；資料的實際型別與呈現方式，由呼叫端決定。</p>
+
+<h2>第二步：依序處理失敗、空資料與成功</h2>
+<p>接著把三種狀態排進元件。順序不能隨意調換：先攔截請求失敗，再處理空資料，最後才進入有資料的畫面。</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/components/DataRenderer.tsx"><code>const DataRenderer = &lt;T,&gt;({
+  success,
+  error,
+  data,
+  empty = DEFAULT_EMPTY,
+  render,
+}: Props&lt;T&gt;) =&gt; {
+  if (!success) {
+    return (
+      &lt;StateSkeleton
+        image={{
+          light: "/images/light-error.png",
+          dark: "/images/dark-error.png",
+          alt: "Error state illustration",
+        }}
+        title={error?.message || DEFAULT_ERROR.title}
+        message={
+          error?.details
+            ? JSON.stringify(error.details, null, 2)
+            : DEFAULT_ERROR.message
+        }
+        button={empty.button}
+      /&gt;
+    );
+  }
+
+  if (!data || data.length === 0)
+    return (
+      &lt;StateSkeleton
+        image={{
+          light: "/images/light-illustration.png",
+          dark: "/images/dark-illustration.png",
+          alt: "Empty state illustration",
+        }}
+        title={empty.title}
+        message={empty.message}
+        button={empty.button}
+      /&gt;
+    );
+
+  return &lt;div&gt;{render(data)}&lt;/div&gt;;
+};</code></pre>
+
+<p>逐段看這份實作：</p>
+
+<ol>
+  <li>
+    <p>若 <code>success</code> 是 <code>false</code>，<code>!success</code> 會成立，元件就回傳錯誤狀態。標題優先使用 <code>error.message</code>；如果有 <code>error.details</code>，就用 <code>JSON.stringify</code> 把細節整理成可顯示的文字。</p>
+  </li>
+  <li>
+    <p>若請求成功，接著檢查 <code>!data || data.length === 0</code>。這會同時處理資料不存在，以及資料陣列存在但長度為零的情況。</p>
+  </li>
+  <li>
+    <p>前兩個條件都沒有成立，代表目前有資料。這時才呼叫 <code>render(data)</code>，把實際的畫面交給呼叫端產生。</p>
+</li>
+</ol>
+
+<p><code>empty</code> 也有預設值 <code>DEFAULT_EMPTY</code>，因此呼叫端即使沒有傳入自訂空狀態，也能正常執行。</p>
+
+<p>這裡的 <code>StateSkeleton</code> 是共用版型，負責排列「插圖、標題、訊息與可選按鈕」。錯誤狀態與空狀態共用同一套排版，列表頁就不會各自長出不同風格。插圖則分成 <code>light</code> 與 <code>dark</code> 版本，配合專案的深淺色主題。</p>
+
+<h2>第三步：用 render prop 把版面交給呼叫端</h2>
+<p><code>render prop</code> 的做法，是把「如何產生一段畫面」包成函式，再透過 prop 傳入。<code>DataRenderer</code> 只判斷狀態；確認有資料後，就呼叫 <code>render(data)</code>。</p>
+
+<p>這裡可以用兩種寫法對照理解：</p>
+
+<p><strong>AI 常犯版：把資料版面也硬寫進 renderer</strong></p>
+<p>如果 <code>DataRenderer</code> 內部直接寫死問題卡片、標籤或使用者的 JSX，它很快就會變成某一種列表的專用元件。每次遇到不同資料型別，都得再複製一顆。</p>
+
+<p><strong>正解版：renderer 處理狀態，呼叫端處理版面</strong></p>
+<p>把錯誤與空資料這些共通邏輯集中在 renderer；把有資料時的排列方式留給 <code>render</code>。這就像餐廳只負責確認訂單是否成功、餐點是否供應，至於餐點要怎麼擺盤，交給真正知道需求的人決定。</p>
+
+<figure class="lesson-figure"><img src="./generic-renderer-composition-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第四步：在 server shell 中實際使用</h2>
+<p>接著看同一顆 <code>DataRenderer</code> 如何在側邊欄中渲染「熱門問題」。呼叫端會把 server action 回傳的狀態與資料傳入，再用 <code>render</code> 描述有資料時的畫面。</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/components/navigation/RightSidebar.tsx"><code>        &lt;DataRenderer
+          data={hotQuestions}
+          empty={{
+            title: "No questions found",
+            message: "No questions have been asked yet.",
+          }}
+          success={success}
+          error={error}
+          render={(hotQuestions) =&gt; (
+            &lt;div className="mt-7 flex w-full flex-col gap-[30px]"&gt;
+              {hotQuestions.map(({ _id, title }) =&gt; (
+                &lt;Link
+                  key={_id}
+                  href={ROUTES.QUESTION(_id)}
+                  className="flex cursor-pointer items-center justify-between gap-7"
+                &gt;
+                  &lt;p className="body-medium text-dark500_light700 line-clamp-2"&gt;
+                    {title}
+                  &lt;/p&gt;
+
+                  &lt;Image
+                    src="/icons/chevron-right.svg"
+                    alt="Chevron"
+                    width={20}
+                    height={20}
+                    className="invert-colors"
+                  /&gt;
+                &lt;/Link&gt;
+              ))}
+            &lt;/div&gt;
+          )}
+        /&gt;</code></pre>
+
+<p>這段使用方式可以拆成兩個動作：</p>
+
+<ol>
+  <li>
+    <p>把 <code>data</code>、<code>success</code> 與 <code>error</code> 直接傳給 <code>DataRenderer</code>。這些值代表 server action 取得的實際結果。</p>
+  </li>
+  <li>
+    <p>透過 <code>render</code> 描述有資料時的畫面。真正負責排列列表的是 <code>hotQuestions.map(...)</code>，而不是 <code>DataRenderer</code>。</p>
+  </li>
+</ol>
+
+<p>如果要改成標籤列表、使用者列表或留言列表，只需要替換資料、<code>empty</code> 內容與 <code>render</code> 函式。同一顆 renderer 可以重複使用，狀態判斷不用再抄一次。</p>
+
+<h2>做完後要確認的結果</h2>
+<p>完成後，你會得到一個可重複套用的列表外殼：</p>
+
+<ul>
+  <li>請求失敗時，顯示錯誤狀態。</li>
+  <li>請求成功但沒有資料時，顯示空狀態。</li>
+  <li>有資料時，使用呼叫端傳入的 <code>render</code> 函式產生列表。</li>
+  <li>需要客製空狀態時，只要替換 <code>empty</code>。</li>
+  <li>需要調整錯誤或空狀態插圖時，修改共用的 <code>StateSkeleton</code> 設定。</li>
+</ul>
+
+<p>分頁與排序仍可維持獨立，不必和錯誤、空資料的狀態處理綁在一起。</p>
+
+<p>另外，<code>DataRenderer</code> 沒有 <code>"use client"</code>，所以它本身可以留在 server，直接放進 server shell 並接收 server 取得的資料。若某個列表需要互動，例如點擊卡片後展開，就把互動放在 <code>render</code> 回傳的 client 子元件裡。renderer 留在 server，client island 則只出現在真正需要互動的地方。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>把每個列表頁都會遇到的「錯誤／空／有資料」三分支，集中到泛型 <code>DataRenderer</code>。用 <code>success</code>、<code>error</code>、<code>data</code> 與 <code>empty</code> 描述狀態，再用 <code>render</code> 這個 render prop 把版面交還給呼叫端。判斷順序是：失敗 → 空 → 有資料。</p>
+</blockquote>
+
+<p>現在你已經有 server shell、純展示磚塊，以及一顆能處理列表狀態的 renderer。下一步要把這些判斷力放到整棵元件樹上：當元件需要互動時，<code>"use client"</code> 到底應該畫在哪一條線上？最後一節會整理成可以直接套用的判別問句，並對照兩種常見的錯誤切法。</p>
+
+<div class="lesson-nav">
+  <div><a href="./presentational-components.html">← 上一步：props-in / JSX-out：不需要 "use client" 的純展示元件</a></div>
+  <div><a href="./boundary-placement-decision.html">下一步：邊界該畫在哪裡：哪些元件留 server、哪些下沉成 client island →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="DataRenderer 的三個判斷分支，順序是什麼？" data-correct="1" data-explain="先看 success 失敗、再看資料是否為空，最後才是有資料。">
+  <button class="opt">有資料 → 空 → 錯誤</button>
+  <button class="opt">錯誤 → 空 → 有資料</button>
+  <button class="opt">空 → 錯誤 → 有資料</button>
+  <button class="opt">隨機依資料長度判斷</button>
+</div>
+<div class="quiz" data-question="DataRenderer 的 render prop 負責什麼？" data-correct="2" data-explain="它由呼叫端提供，決定有資料時畫面要怎麼畫。">
+  <button class="opt">決定請求失敗時顯示的文字</button>
+  <button class="opt">決定空資料時顯示的插圖</button>
+  <button class="opt">決定有資料時的畫面怎麼畫</button>
+  <button class="opt">決定 success 是 true 還是 false</button>
+</div>
+<div class="quiz" data-question="為什麼 DataRenderer 要用泛型與 render prop，而不是把卡片直接寫死？" data-correct="0" data-explain="狀態處理共通、版面各自不同；render prop 讓同一個元件服務多種列表。">
+  <button class="opt">讓同一元件服務多種列表畫面</button>
+  <button class="opt">讓它自動幫每個列表抓資料</button>
+  <button class="opt">讓它變成 client component 使用</button>
+  <button class="opt">讓它強制把資料存進全域 state</button>
+</div>
+<div class="quiz" data-question="呼叫端使用 DataRenderer 時，需要提供下列哪一項？" data-correct="3" data-explain="呼叫端提供資料、狀態與 render（以及可選的 empty）。">
+  <button class="opt">一份完整的 CSS 檔路徑</button>
+  <button class="opt">一個資料庫連線字串設定</button>
+  <button class="opt">一個 window 事件的監聽器</button>
+  <button class="opt">一個 render 函式與狀態資料</button>
+</div>
+<div class="quiz" data-question="DataRenderer 本身是 server 還是 client 元件，為什麼重要？" data-correct="1" data-explain="它沒有 use client，可以留在 server shell 裡直接接收伺服器抓回的資料。">
+  <button class="opt">它是 client，所以能使用事件處理</button>
+  <button class="opt">它是 server，能直接嵌在 shell 裡</button>
+  <button class="opt">它是 client，會把資料帶進瀏覽器</button>
+  <button class="opt">它是 server，所以不能接收 props</button>
+</div>
+<div class="quiz" data-question="如果想客製「沒有資料」時顯示的按鈕，應該怎麼做？" data-correct="2" data-explain="透過 empty prop 傳入 title、message 與 button 來客製空狀態。">
+  <button class="opt">改寫 DataRenderer 的 success 判斷</button>
+  <button class="opt">在元件裡新增一個 useEffect</button>
+  <button class="opt">傳入帶 button 的 empty prop</button>
+  <button class="opt">把 render 函式改成 async</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 元件組合模式：server shell + client island · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

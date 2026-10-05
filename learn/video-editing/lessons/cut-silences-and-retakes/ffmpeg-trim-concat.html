@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 ffmpeg trim/concat 把留稿變成 cut.mp4</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 ffmpeg trim／concat 把留稿變成 cut.mp4</h1>
+<p class="meta">Step 2/4 · 剪掉靜音與 NG 重錄</p>
+
+<h2>這一課要完成什麼</h2>
+
+<p>上一課整理好的「保留區間」清單，這一課要把它變成一支真的能播放的 <code>cut.mp4</code>。做完後，你會得到一支剪掉靜音與 NG 重錄的影片，並能用 ffprobe 檢查成品長度是否正確。</p>
+
+<p>動手前需要準備兩樣東西：已經算好的保留區間，以及已安裝好的 ffmpeg。先看一下這一步在整條 pipeline 的哪個位置：上一課負責判斷哪些片段要留下；這一課負責把判斷翻譯成「切開、歸零、接回去」的指令；下一課才會處理關鍵影格與精準 seek 的原理。</p>
+
+<h2>先看全貌：切開，再接回去</h2>
+
+<p>ffmpeg 剪片可以想成把一卷膠帶剪成幾段，再按照原本順序重新黏起來。流程只有兩個主要動作：</p>
+
+<ol>
+  <li>用 <code>trim</code> 切出要保留的視訊，用 <code>atrim</code> 切出對應的音訊。</li>
+  <li>用 <code>concat</code> 按照順序，把每段視訊與音訊重新接成一支影片。</li>
+</ol>
+
+<p>ffmpeg 不像剪輯軟體那樣有可以拖曳的時間軸，而是用 <code>filter_complex</code> 描述「哪一段視訊配哪一段音訊，以及最後怎麼串接」。</p>
+
+<p>切出片段後，還有一個容易漏掉的步驟：每段的時間軸都要重新歸零。假設從第 14 秒切到第 17 秒，這段影片原本的時間戳記仍然從 14 秒開始。若直接把多段接在一起，播放器可能會遇到混亂的時間戳記。因此，每段切出來後都要用 <code>setpts</code> 與 <code>asetpts</code>，讓它們從 0 秒重新開始。</p>
+
+<figure class="lesson-figure"><img src="./ffmpeg-trim-concat-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟一：找出停頓與保留區間</h2>
+
+<p>上一課已經決定了哪些內容要保留：只刪除不需要的停頓，不重新排列內容；重複句保留最後一版；切點則留一點呼吸。若還沒有保留區間，可以先用 ffmpeg 的 <code>silencedetect</code> 掃描音訊。</p>
+
+<p>下面這行只做偵測，不會產生影片檔。它會把找到的靜音區間印到終端機：</p>
+
+<pre data-source="sources/video-editing/20261003/hyperframes-helper-main/.claude/skills/hyperframes-helper/SKILL.md"><code>ffmpeg -i input.mkv -af "silencedetect=noise=-30dB:d=0.4" -f null - 2&gt;&amp;1 | grep silence</code></pre>
+
+<p><code>-af "silencedetect=noise=-30dB:d=0.4"</code> 表示：音量低於 -30 分貝，而且持續至少 0.4 秒的區間，就視為靜音。</p>
+
+<p><code>-f null -</code> 表示不輸出影片，只把處理結果送到終端機。<code>2&gt;&amp;1 | grep silence</code> 則會把 ffmpeg 的訊息導到標準輸出，再只留下包含 <code>silence</code> 的行。</p>
+
+<p>執行後，你會看到每個靜音區間的起點與終點。把靜音區間反過來看，就是要保留的區間。實務上，切點通常會稍微內縮，保留一點自然呼吸。例如靜音從 14.36 秒開始，保留區間可以在 14.46 秒收尾，讓接縫不會像被剪刀硬切開。</p>
+
+<h2>步驟二：把每個區間寫成 trim 與 atrim</h2>
+
+<p>每個保留區間都需要兩條濾鏡：視訊用 <code>trim</code>，音訊用 <code>atrim</code>。可以把 <code>a</code> 記成 audio，幫助自己分辨兩者。</p>
+
+<pre data-provenance="derived"><code>[0:v]trim=0:14.36,setpts=PTS-STARTPTS[v0];
+[0:a]atrim=0:14.36,asetpts=PTS-STARTPTS[a0]</code></pre>
+
+<p>逐段看這兩行：</p>
+
+<ul>
+  <li><code>[0:v]</code> 是第一個輸入檔的視訊軌；<code>[0:a]</code> 是同一個輸入檔的音訊軌。</li>
+  <li><code>trim=0:14.36</code> 取出 0 到 14.36 秒的視訊；<code>atrim=0:14.36</code> 對音訊做相同的切割。</li>
+  <li><code>setpts=PTS-STARTPTS</code> 與 <code>asetpts=PTS-STARTPTS</code> 會把片段的時間戳記重設，讓片段從 0 秒開始。</li>
+  <li><code>[v0]</code> 與 <code>[a0]</code> 是輸出標籤，之後會交給 <code>concat</code> 使用。</li>
+</ul>
+
+<p>如果還有第二段，就會再產生 <code>[v1]</code> 與 <code>[a1]</code>；第三段則是 <code>[v2]</code> 與 <code>[a2]</code>。每一段的視訊與音訊都要成對處理。</p>
+
+<h2>步驟三：用 concat 依序接回去</h2>
+
+<p>所有片段切好後，用 <code>concat</code> 把它們接起來。<code>n</code> 是片段數量，<code>v=1:a=1</code> 表示每段都包含一組視訊與一組音訊。</p>
+
+<p>輸入順序很重要。三段內容必須寫成 <code>[v0][a0][v1][a1][v2][a2]</code>，視訊與音訊要一段一段成對出現。若順序顛倒，聲音就可能配到錯的畫面。</p>
+
+<h2>步驟四：執行完整指令</h2>
+
+<p>下面這支指令示範把三個保留區間接成一支影片，並在最後重新編碼輸出。這是從 silence-cut 範本整理出的完整版本：</p>
+
+<pre data-source="sources/video-editing/20261003/hyperframes-helper-main/.claude/skills/hyperframes-helper/templates/silence-cut.sh"><code>ffmpeg -hide_banner -y -i "$IN" -filter_complex "\
+[0:v]trim=0:14.36,setpts=PTS-STARTPTS[v0];\
+[0:a]atrim=0:14.36,asetpts=PTS-STARTPTS[a0];\
+[0:v]trim=14.65:17.64,setpts=PTS-STARTPTS[v1];\
+[0:a]atrim=14.65:17.64,asetpts=PTS-STARTPTS[a1];\
+[0:v]trim=17.82:21.32,setpts=PTS-STARTPTS[v2];\
+[0:a]atrim=17.82:21.32,asetpts=PTS-STARTPTS[a2];\
+[v0][a0][v1][a1][v2][a2]concat=n=3:v=1:a=1[v][a]" \
+  -map "[v]" -map "[a]" \
+  -c:v libx264 -preset fast -crf 18 -r 24 -g 24 -keyint_min 24 \
+  -force_key_frames "expr:gte(t,n_forced*1)" \
+  -c:a aac -b:a 192k -movflags +faststart "$TMP"</code></pre>
+
+<p>這支指令可以分成幾個部分理解：</p>
+
+<ul>
+  <li><code>-filter_complex</code> 後面的內容，負責切割每段視訊與音訊，再用 <code>concat</code> 接起來。</li>
+  <li><code>-map "[v]" -map "[a]"</code> 指定最後輸出的視訊與音訊，使用剛剛 concat 產生的兩個結果。</li>
+  <li><code>-c:v libx264</code> 與 <code>-c:a aac</code> 分別指定視訊與音訊編碼器。</li>
+  <li><code>-crf 18</code> 控制畫質；數字越小，通常越接近原始畫質。</li>
+  <li><code>-g 24 -keyint_min 24</code> 與 <code>-force_key_frames</code> 會影響關鍵影格配置，讓影片能夠逐格精準 seek。這組設定的原理會在下一課說明。</li>
+</ul>
+
+<h2>區間很多時，讓程式自動組指令</h2>
+
+<p>只有幾段時，手寫 <code>[v0][a0][v1][a1]…</code> 還可以；區間一多，就很容易漏掉一段，或把視訊與音訊配錯。範本中的 <code>cut-retakes.py</code> 可以把 <code>KEEPS</code> 裡的區間清單，自動轉成 trim、atrim 與 concat：</p>
+
+<pre data-source="sources/video-editing/20261003/hyperframes-helper-main/.claude/skills/hyperframes-helper/templates/cut-retakes.py"><code>    parts = []
+    for i, (s, e) in enumerate(KEEPS):
+        s = max(0, s)
+        parts.append(f"[0:v]trim={s}:{e},setpts=PTS-STARTPTS[v{i}]")
+        parts.append(f"[0:a]atrim={s}:{e},asetpts=PTS-STARTPTS[a{i}]")
+
+    concat_inputs = "".join(f"[v{i}][a{i}]" for i in range(len(KEEPS)))
+    concat = f"{concat_inputs}concat=n={len(KEEPS)}:v=1:a=1[v][a]"
+    filter_complex = ";".join(parts) + ";" + concat
+
+    cmd = [
+        "ffmpeg", "-hide_banner", "-y", "-i", str(IN),
+        "-filter_complex", filter_complex,
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-r", "30", "-g", "30", "-keyint_min", "30",
+        "-force_key_frames", "expr:gte(t,n_forced*1)",
+        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+        str(OUT),
+    ]</code></pre>
+
+<p>這段程式會逐一走過 <code>KEEPS</code>，替每個區間建立一組視訊與音訊濾鏡，再把所有輸出標籤串成 concat 的輸入。</p>
+
+<p>請留意畫面更新率與 GOP 相關參數要互相對應。這段範例使用 30fps，因此是 <code>-r 30 -g 30 -keyint_min 30</code>；前面的完整指令使用 24fps，因此是 24。重點是 <code>-g</code> 要等於每秒格數，讓一組畫面剛好涵蓋一秒。</p>
+
+<h2>驗證結果：確認 cut.mp4 的長度</h2>
+
+<p>指令跑完後，應該會在原始素材旁邊得到一支 <code>cut.mp4</code>。腳本最後可以用 ffprobe 印出成品長度，再和所有保留區間的總和比對：</p>
+
+<pre data-source="sources/video-editing/20261003/hyperframes-helper-main/.claude/skills/hyperframes-helper/templates/silence-cut.sh"><code>ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 "$OUT"</code></pre>
+
+<p>如果印出的長度和預期相符，就表示各個片段已經按照順序接好，視訊與音訊也一起輸出了。這一課完成的是「剪乾淨」的 cut.mp4；下一課會說明，為什麼還要把影片重新編碼成每秒一個關鍵影格，才能交給 HyperFrames 做精準的字幕與動畫對齊。</p>
+
+<figure class="lesson-figure"><img src="./ffmpeg-trim-concat-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+用 ffmpeg 剪片可以拆成兩個動作：先用 trim 切視訊、用 atrim 切音訊，再用 concat 依序接回去。setpts 與 asetpts 會把每段片段的時間軸歸零，避免接合後的時間戳記混亂。保留區間可以手寫進 filter_complex，也可以交給 cut-retakes.py 自動產生。執行完成後得到 cut.mp4，再用 ffprobe 核對成品長度是否等於保留區間的總和。
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./cutting-rules.html">← 上一步：剪掉什麼、留哪一版：剪輯規則</a></div>
+  <div><a href="./seek-safe-gop.html">下一步：為什麼要 1 秒 GOP：讓 HyperFrames 能精準 seek →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="trim 和 atrim 這兩個指令差別在哪裡？" data-correct="1" data-explain="trim 作用在視訊，atrim 作用在音訊，差別只在音訊的 a。">
+  <button class="opt">trim 負責輸出、atrim 負責輸入</button>
+  <button class="opt">trim 處理視訊、atrim 處理音訊</button>
+  <button class="opt">trim 切頭、atrim 負責切結尾</button>
+  <button class="opt">trim 用在短片、atrim 用在長片</button>
+</div>
+<div class="quiz" data-question="為什麼切完片段後要加上 setpts=PTS-STARTPTS？" data-correct="2" data-explain="片段時間戳記仍從原本位置起算，歸零後 concat 才能正常接。">
+  <button class="opt">讓畫面自動變得更清晰銳利</button>
+  <button class="opt">讓音訊的音量維持在固定值</button>
+  <button class="opt">讓片段時間軸重新從零開始</button>
+  <button class="opt">讓檔案輸出的速度變得更快</button>
+</div>
+<div class="quiz" data-question="concat 裡的 v=1:a=1 代表什麼意思？" data-correct="3" data-explain="每一段片段各帶一組視訊與一組音訊。">
+  <button class="opt">只保留一段視訊不要音訊</button>
+  <button class="opt">輸出一個影片再加一個檔案</button>
+  <button class="opt">影片與音訊播放速度相同</button>
+  <button class="opt">每段各帶一組影像與聲音</button>
+</div>
+<div class="quiz" data-question="保留區間主要是從哪裡得來的？" data-correct="0" data-explain="先用 silencedetect 掃出靜音，再把靜音反過來得到保留區間。">
+  <button class="opt">用 silencedetect 掃出的靜音區間</button>
+  <button class="opt">從影片縮圖裡隨機挑出的片段</button>
+  <button class="opt">從剪輯軟體的時間軸手動標記</button>
+  <button class="opt">由影片檔名自動推斷出的段落</button>
+</div>
+<div class="quiz" data-question="-g 這個參數應該設成多少才合理？" data-correct="1" data-explain="讓 GOP 剛好等於一秒，所以 -g 要跟著每秒格數設定。">
+  <button class="opt">固定設成 18，與畫質參數一致</button>
+  <button class="opt">等於你選的影片每秒格數</button>
+  <button class="opt">等於保留區間的總秒數</button>
+  <button class="opt">設成 1 代表每秒一個片段</button>
+</div>
+<div class="quiz" data-question="輸出後用什麼確認成品的長度符合預期？" data-correct="2" data-explain="用 ffprobe 讀出 format=duration，再和保留區間總和比對。">
+  <button class="opt">用 silencedetect 再掃一次成品</button>
+  <button class="opt">用 concat 把成品再接一次</button>
+  <button class="opt">用 ffprobe 讀出影片長度</button>
+  <button class="opt">用 trim 把成品重新切一次</button>
+</div>
+
+<div class="footer">
+  <p>video-editing · 剪掉靜音與 NG 重錄 · Step 2/4</p>
+  <p>讀到這裡有疑問，直接問你的 AI 助教；它可以針對這一節再展開，或用你自己的素材舉例。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

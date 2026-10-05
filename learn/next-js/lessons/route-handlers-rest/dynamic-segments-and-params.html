@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>動態 segment 與 params：路徑參數 vs 查詢參數</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>動態 segment 與 params：路徑參數和查詢參數怎麼分</h1>
+<p class="meta">Step 2/5 · Route Handlers 與 REST API 設計</p>
+
+<h2>先看整張地圖：一個 API，兩種參數</h2>
+
+<p>上一節你學會了用資料夾對應端點：放一個 <code>route.ts</code>，就能做出 <code>/api/users</code>。但實際需求很快會多一層：除了列出所有使用者，還要查詢某一位使用者的詳細資料。</p>
+
+<p>這時網址可能是 <code>/api/users/123</code>。其中 <code>123</code> 不是固定文字，而是會隨著使用者改變的值。你不可能為 <code>users/1</code>、<code>users/2</code>、<code>users/3</code>……每個 id 都建立一個資料夾。id 可以不斷增加，資料夾卻不該跟著無限膨脹。</p>
+
+<p>動態 segment 就像一個可伸縮的抽屜：同一個資料夾可以接住一整類不同的路徑。接著還要分清楚另一個常見問題：路徑上的變動值，和問號後面的查詢條件，究竟各自該放在哪裡？</p>
+
+<h2>本課學完，你要能判斷三件事</h2>
+
+<ul>
+<li>用巢狀資料夾與 <code>[id]</code> 動態資料夾，建立參數化端點。</li>
+<li>從 <code>params</code> 讀取路徑上的變動值。</li>
+<li>分辨路徑參數與查詢參數（<code>searchParams</code>）各自適合的用途。</li>
+</ul>
+
+<h2>先複習：巢狀資料夾就是巢狀路徑</h2>
+
+<p>動態 segment 並不是另一套規則，而是建立在原本的資料夾對應網址上。資料夾多一層，網址就會跟著深一層：</p>
+
+<pre data-provenance="derived"><code>app/
+└── api/
+    └── tickets/
+        └── route.ts   → /api/tickets</code></pre>
+
+<p>這個 <code>route.ts</code> 匯出的 <code>GET</code> 可以回傳整份票券清單。可是，如果要取得單一票券，例如 <code>/api/tickets/5</code>，就需要讓 <code>tickets</code> 底下再接一個代表「某個 id」的資料夾。</p>
+
+<h2>用中括號表示「這一段會變」</h2>
+
+<p>做法是把下一層資料夾的名稱包在中括號裡，例如 <code>[id]</code>，再在裡面放入 <code>route.ts</code>：</p>
+
+<pre data-provenance="derived"><code>app/
+└── api/
+    └── tickets/
+        ├── route.ts          → /api/tickets
+        └── [id]/
+            └── route.ts      → /api/tickets/123</code></pre>
+
+<p><code>[id]</code> 裡的中括號是一個記號，表示這一層不是固定字串，而是一個會變動的參數。當使用者拜訪 <code>/api/tickets/123</code> 時，Next.js 會把 <code>123</code> 捕捉起來，交給你的程式使用。</p>
+
+<figure class="lesson-figure"><img src="./dynamic-segments-and-params-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這裡有一個很關鍵的對應關係：<strong>中括號裡的名字，就是之後讀取參數時使用的鍵。</strong>寫成 <code>[id]</code>，就用 <code>params.id</code> 取得值；寫成 <code>[userId]</code>，就用 <code>params.userId</code>。名稱可以自己決定，但資料夾名稱和程式裡的鍵必須前後一致。</p>
+
+<h2>AI 常犯版 vs 正解版：名稱不是裝飾品</h2>
+
+<p><strong>AI 常犯版：</strong>資料夾叫做 <code>[id]</code>，程式卻讀 <code>params.userId</code>。看起來只差一個名字，實際上卻像拿錯了門牌，當然找不到對應的值。</p>
+
+<p><strong>正解版：</strong>資料夾名稱和讀取鍵保持一致。<code>[id]</code> 對應 <code>params.id</code>；<code>[userId]</code> 對應 <code>params.userId</code>。</p>
+
+<h2>怎麼把路徑參數讀進來？</h2>
+
+<p>動態 segment 的 <code>route.ts</code> 會多收到第二個參數 <code>params</code>。在較新的 Next.js 版本裡，<code>params</code> 是一個 Promise，因此要先 <code>await</code>，才能解構出裡面的值：</p>
+
+<pre data-provenance="derived"><code>// app/api/tickets/[id]/route.ts —— 讀取路徑上的 id
+export async function GET(
+  request: Request,
+  { params }: { params: Promise&lt;{ id: string }&gt; }
+) {
+  const { id } = await params;
+
+  // id 是字串，例如 "123"
+  return Response.json({ id });
+}</code></pre>
+
+<p>如果你熟悉 Express，可以這樣對照：Express 通常從 <code>req.params.id</code> 讀取；Next.js 則把 <code>params</code> 放在 route handler 的第二個參數裡，而且依照框架設計，需要先 <code>await</code>。</p>
+
+<p>兩者的核心直覺是一樣的：網址中那段可變的部分，要用一個參數物件接住它。</p>
+
+<h2>另一個地雷：params 讀到的一律是字串</h2>
+
+<p>從網址來的資料，本質上都是文字。拜訪 <code>/api/tickets/5</code> 時，讀到的 <code>id</code> 是字串 <code>"5"</code>，不是數字 <code>5</code>。</p>
+
+<p>因此，如果資料庫裡的 id 是數字，而你使用嚴格等於比較，就可能永遠比對不到。這時要自己轉型別：</p>
+
+<pre data-provenance="derived"><code>const { id } = await params;
+const ticket = tickets.find((t) =&gt; t.id === Number(id));</code></pre>
+
+<p>反過來，如果資料庫使用的是字串 id，例如 MongoDB 的 <code>_id</code> 或 slug，就不需要轉成數字。要記住的是：<strong>型別轉換由你負責，不要假設框架會自動替你處理。</strong></p>
+
+<h2>路徑參數 vs 查詢參數：先看它們站在哪裡</h2>
+
+<p>現在加入另一種常見需求：搜尋票券。網址可能是 <code>/api/tickets/search?query=hello</code>。問號後面的部分叫做查詢參數（query parameters），也常稱為 <code>searchParams</code>。</p>
+
+<p>它和路徑參數不只是外觀不同，扮演的角色也不同：</p>
+
+<table>
+<thead>
+<tr><th></th><th>路徑參數（params）</th><th>查詢參數（searchParams）</th></tr>
+</thead>
+<tbody>
+<tr><td>在 URL 的位置</td><td>嵌在路徑裡，例如 <code>/tickets/5</code></td><td>在問號後面，例如 <code>?query=hello</code></td></tr>
+<tr><td>通常必填或選填</td><td>多半是資源的身分，通常必填</td><td>多半是選項，通常選填</td></tr>
+<tr><td>典型用途</td><td>指名「哪一筆」資源</td><td>篩選、排序、分頁</td></tr>
+<tr><td>Next.js 讀法</td><td><code>await params</code></td><td><code>request.nextUrl.searchParams</code></td></tr>
+</tbody>
+</table>
+
+<p>可以用一句話記住兩者的分工：</p>
+
+<blockquote>
+<strong>路徑參數回答「你要哪一個東西」；查詢參數回答「你要怎麼看這批東西」。</strong>
+</blockquote>
+
+<p>沒有 <code>123</code>，你就不知道要查哪一筆票券，因此它適合放在路徑裡。沒有 <code>?query=hello</code>，你仍然可以列出全部票券，只是少了一個篩選條件，因此它適合放在問號後面。</p>
+
+<figure class="lesson-figure"><img src="./dynamic-segments-and-params-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>AI 常犯版 vs 正解版：不要把兩種參數混成一鍋</h2>
+
+<p><strong>AI 常犯版：</strong>把資源身分寫成 <code>/api/user?id=5</code>。這在技術上可以運作，但「哪一個 user」被藏在查詢參數裡，路徑不再直接呈現資源本身。</p>
+
+<p><strong>正解版：</strong>把資源身分放進路徑，例如 <code>/api/users/5</code>；把搜尋、排序、分頁等可選條件放到問號後面，例如 <code>/api/tickets?query=hello</code>。</p>
+
+<p>反過來也一樣。若把分頁和排序硬塞進路徑，例如 <code>/api/tickets/page/2/sort/desc</code>，路徑會隨著選項增加而越來越膨脹。讓路徑負責指出資源，讓查詢參數負責調整觀看方式，API 會更容易閱讀和使用。</p>
+
+<h2>怎麼讀取查詢參數？</h2>
+
+<p>在 route handler 裡，查詢參數要從請求物件上取得。若使用 <code>NextRequest</code> 型別，可以這樣寫：</p>
+
+<pre data-provenance="derived"><code>// app/api/tickets/search/route.ts —— 讀取查詢參數
+import { NextRequest, NextResponse } from "next/server";
+
+export async function GET(request: NextRequest) {
+  const searchParams = request.nextUrl.searchParams;
+  const query = searchParams.get("query");
+
+  if (!query) {
+    return NextResponse.json({ success: true, data: tickets });
+  }
+
+  const filtered = tickets.filter((t) =&gt; t.title.includes(query));
+  return NextResponse.json({ success: true, data: filtered });
+}</code></pre>
+
+<p>這裡還有一個小地雷：<code>searchParams</code> 不是普通物件，而是特殊的 <code>URLSearchParams</code>。不能寫成 <code>searchParams.query</code>，必須使用 <code>.get("query")</code> 取值。否則可能只得到 <code>undefined</code>，卻看不出問題出在哪裡。</p>
+
+<h2>做決定的判準：少了它，請求還成立嗎？</h2>
+
+<p>設計 API 時，最常卡住的通常不是語法，而是判斷某個資訊該放在路徑，還是放在問號後面。這時可以問自己一句話：<strong>「少了它，這個請求還成不成立？」</strong></p>
+
+<p>如果少了它，請求就失去意義，例如少了 <code>id</code>，根本不知道要操作哪個資源，那就把它放在路徑裡，做成動態 segment。</p>
+
+<p>如果少了它，請求仍然可以合理執行，只是會回傳全部資料、沒有篩選，或採用預設排序，那它就是可選的修飾條件，應該放在查詢參數裡。</p>
+
+<table>
+<thead>
+<tr><th>問題</th><th>適合放置的位置</th><th>例子</th></tr>
+</thead>
+<tbody>
+<tr><td>要指名哪一個資源？</td><td>路徑參數</td><td><code>/api/tickets/5</code></td></tr>
+<tr><td>要用什麼條件篩選？</td><td>查詢參數</td><td><code>/api/tickets?query=hello</code></td></tr>
+<tr><td>要採用哪種排序或分頁？</td><td>查詢參數</td><td><code>?page=2</code>、<code>?sort=desc</code></td></tr>
+</tbody>
+</table>
+
+<figure class="lesson-figure"><img src="./dynamic-segments-and-params-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把觀念掛回整體架構</h2>
+
+<p>動態 segment 負責把「一整類可能的 URL」對應到同一個 route handler。中括號裡的名稱會成為 <code>params</code> 的鍵，而從 URL 讀出的值一律是字串；在 Next.js 15 中，<code>params</code> 是 Promise，所以要先 <code>await</code>。</p>
+
+<p>查詢參數則不負責指出資源是誰，而是替既有的資源集合加上篩選、排序或分頁等觀看條件。它從 <code>request.nextUrl.searchParams.get(...)</code> 讀取。</p>
+
+<blockquote>
+動態 segment 用中括號命名一個資料夾，例如 <code>[id]</code>，讓它接住一整類不確定的路徑。值從函式的 <code>params</code> 讀出，在 Next.js 15 中要先 <code>await</code>，而且讀到的一律是字串。查詢參數則放在 URL 的問號後面，從 <code>request.nextUrl.searchParams.get(...)</code> 讀取。判準是：少了它就說不出「要哪一筆」的，放路徑；只是篩選、排序、分頁的，放問號。
+</blockquote>
+
+<p>到這裡，你已經能做出路徑正確、參數讀對的端點。請記住這兩種參數在整個 API 架構中的位置：<code>params</code> 負責定位資源，<code>searchParams</code> 負責調整查詢方式。下一篇會用查閱的形式，整理常用的狀態碼與一致的 response 信封，因為端點不只是路徑，前端真正依賴的還有它回傳的狀態碼與資料形狀。</p>
+
+<div class="lesson-nav">
+  <div><a href="./why-route-handlers.html">← 上一步：route.ts 就是你的後端：檔案式 API 端點</a></div>
+  <div><a href="./response-shapes-and-status-codes.html">下一步：狀態碼與 response 信封：端點對外的合約 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="動態 segment 資料夾該怎麼命名，才能讓 /api/tickets/123 的 123 被接住？" data-correct="2" data-explain="用中括號包住參數名，[id] 就會捕捉那一層的值。">
+  <button class="opt">命名成 id 並在 route.ts 設定</button>
+  <button class="opt">命名成 _id 的底線開頭資料夾</button>
+  <button class="opt">命名成 [id] 的中括號資料夾</button>
+  <button class="opt">命名成 id.ts 並匯出 GET</button>
+</div>
+<div class="quiz" data-question="在 Next 15 的動態 route handler 裡，正確讀取路徑參數的寫法是哪一個？" data-correct="1" data-explain="params 是 Promise，要先 await 再解構。">
+  <button class="opt">const { id } = params.id;</button>
+  <button class="opt">const { id } = await params;</button>
+  <button class="opt">const id = request.params.id;</button>
+  <button class="opt">const id = request.nextUrl.id;</button>
+</div>
+<div class="quiz" data-question="關於網址來的 params，下列敘述何者正確？" data-correct="0" data-explain="網址是文字，params 一律是字串，需要時得自己轉型別。">
+  <button class="opt">一律是字串，需要時要自己轉型別</button>
+  <button class="opt">框架會依 schema 自動轉成數字</button>
+  <button class="opt">一律是數字，可以直接做加減運算</button>
+  <button class="opt">型別取決於中括號的名字</button>
+</div>
+<div class="quiz" data-question="「分頁、排序、搜尋關鍵字」這類條件，通常該放在哪裡？" data-correct="3" data-explain="這些是選填的修飾條件，放查詢參數（問號後面）最合適。">
+  <button class="opt">放進巢狀資料夾當成路徑的一部分</button>
+  <button class="opt">放進 request body 當 JSON 傳送</button>
+  <button class="opt">塞進 params 讓框架自動解析</button>
+  <button class="opt">放查詢參數，也就是問號後面</button>
+</div>
+<div class="quiz" data-question="要從 searchParams 取出名為 query 的值，正確寫法是？" data-correct="2" data-explain="searchParams 是 URLSearchParams，要用 .get() 取值。">
+  <button class="opt">request.nextUrl.query</button>
+  <button class="opt">searchParams.query</button>
+  <button class="opt">searchParams.get("query")</button>
+  <button class="opt">params.searchParams.query</button>
+</div>
+<div class="quiz" data-question="判斷一段資訊該放路徑參數還是查詢參數，最實用的問句是？" data-correct="1" data-explain="少了它就說不出要哪一筆資源的，放路徑；只是修飾條件的，放問號後面。">
+  <button class="opt">這個字串比較長還是比較短</button>
+  <button class="opt">少了它，這個請求還成不成立</button>
+  <button class="opt">它會不會被寫進資料庫</button>
+  <button class="opt">它是不是使用者輸入的</button>
+</div>
+
+<div class="footer">
+  <p>next-js · Route Handlers 與 REST API 設計 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

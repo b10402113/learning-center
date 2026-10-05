@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>設計最小可執行 Loop：可除錯的骨架</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>設計最小可執行 Loop：先做出可除錯的骨架</h1>
+<p class="meta">Step 3/4 · 最小可執行 Loop 與 Goal 契約</p>
+
+<h2>這一節要完成什麼</h2>
+
+<p>你要把前一節的 Goal 契約，接到一個真的能跑的 loop。完成後，程式會依序載入 context、選擇動作、執行並觀察結果，再根據 completion criteria 判斷要停止或進入下一輪。</p>
+
+<p>動手前，請先具備兩樣東西：</p>
+
+<ul>
+<li>理解 Goal、Act、Observe、Evaluate 四個階段各自負責什麼。</li>
+<li>準備好一份可執行的 goal 契約。</li>
+</ul>
+
+<p>這一節的重點不是先蓋出完整的 agent 平台，而是先做出一個每一輪都看得懂、出了問題也找得到位置的骨架。之後要加入工具、記憶體、護欄與核准，都應該建立在這個控制流上。</p>
+
+<h2>先從最小骨架開始</h2>
+
+<p>很多人一開始就想設計工作流引擎、記憶體層、外掛市集和監控儀表板。結果平台越蓋越大，卻還沒有一個例子能端到端跑完。</p>
+
+<p>最小可執行 loop 走相反的路：先讓 agent 做一次決定、拿回一次觀察，再決定是否繼續。控制流可以先縮成下面四行：</p>
+
+<pre data-provenance="derived"><code>while not done:
+    action = choose_next_action(context)   # 決定下一步
+    observation = run(action)              # 真的去做，拿回結果
+    state = update(state, observation)     # 把結果寫進狀態
+    done = evaluate(state, goal)           # 對照 goal，決定要不要再一圈
+</code></pre>
+
+<p>這個版本不特別聰明，卻很容易檢查。每一個 action、每一個輸出，以及每一次停止決定，都有明確的位置。這就是它的價值：loop 不再是一坨只有作者看得懂的腳本，而是一條可以逐段除錯的控制流。</p>
+
+<figure class="lesson-figure"><img src="./build-a-minimal-executable-loop-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>按照固定順序跑完一輪</h2>
+
+<p>實際執行時，loop 會從 input goal 開始，但不能直接跳到工具呼叫。請依照下面的順序組裝：</p>
+
+<ol>
+<li><strong>載入相關 context。</strong>讀取 instructions、可用工具、先前的觀察、限制條件，以及上一輪留下的 state。這些內容決定 agent 這一輪能看見什麼。</li>
+<li><strong>選擇並執行一個動作。</strong>從可用能力中選出一個 tool call、一條程式碼路徑或一次查詢，實際執行它。</li>
+<li><strong>擷取 observation。</strong>記錄執行結果，包括輸出、錯誤與狀態變化。</li>
+<li><strong>評估停止條件。</strong>把目前的 observation 和 state，拿去對照 goal 的 completion criteria。</li>
+<li><strong>回傳或繼續執行。</strong>若 goal 已完成，就回傳最終結果；若尚未完成，就把更新後的 state 當成下一輪的輸入。</li>
+</ol>
+
+<p>第五步是 loop 和單次模型呼叫的分界。單次呼叫產出答案後就結束；loop 則會把更新後的 state 餵回下一輪，持續前進，直到抵達明確的停止點、撞到界線，或需要升級求助。</p>
+
+<p>因此，每一輪都應該留下可觀察的紀錄。這些紀錄讓你之後能測試 agent 到底做了什麼，也能分辨問題發生在選擇、執行、狀態更新，還是停止判斷。</p>
+
+<h2>把責任分到清楚的介面</h2>
+
+<p>最小 loop 不需要龐大的架構，但仍然需要乾淨的責任分工。用檔案切開責任，是簡單而耐用的做法：</p>
+
+<table>
+<thead>
+<tr><th>檔案</th><th>放什麼</th></tr>
+</thead>
+<tbody>
+<tr><td><code>loop.py</code></td><td>迴圈控制器：控制流本身，只負責串起其他介面。</td></tr>
+<tr><td><code>tools.py</code></td><td>工具包裝：實際碰真實世界的那一層。</td></tr>
+<tr><td><code>state.py</code></td><td>狀態管理：goal、輪數、觀察、evidence、trace。</td></tr>
+<tr><td><code>evals.py</code></td><td>評估邏輯：拿 criteria 判斷成功、重試或失敗。</td></tr>
+<tr><td><code>CLAUDE.md</code></td><td>操作規則：這個專案怎麼做事、有哪些慣例。</td></tr>
+<tr><td><code>codebase-map.md</code></td><td>架構地圖：重要邏輯放在哪裡、模組之間怎麼依賴。</td></tr>
+<tr><td><code>claude-settings.json</code></td><td>本機權限與工具行為。</td></tr>
+</tbody>
+</table>
+
+<p>前四個檔案分別對應四個獨立介面。這個切法比檔名本身更重要：</p>
+
+<ul>
+<li><code>state</code> 把 context 提供給 <code>tools</code>。</li>
+<li><code>tools</code> 執行動作，並透過 observation 更新 state。</li>
+<li><code>policy</code> 控制哪些動作可以執行。</li>
+<li><code>evaluator</code> 判斷結果是成功、重試還是失敗。</li>
+</ul>
+
+<p>把介面分開後，你可以單獨替換一個工具、收緊一條政策，或改進評估邏輯，不必重寫整個 agent。更重要的是，出了問題時，你有座標可以查：是 action 選錯了、tool 壞了、policy 擋住了，還是 criteria 根本沒有被滿足？</p>
+
+<figure class="lesson-figure"><img src="./build-a-minimal-executable-loop-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把介面接回控制流</h2>
+
+<p>接下來把前面的骨架展開成一個完整的執行流程。下面這段程式碼中，<code>loop</code> 只負責控制順序；真正的執行、狀態管理、政策檢查與結果評估，各自交給對應介面：</p>
+
+<pre data-provenance="derived"><code>def run_agent(goal, state, tools, policy, evaluator):
+    while not evaluator.is_done(goal, state):
+        context = state.load_context(goal)        # state → context
+        action = select_action(context, tools)    # 依可用工具選動作
+        if not policy.allows(action):             # policy：什麼可以跑
+            state.record_blocked(action)
+            break
+        observation = tools.execute(action)       # tools：唯一碰真實世界的介面
+        state.apply(observation)                  # 觀察回寫 state
+        if evaluator.should_stop(goal, state):    # evaluator：拿 criteria 對照
+            break
+    return state.result()
+</code></pre>
+
+<p>可以依照這個順序檢查每個責任：</p>
+
+<ol>
+<li><code>state.load_context(goal)</code> 從 state 準備這一輪要使用的 context。</li>
+<li><code>select_action(context, tools)</code> 只根據 context 和可用工具選擇動作。</li>
+<li><code>policy.allows(action)</code> 先檢查這個動作是否被允許。若不允許，就記錄 blocked action 並停止。</li>
+<li><code>tools.execute(action)</code> 執行動作並回傳 observation。這是唯一碰觸真實世界的介面。</li>
+<li><code>state.apply(observation)</code> 把結果寫回 state，供下一輪使用。</li>
+<li><code>evaluator.should_stop(goal, state)</code> 重新對照 criteria，判斷是否應該停止。</li>
+<li><code>state.result()</code> 在 loop 結束後整理並回傳結果。</li>
+</ol>
+
+<p><code>select_action</code> 不應該自己執行工具，<code>tools.execute</code> 也不應該替 evaluator 判斷是否完成。<code>policy</code> 和 <code>evaluator</code> 同樣只做判斷，不碰真實世界。這樣才能分開測試：你可以餵一個假的 state 給 evaluator，確認證據不足時它會判定「尚未完成」；也可以只測 policy，確認不該執行的動作確實會被擋下來。</p>
+
+<figure class="lesson-figure"><img src="./build-a-minimal-executable-loop-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>完成後要能驗證什麼</h2>
+
+<p>把這個版本跑起來後，你應該能清楚回答每一輪的幾個問題：</p>
+
+<ul>
+<li>這一輪載入了哪些 context？</li>
+<li>agent 選了哪一個 action？</li>
+<li>工具回傳了什麼 observation？</li>
+<li>observation 如何更新 state？</li>
+<li>evaluator 為什麼判定繼續、停止，或失敗？</li>
+</ul>
+
+<p>如果這些問題無法回答，通常表示某些責任又混回同一支腳本裡了。最小可執行 loop 不需要大型架構，但一定需要清楚的 goal、明確的 completion criteria，以及可觀察的證據。前一節已經準備好這三樣東西；這一節只是把它們接上控制流。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+最小可執行 loop 是「做決定 → 觀察 → 決定下一步」的最小可跑版本。完整流程是：載入 context → 選動作 → 執行 → 擷取觀察 → 評估停止 → 回傳，或把更新後的 state 餵回下一輪。用 <code>loop.py</code>、<code>tools.py</code>、<code>state.py</code>、<code>evals.py</code> 切開責任，並讓 state、tools、policy、evaluator 保持獨立介面，迴圈才不會退化成不可測試的腳本。
+</blockquote>
+
+<p>做到這裡，你已經有一個真的跑得起來、也能逐輪檢查的骨架。下一步不是立刻增加更多能力，而是先替它放上界線：<code>max steps</code>、<code>timeout</code>、<code>dry-run</code> 與 <code>approval gate</code>。沒有界線的 loop，就像沒有煞車的車；先把可控範圍定下來，後續擴充才不會失去方向。</p>
+
+<div class="lesson-nav">
+  <div><a href="./goal-as-executable-contract.html">← 上一步：把模糊需求寫成 Goal 契約</a></div>
+  <div><a href="./boundaries-before-autonomy.html">下一步：先設界線再放自主 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="最小可執行 loop 最核心的三個動作是什麼？" data-correct="2" data-explain="做一個決定、觀察結果、再決定下一步，這是它最小的定義。">
+  <button class="opt">建立資料庫、部署服務、設定監控</button>
+  <button class="opt">訓練模型、微調參數、部署推論</button>
+  <button class="opt">做決定、觀察結果、決定下一步</button>
+  <button class="opt">蒐集需求、排優先順序、切票</button>
+</div>
+<div class="quiz" data-question="迴圈從 input goal 開始後，第一步應該做什麼？" data-correct="1" data-explain="先載入 instructions、可用工具、先前觀察、限制與 state，不該直接呼叫工具。">
+  <button class="opt">立刻呼叫第一個想到的工具</button>
+  <button class="opt">先載入相關的 context 與狀態</button>
+  <button class="opt">先把最終答案寫好再回頭驗證</button>
+  <button class="opt">先隨機試跑幾次以蒐集資料</button>
+</div>
+<div class="quiz" data-question="哪一個檔案負責「控制流本身」？" data-correct="0" data-explain="loop.py 是迴圈控制器，只負責串起 state、tools、policy、evaluator。">
+  <button class="opt">loop.py</button>
+  <button class="opt">tools.py</button>
+  <button class="opt">state.py</button>
+  <button class="opt">evals.py</button>
+</div>
+<div class="quiz" data-question="為什麼 state、tools、policy、evaluator 要保持獨立介面？" data-correct="3" data-explain="介面切乾淨才能單獨測試與替換，失敗時也才查得出是哪一層出問題。">
+  <button class="opt">因為這樣程式碼的行數會比較少</button>
+  <button class="opt">因為模型只看得懂單檔的專案</button>
+  <button class="opt">因為這樣可以省下所有的測試工作</button>
+  <button class="opt">因為才能單獨測試、替換與除錯</button>
+</div>
+<div class="quiz" data-question="迴圈未完成時，更新後的 state 應該變成什麼？" data-correct="1" data-explain="未完成就把更新後的 state 當成下一輪的輸入，形成回饋路徑。">
+  <button class="opt">直接丟棄，下一輪從空白重新開始</button>
+  <button class="opt">下一輪的輸入，延續這一輪的進度</button>
+  <button class="opt">回傳給使用者並要求重新下指令</button>
+  <button class="opt">存進資料庫後就永遠不再讀取</button>
+</div>
+<div class="quiz" data-question="把責任切開，對除錯最大的幫助是什麼？" data-correct="2" data-explain="可以定位失敗是選動作、工具、政策還是評估標準造成的。">
+  <button class="opt">讓模型推理的準確率自動提高</button>
+  <button class="opt">讓工具呼叫的費用降到最低</button>
+  <button class="opt">能定位失敗發生在哪一個責任層</button>
+  <button class="opt">能讓使用者不用再閱讀任何紀錄</button>
+</div>
+
+<div class="footer">
+  <p>loop-engineer · 最小可執行 Loop 與 Goal 契約 · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

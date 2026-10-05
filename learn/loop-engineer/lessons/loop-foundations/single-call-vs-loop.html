@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>單次 LLM 呼叫 vs. Agentic Loop</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>單次 LLM 呼叫，還是 Agentic Loop？</h1>
+<p class="meta">Step 3/4 · Loop Engineering 基礎與四層堆疊</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你能用「最小可靠機制」判斷一項任務該使用單次 LLM 呼叫，還是值得啟動 agentic loop，也能說明兩者的取捨，以及過度工程的代價。</p>
+
+<h2>先決定：這件事值得蓋一座工廠嗎？</h2>
+
+<p>前面兩節已經看過 loop 的樣子，也知道四層如何分工。這時很容易掉進一個陷阱：既然 loop 很強大，那就什麼都包成 loop。</p>
+
+<p>於是，連「幫我把這段話改得正式一點」這種一次就能完成的請求，也被塞進規劃、工具呼叫、觀察與評估的完整流程。結果可能是反應變慢、成本變高、失敗點變多，但使用者拿到的答案，仍然和一句 prompt 差不多。</p>
+
+<p>真正要挑的，是<strong>這件工作最小而可靠的機制</strong>；「哪個聽起來比較先進」不是判斷標準。loop 不是每項工作的升級版；它比較像一座工廠，只有在工作需要反覆加工、檢查和調整時，建起來才划算。</p>
+
+<figure class="lesson-figure"><img src="./single-call-vs-loop-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>兩種執行模式，放在一起比較</h2>
+
+<p>先把兩種做法並排看，差異會清楚很多：</p>
+
+<table>
+<thead>
+<tr><th></th><th>單次 LLM 呼叫</th><th>Agentic loop</th></tr>
+</thead>
+<tbody>
+<tr><td>流程</td><td>送出 prompt、模型推理、拿回一個回應，結束</td><td>保持目標、決定下一步、呼叫工具、觀察結果、更新狀態，再重複到停止條件成立</td></tr>
+<tr><td>會不會再看世界</td><td>回答後就不再檢查外部世界</td><td>每一圈都根據真實觀察，修正下一步</td></tr>
+<tr><td>適合</td><td>自我封閉、不需要外部結果，而且使用者能輕鬆檢查答案的任務</td><td>無法一次完成，需要多步驟、工具、狀態或中間判斷的任務</td></tr>
+<tr><td>成本特性</td><td>更快、更便宜、更好測，也更容易解釋</td><td>多出規劃開銷、延遲、行為變異與測試負擔</td></tr>
+</tbody>
+</table>
+
+<p>單次呼叫不是能力較差的版本。摘要、改寫、分類，或回答一個直接問題時，任務小而自足，單次呼叫就是正確的機制。它的簡單不是缺點，反而是它在這個範圍內勝出的原因。</p>
+
+<h2>三個判別問句</h2>
+
+<p>在決定之前，依序問自己三個問題：</p>
+
+<ol>
+<li><strong>這件工作能在一次回應裡完成嗎？</strong>如果可以，單次呼叫通常就夠了。</li>
+<li><strong>我需要拿到外部的真實結果，才能確認事情做成了嗎？</strong>如果成敗取決於外部系統的回應，例如檔案內容、API 結果或測試輸出，通常就需要 loop 觀察結果並修正。</li>
+<li><strong>每一步的結果會改變下一步該做什麼嗎？</strong>如果後面的步驟會因為前面看見的內容而改變，loop 才有價值；如果所有步驟早就固定，它多半只是多繞一圈。</li>
+</ol>
+
+<p>因此，agentic loop 真正有用的時機，是<strong>工作無法在一次 pass 內完成</strong>。常見情況包括：需要多個步驟、呼叫工具、檢查結果、在多次動作間維持狀態、在錯誤後重試，或是在繼續之前取得核准。</p>
+
+<figure class="lesson-figure"><img src="./single-call-vs-loop-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>反例：什麼時候 loop 反而是過度工程？</h2>
+
+<p>規則也不是「只要有複雜感，就一定要用 loop」。遇到下面這些情況，答案可能會翻轉：</p>
+
+<ul>
+<li>使用者只要一個一次性的答案。</li>
+<li>步驟早已固定，而且每次都一樣。此時決定性工作流通常更容易測試、監控與維運。</li>
+<li>工作受到嚴格法遵規則約束。你可能應該先放入規則、驗證與人工複核，而不是先增加自主性。</li>
+<li>任務量很大且高度重複。批次工作或固定服務通常更便宜，也更可靠。</li>
+</ul>
+
+<p>把每個簡單請求都包進 loop，就像為了寄一封信而蓋一條輸送帶：你沒有換到多少價值，卻多背上延遲、成本與更多失敗模式。在生產環境裡，簡單的系統往往更有優勢，因為出事時更容易理解和修復。</p>
+
+<h2>即使使用 loop，也要限制它怎麼前進</h2>
+
+<p>還有一點不能忽略：<strong>觀察和行動一樣重要，而且迴圈不能無止盡地繞下去</strong>。</p>
+
+<p>工具回傳的結果可能表示成功，也可能暴露 context 不足、回報錯誤，或觸發護欄。生產環境中的 loop 必須有清楚的限制與停止規則，通常會綁在驗證、政策、成本或人類核准上。否則它只是一直做事，卻沒有可靠的方法判斷何時應該停下來。</p>
+
+<h2>一張可以直接使用的決策清單</h2>
+
+<blockquote>
+先問：任務能否在一次回應中完成？是否需要外部真實結果？前一步的結果是否會改變下一步？如果答案依序指向「一次完成、不需要外部結果、步驟不會改變」，就選單次 LLM 呼叫；只有在需要觀察、修正、維持狀態、重試或取得核准時，才啟動 agentic loop。選擇的標準是「最小的可靠機制」，不是哪個聽起來更先進。
+</blockquote>
+
+<p>「要不要用 loop」是在機制層面做的決定。但還有更大的一層問題：這個問題本身，到底適不適合交給 agent 來解？下一節會把鏡頭拉遠，用一個判別問句和三種替代方案，幫你在動手前先想清楚。</p>
+
+<div class="lesson-nav">
+  <div><a href="./four-layer-stack.html">← 上一步：Model、Harness、Tools 與 Execution Environment</a></div>
+  <div><a href="./when-to-use-an-agent.html">下一步：什麼時候該用 Agent、什麼時候不該 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="選擇單次呼叫或 loop 的標準是什麼？" data-correct="2" data-explain="選「最小的可靠機制」，能一次做好就不必繞一整圈。">
+  <button class="opt">哪一種用到的模型比較大</button>
+  <button class="opt">哪一種在簡報上聽起來更先進</button>
+  <button class="opt">哪一種是這件工作最小而可靠的機制</button>
+  <button class="opt">哪一種能產生更多的工具呼叫</button>
+</div>
+<div class="quiz" data-question="下列哪一種任務最適合單次 LLM 呼叫？" data-correct="0" data-explain="摘要、改寫這類自我封閉、不需外部結果的任務，一次回應就能完成。">
+  <button class="opt">把一段文字摘要成三句重點</button>
+  <button class="opt">先在 repo 中定位再修改程式碼</button>
+  <button class="opt">從多個系統蒐集證據並比對</button>
+  <button class="opt">依測試結果反覆修到通過為止</button>
+</div>
+<div class="quiz" data-question="Agentic loop 真正開始有用的時機是什麼？" data-correct="3" data-explain="當工作無法在一次 pass 完成、需要多步與回饋時，loop 才有價值。">
+  <button class="opt">當你希望系統看起來更像 AI 時</button>
+  <button class="opt">當使用者想要更快的回應速度時</button>
+  <button class="opt">當你手上的預算還相當充裕時</button>
+  <button class="opt">當工作無法在一次 pass 內完成時</button>
+</div>
+<div class="quiz" data-question="把簡單請求都包進 loop，最主要的代價是什麼？" data-correct="1" data-explain="它額外背上延遲、成本與更多失敗模式，卻沒有換到多少價值。">
+  <button class="opt">它會讓模型的推理能力下降</button>
+  <button class="opt">它多出延遲成本與失敗模式</button>
+  <button class="opt">它會讓工具無法被呼叫到</button>
+  <button class="opt">它會讓提示詞變得更簡短</button>
+</div>
+<div class="quiz" data-question="下列哪一項不是「步驟固定」時該改用的替代方案？" data-correct="2" data-explain="步驟固定時可用決定性工作流、規則複核或批次；把更多自主加進去反而更難控。">
+  <button class="opt">改用決定性工作流來處理</button>
+  <button class="opt">改用批次工作或固定服務</button>
+  <button class="opt">直接增加更多 agent 自主性</button>
+  <button class="opt">先放規則與人工複核再談</button>
+</div>
+<div class="quiz" data-question="生產環境的 loop 為什麼必須有清楚的停止規則？" data-correct="0" data-explain="沒有停止規則的 loop 會失去控制；停止通常綁在驗證、政策、成本或人類核准上。">
+  <button class="opt">為了避免它無止盡地繞下去</button>
+  <button class="opt">為了讓模型能顯示更多 token</button>
+  <button class="opt">為了讓工具可以自行修改自己</button>
+  <button class="opt">為了讓使用者不必再看結果</button>
+</div>
+
+<div class="footer">
+  <p>loop-engineer · Loop Engineering 基礎與四層堆疊 · Step 3/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

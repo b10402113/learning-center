@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>時間到了才更新：time-based revalidation</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>時間到了才更新：time-based revalidation</h1>
+<p class="meta">Step 2/5 · Revalidation 與多層快取</p>
+
+<h2>先看全貌：你要的是「等時間」還是「等事件」？</h2>
+
+<p>上一節我們把四層快取攤開，也分清楚「設定快取」和「更新快取」其實是兩件事。現在換個常見場景：資料會變，但你不想每次寫入資料後，都手動通知系統清掉快取。這時候，能不能直接告訴 Next.js：「這份資料先放著，時間到了再自己重算？」</p>
+
+<p>可以。這就是 <strong>time-based revalidation</strong>，也常被稱為 ISR（Incremental Static Regeneration，增量靜態重生）。它像替快取設定一個鬧鐘：資料不必每次有人修改就立刻更新，而是等到指定時間，再由下一次請求觸發重新產生。</p>
+
+<p>這種方式適合商品列表、部落格文章、排行榜等內容。它們會變動，但晚幾分鐘看到新資料通常不會造成問題。你省下了追蹤每個寫入事件的麻煩，交換條件則是資料可能會暫時舊一點。</p>
+
+<p>這一節會先把整體地圖攤開，再看兩個最容易混淆的問題：<code>revalidate</code> 寫在 route 最上層，和寫在單支 <code>fetch</code> 裡，到底差在哪裡？而數字、<code>0</code>、<code>false</code> 又各自代表什麼？</p>
+
+<h2>同一個名字，不同的管轄範圍</h2>
+
+<p>Next.js 有兩個地方可以設定 <code>revalidate</code>。位置不同，管的範圍也不同：</p>
+
+<ul>
+<li>寫在 route 檔案最上層，是 <strong>route segment config</strong>，影響整個 route。</li>
+<li>寫在單次 <code>fetch</code> 的選項裡，只影響那一次請求。</li>
+</ul>
+
+<pre data-source="sources/next-js/20261004/EBOOK.pdf#Data Fetching"><code>// 寫在頁面/route 最上層：管整個 route
+export const revalidate = 5000;
+
+// 寫在單支 fetch 的選項裡：只管這一次請求
+fetch("https://api.example.com/data", { next: { revalidate: 5000 } });</code></pre>
+
+<h3>AI 常犯版：看見同一個數字，就以為作用範圍也一樣</h3>
+
+<p>假設同一個頁面有兩支 <code>fetch</code>：一支抓文章，另一支抓使用者資料。如果只在文章那支設定 per-fetch 的 <code>revalidate: 5000</code>，使用者資料那支不會跟著套用同一個設定。</p>
+
+<p>另一種寫法是在頁面最上層設定：</p>
+
+<pre><code>export const revalidate = 5000;</code></pre>
+
+<p>這時候，設定的就不只是文章資料，而是整個 route 的重新產生節奏。把兩者混在一起，就像把「某一個房間的鬧鐘」誤認成「整棟房子的總電源」：數字可能相同，控制的東西卻完全不同。</p>
+
+<h3>正解版：先問自己「我要更新哪一層？」</h3>
+
+<table>
+<thead>
+<tr><th>設定位置</th><th>控制範圍</th><th>可以怎麼理解</th></tr>
+</thead>
+<tbody>
+<tr><td>route 最上層的 <code>revalidate</code></td><td>整個 route，主要影響 Full Route Cache</td><td>這個頁面多久重做一次</td></tr>
+<tr><td>單支 <code>fetch</code> 的 <code>next.revalidate</code></td><td>那一次請求，直接影響 Data Cache</td><td>這一筆資料多久更新一次</td></tr>
+</tbody>
+</table>
+
+<p>因此，per-fetch 比較像替單筆資料設鬧鐘；page-level 則像替整個頁面設一個比較大的節拍器。當 route 的成品需要重新產生時，裡面的 <code>fetch</code> 仍會依照各自的規則重新抓取資料。</p>
+
+<figure class="lesson-figure"><img src="./time-based-revalidation-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>三種值：數字、<code>0</code>、<code>false</code></h2>
+
+<p>接著看 <code>revalidate</code> 的值。這三種寫法看起來只是不同填法，實際語意卻差很多。</p>
+
+<table>
+<thead>
+<tr><th>值</th><th>意思</th><th>適合的資料</th></tr>
+</thead>
+<tbody>
+<tr><td>數字 <code>N</code></td><td>快取最多存活 N 秒，時間到後再重新產生</td><td>變動有規律、可以接受延遲的內容</td></tr>
+<tr><td><code>0</code></td><td>等於不快取，每次請求都重新產生</td><td>需要即時、不能使用舊資料的內容</td></tr>
+<tr><td><code>false</code></td><td>等於 <code>Infinity</code>，盡可能一直保留</td><td>幾乎不變、長時間保留也沒問題的內容</td></tr>
+</tbody>
+</table>
+
+<h3>數字：設定一個可接受的等待時間</h3>
+
+<p>數字的單位是秒。<code>revalidate: 1200</code> 代表二十分鐘，但它不是「每二十分鐘準時主動去抓資料」。比較精確的說法是：快取滿二十分鐘後，下一次有人請求時，系統才會開始處理更新。</p>
+
+<h3>AI 常犯版：把 <code>0</code> 當成「每隔零秒更新」</h3>
+
+<p><code>0</code> 不是把更新頻率調到最快而已，而是把時間式快取關掉。它的行為很接近我們前面談過的 <code>cache: 'no-store'</code>：資料不進快取，每次請求都重新計算。</p>
+
+<h3>正解版：<code>0</code> 與 <code>false</code> 是兩個相反方向</h3>
+
+<p><code>0</code> 代表「不要保留，這次就重新算」；<code>false</code> 則代表「盡量一直保留」。因此，幾乎不會變的內容可以使用 <code>false</code>。</p>
+
+<p>不過，<code>false</code> 不是保證資料永遠不會被移除。HTTP 快取機制仍可能在很久之後自行淘汰舊資料，所以它比較接近「盡量永久保留」，而不是「永久保證保留」。</p>
+
+<figure class="lesson-figure"><img src="./time-based-revalidation-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>真正的更新時機：不是時間一到就換新</h2>
+
+<p>這是 time-based revalidation 最容易被誤會的地方。</p>
+
+<h3>AI 常犯版：以為第六十秒一到，資料就已經更新</h3>
+
+<p>如果設定 <code>revalidate: 60</code>，直覺上可能會以為：第六十秒一到，伺服器就立刻抓新資料，把快取換掉。</p>
+
+<p>但實際上，Next.js 採用的是「先給舊的，再偷偷重算」的策略。</p>
+
+<h3>正解版：stale-while-revalidate</h3>
+
+<p>當快取過期後，第一個進來的請求仍會先拿到舊資料，使用者不必停下來等待重新抓取。與此同時，系統會在背景抓取新版本，完成後再用新資料覆蓋舊資料。</p>
+
+<p>所以，真正看到新資料的，通常是下一個請求的人。這個模式叫做 <strong>stale-while-revalidate</strong>，也就是「先提供舊資料，同時重新驗證」。</p>
+
+<p>它換來的是速度：使用者幾乎不會遇到「正在重新抓資料」的等待。代價則是資料永遠可能慢一步更新。你設定的秒數，不是「資料保證在幾秒內變新」，而是「快取至少放到這段時間，過期後才有機會開始換新」。</p>
+
+<p>理解這個差別後，就不會再困惑：「我明明設了六十秒，為什麼過了六十秒看到的還是舊資料？」因為第一個請求可能只是觸發背景更新，當下拿到的仍是舊版本。</p>
+
+<figure class="lesson-figure"><img src="./time-based-revalidation-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>什麼都不設定時，預設會怎樣？</h2>
+
+<p>如果完全不寫 <code>revalidate</code>，一個靜態 route 預設仍可能被快取，並以靜態內容的方式處理。換句話說，你沒有明確設定快取，不代表系統就一定不會快取。</p>
+
+<p>這也是許多人第一次遇到「我沒有設快取，資料怎麼還是舊的？」的原因：預設方向本來就是盡量重用已經產生的內容。若這不是你要的行為，就需要主動設定時間式快取，或打開動態行為。</p>
+
+<h2>什麼時候適合使用 time-based revalidation？</h2>
+
+<p>把前面的觀念放在一起看，time-based revalidation 最適合這種資料：</p>
+
+<ul>
+<li>內容確實會變，但變動有一定規律。</li>
+<li>更新不是由某個使用者操作直接觸發。</li>
+<li>晚幾分鐘看到新資料，不會造成錯誤。</li>
+</ul>
+
+<p>例如首頁的熱門文章列表、商品分類頁、公開的統計數字，都可能適合這種方式。這些內容不一定要即時到秒，用時間式更新可以換來較穩定、較好預測的行為，也省去在每個寫入點手動清快取的麻煩。</p>
+
+<p>反過來，如果使用者一儲存資料，就必須立刻在相關頁面看到結果，time-based revalidation 就不夠用了。它的本質是「等時間」，不是「等事件」；寫入完成後，你只能等待下一次過期。</p>
+
+<p>這類場景需要另一種做法：資料變動的那一刻，就主動讓相關快取失效。那正是下一節要介紹的兩支 API：<code>revalidatePath</code> 與 <code>revalidateTag</code>。</p>
+
+<h2>把這個觀念掛回快取地圖</h2>
+
+<blockquote>
+time-based revalidation 是用 <code>revalidate</code> 設定「資料最多放多久」。填數字代表秒數，<code>0</code> 等同不快取，<code>false</code> 則代表盡量一直保留。設定寫在 route 最上層時，管的是整個 route；寫在單支 <code>fetch</code> 裡時，只管那一筆資料。實際更新也不是時間一到就立刻換新，而是先提供舊資料，再於背景重新產生，因此新資料通常會慢一步出現。這種方式適合變化有規律、可以接受短暫延遲的內容。
+</blockquote>
+
+<p>你可以把 time-based revalidation 放在快取地圖上的「自動、定時更新」這一側：它不需要每次寫入都發出通知，只要讓時間成為更新的節拍器。若需求改成「某個動作發生後，頁面必須立刻變新」，那就不能只等鬧鐘響，而要改用下一節的事件式快取失效。</p>
+
+<div class="lesson-nav">
+  <div><a href="./cache-layers-overview.html">← 上一步：多層快取：四層快取各自的壽命與範圍</a></div>
+  <div><a href="./on-demand-revalidation.html">下一步：事件發生就更新：revalidatePath 與 revalidateTag →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="在頁面最上層寫 export const revalidate = 5000，影響範圍是什麼？" data-correct="2" data-explain="page-level 的 revalidate 影響整個 route 的重新產生節奏。">
+  <button class="opt">只影響頁面裡第一支 fetch 的請求</button>
+  <button class="opt">只影響標了 tag 的那些 fetch 請求</button>
+  <button class="opt">影響整個 route 的重新產生節奏</button>
+  <button class="opt">只影響使用者端瀏覽器的換頁速度</button>
+</div>
+<div class="quiz" data-question="revalidate 填 0 大致等於哪一種行為？" data-correct="1" data-explain="填 0 等同不快取，每次請求都重新產生，接近 no-store。">
+  <button class="opt">把資料永久保留在快取裡面不要動</button>
+  <button class="opt">等於不快取，每次請求都重新算</button>
+  <button class="opt">每六十秒自動去來源重新抓一次</button>
+  <button class="opt">只在建置時抓一次，之後永不更新</button>
+</div>
+<div class="quiz" data-question="revalidate 填 false 代表什麼？" data-correct="3" data-explain="false 等於 Infinity，意思是盡可能一直保留快取。">
+  <button class="opt">表示這份資料無論如何都不能快取</button>
+  <button class="opt">表示每秒都去來源重新抓一次資料</button>
+  <button class="opt">表示只快取失敗的回應方便重新試</button>
+  <button class="opt">表示盡可能一直保留快取不主動更新</button>
+</div>
+<div class="quiz" data-question="設了 revalidate: 60，資料過期的第一個請求會發生什麼？" data-correct="1" data-explain="第一時間先回舊資料，背景才去抓新的，所以新資料慢一步出現。">
+  <button class="opt">請求會被卡住直到抓到新資料才回應</button>
+  <button class="opt">先拿到舊資料，背景才去抓新的</button>
+  <button class="opt">直接回傳錯誤要求使用者重新整理</button>
+  <button class="opt">跳過快取直接從頭重新產生整個頁</button>
+</div>
+<div class="quiz" data-question="per-fetch 的 next.revalidate 和 page-level 的 revalidate 差在哪？" data-correct="0" data-explain="per-fetch 只管那一次請求，page-level 管整個 route。">
+  <button class="opt">一個只管單支請求，一個管整個 route</button>
+  <button class="opt">一個只對 client 生效，一個對 server 生效</button>
+  <button class="opt">一個只能在開發用，一個只能在正式用</button>
+  <button class="opt">一個是秒為單位，一個是毫秒為單位</button>
+</div>
+<div class="quiz" data-question="下列哪一種情境最不適合用 time-based revalidation？" data-correct="3" data-explain="使用者一存檔就要馬上看到新資料，屬於事件驅動，時間式等不了。">
+  <button class="opt">首頁的熱門文章排行榜列表資料</button>
+  <button class="opt">部落格的文章列表與分類頁面</button>
+  <button class="opt">公開的商品目錄與分類瀏覽頁</button>
+  <button class="opt">使用者存檔後必須立刻看到的資料</button>
+</div>
+
+<div class="footer">
+  <p>next-js · Revalidation 與多層快取 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

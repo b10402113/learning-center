@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>挑渲染策略：內容多久變一次、要不要即時</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>挑選渲染策略：內容多久變一次，要不要即時更新？</h1>
+<p class="meta">Step 3/5 · 執行環境與渲染策略：Node / Edge、SSG / ISR / SSR / PPR</p>
+
+<h2>先想像你正在決定一頁怎麼送出去</h2>
+<p>同樣是一個 Next.js 頁面，有些內容幾個月都不會變，有些資料卻可能每秒更新；有些區塊對所有人都一樣，有些則是登入後才看得到的個人資料。把它們全部用同一種方式產生，就像不管食材熟不熟，都只用同一個火候：不是浪費資源，就是把內容煮錯。</p>
+
+<p>這一節要處理的決定很明確：一個頁面該用 SSG、ISR、SSR，還是 PPR？判斷的兩股拉力是<strong>內容多久變一次</strong>，以及<strong>是否需要即時、甚至秒級更新</strong>。</p>
+
+<h2>學習目標</h2>
+<p>學完後，你應該能依照「這頁每次請求的內容是否相同」與「是否需要秒級更新」這兩個問題，選出 SSG、ISR、SSR 或 PPR，說明選擇理由，也能看出 AI 一律使用預設 SSG 或一律使用 SSR 時，問題會出在哪裡。</p>
+
+<h2>先攤開選項：四種策略怎麼取捨？</h2>
+
+<p>上一節已經介紹過四種策略的機制。現在先不要背名詞，把它們放在同一張表裡，看清楚每一種策略要付出的代價：</p>
+
+<table>
+<thead>
+<tr><th>策略</th><th>產生時間</th><th>內容新鮮度</th><th>server 負載</th><th>最適合</th></tr>
+</thead>
+<tbody>
+<tr><td>SSG</td><td>build time</td><td>上線後固定，內容變更時需要重新建置</td><td>最低</td><td>幾乎不變的內容</td></tr>
+<tr><td>ISR</td><td>build time，之後可以再次生成</td><td>依時間或需求更新</td><td>低到中</td><td>偶爾變動的內容</td></tr>
+<tr><td>SSR</td><td>每次請求</td><td>永遠取得最新內容</td><td>最高</td><td>即時、因人而異的內容</td></tr>
+<tr><td>PPR</td><td>外殼在 build time 產生，動態內容再串流</td><td>靜態部分固定，動態部分即時</td><td>中</td><td>同一頁混合靜態與動態內容</td></tr>
+</tbody>
+</table>
+
+<p>這張表可以先濃縮成一個方向感：<strong>內容越固定，就越靠近 SSG；內容越即時、越因人而異，就越靠近 SSR。</strong> 如果一頁裡同時有這兩種內容，PPR 通常更符合實際情況。</p>
+
+<figure class="lesson-figure"><img src="./choosing-a-rendering-strategy-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>先比較兩種常見寫法</h2>
+
+<p><strong>AI 常犯版：所有頁面都套預設 SSG。</strong></p>
+<p>這種寫法看起來簡單，也能讓頁面很快送出，但只要頁面包含登入後的使用者資料，就可能把某個人的內容快取住，接著原封不動送給另一個人。這不是單純「資料晚一點更新」而已，而是正確性與安全問題。</p>
+
+<p><strong>正解版：先看資料的變動方式，再選渲染策略。</strong></p>
+<p>幾乎不變的內容用 SSG；偶爾變動的內容用 ISR；需要即時或因人而異的內容用 SSR；同一頁混合靜態與動態區塊時，則考慮 PPR。策略不是頁面的裝飾，而是跟資料本質綁在一起的選擇。</p>
+
+<h2>兩個判別問句</h2>
+
+<p>Next.js 官方的選擇流程，可以化成兩個問題。請把它們當成做決定時的分岔路口：</p>
+
+<ol>
+<li><strong>這個頁面或內容，每次請求顯示的資訊都一樣嗎？</strong> 如果是，使用 SSG；如果不是，進入下一題。</li>
+<li><strong>這個頁面或內容需要頻繁更新，甚至可能每秒都在變嗎？</strong> 如果是，使用 SSR；如果不是，使用 ISR。</li>
+</ol>
+
+<p>這套問法的好處是，它不會把你帶進「哪種技術比較潮」的討論，而是直接回到資料本身：資料是否固定？多久可以接受一次更新？</p>
+
+<figure class="lesson-figure"><img src="./choosing-a-rendering-strategy-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>如果同一個頁面同時有「幾乎不變」和「隨時在變」的區塊，就不要硬把整頁塞進 SSG 或 SSR。這時可以考慮 PPR，先送出靜態外殼，再補上動態區塊。</p>
+
+<h2>把判斷套進真實情境</h2>
+
+<p>以高流量的電商平台為例。它的頁面通常不是一種資料從頭撐到底，而是好幾種不同速度的資料拼在一起：</p>
+
+<ul>
+<li>商品詳情頁的標題、描述、圖片：幾乎不變，適合用 <strong>SSG</strong>，甚至可以放到 CDN。</li>
+<li>價格、庫存、銷量：會隔一段時間變動，適合用 <strong>ISR</strong>，並設定合理的重新驗證時間。</li>
+<li>購物車、推薦、個人化區塊：每位使用者都不同，而且需要即時資料，適合用 <strong>SSR</strong>。</li>
+<li>如果以上區塊都在同一頁：使用 <strong>PPR</strong>，讓靜態外殼先送達，動態區塊再串流補上。</li>
+</ul>
+
+<figure class="lesson-figure"><img src="./choosing-a-rendering-strategy-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>再看兩個對照案例：</p>
+
+<p>登入後的會員儀表板內容因人而異，也需要即時更新，因此答案偏向 SSR。如果想讓儀表板外框保有較快的回應速度，可以考慮 PPR。</p>
+
+<p>相反地，一篇發布後幾乎不會修改的技術文章，適合使用 SSG。文章列表則可能偶爾增加新文章，因此可以讓列表使用 ISR。</p>
+
+<h2>反例：什麼時候規則會翻轉？</h2>
+
+<p>判準不是背熟後就能無條件套用。以下幾種情況，正是 AI 很容易判斷錯的地方。</p>
+
+<p><strong>反例一：SSG 最快，不代表永遠該用 SSG。</strong></p>
+<p>需要登入、內容因人而異的頁面，如果使用 SSG，就可能把 A 使用者的資料快取起來，再送給 B 使用者。這時候問題已經不是效能，而是內容正確性與安全性。速度再快，資料送錯人仍然是失敗。</p>
+
+<p><strong>反例二：SSR 永遠最新，不代表它是萬靈丹。</strong></p>
+<p>行銷頁或文件頁如果根本不會變，卻每次請求都使用 SSR，就等於不斷重跑沒有必要的工作，也讓快取失去作用。它確實能保證內容最新，但如果內容本來就不需要更新，這份「最新」並沒有帶來價值。</p>
+
+<p><strong>反例三：runtime 不是渲染策略。</strong></p>
+<p>選擇 Edge runtime，不會自動讓頁面變成 SSG；選擇 SSG，也不會自動決定程式要跑在 Edge。這是兩條不同的軸：</p>
+
+<ul>
+<li>渲染策略決定<strong>內容什麼時候產生</strong>。</li>
+<li>runtime 決定<strong>程式在哪個執行環境運作</strong>。</li>
+</ul>
+
+<p>把兩者混在一起，就可能寫出「使用 Edge，所以這是 SSG」或「用 Edge 加速 SSR」這類看似合理、實際上沒有回答渲染策略的判斷。</p>
+
+<p><strong>反例四：ISR 的重新驗證時間不能隨便填。</strong></p>
+<p>如果資料半小時才變一次，卻把 <code>revalidate</code> 設得非常短，就會頻繁重新生成，失去 ISR 原本想節省資源的意義。設得太長，使用者又可能看到明顯過期的內容。</p>
+
+<p>重新驗證時間應該對齊一個實際問題：<strong>你最多能接受資料舊多久？</strong> 這個答案才是設定數值的依據，而不是隨手填一個看起來合理的數字。</p>
+
+<h2>可操作的決策規則</h2>
+
+<p>做決定時，可以依序檢查下面幾項：</p>
+
+<ul>
+<li>每次請求的內容都一樣嗎？是的話，用 <strong>SSG</strong>。</li>
+<li>需要秒級即時更新嗎？是的話，用 <strong>SSR</strong>。</li>
+<li>內容介於兩者之間、只是偶爾變動嗎？用 <strong>ISR</strong>，並依照資料能容忍的過期時間設定重新驗證。</li>
+<li>同一頁同時有靜態與動態區塊嗎？考慮使用 <strong>PPR</strong>。</li>
+<li>渲染策略選定後，再另外判斷程式碼該跑在 Node 還是 Edge；這是下一節要處理的問題。</li>
+</ul>
+
+<h2>小結</h2>
+
+<blockquote>
+選渲染策略時，先問兩件事：每次請求的內容都一樣嗎？需要秒級更新嗎？前者指向 SSG，後者指向 SSR；如果內容會變、但不需要即時更新，就使用 ISR。同一頁同時混有靜態與動態區塊時，則考慮 PPR。最常見的錯誤，是把因人而異的內容用 SSG 快取、把永不改變的頁面用 SSR 硬算，以及把 runtime 誤當成渲染策略。
+</blockquote>
+
+<p>到這裡，你已經能處理「內容什麼時候產生」這條軸。接下來還有另一個決定：同一段 route，究竟該讓它在功能完整的 Node 上執行，還是搬到離使用者更近的 Edge？</p>
+
+<div class="lesson-nav">
+  <div><a href="./server-rendering-strategies.html">← 上一步：三種伺服器渲染策略：SSG、ISR、SSR 與 PPR</a></div>
+  <div><a href="./node-vs-edge-runtime.html">下一步：挑 runtime：Node 還是 Edge →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="選擇渲染策略時，第一個該問的問題是什麼？" data-correct="1" data-explain="先問內容每次請求是否相同；相同就用 SSG，不同再往下判斷。">
+  <button class="opt">這個頁面總共花多少錢</button>
+  <button class="opt">每次請求的內容是否相同</button>
+  <button class="opt">團隊比較喜歡哪一種技術</button>
+  <button class="opt">這個頁面用了幾個元件</button>
+</div>
+<div class="quiz" data-question="內容偶爾變動、但不需要即時更新，最適合哪一種策略？" data-correct="2" data-explain="落在 SSG 與 SSR 之間的，就是 ISR，並搭配合適的重新驗證時間。">
+  <button class="opt">SSG</button>
+  <button class="opt">SSR</button>
+  <button class="opt">ISR</button>
+  <button class="opt">CSR</button>
+</div>
+<div class="quiz" data-question="把登入後、內容因人而異的頁面用 SSG，會造成什麼問題？" data-correct="3" data-explain="SSG 會把第一個使用者的內容快取起來，可能讓其他使用者看到不屬於自己的資料。">
+  <button class="opt">頁面會完全無法開啟</button>
+  <button class="opt">SEO 排名會立刻上升</button>
+  <button class="opt">伺服器負載會變得最高</button>
+  <button class="opt">可能把別人的資料顯示給你</button>
+</div>
+<div class="quiz" data-question="為什麼不該把永遠不變的行銷頁改成 SSR？" data-correct="0" data-explain="內容不會變卻每次重新運算，只是白費 server 資源、讓快取失效。">
+  <button class="opt">每次重算並不會帶來任何好處</button>
+  <button class="opt">SSR 不支援顯示圖片與文字</button>
+  <button class="opt">SSR 會讓頁面無法被搜尋引擎找到</button>
+  <button class="opt">SSR 只能用在有登入的頁面</button>
+</div>
+<div class="quiz" data-question="「選 Edge runtime」和「選 SSG」這兩件事的關係是什麼？" data-correct="2" data-explain="runtime 與渲染策略是兩條不同的軸，選一個不會自動決定另一個。">
+  <button class="opt">選 Edge 就等於選了 SSG</button>
+  <button class="opt">兩者只能同時設定，不能分開</button>
+  <button class="opt">它們是兩條不同的軸，互不決定</button>
+  <button class="opt">選 SSG 會強制切到 Node runtime</button>
+</div>
+<div class="quiz" data-question="ISR 的重新驗證時間該怎麼決定？" data-correct="1" data-explain="應對齊「能接受資料最多舊多久」，設太短失去意義、設太長又太舊。">
+  <button class="opt">一律設成最大值最保險</button>
+  <button class="opt">對齊能接受資料最多舊多久</button>
+  <button class="opt">跟頁面的字數成正比</button>
+  <button class="opt">隨便填一個數字就好</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 執行環境與渲染策略：Node / Edge、SSG / ISR / SSR / PPR · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

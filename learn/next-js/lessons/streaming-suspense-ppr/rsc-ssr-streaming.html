@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>從整頁等待到串流：RSC、SSR 與 Suspense 的角色</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>從整頁等待到串流：RSC、SSR 與 Suspense 的角色</h1>
+<p class="meta">Step 1/4 · 串流、Suspense、PPR 與 after()</p>
+
+<h2>學習目標</h2>
+<p>這一節會帶你看懂：傳統 SSR 為什麼常常要等整頁完成，串流與選擇性 hydration 如何讓畫面更早出現、更早互動，以及 Suspense 在串流與 PPR 中究竟負責哪一段工作。</p>
+
+<h2>先看整張地圖：為什麼一個慢區塊會拖住整頁？</h2>
+
+<p>想像你打開一個問題討論區的詳情頁。問題標題和內文早就從資料庫拿到了，但畫面還是白白的，一直轉圈。打開 DevTools 後才發現，右側的投票狀態正在等待登入 session，下面的答案列表還在查資料庫，側邊欄也正在計算統計資料。</p>
+
+<p>這些區塊裡只要有一塊比較慢，整個頁面就可能陪它一起等。就算你已經知道怎麼在 RSC 裡抓資料，也避開了 waterfall 與 N+1，只要頁面上還有一個必須等待第三方 API 或權限判斷的區塊，傳統渲染方式仍然可能讓使用者先看到一片空白。</p>
+
+<p>這一節要處理的問題很集中：當頁面只有部分區塊比較慢時，Next.js 能不能讓快的內容先出現，慢的內容稍後再補上？關鍵答案是<strong>串流（streaming）</strong>與 <strong>Suspense</strong>。更進一步的 <strong>PPR（Partial Prerendering，部分預渲染）</strong>，則把這個想法推得更遠。</p>
+
+<figure class="lesson-figure"><img src="./rsc-ssr-streaming-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>先分清楚三層：SSR、RSC 與 Suspense</h2>
+
+<p>這幾個名詞常常一起出現，很容易被混成同一件事。可以先把它們想成三個不同位置的角色：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>概念</th>
+      <th>主要處理什麼</th>
+      <th>可以怎麼理解</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>RSC</td>
+      <td>在伺服器上抓資料、計算結果</td>
+      <td>負責準備元件內容，不會送到瀏覽器做 hydration</td>
+    </tr>
+    <tr>
+      <td>SSR</td>
+      <td>在伺服器上把元件渲染成 HTML</td>
+      <td>把畫面先做成瀏覽器看得懂的 HTML</td>
+    </tr>
+    <tr>
+      <td>Suspense</td>
+      <td>切出可能較慢的子樹</td>
+      <td>替慢區塊畫出邊界，先顯示 fallback，再補上真正內容</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><strong>AI 常犯版</strong>會把 RSC 和 SSR 當成同義詞，好像只要「在伺服器渲染」就全都叫 SSR。<strong>正解版</strong>則要分開看：RSC 只在伺服器上執行，負責抓資料、計算結果，最後交給前端一段序列化的描述；SSR 則是在伺服器上產生 HTML，送到瀏覽器後還需要 hydration，才能接上事件與狀態。</p>
+
+<p>Next.js 的價值，就是把這些階段接在一起：頁面可以先由 RSC 在伺服器上組合，再由 SSR 產生 HTML。接下來談串流時，焦點會放在「RSC 渲染出來的內容如何分段送到瀏覽器」；談選擇性 hydration 時，則是在看「HTML 到了瀏覽器後，React 如何分段接手」。兩者處理的是不同階段，但都能透過 Suspense 來切出界線。</p>
+
+<h2>傳統 SSR：最慢的區塊決定整頁速度</h2>
+
+<p>當瀏覽器送出請求，傳統的 server-side rendering（SSR）會在伺服器上渲染整個頁面，組出完整的 HTML 字串。在這份 HTML 完成以前，瀏覽器通常拿不到可顯示的完整內容。</p>
+
+<p>等頁面送達後，瀏覽器才下載 JavaScript，接著開始 <strong>hydration（注水）</strong>：React 會把伺服器產生的靜態 HTML 接上事件與狀態，讓頁面真正能互動。</p>
+
+<p><strong>AI 常犯版</strong>會把這件事想成「伺服器只要先產生一點 HTML，瀏覽器就能自由使用整頁」。但傳統 SSR 的關鍵限制是：整份頁面往往要先準備好，瀏覽器才收到它。頁面中最慢的區塊等多久，整頁就可能跟著等多久。</p>
+
+<p>這就像訂一桌合菜。廚房堅持所有菜都煮好才一起上桌，其中一道佛跳牆燉了三小時，其他已經炒好的菜也只能留在廚房裡慢慢變涼。<strong>正解版</strong>會改成「做好一道，就先端一道」：不必等最慢的那道菜，客人也能先吃到已完成的部分。</p>
+
+<figure class="lesson-figure"><img src="./rsc-ssr-streaming-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>串流：做好一塊，就送一塊</h2>
+
+<p>串流的想法很直接：不要等整頁完成，而是邊渲染、邊把已完成的內容送出去。伺服器開始執行元件後，只要某個區塊準備好了，就先以 HTML 的形式串流給瀏覽器；還沒完成的區塊則先保留，完成後再補上。</p>
+
+<p>這樣一來，使用者可以先看到問題標題、內文或其他已經準備好的內容，而不是只能盯著一整片空白。串流不是把慢區塊變快，而是避免慢區塊把所有內容綁在一起。</p>
+
+<p>它對網路狀況也比較有韌性。可以把串流想成一條塞車的公路：道路沒有空間時，伺服器就暫停送出；等有空間了，再繼續傳送下一段。與其一次把所有內容硬塞出去，不如讓伺服器與瀏覽器按照彼此能處理的速度逐段傳遞。</p>
+
+<h2>選擇性 hydration：先到的區塊先互動</h2>
+
+<p>傳統 hydration 比較像是「整棵樹到齊後，從頭到尾一次注水」。如果頁面上有一個很大的元件，而它需要的 JavaScript 還沒下載完成，其他較小的元件也可能只能一起等待，整個頁面都還不能互動。</p>
+
+<p>React 18 的<strong>選擇性 hydration（selective hydration）</strong>改變了這個規則。React 不必等所有內容都到齊，而是可以收到一塊，就先把那一塊 hydration 起來。哪個區塊先準備好，哪個區塊就能先開始互動。</p>
+
+<p><strong>AI 常犯版</strong>會把選擇性 hydration 說成「所有內容同時變成互動」。<strong>正解版</strong>是：不同區塊可以依照抵達與準備完成的時間分段接手。至於 React 如何知道哪些地方可能比較慢、可以先跳過？這就是 Suspense 負責標記的範圍。</p>
+
+<h2>Suspense：替慢區塊畫出邊界</h2>
+
+<p><strong>Suspense</strong> 是一個 React 元件，用來替某個子樹畫出一條清楚的界線。當你知道某個元件可能需要等待，就可以用 Suspense 把它包起來，並提供一個 <code>fallback</code>：真正內容準備好以前，先顯示的替代畫面。</p>
+
+<p>伺服器渲染時遇到 Suspense，會先把 fallback 放進 HTML 並送出，接著繼續處理其他部分。等慢元件完成後，真正內容再透過串流補上；前端則會用一段腳本，把畫面上的 fallback 換成正式內容。</p>
+
+<p><strong>AI 常犯版</strong>會把 Suspense 當成單純的載入動畫。<strong>正解版</strong>是：載入畫面只是 fallback 的一種呈現方式，Suspense 真正重要的工作，是把可能等待的子樹切出來，讓其他內容不必跟著一起停下來。</p>
+
+<figure class="lesson-figure"><img src="./rsc-ssr-streaming-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>在 DevFlow 的問題詳情頁裡，投票元件需要先知道目前登入者是否投過票。這個判斷要呼叫 server action，因此可以把 <code>Votes</code> 放進 Suspense，並指定 <code>Loading...</code> 作為 fallback：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/app/(root)/questions/[id]/page.tsx"><code>&lt;Suspense fallback={&lt;div&gt;Loading...&lt;/div&gt;}&gt;
+  &lt;Votes
+    targetType="question"
+    upvotes={question.upvotes}
+    downvotes={question.downvotes}
+    targetId={question._id}
+    hasVotedPromise={hasVotedPromise}
+  /&gt;
+&lt;/Suspense&gt;</code></pre>
+
+<p>這段程式的邊界很清楚：問題的標題、內文、標籤等已經拿到資料的部分，可以先送出；投票狀態還沒準備好時，先顯示 fallback。使用者不必因為投票區塊還在等待，就連問題本身也看不到。</p>
+
+<h2>PPR：靜態外殼裡的動態缺口</h2>
+
+<p>如果說串流是「邊做邊送」，那麼 <strong>PPR（Partial Prerendering，部分預渲染）</strong>就是把頁面更細緻地拆開。整頁會被分成一個<strong>靜態外殼（static shell）</strong>與幾個<strong>動態的洞</strong>。</p>
+
+<p>靜態外殼是不會隨請求變動的部分，可以在建置時先準備好，再直接從 CDN 送出。動態的洞則是用 Suspense 標記出來的區塊，等請求進來後，才由伺服器即時算好並串流填入。</p>
+
+<figure class="lesson-figure"><img src="./rsc-ssr-streaming-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p><strong>AI 常犯版</strong>會把渲染策略想成二選一：整頁靜態，或整頁動態。<strong>正解版</strong>則是把界線畫在頁面內部：同一個頁面可以同時擁有靜態外殼與動態區塊，不必因為幾個區塊需要即時資料，就讓整頁每次請求都重新渲染。</p>
+
+<p>當然，動態的洞要切在哪裡，取決於你把 Suspense 邊界放在哪裡。邊界放得好，快的內容就能先出現；邊界放得太大，可能又把不必等待的內容一起包住。這也是下一節要實際動手看的部分。</p>
+
+<h2>把這些概念接回同一條時間軸</h2>
+
+<blockquote>
+傳統 SSR 是整頁生成完才送出，因此最慢的區塊會決定整頁的等待時間。串流讓伺服器做好一塊、送出一塊；選擇性 hydration 讓瀏覽器收到一塊、就能先接手一塊。Suspense 則是標記「這裡可能比較慢，先顯示 fallback」的邊界。PPR 再把這個想法往前推：先送出靜態外殼，再用 Suspense 串流填滿動態的洞。
+</blockquote>
+
+<p>現在可以把它們掛在同一條時間軸上理解：請求進來後，靜態外殼與已完成的內容先送出；可能較慢的區塊由 Suspense 標成缺口，先顯示 fallback；等資料與元件準備完成，正式內容再串流補上，前端也在適當時機接手互動。</p>
+
+<p>所以，這些概念不是互相競爭的替代品。RSC 負責在伺服器準備內容，SSR 負責產生 HTML，串流負責分段傳送，選擇性 hydration 負責分段接手，而 Suspense 負責畫出「哪些地方可以先等」的界線。下一節會把這條關係變成實際的元件切分，觀察 fallback 何時出現，以及正式內容何時取代它。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./suspense-boundaries.html">下一步：用 Suspense 切出可串流的邊界 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="傳統 SSR 的主要等待問題是什麼？" data-correct="2" data-explain="整份 HTML 要全部生成完才能送出，最慢的區塊決定整頁等待時間。">
+  <button class="opt">瀏覽器要先下載完所有圖片才顯示文字</button>
+  <button class="opt">伺服器一定要連上資料庫才能回應請求</button>
+  <button class="opt">整份 HTML 都完成才送出，最慢區塊決定等待</button>
+  <button class="opt">使用者一定要手動重新整理才會看到內容</button>
+</div>
+<div class="quiz" data-question="關於 RSC 與 SSR，下列哪個說法正確？" data-correct="1" data-explain="RSC 只在伺服器執行、不會在瀏覽器 hydration；SSR 則會產生 HTML 並在瀏覽器 hydration。">
+  <button class="opt">RSC 與 SSR 是同一件事的兩種不同叫法</button>
+  <button class="opt">RSC 只在伺服器執行，不會在瀏覽器 hydration</button>
+  <button class="opt">RSC 在瀏覽器執行，SSR 只在伺服器執行</button>
+  <button class="opt">兩者都必須在瀏覽器上重新執行一次邏輯</button>
+</div>
+<div class="quiz" data-question="串流（streaming）的核心想法是什麼？" data-correct="0" data-explain="伺服器邊渲染邊送出，做好一塊就送一塊，而不是等整頁完成。">
+  <button class="opt">做好一塊內容就立刻送給瀏覽器</button>
+  <button class="opt">把所有內容壓縮成一個檔案再送出</button>
+  <button class="opt">讓瀏覽器自己決定要先下載哪些內容</button>
+  <button class="opt">先把整頁快取起來隔天再送給使用者</button>
+</div>
+<div class="quiz" data-question="選擇性 hydration 讓 React 可以做到什麼？" data-correct="3" data-explain="收到某一塊內容就先把那塊 hydration，不必等大元件到齊。">
+  <button class="opt">跳過 hydration 直接用伺服器產生 HTML</button>
+  <button class="opt">把所有元件的 JavaScript 一次下載完</button>
+  <button class="opt">讓伺服器代替瀏覽器執行所有事件</button>
+  <button class="opt">收到一塊內容就先把那一塊 hydration</button>
+</div>
+<div class="quiz" data-question="Suspense 在串流流程裡扮演什麼角色？" data-correct="2" data-explain="它標出可能慢的子樹，先顯示 fallback，等內容好了再補上。">
+  <button class="opt">負責把慢的元件自動平行化執行</button>
+  <button class="opt">負責把資料快取起來避免重複查詢</button>
+  <button class="opt">標出可能慢的子樹並先顯示 fallback</button>
+  <button class="opt">負責把靜態頁面預先部署到 CDN</button>
+</div>
+<div class="quiz" data-question="PPR 的「靜態外殼加動態的洞」是什麼意思？" data-correct="1" data-explain="整頁可一部分靜態先送，動態區塊用 Suspense 標出、之後再串流填滿。">
+  <button class="opt">整頁都改成靜態，動態資料全部交給瀏覽器抓</button>
+  <button class="opt">靜態部分先送，動態區塊用 Suspense 串流填滿</button>
+  <button class="opt">整頁都改成動態，靜態資源等請求時才算</button>
+  <button class="opt">把動態頁面預先渲染成靜態檔案再部署</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 串流、Suspense、PPR 與 after() · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

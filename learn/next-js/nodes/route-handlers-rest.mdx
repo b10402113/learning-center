@@ -1,0 +1,94 @@
+---
+id: route-handlers-rest
+title: Route Handlers 與 REST API 設計
+subject: next-js
+tier: 2
+order: 12
+status: content-written
+goal: 能用 route.ts 建出 resource-oriented 的 REST 端點（動態 segment、params vs searchParams、狀態碼），並判斷什麼時候該用 route handler、什麼時候 server action 更合適。
+sources:
+  - "[[sources/next-js/20261004/EBOOK.pdf#Backend]]"
+  - "[[sources/next-js/20261004/EBOOK.pdf#Nested Routes]]"
+  - "[[sources/next-js/20261004/EBOOK.pdf#URL Query Parameters]]"
+  - "[[sources/next-js/20261004/EBOOK.pdf#Server Actions]]"
+  - "[[sources/next-js/20261004/EBOOK.pdf#Limitations]]"
+  - "[[sources/next-js/20261004/069 -  Introduction to Route Handlers^.en.srt#Introduction to Route Handlers]]"
+  - "[[sources/next-js/20261004/070 -  Create & Read User Routes.en.srt#Create & Read User Routes]]"
+  - "[[sources/next-js/20261004/076 -  API Fetch Handler.en.srt#API Fetch Handler]]"
+  - "[[sources/next-js/20261004/HTML/035 -  Common API Things to Keep in Mind.html#Common API Things to Keep in Mind]]"
+  - "[[sources/next-js/20261004/jsmasterypro_devflow/app/api/users/route.ts]]"
+  - "[[sources/next-js/20261004/jsmasterypro_devflow/app/api/users/[id]/route.ts]]"
+  - "[[sources/next-js/20261004/jsmasterypro_devflow/lib/validations.ts]]"
+  - "[[sources/next-js/20261004/jsmasterypro_devflow/types/global.d.ts]]"
+steps:
+  - id: why-route-handlers
+    order: 1
+    type: concept
+  - id: dynamic-segments-and-params
+    order: 2
+    deps:
+      - why-route-handlers
+    type: concept
+  - id: response-shapes-and-status-codes
+    order: 3
+    deps:
+      - dynamic-segments-and-params
+    type: reference
+  - id: build-validated-crud-route
+    order: 4
+    deps:
+      - response-shapes-and-status-codes
+    type: procedure
+  - id: route-handler-vs-server-action
+    order: 5
+    deps:
+      - build-validated-crud-route
+    type: decision
+prerequisites:
+  - learn/next-js/nodes/file-based-routing-layouts
+  - learn/next-js/nodes/server-data-fetching
+created: 2026-10-04
+updated: 2026-10-04
+---
+
+# Route Handlers 與 REST API 設計
+
+## Learning goal
+
+能用 route.ts 建出 resource-oriented 的 REST 端點（動態 segment、params vs searchParams、狀態碼），並判斷什麼時候該用 route handler、什麼時候 server action 更合適。
+
+## Steps
+
+閱讀順序（deps 決定誰必須先出現）：
+
+1. [[learn/next-js/nodes/route-handlers-rest/why-route-handlers|route.ts 就是你的後端：檔案式 API 端點]] — 理解「資料夾 + route.ts 就是一個端點」的檔案式後端，以及相對 Express 省下的設定。
+2. [[learn/next-js/nodes/route-handlers-rest/dynamic-segments-and-params|動態 segment 與 params：路徑參數 vs 查詢參數]] — 用 `[id]` 吃下不確定的路徑，並分辨 `params` 與 `searchParams` 各該用在哪（需先完成 step 1）。
+3. [[learn/next-js/nodes/route-handlers-rest/response-shapes-and-status-codes|狀態碼與 response 信封：端點對外的合約]] — 查閱狀態碼語意與一致的 response 信封，作為後面實作的詞彙（需先完成 step 2）。
+4. [[learn/next-js/nodes/route-handlers-rest/build-validated-crud-route|一步步建出有驗證的 CRUD route]] — 照著 DevFlow 的 users route，做出有 Zod 驗證、重複檢查與集中錯誤處理的端點（需先完成 step 3）。
+5. [[learn/next-js/nodes/route-handlers-rest/route-handler-vs-server-action|要端點還是要 action？route handler vs server action]] — 用可測試的判準，決定何時用 route handler、何時 server action 更好（需先完成 step 4）。
+
+## Lesson
+
+Next.js 把後端收進了同一個專案：`app/` 底下開一個資料夾、放進一個 `route.ts`，那個資料夾的名稱就變成 API 路徑，資料夾裡匯出的 `GET`、`POST`、`PUT`、`DELETE` 等函式就是對應 HTTP method 的處理器。中間不需要另外安裝 Express、開一個 server、管理一個埠——這是「檔案式後端」，和 App Router 的檔案式路由是同一套心智模型，只差在檔案名稱換成 `route.ts`。
+
+掌握端點之後，接著要處理「不確定的路徑」。`app/api/users/[id]/route.ts` 裡的 `[id]` 是動態 segment，會把 `/api/users/123` 的 `123` 交給 `params`；而網址問號後面的過濾、排序、分頁條件，則從 `request.nextUrl.searchParams` 讀。前者是路徑的一部分、通常是必填的資源識別；後者是選填的查詢選項——搞混這兩者，是 AI 產出的 API 最常見的設計錯誤之一。
+
+端點對外是一份合約，合約的兩個重點是狀態碼與 response 形狀。建立成功回 `201`、刪除成功回 `204`、找不到回 `404`、驗證失敗回 `400`、非預期錯誤回 `500`；回應則統一包成一層信封，讓前端永遠知道要去哪裡拿資料、去哪裡讀錯誤。這套規則讓每個資源端點長得一模一樣，也讓錯誤處理可以集中寫一次。
+
+最後是真正動手：照著 DevFlow 的 `app/api/users/route.ts`，把 request body 解析、Zod 驗證、重複鍵檢查、狀態碼、以及 `catch` 裡的集中錯誤處理串成一條龍。走完之後，你拿到的不只是「會寫 route handler」，而是能判斷一個寫入到底該做成對外的 REST 端點，還是用 server action 就好——這正是 node 的核心目標。
+
+## Sources
+
+- [[sources/next-js/20261004/EBOOK.pdf#Backend]]
+- [[sources/next-js/20261004/EBOOK.pdf#Nested Routes]]
+- [[sources/next-js/20261004/EBOOK.pdf#URL Query Parameters]]
+- [[sources/next-js/20261004/EBOOK.pdf#Server Actions]]
+- [[sources/next-js/20261004/EBOOK.pdf#Limitations]]
+- [[sources/next-js/20261004/069 -  Introduction to Route Handlers^.en.srt#Introduction to Route Handlers]]
+- [[sources/next-js/20261004/070 -  Create & Read User Routes.en.srt#Create & Read User Routes]]
+- [[sources/next-js/20261004/076 -  API Fetch Handler.en.srt#API Fetch Handler]]
+- [[sources/next-js/20261004/HTML/035 -  Common API Things to Keep in Mind.html#Common API Things to Keep in Mind]]
+- [[sources/next-js/20261004/jsmasterypro_devflow/app/api/users/route.ts]]
+- [[sources/next-js/20261004/jsmasterypro_devflow/app/api/users/[id]/route.ts]]
+- [[sources/next-js/20261004/jsmasterypro_devflow/lib/validations.ts]]
+- [[sources/next-js/20261004/jsmasterypro_devflow/types/global.d.ts]]

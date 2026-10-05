@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Model、Harness、Tools 與 Execution Environment</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Model、Harness、Tools 與 Execution Environment：把 Agent 拆成四層</h1>
+<p class="meta">Step 2/4 · Loop Engineering 基礎與四層堆疊</p>
+
+<h2>學習目標</h2>
+<p>學完這一節，你應該能分清楚 Model、Harness、Tools 與 Execution Environment 各自負責什麼，也能說明為什麼可靠性來自清楚的邊界，而不是只靠模型夠聰明。</p>
+
+<h2>先問一個問題：出事的時候，到底是哪一層壞了？</h2>
+
+<p>上一節把 agent 看成一台受控執行器，按照 plan → act → observe → improve 的節奏運作。但實際執行時，它可能改錯檔案、選錯工具，甚至卡在迴圈裡停不下來。</p>
+
+<p>這時如果只說「模型太笨」，其實還不能幫助我們除錯。因為真正需要知道的是：是模型判斷錯了？是控制 loop 的程式有問題？是工具契約不清楚？還是執行環境沒有提供足夠的隔離與限制？</p>
+
+<p>要精準回答這些問題，就要把 agent 拆成幾個職責清楚的層次。每一層都要說明三件事：它被允許做什麼、必須回傳什麼，以及失敗時該怎麼處理。邊界畫清楚之後，可靠性就不再只是「希望模型每次都做對」，而是能靠系統設計把風險關在範圍內。</p>
+
+<h2>四層各司其職</h2>
+
+<p>可靠的 agent 不是一顆單獨產生回應的模型。它是幾層元件一起運作的 loop。可以把它想成一個團隊：有人負責思考，有人負責控場，有人負責執行外部動作，還有人負責管理實際工作的場地。</p>
+
+<ul>
+<li><strong>Model（模型）</strong>提供推理與語言能力。它接收組好的 prompt，判斷下一步想做什麼，再以結構化形式輸出決定。</li>
+<li><strong>Harness（外殼／控制層）</strong>負責控制整個 loop：保存狀態、套用政策、決定是否繼續。它會把指令、context、限制與對話歷史組成 prompt，也會在收到觀察結果後判斷下一步。</li>
+<li><strong>Tools（工具）</strong>提供真正對外的能力，例如呼叫 API、查詢資料庫、透過 MCP 連接外部系統，或使用 LSP 取得程式碼理解。</li>
+<li><strong>Execution Environment（執行環境）</strong>是程式碼與工具動作實際發生的地方，包含隔離、資源控制、機密邊界與日誌等條件。</li>
+</ul>
+
+<p>這四層的核心不是把名詞分得漂亮，而是做到<strong>職責分離</strong>。每一層都有自己的契約，系統才知道哪些事情可以交給它，哪些事情不能交給它。這也讓「一次聰明的模型呼叫」變成一套可以被管理、觀察與限制的工程系統。</p>
+
+<figure class="lesson-figure"><img src="./four-layer-stack-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>一次 loop 迭代怎麼發生？</h2>
+
+<p>把四層放進同一條時間軸，可以看到一輪 loop 大致會經過以下過程：</p>
+
+<ol>
+<li>Harness 先組出 prompt，把指令、context、限制與對話歷史放進去。</li>
+<li>Model 根據 prompt，以及先前取得的觀察結果，決定下一個動作。</li>
+<li>如果工作需要模型以外的能力，Model 就提出一個帶有結構化輸入的工具呼叫。</li>
+<li>Execution Environment 或連接的整合系統執行這個動作，回傳輸出、狀態、產出物或錯誤等觀察結果。</li>
+<li>Harness 將觀察結果拿來對照目標、政策、預算、逾時設定與 schema，再決定要完成、重試、要求澄清、請求人類核准，還是繼續下一輪。</li>
+</ol>
+
+<p>這個流程的重點在於：每一圈都是一次控制風險的機會。系統不是祈禱模型一直表現良好，而是讓每個動作都經過一個可管理的執行週期。</p>
+
+<figure class="lesson-figure"><img src="./four-layer-stack-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>四層各自的契約</h2>
+
+<p>如果要用這種方式設計系統，就必須替每個元件定義清楚的契約。下面的表格可以幫助你快速對照：</p>
+
+<table>
+<thead>
+<tr><th>層</th><th>契約在管什麼</th><th>失敗時看什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>Model</td><td>prompt、context window、結構化輸出</td><td>它有沒有收到正確資訊，以及回傳結果能不能被解析</td></tr>
+<tr><td>Harness</td><td>state、retry policy、評估與 loop 控制</td><td>自主程度是否合適，以及狀態是否正確保存</td></tr>
+<tr><td>Tools</td><td>可呼叫的能力：MCP、LSP、API、資料庫</td><td>schema 是否明確，以及回應是否可預期</td></tr>
+<tr><td>Execution Environment</td><td>動作在哪裡執行：沙箱、repo、終端機與機密邊界</td><td>隔離是否足夠，以及是否設有逾時與資源上限</td></tr>
+</tbody>
+</table>
+
+<p>在程式碼 agent 的工作流裡，這些契約通常會由幾類檔案具體寫下來。專案指示檔可以記錄專案規則；codebase 地圖可以幫助 loop 導航，不必完全靠猜；session 設定檔則可以定義安全的操作上限。<strong>好的 loop engineering，從把這些邊界寫清楚開始。</strong></p>
+
+<h2>把四層放進實務場景</h2>
+
+<p>想像 agent 正在處理一個 repo。Repo 是事實的來源，裡面放著專案指示、程式碼、測試與設定。Harness 從 repo 讀取 context，擬定計畫，透過工具採取行動，再根據觀察結果評估工作是否達到標準。</p>
+
+<p>右側則是 Execution Environment：它提供隔離的工作區來執行指令，可能包含終端機、測試 runner、日誌，以及用完即丟的工作區。變更先在這裡執行與驗證，通過必要檢查後，才有機會被信任。</p>
+
+<p>MCP、LSP、git 與 CI 等工具連結，可以擴張 agent 能做的事，但不代表控制權也應該一併交出去。權限、人類核准與稽核日誌這些治理機制，不是事後才加上的裝飾，而是讓團隊能夠「允許有用的自主」，同時保留可視性與問責的方法。</p>
+
+<figure class="lesson-figure"><img src="./four-layer-stack-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>可靠性來自邊界，不是聰明</h2>
+
+<p>這裡最重要的轉念是：<strong>不要只信任模型的智慧，而要把整個運作循環工程化，讓智慧在真實環境裡變得有用、受約束、可觀察，也能安全執行。</strong></p>
+
+<p>一個安全的 loop，通常會沿著這條路徑運作：先檢查請求，再套用政策；驗證工具 schema 後，在沙箱裡執行；取得結果後進行測試；如果涉及高風險變更，則先取得人類核准，才讓變更成真。</p>
+
+<p>要支撐這條路徑，至少需要幾項基本機制：</p>
+
+<ul>
+<li><strong>最小權限（least privilege）</strong>：限制 agent 能接觸與修改的範圍。</li>
+<li><strong>日誌</strong>：讓團隊可以重建事情發生的順序與原因。</li>
+<li><strong>成本上限</strong>：避免 loop 無限制地執行下去。</li>
+<li><strong>復原行為</strong>：當工具失敗、測試失敗，或模型提出有風險的動作時，系統仍有一條已知且可控的路可走。</li>
+</ul>
+
+<h2>小結：把這四層掛在同一個控制模型上</h2>
+
+<blockquote>
+可靠的 agent 由 Model、Harness、Tools 與 Execution Environment 四層合作而成。每一層都有自己的契約：被允許做什麼、必須回傳什麼，以及失敗時如何處理。Harness 控制 loop，Model 負責推理，Tools 提供對外能力，Execution Environment 則負責隔離與資源管理。可靠性不是建立在模型永遠選對，而是建立在清楚的邊界之上。
+</blockquote>
+
+<p>現在你已經有一個拆解 agent 的骨架：Model 負責想，Harness 負責控，Tools 負責連到外部能力，Execution Environment 負責讓動作在受控的地方發生。接下來還要先回答一個更基本的問題：每個任務都需要這麼完整的系統嗎？下一節會用「最小可靠機制」來判斷，什麼時候單次 LLM 呼叫就足夠，什麼時候才值得啟動一個 loop。</p>
+
+<div class="lesson-nav">
+  <div><a href="./what-is-loop-engineering.html">← 上一步：什麼是 Loop Engineering？</a></div>
+  <div><a href="./single-call-vs-loop.html">下一步：單次 LLM 呼叫 vs. Agentic Loop →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="四層之中，負責保存狀態、執行政策、決定是否繼續的是哪一層？" data-correct="1" data-explain="Harness 是控制 loop 的那一層，狀態、政策與是否繼續都歸它管。">
+  <button class="opt">Model，負責推理與輸出</button>
+  <button class="opt">Harness，負責控制整個 loop</button>
+  <button class="opt">Tools，負責對外的能力</button>
+  <button class="opt">Execution environment，負責隔離</button>
+</div>
+<div class="quiz" data-question="Execution environment 這層主要負責什麼？" data-correct="3" data-explain="它是動作實際執行的地方，帶有隔離、資源控制、機密邊界與日誌。">
+  <button class="opt">產生自然語言與推理步驟</button>
+  <button class="opt">把指令組成一段完整提示</button>
+  <button class="opt">定義每個工具可呼叫的 schema</button>
+  <button class="opt">提供隔離與資源控制來執行動作</button>
+</div>
+<div class="quiz" data-question="一次迭代的第一步通常由 harness 做什麼？" data-correct="0" data-explain="harness 先把指令、context、限制與歷史組成 prompt，再交給模型。">
+  <button class="opt">把指令與 context 組成 prompt</button>
+  <button class="opt">直接把目標丟去呼叫工具</button>
+  <button class="opt">先估算這次要花多少成本</button>
+  <button class="opt">先要求人類核准整個計畫</button>
+</div>
+<div class="quiz" data-question="Harness 拿到觀察結果後，通常不包含哪個選項？" data-correct="2" data-explain="重新訓練模型不在 harness 的職責內；它做的是完成、重試、澄清、核准或再走一步。">
+  <button class="opt">完成任務或要求澄清語意</button>
+  <button class="opt">重試或請求人類核准放行</button>
+  <button class="opt">重新訓練模型更新它的權重</button>
+  <button class="opt">再走一步或調整後繼續執行</button>
+</div>
+<div class="quiz" data-question="為什麼說可靠性來自邊界而不是模型的聰明？" data-correct="1" data-explain="不能假設模型每次都選對，得靠最小權限、日誌、成本上限與復原行為把風險框住。">
+  <button class="opt">因為模型的推理能力其實很有限</button>
+  <button class="opt">因為不能假設它每次都做出正確選擇</button>
+  <button class="opt">因為邊界能讓模型跑得更快更省</button>
+  <button class="opt">因為有了邊界就不需要再做驗證</button>
+</div>
+<div class="quiz" data-question="下列哪一項不屬於圍繞執行路徑的輔助控制？" data-correct="2" data-explain="模型參數的規模屬於模型本身，不在 loop engineering 的邊界控制裡。">
+  <button class="opt">最小權限與可重建的日誌</button>
+  <button class="opt">成本上限與復原行為</button>
+  <button class="opt">模型參數的數量與規模</button>
+  <button class="opt">沙箱隔離與資源上限</button>
+</div>
+
+<div class="footer">
+  <p>loop-engineer · Loop Engineering 基礎與四層堆疊 · Step 2/4</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

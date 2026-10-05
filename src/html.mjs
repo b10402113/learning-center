@@ -14,12 +14,14 @@ import {
   loadEnv,
   withRetry,
 } from './pipeline.mjs';
+import { parseFrontmatter } from '../scripts/generate-data.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export const ILLUSTRATION_STATES = ['none', 'planned', 'done'];
 export const STEP_TYPES = ['concept', 'procedure', 'decision', 'reference'];
 export const DEFAULT_STEP_TYPE = 'concept';
+export const DEFAULT_MAX_PARALLEL = 2;
 export const PENDING_CAPTION = index => `配圖 ${index} 待生成`;
 export const FIGURE_CAPTION = 'AI 生成示意圖';
 export const FIGURE_STYLES = `
@@ -341,6 +343,48 @@ export async function loadTypeRules(root, type, typesDir) {
   return rules ? rules.trim() : '';
 }
 
+/** Read a step's `illustration` frontmatter; unknown or absent falls back to `none`. */
+export async function resolveStepIllustration(root, subject, node, step) {
+  const file = htmlPaths(root, subject, node, step).stepFile;
+  const text = await fs.readFile(file, 'utf8').catch(() => null);
+  if (text == null) return 'none';
+  const fm = text.match(/^---\n([\s\S]*?)\n---/);
+  const state = fm?.[1].match(/^illustration:\s*(.+)$/m)?.[1]?.trim();
+  return ILLUSTRATION_STATES.includes(state) ? state : 'none';
+}
+
+/** Read a node container's step-DAG ids in `order` (source order breaks ties). */
+export async function resolveNodeSteps(root, subject, node) {
+  const file = path.join(root, 'learn', subject, 'nodes', `${node}.mdx`);
+  const text = await fs.readFile(file, 'utf8').catch(() => null);
+  if (text == null) throw new Error(`No node container at learn/${subject}/nodes/${node}.mdx`);
+  const { data } = parseFrontmatter(text);
+  const entries = Array.isArray(data.steps) ? data.steps : [];
+  return entries
+    .map((entry, i) => ({
+      id: String(typeof entry === 'string' ? entry : entry?.id ?? ''),
+      order: Number(typeof entry === 'object' ? entry?.order : 0) || i + 1,
+    }))
+    .filter(entry => entry.id)
+    .sort((a, b) => a.order - b.order)
+    .map(entry => entry.id);
+}
+
+/** Run `fn` over `items` with at most `limit` in flight; results keep input order. */
+export async function mapWithConcurrency(items, limit, fn) {
+  const width = Math.max(1, Math.floor(Number(limit)) || 1);
+  const results = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, worker));
+  return results;
+}
+
 // --- text / image clients --------------------------------------------------
 
 function httpStatus(error) {
@@ -454,6 +498,57 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
     await saveManifest().catch(() => {});
     throw new Error(`Article rewrite failed (${manifest.error.message}); partial files: ${paths.outDir}`, { cause: error });
   }
+}
+
+/**
+ * Rewrite every step of one node with a bounded number of parallel text calls.
+ * Enumerates the node's `steps` DAG, skips steps with no HTML lesson (or, when
+ * `skipExisting`, steps already planned and carrying a plan), and runs the
+ * existing single-step rewrite for the rest. A failure in one step never aborts
+ * the others — every step is reported with its own status.
+ */
+export async function generateNodeArticle(args, root = projectRoot, injected = {}) {
+  const subject = assertSafeId('subject', args.subject);
+  const node = assertSafeId('node', args.node);
+  root = await fs.realpath(root).catch(() => projectRoot);
+  try { await fs.access(path.join(root, 'prompts', 'html-rewrite.txt')); }
+  catch { root = projectRoot; }
+  const stepIds = await resolveNodeSteps(root, subject, node);
+  const maxParallel = Math.max(1, Math.floor(Number(args.maxParallel)) || DEFAULT_MAX_PARALLEL);
+  const skipExisting = Boolean(args.skipExisting);
+
+  const run = async step => {
+    const paths = htmlPaths(root, subject, node, step);
+    const exists = file => fs.access(file).then(() => true, () => false);
+    if (!await exists(paths.lesson)) return { step, status: 'skipped', reason: 'no-html' };
+    if (skipExisting) {
+      const illustration = await resolveStepIllustration(root, subject, node, step);
+      if ((illustration === 'planned' || illustration === 'done') && await exists(paths.plan))
+        return { step, status: 'skipped', reason: 'already-planned' };
+    }
+    try {
+      const result = await generateHtmlArticle(
+        { subject, node, step, brief: args.brief, type: args.type, typesDir: args.typesDir },
+        root,
+        injected,
+      );
+      return { step, status: 'rewritten', rewritten: result.rewritten, planInput: result.planInput, manifest: result.manifest };
+    } catch (error) {
+      return { step, status: 'failed', error: String(error?.message ?? error).slice(0, 400) };
+    }
+  };
+
+  const results = await mapWithConcurrency(stepIds, maxParallel, run);
+  const steps = stepIds.map((id, i) => results[i]);
+  const count = status => steps.filter(entry => entry.status === status).length;
+  return {
+    mode: 'article-batch',
+    subject,
+    node,
+    maxParallel,
+    counts: { rewritten: count('rewritten'), failed: count('failed'), skipped: count('skipped') },
+    steps,
+  };
 }
 
 /**

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>三種伺服器渲染策略：SSG、ISR、SSR 與 PPR</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>三種伺服器渲染策略：SSG、ISR、SSR 與 PPR</h1>
+<p class="meta">Step 2/5 · 執行環境與渲染策略：Node / Edge、SSG / ISR / SSR / PPR</p>
+
+<h2>先想一個問題：為什麼同樣是 Next.js，有的頁面秒開，有的卻要等 server 現場計算？</h2>
+
+<p>你可能看過這種差異：一個 Next.js 專案部署後，首頁幾乎一點就開；另一個專案每次進入頁面，都要等 server「想一下」才把內容送回來。問題不一定出在程式碼寫得好不好，而可能是兩個專案選了不同的渲染策略。</p>
+
+<p>這些策略其實都在回答同一個問題：<strong>頁面什麼時候被產生、多久更新一次，以及哪些內容可以先準備好。</strong>本節會把 SSG、ISR、SSR 與 PPR 攤開來比較，先看清楚整體架構，再理解每種策略適合解決什麼問題。</p>
+
+<h2>學習目標</h2>
+<p>學完後，你應該能解釋 SSG、ISR、SSR 各自在什麼時間點產生內容、如何快取與更新，也能理解 PPR 如何在同一頁把靜態外殼與動態內容混合起來。</p>
+
+<h2>先看全貌：差別在「什麼時候算」</h2>
+
+<p>上一節已經建立了一張座標圖：渲染可以在不同時間、不同環境發生。這一節先把時間軸攤平來看。</p>
+
+<table>
+<thead>
+<tr><th>策略</th><th>內容什麼時候產生</th><th>內容怎麼更新</th><th>最適合的頁面</th></tr>
+</thead>
+<tbody>
+<tr><td>SSG</td><td>build time</td><td>重新建置</td><td>長時間不變的文件、部落格、新聞</td></tr>
+<tr><td>ISR</td><td>build time 為主，也可以事後按需產生</td><td>定時或按需重新驗證</td><td>偶爾會更新的文章列表、商品列表</td></tr>
+<tr><td>SSR</td><td>每次請求</td><td>每次請求都重新計算</td><td>登入、聊天、即時協作</td></tr>
+<tr><td>PPR</td><td>靜態外殼先產生，動態部分再串流</td><td>靜態與動態混合</td><td>同時包含固定資訊與即時資訊的商品頁、儀表板</td></tr>
+</tbody>
+</table>
+
+<p>可以把它們想成四種出餐方式：SSG 是先把餐點大量做好，有人來就直接拿；ISR 是先做好常見餐點，缺貨或過期時再補做；SSR 是客人每點一次，廚房就現做一次；PPR 則是先把餐桌、餐具和固定配菜擺好，熱菜好了再送上桌。</p>
+
+<h2>SSG：build time 就做好，之後直接送出</h2>
+
+<p>Static Site Generation（靜態網站生成，SSG）是三種主要策略裡最單純的一種。頁面在 build time 就會被產生，轉換成 HTML、CSS 與 JavaScript 檔案。上線後有使用者造訪，server 不需要重新計算頁面，只要把現成的靜態檔送出去。</p>
+
+<p>因為檔案早已準備好，所以可以放到 CDN（content delivery network，內容傳遞網路），從離使用者最近的節點送出。這就像先印好一批傳單，分送到各個分店；客人來時直接拿走，不必每次都重新印一張。</p>
+
+<figure class="lesson-figure"><img src="./server-rendering-strategies-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>AI 常犯版：只要是動態資料，就一定不能用 SSG</h3>
+
+<p>這種判斷把「build time 能不能取得資料」和「資料未來會不會改變」混在一起了。SSG 可以在建置時抓取資料；真正的限制是，上線後資料如果改變，既有的頁面不會自己更新。</p>
+
+<h3>正解版：內容很少變，就先做好再重複使用</h3>
+
+<p>SSG 最適合九成時間都不變的內容，例如文件網站、部落格或新聞網站。文章發布時先建好頁面，之後直接從 CDN 送出；如果內容真的需要修改，再重新建置整個站。</p>
+
+<p>它的優點是傳送速度快、快取效果好，而且 server 負擔最低。代價則是更新不夠靈活：資料一變，就得重新 build。</p>
+
+<h2>ISR：先做好，但可以事後補更新</h2>
+
+<p>如果部落格文章偶爾會修正，或商品列表會不定期增加商品，每次改一點內容都重新建置整個站，成本就不太划算。Incremental Static Regeneration（增量靜態再生，ISR）就是用來補上 SSG 這個缺口。</p>
+
+<p>ISR 是 SSG 的延伸。它讓頁面在 build 之後仍然可以更新，而且不必重新建置整個網站。某些頁面可以在 build time 先產好，另一些頁面則等到有使用者請求時才產生；因此，同一個網站可以同時使用不同的產生時機。</p>
+
+<h3>AI 常犯版：ISR 就是「每次請求都重新渲染」</h3>
+
+<p>這其實比較接近 SSR。ISR 的重點不是每次都重新計算，而是先把靜態內容快取起來，等到指定時間或特定請求發生時，再重新驗證（revalidate）並生成需要更新的頁面。</p>
+
+<h3>正解版：只更新真的被需要的頁面</h3>
+
+<p>ISR 不必讓整個網站一起重做，而是只重新生成被請求到的頁面。這能降低建置時間，也能保留靜態內容容易快取的優點。</p>
+
+<p>例如，文章詳情頁的內容通常固定，可以使用 SSG；文章列表頁則可能三不五時出現新文章，適合使用 ISR。這樣的安排就像書店裡的單本書先印好，但展示架上的「最新書籍列表」需要定期補換。</p>
+
+<figure class="lesson-figure"><img src="./server-rendering-strategies-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>有些教材會把 ISR 寫成 ISG（Incremental Static Generation，增量靜態生成）。兩個縮寫指的是同一件事，不必因為名稱不同而以為是兩種策略。</p>
+
+<h2>SSR：每個請求都重新算</h2>
+
+<p>Server-Side Rendering（伺服器端渲染，SSR）走的是另一條路。它不在 build time 先把頁面全部做好，而是在<strong>每次請求</strong>發生時，由 server 執行程式、產生對應的 HTML，再連同需要的 JavaScript 傳回瀏覽器。</p>
+
+<p>因此，使用者每次看到的內容，都是 server 在當下計算出來的最新結果。對需要即時反映狀態的頁面來說，這很重要。</p>
+
+<h3>AI 常犯版：內容越新，就越應該全部使用 SSR</h3>
+
+<p>SSR 確實能取得最新內容，但「最新」不是唯一考量。每個請求都重新計算，代表 server 每次都要做一次工作；回應也比較難像 SSG 或 ISR 那樣直接快取。</p>
+
+<h3>正解版：只有真的需要即時內容，才讓 server 每次現算</h3>
+
+<p>SSR 適合高度依賴互動、需要即時更新的場景，例如身分驗證（authentication）、聊天平台、編輯工具，以及影音串流服務。這些情境中，內容晚一步可能就失去意義。</p>
+
+<p>代價是 server 負載通常比 SSG 或 ISR 高，快取回應也更有挑戰。SSR 交換到的是即時性與最新內容，是否值得，要看頁面真正的需求，而不是看到「動態」兩個字就全部改成 SSR。</p>
+
+<figure class="lesson-figure"><img src="./server-rendering-strategies-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>PPR：同一頁裡，靜態與動態可以並存</h2>
+
+<p>SSG、ISR 與 SSR 通常是以「頁面」為單位選擇策略。但真實世界的頁面很少整頁都一樣：電商商品頁的標題、描述和圖片可能很久不變，價格與庫存卻可能隨時變動。</p>
+
+<p>如果因為一個會變動的價格區塊，就讓整頁都採用 SSR，等於為了桌上的一杯熱湯，讓整套餐具每次都重新準備。Partial Prerendering（部分預渲染，PPR）就是用來處理這種混合型頁面。</p>
+
+<h3>AI 常犯版：一個頁面只能在 SSG、ISR 或 SSR 之間三選一</h3>
+
+<p>這種想法把渲染策略看成整頁只能選一種模式。但一個頁面裡，固定內容和即時內容本來就可能同時存在。</p>
+
+<h3>正解版：先送出靜態外殼，再把動態區塊串流進來</h3>
+
+<p>PPR 會在 build time 先產生頁面的<strong>靜態外殼</strong>，其中包含 layout 與不會變動的部分。外殼中會為動態內容留下<strong>佔位符</strong>，並用 <code>Suspense</code> 把動態元件包起來。</p>
+
+<p>使用者請求頁面時，靜態外殼可以先送出；等動態內容準備好，再以<strong>串流</strong>方式補進頁面。於是同一頁可以同時擁有靜態元件、動態元件，以及部分靜態、部分動態的元件。</p>
+
+<figure class="lesson-figure"><img src="./server-rendering-strategies-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>PPR 和前面三種策略最大的差異，就在於它不必替整頁選邊站。你不必為了一個會變動的價格或庫存區塊，犧牲整頁原本可以享有的靜態速度。</p>
+
+<h2>四種策略對照</h2>
+
+<table>
+<thead>
+<tr><th>策略</th><th>產生時間</th><th>更新方式</th><th>快取與負載</th><th>典型場景</th></tr>
+</thead>
+<tbody>
+<tr><td>SSG</td><td>build time</td><td>重新建置</td><td>強快取、server 負載最低</td><td>文件、部落格、新聞</td></tr>
+<tr><td>ISR</td><td>build time 為主，可事後再生</td><td>時間到或按需重新驗證</td><td>快取靜態內容、可重新驗證</td><td>文章列表、商品列表</td></tr>
+<tr><td>SSR</td><td>每次請求</td><td>每次都是新的</td><td>難以快取、server 負載最高</td><td>登入頁、聊天、即時協作</td></tr>
+<tr><td>PPR</td><td>外殼在 build time，動態部分串流</td><td>混合</td><td>外殼可快取，動態部分即時</td><td>商品頁、儀表板等混合頁面</td></tr>
+</tbody>
+</table>
+
+<p>還有一個容易被忽略的起點：Next.js 預設使用 SSG。也就是說，什麼都不設定時，策略其實已經選好了。許多「資料怎麼都沒有更新」的問題，正是從這個預設行為開始。</p>
+
+<h2>小結：把四種策略掛回同一張圖</h2>
+
+<blockquote>
+SSG 在 build time 把頁面做成靜態檔，快取後從 CDN 送出，速度快但更新時需要重新建置。ISR 是 SSG 的延伸，先在 build time 產好內容，之後可以按需或定時重新生成，適合偶爾變動的資料。SSR 每次請求都重新計算，內容最即時，但 server 負載最高。PPR 則先在 build time 做出靜態外殼，再用 Suspense 包住動態區塊並串流進來，讓靜態與動態內容在同一頁並存。四者都以 server 為主場，真正的差別在於內容產生的時機，以及更新與快取的方式。
+</blockquote>
+
+<p>現在可以把它們記成四個問題：內容能不能先做好？如果會變，多久需要更新？每次請求都必須是最新的嗎？變動的只是整頁，還是其中一小塊？下一節會把這些問題整理成實際的選擇流程，也會看看 AI 最常在哪些地方選錯策略。</p>
+
+<div class="lesson-nav">
+  <div><a href="./rendering-axes.html">← 上一步：渲染的三條軸線：環境、時間、runtime</a></div>
+  <div><a href="./choosing-a-rendering-strategy.html">下一步：挑渲染策略：內容多久變一次、要不要即時 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="SSG 的頁面在什麼時候被產生？" data-correct="0" data-explain="SSG 在 build time 產生內容，之後以靜態檔形式被快取與重複送出。">
+  <button class="opt">在 build time 產生</button>
+  <button class="opt">在每次使用者請求時產生</button>
+  <button class="opt">在瀏覽器 hydration 時產生</button>
+  <button class="opt">在資料庫寫入時產生</button>
+</div>
+<div class="quiz" data-question="ISR 主要是為了解決 SSG 的哪個問題？" data-correct="2" data-explain="ISR 讓靜態頁面在 build 之後仍能更新，不必重新建置整個站。">
+  <button class="opt">SSG 無法使用 React 元件</button>
+  <button class="opt">SSG 無法搭配 CDN 使用</button>
+  <button class="opt">SSG 更新內容必須整站重建</button>
+  <button class="opt">SSG 不支援抓取動態資料</button>
+</div>
+<div class="quiz" data-question="下列哪一種情境最適合用 SSR？" data-correct="1" data-explain="SSR 適合需要即時更新與高度互動的場景，例如聊天與登入。">
+  <button class="opt">一年到頭不變的產品文件</button>
+  <button class="opt">需要即時更新的聊天平台</button>
+  <button class="opt">幾乎不改的靜態部落格文章</button>
+  <button class="opt">內容固定的公司介紹頁</button>
+</div>
+<div class="quiz" data-question="PPR 和前三種策略最大的不同是什麼？" data-correct="3" data-explain="PPR 能在單一頁面內混合靜態與動態，其他策略多以頁面為單位選擇。">
+  <button class="opt">它只能在 Edge runtime 執行</button>
+  <button class="opt">它完全不需要伺服器</button>
+  <button class="opt">它每次請求都重新渲染整頁</button>
+  <button class="opt">它能在同一頁混合靜態與動態</button>
+</div>
+<div class="quiz" data-question="PPR 如何處理頁面中的動態內容？" data-correct="2" data-explain="PPR 在靜態外殼裡用 Suspense 包住動態元件，等內容準備好再串流進來。">
+  <button class="opt">把動態內容也一起預先算成靜態</button>
+  <button class="opt">要求使用者重新整理頁面才能看到</button>
+  <button class="opt">用 Suspense 包住動態元件再串流</button>
+  <button class="opt">把動態內容改成客戶端輪詢取得</button>
+</div>
+<div class="quiz" data-question="Next.js 在沒有任何設定的情況下預設採用哪一種策略？" data-correct="0" data-explain="Next.js 預設使用 SSG，這也是許多「資料不更新」問題的來源。">
+  <button class="opt">SSG</button>
+  <button class="opt">ISR</button>
+  <button class="opt">SSR</button>
+  <button class="opt">PPR</button>
+</div>
+
+<div class="footer">
+  <p>next-js · 執行環境與渲染策略：Node / Edge、SSG / ISR / SSR / PPR · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>先設界線再放自主：max steps、timeout、dry-run、approval</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>先設界線，再放自主：max steps、timeout、dry-run、approval</h1>
+<p class="meta">Step 4/4 · 最小可執行 Loop 與 Goal 契約</p>
+
+<h2>學習目標</h2>
+<p>學會判斷一個最小 loop 應該先加上哪些界線：max steps、timeout、dry-run 與 approval gate。更重要的是，說清楚每一道界線要擋住哪一種失控。</p>
+
+<h2>先決定它最多能壞到哪裡</h2>
+
+<p>你的最小 loop 已經能選動作、執行工具、觀察結果，再評估下一步。它看起來已經像個 agent，這時很容易順手替它接上更多工具、放更多權限，甚至讓它自己決定要不要寫檔。</p>
+
+<p>但「跑得動」不代表「可以放心放大」。沒有界線的迴圈可能一直重試、用過大的範圍呼叫工具，或留下難以追蹤的變更。它不一定會立刻報錯，反而可能安靜地把事情做歪。</p>
+
+<p>所以這一節要做的決定是：<strong>先放界線，再擴充能力</strong>。界線不是 demo 做完後才補的細節，而是 loop 本身的一部分。它讓失敗模式變得可預測，也讓你知道這個迴圈最壞會走到哪裡。</p>
+
+<h2>四道界線，怎麼取捨</h2>
+
+<p>最小版本先從四道界線開始。它們各自擋住不同問題，但代價也不同，不能只是把所有限制無條件打開。</p>
+
+<table>
+<thead>
+<tr><th>界線</th><th>擋掉哪種失控</th><th>代價與提醒</th></tr>
+</thead>
+<tbody>
+<tr><td>Max steps（步數上限）</td><td>無限迴圈、鬼打牆，以及同一個錯誤不斷重試。</td><td>設得太緊，會把正常的長任務提早切斷。要分清楚「還沒做完」和「已經撞牆」。</td></tr>
+<tr><td>Timeout（逾時）</td><td>單一工具卡死，或整個 run 被一個緩慢呼叫拖住。</td><td>最好分層設定：步驟、工具呼叫與整體請求各有上限，並在觀察資料中留下逾時原因。</td></tr>
+<tr><td>Dry-run（試跑模式）</td><td>在意圖還沒確認前，就產生真實副作用。</td><td>適合沙盤推演與事前檢視；但需要真實寫入才能驗證的步驟，不能永遠只靠 dry-run。</td></tr>
+<tr><td>Approval gate（核准閘）</td><td>高影響、敏感或不可逆的動作，在沒有人點頭前就執行。</td><td>如果連低風險、高頻動作都要求核准，人就會變成瓶頸。</td></tr>
+</tbody>
+</table>
+
+<p>把它們放回 loop 的骨架來看：max steps 與 timeout 是迴圈的外框，限制它最多跑多久；dry-run 決定動作是否真的執行；approval gate 則是在動作執行前加上一道人工檢查。</p>
+
+<p>這些界線不該由模型臨場決定，而要由 harness 或 policy 層強制執行。模型可以提出動作，但不能自己決定要不要遵守限制。</p>
+
+<figure class="lesson-figure"><img src="./boundaries-before-autonomy-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>用判別問句決定哪裡要設界線</h2>
+
+<p>不要只憑直覺決定是否需要核准。面對每一個動作，可以先問幾個能實際驗證的問題：</p>
+
+<ul>
+<li><strong>這個動作可逆嗎？</strong>如果不可逆，例如刪檔、對外送出內容或寫入正式環境的資料，就先接上 approval gate。</li>
+<li><strong>失敗了看得到嗎？</strong>如果結果不容易觀察，就需要更強的觀察與驗證，不該急著放行。</li>
+<li><strong>它會不會一直重複？</strong>可能鬼打牆或反覆重試的流程，一定要有步數上限。</li>
+<li><strong>它會產生副作用嗎？</strong>有副作用的動作，先用 dry-run 看清楚意圖，再決定是否真的執行。</li>
+<li><strong>錯一次的成本高嗎？</strong>成本越高，就越值得在動手前插入人類覆核。</li>
+</ul>
+
+<p>反過來說，可逆、低風險，而且本來就具備冪等性的讀取動作，通常不需要每次核准。若所有動作都要人點頭，人的注意力會被低價值請求耗光，真正重要的核准反而可能被草草按過。</p>
+
+<h2>反例：界線太緊或太鬆，都會失效</h2>
+
+<p>第一個反例是界線太緊。假設 max steps 設成 2，但任務正常需要 4 步才能完成，agent 每次都只會回傳 <code>LIMIT_REACHED</code>。看起來像是 agent 能力不足，其實是你把路直接截斷了。</p>
+
+<p>第二個反例是界線全部打開。如果每個動作都只能 dry-run、每個動作都要核准，那些必須真實寫入才能驗證的任務永遠無法完成。人類也會變成每一輪的瓶頸，agent 的效率幾乎歸零。</p>
+
+<p>這兩個例子指向同一個原則：界線的目的，是讓失敗模式可預測，不是讓 agent 什麼都不能做。界線太緊會誤傷正常任務，太鬆則等於沒有設計；兩者都只是碰運氣。</p>
+
+<figure class="lesson-figure"><img src="./boundaries-before-autonomy-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>最小版本可以把限制與需人工覆核的動作集中列出，而不是把常數散落在各處：</p>
+
+<pre data-provenance="derived"><code>limits:
+  max_steps: 8
+  step_timeout_seconds: 30
+  total_timeout_seconds: 180
+  dry_run: true            # 預設只推演，確認後才真的落地
+  require_approval_for:
+    - "delete_file"
+    - "write_outside_repo"
+    - "network_command"
+    - "install_package"
+</code></pre>
+
+<h2>可直接採用的決策規則</h2>
+
+<ol>
+<li>先問「這個迴圈最壞會壞到哪裡」，再問「它還能多做什麼」。</li>
+<li>最小版本預設啟用四道界線：max steps、timeout、dry-run、approval gate。</li>
+<li>approval gate 只放在不可逆、高影響或敏感的動作上，不要拿來阻擋低風險、高頻動作。</li>
+<li>每一道界線都要在 trace 中留下「為什麼停」的原因，讓停止結果可以被審計。</li>
+<li>等邊界到位後，再逐一放寬限制或擴充能力。每放寬一次，都重新確認失敗模式是否仍然可預測。</li>
+</ol>
+
+<h2>小結</h2>
+
+<blockquote>
+先設界線，再放自主。max steps 擋住無限迴圈，timeout 擋住卡死，dry-run 先檢視意圖再產生副作用，approval gate 則在不可逆或高影響動作前插入人類覆核。判斷時問：可逆嗎、看得到嗎、會重複嗎、有副作用嗎、錯一次的成本高嗎？界線太緊會誤傷正常任務，太鬆則等於沒有設計。四道界線到位後，才一步步擴充能力。
+</blockquote>
+
+<p>走到這裡，你已經有一個完整的起點：四階段控制迴圈、一份可驗收的 goal 契約、一個責任清楚的最小骨架，以及一組讓失敗保持可控的界線。這就是最小可執行 loop 的基本形狀。</p>
+
+<p>接下來要做的，是把工具真正接進去，讓這個骨架動起來。</p>
+
+<div class="lesson-nav">
+  <div><a href="./build-a-minimal-executable-loop.html">← 上一步：設計最小可執行 Loop</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼要在擴充能力之前先設好界線？" data-correct="1" data-explain="有了界線，失敗模式才可預測，你知道最壞會壞到哪裡。">
+  <button class="opt">因為界線能讓模型的推理速度變快</button>
+  <button class="opt">因為這樣失敗模式才變得可預測</button>
+  <button class="opt">因為界線可以取代所有的測試工作</button>
+  <button class="opt">因為法規規定 agent 必須有界線</button>
+</div>
+<div class="quiz" data-question="max steps 最主要擋掉哪一種問題？" data-correct="3" data-explain="步數上限防止無限迴圈與同一個錯誤一直重試。">
+  <button class="opt">工具回傳的資料格式不正確</button>
+  <button class="opt">使用者的指令寫得太過模糊</button>
+  <button class="opt">模型的輸出語言與預期不符</button>
+  <button class="opt">無限迴圈與不停重試同一錯誤</button>
+</div>
+<div class="quiz" data-question="哪一種動作最適合先走 dry-run 再決定是否真的執行？" data-correct="0" data-explain="有副作用、還沒確定意圖的動作，先用 dry-run 推演。">
+  <button class="opt">會產生真實副作用、還沒想清楚的動作</button>
+  <button class="opt">可逆且冪等的唯讀查詢動作</button>
+  <button class="opt">已經通過核准的高風險寫入動作</button>
+  <button class="opt">純粹在記憶體中計算的格式化動作</button>
+</div>
+<div class="quiz" data-question="approval gate 最好放在哪一類動作前面？" data-correct="2" data-explain="不可逆、高影響或敏感的動作才值得插入人類覆核。">
+  <button class="opt">所有讀取檔案內容的動作前面</button>
+  <button class="opt">每一次工具呼叫之前都放一道</button>
+  <button class="opt">不可逆或高影響的動作前面</button>
+  <button class="opt">只有程式啟動時的第一個動作前</button>
+</div>
+<div class="quiz" data-question="把 timeout 設得太緊，最可能出現什麼後果？" data-correct="1" data-explain="界線太緊會把正常需要的長任務誤切，讓你誤判成能力不足。">
+  <button class="opt">模型會開始拒絕回答任何問題</button>
+  <button class="opt">正常需要的長任務被誤切中斷</button>
+  <button class="opt">工具會自動獲得更多執行權限</button>
+  <button class="opt">觀察結果會變得更完整更可信</button>
+</div>
+<div class="quiz" data-question="如果對每個低風險高頻動作都要求核准，會發生什麼事？" data-correct="2" data-explain="人變成每一輪的瓶頸，agent 效率歸零，真正該看的核准也被草率帶過。">
+  <button class="opt">系統會變得百分之百地安全無虞</button>
+  <button class="opt">模型會自動學會跳過這些動作</button>
+  <button class="opt">人類變成瓶頸，效率大幅下降</button>
+  <button class="opt">工具呼叫的費用會明顯降低</button>
+</div>
+<div class="quiz" data-question="每一道界線都應該在 trace 裡留下什麼？" data-correct="0" data-explain="留下「為什麼停」的原因，停止才能被審計，也才查得出是撞牆還是真的完成。">
+  <button class="opt">為什麼停下來的原因，讓停止可被審計</button>
+  <button class="opt">模型這次使用了多少個中文字</button>
+  <button class="opt">使用者當時的滑鼠位置與視窗大小</button>
+  <button class="opt">下一次啟動時要用的隨機亂數種子</button>
+</div>
+
+<div class="footer">
+  <p>loop-engineer · 最小可執行 Loop 與 Goal 契約 · Step 4/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
