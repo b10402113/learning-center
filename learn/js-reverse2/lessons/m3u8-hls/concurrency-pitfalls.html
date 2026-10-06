@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>高併發下載的踩雷與替代寫法</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>高併發下載的踩雷與替代寫法</h1>
+<p class="meta">Step 4/4 · M3U8/HLS 串流下載</p>
+
+<h2>學習目標</h2>
+<p>能判斷 TS 批次下載該用同步、協程還是執行緒池，並說出高併發下 HTTPSConnectionPool 錯誤與 loop 嵌套這兩個坑的成因和解法。</p>
+
+<h2>前言：能跑跟跑得穩，是兩回事</h2>
+<p>上一節你學了三種下載寫法，而且三種都能把分片抓下來。但真正上線時，你會發現一件很掃興的事：分片少的時候一切正常，分片一多、併發一開大，錯誤就開始冒出來：有時候是連線池相關的例外，有時候是事件迴圈怪怪的，有時候是愈下載愈慢甚至卡死。這些都不是程式邏輯寫錯，而是「併發」這件事本身帶來的副作用。</p>
+<p>這一節不教你新的下載方法，而是幫你在三個選項之間做對選擇，並且認得併發量拉高之後必然會遇到的兩個坑。看懂之後，你就不會再憑感覺把併發數字調到最大，而是知道什麼情況該踩油門、什麼情況該收手。</p>
+
+<h2>要做的決定：三種下載模型怎麼選</h2>
+<p>同步、協程、執行緒池，三者在「寫法改動程度」與「速度」之間各據一端。把它們攤開來比，差異會清楚很多：</p>
+<table>
+<thead>
+<tr><th>模型</th><th>速度</th><th>改動成本</th><th>適合的情況</th></tr>
+</thead>
+<tbody>
+<tr><td>同步迴圈</td><td>最慢，逐一分片排隊</td><td>最低，直接寫</td><td>只要驗證流程、分片很少、或目標站台很脆弱不能打太大力</td></tr>
+<tr><td>asyncio 協程</td><td>最快，大量等待能交錯</td><td>最高，整段要改成 async</td><td>分片數量多、IO 等待佔比高、想壓榨速度</td></tr>
+<tr><td>執行緒池</td><td>快，受 GIL 與連線數限制</td><td>低，同步函式加幾行</td><td>不想大改寫法，又需要明顯加速的折衷場合</td></tr>
+</tbody>
+</table>
+<p>看出來了嗎？模型沒有絕對的好壞，重點是這個情境下哪個划算。協程不是萬靈丹：如果你的清單只有三五個分片，改成 async 完全是自找麻煩。執行緒池也不是次級品：對大多數「下載幾百個分片」的需求，它用最少的改動拿到接近的加速，CP 值常常最高。</p>
+
+<h2>判別問句：三個問題決定你該用哪個</h2>
+<p>不用背表格，問自己三個問題就好：</p>
+<ol>
+<li><strong>這份清單的分片夠多、值得加速嗎？</strong> 如果只有個位數，同步就好，別為了速度付出不必要的複雜度。</li>
+<li><strong>你願意為速度把程式改成非同步嗎？</strong> 願意，協程最貼合 IO 密集場景；不願意，就選執行緒池。</li>
+<li><strong>目標站台對高併發的耐受度如何？</strong> 如果它很容易擋你或斷線，就算協程能跑更快，也要把併發壓低。</li>
+</ol>
+
+<h2>坑一：HTTPSConnectionPool 連線耗盡</h2>
+<p>高併發下載最常見的錯誤長這樣：程式跑到一半，突然丟出一個跟 <code>HTTPSConnectionPool</code> 有關的例外。它的成因很單純：同時開的請求太多，把連線資源用光了。每一條 HTTP 連線都是有限資源，當你一次丟出上百個請求，連線來不及釋放、又被新請求佔用，池子就爆了。</p>
+<p>課程給的解法有兩個方向：降低併發數，或是在標頭裡加上 <code>Connection: closed</code>。後者的意思是「這次請求完就把連線關掉，不要留著重複使用」，藉此避免大量閒置連線卡住池子。執行緒池版本就是這樣處理的：</p>
+<pre data-source="sources/js-reverse2/20261005/day09/m3u8.md#m3u8"><code>headers  = {
+    'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36',
+    'Connection':'closed'
+}</code></pre>
+<p>原始碼也把病因寫在註解裡，可以整段記下來：</p>
+<pre data-source="sources/js-reverse2/20261005/day09/m3u8.md#m3u8"><code>#HTTPSConnectionPool异常原因：
+    #网络请求的并发量太大（减少并发or在headers中添加一个Connection:closed）</code></pre>
+<p>這裡的取捨是：<code>Connection: closed</code> 解決了連線耗盡，代價是每次請求都要重新建立連線，少了連線重用的效率。所以它不是無腦必加。併發不高時，留著連線重用反而更快；只有當你確實撞到連線池錯誤時，才需要把它當成解法之一，另一個更根本的解法是把併發數調小。</p>
+
+<h2>坑二：事件迴圈嵌套</h2>
+<p>第二個坑只在協程版本出現，而且更隱蔽。當你手上有「兩份不同的 URL 清單要同時下載」時，直覺會想開兩個事件迴圈（loop）分別處理。但事件迴圈不是隨便疊的，嵌套迴圈會讓整個排程錯亂，程式可能直接報錯或行為詭異。原始碼把這個警告留在協程版本的結尾：</p>
+<pre data-source="sources/js-reverse2/20261005/day09/m3u8.md#m3u8"><code>#使用协程：实现一定得有一个url列表，遍历该列表进行多协程的创建
+#使用多个loop的场景：两种数据资源下载，需要实现有两个url列表
+#问题：两个loop之间的关系是异步的吗？
+#注意：千万别搞loop的嵌套。
+
+#特殊的方式：创建两个线程，两个线程中封装处理两个loop。</code></pre>
+<p>解法很明確：不要在一個迴圈裡再開一個迴圈。如果真的有兩份清單要並行處理，正確做法是開兩個執行緒，讓每個執行緒各自封裝一個事件迴圈，彼此互不干涉。換句話說，用「執行緒」隔開「迴圈」，而不是把迴圈疊起來。</p>
+
+<h2>反例：什麼時候「不該」用高併發</h2>
+<p>前面講的都是怎麼用併發，但真正判斷成熟的表現，是知道什麼時候不該用。以下幾種情況，高併發反而會害了你：</p>
+<ul>
+<li><strong>目標站台有風控或頻率限制時。</strong> 你把併發調到 100，等於用 100 倍的速度打人家的伺服器，很容易觸發封鎖。這時該降併發、加延遲，甚至回頭用同步慢慢抓。</li>
+<li><strong>分片數量很少時。</strong> 只有幾個分片，同步的排隊時間根本無感，硬上協程只是徒增改寫與除錯成本。</li>
+<li><strong>你需要穩定的輸出順序時。</strong> 併發下載完成的順序是不固定的，如果你依賴分片按序寫入，就得在下載後另外排序，否則合併出來的影片會錯亂。</li>
+</ul>
+
+<h2>決策規則與檢查表</h2>
+<p>把選擇收斂成一條可直接套用的規則：<strong>先求能跑，再求快；先看數量，再看站台脾氣。</strong> 動手前照這個檢查表走一遍：</p>
+<ol>
+<li>分片多不多？很少就同步，別加複雜度。</li>
+<li>要明顯加速嗎？要，且願意改 async，就選協程；不想大改，就選執行緒池。</li>
+<li>有撞到 <code>HTTPSConnectionPool</code> 嗎？有，先降併發；還不行，再加 <code>Connection: closed</code>。</li>
+<li>有兩份清單要同時跑嗎？開兩個執行緒各自封裝事件迴圈，絕對不要嵌套。</li>
+<li>目標站台會不會擋？會，就主動把併發壓低、加延遲，穩定比快更重要。</li>
+</ol>
+
+<h2>小結</h2>
+<blockquote>
+三種下載模型沒有絕對優劣，端看分片數量、你願意付出的改寫成本，以及目標站台的耐受度。高併發會帶來兩個典型坑：連線池被塞爆（<code>HTTPSConnectionPool</code>）與事件迴圈嵌套。前者用降低併發或 <code>Connection: closed</code> 解，後者用「執行緒隔開迴圈」解。知道什麼時候不該開大併發，才是真正把這類下載做穩的關鍵。
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./download-ts-segments.html">← 上一步：下載 TS 分片：同步、協程、執行緒池三種寫法</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="HTTPSConnectionPool 相關例外，最根本的成因是什麼？" data-correct="1" data-explain="同時開啟的請求太多，把有限的連線資源用光，池子就爆了。">
+  <button class="opt">目標站臺的憑證已經過期</button>
+  <button class="opt">同時開的請求太多用光連線</button>
+  <button class="opt">m3u8 清單的格式解析錯誤</button>
+  <button class="opt">本機的磁碟空間已經不足</button>
+</div>
+
+<div class="quiz" data-question="在標頭加上 Connection: closed 的作用是什麼？" data-correct="2" data-explain="它讓每次請求完就連線，避免大量閒置連線佔住連線池。">
+  <button class="opt">讓每個請求自動重試三次</button>
+  <button class="opt">把下載的資料先壓縮再傳</button>
+  <button class="opt">請求完就關閉連線不再重用</button>
+  <button class="opt">自動跳過需要登入的分片</button>
+</div>
+
+<div class="quiz" data-question="關於 Connection: closed，正確的取捨判斷是什麼？" data-correct="0" data-explain="它解決連線耗盡，但犧牲連線重用；沒撞到錯誤時不必無腦加。">
+  <button class="opt">解了連線耗盡但犧牲連線重用</button>
+  <button class="opt">能同時提升速度又增加穩定</button>
+  <button class="opt">加了之後就不需要再管並發</button>
+  <button class="opt">只有在協程版本才需要加上</button>
+</div>
+
+<div class="quiz" data-question="為什麼協程版本要特別提醒「千萬別搞 loop 的嵌套」？" data-correct="3" data-explain="嵌套事件迴圈會讓排程錯亂，行為變得不可預期。">
+  <button class="opt">嵌套會讓程式佔用的記憶體倍增</button>
+  <button class="opt">嵌套會讓每個請求都變成同步</button>
+  <button class="opt">嵌套會讓 m3u8 清單無法解析</button>
+  <button class="opt">嵌套會讓事件迴圈排程錯亂</button>
+</div>
+
+<div class="quiz" data-question="若真的有兩份 URL 清單要同時下載，課程建議怎麼做？" data-correct="1" data-explain="開兩個執行緒，各自封裝一個事件迴圈，用執行緒把迴圈隔開。">
+  <button class="opt">把兩份清單合併成一份再跑</button>
+  <button class="opt">開兩個執行緒各封裝一個迴圈</button>
+  <button class="opt">在同一個迴圈裡再開一個迴圈</button>
+  <button class="opt">輪流跑完一份再跑另一份</button>
+</div>
+
+<div class="quiz" data-question="下列哪一種情況最不該把並發開到很大？" data-correct="2" data-explain="目標站臺一旦有風控或頻率限制，高並發只會更快觸發封鎖。">
+  <button class="opt">分片數量適中且站臺很穩定</button>
+  <button class="opt">本機網路速度非常快的時候</button>
+  <button class="opt">目標站臺有風控與頻率限制</button>
+  <button class="opt">已經裝好 aiohttp 套件時</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · M3U8/HLS 串流下載 · Step 4/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

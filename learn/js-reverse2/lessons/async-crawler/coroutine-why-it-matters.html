@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>協程：單執行緒也能跑的併發</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>協程：單執行緒也能跑的併發</h1>
+<p class="meta">Step 1/4 · asyncio 與 aiohttp 非同步爬蟲</p>
+
+<h2>學習目標</h2>
+<p>說出協程（coroutine）解決了多執行緒／多行程的什麼痛點，以及它為什麼能在單執行緒下提升 IO 密集程式的效率。</p>
+
+<h2>前言：一支一支抓，時間都花在等</h2>
+<p>假設你手上有一份 50 個網址的清單，每個頁面抓下來大約要等 2 秒。如果照最直覺的寫法，一個迴圈從頭跑到尾，總共要花 100 秒。但真正讓人不甘心的是，這 100 秒裡你的 CPU 幾乎什麼事都沒做，它只是陪著網路一起發呆。</p>
+<p>爬蟲就是這種典型的工作，大部分時間都花在等網路回覆，真正拿來計算的時間少得可憐。既然電腦有處理多件事的能力，為什麼不能趁某個請求還在等回覆時，先去抓下一個頁面？這一節要回答的，就是「協程」這個工具為什麼辦得到，以及它跟多執行緒差在哪裡。</p>
+
+<h2>先把問題定住：爬蟲是 IO 密集型工作</h2>
+<p>前面幾課已經區分了並行與並發、同步與非同步，這裡要把那些名詞收斂到爬蟲上。抓一個網頁的每一步幾乎都在做網路 IO（輸入與輸出）：送出請求、等待伺服器回覆、讀取回傳內容。這類工作的瓶頸從來不是 CPU 算得不夠快，而是「等」。</p>
+<p>所以加速的方向不是換一顆更強的 CPU，而是想辦法把等待的空檔填滿。誰能在「等」的時候去做別的事，誰就快。</p>
+
+<h2>直覺解法：每個網址開一條執行緒</h2>
+<p>多執行緒或多行程的第一個念頭是：每個 URL 交給一條執行緒，大家各抓各的。當某條執行緒卡在等網路時，作業系統可以把 CPU 切去跑別的執行緒，這樣等待時間就被利用起來了。聽起來很合理，問題卻出在「切去跑哪一條」不是你能決定的。</p>
+<p>你的電腦上永遠不只有這幾條下載執行緒，還有編輯器、音樂播放器、通訊軟體、雲端硬碟同步等等。CPU 在執行緒之間切換，是由作業系統的調度器安排的，寫程式的人無法人為干涉。於是就出現一個很掃興的情況：明明你有一堆下載執行緒在排隊等著跑，CPU 卻可能先跑去處理別人的工作，等它輪回你的下載時，又過了好一段時間。等待時間並沒有被穩定地利用起來。</p>
+<p>打個比方，你在銀行抽了號碼牌，以為很快輪到你，但叫號是系統決定的，中間還插進一堆其他業務，你只能乾等。多執行緒的調度就是這個感覺，你叫不動它。</p>
+
+<h2>協程的思路：把切換的主導權拿回自己手上</h2>
+<p>協程（coroutine，也常被叫做微執行緒）走的是另一條路。它不拜託作業系統來切換，而是由你的程式自己決定「什麼時候停下來、把控制權交給下一個任務」。</p>
+<p>具體來說，當某個任務遇到會等待的操作（例如網路請求）時，它不是傻傻地等，而是主動「掛起」自己，把自己暫停，把控制權讓給下一個任務；等原本那個等待結束了，再回來繼續。整個切換發生在使用者空間（你的程式裡），不需要向作業系統發出系統調用，所以不會牽扯到其他無關的行程或執行緒。</p>
+<p>這帶來兩個明顯的好處。第一是<strong>輕量</strong>：協程佔用的系統資源少，建立和銷毀的開銷小，切換起來比執行緒快得多。第二是<strong>可控</strong>：調度和切換由寫程式的人自己安排，不依賴作業系統，因此可以根據實際需求設計更精細的切換邏輯。</p>
+<p>換句話說，協程不是要取代執行緒或行程，而是換一種面對「等待」的方式：把「等」變成「先去做別的事，等好了再回來」。</p>
+
+<h2>協程、執行緒、行程放在一起比</h2>
+<table>
+<thead>
+<tr><th>面向</th><th>行程／執行緒</th><th>協程</th></tr>
+</thead>
+<tbody>
+<tr><td>切換由誰決定</td><td>作業系統的調度器</td><td>寫程式的人自己控制</td></tr>
+<tr><td>切換發生在哪</td><td>核心空間</td><td>使用者空間</td></tr>
+<tr><td>資源開銷</td><td>較大，建立與切換成本高</td><td>較小，建立與切換成本低</td></tr>
+<tr><td>可控性</td><td>低，無法干涉調度順序</td><td>高，可自訂切換邏輯</td></tr>
+<tr><td>特別適合</td><td>需要真正同時運算（CPU 密集）</td><td>大量等待（IO 密集，例如爬蟲）</td></tr>
+</tbody>
+</table>
+<p>這張表的重點不是「協程比較好」，而是它們各自解決不同問題。如果工作是拼命算數學，協程幫不上什麼忙，因為它始終只有一條執行緒在算；但只要工作是拼命等，協程就能把等待的時間拿去做別的事。</p>
+
+<h2>為什麼單執行緒就能快</h2>
+<p>協程提升效率的關鍵，其實只有一句話：想盡辦法把 CPU 留在你自己的程式裡。當一個任務在等網路時，執行緒如果只是睡著，CPU 就浪費了；但協程會在這個空檔把控制權交出去，讓同一條執行緒去跑另一個任務的計算，或送出另一個請求。所以就算只有一條執行緒，只要任務大多是「等」而不是「算」，整體的完成時間就會明顯縮短。</p>
+<p>Python 從 3.6 之後提供了 <code>asyncio</code> 模組來幫你做到這件事。它會幫你偵測阻塞（要特別注意的是，它只偵測網路阻塞），然後在應用程式層級切換。也就是說，它不靠作業系統調度執行緒，而是在你的程式內部安排任務的暫停與恢復。</p>
+
+<h2>小結</h2>
+<blockquote>協程要解決的是「等待」。爬蟲是 IO 密集工作，時間大多花在等網路回覆；多執行緒把切換交給作業系統，你無法保證 CPU 何時回到你的下載工作；協程則把切換主導權交回程式自己，透過掛起與恢復，在使用者空間完成任務切換。它輕量、可控，讓單執行緒也能在等待的空檔去做別的事。</blockquote>
+<p>知道協程為什麼快之後，下一個問題是「怎麼用」。下一節會把 <code>asyncio</code> 的四個零件拆開來看：特殊函數、協程物件、任務、事件循環，帶你寫出第一支能跑的協程程式。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./asyncio-run-skeleton.html">下一步：asyncio 起手式：特殊函數、任務與事件循環 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="爬蟲為什麼特別適合用協程來加速？" data-correct="2" data-explain="爬蟲的時間大多花在等網路回覆，屬於 IO 密集而非 CPU 密集。">
+  <button class="opt">因為它的計算量非常大</button>
+  <button class="opt">因為它需要多顆 CPU 運算</button>
+  <button class="opt">因為它大部分時間都在等待</button>
+  <button class="opt">因為它必須同時寫入硬碟</button>
+</div>
+
+<div class="quiz" data-question="多執行緒下載的效率為什麼常常不穩定？" data-correct="1" data-explain="執行緒切換由作業系統調度，無法保證 CPU 何時輪回你的下載工作。">
+  <button class="opt">因為執行緒無法同時發送請求</button>
+  <button class="opt">因為切換由作業系統決定</button>
+  <button class="opt">因為網路頻寬永遠不夠使用</button>
+  <button class="opt">因為每條執行緒都要拷貝記憶體</button>
+</div>
+
+<div class="quiz" data-question="協程的任務切換主要發生在哪裡？" data-correct="3" data-explain="切換在使用者空間由程式自己完成，不需要向作業系統發出系統調用。">
+  <button class="opt">在作業系統的核心調度器</button>
+  <button class="opt">在網路卡的驅動程式內部</button>
+  <button class="opt">在 CPU 的硬體快取裡面</button>
+  <button class="opt">在程式的使用者空間當中</button>
+</div>
+
+<div class="quiz" data-question="相對於執行緒，協程最主要的兩個好處是什麼？" data-correct="0" data-explain="協程佔用資源少、建立與切換成本低，而且調度切換由程式自己控制。">
+  <button class="opt">輕量而且切換可控</button>
+  <button class="opt">速度快而且能多核心</button>
+  <button class="opt">安全而且能自動分工</button>
+  <button class="opt">相容而且不用寫程式</button>
+</div>
+
+<div class="quiz" data-question="協程提升效率的核心想法，可以用哪句話概括？" data-correct="3" data-explain="關鍵是把等待的空檔拿去做別的事，盡量把 CPU 留在自己的程式裡。">
+  <button class="opt">用多顆 CPU 同時做同一件事</button>
+  <button class="opt">讓每個請求都使用獨立記憶體</button>
+  <button class="opt">把網路請求改成一次全部送出</button>
+  <button class="opt">把等待空檔拿去做其他任務</button>
+</div>
+
+<div class="quiz" data-question="asyncio 偵測的阻塞只包含下列哪一種？" data-correct="2" data-explain="asyncio 在應用程式層級偵測的是網路阻塞，這也是它做任務切換的依據。">
+  <button class="opt">檔案讀寫造成的阻塞</button>
+  <button class="opt">大量計算造成的阻塞</button>
+  <button class="opt">網路請求造成的阻塞</button>
+  <button class="opt">使用者輸入造成的阻塞</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · asyncio 與 aiohttp 非同步爬蟲 · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

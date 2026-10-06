@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>await 放哪、哪些模組會拖垮非同步</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>await 放哪、哪些模組會拖垮非同步</h1>
+<p class="meta">Step 3/4 · asyncio 與 aiohttp 非同步爬蟲</p>
+
+<h2>學習目標</h2>
+<p>判斷 <code>await</code> 該加在哪一行、<code>asyncio.wait</code> 的角色是什麼，並認出哪些同步模組會讓整個非同步效果失效。</p>
+
+<h2>前言：三個任務，卻還是排隊做完</h2>
+<p>上一節你已經能用 <code>ensure_future</code> 和事件循環跑起一個協程。現在把任務從一個變成三個：三個網址，各自等 2 秒。照理說，如果它們真的在「同時等」，總耗時應該接近 2 秒；但跑出來的結果卻是 6 秒，跟一個一個排隊做完沒什麼兩樣。</p>
+<p>程式看起來明明照著上一節的骨架寫，問題出在哪？這一節要做的決定就是這個：哪些地方必須加 <code>await</code>、哪些模組一旦放進來就會把非同步效果整個吃掉。這兩件事其實是同一個問題的兩面：只要搞懂「誰在等」和「交不交出控制權」，答案就出來了。</p>
+
+<h2>先看沒生效的那一版</h2>
+<p>這是把任務變成三個、但總耗時仍然是 6 秒的寫法：</p>
+<pre class="bad-code" data-source="sources/js-reverse2/20261005/day08/异步爬虫.md#异步爬虫"><code>import asyncio
+import time
+start = time.time()
+urls = [
+    'www.1.com','www.2.com','www.3.com'
+]
+async def get_request(url):
+    print('正在请求：',url)
+    time.sleep(2)
+    print('请求结束:',url)
+#有了三个任务对象和一个事件循环对象
+if __name__ == '__main__':
+    tasks = []
+    for url in urls:
+        c = get_request(url)
+        task = asyncio.ensure_future(c)
+        tasks.append(task)
+    #将三个任务对象，添加到一个事件循环对象中
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(asyncio.wait(tasks))
+
+    print('总耗时:',time.time()-start)</code></pre>
+<p>這段程式丟出兩個問題：為什麼沒有達到非同步效果？以及 <code>wait()</code> 到底是什麼意思？先回答第二個，因為它牽涉到整個機制的核心。</p>
+
+<h2>wait() 的角色：給任務「可被掛起」的權限</h2>
+<p><code>loop.run_until_complete()</code> 原本一次只收一個任務。當你有很多任務時，就要用 <code>asyncio.wait(tasks)</code> 把整個任務列表交給它。它的作用是：給列表中的每一個任務物件一個「可被掛起」的權限。</p>
+<p>所謂掛起，就是讓當前正在執行的任務交出 CPU 的使用權。一旦某個任務因為阻塞而被掛起，CPU 就可以去執行其他任務，整體效率才會提升。換句話說，<code>wait()</code> 負責的是「讓這些任務有停下來讓位的資格」，但光有資格還不夠。</p>
+
+<h2>await：主動標出每一個阻塞點</h2>
+<p>問題出在 <code>await</code>。上面那版用的 <code>time.sleep(2)</code> 是完全同步的等待，它會直接讓整條執行緒睡著 2 秒，中間不會把控制權交給任何人。其他任務只能等它睡醒，所以總時間就是 2 秒加 2 秒加 2 秒。</p>
+<p><code>await</code> 解決的正是這件事。它的用途是「掛起發生阻塞操作的那個任務」：凡是會阻塞的操作前面，都必須加上 <code>await</code>。它等於是你<strong>主動</strong>告訴程式：「這裡要等了，把控制權交出去。」上一節為什麼會提到「不可以出現不支援非同步模組的程式碼」，原因就在這裡：沒有 <code>await</code> 可加的同步等待，會把整條執行緒卡死。</p>
+
+<h2>三組要選對的寫法</h2>
+<table>
+<thead>
+<tr><th>情境</th><th>會拖垮非同步的寫法</th><th>正確的非同步寫法</th></tr>
+</thead>
+<tbody>
+<tr><td>等待</td><td><code>time.sleep(2)</code></td><td><code>await asyncio.sleep(2)</code></td></tr>
+<tr><td>發送網路請求</td><td><code>requests.get(url)</code></td><td><code>aiohttp</code>（下一步會用）</td></tr>
+<tr><td>阻塞操作前</td><td>什麼都不加，直接呼叫</td><td>呼叫前面加 <code>await</code></td></tr>
+<tr><td>多任務放進循環</td><td><code>run_until_complete(task)</code> 只收一個</td><td><code>run_until_complete(asyncio.wait(tasks))</code></td></tr>
+</tbody>
+</table>
+
+<h2>判別問句：動手前先問自己三件事</h2>
+<p>遇到一段非同步程式碼，你可以用三個問句快速判斷它會不會失效：</p>
+<ol>
+<li>這一行<strong>會不會停下來等</strong>？如果會（網路請求、睡眠、讀寫），它前面就必須有 <code>await</code>。</li>
+<li>這個模組<strong>支援非同步</strong>嗎？不支援的模組（例如 <code>time.sleep</code>、<code>requests</code>）不能出現在 <code>async def</code> 裡。</li>
+<li>這些任務<strong>是怎麼交給事件循環的</strong>？多個任務要用 <code>asyncio.wait(tasks)</code> 一起放進去，否則它們根本沒有被掛起的機會。</li>
+</ol>
+
+<h2>反例：只要混進一個同步呼叫，全部陪等</h2>
+<p>最容易被忽略的是第二個問句。你可能每一行都乖乖加了 <code>await</code>，但只要在 <code>async def</code> 裡偷偷放一個 <code>requests.get()</code>，整個非同步效果就會中斷。原因是 <code>requests</code> 在等網路時是把執行緒整個睡著，而不是把控制權交出去；事件循環裡的其他任務全部得等它做完才能動。看起來只是一個小地方，實際上等於把整個協程的優勢抹掉。</p>
+
+<h2>正確的一版</h2>
+<p>把 <code>time.sleep</code> 換成 <code>await asyncio.sleep</code>，並用 <code>asyncio.wait(tasks)</code> 承接任務列表，同一份程式就會真正並行等待：</p>
+<pre class="good-code" data-source="sources/js-reverse2/20261005/day08/异步爬虫.md#异步爬虫"><code>import asyncio
+import time
+
+start = time.time()
+
+async def get_request(url):
+    #特殊函数内部不可以出现不支持异步模块的代码，否则会中断整个异步效果
+    print('正在请求的网址是:',url)
+    #没有加await关键字之前：每一个任务中的阻塞操作并没有被执行
+    #await关键字：必须要加在每一个任务的阻塞操作前，作用就是强调执行任务中的阻塞操作
+    #await是用来手动控制任务的挂起操作。
+    await asyncio.sleep(2)
+    print('请求网址结束！')
+    return 123
+
+urls = [
+    'www.1.com','www.2.com','www.3.com'
+]
+
+tasks = [] #定义一个任务列表
+for url in urls: #循环3次
+    #创建了3个协程
+    c = get_request(url)
+    #创建3个任务对象
+    task = asyncio.ensure_future(c)
+    tasks.append(task) #将创建好的3个任务对象依次存放到了tasks这个任务列表中
+
+loop = asyncio.get_event_loop()
+#将任务列表tasks添加到loop容器中
+#wait()函数：用于接收一个任务列表，wait函数就可以给任务列表中每一个任务对象赋予一个可被挂起的权限
+#一个任务被挂起，就表示当前任务对象交出了cpu的使用权
+loop.run_until_complete(asyncio.wait(tasks))
+print('总耗时:',time.time()-start)</code></pre>
+<p>換成這一版之後，總耗時會落在 2 秒左右，而不是 6 秒。差別不在任務的數量，而在每個任務遇到等待時，是否真的把控制權交了出去。</p>
+
+<h2>小結</h2>
+<blockquote>判斷非同步有沒有生效，就看兩件事：<code>await</code> 有沒有加在每一個阻塞操作前面，以及 <code>async def</code> 裡有沒有混進不支援非同步的模組。<code>asyncio.wait(tasks)</code> 負責給任務「可被掛起」的權限，<code>await</code> 則負責在阻塞點實際把控制權交出。記住三個問句：會不會等？模組支不支援非同步？任務怎麼交給事件循環？</blockquote>
+<p>到這裡，你已經知道協程該怎麼寫、陷阱在哪裡，但範例裡的網路請求還是空的。下一節要把等待的對象換成真正的網頁：用支援非同步的 <code>aiohttp</code> 取代 <code>requests</code>，組出一支能同時抓多個頁面、並把結果交給解析函式的完整爬蟲。</p>
+
+<div class="lesson-nav">
+  <div><a href="./asyncio-run-skeleton.html">← 上一步：asyncio 起手式：特殊函數、任務與事件循環</a></div>
+  <div><a href="./aiohttp-multitask-crawler.html">下一步：aiohttp 多任務非同步爬蟲 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="多任務那版總耗時仍是 6 秒，最直接的原因是什麼？" data-correct="3" data-explain="time.sleep 是同步等待，會睡住整條執行緒，其他任務只能等它做完。">
+  <button class="opt">任務數量沒有放進列表</button>
+  <button class="opt">事件循環被重複建立很多次</button>
+  <button class="opt">協程物件沒有被包成任務</button>
+  <button class="opt">用了同步的 time.sleep</button>
+</div>
+
+<div class="quiz" data-question="asyncio.wait(tasks) 的主要作用是什麼？" data-correct="1" data-explain="它給任務列表中每個任務物件一個可被掛起的權限，讓它們能讓出 CPU。">
+  <button class="opt">強制所有任務依序排隊執行</button>
+  <button class="opt">給任務列表中每個任務掛起權限</button>
+  <button class="opt">把任務的回傳值收集成一個列表</button>
+  <button class="opt">幫每個任務自動重試失敗的請求</button>
+</div>
+
+<div class="quiz" data-question="await 關鍵字該加在什麼地方？" data-correct="2" data-explain="凡是會阻塞的操作前面都必須加 await，用來主動交出控制權。">
+  <button class="opt">加在函式定義與 import 之前</button>
+  <button class="opt">加在事件循環建立的那一行</button>
+  <button class="opt">加在每一個阻塞操作的前面</button>
+  <button class="opt">加在任務列表被建立之前</button>
+</div>
+
+<div class="quiz" data-question="為什麼 async def 裡不能放 requests？" data-correct="0" data-explain="requests 是同步模組，等待時會睡住整條執行緒，不交出控制權，會中斷非同步效果。">
+  <button class="opt">它會睡住執行緒而不交出控制權</button>
+  <button class="opt">它的回傳型別不是字串而是位元組</button>
+  <button class="opt">它無法設定 User-Agent 標頭</button>
+  <button class="opt">它只能在多行程模式下運作</button>
+</div>
+
+<div class="quiz" data-question="下列哪一組替換能讓等待真正非同步？" data-correct="3" data-explain="把同步的 time.sleep 換成 await asyncio.sleep，等待時才交得出控制權。">
+  <button class="opt">把 asyncio.wait 換成 run_until_complete</button>
+  <button class="opt">把 ensure_future 換成 get_event_loop</button>
+  <button class="opt">把 loop 換成一個新的 Event</button>
+  <button class="opt">把 time.sleep 換成 await asyncio.sleep</button>
+</div>
+
+<div class="quiz" data-question="判斷非同步是否有生效，最該先檢查哪兩件事？" data-correct="1" data-explain="檢查每個阻塞前有沒有 await，以及 async def 裡有沒有混進同步模組。">
+  <button class="opt">程式行數與註解的數量</button>
+  <button class="opt">await 的位置與模組是否支援非同步</button>
+  <button class="opt">任務數量與事件循環的版本</button>
+  <button class="opt">CPU 核心數與記憶體的大小</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · asyncio 與 aiohttp 非同步爬蟲 · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+---
+id: m3u8-hls
+title: M3U8/HLS 串流下載
+subject: js-reverse2
+tier: 2
+order: 9
+status: content-written
+goal: 解析 M3U8 播放清單、下載並合併 TS 分片，並說出高併發下載時的踩雷與替代寫法。
+sources:
+  - "[[sources/js-reverse2/20261005/day09/m3u8.md#m3u8]]"
+steps:
+  - id: hls-m3u8-basics
+    order: 1
+    type: concept
+  - id: locate-parse-m3u8
+    order: 2
+    deps:
+      - hls-m3u8-basics
+    type: procedure
+  - id: download-ts-segments
+    order: 3
+    deps:
+      - locate-parse-m3u8
+    type: procedure
+  - id: concurrency-pitfalls
+    order: 4
+    deps:
+      - download-ts-segments
+    type: decision
+prerequisites:
+  - learn/js-reverse2/nodes/concurrency-model
+  - learn/js-reverse2/nodes/async-crawler
+created: 2026-10-05
+updated: 2026-10-05
+---
+
+# M3U8/HLS 串流下載
+
+## Learning goal
+
+解析 M3U8 播放清單、下載並合併 TS 分片，並說出高併發下載時的踩雷與替代寫法。
+
+## Steps
+
+1. [[learn/js-reverse2/nodes/m3u8-hls/hls-m3u8-basics|HLS 與 M3U8：影片為什麼變成一片片 TS]] — 看懂 HLS 分片機制與播放清單欄位
+2. [[learn/js-reverse2/nodes/m3u8-hls/locate-parse-m3u8|定位並解析 M3U8 播放清單]] — 從封包找到 M3U8，解析出所有 TS 位址（after step 1）
+3. [[learn/js-reverse2/nodes/m3u8-hls/download-ts-segments|下載 TS 分片：同步、協程、執行緒池三種寫法]] — 用三種併發模型批次下載並合併（after step 2）
+4. [[learn/js-reverse2/nodes/m3u8-hls/concurrency-pitfalls|高併發下載的踩雷與替代寫法]] — 判斷何時該用哪種模型，避開連線池與 loop 嵌套的坑（after step 3）
+
+## Lesson
+
+這節課處理的是一類「表面上是抓影片、骨子裡是批次下載」的目標。現在多數影音網站早就不直接給你一個 MP4 檔，而是用 HLS（HTTP Live Streaming）把影片切成幾秒一段的 TS 分片，再用一份 M3U8 播放清單把這些分片串起來。所以抓取流程其實不是一次請求，而是一條三步鏈：先拿到清單、再解析出所有分片位址、最後批次下載並合併。前三步分別對應這條鏈的每一環，第四步則回頭處理批次下載真正的難點——併發量一大，錯誤就跟著來。
+
+這條鏈的每一個環節都有一個容易忽略的細節。清單本身是純文字，真正的分片位址藏在非 `#` 開頭的行裡，而且常是相對路徑，必須跟清單所在的 base URL 拼接。批次下載則會用到你已經學過的併發模型：同步迴圈最單純但最慢，協程適合大量的 IO 等待，執行緒池則是現成又穩妥的替代；但無論選哪一種，都可能撞上 `HTTPSConnectionPool` 這類連線耗盡的錯誤，解法往往只是加一個標頭。把這三環走完，你就有能力面對多數以 HLS 串流的影音站。
+
+## Sources
+
+- [[sources/js-reverse2/20261005/day09/m3u8.md#m3u8]]

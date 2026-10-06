@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cookie 要手動帶還是用 Session 自動帶？</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Cookie 要手動帶還是用 Session 自動帶？</h1>
+<p class="meta">Step 2/5 · 會話維持：Cookie、登入、代理與驗證碼</p>
+
+<h2>學習目標</h2>
+<p>能依「Cookie 是否會變動、是否要跨多次請求延續」判斷該手動把 Cookie 放進標頭，還是改用 <code>requests.Session</code> 自動處理。</p>
+
+<h2>前言：原理懂了，選法還沒定</h2>
+<p>上一節你把 Cookie 與 Session 的原理弄懂了：Cookie 是伺服器發的識別證，Session 是幫你保管識別證的皮夾。可是懂了原理不等於會選。實際寫爬蟲時，你手上有兩條路可以把 Cookie 帶上去，而多數人卡住的正是這個選擇：到底要把抓包看到的 Cookie 手動貼進標頭，還是乾脆改用 <code>requests.Session</code> 讓它自動處理？</p>
+<p>這一節不談新原理，只把兩條路攤開來比較。目標很單純：下次你看到一個需要 Cookie 的目標，能在三十秒內決定該用哪一招。</p>
+
+<h2>兩條路先看清楚</h2>
+<p><strong>手動處理</strong>的做法很直白：用抓包工具看伺服器發了哪些 Cookie，把那一整串複製下來，當成固定字串塞進請求標頭的 <code>Cookie</code> 欄位。送出時，你就等於戴著這張識別證去敲門。</p>
+<p><strong>自動處理</strong>則是建立一個 <code>requests.Session()</code>，先發一次請求讓伺服器把 Cookie 發下來、存進 Session，之後用同一個 Session 發的請求都會自動帶上它。你不必手動維護那份字串。</p>
+<p>兩者的差異可以用一張表看完：</p>
+<table>
+<thead>
+<tr><th>面向</th><th>手動處理</th><th>Session 自動處理</th></tr>
+</thead>
+<tbody>
+<tr><td>作法</td><td>複製 Cookie 字串塞進 headers</td><td>建立 Session，先請求一次讓 Cookie 存入</td></tr>
+<tr><td>優點</td><td>寫起來快，一眼看得出送了什麼</td><td>Cookie 過期或變動都能自動更新，跨請求延續</td></tr>
+<tr><td>缺點</td><td>Cookie 過期就失效；含即時變動片段就出錯；改版後要重貼</td><td>至少要發兩次請求；登入流程若很多步未必全自動涵蓋</td></tr>
+<tr><td>適用時機</td><td>Cookie 固定、量少、只需要用一次</td><td>需要登入、Cookie 會變、要用同一身分連續抓很多頁</td></tr>
+</tbody>
+</table>
+
+<p>把兩邊的程式擺在一起，差別更清楚：</p>
+<pre data-provenance="derived"><code># 手動：把 Cookie 當成固定字串貼進標頭
+headers = {
+    "User-Agent": "Mozilla/5.0 ...",
+    "Cookie": "sessionid=abc123; token=xyz",
+}
+requests.get(url, headers=headers)
+
+# 自動：讓 Session 先收下 Cookie，再帶著它請求
+session = requests.Session()
+session.get(first_url, headers=headers)      # 第一次：拿 Cookie
+ret = session.get(url, headers=headers)      # 第二次：自動帶 Cookie
+</code></pre>
+<p>注意兩邊的「量」不一樣：手動版本只發一次請求，Session 版本至少兩次。這正是取捨的核心：你多花一次請求，換來的是再也不必手動維護 Cookie。</p>
+
+<h2>判別問句：三個問題決定走哪條路</h2>
+<p>不要憑感覺選。拿到目標時，先問自己三個可測試的問題：</p>
+<ol>
+<li>這份 Cookie 會過期嗎？會的話就別手動，因為你貼上的那一串遲早失效。</li>
+<li>Cookie 裡有沒有即時變動的片段？有的話也別手動，因為你複製的只是抓包當下的舊值。</li>
+<li>我需要用同一個身分連續發很多次請求嗎？需要的話就用 Session，讓它幫你一路帶著 Cookie。</li>
+</ol>
+<p>三個問題的答案如果都是「不會、沒有、不用」，那手動才是划算的選擇；只要有一個是「會、有、要」，就換 Session。</p>
+
+<h2>反例：規則會在哪裡翻轉</h2>
+<p>先講手動會贏的情況。如果某個靜態網站只在第一個請求給你一個固定不變的 Cookie，而你只需要抓一個頁面，那麼手動貼一次就結束了，用 Session 反而多發一次請求。這種「一次性、不變動」的場合，手動的簡單直接就是優勢。</p>
+<p>再講手動會輸得最慘的情況。像雪球網那類目標，熱門貼文是 ajax 動態載入的，資料介面需要 Cookie；而且伺服器發的 Cookie 含有即時變動的片段。你若手動複製抓包看到的舊 Cookie，過一陣子就失效，怎樣都抓不到資料。這種情況必須改用 Session：先造訪首頁讓伺服器發一份全新的 Cookie 存進 Session，再去打資料介面，才拿得到內容。</p>
+<p>但 Session 也不是萬能，這是常被忽略的反例。如果登入流程需要多步跳轉，或者第一個請求跟資料頁跨了不同網域，Session 不一定會把 Cookie 自動帶到你以為的地方。這時候要回頭看實際封包，自己補上中間缺少的請求。選擇從來不是「Session 一定對」，而是「哪一條路在這個目標上最省事又最可靠」。</p>
+<p>最後提醒一個判斷的起點：只要爬蟲拿不到你想要的資料，唯一的原因通常是模擬瀏覽器的力度不夠，而模擬的重點多半落在請求標頭。Cookie 只是這條線上的其中一環，遇到失敗先檢查它有沒有被正確帶上。</p>
+
+<h2>小結</h2>
+<blockquote>
+判準一句話：Cookie 固定、量少、只用一次，就手動貼進標頭；只要 Cookie 會過期、含即時變動片段，或你要用同一身分連續抓很多頁，就改用 <code>requests.Session</code> 自動承接。Session 的代價是至少兩次請求，換來的是不會因為 Cookie 過期或網站改版而突然抓不到。
+</blockquote>
+<p>決定了用 Session 之後，下一節就把鏡頭拉近，實際登入一次給你看。我們會拿一個需要帳密登入的書架頁面當例子，走完「送出帳密 → Cookie 存進 Session → 帶著 Cookie 抓資料」這條完整流程。</p>
+
+<div class="lesson-nav">
+  <div><a href="./cookie-session-basics.html">← 上一步：Cookie 與 Session：HTTP 無狀態怎麼維持登入？</a></div>
+  <div><a href="./simulated-login.html">下一步：模擬登入：用 Session 走完帳密登入流程 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="決定手動帶 Cookie 或交給 Session，最關鍵的判準是什麼？" data-correct="1" data-explain="關鍵在 Cookie 會不會變動、是否需要跨多次請求延續。">
+  <button class="opt">Cookie 字串的長度會不會太長</button>
+  <button class="opt">Cookie 會不會變動、是否跨多次請求</button>
+  <button class="opt">目標網站是用 Python 還是用 Node</button>
+  <button class="opt">你的電腦有沒有安裝瀏覽器可用</button>
+</div>
+
+<div class="quiz" data-question="手動把 Cookie 貼進 headers 最主要的缺點是什麼？" data-correct="1" data-explain="手動貼上的是一份固定字串，Cookie 一過期或變動就會失效。">
+  <button class="opt">會讓每一次請求的速度明顯變慢</button>
+  <button class="opt">Cookie 過期或變動時就會失效</button>
+  <button class="opt">會導致伺服器直接封鎖你的 IP</button>
+  <button class="opt">會讓回應內容被自動壓縮遺失</button>
+</div>
+
+<div class="quiz" data-question="下列哪種情況最適合直接用 Session 自動處理？" data-correct="1" data-explain="需要同一身分連續抓很多頁時，讓 Session 自動維持 Cookie 最省事。">
+  <button class="opt">只需要抓一次、Cookie 固定不變</button>
+  <button class="opt">需要用同一身分連續抓很多頁</button>
+  <button class="opt">目標網站完全不需要任何 Cookie</button>
+  <button class="opt">只是想測試代理伺服器是否可用</button>
+</div>
+
+<div class="quiz" data-question="雪球網的例子裡，手動複製 Cookie 為什麼會失敗？" data-correct="0" data-explain="它的 Cookie 含有即時變動的片段，複製抓包當下的舊值很快就失效。">
+  <button class="opt">因為複製的 Cookie 含有即時變動片段</button>
+  <button class="opt">因為 Cookie 不能放在 headers 裡面</button>
+  <button class="opt">因為它的資料其實不需要 Cookie</button>
+  <button class="opt">因為 Cookie 只能用 POST 方式送出</button>
+</div>
+
+<div class="quiz" data-question="使用 Session 自動處理 Cookie 的代價是什麼？" data-correct="1" data-explain="Session 至少要先發一次請求把 Cookie 存進來，之後才帶得上。">
+  <button class="opt">無法再自訂任何請求的標頭</button>
+  <button class="opt">至少要發兩次請求才能生效</button>
+  <button class="opt">只能用在 http 不能用在 https</button>
+  <button class="opt">必須額外安裝第三方套件才行</button>
+</div>
+
+<div class="quiz" data-question="當爬蟲拿不到想要的資料時，通常的根本原因是什麼？" data-correct="1" data-explain="多半是爬蟲模擬瀏覽器的力度不夠，而重點常落在請求標頭。">
+  <button class="opt">網站的伺服器當下剛好故障了</button>
+  <button class="opt">爬蟲模擬瀏覽器的力度不夠</button>
+  <button class="opt">你的網路連線速度不夠穩定</button>
+  <button class="opt">目標網頁的 HTML 標籤太少</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 會話維持：Cookie、登入、代理與驗證碼 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

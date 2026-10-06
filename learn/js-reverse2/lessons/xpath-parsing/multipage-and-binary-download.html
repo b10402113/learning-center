@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多頁爬取與二進位檔案下載</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>多頁爬取與二進位檔案下載</h1>
+<p class="meta">Step 4/5 · XPath 與資料解析</p>
+
+<h2>學習目標</h2>
+<p>套用多頁爬取的頁碼規律與「首頁取詳情連結、詳情頁取真正檔案」的兩層結構，並用 <code>response.content</code> 加 <code>wb</code> 正確下載圖片、壓縮檔等二進位資料。</p>
+
+<h2>前言：一頁的技術，撐不起真實任務</h2>
+<p>前三節你已經能在單一頁面上定位、取值。但真實任務很少這麼客氣：清單通常有幾十頁，你要的檔案還可能藏在一個點進去的詳情頁裡，而且它是一張圖片或一個壓縮檔，不是文字。如果只會處理單頁文字，遇到這種任務就會卡住。</p>
+<p>這一節把前面的技能串成一條完整流程，順便補上兩個實戰細節：多頁的網址怎麼接，以及二進位資料要怎麼下載才不會存成壞檔。做完之後，你手上就有一套可以直接套用在「小說站、素材站、圖片站」的骨架。</p>
+
+<h2>第一步：找出多頁的網址規律</h2>
+<p>翻頁不是玄學，網站的第二頁網址通常只是第一頁改了幾個字。以簡歷模板站為例，第一頁是 <code>free.html</code>，第二頁變成 <code>free_2.html</code>，後面依此類推。所以爬多頁的關鍵，是先用瀏覽器切到第二、第三頁，比對網址，找出那個「第幾頁的數字」放在哪裡，再用迴圈套進去。</p>
+<p>要注意的是第一頁往往是特例，它不帶數字。原始碼裡的處理方式是先判斷頁碼，再決定要接哪個網址：</p>
+<pre data-source="sources/js-reverse2/20261005/day05/数据解析.md#数据解析"><code>for page in range(1,3):#page的取值是1-5之间
+    if page == 1:
+        url = 'https://sc.chinaz.com/jianli/free.html'
+    else:
+        url = 'https://sc.chinaz.com/jianli/free_%d.html'%page
+    print('正在爬取第%d页的数据......'%page)</code></pre>
+<p><code>range(1,3)</code> 代表 page 會依序是 1、2，也就是爬前兩頁。真實使用時把範圍放大即可，但別忘了下面會提到的節流。另外，網址的編碼要照網站來：中文站常見 <code>utf-8</code>，圖片站有可能是 <code>gbk</code>，設錯就會整片亂碼。</p>
+
+<h2>第二步：兩層結構，列表頁取連結、詳情頁取資料</h2>
+<p>很多清單不會直接把內容放在列表上，而是每一項連到一個詳情頁，真正的資料在那一頁。碧血劍小說的案例就是這種結構：首頁列出章節標題與連結，點進去才是整章內文。程式必須來回兩趟，第一趟在首頁把每一章的標題和網址收集起來，第二趟逐一拜訪詳情頁取內容：</p>
+<pre data-source="sources/js-reverse2/20261005/day05/数据解析.md#数据解析"><code>import requests
+from lxml import etree
+headers = {
+    'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+}
+
+#对首页进行页面数据请求
+url = 'https://bixuejian.5000yan.com/'
+response = requests.get(url=url,headers=headers)
+response.encoding = 'utf-8'
+page_text = response.text
+
+#数据解析：解析章节的标题&详情页的url
+tree = etree.HTML(page_text)
+#li_list列表中存储的是xpath表达式定位到的每一个li标签
+li_list = tree.xpath('/html/body/div[2]/div[1]/main/ul/li')
+
+fp = open('xiaoshuo.txt','w')
+
+for li in li_list:
+    #局部解析：只可以解析li标签内部的局部标签
+    title = li.xpath('./a/text()')[0] # 这个.表示的是xpath的调用者，也就是li标签
+    detail_url = li.xpath('./a/@href')[0]
+    #对详情页的url发起请求，获取详情页的页面源码数据
+    detail_response = requests.get(url=detail_url,headers=headers)
+    detail_response.encoding = 'utf-8'
+    detail_page_text = detail_response.text
+    #对详情页进行数据解析：章节内容
+    detail_tree = etree.HTML(detail_page_text)
+    content = detail_tree.xpath('/html/body/div[2]/div[1]/main/section/div[1]//text()')
+    #将content列表转换成一个完整的字符串
+    content = ''.join(content).strip()
+
+    #持久化存储
+    fp.write(title+':'+content+'\n')
+    print(title,':章节下载保存成功！')
+fp.close()</code></pre>
+<p>仔細看這個骨架：外層是「取得首頁、解析出 li 清單」，內層是「對每個 li 取標題與連結，再去請求詳情頁」。<code>./a/text()</code> 與 <code>./a/@href</code> 用的正是上一節的局部解析。這種兩層結構之後會一再出現：商品列表進商品頁、影片列表進播放頁、文章列表進內文頁，都是同一個模式。</p>
+
+<h2>第三步：二進位資料要用 content 加 wb</h2>
+<p>當你要下載的是壓縮檔或圖片，就不能用 <code>response.text</code> 了。文字是給人讀的，二進位是給程式看的，兩者要分開處理。原始碼的簡歷下載案例示範了正確的寫法：</p>
+<pre data-source="sources/js-reverse2/20261005/day05/数据解析.md#数据解析"><code>    …
+    download_url = detail_tree.xpath('//*[@id="down"]/div[2]/ul/li[1]/a/@href')[0]
+    #对下载地址发起请求，下载对应的简历压缩包数据
+    data = requests.get(url=download_url,headers=headers).content
+    file_name = './jianli/'+title+'.rar'
+    with open(file_name,'wb') as fp:
+        fp.write(data)
+    print(title,'：下载保存成功！')</code></pre>
+<p>兩個關鍵字：<code>.content</code> 拿到的是原始位元組（bytes），存檔時要用 <code>'wb'</code>（write binary）開啟檔案。如果用 <code>.text</code> 配 <code>'w'</code>，輕則檔案損壞，重則直接報編碼錯誤。圖片也是同一套，只是副檔名換成 <code>.jpg</code>：</p>
+<pre data-source="sources/js-reverse2/20261005/day05/数据解析.md#数据解析"><code>    detail_page_text = requests.get(url=detail_url,headers=headers).text
+    detail_tree = etree.HTML(detail_page_text)
+    img_src = 'https://pic.netbian.com/'+detail_tree.xpath('//*[@id="img"]/img/@src')[0]
+    img_data = requests.get(url=img_src,headers=headers).content
+    img_path = './imgs/'+title+'.jpg'
+    with open(img_path,'wb') as fp:
+        fp.write(img_data)
+    print(title,'：保存下载成功！')</code></pre>
+
+<h3>網址補齊：相對路徑要自己接</h3>
+<p>上面那張圖片的寫法藏了一個細節：<code>'https://pic.netbian.com/'+detail_tree.xpath(...)</code>。詳情頁裡的 <code>src</code> 常常是相對路徑，只寫了 <code>/uploads/xxx.jpg</code> 這種片段。這種網址直接拿去請求會失敗，必須自己補上網域或協定。判斷的方式是看瀏覽器網址列與圖片網址的關係，缺什麼補什麼。</p>
+
+<h2>動手之後你會看到什麼</h2>
+<p>跑完一輪，你的工作目錄裡應該出現一整批檔案：小說是一個 txt、簡歷是幾十個 rar、圖片是一堆 jpg，而且每個都打得開、內容完整。如果檔案大小是 0 或打不開，回頭檢查兩件事：有沒有用 <code>.content</code> 配 <code>'wb'</code>，以及目錄是不是先建好了。這一步能穩定跑完，就代表你已經把「定位、取值、翻頁、存檔」四塊拼成一條可用的流程。</p>
+<p>最後補一個實戰提醒：連續請求幾十、幾百次時，請在迴圈裡加一點延遲，例如 <code>time.sleep(0.5)</code>。這不是禮貌問題，而是很多網站會用頻率偵測直接封你，慢一點反而爬得久。</p>
+
+<h2>小結</h2>
+<blockquote>
+多頁爬取靠的是先比對出網址的頁碼規律，再用迴圈套入，並記得第一頁常是特例。清單類網站多半是兩層結構：列表頁取標題與詳情連結，詳情頁再取真正的資料。文字用 <code>.text</code>，圖片與壓縮檔用 <code>.content</code> 配 <code>'wb'</code>。相對網址要自己補上網域，並視情況加 <code>time.sleep()</code> 節流。
+</blockquote>
+<p>到這裡，一般網站的抓取與解析已經能跑通。但有些網站會刻意「不讓你的程式看到真正的資料」，例如圖片網址被換掉、或要求你帶著來源標頭。下一節就來看這兩種常見的阻擋手法，以及要改抓哪個屬性才能繞過。</p>
+
+<div class="lesson-nav">
+  <div><a href="./xpath-extract.html">← 上一步：提取文字與屬性：/text()、//text() 與 @attr</a></div>
+  <div><a href="./anti-hotlink-and-lazy-load.html">下一步：防盜鏈與圖片懶載入的機制與對策 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="簡歷站第一頁是 free.html、第二頁是 free_2.html，程式中該怎麼處理？" data-correct="1" data-explain="用迴圈跑頁碼，並把第一頁當特例，其餘用 free_%d.html 套入頁碼。">
+  <button class="opt">只爬第一頁，因為第二頁網址不同</button>
+  <button class="opt">用迴圈套頁碼，第一頁當特例</button>
+  <button class="opt">把每一頁的網址手動寫成一張清單</button>
+  <button class="opt">改用 POST，把頁碼放在請求體</button>
+</div>
+
+<div class="quiz" data-question="碧血劍案例中，首頁和詳情頁各負責取什麼？" data-correct="0" data-explain="首頁取章節標題與詳情連結，詳情頁才取真正的章節內文。">
+  <button class="opt">首頁取標題與連結，詳情頁取內文</button>
+  <button class="opt">首頁取內文，詳情頁取標題與連結</button>
+  <button class="opt">兩頁都取內文，只是分頁不同</button>
+  <button class="opt">兩頁都只取連結，內文另外請求</button>
+</div>
+
+<div class="quiz" data-question="下載壓縮檔或圖片時，為什麼要用 response.content 而不是 response.text？" data-correct="2" data-explain="content 拿到原始位元組，才能正確寫入二進位檔案；text 是解碼後的字串，會破壞二進位資料。">
+  <button class="opt">content 的速度比 text 快很多</button>
+  <button class="opt">text 只能用在 JSON 回應上</button>
+  <button class="opt">content 是位元組，適合二進位檔</button>
+  <button class="opt">text 無法處理超過 1MB 的資料</button>
+</div>
+
+<div class="quiz" data-question="存二進位檔案時，open() 的 mode 該用哪一個？" data-correct="3" data-explain="'wb' 代表 write binary，才能正確寫入圖片與壓縮檔。">
+  <button class="opt">'r'</button>
+  <button class="opt">'w'</button>
+  <button class="opt">'rb'</button>
+  <button class="opt">'wb'</button>
+</div>
+
+<div class="quiz" data-question="詳情頁裡的圖片 src 是 `/uploads/a.jpg`，直接拿去請求會失敗，該怎麼處理？" data-correct="1" data-explain="這是相對路徑，要自己補上網域或協定，拼成完整的絕對網址。">
+  <button class="opt">改用 POST 方法重新請求一次</button>
+  <button class="opt">在網址前補上網域或協定</button>
+  <button class="opt">加上 Referer 標頭就會自動補齊</button>
+  <button class="opt">改用 response.text 抓取位元組</button>
+</div>
+
+<div class="quiz" data-question="在迴圈裡連續請求幾百次時，加 time.sleep() 的主要目的是什麼？" data-correct="2" data-explain="降低請求頻率、避免觸發網站的頻率偵測而被封鎖，也讓爬取能持續。">
+  <button class="opt">讓每一頁的編碼都能正確解讀</button>
+  <button class="opt">讓 XPath 能抓到更多標籤</button>
+  <button class="opt">降低頻率，避免被網站封鎖</button>
+  <button class="opt">減少程式記憶體的使用量</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · XPath 與資料解析 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

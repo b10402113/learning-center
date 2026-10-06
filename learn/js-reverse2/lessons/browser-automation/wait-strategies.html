@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>等還是不等：強制、顯式與隱式等待的取捨</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>等還是不等：強制、顯式與隱式等待的取捨</h1>
+<p class="meta">Step 3/6 · 瀏覽器自動化與動態渲染</p>
+
+<h2>學習目標</h2>
+<p>判斷動態元素的載入時機，選對強制、顯式與隱式等待，避免定位不到元素或白白浪費固定延遲。</p>
+
+<h2>前言：程式碼沒寫錯，卻一直說找不到元素</h2>
+<p>上一節的範例裡，到處都是 <code>sleep(2)</code>、<code>sleep(5)</code>，而且秒數看起來像隨手猜的。這其實是自動化最常見的失敗來源：你的定位語法完全正確，元素在畫面上也確實存在，但你就是<strong>太早去找它</strong>，於是程式丟出找不到元素的錯誤。</p>
+<p>為什麼會太早？因為現代網頁是動態組出來的，網址一換過去，HTML 骨架先到，內容區塊卻還要等 JavaScript 把資料抓回來、拼進 DOM。在這段空窗期去定位，當然撲空。這一節要做的決定很單純：等，要怎麼等。Selenium 提供三種等待，各有適用時機，選錯了不是白等就是白爆。</p>
+<p><strong>前置條件：</strong>你已經會用 Selenium 開頁、定位與取 <code>page_source</code>（上一節的內容）。</p>
+
+<h2>三種等待，先看全貌</h2>
+<p>先把它們並排看清楚，差異其實就一句話：<strong>你是在等「一段時間」，還是在等「一個條件」。</strong></p>
+<table>
+<thead>
+<tr><th>方式</th><th>寫法</th><th>行為</th><th>適用時機</th></tr>
+</thead>
+<tbody>
+<tr><td>強制等待</td><td><code>time.sleep(n)</code></td><td>無條件阻塞 n 秒，不管元素到了沒</td><td>臨時觀察、debug，或真的沒有可等待的條件時</td></tr>
+<tr><td>顯式等待</td><td><code>WebDriverWait(...).until(EC...)</code></td><td>針對指定條件輪詢，條件成立就立刻往下，逾時才拋錯</td><td>你很確定在等某一個特定元素或狀態</td></tr>
+<tr><td>隱式等待</td><td><code>driver.implicitly_wait(n)</code></td><td>設定一次，之後每次定位失敗都會在 n 秒內輪詢</td><td>整個流程要反覆找很多元素，想設一個全域底線</td></tr>
+</tbody>
+</table>
+
+<h2>強制等待：最簡單，也最不聰明</h2>
+<p>強制等待就是叫程式停在原地 n 秒，時間到才繼續。它的優點是絕對不會誤判，缺點是<strong>它等的不是元素，而是時鐘</strong>：元素其實一秒就到了，你還是得等滿三秒；網路慢的時候你等了三秒，它卻可能十分鐘才到。本質上是用「運氣」換「穩定」。</p>
+<pre data-source="sources/js-reverse2/20261005/day09/selenium.md#selenium"><code>import time
+time.sleep(n)      # 阻塞等待设定的秒数之后再继续往下执行</code></pre>
+<p>把 <code>n</code> 調大不會真的解決問題，只是把「常常爆」變成「偶爾爆」；調小則更不穩。所以它適合拿來做暫時的觀察，或搭配其他等待一起用，不該是正式流程的主力。</p>
+
+<h2>顯式等待：等一個條件，最靈活</h2>
+<p>顯式等待把等待的對象從「時間」換成「條件」。你告訴它：幫我等到某個元素出現在頁面上，最多等十秒，中間每半秒檢查一次。一旦條件成立，它立刻放行，不會多等；只有超過時限還沒等到，才拋出例外。這是最貼近真正需求的做法。</p>
+<pre data-source="sources/js-reverse2/20261005/day09/selenium.md#selenium"><code>from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+ # 每隔 0.5s 检查一次(默认就是 0.5s), 最多等待 10 秒,否则报错。如果定位到元素则直接结束等待，如果在10秒结束之后仍未定位到元素则报错
+ wait = WebDriverWait(chrome, 10,0.5)
+ wait.until(EC.presence_of_element_located((By.ID, 'J_goodsList'))) </code></pre>
+<p>這段的重點是：<code>WebDriverWait(chrome, 10, 0.5)</code> 設定「最多十秒、每 0.5 秒檢查一次」，而 <code>until(...)</code> 裡面放的是一個<strong>預期條件</strong>（expected_conditions，簡稱 EC）。這裡用 <code>presence_of_element_located</code>，代表只要元素出現在 DOM 裡就放行。它的實作其實就是一個不停嘗試的迴圈，只是幫你把輪詢與逾時都封裝好了，所以既不會空等，也不會太早放棄。</p>
+
+<h2>隱式等待：設一次，全域生效</h2>
+<p>隱式等待的做法是在 driver 上設一個超時，之後<strong>每次</strong>定位失敗，它都會自動在設定的秒數內反覆重試，直到找到或逾時。它最省事，設一次就能替整個流程墊一層保險。</p>
+<pre data-source="sources/js-reverse2/20261005/day09/selenium.md#selenium"><code>driver.implicitly_wait(10)    # 在指定的n秒内每隔一段时间尝试定位元素，如果n秒结束还未被定位出来则报错</code></pre>
+<p>它好用的情境是：這個腳本接下來要找幾十個元素，而你不想為每一個都寫一次顯式等待。設定完之後，所有定位動作都自動享有這層等待。代價是它很「粗」：你無法針對某個元素調整時間，也無法指定「要等到可點擊」這種更細的條件。</p>
+
+<h2>怎麼選：三個自我提問</h2>
+<p>把選擇變成可回答的問題，你就不會憑感覺亂挑：</p>
+<ol>
+<li>我明確知道在等<strong>哪一個</strong>元素或哪個狀態嗎？如果是，用顯式等待，並把條件寫成那個元素。</li>
+<li>還是這個瀏覽器接下來要<strong>反覆定位很多</strong>元素，我需要一個統一的底線？如果是，用隱式等待設一次就好。</li>
+<li>我只是要讓畫面停一下看清楚，或真的沒有任何條件可等？那才用強制等待，而且越短越好。</li>
+</ol>
+
+<h2>反例：這些情況會讓等待失效</h2>
+<p>等待不是設了就好，有幾個容易踩的邊界要知道。第一，<strong>隱式與顯式混用</strong>時，兩者的時間可能互相疊加，總等待長度變得難以預期；實務上建議以一種為主，不要兩套都開。第二，顯式等待用 <code>presence_of_element_located</code> 只保證「元素出現在 DOM」，如果元素出現了卻還不能點（例如被遮罩蓋住、還在動畫中），你要改用 <code>element_to_be_clickable</code> 這類更嚴格的條件。第三，隱式等待是<strong>全域</strong>設定，一旦設下去，就沒有辦法只針對某個元素關掉它。</p>
+<p>還有一個觀念要釐清：等待真正在等的是「條件成立」，不是「秒數夠了」。當你把 <code>sleep</code> 一路調大卻仍然偶爾失敗，通常不是秒數不夠，而是你根本沒搞清楚該等哪個元素，那正是顯式等待要解決的問題。</p>
+
+<h2>小結</h2>
+<blockquote>
+等待的選擇取決於「你在等時間還是在等條件」。預設用<strong>顯式等待</strong>去等你要的那個關鍵元素，條件成立就立刻放行、逾時才報錯；如果整個流程要反覆找很多元素，用<strong>隱式等待</strong>設一個全域底線；<strong>強制等待</strong>只留給 debug 或真的沒有條件可等的場合。不要兩套等待混用，也不要靠把秒數調大來硬撐。
+</blockquote>
+<p>到這裡，你已經能穩定地把動態頁面渲染出來、也等得到元素了。但很多大站還有下一道關卡：它一眼就看出你用的是自動化瀏覽器，於是不給你正常內容。下一步要處理的就是這個「被認出來」的問題。</p>
+
+<div class="lesson-nav">
+  <div><a href="./selenium-drive-extract.html">← 上一步：Selenium 基本操作：建立驅動、定位、互動、取渲染後 DOM</a></div>
+  <div><a href="./evade-webdriver-fingerprint.html">下一步：被認出來了：navigator.webdriver 指紋與 stealth 注入 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼動態頁面常常在定位時找不到元素？" data-correct="2" data-explain="網址一換過去骨架先到，內容要等 JS 把資料拼進 DOM，太早定位就會撲空。">
+  <button class="opt">因為 XPath 的表達式一定寫錯了</button>
+  <button class="opt">因為 driver 的版本太新不相容</button>
+  <button class="opt">因為元素還沒被 JS 渲染出來</button>
+  <button class="opt">因為瀏覽器沒有開啟 JavaScript</button>
+</div>
+
+<div class="quiz" data-question="顯式等待等待的對象是什麼？" data-correct="1" data-explain="顯式等待等的是條件，例如某個元素出現在 DOM 或變成可點擊，條件成立就放行。">
+  <button class="opt">一段固定的秒數</button>
+  <button class="opt">一個指定的條件</button>
+  <button class="opt">整個頁面載入完成</button>
+  <button class="opt">網路的傳輸速度</button>
+</div>
+
+<div class="quiz" data-question="整個流程要反覆定位很多元素，想設一個統一底線，該用哪一種？" data-correct="3" data-explain="隱式等待設一次後，每次定位失敗都會在設定時間內自動重試，適合當全局底線。">
+  <button class="opt">每次都寫一次 <code>sleep</code></button>
+  <button class="opt">每個元素各寫一次顯式等待</button>
+  <button class="opt">把 driver 網址換掉重開</button>
+  <button class="opt">用 <code>implicitly_wait</code> 設一次</button>
+</div>
+
+<div class="quiz" data-question="顯式與隱式等待混用可能造成什麼問題？" data-correct="0" data-explain="兩套等待時間可能互相疊加，總等待長度變得難以預期，實務上建議以一種為主。">
+  <button class="opt">兩者時間疊加難以預期</button>
+  <button class="opt">瀏覽器會直接強制關閉</button>
+  <button class="opt">XPath 會因此全部失效</button>
+  <button class="opt">driver 會自動降版本</button>
+</div>
+
+<div class="quiz" data-question="元素已出現在 DOM，但要等它變成可以點擊，該換哪種條件？" data-correct="2" data-explain="presence 只保證出現，要等到可點擊得改用 element_to_be_clickable 這類更嚴格的條件。">
+  <button class="opt">把秒數直接調大到六十秒</button>
+  <button class="opt">改用強制等待一再重試</button>
+  <button class="opt">改用可點擊的預期條件</button>
+  <button class="opt">改用隱式等待設更久</button>
+</div>
+
+<div class="quiz" data-question="下面哪一句最符合本節的決策規則？" data-correct="1" data-explain="預設用顯式等待等關鍵元素，很多元素時用隱式墊底，強制等待只留給 debug。">
+  <button class="opt">一律用最長的強制等待最保險</button>
+  <button class="opt">預設顯式、量大隱式、debug 才強制</button>
+  <button class="opt">顯式和隱式一起開效果最好</button>
+  <button class="opt">等待秒數越大程式越穩定</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 瀏覽器自動化與動態渲染 · Step 3/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

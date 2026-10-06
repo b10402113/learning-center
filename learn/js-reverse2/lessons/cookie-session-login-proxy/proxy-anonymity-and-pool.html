@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>代理伺服器：匿名度、類型與代理池</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>代理伺服器：匿名度、類型與代理池</h1>
+<p class="meta">Step 4/5 · 會話維持：Cookie、登入、代理與驗證碼</p>
+
+<h2>學習目標</h2>
+<p>能用 <code>proxies</code> 參數讓請求走代理，說出透明／匿名／高匿的差別與代理類型必須對上協定，並用代理池輪換 IP 做高頻批次爬取。</p>
+
+<h2>前言：登入成功之後，換你的 IP 被盯上</h2>
+<p>上一節你把 Session 登入流程跑通了，Cookie 也正確帶著走，於是你開心地開始大量抓資料。結果沒多久，網站開始回你 403，甚至直接連不上。奇怪的是，重新確認 Cookie 明明是好的，問題這時已經不在身分，而在你的來源 IP。</p>
+<p>網站偵測到同一個 IP 在短時間內發出異常大量的請求，就會把這個 IP 加進黑名單，之後這個 IP 再送來的請求一律不受理。這一節要處理的正是這道限制。做法是讓請求改由代理伺服器轉發，把網站看到的來源 IP 換掉，再用「代理池」在多個代理之間輪換，讓高頻請求不會撞在同一顆 IP 上。</p>
+
+<h2>前置條件與做完的結果</h2>
+<ul>
+<li>前置：會用 <code>requests</code> 發請求；有一個可用的代理服務（例如芝麻代理、攜趣代理）；知道目標網址是 http 還是 https。</li>
+<li>做完會得到：能用 <code>proxies</code> 參數讓請求走代理，並有一個可隨機取用的代理池清單。</li>
+<li>中間會用到：代理伺服器概念、<code>proxies</code> 參數、<code>random.choice</code>。</li>
+</ul>
+
+<h2>為什麼需要代理：IP 黑名單</h2>
+<p>代理伺服器的角色是「轉發請求與回應」。當你透過代理發請求時，目標網站伺服器收到的請求，實際上是由代理伺服器發起的，所以它看到的來源 IP 是代理伺服器的 IP，而不是你本機的 IP。這樣一來，就算某顆 IP 被鎖，換一顆代理就能繼續。</p>
+<p>要留意的是，代理不是拿來加速的，也不是拿來規避身分驗證的。它解決的是一件事：當你必須對同一個網站伺服器發起高頻請求時，避免那顆來源 IP 被加入黑名單。</p>
+
+<h2>三種匿名度：差別在網站知道多少</h2>
+<p>不是所有代理都能幫你藏身。依網站能看穿多少，代理的匿名度分三級：</p>
+<table>
+<thead>
+<tr><th>匿名度</th><th>網站知道你用了代理嗎</th><th>網站知道你的真實 IP 嗎</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td>透明（transparent）</td><td>知道</td><td>知道</td><td>等於沒有匿名，通常只拿來做快取或轉發</td></tr>
+<tr><td>匿名（anonymous）</td><td>知道</td><td>不知道</td><td>網站看得出你用了代理，但查不到你真實的 IP</td></tr>
+<tr><td>高匿（high-anonymous）</td><td>不知道</td><td>不知道</td><td>網站完全看不出你用了代理，爬蟲首選</td></tr>
+</tbody>
+</table>
+<p>爬蟲挑代理時，盡量選高匿。透明代理等於把「我是誰」直接報給對方，對繞過封鎖幾乎沒有幫助。</p>
+
+<h2>代理類型必須對上請求協定</h2>
+<p>代理伺服器有兩種類型，而它們各自只能轉發對應協定的請求：<code>http</code> 類型的代理只能轉發 http 協定，<code>https</code> 類型的代理則能轉發 https 協定。這條規則很重要，而且是新手最常踩的坑：如果你要請求的是 <code>https://</code> 開頭的網址，卻掛了一顆只能處理 http 的代理，請求就會失敗，或根本沒走代理。選擇代理時，先看清楚目標網址的協定，再挑對應類型的代理。</p>
+
+<h2>步驟一：先確認自己本機的 IP</h2>
+<p>要驗證代理有沒有生效，最直接的辦法是找一個會回傳「你目前來源 IP」的網站。以下用 <code>cip.cc</code> 當例子，先在不掛代理的情況下請求一次，看看它回傳的本機 IP 是什麼。</p>
+<pre data-source="sources/js-reverse2/20261005/day06/requests高级.md#requests高级"><code>import requests
+from lxml import etree
+headers = {
+    'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.80 Safari/537.36',
+}
+url = 'http://www.cip.cc/'
+
+page_text = requests.get(url,headers=headers).text
+tree = etree.HTML(page_text)
+text = tree.xpath('/html/body/div/div/div[3]/pre/text()')[0]
+print(text.split('\n')[0])</code></pre>
+<p>預期看到什麼：程式會印出一組 IP，那就是你本機對外的位址。記下這一組，等等要拿它跟掛代理後的結果對照。</p>
+
+<h2>步驟二：讓請求走代理</h2>
+<p>接著在同一個請求加上 <code>proxies</code> 參數。它的值是一個字典，key 是協定（<code>http</code> 或 <code>https</code>），value 是代理伺服器的 <code>ip:port</code>。掛上去之後再請求一次同一個網址，如果代理生效，印出來的就會是代理伺服器的 IP，而不是你本機的。</p>
+<pre data-source="sources/js-reverse2/20261005/day06/requests高级.md#requests高级"><code>import requests
+from lxml import etree
+headers = {
+    'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.80 Safari/537.36',
+}
+url = 'http://www.cip.cc/'
+
+page_text = requests.get(url,headers=headers,proxies={'http':'121.234.12.62:4246'}).text
+tree = etree.HTML(page_text)
+text = tree.xpath('/html/body/div/div/div[3]/pre/text()')[0]
+print(text.split('\n')[0])</code></pre>
+<p>預期看到什麼：印出的 IP 應該跟步驟一不同，變成代理伺服器的位址。如果兩次印出來一樣，通常是協定沒對上，或那顆代理已經失效。</p>
+
+<h2>步驟三：建一個代理池，輪換 IP</h2>
+<p>單一代理遲早也會被鎖，真正能撐高頻的是「代理池」，也就是一個裝了很多組代理 IP 與埠號的容器。你可以從代理服務商的 API 一次取得一批 IP，存成清單，之後每次請求用 <code>random.choice</code> 隨機挑一顆來用。這樣請求就會分散到不同 IP，不會全部壓在同一顆上。</p>
+<pre data-source="sources/js-reverse2/20261005/day06/requests高级.md#requests高级"><code>import requests
+from lxml import etree
+import random
+import time
+import random
+
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.80 Safari/537.36',
+}
+
+#构建一个代理池（有很多不同的代理服务器）
+proxy_url = 'http://webapi.http.zhimacangku.com/getip?num=80&type=3&pro=&city=0&yys=0&port=11&pack=337730&ts=0&ys=0&cs=0&lb=1&sb=0&pb=4&mr=1&regions='
+page_text = requests.get(url=proxy_url,headers=headers).text
+proxy_list = [] #代理池
+for ips in page_text.split('\n')[0:-1]:
+    dic = {}
+    dic['https'] = ips.strip()
+    proxy_list.append(dic)
+
+for page in range(1, 5001):
+    print('正在爬取第%d页的ip数据......' % page)
+    #生成不同页码对应的url
+    url = 'https://www.kuaidaili.com/free/inha/%d/' % page
+    page_text = requests.get(url=url, headers=headers,proxies=random.choice(proxy_list)).text
+    time.sleep(0.5)
+    tree = etree.HTML(page_text)
+    ip = tree.xpath('//*[@id="list"]/div[1]/table/tbody/tr[1]/td[1]/text()')[0]
+    print(ip)</code></pre>
+<p>逐段看：<code>page_text.split('\n')</code> 把服務商回傳的整批 IP 一行一行切開，每一行包成 <code>{'https': 'ip:port'}</code> 的字典放進 <code>proxy_list</code>；迴圈裡用 <code>proxies=random.choice(proxy_list)</code> 每次隨機挑一顆代理送出請求，<code>time.sleep(0.5)</code> 則稍微放慢節奏，避免自己又把某一顆代理打爆。</p>
+
+<h2>小結</h2>
+<blockquote>
+高頻請求會被網站用 IP 黑名單擋下，解法是用代理伺服器轉發請求，讓網站看到的是代理的 IP。挑代理時選高匿，並確認類型（http／https）對上目標協定。要撐大量請求，就把多顆代理組成代理池，用 <code>random.choice</code> 隨機輪換，讓請求分散出去。
+</blockquote>
+<p>到這裡，你已經會維持登入、也會換 IP。但有些網站會在登入或送出關鍵請求前，跳出一張圖形驗證碼，逼你證明自己是人。下一節要處理的就是最後這道關卡：把驗證碼圖片送去第三方 OCR 平台辨識，取回文字結果。</p>
+
+<div class="lesson-nav">
+  <div><a href="./simulated-login.html">← 上一步：模擬登入：用 Session 走完帳密登入流程</a></div>
+  <div><a href="./captcha-ocr.html">下一步：驗證碼辨識：接上圖鑑平台解圖形驗證碼 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼進行高頻爬取時會需要用到代理？" data-correct="0" data-explain="網站會把短時間內大量請求的來源 IP 加入黑名單，代理能換掉這個來源。">
+  <button class="opt">網站會把高頻來源 IP 加進黑名單</button>
+  <button class="opt">代理可以加快每一次請求的速度</button>
+  <button class="opt">代理會自動幫你破解驗證碼</button>
+  <button class="opt">代理能把 HTML 自動解析成 JSON</button>
+</div>
+
+<div class="quiz" data-question="使用代理之後，網站伺服器看到的來源 IP 是誰？" data-correct="1" data-explain="請求由代理伺服器發出，網站看到的是代理的 IP，而非你本機的。">
+  <button class="opt">仍然是你本機的固定 IP 位址</button>
+  <button class="opt">代理伺服器本身的 IP 位址</button>
+  <button class="opt">目標網站伺服器自己的 IP</button>
+  <button class="opt">你的路由器對外的閘道 IP</button>
+</div>
+
+<div class="quiz" data-question="用於爬蟲時，哪一種匿名度的代理最推薦？" data-correct="2" data-explain="高匿代理讓網站既不知道你用了代理，也不知道你真實 IP，隱蔽性最好。">
+  <button class="opt">透明代理，因為設定最簡單</button>
+  <button class="opt">匿名代理，因為速度最快</button>
+  <button class="opt">高匿代理，因為兩者都藏住</button>
+  <button class="opt">隨便一種，三者效果相同</button>
+</div>
+
+<div class="quiz" data-question="關於代理類型 http 與 https，下列敘述何者正確？" data-correct="1" data-explain="代理類型必須和請求的協定對上，http 代理只轉發 http，https 代理才能轉發 https。">
+  <button class="opt">https 代理只能轉發 http 請求</button>
+  <button class="opt">代理類型必須對上請求的協定</button>
+  <button class="opt">http 代理可以轉發所有協定</button>
+  <button class="opt">兩者可以任意混用沒有差別</button>
+</div>
+
+<div class="quiz" data-question="代理池在批次爬取中的主要用途是什麼？" data-correct="1" data-explain="它讓每次請求隨機換一顆代理 IP，把請求分散到不同來源，避免單一 IP 被封。">
+  <button class="opt">把同一份 Cookie 分給多個 IP</button>
+  <button class="opt">隨機輪換不同代理 IP 分散請求</button>
+  <button class="opt">自動辨識每一頁的圖形驗證碼</button>
+  <button class="opt">把多個 TS 分片合併成一個檔案</button>
+</div>
+
+<div class="quiz" data-question="在 requests 裡指定代理要用哪一個參數？" data-correct="1" data-explain="代理透過 proxies 參數指定，值是一個以協定為 key 的字典。">
+  <button class="opt">headers 參數</button>
+  <button class="opt">proxies 參數</button>
+  <button class="opt">params 參數</button>
+  <button class="opt">data 參數</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 會話維持：Cookie、登入、代理與驗證碼 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

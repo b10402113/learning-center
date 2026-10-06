@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>模擬登入：用 Session 走完帳密登入流程</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>模擬登入：用 Session 走完帳密登入流程</h1>
+<p class="meta">Step 3/5 · 會話維持：Cookie、登入、代理與驗證碼</p>
+
+<h2>學習目標</h2>
+<p>能用 <code>requests.Session</code> 送出帳密登入、讓伺服器發的 Cookie 自動存進 Session，再帶著它請求只有登入後才看得到的頁面。</p>
+
+<h2>前言：選了 Session，接下來要真的登入一次</h2>
+<p>上一節你已經做出選擇：只要目標需要登入、Cookie 又會變動，就交給 <code>requests.Session</code> 自動處理。可是「知道要用 Session」跟「真的用 Session 登入成功」之間，還隔著一段動手做的距離。這一節就把那段距離補上。</p>
+<p>我們用一個需要帳號密碼才能看到書架的網站當例子，走完完整流程：建立 Session、送出帳密、讓 Cookie 自動存進 Session，最後帶著這份 Cookie 去抓只有登入後才看得到的資料。做完之後，你就有能力把同一套流程搬到任何「先登入才給資料」的目標上。</p>
+
+<h2>前置條件與做完的結果</h2>
+<ul>
+<li>前置：會用 <code>requests</code> 送 GET／POST；已從抓包工具知道登入介面與資料介面的網址、請求方法與參數。</li>
+<li>做完會得到：一個登入狀態的 <code>session</code> 物件，以及它抓回來的登入後資料。</li>
+<li>中間會用到：Session 物件、<code>post</code> 送表單、<code>get</code> 取資料、<code>json()</code> 解析。</li>
+</ul>
+
+<h2>步驟一：建立 Session 與準備登入資料</h2>
+<p>先建立一個空白的 Session 物件，它一開始什麼 Cookie 都沒有。同時準備好登入用的請求標頭（至少要有 <code>User-Agent</code>）以及帳密資料。<code>login_url</code> 是登入介面，帳密則以字典形式放在 <code>data</code>，準備當成表單內容送出。</p>
+<pre data-source="sources/js-reverse2/20261005/day06/requests高级.md#requests高级"><code>import requests
+from lxml import etree
+
+headers = {
+    'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+}
+
+login_url = 'https://passport.17k.com/ck/user/login'
+data = {
+    "loginName": "15027900535",
+    "password": "xxxxxxxxx"
+}
+session = requests.Session()</code></pre>
+
+<h2>步驟二：送出帳密，讓 Cookie 存進 Session</h2>
+<p>接著用 Session 發出登入請求。這一步真正重要的不是「帳密對不對」，而是「伺服器有沒有發 Cookie 下來」。只要登入成功，伺服器會在回應裡帶著 Set-Cookie，而 Session 會自動把它收進口袋。</p>
+<pre data-source="sources/js-reverse2/20261005/day06/requests高级.md#requests高级"><code>#请求的目的是为了获取cookie将其保存到session对象中
+session.post(url=login_url,headers=headers,data=data)</code></pre>
+<p>預期看到什麼：這一行本身通常不會印出任何東西。你可以在送出後檢查 <code>session.cookies</code>，如果裡面有東西，就代表 Cookie 已經被收下。如果它是空的，通常意味著登入沒成功，或這個介面根本不是真正的登入端點。</p>
+
+<h2>步驟三：帶著 Cookie 請求登入後頁面</h2>
+<p>Cookie 到手後，用<strong>同一個</strong> Session 去請求書架資料。因為是同一個 Session，它會自動把剛剛存下的 Cookie 帶上，伺服器這才認得你。這裡的書架資料是動態載入的，所以直接請求它的資料介面，並用 <code>.json()</code> 把回應解析成 Python 物件。</p>
+<pre data-source="sources/js-reverse2/20261005/day06/requests高级.md#requests高级"><code>#携带cookie向书架的页面进行请求发送，获取书架信息
+#书架中的数据是动态加载的数据
+book_url = 'https://user.17k.com/ck/author2/shelf?page=1&appKey=2406394919'
+page_text = session.get(url=book_url,headers=headers).json()</code></pre>
+
+<h2>步驟四：取得登入後的資料</h2>
+<p>最後把結果印出來，確認拿到的真的是登入後才看得到的書架資訊，而不是「請先登入」之類的提示。到這裡，整個模擬登入就完成了。</p>
+<pre data-source="sources/js-reverse2/20261005/day06/requests高级.md#requests高级"><code>#解析书架信息
+print(page_text)</code></pre>
+
+<h2>逐段拆解：每一行在做什麼</h2>
+<ol>
+<li><code>session = requests.Session()</code>：建立一個空的工作階段物件。之後所有請求都應該由它發出，Cookie 才會集中管理。</li>
+<li><code>session.post(url=login_url, headers=headers, data=data)</code>：把帳密當成表單（<code>data</code>）送出。這一步的任務是換取 Cookie，不是拿資料。</li>
+<li><code>session.get(url=book_url, headers=headers)</code>：用同一個 Session 請求書架資料，Cookie 由 Session 自動帶上。注意用的是 <code>session.get</code>，不是 <code>requests.get</code>。</li>
+<li><code>.json()</code>：把回應 body 當成 JSON 解析成 Python 字典。書架這種動態資料幾乎都是 JSON，而不是 HTML。</li>
+</ol>
+<p>這裡最容易搞錯的一點，是中途換回全域的 <code>requests.get</code>。那樣做等於換了一個沒有 Cookie 的新身分去敲門，伺服器自然不認得你。整條流程的關鍵就是「同一顆 Session 從頭用到尾」。</p>
+
+<h2>常見錯誤</h2>
+<ul>
+<li><strong>拆成兩個 Session</strong>：登入用一個、抓資料用另一個，Cookie 不會共享，資料請求會因為沒帶 Cookie 而失敗。</li>
+<li><strong>帳密放錯參數</strong>：帳密是表單資料，要放在 <code>data</code>（不是 <code>params</code>，也不是 <code>headers</code>）。</li>
+<li><strong>假設送出就一定成功</strong>：<code>post</code> 完不代表登入成功，要看回應或後續請求是否真的拿到登入後資料才知道。</li>
+</ul>
+
+<h2>小結</h2>
+<blockquote>
+模擬登入的四步是：建立 Session、用 <code>post</code> 送帳密換 Cookie、用同一個 Session 帶 Cookie 請求資料頁、解析回應。核心心法只有一句：登入與取資料必須共用同一顆 Session，Cookie 才會一路帶著走。
+</blockquote>
+<p>登入問題解決了，但如果你用同一個 IP 短時間內大量請求，很快就會撞到另一道牆：網站把你的 IP 加進黑名單。下一節要處理的正是這個，我們會學怎麼用代理伺服器換一個來源 IP，並用代理池輪換，讓高頻請求不會被封。</p>
+
+<div class="lesson-nav">
+  <div><a href="./manual-vs-session-cookie.html">← 上一步：Cookie 要手動帶還是用 Session 自動帶？</a></div>
+  <div><a href="./proxy-anonymity-and-pool.html">下一步：代理伺服器：匿名度、類型與代理池 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="模擬登入時，送出帳密那一次請求的主要目的是什麼？" data-correct="1" data-explain="那一步的任務是讓伺服器發下 Cookie 並存進 Session，不是直接拿資料。">
+  <button class="opt">直接取得登入之後的書架資料</button>
+  <button class="opt">讓伺服器把 Cookie 存進 Session</button>
+  <button class="opt">單純驗證帳號密碼是否正確而已</button>
+  <button class="opt">建立與伺服器之間的長連線通道</button>
+</div>
+
+<div class="quiz" data-question="為什麼取得書架資訊時要用同一個 session 物件？" data-correct="1" data-explain="只有同一個 Session 才會自動把登入時拿到的 Cookie 帶上去。">
+  <button class="opt">因為只有 session 支援 JSON 解析</button>
+  <button class="opt">因為只有它能自動帶上登入 Cookie</button>
+  <button class="opt">因為只有 session 能設定 User-Agent</button>
+  <button class="opt">因為它會自動幫你破解驗證碼</button>
+</div>
+
+<div class="quiz" data-question="書架資料用 response.json() 解析，代表它多半是什麼？" data-correct="1" data-explain="動態載入的資料介面通常回傳 JSON，而不是現成的 HTML 表格。">
+  <button class="opt">一個靜態的 HTML 表格頁面</button>
+  <button class="opt">一個動態載入的 JSON 資料介面</button>
+  <button class="opt">一張需要 OCR 辨識的圖片</button>
+  <button class="opt">一段 base64 編碼後的字串</button>
+</div>
+
+<div class="quiz" data-question="如果把登入請求與資料請求拆成兩個不同的 session，最可能發生什麼？" data-correct="1" data-explain="兩個 Session 不共享 Cookie，資料請求會因為沒帶登入 Cookie 而失敗。">
+  <button class="opt">兩邊的 Cookie 會自動合併共享</button>
+  <button class="opt">資料請求會因為沒帶 Cookie 而失敗</button>
+  <button class="opt">登入請求會自動重送一次帳密</button>
+  <button class="opt">資料請求會改走代理伺服器送出</button>
+</div>
+
+<div class="quiz" data-question="登入用的帳密資料應該放在 requests.post 的哪個參數？" data-correct="1" data-explain="帳密是表單資料，要用 data 傳，而不是 params 或 headers。">
+  <button class="opt">放在 params 參數裡附在網址後面</button>
+  <button class="opt">放在 data 參數裡當作表單內容</button>
+  <button class="opt">放在 headers 參數裡當成標頭</button>
+  <button class="opt">放在 proxies 參數裡交由代理送出</button>
+</div>
+
+<div class="quiz" data-question="送出登入請求之後，為什麼不能馬上假設一定登入成功？" data-correct="1" data-explain="要進一步看回應或後續請求是否真的拿到登入後資料，才能確認登入成功。">
+  <button class="opt">因為 session 還沒設定任何標頭</button>
+  <button class="opt">要看後續請求是否真的拿到資料</button>
+  <button class="opt">因為登入一定要先用代理伺服器</button>
+  <button class="opt">因為該網站不支援 POST 方式</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 會話維持：Cookie、登入、代理與驗證碼 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

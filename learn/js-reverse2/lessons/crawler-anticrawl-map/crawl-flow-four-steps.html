@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>抓取的四步流程：從 URL 到存檔</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>抓取的四步流程：從 URL 到存檔</h1>
+<p class="meta">Step 3/5 · 爬蟲、反爬與逆向的全貌</p>
+
+<h2>學習目標</h2>
+<p>依「指定 URL → 發送請求 → 取得響應 → 持久化」四步寫出最小爬蟲，並在抓不到資料時用封包全域搜尋定位動態資料。</p>
+
+<h2>前言：不管多複雜，骨架都是這四步</h2>
+<p>上一節談完邊界，現在可以安心動手了。你可能會擔心爬蟲很難，但其實不論網站多複雜，一支爬蟲的骨架永遠是同樣四步：指定 URL、發送請求、取得響應、持久化。真正會變的，是每一步要帶多少「像瀏覽器」的細節進去。</p>
+<p>這一節先把這四步用最小可跑的程式走一遍，讓你看到每一步「做了什麼、預期看到什麼」；接著處理這條流程最常失手的地方：當你要的資料根本不在那個網址的回應裡，該去哪裡把它找出來。這一步學會，你就有了面對多數靜態頁面的能力。</p>
+<p><strong>前置條件：</strong>本機已安裝 Python 與 <code>requests</code> 模組（<code>pip install requests</code>）。後面的程式碼可直接執行。</p>
+
+<h2>四步骨架</h2>
+<p>先把四步記牢，之後所有範例都只是往這四格裡填東西：</p>
+<ol>
+<li><strong>指定 URL</strong>：決定要請求哪個網址，以及要用哪種請求方法、帶哪些請求參數。</li>
+<li><strong>發送請求</strong>：送出請求，拿回一個「響應物件」。</li>
+<li><strong>取得響應資料</strong>：從響應物件裡把資料取出來。</li>
+<li><strong>持久化儲存</strong>：把資料寫進檔案或資料庫，留下來。</li>
+</ol>
+
+<h2>第一步到第四步：一個能跑的最小範例</h2>
+<p>以東方財富首頁為例。下面這段程式把四步依序做了一次，每一行都標了對應的步驟：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day02/课堂笔记/02 初识爬虫[UA检测 乱码 动态数据以及图片数据爬取].md#爬虫初始"><code>import requests
+# 1. 指定服务器的URL
+url = 'https://www.eastmoney.com/'
+
+# 2. 发送请求:根据指定的url发送get请求，得到响应对象
+response = requests.get(url)
+
+# 3. 获取响应数据
+data_str = response.text  # text 字符串形式的响应数据【html响应文件】
+
+# 4. 持久化存储
+with open('caifu.html',mode='w',encoding='utf-8') as f:
+    f.write(data_str)
+print('数据爬取结束！')</code></pre>
+<p>逐行看：<code>url = '...'</code> 是第一步，決定打哪裡；<code>requests.get(url)</code> 是第二步，回傳的 <code>response</code> 就是響應物件；<code>response.text</code> 是第三步，把 HTML 以字串形式取出來；最後的 <code>with open(...)</code> 是第四步，把字串寫進檔案。跑完之後，你應該會在專案目錄看到一個 <code>caifu.html</code>。</p>
+<p>如果打開檔案發現中文變成一堆亂碼，代表第三步拿到的字串用錯了編碼。這時在第三步之前補一行，指定回應的編碼：<code>response.encoding = 'utf-8'</code>。若還是亂碼，換成 <code>'gbk'</code> 再試一次。這兩種是實務上最常遇到的編碼。</p>
+
+<h2>帶上請求參數：GET 查詢字串</h2>
+<p>很多網址需要帶參數才能拿到正確內容，例如搜尋關鍵字。做法是把參數放進一個字典，交給 <code>params</code>。以下是抓 51 遊戲搜尋結果的例子：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day02/课堂笔记/02 初识爬虫[UA检测 乱码 动态数据以及图片数据爬取].md#爬虫初始"><code>import requests
+
+game_title = input('请输入游戏名的关键字：')
+
+# 字典类型承载携带的所有请求参数
+p = {
+    'q': game_title,
+}
+# 制定url
+url = 'https://game.51.com/search/action/game/'
+
+# 发送携带请求参数的get请求
+response = requests.get(url,params=p)
+
+# 获取响应数据
+page_html = response.text
+
+# 持久化存储
+with open(f'{game_title}.html',mode='w',encoding='utf-8') as f1:
+    f1.write(page_html)
+
+print('数据爬取完毕！！！')</code></pre>
+<p>關鍵在 <code>response = requests.get(url,params=p)</code> 這一行：<code>params</code> 接收一個字典，<code>requests</code> 會自動把 <code>{'q': 遊戲名}</code> 接成 <code>?q=遊戲名</code> 附在網址後面。你輸入的遊戲名會直接決定抓回來的搜尋結果。</p>
+
+<h2>第三步的變化：回應是什麼型別，就用什麼方法取</h2>
+<p>第三步「取得響應資料」不是只有 <code>.text</code> 一種寫法。要看回應的型別決定用哪個方法，取錯方法就會拿到一堆看不懂的東西：</p>
+<table>
+<thead>
+<tr><th>回應型別</th><th>取值方法</th><th>拿到什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>HTML 網頁</td><td><code>response.text</code></td><td>字串形式的網頁原始碼</td></tr>
+<tr><td>JSON（字典、列表）</td><td><code>response.json()</code></td><td>反序列化後的 Python 字典或列表</td></tr>
+<tr><td>圖片、影片、音訊、壓縮檔等二進位</td><td><code>response.content</code></td><td>二進位的位元組，寫檔時要用 <code>'wb'</code></td></tr>
+</tbody>
+</table>
+<p>可以把這張表當成口訣：看到網頁用 <code>.text</code>、看到資料用 <code>.json()</code>、看到檔案用 <code>.content</code>。</p>
+
+<h2>四步失手時：動態載入的資料在哪裡</h2>
+<p>現在來到這節的重點。很多時候你照著上面的流程，把瀏覽器網址列的 URL 丟進程式，卻發現回應裡根本沒有你要的資料。這不是你寫錯，而是這份資料<strong>不是</strong>從這個網址請求回來的。</p>
+<p>網頁上看到的資料，不一定來自你輸入的那個網址。如果它不在，就一定是被「別的請求」拿回來的。這種不透過網址列 URL、而是靠其他請求取得的資料，就叫做<strong>動態載入資料</strong>。常見的情況有兩種：一種是封包裡根本找不到跟頁面網址一致的請求；另一種是找到了，但那個回應裡沒有你要的資料。</p>
+<p>要把動態資料找出來，靠的是抓包工具的<strong>全域搜尋</strong>。做法是：在抓包工具裡點任意一個請求，按 <code>Control + F</code> 叫出全域搜尋框，把你想要的那段資料當關鍵字搜下去。搜尋的目的，是找出「這份資料到底是哪個請求帶回來的」。定位到那個請求之後，就模擬它重新送一次，只要從它身上抄出兩樣東西：<strong>URL</strong> 和<strong>請求參數</strong>。</p>
+<p>下一個例子就是這樣找到的。頁面網址列給的是課程頁，但真正的課程清單其實來自一個後端 API：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day02/课堂笔记/02 初识爬虫[UA检测 乱码 动态数据以及图片数据爬取].md#爬虫初始"><code>import requests
+
+url = 'https://zyk.icve.com.cn/prod-api/website/course/list'
+
+headers = {
+    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+}
+
+# 请求参数
+params = {
+    "sort": "create_time",
+    "pageNum": 1,
+    "pageSize": 15,
+    "keyWord": "数据"
+}
+
+response = requests.get(url, headers=headers,params=params)
+
+dict_data = response.json()  # json类型的响应数据
+# print(type(dict_data), dict_data)
+
+
+for dic in dict_data['rows']:
+    print(f'课程名称：{dic["name"]}, 老师姓名：{dic["userName"]}')
+
+print('爬取数据成功！')</code></pre>
+<p>注意這裡的 URL 已經不是瀏覽器網址列上那個頁面網址，而是搜尋出來的 API 網址；回應是 JSON，所以第三步改用 <code>response.json()</code>，再從字典的 <code>rows</code> 欄位逐筆取出課程名稱與老師姓名。這個「頁面網址歸頁面網址、資料請求歸資料請求」的分辨能力，就是動態資料定位的核心。</p>
+
+<h2>小結</h2>
+<blockquote>
+任何爬蟲的骨架都是四步：指定 URL、發送請求、取得響應、持久化。第三步依回應型別選 <code>.text</code>、<code>.json()</code> 或 <code>.content</code>；遇到亂碼就調整 <code>response.encoding</code>。當回應裡沒有你要的資料時，那份資料通常是動態載入的，要用抓包工具的全域搜尋找出真正帶回資料的請求，再從它身上抄下 URL 與請求參數重送一次。
+</blockquote>
+<p>你現在有了四步骨架，也知道了資料可能藏在別的請求裡。但就算照著重送，網站還有可能不買帳，它會檢查你的身分、你的來源、你的頻率。下一節把這些「卡點」整理成一張地圖，讓你認得出每一個防守是在四步裡的哪一步動手腳。</p>
+
+<div class="lesson-nav">
+  <div><a href="./legality-and-robots.html">← 上一步：爬蟲的邊界：robots 協議與合法性</a></div>
+  <div><a href="./anticrawl-map.html">下一步：反爬手段地圖：每一招卡在四步流程的哪裡 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="爬蟲的四步編碼流程，正確順序是下列哪一個？" data-correct="1" data-explain="標準順序是：指定 URL、發送請求、取得響應資料、持久化儲存。">
+  <button class="opt">發送請求、指定 URL、持久化、取響應</button>
+  <button class="opt">指定 URL、發送請求、取響應、持久化</button>
+  <button class="opt">取響應、指定 URL、發送請求、持久化</button>
+  <button class="opt">持久化、取響應、發送請求、指定 URL</button>
+</div>
+
+<div class="quiz" data-question="在東方財富的範例裡，哪一行負責第三步取得響應資料？" data-correct="3" data-explain="response.text 把 HTML 以字串形式取出，屬於第三步。">
+  <button class="opt"><code>url = 'https://www.eastmoney.com/'</code></button>
+  <button class="opt"><code>response = requests.get(url)</code></button>
+  <button class="opt"><code>with open('caifu.html', ...)</code></button>
+  <button class="opt"><code>data_str = response.text</code></button>
+</div>
+
+<div class="quiz" data-question="要送出 GET 查詢參數，應該把字典交給哪個參數？" data-correct="0" data-explain="requests.get 的 params 會把字典接成 ?key=value 附在網址後面。">
+  <button class="opt"><code>params</code></button>
+  <button class="opt"><code>data</code></button>
+  <button class="opt"><code>headers</code></button>
+  <button class="opt"><code>cookies</code></button>
+</div>
+
+<div class="quiz" data-question="回應是 JSON（字典或列表）時，第三步該用哪個方法？" data-correct="2" data-explain="response.json() 會把 JSON 反序列化成 Python 的字典或列表。">
+  <button class="opt"><code>response.text</code></button>
+  <button class="opt"><code>response.content</code></button>
+  <button class="opt"><code>response.json()</code></button>
+  <button class="opt"><code>response.encoding</code></button>
+</div>
+
+<div class="quiz" data-question="要抓圖片、影片這類二進位資料，該用哪個方法？" data-correct="1" data-explain="二進位資料用 response.content 取位元組，寫檔時搭配 'wb' 模式。">
+  <button class="opt"><code>response.text</code></button>
+  <button class="opt"><code>response.content</code></button>
+  <button class="opt"><code>response.json()</code></button>
+  <button class="opt"><code>response.status_code</code></button>
+</div>
+
+<div class="quiz" data-question="瀏覽器網址列的 URL 回應裡沒有想要的資料，通常代表什麼？" data-correct="0" data-explain="資料是動態載入的，來自另一個請求，不在網址列那個網址的回應裡。">
+  <button class="opt">資料是動態載入，來自別的請求</button>
+  <button class="opt">網站已經把資料全部刪除了</button>
+  <button class="opt">requests 模組已經損壞失效</button>
+  <button class="opt">這個網頁完全沒有任何資料</button>
+</div>
+
+<div class="quiz" data-question="要用抓包工具找出動態資料是哪個請求帶回來的，該怎麼做？" data-correct="3" data-explain="在抓包工具裡按 Control+F 做全域搜尋，用資料當關鍵字定位負責的請求。">
+  <button class="opt">重新整理頁面直到資料自己出現</button>
+  <button class="opt">把網址列的 URL 直接丟進程式重送</button>
+  <button class="opt">關閉瀏覽器再重新開啟頁面一次</button>
+  <button class="opt">按 Control+F 用資料做全域搜尋</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 爬蟲、反爬與逆向的全貌 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>

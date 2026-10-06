@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工廠、車間與工人：行程與執行緒的心智模型</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>工廠、車間與工人：行程與執行緒的心智模型</h1>
+<p class="meta">Step 1/5 · 行程、執行緒與協程：併發為何存在</p>
+
+<h2>學習目標</h2>
+<p>用「工廠、車間、工人」的譬喻說出行程與執行緒的關係，並分清執行緒共享記憶體、行程之間彼此隔離。</p>
+
+<h2>前言：電腦明明只有一顆核心，為什麼能同時做好幾件事？</h2>
+<p>你一定有過這種畫面：電腦一邊播音樂、一邊開著微信、一邊還在跑遊戲，順得好像它同時在處理這些事。但如果你掀開機殼看規格，很多時候機器只有一顆核心。一顆核心，怎麼可能同時做三件事？</p>
+<p>這個問題不只是好奇。你之後要寫的爬蟲，慢的原因往往不是運算不夠快，而是程式在「等」：等伺服器回你、等下載完成。如果搞不懂電腦到底是怎麼安排這些等待與工作，就很難判斷自己的程式為什麼卡住，也無從選擇該用哪種方式加速。這一節先把最基本的一組角色，也就是行程與執行緒，建起來，後面所有效能技巧都掛在這組角色上。</p>
+
+<h2>先看整體：CPU 是一座工廠</h2>
+<p>電腦的核心是 CPU，所有計算任務都由它扛下，就像一座日夜運轉的工廠。工廠再大，也有供電的限制；這裡的設定是：電力有限，一次只能供給一個車間使用。某個車間開工，其他車間就得停工。</p>
+<p>把這個限制翻成電腦的語言就是：<strong>單核 CPU 一次只能執行一個任務</strong>，同一時刻只能做一件事。這點很容易被日常體驗騙過去：我們感覺電腦在「同時」做好幾件事，但底層其實不是。</p>
+
+<h2>行程是車間，執行緒是工人</h2>
+<p>在這座工廠裡，<strong>行程（process）</strong>就像是工廠的一個車間，代表 CPU 所能處理的單個任務。當你啟動一個應用程式，作業系統就開了一個行程給它，替它準備好對應的記憶體與資源；應用程式在跑，其實就是這個行程在跑。所以狹義地說，一個正在執行的應用程式，在作業系統眼中就是一個行程。具體一點：你有 <code>py1.py</code> 和 <code>py2.py</code> 兩個檔案，把它們各自跑起來，就是兩個獨立的行程。</p>
+<p>車間裡不會只有一台機器，而是有很多工人協同完成任務。這些工人就是<strong>執行緒（thread）</strong>：執行緒是作業系統能拿來排程運算的最小單位，它被包含在行程之中，是行程裡實際動起來的角色。一個行程可以包含多個執行緒，而且每一個行程裡至少會有一個執行緒，這個開頭就存在的執行緒叫做「主執行緒」。</p>
+<p>有了這組譬喻，接下來兩個容易混淆的性質就很好懂了。</p>
+
+<h2>什麼是共享的，什麼是隔離的</h2>
+<p>車間的空間是工人們共用的，很多房間每個工人都能自由進出。對應到程式，就是<strong>一個行程的記憶體空間，會被這個行程底下所有執行緒共享</strong>。同一行程內的執行緒可以一起讀寫這些記憶體，所以 A 執行緒改了某個變數，B 執行緒看得到，這是執行緒方便的地方。</p>
+<p>但車間與車間之間不是這樣。每個車間有自己的空間，別的車間進不來。所以<strong>不同行程之間的資源是彼此隔離的</strong>，一個行程只能存取自己記憶體空間裡的資料，另一個行程完全看不到。這一點在寫爬蟲時特別關鍵：如果你用子行程去修改某個共用變數，很可能改了半天，主行程那邊一點動靜都沒有。</p>
+<p>還有一個實務上的差別：<strong>建立執行緒的開銷，比建立行程要小得多</strong>。開一個車間（行程）要配置整塊廠房與資源，成本高；在同一個車間裡多請一個工人（執行緒），相對便宜。這也埋下了後面選工具的伏筆。</p>
+
+<table>
+<thead>
+<tr><th></th><th>行程（車間）</th><th>執行緒（工人）</th></tr>
+</thead>
+<tbody>
+<tr><td>角色</td><td>CPU 能處理的單個任務</td><td>行程內實際運作的單位</td></tr>
+<tr><td>數量關係</td><td>一個程式跑起來就是一個行程</td><td>一個行程可含多個執行緒，至少一個</td></tr>
+<tr><td>記憶體</td><td>行程之間彼此隔離</td><td>同一行程內共享記憶體</td></tr>
+<tr><td>建立開銷</td><td>較大</td><td>較小</td></tr>
+</tbody>
+</table>
+
+<h2>一個常見的誤會：多執行緒一定平行嗎？</h2>
+<p>既然一個行程可以養好幾個執行緒，那它們是不是就同時在跑？不一定。當 CPU 資源比較充足時，一個行程內的多個執行緒確實可以被分配到不同的核心上，這時候才算真正的「平行」。但這個分配是由作業系統決定的，不是你能手動控制的。所以「多開幾個執行緒」不等於「保證平行」，它只是把任務交出去，實際怎麼跑得看作業系統怎麼安排。</p>
+<p>而作業系統到底是怎麼安排的？為什麼單核也能看起來像同時在做很多事？這就是下一步要拆開的「排程」。</p>
+
+<h2>小結</h2>
+<blockquote>
+CPU 是一座工廠，單核一次只能供電給一個車間，所以單核一次只跑一個任務。行程是車間，代表一個被啟動的程式；執行緒是車間裡的工人，是實際運作的最小單位，一個行程至少有一個執行緒。車間內的空間（記憶體）由工人共享，但車間與車間之間彼此隔離；建立執行緒比建立行程便宜。
+</blockquote>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./concurrency-and-async.html">下一步：一次只做一件事：單核排程、併發與非同步 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="在「工廠」的譬喻裡，行程對應到什麼？" data-correct="1" data-explain="行程好比工廠的車間，代表 CPU 所能處理的單個任務。">
+  <button class="opt">工廠裡的一名工人</button>
+  <button class="opt">工廠裡的一個車間</button>
+  <button class="opt">供給工廠的電力</button>
+  <button class="opt">整個工廠的總開關</button>
+</div>
+
+<div class="quiz" data-question="一個行程與它內部執行緒的記憶體關係是什麼？" data-correct="2" data-explain="同一行程內的執行緒共享該行程的記憶體空間。">
+  <button class="opt">每個執行緒各自獨立互不相通</button>
+  <button class="opt">執行緒的記憶體由作業系統統一隔離</button>
+  <button class="opt">所有執行緒共享行程的記憶體</button>
+  <button class="opt">只有主執行緒能使用這塊記憶體</button>
+</div>
+
+<div class="quiz" data-question="關於不同行程之間的資料，下列敘述何者正確？" data-correct="3" data-explain="行程之間彼此隔離，各自只能訪問自己記憶體空間裡的資料。">
+  <button class="opt">只要網路連得上就能互相讀取</button>
+  <button class="opt">預設會自動同步彼此的變數</button>
+  <button class="opt">只要同一個使用者就會共享</button>
+  <button class="opt">互相隔離，預設不共享資料</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項是執行緒相對行程的優勢？" data-correct="0" data-explain="建立執行緒的開銷比建立行程小得多。">
+  <button class="opt">建立與銷毀的開銷較小</button>
+  <button class="opt">記憶體天生不會衝突</button>
+  <button class="opt">一定可以被分配到多個核心</button>
+  <button class="opt">不受作業系統調度影響</button>
+</div>
+
+<div class="quiz" data-question="「多開幾個執行緒就保證平行」這個說法錯在哪裡？" data-correct="2" data-explain="執行緒能否被分配到不同核心由作業系統決定，不是人為可控。">
+  <button class="opt">執行緒根本無法同時被建立</button>
+  <button class="opt">平行一定要用多個行程才行</button>
+  <button class="opt">分配核心由作業系統決定，人不能控制</button>
+  <button class="opt">執行緒只能執行 IO 不能執行運算</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項對「單核 CPU」的描述是正確的？" data-correct="1" data-explain="單核 CPU 一次只能運行一個任務，同一時刻只做一件事。">
+  <button class="opt">可以真正同時執行多個任務</button>
+  <button class="opt">一次只能運行一個任務</button>
+  <button class="opt">不能執行任何一個行程</button>
+  <button class="opt">必須搭配執行緒才能開機</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 行程、執行緒與協程：併發為何存在 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

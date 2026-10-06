@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cookie 與狀態：無狀態的 HTTP 怎麼記住你</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Cookie 與狀態：無狀態的 HTTP 怎麼記住你</h1>
+<p class="meta">Step 3/4 · Web、HTTP 與 HTML：爬蟲在跟什麼打交道</p>
+
+<h2>學習目標</h2>
+<p>解釋 Cookie 為何能讓登入狀態延續，並說出它由誰建立、存在哪裡與大小數量限制。</p>
+
+<h2>前言：憑什麼伺服器記得你已經登入了</h2>
+<p>前兩節一直在強調一件事：HTTP 是無狀態的，每次請求對伺服器來說都像初次見面。但這個說法跟你每天的使用經驗明顯對不上。你在購物網站登入一次之後，切到會員頁、再切到訂單頁，全程都不必重新輸入密碼。伺服器明明「不記得」，卻又認得你，這中間是怎麼接起來的？</p>
+<p>答案就是 Cookie。它是把無狀態的 HTTP 補上「記憶」的關鍵機制，也是之後你處理登入、維持 session 時一定會碰到的東西。這一節要把它講清楚：它由誰產生、存在哪裡、怎麼在一次次請求之間傳遞，以及它有哪些不能不知道的限制。</p>
+
+<h2>為什麼需要 Cookie：無狀態帶來的麻煩</h2>
+<p>複習一下：HTTP 協定本身不保存請求與請求之間的狀態。每當有新的請求送出，就會產生對應的新回應，但協定不保留之前發生過的任何事。對伺服器來說，每次請求都是全新的，即使是同一個客戶端連續送出的也一樣。</p>
+<p>如果網站只是單純展示文章，這種「講完就忘」其實沒什麼問題，反而讓伺服器更簡單、更能應付大量請求。但隨著網站功能變複雜，需要記住的事情就多了。例如使用者登入一家購物網站，即使他跳到站內其他頁面，也必須繼續維持登入狀態；網站為了掌握「這次請求是誰送的」，就非得保存使用者的狀態不可。Cookie 就是在這樣的需求下被發明出來的。</p>
+
+<h2>Cookie 是什麼：伺服器發給你的小紙條</h2>
+<p>Cookie 是瀏覽器的一項技術。具體來說，它是一小段資訊，由伺服器發送出來、儲存在瀏覽器上的一組組鍵值對（key-value pair）。你可以把它想成伺服器請你吃的一塊小甜點，下次你再上門時，瀏覽器會自動把這些鍵值對帶上，方便伺服器從中取出有用的資訊。</p>
+<p>這裡有一個最關鍵、也最常被搞混的重點：<strong>Cookie 這組鍵值對是由伺服器建立的，儲存在客戶端的瀏覽器裡。</strong>資料是伺服器決定的，存放的位置卻在你的電腦上。你也會在原始請求和回應中看到它長得像一行文字，例如：</p>
+<pre data-provenance="derived"><code>Cookie: sessionid=abc123; uid=42</code></pre>
+<p>這一行就是瀏覽器在後續請求裡自動補上的 Cookie 標頭，把伺服器先前留下的記號原封不動送回去。</p>
+
+<h2>Cookie 的原理：掛號拿就診卡</h2>
+<p>Cookie 的運作其實很直覺，可以拆成兩次拜訪來看。</p>
+<ol>
+<li>第一次拜訪：瀏覽器帶著一個空的 Cookie 去訪問伺服器，伺服器產生內容，同時產生 Cookie，瀏覽器收到回應後把它保存在本機。</li>
+<li>之後再訪問：瀏覽器會自動帶上先前存下的 Cookie。伺服器只要讀 Cookie 的內容，就能判斷這次來的是「誰」。</li>
+</ol>
+<p>這個過程很像去醫院看病。你第一次到醫院要先掛號，拿出身分證辦了一張「就診卡」，醫院系統同時記下你的看診資訊；之後你去各科室檢查、診斷、開藥，都不必再出示身分證，只要憑那張就診卡就能被認出來，也知道你的病史。看完病不想要卡了，就把它註銷，之後再來就得重新辦一張新的。在這裡，就診卡就是 Cookie，而醫院系統裡對應的記錄，就是伺服器儲存的使用者資訊。</p>
+<p>還有一個容易忽略的邊界：Cookie 的內容是由伺服器自行設計的，客戶端無法干涉。你能決定的是要不要接受它，不能改寫它。另外，<strong>不同瀏覽器之間是不共享 Cookie 的</strong>。你用某個瀏覽器登入後，伺服器把 Cookie 發給它並由它保存起來；換另一個瀏覽器訪問同一個網站時，前一個瀏覽器存的 Cookie 不可能被送給伺服器，所以你得重新登入一次。</p>
+
+<h2>Cookie 的規範與限制</h2>
+<p>Cookie 存在瀏覽器裡，但它不是想存多少就存多少。依 HTTP 的 Cookie 規範，有以下幾個上限：</p>
+<table>
+<thead>
+<tr><th>項目</th><th>規範上限</th></tr>
+</thead>
+<tbody>
+<tr><td>單一 Cookie 大小</td><td>4KB</td></tr>
+<tr><td>一個伺服器在瀏覽器上的 Cookie 數量</td><td>20 個</td></tr>
+<tr><td>一個瀏覽器能保存的 Cookie 總數</td><td>300 個（因為一個瀏覽器可以訪問多個伺服器）</td></tr>
+</tbody>
+</table>
+<p>這些數字指的是規範上的標準。實際上，各家瀏覽器為了展現自己的能耐，有時會把它「擴充」一些，例如單一 Cookie 放到 8KB、總數放到 500 個。無論如何，它都不可能大到把硬碟佔滿。理解這些限制的意義在於：網站無法把大量資料塞進 Cookie，因此它通常只放一個識別用的 session id，真正的資料仍留在伺服器端。</p>
+
+<h2>小結</h2>
+<blockquote>
+Cookie 是伺服器建立、存在客戶端瀏覽器裡的一組組鍵值對，用來補上 HTTP 的無狀態。第一次拜訪時瀏覽器帶著空 Cookie，伺服器產生 Cookie 後由瀏覽器保存；之後每次請求瀏覽器都會自動帶上，伺服器便能認出你是誰，登入狀態因此得以延續。它的大小與數量有上限，而且不同瀏覽器之間不共享。
+</blockquote>
+<p>到這裡，客戶端與伺服器怎麼對話、狀態怎麼延續，你都清楚了。但別忘了，伺服器回傳的回應正文，最常見的內容是一份 HTML 文件。你之後真正要抓的資料，就藏在裡面。下一節要來認識這份文件：它的骨架長什麼樣，以及爬蟲之後會從哪些標籤下手。</p>
+
+<div class="lesson-nav">
+  <div><a href="./http-message-anatomy.html">← 上一步：拆開一個 HTTP 訊息：請求行、標頭與狀態碼</a></div>
+  <div><a href="./html-document-tags.html">下一步：HTML 文件與標籤：爬蟲要解析的對象 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Cookie 是由誰建立、存在哪裡？" data-correct="0" data-explain="Cookie 由伺服器建立，卻儲存在客戶端的瀏覽器裡。">
+  <button class="opt">伺服器建立，存在客戶端瀏覽器</button>
+  <button class="opt">瀏覽器建立，存在伺服器硬碟</button>
+  <button class="opt">使用者建立，存在瀏覽器書籤</button>
+  <button class="opt">資料庫建立，存在網路節點</button>
+</div>
+
+<div class="quiz" data-question="Cookie 最主要解決的是什麼問題？" data-correct="2" data-explain="HTTP 無狀態，Cookie 讓它能維持登入這類需要記住的狀態。">
+  <button class="opt">網頁載入速度太慢的問題</button>
+  <button class="opt">伺服器硬碟空間不足的問題</button>
+  <button class="opt">HTTP 無狀態記不住狀態的問題</button>
+  <button class="opt">圖片在不同裝置顯示的問題</button>
+</div>
+
+<div class="quiz" data-question="瀏覽器第一次拜訪某個網站時，帶著什麼樣的 Cookie？" data-correct="1" data-explain="第一次拜訪時帶的是空 Cookie，Cookie 由伺服器在這次回應中才產生。">
+  <button class="opt">帶著完整的使用者資料</button>
+  <button class="opt">帶著一個空的 Cookie</button>
+  <button class="opt">帶著上一次的登入憑證</button>
+  <button class="opt">帶著瀏覽器的版本編號</button>
+</div>
+
+<div class="quiz" data-question="依照 Cookie 規範，單一 Cookie 的大小上限約是多少？" data-correct="3" data-explain="規範上限是 4KB，部分瀏覽器可能擴充到 8KB。">
+  <button class="opt">4 位元組</button>
+  <button class="opt">40 位元組</button>
+  <button class="opt">400 位元組</button>
+  <button class="opt">4KB</button>
+</div>
+
+<div class="quiz" data-question="Cookie 規範中，一個伺服器最多能在瀏覽器上保存幾個 Cookie？" data-correct="1" data-explain="規範是一個伺服器 20 個，一個瀏覽器總共 300 個。">
+  <button class="opt">4 個</button>
+  <button class="opt">20 個</button>
+  <button class="opt">300 個</button>
+  <button class="opt">500 個</button>
+</div>
+
+<div class="quiz" data-question="為什麼換一個瀏覽器登入同一個網站，就得重新登入？" data-correct="0" data-explain="不同瀏覽器之間不共享 Cookie，另一個瀏覽器手上沒有先前存下的記號。">
+  <button class="opt">因為不同瀏覽器之間不共享 Cookie</button>
+  <button class="opt">因為伺服器會封鎖新的瀏覽器</button>
+  <button class="opt">因為 Cookie 的內容被使用者改掉了</button>
+  <button class="opt">因為網站要求每次都要重新輸入</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · Web、HTTP 與 HTML：爬蟲在跟什麼打交道 · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

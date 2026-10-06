@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cookie 與 Session：HTTP 無狀態怎麼維持登入？</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Cookie 與 Session：HTTP 無狀態怎麼維持登入？</h1>
+<p class="meta">Step 1/5 · 會話維持：Cookie、登入、代理與驗證碼</p>
+
+<h2>學習目標</h2>
+<p>能說出 Cookie 為何存在、它以什麼形式在客戶端與伺服器之間流動，並解釋 <code>requests.Session</code> 如何自動承接這條狀態線。</p>
+
+<h2>前言：同一個網址，瀏覽器認得你、程式卻不認得</h2>
+<p>你有沒有遇過這種落差：在瀏覽器裡登入一個網站，把分頁關掉、過一陣子再打開，你還是處於登入狀態；但改用 <code>requests</code> 抓同一個頁面，伺服器卻像完全不認識你，回傳的是「請先登入」。明明送出的網址一模一樣，為什麼結果差這麼多？</p>
+<p>答案不在網址，而在一個每次請求都悄悄跟著你的小東西：<strong>Cookie</strong>。這一節要把 Cookie 與 Session 這條「伺服器怎麼認得你」的線講清楚。搞懂之後，你才會知道為什麼爬蟲只要少帶了它，就會被當成陌生人。</p>
+
+<h2>HTTP 是一套沒有記憶的協定</h2>
+<p>先從問題的根源講起。HTTP 有個很根本的設計：每一個請求都是獨立的，伺服器處理完就忘。第一個請求說「我是小明」，第二個請求如果不重講一次，伺服器不會記得第一個請求講過什麼。這種「不記得前一次」的特性，叫做<strong>無狀態（stateless）</strong>。</p>
+<p>無狀態其實是優點，伺服器不用為每個使用者保留一條連線，要擴充機器也很容易。但它的副作用對登入來說是致命的：你剛剛送了帳號密碼、登入成功，下一個請求想要抓自己的訂單列表，伺服器卻完全不知道你是誰。如果每個請求都要重送一次帳密，那這個網站根本不能用。</p>
+
+<h2>Cookie：櫃檯發給你的一張號碼牌</h2>
+<p>網站的解法，是在你登入成功的那一刻，由伺服器建立一組資料回傳給客戶端，瀏覽器把它存在本機，之後你再造訪同一個伺服器時，瀏覽器會自動把這組資料一起送出去。伺服器比對一下，就知道「是你回來了」。這組由伺服器建立、存在客戶端的鍵值對，就是 <strong>Cookie</strong>。</p>
+<p>你可以把 HTTP 想成一間沒有記憶的櫃檯，每次去都得重新報一次身分。Cookie 則是櫃檯在你第一次驗證身分後發的號碼牌：之後每次上門，只要亮出號碼牌，櫃檯就認得你，不必再報一次帳號密碼。最典型的效果就是網站的「免密碼登入」，你關掉瀏覽器再回來，仍然是登入狀態。</p>
+<p>這裡有兩個一定要記住的重點。第一，Cookie 是<strong>伺服器建立</strong>的，不是你高興就能自己捏一組有效的值出來。第二，它存在<strong>客戶端</strong>，也就是你的瀏覽器裡；不同瀏覽器的 Cookie 各自獨立、不會互通，所以你在 Chrome 登入，不會讓你 Safari 也自動登入。</p>
+
+<h2>Session：伺服器端的登入狀態，與爬蟲端的皮夾</h2>
+<p>伺服器要認人，靠的是 Cookie 裡那組識別資訊，實際上通常是一個 <strong>session id</strong>，對應到伺服器端保存的登入狀態。「Session」這個詞在這裡指的就是伺服器端的「這次工作階段」，也就是你登入之後的那段狀態。但爬蟲沒有瀏覽器，不會自動幫你存 Cookie，也不會自動帶。</p>
+<p><code>requests.Session()</code> 就是拿來模擬「瀏覽器那個皮夾」的角色。它是一個工作階段物件，會追蹤並保存伺服器發給你的 Cookie：你用同一個 Session 發請求，伺服器若在回應裡透過 <code>Set-Cookie</code> 發下 Cookie，Session 就自動收進口袋；之後你再用同一個 Session 發請求，它會自動把口袋裡的 Cookie 帶上。存 Cookie、帶 Cookie 這兩件雜事，它都幫你自動化了。</p>
+<p>有一個關鍵限制要特別注意：<strong>Session 至少要發兩次請求</strong>。第一次請求的目的是讓伺服器把 Cookie 發下來、存進 Session；從第二次起，才是真正「帶著 Cookie」的請求。如果你只發一次就想拿到登入後的資料，通常會失敗，原因就在這裡。</p>
+
+<h2>小結</h2>
+<blockquote>
+HTTP 是無狀態的，所以網站用 Cookie 當識別證來維持登入。Cookie 由伺服器建立、存在客戶端，之後的請求會自動帶上；伺服器端則靠 session id 對應到你的登入狀態。<code>requests.Session</code> 是爬蟲端的皮夾，幫你自動存下與送出 Cookie，代價是至少要先發一次請求把 Cookie 收進來。
+</blockquote>
+<p>理解了 Cookie 與 Session 的原理，下一個問題很實際：既然兩種方式都能把 Cookie 帶上，那我到底該自己手動把 Cookie 塞進標頭，還是直接交給 Session 自動處理？下一節會把這兩條路攤開來比較，給你一條清楚的判準。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./manual-vs-session-cookie.html">下一步：Cookie 要手動帶還是用 Session 自動帶？ →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="HTTP 被稱為無狀態，意思是什麼？" data-correct="0" data-explain="每個請求彼此獨立，伺服器不會記得前一次請求發生過什麼。">
+  <button class="opt">每個請求彼此獨立不記得前一次</button>
+  <button class="opt">每個請求都必須重新連線一次</button>
+  <button class="opt">每個請求都無法攜帶任何標頭</button>
+  <button class="opt">每個請求都只能使用 GET 方法</button>
+</div>
+
+<div class="quiz" data-question="Cookie 是由誰建立、存在哪裡？" data-correct="1" data-explain="Cookie 由伺服器建立並回傳，由客戶端瀏覽器負責儲存。">
+  <button class="opt">由瀏覽器建立並存在伺服器端記憶體</button>
+  <button class="opt">由伺服器建立並存在客戶端瀏覽器</button>
+  <button class="opt">由使用者建立並存在中介代理伺服器</button>
+  <button class="opt">由爬蟲程式建立並存在本機資料庫</button>
+</div>
+
+<div class="quiz" data-question="登入之後，網站主要是靠什麼認出你？" data-correct="1" data-explain="後續請求自動帶上帶有識別資訊的 Cookie，伺服器才能對應到你的登入狀態。">
+  <button class="opt">因為你的帳號密碼每次都被重新送出一次</button>
+  <button class="opt">因為請求會自動帶上識別用的 Cookie</button>
+  <button class="opt">因為網址裡藏著加密過的帳號與密碼</button>
+  <button class="opt">因為伺服器記住了你的電腦連線位址</button>
+</div>
+
+<div class="quiz" data-question="requests.Session 最主要幫你自動做哪一件事？" data-correct="1" data-explain="它會保存伺服器發下的 Cookie，並在後續同一個 Session 的請求中自動帶上。">
+  <button class="opt">自動辨識網頁裡出現的圖形驗證碼</button>
+  <button class="opt">自動保存並帶上下次請求的 Cookie</button>
+  <button class="opt">自動把 HTML 解析成結構化的資料</button>
+  <button class="opt">自動把請求分散到多個代理 IP</button>
+</div>
+
+<div class="quiz" data-question="使用 Session 時，為什麼至少要發兩次請求？" data-correct="1" data-explain="第一次請求是為了讓伺服器把 Cookie 發下來並存進 Session，從第二次起才帶著 Cookie。">
+  <button class="opt">第一次必須先通過驗證碼才能夠登入</button>
+  <button class="opt">第一次要先把伺服器發的 Cookie 存下來</button>
+  <button class="opt">第一次要先建立好與伺服器的連線池</button>
+  <button class="opt">第一次要先下載完整整份的網站地圖</button>
+</div>
+
+<div class="quiz" data-question="下列關於 Cookie 的敘述，哪一項是正確的？" data-correct="2" data-explain="Cookie 存在客戶端，並會在後續請求中自動被帶上，不同瀏覽器之間彼此獨立。">
+  <button class="opt">不同瀏覽器之間的 Cookie 會自動互通</button>
+  <button class="opt">Cookie 的內容是由使用者自行決定的</button>
+  <button class="opt">Cookie 存在客戶端並會自動被帶上</button>
+  <button class="opt">Cookie 只能用來保存登入的帳號密碼</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 會話維持：Cookie、登入、代理與驗證碼 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

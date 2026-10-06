@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>驗證碼辨識：接上圖鑑平台解圖形驗證碼</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>驗證碼辨識：接上圖鑑平台解圖形驗證碼</h1>
+<p class="meta">Step 5/5 · 會話維持：Cookie、登入、代理與驗證碼</p>
+
+<h2>學習目標</h2>
+<p>能說明何時該把驗證碼外包給第三方 OCR 平台，並照著流程把驗證碼圖片送去辨識、取回文字結果。</p>
+
+<h2>前言：登入與 IP 都通了，最後還有一張圖擋著</h2>
+<p>前幾節你依序解決了三個問題：怎麼維持登入狀態、怎麼用 Session 跑完登入流程、怎麼用代理避開 IP 封鎖。偏偏有些網站會在你送出關鍵請求之前，跳出一張驗證碼，要求你輸入圖上的文字，證明坐在螢幕前的是人而不是程式。對人來說這只是一眼的事，對爬蟲卻是一道過不去的牆。</p>
+<p>這一節處理最後這道關卡。做法不是自己寫圖像辨識，而是把「看懂這張圖」外包給專門的 OCR 平台，爬蟲只要負責把圖片送出去、把文字收回來。做完之後，你那條「維持登入 → 帶 Cookie → 換 IP → 過驗證碼」的完整鏈路就補齊了。</p>
+
+<h2>前置條件與做完的結果</h2>
+<ul>
+<li>前置：已註冊第三方驗證碼辨識平台（例如圖鑑）並取得帳號密碼；手上有一張要辨識的驗證碼圖片。</li>
+<li>做完會得到：一個能接收圖片路徑與類型、回傳辨識文字的函式。</li>
+<li>中間會用到：讀檔、base64 編碼、<code>requests.post</code> 送 JSON、解析回傳結果。</li>
+</ul>
+
+<h2>什麼時候該用第三方 OCR</h2>
+<p>先說清楚適用邊界，免得用錯工具。如果驗證碼是單純的圖形文字（純數字、純英文，或英數混合），那很適合外包給 OCR 平台，也就是這一節的做法。但如果它是滑動拼圖、座標點選、軌跡拖曳這一類需要操作滑鼠的驗證碼，通常就不該在純 <code>requests</code> 這一側硬解，而要用瀏覽器自動化（例如 Selenium）配合對應手法處理；那屬於另一條技術路線。</p>
+<p>換句話說：圖形文字的辨識交給 OCR，行為式的驗證留給瀏覽器自動化。選錯路線，再怎麼調參數都事倍功半。</p>
+
+<h2>流程總覽：圖片怎麼變成文字</h2>
+<ol>
+<li>把驗證碼圖片以二進位讀進來，再編成 base64 字串（因為 API 用 JSON 傳輸，不能直接塞二進位）。</li>
+<li>把帳號、密碼、圖片類型代號（<code>typeid</code>）與 base64 圖片打包成一個 JSON，POST 到辨識平台的 API。</li>
+<li>平台回傳 JSON，成功時從裡面取出辨識結果字串；失敗時取出錯誤訊息。</li>
+</ol>
+<p>整個流程裡，<code>typeid</code> 是最容易設錯、也最影響準確度的一環：它告訴平台「這張圖是哪一種驗證碼」，選錯類型，結果就會失準。</p>
+
+<h2>驗證碼類型（typeid）對照</h2>
+<p>平台用一個整數代號區分驗證碼的種類。常見的幾種如下（預設是 3，也就是數英混合）：</p>
+<table>
+<thead>
+<tr><th>typeid</th><th>類型</th></tr>
+</thead>
+<tbody>
+<tr><td>1 / 1001</td><td>純數字</td></tr>
+<tr><td>2 / 1002</td><td>純英文</td></tr>
+<tr><td>3 / 1003</td><td>數英混合（預設）</td></tr>
+<tr><td>4</td><td>閃動 GIF</td></tr>
+<tr><td>11</td><td>計算題</td></tr>
+<tr><td>16</td><td>漢字</td></tr>
+<tr><td>32</td><td>通用文字識別（證件、單據）</td></tr>
+<tr><td>18 / 33</td><td>缺口識別（18 需兩張圖；33 單張圖，回傳 X 軸座標）</td></tr>
+<tr><td>19 / 20 / 21 / 22 / 27</td><td>座標點選類（分別對應 1、3、3~5、5~8、1~4 個座標）</td></tr>
+<tr><td>48 / 53</td><td>軌跡類型 / 拼圖識別</td></tr>
+</tbody>
+</table>
+
+<h2>步驟：封裝辨識函式</h2>
+<p>下列程式把整個流程封裝成兩個函式。<code>base64_api</code> 負責讀圖、編碼、送出並取回結果；<code>getImgCodeText</code> 則是給爬蟲直接呼叫的介面，傳入圖片路徑與類型就回傳文字。</p>
+<pre data-source="sources/js-reverse2/20261005/day06/requests高级.md#requests高级"><code>import base64
+import json
+import requests
+# 一、图片文字类型(默认 3 数英混合)：
+# 1 : 纯数字
+# 1001：纯数字2
+# 2 : 纯英文
+# 1002：纯英文2
+# 3 : 数英混合
+# 1003：数英混合2
+#  4 : 闪动GIF
+#  7 : 无感学习(独家)
+#  11 : 计算题
+#  1005:  快速计算题
+#  16 : 汉字
+#  32 : 通用文字识别(证件、单据)
+#  66:  问答题
+#  49 :recaptcha图片识别
+# 二、图片旋转角度类型：
+# 29 :  旋转类型
+#
+# 三、图片坐标点选类型：
+# 19 :  1个坐标
+# 20 :  3个坐标
+# 21 :  3 ~ 5个坐标
+# 22 :  5 ~ 8个坐标
+# 27 :  1 ~ 4个坐标
+# 48 : 轨迹类型
+#
+# 四、缺口识别
+# 18 : 缺口识别（需要2张图 一张目标图一张缺口图）
+# 33 : 单缺口识别（返回X轴坐标 只需要1张图）
+# 五、拼图识别
+# 53：拼图识别
+#函数实现忽略
+def base64_api(uname, pwd, img, typeid):
+    with open(img, 'rb') as f:
+        base64_data = base64.b64encode(f.read())
+        b64 = base64_data.decode()
+    data = {"username": uname, "password": pwd, "typeid": typeid, "image": b64}
+    result = json.loads(requests.post("http://api.ttshitu.com/predict", json=data).text)
+    if result['success']:
+        return result["data"]["result"]
+    else:
+        return result["message"]
+    return ""
+
+
+def getImgCodeText(imgPath,imgType):#直接返回验证码内容
+    #imgPath：验证码图片地址
+    #imgType：验证码图片类型
+    result = base64_api(uname='bb328410948', pwd='bb328410948', img=imgPath, typeid=imgType)
+    return result</code></pre>
+
+<h2>逐段拆解：每一段在做什麼</h2>
+<ol>
+<li><code>with open(img, 'rb') as f</code>：用二進位模式讀取驗證碼圖片。<code>'rb'</code> 的 <code>b</code> 是 binary，圖片不能用純文字模式讀。</li>
+<li><code>base64.b64encode(f.read()).decode()</code>：把圖片位元組編成 base64，再解碼成字串。因為等一下要用 JSON 傳輸，而 JSON 只能放文字，所以必須先編碼。</li>
+<li><code>data = {"username": uname, "password": pwd, "typeid": typeid, "image": b64}</code>：把平台帳密、驗證碼類型與 base64 圖片組成要送出的內容。</li>
+<li><code>requests.post("http://api.ttshitu.com/predict", json=data)</code>：用 <code>json=</code> 參數把整個字典當 JSON 送出。這是和送表單不同的地方，辨識 API 收的是 JSON body。</li>
+<li><code>result['success']</code> 判斷辨識成不成功：成功就回傳 <code>result["data"]["result"]</code>，失敗則回傳 <code>result["message"]</code> 的錯誤訊息。</li>
+</ol>
+<p>要接進爬蟲時，呼叫 <code>getImgCodeText(圖片路徑, 類型代號)</code> 就能拿到文字，把那個文字填進登入表單的驗證碼欄位，再送出登入請求即可。</p>
+
+<h2>小結</h2>
+<blockquote>
+圖形文字驗證碼交給第三方 OCR 平台：把圖片讀成 base64、連同帳密與 <code>typeid</code> 以 JSON POST 到辨識 API，成功時取回 <code>data.result</code> 的文字。關鍵是挑對 <code>typeid</code>，並認清它的邊界：滑動、點選、軌跡類的驗證碼要靠瀏覽器自動化，不是靠這個流程。
+</blockquote>
+<p>走完這一節，這個節點的四個工具就齊了：用 Cookie 與 Session 維持登入、用模擬登入取得登入後資料、用代理池突破頻率限制、用 OCR 過人機驗證。它們不是四個獨立技巧，而是同一條「伺服器怎麼認出你」的鏈路。實戰時，先看目標卡在哪一關，再決定拿出哪一個工具，這也是整個節點最想留給你的判斷力。</p>
+
+<div class="lesson-nav">
+  <div><a href="./proxy-anonymity-and-pool.html">← 上一步：代理伺服器：匿名度、類型與代理池</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="什麼情況最適合把驗證碼外包給第三方 OCR 平台？" data-correct="1" data-explain="單純的數字或英數圖形驗證碼適合 OCR；滑動、點選類則要靠瀏覽器自動化。">
+  <button class="opt">滑動拼圖這種需要拖曳的驗證碼</button>
+  <button class="opt">單純的數字或英數圖形驗證碼</button>
+  <button class="opt">需要輸入簡訊驗證碼的手機驗證</button>
+  <button class="opt">完全沒有任何圖片的人機驗證</button>
+</div>
+
+<div class="quiz" data-question="送出圖片前，base64_api 先對圖片做了什麼處理？" data-correct="1" data-explain="圖片要以二進位讀入再編成 base64 字串，才能放進 JSON 傳輸。">
+  <button class="opt">把圖片存成 PNG 檔再上傳</button>
+  <button class="opt">讀成 bytes 後再 base64 編碼</button>
+  <button class="opt">把圖片切成多張小圖分別送出</button>
+  <button class="opt">把圖片轉成黑白提高對比度</button>
+</div>
+
+<div class="quiz" data-question="呼叫辨識 API 時，typeid 參數代表什麼？" data-correct="1" data-explain="typeid 是驗證碼的類型代號，平台靠它決定要用哪種模型辨識。">
+  <button class="opt">你的平台帳號等級高低</button>
+  <button class="opt">驗證碼的類型代號</button>
+  <button class="opt">圖片的檔案大小上限</button>
+  <button class="opt">這次請求的逾時秒數</button>
+</div>
+
+<div class="quiz" data-question="辨識成功時，真正的文字結果放在回傳 JSON 的哪裡？" data-correct="1" data-explain="成功時結果在 result['data']['result']，失敗時才是 result['message']。">
+  <button class="opt">result['message'] 欄位裡</button>
+  <button class="opt">result['data']['result'] 欄位裡</button>
+  <button class="opt">result['success'] 布林值本身</button>
+  <button class="opt">result['username'] 字串欄位裡</button>
+</div>
+
+<div class="quiz" data-question="座標點選或缺口辨識這類驗證碼，回傳的通常不是文字，而是什麼？" data-correct="1" data-explain="這類驗證碼回傳的是座標或缺口位置數值，而不是要填入的文字。">
+  <button class="opt">一段加密後的 base64 字串</button>
+  <button class="opt">座標或缺口位置的數值</button>
+  <button class="opt">一張已經被還原的圖片</button>
+  <button class="opt">一個可用的代理伺服器位址</button>
+</div>
+
+<div class="quiz" data-question="為什麼要挑對 typeid 再送出辨識？" data-correct="1" data-explain="typeid 決定平台用哪種模型辨識，類型挑錯會讓結果不準甚至失敗。">
+  <button class="opt">因為不同 typeid 的收費完全相同</button>
+  <button class="opt">因為類型挑錯會讓辨識結果不準</button>
+  <button class="opt">因為 typeid 會決定代理的匿名度</button>
+  <button class="opt">因為 typeid 其實是登入用的密碼</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 會話維持：Cookie、登入、代理與驗證碼 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

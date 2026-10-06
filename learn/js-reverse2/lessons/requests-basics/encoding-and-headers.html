@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>亂碼還是被擋？編碼修正與 UA 偽裝</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>亂碼還是被擋？編碼修正與 UA 偽裝</h1>
+<p class="meta">Step 2/5 · requests 入門與動態資料定位</p>
+
+<h2>學習目標</h2>
+<p>在看到回應亂碼或內容不對時，判斷問題出在編碼還是身分，分別用 <code>response.encoding</code>（utf-8／gbk）與 <code>headers</code> 的 <code>User-Agent</code> 修正。</p>
+
+<h2>前言：兩種「不對」，但病因完全不同</h2>
+<p>上一節你把第一個網頁存下來了。實際跑下去，很快會撞到兩種「回應看起來不對」的情況：一種是中文變成看不懂的方塊或問號，另一種是內容明顯不是你要的，可能是空白、可能是錯誤頁，甚至根本被拒絕。這兩種症狀都發生在第三步取得響應的地方，但病因完全不同，修的地方也不一樣。</p>
+<p>新手最常犯的錯，就是不管三七二十一先亂改。其實你只需要先問自己一句：<strong>資料的「字」壞了，還是資料的「內容」不對？</strong> 這一節把這個判斷講清楚，讓你之後遇到問題能在幾秒鐘內選對工具，而不是東改一行西改一行。</p>
+
+<h2>兩條修法在修的東西不一樣</h2>
+<p>先看兩股張力各站在哪裡。編碼問題出在「同一段位元組，被解讀成哪套字元」的對應關係；身分問題則出在「伺服器認不認得你這個來請求的人」。前者影響字元長什麼樣，後者影響伺服器願不願意把正常內容給你。</p>
+<table>
+<thead>
+<tr><th></th><th>編碼問題</th><th>身分問題（UA 檢測）</th></tr>
+</thead>
+<tbody>
+<tr><td>症狀</td><td>中文變亂碼、方塊或問號</td><td>內容不是你要的、空白或錯誤頁</td></tr>
+<tr><td>病因</td><td>回應被用錯的字元表解讀</td><td>伺服器發現請求者不是瀏覽器</td></tr>
+<tr><td>修的地方</td><td><code>response.encoding</code></td><td><code>headers</code> 裡的 <code>User-Agent</code></td></tr>
+<tr><td>典型值</td><td><code>'utf-8'</code> 或 <code>'gbk'</code></td><td>瀏覽器的 UA 字串</td></tr>
+</tbody>
+</table>
+<p>注意兩者的狀態碼可能都是 200。狀態碼 200 只代表「這次請求有回應」，不代表內容是對的。所以不能只看狀態碼就放心，還要看內容長什麼樣。</p>
+
+<h2>判別問句：三步問出病因</h2>
+<p>拿到一份可疑的回應時，照這個順序問自己：</p>
+<ol>
+<li><strong>內容裡有沒有我要的資料？</strong> 如果連資料的影子都沒有，先別碰編碼，往身分問題查。</li>
+<li><strong>資料在，但中文壞掉了嗎？</strong> 如果資料在、只是字變亂，那就是編碼問題。</li>
+<li><strong>請求時我帶了 <code>User-Agent</code> 嗎？</strong> 如果沒帶，而網站對來者挑身分，那就該補上。</li>
+</ol>
+<p>換句話說，編碼修正解決的是「字認錯」，UA 偽裝解決的是「人認錯」。兩者會同時存在，但通常一次只會遇到一種。</p>
+
+<h2>編碼問題：改 response.encoding</h2>
+<p>東方財富的例子就是標準的編碼問題：網頁抓下來了，但中文是亂碼。修法是在取值之前，先指定回應要用哪套編碼解讀：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day02/课堂笔记/02 初识爬虫[UA检测 乱码 动态数据以及图片数据爬取].md#爬虫初始"><code>import requests
+# 1. 指定服务器的URL
+url = 'https://www.eastmoney.com/'
+
+# 2. 发送请求:根据指定的url发送get请求，得到响应对象
+response = requests.get(url)
+
+# 设置响应数据的编码格式
+response.encoding = 'utf-8'  # gbk
+
+# 3. 获取响应数据
+data_str = response.text  # text 字符串形式的响应数据【html响应文件】
+
+# 4. 持久化存储
+with open('caifu.html',mode='w',encoding='utf-8') as f:
+    f.write(data_str)
+print('数据爬取结束！')</code></pre>
+<p>關鍵就是 <code>response.encoding = 'utf-8'</code> 這一行，而且它必須放在 <code>response.text</code> 之前。原因很簡單：<code>.text</code> 是「現在就用當下的編碼把位元組翻成字串」，等 <code>.text</code> 執行完，字串已經定型，再改編碼也來不及。實務上記住一組候選就好：先試 <code>utf-8</code>，還是亂就換 <code>gbk</code>。這兩種涵蓋了絕大多數中文網站。</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day02/课堂笔记/02 初识爬虫[UA检测 乱码 动态数据以及图片数据爬取].md#爬虫初始"><code># 设置响应数据的编码格式
+response.encoding = 'utf-8'
+response.encoding = 'gbk'</code></pre>
+<p>把這兩行當成口訣：以後遇到亂碼，就是輪流試這兩個值。</p>
+
+<h2>身分問題：補上 User-Agent</h2>
+<p>另一種情況是內容不對。<code>User-Agent</code> 是請求載體的身分標示：用瀏覽器發請求，載體是瀏覽器；用爬蟲程式發請求，載體就是爬蟲程式。有些網站後台會檢查這個身分，是瀏覽器就給正常資料，不是就給錯誤資料，這叫 <strong>UA 檢測</strong>。對策叫 <strong>UA 偽裝</strong>，也就是把爬蟲的 <code>User-Agent</code> 假裝成瀏覽器。</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day02/课堂笔记/02 初识爬虫[UA检测 乱码 动态数据以及图片数据爬取].md#爬虫初始"><code>import requests
+
+url = 'http://www.cpta.com.cn/'
+
+#User-Agent:请求载体（浏览器，爬虫程序）的身份表示
+header = {
+    'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+}
+#伪装了浏览器的请求头
+response = requests.get(url=url,headers=header)
+
+page_text = response.text
+
+with open('kaoshi.html','w') as fp:
+    fp.write(page_text)</code></pre>
+<p>做法是建一個字典 <code>header</code>，鍵是 <code>'User-Agent'</code>，值直接抄瀏覽器的 UA 字串，然後把整個字典交給 <code>requests.get</code> 的 <code>headers</code> 參數。這裡的 <code>Mozilla/5.0 ... Chrome/115.0.0.0 ...</code> 就是一段常見的瀏覽器身分；你不必背，之後從自己的瀏覽器複製即可。真正的重點是觀念：你是在告訴伺服器「我是瀏覽器」，而不是「我是爬蟲」。</p>
+
+<h2>反例：什麼時候這些修法會翻車</h2>
+<p>規則不是萬能，硬套會出錯。<strong>第一個反例：亂碼其實不一定是編碼問題。</strong> 如果回應本身就是一段錯誤訊息（被擋、被導向），那你怎麼調編碼都只會把錯誤訊息的字調得好看一點，真正的資料還是沒出現。所以判別的第一步永遠是「資料到底在不在」。</p>
+<p><strong>第二個反例：編碼猜錯會更糟。</strong> 一個本來是 <code>gbk</code> 的網頁，你硬設成 <code>utf-8</code>，亂碼只會換一種樣子，不會變好。改完一定要重新看內容，確認字讀得懂，而不是改完就當作修好了。</p>
+<p><strong>第三個反例：有些網站不只檢查 UA。</strong> 如果補了 <code>User-Agent</code> 內容還是不對，可能它還看 <code>Referer</code>（你從哪個頁面來的）或其他標頭。那是後面「動態資料定位」那一步會處理的範圍。</p>
+
+<h2>決策檢查表</h2>
+<blockquote>
+拿到回應先看「內容在不在」：<br>
+① 資料完全不在 → 查身分，補 <code>User-Agent</code>（甚至之後補 <code>Referer</code>）；<br>
+② 資料在、中文壞掉 → 查編碼，把 <code>response.encoding</code> 設成 <code>'utf-8'</code>，還亂就換 <code>'gbk'</code>，且一定要放在 <code>response.text</code> 之前。
+</blockquote>
+
+<h2>小結</h2>
+<blockquote>
+「回應不對」有兩種病因：編碼問題是字被解讀錯，用 <code>response.encoding</code> 修，在 <code>.text</code> 之前先試 utf-8 再試 gbk；身分問題是伺服器不認得你，用 <code>headers</code> 的 <code>User-Agent</code> 偽裝成瀏覽器來修。判斷的第一步永遠是「我要的資料在不在」。
+</blockquote>
+<p>會分辨這兩種問題之後，你已經能處理多數「靜態但挑人」的網站。下一步要處理另一種更結構化的問題：當你已經知道要打哪個端點，參數到底該放 <code>params</code> 還是 <code>data</code>？那一步會把 GET 查詢與 POST 表單的差別講清楚。</p>
+
+<div class="lesson-nav">
+  <div><a href="./send-first-request.html">← 上一步：第一支 requests：GET、響應物件與存檔</a></div>
+  <div><a href="./params-vs-data.html">下一步：參數放哪裡：params 查詢字串與 data 表單 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="回應裡的中文變成一堆亂碼，該先修哪裡？" data-correct="1" data-explain="亂碼是編碼問題，調整 response.encoding 重新解讀回應。">
+  <button class="opt">補上 headers 的 User-Agent</button>
+  <button class="opt">調整 response.encoding</button>
+  <button class="opt">把請求方法改成 POST</button>
+  <button class="opt">重新安裝 requests 模組</button>
+</div>
+
+<div class="quiz" data-question="補上 User-Agent 主要在解決哪一種問題？" data-correct="2" data-explain="UA 檢測是伺服器看請求者身份，補 UA 就是把爬蟲偽裝成瀏覽器。">
+  <button class="opt">字元被用錯的字元表解讀</button>
+  <button class="opt">網頁存檔時編碼不一致</button>
+  <button class="opt">伺服器認不得請求載體</button>
+  <button class="opt">回應的狀態碼不是 200</button>
+</div>
+
+<div class="quiz" data-question="response.encoding 這行必須放在哪裡才有效？" data-correct="0" data-explain="text 會用當下的 encoding 解碼，所以要先設定再呼叫 .text。">
+  <button class="opt">放在 response.text 之前</button>
+  <button class="opt">放在 response.text 之後</button>
+  <button class="opt">放在程式最開頭即可</button>
+  <button class="opt">放在寫檔 open 之後</button>
+</div>
+
+<div class="quiz" data-question="看到 response 內容完全不對，第一步判別該問什麼？" data-correct="3" data-explain="第一步先確認要的資料在不在，再決定往編碼還是身分方向查。">
+  <button class="opt">專案的檔名取對了沒有</button>
+  <button class="opt">Python 版本是否夠新</button>
+  <button class="opt">requests 有沒有裝清華源</button>
+  <button class="opt">我要的資料到底在不在</button>
+</div>
+
+<div class="quiz" data-question="某網頁本來是 gbk，硬設成 utf-8 會怎樣？" data-correct="1" data-explain="猜錯編碼只會讓亂碼換一種樣子，不會變好，要回頭試 gbk。">
+  <button class="opt">內容會自動變正常</button>
+  <button class="opt">亂碼會換一種樣子</button>
+  <button class="opt">狀態碼會變成 500</button>
+  <button class="opt">請求會被直接封鎖</button>
+</div>
+
+<div class="quiz" data-question="補了 User-Agent 內容還是不對，下一步可能該做什麼？" data-correct="2" data-explain="有些網站還看 Referer 等其他標頭，需要一併帶上才能通過。">
+  <button class="opt">把網址換成 http 開頭</button>
+  <button class="opt">放棄這個網站不要爬</button>
+  <button class="opt">想想是否還缺其他標頭</button>
+  <button class="opt">改用 response.content 取值</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · requests 入門與動態資料定位 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 lxml 建立解析物件並定位標籤</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 lxml 建立解析物件並定位標籤</h1>
+<p class="meta">Step 2/5 · XPath 與資料解析</p>
+
+<h2>學習目標</h2>
+<p>能把頁面原始碼載入 lxml 的 etree 物件，並用 XPath 的絕對／相對、屬性、索引、階層四種表達式精準定位標籤。</p>
+
+<h2>前言：知道要定位，但工具還沒裝</h2>
+<p>上一節確定了方向：解析要做兩件事，先定位標籤，再從標籤取值。可是「定位」聽起來像是一個動作，實際上你得先有一個能聽懂 XPath 的物件。你手上只有 <code>requests</code> 抓回來的一串字，它對程式來說就只是一段文字，不是一棵可以被搜尋的樹。</p>
+<p>這一節先把這個落差補上。做完之後你會得到一個可執行的流程：把原始碼載入 etree 物件，然後對它下 XPath 表達式，拿回你指定的標籤清單。這是之後每一種爬取案例都會重複的起點，所以值得先在一個乾淨的小頁面上練熟。</p>
+
+<h2>前置條件：安裝 lxml</h2>
+<p>Python 標準庫沒有現成的 XPath 工具，要先用 pip 裝 lxml：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day03/资料/课堂笔记/03 xpath数据分析以及实战案例.md#数据解析"><code>pip install lxml -i https://pypi.tuna.tsinghua.edu.cn/simple</code></pre>
+<p>lxml 是 Python 對 libxml2 的封裝，速度快，也是之後 Scrapy 底層在用的解析引擎。裝好之後，所有操作都從 <code>from lxml import etree</code> 開始。</p>
+
+<h2>兩個準備動作：載入，然後下表達式</h2>
+<p>XPath 解析的編碼流程只有兩步。第一步，建立一個 etree 物件，把即將被解析的頁面原始碼載入進去。第二步，呼叫這個物件的 <code>xpath()</code> 方法，配上不同形式的表達式，去定位標籤、提取資料。下面是原始碼裡的最小示範：</p>
+<pre data-source="sources/js-reverse2/20261005/day05/数据解析.md#数据解析"><code>from lxml import etree
+#1.创建一个etree类型的工具/对象,把被解析的页面源码数据加载到该对象中
+tree = etree.parse('./test.html')
+#2.调用etree对象的xpath函数，结合不同xpath表达式进行标签定位和数据提取
+#标签定位的xpath表达式：
+#定位meta标签
+# ret = tree.xpath('/html/head/meta')[0]
+# ret = tree.xpath('//meta')[0] #从相对位置定位meta标签
+#定位所有的div标签
+# ret = tree.xpath('//div')
+#索引定位:想要定位到第一个div标签(下标是从1开始)
+# ret = tree.xpath('//div[1]')
+#属性定位：定位到class属性值为song的div标签://tagName[@attrName="attrValue"]
+# ret = tree.xpath('//div[@class="song"]')
+#层级定位：定位所有li标签下的a标签
+# ret = tree.xpath('//div[@class="tang"]/ul/li/a')
+# ret = tree.xpath('//div[@class="tang"]//a')
+# print(ret)</code></pre>
+<p>注意一件事：原始碼裡把每一條定位都「註解起來」當範例。你實際使用時，就是把某一行的 <code>#</code> 拿掉，只留你要的那條。每一次 <code>tree.xpath(...)</code> 都回傳一個列表，裡面裝著所有符合條件的標籤。</p>
+
+<h3>載入的兩種方式：讀檔案，還是讀字串</h3>
+<p>載入物件有兩種常見寫法，差別在資料從哪來：</p>
+<table>
+<thead>
+<tr><th>寫法</th><th>資料來源</th><th>時機</th></tr>
+</thead>
+<tbody>
+<tr><td><code>etree.parse('./test.html')</code></td><td>本機的 HTML 檔案</td><td>練習、離線分析一份存下來的頁面</td></tr>
+<tr><td><code>etree.HTML(page_text)</code></td><td>記憶體裡的 HTML 字串</td><td>爬蟲即時抓回來、還沒存檔的頁面</td></tr>
+</tbody>
+</table>
+<p>爬蟲實戰幾乎都用第二種，因為你要解析的是 <code>response.text</code>。以下是碧血劍案例裡把它接起來的片段：</p>
+<pre data-source="sources/js-reverse2/20261005/day05/数据解析.md#数据解析"><code>response.encoding = 'utf-8'
+page_text = response.text
+tree = etree.HTML(page_text)
+li_list = tree.xpath('/html/body/div[2]/div[1]/main/ul/li')</code></pre>
+<p><code>etree.HTML()</code> 會把一段可能殘缺的 HTML 字串補成完整的樹。之後你在爬蟲裡看到 <code>etree.HTML(page_text)</code>，就知道它正準備把抓回來的頁面交給 XPath。</p>
+
+<h2>定位標籤的四種表達式</h2>
+<p>拿下面這個網頁當靶場。它是一份刻意設計過的練習頁，裡面有兩個 <code>div</code>，其中一個 class 是 <code>song</code>、一個是 <code>tang</code>：</p>
+<pre data-source="sources/js-reverse2/20261005/day05/test.html"><code>&lt;div class="song"&gt;
+	&lt;p&gt;李清照&lt;/p&gt;
+	&lt;p&gt;王安石&lt;/p&gt;
+	&lt;p&gt;苏轼&lt;/p&gt;
+	&lt;p&gt;柳宗元&lt;/p&gt;
+	&lt;a href="http://www.song.com/" title="赵匡胤" target="_self"&gt;
+		&lt;span&gt;this is span&lt;/span&gt;
+		宋朝是最强大的王朝，不是军队的强大，而是经济很强大，国民都很有钱&lt;/a&gt;
+	&lt;a href="" class="du"&gt;总为浮云能蔽日,长安不见使人愁&lt;/a&gt;
+	&lt;img src="http://www.baidu.com/meinv.jpg" alt="" /&gt;
+&lt;/div&gt;</code></pre>
+<p>有了這棵樹，定位的方式可以分成四類：</p>
+
+<h3>1. 絕對路徑與相對路徑：`/` 對 `//`</h3>
+<p>絕對路徑從根節點 <code>html</code> 開始，一層一層往下寫，例如 <code>/html/head/title</code> 表示「html 下面的 head 下面的 title」。相對路徑則用 <code>//</code> 開頭，代表不管它在哪一層，只要名字對就找出來，例如 <code>//title</code> 會抓出頁面裡所有的 title。原始碼的說明是：<code>/</code> 表示一個層級，<code>//</code> 表示多個層級。</p>
+<p>兩者的差別在於「精確」與「容錯」的拉扯。絕對路徑很精確，但只要網站改一個 wrapper，它就整條失效；相對路徑比較耐改，但範圍太寬時會撈到你不要的標籤，所以要靠屬性把它收緊。</p>
+
+<h3>2. 屬性定位：用 `[@attr="值"]` 挑出特定標籤</h3>
+<p>當頁面上有很多同名標籤時，屬性是最好用的篩子。語法是 <code>//tagName[@attrName="attrValue"]</code>，例如 <code>//div[@class="song"]</code> 就只挑 class 為 song 的那個 div。</p>
+
+<h3>3. 索引定位：用 `[n]` 挑第幾個</h3>
+<p>想要一堆同名標籤裡的特定一個，就用索引，例如 <code>//div[1]</code> 取第一個 div。這裡有一個常踩的坑：<strong>XPath 的索引從 1 開始，不是 0</strong>。寫 <code>//div[0]</code> 不會拿到第一個，只會空手而回。</p>
+
+<h3>4. 階層定位：把上面幾種串起來</h3>
+<p>實戰很少只用一種，通常是把屬性與階層串成一條路徑。以下兩條的目標都是 div.tang 底下的 a 標籤，但寫法不同：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day03/资料/课堂笔记/03 xpath数据分析以及实战案例.md#数据解析"><code>a_list = tree.xpath('//div[@class="tang"]/ul/li/a')
+a_list = tree.xpath('//div[@class="tang"]//a')</code></pre>
+<p>第一條用 <code>/</code> 逐層指定「tang 的 ul、ul 的 li、li 的 a」，路徑必須完全吻合；第二條用 <code>//</code> 表示「tang 底下不管幾層的 a 都算」，範圍比較大。選哪一條，取決於你要精準框住結構，還是要容忍中間多一層少一層。</p>
+
+<h2>動手之後你會看到什麼</h2>
+<p>如果你把上面的片段跑起來，每一個 <code>xpath()</code> 回傳的都是列表。定位標籤時，列表裡裝的是 Element 物件；如果只想看第一個，就在後面接 <code>[0]</code>。這一節的驗收標準很具體：你能對一份陌生的 HTML，挑出正確的屬性、階層與索引，讓 <code>xpath()</code> 回傳你想要的那一串標籤。至於怎麼把標籤裡的文字和屬性拿出來，是下一節的事。原理只要知道「回傳的是標籤不是資料」就夠了。</p>
+
+<h2>小結</h2>
+<blockquote>
+XPath 解析先後做兩件事：用 <code>etree.parse()</code> 讀本機檔、或 <code>etree.HTML()</code> 讀頁面字串，把 HTML 載入成 etree 物件；再呼叫 <code>xpath()</code> 下表達式。定位有四種基本功：<code>/</code> 與 <code>//</code> 控制跨幾層，<code>[@attr="值"]</code> 用屬性篩選，<code>[n]</code> 取第 n 個（從 1 起算），三者可以串成階層路徑。
+</blockquote>
+<p>定位完成，你手上拿到的還是一堆標籤物件，不是可用的資料。下一節要處理的就是這個落差：把標籤裡的文字與屬性實際取出來，並學會在一堆標籤裡用 <code>./</code> 做局部解析。</p>
+
+<div class="lesson-nav">
+  <div><a href="./data-parsing-basics.html">← 上一步：資料解析與聚焦爬蟲：從「抓下來」到「取出想要的」</a></div>
+  <div><a href="./xpath-extract.html">下一步：提取文字與屬性：/text()、//text() 與 @attr →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="在爬蟲裡要解析 requests 抓回來的頁面字串，該用哪種載入方式？" data-correct="2" data-explain="etree.HTML() 吃的是記憶體裡的 HTML 字串，適合即時抓回來的頁面。">
+  <button class="opt">etree.parse('response.html')</button>
+  <button class="opt">etree.open(response.text)</button>
+  <button class="opt">etree.HTML(page_text)</button>
+  <button class="opt">etree.load(page_text)</button>
+</div>
+
+<div class="quiz" data-question="表達式「//div[@class=&quot;song&quot;]」是在做什麼？" data-correct="1" data-explain="它用屬性定位，挑出 class 屬性值為 song 的所有 div 標籤。">
+  <button class="opt">定位名為 song 的所有標籤</button>
+  <button class="opt">定位 class 為 song 的 div</button>
+  <button class="opt">定位第一個 class 為 song 的標籤</button>
+  <button class="opt">定位 div 底下所有 song 屬性</button>
+</div>
+
+<div class="quiz" data-question="XPath 的索引「//div[1]」代表什麼？" data-correct="0" data-explain="索引從 1 開始，[1] 取的是第一個符合條件的 div。">
+  <button class="opt">第一個符合條件的 div</button>
+  <button class="opt">第二個符合條件的 div</button>
+  <button class="opt">最後一個符合條件的 div</button>
+  <button class="opt">所有符合條件的 div</button>
+</div>
+
+<div class="quiz" data-question="`//div[@class=&quot;tang&quot;]/ul/li/a` 和 `//div[@class=&quot;tang&quot;]//a` 的差別是什麼？" data-correct="1" data-explain="前者要求中間階層完全吻合，後者只要在範圍內、不管幾層都算。">
+  <button class="opt">前者會回傳屬性，後者回傳文字</button>
+  <button class="opt">前者要求階層吻合，後者跨層都可</button>
+  <button class="opt">前者只能用在 div，後者適用所有標籤</button>
+  <button class="opt">前者索引從 1 起，後者從 0 起</button>
+</div>
+
+<div class="quiz" data-question="為什麼實戰通常偏好相對路徑加屬性，而不是從 html 寫到底的絕對路徑？" data-correct="3" data-explain="絕對路徑只要網站多一層或少一層 wrapper 就整條失效，屬性加相對路徑較耐改。">
+  <button class="opt">因為絕對路徑的執行速度比較慢</button>
+  <button class="opt">因為絕對路徑無法取屬性值</button>
+  <button class="opt">因為相對路徑一定會回傳單一標籤</button>
+  <button class="opt">因為網站改版時絕對路徑容易失效</button>
+</div>
+
+<div class="quiz" data-question="呼叫 tree.xpath('//div') 之後，回傳值是什麼？" data-correct="1" data-explain="xpath() 回傳列表，裡面是所有符合定位條件的標籤物件。">
+  <button class="opt">一段組好的 HTML 字串</button>
+  <button class="opt">一個裝著標籤物件的列表</button>
+  <button class="opt">一個布林值代表找不找到</button>
+  <button class="opt">一個數字代表找到幾個標籤</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · XPath 與資料解析 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

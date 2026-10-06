@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>反爬手段地圖：每一招卡在四步流程的哪裡</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>反爬手段地圖：每一招卡在四步流程的哪裡</h1>
+<p class="meta">Step 4/5 · 爬蟲、反爬與逆向的全貌</p>
+
+<h2>學習目標</h2>
+<p>認得常見的反爬手段（UA 檢測、Referer 防盜鏈、Cookie、頻率限制與代理、驗證碼、動態渲染、參數加密），並說出每一招卡在四步流程的哪一步。</p>
+
+<h2>前言：先認得敵人，再談怎麼應對</h2>
+<p>第三節你已經能寫出四步的爬蟲，也學會了用封包搜尋找動態資料。但真實網站不會乖乖讓你抓，它會在四個步驟裡的某幾處設下關卡。這些關卡就是所謂的「反爬機制」，針對它們想出來的破解方式，就是「反反爬策略」。兩者合起來，就是課程一再提到的「矛與盾」。</p>
+<p>這一節是一張查閱用的地圖：把常見的反爬手段列出來，標清楚它<strong>卡在四步的哪一步</strong>、網站實際上做了什麼、以及對應的破解方向。你不需要現在就精通每一招，只要先能在封包裡認出它們，知道遇到時該往哪個方向找路，就足夠了。</p>
+
+<h2>反爬手段總表</h2>
+<p>下表把常見手段、它在四步流程中的卡點、網站的實際做法，以及對應的破解方向並列出來。後面幾節與後續節點會再深入其中幾項。</p>
+<table>
+<thead>
+<tr><th>手段</th><th>卡在哪一步</th><th>網站怎麼做</th><th>對應方向</th></tr>
+</thead>
+<tbody>
+<tr><td>UA 檢測</td><td>第一步：指定 URL（請求頭）</td><td>檢查請求載體的 <code>User-Agent</code> 是不是瀏覽器，不是就回錯誤資料</td><td>UA 偽裝：把 <code>User-Agent</code> 設成瀏覽器的值</td></tr>
+<tr><td>Referer 防盜鏈</td><td>第一步：指定 URL（請求頭）</td><td>檢查請求來源頁（<code>Referer</code>）是否符合預期，不符就拒絕或回假資料</td><td>帶上與目標相符的 <code>Referer</code></td></tr>
+<tr><td>Cookie 驗證</td><td>第一步：指定 URL（請求頭）</td><td>用 Cookie 判斷身分與登入狀態，沒帶就抓不到需登入的內容</td><td>手動複製 Cookie，或用 <code>Session</code> 自動保存</td></tr>
+<tr><td>頻率限制／IP 黑名單</td><td>第二步：發送請求（網路來源）</td><td>偵測到同一 IP 高頻請求，就把它加入黑名單不再受理</td><td>使用代理伺服器或代理池輪換 IP</td></tr>
+<tr><td>驗證碼</td><td>第二步：發送請求（人機驗證）</td><td>要求輸入圖形、滑動、點選等驗證碼才放行</td><td>接第三方 OCR 服務辨識</td></tr>
+<tr><td>動態渲染</td><td>第三步：取得響應（回應內容）</td><td>初始 HTML 沒有資料，靠 JavaScript 在載入後才補上</td><td>用封包全域搜尋定位真正的請求，或用瀏覽器自動化</td></tr>
+<tr><td>參數加密／簽名</td><td>第一步或第三步（參數與內容）</td><td>請求參數帶簽名（sign／token），或請求和回應內容被加密</td><td>逆向前端 JavaScript，找出演算法並用 Python 重現</td></tr>
+</tbody>
+</table>
+
+<h2>幾項需要記住的細節</h2>
+<p>地圖裡有幾個欄位特別值得多看一眼：</p>
+<ul>
+<li><strong>UA 檢測</strong>比的是「請求載體的身分」。用瀏覽器送請求，載體就是瀏覽器；用爬蟲程式送，載體就是爬蟲程式。網站就是靠這個欄位判斷來者是不是瀏覽器。</li>
+<li><strong>Cookie</strong>是由伺服器建立、回傳給客戶端並存在瀏覽器裡的一組鍵值對。下次再造訪同一個伺服器時，客戶端會自動帶上 Cookie，典型的例子就是網站上不用密碼就能登入。手動複製 Cookie 的缺點是麻煩、有有效期限，而且裡面可能夾著會即時變動的欄位，所以實務上常用 <code>Session</code> 物件自動處理。</li>
+<li><strong>代理伺服器</strong>的功能是轉發請求和回應。使用代理後，網站看到的是代理伺服器的 IP，不是你真正的 IP。代理依匿名程度分三級：透明（知道你用代理也知道你真實 IP）、匿名（知道你用代理但不知道真實 IP）、高匿（不知道你用代理也不知道真實 IP）。依協定還分 <code>http</code>（只能轉發 http 請求）與 <code>https</code>（可轉發 https 請求）兩種，使用時型別要和請求的協定對得上。</li>
+<li><strong>驗證碼</strong>可以交給第三方平台辨識，例如圖鑑平台提供的 <code>base64_api(uname, pwd, img, typeid)</code> 這類介面，把圖片轉成 base64 送過去換回文字。</li>
+</ul>
+
+<h2>最小使用範例：UA 偽裝</h2>
+<p>以 UA 檢測為例，破解的方式只是在請求時帶上一個瀏覽器用的 <code>User-Agent</code>。下面的程式對中國人事考試網送出請求，並在標頭裡把載體偽裝成 Chrome：</p>
+<pre data-source="sources/js-reverse2/20261005/day04/requests基础.md#requests基础"><code>import requests
+
+url = 'http://www.cpta.com.cn/'
+
+#User-Agent:请求载体（浏览器，爬虫程序）的身份表示
+header = {
+    'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+}
+#伪装了浏览器的请求头
+response = requests.get(url=url,headers=header)
+
+page_text = response.text
+
+with open('kaoshi.html','w') as fp:
+    fp.write(page_text)
+
+#程序模拟浏览器的力度不够</code></pre>
+<p>這裡唯一新增的東西就是 <code>headers</code> 這個字典，以及把它交給 <code>requests.get</code> 的 <code>headers=</code> 參數。原本會被擋下的請求，加上這個標頭後就能取回正常資料。其他手段的應對也遵循同樣的形狀：在對應的那一步補上網站期望的東西。</p>
+
+<h2>最小使用範例：用 Session 自動處理 Cookie</h2>
+<p>Cookie 驗證的應對方式，不是不斷把手動複製的 Cookie 貼來貼去，而是讓 <code>Session</code> 物件幫你記。下面以雪球網為例，先用 <code>Session</code> 對首頁發一次請求，讓伺服器建立的 Cookie 自動存進 <code>Session</code>，再用同一個 <code>Session</code> 帶著 Cookie 去打真正要資料的 API：</p>
+<pre data-source="sources/js-reverse2/20261005/day06/requests高级.md#requests高级"><code>import requests
+
+headers = {
+    'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+}
+param = {
+    #如果遇到了动态变化的请求参数？必须经过测试才知道需不需要处理
+    "since_id": "-1",
+    "max_id": "553059", #动态变化的请求参数
+    "size": "25"
+}
+
+url = 'https://xueqiu.com/statuses/hot/listV2.json'
+
+#session对象会实时保存跟踪服务器端给客户端创建的cookie
+    #创建一个session对象
+session = requests.Session() #空白的session对象
+
+first_url = 'https://xueqiu.com/'
+#使用session对象进行请求发送：如果该次请求时，服务器端给客户端创建cookie的话，则该cookie就会被保存seesion对象中
+session.get(url=first_url,headers=headers)
+#使用保存了cookie的session对象进行后续请求发送
+ret = session.get(url=url,headers=headers,params=param).json()
+print(ret)</code></pre>
+<p>要留意的是，<code>Session</code> 物件至少需要發起兩次請求：第一次的目的是讓伺服器產生的 Cookie 存進 <code>Session</code>，之後的請求才會自動帶上它。少了第一次，後面照樣拿不到資料。</p>
+
+<h2>卡點速查：四步各自會遇到什麼</h2>
+<p>如果只想記一件事，就記住每個卡點大致落在哪一步：</p>
+<table>
+<thead>
+<tr><th>四步流程</th><th>常見卡點</th></tr>
+</thead>
+<tbody>
+<tr><td>第一步：指定 URL</td><td>UA 檢測、Referer 防盜鏈、Cookie 驗證、參數簽名</td></tr>
+<tr><td>第二步：發送請求</td><td>頻率限制與 IP 黑名單、驗證碼</td></tr>
+<tr><td>第三步：取得響應</td><td>動態渲染、回應內容加密</td></tr>
+<tr><td>第四步：持久化</td><td>通常不是反爬的重點，但資料格式可能需要先解密或清洗</td></tr>
+</tbody>
+</table>
+
+<h2>小結</h2>
+<blockquote>
+反爬機制是網站阻止爬蟲的手段，反反爬策略是爬蟲的破解方式，兩者構成「矛與盾」。常見手段可以依卡點分類：請求頭類（UA 檢測、Referer 防盜鏈、Cookie）、網路與人機類（頻率限制、驗證碼）、內容類（動態渲染、參數加密）。每一招都對應四步流程裡的某一步，也都有各自的方向可以應對。
+</blockquote>
+<p>看懂這張地圖之後，最後一塊拼圖是把「防守」與「破解」串成一個整體的判斷：什麼時候只要補個標頭就能過，什麼時候費盡力氣也補不上、非得動到逆向不可。下一節就用「模擬瀏覽器力度」這條主線，把整張抓取→反爬→逆向的地圖收攏起來。</p>
+
+<div class="lesson-nav">
+  <div><a href="./crawl-flow-four-steps.html">← 上一步：抓取的四步流程：從 URL 到存檔</a></div>
+  <div><a href="./reverse-necessity.html">下一步：病根與出路：抓不到資料＝模擬瀏覽器不足 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="UA 檢測卡在四步流程的哪一步？" data-correct="0" data-explain="它檢查請求頭裡的 User-Agent，屬於第一步指定 URL 時的請求頭。">
+  <button class="opt">第一步：指定 URL 的請求頭</button>
+  <button class="opt">第二步：發送請求的網路來源</button>
+  <button class="opt">第三步：取得響應的回應內容</button>
+  <button class="opt">第四步：持久化儲存的格式</button>
+</div>
+
+<div class="quiz" data-question="網站出現「頻率限制、把 IP 加黑名單」，對應的破解方向是什麼？" data-correct="2" data-explain="用代理伺服器或代理池輪換 IP，讓網站看到的不是你原本的來源。">
+  <button class="opt">把請求標頭裡的 UA 改成瀏覽器</button>
+  <button class="opt">補上一個相符的 Referer</button>
+  <button class="opt">用代理伺服器或代理池換 IP</button>
+  <button class="opt">把回應內容解密後再解析</button>
+</div>
+
+<div class="quiz" data-question="Cookie 是由誰建立、存放在哪裡？" data-correct="1" data-explain="Cookie 由伺服器建立、存在客戶端瀏覽器，之後訪問同一伺服器會自動帶上。">
+  <button class="opt">由爬蟲建立，存放在伺服器端</button>
+  <button class="opt">由伺服器建立，存放在客戶端</button>
+  <button class="opt">由瀏覽器建立，存放在伺服器端</button>
+  <button class="opt">由代理建立，存放在網路節點</button>
+</div>
+
+<div class="quiz" data-question="下列哪一種代理匿名度最高，網站既不知道你用代理也不知道你真實 IP？" data-correct="3" data-explain="高匿代理讓網站不知道你用了代理、也查不到你的真實 IP，是三者中最推薦的。">
+  <button class="opt">透明代理</button>
+  <button class="opt">匿名代理</button>
+  <button class="opt">公開代理</button>
+  <button class="opt">高匿代理</button>
+</div>
+
+<div class="quiz" data-question="使用 Session 自動處理 Cookie 時，為什麼至少需要發起兩次請求？" data-correct="1" data-explain="第一次是讓伺服器產生的 Cookie 存進 Session，之後的請求才會帶上它。">
+  <button class="opt">因為第一次請求一定會被網站拒絕</button>
+  <button class="opt">第一次先讓 Cookie 存進 Session</button>
+  <button class="opt">因為兩次請求才能湊成完整網址</button>
+  <button class="opt">第二次只是用來確認連線正常</button>
+</div>
+
+<div class="quiz" data-question="初始 HTML 裡沒有資料、靠 JavaScript 在載入後補上，稱為哪一種手段？" data-correct="2" data-explain="這是動態渲染，資料在 JS 執行後才出現，屬第三步取得響應的卡點。">
+  <button class="opt">UA 檢測</button>
+  <button class="opt">Referer 防盜鏈</button>
+  <button class="opt">動態渲染</button>
+  <button class="opt">驗證碼</button>
+</div>
+
+<div class="quiz" data-question="請求參數帶 sign／token 或內容被加密，通常要靠什麼破解？" data-correct="1" data-explain="這類保護由前端 JavaScript 產生，要逆向找出演算法並用 Python 重現。">
+  <button class="opt">換一個更快的代理伺服器</button>
+  <button class="opt">逆向前端 JavaScript 演算法</button>
+  <button class="opt">把 User-Agent 換成手機版</button>
+  <button class="opt">改用 JSON 取代 HTML 回應</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 爬蟲、反爬與逆向的全貌 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+
+</body>
+</html>

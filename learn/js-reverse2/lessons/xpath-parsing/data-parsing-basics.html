@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>資料解析與聚焦爬蟲：從「抓下來」到「取出想要的」</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>資料解析與聚焦爬蟲：從「抓下來」到「取出想要的」</h1>
+<p class="meta">Step 1/5 · XPath 與資料解析</p>
+
+<h2>學習目標</h2>
+<p>說出資料解析在爬蟲流程中的位置與通用原理（定位標籤、取出文字或屬性），並比較 xpath、bs4、re、pyquery 四種解析技術的取捨。</p>
+
+<h2>前言：抓回來一大包，然後呢？</h2>
+<p>你把 <code>requests.get()</code> 跑起來，狀態碼 200，畫面印出 <code>response.text</code>，然後是幾千行的 HTML。裡面有導覽列、有廣告、有版權宣告，你要的那個商品價格，可能只佔其中半行。抓下來很簡單，但抓下來之後，問題才剛開始：你要怎麼把那一小段資料從這一大包裡挑出來？</p>
+<p>如果只會「抓」，你的程式永遠停在半成品：資料是抓回來了，但你沒辦法穩定地取出其中一個欄位，也沒辦法把一千筆結果排成表格。這一節先把「資料解析」這件事在整條流程裡的位置講清楚，後面四節才會動手。<strong>先知道為什麼要解析、解析在做什麼，你之後寫的每一條 XPath 才有意義。</strong></p>
+
+<h2>資料解析是什麼</h2>
+<p>資料解析的定義很直白：把爬取到的資料中，你想要的部分單獨提取出來。它本身不是一個新動作，而是對「已經抓回來的東西」再加工一次。</p>
+<p>它帶來的好處是讓爬蟲聚焦。一支只會抓頁面的程式叫通用爬蟲；加上解析之後，它才有本事只鎖定特定欄位，這就叫聚焦爬蟲。聚焦爬蟲的編碼流程比通用爬蟲多了一步，順序是：</p>
+<ol>
+<li>指定 URL</li>
+<li>發起請求</li>
+<li>獲取回應資料</li>
+<li><strong>資料解析</strong></li>
+<li>持久化儲存</li>
+</ol>
+<p>你可以對照先前的抓取流程，會發現解析正好卡在「拿到回應」與「存檔」之間。順帶一提，當你之後碰到伺服器直接回 JSON 的動態介面時，這一步可能只是 <code>response.json()</code> 拿欄位；但只要對方回的是 HTML，你就得靠這一節的工具。</p>
+
+<h2>通用原理：先定位標籤，再取值</h2>
+<p>HTML 的資料為什麼能被挑出來？因為它天生帶著結構。每一段內容都被包在一個標籤裡，標籤身上還可能掛著屬性。所以解析的通用原理只有兩句話：</p>
+<blockquote>在一張頁面中，想要解析的資料存在於相關的 HTML 標籤中。先把指定的標籤定位出來，再從這個標籤的內容或屬性裡把資料取出。</blockquote>
+<p>把網頁想成一座圖書館。你要找的那本書是資料，標籤是書架上的編號，屬性是書封上的標籤（例如語言、出版年）。資料解析在做的事，就是拿著一個書架編號走到那個位置，把書拿下來，再把你要的那頁撕下來帶走。定位與提取是兩個分開的動作，順序不能顛倒：找不到書架，就別談撕哪一頁。</p>
+<p>這裡也藏著一個之後會一直用到的觀念：你能取到什麼，取決於你認不認得出資料被包在哪。這也是為什麼解析常常不是「寫不出表達式」，而是「不知道要對準哪個標籤」。</p>
+
+<h2>四種解析技術，該挑哪一個</h2>
+<p>Python 裡能做出解析的手法不只一種，各有脾氣。以下是常見的四種：</p>
+<table>
+<thead>
+<tr><th>技術</th><th>選擇方式</th><th>特點</th><th>適合的場合</th></tr>
+</thead>
+<tbody>
+<tr><td>xpath</td><td>路徑表達式</td><td>通用性最強，最重要也最常用；跨語言，之後寫 Scrapy 也是同一套</td><td>結構完整的 HTML/XML，本課主線</td></tr>
+<tr><td>bs4</td><td>Python 物件</td><td>Python 專屬，學習成本較低</td><td>想快速寫完的小爬蟲</td></tr>
+<tr><td>re 正則</td><td>字串樣式</td><td>任何文字都能用，但表達式複雜、難以維護</td><td>不規則、沒有標籤結構的片段</td></tr>
+<tr><td>pyquery</td><td>CSS 選擇器</td><td>熟悉 jQuery 或 CSS 的人上手很快</td><td>有前端背景的人</td></tr>
+</tbody>
+</table>
+<p>這四種沒有絕對的優劣，只有場合不同。判斷的問句是：「這份資料有整齊的標籤結構嗎？」有，就走 XPath；沒有，才考慮正則。如果你是從前端過來、對 CSS 選擇器很熟，pyquery 會讓你寫得比較順；但如果考慮到之後要接 Scrapy，學 XPath 的投資報酬率最高，因為那是同一套語言。</p>
+
+<h2>小結</h2>
+<blockquote>
+資料解析就是在抓回來的資料裡，把想要的欄位單獨挑出來，作用是把通用爬蟲升級成聚焦爬蟲。它的通用原理只有兩步：定位標籤，然後從標籤的內容或屬性取值。技術上有 xpath、bs4、re、pyquery 四條路，其中 XPath 通用性最強，是接下來的主線。
+</blockquote>
+<p>原理講完了，接下來要動手。第一個問題很實際：怎麼把一大串 HTML 交給程式，讓它變成一棵可以被 XPath 搜尋的樹？下一節會用 lxml 建立解析物件，並開始用表達式定位標籤。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./xpath-locate.html">下一步：用 lxml 建立解析物件並定位標籤 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="資料解析在聚焦爬蟲流程中位於哪一步之後？" data-correct="2" data-explain="流程是取得回應資料之後、持久化儲存之前，中間夾著資料解析。">
+  <button class="opt">指定 URL 之後、發起請求之前</button>
+  <button class="opt">發起請求之後、取得回應之前</button>
+  <button class="opt">取得回應之後、持久化儲存之前</button>
+  <button class="opt">持久化儲存之後、清理資料之前</button>
+</div>
+
+<div class="quiz" data-question="資料解析的通用原理是哪兩步？" data-correct="1" data-explain="先定位到標籤，再從標籤的內容或屬性把資料取出。">
+  <button class="opt">先下載檔案，再解壓縮取出資料</button>
+  <button class="opt">先定位標籤，再取出內容或屬性</button>
+  <button class="opt">先登入網站，再翻頁抓取資料</button>
+  <button class="opt">先加密參數，再送出偽造的請求</button>
+</div>
+
+<div class="quiz" data-question="四種解析技術中，通用性最強、且之後學 Scrapy 也用得上的是哪一個？" data-correct="0" data-explain="XPath 跨語言、通用性最強，Scrapy 的 response.xpath 也是同一套。">
+  <button class="opt">xpath</button>
+  <button class="opt">bs4</button>
+  <button class="opt">re 正則</button>
+  <button class="opt">pyquery</button>
+</div>
+
+<div class="quiz" data-question="什麼情況下正則（re）會是比 XPath 更合理的選擇？" data-correct="3" data-explain="資料沒有整齊的標籤結構、只是不規則的文字片段時，正則才划算。">
+  <button class="opt">頁面的標籤結構非常整齊時</button>
+  <button class="opt">需要跨語言重複使用同一套規則時</button>
+  <button class="opt">之後打算把程式改寫成 Scrapy 時</button>
+  <button class="opt">資料是沒有標籤結構的文字片段時</button>
+</div>
+
+<div class="quiz" data-question="「聚焦爬蟲」和「通用爬蟲」最大的差別是什麼？" data-correct="1" data-explain="聚焦爬蟲在通用流程之外多了一步資料解析，只鎖定特定欄位。">
+  <button class="opt">聚焦爬蟲一次只能抓一個網站</button>
+  <button class="opt">聚焦爬蟲多了資料解析這一步</button>
+  <button class="opt">聚焦爬蟲不需要發送 HTTP 請求</button>
+  <button class="opt">聚焦爬蟲只能抓 JSON 格式資料</button>
+</div>
+
+<div class="quiz" data-question="解析時，「定位」與「提取」的關係是什麼？" data-correct="2" data-explain="必須先把標籤定位出來，才能從它身上取出文字或屬性。">
+  <button class="opt">兩者互斥，只能選一個動作做</button>
+  <button class="opt">先提取屬性，再回頭定位標籤</button>
+  <button class="opt">先定位標籤，再從標籤取值</button>
+  <button class="opt">兩者順序可以任意調換都行</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · XPath 與資料解析 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
