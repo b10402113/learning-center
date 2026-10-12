@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>兩種環境檢測：證明我是瀏覽器、不是 Node</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>兩種環境檢測：證明我是瀏覽器、不是 Node</h1>
+<p class="meta">Step 4/5 · 補環境與環境檢測</p>
+
+<h2>學習目標</h2>
+<p>分辨「是不是瀏覽器」與「是不是 Node」兩類環境檢測，並針對每一類選對破解方式。</p>
+
+<h2>前言：補了物件，網站還是把你擋掉</h2>
+<p>上一節你把八大前端物件補好了，程式碼終於能跑、不再報錯。可是結果是錯的：本來該拿到一串簽名或 cookie，卻回傳了 <code>false</code>，或者第二個請求照樣被擋。問題不在你的補法，而在於網站<strong>主動去驗證</strong>了你的環境。它會在程式碼裡塞一小段檢查，判斷自己到底被誰在跑。</p>
+<p>這些檢查其實分成兩個方向：一種是確認「我在瀏覽器裡嗎」，另一種是反過來確認「我不在 Node 裡嗎」。兩者的通過條件不同，破解手法也不同。這一節要讓你看到一段檢查碼時，能判斷它問的是哪一種，然後用對的方式回答。</p>
+
+<h2>選項比較：兩種檢測，兩種答案</h2>
+<p>兩種思路的差別，可以用一張表列清楚：</p>
+
+<table>
+  <thead>
+    <tr><th>檢測思路</th><th>它問的問題</th><th>通過條件</th><th>對應破解</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>是不是瀏覽器</td>
+      <td>物件是不是真的瀏覽器物件？（例如 <code>navigator.toString()</code> 等於 <code>[object Navigator]</code> 嗎）</td>
+      <td>物件存在、型別正確、<code>toString</code> 標籤正確</td>
+      <td>補齊八大前端物件與正確的 <code>toString</code> 標籤</td>
+    </tr>
+    <tr>
+      <td>是不是 Node</td>
+      <td>有沒有 Node 專屬的東西？（例如 <code>process</code> 與 <code>global</code> 是否同時存在）</td>
+      <td>找不到 <code>process</code>、<code>global</code> 等識別字</td>
+      <td><code>delete</code> 掉 Node 專屬的識別字</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>第一種（是不是瀏覽器）的典型長相，是拿某個物件的 <code>toString</code> 去比對一個寫死的字串：</p>
+
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day19-Day20：逆向核心案例解析5/03 环境检测Demo.js"><code>navigator = {
+    toString() {
+        return "[object Navigator]"
+    },
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36'
+}</code></pre>
+
+<p>第二種（是不是 Node）的典型長相，是去問「<code>process</code> 和 <code>global</code> 是不是都存在」，因為這兩個是 Node 才有、瀏覽器沒有的全域識別字：</p>
+
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day21-Day22：逆向核心案例解析6/JS逆向补环境文档/逆向爬虫之补环境.md"><code>    if (navigator.toString() === '[object Navigator]') {
+
+        // (3) 基于node关键字判断是不是浏览器环境
+        const isNode = typeof process !== 'undefined' &amp;&amp; typeof global !== 'undefined';
+        if (isNode) {
+            console.log("当前环境是 Node.js");
+            return false
+        } else {
+            console.log("当前环境不是 Node.js");
+            return "u82d1660a".toUpperCase() + navLength // Yuan老师的微信，想深入学逆向爬虫的联系我，结一段善缘!
+        }
+
+    } else {
+        return false
+    }</code></pre>
+
+<p>注意這段程式碼是把兩種檢測疊在一起的：它先確認「是不是瀏覽器」（<code>navigator.toString()</code> 那一段），通過了，再確認「是不是 Node」。所以你在真實網站上，很可能兩種都要處理，而不是選一種。</p>
+
+<h2>判別問句：這行讀的是哪一類東西？</h2>
+<p>面對一段檢查碼，不用先去理解整段邏輯，只要看它讀的是什麼。問自己兩個問題：</p>
+<ol>
+  <li>它讀的是「瀏覽器應該要有」的東西嗎？例如 <code>navigator</code>、<code>document</code>、<code>screen</code>、<code>window</code>。若是，這是<strong>是不是瀏覽器</strong>的檢測，你要把這些物件與它們的成員、<code>toString</code> 補對。</li>
+  <li>它讀的是「只有 Node 才有」的東西嗎？例如 <code>process</code>、<code>global</code>、<code>Buffer</code>、<code>__dirname</code>、<code>__filename</code>。若是，這是<strong>是不是 Node</strong>的檢測，你要把這些識別字弄掉。</li>
+</ol>
+<p>第二類的破解手法，是把這些 Node 痕跡刪掉。下面是一個完整例子，一開始先把 <code>window</code> 接到 <code>global</code>，接著把 Node 的識別字逐一 <code>delete</code>：</p>
+
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day21-Day22：逆向核心案例解析6/JS逆向补环境文档/逆向爬虫之补环境.md"><code>window = global
+
+delete global
+delete process
+delete Buffer
+delete __dirname
+delete __filename</code></pre>
+
+<p>這樣一來，當檢查碼去問「<code>typeof process !== 'undefined'</code>」時，得到的就會是「未定義」，於是判斷「這不是 Node」，走進正確的那條分支。</p>
+
+<h2>反例：這些規則什麼時候會翻轉</h2>
+<p>這兩條規則不是無腦照做就會過，有幾個會讓它失效的情況：</p>
+<ul>
+  <li><strong>刪錯東西會弄壞 Node 本身。</strong><code>delete</code> 是有副作用的操作，刪掉的對象與順序要照著已知可行的範本走。憑感覺多刪或少刪，輕則後續程式碼用了找不到，重則 Node 直接跑不動。</li>
+  <li><strong>只補 <code>toString</code> 不夠。</strong>如果物件本身不存在、或成員型別錯（該是函式卻補成值），檢查一樣不會過。<code>toString</code> 是門面，物件本體要先對。</li>
+  <li><strong>補太多也會露餡。</strong>如果補了瀏覽器上根本不存在的東西，反而可能被反向偵測抓到。補的重點是「像」，不是「多」。</li>
+  <li><strong>兩類檢測可能同時出現。</strong>像上面那段範例，先「是不是瀏覽器」、再「是不是 Node」。只做一種會卡在另一種上。</li>
+</ul>
+
+<h2>小結</h2>
+<blockquote>
+環境檢測有兩個方向：「是不是瀏覽器」（比對物件與 <code>toString</code> 標籤）與「是不是 Node」（查 <code>process</code>、<code>global</code> 等 Node 專屬識別字）。前者靠補齊八大前端物件與正確的 <code>toString</code> 來過，後者靠 <code>delete</code> 掉 Node 識別字來過。兩者常同時出現，所以要兩個都處理；而 <code>delete</code> 有副作用、補太多也會露餡，是兩個要小心的反例。
+</blockquote>
+<p>到這裡，你已經有了完整的補環境迴圈：Proxy 找缺口、八大物件補成員、兩種檢測選對破解。下一節把這整套放進一個代表性的真實場景：瑞數。它會讓你看到：為什麼一個網站要請求兩次、兩個 cookie 各由誰產生，以及你補環境之後到底是在還原哪一個 cookie。</p>
+
+<div class="lesson-nav">
+  <div><a href="./eight-frontend-objects.html">← 上一步：八大前端物件：要補的成員與 toString 標籤</a></div>
+  <div><a href="./rs-cookie-flow.html">下一步：瑞數 cookie 流程：兩次請求與三個動態輸入 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="「是不是瀏覽器」這類檢測，通常在比對什麼？" data-correct="1" data-explain="它常拿物件的 toString 去比對寫死的類別字串，例如 [object Navigator]。">
+  <button class="opt">比對使用者的 IP 位址</button>
+  <button class="opt">比對物件的 toString 標籤</button>
+  <button class="opt">比對 Node 的版本號</button>
+  <button class="opt">比對請求的 header 排序</button>
+</div>
+
+<div class="quiz" data-question="「是不是 Node」這類檢測，通常去找哪些識別字？" data-correct="3" data-explain="Node 專屬識別字如 process、global、Buffer 是這類檢測的目標。">
+  <button class="opt"><code>window</code>、<code>document</code></button>
+  <button class="opt"><code>navigator</code>、<code>screen</code></button>
+  <button class="opt"><code>location</code>、<code>history</code></button>
+  <button class="opt"><code>process</code>、<code>global</code></button>
+</div>
+
+<div class="quiz" data-question="要通過「是不是 Node」檢測，對應的破解是什麼？" data-correct="0" data-explain="把 Node 專屬識別字 delete 掉，讓檢測查不到，就會判斷「不是 Node」。">
+  <button class="opt"><code>delete</code> 掉 Node 識別字</button>
+  <button class="opt">補上 navigator 的 toString</button>
+  <button class="opt">把 window 接到 document</button>
+  <button class="opt">在 header 裡偽裝 User-Agent</button>
+</div>
+
+<div class="quiz" data-question="為什麼 <code>delete</code> Node 識別字要照範本、不能憑感覺？" data-correct="2" data-explain="delete 有副作用，刪錯對象或順序會讓 Node 或後續程式碼找不到東西而壞掉。">
+  <button class="opt">delete 只能刪字串型別的值</button>
+  <button class="opt">delete 會讓瀏覽器檢測失敗</button>
+  <button class="opt">delete 有副作用刪錯會壞</button>
+  <button class="opt">delete 會改變函式的 this</button>
+</div>
+
+<div class="quiz" data-question="如果只把 <code>toString</code> 補對，但物件成員型別補錯，結果會如何？" data-correct="1" data-explain="物件本體與成員型別必須先對，否則檢查仍然不會通過；toString 只是門面。">
+  <button class="opt">檢測必定會通過</button>
+  <button class="opt">檢查一樣不會通過</button>
+  <button class="opt">程式會直接當掉無法執行</button>
+  <button class="opt">自動跳過 Node 檢測</button>
+</div>
+
+<div class="quiz" data-question="關於補環境，下列哪個說法正確？" data-correct="3" data-explain="補的重點是「像」不是「多」；補了瀏覽器不存在的東西反而可能被反向偵測。">
+  <button class="opt">補得越多越不容易被發現</button>
+  <button class="opt">只要補 window 其他都不用</button>
+  <button class="opt">兩種檢測只會出現其中一種</button>
+  <button class="opt">補重點是像不是多</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 補環境與環境檢測 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

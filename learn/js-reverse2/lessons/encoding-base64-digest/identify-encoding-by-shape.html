@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一眼判型：從長度與字母表認出編碼</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一眼判型：從長度與字母表認出編碼</h1>
+<p class="meta">Step 5/5 · 編碼與摘要：URL、Base64、MD5/SHA</p>
+
+<h2>學習目標</h2>
+<p>面對一段陌生字串，依長度與字母表判斷它是 URL 編碼、Base64（標準或 URL-safe）還是十六進位摘要，並選對還原方式。</p>
+
+<h2>前言：先判型，再動手</h2>
+<p>前面的四個步驟，你已經分別認識了 URL 編碼、Base64、它的變體，以及摘要演算法。現在把場景換成真實工作：你在封包裡複製了一段參數，值是 <code>aGVsbG8=</code>。接下來你要做什麼？直接丟進 Base64 解碼器？還是先補 <code>=</code>？還是它其實是某種摘要，根本解不回來？</p>
+<p>這裡有一個很現實的取捨。如果你判斷它是「可逆的編碼」，那你的力氣就花在還原上，解出來就結束了，不必找什麼金鑰。但如果你判斷它是「摘要」，那再多解碼器也沒用，你得把方向轉去「找出它的輸入字串」。判錯方向，輕則白忙一場，重則誤以為這個參數沒有保護、實際上後面還藏著一層。所以真正該先練的，不是怎麼解，而是怎麼看。</p>
+
+<h2>一張表看懂差異</h2>
+<p>這幾種東西的差別，其實都寫在兩件事上：字元集（字母表）和長度。把它們並列起來，判型就變成照表比對：</p>
+<table>
+<thead>
+<tr><th>類型</th><th>字母表特徵</th><th>長度特徵</th><th>還原方式</th></tr>
+</thead>
+<tbody>
+<tr><td>URL 編碼</td><td>含 <code>%</code> 加上兩位十六進位</td><td>長度不定</td><td><code>unquote</code></td></tr>
+<tr><td>標準 Base64</td><td>只用 <code>A-Z a-z 0-9 + / =</code></td><td>去掉 <code>=</code> 後是 4 的倍數</td><td><code>b64decode</code></td></tr>
+<tr><td>URL-safe Base64</td><td>只用 <code>A-Z a-z 0-9 - _ =</code></td><td>4 的倍數</td><td>先 <code>-</code>→<code>+</code>、<code>_</code>→<code>/</code> 再解</td></tr>
+<tr><td>十六進位摘要</td><td>只落在 <code>0-9 a-f</code></td><td>MD5 32、SHA-1 40、SHA-256 64、SHA-512 128</td><td>不可逆，重算或找輸入</td></tr>
+<tr><td>自訂字母表 Base64</td><td>安全字元但順序被重排</td><td>4 的倍數</td><td>需先取得對方字母表</td></tr>
+</tbody>
+</table>
+
+<h2>依序問自己這幾個問題</h2>
+<p>實戰時不一定要每次都查表，把下面的問題照順序問一遍，通常兩三個就能鎖定：</p>
+<ol>
+<li>字串裡有沒有出現 <code>%</code> 開頭、後面接著兩位十六進位的序列？有的話，先當它是 URL 編碼，用 <code>unquote</code> 還原看看。</li>
+<li>字串是不是落在 <code>A-Z a-z 0-9 + / =</code> 這幾類字元裡？去掉尾端的 <code>=</code> 之後，長度是不是 4 的倍數？兩個都成立，就高度可能是標準 Base64。</li>
+<li>裡面有沒有 <code>-</code> 或 <code>_</code>？有，就是 URL-safe 變體，替換回 <code>+</code>、<code>/</code> 再解。</li>
+<li>字串是不是只由 <code>0-9</code> 和 <code>a-f</code> 組成？長度是不是剛好 32、40、64 或 128？符合的話，它比較可能是十六進位摘要，別浪費時間想「解開」它。</li>
+<li>明明很像 Base64、字母表也對，但解出來是一坨看不懂的東西？那可能只是第一層，真正的內容還包在裡面。</li>
+</ol>
+
+<h2>反例：這些判斷會在什麼時候翻車</h2>
+<p>規則講完，更要知道它什麼時候不成立。下面三個反例，是判型最常出錯的地方。</p>
+<h3>反例一：長度是 4 的倍數，不代表就是 Base64</h3>
+<p>十六進位摘要的常見長度 32、40、64、128，剛好全都是 4 的倍數。所以單看「長度是不是 4 的倍數」根本分不出 Base64 和 MD5 摘要。真正能分開它們的是字元集：十六進位只會出現 <code>0-9</code> 和 <code>a-f</code>，不會有 <code>g</code> 之後的字母，也不會有 <code>+ / =</code>。兩個條件要一起看，不能只看一個。</p>
+<h3>反例二：解出一層，不代表結束</h3>
+<p>一段 Base64 解出來的東西常常還是亂碼，因為它裡面包的可能是一段 AES 密文。這時候正確的反應不是「我解錯了」，而是「我解對了，這裡是第二層」。很多逆向案例的結構就是「Base64 外層、對稱加密內層」，看到外層解得開，只能證明你走對方向，不能停下來。</p>
+<h3>反例三：摘要也可能被包成 Base64 的樣子</h3>
+<p>摘要算完通常是十六進位字串，但也有程式把它再轉成 Base64 才傳出去。這種情況下，你在封包裡看到的是一段 Base64，但它真正代表的內容是一串十六進位摘要，外表和本質不一樣。這提醒我們：判型是為了決定「先做哪一步」，不是給出「它一定是什麼」的結論，要邊做邊驗證。</p>
+
+<h2>把它寫成一段檢查程式</h2>
+<p>把上面的判別問句寫成程式，就是一個簡單的初判函式。它只做初步分類，最後的「自訂字母表」還是得靠人工判斷：</p>
+
+<pre data-provenance="derived"><code>import re, base64
+
+def guess_shape(s: str) -> str:
+    if re.search(r"%[0-9A-Fa-f]{2}", s):
+        return "url-encoding"
+    if "-" in s or "_" in s:
+        return "base64-url-safe"
+    if re.fullmatch(r"[0-9a-f]+", s) and len(s) in (32, 40, 64, 128):
+        return "hex-digest"
+    if re.fullmatch(r"[A-Za-z0-9+/=]+", s) and len(s.rstrip("=")) % 4 == 0:
+        return "base64-standard"
+    return "unknown"</code></pre>
+
+<p>這段程式的順序是刻意的：先攔最明確的 URL 編碼，再攔 URL-safe，然後才判斷是不是十六進位摘要，因為 <code>0-9a-f</code> 是標準 Base64 字元的子集，如果不先檢查摘要，一個剛好的十六進位字串會被誤判成 Base64。</p>
+
+<h2>小結</h2>
+<blockquote>
+判型看兩件事：字母表和長度。看到 <code>%XX</code> 就是 URL 編碼，用 <code>unquote</code>；字母表是 <code>A-Z a-z 0-9 + /</code> 且長度是 4 的倍數就是標準 Base64；出現 <code>-</code> 或 <code>_</code> 就是 URL-safe；只有 <code>0-9 a-f</code> 且長度是 32／40／64／128 就偏向十六進位摘要，別再想怎麼「解」，要去把它重算出來。但記得兩個反例：長度是 4 的倍數不代表就是 Base64，解出一層也不代表結束。
+</blockquote>
+<p>把五步收進來看，這條線其實是一組「認字 → 還原 → 重算」的基本功：URL 編碼和 Base64 幫你把可逆的包裝拆開，摘要演算法幫你判斷哪些地方該改用重算而不是還原。有了這套眼力，後面遇到真正的加密（對稱、非對稱）時，你才分得出哪一段能解、哪一段要去找金鑰，那正是下一個節點要講的事。</p>
+
+<div class="lesson-nav">
+  <div><a href="./digest-md5-sha.html">← 上一步：摘要演算法：MD5 與 SHA 家族</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="字串裡出現 % 加上兩位十六進位，通常屬於哪一類？" data-correct="0" data-explain="這是百分比編碼的特徵，用 unquote 就能還原。">
+  <button class="opt">URL 編碼</button>
+  <button class="opt">標準 Base64</button>
+  <button class="opt">URL-safe Base64</button>
+  <button class="opt">十六進位摘要</button>
+</div>
+
+<div class="quiz" data-question="判斷一段字串是不是 Base64 時，哪個條件最關鍵？" data-correct="2" data-explain="要同時看字母表與長度：字元落在 Base64 集合、長度是 4 的倍數。">
+  <button class="opt">字串是不是以等號結尾</button>
+  <button class="opt">字串的長度是不是很長</button>
+  <button class="opt">字母表與長度要一起看</button>
+  <button class="opt">字串裡有沒有出現數字</button>
+</div>
+
+<div class="quiz" data-question="一段全是 0-9 與 a-f、長度 32 的字串最可能是什麼？" data-correct="1" data-explain="字元集落在十六進位、長度 32 正是 MD5 的特徵。">
+  <button class="opt">一段標準的 Base64 編碼</button>
+  <button class="opt">一段 MD5 的十六進位摘要</button>
+  <button class="opt">一段 URL-safe 的 Base64</button>
+  <button class="opt">一段沒有編碼的明文</button>
+</div>
+
+<div class="quiz" data-question="為什麼不能只用「長度是 4 的倍數」來判定 Base64？" data-correct="3" data-explain="十六進位摘要的長度 32、40、64 也都是 4 的倍數，需靠字元集區分。">
+  <button class="opt">因為 Base64 的長度其實不固定</button>
+  <button class="opt">因為中文的長度很難精確計算</button>
+  <button class="opt">因為摘要的長度通常是奇數</button>
+  <button class="opt">因為摘要長度也常是四倍數</button>
+</div>
+
+<div class="quiz" data-question="一段 Base64 解出來仍是亂碼，最合理的下一步是什麼？" data-correct="2" data-explain="外層解得開代表方向對了，裡面可能是密文等第二層，要繼續處理。">
+  <button class="opt">認定自己判錯型別了</button>
+  <button class="opt">換一種編碼重新解一次</button>
+  <button class="opt">把它當成第二層繼續處理</button>
+  <button class="opt">直接放棄這段參數</button>
+</div>
+
+<div class="quiz" data-question="遇到疑似摘要的參數時，力氣應該花在哪裡？" data-correct="0" data-explain="摘要不可逆，重點是找出它的輸入字串與鹽，而不是嘗試解碼。">
+  <button class="opt">找出它的輸入字串與鹽</button>
+  <button class="opt">嘗試用 Base64 把它解開</button>
+  <button class="opt">用 URL 解碼還原原始內容</button>
+  <button class="opt">直接跳過不理這個參數</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 編碼與摘要：URL、Base64、MD5/SHA · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

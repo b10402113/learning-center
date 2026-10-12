@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hydration mismatch：伺服器與瀏覽器為什麼會對不上</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Hydration mismatch：伺服器與瀏覽器為什麼會對不上</h1>
+<p class="meta">Step 4/5 · The Web-Rendering Model</p>
+
+<h2>學習目標</h2>
+<p>能說出 hydration mismatch 的成因：伺服器渲染出的 HTML 與瀏覽器首次渲染的結果不一致時，React 無法把事件正確接上而報錯。</p>
+
+<h2>前言：畫面明明出來了，為什麼主控台在罵人？</h2>
+
+<p>上一節看到 Next.js 把畫面分成兩段：伺服器先畫一份 HTML，JavaScript 到了之後再用 hydration 把互動接上去。這個設計有個前提：伺服器畫的那一份，和瀏覽器「第一次」畫的那一份，必須長得一模一樣。</p>
+
+<p>但實務上有時候畫面明明顯示出來了，瀏覽器卻跳出一個 hydration error，告訴你伺服器渲染的結果和用戶端對不起來。這不是隨機的故障，而是這個「兩邊必須一致」的設計，在特定寫法下必然會踩到的結果。這一節要把 mismatch 從哪裡來講清楚，你以後看到這個錯誤訊息，才知道該往哪裡找。</p>
+
+<h2>hydration 是一場「配對」</h2>
+
+<p>先回頭確認 hydration 的本質。它做的事，是拿伺服器已經產生的那份 HTML 當底稿，把 JavaScript 的事件處理接到對應的節點上。既然要「接到對應的節點」，前提就是兩邊的結構必須一一對得上：伺服器渲染出一個按鈕，瀏覽器也必須渲染出同一個按鈕，事件才掛得上去。</p>
+
+<p>所以當伺服器回傳的 HTML，和瀏覽器第一次渲染出來的結果不一致時，React 就找不到該掛的節點、也無法正確接手。這種情況就是你看到的 hydration error，畫面和伺服器最初渲染的內容出現落差。</p>
+
+<h2>mismatch 具體長什麼樣</h2>
+
+<p>用 React 元件的說法：伺服器會先渲染出一組佔位結構，例如 div、form、span 這些標籤；等到瀏覽器端也要渲染同一批元件時，如果它畫出來的內容和伺服器那份對不上，你就會看到錯誤。這些「先出現、之後要被對上」的標籤，就是問題的所在。</p>
+
+<p>換句話說，錯誤不是因為 HTML 壞了，而是因為「伺服器版」和「瀏覽器版」的首次渲染，說了不同的話。</p>
+
+<h2>為什麼兩邊會說不同的話？</h2>
+
+<p>關鍵在於：伺服器渲染時，是在伺服器那台機器上執行；瀏覽器渲染時，是在使用者的裝置上執行。只要元件在第一次渲染時用到了「兩邊結果不可能相同」的資訊，兩份輸出就會分歧。</p>
+
+<p>最典型的情況，是依賴「只有瀏覽器才有、或每次都不一樣」的值。例如把當下時間顯示在畫面上：伺服器算出的時間和使用者瀏覽器算出的時間本來就不同，於是兩邊渲染出來的文字對不上。</p>
+
+<pre data-provenance="derived"><code>// 概念示意：兩邊各自算「現在時間」，結果必然不同
+function Clock() {
+  return &lt;span&gt;{new Date().toLocaleTimeString()}&lt;/span&gt;;
+}</code></pre>
+
+<p>當伺服器先產生一份帶有某個時間的 HTML，瀏覽器再算一次卻得到另一個時間，兩份就對不起來，hydration 也就失敗了。同樣的道理，任何讓首次渲染結果依賴外部環境、而且兩邊環境不同的寫法，都可能引發 mismatch。</p>
+
+<h2>一致與不一致的差別</h2>
+
+<table>
+<thead>
+<tr><th>情況</th><th>伺服器首次渲染</th><th>瀏覽器首次渲染</th><th>結果</th></tr>
+</thead>
+<tbody>
+<tr><td>一致</td><td>相同的結構與內容</td><td>相同的結構與內容</td><td>hydration 成功，互動接上</td></tr>
+<tr><td>不一致</td><td>某一種內容</td><td>另一種內容</td><td>hydration error，對不上</td></tr>
+</tbody>
+</table>
+
+<p>所以正確的心態不是「把錯誤訊息壓掉」，而是理解：hydration 需要兩次渲染的結果一致。知道這件事，你才有辦法判斷哪些寫法會讓伺服器與瀏覽器各說各話。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+hydration 要拿伺服器渲染好的 HTML 當底稿，把事件接到對應的節點上。當伺服器渲染的佔位結構（div、form、span 等）與瀏覽器首次渲染的結果不一致時，React 就對不上而報出 hydration mismatch。根本原因是首次渲染若依賴兩邊環境不同的資訊（例如當下時間），輸出一分歧，配對就會失敗。
+</blockquote>
+
+<p>到這裡，你已經看懂這個模型的三種長相，以及它最容易咬人的那個環節。最後一節要把鏡頭拉遠：這種「往伺服器移動」的思路，其實不是 Next.js 一時的發明，而是整個 React 生態在 2020 年之後的大轉向。我們來看 Server Components 是怎麼誕生的。</p>
+
+<div class="lesson-nav">
+  <div><a href="./nextjs-ssr-and-hydration.html">← 上一步：Next.js 的 SSR：先畫出來，再 hydration 接上互動</a></div>
+  <div><a href="./birth-of-server-components.html">下一步：Server Components 的誕生：React 為什麼往伺服器走 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="hydration 要能成功，最重要的前提是什麼？" data-correct="2" data-explain="伺服器與瀏覽器首次渲染的結果必須一致，事件才接得上對應節點。">
+  <button class="opt">JavaScript 檔案體積必須很小</button>
+  <button class="opt">伺服器必須比瀏覽器快很多</button>
+  <button class="opt">兩邊首次渲染結果必須一致</button>
+  <button class="opt">網頁不能使用任何 CSS 樣式</button>
+</div>
+
+<div class="quiz" data-question="hydration mismatch 的成因是什麼？" data-correct="1" data-explain="伺服器渲染的佔位結構與瀏覽器首次渲染的結果對不上。">
+  <button class="opt">伺服器完全沒有回傳 HTML</button>
+  <button class="opt">伺服器與瀏覽器渲染結果不一致</button>
+  <button class="opt">使用者的網路連線中斷了</button>
+  <button class="opt">CSS 檔載入順序排錯了</button>
+</div>
+
+<div class="quiz" data-question="下列哪一種寫法最容易造成 hydration mismatch？" data-correct="3" data-explain="首次渲染就依賴兩邊環境不同的值（例如當下時間），輸出會分歧。">
+  <button class="opt">把固定文字放在 span 裡</button>
+  <button class="opt">使用純 CSS 做版面排版</button>
+  <button class="opt">把圖片放在 public 資料夾</button>
+  <button class="opt">首次渲染就顯示當下時間</button>
+</div>
+
+<div class="quiz" data-question="出現 hydration error 時，代表什麼？" data-correct="0" data-explain="代表瀏覽器渲染結果和伺服器最初渲染的內容出現落差、接不起來。">
+  <button class="opt">兩邊渲染結果出現落差、接不起來</button>
+  <button class="opt">伺服器整台當掉需要重啟</button>
+  <button class="opt">JavaScript 檔案被完全封鎖</button>
+  <button class="opt">瀏覽器版本太舊必須更新</button>
+</div>
+
+<div class="quiz" data-question="伺服器與瀏覽器渲染為什麼可能各說各話？" data-correct="2" data-explain="兩者在不同機器上執行，首次渲染若依賴環境不同，結果自然不同。">
+  <button class="opt">因為 HTML 規格本身不穩定</button>
+  <button class="opt">因為 React 常常隨機出錯</button>
+  <button class="opt">因為兩者在不同機器上執行</button>
+  <button class="opt">因為 CSS 會改變文字內容</button>
+</div>
+
+<div class="quiz" data-question="面對 hydration mismatch，正確的心態是什麼？" data-correct="1" data-explain="重點是理解兩次渲染必須一致，據此檢查哪些寫法會造成分歧。">
+  <button class="opt">把錯誤訊息直接關掉就好</button>
+  <button class="opt">理解兩次渲染必須保持一致</button>
+  <button class="opt">把 JavaScript 全部改成 CSS</button>
+  <button class="opt">改回傳統多頁網站最快</button>
+</div>
+
+<div class="footer">
+  <p>next-js · The Web-Rendering Model · Step 4/5</p>
+  <p>讀到這裡有疑問，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

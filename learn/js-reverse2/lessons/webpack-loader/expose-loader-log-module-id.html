@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>暴露 require 函式並記錄模組 id</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>暴露 require 函式並記錄模組 id</h1>
+<p class="meta">Step 3/4 · webpack 拆解與模組定位</p>
+
+<h2>學習目標</h2>
+<p>把 bundle 內的 require 函式接到 <code>window.loader</code>、在模組執行處插一行 <code>console.log</code> 印出模組 id，再用 <code>window.loader(id)</code> 逐一呼叫模組，直到鎖定產生簽名參數的那一個。</p>
+
+<h2>前言：把手在手上，卻不知道要轉哪個號碼</h2>
+<p>前兩節你已經知道 webpack bundle 的骨架，也學會分辨陣列、物件、多檔三種型態。你也知道那行 <code>window.loader = n</code> 是入口。但真正的問題是：簽名參數是由哪一個模組算出來的？那個模組的編號是多少？</p>
+<p>如果你在 DevTools 的斷點上停下來，只會看到 <code>window.loader</code> 收到一個參數 <code>r</code>，但你不知道 <code>r</code> 是什麼、它來自哪個呼叫。這一節要做的就是裝一個「行車記錄器」：在模組即將被執行的位置插一行 log，讓每一次呼叫都留下「編號」的紀錄。有了這份紀錄，你就能從「哪個模組產生了我關心的值」反推回去。</p>
+<p><strong>前置條件：</strong>你手上的打包檔已經能載入 Node 執行（最小情況是先寫 <code>window = global</code>，再把 loader 檔 require 進來）。若那段 JS 依賴瀏覽器物件而報錯，那是補環境的範圍，先跳過，專注在「接把手、插 log、呼叫」這三件事上。</p>
+
+<h2>步驟一：確認 require 函式有沒有露出來</h2>
+<p>打開你手上的 loader 檔，先在裡面搜 <code>window.loader</code>。多數 webpack 打包檔已經幫你寫好了這一行，例如物件版的 loader 直接把 <code>n</code> 指給它：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day17-Day18：逆向核心案例解析4/02 基于对象的webpack.js"><code>!function (e) {
+    var t = {};
+
+    // 加载函数
+    function n(r) {
+        if (t[r])
+            return t[r].exports;
+        var o = t[r] = {
+            i: r,
+            l: !1,
+            exports: {}
+        };
+        e[r].call(o.exports, o, o.exports, n);
+        return o.exports.exports; // 返回 o.exports.exports，而不是整个 o.exports 对象
+    }
+
+    n.a = function () {
+
+    }
+    n.b = function () {
+
+    }
+
+    window.loader = n</code></pre>
+<p>看到最後那行 <code>window.loader = n</code>，就代表把手已經在門口了，你不用動它。多檔版的 bootstrap 也一樣，只是名字不同，它會在建立 <code>__webpack_require__</code> 之後寫下 <code>window.loader = __webpack_require__</code>。</p>
+<p>如果搜不到，代表這份打包檔沒有主動洩漏載入器，這時你自己在 require 函式定義之後補一行 <code>window.loader = n;</code>（<code>n</code> 換成實際的函式名）即可。這一步的成果很單純：確認或建立 <code>window.loader</code> 這個全域變數，之後所有呼叫都靠它。</p>
+
+<h2>步驟二：在模組執行處插一行 log</h2>
+<p>接著是整個手法的核心。找到 require 函式裡「呼叫模組」的那一行，在它前面插一行 <code>console.log</code> 把編號印出來。物件版的做法是這樣，log 加在 <code>e[r].call(...)</code> 的正上方：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day17-Day18：逆向核心案例解析4/02 基于对象的webpack.js"><code>        console.log("moduleID:::", r)
+        e[r].call(o.exports, o, o.exports, n);</code></pre>
+<p>多檔版的位置一模一樣，只是變數名從 <code>r</code> 換成 <code>moduleId</code>：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day17-Day18：逆向核心案例解析4/03 多文件的webpack.js"><code>        console.log("moduleId:::", moduleId)
+        modules[moduleId].call(module.exports, module, module.exports, __webpack_require__);</code></pre>
+<p>為什麼偏偏插在這裡？因為這一行是「某個模組即將被執行」的唯一關口。不管模組是被誰、從哪裡、用什麼順序叫起來的，都一定得穿過這一行。把 log 放在快取判斷之後、模組執行之前，好處是：已經執行過的模組不會再被記錄，log 印出來的就是「本次真正被叫起來的新模組」，乾淨不重複。</p>
+<p>前綴字串（<code>"moduleID:::"</code> 或 <code>"moduleId:::"</code>）是刻意的，方便你在 DevTools 的 Console 用關鍵字過濾，把所有模組軌跡一次撈出來。</p>
+
+<h2>步驟三：用 window.loader 呼叫目標模組</h2>
+<p>log 裝好後，就可以開始報編號了。物件版原始碼裡示範了最直接的呼叫：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day17-Day18：逆向核心案例解析4/02 基于对象的webpack.js"><code>window.loader("1002")</code></pre>
+<p>執行之後，Console 會依序出現兩行：先是我們自己插的 <code>moduleID::: 1002</code>，接著是模組 <code>"1002"</code> 內部的輸出 <code>bar</code>。若把回傳值印出來，還能看到它 <code>this.exports</code> 交出的結果：</p>
+<pre data-source="sources/js-reverse2/20261005/Day27/01 webpack加载器loader.js"><code>console.log(window.loader("1001"))</code></pre>
+<p>這裡就是判讀的訣竅：<strong>你報哪個 id，第一個 log 就會印出哪個 id，緊接著是那個模組自己的輸出。</strong>於是「我呼叫了 <code>1001</code>」和「<code>1001</code> 的 log 是 foo」這兩件事就對上了。下一步就是靠這個對應關係，把你想找的那個值與產生它的模組編號綁在一起。</p>
+
+<h2>步驟四：逐一呼叫，縮小到目標模組</h2>
+<p>真實站點的模組編號是幾十上百個，你不可能一個一個手動試。這時可以用一個迴圈，把可能的編號全部點過一遍，讓 log 自己排出一張軌跡表。下面這段是為了方便而寫的輔助迴圈，不是原始碼的一部分：</p>
+<pre data-provenance="derived"><code>for (let id = 0; id < 200; id++) {
+    try {
+        window.loader(id);
+    } catch (e) {
+        // 不存在的編號會報錯，略過
+    }
+}</code></pre>
+<p>跑完後，Console 裡會依序出現每個存在的模組編號。你把「產生簽名參數的那段邏輯」對照 log 找出來（例如某個模組執行後，你關心的那個參數就出現在視窗或全域變數上），就能鎖定它的編號。之後只要針對那個編號反覆呼叫、觀察輸入輸出即可。</p>
+<p>要提醒一件事：逐一呼叫會把很多模組的初始化邏輯都跑起來，可能觸發網路請求或改動全域狀態。實際操作時，最好在乾淨的頁面或獨立的 Node 環境裡做，並把 log 當成觀察工具而不是無條件信任的結果。</p>
+
+<h2>做完長什麼樣</h2>
+<p>完成這一節後，你應該得到兩樣可驗證的成果。第一，Console 裡有一份清楚的模組軌跡：每一行 <code>moduleID:::</code> 後面跟著一個編號，對應到一個模組被執行的時刻。第二，你能用 <code>window.loader("某個編號")</code> 精準地重跑那個模組，並看到它交出的值。</p>
+<blockquote>
+接把手（<code>window.loader</code>）、插 log（模組執行前一行）、報編號（<code>window.loader(id)</code>）。這三步就能把「哪個模組產生了我關心的值」這件事，從猜測變成有紀錄可查。
+</blockquote>
+<p>單檔 bundle 到這裡就夠用了。但如果是上一節那種多檔 JSONP 版，光載入 loader 還不夠，模組還躺在別的檔案裡，得先把那些檔案載進來，模組才會齊全。下一節就把整套搬進 Node，把多檔 bundle 完整跑一次。</p>
+
+<div class="lesson-nav">
+  <div><a href="./classify-bundle-shape.html">← 上一步：判斷 bundle 型態：陣列、物件與多檔 JSONP</a></div>
+  <div><a href="./run-multifile-bundle-in-node.html">下一步：在 Node 跑多檔 bundle、呼叫簽名模組 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="console.log 應該插在 require 函式的哪個位置？" data-correct="2" data-explain="插在模組執行那行之前，快取判斷之後，才能記錄到真正新執行的模組。">
+  <button class="opt">插在整個 IIFE 的最開頭處</button>
+  <button class="opt">插在檔案最末端的最後一行</button>
+  <button class="opt">插在模組執行前一行的位置</button>
+  <button class="opt">插在 require 函式的參數上</button>
+</div>
+
+<div class="quiz" data-question="為什麼 log 要放在快取判斷之後？" data-correct="1" data-explain="已執行過的模組會命中快取而回傳，放在其後才不會重複記錄同一模組。">
+  <button class="opt">因為放前面會讓程式無法執行</button>
+  <button class="opt">因為這樣才不會重複記錄已跑的模組</button>
+  <button class="opt">因為瀏覽器規定 log 只能放這裡</button>
+  <button class="opt">因為放在後面才能拿到回傳值</button>
+</div>
+
+<div class="quiz" data-question="window.loader 是怎麼來的？" data-correct="3" data-explain="webpack 打包檔通常會把 require 函式指定給 window.loader，讓外部能直接呼叫。">
+  <button class="opt">是 Node 內建提供的全域函式</button>
+  <button class="opt">是瀏覽器自動注入的除錯工具</button>
+  <button class="opt">是模組內部自行匯出的變數</button>
+  <button class="opt">是打包檔把它指定到全域上的</button>
+</div>
+
+<div class="quiz" data-question="呼叫 window.loader("1002") 之後，Console 最先出現什麼？" data-correct="0" data-explain="先是我們插的 moduleID::: 1002，接著才是該模組自己的輸出。">
+  <button class="opt">我們插的 moduleID::: 1002 那一行</button>
+  <button class="opt">模組內部印出的 bar 那一行</button>
+  <button class="opt">整份 bundle 的版本號資訊</button>
+  <button class="opt">目前網頁的完整網址路徑</button>
+</div>
+
+<div class="quiz" data-question="用迴圈逐一呼叫模組時，為什麼要包 try...catch？" data-correct="2" data-explain="不存在的編號呼叫時會報錯，catch 讓迴圈能繼續試下一個編號。">
+  <button class="opt">讓每一次呼叫的速度變得更快</button>
+  <button class="opt">避免模組被瀏覽器快取住</button>
+  <button class="opt">跳過不存在編號造成的錯誤</button>
+  <button class="opt">把回傳值自動轉成 JSON</button>
+</div>
+
+<div class="quiz" data-question="插 log 時刻意加上 &quot;moduleID:::&quot; 這類前綴，用意是什麼？" data-correct="1" data-explain="方便在 Console 用關鍵字過濾，一次撈出所有模組軌跡。">
+  <button class="opt">讓 webpack 能正確辨識模組型別</button>
+  <button class="opt">方便在 Console 過濾出所有軌跡</button>
+  <button class="opt">避免這行 log 被瀏覽器省略</button>
+  <button class="opt">讓模組執行速度變得更快</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · webpack 拆解與模組定位 · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

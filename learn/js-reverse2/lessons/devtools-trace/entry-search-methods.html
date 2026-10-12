@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>入口怎麼找：請求堆疊追蹤與關鍵字搜尋</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>入口怎麼找：請求堆疊追蹤與關鍵字搜尋</h1>
+<p class="meta">Step 2/5 · DevTools：斷點、請求堆疊與呼叫堆疊</p>
+
+<h2>學習目標</h2>
+<p>在「請求堆疊追蹤」與「關鍵字搜尋」兩條定位入口的方法之間，依手上握有的線索選出正確的一條。</p>
+
+<h2>前言：值看得到了，可是要從哪一行開始追？</h2>
+<p>上一節你已經鎖定了目標：有道翻譯的 <code>sign</code>，就放在 <code>webtranslate</code> 這個請求的 form data 裡，是一串 32 位的十六進位。現在你打開 Sources 面板，看到的卻是一份被打包、壓縮過、動輒上萬行的 JavaScript。你的游標在畫面裡茫然地飄，心裡只有一個問題：到底要從哪裡找到產生這個值的那段程式？</p>
+<p>這不是靠毅力硬讀的問題，而是靠方法。實務上定位入口只有兩條路：一條是順著「這個請求是誰送出去的」往回追，另一條是直接搜尋關鍵字。這一節不教你怎麼設斷點（那是下一節），專心講「該選哪一條路、什麼時候選它」。選對了路，你會在幾分鐘內站在對的程式旁邊；選錯了，你可能在幾萬行裡瞎忙一整個下午。</p>
+<p><strong>前置條件：</strong>你已經知道加密值可能出現的三個位置（Step 1）。你會用 DevTools 的 Network 面板找到一個請求，也會用 Sources 面板搜尋字串。</p>
+
+<h2>你要做的決定：兩條路選一條</h2>
+<p>「入口定位」的意思，是找到「把那個值做出來、或把它送出去」的那段程式。做法有兩大類，它們解決同一個問題，但起點和適用時機完全不同。先看它們的差別。</p>
+<table>
+<thead>
+<tr><th></th><th>方法一：請求堆疊追蹤</th><th>方法二：關鍵字搜尋</th></tr>
+</thead>
+<tbody>
+<tr><td>起點</td><td>在 Network 找到那個請求，順著「誰送出的」往回跳</td><td>在 Sources 全站搜尋一個字串</td></tr>
+<tr><td>需要什麼</td><td>你看得到這個值被送出的那個請求</td><td>你知道任何相關的名字或演算法</td></tr>
+<tr><td>擅長</td><td>追「值被送出去」的發送鏈，一路回到組裝點</td><td>快速從一個字命中處理它的程式片段</td></tr>
+<tr><td>弱點</td><td>不是由 XHR／Fetch 送出的請求較難用</td><td>程式被混淆、名字被改掉時會失效</td></tr>
+</tbody>
+</table>
+<p>看這張表時，先注意它們的「起點」是不同的：一個從「請求」出發，一個從「字串」出發。你手上有什麼，就決定了你該從哪裡開始。</p>
+
+<h2>方法一：請求堆疊追蹤</h2>
+<p>當那個值是透過 XHR 或 Fetch 送出去的，你就能讓瀏覽器告訴你「這個請求是被哪一段 JS 發出的」。在 Network 面板點開那個請求，找到顯示發起來源的地方（Initiator／請求堆疊），它會列出一個由上到下的呼叫鏈：最上面是真正把請求送出去的函式，往下是呼叫它的函式，一層一層往上。點其中任何一格，DevTools 會直接跳到那段程式碼。</p>
+<p>你要做的，是從「發送點」往上游走：先看到哪個函式發了請求，再看它是被誰呼叫、它的參數是從哪裡傳進來的，一路往回找到「這個值第一次被組出來」的位置。這條路的價值在於它順著程式真實的執行順序走，你追的就是瀏覽器實際跑過的那條路，不會被無關的程式碼干擾。</p>
+
+<h2>方法二：關鍵字搜尋</h2>
+<p>當你對「這到底是什麼」有一點概念時，最快的方式是直接搜字串。Source 面板的搜尋是跨檔案的全站搜尋，可以一次掃過整個打包檔。有效的搜尋字串大致有三類：</p>
+<table>
+<thead>
+<tr><th>類型</th><th>搜什麼</th><th>例子</th></tr>
+</thead>
+<tbody>
+<tr><td>關聯 key</td><td>參數名稱、變數名稱</td><td><code>sign</code>、<code>mysticTime</code>、<code>token</code></td></tr>
+<tr><td>URL 路徑</td><td>那只 API 的網址片段</td><td><code>webtranslate</code>、<code>/api/sign</code></td></tr>
+<tr><td>敏感詞</td><td>常見的演算法與序列化函式</td><td><code>md5</code>、<code>sha1</code>、<code>encrypt</code>、<code>decrypt</code>、<code>JSON.stringify</code>、<code>JSON.parse</code></td></tr>
+</tbody>
+</table>
+<p>這三類的威力是疊加的。以有道翻譯為例，你可以先搜 <code>sign</code> 找到參數被賦值的地方，也可以直接搜 <code>md5</code> 找到雜湊函式，或搜 <code>webtranslate</code> 找到送出請求的那段程式。搜到命中之後，那段程式就是你的候選入口，接下來再靠下一節的斷點把它停下來驗證。</p>
+
+<h2>判別問句：你現在該走哪一條？</h2>
+<p>不用背準則，問自己幾個問題就會有答案：</p>
+<ol>
+<li>我在 Network 面板裡，看得到這個值被送出的那個請求嗎？看得到，優先走請求堆疊，因為你能直接從發送點往回追。</li>
+<li>我知不知道任何相關的字？例如參數名、變數名、API 路徑的一部分。知道，就可以直接用關鍵字搜尋，通常比請求堆疊快。</li>
+<li>我知不知道它大概用了哪種演算法？看到 32 位十六進位會想到 MD5，看到一段帶等號的 base64 會想到對稱加密。有這種猜測，就直接搜敏感詞。</li>
+</ol>
+<p>這三個問題常常同時有答案。實務上的順序通常是：先用關鍵字搜尋快速縮小範圍，找到候選的那幾段程式；如果搜不到（名字被混淆了），再改用請求堆疊，靠「誰送了這個請求」硬把發送點挖出來。</p>
+
+<h2>反例：什麼時候這條路行不通</h2>
+<p>方法有適用邊界，知道它什麼時候會失效，你才不會在某條路上鑽牛角尖。</p>
+<p>關鍵字搜尋最大的敵人是<strong>混淆</strong>。很多網站會把變數名、參數名縮成 <code>a</code>、<code>b</code>、<code>c</code>，甚至把字串拆開重組。這時候你搜 <code>sign</code> 可能一個命中都沒有。遇到這種情況，別死撐著亂搜，改用請求堆疊從發送點往回追，往往更有效。</p>
+<p>請求堆疊也有它的弱點。如果那個值不是由 XHR／Fetch 送出的，例如它是頁面載入時被某段 <code>&lt;script&gt;</code> 直接帶出來的，或是由瀏覽器底層行為產生，那 Initiator 就未必好用，你可能追不到清晰的呼叫鏈。另外，還有一類值根本不是「算」出來的，而是「讀」出來的，例如從 canvas 或字型指紋蒐集來的；這種值兩種搜尋法都可能落空，得靠後面章節的 Hook 或補環境手法處理。</p>
+
+<h2>小結</h2>
+<blockquote>
+定位加密入口只有兩條路：請求堆疊追蹤（從「誰送出這個請求」往回追）與關鍵字搜尋（用參數名、URL 路徑、敏感詞直接找）。看得到請求就走請求堆疊，有線索字就先搜關鍵字；混淆會讓關鍵字搜尋失效，非 XHR 送出的值會讓請求堆疊不好用。實務上常兩條並用：先搜字縮小範圍，再用堆疊確認發送點。
+</blockquote>
+<p>選好了路、找到候選的那段程式之後，下一步就是讓程式在關鍵的地方停下來，好讓你親眼看見值怎麼被算出來。問題是，斷點不只一種，下錯種類照樣看不到東西。下一節要比較行斷點、事件監聽斷點與 XHR 斷點，教你依情境選對那一種。</p>
+
+<div class="lesson-nav">
+  <div><a href="./value-location.html">← 上一步：逆向值放在哪：資料、請求頭與 Cookie</a></div>
+  <div><a href="./breakpoint-types.html">下一步：斷點怎麼下：行、事件監聽與 XHR 斷點 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="請求堆疊追蹤這條路，最適合在什麼情況下使用？" data-correct="1" data-explain="它能從「誰送出了這個請求」往回追，所以前提是你看得到那個被送出的請求。">
+  <button class="opt">當整份程式碼已被混淆到無法閱讀</button>
+  <button class="opt">當你看得到值被送出的那個請求</button>
+  <button class="opt">當你知道它用了哪一種加密演算法</button>
+  <button class="opt">當值是由伺服器回應時種下的</button>
+</div>
+
+<div class="quiz" data-question="下列哪一組全是本節所說的「敏感詞」搜尋字串？" data-correct="2" data-explain="md5、encrypt、JSON.stringify 都是常見演算法與序列化函式的特徵字，適合拿來搜。">
+  <button class="opt">apple、banana、cherry 與 date</button>
+  <button class="opt">page、size、index 與 offset</button>
+  <button class="opt">md5、encrypt、JSON.stringify</button>
+  <button class="opt">button、input、div 與 span</button>
+</div>
+
+<div class="quiz" data-question="關鍵字搜尋最可能在哪種情況下失效？" data-correct="3" data-explain="混淆會把參數名、變數名縮短或拆開，讓你搜 sign 之類的字一個都命中不了。">
+  <button class="opt">當網站沒有使用任何加密演算法</button>
+  <button class="opt">當請求是由 XHR 非同步送出的</button>
+  <button class="opt">當參數名稱取得又長又清楚時</button>
+  <button class="opt">當程式碼被混淆、名稱被改掉時</button>
+</div>
+
+<div class="quiz" data-question="以有道翻譯為例，搜尋 `webtranslate` 屬於哪一類關鍵字？" data-correct="0" data-explain="webtranslate 是那只 API 的網址路徑片段，屬於 URL 路徑類的搜尋字。">
+  <button class="opt">URL 路徑類的搜尋字</button>
+  <button class="opt">關聯 key 類的搜尋字</button>
+  <button class="opt">敏感詞類的搜尋字</button>
+  <button class="opt">時間戳類的搜尋字</button>
+</div>
+
+<div class="quiz" data-question="實務上兩條路常見的搭配順序是什麼？" data-correct="1" data-explain="先用關鍵字搜尋快速縮小範圍，找到候選程式；搜不到時再用請求堆疊把發送點挖出來。">
+  <button class="opt">先追請求堆疊，再逐行閱讀整份程式</button>
+  <button class="opt">先搜關鍵字縮小範圍，再用請求堆疊</button>
+  <button class="opt">先關掉所有請求，再從第一行讀起</button>
+  <button class="opt">兩條路互斥，只能挑一條走到底</button>
+</div>
+
+<div class="quiz" data-question="關於「值不是由 XHR／Fetch 送出」的情況，本節怎麼說？" data-correct="2" data-explain="這時 Initiator 未必給得出清晰呼叫鏈，請求堆疊追蹤會變得不好用。">
+  <button class="opt">請求堆疊追蹤反而會變得更精準</button>
+  <button class="opt">代表那個值一定不需要被還原</button>
+  <button class="opt">請求堆疊追蹤會變得不好用</button>
+  <button class="opt">可以直接在 Network 面板抄下算法</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · DevTools：斷點、請求堆疊與呼叫堆疊 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

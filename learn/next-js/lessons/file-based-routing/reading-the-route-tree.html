@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>實戰：從資料夾樹推導完整路由樹</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>實戰：從資料夾樹推導完整路由樹</h1>
+<p class="meta">Step 5/5 · Routing as a Filesystem</p>
+
+<h2>學習目標</h2>
+<p>拿到一棵真實的 <code>app/</code> 資料夾樹，能逐步推導出每一條路由、每個 URL 區段對應的檔案，以及每層 layout 的包覆關係。</p>
+
+<h2>前言：零件都會了，但拼得起來嗎？</h2>
+
+<p>前四節分別教了四塊積木：資料夾即路由、巢狀路由與巢狀 layout、動態區段與 <code>params</code>、以及 route group。單獨看每一塊都不難，但真實專案的 <code>app/</code> 樹是一團混在一起的東西：括號、方括號、巢狀好幾層、每個資料夾裡還有 <code>layout</code> 或 <code>page</code>。這一節不再加新語法，而是給你一套固定的推導流程，讓你能對著任何一棵 <code>app/</code> 樹，在腦中還原出完整路由表與每一條路由的 layout 鏈。</p>
+
+<h2>前置條件：動手前你該有的東西</h2>
+
+<p>這個流程會一直用到前四節的規則，所以先確認你記得三件事：資料夾名等於 URL 區段（除非被括號包住）、方的動態區段對應 <code>params</code> 的 key、以及每一層 <code>layout.tsx</code> 管它所在的那棵子樹。接下來的推導不需要終端機、不需要真的跑起來，只要看檔案樹就能做。</p>
+
+<h2>你要推導的樹</h2>
+
+<p>我們拿 DevFlow 問答平台的 <code>app/</code> 資料夾當素材。先把它完整攤開（省略 <code>api/</code> 底下的細節，因為那些是 API 端點、不是頁面路由）：</p>
+
+<pre data-provenance="derived"><code>app/
+├── (auth)/
+│   ├── layout.tsx
+│   ├── sign-in/
+│   │   └── page.tsx
+│   └── sign-up/
+│       └── page.tsx
+├── (root)/
+│   ├── layout.tsx
+│   ├── page.tsx
+│   ├── ask-question/
+│   │   └── page.tsx
+│   ├── collection/
+│   │   └── page.tsx
+│   ├── community/
+│   │   ├── error.tsx
+│   │   ├── loading.tsx
+│   │   └── page.tsx
+│   ├── jobs/
+│   │   └── page.tsx
+│   ├── profile/
+│   │   ├── edit/
+│   │   │   └── page.tsx
+│   │   └── [id]/
+│   │       └── page.tsx
+│   ├── questions/
+│   │   └── [id]/
+│   │       ├── edit/
+│   │       │   └── page.tsx
+│   │       └── page.tsx
+│   └── tags/
+│       ├── [id]/
+│       │   └── page.tsx
+│       └── page.tsx
+├── api/
+│   └── ...
+├── layout.tsx
+└── globals.css</code></pre>
+
+<h2>推導流程：五個步驟</h2>
+
+<p>照著這五步走，任何 <code>app/</code> 樹都能拆解。重點是<strong>先只看資料夾，再處理括號，最後才對 page 檔</strong>，不要一開始就被檔名干擾。</p>
+
+<ol>
+<li><strong>列出所有 <code>page</code> 檔。</strong>每找到一個 <code>page.tsx</code>，就代表一條路由。這一步先不管 URL 長怎樣，只是把「有哪些頁面」框出來。</li>
+<li><strong>處理括號資料夾。</strong>看到 <code>(auth)</code>、<code>(root)</code> 這種被括號包住的，在心中把它從 URL 拿掉，但保留它在樹上的分類位置。它不會貢獻任何路徑區段。</li>
+<li><strong>把路徑拼出來。</strong>對每一個 <code>page</code> 檔，從 <code>app/</code> 一路往下、經過的每一層資料夾接成 URL，括號層跳過；動態區段先標成 <code>:變數名</code>。</li>
+<li><strong>往上收集 layout。</strong>對同一條路由，把從 <code>app/</code> 到它所在的資料夾之間、每一層的 <code>layout.tsx</code> 依序列出，就是它的外框鏈。</li>
+<li><strong>標記動態區段。</strong>凡是方括號資料夾，在 URL 上標成變數，並記住它的名字就是之後 <code>params</code> 的 key。</li>
+</ol>
+
+<h2>走一遍：逐條路由推導</h2>
+
+<p>把流程套在這棵樹上，路由表就一張一張浮出來。注意 <code>(root)</code> 和 <code>(auth)</code> 都不出現在 URL 裡：</p>
+
+<table>
+<thead>
+<tr><th><code>page</code> 檔案</th><th>路由 URL</th><th>layout 鏈</th></tr>
+</thead>
+<tbody>
+<tr><td><code>(root)/page.tsx</code></td><td><code>/</code></td><td>root → <code>(root)</code></td></tr>
+<tr><td><code>(root)/ask-question/page.tsx</code></td><td><code>/ask-question</code></td><td>root → <code>(root)</code></td></tr>
+<tr><td><code>(root)/collection/page.tsx</code></td><td><code>/collection</code></td><td>root → <code>(root)</code></td></tr>
+<tr><td><code>(root)/community/page.tsx</code></td><td><code>/community</code></td><td>root → <code>(root)</code></td></tr>
+<tr><td><code>(root)/jobs/page.tsx</code></td><td><code>/jobs</code></td><td>root → <code>(root)</code></td></tr>
+<tr><td><code>(root)/profile/[id]/page.tsx</code></td><td><code>/profile/:id</code></td><td>root → <code>(root)</code></td></tr>
+<tr><td><code>(root)/profile/edit/page.tsx</code></td><td><code>/profile/edit</code></td><td>root → <code>(root)</code></td></tr>
+<tr><td><code>(root)/questions/[id]/page.tsx</code></td><td><code>/questions/:id</code></td><td>root → <code>(root)</code></td></tr>
+<tr><td><code>(root)/questions/[id]/edit/page.tsx</code></td><td><code>/questions/:id/edit</code></td><td>root → <code>(root)</code></td></tr>
+<tr><td><code>(root)/tags/page.tsx</code></td><td><code>/tags</code></td><td>root → <code>(root)</code></td></tr>
+<tr><td><code>(root)/tags/[id]/page.tsx</code></td><td><code>/tags/:id</code></td><td>root → <code>(root)</code></td></tr>
+<tr><td><code>(auth)/sign-in/page.tsx</code></td><td><code>/sign-in</code></td><td>root → <code>(auth)</code></td></tr>
+<tr><td><code>(auth)/sign-up/page.tsx</code></td><td><code>/sign-up</code></td><td>root → <code>(auth)</code></td></tr>
+</tbody>
+</table>
+
+<p>有兩個地方值得停下來看。第一，<code>/profile/edit</code> 和 <code>/profile/:id</code> 同時存在：<code>edit</code> 是個靜態區段，<code>[id]</code> 是動態區段，Next.js 會優先匹配靜態的那一個，所以打 <code>/profile/edit</code> 不會被誤當成某個人的 id，而打 <code>/profile/abc123</code> 才會落到動態頁。第二，<code>profile/</code>、<code>tags/</code> 這些資料夾本身沒有 <code>layout.tsx</code>，所以它們的頁面只沿用 <code>(root)</code> 那一層外框，layout 不是每一層都必須有。</p>
+
+<h2>layout 鏈是怎麼疊出來的</h2>
+
+<p>第二步的「收集 layout」為什麼能得到「root → <code>(root)</code>」？因為 <code>app/layout.tsx</code> 是整個應用的最外層，而 <code>app/(root)/layout.tsx</code> 又剛好位在這些路由的上方。來看看這一層外框的內容：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/app/(root)/layout.tsx"><code>import { ReactNode } from "react";
+
+import Navbar from "@/components/navigation/navbar";
+import LeftSidebar from "@/components/navigation/LeftSidebar";
+import RightSidebar from "@/components/navigation/RightSidebar";
+
+const RootLayout = ({ children }: { children: ReactNode }) =&gt; {
+  return (
+    &lt;main className="background-light850_dark100 realtive"&gt;
+      &lt;Navbar /&gt;
+
+      &lt;div className="flex"&gt;
+        &lt;LeftSidebar /&gt;
+
+        &lt;section className="flex min-h-screen flex-1 flex-col px-6 pb-6 pt-36 max-md:pb-14 sm:px-14"&gt;
+          &lt;div className="mx-auto w-full max-w-5xl"&gt;{children}&lt;/div&gt;
+        &lt;/section&gt;
+
+        &lt;RightSidebar /&gt;
+      &lt;/div&gt;
+    &lt;/main&gt;
+  );
+};
+
+export default RootLayout;</code></pre>
+
+<p>這個檔案的檔名是 <code>RootLayout</code>，但它其實是 <code>(root)</code> group 的 layout，不是整個應用的根。這正是很多人第一次讀真實專案會卡住的地方：<strong>不要被元件的名字騙了，要看它位在哪個資料夾。</strong>它位在 <code>(root)/</code>，所以只包住 <code>(root)</code> 底下的問答頁面。至於真正的應用根，是 <code>app/layout.tsx</code>。</p>
+
+<p>相對地，<code>(auth)</code> group 用的是完全不同的外框，置中的登入卡片：</p>
+
+<pre data-source="sources/next-js/20261004/jsmasterypro_devflow/app/(auth)/layout.tsx"><code>import Image from "next/image";
+import { ReactNode } from "react";
+
+import SocialAuthForm from "@/components/forms/SocialAuthForm";
+
+const AuthLayout = ({ children }: { children: ReactNode }) =&gt; {
+  return (
+    &lt;main className="flex min-h-screen items-center justify-center bg-auth-light bg-cover bg-center bg-no-repeat px-4 py-10 dark:bg-auth-dark"&gt;
+      &lt;section className="light-border background-light800_dark200 shadow-light100_dark100 min-w-full rounded-[10px] border px-4 py-10 shadow-md sm:min-w-[520px] sm:px-8"&gt;
+        &lt;div className="flex items-center justify-between gap-2"&gt;
+          &lt;div className="space-y-2.5"&gt;
+            &lt;h1 className="h2-bold text-dark100_light900"&gt;Join DevFlow&lt;/h1&gt;
+            &lt;p className="paragraph-regular text-dark500_light400"&gt;
+              To get your questions answered
+            &lt;/p&gt;
+          &lt;/div&gt;
+          &lt;Image
+            src="images/site-logo.svg"
+            alt="DevFlow Logo"
+            width={50}
+            height={50}
+            className="object-contain"
+          /&gt;
+        &lt;/div&gt;
+
+        {children}
+
+        &lt;SocialAuthForm /&gt;
+      &lt;/section&gt;
+    &lt;/main&gt;
+  );
+};
+
+export default AuthLayout;</code></pre>
+
+<p>所以當使用者打開 <code>/sign-in</code>，外框從外到內是「<code>app/layout.tsx</code> → <code>app/(auth)/layout.tsx</code> → <code>(auth)/sign-in/page.tsx</code>」；打開 <code>/questions/123</code>，換成「<code>app/layout.tsx</code> → <code>app/(root)/layout.tsx</code> → <code>(root)/questions/[id]/page.tsx</code>」。兩者共用最外層，卻從第二層起分道揚鑣。</p>
+
+<h2>做完長什麼樣：一張可以核對的檢查表</h2>
+
+<p>推導完成後，你應該能對這棵樹講出三件事：有幾條頁面路由（這棵樹是 13 條）、每一條的 URL（例如 <code>/tags/:id</code>）、以及每一條經過哪些 layout。用底下這幾條快速自我檢查：</p>
+
+<ul>
+<li>括號資料夾有沒有被我從 URL 裡拿掉？</li>
+<li>每個方括號都標成變數了嗎？它的名字對得上未來 <code>params</code> 的 key 嗎？</li>
+<li>每一個 <code>page</code> 都對應到一條路由，沒有漏、沒有多嗎？</li>
+<li>我的 layout 鏈是不是從 <code>app/</code> 一路往上收集，而不是只看目標資料夾那一層？</li>
+</ul>
+
+<p>把這個流程練熟，你就能在幾分鐘內看透一份 AI 生成的專案：它到底做了哪些頁面、路由結構合不合理、外框有沒有放對層級。這正是這個節點一開始設定的目標：由資料夾結構推導出完整路由樹，並解釋 <code>params</code> 的來源。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+推導路由樹的固定流程是：先列出所有 <code>page</code> 檔，把括號資料夾從 URL 移除，逐層拼出每條路徑（動態區段標成變數），再從 <code>app/</code> 往上收集每一層 <code>layout.tsx</code> 得到外框鏈。真實專案像 DevFlow 就用兩組 <code>(auth)</code> 與 <code>(root)</code>，各自套不同外框、共用同一個 <code>app/layout.tsx</code>；而 <code>/profile/edit</code> 與 <code>/profile/:id</code> 的並存，則提醒你靜態區段會優先於動態區段被匹配。
+</blockquote>
+
+<p>到這裡，「Routing as a Filesystem」這個節點就完整了。你已經能把一棵 <code>app/</code> 樹翻譯成路由表與外框鏈。接下來在課程裡，這些路由會開始接上真正的資料抓取、載入與錯誤邊界，讓每一條路由不只是路徑，而是能運作的一頁。</p>
+
+<div class="lesson-nav">
+  <div><a href="./route-groups.html">← 上一步：Route Groups：組織檔案，但不進 URL</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="推導路由樹時，看到 (root) 這種資料夾該怎麼處理？" data-correct="1" data-explain="括號代表 route group，只做分類，不貢獻任何 URL 區段。">
+  <button class="opt">把它當成 URL 的第一段路徑</button>
+  <button class="opt">保留分類但從 URL 中跳過它</button>
+  <button class="opt">把它轉成一個動態區段</button>
+  <button class="opt">把它當成整個應用的 root</button>
+</div>
+
+<div class="quiz" data-question="app/(root)/tags/[id]/page.tsx 對外的路由是什麼？" data-correct="2" data-explain="root 被跳過、id 是變數，拼起來就是 /tags/:id。">
+  <button class="opt">/root/tags/id 這個路徑</button>
+  <button class="opt">/root/tags/[id] 這個路徑</button>
+  <button class="opt">/tags/:id 這個路徑</button>
+  <button class="opt">/tags/id 這個路徑</button>
+</div>
+
+<div class="quiz" data-question="某條路由的 layout 鏈要怎麼收集？" data-correct="0" data-explain="從 app/ 一路往下到目標資料夾，途中每一層的 layout 依序都要算進去。">
+  <button class="opt">從 app/ 往下一路收集每層 layout</button>
+  <button class="opt">只取目標資料夾那一層的 layout</button>
+  <button class="opt">只取最外層 app/layout.tsx 一個</button>
+  <button class="opt">取 page 檔裡 import 的所有元件</button>
+</div>
+
+<div class="quiz" data-question="/profile/edit 與 /profile/[id] 同時存在時，Next.js 會怎麼選？" data-correct="3" data-explain="靜態區段優先於動態區段，所以 /profile/edit 會匹配 edit 頁。">
+  <button class="opt">兩個都會被觸發並同時渲染</button>
+  <button class="opt">一律優先匹配動態的 [id] 頁</button>
+  <button class="opt">直接判定路徑衝突而報錯</button>
+  <button class="opt">靜態的 edit 頁優先被匹配</button>
+</div>
+
+<div class="quiz" data-question="(root)/layout.tsx 的元件名叫 RootLayout，它的實際管轄範圍是什麼？" data-correct="1" data-explain="看位置不看名字，它位在 (root) 底下，所以只管 (root) 這棵子樹。">
+  <button class="opt">整個應用的所有路由都歸它管</button>
+  <button class="opt">只管 (root) 這一段子樹的路由</button>
+  <button class="opt">只管有動態區段的那幾條路由</button>
+  <button class="opt">只管 (auth) 群組裡的登入頁</button>
+</div>
+
+<div class="quiz" data-question="推導完一棵 app/ 樹後，下列哪一項是你應該能講出來的？" data-correct="2" data-explain="完整推導的產出是路由表與每條路由的 layout 鏈。">
+  <button class="opt">每條路由的 API 回應時間</button>
+  <button class="opt">每個元件的 CSS class 名稱</button>
+  <button class="opt">每條路由的 URL 與外框鏈</button>
+  <button class="opt">每筆資料庫查詢的索引設計</button>
+</div>
+
+<div class="footer">
+  <p>next-js · Routing as a Filesystem · Step 5/5</p>
+  <p>讀到這裡有疑問，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

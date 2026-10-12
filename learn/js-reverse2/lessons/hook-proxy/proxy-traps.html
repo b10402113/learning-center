@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Proxy 處理器全覽：六個 trap 各攔什麼</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Proxy 處理器全覽：六個 trap 各攔什麼</h1>
+<p class="meta">Step 5/5 · Hook 與 Proxy 攔截</p>
+
+<h2>學習目標</h2>
+<p>查得到六個 handler trap（<code>get</code>／<code>set</code>／<code>getOwnPropertyDescriptor</code>／<code>defineProperty</code>／<code>apply</code>／<code>construct</code>）各自攔什麼、參數是什麼、最小範例長什麼樣。</p>
+
+<h2>前言</h2>
+<p><code>Proxy</code> 的處理器（handler）是一組 trap 的集合，每個 trap 對應一種操作。這一頁不是要教你原理，而是一份查閱用的目錄：當你在逆向時遇到某種寫法，回來查它對應哪個 trap。</p>
+<p>上一節你只用了 <code>get</code> 與 <code>set</code>。但網站讀寫屬性的方式不只一種：有些用屬性描述符（<code>Object.getOwnPropertyDescriptor</code>、<code>Object.defineProperty</code>），有些則是把「函式本身」當物件來代理，攔它的呼叫或 <code>new</code>。這些都各有一個 trap 等著你。</p>
+
+<h2>Trap 一覽表</h2>
+<table>
+<thead>
+<tr><th>trap</th><th>攔截的操作</th><th>參數</th><th>對應的 Reflect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>get</code></td><td>讀取屬性 <code>obj.p</code></td><td><code>(target, p, receiver)</code></td><td><code>Reflect.get(target, p)</code></td></tr>
+<tr><td><code>set</code></td><td>設定屬性 <code>obj.p = value</code></td><td><code>(target, p, value, receiver)</code></td><td><code>Reflect.set(target, p, value)</code></td></tr>
+<tr><td><code>getOwnPropertyDescriptor</code></td><td><code>Object.getOwnPropertyDescriptor(obj, p)</code></td><td><code>(target, p)</code></td><td><code>Reflect.getOwnPropertyDescriptor(target, p)</code></td></tr>
+<tr><td><code>defineProperty</code></td><td><code>Object.defineProperty(obj, p, descriptor)</code></td><td><code>(target, p, descriptor)</code></td><td><code>Reflect.defineProperty(target, p, descriptor)</code></td></tr>
+<tr><td><code>apply</code></td><td>呼叫函式 <code>f(...)</code></td><td><code>(target, thisArg, argList)</code></td><td><code>Reflect.apply(target, thisArg, argList)</code></td></tr>
+<tr><td><code>construct</code></td><td>用 <code>new</code> 建立物件 <code>new F(...)</code></td><td><code>(target, argArray, newTarget)</code></td><td><code>Reflect.construct(target, argArray, newTarget)</code></td></tr>
+</tbody>
+</table>
+
+<h2>get 與 set</h2>
+<p>攔截屬性的讀取與設定。用在補環境時，是所有 trap 裡最常派上用場的兩個。</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>var User = {
+    username: "bobo",
+    age: 20
+}
+User = new Proxy(User, {
+    get(target, p, receiver) {
+        console.log(`获取属性${p}操作`)
+        return Reflect.get(target, p);
+    },
+    set(target, p, value, receiver) {
+        console.log(`设置属性${p}操作`)
+        Reflect.set(target, p, value);
+    }
+});</code></pre>
+<p>參數：<code>target</code> 是被代理的物件、<code>p</code> 是屬性名、<code>receiver</code> 是代理後的物件，<code>value</code> 是要寫入的值。</p>
+
+<h2>getOwnPropertyDescriptor</h2>
+<p>攔截透過屬性描述符取得屬性值的操作。有些網站的 JS 不是用 <code>obj.p</code> 讀屬性，而是走 <code>Object.getOwnPropertyDescriptor</code>，就要靠這個 trap 才看得到。</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>var User = {
+    username: "bobo",
+    age: 20,
+    address:"Bj"
+}
+
+User = new Proxy(User, {
+    get(target, p, receiver) {
+        console.log(`获取属性${p}操作`)
+        return Reflect.get(target, p);
+    },
+    set(target, p, value, receiver) {
+        console.log(`设置属性${p}操作`)
+        Reflect.set(target, p, value);
+    },
+    getOwnPropertyDescriptor(target, p){
+        let result;
+        result = Reflect.getOwnPropertyDescriptor(target, p);
+        console.log(`通过属性描述符获取属性${p}操作`)
+        return result;
+    }
+});
+
+//测试
+console.log(User.username);
+User.age = 30;
+console.log(Object.getOwnPropertyDescriptor(User, "address").value);</code></pre>
+<p>參數：<code>target</code> 是被代理的物件、<code>p</code> 是屬性名。回傳值是一個屬性描述符物件。</p>
+
+<h2>defineProperty</h2>
+<p>攔截透過屬性描述符<strong>定義</strong>屬性的操作，對應 <code>Object.defineProperty</code>。</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>var Person = {};
+
+Person = new Proxy(Person, {
+    get(target, p, receiver) {
+        console.log(`获取属性${p}操作`)
+        return Reflect.get(target, p);
+    },
+    set(target, p, value, receiver) {
+        console.log(`设置属性${p}操作`)
+        Reflect.set(target, p, value);
+    },
+    getOwnPropertyDescriptor(target, p){
+        let result;
+        result = Reflect.getOwnPropertyDescriptor(target, p);
+        console.log(`通过属性描述符获取属性${p}操作`)
+        return result;
+    },
+    defineProperty: function (target, p, descriptor){
+        console.log(`通过属性描述符设置属性${p}操作`)
+        let result;
+        result = Reflect.defineProperty(target, p, descriptor); 
+        return result;
+    }
+    
+});
+
+// 通过属性描述符给Person对象定义一个name属性
+Object.defineProperty(Person, 'name', {
+      value: 'Bobo',
+      writable: true, // 允许修改属性值
+      enumerable: true, // 允许枚举属性
+      configurable: true // 允许删除或修改属性描述符
+    }
+);
+console.log(Person)</code></pre>
+<p>參數：<code>target</code> 是被代理的物件、<code>p</code> 是屬性名、<code>descriptor</code> 是屬性描述符物件（可含 <code>value</code>、<code>writable</code>、<code>enumerable</code>、<code>configurable</code> 等欄位）。回傳布林值，代表是否設定成功。</p>
+
+<h2>apply</h2>
+<p>攔截函式被呼叫。這裡的目標物件是一個函式，<code>apply</code> 會在它被呼叫時執行。</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>add = function(a,b){
+    console.log("add函数正在被调用");
+    return a+b;
+}
+add = new Proxy(add, {
+    apply:function (target, thisArg, argList){
+        // target: 函数对象。thisArg: 调用函数的this指针。argList:函数参数数组
+        let result;
+        result = Reflect.apply(target, thisArg, argList);
+        console.log(`${target.name}函数被调用，参数为:${argList}`);
+        return result;
+	}
+});
+add(1,2);</code></pre>
+<p>參數：<code>target</code> 是函式物件、<code>thisArg</code> 是呼叫時的 <code>this</code>、<code>argList</code> 是參數陣列。</p>
+
+<h2>construct</h2>
+<p>攔截 <code>new</code> 關鍵字。用 <code>new</code> 建立物件，就是在呼叫該物件的建構方法，這個 trap 專門攔這件事。</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>function Animal(){
+    
+}
+Animal = new Proxy(Animal, {
+	construct:function (target, argArray, newTarget) {
+    //target: 函数对象。argArray: 参数列表。newTarget: 代理后的对象
+    let result = Reflect.construct(target, argArray, newTarget);
+        
+    console.log(`${target.name}对象被创建`);
+    return result;
+	}
+});
+animal = new Animal();</code></pre>
+<p>參數：<code>target</code> 是函式物件、<code>argArray</code> 是參數列表、<code>newTarget</code> 是代理後的物件。</p>
+
+<h2>小結</h2>
+<blockquote>
+處理器裡每個 trap 對應一種操作：<code>get</code>／<code>set</code> 攔一般屬性的讀寫；<code>getOwnPropertyDescriptor</code>／<code>defineProperty</code> 攔走屬性描述符的存取與定義；<code>apply</code> 攔函式呼叫、<code>construct</code> 攔 <code>new</code>。每個 trap 都要用對應的 <code>Reflect.*</code> 把操作交還給目標物件，參數依序是目標物件、屬性（或參數）與代理物件。
+</blockquote>
+<p>到這裡，這個節點的工具就備齊了：hook 用來攔單一函式或屬性，Proxy 用來盯整個物件的讀寫並找出補環境的缺口，還有對付 <code>toString</code> 檢測的那一層偽裝。實際面對目標站時，這幾招經常會一起用：先用 Proxy 找出它讀了哪些屬性，再用 hook 針對關鍵的原生 API 抓出輸入輸出。</p>
+
+<div class="lesson-nav">
+  <div><a href="./proxy-monitor.html">← 上一步：Proxy 是什麼：替物件套一層會記錄讀寫的代理</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="網站用 <code>Object.defineProperty</code> 定義屬性時，要攔它得用哪個 trap？" data-correct="2" data-explain="defineProperty trap 對應 Object.defineProperty，會在屬性被描述符定義時執行。">
+  <button class="opt"><code>get</code></button>
+  <button class="opt"><code>set</code></button>
+  <button class="opt"><code>defineProperty</code></button>
+  <button class="opt"><code>construct</code></button>
+</div>
+
+<div class="quiz" data-question="要攔截 <code>Object.getOwnPropertyDescriptor(obj, p)</code>，該用哪個 trap？" data-correct="1" data-explain="getOwnPropertyDescriptor trap 對應這個 API，參數是 (target, p)。">
+  <button class="opt"><code>get</code></button>
+  <button class="opt"><code>getOwnPropertyDescriptor</code></button>
+  <button class="opt"><code>defineProperty</code></button>
+  <button class="opt"><code>apply</code></button>
+</div>
+
+<div class="quiz" data-question="攔截函式被呼叫（例如 <code>add(1,2)</code>）用哪個 trap，參數是什麼？" data-correct="3" data-explain="apply 攔函式呼叫，參數是 (target, thisArg, argList)。">
+  <button class="opt"><code>get(target, p, receiver)</code></button>
+  <button class="opt"><code>set(target, p, value, receiver)</code></button>
+  <button class="opt"><code>construct(target, argArray, newTarget)</code></button>
+  <button class="opt"><code>apply(target, thisArg, argList)</code></button>
+</div>
+
+<div class="quiz" data-question="攔截 <code>new Animal()</code> 用哪個 trap，參數是什麼？" data-correct="0" data-explain="construct 攔 new，參數是 (target, argArray, newTarget)。">
+  <button class="opt"><code>construct(target, argArray, newTarget)</code></button>
+  <button class="opt"><code>apply(target, thisArg, argList)</code></button>
+  <button class="opt"><code>get(target, p, receiver)</code></button>
+  <button class="opt"><code>defineProperty(target, p, descriptor)</code></button>
+</div>
+
+<div class="quiz" data-question="在 <code>get(target, p, receiver)</code> 中，<code>receiver</code> 指的是什麼？" data-correct="2" data-explain="receiver 是代理後的物件本身，也就是那個被 new Proxy 重新指派的名字。">
+  <button class="opt">被讀取的那個屬性名稱</button>
+  <button class="opt">屬性背後實際存放的值</button>
+  <button class="opt">代理後的物件本身</button>
+  <button class="opt">呼叫 get 的那一支函式</button>
+</div>
+
+<div class="quiz" data-question="下列哪一組 trap 與參數的對應是正確的？" data-correct="1" data-explain="defineProperty 的參數是 (target, p, descriptor)，其餘對應皆有誤。">
+  <button class="opt"><code>set(target, p, value, receiver, extra)</code></button>
+  <button class="opt"><code>defineProperty(target, p, descriptor)</code></button>
+  <button class="opt"><code>getOwnPropertyDescriptor(target, p, receiver)</code></button>
+  <button class="opt"><code>apply(target, argArray, newTarget)</code></button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · Hook 與 Proxy 攔截 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

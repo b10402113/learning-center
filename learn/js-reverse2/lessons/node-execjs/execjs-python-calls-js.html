@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 PyExecJS 讓 Python 呼叫 JS</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 PyExecJS 讓 Python 呼叫 JS</h1>
+<p class="meta">Step 1/5 · Node 執行、execjs 與 JS 前置知識</p>
+
+<h2>學習目標</h2>
+<p>用 PyExecJS 的 <code>get → compile → eval</code> 三步，把一段 JS 檔放進 Python 執行並取回結果，並知道什麼時候該放棄 execjs、直接用 Python 重寫演算法。</p>
+
+<h2>前言：把牆上那坨 JS 變成自己能呼叫的函式</h2>
+<p>你在 DevTools 裡追了半天，終於在一個簽名參數旁邊停下斷點，找到了產生它的那個函式。問題才剛開始：那是一大段位元運算、移位、加減常數的 JS，密密麻麻像天書。你要的是讓它在你的 Python 爬蟲裡能穩定跑出同樣的結果。</p>
+<p>這裡其實只有兩條路。第一條是把它讀懂，用 Python 重寫一遍；第二條是先別管它長什麼樣，把原始 JS 原封不動搬過來執行。這一節要教你第二條路的工具：PyExecJS，讓 Python 能呼叫一段 JS 並拿回結果。它不一定是你最後會選的做法，但當演算法還沒看懂、又需要先跑出答案時，它是最快的兜底手段。</p>
+<p><strong>前置條件：</strong>本機要同時有 Python 和 Node.js。PyExecJS 只是 Python 這邊的「發號施令者」，真正執行 JS 的是背後的 Node，所以 Node 沒裝好，這個模組根本不會生效。</p>
+
+<h2>安裝：先用套件把橋搭起來</h2>
+<p>PyExecJS 是第三方模組，不會跟 Python 一起附帶，得先裝。官方來源在對岸，連線慢的時候可以改走清華大學的鏡像：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#PyExecJS介绍"><code>pip3 install PyExecJS -i https://pypi.tuna.tsinghua.edu.cn/simple</code></pre>
+<p>這一行裝的是「Python 呼叫 JS」的介面，執行時它會在底層啟動一個 Node 行程，把 JS 丟過去跑，再把結果傳回來。</p>
+
+<h2>四步流程：導包、取環境、編譯、執行</h2>
+<p>整段流程只有四步，而且順序固定。先看完整的範例，再逐行拆：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#PyExecJS介绍"><code>#1.导包
+import execjs
+#2.创建node对象
+node = execjs.get()
+#3.编译js文件返回上下文ctx对象(将js文件中的代码读取出来，被compile进行编译)
+fp = open('test.js','r',encoding='utf-8')
+ctx = node.compile(fp.read())
+#4.使用上下文对象ctx调用eval函数执行js文件中的指定函数即可
+result = ctx.eval('getPwd("123456")')
+print(result)</code></pre>
+<p>第一步 <code>import execjs</code> 沒什麼好說，就是把套件載進來。第二步 <code>node = execjs.get()</code> 拿到一個執行環境物件，你可以把它當成「連到背後 Node 執行器的把手」。第三步用 <code>open</code> 把整份 JS 檔讀成字串，交給 <code>node.compile()</code> 編譯，回傳一個上下文物件 <code>ctx</code>；這個 <code>ctx</code> 就是接下來呼叫函式的窗口。第四步最關鍵：<code>ctx.eval()</code> 收的是一個「函式呼叫的字串」，不是函式本身，所以你要把函式名和參數一起寫成 <code>'getPwd("123456")'</code> 這樣的字串進去，它才會在 JS 環境裡執行，並把回傳值交回 Python。</p>
+<p>搭配的 <code>test.js</code> 只是最單純的示範：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#PyExecJS介绍"><code>//test.js
+function getPwd(pwd){
+    return pwd;
+}</code></pre>
+<p>這裡函式原封不動把參數傳回，所以跑完 <code>print(result)</code> 會印出 <code>123456</code>。重點不是它算了什麼，而是你親眼確認了「Python 把字串丟進 JS、JS 把結果交回 Python」這條路是通的。</p>
+
+<h2>一個容易踩的坑：eval 收的是字串</h2>
+<p>新手最常卡住的地方，是以為 <code>ctx.eval(getPwd("123456"))</code> 這樣直接呼叫就好。不行，<code>eval</code> 要的是字串，寫成 <code>ctx.eval('getPwd("123456")')</code> 才會動。換句話說，它的用法更像「你寫一行 JS 給它跑」，而不是「你把 Python 的函式物件傳給它」。</p>
+<p>還有一點：<code>compile</code> 是把整份 JS 檔當成一段程式編譯進去，裡面所有函式都會被載入，所以只要 <code>registerFunc2</code> 之類的名字在檔案裡定義過，你都能用同一個 <code>ctx</code> 去 eval 不同的呼叫字串，不用每換一個函式就重新編譯。</p>
+
+<h2>什麼時候用 execjs，什麼時候改走 Python</h2>
+<p>execjs 的優點是「不用讀懂也能跑」：演算法再噁心，只要那坨 JS 能獨立執行，你就能靠它把結果算出來。但它的代價是每一次呼叫都要經過一次 Python 到 Node 的往返，速度比純 Python 慢，而且一旦那段 JS 依賴瀏覽器才有的東西（例如 <code>window</code>、<code>document</code>），丟進 Node 就會直接報錯。</p>
+<p>所以判斷很簡單：如果加密邏輯是標準演算法（例如 MD5），你認得出來，那就直接用 Python 的 <code>hashlib</code> 重寫，又快又乾淨，不必繞路。只有當那坨邏輯是自己客製、看懂成本很高時，才先用 execjs 把它整包跑起來。這個取捨在本節點最後的實戰案例會再完整走一次。</p>
+
+<h2>動手驗證：另闢蹊徑的純 Python 版本</h2>
+<p>同樣的需求，Python 也有現成解法。假設你要算的是字串 <code>123456</code> 的 MD5：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#微信公众平台案例"><code>from hashlib import md5
+pwd = '123456';
+obj = md5()
+obj.update(pwd.encode("utf-8"))
+
+bs = obj.hexdigest()
+print(bs)</code></pre>
+<p>跑出來會是 <code>96e79218965eb72c92a549dd5a330112</code>。等一下你在最後那個案例會看到它在網站的 JS 裡也對應同樣一串值，這就是「純 Python 重寫」和「execjs 兜底」兩條路線並存的意義：先認得演算法，再決定要不要繞路。</p>
+
+<h2>小結</h2>
+<blockquote>
+execjs 讓 Python 能呼叫 JS，流程固定四步：<code>import execjs</code>、<code>node = execjs.get()</code>、<code>ctx = node.compile(js_source)</code>、<code>ctx.eval('函式呼叫字串')</code>。它的前提是本機裝了 Node；它收的是字串不是函式。能用 Python 重寫的標準演算法就直接用 <code>hashlib</code>，讀不懂或高度客製的邏輯才用 execjs 兜底。
+</blockquote>
+<p>你現在能把一段 JS 塞進 Python 跑了。但真實場景裡，被丟過來的 JS 往往一執行就報錯，因為它預設自己活在瀏覽器裡。下一步我們先補另一塊底子：物件與原型鏈，搞懂暫停頁面上每個屬性和方法究竟是誰提供的；之後再回頭處理「搬到 Node 會壞掉」的問題。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./object-and-prototype-lookup.html">下一步：物件、原型與原型鏈查找 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="使用 PyExecJS 前，本機一定要先具備什麼？" data-correct="2" data-explain="PyExecJS 只是介面，真正執行 JS 的是背後的 Node.js。">
+  <button class="opt">一套可以連外網的代理伺服器</button>
+  <button class="opt">一個已經登入的瀏覽器帳號</button>
+  <button class="opt">一個可以執行的 Node.js 環境</button>
+  <button class="opt">一個可讀寫的資料庫連線</button>
+</div>
+
+<div class="quiz" data-question="ctx.eval() 接受的參數是什麼形式？" data-correct="1" data-explain="它收的是一段函式呼叫的字串，例如 'getPwd(&quot;123456&quot;)'。">
+  <button class="opt">一個已經定義好的 Python 函式物件</button>
+  <button class="opt">一段函式呼叫的字串表達式</button>
+  <button class="opt">一個指向 JS 檔案的檔案路徑</button>
+  <button class="opt">一個包含多個函式的列表結構</button>
+</div>
+
+<div class="quiz" data-question="node.compile(js_source) 主要在做什麼？" data-correct="0" data-explain="它把整份 JS 讀進來編譯，回傳之後可用來呼叫函式的上下文物件。">
+  <button class="opt">把 JS 原始碼編譯成可呼叫的上下文</button>
+  <button class="opt">把 Python 程式碼轉換成 JS 語法</button>
+  <button class="opt">把 JSON 資料解析成 Python 字典</button>
+  <button class="opt">把遠端網頁下載到本機資料夾</button>
+</div>
+
+<div class="quiz" data-question="下列哪種情況最適合直接用 Python 的 hashlib 重寫？" data-correct="3" data-explain="標準演算法如 MD5 用 hashlib 重寫又快又乾淨，不必繞道 execjs。">
+  <button class="opt">演算法依賴瀏覽器專屬的全域物件</button>
+  <button class="opt">演算法極度客製且完全讀不懂</button>
+  <button class="opt">演算法被包在巨大的 webpack 裡</button>
+  <button class="opt">演算法是標準且認得出的雜湊函式</button>
+</div>
+
+<div class="quiz" data-question="同一個 ctx 物件可以重複用來執行不同函式嗎？" data-correct="1" data-explain="compile 已載入整份檔案的函式，同一 ctx 可 eval 不同的呼叫字串。">
+  <button class="opt">不行，每次呼叫都要重新 compile 一次</button>
+  <button class="opt">可以，只要換 eval 的呼叫字串即可</button>
+  <button class="opt">不行，一個 ctx 只能綁定一個函式</button>
+  <button class="opt">可以，但每次都得重啟 Node 行程</button>
+</div>
+
+<div class="quiz" data-question="execjs 相較於純 Python 重寫的主要缺點是什麼？" data-correct="2" data-explain="每次呼叫都經過 Python 到 Node 的往返，較慢，且依賴瀏覽器物件的程式會報錯。">
+  <button class="opt">它無法回傳字串以外的任何型別</button>
+  <button class="opt">它只能在 Windows 系統上正常運作</button>
+  <button class="opt">它較慢且遇到瀏覽器物件就會壞</button>
+  <button class="opt">它會自動改寫你原本的 JS 原始碼</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · Node 執行、execjs 與 JS 前置知識 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

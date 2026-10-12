@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>國密 SM3/SM4：從 sm-crypto 讀懂一條簽名管線</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>國密 SM3/SM4：從 sm-crypto 讀懂一條簽名管線</h1>
+<p class="meta">Step 5/5 · 對稱與非對稱加密：AES/DES、RSA、國密</p>
+
+<h2>學習目標</h2>
+<p>認出 sm-crypto 的 sm3／sm4 特徵，並讀懂四川補貼案例「排序拼接 → SM3 雜湊 → 轉大寫 → SM4 加密」的簽名管線，說出每個 helper 在做什麼。</p>
+
+<h2>前言：一包不是 AES、也不太像 MD5 的加密</h2>
+
+<p>前面幾步你都用同一套判斷在分流：看到 32 位十六進位就猜 MD5，看到 Base64 就找 AES 的 key。但在某些站台，尤其是對岸的政務、補貼、交易平台，你會撞見一包怎麼套都套不進去的東西：既沒有 <code>CryptoJS</code>，也沒有 <code>encrypt</code> 這種眼熟的命名，取而代之的是一行 <code>require('sm-crypto')</code>，以及幾個函式 <code>sm3</code>、<code>sm4.encrypt</code>、<code>sm4.decrypt</code>。</p>
+
+<p>這就是中國國家標準的密碼演算法，簡稱「國密」。它跟 AES／MD5 長得像、用得也像，但完全是另一套實作。這一節不只要認出它，還要跟著一個真實案例（四川農機補貼平台）把整條簽名管線拆開。看懂之後，你之後遇到國密站台就能直接照抄這套拆法，而不是被 <code>sm4</code> 這個陌生的名字卡住。</p>
+
+<h2>認出國密：sm-crypto 的三個函式</h2>
+
+<p>案例的 JS 一開頭就載入了 <code>sm-crypto</code>，並把最常用的三個操作包成小函式：</p>
+
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day15-Day16：逆向核心案例解析3/02 sichuan.js"><code>// const { sm3, sm4 } = require('sm-crypto');
+const sm = require('sm-crypto');
+
+function r(e) {
+    var t = sm.sm3(e);
+    return t
+}
+
+function d(e) {
+    var t = sm.sm4.encrypt(e, "30062AFC48C0E7B5B0918851C0445A37");
+    return t
+}
+
+
+function u(e) {
+    var t = sm.sm4.decrypt(e, "30062AFC48C0E7B5B0918851C0445A37");
+    return t
+}</code></pre>
+
+<p>這裡要先建立兩個對應關係，之後才看得懂整條管線：</p>
+
+<table>
+<thead>
+<tr><th>國密函式</th><th>對應的常見演算法</th><th>性質</th></tr>
+</thead>
+<tbody>
+<tr><td><code>sm.sm3</code></td><td>MD5／SHA 這類雜湊</td><td>單向、不可逆、輸出固定長度</td></tr>
+<tr><td><code>sm.sm4.encrypt</code> / <code>sm.sm4.decrypt</code></td><td>AES／DES 這類對稱分組密碼</td><td>可逆，需要一把 key</td></tr>
+</tbody>
+</table>
+
+<p>所以 <code>r</code> 是「拿 SM3 做雜湊」，<code>d</code> 是「用 SM4 加密」，<code>u</code> 是「用 SM4 解密」。它們三個共用同一把 key，一串 32 個十六進位字元的字串 <code>30062AFC48C0E7B5B0918851C0445A37</code>，換算起來是 128 位元，正好是 SM4 的標準密鑰長度。</p>
+
+<p>有兩個 SM4 的特性要特別記住。第一，<code>sm4.encrypt</code> 預設走的是 ECB 模式、不需要 IV，這跟 AES 常在 CBC 模式、需要 IV 不一樣；硬套 AES 的參數會對不上。第二，它回傳的是一串十六進位或 Base64 文字，不像 Python 的 <code>AES.encrypt</code> 回傳二進位，所以拿到的結果還要看它用哪種格式編碼。</p>
+
+<h2>把請求參數排成可簽名的字串：helper h</h2>
+
+<p>簽名的第一步，是把一坨 JSON 參數整理成一個固定順序的字串，這樣簽出來的結果才可重現。這個工作由 <code>h</code> 負責：</p>
+
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day15-Day16：逆向核心案例解析3/02 sichuan.js"><code>function h(e) {
+    var t = JSON.parse(e)
+        , n = Object.keys(t).sort()
+        , i = n.map((function (e) {
+            var n = t[e];
+            if (n) {
+                var i = ""
+                    , c = encodeURIComponent(e);
+                return i = "object" === typeof (n) ? JSON.stringify(n) : n,
+                    "".concat(c, "=").concat(i)
+            }
+        }
+    ));
+    i = i.filter((function (e) {
+            return void 0 !== e && null !== e && "" !== e
+        }
+    ));
+    var c = i.join("&");
+    return c
+}</code></pre>
+
+<p>拆開來看，它做的是五件事：</p>
+
+<ol>
+<li><code>JSON.parse(e)</code>：把傳進來的字串還原成物件。</li>
+<li><code>Object.keys(t).sort()</code>：把鍵取出來<strong>按字母排序</strong>。這一步是關鍵，因為瀏覽器物件本身的鍵沒有保證順序，只有先排序，同一組參數才會每次都拼出相同的字串。</li>
+<li>把每個鍵值組成 <code>k=v</code>：鍵用 <code>encodeURIComponent</code> 編碼；如果值是物件，先 <code>JSON.stringify</code> 再放進去。</li>
+<li><code>filter</code>：把值為 <code>undefined</code>、<code>null</code> 或空字串的項目濾掉。</li>
+<li><code>join("&")</code>：用 <code>&</code> 串成一段像是查詢字串的內容，這就是最終要拿去簽的「正規化字串」。</li>
+</ol>
+
+<p>這種「排序後拼接」的手法在簽名裡非常普遍：沒有它，參數順序一變，簽名就對不上，伺服器驗不過。</p>
+
+<h2>整條管線：helper p 把兩者串起來</h2>
+
+<p>有了雜湊 <code>r</code>、加密 <code>d</code>、正規化 <code>h</code>，最後由 <code>p</code> 組裝出完整的簽名物件：</p>
+
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day15-Day16：逆向核心案例解析3/02 sichuan.js"><code>function p(e) {
+    var t, n = Date.now();
+    return e ? (e = JSON.parse(u(e.parameter)),
+        e.timestamp = n,
+        e = JSON.stringify(e),
+        t = h(e),
+        t += "&key=HD7232D2AAAKA@978D8723H211?IER&6",
+        {
+            sign: d(r(t).toLocaleUpperCase()),
+            timestamp: d(n.toString()),
+            source: "ZRCSL7V0JIRK1PHY"
+        }) : (e = e || {},
+        e.timestamp = n,
+        e = JSON.stringify(e),
+        t = h(e),
+        t += "&key=HD7232D2AAAKA@978D8723H211?IER&6",
+        {
+            sign: d(r(t).toLocaleUpperCase()),
+            timestamp: d(n.toString()),
+            source: "ZRCSL7V0JIRK1PHY"
+        })
+}</code></pre>
+
+<p>它的流程可以濃縮成這條線：</p>
+
+<blockquote>
+（如果傳進來的是加密過的 <code>parameter</code>，先用 <code>u</code> 以 SM4 解密回 JSON）→ 蓋上目前時間 <code>timestamp</code> → <code>JSON.stringify</code> → 用 <code>h</code> 排成正規化字串 → 在尾端接上固定的密語 <code>&amp;key=HD7232D2AAAKA@978D8723H211?IER&amp;6</code> → 對整段先做 <code>r</code>（SM3 雜湊）、轉成大寫，再用 <code>d</code>（SM4）加密，得到 <code>sign</code>。
+</blockquote>
+
+<p>其中有三個回傳欄位，各自的角色是：</p>
+
+<ul>
+<li><strong>sign</strong>：把「正規化字串 + 固定密語」先 SM3、再轉大寫、最後 SM4 加密。這是真正被伺服器拿去驗的那個簽名。注意順序是<strong>先雜湊再對稱加密</strong>，兩個動作用的都是同一把 key。</li>
+<li><strong>timestamp</strong>：把毫秒時間戳直接字串化後 SM4 加密。它同時也是簽名輸入的一部分，所以時間一變、簽名跟著變，具有防重放的效果。</li>
+<li><strong>source</strong>：一個固定常量 <code>ZRCSL7V0JIRK1PHY</code>，不是算出來的，多半是前端身份標記。</li>
+</ul>
+
+<p>案子裡還有一個 <code>aaa()</code> 示範函式，它更進一步把手上的參數物件本身用 SM4 加密成 <code>parameter</code> 再回傳 <code>{parameter, h}</code>。也就是說，這裡不只是「簽名」，連請求的內容都被加密了，<code>parameter</code> 是密文，簽名則用來證明密文沒有被動過。</p>
+
+<h2>做完長什麼樣：重現簽名</h2>
+
+<p>驗收的標準是：拿同一組參數，你能產生出跟網站一模一樣的 <code>sign</code>。實務上有兩條路走。一條是務實派：把這段 JS 連同 <code>sm-crypto</code> 一起搬到 Node，用 Python 的 <code>execjs</code> 直接呼叫它的函式，省去重寫的功夫，這也是案例中 <code>sichuan.py</code> 的做法。另一條是純 Python 重寫：用支援國密的套件照著上面那條線，自己排序拼接、SM3、SM4 走一遍。第一次接觸時，先跑通 execjs 確認你讀懂了流程，之後再考慮用 Python 重寫以求穩定，是比較省力的順序。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+國密的特徵是 <code>sm-crypto</code> 這個套件，以及 <code>sm3</code>（雜湊，對應 MD5／SHA）和 <code>sm4.encrypt</code>／<code>sm4.decrypt</code>（對稱加密，對應 AES，預設 ECB 且不需 IV）三個函式。四川補貼案例的簽名管線是：JSON 參數先經 <code>h</code> 按鍵排序、編碼、濾空、用 <code>&amp;</code> 串成正規化字串，尾端接上固定密語，接著「先 SM3 雜湊、轉大寫、再用 SM4 加密」得到 <code>sign</code>；<code>timestamp</code> 也是 SM4 加密，<code>source</code> 則是固定常量。這種站台可以把 JS 丟給 execjs 直接呼叫，也可以照這條線在 Python 重寫。
+</blockquote>
+
+<p>走到這裡，對稱加密（AES／DES）、非對稱加密（RSA）與國密（SM3／SM4）三個家族都認過了。之後在真實案例裡再遇到加密的請求或回應，你已經有一張清晰的地圖：先看密文的長度與字母表判斷家族，再回 JS 找 key、iv、mode、padding 或公鑰，最後在 Python 重現並對答案。</p>
+
+<div class="lesson-nav">
+  <div><a href="./rsa-in-python-and-js.html">← 上一步：用 Python 生成金鑰、重現 RSA 加解密，對照 jsencrypt</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="sm-crypto 裡的 sm3 對應到哪一類演算法？" data-correct="2" data-explain="SM3 是雜湊，性質對應 MD5／SHA，單向不可逆。">
+  <button class="opt">對稱加密，像 AES 一樣可逆</button>
+  <button class="opt">非對稱加密，需要公私鑰</button>
+  <button class="opt">雜湊，像 MD5／SHA 般不可逆</button>
+  <button class="opt">編碼，像 base64 般可還原</button>
+</div>
+
+<div class="quiz" data-question="sm4.encrypt 預設使用哪種模式？" data-correct="0" data-explain="SM4 預設是 ECB，不需要 IV，這點跟常走 CBC 的 AES 不同。">
+  <button class="opt">ECB，不需要 IV</button>
+  <button class="opt">CBC，需要 16 位元組 IV</button>
+  <button class="opt">CTR，需要一個計數器</button>
+  <button class="opt">GCM，需要一段標籤</button>
+</div>
+
+<div class="quiz" data-question="helper h 裡 Object.keys(t).sort() 的作用是什麼？" data-correct="1" data-explain="先排序才能保證同一組參數每次都拼出相同的字串，簽名才可重現。">
+  <button class="opt">把參數的值從大到小排列</button>
+  <button class="opt">讓同一組參數每次都拼出相同字串</button>
+  <button class="opt">把物件的鍵刪到剩下一個</button>
+  <button class="opt">把時間戳插進參數列表裡</button>
+</div>
+
+<div class="quiz" data-question="產生 sign 的動作順序是什麼？" data-correct="3" data-explain="先對正規化字串加密語做 SM3 雜湊、轉大寫，再用 SM4 加密。">
+  <button class="opt">先 SM4 加密，再做 SM3 雜湊</button>
+  <button class="opt">只做 SM3 雜湊，不加密</button>
+  <button class="opt">只做 SM4 加密，不雜湊</button>
+  <button class="opt">先 SM3 雜湊再 SM4 加密</button>
+</div>
+
+<div class="quiz" data-question="案例中 timestamp 為什麼也要 SM4 加密？" data-correct="2" data-explain="它也是簽名輸入的一部分，時間一變簽名就變，具有防重放效果。">
+  <button class="opt">因為它會佔用太多傳輸頻寬</button>
+  <button class="opt">因為它必須跟 sign 用不同的 key</button>
+  <button class="opt">因為它是簽名輸入之一，可防重放</button>
+  <button class="opt">因為它其實是一段固定的常量</button>
+</div>
+
+<div class="quiz" data-question="面對國密站台，務實的重現路線是什麼？" data-correct="0" data-explain="把 JS 連同 sm-crypto 搬到 Node，用 execjs 直接呼叫，可省去重寫。">
+  <button class="opt">把 JS 搬進 Node，用 execjs 呼叫</button>
+  <button class="opt">把 SM4 當成 AES 直接換參數</button>
+  <button class="opt">把 sm-crypto 編譯成 Python 套件</button>
+  <button class="opt">略過簽名直接送出請求</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 對稱與非對稱加密：AES/DES、RSA、國密 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

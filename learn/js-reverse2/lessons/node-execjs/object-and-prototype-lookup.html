@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>物件、原型與原型鏈查找</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>物件、原型與原型鏈查找</h1>
+<p class="meta">Step 2/5 · Node 執行、execjs 與 JS 前置知識</p>
+
+<h2>學習目標</h2>
+<p>從暫停頁面上的一個屬性反問「它掛在哪」，沿原型鏈判斷成員是定義在物件本身，還是某一層的原型物件上。</p>
+
+<h2>前言：這個屬性到底是誰給的？</h2>
+<p>上一節你學會用 execjs 把一整段 JS 丟進 Python 執行，先求有答案再說。但要真正看懂一段暫停的頁面，光會跑還不夠。你在 DevTools 裡暫停下來，滑鼠移到某一行，看到 <code>navigator.userAgent</code>，腦中應該冒出一個問題：這個 <code>userAgent</code> 是寫在 <code>navigator</code> 這個物件身上，還是它從別的地方「繼承」來的？</p>
+<p>這個問題不是學術問題。後面做補環境、換 hook 的時候，你要嘛得去改這個屬性、要嘛得去假造它，而你動手的位置對不對，完全取決於你知不知道它掛在哪一層。這一節就是把 JS 的「物件、原型與原型鏈」這條線講清楚，讓你在暫停頁面上能自己回答「這個成員是誰提供的」。</p>
+
+<h2>建立物件有兩條路</h2>
+<p>JS 裡要生出一個物件，最常見的就是兩種寫法。一種是字面量，用大括號直接寫出鍵值對；另一種是先定義一個建構子，再用 <code>new</code> 去呼叫它：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#一. JavaScript前置知识点"><code>let a = {'name':'bobo'}; //方法1
+
+function B(){this.name="bobo"};
+let b = new B(); //方法2
+
+console.log(a);
+console.log(b);</code></pre>
+<p>兩種寫法印出來的東西長得幾乎一樣，都是一個帶 <code>name</code> 的物件。但差別藏在表面之下：字面量方式建立的物件就是一個單純的鍵值集合；而透過 <code>new B()</code> 建立的物件，會跟 <code>B</code> 這個建構子產生一條隱形的連結。後面所有原型鏈的行為，都是從這條連結長出來的。</p>
+
+<h2>建構子、實例與原型對象</h2>
+<p>當你用 <code>new</code> 呼叫一個函式，這個函式就扮演了「建構子」的角色。它身上寫的 <code>this.xxx</code>，會變成每個新物件自己的屬性。以一個最典型的使用者建構子為例：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#一. JavaScript前置知识点"><code>function User(name,pwd){
+    this.userName = name;
+    this.pwd = pwd;
+    this.regist = function(){
+        console.log(this.name+"在注册")
+    }
+}</code></pre>
+<p>用 <code>new User(...)</code> 生出來的東西叫「實例對象」。你生出幾個，它們就各自擁有一份自己的 <code>userName</code>、<code>pwd</code>：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#一. JavaScript前置知识点"><code>let u1 = new User('jay','123');
+let u2 = new User('tom','456');</code></pre>
+<p>問題來了：如果每個實例都各自複製一份方法，記憶體就浪費了。所以 JS 讓你可以把「所有實例共用」的屬性和方法，掛到建構子的「原型對象」上。你可以把原型對象想成 Python 裡類別的類屬性和類方法，定義一次，全部實例共用：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#一. JavaScript前置知识点"><code>//类似于类属性
+User.prototype.address = "BJ";
+User.prototype.gender = "male";
+//类似于类方法
+User.prototype.login = function login(username, password){
+    console.log(`${username}在登录`);
+}
+
+//实例对象共享原型对象存储的内容
+u1.login('jay','123');
+u2.login('tom','456');
+console.log(u1.address,u2.address,u1.gender,u2.gender);</code></pre>
+<p>這裡的關鍵字是 <code>prototype</code>。建構子 <code>User</code> 身上的 <code>User.prototype</code>，就是它所屬的原型對象。而每一個實例，都有一條路可以取回這個原型對象，兩條路的終點是同一個地方：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#一. JavaScript前置知识点"><code>User.prototype;   
+u1.__proto__;
+User.prototype === u1.__proto__ //true</code></pre>
+<p>最後那行 <code>true</code> 是這整節最重要的一句話：<code>u1.__proto__</code> 和 <code>User.prototype</code> 指向的是同一個物件。所以「實例拿得到方法」，其實是因為實例身上有一條 <code>__proto__</code> 連到原型對象，而方法就放在那裡。</p>
+
+<h2>原型鏈：找不到就往上爬</h2>
+<p>那原型對象自己呢？它也是一個物件，所以它同樣有一條 <code>__proto__</code> 指向自己的原型。這種一層扣一層的結構，就是原型鏈。查詢一個成員時的規則是固定的：先看物件自己身上有沒有，沒有就往它的原型對象找，還沒有再往原型對象的原型找，一路往上，直到找到或走到鏈的末端為止。</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#一. JavaScript前置知识点"><code>u1.__proto__.__proto__</code></pre>
+<p>把這件事放到瀏覽器裡看就很有感。DevTools 裡的 <code>navigator</code> 物件，你按下它的原型鏈，會看到它的原型是 <code>Navigator</code>，也就是 <code>Navigator.prototype</code>：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#一. JavaScript前置知识点"><code>navigator.__proto__ === Navigator
+navigator.__proto__ === Navigator.prototype</code></pre>
+<p>這就是為什麼你搜尋 <code>userAgent</code> 的定義時，常常在 <code>Navigator.prototype</code> 那一層才找到它，而不是在 <code>navigator</code> 物件本身。這個判別在逆向時非常實用：如果一個屬性定義在原型對象上，你光改這個實例的屬性可能沒用，得從原型那一層下手。</p>
+
+<table>
+<thead>
+<tr><th>名詞</th><th>指的是什麼</th><th>怎麼拿到</th></tr>
+</thead>
+<tbody>
+<tr><td>建構子</td><td>用 <code>new</code> 呼叫的那個函式</td><td><code>User</code></td></tr>
+<tr><td>實例對象</td><td>由建構子生出、擁有自己屬性的物件</td><td><code>new User(...)</code></td></tr>
+<tr><td>原型對象</td><td>存放所有實例共用成員的地方</td><td><code>User.prototype</code> 或 <code>u1.__proto__</code></td></tr>
+<tr><td>原型鏈</td><td>實例→原型→原型……逐一往上查找的路徑</td><td><code>u1.__proto__.__proto__</code></td></tr>
+</tbody>
+</table>
+
+<h2>小結</h2>
+<blockquote>
+物件有兩種建立方式：字面量與 <code>new</code> 建構子；只有後者會與原型產生連結。實例自己的屬性存在自己身上，共用成員放在建構子的 <code>prototype</code>；<code>u1.__proto__ === User.prototype</code>。查詢成員時由內往外沿原型鏈找，找不到就往上爬，直到鏈的末端。
+</blockquote>
+<p>會沿原型鏈找成員之後，下一步要回答一個更細的問題：同一個屬性，它「能不能被改、能不能被列舉、是純值還是一對 get/set」，這些又是誰決定的？那是屬性的描述符在管。下一節會把 <code>Object</code> 的幾個工具與描述符攤開來看，它們正是你之後寫 hook 與補環境時會直接動到的地方。</p>
+
+<div class="lesson-nav">
+  <div><a href="./execjs-python-calls-js.html">← 上一步：用 PyExecJS 讓 Python 呼叫 JS</a></div>
+  <div><a href="./object-toolkit-descriptors.html">下一步：Object 工具與屬性描述符 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="下列哪種寫法會讓物件與建構子產生原型連結？" data-correct="2" data-explain="用 new 呼叫建構子建立的實例，才會連到建構子的 prototype。">
+  <button class="opt">直接用大括號寫出鍵值對</button>
+  <button class="opt">用陣列語法包住多個值</button>
+  <button class="opt">用 new 呼叫一個建構子</button>
+  <button class="opt">用字串接法拼出屬性名</button>
+</div>
+
+<div class="quiz" data-question="u1.__proto__ 與 User.prototype 的關係是什麼？" data-correct="0" data-explain="兩者指向同一個原型對象，所以判斷式會回傳 true。">
+  <button class="opt">兩者指向完全相同的物件</button>
+  <button class="opt">兩者是彼此複製的不同副本</button>
+  <button class="opt">前者是後者的一個子集合</button>
+  <button class="opt">兩者之間沒有任何關聯</button>
+</div>
+
+<div class="quiz" data-question="查詢物件成員時，原型鏈的查找順序為何？" data-correct="3" data-explain="先找物件自己，再沿 __proto__ 一層層往上，直到找到或到鏈末端。">
+  <button class="opt">先從鏈的最頂端開始往下找</button>
+  <button class="opt">隨機挑一層開始平行搜尋</button>
+  <button class="opt">只看物件自己身上有沒有</button>
+  <button class="opt">先找自己再逐層往上找</button>
+</div>
+
+<div class="quiz" data-question="為什麼搜尋 userAgent 常會在 Navigator.prototype 那層找到？" data-correct="1" data-explain="它定義在原型對象上，由所有實例共用，不在 navigator 物件本身。">
+  <button class="opt">因為瀏覽器會把它複製到每一層</button>
+  <button class="opt">因為它定義在原型上供實例共用</button>
+  <button class="opt">因為它其實是瀏覽器隨機產生的</button>
+  <button class="opt">因為它被加密後才放到原型上</button>
+</div>
+
+<div class="quiz" data-question="把共用方法放在 prototype 上，主要的好處是什麼？" data-correct="2" data-explain="共用成員只存一份，實例透過原型鏈取用，不必各自複製。">
+  <button class="opt">讓這些方法自動被加密保護</button>
+  <button class="opt">讓方法可以跨瀏覽器通用</button>
+  <button class="opt">讓所有實例共用同一份定義</button>
+  <button class="opt">讓方法執行速度變得更快</button>
+</div>
+
+<div class="quiz" data-question="若某屬性定義在原型對象上，逆向時通常該從哪裡下手？" data-correct="1" data-explain="改實例本身可能沒用，因為取值其實來自原型那一層。">
+  <button class="opt">只要改其中一個實例就夠了</button>
+  <button class="opt">要處理它所在的原型那一層</button>
+  <button class="opt">把整個建構子直接刪除掉</button>
+  <button class="opt">重新啟動瀏覽器即可還原</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · Node 執行、execjs 與 JS 前置知識 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Base64 變體：URL-safe 與 Data URI 圖片</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Base64 變體：URL-safe 與 Data URI 圖片</h1>
+<p class="meta">Step 3/5 · 編碼與摘要：URL、Base64、MD5/SHA</p>
+
+<h2>學習目標</h2>
+<p>辨識並還原 URL-safe Base64（<code>-</code> 與 <code>_</code>）與 <code>data:image/...;base64,</code> 圖片，並補上長度不足 4 的 <code>=</code> 之後正確解碼。</p>
+
+<h2>前言：同一套 Base64，字母表被換掉了</h2>
+<p>上一節說標準 Base64 用 <code>+</code> 和 <code>/</code> 這兩個字元。問題是，這兩個字元如果出現在 URL 裡或檔名裡，會被系統解讀成別的意思：<code>+</code> 在網址中可能被當成空格，<code>/</code> 是路徑分隔符號。於是有人把字母表換掉，用 <code>-</code> 取代 <code>+</code>、用 <code>_</code> 取代 <code>/</code>，這就是 URL-safe Base64。</p>
+<p>另一種常見情境是圖片。登入頁的驗證碼、或一些小圖示，常常不是一個圖片網址，而是一長串直接寫在 HTML 裡的 <code>data:image/png;base64,...</code>。這一節要做的，就是把這兩種實戰變體各自還原回來：一個還原成原始文字或位元組，一個存回圖片檔。</p>
+
+<h2>動手前的準備</h2>
+<p>這是一節程序課，目標很明確：給定一段 URL-safe Base64 或一段 Data URI，你能在 Python 裡正確還原它。動手前你只需要先會上一節的兩件事：標準 Base64 的 <code>b64encode</code>／<code>b64decode</code>，以及「輸出長度一定是 4 的倍數、不足要用 <code>=</code> 補」這條規則。其他的交給下面五個步驟。</p>
+
+<h2>步驟一：先判斷它是不是 URL-safe</h2>
+<p>標準 Base64 的字元只會來自 <code>A-Z a-z 0-9 + / =</code>。只要字串裡出現 <code>-</code> 或 <code>_</code>，幾乎就可以確定它是 URL-safe 變體。反過來說，<code>-</code> 和 <code>_</code> 在標準 Base64 裡不會出現，所以這個判準很不囉唆。</p>
+
+<h2>步驟二：把字母表換回標準的</h2>
+<p>還原的方式就是做一次字元替換：<code>-</code> 換回 <code>+</code>、<code>_</code> 換回 <code>/</code>。換完之後，它就變回標準 Base64，可以直接丟給 <code>b64decode()</code>。下面這段程式碼就是這個流程：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day20/04 base64变种.py#L1-L7"><code>import base64
+
+# 一般规则：  + t替换 -   /替换成_
+…
+data = s.replace("-","+").replace("_","/")
+ret = base64.b64decode(data)
+print(ret)</code></pre>
+
+<p>用一組小資料看替換的效果最清楚。標準 Base64 的 <code>//8=</code>，經過 <code>/</code>→<code>_</code> 之後就變成 <code>__8=</code>：</p>
+
+<pre data-provenance="derived"><code>標準：  //8=
+URL-safe：__8=</code></pre>
+
+<h2>步驟三：需要時補上 =，再解碼</h2>
+<p>跟上一節一樣，<code>b64decode()</code> 要求字串長度是 4 的倍數。如果你從 URL 參數裡抓出來的片段被截過、或本來就沒帶 <code>=</code>，就要先補：<code>s += "=" * (-len(s) % 4)</code>。補完再 <code>b64decode()</code>，得到的是位元組，要文字的話再 <code>.decode()</code>。</p>
+
+<h2>步驟四：Data URI 圖片，從逗號後面切開</h2>
+<p>Data URI 的固定格式是 <code>data:image/&lt;型別&gt;;base64,&lt;資料&gt;</code>。前半段是宣告「這是什麼、用什麼編碼」，真正的圖片資料在逗號之後。所以第一步是切掉前綴：用 <code>s.split(",")[-1]</code> 取逗號後面那一大串。接著 <code>b64decode()</code> 把它還原成圖片位元組，最後用二進位模式 <code>open(..., "wb")</code> 寫成檔案。下面這段程式碼就是完整流程：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day20/05 base64图片.py#L5-L12"><code>base64_img = s.split(",")[-1]
+print(base64_img)
+
+img_bytes = base64.b64decode(base64_img)
+print(img_bytes)
+
+with open("baidu_icon.png", "wb") as f:
+    f.write(img_bytes)</code></pre>
+
+<p>這裡有一個很容易踩的錯：寫檔一定要用 <code>"wb"</code>（二進位模式），不能用 <code>"w"</code>（文字模式）。圖片是位元組，用文字模式寫會被編碼處理、檔案就壞了。跑完之後你應該得到一個能正常開啟的圖片檔。</p>
+
+<h2>步驟五：驗證結果</h2>
+<p>程式跑完，你可以用兩個方式確認自己對了。第一，看 <code>print(img_bytes)</code> 的開頭幾個位元組：PNG 檔一定以 <code>b'\x89PNG'</code> 開頭，JPEG 則以 <code>b'\xff\xd8'</code> 開頭。第二，直接開檔看圖片能不能正常顯示。這一步看起來多餘，卻是抓取驗證碼、準備送去 OCR 之前最省事的檢查。</p>
+
+<h2>什麼時候這個做法不夠用</h2>
+<p>這五步成立的前提是：對方用的還是「標準字母表換兩個符號」的 URL-safe 變體。但實務上有更狠的玩法，例如把整張字母表重新洗牌（自訂順序的 64 個字元），或是把長字串每 76 個字元折一行。遇到那類變體，單純的 <code>replace</code> 沒有用，你得先找到對方那張字母表，自己重建對照關係再解。課程後面講到比較進階的保護時，會回頭看到這種自訂字母表的案例。</p>
+
+<h2>小結</h2>
+<blockquote>
+URL-safe Base64 只是把標準字母表的 <code>+</code> 換成 <code>-</code>、<code>/</code> 換成 <code>_</code>；解碼前先 <code>replace</code> 回標準字母表，需要時補 <code>=</code>，再 <code>b64decode</code>。Data URI 圖片則是先切掉 <code>data:image/...;base64,</code> 前綴、取逗號後的內容，解碼成位元組後用 <code>"wb"</code> 寫檔。若對方換掉的是整張字母表，這招就不夠用，得自己重建對照表。
+</blockquote>
+<p>編碼（URL、Base64）講到這裡，共同點是「可逆」，只要有方法就能還原。但還有一類東西天生就還原不回來，而且會頻繁出現在簽名參數裡：摘要演算法。下一節來看它。</p>
+
+<div class="lesson-nav">
+  <div><a href="./base64-basics.html">← 上一步：Base64：把任意位元組塞進文字</a></div>
+  <div><a href="./digest-md5-sha.html">下一步：摘要演算法：MD5 與 SHA 家族 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="一段 Base64 字串裡出現 _，通常代表什麼？" data-correct="1" data-explain="_ 不在標準字母表裡，出現它通常代表這是 URL-safe 變體。">
+  <button class="opt">這段字串已經損壞了</button>
+  <button class="opt">它是 URL-safe 的變體</button>
+  <button class="opt">它其實是十六進位摘要</button>
+  <button class="opt">它是被壓縮過的字串</button>
+</div>
+
+<div class="quiz" data-question="要把 URL-safe Base64 還原成標準 Base64，該做什麼？" data-correct="2" data-explain="把 - 換回 +、_ 換回 /，字母表就回到標準形式。">
+  <button class="opt">把字串整段倒過來寫</button>
+  <button class="opt">先把 = 全部移除掉</button>
+  <button class="opt">把 - 換成 +、_ 換成 /</button>
+  <button class="opt">改用 URL 解碼來處理</button>
+</div>
+
+<div class="quiz" data-question="Data URI 圖片裡，真正的圖片資料在哪一段？" data-correct="0" data-explain="格式是 data:image/...;base64,<資料>，資料在逗號之後。">
+  <button class="opt">逗號後面的那一大串</button>
+  <button class="opt">data 開頭那幾個字元</button>
+  <button class="opt">image 後面的型別名稱</button>
+  <button class="opt">base64 這個關鍵字本身</button>
+</div>
+
+<div class="quiz" data-question="把解碼出的圖片位元組寫成檔案時，該用哪種模式？" data-correct="3" data-explain="圖片是二進位資料，必須用 wb 才不會被文字編碼破壞。">
+  <button class="opt">用 "r" 讀取模式</button>
+  <button class="opt">用 "w" 文字模式</button>
+  <button class="opt">用 "a" 追加模式</button>
+  <button class="opt">用 "wb" 二進位模式</button>
+</div>
+
+<div class="quiz" data-question="b64decode 前如果字串長度不是 4 的倍數，該怎麼處理？" data-correct="1" data-explain="補 = 到 4 的倍數，b64decode 才不會因為長度不符而報錯。">
+  <button class="opt">把字串切成兩半分別解</button>
+  <button class="opt">補 = 讓長度湊成四倍數</button>
+  <button class="opt">把 - 和 _ 換回 + 和 /</button>
+  <button class="opt">改成呼叫 b64encode</button>
+</div>
+
+<div class="quiz" data-question="什麼情況下這個 replace 還原法會失效？" data-correct="2" data-explain="對方若洗牌整張字母表，單純替換兩個符號無法還原，得重建對照表。">
+  <button class="opt">字串裡含有等號補位時</button>
+  <button class="opt">資料本身是圖片二進位時</button>
+  <button class="opt">對方把整張字母表洗牌時</button>
+  <button class="opt">字串長度剛好是四倍數時</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 編碼與摘要：URL、Base64、MD5/SHA · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

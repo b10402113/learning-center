@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>URL 編碼：查詢參數為什麼要跳脫</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>URL 編碼：查詢參數為什麼要跳脫</h1>
+<p class="meta">Step 1/5 · 編碼與摘要：URL、Base64、MD5/SHA</p>
+
+<h2>學習目標</h2>
+<p>看得懂查詢字串裡的 <code>%XX</code>，並用 Python 的 <code>quote</code>／<code>unquote</code>／<code>urlencode</code> 還原與重建 URL 參數。</p>
+
+<h2>前言：一個 &amp; 就把參數切斷了</h2>
+<p>假設你要抓一個搜尋頁，參數是 <code>keyword</code> 和 <code>page</code>。你照著 DevTools 抄下網址，準備用 <code>requests</code> 重打一次。其中一個參數的值剛好是 <code>&amp;apple123</code>。看起來沒什麼問題，但送出去之後，伺服器回給你的資料完全不對。</p>
+<p>問題就出在那個 <code>&amp;</code>。查詢字串用 <code>&amp;</code> 分隔參數、用 <code>=</code> 分隔鍵和值，這些符號是「保留字」，有固定的職責。當它們出現在某個值裡面，伺服器會把它們當成分隔符號來解讀，於是一個參數被硬生生切成好幾個。要讓這些字元乖乖當作「內容」而不是「語法」，就得先經過 URL 編碼。這一節講的就是這道手續。</p>
+
+<h2>查詢字串的語法，以及它撞到的問題</h2>
+<p>一個 URL 的查詢字串長得像這樣：<code>?k1=v1&amp;k2=v2&amp;k3=v3</code>。它遵循三個規則：問號之後開始、<code>&amp;</code> 分隔每個鍵值對、<code>=</code> 分隔鍵與值。這些規則讓 URL 可以被機器精準拆解，但也表示 <code>&amp;</code>、<code>=</code>、<code>?</code>、<code>#</code>、空格這些字元不能隨便出現在鍵或值裡面。</p>
+<p>更麻煩的是中文。假設你要傳的值是「苑」，它根本不在 URL 允許的字元表裡；而且 URL 本質上是位元組的世界，非 ASCII 字元得先轉成 UTF-8 位元組才能上路。所以只要值裡有中文、有空格、有保留字，就必須先編碼。</p>
+
+<h2>解法：百分比編碼</h2>
+<p>URL 編碼（percent-encoding，百分比編碼）的做法很單純：把不能直接放的字元，換成一個 <code>%</code> 加上該字元 UTF-8 位元組的十六進位值。例如 <code>&amp;</code> 的位元組是 <code>0x26</code>，編碼後就是 <code>%26</code>；「苑」的 UTF-8 位元組是 <code>E8 8B 91</code>，編碼後就是 <code>%E8%8B%91</code>。十六進位字母通常用大寫。</p>
+<p>所以原本會壞掉的 <code>k1=&amp;123</code>，正確寫法要變成 <code>k1=%26123</code>。這樣伺服器拆解時，遇到的第一個分隔符號是 <code>%26123</code> 之後的那個 <code>&amp;</code>，就會正確地把 <code>k1</code> 的值還原成 <code>&amp;123</code>。</p>
+
+<h2>Python 裡怎麼做</h2>
+<p>Python 的標準函式庫 <code>urllib.parse</code> 提供三個常用工具：<code>quote()</code> 把單一值編碼、<code>unquote()</code> 還原，而 <code>urlencode()</code> 一次處理整個字典，把鍵值對接成 <code>k=v&amp;k2=v2</code> 的形式。下面這段程式碼用一個含保留字與中文的字典示範 <code>urlencode()</code>：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day20/01 url编码.py#L1-L16"><code>import urllib.parse
+
+data = {
+    "k1": "&123",
+    "k2": "苑"
+}
+new_data = urllib.parse.urlencode(data)
+print("new_data:", new_data)</code></pre>
+
+<p>執行後會印出：</p>
+
+<pre data-provenance="derived"><code>new_data: k1=%26123&k2=%E8%8B%91</code></pre>
+
+<p>可以看到兩個值都被編碼了：<code>&amp;123</code> 變成 <code>%26123</code>，<code>苑</code> 變成 <code>%E8%8B%91</code>。反過來，如果你在封包裡看到 <code>%E8%8B%91</code>，用 <code>urllib.parse.unquote()</code> 就能還原成「苑」；<code>quote("苑")</code> 則可以得到 <code>%E8%8B%91</code>。</p>
+
+<h2>什麼時候要自己編，什麼時候不用</h2>
+<p>多數情況下，用 <code>requests</code> 時你不需要手動編碼。只要你把參數放進 <code>params={...}</code> 字典，套件就會自動幫你編好。真正需要你親手處理的，是「要跟 JS 產生的字串對齊」的時候。例如某個網站的簽名（sign）是把 <code>encodeURIComponent</code> 編碼過的參數拼接起來再雜湊，那你在 Python 端重算時，也得跟著做一次相同的編碼，否則拼出來的字串不一樣，簽名當然對不上。</p>
+<p>另一個常見的坑是「編了兩次」（double encoding）。有些參數在 JS 端先被 <code>quote</code> 過一次，放進 URL 時又被瀏覽器編了一次，於是你會看到 <code>%25</code>，那是 <code>%</code> 本身被編碼的結果。解讀時要記得還原兩層，不要只看一層就下結論。</p>
+
+<h2>小結</h2>
+<blockquote>
+查詢字串用 <code>&amp;</code>、<code>=</code>、<code>?</code> 這些保留字來切分參數，所以值裡面只要有保留字、空格或中文，就必須先做百分比編碼：把字元換成 <code>%</code> 加上它 UTF-8 位元組的十六進位。<code>%26</code> 是 <code>&amp;</code>，<code>%E8%8B%91</code> 是「苑」。在 Python 用 <code>quote</code>／<code>unquote</code> 處理單一值、<code>urlencode</code> 處理整個字典；只有在要跟 JS 對齊簽名輸入時，才需要自己動手編碼。
+</blockquote>
+<p>URL 編碼處理的是「幾個特殊字元」。但如果你手上那串東西不只是幾個特殊字元，而是一整段長得像英數混合的亂碼呢？那通常是下一種編碼：Base64。下一節就來看它怎麼把任意位元組塞進一串安全的文字裡。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./base64-basics.html">下一步：Base64：把任意位元組塞進文字 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="查詢字串的值裡出現 &amp; 時，為什麼要先做 URL 編碼？" data-correct="1" data-explain="& 是分隔參數的保留字，不編碼會讓一個參數被切成好幾段。">
+  <button class="opt">它會讓網址的載入速度變慢</button>
+  <button class="opt">它會被伺服器當成分隔符號切斷</button>
+  <button class="opt">它會讓瀏覽器直接拒絕連線</button>
+  <button class="opt">它會把後面的中文變成亂碼</button>
+</div>
+
+<div class="quiz" data-question="%E8%8B%91 這串編碼代表的內容是什麼？" data-correct="1" data-explain="它是「苑」的 UTF-8 位元組 E8 8B 91 逐個編碼而成。">
+  <button class="opt">一段被加密的英文字串</button>
+  <button class="opt">中文字「苑」的編碼結果</button>
+  <button class="opt">一個隨機生成的識別碼</button>
+  <button class="opt">瀏覽器版本號的十六進位</button>
+</div>
+
+<div class="quiz" data-question="在 Python 裡要把一整個字典接成查詢字串，該用哪個函式？" data-correct="2" data-explain="urlencode(dict) 會把鍵值對接成 k=v&k2=v2 並自動編碼。">
+  <button class="opt">urllib.parse.quote</button>
+  <button class="opt">urllib.parse.unquote</button>
+  <button class="opt">urllib.parse.urlencode</button>
+  <button class="opt">urllib.parse.urlsplit</button>
+</div>
+
+<div class="quiz" data-question="百分比編碼的固定格式是哪一種？" data-correct="0" data-explain="一律是 % 加上該位元組的兩位十六進位數字。">
+  <button class="opt">% 加上兩個十六進位數字</button>
+  <button class="opt"># 加上兩個十進位數字</button>
+  <button class="opt">&amp; 加上兩個英文字母</button>
+  <button class="opt">= 加上兩個十六進位數字</button>
+</div>
+
+<div class="quiz" data-question="什麼情況下你會需要自己手動做 URL 編碼？" data-correct="2" data-explain="要跟 JS 產生的簽名輸入逐字對齊時，編碼方式必須自己控制。">
+  <button class="opt">每次用 requests 帶參數時</button>
+  <button class="opt">每次要下載圖片的時候</button>
+  <button class="opt">要跟 JS 簽名輸入對齊時</button>
+  <button class="opt">伺服器回傳亂碼的時候</button>
+</div>
+
+<div class="quiz" data-question="在字串裡看到 %25 通常代表什麼？" data-correct="1" data-explain="% 本身被編碼就是 %25，出現它通常代表這串被編了兩次。">
+  <button class="opt">伺服器把這個請求擋了下來</button>
+  <button class="opt">這串經過兩次編碼的結果</button>
+  <button class="opt">這是一段無效的壞資料</button>
+  <button class="opt">瀏覽器版本過舊留下的痕跡</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 編碼與摘要：URL、Base64、MD5/SHA · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

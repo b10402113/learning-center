@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>讀呼叫堆疊：從暫停點追回加密函式</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>讀呼叫堆疊：從暫停點追回加密函式</h1>
+<p class="meta">Step 4/5 · DevTools：斷點、請求堆疊與呼叫堆疊</p>
+
+<h2>學習目標</h2>
+<p>斷點命中後讀懂 Call Stack 的呼叫鏈，用 step over／step into／step out 順著參數流，找出生產加密值的那個函式。</p>
+
+<h2>前言：暫停之後，你才是真正的偵探</h2>
+<p>上一節你學會了把程式停在對的地方。但程式一暫停，畫面會突然變得安靜：某一行反白、右邊亮起一個面板、一堆變數等著你看。這一刻，你手上有兩件事要做：第一，確認「現在是在哪一個函式裡、這個函式的輸入是什麼」；第二，回答「這個值到底是從哪一層被算出來的」。第二件事，就是讀呼叫堆疊（Call Stack）。</p>
+<p>這一節我們不用真站，先用一個刻意寫得很單純的練習頁面，把「暫停 → 讀堆疊 → 逐步前進 → 回到上游」這個迴圈完整跑一次。跑完之後，你就有能力在真實網站上做同一件事：從某個被送出的加密值出發，順著呼叫鏈把它追回產生它的那個函式。</p>
+<p><strong>前置條件：</strong>你知道加密值可能在哪（Step 1）、會用請求堆疊或關鍵字找到候選程式（Step 2）、也會依情境設對斷點（Step 3）。這一節需要你實際在瀏覽器裡操作。</p>
+
+<h2>第一步：準備一個看得到的手術台</h2>
+<p>先做一個可以完全看懂的靶場。把下面這段網頁存成一個 <code>.html</code> 檔（例如 <code>demo.html</code>），用瀏覽器打開，頁面上會出現一個標題「断点的使用和请求堆栈」。這段程式刻意把加密過程拆成一長串互相呼叫的函式，讓你一眼就能看出「值在誰手上、又被傳給誰」。</p>
+<pre data-source="sources/js-reverse2/20261005/Day22/01 断点和请求堆栈.html"><code>&lt;h3 onclick="test01()"&gt;断点的使用和请求堆栈&lt;/h3&gt;
+
+&lt;script&gt;
+    function encrypt(data) {
+        return "asdfghjkl"
+    }
+
+    function test01() {
+        console.log("test01...")
+        test02()
+    }
+
+    function test02() {
+        console.log("test02：数据加密")
+        data = "123456"
+        let encrypt_data = encrypt(data)
+        test03(encrypt_data)
+    }
+
+    function test03(encrypt_data) {
+        let a = 1
+        let b = 2
+        let c = 3
+        console.log("test03...")
+        test04(encrypt_data)
+    }
+
+    function test04(y) {
+        let a = 10
+        let b = 20
+        console.log("test04...")
+        test05(y)
+    }
+
+    function test05(x) {
+        console.log("test05...")
+        test06(x)
+    }
+
+    function test06(encrypt_data) {
+        console.log("test06: 发送ajax请求",encrypt_data)
+    }
+&lt;/script&gt;</code></pre>
+<p>先讀一遍這段程式，理解它的結構。使用者點標題時觸發 <code>test01</code>；<code>test01</code> 呼叫 <code>test02</code>；<code>test02</code> 把 <code>data</code> 設成 <code>"123456"</code>，呼叫 <code>encrypt(data)</code> 取得加密結果，再把結果交給 <code>test03</code>；接著 <code>test03</code> 交給 <code>test04</code>、<code>test04</code> 交給 <code>test05</code>、<code>test05</code> 交給 <code>test06</code>。整條鏈是：</p>
+<p><code>test01 → test02 → encrypt → test03 → test04 → test05 → test06</code></p>
+<p>其中真正碰到加密值的只有兩個地方：<code>test02</code> 負責「把資料加密」，<code>test06</code> 負責「把加密結果送出去（模擬發 ajax）」。其餘的 <code>test03</code> 到 <code>test05</code> 只是在中間把值一代傳一代。這個結構正是真實網站的縮影：值會被算出來，然後經過好幾層函式才被送出。</p>
+
+<h2>第二步：在「值被送出去」的地方下斷點</h2>
+<p>我們先從最下游、也就是值被送出去的地方下手。在 <code>test06</code> 裡那一行 <code>console.log("test06: ...")</code> 點一下行號，設一個行斷點。選這裡的原因很實際：這是加密結果最後一次被完整看見的地方，只要停在這裡，你就能確認「被送出去的值長什麼樣」。</p>
+<p>設好斷點後，點一下頁面上的標題文字。<code>onclick</code> 會觸發 <code>test01</code>，程式一路往下跑，跑到 <code>test06</code> 的那一行時就會暫停，DevTools 會自動切到 Sources 面板，那一行反白。</p>
+
+<h2>第三步：讀右邊的 Call Stack</h2>
+<p>程式暫停後，看右側（或下方）面板裡的 <strong>Call Stack</strong>，中文叫「呼叫堆疊」。它列出的是「現在這個函式，是被哪些函式一路呼叫過來的」，最上面是當前暫停的函式，往下是它的呼叫者，再往下是呼叫者的呼叫者，依此類推。以剛才的暫停點為例，你會看到：</p>
+<table>
+<thead>
+<tr><th>順序（由上而下）</th><th>函式</th><th>此刻手上的值</th></tr>
+</thead>
+<tbody>
+<tr><td>最上（當前）</td><td><code>test06</code></td><td>參數 <code>encrypt_data</code></td></tr>
+<tr><td>往下</td><td><code>test05</code></td><td>參數 <code>x</code></td></tr>
+<tr><td>往下</td><td><code>test04</code></td><td>參數 <code>y</code></td></tr>
+<tr><td>往下</td><td><code>test03</code></td><td>參數 <code>encrypt_data</code></td></tr>
+<tr><td>往下</td><td><code>test02</code></td><td>區域變數 <code>data</code>、<code>encrypt_data</code></td></tr>
+<tr><td>往下</td><td><code>test01</code></td><td>無參數</td></tr>
+<tr><td>最底</td><td>（onclick 事件）</td><td>觸發整個鏈的起點</td></tr>
+</tbody>
+</table>
+<p>這張堆疊圖就是你的地圖。它告訴你兩件關鍵的事：<strong>執行的順序</strong>（底下先跑、上面後跑），以及<strong>每一層的輸入</strong>。當你把滑鼠移到堆疊裡的任何一格，DevTools 會讓那一層的變數作用域亮起來，你就能看到那一層當下握有什麼值。點某一格，程式碼也會跳到那一層，方便你現場對照。</p>
+
+<h2>第四步：順著參數流往回找</h2>
+<p>現在開始往回問問題。當前這一層 <code>test06</code> 的參數 <code>encrypt_data</code> 是什麼？把滑鼠移到它上面，你會看到值，在這個示範裡是 <code>"asdfghjkl"</code>，也就是 <code>encrypt</code> 回傳的那串字。好，那這串值是哪來的？往上一層看 <code>test03</code>、<code>test04</code>、<code>test05</code>，它們的參數名稱換來換去（<code>encrypt_data</code>、<code>y</code>、<code>x</code>），但傳的值其實是同一個。真正產生這個值的地方，要再往上一層，在 <code>test02</code>：</p>
+<p><code>data = "123456"</code>，接著 <code>let encrypt_data = encrypt(data)</code>。這句話就是你要的答案：加密值是在 <code>test02</code> 裡，由 <code>encrypt</code> 這個函式對 <code>"123456"</code> 做出來的。從「值被送出處」追到「值被產生處」，你靠的不是讀完整份程式，而是沿著呼叫堆疊一層一層看每一格的輸入。</p>
+<p>這裡有個很實用的觀察：中間那幾層（<code>test03</code>、<code>test04</code>、<code>test05</code>）的參數名稱一直在改，但值不變。這提醒你：<strong>不要被參數名稱騙了，要看值實際流到哪裡才變</strong>。值「第一次變身」的那一層，往往就是加密真正發生的地方。</p>
+
+<h2>第五步：用 Step 系列把過程看清楚</h2>
+<p>光看堆疊還不夠，有時候你想看某一層「是怎麼把值算出來的」。這時就輪到上方的逐步執行按鈕：</p>
+<ol>
+<li><strong>Step Over（逐步跳過）</strong>：執行下一行，但如果是函式呼叫，不會跳進去，而是把它當一行做完。用來快速掠過你不關心的層。</li>
+<li><strong>Step Into（逐步跳入）</strong>：如果下一行會呼叫函式，就跳進去從那個函式的第一行繼續。想進 <code>encrypt</code> 看它怎麼算，就用這個。</li>
+<li><strong>Step Out（逐步跳出）</strong>：把當前這個函式剩下的部分執行完，直接回到呼叫它的那一層。想從深處快速回到上一層用這個。</li>
+</ol>
+<p>以這個示範為例，你可以在 <code>test02</code> 的 <code>encrypt(data)</code> 那一行暫停，按 Step Into 進到 <code>encrypt</code>，看到它 <code>return "asdfghjkl"</code>；再按 Step Out 回到 <code>test02</code>，就會看到 <code>encrypt_data</code> 已經被賦值成那串字。整個過程，就是你親眼看著值被算出來、再被傳下去。</p>
+
+<h2>第六步：回到上游重新確認</h2>
+<p>當你確定了「加密發生在 <code>test02</code>」，下一步是回到那個地方，重新下一次斷點，乾淨地把整個流程再跑一次。這次在 <code>test02</code> 的 <code>let encrypt_data = encrypt(data)</code> 那一行設斷點，重新整理頁面、再點一次標題。程式這次會更早停下來，你可以直接在這個位置判斷 <code>data</code> 的值、按下 Step Into 深入 <code>encrypt</code>。這種「先在下游看一眼、再回到上游下手」的來回，就是讀呼叫堆疊最標準的節奏。</p>
+
+<h2>做完長什麼樣：可驗證的結果</h2>
+<p>跑完這六步，你應該能明確說出這句話：「這個被送出去的加密值 <code>asdfghjkl</code>，是在 <code>test02</code> 裡由 <code>encrypt(data)</code> 產生，輸入的 <code>data</code> 是 <code>123456</code>。」這句話就是你要的產物。你不需要懂 <code>encrypt</code> 內部用了什麼演算法（那是後面案例節點的事），你只要能把「值」和「產生它的函式」對上，逆向的第一階段就完成了。</p>
+
+<h2>小結</h2>
+<blockquote>
+斷點讓程式暫停，Call Stack 則告訴你「現在這個函式是被誰一路呼叫過來的」。讀堆疊要看兩件事：執行的順序（底下先跑、上面後跑），以及每一層的輸入。順著參數流往上游找，值第一次發生變化的那一層，就是加密真正的入口；中間幾層的參數名稱換來換去，都不能被騙。Step Into／Step Out 讓你進出單一函式，看清楚值被算出與傳遞的過程。
+</blockquote>
+<p>單獨練熟了這套動作，接著要把整條流程接回真實世界。下一個步驟不用練習靶場，而是拿一個真實網站的請求，把「哪些欄位需要重現、要用哪條路去定位」整套規劃出來。</p>
+
+<div class="lesson-nav">
+  <div><a href="./breakpoint-types.html">← 上一步：斷點怎麼下：行、事件監聽與 XHR 斷點</a></div>
+  <div><a href="./youdao-walkthrough.html">下一步：整套跑一遍：有道翻譯 sign 與 mysticTime 的定位 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Call Stack（呼叫堆疊）面板最上面那一格代表什麼？" data-correct="1" data-explain="最上面是當前暫停的函式，往下才是它的呼叫者與更上層。">
+  <button class="opt">整條鏈最早被呼叫的函式</button>
+  <button class="opt">目前暫停下來的那個函式</button>
+  <button class="opt">剛剛被刪除的無用函式</button>
+  <button class="opt">即將被呼叫的下一個函式</button>
+</div>
+
+<div class="quiz" data-question="在示範靶場裡，真正產生加密值 `asdfghjkl` 的地方在哪裡？" data-correct="2" data-explain="test02 裡 data 被設成 123456，再由 encrypt(data) 算出加密結果，因此加密發生在 test02。">
+  <button class="opt">在 test06 送出請求的時候</button>
+  <button class="opt">在 test01 觸發事件的時候</button>
+  <button class="opt">在 test02 呼叫 encrypt 的時候</button>
+  <button class="opt">在 test05 傳遞參數的時候</button>
+</div>
+
+<div class="quiz" data-question="想跳進一個被呼叫的函式，看它內部怎麼算，該按哪個按鈕？" data-correct="0" data-explain="Step Into 會在下一行是函式呼叫時跳進去，從該函式第一行繼續。">
+  <button class="opt">Step Into 逐步跳入</button>
+  <button class="opt">Step Over 逐步跳過</button>
+  <button class="opt">Step Out 逐步跳出</button>
+  <button class="opt">Continue 繼續執行</button>
+</div>
+
+<div class="quiz" data-question="按 Step Out（逐步跳出）會發生什麼事？" data-correct="3" data-explain="它把當前函式剩下的部分執行完，直接回到呼叫它的那一層。">
+  <button class="opt">重新啟動整個程式的執行流程</button>
+  <button class="opt">跳進下一行所呼叫的函式內部</button>
+  <button class="opt">跳過下一行不執行任何動作</button>
+  <button class="opt">做完本函式剩下的部分回到上層</button>
+</div>
+
+<div class="quiz" data-question="為什麼說「不要被參數名稱騙了」？" data-correct="1" data-explain="中間幾層的參數名稱一直換（encrypt_data、y、x），但傳的值不變；要看值實際流到哪裡才變化。">
+  <button class="opt">因為參數名稱一定是刻意寫錯的</button>
+  <button class="opt">因為名稱換了但傳的值沒有換</button>
+  <button class="opt">因為參數名稱會影響加密結果</button>
+  <button class="opt">因為 DevTools 顯示的名稱不準</button>
+</div>
+
+<div class="quiz" data-question="在真實網站上讀呼叫堆疊，最終要得到的產物是什麼？" data-correct="2" data-explain="把「被送出的值」與「產生它的那個函式」對上，就算完成逆向的第一階段；演算法細節可留待後續。">
+  <button class="opt">把整份打包檔完整逐行讀完</button>
+  <button class="opt">在瀏覽器裡把演算法改寫一遍</button>
+  <button class="opt">把值跟產生它的函式對上</button>
+  <button class="opt">把請求直接重送一次拿資料</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · DevTools：斷點、請求堆疊與呼叫堆疊 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

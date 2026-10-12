@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>被偵測到了：toString 檢測與它的兩層破解</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>被偵測到了：<code>toString</code> 檢測與它的兩層破解</h1>
+<p class="meta">Step 3/5 · Hook 與 Proxy 攔截</p>
+
+<h2>學習目標</h2>
+<p>判斷網站用的是哪一層 <code>toString</code> 檢測，並選對應的破解（改實例的 <code>toString</code>，還是改 <code>Function.prototype.toString</code>）。</p>
+
+<h2>前言：hook 成功了，網站卻說「環境異常」</h2>
+<p>上一節你把 <code>atob</code> hook 起來，Console 也確實印出了每次的參數與回傳。但你送出請求後，網站卻回你「環境異常，請稍後再試」，或乾脆卡在驗證頁不讓你往下。你的程式沒錯，錯的是<strong>你被發現了</strong>。</p>
+<p>很多網站會主動檢查自己的函式有沒有被別人動過手腳。最常見的檢查方式，就是去比較一個函式的 <code>toString()</code> 在「還沒被你 hook 之前」和「被你 hook 之後」長得不一樣。這一節要做的決定很單純：<strong>面對這種檢測，你要攔到什麼程度的偽裝才夠？</strong>是只把自己動過的 <code>atob</code> 遮起來，還是把整個函式家族的 <code>toString</code> 都換掉？兩者成本與風險不同。</p>
+
+<h2>網站怎麼檢查：比較 toString 的前後</h2>
+<p>先搞清楚它在比什麼。在瀏覽器裡，內建函式的實作不會顯示真正的一堆程式碼，而是顯示一段固定的標記 <code>[native code]</code>。所以原生的 <code>atob.toString()</code> 會回傳類似 <code>function atob() { [native code] }</code> 這樣的字串。</p>
+<p>當你把它換成自己寫的包裝函式之後，<code>atob.toString()</code> 回傳的就變成你那段包裝的原始碼，一串帶著 <code>console.log</code> 的實際程式碼。網站只要把「預期是 <code>[native code]</code>」跟「現在拿到的是實際程式碼」一比，就知道 <code>atob</code> 被人動過了。這就是最根本的 <code>toString()</code> 檢測法。</p>
+<p>問題是，這個檢測有兩個層次。最直覺的是直接呼叫 <code>atob.toString()</code>；但更狡猾的網站會改用 <code>Function.prototype.toString.call(atob)</code>，也就是<strong>借函式原型上的 <code>toString</code> 來檢查</strong>，而不是用 <code>atob</code> 自己的。這兩層你的破解方法不一樣。</p>
+
+<h2>三個選項並排比</h2>
+<table>
+<thead>
+<tr><th>選項</th><th>做法</th><th>擋得住 <code>atob.toString()</code></th><th>擋得住 <code>Function.prototype.toString.call(atob)</code></th><th>影響範圍</th></tr>
+</thead>
+<tbody>
+<tr><td>不處理</td><td>直接放著</td><td>否</td><td>否</td><td>無</td></tr>
+<tr><td>改實例層</td><td><code>atob.toString = …</code></td><td>是</td><td>否</td><td>只影響 <code>atob</code></td></tr>
+<tr><td>改原型層</td><td><code>Function.prototype.toString = …</code></td><td>是</td><td>是</td><td>影響所有函式</td></tr>
+</tbody>
+</table>
+
+<h2>選項一：改實例層的 toString</h2>
+<p>最省事的做法，是在 hook 完 <code>atob</code> 之後，順手把它自己的 <code>toString</code> 也改掉，讓它回傳那個看起來很「原生」的字串：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>_atob = atob;//保存原函数
+
+atob = function (str){
+    console.log("正在执行atob方法, 参数:", str);
+    let result = _atob(str);
+    console.log("正在执行atob方法, 返回值:", result);
+    return result;
+}
+//重写atob函数的toString方法
+atob.toString = function(){
+    return 'function atob() { [native code] }'
+}</code></pre>
+<p>這樣一來，任何直接呼叫 <code>atob.toString()</code> 的檢查，看到的都會是 <code>function atob() { [native code] }</code>，跟原生的一模一樣。它成本低、影響範圍只有 <code>atob</code> 一個函式。但它有個破口：如果網站不是用「<code>atob</code> 自己的 toString」，而是繞到原型上去檢查，這個改法就攔不住了。</p>
+
+<h2>選項二：改原型層的 toString</h2>
+<p>先看它為什麼能繞過你：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>Function.prototype.toString.call(atob)
+//调用函数原型对象中的toString进行的检测，而不是atob实例对象的toString了。</code></pre>
+<p><code>Function.prototype.toString</code> 是<strong>所有函式共用的那個 <code>toString</code></strong>。<code>call(atob)</code> 的意思是「把這個共用的 <code>toString</code> 借來、以 <code>atob</code> 的身分執行」。所以它根本不會去看你掛在 <code>atob</code> 身上的那個 <code>toString</code>，實例層的偽裝當場失效。</p>
+<p>要擋這一層，就得直接換掉共用的那個原型方法：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>_atob = atob;//保存原函数
+
+atob = function (str){
+    console.log("正在执行atob方法, 参数:", str);
+    let result = _atob(str);
+    console.log("正在执行atob方法, 返回值:", result);
+    return result;
+}
+//重写原型链上的toString方法
+Function.prototype.toString = function(){
+    return `function ${this.name}() { [native code] }`
+}</code></pre>
+<p>關鍵在 <code>${this.name}</code>：<code>this</code> 是呼叫 <code>toString</code> 的那個函式，<code>this.name</code> 就是它的名字。這樣不管是 <code>atob</code>、還是別的函式來呼叫，都會回傳「自己的名字 + <code>[native code]</code>」，看起來都很正常。</p>
+
+<h2>反例：為什麼不能把名字寫死</h2>
+<p>你可能會想：那我直接把回傳字串寫死成 <code>function atob() { [native code] }</code> 不是更省事？不行。因為你改的是<strong>全體函式共用</strong>的 <code>toString</code>，一旦寫死名字，之後任何函式呼叫它，回傳的函式名都會變成 <code>atob</code>。例如網站去檢查 <code>Location.toString()</code>，結果拿到的卻是 <code>function atob() { [native code] }</code>，這種牛頭不對馬嘴的回應，本身就是一個強烈的可疑訊號，反而更容易被抓。用 <code>this.name</code> 動態取值，才能讓每個函式都回報自己的名字。</p>
+
+<h2>該選哪一層：判別問句</h2>
+<p>決定之前，先問自己兩個問題：</p>
+<ul>
+<li>網站只是呼叫 <code>atob.toString()</code> 嗎？如果是，改實例層就足夠，範圍小、副作用最少。</li>
+<li>網站有沒有用 <code>Function.prototype.toString.call(atob)</code> 這種從原型借方法的寫法？如果有，實例層擋不住，必須改原型層。</li>
+</ul>
+<p>如果當下無法確定對方用哪一種，實務上會直接改原型層並用 <code>this.name</code>，因為它同時涵蓋兩種情況。代價是影響範圍最大，所有函式的 <code>toString</code> 都被你換掉了，所以要更小心不要讓回傳格式露餡。</p>
+
+<h2>小結</h2>
+<blockquote>
+網站偵測 hook 最常見的手法，是把函式的 <code>toString()</code> 拿去跟原生的 <code>[native code]</code> 比對。破解分兩層：只改 <code>atob.toString</code>（實例層）範圍小、但擋不住 <code>Function.prototype.toString.call(atob)</code>；改 <code>Function.prototype.toString</code>（原型層）兩層都擋得住，但影響所有函式，而且回傳名字必須用 <code>this.name</code> 動態取，寫死會露餡。判準就是：對方用哪一層檢查，你至少要能擋到那一層。
+</blockquote>
+<p>到這裡，hook 這條線就走完了：會攔、會選對時機、也懂得怎麼不被抓。接下來要換另一件工具。hook 攔的通常是「某一個」函式或屬性，但當你要面對的是整個 <code>window</code>、整個 <code>document</code>，一個個 hook 就太慢了。下一節要看的 <code>Proxy</code>，能替整個物件套一層代理，讓所有讀寫自動被記錄。</p>
+
+<div class="lesson-nav">
+  <div><a href="./hook-native-api.html">← 上一步：攔住原生函式：在頁面載入前 hook atob 與 document.cookie</a></div>
+  <div><a href="./proxy-monitor.html">下一步：Proxy 是什麼：替物件套一層會記錄讀寫的代理 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="網站偵測函式有沒有被 hook，最常見的方式是什麼？" data-correct="2" data-explain="內建函式原生的 toString 會顯示 [native code]，被換成包裝後會顯示實際程式碼，一比就知道。">
+  <button class="opt">檢查這個函式的執行速度</button>
+  <button class="opt">檢查函式有沒有被呼叫過</button>
+  <button class="opt">比較函式 toString 的前後差異</button>
+  <button class="opt">檢查函式佔用多少記憶體</button>
+</div>
+
+<div class="quiz" data-question="只改 <code>atob.toString</code>（實例層）擋不住下列哪一種檢查？" data-correct="1" data-explain="Function.prototype.toString.call(atob) 借的是原型上的方法，不會看 atob 自己的 toString。">
+  <button class="opt">直接呼叫 <code>atob.toString()</code></button>
+  <button class="opt"><code>Function.prototype.toString.call(atob)</code></button>
+  <button class="opt">把 atob 的結果印到 Console</button>
+  <button class="opt">把 atob 當參數傳給別的函式</button>
+</div>
+
+<div class="quiz" data-question="為什麼改 <code>Function.prototype.toString</code> 能同時擋住兩層檢測？" data-correct="3" data-explain="因為不管從實例還是從原型呼叫，最後都會落到這個共用的原型方法上。">
+  <button class="opt">因為它會自動刪除所有 hook</button>
+  <button class="opt">因為它讓瀏覽器停止偵測</button>
+  <button class="opt">因為它只影響 atob 一個函式</button>
+  <button class="opt">因為所有函式都共用這個方法</button>
+</div>
+
+<div class="quiz" data-question="原型層破解為什麼要用 <code>${this.name}</code>，而不是寫死 atob？" data-correct="1" data-explain="寫死名字會讓所有函式的 toString 都回傳同一個名字，例如 Location.toString() 也回傳 atob，反而露餡。">
+  <button class="opt">因為寫死的字串比較容易被過濾</button>
+  <button class="opt">因為寫死會讓別的函式回傳同名字</button>
+  <button class="opt">因為 this.name 執行起來比較快</button>
+  <button class="opt">因為瀏覽器只接受動態的字串</button>
+</div>
+
+<div class="quiz" data-question="<code>[native code]</code> 這個標記代表什麼意思？" data-correct="0" data-explain="JS 內建函式的實作不會顯示實際程式碼，而是以 [native code] 表示。">
+  <button class="opt">內建函式的實作被標為原生碼</button>
+  <button class="opt">這個函式已經被網站封鎖了</button>
+  <button class="opt">這個函式是用 C 語言寫的</button>
+  <button class="opt">這個函式沒有被任何人呼叫過</button>
+</div>
+
+<div class="quiz" data-question="不確定網站用哪一層檢測時，下列哪個做法最保險？" data-correct="2" data-explain="改原型層並用 this.name，可同時涵蓋實例層與原型層兩種檢查。">
+  <button class="opt">完全不處理，讓它自然通過</button>
+  <button class="opt">只改 atob 的實例層 toString</button>
+  <button class="opt">改原型層並用 <code>this.name</code></button>
+  <button class="opt">把 atob 整個刪掉不用它</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · Hook 與 Proxy 攔截 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

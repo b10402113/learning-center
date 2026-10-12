@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>在 Node 跑多檔 bundle、呼叫簽名模組</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>在 Node 跑多檔 bundle、呼叫簽名模組</h1>
+<p class="meta">Step 4/4 · webpack 拆解與模組定位</p>
+
+<h2>學習目標</h2>
+<p>把多檔 JSONP bundle 的 loader 與各模組檔載進 Node、讓 <code>webpackJsonp</code> 的 callback 把模組合併起來，最後用模組 id 呼叫簽名模組並取得結果。</p>
+
+<h2>前言：一堆檔案，到底誰先誰後</h2>
+<p>上一節你在單檔 bundle 上練會了接把手、插 log、報編號。但真實的大型網站很少把東西放在一個檔案裡。你在 DevTools 的 Network 面板會看到好幾支 JS：一支只有幾百行、名字像 loader 或 runtime；接著一兩支幾萬行的 chunk-libs、app；HTML 用 <code>&lt;script&gt;</code> 把它們依序掛上去。</p>
+<p>問題來了：你把這些檔案全部下載下來，該怎麼擺、用什麼順序載入？如果順序錯了，會出現「<code>window.loader is not defined</code>」，或者呼叫某個編號時告訴你模組不存在。這一節要講清楚多檔版的組裝順序，並把整套流程搬進 Node 跑一次：載入 loader、載入各模組檔、再用一個編號把簽名模組叫出來。</p>
+<p><strong>前置條件：</strong>你的 JS 已經能在 Node 執行（最簡單是先寫 <code>window = global</code>，再把檔案 require 進來）。若 bundle 依賴 <code>document</code>、<code>navigator</code> 等瀏覽器物件，得先補環境，否則一載入就報錯。</p>
+
+<h2>步驟一：先載入 loader 檔，把機制架起來</h2>
+<p>順序的第一條鐵則是：<strong>loader 永遠最先。</strong>它負責建立整個模組系統：快取、require 函式、以及接收模組的 JSONP 機制。看它關鍵的幾個部分：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day17-Day18：逆向核心案例解析4/03 多文件的webpack.js"><code>function webpackJsonpCallback(data) {
+    var chunkIds = data[0];
+    var moreModules = data[1];
+    var executeModules = data[2];
+    …
+    for (moduleId in moreModules) {
+        if (Object.prototype.hasOwnProperty.call(moreModules, moduleId)) {
+            modules[moduleId] = moreModules[moduleId];
+        }
+    }
+    …
+};
+
+var installedModules = {};
+…
+function __webpack_require__(moduleId) {
+    …
+    console.log("moduleId:::", moduleId)
+    …
+    modules[moduleId].call(module.exports, module, module.exports, __webpack_require__);
+    …
+    return module.exports;
+}
+
+window.loader = __webpack_require__
+
+var jsonpArray = window["webpackJsonp"] = window["webpackJsonp"] || [];
+var oldJsonpFunction = jsonpArray.push.bind(jsonpArray);
+jsonpArray.push = webpackJsonpCallback;</code></pre>
+<p>這段做了三件鋪路的工作。第一，建立 <code>webpackJsonpCallback</code>，它的工作是把某個檔案送來的模組（<code>moreModules</code>）逐一搬進 loader 內部的 <code>modules</code> 物件。第二，建立 <code>__webpack_require__</code> 這支 require 函式，並把它指定成 <code>window.loader</code>。第三，也是多檔版最巧妙的一步：把全域的 <code>window.webpackJsonp</code> 準備成陣列，然後<strong>把它原本的 <code>push</code> 換成 <code>webpackJsonpCallback</code></strong>。</p>
+<p>為什麼要換 <code>push</code>？因為後面每一支模組檔都會「把模組 push 進 webpackJsonp」。但既然 <code>push</code> 已經被換成 callback，這個 push 動作實際上就等於「請 loader 把這些模組收進去」。檔案之間不需要互相 import，全靠這個被改造過的 <code>push</code> 當作通道。</p>
+
+<h2>步驟二：再依序載入每個模組檔</h2>
+<p>loader 就緒後，接著載入模組檔。每一支模組檔執行起來，幾乎都長這個樣子：把一批模組 push 給 <code>window.webpackJsonp</code>：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day17-Day18：逆向核心案例解析4/04 mod1.js"><code>!(window["webpackJsonp"] = window["webpackJsonp"] || []).push([["app"], {
+    0: function (e, t, n) {
+        e.exports = n("56d7")
+    },
+    "1001": function () {
+        console.log("1001 fn ....")
+    },
+    "1002": function () {
+        console.log("1002 fn ....")
+    }
+}, [[0, "runtime", "chunk-elementUI", "chunk-libs"]]]);</code></pre>
+<p>另一支模組檔形式完全一樣，只是帶進來的編號不同：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day17-Day18：逆向核心案例解析4/05 mod2.js"><code>!(window["webpackJsonp"] = window["webpackJsonp"] || []).push([["app"], {
+    0: function (e, t, n) {
+        e.exports = n("56d7")
+    },
+    "1003": function () {
+        console.log("1001 fn ....")
+    },
+    "1004": function () {
+        console.log("1002 fn ....")
+    }
+}, [[0, "runtime", "chunk-elementUI", "chunk-libs"]]]);</code></pre>
+<p>讀懂這一行，多檔版就通了。陣列的第一格 <code>["app"]</code> 是這批模組所屬的 chunk 名稱；第二格是「編號對函式」的模組表，也就是真正被搬進 loader 的 <code>moreModules</code>；第三格是執行清單。因為 loader 早就把 <code>push</code> 換成了 callback，這兩支檔案被載入時，等於連續兩次呼叫 <code>webpackJsonpCallback</code>，把 <code>"1001"</code> 到 <code>"1004"</code> 這幾個模組搬進 loader 的 <code>modules</code> 裡。</p>
+<p>所以載入順序是：<strong>先 loader，再所有模組檔。</strong>loader 一個人先來把櫃子與管理員備好，模組檔之後一個一個把書送進來。順序顛倒的話，模組檔執行時發現沒有被改造過的 <code>push</code>，模組就進不了 loader。</p>
+
+<h2>步驟三：串起驅動檔，呼叫目標模組</h2>
+<p>把整件事收攏成一支小小的驅動檔：先 require loader，再 require 兩支模組檔，最後呼叫 <code>window.loader</code>。原始碼裡的驅動檔就長這樣：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day17-Day18：逆向核心案例解析4/06 main.js"><code>require("./03 多文件的webpack")
+require("./04 mod1")
+require("./05 mod2")
+
+window.loader("1001")
+window.loader("1003")</code></pre>
+<p>前兩行的 <code>require</code> 是 Node 的載入語法，用來把「本機這幾支檔案」依序執行。順序正是上一段說的鐵則：先 loader，再模組。等三支都跑過，模組已經全部進櫃，最後兩行才用 <code>window.loader("1001")</code>、<code>window.loader("1003")</code> 報編號呼叫。</p>
+<p>因為步驟二插的 <code>console.log("moduleId:::", moduleId)</code> 還在，執行後你會看到 log 依序印出 <code>1001</code>、<code>1003</code>，緊接著是對應模組自己的輸出。這就是「模組齊全 → 依編號呼叫」的完整軌跡。</p>
+
+<h2>步驟四：把編號換成簽名模組</h2>
+<p>前面的 demo 用 <code>"1001"</code>、<code>"1003"</code> 只是為了示範。真實站點的做法一模一樣，差別只在兩件事：<strong>把模組檔補齊，把編號換成簽名模組的 id。</strong></p>
+<ol>
+<li>在 DevTools 的 Network 面板抓下所有參與的 JS：loader 一支，模組檔可能有好幾支。</li>
+<li>依「loader 在前、模組檔在後」的順序載入 Node。</li>
+<li>用步驟三的手法插 log、逐一呼叫，找出產生簽名參數的那個模組編號。</li>
+<li>用 <code>window.loader("簽名模組的 id")</code> 拿到它匯出的函式，餵入需要的參數，取得簽名結果。</li>
+</ol>
+<p>之後就能像單檔那樣，把這個值接進 Python 的請求流程裡。多檔版比起單檔版，真正多出來的只有「按順序把模組檔餵進來」這一步。</p>
+
+<h2>做完長什麼樣</h2>
+<p>跑完這一節，你會得到一份能在 Node 獨立重現目標模組輸出的組裝流程：三支以上的檔案依序載入，Console 印出一條清楚的模組執行軌跡，最後一行是你用某個編號呼叫後拿回的簽名值。這個流程與上一節的定位手法合起來，就是一套對任何 webpack 站點都適用的搬移方法。</p>
+<p>這裡刻意不深談「為什麼瀏覽器環境要補齊、缺了會怎樣」，那是補環境那個節點的主題。這一節把重點放在「檔案組裝的順序」，因為那是多檔 bundle 最容易失敗的地方，也是它與單檔版本唯一的關鍵差異。</p>
+
+<div class="lesson-nav">
+  <div><a href="./expose-loader-log-module-id.html">← 上一步：暴露 require 函式並記錄模組 id</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="多檔 bundle 載入時，正確的順序是什麼？" data-correct="0" data-explain="先載入 loader 建立機制與 window.loader，再載入模組檔把模組 push 進去。">
+  <button class="opt">先 loader，再載入所有模組檔</button>
+  <button class="opt">先所有模組檔，最後再載入 loader</button>
+  <button class="opt">順序其實完全不影響結果</button>
+  <button class="opt">模組檔與 loader 必須同時載入</button>
+</div>
+
+<div class="quiz" data-question="loader 把 window.webpackJsonp 的 push 換成什麼？" data-correct="2" data-explain="換成 webpackJsonpCallback，之後模組檔的 push 就等於把模組交給 loader。">
+  <button class="opt">換成 console.log 的除錯函式</button>
+  <button class="opt">換成 __webpack_require__ 本身</button>
+  <button class="opt">換成 webpackJsonpCallback</button>
+  <button class="opt">換成 window.loader 這個變數</button>
+</div>
+
+<div class="quiz" data-question="模組檔裡的 push 陣列，第二格代表什麼？" data-correct="1" data-explain="第二格是編號對函式的模組表，也就是要被併進 loader 的 moreModules。">
+  <button class="opt">這批模組所屬的 chunk 名稱</button>
+  <button class="opt">要被併進 loader 的模組表</button>
+  <button class="opt">載入完成後要執行的模組清單</button>
+  <button class="opt">這個檔案的版本號與雜湊值</button>
+</div>
+
+<div class="quiz" data-question="webpackJsonpCallback 主要負責把什麼搬進 loader？" data-correct="3" data-explain="它把 moreModules 逐一複製進 loader 內部的 modules 物件。">
+  <button class="opt">把全域變數清空以避免污染</button>
+  <button class="opt">把快取清掉讓模組重新執行</button>
+  <button class="opt">把簽名結果轉成 base64 字串</button>
+  <button class="opt">把 moreModules 併進 modules</button>
+</div>
+
+<div class="quiz" data-question="哪個檔負責建立 window.loader？" data-correct="0" data-explain="loader 檔在建立 __webpack_require__ 後把它指定給 window.loader。">
+  <button class="opt">負責建立機制的 loader 檔</button>
+  <button class="opt">負責 push 模組的 chunk 檔</button>
+  <button class="opt">負責呼叫的驅動檔</button>
+  <button class="opt">負責補環境的 env 檔</button>
+</div>
+
+<div class="quiz" data-question="要重現真實站點的簽名，除了補齊模組檔，還要換掉什麼？" data-correct="2" data-explain="把 demo 的模組編號換成目標簽名模組的 id，再呼叫它匯出的函式。">
+  <button class="opt">把 Node 換成瀏覽器來執行</button>
+  <button class="opt">把 loader 改成自己重寫的一支</button>
+  <button class="opt">把模組編號換成簽名模組的 id</button>
+  <button class="opt">把 console.log 全部刪除掉</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · webpack 拆解與模組定位 · Step 4/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

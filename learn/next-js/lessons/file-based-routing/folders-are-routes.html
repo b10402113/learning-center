@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>資料夾就是路由：檔案路由的第一條規則</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>資料夾就是路由：檔案路由的第一條規則</h1>
+<p class="meta">Step 1/5 · Routing as a Filesystem</p>
+
+<h2>學習目標</h2>
+<p>說出檔案路由的兩條規則（資料夾定義 URL 區段、<code>page</code> 檔定義該區段的 UI），並解釋它如何取代 React Router 的設定檔。</p>
+
+<h2>前言：你上一次「設定路由」是什麼時候？</h2>
+
+<p>想像你剛接手一份 React 專案，有人請你「把 About 頁加一條新路由」。你的第一反應可能是打開一個叫做 <code>App.js</code> 或 <code>routes.js</code> 的檔案，在裡面某一堆 <code>&lt;Route&gt;</code> 標籤之間，找到對的位置、複製一行、改個路徑。路由不是「檔案放哪裡」，而是一份要人去維護的清單。</p>
+
+<p>Next.js 的 App Router 把這件事反過來做：你不再編輯一份路由表，而是用<strong>資料夾結構</strong>本身來表達路由。新增一條 <code>/about</code>，你就在 <code>app/</code> 底下建一個 <code>about/</code> 資料夾。這一節先把這個最基本的對應關係講清楚，因為之後的巢狀路由、動態路由、route group 全部都是疊在這兩條規則之上。搞懂它，你看到 AI 產出的任何一棵 <code>app/</code> 樹，都能直接唸出它有哪些路由。</p>
+
+<h2>React 時代：路由是一份要自己維護的設定</h2>
+
+<p>先看看沒有檔案路由時，一條路由是怎麼被「登記」的。在 React 裡，我們常用 <code>react-router-dom</code> 這個外部套件，把每一條路徑對應到哪個元件，明明白白寫在一份設定裡：</p>
+
+<pre data-source="sources/next-js/20261004/EBOOK.pdf#Routing"><code>import { BrowserRouter as Router, Route, Link, Routes } from 'react-router-dom';
+
+const App = () => {
+    return (
+        &lt;Router&gt;
+          &lt;Routes&gt;
+            &lt;Route path="/" element={&lt;Home /&gt;} /&gt;
+            &lt;Route path="/about" element={&lt;About /&gt;} /&gt;
+            &lt;Route path="/contact" element={&lt;Contact /&gt;} /&gt;
+          &lt;/Routes&gt;
+        &lt;/Router&gt;
+     );
+};
+
+export default App;</code></pre>
+
+<p>三條路由還好。但一個真實的電商網站會有商品列表、商品詳情、賣家後台、訂單、評價、商品底下再分價格與照片……這些路徑全部要一層一層手寫進設定檔，而且巢狀關係是用縮排和標籤的嵌套去表達的：</p>
+
+<pre data-source="sources/next-js/20261004/EBOOK.pdf#Routing"><code>import React, { Fragment } from 'react';
+import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
+
+function App() {
+  return (
+    &lt;Router&gt;
+      &lt;Fragment&gt;
+        &lt;Routes&gt;
+          &lt;Route path="/" element={&lt;Layout /&gt;}&gt;
+            &lt;Route index element={&lt;Home /&gt;} /&gt;
+            &lt;Route path="about" element={&lt;About /&gt;} /&gt;
+            &lt;Route path="products" element={&lt;Products /&gt;} /&gt;
+            &lt;Route path="products/:id" element={&lt;ProductDetail /&gt;} /&gt;
+
+            &lt;Route path="seller" element={&lt;SellerLayout /&gt;}&gt;
+              &lt;Route index element={&lt;Dashboard /&gt;} /&gt;
+              &lt;Route path="orders" element={&lt;Orders /&gt;} /&gt;
+              &lt;Route path="reviews" element={&lt;Reviews /&gt;} /&gt;
+              &lt;Route path="products" element={&lt;SellerProducts /&gt;} /&gt;
+              &lt;Route path="products/:id" element={&lt;SellerProductDetail /&gt;}&gt;
+                &lt;Route index element={&lt;SellerProductInfo /&gt;} /&gt;
+                &lt;Route path="pricing" element={&lt;SellerProductPricing /&gt;} /&gt;
+                &lt;Route path="photos" element={&lt;SellerProductPhotos /&gt;} /&gt;
+              &lt;/Route&gt;
+            &lt;/Route&gt;
+          &lt;/Route&gt;
+        &lt;/Routes&gt;
+      &lt;/Fragment&gt;
+    &lt;/Router&gt;
+  );
+}
+
+export default App;</code></pre>
+
+<p>還沒有一個大網站該有的規模，這份設定就已經開始讓人頭痛了。你必須額外安裝並維護一個套件、熟記它的標籤語法，而且每當檔案搬動，你還得回來確認設定有沒有跟上。路由的真相（哪些頁面存在、誰是誰的子層）散落在兩個地方：檔案樹，和這份設定。</p>
+
+<h2>Next.js 的兩條規則</h2>
+
+<p>Next.js 用「檔案路由」把兩份真相合而為一。它的規則只有兩條：</p>
+
+<blockquote>
+<strong>資料夾</strong>定義路由（URL 的區段）；<strong>檔案</strong>定義那個區段的 UI。
+</blockquote>
+
+<p>把這句話翻成具體對應：一個資料夾的名字，就是 URL 上的一段路徑；而這個資料夾裡一個叫做 <code>page</code> 的特殊檔案（<code>page.js</code>、<code>page.jsx</code> 或 <code>page.tsx</code>），就是造訪那條路由時要顯示的畫面。上面那三條 React 路由，在 Next.js 裡只需要兩個資料夾 <code>about</code>、<code>contact</code>，再加上一個根目錄的 <code>page.js</code>，而且不用安裝任何路由套件。</p>
+
+<table>
+<thead>
+<tr><th></th><th>React Router</th><th>Next.js 檔案路由</th></tr>
+</thead>
+<tbody>
+<tr><td>路由登記方式</td><td>在設定檔手寫 <code>&lt;Route&gt;</code></td><td>建立資料夾，放進 <code>page</code> 檔</td></tr>
+<tr><td>需要外部套件嗎</td><td>需要 <code>react-router-dom</code></td><td>內建，不用安裝</td></tr>
+<tr><td>巢狀關係怎麼表達</td><td>標籤一層層嵌套</td><td>資料夾一層層嵌套</td></tr>
+<tr><td>路由真相在哪</td><td>設定檔＋檔案樹兩份</td><td>只有檔案樹一份</td></tr>
+</tbody>
+</table>
+
+<h2>動手：一個資料夾就是一條路由</h2>
+
+<p>假設我們要 <code>/contact</code> 這條路由。做法就是：在 <code>app/</code> 底下建立一個 <code>contact/</code> 資料夾，裡面放一個 <code>page.tsx</code>，內容就是一個普通的 React 元件：</p>
+
+<pre data-source="sources/next-js/20261004/EBOOK.pdf#Routing"><code>export default function Contact() {
+  return (
+    &lt;main&gt;
+      &lt;h1&gt;Contact&lt;/h1&gt;
+    &lt;/main&gt;
+  )
+}</code></pre>
+
+<p>就這樣，不需要動任何設定。存檔之後回到瀏覽器，網址列輸入 <code>/contact</code>，畫面就會切到這個元件，而且不用手動重新整理，這是 Next.js 的 Fast Refresh 在即時套用你的修改。同樣地，把上面的 <code>contact</code> 換成 <code>about</code>、把 <code>&lt;h1&gt;</code> 換成 <code>About</code>，就得到 <code>/about</code>。</p>
+
+<p>這裡有個容易踩的小地方：<strong>資料夾名字會原封不動變成 URL</strong>。所以請用小寫，並遵循 kebab case（用連字號分隔單字，例如 <code>sign-in</code>、<code>ask-question</code>），不要寫成 <code>SignIn</code> 或 <code>sign_in</code>。你怎麼命名資料夾，路由就長怎樣，兩者沒有模糊空間。</p>
+
+<h2>為什麼看資料夾就能看懂路由</h2>
+
+<p>這個設計最實用的地方，是它讓「這條路由在哪裡」和「這個頁面在做什麼」變成同一個問題。打開任何 Next.js 專案的 <code>app/</code> 資料夾，你不需要先找到某個 router 設定檔才能知道網站有哪些頁面，資料夾的形狀就是路由的形狀。</p>
+
+<p>這一點在審查 AI 產出的架構時特別好用。如果 AI 說它做了一個「商品詳情頁」，你只要去看 <code>app/</code> 底下有沒有對應的資料夾與 <code>page</code> 檔，就能立刻驗證。它無法靠嘴巴宣稱一條不存在的路由，因為路由必須真的以資料夾的形式落地。反過來，如果 <code>app/</code> 底下冒出一堆沒有 <code>page</code> 檔的資料夾，那多半只是還沒接上 UI 的空殼。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+Next.js 的檔案路由只有兩條規則：資料夾定義 URL 區段，<code>page</code> 檔定義該區段的 UI。它把 React Router 那種「一份要手動維護的路由設定」換成「資料夾結構本身就是路由」，所以不需要外部套件，路由的真相也只有一份：檔案樹。資料夾命名要小寫、用 kebab case，因為它會直接變成 URL。
+</blockquote>
+
+<p>現在你已經會用資料夾造出單層的靜態路由了。但真實網站幾乎都有像 <code>/projects/list</code> 或 <code>/dashboard/settings</code> 這種多層路徑，而且每一頁還要共用導覽列。下一節就看巢狀資料夾如何產生巢狀路由，以及 layout 如何包住一整段子樹。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./nested-routes-and-layouts.html">下一步：巢狀路由與巢狀 layout →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Next.js 檔案路由判斷「一條路由存不存在」的依據是什麼？" data-correct="1" data-explain="資料夾階層就是路由，資料夾裡有 page 檔就代表那條路由有畫面。">
+  <button class="opt">是否存在一份 routes 設定檔</button>
+  <button class="opt">是否存在對應的資料夾與 page</button>
+  <button class="opt">是否安裝了 router 相關套件</button>
+  <button class="opt">是否在 package 裡註冊過路徑</button>
+</div>
+
+<div class="quiz" data-question="要新增一條 /contact 路由，最基本要建立什麼？" data-correct="2" data-explain="在 app/ 下建 contact 資料夾，裡面放一個 page 檔即可。">
+  <button class="opt">在 App.js 貼一行 Route 標籤</button>
+  <button class="opt">在 next.config 註冊這個路徑</button>
+  <button class="opt">建立 contact 資料夾與 page 檔</button>
+  <button class="opt">安裝一個專屬的路由套件</button>
+</div>
+
+<div class="quiz" data-question="React Router 比 Next.js 檔案路由多出哪一項負擔？" data-correct="0" data-explain="React 需要外部套件並手動維護一份路由設定，Next.js 兩者都不需要。">
+  <button class="opt">要安裝並維護外部路由套件</button>
+  <button class="opt">要用資料夾表達巢狀的路由層級</button>
+  <button class="opt">要為每個頁面建立一個元件</button>
+  <button class="opt">要在瀏覽器上手動重新整理頁面</button>
+</div>
+
+<div class="quiz" data-question="為什麼資料夾名稱建議用小寫與 kebab case？" data-correct="3" data-explain="資料夾名稱會直接變成 URL 區段，命名規則等於路由的長相。">
+  <button class="opt">因為 Next.js 會自動轉換大小寫</button>
+  <button class="opt">因為大寫會拖慢建置的速度</button>
+  <button class="opt">因為路由套件要求這種命名法</button>
+  <button class="opt">因為資料夾名稱會直接變成 URL</button>
+</div>
+
+<div class="quiz" data-question="Next.js 檔案路由中，路徑的「巢狀關係」是用什麼表達的？" data-correct="1" data-explain="資料夾一層層嵌套，就對應 URL 一層層的區段。">
+  <button class="opt">用 Route 標籤的縮排層級</button>
+  <button class="opt">用資料夾的嵌套層級</button>
+  <button class="opt">用 page 檔的檔名順序</button>
+  <button class="opt">用 next.config 的設定順序</button>
+</div>
+
+<div class="quiz" data-question="審查一份 AI 宣稱做好的路由架構，最直接的做法是什麼？" data-correct="2" data-explain="路由必須以資料夾與 page 檔落地，直接檢查 app/ 樹最快也最準。">
+  <button class="opt">請 AI 再描述一次它的設計</button>
+  <button class="opt">檢查它有沒有安裝路徑套件</button>
+  <button class="opt">檢查 app/ 下的資料夾與 page</button>
+  <button class="opt">看看首頁有沒有正常顯示</button>
+</div>
+
+<div class="footer">
+  <p>next-js · Routing as a Filesystem · Step 1/5</p>
+  <p>讀到這裡有疑問，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

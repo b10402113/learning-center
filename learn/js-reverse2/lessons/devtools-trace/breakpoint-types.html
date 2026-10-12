@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>斷點怎麼下：行、事件監聽與 XHR 斷點</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>斷點怎麼下：行、事件監聽與 XHR 斷點</h1>
+<p class="meta">Step 3/5 · DevTools：斷點、請求堆疊與呼叫堆疊</p>
+
+<h2>學習目標</h2>
+<p>依「值在什麼時機、什麼位置產生」選對斷點種類，讓執行停在能觀察到加密值的地方。</p>
+
+<h2>前言：程式不會因為你盯著它就停下來</h2>
+<p>你已經用上一節的方法，找到了幾段疑似處理加密值的程式。你把那段程式打開，從頭到尾看了一遍，卻發現它寫得很順、一眨眼就跑完了，你根本來不及看某個變數在中途變成什麼。程式不會因為你盯著它就停下來。你必須在對的地方設一個斷點，強迫它在那一行暫停，把當下的狀態攤在你面前。</p>
+<p>但斷點不是只有「在某一行插一根旗子」這一種。DevTools 提供了好幾類斷點，用在不同的時機。下錯了種類，輕則程式根本不停，重則停在一個莫名其妙的時間點，讓你誤判方向。這一節要做的，就是讓你看著手上的線索，挑出正確的那一類斷點。</p>
+<p><strong>前置條件：</strong>你已經知道加密值可能在哪（Step 1），也知道怎麼用請求堆疊或關鍵字找到候選程式（Step 2）。你會打開 Sources 面板、看得到原始碼的行號。</p>
+
+<h2>你手上有哪些斷點可以用</h2>
+<p>這一節要比較的是三類最常用的斷點。它們的差別，用一句話講就是「你希望程式在什麼時機、什麼條件下停下來」。</p>
+<table>
+<thead>
+<tr><th>斷點種類</th><th>什麼時候停</th><th>典型適用時機</th></tr>
+</thead>
+<tbody>
+<tr><td>行斷點（Line breakpoint）</td><td>執行到某一行時</td><td>你已經知道（或強烈懷疑）處理這個值的那一行</td></tr>
+<tr><td>事件監聽斷點（Event listener breakpoint）</td><td>某個事件（如 click、腳本載入）發生時</td><td>你需要在頁面程式執行之前就先停住、插旗</td></tr>
+<tr><td>XHR／Fetch 斷點</td><td>送出或收到非同步請求時</td><td>你知道這個值是由哪個 XHR／Fetch 請求送出的</td></tr>
+</tbody>
+</table>
+<p>三者的起點不同：行斷點從「位置」出發，事件監聽斷點從「事件」出發，XHR 斷點從「請求」出發。你的線索是哪一種，就優先選哪一種。</p>
+
+<h2>行斷點：當你知道大概在哪一行</h2>
+<p>行斷點是最直覺的一種。你在原始碼左邊的行號上點一下，那一行就出現一個藍色標記；之後程式每次執行到那一行，都會暫停。它適合你已經用關鍵字搜尋或請求堆疊，縮小到某一段程式時使用。</p>
+<p>下面這個小檔案就是最單純的示範。它依序做三件事：把 <code>x</code> 設成 1、印出來，然後換 <code>y</code>、再換 <code>z</code>。如果你在第二行 <code>console.log(x)</code> 按下行斷點，重新載入後程式就會停在那一行，你可以在 Console 或滑鼠移上去看到 <code>x</code> 此刻等於 1。</p>
+<pre data-source="sources/js-reverse2/20261005/Day21/10 JS的断点.js"><code>var x = 1
+console.log(x)
+
+var y = 2
+console.log(y)
+
+var z = 3
+console.log(z)</code></pre>
+<p>行斷點的限制也很明確：你必須先知道「哪一行才值得停」。如果整份檔案被壓縮成幾萬行、好幾段程式擠在同一行，那麼在那一行下斷點會顯得太粗，你得改用條件式斷點（只在此條件成立時才停），或改用下面兩類從事件或請求出發的斷點。</p>
+
+<h2>事件監聽斷點：在頁面程式跑之前先停住</h2>
+<p>有些時候，你要處理的值在頁面一載入的瞬間就被算好了。等你手動打開 Sources、找到地方、設好斷點，一切早就結束了。這種情況下，行斷點幫不上忙，你需要的是「在事件發生時就停住」的斷點。</p>
+<p>事件監聽斷點掛在「某個事件」上。例如示範頁面把一段程式綁在標題的點擊事件上，只要有人點標題就會執行：</p>
+<pre data-source="sources/js-reverse2/20261005/Day22/01 断点和请求堆栈.html"><code>&lt;h3 onclick="test01()"&gt;断点的使用和请求堆栈&lt;/h3&gt;</code></pre>
+<p>如果你想在「點擊發生、但還來不及執行裡面的程式」時就停住，可以在 Sources 面板的 Event Listener Breakpoints 裡勾選對應的事件。這樣一來，事件一被觸發，程式會先停在事件處理的入口，你再一步一步往下走。</p>
+<p>這一類斷點還有一個關鍵用途：站在「頁面自己的程式開始執行之前」。當你想要攔截、改寫某個原生 API（例如 <code>atob</code>）時，必須在頁面程式還沒用到它之前就先動手；而這個時機點只有靠事件監聽斷點才抓得住。切記，一旦你重新整理頁面，剛剛設好、還沒生效的改動就會全部重來，所以這類操作通常是「設斷點、暫停、動手、然後不再重整」。</p>
+
+<h2>XHR／Fetch 斷點：當你知道是哪個請求送出的</h2>
+<p>如果那個值是由某個非同步請求送出去的，最省事的做法是直接在「請求送出」這件事上設斷點。DevTools 可以設定在每次發出 XHR／Fetch 時暫停，甚至在網址符合某個片段時才暫停。當程式停在送出請求的那一刻，你就可以往上讀呼叫堆疊，看看這個請求的參數是被誰組出來的（這正是下一節要練的動作）。</p>
+<p>這一類斷點特別適合搭配 Step 2 的請求堆疊追蹤：你知道值在請求資料裡，卻不確定是哪段程式組的，那就讓「送出請求」這個動作自己把程式停下來，你就不必先猜是哪一行。</p>
+
+<h2>判別問句：該下哪一種？</h2>
+<ol>
+<li>你已經知道（或大概知道）處理這個值的那一行在哪嗎？知道，就下行斷點，最快。</li>
+<li>這個值是在頁面載入的瞬間就被算好的嗎？是，就用事件監聽斷點，搶在頁面程式執行前停住。</li>
+<li>這個值是某個 XHR／Fetch 請求送出的嗎？是，就在那個請求上設 XHR 斷點，從發送點往回追。</li>
+</ol>
+<p>如果三個問題都沒有明確答案，通常表示你還沒定位到候選程式，該回去把 Step 2 的搜尋再收窄一點，而不是隨便下一根斷點碰運氣。</p>
+
+<h2>反例：這些時候選項會翻轉</h2>
+<p>行斷點最適合「你知道那一行」的情境，但當檔案被壓縮成超長的一行、或程式被混淆到處都是 <code>&amp;&amp;</code> 串接時，它會變得很不精準，此時改用 XHR 斷點或條件式斷點更實際。</p>
+<p>事件監聽斷點雖然能在事件發生時停住，但它的代價是「時機很難重現」：如果你設好之後重新整理了頁面，很多還沒生效的狀態就會消失。所以在做需要在「頁面程式之前」插旗的操作時，動作要一次到位，不要中途重整。</p>
+<p>XHR 斷點也不是萬靈丹。它只對「由 XHR／Fetch 送出的請求」有效；如果值是由頁面載入時的 <code>&lt;script&gt;</code> 帶出、或是使用者操作 DOM 後即時寫入某個欄位，那它就不會觸發，你得改用事件監聽或行斷點。</p>
+
+<h2>小結</h2>
+<blockquote>
+斷點要對應你的線索：知道「哪一行」就用行斷點；值在頁面載入瞬間就產生、需要搶在頁面程式前停住，就用事件監聽斷點；值由某個請求送出，就用 XHR／Fetch 斷點。混淆的長行會讓行斷點失準，重新整理會讓事件監聽的前置動作失效，非 XHR 送出的值則不吃 XHR 斷點。選錯種類，等於在錯的時間點按了暫停鍵。
+</blockquote>
+<p>斷點讓你停下來了，可是停下來只是開始。真正要緊的是：程式暫停的這一刻，你要怎麼從它身上問出「這個值是誰算出來的」？答案在右邊那個你一暫停就會亮起來的面板：Call Stack。下一節要把讀呼叫堆疊這個核心動作，一步步練起來。</p>
+
+<div class="lesson-nav">
+  <div><a href="./entry-search-methods.html">← 上一步：入口怎麼找：請求堆疊追蹤與關鍵字搜尋</a></div>
+  <div><a href="./call-stack-reading.html">下一步：讀呼叫堆疊：從暫停點追回加密函式 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="你已經知道處理加密值的大概行號，該優先使用哪一種斷點？" data-correct="0" data-explain="行斷點是「執行到某一行就停」，當你已知位置時最快、最直接。">
+  <button class="opt">在該行設定行斷點</button>
+  <button class="opt">在點擊事件上設事件監聽斷點</button>
+  <button class="opt">在所有 XHR 上設請求斷點</button>
+  <button class="opt">在頁面重新載入時設斷點</button>
+</div>
+
+<div class="quiz" data-question="值在頁面一載入的瞬間就算好了，來不及手動設行斷點，該改用什麼？" data-correct="2" data-explain="事件監聽斷點可以在事件（如腳本載入）發生時先停住，讓你搶在頁面程式執行前動手。">
+  <button class="opt">在 Console 直接印出結果</button>
+  <button class="opt">把整份程式碼另存再慢慢讀</button>
+  <button class="opt">事件監聽斷點搶先停住</button>
+  <button class="opt">在 Network 面板重新送出請求</button>
+</div>
+
+<div class="quiz" data-question="已知某個值是由一個 XHR 請求送出的，最省事的做法是在哪裡設斷點？" data-correct="1" data-explain="在該 XHR／Fetch 請求上設斷點，就能在送出請求的瞬間停住並往上追。">
+  <button class="opt">在頁面所有按鈕的事件上</button>
+  <button class="opt">在送出請求的那個 XHR 上</button>
+  <button class="opt">在程式的第一行設行斷點</button>
+  <button class="opt">在瀏覽器重新整理的事件上</button>
+</div>
+
+<div class="quiz" data-question="為什麼使用事件監聽斷點做事時，中途不該重新整理頁面？" data-correct="3" data-explain="需要在頁面程式之前插旗的操作，一旦重整就全部重來，還沒生效的狀態會消失。">
+  <button class="opt">重新整理會讓斷點清單全部遺失</button>
+  <button class="opt">重新整理會刪掉瀏覽器的 Cookie</button>
+  <button class="opt">重新整理會讓 XHR 斷點全部失效</button>
+  <button class="opt">重新整理會讓前置改動全部重來</button>
+</div>
+
+<div class="quiz" data-question="下列哪一種情況會讓「行斷點」變得不精準？" data-correct="2" data-explain="壓縮後的檔案把大量程式擠進同一行，行斷點就難以精確停在你想要的位置。">
+  <button class="opt">程式碼寫得簡短而清楚</button>
+  <button class="opt">函式命名很長又難懂時</button>
+  <button class="opt">檔案被壓縮成超長一行</button>
+  <button class="opt">程式裡有很多註解說明時</button>
+</div>
+
+<div class="quiz" data-question="下列哪一種值最不可能被 XHR／Fetch 斷點攔到？" data-correct="1" data-explain="由頁面載入時的 script 直接帶出、或操作 DOM 後即時寫入的值，不會經過 XHR，XHR 斷點不會觸發。">
+  <button class="opt">由頁面送出的搜尋請求帶的值</button>
+  <button class="opt">頁面載入時 script 帶出的值</button>
+  <button class="opt">由非同步請求送出的簽名值</button>
+  <button class="opt">送出 API 請求時附上的 token</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · DevTools：斷點、請求堆疊與呼叫堆疊 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

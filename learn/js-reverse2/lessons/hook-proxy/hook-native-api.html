@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>攔住原生函式：在頁面載入前 hook atob 與 document.cookie</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>攔住原生函式：在頁面載入前 hook <code>atob</code> 與 <code>document.cookie</code></h1>
+<p class="meta">Step 2/5 · Hook 與 Proxy 攔截</p>
+
+<h2>學習目標</h2>
+<p>照著瀏覽器操作順序，在頁面程式碼執行前把原生的 <code>atob</code> 與 <code>document.cookie</code> hook 起來，並確認攔得到每一次讀寫。</p>
+
+<h2>前言：要攔的不是你的函式，是瀏覽器自己的</h2>
+<p>上一節你已經會 hook 頁面裡的函式了：存下原函式、換上包裝，就能看到它被誰、用什麼參數呼叫。但你會遇到的目標站，關鍵的編碼、解碼往往不是自己寫的，而是直接呼叫瀏覽器原生的函式。例如很多站會用 <code>atob</code>（原生 base64 解碼函式）把一段字串解開，或反過來把 cookie 讀進來再加工。</p>
+<p>攔截這些原生 API 的困難，跟上一節不一樣：它們不是你定義的，而且很可能<strong>在你打開 DevTools 之前就已經被呼叫過</strong>了。所以這一節的重點不是新的程式碼技巧，而是一套操作順序：你必須搶在頁面自己的程式碼之前把 hook 裝好，而且中途不能重新整理頁面。搞懂這個時機，你才能真的攔到。</p>
+<p><strong>前置條件：</strong>你已經知道怎麼在 DevTools 裡開斷點、使用事件監聽器（DevTools 那個節點），也理解上一節「存下原函式、換上包裝」的骨架。</p>
+
+<h2>你要得到的結果</h2>
+<p>做完這一節的操作之後，當頁面每次呼叫 <code>atob</code>，或每次讀寫 <code>document.cookie</code>，Console 都會印出當下的參數與回傳值。你不需要一行一行讀它的原始碼，就能知道原生 API 被餵進什麼、又吐出了什麼。</p>
+
+<h2>動手前要先懂的兩件事</h2>
+<p>第一，<strong>時機</strong>。原生函式在頁面一開始載入時就可能被用到。如果你是在頁面跑完之後才裝 hook，那段早期的呼叫你根本攔不到。所以我們要用「事件監聽器斷點」讓瀏覽器在執行任何腳本<strong>之前</strong>先停下來，趁這個空檔把 hook 裝好。</p>
+<p>第二，<strong>不能重新整理</strong>。你 hook 的是「現在這個頁面」裡的函式。一旦重新整理，瀏覽器會重新載入一份全新的文件，你剛才在 Snippets 裡執行的 hook 就隨之消失，回歸成原生的函式。所以裝好之後，只能繼續執行、不能按重新整理。</p>
+
+<h2>操作步驟：先攔住執行，再裝 hook</h2>
+<ol>
+<li>開一個<strong>空白頁</strong>，並在這個空白頁上打開開發者工具。從空白頁開始，是為了不讓任何目標站的腳本提前跑掉。</li>
+<li>在 DevTools 的 Sources 面板裡，開啟<strong>事件監聽器斷點</strong>（Event Listener Breakpoints）中的 <strong>Script</strong> 類別。它的作用是：讓瀏覽器在執行腳本的第一行之前就暫停。</li>
+<li>造訪你要分析的目標頁。因為上一步的斷點，執行會停在頁面腳本開始之前，此時你有一個乾淨的空檔可以動手。</li>
+<li>在 Sources 面板的 <strong>Snippets</strong>（程式碼片段）區新增一段 hook 程式碼，替它打上一個斷點，然後執行它。這樣 hook 就裝好了。</li>
+<li>取消剛剛的 Script 事件監聽器，因為此時 <code>atob</code> 已經成功被 hook，不需要再靠斷點攔人了。切記<strong>不可重新整理頁面</strong>。</li>
+<li>放行讓頁面繼續執行，觀察 Console，確認每次 <code>atob</code> 被呼叫時都被記錄下來。</li>
+</ol>
+
+<h2>步驟 4 的內容：hook 原生 <code>atob</code></h2>
+<p>要放進 Snippets 的程式碼如下。<code>atob</code> 是瀏覽器內建、用來解碼 base64 資料的函式，這裡把它包起來：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code> _atob = atob;//保存原函数
+
+atob = function (str){
+    console.log("正在执行atob方法, 参数:", str);
+    let result = _atob(str);
+    console.log("正在执行atob方法, 返回值:", result);
+    return result;
+}</code></pre>
+<p>逐段看：<code>_atob = atob</code> 先把原生的 <code>atob</code> 存起來；接著把全域的 <code>atob</code> 換成一個新函式，它先印出收到的參數 <code>str</code>，用存起來的 <code>_atob</code> 算出結果，再印出回傳值，最後把結果 <code>return</code> 出去。對頁面來說，呼叫 <code>atob(str)</code> 的結果完全沒變，只是中間多了一層記錄。</p>
+
+<h2>同樣的手法：hook <code>document.cookie</code></h2>
+<p>cookie 不是函式，而是一個屬性，所以換成用屬性 hook 的寫法：用 <code>Object.defineProperty</code> 攔它的讀取（<code>get</code>）與設定（<code>set</code>）。操作步驟跟攔 <code>atob</code> 完全一樣。</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>_cookie = document.cookie;
+Object.defineProperty(document,'cookie',{
+    get(){
+        console.log("正在获取cookie:", _cookie);
+        return _cookie;
+    },
+    set(value){
+        console.log("正在设置cookie:", value);
+        _cookie = value;
+    }
+});</code></pre>
+<p><code>_cookie</code> 存下原本的 cookie 值；之後任何人讀 <code>document.cookie</code> 就會走 <code>get</code>，把當前值印出來再回傳；任何人寫 <code>document.cookie = ...</code> 就會走 <code>set</code>，把要寫入的值印出來。這樣一來，網站是什麼時候、寫了什麼 cookie 進去，你一目了然。</p>
+
+<h2>為什麼一定要用「頁面載入前」的斷點</h2>
+<p>你可能會想：直接在頁面跑完後，於 Console 貼上 hook 不行嗎？可以，但只能攔到「之後」的呼叫。原生 API 常常在頁面初始化的最早期就被使用，那時你的 hook 還沒裝上，最關鍵的那一次就被漏掉了。事件監聽器斷點的作用，正是把時間軸<strong>往前挪到頁面腳本執行之前</strong>，讓你在它第一次用到原生 API 之前就把包裝裝好。</p>
+
+<h2>預期結果與驗證</h2>
+<p>放行之後，只要頁面一用到 <code>atob</code>，Console 就會出現類似「正在執行 atob 方法，參數: ……」與「回傳值: ……」兩行。如果什麼都沒印，通常是三個原因之一：斷點開得太晚（頁面已經跑過）、中途重新整理了頁面、或這段腳本根本沒用到 <code>atob</code>。逐項回頭檢查就能定位。</p>
+
+<h2>小結</h2>
+<blockquote>
+要攔截瀏覽器原生 API（例如 <code>atob</code>、<code>document.cookie</code>），靠的不是新語法，而是<strong>時機</strong>：先用 Sources 裡的 Script 事件監聽器斷點讓頁面在執行腳本前暫停，趁空檔把 hook 裝進 Snippets 並執行，再取消斷點放行，而且全程不能重新整理。函式用「存原函式、換包裝」，屬性用 <code>defineProperty</code> 的 <code>get</code>／<code>set</code>，跟上一節一模一樣，只是這次對象是瀏覽器自己的東西。
+</blockquote>
+<p>攔得進去之後，新的問題馬上浮現：網站會不會察覺自己被攔了？會。而且最常見的檢查方式，就是比較函式的 <code>toString</code> 有沒有被動過手腳。下一節要講的就是這場貓捉老鼠，以及破解檢測時該改哪一層。</p>
+
+<div class="lesson-nav">
+  <div><a href="./hook-concept.html">← 上一步：Hook 是什麼：存下原本的，換上會回報的包裝</a></div>
+  <div><a href="./hook-detection-bypass.html">下一步：被偵測到了：toString 檢測與它的兩層破解 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 hook 原生 API 時，要用 Scripts 事件監聽器斷點？" data-correct="2" data-explain="事件監聽器斷點讓頁面在執行任何腳本之前先暫停，你才能趁空檔把 hook 裝好。">
+  <button class="opt">它可以自動幫你寫好 hook 程式碼</button>
+  <button class="opt">它可以讓網站的加密變慢一點</button>
+  <button class="opt">它讓頁面在執行腳本前先停下來</button>
+  <button class="opt">它可以繞過網站的所有登入驗證</button>
+</div>
+
+<div class="quiz" data-question="把 hook 放進 Snippets 並執行之後，為什麼不能重新整理頁面？" data-correct="1" data-explain="重新整理會載入一份全新的文件，Snippets 裡執行的 hook 隨之消失，函式回復成原生版本。">
+  <button class="opt">因為重新整理會被網站封鎖 IP</button>
+  <button class="opt">因為新文件會讓 hook 失效</button>
+  <button class="opt">因為 Snippets 會被瀏覽器刪除</button>
+  <button class="opt">因為 cookie 會全部被清空</button>
+</div>
+
+<div class="quiz" data-question="hook <code>atob</code> 的程式碼中，<code>_atob = atob</code> 這行的作用是什麼？" data-correct="3" data-explain="先把原生 atob 存起來，包裝才能呼叫它來取得真正的解碼結果。">
+  <button class="opt">把 atob 的參數印出來</button>
+  <button class="opt">把 atob 整個停用掉</button>
+  <button class="opt">把 atob 改名成 _atob 並刪除原函式</button>
+  <button class="opt">先存下原生函式以便轉呼叫</button>
+</div>
+
+<div class="quiz" data-question="要攔截 <code>document.cookie</code> 的讀取與寫入，該用什麼？" data-correct="0" data-explain="cookie 是屬性而非函式，用 Object.defineProperty 的 get 攔讀取、set 攔寫入。">
+  <button class="opt"><code>Object.defineProperty</code> 的 <code>get</code>／<code>set</code></button>
+  <button class="opt">把 cookie 改存到 localStorage</button>
+  <button class="opt">用 <code>setInterval</code> 每秒讀一次</button>
+  <button class="opt">在 Network 面板封鎖 cookie 請求</button>
+</div>
+
+<div class="quiz" data-question="如果放行後 Console 完全沒有 atob 的記錄，最可能是什麼原因？" data-correct="1" data-explain="最常見是斷點開得太晚、中途重新整理，或該頁面根本沒用到 atob。">
+  <button class="opt">因為 atob 已經被瀏覽器移除</button>
+  <button class="opt">斷點太晚、重新整理或沒用到</button>
+  <button class="opt">因為 Console 預設是關著的</button>
+  <button class="opt">因為 hook 只能攔函式不能攔屬性</button>
+</div>
+
+<div class="quiz" data-question="hook 原生 API 之後，對頁面原本的執行結果有什麼影響？" data-correct="3" data-explain="包裝會把原函式的結果原封不動 return，因此頁面的執行結果不變，只是多了記錄。">
+  <button class="opt">會讓頁面的加密結果全部改變</button>
+  <button class="opt">會讓頁面無法再發出任何請求</button>
+  <button class="opt">會讓頁面直接崩潰需要重開</button>
+  <button class="opt">結果不變，只是多了記錄</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · Hook 與 Proxy 攔截 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

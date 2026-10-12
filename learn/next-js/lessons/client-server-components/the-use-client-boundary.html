@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>「use client」這條線劃在哪裡？</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>「use client」這條線劃在哪裡？</h1>
+<p class="meta">Step 3/5 · Server vs Client Components</p>
+
+<h2>學習目標</h2>
+<p>能解釋 <code>"use client"</code> 如何把整個模組（連同它 import 的東西）標成 client 程式碼，並說明為什麼不能在 Client Component 裡塞 Server Component。</p>
+
+<h2>前言：那行字只影響一個元件，還是整個檔案？</h2>
+
+<p>上一節我們把兩種元件分清楚了，也知道加 <code>"use client"</code> 會讓元件變成 Client Component。但這裡有個很容易搞錯的直覺：很多人以為它就像一顆按鈕，按下去只改變「這一個元件」的身分。</p>
+
+<p>真正的規則比這個嚴格得多。<code>"use client"</code> 管的不是單一元件，而是<strong>一整個檔案模組</strong>，甚至會沿著 import 往外擴散。這一節要把這條線劃清楚，因為它是 Next.js 裡最常被寫錯、也最容易讓 bundle 無聲膨脹的地方。</p>
+
+<h2>"use client" 是一條分界線</h2>
+
+<p>你可以把 <code>"use client"</code> 想成伺服器程式碼與 client 程式碼之間的一條分界線。當你在一個檔案的最上方寫下它，這個檔案就被歸到 client 這一側；一旦這條邊界立起來，<strong>邊界裡的所有東西都會變成 client 程式碼。</strong></p>
+
+<p>這裡的「所有東西」是關鍵。當你在某個檔案裡用了 <code>"use client"</code>，這個檔案所 import 的其他模組，包括那些原本是 Server Component 的子元件，都會被當成 client 模組的一部分。換句話說，邊界不是畫在元件的邊緣，而是畫在模組的邊緣；凡是從 client 模組往下長出來的枝葉，全部都會被一起拉進 client 那一側。</p>
+
+<h2>用一個實驗看它怎麼擴散</h2>
+
+<p>我們把之前那個 Server Component 塞進 Client Component 裡，看看會發生什麼事。原本 ExampleClient 只顯示自己，現在讓它也 import 並渲染 ExampleServer：</p>
+
+<pre data-source="sources/next-js/20261004/EBOOK.pdf#Client Vs. Server"><code>"use client";
+
+import ExampleServer from "./ExampleServer";
+
+const ExampleClient = () =&gt; {
+  console.log("I'm Client Component :)");
+
+  return (
+    &lt;&gt;
+      &lt;div&gt;
+        &lt;p&gt;This an example client component&lt;/p&gt;
+      &lt;/div&gt;
+      &lt;ExampleServer /&gt;
+    &lt;/&gt;
+  );
+};
+
+export default ExampleClient;</code></pre>
+
+<p>存檔之後，先看終端機，三行日誌都在，這不意外。但接著打開瀏覽器的 Console，你會看到一個不太對勁的畫面：<strong>連 ExampleServer 那行「I'm Server Component」也出現在瀏覽器裡了。</strong>它不是應該只在伺服器端出現嗎？</p>
+
+<p>答案是，當你 import 一個 server 元件到 client 檔案裡，它就不再是純粹的 server 元件了。它被拉進了 client 模組，於是跟著整個 client 一起被送到瀏覽器、一起在瀏覽器裡執行。原本你以為它住在伺服器，實際上它被拖到了用戶端。</p>
+
+<h2>所以規則很簡單：不要在 Client Component 裡塞 Server Component</h2>
+
+<p>把上面的實驗收斂成一句話：<strong>不要把 Server Component 包在 Client Component 裡面。</strong>這聽起來有點反直覺。如果你從上往下組畫面，很自然會想把一個元件放進另一個元件裡。但在 Next.js 的模型裡，這個動作會直接抹掉那個 server 元件的伺服器身分。</p>
+
+<p>那如果畫面真的需要「有互動的外層」包住「需要讀資料的內層」怎麼辦？關鍵是別讓它們在 import 關係上變成父子。做法是讓 Server Component 留在外層，把 Client Component 當成子元件匯入；如果反過來有需求，也可以把 server 元件當作內容從外層傳進去，而不是從 client 檔案裡 import。這個組合技巧的完整細節會留到後面的專門章節，但現在你至少要知道：<strong>問題的根源是 import 的方向，不是元件本身。</strong></p>
+
+<p>回頭看看正確的擺法。只要兩個元件都在頁面層級被 import，它們就各自保有原本的身分：</p>
+
+<pre data-source="sources/next-js/20261004/EBOOK.pdf#Client Vs. Server"><code>import styles from './page.module.css'
+import ExampleClient from '@/components/ExampleClient'
+import ExampleServer from '@/components/ExampleServer'
+
+export default function Home() {
+    console.log("Where do I render?")
+
+    return (
+        &lt;main className={styles.main}&gt;
+            &lt;h2&gt;Welcome &lt;/h2&gt;
+            &lt;ExampleClient /&gt;
+            &lt;ExampleServer /&gt;
+        &lt;/main&gt;
+    )
+}</code></pre>
+
+<p>這樣一來，ExampleClient 依然是 client，ExampleServer 依然留在 server，兩者井水不犯河水。差別不在畫面上誰包住誰，而在 import 關係上誰把誰拉了進來。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>"use client"</code> 不是標記一個元件，而是標記一個檔案模組。它是伺服器與 client 之間的分界線，一旦立起來，這個模組以及它 import 的所有東西，包含子 server 元件，都會變成 client 程式碼。所以不要把 Server Component 放進 Client Component 裡；要保住 server 身分，就讓它在 import 關係上留在外層。
+</blockquote>
+
+<p>現在你懂了這條邊界的運作方式，也知道它會怎麼擴散。但有機制的知識還不足以應付每天的開發。真正要練的是：拿到一個元件，怎麼在三秒內判斷它該放哪一邊？下一節要用一個問題，把這個判斷變成可以反覆使用的流程。</p>
+
+<div class="lesson-nav">
+  <div><a href="./server-vs-client-anatomy.html">← 上一步：Server Component 與 Client Component 到底是什麼？</a></div>
+  <div><a href="./choosing-component-type.html">下一步：這個元件該放 Server 還是 Client？ →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="「use client」標記的真正範圍是什麼？" data-correct="2" data-explain="它標記的是整個檔案模組，而不是單一個元件。">
+  <button class="opt">只標記檔案裡最上面那個元件</button>
+  <button class="opt">只標記檔案裡有互動的那幾行</button>
+  <button class="opt">標記整個檔案模組的範圍</button>
+  <button class="opt">標記整個應用程式的所有頁面</button>
+</div>
+
+<div class="quiz" data-question="把 Server Component import 進 Client Component 檔案，會發生什麼事？" data-correct="1" data-explain="它會被當成 client 模組的一部分，跟著被送到瀏覽器執行。">
+  <button class="opt">它會被 Next.js 自動擋下來並報錯</button>
+  <button class="opt">它會變成 client 模組的一部分</button>
+  <button class="opt">它仍然只在伺服器端執行不變</button>
+  <button class="opt">它會被自動改寫成 Client Component 檔案</button>
+</div>
+
+<div class="quiz" data-question="實驗中，為什麼 server 元件的日誌跑進了瀏覽器？" data-correct="0" data-explain="因為它被 import 進 client 檔案，被拉進了 client 模組，一起送到瀏覽器。">
+  <button class="opt">因為它被拉進 client 模組一起送出</button>
+  <button class="opt">因為終端機把日誌錯誤地轉送了</button>
+  <button class="opt">因為 Next.js 把伺服器元件誤判了</button>
+  <button class="opt">因為瀏覽器可以連線回伺服器讀日誌</button>
+</div>
+
+<div class="quiz" data-question="要保住一個元件的 server 身分，最關鍵的是什麼？" data-correct="3" data-explain="重點是 import 的方向：別讓 client 檔案把 server 元件拉進來。">
+  <button class="opt">把它放在頁面的最上面位置</button>
+  <button class="opt">在它的檔案裡加上 use server</button>
+  <button class="opt">把它的檔名改成 .server.jsx</button>
+  <button class="opt">別讓 client 檔案 import 它</button>
+</div>
+
+<div class="quiz" data-question="下列哪一種擺法能讓兩個元件各自保住原本的身分？" data-correct="1" data-explain="讓它們都在頁面層級被 import，彼此之間沒有 import 關係。">
+  <button class="opt">把 server 元件 import 進 client 檔案裡</button>
+  <button class="opt">讓兩者都在頁面層級被 import</button>
+  <button class="opt">把 client 元件 import 進 server 檔案裡</button>
+  <button class="opt">把兩個元件合併成同一個檔案</button>
+</div>
+
+<div class="quiz" data-question="「use client」這條邊界對 bundle 的第一個影響是什麼？" data-correct="2" data-explain="被拉進 client 模組的程式碼都會被送進瀏覽器，讓 bundle 跟著變大。">
+  <button class="opt">讓伺服器的執行速度明顯變快</button>
+  <button class="opt">讓 HTML 不再需要經過伺服器</button>
+  <button class="opt">讓模組內的程式碼都被送進瀏覽器</button>
+  <button class="opt">讓資料庫連線自動切換到瀏覽器</button>
+</div>
+
+<div class="footer">
+  <p>next-js · Server vs Client Components · Step 3/5</p>
+  <p>讀到這裡有疑問，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

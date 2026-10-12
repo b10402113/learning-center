@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把瀏覽器 JS 搬到 Node 執行</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>把瀏覽器 JS 搬到 Node 執行</h1>
+<p class="meta">Step 4/5 · Node 執行、execjs 與 JS 前置知識</p>
+
+<h2>學習目標</h2>
+<p>說明瀏覽器 JS 在 Node 執行會壞在哪（<code>window</code> 對 <code>global</code>、Node 專屬符號外洩），並用假物件與 <code>toString</code> 標籤把環境補起來的起手式。</p>
+
+<h2>前言：同一段程式碼，換個地方跑就爆了</h2>
+<p>前面幾節我們把語言層面的工具備齊了：原型鏈幫你判斷成員掛在哪，描述符讓你讀懂並改寫屬性的讀寫行為。現在回到第一節留下的那條線：execjs 會把 JS 丟到 Node 執行，可是當你真的把網站上那段加密程式搬過去，十之八九會直接報錯。</p>
+<p>它報錯不是因為你抄錯，而是因為那段程式碼預設自己活在瀏覽器裡。它會去摸 <code>window</code>、去呼叫 <code>document</code>、去讀 <code>navigator</code>，而這些東西在 Node 裡根本不存在。這一節要講清楚這個落差從哪來，以及面對它時最標準的第一招：用手刻的假物件把瀏覽器環境「補」出來。</p>
+
+<h2>落差一：頂層物件不一樣</h2>
+<p>在瀏覽器裡，所有在全域寫下的變數、函式，最後都掛在 <code>window</code> 這個頂層物件上；<code>window</code> 就是瀏覽器的全域物件。到了 Node，這個頂層物件換成了 <code>global</code>，而 Node 裡並沒有 <code>window</code>。</p>
+<p>所以一段在瀏覽器裡理所當然的程式，搬到 Node 後只要寫到 <code>window.xxx</code>，就會立刻因為「window is not defined」而停擺。最常見的修補方式，是先宣告 <code>window</code> 這個名字，讓它指向 Node 的全域物件，這樣原本寫給瀏覽器的全域變數，就會落在同一個地方。</p>
+
+<h2>落差二：Node 專屬的符號會外洩</h2>
+<p>反過來，Node 也有瀏覽器沒有的東西，例如 <code>global</code>、<code>process</code>、<code>Buffer</code>、<code>__dirname</code>、<code>__filename</code>。這些符號在瀏覽器環境下應該是不存在的。網站的偵測程式碼很常拿它們來反問一句：「如果 <code>process</code> 存在，那你就不是在瀏覽器，而是在自動化工具裡。」</p>
+<p>要躲過這種檢測，最直白的一招就是把它們刪掉。這正是最小的 Node 環境清理範例在做的事：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day19-Day20：逆向核心案例解析5/01 node.js理解.js"><code>delete global
+
+delete process</code></pre>
+<p>刪掉之後，腳本再怎麼探測 <code>global</code> 或 <code>process</code>，都會得到「不存在」的結果，於是它願意相信自己在瀏覽器裡。要注意的是，這只是把最顯眼的兩個符號藏起來，真實網站可能還會檢查更多東西，這就是完整的補環境要處理的事了。</p>
+
+<h2>落差三：裸賦值會長成全域變數</h2>
+<p>還有一個容易誤會的地方。在 JS 裡，如果你不寫 <code>let</code>、<code>const</code> 或 <code>var</code>，直接寫 <code>x = 100</code>，這個 <code>x</code> 會變成全域變數，掛在當下的頂層物件上。在瀏覽器裡它掛到 <code>window</code>，在 Node 裡它掛到 <code>global</code>。</p>
+<p>也就是說：一旦你把 <code>window</code> 接到 <code>global</code>，那些裸賦值行為就會跟瀏覽器一致，因為兩邊其實是同一個頂層物件。這也是為什麼「先補一個 <code>window</code>」幾乎是每個補環境流程的開場白。</p>
+
+<h2>起手式：手刻一個 window 假物件</h2>
+<p>把 <code>window</code> 接到 <code>global</code> 是省事的做法，但有時候你想更精準地控制它，只給出腳本真正需要的那幾個成員。這時就手刻一個物件來冒充瀏覽器的 <code>window</code>。最小的版本可能長這樣：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day19-Day20：逆向核心案例解析5/02 前端常见对象.js"><code>window = {
+    addEventListener() {
+    },
+    toString: function () {
+        return '[object Window]'
+    }
+}</code></pre>
+<p>這裡放了兩樣東西。一個是空的 <code>addEventListener</code>，因為瀏覽器程式很愛用它註冊事件，先給一個什麼都不做的版本，避免它呼叫時報錯。另一個是 <code>toString</code>，這個才是關鍵，下面會單獨講。</p>
+<p>另外，瀏覽器裡 <code>window</code> 還有一堆別名：<code>self</code>、<code>top</code> 其實都指向同一個 <code>window</code>。程式碼可能用其中任何一個名字去摸它，所以補的時候要讓它們全部指向同一個物件：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day19-Day20：逆向核心案例解析5/02 前端常见对象.js"><code>// window = self = top = {}
+self = top = window</code></pre>
+<p>少了這一行，腳本喊 <code>self.xxx</code> 時就會找不到東西。這類「別名要一起接上」的細節，是補環境裡最容易被忽略、卻最常導致失敗的地方。</p>
+
+<h2>toString 標籤：最常見的檢測點</h2>
+<p>為什麼前面那個假 <code>window</code> 要特地覆寫 <code>toString</code>？因為網站偵測環境時，很常用上一節學過的類別標籤來判斷真假。真正的瀏覽器 <code>window</code>，呼叫 <code>window.toString()</code> 會得到 <code>'[object Window]'</code>；你手刻的物件如果回傳別的東西，立刻就會露餡。</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day19-Day20：逆向核心案例解析5/02 前端常见对象.js"><code>if (window.toString() === '[object Window]') {
+    // 正常走
+    console.log("正常走")
+} else {
+    // 返回一个假值
+    console.log(window.toString())
+    console.log("返回一个假值")
+}</code></pre>
+<p>這段檢測的邏輯很單純：標籤對了就照正常流程走，標籤不對就刻意回傳一個假值，讓你後續拿到的資料全部是錯的。所以補環境時，把每個物件的 <code>toString</code> 標籤調到跟真瀏覽器一致，是必做的基本功。</p>
+
+<h2>小結</h2>
+<blockquote>
+瀏覽器 JS 搬進 Node 會壞，是因為頂層物件不同（<code>window</code> 對 <code>global</code>）、Node 專屬符號（<code>global</code>、<code>process</code> 等）會外洩。修補的第一步是把 <code>window</code> 接上或手刻一個假物件，讓 <code>self</code>、<code>top</code> 一起指向它，並覆寫 <code>toString</code> 讓類別標籤回傳 <code>'[object Window]'</code>，最後刪掉 Node 專屬符號來通過檢測。
+</blockquote>
+<p>這一節示範的是「最小可用的假物件」。真實網站要補的東西更多，後面有一個專門的節點會把八個前端物件與 Proxy 監測完整走一遍。現在你手上有 execjs 這座橋、有讀屬性的語言工具、也知道環境落差在哪，下一步就把這些全部湊起來，跟著微信公眾平台的密碼加密案例跑一次完整流程。</p>
+
+<div class="lesson-nav">
+  <div><a href="./object-toolkit-descriptors.html">← 上一步：Object 工具與屬性描述符</a></div>
+  <div><a href="./wechat-pwd-reverse-case.html">下一步：案例：微信公眾平台密碼加密 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="瀏覽器與 Node 的頂層全域物件分別是什麼？" data-correct="1" data-explain="瀏覽器用 window，Node 用 global，這就是搬移後報錯的根源之一。">
+  <button class="opt">瀏覽器用 global，Node 用 window</button>
+  <button class="opt">瀏覽器用 window，Node 用 global</button>
+  <button class="opt">兩者其實都用同一個 window</button>
+  <button class="opt">兩者其實都用同一個 global</button>
+</div>
+
+<div class="quiz" data-question="為什麼要執行 delete global 與 delete process？" data-correct="2" data-explain="這些是 Node 專屬符號，刪掉能讓腳本相信自己在瀏覽器環境。">
+  <button class="opt">為了讓程式跑得更快更省記憶體</button>
+  <button class="opt">為了刪除不需要的第三方套件</button>
+  <button class="opt">為了不讓腳本偵測到 Node 環境</button>
+  <button class="opt">為了讓 execjs 能編譯成功</button>
+</div>
+
+<div class="quiz" data-question="手刻假 window 時，為什麼要把 self 與 top 也接上？" data-correct="0" data-explain="它們都是 window 的別名，腳本可能用任一個名字存取，必須指向同一物件。">
+  <button class="opt">它們是 window 的別名要指向同一物件</button>
+  <button class="opt">它們是兩個獨立且不同的瀏覽器物件</button>
+  <button class="opt">它們是專門用來偵測環境的陷阱</button>
+  <button class="opt">它們只能用在 Node 的 global 上面</button>
+</div>
+
+<div class="quiz" data-question="window.toString() 回傳 '[object Window]' 的用途是什麼？" data-correct="3" data-explain="這是類別標籤，腳本用它判斷環境真假，標籤要與真瀏覽器一致。">
+  <button class="opt">把 window 轉換成可傳輸的字串</button>
+  <button class="opt">列出 window 上所有的屬性名稱</button>
+  <button class="opt">計算 window 物件的大小與數量</button>
+  <button class="opt">提供腳本判斷環境真假的標籤</button>
+</div>
+
+<div class="quiz" data-question="不寫 let 或 const 直接寫 x = 100，在 Node 會怎樣？" data-correct="1" data-explain="裸賦值會建立全域變數，在 Node 掛到 global 上，瀏覽器則掛到 window。">
+  <button class="opt">直接丟出語法錯誤無法執行</button>
+  <button class="opt">變成掛在 global 上的全域變數</button>
+  <button class="opt">只存在於當前函式的區域變數</button>
+  <button class="opt">被自動加上 var 變成區域變數</button>
+</div>
+
+<div class="quiz" data-question="假 window 裡放一個空的 addEventListener，用意是什麼？" data-correct="2" data-explain="先提供不報錯的版本，避免腳本註冊事件時因為函式不存在而中斷。">
+  <button class="opt">讓瀏覽器真的監聽這個頁面的事件</button>
+  <button class="opt">把事件處理函式的內容記錄下來</button>
+  <button class="opt">避免腳本呼叫時因不存在而報錯</button>
+  <button class="opt">加速事件註冊的整體執行速度</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · Node 執行、execjs 與 JS 前置知識 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

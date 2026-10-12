@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>案例：微信公眾平台密碼加密</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>案例：微信公眾平台密碼加密</h1>
+<p class="meta">Step 5/5 · Node 執行、execjs 與 JS 前置知識</p>
+
+<h2>學習目標</h2>
+<p>從一個 32 位密碼參數出發，用全域搜尋與斷點找回產生它的加密函式，再選擇用 Python 的 <code>hashlib.md5</code> 或 <code>execjs</code> 把演算法重現出來。</p>
+
+<h2>前言：把前面學的全部串成一次操作</h2>
+<p>上一節我們看到瀏覽器 JS 搬進 Node 會在哪裡出事，也知道補環境是怎麼回事。不過幸運的是，不是每個網站的加密都那麼難搞，當你認出對方用的只是標準演算法時，整個流程會乾淨很多。這個案例就是這種情況。</p>
+<p>目標是微信公眾平台登入頁的密碼加密。我們要做的，是從一個看不懂的 32 位字串出發，用 DevTools 找到產生它的函式，然後決定要用 execjs 把原碼跑起來、還是直接用 Python 重寫。這一步會把前面學的「定位入口」和「重現演算法」兩件事，實際在一個真站上走一遍。</p>
+<p><strong>前置條件：</strong>已安裝 PyExecJS 與 Node，並熟悉 DevTools 的基本操作（Network 面板、Sources 面板、設定斷點）。</p>
+
+<h2>第一步：先猜它是什麼</h2>
+<p>開發者工具打開，登入時抓封包，你會看到密碼被加密成一串固定長度的字。這裡的關鍵線索是長度：加密後的資料剛好是 32 位。在密碼學裡，32 個十六進位字元正是 MD5 摘要的標準長度，所以第一個合理的猜測就是：這大概是 MD5 加密。</p>
+<p>先猜不是偷懶，而是策略。認出可能的演算法，等於先圈出一個小範圍，接下來的搜尋與斷點才有方向，也才判斷得出最後該用哪種方式重現。</p>
+
+<h2>第二步：確認加密值被誰使用</h2>
+<p>接著看這串值出現在請求的哪個位置。這個案例裡，加密後的資料是被 <code>pwd</code> 這個請求參數使用的。知道參數名很重要，因為下一步的搜尋就是從它下手。</p>
+
+<h2>第三步：全域搜尋，定位加密環節</h2>
+<p>我們想知道「這串值是在哪裡被算出來的」。做法是在 Sources 面板對整個專案做全域搜尋，關鍵字就從參數名出發，搜 <code>pwd</code> 或更精準的 <code>pwd:</code>。這些關鍵字會把你帶到組裝請求參數的那段程式碼附近，加密函式的呼叫通常就在那裡。</p>
+<p>這裡用到的，就是逆向裡最基礎的入口搜尋手法。如果搜尋結果太多、太雜，可以再搭配做法二：用請求堆疊反推。從 Network 面板找到發送這個請求的那一筆，從它的發起堆疊跳進 JS，再往回追值是在哪一層被算出來的。</p>
+
+<h2>第四步：設斷點，找到真正的加密函式</h2>
+<p>找到可疑的位置後，在那一行設斷點，然後在頁面上觸發登入動作。執行暫停時，沿著呼叫堆疊往上追，最後會看到加密的內容是由一個 <code>P(t)</code> 的呼叫回傳的。也就是說，<code>P</code> 就是那個產生 32 位字串的函式，逆向的目標就是它。</p>
+<p>把 <code>P</code> 背後的實作整段抽出來之後，真正的演算法會現形。抽出來的核心長這樣（中間一大段位元運算的輔助函式先省略）：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#微信公众平台案例"><code>function R(t) {
+    return q(M(t))
+}
+…
+function getPwd(t, p, n) {
+    if (!p) {
+        if (!n) {
+            return R(t)
+        } else {
+            return M(t)
+        }
+    }
+    if (!n) {
+        return U(p, t)
+    } else {
+        return B(p, t)
+    }
+}
+
+// var result = getPwd('111111')
+// console.log(result)
+
+// 96e79218965eb72c92a549dd5a330112</code></pre>
+<p>看到 <code>R(t) → q(M(t))</code> 這種「先轉位元組、再跑壓縮函式、最後轉十六進位」的鏈，就幾乎可以確定是 MD5 的標準實作。寫死的註解 <code>96e79218965eb72c92a549dd5a330112</code> 也印證了這一點，那正是 <code>'123456'</code> 的 MD5。</p>
+
+<h2>第五步：路線一，用 execjs 把原碼跑起來</h2>
+<p>既然原始函式已經抽出來了，最省事的方式是直接讓 Python 呼叫它。把抽出來的 JS 存成 <code>main.js</code>，用前面學過的四步流程編譯並執行：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#微信公众平台案例"><code>#1.导包
+import execjs
+#2.创建node对象
+node = execjs.get()
+#3.编译js文件返回上下文ctx对象(将js文件中的代码读取出来，被compile进行编译)
+fp = open('main.js','r',encoding='utf-8')
+ctx = node.compile(fp.read())
+#4.使用上下文对象ctx调用eval函数执行js文件中的指定函数即可
+result = ctx.eval('P("123456")')
+print(result)</code></pre>
+<p>呼叫字串裡用的就是斷點找到的那個 <code>P</code>（在整理過的版本裡叫 <code>getPwd</code>，差別只在命名）。這個路線的好處是不用讀懂整段位元運算，原碼照搬即可。</p>
+
+<h2>第六步：路線二，認出演算法就直接用 Python 重寫</h2>
+<p>由於我們已經確定它是標準 MD5，其實有更好的做法：直接用 Python 內建的 <code>hashlib</code>，一行都不用搬 JS：</p>
+<pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#微信公众平台案例"><code>from hashlib import md5
+pwd = '123456';
+obj = md5()
+obj.update(pwd.encode("utf-8"))
+
+bs = obj.hexdigest()
+print(bs)</code></pre>
+<p>跑出來一樣是 <code>96e79218965eb72c92a549dd5a330112</code>，跟第 1 步抓到的結果一致。這就是這個案例真正的價值：當演算法是標準的、你認得出來，純 Python 重寫又快又乾淨，也不必處理 Node 環境落差的問題。</p>
+
+<h2>最後檢查：兩條路線的取捨</h2>
+<p>回頭比較兩條路線。execjs 適合「演算法太客製、看不懂」的時候，把原碼整包丟進去跑就對了；但只要你能認出演算法，Python 重寫永遠是首選。判斷的第一個線索就是密文長度：32 位十六進位指向 MD5，其他長度則要先確認是 Base64 還是別的摘要，才不會猜錯方向。</p>
+<p>做完之後你會得到一個可重複呼叫的加密函式（不管是 Python 版還是 execjs 版），餵進不同密碼都能吐出對應的 32 位結果，可以直接塞進登入請求的 <code>pwd</code> 參數。到這裡，你已經能在一個真站上走完「抓包 → 定位入口 → 斷點 → 重現」的完整迴圈，這正是往後每個簽名案例的固定套路。</p>
+
+<h2>小結</h2>
+<blockquote>
+微信案例的流程是：抓包看到 32 位密文 → 猜 MD5 → 確認被 <code>pwd</code> 參數使用 → 全域搜尋 <code>pwd:</code> 或請求堆疊定位入口 → 設斷點找到回傳加密值的 <code>P(t)</code> → 抽出演算法。重現有兩條路：用 execjs 呼叫原碼（讀不懂時的兜底），或用 Python <code>hashlib.md5</code> 重寫（認得出標準演算法時的首選）。密文長度是判斷演算法家族的第一個線索。
+</blockquote>
+<p>五個步驟走完，你把 execjs 這座橋、原型與描述符這些閱讀工具、以及 Node 環境的落差全部串起來了。接下來可以進到「補環境與環境檢測」那個節點，把今天的最小假物件擴充成完整的八物件補丁，再往真實案例的簽名與加密前進。</p>
+
+<div class="lesson-nav">
+  <div><a href="./node-executes-browser-js.html">← 上一步：把瀏覽器 JS 搬到 Node 執行</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="看到密文剛好是 32 位十六進位字元，最可能的演算法是什麼？" data-correct="1" data-explain="32 位十六進位正是 MD5 摘要的標準長度，是判斷家族的第一個線索。">
+  <button class="opt">AES 的對稱加密密文</button>
+  <button class="opt">MD5 的摘要結果</button>
+  <button class="opt">RSA 的非對稱密文</button>
+  <button class="opt">Base64 編碼後的字串</button>
+</div>
+
+<div class="quiz" data-question="定位加密環節時，全域搜尋的關鍵字通常從哪裡下手？" data-correct="2" data-explain="從請求參數名出發，例如搜 pwd 或 pwd:，會帶你找到組裝參數的程式碼。">
+  <button class="opt">從網站的網域名稱開始搜尋</button>
+  <button class="opt">從瀏覽器的版本號開始搜尋</button>
+  <button class="opt">從請求的參數名開始搜尋</button>
+  <button class="opt">從伺服器的 IP 位址開始搜尋</button>
+</div>
+
+<div class="quiz" data-question="斷點暫停後，要怎麼確認哪個函式產生加密值？" data-correct="0" data-explain="沿呼叫堆疊往上追，看到回傳加密內容的呼叫，就是目標函式。">
+  <button class="opt">沿呼叫堆疊往上追蹤來源</button>
+  <button class="opt">重新整理頁面再看一次封包</button>
+  <button class="opt">把整份 JS 通讀一遍找答案</button>
+  <button class="opt">直接猜測常見的函式名稱</button>
+</div>
+
+<div class="quiz" data-question="用 execjs 重現加密值，eval 的字串該寫什麼？" data-correct="3" data-explain="要寫成函式呼叫的字串，例如 P(&quot;123456&quot;)，它才會在 JS 環境執行。">
+  <button class="opt">只寫函式名稱不加任何參數</button>
+  <button class="opt">寫成 Python 函式的呼叫語法</button>
+  <button class="opt">寫成待加密資料的檔案路徑</button>
+  <button class="opt">寫成函式呼叫的字串如 P(&quot;123456&quot;)</button>
+</div>
+
+<div class="quiz" data-question="確定演算法是標準 MD5 後，哪種重現方式最推薦？" data-correct="1" data-explain="標準演算法用 Python 的 hashlib 重寫，又快又乾淨，也不必處理環境落差。">
+  <button class="opt">照樣用 execjs 把原碼整包跑</button>
+  <button class="opt">用 Python 的 hashlib.md5 重寫</button>
+  <button class="opt">改用瀏覽器自動化送出登入</button>
+  <button class="opt">用代理伺服器攔截並改寫請求</button>
+</div>
+
+<div class="quiz" data-question="什麼情況下 execjs 會比 Python 重寫更合適？" data-correct="2" data-explain="演算法高度客製、看不懂時，execjs 把原碼整包跑起來是最快的兜底。">
+  <button class="opt">演算法很短且一看就懂的時候</button>
+  <button class="opt">只需要計算一次結果的時候</button>
+  <button class="opt">演算法客製到讀不懂的時候</button>
+  <button class="opt">密文長度剛好是 32 位的時候</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · Node 執行、execjs 與 JS 前置知識 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

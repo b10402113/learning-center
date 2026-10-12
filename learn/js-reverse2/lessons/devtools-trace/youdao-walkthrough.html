@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>整套跑一遍：有道翻譯 sign 與 mysticTime 的定位</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>整套跑一遍：有道翻譯 sign 與 mysticTime 的定位</h1>
+<p class="meta">Step 5/5 · DevTools：斷點、請求堆疊與呼叫堆疊</p>
+
+<h2>學習目標</h2>
+<p>對一個真實請求，標出哪些欄位是動態而必須重現的，並說明如何用請求堆疊／關鍵字搜尋把它們定位到產生它們的 JS。</p>
+
+<h2>前言：把前四步接回一個真的請求</h2>
+<p>你已經練過單一動作：知道值可能在哪（Step 1）、會選入口定位的方法（Step 2）、會依情境下對斷點（Step 3）、也會讀呼叫堆疊追回函式（Step 4）。但真實工作不會把這些拆開來考你，而是丟給你一個完整的請求，要你在腦中把整套流程跑一遍、規劃出「我接下來要怎麼追」。</p>
+<p>這一節就拿有道翻譯的一個實際請求當素材。它不是一個要你當場打開 DevTools 操作的練習，而是一道「紙上兵推」：看著這份被保存下來的請求，標出哪些欄位需要重現，再說明你會用哪條路去找出它們的產地。做完之後，你面對工作上任何一個被保護的請求，都能先用同樣的方式規劃，再動手。</p>
+<p><strong>前置條件：</strong>你已看完 Step 1 到 Step 4，知道請求資料／請求頭／Cookie 三個位置，也知道請求堆疊追蹤與關鍵字搜尋兩條路，以及行、事件監聽、XHR 三種斷點的差別。</p>
+
+<h2>第一步：看清這個請求長什麼樣</h2>
+<p>下面是重放這個請求的核心部分。它是一個 <code>POST</code>，送到 <code>https://dict.youdao.com/webtranslate</code>，內容型別是 <code>application/x-www-form-urlencoded</code>，也就是欄位用「&amp;」串接的形式放在請求資料裡（而不是 JSON）。</p>
+<pre data-source="sources/js-reverse2/20261005/Day22/03 有道翻译.py"><code>wd = "apple"
+
+data = {
+    'i': wd,
+    'from': 'auto',
+    'to': '',
+    'domain': '0',
+    'dictResult': 'true',
+    'keyid': 'webfanyi',
+    'sign': '1be3315fc3cd8097a033646862b6e5db',
+    'client': 'fanyideskweb',
+    'product': 'webfanyi',
+    'appVersion': '1.0.0',
+    'vendor': 'web',
+    'pointParam': 'client,mysticTime,product',
+    'mysticTime': '1704288976618',
+    'keyfrom': 'fanyi.web',
+    'mid': '1',
+    'screen': '1',
+    'model': '1',
+    'network': 'wifi',
+    'abtest': '0',
+    'yduuid': 'abcdefg',
+}
+
+response = requests.post('https://dict.youdao.com/webtranslate', cookies=cookies, headers=headers, data=data)</code></pre>
+<p>這段程式是「攻擊方已經把答案寫好」的版本，它直接帶著一個現成的 <code>sign</code> 去請求。但這正是逆向要面對的問題：那個 <code>sign</code> 是怎麼生出來的？如果你只是把這一串固定的 <code>sign</code> 抄下來重複用，只要換一個查詢的字、換一個時間，伺服器就會拒絕你。所以我們要先把「哪些欄位會變」找出來。</p>
+
+<h2>第二步：標出固定的與動態的欄位</h2>
+<p>把上面那串欄位逐一分類。分完，你的目標就清楚了。</p>
+<table>
+<thead>
+<tr><th>欄位</th><th>範例值</th><th>性質</th></tr>
+</thead>
+<tbody>
+<tr><td><code>i</code></td><td>apple</td><td>要查的字，由使用者決定，會變但不需還原</td></tr>
+<tr><td><code>sign</code></td><td>1be3315fc3cd8097a033646862b6e5db</td><td>32 位十六進位，需重現的目標</td></tr>
+<tr><td><code>mysticTime</code></td><td>1704288976618</td><td>毫秒時間戳記，每次不同，需重現的目標</td></tr>
+<tr><td><code>client</code></td><td>fanyideskweb</td><td>固定字串</td></tr>
+<tr><td><code>product</code></td><td>webfanyi</td><td>固定字串</td></tr>
+<tr><td><code>keyid</code></td><td>webfanyi</td><td>固定字串</td></tr>
+<tr><td><code>pointParam</code></td><td>client,mysticTime,product</td><td>一個很好的線索，見下段</td></tr>
+</tbody>
+</table>
+<p>先看 <code>sign</code>。它的長度是 32 個十六進位字元，這正是 MD5 這類摘要演算法的典型輸出格式。看到這種長度與字元集，第一懷疑就是「某幾個欄位被串起來後取了摘要」。再看 <code>mysticTime</code>，是一個十三位數字，符合毫秒級時間戳記的特徵，會隨時間改變，難怪換了時間就過不了。</p>
+<p>最有意思的是 <code>pointParam</code>，它的值是 <code>client,mysticTime,product</code>。這個欄位幾乎是在明示：這次簽名與 <code>client</code>、<code>mysticTime</code>、<code>product</code> 這三個欄位有關。它等於是把自己的配方洩漏了一半。這也是真實網站常見的疏忽。所以你的目標可以更精確地寫成：「找出把 <code>client</code>、<code>mysticTime</code>、<code>product</code>（可能還加上一個固定 key）串起來、再取摘要的那段程式。」</p>
+
+<h2>第三步：規劃入口定位：該走哪條路？</h2>
+<p>現在把 Step 2 的判別問句拿出來套。</p>
+<p>第一問：<strong>我看得到這個值被送出的請求嗎？</strong>看得到，就是這個 <code>webtranslate</code> 的 POST，而且它是由頁面的 JavaScript 用非同步請求送出的。所以請求堆疊追蹤可行：在 Network 找到這個請求，順著它的發送來源跳到發出請求的那段 JS，再往上追參數是怎麼被組出來。</p>
+<p>第二問：<strong>我知不知道任何相關的字？</strong>知道好幾個。參數名有 <code>sign</code>、<code>mysticTime</code>、<code>pointParam</code>；API 路徑片段是 <code>webtranslate</code>；演算法特徵是 <code>md5</code>。任何一個都值得直接在 Sources 全站搜尋。尤其是 <code>pointParam</code> 這個不常見的欄位名，往往一搜就命中。</p>
+<p>第三問：<strong>我知不知道大概用了哪種演算法？</strong>從 32 位十六進位猜是 MD5，所以直接搜 <code>md5</code> 也很合理。</p>
+<p>三問都有答案，實務上會兩條並用：<strong>先搜關鍵字</strong>（<code>sign</code>、<code>pointParam</code>、<code>md5</code>）快速把範圍縮到那幾段程式；如果搜不到（例如被打包工具改過名），<strong>再回到請求堆疊</strong>，沿著 <code>webtranslate</code> 這個請求的發送鏈硬把組裝點挖出來。</p>
+
+<h2>第四步：下斷點、讀堆疊</h2>
+<p>定位到候選程式之後，接著把 Step 3、Step 4 接上。因為這個值是 XHR 送出的，最省事的做法是在送出 <code>/webtranslate</code> 的那個請求上設 XHR 斷點；一送出請求，程式就會停在發送的那一刻。停下來之後，讀右邊的 Call Stack：往上一層層看，哪一層把 <code>client</code>、<code>mysticTime</code>、<code>product</code> 組進同一個字串，那一層就是簽名的入口。如果你偏好先掌握位置，也可以在搜到的那行 <code>sign = ...</code> 上設行斷點，直接停在賦值的那一刻。</p>
+<p>整個動作的節奏和 Step 4 的練習靶場一模一樣：從「值被送出去」的地方暫停，沿呼叫鏈往上游走，觀察值到哪一層才變成那串 32 位十六進位。那裡的函式，就是你要還原的目標。</p>
+
+<h2>第五步：怎麼確認你追對了</h2>
+<p>逆向不是找到一段「看起來像」的程式就算數，你得能驗證。驗證的方式是：假設你已經用 Python 重現了簽名邏輯，那就準備兩組不同的輸入（換一個 <code>i</code>、換一個 <code>mysticTime</code>），一組在瀏覽器裡讓它現算，一組用你的 Python 算，兩串 <code>sign</code> 若完全一致，才算真正追對。</p>
+<p>這一步之所以重要，是因為前面那份重放腳本剛好示範了錯誤的做法，它把一個固定的 <code>sign</code> 寫死。只要你不重現產生 <code>sign</code> 的邏輯，換個查詢字或換個時間就失效。能自己生出合法的 <code>sign</code>，才是這個節點真正要達成的能力。</p>
+
+<h2>做完長什麼樣：可驗證的結果</h2>
+<p>跑完這五步的規劃，你手上應該有一份清楚的清單：這個請求的動態欄位是 <code>sign</code> 與 <code>mysticTime</code>；<code>sign</code> 是 32 位十六進位、疑似某幾個欄位串接後的 MD5；定位走「先關鍵字搜 <code>sign</code>／<code>pointParam</code>／<code>md5</code>，必要時再請求堆疊追 <code>webtranslate</code>」；斷點用 XHR 或行斷點；確認方式是用 Python 重算並比對。你能說出這整份計畫，就代表這個節點的目標達成了。剩下的工作，是把真正的簽名公式還原出來，那會留給後面的案例節點。</p>
+
+<h2>小結</h2>
+<blockquote>
+面對一個真實的被保護請求，先做紙上兵推：把欄位分成固定的與動態的，動態的才是目標。有道翻譯的 <code>sign</code> 是 32 位十六進位、疑似 MD5，<code>mysticTime</code> 是毫秒時間戳記；<code>pointParam</code> 這個欄位幾乎把「client、mysticTime、product 參與簽名」的線索直接送上門。定位時先關鍵字搜 <code>sign</code>、<code>pointParam</code>、<code>md5</code> 縮小範圍，必要時再用請求堆疊沿 <code>webtranslate</code> 追發送鏈；斷點選 XHR 或行斷點；最後一定要用 Python 重算並比對，確認自己真的追對。這套「先規劃、再動手、最後驗證」的節奏，就是你之後面對工作上任何目標網站的第一步。
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./call-stack-reading.html">← 上一步：讀呼叫堆疊：從暫停點追回加密函式</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="有道翻譯這個請求中，下列哪兩個欄位是必須被重現的動態值？" data-correct="1" data-explain="sign 疑似摘要、mysticTime 是毫秒時間戳記，兩者每次不同，必須重現；其餘多為固定字串或使用者輸入。">
+  <button class="opt">i 與 keyfrom 兩個欄位</button>
+  <button class="opt">sign 與 mysticTime 兩個欄位</button>
+  <button class="opt">client 與 product 兩個欄位</button>
+  <button class="opt">keyid 與 appVersion 兩個欄位</button>
+</div>
+
+<div class="quiz" data-question="請求裡的 `pointParam` 值為 `client,mysticTime,product`，這個欄位在逆向時有什麼價值？" data-correct="2" data-explain="它等於洩漏了哪些欄位參與簽名，直接給出了目標欄位清單與搜尋線索。">
+  <button class="opt">它是伺服器用來檢查登入狀態的</button>
+  <button class="opt">它決定了使用者要查詢哪個字</button>
+  <button class="opt">它洩漏了參與簽名的欄位清單</button>
+  <button class="opt">它是瀏覽器自動補上的時間戳記</button>
+</div>
+
+<div class="quiz" data-question="看到 `sign` 是 32 個十六進位字元，最合理的第一個猜測是什麼？" data-correct="0" data-explain="32 位十六進位正是 MD5 這類摘要演算法的典型輸出，因此先懷疑它是取了摘要。">
+  <button class="opt">它是某種摘要的輸出值</button>
+  <button class="opt">它是毫秒級的時間戳記</button>
+  <button class="opt">它是使用者輸入的原始文字</button>
+  <button class="opt">它是伺服器種下的 Cookie 值</button>
+</div>
+
+<div class="quiz" data-question="為什麼在這個請求上，請求堆疊追蹤可行？" data-correct="3" data-explain="這個值由頁面的 XHR 送出，因此可以沿請求的發送來源跳到發送的 JS，再往回追組裝點。">
+  <button class="opt">因為這個請求完全沒有任何加密欄位</button>
+  <button class="opt">因為 sign 是使用者手動輸入進去的</button>
+  <button class="opt">因為伺服器回應裡直接附上了答案</button>
+  <button class="opt">因為這個值由頁面的 XHR 送出</button>
+</div>
+
+<div class="quiz" data-question="本節建議的實務順序是先用關鍵字搜、還是先用請求堆疊？" data-correct="2" data-explain="先搜 sign、pointParam、md5 快速縮小範圍；若搜不到（如被改名），再回到請求堆疊硬追發送鏈。">
+  <button class="opt">先讀完整份打包檔再決定</button>
+  <button class="opt">只用請求堆疊，關鍵字不准用的</button>
+  <button class="opt">先搜關鍵字，必要再用請求堆疊</button>
+  <button class="opt">兩者都不能用，只能靠通靈猜測</button>
+</div>
+
+<div class="quiz" data-question="為什麼「把固定的 sign 抄下來重複用」行不通？" data-correct="1" data-explain="sign 與每次查詢的字和時間有關，固定值只要換字或換時間就會被伺服器拒絕。">
+  <button class="opt">因為 sign 每次都會被瀏覽器自動清掉</button>
+  <button class="opt">因為換字或換時間後 sign 就不再有效</button>
+  <button class="opt">因為 sign 只能使用一次就會過期</button>
+  <button class="opt">因為伺服器根本不檢查這個欄位</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · DevTools：斷點、請求堆疊與呼叫堆疊 · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
