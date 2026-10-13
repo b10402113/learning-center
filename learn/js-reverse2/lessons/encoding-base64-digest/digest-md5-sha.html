@@ -8,26 +8,42 @@
 </head>
 <body>
 
-<h1>摘要演算法：MD5 與 SHA 家族</h1>
+<h1>看懂 MD5 與 SHA：摘要不是編碼，也不是加密</h1>
 <p class="meta">Step 4/5 · 編碼與摘要：URL、Base64、MD5/SHA</p>
 
 <h2>學習目標</h2>
-<p>說明摘要演算法不可逆、定長、決定性的三個特徵，並用 Python 的 <code>hashlib</code> 重現 MD5 與 SHA，以及加鹽的寫法。</p>
+<p>從封包中的陌生字串判斷它是否可能是摘要，理解摘要「不可逆、定長、決定性」的特徵，並用 Python 的 <code>hashlib</code> 重現 MD5、SHA 與加鹽寫法。</p>
 
-<h2>前言：那 32 個字元，為什麼解不回來</h2>
-<p>你抓包看到登入請求裡有個 <code>pwd</code> 欄位，值是 <code>e10adc3949ba59abbe56e057f20f883e</code>，剛好 32 個字元，全是十六進位。你想著「這大概是密碼被藏起來了」，於是拿各種解碼器輪番上陣：Base64 解出來是亂碼，URL 解碼沒反應。因為這段東西從一開始就不是「編碼」，而是「摘要」，它天生就設計成解不回去。</p>
-<p>前面兩節的 URL 編碼和 Base64 都是可逆的，目的是「換一種安全的形式搬運」。摘要演算法（hash，雜湊）的目的完全不同：它把任意長度的輸入，壓成一小段固定長度的指紋，而且刻意讓這個過程單向不可逆。這正是它能拿來當簽名、存密碼的原因。這一節要建立的，就是「看到一段摘要時，該去想什麼」的直覺。</p>
+<h2>前言：登入請求裡的 32 個字元，為什麼解不開？</h2>
+<p>你在 DevTools 的 Network 面板檢查登入請求，發現 <code>pwd</code> 欄位不是明文，而是 <code>e10adc3949ba59abbe56e057f20f883e</code>。它剛好有 32 個字元，而且全部由十六進位字元組成。</p>
+<p>第一個直覺可能是：「密碼被編碼了，只要找到正確的解碼器就能還原。」於是你試了 Base64，結果只得到亂碼；再試 URL 解碼，內容也沒有變化。</p>
+<p>問題不在解碼器選錯，而是這段內容從一開始就不是編碼。它是摘要，就像替資料壓上一枚指紋：你可以拿同一份資料再按一次，確認指紋是否一致，卻不能只看指紋就把原始資料還原。</p>
 
-<h2>摘要什麼時候會出現</h2>
-<p>在爬蟲與逆向的世界裡，摘要幾乎無所不在。最常見的是 <code>sign</code> 參數：網站把一串規則拼好的參數（例如按字母排序、加上一個固定密鑰）餵進 MD5 或 SHA，吐出一段十六進位，伺服器收到後用同樣規則重算一次來比對，就知道這個請求有沒有被竄改。另一種是拿來存密碼，資料庫只存摘要，不存明文。還有一種是校驗檔案有沒有被改過。</p>
-<p>這些用途都建立在摘要的三個性質上：不可逆、定長、決定性。以下逐一拆開。</p>
+<figure class="lesson-figure"><img src="./digest-md5-sha-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>性質一：不可逆</h2>
-<p>摘要演算法是單向的。你可以把明文算成摘要，卻沒辦法從摘要還原出明文，就算你知道對方用的是 MD5，也算不回去。原因是這個過程把大量資訊壓縮掉了：不管輸入是 6 個字元還是 6 GB，輸出都是固定幾十個字元，資訊只進不出。</p>
-<p>不過，「不可逆」不等於「打不破」。如果原始輸入是一個弱密碼（例如 <code>123456</code>），攻擊者可以拿常見密碼一個一個算摘要、做成對照表來比對，這叫撞庫或彩虹表。所以網站通常會加鹽（salt），在密碼前面或後面再接一段額外的字串，讓同一組密碼在每個網站算出來都不一樣，提高破解成本。</p>
+<p>把它放回「抓取 → 反爬 → 逆向」的大圖來看：抓取時，你先在封包裡發現 <code>sign</code> 或看似亂碼的欄位；遇到伺服器驗證時，這些欄位可能成為反爬門檻；進入逆向後，真正要追的便是網站用了哪種摘要，以及送進演算法前的字串如何組合。</p>
 
-<h2>性質二：定長</h2>
-<p>不同長度的輸入，輸出長度永遠固定。同一個演算法不會因為輸入變長，輸出也跟著變長。不同演算法的固定長度如下：</p>
+<h2>先分清楚：摘要和編碼在解決不同問題</h2>
+<p>前面介紹的 URL 編碼與 Base64 都可以逆向還原。它們的工作比較像替貨物換包裝，目的是讓資料能安全地通過特定傳輸環境；只要知道規則，就能拆開包裝取回原文。</p>
+<p>摘要演算法（hash，雜湊）做的事不同。它會把任意長度的輸入壓成固定長度的資料指紋，而且刻意設計成單向過程。它常被用於請求簽名、密碼儲存，以及檢查檔案是否被修改。</p>
+<p>因此，看到陌生字串時，不要一律往「解碼」的方向衝。若它符合摘要特徵，逆向的目標通常不是把它解回去，而是找出原始輸入與計算規則，然後重算出相同結果。</p>
+
+<figure class="lesson-figure"><img src="./digest-md5-sha-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>摘要會出現在哪裡？</h2>
+<p>在爬蟲與逆向情境中，常見的例子是 <code>sign</code> 參數。網站可能先按照規則排列參數，再接上一段固定密鑰，最後交給 MD5 或 SHA，得到一串十六進位摘要。</p>
+<p>伺服器收到請求後，會按照相同規則再算一次。兩邊結果相同，代表送來的資料符合預期；如果內容途中被改動，重新計算出的摘要也會不同。</p>
+<p>另一個用途是儲存密碼。資料庫保存摘要，而不是直接保存明文。摘要也能用來校驗檔案：只要檔案內容有變化，計算結果通常就會跟著改變。</p>
+<p>這些用途都建立在三個核心性質上：不可逆、定長與決定性。理解這三者，才能知道摘要適合做什麼，又不能拿它做什麼。</p>
+
+<h2>性質一：不可逆，但不代表猜不到</h2>
+<p>摘要演算法是單向的。你可以把明文算成摘要，卻無法從摘要直接還原明文；即使知道使用的是 MD5，也沒有對應的「MD5 解碼」可以把內容變回去。</p>
+<p>原因在於，大量輸入資訊已經在計算過程中被壓縮掉了。不論輸入只有 6 個字元，還是大到 6 GB，最後都只會留下固定長度的結果。這就像把一整本書壓成一枚小小的指紋，指紋可以拿來比對，卻裝不回原本的每一頁文字。</p>
+<p>不過，不可逆不等於無法被猜中。如果原始內容是 <code>123456</code> 這類常見弱密碼，攻擊者可以逐一嘗試候選密碼，計算每個候選值的摘要，再與目標結果比對。彩虹表則是預先整理好的摘要對照資料。</p>
+<p>因此，網站通常會加鹽（salt），也就是在密碼前後加入額外字串後再計算。不同的鹽會讓同一組密碼產生不同摘要，增加直接使用既有對照資料破解的成本。</p>
+
+<h2>性質二：輸入再長，輸出仍是固定長度</h2>
+<p>同一種摘要演算法的輸出長度固定，不會因為輸入內容變長，結果也跟著拉長。常見演算法的長度如下：</p>
 <table>
 <thead>
 <tr><th>演算法</th><th>輸出位元</th><th>十六進位字元數</th></tr>
@@ -39,13 +55,20 @@
 <tr><td>SHA-512</td><td>512</td><td>128</td></tr>
 </tbody>
 </table>
-<p>這張表是實戰最有用的線索。當你在封包裡看到一段十六進位是 32 個字元時，第一個該懷疑的就是 MD5；看到 40 個字元，先想 SHA-1。長度本身就是密碼學留下的指紋。</p>
+<p>這張表在查看封包時很實用。若某個欄位是 32 個十六進位字元，可以先懷疑它是 MD5；若是 40 個，則可以先檢查 SHA-1。字串長度就像演算法留在現場的鞋印，能幫你縮小範圍。</p>
 
-<h2>性質三：決定性</h2>
-<p>同一個輸入，永遠算出同一個摘要。今天算、明天算、換一台電腦算，結果都一模一樣。反過來說，只要輸入有一點點不同，輸出就會差非常多，哪怕只差一個空格，整段摘要也會面目全非。這條性質讓摘要成為「一致性檢查」的好工具：只要比對摘要，就知道兩份資料是不是完全相同。</p>
+<figure class="lesson-figure"><img src="./digest-md5-sha-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>在 Python 裡重現 MD5</h2>
-<p>Python 的 <code>hashlib</code> 提供了這些演算法。用法有兩種：一種是一次把整段資料丟進去算完；另一種是先建立物件、再一段一段 <code>update()</code> 餵資料，適合資料很大、要分次讀取的情況。下面這段程式碼示範加鹽的寫法，先在建構時餵入一段固定的鹽，再把真正的密碼 <code>123456</code> 交給 <code>update()</code>：</p>
+<p>但長度只是線索，不是最後證據。它適合用來提出候選演算法，不能單憑字元數就斷定答案。接下來仍要查看 JavaScript 原始碼，或用相同輸入重算並比對結果。</p>
+
+<h2>性質三：相同輸入，一定得到相同結果</h2>
+<p>摘要具有決定性。同一份輸入，無論今天或明天計算，也無論換到哪一台電腦，只要演算法與輸入位元完全相同，結果就會一致。</p>
+<p>相反地，只要輸入稍微改變，輸出通常就會變得完全不同。多一個空格、少一個字元，甚至只是參數排列順序不同，都可能讓整段摘要面目全非。</p>
+<p>這正是摘要適合拿來做一致性檢查的原因。兩份資料算出的摘要一致，就能用來確認內容是否相同；逆向簽名失敗時，也應優先檢查輸入字串，而不是只盯著演算法名稱。</p>
+
+<h2>用 Python 重現加鹽的 MD5</h2>
+<p>找到疑似摘要後，可以用 Python 的 <code>hashlib</code> 重現網站的計算結果。它有兩種常見用法：一種是一次把整段資料交給演算法；另一種是先建立摘要物件，再透過 <code>update()</code> 分段餵入資料。</p>
+<p>分段處理適合資料很大、需要分次讀取的情況，也能貼近網站逐段拼接簽名內容的寫法。以下程式先在建立 MD5 物件時放入固定的鹽，再把密碼 <code>123456</code> 交給 <code>update()</code>：</p>
 
 <pre data-source="sources/js-reverse2/20261005/Day20/06 摘要算法.py#L1-L28"><code>from hashlib import md5, sha1, sha256, sha512
 
@@ -55,8 +78,14 @@ m.update(data.encode())  # data字节
 …
 print(m.hexdigest())  # b7a4250495541312d48fc1553e40b0a0</code></pre>
 
-<p>這裡的鹽 <code>yuanLaoShiDaShuaiGe</code> 讓 <code>123456</code> 算出的結果不再是常見的 <code>e10adc3949ba59abbe56e057f20f883e</code>，而是 <code>b7a4250495541312d48fc1553e40b0a0</code>。也就是說，同樣的密碼在不同網站（不同鹽）會得到完全不同的摘要。</p>
-<p><code>update()</code> 是可以累加的：先餵一段、再餵一段，等於一次餵進它們串接起來的內容。下面的程式碼先 <code>update("123 ")</code>（注意結尾有一個空格）再 <code>update("456")</code>，結果等同於直接算 <code>"123 456"</code>：</p>
+<p>沒有這段鹽時，<code>123456</code> 常見的 MD5 結果是 <code>e10adc3949ba59abbe56e057f20f883e</code>。加入 <code>yuanLaoShiDaShuaiGe</code> 後，結果變成 <code>b7a4250495541312d48fc1553e40b0a0</code>。</p>
+<p>這個對比也說明了逆向時為什麼不能只知道「它用了 MD5」。你還需要找出鹽放在哪裡、各段資料如何排列，以及實際送進演算法的完整內容。</p>
+
+<figure class="lesson-figure"><img src="./digest-md5-sha-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2><code>update()</code> 會依序累加內容</h2>
+<p><code>update()</code> 可以呼叫多次。先餵入一段，再餵入另一段，效果等同於把兩段內容依原順序串接後一次計算。</p>
+<p>下面先送入 <code>"123 "</code>，注意結尾保留了一個空格，再送入 <code>"456"</code>。因此，它等同於計算 <code>"123 456"</code>，而不是 <code>"123456"</code>：</p>
 
 <pre data-source="sources/js-reverse2/20261005/Day20/06 摘要算法.py#L1-L28"><code>data = "123 "
 data2 = "456"
@@ -67,16 +96,21 @@ m.update(data2.encode())  # data字节
 print(m.hexdigest())
 print(m.digest())</code></pre>
 
-<p>這段程式碼同時示範了兩種輸出：<code>hexdigest()</code> 回傳十六進位字串，就是你在封包裡看到的那種；<code>digest()</code> 回傳原始位元組，用在需要把摘要當二進位資料繼續處理的時候（例如接進下一層加密）。</p>
+<p>這裡也示範了兩種輸出形式。<code>hexdigest()</code> 會回傳十六進位字串，也就是封包中最常見的樣子；<code>digest()</code> 則回傳原始位元組，適合把摘要當成二進位資料繼續處理，例如接進下一層加密。</p>
+<p>如果目標是比對封包中的十六進位欄位，通常先使用 <code>hexdigest()</code>。只有後續流程明確需要原始位元組時，才改用 <code>digest()</code>，否則兩種格式混用會讓比對看起來完全對不上。</p>
 
-<h2>換成 SHA 也是同一套</h2>
-<p>把上面的 <code>md5</code> 換成 <code>sha1</code>、<code>sha256</code> 或 <code>sha512</code>，用法完全一樣，只是輸出長度不同。也就是說，你在 JS 原始碼裡看到 <code>CryptoJS.MD5(...)</code> 就對應到 <code>hashlib.md5</code>，看到 <code>CryptoJS.SHA1(...)</code> 就對應到 <code>hashlib.sha1</code>。逆向時的重點通常不是演算法本身，而是「輸入字串是怎麼拼出來的」。</p>
+<h2>換成 SHA，真正難的仍是輸入內容</h2>
+<p>把前面的 <code>md5</code> 換成 <code>sha1</code>、<code>sha256</code> 或 <code>sha512</code>，操作方式相同，主要差別在輸出長度。</p>
+<p>在 JavaScript 原始碼中看到 <code>CryptoJS.MD5(...)</code>，可以用 Python 的 <code>hashlib.md5</code> 對照；看到 <code>CryptoJS.SHA1(...)</code>，則可對應到 <code>hashlib.sha1</code>。</p>
+<p>不過，辨認演算法通常只是入口。真正容易卡住的地方，是括號內的輸入究竟如何產生：參數有沒有排序、是否插入固定字串、空格是否保留，以及各段內容的串接順序。只要其中一處不同，最後結果就不會相同。</p>
 
-<h2>小結</h2>
+<h2>看到摘要時，該把注意力放在哪裡？</h2>
 <blockquote>
-摘要演算法把任意長度的輸入壓成固定長度的指紋，具備三個性質：不可逆（算不回明文）、定長（MD5 是 32 個十六進位、SHA-1 是 40 個）、決定性（同輸入永遠同輸出）。Python 用 <code>hashlib</code> 操作，<code>hexdigest()</code> 取十六進位字串、<code>digest()</code> 取原始位元組，<code>update()</code> 可以分段累加。實戰中它是 <code>sign</code> 參數與密碼儲存的主力，辨識它的第一條線索就是長度。
+<p>摘要會把任意長度的輸入轉成固定長度的資料指紋。它不可逆，但弱輸入仍可能被逐一猜測；它長度固定，因此可用 32、40、64 或 128 個十六進位字元作為初步線索；它具有決定性，所以輸入完全相同時，結果也一定相同。</p>
+<p>在 Python 中，可以用 <code>hashlib</code> 重現 MD5 與 SHA。<code>update()</code> 能分段累加輸入，<code>hexdigest()</code> 取得十六進位字串，<code>digest()</code> 則取得原始位元組。</p>
 </blockquote>
-<p>到這裡，你已經認識了 URL 編碼、Base64 和摘要三種東西。真正的挑戰是：封包裡那段陌生字串擺在眼前時，你怎麼在幾秒內決定它屬於哪一類、該用哪一招？下一節把這些線索收成一張判型表。</p>
+<p>把這個觀念接回前面的 URL 編碼與 Base64：編碼是在更換資料的表示方式，摘要則是在產生無法直接還原的指紋。逆向時若判斷它是摘要，就不要繼續尋找不存在的解碼器，而要沿著 JavaScript 的資料流，找出演算法、輸入內容與拼接規則。</p>
+<p>下一節會把 URL 編碼、Base64 與摘要的外觀及特徵放在一起，整理成封包判型時可以快速使用的線索。</p>
 
 <div class="lesson-nav">
   <div><a href="./base64-variants-data-uri.html">← 上一步：Base64 變體：URL-safe 與 Data URI 圖片</a></div>
@@ -91,35 +125,30 @@ print(m.digest())</code></pre>
   <button class="opt">可以，用 Base64 就能解開</button>
   <button class="opt">不行，除非知道金鑰長度</button>
 </div>
-
 <div class="quiz" data-question="看到一段 32 個字元的十六進位，最該優先懷疑是哪個演算法？" data-correct="0" data-explain="MD5 輸出 128 bit，換成十六進位正好是 32 個字元。">
   <button class="opt">MD5</button>
   <button class="opt">SHA-1</button>
   <button class="opt">SHA-256</button>
   <button class="opt">SHA-512</button>
 </div>
-
 <div class="quiz" data-question="摘要演算法的「定長」是什麼意思？" data-correct="2" data-explain="輸出的長度由演算法決定、固定不變，與輸入長短無關。">
   <button class="opt">輸入的長度必須固定不變</button>
   <button class="opt">輸出長度會隨輸入而變長</button>
   <button class="opt">輸出長度固定、與輸入無關</button>
   <button class="opt">輸出固定只有一種可能的值</button>
 </div>
-
 <div class="quiz" data-question="網站幫密碼「加鹽」的主要目的是什麼？" data-correct="1" data-explain="加鹽讓同一組密碼在不同網站算出不同摘要，提高撞庫的成本。">
   <button class="opt">讓摘要的計算速度變得更快</button>
   <button class="opt">讓弱密碼不容易被撞庫破解</button>
   <button class="opt">讓摘要的長度變得可以縮短</button>
   <button class="opt">讓使用者不需要記住密碼</button>
 </div>
-
 <div class="quiz" data-question="程式裡分兩次呼叫 update()，結果等同於什麼？" data-correct="3" data-explain="update 可以累加，分次餵等同於一次餵入兩段串接後的內容。">
   <button class="opt">等同於只算第一次的資料</button>
   <button class="opt">等同於把兩段摘要相加</button>
   <button class="opt">等同於只算第二次的資料</button>
   <button class="opt">等同於一次餵入兩段串接</button>
 </div>
-
 <div class="quiz" data-question=".hexdigest() 和 .digest() 的差別是什麼？" data-correct="0" data-explain="hexdigest 回傳十六進位字串，digest 回傳原始位元組。">
   <button class="opt">前者回傳字串、後者回傳位元組</button>
   <button class="opt">前者回傳位元組、後者回傳字串</button>

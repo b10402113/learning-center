@@ -8,23 +8,30 @@
 </head>
 <body>
 
-<h1>Hook 是什麼：存下原本的，換上會回報的包裝</h1>
+<h1>Hook：替函式與屬性裝上會回報的包裝</h1>
 <p class="meta">Step 1/5 · Hook 與 Proxy 攔截</p>
 
 <h2>學習目標</h2>
-<p>說出 hook 為什麼能攔到函式的輸入與輸出，並用「存下原本的、換上包裝的」骨架，對一般函式與物件屬性都寫出一個 hook。</p>
+<p>理解 hook 為什麼能攔到函式的輸入與輸出，並掌握「存下原本的、換上包裝」這個共同骨架。學完後，你會知道如何 hook 一般函式與物件屬性，也能判斷它適合用在什麼情況、又可能在哪裡失效。</p>
 
-<h2>前言：你知道有加密，卻不知道是誰算的</h2>
-<p>打開 DevTools 的 Network 面板，你會看到某個請求帶著一個像簽名的參數，例如 <code>sign</code>。你隱約知道它是被某個加密函式算出來的，但頁面載入了好幾支 JS，你既不知道那個函式叫什麼、在哪個檔案，也不知道它被誰、在哪一行呼叫。於是你開始用關鍵字搜尋、一行一行讀，讀到眼睛發酸，還是卡住。</p>
-<p>這種時候，與其「找」那支函式，不如讓它自己現身。JavaScript 有一種做法，可以在完全不改動原始程式碼的前提下，替某個函式或屬性裝一雙眼睛：它每次被讀、被寫、被呼叫時，都把參數和結果印出來。這個做法叫 <strong>hook</strong>（掛鉤）。學會它之後，你不用再猜函式在哪，只要 hook 在對的地方，程式一跑就自己告訴你答案。</p>
-<p><strong>前置條件：</strong>你應該已經能讀斷點與呼叫堆疊（DevTools 那個節點），並且理解函式與物件屬性的基本語法。</p>
+<h2>前言：請求抓到了，簽名是誰算的？</h2>
+<p>逆向通常不是一開始就埋頭讀 JavaScript。比較常見的路線是：先在 DevTools 的 Network 面板抓到請求，發現請求裡有反爬相關的簽名或加密參數，再回頭追查它是怎麼產生的。</p>
+<p>例如，你看到某個請求帶著 <code>sign</code>。你知道它可能由某個函式算出來，卻不知道函式叫什麼、藏在哪支 JS，也不知道是誰在什麼時機呼叫它。頁面載入的程式碼像一大捆纏在一起的電線，逐檔搜尋、逐行閱讀，常常看得眼睛發酸，還是找不到真正通電的那一條。</p>
+<p>這時可以換個方向：與其一路追著程式碼找，不如在可疑的函式或屬性旁架一台「行車記錄器」。每當它被呼叫、讀取或寫入，就把參數、結果與發生時機記下來。這種攔截方式叫做 <strong>hook</strong>（掛鉤）。</p>
+<p>在「抓取 → 遇到反爬 → 逆向定位」這條路線上，hook 位於定位階段。它不會自動替你破解演算法，但能把藏在執行流程裡的線索拉到 Console 眼前，幫你回答「資料從哪裡進來，又從哪裡出去」。</p>
 
-<h2>Hook 是什麼</h2>
-<p>Hook 是一種<strong>攔截並修改函式或方法行為</strong>的技術。你可以在原函式執行之前、執行之後插入自己的邏輯，甚至整段替換掉它的實作。它最初是給框架與外掛用的，讓你在不改動別人程式碼的前提下擴充功能；但對逆向來說，它真正的價值是另一件事：<strong>找出函式的入口，以及參數與回傳值的變化</strong>。</p>
-<p>為什麼這件事對逆向特別重要？因為加密參數的問題，八成不是「看不懂演算法」，而是「不知道這條線從哪裡牽過來」。Hook 把這個問題換成「程式跑一次，日誌自己記下來」。它有三個好處：不會侵入原始程式碼、可以在原功能上加東西、便於除錯與定位問題。</p>
+<figure class="lesson-figure"><img src="./hook-concept-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>核心骨架：存下原本的，換上包裝</h2>
-<p>所有 hook 都從一個很簡單的動作開始：<strong>先把原本的函式存到另一個變數，再把原本的名字重新指派成一個包裝函式</strong>。包裝函式會先記錄收到的參數，轉頭去呼叫存起來的原函式，再記錄它回傳的結果，最後把結果原封不動地交出去。</p>
+<p><strong>前置條件：</strong>你應該已經會使用 DevTools 的斷點與呼叫堆疊，並理解函式及物件屬性的基本語法。</p>
+
+<h2>Hook 解決的是定位問題</h2>
+<p>Hook 是一種<strong>攔截並調整函式、方法或屬性行為</strong>的技術。它可以在原函式執行前後插入自己的邏輯，也能整段替換原本的實作。框架與外掛會用它擴充功能；進行逆向時，我們則用它觀察程式實際怎麼跑。</p>
+<p>許多加密參數之所以難追，不一定是因為演算法太難，而是因為不知道參數從哪裡來、經過哪些函式，又在哪裡變成最後的結果。Hook 能把這條看不見的路線留下紀錄，讓程式執行一次，就交出一份參數與回傳值的日誌。</p>
+<p>它適合用在你已經鎖定可疑函式、方法或屬性，想觀察實際輸入與輸出的時候。如果連目標在哪個物件、哪條存取路徑都還不知道，hook 就沒有明確的下手點；此時仍要先靠 Network、搜尋、斷點或呼叫堆疊縮小範圍。</p>
+
+<h2>共同骨架：存下原本的，換上包裝</h2>
+<p>大多數 hook 都有同一個核心：<strong>先保存原本的內容，再把原本的名字指向一層包裝</strong>。</p>
+<p>以函式來說，包裝會先記錄傳入的參數，再呼叫保存下來的原函式。原函式算完後，包裝記錄回傳值，最後把結果原封不動地交還給原本的呼叫方。</p>
 
 <p>先看一個普通函式：</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>function add(a,b){
@@ -32,10 +39,10 @@
     return a+b;
 }</code></pre>
 
-<p>接著把原函式存起來，這是為了之後能呼叫它、又不去改動它內部的實作：</p>
+<p>接著保存原函式。這一步像是先留一把備用鑰匙，否則換上包裝後，就沒有辦法再回頭執行原本的邏輯：</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>_add = add;</code></pre>
 
-<p>然後把 <code>add</code> 這個名字換成包裝：</p>
+<p>最後，把 <code>add</code> 換成負責記錄的包裝函式：</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>add = function(a,b){
 	console.log("原函数调用前, 参数：", a, b);
     let result = _add(a,b)
@@ -43,13 +50,16 @@
     return result;
 }</code></pre>
 
-<p>這樣一來，任何呼叫 <code>add(1,2)</code> 的程式碼都不需要修改，但在結果產生前後，參數與回傳值都會被印出來。你可以把它想成把原本的店員請到後台休息，前台換一個會登記的店員：客人（呼叫方）完全沒感覺，但每一筆進出都被記了下來。原本的邏輯還在，只是外面多了一層。</p>
+<p>現在，原本呼叫 <code>add(1,2)</code> 的程式碼完全不必修改，卻會在 Console 留下參數與結果。對呼叫方而言，櫃台還是那個櫃台；只是櫃台外多了一位會登記進出資料的人。</p>
+<p>這種寫法的重點不是改變計算結果，而是保留原功能，同時增加觀察能力。如果你的目標只是知道 <code>add</code> 收到什麼、回傳什麼，這種包裝很合適；如果包裝忘了呼叫原函式，或沒有把結果傳回去，頁面原有流程就可能被你改壞。</p>
 
-<p>這裡有一個關鍵時機：<strong>hook 必須放在原函式被定義之後</strong>。如果太早執行，<code>_add</code> 在那個當下還是 undefined，包裝一被呼叫就會出錯。</p>
+<figure class="lesson-figure"><img src="./hook-concept-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>為什麼逆向要用它：找出誰呼叫了加密函式</h2>
-<p>瀏覽器載入一個頁面時，其實執行了非常多 JS 檔，而每個檔案裡又有大量函式。假設你已經鎖定某個叫 <code>add</code> 的加密函式，接下來想知道的是：它到底在哪些程式碼裡被呼叫？</p>
-<p>做法就是對它 hook。下面的例子裡，<code>a</code>、<code>b</code>、<code>c</code>、<code>d</code>、<code>e</code> 互相呼叫，最後一路呼叫到加密函式 <code>add</code>：</p>
+<p>時機也很重要：<strong>hook 必須放在原函式定義之後</strong>。如果執行得太早，當下的 <code>add</code> 還不存在，保存下來的內容就會是 undefined，之後呼叫包裝時便會出錯。</p>
+
+<h2>在 DevTools 裡觀察呼叫現場</h2>
+<p>假設你已經從 Network 的請求線索或斷點結果，鎖定一個名為 <code>add</code> 的可疑函式。接下來的問題不是它在哪裡宣告，而是：哪些程式碼會走到它？實際傳入的資料又是什麼？</p>
+<p>下面的 demo 裡，數個函式彼此呼叫，最後會走到作為加密函式示意的 <code>add</code>：</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课上代码/01 hook.js"><code>function a(){
   console.log('a');
 }
@@ -78,14 +88,16 @@ add = function (a, b){
   console.log('原函数执行后，结果', result)
   return result
 }</code></pre>
-<p>把這段放進頁面執行，再觸發一次頁面行為，你就會在 Console 看到 <code>add</code> 被呼叫的每一次記錄，包含傳進來的參數。原本要靠反覆讀碼才能猜的事，現在變成一份可讀的日誌。這就是 hook 在逆向裡最典型的用法：<strong>讓被鎖定的函式，把它的入口與參數自己報出來</strong>。</p>
+<p>把這段放進頁面執行，再觸發會走到 <code>add</code> 的頁面行為，Console 就會留下每次呼叫的參數與結果。原本要靠反覆讀碼推測的資料流，現在變成能直接觀察的執行紀錄。</p>
+<p>這正是 hook 在逆向裡最典型的用途：<strong>已經鎖定目標後，讓目標函式主動回報入口、參數與結果</strong>。如果還需要知道是哪一行呼叫它，則可以把 hook 的紀錄和 DevTools 的斷點、呼叫堆疊一起使用，而不是只看 Console 猜測。</p>
 
-<h2>同一套骨架，用在物件屬性上</h2>
-<p>函式可以 hook，物件的屬性也可以。假設有個物件長這樣：</p>
+<h2>同一個觀念，也能套在物件屬性上</h2>
+<p>函式會「被呼叫」，屬性則會「被讀取」或「被設定」。因此，屬性 hook 不會換上一個普通函式，而是分別準備 <code>get</code> 與 <code>set</code>，攔住讀寫兩個方向。</p>
+<p>先從這個物件開始：</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>let user = {
     "name": "波波",
 };</code></pre>
-<p>屬性沒有「被呼叫」這回事，它只有「被讀取」和「被設定」兩種操作。所以包裝要換成兩個動作：<code>get</code> 負責攔讀取，<code>set</code> 負責攔寫入。JS 提供 <code>Object.defineProperty</code> 來重新定義一個屬性，把它的讀寫導到我們準備好的函式上：</p>
+<p>JavaScript 提供 <code>Object.defineProperty</code>，可以重新定義屬性的存取方式。下面的程式先保存 <code>name</code> 原本的值，再把後續讀寫導向新的 <code>get</code> 與 <code>set</code>：</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>//1、创建一个对象
 let user = {
     "name": "波波",
@@ -112,9 +124,14 @@ Object.defineProperty(user, "name",{
 console.log(user.name)
 user.name = 'Jay'
 console.log(user.name)</code></pre>
-<p>你會發現它跟函式 hook 是同一個精神：<code>_name</code> 存的是原本的值（相當於「存下原本的」），<code>get</code>／<code>set</code> 則是換上的包裝。之後任何人讀 <code>user.name</code> 或寫 <code>user.name</code>，都會先經過這兩個函式。<code>Object.defineProperty</code> 的第三個參數叫屬性描述符，這裡只用到其中的 <code>get</code> 與 <code>set</code> 兩個欄位。</p>
+<p>這段程式與函式 hook 的精神完全相同。<code>_name</code> 保存原本的值；<code>get</code> 與 <code>set</code> 則是換上的包裝。之後只要有人讀取 <code>user.name</code>，就會經過 <code>get</code>；有人寫入新值，就會經過 <code>set</code>。</p>
+<p><code>Object.defineProperty</code> 的第三個參數稱為屬性描述符。這裡只使用其中的 <code>get</code> 與 <code>set</code>，分別處理讀取和設定。</p>
 
-<p>更妙的是，<strong>屬性原本不存在也能 hook</strong>。下面這個 <code>user</code> 一開始只有 <code>name</code>、沒有 <code>age</code>，但我們先把預設值存在 <code>_age</code>，再直接把 <code>age</code> 定義成一個可攔截的屬性：</p>
+<figure class="lesson-figure"><img src="./hook-concept-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>不存在的屬性，也能先設一個觀察點</h2>
+<p>屬性 hook 還有一個很實用的特性：<strong>即使屬性原本不存在，也能先把它定義出來</strong>。</p>
+<p>下面的 <code>user</code> 原本沒有 <code>age</code>。程式先把預設值放進 <code>_age</code>，再建立一個能攔截讀寫的 <code>age</code> 屬性：</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>//2、保存原属性
 _age = 18;
 
@@ -129,28 +146,35 @@ Object.defineProperty(user, "age",{
          _age = value;
     }
 });</code></pre>
-<p>這個能力在後面補環境時很重要：當某個進來的腳本一直讀一個「其實不存在」的屬性，你可以主動把它定義成會被記錄的屬性，看清楚它到底在期待什麼。</p>
+<p>這在後續補環境時很有用。當一段移入其他環境的腳本不斷讀取某個不存在的屬性，你可以先把那個屬性做成觀察點，看看腳本何時讀它、寫入什麼，又期待得到什麼。</p>
+<p>但這不是用來隨意猜測環境的捷徑。若連腳本要存取哪個屬性都不知道，仍然要先從錯誤訊息、斷點或程式碼找到具體目標，再決定要不要 hook。</p>
 
-<h2>函式 hook 與屬性 hook 的對照</h2>
+<h2>函式 hook 與屬性 hook 的取捨</h2>
 <table>
 <thead><tr><th></th><th>函式 hook</th><th>屬性 hook</th></tr></thead>
 <tbody>
-<tr><td>攔什麼</td><td>函式的呼叫</td><td>屬性的讀取與設定</td></tr>
-<tr><td>存下原本的</td><td><code>_add = add</code></td><td><code>_name = user.name</code></td></tr>
-<tr><td>換上的包裝</td><td>一個新的 function</td><td><code>defineProperty</code> 的 <code>get</code>／<code>set</code></td></tr>
-<tr><td>攔得到什麼</td><td>參數、回傳值</td><td>讀到的值、寫入的值</td></tr>
-<tr><td>能不能攔不存在的</td><td>不行，函式要先存在</td><td>可以，先定義出來就行</td></tr>
+<tr><td>攔截對象</td><td>函式呼叫</td><td>屬性的讀取與設定</td></tr>
+<tr><td>保存原本內容</td><td><code>_add = add</code></td><td><code>_name = user.name</code></td></tr>
+<tr><td>換上的包裝</td><td>新的 function</td><td><code>defineProperty</code> 的 <code>get</code>／<code>set</code></td></tr>
+<tr><td>可觀察資料</td><td>參數、回傳值</td><td>讀到的值、寫入的值</td></tr>
+<tr><td>目標不存在時</td><td>不能直接攔，函式必須先存在</td><td>可以先定義屬性再攔截</td></tr>
+<tr><td>適合時機</td><td>已鎖定可疑函式，想追輸入與輸出</td><td>已鎖定可疑屬性，想追資料何時被讀寫</td></tr>
 </tbody>
 </table>
 
-<h2>邊界：hook 攔的是「名字」</h2>
-<p>有一點要先講清楚，免得後面對不上。上面的 hook 改變的是「<code>add</code> 或 <code>user.name</code> 這個名字之後會指向誰」。如果某段程式碼在 hook 之前就把原函式存進自己的變數，之後它呼叫的就是那個舊的引用，你的包裝攔不到。這也是為什麼 hook 的時機很重要：要在正確的時間點、針對正確的存取路徑下手。</p>
+<h2>Hook 的邊界：你攔到的是存取路徑</h2>
+<p>Hook 並不是在整個 JavaScript 世界裡攔住某段邏輯。上面的做法改變的是 <code>add</code> 或 <code>user.name</code> 這條存取路徑之後會連到什麼。</p>
+<p>如果某段程式碼在 hook 之前，就已經把原函式保存到自己的變數裡，之後又直接呼叫那個舊引用，你換上的包裝便攔不到。這就像你在大門加裝刷卡機，但有人早已拿著另一扇側門的鑰匙進出；大門的紀錄自然不會出現他的足跡。</p>
+<p>因此，hook 能不能生效，取決於兩件事：時機是否夠早，以及目標程式是否真的經過你攔截的名字或屬性。當 Console 沒有任何紀錄時，不要立刻認定函式沒被呼叫；也可能是你 hook 得太晚，或攔錯了存取路徑。</p>
 
-<h2>小結</h2>
+<figure class="lesson-figure"><img src="./hook-concept-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把 Hook 放回逆向流程裡</h2>
 <blockquote>
-Hook 是在不改動原始碼的前提下，攔截函式或屬性進出的技術。它的骨架只有兩步：把原本的存到另一個變數，再把原本的名字換成一個會記錄、又會轉呼叫原本版本的包裝。函式靠換一個新的 function；屬性靠 <code>Object.defineProperty</code> 的 <code>get</code>／<code>set</code>，而且連原本不存在的屬性也能先定義出來攔。逆向時，它讓你不用再猜哪支函式在哪，只要 hook 在對的地方，程式一跑就把參數與結果自己報出來。
+<p>Hook 的核心不是「破解」，而是「觀察」。先從 Network 或斷點找到可疑目標，再保存原本的函式或值，換上一層會回報資料、同時維持原功能的包裝。</p>
+<p>函式 hook 觀察呼叫參數與回傳值；屬性 hook 透過 <code>Object.defineProperty</code> 的 <code>get</code>／<code>set</code> 觀察讀寫，甚至能先替不存在的屬性設下觀察點。兩者都建立在同一個觀念上：讓原本看不見的資料流，在程式實際執行時留下足跡。</p>
 </blockquote>
-<p>不過到目前為止，你 hook 的都還是「自己頁面裡定義的東西」。真正的目標站常把關鍵的編碼、解碼交給瀏覽器原生的函式，例如 <code>atob</code>；而且這些原生函式很可能在你打開 DevTools 之前就跑過了。下一節要處理的，就是怎麼在頁面程式碼執行之前，把這些原生 API hook 起來。</p>
+<p>目前的例子都是頁面自行定義的內容。真正的目標站也可能把編碼、解碼交給瀏覽器原生函式，例如 <code>atob</code>，而且它可能在你打開 DevTools 前就已經執行。下一節要處理的，就是如何在頁面程式碼執行以前，先把這些原生 API hook 起來。</p>
 
 <div class="lesson-nav">
   <div></div>
@@ -165,35 +189,30 @@ Hook 是在不改動原始碼的前提下，攔截函式或屬性進出的技術
   <button class="opt">存下原函式再換上記錄用的包裝</button>
   <button class="opt">用計時器每隔一秒讀一次變數</button>
 </div>
-
 <div class="quiz" data-question="為什麼 hook 一定要放在原函式定義之後？" data-correct="1" data-explain="太早執行時原函式還不存在，存起來的變數會是 undefined，包裝一呼叫就出錯。">
   <button class="opt">因為太早執行會被瀏覽器封鎖</button>
   <button class="opt">因為那時原函式還不存在</button>
   <button class="opt">因為函式只能在全域被定義</button>
   <button class="opt">因為 Console 還沒準備好</button>
 </div>
-
 <div class="quiz" data-question="想在某人讀取物件屬性時記錄下來，該用什麼？" data-correct="3" data-explain="Object.defineProperty 的 get 會在屬性被讀取時執行，set 則在設定時執行。">
   <button class="opt">把屬性改名成另一個名字</button>
   <button class="opt">用 console.log 印出整個物件</button>
   <button class="opt">把屬性值事先複製一份</button>
   <button class="opt"><code>Object.defineProperty</code> 的 <code>get</code></button>
 </div>
-
 <div class="quiz" data-question="關於 hook 一個「原本不存在」的屬性，下列哪個說法正確？" data-correct="0" data-explain="只要先用 defineProperty 把屬性定義出來（含預設值），就能攔截對它的讀寫。">
   <button class="opt">可以，先定義出來就能攔</button>
   <button class="opt">不行，屬性必須原本就存在</button>
   <button class="opt">不行，只能攔函式的呼叫</button>
   <button class="opt">可以，但會讓瀏覽器當掉</button>
 </div>
-
 <div class="quiz" data-question="下列哪種情況，hook 攔不到？" data-correct="2" data-explain="若程式在 hook 之前就存下原函式的引用，之後呼叫的是舊引用，包裝攔不到。">
   <button class="opt">呼叫方沒有傳任何參數進來</button>
   <button class="opt">函式回傳的是 undefined</button>
   <button class="opt">程式早一步存下了原函式引用</button>
   <button class="opt">屬性後來才被刪除掉</button>
 </div>
-
 <div class="quiz" data-question="逆向時 hook 一個加密函式，最主要的目的是什麼？" data-correct="1" data-explain="hook 讓加密函式在被呼叫時印出參數與結果，於是你能知道它被誰、用什麼參數呼叫。">
   <button class="opt">把加密速度改得更快一點</button>
   <button class="opt">知道它被誰、用什麼參數呼叫</button>

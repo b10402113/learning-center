@@ -307,3 +307,107 @@ updated: 2026-10-12
 - rs-cookie-version-suffix: unknown
 
 > probe skipped via /nodes js-reverse2/env-supplement skip-probe on 2026-10-12
+
+## cases-sign-hash — 案例：簽名與雜湊演算法
+
+- sign-canonical-string: unknown
+- sign-secret-salt: unknown
+- sign-hash-choice: unknown
+- sign-dynamic-fields: unknown
+- sorted-concat-salt-md5: unknown
+- case-insensitive-key-sort: unknown
+- nested-json-stringify-parity: unknown
+- cmp-to-key-custom-sort: unknown
+- fixed-order-concat-uuid-md5: unknown
+- sign-vs-url-encoding: unknown
+- double-url-encode-keyword: unknown
+- fixed-order-query-key-md5: unknown
+- mystictime-timestamp: unknown
+- two-track-python-vs-execjs: unknown
+- sha1-40-hex-identification: unknown
+- bundled-pure-js-sha1: unknown
+- noncestr-servertimestamp-fields: unknown
+- custom-hash-gtk: unknown
+- truncation-over-30-chars: unknown
+- execjs-for-custom-hash: unknown
+- webpack-loader-sign-module: unknown
+- sorted-serialize-sha1-then-md5: unknown
+- blueimp-md5-constants: unknown
+
+> probe skipped via /nodes js-reverse2/cases-sign-hash skip-probe on 2026-10-12
+
+## cases-symmetric-body — 案例：對稱與串流加解密
+
+- recognize-encrypted-payload-shapes: unknown
+- transport-variant-normalize: unknown
+- aes-cbc-pkcs7-decrypt: unknown
+- aes-cbc-zeropadding: unknown
+- cryptojs-words-array-key-iv: unknown
+- md5-derived-key-iv: unknown
+- key-equals-iv-shortcut: unknown
+- des-ecb-8byte-key: unknown
+- rc4-stream-custom-utf8: unknown
+- request-response-dual-keys: unknown
+
+> probe skipped via /nodes js-reverse2/cases-symmetric-body skip-probe on 2026-10-12
+
+## cases-asymmetric — 案例：非對稱（RSA）
+
+- rsa-sign-vs-encrypt: unknown
+- key-shape-pem-vs-modulus: unknown
+- extract-rsa-call-params: unknown
+- waimao-publickeyfrompem-oaep: unknown
+- waimao-oaep-md-mgf1-params: unknown
+- waimao-btoa-base64-wrap: unknown
+- womail-modulus-exponent-setpublic: unknown
+- womail-pkcs1-v15-hex-ciphertext: unknown
+- womail-hashpassword-hash-prefix: unknown
+- licaiwang-sha256withrsa-signature: unknown
+- licaiwang-private-key-in-bundle: unknown
+- compact-json-stringify-body: unknown
+- signature-header-request: unknown
+- private-key-in-frontend-failure: unknown
+- reuse-bundle-vs-python-reimplement: unknown
+
+> probe skipped via /nodes js-reverse2/cases-asymmetric skip-probe on 2026-10-12
+
+## cases-webpack — 案例：webpack 打包站實戰
+
+- load-order-loader-then-mods: unknown
+- webpackjsonp-chunk-merge: unknown
+- window-global-shim: unknown
+- env-stub-document-timers: unknown
+- module-id-probe-insertion: unknown
+- dd88-abc-exports: unknown
+- dd88-three-calls-b-c-a: unknown
+- loader-try-finally-cache-delete: unknown
+- cailianshe-w2yj-callable-export: unknown
+- womail-437-named-exports: unknown
+- womail-chunk-name-maps: unknown
+- export-shape-four-forms: unknown
+- default-interop-call: unknown
+- standalone-signer-model: unknown
+- call-bundle-vs-python-rewrite: unknown
+
+> probe skipped via /nodes js-reverse2/cases-webpack skip-probe on 2026-10-12
+
+## cases-dynamic-cookie — 案例：動態 cookie 與風控
+
+- two-request-loop: unknown
+- three-dynamic-inputs: unknown
+- grab-meta-ts-auto: unknown
+- inputs-change-per-request: unknown
+- placeholder-substitution: unknown
+- execjs-compile-call: unknown
+- harvest-first-cookie-pair: unknown
+- replay-with-data: unknown
+- pagination-clear-cookies: unknown
+- pdd-four-file-shape: unknown
+- entry-get-anti-content: unknown
+- hot-load-module-loader: unknown
+- update-server-time: unknown
+- anti-content-as-param: unknown
+- env-fixes-nano-fp-webdriver: unknown
+- locate-vm-ts-entry: unknown
+
+> probe skipped via /nodes js-reverse2/cases-dynamic-cookie skip-probe on 2026-10-12

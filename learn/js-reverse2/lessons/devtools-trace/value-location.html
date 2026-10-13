@@ -8,66 +8,105 @@
 </head>
 <body>
 
-<h1>逆向值放在哪：資料、請求頭與 Cookie</h1>
-<p class="meta">Step 1/5 · DevTools：斷點、請求堆疊與呼叫堆疊</p>
+<h1>逆向前先找位置：資料、請求頭，還是 Cookie？</h1>
+<p class="meta">Step 1/5 · 用 DevTools 鎖定被保護的請求參數</p>
 
 <h2>學習目標</h2>
-<p>說出加密值可能出現的三個位置（請求資料、請求頭、Cookie），並從 Network 面板認出哪個請求、哪個參數是被保護而需要重現的。</p>
+<p>這一節會用翻譯網站的實際請求，辨認加密值可能出現的三個位置：請求資料、請求頭與 Cookie。你也會練習從 Network 面板找出可疑的請求，判斷哪些參數需要重現。</p>
 
-<h2>前言：那串看不懂的字，是怎麼冒出來的？</h2>
-<p>你在翻譯網站上輸入一個單字、按下查詢，DevTools 的 Network 面板立刻跳出一筆 <code>webtranslate</code> 請求。點開一看，Payload 裡有一大串欄位，其中有個叫 <code>sign</code> 的值是一串 32 個字的十六進位，你完全看不懂它是怎麼來的；旁邊還有一個 <code>mysticTime</code>，每次重新查詢都會變。</p>
-<p>你的直覺是「趕快去找是誰算出這個 sign」。先等一下。在整條逆向流程裡，第一件該做的事不是找「誰算的」，而是先確認這個值「最後被放在哪裡」。這個順序不是龜毛。同樣一串十六進位，放在請求資料裡、藏在請求頭裡，還是塞在 Cookie 裡，之後要用的追蹤手法完全不一樣。這一節先把「值的位置」這件事講清楚，它是後面所有定位工作的起點。</p>
-<p><strong>前置條件：</strong>你已經會用 DevTools 打開 Network 面板、看得到單一請求的細節。有 HTTP 請求與回應的基本概念（方法、標頭、狀態碼、Cookie）。這一節不需要寫任何程式。</p>
+<h2>前言：先別急著鑽進上萬行 JavaScript</h2>
+<p>想像一下：你在翻譯網站輸入一個單字，按下查詢後，DevTools 的 Network 面板立刻跳出一筆 <code>webtranslate</code> 請求。</p>
+<p>點開 Payload，你看到一大串欄位。其中，<code>sign</code> 是一串 32 位的十六進位字元，完全看不出來源；旁邊的 <code>mysticTime</code> 更奇怪，每次查詢都會改變。</p>
+<p>這時很容易立刻衝去搜尋 <code>sign</code>，想從打包過的 JavaScript 裡找出「到底是誰算的」。但這就像看到包裹便急著追查寄件人，卻還沒確認包裹究竟放在門口、管理室，還是信箱裡。</p>
+<p>在「抓取 → 遇到反爬限制 → 逆向被保護參數」這條路上，逆向的第一個問題不是「誰算出這個值」，而是「這個值最後被放在哪裡」。它位於請求資料、請求頭或 Cookie，會直接決定接下來該沿哪條線索追查。</p>
+<p><strong>前置條件：</strong>你已經會開啟 DevTools 的 Network 面板，也能查看單一請求的細節；並且知道 HTTP 方法、標頭、狀態碼與 Cookie 的基本概念。這一節不需要寫程式。</p>
 
-<h2>先問「值在哪裡」，不要急著找「誰算的」</h2>
-<p>逆向一個被保護的參數，你手上唯一的線索，就是「這個請求送出去時長這樣」。你得先從這份請求裡挑出「哪個欄位是被保護的」，並記下它出現的位置。原因很簡單：位置決定了你要用哪條路去追它。</p>
-<p>舉個例子。如果值放在請求資料裡，而這個請求是由頁面的 JavaScript 用 XHR 或 Fetch 送出的，那你就可以沿著「哪一段 JS 發了這個請求」一路往回追。但如果那個值是放在 Cookie 裡、由伺服器在回應時種下的，那追法就完全不同了，你得去看是哪一次的 SET-COOKIE 把它帶出來的。同樣是一個值，起點卻差很多，所以先定位位置，等於先幫自己省下一半的路。</p>
+<h2>位置為什麼會影響追查方向？</h2>
+<p>逆向剛開始時，手上最可靠的線索通常只有一個：請求送出去時，實際長什麼樣子。</p>
+<p>如果被保護的值放在請求資料裡，而且請求是由頁面 JavaScript 透過 XHR 或 Fetch 送出，就可以從發送請求的位置往回追，尋找是哪段程式組合了這個欄位。</p>
+<p>如果值藏在自訂請求頭裡，追查重點仍然是送出請求的程式碼，但要特別留意建立標頭的地方。只盯著 Payload，便可能從一開始就漏掉目標。</p>
+<p>如果值來自 Cookie，情況又不同。它可能是伺服器在先前某次回應中透過 <code>Set-Cookie</code> 種下，也可能由前端 JavaScript 寫入。這時只追目前的請求通常不夠，還得往前查看回應與 Cookie 的寫入來源。</p>
+<p>因此，先確認位置不是多做一道手續，而是在岔路口先看路標。入口選對了，後面才不會在錯誤的程式碼裡繞圈。</p>
 
-<h2>三個可能的位置</h2>
-<p>實務上，需要被還原的值幾乎都落在這三個地方。你可以把它想成「一個請求送出去時，身上能夾帶東西的三個口袋」。</p>
+<figure class="lesson-figure"><img src="./value-location-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>請求可以藏東西的三個口袋</h2>
+<p>實務上，需要還原的值大多會出現在以下三個位置。可以把一筆 HTTP 請求想成穿著三個口袋出門：每個口袋都能帶資料，但來源與追法不太一樣。</p>
 <table>
 <thead>
-<tr><th>位置</th><th>在哪裡看</th><th>典型內容</th></tr>
+<tr><th>位置</th><th>在 DevTools 哪裡看</th><th>常見內容</th><th>適合從哪裡追</th></tr>
 </thead>
 <tbody>
-<tr><td>請求資料</td><td>Payload 分頁的 Query String Parameters 或 Form Data</td><td>網址上的查詢參數，或 POST 出去的表單欄位，例如 <code>sign</code></td></tr>
-<tr><td>請求頭</td><td>Headers 分頁的 Request Headers</td><td>自訂的簽名標頭、<code>token</code>、<code>X-Signature</code> 之類的值</td></tr>
-<tr><td>Cookie</td><td>Headers 分頁的 Request Cookies（或 Application 面板）</td><td>伺服器種下、或前端 JS 寫入的識別與風控值</td></tr>
+<tr><td>請求資料</td><td>Payload 分頁的 Query String Parameters 或 Form Data</td><td>網址查詢參數或 POST 表單欄位，例如 <code>sign</code></td><td>發送 XHR 或 Fetch、組合 Payload 的 JavaScript</td></tr>
+<tr><td>請求頭</td><td>Headers 分頁的 Request Headers</td><td>自訂簽名標頭、<code>token</code>、<code>X-Signature</code> 等值</td><td>建立請求與設定 Headers 的 JavaScript</td></tr>
+<tr><td>Cookie</td><td>Headers 分頁的 Request Cookies，或 Application 面板</td><td>伺服器種下或前端 JavaScript 寫入的識別與風控值</td><td>先前回應的 <code>Set-Cookie</code>，或寫入 Cookie 的程式碼</td></tr>
 </tbody>
 </table>
-<p>三個位置裡，請求資料與請求頭通常是你「主動送出去」的，Cookie 則常常是前面某一次回應「回給你」的。這個差別在追查時很重要：主動送出的值，線索在發送它的那段 JS；被回傳種下的值，線索在前面的回應與寫入 Cookie 的程式碼。</p>
+<p>請求資料與請求頭通常是這次請求主動送出的內容；Cookie 則常承接前面某次互動留下的狀態。這個差別很重要：前兩者多半往「誰組成並送出請求」追，Cookie 則可能要往更早的回應追。</p>
 
-<h2>打開 Network，把位置看清楚</h2>
-<p>具體操作只需要幾步。重新整理頁面或觸發查詢，讓那個請求出現在 Network 面板，點它，然後依序看三個地方：</p>
-<ol>
-<li>先看 <strong>Payload</strong> 分頁。這裡列出 Query String Parameters 與 Form Data，是「請求資料」的家。看到可疑的十六進位、很長的字串，或名字帶有 sign、token 的欄位，就先懷疑它。</li>
-<li>再看 <strong>Headers</strong> 分頁裡的 Request Headers。有些網站不把簽名放進內文，而是塞進自訂標頭，這類的值常常被忽略。</li>
-<li>最後看同一個 Headers 分頁裡的 Request Cookies，確認值是不是其實來自 Cookie，而不是這次請求自己帶上的。</li>
-</ol>
-<p>看得愈慢、愈仔細，後面就愈不容易追錯方向。很多時候「找不到加密入口」不是因為程式難，而是因為一開始就找錯了值、看錯了位置。</p>
+<figure class="lesson-figure"><img src="./value-location-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>等一下，哪些值才需要重現？</h2>
-<p>不是請求裡的每個欄位都值得你花力氣。同一個請求裡，通常混著兩類欄位：一類是固定的、每次查詢都一樣；另一類是動態的、每次都會變。真正要還原的，是後者。</p>
-<p>以有道翻譯那個請求為例，欄位可以粗分成這樣：</p>
+<h2>跟著有道翻譯請求看一次</h2>
+<p>現在回到翻譯網站，實際在 DevTools 裡確認位置。先打開 Network 面板，再重新整理頁面或觸發一次翻譯查詢，讓 <code>webtranslate</code> 請求出現在清單中。</p>
+
+<h2>先看 Payload：資料是不是跟著請求送出？</h2>
+<p>點開 <code>webtranslate</code>，查看 <strong>Payload</strong> 分頁。這裡會列出 Query String Parameters 或 Form Data，也就是網址上的查詢參數與 POST 送出的表單欄位。</p>
+<p>此時可以留意幾類線索：很長的字串、看似十六進位的內容，以及名稱含有 <code>sign</code> 或 <code>token</code> 的欄位。它們不一定都是加密值，但值得先標記。</p>
+<p>這個入口適合用在目標值明確出現在 Payload 時。如果 Payload 裡根本沒有那個值，就不要硬在這裡找；它可能位於請求頭或 Cookie。</p>
+
+<h2>再看 Request Headers：別漏掉藏在信封上的值</h2>
+<p>接著切到 <strong>Headers</strong> 分頁，查看 Request Headers。有些網站不把簽名放在請求內文，而是寫進自訂標頭，像把資訊寫在信封外，而不是放進信紙裡。</p>
+<p>如果只檢查 Payload，這類欄位很容易被忽略。當你在 Request Headers 看到可疑的 <code>token</code>、<code>X-Signature</code> 或其他動態值，就應該把追查重點轉向建立標頭的程式碼。</p>
+
+<h2>最後看 Request Cookies：值可能早就被種下</h2>
+<p>同樣在 Headers 分頁中，查看 Request Cookies；也可以到 Application 面板檢查目前保存的 Cookie。</p>
+<p>如果可疑值來自 Cookie，就不能直接假設它是這次請求現算的。它可能由伺服器在更早的回應中種下，也可能由前端 JavaScript 寫入。這時應該查看先前回應中的 <code>Set-Cookie</code>，或尋找寫入 Cookie 的程式碼。</p>
+<p>反過來說，如果目標已經清楚出現在 Payload，而且每次送出前都重新產生，就不必先把時間花在 Cookie 上。位置的價值，就在於幫你排除不適用的追查方向。</p>
+
+<figure class="lesson-figure"><img src="./value-location-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>不是每個欄位都需要逆向</h2>
+<p>找到位置後，下一個問題是：哪些值真的需要重現？一筆請求裡通常混著固定值、使用者輸入，以及由網站動態產生的值。它們看起來都只是欄位，處理方式卻完全不同。</p>
+<p>以有道翻譯的請求為例，可以先做以下分類：</p>
 <table>
 <thead>
-<tr><th>欄位</th><th>值</th><th>性質</th></tr>
+<tr><th>欄位</th><th>值</th><th>性質</th><th>處理方式</th></tr>
 </thead>
 <tbody>
-<tr><td><code>i</code></td><td>apple</td><td>你要查的字，會變但由你決定</td></tr>
-<tr><td><code>sign</code></td><td>1be3315fc3cd8097a033646862b6e5db</td><td>32 位十六進位，疑似摘要，需重現</td></tr>
-<tr><td><code>mysticTime</code></td><td>1704288976618</td><td>毫秒時間戳記，每次不同，需重現</td></tr>
-<tr><td><code>client</code></td><td>fanyideskweb</td><td>固定字串</td></tr>
-<tr><td><code>product</code></td><td>webfanyi</td><td>固定字串</td></tr>
+<tr><td><code>i</code></td><td>apple</td><td>會改變，但內容由使用者決定</td><td>依查詢內容填入，不需要逆向</td></tr>
+<tr><td><code>sign</code></td><td>1be3315fc3cd8097a033646862b6e5db</td><td>32 位十六進位，疑似摘要</td><td>標記為需要重現的目標</td></tr>
+<tr><td><code>mysticTime</code></td><td>1704288976618</td><td>毫秒時間戳記，每次不同</td><td>標記為需要重現的目標</td></tr>
+<tr><td><code>client</code></td><td>fanyideskweb</td><td>固定字串</td><td>記錄並沿用</td></tr>
+<tr><td><code>product</code></td><td>webfanyi</td><td>固定字串</td><td>記錄並沿用</td></tr>
 </tbody>
 </table>
-<p>這個分類動作本身就是一種篩選：把固定值抄下來即可，把會變的值標記成「這是我的目標」。<code>i</code> 雖然也會變，但那是「使用者輸入」，你自己填就行；真正麻煩的是 <code>sign</code> 與 <code>mysticTime</code> 這種由網站前端算出來、你不重現就被伺服器拒絕的值。</p>
+<p><code>i</code> 雖然會隨查詢內容改變，但它只是使用者輸入，不代表網站正在保護它。固定的 <code>client</code> 與 <code>product</code> 也不需要追查產生方式，記下來即可。</p>
+<p>真正值得投入逆向工作的，是 <code>sign</code> 與 <code>mysticTime</code> 這類由網站前端產生、會隨請求變化，而且缺少後可能遭伺服器拒絕的值。換句話說，「會變」只是線索，還要進一步分辨它是使用者決定的，還是網站計算出來的。</p>
 
-<h2>小結</h2>
+<figure class="lesson-figure"><img src="./value-location-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>什麼時候該用這個判斷方式？</h2>
+<table>
+<thead>
+<tr><th>情況</th><th>是否需要繼續逆向</th><th>原因</th></tr>
+</thead>
+<tbody>
+<tr><td>欄位是固定字串</td><td>通常不需要</td><td>記錄並重送即可</td></tr>
+<tr><td>欄位會變，但由使用者輸入決定</td><td>通常不需要</td><td>資料來源已知，例如查詢文字</td></tr>
+<tr><td>欄位每次變化，且由前端自動產生</td><td>需要進一步確認</td><td>可能是時間戳記、摘要、簽名或其他保護值</td></tr>
+<tr><td>值來自 Cookie</td><td>不一定要逆向計算</td><td>可能只需重現取得與保存 Cookie 的流程</td></tr>
+<tr><td>請求不帶該值也能成功</td><td>不需要</td><td>它可能不是必要欄位</td></tr>
+</tbody>
+</table>
+<p>這個判斷方式適合用在「瀏覽器能成功送出請求，但自行重送時失敗」的情況。它能幫你從大量欄位中縮小範圍。</p>
+<p>如果請求裡只有固定值與明確的使用者輸入，就不必為了看到長字串而硬做逆向。逆向不是每次抓取都必經的儀式，而是遇到動態保護值時才需要拿出的工具。</p>
+
+<h2>把這個觀念放回整體流程</h2>
 <blockquote>
-要還原一個被保護的值，第一步不是問「誰算的」，而是問「它在哪」。加密值可能出現在請求資料、請求頭或 Cookie 三個位置；位置不同，之後的追蹤手法就不同。打開 Network，先鎖定可疑的請求與欄位，再把欄位分成固定的與動態的，動態的那幾個才是你真正要重現的目標。
+<p>逆向被保護的值時，先問「它在哪裡」，再問「誰算出它」。值可能出現在請求資料、請求頭或 Cookie；位置不同，來源與追查方向也不同。</p>
+<p>找到位置後，再把欄位分成固定值、使用者輸入與網站動態產生的值。真正需要重現的，通常是由網站產生、會隨請求改變，而且缺少後會影響請求成功的那一類。</p>
 </blockquote>
-<p>現在你知道值大概放在哪了，但下一步的問題才正要開始：在一堆打包過、動輒上萬行的 JavaScript 裡，要從哪裡找到處理這個值的那一段程式？下一節要比較兩條定位入口的方法：沿請求堆疊往回追，以及直接關鍵字搜尋。</p>
+<p>到這裡，你已經把「抓取失敗」與「需要逆向的動態值」連起來，也知道該從請求的哪個口袋開始找。下一個問題才是：面對打包過、動輒上萬行的 JavaScript，要怎麼找到處理這個值的程式？下一節會比較兩個定位入口：沿請求堆疊往回追，以及直接使用關鍵字搜尋。</p>
 
 <div class="lesson-nav">
   <div></div>
@@ -82,35 +121,30 @@
   <button class="opt">請求攜帶的 Cookie 裡</button>
   <button class="opt">伺服器端的資料庫欄位裡</button>
 </div>
-
 <div class="quiz" data-question="為什麼追一個加密值之前，要先確認它出現在哪個位置？" data-correct="1" data-explain="位置不同，追蹤的起點與手法也不同，先定位位置能省下走錯路的時間。">
   <button class="opt">因為位置決定了它的加密強度</button>
   <button class="opt">因為位置不同追蹤手法就不同</button>
   <button class="opt">因為位置會影響伺服器回應速度</button>
   <button class="opt">因為只有一個位置是真的合法</button>
 </div>
-
 <div class="quiz" data-question="在 DevTools 的 Network 面板，要看一個請求帶了哪些查詢或表單欄位，主要看哪個分頁？" data-correct="2" data-explain="Payload 分頁列出 Query String Parameters 與 Form Data，是請求資料所在。">
   <button class="opt">Timing 分頁裡的時間軸</button>
   <button class="opt">Preview 分頁裡的內容</button>
   <button class="opt">Payload 分頁裡的參數</button>
   <button class="opt">Response 分頁裡的回應</button>
 </div>
-
 <div class="quiz" data-question="有道翻譯請求裡，`mysticTime` 的值 `1704288976618` 最可能是什麼？" data-correct="0" data-explain="那是一串十三位數字，符合毫秒級時間戳記的特徵，每次請求都會變。">
   <button class="opt">一個毫秒級的時間戳記</button>
   <button class="opt">一段用 MD5 算出的摘要</button>
   <button class="opt">一個固定不變的產品代號</button>
   <button class="opt">一個伺服器給的 Cookie 值</button>
 </div>
-
 <div class="quiz" data-question="同一個請求裡，下列哪種欄位最需要你花力氣去重現？" data-correct="2" data-explain="由網站前端算出、每次都會變的值（如 sign、mysticTime）才需要重現；固定值抄下來即可。">
   <button class="opt">每次都不變的固定字串</button>
   <button class="opt">使用者自己輸入的關鍵字</button>
   <button class="opt">前端算出且每次會變的值</button>
   <button class="opt">伺服器回應的狀態碼欄位</button>
 </div>
-
 <div class="quiz" data-question="關於 Cookie 裡的值，本節提醒的追蹤起點是什麼？" data-correct="3" data-explain="Cookie 常是前面某次回應種下的，線索在前面的回應與寫入 Cookie 的程式碼，而非本次請求。">
   <button class="opt">一定是本次請求前端即時算出的</button>
   <button class="opt">一定與請求資料裡的值完全相同</button>

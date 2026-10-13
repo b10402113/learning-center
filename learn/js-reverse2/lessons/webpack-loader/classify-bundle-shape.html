@@ -8,19 +8,17 @@
 </head>
 <body>
 
-<h1>判斷 bundle 型態：陣列、物件與多檔 JSONP</h1>
+<h1>判斷 bundle 型態：陣列、物件，還是多檔 JSONP？</h1>
 <p class="meta">Step 2/4 · webpack 拆解與模組定位</p>
 
-<h2>學習目標</h2>
-<p>拿到一份打包檔時，能判斷它屬於陣列、物件（hash key）或多檔 JSONP 哪一型，並說出各型的模組 id 長什麼樣、該從哪裡接上 require 函式。</p>
+<h2>先做對決定，才不會在錯的檔案裡找模組</h2>
+<p>你在 DevTools 打開一支打包後的 JavaScript，準備找出產生簽名參數的模組。眼前卻可能出現兩種拉扯：模組到底就在這支檔案裡，還是由其他 chunk 稍後送進來？呼叫時又該用數字索引，還是字串 key？</p>
+<p>如果型態判錯，後面每一步都會歪掉。你可能對著多檔 bundle 一直找不存在的模組陣列，也可能把物件版當成陣列版，輸入 <code>n(0)</code> 後只得到 <code>undefined</code>。</p>
+<p>這一節要練的不是背定義，而是看到 bundle 後，能迅速判斷它屬於陣列版、物件版或多檔 JSONP。判斷完成後，你也要能回答兩個實際問題：模組 id 長什麼樣，以及 require 函式應該從哪裡接出來。</p>
+<p><strong>前置條件：</strong>你已經看懂上一節介紹的 IIFE 骨架與 require 函式。接下來只要打開檔案，沿著幾個固定線索往下看。</p>
 
-<h2>前言：櫃子的形式不只一種</h2>
-<p>上一節我們認出了 webpack 的共同骨架：外層 IIFE、裡面的 require 函式、加上一櫃子編號模組。但實際拆站點時，你會發現這座櫃子有三種常見的長相，而且它們決定了兩件對你很實際的事：模組 id 要用什麼形式報，以及載入器該去哪裡找。</p>
-<p>用錯判斷，就會發生很典型的卡關：你對著一個多檔 bundle，一直想找它自己的模組陣列，卻不知道模組其實躺在旁邊另外兩支檔案裡；或者你把物件版當成陣列版，用 <code>n(0)</code> 呼叫，結果當然是 undefined。這一節要練的就是「一眼歸類」，把辨認型態變成反射動作。</p>
-<p><strong>前置條件：</strong>你已經看懂上一節的 require 函式與 IIFE 骨架。辨認型態不需要新工具，只需要知道往哪裡看。</p>
-
-<h2>三種型態並排比較</h2>
-<p>三種型態的差別，濃縮在這張表。先掃一遍，再往下逐一拆解。</p>
+<h2>先把三個選項攤開比較</h2>
+<p>可以把 bundle 想成裝模組的櫃子。陣列版按位置編號，物件版替每個抽屜貼上字串標籤，多檔 JSONP 則先架好空櫃子，再由其他檔案把抽屜送進來。</p>
 <table>
 <thead>
 <tr><th>型態</th><th>IIFE 尾端傳入什麼</th><th>模組 id 形式</th><th>載入器怎麼露出</th><th>典型情境</th></tr>
@@ -32,8 +30,10 @@
 </tbody>
 </table>
 
-<h2>型態一：陣列版，模組按順序排隊</h2>
-<p>陣列版最好認，因為它把模組一個接一個排進陣列，IIFE 尾端一定是中括號。模組的身分就是它在陣列裡的位置，所以 id 是 0、1、2 這種數字索引。</p>
+<figure class="lesson-figure"><img src="./classify-bundle-shape-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>選項一：陣列版，模組依位置排隊</h2>
+<p>先在 DevTools 打開 bundle，拉到 IIFE 的尾端。若看到一串模組函式被放進陣列，這就是陣列版。每個模組的身分，就是它在陣列裡的位置，因此 id 會是 0、1、2 這類數字索引。</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/Day17-Day18：逆向核心案例解析4/01 基于数组的webpack.js"><code>}([
     function () {
         console.log("foo");
@@ -43,10 +43,12 @@
         console.log("bar");
     }
 ]);</code></pre>
-<p>看到 <code>}([ … ])</code> 就結束了，沒有第二句話。要呼叫第一個模組，就是 <code>n(0)</code>；第二個是 <code>n(1)</code>。缺點是只要插入或刪掉一個模組，後面所有索引都會位移，所以大專案很少用，多半出現在教學範例或小工具裡。</p>
+<p>這個案例的尾端是 <code>}([ … ])</code>。要呼叫第一個模組就用 <code>n(0)</code>，第二個則用 <code>n(1)</code>。</p>
+<p>這個判法適合尾端陣列裡已經裝著模組函式的單檔 bundle。不適合只看見空陣列就直接下結論，因為多檔 JSONP 的 loader 尾端也可能出現 <code>([])</code>。</p>
+<p>陣列版的缺點是，只要中間插入或刪除一個模組，後面的索引就會跟著位移。因此它較常出現在教學範例或小工具，不是大專案常見的選擇。</p>
 
-<h2>型態二：物件版，模組掛在字串編號下</h2>
-<p>物件版把模組掛在一張「編號對函式」的表上，IIFE 尾端是大括號。編號是字串，常長得像 <code>"1001"</code>、<code>"1002"</code> 或 <code>"56d7"</code>、<code>"dd88"</code> 這種看似隨機的 hash。</p>
+<h2>選項二：物件版，用字串 key 找模組</h2>
+<p>如果 IIFE 尾端不是陣列，而是一個「編號對函式」的物件，就要改用物件版的思路。它的模組 id 是字串，可能是 <code>"1001"</code>、<code>"1002"</code>，也可能是 <code>"56d7"</code>、<code>"dd88"</code> 這種看似隨機的 hash。</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/Day17-Day18：逆向核心案例解析4/02 基于对象的webpack.js"><code>}({
     "1001": function () {
         console.log("foo");
@@ -64,10 +66,12 @@
 });
 
 window.loader("1002")</code></pre>
-<p>這種型態有個很方便的特點：模組之間可以互相呼叫。原始碼裡那行被註解掉的 <code>// window.loader("1003")</code> 就在提示，模組內想用別的模組，透過同一把 <code>window.loader</code> 報上對方的編號就行。物件版的 id 不會因為插入模組而位移，穩定性好，是實務上最常見的單檔型態。</p>
+<p>這裡要注意呼叫方式。既然 id 是字串 key，就應該使用 <code>window.loader("1002")</code>，而不是照陣列版輸入 <code>n(0)</code>。</p>
+<p>原始碼中被註解的 <code>// window.loader("1003")</code> 也透露了另一個線索：模組之間可以透過同一個 <code>window.loader</code>，報上另一個模組的編號來互相呼叫。</p>
+<p>這個判法適合尾端容器明確是物件，而且模組函式掛在字串鍵下的 bundle。字串 key 不會因為中間插入一個模組就整批位移，因此穩定性較好，也是實務上常見的單檔型態。</p>
 
-<h2>型態三：多檔 JSONP，模組由別的檔案送進來</h2>
-<p>前兩型都是「一個檔案自給自足」，多檔版則把 loader 和模組拆開。loader 檔本身只有幾百行，尾端傳入一個空陣列；真正的模組在旁邊其他 JS 檔裡，靠一個叫 <code>webpackJsonp</code> 的機制送進 loader。</p>
+<h2>選項三：多檔 JSONP，模組從其他檔案送進來</h2>
+<p>多檔 JSONP 最容易讓人走錯路。前兩種型態都是一支檔案自給自足；多檔版則把 loader 與模組拆開。loader 檔可能只有幾百行，真正的模組放在旁邊其他 JS 檔案裡，再透過 <code>webpackJsonp</code> 機制送進來。</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/Day17-Day18：逆向核心案例解析4/03 多文件的webpack.js"><code>!(function (modules) { // webpackBootstrap
     …
     function webpackJsonpCallback(data) {
@@ -99,32 +103,42 @@ window.loader("1002")</code></pre>
 })
 …
 /******/ ([]);</code></pre>
-<p>這段有幾個專屬記號，看到就幾乎能確定是多檔版：<code>webpackBootstrap</code>、<code>webpackJsonpCallback</code>、<code>__webpack_require__</code>、還有 <code>window["webpackJsonp"]</code>。機制是這樣的：loader 把全域的 <code>window.webpackJsonp</code> 準備成一個陣列，並把它原本的 <code>push</code> 換成 <code>webpackJsonpCallback</code>。之後每一支模組檔執行時，都會呼叫 <code>window.webpackJsonp.push([ … ])</code>，把一批模組丟進來。由於 <code>push</code> 已經被換掉，這些模組就會被 callback 併進 loader 的 <code>modules</code> 裡。等多檔都載完，模組才齊全。</p>
-<p>這個 loader 尾端是 <code>([])</code>，也就是一個空陣列。它自己沒有任何模組，所有模組都是後來被 push 進去的。這是最容易被誤判的地方：看到 <code>[</code> 別急著歸類成陣列版。</p>
+<p>在 DevTools 搜尋 <code>webpackBootstrap</code>、<code>webpackJsonpCallback</code>、<code>__webpack_require__</code> 或 <code>window["webpackJsonp"]</code>。這幾個記號一起出現時，通常就能判定正在處理多檔版。</p>
+<p>它的運作方式像一個收貨櫃台。loader 先把全域的 <code>window.webpackJsonp</code> 準備成陣列，再把原本的 <code>push</code> 換成 <code>webpackJsonpCallback</code>。之後其他模組檔執行 <code>window.webpackJsonp.push([ … ])</code> 時，送進來的模組就會被 callback 併入 loader 的 <code>modules</code>。</p>
+<p>因此，這個 loader 尾端雖然是 <code>([])</code>，卻不能當成一般陣列版。這個空陣列裡沒有模組；模組要等其他檔案 push 進來後才會齊全。</p>
 
-<h2>怎麼判？四個問句</h2>
+<figure class="lesson-figure"><img src="./classify-bundle-shape-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這種判法適合大型 SPA 或拆成多個 chunk 的站點。不適合只憑中括號判斷，因為真正的關鍵不是「有沒有陣列」，而是「模組是否依賴其他檔案送進來」。</p>
+
+<h2>在 DevTools 裡，用四個問句確認</h2>
+<p>看到一支陌生 bundle 時，不必從第一行一路讀到最後。先查看 IIFE 尾端，再搜尋 JSONP 關鍵字，依序問自己：</p>
 <ol>
 <li>IIFE 尾端括號裡放的是 <code>[</code>、<code>{</code>，還是空陣列 <code>([])</code>？</li>
 <li>檔案裡有沒有 <code>webpackJsonp</code>、<code>webpackJsonpCallback</code>、<code>jsonpScriptSrc</code> 這幾個字？</li>
 <li>呼叫模組時用的是 <code>n(0)</code> 這種數字，還是 <code>n("1001")</code> 這種字串？</li>
 <li>這支檔是不是只有幾百行的 loader，而旁邊還躺著好幾支幾萬行的 JS？</li>
 </ol>
-<p>前兩題分型態，後兩題確認 id 形式。通常看到第二題的關鍵字，就可以直接判成多檔版；沒有的話，就看第一題是陣列還是物件。</p>
+<p>第一題先辨認容器，第二題檢查是否存在跨檔載入機制。第三題用來確認模組 id 的形式，第四題則幫你判斷真正的模組是否藏在其他檔案裡。</p>
+<p>如果找到 JSONP 關鍵字，先別急著定案。還要確認模組是不是靠另一支檔案的 <code>push</code> 才出現；若沒有 JSONP 機制，再回頭看尾端容器究竟是陣列還是物件。</p>
 
-<h2>幾個會翻盤的反例</h2>
-<p>規則講完了，但有幾種情況會讓你判錯，先講清楚：</p>
+<h2>反例：看到這些情況，原本的規則要翻面</h2>
+<p>辨認 bundle 不能只抓一個符號。以下幾種情況最容易讓判斷翻車：</p>
 <ul>
-<li><strong>別把多檔 loader 當成陣列版。</strong>多檔 loader 尾端是 <code>([])</code>，確實有中括號，但它不含模組。關鍵差別是有沒有 <code>webpackJsonp</code> 機制。</li>
-<li><strong>單檔也可能內建 <code>webpackJsonp</code>。</strong>有些站點把整包模組都塞進同一支檔，卻仍保留 JSONP 機制的程式碼。這種看起來像多檔，其實只有一支，判準是「模組是不是靠另一支檔的 push 才出現」。</li>
-<li><strong>物件版的 key 是字串，不代表值是字串。</strong>看到 <code>"1001"</code> 別誤以為是陣列索引，它的本質是物件的字串鍵。</li>
-<li><strong>型態看的是容器，不是大小。</strong>陣列版也能塞幾百個模組，物件版也能只有兩個。別用檔案大小或模組數量來猜。</li>
+<li><strong>別把多檔 loader 當成陣列版。</strong>多檔 loader 尾端是 <code>([])</code>，確實有中括號，但裡面沒有模組。此時應改查有沒有 <code>webpackJsonp</code> 機制。</li>
+<li><strong>單檔也可能保留 <code>webpackJsonp</code>。</strong>有些站點把整包模組放在同一支檔案，卻仍保留 JSONP 機制。這時不能只靠關鍵字判斷，要檢查模組是否真的依賴另一支檔案的 <code>push</code> 才會出現。</li>
+<li><strong>物件版的 key 是字串，不代表值也是字串。</strong>看到 <code>"1001"</code> 時，別把它當成陣列索引。它的本質是物件的字串鍵，對應的值仍是模組函式。</li>
+<li><strong>型態看的是容器與載入方式，不是檔案大小。</strong>陣列版可以放幾百個模組，物件版也可能只有兩個。不能只靠檔案大小或模組數量猜測。</li>
 </ul>
 
 <h2>帶走這條決策規則</h2>
 <blockquote>
-先看 IIFE 尾端傳進來的容器：<code>[</code> 是陣列版、<code>{</code> 是物件版、<code>[]</code> 加上檔案內有 <code>webpackJsonp</code> 是多檔版。再用模組 id 是數字還是字串，決定呼叫時要報什麼 key。
+先看 IIFE 尾端的容器：裝著模組的 <code>[ … ]</code> 是陣列版，<code>{ … }</code> 是物件版；若尾端是空的 <code>([])</code>，又能找到 <code>webpackJsonp</code> 與跨檔 <code>push</code>，就是多檔版。最後再確認 id 是數字還是字串，決定呼叫 loader 時要交出哪一種 key。
 </blockquote>
-<p>型態判斷清楚了，你就知道要去哪裡接載入器、要拿什麼鑰匙開櫃子。下一節要把上一節的「把手」加上這一節的「編號」，做出一套能在任何網頁上都通用的定位流程：把 require 函式接到 <code>window.loader</code>，插一行 log 記錄模組 id，再逐一呼叫，直到找到產生簽名參數的那個模組。</p>
+
+<figure class="lesson-figure"><img src="./classify-bundle-shape-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>型態判對之後，你才知道 require 函式要從哪裡接出來，也知道該拿什麼編號呼叫模組。下一節會把 require 接到 <code>window.loader</code>，加入 log 記錄模組 id，再逐一呼叫，直到定位出產生簽名參數的模組。</p>
 
 <div class="lesson-nav">
   <div><a href="./webpack-loader-anatomy.html">← 上一步：webpack bundle 的骨架：IIFE、require 函式與快取</a></div>
@@ -139,35 +153,30 @@ window.loader("1002")</code></pre>
   <button class="opt">一個依序排列的陣列</button>
   <button class="opt">一個由外部 push 進來的 chunk</button>
 </div>
-
 <div class="quiz" data-question="下列哪些關鍵字出現時，幾乎可確定是多檔 JSONP 版？" data-correct="3" data-explain="webpackJsonp、webpackJsonpCallback、__webpack_require__ 都是多檔 bootstrap 的專屬記號。">
   <button class="opt">console.log 與 module.exports</button>
   <button class="opt">document 與 navigator</button>
   <button class="opt">var t = {} 與 function n(r)</button>
   <button class="opt">webpackJsonp 與 webpackJsonpCallback</button>
 </div>
-
 <div class="quiz" data-question="物件版的模組要呼叫另一個模組，通常怎麼做？" data-correct="0" data-explain="透過同一把 window.loader 報上對方的字串編號即可。">
   <button class="opt">用 window.loader 報上對方編號</button>
   <button class="opt">import 對方的檔案路徑名稱</button>
   <button class="opt">把對方模組複製一份進來</button>
   <button class="opt">直接讀取對方在陣列中的索引</button>
 </div>
-
 <div class="quiz" data-question="為什麼多檔版 loader 尾端是空陣列卻不能算陣列版？" data-correct="1" data-explain="它本身不含模組，模組是靠其他檔案的 push 併進來的，關鍵在 webpackJsonp 機制。">
   <button class="opt">因為空陣列在 JS 裡不算真正的陣列</button>
   <button class="opt">因為模組是別的檔案 push 進來的</button>
   <button class="opt">因為它其實是物件版的一種變形</button>
   <button class="opt">因為它的模組編號全部都是字串</button>
 </div>
-
 <div class="quiz" data-question="單檔 webpack 也可能內建 webpackJsonp 機制，這時怎判斷它是單檔？" data-correct="2" data-explain="判準是模組是否還需要靠另一支檔案的 push 才出現；都在同一檔內就是單檔。">
   <button class="opt">看它的模組編號是數字還是字串</button>
   <button class="opt">看它有沒有使用 window.loader</button>
   <button class="opt">看模組是否還需要別的檔案補上</button>
   <button class="opt">看檔案裡有沒有出現 console.log</button>
 </div>
-
 <div class="quiz" data-question="要判斷型態，最直接該先看 IIFE 尾端傳入的是什麼？" data-correct="1" data-explain="容器是 [ 為陣列版、{ 為物件版、[] 加 webpackJsonp 為多檔版。">
   <button class="opt">函式的名稱與參數個數</button>
   <button class="opt">尾端括號裡的容器形式</button>

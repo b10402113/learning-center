@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>沃邮箱：鎖定登入加密模組 437 並呼叫加密</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>沃邮箱：鎖定登入加密模組 437 並呼叫加密</h1>
+<p class="meta">Step 3/5 · 案例：webpack 打包站實戰</p>
+
+<h2>學習目標</h2>
+<p>在沃邮箱的登入 bundle 裡用探針鎖定模組 437，讀懂 encrypt 與 hashPassword 的匯出並呼叫它們取得加密後的密碼。</p>
+
+<h2>前言：登入框裡的密碼，送出去前被誰動了手？</h2>
+
+<p>上一節在财联社把簽名模組當函式呼叫，練的是「可呼叫的匯出」。這一節換一個情境：登入。你在沃邮箱（中國聯通的信箱服務）的登入框輸入密碼，打開開發者工具看送出的請求，發現密碼欄位已經不是你打的那串字，而是一大段亂碼。把登入用的 JavaScript 另存下來，同樣是一份 webpack 打包檔，但這次模組 id 從字串換成了數字，加密模組掛的是具名方法，呼叫端的測試程式甚至把 RSA 公鑰參數直接寫死在裡面。</p>
+
+<p>這一節就把這條登入加密的路走通：讀懂這份精簡版 loader、看懂入口模組在等哪些懶載入區塊、鎖定模組 437、讀懂它的匯出，最後照測試程式的寫法把加密呼叫出來。RSA 這個演算法本身的細節（填充模式、輸出格式、Python 重現）在非對稱加密的案例節點裡；這裡練的仍然是 webpack 呼叫層——只不過這次的匯出形狀是第三種。</p>
+
+<h2>目標與前置條件</h2>
+
+<p>做完這一節，你會有一支加密密碼的小程式：餵明文密碼進去，拿回 <code>#!</code> 開頭的 RSA 密文，正好可以塞進登入請求的密碼欄位。動手前需要前兩節的定位與呼叫手感，以及知道 RSA 是「公鑰加密、私鑰解密」的非對稱演算法即可，不需要會推導它。</p>
+
+<h2>步驟一：讀這份精簡版 loader</h2>
+
+<p>沃邮箱的入口檔 <code>09 沃邮箱的loader.js</code> 開頭一樣是載入模組檔，接著是分發器。它的分發器 <code>c(e)</code> 比财联社的更短，探針的位置也一眼可見：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day27/09 沃邮箱的loader.js"><code>    function c(e) {
+        if (t[e])
+            return t[e].exports;
+        var n = t[e] = {
+            i: e,
+            l: !1,
+            exports: {}
+        };
+
+        console.log("e:::", e)
+        return a[e].call(n.exports, n, n.exports, c),
+            n.l = !0,
+            n.exports
+    }
+
+    window.loader = c</code></pre>
+
+<p>骨架跟前面兩站完全一致：快取命中先回傳、建快取紀錄、執行模組、回傳 <code>n.exports</code>。差異只有細節：探針的訊息字串是 <code>e:::</code>（前一站是 <code>r:::</code>），而且這裡沒有 try/finally 的快取清理——模組若丟出例外，半成品快取會留在原地。知道這個差別就好，正常呼叫時它不會咬人。</p>
+
+<p>洩漏點一樣是 <code>window.loader = c</code>。所以三站下來你已經可以歸納：不管分發器叫什麼名字、長什麼樣，逆向者的兩把手術刀（探針、<code>window.loader</code> 洩漏）插的位置都是同一組。探針的訊息字串每站不同，反而是辨認「這支 loader 被誰動過手」的小線索。</p>
+
+<h2>步驟二：看懂入口模組在等什麼</h2>
+
+<p>這支 loader 的結尾跟著一組大括號，裡面是入口模組 329：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day27/09 沃邮箱的loader.js"><code>}({
+    329: function (e, n, t) {
+        document.onreadystatechange = function () {
+            Promise.all([t.e(0), t.e(6)]).then(t.t.bind(null, 338, 7))
+        }
+    }
+});</code></pre>
+
+<p>它在說的是瀏覽器的行為：頁面載入完成時，先用 <code>t.e(0)</code> 與 <code>t.e(6)</code> 去抓兩個懶載入區塊，都到齊了才載入模組 338（登入畫面）。這兩個區塊的檔名對照表就在同一支檔案裡：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day27/09 沃邮箱的loader.js"><code>                    i.src = c.p + '' + ({
+                        0: 'loginCommon',
+                        6: 'login'
+                    }[e = u] || e) + '.54f91.js',</code></pre>
+
+<p>區塊 0 叫 loginCommon、區塊 6 叫 login，就是「共用登入元件」跟「登入畫面」兩包程式碼。對逆向者來說，這整段是瀏覽器才走的路：我們的目標模組 437 不在懶載入區塊裡，它已經躺在開頭載入的模組檔中，直接用 <code>window.loader(437)</code> 就拿得到，完全不必模擬這段載入流程。</p>
+
+<h2>步驟三：打開模組 437，看它的匯出形狀</h2>
+
+<p>在模組檔 <code>10 沃邮箱的mod1.js</code> 裡搜尋 <code>437: function</code>，找到目標模組。它長這樣：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day27/10 沃邮箱的mod1.js"><code>    437: function(t, e, n) {
+        var i = n(595)
+          , o = 'C4E3F7212602E1E396C0B6623CF11D26204ACE3E7D26685E037AD2507DCE82FC\n28F2D5F8A67FC3AFAB89A6D818D1F4C28CFA548418BD9F8E7426789A67E73E41';
+        function r(t, e, n) {
+            var r = new i;
+            return r.setPublic(e, n),
+            r.encrypt(t)
+        }
+        t.exports = {
+            encrypt: r,
+            hashPassword: function(t) {
+                return t ? '#!' + r(t, o, '10001') : ''
+            },</code></pre>
+
+<p>逐段拆開看。開頭 <code>n(595)</code> 取出 595 號模組——那是一個 RSA 加密函式庫，介面長得像常見的 JSEncrypt（用 <code>setPublic</code> 設公鑰、用 <code>encrypt</code> 加密）。變數 <code>o</code> 是一長串十六進位的公鑰模數（modulus，RSA 公鑰的一半），<code>'10001'</code> 是公鑰指數（exponent，另一半）。這兩個參數就硬編碼在模組裡，任何拿到打包檔的人都看得到——這正是「公鑰本來就要公開」的設計，伺服器拿私鑰解密。</p>
+
+<p>再看匯出：<code>t.exports = { encrypt: r, hashPassword: ..., loadPassword: ... }</code>。這就是第三種匯出形狀——「具名方法的物件」，跟四川补贴的 dd88 是同一族，但方法名從單字母換成了有語意的名字。<code>encrypt</code> 是低階版本，三個參數自己傳；<code>hashPassword</code> 是高階版本，把「公鑰參數已寫好、再補上 <code>#!</code> 前綴」都包辦了；<code>loadPassword</code> 是開發用的解密工具，會從網址列的 <code>location.hash</code> 讀回密文解開，逆向時用不到但可以偷看它的私鑰參數。</p>
+
+<h2>步驟四：照測試程式呼叫加密</h2>
+
+<p>入口檔的最尾端留著一段環境測試，這就是現成的呼叫範例：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day27/09 沃邮箱的loader.js"><code>let t = "asdasdasd"
+let o = 'e3873eb7dea99b6c0c85f9e543a7dfaa7e6f90f5794c99dadf04326673437258174a2489fe12c75f4b81af37e60f152a0bd1180e9b959784dfbdc2e95ee48e927a6c09fa0037275290b2d475bd574dcbade9492181c6f5f56b96d74148498deae93d5b7ae3b8eb965ffc4c71efa671accda941db64d3e29907c2b42e0b365e0d'
+let n = '10001'
+console.log(window.loader(437).encrypt(t, o, n))</code></pre>
+
+<p>呼叫寫法是 <code>window.loader(437).encrypt(t, o, n)</code>：數字 id <code>437</code> 換回匯出物件，點上具名方法 <code>encrypt</code>，傳入三個參數——明文 <code>t</code>、公鑰模數 <code>o</code>、公鑰指數 <code>n</code>。測試用的明文是隨便打的字串，模數是另一串十六進位（跟模組裡那串不同，代表測試者想測不同的公鑰）。實際要加密登入密碼時，把 <code>t</code> 換成密碼字串即可；或者更省事，直接呼叫 <code>hashPassword(密碼)</code>，連公鑰參數都不用傳，它會自動用模組裡寫好的那組。</p>
+
+<p>回傳值是一段 RSA 密文（用 <code>hashPassword</code> 的話前面會多一個 <code>#!</code>），直接放進登入請求的密碼欄位就能對上伺服器的解密邏輯。這一段密文怎麼用 RSA 還原成 Python 可產生的格式，是非對稱加密案例節點的功課；在這裡，「找到 437、按對方法、傳對參數」就是全部任務。</p>
+
+<h2>做完長什麼樣</h2>
+
+<p>執行後終端機會先吐一串 <code>e:::</code> 的探針訊息——其中一定有 <code>e::: 437</code>，證明目標模組被觸發；接著是一段 RSA 密文。把這段密文換進真實登入請求、伺服器接受登入，整條路就驗證完畢。若呼叫時出現「setPublic is not a function」之類的錯誤，多半是 595 號模組沒有先被載入——模組依賴是自動的，但環境缺件（例如瀏覽器的 <code>navigator</code>）仍可能讓函式庫初始化失敗，照錯誤訊息補環境就好。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+沃邮箱給了第三種匯出形狀：具名方法物件，<code>encrypt</code> 低階、<code>hashPassword</code> 高階。模組 id 也換成了數字——id 是字串還是數字取決於打包工具的組態，呼叫前先看清楚。入口模組等的懶載入區塊是瀏覽器的路，直接呼叫目標模組時繞過它即可。公鑰參數（模數與指數）硬編碼在模組裡是正常設計，不用懷疑自己找錯地方。
+</blockquote>
+
+<p>三個案例下來，你已經看過三種匯出形狀：dd88 的物件方法、W2Yj 的可呼叫函式、437 的具名方法，外加模組 id 的字串與數字兩種長相。是時候把這些經驗壓成一張隨查隨用的對照表了——下一節整理四個真實站點的 loader 變形與匯出形狀，讓你接到新站時能對號入座。</p>
+
+<div class="lesson-nav">
+  <div><a href="./cailianshe-sign-entry.html">← 上一步：财联社：在真實 loader 插探針、呼叫 W2Yj 簽名模組</a></div>
+  <div><a href="./real-bundle-call-shapes.html">下一步：真實站點對照：loader 變形與模組匯出形狀 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="沃邮箱 loader 的探針訊息字串是什麼？" data-correct="0" data-explain="探針印的是 e:::，與财联社的 r::: 不同，是辨認 loader 的小線索。">
+  <button class="opt">e:::</button>
+  <button class="opt">r:::</button>
+  <button class="opt">moduleId:::</button>
+  <button class="opt">mod:::</button>
+</div>
+
+<div class="quiz" data-question="入口模組 329 的 Promise.all([t.e(0), t.e(6)]) 在瀏覽器裡做什麼？" data-correct="2" data-explain="去抓 loginCommon 與 login 兩個懶載入區塊，到齊後才載入登入畫面的模組 338。">
+  <button class="opt">用兩把金鑰分別加密密碼</button>
+  <button class="opt">把登入請求重送兩次做驗證</button>
+  <button class="opt">抓兩個懶載入區塊後載入登入畫面</button>
+  <button class="opt">同時計算簽名與時間戳記</button>
+</div>
+
+<div class="quiz" data-question="直接呼叫模組 437 時，為什麼不用理會懶載入區塊？" data-correct="1" data-explain="437 已在開頭載入的模組檔裡，window.loader(437) 就拿得到，不會走到區塊載入的路。">
+  <button class="opt">因為懶載入區塊的檔案已經損壞</button>
+  <button class="opt">因為目標模組在已載入的模組檔裡</button>
+  <button class="opt">因為 Node 不支援 Promise 的語法</button>
+  <button class="opt">因為懶載入只跟 CSS 檔案有關係</button>
+</div>
+
+<div class="quiz" data-question="模組 437 裡的變數 o 與 '10001' 分別代表什麼？" data-correct="3" data-explain="o 是 RSA 公鑰的模數，'10001' 是公鑰指數，兩者合起來就是公鑰。">
+  <button class="opt">AES 的金鑰與初始化向量</button>
+  <button class="opt">密碼的雜湊值與雜湊種子</button>
+  <button class="opt">伺服器位址與連接埠編號</button>
+  <button class="opt">公鑰的模數與公鑰指數</button>
+</div>
+
+<div class="quiz" data-question="encrypt 與 hashPassword 的差別是什麼？" data-correct="2" data-explain="encrypt 要自己傳公鑰參數，hashPassword 把公鑰參數與 #! 前綴都包辦。">
+  <button class="opt">encrypt 加密登入密碼，hashPassword 加密使用者名稱</button>
+  <button class="opt">encrypt 用 RSA，hashPassword 用 MD5 雜湊</button>
+  <button class="opt">encrypt 低階自己傳參數，hashPassword 高階已包好</button>
+  <button class="opt">encrypt 是加密，hashPassword 其實是解密</button>
+</div>
+
+<div class="quiz" data-question="公鑰的模數與指數直接寫死在模組裡，代表什麼？" data-correct="1" data-explain="這是公鑰加密的正常設計，公鑰本來就公開，伺服器用私鑰解密。">
+  <button class="opt">代表找錯檔案，應該去伺服器端找</button>
+  <button class="opt">代表正常，公鑰本來就是公開的</button>
+  <button class="opt">代表這支加密已經被破解不用理</button>
+  <button class="opt">代表需要用暴力法還原私鑰</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 案例：webpack 打包站實戰 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -8,42 +8,115 @@
 </head>
 <body>
 
-<h1>瑞數 cookie 流程：兩次請求與三個動態輸入</h1>
-<p class="meta">Step 5/5 · 補環境與環境檢測</p>
+<h1>拆解瑞數 cookie：兩次請求、兩個 cookie、三個動態輸入</h1>
+<p class="meta">Step 5/5 · 從 DevTools 看懂補環境與環境檢測</p>
 
-<h2>學習目標</h2>
-<p>講出瑞數的兩次請求、<code>cookie1</code>／<code>cookie2</code> 的角色，以及 <code>meta</code>、<code>ts</code>、大自執行函式三個動態輸入如何共同生成 <code>cookie2</code>。</p>
+<h2>先看全貌：抓取為什麼會走進反爬與逆向</h2>
+<p>你在 DevTools 的 Network 面板打開目標網址，原本以為第一個文件請求會帶回頁面內容，結果卻只收到 <code>202</code> 或 <code>412</code>。回應裡沒有真正的頁面，反而多了一個 cookie 和一段看似難懂的 HTML。</p>
+<p>接著，瀏覽器在本地執行一批動態 JavaScript。等同一個網址再次送出請求，真正的頁面才終於出現。切到 Sources 面板，還會看到好幾個以「VM」開頭、內容密密麻麻的檔案。</p>
+<p>這段現象正好把「抓取 → 反爬 → 逆向」串在一起：抓取程式第一次拿不到內容，是因為碰到反爬驗證；要重現瀏覽器通過驗證的方式，就得分析動態 JavaScript，設法算出下一次請求需要的 cookie。</p>
 
-<h2>前言：頁面還沒看到，就先被回了 412</h2>
-<p>你打開 DevTools，輸入你要爬的那個網址。第一個請求送出去，回來的不是頁面，而是一個 <code>202</code> 或 <code>412</code>，沒有你要的內容，卻帶著一個 cookie。重新送一次，這次才拿到真正的頁面。往 Scripts 面板一看，多出好幾個以「VM」開頭的檔案，點開來是密密麻麻、每個人看到的都不太一樣的程式碼。</p>
-<p>這就是瑞數。它在你和網站之間插了一道「先證明你是真的瀏覽器」的關卡，而前面四節學的補環境，正是通過這道關卡的三種方法之一。這一節把整個流程拆開：為什麼要請求兩次、兩個 cookie 各由誰產生、那三個每次都不一樣的動態輸入又在做什麼。</p>
+<figure class="lesson-figure"><img src="./rs-cookie-flow-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>瑞數在瀏覽器與網站之間放了一道關卡，要求用戶端先證明自己能像瀏覽器一樣執行程式碼。這一課要建立的核心概念，就是看懂這道關卡如何靠兩次請求、兩個 cookie，以及三個動態輸入運作。</p>
 
 <h2>瑞數在防什麼</h2>
-<p>瑞數是一家做動態應用安全防護的公司，它的產品核心是「動態安全」：透過動態封裝、動態驗證、動態混淆、動態令牌等技術，讓伺服器回傳的底層程式碼持續變換，增加行為的不可預測性，替網站提供從用戶端到伺服器端的防護。對爬蟲來說，它可以理解成進入 JS 逆向世界的一道代表性門檻。</p>
-<p>要通過它，實務上主要有三條路：</p>
-<ol>
-  <li><strong>自動化工具</strong>：讓真正的瀏覽器（或自動化瀏覽器）去執行，繞過人工補環境。</li>
-  <li><strong>補環境</strong>：把那段 JS 搬回 Node，補齊前端物件後自己跑出結果。這正是這個節點在教的路線。</li>
-  <li><strong>純算</strong>：完全看懂演算法後，用 Python 等語言自己重寫。</li>
-</ol>
+<p>瑞數是一家提供動態應用安全防護的公司。它的產品核心是「動態安全」，會運用動態封裝、動態驗證、動態混淆與動態令牌等技術，讓伺服器回傳的底層程式碼持續變化。</p>
+<p>這就像網站每次都換一把鎖。即使抓取程式記住上一次的答案，下一次也未必能直接使用。對爬蟲來說，瑞數因此成為進入 JavaScript 逆向領域時，很有代表性的一道門檻。</p>
+<p>面對這類驗證，實務上主要有三條路。三者的目的相同，差別在於由誰來執行 JavaScript，以及要把演算法理解到多深。</p>
 
-<h2>兩次請求與兩個 cookie</h2>
-<p>瑞數的網站會對同一個頁面網址（文件請求）請求兩次，流程如下：</p>
-<ol>
-  <li>第 1 次請求頁面網址，回來的不是內容，而是一個 <code>cookie1</code>，加上一段 HTML 原始碼，以及 <code>202</code> 或 <code>412</code> 的回應碼。</li>
-  <li>這段 HTML 原始碼裡藏著三個要素，它們在本地一起算出 <code>cookie2</code>：
-    <ul>
-      <li><strong>一個 <code>meta</code> 標籤</strong>，它的 content 內容很長，而且是動態的，每次請求都不一樣，會在 eval 執行第二層 JS 時被用到。</li>
-      <li><strong>一段 <code>ts</code> 程式碼</strong>，它後面的自執行函式會解密檔案內容，生成 eval 執行時需要的 JS 原始碼，也就是第二層的 vm 程式碼。</li>
-      <li><strong>一個大自執行函式</strong>，每次請求首頁都會動態變化，它會給 <code>window</code> 加上一些屬性（例如 <code>$_ts</code>），這些屬性會在 vm 裡被使用。</li>
-    </ul>
+<table>
+  <thead>
+    <tr>
+      <th>路線</th>
+      <th>核心做法</th>
+      <th>適用情境</th>
+      <th>不適合的情境</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>自動化工具</strong></td>
+      <td>交給真正的瀏覽器或自動化瀏覽器執行驗證程式碼</td>
+      <td>希望直接利用完整瀏覽器環境，不自行補齊前端物件</td>
+      <td>目標是把驗證程式搬到 Node 執行時</td>
+    </tr>
+    <tr>
+      <td><strong>補環境</strong></td>
+      <td>把 JavaScript 搬到 Node，補上它需要的瀏覽器物件與行為</td>
+      <td>需要在 Node 中重現瀏覽器的執行條件並產生結果</td>
+      <td>不打算分析程式依賴的前端環境時</td>
+    </tr>
+    <tr>
+      <td><strong>純算</strong></td>
+      <td>完整理解演算法，再使用 Python 等語言重寫</td>
+      <td>已經能掌握演算法，並希望脫離原本的 JavaScript 執行環境</td>
+      <td>尚未看懂核心演算法時</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>本節聚焦第二條路：補環境。它不是憑空產生 cookie，而是接手第一次回應之後的本地計算，模擬瀏覽器執行動態程式碼。</p>
+
+<h2>兩次請求，其實是一場接力</h2>
+<p>先在 DevTools 的 Network 面板盯住同一個頁面的文件請求。你會看到整個驗證不是一次完成，而是由兩次請求接力。</p>
+<p><strong>第 1 次請求</strong>送出後，伺服器不會直接交出真正內容。它會回傳 <code>cookie1</code>、一段 HTML 原始碼，以及 <code>202</code> 或 <code>412</code> 的回應碼。</p>
+<p>這段 HTML 不是無用的錯誤頁，而是一包「待計算材料」。瀏覽器會在本地執行其中的內容，算出 <code>cookie2</code>。</p>
+<p><strong>第 2 次請求</strong>再帶著 <code>cookie1</code> 與 <code>cookie2</code>，向同一個頁面網址發出文件請求。兩個 cookie 都到齊後，伺服器才回傳真正的頁面內容。</p>
+
+<figure class="lesson-figure"><img src="./rs-cookie-flow-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+  <thead>
+    <tr>
+      <th>項目</th>
+      <th>由誰產生</th>
+      <th>出現時機</th>
+      <th>用途</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>cookie1</code></td>
+      <td>伺服器</td>
+      <td>第 1 次請求的回應</td>
+      <td>交給第 2 次請求一起帶回</td>
+    </tr>
+    <tr>
+      <td><code>cookie2</code></td>
+      <td>用戶端 JavaScript</td>
+      <td>收到第 1 次回應後，在本地計算</td>
+      <td>與 <code>cookie1</code> 一起通過第 2 次驗證</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>兩者最重要的差別是來源：<code>cookie1</code> 是伺服器直接發的，<code>cookie2</code> 則是用第 1 次回應裡的動態材料算出來的。缺少 <code>cookie2</code>，第 2 次請求就拿不到真正頁面。</p>
+
+<h2>三個動態輸入，如何一起生成 cookie2</h2>
+<p>回到 DevTools 查看第 1 次請求的 Response。這段 HTML 裡藏著三個關鍵要素，它們像三塊必須同時到位的拼圖，共同支撐 <code>cookie2</code> 的計算。</p>
+
+<ul>
+  <li>
+    <strong>動態 <code>meta</code> 標籤</strong>
+    <p>它的 <code>content</code> 很長，而且每次請求都不同。程式執行到第二層 JavaScript，也就是 <code>eval</code> 執行的內容時，會使用這個值。</p>
   </li>
-  <li>第 2 次請求頁面網址，這次同時帶著 <code>cookie1</code> 與 <code>cookie2</code>，才取回真正的頁面內容。</li>
-</ol>
-<p>換句話說，<code>cookie1</code> 是伺服器在第 1 次請求時發的，而 <code>cookie2</code> 是第 1 次回應裡那三個動態要素在本地算出來的。沒有 <code>cookie2</code>，第 2 次請求就拿不到真頁面。</p>
+  <li>
+    <strong><code>ts</code> 程式碼</strong>
+    <p>它後面的自執行函式會解密檔案內容，產生交給 <code>eval</code> 執行的 JavaScript 原始碼。這就是第二層的 VM 程式碼。</p>
+  </li>
+  <li>
+    <strong>大自執行函式</strong>
+    <p>這段程式會隨每次首頁請求動態變化。它會在 <code>window</code> 上加入一些屬性，例如 <code>$_ts</code>，而 VM 裡的程式碼還會繼續使用這些屬性。</p>
+  </li>
+</ul>
 
-<h2>cookie 的版本與後綴</h2>
-<p>那三個要素每次都變，所以 <code>cookie2</code> 也不可能寫死，這正是必須補環境、把那段 JS 跑起來的原因。不同的瑞數世代，cookie 的名字與後綴也不一樣：</p>
+<figure class="lesson-figure"><img src="./rs-cookie-flow-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這三項不是可以任意替換的固定常數。它們會隨請求變動，因此不能只抄一次結果，也不能把 <code>cookie2</code> 寫死。補環境真正要做的，是讓這批當次取得的材料，在可用的環境中重新跑起來。</p>
+
+<h2>從 cookie 名稱判讀瑞數世代</h2>
+<p>除了觀察兩次文件請求，也可以查看 Application 面板或 Network 面板裡的 cookie。不同瑞數世代，cookie 名稱的後綴會呈現不同特徵。</p>
 
 <table>
   <thead>
@@ -65,15 +138,25 @@
   </tbody>
 </table>
 
-<p>幾個判讀線索：<code>S</code>／<code>T</code> 前面通常會跟著 <code>80</code> 或 <code>443</code> 這樣的數字；而 cookie 值的第一個數字，就是瑞數的版本。所以在實際站點上，你光看 cookie 的名字與格式，就能大致判斷面對的是哪一代。</p>
+<p><code>S</code>／<code>T</code> 前面通常會接著 <code>80</code> 或 <code>443</code> 這類數字，而 cookie 值的第一個數字就是瑞數版本。因此，在實際站點看到 cookie 的名稱與格式時，可以先用這些線索大致判斷面對的是哪一代，再決定後續的分析方向。</p>
 
-<h2>VM 檔案與入口</h2>
-<p>DevTools 裡那些以「VM」開頭的檔案，很容易讓人以為是專案原始碼。其實 VM 是 Virtual Machine（虛擬機）的縮寫，這些檔案代表的是<strong>由瀏覽器動態生成並執行的臨時腳本</strong>：它們不是專案的一部分，也不是實際存在的實體檔案，而是存在於瀏覽器記憶體中。</p>
-<p>它們之所以出現，是因為程式碼用了 <code>eval</code> 或 <code>new Function</code> 去動態執行一段字串。當你在這種動態生成的程式碼上設斷點時，Chrome 就會在一個 <code>VM</code> 開頭的檔案裡顯示它，例如 <code>VM111.js</code>，這個檔案只為了除錯而存在。</p>
-<p>那要怎麼找到入口？因為第 1 次回應的 <code>index.html</code> 是動態的，通常先把檔案替換成本地版本方便除錯，接著在 <code>index.html</code> 裡直接搜尋 <code>.call</code>。這個位置通常就是分析瑞數時的入口：圖中的 <code>_$jL</code> 實際上就是 <code>eval</code>，它傳入的第一個參數（如 <code>_$iC</code>）是 Window 物件，第二個參數（如 <code>_$eB</code>）就是 VM 虛擬機裡的 IIFE 自執行程式碼。在入口處單步除錯，就能進入 VM 環境，後續的斷點都在這個環境裡下。</p>
+<h2>Sources 面板裡的 VM 檔案是什麼</h2>
+<p>切到 DevTools 的 Sources 面板後，那些以「VM」開頭的檔案很容易被誤認為網站的專案原始碼。其實，VM 是 Virtual Machine，也就是「虛擬機」的縮寫。</p>
+<p>這些檔案是瀏覽器動態生成並執行的臨時腳本。它們不是專案的一部分，也不是伺服器上實際存在的檔案，而是留在瀏覽器記憶體裡，方便開發者除錯。</p>
+<p>當程式透過 <code>eval</code> 或 <code>new Function</code> 執行一段字串時，Chrome 需要替這段動態程式碼安排一個可顯示、可下斷點的位置，所以會建立像 <code>VM111.js</code> 這樣的名稱。</p>
+<p>換句話說，看到 VM 並不代表你找到了一支真正的 JavaScript 檔案。它比較像 Chrome 臨時搭起的工作桌，讓你能觀察原本藏在字串裡的程式碼如何執行。</p>
 
-<h2>補環境在瑞數流程裡的角色</h2>
-<p>把這些連起來看，這個節點前面學的補環境，就是在做「第 1 次請求之後、第 2 次請求之前」那段本地計算：把從 HTML 拿到的三個動態要素餵進補好的環境，讓那段 <code>ts</code>／vm 程式碼跑起來，產出 <code>cookie2</code>。實際開始補時，起手式通常長這樣，先把 <code>metaContent</code> 填進去、把最上層物件對齊、把計時器與事件補成不做事的方法：</p>
+<h2>從 <code>.call</code> 找到 VM 入口</h2>
+<p>第 1 次回應裡的 <code>index.html</code> 是動態的。分析時通常會先把它替換成本地版本，讓除錯比較穩定，再直接在 <code>index.html</code> 裡搜尋 <code>.call</code>。</p>
+<p>這個位置通常是進入瑞數 VM 的分析入口。以原本的變數為例，<code>_$jL</code> 實際上就是 <code>eval</code>。它的第一個參數，例如 <code>_$iC</code>，是 Window 物件；第二個參數，例如 <code>_$eB</code>，則是 VM 虛擬機裡的 IIFE，也就是立即執行函式。</p>
+<p>在這個入口設下斷點並單步執行，就能跟進 VM 環境。之後要觀察的動態程式碼與斷點，也會主要落在這個環境裡。</p>
+
+<h2>補環境接在流程的哪個位置</h2>
+<p>把整條鏈接起來看，補環境位於「第 1 次請求之後、第 2 次請求之前」。它接收 HTML 裡的三個動態輸入，讓 <code>ts</code> 與 VM 程式碼在補好的環境中執行，最後產出 <code>cookie2</code>。</p>
+
+<figure class="lesson-figure"><img src="./rs-cookie-flow-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>開始補環境時，常見的起手式如下：先放入 <code>metaContent</code>，對齊最上層物件，再把計時器、事件與部分介面補成不執行實際工作的函式。</p>
 
 <pre data-source="sources/js-reverse2/20261005/JS逆向/Day21-Day22：逆向核心案例解析6/JS逆向补环境文档/逆向爬虫之补环境.md"><code>metaContent = "pDcfDN8f3jz1r7XPqFGsPL6q9rSYtQFpgNsbPWxFArYi81IxUjQqVJWLCSbyMjvmpPyvkJOGoZQizOfI8SGYRSg.ZWDc2MpBkbeiYeTC0T2n07RtcD7cCyQ_xeajMYzzU28381JavZM7FlN4Pz3whmOha766Uu_TEYu3H4pK.j6M9UQzVj.Y2G"
 
@@ -90,13 +173,15 @@ window.XMLHttpRequest = function () {
 }
 window.HTMLFormElement = function () {}</code></pre>
 
-<p>這裡的 <code>metaContent</code> 就是第 1 次回應裡那個 <code>meta</code> 標籤的 content。它每次請求都不一樣，所以不能寫死，必須在爬取時先把第 1 次回應抓回來、抽出這三個動態要素，再注入到補環境的檔案裡執行，最後把 <code>cookie2</code> 取出來，帶著它送第 2 次請求。</p>
+<p>這裡的 <code>metaContent</code> 對應第 1 次回應中，<code>meta</code> 標籤的 <code>content</code>。範例展示的是注入位置與環境骨架，但實際抓取時不能把這個值固定寫死，因為它每次請求都可能不同。</p>
+<p>因此，補環境不是單純複製一份 JavaScript 就結束。它必須與當次請求取得的資料接在一起：先從第 1 次回應抽出三個動態要素，再注入補好的環境中執行，取出新生成的 <code>cookie2</code>，最後與 <code>cookie1</code> 一起送回第 2 次請求。</p>
 
-<h2>小結</h2>
+<h2>把觀念掛回完整流程</h2>
 <blockquote>
-瑞數用「兩次請求、兩個 cookie」擋人：第 1 次頁面請求回傳 <code>cookie1</code> 與一段 HTML（狀態碼 <code>202</code>／<code>412</code>），HTML 裡的動態 <code>meta</code> content、<code>ts</code> 解密程式碼、大自執行函式三個要素，在本地一起算出 <code>cookie2</code>；第 2 次請求帶著 <code>cookie1</code>＋<code>cookie2</code> 才拿回真頁面。VM 檔案是 <code>eval</code>／<code>new Function</code> 產生的臨時腳本，可從 <code>.call</code> 找到進入 VM 的入口。補環境是通過瑞數的其中一條路：把三個動態要素注入補好的環境，讓 JS 跑出 <code>cookie2</code>。
+<p>瑞數的核心關係可以記成一場兩棒接力：第 1 次頁面請求收到 <code>cookie1</code>、動態 HTML，以及 <code>202</code>／<code>412</code>；HTML 裡的動態 <code>meta</code> content、<code>ts</code> 程式碼與大自執行函式，會在本地共同生成 <code>cookie2</code>；第 2 次請求帶齊 <code>cookie1</code> 與 <code>cookie2</code>，才取得真正頁面。</p>
 </blockquote>
-<p>這個節點走到這裡，你已經把「補環境」從原理、工具（Proxy）、清單（八大物件）、檢測（是不是瀏覽器／是不是 Node）到代表性場景（瑞數）串成一個完整迴圈。之後當你在真實站點上遇到動態 cookie，就是把這個迴圈再跑一次：抓第一批動態輸入、注入、執行 JS、取回 cookie、帶資料重放。</p>
+<p>DevTools 裡的 VM 檔案，則是這段動態 JavaScript 被 <code>eval</code> 或 <code>new Function</code> 執行後的臨時除錯檔案。從 <code>.call</code> 附近找到入口，可以跟進 VM，觀察三個動態輸入如何被使用。</p>
+<p>至此，「補環境」也有了明確位置：它不是獨立技巧，而是逆向流程裡的一座橋。前端環境、Proxy、八大物件與環境檢測，都是為了讓這座橋能承接第 1 次回應，重現瀏覽器的本地計算，再把產生的動態 cookie 交給第 2 次請求。</p>
 
 <div class="lesson-nav">
   <div><a href="./env-check-strategies.html">← 上一步：兩種環境檢測：證明我是瀏覽器、不是 Node</a></div>
@@ -110,42 +195,36 @@ window.HTMLFormElement = function () {}</code></pre>
   <button class="opt">三次</button>
   <button class="opt">四次</button>
 </div>
-
 <div class="quiz" data-question="第 1 次頁面請求的回應碼通常是什麼？" data-correct="2" data-explain="第 1 次請求會回傳 202 或 412，以及 cookie1 和一段 HTML。">
   <button class="opt"><code>200</code> 或 <code>301</code></button>
   <button class="opt"><code>403</code> 或 <code>404</code></button>
   <button class="opt"><code>202</code> 或 <code>412</code></button>
   <button class="opt"><code>500</code> 或 <code>502</code></button>
 </div>
-
 <div class="quiz" data-question="下列哪一項<strong>不是</strong>第 1 次回應 HTML 裡的三個動態要素？" data-correct="3" data-explain="三個要素是動態 meta content、ts 程式碼、大自執行函式；cookie2 是它們算出來的結果，不是來源要素。">
   <button class="opt">動態的 <code>meta</code> content</button>
   <button class="opt"><code>ts</code> 解密程式碼</button>
   <button class="opt">大自執行函式</button>
   <button class="opt"><code>cookie2</code> 本身</button>
 </div>
-
 <div class="quiz" data-question="<code>cookie2</code> 是由誰產生的？" data-correct="0" data-explain="cookie2 是第 1 次回應裡那三個動態要素在本地一起計算出來的，所以必須把 JS 跑起來。">
   <button class="opt">三個動態要素在本地算出</button>
   <button class="opt">第 2 次請求由伺服器回傳</button>
   <button class="opt">瀏覽器自動從快取取出</button>
   <button class="opt">由 Node 的 process 產生</button>
 </div>
-
 <div class="quiz" data-question="DevTools 裡以「VM」開頭的檔案代表什麼？" data-correct="2" data-explain="VM 是虛擬機，這些是由 eval／new Function 動態生成、只存在於瀏覽器記憶體的臨時腳本。">
   <button class="opt">專案裡被壓縮的實體檔案</button>
   <button class="opt">伺服器上另一台機器的程式</button>
   <button class="opt"><code>eval</code> 產生的臨時腳本</button>
   <button class="opt">瀏覽器外掛注入的腳本</button>
 </div>
-
 <div class="quiz" data-question="分析瑞數時，常用什麼在 <code>index.html</code> 裡找入口？" data-correct="1" data-explain="搜尋 .call 通常能找到入口，那個位置實際上就是 eval，傳入 Window 物件與 VM 裡的 IIFE。">
   <button class="opt">搜尋 <code>window</code> 這個字</button>
   <button class="opt">搜尋 <code>.call</code></button>
   <button class="opt">搜尋 <code>cookie</code> 這個字</button>
   <button class="opt">搜尋 <code>setTimeout</code></button>
 </div>
-
 <div class="quiz" data-question="瑞數版本的線索，可以從哪裡判讀？" data-correct="3" data-explain="cookie 值的第一個數字就是瑞數版本，S／T 前面通常跟著 80 或 443。">
   <button class="opt">HTTP 回應碼的大小</button>
   <button class="opt">meta content 的長度</button>

@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>理財網：RSA-SHA256 簽章重現</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>理財網：RSA-SHA256 簽章與一個必須對齊的 JSON 細節</h1>
+<p class="meta">Step 4/5 · 案例：非對稱（RSA）</p>
+
+<h2>學習目標</h2>
+<p>對理財網重現 RSA-SHA256 簽章，對齊 JSON 序列化細節，並把簽章放進 signature header 送出請求。</p>
+
+<h2>前言：換一個查詢條件，簽章就換一張臉</h2>
+
+<p>前兩個案例都是同一種任務：拿公鑰把要送出的內容鎖起來。理財網（中國理財網的產品清單 API）把方向反了——請求內容是明文可見的，但每個請求都得附上一張「印章」放在 <code>signature</code> 標頭裡。你在 DevTools 裡換個頁碼重新發請求，那串簽章就整個換掉；把簽章設成固定值，伺服器直接拒絕。</p>
+
+<p>這就是<strong>簽章</strong>任務的長相：它不藏內容，它證明內容出自持有私鑰的人、而且沒被改過。而這個案例最值得玩味的地方在——那把「本該保密」的私鑰，就明文寫在 bundle 裡。這件事的意義第五步專門收網，眼下先把它當成一把好用的鑰匙，把簽章流程完整跑通。</p>
+
+<p>前置條件：會用 webpack 模組定位找函式、Node 與 <code>execjs</code> 環境就緒、Python 裝了 <code>cryptography</code>。做完會得到一支 <code>get_sign(payload)</code>：丟進請求參數的字典，吐出伺服器驗得過的簽章字串。</p>
+
+<h2>步驟一：從 Python 端看整條呼叫鏈</h2>
+
+<p>這個案例的原始碼附了完整的 Python 重現腳本，直接從它讀起最清楚。簽章、標頭、請求體三件事一次看全：</p>
+
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day15-Day16：逆向核心案例解析3/03 理财网.py#L43-L46"><code>sign = execjs.compile(open("04 理财网.js").read()).call("get_sign", data)
+print("sign:::", sign)
+
+headers["signature"] = sign</code></pre>
+
+<p>話說得很明白：簽章函式叫 <code>get_sign</code>，吃一份參數字典 <code>data</code>；算出的字串放進 <code>signature</code> 標頭。請求體的寫法也有玄機：</p>
+
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day15-Day16：逆向核心案例解析3/03 理财网.py#L48-L56"><code>response = requests.post(
+    'https://xinxipilu.chinawealth.com.cn/lcxp-platService/product/getProductList',
+    cookies=cookies,
+    headers=headers,
+    # params: GET请求的查询数据
+    # data=data,  # data默认将字典处理成form表单的字符串格式（a=1&b=2）
+    # json=data,  # json=data是将字典处理成json字符串格式（{"a":1,"b":2}）
+    data=json.dumps(data, separators=(",", ":"))
+)</code></pre>
+
+<p>作者特別註解了 <code>data=</code>、<code>json=</code> 兩種寫法都不能用，最後選 <code>data=json.dumps(data, separators=(",", ":"))</code>。原因下一步揭曉——簽章簽的是「這份 JSON 字串」，而 <code>requests</code> 的兩種自動序列化都可能產出跟 JavaScript 不同的字串（多空白、多逗號），字串不同，簽章就對不上。</p>
+
+<h2>步驟二：讀簽章配方——SHA256withRSA</h2>
+
+<p>打開 <code>04 理财网.js</code>，拉到檔案最尾端（大約七萬九千行之後），有一段人工追加的程式碼——這就是逆向者自己從 bundle 抽出來的簽章核心：</p>
+
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day15-Day16：逆向核心案例解析3/04 理财网.js#L79102-L79110"><code>function Me(e, t) {
+    const o = He.KEYUTIL.getKey(t)
+        , n = new He.KJUR.crypto.Signature({
+        alg: "SHA256withRSA"
+    });
+    return n.init(o),
+        n.updateString(e),
+        He.hextob64(n.sign())
+}</code></pre>
+
+<p>五個動作，每個都對得上 jsrsasign 的標準 API（這裡的 <code>He</code> 就是 bundle 裡的 jsrsasign 實例）：</p>
+
+<ol>
+<li><code>He.KEYUTIL.getKey(t)</code>：把引數 <code>t</code> 解析成金鑰物件——傳 PEM 字串進去，它自動認出是公鑰還是私鑰。</li>
+<li><code>new He.KJUR.crypto.Signature({alg: "SHA256withRSA"})</code>：建立簽章器，配方是 <code>SHA256withRSA</code>——先對訊息算 SHA-256 雜湊，再用 RSA 私鑰簽那個雜湊。</li>
+<li><code>n.init(o)</code>：用剛才解析出的金鑰初始化。</li>
+<li><code>n.updateString(e)</code>：送入要簽的字串。</li>
+<li><code>He.hextob64(n.sign())</code>：<code>sign()</code> 吐出十六進位的簽章，<code>hextob64</code> 轉成 Base64 後回傳。</li>
+</ol>
+
+<p>對照第一步的判讀法：字串進、簽章出，同一份資料結果固定——這是簽章不是加密。<code>SHA256withRSA</code> 這個參數白紙黑字寫在那裡，等於作者直接告訴你配方，剩下的是照做。</p>
+
+<h2>步驟三：get_sign 與寫死的私鑰</h2>
+
+<p>呼叫端 <code>get_sign</code> 把配方和金鑰組合起來：</p>
+
+<pre data-source="sources/js-reverse2/20261005/JS逆向/Day15-Day16：逆向核心案例解析3/04 理财网.js#L79112-L79122"><code>function
+get_sign(data) {
+…
+    i = JSON.stringify(data)
+    r = Me(i, n);
+    return r
+}</code></pre>
+
+<p>（原本夾在中間的那行是 <code>let n = "-----BEGIN PRIVATE KEY----- … -----END PRIVATE KEY-----"</code>——一把寫死的 2048-bit 私鑰 PEM，字串太長，這裡省略。）</p>
+
+<p>兩個細節決定成敗。第一，被簽的不是「參數」這個抽象概念，而是 <code>JSON.stringify(data)</code> 產出的<strong>那個具體字串</strong>。伺服器驗章時拿的是它自己組出來的 JSON 字串，兩邊字串必須逐字元一致。第二，<code>getKey</code> 收到的是 <code>BEGIN PRIVATE KEY</code>——<strong>私鑰</strong>。簽章流程本該由私鑰持有者執行，而這裡私鑰隨著前端程式碼發給了每一個訪客。</p>
+
+<h2>步驟四：序列化細節必須逐字元對齊</h2>
+
+<p>簽章對不上，十次有九次不是 RSA 算錯，而是 JSON 字串不一樣。回到第一步那行 <code>json.dumps(data, separators=(",", ":"))</code>，三個細節缺一不可：</p>
+
+<ul>
+<li><strong>不能有空白。</strong><code>JSON.stringify</code> 的預設輸出是緊湊格式 <code>{"a":1,"b":2}</code>；Python 的 <code>json.dumps</code> 預設卻是 <code>{"a": 1, "b": 2}</code>（多了空格）。<code>separators=(",", ":")</code> 就是為了把冒號和逗號後的空格去掉。</li>
+<li><strong>鍵的順序要一致。</strong>簽的是字串，鍵順序不同字串就不同。Python 的字典保留插入順序，所以腳本裡字典的書寫順序要跟 JS 端一致。</li>
+<li><strong>null 要對得上。</strong>JS 的 <code>null</code> 對 Python 的 <code>None</code>，<code>json.dumps</code> 會正確輸出 <code>null</code>——但若是日期、浮點數之類的型別，兩邊格式可能有細微差異，要逐一核對。</li>
+</ul>
+
+<p>可以把它想成對照兩張紙的影本：簽章蓋在「這張紙的內容」上，影本差一個空格就是另一張紙，印章自然驗不過。</p>
+
+<h2>步驟五：不走 execjs 的 Python 重現</h2>
+
+<p><code>execjs</code> 路線是最快驗證想法的方式，但長期維護可以乾脆用 Python 直接算。配方是標準的 PKCS#1 v1.5 簽章加 SHA-256：</p>
+
+<pre data-provenance="derived"><code>import base64
+import json
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+
+private_key = serialization.load_pem_private_key(
+    PRIVATE_KEY_PEM,  # bundle 裡那把 -----BEGIN PRIVATE KEY----- 字串
+    password=None,
+)
+
+
+def get_sign(payload: dict) -> str:
+    message = json.dumps(payload, separators=(",", ":")).encode()
+    signature = private_key.sign(message, padding.PKCS1v15(), hashes.SHA256())
+    return base64.b64encode(signature).decode()</code></pre>
+
+<p><code>private_key.sign</code> 吃的是原始訊息位元組，內部自己算 SHA-256 再簽——跟 jsrsasign 的 <code>SHA256withRSA</code> 是同一件事。輸出的簽章位元組直接 Base64，對應 JS 端的 <code>hextob64</code>。</p>
+
+<p>驗證比前兩個案例舒服得多：<strong>PKCS#1 v1.5 簽章是確定性的</strong>——同一份資料、同一把私鑰，簽出來的字串每次都一樣。所以你可以拿同一份 payload 分別餵 JS 和 Python，逐字元比對簽章；相等就代表重現正確。最後把簽章放進 <code>signature</code> 標頭、請求體用緊湊 JSON 送出，附上 <code>JSESSIONID</code> cookie 與 <code>Content-Type: application/json;charset=UTF-8</code>，伺服器就會正常回產品清單。</p>
+
+<h2>做完長什麼樣</h2>
+
+<p>可驗證的結果：<code>get_sign(payload)</code> 回傳一串 344 字元左右的 Base64（2048-bit 簽章 256 位元組）；同一 payload 重算結果恆定；貼進 <code>signature</code> 標頭送出請求，拿到 200 與產品清單 JSON。改任何一個參數——換頁碼、換關鍵字——簽章跟著變，因為被簽的字串變了。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+理財網用 RSA-SHA256 對 <code>JSON.stringify(data)</code> 的字串簽章，簽章放進 <code>signature</code> 標頭。配方是 jsrsasign 的 <code>SHA256withRSA</code>：SHA-256 雜湊加 PKCS#1 v1.5 簽名，輸出從 hex 轉 Base64。重現的成敗在序列化：緊湊 JSON、鍵順序、null 都要跟 JS 逐字元對齊。簽章是確定性的，可以直接比對驗證——但別忘了，簽章用的私鑰就寫死在 bundle 裡。
+</blockquote>
+
+<p>三個案例跑完了：外貿的公鑰 PEM、沃郵箱的模數加指數、理財網寫死的私鑰。同樣是 RSA，站方把哪把鑰匙放上前端，決定了這層保護到底擋住了誰——也決定了你的重現該走哪條路。下一步把三案並排，做最後的判斷與抉擇。</p>
+
+<div class="lesson-nav">
+  <div><a href="./womail-rsa-password.html">← 上一步：沃郵箱：登入密碼的 RSA 加密重現</a></div>
+  <div><a href="./private-key-in-frontend.html">下一步：抉擇：私鑰在前端的失效模式與重現路線 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="signature 標頭裡的簽章是用哪把鑰匙算出來的？" data-correct="1" data-explain="簽章用私鑰算，伺服器用公鑰驗；這個案例的私鑰寫死在 bundle 裡。">
+  <button class="opt">伺服器發的公鑰</button>
+  <button class="opt">寫死在 bundle 裡的私鑰</button>
+  <button class="opt">使用者登入後的 session 金鑰</button>
+  <button class="opt">隨機產生、每次不同的一次性金鑰</button>
+</div>
+<div class="quiz" data-question="SHA256withRSA 這組配方代表什麼？" data-correct="3" data-explain="先對訊息算 SHA-256 雜湊，再用 RSA 私鑰簽那個雜湊，是簽章不是加密。">
+  <button class="opt">用 SHA-256 加密後再用 RSA 加密</button>
+  <button class="opt">產生 256 位元的 RSA 金鑰</button>
+  <button class="opt">把 RSA 密文做 SHA-256 摘要</button>
+  <button class="opt">對訊息的 SHA-256 雜湊做 RSA 簽名</button>
+</div>
+<div class="quiz" data-question="簽章驗不過時，最可能出錯的是什麼？" data-correct="0" data-explain="簽的是 JSON.stringify 的字串，空白、鍵序、null 只要不同就是另一個字串，驗章必失敗。">
+  <button class="opt">JSON 序列化沒有逐字元對齊</button>
+  <button class="opt">RSA 演算法實作有 bug</button>
+  <button class="opt">Base64 的補位符號沒去掉</button>
+  <button class="opt">簽章的有效期限過了</button>
+</div>
+<div class="quiz" data-question="為什麼 Python 端要用 separators=(\",\", \":\") 做 json.dumps？" data-correct="2" data-explain="去掉冒號與逗號後的空格，讓輸出跟 JS 的 JSON.stringify 緊湊格式一致。">
+  <button class="opt">為了讓 JSON 可以被加密</button>
+  <button class="opt">為了壓縮請求體積</button>
+  <button class="opt">讓輸出與 JS 的緊湊格式一致</button>
+  <button class="opt">為了讓鍵自動排序</button>
+</div>
+<div class="quiz" data-question="為什麼這個案例可以用「比對簽章字串」來驗證重現正確？" data-correct="1" data-explain="PKCS#1 v1.5 簽章沒有隨機性，同資料同私鑰的簽章恆定；加密案例才有隨機輸出。">
+  <button class="opt">因為簽章是 Base64，比對容易</button>
+  <button class="opt">簽章是確定性的，同資料同結果</button>
+  <button class="opt">因為伺服器會回傳期望值</button>
+  <button class="opt">所有 RSA 輸出都是恆定的</button>
+</div>
+<div class="quiz" data-question="這個案例的私鑰寫死在前端，代表什麼？" data-correct="3" data-explain="任何拿到 bundle 的人都能對任意內容簽出合法簽章，等於簽章能力公開。">
+  <button class="opt">伺服器無法驗證簽章</button>
+  <button class="opt">簽章演算法已經被破解</button>
+  <button class="opt">需要用暴力破解才能還原</button>
+  <button class="opt">任何人可偽造合法簽章</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 案例：非對稱（RSA） · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

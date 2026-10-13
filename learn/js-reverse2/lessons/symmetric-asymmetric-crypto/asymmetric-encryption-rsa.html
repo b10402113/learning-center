@@ -8,35 +8,55 @@
 </head>
 <body>
 
-<h1>非對稱加密：公鑰加密、私鑰解密的 RSA 模型</h1>
-<p class="meta">Step 3/5 · 對稱與非對稱加密：AES/DES、RSA、國密</p>
+<h1>非對稱加密：看懂 RSA 的公鑰加密與私鑰解密</h1>
+<p class="meta">Step 3/5 · 對稱與非對稱加密：AES／DES、RSA、國密</p>
 
 <h2>學習目標</h2>
-<p>能說明非對稱加密為什麼需要公鑰與私鑰兩把 key，講清楚「公鑰加密、私鑰解密」的方向，並認出 jsencrypt 的 setPublicKey／setPrivateKey 特徵。</p>
+<p>這一課要建立 RSA 的判斷模型。你會理解非對稱加密為什麼需要公鑰與私鑰，掌握「公鑰加密、私鑰解密」的方向，並能從 <code>setPublicKey</code>、<code>setPrivateKey</code> 等特徵，認出前端使用的 <code>jsencrypt</code>。</p>
 
-<h2>前言：登入頁那串密碼，前端竟然沒有 key</h2>
+<h2>登入密碼變成密文，卻怎麼也找不到 key</h2>
 
-<p>你盯著一個登入介面的請求，看到送出去的 <code>password</code> 已經變成一長串 Base64，於是很自然地往上一節的路線走：找對稱加密的 key。可是搜遍了整包 JS，怎麼找都找不到那 16 個位元組的密鑰。奇怪的是，明明沒有 key，密文卻還是能產生出來。</p>
+<p>想像你正在 DevTools 的 Network 面板檢查登入請求。使用者輸入的密碼送出後，已經變成一長串 Base64。沿著「抓到請求，再回頭逆向前端程式」的路線，你很自然會開始搜尋對稱加密使用的 key。</p>
 
-<p>這不是找漏了，而是這一站用的根本不是對稱加密。你想想：對稱加密的加密與解密共用同一把 key，如果前端要能加密，那把 key 就非得放在前端不可，那不就等於把鑰匙貼在保險箱上嗎？正是為了避開這個矛盾，站台改用另一套模型：前端只放一把可以公開的鑰匙用來加密，真正能解開的鑰匙留在伺服器。這就是非對稱加密。</p>
+<p>但你翻遍整包 JavaScript，始終找不到熟悉的 16 位元組密鑰。奇怪的是，前端明明沒有那把 key，卻還是能產生密文。</p>
 
-<h2>為什麼需要兩把 key</h2>
+<p>這通常不是你漏找了，而是方向一開始就錯了。這個站台使用的可能不是對稱加密，而是 RSA 這類<strong>非對稱加密</strong>。</p>
 
-<p>非對稱加密需要兩個金鑰，一組是<strong>公開金鑰</strong>（public key，簡稱公鑰），一組是<strong>私有金鑰</strong>（private key，簡稱私鑰）。公鑰與私鑰是一對，兩者互相搭配。它的核心規則只有一句：<strong>用公鑰把資料加密之後，只有對應的私鑰才能解開。</strong>因為加密與解密用的是兩把不同的 key，這種做法就叫做非對稱加密，RSA 是最廣為使用的代表。</p>
+<p>對稱加密就像同一把鑰匙同時負責上鎖與開鎖。前端若要加密，就必須拿到這把鑰匙；但把它放進瀏覽器，又像把保險箱鑰匙直接貼在箱門旁。非對稱加密改用兩把不同的鑰匙：前端只拿可以公開的那一把，真正能解密的另一把則留在伺服器。</p>
 
-<p>這個設計解決了對稱加密在前端場景的死結：公鑰可以大方地公開，寫在 JS 裡也沒關係，因為它只能加密、不能解密；私鑰則留在伺服器端，不曾出現在前端。所以逆向這類加密時，你找的「金鑰」其實是公鑰，而且它本來就攤在那裡給你看，你要做的是把它撈出來，重現加密過程。</p>
+<figure class="lesson-figure"><img src="./asymmetric-encryption-rsa-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>使用流程與方向</h2>
+<h2>為什麼要把一把 key 拆成兩把</h2>
 
-<p>使用時的方向固定是「公鑰加密、私鑰解密」，不能反過來當成日常用途。可以這樣想像：公鑰像是一個只有投遞口的信箱，任何人都能往裡面投信（加密），但只有握有私鑰的人能打開信箱把信拿出來（解密）。</p>
+<p>非對稱加密使用一對彼此配合的金鑰：<strong>公開金鑰</strong>（public key，簡稱公鑰）與<strong>私有金鑰</strong>（private key，簡稱私鑰）。</p>
+
+<p>在本課討論的 RSA 加密情境中，規則可以先記成一句話：<strong>使用公鑰加密的資料，只有對應的私鑰才能解開。</strong>加密與解密不再共用同一把 key，因此稱為「非對稱」加密。RSA 就是最常見的代表之一。</p>
+
+<p>這個設計解開了前端加密的難題。公鑰只能用來把資料鎖起來，所以可以公開，也可以直接寫在 JavaScript 裡；私鑰則留在伺服器端，不需要送進瀏覽器。</p>
+
+<p>因此，逆向 RSA 前端加密時，不必像分析 AES 那樣執著於尋找一把不能外洩的密鑰。你要找的是本來就能公開的公鑰，以及前端如何使用它產生密文。這也是「抓取 → 觀察請求 → 逆向 JavaScript」這條路線中的關鍵判斷：先分辨加密模型，才知道接下來該追什麼。</p>
+
+<h2>公鑰像投遞口，私鑰才是信箱鑰匙</h2>
+
+<p>理解 RSA 的方向，可以把它想成一個只有投遞口的信箱。任何拿到公鑰的人都能把信投進去，也就是加密；但只有握有私鑰的人，才能打開信箱並取出內容，也就是解密。</p>
 
 <ul>
-<li>假設 A、B、C 三方要互相加密通訊，大家各自把自己的公鑰公開，其他人就用該公鑰加密訊息，只有持有對應私鑰的那一方能解讀。</li>
-<li>公鑰可以公開分享，私鑰必須自己妥善保留。</li>
-<li>典型場景是使用者輸入的支付密碼會先經過 RSA 加密才送出，密碼在前端就被公鑰鎖上，即使封包被攔截，沒有私鑰也解不開。</li>
+<li>假設 A、B、C 三方需要互相傳送加密訊息，每一方都可以公開自己的公鑰。其他人要傳訊息給某一方時，就使用那一方的公鑰加密；最後只有持有對應私鑰的人能讀取內容。</li>
+<li>公鑰可以公開分享，私鑰則必須由持有者妥善保管。</li>
+<li>典型情境是使用者輸入的支付密碼先經過 RSA 加密，再送往伺服器。密碼在前端就被公鑰鎖上；即使封包遭到攔截，沒有私鑰也無法直接還原明文。</li>
 </ul>
 
-<p>另外要記住一個實務上的取捨：非對稱加密的演算法強度較高、安全性依賴演算法與金鑰，但正因為運算複雜，它的加解密速度<strong>比對稱加密慢</strong>。所以真實系統很少整段資料都用 RSA 處理，更常見的是拿它來保護體積很小的東西（例如密碼），或是在開頭先交換一把對稱加密用的 key，之後才用對稱加密處理大量資料。</p>
+<p>這裡的「公鑰加密、私鑰解密」是在談資料保密，也是前端登入與支付密碼常見的使用方向。不要把方向任意顛倒，當成同一種日常加密用途。</p>
+
+<figure class="lesson-figure"><img src="./asymmetric-encryption-rsa-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>什麼時候適合 RSA，什麼時候不適合</h2>
+
+<p>兩把鑰匙解決了金鑰不能安全放在前端的問題，但並不是沒有代價。非對稱加密的運算較複雜，加解密速度也<strong>比對稱加密慢</strong>。</p>
+
+<p>因此，RSA 適合保護體積較小、但不希望直接暴露的資料，例如密碼或授權啟用資訊。若要處理大量資料，整段內容都交給 RSA 並不划算。</p>
+
+<p>真實系統更常採用分工方式：先用非對稱加密保護或交換一把對稱加密用的 key，後續的大量資料再交給速度較快的對稱加密。這就像先用保險箱運送倉庫鑰匙，而不是把整間倉庫塞進保險箱。</p>
 
 <h2>對稱與非對稱，一張表看清楚</h2>
 
@@ -45,26 +65,36 @@
 <tr><th></th><th>對稱加密（AES／DES）</th><th>非對稱加密（RSA）</th></tr>
 </thead>
 <tbody>
-<tr><td>金鑰</td><td>加解密共用一把</td><td>公鑰與私鑰一對</td></tr>
-<tr><td>方向</td><td>同一把 key 加密、同一把 key 解密</td><td>公鑰加密、私鑰解密</td></tr>
-<tr><td>前端能看到什麼</td><td>能看到 key 才能加密，等於洩漏風險</td><td>只放公鑰，可以公開</td></tr>
+<tr><td>金鑰</td><td>加密與解密共用一把</td><td>使用成對的公鑰與私鑰</td></tr>
+<tr><td>方向</td><td>同一把 key 加密，也用同一把 key 解密</td><td>本課情境為公鑰加密、私鑰解密</td></tr>
+<tr><td>前端能看到什麼</td><td>前端必須拿到 key 才能加密，因而有外洩風險</td><td>前端只需要公鑰，公鑰可以公開</td></tr>
 <tr><td>速度</td><td>較快</td><td>較慢</td></tr>
-<tr><td>常見用途</td><td>加密大量資料、請求／回應 body</td><td>密碼、授權啟用等小量資料</td></tr>
+<tr><td>常見用途</td><td>加密大量資料、請求或回應 body</td><td>密碼、授權啟用等小量資料</td></tr>
 </tbody>
 </table>
 
-<h2>jsencrypt：前端最常見的 RSA 實作</h2>
+<p>在 DevTools 裡看到密文時，這張表就是第一層判斷工具。若程式附近還能找到固定 key，可能是在使用 AES 或 DES；若看到一大段公鑰，以及設定公鑰後呼叫加密函式的流程，就更像 RSA。</p>
 
-<p>前端要做 RSA，最常見的套件是 <code>jsencrypt</code>，用 <code>npm install jsencrypt</code> 安裝。它把操作濃縮成幾個方法，認得這幾個名字，你就能在混淆過的程式碼裡很快定位：</p>
+<h2>從 jsencrypt 的特徵認出 RSA</h2>
+
+<p>前端實作 RSA 時，常見套件之一是 <code>jsencrypt</code>，可以使用 <code>npm install jsencrypt</code> 安裝。實際逆向時，即使程式碼經過混淆，幾個方法名稱仍是很有用的路標：</p>
 
 <ul>
-<li><strong>RSA</strong>：出現在套件名或註解裡，是最直接的線索。</li>
-<li><strong>setPublicKey</strong>：設定公鑰，看到它就代表接下來要做的是「加密」。</li>
-<li><strong>setPrivateKey</strong>：設定私鑰，代表接下來要做的是「解密」，如果這個出現在前端，本身就是一個警訊，後面會再提。</li>
-<li><strong>encrypt、decrypt</strong>：加解密函式名。</li>
+<li><strong>RSA</strong>：若出現在套件名稱或註解中，是最直接的線索。</li>
+<li><strong>setPublicKey</strong>：把公鑰交給加密物件。看到它，通常表示接下來要進行加密。</li>
+<li><strong>setPrivateKey</strong>：把私鑰交給物件，通常代表後續要解密。私鑰若出現在前端，本身就是值得警覺的訊號。</li>
+<li><strong>encrypt、decrypt</strong>：分別是加密與解密函式名稱。</li>
 </ul>
 
-<p>還有一個很容易忽略的細節：<code>jsencrypt</code> 原本是設計給瀏覽器用的，它會去讀取瀏覽器才有的 <code>window</code> 與 <code>self</code> 這兩個全域物件。當你想把它搬到 Node 環境執行時，必須先補上這兩個東西，否則一載入就報錯。課程裡的示範就是先用兩行把它們指向 <code>globalThis</code>：</p>
+<p>所以在 DevTools 的 Sources 面板追程式時，可以先搜尋這些特徵，再沿著呼叫位置往回找公鑰與原始明文。這比一開始就在整包混淆程式裡逐行閱讀有效得多。</p>
+
+<figure class="lesson-figure"><img src="./asymmetric-encryption-rsa-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把瀏覽器程式搬到 Node 時，為什麼會報錯</h2>
+
+<p><code>jsencrypt</code> 原本是為瀏覽器設計的，因此會讀取瀏覽器環境才有的 <code>window</code> 與 <code>self</code> 全域物件。當你把前端加密邏輯搬到 Node 執行時，如果缺少這兩個物件，套件可能在載入階段就報錯。</p>
+
+<p>課程示範的處理方式，是先讓它們指向 <code>globalThis</code>，再載入 <code>jsencrypt</code>：</p>
 
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day07/课上代码/02 加密.js#L9-L13"><code>window = globalThis;
 // 添加这行
@@ -72,7 +102,7 @@ self = globalThis;
 
 const JSEncrypt = require('jsencrypt');</code></pre>
 
-<p>補完之後，jsencrypt 就能在 Node 下正常呼叫。典型的使用長相如下，公鑰與私鑰都是字串，格式是介於 <code>-----BEGIN PUBLIC KEY-----</code> 與 <code>-----END PUBLIC KEY-----</code> 之間的一大段 Base64，稱為 PEM 格式：</p>
+<p>補上執行環境後，就能在 Node 中呼叫原本給瀏覽器使用的套件。典型的公鑰加密程式如下：</p>
 
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day07/课堂笔记/3.加密算法 - 副本.md#L455-L467"><code>window = globalThis;
 
@@ -84,15 +114,29 @@ encrypt.setPublicKey(PUBLIC_KEY);//设置公钥
 var encrypted = encrypt.encrypt('hello bobo!');//对指定数据进行加密
 console.log(encrypted);//使用私钥解密</code></pre>
 
-<p>公鑰與私鑰可以線上生成，也可以自己用工具產生。前端程式裡如果出現了一段完整的私鑰（<code>-----BEGIN PRIVATE KEY-----</code>），通常只有兩種可能：一種是開發者拿它來做本機測試的輔助功能，另一種則是設計失誤：把應該留在伺服器的私鑰直接送到了瀏覽器。後者等於門鎖連鑰匙一起交給對方，是整個加密流程失效的經典失誤。</p>
+<p>這段程式最值得辨認的關係是：先建立 <code>JSEncrypt</code> 物件，再透過 <code>setPublicKey</code> 放入公鑰，最後呼叫 <code>encrypt</code> 產生密文。逆向時即使變數名稱遭到改寫，這組關係通常仍能幫你確認它正在做 RSA 公鑰加密。</p>
 
-<h2>小結</h2>
+<p>公鑰與私鑰都是字串。常見格式是在 <code>-----BEGIN PUBLIC KEY-----</code> 與 <code>-----END PUBLIC KEY-----</code> 之間放入一大段 Base64，這種格式稱為 PEM。金鑰可以在線上生成，也可以自行使用工具產生。</p>
+
+<h2>前端出現私鑰，為什麼是警訊</h2>
+
+<p>正常模型中，前端拿到公鑰很合理，因為公鑰原本就可以公開；但如果程式裡出現完整的 <code>-----BEGIN PRIVATE KEY-----</code>，判斷就完全不同了。</p>
+
+<p>一種可能是開發者為了本機測試，暫時加入解密功能。另一種可能則是設計失誤：原本應該留在伺服器的私鑰，竟然被送進瀏覽器。</p>
+
+<figure class="lesson-figure"><img src="./asymmetric-encryption-rsa-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>後者就像把門鎖與唯一能開門的鑰匙一起交出去。只要私鑰落到前端，任何能取得前端程式的人都可能拿到它，原本「只有伺服器可以解密」的邊界也就跟著消失。</p>
+
+<h2>把 RSA 放回逆向流程中理解</h2>
 
 <blockquote>
-非對稱加密用一對金鑰：公鑰可以公開、負責加密，私鑰留在伺服器、負責解密，方向固定是「公鑰加密、私鑰解密」。它解決了對稱加密在前端「要加密就得先洩漏 key」的矛盾，代價是速度較慢，因此常用來保護密碼、授權啟用這類小量資料，而不是整段 body。前端最常見的實作是 jsencrypt，認得 <code>setPublicKey</code>、<code>setPrivateKey</code>、<code>encrypt</code>、<code>decrypt</code> 與那段 <code>window = globalThis; self = globalThis;</code> 的 Node 補丁，你就能在混淆的程式碼裡找到它。
+非對稱加密使用一對金鑰。公鑰可以公開，負責在前端把資料加密；私鑰留在伺服器，負責解密。它解決了對稱加密在前端「要加密，就得先暴露同一把 key」的矛盾，但代價是速度較慢，因此通常用來保護密碼、授權啟用等小量資料，而不是直接處理整段 body。
 </blockquote>
 
-<p>知道模型之後，下一步就是把這套流程親手做一遍：用 Python 產生一對公私鑰、匯出成 PEM，再用它把資料加密、base64 傳出去，最後用私鑰解回來，並對照 jsencrypt 的 Node 寫法。</p>
+<p>在前端逆向的大圖裡，RSA 應該放在「抓到異常欄位之後，判斷加密模型」這個位置。看到 <code>setPublicKey</code>、<code>encrypt</code> 與 PEM 公鑰，就應該聯想到公鑰加密；看到 <code>setPrivateKey</code> 或完整私鑰出現在瀏覽器，則要立刻檢查是否只是測試程式，或已經發生設計失誤。</p>
+
+<p>下一課會把這個模型實際跑過一次：使用 Python 產生一對公私鑰、匯出成 PEM，以公鑰加密並透過 Base64 傳遞，再用私鑰解密，同時對照 <code>jsencrypt</code> 在 Node 中的寫法。</p>
 
 <div class="lesson-nav">
   <div><a href="./aes-des-in-js-and-python.html">← 上一步：從 crypto-js 還原 AES/DES，並用 pycryptodome 重現</a></div>
@@ -107,35 +151,30 @@ console.log(encrypted);//使用私钥解密</code></pre>
   <button class="opt">公鑰加密，公鑰解密</button>
   <button class="opt">私鑰加密，私鑰解密</button>
 </div>
-
 <div class="quiz" data-question="前端為什麼可以安全地放公鑰？" data-correct="2" data-explain="公鑰只能加密、不能解密，公開它不會讓別人還原密文。">
   <button class="opt">因為公鑰每次連線都會自動更換</button>
   <button class="opt">因為公鑰本身也經過對稱加密保護</button>
   <button class="opt">因為公鑰只能加密、不能解密</button>
   <button class="opt">因為公鑰只能加密長度為零的資料</button>
 </div>
-
 <div class="quiz" data-question="相較於對稱加密，RSA 的速度如何？" data-correct="1" data-explain="非對稱演算法較複雜，加解密速度比對稱加密慢。">
   <button class="opt">比對稱加密明顯更快</button>
   <button class="opt">比對稱加密慢</button>
   <button class="opt">兩者速度完全一樣</button>
   <button class="opt">取決於網路速度而非演算法</button>
 </div>
-
 <div class="quiz" data-question="在前端看到 setPrivateKey，通常暗示了什麼？" data-correct="3" data-explain="私鑰不該出現在前端，這要嘛是測試用途，要嘛是設計失誤。">
   <button class="opt">這是一段對稱加密的程式</button>
   <button class="opt">公鑰已經被伺服器撤銷</button>
   <button class="opt">接下來會把密文再雜湊一次</button>
   <button class="opt">私鑰可能不該出現在前端</button>
 </div>
-
 <div class="quiz" data-question="把 jsencrypt 拿到 Node 執行時，要先補上什麼？" data-correct="2" data-explain="它原本依賴瀏覽器的 window 與 self，要先把它們指向 globalThis。">
   <button class="opt">補上一個真正的伺服器網域</button>
   <button class="opt">補上 crypto-js 這個套件</button>
   <button class="opt">補上 window 與 self 全域物件</button>
   <button class="opt">補上一個長度 16 的對稱 key</button>
 </div>
-
 <div class="quiz" data-question="實務上 RSA 最常用來處理下列哪一種資料？" data-correct="0" data-explain="RSA 慢，適合保護密碼這類小量資料，而非整段 body。">
   <button class="opt">密碼、授權啟用等小量資料</button>
   <button class="opt">整個網站的所有回應 body</button>

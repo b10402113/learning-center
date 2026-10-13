@@ -8,27 +8,30 @@
 </head>
 <body>
 
-<h1>從 crypto-js 還原 AES/DES，並用 pycryptodome 重現</h1>
-<p class="meta">Step 2/5 · 對稱與非對稱加密：AES/DES、RSA、國密</p>
+<h1>從 crypto-js 拆出 AES／DES，並用 pycryptodome 重現</h1>
+<p class="meta">Step 2/5 · 對稱與非對稱加密：AES／DES、RSA、國密</p>
 
 <h2>學習目標</h2>
-<p>看到 crypto-js 的 AES/DES 程式碼，能依序抓出 key、iv、mode、padding，並在 Python 用 pycryptodome 寫出可驗證、可對接的加解密。</p>
+<p>這一節要完成一個可以直接驗收的目標：從 crypto-js 的 AES／DES 程式碼中找出 key、iv、mode 與 padding，再用 Python 的 pycryptodome 重現相同的加解密流程。</p>
+<p>做完之後，你不只要能解出原文，還要能讓 JavaScript 與 Python 在相同參數下產生<strong>一模一樣的密文</strong>。這樣才表示 Python 程式真的能拿去對接介面。</p>
 
-<h2>前言：認得模型之後，工作變成「把四個參數抄到手」</h2>
+<h2>先看大圖：從抓取一路走到加密逆向</h2>
+<p>分析真實網站時，通常先在 DevTools 觀察請求。如果請求 body 不是可讀的明文，而是一串 Base64 字串，就要繼續追到產生它的 JavaScript。</p>
+<p>找到 crypto-js 的呼叫後，工作就像照著配方表點材料：先確認演算法，再找出 key、iv、mode 與 padding，最後把同一份配方搬到 Python。只要其中一項抄錯，做出來的密文就會完全不同。</p>
+<p>這套方法適合處理前端直接使用 crypto-js 的 AES／DES 加密。若 key 不是固定字串，而是經過 MD5、切片或其他運算產生，就不能只抄最後一行，還要沿著變數往回追。</p>
 
-<p>上一節把對稱加密的模型講完了：同一把 key、五個參數、ECB 與 CBC 的差別。觀念聽懂了，但真正下場時你面對的是一段別人的 JS：變數名稱被壓縮成 <code>a</code>、<code>t</code>、<code>n</code>，密鑰散在好幾行裡。這一節要做的，就是把上一節的模型當成一張清單，逐項去 JS 裡對答案：key 在哪、iv 在哪、用的是 CBC 還是 ECB、padding 是哪一種。抄齊之後，你要在 Python 用 pycryptodome 重現出<strong>一模一樣的密文</strong>，這樣才能拿它去對接介面。</p>
+<figure class="lesson-figure"><img src="./aes-des-in-js-and-python-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>動手前的前置條件</h2>
-
 <ul>
-<li>Python 環境要能安裝 pycryptodome，課程裡用的是清華鏡像：<code>pip install pycryptodome -i https://pypi.tuna.tsinghua.edu.cn/simple/</code>。</li>
-<li>要看懂 Base64，因為密文多半會先用 Base64 包一層才傳輸，這在上一個節點已經學過。</li>
-<li>知道上一節那五個參數各自的意思，這裡就不再重講。</li>
+<li>Python 環境要能安裝 pycryptodome。課程使用的安裝指令是 <code>pip install pycryptodome -i https://pypi.tuna.tsinghua.edu.cn/simple/</code>。</li>
+<li>要看得懂 Base64。網站通常會把二進位密文包成 Base64 字串，再放進請求或回應中。</li>
+<li>要知道 key、iv、mode、padding 與明文這五項參數的用途。這一節會直接拿它們來核對程式碼，不再重講原理。</li>
 </ul>
 
-<h2>第一步：從 JS 認出加密呼叫，讀出四個參數</h2>
-
-<p>先看一段典型的 crypto-js 加密程式。整段的重點只有一行 <code>CryptoJS.AES.encrypt</code>，其餘都是在準備它的參數：</p>
+<h2>第一步：在 DevTools 找到加密呼叫</h2>
+<p>先追到真正執行加密的位置。看到 crypto-js 時，不必一開始就讀完整份 JavaScript；先鎖定 <code>CryptoJS.AES.encrypt</code> 或 <code>CryptoJS.DES.encrypt</code>，再看傳進去的參數。</p>
+<p>以下是一段典型的 AES 加密程式。核心是 <code>CryptoJS.AES.encrypt</code>，前面的程式則是在準備 key、iv 與明文：</p>
 
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day07/课堂笔记/3.加密算法 - 副本.md#L375-L397"><code>const CryptoJS = require("crypto-js")
 
@@ -53,20 +56,18 @@ var ciphertext = encrypted.toString();
 
 console.log(ciphertext);</code></pre>
 
-<p>從這段程式你可以一項一項對出上一節的清單：</p>
-
-<ul>
-<li><strong>key</strong>：<code>CryptoJS.enc.Utf8.parse('0123456789abcdef')</code>。那個 <code>Utf8.parse</code> 只是把字串轉成 crypto-js 內部要用的位元組形式，真正有意義的是引號裡的字串，長度 16 個字元，對應 128 位元的 AES 密鑰。</li>
-<li><strong>iv</strong>：同樣用 <code>Utf8.parse</code> 包起來的 <code>'1234567890abcdef'</code>，也是 16 個字元。</li>
+<p>照著呼叫位置往外讀，可以依序抄出四項關鍵參數：</p>
+<ol>
+<li><strong>key</strong>：<code>CryptoJS.enc.Utf8.parse('0123456789abcdef')</code>。<code>Utf8.parse</code> 會把字串轉成 crypto-js 使用的位元組資料；真正要追的是括號裡的內容。</li>
+<li><strong>iv</strong>：<code>CryptoJS.enc.Utf8.parse('1234567890abcdef')</code>，同樣是 16 個字元。</li>
 <li><strong>mode</strong>：<code>CryptoJS.mode.CBC</code>。</li>
 <li><strong>padding</strong>：<code>CryptoJS.pad.Pkcs7</code>。</li>
-</ul>
+</ol>
+<p>這裡的 key 是 16 個字元，對應 128 位元的 AES 密鑰。</p>
+<p>真實網站不一定會把 key 直接寫在引號裡。若你看到的是 <code>Utf8.parse(key)</code>，就要繼續往回找 <code>key</code> 的來源。它可能來自 <code>md5(...)</code>，也可能是 <code>a.slice(0,16)</code> 的結果。只抄變數名稱，就像只拿到食譜上的「醬汁適量」，還不足以在 Python 重做。</p>
 
-<p>逆向時最容易漏看的是：引號裡那個字串不一定是寫死的常量，很可能前面幾行是 <code>key = md5(...)</code> 或 <code>key = a.slice(0,16)</code> 算出來的。所以看到 <code>Utf8.parse(...)</code>，要順著括號裡的變數再往回追一層。</p>
-
-<h2>第二步：先判斷是 AES 還是 DES</h2>
-
-<p>在動手抄參數前，先確認演算法。辨認方式有三個線索，任一個成立就足以分流：</p>
+<h2>第二步：確認是 AES 還是 DES</h2>
+<p>抄參數之前，先確認演算法。最直接的線索是呼叫物件；如果名稱被包進其他函式，再用 key 與密文區塊長度交叉檢查。</p>
 
 <table>
 <thead>
@@ -79,11 +80,14 @@ console.log(ciphertext);</code></pre>
 </tbody>
 </table>
 
-<p>很多人會下意識把所有對稱加密都當 AES，結果 key 只有 8 個位元組時怎麼算都對不上。看到 <code>DES</code> 就改用 DES 的參數，這一分流能省下大量鬼打牆的時間。</p>
+<p>若程式直接呼叫 <code>CryptoJS.AES</code> 或 <code>CryptoJS.DES</code>，就以呼叫物件分流。若只看到包裝後的函式，才用 key 長度與 Base64 解碼後的密文長度輔助判斷。</p>
+<p>不要把所有對稱加密都當成 AES。當 key 只有 8 個位元組，或原始程式明確使用 <code>CryptoJS.DES</code>，Python 端也要改用 DES。演算法選錯，後面即使 mode 與 padding 都抄對，結果仍然對不上。</p>
 
-<h2>第三步：在 Python 重現加密</h2>
+<figure class="lesson-figure"><img src="./aes-des-in-js-and-python-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>參數抄齊後，Python 這邊要做的事分成四個動作：把 key 轉成位元組、把明文補到 16 的整數倍、建立 CBC 加密物件、加密完再用 Base64 包起來。對應的程式如下：</p>
+<h2>第三步：把 AES／CBC 搬到 Python</h2>
+<p>參數確認後，Python 端依序完成四件事：把 key 與明文轉成 bytes、用 PKCS7 補齊明文、建立 CBC 加密物件，最後把二進位密文轉成 Base64。</p>
+<p>下面這份 Python 範例使用自己的明文與 iv，和前面的 JavaScript 範例不是同一組測試資料。先看清楚每一步；正式比對時，再把兩邊的 key、iv、明文、mode 與 padding 全部改成相同值。</p>
 
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day07/课堂笔记/3.加密算法 - 副本.md#L328-L347"><code>from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -104,19 +108,19 @@ print("aes加密数据:::", en_text) #返回二进制类型数据
 en_text = base64.b64encode(en_text).decode()  # 将返回的字节型数据转进行base64编码
 print(en_text)</code></pre>
 
-<p>逐行看它在做什麼：</p>
-
+<p>逐行拆開來看：</p>
 <ol>
-<li><code>'0123456789abcdef'.encode()</code> 把字串轉成 bytes。AES 的 key 必須是位元組，而且長度只能是 16、24 或 32；這裡正好 16 個字元，就是 AES-128。長度不對，<code>AES.new</code> 會直接報錯。</li>
-<li><code>iv = b'abcdabcdabcdabcd'</code> 用的是 bytes 字面值，一樣是 16 位元組。CBC 模式沒有 iv 會報錯。</li>
-<li><code>pad(text.encode(), 16)</code> 把明文轉成 bytes 並補到 16 的整數倍。這一步就是 crypto-js 那邊 <code>Pkcs7</code> 做的事，兩邊的填充規則要一致，否則解出來的尾巴會多出垃圾字元。</li>
-<li><code>AES.new(key, AES.MODE_CBC, iv)</code> 建立加密物件，明確指定 CBC 模式。用 ECB 的話就不需要第三個參數（iv）。</li>
-<li><code>aes.encrypt(text)</code> 得到二進位密文，最後 <code>base64.b64encode(...).decode()</code> 包成可傳輸的字串。</li>
+<li><code>'0123456789abcdef'.encode()</code> 把 key 從字串轉成 bytes。AES key 的長度只能是 16、24 或 32 位元組；這裡是 16 位元組，也就是 AES-128。長度不符時，<code>AES.new</code> 會直接報錯。</li>
+<li><code>iv = b'abcdabcdabcdabcd'</code> 建立 16 位元組的 iv。這份程式使用 CBC，因此建立加密物件時必須提供 iv。</li>
+<li><code>text.encode()</code> 先把明文轉成 bytes，<code>pad(..., 16)</code> 再用 PKCS7 將長度補成 16 的整數倍。這對應 JavaScript 裡的 <code>CryptoJS.pad.Pkcs7</code>。</li>
+<li><code>AES.new(key, AES.MODE_CBC, iv)</code> 建立 AES／CBC 加密物件。若原始程式使用 ECB，Python 端就不該照抄 CBC，也不需要傳入 iv。</li>
+<li><code>aes.encrypt(text)</code> 產生二進位密文。最後用 <code>base64.b64encode(...).decode()</code> 轉成可放進請求的字串。</li>
 </ol>
 
-<h2>第四步：在 Python 重現解密</h2>
+<p>這個寫法適用於原始 JavaScript 明確使用 AES、CBC 與 PKCS7 的情況。若 DevTools 裡看到的是 DES、ECB 或不同 padding，就要跟著更換，不能只替換 key。</p>
 
-<p>解密的順序跟加密剛好相反：先 Base64 解碼拿回二進位密文，再解密，最後把 padding 去掉、還原成文字：</p>
+<h2>第四步：照相反順序完成解密</h2>
+<p>解密就像把包裹一層一層拆回去。先將 Base64 還原成二進位密文，再用相同的 key、iv 與 mode 解密，最後移除 padding 並轉回文字。</p>
 
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day07/课堂笔记/3.加密算法 - 副本.md#L351-L369"><code>from Crypto.Cipher import AES
 import base64
@@ -136,9 +140,18 @@ print("aes解密数据:::", source.decode())
 #取消填充数据
 print("aes解密数据:::", unpad(source, 16).decode())</code></pre>
 
-<p>有兩個地方值得注意。第一，<code>aes.decrypt</code> 之後如果直接 <code>source.decode()</code>，印出來的會在尾端多出一些控制字元，那是沒拆掉的填充，所以一定要 <code>unpad(source, 16)</code>。第二，解密用的 key 與 iv 必須跟加密時<strong>完全相同</strong>；key 對了但 iv 錯了，明文會被打亂成另一坨亂碼，不會報錯，只會讓你誤以為自己找錯演算法。</p>
+<ol>
+<li><code>base64.b64decode(text)</code> 拆掉傳輸用的 Base64，拿回真正的二進位密文。</li>
+<li><code>aes.decrypt(ecrypted_base64)</code> 使用相同的 AES／CBC 參數解密。</li>
+<li><code>unpad(source, 16)</code> 移除 PKCS7 填充。</li>
+<li><code>.decode()</code> 把 bytes 還原成文字。</li>
+</ol>
 
-<p>對照的 JS 解密長這樣，你可以看出兩邊的參數是逐項對應的：</p>
+<p>若直接對解密結果執行 <code>source.decode()</code>，尾端可能出現填充留下的控制字元。要取得乾淨的原文，應使用 <code>unpad(source, 16).decode()</code>。</p>
+<p>解密時的 key 與 iv 必須和加密時<strong>完全相同</strong>。尤其是 iv，不一定每次錯誤都會直接報錯；你可能只會看到無法還原的內容。因此遇到亂碼時，不要立刻斷定演算法錯了，先逐項核對 key、iv、mode 與 padding。</p>
+
+<h2>第五步：對照 crypto-js 的解密參數</h2>
+<p>回到 JavaScript，可以看到解密端仍然使用同一組 key、iv、CBC 與 PKCS7。Python 端也必須逐項對上：</p>
 
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day07/课堂笔记/3.加密算法 - 副本.md#L402-L425"><code>const CryptoJS = require("crypto-js")
 
@@ -163,19 +176,36 @@ var plaintext = decrypted.toString(CryptoJS.enc.Utf8);
 
 console.log(plaintext);</code></pre>
 
-<p>crypto-js 的 <code>decrypted.toString(CryptoJS.enc.Utf8)</code> 等於 Python 的 <code>unpad(...).decode()</code>：它一次把填充拿掉並轉回文字。</p>
+<p>JavaScript 的 <code>CryptoJS.AES.decrypt</code> 會依設定處理解密與填充，接著用 <code>decrypted.toString(CryptoJS.enc.Utf8)</code> 轉成可讀文字。Python 則把這些動作明確拆成 <code>decrypt</code>、<code>unpad</code> 與 <code>decode</code>。</p>
 
-<h2>做完長什麼樣：拿密文對答案</h2>
+<h2>做完如何驗收：讓兩邊密文一字不差</h2>
+<p>驗收時不要直接混用上面幾份範例，因為它們的明文與 iv 並不完全相同。請先固定同一組測試資料：</p>
+<ul>
+<li>明文：<code>'alex is a monkey!'</code></li>
+<li>key：<code>0123456789abcdef</code></li>
+<li>iv：<code>abcdabcdabcdabcd</code></li>
+<li>mode：CBC</li>
+<li>padding：PKCS7</li>
+</ul>
 
-<p>驗證的方式很單純，就是<strong>同一組 key、iv、明文，兩邊跑出來的密文要一字不差</strong>。你可以先固定明文 <code>'alex is a monkey!'</code>、key <code>0123456789abcdef</code>、iv <code>abcdabcdabcdabcd</code>，在 Python 加密得到一串 Base64；再在 Node 裡跑同一組參數，比對結果。兩串相同，代表你抄的參數正確；不同，就回頭檢查 mode、padding、iv 這三個最常抄錯的地方。接著把 Python 密文丟進解密函式，能還原成原文，整個迴圈才算閉合。之後遇到真實站的加密 body，你就能用這套動作把請求發出去，或是把回應解回來。</p>
+<ol>
+<li>先在 Python 執行加密，取得 Base64 密文。</li>
+<li>再把 Node 裡的明文、key、iv、mode 與 padding 改成相同值。</li>
+<li>比較兩邊輸出的 Base64 字串。正確結果應該一字不差。</li>
+<li>若結果不同，依序檢查演算法、mode、padding、iv，以及字串轉 bytes 的方式。</li>
+<li>最後把密文交給解密程式，確認能完整還原成原文。</li>
+</ol>
+
+<figure class="lesson-figure"><img src="./aes-des-in-js-and-python-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>加密結果相同，而且密文能解回原文，才代表整個流程閉合。之後遇到真實網站的加密 body，就能把從 JavaScript 找到的參數搬進 Python，用來產生請求資料或解開回應內容。</p>
 
 <h2>小結</h2>
-
 <blockquote>
-從 crypto-js 還原對稱加密，就是把上一節的五個參數當清單逐項抄齊：先看呼叫的是 <code>CryptoJS.AES</code> 還是 <code>CryptoJS.DES</code>（key 長度 16 還是 8、密文長度 16 倍還是 8 倍），再從 <code>Utf8.parse(...)</code> 追出 key 與 iv，並讀出 mode 與 padding。Python 端用 pycryptodome：加密是 <code>pad → AES.new → encrypt → b64encode</code>，解密是 <code>b64decode → decrypt → unpad</code>。驗收標準只有一個：兩邊的密文一字不差。
+從 crypto-js 還原對稱加密，可以照固定順序進行：先確認呼叫的是 <code>CryptoJS.AES</code> 還是 <code>CryptoJS.DES</code>，再追出 key 與 iv，接著核對 mode 和 padding。Python 加密流程是 <code>pad → AES.new → encrypt → b64encode</code>；解密流程則是 <code>b64decode → decrypt → unpad → decode</code>。最後用完全相同的參數交叉測試，兩邊密文一字不差才算完成。
 </blockquote>
 
-<p>對稱加密處理完，下一條路是它的搭檔，非對稱加密。它不用同一把 key，而是公鑰加密、私鑰解密，最常見的場景就是登入頁的密碼欄位。先搞懂它為什麼要兩把 key，再談怎麼在 Python 重現。</p>
+<p>對稱加密處理完後，下一條常見路線是非對稱加密。它不再由雙方共用同一把 key，而是使用公鑰加密、私鑰解密，常見於登入頁的密碼欄位。下一步會先弄清楚為什麼需要兩把 key，再看如何用 Python 重現。</p>
 
 <div class="lesson-nav">
   <div><a href="./symmetric-encryption-model.html">← 上一步：對稱加密的運作模型：Key、Mode、Padding、IV</a></div>
@@ -190,35 +220,30 @@ console.log(plaintext);</code></pre>
   <button class="opt">CryptoJS.enc.Utf8.parse</button>
   <button class="opt">CryptoJS.SHA256.update</button>
 </div>
-
 <div class="quiz" data-question="Python 裡 AES 的 key 長度不能是多少位元組？" data-correct="1" data-explain="AES 的 key 只能是 16、24 或 32 位元組；8 位元組是 DES 的長度。">
   <button class="opt">16 位元組</button>
   <button class="opt">8 位元組</button>
   <button class="opt">24 位元組</button>
   <button class="opt">32 位元組</button>
 </div>
-
 <div class="quiz" data-question="Python 加密前呼叫 pad(text.encode(), 16) 的目的是什麼？" data-correct="0" data-explain="把明文補到 16 的整數倍，對應 crypto-js 的 Pkcs7 填充。">
   <button class="opt">把明文補到 16 的整數倍</button>
   <button class="opt">把密文壓縮成更短的長度</button>
   <button class="opt">把 key 的長度固定成 16 位元組</button>
   <button class="opt">把 Base64 還原成原始位元組</button>
 </div>
-
 <div class="quiz" data-question="解密後如果沒有 unpad，會出現什麼現象？" data-correct="3" data-explain="尾端會殘留填充的控制字元，明文看起來多了垃圾。">
   <button class="opt">程式會直接拋出致命的錯誤</button>
   <button class="opt">密文長度會縮短成一半</button>
   <button class="opt">key 會被自動改成錯誤的值</button>
   <button class="opt">明文尾端殘留填充的控制字元</button>
 </div>
-
 <div class="quiz" data-question="要驗證 Python 重現是否正確，最直接的標準是什麼？" data-correct="1" data-explain="同一組 key／iv／明文下，兩邊產生的密文必須一字不差。">
   <button class="opt">Python 的程式可以順利執行不報錯</button>
   <button class="opt">同一組參數下兩邊密文一字不差</button>
   <button class="opt">密文的長度碰巧是偶數位元組</button>
   <button class="opt">key 的字串長度剛好是 16 個字</button>
 </div>
-
 <div class="quiz" data-question="看到 CryptoJS.DES 時，最該調整的觀念是什麼？" data-correct="2" data-explain="DES 的 key 是 8 位元組、密文是 8 的倍數，不能當成 AES 處理。">
   <button class="opt">它的密文長度一定是 16 的倍數</button>
   <button class="opt">它的加密不需要任何 key</button>

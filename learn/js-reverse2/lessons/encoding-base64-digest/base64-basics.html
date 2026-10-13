@@ -8,22 +8,26 @@
 </head>
 <body>
 
-<h1>Base64：把任意位元組塞進文字</h1>
+<h1>Base64：看穿藏在文字外衣裡的位元組</h1>
 <p class="meta">Step 2/5 · 編碼與摘要：URL、Base64、MD5/SHA</p>
 
 <h2>學習目標</h2>
-<p>說出 Base64 的字母表與「3 個位元組轉 4 個字元」的分組規則，並用 Python 的 <code>b64encode</code>／<code>b64decode</code> 完成編碼與解碼。</p>
+<p>看懂 Base64 的字母表與「3 個位元組換成 4 個字元」的分組規則，並能使用 Python 的 <code>b64encode</code> 與 <code>b64decode</code> 完成編碼、解碼。</p>
 
-<h2>前言：那串看起來像亂碼的東西，其實是明文</h2>
-<p>你在 DevTools 的 Network 面板裡盯上一枚 cookie，它的值長得像 <code>eyJ0eXAiOiJKV1QifQ</code>。同事路過看了一眼說「這是明文的啦」，你不信，把它丟進線上的 Base64 解碼器，結果真的跑出一段可讀的 JSON。這種經驗會讓人重新思考一件事：很多你以為被「加密」的參數，其實只是換了一種寫法而已。</p>
-<p>上一節的 URL 編碼處理的是幾個特殊字元；Base64 要處理的情境更廣，它面對的是任意位元組，包括圖片、密文這些二進位資料，目標是把它們通通塞進一串「純文字也能安全傳」的字元裡。搞懂它的分組規則，你就能一眼看穿哪些欄位其實裸奔，哪些才是真的上了鎖。</p>
+<h2>先從 DevTools 裡的一串可疑文字開始</h2>
+<p>你在 DevTools 的 Network 面板追查請求，發現某枚 cookie 的值是 <code>eyJ0eXAiOiJKV1QifQ</code>。它看起來像亂碼，也很容易被誤認為加密結果；但丟進 Base64 解碼器後，卻能直接還原成可讀的 JSON。</p>
+<p>這正是分析網站資料時常見的岔路。從抓取請求、觀察反爬機制，到逆向參數格式，你得先判斷眼前的字串究竟只是編碼，還是真的經過加密。認錯了，就像把普通紙盒當成保險箱，花了半天找鑰匙，其實拆開包裝就能看到內容。</p>
+<p>上一節的 URL 編碼，主要處理網址裡具有特殊意義的字元。Base64 面對的範圍更廣：文字、圖片位元組與加密後的密文，都能換成一串方便傳輸的文字。看懂它的規則，便能在 DevTools 裡快速辨認這層包裝，決定接下來該直接解碼，還是繼續追查真正的加密流程。</p>
 
-<h2>為什麼需要 Base64</h2>
-<p>很多傳輸通道只保證「安全字元」能順利通過。URL 有它的保留字，JSON 字串不能直接塞二進位，HTTP 標頭也有它的限制。可是我們手上的資料，像一張圖片的位元組、一段加密後的密文，往往不是安全字元，硬塞進去就會被截斷或誤解。</p>
-<p>Base64 的解法是：拿 64 個大家公認安全的字元，當作一套「代號表」，把任意位元組重新編寫成這 64 個字元組成的字串。這樣不管原本是文字還是二進位，吐出來的都是安全的純文字。代價是體積會膨脹，大約多出三分之一。你可以把它想成把一張照片用文字描述出來寄給別人：資訊一點都沒少，只是換了一種一定寄得過去的表達方式。</p>
+<h2>為什麼位元組需要換一件外衣</h2>
+<p>不同傳輸格式都有自己的限制。URL 有保留字，JSON 字串不能直接容納任意二進位資料，HTTP 標頭也不是想塞什麼位元組都可以。圖片或密文若直接放進這些位置，可能遭到截斷，也可能被當成具有特殊用途的符號。</p>
+<p>Base64 的做法，是準備一張只有 64 個字元的固定代號表，再用這些代號重新表示原始位元組。無論輸入是文字還是二進位資料，輸出都會變成一串文字，方便放進原本不適合傳送二進位內容的地方。</p>
+<p>這種轉換不會遺失資訊，但會讓資料體積增加約三分之一。它適合用來跨過格式或傳輸限制，卻不適合拿來縮小檔案，也不能拿來保護祕密。可以把它想成把物品重新裝進符合寄送規格的箱子：內容沒有變少，也沒有上鎖，只是更容易送出去。</p>
+
+<figure class="lesson-figure"><img src="./base64-basics-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>字母表：64 個字元，每個代表 6 個 bit</h2>
-<p>Base64 的字母表是固定的 64 個字元，順序如下：</p>
+<p>標準 Base64 使用以下 64 個字元，而且順序固定。解碼時，就是依照這張表把字元換回數字：</p>
 <table>
 <thead>
 <tr><th>字元</th><th>索引範圍</th></tr>
@@ -36,11 +40,14 @@
 <tr><td><code>/</code></td><td>63</td></tr>
 </tbody>
 </table>
-<p>另外還有一個 <code>=</code>，它不算字母表的一員，而是拿來補位用的。因為 64 剛好是 2 的 6 次方，每一個字元可以代表 6 個 bit，這正是整個演算法能成立的關鍵。</p>
+<p><code>=</code> 不在這 64 個字元裡。它不代表資料，只負責在尾端補位。</p>
+<p>為什麼剛好是 64 個字元？因為 64 是 2 的 6 次方，所以每個 Base64 字元都能代表一組 6 bit。這個「6 bit 一組」的設計，就是整套轉換機制的核心。</p>
 
-<h2>核心規則：3 個位元組換 4 個字元</h2>
-<p>Base64 一次讀 3 個位元組，也就是 24 個 bit。24 剛好能整除成 4 組 6 bit，每一組拿去查字母表，就得到 4 個字元。這條「3 進 4 出」的規則是理解 Base64 的全部。</p>
-<p>用 <code>you</code> 當例子。這三個字元的位元組是 <code>y</code>=<code>0x79</code>、<code>o</code>=<code>0x6F</code>、<code>u</code>=<code>0x75</code>，攤開成二進位是 <code>01111001 01101111 01110101</code>。從頭每 6 個 bit 切一組，得到 <code>011110</code>、<code>010110</code>、<code>111101</code>、<code>110101</code>：</p>
+<h2>核心機制：3 個位元組換成 4 個字元</h2>
+<p>一個位元組有 8 bit。Base64 每次讀取 3 個位元組，總共得到 24 bit，再把它切成 4 組，每組 6 bit。每一組都會得到一個介於 0 到 63 的數字，接著拿這個數字查字母表，換成對應字元。</p>
+<p>換句話說，它只是把同一排 bit 改用不同刻度切割：原本是每 8 bit 一格，現在改成每 6 bit 一格。資料本身沒有被藏起來，只是重新分組。</p>
+<p>以 <code>you</code> 為例。三個字元的位元組分別是 <code>y</code>=<code>0x79</code>、<code>o</code>=<code>0x6F</code>、<code>u</code>=<code>0x75</code>。展開成二進位後是 <code>01111001 01101111 01110101</code>。</p>
+<p>把這 24 bit 從頭切成四組，會得到 <code>011110</code>、<code>010110</code>、<code>111101</code>、<code>110101</code>：</p>
 <table>
 <thead>
 <tr><th>6-bit 分組</th><th>十進位</th><th>對應字元</th></tr>
@@ -52,10 +59,12 @@
 <tr><td><code>110101</code></td><td>53</td><td><code>1</code></td></tr>
 </tbody>
 </table>
-<p>四個字元拼起來就是 <code>eW91</code>。這就是 <code>you</code> 的 Base64。看懂這個例子，你就看懂了三分之二的 Base64。</p>
+<p>依序拼起來，就是 <code>eW91</code>。因此，<code>you</code> 經過 Base64 編碼後會變成 <code>eW91</code>。只要抓住「24 bit 重新切成四組 6 bit」，就不必死背結果。</p>
 
-<h2>補位：處理湊不滿 3 個位元組的尾巴</h2>
-<p>輸入長度不會每次都剛好是 3 的倍數，尾端總會剩東西。Base64 用 <code>=</code> 把輸出補成 4 的倍數：</p>
+<figure class="lesson-figure"><img src="./base64-basics-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>補位：尾端湊不滿 3 個位元組時怎麼辦</h2>
+<p>輸入長度不一定剛好是 3 的倍數。當尾端只剩 1 或 2 個位元組時，Base64 會用 <code>=</code> 補齊輸出，讓字元總數維持 4 的倍數。</p>
 <table>
 <thead>
 <tr><th>尾端剩餘</th><th>輸出</th><th>例子</th></tr>
@@ -66,10 +75,10 @@
 <tr><td>剛好整除</td><td>4 個字元、不加 <code>=</code></td><td><code>you</code> → <code>eW91</code></td></tr>
 </tbody>
 </table>
-<p>所以不管輸入多長，Base64 輸出的長度一定是 4 的倍數。這個規律非常有辨識度，後面判斷一段字串是不是 Base64 時會反覆用到。</p>
+<p>這也提供了一個實用的辨識線索：標準 Base64 的完整輸出長度通常是 4 的倍數，尾端也可能出現一個或兩個 <code>=</code>。不過，實務上的字串有時會省略補位，因此不能只因為長度不符就立刻排除。</p>
 
-<h2>在 Python 裡編碼與解碼</h2>
-<p>Python 的 <code>base64</code> 模組把這套規則包成兩個函式。<code>b64encode()</code> 吃位元組、吐位元組，所以字串要先 <code>.encode()</code>、結果再 <code>.decode()</code> 轉回字串。<code>b64decode()</code> 則反過來，吃字串吐位元組。下面這段程式碼示範編碼：</p>
+<h2>用 Python 驗證剛才的規則</h2>
+<p>理解分組方式後，可以直接用 Python 的 <code>base64</code> 模組驗證。<code>b64encode()</code> 接收的是位元組，因此文字要先呼叫 <code>.encode()</code>；編碼結果仍是位元組，如果要顯示成一般字串，再呼叫 <code>.decode()</code>。</p>
 
 <pre data-source="sources/js-reverse2/20261005/Day20/02   base64编码.py#L1-L21"><code>import base64
 …
@@ -78,11 +87,12 @@ s = "you!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 ret = base64.b64encode(s.encode())  # 字节处理
 print(ret.decode())</code></pre>
 
-<p>執行結果是一串以 <code>eW91</code> 開頭的 Base64 字串：</p>
+<p>執行後會得到一串以 <code>eW91</code> 開頭的結果。這正好對應前面算出的 <code>you</code>：</p>
 
 <pre data-provenance="derived"><code>eW91ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ==</code></pre>
 
-<p>解碼時有兩個動作要注意：<code>b64decode()</code> 回傳的是位元組，要再用 <code>.decode()</code> 才會變回可讀文字；而且如果字串長度不是 4 的倍數，直接解會出錯，得先自己補上 <code>=</code>。下面這段程式碼就示範了這個補位動作：</p>
+<p>解碼時，<code>b64decode()</code> 會把 Base64 文字還原成位元組。若內容原本是文字，還要再用 <code>.decode()</code> 轉回可讀字串。</p>
+<p>從 DevTools 複製出來的 Base64 有時會少掉尾端的 <code>=</code>。這時若長度不是 4 的倍數，直接解碼可能出錯，必須先補位。下面的資料正好缺少兩個 <code>=</code>，程式會在解碼前把它們補回來：</p>
 
 <pre data-source="sources/js-reverse2/20261005/Day20/03   base64解码.py#L1-L15"><code># 案例2
 data = "eW91ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhIQ"
@@ -91,17 +101,26 @@ ret = base64.b64decode(data)
 print(ret)
 print(ret.decode())</code></pre>
 
-<p>數字看熟之後，你也可以寫成一行：<code>base64.b64decode(s + "=" * (-len(s) % 4)).decode()</code>，效果一樣。</p>
+<p>如果要用一行處理補位與解碼，可以寫成 <code>base64.b64decode(s + "=" * (-len(s) % 4)).decode()</code>。其中 <code>-len(s) % 4</code> 會算出距離下一個 4 的倍數還差幾個字元；原本已經整除時，就不會多補 <code>=</code>。</p>
 
-<h2>它不是壓縮，也不是加密</h2>
-<p>Base64 常常被誤會成這兩件事，這裡要分清楚。<strong>它不是壓縮</strong>：Base64 反而會讓資料變大約三分之一，因為一個位元組被拆去共用 4 個字元。上面 <code>you</code> 只有 3 個位元組，卻要 4 個字元才寫得完。</p>
-<p><strong>它更不是加密</strong>：Base64 沒有金鑰、沒有祕密，任何人都能解回來。它是一種編碼（encoding），任務是「讓資料能安全通過某些通道」，而不是「不讓別人看懂」。真正的加密算完之後，往往還會再包一層 Base64 方便傳輸，所以你看到 Base64 時，要意識到它可能只是外層包裝，真正的內容還藏在裡面。</p>
+<h2>什麼時候該想到 Base64</h2>
+<p>當你在 Network 面板、cookie、請求參數或回應內容中看到一長串由英文字母、數字與少量符號組成的文字，可以先把 Base64 列入候選。若尾端帶有 <code>=</code> 或 <code>==</code>，特徵會更加明顯。</p>
+<p>這時值得嘗試解碼，因為結果可能直接變成 JSON 或其他可讀內容；也可能還原成圖片、密文等二進位資料。後一種情況不代表解碼失敗，而是說明 Base64 只是外層容器，裡面的資料本來就不是文字。</p>
+<p>反過來說，若目標是隱藏內容、防止修改或縮小資料，Base64 都不是合適工具。字串長得像 Base64，也不表示一定能解出有意義的文字；辨識特徵只能幫你決定是否值得測試，不能代替實際解碼與內容判讀。</p>
 
-<h2>小結</h2>
+<h2>它不是壓縮，更不是加密</h2>
+<p><strong>Base64 不是壓縮。</strong>它通常會讓資料增加約三分之一。以 <code>you</code> 為例，原本是 3 個位元組，編碼後卻需要 4 個字元。它解決的是傳輸形式問題，不是檔案大小問題。</p>
+<p><strong>Base64 也不是加密。</strong>它沒有金鑰，也沒有祕密。任何知道規則的人都能把內容還原，因此不能因為字串看不懂，就把它視為受到保護的資料。</p>
+<p>不過，真正的加密結果也常再包上一層 Base64，方便放進文字格式傳輸。因此，解開 Base64 後若仍是一段不可讀的位元組，可能代表裡面還有另一層資料格式或加密內容。分析流程不是到此停止，而是剝掉一層包裝後，再判斷裡面究竟裝了什麼。</p>
+
+<figure class="lesson-figure"><img src="./base64-basics-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把 Base64 放回逆向分析的大圖裡</h2>
 <blockquote>
-Base64 用 <code>A-Z a-z 0-9 + /</code> 這 64 個安全字元，把任意位元組用每 6 個 bit 一組的方式重新表示：每 3 個位元組換 4 個字元，尾端不足就用 <code>=</code> 補到 4 的倍數。<code>you</code> 的結果是 <code>eW91</code>。它是可逆的編碼，不是壓縮也不是加密，任何人拿到都能解開；很多時候它只是加密結果外面的一層包裝。
+Base64 使用 <code>A-Z a-z 0-9 + /</code> 這 64 個字元，把任意位元組改成每 6 bit 一組的文字表示。它每讀取 3 個位元組，就輸出 4 個字元；尾端不足時，再用 <code>=</code> 補位。<code>you</code> 的編碼結果是 <code>eW91</code>。
 </blockquote>
-<p>標準 Base64 用的是 <code>+</code> 和 <code>/</code>，但這兩個字元放在 URL 或檔名裡會出問題，所以實務上還有換過字母表的變體；圖片也常被直接以 Base64 形式內嵌在網頁裡。下一節就把這兩個實戰情境拆開來講。</p>
+<p>在「抓取 → 觀察反爬 → 逆向參數」的流程裡，Base64 應該放在「辨認資料表示方式」這一層。它能幫你把包裝拆掉，卻不能直接證明裡面沒有加密，也不能提供安全性。</p>
+<p>標準 Base64 使用 <code>+</code> 與 <code>/</code>，但這兩個字元放進 URL 或檔名時可能造成問題，因此實務上還有更換字母表的變體。圖片也常以 Base64 形式直接內嵌在網頁中。下一節會繼續拆解這兩種實戰情境。</p>
 
 <div class="lesson-nav">
   <div><a href="./url-encoding.html">← 上一步：URL 編碼：查詢參數為什麼要跳脫</a></div>
@@ -116,35 +135,30 @@ Base64 用 <code>A-Z a-z 0-9 + /</code> 這 64 個安全字元，把任意位元
   <button class="opt">4 個字元</button>
   <button class="opt">6 個字元</button>
 </div>
-
 <div class="quiz" data-question="Base64 的輸出長度一定有怎樣的規律？" data-correct="1" data-explain="尾端不足一定用 = 補齊，所以輸出長度必為 4 的倍數。">
   <button class="opt">一定是奇數個字元</button>
   <button class="opt">一定是 4 的倍數</button>
   <button class="opt">一定少於輸入長度</button>
   <button class="opt">一定以 = 號開頭</button>
 </div>
-
 <div class="quiz" data-question="字串 you 的 Base64 結果是哪一個？" data-correct="0" data-explain="位元組 0x79 0x6F 0x75 依 6 bit 切組查表，得到 eW91。">
   <button class="opt">eW91</button>
   <button class="opt">eW91eQ==</button>
   <button class="opt">IyFA</button>
   <button class="opt">dXlvdQ==</button>
 </div>
-
 <div class="quiz" data-question="Base64 編碼後，資料體積通常會怎麼變化？" data-correct="3" data-explain="3 個位元組變成 4 個字元，所以整體大約變大三分之一。">
   <button class="opt">大幅縮小到原本一半</button>
   <button class="opt">幾乎維持原本大小不變</button>
   <button class="opt">依照內容時大時小</button>
   <button class="opt">大約變大三分之一</button>
 </div>
-
 <div class="quiz" data-question="關於 Base64，下面哪一句說法是對的？" data-correct="2" data-explain="它沒有金鑰、可逆，任何人都能解回來，是一種編碼不是加密。">
   <button class="opt">它是一種無法還原的加密</button>
   <button class="opt">它需要一組密鑰才能解開</button>
   <button class="opt">它是可逆的編碼不是加密</button>
   <button class="opt">它會移除資料中重複的部分</button>
 </div>
-
 <div class="quiz" data-question="拿到一段長度不是 4 倍數的 Base64 字串，解碼前該怎麼做？" data-correct="1" data-explain="先補 = 到 4 的倍數，b64decode 才不會因為長度不對而報錯。">
   <button class="opt">把多餘的字元直接刪掉</button>
   <button class="opt">補上 = 讓長度成為四倍數</button>

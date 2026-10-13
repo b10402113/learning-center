@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>外貿電商平台：RSA-OAEP 公鑰加密重現</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>外貿電商平台：把公鑰抽出來，用 Python 重現 RSA-OAEP</h1>
+<p class="meta">Step 2/5 · 案例：非對稱（RSA）</p>
+
+<h2>學習目標</h2>
+<p>從外貿電商平台的 bundle 抽出 2048-bit 公鑰 PEM，在 Python 重現 RSA-OAEP（SHA-256、MGF1-SHA1）加密與 base64 包裝。</p>
+
+<h2>前言：一團只有伺服器解得開的密文</h2>
+
+<p>上一步練的是眼睛——認出 bundle 裡的 RSA 在做什麼。這一步開始動手，而且是三個案例中最乾淨的一個：外貿電商平台把整把公鑰、整個加密流程都寫在同一個模組裡，沒有混淆、沒有藏，簡直像靶場。</p>
+
+<p>先講清楚目標與前置條件。做完這一步，你會得到一支 Python 函式：丟進任何字串，吐出這個平台伺服器收得下的加密欄位——伺服器用自己的私鑰解開後能拿到你指定的內容。動手前需要三樣東西：webpack 的模組定位基本功（知道 <code>window.loader</code> 是什麼）、能跑的 Node 環境（用來驗證）、以及 Python 的 <code>cryptography</code> 套件（<code>pip install cryptography</code>）。</p>
+
+<p>順帶一提這個平台的設計：它把「公鑰加密」用在請求上——前端把要送出的內容鎖起來，只有伺服器的私鑰開得了。這代表你永遠解不開別人的密文，但也代表你可以對伺服器偽造任何內容。這條界線第五步會再回來談，現在先把重現跑通。</p>
+
+<h2>步驟一：從 loader 尾端的測試碼鎖定模組</h2>
+
+<p>作者在 loader 檔案的最後留了一行測試碼。逆向時這種「作者自己留下的煙火」價值連城——它直接告訴你加密入口在哪：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day27/02  外贸电商平台的loader.js#L585-L586"><code>// console.log(window.loader)
+console.log(window.loader("MuMZ").a("123"))</code></pre>
+
+<p>這行話說得很明白：加密模組的 ID 是 <code>"MuMZ"</code>，呼叫的導出方法是 <code>a</code>，丟字串進去、拿加密結果出來。用上一節的判讀法看「進什麼、出什麼」——字串 <code>"123"</code> 進去，一團亂碼出來，這是加密。</p>
+
+<p>預期看到什麼：把這行放進 Node 跑（先載入 loader 與模組檔、補上 <code>window</code> 等環境），會印出一長串 Base64。同一個輸入 <code>"123"</code>，每次跑結果都不一樣——這是 OAEP 的隨機性，不是你哪裡做錯。</p>
+
+<h2>步驟二：打開模組，讀加密配方</h2>
+
+<p>用模組 ID 在應用程式主檔（mod1.js）裡搜尋，找到 <code>MuMZ</code> 的定義。整個模組不到三十行，加密配方全寫在臉上：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day27/03  外贸电商平台的mod1.js#L3972-L3981"><code>    MuMZ: function(e, t, n) {
+        "use strict";
+        n.d(t, "a", function() {
+            return o
+        }),
+        n.d(t, "b", function() {
+            return r
+        });
+        var i = n("XBrZ");
+        function o(e) {
+            var t = i.pki.publicKeyFromPem(</code></pre>
+
+<p>逐行拆開看：<code>n.d(t, "a", …)</code> 把函式 <code>o</code> 導出成 <code>a</code>、<code>r</code> 導出成 <code>b</code>（<code>b</code> 是另一個 MD5 雜湊小工具，這一步用不到）；<code>var i = n("XBrZ")</code> 是依賴注入——模組 <code>XBrZ</code> 就是著名的加密庫 <strong>jsrsasign</strong>，一個純 JavaScript 實作的 RSA 與 X.509 工具組。認出這點很關鍵：jsrsasign 的 API 形狀是固定的，看到 <code>pki.publicKeyFromPem</code>、<code>md.sha256.create</code> 就知道該查它的文件。</p>
+
+<h2>步驟三：抽出公鑰 PEM 與全部參數</h2>
+
+<p>接著是 <code>publicKeyFromPem</code> 的引數——整把 2048-bit 公鑰就這樣明文寫死在程式碼裡：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day27/03  外贸电商平台的mod1.js#L3982"><code>            var t = i.pki.publicKeyFromPem("-----BEGIN PUBLIC KEY-----\n MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsy4xppPDUT2eAOR5h0cyydzxtKB9O80A\n GjUT6FmDgg6CwelpnE0C2h2JQyP1gCveJs6GDwSDn20RVVpD67f//YPYErjaH/CBOxNG3k5IkW1o\n Qx04uqFNMtWvjzk0aFh2eJLsBi7Ha4elw3WySg00B8oZCL4VBay4ML9kyOAjjCj5jHCX8a2yxIMJ\n IF+EjW3kBR68IMwBvuDL45Qa0oB24vTffaSEs+hGjMTQvoCciOfti3pmEAlVc438/cBgAhK5cIMf\n IMElxYAVvmsDy0I7RCUTrajetKjX94Q+JuQUxnIHNC3IVtYsl1x0lNRtb93IhlRCkZ9djOu350eq\n hZIOXQIDAQAB\n  -----END PUBLIC KEY-----").encrypt(e, "RSA-OAEP", {</code></pre>
+
+<p>把這段字串從 <code>-----BEGIN PUBLIC KEY-----</code> 到 <code>-----END PUBLIC KEY-----</code> 完整複製出來，就是你的戰利品。注意它是 <code>PUBLIC KEY</code>——公鑰，可公開，這符合「公鑰加密」的設計。再看結尾的 <code>.encrypt(e, "RSA-OAEP", {</code>：第一個引數是明文，第二個是填充模式 <code>RSA-OAEP</code>，第三個是 OAEP 的內部參數。接下來的幾行把它補完：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day27/03  外贸电商平台的mod1.js#L3983-L3993"><code>                md: i.md.sha256.create(),
+                mgf1: {
+                    md: i.md.sha1.create()
+                }
+            });
+            return window.btoa(t)
+        }
+        function r(e) {
+            var t = i.md.md5.create();
+            return t.update(e),
+            t.digest().toHex()
+        }</code></pre>
+
+<p>三個重點。第一，OAEP 的雜湊 <code>md</code> 是 SHA-256。第二，遮罩產生函式（MGF1，mask generation function，OAEP 內部用來擴充隨機數的機制）用的雜湊是 SHA-1——<strong>兩個雜湊不一樣</strong>，這是 jsrsasign 的預設組合，也是最容易抄錯的地方。第三，加密結果還要過 <code>window.btoa(t)</code>，也就是 Base64 編碼後才送出去，因為 RSA 輸出是二進位，塞進 HTTP 欄位前必須轉成文字。</p>
+
+<h2>步驟四：在 Python 重現同一個流程</h2>
+
+<p>配方齊了：2048-bit 公鑰、RSA-OAEP、SHA-256 雜湊、MGF1-SHA1、最後 Base64。用 <code>cryptography</code> 套件照抄：</p>
+
+<pre data-provenance="derived"><code>import base64
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+
+PEM = b"""-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsy4xppPDUT2eAOR5h0cyydzxtKB9O80A
+GjUT6FmDgg6CwelpnE0C2h2JQyP1gCveJs6GDwSDn20RVVpD67f//YPYErjaH/CBOxNG3k5IkW1o
+Qx04uqFNMtWvjzk0aFh2eJLsBi7Ha4elw3WySg00B8oZCL4VBay4ML9kyOAjjCj5jHCX8a2yxIMJ
+IF+EjW3kBR68IMwBvuDL45Qa0oB24vTffaSEs+hGjMTQvoCciOfti3pmEAlVc438/cBgAhK5cIMf
+IMElxYAVvmsDy0I7RCUTrajetKjX94Q+JuQUxnIHNC3IVtYsl1x0lNRtb93IhlRCkZ9djOu350eq
+hZIOXQIDAQAB
+-----END PUBLIC KEY-----"""
+
+public_key = serialization.load_pem_public_key(PEM)
+
+
+def encrypt(plaintext: str) -> str:
+    ciphertext = public_key.encrypt(
+        plaintext.encode(),
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA1()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
+    )
+    return base64.b64encode(ciphertext).decode()</code></pre>
+
+<p>三個參數跟 JS 端一一對應：<code>algorithm=hashes.SHA256()</code> 是 <code>md: sha256</code>，<code>MGF1(SHA1)</code> 是 <code>mgf1: {md: sha1}</code>，<code>label=None</code> 對應 jsrsasign 沒傳 label 的預設。少一個、錯一個，伺服器解開就失敗。</p>
+
+<p>另一條路是直接重用 bundle 內建的庫：把 loader 與模組檔載入 Node、補上 <code>window</code> 之類的環境，然後照作者的測試碼呼叫 <code>window.loader("MuMZ").a(明文)</code>。這條路勝在「不可能抄錯參數」，缺點是每次執行都要拖著整包模組跑。兩條路怎麼選，第五步會給完整的抉擇表；眼下先確保 Python 路能獨立跑通。</p>
+
+<h2>警告：別用「密文比對」當驗證</h2>
+
+<p>這一步最常見的挫折是：Python 跑出來的密文跟 Node 跑出來的對不上，於是開始懷疑自己抄錯參數。<strong>先別急著改參數。</strong>RSA-OAEP 的填充自帶隨機數，同一段明文每次加密的輸出必然不同——這是設計，不是 bug。你拿兩團密文直接比字串，永遠不會相等。</p>
+
+<p>正確的驗證方式有兩種。最實在的一種：把 Python 加密出來的欄位送進真實請求，看伺服器收不收、回不回正常資料。另一種是自己生成一組測試金鑰，用私鑰解開 Python 的輸出，確認解得回原文。參數錯了會在「伺服器解不開」時立刻現形；參數對了則每一團密文都能解回原文。</p>
+
+<h2>做完長什麼樣</h2>
+
+<p>可驗證的結果長這樣：<code>encrypt("123")</code> 回傳一串 344 個字元左右的 Base64（2048-bit 密文固定 256 位元組，Base64 後約 344 字元），丟進請求欄位後伺服器正常回應；再送一次請求，密文不同但伺服器同樣正常回應。至於 OAEP 內部的數學為什麼要兩個雜湊、MGF1 在擴充什麼，那是密碼學理論的地盤——重現只需要照抄，理解它不是這一步的任務。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+外貿電商平台把 RSA 公鑰加密寫在模組 <code>MuMZ</code>：jsrsasign 的 <code>publicKeyFromPem</code> 載入寫死的 2048-bit 公鑰，用 RSA-OAEP（SHA-256 雜湊、MGF1-SHA1）加密，最後 <code>window.btoa</code> 包一層 Base64。Python 重現就是照抄這四件事；驗證要看伺服器收不收，不能比密文字串，因為 OAEP 每次輸出都不同。
+</blockquote>
+
+<p>這個案例的鑰匙是整段 PEM。但不是每個站都這樣大方——下一個案例沃郵箱連 PEM 都沒有，只給你一串十六進位長字串和 <code>10001</code>，得先把「拆開的公鑰」拼回來才能動手。</p>
+
+<div class="lesson-nav">
+  <div><a href="./recognize-rsa-in-bundle.html">← 上一步：認出 bundle 裡的 RSA：鑰匙形態與呼叫特徵</a></div>
+  <div><a href="./womail-rsa-password.html">下一步：沃郵箱：登入密碼的 RSA 加密重現 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="模組 MuMZ 的 a 與 b 兩個導出方法各做什麼？" data-correct="1" data-explain="a 用公鑰做 RSA-OAEP 加密再 base64，b 是 MD5 雜湊小工具。">
+  <button class="opt">a 做 MD5，b 做 RSA 加密</button>
+  <button class="opt">a 做 RSA-OAEP 加密再 base64，b 做 MD5</button>
+  <button class="opt">a 加密、b 解密，是一對</button>
+  <button class="opt">a 產生金鑰，b 簽署請求</button>
+</div>
+<div class="quiz" data-question="這個案例的 OAEP 參數中，MGF1 用的是哪個雜湊？" data-correct="2" data-explain="mgf1 的 md 是 SHA-1，跟主雜湊 SHA-256 不同，這是最容易抄錯的地方。">
+  <button class="opt">跟主雜湊一樣用 SHA-256</button>
+  <button class="opt">MD5</button>
+  <button class="opt">SHA-1</button>
+  <button class="opt">SHA-512</button>
+</div>
+<div class="quiz" data-question="用同一段明文分別跑 Node 與 Python，密文字串不同，代表什麼？" data-correct="3" data-explain="RSA-OAEP 填充自帶隨機數，每次輸出必然不同，不能用字串比對驗證。">
+  <button class="opt">一定是公鑰抄錯了</button>
+  <button class="opt">一定是 Python 套件版本太舊</button>
+  <button class="opt">一定是 base64 包裝少做了</button>
+  <button class="opt">OAEP 有隨機填充，輸出本來就不同</button>
+</div>
+<div class="quiz" data-question="加密結果為什麼還要過 window.btoa？" data-correct="0" data-explain="RSA 輸出是二進位位元組，塞進 HTTP 欄位前要轉成 Base64 文字。">
+  <button class="opt">二進位密文要轉成 Base64 才能送 HTTP</button>
+  <button class="opt">再加密一層比較安全</button>
+  <button class="opt">壓縮密文讓請求變小</button>
+  <button class="opt">為了讓每次輸出都一樣</button>
+</div>
+<div class="quiz" data-question="Python 端要重現 MGF1-SHA1，程式該怎麼寫？" data-correct="1" data-explain="padding.MGF1(algorithm=hashes.SHA1()) 配上主雜湊 SHA256，跟 jsrsasign 的參數一一對應。">
+  <button class="opt">MGF1 用 SHA256，主雜湊用 SHA1</button>
+  <button class="opt">MGF1(SHA1) 配主雜湊 SHA256</button>
+  <button class="opt">兩個都用 SHA256 就好</button>
+  <button class="opt">不用指定，套件會自己猜</button>
+</div>
+<div class="quiz" data-question="模組裡的 n(\"XBrZ\") 代表什麼？" data-correct="2" data-explain="XBrZ 是被注入的 jsrsasign 加密庫，publicKeyFromPem、md.sha256 都是它的 API。">
+  <button class="opt">另一個加密模組的輸出結果</button>
+  <button class="opt">瀏覽器的原生加密介面</button>
+  <button class="opt">jsrsasign 加密庫</button>
+  <button class="opt">混淆器產生的亂數種子</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 案例：非對稱（RSA） · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -8,23 +8,28 @@
 </head>
 <body>
 
-<h1>Proxy 是什麼：替物件套一層會記錄讀寫的代理</h1>
+<h1>Proxy：替整個物件裝上讀寫紀錄器</h1>
 <p class="meta">Step 4/5 · Hook 與 Proxy 攔截</p>
 
 <h2>學習目標</h2>
-<p>用 <code>new Proxy</code> 的 <code>get</code>／<code>set</code> 攔截對物件的讀寫，並從「讀到不存在的屬性」判斷補環境時該補哪些東西。</p>
+<p>理解如何用 <code>new Proxy</code> 的 <code>get</code> 與 <code>set</code> 攔截物件讀寫，並從程式嘗試存取的屬性，判斷補環境時可能缺少哪些內容。</p>
 
-<h2>前言：整個 window 都要盯，一個個 hook 太慢</h2>
-<p>前面三節，hook 攔的對象都是「某一個」函式或「某一個」屬性。這在已經知道目標是誰的時候很好用。但逆向到了補環境的階段，情況會反過來：一大包被壓縮的程式碼丟進來執行，你會發現它讀了一堆 <code>window</code> 或 <code>document</code> 上的屬性，而<strong>你根本不知道它讀了哪些</strong>。它可能讀 <code>window.screenX</code>、讀 <code>navigator.userAgent</code>、讀某個你可能聽都沒聽過的屬性。</p>
-<p>一個個去 hook 是不現實的，因為你連名字都不知道。這時候需要的是另一種工具：替<strong>整個物件</strong>套一層代理，之後所有對它的讀取與寫入，都會自動先經過你指定的邏輯。這個工具叫 <code>Proxy</code>（代理）。它不只讓你把讀寫全部記下來，還能幫你回答「這個物件缺了什麼」，而這正是補環境時最想知道的事。</p>
-<p><strong>前置條件：</strong>你理解物件屬性的讀寫（<code>obj.prop</code>／<code>obj.prop = v</code>）與原型鏈的基本概念（JS 原型鏈那個節點）。</p>
+<h2>從抓取到逆向：為什麼要監看整個物件</h2>
+<p>處理網站資料時，通常會先嘗試直接抓取。遇到反爬機制後，才會進一步觀察網站如何產生參數、檢查環境，並開始逆向相關程式碼。</p>
+<p>到了補環境這一段，問題常常不是「某個函式做了什麼」，而是「這包程式到底碰了哪些瀏覽器物件」。壓縮過的程式碼可能讀取 <code>window.screenX</code>、<code>navigator.userAgent</code>，也可能存取你從未注意過的屬性。</p>
+<p>如果已經知道目標，替單一函式或屬性加上 hook 很有效。但現在連屬性名稱都不知道，一個個 hook 就像拿手電筒逐間找人，範圍太大，也很容易漏掉。</p>
+<p>這時可以替<strong>整個物件</strong>套上一層代理。之後所有經過代理的讀取與寫入，都會先通過你指定的邏輯。這個工具就是 <code>Proxy</code>。它能留下讀寫紀錄，也能協助你找出程式期待、但目前環境裡沒有的屬性。</p>
+<p><strong>前置條件：</strong>你需要先理解物件屬性的讀寫方式，例如 <code>obj.prop</code> 與 <code>obj.prop = v</code>，並具備 JavaScript 原型鏈的基本概念。</p>
 
-<h2>Proxy 是什麼</h2>
-<p><code>Proxy</code> 是 JavaScript 的內建物件。它包住另一個物件（稱為目標物件，<code>target</code>），並允許你提供一個<strong>處理器</strong>（<code>handler</code>）來攔截對目標物件的操作。處理器裡放著一個一個的方法，這些方法被稱為<strong>捕獲器</strong>（trap），當對應的操作發生時就會被呼叫。</p>
-<p>打個比方：原本的物件是一間倉庫，你平常直接進出拿貨。<code>Proxy</code> 則是在門口加了一個登記櫃檯：之後所有進出都得先經過櫃檯登記，但貨實際上還是進出原本那間倉庫。你只要決定櫃檯要登記什麼、要不要放行即可。</p>
+<h2>Proxy 像物件門口的登記櫃檯</h2>
+<p><code>Proxy</code> 是 JavaScript 的內建物件。它會包住另一個物件，這個被包住的物件稱為目標物件，也就是 <code>target</code>。</p>
+<p>建立代理時，還要提供一個處理器 <code>handler</code>。處理器裡可以放入多種攔截方法，這些方法稱為捕獲器，也就是 trap。當對應的操作發生時，相關 trap 就會被呼叫。</p>
+<p>可以把原物件想成一間倉庫，平常大家直接進出拿貨。套上 <code>Proxy</code> 之後，就像在門口設置登記櫃檯。人與貨仍然進出原本的倉庫，但每次經過門口時，都可以先記下「誰拿了什麼」或「誰放了什麼」，再決定是否照常放行。</p>
 
-<h2>最基本的兩個捕獲器：get 與 set</h2>
-<p>最常用的兩個 trap 是 <code>get</code>（攔讀取）與 <code>set</code>（攔寫入）。看一個完整的例子：</p>
+<figure class="lesson-figure"><img src="./proxy-monitor-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>先在 DevTools 觀察 get 與 set</h2>
+<p>最常用的兩個 trap 是 <code>get</code> 與 <code>set</code>。前者攔截屬性讀取，後者攔截屬性寫入。把下面的範例放進 DevTools Console 執行，就能直接看到每次操作留下的紀錄：</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>//创建user对象
 var User = {
     username: "bobo",
@@ -50,11 +55,20 @@ User.username = "Jay"
 User.age = 18
 console.log(User.username);
 console.log(User.age);</code></pre>
-<p><code>new Proxy</code> 的參數 1 是被代理的物件，參數 2 是處理器。處理器裡有兩個方法：<code>get(target, p, receiver)</code> 會在有人讀取屬性時執行，其中 <code>target</code> 是被代理的物件、<code>p</code> 是被讀取的屬性名、<code>receiver</code> 是代理後的物件（也就是這裡的 <code>User</code>）；<code>set</code> 則在有寫入時執行。</p>
-<p>真正把操作交還給原物件的，是 <code>Reflect</code>。<code>Reflect.get(target, p)</code> 的意思是「以原物件的語意，把 <code>p</code> 這個屬性讀出來」，<code>Reflect.set</code> 同理。它就像程式語言裡的「反射」機制（Python 也有類似的東西），讓你能用統一的介面去執行原本的預設操作。用 <code>Reflect</code> 是關鍵：如果你在 <code>get</code> 裡不小心直接回傳 <code>User[p]</code>，因為 <code>User</code> 現在是代理本身，就會再次觸發 <code>get</code>，一路無限遞迴下去。<code>Reflect.get(target, p)</code> 讀的是背後的原物件，才不會繞回代理。</p>
+<p><code>new Proxy</code> 的第一個參數是被代理的物件，第二個參數則是處理器。建立完成後，變數 <code>User</code> 指向代理物件，而不是直接指向原本的物件。</p>
+<p>讀取 <code>User.username</code> 時，會先進入 <code>get(target, p, receiver)</code>。其中 <code>target</code> 是原本的物件，<code>p</code> 是被讀取的屬性名稱，<code>receiver</code> 則是接到這次操作的代理物件。</p>
+<p>執行 <code>User.age = 18</code> 時，則會進入 <code>set(target, p, value, receiver)</code>。除了屬性名稱之外，<code>value</code> 也帶著準備寫入的新值。</p>
 
-<h2>用 Proxy 抓出「不存在的屬性」</h2>
-<p>Proxy 真正在補環境時發光的地方，是抓出那些「其實不存在」的屬性。看下面這段，它對同一個 <code>User</code> 套了代理，然後分別讀了 <code>username</code>、<code>age</code>，最後讀一個根本沒定義的 <code>address</code>：</p>
+<h2>Reflect 負責把操作送回原物件</h2>
+<p>trap 記完紀錄之後，通常仍要讓原本的讀寫繼續進行。範例中的 <code>Reflect.get(target, p)</code> 與 <code>Reflect.set(target, p, value)</code>，就是把操作交給背後的目標物件。</p>
+<p>這裡最容易踩到的陷阱，是在 <code>get</code> 裡再次讀取 <code>User[p]</code>。因為 <code>User</code> 已經是代理物件，這次讀取會再次觸發 <code>get</code>，接著又讀一次 <code>User[p]</code>，像兩面鏡子互相反射，最後變成無限遞迴。</p>
+<p>使用對應的 <code>Reflect.*</code>，可以避免操作重新繞回代理。實務上，可以把這種寫法理解成「先登記，再把操作交還給原物件」。</p>
+
+<figure class="lesson-figure"><img src="./proxy-monitor-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>用 Proxy 看見程式正在尋找什麼</h2>
+<p>Proxy 在補環境時最有價值的地方，不只是記錄正常讀寫，而是讓原本躲在壓縮程式碼裡的屬性存取浮上檯面。</p>
+<p>下面的範例依序讀取 <code>username</code>、<code>age</code>，最後再讀取沒有定義的 <code>address</code>：</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day09/课堂笔记/js进阶02.md#js-hook-proxy"><code>//创建user对象
 var User = {
     username: "bobo",
@@ -75,17 +89,65 @@ User = new Proxy(User, {
 console.log(User.username);
 console.log(User.age);
 console.log(User.address);</code></pre>
-<p>執行的時候，<code>get</code> 對三次讀取都會觸發並印出日誌。前兩次拿到的 <code>username</code> 與 <code>age</code> 是正常的值；但第三次讀 <code>address</code> 時，<code>target</code> 裡根本沒有這個屬性，回傳的是 undefined。這代表：<strong>這個物件缺了 <code>address</code> 這個屬性</strong>，如果某段程式碼依賴它，就得把它補上。</p>
-<p>把這個模式放大到逆向的補環境上就很清楚了：當你把 <code>window</code> 物件套上代理，讓那一大包程式碼去跑，凡是它讀到、但 <code>window</code> 上不存在的屬性，都會被你的 <code>get</code> 記錄下來、回傳空值。你看日誌就知道「原來它在期待 <code>window</code> 上有這些東西」，於是回過頭去把這些屬性補進環境裡。這是從「憑空猜要補什麼」變成「它自己告訴你要補什麼」的關鍵一步。</p>
+<p>執行後，三次讀取都會觸發 <code>get</code>。前兩次能取得既有的值；讀取 <code>address</code> 時，目標物件沒有這個屬性，因此結果是 <code>undefined</code>。</p>
+<p>這筆紀錄透露了一件重要的事：執行中的程式曾經向 <code>User</code> 詢問 <code>address</code>。如果後續程式依賴這個值，就可能需要補上對應的屬性。</p>
+<p>不過，看到 <code>undefined</code> 時仍要判斷原因。它可能代表屬性不存在，也可能是屬性本來就存在，只是值恰好為 <code>undefined</code>。Proxy 提供的是調查線索，不是自動完成的結論。</p>
 
-<h2>Proxy 攔的是「透過代理」的操作</h2>
-<p>有一點和 hook 一樣要記住：Proxy 保護的是<strong>經過這個代理物件</strong>的操作。如果某段程式碼拿到的是原始 <code>target</code> 的引用，直接對原物件動手，就會繞過你的處理器。另外，處理器裡每個 trap 都應該用對應的 <code>Reflect</code> 方法把操作轉回原物件，否則很容易改變原本的語意或造成遞迴。把 <code>get</code>／<code>set</code> 想成「登記後照原樣放行」，是最安全的做法。</p>
+<figure class="lesson-figure"><img src="./proxy-monitor-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>放大到 window，就是補環境的雷達</h2>
+<p>把同樣的觀念套到 <code>window</code> 或 <code>document</code>，就能理解 Proxy 為什麼適合補環境。</p>
+<p>當一大包程式碼開始執行，它對代理物件的讀寫會陸續經過 trap。你可以從日誌看見它嘗試存取哪些屬性，再檢查目前環境是否真的提供這些內容。</p>
+<p>原本的做法像是憑空猜測「瀏覽器環境可能缺什麼」；套上 Proxy 後，則是讓程式親自留下需求清單。它讀了什麼、在哪裡得到空值，都會成為下一步調查與補環境的依據。</p>
+
+<h2>什麼時候用 Proxy，什麼時候改用單點 hook</h2>
+<table>
+<thead>
+<tr>
+<th>情境</th>
+<th>較適合的工具</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>已經知道要觀察哪個函式或屬性</td>
+<td>單點 hook</td>
+<td>目標明確，紀錄較集中，也比較容易追蹤呼叫內容。</td>
+</tr>
+<tr>
+<td>不知道程式會讀寫哪些屬性</td>
+<td><code>Proxy</code></td>
+<td>可以從整個物件的存取紀錄中找出線索。</td>
+</tr>
+<tr>
+<td>需要找出補環境可能缺少的內容</td>
+<td><code>Proxy</code></td>
+<td>能看見程式曾經要求哪些屬性，以及哪些讀取沒有取得預期值。</td>
+</tr>
+<tr>
+<td>程式持有原始物件，沒有經過代理</td>
+<td><code>Proxy</code> 不適用</td>
+<td>直接操作原始 <code>target</code> 會繞過處理器，trap 不會收到通知。</td>
+</tr>
+<tr>
+<td>程式不是一般讀寫，而是檢查屬性描述符或呼叫函式</td>
+<td>改用其他 trap</td>
+<td><code>get</code> 與 <code>set</code> 只能處理對應的讀寫操作。</td>
+</tr>
+</tbody>
+</table>
+
+<h2>Proxy 的邊界：只有經過代理才攔得到</h2>
+<p>Proxy 攔截的是<strong>透過代理物件發生的操作</strong>。如果某段程式碼仍持有原始 <code>target</code> 的引用，並直接對原物件讀寫，就會像繞過倉庫櫃檯的側門一樣，不留下任何代理紀錄。</p>
+<p>另一個邊界是操作類型。這一節使用的 <code>get</code> 與 <code>set</code>，只負責一般的屬性讀寫。有些網站會使用 <code>Object.getOwnPropertyDescriptor</code> 或 <code>Object.defineProperty</code> 處理屬性描述符，也可能把函式當成代理目標，攔截一般呼叫或 <code>new</code>。這些情況需要其他 trap，光靠 <code>get</code> 與 <code>set</code> 並不完整。</p>
 
 <h2>小結</h2>
 <blockquote>
-<code>Proxy</code> 用 <code>new Proxy(target, handler)</code> 把一個物件包起來，<code>handler</code> 裡的 trap 負責攔截操作，最常用的是 <code>get</code>（讀）與 <code>set</code>（寫）。每個 trap 都用對應的 <code>Reflect.*</code> 把操作以原本的語意交還給目標物件，避免改變行為或無限遞迴。它最有價值的用法，是對 <code>window</code>、<code>document</code> 這類大物件做代理，把所有「讀到不存在的屬性」記錄下來，藉此找出補環境該補哪些東西。
+<p><code>Proxy</code> 用 <code>new Proxy(target, handler)</code> 在物件外加上一層代理。<code>handler</code> 裡的 trap 負責攔截操作，其中 <code>get</code> 觀察讀取，<code>set</code> 觀察寫入；對應的 <code>Reflect.*</code> 則把操作交還給目標物件，避免再次繞回代理。</p>
+<p>單點 hook 適合已知目標，Proxy 則適合目標尚未明朗、需要觀察整個物件的情況。放在補環境的脈絡裡，它就像一具雷達：不替你直接決定要補什麼，但能顯示程式正在尋找哪些屬性。</p>
 </blockquote>
-<p>你在這一節只用了 <code>get</code> 與 <code>set</code>。但有些網站不是用 <code>obj.prop</code> 讀屬性，而是用屬性描述符（<code>Object.getOwnPropertyDescriptor</code>／<code>Object.defineProperty</code>）；有些則是代理整個函式，去攔它的呼叫或 <code>new</code>。下一節是一份目錄，把六個常用 trap 一次列清楚，讓你遇到哪種寫法就查對應的那一個。</p>
+<p>因此，Proxy 可以接在前面的 hook 觀念之後：兩者都在攔截操作，差別在觀察範圍與入口。下一節會把六個常用 trap 整理成一份目錄，讓屬性描述符、函式呼叫與建構操作也能找到各自對應的攔截點。</p>
 
 <div class="lesson-nav">
   <div><a href="./hook-detection-bypass.html">← 上一步：被偵測到了：toString 檢測與它的兩層破解</a></div>
@@ -100,35 +162,30 @@ console.log(User.address);</code></pre>
   <button class="opt">一個是屬性名，一個是屬性值</button>
   <button class="opt">一個是原函式，一個是包裝函式</button>
 </div>
-
 <div class="quiz" data-question="處理器裡那些負責攔截操作的方法，叫做什麼？" data-correct="3" data-explain="handler 裡的方法被稱為捕獲器（trap），對應的操作發生時會被呼叫。">
   <button class="opt">回呼（callback）</button>
   <button class="opt">閉包（closure）</button>
   <button class="opt">原型（prototype）</button>
   <button class="opt">捕獲器（trap）</button>
 </div>
-
 <div class="quiz" data-question="為什麼 <code>get</code> 裡要用 <code>Reflect.get(target, p)</code> 而不是回傳 <code>User[p]</code>？" data-correct="0" data-explain="User 是代理本身，回傳 User[p] 會再次觸發 get，無限遞迴；Reflect.get 讀的是背後的原物件。">
   <button class="opt">回傳 <code>User[p]</code> 會無限遞迴</button>
   <button class="opt">回傳 <code>User[p]</code> 會讓程式變慢</button>
   <button class="opt">Reflect 可以自動修好錯誤</button>
   <button class="opt">回傳 <code>User[p]</code> 語法不合法</button>
 </div>
-
 <div class="quiz" data-question="用 Proxy 代理 window，發現某個屬性讀出來是 undefined，代表什麼？" data-correct="2" data-explain="代表 window 上沒有這個屬性，而程式碼在讀它，所以補環境時要把這個屬性補上。">
   <button class="opt">代表這個屬性已經被刪除了</button>
   <button class="opt">代表網站成功偵測到你</button>
   <button class="opt">代表環境缺了這個屬性要補</button>
   <button class="opt">代表這行程式碼不需要執行</button>
 </div>
-
 <div class="quiz" data-question="Proxy 攔不到下列哪一種操作？" data-correct="1" data-explain="Proxy 只攔經過代理物件的操作；若程式拿到原始 target 的引用直接操作，就繞過了代理。">
   <button class="opt">透過代理物件讀取屬性</button>
   <button class="opt">直接操作原始 target 的引用</button>
   <button class="opt">透過代理物件設定屬性</button>
   <button class="opt">透過代理物件刪除屬性</button>
 </div>
-
 <div class="quiz" data-question="相比一個個 hook，Proxy 在補環境時最大的優勢是什麼？" data-correct="3" data-explain="它把整個物件的所有讀寫一次記錄下來，於是你不用事先知道屬性名，缺什麼會自己現形。">
   <button class="opt">它會自動產生合法的 cookie</button>
   <button class="opt">它能讓網站無法偵測 hook</button>

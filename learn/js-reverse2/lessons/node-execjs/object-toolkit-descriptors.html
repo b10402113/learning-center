@@ -8,34 +8,45 @@
 </head>
 <body>
 
-<h1>Object 工具與屬性描述符</h1>
+<h1>用 Object 看穿屬性：型別、原型與描述符</h1>
 <p class="meta">Step 3/5 · Node 執行、execjs 與 JS 前置知識</p>
 
 <h2>學習目標</h2>
-<p>用 <code>Object</code> 的幾個工具辨識型別、判斷自有屬性與原型物件，並用屬性描述符讀懂、甚至改寫一個屬性的可寫、可列舉與 get/set 行為。</p>
+<p>這一節要用 <code>Object</code> 的幾個工具，辨認值的型別、區分自有與繼承屬性，並讀懂屬性描述符。掌握這些工具後，你就能判斷一個屬性為什麼不能改、為什麼不會被列出，以及讀寫時為什麼會觸發 get/set 函式。</p>
 
-<h2>前言：同一個取值，為什麼有時會「觸發函式」</h2>
-<p>上一節我們把原型鏈講清楚了，你已經知道成員可能藏在物件本身，也可能藏在某一層原型上。但這樣還不夠。現場還有一種更麻煩的情況：你只是讀一個屬性 <code>obj.score</code>，背後卻偷偷執行了一段函式；你對它賦值 <code>obj.score = 100</code>，結果卻像石沉大海，一點動靜都沒有。</p>
-<p>這不是靈異現象，而是屬性的「描述符」在決定一切。同一個屬性，可能是一個單純的值，也可能是一對 get/set 函式；它可能可寫、可刪，也可能被鎖死。這一節要教你用 <code>Object</code> 的幾個工具把這些設定挖出來，因為之後你要寫的 hook，做的正是「攔截某個屬性的讀寫」，那背後的機制就是這裡講的描述符。</p>
+<h2>先看大圖：抓到程式碼之後，怎麼一路追到 hook</h2>
+<p>做 JS 逆向時，抓到腳本只是起點。接下來常要在 DevTools 裡確認變數型別、沿著原型鏈找成員，再觀察某個屬性如何被讀寫。最後，才可能用 hook 攔截加密參數或關鍵資料。</p>
+<p>這幾件事其實連成同一條線：先確認「手上的東西是什麼」，再追查「屬性放在哪裡」，最後拆開「屬性讀寫時會做什麼」。<code>Object</code> 提供的工具，就像一組檢查物件內部構造的手電筒。</p>
 
-<h2>先解決一個老問題：typeof 分不清某些型別</h2>
-<p>要在 JS 裡判斷「這個東西是什麼型別」，直覺會用 <code>typeof</code>。它對數字、字串、布林、函式都還算準，但有兩個著名的例外：<code>null</code> 和空陣列 <code>[]</code>，用 <code>typeof</code> 看都會回傳 <code>object</code>，完全分不出彼此：</p>
+<figure class="lesson-figure"><img src="./object-toolkit-descriptors-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>同樣是取值，為什麼有時會執行函式？</h2>
+<p>上一節談過原型鏈。你已經知道，成員可能放在物件本身，也可能藏在某一層原型上。但逆向時還會碰到另一種情況：你只是讀取 <code>obj.score</code>，背後卻執行了一段函式；你寫入 <code>obj.score = 100</code>，結果數值完全沒有改變。</p>
+<p>這不是屬性忽然鬧脾氣，而是它背後的「屬性描述符」正在控制行為。一個屬性可以只是普通的值，也可以由 get/set 函式接管；它可能允許改寫與刪除，也可能像被鎖進玻璃櫃，只能看、不能碰。</p>
+<p>之後要寫的 hook，本質上也是攔截屬性的讀取或寫入。因此，在動手 hook 之前，要先學會看懂這層機制。</p>
+
+<h2>第一關：別讓 typeof 把不同型別混在一起</h2>
+<p>在 DevTools Console 拿到一個混淆過的變數時，第一個問題通常是：「這到底是什麼？」最直覺的工具是 <code>typeof</code>。它判斷數字、字串、布林與函式時很好用，但遇到 <code>null</code> 和陣列就不夠精確。</p>
+<p>把下面這段放進 Console 執行，可以直接看到差異：</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#3. Object对象常用成员"><code>console.log('空数组[]',typeof []);
 console.log('null空',typeof null);
 console.log('undefined',typeof undefined);
 console.log('函数function (){}',typeof function (){});</code></pre>
-<p>這在逆向現場很致命。你從一個混淆過的變數裡拿到一個東西，想知道它到底是陣列、物件還是 null，單靠 <code>typeof</code> 會誤判。</p>
+<p>空陣列 <code>[]</code> 與 <code>null</code> 都會得到 <code>object</code>。如果只看這個結果，就無法判斷手上的值究竟能不能當成陣列操作。</p>
+<p>因此，<code>typeof</code> 適合快速區分基本型別與函式；需要進一步分辨陣列、<code>null</code> 或其他物件類型時，就不該停在這裡。</p>
 
-<h2>更精確的做法：Object.prototype.toString.call</h2>
-<p>比較可靠的方法，是借用 <code>Object</code> 原型上的 <code>toString</code>，用 <code>call</code> 把它套到目標值上。它回傳的是一個帶方括號的標籤，會把真正的型別寫出來：</p>
+<h2>需要更精確時：借用 Object.prototype.toString</h2>
+<p>更可靠的做法，是借用 <code>Object.prototype</code> 上的 <code>toString</code>，再透過 <code>call</code> 把目標值交給它檢查。它回傳的不是模糊的 <code>object</code>，而是一個帶方括號的類別標籤。</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#3. Object对象常用成员"><code>console.log(Object.prototype.toString.call(1));
 console.log(Object.prototype.toString.call([]));
 console.log(Object.prototype.toString.call(null));
 console.log(Object.prototype.toString.call(function () {}));</code></pre>
-<p>這樣一印，數字會給出 <code>[object Number]</code>、陣列給 <code>[object Array]</code>、null 給 <code>[object Null]</code>，一目瞭然。這個「類別標籤」後面補環境時還會再遇到：當腳本用 <code>window.toString()</code> 回傳的標籤來判斷「這是不是真的瀏覽器」時，你要做的就是讓假物件吐出一模一樣的標籤。</p>
+<p>執行後，數字會得到 <code>[object Number]</code>，陣列是 <code>[object Array]</code>，<code>null</code> 則是 <code>[object Null]</code>。這就像把只寫著「物件」的模糊標籤，換成真正標明內容物的名牌。</p>
+<p>這種類別標籤不只用來除錯。之後補瀏覽器環境時，某些腳本也會檢查物件回傳的標籤，藉此判斷自己是否真的執行在瀏覽器中。此時，假物件就必須表現得像原本的瀏覽器物件。</p>
 
-<h2>這是它自己的屬性，還是繼承來的？</h2>
-<p>沿著原型鏈找成員時，另一個必備工具是 <code>hasOwnProperty</code>。它回答的是「這個屬性是不是長在物件自己身上」，繼承來的一律回傳 false：</p>
+<h2>第二關：屬性是自己擁有，還是向原型借來的？</h2>
+<p>確認型別後，下一個問題通常是：「這個成員到底放在哪裡？」DevTools 雖然能展開物件與原型，但要在程式中做明確判斷，可以使用 <code>hasOwnProperty</code>。</p>
+<p>它只回答一件事：指定屬性是不是直接存在於物件自己身上。從原型鏈繼承而來的屬性，一律回傳 false。</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#3. Object对象常用成员"><code>function func(){
     this.name="bobo";
     this.getAge=function(){}
@@ -44,36 +55,50 @@ f = new func();
 f.hasOwnProperty('name'); //true
 f.hasOwnProperty('getAge'); //true
 f.hasOwnProperty('toString'); //false</code></pre>
-<p><code>name</code>、<code>getAge</code> 是自己 <code>this.xxx</code> 寫上去的，回傳 true；<code>toString</code> 是從原型鏈繼承來的，回傳 false。這正好補上上一節的查找規則，你可以用 <code>hasOwnProperty</code> 判斷「爬到某一層時，這個成員是自己有還是要繼續往上」。</p>
-<p>跟原型直接相關的還有三個工具。<code>Object.getPrototypeOf(f)</code> 取得某物件的原型（等價於 <code>f.__proto__</code>），<code>Object.setPrototypeOf</code> 可以事後換掉一個物件的原型，而 <code>Object.create(window)</code> 則是以某個物件為原型「生一個新的」出來。最後這個在補環境時特別常見：你想造一個假物件、讓它的原型指到 <code>window</code>，就會用到它。</p>
+<p><code>name</code> 與 <code>getAge</code> 是透過 <code>this.xxx</code> 直接寫到實例上的，所以結果是 true。<code>toString</code> 則來自原型鏈，因此結果是 false。</p>
+<p>可以把物件想成一間租屋處。自有屬性是房間裡原本就放著的家具；繼承屬性則像大樓公設，住戶可以使用，但不在自己的房間裡。<code>hasOwnProperty</code> 檢查的，就是這件東西究竟在房內，還是在公設區。</p>
 
-<h2>核心：屬性描述符</h2>
-<p>回到開頭那個謎題。每個屬性身上其實都掛著一組設定，叫屬性描述符。描述符本身也是一個物件，它分成兩大類，而且同一個屬性只能屬於其中一類，不能混用：</p>
+<figure class="lesson-figure"><img src="./object-toolkit-descriptors-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>如果要直接查看或調整原型，還有三個相關工具。<code>Object.getPrototypeOf(f)</code> 可以取得物件的原型，作用相當於查看 <code>f.__proto__</code>；<code>Object.setPrototypeOf</code> 能在物件建立後更換原型；<code>Object.create(window)</code> 則會建立一個新物件，並讓指定物件成為它的原型。</p>
+<p>這些工具在補環境時很實用。例如要建立一個假物件，並讓它沿著原型鏈找到 <code>window</code> 上的成員，就可能使用 <code>Object.create(window)</code>。不過，如果只是確認屬性的來源，先查看原型通常就夠了，不必急著改動它。</p>
+
+<h2>核心機制：屬性描述符</h2>
+<p>知道屬性放在哪裡之後，還要理解它的行為。每個屬性背後都有一組設定，稱為「屬性描述符」。它像屬性的控制面板，決定這個屬性存的是普通值，還是由函式接管讀寫。</p>
+<p>描述符分成兩大類。同一個屬性只能採用其中一類，不能一邊設定 <code>value</code>，一邊又用 <code>get</code>/<code>set</code> 接管。</p>
 <table>
 <thead>
 <tr><th>類型</th><th>包含的欄位</th><th>行為</th></tr>
 </thead>
 <tbody>
-<tr><td>資料描述符</td><td><code>value</code>、<code>writable</code>、<code>enumerable</code>、<code>configurable</code></td><td>屬性是單純的值，能被讀寫</td></tr>
-<tr><td>存取描述符</td><td><code>get</code>、<code>set</code>、<code>enumerable</code>、<code>configurable</code></td><td>取值/賦值時觸發你提供的函式</td></tr>
+<tr><td>資料描述符</td><td><code>value</code>、<code>writable</code>、<code>enumerable</code>、<code>configurable</code></td><td>屬性直接保存一個值，並可設定是否允許改寫</td></tr>
+<tr><td>存取描述符</td><td><code>get</code>、<code>set</code>、<code>enumerable</code>、<code>configurable</code></td><td>讀取或賦值時，改由指定函式處理</td></tr>
 </tbody>
 </table>
-<p>兩個類型共用的三個欄位，決定了屬性的自由度：<code>enumerable</code> 決定它會不會出現在 <code>for..in</code> 迴圈裡；<code>writable</code> 決定它能不能被賦值改變；<code>configurable</code> 決定它能不能被刪除、或能不能再修改它的描述符。</p>
-<p>要看某個屬性現在的描述符，用 <code>getOwnPropertyDescriptor</code>（單一）或 <code>getOwnPropertyDescriptors</code>（全部）：</p>
+<p><code>enumerable</code> 決定屬性是否會出現在 <code>for..in</code> 之類的列舉過程中；<code>configurable</code> 決定屬性能否被刪除，以及描述符能否再次調整。資料描述符另外使用 <code>writable</code> 控制值能否透過賦值改變。</p>
+
+<figure class="lesson-figure"><img src="./object-toolkit-descriptors-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>要檢查單一屬性，可以用 <code>Object.getOwnPropertyDescriptor</code>；要一次查看所有自有屬性，則使用 <code>Object.getOwnPropertyDescriptors</code>。</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#3. Object对象常用成员"><code>Object.getOwnPropertyDescriptor(f,'name');
 // { value: 'bobo', writable: true, enumerable: true, configurable: true }
 Object.getOwnPropertyDescriptors(f);</code></pre>
+<p>逆向時，如果某個屬性看得到卻改不動，或明明存在卻沒有被迴圈列出來，描述符就是優先檢查的地方。它比反覆猜測賦值語法是否寫錯，更快接近真正原因。</p>
 
-<h2>用 defineProperty 現裝一個屬性</h2>
-<p>看得懂描述符之後，反過來你也可以自己安裝。如果一個屬性本來就存在（例如用 <code>age = 10</code> 直接寫出來的），那它預設是資料描述符、三個自由度全開、值可讀寫。但用 <code>Object.defineProperty</code> 現裝一個新屬性，你就可以逐項指定：</p>
+<h2>資料描述符：把屬性的開關逐一設定</h2>
+<p>看懂描述符後，也可以反過來安裝屬性。一般直接指定的屬性，通常是保存值的資料屬性；使用 <code>Object.defineProperty</code> 時，則可以明確決定每一個開關。</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#3. Object对象常用成员"><code>Object.defineProperty(User, "height", {
     enumerable:true, //该属性是否可遍历
     configurable:true,//该属性是否可配置:决定该属性是否可以被删除或修改其属性描述符。
     value:160, //属性的值
     writable:false //该属性的值是否可以通过赋值运算符改变
 });</code></pre>
-<p>這裡把 <code>writable</code> 設成 false，所以之後再對 <code>User.height = 180</code> 賦值，數值不會變。而如果把 <code>enumerable</code> 設成 false，這個屬性就不會被 <code>for..in</code> 列出來，混淆過的程式碼有時候就是靠這招藏東西。</p>
-<p>另一種用法是存取描述符，也就是裝一對 get/set。這是最接近「hook」原型的技巧：讀取時執行你的 <code>get</code>，寫入時執行你的 <code>set</code>，你就能在函式裡偷看、記錄、甚至改寫進出的值：</p>
+<p>這裡把 <code>writable</code> 設成 false，所以之後即使執行 <code>User.height = 180</code>，屬性值也不會照一般可寫屬性那樣改變。</p>
+<p>如果將 <code>enumerable</code> 設為 false，屬性仍然存在，也可以直接讀取，但不會被 <code>for..in</code> 列出來。混淆程式碼有時會利用這種落差，讓只靠列舉檢查物件的人漏看某些成員。</p>
+<p>資料描述符適合用在「屬性就是一個值，只需要控制能不能改、能不能列出」的情況。如果目標是觀察每一次讀取與寫入，就要換成存取描述符。</p>
+
+<h2>存取描述符：讀寫屬性時順手攔截</h2>
+<p>存取描述符使用 <code>get</code> 與 <code>set</code> 接管屬性。讀取屬性時執行 <code>get</code>，賦值時則執行 <code>set</code>。這已經非常接近 hook 的基本形狀。</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/day08/课堂笔记/js进阶01.md#3. Object对象常用成员"><code>Object.defineProperty(Stu, "score", {
     enumerable:true,
     configurable:true,
@@ -86,13 +111,19 @@ Object.getOwnPropertyDescriptors(f);</code></pre>
         temp = value;
     }
 });</code></pre>
-<p>注意這裡沒有 <code>value</code>、<code>writable</code>，而是用 <code>get</code>/<code>set</code> 取代，這正是兩類描述符不能混用的意思。資料存在外面的 <code>temp</code>，讀寫都經過這一對函式。等你之後要攔截網站的某個加密參數時，靠的就是這種「把屬性換成 get/set」的手法。</p>
+<p>這個屬性沒有設定 <code>value</code> 與 <code>writable</code>，而是改用 <code>get</code>/<code>set</code>。真正的資料放在外部變數 <code>temp</code>，所有讀寫都先通過這兩個函式。</p>
+<p>這就像在門口加裝感應器。資料仍然能進出，但每一次通過都會留下動靜。之後若要攔截網站產生的加密參數，就能利用同樣的機制，在值被讀取或寫入時記錄它，甚至調整進出的內容。</p>
 
-<h2>小結</h2>
+<figure class="lesson-figure"><img src="./object-toolkit-descriptors-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>不過，這種手法只適合屬性讀寫確實會經過該描述符的情況。動手前還是要先確認屬性位於物件本身或哪一層原型，以及它的 <code>configurable</code> 是否允許重新定義。否則，hook 裝錯位置，就像在隔壁家的門口裝感應器，目標資料根本不會經過。</p>
+
+<h2>把這些工具串回逆向流程</h2>
 <blockquote>
-<code>typeof</code> 分不清 <code>null</code> 與陣列，改用 <code>Object.prototype.toString.call</code> 看類別標籤。用 <code>hasOwnProperty</code> 分辨自有與繼承屬性，用 <code>getPrototypeOf</code>／<code>setPrototypeOf</code>／<code>Object.create</code> 操作原型。屬性描述符分資料與存取兩類：前者管 <code>value</code>／<code>writable</code>，後者管 <code>get</code>／<code>set</code>，共用 <code>enumerable</code> 與 <code>configurable</code>；<code>Object.defineProperty</code> 讓你自己安裝，這正是寫 hook 的底層原語。
+<p>拿到陌生值時，先用 <code>typeof</code> 做快速判斷；若要分辨陣列、<code>null</code> 或其他物件類型，再用 <code>Object.prototype.toString.call</code> 查看類別標籤。找到目標屬性後，用 <code>hasOwnProperty</code> 與原型工具確認它放在哪裡，再透過屬性描述符理解它為什麼可寫、不可寫、可列舉，或會觸發 get/set。最後，<code>Object.defineProperty</code> 才把這些觀念接到 hook 上。</p>
 </blockquote>
-<p>語言這一側的工具差不多備齊了。再來回到執行環境：你手上那些從瀏覽器抓來的 JS，一丟進 Node 常常馬上報錯，因為它們預設自己活在瀏覽器裡。下一節就來處理這個落差，看看 <code>window</code> 和 <code>global</code> 到底差在哪、又該怎麼把環境補起來。</p>
+<p>這些工具不是彼此分散的 API，而是一條完整的檢查路線：辨認值、追查來源、拆解行為，再決定是否攔截。它們也把上一節的原型鏈，接到了後面的環境補全與 hook。</p>
+<p>接下來要回到執行環境。從瀏覽器抓出的 JS 丟進 Node 後，常會因為缺少瀏覽器物件而立刻報錯。下一節將繼續處理 <code>window</code> 與 <code>global</code> 的差異，並看看該如何把缺少的環境補起來。</p>
 
 <div class="lesson-nav">
   <div><a href="./object-and-prototype-lookup.html">← 上一步：物件、原型與原型鏈查找</a></div>
@@ -107,35 +138,30 @@ Object.getOwnPropertyDescriptors(f);</code></pre>
   <button class="opt">因為它只能用在函式上面</button>
   <button class="opt">因為它會修改被檢查的值</button>
 </div>
-
 <div class="quiz" data-question="要取得某個值精確的類別標籤，該用什麼？" data-correct="3" data-explain="Object.prototype.toString.call 會回傳 [object Xxx] 形式的標籤。">
   <button class="opt">直接對它呼叫 typeof 運算子</button>
   <button class="opt">用 JSON.stringify 轉成字串</button>
   <button class="opt">用 parseInt 解析成整數值</button>
   <button class="opt">用 Object.prototype.toString.call</button>
 </div>
-
 <div class="quiz" data-question="hasOwnProperty('toString') 通常會回傳什麼？" data-correct="2" data-explain="toString 是從原型鏈繼承的，不是物件自己的屬性，所以回傳 false。">
   <button class="opt">回傳 true，因為萬物都有它</button>
   <button class="opt">回傳報錯，因為它是保留字</button>
   <button class="opt">回傳 false，因為它繼承而來</button>
   <button class="opt">回傳 null，因為無法判斷</button>
 </div>
-
 <div class="quiz" data-question="資料描述符與存取描述符差別在哪裡？" data-correct="0" data-explain="資料描述符有 value/writable，存取描述符用 get/set 取代，兩者不能混用。">
   <button class="opt">前者用 value 後者用 get 與 set</button>
   <button class="opt">前者可列舉後者不可被列舉</button>
   <button class="opt">前者可刪除後者不能被刪除</button>
   <button class="opt">前者給物件後者給函式使用</button>
 </div>
-
 <div class="quiz" data-question="把屬性描述符的 writable 設成 false 會有什麼效果？" data-correct="1" data-explain="writable 為 false 時，之後再對這個屬性賦值不會改變它的值。">
   <button class="opt">這個屬性會被從物件上刪除</button>
   <button class="opt">這個屬性無法再被賦值改變</button>
   <button class="opt">這個屬性不會被 for in 列出</button>
   <button class="opt">這個屬性的 get 會被停用</button>
 </div>
-
 <div class="quiz" data-question="Object.defineProperty 裝 get/set 最能對應下列哪件事？" data-correct="2" data-explain="把屬性換成 get/set 就是在讀寫兩端插函式，正是 hook 的原型。">
   <button class="opt">把一段 JS 編譯成上下文物件</button>
   <button class="opt">把 JSON 轉換成 Python 字典</button>

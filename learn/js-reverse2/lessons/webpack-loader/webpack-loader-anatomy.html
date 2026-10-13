@@ -8,25 +8,31 @@
 </head>
 <body>
 
-<h1>webpack bundle 的骨架：IIFE、require 函式與快取</h1>
+<h1>拆開 webpack bundle：IIFE、require 與模組快取</h1>
 <p class="meta">Step 1/4 · webpack 拆解與模組定位</p>
 
-<h2>學習目標</h2>
-<p>看懂一段 webpack bundle 的最小骨架：最外層的 IIFE、內部的 require 函式、模組快取，並認出 <code>window.loader</code> 就是逆向時要接上的那把把手。</p>
+<h2>先看問題：加密函式到底藏去哪裡了？</h2>
+<p>你在 DevTools 的 Sources 面板打開網站的 JavaScript，想搜尋「sign」或「token」，卻只看到一大團層層包裹、幾乎沒有名稱的程式碼。請求中的參數明明經過計算，但你就是找不到一個叫 <code>getSign</code> 的函式。</p>
+<p>原因通常不是函式消失了，而是它已經被 webpack 這類工具打包。原本分散在不同檔案裡的模組，被收進一個或數個 bundle；模組的身分也可能從名稱變成編號。</p>
+<p>可以把 bundle 想成一座編號書庫。加密邏輯仍是其中一本書，只是書名被換成了編號。與其從頭讀完整座書庫，更有效的方法是先找到負責取書的「圖書館員」。</p>
+<p>這一節要建立的就是這張大圖：最外層的 IIFE 負責包住環境，require 函式依編號執行模組，快取保存執行結果，而 <code>window.loader</code> 則是範例刻意留給外部使用的把手。看懂這些關係，後面才能精準定位真正的加密模組。</p>
 
-<h2>前言：為什麼網站的 JS 裡找不到一個叫 getSign 的函式</h2>
-<p>你在 DevTools 的 Sources 面板點開目標網站的 JS，想搜「sign」、「token」這類關鍵字，結果看到的是一坨沒有名字、層層包起來的程式。你想找的那個加密函式明明存在（參數就是它算出來的），但它不叫 <code>getSign</code>，而是被編到某個編號裡，藏在一個巨大的檔案深處。</p>
-<p>這不是網站故意混淆，是打包工具的日常。現在的網站幾乎都用 webpack 這類工具把幾百個模組打包成一個或幾個檔案。打包之後，程式不再是「一連串函式與變數」，而是「一位圖書館員，加上一櫃子用編號排好的書」。你要找的加密邏輯，就是其中一本書，它只有編號，沒有書名。</p>
-<p>這一節先把這個骨架拆給你看：書櫃怎麼蓋起來、那位圖書館員怎麼依編號取書、以及你之後要靠哪個開關把它叫出來。看懂這一層，後面才有辦法在櫃子裡精準地抽出你要的那一本。</p>
+<h2>整體骨架：一個載入器，加上一櫃子模組</h2>
+<p>webpack bundle 看起來很龐大，但這一課關心的最小骨架並不複雜。外層先建立一個封閉空間，裡面放著載入器與快取；所有模組則以陣列或物件的形式傳入。</p>
+<p>當程式需要某個模組時，載入器會根據編號找到它。若模組尚未執行，就執行並保存結果；如果先前已經執行過，就直接從快取取回。</p>
+<p>這個觀念適合用來處理「函式已被打包、只能看到模組編號」的情況。如果 Sources 裡已經能直接找到具名函式與清楚的呼叫關係，就不必先繞進載入器。載入器是定位入口，不是每次都必須使用的答案。</p>
 
-<h2>骨架一：最外層是一個立即執行函式</h2>
-<p>webpack 打包出來的檔案，外型通常長這樣：一個用括號包起來的匿名函式，後面緊接著一組括號把它當場執行掉，再把「所有模組」當參數傳進去。這種寫法叫立即執行函式運算式（IIFE，Immediately Invoked Function Expression），寫成 <code>!function (形參) { … }(功能模組)</code> 的形式。</p>
-<p>為什麼要用 IIFE？因為它替包好的程式開了一個私密空間。裡面宣告的變數不會漏到全域去，也就不會跟別人打架。整個 bundle 對外只露出極少數東西，通常是刻意設定的那一個。</p>
-<p>把參數的位置看清楚，是判斷型態的第一步。這個「功能模組」的位置，可能是用中括號包起來的陣列，也可能是用大括號包起來的物件，後面講型態時會專門分辨。現在先記住：看到一個被當場執行的匿名函式，把一大包東西當參數吃下去，這就是 webpack 的門面。</p>
+<figure class="lesson-figure"><img src="./webpack-loader-anatomy-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>骨架二：核心是那個 require 函式</h2>
-<p>真正的主角在 IIFE 裡面。它通常叫 <code>n</code>（陣列版常叫 <code>n</code>，多檔版叫 <code>__webpack_require__</code>），做的事就一件：你報一個模組編號，它把對應的模組執行起來，並回傳結果。這就是那位圖書館員。</p>
-<p>看一段最小的、物件版的載入器。這段是逐字引自原始碼的：</p>
+<h2>外層：IIFE 建立私密空間</h2>
+<p>webpack 打包後的檔案，外型常是一個被括號包住的匿名函式，後面立刻接著括號執行，再把整組模組當成參數傳進去。這種結構稱為立即執行函式運算式，也就是 IIFE（Immediately Invoked Function Expression）。常見外型是 <code>!function (形參) { … }(功能模組)</code>。</p>
+<p>IIFE 像是在 bundle 外面罩上一層透明保護殼。裡面宣告的變數留在自己的作用域，不會全部散落到全域，也比較不容易和其他程式互相衝突。</p>
+<p>在 DevTools 裡看到這種結構時，先別急著閱讀每個內部函式。先看匿名函式最後吃進了什麼參數：如果是中括號，模組可能排在陣列裡；如果是大括號，則可能以物件的 key 保存。後面定位模組時，這個差異會直接影響你要找的是索引還是 key。</p>
+
+<h2>核心：require 函式負責按編號取模組</h2>
+<p>IIFE 裡真正值得先找的，是負責載入模組的 require 函式。它在壓縮後可能只叫 <code>n</code>，多檔版本也可能保留 <code>__webpack_require__</code> 這類名稱。</p>
+<p>它的工作很單純：接收一個模組編號，找到對應的模組函式，執行它，最後回傳模組輸出的結果。它就是那位只認編號、不認書名的圖書館員。</p>
+<p>下面是物件版載入器的最小範例，內容逐字引自原始碼：</p>
 <pre data-source="sources/js-reverse2/20261005/Day27/01 webpack加载器loader.js"><code>!function (e) {
     var t = {};
 
@@ -42,14 +48,16 @@
         return o.exports.exports;
     }
     window.loader = n</code></pre>
-<p>逐行看。外層的 <code>e</code> 就是「模組的集合」，也就是那一櫃子書。<code>var t = {}</code> 是快取，下面會單獨講。<code>function n(r)</code> 是 require 函式，參數 <code>r</code> 就是模組編號，它可能是索引或 key。</p>
-<p>進到函式裡，第一件事是查快取：<code>if (t[r]) return t[r].exports;</code>。如果這個編號先前跑過，直接把它上次的結果交出去，不再重跑。這就是為什麼同一個模組不管你呼叫幾次，它的初始化邏輯只會執行一遍。</p>
-<p>沒跑過的話，就幫它建一筆新紀錄 <code>var o = t[r] = { i: r, l: !1, exports: {} }</code>，其中 <code>i</code> 記編號、<code>l</code> 記「有沒有載入過」、<code>exports</code> 是這個模組要交出東西的地方。</p>
-<p>接著是關鍵那一行：<code>e[r].call(o.exports, o, o.exports, n)</code>。它把 <code>e</code> 裡編號 <code>r</code> 的那個模組函式叫起來執行，同時把三樣東西綁進去當參數：它自己的 <code>exports</code>、它自己的紀錄 <code>o</code>、以及 require 函式本身 <code>n</code>（這樣模組內部才能再去要別的模組）。</p>
-<p>最後 <code>return o.exports.exports;</code>。注意這個尾巴：回傳的是 <code>o.exports.exports</code>，不是整個 <code>o.exports</code> 物件。這是這份原始碼特別標記的細節：模組是用 <code>this.exports = 值</code> 把結果塞在 <code>exports</code> 這個位置，所以再取一層才拿得到真正要的東西。</p>
+<p>閱讀這段程式時，可以先抓住三個角色。外層參數 <code>e</code> 是模組集合，也就是書櫃；<code>t</code> 是模組快取；<code>n(r)</code> 則是載入器，其中 <code>r</code> 是模組的索引或 key。</p>
+<p>載入器先檢查 <code>if (t[r]) return t[r].exports;</code>。如果快取裡已經有這個編號，就直接交回先前保存的內容，不再重新執行模組。</p>
+<p>若快取裡沒有，程式便建立 <code>var o = t[r] = { i: r, l: !1, exports: {} }</code>。其中 <code>i</code> 保存模組編號，<code>l</code> 是載入狀態欄位，<code>exports</code> 則是模組交付結果的位置。</p>
+<p>真正啟動模組的是 <code>e[r].call(o.exports, o, o.exports, n)</code>。它先從 <code>e</code> 找到編號為 <code>r</code> 的模組函式，並把 <code>this</code> 綁定成 <code>o.exports</code>；接著傳入模組紀錄 <code>o</code>、輸出物件 <code>o.exports</code>，以及載入器 <code>n</code>。因此，模組內部若還需要其他模組，也能繼續呼叫同一個載入器。</p>
+<p>最後要特別注意 <code>return o.exports.exports;</code>。這份原始碼不是直接回傳整個 <code>o.exports</code>，而是再往裡取一層。原因是範例模組透過 <code>this.exports = 值</code> 保存結果，所以真正的輸出位於 <code>o.exports.exports</code>。</p>
 
-<h2>骨架三：模組怎麼被存、怎麼被叫</h2>
-<p>上面那位圖書館員，服務的書櫃長什麼樣？物件版的書櫃是一張「編號對函式」的表：</p>
+<figure class="lesson-figure"><img src="./webpack-loader-anatomy-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>模組集合：物件版用 key，陣列版用索引</h2>
+<p>載入器知道怎麼取書之後，接著要看書櫃的排列方式。物件版是一張「模組編號對應模組函式」的表：</p>
 <pre data-source="sources/js-reverse2/20261005/Day27/01 webpack加载器loader.js"><code>}(
     {
         "1001": function () {
@@ -65,8 +73,9 @@
 );
 
 console.log(window.loader("1001"))</code></pre>
-<p>你可以看到模組的編號是字串，像 <code>"1001"</code>、<code>"1002"</code>，而不是名字。這就是為什麼你在檔案裡搜不到函式名：模組的身分被編號取代了。呼叫的方式也很直白，<code>window.loader("1001")</code>，報上編號，拿回該模組 <code>this.exports</code> 交出的值。</p>
-<p>陣列版的書櫃則是把模組依序排進一個陣列，編號就變成 0、1、2 這種索引：</p>
+<p>這裡的模組編號是 <code>"1001"</code>、<code>"1002"</code> 這類字串，而不是原本的函式名稱。這也解釋了為什麼搜尋具名函式可能沒有結果：模組在 bundle 裡是靠編號辨認的。</p>
+<p>呼叫方式則很直接。<code>window.loader("1001")</code> 把編號交給載入器，載入器找到對應函式並執行，最後取回它透過 <code>this.exports</code> 交出的值。</p>
+<p>另一種常見外型是陣列版。所有模組依序放入陣列，模組編號自然就變成 0、1、2 這類索引：</p>
 <pre data-source="sources/js-reverse2/20261005/JS逆向/Day17-Day18：逆向核心案例解析4/01 基于数组的webpack.js"><code>!function (e) {
     var t = {};
 
@@ -95,18 +104,27 @@ console.log(window.loader("1001"))</code></pre>
         console.log("bar");
     }
 ]);</code></pre>
-<p>注意 <code>n(0)</code> 被叫了兩次。第一次進去執行、把結果放進快取；第二次直接命中快取、原封不動回傳。這正是快取存在的意義：模組只初始化一次。</p>
+<p>這段程式連續呼叫了兩次 <code>n(0)</code>。第一次呼叫時，載入器會執行索引 0 的模組，並把結果放進快取；第二次呼叫時，載入器發現快取已有紀錄，便直接回傳，不再重跑初始化邏輯。</p>
+<p>因此，物件版與陣列版的核心機制其實相同。差別只在書架上的標籤：物件版用 key 找模組，陣列版用數字索引找模組。</p>
 
-<h2>骨架四：那把被刻意留在門口的把手</h2>
-<p>如果 require 函式只存在 IIFE 裡面，外面的人根本碰不到它，那逆向就無從下手。所以 webpack 幾乎都把它洩漏到全域，最常見的寫法就是一行 <code>window.loader = n</code>。多檔版的 bootstraps 也一樣，只是名字換成 <code>window.loader = __webpack_require__</code>。</p>
-<p>這一行，等於把圖書館員請到櫃檯外面站著。你在 Node 或 DevTools 裡只要喊 <code>window.loader(編號)</code>，就能直接驅動整個 bundle，不必重寫任何演算法。整個 webpack 逆向的起點，就是找到這一把把手。</p>
+<h2>快取：為什麼同一個模組只初始化一次</h2>
+<p>快取不只是讓程式跑得更快，它也維持了模組執行的一致性。模組第一次被載入時建立輸出；之後不論被要求幾次，載入器都交回先前保存的結果。</p>
+<p>可以把它想成圖書館員第一次接到需求時，先去倉庫取書並登記；之後再有人要同一本書，就直接查登記資料，不必重新跑一趟。</p>
+<p>在逆向時，這個機制也提醒你：重複呼叫同一個模組編號，不代表模組內的初始化程式會跟著重跑。若你正在觀察某段初始化行為，就必須知道自己拿到的是第一次執行，還是快取中的既有結果。</p>
 
-<h2>把觀念串起來</h2>
-<p>用一句話整理 webpack bundle 的骨架：外層是 IIFE，負責把一切包進私密空間；裡面是一個依編號取模組的 require 函式，搭配一份快取；模組的集合以參數的形式餵進來，可能是陣列、物件或更複雜的機制；而 require 函式通常會被丟到 <code>window.loader</code>，成為你唯一需要接上的介面。</p>
+<h2><code>window.loader</code>：留在封閉空間外的把手</h2>
+<p>如果 require 函式完全留在 IIFE 裡，外部程式就無法直接呼叫它。範例中的 <code>window.loader = n</code>，便是刻意把內部載入器掛到全域的 <code>window</code> 上。</p>
+<p>這像是在封閉書庫外加裝一個服務鈴。你不必拆掉整面牆，只要在 DevTools 裡呼叫 <code>window.loader(模組編號)</code>，就能請內部載入器取出指定模組。多檔版也可以採用相同概念，只是內部函式可能叫 <code>__webpack_require__</code>，再以 <code>window.loader = __webpack_require__</code> 暴露出來。</p>
+<p>這個方法適合已經知道或能追到模組編號，而且載入器確實可以從外部接上的情況。反過來說，如果頁面沒有把載入器暴露到全域，單純輸入 <code>window.loader(...)</code> 並不會自動生效；這時應先辨認實際載入機制，而不是預設每個站都已經準備好同名介面。</p>
+
+<figure class="lesson-figure"><img src="./webpack-loader-anatomy-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>把這張圖掛回逆向流程</h2>
+<p>webpack bundle 的骨架可以看成幾個彼此相扣的角色：IIFE 建立私密空間，模組集合保存編號與函式，require 載入器負責依編號執行模組，快取則保存第一次執行的結果。範例再透過 <code>window.loader</code>，把內部載入器接到外部。</p>
 <blockquote>
-webpack 把程式變成「載入器 + 一櫃子編號模組」。你要做的不是讀懂整包，而是認出那個 require 函式、找到它洩漏出來的把手（<code>window.loader</code>）、再依編號把加密模組抽出來。
+webpack 把程式整理成「載入器 + 一櫃子編號模組」。逆向時不必先讀懂整包程式；先認出 require 函式與模組集合，再找到能從外部接上的把手，才有機會依編號抽出真正需要的加密模組。
 </blockquote>
-<p>骨架看懂了，下一步要處理一個現實問題：櫃子的形式不只一種。同樣是「載入器加模組」，陣列版、物件版、多檔版長得都不太一樣，模組編號的形式也不同。下一節就來學怎麼一眼判斷手上的打包檔屬於哪一型。</p>
+<p>這個觀念位在「看到打包檔」與「定位目標模組」之間。骨架辨認正確，後面的搜尋才不會像在書庫裡逐頁翻找。下一節會繼續比較陣列版、物件版與多檔版，看看不同書櫃外型下，模組編號與載入器分別藏在哪裡。</p>
 
 <div class="lesson-nav">
   <div></div>
@@ -121,35 +139,30 @@ webpack 把程式變成「載入器 + 一櫃子編號模組」。你要做的不
   <button class="opt">為了加快瀏覽器第一次載入的速度</button>
   <button class="opt">為了讓程式碼能支援較舊的瀏覽器</button>
 </div>
-
 <div class="quiz" data-question="require 函式裡的 var t = {} 扮演什麼角色？" data-correct="2" data-explain="t 是模組快取，命中的模組直接回傳上次結果，不再重跑。">
   <button class="opt">記錄每一個模組的原始程式碼</button>
   <button class="opt">儲存整份 bundle 的全域變數</button>
   <button class="opt">快取已執行過的模組結果</button>
   <button class="opt">列出所有模組的對外網路請求</button>
 </div>
-
 <div class="quiz" data-question="這份 loader 最後回傳的是 o.exports.exports 而不是 o.exports，代表什麼？" data-correct="3" data-explain="模組用 this.exports = 值 把結果塞進 exports，所以要多取一層才拿到真正的值。">
   <button class="opt">模組的 exports 一定是一個陣列</button>
   <button class="opt">回傳值永遠都是 undefined</button>
   <button class="opt">這是一段有 bug 的程式碼</button>
   <button class="opt">模組把結果塞在 exports 這個位置上</button>
 </div>
-
 <div class="quiz" data-question="為什麼逆向時特別在意 window.loader = n 這一行？" data-correct="0" data-explain="它把 require 函式洩漏到全域，等於給你一個直接驅動 bundle 的介面。">
   <button class="opt">它是讓你從外部驅動 bundle 的把手</button>
   <button class="opt">它是模組加密金鑰的儲存位置</button>
   <button class="opt">它是瀏覽器用來載入頁面的函式</button>
   <button class="opt">它是 webpack 版本號的宣告處</button>
 </div>
-
 <div class="quiz" data-question="在陣列版 loader 中，模組編號通常長什麼樣子？" data-correct="2" data-explain="陣列版把模組依序排進陣列，編號就是 0、1、2 這類數字索引。">
   <button class="opt">一串 32 位元的雜湊字串</button>
   <button class="opt">以底線連接的英文字母</button>
   <button class="opt">從 0 開始的數字索引</button>
   <button class="opt">模組原本的檔案路徑</button>
 </div>
-
 <div class="quiz" data-question="為什麼同一個模組被呼叫兩次，初始化邏輯只跑一次？" data-correct="1" data-explain="第一次把結果寫進快取 t，第二次先查到快取就直接回傳。">
   <button class="opt">因為第二次呼叫會被自動忽略掉</button>
   <button class="opt">因為快取攔下第二次的重新執行</button>

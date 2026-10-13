@@ -8,83 +8,126 @@
 </head>
 <body>
 
-<h1>對稱加密的運作模型：Key、Mode、Padding、IV</h1>
+<h1>看懂對稱加密：Key、Mode、Padding、IV 如何一起運作</h1>
 <p class="meta">Step 1/5 · 對稱與非對稱加密：AES/DES、RSA、國密</p>
 
 <h2>學習目標</h2>
-<p>能講清楚對稱加密為什麼只需要一把 key，並說出 Key／Data／Mode／padding／iv 這五個參數各自決定什麼，以及 ECB 與 CBC 的差別。</p>
+<p>這一節會建立對稱加密的整體模型。學完後，你應該能說明為什麼加密與解密共用同一把 key，也能判斷 Key、Data、Mode、padding、iv 分別控制什麼，以及 ECB 與 CBC 有何差別。</p>
 
-<h2>前言：那串不是 MD5 的亂碼，多半就是它</h2>
+<h2>前言：Base64 解開了，為什麼還是一團亂碼？</h2>
 
-<p>你在上一個節點已經學過，看到一串 32 位、只有 <code>0-9a-f</code> 的字串，八成是 MD5；看到一串由大小寫字母、數字與 <code>+ / =</code> 組成、長度是 4 的倍數的內容，那是 Base64。但真實的站台上還有第三種東西：一長串 Base64 解開之後，得到的不是可讀文字，而是另一坨二進位亂碼。例如某個介面回傳的內容是 <code>X/A0fy9S7+kUI3HYQRKO46WTlid6T1DBhXutwmPdboY=</code>，你把它 Base64 解碼，卻得不到任何人看得懂的句子。</p>
+<p>抓取資料時，流程通常不是「送出請求、拿到內容」就結束。站台可能先用反爬機制限制請求，再把真正的資料加密。這時，工作就會從單純抓取一路走到逆向：先確認回應怎麼來，再找出資料經過哪些轉換，最後重現解密流程。</p>
 
-<p>這種「解了一層還是看不懂」的東西，通常就是<strong>對稱加密</strong>的密文。它跟 Base64 的差別在於：Base64 只是換個寫法，誰都能解回來；對稱加密則需要一把密鑰（key）才解得開，而逆向的工作，就是想辦法把這把 key 找出來。這一節先把對稱加密的運作模型講清楚，下一節再帶你實際從 JS 裡挖出參數、用 Python 重現。</p>
+<p>例如，你在 DevTools 的 Network 面板看到某個介面回傳 <code>X/A0fy9S7+kUI3HYQRKO46WTlid6T1DBhXutwmPdboY=</code>。它看起來像 Base64，但解碼之後，得到的不是可讀文字，而是一串二進位資料。這就像拆開一個包裹，裡面卻還有一只上鎖的盒子：Base64 只是外包裝，真正擋在裡面的可能是加密。</p>
 
-<h2>對稱加密的核心：加解密共用同一把 key</h2>
+<p>上一個節點提過，32 位且只包含 <code>0-9a-f</code> 的字串，常會讓人聯想到 MD5；由大小寫字母、數字與 <code>+ / =</code> 組成，而且長度是 4 的倍數，則可能是 Base64。不過，這些外觀都只能當成線索，不能直接當成結論。</p>
 
-<p>對稱加密之所以叫「對稱」，是因為加密與解密用的是同一把密鑰。你拿這把 key 把明文鎖起來變成密文，別人只要拿到同一把 key，就能把密文還原成明文。整個流程可以想成家用保險箱：鎖上與打開都用同一把鑰匙，誰拿到鑰匙，誰就能開。</p>
+<p>Base64 只是把資料換一種表示方式，不需要密鑰，任何人都能解碼。對稱加密則不同：即使你認得外層格式，沒有正確的密鑰與參數，仍然無法還原內容。因此，當 Base64 解碼後依舊不可讀，而且前端程式裡又出現 AES、DES、<code>encrypt</code> 或 <code>decrypt</code>，才適合沿著對稱加密的方向追查。</p>
 
-<p>這帶來一個很直接的推論：對稱加密的安全性，完全押在「這把 key 有沒有被別人知道」上。演算法本身是公開的，AES、DES 的規則人人可查，真正保密的是那把 key。所以逆向這類加密時，你找的從來不是「破解演算法」，而是那把藏在程式碼裡的 key，以及它被怎麼使用。</p>
+<figure class="lesson-figure"><img src="./symmetric-encryption-model-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>分組密碼的五個參數</h2>
+<h2>對稱加密的核心：同一把 key 負責鎖上與打開</h2>
 
-<p>DES 與 AES 都屬於「分組密碼」（block cipher），它們不是一個字元一個字元地加密，而是把資料切成一塊塊固定大小的「分組」再處理。要把一筆資料加密成功，必須湊齊五個參數，少一個結果就會不同：</p>
+<p>對稱加密之所以稱為「對稱」，是因為加密與解密使用同一把密鑰，也就是 key。明文用這把 key 加密成密文；要把密文還原，也必須使用同一把 key。</p>
+
+<p>可以把它想成家用保險箱。鎖門與開門都靠同一把鑰匙，演算法則像保險箱內部公開的機械結構。AES、DES 的規則可以公開查到，真正必須保密的是鑰匙。</p>
+
+<p>這也說明了逆向時真正要追的是什麼。通常不是去「破解 AES」或「破解 DES」，而是找出程式使用了哪一把 key，以及這把 key 搭配了哪些參數。只找到演算法名稱，就像只認出眼前是一只保險箱，離打開它還有一段距離。</p>
+
+<h2>一筆密文背後，通常要對上五個參數</h2>
+
+<p>DES 與 AES 都是分組密碼（block cipher）。它們不會逐字元處理資料，而是先把內容切成固定大小的區塊，再一塊一塊加密。</p>
+
+<p>因此，在 DevTools 裡看到一段 <code>CryptoJS.AES.encrypt</code> 時，不要只盯著 key。要完整重現結果，通常還得一起確認 Data、Mode、padding 與 iv。這五項就像轉開密碼鎖時必須對準的五個刻度，其中一項不同，結果便可能完全不同。</p>
 
 <table>
 <thead>
 <tr><th>參數</th><th>它是什麼</th><th>決定什麼</th></tr>
 </thead>
 <tbody>
-<tr><td>Key（密鑰）</td><td>加解密共用的那組字串</td><td>用哪把鑰匙開鎖；對稱加密的機密核心</td></tr>
-<tr><td>Data（資料）</td><td>要被加密或被解密的內容</td><td>這次要處理的明文或密文</td></tr>
-<tr><td>Mode（模式）</td><td>分組之間怎麼串接</td><td>用 ECB 還是 CBC，直接影響安全性與是否用到 iv</td></tr>
-<tr><td>padding（填充）</td><td>補齊長度的規則</td><td>資料不足一個分組時，怎麼補到整數倍</td></tr>
-<tr><td>iv（初始向量）</td><td>CBC 模式用的起始值</td><td>即使明文相同，也能讓每次密文不同</td></tr>
+<tr><td>Key（密鑰）</td><td>加密與解密共用的資料</td><td>使用哪一把鑰匙，是對稱加密的機密核心</td></tr>
+<tr><td>Data（資料）</td><td>這次要處理的內容</td><td>加密時是明文，解密時是密文</td></tr>
+<tr><td>Mode（模式）</td><td>各個分組之間的處理方式</td><td>分組是否彼此關聯，以及是否需要 iv</td></tr>
+<tr><td>padding（填充）</td><td>補齊資料長度的規則</td><td>資料不足一個完整分組時，要如何補滿</td></tr>
+<tr><td>iv（初始向量）</td><td>某些模式使用的起始值</td><td>為第一個分組提供起點；解密時必須使用相同的 iv</td></tr>
 </tbody>
 </table>
 
-<p>先講 padding。分組密碼要求資料長度剛好是分組大小的整數倍，DES 的分組是 8 個位元組、AES 是 16 個位元組。如果資料湊不滿，就要按照 padding 規則補齊。這裡有個容易踩的點：密文長度是分組大小的整數倍這件事，其實是「加密前先 padding」的結果：AES 的密文長度一定是 16 的倍數，DES 一定是 8 的倍數。反過來說，當你看到一段密文長度是 16 的倍數，就要懷疑它是 AES；是 8 的倍數，就可能藏著 DES。</p>
+<p>先看 padding。分組密碼要求資料長度符合分組大小：DES 的分組是 8 個位元組，AES 的分組是 16 個位元組。如果明文長度不足，就必須按照指定的 padding 規則補齊，再交給演算法處理。</p>
 
-<h2>ECB 與 CBC：分組之間要不要互相牽連</h2>
+<p>這也是為什麼密文長度可以提供線索。AES 處理後的密文長度會是 16 位元組的整數倍，DES 則是 8 位元組的整數倍。不過，這只能幫助你縮小範圍，不能單靠長度直接定案；真正可靠的判斷，仍要回到 JS 呼叫、參數來源與執行結果。</p>
 
-<p>加密時資料被切成一塊塊分組，這些分組彼此之間要不要有關聯，就是 Mode 在決定。最常用的是 ECB 與 CBC 兩種。</p>
+<figure class="lesson-figure"><img src="./symmetric-encryption-model-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p><strong>ECB</strong> 是最基礎的做法：每個分組各自獨立加密，一個接著一個輸出，組合成密文。它的問題很直白：相同的明文分組，永遠得到相同的密文分組。如果一張圖片用 ECB 加密，色塊的輪廓甚至還會隱約浮現，因為同樣的圖案加密後還是同樣的圖案。所以 ECB 雖然簡單，安全性較弱。</p>
+<h2>ECB 與 CBC：每塊單獨處理，還是前後串在一起？</h2>
 
-<p><strong>CBC</strong> 則是把前一個分組的密文，跟當前分組的明文先做一次 XOR 運算，再拿去加密。這樣每個分組的加密結果都會被前一塊牽動，相同的明文分組就再也加密不出相同的結果，破解難度明顯提高。也因為要「牽動前一塊」，CBC 需要一個起點，那個起點就是 iv（初始向量）。iv 通常是一個 16 位元組的隨機字串，它的作用是確保即使你加密相同的明文，每次產生的密文也不一樣。要注意：iv 只是一個「起始值」，不是祕密，但在解密時必須拿到同一個 iv 才能還原，所以傳輸或儲存時要把它一起留著。</p>
+<p>Mode 決定各個分組如何合作。理解 ECB 與 CBC 時，可以把一串資料想成一列火車車廂：ECB 讓每節車廂各走各的，CBC 則把前後車廂連起來，前一節的結果會影響下一節。</p>
 
-<blockquote>
-一句話記差別：ECB 是「各塊各自加密」，同樣明文永遠得到同樣密文；CBC 是「前一塊的密文先跟這塊明文混合再加密」，同樣明文每次也不一樣，代價是要多帶一個 iv。
-</blockquote>
+<table>
+<thead>
+<tr><th>模式</th><th>分組關係</th><th>相同明文分組的結果</th><th>是否需要 iv</th></tr>
+</thead>
+<tbody>
+<tr><td>ECB</td><td>每個分組獨立加密</td><td>會得到相同的密文分組</td><td>不需要</td></tr>
+<tr><td>CBC</td><td>前一個密文分組會影響下一個分組</td><td>結果會受到前文與 iv 影響</td><td>需要</td></tr>
+</tbody>
+</table>
 
-<h2>DES 與 AES：為什麼現在都用 AES</h2>
+<p><strong>ECB</strong> 的做法最直接：每個分組獨立加密，再依序組合成完整密文。它容易理解，也少一個 iv 參數，但缺點很明顯。相同的明文分組會產生相同的密文分組，因此原始資料裡重複出現的結構，可能在密文中留下痕跡。</p>
 
-<p>DES 的全名是 Data Encryption Standard（資料加密標準），是一種使用密鑰的對稱加密演算法；AES 則是後來取代 DES 的先進加密標準。兩者的差別在實務上有兩個層面：</p>
+<p>圖片是常見的對比案例。如果使用 ECB 加密，重複色塊會反覆產生相同結果，圖片輪廓可能仍隱約可見。也就是說，內容雖然被打亂，原本的圖案卻沒有完全藏好。因此，ECB 雖然簡單，安全性較弱。</p>
 
-<ul>
-<li><strong>密文長度不同</strong>：DES 加密後的密文長度是 8 的整數倍，AES 是 16 的整數倍。</li>
-<li><strong>應用場景不同</strong>：一般企業級開發，DES 的強度已經夠用；要求更高的場合則改用 AES。</li>
-</ul>
+<p><strong>CBC</strong> 會先把前一個密文分組與目前的明文分組做 XOR 運算，再進行加密。如此一來，每個分組都會受到前一塊影響，不再只是各自處理自己的內容。</p>
 
-<p>在逆向現場，這個差別會直接幫你判斷。當你在 JS 裡看到關鍵字，如果呼叫的是 <code>CryptoJS.AES.encrypt</code>，那就是 AES；如果看到 <code>CryptoJS.DES</code>，那就是 DES，它的密鑰長度是 8 個位元組，不要理所當然地當成 AES 來還原，這是很多人第一次踩的坑。</p>
+<p>第一個分組前面沒有密文可以接，所以 CBC 需要一個起點，這就是 iv，也就是初始向量。以 AES-CBC 為例，iv 的長度是 16 位元組。它不是用來取代 key，也不等於第二把密鑰；它的工作是為串接流程提供起點，讓相同明文搭配不同 iv 時，可以產生不同密文。</p>
 
-<h2>認出對稱加密的關鍵字</h2>
+<p>iv 通常不需要像 key 一樣保密，但解密端必須取得加密時使用的同一個 iv。因此，逆向 CBC 時，只找到 key 還不夠；如果 iv、Mode 或 padding 對不上，解密結果仍可能是一團亂碼。</p>
 
-<p>要在 JS 裡定位對稱加密，先鎖定幾個關鍵字：</p>
-
-<ul>
-<li><strong>AES、DES</strong>：演算法名稱，出現在呼叫的函式或物件上。</li>
-<li><strong>encrypt、decrypt</strong>：加解密函式名，幾乎所有實作都這樣命名，是搜尋入口。</li>
-<li><strong>xxx key</strong>：密鑰變數。有一點要特別放心上，也是最關鍵的觀念：<strong>真實網站裡的 key 幾乎不會明晃晃地寫死在程式碼裡</strong>，它通常是另外生成、拼接或經過一層推導得來的。所以你不能只靠眼睛找一個「看起來像 key 的字串」，而要順著 key 是怎麼被算出來的那條線往上游追。</li>
-</ul>
-
-<h2>小結</h2>
+<figure class="lesson-figure"><img src="./symmetric-encryption-model-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <blockquote>
-對稱加密的加密與解密共用同一把 key，安全性全押在這把 key 上。DES 與 AES 都是分組密碼，一筆資料要成功加解密得湊齊五個參數：Key、Data、Mode、padding、iv。ECB 讓每塊各自加密、相同明文得到相同密文；CBC 讓前一塊密文牽動下一塊，並額外靠 iv 這個 16 位元組的起始值保證每次密文不同。DES 的分組是 8 位元組、AES 是 16 位元組，現在主流用 AES。逆向時盯住 AES／DES、encrypt／decrypt 這些關鍵字，並且記住真正的 key 多半不是寫死的。
+一句話分辨：ECB 是「每塊各自加密」，所以相同明文分組會留下相同結果；CBC 是「前一塊牽動下一塊」，並使用 iv 作為第一塊的起點。
 </blockquote>
 
-<p>觀念站穩之後，下一步就是把這套模型套進真實程式碼：看一段 crypto-js 寫的 AES，把它的 key、iv、mode、padding 一項一項抓出來，再用 Python 的 pycryptodome 重現出完全一樣的密文。</p>
+<h2>DES 與 AES：不要只看密文外觀猜演算法</h2>
+
+<p>DES 的全名是 Data Encryption Standard，也就是資料加密標準；AES 則是後來用來取代 DES 的先進加密標準。兩者都是對稱式分組密碼，但分組大小與實務安全性不同。</p>
+
+<ul>
+<li><strong>分組大小不同</strong>：DES 的分組大小是 8 個位元組，AES 則是 16 個位元組。</li>
+<li><strong>實務選擇不同</strong>：DES 的安全強度已不足以應付現代用途，新系統應優先使用 AES；逆向舊站時，仍可能遇到 DES。</li>
+</ul>
+
+<p>這個差別會直接影響逆向判斷。當你在 JS 裡看到 <code>CryptoJS.AES.encrypt</code>，就知道程式正在使用 AES；如果看到 <code>CryptoJS.DES</code>，則要按照 DES 的分組大小與參數處理，不能直接套用 AES 的設定。</p>
+
+<p>密文長度適合拿來提出假設，不適合拿來單獨下結論。尤其 16 的倍數同時也是 8 的倍數，只看長度可能同時符合 AES 與 DES。更穩妥的證據，是程式實際呼叫的函式、key 與 iv 的處理方式，以及重現後能否得到相同結果。</p>
+
+<h2>在 DevTools 裡，哪些關鍵字值得追？</h2>
+
+<p>當介面回應解碼後仍不可讀，可以回到 DevTools，從請求發生的位置往前追。搜尋時，以下關鍵字常能幫你快速找到入口：</p>
+
+<ul>
+<li><strong>AES、DES</strong>：演算法名稱，可能出現在函式、物件或套件呼叫中。</li>
+<li><strong>encrypt、decrypt</strong>：常見的加密與解密函式名稱，適合當成第一批搜尋字。</li>
+<li><strong>key</strong>：密鑰或密鑰衍生資料的變數名稱，但不能只靠名稱判斷。</li>
+<li><strong>mode、padding、iv</strong>：用來確認完整加解密設定，尤其 CBC 不能漏掉 iv。</li>
+</ul>
+
+<p>找到一個看起來像 key 的字串，並不代表工作已經完成。真實站台裡的 key 可能直接出現，也可能由其他資料生成、拼接或推導而來。這時不能只用眼睛掃過程式碼，而要順著變數來源往上游追：它從哪裡取得、經過哪些函式，最後又以什麼格式交給加密函式。</p>
+
+<figure class="lesson-figure"><img src="./symmetric-encryption-model-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>反過來說，如果內容只做了 Base64 編碼，或程式裡完全找不到加密呼叫，就不該硬套 AES 或 DES。先分清楚編碼、雜湊與加密，能避免拿錯工具，在錯誤方向上追很久。</p>
+
+<h2>把這個模型放回抓取與逆向流程</h2>
+
+<blockquote>
+對稱加密不是只找一把 key。完整模型是：Data 經過指定的演算法、Mode 與 padding 處理，某些模式還需要 iv，而加密與解密共用同一把 key。ECB 讓分組各自處理；CBC 讓前後分組互相牽動，並以 iv 作為起點。DES 的分組是 8 位元組，AES 則是 16 位元組；現代系統應優先使用 AES，但逆向舊站時仍可能碰到 DES。
+</blockquote>
+
+<p>把它放回整個流程來看：抓取先讓你拿到介面回應，反爬分析用來確認請求能否正常重現；當回應經過 Base64 解碼仍不可讀，而且前端確實存在 AES 或 DES 呼叫時，才進入對稱加密逆向。</p>
+
+<p>接下來面對 crypto-js 的 AES 程式碼時，腦中要掛著這張參數地圖：不要只問「key 在哪裡」，還要一起確認 Data、Mode、padding 與 iv。下一節會把這套模型套進實際程式碼，逐項找出參數，再用 Python 的 pycryptodome 重現完全相同的密文。</p>
 
 <div class="lesson-nav">
   <div></div>
@@ -99,35 +142,30 @@
   <button class="opt">它的密文長度永遠是明文的一半</button>
   <button class="opt">它需要公鑰與私鑰兩把不同的 key</button>
 </div>
-
 <div class="quiz" data-question="下列哪一項不是分組密碼的加解密參數？" data-correct="3" data-explain="salt 是雜湊加料用的，不屬於 DES/AES 的加密參數。">
   <button class="opt">Key 密鑰</button>
   <button class="opt">Mode 工作模式</button>
   <button class="opt">padding 填充</button>
   <button class="opt">salt 加鹽值</button>
 </div>
-
 <div class="quiz" data-question="ECB 模式最大的弱點是什麼？" data-correct="2" data-explain="相同明文分組加密後永遠相同，圖案或規律會殘留，因而較易被分析。">
   <button class="opt">它的加密速度比 AES 還快</button>
   <button class="opt">它必須額外傳遞一個 iv</button>
   <button class="opt">相同明文永遠得到相同密文</button>
   <button class="opt">它無法加密超過一個分組的資料</button>
 </div>
-
 <div class="quiz" data-question="CBC 模式裡的 iv 主要作用是什麼？" data-correct="0" data-explain="iv 作為起始值，讓相同明文每次加密也能得到不同密文。">
   <button class="opt">讓相同明文每次加密得到不同密文</button>
   <button class="opt">讓密文的長度縮短成一半</button>
   <button class="opt">讓密鑰可以省下來不用傳</button>
   <button class="opt">讓加密過程不再需要 padding</button>
 </div>
-
 <div class="quiz" data-question="AES 加密後的密文長度有什麼特徵？" data-correct="1" data-explain="AES 分組為 16 位元組，所以密文長度一定是 16 的整數倍。">
   <button class="opt">一定是 8 的整數倍</button>
   <button class="opt">一定是 16 的整數倍</button>
   <button class="opt">一定是 128 的整數倍</button>
   <button class="opt">任何長度都可能出現</button>
 </div>
-
 <div class="quiz" data-question="關於對稱加密的 key，下列敘述何者正確？" data-correct="3" data-explain="key 通常是另外生成或推導出來的，不會明文寫死在程式碼裡。">
   <button class="opt">key 一定會明文寫死在 JS 裡方便讀取</button>
   <button class="opt">key 可以公開，因為只有私鑰才能解密</button>

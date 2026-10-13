@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>不一定是 MD5：辨識雜湊與選擇重現路線</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>不一定是 MD5：辨識雜湊與選擇重現路線</h1>
+<p class="meta">Step 4/5 · 案例：簽名與雜湊演算法</p>
+
+<h2>學習目標</h2>
+<p>從雜湊實作判斷它是標準演算法還是自家配方，並決定翻成 Python 還是直接用 execjs 呼叫。</p>
+
+<h2>前言：sign 看起來都像 MD5，直到你遇到不像的</h2>
+
+<p>前兩節的配方都以 MD5 收尾，32 位十六進位看久了，你的手指會比大腦先做出反應——看到 sign 就開始寫 <code>hashlib.md5()</code>。丁香網的病例搜尋介面會立刻糾正這個習慣：它的 sign 是 <strong>40</strong> 位十六進位，翻開 JS 一看，是一坨手寫的位元運算迴圈，不是任何函式庫。而百度翻譯更狠，它的 sign 乾脆長這樣：<code>228742.198315</code>。兩個數字、一個小數點，連十六進位都不是。</p>
+
+<p>這時候你面對的不再是如何拼字串，而是一個岔路口的抉擇：左邊是把這坨演算法翻譯成 Python（<code>hashlib</code> 或手寫迴圈），右邊是放棄翻譯、用 <code>execjs</code> 直接呼叫網站的原 JS。兩股力量在拉扯——純 Python 路線好整合、跑得快、不需要 Node 環境，但翻譯有成本、細節容易抄漏；execjs 路線保證原汁原味、上手快，但每台跑爬蟲的機器都要多帶一個 JS 執行環境。這一節給出判斷的規則，用丁香網和百度翻譯兩個極端案例各走一次。</p>
+
+<h2>兩條路線的取捨</h2>
+
+<table>
+<thead>
+<tr><th></th><th>翻成 Python</th><th>execjs 呼叫原 JS</th></tr>
+</thead>
+<tbody>
+<tr><td>保真度</td><td>靠自己對齊細節，可能抄漏</td><td>演算法原封不動，輸出保證一致</td></tr>
+<tr><td>執行需求</td><td>只要 Python</td><td>Python ＋ Node 執行環境</td></tr>
+<tr><td>整合難度</td><td>容易併進 asyncio、多緒爬蟲</td><td>每次呼叫跨越語言邊界，較慢</td></tr>
+<tr><td>適合的演算法</td><td>標準雜湊（MD5／SHA 系列）</td><td>自家 hash、或實作與環境糾纏太深</td></tr>
+<tr><td>翻車方式</td><td>字串化或編碼細節不一致</td><td>JS 依賴瀏覽器物件，載入就報錯</td></tr>
+</tbody>
+</table>
+
+<p>表裡最值得記的是最後兩列的對照：兩條路各有各的死法。翻譯派死在「以為翻對了其實差一個字元」，呼叫派死在「JS 一載入就喊 window is not defined」。所以抉擇不是誰碾壓誰，而是看眼前這個演算法的長相，選活路比較長的那條。</p>
+
+<h2>四個判別問句</h2>
+
+<p>拿到雜湊實作時，依序問自己下面四個問題。每一句都是可以當場測試的，不需要猜：</p>
+
+<ol>
+<li><strong>輸出的形狀像標準雜湊嗎？</strong>32 位十六進位像 MD5、40 位像 SHA-1、64 位像 SHA-256；像 <code>228742.198315</code> 這種「數字．數字」的，絕對不是標準雜湊的直接輸出。</li>
+<li><strong>實作裡找得到標準常數嗎？</strong>看到 <code>1732584193</code> 幾乎可以確定是 MD5 的初始值；看到 <code>String.fromCharCode</code> 現拼對照表、自訂的移位加減迴圈，那是自家配方。</li>
+<li><strong>輸入字串完整可見嗎？</strong>拼接字串整個攤在程式裡（像有道那樣），翻譯成本很低；輸入由多層函式東拼西湊出來，翻譯容易漏。</li>
+<li><strong>實作跟瀏覽器環境糾纏多深？</strong>純計算的函式好翻；碰到 <code>window</code>、<code>document</code>、計時器，翻譯前得先補環境，不如直接呼叫。</li>
+</ol>
+
+<p>還有一句話要先放在心上：<strong>輸出形狀只告訴你最後一層雜湊是什麼</strong>。32 位十六進位只能說明「最外面是 MD5 或同長度的東西」，裡面可能還套了好幾層——下一節的財联社就是「SHA1 再 MD5」的雙層結構。</p>
+
+<h2>案例一：丁香網的 40 位 SHA-1</h2>
+
+<p>丁香網的病例庫搜尋要在查詢參數裡帶一個 <code>sign</code>。Python 端把要簽的字串拼好，交給 JS 的 <code>u</code> 函式算簽名：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day25/01 丁香网.py#47"><code>nonstr = str(random.randint(0, 100000000)).rjust(8, '0')
+# nonstr = ''.join([str(random.randint(0, 9)) for _ in range(8)])
+timestamp = int(time.time() * 1000)
+
+params = {
+    'keyword': '新冠',
+    'sectionCode': '0',
+    'pageSize': '10',
+    'pageNum': '1',
+    'serverTimestamp': timestamp - 2,
+    'timestamp': timestamp,
+    'noncestr': nonstr,
+}
+
+data = f'appSignKey=4bTogwpz7RzNO2VTFtW7zcfRkAE97ox6ZSgcQi7FgYdqrHqKB7aGqEZ4o7yssa2aEXoV3bQwh12FFgVNlpyYk2Yjm9d2EZGeGu3&keyword={params["keyword"]}&noncestr={params["noncestr"]}&pageNum={params["pageNum"]}&pageSize={params["pageSize"]}&sectionCode=0&serverTimestamp={params["serverTimestamp"]}&timestamp={params["timestamp"]}'
+sign = execjs.compile(open("02 丁香网.js").read()).call("u", data)
+print("sign", sign)
+params["sign"] = sign</code></pre>
+
+<p>配方本身是熟面孔：固定順序拼接＋固定金鑰——<code>appSignKey=…</code> 那串 80 位的亂碼就是金鑰，排在第一位，欄位照 <code>keyword</code>、<code>noncestr</code>、<code>pageNum</code>、<code>pageSize</code>、<code>sectionCode</code>、<code>serverTimestamp</code>、<code>timestamp</code> 的順序拼上去。兩個欄位值要照抄：<code>noncestr</code> 是 8 碼補零的隨機數（<code>rjust(8, '0')</code>），<code>serverTimestamp</code> 偏偏要是 <code>timestamp - 2</code>——比當下時間少 2 毫秒，這種小動作只能照抄，想不通就先抄。</p>
+
+<p>變的是雜湊：JS 裡的 <code>u</code> 是一整套手寫的 SHA-1 實作（位元分組、輪迴圈、十六進位輸出），不是 <code>crypto-js</code>、也不是 Node 的 <code>crypto</code>。輸出 40 位十六進位，正是 SHA-1 的形狀。對照判別問句：輸出像標準雜湊（SHA-1），但實作是獨立的一坨純計算 JS、輸入字串完整可見。這站的選擇是 <code>execjs</code> 呼叫 <code>u</code>——函式已經是孤立的純函式，呼叫它比逐行翻譯更穩，還省掉驗證翻譯正確性的成本。</p>
+
+<h2>案例二：百度翻譯的自家 hash</h2>
+
+<p>百度翻譯的 <code>v2transapi</code> 也要 sign，Python 端只做一件事：把要查的單字丟給 JS：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day26/03 百度翻译.py"><code>wd = 'banana'
+
+sign = execjs.compile(open("04 百度翻译.js").read()).call("get_sign",wd)
+print("sign:", sign)</code></pre>
+
+<p>翻開 <code>04 百度翻译.js</code> 的 <code>get_sign</code>，四個判別問句會連續命中三個。先看它的輸入處理——超過 30 個字元的輸入會被砍成「頭 10 字＋中間 10 字＋尾 10 字」，還有一整段處理 surrogate pair（代理對，中文、emoji 這類需要兩個編碼單位的字元）的分支：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day26/04 百度翻译.js"><code>function get_sign(t) {
+    var o, i = t.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g);
+    if (null === i) {
+        var a = t.length;
+        a > 30 && (t = "".concat(t.substr(0, 10)).concat(t.substr(Math.floor(a / 2) - 5, 10)).concat(t.substr(-10, 10)))
+    } else {</code></pre>
+
+<p>接著是核心的運算：一段以 <code>window.gtk</code>（值是 <code>'320305.131321201'</code>，被拆成兩個數字當種子）為起點的累加迴圈，每一步做移位、相加與 XOR，最後以 <code>(b %= 1e6)</code> 取模、輸出「數字．數字」格式：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day26/04 百度翻译.js"><code>    for (var b = f, w = "".concat(String.fromCharCode(43)).concat(String.fromCharCode(45)).concat(String.fromCharCode(97)) + "".concat(String.fromCharCode(94)).concat(String.fromCharCode(43)).concat(String.fromCharCode(54)), k = "".concat(String.fromCharCode(43)).concat(String.fromCharCode(45)).concat(String.fromCharCode(51)) + "".concat(String.fromCharCode(94)).concat(String.fromCharCode(43)).concat(String.fromCharCode(98)) + "".concat(String.fromCharCode(43)).concat(String.fromCharCode(45)).concat(String.fromCharCode(102)), x = 0; x &lt; g.length; x++)
+        b = n(b += g[x], w);
+    return b = n(b, k),
+    (b ^= m) &lt; 0 && (b = 2147483648 + (2147483647 &amp; b)),
+        "".concat((b %= 1e6).toString(), ".").concat(b ^ f)</code></pre>
+
+<p>逐項對照判別問句：輸出形狀「數字．數字」，不是任何標準雜湊；移位與 XOR 的指令表用 <code>String.fromCharCode</code> 現拼出來（<code>w</code>、<code>k</code> 兩串指令），沒有任何標準常數；種子來自頁面上的 <code>window.gtk</code>，跟瀏覽器環境有牽連。三條全部指向同一個結論：<strong>不要翻譯，直接 <code>execjs</code> 呼叫 <code>get_sign</code></strong>。翻譯它理論上做得到，但你要重現 surrogate pair 處理、指令表編碼、32 位元溢位遮罩每一個細節，錯一處輸出就全變——投入產出比極差。</p>
+
+<h2>規則會翻轉的三個情況</h2>
+
+<p>判別規則不是死的，下面幾種情況會翻盤：</p>
+
+<ul>
+<li><strong>標準雜湊，卻選了呼叫派：</strong>丁香網的 SHA-1 是標準演算法，用 <code>hashlib.sha1</code> 也重現得出來；但它的 JS 已經是孤立的純函式，呼叫它零翻譯成本。當「原 JS 已經很好呼叫」時，保真派直接勝出，不必為了純 Python 而純 Python。</li>
+<li><strong>輸入拼接才是難題：</strong>有時候雜湊是標準的，真正難的是拼接字串的組裝邏輯（條件欄位、巢狀序列化）。這時把力氣花在重現字串組裝、雜湊交給 <code>hashlib</code>，比整包呼叫 JS 更好整合。</li>
+<li><strong>形狀欺騙：</strong>百度的輸出雖然長得完全不像雜湊，內部其實還是一輪輪的雜湊式運算；反之 40 位十六進位只能保證「最外層像 SHA-1」。認形狀是為了決定先查什麼，不是結案。</li>
+</ul>
+
+<h2>決策規則</h2>
+
+<p>把整節收斂成一張當場能用的檢查表：</p>
+
+<ol>
+<li>先看輸出形狀，猜「最外層」是哪種雜湊，把它當假設不當定論。</li>
+<li>讀實作找常數：有 <code>1732584193</code> 之類的標準初始值就是標準雜湊家族；<code>String.fromCharCode</code> 拼表、自訂移位迴圈就是自家配方。</li>
+<li>輸入字串完整可見＋雜湊標準 → 翻成 Python（<code>hashlib</code>），好整合。</li>
+<li>自家 hash、或實作與 <code>window</code>／<code>document</code> 糾纏 → 直接 <code>execjs</code> 呼叫，別翻譯。</li>
+<li>原 JS 已是孤立純函式時，呼叫派是省力的預設值。</li>
+<li>不論哪條路，最後都要用「相同輸入 → 與瀏覽器相同輸出」驗證至少兩組。</li>
+</ol>
+
+<h2>小結</h2>
+
+<blockquote>
+sign 不一定是 MD5：丁香網是手寫 SHA-1（40 位十六進位），百度翻譯是種子來自 <code>gtk</code> 的自家 hash（輸出「數字．數字」）。抉擇的判準是四個問句——輸出形狀、標準常數、輸入可見度、環境糾纏深度；標準雜湊且好拼就翻 Python，自家配方或糾纏深就 <code>execjs</code>。記住輸出形狀只反映最後一層，別被它騙了。
+</blockquote>
+
+<p>說到「最後一層」，下一節正好把它坐實：財联社把「排序序列化 → SHA1 → MD5」兩層雜湊疊在一起，而且整條管線埋在 webpack 打包檔的某個模組裡——先找到簽名模組，再一層層認出配方。</p>
+
+<div class="lesson-nav">
+  <div><a href="./fixed-order-secret-md5.html">← 上一步：配方二：固定順序＋固定金鑰的 MD5 簽名（xdf 與有道翻譯）</a></div>
+  <div><a href="./layered-hash-loader-sign.html">下一步：打包檔裡的雙層雜湊：財联社的排序→SHA1→MD5 簽名→</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="丁香網的 sign 是 40 位十六進位，最合理的判讀是什麼？" data-correct="0" data-explain="40 位十六進位是 SHA-1 的典型輸出長度，配合 JS 實作可確認是 SHA-1。">
+  <button class="opt">SHA-1 這類雜湊的輸出</button>
+  <button class="opt">MD5 加上了 8 位補丁</button>
+  <button class="opt">AES 加密後的金鑰</button>
+  <button class="opt">兩個 MD5 拼接而成</button>
+</div>
+
+<div class="quiz" data-question="百度翻譯的 sign 長得像 228742.198315，說明了什麼？" data-correct="2" data-explain="「數字．數字」不是標準雜湊的輸出形狀，代表它是自家 hash 配方。">
+  <button class="opt">它是 MD5 的十進位版本</button>
+  <button class="opt">它是一個毫秒時間戳記</button>
+  <button class="opt">它不是標準雜湊的輸出</button>
+  <button class="opt">它是兩組亂數拼起來的</button>
+</div>
+
+<div class="quiz" data-question="在雜湊實作裡看到常數 1732584193，代表什麼？" data-correct="1" data-explain="1732584193 是 MD5 的標準初始值，見到它幾乎可確定是 MD5 家族的實作。">
+  <button class="opt">這是 SHA-1 的輪常數</button>
+  <button class="opt">這是 MD5 的標準初始值</button>
+  <button class="opt">這是 AES 的區塊長度</button>
+  <button class="opt">這是網站自訂的金鑰</button>
+</div>
+
+<div class="quiz" data-question="哪種情況最適合翻成純 Python 重現？" data-correct="3" data-explain="輸入字串完整可見、雜湊又是標準演算法時，翻譯成本最低且最好整合。">
+  <button class="opt">演算法是用字元拼表的自家 hash</button>
+  <button class="opt">實作大量依賴 window 與 document</button>
+  <button class="opt">JS 已經是孤立可呼叫的純函式</button>
+  <button class="opt">輸入字串完整可見且雜湊標準</button>
+</div>
+
+<div class="quiz" data-question="丁香網的 SHA-1 是標準演算法，案例卻用 execjs 呼叫，原因是什麼？" data-correct="0" data-explain="原 JS 已是孤立純函式，呼叫零翻譯成本且保證輸出一致。">
+  <button class="opt">原 JS 已是純函式，呼叫保真又省力</button>
+  <button class="opt">Python 的 hashlib 不支援 SHA-1</button>
+  <button class="opt">SHA-1 只能在 Node 環境執行</button>
+  <button class="opt">翻成 Python 會讓速度慢一百倍</button>
+</div>
+
+<div class="quiz" data-question="為什麼說「輸出形狀只告訴你最後一層」？" data-correct="1" data-explain="外層輸出只反映最外圈的雜湊，內部可能還套了其他雜湊或運算層。">
+  <button class="opt">因為輸出格式可以隨意自訂</button>
+  <button class="opt">因為內部可能還套了其他雜湊層</button>
+  <button class="opt">因為伺服器會隨時更換演算法</button>
+  <button class="opt">因為輸出有時會被壓縮過</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 案例：簽名與雜湊演算法 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

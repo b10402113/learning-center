@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>抉擇：私鑰在前端的失效模式與重現路線</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>私鑰在前端：這層保護到底擋住了誰？</h1>
+<p class="meta">Step 5/5 · 案例：非對稱（RSA）</p>
+
+<h2>學習目標</h2>
+<p>判斷一個 RSA 保護真正擋住了什麼——特別是「私鑰在前端」的失效模式——並在重用 bundle、execjs、Python 重寫三條重現路線中做選擇。</p>
+
+<h2>前言：你手上有三把鑰匙，但它們的價值天差地遠</h2>
+
+<p>三個案例跑完，你的戰利品攤在桌上：外貿電商平台的一段公鑰 PEM、沃郵箱的一組模數加指數、理財網的一整把私鑰。同樣是「逆向成功、參數到手」，三把鑰匙能做的事完全不同——前兩把只能讓你<b>加入</b>合法流量，第三把卻讓你能<b>偽造</b>任何簽章，地位跟站方一模一樣。</p>
+
+<p>這就是這個節點要收的網：面對一個 RSA 保護，你得先判斷站方把哪把鑰匙放上前端、這層保護在防什麼，才能決定該期待什麼、該走哪條重現路線。判斷錯了，輕則白費力氣去找不存在的「解密」，重則誤把橡皮圖章當成銅牆鐵壁。</p>
+
+<h2>三個案例並排：誰在保護什麼</h2>
+
+<p>先把差異放到同一張表上。看的重點有四欄：前端拿的是哪把鑰、它執行的是加密還是簽章、伺服器拿什麼檢查、以及——最重要的——這個設計「真正」擋住了誰：</p>
+
+<table>
+<thead>
+<tr><th>案例</th><th>前端持有的鑰</th><th>任務</th><th>伺服器的檢查</th><th>你到手後能偽造什麼</th><th>保護真正擋什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>外貿電商平台</td><td>公鑰 PEM</td><td>加密請求內容</td><td>私鑰解開密文</td><td>任意內容的合法密文</td><td>擋偷看，不擋偽造</td></tr>
+<tr><td>沃郵箱</td><td>公鑰（模數＋指數）</td><td>加密登入密碼</td><td>私鑰解開密碼</td><td>任意密碼的合法密文</td><td>擋偷看；另有殘留私鑰</td></tr>
+<tr><td>理財網</td><td>私鑰 PEM</td><td>對請求簽章</td><td>公鑰驗章</td><td>任意請求的合法簽章</td><td>名義上擋篡改，實際擋不住</td></tr>
+</tbody>
+</table>
+
+<p>讀表的方法是「兩股張力」：加密類保護的是<strong>機密</strong>——內容不能被第三者看見；簽章類保護的是<strong>完整性與來源</strong>——內容不能被改、必須出自持有私鑰者。公鑰放前端，洩漏的只是「加密能力」，機密性不受影響：你加密得了，卻永遠解不開伺服器手上的密文。私鑰放前端，洩漏的是「簽署能力」：完整性保證當場蒸發，因為每個訪客都能蓋出驗得過的章。</p>
+
+<p>一個譬喻把三案串起來：公鑰像掛鎖，鎖可以發給每個人，別人拿你的鎖鎖箱子你開不了、也不需要開；私鑰像印章，印章一旦複製出去，滿街都是「真跡」。理財網把印章跟著網頁發出去，等於請每位訪客都替自己保管一份。</p>
+
+<h2>「私鑰在前端」的兩種樣貌</h2>
+
+<p>失效模式不長得都一樣。跑過的案例裡就有兩種：</p>
+
+<p>第一種是<strong>設計性的洩漏</strong>——簽章流程本來就需要私鑰，而站方選擇在前端簽。理財網是標準樣本：<code>get_sign</code> 裡那把 <code>BEGIN PRIVATE KEY</code> 不是意外，是流程的一環。這種設計下，「簽章驗證」只能擋住不看 JavaScript 的人；對任何會打開 bundle 的人，它是一張橡皮圖章，想蓋多真就多真。</p>
+
+<p>第二種是<strong>殘留的洩漏</strong>——主流程沒洩漏，但開發工具忘了清。沃郵箱就是這樣：<code>hashPassword</code> 只用公鑰，設計正確；但同一個模組裡留著一個開發用的 <code>loadPassword</code>，把私鑰指數也打包了進來：</p>
+
+<pre data-source="sources/js-reverse2/20261005/Day27/10 沃邮箱的mod1.js#L11882-L11888"><code>            loadPassword: function(t) {
+                var e, n, r = /^#!(\w+)$/.exec(location.hash);
+                r && t.val((e = r[1],
+                (n = new i).setPrivate(o, '10001', '7cd1745aec69096129b1f42da52ac9eae0afebbe0bc2ec89253598dcf454960e\n3e5e4ec9f8c87202b986601dd167253ee3fb3fa047e14f1dfd5ccd37e931b29d'),
+                n.decrypt(e)))
+            }</code></pre>
+
+<p><code>setPrivate</code> 收的第三個引數就是私鑰指數。這個函式的用途是從網址的 <code>#</code> 片段撈回密碼原文——大概是開發時「忘記自己設的密碼」的自救工具。功能無害，洩漏有害：任何人讀到這行，就拿到了這把公鑰對應的私鑰，不但能偽造密文，還能<strong>解開</strong>所有用這把公鑰加密的密碼欄位。主流程守住了，雜物間沒鎖。</p>
+
+<h2>判別問句：四個可測試的問題</h2>
+
+<p>把上面的觀察收斂成四個問題。它們的特點是都能對著程式碼當場回答，不靠感覺：</p>
+
+<ol>
+<li><strong>呼叫點吃的是哪種鑰？</strong>看到 <code>getKey</code>、<code>setPrivateKey</code>，或 PEM 開頭是 <code>PRIVATE</code>，前端就持有私鑰；看到 <code>publicKeyFromPem</code>、<code>setPublic</code>，或 PEM 開頭是 <code>PUBLIC</code>，前端只有公鑰。</li>
+<li><strong>被保護的欄位要的是機密還是完整？</strong>密碼、支付資料這類「不能被看見」的內容，合理的設計是公鑰加密；請求標頭的簽章這類「不能被改」的內容，合理的設計是伺服器持私鑰簽、或前端持私鑰簽但私鑰不得外流。</li>
+<li><strong>伺服器檢查的是「內容正確」還是「來路正確」？</strong>解密失敗 = 機密通道；驗章失敗 = 完整性通道。兩者的失效模式完全不同。</li>
+<li><strong>模組裡有沒有解密路徑？</strong>搜尋 <code>setPrivate</code>、<code>decrypt</code>、<code>loadPassword</code> 這類字樣。主流程用不到的解密函式，往往就是殘留洩漏的藏身處。</li>
+</ol>
+
+<h2>反例：規則會翻轉的三個情況</h2>
+
+<p>規則說「私鑰在前端 = 保護失效」，但有三個情況會翻盤，值得逐一記住。</p>
+
+<p>第一，<strong>公鑰在前端不等於保護無效</strong>。外貿與沃郵箱的設計就是這樣，而且它們是正確的設計：你拿到公鑰，能偽造合法密文混進去，卻解不開伺服器的資料、也解不開別人的流量。「能重現」只是加入流量，不是打穿防護——別把兩件事混為一談。</p>
+
+<p>第二，<strong>「有簽章」不等於「有防篡改」</strong>，但反過來說，若私鑰真的只在伺服器（前端手上的公鑰純粹用來驗章），簽章就是實打實的強保護，你的重現也就只能止步於「照規則算出合法請求」。一句話：<strong>規則的翻轉點就是私鑰在哪</strong>，不是有沒有簽章這個表面特徵。</p>
+
+<p>第三，<strong>失效模式也要看你的目的</strong>。爬蟲要的是「穩定發出合法請求」，私鑰在不在前端對你其實夠用——反正簽章算得出來就好。只有當任務升級成「替別人驗證」或「評估這網站能不能擋住偽造」時，私鑰洩漏才從「方便」變成「致命」。同一件事，對爬蟲是順風，對站方是災難。</p>
+
+<h2>重現路線抉擇：三條路怎麼選</h2>
+
+<p>攻防判斷定案後，剩最後一個決定：重現走哪條路。三個案例其實各自示範了一條：</p>
+
+<table>
+<thead>
+<tr><th>路線</th><th>做法</th><th>勝場</th><th>代價</th><th>適用時機</th></tr>
+</thead>
+<tbody>
+<tr><td>重用 bundle</td><td>Node 載入 loader 與模組，直接呼叫（<code>window.loader("MuMZ").a(...)</code>）</td><td>參數不可能抄錯，最快看到結果</td><td>要補瀏覽器環境，執行慢、部署重</td><td>演算法看不懂、先求驗證時</td></tr>
+<tr><td>execjs 橋接</td><td>Python 抽出簽章函式餵給 Node 執行（理財網腳本的路線）</td><td>Python 主導流程，JS 只算簽章</td><td>依賴 Node，JS 檔要能獨立跑</td><td>函式已抽好、不想重寫演算法時</td></tr>
+<tr><td>Python 重寫</td><td>讀懂參數後用 <code>cryptography</code> 重現</td><td>快、穩、可測試、好維護</td><td>必須讀懂每一參數，抄錯就死</td><td>標準演算法、要長期爬取時</td></tr>
+</tbody>
+</table>
+
+<p>抉擇問句有三個。<strong>演算法標準嗎？</strong>RSA、AES 這類標準演算法，Python 庫的支援又快又穩，重寫划算；自家 hash、自創編碼就別硬寫，直接搬 JS。<strong>要長期維護嗎？</strong>一次性的資料抓取用 execjs 就好；每天跑的排程爬蟲值得投資重寫。<strong>庫搬得動嗎？</strong>jsrsasign、JSEncrypt 都是純 JS，抽出來容易；若加密流程跟幾十個模組纏在一起，重用整包反而省事。</p>
+
+<p>實務上三條路會混著用：先用重用 bundle 把結果驗證出來、確認參數抄對，再決定要不要重寫成 Python。驗證先行、重寫在後，是成本最低的順序。</p>
+
+<h2>決策規則</h2>
+
+<p>最後收斂成一張能貼在螢幕邊的檢查表：</p>
+
+<ol>
+<li><strong>先認鑰匙身分</strong>——PEM 開頭或 <code>setPublic</code>／<code>setPrivate</code>，決定這是加密通道還是簽章通道，以及失效模式會長什麼樣。</li>
+<li><strong>再定攻防目標</strong>——只要加入流量（爬蟲）夠用，還是要評估偽造風險（資安視角）。</li>
+<li><strong>最後選路線</strong>——標準演算法長期爬就 Python 重寫；看不懂或趕時間就重用 bundle 或 execjs，驗證後再說。</li>
+</ol>
+
+<h2>小結</h2>
+
+<blockquote>
+RSA 保護的強弱取決於鑰匙放在哪：公鑰在前端是正確設計，只能加密不能解，擋偷看不擋偽造；私鑰在前端則讓簽章變成橡皮圖章——理財網是流程性的洩漏，沃郵箱的 <code>loadPassword</code> 是殘留性的洩漏。判別看四件事：鑰的身分、保護的目標、伺服器的檢查、有沒有殘留解密路徑。重現路線按「演算法是否標準、是否長期維護」在重用 bundle、execjs、Python 重寫之間選，驗證先行、重寫在後。
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./licaiwang-rsa-sign.html">← 上一步：理財網：RSA-SHA256 簽章重現</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="外貿電商平台把公鑰放在前端，這層保護真正擋住什麼？" data-correct="1" data-explain="公鑰可公開，擋的是第三者偷看內容；擋不住偽造合法密文，這是設計使然不是漏洞。">
+  <button class="opt">擋住別人偽造請求</button>
+  <button class="opt">擋住第三者偷看內容，不擋偽造</button>
+  <button class="opt">擋住任何形式的重放攻擊</button>
+  <button class="opt">什麼都擋不住，等同沒保護</button>
+</div>
+<div class="quiz" data-question="理財網把私鑰打包進 bundle，簽章這層保護的實際效果是什麼？" data-correct="3" data-explain="人人拿得到私鑰就人人蓋得出真章，簽章只能擋住不看 JS 的人。">
+  <button class="opt">簽章演算法失效，請求會被拒</button>
+  <button class="opt">保護加強，因為簽章不可偽造</button>
+  <button class="opt">只有拿到 session 的人才能簽</button>
+  <button class="opt">只剩擋不看 JS 的人，等同橡皮圖章</button>
+</div>
+<div class="quiz" data-question="沃郵箱的 loadPassword 為什麼算資安問題？" data-correct="0" data-explain="開發用的解密 helper 把私鑰指數也打包了，屬於殘留洩漏，能解開所有加密密碼欄位。">
+  <button class="opt">它把私鑰指數殘留在前端，能解開密碼密文</button>
+  <button class="opt">它的加密速度太慢</button>
+  <button class="opt">它會把密碼存進 localStorage</button>
+  <button class="opt">它用的 PKCS#1 v1.5 已被破解</button>
+</div>
+<div class="quiz" data-question="看到前端呼叫 setPrivate 或 PEM 是 BEGIN PRIVATE KEY，該做什麼判斷？" data-correct="2" data-explain="代表前端持有私鑰：簽章通道的完整性保證可能已失效，並檢查是否殘留解密路徑。">
+  <button class="opt">這是正常設計，公私鑰本來都在前端</button>
+  <button class="opt">代表網站用的是對稱加密</button>
+  <button class="opt">前端持有私鑰，檢查失效模式與殘留解密路徑</button>
+  <button class="opt">代表金鑰即將過期</button>
+</div>
+<div class="quiz" data-question="「能用 Python 重現加密」等於「打穿了保護」嗎？" data-correct="1" data-explain="公鑰加密場景下重現只是加入合法流量，解不開伺服器或別人的資料，兩件事不能混為一談。">
+  <button class="opt">等於，重現就代表保護無效</button>
+  <button class="opt">不等於，重現只代表能加入合法流量</button>
+  <button class="opt">等於，但只對爬蟲成立</button>
+  <button class="opt">不等於，重現後還要解開金鑰才行</button>
+</div>
+<div class="quiz" data-question="三個重現路線，何時該選 Python 重寫？" data-correct="0" data-explain="演算法標準、需要長期維護時重寫最划算；看不懂或趕時間先用重用 bundle 驗證。">
+  <button class="opt">演算法標準且要長期爬取時</button>
+  <button class="opt">演算法是自家 hash 時</button>
+  <button class="opt">只想快速驗證一次時</button>
+  <button class="opt">加密流程跟很多模組纏在一起時</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 案例：非對稱（RSA） · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

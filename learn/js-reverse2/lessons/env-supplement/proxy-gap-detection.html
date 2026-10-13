@@ -8,19 +8,29 @@
 </head>
 <body>
 
-<h1>用 Proxy 監控缺口：讓程式自己說它缺什麼</h1>
+<h1>用 Proxy 監控環境缺口：讓程式自己說它少了什麼</h1>
 <p class="meta">Step 2/5 · 補環境與環境檢測</p>
 
-<h2>學習目標</h2>
-<p>用 <code>new Proxy</code> 的 <code>get</code>／<code>set</code> 攔截對物件的讀寫，用 <code>setProxyArr</code> 批次對多個物件掛上代理，並從日誌列出補環境要補的屬性。</p>
+<h2>這一節要完成什麼</h2>
+<p>在「抓取 → 反爬 → 逆向」的流程裡，當瀏覽器裡的 JavaScript 被搬到 Node 執行，常會因為缺少 <code>window</code>、<code>document</code> 或 <code>navigator</code> 等瀏覽器物件而失敗。</p>
+<p>這一節不打算靠人工讀完幾萬行、甚至已經混淆過的程式碼。你會改用 <code>Proxy</code> 監控物件的讀寫，讓黑盒子程式在執行時，自己留下「用過哪些物件與屬性」的紀錄。</p>
+<p>完成後，你會得到一份可檢查的日誌，並從中整理出需要補進 Node 環境的屬性清單。</p>
+<p><strong>動手前請先確認：</strong>你已經理解 <code>obj.prop</code> 與 <code>obj.prop = value</code> 這兩種物件屬性操作。Proxy 的基本觀念已在「Hook 與 Proxy 攔截」節點介紹過，這裡會直接拿來實作。</p>
 
-<h2>前言：黑盒子不會告訴你它缺什麼</h2>
-<p>上一節說明了瀏覽器 JS 搬進 Node 會壞的兩個根因。現在問題變成：那段被你拷來的加密程式碼，可能有好幾萬行、還做了混淆，它到底用了 <code>window</code> 的哪些屬性、<code>document</code> 的哪些方法？你不可能一行行讀完再一個一個補。</p>
-<p>這一節要裝上一個工具，把這個「猜」的過程變成「記錄」。做法是替整個 <code>window</code>、<code>document</code> 套一層代理，之後這段程式碼不管讀取或寫入這兩個物件的任何屬性，都會先經過你寫的邏輯，於是它缺什麼，會自己一筆一筆印在你的終端機上。</p>
-<p><strong>前置條件：</strong>你理解物件屬性的讀寫（<code>obj.prop</code> 與 <code>obj.prop = v</code>）的基本操作。Proxy 的觀念在「Hook 與 Proxy 攔截」那個節點已經建立，這裡直接用。</p>
+<h2>先看完整操作流程</h2>
+<ol>
+    <li>用 <code>new Proxy</code> 包住一個測試物件，確認能攔截讀取與寫入。</li>
+    <li>用 <code>Reflect</code> 把操作交回原物件，避免代理邏輯繞回自己。</li>
+    <li>建立 <code>setProxyArr</code>，一次代理多個全域物件。</li>
+    <li>把 <code>window</code>、<code>document</code>、<code>navigator</code> 等名稱加入監控。</li>
+    <li>執行黑盒子程式，根據日誌判斷哪些屬性真的需要補。</li>
+</ol>
 
-<h2>第一步：把一個物件包進 Proxy</h2>
-<p>先從最單純的版本開始，只代理一個物件。下面這段定義了一個 <code>yuan</code> 物件，然後用 <code>new Proxy</code> 把它包起來，<code>get</code> 攔讀取、<code>set</code> 攔寫入：</p>
+<figure class="lesson-figure"><img src="./proxy-gap-detection-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一步：先代理一個測試物件</h2>
+<p>先不要急著處理整套瀏覽器環境。從一個簡單的 <code>yuan</code> 物件開始，確認攔截機制確實會工作。</p>
+<p>下面的程式用 <code>new Proxy</code> 包住原物件。其中，<code>get</code> 負責攔截讀取，<code>set</code> 負責攔截寫入：</p>
 
 <pre data-source="sources/js-reverse2/20261005/JS逆向/Day19-Day20：逆向核心案例解析5/05 Proxy语法.js"><code>var yuan = {
     username: "yuan",
@@ -53,14 +63,33 @@ yuan.age = 18
 yuan.foo()
 …</code></pre>
 
-<p>預期看到什麼：每當程式碼讀一次 <code>yuan</code> 的屬性，<code>get</code> 就印出一行「查詢了屬性 XXX」；每當寫入，<code>set</code> 就印出「設置了屬性 XXX 值為 YYY」。原本的讀寫結果完全不變，只是在旁邊多了一本流水帳。</p>
+<p>執行後，逐一對照程式與輸出。當程式讀取 <code>yuan.username</code> 或 <code>yuan.age</code>，就會進入 <code>get</code>，並印出被查詢的屬性。</p>
+<p>當程式執行 <code>yuan.username = "rain"</code> 或 <code>yuan.age = 18</code>，則會進入 <code>set</code>，記下屬性名稱與寫入值。</p>
+<p>這層代理就像替物件裝上一台監視器。原本的讀寫仍會繼續，只是每次操作都多留下一筆流水帳。</p>
+
+<figure class="lesson-figure"><img src="./proxy-gap-detection-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>第二步：用 Reflect 把操作交回原物件</h2>
-<p><code>get</code> 與 <code>set</code> 收到三個關鍵參數：<code>target</code> 是被代理的原物件、<code>p</code> 是被存取的屬性名、<code>receiver</code> 是代理後的物件。它們的責任是把操作「以原本的語意」交還給 <code>target</code>，這個動作由 <code>Reflect.get(target, p)</code> 與 <code>Reflect.set(target, p, value)</code> 完成。</p>
-<p>注意原始碼裡被註解掉的那一行：<code>// return window['username'];/// 这里如果这样写. 有递归风险的...</code>。這是這個工具最容易踩的坑。你在 <code>get</code> 裡面要回傳屬性值時，如果又去讀那個「已經被代理過」的物件，就會再一次觸發 <code>get</code>，然後無限遞迴下去。<code>Reflect.get(target, p)</code> 讀的是背後的原物件 <code>target</code>，不會繞回代理，所以安全。</p>
+<p><code>get</code> 與 <code>set</code> 會收到幾個重要參數：</p>
+<ul>
+    <li><code>target</code>：被代理的原物件。</li>
+    <li><code>p</code>：這次存取的屬性名稱。</li>
+    <li><code>value</code>：寫入屬性的新值，只會出現在 <code>set</code>。</li>
+    <li><code>receiver</code>：代理後接收這次操作的物件。</li>
+</ul>
+<p>日誌記完之後，操作仍要交回原物件。因此範例分別使用 <code>Reflect.get(target, p)</code> 與 <code>Reflect.set(target, p, value)</code>，讓原本的讀寫繼續完成。</p>
 
-<h2>第三步：批次代理多個物件（setProxyArr）</h2>
-<p>補環境要盯的不是一個 <code>yuan</code>，而是 <code>window</code>、<code>document</code>、<code>navigator</code>……一大堆。如果每個都照上面寫一次 <code>new Proxy</code>，程式碼會又長又重複。所以補環境的標準做法是寫一個函式，對一串物件名迴圈掛代理：</p>
+<blockquote>
+<p><strong>注意遞迴風險：</strong>不要在 <code>get</code> 裡再次讀取同一個代理物件。這會重新觸發 <code>get</code>，像走進一扇會把人送回原地的旋轉門，不斷繞圈。</p>
+</blockquote>
+
+<p>原始碼中被註解的 <code>return window['username']</code>，正是在提醒這個問題。若 <code>window</code> 已經是代理物件，在 <code>get</code> 裡再次讀取它，就可能反覆觸發同一段攔截邏輯。</p>
+<p><code>Reflect.get(target, p)</code> 直接從背後的原物件 <code>target</code> 取值，不會再繞回代理，因此較安全。</p>
+
+<h2>第三步：用 setProxyArr 批次掛上代理</h2>
+<p>單一物件測試成功後，下一步才是補環境真正需要的做法。</p>
+<p>這時要監控的通常不只有一個物件，而是 <code>window</code>、<code>document</code>、<code>navigator</code> 等多個名稱。若每個物件都手寫一次 <code>new Proxy</code>，程式會變得又長又重複。</p>
+<p>因此，我們建立 <code>setProxyArr</code>，讓它接收一串物件名稱，再逐一掛上代理：</p>
 
 <pre data-source="sources/js-reverse2/20261005/JS逆向/Day21-Day22：逆向核心案例解析6/JS逆向补环境文档/逆向爬虫之补环境.md"><code>function setProxyArr(proxyObjArr) {
     for (let i = 0; i &lt; proxyObjArr.length; i++) {
@@ -82,23 +111,48 @@ yuan.foo()
     }
 }</code></pre>
 
-<p>逐行看它在做什麼。<code>objName</code> 是這一輪要處理的物件名，例如 <code>"window"</code>。它的 <code>get</code> 與 <code>set</code> 裡都帶了 <code>objName</code> 與 <code>property</code>，所以日誌可以印出「是哪個物件上的哪個屬性被動了」，這比只看「有東西被讀」有用得多。接著 <code>global[objName] || {}</code> 的意思是「如果 Node 的全域已經有這個物件就用它，沒有就先給一個空物件」，再把這個物件包成代理、放回全域，如此一來，之後程式碼存取這個名字，拿到的就是被監控的代理。</p>
-<p>你可能注意到，這裡 <code>get</code> 只是很單純地 <code>return target[property]</code>，而沒有用 <code>Reflect.get</code>。這是可以的：<code>target</code> 是原物件，不是代理本身，直接讀它不會觸發遞迴。真正要小心遞迴的寫法是「在 <code>get</code> 裡去讀代理後的 <code>window</code>」，那才會繞回自己。</p>
+<p>按照執行順序拆開來看：</p>
+<ol>
+    <li><code>proxyObjArr</code> 是要監控的物件名稱陣列。</li>
+    <li><code>objName</code> 代表目前這一輪正在處理的名稱，例如 <code>"window"</code>。</li>
+    <li><code>handler</code> 裡的 <code>get</code> 與 <code>set</code> 會記錄物件名稱、屬性名稱、值與型別。</li>
+    <li><code>global[objName] || {}</code> 會先檢查 Node 全域中是否已有該物件。若有就沿用，若沒有就先建立空物件。</li>
+    <li>最後用 <code>new Proxy(targetObject, handler)</code> 包住它，再放回 Node 的全域範圍。</li>
+</ol>
+<p>如此一來，後續程式只要存取這些全域名稱，拿到的就是已經裝好監控的代理物件。日誌也不只會告訴你「某個屬性被讀了」，還能指出「哪個物件的哪個屬性被讀了」。</p>
+<p>這段 <code>get</code> 使用的是 <code>return target[property]</code>，而不是 <code>Reflect.get</code>。這裡仍然可以正常運作，因為 <code>target</code> 是原物件，不是代理本身，直接讀取不會重新觸發同一個 <code>get</code>。</p>
 
-<h2>第四步：把要盯的物件名列進去</h2>
-<p>函式寫好後，實際使用只要傳入一個陣列，列出你想監控的物件名：</p>
+<h2>第四步：指定要監控的全域物件</h2>
+<p>函式準備好後，傳入要監控的物件名稱即可。先從最常見的三個名稱開始：</p>
 
 <pre data-source="sources/js-reverse2/20261005/JS逆向/Day19-Day20：逆向核心案例解析5/05 Proxy语法.js"><code>setProxyArr(["window", "document", "navigator"])</code></pre>
 
-<p>執行之後，這些名字在全域都會被換成掛好代理的版本。你可以先跑一段你自己的測試程式碼確認日誌有動，再換成真正的黑盒子加密程式碼。</p>
+<p>執行後，<code>window</code>、<code>document</code> 與 <code>navigator</code> 都會被換成掛好代理的版本。</p>
+<p>先用自己的簡單測試程式讀寫幾個屬性，確認終端機確實出現日誌。確認監控正常後，再執行真正要分析的黑盒子加密程式碼。這樣如果沒有輸出，也比較容易判斷是代理沒有裝好，還是程式根本沒有走到那條路徑。</p>
 
-<h2>第五步：讀日誌，列出要補的屬性</h2>
-<p>最後一步不是寫程式，而是看輸出。把代理裝好後放那段黑盒子去跑，日誌會一行一行告訴你：它讀了哪個物件的哪個屬性、屬性的型別是什麼、當下的值是什麼。凡是「屬性值」印出 undefined 的，就是這個物件缺少了那個屬性，那正是你要補進去的清單。</p>
-<p>這裡要提醒兩個判斷原則。第一，不是每一個 undefined 都要補：有些屬性程式碼只是探測性地讀一下、拿不到也無所謂（例如某些瀏覽器版本才有的物件），補了反而多餘，甚至補錯型別會造成後續行為不同。第二，補的時候要符合原本的型別與形狀：日誌已經印了「屬性值類型」，是函式就補函式、是物件就補物件，而不是一律塞一個空值進去。</p>
+<h2>第五步：從日誌整理補環境清單</h2>
+<p>代理裝好後，讓黑盒子程式照常執行。終端機會陸續顯示它讀寫了哪個物件、哪個屬性，以及當下的值與型別。</p>
+<p>如果某個被讀取的屬性值是 <code>undefined</code>，代表目前物件上沒有可用的值。先把這些紀錄圈出來，作為補環境的候選清單。</p>
 
-<h2>做完長什麼樣</h2>
-<p>跑完這一節，你應該得到一份終端機輸出，內容是一連串「物件：window／屬性：screenX／屬性值：undefined」這樣的紀錄，而你已經能從中圈出「真正需要補」的那幾個。至於 Proxy 為什麼能攔到、<code>Reflect</code> 背後是怎麼運作的，屬於觀念層次，已經在「Hook 與 Proxy 攔截」節點講過，這裡只把它當成手上的工具用。</p>
-<p>現在你有了「缺什麼」的清單，但下一個問題是：這些屬性該補成什麼樣子？下一節把所有補環境會用到的前端物件整理成一份可查的清單，也就是八大前端物件，連同那個最常被拿來檢查的 <code>toString</code> 標籤一起補齊。</p>
+<blockquote>
+<p><strong>不要看到 <code>undefined</code> 就全部補上。</strong>先確認程式後續是否真的依賴這個屬性，再決定要不要處理。</p>
+</blockquote>
+
+<p>有些程式只是試探性讀取某個屬性。即使拿到 <code>undefined</code>，後續仍能正常執行。這種情況通常不必補；若隨意塞入錯誤的值，反而可能改變原本的判斷結果。</p>
+<p>若程式確實需要該屬性，就要補成符合原本型別與形狀的內容。需要函式時就補函式，需要物件時就補物件，而不是所有缺口都塞入同一種空值。</p>
+<p>換句話說，Proxy 日誌提供的是「線索」，不是可以不經判斷就照抄的答案。</p>
+
+<figure class="lesson-figure"><img src="./proxy-gap-detection-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>什麼時候適合使用這個方法</h2>
+<p>當程式碼龐大、經過混淆，或你無法快速從靜態程式碼判斷它用了哪些瀏覽器物件時，Proxy 很適合拿來動態記錄實際發生的存取。</p>
+<p>如果只是少量、清楚可見的屬性缺失，直接根據錯誤訊息補上可能更快。若某個屬性只存在於沒有被執行到的分支，這次日誌也不會出現它；Proxy 記錄的是實際走過的路，不是整份程式所有可能的路徑。</p>
+
+<h2>完成後應該看到的結果</h2>
+<p>完成這些步驟後，終端機應該會出現一連串類似「物件：window／屬性：screenX／屬性值：undefined」的紀錄。</p>
+<p>你也應該能把紀錄分成兩類：一類只是試探性存取，不需要處理；另一類會影響程式後續執行，必須加入補環境清單。</p>
+<p>Proxy 為什麼能攔截操作，以及 <code>Reflect</code> 背後的運作原理，已經在「Hook 與 Proxy 攔截」節點說明過。這一節的重點是把它們當成工具，用來找出黑盒子程式實際需要的環境。</p>
+<p>現在你已經知道「缺哪些屬性」。下一節要處理的是「這些屬性該補成什麼樣子」：我們會整理補環境常用的八大前端物件，以及經常被拿來檢查的 <code>toString</code> 標籤。</p>
 
 <div class="lesson-nav">
   <div><a href="./why-node-breaks.html">← 上一步：瀏覽器 JS 搬進 Node 就壞掉：window 與 global 的分岔</a></div>
@@ -113,35 +167,30 @@ yuan.foo()
   <button class="opt">把字串解析成可執行的函式</button>
   <button class="opt">刪除全域中 Node 專屬的識別字</button>
 </div>
-
 <div class="quiz" data-question="為什麼 <code>get</code> 裡要用 <code>Reflect.get(target, p)</code> 而不是讀代理後的物件？" data-correct="2" data-explain="讀代理後的物件會再次觸發 get，無限遞迴；Reflect.get 讀的是背後的原物件。">
   <button class="opt">Reflect 可以自動修正型別錯誤</button>
   <button class="opt">Reflect 能讓讀取速度變快</button>
   <button class="opt">讀代理物件會無限遞迴</button>
   <button class="opt">直接讀原物件語法不合法</button>
 </div>
-
 <div class="quiz" data-question="日誌中某個屬性的「屬性值」印出 undefined，通常代表什麼？" data-correct="3" data-explain="代表該物件上沒有這個屬性，程式碼卻在讀它，所以這是補環境要補的缺口。">
   <button class="opt">這個屬性已經被程式碼刪除</button>
   <button class="opt">網站成功偵測到你補環境</button>
   <button class="opt">代理設定寫錯因此攔不到</button>
   <button class="opt">物件缺少這個屬性要補</button>
 </div>
-
 <div class="quiz" data-question="<code>global[objName] || {}</code> 這行的目的是什麼？" data-correct="0" data-explain="先確認全域有沒有這個物件，有就用它，沒有就給空物件，再把結果包成代理放回全域。">
   <button class="opt">已有就用、沒有就給空物件</button>
   <button class="opt">把所有全域物件一次刪乾淨</button>
   <button class="opt">強制把物件轉成布林值</button>
   <button class="opt">檢查物件是否可被修改</button>
 </div>
-
 <div class="quiz" data-question="讀日誌時，為什麼不是每個 undefined 都要補？" data-correct="1" data-explain="有些只是探測性讀取，拿不到也無妨；補錯型別反而可能改變後續行為。">
   <button class="opt">補太多會讓 Node 無法啟動</button>
   <button class="opt">有些只是探測、補錯更糟</button>
   <button class="opt">undefined 永遠不需要補</button>
   <button class="opt">日誌的型別資訊都是錯的</button>
 </div>
-
 <div class="quiz" data-question="補屬性時，日誌中的「屬性值類型」有什麼用？" data-correct="2" data-explain="它告訴你該屬性原本是函式還是物件，讓你把缺口補成一致的型別與形狀。">
   <button class="opt">告訴你這個網站用了哪一代瑞數</button>
   <button class="opt">決定要不要刪除 Node 識別字</button>

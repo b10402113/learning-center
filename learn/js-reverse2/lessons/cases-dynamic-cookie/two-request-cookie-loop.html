@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>兩次請求與動態 cookie：資料為什麼第一發拿不到</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>兩次請求與動態 cookie：資料為什麼第一發拿不到</h1>
+<p class="meta">Step 1/5 · 案例：動態 cookie 與風控</p>
+
+<h2>學習目標</h2>
+<p>說出「抓動態輸入→注入→執行 JS→取得 cookie→帶資料重放」的五段迴圈，並解釋為什麼第一發請求拿不到資料。</p>
+
+<h2>前言：複製成 cURL 的那個請求，為什麼不回資料</h2>
+
+<p>你在 DevTools 裡盯著一個鋼材搜尋網站的 XHR：同樣的網址、同樣的請求標頭、同樣的查詢參數，瀏覽器打一次就回一整頁搜尋結果。右鍵「Copy as cURL」貼進終端機，用 Python 的 requests 重放一次，回應卻是空的，或者乾脆是一個錯誤頁。你把 headers 一個一個抄齊了，連 Referer 和 User-Agent 都對過了，資料就是不出來。</p>
+
+<p>差別不在你抄漏了哪個欄位，而在瀏覽器身上帶著一組你沒有帶上的通行證——一組 cookie。更麻煩的是，這組 cookie 不是登入生出來的，也不是網站發給你之後就能一直用的：它是瀏覽器當場用一段 JavaScript 算出來的，而且每算一次就換一組新的。這種設計有個統稱叫「動態 cookie」或「風控 cookie」，是真實網站最常見的防爬手段之一。</p>
+
+<p>不解開它，你只剩下兩條又慢又脆的路：用瀏覽器自動化一頁一頁撈，或者乾脆放棄這個站。解開它，你會得到一條可以換站重用的迴圈。這一節先把迴圈的全貌講清楚：資料為什麼第一發拿不到、伺服器到底在要求什麼、五段工作各自解決什麼問題。後面四節會把這五段逐一做實。</p>
+
+<h2>現象：第一發請求，伺服器只發一份「考卷」</h2>
+
+<p>以歐冶的搜尋介面為例，實際的查詢 API 是一個 POST 端點，送出查詢條件後回傳商品清單。瀏覽器裡這一切很正常，但用 requests 直接打這個端點，拿不到商品清單。伺服器在第一發請求的回應裡不放資料，而是放一份「考卷」：一個 HTML 頁面，裡面藏著三樣東西。</p>
+
+<p>這三樣東西合稱「三件套」，是這一整個節點反覆出現的主角：</p>
+
+<ol>
+<li><strong>meta content</strong> — HTML 裡一個 <code>&lt;meta&gt;</code> 標籤的 content 屬性值，是一串動態產生的文字，會被當參數餵給下面的腳本。</li>
+<li><strong>ts 腳本</strong> — 頁面裡第一段 <code>&lt;script&gt;</code> 的內文，是壓縮成單行的解密腳本（ts 是這支腳本的代號，內部實作是個小型虛擬機，所以也常被叫 VM 腳本）。</li>
+<li><strong>auto 腳本</strong> — 一個外部 <code>&lt;script src&gt;</code> 的原始碼，由伺服器動態產生，每份都不同。</li>
+</ol>
+
+<p>打個比方：伺服器不是門口放著東西讓你拿，而是發一張一次性考卷給你——題目（三件套）每次都不一樣，你得在自己那邊把答案算出來，帶著答案來才放行。抄上一次的答案沒有用，因為這次的題目已經換了。</p>
+
+<h2>兩個 cookie 的接力：cookie1 與 cookie2</h2>
+
+<p>整場交易裡其實有兩個 cookie，角色完全不同，值得先分清楚。</p>
+
+<p><strong>cookie1</strong> 在第一發請求的回應裡就種下來了，它比較像訪客登記證：伺服器用它記住「這個訪客剛領過這張考卷」。它不難拿，問題是它一張登記證還不足以通關。</p>
+
+<p><strong>cookie2</strong> 才是真正的通關章。它不在任何回應裡——它是把三件套注入一支補好環境的 JavaScript 之後，在本地跑出來的結果，最後落在 <code>document.cookie</code> 裡。伺服器驗得出來這枚章是不是用「本次的考卷」算出來的，驗過才回真資料。</p>
+
+<p>這個「兩次請求、兩個 cookie」的結構，跟前一個節點講的瑞數流程是同一種設計：第一發拿題目，本地算答案，第二發帶答案取資料。差別只在各家網站把題目藏在不同地方、用不同的腳本算答案。</p>
+
+<table>
+<thead>
+<tr><th></th><th>第一次請求</th><th>第二次請求</th></tr>
+</thead>
+<tbody>
+<tr><td>目的</td><td>領考卷</td><td>拿資料</td></tr>
+<tr><td>要帶什麼</td><td>一般請求標頭</td><td>cookie1＋cookie2＋查詢資料</td></tr>
+<tr><td>回應裡有什麼</td><td>三件套（meta、ts、auto）＋cookie1</td><td>真正的商品資料</td></tr>
+<tr><td>誰負責</td><td>抓取腳本負責把三件套挖出來</td><td>注入後的 JS 負責算出 cookie2</td></tr>
+</tbody>
+</table>
+
+<h2>五段迴圈：每一段解決一個問題</h2>
+
+<p>把整條工作線拆開，就是五段。這五段的順序不能亂，因為每一段的輸出是下一段的輸入：</p>
+
+<ol>
+<li><strong>抓動態輸入</strong> — 從第一發回應把三件套挖出來。解的問題是「題目在哪」。</li>
+<li><strong>注入</strong> — 把三件套填進 JS 模板的佔位符。解的問題是「題目怎麼交給腳本」。</li>
+<li><strong>執行 JS</strong> — 在 Node 裡跑這支注入後的腳本，產生 cookie2。解的問題是「答案怎麼算」。</li>
+<li><strong>取 cookie</strong> — 讀 <code>document.cookie</code>，解析出要帶走的鍵值。解的問題是「答案從哪裡收割」。</li>
+<li><strong>重放</strong> — 帶著 cookie 與查詢資料打第二次請求，拿回資料。解的問題是「答案怎麼兌換成資料」。</li>
+</ol>
+
+<p>第三段裡「跑 JS」需要的補環境功夫，前面的節點已經練過了——JS 為什麼在 Node 裡會壞、要補哪些前端物件、怎麼用 Proxy 找缺口。這個節點把那套功夫放進完整流程裡用，不再從零解釋。</p>
+
+<h2>為什麼答案不能重用</h2>
+
+<p>理解「三件套每次請求都變」之後，一個自然的疑問是：那我抓一次三件套、算一組 cookie2，之後一直帶著它重放不就好了？</p>
+
+<p>不行，原因藏在伺服器的驗證邏輯裡。cookie2 是「本次題目」的答案，題目跟答案成對綁定；你拿舊答案配新題目，伺服器一驗就穿幫。所以正確的工作方式是把「抓三件套＋算 cookie2」當成每次請求的前置動作，一次性的消耗品，而不是快取起來的資產。歐冶的抓取程式甚至更乾脆：每一頁都把 cookie 清掉、整套重跑一次，寧可慢，也不讓任何一組舊答案混進來。</p>
+
+<p>另一種形態的例外是像拼多多那樣的 anti_content：輸入不是每次從回應裡抓，而是一組靜態的腳本檔案，加上一個「對時」動作讓簽名保鮮。那是第五節的主題；先記住判斷的軸心——你要的這串值，是「每發請求都重新產生」的消耗品，還是「一組檔案算到底、靠時間戳保鮮」的耐用品。</p>
+
+<h2>把觀念掛回完整流程</h2>
+
+<p>這個觀念在知識地圖上掛在兩個地方。往上，它接瑞數的兩次請求兩個 cookie：同一種「發考卷、算答案、帶答案取資料」的接力，只是題目的藏身處不同。往下，它是後面四節的大綱：第二節把第一段（抓三件套）做實，第三節做第二、三、四段（注入、執行、收割），第四節做第五段（重放與分頁），第五節換一支線看 anti_content 的另一種形態。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+動態 cookie 站台的資料鎖在「第二次請求」後面：第一發只拿得到 cookie1 與三件套（meta content、ts 腳本、auto 腳本）；三件套每次請求都不同，注入補好環境的 JS 算出 cookie2，帶著它與查詢資料重放才回資料。整條流程就是五段迴圈——抓、注入、執行、取 cookie、重放——每一段的輸出餵給下一段。
+</blockquote>
+
+<p>全貌有了，接下來動手把第一段做實：考卷上的三件套各藏在 HTML 的哪個角落，怎麼用 XPath 穩穩地挖出來。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./grab-dynamic-inputs.html">下一步：抓三件套：從第一發回應挖出 meta、ts 腳本與 auto 腳本 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="用 requests 直接重放搜尋 API 拿不到資料，最可能缺了什麼？" data-correct="2" data-explain="伺服器第一發只發考卷，資料鎖在帶 cookie2 的第二次請求後面。">
+  <button class="opt">缺了正確的 Content-Type 欄位</button>
+  <button class="opt">缺了正確的查詢參數</button>
+  <button class="opt">缺了 JS 現算出來的 cookie2</button>
+  <button class="opt">缺了正確的 HTTP 版本</button>
+</div>
+
+<div class="quiz" data-question="三件套為什麼不能抓一次就寫死重用？" data-correct="1" data-explain="題目每次請求都換新，cookie2 是本次題目的答案，舊答案配新題目會被驗穿。">
+  <button class="opt">因為三件套的檔案太大會過期</button>
+  <button class="opt">因為它每次請求都變，跟當次的題目綁定</button>
+  <button class="opt">因為它有固定的保存期限</button>
+  <button class="opt">因為它會跟 IP 位址綁在一起</button>
+</div>
+
+<div class="quiz" data-question="cookie2 是在哪裡產生的？" data-correct="0" data-explain="三件套注入補好環境的 JS 後在本地執行，結果落在 document.cookie。">
+  <button class="opt">本地跑注入後的 JS，落在 document.cookie</button>
+  <button class="opt">伺服器在第二發回應的標頭裡給的</button>
+  <button class="opt">瀏覽器自己隨機產生的亂數</button>
+  <button class="opt">第一發回應的 Set-Cookie 裡就全部給完</button>
+</div>
+
+<div class="quiz" data-question="五段迴圈的順序，下列哪一項正確？" data-correct="3" data-explain="每一段的輸出是下一段的輸入，順序不能亂。">
+  <button class="opt">執行 JS → 抓動態輸入 → 注入 → 重放 → 取 cookie</button>
+  <button class="opt">注入 → 重放 → 抓動態輸入 → 執行 JS → 取 cookie</button>
+  <button class="opt">取 cookie → 重放 → 抓動態輸入 → 注入 → 執行 JS</button>
+  <button class="opt">抓動態輸入 → 注入 → 執行 JS → 取 cookie → 重放</button>
+</div>
+
+<div class="quiz" data-question="cookie1 與 cookie2 的角色差別是什麼？" data-correct="1" data-explain="cookie1 是第一發就種下的訪客登記，cookie2 是本地算出來的通關章。">
+  <button class="opt">兩個都是伺服器直接發下來的通行證</button>
+  <button class="opt">cookie1 是訪客登記，cookie2 是算出來的通關章</button>
+  <button class="opt">cookie1 是算出來的答案，cookie2 是題目</button>
+  <button class="opt">兩者沒有差別，只是名稱不同</button>
+</div>
+
+<div class="quiz" data-question="歐冶案例每一頁都清 cookie、整套重跑，是為了什麼？" data-correct="2" data-explain="答案是一次性消耗品，寧可每頁重算也不讓舊答案混進新題目。">
+  <button class="opt">為了讓爬蟲跑得快一點</button>
+  <button class="opt">為了節省記憶體</button>
+  <button class="opt">避免任何一組舊答案混進新的一頁</button>
+  <button class="opt">因為伺服器要求 cookie 一定要是空的</button>
+</div>
+
+<div class="footer">
+  <p>js-reverse2 · 案例：動態 cookie 與風控 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
