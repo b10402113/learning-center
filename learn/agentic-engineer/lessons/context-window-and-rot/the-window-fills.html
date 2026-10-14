@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Context Window 為什麼會滿</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Context Window 為什麼會滿</h1>
+<p class="meta">Step 1/5 · Context Window、Context Rot 與 Session 衛生</p>
+
+<h2>學習目標</h2>
+<p>能說明 context window 是一個裝下所有讀取、輸入與回覆的單一容器，並且判斷出：把它填滿的主因是「尋找答案的成本」，而不是答案本身。</p>
+
+<h2>前言：那些讀進來的東西，最後都去了哪</h2>
+
+<p>上一節你看到 agent 怎麼在你的程式庫裡找路：沒有索引，也沒有預先畫好的地圖。它只能 grep 搜字、glob 找檔名、read 打開檔案，一個接一個地讀，直到把答案拼湊出來。</p>
+
+<p>現在換一個很自然、卻常常被忽略的問題：這些被讀進來的東西，最後都到哪裡去了？</p>
+
+<p>你大概有過這種體感。一個 session 剛開始很聰明，問什麼答什麼；聊了半小時、解掉幾個問題之後，它開始變慢、變得遲鈍，甚至把你早先講過的事忘掉。很多人把這歸咎於「專案太大」或「問題太難」。但真正的答案可能讓你意外：問題往往不在你的專案有多大，而在於一個你看不見的容器正在被慢慢填滿。更麻煩的是，填進去的大部分東西，根本不是你要的答案。</p>
+
+<h2>一個容器，一個硬上限</h2>
+
+<p>agent 在過程裡讀的、你打的、它回覆的，全部都會被裝進同一個地方。這個地方叫 <strong>context window（上下文視窗）</strong>。</p>
+
+<p>你可以把它想成一個有硬性上限的容器。整個 session 期間，所有東西都住在裡面，直到 session 結束才清空。</p>
+
+<p>有些工具支援的 window 大到一百萬個 token，聽起來像天文數字，好像永遠裝不滿。這正是最讓開發者意外的地方：即使數字這麼大，它還是填得比你想像快。</p>
+
+<p>原因不是你的專案突然變大，而是填進去的東西有一個你沒算到的結構。</p>
+
+<h2>看著容器被填滿：重建那題「auth 在哪」</h2>
+
+<p>把上一節那題「這個專案的 auth 是怎麼運作的」重新跑一遍。這次不要看 agent 找到什麼，而是看它一路上往容器裡丟了什麼。</p>
+
+<p>第一，你那個問題本身先進去。它很小，幾乎不佔空間。</p>
+
+<p>第二，搜尋結果跟著進來。每一筆 grep 的命中、每一個檔案路徑、每一行它為了判斷而讀的周圍文字，全都進了 window。這些不是免費的，它們是實實在在的 token，就坐在容器裡。</p>
+
+<p>第三，它打開檔案來讀。注意，是<strong>整個檔案</strong>，不是只有相關的那個函式。檔案裡的每一個 import、每一行註解、每一段夾在你需要的那段程式碼上下的無關程式碼，通通被載入。</p>
+
+<p>第四，也是最容易被忽略的一步：它還開了第二個檔，結果那個檔根本無關。這是一次猜測，猜錯了。但猜錯的檔案不會被退費，它就這樣留在 window 裡，靜靜佔著位置。</p>
+
+<p>最後，你真正想要的那個答案，只是整段過程最末端的一小段。</p>
+
+<figure class="lesson-figure"><img src="./the-window-fills-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<table>
+<thead>
+<tr><th>容器裡放進了什麼</th><th>它佔的份量</th><th>是你要的嗎</th></tr>
+</thead>
+<tbody>
+<tr><td>你的問題</td><td>很小</td><td>是，但只是一開始</td></tr>
+<tr><td>搜尋結果（命中、路徑、周圍文字）</td><td>可觀</td><td>大部分不是</td></tr>
+<tr><td>被打開的整個檔案</td><td>很大</td><td>只有一小段是</td></tr>
+<tr><td>猜錯、無關的那個檔</td><td>不小</td><td>完全不是</td></tr>
+<tr><td>真正的答案</td><td>一小段</td><td>是</td></tr>
+</tbody>
+</table>
+
+<h2>關鍵洞見：填滿它的是「找答案的成本」</h2>
+
+<p>把上面那張表看一遍，你會發現一件很反直覺的事：容器裡絕大部分的東西，不是有用的部分，而是<strong>找到有用部分的成本</strong>。</p>
+
+<p>搜尋、開啟、猜錯、多讀的那些，都只是過程。而你真正關心的那個答案，在整個畫面裡小得可憐。</p>
+
+<p>這不是特例。把同一個模式拉長到一個真實 session，不是一題，而是一整個功能，在三十到四十輪對話裡慢慢蓋出來，每一輪都在重複同樣的循環：搜尋、開檔、有時猜錯、然後抽出答案。再大的 window 也會被填滿。而填滿它的原因，<strong>不是因為你的專案異常龐大，是因為探索本身就是昂貴的</strong>。每個 agent 在能動手之前，都必須先探索。</p>
+
+<p>用一個生活化的比喻。你請人到一間塞滿箱子的倉庫裡，找一顆特定的螺絲。他每打開一個箱子，你都按工時計費；猜錯打開的箱子不會退錢；而那顆真正要找的螺絲，在整個翻找過程裡只佔一小角。你付出去的錢，絕大多數是「翻箱倒櫃」這件事，不是那顆螺絲本身。</p>
+
+<figure class="lesson-figure"><img src="./the-window-fills-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>對你這名架構師的意義</h2>
+
+<p>知道 window 會這樣被填滿之後，你可以放下一個錯誤的焦慮：把 window 填滿本身不是罪，不需要每次緊張兮兮地盯著數字。</p>
+
+<p>但同時也要接受另一件事：它也不是免費的。每一個被浪費的片段、每一次猜錯、每一個無關的檔案，都是本來可以留給這個 session 後面重要工作的空間。前面花掉的空間不會回來，後面能用的就變少。</p>
+
+<p>這正好接回上一節為什麼要談命名與結構。好結構的價值，在 token 的世界裡看得很清楚。清楚的命名讓 agent 一次命中，可預測的結構讓它少猜、少開無關的檔。猜錯變少，浪費的探索變少，你的 window 就能留下更多空間給真正的工作。結構不是風格問題，它是你對 agent 每次閱讀成本的直接控制。</p>
+
+<figure class="lesson-figure"><img src="./the-window-fills-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+context window 是一個裝下整個 session 所有讀取、輸入與回覆的單一容器，有硬性上限，而且填得比你想像快。它填滿的主因不是專案大，而是探索很貴：搜尋結果、整個檔案、猜錯的無關檔，全部留在裡面且不退費，而你真正要的答案只是最末端的一小段。好結構能減少猜錯，把 window 留給真正的工作。
+</blockquote>
+
+<p>知道 window 會滿，下一步的問題很自然：那滿了之後會怎樣？多數人的直覺是「滿了才出問題」。但實際量測的結果完全不是這樣：它在你把 window 裝滿<strong>之前</strong>，品質就已經開始往下掉了。這就是下一節要講的 context rot。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./context-rot.html">下一步：Context Rot 品質在裝滿之前就開始掉 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="agent 讀過、你打過、它回過的所有內容，最後都會被放到哪裡？" data-correct="2" data-explain="全部被裝進同一個 context window，整個 session 期間都住在裡面。">
+  <button class="opt">它們會自動被摘要成一份長期記憶</button>
+  <button class="opt">它們會被存進專案裡的暫存檔案</button>
+  <button class="opt">它們全部進到同一個 context window</button>
+  <button class="opt">它們會被即時壓縮後直接丟棄</button>
+</div>
+<div class="quiz" data-question="把「auth 在哪」那題重建一次後，填入 window 最多的是什麼？" data-correct="1" data-explain="搜尋、開檔、猜錯、多讀，這些探索的成本佔掉絕大部分。">
+  <button class="opt">你最後真正想知道的那個答案</button>
+  <button class="opt">尋找那個答案所付出的探索成本</button>
+  <button class="opt">系統一開始就載入的固定指令</button>
+  <button class="opt">你打字輸入問題所佔用的空間</button>
+</div>
+<div class="quiz" data-question="猜錯、打開了一個無關的檔案，會發生什麼事？" data-correct="2" data-explain="猜錯的檔不會退費，它就留在 window 裡繼續佔空間。">
+  <button class="opt">它會在發現無關後自動被移除</button>
+  <button class="opt">它會被標記成無效不再佔空間</button>
+  <button class="opt">它會留在 window 裡不會退費</button>
+  <button class="opt">它會覆蓋掉先前搜尋的結果</button>
+</div>
+<div class="quiz" data-question="為什麼連一百萬 token 的 window 也還是會填滿？" data-correct="2" data-explain="不是專案大，而是探索本身就昂貴，每輪都在重複找路。">
+  <button class="opt">因為每個專案的程式碼都異常龐大</button>
+  <button class="opt">因為模型會偷偷重複讀同一批檔案</button>
+  <button class="opt">因為探索本身就是昂貴的自然成本</button>
+  <button class="opt">因為你的問題被自動展開成很多段</button>
+</div>
+<div class="quiz" data-question="為什麼「清楚的命名與結構」對 agent 特別值錢？" data-correct="1" data-explain="好結構讓它少猜、少開無關檔案，把 window 留給真正的工作。">
+  <button class="opt">因為它讓程式碼的執行速度變快</button>
+  <button class="opt">因為它讓 agent 少猜、少浪費 window</button>
+  <button class="opt">因為它讓模型本身的參數變得更小</button>
+  <button class="opt">因為它讓專案不需要任何測試覆蓋</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · Context Window、Context Rot 與 Session 衛生 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

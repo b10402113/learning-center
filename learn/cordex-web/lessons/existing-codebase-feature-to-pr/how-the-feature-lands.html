@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>功能為何能長得跟既有 dashboard 一樣</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>功能為何能長得跟既有 dashboard 一樣</h1>
+<p class="meta">Step 3/5 · 既有 codebase：加功能並開 PR</p>
+
+<h2>學習目標</h2>
+<p>能說出功能自動貼合既有 dashboard 的傳導鏈：AGENTS.md 路由到 skill、skill 指向範例元件與資料契約，於是 Codex 重用既有 primitives 並保留 region filter。</p>
+
+<h2>前言：一個「什麼都沒寫」卻做對了的 prompt</h2>
+
+<p>上一節的結尾是這樣的畫面：你送出一段只描述結果的 prompt，Codex 跑了十分鐘，新的「Where activity is changing」區塊出現在畫面上。它長得跟旁邊其他卡片一模一樣，當你點下區域篩選，這張新卡片也跟著一起變。</p>
+
+<p>問題來了：你回頭看那段 prompt，裡面完全沒提到設計系統、沒提到圖表套件，也沒提到「要跟篩選連動」以外的任何實作細節。那這一切是怎麼發生的？</p>
+
+<p>如果只看 prompt，答案會是「什麼都沒發生」，因為真正的答案不在 prompt 裡，而在 repo 裡。這一節要拆的就是這條從 repo 傳導到畫面的鏈。看懂它，你就會明白前面強調的「把知識寫進 repo」不是口號，而是會直接決定輸出品質的機制。</p>
+
+<h2>傳導鏈：四個環節</h2>
+
+<p>整條鏈可以簡化成四段，每一段都把上一段的線索交棒給下一段：</p>
+
+<table>
+<thead>
+<tr><th>環節</th><th>它做的事</th></tr>
+</thead>
+<tbody>
+<tr><td>AGENTS.md 的 skill 路由</td><td>辨認出「這是新增 dashboard 卡片的工作」，指向對應的 skill</td></tr>
+<tr><td>SKILL.md 的導覽</td><td>告訴 Codex 先讀哪些既有檔案，再決定怎麼實作</td></tr>
+<tr><td>references 的契約</td><td>提供元件、資料、圖表、樣式與版面可沿用的實際規範</td></tr>
+<tr><td>assets 的範例</td><td>給一份可改寫的實作起點，而不是要求照抄</td></tr>
+</tbody>
+</table>
+
+<p>下面把每一環攤開來看。你會發現 prompt 之所以能那麼短，是因為這些內容早就躺在 repo 裡等著被讀到。</p>
+
+<figure class="lesson-figure"><img src="./how-the-feature-lands-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一環：AGENTS.md 把工作路由到 skill</h2>
+
+<p>Codex 進到 repo 後，會讀最接近的那份 AGENTS.md。這份檔案裡有一段專門在做路由，把不同種類的工作連到不同的 skill：</p>
+
+<pre data-source="sources/cordex-web/20261004/codex/master-dev-workshop/user-insights/AGENTS.md"><code>## Choose the matching skill
+
+- For a new dashboard card, analytics panel, chart, engagement metric, regional breakdown, table, or compact insight, read and follow `skills/blossomview-card-builder/SKILL.md`.
+- Use the skill's `references/dashboard-card-patterns.md` for the existing component, data, chart, styling, and layout contracts.
+- Use `assets/active-engagement-card.tsx` only as an adaptable implementation asset, not as a requirement to add that exact card.
+- Keep implementation detail in the skill. Do not duplicate its full workflow here.</code></pre>
+
+<p>注意它的寫法：只講「什麼工作 → 去讀哪個 skill」，而且最後一句明白要求「實作細節留在 skill 裡，不要在 AGENTS.md 重複」。這是一個刻意的分層，就像公司裡的櫃台只負責指路，不會把整棟樓的平面圖貼在櫃台上。</p>
+
+<p>你的 prompt 提到「新增一個區塊」，剛好落在「dashboard card、analytics panel」這一類，於是 Codex 被導向 <code>blossomview-card-builder</code>。</p>
+
+<h2>第二環：SKILL.md 是一份導覽，不是百科全書</h2>
+
+<p>進到 skill 之後，第一件事不是挑元件，而是照著順序讀一批既有檔案：</p>
+
+<pre data-source="sources/cordex-web/20261004/codex/master-dev-workshop/user-insights/skills/blossomview-card-builder/SKILL.md"><code>## Start with the existing system
+
+1. Read `src/App.tsx` to locate the existing dashboard state and the two card placement options.
+2. Read `src/components/ui/card.tsx` and reuse `Card`, `CardHeader`, `CardTitle`, `CardDescription`, and `CardContent`.
+3. Read `src/components/audience-chart.tsx` and `src/components/geographic-table.tsx` for full-size analytics cards, or `src/components/insights-rail.tsx` for a compact sidebar section.
+4. Read `src/data/insights.ts` and `src/lib/utils.ts`. Derive metrics from the existing `UserCity[]`, `getCountryTotals`, `getGrowthData`, `compactNumber`, and `preciseNumber`.
+5. Read the relevant `.analytics-*`, `.rail-*`, and breakpoint rules in `src/index.css`.</code></pre>
+
+<p>這份清單本身就是「怎麼做」的答案：先看狀態放在哪、再看要重用的 Card primitives、然後看完整卡片的範例、接著看資料 helper、最後看樣式與斷點。Codex 不必憑空猜這個 repo 的慣例，它只要照著清單走。</p>
+
+<p>這裡也順便示範了 skill 的設計原則：<code>SKILL.md</code> 只當導覽，把大量細節推到 <code>references/</code> 與 <code>assets/</code>。原因很現實：一旦 Codex 判定要載入某個 skill，它就會讀 <code>SKILL.md</code>；如果連同所有深度內容都塞在裡面，context 一載入就被撐爆。分層之後，Codex 只在真的需要時才去取更深的那一層，像書裡的章節摘要帶你到書架前，再自己抽出該翻的那一本。</p>
+
+<h2>第三環：references 定義資料契約</h2>
+
+<p>真正讓「篩選會自動連動」成立的地方，在 <code>references/dashboard-card-patterns.md</code>。它把資料怎麼流動講得清清楚楚：狀態的擁有者是 <code>App</code>，被篩選過的城市清單由它算出來，再當成 prop 往下傳。</p>
+
+<pre data-source="sources/cordex-web/20261004/codex/master-dev-workshop/user-insights/skills/blossomview-card-builder/references/dashboard-card-patterns.md"><code>const [region, setRegion] = useState&lt;Region&gt;("Everywhere");
+const selectedCities = useMemo(() =&gt; getCities(region), [region]);</code></pre>
+
+<p>而新的卡片要接受的是這份「已經篩選過」的清單：</p>
+
+<pre data-source="sources/cordex-web/20261004/codex/master-dev-workshop/user-insights/skills/blossomview-card-builder/references/dashboard-card-patterns.md"><code>&lt;ActiveEngagementCard cities={selectedCities} /&gt;</code></pre>
+
+<p>契約裡還有一條硬規則：卡片要吃的是從 <code>App</code> 傳下來、被 region 篩選過的 <code>cities</code>，絕對不可以自己去 import 那份未篩選的全域資料。</p>
+
+<p>就是這一條，解釋了為什麼新卡片會跟著區域篩選一起變。它不是「被特別寫成會連動」，而是從一開始就被要求從同一條資料流拿資料。如果這條規則沒被寫進 references，Codex 很可能就自己 import 全域資料，做出一個不會連動的卡片，外觀對了，行為卻是壞的。</p>
+
+<figure class="lesson-figure"><img src="./how-the-feature-lands-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>同一個 references 也把圖表的寫法講死：只能用已安裝的 <code>recharts</code> 與本地的 chart wrapper，並沿用既有的 CSS token 與 class。</p>
+
+<h2>第四環：assets 給的是可改寫的起點</h2>
+
+<p>最後一環是 <code>assets/active-engagement-card.tsx</code>。AGENTS.md 對它的定位說得很精準：它是一份「可以改寫的實作素材」，而不是「照抄這個卡片」的規定。</p>
+
+<p>這樣的措辭避開了一個常見的陷阱。把它當成模板硬套，Codex 就會做出一個跟需求無關的 active engagement 卡片；把它當起點，Codex 就會沿用結構、再換成 audience momentum 的內容。範例是給手感的樣品，不是蓋章的規格。</p>
+
+<h2>結果：看起來一模一樣，其實是被推導出來的</h2>
+
+<p>把四環接起來看，你就得到一開始那個畫面了。新卡片用了既有的 <code>Card</code> primitives、既有的 <code>recharts</code> wrapper、<code>@/</code> 的 import 別名，以及既有的 CSS class 與 token，所以視覺上跟其他卡片同一套；它從 <code>App</code> 拿到被篩選的 <code>cities</code>，所以行為上也跟其他卡片同步。</p>
+
+<figure class="lesson-figure"><img src="./how-the-feature-lands-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這不是 Codex「猜對」了，而是每一項決定都被 repo 的規則推導出來。</p>
+
+<p>這也回頭印證了上一節為什麼要講探索：如果 repo 沒有這些檔案，Codex 探索時就找不到線索，只好自己發明。功能會不會「貼合」，其實在你寫 prompt 之前就由 repo 決定了。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+功能能自動貼合既有 dashboard，靠的是一條 repo 內的傳導鏈：AGENTS.md 把工作路由到對應 skill，<code>SKILL.md</code> 導覽 Codex 先讀哪些既有檔案，<code>references/</code> 定義元件與資料契約（包括「只吃被篩選過的 cities」），<code>assets/</code> 提供可改寫的起點。Codex 沿著這些規則重用既有 primitives 與資料流，於是新卡片在視覺與行為上都跟其他卡片一致。prompt 之所以能那麼短，是因為怎麼做早就被寫進 repo 了。
+</blockquote>
+
+<p>把這條鏈記成一句話：repo 管「怎麼做」，prompt 只管「要什麼」。機制看懂了，下一個問題就變成「那我要給多少指引」：既然 repo 會提供做法，是不是永遠都只說要什麼就好？下一節會給你一個判準，讓你決定 prompt 該停在多高的層次。</p>
+
+<div class="lesson-nav">
+  <div><a href="./exploring-with-codex.html">← 上一步：動手探索既有專案並送功能 prompt</a></div>
+  <div><a href="./how-much-to-specify.html">下一步：要給多少指引 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="AGENTS.md 的「Choose the matching skill」區塊主要在做什麼？" data-correct="2" data-explain="它把不同種類的工作連到對應 skill，並要求細節留在 skill 裡不重複。">
+  <button class="opt">重新抄一遍 skill 的完整實作流程</button>
+  <button class="opt">列出這個 repo 安裝的所有相依套件</button>
+  <button class="opt">把某類工作路由到對應的 skill</button>
+  <button class="opt">規定使用者層級的個人偏好設定</button>
+</div>
+<div class="quiz" data-question="SKILL.md 只當導覽、細節推到 references 與 assets，是為了什麼？" data-correct="1" data-explain="避免 skill 一載入就把 context 撐爆，讓細節只在真的需要時才取用。">
+  <button class="opt">讓 skill 的檔案看起來比較簡短好看</button>
+  <button class="opt">避免一載入 skill 就把 context 撐爆</button>
+  <button class="opt">強迫使用者一定要讀完所有細節</button>
+  <button class="opt">讓 Codex 每次都得重新學習一遍</button>
+</div>
+<div class="quiz" data-question="新卡片為什麼會跟著區域篩選一起變？" data-correct="3" data-explain="契約要求卡片只吃從 App 傳下來、已被篩選過的 cities，而不是全域資料。">
+  <button class="opt">因為 prompt 裡明文指定要跟篩選連動</button>
+  <button class="opt">因為 Codex 每次都會自動加上連動邏輯</button>
+  <button class="opt">因為設計系統的 CSS 會自動處理連動</button>
+  <button class="opt">因為契約要求它吃被篩選過的 cities</button>
+</div>
+<div class="quiz" data-question="assets/active-engagement-card.tsx 在 AGENTS.md 裡的定位是什麼？" data-correct="1" data-explain="它是一份可改寫的實作素材，而不是要求照抄那個卡片。">
+  <button class="opt">一個必須原封不動掛上去的模板</button>
+  <button class="opt">一份可以改寫的實作起點素材</button>
+  <button class="opt">一個只供閱讀、不可修改的範例</button>
+  <button class="opt">一個會被自動安裝的第三方套件</button>
+</div>
+<div class="quiz" data-question="整條傳導鏈能成立的最上層前提是什麼？" data-correct="0" data-explain="這些路由、契約與範例都必須先被寫進 repo，Codex 才找得到線索。">
+  <button class="opt">規則、契約與範例已經被寫進 repo</button>
+  <button class="opt">使用者熟悉這個 repo 的每一行程式</button>
+  <button class="opt">prompt 寫得又長又詳細沒有遺漏</button>
+  <button class="opt">模型剛好記得住這個 repo 的慣例</button>
+</div>
+
+<div class="footer">
+  <p>cordex-web · 既有 codebase：加功能並開 PR · Step 3/5</p>
+  <p>讀到卡住的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

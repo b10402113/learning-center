@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Context Rot：品質在裝滿之前就開始掉</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Context Rot：品質在裝滿之前就開始掉</h1>
+<p class="meta">Step 2/5 · Context Window、Context Rot 與 Session 衛生</p>
+
+<h2>學習目標</h2>
+<p>能說明 context rot 為什麼在 window 裝滿之前就開始，並分辨位置衰減（U 形）與長度衰減這兩種不同的機制。</p>
+
+<h2>前言：一個你明明講過、它卻像忘了的決定</h2>
+
+<p>上一節的結論是：context window 會滿，主因是探索的成本，不是你的專案太大。知道它總有一天會滿之後，下一個問題就很自然了：那滿了之後會怎樣？</p>
+
+<p>多數人的直覺是：在裝滿之前都好好的，爆掉才會出事。這一節要拆掉的，就是這個直覺。</p>
+
+<p>你有沒有遇過這種情況：session 一開始你就把某個決定講得很清楚，例如「這個欄位不接受 null，一律用空字串」。跑了二十來輪之後，它卻像從來沒聽過這件事，又把 null 用回來了。你翻回去找，那段話明明還留在對話裡，一個字都沒少。它沒有消失，卻像被模型吃掉了。</p>
+
+<p>這種「明明在，卻用不到」的現象不是你的錯覺，也不是模型在偷懶。它有名字，而且是被反覆量測過、跨模型一致的行為。</p>
+
+<h2>它有名字，而且不罕見</h2>
+
+<p>這個現象叫 <strong>context rot（上下文腐化）</strong>：隨著越來越多 token 進入 context window，輸出的品質會一路往下掉，而且<strong>在 window 填滿之前就開始</strong>。</p>
+
+<p>2025 年有研究系統性地測試前沿模型在拉長 context 之後表現如何。結果橫跨十八個不同的模型，每一個都呈現同一個模式：塞進去的 token 越多，輸出品質越低。不是某些模型，不是大部分模型，<strong>是全部</strong>。</p>
+
+<p>更讓人意外的是它開始發作的時間點。一個標榜二十萬 token window 的模型，才走到五萬 token，也就是四分之一滿，就已經呈現出真實、可量測的品質下滑。</p>
+
+<figure class="lesson-figure"><img src="./context-rot-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這裡要記住一句話：<strong>盒子上寫的那個數字是技術天花板，不是品質開始滑落的位置</strong>。規格寫的是「最多能裝多少」，不是「裝到多少之前都能維持同樣的判斷力」。這兩件事經常被混為一談，就像把卡車的載重上限當成「這個重量以下貨物都不會受損」一樣。</p>
+
+<h2>兩個不同的問題，不要搞混</h2>
+
+<p>研究進一步把這個下滑拆成兩種效應。它們值得分開來看，因為對應的習慣不太一樣。</p>
+
+<h3>位置衰減：東西放在哪裡有差</h3>
+
+<p>第一種叫<strong>位置衰減（positional degradation）</strong>：資訊在 window 裡的位置，會影響它被用得好不好。多份研究都發現一個一致的 <strong>U 形</strong>：落在對話最開頭或最末尾的資訊，模型用得比較好；被埋在<strong>中間</strong>的資訊，用得明顯差，在受控測試裡有時差到二、三十分。</p>
+
+<p>這就解釋了前面那個場景。你二十輪前講過的決定，為什麼感覺像「不見了」，即使它技術上還在 window 裡。它沒有不見，它只是坐在模型最不擅長取用的那個位置上，就像一本厚書夾在正中間的書籤，翻起來最費力。</p>
+
+<h3>長度衰減：旁邊的東西越多，越不可靠</h3>
+
+<p>第二種叫<strong>長度衰減（length degradation）</strong>，它跟位置無關。就算你把重要資訊放在最有利的位置（開頭、容易找到），只要周圍的 context 越長，準確率還是會掉。</p>
+
+<p>一份受控研究發現，當輸入從幾百 token 成長到幾千 token，任務本身完全沒變，推理準確率從 92% 掉到 68%。另一份研究更進一步：當一個事實是被<strong>改寫</strong>而不是逐字重複時，多數受測模型在背著大約三萬兩千 token 的時候，準確率會掉到它短 context 時的一半以下。</p>
+
+<table>
+<thead>
+<tr><th>機制</th><th>它關乎什麼</th><th>可觀察的現象</th></tr>
+</thead>
+<tbody>
+<tr><td>位置衰減</td><td>資訊放在 window 的哪個位置</td><td>U 形：開頭結尾好、中間差，可差 20–30 分</td></tr>
+<tr><td>長度衰減</td><td>周圍 context 有多長</td><td>位置擺得再好，輸入越長準確率越低（92%→68%）</td></tr>
+</tbody>
+</table>
+
+<p>把這兩件事合起來，結論就清楚了：不只是「不要把東西埋在中間」，也是「不要以為空間越大就越可靠」。<strong>長度本身有成本，而且這個成本跟位置無關。</strong>空出來的空間不會讓模型變聰明，只會讓它有更多東西要顧。</p>
+
+<figure class="lesson-figure"><img src="./context-rot-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+context rot 指的是：越多 token 進入 window，輸出品質越低，而且它在 window 填滿之前就開始：二十萬 token 的 window 在五萬 token 就能量測到下滑。它分成兩種機制：位置衰減（U 形，中間最差，可差 20–30 分）與長度衰減（不管位置，周圍越長越不可靠，推理準確率 92%→68%）。規格上的上限不等於品質的保證。
+</blockquote>
+
+<p>到這裡你看到的，是「量」與「位置」怎麼在你滿之前就悄悄侵蝕可靠度。但長度並不是唯一讓一個 session 變差的東西。還有第二個問題，它更安靜、更容易被忽略，而且跟 window 有多滿完全無關，它只跟 window 裡裝了<strong>什麼樣的東西</strong>有關。這就是下一節的主題：切換主題。</p>
+
+<div class="lesson-nav">
+  <div><a href="./the-window-fills.html">← 上一步：Context Window 為什麼會滿</a></div>
+  <div><a href="./topic-switching.html">下一步：切換主題 無關的工作如何搶走注意力 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="2025 年那個橫跨十八個模型的研究，發現了什麼共同模式？" data-correct="1" data-explain="進去越多 token，輸出品質越低，十八個模型全都如此。">
+  <button class="opt">越多 token 進去，輸出品質就越好</button>
+  <button class="opt">越多 token 進去，輸出品質就越低</button>
+  <button class="opt">品質只跟模型大小有關，與長度無關</button>
+  <button class="opt">只有舊模型才會出現品質下滑</button>
+</div>
+<div class="quiz" data-question="一個標榜二十萬 token 的 window，大約在多少 token 就能量測到下滑？" data-correct="2" data-explain="在五萬 token、也就是四分之一的地方，就已經能量測到真實下滑。">
+  <button class="opt">大約在一萬 token 左右就會開始</button>
+  <button class="opt">大約在十八萬 token 快滿時才開始</button>
+  <button class="opt">大約在五萬 token 就已經開始了</button>
+  <button class="opt">幾乎要到二十萬全滿才會開始</button>
+</div>
+<div class="quiz" data-question="「位置衰減」呈現什麼樣的一致形狀？" data-correct="0" data-explain="開頭與結尾用得好、中間用得差，形成 U 形。">
+  <button class="opt">開頭結尾好、中間差的 U 形</button>
+  <button class="opt">開頭差、越往後越好的斜線</button>
+  <button class="opt">完全隨機、沒有可預測的模式</button>
+  <button class="opt">每個位置都一樣好的水平線</button>
+</div>
+<div class="quiz" data-question="「長度衰減」和「位置衰減」最關鍵的差別是什麼？" data-correct="2" data-explain="長度衰減與位置無關，周圍一長，準確率照樣掉。">
+  <button class="opt">長度衰減只發生在模型比較小的時候</button>
+  <button class="opt">長度衰減只在你手動壓縮之後才發生</button>
+  <button class="opt">長度衰減與位置無關，長了就會掉</button>
+  <button class="opt">長度衰減其實就是位置衰減的另一種說法</button>
+</div>
+<div class="quiz" data-question="規格上寫的 window 大小，代表的是什麼？" data-correct="1" data-explain="那是技術上限，不是品質開始滑落的位置。">
+  <button class="opt">品質開始明顯滑落的那個位置</button>
+  <button class="opt">技術上最多能裝多少的硬天花板</button>
+  <button class="opt">模型保證維持最高品質的範圍</button>
+  <button class="opt">你每個 session 平均會用到的量</button>
+</div>
+<div class="quiz" data-question="為什麼一個二十輪前講過的決定，會像「不見了」？" data-correct="2" data-explain="它還在 window，只是坐在模型最不擅長取用的中間位置。">
+  <button class="opt">因為它在不知不覺中被模型刪除了</button>
+  <button class="opt">因為它被複製到另一個新的 session</button>
+  <button class="opt">因為它落在模型最不擅長取用的中間</button>
+  <button class="opt">因為它被後來的搜尋結果完全覆蓋</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · Context Window、Context Rot 與 Session 衛生 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
