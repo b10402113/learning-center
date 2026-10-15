@@ -16,17 +16,17 @@
 
 <h2>前言：一筆看起來很嚇人的數字</h2>
 
-<p>上一節把建置帳單的真相拆開了：多出來的 token 大多不是思考，而是浪費。但要能動手砍，你得先看得到明細。問題是，agent 跑完一個 session 之後，你眼前只有一個很大的總數——比如某次 architect 跑出了八萬 token。這數字很嚇人，可是它嚇人得有道理嗎？</p>
+<p>上一節拆開了建置帳單的真相：多出來的 token 大多不是思考，而是浪費。不過想動手砍，得先看得到明細。現實是，agent 跑完一個 session，你眼前通常只有一個很大的總數，例如某次 architect 跑出了八萬 token。數字很嚇人，但它嚇人得有道理嗎？</p>
 
-<p>這正是這一節的工具要回答的問題。它是課程附的一支小腳本，專門把那個嚇人的總數打開，告訴你每個 token 是「哪一種」、各自值多少錢。學會讀它，你才有辦法判斷一筆帳到底是真貴還是只是看起來大。</p>
+<p>這一節的工具就是來回答這個問題的。它是課程附的一支小腳本，把那個嚇人的總數打開，告訴你每個 token 屬於哪一種、各自值多少錢。讀得懂它，你才判斷得出一筆帳是真貴，還是只是看起來大。</p>
 
 <h2>analyze-token-usage.mjs</h2>
 
-<p><code>analyze-token-usage.mjs</code> 是一個唯讀的 token 用量分析器，讀取一份 Claude Code 的 session transcript，回答「這次跑的 token 到底花去哪了？」它是少數你這個階段就會用到的工具之一，因為它把「省 token」這件抽象的事，變成一份看得懂的帳單。</p>
+<p><code>analyze-token-usage.mjs</code> 是一個唯讀的 token 用量分析器。它讀取一份 Claude Code 的 session transcript，回答一個問題：「這次跑的 token 到底花去哪了？」它把「省 token」這件抽象的事，換算成一份看得懂的帳單。</p>
 
-<p>它讀的是 Claude Code 自己的 session 檔，位置在 <code>~/.claude/projects/&lt;encoded-cwd&gt;/&lt;session-id&gt;.jsonl</code>。它不寫入任何檔案，零依賴——裝好就只想著讀，不會弄髒你的環境。</p>
+<p>它讀的是 Claude Code 自己的 session 檔，位置在 <code>~/.claude/projects/&lt;encoded-cwd&gt;/&lt;session-id&gt;.jsonl</code>。它不寫入任何檔案，也沒有任何依賴，裝好之後只負責讀。</p>
 
-<h3>怎麼跑它</h3>
+<h3>怎麼呼叫它</h3>
 
 <p>它是一個命令列工具，支援以下幾種呼叫方式（以下區塊逐字引用自原始碼）：</p>
 
@@ -50,14 +50,14 @@
 </tbody>
 </table>
 
-<p>其中 <code>--top</code> 的預設值是 <code>12</code>；<code>--project</code> 預設為 <code>null</code>，也就是用目前工作目錄換算出來的編碼名稱。</p>
+<p>預設值有兩個。<code>--top</code> 預設是 <code>12</code>；<code>--project</code> 預設是 <code>null</code>，也就是用目前工作目錄換算出的編碼名稱。</p>
 
 <pre data-source="sources/agentic-engineer/20261014/skills/scripts/analyze-token-usage.mjs"><code>const TOP = Number(flag('--top', '12'));
 const projectOverride = flag('--project', null);</code></pre>
 
-<h3>它把 token 分成哪幾種</h3>
+<h3>token 的四種分類</h3>
 
-<p>這支工具最重要的設計，是不把「token 總數」當成一個數字看，而是拆成四種，各自有不同的成本權重。它同時也把主線（main thread）與 subagent（sidechain）的成本分開列。</p>
+<p>這支工具不把 token 當成一個總數看，而是拆成四種，各自帶一個成本權重。同時，主線（main thread）與 subagent（sidechain）的成本分開列。</p>
 
 <table>
 <thead>
@@ -71,7 +71,7 @@ const projectOverride = flag('--project', null);</code></pre>
 </tbody>
 </table>
 
-<p>這些權重定義在原始碼裡的一個常數（以下逐字引用）：</p>
+<p>這些權重定義在原始碼的一個常數（以下逐字引用）：</p>
 
 <pre data-source="sources/agentic-engineer/20261014/skills/scripts/analyze-token-usage.mjs"><code>// Approximate cost weights RELATIVE to one uncached input token (= 1.0).
 // These are the standard Anthropic cache/output multipliers; they are here to
@@ -79,9 +79,11 @@ const projectOverride = flag('--project', null);</code></pre>
 // dollar price (that depends on the model tier you ran on). Output dominates.
 const W = { input: 1.0, cacheWrite: 1.25, cacheRead: 0.1, output: 5.0 };</code></pre>
 
-<p>把這張表讀一遍：最貴的是 output，一份要價五倍；最便宜的是 cache-read，只要十分之一。這代表「token 總數很大」跟「錢花很多」是兩回事——一個塞滿快取讀取的 session，看起來可以很胖，帳單卻很輕。</p>
+<p>四個數字排在一起，落差就很清楚了：output 一份要價五倍，cache-read 只要十分之一。所以「token 總數很大」跟「錢花很多」是兩件事：一個塞滿快取讀取的 session 看起來很胖，帳單卻很輕。</p>
 
-<h3>輸出分成哪幾段</h3>
+<figure class="lesson-figure"><img src="./reading-the-token-bill-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>輸出的五個區塊</h3>
 
 <table>
 <thead>
@@ -96,7 +98,7 @@ const W = { input: 1.0, cacheWrite: 1.25, cacheRead: 0.1, output: 5.0 };</code><
 </tbody>
 </table>
 
-<p>其中最該先看的是 READ ME 那一段，它直接告訴你砍的優先順序（以下逐字引用）：</p>
+<p>READ ME 那一段直接印出砍的優先順序（以下逐字引用）：</p>
 
 <pre data-source="sources/agentic-engineer/20261014/skills/scripts/analyze-token-usage.mjs"><code>console.log(`\nREAD ME: ${cacheReadPct}% of raw tokens are cache reads (billed ~10% of a fresh token),`);
 console.log(`so the raw total overstates real cost. In cost-units, output generation is ~${outCostPct}% of the bill.`);
@@ -105,11 +107,11 @@ console.log(`cache reads are already cheap. Fewer interview rounds cuts output; 
 
 <h3>最小使用範例</h3>
 
-<p>最單純的用法，就是在專案目錄下直接跑它，看最新一次 session：</p>
+<p>最單純的用法，是在專案目錄下直接跑它，看最新一次 session：</p>
 
 <pre data-source="sources/agentic-engineer/20261014/skills/scripts/analyze-token-usage.mjs"><code>//   node scripts/analyze-token-usage.mjs                # newest session for THIS project</code></pre>
 
-<p>它會印出 TOKENS BY THREAD 那片，長得像這樣（欄位格式取自原始碼的 <code>row()</code> 函式）：</p>
+<p>它會印出 TOKENS BY THREAD 那一片，欄位格式定義在原始碼的 <code>row()</code> 函式（以下逐字引用）：</p>
 
 <pre data-source="sources/agentic-engineer/20261014/skills/scripts/analyze-token-usage.mjs"><code>function row(label, a) {
   const parts = [
@@ -128,7 +130,7 @@ console.log(`cache reads are already cheap. Fewer interview rounds cuts output; 
 <code>analyze-token-usage.mjs</code> 是一支唯讀的分析器，讀 Claude Code 的 session 檔，回答「token 花去哪了」。它把成本拆成 fresh input（1.0）、cache-write（1.25）、cache-read（0.1）、output（5.0）四種權重，並把主線與 subagent 分開列。輸出分成 TOKENS BY THREAD、READ ME、WEB、SUBAGENTS SPAWNED、HEAVIEST N TURNS 五段，其中 READ ME 直接告訴你該先砍 output 與 fresh input，因為 cache-read 本來就便宜。
 </blockquote>
 
-<p>工具只是把帳單打開，真正的問題是：看到帳單之後，你該改什麼？下一節把課程實際採用的三個修正列出來，用一張比較表與幾個判準，讓你在自己的 session 上當場決定該套用哪一個。</p>
+<p>往後查這支工具的細節，就回到上面的選項表、四種權重表與五個輸出區塊。至於工具跑完之後該怎麼做（看到帳單之後你該改什麼），下一節列出課程實際採用的三個修正，附一張比較表與幾個判準，讓你能在自己的 session 上當場決定要套用哪一個。前一節「建置帳單的真相」則解釋了這些浪費是怎麼產生的。</p>
 
 <div class="lesson-nav">
   <div><a href="./build-bill-more-tokens.html">← 上一步：建置帳單：workflow 反而更耗 token</a></div>
@@ -143,35 +145,30 @@ console.log(`cache reads are already cheap. Fewer interview rounds cuts output; 
   <button class="opt">統計整個 GitHub 專案的程式碼行數</button>
   <button class="opt">壓縮 session 讓 token 的用量變小</button>
 </div>
-
 <div class="quiz" data-question="這支工具對你的檔案系統做了什麼？" data-correct="1" data-explain="它是唯讀的，只讀 transcript，不寫入任何檔案，零依賴。">
   <button class="opt">會寫入一個新的 session 檔備份</button>
   <button class="opt">只讀取檔案，不寫入任何東西</button>
   <button class="opt">會把 transcript 上傳到雲端保存</button>
   <button class="opt">會刪除已經過期的 .jsonl 檔</button>
 </div>
-
 <div class="quiz" data-question="--top N 這個旗標控制什麼？它的預設值是多少？" data-correct="0" data-explain="它顯示最重的 N 個 turn，預設值為 12。">
   <button class="opt">最重的 N 個 turn，預設是 12</button>
   <button class="opt">最早的 N 個 turn，預設是 5</button>
   <button class="opt">前 N 個 subagent，預設是 3</button>
   <button class="opt">輸出限制成 N 行，預設是 80</button>
 </div>
-
 <div class="quiz" data-question="在成本權重裡，output 相對一份未快取輸入 token 是幾倍？" data-correct="3" data-explain="output 的權重是 5.0，是四種裡最貴的，所以工具叫你優先砍它。">
   <button class="opt">0.1 倍</button>
   <button class="opt">1.0 倍</button>
   <button class="opt">1.25 倍</button>
   <button class="opt">5.0 倍</button>
 </div>
-
 <div class="quiz" data-question="根據工具的說明，該優先砍哪一種 token？" data-correct="1" data-explain="排序依成本單位：先砍 output 與 fresh input，cache-read 本來就便宜。">
   <button class="opt">先砍 cache-read，因為它最貴</button>
   <button class="opt">先砍 output 與 fresh input</button>
   <button class="opt">先砍 cache-write，因為它獨佔</button>
   <button class="opt">先砍 subagent，因為它最花錢</button>
 </div>
-
 <div class="quiz" data-question="工具的輸出把成本分成主線（main thread）與哪一種？" data-correct="0" data-explain="它把主線與 subagent（sidechain）的成本分開列。">
   <button class="opt">subagent（sidechain）的成本</button>
   <button class="opt">瀏覽器端快取的資料成本</button>

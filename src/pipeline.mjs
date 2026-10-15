@@ -238,15 +238,30 @@ export async function generateEvolinkImage({ prompt, model, size, resolution, qu
   }
   throw new Error(`Evolink task ${task.id} timed out`);
 }
+// Native OpenAI image models (gpt-image / dall-e) always return inline base64
+// and reject an explicit `response_format`, whereas OpenAI-compatible relays
+// (e.g. Grok Imagine) return a private `url` that is unreachable from here
+// unless `response_format: 'b64_json'` is requested. So ask for `b64_json`
+// only for the non-native models; `IMAGE_RESPONSE_FORMAT` overrides the guess
+// (set it to `b64_json` to force inline bytes, or leave empty to send nothing).
+export function responseFormatFor(model, env = process.env) {
+  if (env.IMAGE_RESPONSE_FORMAT != null) {
+    const value = String(env.IMAGE_RESPONSE_FORMAT).trim();
+    return value || undefined;
+  }
+  return /^(gpt-image|dall-e|chatgpt-image)/i.test(String(model || '')) ? undefined : 'b64_json';
+}
 // OpenAI-compatible image generation is synchronous: one Images API call per
 // paragraph. Relay endpoints often return the bytes inline as base64 and a
 // private `url` that is unreachable from here, so prefer `b64_json`.
 export async function generateOpenAIImage({ prompt, model, size, quality,
   apiKey = process.env.IMAGE_API_KEY || process.env.EVOLINK_API_KEY,
   baseUrl = process.env.IMAGE_BASE_URL || process.env.EVOLINK_BASE_URL || 'https://api.openai.com',
+  responseFormat = responseFormatFor(model),
   fetchImpl = globalThis.fetch } = {}) {
   if (!apiKey) throw new Error('Set IMAGE_API_KEY (or EVOLINK_API_KEY)');
   const payload = { model, prompt, n: 1 };
+  if (responseFormat) payload.response_format = responseFormat;
   if (size) payload.size = size;
   if (quality) payload.quality = quality;
   const response = await fetchImpl(imagesGenerationsUrl(baseUrl), {

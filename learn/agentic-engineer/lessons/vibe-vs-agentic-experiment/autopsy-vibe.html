@@ -8,23 +8,25 @@
 </head>
 <body>
 
-<h1>驗屍 Vibe 版：四個架構級殺手</h1>
+<h1>驗屍 Vibe 版：四個架構層的殺手</h1>
 <p class="meta">Step 3/5 · A/B 實驗：Vibe Build vs Agentic Build</p>
 
 <h2>學習目標</h2>
-<p>從 vibe 版程式庫指出四個架構級殺手（請求路徑中的貴模型呼叫、沒有退避又吞錯的 TMDB 平行驗證、沒有交易的先刪後插、完全沒有測試與 migration），並說明「每一行單看都乾淨、失敗卻在架構層」是什麼意思。</p>
+<p>從 vibe 版的程式庫裡，指出四個架構層的殺手：請求路徑中的貴模型呼叫、沒有退避又吞錯的 TMDB 平行驗證、沒有交易的先刪後插、完全沒有測試與 migration。讀完你會知道「每一行單看都乾淨、失敗卻發生在架構層」這句話，具體指的是什麼。</p>
 
-<h2>前言：症狀看過了，現在看病因</h2>
+<h2>前言：症狀看過了，現在來看病因</h2>
 
-<p>上一節我們看到 vibe 版 feed 的症狀：開一次要 40 秒、三個分頁三個答案、每開一次都在燒錢。但症狀不是原因。同一種症狀可以來自很多地方，要真的修它，你得知道它是在哪一行被寫出來的。</p>
+<p>上一節我們看到了 vibe 版 feed 的症狀：開一次要 40 秒、三個分頁跑出三個答案、每開一次都在燒錢。</p>
 
-<p>這一節我們就把 vibe 版的程式庫打開，像一位資深審查者那樣讀它——不是讀「有沒有排版錯誤」，而是讀「這些壞掉的行為，各自住在哪個檔案、哪一行」。講師把找到的東西分成四個，直接叫它們「殺手」。我們一個一個看。</p>
+<p>但症狀不等於原因。同樣是「很慢」，可能是資料庫沒建索引，可能是某個貴的呼叫被放錯位置，也可能是每次都重新算一遍沒有快取。要真的把問題修掉，你必須能指出它是在哪個檔案、哪一行被寫出來的。</p>
+
+<p>這一節我們把 vibe 版的程式庫整個打開，用一位資深審查者的讀法來讀它。讀的重點不是「有沒有排版錯誤」或「變數命名好不好看」，而是「那些壞掉的行為，各自住在哪裡」。講師把找到的東西分成四個，直接稱它們為「殺手」。我們一個一個看。</p>
 
 <h2>殺手一：貴模型被放在請求路徑裡</h2>
 
-<p>第一個殺手在 <code>src/lib/engine.ts</code>，這是整個 App 的媒合引擎。它的設計很合理：Claude 先提出候選（片名、年份、一句話理由），回傳的一切都被當成<strong>未經驗證</strong>，一定要先過 <code>tmdb.ts</code> 驗證才能顯示。檔案最上面的註解把這個意圖寫得很清楚，而且還特別點出「保證是放在驗證層，不是放在 prompt 裡」——這其實是一個很好的想法。</p>
+<p>第一個殺手住在 <code>src/lib/engine.ts</code>，這是整個 App 的媒合引擎。它的設計理念其實很正確：Claude 負責提出候選（片名、年份、一句話理由），而它回傳的所有內容一律被視為<strong>未經驗證</strong>，必須先通過 <code>tmdb.ts</code> 的驗證才能顯示給使用者。檔案最上面的註解把這個意圖寫得清清楚楚，還特別點出「保證是放在驗證層，不是放在 prompt 裡」，這是一個很好的想法。</p>
 
-<pre data-source="sources/agentic-engineer/20261014/reel-vibe_coded/src/lib/engine.ts">/**
+<pre class="bad-code" data-source="sources/agentic-engineer/20261014/reel-vibe_coded/src/lib/engine.ts">/**
  * The Reel matching engine.
  *
  * Claude proposes candidates (title, year, one-line personal reason);
@@ -36,9 +38,9 @@
 
 const MODEL = "claude-opus-4-8";</pre>
 
-<p>問題出在第 16 行那個 <code>MODEL</code> 常數。它被硬編成一顆最貴的模型。而真正在生成 feed 的 <code>generateFeedCandidates</code>，用的就是這顆模型，再加上 16,000 的 token 上限與開啟「adaptive thinking」（讓模型自己決定要不要多想一輪）。單看這一段，沒有任何一行是錯的：變數命名清楚、結構乾淨、連註解都寫得很負責任。</p>
+<p>問題出在第 16 行的 <code>MODEL</code> 常數。它被硬編成一顆最貴的模型。而真正負責產生 feed 的 <code>generateFeedCandidates</code>，用的就是這顆模型，再加上 16,000 的 token 上限，以及開啟「adaptive thinking」（讓模型自己決定要不要多想一輪）。單看這一段程式碼，沒有任何一行是錯的：變數命名清楚、結構乾淨，連註解都寫得很負責任。</p>
 
-<pre data-source="sources/agentic-engineer/20261014/reel-vibe_coded/src/lib/engine.ts">export async function generateFeedCandidates(
+<pre class="bad-code" data-source="sources/agentic-engineer/20261014/reel-vibe_coded/src/lib/engine.ts">export async function generateFeedCandidates(
   profile: TasteProfile,
   exclude: string[],
   count = 18
@@ -47,59 +49,190 @@ const MODEL = "claude-opus-4-8";</pre>
     model: MODEL,
     max_tokens: 16000,
     thinking: { type: "adaptive" },
-    system: ENGINE_SYSTEM,</pre>
+    system: ENGINE_SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content: `Here is the user's taste profile: …`,
+      },
+    ],
+    output_config: { format: zodOutputFormat(CandidateSchema) },
+  });</pre>
 
-<p>要看到殺手，得把鏡頭拉遠。feed 頁面有一個 <code>useEffect</code>（大約在第 34 行），它在 component 掛載時就呼叫這個函式、而且整支檔案裡<strong>沒有任何快取</strong>。於是「整個 App 最貴的一次運算」被放在「每一次頁面載入」的路徑上，跑一次大約 35 分錢。</p>
+<p>要看到殺手，得把鏡頭拉遠一點。回到 feed 頁面，那裡有一個 <code>useEffect</code>（第 34 行），component 一掛載就呼叫這個函式。而整支檔案裡<strong>沒有任何快取</strong>——每開一次頁面，就再打一次這顆最貴的模型。</p>
 
-<p>這個 35 分錢的數字，下一節會看到它在規模上有多可怕。此刻先記住一件事：貴不是問題，「貴 × 每次都跑」才是。</p>
+<pre class="bad-code" data-source="sources/agentic-engineer/20261014/reel-vibe_coded/src/app/feed/page.tsx">const load = useCallback(async () => {
+  setLoading(true);
+  setError(null);
+  try {
+    const res = await fetch("/api/recommendations", { method: "POST" });
+    ...
+  } catch (e) {
+    setError(e instanceof Error ? e.message : "Could not load your feed");
+  } finally {
+    setLoading(false);
+  }
+}, [router]);
+
+useEffect(() => {
+  load();
+}, [load]);</pre>
+
+<p>於是「整個 App 最貴的一次運算」，被放進了「每一次頁面載入」的路徑上，跑一次大約 35 分錢。</p>
+
+<p>你可以把它想成：每次有人推開餐廳大門，廚房就從熬高湯開始重做一鍋。湯當然好喝，但大門一天被推開一百次，就是一百鍋湯。</p>
+
+<p>這個 35 分錢的數字，在規模上有多可怕，下一節會看到。此刻先記住一件事：<strong>貴不是問題，「貴 × 每次都跑」才是。</strong></p>
+
+<figure class="lesson-figure"><img src="./autopsy-vibe-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>殺手二：沒有退避、還會吞錯的平行驗證</h2>
 
-<p>第二個殺手在 <code>src/lib/tmdb.ts</code> 的 <code>validateCandidates</code>。它的工作是拿一批候選去 TMDB 驗證片名是否真實存在。做法是一個 <code>Promise.all</code>，把大約 24 個候選全部平行丟出去。</p>
+<p>第二個殺手在 <code>src/lib/tmdb.ts</code> 的 <code>validateCandidates</code>。它的工作是拿一批候選去 TMDB 驗證片名是否真實存在。做法是一個 <code>Promise.all</code>，把大約 24 個候選一次全部平行丟出去。</p>
 
-<p>三個毛病疊在一起。第一，沒有 rate limiter（速率限制），一次打這麼多請求出去，等於在挑釁對方的 API。第二，沒有 backoff（退避）也沒有 retries（重試）——對方一旦回「你太快了」，這裡不會等一下再試。第三，也是最陰的：它的 <code>catch</code> 區塊只是回傳 <code>null</code>。這代表一次被拒絕的驗證會<strong>無聲無息地消失</strong>。當 TMDB 開始推回請求時，你看到的不是錯誤，而是候選「變少了」——catch 區塊其實完全照著它被寫的樣子在工作。</p>
+<pre class="bad-code" data-source="sources/agentic-engineer/20261014/reel-vibe_coded/src/lib/tmdb.ts">export async function validateCandidates(
+  candidates: Candidate[]
+): Promise&lt;Movie[]&gt; {
+  const matches = await Promise.all(
+    candidates.map(async (c) =&gt; {
+      try {
+        const match = await matchCandidate(c);
+        return match ? toMovie(match, c.reason) : null;
+      } catch {
+        return null;
+      }
+    })
+  );
+  ...
+}</pre>
 
-<p>同一個檔案往上數到第 44 行，還有一個獨立的問題：API key 被當成 query string 參數串在請求 URL 上。這意味著這把 key 會出現在它到 TMDB 之間<strong>每一份 log 與每一個 proxy</strong> 裡。這跟架構無關，是單純的資安失誤，但同樣是「沒有人停下來檢查」的產物。</p>
+<p>這裡疊了三個毛病。</p>
+
+<p>第一，沒有 rate limiter（速率限制）。一次打這麼多請求出去，等於對著對方的 API 大吼大叫。</p>
+
+<p>第二，沒有 backoff（退避）也沒有 retries（重試）。對方一旦回你「你太快了」，這裡不會等一下、慢下來再試，而是直接往下走。</p>
+
+<p>第三，也是最陰的一個：它的 <code>catch</code> 區塊只是回傳 <code>null</code>。這代表一次被拒絕的驗證會<strong>無聲無息地消失</strong>。當 TMDB 開始推回請求時，你在畫面上看到的不是錯誤訊息，而是候選「變少了」。catch 區塊其實完全照著它被寫的樣子在工作，只是那個樣子本身就是問題。</p>
+
+<p>另外，同一個檔案往上數到第 44 行，還有一個獨立的問題：API key 被當成 query string 參數，直接串在請求的 URL 上。這代表這把 key 會出現在它到 TMDB 之間的<strong>每一份 log、每一個 proxy</strong> 裡。這跟架構無關，是單純的資安失誤，但同樣是「沒有人停下來檢查」的產物。</p>
+
+<pre class="bad-code" data-source="sources/agentic-engineer/20261014/reel-vibe_coded/src/lib/tmdb.ts">async function tmdbGet(path: string, params: Record&lt;string, string&gt;) {
+  const url = new URL(`${TMDB_BASE}${path}`);
+  url.searchParams.set("api_key", apiKey());
+  url.searchParams.set("include_adult", "false");
+  ...
+}</pre>
 
 <h2>殺手三：沒有交易的先刪後插</h2>
 
-<p>第三個殺手在 import 流程的 <code>route.ts</code>。第 35 行有一句註解，寫得理直氣壯：</p>
+<p>第三個殺手在匯入流程的 <code>route.ts</code>。第 35 行有一句註解，寫得理直氣壯：</p>
 
 <blockquote>
 Replace any previous import wholesale. The export is the source of truth.<br>
 （整批取代上一次的匯入。匯出檔才是真相來源。）
 </blockquote>
 
-<p>緊接著第 36 行，它真的把這個使用者先前的所有評分<strong>全部刪掉</strong>；然後第 45 到 48 行，手工迴圈處理 500 筆資料，逐一插入。問題是：<strong>沒有東西包住這串刪除與插入</strong>。它不是一個交易（transaction）。所以如果跑到一半、某一塊失敗了，刪除早就已經發生，而且沒有任何 rollback 可以把資料還原——使用者的評分就這麼不見了。</p>
+<p>緊接著第 36 行，它真的把這個使用者先前的所有評分<strong>全部刪掉</strong>；然後在第 45 到 48 行，用一個手工迴圈處理 500 筆資料，逐一插入。</p>
 
-<p>更耐人尋味的是，agent 甚至寫了一句註解，精準描述了它正在做的事。它知道自己在做什麼，但沒有人檢查這是不是可接受的，因為<strong>從頭到尾沒有人在做「決定」這個動作</strong>。</p>
+<pre class="bad-code" data-source="sources/agentic-engineer/20261014/reel-vibe_coded/src/app/api/import/route.ts">// Replace any previous import wholesale — the export is the source of truth.
+await supabase.from("ratings").delete().eq("user_id", user.id);
+const rows = ratings.map((r) =&gt; ({
+  user_id: user.id,
+  title: r.title,
+  year: r.year,
+  rating: r.rating,
+  source: r.source,
+}));
+// Supabase caps request sizes; insert in chunks.
+for (let i = 0; i &lt; rows.length; i += 500) {
+  const { error } = await supabase.from("ratings").insert(rows.slice(i, i + 500));
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+}</pre>
 
-<h2>殺手四：找不到的東西——測試與 migration</h2>
+<p>問題是：<strong>沒有任何東西包住這串刪除與插入</strong>。它不是一個交易（transaction）。所以只要跑到一半、某一塊失敗了，刪除早就已經發生，而且沒有 rollback 可以把資料還原，使用者的評分就這麼不見了。就像搬家時先把舊家具全扔了，才發現新家具的卡車根本沒出發。</p>
 
-<p>第四個殺手最特別：它不在任何檔案裡，而在「缺少的東西」裡。試著在整個 repo 找一個測試——沒有，一個都沒有。再找一個 migration 資料夾——也沒有，Supabase 底下只有 schema，85 行手寫 SQL，沒有版控的遷移紀錄。</p>
+<p>更耐人尋味的是，agent 甚至寫了一句註解，精準描述了它正在做的事。它知道自己在做什麼，但沒有人去檢查「這樣做可不可以接受」，因為<strong>從頭到尾沒有人在做「決定」這個動作</strong>。</p>
 
-<p>而偏偏被漏掉的，正是最該被測的那種程式碼：Letterboxd 的 CSV 解析、片名的模糊比對。這些都是純函式（pure function），邊界情況多到數不完，卻一個測試都沒有。CSV 裡多一個逗號、片名大小寫不同、別名對不上——每一種都可能出錯，而沒有任何一個被護住。</p>
+<figure class="lesson-figure"><img src="./autopsy-vibe-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>殺手四：找不到的東西，測試與 migration</h2>
+
+<p>第四個殺手最特別：它不住在任何檔案裡，而是住在「缺少的東西」裡。</p>
+
+<p>試著在整個 repo 找一個測試，沒有，一個都沒有。再找一個 migration 資料夾，也沒有。Supabase 底下只有 schema，85 行手寫 SQL，沒有版控的遷移紀錄。</p>
+
+<pre class="bad-code" data-source="sources/agentic-engineer/20261014/reel-vibe_coded/supabase/schema.sql">-- Reel database schema
+-- Run this in the Supabase SQL editor (or `supabase db push`) once per project.
+
+create table if not exists public.ratings (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  title      text not null,
+  year       int,
+  rating     numeric(2, 1),
+  source     text not null check (source in ('letterboxd', 'imdb')),
+  created_at timestamptz not null default now()
+);</pre>
+
+<p>上面這份 <code>schema.sql</code> 就是全部的資料庫定義。它不是一連串有版號、可回溯的 migration，而是一份「執行一次就長這樣」的靜態檔案。</p>
+
+<p>而偏偏被漏掉的，正是最該被測試的那種程式碼：Letterboxd 的 CSV 解析、片名的模糊比對。這些都是純函式（pure function），輸入固定、沒有外部依賴，最好測；同時邊界情況也多到數不完。CSV 裡多一個逗號、片名大小寫不同、別名對不上，每一種都可能出錯，而沒有一種被護住。</p>
+
+<pre class="bad-code" data-source="sources/agentic-engineer/20261014/reel-vibe_coded/src/lib/csv.ts">export function parseRatingsCsv(csvText: string): ImportedRating[] {
+  const parsed = Papa.parse&lt;Record&lt;string, string&gt;&gt;(csvText.trim(), {
+    header: true,
+    skipEmptyLines: true,
+  });
+
+  const rows = parsed.data;
+  if (rows.length === 0) return [];
+
+  const headers = Object.keys(rows[0]).map((h) =&gt; h.trim().toLowerCase());
+
+  if (headers.includes("letterboxd uri") || (headers.includes("name") &amp;&amp; headers.includes("year"))) {
+    return parseLetterboxd(rows);
+  }
+  if (headers.includes("const") || headers.includes("your rating")) {
+    return parseImdb(rows);
+  }
+
+  throw new Error("Unrecognized CSV format. …");
+}</pre>
 
 <h2>每一行都乾淨，失敗卻在架構層</h2>
 
 <p>把四個殺手攤在一起，會浮現一個很重要的結論：<strong>不是 AI 寫了爛程式</strong>。你隨便挑十行程式碼單獨來看，它們都是乾淨、可讀、命名有意義的。逐行來看，這份程式庫是好的。</p>
 
-<p>但失敗全部發生在<strong>架構層</strong>：那個貴的呼叫被放在哪裡、併發負載下會怎樣、跑到一半失敗會怎樣、使用者是 40 筆評分還是 400 筆。這些不是「某一行寫對寫錯」的問題，它們是<strong>大決定</strong>。而在這個 build 裡，每一個大決定都被一個「為了讓 demo 跑起來」的程式碼產生器，隱含地做掉了。</p>
+<table>
+<thead>
+<tr><th>看的角度</th><th>看到什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>逐行來看</td><td>乾淨、可讀、命名有意義、註解負責</td></tr>
+<tr><td>架構層來看</td><td>貴的呼叫被放在哪裡、併發負載下會怎樣、跑到一半失敗會怎樣、使用者是 40 筆還是 400 筆評分</td></tr>
+</tbody>
+</table>
+
+<p>右邊那一欄，都不是「某一行寫對寫錯」的問題。它們是<strong>大決定</strong>。而在這個 build 裡，每一個大決定都被一個「為了讓 demo 跑起來」的程式碼產生器，用預設值默默填掉了。</p>
 
 <blockquote>
 Vibe coding doesn't produce bad lines. It produces undecided architecture.<br>
 （vibe coding 不會產出壞的單行，它產出的是「沒有被決定過的架構」。）
 </blockquote>
 
-<p>這句是整個模組的中心。它的意思是：你看到的問題，不是打字打錯了，而是根本沒有人坐下來決定「這顆貴模型該放在哪」「匯入可不可以丟資料」。程式碼只是把那些沒做的決定，用預設值填滿而已。</p>
+<p>這句話是整個模組的中心。它的意思是：你看到的問題，不是有人打字打錯了，而是根本沒有人坐下來決定「這顆貴模型該放在哪」「匯入可不可以丟掉使用者的資料」。程式碼只是把那些沒做的決定，用預設值填滿而已。</p>
+
+<figure class="lesson-figure"><img src="./autopsy-vibe-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 <h2>小結</h2>
 
 <blockquote>
-Vibe 版的四個架構級殺手：一、最貴的模型被放在 feed 的請求路徑上、每次載入都跑約 35 分錢；二、TMDB 驗證用沒有速率限制、沒有退避重試的平行請求，catch 又直接吞錯讓候選消失，API key 還串在 URL 上；三、匯入是沒有交易的先刪後插，中途失敗就丟資料、無法回滾；四、整個 repo 沒有任何測試、也沒有 migration，只有 85 行手寫 SQL。但重點是：每一行程式單看都乾淨，失敗全在架構層——那些「大決定」沒有人做過。這就是「vibe coding 不產出壞的單行，它產出未決的架構」。
+Vibe 版的四個架構級殺手：一、最貴的模型被放在 feed 的請求路徑上、每次載入都跑約 35 分錢；二、TMDB 驗證用沒有速率限制、沒有退避重試的平行請求，catch 又直接吞錯讓候選消失，API key 還串在 URL 上；三、匯入是沒有交易的先刪後插，中途失敗就丟資料、無法回滾；四、整個 repo 沒有任何測試、也沒有 migration，只有 85 行手寫 SQL。但重點是：每一行程式單看都乾淨，失敗全在架構層，那些「大決定」沒有人做過。這就是「vibe coding 不產出壞的單行，它產出未決的架構」。
 </blockquote>
 
-<p>看到這裡你應該很不舒服：這些都是明擺著的工程失誤，為什麼會發生？答案不是「AI 不夠聰明」，而是「流程裡沒有讓人做決定的位置」。下一節我們換一個做法——在同一個 prompt 上，看看一個把人放進決策迴圈的流程，長什麼樣子。</p>
+<p>看到這裡你應該覺得很不舒服：這些都是明擺著的工程失誤，為什麼會發生？答案不是「AI 不夠聰明」，而是「流程裡沒有讓人做決定的位置」。這四個殺手要掛在你腦中的位置是：它們全都不是 coding 問題，而是 decision 問題。</p>
+
+<p>下一節我們換一個做法，在同一個 prompt 上，看看一個把人放進決策迴圈的流程，長什麼樣子。</p>
 
 <div class="lesson-nav">
   <div><a href="./watch-it-break.html">← 上一步：打開 Feed 就露餡：40 秒、老虎機與沒人做過的決定</a></div>
@@ -114,35 +247,30 @@ Vibe 版的四個架構級殺手：一、最貴的模型被放在 feed 的請求
   <button class="opt">它把模型輸出直接存進了資料庫</button>
   <button class="opt">它無法解析模型回傳的 JSON 格式</button>
 </div>
-
 <div class="quiz" data-question="TMDB 驗證的 catch 只回傳 null，造成什麼後果？" data-correct="3" data-explain="被拒絕的驗證無聲消失，候選會悄悄變少，錯誤不會被看見。">
   <button class="opt">會讓整個伺服器直接當機重開</button>
   <button class="opt">會把錯誤訊息塞進使用者畫面</button>
   <button class="opt">會自動改用另一顆模型來重試</button>
   <button class="opt">被拒絕的驗證無聲消失、候選變少</button>
 </div>
-
 <div class="quiz" data-question="匯入流程「先刪後插」最大的風險是什麼？" data-correct="0" data-explain="刪除與插入沒有包在交易裡，中途失敗後刪除已發生且無法回滾。">
   <button class="opt">中途失敗後資料已被刪且無法回滾</button>
   <button class="opt">匯入速度會比原本慢上非常多倍</button>
   <button class="opt">會把別的使用者的評分也一起刪掉</button>
   <button class="opt">資料庫會因為檔案過大而無法開啟</button>
 </div>
-
 <div class="quiz" data-question="「殺手四」為什麼說它不在檔案裡？" data-correct="2" data-explain="它是「缺少的東西」：整個 repo 沒有任何測試，也沒有 migration 資料夾。">
   <button class="opt">它被寫在瀏覽器看不到的伺服器上</button>
   <button class="opt">它被加密藏在資料庫的一個欄位裡</button>
   <button class="opt">它是缺少的測試與 migration</button>
   <button class="opt">它被放在作者沒有上傳的私人分支裡</button>
 </div>
-
 <div class="quiz" data-question="「單行乾淨、失敗在架構層」是什麼意思？" data-correct="1" data-explain="任何十行單看都乾淨，但貴呼叫放哪、併發與中途失敗等大決定沒人做過。">
   <button class="opt">程式碼充滿語法錯誤只是排版整齊</button>
   <button class="opt">單行都乾淨，但大決定沒人做過</button>
   <button class="opt">程式碼太短所以看不出真正的問題</button>
   <button class="opt">架構很好但每一行都寫得很隨便</button>
 </div>
-
 <div class="quiz" data-question="「undecided architecture」的意思是？" data-correct="3" data-explain="問題不是寫錯行，而是那些架構級的大決定從來沒有被人 Decide 過。">
   <button class="opt">程式碼使用了太多種不同的框架</button>
   <button class="opt">架構圖畫得太複雜導致沒人看懂</button>

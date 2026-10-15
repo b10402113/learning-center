@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { generateArticle, normalizeImagePlan, parseImagePlanMarkers, insertImages, generateEvolinkImage, generateOpenAIImage, resolveImageProvider, textContent, MAX_IMAGES, responseError, outputDirName, slugifyTopic } from './pipeline.mjs';
+import { generateArticle, normalizeImagePlan, parseImagePlanMarkers, insertImages, generateEvolinkImage, generateOpenAIImage, resolveImageProvider, responseFormatFor, textContent, MAX_IMAGES, responseError, outputDirName, slugifyTopic } from './pipeline.mjs';
 
 test('slugifyTopic strips path and control characters', () => {
   assert.equal(slugifyTopic('a/b\\c:d*e?f|g<h>i"j'), 'a-b-c-d-e-f-g-h-i-j');
@@ -238,6 +238,25 @@ test('openai-compatible image: captures the provider error on HTTP failure', asy
   await assert.rejects(
     generateOpenAIImage({ prompt: 'x', model: 'm', apiKey: 'k', baseUrl: 'https://kvkks.top/v1', fetchImpl }),
     error => error.status === 401 && error.code === 'invalid_api_key' && /Invalid API key/.test(error.message));
+});
+test('openai-compatible image: requests b64_json for non-native models (Grok)', async () => {
+  const calls = [];
+  const png = Buffer.from('89504e470d0a1a0a', 'hex');
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ body: init.body });
+    return { ok: true, status: 200, json: async () => ({ data: [{ b64_json: png.toString('base64') }] }) };
+  };
+  const bytes = await generateOpenAIImage({ prompt: 'x', model: 'grok-imagine-image-2.0',
+    apiKey: 'k', baseUrl: 'https://kvkks.top/v1', fetchImpl });
+  assert.deepEqual(bytes, png);
+  assert.deepEqual(JSON.parse(calls[0].body), { model: 'grok-imagine-image-2.0', prompt: 'x', n: 1, response_format: 'b64_json' });
+});
+test('responseFormatFor: native OpenAI models omit it, others request b64_json, env overrides', () => {
+  assert.equal(responseFormatFor('gpt-image-2.5-sunburst', {}), undefined);
+  assert.equal(responseFormatFor('dall-e-3', {}), undefined);
+  assert.equal(responseFormatFor('grok-imagine-image-2.0', {}), 'b64_json');
+  assert.equal(responseFormatFor('grok-imagine-image-2.0', { IMAGE_RESPONSE_FORMAT: '' }), undefined);
+  assert.equal(responseFormatFor('gpt-image-2.5-sunburst', { IMAGE_RESPONSE_FORMAT: 'b64_json' }), 'b64_json');
 });
 test('resolveImageProvider: explicit wins, otherwise infer from host', () => {
   assert.equal(resolveImageProvider({ EVOLINK_BASE_URL: 'https://api.evolink.ai' }), 'evolink');
