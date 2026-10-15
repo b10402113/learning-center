@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Always-on 檔案怎麼載入：CLAUDE.md、AGENTS.md 與 import</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Always-on 檔案怎麼載入：CLAUDE.md、AGENTS.md 與 import</h1>
+<p class="meta">Step 3/5 · Context Engineering</p>
+
+<h2>學習目標</h2>
+<p>做完這一節，你能說出 exploration（也許）與 always-on（保證）兩種規則送達方式的差別，知道 Claude Code 開機只讀 <code>CLAUDE.md</code>、<code>AGENTS.md</code> 要靠 import 才進得來，並用 <code>/context</code> 與 <code>/memory</code> 驗證這個 session 到底載入了哪些檔。</p>
+
+<h2>前言：規則寫了，它就一定會看到嗎？</h2>
+
+<p>「我把規則寫進檔案了，agent 應該會照做吧？」這是最多人會踩空的地方。規則寫下來是一回事，規則有沒有<strong>到達</strong> agent，是完全不同的另一回事。而大家平常測試這件事的方式，大多不可靠——跑一次結果對了，就當作有效。</p>
+
+<p>前面兩節把 always-on context 當成概念在談。這一節把它變成可以動手驗證的機制：做完之後，你要能<strong>百分之百確定</strong>「我這個 session 載入了哪些規則檔」，而不是靠印象、靠猜。</p>
+
+<p>前置條件很簡單：一個 Claude Code 環境，加一個你自己的專案。課堂上是用「開一個新 repo、在裡面建一個新的 Next.js app」來示範，建 app 的過程本身不重要，重點是接下來規則檔怎麼被建立、怎麼被載入。</p>
+
+<h2>規則抵達 agent 的兩條路</h2>
+
+<p>規則住在一個檔案裡，但要「到達」agent，有兩條完全不同的路。開發者不斷把這兩條搞混，所以先把界線畫清楚。</p>
+
+<p><strong>第一條路是探索（exploration）。</strong>你給 agent 一個任務，它會在專案裡東看西看，想弄清楚現在有什麼。看的過程中，它<strong>可能</strong>會打開那個放規則的檔，然後遵守它。</p>
+
+<p>請把注意力放在「可能」這兩個字。它會不會打開那個檔，取決於這次任務是什麼、什麼東西看起來相關，以及它願不願意多翻一下。有時候它會找到你特地留給它的規則，有時候它就這樣走過去。這條路你沒辦法指望。</p>
+
+<p><strong>第二條路是 always-on context。</strong>這是每個 session 一開始、在你打任何字之前、不管它有沒有去探索，就已經載入進去的規則。它不靠 agent 好奇，它就是每次都在。</p>
+
+<figure class="lesson-figure"><img src="./how-always-on-loads-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+
+<blockquote>
+這就是「希望 agent 找到一條規則」和「保證它有管道拿到這條規則」之間的差別。
+</blockquote>
+
+<h2>動手：從建立專案到驗證載入</h2>
+
+<p>下面照著做。每一步都標了「做了什麼」和「你應該看到什麼」。若某一步的結果和預期不符，先停下來確認，不要繼續往下堆。</p>
+
+<ol>
+<li>
+<p><strong>開一個新專案 repo，在裡面建立一個新的 Next.js app。</strong>這只是給你一個乾淨的落地場景，讓你親眼看到規則檔怎麼被建立、又是怎麼被載入 context 的。（若你已經有專案，直接用它也可以。）</p>
+</li>
+
+<li>
+<p><strong>把專案規則放進一個檔。</strong>這裡有一個會讓人意外的事實：<strong>Claude Code 啟動時只讀一個檔——<code>CLAUDE.md</code>，不是 <code>AGENTS.md</code>。</strong></p>
+<p>這很反直覺，因為 <code>AGENTS.md</code> 是大多數其他工具原生就會讀的共享檔，自然是你想放專案規則的地方。但 Claude Code 自己不會讀 <code>AGENTS.md</code>，而且<strong>沒有 fallback</strong>——它不會因為找不到 <code>CLAUDE.md</code> 就退而讀 <code>AGENTS.md</code>。</p>
+</li>
+
+<li>
+<p><strong>用 import 把 <code>AGENTS.md</code> 接進 <code>CLAUDE.md</code>。</strong>在 <code>CLAUDE.md</code> 裡寫下面這一行：</p>
+<pre data-provenance="derived"><code>@AGENTS.md</code></pre>
+<p>這一行就是 import。它等於告訴 Claude Code：載入 always-on context 時，把這個檔案一起拉進迴圈。有了它，<code>AGENTS.md</code> 才會進到保證通道裡。</p>
+</li>
+
+<li>
+<p><strong>驗證到底載入了什麼。</strong>不用猜，工具本身有指令可以看。</p>
+<ul>
+<li>跑 <code>/context</code>：它顯示這個 session 確切載入了什麼。先忽略 token 數字，看「memory files」那一行。</li>
+<li>跑 <code>/memory</code>：它會直接打開並<strong>列出檔名</strong>。你會看到 project memory（在 <code>CLAUDE.md</code> 底下）、你的 user memory，以及 <code>AGENTS.md</code>——而 <code>AGENTS.md</code> 之所以在清單上，正是因為它是被 import 進來的。</li>
+</ul>
+<p>你應該看到 <code>AGENTS.md</code> 確實出現在 memory files 裡。這個「出現」，就是整節課的重點。</p>
+</li>
+
+<li>
+<p><strong>反證它真的在做事。</strong>把 <code>CLAUDE.md</code> 裡那行 import 拿掉，重新載入 Claude Code 的視窗，再跑一次 <code>/context</code>。</p>
+<p>你應該看到 memory files 直接變成「零」。雖然 <code>AGENTS.md</code> 還躺在專案裡、裡面還寫著規則，Claude Code 現在卻完全不載入它。它從保證通道掉到了「也許」——只有當 agent 探索時剛好打開它，那些規則才進得來。</p>
+
+<figure class="lesson-figure"><img src="./how-always-on-loads-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<p>提醒：拿掉 import 只是為了反證，這個動作可以還原，但你要清楚知道後果，就是上面那句「規則掉出保證通道」。</p>
+</li>
+
+<li>
+<p><strong>把它加回來。</strong>既然我們要那些規則是「保證」的，就把 import 寫回 <code>CLAUDE.md</code>。</p>
+<p>但請記住一件事：<strong>這不是免費的。</strong>一旦接回來，檔案裡的每一行都會在每個 session 開頭被載入，而你上一節學過——你要為每一行、每一次付費。所以要<strong>保持它小</strong>，只放那幾條 agent 絕對不能搞錯的規則。那些只在專案某個部分才重要的規則，不該待在 always-on 裡，而該靠近它被使用的地方，或放在一個只在相關時才被載入的檔案。</p>
+</li>
+</ol>
+
+<h2>做完長什麼樣</h2>
+
+<p>你應該能打開終端機，跑 <code>/context</code> 或 <code>/memory</code>，然後<strong>確切說出</strong>這個 session 載入了哪幾個檔。而且你親眼看過這個因果：import 在，<code>AGENTS.md</code> 就是保證；import 不在，它就掉成「也許」。</p>
+
+<p>原理的部分——為什麼 always-on 必須那麼小、一條規則該放哪裡——上一節已經講過，這裡不重複。這一節只交給你機制與兩個可靠的指令。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+規則有兩條路到達 agent：exploration 是「也許」，它可能逛到、可能走過去；always-on context 是「保證」，在你打字前就載入。而保證是靠 import 拿到的——Claude Code 啟動時只讀 <code>CLAUDE.md</code>，不是 <code>AGENTS.md</code>，所以要在 <code>CLAUDE.md</code> 裡用 <code>@AGENTS.md</code> 把它拉進來，沒有 fallback。要知道到底載入了什麼，別猜：跑 <code>/context</code> 看 memory files，跑 <code>/memory</code> 看檔名。
+</blockquote>
+
+<p>現在你知道檔案怎麼載入，也知道它每次都要付費。下一個問題就變成判斷題了：到底哪些規則「配得上」這個每次都付的位置？下一節給你一個判準，還有一個很多人踩過的坑。</p>
+
+<div class="lesson-nav">
+  <div><a href="./three-types-of-context.html">← 上一步：三種 Context：Always-on、On-demand、Reference</a></div>
+  <div><a href="./what-earns-always-on.html">下一步：什麼才配放進 Always-on？一個判準與九份文件的教訓 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="exploration 與 always-on context 最根本的差別是什麼？" data-correct="1" data-explain="exploration 是「也許」，always-on 是「保證」，差在能不能指望它。">
+  <button class="opt">一個比較快，一個比較慢</button>
+  <button class="opt">一個是也許，一個是保證</button>
+  <button class="opt">一個免費，一個要收月費</button>
+  <button class="opt">一個讀檔案，一個讀網路</button>
+</div>
+<div class="quiz" data-question="Claude Code 在啟動時，只讀哪一個檔當作 always-on context？" data-correct="0" data-explain="它只讀 CLAUDE.md，而且沒有 fallback；AGENTS.md 要靠 import 帶進來。">
+  <button class="opt">只讀 CLAUDE.md 這一個檔</button>
+  <button class="opt">只讀 AGENTS.md 這一個檔</button>
+  <button class="opt">兩個檔都會自動讀進來</button>
+  <button class="opt">兩個檔都不會自動讀進來</button>
+</div>
+<div class="quiz" data-question="為什麼要用 @AGENTS.md 這一行？" data-correct="3" data-explain="import 告訴 Claude Code 載入 always-on context 時，把 AGENTS.md 也拉進迴圈。">
+  <button class="opt">用來刪除專案裡多餘的設定檔</button>
+  <button class="opt">用來把 AGENTS.md 加密保護起來</button>
+  <button class="opt">用來把規則搬到另一個新的 repo</button>
+  <button class="opt">用來讓 Claude Code 把它拉進來</button>
+</div>
+<div class="quiz" data-question="要確認這個 session 到底載入了哪些檔，該用哪個指令？" data-correct="2" data-explain="/context 顯示載入了什麼，/memory 直接列出 memory 檔名，兩者都不用猜。">
+  <button class="opt">用 git log 看最近的提交紀錄</button>
+  <button class="opt">用 npm run build 重新建置專案</button>
+  <button class="opt">用 /context 或 /memory 去看</button>
+  <button class="opt">用 grep 搜尋整個磁碟的檔案</button>
+</div>
+<div class="quiz" data-question="把 import 拿掉並重新載入後，會發生什麼事？" data-correct="1" data-explain="AGENTS.md 會從保證通道掉到「也許」，只有 agent 探索時剛好打開才進得來。">
+  <button class="opt">AGENTS.md 會被自動刪除乾淨</button>
+  <button class="opt">它會從保證掉成探索的也許</button>
+  <button class="opt">它反而會被更積極地載入</button>
+  <button class="opt">CLAUDE.md 會自動接手讀它</button>
+</div>
+<div class="quiz" data-question="import 接回來、規則回到保證通道後，為什麼仍要把它保持很小？" data-correct="0" data-explain="因為它會在每個 session 開頭被載入，每一行都是每次都要付的成本。">
+  <button class="opt">因為每一行每個 session 都要付</button>
+  <button class="opt">因為太長的檔案無法存進 Git</button>
+  <button class="opt">因為現在的模型讀不懂長檔案</button>
+  <button class="opt">因為工具限制只能放五行文字</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · Context Engineering：Always-on／On-demand／Reference · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

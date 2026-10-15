@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Subagent：把重讀取隔離到自己的 context</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Subagent：把重讀取隔離到自己的 context</h1>
+<p class="meta">Step 1/4 · Subagents 與模型選擇</p>
+
+<h2>學習目標</h2>
+<p>說出 subagent 為什麼要用自己的 context、它替你省下什麼，以及哪一種任務才值得派一個出去。</p>
+
+<h2>前言：查到一半，它怎麼就變笨了？</h2>
+
+<p>你可能遇過這種情況。你請 agent 做一件需要翻很多檔案的事，例如「把整個 API 層的錯誤處理方式整理給我」。它一開始很順，grep 一次、開一個檔、再開一個檔，回覆也還算準。</p>
+
+<p>可是愈到後面，它的回答開始飄：忘記前面讀過什麼、把兩個函式的行為混在一起，甚至回頭做出你早就講過不要的選擇。</p>
+
+<p>你沒換模型，prompt 也沒改，為什麼品質會下滑？因為那些它讀過的檔案、跑過的搜尋，全部堆進了同一個 context window，把桌子塞滿了。而桌子一滿，它的表現就會開始掉。</p>
+
+<p>這一節要介紹的 subagent，就是為了處理這件事而存在的四大原語之一。它的做法很簡單：把大量閱讀與搜尋搬到另一個地方去做，只把結論帶回來。搞懂它，你就能讓主線的 context 一直保持清爽，也才判斷得出什麼時候該派它、什麼時候派了反而多餘。</p>
+
+<h2>問題：所有讀取都堆在同一張桌子上</h2>
+
+<p>先回到上一課的結論：agent 只知道 context window 裡的東西。它讀的每一個檔案、跑的每一次搜尋，都會留在那個視窗裡。即使那份檔案已經用不上了，也不會自動消失。任務做完之前，它們全都佔著位子。</p>
+
+<p>這件事在「重讀取」的任務上特別致命。假設你只想要一個簡短的答案，但為了拿到它，agent 得先讀二十個檔案。等它終於拼出答案，那二十個檔案也已經全部躺在它的 window 裡了，接下來的每一輪對話都得背著它們。</p>
+
+<p>你要的只是最後那幾句結論，卻付了整條探索路徑的成本。而且視窗愈滿，它就愈容易做出糊塗的判斷——前面那個「愈查愈笨」的現象，就是從這裡來的。</p>
+
+<figure class="lesson-figure"><img src="./subagents-own-context-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>換句話說，你真正需要的是「結果」，卻被迫連「過程」一起吞下去。</p>
+
+<h2>解法：讓它在自己的地盤做完重活</h2>
+
+<p><strong>subagent（子代理）</strong>是一個有自己獨立 context 的工人。你派它去做那些需要大量閱讀與搜尋的粗活，它在自己的空間裡把過程全部做完，最後只把你要的結果交回主線。</p>
+
+<p>所有中間讀過的檔案、跑過的搜尋，都留在它那邊，不會進到你眼前的 window。就像你把一份資料整理工作外包出去，對方在自己的辦公室翻完整箱文件，寄回來的只有那一頁摘要。</p>
+
+<p>課程裡有一個現場示範，把這件事講得非常清楚。先在終端機的 Claude session 裡跑 <code>/context</code>，會看到當下的分解：系統提示約占 1%、系統工具約占 2%，剩下 93% 是可用空間，也就是只花了 4%。記住這個「4% 已用」。</p>
+
+<p>接著故意丟一個範圍很大的問題：「look through this project and summarize how error handling is done across the API routes.」這種問題正是那種需要到處翻找的類型。</p>
+
+<p>一送出去，主 agent 並沒有自己開始一個檔一個檔地開。它派了一個 subagent 出去，畫面上會出現一列寫著 <code>Explore</code> 的項目，那就是在獨立 context 裡工作的子代理，跟我們正在看的主線完全分開。它在那邊讀了多少檔、搜了多少次，都不會落到主線的 window。</p>
+
+<p>結果回來時，只有幾句話——它找到的錯誤處理模式摘要，而不是它為了得到這個結論所讀的那二十個檔案。你再跑一次 <code>/context</code>，會發現「已用」幾乎沒動。</p>
+
+<p>所有重活都發生在別的地方，而且就留在那裡。這就是 subagent 的第一個價值：重活在它的空間裡做完，主線只收結果，保持乾淨。</p>
+
+<figure class="lesson-figure"><img src="./subagents-own-context-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第二個好處：可以同時派好幾個</h2>
+
+<p>subagent 帶來的不只是乾淨，還有速度。因為每個 agent 都在自己的空間裡跑，主 agent 可以同時把好幾個 subagent 派出去，各做一件互相獨立的事。原本要一步一步排隊做完的大任務，現在可以平行進行。</p>
+
+<p>你可以把它想成「平行的程式執行」：不是把每件事接在同一條線上跑，而是拆開來同時跑，整體自然更快完成。</p>
+
+<p>這也預告了後面 workflow 為什麼能維持速度——很多時候是把互不依賴的探索同時丟出去，各自在各自的桌子上忙。</p>
+
+<h2>但它不是免費的，也不是萬用解答</h2>
+
+<p>講到這裡很容易變成「什麼都派 subagent」。這正是要小心的地方：開一個 subagent 是有額外成本的。多一層派發、多一次來回，任務小的時候，這個成本划不來。</p>
+
+<p>所以判斷的標準是兩個問題：</p>
+
+<ol>
+<li><strong>這件工作重不重？</strong>也就是有大量的閱讀或搜尋，而你只在乎最後的結果，不在乎中間那條路。</li>
+<li><strong>這件工作能不能拆成互不依賴的幾塊？</strong>彼此之間不需要等對方，就能各自進行。</li>
+</ol>
+
+<p>只要有任何一個答案是「是」，subagent 就是很適合的選擇。兩種情況對照起來大概是這樣：</p>
+
+<table>
+<thead>
+<tr><th>情況</th><th>該不該派 subagent</th></tr>
+</thead>
+<tbody>
+<tr><td>要讀很多檔、搜很多次，但你只要結論</td><td>該派，重活留在它那邊</td></tr>
+<tr><td>能拆成幾塊互不依賴的工作</td><td>該派，可以同時派好幾個</td></tr>
+<tr><td>主 agent 讀一兩個檔就能回答的小問題</td><td>別派，多繞一步沒有幫助</td></tr>
+</tbody>
+</table>
+
+<p>反過來說，如果任務又小又精確，那派一個 subagent 出去只是多繞一步，對結果沒有任何幫助。</p>
+
+<figure class="lesson-figure"><img src="./subagents-own-context-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>有趣的是，這跟上一課判斷 MCP 用的是同一句話。你問的不該是「我這裡能不能用一個 subagent」，而是「這個任務是不是真的需要一個屬於它自己的空間」。問對了問題，才不會養了一個你根本不需要的幫手。</p>
+
+<p>順帶提一件事，先放在心裡就好：課程後面的 agentic engineering workflow，正是靠這個觀念保持快速與乾淨的——重活都發生在主線旁邊。等你走到那裡，會一眼認出來。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+subagent 是一個有自己獨立 context 的工人：它把大量閱讀與搜尋在自己的空間裡做完，只把結果交回主線，所以主線的 window 不會被重讀取塞滿。因為每個 agent 各有空間，還能同時派好幾個，平行加速。但它不是免費的，也不總是答案——當工作夠重、而你只要結果，或工作能拆成互不依賴的幾塊時，才值得派它出去。判斷的方式跟 MCP 一樣：問「這個任務需不需要自己的空間」，而不是「我能不能用」。
+</blockquote>
+
+<p>知道了「什麼時候該用」，下一個問題自然是「怎麼把它做出來」。下一節會帶你在 Claude Code 裡實際建立一個 subagent：用 <code>/agents</code> 引導，或親手寫一個小小的 markdown 檔。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./configuring-a-subagent.html">下一步：設定並使用一個 subagent →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="subagent 最主要解決的是什麼問題？" data-correct="1" data-explain="它把大量閱讀與搜尋移到自己的 context，不讓這些內容塞滿主線的 window。">
+  <button class="opt">模型的參數太小，記不住太多事</button>
+  <button class="opt">重讀取堆滿主線的 context window</button>
+  <button class="opt">專案太大，沒辦法建立搜尋索引</button>
+  <button class="opt">工具沒有權限去讀取專案檔案</button>
+</div>
+<div class="quiz" data-question="subagent 做完一堆閱讀之後，主線實際拿到的是什麼？" data-correct="2" data-explain="它只把結果交回主線，中間讀過的檔案與搜尋都不會進來。">
+  <button class="opt">它讀過的所有檔案的完整內容</button>
+  <button class="opt">它跑過的每一次搜尋的原始紀錄</button>
+  <button class="opt">它整理出來的簡短結論與結果</button>
+  <button class="opt">一份可以離線瀏覽的專案快照</button>
+</div>
+<div class="quiz" data-question="下列哪一種任務最適合派一個 subagent？" data-correct="0" data-explain="需要大量閱讀、但你只想要結論時，正是 subagent 的主場。">
+  <button class="opt">要翻很多檔、但你只要最後的結論</button>
+  <button class="opt">讀一兩個檔就能回答的小問題</button>
+  <button class="opt">要你親手確認每一步的敏感操作</button>
+  <button class="opt">需要保留完整閱讀過程的稽核任務</button>
+</div>
+<div class="quiz" data-question="一個讀一兩個檔案就能答的小問題，該怎麼處理？" data-correct="3" data-explain="任務太小又精確時，派 subagent 只是多繞一步，沒有幫助。">
+  <button class="opt">還是派 subagent，讓它更專心處理</button>
+  <button class="opt">派三個 subagent 互相對照答案</button>
+  <button class="opt">先派 subagent 建立專案地圖再說</button>
+  <button class="opt">讓主 agent 自己讀，不必多繞一步</button>
+</div>
+<div class="quiz" data-question="工作能拆成互不依賴的幾塊時，subagent 額外給你什麼好處？" data-correct="1" data-explain="各自在自己的空間跑，可以同時進行，整體更快完成。">
+  <button class="opt">它會把結果自動寫回版本控制</button>
+  <button class="opt">可以同時派出去，平行加速完成</button>
+  <button class="opt">它會替你把整份專案重寫一遍</button>
+  <button class="opt">它會強制降低模型的使用成本</button>
+</div>
+<div class="quiz" data-question="判斷要不要用 subagent 的問句，跟哪一個原語用的是同一套邏輯？" data-correct="2" data-explain="兩者都在問「這個任務是否真的需要自己的空間」，而不是「我能不能用」。">
+  <button class="opt">skills，看有沒有現成的程序可用</button>
+  <button class="opt">tools，看模型能不能呼叫它</button>
+  <button class="opt">MCP，看任務是否需要專屬空間</button>
+  <button class="opt">context，看視窗還剩下多少空間</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · Subagents 與模型選擇 · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

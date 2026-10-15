@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>檔案大小就是 context 成本</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>檔案大小就是 context 成本</h1>
+<p class="meta">Step 2/4 · 大檔案會把不相關的程式碼一起拖進 window</p>
+
+<h2>學習目標</h2>
+<p>解釋為什麼大檔案會把不相關的程式碼一起拖進 window、形成自找的 context rot，並說出拆成小檔案如何讓 agent 只載入真正需要的那一小塊。</p>
+
+<h2>前言：只是改一個函式，為什麼要賠上整份檔案？</h2>
+
+<p>上一節我們定下了一個前提：程式碼本身就是 context，而 context 有一筆帳要付，其中一半取決於「讀得多貴」。</p>
+
+<p>這一節來看這筆帳裡最直觀、也最容易動手調整的一項：檔案的大小。你可能覺得檔案長一點短一點沒什麼差，反正邏輯都寫在裡面就好。但對 agent 來說，差別很大，而且理由非常具體。</p>
+
+<p>想像一個情境：你只要它改一個很小的函式，把某段金額計算多乘一個稅率。結果它為了改這幾行，得先把一整份六百行的檔案讀進來——上面一堆跟這次任務無關的 import，旁邊還夾著七八個完全用不到的函式。它並不需要那些東西，卻得整個吞下去。</p>
+
+<p>這一節就講清楚兩件事：這種情況為什麼會發生，以及你可以怎麼讓它少吞一點。</p>
+
+<h2>讀取是昂貴的，而且經常多讀</h2>
+
+<p>先回想 token 那一節的結論：讀取很貴。檔案被打開就是整份載入，不會因為你只需要其中十行，就只收十行的錢。三百行的檔案就算只用到三行，付出的代價還是接近三百行。</p>
+
+<p>更麻煩的是，agent 打開檔案時往往沒辦法精準切出它要的那一段。它讀進來的通常是整份檔案，或者它想改的那一段被埋在一個很大的檔案裡，得連同前後文一起撈出來才看得懂。於是那些 import、上下夾著的不相干函式、整個檔案的脈絡，全都跟著進來了。</p>
+
+<p>所以結論很清楚：檔案越大，一次讀取被迫帶上的「無關程式碼」就越多。這些無關程式碼一樣佔 window、一樣付錢，卻對這次任務毫無幫助。</p>
+
+<figure class="lesson-figure"><img src="./file-size-as-context-cost-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小檔案讓它只載入真正需要的那一塊</h2>
+
+<p>反過來說，當專案被切成許多小而聚焦的檔案，agent 就能載入「接近它真正需要的那一小塊」。同樣的邏輯、同樣的功能，只是放法不同，工作起來的成本就完全不一樣——而且這個差別在每一次 session 都會重演。</p>
+
+<p>課程用一句很直接的話收斂這件事：大檔案讓你付出的代價，往往遠超過那個改動本身應得的份量。你要改的明明只是一個小地方，卻得把整份大檔一起扛進來。</p>
+
+<p>下面這個對照，把「同樣的程式碼、不同的切法」具體畫出來（示意結構，非課程原始碼）：</p>
+
+<pre data-provenance="derived"><code>// 切法 A：一個大檔
+lib/utils.ts        (約 600 行)
+  ├─ formatCurrency()
+  ├─ parseDate()
+  ├─ validateEmail()
+  ├─ slugify()
+  └─ ... 還有十幾個不相關的函式
+
+// 切法 B：拆成聚焦的小檔
+lib/format/currency.ts   → formatCurrency()
+lib/format/date.ts       → parseDate()
+lib/format/slug.ts       → slugify()
+lib/validation/email.ts  → validateEmail()</code></pre>
+
+<p>在切法 A 裡，agent 要改 <code>formatCurrency()</code>，就得把整個 <code>utils.ts</code> 連同十幾個用不到的函式一起讀進來。在切法 B 裡，它只需要打開 <code>lib/format/currency.ts</code>，幾乎就只載到它要的那個函式。同樣是改一行金額計算，切法 B 的 window 乾淨得多。</p>
+
+<figure class="lesson-figure"><img src="./file-size-as-context-cost-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>這才是「檔案要小」真正的原因</h2>
+
+<p>很多人以為「檔案不要太大」只是老工程師的美感潔癖，或者是為了人類好讀。但對 agent 來說，理由硬得多：大檔案會把本次任務根本不需要的程式碼一起拖進來。</p>
+
+<p>這正是前面講過的 context rot 壓力——而且是你自己造成的。context rot 指的是，window 裡塞進越多與當前任務無關的內容，模型就越容易被拉離現在要做的事。那些不需要的程式碼不會安靜地躺在角落，它們會佔位、會干擾，讓模型更容易看錯、更容易跑偏。</p>
+
+<p>所以「把檔案切小」不是在追求漂亮，而是在替每一次任務減少這種自找的干擾。</p>
+
+<blockquote>
+「檔案要小」的原因不是大檔案很醜，而是大檔案會把本次任務從來不需要的程式碼一起拖進 window。那是自找的 context rot：你親手把雜訊塞進它的工作檯，再期待它專心。
+</blockquote>
+
+<h2>小心反過來切過頭</h2>
+
+<p>這裡要提醒一個反直覺的地方：把檔案切小，不等於切得越碎越好、檔案越多越好。如果切得太散，agent 為了理解一個完整的功能，反而得把五、六個小檔案一個一個找出來、一個一個打開，搜尋與跳躍的成本又回來了。</p>
+
+<p>真正的目標不是「檔案最小」，而是「檔案聚焦」——讓它打開一個檔案時，裡面的東西大致都是為了同一件事，不會拖著一堆無關的程式碼。切到多大算剛好，取決於這個單位本身是不是一個完整、可理解的東西。</p>
+
+<p>這個判斷會在下一節，以及最後一節的檢查問句裡，變成你手上可以直接用的準則。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+讀取很貴，而且打開檔案往往會多讀——import、周圍的函式、整份檔案的前後文。所以大檔案會讓 agent「只改一個小函式」卻賠上一大堆無關的程式碼，這是自找的 context rot。把專案切成小而聚焦的檔案，它就能載入接近真正需要的那一塊。但切記：目標是「聚焦」，不是「越小越好」，切過頭反而多出搜尋與跳躍的成本。
+</blockquote>
+
+<p>檔案大小處理的是「讀進來的東西」，但成本還有另一半沒解決：agent 是怎麼「找到」那個檔案的？下一節會看到，命名與位置如何直接決定它要搜幾次、開錯幾個檔案，而 colocation 又怎麼把一場尋寶遊戲變成一趟單次讀取。</p>
+
+<div class="lesson-nav">
+  <div><a href="./code-is-context.html">← 上一步：你的程式碼就是 context</a></div>
+  <div><a href="./naming-and-colocation.html">下一步：可預測命名與 colocation：把尋寶變成一次讀取 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼檔案大小會直接影響 agent 的成本？" data-correct="1" data-explain="打開一個檔案就是整份載入，越大的檔案，被迫帶上的無關程式碼就越多。">
+  <button class="opt">因為大檔案編譯起來特別慢</button>
+  <button class="opt">因為整份檔案都會被讀進去</button>
+  <button class="opt">因為大檔案會佔掉硬碟空間</button>
+  <button class="opt">因為大檔案會讓測試跑更久</button>
+</div>
+<div class="quiz" data-question="改一個六百行檔案裡的小函式，agent 為何要賠上一堆無關程式碼？" data-correct="2" data-explain="它讀的是整份檔案，或想要的那段被埋在大檔裡，得連同前後文一起撈出來。">
+  <button class="opt">因為它想偷看其他函式的寫法</button>
+  <button class="opt">因為它習慣先把整個專案讀完</button>
+  <button class="opt">因為那段被埋在大檔裡不好切</button>
+  <button class="opt">因為它會自動快取整份專案</button>
+</div>
+<div class="quiz" data-question="「大檔案造成的是自找的 context rot」，這裡的「自找」指什麼？" data-correct="0" data-explain="那些無關程式碼是你自己的檔案結構造成的，不是 agent 亂讀來的。">
+  <button class="opt">是你自己的檔案結構造成的</button>
+  <button class="opt">是模型自己選錯檔案造成的</button>
+  <button class="opt">是工具預設行為造成的</button>
+  <button class="opt">是網路延遲造成的</button>
+</div>
+<div class="quiz" data-question="把專案切成小而聚焦的檔案，主要是為了什麼？" data-correct="3" data-explain="讓 agent 載入接近真正需要的那一小塊，而不是整份無關的程式碼。">
+  <button class="opt">讓檔案數量看起來比較整齊</button>
+  <button class="opt">讓每一行程式都跑得更快</button>
+  <button class="opt">讓版本控制紀錄比較乾淨</button>
+  <button class="opt">讓它只載入真正需要的那塊</button>
+</div>
+<div class="quiz" data-question="這一節提醒「切小」要小心的反例是什麼？" data-correct="1" data-explain="切得太碎會讓 agent 為了拼出完整功能，又多出搜尋與跳躍的成本。">
+  <button class="opt">切太小會讓程式無法編譯通過</button>
+  <button class="opt">切太碎反而增加搜尋與跳躍成本</button>
+  <button class="opt">切太小會讓檔案名稱難以命名</button>
+  <button class="opt">切太碎會讓專案無法部署上線</button>
+</div>
+<div class="quiz" data-question="這一節主張「檔案要小」的真正目標是什麼？" data-correct="2" data-explain="目標是讓一個檔案聚焦在同一件事，而不是追求檔案越小越好。">
+  <button class="opt">每個檔案都壓到十行以內</button>
+  <button class="opt">每個功能拆到最多三個檔案</button>
+  <button class="opt">讓檔案聚焦在同一件事情</button>
+  <button class="opt">讓每個檔案都只放一個變數</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · 程式結構即 Context · Step 2/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>可預測命名與 colocation：把尋寶變成一次讀取</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>可預測命名與 colocation：把尋寶變成一次讀取</h1>
+<p class="meta">Step 3/4 · 命名砍掉搜尋成本，colocation 砍掉跳躍成本</p>
+
+<h2>學習目標</h2>
+<p>用「<code>auth.ts</code> 對上 <code>utils2.ts</code>／<code>handleThing</code>」與「一個鄰居對上五個資料夾」兩組對比，看清楚可預測命名如何砍掉搜尋成本，colocation 如何把一場尋寶變成一次讀取。</p>
+
+<h2>前言：找到了沒？比讀得貴不貴更早發生的問題</h2>
+
+<p>上一節處理的是「讀得多貴」，做法是把檔案切得聚焦，讓 agent 不要在一次讀取裡夾帶一堆無關的程式碼。但那只是事情的一半。</p>
+
+<p>別忘了，在它開始讀任何一個檔案之前，還有更早的一步：它得先<strong>找到</strong>那個檔案。step 1 就提過，「找得多累」是另一種獨立的成本。就算每個檔案都切得乾淨漂亮，只要它找錯對象，前面省下的功夫就全部白費。</p>
+
+<p>為什麼找路對 agent 特別貴？因為它手上沒有你腦中那張「這個專案大概怎麼運作」的地圖。前面幾節講過，agent 沒有索引、沒有 embeddings、也沒有預先畫好的結構圖，它能依靠的只有搜尋和開檔。所以「東西好不好找」對它不是體感問題，而是直接換算成一次一次的工具呼叫、一個一個被打開的檔案，全都記在帳上。這一節要看的就是兩件事：命名怎麼決定搜尋成本，colocation 怎麼決定它要跑幾個地方。</p>
+
+<h2>可預測的命名與位置，直接砍掉搜尋</h2>
+
+<p>因為 agent 沒有索引，當它需要某個東西時，唯一的路徑就是搜尋，然後打開檔案來確認。於是決定成本的問題變得很單純：這個東西，有多難找？</p>
+
+<p>課程用了一組非常傳神的對比。假設你的驗證（auth）邏輯放在一個叫 <code>auth.ts</code> 的檔案裡，agent 通常一次搜尋就命中，打開一個檔案就找到答案。但同樣的邏輯，如果被塞進一個叫 <code>utils2.ts</code> 的檔案、藏在一個叫 <code>handleThing</code> 的函式底下，情況就完全不同：它得搜得更廣，打開好幾個看起來像的結果，而每一個錯的檔案都要先付一次開啟的代價，才發現找錯地方，最後才跌跌撞撞落到對的位置。</p>
+
+<figure class="lesson-figure"><img src="./naming-and-colocation-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>最關鍵的一句在這裡：這些位置，你早就知道了。你心裡很清楚 auth 在哪，但 agent 不知道，它只能靠搜尋，一個一個把路「買」出來。你替它省下的每一次搜尋，都是實實在在省下的成本。</p>
+
+<blockquote>
+可預測的命名與位置，對 agent 來說不是風格偏好。它們真正的差別是：一次便宜的讀取，對上一堆昂貴的錯誤猜測——而且 agent 每次要找東西時，都會把這筆帳重付一遍。
+</blockquote>
+
+<p>這件事一點都不花俏。名字就講清楚這個東西是什麼，位置就放在「直覺上該看的地方，恰好就是正確的地方」。回報是 agent 能把 context 花在做正事上，而不是花在找路。</p>
+
+<h2>colocation：讓它讀一個鄰居，而不是跑五個地方</h2>
+
+<p>第三個結構選擇，講的是「距離」。當一個功能的所有零件都住在一起，agent 在同一個地方就能把整個功能讀完。但零件一旦散落在專案各處，它就得一個個去蒐集，而每一趟移動都是一次新的搜尋、一次新的開檔。</p>
+
+<p>用課程的例子：如果所有跟「建立訂單（create order）」有關的東西都集中在同一個區域——資料模型、處理邏輯、驗證——agent 在處理這個功能時，只要讀進一個「鄰居」，就能掌握整個來龍去脈。但如果這些零件分散在五個相距很遠的資料夾裡，它就得讀五個鄰居，而且每個鄰居旁邊還住著跟訂單無關的程式碼，它一樣得照單全收，然後把這堆雜訊一路拖到任務結束。</p>
+
+<p>下面把「一個鄰居」和「五個資料夾」的差別畫出來（示意結構，非課程原始碼）：</p>
+
+<pre data-provenance="derived"><code>// 散落各處：讀五個鄰居，夾帶四倍無關程式碼
+src/models/order.ts
+src/handlers/orderHandler.ts
+src/validation/orderRules.ts
+src/serializers/orderDto.ts
+src/constants/orderStatus.ts
+
+// colocated：一個鄰居，一次讀完
+src/features/order/
+  ├─ model.ts
+  ├─ handler.ts
+  ├─ validation.ts
+  └─ status.ts</code></pre>
+
+<p>在散落版裡，agent 為了理解「建立訂單」，得逛遍五個資料夾，而每個資料夾裡還住著跟訂單無關的東西。在 colocated 版裡，它打開 <code>src/features/order/</code> 這一個鄰居，整個功能的零件就攤在眼前。同一組零件，差別只在放法，但要跑的距離、要打開的檔案數、要承受的雜訊，差了一大截。</p>
+
+<figure class="lesson-figure"><img src="./naming-and-colocation-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<blockquote>
+會一起改動的東西，就該住在一起。對 agent 來說，colocation 把一場東奔西跑的尋寶，壓縮成一趟單次讀取。
+</blockquote>
+
+<h2>這兩個槓桿其實是同一件事</h2>
+
+<p>命名與 colocation 看起來是兩招，骨子裡是同一件事：它們都在降低「找路」的成本。命名讓「一次搜尋就命中正確檔案」變成可能，colocation 則讓「命中之後還要四處蒐集分散的零件」這個步驟直接消失。兩者合起來，就是把 agent 每次進來的搜尋與跳躍壓到最低。</p>
+
+<p>它們也和上一節互補：檔案大小管的是「讀進來之後夾帶多少雜訊」，命名與 colocation 管的是「找到它之前要跑多遠」。三件事一起做，才算把「結構即 context 成本」完整處理掉。</p>
+
+<figure class="lesson-figure"><img src="./naming-and-colocation-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+agent 沒有索引，找不到東西就得付搜尋與開檔的成本。可預測的命名與位置讓它一次命中正確的檔案（<code>auth.ts</code> 一次搜尋就中，<code>utils2.ts</code> 的 <code>handleThing</code> 則逼它多搜、多開錯檔）；colocation 則讓一個功能的零件住在一起，把「跑五個資料夾」變成一趟讀取。這兩個槓桿指向同一件事：把找路的成本壓到最低。
+</blockquote>
+
+<p>到這裡，三個結構選擇——檔案大小、可預測命名、colocation——都講完了。最後一節會把三件事收成一個心態，並給你一句可以當場用的檢查問句：面對任何一個結構提案，你要怎麼判斷它值不值得接受？</p>
+
+<div class="lesson-nav">
+  <div><a href="./file-size-as-context-cost.html">← 上一步：檔案大小就是 context 成本</a></div>
+  <div><a href="./structure-as-standing-cost.html">下一步：結構是每次 session 都在付的固定成本 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="agent 找一個檔案的成本，主要由什麼決定？" data-correct="1" data-explain="它沒有索引，只能搜尋再開檔，所以東西有多難找，直接決定成本。">
+  <button class="opt">這個檔案在硬碟裡排得多深</button>
+  <button class="opt">這個東西到底有多難找</button>
+  <button class="opt">這個檔案上一次被讀的時間</button>
+  <button class="opt">這個檔案是不是用 UTF-8 編碼</button>
+</div>
+<div class="quiz" data-question="為什麼 auth.ts 對 agent 比 utils2.ts／handleThing 友善？" data-correct="3" data-explain="auth.ts 通常一次搜尋就命中；utils2.ts 藏在 handleThing 底下，逼它多搜、多開錯檔。">
+  <button class="opt">因為 auth.ts 的檔案比較小一點</button>
+  <button class="opt">因為 auth.ts 會自動被快取起來</button>
+  <button class="opt">因為 utils2.ts 的語法比較舊</button>
+  <button class="opt">因為它一次搜尋就能命中</button>
+</div>
+<div class="quiz" data-question="「你早就知道 auth 在哪，但 agent 得把路買出來」是什麼意思？" data-correct="0" data-explain="位置你清楚，但 agent 沒有你腦中的地圖，只能靠搜尋與開檔自己找。">
+  <button class="opt">它沒有你腦中的那張地圖</button>
+  <button class="opt">它讀不到你寫在註解裡的提示</button>
+  <button class="opt">它需要你每次重新上傳專案</button>
+  <button class="opt">它的搜尋功能其實是壞掉的</button>
+</div>
+<div class="quiz" data-question="colocation 想解決的是哪一種成本？" data-correct="2" data-explain="它讓一個功能的零件住在一起，省下「跑好幾個地方蒐集零件」的跳躍成本。">
+  <button class="opt">檔案讀進來時夾帶太多程式碼</button>
+  <button class="opt">程式在執行時的記憶體佔用量</button>
+  <button class="opt">為了蒐集零件而東奔西跑的成本</button>
+  <button class="opt">把程式碼編譯成檔案的等待時間</button>
+</div>
+<div class="quiz" data-question="當一個功能的零件散落在五個資料夾，agent 會發生什麼事？" data-correct="1" data-explain="它得讀五個鄰居，每個鄰居旁邊還夾著無關程式碼，並把雜訊帶到任務結束。">
+  <button class="opt">它會拒絕處理這個功能，要求你先整理</button>
+  <button class="opt">它會讀五個鄰居並帶上無關雜訊</button>
+  <button class="opt">它會自動把這些檔案搬到同一個資料夾</button>
+  <button class="opt">它會把這個功能的成本降到最低</button>
+</div>
+<div class="quiz" data-question="命名與 colocation 這兩個槓桿，共同想達成的目標是什麼？" data-correct="3" data-explain="兩者都在降低「找路」的成本，只是一個管搜尋，一個管跳躍。">
+  <button class="opt">讓程式執行的速度變得更快</button>
+  <button class="opt">讓檔案的行數自動變得更少</button>
+  <button class="opt">讓人類閱讀起來更有條理</button>
+  <button class="opt">把它找路的成本壓到最低</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · 程式結構即 Context · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
