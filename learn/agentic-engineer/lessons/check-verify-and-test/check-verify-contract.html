@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>check verify 讀什麼：verify.md 合約與四種判定</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>check verify 讀什麼：verify.md 合約與四種判定</h1>
+<p class="meta">Step 1/4 · 實跑 check verify 與 test</p>
+
+<h2>學習目標</h2>
+<p>說出 <code>check verify</code> 從 <code>/develop</code> 留下的 <code>verify.md</code> 拿到驗收合約，每個驗收條件（<code>AC-N</code>）只會得到 met／specced but missing／specced but not applied／blocked 四種結果之一，而且沒有證據就不打勾。</p>
+
+<h2>前言：它憑什麼說一個功能通過了？</h2>
+
+<p>上一節我們把「證明」分成兩種：<code>check verify</code> 回答「這個功能今天真的能跑嗎」，<code>test</code> 回答「以後每次改動，它還能不能跑」。順序是先 verify、後 test。但你可能接著會想：<code>check verify</code> 到底是憑什麼蓋章的？它會把整個 App 打開、四處點一點，然後給你一句「看起來沒問題」嗎？</p>
+
+<p>不是。它動手之前會先讀一份別人寫好的合約，然後逐條照著合約去驗。這份合約叫 <code>verify.md</code>，不是 AI 在跑的當下臨時發明的，而是 <code>/develop</code> 在開發這個功能時就一起留下的。這一節要做的事，就是認出這份合約從哪裡來、它長什麼樣子、每一條驗收條件最後會被蓋上哪一種章，以及那條最硬的原則：沒有證據，就不打勾。</p>
+
+<h2><code>/check</code> 有兩個模式，先分清楚</h2>
+
+<p><code>/check</code> 底下其實掛著兩個模式，做的事完全不同。<code>verify</code> 是執行期的證明：它把真的 App 跑起來，看這個變更實際運作的樣子，用來確認「功能真的存在、而且符合 spec」。<code>review</code> 是另一回事，它把這份 diff 交給一個沒寫過這段程式的模型做資深審查，把發現依嚴重程度排序。兩個模式都不會改你的程式：<code>verify</code> 把失敗指向 <code>/debug</code> 或 <code>/develop</code>，<code>review</code> 只回報問題，交給你去修。</p>
+
+<p>這一節只談 <code>verify</code>。它有個定位很好記：它專門補上「測試是綠的」和「功能真的能動」之間那道落差。通過的測試只能證明「作者想到要測的那些東西」是對的，卻證明不了「這個功能真的存在」；<code>verify</code> 補的正是這一塊。</p>
+
+<h2>合約從哪來：<code>/develop</code> 留下的 <code>verify.md</code></h2>
+
+<p><code>/check verify</code> 做的第一件事，是找出這個功能對應的 spec，然後把它旁邊的 <code>verify.md</code> 讀進來。這份檔案是 <code>/develop</code> 動工時就寫好的，它把每個驗收條件（<code>AC-N</code>）連到一個可觀察的行為。換句話說，spec 定義「什麼叫做完成」，而 <code>verify.md</code> 把每一條完成條件翻譯成一兩個可以真的動手做的事。</p>
+
+<p>這份 checklist 的骨架大致長這樣：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/modes/verify.md#step-0b-load-the-spec-contract-if-a-governing-spec-exists"># Verify: &lt;feature&gt; · spec NNNN
+## UI / manual
+- [ ] &lt;action&gt; → &lt;expected&gt;   → AC-N
+## Commands
+- [ ] `&lt;command&gt;` → &lt;expected&gt; → AC-N
+## Acceptance-criteria coverage
+- AC-1 … · AC-2 … · …</pre>
+
+<p><code>## UI / manual</code> 放的是要人在畫面上操作的步驟，<code>## Commands</code> 放的是要跑某個指令的步驟，最後的 <code>## Acceptance-criteria coverage</code> 則把 <code>AC-1</code>、<code>AC-2</code>⋯⋯一條條列出來對帳。你會注意到每個步驟後面都掛著一個 <code>→ AC-N</code>，這就是它為什麼能逐條回報：每一條驗收條件，都對應到你剛剛跑的某個步驟。</p>
+
+<figure class="lesson-figure"><img src="./check-verify-contract-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>如果這個功能沒有對應的 spec（例如只是個沒有記錄的小改動），它會略過合約這一步，單純照觀察到的行為來驗。但只要有一份 governing spec，這份 checklist 就是它的範圍——而且它不會只挑有改動的檔案來看，因為「spec 有要求、卻根本沒被建」的那種漏，正是它要抓的。</p>
+
+<h2>四種判定：每一條 AC 只會拿到一個</h2>
+
+<p>跑完之後，<code>/check verify</code> 不會只給一句「感覺還行」，而是對每一條 <code>AC-N</code> 和每一個 spec 點名的表面（頁面、路由、資料表、migration）給出四種判定之一：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/modes/verify.md#step-4b-conformance-verdict-only-when-a-spec-contract-was-loaded-in-step-0b">- met ✅: the check passed / the surface exists and behaves as specced.
+- specced but missing 🚫: specced but no implementation at all; never built, nothing to exercise. Name the exact spec item and the fix, e.g. "the spec requires `/auth/verify-email`, page not found (no route, no file); build it before this is done."
+- specced but not applied ⚠️: the code exists but its runtime check fails. Classic case: a written but un applied migration, e.g. "Migration `0007_add_verified_at.sql` is committed but the column isn't in the live schema; run the migration."
+- blocked ⚠️: couldn't be exercised (missing data/creds/env); say what's needed. Not applied is a confirmed runtime failure; blocked is unknown.</pre>
+
+<p>其中 <code>specced but missing</code> 和 <code>specced but not applied</code> 最容易混在一起。missing 是「根本沒蓋」：spec 要求一個頁面，但專案裡連檔案都沒有，這是範圍被漏掉（scope miss）。not applied 是「蓋好了，但沒生效」：程式碼就躺在那裡，只是實際跑起來的檢查失敗，最典型的例子是一個已經寫好、卻還沒套用的 migration——檔案 committed 了，但 live schema 裡就是沒有那個欄位（wiring miss）。兩者都會讓功能過不了，但修法完全不同：missing 要交給 <code>/develop</code> 去建，not applied 要你先把 migration 跑起來。</p>
+
+<figure class="lesson-figure"><img src="./check-verify-contract-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>至於 <code>blocked</code>，它不是「通過」，而是「我沒辦法驗」——欠缺資料、憑證或環境，所以這條沒被真的測到。它和 not applied 的差別在於：not applied 是一次確認過的執行期失敗，blocked 是狀態未知。</p>
+
+<h2>鐵律：沒有證據，就不打勾</h2>
+
+<p>這個 skill 存在的目的，是要「跑給你看」，而不是「讀程式碼推理看看」。所以它有一條寫得很死的規則：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/modes/verify.md#step-4c-the-evidence-gate-a-verdict-you-cannot-fabricate">1. **No evidence, no ✅.** A behavior is `met` only if you can cite the ledger entry from Step 3 that proves it: the command and its output, the URL and what rendered, the screenshot path, the query and its result. Cite it inline in the report. If you cannot cite it, the behavior is `blocked`, not `met`.
+2. **Never started, never PASS.** If you did not actually launch and exercise the app in this run, you may not emit PASS or ✅ for anything. Report `blocked` for every behavior, say plainly that nothing was exercised and why, and stop.</pre>
+
+<p>翻成白話：就算程式碼讀起來完全正確、測試全部綠燈，只要沒有真的把 App 跑起來、沒有留下可以引用的證據，一條都不能打勾。原因很簡單：綠燈的測試只證明「作者想到要測的那些東西」是對的，它證明不了「這個功能真的存在」。spec 要求的一個表面如果根本沒被建，或一條 migration 沒被套用，測試再怎麼綠也看不到。這也是為什麼一條沒套用的 migration，可以讓一個測試全綠的功能照樣過不了。</p>
+
+<p>在 demo 裡可以清楚看到這個原則怎麼運作。跑 <code>check verify data model</code> 時，它回報「一條 spec 檢查沒照文件跑、七條 smoke test 斷言裡有一條失敗」，其餘每一條都是對照一個真的 Supabase 資料庫拿到的證據，最後建議用 <code>debug data model</code> 把那兩個問題修掉再重跑。另一輪 <code>check verify core review loop</code> 的結果則是十五條行為裡九條 met、一條確認是真 bug、三條 blocked、一條因為需要 Vercel 部署而沒跑。注意那個 blocked：當下工具不夠，它就誠實說「沒驗到」，不會硬湊一個綠色給你。</p>
+
+<h2>為什麼同一份合約，換台機器結果會不一樣</h2>
+
+<p>上一個例子裡，為什麼會有那麼多條 blocked？因為判定結果有一部分取決於你給這個 skill 多少工具。有 browser 自動化 MCP，它才能真的點進畫面看；有 database MCP，才能直接對 live schema 查那條 migration 到底套用了沒。少了這些，原本可以判 met 的行為就只能退回 blocked。所以同一份合約、同一個功能，在不同環境跑出來的把握程度就是不一樣——工具開得多，能下的判斷就愈多，能留下的證據也愈多。</p>
+
+<figure class="lesson-figure"><img src="./check-verify-contract-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/check verify</code> 動手之前會先讀 <code>/develop</code> 留下的 <code>verify.md</code> 合約：那是一份把 spec 每條驗收條件（<code>AC-N</code>）連到可觀察行為的 checklist。它對每條 AC 與每個 spec 表面只給四種判定：met、specced but missing（沒建）、specced but not applied（建了卻沒生效）、blocked（沒工具可驗）。它的鐵律是「沒有證據就不打勾」——測試全綠、程式碼看起來正確，都不算證據；一條沒套用的 migration 就足以讓整個功能過不了。
+</blockquote>
+
+<p>認出合約與四種判定之後，下一節要把這條指令真的跑一次：看它從哪裡讀合約、怎麼把真的 App 開起來、留下的證據長什麼樣，以及報告出現 FAIL 或 BLOCKED 時，該把失敗分流到 <code>/debug</code> 還是 <code>/develop</code>。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./run-check-verify.html">下一步：跑一次 check verify：在真 App 上對驗收條件找真 bug →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="這份驗收合約 verify.md 主要是誰留下的？" data-correct="0" data-explain="／develop 在開發這個功能時就在 spec 旁寫好了這份 checklist。">
+  <button class="opt">develop 在開發這個功能時就留下的</button>
+  <button class="opt">scope 在規劃階段隨手整理出來的</button>
+  <button class="opt">check 每次執行時在現場臨時生成的</button>
+  <button class="opt">test 在寫單元測試時自動同步過去的</button>
+</div>
+<div class="quiz" data-question="specced but missing 與 specced but not applied 差在哪？" data-correct="0" data-explain="missing 是根本沒建，not applied 是建了卻在執行期沒生效。">
+  <button class="opt">前者根本沒建，後者建了但沒生效</button>
+  <button class="opt">前者執行期沒生效，後者根本沒被建</button>
+  <button class="opt">前者是工具不足，後者是確認過的失敗</button>
+  <button class="opt">前者會被放行，後者才讓功能不通過</button>
+</div>
+<div class="quiz" data-question="一條已經寫好、卻還沒套用的 migration，最可能被蓋上哪個判定？" data-correct="2" data-explain="程式碼在、但對 live schema 的檢查失敗，就是 specced but not applied。">
+  <button class="opt">met</button>
+  <button class="opt">blocked</button>
+  <button class="opt">specced but not applied</button>
+  <button class="opt">specced but missing</button>
+</div>
+<div class="quiz" data-question="根據證據閘門，什麼情況才可以把一條行為判成 met？" data-correct="0" data-explain="要能引用這次真的跑出來的那筆證據，沒有證據就只能是 blocked。">
+  <button class="opt">能引用到這次真的跑出來的那筆證據</button>
+  <button class="opt">讀完程式碼後覺得邏輯明顯是正確的</button>
+  <button class="opt">既有的測試套件跑起來是全部綠燈的</button>
+  <button class="opt">作者自己表示他已經在本地測過這塊</button>
+</div>
+<div class="quiz" data-question="報告裡出現 blocked 代表什麼意思？" data-correct="0" data-explain="blocked 是沒能真的驗證，不是通過，也不是確認的失敗。">
+  <button class="opt">這次沒能真的把它跑起來驗證</button>
+  <button class="opt">這條行為確認已經被實作得正確</button>
+  <button class="opt">spec 點名的表面根本就沒有被建置</button>
+  <button class="opt">程式碼在但執行起來時檢查失敗了</button>
+</div>
+<div class="quiz" data-question="為什麼一條沒套用的 migration 能讓測試全綠的功能照樣不通過？" data-correct="1" data-explain="綠燈只證明作者想到要測的東西，證明不了 specced 的表面真的存在。">
+  <button class="opt">因為測試全綠本身在這種情況下是矛盾的</button>
+  <button class="opt">因為綠燈證明不了 specced 的表面真的存在</button>
+  <button class="opt">因為 migration 一定要由 check 指令來執行</button>
+  <button class="opt">因為 spec 的驗收條件根本不允許自動化測試</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · 實跑 check verify 與 test · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

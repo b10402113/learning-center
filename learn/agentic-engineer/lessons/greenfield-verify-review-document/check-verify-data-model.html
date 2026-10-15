@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>對資料模型跑 check verify</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>對資料模型跑 check verify</h1>
+<p class="meta">Step 1/4 · Greenfield：Verify、Review、Document</p>
+
+<h2>學習目標</h2>
+<p>這一節要帶你第一次跑 <code>check verify</code>。做完之後，你會拿到一份依驗收標準逐條打勾的驗證報告；資料模型的每一條 acceptance criteria 都真的被跑過，而不是只看程式碼「應該會動」。你會依序看懂：它怎麼從 <code>verify.md</code> 決定要驗什麼、缺 <code>.env.local</code> 時怎麼解開阻塞、Supabase 的四個變數哪兩個可以交給 agent、最後那份「11 條 checked、零 unexercised、零 fail」的報告是怎麼讀的。</p>
+
+<h2>前言：功能早就寫完，但驗證還沒做</h2>
+<p>想像你花了兩個晚上把資料庫 schema 寫好，migration 也寫了，seed 也跑了，心裡覺得「這塊完成了」。於是你打開 scope 檔，看到資料模型那一列還停在 in progress，底下幾個子項有一個沒打勾。那個沒打勾的項目是「Verify it」。很多人會在這個地方停住，因為功能看起來明明能動，為什麼還要再驗一次？</p>
+<p>原因是：綠色測試與「我剛才手動看過」只證明你想到的那些路徑會動，不證明規格裡承諾的每一條都真的成立。正式的驗收必須由一支會被逼著「動手跑真東西」的 skill 來做。這一步就是那支 skill。前置條件只有兩件事：這個功能已經 <code>/develop</code> 完、處在一條相對 base 有差異的分支上，而且你有辦法連到一個真的資料庫。沒有這個前置，先回去把功能建起來。</p>
+
+<h2>Step 1：先讓它選模式，不要讓它猜</h2>
+<p>打開 Claude Code，輸入 <code>check</code>。注意，它<strong>不會</strong>預設幫你跑 <code>verify</code>，而是先停下來問你要跑哪一種。這是刻意的：跑錯模式會浪費整個 run，所以這一步被放在所有事情之前。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/SKILL.md#pick-the-mode-route-before-doing-anything-else">Which check do you want to run? Type one:
+  • verify  run the real app and prove the change works against its spec (usually right after /develop)
+  • review  a fresh model senior read of the diff, ranked findings (usually right before a PR)
+  • both    verify first, then review</pre>
+
+<p>課程示範選的是 <code>verify</code>，對象是 data model。兩個模式的時機不同：<code>verify</code> 接在 <code>/develop</code> 之後，證明行為真的發生；<code>review</code> 通常發生在開 PR 之前，換一個模型讀 diff。這一節只跑前者，後者留到下一節。</p>
+
+<figure class="lesson-figure"><img src="./check-verify-data-model-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+
+<h2>Step 2：它讀 verify.md，找出還沒打勾的項目</h2>
+<p>選定模式之後，它做的第一件事不是打開程式碼，而是去讀這個功能旁邊的 <code>verify.md</code>。這份檔案是 <code>/develop</code> 階段留下的驗收清單，把每一條 acceptance criterion 翻譯成一個「可以觀察」的動作加預期結果，並標上它對應哪一條 AC。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/modes/verify.md#step-0b-load-the-spec-contract-if-a-governing-spec-exists"># Verify: &lt;feature&gt; · spec NNNN
+## UI / manual
+- [ ] &lt;action&gt; → &lt;expected&gt;   → AC-N
+## Commands
+- [ ] `&lt;command&gt;` → &lt;expected&gt; → AC-N
+## Acceptance-criteria coverage
+- AC-1 … · AC-2 … · …</pre>
+
+<p>課程示範裡，這份清單上的框框有些已經打勾、有些還沒，而資料模型那一項正卡在半途。你要注意的地方是：它的工作範圍不是「只驗你改過的檔案」，而是「把 spec 承諾的每一條都驗一遍」。就算某條 AC 根本還沒實作，它也會留在清單上被標出來，因為那正是這道關卡要抓的漏。</p>
+
+<h2>Step 3：缺 .env.local 卡住了，先解開它</h2>
+<p>跑了一陣子，它回報一件事：repo 裡沒有 <code>.env.local</code>。少了這個檔案，`pnpm db migrate`、`pnpm db seed`，以及任何要啟動 app 的動作都跑不起來。它沒有硬闖，而是問你：「執行階段的步驟你想怎麼處理？」</p>
+
+<p>這裡是整節最值得學的操作判斷。Supabase 需要四個變數，但它們的敏感度不同：</p>
+<ul>
+  <li><code>NEXT_PUBLIC_SUPABASE_URL</code> 與 <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code>：這兩個是公開值，本來就會送到瀏覽器端，所以 agent 可以透過 MCP 直接幫你填好。</li>
+  <li>兩條連線字串（database URL 與 direct URL）：裡面帶著你的資料庫密碼。沒有任何 API 會把密碼交出去，所以這兩個一定要你自己去 dashboard 複製。</li>
+</ul>
+
+<p>它的處理正是照這條界線切開：公開的兩個自己填，帶密碼的兩個留給你。這樣你既省下最容易填錯的部分，又不會把密碼交給工具。填好之後，<code>.env.local</code> 大概長這樣（實際值依你的專案而定）：</p>
+
+<figure class="lesson-figure"><img src="./check-verify-data-model-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+
+<pre data-provenance="derived"># .env.local
+NEXT_PUBLIC_SUPABASE_URL=https://&lt;project&gt;.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=&lt;anon-key&gt;
+DATABASE_URL=postgresql://...:6543/postgres   # transaction pooler
+DIRECT_URL=postgresql://...:5432/postgres     # direct connection</pre>
+
+<p>兩個連線字串的來源在 dashboard 的 <strong>connect</strong> 區：transaction pooler 走 port 6543，direct connection 走 port 5432，把 dashboard 給的字串貼進去、換上你自己的密碼即可。這裡有個很容易踩的坑：要填進 <code>.env.local</code>，<strong>不是</strong> <code>.env.example</code>。後者只是給人看的範本，填在裡面不會生效。</p>
+
+<h2>Step 4：IPv6 不通時，改用 session pooler</h2>
+<p>你以為填完就能一路順跑，結果它又回報一件事：你用的是 IPv4 的 session pooler，但這台機器沒有全域 IPv6 位址，所以原本的 direct URL 連不上。它的處理是把 direct URL 換成 session pooler——這是官方支援的替代路徑，不是隨便亂改。</p>
+<p>這件事的價值不在於「換一個字串」，而在於它<strong>先連線、發現不通、才回頭換路徑</strong>。它沒有假裝連得上，也沒有叫你自己去想辦法。遇到連線層的問題時，這種「先用可觀察的事實確認、再換方案」的節奏，正是你要學的手感。</p>
+
+<h2>Step 5：它真的去操作 app，而不是讀程式碼</h2>
+<p>環境通了之後，它開始執行驗證。關鍵在於它做的是「驅動真實的 app」：更新 profiles、把 onboarding 設成 complete、從 <code>auth.users</code> 刪除使用者、再刪一次，跑完整條流程後把資料庫留在乾淨狀態。</p>
+<p>它為什麼非跑不可？因為這支 skill 有一條不能繞過的規則：沒有證據，就不能給過。它必須在當下記下「我執行了什麼、看到什麼」，這些紀錄才撐得起後面的結論。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/modes/verify.md#step-3-run-and-exercise">| Behavior kind | The evidence to record |
+|---|---|
+| UI | the URL you loaded, the screenshot path you saved, and what you saw rendered |
+| API | the exact request line, the HTTP status, and the key fields of the body |
+| CLI / job | the exact command, its exit code, and the stdout/stderr excerpt |
+| Data layer | the query you ran against the live schema, and its result |</pre>
+
+<p>對資料模型來說，最有力的一條證據就是「真的對活著的資料庫下了查詢、並且看到結果」。這也是為什麼缺 <code>.env.local</code> 會是阻塞而不是小事：沒有它，資料層這一格根本填不出來。</p>
+
+<h2>Step 6：讀最後那份報告</h2>
+<p>跑完之後，它會輸出一份格式固定的報告。標題先給結論，下面才是細節：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/modes/verify.md#step-5-report">## /check verify &lt;feature&gt; · &lt;PASS | FAIL | BLOCKED&gt;
+
+**&lt;PASS: all N behaviors met, every specced surface built · FAIL: M of N failed · BLOCKED: K couldn't be exercised&gt;.**   (never PASS or ✅ if you did not actually run the app; say "not started")</pre>
+
+<p>課程示範這一輪的結果是：<code>pnpm db migrate</code>、<code>pnpm db seed</code>、<code>pnpm verify dev</code> 三個指令都正常運作，<strong>11 條 acceptance criteria 全數 checked、零 unexercised、零 blocker、零 fail</strong>，而且是一次通過。另外它特別註明「one segment carried forward by the design」——意思是有一段是刻意留給後續設計承接的，不是漏掉，別把它誤讀成缺失。</p>
+<p>你要抓的讀法是：先看總結論落在 PASS／FAIL／BLOCKED，再看有幾條沒被真正執行。零 unexercised 的意義很大——它代表沒有任何一條是「因為沒跑而不知道」，全部都有證據。</p>
+
+<figure class="lesson-figure"><img src="./check-verify-data-model-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+
+<h2>Step 7：知道它的邊界，然後 clear</h2>
+<p>最後要記得這支 skill 不修東西。它只負責判斷：通過就開綠燈，失敗就把你指向 <code>/debug</code> 或 <code>/develop</code>。它不會、也不應該順手改你的程式碼——因為一旦它開始改，這份驗證就再也不是獨立的了。</p>
+<p>示範的最後一個動作是輸入 <code>clear</code>。驗證的狀態已經寫回 spec 與 scope，開一個乾淨的 session 不會丟掉任何東西，反而讓下一步更便宜。接著才進入第二種檢查：<code>check review</code>。</p>
+
+<h2>小結</h2>
+<blockquote>
+<p>功能寫完不等於驗收完成。<code>check verify</code> 先路由模式、再讀 <code>verify.md</code> 找出還沒打勾的項目，把 spec 承諾的每一條 AC 都排進清單。</p>
+<p>缺 <code>.env.local</code> 時它會停下來解開阻塞：公開的 Supabase 變數由 MCP 代填，帶密碼的連線字串留給你自己去 dashboard 複製；IPv6 不通就改用 IPv4 的 session pooler。接著它驅動真實的 app 跑過整條流程，並且遵守「沒有證據就不給過」，最後產出「11 條 checked、零 unexercised、零 blocker、零 fail」的單次通過報告。</p>
+<p>它只判斷、不修改；跑完之後用 <code>clear</code> 開一個乾淨的 session，把狀態交給下一支 skill。</p>
+</blockquote>
+
+<p>驗證回答了「今天這樣跑會動嗎」。但還有一個問題沒回答：這份程式碼是<strong>怎麼被造出來的</strong>，有沒有作者自己看不見的盲點。下一節要把同一份碼交給一個沒寫過它的模型，跑 <code>check review</code>。</p>
+
+<div class="lesson-nav">
+  <div><a href="./check-review-data-model.html">下一步：換模型跑 check review →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼功能已經 develop 完，還是要再跑一次 check verify？" data-correct="2" data-explain="綠色測試只證明作者想到的路徑，規格承諾的每一條仍要真的跑過。">
+  <button class="opt">因為只有這樣才能把驗證的時間花掉</button>
+  <button class="opt">因為 develop 從不寫任何測試或檢查</button>
+  <button class="opt">因為規格承諾的每一條必須真的被跑過</button>
+  <button class="opt">因為沒跑的話 scope 檔會無法被開啟</button>
+</div>
+<div class="quiz" data-question="輸入 bare 的 check 之後，它第一件事會做什麼？" data-correct="1" data-explain="它會先print 選項面板並停下等你選，不會替你猜模式。">
+  <button class="opt">直接預設跑 verify，之後再說</button>
+  <button class="opt">先顯示模式選項並停下等你選</button>
+  <button class="opt">先讀完整個 diff 再決定模式</button>
+  <button class="opt">先幫你把 .env.local 建立起來</button>
+</div>
+<div class="quiz" data-question="Supabase 四個變數裡，哪一組 agent 可以自己填？" data-correct="0" data-explain="公開值本來就會送到瀏覽器，帶密碼的連線字串才留給人。">
+  <button class="opt">公開 URL 與 anon key 這兩個公開值</button>
+  <button class="opt">database URL 與 direct URL 這兩個</button>
+  <button class="opt">四個都可以由 agent 一次填完</button>
+  <button class="opt">四個都只能由人工逐一手動填</button>
+</div>
+<div class="quiz" data-question="為什麼兩條連線字串要留給你自己填？" data-correct="2" data-explain="連線字串裡帶著資料庫密碼，沒有任何 API 會把密碼交出去。">
+  <button class="opt">因為它們的格式在每個專案都不同</button>
+  <button class="opt">因為 MCP 讀不到 dashboard 裡的欄位</button>
+  <button class="opt">因為字串裡帶著你的資料庫密碼</button>
+  <button class="opt">因為它們其實不需要填就能連線</button>
+</div>
+<div class="quiz" data-question="這台機器沒有全域 IPv6 位址時，它怎麼處理 direct URL？" data-correct="1" data-explain="它改用官方支援的 IPv4 session pooler 作為替代路徑。">
+  <button class="opt">它略過這一步，直接標記為 fail</button>
+  <button class="opt">它換成 IPv4 的 session pooler</button>
+  <button class="opt">它要你重新申請一個 IPv6 位址</button>
+  <button class="opt">它把 direct URL 整段刪掉不用</button>
+</div>
+<div class="quiz" data-question="「零 unexercised」在報告裡代表什麼意思？" data-correct="3" data-explain="沒有任何一條是因為沒跑而不知道，全部都有可引用的證據。">
+  <button class="opt">沒有任何一條 acceptance criteria 被寫出來</button>
+  <button class="opt">所有測試都還沒開始執行就先跳過了</button>
+  <button class="opt">所有失敗的項目都已經被自動修好了</button>
+  <button class="opt">沒有任何一條是因為沒跑而不知道</button>
+</div>
+<div class="quiz" data-question="check verify 跑完之後，關於它的邊界哪一項正確？" data-correct="0" data-explain="它只判斷、不修，失敗會把你指向 debug 或 develop。">
+  <button class="opt">它只判斷、不修，失敗指向 debug 或 develop</button>
+  <button class="opt">它會順手把失敗的程式碼直接改到過</button>
+  <button class="opt">它會在通過後自動幫你開 PR 並合併</button>
+  <button class="opt">它會把測試補齊之後再重跑一遍驗證</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · Greenfield：Verify、Review、Document · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

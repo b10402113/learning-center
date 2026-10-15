@@ -26,12 +26,89 @@
 
 <p>還記得 vibe 版的 feed 嗎？每次載入頁面，都會在請求路徑中即時呼叫最貴的模型。workflow 版則把做法整個反過來：先把評分轉成代表使用者口味的「口味向量」，再透過<strong>一次資料庫呼叫和向量索引</strong>，從真實電影目錄中找出最符合口味的電影，並把結果寫進 <code>recommendations</code> 表。</p>
 
+<p>這件事在 <code>src/lib/feed/generate.ts</code> 的 <code>generateFeed</code> 裡看得最清楚：它拿口味向量呼叫一次 <code>matchFeedCandidates</code>（也就是向量索引查詢），再讓 Sonnet 批次寫理由，最後用一個交易一次寫回 <code>recommendations</code>。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/lib/feed/generate.ts">    // taste_profiles.vector comes back from PostgREST as the pgvector text literal; the RPC casts it.
+    const vectorLiteral = typeof vector === "string" ? vector : `[${vector.join(",")}]`;
+
+    const candidates = await matchFeedCandidates(supabase, vectorLiteral);
+
+    // No unseen embedded movies (a heavy rater against a thin catalog): clear the feed, no Claude
+    // call. The empty set still replaces atomically so the cache reflects reality.
+    if (candidates.length === 0) {
+      const { error } = await supabase.rpc("replace_recommendations", { rows: [] });
+      if (error) throw new Error(error.message);
+      return { status: "ok", picks: [] };
+    }
+
+    const taste: TasteSummary = {
+      topGenres: topGenres(row.genre_affinities),
+      topTitles: await topRatedTitles(supabase, userId),
+    };
+
+    // A transient Claude failure throws here → caught below → old feed kept (fail closed).
+    const reasons = await writeReasons(candidates, taste);
+
+    const rows = candidates.map((c, i) => ({
+      movie_id: c.movie.id,
+      rank: i + 1,
+      score: c.score,
+      reason: reasons.get(c.movie.id) ?? "Picked to match your taste.",
+    }));
+
+    // Atomic delete-then-insert in one transaction; only reached once the full set is built.
+    const { error: replaceError } = await supabase.rpc("replace_recommendations", { rows });
+    if (replaceError) throw new Error(replaceError.message);</pre>
+
 <p>那開啟 feed 時會發生什麼事？<code>get feed</code> 這個 action 只會讀取資料表，整條讀取路徑<strong>完全不呼叫模型</strong>。因此，這一頁的成本實質上是零，速度則取決於 Supabase 回傳資料要多久。這和 vibe 版的 40 秒，完全是兩種體驗。</p>
+
+<p>打開 <code>src/app/feed/actions.ts</code> 的 <code>getFeed</code> 就能驗證：它只做兩件事，先讀 <code>taste_profiles.computed_at</code>，再讀 <code>recommendations</code> 表，整段沒有出現任何模型呼叫，最後只是把 <code>isFeedStale</code> 的結果一起回傳。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/app/feed/actions.ts">// Read the cached feed and report whether it is stale. No Claude call on this path.
+export async function getFeed(): Promise&lt;GetFeedResult&gt; {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { status: "no-profile" };
+
+  // computed_at is written only alongside the taste vector, so a null (or missing row) means no
+  // usable profile. This avoids transferring the 1536-dim vector on every feed load.
+  const { data: profile } = await supabase
+    .from("taste_profiles")
+    .select("computed_at")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const computedAt = (profile?.computed_at as string | null) ?? null;
+  if (!computedAt) return { status: "no-profile" };
+
+  const { data: rows } = await supabase
+    .from("recommendations")
+    .select(`rank, score, reason, generated_at, movie:movies(${MOVIE_COLUMNS})`)
+    .eq("user_id", user.id)
+    .order("rank", { ascending: true });</pre>
 
 <figure class="lesson-figure"><img src="./autopsy-workflow-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
 
 <p>AI 仍然會出場，但只負責替每個推薦寫一句「為什麼這適合你」。細節也有經過設計：使用的是一顆 <strong>Sonnet</strong>，不是 Opus 或最貴的模型；它一次批次寫完整份 feed 的理由，關閉思考功能，而且<strong>只有在使用者口味真的改變，或使用者手動按下重新整理時才執行，不會在頁面載入時執行</strong>。</p>
+
+<p>對應的 <code>src/lib/feed/reasons.ts</code> 就固定了寫作的那顆模型，並在呼叫時把思考功能關掉：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/lib/feed/reasons.ts">// The current Sonnet id (ADR 0007; re-verified against the claude-api reference at build).
+// Sonnet is the writing tier per ADR 0001, not the cheap Haiku parser.
+const REASON_MODEL = "claude-sonnet-5";</pre>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/lib/feed/reasons.ts">  // Batched, structured, thinking off (a short JSON reply doesn't need it). A transient failure
+  // throws out of here; a bad/empty body yields an empty map (→ grounded fallbacks below).
+  const response = await getClient().messages.create({
+    model: REASON_MODEL,
+    max_tokens: 1024,
+    thinking: { type: "disabled" },
+    system: SYSTEM_PROMPT,
+    output_config: { format: { type: "json_schema", schema: REASON_SCHEMA } },
+    messages: [{ role: "user", content: userContent }],
+  });</pre>
 
 <p>在 <code>src/lib/feed/generate.ts</code> 裡，可以看到程式把「什麼時候該重新計算」寫成一個有名字的函式：</p>
 
@@ -60,9 +137,52 @@ export function isFeedStale(computedAt: string | null, maxGeneratedAt: string | 
 
 <p>vibe 版匯入資料時，沒有使用交易保護，而是先刪除、再插入。workflow 版的做法不同：瀏覽器先解析 CSV，再<strong>每次送出 100 筆</strong>，這個數字可以在 chunk 大小設定中看到。分批處理也讓重試可以接續同一份匯入，不必從頭開始。import 的 <code>actions.ts</code> 裡還有一個 retry helper：每個資料區塊在回報錯誤之前，都會先自行退避重試一次。</p>
 
+<p>那個「100 筆」寫在瀏覽器端的 <code>src/app/import/import-flow.tsx</code> 裡，是一個有名字的常數：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/app/import/import-flow.tsx">const CHUNK_SIZE = 100;</pre>
+
+<p>而區塊的退避重試，則寫成 <code>src/app/import/actions.ts</code> 裡的 <code>withRetry</code>，用指數退避加上抖動（jitter）：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/app/import/actions.ts">// Retry a transient step (a TMDB or OpenAI hiccup) a few times with exponential backoff and
+// jitter, then give up. ADR 0006: a chunk that still fails after this marks the import failed.
+async function withRetry&lt;T&gt;(fn: () =&gt; Promise&lt;T&gt;, attempts = 3): Promise&lt;T&gt; {
+  let lastError: unknown;
+  for (let i = 0; i &lt; attempts; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (i &lt; attempts - 1) await sleep(500 * 2 ** i + Math.floor(Math.random() * 250));
+    }
+  }
+  throw lastError;
+}</pre>
+
 <p>更重要的是，這個流程<strong>不會刪除資料</strong>。它使用 movie ID 做 upsert：資料已存在就更新，尚未存在就新增。因此，和 vibe 版的先刪後插相比，這裡<strong>不會有任何一段時間讓你的評分資料消失</strong>。</p>
 
+<p>程式碼長這樣：所有評分先在記憶體中以 <code>movie_id</code> 為鍵收斂，再用 <code>upsert</code> 一次寫入，衝突時直接更新，而不是先刪後插。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/app/import/actions.ts">    const ratingsToUpsert = Array.from(ratingsByMovie.values());
+    if (ratingsToUpsert.length &gt; 0) {
+      await withRetry(async () =&gt; {
+        const res = await supabase.from("ratings").upsert(ratingsToUpsert, {
+          onConflict: "user_id,movie_id",
+        });
+        if (res.error) throw new Error(res.error.message);
+        return res;
+      });
+    }</pre>
+
 <p>流程也處理了一個容易忽略的邊角情況：匯出檔可能有兩筆資料指向同一部電影，例如重映或別名。如果這兩筆在同一段 SQL 中撞在一起，Postgres 會拋錯，整個區塊就會失敗。由於重試會再次送出完全相同的輸入，匯入便可能<strong>永遠卡住</strong>。workflow 版先對資料去重（dedupe），避免這種情況。</p>
+
+<p>程式碼把這個坑連原因一起寫在註解裡，說明為什麼非去重不可：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/app/import/actions.ts">    // Key by movie_id so two source rows that resolve to the same movie within one chunk
+    // (a re-release, an alias, or the same film listed twice) collapse to one rating (latest
+    // wins). Without this, the upsert would try to touch the same (user_id, movie_id) twice in
+    // one statement and Postgres throws "cannot affect row a second time", which would fail the
+    // whole chunk and, because re-drive replays the same input, wedge the import permanently.
+    const ratingsByMovie = new Map&lt;number, Record&lt;string, unknown&gt;&gt;();</pre>
 
 <figure class="lesson-figure"><img src="./autopsy-workflow-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
@@ -73,7 +193,69 @@ export function isFeedStale(computedAt: string | null, maxGeneratedAt: string | 
 
 <p>workflow 版的 Vibe 搜尋是一條管線，整段流程可以用五行讀完：先取得和 profile 有關的資料，再判斷使用者想找什麼，接著挑選候選電影、記錄結果並回傳。拆開來看，第一顆便宜的小模型會把使用者的查詢轉成結構化意圖，例如年份、片長，或 mood、theme、tone 這類描述「感覺」的條件。接著，系統透過向量或 embedding 搜尋，從真實目錄中找出候選電影。最後，一顆中等模型從候選清單中挑出三到五部，而且<strong>只能從提供給它的清單裡挑選</strong>。</p>
 
+<p>第一顆「便宜的小模型」是 Haiku，它把自由文字轉成結構化意圖。這個分工在 <code>src/lib/search/parse.ts</code> 裡被寫成一顆常數，意圖的欄位則由一份 JSON schema 固定下來：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/lib/search/parse.ts">// The parse tier (ADR 0001): Haiku parses vibe queries; Sonnet writes the reasons.
+const PARSE_MODEL = "claude-haiku-4-5";
+
+// Nullable fields (returned null when the query does not specify them) keep every field required,
+// which is the robust shape for structured output.
+const INTENT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    vibeText: { type: "string" },
+    yearFrom: { type: ["integer", "null"] },
+    yearTo: { type: ["integer", "null"] },
+    maxRuntimeMinutes: { type: ["integer", "null"] },
+    audience: { type: "string", enum: ["family", "any"] },
+  },
+  required: ["vibeText", "yearFrom", "yearTo", "maxRuntimeMinutes", "audience"],
+} as const;</pre>
+
 <p>這裡有個值得注意的細節。<code>select.ts</code> 會告訴模型：「不要發明電影，只能從提供給你的真實電影裡挑。」但講師提醒，<strong>這仍然只是請求模型乖乖遵守，和 vibe 版採用的做法一樣</strong>。真正的差別在於，workflow 版也定義了「一部電影的 schema 長什麼樣子」。整條程式路徑都固定了 movie 的資料結構，因此模型<strong>在結構上就無法捏造出一部電影</strong>。</p>
+
+<p>先看「規則」這一半。<code>src/lib/search/select.ts</code> 在 system prompt 裡明白要求模型只能挑清單裡的 id：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/lib/search/select.ts">    "You are a film concierge. From the provided real movies only, pick the best fits for the",
+    `viewer's vibe and return between ${VIBE_MIN_PICKS} and ${VIBE_MAX_PICKS} of them.`,
+    "Rules:",
+    "- Only use movie_id values from the provided list. Never invent a movie or an id.",
+    "- Order the picks best fit first.",</pre>
+
+<p>不過光是打字要求還不夠。程式在讀回模型的答案時，也真的把不在清單裡的 id 濾掉，等於在規則之外再加一道程式防線：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/lib/search/select.ts">  const seen = new Set&lt;number&gt;();
+  const choices: VibePickChoice[] = [];
+  for (const p of parsed.picks ?? []) {
+    // Constrain to the real shortlist and dedupe; drop anything the model invented.
+    if (!allowed.has(p.movie_id) || seen.has(p.movie_id)) continue;
+    if (typeof p.reason !== "string" || !p.reason.trim()) continue;
+    seen.add(p.movie_id);
+    choices.push({ movieId: p.movie_id, reason: p.reason.trim() });
+    if (choices.length &gt;= VIBE_MAX_PICKS) break;
+  }
+  return choices;</pre>
+
+<p>再看「保證」那一半。真正讓模型無法捏造電影的，是 <code>src/lib/catalog/types.ts</code> 裡定義的 <code>Movie</code> 型別。整條程式路徑都只認這個結構，模型的輸出自然被框在真實電影的欄位裡：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/lib/catalog/types.ts">export interface Movie {
+  id: number; // TMDB id (natural primary key)
+  title: string;
+  release_year: number | null;
+  overview: string | null;
+  poster_path: string | null;
+  genres: NamedTag[] | null;
+  runtime_minutes: number | null;
+  imdb_id: string | null;
+  directors: Person[] | null;
+  top_cast: CastMember[] | null;
+  keywords: NamedTag[] | null;
+  vote_average: number | null;
+  vote_count: number | null;
+  popularity: number | null;
+  synced_at: string | null;
+}</pre>
 
 <blockquote>
 … the architecture gives it no way to misbehave. That's the difference between a rule and a guarantee.<br>
@@ -90,6 +272,20 @@ export function isFeedStale(computedAt: string | null, maxGeneratedAt: string | 
 <p>還記得 vibe 版的第四個殺手嗎？缺少測試與 migration。workflow 版兩者都具備：專案使用 Vitest，並替最容易出錯的邏輯（CSV 解析和口味計算）建立測試檔。</p>
 
 <p>也可以留意測試的命名方式，例如「compute taste profile below the floor, AC7」。測試名稱會使用驗收條件的編號，讓每個測試都能追溯到當初對應的決定。此外，資料庫也有六個版本的 migration，記錄資料系統如何隨著功能逐步升級。</p>
+
+<p>測試檔裡真的就是這樣命名的。打開 <code>src/lib/taste/index.test.ts</code>，每個 <code>describe</code> 後面都掛著驗收條件的編號：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/src/lib/taste/index.test.ts">describe("computeTasteProfile — below the floor (AC-7)", () => {
+  it("writes no vector and reports below-floor when fewer than 20 movies match", async () => {</pre>
+
+<p>資料庫同樣留下了逐步演進的痕跡，<code>supabase/migrations/</code> 底下共有六個版本：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/reel-agentic_engineering/supabase/migrations">20260704173914_init_schema.sql
+20260704181325_add_catalog_columns.sql
+20260705062903_update_handle_new_user_from_oauth.sql
+20260705120000_add_taste_vectors.sql
+20260705130000_add_recommendations.sql
+20260705140000_add_vibe_search.sql</pre>
 
 <h2>程式庫比較大，但不是為了好看</h2>
 

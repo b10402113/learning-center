@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>實作 Movie Catalog 與 Cache：develop → check verify → sync</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>實作 Movie Catalog 與 Cache：develop → check verify → sync</h1>
+<p class="meta">Step 1/6 · Greenfield：Catalog、Design System 與第一個 Slice</p>
+
+<h2>學習目標</h2>
+<p>用 spec 0003 的 catalog + cache 這條 feature 走完 <code>develop</code> → <code>check verify</code> → <code>sync</code>，並能指出 verify 必須打到真服務、真 defect 要當場修完再 sync。</p>
+
+<h2>前言：資料庫有了，但 app 還看不見東西</h2>
+
+<p>前面幾個節點已經把地基鋪好：scope 決定了、技術棧選定了、專案 scaffold 起來了，資料模型也跑過一輪 <code>check verify</code>、<code>check review</code>、<code>document</code>。可是到這個階段為止，你的 app 其實還「看不到東西」——它有一張張空的表，卻沒有資料填進去，也還沒有任何畫面能證明這些表真的能用。</p>
+
+<p>這一節要跨過那條線。Movie catalog 與 cache 是第一條真的去打外部服務的資料 feature，它要把 TMDB 的電影抓進來、存進 catalog、再供後面的功能讀取。因為它會碰到網路、憑證、快取時效這些真實世界的東西，驗證的重點就不再是「型別有沒有過」，而是「它有沒有真的打到服務、拿回真的資料」。這也是整套 workflow 第一次逼你面對「驗證要對真的東西做」的紀律。</p>
+
+<figure class="lesson-figure"><img src="./implement-catalog-and-cache-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>動手前先備齊的事</h2>
+
+<p>這條 feature 的規格是 spec 0003，它早就在 <code>architect</code> 那一輪寫好了，所以這裡不用重新設計，只要把它交給 <code>develop</code>。會缺的是環境變數：TMDB 的 API key，加上 ingest 的 signing key 和 event key。</p>
+
+<p>你可以選先把整條 feature 建完、稍後再補 key，也可以現在停下來把 key 填好再動工。課程選擇前者——讓它邊建、你邊去把 key 生出來，這樣等待的時間不會浪費。要記住的是：key 沒填，feature 還是建得起來，但驗證那一段會走不到，所以補 key 不能拖太久。</p>
+
+<h2>步驟一：跑 develop，讀懂它的產出</h2>
+
+<p>除了 spec 之外，<code>develop</code> 開頭會自己確認它已經載入了三樣東西：spec 本身、專案的 conventions，以及這次要用的 ingest skill。載入完成後，它會照 spec 裡那份 build plan 一條條實作。以這條 feature 為例，build plan 切成 10 個 task，跑完之後你會拿到一個分支和對應的 commit。</p>
+
+<p>產出的內容包含 TMDB 的設定、movies catalog 的資料層、一個 normalizer，以及 ingest client。這裡有個容易忽略但很關鍵的描述：這些檔案是「對真的東西證明過，不只是過型別檢查」——因為它真的打了一次服務，所以型別對不對只是最低標準。</p>
+
+<h2>步驟二：跑 check verify，看它打到真服務</h2>
+
+<p>接著跑 <code>check verify</code>。這一輪會很久，課程裡講師離開電腦大約十分鐘，回來才看到結果。它做的是把 spec 的驗收條件一條條拿去對真服務操作，而不是在腦內模擬。驗證報告長這樣：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/13. Idea to First Ship — Greenfield/8. Implement the Movie Catalog and Cache.srt#implement-the-movie-catalog-and-cache">53 of 62 checklist steps
+exercised and passed,
+9 non-exercised, we
+are verified and live.</pre>
+
+<p>62 條裡有 53 條被實際操作過並通過，9 條沒有被操作到（多半是工具沒接上，或需要本機環境配合）。重點在「exercised」這個字：它沒有把沒跑過的算成通過。裡面有幾個 blocker 是正常的，但驗證也留下一條真正的 defect。</p>
+
+<h2>步驟三：把真 defect 當場修完</h2>
+
+<p>被留下來的那條 defect 很典型，它發生在把 TMDB 的 ID 合進回傳物件的時候。catalog refresh 會把 TMDB ID 傳進來，但 <code>create</code> 回傳的物件自己身上也有一個 <code>id</code> 欄位，於是當程式碼用物件展開（spread）覆蓋時，剛剛帶進來的自訂 ID 被蓋成 <code>undefined</code>，事件層的去重就整個失效了。修法很單純：把自訂 ID 放到 spread 之後，讓它蓋回去。</p>
+
+<pre data-provenance="derived">// 壞掉：spread 在後面，回傳物件自帶的 id（undefined）蓋掉了自訂 ID
+return { id: tmdbId, ...catalogItem };
+
+// 修好：把自訂 ID 放到 spread 之後，讓它最後生效
+return { ...catalogItem, id: tmdbId };</pre>
+
+<figure class="lesson-figure"><img src="./implement-catalog-and-cache-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>修完之後，課程做了一個很值得學的動作：它直接叫它修掉，然後「跳過 review」，把這個 feature 標成完成，馬上 <code>sync</code>。理由是 review 不必對每一條 feature 都做——當 verify 已經抓到並證明了修正，這條線就可以往前走。真 defect 的處理順序因此是「當場修完 → 跳過 review → 標記完成 → sync」，而不是先記帳、留到以後。</p>
+
+<h2>步驟四：sync 對帳</h2>
+
+<p>最後一步是 <code>sync</code>，它負責把專案文件（例如根目錄的 AGENTS.md）和實際狀態對齊。這一輪它回報 spec 的三種狀態都已經一致，但抓到文件裡兩件真的過時的事：一個是「目前裝了哪些東西」的描述，另一個是指令區塊漏掉了每一個 DB script。這些不是程式錯誤，卻是會誤導下一個人的文件債——sync 的工作就是把它們改回真的。</p>
+
+<pre data-provenance="derived">develop catalog-and-cache      # 依 spec 0003 的 build plan 實作
+check verify catalog-and-cache # 對真服務操作每個驗收條件
+# 修掉 verify 留下的真 defect
+sync                           # 把文件與現況對齊</pre>
+
+<h2>這套流程沒有看起來那麼硬</h2>
+
+<p>課程特別強調一件事：workflow 不是死板的一條線。等到地基打穩、你對接下來要做什麼有完整的想法之後，你可以叫它「一起 develop 幾條 feature」，而不是永遠一條一條來；也可以把幾條功能先 <code>architect</code> 好（例如 CSV import 和 core taste loop），再一起交給 <code>develop</code>。但不管你怎麼批次，你仍然要坐在駕駛座上回答問題——批次換到的是吞吐量，不是把判斷權交出去。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+一條打外部服務的資料 feature，走法是：<code>develop</code> 依 build plan 實作並留下分支 → <code>check verify</code> 真的去打服務、逐條操作驗收條件 → 留下來的真 defect 當場修到被證明 → 跳過不必做的 review、標記完成 → <code>sync</code> 把文件對齊。驗證的價值不在「型別過關」，而在它真的碰了真服務。
+</blockquote>
+
+<p>走完這一步，你手上有了第一條真的在動的資料路徑，但畫面仍然是素的。下一節要換到完全不同的尺度：把「這個 app 長什麼樣」從口頭偏好變成一條正式的 <code>architect</code> 訪談，產出 design.md 和 spec 0004。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./architect-the-design-system.html">下一步：Architect Design System：把視覺方向定成 design.md 與 spec 0004 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="跑 develop 之前，這條 feature 還缺什麼讓驗證走不下去？" data-correct="1" data-explain="缺 TMDB 與 ingest 的環境變數；可以先建置、邊等 key 生出來。">
+  <button class="opt">缺一份重新寫過的 spec 規格文件</button>
+  <button class="opt">缺 TMDB 與 ingest 的環境變數</button>
+  <button class="opt">缺一個還沒建立的資料庫資料表</button>
+  <button class="opt">缺一份使用者訪談的逐字紀錄</button>
+</div>
+<div class="quiz" data-question="驗證報告寫「53 of 62 exercised and passed」，重點是什麼？" data-correct="2" data-explain="沒有被實際操作到的步驟，不會被算成通過。">
+  <button class="opt">剩下 9 條已經被判定為不重要的項目</button>
+  <button class="opt">所有步驟都已經被操作過而且全部通過</button>
+  <button class="opt">沒被實際操作到的步驟不算通過</button>
+  <button class="opt">有 53 條被跳過、9 條真的跑過</button>
+</div>
+<div class="quiz" data-question="catalog refresh 那條真 defect 的成因是什麼？" data-correct="0" data-explain="回傳物件自帶的 id 經 spread 展開後，把帶進來的自訂 ID 蓋成 undefined。">
+  <button class="opt">spread 把自訂 ID 蓋成了 undefined</button>
+  <button class="opt">TMDB 回傳的電影資料格式不正確</button>
+  <button class="opt">快取時效設得太短導致資料過期</button>
+  <button class="opt">去重邏輯根本沒有被寫進程式裡</button>
+</div>
+<div class="quiz" data-question="那條 defect 的正確修法是什麼？" data-correct="3" data-explain="把自訂 ID 移到 spread 之後，讓它最後生效。">
+  <button class="opt">把整個回傳物件改成先轉成字串再解析</button>
+  <button class="opt">拿掉物件展開，改成手動逐一複製欄位</button>
+  <button class="opt">改用另一組欄位名稱避開 id 的衝突</button>
+  <button class="opt">把自訂 ID 放到 spread 之後才指定</button>
+</div>
+<div class="quiz" data-question="verify 抓到真 defect、修好並證明之後，下一步是什麼？" data-correct="1" data-explain="跳過 review、標記完成，接著 sync 對帳。">
+  <button class="opt">先建一個新的 PR，等 reviewer 批准再動</button>
+  <button class="opt">跳過 review、標記完成，接著 sync</button>
+  <button class="opt">把整條 feature 打掉，重新 architect 一次</button>
+  <button class="opt">先把後面所有 feature 一起 develop</button>
+</div>
+<div class="quiz" data-question="關於把幾條 feature 一起 develop，課程的立場是什麼？" data-correct="2" data-explain="可以批次，但你仍要坐在駕駛座回答問題。">
+  <button class="opt">絕對不行，每條 feature 都必須獨立走完</button>
+  <button class="opt">可以批次，批次之後就不必再回答問題</button>
+  <button class="opt">可以批次，但你仍要負責回答問題</button>
+  <button class="opt">只能批次 architect，永遠不能批次 develop</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · Greenfield：Catalog、Design System 與第一個 Slice · Step 1/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

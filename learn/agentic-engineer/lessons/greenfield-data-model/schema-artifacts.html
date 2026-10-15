@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Schema 產物：一檔一表、enums 與 movie 身分</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Schema 產物：一檔一表、enums 與 movie 身分</h1>
+<p class="meta">Step 5/6 · Greenfield：設計資料模型</p>
+
+<h2>學習目標</h2>
+<p>認得這一輪長出來的實際 schema 產物：Drizzle schema 放在 <code>source/db/schema</code>、每個 entity 一個檔並由 index re-export；固定值集用 Postgres enum；<code>movies</code> 用 UUID 主鍵加唯一 TMDB ID 與 embedding 欄位（nullable 搭配 partial index）；以及 rating state、starter deck 布林旗標、audit events 與 model usage 的形狀。這一節是查閱用，只描述、不評價。</p>
+
+<h2>前言：把散落的決定收成一份可查的產物</h2>
+<p>前面幾節把表該有哪些、欄位該怎麼放、安全該怎麼守都決定完了。這些決定最後會落地成一疊實際的 schema 檔案——而這一節就是把那疊檔案攤開來，當成一份可以隨時回來查的對照表。</p>
+<p>你之後動 schema 時，多半不會從頭重讀一遍設計理由，而是想知道「那一張表的主鍵是什麼、那個固定值集有哪幾個值、embedding 放在哪」。以下就照這個用途整理，每一項都附最小範例。</p>
+
+<h2>版面：一檔一表，由 index re-export</h2>
+<p>Drizzle schema 放在 <code>source/db/schema</code>。版面採「一個 entity 一個檔」，再由一個 <code>index</code> 把全部重新匯出。相對於把所有表塞進單一大檔、一次看到全部，這種排法讓每個表的定義各自獨立，之後要找某一張表時，直接開對應的檔就好。</p>
+<pre data-provenance="derived">// source/db/schema/index.ts
+export * from "./enums";
+export * from "./profiles";
+export * from "./movies";
+export * from "./ratings";
+export * from "./taste-vectors";
+export * from "./picks";
+export * from "./model-usage";
+export * from "./watchlist-entries";
+export * from "./import-runs";
+export * from "./audit-events";</pre>
+
+<h2>固定值集：用 Postgres enum</h2>
+<p>固定不變的值集——例如 rating 的來源、rating 的狀態、pick 的狀態——用 Postgres enum 表示。這些值集的例子包括 rating source、rating state 與 pick state。</p>
+<pre data-provenance="derived">// source/db/schema/enums.ts
+export const ratingSource = pgEnum("rating_source", ["swipe", "letterboxd"]);
+export const ratingState  = pgEnum("rating_state",  ["like", "dislike", "skipped"]);
+export const pickState    = pgEnum("pick_state",    ["seen", "dismissed", "saved"]);</pre>
+
+<h2>movies：UUID 主鍵、唯一 TMDB ID、embedding 欄位</h2>
+<p>一部電影的身分由三件事決定：一個 UUID 主鍵、一個唯一的 TMDB ID、以及一個 embedding 欄位。這裡有一個時序上的限制：電影列是從 TMDB 先建立、embedding 之後才算得出來，所以 embedding 必須允許 null。為了讓「還沒有 embedding 的那些列」查得有效率，另外在這些待處理的列上建一個 partial index。</p>
+<pre data-provenance="derived">// source/db/schema/movies.ts
+export const movies = pgTable("movies", {
+  id:        uuid("id").primaryKey().defaultRandom(),
+  tmdbId:    integer("tmdb_id").notNull().unique(),
+  embedding: vector("embedding"),        // 由 TMDB 建立時還不存在，允許 null
+  starterDeck: boolean("starter_deck").notNull().default(false),
+}, (t) => ({
+  pendingEmbedding: index("movies_pending_embedding_idx")
+    .on(t.id).where(isNull(t.embedding)),   // partial index：只蓋待補 embedding 的列
+}));</pre>
+
+<figure class="lesson-figure"><img src="./schema-artifacts-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>ratings：一列一組 user＋movie，原地更新</h2>
+<p>一個使用者對一部電影只有一列，之後更新是原地更新，而不是留下歷史。一列評分由兩部分組成：一個 <code>rating</code> 欄與一個 <code>source</code> 欄。swipe 進來的列只有 state（like／dislike／skipped），分數為 null；Letterboxd 匯入進來的列則帶著真實的評分。</p>
+<pre data-provenance="derived">// source/db/schema/ratings.ts
+export const ratings = pgTable("ratings", {
+  userId:  uuid("user_id").notNull(),
+  movieId: uuid("movie_id").notNull(),
+  rating:  numeric("rating"),                 // 匯入帶真實分數；swipe 為 null
+  source:  ratingSource("source").notNull(),  // swipe / letterboxd
+  state:   ratingState("state"),              // like / dislike / skipped
+});   // 一個 user 對一部電影只有一列，原地更新</pre>
+
+<h2>taste_vectors：每個 facet 一列</h2>
+<p>taste profile 存在 <code>taste_vectors</code> 表，每個使用者可以有 n 列，每一列是一個 facet，帶著該 facet 的 label 與 vector。</p>
+<pre data-provenance="derived">// source/db/schema/taste-vectors.ts
+export const tasteVectors = pgTable("taste_vectors", {
+  id:     uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  label:  text("label").notNull(),   // 一個 facet；tracer bullet 先放 "average"
+  vector: vector("vector"),
+});</pre>
+
+<h2>picks：每列一部電影推薦給一位使用者</h2>
+<p>推薦以獨立的 pick 列表示，對同一個 user 與 movie 組合唯一。每一列帶著它的理由 <code>reason</code>、分數 <code>score</code>、建立時間 <code>created_at</code>，以及一個 state 欄（供之後的 feed feedback 與收藏使用）。</p>
+
+<figure class="lesson-figure"><img src="./schema-artifacts-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>profiles：以 auth.userId 為鍵</h2>
+<p>app 自己的使用者資料放在 <code>profiles</code> 表，鍵是 <code>auth.userId</code>。它的列由 <code>auth.users</code> 的 insert trigger 建立。</p>
+
+<h2>model_usage：每人每天每模型一列</h2>
+<p>每日的 model 額度以「一個使用者、一天、一個模型一列，帶一個計數器」的形狀儲存。這是 feature 6 會用到的表。</p>
+<pre data-provenance="derived">// source/db/schema/model-usage.ts
+export const modelUsage = pgTable("model_usage", {
+  userId:  uuid("user_id").notNull(),
+  day:     date("day").notNull(),
+  model:   text("model").notNull(),
+  counter: integer("counter").notNull().default(0),
+});   // 每人每天每模型一列</pre>
+
+<h2>watchlist_entries、import_runs、audit_events</h2>
+<p>剩下三張：<code>watchlist_entries</code> 供 feature 10 的收藏使用；<code>import_runs</code> 供 feature 7 的匯入使用；<code>audit_events</code> 是一張通用表，存放 import 與帳號刪除的稽核紀錄（spec 0001 要求）。這三張在第一次遷移時先立起來，其中前兩張要等對應功能輪到才啟用。</p>
+
+<h2>starter deck：電影上的一個布林旗標</h2>
+<p>starter deck 以 <code>movies</code> 上的一個 boolean 欄位表示（如上例的 <code>starter_deck</code>）。</p>
+
+<h2>references：此刻沒有</h2>
+<p>在這個時間點，模型沒有加上外鍵／references。表與表之間的對應靠欄位記錄，但不由資料庫的約束強制。</p>
+
+<h2>小結</h2>
+<blockquote>
+<p>schema 產物落在 <code>source/db/schema</code>，一 entity 一檔、由 index re-export；固定值集用 Postgres enum；<code>movies</code> 用 UUID 主鍵＋唯一 TMDB ID＋nullable embedding 與 partial index；<code>ratings</code> 一列一組 user＋movie、原地更新，用 <code>rating</code>＋<code>source</code> 承載兩條來源；<code>taste_vectors</code> 每 facet 一列；<code>model_usage</code> 每人每天每模型一列。此刻沒有外鍵約束。</p>
+</blockquote>
+
+<p>要查這些形狀怎麼被保護，回頭看<a href="./ownership-and-rls.html">Ownership 與 RLS</a>；要查它們實際上線後如何被驗證，看下一節<a href="./cross-check-and-live-verification.html">Cross-check 與對 live DB 驗證</a>。</p>
+
+<div class="lesson-nav">
+  <div><a href="./ownership-and-rls.html">← 上一步：Ownership 與 RLS：scoped query helper 自己套用 user ID</a></div>
+  <div><a href="./cross-check-and-live-verification.html">下一步：Cross-check 與對 live DB 驗證 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="Drizzle schema 的版面怎麼排？" data-correct="1" data-explain="一個 entity 一個檔放在 source/db/schema，再由 index re-export。">
+  <button class="opt">全部的表集中在一個很大的 schema 檔案裡</button>
+  <button class="opt">一 entity 一檔，由 index 重新匯出</button>
+  <button class="opt">每一張表各自獨立成一個 npm 套件</button>
+  <button class="opt">依功能把表拆進不同的 git 分支</button>
+</div>
+<div class="quiz" data-question="固定值集（rating source、rating state、pick state）用什麼表示？" data-correct="2" data-explain="用 Postgres enum 表示這些固定不變的值集。">
+  <button class="opt">用一般的 text 欄位並在應用層自行檢查</button>
+  <button class="opt">用一張獨立的 lookup 關聯表來存放</button>
+  <button class="opt">用 Postgres enum 來表示這些固定值集</button>
+  <button class="opt">用 boolean 旗標拆成多個 True/False 欄位</button>
+</div>
+<div class="quiz" data-question="movies 的 embedding 為什麼是 nullable？" data-correct="0" data-explain="電影列先從 TMDB 建立，embedding 之後才算出來，所以必須允許 null。">
+  <button class="opt">因為電影先建立、embedding 之後才算</button>
+  <button class="opt">因為不是每一部電影都有 TMDB 編號</button>
+  <button class="opt">因為向量欄位在 Postgres 中不能設為 not null</button>
+  <button class="opt">因為 embedding 會隨使用者不同而改變</button>
+</div>
+<div class="quiz" data-question="movies 上那個 partial index 蓋的是哪些列？" data-correct="3" data-explain="它只蓋 embedding 還是 null、待補的列。">
+  <button class="opt">只蓋已經有 embedding 的那一些列</button>
+  <button class="opt">只蓋被標成 starter deck 的那一些列</button>
+  <button class="opt">只蓋 TMDB ID 重複的那一些列</button>
+  <button class="opt">只蓋 embedding 還是 null 的待補列</button>
+</div>
+<div class="quiz" data-question="一筆 swipe 進來的評分，會被存成什麼？" data-correct="1" data-explain="它是一列 state 為 like／dislike／skipped、分數為 null 的 rating。">
+  <button class="opt">一列帶有 0.5 到 5 星分數的完整評分</button>
+  <button class="opt">一列 state 為 like／dislike／skip、分數為 null</button>
+  <button class="opt">一列只存在記憶體、不進資料庫的暫存</button>
+  <button class="opt">一列同時帶 like 與 dislike 兩種狀態</button>
+</div>
+<div class="quiz" data-question="model_usage 的每一列代表什麼？" data-correct="2" data-explain="一個使用者、一天、一個模型一列，帶一個計數器。">
+  <button class="opt">一個使用者總共花掉的模型呼叫次數</button>
+  <button class="opt">一個模型在整個系統的每日總呼叫量</button>
+  <button class="opt">一個使用者一天一個模型一列加計數器</button>
+  <button class="opt">一次推薦所使用到的模型名稱清單</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · Greenfield：設計資料模型 · Step 5/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

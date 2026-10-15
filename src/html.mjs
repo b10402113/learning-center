@@ -11,6 +11,7 @@ import {
   resolveImageProvider,
   generateEvolinkImage,
   generateOpenAIImage,
+  generateGeminiImage,
   loadEnv,
   withRetry,
 } from './pipeline.mjs';
@@ -501,11 +502,27 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
 }
 
 /**
+ * Plan-only: no text-model call. Reuse a step's existing rewrite when present,
+ * otherwise adopt the current lesson's cleaned body as the base, so images can
+ * be planned on an article that was never rewritten.
+ */
+async function preparePlanOnlyArticle(args, root) {
+  const { paths, chrome } = await prepareHtmlLesson(args, root);
+  const existing = await fs.readFile(paths.rewritten, 'utf8').catch(() => null);
+  if (existing == null) await fs.writeFile(paths.rewritten, `${chrome.cleaned}\n`);
+  return { rewritten: paths.rewritten, planInput: paths.planInput };
+}
+
+/**
  * Rewrite every step of one node with a bounded number of parallel text calls.
  * Enumerates the node's `steps` DAG, skips steps with no HTML lesson (or, when
  * `skipExisting`, steps already planned and carrying a plan), and runs the
  * existing single-step rewrite for the rest. A failure in one step never aborts
  * the others — every step is reported with its own status.
+ *
+ * With `planOnly` (the `/to-article -plan-only` flow) the text model is never
+ * called: each step with an existing rewrite, or else with a lesson to adopt,
+ * is returned as `rewritten`-ready-to-plan; steps already planned are skipped.
  */
 export async function generateNodeArticle(args, root = projectRoot, injected = {}) {
   const subject = assertSafeId('subject', args.subject);
@@ -516,16 +533,26 @@ export async function generateNodeArticle(args, root = projectRoot, injected = {
   const stepIds = await resolveNodeSteps(root, subject, node);
   const maxParallel = Math.max(1, Math.floor(Number(args.maxParallel)) || DEFAULT_MAX_PARALLEL);
   const skipExisting = Boolean(args.skipExisting);
+  const planOnly = Boolean(args.planOnly);
 
   const run = async step => {
     const paths = htmlPaths(root, subject, node, step);
     const exists = file => fs.access(file).then(() => true, () => false);
     if (!await exists(paths.lesson)) return { step, status: 'skipped', reason: 'no-html' };
-    if (skipExisting) {
-      const illustration = await resolveStepIllustration(root, subject, node, step);
-      if ((illustration === 'planned' || illustration === 'done') && await exists(paths.plan))
+    const illustration = await resolveStepIllustration(root, subject, node, step);
+    const hasPlan = await exists(paths.plan);
+    if (planOnly) {
+      if (hasPlan || illustration === 'planned' || illustration === 'done')
         return { step, status: 'skipped', reason: 'already-planned' };
+      try {
+        const result = await preparePlanOnlyArticle({ subject, node, step }, root);
+        return { step, status: 'rewritten', rewritten: result.rewritten, planInput: result.planInput };
+      } catch (error) {
+        return { step, status: 'failed', error: String(error?.message ?? error).slice(0, 400) };
+      }
     }
+    if (skipExisting && (illustration === 'planned' || illustration === 'done') && hasPlan)
+      return { step, status: 'skipped', reason: 'already-planned' };
     try {
       const result = await generateHtmlArticle(
         { subject, node, step, brief: args.brief, type: args.type, typesDir: args.typesDir },
@@ -546,6 +573,7 @@ export async function generateNodeArticle(args, root = projectRoot, injected = {
     subject,
     node,
     maxParallel,
+    planOnly,
     counts: { rewritten: count('rewritten'), failed: count('failed'), skipped: count('skipped') },
     steps,
   };
@@ -609,7 +637,9 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
   const imageModel = resolveImageModel();
   const imageProvider = resolveImageProvider();
   const generateImage = injected.generateImage
-    || (imageProvider === 'evolink' ? generateEvolinkImage : generateOpenAIImage);
+    || (imageProvider === 'evolink' ? generateEvolinkImage
+      : imageProvider === 'gemini' ? generateGeminiImage
+      : generateOpenAIImage);
   const manifest = {
     status: 'running',
     mode: 'image',
@@ -647,7 +677,14 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
           size: process.env.IMAGE_SIZE || '4:3',
           resolution: process.env.IMAGE_RESOLUTION || '1K',
           quality: process.env.IMAGE_QUALITY || 'medium',
-        }), { attempts: 2, baseDelayMs: 5000, retryOn: error => !httpStatus(error) });
+        }), { attempts: 4, baseDelayMs: 5000,
+          // Retry only transient relay failures: a dropped connection (no status),
+          // a 429 (per-user concurrency limit), or a gateway 5xx/timeout (524).
+          // A request that never completed upstream is safe to re-send.
+          retryOn: error => {
+            const status = httpStatus(error);
+            return !status || status === 429 || status === 408 || status >= 500;
+          } });
         if (!Buffer.isBuffer(bytes) || !bytes.length) throw new Error(`No image returned for figure ${item.index}`);
         await fs.writeFile(source, bytes);
       }

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 /scope 與 /architect 規劃最小變更：先讀現況再決定</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>用 /scope 與 /architect 規劃最小變更：先讀現況再決定</h1>
+<p class="meta">Step 3/5 · 在舊碼庫裡工作：先 audit，再最小變更</p>
+
+<h2>學習目標</h2>
+<p>在已建好地圖的舊碼庫上跑 <code>/scope</code> 規劃一個 slice（existing／planned／deferred、寫進 <code>docs/scope.md</code>），再用 <code>/architect</code> 先讀功能現況、追請求路徑、查誰依賴它，才決定變更要落在哪裡，並守住「看不懂的程式碼不要拆」。</p>
+
+<h2>前言：動手前，你手上應該有兩份紙</h2>
+
+<p>上一節把地圖驗過之後，你已經確定它反映的是真實專案。這一節要做的，是在這個基礎上規劃一次變更——而在你真正打開檔案改程式碼之前，你應該先拿到兩份紙：一份是<strong>這次要做哪個 slice 的規劃</strong>，寫在 <code>docs/scope.md</code>；另一份是<strong>這個 slice 的規格</strong>，寫在 <code>specs/</code> 底下。做完這一步，你會得到這兩份可審閱的文件，而不是散落在對話裡的想法。</p>
+
+<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>動手前你需要先具備幾樣東西：BookWise 的地圖已經建好也驗過了（前一、二節）、該有的 ENV 變數都拿到了，而且你人在這個 repo 裡。準備好之後，就從 <code>/scope</code> 開始。</p>
+
+<h2>第一步：跑 /scope，它會先讀 audit 的地圖</h2>
+
+<pre data-provenance="derived">scope</pre>
+
+<p>在它建立計畫之前，<code>/scope</code> 會先讀 <code>/audit</code> 產出的 <code>AGENTS.md</code>。這一步很關鍵：那份地圖給它專案結構、可用指令、慣例，以及任何它必須遵守的警告。少了這份地圖，它就只能靠當下讀到的片段去推測；有了地圖，它一開始就站在「這個專案平常怎麼運作」的基礎上。</p>
+
+<p>讀完之後，它會接著辨識三件事：這個變更牽涉碼庫裡的哪些部分、工作應該以什麼順序進行、以及這個變更值得多少驗證。預期你會看到它反過來問你一個問題：你想先規劃圖書館 app 的哪一個 slice？</p>
+
+<h2>第二步：指定 slice——還書與續借流程</h2>
+
+<p>示範裡選的 slice 是還書與續借流程：學生可以歸還借出的書、續借到期日，管理員則能看到更新後的狀態。這次先只做「還書」，把逾期與其他限制先擺到後面。</p>
+
+<p>你回答之後，它會同時<strong>開始掃描既有碼庫</strong>，把已經做好的功能整理成一份 inventory。預期你會看到一份功能清單回來：目前為止做過的功能都被登錄下來，接著它會繼續問你下一步想做什麼、要用哪一種 build approach。</p>
+
+<p>這裡有一個值得記下的行為：它的每一條建議，都是<strong>根據它對這個碼庫的理解</strong>提出來的，而不是憑空推薦。這正是先讀現況的價值。</p>
+
+<h2>第三步：拿到規劃，寫進 docs/scope.md</h2>
+
+<p><code>/scope</code> 會把規劃寫進 <code>docs/scope.md</code>。內容的結構大致長這樣：既有功能被標成 existing，其中有些正在進行中（in progress），所以可以繼續把它們做完；然後它加入一個新的 planned 項目，也就是這次要做的「return a book」。規劃裡也會把這次不做的東西標成 deferred。這裡有個小細節很有意思：新加的 planned 項目編號是「1」，而其他既有的項目編號是用字母，兩者一眼就能分辨。</p>
+
+<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<pre data-provenance="derived">docs/scope.md
+├── existing   既有功能（有些標為 in progress，可以繼續做完）
+├── planned    1. return a book   ← 這次要做的
+└── deferred   overdue 等先延後，這次不做</pre>
+
+<p>拿到這份規劃後，預期你會做兩件事：先換一個乾淨的 session，再進到架構規劃。示範者把整個節奏講得很清楚——先 <code>clear</code>，再 <code>architect</code>。</p>
+
+<pre data-provenance="derived">clear
+architect return a book</pre>
+
+<h2>第四步：/architect 不從零設計，而是先讀功能怎麼運作</h2>
+
+<p>在一個全新的專案上，<code>/architect</code> 會依照你選的需求與 stack 去設計功能。但在這裡，它的行為完全不同。在提出任何建議之前，它會依序做四件事：</p>
+
+<ol>
+<li><strong>讀這個功能現在怎麼運作。</strong></li>
+<li><strong>把那個請求追過既有的檔案</strong>，找出它用到哪些資料。</li>
+<li><strong>查出專案裡還有哪些部分依賴它。</strong></li>
+<li><strong>最後才決定這個變更該怎麼放進去。</strong></li>
+</ol>
+
+<p>在這裡，<code>/scope</code> 幫了它一點忙：scope 已經先發現，還書流程需要的多數零件其實<strong>都已經存在</strong>了，只是需要把它們接起來。所以 architect 給出的框是「在你既有 stack 上做 enhancement，不是一個新功能」——它建立在既有的「借書」功能之上，而不是另起爐灶。它也順帶指出：如果跳過 audit、scope、architect，換成其他 agent 來做，很可能會把所有東西從頭造一遍，而且用上版本不合的函式庫。</p>
+
+<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第五步：回答需求問題，把決定固定下來</h2>
+
+<p>architect 會用一串問題把設計收斂。示範裡被問到的包括：誰可以觸發還書（答案是只有 admin）、效果要即時且原子（atomic）嗎、逾期有沒有差別、以及是否只接還書這個動作、還是連狀態下拉選單一起改（答案是只接還書）。</p>
+
+<p>其中有個轉折值得注意：它發現這個動作<strong>沒辦法做到原子</strong>，於是反過來問你是不是要分成兩次做。你同意的話，規格就會照這個決定寫。這些問答存在的目的，不是把功能做得更漂亮，而是<strong>找出「非做不可」的事，避免不必要的修改</strong>。有時候那代表只需要更新一個既有函式，而不是重寫一整塊。</p>
+
+<h2>第六步：寫出 spec——它同時說明了界線與證明方式</h2>
+
+<p>需求談完，它會把規格寫進 <code>specs/</code>，示範中的路徑是 <code>specs/1. return a book</code>。這份規格不只是描述最後的功能，它會交代四件事：變更屬於哪裡、哪些既有行為必須維持不變、預期會動到哪些檔案、以及你要如何證明結果。它也附上完整的 build plan、後果，以及後續事項。如果你想把關得嚴一點，也可以拿另一顆模型來交叉檢查這份規格。</p>
+
+<pre data-provenance="derived">specs/1. return a book
+├── 變更屬於哪裡
+├── 哪些既有行為必須維持不變
+├── 預期會動到哪些檔案
+└── 你要怎麼證明結果</pre>
+
+<p>為什麼規格要交代「既有行為不變」和「證明方式」？因為舊程式碼裡常有一種細節：它的用意第一眼看不出來。一個奇怪的條件可能是在處理好幾年前的某個客戶案例；一個多出來的資料庫查詢，可能只是因為部署環境行為不同；一行看起來多餘的程式碼，可能是在擋另一個服務還在用的 API 合約。這些如果不先寫明「不能動」，很容易在重構時被當成雜訊清掉。</p>
+
+<h2>變更落點：先看能不能改現有的，再考慮新增</h2>
+
+<p>規劃變更落點時，這是一個有分支的判斷：</p>
+
+<ul>
+<li><strong>如果更新一個既有函式就夠了</strong>，那就改它，不另起爐灶。</li>
+<li><strong>如果需要在舊實作旁邊新增一份新實作</strong>，那就先讓新舊並存，逐步把呼叫端遷移過去，直到確認沒有東西依賴舊路徑，才把舊的移除。</li>
+<li><strong>如果這個變更會影響到已存的資料</strong>，規格就必須說明既有紀錄會如何繼續運作，以及是否需要 migration。示範裡的 architect 判斷無法原子完成，最後決定分兩次做。</li>
+</ul>
+
+<p>貫穿這一切的是同一條紀律，課程用一句很直白的話講它：<strong>看不懂它在做什麼的程式碼，就不要拆</strong>。architect 不會因為「一時看不出這段行為為什麼存在」就把它拿掉。它會去讀程式碼、搜尋呼叫者、必要時查歷史，然後把「必須保留」的東西記錄下來。這是你在舊碼庫裡保護既有行為的核心動作。</p>
+
+<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>結尾：做完會看到什麼</h2>
+
+<p>走完這一步，你應該拿到幾樣可驗證的東西：<code>docs/scope.md</code> 裡有一份規劃，把既有功能、這次要做的 planned slice、以及 deferred 的項目分清楚；<code>specs/1. return a book</code> 裡有一份被接受的規格，寫明變更落點、必須不變的行為、會動到的檔案，以及怎麼證明結果；而 scope 也會在規格被接受後更新。</p>
+
+<p>到這裡為止，你都還沒有改任何程式碼。這是有意的：規劃與設計的原理屬於 <code>/scope</code> 與 <code>/architect</code> 的範疇，而「照著規格把程式碼寫出來」是下一步 <code>/develop</code> 的事。先把紙上的東西談清楚，再把刀伸進檔案裡，正是這一節要建立的手感。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>在已建好地圖的舊碼庫上，<code>/scope</code> 會先讀 audit 的 <code>AGENTS.md</code>，問你要規劃哪個 slice，同時掃描既有碼庫做功能 inventory，最後把 existing／planned／deferred 的規劃寫進 <code>docs/scope.md</code>。接著 <code>clear</code> 再跑 <code>/architect</code>；它不從零設計，而是先讀功能現況、把請求追過既有檔案、查誰依賴它，才決定變更落點，並把這次定位成既有 stack 上的 enhancement。需求問題用來收斂決定，規格寫進 <code>specs/</code>，交代變更落點、必須不變的行為、會動到的檔案與證明方式。落點的原則是能改既有函式就改，否則新增在旁、逐步遷移；影響資料就要說明既有紀錄如何繼續運作與是否 migration。而最底線的一條：看不懂的程式碼不要拆。</p>
+</blockquote>
+
+<p>規劃與規格都到位了，接下來才是把刀伸進程式碼。下一節會用 <code>/develop</code>，看它怎麼跟著既有模式動手，把變更收在規格劃定的邊界內，做出一個最小而安全的成果。</p>
+
+<div class="lesson-nav">
+  <div><a href="./map-is-evidence-not-truth.html">← 上一步：地圖是證據不是真相：動手前先驗證它</a></div>
+  <div><a href="./develop-the-minimal-safe-change.html">下一步：用 /develop 下手：跟著既有模式改，只動該動的地方 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="/scope 在建立計畫之前，第一件事是做什麼？" data-correct="1" data-explain="它會先讀 audit 產出的 AGENTS.md，取得結構、指令、慣例與警告。">
+  <button class="opt">先打開資料庫，把現有資料抄一份出來</button>
+  <button class="opt">先讀 audit 產出的 AGENTS.md 取得脈絡</button>
+  <button class="opt">先隨機挑一個功能開始寫程式碼</button>
+  <button class="opt">先問你要用哪一顆模型來做這次規劃</button>
+</div>
+<div class="quiz" data-question="docs/scope.md 裡用什麼方式區分既有與新規劃的功能？" data-correct="3" data-explain="既有功能編號用字母，新的 planned 項目用數字，一眼可分辨。">
+  <button class="opt">既有功能用紅字，新規劃的功能用藍字</button>
+  <button class="opt">既有功能放檔案上半，新規劃放下半</button>
+  <button class="opt">既有功能不編號，新規劃才需要編號</button>
+  <button class="opt">既有用字母編號，新 planned 用數字編號</button>
+</div>
+<div class="quiz" data-question="/architect 在舊碼庫上提出建議前的順序是什麼？" data-correct="0" data-explain="先讀功能現況、追請求路徑、查依賴，最後才決定變更該怎麼放。">
+  <button class="opt">先讀現況、追請求路徑、查依賴，再決定落點</button>
+  <button class="opt">先決定落點，再去讀現況與既有相依關係</button>
+  <button class="opt">先寫好程式碼，再回頭補上設計的說明</button>
+  <button class="opt">先問使用者要用什麼函式庫，再開始設計</button>
+</div>
+<div class="quiz" data-question="規範裡為什麼要寫明「哪些既有行為必須維持不變」？" data-correct="2" data-explain="舊碼裡有些細節用意不明，不先寫明不能被當成雜訊清掉。">
+  <button class="opt">因為這樣可以讓新的程式碼寫得比較快</button>
+  <button class="opt">因為規格需要看起來更完整、更專業</button>
+  <button class="opt">舊碼有些細節用意不明，避免被當雜訊清掉</button>
+  <button class="opt">因為法律規定變更前必須標示所有行為</button>
+</div>
+<div class="quiz" data-question="如果變更需要更換既有實作，正確的做法是什麼？" data-correct="1" data-explain="新舊並存、逐步遷移呼叫端，等沒有東西依賴舊路徑後才移除它。">
+  <button class="opt">直接刪掉舊實作，一次把呼叫端全部改好</button>
+  <button class="opt">新舊並存、逐步遷移，確認無依賴才移除舊路徑</button>
+  <button class="opt">保留舊實作不動，另外開一個新專案重做</button>
+  <button class="opt">讓新舊兩條路徑長期並存，不需要移除</button>
+</div>
+<div class="quiz" data-question="「看不懂的程式碼不要拆」在這一節指的是什麼？" data-correct="0" data-explain="不因為一時看不出行為為何存在就移除它，而是讀碼、查呼叫者與歷史，記下必須保留的部分。">
+  <button class="opt">不因為一時看不出用意就移除既有行為</button>
+  <button class="opt">看不懂的檔案就整份刪掉重新寫一份</button>
+  <button class="opt">看不懂的部分一律加上註解再繼續開發</button>
+  <button class="opt">只有作者本人才能修改自己寫的程式碼</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · 在舊碼庫裡工作：先 audit，再最小變更 · Step 3/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

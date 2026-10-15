@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>在成熟舊專案上跑 /audit：它怎麼建出一張地圖</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>在成熟舊專案上跑 /audit：它怎麼建出一張地圖</h1>
+<p class="meta">Step 1/5 · 在舊碼庫裡工作：先 audit，再最小變更</p>
+
+<h2>學習目標</h2>
+<p>說出 <code>/audit</code> 在一個已成熟的舊專案上如何改成整庫掃描、寫出 root <code>AGENTS.md</code> 與 <code>CLAUDE.md</code> 指標、只在真正需要的區域放 nested 檔，並記下 stack、指令、慣例與新人第一天會被交代的細節。</p>
+
+<h2>前言：拿到一個不是你寫的專案，第一件事不是改它</h2>
+
+<p>上一節談到，agent 在舊碼庫上會失敗，核心原因是它手上沒有地圖：它讀得到程式碼「寫了什麼」，卻讀不出「為什麼存在」。所以它只能猜，而且常常猜得很乾淨、很自信，卻打破了專案依賴多年的規則。既然問題出在沒有地圖，第一件該做的事就很清楚了——不要急著叫 agent 改東西，先建出那張地圖。</p>
+
+<p>課程的示範情境很寫實：有人把一個專案丢給你。它叫 BookWise，是一個大學圖書館應用，開發過程累積了一百四十次檔案變更，裡面有超過兩年的真實程式碼。也因為它這麼舊，當年根本還沒有 <code>AGENTS.md</code> 這種東西，整個專案是純手工寫出來的。你在這種專案上開一個新的 Claude Code 視窗，如果直接叫 agent 動工，等於讓它在一座陌生的城市裡不看地圖就開車。這一節要看的，就是 <code>/audit</code> 在這種專案上會做出什麼。</p>
+
+<h2>/audit 第一件認出的事：這不是新專案</h2>
+
+<p>如果你在一個全新的專案上跑過 <code>/audit</code>，你看到的行為是它會反過來問你偏好什麼慣例，因為那時沒有任何既有的東西可以讀。但在這裡<strong>完全不是這樣</strong>。示範裡的 BookWise 已經有六十二個以上的原始檔、真的資料庫 migration、還有 auth，於是 audit 判斷它是一個已經成形的碼庫，直接改走另一條路：整庫掃描（whole-repo scan）。</p>
+
+<figure class="lesson-figure"><img src="./audit-builds-the-map-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>它會去檢視三個來源：程式碼、git 歷史，以及專案裡既有的檔案。這三樣合起來，才足夠讓它說出「這個專案平常怎麼運作」，而不是只看見單一檔案長什麼樣。</p>
+
+<pre data-provenance="derived"># 在專案根目錄開一個新的 Claude Code 視窗
+# 如果你的 skills 是全域安裝的，可以直接執行；否則要先裝 JSM 這套 skills
+/audit</pre>
+
+<p>這一步的重點不是指令本身，而是你要預期看到的路由結果：它不會問你慣例，而是開始讀檔。理解這一點，你才不會在它沉默地掃描時以為它卡住了。</p>
+
+<h2>掃描的過程中，它其實同時做了好幾件事</h2>
+
+<p>整庫掃描不是單純把檔案讀一遍。audit 會讀到「足夠寫出 <code>AGENTS.md</code>」為止，但在動筆寫文件之前，它還做了兩件事：先檢查有沒有 agent skills 或 MCP 需要你同意的決定，並快速看一下 components、forms 以及幾個檔案裡的慣例。接著它會問你：要不要順便幫你把 agent skills 和 MCP servers 建起來？</p>
+
+<p>這個專案當年純手工寫成，所以示範者直接說好。這裡有個值得學的手法：當你答應之後，audit 沒有把「探索 skill 與 MCP」塞進主要對話，而是<strong>開一個 sub-agent 去背景找</strong>，自己同時繼續寫地圖。這樣一來，你的主要對話裡最後只留下有用的結果，而不是它沿途打開過的每一個檔案。這正是你在 context 相關章節學過的取捨：把雜訊留給 sub-agent 自己的 context。</p>
+
+<p>探索的結果，它認出這個專案用了 Next.js，配 Drizzle ORM、PostgreSQL／Neon、Tailwind 與 Zod，再加上 Auth.js／NextAuth v5 與 Upstash。它把相關的 agent skills 裝了進去，並建議可以接上 Neon、Upstash、ImageKit 三個 MCP servers。有趣的是，其中一個 Auth.js 的 skill 套件看起來只是普通文件，卻被 GenScanner 標成 critical risk，而另一個掃描器認為它只是 low risk。audit 沒有替你決定，而是把這個判斷留給你——示範者最後選擇移除它。這種「把風險判斷交回人類」的克制，是你可以信任它的原因之一。</p>
+
+<h2>地圖裡記的，是資深工程師第一天會跟你講的事</h2>
+
+<p>map 寫完之後，內容讀起來就像一位資深工程師在你報到第一天會交代的東西：這個專案用什麼 stack、每天工作要跑哪些指令、程式碼遵循哪些模式，還有一些新人不講就會踩到的細節。root 的 <code>AGENTS.md</code> 會記錄語言與 runtime、帶明確版本的框架、關鍵依賴、套件管理器、build 策略（這裡留給 scope 決定）、測試指令、spec 存放的位置，以及整個碼庫遵循的規則；它也會列出裝好的 agent skills 和相關檔案。</p>
+
+<p>為什麼 root 檔特別重要？因為<strong>之後你給 agent 的每一則新 prompt，都會從先讀這份檔案開始</strong>。它現在知道這個專案的語言、runtime、框架版本、關鍵依賴、套件管理器、測試指令、spec 位置與規則，這些都是過去每次對話都得重新摸索、甚至每次猜得不一樣的東西。旁邊的 <code>CLAUDE.md</code> 則不重複內容，只留一行指向 <code>AGENTS.md</code> 的指標。</p>
+
+<figure class="lesson-figure"><img src="./audit-builds-the-map-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>nested 只放在真的需要的區域</h2>
+
+<p>一個區域如果<strong>真的</strong>有自己獨特的規則，audit 才會在靠近那段程式碼的地方再放一份 <code>AGENTS.md</code>。所謂「真的需要」，指的是它有不同於全域的慣例、有自己的指令、有外部整合，或是有重要的在地風險。它不會每個資料夾都放一份，因為那樣只會把成本加上去，卻沒有換到對應的資訊。在示範裡，她只在 <code>database</code> 與 <code>app</code> 兩個區域各放了一份。</p>
+
+<figure class="lesson-figure"><img src="./audit-builds-the-map-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這次是 <code>/audit</code> 第一次產出 nested 的 <code>AGENTS.md</code>。放在 <code>database</code> 的那份，記錄了 Drizzle ORM schema、Neon Postgres 連線、Redis client 以及 dev／seed script。其中 <code>schema.ts</code> 是整個資料模型的唯一真實來源，定義了 users、books、borrow records，並用 Postgres enum 表達 role、status、borrow status；<code>drizzle.ts</code> 與 <code>redis.ts</code> 負責建立執行期 client，供功能程式碼匯入；<code>seed</code> 則是一支獨立的開發腳本，不屬於 app 執行期。這份檔會指出關鍵檔案、它們各自負責什麼、可用的指令，以及慣例。</p>
+
+<p>放在 <code>app</code> 的那份，談的主要是 layout：auth layout 管登入與註冊，另外還有 root layout、admin layout，以及另一個頁面，並把相關慣例一併記下。這樣安排的用意是：agent 只有在做資料庫相關的事時，才會去讀 <code>database</code> 那一份，處理一般頁面時不會被資料庫細節干擾。</p>
+
+<h2>這條規則在所有專案上都一樣</h2>
+
+<p>同一個 skill 會隨專案型態調整：遇到 monorepo，它會建立一份簡短的 root 檔，再為每個 workspace 各放一份 agent 檔。但不管哪一種情況，底層的規則都相同——<strong>讀既有的內容，只補上缺少的，並保護別人已經寫好的東西</strong>。正是這份克制，讓一個團隊願意信任這張地圖，而不是每到有人重跑一次就擔心它被整份改寫。</p>
+
+<p>走完這一輪，你就有能力在一個從沒打開過的專案上開始工作了：它現在有一張每個 skill 都讀得到的地圖，而地圖裡的 stack、指令、慣例與重要風險，都是從真實程式碼長出來、再由你檢查過的。這張地圖，正是讓整套 agentic engineering workflow 能在這裡安全跑起來的前提。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+<p>在已成熟的舊專案上，<code>/audit</code> 不會問你慣例，而是因為偵測到足夠的既有訊號（檔案數、migration、auth），改走整庫掃描。它讀程式碼、git 歷史與既有檔案，先把 agent skills 與 MCP 的探索交給背景 sub-agent，再寫出 root <code>AGENTS.md</code> 加一行 <code>CLAUDE.md</code> 指標，並只在真有獨特慣例的區域（示範中是 <code>database</code> 與 <code>app</code>）放 nested 檔。root 記錄的，是資深工程師第一天會交代的事：stack、每日指令、程式碼模式與容易漏掉的細節。而貫穿所有專案型態的，是同一條原則：讀既有的、只補缺的、保護別人寫好的。</p>
+</blockquote>
+
+<p>地圖有了，但要小心一件事：它是從證據推出來的一組判斷，不是不容質疑的真相。下一節要談的，就是動手之前，你該怎麼把這張地圖對著真實專案驗一遍。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./map-is-evidence-not-truth.html">下一步：地圖是證據不是真相：動手前先驗證它 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 /audit 在 BookWise 上不問「你偏好什麼慣例」？" data-correct="1" data-explain="它偵測到專案已成形，於是改走整庫掃描，而不是詢問慣例。">
+  <button class="opt">因為它偵測到這是全新的空白專案</button>
+  <button class="opt">因為它判斷專案已成形，改走整庫掃描</button>
+  <button class="opt">因為它認為慣例問題交給使用者太麻煩</button>
+  <button class="opt">因為它只能掃描、無法主動發問問題</button>
+</div>
+<div class="quiz" data-question="root 的 AGENTS.md 為什麼特別重要？" data-correct="2" data-explain="之後每一則新 prompt 都會先讀這份檔案，再開始做事。">
+  <button class="opt">它是唯一會被版本控制追蹤的設定檔</button>
+  <button class="opt">它負責存放所有功能規格的詳細內容</button>
+  <button class="opt">每一則新 prompt 都會從先讀它開始</button>
+  <button class="opt">它會自動覆寫專案裡既有的慣例設定</button>
+</div>
+<div class="quiz" data-question="什麼情況下 /audit 才會放一份 nested 的 AGENTS.md？" data-correct="3" data-explain="只有該區域真的有自己的慣例、指令、外部整合或在地風險時才放。">
+  <button class="opt">只要那個資料夾裡有超過三個檔案</button>
+  <button class="opt">只要那個資料夾是專案裡的第二層目錄</button>
+  <button class="opt">只要那個資料夾裡有任何程式碼檔案</button>
+  <button class="opt">該區域真的有自己獨特的慣例或風險</button>
+</div>
+<div class="quiz" data-question="audit 為什麼把 agent skills 與 MCP 的探索交給 sub-agent？" data-correct="1" data-explain="讓主對話只留下有用的結果，而不是沿途開過的每個檔。">
+  <button class="opt">因為主 agent 不被允許讀取這些檔案</button>
+  <button class="opt">讓主對話只留有用結果，不留每個開過的檔</button>
+  <button class="opt">因為探索這些檔案需要用到另一套模型</button>
+  <button class="opt">讓掃描速度加快，但不影響任何輸出內容</button>
+</div>
+<div class="quiz" data-question="底下那條無論哪種專案都成立的原則是什麼？" data-correct="0" data-explain="讀既有內容、只補缺少的、保護別人已經寫好的，團隊才敢信任地圖。">
+  <button class="opt">讀既有的、只補缺的、保護別人已寫的</button>
+  <button class="opt">每次重跑都整份重寫，確保內容最新</button>
+  <button class="opt">把所有慣例都集中塞進 root 一份檔案</button>
+  <button class="opt">為每個資料夾都建立一份自己的說明檔</button>
+</div>
+<div class="quiz" data-question="audit 對那個被標成 critical risk 的 Auth.js skill，最後怎麼處理？" data-correct="2" data-explain="它把風險判斷留給人，示範者最後選擇把它移除。">
+  <button class="opt">掃描器說高風險，所以它直接強制移除</button>
+  <button class="opt">掃描器說低風險，所以它直接全部保留</button>
+  <button class="opt">把風險判斷留給人，由使用者決定去留</button>
+  <button class="opt">兩個掃描結果不一致時直接重新掃一遍</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · 在舊碼庫裡工作：先 audit，再最小變更 · Step 1/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跑一次 check review：換模型、讀全檔、拿 findings</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>跑一次 check review：換模型、讀全檔、拿 findings</h1>
+<p class="meta">Step 2/5 · check review 與 /document：第二個視角、會跟著走的紀錄</p>
+
+<h2>學習目標</h2>
+<p>這一節要帶你完整跑一次 <code>check review</code>。做完之後，你會拿到一份依嚴重度排序的 findings 檔；而你的主對話只會收到一份精簡摘要，因為讀 diff 與讀檔的過程都發生在一個獨立的唯讀 helper 裡。你會逐步看懂：它怎麼判斷作者模型、為什麼只問一句確認、換成哪一個模型、為什麼要讀完整份檔案，以及一份 findings 該怎麼讀。</p>
+
+<h2>前言：動手前先確認目標與前置條件</h2>
+<p>前置條件是：這個功能已經建置、驗證、通過測試，而且處在一條相對 base 有差異的分支上（或是你在 base 分支上直接有尚未提交的變更）。如果你還沒走到這一步，先回去把 <code>check verify</code> 與 <code>test</code> 跑完，因為 <code>check review</code> 不重跑 app、也不補測試，它假設這些都已經做過了。</p>
+<p>你要準備的只有一件事：想清楚這次要請它看哪個範圍。課程示範選的是資料模型（data model），也就是整個資料庫設定，因為整個應用程式都依賴它。範圍講得越具體，findings 越聚焦。</p>
+
+<h2>Step 1：啟動，先選 verify 還是 review</h2>
+<p>打開 Claude Code，或任何你慣用的 agent，然後跑 <code>check</code>。它不會直接動手，而是先問你要跑哪一種檢查，以及針對哪個部分。課程示範輸入的是 <code>check review data model</code>。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/SKILL.md#pick-the-mode-route-before-doing-anything-else">Which check do you want to run? Type one:
+  • verify  run the real app and prove the change works against its spec (usually right after /develop)
+  • review  a fresh model senior read of the diff, ranked findings (usually right before a PR)
+  • both    verify first, then review</pre>
+
+<p>兩個模式的時機不同：<code>verify</code> 通常接在 <code>/develop</code> 之後，用真實的 app 證明行為；<code>review</code> 通常發生在開 PR 之前。除此之外，它還支援幾種 steering：<code>check review with opus</code> 可以指定 reviewer，<code>check review uncommitted</code> 則把範圍縮到工作區尚未提交的變更。</p>
+
+<h2>Step 2：它先判斷「這段碼是誰寫的」</h2>
+<p>在它讀第一行程式碼之前，它得先弄清楚一件事：這段碼是哪個模型寫的。原因是，如果把作品交還給作者本人審，就等於整個機制白做了。所以它必須先確定作者是誰，再換一個不同的模型。</p>
+
+<figure class="lesson-figure"><img src="./run-check-review-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>判斷的方式特別值得注意。它<strong>不會</strong>問目前正在跑的模型「你是誰」，因為那個答案本身可能就錯，而且一段對話裡寫死的模型名稱，在你一換模型之後就立刻過時。它改為去讀專案設定檔。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/modes/review.md#1-determine-the-author-model-then-pick-a-different-reviewer">**1a: Detect the author model (best effort).** The author model is whatever is generating code in this session. Using your file tools, read `ANTHROPIC_MODEL` from the env if set, and check `.claude/settings.local.json`, `.claude/settings.json`, and the user-level `.claude/settings.json` in the home directory for a `"model"` value. Map ids to families: `claude-opus-*` → `opus`, `claude-sonnet-*` → `sonnet`, `claude-haiku-*` → `haiku`, `claude-fable-*` → `fable`. Use the system-prompt value only as a last-resort weak hint, possibly stale.</pre>
+
+<p>換句話說，它把「我是誰」換成「這個專案設定成用誰」。設定檔是持久的，不會因為你在對話中途切換模型而說謊。</p>
+
+<h2>Step 3：只問你一句確認</h2>
+<p>偵測完之後，它只給你一個問題：「這是寫這段碼的模型嗎？」</p>
+<p>這一句確認看起來很小，卻是整個機制的保證。因為偵測只是盡力而為（best effort），一旦猜錯，就會默默用同一個模型審同一份程式碼，整個跨模型的好處當場消失。所以它把這一步交給你看一眼確認；如果偵測到的家族是對的，直接選推薦項就好。課程示範裡，作者是 Sonnet，所以確認 sonnet 是正確答案；換成你，可能是 Opus 或其他。</p>
+
+<h2>Step 4：它換一個不同的模型來 review</h2>
+<p>你確認作者後，它會挑一個對照的模型當 reviewer。對照關係是固定的：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/modes/review.md#1-determine-the-author-model-then-pick-a-different-reviewer">| Author model | Reviewer model to spawn |
+|---|---|
+| `opus` | `sonnet` |
+| `sonnet` | `opus` |
+| `fable` | `opus` |
+| `haiku` | `sonnet` |</pre>
+
+<p>規則的核心是：reviewer 永遠不能和作者同一個家族。另外，review 是高度需要推理的工作，所以不會用 haiku 來審。課程示範這一輪的結果是「作者 Sonnet、review 用 Opus」。</p>
+
+<h2>Step 5：review 在一個唯讀的 helper 裡跑</h2>
+<p>接著它把 review 放進一個獨立的子代理去跑。這個子代理拿到的工具裡沒有 <code>Edit</code>，也就是說，它結構上根本無法修改程式碼。它只能讀、只能判斷、只能把發現寫進 findings 檔。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/modes/review.md#4-spawn-the-review-subagent-on-the-contrasting-claude-model">- `model`: the reviewer model chosen in Step 1 (different family from the author)
+- `description`: `"Review: &lt;N&gt; changed files on &lt;reviewer-model&gt;"`
+- Tools: `Read`, `Bash`, `Grep`, `Glob`, `Write`, no `Edit` (the reviewer reports, it does not change code)</pre>
+
+<p>這樣安排還有第二個好處：diff 與檔案的讀取都留在那個子代理裡，不會擠進你的主對話。你的 session 只收到最後的濃縮結論，context 不會被大量檔案內容撐爆。</p>
+
+<figure class="lesson-figure"><img src="./run-check-review-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>Step 6：它不只讀 diff，還把每個檔案整份讀完</h2>
+<p>很多 review 工具只看 diff，它偏不。它會先看 diff，然後做一件大多數工具沒做的事：把涉及的每一個檔案從頭到尾讀一遍。</p>
+<p>原因不難懂。diff 只顯示「你改了哪幾行」，但真正決定這個改動安不安全的，往往是那幾行<strong>周圍</strong>的程式碼。只盯著改動的行，你會看不清它在整體裡造成的影響。</p>
+<p>課程示範裡，因為範圍是資料模型，它檢查了 source 下的 database 資料夾、server、drizzle，以及 spec。整個 run 總共涉及 23 個檔案。</p>
+
+<h2>Step 7：讀懂它回來的 findings</h2>
+<p>跑完之後，findings 會寫成一份檔案，主模型只轉述重點。你讀的時候可以先抓這幾層：</p>
+<ul>
+  <li><strong>verdict</strong>：結論落在哪一級。選項有 Approve、Approve with nits、Changes requested、Blocked 四種。</li>
+  <li><strong>Blockers</strong>：合併前一定要修的項目，這是最該先看的一層。</li>
+  <li><strong>Major</strong>：嚴重但不必擋住合併的問題。</li>
+  <li><strong>Minor 與 nitpicks</strong>：可以順手修的小事。</li>
+  <li><strong>Strengths 與 test coverage</strong>：它認為做得好的地方，以及測試是否真的涵蓋了需求。</li>
+</ul>
+<p>課程把轉述的原則說得很清楚：先把結論講出來，把每一個 blocker 和 major 都攤開，因為那些才是行動項目；minor、nitpicks、strengths 以及 reviewer 與範圍，收斂成最後一行，再附上完整 findings 的檔案路徑。</p>
+
+<figure class="lesson-figure"><img src="./run-check-review-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>示範這一輪的結果是：五個 major 修正，另外還有十個 minor、八個 nitpicks，以及一句 strengths「schema faithfully implements the spec」。其中幾個 major 很值得看，因為它們正好是「作者自己不容易抓到」的那種問題：</p>
+<ul>
+  <li><code>package.json</code> 把某個套件放在 devDependencies，但它其實是執行期的 peer dependency，所以正式環境做精簡安裝時整個 owner auth 會壞掉。</li>
+  <li>客戶端身分用的 JWT 沒有到期時間，與兩份 spec 要求的 90 天到期互相矛盾，等於 token 永遠有效。</li>
+  <li>server actions 的交易沒有防護，可能在專案被刪除時直接拋錯，而不是回傳 <code>{ ok: false }</code>。</li>
+  <li>唯一涵蓋 AC1 到 AC9 的測試被 <code>describe.skip</code> 關掉了，從來沒有真的跑過。</li>
+</ul>
+<p>示範者也點出，第一點他自己大概不會發現。這正是獨立視角的價值。</p>
+
+<h2>Step 8：findings 拿到手之後</h2>
+<p>你可以直接叫 agent 依照這份文件逐項修掉所有問題。如果 review 裡夾帶的是 bug，就交給 <code>debug</code> 處理；如果是測試相關的問題，就交給 <code>test</code> 去補。到這裡你會開始看見，這些 skill 是彼此接得起來的。</p>
+<p>也要記得 skill 本身的邊界：<code>check review</code> 在轉述完之後就結束了。它<strong>不修</strong> findings（那是實作端的事），也不會去呼叫其他 skill。它的工作只是評估。</p>
+
+<h2>小結</h2>
+<blockquote>
+<p><code>check review</code> 從專案設定檔判斷作者模型，而不是問目前模型自己是誰；只問一句「這是寫這段碼的模型嗎」來確認，因為猜錯就會讓跨模型的好處消失。接著它換成一個不同家族的模型，在一個沒有 <code>Edit</code> 權限的唯讀子代理裡跑 review。</p>
+<p>它先看 diff，再把涉及的每個檔案整份讀完，因為決定改動安不安全的是周圍的程式碼。回來的 findings 會依嚴重度排序，並附上一句 strengths 與測試覆蓋的判讀。你可以拿它去修問題，bug 交給 <code>debug</code>、測試交給 <code>test</code>；而 <code>check review</code> 自己只負責判斷，不負責修改。</p>
+</blockquote>
+
+<p>程式碼有了第二個視角，接下來要處理的是「人」。下一節要看 <code>/document</code> 為什麼要讀四份材料，以及它如何把理由與風險直接從磁碟上拿出來，而不是靠你一週後回想。</p>
+
+<div class="lesson-nav">
+  <div><a href="./why-a-second-mind.html">← 上一步：為什麼需要第二個視角：GA tier 的獨立 review</a></div>
+  <div><a href="./document-four-inputs.html">下一步：/document 為什麼讀四份材料：讓理由與風險從磁碟來 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="check review 判斷作者模型的方式是什麼？" data-correct="2" data-explain="它讀專案設定檔，而不是問目前模型自己是誰。">
+  <button class="opt">直接問目前正在跑的模型「你是哪一個模型」</button>
+  <button class="opt">從 diff 的縮排風格推測是由誰撰寫</button>
+  <button class="opt">讀專案設定檔裡的 model 值再請你確認</button>
+  <button class="opt">從 commit message 裡的署名逐筆還原</button>
+</div>
+<div class="quiz" data-question="為什麼它不是問目前模型自己是誰？" data-correct="1" data-explain="自我辨識可能出錯，對話裡的模型名一換模型就過時。">
+  <button class="opt">因為目前的模型沒有權限讀取 env 變數</button>
+  <button class="opt">因為自我辨識可能錯，也會隨換模型而過時</button>
+  <button class="opt">因為問自己會多花掉一次昂貴的模型呼叫</button>
+  <button class="opt">因為那會把作者資訊洩漏給審查的模型</button>
+</div>
+<div class="quiz" data-question="review 子代理拿到的工具裡，刻意少了哪一個？" data-correct="3" data-explain="沒有 Edit，代表它結構上無法修改被審的程式碼。">
+  <button class="opt">少了 Read，避免它讀取不相關的檔案</button>
+  <button class="opt">少了 Bash，避免它執行專案的指令</button>
+  <button class="opt">少了 Write，避免它產出額外的檔案</button>
+  <button class="opt">少了 Edit，代表它無法修改被審的程式碼</button>
+</div>
+<div class="quiz" data-question="它為什麼要在 diff 之外，把每個檔案整份讀完？" data-correct="0" data-explain="決定改動安不安全的是它周圍的程式碼。">
+  <button class="opt">因為決定改動安不安全的是周圍的程式碼</button>
+  <button class="opt">因為 diff 的資訊量太少，讀起來毫無意義</button>
+  <button class="opt">因為整份讀完才能順便算出測試覆蓋率</button>
+  <button class="opt">因為這樣可以順手把格式問題一併修掉</button>
+</div>
+<div class="quiz" data-question="findings 回來之後，哪一層最該先看？" data-correct="2" data-explain="Blockers 是合併前一定要修的項目。">
+  <button class="opt">最下面的 nitpicks，因為通常最容易修</button>
+  <button class="opt">strengths，因為那代表工作被肯定</button>
+  <button class="opt">Blockers，那是合併前一定要修的項目</button>
+  <button class="opt">test coverage，因為那決定要不要再跑一次</button>
+</div>
+<div class="quiz" data-question="關於 check review 的邊界，下列哪一項正確？" data-correct="1" data-explain="它只評估並轉述 findings，不修也不呼叫其他 skill。">
+  <button class="opt">它修完 blocker 之後會自動幫你重新合併</button>
+  <button class="opt">它只評估並轉述 findings，不修也不呼叫其他 skill</button>
+  <button class="opt">它會直接把每個 major 問題改成對的寫法</button>
+  <button class="opt">它跑完之後會順手把 spec 一併更新對齊</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · check review 與 /document：第二個視角、會跟著走的紀錄 · Step 2/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

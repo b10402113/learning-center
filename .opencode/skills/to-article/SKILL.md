@@ -13,6 +13,7 @@ Rewrite the HTML lessons of a subject's steps into readable illustrated articles
 - `/to-article <subject> <slug> [<slug> ...]` — only the listed nodes.
 - Append `-max-subagents N` (default 3): how many nodes run in parallel.
 - Append `-max-parallel N` (default 2): how many text calls one node's batch may run at once. At most `max-subagents × max-parallel` text calls are ever in flight.
+- Append `-plan-only` to plan images without rewriting: the text model is never called. Each step with an existing `rewritten.html` — or else the current lesson, which the batch adopts as the base — is planned in place; steps already planned are skipped.
 
 Prereqs: `learn/<subject>/MEMORY.md` and `learn/<subject>/ROADMAP.md` exist; the repo root has `npm install` run and a `.env` with `TEXT_API_KEY` (see `.env.example`). If any is missing, say so and stop.
 
@@ -24,10 +25,11 @@ Completion: every node was dispatched to its own article-agent, every agent retu
 
 ## Article-prompt
 
-Passed to each `task` call. Fill `<SUBJECT>`, `<NODE-ID>` and `<MAX-PARALLEL>` first; dispatch with `subagent_type: article-agent`.
+Passed to each `task` call. Fill `<SUBJECT>`, `<NODE-ID>`, `<MAX-PARALLEL>` and `<YES or NO>` first; dispatch with `subagent_type: article-agent`.
 
 ```
 Process one whole lesson node in node-article mode. Subject: <SUBJECT>. Node: <NODE-ID>.
+Plan-only: <YES or NO>. If YES, pass `--plan-only` to the article-batch call — the text model is never called; plan each step from its existing rewrite, or from the current lesson which the batch adopts as the base.
 
 Follow your article-agent instructions (mode `node-article`) exactly: run the `src/html-cli.mjs article-batch --subject <SUBJECT> --node <NODE-ID> --max-parallel <MAX-PARALLEL>` call (it uses the .env text model and rewrites every step of the node in one batch), then for each step it reports as `rewritten`, one step at a time: read the rewrite, decide the image plan, insert the `<!--image:N-->` marker lines (the only edit you may make to that file), write the plan file, and run the `src/html-cli.mjs figures` call for that step to finalize.
 

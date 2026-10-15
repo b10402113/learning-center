@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>test 掃什麼：branch 變更、檔案分類與 AC 追溯</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>test 掃什麼：branch 變更、檔案分類與 AC 追溯</h1>
+<p class="meta">Step 3/4 · 實跑 check verify 與 test</p>
+
+<h2>學習目標</h2>
+<p>說出 <code>test</code> skill 只測這條 branch 上尚未 commit 的變更、依檔案類型挑測試策略、把可自動化的耐久條件追到 <code>AC-N</code>，並拒絕替 scaffolding 上鎖。</p>
+
+<h2>前言：證明只描述了今天</h2>
+
+<p>上一節你親眼看著 <code>check verify</code> 把功能跑起來、留下證據、一條條蓋章。那一刻的證明是真的，但它只描述了「今天」。你接下來要做的下一個功能，很可能動到同一段程式；如果它不小心踩壞了舊行為，現在這個證明幫不上忙——沒有東西會跳出來告訴你。</p>
+
+<p>把一次性的證明，變成「以後每次改動都會被守住」的保護，就是 <code>test</code> 這個 skill 的工作。它有兩個地方特別容易被誤解。第一，它一開始不會問你「想測什麼」，而是自己從 git 的工作區裡把範圍算出來；第二，它不是看到檔案就套同一種測試，而是先分類、再挑策略。這一節先把這兩個判斷看明白，下一節才真的動手跑它。</p>
+
+<h2>範圍由 git 決定，不由你決定</h2>
+
+<p>很多測試工具一開頭就丟問題給你：「要測哪個資料夾？」<code>test</code> 不這樣做，因為範圍有更誠實的來源：這條 branch 上、還沒 commit 的變更。它用幾個指令就能算出來：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/test/SKILL.md#1-determine-scope-from-git-do-this-first-if-empty-no-point-asking-anything">- Tracked (staged + unstaged), excluding deletions: `git diff --name-only --diff-filter=ACMR HEAD`
+- Untracked, and not ignored: `git ls-files --others --exclude-standard`</pre>
+
+<p>第一行抓的是「已追蹤但還沒 commit」的變更（新增、複製、修改、改名，排除刪除），第二行抓的是「還沒被追蹤、也沒被忽略」的新檔案。兩者合起來去掉重複，就是這次要處理的範圍。</p>
+
+<p>接下來它會把不該測的檔案濾掉：測試檔本身、設定檔、lock 檔與產生出來的 build 輸出、樣式檔、型別宣告，以及文件與 <code>test-preferences.json</code>。剩下的才是 scope。之所以不問你，是因為 git 工作區就是最直接的答案——你剛剛改了什麼，那裡就是最該補測試的地方。它唯一的例外是範圍「空的時候」：沒有未 commit 的變更，它會問你要不要測最後一個 commit、指定某些檔案，或現在先不測。</p>
+
+<p>如果濾完之後還剩超過十五個原始檔，它不會硬幹。它會先依類型排優先順序——<code>logic</code> 與 <code>api/server</code> 最有風險、也最容易測得好——再問你要先全力測這些、分批全部測完，或由你指定要聚焦的檔案。</p>
+
+<figure class="lesson-figure"><img src="./test-skill-scoping-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>檔案分類：同一種測試不能套在每一種檔案上</h2>
+
+<p>範圍定好之後，它會只憑路徑與檔名，先替每個檔案歸類。這一步刻意做得便宜，不把檔案讀進來；真的難以判斷時，就先標成 <code>logic</code>，等寫測試時讀了檔案再重新標一次。分類表是固定的：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/test/SKILL.md#1b-classify-each-scoped-file">| Signals in path / filename | Class | Test strategy |
+|---|---|---|
+| `*.tsx`/`*.jsx`/`*.vue`/`*.svelte` not under a route/page path | **component** | Component test (render + interact + assert DOM/ARIA) |
+| `app/**/page.*`, `pages/**` (not `pages/api`), `*Screen.*`, `*View.*` | **page/flow** | E2E candidate + component test of pieces |
+| `app/**/route.*`, `pages/api/**`, `*.controller.*`, `*.handler.*`, `*.resolver.*`, `actions.*` | **api/server** | Integration test (call handler, mock at boundary) |
+| Plain `.ts`/`.js`/`.py`/`.go`/`.rs`, utils, hooks, services, domain logic | **logic** | Unit test (inputs → outputs, edge cases, errors) |
+| `cli.*`, `bin/**`, `*.command.*`, `cmd/**` | **cli** | Integration test invoking the command |</pre>
+
+<p>這張表決定了每個檔案該用哪種測試。<code>logic</code> 是純函式：餵真的輸入、斷言輸出，把邊界與錯誤情況盡量覆蓋，只在真正的邊界（網路、檔案系統、時鐘、隨機）才 mock。<code>component</code> 是渲染元件、用使用者事件互動、斷言使用者看到什麼，而不是斷言內部 state 或 class 名稱。<code>page/flow</code> 是頁面流程，有 E2E 工具就寫一條真實瀏覽器的主流程加上一條失敗路徑，同時把頁面裡不簡單的零件也做元件測試。<code>api/server</code> 是整合測試：呼叫 handler 或 route，斷言 status、回應形狀與錯誤回應，只在資料庫與外部服務的邊界 mock。<code>cli</code> 則是實際帶參數執行指令，斷言 stdout、exit code 與副作用，也要涵蓋參數錯誤的路徑。</p>
+
+<p>分類也決定了它「不會做」的事：它不會替一個純邏輯檔硬塞瀏覽器測試，也不會替一個 UI 元件只斷言內部變數。demo 裡那句話說得很直白——comment 的邏輯拿到單元測試，endpoints 拿到整合測試，thread 元件則被渲染之後，用「人會怎麼操作它」的方式驅動。</p>
+
+<h2>把耐久條件追回 <code>AC-N</code></h2>
+
+<p>如果這次變更有一個對應的 spec，<code>test</code> 會讀它的驗收條件，把「可以被自動化、而且是耐久行為」的那些寫成測試，而且每個測試都標上它守的是哪一條 <code>AC-N</code>——例如在測試標題裡帶上 <code>AC-3</code>，或加一行 <code>covers: AC-3</code>。這樣一來，測試套件就對得上合約，而不只是一堆鬆散的檢查。</p>
+
+<p>反過來，有些驗收條件天生無法自動化：視覺外觀、需要真人收到一封信、或需要特定環境。遇到這種，它不會硬掰一個假的測試來交差，而是記進 <code>NOT_COVERED</code>，寫明原因，交回給 <code>/check verify</code> 的人工步驟處理。這是它對「測試」這件事的誠實邊界。</p>
+
+<figure class="lesson-figure"><img src="./test-skill-scoping-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>拒絕替 scaffolding 上鎖</h2>
+
+<p>不是所有看起來「該有測試」的東西都值得測。如果這個 slice 目前還刻意用假資料或佔位實作（scaffolding），那它本來就會一直變；把當下的樣子鎖成斷言，只是製造未來的假失敗。所以 <code>test</code> 會拒絕替這種還在變的東西上鎖，也不會去斷言一個計畫上還沒真正做好的實作。</p>
+
+<p>判準是「這條 slice 承諾要做出真的行為」：真正承諾要上線的行為，才值得被斷言守著；刻意先做假的佔位，就留著讓它變。這也呼應了工作流程裡「build approach 決定這條 slice 要做到多真」的那套校準方式。</p>
+
+<h2>測試偏好存在哪裡</h2>
+
+<p><code>test</code> 每次都會先讀專案根目錄的 <code>test-preferences.json</code>，用來決定要不要寫測試套件、用什麼工具。這份檔案有兩種形狀。第一種是專案有跑測試的工具：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/test/modes/setup.md#step-6-save-preferences">{
+  "tool": "&lt;unit framework&gt;",
+  "gate": null,
+  "additionalTools": ["@testing-library/react"],
+  "e2eTool": "&lt;playwright|cypress|none&gt;",
+  "testDir": "&lt;conventional dir for the tool&gt;",
+  "filePattern": "&lt;*.test.ts&gt;",
+  "packageManager": "&lt;npm|pnpm|yarn|bun&gt;"
+}</pre>
+
+<p>第二種，是專案刻意不裝 test runner，改用 typecheck／lint 當閘門：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/test/modes/setup.md#step-6-save-preferences">{
+  "tool": null,
+  "gate": "typecheck+verify",
+  "packageManager": "&lt;npm|pnpm|yarn|bun&gt;"
+}</pre>
+
+<p>關鍵差別在 <code>tool</code> 這個欄位。如果它是一個工具名稱，代表專案有 runner；如果它是 <code>null</code> 而 <code>gate</code> 有值，代表這是一個「刻意選擇不裝 runner」的專案，<code>test</code> 就不會硬塞一套測試框架給你，只會跑它的 typecheck 閘門，行為則交給 <code>/check verify</code>。這也是為什麼它判斷的是 <code>tool</code> 這個欄位的內容，而不是「這個檔案存不存在」。</p>
+
+<figure class="lesson-figure"><img src="./test-skill-scoping-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>test</code> 的範圍由 git 決定：只測這條 branch 上還沒 commit 的變更，再濾掉測試檔、設定、lock、產出物、樣式與文件。剩下的檔案先依路徑歸類成 component／page-flow／api-server／logic／cli，再依類型挑對應的測試策略。若這次變更有對應的 spec，它會把可自動化的耐久條件寫成測試並追到 <code>AC-N</code>，無法自動化的就記進 <code>NOT_COVERED</code>。它拒絕替還在變的 scaffolding 上鎖，也會先讀 <code>test-preferences.json</code> 決定要不要寫測試套件、用什麼框架。
+</blockquote>
+
+<p>看懂它掃什麼、怎麼分類之後，下一節要真的跑一次 <code>test</code>：讓它把測試寫出來、跑到 green，把測試檔與偏好檔留在專案裡，讓下一次改動有東西可以幫你踩剎車。</p>
+
+<div class="lesson-nav">
+  <div><a href="./run-check-verify.html">← 上一步：跑一次 check verify：在真 App 上對驗收條件找真 bug</a></div>
+  <div><a href="./run-test-to-green.html">下一步：跑一次 test：把一次性驗證變成回歸保護 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="test skill 的測試範圍是怎麼決定的？" data-correct="1" data-explain="範圍是這條 branch 上尚未 commit 的變更，由 git 工作區決定。">
+  <button class="opt">由使用者回應的問題清單來決定範圍</button>
+  <button class="opt">這條 branch 上尚未 commit 的變更</button>
+  <button class="opt">專案裡全部的原始碼檔案都要被測到</button>
+  <button class="opt">只有最新那一個 commit 裡改到的檔案</button>
+</div>
+<div class="quiz" data-question="下列哪一種檔案會被歸類成 logic 並拿到單元測試？" data-correct="3" data-explain="純 ts／js／py 的工具、hook、service、領域邏輯都算 logic。">
+  <button class="opt">app 目錄裡負責某個路由的 route 檔</button>
+  <button class="opt">不屬於 route 路徑下的 React 元件檔</button>
+  <button class="opt">app 目錄裡負責渲染的 page 檔案</button>
+  <button class="opt">負責商業邏輯的一般 TypeScript 檔案</button>
+</div>
+<div class="quiz" data-question="當這次變更有對應的 spec 時，test 會怎麼處理驗收條件？" data-correct="0" data-explain="可自動化的耐久條件寫成測試並標上它守的 AC-N。">
+  <button class="opt">可自動化的耐久條件寫成測試並標上 AC-N</button>
+  <button class="opt">所有驗收條件都改寫成手動檢查清單</button>
+  <button class="opt">直接沿用 spec 的條文當作測試的名稱</button>
+  <button class="opt">把無法自動化的條件也硬做成自動測試</button>
+</div>
+<div class="quiz" data-question="遇到無法自動化的驗收條件時，test 會怎麼做？" data-correct="2" data-explain="記進 NOT_COVERED 並寫明原因，交回 ／check verify 的人工步驟。">
+  <button class="opt">直接把它標成 met 當作已經驗證過</button>
+  <button class="opt">跳過整份 spec 完全不去追溯條件</button>
+  <button class="opt">記進 NOT_COVERED 寫明原因交回人工</button>
+  <button class="opt">自己編一個假的測試來讓它變成綠燈</button>
+</div>
+<div class="quiz" data-question="test 為什麼拒絕替 scaffolding 上鎖？" data-correct="1" data-explain="它本來就會一直變，鎖成斷言只會製造未來的假失敗。">
+  <button class="opt">因為 scaffolding 程式碼通常沒有被寫進 git</button>
+  <button class="opt">它本來就會變，鎖住只會製造假失敗</button>
+  <button class="opt">因為佔位實作沒有所謂正確的行為可言</button>
+  <button class="opt">因為它不屬於這次 branch 的變更範圍內</button>
+</div>
+<div class="quiz" data-question="test-preferences.json 裡 tool 為 null 而 gate 有值時，代表什麼？" data-correct="3" data-explain="這是刻意不裝 runner 的專案，只跑 typecheck 閘門，行為交給 ／check verify。">
+  <button class="opt">偏好檔損壞了需要重新偵測技術棧</button>
+  <button class="opt">專案還沒安裝任何測試相關的工具</button>
+  <button class="opt">專案有 runner 但還沒被偵測出來</button>
+  <button class="opt">刻意不裝 runner，只跑 typecheck 閘門</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · 實跑 check verify 與 test · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

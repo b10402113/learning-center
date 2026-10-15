@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { generateArticle, normalizeImagePlan, parseImagePlanMarkers, insertImages, generateEvolinkImage, generateOpenAIImage, resolveImageProvider, responseFormatFor, textContent, MAX_IMAGES, responseError, outputDirName, slugifyTopic } from './pipeline.mjs';
+import { generateArticle, normalizeImagePlan, parseImagePlanMarkers, insertImages, generateEvolinkImage, generateOpenAIImage, generateGeminiImage, resolveImageProvider, responseFormatFor, textContent, MAX_IMAGES, responseError, outputDirName, slugifyTopic } from './pipeline.mjs';
 
 test('slugifyTopic strips path and control characters', () => {
   assert.equal(slugifyTopic('a/b\\c:d*e?f|g<h>i"j'), 'a-b-c-d-e-f-g-h-i-j');
@@ -251,6 +251,32 @@ test('openai-compatible image: requests b64_json for non-native models (Grok)', 
   assert.deepEqual(bytes, png);
   assert.deepEqual(JSON.parse(calls[0].body), { model: 'grok-imagine-image-2.0', prompt: 'x', n: 1, response_format: 'b64_json' });
 });
+test('gemini image: decodes the base64 data URL from the chat message', async () => {
+  const calls = [];
+  const png = Buffer.from('89504e470d0a1a0a', 'hex');
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url, method: init.method || 'GET', auth: init.headers?.Authorization, body: init.body });
+    return { ok: true, status: 200, json: async () => ({ choices: [{ message: {
+      role: 'assistant', content: `![image](data:image/png;base64,${png.toString('base64')})`
+    } }] }) };
+  };
+  const bytes = await generateGeminiImage({ prompt: 'A quiet room.', model: 'gemini-3.1-flash-image',
+    apiKey: 'test-key', baseUrl: 'https://kvkks.top/v1', fetchImpl });
+  assert.deepEqual(bytes, png);
+  assert.equal(calls[0].url, 'https://kvkks.top/v1/chat/completions');
+  assert.equal(calls[0].method, 'POST');
+  assert.deepEqual(JSON.parse(calls[0].body), {
+    model: 'gemini-3.1-flash-image', messages: [{ role: 'user', content: 'A quiet room.' }]
+  });
+});
+test('gemini image: captures the provider error on HTTP failure', async () => {
+  const fetchImpl = async () => ({ ok: false, status: 429, json: async () => ({ error: {
+    code: 'rate_limit', message: 'Concurrency limit exceeded.'
+  } }) });
+  await assert.rejects(
+    generateGeminiImage({ prompt: 'x', model: 'gemini-3.1-flash-image', apiKey: 'k', baseUrl: 'https://kvkks.top/v1', fetchImpl }),
+    error => error.status === 429 && error.code === 'rate_limit' && /Concurrency limit/.test(error.message));
+});
 test('responseFormatFor: native OpenAI models omit it, others request b64_json, env overrides', () => {
   assert.equal(responseFormatFor('gpt-image-2.5-sunburst', {}), undefined);
   assert.equal(responseFormatFor('dall-e-3', {}), undefined);
@@ -258,11 +284,13 @@ test('responseFormatFor: native OpenAI models omit it, others request b64_json, 
   assert.equal(responseFormatFor('grok-imagine-image-2.0', { IMAGE_RESPONSE_FORMAT: '' }), undefined);
   assert.equal(responseFormatFor('gpt-image-2.5-sunburst', { IMAGE_RESPONSE_FORMAT: 'b64_json' }), 'b64_json');
 });
-test('resolveImageProvider: explicit wins, otherwise infer from host', () => {
+test('resolveImageProvider: explicit wins, otherwise infer from model or host', () => {
   assert.equal(resolveImageProvider({ EVOLINK_BASE_URL: 'https://api.evolink.ai' }), 'evolink');
   assert.equal(resolveImageProvider({ EVOLINK_BASE_URL: 'https://kvkks.top/v1' }), 'openai');
   assert.equal(resolveImageProvider({ IMAGE_PROVIDER: 'evolink', IMAGE_BASE_URL: 'https://kvkks.top/v1' }), 'evolink');
   assert.equal(resolveImageProvider({ IMAGE_PROVIDER: 'openai', IMAGE_BASE_URL: 'https://api.evolink.ai' }), 'openai');
+  assert.equal(resolveImageProvider({ IMAGE_MODEL: 'gemini-3.1-flash-image', IMAGE_BASE_URL: 'https://kvkks.top/v1' }), 'gemini');
+  assert.equal(resolveImageProvider({ IMAGE_PROVIDER: 'gemini', IMAGE_BASE_URL: 'https://api.evolink.ai' }), 'gemini');
   assert.equal(resolveImageProvider({}), 'evolink');
 });
 test('text content: accepts standard and data-wrapped chat responses', () => {

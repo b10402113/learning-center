@@ -577,6 +577,28 @@ test('article-batch skips steps without HTML and, with skip-existing, already-pl
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
+test('article-batch plan-only reuses rewrites, adopts the lesson otherwise, and skips the planned — with no text call', async () => {
+  const root = await makeBatchRoot(['s1', 's2', 's3'], { planned: ['s3'] });
+  try {
+    const rewriteDir = path.join(root, 'learn', 'demo', 'output', 'demo-node', 's1');
+    await fs.mkdir(rewriteDir, { recursive: true });
+    await fs.writeFile(path.join(rewriteDir, 'rewritten.html'), '<p>既有改寫稿</p>\n');
+    const planDir = path.join(root, 'learn', 'demo', 'output', 'demo-node', 's3');
+    await fs.mkdir(planDir, { recursive: true });
+    await fs.writeFile(path.join(planDir, 'plan.json'), '[]');
+    const result = await generateNodeArticle({ subject: 'demo', node: 'demo-node', planOnly: true }, root);
+    assert.equal(result.mode, 'article-batch');
+    assert.equal(result.planOnly, true);
+    assert.deepEqual(result.counts, { rewritten: 2, failed: 0, skipped: 1 });
+    const byStep = Object.fromEntries(result.steps.map(s => [s.step, s]));
+    assert.equal(byStep.s1.status, 'rewritten');
+    assert.equal(byStep.s3.status, 'skipped');
+    assert.equal(byStep.s3.reason, 'already-planned');
+    assert.match(await fs.readFile(byStep.s1.rewritten, 'utf8'), /既有改寫稿/);
+    assert.match(await fs.readFile(byStep.s2.rewritten, 'utf8'), /第一段文字/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 test('article-batch: one failing step does not abort the others', async () => {
   const root = await makeBatchRoot(['good', 'bad']);
   try {

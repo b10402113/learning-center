@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ownership 與 RLS：scoped query helper 自己套用 user ID</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>Ownership 與 RLS：scoped query helper 自己套用 user ID</h1>
+<p class="meta">Step 4/6 · Greenfield：設計資料模型</p>
+
+<h2>學習目標</h2>
+<p>說清楚 rule one——query helper 必須自己套用 user ID、不能信任呼叫端；知道一份 typed registry 如何補上「忘記註冊某張 user-owned 表」這個缺口；以及為什麼在一個沒有測試套件、資料庫在這條路徑上又無法驗證 ownership 的專案裡，RLS deny-all 加上 scoped helper 是唯一真正的防線。</p>
+
+<h2>前言：表建對了，不代表資料安全</h2>
+<p>上一節把九張表立好了。但只要其中有任何一張裝的是「某個使用者自己的資料」，就多出一個新的問題：你怎麼保證沒有哪個功能，會在無意之間讀到別人的資料？</p>
+<p>這個問題在健康的專案裡通常有兩道保險。第一道是測試套件——只要你少加一個 <code>where userId = ...</code>，CI 上就會有測試變紅。第二道是資料庫本身就是那條界線，即使程式碼寫錯，資料庫也不讓你越界。可是課程裡的這個專案兩道都沒有。這一節要講的，就是這種情況下該怎麼建立防線。</p>
+
+<h2>危險的預設寫法</h2>
+<p>最常見、也最危險的寫法，是把「這是誰的資料」交給呼叫端自己記得帶。helper 只是被動地照著傳進來的條件查，本身不檢查任何東西：</p>
+<pre data-provenance="derived">// 不安全：scoping 交給呼叫端，遲早有人忘記
+async function getRatings(userId: string) {
+  return db.select().from(ratings).where(eq(ratings.userId, userId));
+}
+
+// 某個功能在重構時不小心只留了 movieId：
+const rows = await db.select().from(ratings)
+  .where(eq(ratings.movieId, movieId));   // 少了 userId，卻不會報錯</pre>
+<p>這種寫法不是「一定會出事」，而是「一定會有人出事」。它把安全建立在「每個人都記得」上面——而人會忘記、模型也會忘記，尤其在重構、複製貼上、或急著出貨的時候。一旦漏掉那個條件，程式照跑、測試如果沒有正好覆蓋到也不會紅，等你發現時，資料早就外洩了。</p>
+<p>打個比方：這就像一棟大樓的每間辦公室都貼著「離開請鎖門」的公告。公告本身沒錯，但它防不了疲累、分心、或單純忘了的人。真正可靠的門禁，是門自己會在你離開時鎖上——不管你記不記得。</p>
+
+<h2>rule one：讓 helper 自己套用 user ID</h2>
+<p>課程把解法濃縮成一條規則：query helper 必須自己套用 user ID，而不是信任呼叫端會傳對。換句話說，呼叫端只負責說「我要哪張表、做什麼操作」，至於「這是誰的資料」由 helper 自己從 session 拿，呼叫端根本沒有機會傳錯。</p>
+<p>規則的第二半，是把操作寫成「對一張 user-owned 表的一組通用動作」：不是每個功能各寫一段查詢，而是所有查詢都走同一套通用的 read／write／update，而這套通用動作只認一份「哪些表屬於使用者」的清單。清單裡的每一張表，都自動被套上同樣的 scoping，沒有例外。</p>
+<p>用門禁的比喻來說：不是叫每個人記得鎖門，而是把門改成「感應不到你的識別證就推不開」。你不需要記得做對的事，因為做錯的路已經被拿掉了。</p>
+
+<figure class="lesson-figure"><img src="./ownership-and-rls-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>用 typed registry 補上最後一個缺口</h2>
+<p>走到這裡還剩一個漏洞：如果新開了一張 user-owned 表，卻沒有人把它加進那份清單，那這張表就繞過了 helper 的 scoping。課程把這個缺口講得很直白：rule one 剩下的縫，是「沒有任何東西會檢查新的 user-owned 表有沒有被註冊」。</p>
+<p>補法是把那份清單做成一份 <strong>typed registry</strong>（有型別約束的註冊表），而且讓 helper 成為它唯一的消費者；再加上一個寫進文件的步驟，提醒新增 user-owned 表時要來這裡註冊。這裡的關鍵不是「加一個檢查」，而是讓 helper 和 registry 綁在一起——因為 helper 是唯一讀這份清單的人，清單就成了 scoping 的唯一入口。一張表沒有登記，helper 就不認得它，也就寫不出能碰到它的通用操作。</p>
+<pre data-provenance="derived">// 唯一一份「哪些表屬於使用者」的清單
+export const userOwnedTables = {
+  profiles, ratings, tasteVectors, picks,
+  modelUsage, watchlistEntries, importRuns,
+} as const;   // typed registry：helper 是它唯一的消費者
+
+// helper 自己取 userId，呼叫端沒有機會傳錯、也無從繞過
+export function scoped<T extends keyof typeof userOwnedTables>(name: T) {
+  const table = userOwnedTables[name];
+  const userId = requireSessionUserId();
+  return {
+    list:   () => db.select().from(table).where(eq(table.userId, userId)),
+    insert: (row) => db.insert(table).values({ ...row, userId }),
+    update: (v)   => db.update(table).set(v).where(eq(table.userId, userId)),
+  };
+}</pre>
+<p>這段程式碼裡，安全不是靠在每個呼叫點記得加條件，而是靠 <code>scoped()</code> 這一個入口本身。只要所有查詢都經過它，<code>userId</code> 就一定會被套上，而且是由 helper 自己決定的。</p>
+
+<figure class="lesson-figure"><img src="./ownership-and-rls-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>RLS deny-all：資料庫層再加一道門</h2>
+<p>helper 解決的是「應用程式自己寫的查詢」。但資料庫還可能被別的路徑碰到——例如帶著 anon key 的請求。課程在遷移裡一併寫入 row-level security 的 deny-all，也就是說，沒有任何開放的政策，任何未經授權的存取一律回零列。</p>
+<p>之後驗證時會看到這一條的實際效果：拿 anon key 去查九張表，每一張都回傳零列——包括明明已經塞了 20 部電影的 <code>movies</code>。這就是 deny-all 在說的話：沒有被明確允許的人，什麼都看不到。</p>
+
+<h2>為什麼這裡非得這樣做不可</h2>
+<p>你可能會想：兩道保險是不是太多了？在一般的專案裡也許是，但在這個專案裡，課程的判斷是「只剩下這條路」。原文這樣說：</p>
+<blockquote>
+<p>the project has no test suite, and on this stack, the database cannot check ownership, so the only real defense is removing the unsafe path rather than remembering to avoid it</p>
+</blockquote>
+<p>把它拆成三個條件，你就知道為什麼：</p>
+<ol>
+  <li><strong>沒有測試套件</strong>：沒有 CI 會在有人漏掉 scoping 時變紅，所以「靠測試來抓」這條路不存在。</li>
+  <li><strong>資料庫在這條路徑上無法幫你驗證 ownership</strong>：app 走的是自己的連線，資料庫沒辦法替應用程式判斷「這個查詢該不該看到這一列」。</li>
+  <li><strong>所以唯一可靠的防守，是讓不安全的路徑不存在</strong>——不是靠大家記得避開，而是靠結構上就寫不出來。</li>
+</ol>
+<p>課程在收尾時又把這段話說了一次，因為它是整個資料模型裡最不容易懂、卻最重要的一個判斷：當你沒有自動化的網子、也借不到資料庫的力量時，你能做的就是把錯誤的寫法從選項裡拿掉。</p>
+
+<figure class="lesson-figure"><img src="./ownership-and-rls-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+<blockquote>
+<p>九張表裡有七張裝的是某個使用者自己的資料，所以真正的問題不是「能不能查」，而是「有沒有人會忘記限制在誰身上」。rule one 把這個責任收進 helper：由它自己套用 user ID，呼叫端無法傳錯；一份 typed registry 補上「新表忘了註冊」的缺口，而 helper 是它唯一的消費者；遷移裡再寫入 RLS deny-all，讓未經授權的存取一律回零列。</p>
+<p>之所以要這麼嚴，是因為這個專案沒有測試套件，資料庫在這條路徑上又無法驗證 ownership——所以唯一的防守，就是讓不安全的路徑根本不存在。</p>
+</blockquote>
+
+<p>安全的路徑確立之後，還剩下一個很務實的問題：這些表、enum、欄位與索引，實際上要怎麼排進程式碼裡？下一節會把實際的 schema 產物攤開來看——一檔一表、固定值集用 enum、以及電影的 UUID 主鍵與 embedding 欄位。</p>
+
+<div class="lesson-nav">
+  <div><a href="./entity-and-taste-model.html">← 上一步：實體與 Taste 模型：taste_vectors、ratings、profiles 與九表</a></div>
+  <div><a href="./schema-artifacts.html">下一步：Schema 產物：一檔一表、enums 與 movie 身分 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="rule one 對 query helper 的要求是什麼？" data-correct="1" data-explain="helper 必須自己套用 user ID，不能信任呼叫端會傳對。">
+  <button class="opt">helper 要盡量減少對資料庫的查詢次數</button>
+  <button class="opt">helper 必須自己套用 user ID 不信任呼叫端</button>
+  <button class="opt">helper 要把每次查詢的結果快取起來</button>
+  <button class="opt">helper 只能被資料庫管理員直接呼叫</button>
+</div>
+<div class="quiz" data-question="typed registry 主要補上哪一個缺口？" data-correct="2" data-explain="它讓 helper 成為唯一消費者，新表沒註冊就繞不過 helper。">
+  <button class="opt">它讓查詢的執行速度比手寫查詢更快</button>
+  <button class="opt">它把使用者密碼加密後存放在資料庫</button>
+  <button class="opt">它補上新的 user-owned 表忘了被註冊</button>
+  <button class="opt">它自動產生所有資料表的 migration</button>
+</div>
+<div class="quiz" data-question="課程說「唯一的真正防線」是什麼？" data-correct="3" data-explain="在沒有測試、資料庫也無法驗證 ownership 時，只能讓不安全的路徑不存在。">
+  <button class="opt">在上線前用更強的模型再 review 一次</button>
+  <button class="opt">替每個查詢都補上一段自動化測試</button>
+  <button class="opt">把資料庫換成能夠驗證 ownership 的版本</button>
+  <button class="opt">讓不安全的路徑在結構上根本不存在</button>
+</div>
+<div class="quiz" data-question="為什麼 RLS deny-all 的實際效果是「anon 查到零列」？" data-correct="0" data-explain="沒有任何開放政策，未經授權的請求一律看不到任何列。">
+  <button class="opt">因為沒有開放政策，未授權一律看不到列</button>
+  <button class="opt">因為 anon key 過期後就無法再送出請求</button>
+  <button class="opt">因為九張表在遷移時都還沒有任何資料</button>
+  <button class="opt">因為 movies 表被設定成唯讀的分享表</button>
+</div>
+<div class="quiz" data-question="「把安全交給呼叫端記得帶 userId」的核心問題是什麼？" data-correct="1" data-explain="它把安全建立在每個人都記得的前提上，漏掉時程式不會報錯。">
+  <button class="opt">它會讓每次查詢多花一個欄位的比對成本</button>
+  <button class="opt">它把安全建立在每個人都不會忘記上</button>
+  <button class="opt">它會讓資料庫無法建立對應的索引</button>
+  <button class="opt">它讓使用者無法在同一台裝置上登入</button>
+</div>
+<div class="quiz" data-question="為什麼課程說這個專案沒有「靠測試來抓」這條路？" data-correct="2" data-explain="專案沒有測試套件，所以不會有測試在漏掉 scoping 時變紅。">
+  <button class="opt">因為測試的成本比遷移還要高出很多</button>
+  <button class="opt">因為這裡的資料庫不支援任何自動化測試</button>
+  <button class="opt">因為專案裡目前沒有測試套件能變紅</button>
+  <button class="opt">因為測試只能驗證前端、無法驗證資料</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · Greenfield：設計資料模型 · Step 4/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

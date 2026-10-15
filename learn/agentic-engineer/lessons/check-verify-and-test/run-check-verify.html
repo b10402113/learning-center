@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跑一次 check verify：在真 App 上對驗收條件找真 bug</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>跑一次 check verify：在真 App 上對驗收條件找真 bug</h1>
+<p class="meta">Step 2/4 · 實跑 check verify 與 test</p>
+
+<h2>學習目標</h2>
+<p>跑 <code>check verify &lt;feature&gt;</code>，讀懂驗證報告，並把失敗分流到 <code>/debug</code> 或 <code>/develop</code>。</p>
+
+<h2>前言：把合約真的跑一次</h2>
+
+<p>上一節我們把 <code>verify.md</code> 合約、四種判定和「沒有證據就不打勾」這條鐵律看清楚。但光是看懂規則，跟真的把 App 跑起來、看著它一條條蓋章，是兩回事。這一節要把這條指令親自走一遍。</p>
+
+<p>動手前先確認三件事。第一，你要驗的那個功能已經由 <code>/develop</code> 開發完，而且它的 spec 旁邊有 <code>verify.md</code>。第二，App 本身跑得起來——專案的啟動指令、環境變數（<code>.env</code>）都要齊。第三，如果你希望它驗得夠深，先把工具接上（browser MCP、database MCP 等）；第三點不是硬性，但少了它，很多條會直接掉進 blocked。</p>
+
+<h2>步驟一：決定模式</h2>
+
+<p><code>/check</code> 底下有兩個模式，你可以直接指名 <code>verify</code>，也可以只敲 <code>/check</code> 讓它問你。指名時參數長這樣：</p>
+
+<pre data-provenance="derived">/check verify &lt;feature&gt;</pre>
+
+<p>如果只敲 <code>/check</code> 不帶參數，它刻意不猜，會停下來讓你選：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/SKILL.md#pick-the-mode-route-before-doing-anything-else">Which check do you want to run? Type one:
+  • verify  run the real app and prove the change works against its spec (usually right after /develop)
+  • review  a fresh model senior read of the diff, ranked findings (usually right before a PR)
+  • both    verify first, then review</pre>
+
+<p>這裡只走 verify。如果你把 feature 名字也帶上——例如 demo 裡的 <code>check verify data model</code>——它會直接鎖定那個功能，不再多問。模式要一次走完，不要在同一輪裡把 verify 和 review 混著跑。</p>
+
+<h2>步驟二：載入合約</h2>
+
+<p>它做的第一件事，是把 spec 的驗收條件讀進來，也就是上一節那份 <code>verify.md</code> checklist。<code>/develop</code> 已經把每個步驟綁到它要證明的 <code>AC-N</code>，所以你不用自己整理對應關係。demo 裡這個 spec 放在 <code>specs/0003-data-model/</code>，目錄裡有 <code>index</code>、<code>rationale</code>、<code>verify</code> 三個檔案，那份 <code>verify</code> 就是 <code>/develop</code> 產生的。</p>
+
+<h2>步驟三：校準「算不算過」</h2>
+
+<p>接著它會依這個 slice 當初承諾「要做到多真」來決定標準。一條薄薄的端到端路徑，要求的是整條路真的走得通；一個 UI shell，則允許資料來源先擺假資料。這一步是為了避免標準訂錯而產生假失敗或假通過：驗得太鬆會放過沒接好的線，驗得太嚴會把計畫上本來就允許的佔位當成缺陷。</p>
+
+<figure class="lesson-figure"><img src="./run-check-verify-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟四：把 App 跑起來、動手操作</h2>
+
+<p>然後它照專案自己的方式啟動 App，真的去操作：UI 就導覽、點擊、輸入、截圖；API 就送請求、記下 status 與 body；CLI 或背景工作就執行它、收集 stdout 與 stderr；資料層就對 live schema 跑查詢。它一邊跑，一邊維護一份「證據台帳」——每一條行為都要對應到當下留下來的證據，之後在報告裡被引用：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/modes/verify.md#step-3-run-and-exercise">| Behavior kind | The evidence to record |
+|---|---|
+| UI | the URL you loaded, the screenshot path you saved, and what you saw rendered |
+| API | the exact request line, the HTTP status, and the key fields of the body |
+| CLI / job | the exact command, its exit code, and the stdout/stderr excerpt |
+| Data layer | the query you ran against the live schema, and its result |</pre>
+
+<p>這張表的重點是：沒有被記錄下來的行為，就算你再有把握，也不算驗過。所以它寧可把整個操作過程留成證據，也不要只留一句結論。</p>
+
+<h2>步驟五：判讀報告，把失敗分流</h2>
+
+<p>報告的基本形狀是固定的。領頭是這個功能的三種總判定之一，接著只列出沒過或還欠的條目，其餘細節留給 <code>verify.md</code> 自己：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/check/modes/verify.md#step-5-report">## /check verify &lt;feature&gt; · &lt;PASS | FAIL | BLOCKED&gt;
+
+**&lt;PASS: all N behaviors met, every specced surface built · FAIL: M of N failed · BLOCKED: K couldn't be exercised&gt;.**   (never PASS or ✅ if you did not actually run the app; say "not started")
+Next (this feature's next unticked box in the scope): PASS → `/test &lt;feature&gt;` if a `Test it` box remains, else the next feature · FAIL → `/debug &lt;feature&gt;` · missing surface → `/develop &lt;feature&gt;` · BLOCKED → what's needed to run it
+
+Failing / owed (omit if PASS):
+- &lt;behavior or AC-N&gt;: &lt;what went wrong + evidence path&gt; → &lt;run /debug | build it, specced but missing | apply the migration, built but not live&gt;</pre>
+
+<p>讀的時候先看總判定。PASS 的門檻是：每一條行為都能引用這次真的跑出來的證據，而且（有合約時）每一條 <code>AC-N</code> 都 met、每一個 spec 點名的表面都存在。只要有一個沒過，總判定就是 FAIL；如果連 App 都沒真的跑起來、或關鍵工具缺失，就是 BLOCKED。三種都不是「差不多可以了」，而是三種不同的下一步。</p>
+
+<p>分流規則就寫在報告的 <code>Next</code> 那行：真 bug 送 <code>/debug</code>，spec 有要求卻沒建的表面送 <code>/develop</code>，建了卻沒生效的 migration 就先把它套用起來。PASS 之後才會去動 scope：它會把這個功能在 <code>verify.md</code> 裡實際跑過且通過的步驟打勾，並把 scope 的 <code>Verify it</code> 打勾。如果這個功能的這一格已經是最後一格（Alpha tier），它會問你「驗過也過了，要不要標成 done」，但不會替你決定。</p>
+
+<figure class="lesson-figure"><img src="./run-check-verify-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>兩個實際的跑法對照</h2>
+
+<p>demo 裡有兩次實際的操作。第一次是 <code>check verify data model</code>，結果是 FAIL：一條 spec 檢查沒照文件跑、七條 smoke test 斷言中有一條失敗，其餘每一條都是對照真 Supabase 資料庫拿到的證據，最後建議用 <code>debug data model</code> 修掉那兩個問題，再重跑驗證。</p>
+
+<p>第二次是 <code>check verify core review loop</code>。這次它動用了 Supabase 的 MCP 直接和資料庫對話、跑 lint、build、用 curl 改 cookie 去測 signup 流程，還執行了 SQL 查詢。結果十五條行為裡九條 met、一條確認是真 bug、三條因為沒有 browser 工具而 blocked、一條要 Vercel 部署才跑得動。那條真 bug 追下去，就是先前為了本機測試把 <code>http://localhost:3000</code> 放進來的那個改動，程式碼改一下就好。</p>
+
+<p>兩次都指向同一件事：它真的在拿證據找 bug，不是幫你蓋章。而且 demo 也提醒了一件事——如果你選的是 prototype tier，scope 上根本沒有格子可以打勾，但你還是可以手動替某個功能跑驗證；驗證的強度，等於它手上工具能觸及的範圍。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+跑一次驗證的順序是：決定模式（<code>/check verify &lt;feature&gt;</code>）、載入 <code>verify.md</code> 合約、依 slice 承諾校準標準、用專案自己的方式把 App 跑起來、實際操作每個行為並留下證據、逐條判定，最後輸出 PASS／FAIL／BLOCKED。讀報告先看總判定，再看沒過的條目與它引用的證據：真 bug 給 <code>/debug</code>，沒建的表面給 <code>/develop</code>，沒套用的 migration 先套用。PASS 之後，才算把這個功能在 scope 上的 <code>Verify it</code> 完成。
+</blockquote>
+
+<p>驗證證明了功能「今天」能跑，但它描述的也只是今天。下一節要看 <code>test</code> 這個 skill 掃哪些東西：它怎麼只鎖定這條 branch 上還沒 commit 的變更、怎麼依檔案類型挑測試策略，以及怎麼把耐久條件追回到 <code>AC-N</code>。</p>
+
+<div class="lesson-nav">
+  <div><a href="./check-verify-contract.html">← 上一步：check verify 讀什麼：verify.md 合約與四種判定</a></div>
+  <div><a href="./test-skill-scoping.html">下一步：test 掃什麼：branch 變更、檔案分類與 AC 追溯 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="只敲 /check 不帶任何參數時，skill 會怎麼做？" data-correct="0" data-explain="它刻意不猜，停下來問你要 verify、review 還是 both。">
+  <button class="opt">停下來問你要 verify 還是 review</button>
+  <button class="opt">預設直接跑 verify 模式不再詢問</button>
+  <button class="opt">預設直接跑 review 模式不再詢問</button>
+  <button class="opt">兩個模式都跑完再一起回報結果</button>
+</div>
+<div class="quiz" data-question="跑 check verify 時，它做的第一件事是什麼？" data-correct="2" data-explain="先找出功能對應的 spec，把旁邊的 verify.md 合約讀進來。">
+  <button class="opt">先把整個測試套件跑一遍確認全綠</button>
+  <button class="opt">先檢查程式碼裡有沒有明顯的錯誤</button>
+  <button class="opt">先找出 spec 並讀取 verify.md 合約</button>
+  <button class="opt">先把資料庫的 migration 全部套用起來</button>
+</div>
+<div class="quiz" data-question="報告的總判定 PASS 需要滿足什麼條件？" data-correct="1" data-explain="每條行為都有引用的證據，且每條 AC met、每個 spec 表面都在。">
+  <button class="opt">只要大部分的驗收條件都通過就可以了</button>
+  <button class="opt">每條行為有證據且每條 AC met、表面都在</button>
+  <button class="opt">只要測試套件全部綠燈就能夠判定為通過</button>
+  <button class="opt">只要沒有出現 blocked 的項目就算通過了</button>
+</div>
+<div class="quiz" data-question="驗證失敗時，spec 有要求卻根本沒建的表面該送去哪？" data-correct="3" data-explain="missing 是範圍漏掉，交給 ／develop 去建置。">
+  <button class="opt">送去 /debug 找出為什麼會壞掉</button>
+  <button class="opt">送去 /test 補上對應的單元測試</button>
+  <button class="opt">送去 /sync 更新專案的說明文件</button>
+  <button class="opt">送去 /develop 把缺的表面建起來</button>
+</div>
+<div class="quiz" data-question="為什麼接上 database MCP 之後，met 的條目可能變多？" data-correct="0" data-explain="有工具才能直接對 live schema 查證，沒工具只能判 blocked。">
+  <button class="opt">有工具才能直接對 live schema 查證</button>
+  <button class="opt">有工具會自動把失敗的條目改成通過</button>
+  <button class="opt">有工具就不需要再引用任何執行的證據</button>
+  <button class="opt">有工具時 spec 的驗收條件會自動減少</button>
+</div>
+<div class="quiz" data-question="demo 裡 check verify data model 那次的結果是什麼？" data-correct="1" data-explain="它回報一條 spec 檢查沒照文件跑、七條 smoke test 斷言中有一條失敗。">
+  <button class="opt">十五條行為全部 met、沒有任何問題</button>
+  <button class="opt">一條 spec 檢查沒照文件跑、斷言一條失敗</button>
+  <button class="opt">三條 blocked、其餘全部判定為 met</button>
+  <button class="opt">因為沒有工具而整份退回 BLOCKED</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · 實跑 check verify 與 test · Step 2/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

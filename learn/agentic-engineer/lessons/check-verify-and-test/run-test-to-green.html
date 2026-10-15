@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跑一次 test：把一次性驗證變成回歸保護</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>跑一次 test：把一次性驗證變成回歸保護</h1>
+<p class="meta">Step 4/4 · 實跑 check verify 與 test</p>
+
+<h2>學習目標</h2>
+<p>跑 <code>test</code> 或 <code>test &lt;feature&gt;</code>，把未測的資料邏輯補成單元／整合測試並跑到 green，留下 <code>test-preferences.json</code>。</p>
+
+<h2>前言：讓下一次改動有人幫你踩剎車</h2>
+
+<p>上一節把 <code>test</code> 掃什麼、怎麼分類看懂之後，這一節要真的把它跑起來。做完之後，專案裡會多出針對這次變更的測試檔、一份 <code>test-preferences.json</code>，而且測試套件是綠的。從此以後，每次改動都有東西會第一時間告訴你：有沒有踩壞舊行為。</p>
+
+<p>動手前先確認幾件事。第一，這條 branch 上有還沒 commit 的原始檔變更（如果沒有，它會走另一條路問你要改測什麼）。第二，<code>check verify</code> 已經先跑過——順序是 verify 先、test 後。第三，如果這是專案第一次跑 <code>test</code>，要有心理準備回答幾個技術棧的問題。</p>
+
+<h2>步驟一：跑 <code>test</code>，讓它先定範圍</h2>
+
+<p>你可以直接跑 <code>test</code>，也可以帶上目標。先看不帶參數的版本會發生什麼事：</p>
+
+<pre data-provenance="derived">/test</pre>
+
+<p>不帶參數時，它會掃過所有檔案，先判斷現有測試套件有多完整、甚至存不存在。demo 裡它算出四十個檔案——對一次測試來說太多了，於是它停下來問你該怎麼聚焦：先測 logic 與 API、分批全部測完，或由你指定範圍。多數時候大家會走「指定」這條路，因為範圍小、回饋快。</p>
+
+<h2>步驟二：指定功能，鎖定目標</h2>
+
+<p>接著用指令列上的目標鎖定範圍，例如 demo 裡的 <code>test data model</code>：</p>
+
+<pre data-provenance="derived">/test &lt;feature&gt;</pre>
+
+<p>它會辨識出這個功能裡值得寫測試的資料邏輯。demo 裡列出來的有 <code>assign next pin number</code>、<code>compute unread pins</code> 等等。注意它問你的是「範圍」，不是「要哪一種測試」——要哪種測試，是它依上一節那張分類表自己決定的。</p>
+
+<h2>步驟三：讀偏好，或第一次設定</h2>
+
+<p>它會先看專案根目錄有沒有 <code>test-preferences.json</code>，再依 <code>tool</code> 欄位分三條路走：</p>
+
+<ul>
+  <li>檔案存在，而且 <code>tool</code> 有工具名稱：直接載入工具、<code>testDir</code>、<code>filePattern</code>、<code>packageManager</code>，跳去寫測試。</li>
+  <li>檔案存在，但 <code>tool</code> 是 <code>null</code>、<code>gate</code> 有值：這是一個刻意不裝 runner 的專案。它只跑 typecheck／lint 閘門，然後停下來，把行為交給 <code>/check verify</code>，不會硬塞一套框架。</li>
+  <li>檔案不存在：這是第一次跑，它會先偵測技術棧，再問你幾個問題。</li>
+</ul>
+
+<p>第一次跑的問題有幾個重點。首先，如果整個專案完全沒有測試設定，它不會自作主張幫你裝一套，而是先確認你的打算：要裝一套測試框架、用 typecheck + <code>/check verify</code> 當閘門，還是只做 typecheck。決定要裝框架後，才問你要用哪一套——JS／TS 常見的預設是 Vitest，但已經安裝的工具會被優先列出。再來，只有當變更裡出現 page/flow 檔案時，它才會問要不要加 E2E（例如 Playwright）；只有當變更裡有 component 或 page/flow 檔案時，才會問要不要加元件測試支援（例如 Testing Library）。範圍只有 logic／api／cli 時，這兩個問題直接跳過。問完它會把選擇寫進 <code>test-preferences.json</code>，並告訴你：之後的 <code>/test</code> 會直接讀這份，跳過設定。</p>
+
+<figure class="lesson-figure"><img src="./run-test-to-green-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟四：決定要不要跑</h2>
+
+<p>每一輪它都會問你同一件事，而且不幫你預設：測試寫完之後，要不要順手跑起來、修到綠？你可以選「跑並修到綠」，也可以選「只寫，給我手動指令」。這是一個每次都要重新回答的選擇，不會被存進偏好檔。</p>
+
+<h2>步驟五：寫測試、跑到 green</h2>
+
+<p>如果選了「跑並修到綠」，它會用專案自己的指令執行，demo 裡跑的就是：</p>
+
+<pre data-provenance="derived">pnpm test</pre>
+
+<p>接著進入迭代迴圈。這裡有兩條要分清楚的規則。第一，測試失敗如果是因為「測試本身寫錯」——匯入錯、選擇器錯、斷言錯、少了前置設定——就修測試，而且只重跑那個失敗的檔案，把輸出壓小。第二，測試失敗如果是因為「應用程式碼真的錯」——它違反了自己的合約或 spec——那就是測試在盡本分。這時候<strong>不要為了讓它變綠而去改應用程式的原始碼，也不要把斷言放鬆</strong>；把它留在 <code>BUGS_FOUND</code> 裡，繼續往下走。迴圈停下的條件是：只剩真的 bug，或全部綠燈。</p>
+
+<figure class="lesson-figure"><img src="./run-test-to-green-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟六：讀報告</h2>
+
+<p>寫完之後，報告的形狀大致固定，領頭是這個功能的總結果，接著才是測試檔清單與需要你注意的地方。bug 有的話會放在最前面，因為那是真的發現：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/test/SKILL.md#after-writing-the-suite">## /test &lt;feature&gt; · &lt;all N passed | Y failed | not run&gt;
+
+**Wrote &lt;N&gt; tests across &lt;M&gt; files (happy path / edges / errors / a11y). &lt;X passed, Y failed via `&lt;RUN_COMMAND&gt;` | not run&gt;.**
+Next (this feature's next unticked box in the scope): all pass → `/check review` if a `Review it` box remains, else `/sync` or the next feature · Y failed → fix them, or `/debug &lt;feature&gt;` if the code is wrong · not run → `&lt;RUN_COMMAND&gt;`
+Heads up: &lt;bugs the tests caught · file:line + the failing expectation&gt; · &lt;uncovered AC-N or area, why&gt;</pre>
+
+<p>讀的時候先看總結果那一行：幾個測試、幾個檔案、通過幾個、失敗幾個，還有用的指令是什麼。然後看 <code>Heads up</code>：如果有 bug 被測試抓到，會在這裡列出來，附上 <code>file:line</code> 與失敗的斷言；如果有沒覆蓋到的 <code>AC-N</code> 或區域，也會寫明原因。</p>
+
+<h2>步驟七：確認專案留下了什麼</h2>
+
+<p>跑完之後，專案會多出兩樣東西。第一是測試檔，依 <code>testDir</code> 與 <code>filePattern</code> 放好；如果同名的測試檔已經存在，它會用擴充的方式把你原本的測試留著，不會另建一個平行檔案，也不會覆蓋手寫的測試。第二是 <code>test-preferences.json</code>，讓之後的每一輪都能直接開始寫。</p>
+
+<p>demo 裡的結果可以當作範例：它替 data model 產出三個新的單元測試，針對還沒被測到的資料邏輯——odds invariant、client identity signing，以及 shared token creation／resolution；既有的 smoke test 已經守住 pins、regenerate、revoke、delete 對資料庫的行為；最後跑出 <code>15 passed, 0 failed</code>。</p>
+
+<figure class="lesson-figure"><img src="./run-test-to-green-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>如果這個功能在 scope 上，而且測試通過，它會問你要不要把這個功能的 <code>Test it</code> 打勾、並把 spec 的狀態推進 <code>Accepted</code>。要不要標成 <code>done</code> 由你決定，它不會拿這個當閘門。反過來，如果測試失敗或覆蓋不完整，<code>Test it</code> 就留著不打勾，並把狀況回報給你。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+跑 <code>test</code> 的順序是：先讓它從 git 工作區定出範圍（檔案太多時先選聚焦策略）、用 <code>test &lt;feature&gt;</code> 鎖定目標、讀 <code>test-preferences.json</code>（第一次會問技術棧並存檔，以及問要不要跑）、依檔案類型寫測試、用專案指令跑到綠、輸出總結果與 <code>Heads up</code>，最後在專案裡留下測試檔與偏好檔。兩條要記住的原則：測試因真實 bug 失敗時，不要動應用程式的原始碼、也不要放鬆斷言；它不會替還在變的 scaffolding 上鎖。
+</blockquote>
+
+<p>走到這裡，兩種證明你都實際跑過一遍了：<code>check verify</code> 負責證明功能今天能跑，<code>test</code> 負責把它變成之後還會被守住的回歸保護。下一步就是把這條功能真的交出去——那個流程留給後面的單元。</p>
+
+<div class="lesson-nav">
+  <div><a href="./test-skill-scoping.html">← 上一步：test 掃什麼：branch 變更、檔案分類與 AC 追溯</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="不帶參數直接跑 test 時，如果變更檔案太多，它會怎麼做？" data-correct="2" data-explain="它會停下來問你怎麼聚焦：先測 logic 與 API、分批測完，或由你指定。">
+  <button class="opt">直接跳過不管，只挑最新的檔案來測</button>
+  <button class="opt">還是不管數量，硬把所有檔案一次測完</button>
+  <button class="opt">停下來問你該怎麼聚焦這個範圍</button>
+  <button class="opt">自己隨機挑幾個檔案，跑完再來回報</button>
+</div>
+<div class="quiz" data-question="測試失敗的原因如果是應用程式碼真的寫錯了，該怎麼處理？" data-correct="1" data-explain="那是測試在盡本分，留在 BUGS_FOUND，不改原始碼也不放鬆斷言。">
+  <button class="opt">修改應用程式的原始碼讓測試可以變綠</button>
+  <button class="opt">留在 BUGS_FOUND，不改原始碼與斷言</button>
+  <button class="opt">把這個測試標成跳過，當作沒看到它</button>
+  <button class="opt">把斷言改寬一點，讓它看起來是通過</button>
+</div>
+<div class="quiz" data-question="每一輪 test 都會問、而且不會被存進偏好檔的問題是什麼？" data-correct="0" data-explain="每一輪都會問要不要在寫完後跑套件並修到綠，這是每次的選擇。">
+  <button class="opt">寫完後要不要跑套件並修到綠</button>
+  <button class="opt">這次要用哪一套單元測試框架</button>
+  <button class="opt">這次要不要加上端到端的測試</button>
+  <button class="opt">這次的測試檔應該放在哪個目錄</button>
+</div>
+<div class="quiz" data-question="第一次跑 test 時，它對「完全沒有測試設定」的專案會怎麼做？" data-correct="3" data-explain="它不會自作主張，先問你要裝框架、用 typecheck 當閘門，或只做 typecheck。">
+  <button class="opt">直接安裝 Vitest 並開始寫預設的測試</button>
+  <button class="opt">直接跳過整個流程，不寫任何測試</button>
+  <button class="opt">把 AGENTS.md 改成有測試框架的說明</button>
+  <button class="opt">先問你要不要裝框架或改用閘門</button>
+</div>
+<div class="quiz" data-question="demo 裡 test data model 最後跑出來的結果是什麼？" data-correct="1" data-explain="它產出三個新單元測試，最後跑出 15 passed、0 failed。">
+  <button class="opt">五個測試通過、兩個還在失敗等待修正</button>
+  <button class="opt">三個新單元測試，最後 15 通過 0 失敗</button>
+  <button class="opt">整份套件因為缺少工具而沒有被執行</button>
+  <button class="opt">所有測試都被標成跳過，等待之後再補</button>
+</div>
+<div class="quiz" data-question="跑完 test 之後，專案根目錄會多出哪一個檔案？" data-correct="2" data-explain="test-preferences.json 記下工具與設定，之後的每一輪都能直接開始寫測試。">
+  <button class="opt">verify.md，記下這次功能的驗收條件</button>
+  <button class="opt">AGENTS.md，記下專案的整體慣例</button>
+  <button class="opt">test-preferences.json，記下測試工具設定</button>
+  <button class="opt">design.md，記下這次用到的設計權杖</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · 實跑 check verify 與 test · Step 4/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

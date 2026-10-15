@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>五步升級與三種結局：把 session 救回來</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>五步升級與三種結局：把 session 救回來</h1>
+<p class="meta">Step 6/6 · 除錯 AI 寫的碼與救回卡住的 Session</p>
+
+<h2>學習目標</h2>
+<p>依序套用 stop → 問它相信什麼 → 給更少任務 → rollback → clear 並帶證據，把事情救回來；並在事前用「先計畫、再編輯」預防迴圈發生。</p>
+
+<h2>前言：把前面的判斷，換成五個動作</h2>
+
+<p>上一節你做了那個關鍵判斷：這個 session 的 context 是資產還是負債。但判斷本身不會修好任何東西。這一節要把判斷落地，變成一份可以照著執行、而且有先後順序的動作清單。</p>
+
+<p>動手前你要先具備兩件事：第一，你已經認出這是迴圈（重複但沒有進展），而不是普通的 code bug；第二，你已經判斷過這個 context 該留還是該丟。缺了這兩件事，你在這一節的動作會變成瞎猜。</p>
+
+<p>做完之後你會得到一個結果——不是「問題解決了」，而是「這個 session 走向了某一種結局」。它可能被救回來，也可能被正確地放棄。先把五步走完，結尾再回頭看這三種結局。</p>
+
+<figure class="lesson-figure"><img src="./five-step-escalation-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第一步：停下來</h2>
+
+<p>第一件事不是修，是停。原文強調的重點是：停止回應要用 <code>Esc</code>，而不是 <code>Ctrl+C</code>。這兩者的差別很重要——<code>Esc</code> 只是中止這一次的回應，session 本身還在；<code>Ctrl+C</code> 則是直接結束整個 session，你會失去它。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/11. Workflow Find the Root Cause/5. Recover a Broken Session (9_11_2026 1：52：08 PM).html#recover-a-broken-session">Esc
+Ctrl+C</pre>
+
+<p>這一步幾乎不花任何成本，所以原文說：永遠不要跳過它。在它還在打轉的時候，任何你後續要下的判斷，都會被它持續的動作干擾。</p>
+
+<h2>第二步：問它相信什麼</h2>
+
+<p>停下來之後，先不要改任何東西。原文建議你先問它一句：</p>
+
+<blockquote>
+<strong>你覺得問題是什麼？你正在假設什麼、而那個假設可能是錯的？</strong>
+</blockquote>
+
+<p>預期會看到什麼？一個卡住的 agent，通常正繞著某一個錯誤的假設打轉。當你把那個假設逼它說出來，很多時候迴圈就當場斷了，因為它自己看見了那個矛盾。就算它沒有當場斷，你也得到了一個明確的資訊：下一次嘗試該修正的，正是那個假設。</p>
+
+<p>這一步之所以有效，是因為它把隱形的假設變成看得見的句子。迴圈之所以能持續，往往正因為那個假設始終沒被攤開來檢查。</p>
+
+<h2>第三步：給它更少，不是更多</h2>
+
+<p>多數迴圈的起點，是任務一開始就太寬。原文的觀察是：它太寬，所以做不完；做不完，所以反覆重試；反覆重試，就變成了迴圈。</p>
+
+<table>
+<thead>
+<tr><th>太寬（做不完）</th><th>可完成（有明確邊界）</th></tr>
+</thead>
+<tbody>
+<tr><td>「重構整個驗證模組」</td><td>「把 token refresh 這個函式抽出來，其他都不要動」</td></tr>
+</tbody>
+</table>
+
+<p>所以第三步做的，不是把任務講得更仔細，而是把任務<strong>縮小</strong>，並且在它被允許更動的範圍上加一道硬邊界。從「重構整個模組」變成「只抽這個函式、其他都不要碰」，它要走的步數就從幾十步變成幾步，也才有機會真正走完一輪。</p>
+
+<figure class="lesson-figure"><img src="./five-step-escalation-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第四步：把程式碼 roll back</h2>
+
+<p>如果前面那些失敗的嘗試已經把檔案改壞了，千萬不要叫一個還在混亂中的 agent 去清理自己的爛攤子。它很可能會在這個過程裡製造更多問題。正確的做法是你自己把程式碼退回去。</p>
+
+<p>這裡有一個必須先知道的限制：<strong>checkpoint 不一定能還原那些被 shell 指令改過的檔案。</strong>checkpoint 記錄的是編輯動作，但如果中間有一步是用指令碼或指令直接改了檔案，那類變更可能不在還原範圍內。所以真正的通用後備是 Git：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/11. Workflow Find the Root Cause/5. Recover a Broken Session (9_11_2026 1：52：08 PM).html#recover-a-broken-session">git restore
+git reset</pre>
+
+<p>選哪一個看你要退到哪裡：只是要丟掉工作區的變更，用 <code>git restore</code>；如果連 repository 的狀態本身都得往回移動，才用 <code>git reset</code>。這一步會丟掉程式碼的變更，執行動作前先確認你要放棄的範圍，因為這不是每一步都能輕鬆回頭的。</p>
+
+<h2>第五步：clear，並把證據帶進新 session</h2>
+
+<p>最後一步是清乾淨、重開。但這裡有個關鍵：<strong>不要把原本的 prompt 原封不動再貼一次。</strong>那樣做等於把整條迴圈的起點又複製一遍到新 session，你會得到同一個迴圈。</p>
+
+<p>新的 session 要開在三樣東西上：那個確切的錯誤、那個失敗的測試，以及舊 session 從頭到尾一直漏掉的那一個事實。</p>
+
+<blockquote>
+一個乾淨的 session，如果一開始就握有強證據，可以在兩輪之內解掉一個中毒的 session 十輪都解不掉的問題。
+</blockquote>
+
+<p>而且 clear 其實比你想的便宜：你失去的是對話，不是工作。scope、spec 和 AGENTS.md 都還在磁碟上。所以真正要保留的東西——也就是「證據」——本來就不在對話裡，它在你手上。你要做的，只是把它們帶過去。</p>
+
+<h2>事前預防：先計畫，再編輯</h2>
+
+<p>這五步是救火。要少用到它們，做法很簡單：在一個大改動之前，先讓 agent 只計畫、不編輯任何檔案。</p>
+
+<p>原文的理由很實際——你可以趁一個壞做法還只是幾行文字的時候就否掉它，而不是等它已經改寫了十個檔案之後才發現不對。計畫階段的否決成本是幾行字，編輯階段的否決成本是十個檔案。跨工具對應的作法大概是這個樣子：</p>
+
+<table>
+<thead>
+<tr><th>動作</th><th>Claude Code</th><th>Codex</th><th>Cursor</th></tr>
+</thead>
+<tbody>
+<tr><td>停止回應</td><td><code>Esc</code></td><td><code>Esc</code></td><td>Stop，或 <code>Esc</code></td></tr>
+<tr><td>檢查它的假設</td><td>直接問它</td><td>直接問它</td><td>直接問它</td></tr>
+<tr><td>縮小任務</td><td>直接要求</td><td>直接要求</td><td>直接要求</td></tr>
+<tr><td>還原程式碼</td><td><code>Esc Esc</code> 或 <code>/rewind</code></td><td><code>git restore</code></td><td>Restore Checkpoint</td></tr>
+<tr><td>還原對話</td><td><code>Esc Esc</code> 或 <code>/rewind</code></td><td><code>Esc</code> backtrack</td><td>Edit an earlier message</td></tr>
+<tr><td>重新開始</td><td><code>/clear</code></td><td><code>/clear</code></td><td>New chat</td></tr>
+<tr><td>保留有用的脈絡</td><td><code>/compact</code>、<code>/context</code></td><td><code>/compact</code></td><td>Summarise</td></tr>
+<tr><td>先計畫再編輯</td><td>Plan mode</td><td><code>/plan</code></td><td>Ask mode</td></tr>
+<tr><td>通用救援</td><td><code>git restore</code> 或 <code>git reset</code></td><td><code>git restore</code> 或 <code>git reset</code></td><td><code>git restore</code> 或 <code>git reset</code></td></tr>
+</tbody>
+</table>
+
+<p>原文特別提醒：這張對照表會隨工具版本快速過時，比課程裡其他任何東西都快。使用前要自己驗證每一列是不是還成立，並記下日期。</p>
+
+<h2>三種結局：不一定是「修好了」</h2>
+
+<p>走完五步之後，一個卡住的 session 只會走向三種結局之一。判斷自己正在哪一種，才是真正的技術：</p>
+
+<table>
+<thead>
+<tr><th>結局</th><th>什麼時候是這一種</th></tr>
+</thead>
+<tbody>
+<tr><td>Steer out（導回正軌）</td><td>你把錯誤的假設攤開來、把任務縮小了，於是它重新往前走</td></tr>
+<tr><td>Reset to good（重置回好的狀態）</td><td>你把程式碼還原，或把 context 清掉，讓一切退回可用的起點</td></tr>
+<tr><td>Rethink（重新想過）</td><td>反覆失敗其實在告訴你：原本的計畫本身就是錯的，該回到 <code>/architect</code> 或 <code>/scope</code></td></tr>
+</tbody>
+</table>
+
+<p>第三種最容易被忽略。當你發現怎麼救都救不動，那通常不是 agent 不夠努力，而是計畫本身的假設站不住腳。這時候再多下幾個 prompt 也救不回來——因為問題不在執行，在計畫。能不能認出「我其實是在第三種結局裡」，決定了你會不會白耗時間。</p>
+
+<figure class="lesson-figure"><img src="./five-step-escalation-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+救回一個卡住的 session，有五個依序的動作：用 <code>Esc</code>（不是 <code>Ctrl+C</code>）停下來；問它相信什麼、假設什麼；把任務縮小、加上硬邊界；用 Git 把程式碼 roll back（記住 checkpoint 不一定還原 shell 指令改過的檔案）；最後 clear，但只帶走證據——確切的錯誤、失敗的測試，以及舊 session 一直漏掉的那個事實，而不是重貼原始 prompt。事前預防是「先計畫、再編輯」。而每個 session 最終只會走向三種結局：導回正軌、重置回好的狀態，或認清計畫本身錯了、該回去重想。
+</blockquote>
+
+<p>到這裡，這個節點就完整了。你現在有一條完整的線：先分辨是哪一種壞，對 AI 寫的碼用三個來源還原意圖、用四種模式認出破綻；當壞掉的是 agent 本身，先用「重複但沒有進展」認出迴圈，判斷 context 是資產還是負債，再照五步升級把它救回來。下一步建議把這些步驟真的拿到一個 session 上跑一次。</p>
+
+<div class="lesson-nav">
+  <div><a href="./context-asset-or-liability.html">← 上一步：一個判斷：這個 context 是資產還是負債</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="五步升級的第一步，原文為什麼強調用 Esc 而不是 Ctrl+C？" data-correct="1" data-explain="Esc 只中止這一次回應，session 還在；Ctrl+C 會直接結束整個 session。">
+  <button class="opt">因為 Esc 的處理速度比 Ctrl+C 快得多</button>
+  <button class="opt">因為 Esc 只停這次回應，Ctrl+C 會退出 session</button>
+  <button class="opt">因為 Ctrl+C 會把整段對話的內容刪除</button>
+  <button class="opt">因為 Esc 會順便把 agent 的假設記錄下來</button>
+</div>
+<div class="quiz" data-question="「問它相信什麼」這一步，目的是什麼？" data-correct="3" data-explain="把隱形的錯誤假設逼出來，常常當場就斷了迴圈，也指出下次該修正什麼。">
+  <button class="opt">讓 agent 重新把整個任務從頭規劃一次</button>
+  <button class="opt">確認 agent 的模型版本與工具是否正確</button>
+  <button class="opt">要它替自己的所有錯誤寫一份完整報告</button>
+  <button class="opt">把它正在繞的那個錯誤假設逼出來檢查</button>
+</div>
+<div class="quiz" data-question="為什麼第三步是「給它更少」而不是「講得更仔細」？" data-correct="0" data-explain="多數迴圈起於任務太寬，縮小任務並加上硬邊界，它才走得完一輪。">
+  <button class="opt">任務太寬做不完，正是迴圈常見的起點</button>
+  <button class="opt">更仔細的說明會讓模型花掉更多 token</button>
+  <button class="opt">更少的任務能讓模型選擇更快的執行路徑</button>
+  <button class="opt">縮小任務可以讓它跳過先重現的步驟</button>
+</div>
+<div class="quiz" data-question="用 Git rollback 時，checkpoint 有什麼限制？" data-correct="2" data-explain="checkpoint 不一定能還原被 shell 指令改過的檔案，Git 才是通用後備。">
+  <button class="opt">它只能還原最近一次編輯的那個檔案</button>
+  <button class="opt">它只能還原小於固定大小的檔案變更</button>
+  <button class="opt">它不一定能還原 shell 指令改過的檔案</button>
+  <button class="opt">它無法在已經有 commit 的專案上運作</button>
+</div>
+<div class="quiz" data-question="第五步 clear 之後，新 session 該用什麼開場？" data-correct="1" data-explain="要帶上確切的錯誤、失敗的測試，與舊 session 一直漏掉的那個事實。">
+  <button class="opt">把原本的 prompt 一字不改地重新貼一次</button>
+  <button class="opt">帶上確切錯誤、失敗測試與漏掉的事實</button>
+  <button class="opt">先讓它把整個專案重新讀過一遍再說</button>
+  <button class="opt">直接從上一個 session 的摘要繼續下去</button>
+</div>
+<div class="quiz" data-question="「先計畫、再編輯」為什麼能預防迴圈？" data-correct="3" data-explain="壞做法還在幾行文字時就能否決，不必等它已經改寫十個檔案。">
+  <button class="opt">因為計畫階段完全不會消耗任何 token</button>
+  <button class="opt">因為計畫能保證一次就找到正確的修法</button>
+  <button class="opt">因為計畫可以取代後續所有的測試工作</button>
+  <button class="opt">因為壞做法還在幾行字時就能先否決</button>
+</div>
+<div class="quiz" data-question="如果怎麼救都救不動，通常代表你處在哪一種結局？" data-correct="2" data-explain="反覆失敗在說計畫本身錯了，該回到 /architect 或 /scope 重新想過。">
+  <button class="opt">Steer out，你已經把任務縮小到可完成</button>
+  <button class="opt">Reset to good，你已經還原到可用狀態</button>
+  <button class="opt">Rethink，原計畫本身可能就是錯的</button>
+  <button class="opt">Success，問題其實已經被默默修好了</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · 除錯 AI 寫的碼與救回卡住的 Session · Step 6/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

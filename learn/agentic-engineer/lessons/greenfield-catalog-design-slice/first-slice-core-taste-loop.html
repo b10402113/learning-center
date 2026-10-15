@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第一個 Slice：core taste loop 這條 walking skeleton</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>第一個 Slice：core taste loop 這條 walking skeleton</h1>
+<p class="meta">Step 5/6 · Greenfield：Catalog、Design System 與第一個 Slice</p>
+
+<h2>學習目標</h2>
+<p>用 <code>architect</code> → <code>develop</code> 蓋出 core taste loop 這條端到端 thin slice（auth／pool／taste vector／weighting／quota／gating），15 個 task 上 branch，再用 Playwright 驗證。</p>
+
+<h2>前言：零件都在，但沒有一條真的走得通的路</h2>
+
+<p>到目前為止，你手上有一堆零件：一組設計系統、可以動的元件、一個可以打 TMDB 的 catalog。可是如果你把 app 拿給一個真實的使用者，他會卡住——因為從「進來」到「拿到推薦」這條完整路徑，還沒有人把它接通。這正是 walking skeleton 要解決的事：一條細細的、但真的會走的骨架，把你最重要的幾條假設一次逼到檯面上。</p>
+
+<p>這一節要蓋的是 core taste loop，整個產品的核心迴路。它之所以是「第一個 slice」，是因為它不追求功能多，而是要求整條路真的能走完：登入、評分一個 starter deck、拿到一份每條都帶理由的推薦。做法上，它仍然是那條熟悉的線——先 <code>architect</code> 訪談把決定釘死，再 <code>develop</code> 實作。</p>
+
+<figure class="lesson-figure"><img src="./first-slice-core-taste-loop-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>前置：先看清這條 slice 有多窄</h2>
+
+<p>scope 上，前五個功能已經做完，core taste loop 先前只停在「已規劃」，現在要真的 architect 它。它刻意被切得很窄，課程是這樣描述的：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/13. Idea to First Ship — Greenfield/12. First Slice Core taste loop.srt#first-slice-core-taste-loop">Sign in, swipe a small starter
+deck of well-known films,
+get a feed of pics where each one carries a
+short reason, real accounts, real storage,
+real recommendations. This slice is the walking
+skeleton, so it stays
+narrow on purpose.</pre>
+
+<p>它有意識地先把 CSV 匯入、vibe search、feed 內回饋全部排除，因為 walking skeleton 的價值在於「端到端打通」，不在於功能多。完成的定義也很明確：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/13. Idea to First Ship — Greenfield/12. First Slice Core taste loop.srt#first-slice-core-taste-loop">This is done when a new
+user can sign in, rate a
+starter deck, and land
+on a feed of pics that each
+show a one-sentence reason
+tied to what they just rated.</pre>
+
+<p>另外還有一條容易被漏掉、卻很關鍵的條件：使用者下次回來登入時，看到的是 feed，不是又走一次 onboarding。還有一條是關於驗證信的——要用自訂 SMTP，而不是 Supabase 內建的寄信服務，因為後者有速率限制，而且會在額度用盡時安靜地停止寄送，你根本不會知道信沒送出去。</p>
+
+<h2>步驟一：跑 architect，把 load-bearing 的決定一次問清楚</h2>
+
+<p>開一個新視窗，叫它 <code>architect</code> core taste loop，然後就是一連串訪談。這些問題之所以重要，是因為它們每一個都是「之後很難改」的決定。課程把它們收斂成下面這幾條：</p>
+
+<table>
+<thead>
+<tr><th>決定</th><th>最後選了什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>登入方式</td><td>Supabase auth 已定，方式選 Google 登入當主路徑；自訂 SMTP 先延後，因為 Google 帳號本來就已驗證，走純 Google 就不需要寄信</td></tr>
+<tr><td>Onboarding 何時算完成</td><td>至少 5 個 liked／disliked，deck 共 20 張、可以提早結束；但為了推薦品質，仍以走完 20 張為目標</td></tr>
+<tr><td>推薦片從哪來</td><td>預先抓一個固定候選池（約 500 部，popular 加 top-rated、去重）；規則三禁止在 request 裡做慢工作，所以先落到 feed、顯示 building 狀態，再輪詢是否就緒</td></tr>
+<tr><td>一次 build 產生幾條</td><td>12 條。每條的理由句都要一次 model call，而規則五規定理由一旦存下就不再重新生成</td></tr>
+<tr><td>build 狀態怎麼表示</td><td>用一個 enum 欄位，記 running／finished／failed，供前端輪詢判斷</td></tr>
+<tr><td>一筆 swipe 值多少</td><td>對稱權重：liked +1、disliked −1、skipped 0。理由是「不喜歡」和「喜歡」一樣能主導口味 profile</td></tr>
+<tr><td>taste vector 何時重建</td><td>這一條 slice 裡只在 onboarding 結束時重建</td></tr>
+<tr><td>swipe 何時寫進資料庫</td><td>立即，一次 swipe 一個 server action</td></tr>
+<tr><td>12 條理由怎麼生</td><td>一次批次呼叫回傳全部 12 條，用 Zod 解析</td></tr>
+<tr><td>12 條怎麼從 500 池裡挑</td><td>用 cosine distance 取最接近的前 12，排除已評分或已挑過的</td></tr>
+<tr><td>花費上限</td><td>每個使用者每天 25 次理由 model call；一次 feed build 恰好等於一次呼叫</td></tr>
+<tr><td>登入區怎麼守</td><td>採嚴格 funnel：middleware 在每條路由刷新 session 並轉址，不讓使用者再回到 onboarding</td></tr>
+<tr><td>一週後回來的使用者</td><td>顯示存下來的 picks，並提供「refresh my feed」動作按需重建</td></tr>
+<tr><td>帳號頁</td><td>帶入 Google 的名稱與頭像，加上可用的登出</td></tr>
+</tbody>
+</table>
+
+<p>有兩題特別值得停下來想。第一是 swipe 的權重：一開始的選項是 disliked 只給 −0.5（理由是「not for me」比「yes」弱），但課程最後選了對稱的 −1，因為不喜歡的訊號同樣能強力地把 profile 推離某一區。第二是 swipe 何時落庫：立即寫入會犧牲「伺服器永遠知道有幾筆真實評分、可以據此再供更多卡」的好處，但如果分頁被關掉、手機沒電，批次的做法就得從頭再來。這兩題都沒有標準答案，重點是你知道自己在換什麼。</p>
+
+<figure class="lesson-figure"><img src="./first-slice-core-taste-loop-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>步驟二：spec 產出與 develop</h2>
+
+<p>訪談收斂完，它會先產出一份資料模型要你確認，接著才寫成 spec。refresh 的語意也在這裡定死：把舊的 picks 標記為已看過、插入 12 條新的、並排除任何已經被挑過的。spec 打開會看到 user stories、acceptance criteria、候選池的定義。</p>
+
+<p>批准之後，同樣 <code>clear</code> 再 <code>develop</code>。這次的份量不小，全部 15 個 build plan task 都做在分支 <code>feed/core-taste-loop</code> 上，登入與 session 也一起完成。跑完之後它會回報三件「我改了什麼、或我發現了什麼值得一提的事」。接著你還要補上 Anthropic 與 OpenAI 的 API key（理由句要用模型），才能跑驗證。</p>
+
+<pre data-provenance="derived">clear
+develop the core taste loop
+# 補上 Anthropic 與 OpenAI 的 API key
+check verify core-taste-loop</pre>
+
+<h2>步驟三：Playwright 驗證——很徹底，但也很花時間</h2>
+
+<p>驗證時，它會自己開一個 Chrome、建立一個新帳號，然後像真人一樣一路點過去。課程提醒：這一輪會很久，因為 agent 要把各種排列組合都測一遍。如果你手邊時間不多，講師的建議很直接——<strong>不要走 Playwright</strong>，改成自己手動測比較快；但如果你能把它放著去做別的事，這條路能測到的廣度是人手比不上的。</p>
+
+<h2>步驟四：手動驗證會逼出兩件只有人要做的事</h2>
+
+<p>機器再怎麼測，有兩件事還是得你親自去後台按。第一件是 Supabase 端的 Google provider 預設是關的——你登入時會看到「unsupported provider」。要進 Supabase dashboard，到 authentication 底下的 OAuth／sign-in providers 把 Google 打開。第二件是它會要一組 client ID，你得去 Google Cloud 的 Auth platform 建一個 web client，把 Supabase 給的 authorized redirect URI 填進去，建立後拿到 client ID 與 secret，再貼回 Supabase。做完這一輪，Google 登入才會真的通。</p>
+
+<p>登入成功後，你會被導到 onboarding 畫面：「Tell us what you like. There is no wrong answer.」——到這裡，整條路終於開始走了。</p>
+
+<h2>步驟五：debug 一個只有人眼會看到的 bug</h2>
+
+<p>手動走的時候，講師發現一個很討厭的 bug：onboarding 的第一張電影海報時有時無——首次載入沒有，重新整理又有了，而且之後每次重整還會在「有」與「沒有」之間跳。這種 bug 在自動化測試裡很容易被漏掉，因為它不穩定，人眼反而最容易抓到。</p>
+
+<p>把它丟進 <code>/debug</code> 後，agent 用 Playwright 重現、還刻意把已 onboard 的使用者重設、連續重整六次，發現伺服器吐出的 HTML 每次都一模一樣，圖片優化器也正常。最後它找到一個有明確成因的 bug：<code>next/image</code> 的 <code>priority</code> prop 在 Next.js 16 已經被棄用，不再做程式碼原本以為它會做的事，應該改用 <code>preload</code>；而 Next 也警告這張圖是 LCP，首屏圖片要加上 eager 載入。</p>
+
+<pre data-provenance="derived">// 壞掉：Next.js 16 起 Image 的 priority 已棄用，不再保證 eager 載入
+&lt;Image src={poster} priority /&gt;
+
+// 修好：改用 preload，並對首屏圖片加上 loading="eager"
+&lt;Image src={poster} preload loading="eager" /&gt;</pre>
+
+<p>把 <code>priority</code> 改成 <code>preload</code>、補上 <code>loading</code> 之後，再重整幾次，海報就每次都立刻出現了。這一段的價值不只是修好一個 bug，而是示範了一種 debug 的節奏：先設法穩定重現、把可變的因素一一排除（伺服器 HTML？優化器？），最後才把矛頭指向那個「文件早已改變、但程式碼還在用舊假設」的 API。</p>
+
+<figure class="lesson-figure"><img src="./first-slice-core-taste-loop-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>做完長什麼樣</h2>
+
+<p>走完這一節，你的 app 第一次能讓一個真人從頭走到尾：用 Google 登入、被帶到 onboarding、一張張滑完 starter deck、然後拿到一份 12 條、每條都附一句「為什麼推薦你」的 feed。三個核心假設——auth、pool、taste vector 與 quota——都在動手前被寫成 spec，而不是邊做邊猜。而這也正是下一節要收尾的地方：拿到 feed 之後，我們還要把這條 feature 真的關掉，並想想怎麼把剩下的功能一次推進。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+core taste loop 是第一個 walking skeleton：範圍刻意切窄，只承諾「登入 → 滑一輪 starter deck → 拿到帶理由的 picks」，而 CSV 匯入、vibe search、feed 內回饋全部先不做。做法照舊是 <code>architect</code> 把 load-bearing 決定（登入方式、候選池、swipe 權重、build 狀態、選擇邏輯、每日 quota、gating）釘死成 spec，再 <code>clear</code> + <code>develop</code> 為 15 個 task 上分支。驗證時 Playwright 會很徹底但很花時間；而只有人會遇到的坑（Supabase 開 Google provider、拿 client ID）與不穩定的 bug（<code>next/image</code> 的 <code>priority</code> 已棄用改 <code>preload</code>），要靠手動走一遍才會現形。
+</blockquote>
+
+<p>整條 slice 通了，但「通」還不等於「收掉」。下一節要把 feature 真的關掉，也會談一個把速度換回來的做法：什麼時候該先把好幾條功能一次 architect 好，再一起 develop。</p>
+
+<div class="lesson-nav">
+  <div><a href="./iterate-the-design-system.html">← 上一步：改主意時：compact 而非 clear，重跑 architect→develop</a></div>
+  <div><a href="./showcase-and-batch-forward.html">下一步：Showcase 收尾與批次推進：一次一個，還是先 batch architect →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 core taste loop 刻意切得很窄？" data-correct="2" data-explain="walking skeleton 的價值在端到端打通，不在功能多，所以先排除 CSV 匯入等。">
+  <button class="opt">因為它只是用來測試伺服器能不能啟動</button>
+  <button class="opt">因為它的資料模型還沒設計完成</button>
+  <button class="opt">因為 walking skeleton 要的是端到端打通</button>
+  <button class="opt">因為使用者訪談裡沒有人提到推薦功能</button>
+</div>
+<div class="quiz" data-question="swipe 的權重最後為什麼選對稱的 +1／−1／0？" data-correct="1" data-explain="因為不喜歡和喜歡一樣能主導口味 profile。">
+  <button class="opt">因為這樣寫起來的程式碼比較短</button>
+  <button class="opt">因為不喜歡和喜歡一樣能主導 profile</button>
+  <button class="opt">因為資料庫欄位只允許整數值</button>
+  <button class="opt">因為 AI 模型建議一定要對稱</button>
+</div>
+<div class="quiz" data-question="登入方式最終決定走哪條路？" data-correct="3" data-explain="選 Google 登入當主路徑，並延後自訂 SMTP。">
+  <button class="opt">只用 email 加密碼，必要時才加 magic link</button>
+  <button class="opt">magic link 為主，email 加密碼當備援</button>
+  <button class="opt">email 加密碼為主，Google 最後才加</button>
+  <button class="opt">Google 登入為主，並延後自訂 SMTP</button>
+</div>
+<div class="quiz" data-question="為什麼課程建議時間不夠就別走 Playwright 驗證？" data-correct="0" data-explain="它很徹底但很花時間；趕時間的話自己手動測比較快。">
+  <button class="opt">它很徹底但很花時間，手動測更快</button>
+  <button class="opt">它根本無法在瀏覽器裡操作 app</button>
+  <button class="opt">它只會驗證型別、不會真的開瀏覽器</button>
+  <button class="opt">它會把測試帳號寫進正式資料庫</button>
+</div>
+<div class="quiz" data-question="海報時有時無的 bug，根本成因是什麼？" data-correct="1" data-explain="next/image 的 priority 在 Next.js 16 已棄用，改用 preload 並加 loading eager。">
+  <button class="opt">TMDB 對同一部片回傳了兩種不同尺寸的海報</button>
+  <button class="opt">next/image 的 priority 已棄用，該用 preload</button>
+  <button class="opt">圖片優化器每次重新產圖導致隨機失敗</button>
+  <button class="opt">伺服器每次吐出的 HTML 都不一樣</button>
+</div>
+<div class="quiz" data-question="登入時的 unsupported provider 要怎麼解？" data-correct="2" data-explain="到 Supabase dashboard 手動開啟 Google provider 並填 client ID。">
+  <button class="opt">改寫程式碼，把 auth 換成別家服務</button>
+  <button class="opt">把 middleware 的轉址規則拿掉</button>
+  <button class="opt">到 Supabase 手動開啟 Google provider</button>
+  <button class="opt">把 onboarding 的決定改成批次送出</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · Greenfield：Catalog、Design System 與第一個 Slice · Step 5/6</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

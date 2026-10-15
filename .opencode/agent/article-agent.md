@@ -38,8 +38,9 @@ You are given a mode, a subject, a node id and a step id; all paths are derived 
 ## Mode `node-article` (the `/to-article` flow — one agent owns one node's steps)
 
 1. Rewrite every step of the node in one bounded-parallel batch:
-   `node src/html-cli.mjs article-batch --subject <SUBJECT> --node <NODE> [--max-parallel <N>] [--skip-existing]`
+   `node src/html-cli.mjs article-batch --subject <SUBJECT> --node <NODE> [--max-parallel <N>] [--skip-existing] [--plan-only]`
    It reads the node's `steps` DAG, skips steps with no HTML lesson (and, with `--skip-existing`, steps already `illustration: planned`/`done` that carry a `plan.json`), rewrites the rest with at most `--max-parallel` text calls at once, and prints JSON: `{ node, steps: [ { step, status: "rewritten" | "failed" | "skipped", reason?, rewritten?, planInput?, manifest?, error? } ] }`. A failed step never aborts the others. Only pass `--skip-existing` when your prompt tells you to (the `/batch-nodes -gen-article` flow).
+   With `--plan-only` (the `/to-article -plan-only` flow) the text model is never called: each step's existing `rewritten.html` is reused, or else the current lesson is adopted as the base, and already-planned steps are skipped; plan those `rewritten` steps exactly as below.
 2. For each step whose `status` is `rewritten`, **one step at a time** (read it, plan it, move on — never load every rewrite into context at once), repeat the `article` mode's planning steps 2–5: read `learn/<SUBJECT>/output/<NODE>/<STEP>/rewritten.html`, decide the image count from its Chinese-character length (1–5, same table), insert the `<!--image:N-->` marker lines (the only edit allowed), write the ordered plan to that step's `planInput` path, then run
    `node src/html-cli.mjs figures --subject <SUBJECT> --node <NODE> --step <STEP>`.
 3. Steps reported `failed` or `skipped` are not planned. Never fabricate a plan for them and never retry the CLI.

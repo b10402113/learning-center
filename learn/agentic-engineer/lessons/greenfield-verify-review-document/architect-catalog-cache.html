@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>為 movie catalog 與 cache 跑 architect</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>為 movie catalog 與 cache 跑 architect</h1>
+<p class="meta">Step 4/4 · Greenfield：Verify、Review、Document</p>
+
+<h2>學習目標</h2>
+<p>資料模型交付之後，鏡頭轉向下一個功能：movie catalog 與 cache。它是個比較大的功能，不能直接 <code>/develop</code>，得先設計規格。這一節要帶你跑 <code>architect movie catalog and cache</code>，把它從「needs a decision」變成一份可以動工的 spec。做完之後，你會拿到一份寫進 <code>docs/specs/</code> 的設計文件，內含 16 條 acceptance criteria、每個值都標了來源的 value sourcing 表，以及一份逐條對得起來的 build plan。你會看懂：一輪決策訪談的節奏、每個決定背後的取捨、以及最後的完整性檢查在確認什麼。</p>
+
+<h2>前言：比較大的功能，不能直接跳下去寫</h2>
+<p>前面三個功能的路徑是「先 <code>/develop</code> 寫出來，再驗、再審、再交付」。但下一個功能不一樣。movie catalog 與 cache 牽涉到一個外部資料源（TMDB）、一套比對演算法、一個背景任務系統，以及「資料要存多久、什麼時候該更新」這些沒有標準答案的選擇。如果直接 opens 開發，agent 會幫你把每個沒決定的事<strong>默默決定掉</strong>，而你等到 build 到一半才發現「等等，這個不是我要的」。</p>
+<p>所以規則是：凡是需要做決定的功能，先跑 <code>architect</code>。它會用一輪帶建議選項的訪談，把每個 load bearing 的決定都攤到你面前，再寫成 spec。<code>/develop</code> 之後就照著 spec 建，不用再猜。前置條件是：你知道要做哪個功能，而且願意花時間回答問題——這一輪的價值全在「把決定想清楚」，不在「快」。</p>
+
+<h2>Step 1：它先讀現況，把問題定位清楚</h2>
+<p>輸入 <code>architect movie catalog and cache</code>。它很快會回報它的判讀：這是一個<strong>新功能（feature），建在既有的 web stack 上，目前還沒有 UI</strong>。這個判讀很重要，因為它決定了接下來問哪些問題、以及 spec 會長什麼形狀。</p>
+<p>判斷的來源是 scope。scope 裡 feature 4（movie catalog and cache）被標成「needs a decision」，意思是它還沒被設計過；feature 5（design system 與 UI foundation）排在它後面。而 feature 4 正是<strong>擋住真實資料</strong>的那一個，因為目前 starter deck 還是從一個 checked-in 的檔案 seed 進去的。所以先做 feature 4、把真資料接進來，是這條路線的正確順序。</p>
+
+<h2>Step 2：決策訪談的節奏——一問一答，每題都有建議</h2>
+<p>接著它開始問問題。這是這一節最核心的手法。它不是丟一份填不完的問卷給你，而是<strong>一個決定一個問題</strong>，每次提出幾個真實的選項，其中一個標成 recommended 並附一句理由，你只要回答就好。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/architect/internal/design-conversation.md#staged-design-conversation-gated-acceptance-criteria-first-main-model">**Grill down to the smallest load bearing decision.** Work out every decision this specific project needs, from the big architectural calls to the smallest tool and setup choices, and ask each as its own question with a recommended pick and current, real options you generate at runtime. No choice is too small to route through the engineer; never silently decide one for them.</pre>
+
+<p>而且它同時是你的<strong>對練夥伴</strong>。示範裡有一題，它問「TMDB 的抓取要跑在哪裡：cache miss 時 inline 抓，還是全部丟進一個 job」，示範者不確定，就直接回「我在選項一和選項二之間猶豫，幫我決定」。agent 沒有含糊帶過，而是先問「那實際上 miss 有多常發生」，得到「幾乎不會，因為 deck 已經預先存好、feature 6 也在 job 裡產生選片，前端只讀已存的 row」之後，才回頭下判斷。這種「先釐清事實、再給建議」的對答，比單方面接受你的選擇有價值得多。</p>
+
+<figure class="lesson-figure"><img src="./architect-catalog-cache-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<p>以下是示範這一輪真正定下來的決定，以及每個決定背後的關鍵取捨：</p>
+<table>
+  <thead>
+    <tr><th>面向</th><th>定下來的決定</th><th>關鍵理由</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>範圍</td><td>從真實 TMDB 抓取並儲存 20 部 starter deck，加上一個可重用的 title + year 查詢，回傳已存的 movie row</td><td>這是這個功能要真正做到的事</td></tr>
+    <tr><td>比對</td><td>不確定時就評分、接受，否則記為未匹配；讀取時若資料過期就更新</td><td>匯入的資料形狀不乾淨，需要容錯</td></tr>
+    <tr><td>執行位置</td><td>寫入走 job，讀取走 request；任何跟 TMDB 通話的都跑成背景 job</td><td>不讓慢或受限的 TMDB 卡住任何一個頁面</td></tr>
+    <tr><td>新鮮度</td><td>30 天</td><td>讀取時更新的 staleness 門檻</td></tr>
+    <tr><td>欄位</td><td>normalized title、original title、IMDb ID、popularity、vote average、vote count、keywords、tagline，加上一欄 refreshed_at</td><td>比對與搜尋需要的欄位優先，展示用的先不加</td></tr>
+    <tr><td>海報</td><td>只存 path；圖片 base URL 與尺寸集中一處；把 image.tmdb.org 加進 Next 的 remote pattern</td><td>只settle 影像的設定，渲染留給之後</td></tr>
+    <tr><td>授權</td><td>用 V4 access token 當 bearer header，環境變數命名為 <code>TMDB_READ_ACCESS_TOKEN</code></td><td>原本的 spec 寫的是 TMDB API key，但那是我們不用的憑證格式</td></tr>
+    <tr><td>用戶端</td><td>plain fetch 加上 Zod schemas</td><td>不需要額外的 SDK 依賴</td></tr>
+    <tr><td>Rate limit</td><td>約每秒 50 次、無每日上限；用 ingest 的併發數加上 429 重試來控制</td><td>貼著真實限制設計，不要自己亂猜</td></tr>
+    <tr><td>正規化</td><td>去除大小寫、重音、標點與開頭的冠詞</td><td>涵蓋 letterbox 匯出真正會出現的形狀，但不能太激進</td></tr>
+    <tr><td>比對信心</td><td>加權的 title 相似度加上年份距離，共用一個門檻</td><td>同時比對 title 與 original title，取較好的一個</td></tr>
+  </tbody>
+</table>
+<p>這張表本身就是「把決定寫下來」的價值。每一列都是一個如果沒問、就會被默默決定掉的選擇；現在它們全部有答案、也全部有理由。</p>
+
+<h2>Step 3：幾個特別值得記住的判斷</h2>
+<p>表裡有幾題特別容易在真實專案裡踩錯，值得單獨講。</p>
+<h3>為什麼是永久存 row，而不是「快取」</h3>
+<p>這個功能的名字裡有 cache，但最後的設計不是一個「有到期時間的快取」，而是<strong>把抓到的電影變成 movies 表裡的一筆永久資料</strong>。查詢時會先查 Postgres 的 normalized title，所以重複查同一部片時<strong>完全不需要再打一次網路</strong>。這個選擇讓「TMDB 慢、被限流、或掛掉」永遠不會變成「頁面打不開」。</p>
+
+<figure class="lesson-figure"><img src="./architect-catalog-cache-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<h3>為什麼 miss 路徑可以 inline 抓</h3>
+<p>一般會直覺認為「任何外部呼叫都該丟進 job」，但這裡留了一個 inline 的例外。判斷的依據不是教條，而是<strong>頻率</strong>：設計上幾乎不會 miss，因為 deck 是 job 預先存好的、feature 6 的選片也在 job 產生、前端只讀已存的 row。使用者請求真的撞到一筆表裡沒有的電影，是罕見的邊緣情況，所以 inline 抓一下是可以接受的。</p>
+<h3>為什麼要 reject 沒有 overview 的電影</h3>
+<p>TMDB 有時會回傳一部沒有 overview（或沒有海報）的電影。決定是直接拒絕它。這帶來一個取捨：好處是之後做 embedding 時品質更好，壞處是某人 letterbox 匯出裡的一部真電影，可能被回報成「未匹配」。所以它的定義要講清楚：這不是「沒找到」，而是<strong>一個明確、匹配到了、但不可用的結果</strong>。把這條邊界寫進 spec，之後才不會有人把它誤讀成 bug。</p>
+<h3>為什麼環境變數要改名</h3>
+<p>spec 原本寫的變數叫 TMDB API key，但既然決定用 V4 bearer token，那個名字就在描述一種我們<strong>沒有在用</strong>的憑證格式。所以改成 <code>TMDB_READ_ACCESS_TOKEN</code>。這種「名字要跟真實內容一致」的龜毛，正是決策階段該做的事——等到 build 才發現名字對不上，就要多繞一圈。</p>
+
+<h2>Step 4：spec 寫成什麼形狀</h2>
+<p>訪談結束後，它把結論寫成一份 spec。這一份採的是 directory 形狀：一個資料夾，裡面有 <code>index.md</code>（給 <code>/develop</code> 讀的 build spec）與 <code>rationale.md</code>（給人讀的決策紀錄），另外還有一份 <code>verify.md</code>。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/architect/spec-template.md#a-directory-spec-splits-build-spec-from-reasoning">- **`index.md`**: the build spec `/develop` reads: `## Summary`, `## Requirements`, `## Decision`, the design/spec section, `## Build plan`, `## Consequences`, `## Follow-up`, and a one line `## Rationale` pointer to `rationale.md`.
+- **`rationale.md`**: everything in the decision record that `/develop` does not need: `## Context`, `## Options considered`, `## Rationale`, the `## References` section, and any supporting evidence (inventories, audits, a landscape scan).</pre>
+
+<p>這個切法的用意是：<code>/develop</code> 只需要 build spec，不需要每次連著一整段決策歷史一起載入；而人（或未來的你）要回頭查「當初為什麼這樣選」時，才去讀 <code>rationale.md</code>。兩份檔案的讀者不同，所以分開。</p>
+<p>spec 裡有兩個結構是這個階段的關鍵產物。第一個是 <strong>acceptance criteria</strong>——每一條都編號、可獨立檢查：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/architect/spec-template.md#requirements">**Acceptance criteria** (the contract, each criterion is IDed and independently checkable):
+- **AC-1**: &lt;observable, testable outcome that must hold for the feature to be correct&gt;
+- **AC-2**: &lt;the key edge case or failure that must be handled, e.g. "retry after timeout returns the same result (idempotent)"&gt;
+- **AC-N**: &lt;…&gt;</pre>
+
+<p>第二個是 <strong>value sourcing 表</strong>：把每個 action 會產生、計算或顯示的值，逐一指名它的來源。這一欄的用意是攔截「未決定的輸入」——如果某條 AC 需要一個值，但 spec 從沒說那個值從哪來，builder 就只能在開發途中自己發明一個。那不該發生在 build 階段。</p>
+
+<figure class="lesson-figure"><img src="./architect-catalog-cache-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/architect/spec-template.md#feature-design">**Value sourcing** (every value each action produces, computes, or displays names where it comes from; a required value with no named source is an undecided input, resolve it before this spec is done, do NOT leave the build to invent it):
+| Action | Value produced / displayed | Source |
+|---|---|---|
+| &lt;action&gt; | &lt;the value&gt; | &lt;an input param · a DB column · derived from X · decided in spec N&gt; |</pre>
+
+<h2>Step 5：完整性檢查在確認什麼</h2>
+<p>spec 寫完後，它會先做一次「檢查自己寫的東西」的 pass。示範裡的三個結論剛好就是這個階段的檢查清單：</p>
+<ul>
+  <li>所有必要的 section 都在（index 與 rationale 兩份都算）。</li>
+  <li><strong>全部 16 條 acceptance criteria 都能來回對上 build tasks</strong>：每條 AC 至少有一個任務在滿足它，反過來每個任務也都指向某條 AC。</li>
+  <li>value sourcing 表為每一個 criteria 需要的值都指了來源。</li>
+</ul>
+<p>這個「來回對得上」的檢查是重點。它要抓的是兩種孤兒——沒有任務支撐的 AC，以及沒有 AC 依據的任務。任何一種出現，都代表 spec 還沒想清楚。</p>
+
+<h2>Step 6：要不要再找一個模型互相檢查，你決定</h2>
+<p>接著它會問你一個問題：在你自己看過之前，要不要先讓另一個模型做一次唯讀的交叉檢查？四個選項各自對應不同的嚴謹度：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/architect/internal/after-subagent.md#after-the-spec-is-written">- **question**: "Cross check this spec before you review it? (Recommended: `&lt;tier-based pick&gt;`.)"
+- **header**: "Cross check"
+- **options**:
+  - `Another model`: a read only critique pass on a different, capable model, which catches what the model that wrote the spec is blind to.
+  - `Same model`: a read only critique pass on this same model (a fresh eyes critique of its own work).
+  - `I'll review it myself`: no AI critique; show the spec and let the engineer scrutinise it.
+  - `Skip`: go straight to accept.</pre>
+
+<p>規則很重要的一點是：它<strong>一定會問，但絕不會替你跑或替你跳過</strong>。示範這一輪選的是「no AI critique is needed」，因為前面資料模型的完整審查流程已經示範過了，這次由人工看過檔案、直接給意見。</p>
+
+<figure class="lesson-figure"><img src="./architect-catalog-cache-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<p>不論有沒有跑交叉檢查，最後都會走到同一個確認選項：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/architect/internal/after-subagent.md#after-the-spec-is-written">- **question**: "Accept this spec, or change it?"
+- **header**: "spec"
+- **options**: `Accept, looks solid (recommended)` · `Change something, I'll tell you what` · `Rethink the approach`</pre>
+
+<p>示範者讀完之後選了接受，因為資料模型與各項決定都符合預期。到這裡，feature 4 的 spec 完成，下一步是 <code>clear</code> 開一個乾淨的 session，然後 <code>develop the movie catalog and cache</code>——真正把它建出來。</p>
+
+<h2>小結</h2>
+<blockquote>
+<p>比較大的功能不能直接 <code>/develop</code>，要先跑 <code>architect</code>。它會先判讀現況（新功能、既有 web stack、尚無 UI），再用一輪「一題一個決定、每題附建議」的訪談，把所有 load bearing 的選擇攤出來；遇到你猶豫的題目，它會先問事實、再給判斷，當你的對練夥伴。</p>
+<p>這一輪定下了 job 寫入、request 讀取、永久存 row 而非有到期的快取、30 天 staleness、只存海報 path、V4 bearer token 環境變數改名為 <code>TMDB_READ_ACCESS_TOKEN</code>、正規化去大小寫重音標點冠詞，以及加權 title 相似度加年份距離的比對方式等決定。</p>
+<p>spec 採 directory 形狀，<code>index.md</code> 給 <code>/develop</code>、<code>rationale.md</code> 給人讀。寫完後做完整性檢查：必要 section 齊全、16 條 AC 與 build tasks 來回對得上、value sourcing 表為每個值指了來源。要不要再做一次跨模型交叉檢查由你決定；確認接受後就 <code>clear</code>，接著 <code>/develop</code> 把它建出來。</p>
+</blockquote>
+
+<div class="lesson-nav">
+  <div><a href="./document-data-model.html">← 上一步：用 document 產出交付紀錄（PR）</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 movie catalog 與 cache 不能直接跑 /develop？" data-correct="1" data-explain="它牽涉多個需要決定的選擇，跳過設計會讓每個沒決定的事被默默決定掉。">
+  <button class="opt">因為它的程式碼量太大，超過單次執行上限</button>
+  <button class="opt">因為它牽涉多個需要決定的選擇，得先設計</button>
+  <button class="opt">因為它必須等 design system 做完才能動工</button>
+  <button class="opt">因為它會用到資料庫，而資料庫還沒建好</button>
+</div>
+<div class="quiz" data-question="architect 訪談一輪的節奏是什麼？" data-correct="2" data-explain="一個決定一個問題，每題附上真實選項與一個 recommended。">
+  <button class="opt">一次丟出一份完整問卷讓你自己慢慢填寫</button>
+  <button class="opt">由它直接決定全部，最後再給你確認</button>
+  <button class="opt">一題一個決定，每題附選項與一個建議</button>
+  <button class="opt">只問最大的架構問題，細節留給 develop</button>
+</div>
+<div class="quiz" data-question="這輪把 TMDB 的抓取放在哪裡執行？" data-correct="0" data-explain="寫入走 job、讀取走 request，任何跟 TMDB 通話的都跑成背景 job。">
+  <button class="opt">寫入走 job、讀取走 request 的分工</button>
+  <button class="opt">全部都在 request 裡同步完成較簡單</button>
+  <button class="opt">全部都在同一個 job 裡一次抓完</button>
+  <button class="opt">交給前端瀏覽器直接呼叫 TMDB</button>
+</div>
+<div class="quiz" data-question="為什麼 miss 路徑可以接受 inline 抓，而不用一律丟 job？" data-correct="3" data-explain="因為設計上幾乎不會 miss，deck 已預存、前端只讀已存的 row。">
+  <button class="opt">因為 TMDB 的 rate limit 其實完全沒有上限</button>
+  <button class="opt">因為 job 系統還沒有安裝完成不能使用</button>
+  <button class="opt">因為 inline 抓取永遠比背景 job 更快更穩</button>
+  <button class="opt">因為設計上幾乎不會 miss，屬於罕見情況</button>
+</div>
+<div class="quiz" data-question="把抓到的電影永久存成 row，而不是有到期的快取，主要好處是什麼？" data-correct="1" data-explain="重複查詢先查 Postgres，TMDB 慢或掛掉都不會讓頁面打不開。">
+  <button class="opt">可以省下資料庫的儲存空間與索引成本</button>
+  <button class="opt">重複查詢不再打網路，TMDB 掛了也不影響</button>
+  <button class="opt">可以直接讓前端瀏覽器快取整份電影清單</button>
+  <button class="opt">可以省掉寫 migration 與建表的工作</button>
+</div>
+<div class="quiz" data-question="spec 寫完後的完整性檢查，主要確認哪一件事？" data-correct="2" data-explain="每條 AC 與 build task 要能來回對上，value sourcing 也要為每個值指來源。">
+  <button class="opt">確認 spec 的總行數沒有超過專案的慣例上限</button>
+  <button class="opt">確認所有決定都由同一個模型獨自完成評分</button>
+  <button class="opt">確認 AC 與 build task 能來回對上且值有來源</button>
+  <button class="opt">確認 references 區段裡每個連結都能被重新抓取</button>
+</div>
+<div class="quiz" data-question="關於跨模型交叉檢查這件事，architect 的規則是什麼？" data-correct="0" data-explain="它一定會問，但不會替你跑或替你跳過，決定權在你。">
+  <button class="opt">它一定會問，但絕不替你跑或替你跳過</button>
+  <button class="opt">它預設一定會自動跑一次，不問你意見</button>
+  <button class="opt">只在 spec 被判定為不完整時才會問你</button>
+  <button class="opt">它會依你的 tier 設定自動決定要不要跑</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · Greenfield：Verify、Review、Document · Step 4/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

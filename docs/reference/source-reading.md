@@ -164,12 +164,14 @@ A step's `sources` locators are the entry points. For a step with a source:
 
 ### Code provenance
 
-Read the source before writing code. When the source carries code, quote it verbatim: drop whole lines or elide a run with `…` if needed, but never rewrite a line. When the source carries no code, write it from the prose, faithful to what the source says. Either way, mark every `<pre>` block in a `procedure` or `reference` lesson with an invisible provenance attribute:
+Read the source before writing code. When the source carries code, quote it verbatim: drop whole lines or elide a run with `…` if needed, but never rewrite a line. When the source carries no code, write it from the prose, faithful to what the source says. Either way, mark every `<pre>` block with an invisible provenance attribute:
 
 - quoted from source: `<pre data-source="sources/<subject>/<file>#<locator>">`
 - written from the prose: `<pre data-provenance="derived">`
 
-The attribute adds no visible text, so the page reads the same; `scripts/verify.mjs` reads it to confirm a procedure lesson never ships an unmarked block.
+Surfacing code applies to every step type, not just `procedure`/`reference`: whenever the prose names a file, function, API, or command — or the step's `sources` include a code file — surface the real code. A pure-theory lesson that involves no code surfaces none; never manufacture derived code to fill space.
+
+The attribute adds no visible text, so the page reads the same. `scripts/verify.mjs` enforces it for `procedure`/`reference` lessons (the hard gate); `concept`/`decision` follow the same rule as a soft requirement.
 
 ### Missing source
 

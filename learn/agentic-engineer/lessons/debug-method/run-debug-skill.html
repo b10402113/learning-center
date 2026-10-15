@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>實跑 debug skill：餵它三件事、一次一個假設</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>實跑 debug skill：餵它三件事、一次一個假設</h1>
+<p class="meta">Step 4/4 · 除錯方法：三種壞法與科學方法</p>
+
+<h2>學習目標</h2>
+<p>跑一次 debug skill：一開始餵它觀察到什麼、預期什麼、怎麼重現三件事，過程中盯著它只下一個假設，並用「修得夠小」判斷它是否真的找到根因。</p>
+
+<h2>前言：把方法交到手上</h2>
+
+<p>上一節你已經知道六個步驟，也知道 debug skill 就是替你把這六步跑完的那個東西。這一節不重講方法，而是示範怎麼<strong>用好這個 skill</strong>：開場要餵它什麼、過程中要盯什麼、結束後要用什麼標準判斷它到底有沒有找到根因。</p>
+
+<p>動手前你需要的東西很簡單：一個 debug skill 能跑的專案，還有一個你知道「哪裡不對」的具體現象。做完之後，你手上會有一條能重複使用的使用方式，而不是每次憑感覺跟它對話。</p>
+
+<h2>第一步：開場先把三件事餵給它</h2>
+
+<p>如果你只把 debug skill 單獨跑起來，它做的第一件事，是問你這個 bug 的細節。而整場對話最關鍵的部分，就是你在一開始給它的東西——<strong>三件事</strong>。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#step-0-capture-the-symptom">Pin down precisely, before touching code:
+- **Observed** behavior (the exact error, stack trace, wrong output, or screenshot).
+- **Expected** behavior.
+- **Repro**: the steps, inputs, and environment that trigger it.
+
+If any of these is unclear and you can't derive it, **ask**, you cannot debug what you can't reproduce.</pre>
+
+<p>這三件事就是：你觀察到什麼（Observed）、你預期什麼（Expected）、以及怎麼重現它（Repro）。把它們一次講清楚，它就會直接開始調查。如果你只丟一句「壞了」，它就得停下來先問你要證據——而這個差別，往往就是「一次快速調查」和「一次緩慢調查」之間的分界。</p>
+
+<figure class="lesson-figure"><img src="./run-debug-skill-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>有一種情況很省事：如果你前面才剛跑過 check verify，那份產出其實已經把三件事都蒐集好了，debug skill 可以直接接手。課程 demo 裡就是這樣，直接下一行指令即可：</p>
+
+<pre data-provenance="derived">/debug next data model</pre>
+
+<p>這裡的 <code>next data model</code> 指的是「接著上一次 check verify 針對 data model 找到的問題繼續查」。它之所以能省略開場三件事，是因為那些資訊早已在前一輪的驗證結果裡。</p>
+
+<p>如果你是自己跑、手上沒有那份驗證結果，那就<strong>說得具體一點</strong>。不要只說「資料庫有問題」，要具體到讓下一個實驗有辦法證明它對或錯。</p>
+
+<h2>第二步：看它怎麼重現</h2>
+
+<p>開場資訊給足之後，它會去取得一個能隨傳隨到的重現。如果它一時重現不出來，它不會硬修——它會停下來，加上額外的 instrumentation，讓自己有能力抓到這個 bug，然後告訴你它加了什麼、得到什麼結果。</p>
+
+<p>這一點值得記住：<strong>一個重現不出來的 bug，是沒辦法被證明修好的。</strong>所以當它願意停下來加觀察點，而不是直接下手改，這其實是好跡象。</p>
+
+<h2>第三步：盯它一次只下一個假設</h2>
+
+<p>接下來你要做的，就是看它怎麼下判斷。整個過程你只要盯一件事：<strong>一次一個假設。</strong></p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#step-3-hypothesize-one-at-a-time">State a single, specific, falsifiable hypothesis for the root cause, e.g. "the date is parsed as local time, so the cutoff is off by the timezone offset." Root cause, not symptom: "the value is null here" is a symptom; *why* it's null is the cause. Resist shotgun changing several things at once.</pre>
+
+<p>所以，如果你看到它一次改動好幾個不相關的地方，然後祈禱那個失敗自己消失——<strong>直接把它停下來。</strong>改成一次只做一個實驗、只帶一個資訊，等它確認了這個假設，才允許它動手修。這一步是你可以、也必須介入的地方。</p>
+
+<h2>第四步：用「修得夠小」判斷它有沒有抓到根因</h2>
+
+<p>那要怎麼知道它真的找對原因了？不是看紅燈有沒有變綠，而是看<strong>修復的大小</strong>。多數時候，真正抓到根因的修復會小到不可思議。</p>
+
+<p>課程 demo 就是一個很好的例子。那次測試全部跑過、卻沒有任何失敗訊號，查到最後的原因（root cause）是：<strong>ENV 從來沒被載入。</strong>smoke test 匯入的 dotenv config，只會讀檔名剛好叫 <code>.env</code> 的那個檔案，但這個專案的 secrets 其實放在 <code>.env.local</code>。於是 <code>.env</code> 裡的值一直是空的，所有測試自然一路無聲地跑過。修法是把 <code>.env</code> 明確載進 smoke test——而這個改變，實際上只有一行。</p>
+
+<pre data-provenance="derived">// 壞掉時：這個 import 只會讀檔名剛好叫 .env 的檔案
+import 'dotenv/config';
+
+const databaseUrl = process.env.DATABASE_URL; // 一直都是空的
+
+// 修好後：明確把 .env.local 載進來，secrets 其實放在那裡
+import { config } from 'dotenv';
+config({ path: '.env.local' });</pre>
+
+<p>上面這段程式碼是依照 demo 的描述重建的，不是原始碼逐字引用。它要示範的是那個形狀：一個看起來完全正常、讀起來也對的設定檔載入，實際上讀錯了檔案；真正的修復只有一行。當你看到修復這麼小、又能用一句話解釋它為什麼有效，那才是它真的找到了根因。</p>
+
+<figure class="lesson-figure"><img src="./run-debug-skill-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第五步：Review 它的結論，用同一條規則驗收</h2>
+
+<p>調查結束後，你要做的不是點頭收工，而是 review。驗收的規則就是第一節那條：<strong>不要接受一個你無法解釋的修復。</strong>它交出的報告，應該讓你一眼看到根因、最小的修復，以及下一步。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#report">**Root cause: &lt;the proven cause&gt;. Fixed by &lt;the minimal change, files touched&gt;.**
+Next: /test &lt;feature&gt;   (lock in the regression test, added inline or handed over)
+Heads up: &lt;same cause also at &lt;where&gt;, fixed too · or a design flaw → /architect &lt;what&gt;&gt;   (omit if none)</pre>
+
+<p>報告會先講根因與修復，重現與證據只是過程的足跡、不是頭條。最後那個 <code>Heads up</code> 是提醒你：同一個根因常常也藏在別的地方；如果它其實是一個「本來就沒做對的決定」，那就該轉去 <code>/architect</code>，而不是在 code 上補丁。</p>
+
+<h2>可選：把調查丟進 subagent</h2>
+
+<p>如果這場調查不簡單，你可以把它放進一個專門的調查 subagent，讓它反覆動用工具的那段過程不要塞滿你的主對話。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#optional-run-it-in-a-subagent">- `model`: set explicitly to a strong model, do not inherit the session model (Claude Code: `sonnet`)
+- `description: "Debug: &lt;symptom&gt;"`
+- Tools: `Read`, `Bash`, `Grep`, `Glob`, `Edit`, `Write`
+- `prompt`: this loop + the captured symptom + reproduction + the relevant `AGENTS.md` (inlined). Require it to report the root cause with evidence, not just "fixed it."</pre>
+
+<p>兩個細節：模型要明確指定成強模型，不要沿用你目前的 session 模型；還有，要求它「用證據講出根因」，而不是只回一句「修好了」。</p>
+
+<h2>這和「盲目請 agent 修」差在哪</h2>
+
+<p>一般的「幫我修好這個錯誤」提示，會鼓勵 agent 一直改東西，改到紅燈變綠燈為止。有時候它真的會成功，然後你會在一片沒有解釋的情況下結束——你不知道剛剛到底哪裡錯了。課程給這件事取了一個名字：<strong>vibe debugging</strong>（憑感覺除錯），而你知道那通常怎麼收場。</p>
+
+<p>debug skill 不一樣。它要求的是：一個重現、一個假設、一份證據、一個最小修復，最後再補一個回歸測試。它的優勢不是「用最少的步數」，而是「你能解釋為什麼這個結果會有效」。</p>
+
+<figure class="lesson-figure"><img src="./run-debug-skill-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+用好 debug skill 的關鍵，在開場與 review 兩端。開場時餵它三件事——觀察到什麼、預期什麼、怎麼重現；如果前一輪 check verify 已經蒐集好，直接讓它接手即可。過程中盯它「一次只下一個假設」，看到它一次改多個不相關的地方就停下來。結束後，用「修得夠小」判斷它是否抓到根因，並守著那條規則：不要接受一個你無法解釋的修復。skill 能把重現、定位、測試、修復、保護做得比你快，但「這是否真的證明了原因」這個判斷，永遠是你的。
+</blockquote>
+
+<p>到這裡，這個節點的四步就走完了：先問是哪一種壞、分流後選對回應、對一般 code bug 套上科學方法，最後用 debug skill 實際跑一輪。接下來你可以用 <code>/tackle</code> 針對每一步驗證自己的掌握程度。</p>
+
+<div class="lesson-nav">
+  <div><a href="./scientific-method-for-bugs.html">← 上一步：一般 code bug 的科學方法：observe → hypothesize → test</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="開場餵給 debug skill 的「三件事」是哪三件？" data-correct="2" data-explain="觀察到什麼、預期什麼、怎麼重現——這三件事決定調查快或慢。">
+  <button class="opt">專案名稱、分支、以及提交的版本</button>
+  <button class="opt">錯誤訊息、修法、以及回歸測試</button>
+  <button class="opt">觀察到什麼、預期什麼、怎麼重現</button>
+  <button class="opt">功能清單、負責人、以及期限</button>
+</div>
+<div class="quiz" data-question="如果你只告訴它「壞了」，會發生什麼事？" data-correct="1" data-explain="它無法重現就必須停下來，請你先提供證據。">
+  <button class="opt">它會自動幫你重現出那個錯誤</button>
+  <button class="opt">它得停下來先向你索取證據</button>
+  <button class="opt">它會直接開始重構整個模組</button>
+  <button class="opt">它會拒絕執行並結束這一輪</button>
+</div>
+<div class="quiz" data-question="過程中看到 agent 一次改動好幾個不相關的地方，你該怎麼做？" data-correct="3" data-explain="那代表它同時下了多個假設，直接停下來，回到一次一個實驗。">
+  <button class="opt">繼續觀察，讓它自己收斂到答案</button>
+  <button class="opt">幫它再加幾個可能的原因一起修</button>
+  <button class="opt">先讓它把這些改動全部提交上去</button>
+  <button class="opt">直接停下來，回到一次一個假設</button>
+</div>
+<div class="quiz" data-question="課程建議用什麼判斷它真的找到了根因？" data-correct="0" data-explain="真正抓到根因的修復通常極小，像 demo 裡那樣只有一行。">
+  <button class="opt">看修復是不是小到可以指著它</button>
+  <button class="opt">看紅燈是不是終於變成綠燈</button>
+  <button class="opt">看它總共花了多少輪對話</button>
+  <button class="opt">看它有沒有把測試全部刪掉</button>
+</div>
+<div class="quiz" data-question="demo 裡測試沒有失敗訊號的根本原因是什麼？" data-correct="2" data-explain="smoke test 只讀 .env，但 secrets 放在 .env.local，所以值一直是空的。">
+  <button class="opt">測試檔本身有一段寫錯的斷言</button>
+  <button class="opt">測試執行時使用了錯的 Node 版本</button>
+  <button class="opt">設定檔載入讀錯檔案，值一直是空的</button>
+  <button class="opt">資料庫連線逾時導致測試全部略過</button>
+</div>
+<div class="quiz" data-question="「不要接受一個你無法解釋的修復」是為了拒絕什麼？" data-correct="1" data-explain="它拒絕的是只把症狀藏起來、卻沒證明根因的假修好。">
+  <button class="opt">拒絕任何不是你自己親手寫的修復</button>
+  <button class="opt">拒絕只藏起症狀而沒證明原因的修復</button>
+  <button class="opt">拒絕所有改動超過一行的程式修復</button>
+  <button class="opt">拒絕任何沒有附上截圖的修復報告</button>
+</div>
+<div class="quiz" data-question="課程用「vibe debugging」形容哪一種做法？" data-correct="3" data-explain="一直改到紅燈變綠燈，最後卻說不出剛剛到底哪裡錯了。">
+  <button class="opt">先寫測試再開始定位根因的流程</button>
+  <button class="opt">把調查放進專門的調查 subagent</button>
+  <button class="opt">要求一次只下一個假設的嚴謹流程</button>
+  <button class="opt">一直改到紅燈變綠卻說不出原因</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · 除錯方法：三種壞法與科學方法 · Step 4/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

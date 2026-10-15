@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generateArticle, generateEvolinkImage, generateOpenAIImage, resolveImageProvider, textContent } from './pipeline.mjs';
+import { generateArticle, generateEvolinkImage, generateOpenAIImage, generateGeminiImage, resolveImageProvider, textContent } from './pipeline.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputRoot = path.join(projectRoot, 'output');
@@ -84,7 +84,9 @@ async function testImage(promptArg?: string): Promise<void> {
   const resolution = process.env.IMAGE_RESOLUTION || '1K';
   const quality = process.env.IMAGE_QUALITY || 'medium';
   const provider = resolveImageProvider();
-  const generateImage = provider === 'evolink' ? generateEvolinkImage : generateOpenAIImage;
+  const generateImage = provider === 'evolink' ? generateEvolinkImage
+    : provider === 'gemini' ? generateGeminiImage
+    : generateOpenAIImage;
   console.log(`[image] provider=${provider} model=${model} size=${size} resolution=${resolution} quality=${quality}`);
   console.log(`[image] prompt=${prompt}`);
   const started = Date.now();

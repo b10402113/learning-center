@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>狀態存檔案，不存對話</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>狀態存檔案，不存對話</h1>
+<p class="meta">Step 4/5 · JSM Skills System：安裝與九步驟地圖</p>
+
+<h2>學習目標</h2>
+<p>理解「狀態活在檔案、不活在 chat」：四種檔案（context／scope／specs／design.md）各由哪個 skill 負責，以及 <code>/sync</code> 如何讓文件到了第 30 天仍然有用。</p>
+
+<h2>前言：對話關掉之後，還剩下什麼？</h2>
+
+<p>上一節的地圖上，幾乎每一格都在寫東西：scope 寫計畫、architect 寫規格、audit 寫 context、sync 把學到的內容寫回去。這些產物有個共同點：它們不是留在對話裡，而是存進檔案。</p>
+
+<p>這值得特別停下來看，因為它回答了整套流程最關鍵的問題。agent 對話可以結束，session 可以清掉，同事也可以把分支拉過去。如果重要資訊只留在對話裡，對話一關，工作就像沒發生過一樣。這一節要說明的是：這套系統如何讓工作延續到對話結束之後。</p>
+
+<h2>對話是一個會消失的地方</h2>
+
+<p>把重要知識放在對話裡，問題不只是關掉就會消失。對話會越滾越長、成本越來越高；長到某個程度，agent 也更容易漏掉前面說過的事。你可能遇過這種情況：同一件事講了三遍，它還是忘了。</p>
+
+<p>這套 workflow 的解法很直接：該記下來的資訊，一律寫進專案檔案。即使對話結束、session 清空，或隊友拉到分支，知識都還在，因為它從來沒有被困在對話裡。也因此，每個階段之間，官方甚至會建議清掉 session：新對話會從磁碟重新讀取現況，不會因此漏掉工作狀態。</p>
+
+<figure class="lesson-figure"><img src="./state-in-files-and-ownership-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>四種檔案，各有明確的主人</h2>
+
+<h3>一、context 檔：AGENTS.md</h3>
+
+<p><code>AGENTS.md</code> 記錄專案實際如何運作，例如使用的技術棧、執行指令與開發慣例。它是純文字，任何 coding agent 都能讀。如果專案使用 Claude Code，旁邊還會有一個極短的 <code>CLAUDE.md</code>，只負責指向 <code>AGENTS.md</code>。這樣真正的資訊來源就只有一份，不會出現兩份內容各自變動的情況。</p>
+
+<p>它還有一個重要特性：<strong>可以巢狀</strong>。專案根目錄的檔案可以記錄全專案適用的規則，特定資料夾也能放一份只管那一區的規則。skill 處理 payments 程式碼時，會讀取最近的那份檔案，因此能同時掌握全專案規則與該區域的在地規則。</p>
+
+<pre data-provenance="derived">AGENTS.md                 ← 根目錄：適用全專案的規則
+src/payments/AGENTS.md    ← 只有 payments 這一區要遵守的規則</pre>
+
+<p><code>/audit</code> 負責建立這份檔案，其他每個 skill 都會讀它，程式碼變動後則由 <code>/sync</code> 維持更新。原則很簡單：context 檔已經寫明的慣例，就不需要任何 skill 再靠猜測補上。</p>
+
+<h3>二、scope：<code>docs/scope/</code></h3>
+
+<p>scope 是「要做什麼、先後順序如何」的粗略計畫，由 <code>/scope</code> 建立。<code>/develop</code> 建功能時會推進這份計畫，例如標記功能正在進行、勾選里程碑；但它不會自行把功能標成完全完成，因為「建好了」不等於「驗證過了」。不帶參數執行 <code>/scope</code>，或在合併時執行 <code>/sync</code>，都會把 scope 和程式碼的實際狀態對齊。</p>
+
+<h3>三、specs：<code>docs/specs/</code></h3>
+
+<p>一份 spec 是「一個真實決定」的書面紀錄，也是建構時必須遵守的合約。決定做出的當下，由 <code>/architect</code> 寫下 spec，初始狀態是 <code>Proposed</code>，意思是「已決定，但還沒建」。建構期間，<code>/develop</code> 只會更新狀態那一行：先從 <code>Proposed</code> 推進到 <code>In Progress</code>，功能建好並完成驗證後，再改為 <code>Accepted</code>。如果某個決定真的被推翻，<code>/architect</code> 會寫一份新 spec，將舊 spec 標成 <code>Superseded</code>，並指向取代它的新版本，讓決策歷史仍然清楚可查。</p>
+
+<p>還有一種特殊狀態叫 <code>Assumed</code>。如果選擇「先建再說」，而當中的決定又確實重要，<code>/develop</code> 不會默默猜下去，而是寫一份簡短的 <code>Assumed</code> spec，記下採用的假設、授權者，以及受影響的程式碼。這表示「已記錄，但還沒想透」。這些功能會一直帶著「待批准」的旗標，直到你再次執行 <code>/architect</code>，正式批准這項決定。</p>
+
+<figure class="lesson-figure"><img src="./state-in-files-and-ownership-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>四、design 系統：<code>design.md</code></h3>
+
+<p>這份檔案記錄使用者介面的美術方向，也就是頁面的整體氣質與組裝規則。精確數值，例如確切的顏色與尺寸，則存放在專案 CSS 裡；<code>design.md</code> 只指向這些數值，避免同一個數值被記在兩個地方。第一次建置介面時，由 <code>/develop</code> 建立這份檔案，也可以從既有畫面萃取內容。</p>
+
+<h2>每個檔案只有一個主人</h2>
+
+<p>這些檔案能持續讓人信任，關鍵在於<strong>擁有權固定</strong>：誰建立、誰讀取、誰能修改，都有明確規定。每個 skill 都不會修改另一個 skill 擁有的檔案。</p>
+
+<table>
+<thead>
+<tr><th>檔案</th><th>建立者</th><th>讀者</th><th>誰可以改</th></tr>
+</thead>
+<tbody>
+<tr><td><code>AGENTS.md</code> 及其 <code>CLAUDE.md</code> 指標</td><td>audit</td><td>每一個 skill</td><td>sync</td></tr>
+<tr><td><code>docs/scope/</code> 的 scope</td><td>scope</td><td>architect、develop</td><td>develop 推進它，scope 與 sync 對回它</td></tr>
+<tr><td><code>docs/specs/</code> 的 specs</td><td>architect（另加 develop 可建的 <code>Assumed</code> 草稿）</td><td>develop</td><td>develop 只動狀態行，architect 擁有內容並負責批准；sync 標記過期的那份</td></tr>
+<tr><td><code>design.md</code> 與它指向的 CSS 數值</td><td>develop</td><td>develop、check</td><td>develop</td></tr>
+</tbody>
+</table>
+
+<p>下面這張更完整的對照表，把各種產物的存放位置與負責者列在一起：</p>
+
+<table>
+<thead>
+<tr><th>產物</th><th>路徑</th><th>擁有者</th></tr>
+</thead>
+<tbody>
+<tr><td>Scope</td><td><code>docs/scope/</code></td><td>scope</td></tr>
+<tr><td>Specs</td><td><code>docs/specs/</code></td><td>architect</td></tr>
+<tr><td>Context 檔</td><td><code>AGENTS.md</code>（加上極短的 <code>CLAUDE.md</code> 指標）</td><td>audit，由 sync 保持最新</td></tr>
+<tr><td>Design 系統</td><td><code>design.md</code>（方向；色值住在 CSS）</td><td>develop</td></tr>
+<tr><td>審查發現</td><td><code>docs/reviews/</code></td><td>check</td></tr>
+<tr><td>測試</td><td>你的測試目錄</td><td>test</td></tr>
+<tr><td>應用程式碼</td><td>你的原始碼樹</td><td>develop</td></tr>
+<tr><td>給人看的文件</td><td>PR 內文、<code>CHANGELOG.md</code>、<code>docs/releases/</code>、<code>docs/postmortems/</code></td><td>document</td></tr>
+</tbody>
+</table>
+
+<p>把這些路徑攤開來看，就是一組放在 <code>docs/</code> 底下、各有負責者的資料夾：</p>
+
+<pre data-provenance="derived">docs/
+├── scope/      ← /scope 擁有，/develop 推進
+├── specs/      ← /architect 擁有，/develop 只動狀態行
+└── reviews/    ← /check 擁有</pre>
+
+<p>（補充：如果你的 <code>docs/</code> 本身是對外發布的文件網站，這些檔案會改放到 <code>.workflow/</code>，避免跟著網站一起出貨。）</p>
+
+<h2>/sync 讓文件活到第 30 天</h2>
+
+<p>回到第二節留下的問題：到了第 30 天，文件會變成什麼樣子？關鍵角色是 <code>/sync</code>。它會在接近合併時執行，檢查程式碼的實際狀態，再把耐久檔案對齊：如果這次建構引入了新慣例，它會更新 context 檔；它會校正 scope；如果某項改動讓 spec 過期，也會把它標記出來。</p>
+
+<p><code>/sync</code> 只做外科手術般的小修改：只新增內容，或修改自己負責的行，<strong>絕不改寫你寫的文字</strong>。這是整套系統的保證。每種檔案都有固定主人，<code>/sync</code> 不需要、也不被允許重新詮釋別人的內容；它只負責讓文件與事實對齊。正因為有這份紀律，文件才不會隨時間變得混亂，甚至「很有自信地寫錯」。</p>
+
+<figure class="lesson-figure"><img src="./state-in-files-and-ownership-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+這套 workflow 的狀態活在檔案裡，不活在對話裡，因此工作可以跨 session、跨人延續。四種檔案各有明確的用途與主人：<code>AGENTS.md</code>（audit 建立、所有 skill 讀取、sync 更新，而且可以巢狀）、<code>docs/scope/</code> 的 scope（scope 建立、develop 推進）、<code>docs/specs/</code> 的 specs（architect 擁有內容、develop 只改狀態行；狀態從 Proposed 推進到 Accepted，另有待批准的 Assumed），以及 <code>design.md</code>（develop 建立，數值則存在 CSS）。擁有權固定，各 skill 不會碰別人的檔案，<code>/sync</code> 才能用小幅修改讓文件與實際程式碼保持一致，讓它們到了第 30 天仍然可信。
+</blockquote>
+
+<p>到這裡，你已經有了整張地圖，也知道狀態存在哪裡。最後一個實務問題是：面對真實專案，該從這個迴圈的哪裡開始？新專案、既有程式碼庫和單一小改動，入口各不相同。下一節會從 <code>/audit</code> 的位置切入，說明如何選擇起點。</p>
+
+<div class="lesson-nav">
+  <div><a href="./the-nine-skills-map.html">← 上一步：九個 skill 的地圖</a></div>
+  <div><a href="./finding-your-entry-point.html">下一步：從哪裡進入這個迴圈 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="這套 workflow 把重要狀態放在哪裡，才讓工作能跨 session 存活？" data-correct="1" data-explain="狀態寫進專案裡的檔案，所以對話結束、session 清掉都不會遺失。">
+  <button class="opt">放在 agent 的長期記憶資料庫裡</button>
+  <button class="opt">放在專案裡的檔案，不放在對話裡</button>
+  <button class="opt">放在開發者自己的腦中隨時記著</button>
+  <button class="opt">放在雲端帳號綁定的個人筆記裡</button>
+</div>
+<div class="quiz" data-question="AGENTS.md 旁邊那個極短的 CLAUDE.md 用途是什麼？" data-correct="3" data-explain="它什麼都不做，只是指向 AGENTS.md，確保永遠只有一份真正的來源。">
+  <button class="opt">它存放專案的機密金鑰與憑證</button>
+  <button class="opt">它是一份壓縮過的備份檔案</button>
+  <button class="opt">它負責執行專案的建置流程</button>
+  <button class="opt">它只是指向 AGENTS.md，避免兩份來源</button>
+</div>
+<div class="quiz" data-question="一份 spec 剛被 /architect 寫下時，狀態是什麼？" data-correct="0" data-explain="出生狀態是 Proposed，代表已決定但還沒建；建好並驗證後才走到 Accepted。">
+  <button class="opt">Proposed，已決定但還沒建</button>
+  <button class="opt">Accepted，已經驗證完成</button>
+  <button class="opt">Superseded，已被新決定取代</button>
+  <button class="opt">Deprecated，準備要廢棄掉</button>
+</div>
+<div class="quiz" data-question="當你選擇「先建再說」、而那是個真決定時，/develop 會怎麼做？" data-correct="2" data-explain="它寫一份 Assumed spec 記錄假設，功能掛著待批准旗標，直到 /architect 正式批准。">
+  <button class="opt">直接沉默地亂猜一個決定然後往下建</button>
+  <button class="opt">停下來拒絕繼續，直到你寫好 spec</button>
+  <button class="opt">寫一份 Assumed spec 記錄它的假設</button>
+  <button class="opt">把決定藏在對話裡不寫進任何檔案</button>
+</div>
+<div class="quiz" data-question="下列哪一組「檔案—建立者」配對是對的？" data-correct="1" data-explain="AGENTS.md 由 audit 建立，docs/specs/ 由 architect 建立，design.md 由 develop 建立。">
+  <button class="opt">AGENTS.md 由 develop 建立、specs 由 test 建立</button>
+  <button class="opt">AGENTS.md 由 audit 建立、specs 由 architect 建立</button>
+  <button class="opt">scope 由 sync 建立、design.md 由 audit 建立</button>
+  <button class="opt">specs 由 document 建立、測試由 check 建立</button>
+</div>
+<div class="quiz" data-question="/sync 處理文件的方式，下列哪一句最貼近？" data-correct="2" data-explain="它只做外科手術式小修改，只動自己擁有的行，絕不改寫你的文字。">
+  <button class="opt">它會把文件整份重寫成自己的語氣</button>
+  <button class="opt">它會刪掉所有舊文件重新生成一遍</button>
+  <button class="opt">它只做小手術，絕不改寫你的文字</button>
+  <button class="opt">它把文件搬進對話裡不再留下檔案</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · JSM Skills System：安裝與九步驟地圖 · Step 4/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

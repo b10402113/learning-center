@@ -169,10 +169,12 @@ function imagesGenerationsUrl(baseUrl) {
   return `${apiV1(baseUrl)}/images/generations`;
 }
 // Which image backend to use. An explicit IMAGE_PROVIDER wins; otherwise infer
+// from the model (Gemini image models answer over chat, not the Images API) or
 // from the endpoint, defaulting to Evolink so the original config keeps working.
 export function resolveImageProvider(env = process.env) {
   const explicit = String(env.IMAGE_PROVIDER || '').trim().toLowerCase();
-  if (explicit === 'evolink' || explicit === 'openai') return explicit;
+  if (explicit === 'evolink' || explicit === 'openai' || explicit === 'gemini') return explicit;
+  if (/^gemini/i.test(String(env.IMAGE_MODEL || '').trim())) return 'gemini';
   const baseUrl = env.IMAGE_BASE_URL || env.EVOLINK_BASE_URL;
   if (!baseUrl) return 'evolink';
   try { return /(^|\.)evolink\.ai$/i.test(new URL(baseUrl).hostname) ? 'evolink' : 'openai'; }
@@ -290,6 +292,46 @@ export async function generateOpenAIImage({ prompt, model, size, quality,
     return Buffer.from(await download.arrayBuffer());
   }
   throw new Error('Image response missing data[0].b64_json');
+}
+// Gemini image models are not served by the Images API on OpenAI-compatible
+// relays; they answer over chat completions and return the PNG inline as a
+// base64 data URL inside the assistant message. Extract those bytes.
+export async function generateGeminiImage({ prompt, model,
+  apiKey = process.env.IMAGE_API_KEY || process.env.EVOLINK_API_KEY,
+  baseUrl = process.env.IMAGE_BASE_URL || process.env.EVOLINK_BASE_URL || 'https://api.openai.com',
+  fetchImpl = globalThis.fetch } = {}) {
+  if (!apiKey) throw new Error('Set IMAGE_API_KEY (or EVOLINK_API_KEY)');
+  const response = await fetchImpl(`${apiV1(baseUrl)}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }] })
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    const apiError = body?.error;
+    const error = new Error(`Image request failed with status ${response.status}`
+      + (apiError?.message ? `: ${apiError.message}` : ''));
+    error.status = response.status;
+    if (apiError?.code) error.code = apiError.code;
+    throw error;
+  }
+  const message = body?.choices?.[0]?.message ?? {};
+  const parts = [];
+  if (typeof message.content === 'string') parts.push(message.content);
+  else if (Array.isArray(message.content)) for (const part of message.content) {
+    if (typeof part?.text === 'string') parts.push(part.text);
+    if (typeof part?.image_url?.url === 'string') parts.push(part.image_url.url);
+    if (typeof part?.inline_data?.data === 'string')
+      parts.push(`data:${part.inline_data.mime_type || 'image/png'};base64,${part.inline_data.data}`);
+  }
+  for (const image of Array.isArray(message.images) ? message.images : []) {
+    if (typeof image?.image_url?.url === 'string') parts.push(image.image_url.url);
+    if (typeof image?.data === 'string') parts.push(`data:image/png;base64,${image.data}`);
+  }
+  const match = parts.join('\n').match(/data:image\/[a-z0-9.+-]+;base64,([a-z0-9+/=\s]+)/i);
+  if (match) return Buffer.from(match[1].replace(/\s+/g, ''), 'base64');
+  if (typeof body?.data?.[0]?.b64_json === 'string') return Buffer.from(body.data[0].b64_json, 'base64');
+  throw responseError(body) ?? new Error('Gemini image response missing image data');
 }
 // Best-effort JSON read used for resume state; missing or corrupt files are undefined.
 async function readJson(file) {

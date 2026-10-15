@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一般 code bug 的科學方法：observe → hypothesize → test</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>一般 code bug 的科學方法：observe → hypothesize → test</h1>
+<p class="meta">Step 3/4 · 除錯方法：三種壞法與科學方法</p>
+
+<h2>學習目標</h2>
+<p>對一個可重現的一般 code bug 套用 observe → hypothesize → test，一次只改一件事，讓證據決定下一步，而不是改到錯誤消失為止。</p>
+
+<h2>前言：分流完之後，這一條路怎麼走</h2>
+
+<p>上一節的分流如果把你帶到「一般 code bug」，也就是一個穩定、可重現、誰寫都一樣的錯誤，那麼接下來就有一套固定的走法。這套方法在任何語言、任何 codebase 都成立，不管那段 code 是你、同事，還是 agent 寫的。</p>
+
+<p>動手之前你需要兩樣東西：一個能穩定重現的錯誤，還有一點「不清楚就先別猜」的耐心。做完之後你會得到三樣東西：一個你能用一句話說清楚的根因、一個小到可以指著它看的修復，還有一個之後能防止它悄悄回頭的回歸測試。</p>
+
+<h2>先講它「不是」什麼</h2>
+
+<p>除錯<strong>不是</strong>「一直改東西，改到錯誤消失為止」。這件事每個人都會做，也正是 bug 會回來的原因——因為你從來沒有真的知道它錯在哪，只是暫時讓它碰不到你而已。</p>
+
+<p>那它是什麼？它是把科學方法套在一個壞掉的程式上：你觀察失敗、形成一個具體的解釋、測試它，然後讓證據告訴你下一步該做什麼。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#step-3-hypothesize-one-at-a-time">Resist shotgun changing several things at once.</pre>
+
+<h2>動手前的第 0 步：把症狀釘死</h2>
+
+<p>在碰任何 code 之前，先把三件事寫清楚。這是後面所有步驟的地基：如果連「什麼叫壞」都說不清楚，你根本無法判斷自己有沒有修好。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#step-0-capture-the-symptom">Pin down precisely, before touching code:
+- **Observed** behavior (the exact error, stack trace, wrong output, or screenshot).
+- **Expected** behavior.
+- **Repro**: the steps, inputs, and environment that trigger it.
+
+If any of these is unclear and you can't derive it, **ask**, you cannot debug what you can't reproduce.</pre>
+
+<p>這三行是：你看見了什麼（Observed）、你本來預期什麼（Expected）、以及怎麼重現它（Repro）。三者缺一，就先補齊，再往下走。</p>
+
+<figure class="lesson-figure"><img src="./scientific-method-for-bugs-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>六個步驟</h2>
+
+<p>核心流程就是六個步驟，一輪一輪地跑，直到假設被證據確認。</p>
+
+<h3>步驟 1：可靠地重現（Reproduce）</h3>
+
+<p>目標是拿到一個決定性的重現——一個失敗的測試、一行指令、一個請求，能在你要它壞的時候就壞。如果錯誤是偶發的，就想辦法找出讓它變確定的條件（時序、順序、資料、並行）。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#step-1-reproduce-reliably">Get a **deterministic reproduction** (a failing test, a command, a request) that triggers the bug on demand. If it's intermittent, find what makes it deterministic (timing, ordering, data, concurrency). A bug you can't reproduce on command, you can't prove you've fixed. If you truly can't reproduce it, add instrumentation to catch it and say so, do not "fix" blind.</pre>
+
+<p>注意最後一句：如果怎樣都重現不出來，正確做法是加 instrumentation 去抓它，而不是「盲修」。一個你無法隨傳隨到的 bug，你無法證明自己修好了它。</p>
+
+<h3>步驟 2：定位（Localize）</h3>
+
+<p>在開始猜原因之前，先把失敗縮到最小的範圍。做法有三種，可以混著用：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#step-2-localize">Narrow the failure to the smallest possible surface before theorizing:
+- **Bisect the code path**: binary search where good input becomes bad output (logging/print at midpoints, breakpoints, or commenting out).
+- **Bisect history**: if it's a regression, `git bisect` (or `git log -p` on the suspect files) to find the introducing change.
+- **Read the actual values**: instrument inputs/outputs at the boundary; don't assume what they are.</pre>
+
+<p>三種分別是：對程式路徑做二分搜尋，找出好輸入在哪裡變成壞輸出；如果這是後來才壞的，用 <code>git bisect</code> 找出是哪個改動引進的；以及，別用猜的——把邊界上的實際輸入輸出印出來看。</p>
+
+<h3>步驟 3：一次只假設一件事（Hypothesize）</h3>
+
+<p>寫下一個單一、具體、可被推翻的假設。要抓的是根因，不是症狀：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#step-3-hypothesize-one-at-a-time">State a single, specific, falsifiable hypothesis for the root cause, e.g. "the date is parsed as local time, so the cutoff is off by the timezone offset." Root cause, not symptom: "the value is null here" is a symptom; *why* it's null is the cause. Resist shotgun changing several things at once.</pre>
+
+<p>「這裡的值是 null」是症狀，不是原因；<strong>為什麼</strong>它是 null 才是原因。把兩者分清楚，你的假設才有辦法被測試。下面兩個句子就是很好的對照：</p>
+
+<pre class="bad-code" data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#step-3-hypothesize-one-at-a-time">"the value is null here"   ← 這是症狀，測不出東西</pre>
+
+<pre class="good-code" data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#step-3-hypothesize-one-at-a-time">"the date is parsed as local time, so the cutoff is off by the timezone offset."   ← 這是根因，可以被測試</pre>
+
+<h3>步驟 4：測試假設（Test）</h3>
+
+<p>設計一個最小的實驗，去確認或推翻這個假設——一個針對性的 log、一個 assertion、一行改動、或一個單元測試，然後跑它。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#step-4-test-the-hypothesis">Design the smallest experiment that confirms or refutes it (a targeted log, an assertion, a one line change, a unit test). Run it.
+- **Refuted** → discard it, return to Step 2/3 with what you learned. Do not keep a change that didn't help.
+- **Confirmed** → you've found the root cause. Proceed.</pre>
+
+<p>這裡有兩條分支，要分清楚走：</p>
+
+<ul>
+<li><strong>假設被推翻</strong>：丟掉它，帶著這次學到的東西回到步驟 2 或 3。不要留下一個沒幫上忙的改動。</li>
+<li><strong>假設被確認</strong>：你已經找到根因，可以往下修了。</li>
+</ul>
+
+<p>這一步就是整套方法的心臟。它逼你「一次只改一件事」，因為這樣每一個結果都還會教你一點東西。反過來，如果你一次改五個地方，就算錯誤消失了，你也永遠不知道是哪一個起了作用——那個結果等於什麼都沒教你。</p>
+
+<figure class="lesson-figure"><img src="./scientific-method-for-bugs-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>步驟 5：在根因上修（Fix）</h3>
+
+<p>做那個最小、最針對性的改動，只針對已經被證明的原因。</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#step-5-fix-at-the-root">Make the **minimal, targeted** change that addresses the proven cause. Don't fix the symptom (clamping the null), fix the cause (why it's null). Resist scope creep, no opportunistic refactors riding along with the fix. Follow the project's conventions (`AGENTS.md`, neighbouring code).</pre>
+
+<p>不要用「把 null 夾住」這種方式去修症狀，要去修「它為什麼是 null」。同時忍住衝動，不要順手做大掃除式的重構——那些改動會混進這次修復，讓你之後分不清楚哪一行才是真正的解。</p>
+
+<h3>步驟 6：驗證並保護（Verify）</h3>
+
+<p>修完還沒結束。要走完這幾件事，才算真的收乾淨：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/debug/SKILL.md#step-6-verify-and-protect">- Run the Step 1 reproduction again, confirm it now passes.
+- Run the surrounding test suite, confirm no regression.
+- **Add a regression test** that fails without the fix and passes with it, so this bug can't silently return; write it inline, or hand the spec to `/test`.
+- **Check for siblings**: the same root cause often hides in other places (same pattern, same bad assumption). Grep for them and note or fix them.</pre>
+
+<p>四個動作：重跑步驟 1 的重現、確認現在通過；跑周邊測試、確認沒有回歸；補一個回歸測試（沒有修就失敗、修了就通過）；最後檢查有沒有「同一個原因藏在別的地方」，同樣的模式、同樣的錯誤假設，常常不只出現在一處。</p>
+
+<h2>為什麼還得自己會這套方法</h2>
+
+<p>你可能會想：debug skill 不是可以幫我跑完這一整輪嗎？可以，而且它重現、定位、測試、修復、保護的速度比你快。</p>
+
+<p>但它有一件事做不到：判斷這次到底是「真的證明了原因」，還是只「讓症狀消失了」。這個判斷是你的工作。而且如果你自己不懂這套方法，你就做不出這個判斷。方法屬於你，skill 只是更快套用它的方式。</p>
+
+<figure class="lesson-figure"><img src="./scientific-method-for-bugs-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>小結</h2>
+
+<blockquote>
+除錯不是「改到錯誤消失」，那是所有人都會做、也正是 bug 會回來的原因。對一般 code bug，方法是把科學方法套在壞掉的程式上：先釘死觀察、預期、重現三件事，然後跑 reproduce → localize → hypothesize → test → fix → verify 這六步。最重要的習慣是一次只改一件事，讓每個結果都教你一點東西；假設被推翻就丟掉它、帶走學到的東西再來一次，被確認才動手修。skill 能幫你跑得更快，但「是否真的證明根因」這個判斷，永遠是你的。
+</blockquote>
+
+<p>方法在你手上了。下一節要把它落到實際操作：跑一次 debug skill，看它怎麼問你開場的三件事、你該盯著它一次只下一個假設，以及為什麼「修得夠小」是它真的找到根因的訊號。</p>
+
+<div class="lesson-nav">
+  <div><a href="./triage-which-kind.html">← 上一步：分流：認出是哪一種壞，選對回應</a></div>
+  <div><a href="./run-debug-skill.html">下一步：實跑 debug skill：餵它三件事、一次一個假設 →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="課程明確說「除錯不是」哪一件事？" data-correct="1" data-explain="一直改到錯誤消失是所有人都會做的，也正是 bug 回頭的原因。">
+  <button class="opt">把失敗縮到最小的可重現範圍</button>
+  <button class="opt">一直改東西改到錯誤整個消失</button>
+  <button class="opt">寫下單一且可被推翻的假設</button>
+  <button class="opt">補上一個沒有修就會失敗的測試</button>
+</div>
+<div class="quiz" data-question="在開始假設之前，步驟 2 要你先做什麼？" data-correct="3" data-explain="先把失敗縮到最小範圍，才開始推理原因。">
+  <button class="opt">先寫好一份完整的回歸測試</button>
+  <button class="opt">先重構附近看起來很亂的程式碼</button>
+  <button class="opt">先問 agent 它覺得原因可能是什麼</button>
+  <button class="opt">先把失敗縮到最小的可能範圍</button>
+</div>
+<div class="quiz" data-question="好的假設應該具備什麼性質？" data-correct="0" data-explain="要單一、具體、可被推翻，而且要指向根因而非症狀。">
+  <button class="opt">單一、具體、可被證據推翻</button>
+  <button class="opt">盡量涵蓋多個可能的原因</button>
+  <button class="opt">描述眼前的症狀就足夠了</button>
+  <button class="opt">用不可驗證的推測保留彈性</button>
+</div>
+<div class="quiz" data-question="實驗的結果顯示假設被推翻時，正確做法是什麼？" data-correct="2" data-explain="丟掉它，帶著學到的東西回到步驟 2 或 3，別留下沒用的改動。">
+  <button class="opt">保留改動，說不定之後會派上用場</button>
+  <button class="opt">直接把沒過的部分註解掉就好</button>
+  <button class="opt">丟掉它，帶走學到的再來一次</button>
+  <button class="opt">先換一個完全不同的問題來修</button>
+</div>
+<div class="quiz" data-question="步驟 5 要求你修的是什麼？" data-correct="1" data-explain="修已被證明的根因，不是把症狀夾住。">
+  <button class="opt">把錯誤訊息和 stack trace 遮蔽掉</button>
+  <button class="opt">已被證明的那個根本原因</button>
+  <button class="opt">附近所有看起來可疑的地方</button>
+  <button class="opt">順手把整個模組重構乾淨</button>
+</div>
+<div class="quiz" data-question="為什麼「一次只改一件事」這麼重要？" data-correct="3" data-explain="一次只改一件事，每個結果才會告訴你是哪個改動造成了變化。">
+  <button class="opt">因為改太多會被程式碼審查擋下來</button>
+  <button class="opt">因為每一次改動都要重新部署一次</button>
+  <button class="opt">因為函式庫不允許同時改多個檔案</button>
+  <button class="opt">因為這樣每個結果才會教你一件事</button>
+</div>
+<div class="quiz" data-question="關於 debug skill 與這套方法的關係，課程怎麼說？" data-correct="2" data-explain="skill 能跑得更快，但「是否真證明根因」的判斷仍然是你的。">
+  <button class="opt">只要交給 skill 跑，你就不需要懂方法</button>
+  <button class="opt">skill 會自動判斷它是不是真的修好了</button>
+  <button class="opt">skill 跑得更快，但判斷仍要你自己做</button>
+  <button class="opt">skill 會取代方法，成為唯一該學的東西</button>
+</div>
+
+<div class="footer">
+  <p>agentic-engineer · 除錯方法：三種壞法與科學方法 · Step 3/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
