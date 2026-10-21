@@ -443,7 +443,7 @@ updated: 2026-10-15
 - debug-loop-reproduce-localize-hypothesis: unknown
 - minimal-fix-then-regression: unknown
 
-> probe skipped via /nodes agentic-engineer/debug-method skip-probe on 2026-10-15
+> probe skipped via /nodes agentic-engineer/debug-method skip-probe on 2026-10-21
 
 ## two-kinds-of-proof — 兩種證明：check verify vs test
 
@@ -537,7 +537,7 @@ updated: 2026-10-15
 - small-fix-may-skip-scope: unknown
 - missing-decision-sends-back-to-architect: unknown
 
-> probe skipped via /nodes agentic-engineer/working-in-legacy-code skip-probe on 2026-10-15
+> probe skipped via /nodes agentic-engineer/working-in-legacy-code skip-probe on 2026-10-21
 
 ## ship-it-like-a-team — 像團隊一樣交付：check review 與 document
 

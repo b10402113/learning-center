@@ -8,122 +8,140 @@
 </head>
 <body>
 
-<h1>認出 agent 在打轉：迴圈與幻覺的差別</h1>
+<h1>認出 agent 在打轉：重複，但沒有進展</h1>
 <p class="meta">Step 4/6 · 除錯 AI 寫的碼與救回卡住的 Session</p>
 
 <h2>學習目標</h2>
-<p>用「重複但沒有進展」認出 agent 卡住的 session，並說明為什麼在這個時候加指示，只會讓迴圈更糟。</p>
+<p>能用「重複而沒有進展」認出 agent 卡在迴圈，並說出為什麼這種情況繼續加指示只會更糟。</p>
 
-<h2>前言：壞掉的不是程式，是流程</h2>
+<h2>前言：它一直在動，但你不知道它有沒有前進</h2>
 
-<p>前面三節講的都是第二種壞——agent 寫出來的程式碼本身有問題。但還有第三種壞，它更難處理，因為壞掉的根本不是你的程式碼，而是 agent 這個過程本身。</p>
+<p>你請 agent 修一個失敗的測試。它改了 service，跑測試，失敗。它改回來，換個寫法，再失敗。第三次它說「我找到問題了」，於是把同一個函式又重寫一遍，跟前兩次幾乎一樣。</p>
 
-<p>你想像一下這個畫面：你請 agent 修一個登入的 bug，它改了同一個函式五次，每一次只差一點點；它一再打開同樣幾個檔案；diff 越滾越大、越改越亂；更奇怪的是，它有時候還會推翻自己前面才做過的決定。你看不出哪裡「錯了」，因為它給你的每一句說明聽起來都很有自信。但整個 session 就是沒有往前推進。</p>
+<p>你已經盯著螢幕四十分鐘。它回你的每一則訊息都很有自信，diff 卻越來越亂。你想說「好，那你再試一次」，又覺得哪裡怪怪的，因為你說不出它到底離答案更近還是更遠。</p>
 
-<p>這一節要教你認出這個狀態。認出來之後，你才有辦法做後面兩節的事——判斷該留還是該丟，然後照順序把它救回來。</p>
+<p>這一節處理的不是你的程式碼，是這個 session。先能認出它，後面的判斷與救援才有意義。而認出的關鍵，不是「它有沒有在動」，是「它有沒有前進」。</p>
 
-<h2>徵兆：重複，但沒有進展</h2>
+<h2>訊號：重複，而且沒有進展</h2>
 
-<p>原文給的判準只有一句話：<strong>重複，卻沒有進展。</strong>這句話之所以好用，是因為它同時抓到了兩個必要條件——只重複，不算迴圈（也可能只是任務本來就需要反覆迭代）；只沒進展，也不算迴圈（也可能只是還沒輪到它）。要「又重複、又沒進展」，才是那個卡住的訊號。</p>
-
-<p>它在現場長這樣：</p>
+<p>來源用一句話定義這種狀態：repetition without progress。它會用幾種很具體的樣子出現：</p>
 
 <ul>
-<li>同一個函式被重寫了五次，每次只差一點點。</li>
-<li>同樣幾個檔案被反覆打開。</li>
-<li>diff 越變越亂。</li>
-<li>開始和它自己先前的決定互相矛盾。</li>
+<li>同一個函式被重寫了五次，每次只有一點點不一樣。</li>
+<li>同樣的幾個檔案反覆被打開、關掉、再打開。</li>
+<li>diff 越來越亂，改動的範圍一直擴大。</li>
+<li>它跟自己做過的決定互相矛盾：前面說要用 A 方案，現在改成 B，等一下又回到 A。</li>
 </ul>
 
-<p>其中最後一項最值得注意。當一個 agent 開始推翻自己前面才做出的決定，代表它已經沒有一個穩定一致的內在狀態，只是在你眼前不斷重新開機。</p>
+<p>這四個徵兆表面上不一樣，其實是同一件事：動作很多，狀態沒有往前。你可以把它想成一個人在迷宮裡走。如果每條走過的路都在牆上留下記號，第二次走到同一個路口時他會知道要換方向；但如果他每次走到同一個路口都覺得「這次往左試試看」，他會一直在那一小塊區域打轉。</p>
 
-<figure class="lesson-figure"><img src="./recognizing-the-loop-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<figure class="lesson-figure"><img src="./recognizing-the-loop-assets/image-1.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>迴圈和幻覺，是兩件不同的事</h2>
+<p>你要觀察的就是這件事：<strong>上一次嘗試排除了什麼？</strong>如果答不出來，那不管它改了幾行、跑了幾次測試，都只是原地。</p>
 
-<p>這裡要分清楚一個很容易混在一起的差別。原文的說法是：<strong>幻覺給你的是錯誤的內容，迴圈給你的是壞掉的流程。</strong></p>
+<h2>迴圈不是幻覺：錯的內容與壞掉的流程</h2>
 
-<p>幻覺壞在產出。它可能把一個不存在的函式說得煞有介事，或把一段錯誤的邏輯寫得頭頭是道——但那個錯誤是「內容層面」的，只要你能辨認出內容錯了，就能處理。迴圈壞的是過程：它可能每一句內容都不算太離譜，可是它整體在打轉，沒有累積任何進展。</p>
+<p>這兩件事很容易混在一起，但它們要的處理方式完全不同。</p>
 
-<table>
-<thead>
-<tr><th>面向</th><th>幻覺</th><th>迴圈</th></tr>
-</thead>
-<tbody>
-<tr><td>壞在哪裡</td><td>產出的內容是錯的</td><td>整個過程停滯不前</td></tr>
-<tr><td>你看到什麼</td><td>一段說得很有自信的錯誤內容</td><td>一再重複、每一次都更亂</td></tr>
-<tr><td>怎麼處理</td><td>指出內容的錯，修正它</td><td>修法不在內容，要處理流程本身</td></tr>
-</tbody>
-</table>
+<p>幻覺給你的是<strong>錯的內容</strong>：它說某個函式存在，其實不存在；它引用一段你沒寫過的程式。內容錯了，你可以指出錯在哪、要求它換掉，對話本身還是能運作。</p>
 
-<p>為什麼要分得這麼細？因為如果你把迴圈誤認成幻覺，你就會用對付幻覺的方式去處理它——也就是繼續加指示、繼續下更清楚的 prompt。而那正是下一段要說的地雷。</p>
+<p>迴圈給你的是<strong>壞掉的流程</strong>：它給你的每一則回覆可能都合理，甚至每一次修改都對應你當下的要求，但整個過程已經失去方向。問題不在某一則訊息，在於產生訊息的那個機制。</p>
 
-<figure class="lesson-figure"><img src="./recognizing-the-loop-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p>這個差別，決定了你該不該繼續下指令。內容錯，換掉內容就好；流程壞，你丟進去的東西會被同一個壞掉的流程吃掉。</p>
 
-<h2>為什麼加指示只會更糟</h2>
+<blockquote>
+A hallucination gives you wrong content. A loop gives you a broken process. Adding instructions makes a loop worse, because the thing you're instructing is part of the failure.
+</blockquote>
 
-<p>面對錯誤的內容，最直覺的動作就是糾正它：「你這裡錯了，應該要這樣做。」這個動作對幻覺有效。但對迴圈，原文的說法是：加指示會讓它更糟。</p>
+<p>打個比方：一台跳針的錄音機。你聽到的不是它唱錯，是它卡在同一段。這時候你把音量調大沒有用，因為問題不在音量，在播放的機制。這個類比有一個地方不能照搬：agent 不是機械故障，它通常是繞著一個錯誤的假設轉。所以有些時候，一句對的問話就能把它拉出來。但那不會是「你再試一次」這種指示。</p>
 
-<p>原因在於，你正在指揮的那個東西，本身就是故障的一部分。這是一個很違反直覺的處境——你以為你在修一個壞掉的產出，實際上你是在對一個已經失去方向、卻又充滿自信的過程下指令。它會把你新給的指示也吸收進那個失序的狀態裡，然後繼續打轉，甚至轉得更亂。你把更多燃料倒進一具已經失控的引擎，不會讓它變好。</p>
+<figure class="lesson-figure"><img src="./recognizing-the-loop-assets/image-2.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>換個比喻：一個人在森林裡迷了路，一直繞著同一棵樹打轉。你這時候給他一張更詳細的地圖，並不會幫上忙——因為他真正的問題不是資訊不足，而是他判斷方向的那個機制已經壞了。你愈是疊加指示，他只是拿著更多資訊繼續繞同一圈。</p>
+<h2>為什麼「再清楚一點的指示」會讓它更糟</h2>
 
-<h2>把它掛回「三種壞」</h2>
+<p>人在卡住的時候，直覺是補更多資訊：把需求講得更細、把錯誤貼上去、告訴它「這次請認真看」。這個直覺在正常對話裡有效，在這裡卻常常反效果。</p>
 
-<p>現在你可以把這一節接到前面那個大分類上：這就是第三種壞——agent 自己丟失了路徑。它和第一種（普通 code bug）、第二種（AI 寫的碼出錯）的關鍵差異在於，前兩種的故障都在程式碼這一側，你有可以拿去比對、重現、修正的實體；第三種的故障在流程那一側，程式碼可能根本沒有錯，錯的是「產生程式碼的這個過程」。</p>
+<p>原因是：你正在指揮的東西，本身就是故障的一部分。你的新指示會進到同一個 context，被同一個錯誤假設解讀。</p>
 
-<p>正因為故障不在程式碼上，第三種壞的第一步永遠不是「再去改一行程式」，而是先認出它、然後決定怎麼處理這個已經壞掉的過程。這也是接下來兩節要做的事。</p>
+<p>看一個具體的例子。假設 agent 已經認定「token 一定存在 cookie 裡」，於是它每次修不好，就再去 cookie 裡找一次。這時候你輸入「再檢查一次認證流程，剛剛還是失敗」，它會做什麼？它會從 cookie 的角度再檢查一次，而且更用力。你的指示沒有帶來新資訊，只是讓它在同一個框架裡多跑一圈。</p>
+
+<p>這也是為什麼後面五步升級的第一步是「停」，而不是「補充說明」。你必須先讓那個流程停下來，才有機會換掉它依賴的假設。</p>
+
+<h2>最容易混淆的邊界：還在動，不等於有進展</h2>
+
+<p>Agent 的輸出天生看起來很忙碌：它在讀檔、在改 code、在跑測試。這些動作會給你一種「它有在做事」的感覺，但動作的數量跟進展無關。</p>
+
+<p>判準只有一個：<strong>這次嘗試之後，有沒有哪個可能性被排除了？</strong></p>
+
+<p>如果它說「我改成用 <code>await</code> 試試看」，而你能指出「好，這排除了 callback 時序的問題」，那是有進展，即使測試還是失敗。如果它說「我再調整一下錯誤處理」，而你完全不知道這次跟上次差在哪、排除了什麼，那就是原地。</p>
+
+<figure class="lesson-figure"><img src="./recognizing-the-loop-assets/image-3.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>還有一個更隱蔽的版本：它開始跟你先前確認過的決定矛盾。前面你們已經確定不改成非同步，現在它又繞回去改。這不是它「改變想法」，是它已經丟掉了那段共識。那通常代表 context 的狀態已經不適合繼續推進了。</p>
+
+<h2>認出之後，先別急著選指令</h2>
+
+<p>很多人一發現「它在打轉」，第一個反應是找一個更強的命令：重來、清除、換模型。但指令的選擇，取決於一個更前面的問題：這個 session 到目前為止累積的東西，對下一步還有沒有用？</p>
+
+<p>如果它其實已經幫你收集了不少有價值的事實，只是開始繞圈，那你會想保留那些事實。如果它整段都是失敗的嘗試與重複的假設，那留著只會拖累下一個開始。</p>
+
+<p>這個判斷只有兩個答案，選錯邊的代價卻不對稱。下一節專門講它。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-認出 agent 卡住的唯一訊號是「重複，但沒有進展」——同一個函式反覆重寫、同樣的檔案反覆打開、diff 越滾越亂，甚至開始推翻自己先前的決定。它和幻覺不同：幻覺給你錯誤的內容，迴圈給你壞掉的流程。所以面對迴圈，加指示只會更糟，因為你正在指揮的那個東西，本身就是故障的一部分。這是三種壞裡的第三種：壞掉的不是程式碼，是過程。
+迴圈的訊號是重複而沒有進展：同一個函式反覆重寫、同樣的檔案反覆打開、diff 越來越亂、跟自己先前的決定矛盾。幻覺給你錯的內容，迴圈給你壞掉的流程；內容錯可以換掉，流程壞會把你後續的指示也吃掉，所以加指示只會更糟。判斷有沒有進展，只看一件事：這次嘗試排除了哪個可能性。認出之後，先別選指令，先判斷這個 context 還值不值得留。
 </blockquote>
 
-<p>認出迴圈之後，你不能立刻動手修——還有一個更根本的判斷要先做：這個 session 累積下來的 context，到底該留，還是該丟？這個判斷錯了，代價很高，下一節專門講它。</p>
+<p>判斷之前，還有一個很實際的問題要先回答：你手上這個 session，裡面裝的到底是資產還是負債？</p>
 
 <div class="lesson-nav">
   <div><a href="./four-failure-patterns.html">← 上一步：四種 AI 失敗模式與它們的破綻</a></div>
-  <div><a href="./context-asset-or-liability.html">下一步：一個判斷：這個 context 是資產還是負債 →</a></div>
+  <div><a href="./context-asset-or-liability.html">下一步：一個判斷 這個 context 是資產還是負債 →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="認出 agent 卡住的判準是什麼？" data-correct="1" data-explain="要同時滿足重複與沒有進展兩個條件，才是卡住的訊號。">
-  <button class="opt">它開始拒絕依照你的指示修改程式碼</button>
-  <button class="opt">它重複同樣的動作，卻始終沒有進展</button>
-  <button class="opt">它一次修改了非常大量的檔案與內容</button>
-  <button class="opt">它回覆的速度變得越來越慢又很簡短</button>
+<div class="quiz" data-question="認出 agent 卡在迴圈，最核心的判準是什麼？" data-correct="1" data-explain="關鍵不是動作多寡，而是重複之餘有沒有排除新的可能性、往前推進。">
+  <button class="opt">它回覆的訊息長度越來越長</button>
+  <button class="opt">它重複動作，但沒有帶來進展</button>
+  <button class="opt">它執行的測試次數超過十次</button>
+  <button class="opt">它開始使用更複雜的程式寫法</button>
 </div>
-<div class="quiz" data-question="為什麼「只重複」本身不足以判定 agent 卡住？" data-correct="3" data-explain="有些任務本來就需要反覆迭代，所以要再加上「沒有進展」才成立。">
-  <button class="opt">因為重複通常代表它正在變得越來越精準</button>
-  <button class="opt">因為重複只是它節省 token 的一種策略</button>
-  <button class="opt">因為重複其實是你下達指令造成的結果</button>
-  <button class="opt">因為有些任務本來就需要反覆迭代修改</button>
+
+<div class="quiz" data-question="下列哪一個不是本節列出的迴圈徵兆？" data-correct="3" data-explain="模型版本無關；徵兆是同函式反覆重寫、同檔案反覆打開、diff 變亂、自相矛盾。">
+  <button class="opt">同一個函式被重寫了五次</button>
+  <button class="opt">同樣的檔案反覆被打開</button>
+  <button class="opt">diff 的範圍越來越混亂</button>
+  <button class="opt">它換用了另一個模型版本</button>
 </div>
-<div class="quiz" data-question="迴圈和幻覺最關鍵的差別是什麼？" data-correct="0" data-explain="幻覺錯在內容，迴圈壞在流程，兩者要用完全不同的方式處理。">
-  <button class="opt">幻覺給你錯誤的內容，迴圈給你壞掉的流程</button>
-  <button class="opt">幻覺只發生在寫程式，迴圈只發生在讀檔案</button>
-  <button class="opt">幻覺可以用 prompt 修正，迴圈無法被認出</button>
-  <button class="opt">幻覺比較常見，迴圈只出現在複雜任務裡</button>
+
+<div class="quiz" data-question="迴圈與幻覺最大的差別在哪裡？" data-correct="2" data-explain="幻覺是內容錯，迴圈是流程壞，後者會把你後續的指示也一起吃進去。">
+  <button class="opt">幻覺只發生在沒有測試的專案</button>
+  <button class="opt">迴圈只發生在對話超過十輪之後</button>
+  <button class="opt">幻覺給你錯內容，迴圈給你壞流程</button>
+  <button class="opt">迴圈一定會伴隨編譯器錯誤訊息</button>
 </div>
-<div class="quiz" data-question="為什麼面對迴圈時，加更多指示反而更糟？" data-correct="2" data-explain="你正在指揮的那個東西本身就是故障的一部分，新指示只會被吸進失序裡。">
-  <button class="opt">因為更多的指示會讓 token 費用大幅上升</button>
-  <button class="opt">因為模型會把你的指示誤判成新的錯誤</button>
-  <button class="opt">因為你指揮的東西本身就是故障的一部分</button>
-  <button class="opt">因為加指示會讓它把程式碼改得更複雜</button>
+
+<div class="quiz" data-question="為什麼對一個正在打轉的 agent 補更多指示，通常會更糟？" data-correct="0" data-explain="新指示進入同一個 context，會被同一個錯誤假設解讀，只是在同一個框架多跑一圈。">
+  <button class="opt">新指示會被同一個錯誤假設解讀</button>
+  <button class="opt">指示太長會直接超過模型上限</button>
+  <button class="opt">agent 會因此拒絕繼續執行任務</button>
+  <button class="opt">指示會讓它忘記原本的程式語言</button>
 </div>
-<div class="quiz" data-question="迴圈屬於「三種壞」裡的哪一種？" data-correct="1" data-explain="它壞的是產生程式碼的過程，而不是程式碼本身。">
-  <button class="opt">第一種，一段誰寫都一樣的普通 code bug</button>
-  <button class="opt">第三種，壞掉的是過程而不是程式碼</button>
-  <button class="opt">第二種，AI 寫出來的程式碼本身出錯</button>
-  <button class="opt">不屬於任何一種，是全新的第四種狀況</button>
+
+<div class="quiz" data-question="Agent 說「我再調整一下錯誤處理」，你卻說不出這次跟上次差在哪。這代表什麼？" data-correct="1" data-explain="無法指出排除了哪個可能性，就沒有進展，即使它看起來還在動作。">
+  <button class="opt">它正在進行有效的假設淘汰</button>
+  <button class="opt">這是原地打轉，沒有真的前進</button>
+  <button class="opt">它已經找到根因，只差最後一步</button>
+  <button class="opt">它需要你提供更長的錯誤訊息</button>
 </div>
-<div class="quiz" data-question="當 agent 開始推翻自己先前的決定，代表什麼？" data-correct="3" data-explain="它已沒有穩定一致的內在狀態，只是在原地不斷重新開機。">
-  <button class="opt">它正在用更嚴格的標準重新檢查自己的產出</button>
-  <button class="opt">它已經找到了先前決定裡的真正錯誤</button>
-  <button class="opt">它準備要把整個任務重新規劃一次</button>
-  <button class="opt">它已失去穩定狀態，只是不斷重新開機</button>
+
+<div class="quiz" data-question="Agent 開始跟你先前確認過的決定矛盾，通常代表什麼？" data-correct="3" data-explain="它丟掉了先前的共識，通常表示 context 的狀態已經不適合繼續推進。">
+  <button class="opt">它變得更聰明，懂得自我修正</button>
+  <button class="opt">它正在進行多假設平行驗證</button>
+  <button class="opt">它準備要重寫整個專案架構</button>
+  <button class="opt">它已丟掉共識，context 該處理了</button>
 </div>
 
 <div class="footer">

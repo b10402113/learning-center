@@ -12,83 +12,153 @@
 <p class="meta">Step 4/5 · 在舊碼庫裡工作：先 audit，再最小變更</p>
 
 <h2>學習目標</h2>
-<p>用 <code>/develop</code> 在舊碼庫做出最小安全變更：讀周邊檔案、沿用既有模式與工具、能用改一個現有函式解決就不另起爐灶、換路徑前先搜尋所有引用，把變更收在 spec 邊界內，做出一個不必 migration、只動四檔的成果。</p>
+<p>用 <code>/develop</code> 在舊碼庫做一個最小安全變更：沿用既有模式與工具、在「改一個函式」與「新增實作再遷移呼叫端」之間選對、換路徑前搜尋所有引用，並把改動收在 spec 邊界內。</p>
 
-<h2>前言：刀要下去之前，先看清楚旁邊的人都怎麼做</h2>
+<h2>前言：寫得出來不難，長得像這個專案才難</h2>
 
-<p>上一節結束時，你手上有一份被接受的規格：<code>specs/1. return a book</code>，寫明變更屬於哪裡、哪些行為不能動、會動到哪些檔案，以及要怎麼證明結果。規劃和設計都談完了，現在終於要動程式碼。動手前你需要先具備的，就是這份規格，以及一個乾淨的 session。</p>
+<p>spec 已經寫好了，範圍也定了：只有管理員能觸發還書，這次只接還書這一個狀態。聽起來很簡單，對吧？但真正的考驗在細節裡：錯誤要用什麼形狀回傳？資料要用哪個 client 存取？按鈕要放在哪個元件？命名要用 camelCase 還是 kebab-case？這些問題 spec 不會全部回答，而 agent 如果自己發明一套，程式碼一樣能跑，只是它會變成這個專案裡的異類。</p>
 
-<p>這一節要建立的，是舊碼庫裡最實用的一種手感：<strong>讓你的變更看起來像本來就屬於這個專案</strong>。做法不是模仿表面風格，而是動手前先讀變更周圍的檔案，照著那部分既有的模式走。示範者把這件事講得很清楚：<code>/develop</code> 在寫任何東西之前，會先讀變更附近的檔案，跟著那段程式碼已經在用的模式。</p>
+<p>舊碼庫裡的「最小變更」不是指行數最少，而是指改動落在對的位置、用對的方式、只碰該碰的東西。這一節要看 <code>/develop</code> 怎麼做到這件事：先讀周邊、再選路線、動手、最後確認沒有留下兩條同時在跑的路徑。</p>
 
-<h2>第一步：換一個乾淨的 session，再跑 /develop</h2>
+<h2>開始之前：讓上一個對話結束</h2>
 
-<pre data-provenance="derived">clear
-develop</pre>
+<p>spec 接受、scope 更新之後，先 <code>/clear</code>，再開一個新的 session 跑 <code>/develop</code>。這跟上一節 clear 的理由一樣：你要讓 develop 從乾淨的上下文開始，只帶著檔案進來。這樣做的好處是它可以自己重新讀一次周邊程式碼，而不是依賴前面對話裡「某人說過」的印象。</p>
 
-<p>先把規格談定、換掉 session，再開始實作。這樣 <code>/develop</code> 開場拿到的是一個乾淨的起點，而不是前面幾輪規劃累積下來的雜訊。預期你會看到它在寫任何程式碼之前，先去讀變更附近的檔案。</p>
+<pre data-provenance="derived"><code>/clear
+/develop 還書（return a book）
 
-<h2>第二步：先讀現有模式，再決定怎麼寫</h2>
+# 或者直接指定 spec
+/develop specs/0001-return-a-book</code></pre>
 
-<p>讀周圍檔案並不是走個形式。它會看四件事：類似的功能是怎麼組織的、錯誤是怎麼回傳的、資料是怎麼存取的、測試是怎麼寫的。這四件事合起來，就是這個專案對「一個功能應該長什麼樣」的既定答案。</p>
+<p>如果 spec 已經很明確，第二種寫法更省事；如果只是想接著 scope 的計畫走，第一種就夠。兩者都會讓它先去找對應的 spec 與地圖。</p>
 
-<figure class="lesson-figure"><img src="./develop-the-minimal-safe-change-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<h2>第一步：先讀周邊，不急著寫</h2>
 
-<p>讀完之後，它有個重要判斷：某一段程式碼其實已經存在了，所以不需要重做，直接寫還書的 server action 就好。示範裡的落點是 <code>lib/actions/book</code>，因為規格已經確認這段東西本來就該在那裡。這就是「能用改一個現有函式解決，就不另起爐灶」的實例——它沒有發明新的檔案或新的流程，而是接進既有的位置。</p>
-
-<h2>第三步：接到介面上，把改動收乾淨</h2>
-
-<p>server action 寫好之後，它接著把它接進 UI：把 admin 的 menu component 接上，並加上一個 <code>on item select</code> 的 callback，取代原本只印 dummy data 的 <code>console.log</code>。注意這裡的節奏：它不是新蓋一個選單，而是在既有的 menu component 上加一個 callback，把原本的空殼換成真的會做事的行為。</p>
-
-<p>最後它新增一個 client row component，去呼叫 <code>return book</code>，並讓每一筆借閱紀錄都渲染出那個 row。整個功能的四個動到的檔案，大致可以這樣列出來：</p>
-
-<pre data-provenance="derived">1. lib/actions/book          新增 server-side admin action（含 admin 檢查）
-2. components/admin/menu     加上 on item select callback，取代原本只印 dummy data 的 console.log
-3. 新的 client row component 呼叫 return book
-4. 讓每一筆 borrow record 逐列渲染出那個 row component</pre>
-
-<p>四處改動，各自都只是「把既有的東西接起來」。這正是最小變更的樣子：它不是一個從天而降的新功能，而是把既有零件缺的那幾條線接上。</p>
-
-<h2>第四步：三個跟隨既有專案的紀律</h2>
-
-<p>整個實作過程中，有三條紀律反覆出現，它們決定了成果「像不像本來就屬於這裡」：</p>
+<p>在新專案上，develop 拿到 spec 就開始建檔案。在這裡，它會先讀這次變更周圍的檔案，並且遵循那個區域已經在用的模式。它具體看四件事：</p>
 
 <ul>
-<li><strong>重複使用既有的工具，不要另造一份。</strong> 專案裡已經有的 utility，就直接用它，而不是複製一份出來。</li>
-<li><strong>跟隨當地的命名與檔案結構。</strong> 新檔案放哪裡、叫什麼名字，都照這個區域既有的習慣。</li>
-<li><strong>把變更留在規格定義的邊界內。</strong> 規格說會動哪些檔案、要改什麼行為，就不要趁機多做。</li>
+<li>類似的功能是怎麼組織的：server action 放哪、client component 放哪、兩者怎麼分工。</li>
+<li>錯誤是怎麼回傳的：丟例外、回傳物件，還是用某種統一的結果型別。</li>
+<li>資料是怎麼存取的：透過哪個 client、有沒有統一的查詢層。</li>
+<li>測試是怎麼寫的：放在哪裡、用什麼工具、涵蓋到什麼程度。</li>
 </ul>
 
-<figure class="lesson-figure"><img src="./develop-the-minimal-safe-change-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p>這四項加起來，就是「這個專案的寫法」。它不需要你口頭交代，因為答案都在檔案裡。這也是為什麼前面要花力氣建地圖：地圖告訴它「去哪裡看」，實際的細節還是要它自己讀。</p>
 
-<p>如果這個變更需要更深的掃描，它也可以把掃描丟進一個 read-only 的 helper 裡執行。這樣一來，主 session 只會收到有用的發現，而不是把沿途檢視過的每一個檔案都塞進 context。這和你在 context 章節學到的道理一致：把大量閱讀留在它自己的地方，只把結論帶回來。</p>
+<figure class="lesson-figure"><img src="./develop-the-minimal-safe-change-assets/image-1.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>第五步：換掉既有路徑前，先搜尋所有引用</h2>
+<p>如果這次需要更深的掃描，它可以把掃描放進一個唯讀的 helper 裡執行。這樣主 session 只會收到有用的發現，不會被幾十個被打開的檔案塞滿。這跟 <code>/audit</code> 用 sub-agent 找 skills 是同一個思路：過程留在外面，結論帶進來。</p>
 
-<p>這是舊碼庫裡最容易出事、也最值得記住的一個動作。當既有程式碼最後要被取代時，<code>/develop</code> 在移除它之前，會<strong>先搜尋每一處引用</strong>。為什麼要這麼做？因為如果漏掉一個呼叫端，舊路徑與新路徑就會同時活著。起初兩條路徑的結果可能一樣，但隨著後續修改走岔，它們會慢慢開始產生不同的結果——這種 bug 特別難找，因為兩條路本身都「看起來沒錯」。</p>
+<h2>第二步：選路線，改一個函式還是新增再遷移</h2>
 
-<figure class="lesson-figure"><img src="./develop-the-minimal-safe-change-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p>讀完周邊，它會遇到一個真正的岔路。spec 說要接上還書，但既有的程式碼可能有三種狀態：已經有幾乎可用的函式、有一個只完成一半的實作、或完全沒有。路線不同，做法就不同。</p>
 
-<p>所以要移除舊路徑，必須先確認沒有東西還依賴它。示範裡的這次變更最後是 migration-free 的，也沒有留下新舊並存的路徑，這正是先搜尋引用的成果。</p>
+<table>
+<thead>
+<tr><th>你看到的現況</th><th>採用做法</th><th>代價與風險</th></tr>
+</thead>
+<tbody>
+<tr><td>既有函式只差這次要加的行為</td><td>直接改那個函式</td><td>diff 最小；但要確認沒有其他地方依賴它現在的行為</td></tr>
+<tr><td>新舊行為需要並存一段時間</td><td>在舊實作旁邊新增一份，逐步把呼叫端移過去，最後才刪舊的</td><td>安全、可回滾；但期間要有紀律，不能讓兩條路都有人維護</td></tr>
+<tr><td>既有邏輯看不懂，但程式在跑</td><td>不動它，新增路徑繞過或包裝</td><td>技術債留著；但比拆掉一個正在保護某個契約的條件安全</td></tr>
+</tbody>
+</table>
 
-<h2>第六步：把無關的清理留在變更之外</h2>
+<p>判斷的問句很簡單：<strong>這次要改的行為，是既有函式本來就該負責的嗎？</strong>如果是，改它；如果這次是新增一種與舊行為並存的需求，就新增再遷移。示範裡的還書屬於前者：資料模型裡已經有還書狀態，後台也已經有借閱紀錄，缺的是把管理員的操作接上去，所以它直接往既有的 server action 裡加。</p>
 
-<p>安全的 enhancement 之所以好審，是因為它的 diff 裡只包含「這個 enhancement 需要的檔案與行為」。所以 <code>/develop</code> 會刻意把無關的清理排除在這次變更之外。示範裡有個有趣的插曲：它跑型別檢查，一切正常；接著它還發現了一些 lint 問題，但那些問題是<strong>本來就存在</strong>的，不是這次改動造成的。它的新程式碼本身是 lint clean 的。</p>
+<p>反過來說，什麼時候該走「新增再遷移」？當你無法一次把所有呼叫端改完，或新舊行為必須同時存在一段時間的時候，例如同一個通知流程要從舊的排程器換到新的佇列。這時候新的實作先上，呼叫端一個一個搬，等到搜尋不到任何引用，才移除舊路徑。</p>
 
-<p>即使它後來順手把那幾個既有的 lint 問題修掉了，這條原則仍然值得你記住：把無關的清理混進變更裡，會讓 review 變難，也讓「這次到底改了什麼」變得模糊。真要做的清理，值得是另一個獨立的變更。最後它更新了 spec 與 scope，並提議可以做後續的驗證。</p>
+<p>這裡有一個很容易被忽略的細節：兩條路徑同時存在時，它們會慢慢產生不同的結果。舊路徑可能還在用舊的日期格式、舊的錯誤處理，於是同一筆資料在兩個畫面看起來不一樣。這不是理論上的風險，而是這種遷移最常見的結局。所以「最後才移除舊路徑」不是拖延，是必須有一個明確的收尾動作。</p>
 
-<h2>結尾：做完會看到什麼</h2>
+<figure class="lesson-figure"><img src="./develop-the-minimal-safe-change-assets/image-2.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>走完這一步，你會拿到一個真正完成的功能：還書功能上線，包含 admin 的動作以及接好的 admin 下拉選單，而且不必 migration。整個變更只動了四個檔案——一個新的、帶 admin 檢查的 server-side admin action；一個取代舊 dummy <code>console.log</code> 的 <code>on item select</code> callback；一個呼叫 <code>return book</code> 的新 client row component；以及讓每一筆借閱紀錄渲染出那個 row 的改動。</p>
+<h2>第三步：動手，讓程式碼看起來像本來就在這裡</h2>
 
-<p>你在一條從未碰過、也從沒走過一遍的程式庫裡，做出了一個可以被審閱的變更。會做到這個程度，關鍵在於：每一個動作都先讀了現況（讀周邊檔案、讀既有模式），再把改動收在規格邊界內。至於「為什麼要先搜尋引用」「為什麼要重用既有工具」這些原理，屬於 <code>/scope</code> 與 <code>/architect</code> 規劃階段要交代的事；在 <code>/develop</code> 這裡，你要的是一刀乾淨的實作。</p>
+<p>示範裡它很快確認：spec 要求的還書 server action 已經有既定的位置，就在 <code>lib/actions/book</code>，於是它把實作補進那個檔案，接著去接後台的下拉選單元件。下面是形狀示意，不是原始碼。重點是看它沿用了什麼：</p>
+
+<pre data-provenance="derived"><code>// lib/actions/book.ts（示意：在既有檔案新增一個 action）
+"use server";
+
+export async function returnBook(borrowRecordId: string) {
+  await requireAdmin();            // 沿用專案既有的權限檢查
+  // 更新借閱紀錄狀態、寫入還書時間
+  // 重新驗證受影響的路徑
+}</code></pre>
+
+<pre data-provenance="derived"><code>// 後台選單（示意：把原本的 dummy 行為換成真的呼叫）
+onItemSelect={async (record) =&gt; {
+  await returnBook(record.id);
+}}</code></pre>
+
+<p>兩個示意都刻意留白，因為真正的內容取決於專案。你要看的不是語法，而是三個判斷：它有沒有重用既有的權限檢查，而不是自己再寫一套？它有沒有沿用既有的資料存取方式，而不是直接開一個新的連線？它有沒有把檔案放在該放的位置，而不是為了方便新開一個資料夾？</p>
+
+<p>課程對這個結果的描述是：實作看起來就屬於這個專案。具體表現在三件事上：重複使用既有工具而不是造一個新的、遵循當地的命名與檔案結構、把改動留在 spec 定義的邊界內。</p>
+
+<figure class="lesson-figure"><img src="./develop-the-minimal-safe-change-assets/image-3.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第四步：換掉舊路徑之前，先搜尋所有引用</h2>
+
+<p>這是本節最重要的一個動作。當既有程式碼真的要被取代時，<code>/develop</code> 會在移除之前搜尋每一個引用。理由不難懂：如果只改了它知道的那一個呼叫端，其他地方還在呼叫舊函式，舊路徑就沒有真的消失。兩條路徑同時活著，就會慢慢產生不同的結果。</p>
+
+<p>實作上的做法很樸素：用函式名稱、檔案路徑、或那個行為的特徵字串去搜整個 repo，確認每一個命中都處理過。不是只搜 <code>src</code>，也要看測試、腳本、設定檔。搜完之後，才能把舊的實作刪掉。</p>
+
+<pre data-provenance="derived"><code># 移除舊路徑前，先確認沒有殘留引用（依實際名稱替換）
+rg "舊函式名稱|舊檔案路徑" .
+
+# 確認測試與腳本裡也沒有
+rg "舊函式名稱" --glob "*.{test,spec}.{ts,tsx,js,jsx}" .</code></pre>
+
+<p>如果搜到還有引用，就回到第二步：要嘛把那個呼叫端也搬過來，要嘛讓新舊並存到它可以被搬為止。不要為了一個乾淨的 diff 而提前刪除，也不要假裝沒看到。</p>
+
+<figure class="lesson-figure"><img src="./develop-the-minimal-safe-change-assets/image-4.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>第五步：把無關的整理留在外面</h2>
+
+<p>讀舊程式碼的時候，你一定會看到一堆想順手改的東西：命名不一致、重複的 utility、一段沒人用的程式。develop 會把這些留在這次變更之外。理由不是懶，而是 review 的成本：當 diff 裡只有這個增強功能真正需要的檔案與行為時，審查的人可以逐行確認；一旦混進三個不相關的重構，真正的風險就被藏在噪音裡。</p>
+
+<p>這也回到前面 architect 的原則：不要因為「這樣比較乾淨」就重寫。乾淨是好事，但它應該是另一個有意識的決定，而不是一個功能變更的副作用。</p>
+
+<h2>第六步：型別、lint，與檔案同步</h2>
+
+<p>寫完之後，它會先檢查型別。示範裡型別全部過關。接著跑 lint，發現了一些問題，但那些是原本就存在的，不是這次改動造成的。它沒有因此停手，還是把它們修掉了；同時確認自己新寫的程式碼是 lint clean 的。</p>
+
+<p>這一段有兩個可以帶走的習慣。第一，分清楚「我弄壞的」和「本來就壞的」：前者一定要修，後者可以修，但要讓 reviewer 知道它不是這次功能的一部分。第二，型別與 lint 是最便宜的驗證，先跑完再談更重的檢查；如果型別都不過，後面的功能驗證沒有意義。</p>
+
+<pre data-provenance="derived"><code>npm run typecheck
+npm run lint</code></pre>
+
+<p>最後它更新了 spec 與 scope，把實際做了什麼、哪些地方跟原本的計畫不同記錄下來。這個動作很重要：下一個 session 或下一個接手的人，讀到的是更新後的版本，而不是一份跟程式碼已經脫節的計畫。</p>
+
+<h2>完成的樣子：四個檔案，不需要 migration</h2>
+
+<p>示範的結果是一個可用的還書功能：管理員可以從後台把書標記為歸還，狀態立刻更新。它沒有動資料庫結構，所以不需要 migration；總共只碰了四個檔案：</p>
+
+<ol>
+<li>新增一個管理員用的 server action，裡面有伺服器端的權限檢查。</li>
+<li>在選單元件加上 <code>onItemSelect</code> 回呼，取代原本只印出 dummy 資料的 <code>console.log</code>。</li>
+<li>新增一個 client row 元件，負責呼叫還書的 action。</li>
+<li>讓借閱紀錄的每一列都用這個新元件渲染。</li>
+</ol>
+
+<p>注意這四個改動之間的關係：它們是一條線，不是四散的功能。action 提供行為、回呼接上行為、元件負責觸發、列表負責渲染。沒有任何一個是「順便」加的。這就是最小安全變更的具體長相。</p>
+
+<figure class="lesson-figure"><img src="./develop-the-minimal-safe-change-assets/image-5.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>你可以用幾個條件確認自己做完了：功能在畫面上真的能用；diff 裡只有這次需要的檔案；舊路徑（如果被取代）已經搜過所有引用並移除；型別與 lint 沒有新增問題；spec 與 scope 已同步。</p>
+
+<h2>常見失敗：能跑，但不像這個專案</h2>
+
+<p>最常見的失敗不是功能壞掉，而是功能會動、卻讓下一個工程師皺眉。三種典型長相：自己造一個新的 fetch 包裝，而專案裡已經有一個；把錯誤用 <code>throw new Error</code> 往外丟，而這個區域的慣例是回傳結果物件；把新元件放在一個新開的 <code>components/new/</code> 資料夾，而附近所有元件都在 <code>components/admin/</code>。</p>
+
+<p>這三種都不會被型別檢查抓到，也不會被 lint 抓到，因為它們語法正確。抓到它們的方法只有一個：動手前真的讀過周邊。這也是為什麼第一步不能省。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-<p>在舊碼庫上，<code>/develop</code> 動手前會先讀變更周圍的檔案，跟著既有模式走：類似功能怎麼結構、錯誤怎麼回、資料怎麼存取、測試怎麼寫。能用改一個現有函式解決就不另起爐灶（示範中直接寫進既有的 <code>lib/actions/book</code>），並把改動接到既有 component 上。三個紀律是重用既有工具、跟隨當地命名與結構、把變更留在 spec 邊界內；需要更深的掃描就交給 read-only helper，只把發現帶回主 session。換掉既有歷史前先搜尋所有引用，避免新舊路徑並存而產生分歧；無關的清理留在變更之外，讓 diff 只有這次需要的檔案與行為。最後會更新 spec 與 scope，交出一個不必 migration、只動四個檔案的成果。</p>
+<code>/develop</code> 在舊碼庫裡先讀變更周邊的檔案，看類似功能怎麼組織、錯誤怎麼回、資料怎麼存取、測試怎麼寫，再決定要改既有函式還是新增實作再遷移。動手時沿用既有工具、命名與檔案結構，把改動收在 spec 邊界內；換掉舊路徑前搜尋所有引用；把無關的整理留在外面。完成後跑型別與 lint，並更新 spec 與 scope。示範的結果是四個檔案、不需要 migration 的還書功能。
 </blockquote>
 
-<p>變更做出來了，但「寫完」不等於「證明它不會破壞既有行為」。下一節要處理收尾：什麼時候用 <code>check verify</code>、什麼時候用 <code>check review</code>、什麼時候該在 skill 之間 <code>clear</code>，以及什麼情況下可以跳過 <code>/scope</code> 直接進 <code>/develop</code>。</p>
+<p>功能做出來了，但「能跑」還不等於「可以交」。最後一節要處理收尾：什麼時候用 <code>check verify</code>、什麼時候再補一個 <code>check review</code>、什麼時候該 clear，以及哪種小修正可以跳過 <code>/scope</code>。</p>
 
 <div class="lesson-nav">
   <div><a href="./scope-and-architect-on-existing-code.html">← 上一步：用 /scope 與 /architect 規劃最小變更：先讀現況再決定</a></div>
@@ -97,41 +167,46 @@ develop</pre>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="/develop 在寫任何程式碼之前，第一件事是做什麼？" data-correct="2" data-explain="它先讀變更周圍的檔案，跟著那部分既有模式走。">
-  <button class="opt">先跑一次完整的測試套件確認現況</button>
-  <button class="opt">先建立一個全新的分支並推送上去</button>
-  <button class="opt">先讀變更周圍的檔案，跟著既有模式</button>
-  <button class="opt">先問使用者這個功能要怎麼設計</button>
+<div class="quiz" data-question="/develop 在動手寫之前，為什麼要先讀變更周邊的檔案？" data-correct="1" data-explain="它要從既有程式碼得知這個區域怎麼組織、錯誤怎麼回、資料怎麼存取、測試怎麼寫。">
+  <button class="opt">因為它要先確認你有沒有改過那些檔案</button>
+  <button class="opt">因為它要沿用那個區域既有的模式</button>
+  <button class="opt">因為它要先把周邊程式碼重構一次</button>
+  <button class="opt">因為它要計算這次 diff 會有幾行</button>
 </div>
-<div class="quiz" data-question="它讀周圍檔案時，會看哪四件事？" data-correct="1" data-explain="結構、錯誤回傳、資料存取與測試寫法，就是這個專案對功能的既定答案。">
-  <button class="opt">檔案大小、註解多寡、命名長度、授權條款</button>
-  <button class="opt">功能結構、錯誤回傳、資料存取、測試寫法</button>
-  <button class="opt">commit 數量、作者人數、開啟的 issue 數</button>
-  <button class="opt">資料庫版本、套件版本、Node 版本</button>
+
+<div class="quiz" data-question="什麼情況適合「新增實作再逐步遷移」，而不是直接改既有函式？" data-correct="2" data-explain="當新舊行為需要並存一段時間、無法一次改完所有呼叫端時，就先新增再搬遷。">
+  <button class="opt">當既有函式的命名不好看的時候</button>
+  <button class="opt">當這次改動只有一行程式碼的時候</button>
+  <button class="opt">當新舊行為需要並存一段時間的時候</button>
+  <button class="opt">當專案裡完全沒有相關函式的時候</button>
 </div>
-<div class="quiz" data-question="在移除既有程式碼之前，/develop 一定會先做什麼？" data-correct="3" data-explain="先搜尋每一處引用，避免新舊路徑並存而慢慢產生分歧。">
-  <button class="opt">先跑一次型別檢查與 lint 確保乾淨</button>
-  <button class="opt">先請另一顆模型審查這段舊程式碼</button>
-  <button class="opt">先寫一個測試把舊行為固定下來</button>
-  <button class="opt">先搜尋每一處引用，確認沒有東西依賴它</button>
+
+<div class="quiz" data-question="移除舊路徑前搜尋所有引用，主要在防什麼？" data-correct="3" data-explain="避免還有呼叫端停在舊路徑，造成新舊兩條路同時活著、慢慢產生不同結果。">
+  <button class="opt">避免搜尋引擎找不到這個函式</button>
+  <button class="opt">避免型別檢查執行的時間太長</button>
+  <button class="opt">避免新程式碼的命名不夠一致</button>
+  <button class="opt">避免新舊兩條路徑同時存活</button>
 </div>
-<div class="quiz" data-question="為什麼要避免新舊兩條路徑同時存在？" data-correct="0" data-explain="兩條路起初結果一樣，後續修改會走岔，慢慢產生不同結果，特別難找。">
-  <button class="opt">後續修改走岔後，兩條路會產生不同結果</button>
-  <button class="opt">同時存在會讓程式碼檔案數量超過限制</button>
-  <button class="opt">舊路徑會自動攔截所有新路徑的請求</button>
-  <button class="opt">同時存在會讓型別檢查無法通過</button>
+
+<div class="quiz" data-question="為什麼要把無關的清理排除在這次變更之外？" data-correct="0" data-explain="diff 只含這次需要的檔案與行為時，reviewer 才能專心確認真正的風險。">
+  <button class="opt">讓 diff 只留下這次要審的行為</button>
+  <button class="opt">因為重構一定會讓程式壞掉</button>
+  <button class="opt">因為 lint 不允許重構的變更</button>
+  <button class="opt">因為 spec 禁止修改既有檔案</button>
 </div>
-<div class="quiz" data-question="面對專案裡原本就存在的 lint 問題，正確的心態是什麼？" data-correct="2" data-explain="把無關清理留在變更之外，diff 只含這次需要的檔案與行為才容易審。">
-  <button class="opt">一定要趁這次機會全部修掉才算完成</button>
-  <button class="opt">直接忽略，反正不是這次改動造成的</button>
-  <button class="opt">留在變更之外，讓 diff 只含這次需要的東西</button>
-  <button class="opt">把整份 linter 設定改成不會報這些錯</button>
+
+<div class="quiz" data-question="lint 抓到一些原本就存在的問題，示範裡怎麼處理？" data-correct="2" data-explain="它分清楚了新舊問題，仍把舊問題修掉，並確認新程式碼本身是 lint clean 的。">
+  <button class="opt">全部略過，因為不是這次造成的</button>
+  <button class="opt">把 lint 規則關掉以免干擾</button>
+  <button class="opt">修掉舊問題，同時確認新碼乾淨</button>
+  <button class="opt">把它們留給下一個功能處理</button>
 </div>
-<div class="quiz" data-question="這次還書功能最後的成果有什麼特徵？" data-correct="1" data-explain="它不必 migration，而且只動了四個檔案，是一個最小安全變更。">
-  <button class="opt">重建了整個專案結構，並加上多個 migration</button>
-  <button class="opt">不必 migration，且只動了四個檔案</button>
-  <button class="opt">新增了一整套新的 admin 後台與權限系統</button>
-  <button class="opt">改動了二十多個檔案，覆蓋原本的實作</button>
+
+<div class="quiz" data-question="示範裡的還書功能為什麼不需要 migration？" data-correct="1" data-explain="資料模型裡本來就有還書狀態與借閱紀錄，這次只是把管理員操作接上去，沒有改資料庫結構。">
+  <button class="opt">因為它把資料存在瀏覽器裡</button>
+  <button class="opt">因為資料模型本來就有這些欄位</button>
+  <button class="opt">因為它刪掉了舊的資料表</button>
+  <button class="opt">因為它改用另一個資料庫服務</button>
 </div>
 
 <div class="footer">

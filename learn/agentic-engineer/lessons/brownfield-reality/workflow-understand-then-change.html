@@ -3,134 +3,253 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>把 workflow 對上問題：先理解，再安全地改</title>
+<title>把 workflow 對上問題</title>
 <link rel="stylesheet" href="../assets/shared.css">
 </head>
 <body>
 
-<h1>把 workflow 對上問題：先理解，再安全地改</h1>
+<h1>把 workflow 對上問題</h1>
 <p class="meta">Step 3/4 · 沒有白紙：Brownfield 的風險</p>
 
 <h2>學習目標</h2>
-<p>用「先理解、再安全地改」兩個工作把 workflow 對上舊碼庫問題：/audit 建地圖、/architect 決策前先讀現況、/develop 先讀再寫並沿用既有模式、/check verify 在真 App 內證明不破壞行為、/check review 交給第二個模型。</p>
+<p>把 <code>/audit</code>、<code>/architect</code>、<code>/develop</code>、<code>/check verify</code>、<code>/check review</code> 各自對到「先理解、再安全地改」的哪一步，並說出每個 skill 在舊碼庫裡改變了什麼行為。</p>
 
-<h2>前言：同一套流程，換一個起點</h2>
+<h2>前言：你不可能每次都在 prompt 裡補歷史</h2>
 
-<p>前兩節把問題的兩面都攤開了：agent 在舊碼庫失手，是因為它沒有地圖；而在真實專案上用 AI，又同時牽涉交付風險與資訊外流的風險。這一節要回頭看那套你已經學會的 workflow，問一個很實際的問題——它在舊碼庫上到底修好了什麼？</p>
+<p>上一節的結論是：agent 猜錯，是因為它沒有 why。你當然可以在每一次對話的開頭，手打一段「注意，<code>billing-legacy</code> 才是正式環境在跑的版本，<code>place-order.ts</code> 裡那段判斷不能刪」。這樣做有效，但你會發現兩件事：第一，你每次都要重打；第二，你總會漏掉某一段，因為你自己也記不全。</p>
 
-<p>先回想一下新專案的流程：你決定這個系統該長成什麼樣，然後把它建出來。起點是一張白紙，你先想、再做。可是在既有專案上，起點完全相反：系統已經存在了，而且不是照你的意思長的。所以你的第一責任不是「決定它應該是什麼」，而是先搞清楚「它現在是什麼」。</p>
+<p>真正需要的是把「先找地圖、再動手」變成一種預設行為，而不是靠你每次記得提醒。這套 workflow 就是在做這件事。它在舊碼庫上的工作順序，可以收成兩步：<strong>先理解，再安全地改</strong>。這一節把五個你會用到的 skill 對到這兩步上，讓你知道每個 skill 到底改變了 agent 的哪一個行為。</p>
 
-<figure class="lesson-figure"><img src="./workflow-understand-then-change-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<figure class="lesson-figure"><img src="./workflow-understand-then-change-assets/image-1.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>課程把這件事收束成兩個工作，而且順序不能顛倒：<strong>先理解，再安全地改。</strong>這一節就把 workflow 的每個 skill 對上這兩個工作，看看它們各自補上了哪一段。</p>
+<h2>進入既有程式庫，你通常有兩個工作</h2>
 
-<h2>第一個工作：理解它（先把地圖建出來）</h2>
+<p>課程對舊碼庫的指示很明確：先 <code>/audit</code>，再讓後面的 skill 接手。原文是這樣說的：</p>
 
-<p>既然 agent 猜測的根因是「沒有地圖」，那麼 workflow 的第一步就是把地圖建出來。負責這件事的是 <code>/audit</code>。它讀真實現有的程式碼、歷史與專案檔案，把 agent 不可能安全地自己發明的東西寫下來：架構、慣例、指令、邊界與規則。</p>
+<blockquote>
+On an existing codebase, run <code>audit</code> first. It reads your real code and writes the context files, so every later skill understands your stack and conventions before it touches anything. Then <code>scope</code> enrolls what already exists and plans the new slice on top. From there the loop is the same.
+</blockquote>
 
-<p>地圖建好之後，還有一個關鍵的用法：不要把整個 repo 一次丟給 agent 去理解。課程的說法是，你交給它那張專案地圖，再加上這次任務真正需要的那一小塊。這聽起來像是省成本，其實更重要的是省注意力——一次讀進整個大型碼庫，反而會讓它抓不到重點。地圖加上一小塊的組合，才是它在大型系統裡能好好工作的形狀。</p>
+<p>後面還有一句更短的版本，把整個順序講完：</p>
 
-<figure class="lesson-figure"><img src="./workflow-understand-then-change-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<blockquote>
+Understand first. Then touch.
+</blockquote>
 
-<p>而地圖之所以能分塊使用，是因為 <code>AGENTS.md</code> 這類 context file 會分層擺放。某個 skill 走到哪一區，就讀最靠近那一區的那一份：</p>
+<p>這個順序不能顛倒，理由不難懂。<code>/architect</code> 的工作是比較選項、做決定，而選項是從現況推出來的。如果它還沒讀過現況，它給你的就會是一份「一般來說這樣最好」的建議，而不是「在你們這個系統裡這樣最好」的建議。前者聽起來很專業，實際上跟你上網查到的東西差不多。</p>
 
-<pre data-source="sources/agentic-engineer/20261014/skills/docs/workflow-guide.md#the-files-that-carry-the-work-and-how-they-live">The key idea is that these files nest. There is one at the root of the project for rules that apply everywhere. There can be more inside folders for rules that apply only to that area. For example a project might have a root `AGENTS.md` and also a `src/payments/AGENTS.md` that records rules only the payments code follows. When a skill works on the payments code, it reads the nearest one, so it sees both the project wide rules and the local ones. `audit` creates these files. Every other skill reads them. `sync` keeps them current as the code changes. No skill guesses your conventions when a context file already states them.</pre>
+<h2>五個 skill，各自對到哪裡</h2>
 
-<p>最後一句話很值得停下來想：「當 context file 已經寫明慣例，就沒有 skill 需要去猜你的慣例。」這就是整節的核心——把「猜」換成「讀」。</p>
-
-<h2>第二個工作：安全地改它（讓每個動作都有依據）</h2>
-
-<p>地圖存在之後，改動就可以開始了。但「安全地改」不是一句口號，它是由幾個 skill 各管一段拼起來的。課程把這幾段講得很清楚：</p>
+<p>先看全貌，再一個一個拆。下面這張表要看的不是 skill 叫什麼名字，而是<strong>它擋掉了哪一種失手</strong>。</p>
 
 <table>
 <thead>
-<tr><th>Skill</th><th>在「安全地改」裡負責哪一段</th></tr>
+<tr><th>要處理的問題</th><th>用哪個 skill</th><th>它改變了什麼行為</th></tr>
 </thead>
 <tbody>
-<tr><td><code>/architect</code></td><td>在做決定之前，先讀現有的實作，而不是憑空設計</td></tr>
-<tr><td><code>/develop</code></td><td>先讀再寫，並沿用專案裡已經在用的模式</td></tr>
-<tr><td><code>/check verify</code></td><td>在真實的應用程式裡證明改動有效，而且沒有破壞既有行為</td></tr>
-<tr><td><code>/check review</code></td><td>把程式碼交給另一個模型，抓作者自己漏掉的東西</td></tr>
+<tr><td>這個專案怎麼運作，沒人寫下來</td><td><code>/audit</code></td><td>掃描真的程式庫，寫出 <code>AGENTS.md</code> 地圖（根目錄加巢狀）</td></tr>
+<tr><td>要改別人設計的東西</td><td><code>/architect</code>（ENHANCEMENT 模式）</td><td>先讀現有程式碼與 spec，才提出選項</td></tr>
+<tr><td>準備開始寫</td><td><code>/develop</code></td><td>先過 spec gate，再讀既有模式，最後才寫</td></tr>
+<tr><td>改完了，不確定有沒有弄壞</td><td><code>/check verify</code></td><td>在真的跑起來的 App 裡證明行為沒變</td></tr>
+<tr><td>要進 PR 了</td><td><code>/check review</code></td><td>換一個沒寫過這段程式的模型看 diff</td></tr>
 </tbody>
 </table>
 
-<p>這個順序藏著一個設計意圖：<code>/architect</code> 之所以要先讀現有實作，是因為在別人的系統裡，你任何一個決定都得先服從「它現在怎麼運作」。它同時扮演一個決策閘門，避免 agent 悄悄替別人決定這個系統該怎麼長。<code>/develop</code> 的「先讀再寫」則是同一件事往下一層：它不是先想一個漂亮的新寫法，而是先看看這個專案原本怎麼寫，然後照著做。</p>
+<h3><code>/audit</code>：把 why 寫成一個檔案</h3>
 
-<p>驗證之所以要用真實的 App，是因為「測試檔通過」跟「功能真的能用」是兩件事。<code>/check verify</code> 是去驅動真的跑起來的應用程式，證明每一個承諾的行為真的成立。<code>/check review</code> 再補上另一個角度：它刻意跑在跟寫程式的模型不同的模型上，理由很簡單——同一個模型審自己的作品，容易跟自己意見一致，找不出盲點。</p>
+<p><code>/audit</code> 在 brownfield 專案裡做的事，skill 檔案寫得很清楚：</p>
 
-<figure class="lesson-figure"><img src="./workflow-understand-then-change-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<blockquote>
+Brownfield, undocumented (code, no <code>AGENTS.md</code>): scan the whole project, write root <code>AGENTS.md</code> and nested <code>&lt;area&gt;/AGENTS.md</code> files, judging what is global (root) vs area specific (nested).
+</blockquote>
 
-<p>這兩個 skill 的官方描述是這樣的：</p>
+<p>注意它產出的東西：不是一份報告，而是<strong>檔案</strong>。這一點是整套 workflow 的基礎。檔案會留在 repo 裡，session 清掉還在，同事 pull 下來也看得到，下一個 agent 進來讀到的還是同一份。這就是把「某個人腦中的 why」轉成「所有 agent 都讀得到的 why」。</p>
 
-<pre data-source="sources/agentic-engineer/20261014/skills/docs/workflow-guide.md#the-workflows">| `architect` | Makes a real decision (a stack, a data model, a page design) and writes it as a spec. |
-| `develop` | Builds a feature, user interface or backend, from its spec. |
-| `check` | Confirms a change before merge, by running the real app and by a second review. |</pre>
+<p>地圖長什麼樣子？下面是示範，不是課程 repo 裡的檔案，但結構與 <code>/audit</code> 的產物一致：</p>
 
-<p>你可能會覺得這些步驟在乾淨的專案上顯得又慢又重。但在舊碼庫裡，它們反而是讓 AI 真的能派上用場的原因。課程的講法是：這套紀律讓 agent 拿到的是邊界、證據與審查，而不是放任它在一個自己沒完全搞懂的系統裡自由行動。</p>
+<pre data-provenance="derived"><code># AGENTS.md（專案根目錄）
+## Stack
+Next.js 15, TypeScript, Prisma, Postgres
+## Commands
+pnpm dev / pnpm test / pnpm db:migrate
+## Conventions
+- 錯誤一律回傳 Result，不拋例外
+- 新頁面放在 app/(dashboard)/ 底下
 
-<h2>整條線拉起來看：對既有碼庫的入口有變</h2>
+# src/payments/AGENTS.md（巢狀）
+## Rules
+- 金額一律用整數分計算，不碰浮點數
+- 呼叫金流商前必須先寫 idempotency key
+- billing-legacy 才是正式環境在跑的版本</code></pre>
 
-<p>把新專案和既有碼庫放在一起比，最明顯的差別是入口。新專案是「先決定、再建」，既有碼庫則是「先讀、再決定、再改」。課程的指南自己也把這個入口寫得很明白：</p>
+<p>最後那一行就是上一節說的那種知識：它不寫在程式碼裡，但少了它，agent 會選錯服務。根目錄那份放全域規則，巢狀那份放只有這個區域才適用的規則。agent 在改 payments 時讀最近的那一份，於是同時看到全域與區域的規則。</p>
 
-<pre data-source="sources/agentic-engineer/20261014/skills/docs/workflow-guide.md#the-same-flow-on-an-existing-codebase-and-in-a-monorepo">On an existing codebase, run `audit` first. It reads your real code and writes the context files, so every later skill understands your stack and conventions before it touches anything. Then `scope` enrolls what already exists and plans the new slice on top. From there the loop is the same.</pre>
+<figure class="lesson-figure"><img src="./workflow-understand-then-change-assets/image-2.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>所以整段可以這樣理解：<code>/audit</code> 先建出那張缺失的地圖；<code>/architect</code>、<code>/develop</code>、<code>/check</code> 接著在「先讀現況」的前提下推動改動。兩個工作——理解、安全地改——就是這樣被拆進 skill 裡的。</p>
+<h3><code>/architect</code>：先讀現況，才給選項</h3>
+
+<p><code>/architect</code> 有四種模式，舊碼庫對應的是 ENHANCEMENT。它對這個模式的描述只有一行，但那一行就是重點：</p>
+
+<blockquote>
+Read existing code + specs, focused option comparison
+</blockquote>
+
+<p>在全新專案裡，它做的是大範圍的技術棧比較；在舊碼庫裡，它先讀你現有的實作與 spec，然後才在「這個系統已經長這樣」的前提下比較選項。差別很大。同一個問題，在空白專案裡答案可能是「用 X」，在你們的系統裡答案可能是「沿用你已經在用的 Y，因為換掉的遷移成本大於好處」。</p>
+
+<p>再看它問問題的方式。它會把資訊分成三類：能從程式碼或需求推斷的，它自己處理，不問你；只有你知道的（商業規則、偏好、合規範圍），它才問；專業能決定的（用哪個資料庫、哪個登入套件），它給一個建議加一個備案，讓你覆寫。在舊碼庫裡，第一類的比例特別高，因為大部分答案都寫在程式碼裡，只是沒有人整理過。</p>
+
+<h3><code>/develop</code>：先過一道 gate，再動手</h3>
+
+<p><code>/develop</code> 在寫任何東西之前，會先問自己一個問題。這個問題不是「我覺得這樣可以嗎」，而是一個機械式的檢查：</p>
+
+<blockquote>
+Enumerate every value this build must produce, compute, or display (from the acceptance criteria and the spec's design). For each, does the spec name where it comes from (an input, a DB column, a derivation from a named value, a prior decision)? Any required value with no named source is an owed decision.
+</blockquote>
+
+<p>翻成白話：把這次要產生、計算、顯示的每一個值列出來，然後逐一檢查 spec 有沒有說它的來源。任何一個值沒有來源，就是一個還沒做的決定，它會停下來，不會自己挑一個。</p>
+
+<figure class="lesson-figure"><img src="./workflow-understand-then-change-assets/image-3.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>為什麼這個檢查在舊碼庫特別有用？因為「來源」常常藏在既有系統裡。某個金額是從哪張表算出來的、某個狀態是從哪個欄位推的、某個排序為什麼是那樣，這些在全新專案裡由 spec 定義，在舊系統裡則是由歷史定義。這個檢查逼 agent 去把歷史找出來，而不是用一個看起來合理的演算法填補。</p>
+
+<p>如果它判斷有一個真正的決定還沒做，而你又選擇先往下建，它不會默默猜。它會先寫一份 <code>Assumed</code> 狀態的 spec，把假設寫進 repo：</p>
+
+<pre data-source="sources/agentic-engineer/20261014/skills/skills/develop/SKILL.md#step-0-the-spec-gate-always-first"><code># NNNN · &lt;feature&gt;
+
+**Status**: Assumed
+**Date**: &lt;today&gt;
+**Authorized by**: &lt;engineer&gt;, during /develop
+
+## Owed decision
+&lt;the specific load bearing choice that was not made&gt;
+
+## Assumption built on
+&lt;the concrete assumption this build will use&gt;
+
+## Code area
+&lt;the paths this build will touch&gt;</code></pre>
+
+<p>這份檔案存在的理由很單純：假設如果只留在對話裡，session 一清就沒了，同事看不到，下一個 agent 也不知道。寫成檔案之後，它就變成一個「還沒被正式討論、但至少被記錄下來」的決定。決定留在 repo，不在 chat，這是整套 workflow 反覆強調的一句話。</p>
+
+<h3><code>/check verify</code>：在真的 App 裡證明</h3>
+
+<p>改完之後，第一個檢查是 verify。它做的事不是跑測試，而是把真的 App 跑起來，看行為對不對：</p>
+
+<blockquote>
+<code>verify</code> (runtime proof): run the real app and watch the change behave. Proves it works and conforms to the spec (every acceptance criterion met, every specced surface built), which green tests never reveal.
+</blockquote>
+
+<p>最後那一句才是重點。測試綠不代表行為對，尤其是在舊碼庫：測試可能只覆蓋主要路徑，而被你弄壞的偏偏是那條很少人走的舊路徑。verify 打開真的 App、真的按下去，才有機會看到「畫面一直轉圈」這種測試抓不到的事。</p>
+
+<h3><code>/check review</code>：換一個沒寫過這段程式的模型</h3>
+
+<p>第二個檢查是 review，它的設計有一個很實際的前提：</p>
+
+<blockquote>
+a senior read of the diff on a <strong>different model than wrote the code</strong> (a model reviewing its own output shares its blind spots)
+</blockquote>
+
+<p>同一個模型看自己的輸出，會同意自己。它的盲點跟它寫的時候一模一樣，所以它會覺得那段刪掉的程式碼確實該刪。換一個模型，至少有機會用不同的角度問：「這段為什麼存在？」</p>
+
+<p>要注意的是，review 只讀不改。它把發現寫進 <code>docs/reviews/</code>，由你決定要不要修。這是刻意的：如果 review 會自動改 code，你就失去了最後一個人類判斷點。</p>
+
+<h2>順序為什麼不能顛倒</h2>
+
+<p>把這五個 skill 排成「先理解、再安全地改」，順序是：<code>/audit</code> → <code>/architect</code> → <code>/develop</code> → <code>/check verify</code> → <code>/check review</code>。把任何一個步驟往前挪，都會失去它原本的作用。</p>
+
+<p>先 architect 再 audit，等於在錯的現況上做決定。它會讀到一個不完整的專案，給出一個聽起來很合理的方案，然後你照著做，才發現正式環境根本不是這樣跑。</p>
+
+<p>先 review 再 verify，等於用 diff 取代行為。review 看的是程式碼的形狀，它看不出「舊版 App 送空 cart 時會轉圈」這種只有跑起來才會出現的問題。</p>
+
+<p>先 develop 再 architect，就是 spec gate 在擋的事。它當然做得下去，只是你會在還沒決定的情況下開始蓋，蓋到一半發現某個值沒有來源，那時候改動成本已經高很多。</p>
+
+<figure class="lesson-figure"><img src="./workflow-understand-then-change-assets/image-4.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>不是九個 skill 都要跑</h2>
+
+<p>看到這裡可能會有一種壓力：是不是每次改一行都要把整套跑完？不是。workflow 的設計是「你需要哪幾個就跑哪幾個」：</p>
+
+<blockquote>
+There are nine. You run only the ones a change needs, in whatever order fits.
+</blockquote>
+
+<p>課程的常見問答裡也講得非常直接：一個很小的改動可以只跑 <code>develop</code> 加 <code>check verify</code>；一個 bug 就只跑 <code>debug</code>。真正需要完整跑一輪的時機，是你第一次進入一個沒有地圖的舊碼庫。那次 <code>/audit</code> 建好的地圖會留下來，之後靠 <code>/sync</code> 維護，不需要每次重做。</p>
+
+<p>所以你可以這樣記：<strong>第一次進場要建地圖，之後每次改動只要沿著地圖走。</strong></p>
+
+<h2>容易搞混的地方</h2>
+
+<p>第一個混淆，是把 <code>/audit</code> 當成一次性的文件工作。它產出的 <code>AGENTS.md</code> 是活的：專案加了新的慣例、換了指令、某個服務退役，地圖就要更新，那是 <code>/sync</code> 的工作。一張過期的地圖比沒有地圖更糟，因為它會讓你以為自己掌握了現況。</p>
+
+<p>第二個混淆，是把 workflow 當成一條必須從頭走到尾的流程圖。它比較像一組工具，每個工具對應一種失手。你可以只拿 <code>/check verify</code> 來驗一個手工改的 bug fix，也可以只拿 <code>/architect</code> 來想清楚一個決定。</p>
+
+<p>第三個混淆，是以為 review 可以取代 verify，或反過來。它們看的是不同的東西：verify 看行為，review 看程式碼。兩個都看過，你對這次改動的掌握才比較完整。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-在既有碼庫上，workflow 對上問題的方式只有兩步：<strong>先理解，再安全地改</strong>。理解靠 <code>/audit</code> 建出那張缺失的地圖，然後把地圖加上這次任務需要的一小塊交給 agent，而不是要它一次讀完整個 repo。安全地改則靠後續幾個 skill 各管一段：<code>/architect</code> 決策前先讀現況、<code>/develop</code> 先讀再寫並沿用既有模式、<code>/check verify</code> 在真實 App 內證明沒破壞行為、<code>/check review</code> 交給第二個模型複審。它的重點是把「猜」換成「讀」，把「自由發揮」換成「邊界、證據與審查」。
+舊碼庫的工作順序只有兩步：先理解，再安全地改。<code>/audit</code> 把 why 寫成 <code>AGENTS.md</code> 地圖，讓 agent 有東西可讀；<code>/architect</code> 在 ENHANCEMENT 模式下先讀現況才給選項；<code>/develop</code> 用「每個值都要有來源」的 gate 擋住猜測，必要時把假設寫成 <code>Assumed</code> spec；<code>/check verify</code> 在真的 App 裡證明行為沒壞；<code>/check review</code> 換一個模型補上作者的盲點。順序不能顛倒，但也不必每次全跑：第一次進場建地圖，之後沿著地圖走，只挑這次改動需要的 skill。
 </blockquote>
 
-<p>不過這套 workflow 有一條界線它自己跨不過去：它管的是「agent 怎麼工作」。至於哪些公司的資訊可以讓模型看見、什麼東西能離開組織，則是另一組設定與政策在管。下一節就要把這條界線畫清楚——因為在你把真實碼庫交出去之前，這是最後一個、也最不能被略過的決定。</p>
-
 <div class="lesson-nav">
-  <div><a href="./two-risk-directions.html">← 上一步：兩個風險方向：agent 放進來的、你交給它的</a></div>
+  <div><a href="./two-risk-directions.html">← 上一步：兩個風險方向</a></div>
   <div><a href="./who-decides-what-leaves.html">下一步：誰決定什麼能離開公司 →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="面對既有碼庫，workflow 把工作收束成哪兩步？" data-correct="1" data-explain="先理解系統現在是什麼，再安全地改它。">
-  <button class="opt">先重寫舊的系統，再開始加新的功能</button>
-  <button class="opt">先理解它，再安全地改它</button>
-  <button class="opt">先部署上線，再回頭補上它的文件</button>
-  <button class="opt">先估好工時，再決定要不要用 AI</button>
+<div class="quiz" data-question="進入一個沒有地圖的舊碼庫，課程建議的第一個動作是什麼？" data-correct="1" data-explain="先用 /audit 建出 AGENTS.md，後面的 skill 才有現況可讀。">
+  <button class="opt">先跑 /develop 改一個小 bug 試水溫</button>
+  <button class="opt">先跑 /audit 把專案脈絡寫成檔案</button>
+  <button class="opt">先跑 /check review 看程式碼品質</button>
+  <button class="opt">先跑 /architect 決定新的技術棧</button>
 </div>
-<div class="quiz" data-question="哪個 skill 負責建出那張 agent 缺失的地圖？" data-correct="3" data-explain="／audit 讀真實程式碼與歷史，寫下架構、慣例、指令與邊界。">
-  <button class="opt">先跑 /develop 把新功能建出來就有了</button>
-  <button class="opt">先跑 /check 在真實 App 裡跑一次就有了</button>
-  <button class="opt">先跑 /scope 把要做的事列成清單就有了</button>
-  <button class="opt">由 /audit 讀真實程式碼與歷史建出來</button>
+
+<div class="quiz" data-question="/architect 在舊碼庫對應的是哪一種模式，它多做什麼？" data-correct="2" data-explain="ENHANCEMENT 模式會先讀現有程式碼與 spec，再做聚焦的選項比較。">
+  <button class="opt">ARCHITECTURE 模式，做大範圍的技術棧評估</button>
+  <button class="opt">FEATURE 模式，從第一原理設計新功能</button>
+  <button class="opt">ENHANCEMENT 模式，先讀現有程式碼與 spec</button>
+  <button class="opt">CROSS-CUTTING 模式，統一全專案的命名</button>
 </div>
-<div class="quiz" data-question="在既有碼庫上，/architect 跟在新專案上最大的不同是什麼？" data-correct="0" data-explain="它會先讀現有實作，服從系統現在怎麼運作，再決定怎麼改。">
-  <button class="opt">做決定之前會先讀現有的實作</button>
-  <button class="opt">完全不讀任何程式碼就直接做決定</button>
-  <button class="opt">改成只負責寫文件而不再做決定</button>
-  <button class="opt">改成由它取代 /develop 直接動手建置</button>
+
+<div class="quiz" data-question="/develop 的 spec gate 用什麼方式判斷「有決定還沒做」？" data-correct="3" data-explain="它列出每個必須產生或顯示的值，逐一檢查 spec 有沒有指明來源。">
+  <button class="opt">請模型自問「我現在是不是在發明東西」</button>
+  <button class="opt">比對這次改動跟上一版程式碼的差異</button>
+  <button class="opt">執行既有的測試，看有沒有失敗的案例</button>
+  <button class="opt">逐一檢查每個必要的值有沒有指定來源</button>
 </div>
-<div class="quiz" data-question="/develop 在既有碼庫上的原則是什麼？" data-correct="2" data-explain="先讀周邊檔案、沿用既有模式，再把改動限制在規格範圍內。">
-  <button class="opt">先寫一套全新的寫法，再想辦法接上舊系統</button>
-  <button class="opt">先把舊的程式碼全部刪掉，再重新實作一次</button>
-  <button class="opt">先讀再寫，並沿用專案裡已經在用的模式</button>
-  <button class="opt">先問使用者喜歡哪種寫法，再照著重寫一遍</button>
+
+<div class="quiz" data-question="為什麼 /develop 要把假設寫成一份 Assumed spec，而不是留在對話裡？" data-correct="0" data-explain="檔案會留在 repo，session 清掉、同事 pull、下一個 agent 進來都還讀得到。">
+  <button class="opt">因為檔案會留下，對話清掉就沒了</button>
+  <button class="opt">因為寫檔案可以讓建置速度變快</button>
+  <button class="opt">因為 spec 會自動通過所有驗收條件</button>
+  <button class="opt">因為對話內容無法被任何模型讀取</button>
 </div>
-<div class="quiz" data-question="/check verify 和 /check review 各別負責什麼？" data-correct="1" data-explain="verify 在真 App 內證明沒破壞行為；review 由第二個模型找作者漏掉的東西。">
-  <button class="opt">verify 負責寫測試；review 負責把測試跑過一遍</button>
-  <button class="opt">verify 在真 App 內證明；review 交給第二個模型</button>
-  <button class="opt">verify 負責建地圖；review 負責把地圖維持最新</button>
-  <button class="opt">verify 負責做決定；review 負責把決定寫成規格</button>
+
+<div class="quiz" data-question="/check verify 跟跑測試最大的差別在哪裡？" data-correct="1" data-explain="verify 把真的 App 跑起來看行為，測試綠不代表行為對，尤其舊路徑常常沒被覆蓋。">
+  <button class="opt">verify 會自動修改程式碼，測試不會</button>
+  <button class="opt">verify 在真的 App 裡看行為，測試只看斷言</button>
+  <button class="opt">verify 只檢查程式碼風格，測試檢查邏輯</button>
+  <button class="opt">verify 由另一個模型執行，測試由作者執行</button>
 </div>
-<div class="quiz" data-question="課程建議，面對大型 repo 時該怎麼交給 agent？" data-correct="0" data-explain="給它專案地圖，加上這次任務真正需要的那一小塊，而不是整個 repo。">
-  <button class="opt">給它專案地圖加上這次任務需要的一小塊</button>
-  <button class="opt">把整個 repo 一次全部塞進它的對話裡讀完</button>
-  <button class="opt">什麼都不給它，讓它自己從零開始摸索</button>
-  <button class="opt">只給它資料夾結構，其他內容一概不提供</button>
+
+<div class="quiz" data-question="為什麼 /check review 要用「沒寫過這段程式」的另一個模型？" data-correct="3" data-explain="同一個模型看自己的輸出一樣有盲點，會同意自己當初的判斷。">
+  <button class="opt">因為另一個模型的授權費用比較便宜</button>
+  <button class="opt">因為另一個模型的執行速度比較快</button>
+  <button class="opt">因為只有另一個模型能讀懂舊程式碼</button>
+  <button class="opt">因為同一個模型會同意自己的盲點</button>
+</div>
+
+<div class="quiz" data-question="下列哪一個順序是錯的，而且會讓 skill 失去作用？" data-correct="2" data-explain="沒有地圖就先做決定，等於在錯的現況上比較選項，後面整條路都會歪。">
+  <button class="opt">/audit → /architect → /develop → verify</button>
+  <button class="opt">/audit → /develop → verify</button>
+  <button class="opt">/architect → /audit → /develop → verify</button>
+  <button class="opt">/audit → /develop → verify → review</button>
 </div>
 
 <div class="footer">
   <p>agentic-engineer · 沒有白紙：Brownfield 的風險 · Step 3/4</p>
-  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>

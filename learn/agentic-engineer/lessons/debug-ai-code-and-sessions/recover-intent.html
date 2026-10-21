@@ -8,128 +8,167 @@
 </head>
 <body>
 
-<h1>還原意圖：從 spec、周邊程式與執行行為找線索</h1>
+<h1>還原意圖：三個地方問「它本來想做什麼」</h1>
 <p class="meta">Step 2/6 · 除錯 AI 寫的碼與救回卡住的 Session</p>
 
 <h2>學習目標</h2>
-<p>從 spec 的驗收條件、周邊程式與執行行為三個地方還原 AI 碼的意圖，並在沒有 spec 時判斷這是「沒做過的決定」而非 bug。</p>
+<p>能用 spec 的驗收條件、周邊程式的慣例、實際執行的行為三處還原一段陌生碼的意圖；並在沒有 spec 時判斷這是「從沒做過的決定」，而不是一個你能修的 bug。</p>
 
-<h2>前言：少了記憶，線索要從別的地方來</h2>
+<h2>前言：你抓到錯誤了，但還不知道它「本來該對」</h2>
 
-<p>上一節我們確認了：面對 AI 寫的碼，你沒有作者記憶，而且「看著它生成」補不上這個缺口。既然當初的意圖不在你腦子裡，那它還能從哪裡來？</p>
+<p>上一節你接受了一件事：這段碼不是你想的，是別人寫的。你也把「這行大概想幹嘛」從前提降級成假設。</p>
 
-<p>答案是有三個地方。它們都不是「問 agent 它當初在想什麼」——那只是又一次叫它生成說法，你無從驗證真假。三個來源都寫在你身邊的檔案與系統裡，可以查、可以比對，也正因為如此，它們可以被驗證。這一節就是帶著你依序走過這三個來源；如果三個都沒有，你會在最後撿到一個比 bug 更重要的東西。</p>
+<p>現在你手上有了一個可重現的失敗：什麼輸入、預期什麼、實際發生什麼。接下來最容易犯的錯，是立刻開始改。因為「壞掉」只告訴你結果不對，沒有告訴你本來應該是什麼。少了後半段，你只能改到某個看起來合理為止，那正是「無法解釋的修好」。</p>
 
-<figure class="lesson-figure"><img src="./recover-intent-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p>這一節是一個還原流程：在動手之前，先把「它被要求做什麼」變成一份有證據的答案。整個流程只用到三個來源，順序有講究，而且最後有一個分支會讓你停手。</p>
 
-<h2>動手前：先確認你查的是哪一種壞</h2>
+<figure class="lesson-figure"><img src="./recover-intent-assets/image-1.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>這一步有前置條件。你面對的必須是第二種壞——agent 寫的程式碼本身出錯——而不是第三種壞——agent 自己卡住了、在那裡打轉。如果症狀是「同一個函式被重複改、越改越亂」，那你要的是後面兩節的內容，不是這一節的還原流程。</p>
+<h2>開始之前：你需要的三樣東西</h2>
 
-<p>另外，能跑起來的環境是必要的。這一節的第三個來源要你實際觀察程式的行為，光讀程式碼看不出來。如果你手上有一份規格或驗收條件，也先把它找出來，它是最重要的那一個。</p>
+<p>先確認你手上有這些材料，沒有的話先補齊，後面的步驟才有東西可比對。</p>
 
-<h2>意圖來源一：讀 spec 的驗收條件</h2>
+<ul>
+<li><strong>一個可重現的失敗</strong>：能說出「做什麼操作、看到什麼錯誤」。如果還不能重現，先回去把重現做出來；不能重現的失敗，你無法判斷最後到底修好了沒。</li>
+<li><strong>失敗的那段程式</strong>：包含它所在的檔案，最好連同同資料夾的鄰居。</li>
+<li><strong>spec，如果存在的話</strong>：不存在的話不是結束，只是後面的路徑不同。</li>
+</ul>
 
-<p>先看 spec。這裡看的不是「它實際上做了什麼」，而是「它當初承諾要做什麼」。原文的措辭很關鍵：驗收條件告訴你的，是這段程式碼當初被要求做到的事，是它的<strong>承諾</strong>，而不是它現在的表現。</p>
+<h2>第一步：把事實與猜測分開</h2>
 
-<p>這個轉換會把你原本模糊的調查，變成一場具體的比較。你不再需要漫無目的地猜哪裡有問題，而是把兩份東西並排：一邊是當初承諾的行為，一邊是實際發生的行為，然後找出中間的落差。落差在哪裡，bug 就在哪裡。</p>
+<p>拿一張紙或一個暫存檔，寫兩欄。左邊只放事實：完整的錯誤訊息、觸發的輸入、你預期什麼、實際觀察到什麼。右邊放猜測：「我覺得它應該是想……」。</p>
 
-<p>這也是前面那一大段「把東西寫下來」的功夫，報酬最低調的一次兌現。平常你會覺得寫下驗收條件很囉唆，但在這裡，它直接把一個沒有方向感的調查，變成一個有明確答案的比對工作。</p>
+<p>這個動作看起來很瑣碎，但它有一個實際作用：讓後面的三個來源有地方放。沒有分欄，你的猜測會混進事實裡，然後在下一步被當成證據引用。</p>
 
-<h2>意圖來源二：讀周邊程式</h2>
+<p>還有一個好處：當你之後找到意圖，你可以回頭看右欄，確認自己原本猜錯在哪。猜錯的地方，往往就是你對這個專案理解最薄的地方。</p>
 
-<p>第二個來源是這段程式碼四周的東西。原文的說法是：周邊程式給你的是「這個檔案当初應該遵循的慣例」。</p>
+<h2>第二步：先找 spec 的驗收條件</h2>
 
-<p>用白話說，就是先看同一份檔案、同一個資料夾裡的其他函式怎麼寫。如果整份檔案都習慣把錯誤往上丟、都用同一個命名風格、都走同一種資料格式，只有你正在看的那一行偏偏不一樣，那個「不一樣」就是一條線索。它不一定就是 bug，但它是一個值得優先檢查的偏離點。</p>
+<p>spec 是三個來源裡最有力的一個，因為它寫的是「它承諾了什麼」，而不是「它做了什麼」。這兩句話的差別，就是整個調查的槓桿。</p>
 
-<p>要注意的是，周邊程式只告訴你「這裡通常怎麼做」，它不會告訴你「你眼前這一行為什麼這樣做」。所以它適合拿來縮小範圍，不適合拿來當成最終答案。</p>
+<p>有了驗收條件，你的調查就從「四處亂看」變成一場比對：這裡是承諾，這裡是實際，找出中間的缺口。缺口就是 bug 的位置。</p>
 
-<h2>意圖來源三：觀察執行行為</h2>
+<p>什麼算驗收條件？一句可以判斷真假的句子。例如「超過 10MB 的檔案回 413，並附上錯誤訊息」可以判真假；「支援檔案上傳」不行，它沒有說多大算太大、失敗要長什麼樣。</p>
 
-<p>第三個來源是實際跑起來的行為。原文的說法是：它給你的，是「實際發生了什麼，而不是程式碼看起來說了什麼」。</p>
+<figure class="lesson-figure"><img src="./recover-intent-assets/image-2.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>這一點很值得停下來想。程式碼「看起來的樣子」和它「實際運作的樣子」經常是兩件事。一段讀起來很合理的判斷，可能因為單位、順序或某個隱藏的轉換而做出完全不同的結果。你讀的是意圖的草稿，執行的才是事實，而比對這兩者，正是找到落差的方法。所以不要只讀，要真的把程式跑起來，看你觀察到什麼。</p>
+<p>如果 spec 只寫得出後者，先把它記下來，然後往下走。這個「規格本身不夠具體」的觀察，晚一點會決定你要不要停手。</p>
 
-<figure class="lesson-figure"><img src="./recover-intent-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<h2>第三步：讀周邊的程式，找出這個檔案該遵守的慣例</h2>
 
-<h2>三個來源的總表</h2>
+<p>Spec 說的是功能承諾，周邊程式說的是風格與結構上的承諾：錯誤怎麼回、驗證放在哪一層、命名怎麼取、哪些事情由 middleware 做。</p>
 
-<table>
-<thead>
-<tr><th>來源</th><th>它給你什麼</th></tr>
-</thead>
-<tbody>
-<tr><td>spec 的驗收條件</td><td>這段程式碼當初被要求做什麼。它與現實之間的落差，就是 bug 所在</td></tr>
-<tr><td>周邊程式</td><td>這個檔案原本應該遵循的慣例。偏離慣例的那一行值得先看</td></tr>
-<tr><td>執行行為</td><td>實際發生了什麼，而不是程式碼看起來說了什麼</td></tr>
-</tbody>
-</table>
+<p>讀的時候問一個問題：「如果照這個檔案鄰居的寫法，這段應該長什麼樣？」</p>
 
-<h2>當三個來源都沒有：你找到的是決定，不是 bug</h2>
+<p>偏離慣例的地方就是嫌疑犯。偏離不一定錯，有時候是刻意的，但它值得你先看。比方說，其他所有端點都在 handler 開頭用 schema 驗證並回 400，只有這一個把驗證塞在資料庫查詢之後；那不管你最後結論是什麼，這個差異都需要一個理由。</p>
 
-<p>現在講那個分岔。很多 AI 寫的碼，根本沒有 spec，這是很誠實、也很常見的答案。這時候如果你在三個來源裡都找不到意圖，你找到的東西比一個 bug 更重要。</p>
+<h2>第四步：跑起來，看它實際做什麼</h2>
 
-<p>原文的邏輯是：一段行為，如果背後沒有一個被記錄下來的決定，那它就不是一個「你可以修好的 bug」。它是一個<strong>從來沒被做過的決定</strong>。在有人先決定「正確應該長什麼樣」之前，你根本無從判斷這段程式碼是對還是錯——因為「對」的標準還沒被定義出來。</p>
+<p>第三步讀的是「程式看起來說了什麼」，這一步看的是「它實際做了什麼」。這兩件事在同步、單純的程式裡通常一致；在非同步、middleware 順序、預設值、錯誤被吞掉的地方，經常不一致。</p>
 
-<figure class="lesson-figure"><img src="./recover-intent-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p>做法不用複雜：用最小的輸入跑一次，在關鍵邊界上加 log 或中斷點，確認流程真的走到你以為的那一行。很多時候你會發現，錯誤根本不在你讀的那個函式裡，而是在它之前就拋出去了。</p>
 
-<p>這種情況不屬於除錯。除錯的前提是有個已知的正確行為可以對照；這裡缺的正是那個正確行為。所以它屬於設計決策的範疇。原文用兩個工具名稱把這個分界講得很清楚：</p>
+<figure class="lesson-figure"><img src="./recover-intent-assets/image-3.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<pre data-source="sources/agentic-engineer/20261014/11. Workflow Find the Root Cause/4. Debugging Code You Didn't Write (9_11_2026 1：51：47 PM).html#debugging-code-you-didnt-write">/debug
-/architect</pre>
+<h2>第五步：三處交叉，寫下一句可推翻的意圖假設</h2>
 
-<p>當你發現「這段行為沒有意圖可還原」，別急著把它硬塞進除錯流程裡改。先退一步，把「正確應該是什麼」這件事決定下來——那才是此刻真正該做的工作。</p>
+<p>把前面三段材料放在一起，寫出一句話，格式固定：「我認為這段碼被要求做 X，因為（證據一）（證據二）（證據三）；如果 Y 成立，這個假設就錯。」</p>
+
+<p>最後那半句很重要。沒有它，你的假設只是一個比較有禮貌的猜測；有了它，你就知道下一個實驗要幹嘛。</p>
+
+<p>看一個示範（以下情境是為說明而設計的，不是來源裡的案例）。某個上傳端點回 500，spec 的驗收條件寫著「超過 10MB 回 413 並附錯誤訊息」。周邊的端點都在 handler 開頭驗證、回 400。實際跑起來，log 顯示錯誤在進到 handler 之前就拋出了。</p>
+
+<pre data-provenance="derived"><code>// 示範：上傳 middleware 先執行，錯誤還沒進到 handler 就發生了
+app.post('/upload', upload.single('file'), (req, res) =&gt; {
+  // 這裡根本還沒被執行，所以 handler 裡的錯誤處理幫不上忙
+})
+</code></pre>
+
+<p>於是你寫下：「我認為大小限制被設在上傳 middleware，而那個 middleware 的錯誤沒有被接住，因為 spec 要求 413、實際回 500，而且錯誤發生在 handler 之前。如果把 limit 調高後仍然回 500，這個假設就錯。」</p>
+
+<p>這句話有承諾、有行為、有位置，而且寫明了怎麼推翻它。到這裡，你才真的可以開始改，而且你會知道要改哪裡、改完要驗什麼。</p>
+
+<h2>分支：三個來源都給不出答案的時候</h2>
+
+<p>有些情況你會走到底，卻發現沒有東西可以比對：沒有 spec、周邊程式沒有相關慣例、執行行為也說不出對錯。這時候你找到的不是 bug。</p>
+
+<p>來源的講法是：一個行為背後沒有被記錄下來的決定，不是你能修的 bug，而是一個從沒被做過的決定。你無法判斷程式對不對，因為「對」長什麼樣還沒有人定義。</p>
+
+<p>這種情況不屬於 <code>/debug</code>，屬於 <code>/architect</code>。</p>
+
+<p>要在當場分辨，問自己一句：「如果把這段改成相反的行為，我能說出哪一個才是對的嗎？」如果答不出來，那就不是除錯問題，是規格問題。硬修下去，你只會得到一個能跑、但沒有人同意它正確的版本。</p>
+
+<figure class="lesson-figure"><img src="./recover-intent-assets/image-4.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>這個分支不是失敗。來源說得很清楚：當你發現沒有意圖可以還原，你找到的東西比 bug 更有價值：你找到的是一個還沒被決定的產品行為，而它遲早要有人決定。</p>
+
+<h2>完成條件與常見失敗</h2>
+
+<p>做完這輪，你應該能拿出下面其中一種結果：</p>
+
+<ul>
+<li>一句「它被要求做什麼」，加上至少兩條來自不同來源的證據。</li>
+<li>一個寫明「什麼情況會推翻它」的假設。</li>
+<li>或者，一個明確的結論：這裡沒有人做過決定，該回到 <code>/architect</code>。</li>
+</ul>
+
+<p>最常見的失敗，是把意圖假設直接當成結論，然後開始改程式。那會讓你繞回上一節講的坑：你修的是自己的理論，不是程式。第二常見的失敗，是在沒有 spec 時硬修，最後得到一個「測試綠了、但沒人說得出為什麼這樣才對」的行為。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-意圖有三個可查的來源：spec 的驗收條件（它承諾了什麼）、周邊程式（它應該遵循什麼慣例）、以及執行行為（它實際做了什麼）。把承諾與實際並排，調查就變成一場找落差的比較。若三個來源都沒有，你找到的不是 bug，而是一個從沒被做過的決定，那不是 /debug 而是 /architect。
+還原意圖靠三個來源：spec 的驗收條件告訴你它承諾了什麼，周邊程式告訴你它該遵守什麼慣例，實際執行告訴你真實發生了什麼。三處交叉之後，寫成一句可推翻的假設，再動手。如果三處都給不出答案，你面對的不是 bug，而是一個從沒被做過的決定，那是 <code>/architect</code> 的工作。
 </blockquote>
 
-<p>現在你有了還原意圖的流程。但要在現場快速認出「這裡不對勁」，你還需要一份辨認清單。下一節會把反覆出現的四種 AI 失敗模式列出來，讓你一眼就能叫出它們的名字。</p>
+<p>有了意圖，你就能判斷「哪裡不對」。但 AI 寫的碼出錯，通常會落在幾種固定的形狀裡。認得那些形狀，你會更快知道第一個該檢查哪裡。下一節把四種模式整理成一張表。</p>
 
 <div class="lesson-nav">
-  <div><a href="./why-ai-code-is-different.html">← 上一步：除錯 AI 寫的碼：為什麼沒有作者記憶</a></div>
+  <div><a href="./why-ai-code-is-different.html">← 上一步：除錯 AI 寫的碼 為什麼沒有作者記憶</a></div>
   <div><a href="./four-failure-patterns.html">下一步：四種 AI 失敗模式與它們的破綻 →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="還原 AI 碼的意圖時，讀 spec 的驗收條件是在找什麼？" data-correct="1" data-explain="驗收條件給的是當初承諾的行為，拿它和實際行為比對就能找到落差。">
-  <button class="opt">它現在實際上究竟做了哪些事情</button>
-  <button class="opt">它當初被要求、承諾要做到什麼</button>
-  <button class="opt">它的作者在寫的時候心裡想什麼</button>
-  <button class="opt">它的執行速度與資源消耗的表現</button>
+<div class="quiz" data-question="為什麼 spec 的驗收條件比其他線索更有力？" data-correct="2" data-explain="它寫的是程式承諾了什麼，讓調查變成「承諾與實際」的比對。">
+  <button class="opt">因為它一定是正確而且最新的文件</button>
+  <button class="opt">因為它會直接指出哪一行程式有錯</button>
+  <button class="opt">因為它寫的是承諾，可與實際比對</button>
+  <button class="opt">因為它比閱讀程式碼節省更多時間</button>
 </div>
-<div class="quiz" data-question="周邊程式能提供哪一種線索？" data-correct="3" data-explain="它告訴你這個檔案原本該遵循的慣例，偏離處值得優先檢查。">
-  <button class="opt">它可以直接證明出錯的那一行就是元凶</button>
-  <button class="opt">它能還原作者當初寫下那行的動機</button>
-  <button class="opt">它可以取代實際跑起來觀察的行為</button>
-  <button class="opt">它顯示這個檔案原本該遵循的慣例</button>
+
+<div class="quiz" data-question="下列哪一句才是可用的驗收條件？" data-correct="1" data-explain="它可以判真假：有門檻、有預期狀態、有回應內容。">
+  <button class="opt">系統要支援使用者上傳檔案</button>
+  <button class="opt">超過 10MB 要回 413 並附錯誤訊息</button>
+  <button class="opt">上傳功能要做得完整而且好用</button>
+  <button class="opt">檔案上傳要符合業界常見做法</button>
 </div>
-<div class="quiz" data-question="為什麼「觀察執行行為」不能只靠讀程式碼代替？" data-correct="2" data-explain="程式碼看起來的樣子與實際運作的樣子常常是兩件事。">
-  <button class="opt">因為執行行為通常比程式碼更難理解</button>
-  <button class="opt">因為讀程式碼會花掉太多時間和心力</button>
-  <button class="opt">因為看起來的樣子與實際運作常不同</button>
-  <button class="opt">因為執行的結果每次都會不太一樣</button>
+
+<div class="quiz" data-question="讀周邊程式的目的主要是什麼？" data-correct="0" data-explain="鄰居透露了錯誤處理、驗證層級與命名等慣例，偏離處就是嫌疑。">
+  <button class="opt">找出這個檔案原本該遵守的慣例</button>
+  <button class="opt">找出哪一位同事寫過類似的功能</button>
+  <button class="opt">確認這個資料夾的測試覆蓋率多高</button>
+  <button class="opt">統計整個專案總共用了幾個套件</button>
 </div>
-<div class="quiz" data-question="如果三個來源都找不到意圖，你該怎麼判斷？" data-correct="0" data-explain="沒有被記錄下來的決定，在定義出正確行為前無法判斷對錯。">
-  <button class="opt">這是一個從沒被做過、需要先定義的決定</button>
-  <button class="opt">這是一個只要多改幾次就一定能修好的 bug</button>
-  <button class="opt">這是一段可以直接刪掉重寫的無用程式碼</button>
-  <button class="opt">這是一個應該交給 agent 自己判斷的小問題</button>
+
+<div class="quiz" data-question="寫意圖假設時，為什麼要附上「如果 Y 成立，這個假設就錯」？" data-correct="3" data-explain="它把假設變成可檢驗的，讓你知道下一個實驗要驗什麼。">
+  <button class="opt">讓假設讀起來比較有學術感</button>
+  <button class="opt">避免同事直接採用你的結論</button>
+  <button class="opt">符合規格文件要求的撰寫格式</button>
+  <button class="opt">讓你知道下一個實驗要驗什麼</button>
 </div>
-<div class="quiz" data-question="為什麼「行為沒被記錄決定」時，不該繼續用除錯流程？" data-correct="1" data-explain="除錯需要一個已知的正確行為可對照，而這裡缺的正是那個標準。">
-  <button class="opt">因為除錯流程的工具在這種情況下無法啟動</button>
-  <button class="opt">因為除錯需要已知的正確行為當作對照</button>
-  <button class="opt">因為除錯只適用於自己親手寫的程式碼</button>
-  <button class="opt">因為除錯的步驟會讓程式碼變得更難讀</button>
+
+<div class="quiz" data-question="三個來源都給不出答案時，為什麼不該繼續修程式？" data-correct="1" data-explain="沒有被決定過的正確行為，你無法判斷程式對不對，該先做的是決定規格。">
+  <button class="opt">因為這時候修改一定會產生新的 bug</button>
+  <button class="opt">因為「正確」還沒有人定義，無法驗證</button>
+  <button class="opt">因為沒有 spec 的專案不能執行測試</button>
+  <button class="opt">因為這種情況只能由原本寫它的人修</button>
 </div>
-<div class="quiz" data-question="把承諾與實際行為並排，讓調查產生了什麼改變？" data-correct="3" data-explain="原本沒有方向的調查，變成一場明確找落差的比較。">
-  <button class="opt">讓你能跳過重現問題這個必經步驟</button>
-  <button class="opt">讓你可以直接請 agent 自動修好一切</button>
-  <button class="opt">讓你不用再讀周邊程式與執行行為</button>
-  <button class="opt">讓模糊的調查變成明確的落差比對</button>
+
+<div class="quiz" data-question="要當場判斷「這是 bug 還是沒做過的決定」，最適合問哪一句？" data-correct="2" data-explain="如果改成相反行為你仍說不出哪個對，代表正確行為尚未被決定。">
+  <button class="opt">這段程式碼總共有幾行？</button>
+  <button class="opt">這段程式碼是誰在什麼時候寫的？</button>
+  <button class="opt">改成相反行為時，我能說哪個對嗎？</button>
+  <button class="opt">這段程式碼有沒有對應的單元測試？</button>
 </div>
 
 <div class="footer">

@@ -12,108 +12,158 @@
 <p class="meta">Step 3/5 · 在舊碼庫裡工作：先 audit，再最小變更</p>
 
 <h2>學習目標</h2>
-<p>在已建好地圖的舊碼庫上跑 <code>/scope</code> 規劃一個 slice（existing／planned／deferred、寫進 <code>docs/scope.md</code>），再用 <code>/architect</code> 先讀功能現況、追請求路徑、查誰依賴它，才決定變更要落在哪裡，並守住「看不懂的程式碼不要拆」。</p>
+<p>跑一次舊碼庫版的 <code>/scope</code> 加 <code>/architect</code>：讓 scope 讀地圖、把功能分成 existing／planned／deferred 寫進 <code>docs/scope.md</code>，再讓 architect 追過現有實作與依賴後才決定變更落點，並寫出保留既有行為的 spec。</p>
 
-<h2>前言：動手前，你手上應該有兩份紙</h2>
+<h2>前言：同樣的 skill，這次不能從零開始</h2>
 
-<p>上一節把地圖驗過之後，你已經確定它反映的是真實專案。這一節要做的，是在這個基礎上規劃一次變更——而在你真正打開檔案改程式碼之前，你應該先拿到兩份紙：一份是<strong>這次要做哪個 slice 的規劃</strong>，寫在 <code>docs/scope.md</code>；另一份是<strong>這個 slice 的規格</strong>，寫在 <code>specs/</code> 底下。做完這一步，你會得到這兩份可審閱的文件，而不是散落在對話裡的想法。</p>
+<p>你已經在新專案上用過 <code>/scope</code> 和 <code>/architect</code>。那時候專案是空的，它們的問題是「你想做什麼」、「你想怎麼做」，答案由你提供，它們負責整理成計畫。</p>
 
-<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p>現在情況反過來了。專案裡已經有借書、審核、通知、後台，你要加的是「還書」。如果你讓 agent 從零設計還書流程，它會很合理地生出一套完整的東西：新的資料表、新的 API、新的狀態機。問題是這些東西專案裡大多已經有了，只是散在幾個地方；它再造一份，你就得到兩套平行邏輯，過幾個月開始出現「同一本書在兩個畫面狀態不一樣」這種事故。</p>
 
-<p>動手前你需要先具備幾樣東西：BookWise 的地圖已經建好也驗過了（前一、二節）、該有的 ENV 變數都拿到了，而且你人在這個 repo 裡。準備好之後，就從 <code>/scope</code> 開始。</p>
+<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-1.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>第一步：跑 /scope，它會先讀 audit 的地圖</h2>
+<p>所以這一節的重點不是學會新指令，而是看清楚同一個指令在熟悉的順序裡，行為怎麼變：<code>/scope</code> 先讀地圖、盤點既有功能；<code>/architect</code> 先追現有實作與依賴，才決定變更放哪裡。</p>
 
-<pre data-provenance="derived">scope</pre>
+<h2>開始之前：你應該在什麼狀態</h2>
 
-<p>在它建立計畫之前，<code>/scope</code> 會先讀 <code>/audit</code> 產出的 <code>AGENTS.md</code>。這一步很關鍵：那份地圖給它專案結構、可用指令、慣例，以及任何它必須遵守的警告。少了這份地圖，它就只能靠當下讀到的片段去推測；有了地圖，它一開始就站在「這個專案平常怎麼運作」的基礎上。</p>
+<p>你需要的東西不多：一個已經跑過 <code>/audit</code>、地圖也驗過的 repo；一個新的 Claude Code 視窗；以及可用的 JSM agentic engineering skills。如果 skills 是全域安裝的，開窗就能用；不是的話，得先為這個專案裝一次。</p>
 
-<p>讀完之後，它會接著辨識三件事：這個變更牽涉碼庫裡的哪些部分、工作應該以什麼順序進行、以及這個變更值得多少驗證。預期你會看到它反過來問你一個問題：你想先規劃圖書館 app 的哪一個 slice？</p>
+<p>後面的 demo 還會用到環境變數。這個專案的資料庫與登入都接外部服務，沒有 ENV 跑不起來。理想情況是有人把整份 ENV 交給你，或你自己把它們湊齊。</p>
 
-<h2>第二步：指定 slice——還書與續借流程</h2>
+<h2>第一步：/scope 讀地圖，再問你要規劃哪一塊</h2>
 
-<p>示範裡選的 slice 是還書與續借流程：學生可以歸還借出的書、續借到期日，管理員則能看到更新後的狀態。這次先只做「還書」，把逾期與其他限制先擺到後面。</p>
+<p>在新視窗裡直接跑 <code>/scope</code>，順便把你這次想做的 slice 講清楚。示範裡用的說法是「還書與續借流程」：學生可以歸還借出的書、可以續借延長到期日，管理員看得到更新後的狀態。</p>
 
-<p>你回答之後，它會同時<strong>開始掃描既有碼庫</strong>，把已經做好的功能整理成一份 inventory。預期你會看到一份功能清單回來：目前為止做過的功能都被登錄下來，接著它會繼續問你下一步想做什麼、要用哪一種 build approach。</p>
+<pre data-provenance="derived"><code>/scope
 
-<p>這裡有一個值得記下的行為：它的每一條建議，都是<strong>根據它對這個碼庫的理解</strong>提出來的，而不是憑空推薦。這正是先讀現況的價值。</p>
+# 這次要規劃的 slice（示範說法）
+還書與續借流程：學生可以歸還借出的書、續借延長到期日，
+管理員可以看到更新後的狀態。</code></pre>
 
-<h2>第三步：拿到規劃，寫進 docs/scope.md</h2>
+<p>在它建立任何計畫之前，它會先讀 <code>/audit</code> 產出的 <code>AGENTS.md</code>。這一步是整個舊碼庫流程的關鍵：地圖給了它專案結構、指令、慣例，以及它必須遵守的警告。你在新專案上不會看到這個動作，因為那時候沒有地圖可讀。</p>
 
-<p><code>/scope</code> 會把規劃寫進 <code>docs/scope.md</code>。內容的結構大致長這樣：既有功能被標成 existing，其中有些正在進行中（in progress），所以可以繼續把它們做完；然後它加入一個新的 planned 項目，也就是這次要做的「return a book」。規劃裡也會把這次不做的東西標成 deferred。這裡有個小細節很有意思：新加的 planned 項目編號是「1」，而其他既有的項目編號是用字母，兩者一眼就能分辨。</p>
+<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-2.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p>讀完之後，它做三件事：辨識這次會牽涉到 repo 的哪些部分、判斷工作應該用什麼順序進行、決定這個變更要多少驗證才夠。注意第三項：它不是一律用最重的流程，而是依變更的風險調整。</p>
 
-<pre data-provenance="derived">docs/scope.md
-├── existing   既有功能（有些標為 in progress，可以繼續做完）
-├── planned    1. return a book   ← 這次要做的
-└── deferred   overdue 等先延後，這次不做</pre>
+<p>接著它會問你一個問題：「接下來想規劃圖書館應用裡的哪一塊？」同時，它已經在背景掃描既有程式碼，把「已經建好的功能」盤點出來。這個背景掃描不是為了寫程式，是為了讓後面的計畫知道哪些東西不用重做。</p>
 
-<p>拿到這份規劃後，預期你會做兩件事：先換一個乾淨的 session，再進到架構規劃。示範者把整個節奏講得很清楚——先 <code>clear</code>，再 <code>architect</code>。</p>
+<h2>第二步：回答 scope 的問題，拿到功能盤點</h2>
 
-<pre data-provenance="derived">clear
-architect return a book</pre>
+<p>它會針對你選的 slice 繼續問：這次的範圍包含什麼、什麼先不做、有沒有什麼限制。示範裡的回答很具體：這次只做還書，逾期相關的先延後。</p>
 
-<h2>第四步：/architect 不從零設計，而是先讀功能怎麼運作</h2>
+<p>很快地，它交回一份功能盤點（feature inventory），把目前為止已經存在的功能全部記下來，然後繼續問你下一步想做什麼、想用哪種 build approach。它給的建議是根據自己對這個程式庫的了解推出來的，不是通用最佳實務。建議的品質取決於它讀到多少現況，所以前面才要先 audit。</p>
 
-<p>在一個全新的專案上，<code>/architect</code> 會依照你選的需求與 stack 去設計功能。但在這裡，它的行為完全不同。在提出任何建議之前，它會依序做四件事：</p>
+<p>課程也在這裡補了一個判斷：如果你只是要加一個很小的功能，或改一行字，通常會跳過 <code>/scope</code> 直接進 <code>/develop</code>；但比較大的功能，永遠從 <code>/scope</code> 開始。這個界線在最後一節會再展開。</p>
+
+<h3>產出長什麼樣子</h3>
+
+<p>計畫會寫進 <code>docs/scope.md</code>。它的結構不是待辦清單，而是把整個專案的功能分成三種狀態：已經存在的、進行中的、以及這次新規劃的。示範裡的結果大致像這樣：</p>
+
+<pre data-provenance="derived"><code># docs/scope.md（示意，依 demo 描述整理）
+
+## Existing
+- 註冊與登入（含大學 ID 圖檔上傳）
+- 書籍瀏覽、摘要、借書
+- 管理員審核使用者
+
+## In progress
+- 通知與到期提醒
+
+## Planned
+1. 還書（return a book）
+   - build approach：（你在 scope 時選定的方式）
+   - workflow：（你選定的流程層級）
+
+## Deferred
+- 逾期罰款與相關規則
+- 續借</code></pre>
+
+<p>還有一個小地方很有意思：新規劃的功能編號是 <code>1</code>，其他既有功能是用字母編的。這種編號慣例不是重點，重點是它把「新東西」和「已經存在的東西」在檔案裡明確分開，讓下一個進來的 skill 一眼就知道哪些是既成事實、哪些是待辦。</p>
+
+<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-3.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>計畫完成後，先 <code>/clear</code>，再進 <code>/architect</code>。這個 clear 不是因為上一個對話做壞了，而是要讓 architect 從乾淨的上下文開始，只帶著檔案（地圖、scope、程式碼）進來，而不是拖著 scope 的整段問答。</p>
+
+<h2>第三步：/architect 先追現況，才決定變更放哪</h2>
+
+<p>在新視窗跑 <code>/architect</code>，指定還書這個功能。它開口第一件事不是提議方案，而是給你一個提醒：這個程式庫其實已經具備還書流程需要掛上去的大部分零件，包括 schema 裡的還書狀態、管理員的借閱紀錄、以及提醒流程裡的還書檢查。</p>
+
+<p>接著它列出真正需要你決定的事：還書是學生自助、由管理員操作，還是兩者都支援？後台的下拉選單要不要沿用既有的元件？這些問題不是它偷懶，而是原本就存在於程式碼裡的岔路，只有你能決定要走哪一條。</p>
+
+<p>它同時回報了掃描時看到、但不在這次 slice 裡的問題：書籍與使用者沒有刪除功能；管理員核准或拒絕時，介面聲稱會寄信，但實際上沒有寄；登入相關的文案可能有 sign in 與 sign-in 用字不一致的情況。這些它只記錄，不動手，並註明等那些區域被規劃時再處理。這個行為值得學起來：在舊碼庫裡，你會一直看到「不對但不在這次範圍」的東西，把它記下來是貢獻，順手修掉是風險。</p>
+
+<h3>它的閱讀順序，決定了建議的品質</h3>
+
+<p>在新專案上，architect 是從需求與你選的 stack 設計功能。在這裡，它的順序是固定的：</p>
 
 <ol>
-<li><strong>讀這個功能現在怎麼運作。</strong></li>
-<li><strong>把那個請求追過既有的檔案</strong>，找出它用到哪些資料。</li>
-<li><strong>查出專案裡還有哪些部分依賴它。</strong></li>
-<li><strong>最後才決定這個變更該怎麼放進去。</strong></li>
+<li>先讀這個功能現在怎麼運作。</li>
+<li>把請求沿著現有檔案追下去，找到它用到的資料。</li>
+<li>再查專案裡還有哪些部分依賴它。</li>
+<li>最後才決定這次的變更應該怎麼放。</li>
 </ol>
 
-<p>在這裡，<code>/scope</code> 幫了它一點忙：scope 已經先發現，還書流程需要的多數零件其實<strong>都已經存在</strong>了，只是需要把它們接起來。所以 architect 給出的框是「在你既有 stack 上做 enhancement，不是一個新功能」——它建立在既有的「借書」功能之上，而不是另起爐灶。它也順帶指出：如果跳過 audit、scope、architect，換成其他 agent 來做，很可能會把所有東西從頭造一遍，而且用上版本不合的函式庫。</p>
+<p>這個順序不能顛倒。如果先決定「我要加一個還書 API」，再去檔案裡找地方塞，你就會得到一個跟既有流程平行的新路徑；先追過一輪，你才會發現「其實只要把已經存在的狀態和按鈕接起來」。示範裡 scope 也幫了忙：它在盤點時就已經看出還書流程的零件大多存在，只差把它們接上。</p>
 
-<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-4.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>第五步：回答需求問題，把決定固定下來</h2>
+<p>課程對「不這樣做會怎樣」說得很重：如果沒有 audit、scope、architect，換成任何一個 agent，它大概都會從零把整套東西建出來，而且很可能用上跟專案不一致的函式庫。</p>
 
-<p>architect 會用一串問題把設計收斂。示範裡被問到的包括：誰可以觸發還書（答案是只有 admin）、效果要即時且原子（atomic）嗎、逾期有沒有差別、以及是否只接還書這個動作、還是連狀態下拉選單一起改（答案是只接還書）。</p>
+<h2>第四步：把這次變更框成「增強」，不是「新功能」</h2>
 
-<p>其中有個轉折值得注意：它發現這個動作<strong>沒辦法做到原子</strong>，於是反過來問你是不是要分成兩次做。你同意的話，規格就會照這個決定寫。這些問答存在的目的，不是把功能做得更漂亮，而是<strong>找出「非做不可」的事，避免不必要的修改</strong>。有時候那代表只需要更新一個既有函式，而不是重寫一整塊。</p>
+<p>讀完現況，architect 會先確認 framing：這次是在你既有的 stack 上做增強，不是一個新功能；它建立在既有的「借書」功能之上。這句話不是形式，它會影響後面每一個設計決定。增強意味著沿用、接線、對齊；新功能意味著新建。</p>
 
-<h2>第六步：寫出 spec——它同時說明了界線與證明方式</h2>
+<p>然後進入需求階段，一次問一個關鍵問題。示範裡的答案組合是：只有管理員能觸發還書；效果要立即且原子；逾期與否不影響這次的行為；狀態下拉選單這次只接還書，其他狀態先不動。</p>
 
-<p>需求談完，它會把規格寫進 <code>specs/</code>，示範中的路徑是 <code>specs/1. return a book</code>。這份規格不只是描述最後的功能，它會交代四件事：變更屬於哪裡、哪些既有行為必須維持不變、預期會動到哪些檔案、以及你要如何證明結果。它也附上完整的 build plan、後果，以及後續事項。如果你想把關得嚴一點，也可以拿另一顆模型來交叉檢查這份規格。</p>
+<p>「立即且原子」這個要求馬上遇到現實：它判斷這個流程沒辦法真正做到原子，於是回頭問你「要不要分成兩步做」。你同意。這種來回是正常的，重點是它在寫 spec 之前就把「做不到」講出來，而不是寫進計畫裡假裝做得到。</p>
 
-<pre data-provenance="derived">specs/1. return a book
-├── 變更屬於哪裡
-├── 哪些既有行為必須維持不變
-├── 預期會動到哪些檔案
-└── 你要怎麼證明結果</pre>
+<p>整個過程有一個反覆出現的原則：不要因為「這樣比較乾淨」就把東西全部重寫，先找出「必須做什麼」，不做多餘的修改。有時候這代表只更新一個既有函式；有時候代表在舊實作旁邊新增一份，逐步把呼叫端移過去，等到沒有東西依賴舊路徑之後，才把它移除（這個選擇下一節會細看）。</p>
 
-<p>為什麼規格要交代「既有行為不變」和「證明方式」？因為舊程式碼裡常有一種細節：它的用意第一眼看不出來。一個奇怪的條件可能是在處理好幾年前的某個客戶案例；一個多出來的資料庫查詢，可能只是因為部署環境行為不同；一行看起來多餘的程式碼，可能是在擋另一個服務還在用的 API 合約。這些如果不先寫明「不能動」，很容易在重構時被當成雜訊清掉。</p>
+<table>
+<thead>
+<tr><th>變更碰到什麼</th><th>spec 要多寫什麼</th><th>為什麼</th></tr>
+</thead>
+<tbody>
+<tr><td>已存的資料</td><td>舊資料怎麼繼續運作、需不需要 migration</td><td>資料不能像程式碼一樣說換就換</td></tr>
+<tr><td>重要的 workflow</td><td>新舊行為如何比對、何時讓新版本成為唯一路徑</td><td>需要一段可觀察的並行期</td></tr>
+<tr><td>看不懂但仍在跑的行為</td><td>哪些行為必須保留，以及判斷的依據</td><td>它可能正在保護某個客戶情境或外部契約</td></tr>
+<tr><td>對外的 API 或事件</td><td>呼叫端會受到什麼影響</td><td>另一個服務可能還依賴目前的形狀</td></tr>
+</tbody>
+</table>
 
-<h2>變更落點：先看能不能改現有的，再考慮新增</h2>
+<h2>第五步：讀 spec，然後接受它</h2>
 
-<p>規劃變更落點時，這是一個有分支的判斷：</p>
+<p>需求問完，spec 會寫進 <code>specs/</code> 底下，示範裡是 <code>specs/0001-return-a-book/</code>。在按下接受之前，先自己讀一遍。一份好的舊碼庫 spec 不只描述最終功能，它會交代四件事：</p>
 
 <ul>
-<li><strong>如果更新一個既有函式就夠了</strong>，那就改它，不另起爐灶。</li>
-<li><strong>如果需要在舊實作旁邊新增一份新實作</strong>，那就先讓新舊並存，逐步把呼叫端遷移過去，直到確認沒有東西依賴舊路徑，才把舊的移除。</li>
-<li><strong>如果這個變更會影響到已存的資料</strong>，規格就必須說明既有紀錄會如何繼續運作，以及是否需要 migration。示範裡的 architect 判斷無法原子完成，最後決定分兩次做。</li>
+<li>這次的變更屬於哪裡。</li>
+<li>哪些既有行為必須維持不變。</li>
+<li>哪些檔案預期會被改動。</li>
+<li>你之後要怎麼證明結果是對的。</li>
 </ul>
 
-<p>貫穿這一切的是同一條紀律，課程用一句很直白的話講它：<strong>看不懂它在做什麼的程式碼，就不要拆</strong>。architect 不會因為「一時看不出這段行為為什麼存在」就把它拿掉。它會去讀程式碼、搜尋呼叫者、必要時查歷史，然後把「必須保留」的東西記錄下來。這是你在舊碼庫裡保護既有行為的核心動作。</p>
+<p>第二項「哪些既有行為必須維持不變」是舊碼庫特有的。老程式碼裡常有一些第一眼看不懂的細節：一個奇怪的條件可能是在處理好幾年前的某個客戶情境；一個看起來多餘的資料庫查詢，可能只是因為當時的部署環境行為不同；一行看起來沒用的程式，可能在保護另一個服務仍在使用的 API 契約。</p>
 
-<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-4.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<p>所以 architect 不會因為「一時看不懂它為什麼存在」就把行為移除。它會讀程式碼、搜尋呼叫端、必要時查歷史，然後把「必須保留什麼」寫進 spec。課程用一句話總結這個態度：不要動那些你不確定它在幹嘛的可疑程式碼。</p>
 
-<h2>結尾：做完會看到什麼</h2>
+<figure class="lesson-figure"><img src="./scope-and-architect-on-existing-code-assets/image-5.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>走完這一步，你應該拿到幾樣可驗證的東西：<code>docs/scope.md</code> 裡有一份規劃，把既有功能、這次要做的 planned slice、以及 deferred 的項目分清楚；<code>specs/1. return a book</code> 裡有一份被接受的規格，寫明變更落點、必須不變的行為、會動到的檔案，以及怎麼證明結果；而 scope 也會在規格被接受後更新。</p>
+<p>spec 裡還會有一份完整的 build plan、後果與 follow-up。接受之後，scope 會跟著更新，反映這次 spec 定案後的狀態。到這裡，規劃結束，可以進 <code>/develop</code> 了。</p>
 
-<p>到這裡為止，你都還沒有改任何程式碼。這是有意的：規劃與設計的原理屬於 <code>/scope</code> 與 <code>/architect</code> 的範疇，而「照著規格把程式碼寫出來」是下一步 <code>/develop</code> 的事。先把紙上的東西談清楚，再把刀伸進檔案裡，正是這一節要建立的手感。</p>
+<h2>完成條件與常見失敗</h2>
+
+<p>你可以用三個具體產物確認這一步做完了：<code>docs/scope.md</code> 裡看得到 existing／in progress／planned／deferred 四種分類，而且新功能與既有功能分得開；<code>specs/</code> 底下有一份 spec，寫明了不可變的行為與驗證方式；scope 已同步更新。</p>
+
+<p>最常見的失敗是「scope 只當成形式」：跑了一次，但沒有真的回答那些範圍問題，於是 architect 拿到一個模糊的 slice，只能自己補空白。另一個相反方向的失敗，是讓 architect 把「順便整理一下」也放進計畫，結果 diff 裡混進一堆與還書無關的重構。兩者的修正方式一樣：把這次的邊界說清楚，並且在讀 spec 時檢查「哪些既有行為必須維持不變」這一段有沒有真的寫出來。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-<p>在已建好地圖的舊碼庫上，<code>/scope</code> 會先讀 audit 的 <code>AGENTS.md</code>，問你要規劃哪個 slice，同時掃描既有碼庫做功能 inventory，最後把 existing／planned／deferred 的規劃寫進 <code>docs/scope.md</code>。接著 <code>clear</code> 再跑 <code>/architect</code>；它不從零設計，而是先讀功能現況、把請求追過既有檔案、查誰依賴它，才決定變更落點，並把這次定位成既有 stack 上的 enhancement。需求問題用來收斂決定，規格寫進 <code>specs/</code>，交代變更落點、必須不變的行為、會動到的檔案與證明方式。落點的原則是能改既有函式就改，否則新增在旁、逐步遷移；影響資料就要說明既有紀錄如何繼續運作與是否 migration。而最底線的一條：看不懂的程式碼不要拆。</p>
+在舊碼庫裡，<code>/scope</code> 先讀 audit 產出的地圖，盤點既有功能，把這次的 slice 分成 existing／planned／deferred 寫進 <code>docs/scope.md</code>；<code>/architect</code> 則先讀功能現在怎麼運作、把請求追過現有檔案、查誰依賴它，最後才決定變更放哪裡。它把這次工作框成「既有 stack 上的增強」，寫出保留既有行為、可能需要的 migration、以及如何證明的 spec。這一階段的產物是計畫，不是程式碼。
 </blockquote>
 
-<p>規劃與規格都到位了，接下來才是把刀伸進程式碼。下一節會用 <code>/develop</code>，看它怎麼跟著既有模式動手，把變更收在規格劃定的邊界內，做出一個最小而安全的成果。</p>
+<p>下一步才是真正動手。<code>/develop</code> 會讀周邊檔案、沿用既有模式，並且在換掉舊路徑之前先搜尋所有引用。我們會看它怎麼把改動收在四個檔案裡，完成一個不需要 migration 的還書功能。</p>
 
 <div class="lesson-nav">
   <div><a href="./map-is-evidence-not-truth.html">← 上一步：地圖是證據不是真相：動手前先驗證它</a></div>
@@ -122,41 +172,46 @@ architect return a book</pre>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="/scope 在建立計畫之前，第一件事是做什麼？" data-correct="1" data-explain="它會先讀 audit 產出的 AGENTS.md，取得結構、指令、慣例與警告。">
-  <button class="opt">先打開資料庫，把現有資料抄一份出來</button>
-  <button class="opt">先讀 audit 產出的 AGENTS.md 取得脈絡</button>
-  <button class="opt">先隨機挑一個功能開始寫程式碼</button>
-  <button class="opt">先問你要用哪一顆模型來做這次規劃</button>
+<div class="quiz" data-question="/scope 在建立計畫之前，第一件事為什麼是讀 AGENTS.md？" data-correct="2" data-explain="地圖提供專案結構、指令、慣例與必須遵守的警告，讓計畫建立在現況上。">
+  <button class="opt">因為它要確認檔案有沒有被修改</button>
+  <button class="opt">因為它要先把地圖重新寫一遍</button>
+  <button class="opt">因為它要先取得專案現況與限制</button>
+  <button class="opt">因為它要檢查你有沒有安裝 skills</button>
 </div>
-<div class="quiz" data-question="docs/scope.md 裡用什麼方式區分既有與新規劃的功能？" data-correct="3" data-explain="既有功能編號用字母，新的 planned 項目用數字，一眼可分辨。">
-  <button class="opt">既有功能用紅字，新規劃的功能用藍字</button>
-  <button class="opt">既有功能放檔案上半，新規劃放下半</button>
-  <button class="opt">既有功能不編號，新規劃才需要編號</button>
-  <button class="opt">既有用字母編號，新 planned 用數字編號</button>
+
+<div class="quiz" data-question="docs/scope.md 把功能分成 existing／planned／deferred，主要好處是什麼？" data-correct="1" data-explain="讓下一個進來的 skill 一眼分清什麼是既成事實、什麼是待辦、什麼是先不做。">
+  <button class="opt">讓專案經理可以直接拿去排時程</button>
+  <button class="opt">讓後續 skill 分得清現況與待辦</button>
+  <button class="opt">讓 scope 檔案看起來比較完整</button>
+  <button class="opt">讓 agent 可以跳過 architect 階段</button>
 </div>
-<div class="quiz" data-question="/architect 在舊碼庫上提出建議前的順序是什麼？" data-correct="0" data-explain="先讀功能現況、追請求路徑、查依賴，最後才決定變更該怎麼放。">
-  <button class="opt">先讀現況、追請求路徑、查依賴，再決定落點</button>
-  <button class="opt">先決定落點，再去讀現況與既有相依關係</button>
-  <button class="opt">先寫好程式碼，再回頭補上設計的說明</button>
-  <button class="opt">先問使用者要用什麼函式庫，再開始設計</button>
+
+<div class="quiz" data-question="/architect 在舊碼庫裡的第一個動作是什麼？" data-correct="3" data-explain="先讀功能現在怎麼運作，把請求追過現有檔案、找到資料、查出依賴，最後才決定變更放哪。">
+  <button class="opt">先提出三種架構方案讓你選</button>
+  <button class="opt">先建立新的資料表與 API</button>
+  <button class="opt">先寫一份完整的測試計畫</button>
+  <button class="opt">先讀這個功能現在怎麼運作</button>
 </div>
-<div class="quiz" data-question="規範裡為什麼要寫明「哪些既有行為必須維持不變」？" data-correct="2" data-explain="舊碼裡有些細節用意不明，不先寫明不能被當成雜訊清掉。">
-  <button class="opt">因為這樣可以讓新的程式碼寫得比較快</button>
-  <button class="opt">因為規格需要看起來更完整、更專業</button>
-  <button class="opt">舊碼有些細節用意不明，避免被當雜訊清掉</button>
-  <button class="opt">因為法律規定變更前必須標示所有行為</button>
+
+<div class="quiz" data-question="architect 把這次工作框成「既有 stack 上的增強」，會造成什麼差異？" data-correct="0" data-explain="增強意味著沿用、接線、對齊既有實作，而不是新建一套平行系統。">
+  <button class="opt">它會優先接上既有零件而非新建</button>
+  <button class="opt">它會自動跳過需求訪談階段</button>
+  <button class="opt">它會把既有程式碼全部重寫</button>
+  <button class="opt">它會改用跟專案不同的函式庫</button>
 </div>
-<div class="quiz" data-question="如果變更需要更換既有實作，正確的做法是什麼？" data-correct="1" data-explain="新舊並存、逐步遷移呼叫端，等沒有東西依賴舊路徑後才移除它。">
-  <button class="opt">直接刪掉舊實作，一次把呼叫端全部改好</button>
-  <button class="opt">新舊並存、逐步遷移，確認無依賴才移除舊路徑</button>
-  <button class="opt">保留舊實作不動，另外開一個新專案重做</button>
-  <button class="opt">讓新舊兩條路徑長期並存，不需要移除</button>
+
+<div class="quiz" data-question="spec 裡「哪些既有行為必須維持不變」這一段，為什麼在舊碼庫特別重要？" data-correct="1" data-explain="老程式碼有些細節第一眼看不懂，但可能正保護某個客戶情境或外部契約，不能因為看不懂就移除。">
+  <button class="opt">因為它可以讓 spec 的篇幅更長</button>
+  <button class="opt">因為看不懂的程式可能正在保護契約</button>
+  <button class="opt">因為新功能一定要保留舊介面</button>
+  <button class="opt">因為它可以用來取代測試檔案</button>
 </div>
-<div class="quiz" data-question="「看不懂的程式碼不要拆」在這一節指的是什麼？" data-correct="0" data-explain="不因為一時看不出行為為何存在就移除它，而是讀碼、查呼叫者與歷史，記下必須保留的部分。">
-  <button class="opt">不因為一時看不出用意就移除既有行為</button>
-  <button class="opt">看不懂的檔案就整份刪掉重新寫一份</button>
-  <button class="opt">看不懂的部分一律加上註解再繼續開發</button>
-  <button class="opt">只有作者本人才能修改自己寫的程式碼</button>
+
+<div class="quiz" data-question="掃描時看到「核准時聲稱會寄信但實際沒寄」這種不在本次範圍的問題，較好的處理是？" data-correct="2" data-explain="記錄下來，等那個區域被規劃時再處理；順手修掉會讓 diff 混進無關變更。">
+  <button class="opt">立刻順手修掉，反正只是小問題</button>
+  <button class="opt">把它包進這次 spec 一起做</button>
+  <button class="opt">先記錄，等該區域被規劃再處理</button>
+  <button class="opt">忽略它，因為不在這次 slice 裡</button>
 </div>
 
 <div class="footer">

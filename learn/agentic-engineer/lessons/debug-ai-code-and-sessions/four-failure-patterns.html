@@ -8,117 +8,165 @@
 </head>
 <body>
 
-<h1>四種 AI 失敗模式與它們的破綻</h1>
+<h1>四種 AI 失敗模式：一張對照表與它們的破綻</h1>
 <p class="meta">Step 3/6 · 除錯 AI 寫的碼與救回卡住的 Session</p>
 
 <h2>學習目標</h2>
-<p>認出 Invented function、Plausible but wrong logic、A decision made mid-file、The unconsidered edge case 四種失敗模式，並記住 bug 幾乎不在出錯的那一行。</p>
+<p>能認出 AI 寫碼時四種反覆出現的失敗模式與各自的破綻，並用「bug 幾乎不在出錯的那一行」把調查往前推。</p>
 
-<h2>前言：一份可以叫得出名字的清單</h2>
+<h2>前言：為什麼要背這四個名字</h2>
 
-<p>上一節你學了怎麼把意圖還原出來。但要在現場快速行動，你還缺一份辨認清單：當你盯著一段 AI 寫的碼，能不能一眼看出它「是怎麼壞的」？</p>
+<p>這頁是查閱用的。當你手上有一段 AI 寫的碼出錯，這張表幫你判斷它屬於哪一種失敗，以及第一個該檢查哪裡。範圍限於本課整理的四種模式，不是所有 AI 失敗的窮盡分類；對不上這四種，不代表沒有問題，只代表你要回到上一節的三個來源慢慢找。</p>
 
-<p>值得把這四種模式背下名字，因為看過一次之後，你認出它們的速度會快很多。這一份是查閱用的清單——四個條目、它們各自的破綻，以及一條貫穿全部的通則。它是後面所有除錯判斷的參照點。</p>
+<p>這幾個名字值得記，因為認出來之後，你的第一個動作會完全不同。看到「呼叫不存在的函式」，你去查版本；看到「讀起來很順但結果錯了」，你去餵真實資料。兩者的調查方向幾乎沒有重疊，而搞錯方向，就是你花兩小時卻一無所獲的主因。</p>
 
-<h2>四種模式</h2>
+<figure class="lesson-figure"><img src="./four-failure-patterns-assets/image-1.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>四種模式對照表</h2>
 
 <table>
 <thead>
-<tr><th>模式</th><th>它怎麼壞</th><th>多難抓</th></tr>
+<tr><th>模式</th><th>怎麼壞</th><th>多難抓</th><th>第一個檢查</th></tr>
 </thead>
 <tbody>
-<tr><td>Invented function（發明函式）</td><td>呼叫一個不存在的東西，或是兩版之前才存在的東西</td><td>容易。失敗得很吵</td></tr>
-<tr><td>Plausible but wrong logic（貌似合理的錯誤邏輯）</td><td>讀起來正確、能過審查，遇到真實資料才出錯</td><td>最難。形狀是對的，推理不是</td></tr>
-<tr><td>A decision made mid-file（檔案中途做出的決定）</td><td>嚴格說不算 bug。某個東西被選定了，選它的是生成器，沒人審過</td><td>在它和別的東西衝突之前都看不見</td></tr>
-<tr><td>The unconsidered edge case（沒被考慮到的邊界情況）</td><td>happy path 全部完成，第一個不尋常的輸入就穿過破洞</td><td>餵真實資料進去就容易抓到</td></tr>
+<tr>
+<td>發明出來的函式<br>（invented function）</td>
+<td>呼叫一個根本不存在的東西，或兩版之前才存在的東西</td>
+<td>容易。錯得很大聲</td>
+<td>把錯誤訊息裡的函式名拿去查目前版本的 API</td>
+</tr>
+<tr>
+<td>看似合理但邏輯錯<br>（plausible but wrong logic）</td>
+<td>讀起來正確、review 會過，遇到真實資料才錯</td>
+<td>最難。形狀對，推理不對</td>
+<td>用真實資料跑邊界，而不是只看程式順不順</td>
+</tr>
+<tr>
+<td>檔案中途做的決定<br>（a decision made mid-file）</td>
+<td>嚴格說不是 bug：某個東西被生成器選了，沒有人 review</td>
+<td>在它跟別的東西衝突之前看不見</td>
+<td>問「這個選擇是誰決定的、記在哪裡」</td>
+</tr>
+<tr>
+<td>沒被考慮到的邊界<br>（the unconsidered edge case）</td>
+<td>happy path 完整，第一個不尋常的輸入就從缺口穿過去</td>
+<td>餵真實資料之後就變容易</td>
+<td>列出它沒有處理的輸入，特別是空值與異常格式</td>
+</tr>
 </tbody>
 </table>
 
-<figure class="lesson-figure"><img src="./four-failure-patterns-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<h2>逐項說明</h2>
 
-<h2>逐項描述</h2>
+<h3>發明出來的函式：最容易，也最吵</h3>
 
-<h3>Invented function</h3>
-<p>程式碼呼叫了一個函式，而那個函式在專案裡與套件裡都不存在；或者它曾經存在，但在兩個版本之前就被移除了。這一類的錯誤會直接拋出，錯誤訊息明白指出找不到那個名字，所以它失敗得很吵，抓到不難。</p>
+<p>Agent 呼叫了一個不存在的函式，或某個在舊版本才有、現在已經移除的函式。這種錯誤通常在你第一次執行時就爆開，錯誤訊息直接寫出名字，所以你不需要推理，只需要查證。</p>
 
-<pre data-provenance="derived">// 專案與相依套件裡都找不到這個函式
-const user = await getUserBySessionId(sessionId);</pre>
+<p>示範（不是來源裡的程式）：</p>
 
-<h3>Plausible but wrong logic</h3>
-<p>程式碼讀起來正確，也能通過審查，因為它的形狀是對的——該有的判斷、該有的迴圈、該有的回傳值都在。問題出在形狀內部的推理。它往往要等到真實資料進來才會出錯，所以是最難抓的一種。原文特別點名它是危險的那一個。</p>
+<pre data-provenance="derived"><code>// 示範：目前的 SDK 只有 verify，沒有 verifyToken
+const payload = jwt.verifyToken(token)
+</code></pre>
 
-<h3>A decision made mid-file</h3>
-<p>這一項嚴格說起來不算 bug。某個東西在過程中被選定了，做選擇的是生成器，而且沒有人審過。它一直隱形，直到和專案裡的其他東西產生衝突。它屬於前一節講的那個分岔：一個沒有人記錄下來的決定。</p>
+<p>這種模式的危險不在難查，在於它太好查，容易讓你以為「AI 寫的碼就是這樣，改個名字就好」。修完這一個，下一個可能不是同一種。</p>
 
-<h3>The unconsidered edge case</h3>
-<p>happy path（一般正常輸入會走的路徑）全部完成，看起來功能齊全。但第一個不尋常的輸入進來，就從某個沒被想到的縫隙穿了過去。這一種只要餵真實資料進去，就相對容易抓到。</p>
+<h3>看似合理但邏輯錯：真正危險的那一種</h3>
 
-<h2>共同的破綻</h2>
+<p>它讀起來是對的，review 也會過，因為它的形狀對：命名合理、分層合理、錯誤處理看起來該有的都有。錯的是裡面的推理，而推理不會寫在表面上。</p>
+
+<p>這也是為什麼 review 抓不到它：review 大部分時候在看形狀。真正能抓到的，是拿真實資料跑一次，尤其是那些你平常不會手動輸入的資料。來源特別提醒這一種值得停下來多想，因為它什麼都不會提醒你，直到真實資料提醒你。</p>
+
+<figure class="lesson-figure"><img src="./four-failure-patterns-assets/image-2.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h3>檔案中途做的決定：不是 bug，是沒人 review 的選擇</h3>
+
+<p>Agent 在寫某個檔案的途中，順手選了一個做法：也許是錯誤要回 400 還是 422，也許是時間要用 UTC 還是本地時區，也許是重試三次還是五次。它沒有問你，也沒有記錄下來。</p>
+
+<p>這不是嚴格意義的 bug，因為它不一定錯。它只是「被選了，而且沒有人看過」。所以在它跟別的東西衝突之前，它完全隱形；一衝突，你就會看到一個很難理解的現象：兩段都合理的程式，湊在一起卻不對。</p>
+
+<h3>沒被考慮到的邊界：happy path 看起來完成了</h3>
+
+<p>正常流程從頭到尾都通，於是你會覺得功能做完了。但 agent 只考慮了它看過的情境，第一個不尋常的輸入，例如空陣列、<code>null</code>、超長字串、重複的鍵、時區跨日，就會直接穿過缺口。</p>
+
+<p>這種模式的好消息是：只要你餵真實資料，它通常會自己現形。壞消息是，如果你只跑 happy path 的測試，它會一直躲著。</p>
+
+<h2>共同的破綻：bug 幾乎不在出錯的那一行</h2>
+
+<p>四種模式看起來差很多，但它們指向同一個通則：出錯的那一行，通常只是症狀發作的地方，不是決定出錯的地方。</p>
 
 <blockquote>
-<strong>Bug 幾乎從來不在出錯的那一行。</strong>它在更早、某個沒有人寫下來的決定裡。
+The bug is almost never in the line that failed. It's in a decision made earlier that nobody wrote down.
 </blockquote>
 
-<p>所以你的調查要比查自己的碼時多帶一個問題：<strong>這件事，當初到底有沒有被決定過？</strong></p>
+<p>所以你的調查要多帶一個問題，而這個問題你除錯自己的碼時幾乎不會問：<strong>「這件事有沒有被決定過？」</strong></p>
 
-<p>這一句就是整份清單的通則。出錯的那一行只是症狀露出來的地方；真正的原因通常埋在上游某個沒被記錄的選擇裡。這也是為什麼前面要不厭其煩地回頭還原意圖，而不是盯著錯誤訊息那一行猛看。</p>
+<p>這個問題會把你從錯誤訊息那一行，往上游到更早的地方：一個錯誤的假設、一個沒人 review 的選擇、一個被忽略的輸入條件。它也是上一節那個分支的入口。如果答案是真的沒有人決定過，那你需要的不是修程式，是先把決定做出來。</p>
 
-<figure class="lesson-figure"><img src="./four-failure-patterns-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<figure class="lesson-figure"><img src="./four-failure-patterns-assets/image-3.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>相關章節</h2>
+<h2>怎麼用這張表：兩個最小例子</h2>
 
-<p>要實際操作「怎麼把意圖還原出來、怎麼判斷要不要繼續除錯」，看第 2 步〈還原意圖〉；要理解為什麼 AI 寫的碼沒有作者記憶、這件事差在哪，看第 1 步〈除錯 AI 寫的碼：為什麼沒有作者記憶〉。</p>
+<p><strong>例子一。</strong>錯誤訊息是 <code>TypeError: encryptPassword is not a function</code>。屬於發明出來的函式。第一個動作：查目前版本有沒有這個函式、正確的名字是什麼。不用讀完整個檔案。</p>
+
+<p><strong>例子二。</strong>沒有錯誤訊息，但使用者說「有時候結帳金額會多一塊」。程式讀起來完全正確。屬於看似合理但邏輯錯，或沒被考慮到的邊界。第一個動作：找出「有時候」的共同條件，用真實的訂單資料跑一次，而不是繼續讀程式。</p>
+
+<p>兩個例子裡，你先分類，再決定第一個檢查。分類錯了不會世界末日，但你會多繞一段路。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-四種模式是：發明函式（吵，好抓）、貌似合理的錯誤邏輯（形狀對、推理錯，最難）、檔案中途做出的決定（不算 bug，衝突前隱形）、沒被考慮到的邊界情況（用真實資料就抓得到）。四者共用同一條破綻：出錯的那一行幾乎從來不是原因，真正的原因在更早、某個沒被寫下來的決定。
+四種模式：發明出來的函式（大聲、好查）、看似合理但邏輯錯（最難，形狀對推理錯）、檔案中途做的決定（不是 bug，是沒人 review 的選擇）、沒被考慮到的邊界（happy path 完整，真實資料一餵就破）。共同破綻是：bug 幾乎不在出錯的那一行，而在更早、沒有人寫下來的某個決定。所以調查要多問一句「這件事有沒有被決定過」。
 </blockquote>
 
-<p>到這裡，第二種壞——AI 寫的碼出錯——就講完了。接下來要換一條線：當壞掉的不是程式碼，而是 agent 本身。它會用一種很不一樣的方式失控，下一節先教你怎麼認出它。</p>
+<p>想理解這四種模式為什麼會出現，回到<a href="./why-ai-code-is-different.html">上一步</a>談的作者記憶；想知道實際怎麼一步步還原意圖，看<a href="./recover-intent.html">還原意圖</a>。如果四種都不像，而且 agent 開始重複同樣的動作，那可能不是程式碼的問題。下一節換一個對象：agent 本身。</p>
 
 <div class="lesson-nav">
-  <div><a href="./recover-intent.html">← 上一步：還原意圖：從 spec、周邊程式與執行行為找線索</a></div>
-  <div><a href="./recognizing-the-loop.html">下一步：認出 agent 在打轉：迴圈與幻覺的差別 →</a></div>
+  <div><a href="./recover-intent.html">← 上一步：還原意圖 從 spec、周邊程式與執行行為找線索</a></div>
+  <div><a href="./recognizing-the-loop.html">下一步：認出 agent 在打轉 迴圈與幻覺的差別 →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="哪一種失敗模式因為「形狀對、推理錯」而最難抓？" data-correct="2" data-explain="它讀起來正確、能過審查，要到真實資料進來才出錯。">
-  <button class="opt">發明函式呼叫了不存在的東西</button>
-  <button class="opt">沒被考慮到的邊界情況穿過破洞</button>
-  <button class="opt">貌似合理但推理錯誤的邏輯</button>
-  <button class="opt">檔案中途由生成器做出的決定</button>
+<div class="quiz" data-question="哪一種失敗模式最難被 code review 抓到？" data-correct="2" data-explain="它的形狀與命名都合理，review 看表面看不出推理錯誤，只有真實資料會暴露。">
+  <button class="opt">發明出來的函式，因為名字很難記</button>
+  <button class="opt">沒被考慮到的邊界，因為完全沒有錯誤</button>
+  <button class="opt">看似合理但邏輯錯，因為形狀是對的</button>
+  <button class="opt">檔案中途做的決定，因為它一定會衝突</button>
 </div>
-<div class="quiz" data-question="「檔案中途做出的決定」為什麼嚴格說不算 bug？" data-correct="1" data-explain="它是個沒被記錄的選擇，要等和別的東西衝突才會現形。">
-  <button class="opt">因為它的錯誤訊息永遠不會被觸發</button>
-  <button class="opt">因為它是沒被記錄、尚未定義的選擇</button>
-  <button class="opt">因為生成器已經自動替它寫了測試</button>
-  <button class="opt">因為它在檔案裡的位置比較不明顯</button>
+
+<div class="quiz" data-question="「檔案中途做的決定」為什麼嚴格說不算 bug？" data-correct="1" data-explain="它不一定錯，只是被生成器選了、沒有人 review，直到與其他東西衝突才顯現。">
+  <button class="opt">因為它一定會在編譯時期被擋下來</button>
+  <button class="opt">因為它不一定錯，只是沒人 review 過</button>
+  <button class="opt">因為它只會出現在測試檔案裡面</button>
+  <button class="opt">因為它是由人類工程師親自決定的</button>
 </div>
-<div class="quiz" data-question="哪一種模式只要餵入真實資料就相對容易抓到？" data-correct="3" data-explain="happy path 完整，第一個不尋常的輸入就會從縫隙穿過。">
-  <button class="opt">呼叫了兩版之前才存在的函式</button>
-  <button class="opt">讀起來正確卻推理錯誤的邏輯</button>
-  <button class="opt">在檔案中途被悄悄選定的決定</button>
-  <button class="opt">沒被考慮到、穿過破洞的邊界情況</button>
+
+<div class="quiz" data-question="遇到「沒被考慮到的邊界」時，最有效的第一個動作是什麼？" data-correct="3" data-explain="這種模式在 happy path 躲得很好，餵真實與異常資料就會現形。">
+  <button class="opt">把整個函式重寫一遍以確保乾淨</button>
+  <button class="opt">先查這個函式在舊版本是否存在</button>
+  <button class="opt">增加更多註解說明原本的意圖</button>
+  <button class="opt">餵它真實與異常的輸入資料</button>
 </div>
-<div class="quiz" data-question="這份清單的通則是什麼？" data-correct="0" data-explain="出錯的那一行是症狀露出的地方，原因在更早沒被寫下的決定。">
-  <button class="opt">bug 幾乎不在出錯那行，而在更早的決定</button>
-  <button class="opt">bug 幾乎都出現在最複雜的那幾行</button>
-  <button class="opt">bug 幾乎都能靠錯誤訊息直接指出來</button>
-  <button class="opt">bug 幾乎都出現在檔案最開頭的設定</button>
+
+<div class="quiz" data-question="四種模式共同的破綻是什麼？" data-correct="0" data-explain="出錯的那一行通常只是症狀，真正的問題在更早、沒有被記錄下來的決定。">
+  <button class="opt">錯通常不在出錯那一行，而在更早的決定</button>
+  <button class="opt">錯一定發生在非同步的程式碼裡面</button>
+  <button class="opt">錯一定來自套件版本沒有鎖定</button>
+  <button class="opt">錯通常出現在測試檔而不是產品碼</button>
 </div>
-<div class="quiz" data-question="面對 AI 寫的碼，調查要多帶哪一個問題？" data-correct="2" data-explain="多問「這件事當初有沒有被決定過」，才能找到上游沒寫下的選擇。">
-  <button class="opt">這一行程式碼的執行速度夠快嗎</button>
-  <button class="opt">這一段是不是該整段砍掉重寫</button>
-  <button class="opt">這件事當初到底有沒有被決定過</button>
-  <button class="opt">這個函式是不是該換一個名字</button>
+
+<div class="quiz" data-question="看到 TypeError: foo is not a function，最符合哪一種模式？" data-correct="2" data-explain="呼叫了不存在或已被移除的函式，屬於發明出來的函式。">
+  <button class="opt">看似合理但邏輯錯</button>
+  <button class="opt">沒被考慮到的邊界</button>
+  <button class="opt">發明出來的函式</button>
+  <button class="opt">檔案中途做的決定</button>
 </div>
-<div class="quiz" data-question="Invented function 這一類的失敗有什麼特徵？" data-correct="1" data-explain="它會直接拋出找不到名稱的錯誤，失敗得很吵，因此好抓。">
-  <button class="opt">它安靜地算錯，只有真實資料會發現</button>
-  <button class="opt">它失敗得很吵，錯誤訊息直接指出來</button>
-  <button class="opt">它要等到和別的模組衝突才現形</button>
-  <button class="opt">它只在特定的邊界輸入下才出錯</button>
+
+<div class="quiz" data-question="「這件事有沒有被決定過？」這個問題的作用是什麼？" data-correct="1" data-explain="它把調查從出錯的那一行往上推，找出更早的假設或沒人 review 的選擇。">
+  <button class="opt">確認這段程式碼的作者到底是誰</button>
+  <button class="opt">把調查從症狀推到更早的決定</button>
+  <button class="opt">判斷這個 bug 應該由誰負責修</button>
+  <button class="opt">檢查專案有沒有使用版本控制</button>
 </div>
 
 <div class="footer">

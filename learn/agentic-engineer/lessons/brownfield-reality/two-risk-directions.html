@@ -3,140 +3,166 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>兩個風險方向：agent 放進來的、你交給它的</title>
+<title>兩個風險方向</title>
 <link rel="stylesheet" href="../assets/shared.css">
 </head>
 <body>
 
-<h1>兩個風險方向：agent 放進來的、你交給它的</h1>
+<h1>兩個風險方向</h1>
 <p class="meta">Step 2/4 · 沒有白紙：Brownfield 的風險</p>
 
 <h2>學習目標</h2>
-<p>分辨在舊碼庫上用 AI 的兩個風險方向——agent 放進專案裡的東西，以及你交給 agent 的東西——並說明為什麼這是商業與安全決策，不只是寫程式決策。</p>
+<p>分別列出「agent 放進專案」與「你交給 agent」兩個方向的風險，並說明為什麼在舊碼庫上用 AI 同時是商業與安全決策。</p>
 
-<h2>前言：安全的問題有兩個門</h2>
+<h2>前言：你只盯著 diff 看</h2>
 
-<p>上一節我們看到 agent 在舊碼庫失手的根因：它沒有地圖，只能猜。但那還只解釋了「改出來的東西可能不對」。真正的公司在意的，往往不只對不對，還包括「有沒有東西跑錯方向」。</p>
+<p>你把一個 bug 的描述貼進對話框，順手附上三個檔案的內容、一段正式環境的錯誤 log，還有一張客戶回報的截圖。agent 開始跑，你盯著它產出的 diff，一行一行看有沒有寫錯。半小時後改動完成，測試過了，你覺得這次合作很順利。</p>
 
-<p>想像公司大樓的兩道門。一道是進貨門，所有東西從這裡進來；另一道是出貨門，所有東西從這裡出去。多數人談 AI 風險時只盯著其中一道，另一道卻常常沒人看。而在舊碼庫上用 AI，剛好兩道門同時開著。</p>
+<p>整個過程裡，你檢查的是「它放進專案裡的東西」。但你剛剛還做了另一件事：你把公司系統的程式碼、含客戶資料的 log、以及一張有客戶姓名的截圖，交出去了。這件事沒有 diff 可以看，沒有 review 畫面，也不會出現在 PR 裡。</p>
 
-<figure class="lesson-figure"><img src="./two-risk-directions-assets/image-1.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<figure class="lesson-figure"><img src="./two-risk-directions-assets/image-1.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<p>這一節就把這兩道門分開講清楚。看清楚之後，你會發現「在真實碼庫上用 AI」根本不是單純的寫程式決定。</p>
+
+<p>上一節說 agent 會因為沒有地圖而猜錯。這一節要把「風險」拆成兩個方向，因為它們的成因、看不看得見、該用什麼方法處理，完全不一樣。只盯其中一個方向，你會覺得自己管住了風險，其實只關了一半的門。</p>
 
 <h2>方向一：agent 放進專案裡的東西</h2>
 
-<p>第一個風險方向，是 agent 往你的專案裡加進了什麼。常用的 coding agent 會寫程式碼、改設定、動資料庫與權限，所以它有機會在不經意之間放入這些東西：</p>
+<p>第一個方向是你最熟悉的：它寫出來的程式碼。課程列了四種具體情況：引入不安全的程式碼、把金鑰暴露出去、放寬一條存取規則、做出一個沒有人批准的重要決定。</p>
 
-<ul>
-<li>不安全的程式碼，例如沒有檢查輸入、或用了已知有問題的寫法。</li>
-<li>外洩的密鑰，例如把一組金鑰直接寫死在原始碼裡，然後被 commit 進版控。</li>
-<li>被放寬的存取規則，例如原本該擋的權限被順手打開了一點。</li>
-<li>沒人批准的重要決定，例如它自己選了一個服務架構或資料模型，而那個選擇從此留在系統裡。</li>
-</ul>
+<p>這四種情況有一個共同點：<strong>它們都會留下痕跡</strong>。程式碼在 diff 裡，設定檔在 commit 裡，決定寫在某個 spec 或某段對話裡。痕跡不代表你一定看得到，但至少有一個東西可以給你檢查。</p>
 
-<p>這些東西的共同點是：當下看起來都像「順手做的小事」，但每一個都會留在專案裡，跟著之後的每一次部署活下去。在你自己專案上，這頂多讓你不舒服；在公司專案上，它會變成一個沒人記得為什麼存在的風險點。</p>
+<p>看一個具體例子。假設 agent 在修一個付款頁的錯誤，發現前端讀不到金鑰，於是「順手」把變數名稱改了一下，讓它在前端也拿得到：</p>
 
-<figure class="lesson-figure"><img src="./two-risk-directions-assets/image-2.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<pre data-provenance="derived"><code>// lib/payments.ts
+// agent 為了讓前端讀得到金鑰，把變數改成 NEXT_PUBLIC_ 開頭
+export const stripeKey = process.env.NEXT_PUBLIC_STRIPE_SECRET_KEY;
 
-<p>值得注意的是，workflow 本身對其中一類已經內建了防線。例如在處理外部服務時，它規定密鑰要從環境讀取，而不是寫進程式碼：</p>
+export function getCheckoutSession() {
+  return loadStripe(stripeKey);
+}</code></pre>
 
-<pre data-source="sources/agentic-engineer/20261014/skills/docs/workflow-guide.md#stage-5-build-it">- It wires any outside service the spec chose, reads secret keys from the environment rather than writing them into the code, and adds logging at the edges.</pre>
+<p>這是一段示範，不是課程 repo 裡的檔案。請注意 agent 在這一步達成了什麼：它讓前端拿得到金鑰，錯誤消失了，功能正常了。它沒有判斷的是「這個值該不該給前端」。在 Next.js 這類框架裡，<code>NEXT_PUBLIC_</code> 開頭的環境變數會被內嵌進送到瀏覽器的程式碼，任何訪客打開開發者工具都看得到。修好了一個顯示錯誤，換來一把公開的金鑰。</p>
 
-<p>這條規則管的是「進貨門」：它降低 agent 把密鑰寫進去的機會。但它管不到後面要講的另一道門。</p>
+<p>這就是方向一的典型長相：改動本身有明確的目標，也真的達成了目標，但代價落在目標之外。agent 不會自動知道「這把 key 的權限有多大」、「被放寬的這條規則原本在擋誰」。</p>
+
+<figure class="lesson-figure"><img src="./two-risk-directions-assets/image-2.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
 
 <h2>方向二：你交給 agent 的東西</h2>
 
-<p>第二個方向反過來：不是 agent 放進來什麼，而是你把什麼交出去。當一個 agent 服務在遠端跑，你送進去的內容會經過供應商。在真實專案裡，你交出去的可能是：</p>
+<p>第二個方向是反過來的：原始碼、憑證、客戶資料、私有的商業邏輯，可能離開你的組織。會不會離開、離開多少，取決於你用的工具與設定。</p>
 
-<ul>
-<li>原始碼——整包私有邏輯。</li>
-<li>憑證——金鑰、權杖、連線字串。</li>
-<li>客戶資料——真實使用者的姓名、聯絡方式、任何個資。</li>
-<li>私有商業邏輯——那些「為什麼這個服務有三個版本」之類的內部知識。</li>
-</ul>
+<p>這個方向容易被忽略，是因為它<strong>沒有產物</strong>。方向一至少有個 diff，你可以叫同事一起看；方向二發生在對話框裡，貼出去就貼出去了，沒有 review 畫面，也不會有人幫你留下稽核紀錄。如果那個工具的政策允許保留或使用你的輸入，那些內容就不只是「經過」而已。</p>
 
-<p>這些東西會不會離開你的組織、離開之後被怎麼處理，取決於你用哪個工具、以及你的帳號與環境怎麼設定。換句話說，這一方向的閘門不在 workflow 手上，而在你的供應商選擇與公司政策手上。</p>
+<p>還有一個更細的地方：很多人以為「我沒有貼客戶資料」就安全了。但一段正式環境的錯誤 log 可能含 email、訂單編號、內部服務名稱；一張除錯截圖可能含客戶姓名與金額；一段「幫我看看這個定價邏輯」的 prompt，可能就把公司還沒公開的商業規則整段送出去。這些東西單看都不像機密，合起來就是一份情報。</p>
 
-<figure class="lesson-figure"><img src="./two-risk-directions-assets/image-3.png" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+<figure class="lesson-figure"><img src="./two-risk-directions-assets/image-3.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
 
-<h2>一張表看清兩個方向</h2>
+
+<h2>把兩個方向放在一起看</h2>
+
+<p>這兩個方向的差別，用一張表固定下來比較清楚，也決定你後面遇到問題時該找哪一層。</p>
 
 <table>
 <thead>
-<tr><th></th><th>方向一：agent 放進來的</th><th>方向二：你交給 agent 的</th></tr>
+<tr><th></th><th>方向一：agent 放進專案</th><th>方向二：你交給 agent</th></tr>
 </thead>
 <tbody>
-<tr><td>具體例子</td><td>不安全程式碼、外洩密鑰、放寬的存取規則、未批准的決定</td><td>原始碼、憑證、客戶資料、私有商業邏輯</td></tr>
-<tr><td>風險流向</td><td>從 agent 流向你的專案</td><td>從你的組織流向供應商</td></tr>
-<tr><td>主要防線</td><td>workflow 的流程與審查（例如先建地圖、先讀再寫、第二個模型複審）</td><td>供應商、帳號設定、公司政策與安全要求</td></tr>
-<tr><td>誰該做決定</td><td>你與你的團隊</td><td>你的公司與資安要求</td></tr>
+<tr><td>具體例子</td><td>不安全的程式碼、外洩的金鑰、被放寬的存取規則、沒被批准的決定</td><td>原始碼、憑證、客戶資料、私有商業邏輯</td></tr>
+<tr><td>發生的時刻</td><td>它產生改動的時候</td><td>你貼上、授權、開權限的時候</td></tr>
+<tr><td>看不看得見</td><td>有 diff，可以逐行審</td><td>沒有 diff，通常沒有紀錄</td></tr>
+<tr><td>誰能管</td><td>workflow：review、verify、spec gate</td><td>供應商、帳號設定、公司政策、安全要求</td></tr>
+<tr><td>最壞的情況</td><td>上線後才發現行為被破壞</td><td>資料出去之後收不回來</td></tr>
 </tbody>
 </table>
 
-<p>把兩欄放在一起看，就會發現它們的性質完全不同。左邊那欄是「工程品質」問題：這裡寫得對不對、有沒有違反既有規則，可以靠流程與審查慢慢收緊。右邊那欄是「治理」問題：東西該不該交出去、交出去之後誰負責，這不是把程式寫好就能解決的。</p>
+<p>表格右邊那一欄的「誰能管」，是這一節最需要記住的一格。workflow 是一組在 repo 裡工作的 skill，它讀程式碼、寫文件、跑檢查。它看得到你的 <code>AGENTS.md</code>，看不到你的合約條款、帳號方案、公司資安規範。所以方向一它可以壓得很低，方向二它幾乎碰不到。</p>
 
-<h2>所以這是商業與安全決定</h2>
+<h2>為什麼這是商業決策，不只是寫程式的決定</h2>
 
-<p>課程下的結論很直接：在真實碼庫上用 AI，是一個<strong>商業與安全的決定，不只是寫程式的決定</strong>。因為它同時牽涉到「改壞東西要付出的成本」（方向一），以及「資訊離開組織要付出的代價」（方向二）。前者影響交付，後者影響的是信任、合約與法規。</p>
+<p>課程用一句話定調：在真實的程式庫上使用 AI，是一個商業與安全的決定，不只是寫程式的決定。</p>
 
-<p>這個區分之所以重要，是因為它會決定你該去問誰。純粹的程式問題，你可以自己判斷；但「哪些公司資訊能讓模型看見」，你通常得回去問公司的資安政策或法遵要求，而不是自己想辦法。</p>
+<p>原因很直接。方向一失控，你損失的是系統穩定性與開發時間；方向二失控，你損失的可能是客戶對你的信任、一份合約、或一項還沒發布的產品優勢。這些事情的決定權通常不在工程師手上，而在法務、資安、採購與管理層手上。所以「我們可不可以在這個專案用 AI」這個問題，光問工程團隊是答不完整的。</p>
+
+<p>反過來說，這也解釋了為什麼很多公司明明買了企業版工具，工程師還是覺得綁手綁腳：企業版處理的是方向二的一部分（例如資料處理條款、租戶隔離），它不會讓 agent 突然看懂你的舊系統，方向一的風險還是得靠 review 與 verify。</p>
+
+<h2>兩個方向之間有一個張力</h2>
+
+<p>兩個方向之間還有一個很容易漏掉的連動。上一節說，要讓 agent 不亂猜，就要給它 why。而給 why 最具體的做法，就是餵更多脈絡：更多檔案、更多 log、更多資料庫欄位、更多客戶回報。</p>
+
+<p>於是你在做一個交換：<strong>給得越多，方向一的風險越低，方向二的風險越高</strong>。這不是二選一，中間有一條線要畫。畫線的依據不是你當下的方便，而是這些內容能不能離開組織，以及離開之後有沒有辦法補救。</p>
+
+<figure class="lesson-figure"><img src="./two-risk-directions-assets/image-4.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+
+<p>這條線的判斷方法，要到最後一節才會完整展開。現在你只要先接受一件事：這兩個方向不是同一個問題的兩種說法，它們是兩個不同的問題，需要兩套不同的控制手段。</p>
+
+<h2>容易搞混的地方</h2>
+
+<p>第一個常見的混淆，是把「有做 code review」當成風險已經處理完。review 看的是 diff，它很擅長抓方向一，對方向二幾乎無能為力。你把客戶資料貼出去的那一刻，review 還沒開始。</p>
+
+<p>第二個混淆，是把「工具很安全」當成「用法很安全」。同一個工具，用公司的企業帳號、關掉資料保留、只在核准的環境裡跑，跟用個人免費帳號、把整包 repo 上傳，是兩種完全不同的風險。工具本身不會替你決定怎麼用。</p>
+
+<p>第三個混淆，是覺得方向二「反正已經偶爾在用了」。偶爾為之、沒有人記錄、沒有人核准，正是它最危險的地方，因為組織不知道自己的資料去過哪裡，出事時也無法回答。</p>
 
 <h2>小結</h2>
 
 <blockquote>
-在舊碼庫上用 AI，有兩個方向的風險要分開看。<strong>方向一</strong>是 agent 放進專案裡的東西：不安全的程式碼、外洩的密鑰、被放寬的存取規則、沒被批准的決定——這靠 workflow 的流程與審查來管。<strong>方向二</strong>是你交給 agent 的東西：原始碼、憑證、客戶資料、私有商業邏輯——這靠供應商選擇、帳號設定、公司政策與安全要求來管。因為兩者同時存在，所以這是一個商業與安全的決定，不只是寫程式的決定。
+在舊碼庫上用 AI，風險有兩個方向。方向一是 agent 放進專案裡的東西：不安全的程式碼、外洩的金鑰、被放寬的存取規則、沒被批准的決定，這些會留下 diff，可以用 review 與 verify 管。方向二是你交給 agent 的東西：原始碼、憑證、客戶資料、私有商業邏輯，這些沒有 diff、沒有 review 畫面，會不會離開取決於供應商、帳號設定與公司政策。兩個方向的控制手段不同，所以「在舊碼庫上用 AI」從來不只是寫程式的決定，它同時是商業與安全的決定。
 </blockquote>
-
-<p>分清了兩個方向，下一節就可以回來看 workflow 到底修好了什麼。它主要治的是方向一：用「先理解、再安全地改」把 agent 從猜測變成有地圖、有邊界、有證據的工作方式。至於方向二，workflow 自己跨不過去，那是再下一步要談的界線。</p>
 
 <div class="lesson-nav">
   <div><a href="./why-agents-fail-on-legacy.html">← 上一步：agent 為什麼在舊碼庫失手</a></div>
-  <div><a href="./workflow-understand-then-change.html">下一步：把 workflow 對上問題：先理解，再安全地改 →</a></div>
+  <div><a href="./workflow-understand-then-change.html">下一步：把 workflow 對上問題 →</a></div>
 </div>
 
 <h2>複習題</h2>
 
-<div class="quiz" data-question="在舊碼庫上用 AI 的兩個風險方向，分別是什麼？" data-correct="1" data-explain="一邊是 agent 放進專案的東西，一邊是你交給 agent 的東西。">
-  <button class="opt">agent 寫得太慢以及它寫得太快</button>
-  <button class="opt">agent 放進來的以及你交給它的</button>
-  <button class="opt">公司內部的風險以及公司外部的風險</button>
-  <button class="opt">成本超支的風險以及進度延遲的風險</button>
+<div class="quiz" data-question="「方向一」的風險指的是什麼？" data-correct="1" data-explain="方向一是 agent 產出的東西進入專案：不安全的程式碼、外洩的金鑰、被放寬的權限、沒被批准的決定。">
+  <button class="opt">你把公司的資料貼進對話框裡</button>
+  <button class="opt">agent 放進專案裡的不安全改動</button>
+  <button class="opt">模型訓練時使用了你的程式碼</button>
+  <button class="opt">團隊成員沒有遵守程式碼格式</button>
 </div>
-<div class="quiz" data-question="下列哪一項屬於「agent 放進專案裡的東西」？" data-correct="3" data-explain="放寬存取規則、寫死密鑰、放入未批准的決定，都屬於這個方向。">
-  <button class="opt">公司客戶的姓名與聯絡方式</button>
-  <button class="opt">公司的私有商業邏輯原始碼</button>
-  <button class="opt">你貼進對話的資料庫連線字串</button>
-  <button class="opt">順手被放寬的某條存取規則</button>
+
+<div class="quiz" data-question="為什麼「方向二」的風險特別容易被忽略？" data-correct="2" data-explain="它發生在對話框裡，沒有 diff、沒有 review 畫面，也不會有 PR 留下紀錄。">
+  <button class="opt">因為它只發生在很少人使用 AI 的公司</button>
+  <button class="opt">因為它的影響通常只出現在本機環境</button>
+  <button class="opt">因為它沒有 diff，也沒有 review 畫面可看</button>
+  <button class="opt">因為只有管理層才會遇到這個問題</button>
 </div>
-<div class="quiz" data-question="下列哪一項屬於「你交給 agent 的東西」？" data-correct="0" data-explain="客戶資料一旦送進遠端模型，就可能離開你的組織。">
-  <button class="opt">真實客戶的姓名與聯絡資料</button>
-  <button class="opt">agent 順手寫出來的不安全程式碼</button>
-  <button class="opt">agent 自己放寬的某條存取規則</button>
-  <button class="opt">agent 未經批准就選定的資料模型</button>
+
+<div class="quiz" data-question="agent 把金鑰改成 NEXT_PUBLIC_ 開頭，屬於哪一種風險？" data-correct="0" data-explain="它把金鑰寫進會送到瀏覽器的程式碼，是 agent 放進專案裡的東西。">
+  <button class="opt">方向一：agent 放進專案裡的東西</button>
+  <button class="opt">方向二：你交給 agent 的東西</button>
+  <button class="opt">兩者皆非，這只是單純的命名問題</button>
+  <button class="opt">兩者皆是，但它只影響本機開發</button>
 </div>
-<div class="quiz" data-question="課程說，在真實碼庫上用 AI 是什麼樣的決定？" data-correct="2" data-explain="它同時牽涉交付風險與資訊外流風險，因此是商業與安全決定。">
-  <button class="opt">單純只是工具選擇上的技術決定</button>
-  <button class="opt">單純只是成本預算上的財務決定</button>
-  <button class="opt">同時是商業也是資訊安全的決定</button>
-  <button class="opt">同時是行銷也是客戶服務的決定</button>
+
+<div class="quiz" data-question="為什麼課程說在真實程式庫上用 AI 是商業決策？" data-correct="3" data-explain="失控時可能影響客戶信任、合約與尚未公開的產品優勢，決定權往往不在工程團隊手上。">
+  <button class="opt">因為 AI 工具的授權費用通常相當昂貴</button>
+  <button class="opt">因為商業部門通常會直接決定技術棧</button>
+  <button class="opt">因為 agent 產出的程式碼可以用來販售</button>
+  <button class="opt">因為失控時會影響客戶、合約與商業優勢</button>
 </div>
-<div class="quiz" data-question="為什麼「在舊碼庫上用 AI」不能只靠把程式寫好來解決？" data-correct="1" data-explain="另一個方向是資訊離開組織的治理問題，不是程式品質問題。">
-  <button class="opt">因為把程式寫好其實根本不需要用到 AI</button>
-  <button class="opt">因為資訊要不要離開組織是治理問題</button>
-  <button class="opt">因為舊碼庫的程式碼通常已經無法修改</button>
-  <button class="opt">因為 agent 永遠無法讀懂任何舊的程式碼</button>
+
+<div class="quiz" data-question="為什麼 workflow 無法處理「方向二」的風險？" data-correct="1" data-explain="workflow 在 repo 裡工作，看得到程式碼，看不到合約、帳號方案與公司資安規範，也無法阻止你把東西貼出去。">
+  <button class="opt">因為 workflow 只支援全新專案，不支援舊碼庫</button>
+  <button class="opt">因為它看得到程式碼，看不到合約與帳號政策</button>
+  <button class="opt">因為 workflow 的執行速度太慢，無法即時攔阻</button>
+  <button class="opt">因為 workflow 只能檢查程式碼，不能檢查資料</button>
 </div>
-<div class="quiz" data-question="課程提到 workflow 對「密鑰」的內建規則是什麼？" data-correct="3" data-explain="要從環境變數讀取密鑰，而不是把它寫進程式碼裡。">
-  <button class="opt">把密鑰加密後直接寫進程式碼裡面</button>
-  <button class="opt">把密鑰放在公開的設定檔一起做版控</button>
-  <button class="opt">讓 agent 自己上網找一組新的密鑰來用</button>
-  <button class="opt">從環境讀取而不是寫死在程式碼裡</button>
+
+<div class="quiz" data-question="「給 agent 更多脈絡」會造成什麼連帶效果？" data-correct="2" data-explain="給更多檔案、log、資料能降低方向一的猜測，但同時讓更多內容離開組織，拉高方向二。">
+  <button class="opt">兩個方向的風險會一起下降，因為判斷更準</button>
+  <button class="opt">兩個方向的風險會一起上升，因為成本增加</button>
+  <button class="opt">方向一風險下降，方向二的風險反而上升</button>
+  <button class="opt">對兩個方向都沒有影響，只會影響執行速度</button>
 </div>
 
 <div class="footer">
   <p>agentic-engineer · 沒有白紙：Brownfield 的風險 · Step 2/4</p>
-  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這一步再展開。</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
 </div>
 
 <script src="../assets/quiz.js"></script>
