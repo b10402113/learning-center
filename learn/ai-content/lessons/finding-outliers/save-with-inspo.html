@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>存進 /inspo 靈感牆：一鍵收藏與之後取用</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>存進 /inspo 靈感牆：一鍵收藏與之後取用</h1>
+<p class="meta">Step 5/5 · Finding Outliers 與 /inspo</p>
+
+<h2>前言：挑出來的爆款，幾週後你還找得回來嗎</h2>
+
+<p>上一步你從結果頁挑出了幾支值得研究的題材。但它們現在只活在兩處：結果頁的 cart，和你的記憶裡。三週後你想找「我之前存過的那支、講某個主題的影片」時，結果頁早就重建過好幾輪，腦中的印象也模糊了。</p>
+
+<p>這一步把這些參考固定下來：用 <code>/inspo</code> 把影片存進你自己的靈感牆，之後請 agent 依主題從牆上取用。存的時候數字會凍結在當下，找的時候比對的是意思——這兩個設計決定了幾個月後這面牆還能不能用。</p>
+
+<figure class="lesson-figure"><img src="./save-with-inspo-assets/image-1.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>學習目標</h2>
+
+<p>把值得研究的 outlier 存進自己的 <code>/inspo</code> 靈感牆，並能請 agent 依主題或情境從靈感牆取出最合適的幾支。</p>
+
+<h2>做完會得到什麼、動手前要準備什麼</h2>
+
+<p>做完這一段，你會有一面自己的靈感牆：一支影片一張卡片，帶著標題、頻道、當時的觀看數和你自己寫的備註。之後你要做新片、想找某個主題的參考，開口問 agent 就好，它會從牆上挑出最合適的幾支，各附一行理由。</p>
+
+<p>前置條件很輕：Node.js 18 以上是唯一的必備（helper 只用 Node 內建模組），加上裝好的 <code>robonuggets-inspo.zip</code>。yt-dlp 選裝，但建議裝上——有它讀 YouTube 比較穩，因為它會跟著 YouTube 改版更新。</p>
+
+<h2>一、把影片存進牆上</h2>
+
+<p>存檔只有一個指令：<code>scripts/add-inspo.mjs</code>。它是這個 skill 的 helper，所有對牆的讀寫都由它負責。檔案開頭的使用說明寫齊了全部用法：</p>
+
+<pre data-source="sources/ai-content/20261015/3-Wk2 - Content Ideation/7-Module 12 - Finding Outliers/resources/robonuggets-inspo/inspo/skills/inspo/scripts/add-inspo.mjs#usage"><code>// Usage:
+//   node add-inspo.mjs "&lt;youtube link or id&gt;" ["&lt;another link&gt;" ...]   add or refresh videos
+//   node add-inspo.mjs "&lt;youtube link&gt;" --note "why you saved it"      add one video with a note
+//   node add-inspo.mjs --remove "&lt;youtube link or id&gt;"                 take one video off the wall
+//   node add-inspo.mjs --list [words]                                  print the wall, one short entry per video
+//                                                                       (words: videos matching any of them, best first)</code></pre>
+
+<p>照順序看：第一個用法是存檔，一次呼叫可以放好幾個連結，一支失敗不會中斷其他支；<code>--note</code> 讓你附上一句「為什麼存它」，但帶筆記時一次只能一個連結——程式會直接擋下來，因為一則備註對應兩支影片就亂了；<code>--remove</code> 把一支從牆上拿掉；<code>--list</code> 印出整面牆，後面跟字詞就只留符合的、最符合的排前面。</p>
+
+<p>連結的格式很寬鬆：完整 YouTube 網址、Shorts 連結、youtu.be 短網址、甚至裸的 11 碼影片 id 都可以。存下去之後，終端機每個影片印一段短訊息：標題、觀看數、多久前發布、長度、頻道、存檔路徑。看到這段輸出就是成功了。</p>
+
+<p><strong>一個警告：</strong><code>--remove</code> 是真的把卡片從牆上刪掉。刪掉後再存回來雖然可以，但當初凍結的那組數字就換成新的了——如果你本來想留的就是「它當時的樣子」，先想清楚再刪。</p>
+
+<h2>二、快照為什麼要凍結</h2>
+
+<p>存檔的核心設計是：觀看數、發布多久這些數字，<strong>凍結在你存它的那一刻</strong>。理由是，你當初被這支影片吸引，就是因為它那時的表現——三個月後它漲到多少，跟你為什麼存它無關。這也是幾個月後這面牆還有意義的原因。</p>
+
+<p>helper 裡負責存檔的 <code>add()</code> 函式把這件事寫得很清楚：</p>
+
+<pre data-source="sources/ai-content/20261015/3-Wk2 - Content Ideation/7-Module 12 - Finding Outliers/resources/robonuggets-inspo/inspo/skills/inspo/scripts/add-inspo.mjs#add"><code>  const fresh = {
+    id,
+    url: 'https://www.youtube.com/watch?v=' + id,
+    title: raw.title && raw.title !== 'NA' ? raw.title : id,
+    …
+    capturedAt: new Date().toISOString()
+  };
+
+  const store = readStore();
+  const prev = store.inspos.find(v =&gt; v.id === id) || {};
+  // Keep anything the user added to the old card (a note, their own fields), refresh the rest.
+  const video = { ...prev, ...fresh };
+  if (note) video.note = note;
+  store.inspos = store.inspos.filter(v =&gt; v.id !== id); // one card per video
+  store.inspos.unshift(video);                          // newest first
+  writeStore(store);</code></pre>
+
+<p>逐行讀一次。<code>fresh</code> 是這次從 YouTube 抓到的新資料，<code>capturedAt</code> 用 ISO 時間記下存檔當下，這就是「凍結」發生的地方。接著 <code>prev</code> 找牆上既有的同一張卡，<code>{ ...prev, ...fresh }</code> 把兩者合併：新抓到的數字蓋掉舊的，但你在舊卡片上自己加的欄位（尤其是筆記）會留下來——註解寫的就是這件事。<code>if (note)</code> 把這次新寫的筆記蓋上去。最後兩行處理順序：<code>filter</code> 先把同一支的舊卡移除，保證一支影片只有一張卡；<code>unshift</code> 把它放到最前面，牆上永遠最新的在上面。</p>
+
+<p>所以「再存一次」的效果是：數字刷新、筆記保留、卡片跳到最上面。日常用起來就像一支影片一個書籤，書籤上的便利貼不會因為更新數據而不見。</p>
+
+<figure class="lesson-figure"><img src="./save-with-inspo-assets/image-2.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<h2>三、之後怎麼從牆上取用</h2>
+
+<p>當你要做新片、或想找符合某個主題、格式、心情的參考時，流程是這樣：</p>
+
+<ol>
+<li>先跑 <code>node &lt;skill 資料夾&gt;/scripts/add-inspo.mjs --list</code>，不要自己去找檔案。helper 知道牆在哪（你可能用 <code>INSPOS_FILE</code> 搬過家），會印出那個路徑，並把每支影片列成一條短紀錄。<code>--list &lt;字詞&gt;</code> 只留符合任一字詞的影片，最符合的排前面。</li>
+<li>請 agent 挑出 3 到 5 支最合適的，<strong>用意思比對，不只看字面</strong>——「安靜又有畫面感」這種需求，可以配到一支標籤裡根本沒寫「安靜」的影片。每支給一行適合的理由，附上連結。有個判斷線索很好用：觀看數遠高於頻道訂閱數，就是這支打敗平常的跡象，需要時點出來。</li>
+<li>想看某一支的完整描述、標籤或發布日期，去讀 <code>--list</code> 印出的那個檔案裡的那筆紀錄就好。</li>
+</ol>
+
+<p>這裡有一個分工值得記住：存檔是一次腳本呼叫、零判斷，SKILL.md 建議這種活可以丟給便宜的小模型跑；「挑出最合適的 3–5 支、各說一行理由」才是需要判斷的部分，留給你的 agent。</p>
+
+<h2>四、牆在哪裡、怎麼看</h2>
+
+<p>牆的本體是一個純文字的 JSON 檔，預設在 <code>&lt;home&gt;/inspos/inspos.json</code>，或者 <code>INSPOS_FILE</code> 指到的地方。它的形狀是：</p>
+
+<pre data-source="sources/ai-content/20261015/3-Wk2 - Content Ideation/7-Module 12 - Finding Outliers/resources/robonuggets-inspo/inspo/skills/inspo/SKILL.md#where-the-wall-lives"><code>{ "inspos": [ { id, url, title, channel, subscribers, views, viewsText, published, ago, duration, tags, description, note, capturedAt } ] }</code></pre>
+
+<p>最新的排最前面。手動編輯這個檔沒問題——helper 會保留它自己不填的欄位，所以你想加自己的欄位就加。看這面牆有三種方式：RUBRIC console 的 Inspos 分頁、bridge 的頁面 <code>http://127.0.0.1:5299/</code>、或直接打開 <code>page/inspos.html</code>（它的 Open file 按鈕會讀你選的 JSON）。三條路徑必須指向同一個檔案，不然你會看到三面不同的牆。</p>
+
+<figure class="lesson-figure"><img src="./save-with-inspo-assets/image-3.webp" alt=""><figcaption>AI 生成示意圖</figcaption></figure>
+
+<p>環境變數都是選用的：<code>INSPOS_FILE</code> 決定牆存哪裡、<code>YTDLP_PATH</code> 在 yt-dlp 不在 PATH 時給完整路徑、<code>INSPO_THUMBS_DIR</code> 會另外存一份完整縮圖當設計參考。</p>
+
+<h2>五、出錯的時候</h2>
+
+<p>helper 讀影片時優先用 yt-dlp（它會跟著 YouTube 改版更新），沒有才自己讀 YouTube 公開頁面。三種常見的錯誤訊息各有對策：</p>
+
+<ul>
+<li>「Could not read this video from its YouTube page」：影片私有或已下架，或 YouTube 改了頁面。裝 yt-dlp（<code>pip install yt-dlp</code>）再試一次。</li>
+<li>「yt-dlp could not read this video」：影片私有、下架、有年齡限制，或 yt-dlp 太舊（<code>pip install -U yt-dlp</code> 更新）。把確切的訊息轉告使用者。</li>
+<li>「Your wall file is not valid JSON」：手動編輯把檔案改壞了。把 JSON 修好，或把檔案移到旁邊重開一面牆。</li>
+</ul>
+
+<h2>小結</h2>
+
+<blockquote>
+<code>/inspo</code> 用一次腳本呼叫把影片存成「數字凍結在當下」的卡片：存檔刷新數字、保留筆記、排到最前面，<code>--remove</code> 才會拿掉。取用時先 <code>--list</code>，再由 agent 用意思比對挑 3–5 支、各說一行理由。牆就是一個純 JSON 檔，skill、瀏覽器擴充、console 分頁共用同一個檔案。
+</blockquote>
+
+<p>做完長這樣：每存一支，終端機印一段「Added: …」，<code>--list</code> 看得到它在牆上。把它跟前一步串起來用：跑一次 outliers 掃描、挑出值得研究的、用 <code>/inspo</code> 存下來——這面牆就慢慢變成「你的利基裡什麼正在發生作用」的候選清單。至於快照為什麼凍結、JSON 為什麼是好格式，原理可以慢慢再看；這一步你只要能存、能找。</p>
+
+<div class="lesson-nav">
+  <div><a href="./pick-copyable-outliers.html">← 上一步：挑出能複製的爆款：看模式，不看單支影片</a></div>
+  <div></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="存影片時把數字凍結在存檔那一刻，用意是什麼？" data-correct="1" data-explain="你被它吸引是因為它當時的表現，凍結才留得住那個訊號。">
+  <button class="opt">讓檔案的容量不要太大</button>
+  <button class="opt">留住你當初被它吸引時的那個訊號</button>
+  <button class="opt">避免 YouTube 限制查詢次數</button>
+  <button class="opt">讓每張卡片的格式完全一致</button>
+</div>
+
+<div class="quiz" data-question="同一支影片再存一次，會發生什麼事？" data-correct="0" data-explain="數字刷新、筆記保留，卡片移到最上面。">
+  <button class="opt">數字刷新、筆記保留、卡片跳到最上面</button>
+  <button class="opt">牆上出現兩張一樣的卡片</button>
+  <button class="opt">舊的數字被永久保留，新的被丟掉</button>
+  <button class="opt">筆記會被清空</button>
+</div>
+
+<div class="quiz" data-question="使用 --note 附備註時，有什麼限制？" data-correct="3" data-explain="一次只能存一個連結，程式會直接擋下多連結的情況。">
+  <button class="opt">備註不能超過十個字</button>
+  <button class="opt">備註只能用英文寫</button>
+  <button class="opt">備註寫了就不能再改</button>
+  <button class="opt">一次只能配合一個連結</button>
+</div>
+
+<div class="quiz" data-question="請 agent 從靈感牆挑參考時，比對的原則是什麼？" data-correct="2" data-explain="用意思比對而不是只看字面，挑 3–5 支各附一行理由。">
+  <button class="opt">照觀看數由高到低取前五名</button>
+  <button class="opt">只找標籤字面完全相同的影片</button>
+  <button class="opt">用意思比對，挑 3 到 5 支最合適的</button>
+  <button class="opt">照存檔時間由舊到新全部列出</button>
+</div>
+
+<div class="quiz" data-question="靈感牆本體是什麼？" data-correct="0" data-explain="一個純 JSON 檔，skill、擴充、console 分頁共用同一個檔案。">
+  <button class="opt">一個純 JSON 檔，可手動編輯</button>
+  <button class="opt">一個要付費的雲端資料庫</button>
+  <button class="opt">瀏覽器擴充的私有儲存空間</button>
+  <button class="opt">存在 agent 對話紀錄裡的清單</button>
+</div>
+
+<div class="quiz" data-question="出現「Your wall file is not valid JSON」時該怎麼辦？" data-correct="1" data-explain="通常是手動編輯改壞了，修好 JSON 或把檔案移走重開一面牆。">
+  <button class="opt">重新安裝 Node.js</button>
+  <button class="opt">修好 JSON，或把檔案移走重開一面牆</button>
+  <button class="opt">申請一組新的 API key</button>
+  <button class="opt">把整個 skill 資料夾刪掉重裝</button>
+</div>
+
+<div class="footer">
+  <p>ai-content · Finding Outliers 與 /inspo · Step 5/5</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
