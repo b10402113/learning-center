@@ -19,7 +19,7 @@ import {
   prepareHtmlLesson,
   generateHtmlArticle,
   generateNodeArticle,
-  finalizeHtmlArticle,
+  finalizeHtmlPlan,
   generateHtmlImages,
   buildBrief,
   setStepIllustration,
@@ -73,19 +73,6 @@ const LESSON = `<!DOCTYPE html>
 
 const PLAN = [{ heading: '第一節', anchor: '第一段文字', prompt: '第一段示意' }];
 
-const REWRITE = `<h1>測試課程標題</h1>
-<p class="meta">Step 1/2 · 測試節點</p>
-
-<h2>第一節</h2>
-<p>改寫後的第一段，保留 <a href="https://example.com/doc">外部連結</a>。</p>
-<pre><code>const x = 1 &lt; 2;</code></pre>
-
-<!--image:1-->
-
-<h2>第二節</h2>
-<p>改寫後的第二段。</p>
-`;
-
 const REWRITE_NO_MARK = `<h1>測試課程標題</h1>
 <p class="meta">Step 1/2 · 測試節點</p>
 
@@ -97,25 +84,17 @@ const REWRITE_NO_MARK = `<h1>測試課程標題</h1>
 <p>改寫後的第二段。</p>
 `;
 
-const REWRITE2 = `<h1>測試課程標題</h1>
-<p class="meta">Step 1/2 · 測試節點</p>
-
-<h2>第一節</h2>
-<p>改寫後的第一段，保留 <a href="https://example.com/doc">外部連結</a>。</p>
-<pre><code>const x = 1 &lt; 2;</code></pre>
-
-<!--image:1-->
-
-<h2>第二節</h2>
-<p>改寫後的第二段。</p>
-
-<!--image:2-->
-`;
-
 const PLAN2 = [
   { heading: '第一節', anchor: '第一段文字', prompt: '第一段示意' },
   { heading: '第二節', anchor: '第二段文字', prompt: '第二段示意' },
 ];
+
+// A published lesson carrying the agent's image markers, as /to-image's plan
+// step leaves it: markers sit in the live lesson, which is never rebuilt.
+const LESSON_MARKED = LESSON.replace('<p>第二段文字。</p>', '<p>第二段文字。</p>\n\n<!--image:1-->');
+const LESSON_MARKED2 = LESSON
+  .replace('<p>第一段文字，含有 <a href="https://example.com/doc">外部連結</a>。</p>', '$&\n\n<!--image:1-->')
+  .replace('<p>第二段文字。</p>', '$&\n\n<!--image:2-->');
 
 async function makeRoot() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'html-test-'));
@@ -247,15 +226,15 @@ test('validateRewrite preserves code blocks and links', () => {
 test('markers become figures pointing at the known image path', () => {
   const plan = normalizeImagePlan([{ prompt: 'a' }, { prompt: 'b' }]);
   const out = markersToFigures('A\n\n<!--image:1-->\n\nB\n\n<!--image:2-->', plan, 'my-step');
-  assert.match(out, /<figure class="lesson-figure"><img src="\.\/my-step-assets\/image-1\.png" alt=""><figcaption>AI 生成示意圖<\/figcaption><\/figure>/);
-  assert.match(out, /<img src="\.\/my-step-assets\/image-2\.png"/);
+  assert.match(out, /<figure class="lesson-figure"><img src="\.\/my-step-assets\/image-1\.webp" alt=""><figcaption>AI 生成示意圖<\/figcaption><\/figure>/);
+  assert.match(out, /<img src="\.\/my-step-assets\/image-2\.webp"/);
   assert.doesNotMatch(out, /pending|待生成/);
 });
 
 test('ensureFigure is idempotent and migrates an old pending placeholder', () => {
   const legacy = 'A\n\n<figure class="lesson-figure pending">配圖 1 待生成</figure>\n\nB';
   const migrated = ensureFigure(legacy, 1, 'my-step');
-  assert.match(migrated, /<img src="\.\/my-step-assets\/image-1\.png"/);
+  assert.match(migrated, /<img src="\.\/my-step-assets\/image-1\.webp"/);
   assert.doesNotMatch(migrated, /pending|待生成/);
   assert.equal(ensureFigure(migrated, 1, 'my-step'), migrated);
 });
@@ -283,12 +262,11 @@ test('prepareHtmlLesson backs up the original and writes a cleaned body', async 
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('article: one text call writes the rewrite without touching lesson, plan or markers', async () => {
+test('article: one text call writes the rewrite and publishes it as the plain article', async () => {
   const root = await makeRoot();
   try {
     let textCalls = 0;
     let imageCalls = 0;
-    const before = await fs.readFile(lessonPath(root), 'utf8');
     const client = textClient(REWRITE_NO_MARK, request => {
       textCalls++;
       const payload = JSON.parse(request.messages[1].content);
@@ -307,7 +285,15 @@ test('article: one text call writes the rewrite without touching lesson, plan or
     assert.match(rewritten, /改寫後的第一段/);
     assert.match(rewritten, /const x = 1 &lt; 2;/);
     assert.doesNotMatch(rewritten, /<!--image:/);
-    assert.equal(await fs.readFile(lessonPath(root), 'utf8'), before);
+    // The live lesson becomes the published plain article: rewrite + chrome, no figures.
+    const lesson = await fs.readFile(lessonPath(root), 'utf8');
+    assert.match(lesson, /改寫後的第一段/);
+    assert.doesNotMatch(lesson, /第一段文字，含有/);
+    assert.match(lesson, /class="quiz"/);
+    assert.match(lesson, /測試頁尾/);
+    assert.match(lesson, /<script src="\.\.\/assets\/quiz\.js"><\/script>/);
+    assert.doesNotMatch(lesson, /<figure/);
+    assert.doesNotMatch(lesson, /<!--image:/);
     assert.equal(await fs.readFile(path.join(outputDir(root), 'plan.json'), 'utf8').catch(() => null), null);
     assert.doesNotMatch(await fs.readFile(mdxPath(root), 'utf8'), /^illustration:/m);
     const manifest = JSON.parse(await fs.readFile(result.manifest, 'utf8'));
@@ -316,16 +302,17 @@ test('article: one text call writes the rewrite without touching lesson, plan or
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('figures: agent markers become figures, plan recorded, illustration planned', async () => {
+test('plan: markers in the live lesson are validated, plan recorded, illustration planned', async () => {
   const root = await makeRoot();
   try {
+    await fs.writeFile(lessonPath(root), LESSON_MARKED);
     await fs.mkdir(outputDir(root), { recursive: true });
-    await fs.writeFile(path.join(outputDir(root), 'rewritten.html'), REWRITE);
     await fs.writeFile(path.join(outputDir(root), 'plan.input.json'), JSON.stringify(PLAN));
-    const result = await finalizeHtmlArticle({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root);
+    const result = await finalizeHtmlPlan({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root);
     const lesson = await fs.readFile(result.lesson, 'utf8');
-    assert.match(lesson, /<figure class="lesson-figure"><img src="\.\/step-one-assets\/image-1\.png" alt=""><figcaption>AI 生成示意圖<\/figcaption><\/figure>/);
-    assert.doesNotMatch(lesson, /pending|待生成/);
+    // markers stay in place as the insertion contract; the lesson is not rebuilt
+    assert.match(lesson, /<!--image:1-->/);
+    assert.doesNotMatch(lesson, /<figure/);
     assert.match(lesson, /class="quiz"/);
     assert.match(lesson, /測試頁尾/);
     assert.match(lesson, /<script src="\.\.\/assets\/quiz\.js"><\/script>/);
@@ -336,15 +323,14 @@ test('figures: agent markers become figures, plan recorded, illustration planned
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('figures: a marker/plan mismatch fails without overwriting the lesson', async () => {
+test('plan: a marker/plan mismatch fails without recording a plan or touching the lesson', async () => {
   const root = await makeRoot();
   try {
     const before = await fs.readFile(lessonPath(root), 'utf8');
     await fs.mkdir(outputDir(root), { recursive: true });
-    await fs.writeFile(path.join(outputDir(root), 'rewritten.html'), REWRITE.replace('<!--image:1-->', ''));
     await fs.writeFile(path.join(outputDir(root), 'plan.input.json'), JSON.stringify(PLAN));
     await assert.rejects(
-      finalizeHtmlArticle({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root),
+      finalizeHtmlPlan({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root),
       /No image markers/);
     assert.equal(await fs.readFile(lessonPath(root), 'utf8'), before);
     assert.equal(await fs.readFile(path.join(outputDir(root), 'plan.json'), 'utf8').catch(() => null), null);
@@ -381,15 +367,15 @@ test('article: reruns rewrite from the saved original, not the live lesson', asy
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('image: generates missing figures, reuses existing PNGs, never calls the text model', async () => {
+test('image: swaps the plan markers for figures in place, generates missing WebP figures, never calls the text model', async () => {
   const root = await makeRoot();
   try {
+    await fs.writeFile(lessonPath(root), LESSON_MARKED2);
     await fs.mkdir(outputDir(root), { recursive: true });
-    await fs.writeFile(path.join(outputDir(root), 'rewritten.html'), REWRITE2);
     await fs.writeFile(path.join(outputDir(root), 'plan.input.json'), JSON.stringify(PLAN2));
-    await finalizeHtmlArticle({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root);
+    await finalizeHtmlPlan({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root);
     await fs.mkdir(path.join(outputDir(root), 'assets'), { recursive: true });
-    await fs.writeFile(path.join(outputDir(root), 'assets', 'image-1.png'), Buffer.from('89504e47', 'hex'));
+    await fs.writeFile(path.join(outputDir(root), 'assets', 'image-1.webp'), Buffer.from('89504e47', 'hex'));
     let imageCalls = 0;
     const result = await generateHtmlImages({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root, {
       client: { chat: { completions: { create: async () => { throw new Error('text model must not be called'); } } } },
@@ -397,9 +383,12 @@ test('image: generates missing figures, reuses existing PNGs, never calls the te
     });
     assert.equal(imageCalls, 1);
     const lesson = await fs.readFile(result.lesson, 'utf8');
-    assert.match(lesson, /<img src="\.\/step-one-assets\/image-1\.png"/);
-    assert.match(lesson, /<img src="\.\/step-one-assets\/image-2\.png"/);
+    assert.match(lesson, /<img src="\.\/step-one-assets\/image-1\.webp"/);
+    assert.match(lesson, /<img src="\.\/step-one-assets\/image-2\.webp"/);
+    assert.doesNotMatch(lesson, /<!--image:/);
     assert.doesNotMatch(lesson, /lesson-figure pending/);
+    assert.match(lesson, /class="quiz"/);
+    assert.match(lesson, /測試頁尾/);
     assert.equal((await fs.readdir(path.join(root, 'learn', 'demo', 'lessons', 'demo-node', 'step-one-assets'))).length, 2);
     assert.match(await fs.readFile(mdxPath(root), 'utf8'), /^illustration: done$/m);
     const manifest = JSON.parse(await fs.readFile(result.manifest, 'utf8'));
@@ -411,14 +400,14 @@ test('image: generates missing figures, reuses existing PNGs, never calls the te
 test('image: reuses figures already published in the lesson assets dir', async () => {
   const root = await makeRoot();
   try {
+    await fs.writeFile(lessonPath(root), LESSON_MARKED2);
     await fs.mkdir(outputDir(root), { recursive: true });
-    await fs.writeFile(path.join(outputDir(root), 'rewritten.html'), REWRITE2);
     await fs.writeFile(path.join(outputDir(root), 'plan.input.json'), JSON.stringify(PLAN2));
-    await finalizeHtmlArticle({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root);
+    await finalizeHtmlPlan({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root);
     const published = path.join(root, 'learn', 'demo', 'lessons', 'demo-node', 'step-one-assets');
     await fs.mkdir(published, { recursive: true });
-    await fs.writeFile(path.join(published, 'image-1.png'), Buffer.from('89504e47', 'hex'));
-    await fs.writeFile(path.join(published, 'image-2.png'), Buffer.from('89504e47', 'hex'));
+    await fs.writeFile(path.join(published, 'image-1.webp'), Buffer.from('89504e47', 'hex'));
+    await fs.writeFile(path.join(published, 'image-2.webp'), Buffer.from('89504e47', 'hex'));
     let imageCalls = 0;
     const result = await generateHtmlImages({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root, {
       generateImage: async () => { imageCalls++; return Buffer.from('89504e470d0a1a0a', 'hex'); },
@@ -553,7 +542,7 @@ test('article-batch rewrites each step once, in DAG order, without exceeding max
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('article-batch skips steps without HTML and, with skip-existing, already-planned steps', async () => {
+test('article-batch skips steps without HTML and, with skip-existing, already-rewritten steps', async () => {
   const root = await makeBatchRoot(['s1', 's2', 's3'], { planned: ['s2'] });
   try {
     await fs.rm(path.join(root, 'learn', 'demo', 'lessons', 'demo-node', 's3.html'));
@@ -571,31 +560,29 @@ test('article-batch skips steps without HTML and, with skip-existing, already-pl
     const byStep = Object.fromEntries(result.steps.map(s => [s.step, s]));
     assert.equal(byStep.s1.status, 'rewritten');
     assert.equal(byStep.s2.status, 'skipped');
-    assert.equal(byStep.s2.reason, 'already-planned');
+    assert.equal(byStep.s2.reason, 'already-rewritten');
     assert.equal(byStep.s3.status, 'skipped');
     assert.equal(byStep.s3.reason, 'no-html');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('article-batch plan-only reuses rewrites, adopts the lesson otherwise, and skips the planned — with no text call', async () => {
-  const root = await makeBatchRoot(['s1', 's2', 's3'], { planned: ['s3'] });
+test('article-batch: skip-existing also skips steps that were already rewritten', async () => {
+  const root = await makeBatchRoot(['s1', 's2']);
   try {
     const rewriteDir = path.join(root, 'learn', 'demo', 'output', 'demo-node', 's1');
     await fs.mkdir(rewriteDir, { recursive: true });
     await fs.writeFile(path.join(rewriteDir, 'rewritten.html'), '<p>既有改寫稿</p>\n');
-    const planDir = path.join(root, 'learn', 'demo', 'output', 'demo-node', 's3');
-    await fs.mkdir(planDir, { recursive: true });
-    await fs.writeFile(path.join(planDir, 'plan.json'), '[]');
-    const result = await generateNodeArticle({ subject: 'demo', node: 'demo-node', planOnly: true }, root);
-    assert.equal(result.mode, 'article-batch');
-    assert.equal(result.planOnly, true);
-    assert.deepEqual(result.counts, { rewritten: 2, failed: 0, skipped: 1 });
+    let calls = 0;
+    const client = { chat: { completions: { create: async () => {
+      calls++;
+      return { id: 'test', choices: [{ message: { content: REWRITE_NO_MARK } }] };
+    } } } };
+    const result = await generateNodeArticle({ subject: 'demo', node: 'demo-node', skipExisting: true }, root, { client });
+    assert.equal(calls, 1);
     const byStep = Object.fromEntries(result.steps.map(s => [s.step, s]));
-    assert.equal(byStep.s1.status, 'rewritten');
-    assert.equal(byStep.s3.status, 'skipped');
-    assert.equal(byStep.s3.reason, 'already-planned');
-    assert.match(await fs.readFile(byStep.s1.rewritten, 'utf8'), /既有改寫稿/);
-    assert.match(await fs.readFile(byStep.s2.rewritten, 'utf8'), /第一段文字/);
+    assert.equal(byStep.s1.status, 'skipped');
+    assert.equal(byStep.s1.reason, 'already-rewritten');
+    assert.equal(byStep.s2.status, 'rewritten');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 

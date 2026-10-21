@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>物件是垃圾嗎？可達性分析與四種引用</title>
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<h1>物件是垃圾嗎？可達性分析與四種引用</h1>
+<p class="meta">Step 1/4 · GC、記憶體壓力與線上排查</p>
+
+<h2>學習目標</h2>
+<p>能講清楚 JVM 為什麼用可達性分析而不是引用計數，說出四類 GC Roots，並用四種引用強度解釋「這個物件什麼時候才會被回收」。</p>
+
+<h2>前言：記憶體一直漲，重啟就好？</h2>
+
+<p>你有沒有遇過這種服務：上線後記憶體慢慢往上爬，撐個三五天就開始卡，重啟一下又恢復正常，過幾天再漲回來。同事問你「到底是哪裡漏了」，你盯著程式碼卻說不出個所以然。</p>
+
+<p>要回答這個問題，得先退一步問一個更基本的問題：JVM 是怎麼知道一個物件「已經沒人用了、可以丟掉」？如果連判斷生死的規則都不清楚，就更不可能說出「為什麼它沒被回收」。這一節就把這條規則講清楚，而它的答案不是「沒人指向我就丟掉」，而是「從幾個固定的根出發，走不到我就丟掉」。</p>
+
+<h2>先看一個行不通的做法：引用計數</h2>
+
+<p>最直覺的想法是幫每個物件裝一個計數器。有人引用它，計數器加一；引用斷開，計數器減一。計數器歸零，就代表沒人用它了，可以回收。這個方法叫引用計數法，邏輯簡單，聽起來也很合理。</p>
+
+<p>問題出在一個它永遠解不掉的死角：循環引用。假設物件 A 內部持有物件 B，物件 B 內部又持有物件 A，除此之外，外界沒有任何地方引用它們。這種情況下，A 和 B 其實都是垃圾，但因為互相指著對方，兩個計數器永遠是 1，誰也歸不了零，於是永遠收不掉，記憶體就卡在那裡。就因為這個死角，HotSpot 這類工業級 JVM 並不採用引用計數法。</p>
+
+<h2>JVM 真正用的方法：可達性分析</h2>
+
+<p>JVM 用的是另一種思路，叫可達性分析。它把記憶體裡所有物件看成一大張圖，物件之間的引用就是圖上的線。接著選定幾個固定的起點，稱為 GC Roots，從這些起點沿著線往下走。凡是走得到的物件，就判定為存活；走不到的，就判定為可回收。</p>
+
+<p>你可以把它想成「從家門口出發的地鐵可達圖」。只要有一條路能從家門口走到某個站，那個站就是活的；完全連不上任何路線的站，就當它不存在。這裡的關鍵是：判斷標準不是「有沒有人指向我」，而是「從根能不能走到我」。用這個標準看剛剛的 A 和 B，因為從任何一個 GC Roots 都走不到它們，它們就是垃圾，循環引用再怎麼互相指也沒用。</p>
+
+<h3>哪些物件可以當 GC Roots</h3>
+
+<p>這是面試最常追問的細節。可以當作根的物件主要有四類：</p>
+
+<ol>
+<li>虛擬機棧（方法執行時用的那塊記憶體）中，區域變數所引用的物件。例如方法裡寫了 <code>User u = new User();</code>，只要這個方法還沒結束，<code>u</code> 就是根，它指向的 User 物件就不能被回收。</li>
+<li>方法區中靜態屬性（<code>static</code>）所引用的物件。例如 <code>public static User user;</code>，只要類別還被載入著，這個 user 就是根。</li>
+<li>方法區中常數（<code>final</code>）所引用的物件，例如字串常量池裡的引用。</li>
+<li>本地方法棧中，JNI（Java 呼叫 C/C++ 原生方法）所引用的物件。</li>
+</ol>
+
+<p>把這四類記住，你就有了「什麼東西永遠不會被回收」的判準。後面排查記憶體洩漏時，MAT 工具裡的 Path to GC Roots，做的就是反過來沿著這些根找出「是誰還牽著它」。</p>
+
+<h2>四種引用強度：決定「什麼時候才收」</h2>
+
+<p>可達性分析回答的是「這物件還活著嗎」，但同樣是活的物件，GC 對它們的態度其實不一樣。Java 設計了四種引用強度，讓你可以精細地控制物件的存活時間。它們的差別就在一句話：GC 什麼時候肯收它。</p>
+
+<table>
+<thead>
+<tr><th>引用</th><th>寫法</th><th>GC 的態度</th><th>典型用途</th></tr>
+</thead>
+<tbody>
+<tr><td>強引用</td><td><code>Object o = new Object()</code></td><td>絕不回收，記憶體不足寧願丟 OutOfMemoryError</td><td>日常最普通的引用</td></tr>
+<tr><td>軟引用</td><td><code>SoftReference</code></td><td>記憶體夠就留著，快不夠時才回收</td><td>對記憶體敏感的本地快取，例如圖片快取</td></tr>
+<tr><td>弱引用</td><td><code>WeakReference</code></td><td>只要發生 GC，不論記憶體夠不夠都回收</td><td>ThreadLocal 的 key、WeakHashMap</td></tr>
+<tr><td>虛引用</td><td><code>PhantomReference</code></td><td>無法取回物件，只在回收時發個通知</td><td>管理堆外記憶體的釋放</td></tr>
+</tbody>
+</table>
+
+<p>強引用就是你平常寫的 <code>new</code>，只要它還指向物件，GC 就不會動它，哪怕快要撐爆記憶體也一樣。軟引用描述的是「有用但不那麼必要」的物件，適合拿來做快取：記憶體充裕時它就跟強引用一樣活著，記憶體吃緊時再清掉它來騰空間，所以不會因為快取把系統撐死。</p>
+
+<p>弱引用更短命，只要 GC 一啟動，不管當下記憶體夠不夠，弱引用綁著的物件都會被回收。這裡最經典的用法是 ThreadLocal 裡的 key，以及 WeakHashMap：當某個 key 不再被外部強引用時，對應的鍵值對就能自動被收掉，避免拖著一堆沒用的資料不放。虛引用則是最弱的一種，你甚至沒辦法用 <code>get()</code> 拿回原物件（永遠回傳 null），它唯一的用處是搭配引用隊列，在物件被回收時收到一個通知，通常用來處理堆外記憶體的清理。</p>
+
+<h2>小結</h2>
+
+<blockquote>
+JVM 判斷物件死活靠的是可達性分析，不是引用計數，因為計數器解不掉循環引用。可達性分析從四類 GC Roots 出發，走得到就是活的。至於「什麼時候才被回收」，則由引用強度決定：強引用死不放，軟引用記憶體不足才放，弱引用一 GC 就放，虛引用只負責通知。
+</blockquote>
+
+<p>搞懂了誰是垃圾，下一步才有意義：這些垃圾實際上要怎麼被收走？下一節會講三種收集演算法與分代策略，以及為什麼再怎麼優化，GC 都一定會讓服務暫停一下。</p>
+
+<div class="lesson-nav">
+  <div></div>
+  <div><a href="./collection-algorithms-and-stw.html">下一步：垃圾怎麼收？三種演算法、分代收集與 STW →</a></div>
+</div>
+
+<h2>複習題</h2>
+
+<div class="quiz" data-question="為什麼 HotSpot 不採用引用計數法？" data-correct="1" data-explain="兩個互相引用的物件，即使外界沒人用，計數器也永遠不會歸零。">
+  <button class="opt">因為它的執行速度實在太慢了</button>
+  <button class="opt">因為它解不掉物件互相引用的情況</button>
+  <button class="opt">因為它必須暫停所有使用者執行緒</button>
+  <button class="opt">因為它只能用在沒有垃圾的場合</button>
+</div>
+
+<div class="quiz" data-question="可達性分析判斷物件存活的標準是什麼？" data-correct="2" data-explain="從 GC Roots 出發沿引用鏈走，走得到就是存活。">
+  <button class="opt">看有幾個地方指向這個物件</button>
+  <button class="opt">看這個物件被建立的時間先後</button>
+  <button class="opt">看能不能從 GC Roots 走到它</button>
+  <button class="opt">看這個物件佔用多大的記憶體</button>
+</div>
+
+<div class="quiz" data-question="下列哪一項不算 GC Roots？" data-correct="3" data-explain="堆裡自己 new 出來的普通物件是分析的目標，不是根。">
+  <button class="opt">方法區裡 static 屬性的引用</button>
+  <button class="opt">虛擬機棧裡的區域變數引用</button>
+  <button class="opt">本地方法棧裡 JNI 的引用</button>
+  <button class="opt">堆裡自己 new 出來的物件</button>
+</div>
+
+<div class="quiz" data-question="想做一個記憶體吃緊時能自動讓位的快取，該用哪種引用？" data-correct="0" data-explain="軟引用在記憶體不足、快 OOM 時才被回收，正好適合快取。">
+  <button class="opt">軟引用 SoftReference</button>
+  <button class="opt">強引用直接 new 出來</button>
+  <button class="opt">弱引用 WeakReference</button>
+  <button class="opt">虛引用 PhantomReference</button>
+</div>
+
+<div class="quiz" data-question="ThreadLocal 的 key 用弱引用，主要是為了什麼？" data-correct="1" data-explain="key 不再被外部強引用時能被自動回收，避免拖著沒用的鍵值對。">
+  <button class="opt">讓 key 的讀取速度變得更快</button>
+  <button class="opt">讓沒人使用的 key 能被自動回收</button>
+  <button class="opt">讓多個執行緒能共用同一個 key</button>
+  <button class="opt">讓 key 的比較可以省略 hash 值</button>
+</div>
+
+<div class="quiz" data-question="虛引用實際上有什麼用處？" data-correct="2" data-explain="它無法取回物件，只在回收時透過引用隊列發出通知。">
+  <button class="opt">可以用來延長物件的存活時間</button>
+  <button class="opt">可以用 get 拿回被回收的物件</button>
+  <button class="opt">可以在回收時收到一個通知</button>
+  <button class="opt">可以讓物件永遠不被垃圾回收</button>
+</div>
+
+<div class="footer">
+  <p>小哲讲八股 · GC、記憶體壓力與線上排查 · Step 1/4</p>
+  <p>讀完有疑問的地方，直接問你的 AI 助教，它可以針對這個節點再展開。</p>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

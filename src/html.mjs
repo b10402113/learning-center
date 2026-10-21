@@ -26,7 +26,7 @@ export const DEFAULT_MAX_PARALLEL = 2;
 export const PENDING_CAPTION = index => `配圖 ${index} 待生成`;
 export const FIGURE_CAPTION = 'AI 生成示意圖';
 export const FIGURE_STYLES = `
-/* Lesson figure styles (added by /to-article) */
+/* Lesson figure styles (added by /to-image) */
 .lesson-figure { margin: 1.5rem 0; text-align: center; }
 .lesson-figure img { max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
 .lesson-figure figcaption { margin-top: 0.5rem; color: var(--muted); font-size: 0.85rem; }
@@ -238,7 +238,7 @@ export function validateRewrite({ rewritten, originalBody }) {
 }
 
 export function figureHtml(step, index) {
-  return `<figure class="lesson-figure"><img src="./${step}-assets/image-${index}.png" alt=""><figcaption>${FIGURE_CAPTION}</figcaption></figure>`;
+  return `<figure class="lesson-figure"><img src="./${step}-assets/image-${index}.webp" alt=""><figcaption>${FIGURE_CAPTION}</figcaption></figure>`;
 }
 
 /** Replace each marker with its final figure, whose src points at the future image path. */
@@ -436,12 +436,14 @@ export async function prepareHtmlLesson(args, root = projectRoot) {
 }
 
 /**
- * One text-model call per run: clean the original, rewrite it, and save the
- * rewrite. No image plan is involved — the calling agent reads the finished
- * article afterwards and marks where figures should go.
+ * One text-model call per run: clean the original, rewrite it, save the rewrite,
+ * and publish it to the live lesson as the plain article. No image plan is
+ * involved — `/to-image` later reads the published article and marks where
+ * figures go. Publishing here is the only place the live lesson is rebuilt from
+ * a rewrite; every later stage edits it in place.
  */
 export async function generateHtmlArticle(args, root = projectRoot, injected = {}) {
-  const { root: resolved, paths, chrome } = await prepareHtmlLesson(args, root);
+  const { root: resolved, paths, htmlTag, headInner, chrome } = await prepareHtmlLesson(args, root);
   const subject = assertSafeId('subject', args.subject);
   const node = assertSafeId('node', args.node);
   const step = assertSafeId('step', args.step);
@@ -485,9 +487,11 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
     validateRewrite({ rewritten, originalBody: chrome.cleaned });
     manifest.stages.rewritten = true;
     await fs.writeFile(paths.rewritten, `${rewritten}\n`);
+    await fs.writeFile(paths.lesson, assembleLesson({ htmlTag, headInner, body: rewritten, chrome }));
+    manifest.stages.published = true;
     manifest.status = 'completed';
     await saveManifest();
-    return { rewritten: paths.rewritten, planInput: paths.planInput, manifest: paths.manifest };
+    return { rewritten: paths.rewritten, lesson: paths.lesson, manifest: paths.manifest };
   } catch (error) {
     manifest.status = 'failed';
     manifest.error = {
@@ -502,27 +506,12 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
 }
 
 /**
- * Plan-only: no text-model call. Reuse a step's existing rewrite when present,
- * otherwise adopt the current lesson's cleaned body as the base, so images can
- * be planned on an article that was never rewritten.
- */
-async function preparePlanOnlyArticle(args, root) {
-  const { paths, chrome } = await prepareHtmlLesson(args, root);
-  const existing = await fs.readFile(paths.rewritten, 'utf8').catch(() => null);
-  if (existing == null) await fs.writeFile(paths.rewritten, `${chrome.cleaned}\n`);
-  return { rewritten: paths.rewritten, planInput: paths.planInput };
-}
-
-/**
  * Rewrite every step of one node with a bounded number of parallel text calls.
- * Enumerates the node's `steps` DAG, skips steps with no HTML lesson (or, when
- * `skipExisting`, steps already planned and carrying a plan), and runs the
- * existing single-step rewrite for the rest. A failure in one step never aborts
- * the others — every step is reported with its own status.
- *
- * With `planOnly` (the `/to-article -plan-only` flow) the text model is never
- * called: each step with an existing rewrite, or else with a lesson to adopt,
- * is returned as `rewritten`-ready-to-plan; steps already planned are skipped.
+ * Enumerates the node's `steps` DAG, skips steps with no HTML lesson (and, when
+ * `skipExisting`, steps already rewritten or already planned), and runs the
+ * existing single-step rewrite — which publishes each rewrite to the live
+ * lesson — for the rest. A failure in one step never aborts the others: every
+ * step is reported with its own status.
  */
 export async function generateNodeArticle(args, root = projectRoot, injected = {}) {
   const subject = assertSafeId('subject', args.subject);
@@ -533,33 +522,22 @@ export async function generateNodeArticle(args, root = projectRoot, injected = {
   const stepIds = await resolveNodeSteps(root, subject, node);
   const maxParallel = Math.max(1, Math.floor(Number(args.maxParallel)) || DEFAULT_MAX_PARALLEL);
   const skipExisting = Boolean(args.skipExisting);
-  const planOnly = Boolean(args.planOnly);
 
   const run = async step => {
     const paths = htmlPaths(root, subject, node, step);
     const exists = file => fs.access(file).then(() => true, () => false);
     if (!await exists(paths.lesson)) return { step, status: 'skipped', reason: 'no-html' };
     const illustration = await resolveStepIllustration(root, subject, node, step);
-    const hasPlan = await exists(paths.plan);
-    if (planOnly) {
-      if (hasPlan || illustration === 'planned' || illustration === 'done')
-        return { step, status: 'skipped', reason: 'already-planned' };
-      try {
-        const result = await preparePlanOnlyArticle({ subject, node, step }, root);
-        return { step, status: 'rewritten', rewritten: result.rewritten, planInput: result.planInput };
-      } catch (error) {
-        return { step, status: 'failed', error: String(error?.message ?? error).slice(0, 400) };
-      }
-    }
-    if (skipExisting && (illustration === 'planned' || illustration === 'done') && hasPlan)
-      return { step, status: 'skipped', reason: 'already-planned' };
+    const alreadyRewritten = await exists(paths.rewritten);
+    if (skipExisting && (alreadyRewritten || illustration === 'planned' || illustration === 'done'))
+      return { step, status: 'skipped', reason: 'already-rewritten' };
     try {
       const result = await generateHtmlArticle(
         { subject, node, step, brief: args.brief, type: args.type, typesDir: args.typesDir },
         root,
         injected,
       );
-      return { step, status: 'rewritten', rewritten: result.rewritten, planInput: result.planInput, manifest: result.manifest };
+      return { step, status: 'rewritten', rewritten: result.rewritten, lesson: result.lesson, manifest: result.manifest };
     } catch (error) {
       return { step, status: 'failed', error: String(error?.message ?? error).slice(0, 400) };
     }
@@ -573,7 +551,6 @@ export async function generateNodeArticle(args, root = projectRoot, injected = {
     subject,
     node,
     maxParallel,
-    planOnly,
     counts: { rewritten: count('rewritten'), failed: count('failed'), skipped: count('skipped') },
     steps,
   };
@@ -581,34 +558,35 @@ export async function generateNodeArticle(args, root = projectRoot, injected = {
 
 /**
  * Program-only: the agent has already inserted `<!--image:N-->` markers into
- * the rewrite and written the plan. Convert the markers to figures, assemble
- * the lesson, and record the plan.
+ * the live lesson and written the plan. Validate the markers against the plan,
+ * record `plan.json`, and mark the step `planned`. The lesson is left as-is —
+ * the markers stay in place as the insertion contract for `/to-image` generate,
+ * and the lesson is never rebuilt from an older snapshot.
  */
-export async function finalizeHtmlArticle(args, root = projectRoot) {
-  const { root: resolved, paths, htmlTag, headInner, chrome } = await prepareHtmlLesson(args, root);
+export async function finalizeHtmlPlan(args, root = projectRoot) {
   const subject = assertSafeId('subject', args.subject);
   const node = assertSafeId('node', args.node);
   const step = assertSafeId('step', args.step);
-  const rewritten = await fs.readFile(paths.rewritten, 'utf8').catch(() => null);
-  if (rewritten == null)
-    throw new Error(`No rewritten article at ${path.relative(resolved, paths.rewritten)}; run the article rewrite first`);
+  root = await fs.realpath(root).catch(() => projectRoot);
+  const paths = htmlPaths(root, subject, node, step);
+  const lesson = await fs.readFile(paths.lesson, 'utf8').catch(() => null);
+  if (lesson == null)
+    throw new Error(`No HTML lesson at ${path.relative(root, paths.lesson)}; publish the article first`);
   const providedPlan = args.imagePlan ?? await readJson(paths.planInput);
   const plan = normalizeImagePlan(providedPlan);
   if (!plan.length) throw new Error('imagePlan is required: the calling agent must mark at least one image');
   if (plan.length > MAX_IMAGES) throw new Error(`imagePlan has ${plan.length} items; at most ${MAX_IMAGES} are allowed`);
-  parseImageMarkers(rewritten, plan);
-  // The plan is only recorded once the markers validate, so /to-image never
-  // picks up a plan for an article that was never written.
+  parseImageMarkers(lesson, plan);
+  // The plan is only recorded once the markers validate, so image generation
+  // never picks up a plan whose markers are not actually in the lesson.
   await fs.writeFile(paths.plan, JSON.stringify(plan, null, 2));
-  const body = markersToFigures(rewritten, plan, step);
-  await fs.writeFile(paths.lesson, assembleLesson({ htmlTag, headInner, body, chrome }));
-  await ensureLessonFigureStyles(resolved, subject);
-  await setStepIllustration(resolved, subject, node, step, 'planned');
+  await ensureLessonFigureStyles(root, subject);
+  await setStepIllustration(root, subject, node, step, 'planned');
   const manifest = await readJson(paths.manifest) ?? { mode: 'article' };
   manifest.status = 'completed';
-  manifest.stages = { ...(manifest.stages ?? {}), assembled: true };
+  manifest.stages = { ...(manifest.stages ?? {}), planned: true };
   await fs.writeFile(paths.manifest, JSON.stringify(manifest, null, 2));
-  return { lesson: paths.lesson, plan: paths.plan, rewritten: paths.rewritten };
+  return { lesson: paths.lesson, plan: paths.plan, planInput: paths.planInput };
 }
 
 function buildImagePrompt(item, context, imageTemplate) {
@@ -633,7 +611,7 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
   loadEnv(root);
   const paths = htmlPaths(root, subject, node, step);
   const plan = normalizeImagePlan(await readJson(paths.plan));
-  if (!plan.length) throw new Error(`No image plan at ${path.relative(root, paths.plan)}; run /to-article first`);
+  if (!plan.length) throw new Error(`No image plan at ${path.relative(root, paths.plan)}; run the /to-image plan step first`);
   const imageModel = resolveImageModel();
   const imageProvider = resolveImageProvider();
   const generateImage = injected.generateImage
@@ -655,12 +633,12 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
     await fs.mkdir(paths.assets, { recursive: true });
     await fs.mkdir(paths.imageAssets, { recursive: true });
     const imageTemplate = await fs.readFile(path.join(root, 'prompts', 'image.txt'), 'utf8').catch(() => '');
-    const rewritten = await fs.readFile(paths.rewritten, 'utf8').catch(() => '');
-    const contexts = rewritten ? markerContexts(rewritten, plan) : [];
+    const article = await fs.readFile(paths.lesson, 'utf8');
+    const contexts = markerContexts(article, plan);
     // Fire every figure at once rather than one at a time; collect the results
     // by index so the manifest and marker replacement stay deterministic.
     const outcomes = await Promise.allSettled(plan.map(async item => {
-      const filename = `image-${item.index}.png`;
+      const filename = `image-${item.index}.webp`;
       const source = path.join(paths.assets, filename);
       const destination = path.join(paths.imageAssets, filename);
       // Check both places the image can already live — the output working dir and
@@ -698,7 +676,10 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
     const figures = outcomes.map(outcome => outcome.value).sort((a, b) => a.index - b.index);
     manifest.images = figures;
     await saveManifest();
-    let lesson = await fs.readFile(paths.lesson, 'utf8');
+    // Swap the plan's markers for their final figures in place, then ensure each
+    // figure exists — idempotent, and it still migrates any legacy pending
+    // placeholder an older run left behind. The article is never rebuilt.
+    let lesson = markersToFigures(article, plan, step);
     for (const figure of figures) lesson = ensureFigure(lesson, figure.index, step);
     await fs.writeFile(paths.lesson, lesson);
     await setStepIllustration(root, subject, node, step, 'done');

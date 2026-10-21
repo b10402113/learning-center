@@ -1,12 +1,12 @@
 import fs from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { prepareHtmlLesson, generateHtmlArticle, generateNodeArticle, finalizeHtmlArticle, generateHtmlImages } from './html.mjs';
+import { prepareHtmlLesson, generateHtmlArticle, generateNodeArticle, finalizeHtmlPlan, generateHtmlImages } from './html.mjs';
 
 const usage = `Usage:
   node src/html-cli.mjs clean   --subject <s> --node <n> --step <t> [--root <dir>]
   node src/html-cli.mjs article --subject <s> --node <n> --step <t> [--brief <text>] [--type <t>] [--types-dir <dir>] [--root <dir>]
-  node src/html-cli.mjs article-batch --subject <s> --node <n> [--max-parallel <n>] [--skip-existing] [--plan-only] [--brief <text>] [--types-dir <dir>] [--root <dir>]
-  node src/html-cli.mjs figures --subject <s> --node <n> --step <t> [--plan <file>] [--root <dir>]
+  node src/html-cli.mjs article-batch --subject <s> --node <n> [--max-parallel <n>] [--skip-existing] [--brief <text>] [--types-dir <dir>] [--root <dir>]
+  node src/html-cli.mjs plan    --subject <s> --node <n> --step <t> [--plan <file>] [--root <dir>]
   node src/html-cli.mjs image   --subject <s> --node <n> --step <t> [--root <dir>]`;
 
 const { values, positionals } = parseArgs({
@@ -21,7 +21,6 @@ const { values, positionals } = parseArgs({
     'types-dir': { type: 'string' },
     'max-parallel': { type: 'string' },
     'skip-existing': { type: 'boolean' },
-    'plan-only': { type: 'boolean' },
     root: { type: 'string' },
   },
   allowPositionals: true,
@@ -64,12 +63,11 @@ try {
         subject: target.subject, node: target.node,
         brief: values.brief, type: values.type, typesDir: values['types-dir'],
         maxParallel: values['max-parallel'], skipExisting: values['skip-existing'],
-        planOnly: values['plan-only'],
       }, root);
       console.log(JSON.stringify(result, null, 2));
-    } else if (mode === 'figures') {
+    } else if (mode === 'plan') {
       const imagePlan = values.plan ? JSON.parse(await fs.readFile(values.plan, 'utf8')) : undefined;
-      const result = await finalizeHtmlArticle({ ...target, imagePlan }, root);
+      const result = await finalizeHtmlPlan({ ...target, imagePlan }, root);
       console.log(JSON.stringify(result, null, 2));
     } else if (mode === 'image') {
       const result = await generateHtmlImages(target, root);

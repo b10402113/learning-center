@@ -14,6 +14,6 @@ Validate every resolved slug has a container at `learn/<subject>/nodes/<slug>.md
 
 ## Batch the work
 
-Partition the resolved work items — nodes for `/batch-nodes` and `/to-article`, steps for `/to-image` — into batches of `max-subagents`. Process batches sequentially; items within a batch run in parallel. For each batch launch one `task` subagent per item — all calls in a single message, with the `subagent_type` the skill names (`general` for `/batch-nodes`'s Nodes phase and `teach-agent` for its Teach phase, `article-agent` for `/to-article` and `/to-image`). Wait for every subagent to return before the next batch, and show a progress line after each batch.
+Partition the resolved work items — nodes for `/batch-nodes` and `/to-article`, steps for `/to-image` — into batches of `max-subagents`. Process batches sequentially; items within a batch run in parallel. For each batch launch one `task` subagent per item — all calls in a single message, with the `subagent_type` the skill names (`general` for `/batch-nodes`'s Nodes phase and `teach-agent` for its Teach phase, `article-agent` for `/to-image`). `/to-article` is a pure CLI batch and dispatches no subagent. Wait for every subagent (or command) to return before the next batch, and show a progress line after each batch.
 
 Report at the end: succeeded, failed, and skipped per item, with a reason for each skip and the error for each failure.

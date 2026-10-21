@@ -343,7 +343,9 @@ function checkSourcesPresent(report, path, kind) {
 
 // Every code block in a procedure/reference lesson must carry its provenance:
 // data-source for verbatim source code, data-provenance="derived" for code
-// written from the prose. The lesson HTML is the published artifact.
+// written from the prose. The lesson HTML is the published artifact. A <pre>
+// without <code> quotes prose (a subtitle or transcript line), not code, so it
+// carries no provenance.
 function checkStepProvenance(report, subject, step) {
   const { data: fm } = parse(step.path);
   const type = fm.type ? String(fm.type) : "concept";
@@ -352,7 +354,7 @@ function checkStepProvenance(report, subject, step) {
   if (!existsSync(htmlPath)) return;
   const html = readFileSync(htmlPath, "utf8");
   const rel = htmlPath.replace(REPO_ROOT + "/", "");
-  const re = /<pre\b[^>]*>/gi;
+  const re = /<pre\b[^>]*>\s*<code\b/gi;
   let m;
   while ((m = re.exec(html)) !== null) {
     const tag = m[0];

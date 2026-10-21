@@ -1,37 +1,27 @@
 ---
 name: to-article
-description: 把既有 step HTML 課程改寫成圖文並茂的文章（只改寫與規劃配圖，不花錢生圖）。
+description: 把既有 step HTML 課程改寫成純文章（只改寫、發佈，不規劃配圖、不花錢）。
 disable-model-invocation: true
 argument-hint: "/to-article <subject> [tier<N> | node-slug ...] [-max-subagents N] [-max-parallel N]"
 ---
 
-Rewrite the HTML lessons of a subject's steps into readable illustrated articles, planning where images go but **not generating them**. One `article-agent` handles each **node**: it first rewrites every step in one bounded-parallel batch (one `.env` text-model call per step, by `src/html-cli.mjs`), then plans where each step's images go. A later `/to-image` spends the image money. Prose cleanup (`/speak-human-tw`) is a separate concern, not part of this skill.
+Rewrite the HTML lessons of a subject's steps into readable articles and publish them. **This stage only rewrites and publishes — it does not plan or place figures.** Image planning and generation are `/to-image`'s job. Prose cleanup (`/zh-tw-humanizer`) is a separate concern, not part of this skill.
+
+The rewrite goes through `src/html-cli.mjs`, which makes one `.env` text-model call per step, validates that code blocks and links survive, writes `rewritten.html`, and publishes the plain rewritten article (rewrite body + the original quiz/nav/footer) to the live lesson. No agent is involved — the whole stage is the CLI batch.
 
 **Invocation modes:**
 - `/to-article <subject>` — all nodes in the roadmap.
 - `/to-article <subject> tier<N>` — all nodes under `### Tier <N>` in the roadmap (e.g. `tier1`).
 - `/to-article <subject> <slug> [<slug> ...]` — only the listed nodes.
-- Append `-max-subagents N` (default 3): how many nodes run in parallel.
+- Append `-max-subagents N` (default 3): how many nodes are processed at once.
 - Append `-max-parallel N` (default 2): how many text calls one node's batch may run at once. At most `max-subagents × max-parallel` text calls are ever in flight.
-- Append `-plan-only` to plan images without rewriting: the text model is never called. Each step with an existing `rewritten.html` — or else the current lesson, which the batch adopts as the base — is planned in place; steps already planned are skipped.
 
 Prereqs: `learn/<subject>/MEMORY.md` and `learn/<subject>/ROADMAP.md` exist; the repo root has `npm install` run and a `.env` with `TEXT_API_KEY` (see `.env.example`). If any is missing, say so and stop.
 
-1. **Resolve.** Parse `subject`, `-max-subagents N`, `-max-parallel N`, and the scope per `docs/reference/skill-scope.md`. Validate each resolved slug has a container at `learn/<subject>/nodes/<slug>.mdx`. Do **not** enumerate steps here — the batch CLI reads each node's `steps` DAG itself and reports any step it skips.
-2. **Article.** Batch the resolved **nodes** into groups of `max-subagents`. Process batches sequentially; nodes within a batch run in parallel. For each node dispatch one `task` call with `subagent_type: article-agent` and the [Article-prompt](#article-prompt) filled in — the same agent rewrites the node's steps in one batch, then plans each rewritten step (one at a time). Wait for the batch, show a progress line, then continue.
-3. **Report.** Summarise: steps rewritten / planned, steps failed, steps skipped (with reasons). List failed steps and suggest re-running `/to-article <subject> <node-slug>`. Remind the learner to review the rewritten HTML before running `/to-image`.
+1. **Resolve.** Parse `subject`, `-max-subagents N`, `-max-parallel N`, and the scope per `docs/reference/skill-scope.md`. Validate each resolved slug has a container at `learn/<subject>/nodes/<slug>.mdx`. Do **not** enumerate steps — the batch CLI reads each node's `steps` DAG itself and reports any step it skips.
+2. **Rewrite.** For each batch of `max-subagents` nodes, run one command per node in parallel:
+   `node src/html-cli.mjs article-batch --subject <subject> --node <node> [--max-parallel <max-parallel>]`
+   It rewrites every step of the node, publishes each rewrite to the live lesson, and prints JSON with per-step statuses (`rewritten` / `failed` / `skipped`, with a reason). Process batches sequentially; wait for every command in a batch before the next, and show a progress line.
+3. **Report.** Summarise: steps rewritten / failed / skipped (with reasons). List failed steps and suggest re-running `/to-article <subject> <node-slug>`. Remind the learner the article is published and figures come later from `/to-image`.
 
-Completion: every node was dispatched to its own article-agent, every agent returned, each step reports rewritten / planned / failed / skipped, and the final report is delivered.
-
-## Article-prompt
-
-Passed to each `task` call. Fill `<SUBJECT>`, `<NODE-ID>`, `<MAX-PARALLEL>` and `<YES or NO>` first; dispatch with `subagent_type: article-agent`.
-
-```
-Process one whole lesson node in node-article mode. Subject: <SUBJECT>. Node: <NODE-ID>.
-Plan-only: <YES or NO>. If YES, pass `--plan-only` to the article-batch call — the text model is never called; plan each step from its existing rewrite, or from the current lesson which the batch adopts as the base.
-
-Follow your article-agent instructions (mode `node-article`) exactly: run the `src/html-cli.mjs article-batch --subject <SUBJECT> --node <NODE-ID> --max-parallel <MAX-PARALLEL>` call (it uses the .env text model and rewrites every step of the node in one batch), then for each step it reports as `rewritten`, one step at a time: read the rewrite, decide the image plan, insert the `<!--image:N-->` marker lines (the only edit you may make to that file), write the plan file, and run the `src/html-cli.mjs figures` call for that step to finalize.
-
-Report one line per step with the step id, status (rewritten / planned / failed / skipped), the rewritten path, the planned image count, and any error message.
-```
+Completion: every node in scope ran its `article-batch`, each step reports rewritten / failed / skipped, and the final report is delivered.
