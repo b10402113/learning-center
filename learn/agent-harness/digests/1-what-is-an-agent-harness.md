@@ -1,48 +1,32 @@
 ---
-source: 1-what-is-an-agent-harness
-source_type: pdf
+source: sources/agent-harness/20260915/1-what-is-an-agent-harness.txt
+source_type: text
 source_lines: 216
 status: absorbed
-absorbed_at: 2026-09-15
-created: 2026-09-15
-updated: 2026-09-15
+absorbed_at: 2026-10-22
 ---
 
-# Digest — 1-what-is-an-agent-harness
+# L1 overview
 
-## Overview (L1)
+Scott Moss 用一整段訪談定義 agent harness，重點如下：
 
-- Defining the harness — Scott's working definition: an agent = LLM + harness; the harness is the infrastructure that makes an agent conversational, memory-bearing, durable, and self-healing, versus bare transactional inference calls.
-- Harness components in practice — How the harness solves memory (short/long-term, scratchpad, facts), tools (own implementation vs MCP, server management), and long-running/durable tasks across app closures and notifications.
-- Harness examples and the primacy of harness engineering — Claude Code as a case study (terminal UI, skills, file-mention UX, auto-compaction, autonomous sub-agents), other harnesses (OpenCode, OpenClaw, Hermes, Pi), and the claim that the best harness beats the best model.
-- What to prioritize and experience-dependence — The harness follows the target experience (trading bot → self-healing, guardrails, approvals, PII security, self-eval loop); table stakes are memory and tool calling, durable execution is situational.
+- Agent = LLM + harness；沒有 harness 只是 transactional inference calls。
+- Harness 是基礎設施：memory、tools（含 MCP）、long-running tasks、durability、recovery。
+- 以 Claude Code 為例，harness 是 terminal UI、skills、檔案提及、自動壓縮、sub-agent。
+- 好的 harness 可以讓較弱的模型贏過較強模型；模型只做 harness 允許的事。
+- Harness engineering 與 evals 是他認為現在 AI 最值得投入的兩件事。
+- 沒有固定清單，取決於產品體驗；基本盤是 memory、tool calling、durable execution。
+- 交易型 agent 的 harness 會多出 guardrail、approval、PII 防護。
 
-## Sections (L2)
+# L2 detail
 
-### defining-the-harness
-
-- Locator: `[[sources/agent-harness/20260915/1-what-is-an-agent-harness.txt#defining-the-harness]]`
-- Summary: Scott gives his definition of a harness, acknowledging the term is as overloaded as "agent." He argues an agent is the combination of an LLM plus a harness, and the harness is the infrastructure that turns raw model calls into a usable, durable product.
-- Key claims: Agent = LLM + harness; without a harness you only have one-off transactional inference calls; a harness enables conversation, memory, durability, self-healing, and the ability to exercise different architectures for different problems; the harness is infrastructure, and you cannot build a production agent without it; other definitions of harness are derivatives of "all the infrastructure an agent needs to be hardened, accurate, durable, and resilient."
-- Learner-relevant: The foundational definition that frames every later design decision and justifies treating the harness as its own engineering discipline.
-
-### harness-components
-
-- Locator: `[[sources/agent-harness/20260915/1-what-is-an-agent-harness.txt#harness-components]]`
-- Summary: Zooms into the harness to enumerate the concrete problems it must solve: memory, tools, and long-running tasks. These become the recurring sub-systems the course builds.
-- Key claims: Memory must be solved across short-term, long-term, scratchpad, and facts; tools must be introduced and managed — whether a standard tool-call implementation or MCP, and how tool servers get managed; long-running tasks need durable execution so a ten-minute deep-research job survives the user closing the app and can notify them later; the harness is the infrastructure that powers the agent.
-- Learner-relevant: Enumerates the design surfaces (memory, tools, durability) that the learner will reason about and later implement.
-
-### harness-examples-and-harness-engineering
-
-- Locator: `[[sources/agent-harness/20260915/1-what-is-an-agent-harness.txt#harness-examples-and-harness-engineering]]`
-- Summary: Uses Claude Code as a concrete example of harness boundaries, then names other harness implementations around the same models. Scott argues harness quality, not model quality, is the differentiator.
-- Key claims: Strip away the model selection in Claude Code and the harness is the terminal UI, the skills implementation, the file-mention UX, auto-compaction when history grows, and the ability to spawn sub-agents unprompted; OpenCode, OpenClaw, Hermes, and Pi are all harnesses around the same underlying models; harnesses using inferior models can outperform harnesses with superior models; harness engineering and evals are the two most valuable AI skills, roughly 90% of the work.
-- Learner-relevant: Builds intuition for what "counts" as harness and motivates investing effort in harness quality over chasing the newest model.
-
-### what-to-prioritize
-
-- Locator: `[[sources/agent-harness/20260915/1-what-is-an-agent-harness.txt#what-to-prioritize]]`
-- Summary: Answers what to focus on when building a harness: everything depends on the experience you want to deliver. Scott walks through a trading-agent example and then names the table-stakes capabilities.
-- Key claims: Harness priorities depend on the target experience — an always-on trading agent needs self-healing, guardrails, approval systems, and PII/security mechanisms; consider tying in an eval loop so the agent self-judges and improves; table stakes are memory and tool calling; durable execution is needed here but not by every agent (e.g. simple send-message/get-response agents); summarized as "models work the way that harnesses allow them to."
-- Learner-relevant: Teaches learners to derive harness requirements from the desired experience rather than applying a fixed checklist, and identifies which capabilities are non-negotiable.
+- `#L1-L11` — 定義：harness 讓 agent 成為 agent，agent 是 LLM 加 harness。
+- `#L12-L25` — 沒有 harness 就只有一次性 inference；對話、記憶、durable、self-healing 都屬於 harness。
+- `#L26-L58` — harness 是基礎設施：memory、tools/MCP、長跑任務、關掉 app 後續跑。
+- `#L59-L80` — 沒有 harness 上不了 production，只會有 LLM call。
+- `#L81-L108` — 以 Claude Code 舉例：terminal UI、skills、mention files、auto compact、spawn sub-agents。
+- `#L109-L127` — 模型不是差異來源；harness 好壞決定成果。
+- `#L128-L145` — harness engineering 與 evals 是現在最值得做的兩件事。
+- `#L146-L196` — harness 取決於體驗：交易 agent 需要 guardrail、approval、PII、自我評估。
+- `#L197-L208` — 基本盤：memory、tool calling、durable execution（非每個 agent 都需要）。
+- `#L209-L216` — 總結：模型只能做 harness 允許它做的事。
