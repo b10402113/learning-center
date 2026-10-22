@@ -2,35 +2,31 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import subjectsIndex from "./data/subjects.json";
 import Sidebar from "./components/Sidebar.jsx";
 import NodeView from "./components/NodeView.jsx";
+import StepView from "./components/StepView.jsx";
+import { hashFor, parseHash } from "./lib/route.mjs";
 
 // Lazy loaders — each subject's course JSON is code-split and fetched on demand.
 const courseLoaders = import.meta.glob("./data/subjects/*.json");
 const SUBJECTS = subjectsIndex.subjects;
 
-function parseHash() {
-  const m = window.location.hash.match(/^#\/([^/]+)\/(.+)$/);
-  if (m) {
-    return { subjectId: decodeURIComponent(m[1]), nodeId: decodeURIComponent(m[2]) };
-  }
-  // legacy single-subject scheme: #/node/<id>
-  const legacy = window.location.hash.match(/^#\/node\/(.+)$/);
-  if (legacy) return { subjectId: null, nodeId: decodeURIComponent(legacy[1]) };
-  return null;
+function resolveSubjectId(id) {
+  return id && SUBJECTS.some((s) => s.id === id) ? id : SUBJECTS[0]?.id;
+}
+
+function initialRoute() {
+  const h = parseHash(window.location.hash);
+  return {
+    subjectId: resolveSubjectId(h?.subjectId),
+    nodeId: h?.nodeId ?? null,
+    stepId: h?.stepId ?? null,
+  };
 }
 
 export default function App() {
-  const [{ subjectId, nodeId }, setRoute] = useState(() => {
-    const h = parseHash();
-    const sid =
-      h?.subjectId && SUBJECTS.some((s) => s.id === h.subjectId)
-        ? h.subjectId
-        : SUBJECTS[0]?.id;
-    return { subjectId: sid, nodeId: h?.nodeId ?? null };
-  });
+  const [route, setRoute] = useState(initialRoute);
+  const { subjectId, nodeId, stepId } = route;
   const [course, setCourse] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  // Set of "nodeId/stepId" — which step cards are expanded
-  const [expanded, setExpanded] = useState(() => new Set());
   const cacheRef = useRef({});
 
   // Load the selected subject's data (async, cached)
@@ -59,11 +55,21 @@ export default function App() {
     [course, nodeId]
   );
 
+  const step = useMemo(
+    () => node?.steps.find((s) => s.id === stepId) || null,
+    [node, stepId]
+  );
+
   // Browser back/forward support
   useEffect(() => {
     const onHash = () => {
-      const h = parseHash();
-      if (h?.subjectId && h?.nodeId) setRoute(h);
+      const next = parseHash(window.location.hash);
+      if (!next) return;
+      setRoute({
+        subjectId: resolveSubjectId(next.subjectId),
+        nodeId: next.nodeId,
+        stepId: next.stepId,
+      });
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -80,14 +86,18 @@ export default function App() {
     };
   }, [sidebarOpen]);
 
-  const pushHash = (sid, nid) => {
-    const next = `#/${encodeURIComponent(sid)}/${encodeURIComponent(nid)}`;
+  const replaceHash = (sid, nid, stid = null) => {
+    const next = hashFor(sid, nid, stid);
+    if (window.location.hash !== next) history.replaceState(null, "", next);
+  };
+
+  const pushHash = (sid, nid, stid = null) => {
+    const next = hashFor(sid, nid, stid);
     if (window.location.hash !== next) history.pushState(null, "", next);
   };
 
   const selectNode = (id) => {
-    setRoute((r) => ({ ...r, nodeId: id }));
-    setExpanded(new Set());
+    setRoute((r) => ({ ...r, nodeId: id, stepId: null }));
     setSidebarOpen(false);
     pushHash(subjectId, id);
     window.scrollTo({ top: 0 });
@@ -95,28 +105,30 @@ export default function App() {
 
   const switchSubject = (sid) => {
     if (sid === subjectId || !SUBJECTS.some((s) => s.id === sid)) return;
-    setRoute({ subjectId: sid, nodeId: null }); // node resolves after load
+    setRoute({ subjectId: sid, nodeId: null, stepId: null });
     setCourse(null);
-    setExpanded(new Set());
     setSidebarOpen(false);
     window.scrollTo({ top: 0 });
   };
 
-  // After a subject loads, sync its first node into the hash if none selected
+  // Resolve incomplete or stale hashes once the course JSON is loaded.
   useEffect(() => {
-    if (course && !course.nodes.some((n) => n.id === nodeId) && course.nodes[0]) {
-      setRoute((r) => ({ ...r, nodeId: course.nodes[0].id }));
-      history.replaceState(null, "", `#/${encodeURIComponent(course.subject)}/${encodeURIComponent(course.nodes[0].id)}`);
-    }
-  }, [course, nodeId]);
+    if (!course || course.nodes.length === 0) return;
+    const resolved =
+      course.nodes.find((n) => n.id === nodeId) || course.nodes[0];
+    const resolvedStep = resolved.steps.some((s) => s.id === stepId)
+      ? stepId
+      : null;
 
-  const toggleStep = (key) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+    if (resolved.id !== nodeId || resolvedStep !== stepId) {
+      setRoute({
+        subjectId: course.subject,
+        nodeId: resolved.id,
+        stepId: resolvedStep,
+      });
+    }
+    replaceHash(course.subject, resolved.id, resolvedStep);
+  }, [course, nodeId, stepId]);
 
   if (!course || !node) {
     return (
@@ -145,7 +157,9 @@ export default function App() {
           <p className="text-[10px] uppercase tracking-[0.12em] text-ink-soft">
             {course.title} · Tier {node.tier}
           </p>
-          <p className="truncate text-sm font-semibold">{node.title}</p>
+          <p className="truncate text-sm font-semibold">
+            {step ? step.title : node.title}
+          </p>
         </div>
       </header>
 
@@ -160,13 +174,11 @@ export default function App() {
       />
 
       <main className="min-w-0 flex-1 px-4 pb-20 pt-6 sm:px-8 sm:pt-8 lg:max-w-[900px] xl:px-12">
-        <NodeView
-          course={course}
-          node={node}
-          expanded={expanded}
-          onToggleStep={toggleStep}
-          onSelect={selectNode}
-        />
+        {step ? (
+          <StepView course={course} node={node} step={step} />
+        ) : (
+          <NodeView course={course} node={node} onSelect={selectNode} />
+        )}
       </main>
     </div>
   );

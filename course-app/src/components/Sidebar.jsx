@@ -88,7 +88,7 @@ export default function Sidebar({
               </div>
               {items.map((node) => {
                 const active = node.id === currentId;
-                const written = node.status === "content-written";
+                const written = node.status === "written";
                 return (
                   <button
                     key={node.id}

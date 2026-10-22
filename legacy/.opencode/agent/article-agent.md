@@ -36,7 +36,7 @@ You are given a subject, a node id and a step id; all paths are derived from tho
 
 1. Run:
    `node src/html-cli.mjs image --subject <SUBJECT> --node <NODE> --step <STEP>`
-   It generates one figure per plan item, writes the originals under `output/.../assets/`, copies them into `lessons/<node>/<step>-assets/`, swaps each marker for a `<figure>` in place, and sets `illustration: done`. Existing images are reused, so it is safe to re-run.
+   It generates one figure per plan item, compresses each new figure to WebP (`IMAGE_COMPRESS_QUALITY` / `IMAGE_MAX_WIDTH`), writes it under `output/.../assets/`, copies it into `lessons/<node>/<step>-assets/`, swaps each marker for a `<figure>` in place, and sets `illustration: done`. Existing images are reused untouched, so it is safe to re-run.
 2. If the step has no `plan.json`, report it as skipped. If the command fails, report the error.
 
 ## Report

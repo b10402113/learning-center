@@ -1,21 +1,14 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { resolveSrc } from "../lib/assets.mjs";
 
 /**
- * Renders lesson markdown with paper-theme prose styling.
- * Wiki-links are already flattened to plain text at build time.
+ * Renders Markdown with paper-theme prose styling. Relative images resolve
+ * against `assetBase`, which points at the step's directory in public/nodes/.
  */
-export default function Markdown({ children, className = "" }) {
+export default function Markdown({ children, className = "", assetBase = "" }) {
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        table: (props) => (
-          <div className="my-4 overflow-x-auto">
-            <table {...props} />
-          </div>
-        ),
-      }}
+    <div
       className={`prose prose-sm sm:prose-base max-w-none
         prose-headings:font-serif prose-headings:font-semibold prose-headings:text-ink
         prose-p:text-ink/90 prose-p:leading-relaxed
@@ -33,7 +26,27 @@ export default function Markdown({ children, className = "" }) {
         prose-hr:border-line
         ${className}`}
     >
-      {children}
-    </ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          img: ({ src, alt, title }) => (
+            <img
+              src={resolveSrc(src, assetBase, window.location.href)}
+              alt={alt || ""}
+              title={title}
+              loading="lazy"
+              className="lesson-figure my-6 w-full rounded-lg border border-line"
+            />
+          ),
+          table: (props) => (
+            <div className="my-4 overflow-x-auto">
+              <table {...props} />
+            </div>
+          ),
+        }}
+      >
+        {children}
+      </ReactMarkdown>
+    </div>
   );
 }

@@ -1,0 +1,165 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { buildSubject, discoverSubjects } from "./build-data.mjs";
+
+function write(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+}
+
+function fixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "course-build-"));
+  const learnRoot = path.join(root, "learn");
+  const appRoot = path.join(root, "app");
+  const subjectDir = path.join(learnRoot, "demo");
+
+  write(
+    path.join(subjectDir, "ROADMAP.md"),
+    `---
+subject: demo
+status: confirmed
+created: 2026-10-22
+---
+
+# Demo
+
+## Goal
+
+Learn the demo.
+
+## Nodes
+
+### Tier 1 — Basics
+
+1. **[Node A](nodes/node-a.md)**
+   - Goal: Node A goal.
+   - Steps: 2
+`
+  );
+
+  write(
+    path.join(subjectDir, "MEMORY.md"),
+    `---
+subject: demo
+language: zh-Hant
+---
+
+# Learner profile
+`
+  );
+
+  write(
+    path.join(subjectDir, "nodes", "node-a.md"),
+    `---
+id: node-a
+title: "Node A"
+subject: demo
+tier: 1
+order: 1
+status: confirmed
+goal: "Node A goal."
+prerequisites: []
+steps:
+  - id: step-two
+    title: "Step Two"
+    purpose: "Second purpose."
+    sources:
+      - "[[sources/demo/source.txt#L10-L20]]"
+  - id: step-one
+    title: "Step One"
+    purpose: "First purpose."
+    sources:
+      - "[[sources/demo/source.txt#L1-L5]]"
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Node A
+
+## Lesson
+
+Lesson body for node A.
+
+## Steps
+
+1. [Step Two](node-a/step-two.md)
+2. [Step One](node-a/step-one.md)
+`
+  );
+
+  write(
+    path.join(subjectDir, "nodes", "node-a", "step-one.md"),
+    `# Step One
+
+First article body.
+
+![Figure](./step-one-assets/image-1.webp)
+`
+  );
+  write(
+    path.join(subjectDir, "nodes", "node-a", "step-one-assets", "image-1.webp"),
+    "fake-webp"
+  );
+  write(path.join(subjectDir, "nodes", "ignored.mdx"), "# ignored");
+
+  return { root, learnRoot, appRoot };
+}
+
+test("discovers subjects that have a ROADMAP.md", () => {
+  const { learnRoot } = fixture();
+  assert.deepEqual(discoverSubjects(learnRoot), ["demo"]);
+});
+
+test("reads Markdown nodes and keeps frontmatter step order", () => {
+  const { learnRoot, appRoot } = fixture();
+  const course = buildSubject("demo", { learnRoot, appRoot });
+
+  assert.equal(course.subject, "demo");
+  assert.equal(course.goal, "Learn the demo.");
+  assert.deepEqual(course.tiers, [{ tier: 1, name: "Basics" }]);
+
+  const node = course.nodes[0];
+  assert.equal(node.id, "node-a");
+  assert.equal(node.title, "Node A");
+  assert.equal(node.goal, "Node A goal.");
+  assert.equal(node.lessonIntro, "Lesson body for node A.");
+  assert.deepEqual(
+    node.steps.map((step) => step.id),
+    ["step-two", "step-one"]
+  );
+  assert.deepEqual(
+    node.steps.map((step) => step.order),
+    [1, 2]
+  );
+  assert.equal(node.steps[0].hasContent, false);
+  assert.equal(node.steps[1].hasContent, true);
+  assert.match(node.steps[1].articleMd, /^# Step One/);
+  assert.match(node.steps[1].articleMd, /First article body/);
+  assert.deepEqual(
+    node.steps.map((step) => step.purpose),
+    ["Second purpose.", "First purpose."]
+  );
+  assert.equal(node.steps[0].sources[0].label, "source.txt#L10-L20");
+});
+
+test("copies step assets and does not copy HTML lessons", () => {
+  const { learnRoot, appRoot } = fixture();
+  write(path.join(learnRoot, "demo", "lessons", "old.html"), "<html></html>");
+
+  buildSubject("demo", { learnRoot, appRoot });
+
+  assert.equal(
+    fs.readFileSync(
+      path.join(
+        appRoot,
+        "public/nodes/demo/node-a/step-one-assets/image-1.webp"
+      ),
+      "utf8"
+    ),
+    "fake-webp"
+  );
+  assert.equal(fs.existsSync(path.join(appRoot, "public/lessons")), false);
+});

@@ -14,10 +14,18 @@ import {
   generateGeminiImage,
   loadEnv,
   withRetry,
-} from './pipeline.mjs';
+} from '../../src/pipeline.mjs';
 import { parseFrontmatter } from '../scripts/generate-data.mjs';
 
-const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const legacyRoot = path.resolve(moduleDir, '..');
+const projectRoot = path.resolve(legacyRoot, '..');
+
+/** Read a legacy asset, preferring a caller-provided root over `legacy/`. */
+async function readLegacyFile(root, ...parts) {
+  return fs.readFile(path.join(root, ...parts), 'utf8')
+    .catch(() => fs.readFile(path.join(legacyRoot, ...parts), 'utf8'));
+}
 
 export const ILLUSTRATION_STATES = ['none', 'planned', 'done'];
 export const STEP_TYPES = ['concept', 'procedure', 'decision', 'reference'];
@@ -298,7 +306,7 @@ export async function ensureLessonFigureStyles(root, subject) {
   const target = path.join(root, 'learn', subject, 'lessons', 'assets', 'shared.css');
   let css = await fs.readFile(target, 'utf8').catch(() => null);
   if (css == null) {
-    css = await fs.readFile(path.join(projectRoot, '.opencode', 'skills', 'teach', 'assets', 'shared.css'), 'utf8')
+    css = await readLegacyFile('.opencode', 'skills', 'teach', 'assets', 'shared.css')
       .catch(() => '');
   }
   if (!css.includes('.lesson-figure')) {
@@ -339,8 +347,13 @@ export async function resolveStepType(root, subject, node, step) {
 
 /** Read the writing rules for a step type from `.opencode/skills/teach/types/<type>.md`. */
 export async function loadTypeRules(root, type, typesDir) {
-  const dir = typesDir || path.join(root, '.opencode', 'skills', 'teach', 'types');
-  const rules = await fs.readFile(path.join(dir, `${type}.md`), 'utf8').catch(() => null);
+  if (typesDir) {
+    const rules = await fs.readFile(path.join(typesDir, `${type}.md`), 'utf8').catch(() => null);
+    return rules ? rules.trim() : '';
+  }
+  const rules = await fs.readFile(path.join(root, '.opencode', 'skills', 'teach', 'types', `${type}.md`), 'utf8')
+    .catch(() => fs.readFile(path.join(legacyRoot, '.opencode', 'skills', 'teach', 'types', `${type}.md`), 'utf8'))
+    .catch(() => null);
   return rules ? rules.trim() : '';
 }
 
@@ -461,7 +474,7 @@ export async function generateHtmlArticle(args, root = projectRoot, injected = {
   const saveManifest = () => fs.writeFile(paths.manifest, JSON.stringify(manifest, null, 2));
   try {
     const client = injected.client ?? await createTextClient();
-    const basePrompt = await fs.readFile(path.join(resolved, 'prompts', 'html-rewrite.txt'), 'utf8');
+    const basePrompt = await readLegacyFile(resolved, 'prompts', 'html-rewrite.txt');
     const stepType = args.type ?? await resolveStepType(resolved, subject, node, step);
     const typeRules = await loadTypeRules(resolved, stepType, args.typesDir ?? injected.typesDir);
     const systemPrompt = typeRules
@@ -589,6 +602,45 @@ export async function finalizeHtmlPlan(args, root = projectRoot) {
   return { lesson: paths.lesson, plan: paths.plan, planInput: paths.planInput };
 }
 
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** Compression settings for newly generated figures, overridable from `.env`. */
+export function resolveImageCompression() {
+  const number = (raw, fallback) => {
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : fallback;
+  };
+  const quality = Math.round(clampNumber(number(process.env.IMAGE_COMPRESS_QUALITY, 80), 1, 100));
+  const maxWidth = Math.max(0, Math.floor(number(process.env.IMAGE_MAX_WIDTH, 1600)));
+  return { quality, maxWidth };
+}
+
+/**
+ * Re-encode one generated figure as WebP at the configured quality and max
+ * width. Returns the compressed bytes plus the original size; a decode failure
+ * keeps the original bytes so a provider returning an unexpected format never
+ * breaks the whole step — the caller records the warning in the manifest.
+ */
+async function compressImageBytes(bytes, settings, injectedCompress) {
+  const originalBytes = bytes.length;
+  try {
+    const compressed = injectedCompress
+      ? await injectedCompress(bytes, settings)
+      : await (async () => {
+        const { default: sharp } = await import('sharp');
+        let pipeline = sharp(bytes);
+        if (settings.maxWidth) pipeline = pipeline.resize({ width: settings.maxWidth, withoutEnlargement: true });
+        return pipeline.webp({ quality: settings.quality }).toBuffer();
+      })();
+    if (!Buffer.isBuffer(compressed) || !compressed.length) throw new Error('compressor returned no bytes');
+    return { bytes: compressed, originalBytes, compressed: true };
+  } catch (error) {
+    return { bytes, originalBytes, compressed: false, error: String(error?.message ?? error).slice(0, 200) };
+  }
+}
+
 function buildImagePrompt(item, context, imageTemplate) {
   const focus = item.prompt || item.anchor;
   const section = item.heading || context?.heading || '';
@@ -614,6 +666,7 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
   if (!plan.length) throw new Error(`No image plan at ${path.relative(root, paths.plan)}; run the /to-image plan step first`);
   const imageModel = resolveImageModel();
   const imageProvider = resolveImageProvider();
+  const compression = resolveImageCompression();
   const generateImage = injected.generateImage
     || (imageProvider === 'evolink' ? generateEvolinkImage
       : imageProvider === 'gemini' ? generateGeminiImage
@@ -624,6 +677,7 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
     subject, node, step,
     imageModel,
     imageProvider,
+    compression,
     imageRequests: 0,
     images: [],
     stages: {},
@@ -632,7 +686,7 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
   try {
     await fs.mkdir(paths.assets, { recursive: true });
     await fs.mkdir(paths.imageAssets, { recursive: true });
-    const imageTemplate = await fs.readFile(path.join(root, 'prompts', 'image.txt'), 'utf8').catch(() => '');
+    const imageTemplate = await readLegacyFile(root, 'prompts', 'image.txt').catch(() => '');
     const article = await fs.readFile(paths.lesson, 'utf8');
     const contexts = markerContexts(article, plan);
     // Fire every figure at once rather than one at a time; collect the results
@@ -646,6 +700,7 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
       let bytes = await fs.readFile(source).catch(() => null);
       if (bytes == null) bytes = await fs.readFile(destination).catch(() => null);
       const reused = bytes != null;
+      let compressionInfo;
       if (!reused) {
         manifest.imageRequests++;
         await saveManifest();
@@ -664,10 +719,17 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
             return !status || status === 429 || status === 408 || status >= 500;
           } });
         if (!Buffer.isBuffer(bytes) || !bytes.length) throw new Error(`No image returned for figure ${item.index}`);
+        const result = await compressImageBytes(bytes, compression, injected.compressImage);
+        bytes = result.bytes;
         await fs.writeFile(source, bytes);
+        compressionInfo = {
+          originalBytes: result.originalBytes,
+          compressed: result.compressed,
+          compressionError: result.error,
+        };
       }
       await fs.writeFile(destination, bytes);
-      return { index: item.index, filename, reused };
+      return { index: item.index, filename, reused, bytes: bytes.length, ...compressionInfo };
     }));
     // Wait for every job to settle before failing, so no straggler overwrites
     // the failed manifest the catch block is about to write.
@@ -675,6 +737,10 @@ export async function generateHtmlImages(args, root = projectRoot, injected = {}
     if (failed) throw failed.reason;
     const figures = outcomes.map(outcome => outcome.value).sort((a, b) => a.index - b.index);
     manifest.images = figures;
+    const compressionWarnings = figures
+      .filter(figure => figure.compressionError)
+      .map(figure => ({ index: figure.index, error: figure.compressionError }));
+    if (compressionWarnings.length) manifest.imageCompressionWarnings = compressionWarnings;
     await saveManifest();
     // Swap the plan's markers for their final figures in place, then ensure each
     // figure exists — idempotent, and it still migrates any legacy pending

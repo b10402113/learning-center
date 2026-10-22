@@ -3,11 +3,11 @@ import { parseArgs } from 'node:util';
 import { prepareHtmlLesson, generateHtmlArticle, generateNodeArticle, finalizeHtmlPlan, generateHtmlImages } from './html.mjs';
 
 const usage = `Usage:
-  node src/html-cli.mjs clean   --subject <s> --node <n> --step <t> [--root <dir>]
-  node src/html-cli.mjs article --subject <s> --node <n> --step <t> [--brief <text>] [--type <t>] [--types-dir <dir>] [--root <dir>]
-  node src/html-cli.mjs article-batch --subject <s> --node <n> [--max-parallel <n>] [--skip-existing] [--brief <text>] [--types-dir <dir>] [--root <dir>]
-  node src/html-cli.mjs plan    --subject <s> --node <n> --step <t> [--plan <file>] [--root <dir>]
-  node src/html-cli.mjs image   --subject <s> --node <n> --step <t> [--root <dir>]`;
+  node legacy/src/html-cli.mjs clean   --subject <s> --node <n> --step <t> [--root <dir>]
+  node legacy/src/html-cli.mjs article --subject <s> --node <n> --step <t> [--brief <text>] [--type <t>] [--types-dir <dir>] [--root <dir>]
+  node legacy/src/html-cli.mjs article-batch --subject <s> --node <n> [--max-parallel <n>] [--skip-existing] [--brief <text>] [--types-dir <dir>] [--root <dir>]
+  node legacy/src/html-cli.mjs plan    --subject <s> --node <n> --step <t> [--plan <file>] [--root <dir>]
+  node legacy/src/html-cli.mjs image   --subject <s> --node <n> --step <t> [--root <dir>]`;
 
 const { values, positionals } = parseArgs({
   args: process.argv.slice(2),

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeImagePlan } from './pipeline.mjs';
+import { normalizeImagePlan } from '../../src/pipeline.mjs';
 import {
   splitHtml,
   stripLessonChrome,
@@ -21,6 +21,7 @@ import {
   generateNodeArticle,
   finalizeHtmlPlan,
   generateHtmlImages,
+  resolveImageCompression,
   buildBrief,
   setStepIllustration,
   resolveStepType,
@@ -418,6 +419,104 @@ test('image: reuses figures already published in the lesson assets dir', async (
     assert.ok(manifest.images.every(figure => figure.reused));
     assert.equal(manifest.status, 'completed');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('image: compresses newly generated figures but leaves reused ones alone', async () => {
+  const root = await makeRoot();
+  try {
+    await fs.writeFile(lessonPath(root), LESSON_MARKED2);
+    await fs.mkdir(outputDir(root), { recursive: true });
+    await fs.writeFile(path.join(outputDir(root), 'plan.input.json'), JSON.stringify(PLAN2));
+    await finalizeHtmlPlan({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root);
+    await fs.mkdir(path.join(outputDir(root), 'assets'), { recursive: true });
+    await fs.writeFile(path.join(outputDir(root), 'assets', 'image-1.webp'), Buffer.from('REUSED', 'utf8'));
+    const seen = [];
+    const result = await generateHtmlImages({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root, {
+      generateImage: async () => Buffer.from('RAW-IMAGE-BYTES', 'utf8'),
+      compressImage: async (bytes, settings) => {
+        seen.push({ text: bytes.toString('utf8'), settings });
+        return Buffer.from('WEBP-COMPRESSED', 'utf8');
+      },
+    });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].text, 'RAW-IMAGE-BYTES');
+    assert.deepEqual(seen[0].settings, { quality: 80, maxWidth: 1600 });
+    const assets = path.join(root, 'learn', 'demo', 'lessons', 'demo-node', 'step-one-assets');
+    assert.equal(await fs.readFile(path.join(assets, 'image-1.webp'), 'utf8'), 'REUSED');
+    assert.equal(await fs.readFile(path.join(assets, 'image-2.webp'), 'utf8'), 'WEBP-COMPRESSED');
+    const manifest = JSON.parse(await fs.readFile(result.manifest, 'utf8'));
+    assert.deepEqual(manifest.images.map(figure => figure.compressed), [undefined, true]);
+    assert.equal(manifest.images[1].originalBytes, 'RAW-IMAGE-BYTES'.length);
+    assert.equal(manifest.images[1].bytes, 'WEBP-COMPRESSED'.length);
+    assert.equal(manifest.compression.quality, 80);
+    assert.equal(manifest.compression.maxWidth, 1600);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('image: a real provider PNG is re-encoded to a resized WebP', async () => {
+  const { default: sharp } = await import('sharp');
+  const root = await makeRoot();
+  try {
+    await fs.writeFile(lessonPath(root), LESSON_MARKED);
+    await fs.mkdir(outputDir(root), { recursive: true });
+    await fs.writeFile(path.join(outputDir(root), 'plan.input.json'), JSON.stringify(PLAN));
+    await finalizeHtmlPlan({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root);
+    const png = await sharp({ create: { width: 2000, height: 1000, channels: 3, background: '#336699' } }).png().toBuffer();
+    const result = await generateHtmlImages({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root, {
+      generateImage: async () => png,
+    });
+    const file = path.join(root, 'learn', 'demo', 'lessons', 'demo-node', 'step-one-assets', 'image-1.webp');
+    const bytes = await fs.readFile(file);
+    assert.equal(bytes.subarray(0, 4).toString('ascii'), 'RIFF');
+    assert.equal(bytes.subarray(8, 12).toString('ascii'), 'WEBP');
+    const metadata = await sharp(bytes).metadata();
+    assert.equal(metadata.format, 'webp');
+    assert.equal(metadata.width, 1600);
+    assert.equal(metadata.height, 800);
+    const manifest = JSON.parse(await fs.readFile(result.manifest, 'utf8'));
+    assert.equal(manifest.images[0].compressed, true);
+    assert.equal(manifest.images[0].originalBytes, png.length);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('image: keeps the original bytes and records a warning when compression fails', async () => {
+  const root = await makeRoot();
+  try {
+    await fs.writeFile(lessonPath(root), LESSON_MARKED);
+    await fs.mkdir(outputDir(root), { recursive: true });
+    await fs.writeFile(path.join(outputDir(root), 'plan.input.json'), JSON.stringify(PLAN));
+    await finalizeHtmlPlan({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root);
+    const result = await generateHtmlImages({ subject: 'demo', node: 'demo-node', step: 'step-one' }, root, {
+      generateImage: async () => Buffer.from('ORIGINAL-BYTES', 'utf8'),
+      compressImage: async () => { throw new Error('not an image'); },
+    });
+    const assets = path.join(root, 'learn', 'demo', 'lessons', 'demo-node', 'step-one-assets');
+    assert.equal(await fs.readFile(path.join(assets, 'image-1.webp'), 'utf8'), 'ORIGINAL-BYTES');
+    const manifest = JSON.parse(await fs.readFile(result.manifest, 'utf8'));
+    assert.equal(manifest.images[0].compressed, false);
+    assert.deepEqual(manifest.imageCompressionWarnings, [{ index: 1, error: 'not an image' }]);
+    assert.equal(manifest.status, 'completed');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('resolveImageCompression clamps env overrides and defaults to q80/1600', async () => {
+  const saved = { quality: process.env.IMAGE_COMPRESS_QUALITY, width: process.env.IMAGE_MAX_WIDTH };
+  try {
+    delete process.env.IMAGE_COMPRESS_QUALITY;
+    delete process.env.IMAGE_MAX_WIDTH;
+    assert.deepEqual(resolveImageCompression(), { quality: 80, maxWidth: 1600 });
+    process.env.IMAGE_COMPRESS_QUALITY = '250';
+    process.env.IMAGE_MAX_WIDTH = '0';
+    assert.deepEqual(resolveImageCompression(), { quality: 100, maxWidth: 0 });
+    process.env.IMAGE_COMPRESS_QUALITY = 'bogus';
+    process.env.IMAGE_MAX_WIDTH = '720';
+    assert.deepEqual(resolveImageCompression(), { quality: 80, maxWidth: 720 });
+  } finally {
+    for (const [key, value] of [['IMAGE_COMPRESS_QUALITY', saved.quality], ['IMAGE_MAX_WIDTH', saved.width]]) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test('buildBrief reads language and teaching preferences from MEMORY.md', async () => {
