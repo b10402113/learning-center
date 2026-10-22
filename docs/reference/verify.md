@@ -1,70 +1,100 @@
 # Verification Script Protocol
 
-Shared contract for `scripts/verify.mjs` — the single CLI that runs all **deterministic format checks** across the learning path. `nodes` uses it as the per-node gate (step 11); the AGENTS.md periodic lint uses it for whole-subject scans.
+Shared contract for `scripts/verify.mjs` — the single CLI that runs every **deterministic format check** across a Markdown subject. `/nodes` and `/article` use it as a hard gate; the periodic lint uses it for whole-subject scans.
 
 ## Principle
 
-The script checks **format correctness only**. It verifies frontmatter, IDs, DAG consistency, reference resolution, and section presence — never prose quality or content semantics. Prose style, depth calibration, contradictions, and style conformance are deliberately out of scope; the learner is the final judge of those. Because the script is the sole gate, the LLM only fixes what it flags and never re-reads an article body to judge it.
+The script checks **format correctness only**. It verifies frontmatter, step/article pairing, heading and list consistency, source locators, digest coverage, code provenance, and link resolution — never prose quality or content semantics. Because it is the sole gate, an agent only fixes what it flags.
+
+Every hard-failure rule has a negative fixture in `scripts/verify.test.mjs`: deliberately breaking the fixture must turn the rule red. Advisory flags are not fixtures.
 
 ## Usage
 
 ```text
-node scripts/verify.mjs --node <subject>/<node-id>    # per-node gate (/nodes step 11)
+node scripts/verify.mjs --node <subject>/<node-id>    # per-node gate
 node scripts/verify.mjs --subject <subject>           # whole-subject lint
 node scripts/verify.mjs --subject <subject> --json    # machine-readable report
 ```
 
-Exit code: `0` = no failures, `1` = at least one failure. A non-zero exit is a hard gate.
+Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. A non-zero exit is a hard gate.
 
 ## Output
 
 - **SUMMARY** — one line: counts checked and failures/flags, exit status.
 - **FAILURES** — `file:line  check-id  message`, one per failed check.
-- **FLAGS** — advisory notes (e.g. node-count deviation, orphans). Never block.
-- `--json` — `{ subject, failures, flags, pass }` for tooling.
+- **FLAGS** — advisory notes that never block.
+- `--json` — `{ subject, counts, failures, flags, pass }` for tooling.
 
 ## Check reference
 
-### Structure and links (both scopes)
+### Repository and node structure
 
 | id | checks |
 |---|---|
-| `fm-required` | required frontmatter keys present per file type |
-| `fm-status` | node `status` is a legal value |
-| `fm-illustration` | optional step `illustration` is `none`/`planned`/`done` |
-| `fm-nodes-no-elements` | node container carries no flat `elements` list |
-| `fm-type` | element `type` is `article`/`video`; `video` has `videoUrl` |
-| `id-filename` | frontmatter `id` equals the filename |
-| `dag-step-exists` | every step in the node DAG has a step file |
-| `dag-orphan-step` | every step file appears in its node's DAG |
-| `dag-order-deps` | `deps` reference same-node steps; orders unique |
-| `link-element` / `link-step` / `link-node` | wiki links resolve to existing files |
-| `teaches-resolves` | step `teaches` elements exist |
-| `elem-nodes-ref` | element `nodes` reference existing nodes |
-| `src-path` | source link subject matches; source file exists |
-| `src-locator` | locator resolves in a digest (containment match) |
-| `code-provenance` | every code `<pre><code>` block in a `procedure`/`reference` lesson carries `data-source` or `data-provenance="derived"` |
-| `sources-empty` | node/step has at least one source link (flag) |
-| `elem-connections` | Connections section present with ≥2 element links |
-| `elem-questions` | Questions section present |
+| `no-mdx` | the `learn/` tree contains no `.mdx` files (whole tree for `--subject`, one subject for `--node`) |
+| `fm-parse` | frontmatter parses as YAML; malformed YAML is a failure, not a crash |
+| `fm-required` | node frontmatter has `id, title, subject, tier, order, status, goal, steps, created, updated` |
+| `fm-status` | node `status` is `draft` / `confirmed` / `written` |
+| `fm-subject` | node `subject` matches the subject argument |
+| `id-filename` | node frontmatter `id` equals the filename |
+| `steps-array` | node `steps` is an array; may be empty for a draft node |
+| `steps-empty` | a `confirmed` or `written` node has at least one step |
+| `step-entry` | every step entry has `id`, `title`, `purpose`, and `sources` |
+| `steps-flat` | step entries declare no `deps`, `type`, or `order` |
+| `steps-duplicate` | step ids are unique within a node |
+| `node-missing` | the requested `--node` exists |
+| `node-container-missing` | every step folder has a matching `<node>.md` container |
 
-Section-heading checks (`elem-connections`, `elem-questions`) are **localization-aware**: they match either the bare English heading (`## Connections`) or a localized heading carrying the English token in parentheses or full-width parens (e.g. `## 自檢問題 (Questions)`).
-
-### Whole-subject only
+### Step articles
 
 | id | checks |
 |---|---|
-| `lint-node-count` | actual node count within ±40% of the formula baseline (flag) |
-| `lint-orphan` | node/step/element files unreferenced by any link (flag) |
-| `lint-edge-refs` | edge `from`/`to`/`nodes` resolve |
+| `step-article-missing` | every step entry has `nodes/<node>/<step>.md` |
+| `step-orphan` | every article in the node folder has a step entry |
+| `step-h1` | the article's first non-empty line is exactly `# <step title>` |
+| `node-steps-list` | `## Steps` exists when the node has steps; titles, ids, and order match frontmatter |
+| `node-step-link` | every `## Steps` link resolves relative to the node file |
+
+### Sources and digests
+
+| id | checks |
+|---|---|
+| `src-format` | a step source is `[[sources/<subject>/<file>#Lx-Ly]]` |
+| `src-path` | the source subject matches and the file exists |
+| `src-pdf` | a citation never points at a PDF |
+| `src-locator-format` | the locator is `#Lx` or `#Lx-Ly` (no slugs) |
+| `src-range` | `1 ≤ start ≤ end ≤ actual line count` |
+| `src-slice-empty` | the cited slice is not blank |
+| `src-digest-missing` | the source has a digest |
+| `src-digest-range` | the citation is covered by the digest's L2 line map |
+| `digest-fm` | digest frontmatter has `source, source_type, source_lines, status` |
+| `digest-status` | digest `status` is `pending` / `absorbed` |
+| `digest-source` | digest `source` exists under `sources/<subject>/` |
+| `digest-source-pdf` | digest `source` is the extracted `.txt`, never a PDF |
+| `digest-source-lines` | `source_lines` equals the actual `.txt` line count (single-file digests); directory sources only bound the ranges |
+| `digest-range` | every L2 range is `1 ≤ start ≤ end`, and ends within the actual lines or declared `source_lines` |
+| `digest-l2-empty` | the digest has an L2 line map (image digests excepted) |
+| `digest-locator` | any source link inside a digest uses `#Lx-Ly`, not a slug |
+
+### Code, links, and flags
+
+| id | checks |
+|---|---|
+| `code-provenance` | every fenced code block (except `quiz`) is preceded by `<!-- source: sources/…#Lx-Ly -->` or `<!-- derived -->`; a source comment must resolve to an existing file and non-empty range |
+| `link` | relative Markdown links resolve |
+| `sources-empty` | step has at least one source link (flag) |
+| `lint-node-count` | node count is within ±40% of the formula baseline (flag) |
+
+Image-existence and orphan-asset checks land with the image ticket; `quiz` JSON validation lands with the reading-experience ticket.
 
 ## False-positive policy
 
-The check set is deliberately limited to determinism so it rarely misfires. Known tolerance points:
+The check set stays deterministic so it rarely misfires:
 
-- `src-locator` uses containment, not exact equality — a node locator may be a sub-range of a digest locator.
-- Localized section headings are matched by their English token, not a language map.
+- Line counts use newline characters, matching `wc -l`.
+- Digest coverage is the union of L2 ranges, so adjacent ranges may jointly cover a citation.
+- Codebase digests may cover citations by directory prefix.
+- Fenced code and inline code are stripped before link checking.
 - `.DS_Store` and hidden files are ignored.
-- Edges are terminal pages discovered by the graph generator, never by wiki links, so they are not reported as orphans.
 
 If a legitimate file trips a check, fix the file rather than relaxing the rule — the script is the contract.

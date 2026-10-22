@@ -17,39 +17,45 @@ A source is **large** when it exceeds either bound:
 
 - Location: `learn/<subject>/digests/<source-stem>.md` — one file per source (the stem is the original filename without extension for files, or the directory name for codebases). Large sources are split into one **part file per chunk**, named `<source-stem>.<n>.part.md`; each part is a self-contained digest. Digests are two-level:
   - **L1 — overview**: a few lines per chapter (PDF) or per module (codebase). Enough for `learn-init` grilling and `roadmap` partitioning without loading detail.
-  - **L2 — detail**: per-section entry (PDF) or per-module entry (codebase) with a summary, key claims, learner-relevant outcomes, and the exact locator. Used by `nodes` for element extraction.
+  - **L2 — line map**: one entry per section (PDF/text) or per module (codebase), each naming the exact `#Lstart-Lend` range and a one-line description. This is the discovery map `nodes` and `article` use to pick the lines worth reading. There are no slug locators.
 - Every source gets a digest, large or small (parts included). `nodes` reads digests only — never raw sources.
-- Frontmatter records `source`, `source_lines`, and `status` (`pending` | `absorbed`).
+- Frontmatter records `source` (the extracted text file for PDFs), `source_type`, `source_lines` (the actual `.txt` line count, matching `wc -l`), and `status` (`pending` | `absorbed`).
 
-### PDF digest format
+### PDF text extraction
+
+A PDF is extracted once, at ingest time, into a sibling `.txt`:
+
+```bash
+node scripts/pdf-backfill.mjs --subject <subject>
+```
+
+The command is idempotent: an existing `.txt` is never overwritten, so line numbers stay stable. Every citation points at the `.txt`; citing a PDF is a verification failure. Re-extracting a source means treating it as a new source, because the line numbers may move.
+
+### Text digest format
 
 ```markdown
 ---
-source: <source-stem>
-source_type: pdf
-source_lines: <pdftotext line count>
-part: <n> # parts only; omit for single-file digests
+source: sources/<subject>/<YYYYMMDD>/<file>.txt
+source_type: text
+source_lines: <wc -l of the .txt>
 status: pending | absorbed
 absorbed_at: YYYY-MM-DD # set when consumed by /roadmap or /absorb
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
 
-# Digest — <source-stem> (part <n>)
-
-## Overview (L1)
+# L1 overview
 
 - <chapter/part> — <2–4 line summary>
 
-## Sections (L2)
+# L2 detail
 
-### <section id>
-
-- Locator: `[[sources/<subject>/<YYYYMMDD>/<file>#<section>]]`
-- Summary: <what this section explains>
-- Key claims: <claim 1>; <claim 2>
-- Learner-relevant: <outcome or anchor this section can support>
+- `#L1-L11` — <what these lines explain>
+- `#L12-L25` — <what these lines explain>
+- `#L26-L58` — <what these lines explain>
 ```
+
+`source_lines` must equal the actual `.txt` line count. Every line of the source should be covered by an L2 range, so a step citation can always be traced back to a digest entry.
 
 ### Codebase digest format
 
@@ -57,48 +63,42 @@ Large codebases are split into one **part file per top-level directory**, named 
 
 ```markdown
 ---
-source: <dir-stem>
+source: sources/<subject>/<YYYYMMDD>/<dir-stem>
 source_type: codebase
-source_lines: <wc -l line count for this directory>
+source_lines: <wc -l for this directory>
 language: <primary language by file count>
 file_count: <code files in this directory>
 part: <n> # parts only; omit for single-file digests
 status: pending | absorbed
-absorbed_at: YYYY-MM-DD # set when consumed by /roadmap or /absorb
+absorbed_at: YYYY-MM-DD
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
 
-# Digest — <dir-stem> (part <n>)
-
-## Overview (L1)
+# L1 overview
 
 - <module/directory> — <2–4 line summary of what it does>
 
-## Structure (L2)
+# L2 detail
 
-### <module-path>
-
-- Locator: `[[sources/<subject>/<YYYYMMDD>/<dir-stem>/<path>]]`
-- Purpose: <what this module/file does>
-- Key exports: <function/class names>
-- Dependencies: <what it imports from within the codebase>
-- Learner-relevant: <what concept this module teaches>
+- `#L1-L40` — <module path> — <purpose, key exports, learner-relevant concept>
+- `#L41-L88` — <module path> — <purpose, key exports, learner-relevant concept>
 ```
 
 ## Sub-agent workflow (large sources)
 
 ### PDF
 
-1. Compute `pdftotext` output and line count in the main context; chunk on section boundaries (book chapters, numbered sections), each chunk < 2000 lines.
-2. Dispatch sub-agents **in parallel**, one per chunk (<2000 lines). Each sub-agent reads only the relevant `sources/<subject>/<YYYYMMDD>/` subfolder, writes a self-contained part digest to `learn/<subject>/digests/<source-stem>.<n>.part.md` with `source_lines` and `status: pending` in its frontmatter, and returns only a compact TOC line for its chunk (chapter ids + one-line summaries).
+1. Run `node scripts/pdf-backfill.mjs --subject <subject>` so every PDF has a stable `.txt`.
+2. Compute the `.txt` line count and chunk on section boundaries (book chapters, numbered sections), each chunk < 2000 lines.
+3. Dispatch sub-agents **in parallel**, one per chunk (<2000 lines). Each sub-agent reads only its line range of the `.txt`, writes a self-contained part digest to `learn/<subject>/digests/<source-stem>.<n>.part.md` with `source_lines` and `status: pending` in its frontmatter, and returns only a compact TOC line for its chunk (chapter ids + `#Lx-Ly` ranges).
 
 There is no merge step: the part files together are the digest.
 
 ### Codebase
 
 1. Compute `wc -l` line count across all code files in the main context; split on top-level directory boundaries.
-2. Dispatch sub-agents **in parallel**, one per top-level directory. Each sub-agent reads only its directory, writes a self-contained part digest to `learn/<subject>/digests/<dir-stem>.<n>.part.md` with `source_lines` (that directory's `wc -l`) and `status: pending` in its frontmatter, and returns only a compact TOC line for its directory (directory name + one-line summary).
+2. Dispatch sub-agents **in parallel**, one per top-level directory. Each sub-agent reads only its directory, writes a self-contained part digest to `learn/<subject>/digests/<dir-stem>.<n>.part.md` with `source_lines` (that directory's `wc -l`) and `status: pending` in its frontmatter, and returns only a compact TOC line for its directory (directory name + `#Lx-Ly` line map).
 
 There is no merge step: the part files together are the digest.
 
@@ -113,9 +113,9 @@ This protocol extends the one-file-per-digest rule to accommodate the `ingest` s
 
 1. **The batch is the input.** `ingest` reads all files that were just moved into `sources/<subject>/YYYYMMDD/`. It does not consider earlier archived files, even if they share the same subject.
 2. **Clustering.** Files are clustered by semantic similarity. Two files belong in the same cluster if their combined content forms a coherent learning unit that `absorb` can reasonably consider as a single node goal. Standalone files that do not match any other file’s topic form single-file clusters.
-3. **Digest name.** The digest name is derived from the cluster’s unified topic (e.g., `closure-basics`). For a single-file cluster where the file is self-contained, the name may be the original file stem.
-4. **Large-source handling.** The size check and sub-agent path from the large-source sections still apply within a cluster. Part digests are named `<cluster-name>.<n>.part.md`.
-5. **Locator preservation.** Each L2 section records source locators exactly as in the one-file format, e.g., `[[sources/<subject>/YYYYMMDD/chapter-notes/fig1.png]]`.
+3. **Digest name.** The cluster name is a prefix for discovery, not a merge: every source file gets its own digest (`<cluster-name>-<file-stem>.md`), because an L2 line map points into exactly one text file. A single-file cluster may use the original file stem.
+4. **Large-source handling.** The size check and sub-agent path from the large-source sections still apply within a cluster. Part digests are named `<cluster-name>-<file-stem>.<n>.part.md`, so two large files in one cluster never collide.
+5. **Locator preservation.** Each L2 entry records the source path and exact line range, e.g. `#L120-L168`. Image L2 entries keep the image path and a one-line description; they carry no line range.
 
 ### Image-only digests
 
@@ -133,7 +133,7 @@ Existing per-file digests remain untouched. This batch-aware grouping applies on
 
 ### Lint considerations
 
-When validating digests, the linter should still check for broken locators and correct frontmatter. It does not enforce the new batch-aware constraints: it only checks that each file referenced in `[[...]]` points to an actual source file, and that every cluster’s L2 entries have at least one matching locator.
+When validating digests, the linter checks frontmatter, that `source` exists and is not a PDF, that `source_lines` matches the `.txt`, and that every L2 entry uses `#Lx-Ly`. It does not enforce the batch-aware clustering constraints.
 
 ## Digest lifecycle
 
@@ -146,34 +146,32 @@ Sources are immutable, so a digest is stable once written. A `pending` digest is
 
 ## Lazy detail pulls (`nodes`)
 
-When a node's element extraction needs detail beyond the digest:
+When a node's step planning needs detail beyond the digest:
 
-1. Locate the section via its L2 locator.
-2. Dispatch one sub-agent to run `pdftotext` and extract that section's original text.
-3. The sub-agent returns the excerpt in its message — one-off reads, no file. Only pull when the digest is genuinely insufficient.
+1. Locate the `#Lx-Ly` entry in the digest's L2 map.
+2. Read that slice of the `.txt` directly (or dispatch one sub-agent when the slice is large).
+3. Only pull when the digest is genuinely insufficient; the digest remains the navigation layer.
 
-## Source-grounded teaching (`teach`)
+## Source-grounded articles (`article`)
 
-`teach` is the one stage that reads raw source, because a lesson that shows code must show the real code. `nodes` stays digest-only (above); `teach` pulls the located slice on demand. A `teach-agent` does the read, so the raw text stays in its own context and never enters the main one.
+`article` is the stage that reads raw source, because an article that shows code must show the real code. `nodes` stays digest-only (above); `article` pulls the located slice on demand. A sub-agent does the read, so the raw text stays in its own context and never enters the main one.
 
-A step's `sources` locators are the entry points. For a step with a source:
+A step's `sources` entries are the entry points. For a step with a source:
 
-1. Locate the section or code file from the step's `sources` locators.
-2. Read only that slice — a `pdftotext` section, a source file, a transcript range — never the whole source. When a locator is absent or stale, fall back to the digest and mark the gap (below).
-3. Write the lesson with code provenance.
+1. Resolve every `[[sources/<subject>/<file>#Lx-Ly]]` from the node's step entry.
+2. Read only that slice — never the whole source. When a locator is absent or stale, fall back to the digest and mark the gap (below).
+3. Write the article with code provenance.
 
 ### Code provenance
 
-Read the source before writing code. When the source carries code, quote it verbatim: drop whole lines or elide a run with `…` if needed, but never rewrite a line. When the source carries no code, write it from the prose, faithful to what the source says. Either way, mark every code `<pre><code>` block with an invisible provenance attribute:
+Read the source before writing code. When the source carries code, quote it verbatim: drop whole lines or elide a run with `…` if needed, but never rewrite a line. When the source carries no code, write it from the prose, faithful to what the source says. Either way, every fenced code block carries an HTML comment above it (blank lines between the comment and the fence are ignored):
 
-- quoted from source: `<pre data-source="sources/<subject>/<file>#<locator>"><code>`
-- written from the prose: `<pre data-provenance="derived"><code>`
+- quoted from source: `<!-- source: sources/<subject>/<file>#Lx-Ly -->`
+- written from the prose: `<!-- derived -->`
 
-A `<pre>` that quotes non-code source text — a subtitle line, a transcript excerpt — carries no provenance attribute.
+`quiz` blocks are data, not code, and carry no provenance comment. `scripts/verify.mjs` fails any other fenced block without one.
 
-Surfacing code applies to every step type, not just `procedure`/`reference`: whenever the prose names a file, function, API, or command — or the step's `sources` include a code file — surface the real code. A pure-theory lesson that involves no code surfaces none; never manufacture derived code to fill space.
-
-The attribute adds no visible text, so the page reads the same. `scripts/verify.mjs` enforces it for code blocks in `procedure`/`reference` lessons (the hard gate); `concept`/`decision` follow the same rule as a soft requirement.
+Surfacing code applies to every step: whenever the prose names a file, function, API, or command — or the step's `sources` include a code file — surface the real code. A pure-theory article that involves no code surfaces none; never manufacture derived code to fill space.
 
 ### Missing source
 
@@ -182,7 +180,7 @@ A step whose source cannot be read — no `sources`, a stale locator, a moved co
 ## Node count formula
 
 ```text
-lines  = total pdftotext lines (PDFs) + total wc -l lines (codebases)
+lines  = total .txt lines (PDFs) + total wc -l lines (codebases)
 target = clamp(round(lines / 1100), 3, 30)
 ```
 

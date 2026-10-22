@@ -21,6 +21,14 @@ Inventory `sources/<subject>/` recursively. Collect every **file** at any depth,
 
 If no files needed moving (all were already in dated subfolders), say so and stop.
 
+After archiving, extract every new PDF to text:
+
+```bash
+node scripts/pdf-backfill.mjs --subject <subject>
+```
+
+The command is idempotent — an existing `.txt` is never overwritten — so citations keep stable line numbers. Digests and citations always point at the `.txt`, never the PDF.
+
 ## Step 2 — Create digests
 
 Collect all files that were **just moved** in step 1. These form the **current batch**.
@@ -33,19 +41,19 @@ If the batch contains only one file, or if the learner explicitly wants the old 
 
 1. **Read all files.** Load the content of every file in the batch into context.
 2. **Group by topic.** Analyze the batch holistically and cluster the files into groups by topic/concept relevance. Each cluster must be a single meaningful learning unit that downstream `/absorb` can reason about as one concept block. Files that have no thematic overlap with any other file remain as single-file clusters.
-3. **Choose digest names.** For each cluster, derive a semantic name from its unified topic. If the cluster contains exactly one file and its content is self-contained, the name may be that file's stem; otherwise pick a name that reflects the shared topic (e.g. `closure-basics`, `async-event-loop`).
+3. **Choose digest names.** For each cluster, derive a semantic name from its unified topic. A cluster name is a prefix only: every source file still gets its own digest, because a digest maps line ranges into exactly one `.txt`. Name a file's digest `<cluster-name>-<file-stem>.md`, or just `<file-stem>.md` for a single-file cluster.
 4. **Check size.** For each file in a cluster, determine source type and size:
-   - PDF: `pdftotext | wc -l` for line count; also check byte size (`du -b`).
+   - PDF: use the extracted `.txt` (`wc -l`) for line count; byte size still comes from the PDF.
    - Codebase: `wc -l` for line count.
    - Else: treat as small (read directly).
-   Large sources (> 3,000 lines or > ~250 KB) follow the sub-agent path in `docs/reference/source-reading.md`; their part files are grouped under the cluster digest name (e.g. `closure-basics.1.part.md`, `closure-basics.2.part.md`).
+   Large sources (> 3,000 lines or > ~250 KB) follow the sub-agent path in `docs/reference/source-reading.md`; their part files are named `<cluster-name>-<file-stem>.<n>.part.md` so each part maps to one file.
 5. **Check for existing digest.** Before writing, check `learn/<subject>/digests/<name>.md` (and `<name>.*.part.md`). If a digest with the same name already exists, skip writing — it was produced in a prior run.
-6. **Write the cluster digest.** For each new cluster:
-   1. Frontmatter must include `source` (the digest name), `source_lines` (total lines across all cluster members), `status: pending`, and `absorbed_at: ""`.
-   2. L1 overview: summarize the unified topic. If the cluster contains multiple files, list them and note what each contributes.
-   3. L2 sections: organized by sub-topic, not by original file boundary. Each `Locator:` entry references the specific source file(s) that support that sub-topic. A section may list multiple locators on separate lines when more than one file contributes.
-   4. **Images:** if a cluster's text members reference images, cite those image locators inside the relevant L2 section. Images with no text counterpart in the cluster get their own minimal image-only digest (see §Image-only digests).
-7. **Mark remaining singles.** Files that did not group with any other file still get their own digest, named from their content/topic (or their stem when the file is clearly self-contained).
+6. **Write one digest per source.** For every file in the cluster:
+   1. Frontmatter must include `source` (the exact `sources/<subject>/YYYYMMDD/<file>.txt` path), `source_lines` (that file's actual `.txt` line count), `status: pending`, and `absorbed_at: ""`.
+   2. L1 overview: summarize what this file contributes to the cluster's unified topic.
+   3. L2 detail: a line map, not a slug map. Each entry names the exact `#Lx-Ly` range and a one-line description of what those lines cover. Every line of the file should be covered by some L2 range.
+   4. **Images:** if the file references images, cite those image paths inside the relevant L2 section. Images with no text counterpart in the cluster get their own minimal image-only digest (see §Image-only digests).
+7. **Mark remaining singles.** Files that did not group with any other file follow the same one-digest-per-source rule, named from their content/topic (or their stem when the file is clearly self-contained).
 
 ### Image-only digests
 
@@ -53,7 +61,7 @@ For images, screenshots, and other non-text sources that did not attach to any t
 
 1. One digest per image, or one digest per small group of related images (e.g. all figures from the same tutorial).
 2. Minimal L1: one-line summary of what the batch of images depicts.
-3. L2: one entry per image, with `Locator:` and a one-line description of what it shows.
+3. L2: one entry per image, with the image path and a one-line description of what it shows. Image entries carry no line range.
 4. Frontmatter: `source_type: image` (or appropriate type), `source_lines: 0`.
 
 ### Single-file mode
@@ -62,7 +70,7 @@ One file in the batch, or a file that stands alone. One digest per source, named
 
 ### Source path preservation
 
-When citing a source that came from a dated subfolder, preserve its relative path inside the dated folder in source links: `[[sources/<subject>/YYYYMMDD/chapter-notes/fig1.png]]` rather than flattening to the filename alone. This applies to both single-file and batch digests.
+When citing a source that came from a dated subfolder, preserve its relative path inside the dated folder and use a line range for text: `[[sources/<subject>/YYYYMMDD/chapter-notes/notes.txt#L1-L20]]`. Image paths appear in a digest's L2 description, not in step source locators.
 
 ### Backward compatibility
 

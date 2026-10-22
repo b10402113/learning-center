@@ -17,14 +17,24 @@ Before reading, move each source file **and directory** into a dated subfolder s
 
 Skip this step entirely if `sources/<subject>/` already contains only dated subfolders.
 
+## Extract PDFs to text
+
+Before reading, run:
+
+```bash
+node scripts/pdf-backfill.mjs --subject <subject>
+```
+
+Every PDF gets a sibling `.txt`; an existing `.txt` is never overwritten, so line numbers stay stable. All digests and citations point at the `.txt`, never the PDF.
+
 ## Read the material first
 
 Follow the shared `docs/reference/source-reading.md` protocol — never read a source directly and never load a large source into the main context wholesale. Concretely:
 
 1. **Ensure digests.** For each entry in `sources/<subject>/YYYYMMDD/` subfolders (do not browse `sources/` or `wiki/` or any other subject's folder):
-   - **PDF / text file:** check `learn/<subject>/digests/<source-stem>.md`. If it exists and has `status: pending`, skip. If missing, build it via the sub-agent workflow (large sources) or read directly in the main context and write it yourself (small sources). The `source-stem` is the original filename without extension.
-   - **Codebase directory:** detect by file extension — if the directory contains ≥ 1 source code file (`.py`, `.ts`, `.js`, `.go`, `.rs`, `.java`, `.c`, `.cpp`, `.rb`, `.swift`, `.kt`, `.php`), treat it as a codebase. Check `learn/<subject>/digests/<dir-stem>.md` (small) or `learn/<subject>/digests/<dir-stem>.*.part.md` (large). If it exists and has `status: pending`, skip. If missing, build it per the codebase digest workflow in `source-reading.md`. The `dir-stem` is the directory name.
-   - **Images and image folders (`.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, and any `images/` folder):** read every image with the Read tool — a visual source teaches through its pictures as much as its text, so frames, screenshots, slides and diagrams are source material too. Record each image's content in the digest (L2 `Locator` plus what it shows and what it teaches). Never infer an image from its filename or its neighbours' text.
+   - **PDF / text file:** search `learn/<subject>/digests/*.md` for a digest whose frontmatter `source` is this file. If it exists and has `status: pending`, skip. If missing, build it via the sub-agent workflow (large sources) or read directly in the main context and write it yourself (small sources). Name it `<source-stem>.md`, or `<cluster-name>-<source-stem>.md` when `/ingest` grouped it with others. The digest is an L1 overview plus an L2 line map (`#L1-L11`, `#L12-L25`, …); `source_lines` must equal the actual `.txt` line count and every citation points at the `.txt`.
+   - **Codebase directory:** detect by file extension — if the directory contains ≥ 1 source code file (`.py`, `.ts`, `.js`, `.go`, `.rs`, `.java`, `.c`, `.cpp`, `.rb`, `.swift`, `.kt`, `.php`), treat it as a codebase. Search digests by frontmatter `source` for this directory; check `learn/<subject>/digests/<dir-stem>.md` (small) or part files (large). If it exists and has `status: pending`, skip. If missing, build it per the codebase digest workflow in `source-reading.md`; its L2 is also a `#Lx-Ly` line map. The `dir-stem` is the directory name.
+   - **Images and image folders (`.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, and any `images/` folder):** read every image with the Read tool — a visual source teaches through its pictures as much as its text, so frames, screenshots, slides and diagrams are source material too. Record each image's content in the digest's L2 as an image path plus what it shows and what it teaches (no line range). Never infer an image from its filename or its neighbours' text.
    Every new digest must have `status: pending` in its frontmatter.
 2. **Load L1 + TOC.** Read only the L1 overviews (and the sub-agents' compact TOC lines), not the L2 section detail. This is the ground truth your grilling questions will probe and your MEMORY will anchor to.
 3. **Pull detail lazily.** If a grilling question needs a specific section, dispatch a sub-agent to extract it — one-off, returned in message.

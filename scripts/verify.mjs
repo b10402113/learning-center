@@ -1,600 +1,718 @@
 #!/usr/bin/env node
-// verify.mjs — the verification script for the learning path.
-//
-// Runs deterministic FORMAT checks only (frontmatter, IDs, DAG consistency,
-// link/reference resolution, section presence). It never judges
-// prose quality or content semantics — that is deliberately out of scope.
-//
-// Usage:
-//   node scripts/verify.mjs --node <subject>/<node-id>   # per-node gate (/nodes step 8)
-//   node scripts/verify.mjs --subject <subject>          # whole-subject lint (AGENTS.md)
-//   node scripts/verify.mjs --subject <subject> --json   # machine-readable report
-//
-// Exit 0 = no failures, 1 = at least one failure.
-
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseFrontmatter } from "./generate-data.mjs";
+import matter from "gray-matter";
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const LEARN_ROOT = join(REPO_ROOT, "learn");
-const SOURCES_ROOT = join(REPO_ROOT, "sources");
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const ALLOWED_STATUS = new Set([
-  "draft",
-  "probed",
-  "confirmed",
-  "nodes-written",
-  "content-written",
-  "edges-written",
-]);
-
-const ALLOWED_ILLUSTRATION = new Set(["none", "planned", "done"]);
-
-const ALLOWED_STEP_TYPE = new Set(["concept", "procedure", "decision", "reference"]);
-
-const NODE_FM = ["id", "title", "subject", "tier", "order", "status", "goal", "sources", "steps", "created", "updated"];
-const STEP_FM = ["id", "title", "subject", "sources", "created", "updated"];
-const EDGE_FM = ["title", "type", "from", "to", "nodes", "created", "updated"];
+const ALLOWED_NODE_STATUS = new Set(["draft", "confirmed", "written"]);
+const ALLOWED_DIGEST_STATUS = new Set(["pending", "absorbed"]);
+const NODE_FM = ["id", "title", "subject", "tier", "order", "status", "goal", "steps", "created", "updated"];
+const STEP_ENTRY_KEYS = ["id", "title", "purpose", "sources"];
+const FORBIDDEN_STEP_KEYS = ["deps", "type", "order"];
+const DERIVED_COMMENT = /^<!--\s*derived\s*-->$/;
+const SOURCE_COMMENT = /^<!--\s*source:\s*sources\/.+#L\d+(?:-L\d+)?\s*-->$/;
 
 class Report {
   constructor() {
     this.failures = [];
     this.flags = [];
   }
+
   fail(file, line, checkId, message) {
     this.failures.push({ file: file ?? "", line: line ?? 0, checkId, message });
   }
+
   flag(file, checkId, message) {
     this.flags.push({ file: file ?? "", checkId, message });
   }
+
   get hasFailures() {
     return this.failures.length > 0;
   }
 }
 
-// --- file scanning ---------------------------------------------------------
+const markdownCache = new Map();
 
-function readFiles(dir, exts = [".md", ".mdx"]) {
-  const out = [];
+function readMarkdown(path) {
+  if (markdownCache.has(path)) return markdownCache.get(path);
+  let result;
+  try {
+    const { data, content } = matter(readFileSync(path, "utf8"));
+    result = { data, body: content };
+  } catch (error) {
+    result = { data: {}, body: "", error: error.message };
+  }
+  markdownCache.set(path, result);
+  return result;
+}
+
+function rel(root, path) {
+  return path.slice(root.length + 1);
+}
+
+function countLines(text) {
+  if (!text) return 0;
+  return (text.match(/\n/g) || []).length;
+}
+
+function lineSlice(text, start, end) {
+  const lines = text.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines.slice(start - 1, end);
+}
+
+function isTextSource(file) {
+  return ![".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".zip"].includes(extname(file).toLowerCase());
+}
+
+function walkFiles(dir, predicate, out = []) {
   if (!existsSync(dir)) return out;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isFile() && exts.some((e) => entry.name.endsWith(e))) {
-      out.push({ path: join(dir, entry.name), name: entry.name });
-    }
+    if (entry.name.startsWith(".")) continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) walkFiles(full, predicate, out);
+    else if (entry.isFile() && predicate(entry.name)) out.push(full);
   }
   return out;
 }
 
-function scanSubjectDir(subject) {
-  const sub = join(LEARN_ROOT, subject);
-  const nodesDir = join(sub, "nodes");
-  const edgesDir = join(sub, "edges");
-  const digestsDir = join(sub, "digests");
+function scanSubject(root, subject) {
+  const subjectDir = join(root, "learn", subject);
+  const nodesDir = join(subjectDir, "nodes");
 
-  const nodes = readFiles(nodesDir, [".mdx", ".md"]).map((f) => ({
-    ...f,
-    id: f.name.replace(/\.(mdx|md)$/, ""),
-  }));
+  const nodes = existsSync(nodesDir)
+    ? readdirSync(nodesDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+        .map((entry) => ({
+          id: entry.name.replace(/\.md$/, ""),
+          name: entry.name,
+          path: join(nodesDir, entry.name),
+        }))
+    : [];
 
   const steps = [];
   if (existsSync(nodesDir)) {
-    for (const nodeEntry of readdirSync(nodesDir, { withFileTypes: true })) {
-      if (!nodeEntry.isDirectory()) continue;
-      for (const f of readFiles(join(nodesDir, nodeEntry.name))) {
+    for (const entry of readdirSync(nodesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const stepDir = join(nodesDir, entry.name);
+      for (const file of readdirSync(stepDir, { withFileTypes: true })) {
+        if (!file.isFile() || !file.name.endsWith(".md")) continue;
         steps.push({
-          path: f.path,
-          name: f.name,
-          nodeId: nodeEntry.name,
-          id: f.name.replace(/\.(mdx|md)$/, ""),
+          nodeId: entry.name,
+          id: file.name.replace(/\.md$/, ""),
+          name: file.name,
+          path: join(stepDir, file.name),
         });
       }
     }
   }
 
-  const edges = readFiles(edgesDir).map((f) => ({ ...f, name: f.name }));
-  const digests = readFiles(digestsDir, [".md"]);
+  const digestsDir = join(subjectDir, "digests");
+  const digests = existsSync(digestsDir)
+    ? readdirSync(digestsDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+        .map((entry) => ({ name: entry.name, path: join(digestsDir, entry.name) }))
+    : [];
 
-  return { sub, nodes, steps, edges, digests };
+  const sourcesRoot = join(root, "sources", subject);
+  const sources = walkFiles(sourcesRoot, () => true).map((path) => ({
+    path,
+    rel: path.slice(sourcesRoot.length + 1),
+  }));
+  const sourceByRel = new Map(sources.map((source) => [source.rel, source]));
+
+  return { subjectDir, nodesDir, nodes, steps, digests, sources, sourceByRel };
 }
 
-function readSubjectDoc(subject, file) {
-  const p = join(LEARN_ROOT, subject, file);
-  return existsSync(p) ? readFileSync(p, "utf8") : "";
+function parseSourceLink(link) {
+  const match = String(link).match(/^\[\[\s*(sources\/[^\]#]+?)(?:\s*#\s*([^\]]+?))?\s*\]\]$/);
+  if (!match) return null;
+  return { path: match[1].trim(), locator: (match[2] || "").trim() };
 }
 
-function parse(path) {
-  return parseFrontmatter(readFileSync(path, "utf8"));
+function parseLocator(locator) {
+  const match = String(locator).match(/^L(\d+)(?:-L(\d+))?$/);
+  if (!match) return null;
+  const start = Number(match[1]);
+  const end = match[2] ? Number(match[2]) : start;
+  return { start, end };
 }
 
-// --- link extraction -------------------------------------------------------
-
-function extractLinks(text, subject) {
-  const links = [];
-  const re = new RegExp(`\\[\\[\\s*(learn\\/${subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\/[^\\]|]+)`, "g");
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    links.push(m[1].trim());
+function mergeRanges(ranges) {
+  const sorted = ranges.map((range) => ({ ...range })).sort((a, b) => a.start - b.start);
+  const merged = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end + 1) last.end = Math.max(last.end, range.end);
+    else merged.push({ ...range });
   }
-  return [...new Set(links)];
+  return merged;
 }
 
-function extractSourceLinks(text) {
-  const links = [];
-  const re = /\[\[\s*(sources\/[^\]]+?)\s*\]\]/g;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    links.push(m[1].trim());
-  }
-  return [...new Set(links)];
+function covers(ranges, start, end) {
+  return mergeRanges(ranges).some((range) => range.start <= start && range.end >= end);
 }
 
-function findHeadingSection(body, token) {
-  const esc = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`^##\\s+(?:${esc}\\s*$|.+?[(（]${esc}[)）]\\s*$)`, "m");
-  const m = body.match(re);
-  if (!m) return null;
-  const rest = body.slice(m.index + m[0].length);
-  const next = rest.match(/^##\s/m);
-  return next ? rest.slice(0, next.index) : rest;
-}
-
-// --- digest helpers --------------------------------------------------------
-
-function buildDigestIndex(subject) {
-  const digests = scanSubjectDir(subject).digests;
-  const allLocators = new Set();
-  const totalLines = { value: 0 };
-  const countedSources = new Set();
-  for (const d of digests) {
-    const { data, body } = parseFrontmatter(readFileSync(d.path, "utf8"));
-    const src = data.source || "";
-    if (typeof data.source_lines === "number" && src && !countedSources.has(src)) {
-      countedSources.add(src);
-      totalLines.value += data.source_lines;
+function digestFor(index, sourcePath) {
+  if (index.has(sourcePath)) return index.get(sourcePath);
+  let match = null;
+  let length = 0;
+  for (const [key, value] of index) {
+    if (sourcePath.startsWith(`${key}/`) && key.length > length) {
+      match = value;
+      length = key.length;
     }
-    const re = /Locator:\s*`?\[\[\s*sources\/[^\]]*?#([^\]]+)\s*\]\]`?/g;
-    let m;
-    while ((m = re.exec(body)) !== null) allLocators.add(m[1].trim());
   }
-  return { digests, allLocators, totalLines };
+  return match;
 }
 
-function sourceFilesFor(subject) {
-  const dir = join(SOURCES_ROOT, subject);
-  if (!existsSync(dir)) return [];
-  const out = [];
-  function walk(d, rel) {
-    for (const e of readdirSync(d, { withFileTypes: true })) {
-      if (e.name.startsWith(".")) continue;
-      const full = join(d, e.name);
-      const name = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) {
-        walk(full, name);
-      } else if (e.isFile()) {
-        out.push({ name });
+function buildDigestIndex(report, root, subject, scan) {
+  const index = new Map();
+
+  for (const digest of scan.digests) {
+    const file = rel(root, digest.path);
+    const parsed = readMarkdown(digest.path);
+    if (parsed.error) {
+      report.fail(file, 1, "fm-parse", `invalid YAML frontmatter: ${parsed.error}`);
+      continue;
+    }
+    const { data, body } = parsed;
+
+    for (const key of ["source", "source_type", "source_lines", "status"]) {
+      if (data[key] === undefined || data[key] === null || data[key] === "") {
+        report.fail(file, 1, "digest-fm", `missing required frontmatter key: ${key}`);
+      }
+    }
+    if (data.status && !ALLOWED_DIGEST_STATUS.has(String(data.status))) {
+      report.fail(file, 1, "digest-status", `invalid digest status: ${data.status}`);
+    }
+
+    for (const match of body.matchAll(/\[\[\s*sources\/[^\]]*#([^\]]+?)\s*\]\]/g)) {
+      if (!parseLocator(match[1].trim())) {
+        report.fail(file, 0, "digest-locator", `locator "#${match[1].trim()}" must be #Lx or #Lx-Ly`);
+      }
+    }
+
+    const ranges = [];
+    for (const match of body.matchAll(/^\s*[-*]\s+`?#L(\d+)(?:-L(\d+))?/gm)) {
+      const start = Number(match[1]);
+      const end = match[2] ? Number(match[2]) : start;
+      if (start < 1 || end < start) {
+        report.fail(file, 0, "digest-range", `invalid line range #L${start}-L${end}`);
+        continue;
+      }
+      ranges.push({ start, end });
+    }
+    if (ranges.length === 0 && data.source_type !== "image") {
+      report.fail(file, 0, "digest-l2-empty", "digest has no L2 line-number map");
+    }
+
+    let sourceKey = null;
+    if (typeof data.source === "string" && data.source.trim()) {
+      const source = resolveDigestSource(root, subject, scan, data.source.trim());
+      if (!source) {
+        report.fail(file, 1, "digest-source", `digest source "${data.source}" not found under sources/${subject}/`);
+      } else {
+        sourceKey = `sources/${subject}/${source.rel}`;
+        if (extname(source.rel).toLowerCase() === ".pdf") {
+          report.fail(file, 1, "digest-source-pdf", "digest must cite extracted .txt, not a PDF");
+        } else if (data.source_lines !== undefined) {
+          const declared = Number(data.source_lines);
+          if (!Number.isFinite(declared)) {
+            report.fail(file, 1, "digest-source-lines", `source_lines "${data.source_lines}" is not a number`);
+          } else if (source.directory) {
+            for (const range of ranges) {
+              if (range.end > declared) {
+                report.fail(file, 0, "digest-range", `#L${range.start}-L${range.end} exceeds source_lines ${declared}`);
+              }
+            }
+          } else if (isTextSource(source.rel)) {
+            const actual = countLines(readFileSync(source.path, "utf8"));
+            if (declared !== actual) {
+              report.fail(
+                file,
+                1,
+                "digest-source-lines",
+                `source_lines ${data.source_lines} does not match ${actual} lines in ${source.rel}`,
+              );
+            }
+            for (const range of ranges) {
+              if (range.end > actual) {
+                report.fail(file, 0, "digest-range", `#L${range.start}-L${range.end} exceeds ${actual} source lines`);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (!sourceKey) continue;
+    const entry = index.get(sourceKey) || { ranges: [] };
+    entry.ranges.push(...ranges);
+    index.set(sourceKey, entry);
+  }
+
+  return index;
+}
+
+function resolveDigestSource(root, subject, scan, raw) {
+  const clean = raw.replace(/^\.\//, "");
+  if (clean.startsWith(`sources/${subject}/`)) {
+    const sourceRel = clean.slice(`sources/${subject}/`.length);
+    const direct = scan.sourceByRel.get(sourceRel);
+    if (direct) return direct;
+    const full = join(root, clean);
+    if (existsSync(full) && statSync(full).isDirectory()) {
+      return { path: full, rel: sourceRel, directory: true };
+    }
+  }
+  if (clean.startsWith("sources/")) {
+    return null;
+  }
+  const stem = clean.replace(/\.[^.]+$/, "");
+  const matches = scan.sources.filter((source) => {
+    const sourceStem = basename(source.rel).replace(/\.[^.]+$/, "");
+    return source.rel === clean || sourceStem === stem;
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function checkNoMdx(report, root, subject = null) {
+  const learnRoot = subject ? join(root, "learn", subject) : join(root, "learn");
+  for (const path of walkFiles(learnRoot, (name) => name.endsWith(".mdx"))) {
+    report.fail(rel(root, path), 0, "no-mdx", "the Markdown course tree must not contain .mdx files");
+  }
+}
+
+function checkProvenanceSource(report, root, file, line, marker) {
+  const comment = marker.slice(4, -3).trim();
+  const reference = comment.slice("source:".length).trim();
+  const hash = reference.lastIndexOf("#");
+  if (hash === -1) {
+    report.fail(file, line, "code-provenance", `source comment "${reference}" has no #Lx-Ly locator`);
+    return;
+  }
+  const path = reference.slice(0, hash);
+  const locator = parseLocator(reference.slice(hash + 1));
+  const full = join(root, path);
+  if (!existsSync(full)) {
+    report.fail(file, line, "code-provenance", `source comment path "${path}" does not exist`);
+    return;
+  }
+  if (!locator) {
+    report.fail(file, line, "code-provenance", `source comment locator "#${reference.slice(hash + 1)}" must be #Lx or #Lx-Ly`);
+    return;
+  }
+  const text = readFileSync(full, "utf8");
+  const total = countLines(text);
+  if (locator.start < 1 || locator.end < locator.start || locator.end > total) {
+    report.fail(file, line, "code-provenance", `source comment range #L${locator.start}-L${locator.end} is outside 1-${total}`);
+    return;
+  }
+  if (!lineSlice(text, locator.start, locator.end).join("\n").trim()) {
+    report.fail(file, line, "code-provenance", `source comment range #L${locator.start}-L${locator.end} is empty`);
+  }
+}
+
+function checkCodeProvenance(report, root, file, body) {
+  const lines = body.split("\n");
+  let fence = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const match = line.match(/^\s*(`{3,}|~{3,})\s*([^\s`]*)/);
+    if (!fence) {
+      if (!match) continue;
+      fence = { marker: match[1], lang: match[2] };
+      if (fence.lang === "quiz") continue;
+
+      let previous = index - 1;
+      while (previous >= 0 && lines[previous].trim() === "") previous -= 1;
+      const marker = previous >= 0 ? lines[previous].trim() : "";
+      if (DERIVED_COMMENT.test(marker)) continue;
+      if (SOURCE_COMMENT.test(marker)) {
+        checkProvenanceSource(report, root, file, index + 1, marker);
+      } else {
+        report.fail(
+          file,
+          index + 1,
+          "code-provenance",
+          "code block must be preceded by <!-- source: sources/...#Lx-Ly --> or <!-- derived -->",
+        );
+      }
+    } else if (line.trim().startsWith(fence.marker)) {
+      fence = null;
+    }
+  }
+}
+
+function stripCode(body) {
+  const withoutFences = body.replace(/^(\s*)(`{3,}|~{3,})[\s\S]*?^\s*\2[^\n]*$/gm, "");
+  return withoutFences.replace(/`[^`\n]*`/g, "");
+}
+
+function checkLinks(report, root, file, body, baseDir) {
+  for (const match of stripCode(body).matchAll(/(?<!!)\[[^\]]*\]\(([^)]+)\)/g)) {
+    const target = match[1].trim().replace(/^<|>$/g, "");
+    if (!target || target.startsWith("#") || target.startsWith("//")) continue;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
+    const clean = target.split("#")[0].split("?")[0];
+    if (!clean) continue;
+    const full = clean.startsWith("/") ? join(root, clean) : resolve(baseDir, clean);
+    if (!existsSync(full)) {
+      report.fail(file, 0, "link", `link target "${target}" does not exist`);
+    }
+  }
+}
+
+function parseStepsSection(body) {
+  const heading = body.match(/^##\s+Steps\s*$/m);
+  if (!heading) return null;
+  const rest = body.slice(heading.index + heading[0].length);
+  const next = rest.match(/^##\s/m);
+  const section = next ? rest.slice(0, next.index) : rest;
+  const items = [];
+  for (const match of section.matchAll(
+    /^\s*(?:\d+\.|[-*])\s+\[([^\]]+)\]\(([^)]+)\)\s*(?:$|[—–-]\s*.*$)/gm,
+  )) {
+    items.push({ title: match[1].trim(), target: match[2].trim() });
+  }
+  return items;
+}
+
+function checkNode(report, root, subject, scan, digestIndex, node, stepIndex) {
+  const file = rel(root, node.path);
+  const parsed = readMarkdown(node.path);
+  if (parsed.error) {
+    report.fail(file, 1, "fm-parse", `invalid YAML frontmatter: ${parsed.error}`);
+    return;
+  }
+  const { data, body } = parsed;
+
+  for (const key of NODE_FM) {
+    if (data[key] === undefined || data[key] === null || data[key] === "") {
+      report.fail(file, 1, "fm-required", `missing required frontmatter key: ${key}`);
+    }
+  }
+  if (data.id !== node.id) {
+    report.fail(file, 1, "id-filename", `frontmatter id "${data.id}" does not match filename "${node.id}"`);
+  }
+  if (data.subject !== undefined && data.subject !== subject) {
+    report.fail(file, 1, "fm-subject", `frontmatter subject "${data.subject}" does not match "${subject}"`);
+  }
+  if (data.status !== undefined && !ALLOWED_NODE_STATUS.has(String(data.status))) {
+    report.fail(file, 1, "fm-status", `invalid status: ${data.status}`);
+  }
+  if (!Array.isArray(data.steps)) {
+    report.fail(file, 1, "steps-array", "frontmatter steps must be an array");
+    return;
+  }
+  if (data.steps.length === 0 && data.status !== "draft") {
+    report.fail(file, 1, "steps-empty", "a confirmed or written node needs at least one step");
+  }
+
+  const seen = new Set();
+  for (const [index, entry] of data.steps.entries()) {
+    if (!entry || typeof entry !== "object") {
+      report.fail(file, 1, "step-entry", `steps[${index}] must be an object`);
+      continue;
+    }
+    for (const key of STEP_ENTRY_KEYS) {
+      if (entry[key] === undefined || entry[key] === null || entry[key] === "") {
+        report.fail(file, 1, "step-entry", `steps[${index}] missing "${key}"`);
+      }
+    }
+    for (const key of FORBIDDEN_STEP_KEYS) {
+      if (entry[key] !== undefined) {
+        report.fail(file, 1, "steps-flat", `steps[${index}] must not declare "${key}"`);
+      }
+    }
+    if (!entry.id) continue;
+    if (seen.has(entry.id)) {
+      report.fail(file, 1, "steps-duplicate", `duplicate step id "${entry.id}"`);
+    }
+    seen.add(entry.id);
+
+    const article = join(scan.nodesDir, node.id, `${entry.id}.md`);
+    if (!existsSync(article)) {
+      report.fail(file, 1, "step-article-missing", `step "${entry.id}" has no article at ${rel(root, article)}`);
+    }
+    for (const [sourceIndex, source] of (Array.isArray(entry.sources) ? entry.sources : []).entries()) {
+      checkSourceRef(report, root, subject, scan, digestIndex, file, source, `steps[${index}].sources[${sourceIndex}]`);
+    }
+    if (!Array.isArray(entry.sources) || entry.sources.length === 0) {
+      report.flag(file, "sources-empty", `step "${entry.id}" has no sources`);
+    }
+  }
+
+  for (const step of stepIndex.byNode.get(node.id) || []) {
+    if (!seen.has(step.id)) {
+      report.fail(rel(root, step.path), 0, "step-orphan", `article has no entry in ${node.name} steps`);
+    }
+  }
+
+  const items = parseStepsSection(body);
+  const expected = data.steps.filter((entry) => entry && entry.id);
+  if (!items && expected.length > 0) {
+    report.fail(file, 0, "node-steps-list", "node must have a ## Steps section");
+  } else if (items) {
+    if (items.length !== expected.length) {
+      report.fail(file, 0, "node-steps-list", `## Steps lists ${items.length} article(s), frontmatter has ${expected.length}`);
+    }
+    for (const [index, item] of items.entries()) {
+      const entry = expected[index];
+      if (!entry) continue;
+      if (item.title !== entry.title) {
+        report.fail(file, 0, "node-steps-list", `## Steps[${index}] title "${item.title}" != "${entry.title}"`);
+      }
+      const targetPath = resolve(dirname(node.path), item.target.split("#")[0]);
+      const expectedPath = resolve(scan.nodesDir, node.id, `${entry.id}.md`);
+      if (targetPath !== expectedPath) {
+        report.fail(
+          file,
+          0,
+          "node-steps-list",
+          `## Steps[${index}] must link nodes/${node.id}/${entry.id}.md, got "${item.target}"`,
+        );
+      }
+      if (!existsSync(targetPath)) {
+        report.fail(file, 0, "node-step-link", `## Steps[${index}] link "${item.target}" does not resolve`);
       }
     }
   }
-  walk(dir, "");
-  return out;
+
+  checkLinks(report, root, file, body, dirname(node.path));
+  checkCodeProvenance(report, root, file, body);
 }
 
-function baselineNodeCount(totalLines) {
-  return Math.max(3, Math.min(30, Math.round(totalLines / 1100)));
-}
-
-// --- checks ----------------------------------------------------------------
-
-function checkFrontmatter(report, path, fm, required) {
-  const rel = path.replace(REPO_ROOT + "/", "");
-  const line = 1;
-  for (const key of required) {
-    if (fm[key] === undefined || fm[key] === null || fm[key] === "") {
-      report.fail(rel, line, "fm-required", `missing required frontmatter key: ${key}`);
-    }
+function checkSourceRef(report, root, subject, scan, digestIndex, file, raw, label) {
+  const parsed = parseSourceLink(raw);
+  if (!parsed) {
+    report.fail(file, 1, "src-format", `${label} must be [[sources/${subject}/<file>#Lx-Ly]]`);
+    return;
   }
-  if (fm.status !== undefined && !ALLOWED_STATUS.has(String(fm.status))) {
-    report.fail(rel, line, "fm-status", `invalid status: ${fm.status}`);
+  const prefix = `sources/${subject}/`;
+  if (!parsed.path.startsWith(prefix)) {
+    report.fail(file, 1, "src-path", `${label} subject does not match "${subject}"`);
+    return;
   }
-}
-
-function checkIdFilename(report, path, id, expectedId) {
-  if (id !== expectedId) {
+  const sourceRel = parsed.path.slice(prefix.length);
+  const source = scan.sourceByRel.get(sourceRel);
+  if (!source) {
+    report.fail(file, 1, "src-path", `${label} source file "${sourceRel}" not found`);
+    return;
+  }
+  if (extname(sourceRel).toLowerCase() === ".pdf") {
+    report.fail(file, 1, "src-pdf", `${label} must cite extracted text, not a PDF`);
+    return;
+  }
+  const locator = parseLocator(parsed.locator);
+  if (!locator) {
+    report.fail(file, 1, "src-locator-format", `${label} locator "#${parsed.locator}" must be #Lx or #Lx-Ly`);
+    return;
+  }
+  const text = readFileSync(source.path, "utf8");
+  const total = countLines(text);
+  if (locator.start < 1 || locator.end < locator.start || locator.end > total) {
     report.fail(
-      path.replace(REPO_ROOT + "/", ""),
+      file,
       1,
-      "id-filename",
-      `frontmatter id "${id}" does not match filename "${expectedId}"`,
+      "src-range",
+      `${label} range #L${locator.start}-L${locator.end} is outside 1-${total}`,
+    );
+    return;
+  }
+  const slice = lineSlice(text, locator.start, locator.end).join("\n").trim();
+  if (!slice) {
+    report.fail(file, 1, "src-slice-empty", `${label} range #L${locator.start}-L${locator.end} is empty`);
+  }
+  const digest = digestFor(digestIndex, parsed.path);
+  if (!digest) {
+    report.fail(file, 1, "src-digest-missing", `${label} has no digest for ${parsed.path}`);
+  } else if (!covers(digest.ranges, locator.start, locator.end)) {
+    report.fail(
+      file,
+      1,
+      "src-digest-range",
+      `${label} range #L${locator.start}-L${locator.end} falls outside the digest line map`,
     );
   }
 }
 
-function checkIllustration(report, path, fm) {
-  if (fm.illustration === undefined || fm.illustration === null) return;
-  if (!ALLOWED_ILLUSTRATION.has(String(fm.illustration))) {
-    report.fail(path.replace(REPO_ROOT + "/", ""), 1, "fm-illustration", `invalid illustration: ${fm.illustration}`);
-  }
-}
-
-function checkStepType(report, path, fm) {
-  if (fm.type === undefined || fm.type === null || fm.type === "") return;
-  if (!ALLOWED_STEP_TYPE.has(String(fm.type))) {
-    report.fail(path.replace(REPO_ROOT + "/", ""), 1, "fm-step-type", `invalid step type: ${fm.type}`);
-  }
-}
-
-function checkDag(report, path, nodeId, fm, stepFiles, stepIdsByNode, stepTypes) {
-  const rel = path.replace(REPO_ROOT + "/", "");
-  const dag = Array.isArray(fm.steps) ? fm.steps : [];
-  const seenOrders = new Set();
-  for (const s of dag) {
-    const id = s?.id;
-    if (!id) {
-      report.fail(rel, 1, "dag-step-exists", "steps entry missing id");
-      continue;
-    }
-    if (s?.type !== undefined && s?.type !== null && s?.type !== "") {
-      if (!ALLOWED_STEP_TYPE.has(String(s.type))) {
-        report.fail(rel, 1, "fm-step-type", `invalid type in DAG for step "${id}": ${s.type}`);
-      }
-      const fmType = stepTypes?.get(`${nodeId}/${id}`);
-      if (fmType !== undefined && fmType !== null && fmType !== "" && String(fmType) !== String(s.type)) {
-        report.fail(rel, 1, "dag-step-type", `step "${id}" frontmatter type "${fmType}" does not match DAG type "${s.type}"`);
-      }
-    }
-    if (!stepFiles.has(id)) {
-      report.fail(rel, 1, "dag-step-exists", `step "${id}" has no step file under nodes/${nodeId}/`);
-    }
-    const order = Number(s?.order) || 0;
-    if (order && seenOrders.has(order)) {
-      report.fail(rel, 1, "dag-order-deps", `duplicate order ${order} for step "${id}"`);
-    }
-    seenOrders.add(order);
-    for (const dep of Array.isArray(s?.deps) ? s.deps : []) {
-      if (!stepFiles.has(dep)) {
-        report.fail(rel, 1, "dag-order-deps", `step "${id}" depends on "${dep}" which is not a step of this node`);
-      }
-    }
-  }
-  for (const [stepId, stepNode] of stepIdsByNode) {
-    if (stepNode === nodeId && !dag.some((s) => s?.id === stepId)) {
-      report.fail(rel, 1, "dag-orphan-step", `step file "${stepId}" has no entry in this node's steps DAG`);
-    }
-  }
-}
-
-function checkReferences(report, path, text, subject, nodeIds, stepKeys) {
-  const rel = path.replace(REPO_ROOT + "/", "");
-  const links = extractLinks(text, subject);
-  for (const target of links) {
-    const parts = target.split("/");
-    // learn/<subject>/<kind>/...
-    if (parts[0] !== "learn" || parts[1] !== subject) continue;
-    const kind = parts[2];
-    if (kind === "nodes") {
-      const nodeId = parts[3];
-      if (parts.length === 4) {
-        if (!nodeIds.has(nodeId)) {
-          report.fail(rel, 0, "link-node", `node link to missing node "${nodeId}"`);
-        }
-      } else if (parts.length === 5) {
-        const stepKey = `${nodeId}/${parts[4]}`;
-        if (!stepKeys.has(stepKey)) {
-          report.fail(rel, 0, "link-step", `step link to missing step "${stepKey}"`);
-        }
-      }
-    }
-  }
-}
-
-function checkSourceLinks(report, path, text, subject, sourceNames) {
-  const rel = path.replace(REPO_ROOT + "/", "");
-  for (const link of extractSourceLinks(text)) {
-    // sources/<subject>/<file>[#locator]
-    const rest = link.replace(/^sources\//, "");
-    const hashIdx = rest.indexOf("#");
-    const filePart = hashIdx === -1 ? rest : rest.slice(0, hashIdx);
-    const locator = hashIdx === -1 ? "" : rest.slice(hashIdx + 1);
-    const parts = filePart.split("/");
-    const srcSubject = parts[0];
-    const fileName = parts.slice(1).join("/");
-    if (srcSubject !== subject) {
-      report.fail(rel, 0, "src-path", `source link subject "${srcSubject}" does not match "${subject}"`);
-    } else if (!sourceNames.has(fileName) && !sourceNames.has(fileName + ".md")) {
-      report.fail(rel, 0, "src-path", `source file "${fileName}" not found under sources/${subject}/`);
-    } else if (locator) {
-      checkLocator(report, rel, locator);
-    }
-  }
-}
-
-let digestLocatorsCache = null;
-function checkLocator(report, rel, locator) {
-  if (!digestLocatorsCache) {
-    digestLocatorsCache = new Set();
-    for (const subjectDir of readdirSync(LEARN_ROOT, { withFileTypes: true })) {
-      if (!subjectDir.isDirectory()) continue;
-      const idx = buildDigestIndex(subjectDir.name);
-      for (const l of idx.allLocators) digestLocatorsCache.add(l);
-    }
-  }
-  let found = false;
-  for (const l of digestLocatorsCache) {
-    if (l.includes(locator) || locator.includes(l)) {
-      found = true;
-      break;
-    }
-  }
-  if (!found) {
-    report.fail(rel, 0, "src-locator", `source locator "#${locator}" not found in any digest`);
-  }
-}
-
-// A step with no source link anywhere (frontmatter or body) is a gap, not a
-// failure: the lesson was still written, marked [needs source].
-function checkSourcesPresent(report, path, kind) {
-  const rel = path.replace(REPO_ROOT + "/", "");
-  if (!/\[\[\s*sources\//.test(readFileSync(path, "utf8"))) {
-    report.flag(rel, "sources-empty", `${kind} has no source link`);
-  }
-}
-
-// Every code block in a procedure/reference lesson must carry its provenance:
-// data-source for verbatim source code, data-provenance="derived" for code
-// written from the prose. The lesson HTML is the published artifact. A <pre>
-// without <code> quotes prose (a subtitle or transcript line), not code, so it
-// carries no provenance.
-function checkStepProvenance(report, subject, step) {
-  const { data: fm } = parse(step.path);
-  const type = fm.type ? String(fm.type) : "concept";
-  if (type !== "procedure" && type !== "reference") return;
-  const htmlPath = join(LEARN_ROOT, subject, "lessons", step.nodeId, `${step.id}.html`);
-  if (!existsSync(htmlPath)) return;
-  const html = readFileSync(htmlPath, "utf8");
-  const rel = htmlPath.replace(REPO_ROOT + "/", "");
-  const re = /<pre\b[^>]*>\s*<code\b/gi;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    const tag = m[0];
-    const marked =
-      /\bdata-source\s*=/.test(tag) || /\bdata-provenance\s*=\s*["']derived["']/i.test(tag);
-    if (!marked) {
-      const line = html.slice(0, m.index).split("\n").length;
-      report.fail(rel, line, "code-provenance", `${type} step code block missing data-source or data-provenance="derived"`);
-    }
-  }
-}
-
-// --- scope runners ---------------------------------------------------------
-
-function runNodeChecks(report, subject, nodeId, scan, digestIdx, sourceNames, nodeIds, stepKeys) {
-  const nodeFile = scan.nodes.find((n) => n.id === nodeId);
-  if (!nodeFile) {
-    report.fail("", 0, "dag-step-exists", `node "${nodeId}" not found under nodes/`);
+function checkArticle(report, root, entry, step) {
+  const file = rel(root, step.path);
+  const parsed = readMarkdown(step.path);
+  if (parsed.error) {
+    report.fail(file, 1, "fm-parse", `invalid YAML frontmatter: ${parsed.error}`);
     return;
   }
+  const { body } = parsed;
 
-  const stepFiles = new Set();
-  const stepIdsByNode = new Map();
-  const stepTypes = new Map();
-  for (const s of scan.steps) {
-    stepFiles.add(s.id);
-    stepIdsByNode.set(s.id, s.nodeId);
-    const { data: sfm } = parse(s.path);
-    stepTypes.set(`${s.nodeId}/${s.id}`, sfm.type);
-  }
-
-  const { data: nodeFm, body: nodeBody } = parse(nodeFile.path);
-  checkFrontmatter(report, nodeFile.path, nodeFm, NODE_FM);
-  checkIdFilename(report, nodeFile.path, nodeFm.id, nodeFile.id);
-  checkDag(report, nodeFile.path, nodeId, nodeFm, stepFiles, stepIdsByNode, stepTypes);
-  checkReferences(report, nodeFile.path, nodeBody, subject, nodeIds, stepKeys);
-  checkSourceLinks(report, nodeFile.path, nodeBody, subject, sourceNames);
-  checkSourcesPresent(report, nodeFile.path, "node");
-
-  const nodeSteps = scan.steps.filter((s) => s.nodeId === nodeId);
-  for (const step of nodeSteps) {
-    const { data: fm, body } = parse(step.path);
-    checkFrontmatter(report, step.path, fm, STEP_FM);
-    checkIllustration(report, step.path, fm);
-    checkStepType(report, step.path, fm);
-    checkIdFilename(report, step.path, fm.id, step.id);
-    checkReferences(report, step.path, body, subject, nodeIds, stepKeys);
-    checkSourceLinks(report, step.path, body, subject, sourceNames);
-    checkSourcesPresent(report, step.path, "step");
-    checkStepProvenance(report, subject, step);
-  }
-}
-
-function runSubjectChecks(report, subject, scan, digestIdx, sourceNames, nodeIds, stepKeys) {
-  for (const node of scan.nodes) {
-    const { data: fm, body } = parse(node.path);
-    checkFrontmatter(report, node.path, fm, NODE_FM);
-    checkIdFilename(report, node.path, fm.id, node.id);
-    checkReferences(report, node.path, body, subject, nodeIds, stepKeys);
-    checkSourceLinks(report, node.path, body, subject, sourceNames);
-    checkSourcesPresent(report, node.path, "node");
-  }
-
-  const stepFiles = new Set();
-  const stepIdsByNode = new Map();
-  const stepTypes = new Map();
-  for (const s of scan.steps) {
-    stepFiles.add(s.id);
-    stepIdsByNode.set(s.id, s.nodeId);
-    const { data: sfm } = parse(s.path);
-    stepTypes.set(`${s.nodeId}/${s.id}`, sfm.type);
-  }
-
-  for (const step of scan.steps) {
-    const { data: fm, body } = parse(step.path);
-    checkFrontmatter(report, step.path, fm, STEP_FM);
-    checkIllustration(report, step.path, fm);
-    checkStepType(report, step.path, fm);
-    checkIdFilename(report, step.path, fm.id, step.id);
-    checkReferences(report, step.path, body, subject, nodeIds, stepKeys);
-    checkSourceLinks(report, step.path, body, subject, sourceNames);
-    checkSourcesPresent(report, step.path, "step");
-    checkStepProvenance(report, subject, step);
-  }
-
-  for (const node of scan.nodes) {
-    const { data: fm } = parse(node.path);
-    checkDag(report, node.path, node.id, fm, stepFiles, stepIdsByNode, stepTypes);
-  }
-
-  for (const edge of scan.edges) {
-    const { data: fm, body } = parse(edge.path);
-    checkFrontmatter(report, edge.path, fm, EDGE_FM);
-    if (Array.isArray(fm.nodes)) {
-      for (const n of fm.nodes) {
-        const id = String(n).split("/").pop();
-        if (!nodeIds.has(id)) {
-          report.fail(edge.path.replace(REPO_ROOT + "/", ""), 1, "lint-edge-refs", `edge nodes reference missing node "${id}"`);
-        }
-      }
+  if (entry) {
+    const first = body.split("\n").find((line) => line.trim() !== "");
+    const expected = `# ${entry.title}`;
+    if (!first || first.trim() !== expected) {
+      report.fail(file, 1, "step-h1", `first heading must be "${expected}"`);
     }
-    checkReferences(report, edge.path, body, subject, nodeIds, stepKeys);
   }
 
-  checkOrphans(report, subject, scan, nodeIds, stepKeys);
-  checkNodeCount(report, subject, scan, digestIdx);
+  checkLinks(report, root, file, body, dirname(step.path));
+  checkCodeProvenance(report, root, file, body);
 }
 
-function checkNodeCount(report, subject, scan, digestIdx) {
-  const target = baselineNodeCount(digestIdx.totalLines.value);
+function checkNodeCount(report, subject, scan) {
+  let totalLines = 0;
+  const counted = new Set();
+  for (const file of scan.digests) {
+    const { data } = readMarkdown(file.path);
+    const key = data.source || file.path;
+    if (typeof data.source_lines === "number" && !counted.has(key)) {
+      counted.add(key);
+      totalLines += data.source_lines;
+    }
+  }
+  const target = Math.max(3, Math.min(30, Math.round(totalLines / 1100)));
   const actual = scan.nodes.length;
   if (target > 0) {
-    const dev = (actual - target) / target;
-    if (Math.abs(dev) > 0.4) {
-      report.flag(`learn/${subject}`, "lint-node-count", `node count ${actual} deviates ${(dev * 100).toFixed(0)}% from baseline ${target} (±40%)`);
+    const deviation = (actual - target) / target;
+    if (Math.abs(deviation) > 0.4) {
+      report.flag(
+        `learn/${subject}`,
+        "lint-node-count",
+        `node count ${actual} deviates ${(deviation * 100).toFixed(0)}% from baseline ${target} (±40%)`,
+      );
     }
   }
 }
 
-function checkOrphans(report, subject, scan, nodeIds, stepKeys) {
-  const allLinks = new Set();
-  const collect = (text) => {
-    for (const l of extractLinks(text, subject)) {
-      const parts = l.split("/");
-      if (parts[0] === "learn" && parts[1] === subject) {
-        if (parts[2] === "nodes") {
-          if (parts.length === 4) allLinks.add(parts[3]);
-          else if (parts.length === 5) allLinks.add(`${parts[3]}/${parts[4]}`);
-        }
-      }
-    }
+export function runChecks({ root = REPO_ROOT, subject, node = null }) {
+  markdownCache.clear();
+  const scan = scanSubject(root, subject);
+  const report = new Report();
+  const stepIndex = {
+    byNode: new Map(),
   };
-  for (const f of [...scan.nodes, ...scan.steps, ...scan.edges]) {
-    collect(readFileSync(f.path, "utf8"));
+  for (const step of scan.steps) {
+    if (!stepIndex.byNode.has(step.nodeId)) stepIndex.byNode.set(step.nodeId, []);
+    stepIndex.byNode.get(step.nodeId).push(step);
   }
-  const roadmap = readSubjectDoc(subject, "ROADMAP.md");
-  collect(roadmap);
-  const mastery = readSubjectDoc(subject, "mastery.md");
-  collect(mastery);
 
-  for (const n of scan.nodes) {
-    if (!allLinks.has(n.id)) report.flag(`learn/${subject}/nodes/${n.name}`, "lint-orphan", "node is not referenced by any link");
+  checkNoMdx(report, root, node ? subject : null);
+  const digestIndex = buildDigestIndex(report, root, subject, scan);
+
+  const nodesById = new Map(scan.nodes.map((item) => [item.id, item]));
+  for (const nodeId of stepIndex.byNode.keys()) {
+    if (!nodesById.has(nodeId)) {
+      report.fail(
+        `learn/${subject}/nodes/${nodeId}`,
+        0,
+        "node-container-missing",
+        `step folder "${nodeId}" has no node container at learn/${subject}/nodes/${nodeId}.md`,
+      );
+    }
   }
-  for (const s of scan.steps) {
-    if (!allLinks.has(`${s.nodeId}/${s.id}`)) report.flag(`learn/${subject}/nodes/${s.nodeId}/${s.name}`, "lint-orphan", "step is not referenced by any link");
+
+  const stepEntries = new Map();
+  for (const item of scan.nodes) {
+    const parsed = readMarkdown(item.path);
+    if (parsed.error) continue;
+    for (const entry of Array.isArray(parsed.data.steps) ? parsed.data.steps : []) {
+      if (entry && entry.id) stepEntries.set(`${item.id}/${entry.id}`, entry);
+    }
   }
+  const targets = node ? [nodesById.get(node)].filter(Boolean) : scan.nodes;
+  if (node && !nodesById.has(node)) {
+    report.fail("", 0, "node-missing", `node "${node}" not found under nodes/`);
+  }
+
+  for (const item of targets) {
+    checkNode(report, root, subject, scan, digestIndex, item, stepIndex);
+  }
+
+  const articleNodes = node ? new Set([node]) : new Set(scan.nodes.map((item) => item.id));
+  for (const step of scan.steps) {
+    if (!articleNodes.has(step.nodeId)) continue;
+    const entry = stepEntries.get(`${step.nodeId}/${step.id}`) || null;
+    checkArticle(report, root, entry, step);
+  }
+
+  if (!node) checkNodeCount(report, subject, scan);
+
+  return {
+    subject,
+    ...(node ? { node } : {}),
+    counts: { nodes: targets.length, steps: scan.steps.length, digests: scan.digests.length },
+    failures: report.failures,
+    flags: report.flags,
+    pass: !report.hasFailures,
+  };
 }
-
-// --- main ------------------------------------------------------------------
 
 function usage() {
-  console.error("usage: node scripts/verify.mjs (--node <subject>/<node-id> | --subject <subject>) [--json]");
+  console.error("usage: node scripts/verify.mjs (--node <subject>/<node-id> | --subject <subject>) [--root <dir>] [--json]");
+}
+
+function parseArgs(argv) {
+  const options = { subject: null, node: null, root: REPO_ROOT, json: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === "--node" && index + 1 < argv.length) {
+      const value = argv[++index];
+      const slash = value.indexOf("/");
+      if (slash === -1) return null;
+      options.subject = value.slice(0, slash);
+      options.node = value.slice(slash + 1);
+    } else if (argv[index] === "--subject" && index + 1 < argv.length) {
+      options.subject = argv[++index];
+    } else if (argv[index] === "--root" && index + 1 < argv.length) {
+      options.root = resolve(argv[++index]);
+    } else if (argv[index] === "--json") {
+      options.json = true;
+    }
+  }
+  return options;
 }
 
 function main(argv) {
-  const args = argv.slice(2);
-  let nodeTarget = null;
-  let subject = null;
-  let json = false;
-
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--node" && i + 1 < args.length) {
-      const val = args[++i];
-      const slash = val.indexOf("/");
-      if (slash === -1) {
-        usage();
-        process.exit(2);
-      }
-      subject = val.slice(0, slash);
-      nodeTarget = val.slice(slash + 1);
-    } else if (args[i] === "--subject" && i + 1 < args.length) {
-      subject = args[++i];
-    } else if (args[i] === "--json") {
-      json = true;
-    }
-  }
-
-  if (!subject) {
+  const options = parseArgs(argv.slice(2));
+  if (!options || !options.subject) {
     usage();
     process.exit(2);
   }
-  if (!existsSync(join(LEARN_ROOT, subject))) {
-    console.error(`unknown subject: ${subject}`);
+  if (!existsSync(join(options.root, "learn", options.subject))) {
+    console.error(`unknown subject: ${options.subject}`);
     process.exit(2);
   }
 
-  const scan = scanSubjectDir(subject);
-  const digestIdx = buildDigestIndex(subject);
-  const sourceNames = new Set(sourceFilesFor(subject).map((s) => s.name));
-  const nodeIds = new Set(scan.nodes.map((n) => n.id));
-  const stepKeys = new Set(scan.steps.map((s) => `${s.nodeId}/${s.id}`));
+  const result = runChecks(options);
 
-  const report = new Report();
-  digestLocatorsCache = null;
-
-  if (nodeTarget) {
-    runNodeChecks(report, subject, nodeTarget, scan, digestIdx, sourceNames, nodeIds, stepKeys);
-  } else {
-    runSubjectChecks(report, subject, scan, digestIdx, sourceNames, nodeIds, stepKeys);
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.exit(result.pass ? 0 : 1);
   }
 
-  if (json) {
-    process.stdout.write(
-      JSON.stringify(
-        {
-          subject,
-          ...(nodeTarget ? { node: nodeTarget } : {}),
-          failures: report.failures,
-          flags: report.flags,
-          pass: !report.hasFailures,
-        },
-        null,
-        2,
-      ) + "\n",
-    );
-    process.exit(report.hasFailures ? 1 : 0);
-  }
-
-  const files = new Set(report.failures.map((f) => f.file).filter(Boolean));
-  const flagFiles = new Set(report.flags.map((f) => f.file).filter(Boolean));
+  const failedFiles = new Set(result.failures.map((failure) => failure.file).filter(Boolean));
+  const flaggedFiles = new Set(result.flags.map((flag) => flag.file).filter(Boolean));
   console.log(
-    `SUMMARY: ${scan.nodes.length} node(s), ${scan.steps.length} step(s), ${scan.edges.length} edge(s) checked; ${report.failures.length} failure(s) in ${files.size} file(s), ${report.flags.length} flag(s) in ${flagFiles.size} file(s); exit ${report.hasFailures ? 1 : 0}`,
+    `SUMMARY: ${result.counts.nodes} node(s), ${result.counts.steps} step(s), ${result.counts.digests} digest(s) checked; ${result.failures.length} failure(s) in ${failedFiles.size} file(s), ${result.flags.length} flag(s) in ${flaggedFiles.size} file(s); exit ${result.pass ? 0 : 1}`,
   );
 
-  if (report.failures.length > 0) {
+  if (result.failures.length > 0) {
     console.log("\nFAILURES:");
-    for (const f of report.failures) {
-      const loc = f.file ? `${f.file}${f.line ? `:${f.line}` : ""}` : "<root>";
-      console.log(`  [${f.checkId}] ${loc} — ${f.message}`);
+    for (const failure of result.failures) {
+      const location = failure.file ? `${failure.file}${failure.line ? `:${failure.line}` : ""}` : "<root>";
+      console.log(`  [${failure.checkId}] ${location} — ${failure.message}`);
     }
   }
-  if (report.flags.length > 0) {
+  if (result.flags.length > 0) {
     console.log("\nFLAGS:");
-    for (const f of report.flags) {
-      const loc = f.file ? `${f.file}` : "<root>";
-      console.log(`  [${f.checkId}] ${loc} — ${f.message}`);
+    for (const flag of result.flags) {
+      console.log(`  [${flag.checkId}] ${flag.file || "<root>"} — ${flag.message}`);
     }
   }
-  console.log(report.hasFailures ? "\n✗ FAILED" : "\n✓ PASS");
-  process.exit(report.hasFailures ? 1 : 0);
+  console.log(result.pass ? "\n✓ PASS" : "\n✗ FAILED");
+  process.exit(result.pass ? 0 : 1);
 }
 
 const mainUrl = process.argv[1] ? resolve(process.argv[1]) : null;
