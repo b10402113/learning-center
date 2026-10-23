@@ -1,58 +1,46 @@
 # Node Container Format
 
-`learn/<subject>/nodes/<node-id>.mdx` — a step-DAG container with reading order and short main lesson.
+`learn/<subject>/nodes/<node-id>.md` — the plan for one node. It holds the ordered `steps` array and a short lesson overview. There is no node-level `sources` field and no step-DAG metadata.
 
 ```markdown
 ---
 id: <node-id>
-title: <Node title>
+title: "<Node title>"
 subject: <subject>
 tier: <node tier>
 order: <node order>
-status: <draft | confirmed | nodes-written | content-written | edges-written>
-goal: <learner-facing outcome>
-sources:
-  - "[[sources/<subject>/<file>#<section>]]"
+status: <draft | confirmed | written>
+goal: "<learner-facing outcome>"
+prerequisites: []
 steps:
   - id: <step-id>
-    order: 1
-    type: concept
-  - id: <step-id>
-    order: 2
-    deps:
-      - <step-id>
-    type: procedure
-prerequisites:
-  - learn/<subject>/nodes/<node-id>
+    title: "<Step title>"
+    purpose: "<one short sentence>"
+    sources:
+      - "[[sources/<subject>/<file>#Lx-Ly]]"
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
 
 # <Node title>
 
-## Learning goal
+## Lesson
 
-<learner-facing outcome>
+<2–3 sentences tying the steps together.>
 
 ## Steps
 
-<Reading order — deps show what must come first.>
-
-1. [[learn/<subject>/nodes/<node-id>/<step-id>|<Step title>]] — <one-line goal>
-2. [[learn/<subject>/nodes/<node-id>/<step-id>|<Step title>]] — <one-line goal> (after step 1)
-3. [[learn/<subject>/nodes/<node-id>/<step-id>|<Step title>]] — <one-line goal> (after steps 1–2)
-
-## Lesson
-
-<The node's main lesson — the overarching idea the steps build toward, a few paragraphs.>
-
-## Sources
-
-- [[sources/<subject>/<file>#<section>]]
+1. [<Step title>](<node-id>/<step-id>.md)
+2. [<Step title>](<node-id>/<step-id>.md)
 ```
 
 ## Rules
 
-- `steps` is the step-DAG: every step id with its `order`, `deps`, and `type`. `order` is reading order; `deps` name the steps that must come first. A step with no `deps` is an entry point.
-- `type` is the step's knowledge form: `concept`（觀念）| `procedure`（程序）| `decision`（抉擇）| `reference`（查閱）. It shapes how `/teach` writes the article (see `.opencode/skills/teach/types/`). Write it here when the DAG is designed; `/nodes` mirrors it into the step frontmatter. Omit only on legacy steps, where it defaults to `concept`.
-- `prerequisites` is a list of stable node IDs (`learn/<subject>/nodes/<id>`); omit when the node has none.
+- `id` equals the filename without `.md`.
+- `status` is `draft` (planned, no steps yet), `confirmed` (`/nodes` wrote the step plan), or `written` (every step article has a body).
+- `steps` array order is teaching order. A step entry has exactly `id`, `title`, `purpose`, and `sources`. It must not declare `deps`, `type`, or `order`.
+- `purpose` is one sentence of at most 120 characters. It states the learner-facing outcome, not a summary of the article.
+- `sources` cite `[[sources/<subject>/<file>#Lx-Ly]]` line ranges in extracted `.txt` files. PDF locators, slugs, and whole-folder references are invalid.
+- `prerequisites` is a list of relative node paths such as `learn/<subject>/nodes/<node-id>.md`; use `[]` when none.
+- The `## Steps` list is an ordered relative Markdown list. Link targets are relative to the node file (`<node-id>/<step-id>.md`) and must match the frontmatter's ids, titles, and order one-to-one.
+- A `draft` node may have `steps: []`. A `confirmed` or `written` node needs at least one step.

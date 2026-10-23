@@ -1,48 +1,44 @@
-# Step Format
+# Step Article Format
 
-`learn/<subject>/nodes/<node-id>/<step-id>.mdx` — a first-class article written in teach-node style. Step files live inside a subdirectory named after the node (`nodes/<node-id>/`), never directly in `nodes/`. Deps live in the node's `steps` DAG, not here.
+`learn/<subject>/nodes/<node-id>/<step-id>.md` — one article. Step files live inside a subdirectory named after their node, never directly in `nodes/`. The node's `steps` array owns the step's id, title, purpose, and sources; the article has no frontmatter.
 
-```mdx
----
-id: <step-id>
-title: <Step title>
-subject: <subject>
-type: concept
-sources:
-  - "[[sources/<subject>/<file>#<section>]]"
-created: YYYY-MM-DD
-updated: YYYY-MM-DD
----
+## Skeleton (written by `/nodes`)
 
-<LearningGoal>
-<one sentence: the learner-facing outcome for this step>
-</LearningGoal>
+````markdown
+# <Step title>
+````
 
-## Lesson
+A skeleton is one H1 and nothing else. It exists so the node's `## Steps` link resolves and verify passes. `/article` treats an H1-only file as unwritten and replaces it with the full article.
 
-<The step article>
+## Article (written by `/article`)
 
-## Sources
+````markdown
+# <Step title>
 
-- [[sources/<subject>/<file>#<section>]]
+<Opening from a reader's situation — no learning-goal banner, no source commentary.>
+
+## <Section>
+
+<Short paragraphs in the subject's language.>
+
+<!-- source: sources/<subject>/<file>#Lx-Ly -->
+```<language>
+<verbatim source code>
 ```
+
+## <Section>
+
+<...>
+
+![第 N 段配圖](./<step-id>-assets/image-N.webp)
+*AI 生成示意圖*
+````
 
 ## Rules
 
-- Deps live in the node's `steps` DAG — not here. Omit `order`; the DAG sets it.
-- `type` is the step's knowledge form — `concept` | `procedure` | `decision` | `reference` — and must match the node DAG entry. It shapes how `/teach` writes the article (see `.opencode/skills/teach/types/`). Omit only on legacy steps, where it defaults to `concept`.
-- `<LearningGoal>` is always present, always first. One sentence.
-- MDX components are provided by the rendering framework and used naturally in `## Lesson` prose. See [teach-node STEP-WRITING.md](../../.opencode/skills/teach-node/STEP-WRITING.md) for available components and when to use them.
-- No separate polish pass — the article is written in teach-node style directly.
-
-## Lesson body-prose rules
-
-The `## Lesson` body is written for a stranger — someone with no access to the book, no context, and no idea a source exists. It must stand alone:
-
-1. **No source links in the body.** `[[sources/…]]` links live only in frontmatter `sources:` and `## Sources` — never inside `## Lesson` prose.
-2. **No source commentary.** Never reference the material's packaging — no 「書裡的定義是…」「作者說…」 or equivalents. State the definition and reasoning directly, as if the article were the primary source.
-3. **Reproduce, don't point.** When the source teaches through a table, list, or diagram, reproduce it as a proper markdown table/list or MDX component in the article's own wording — never 「書中的表格」 or gestures at material the reader cannot see.
-4. **Self-contained examples.** Numbers, examples, and scenarios are rewritten with full context so a reader who has never opened the source understands them completely.
-5. **Phenomenon before term.** Describe the situation first, then name the concept. Don't open with jargon.
-6. **Gloss first use.** Technical terms get a parenthetical translation on first use: `B-tree（B 樹）`. The `language` from `MEMORY.md` determines the parenthetical form.
-7. **Plain language.** Write in the subject's `language` (from `MEMORY.md`). Short sentences. Active voice. No nominalization. No filler.
+- The first line is the H1 and must equal the step entry's `title` exactly. There is no frontmatter.
+- The file lives at `nodes/<node-id>/<step-id>.md`; its images live at `nodes/<node-id>/<step-id>-assets/` and are referenced with a relative path.
+- Do not write a sources section, learning-goal section, or practice section; course-app aggregates sources from the node's step entries.
+- Every fenced code block needs the comment directly above it: `<!-- source: sources/<subject>/<file>#Lx-Ly -->` for quoted code, or `<!-- derived -->` for code written from the prose. `quiz` blocks are data and carry no provenance comment.
+- Source citations inside the article use `[[sources/<subject>/<file>#Lx-Ly]]` line ranges, never slugs and never PDFs.
+- Relative Markdown links must resolve from the article's directory.

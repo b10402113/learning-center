@@ -13,6 +13,9 @@ const STEP_ENTRY_KEYS = ["id", "title", "purpose", "sources"];
 const FORBIDDEN_STEP_KEYS = ["deps", "type", "order"];
 const DERIVED_COMMENT = /^<!--\s*derived\s*-->$/;
 const SOURCE_COMMENT = /^<!--\s*source:\s*sources\/.+#L\d+(?:-L\d+)?\s*-->$/;
+const MAX_PURPOSE_CHARS = 120;
+const CJK_SENTENCE_END = /[。！？]/;
+const ASCII_SENTENCE_BOUNDARY = /[.!?](?=\s+\S)/;
 
 class Report {
   constructor() {
@@ -382,6 +385,59 @@ function parseStepsSection(body) {
   return items;
 }
 
+function checkStepPurpose(report, file, index, purpose) {
+  if (typeof purpose !== "string") {
+    report.fail(file, 1, "step-purpose", `steps[${index}].purpose must be a string`);
+    return;
+  }
+  const text = purpose.trim();
+  if (!text) return;
+  if (text.includes("\n")) {
+    report.fail(file, 1, "step-purpose", `steps[${index}].purpose must be a single line`);
+    return;
+  }
+  const characters = Array.from(text).length;
+  if (characters > MAX_PURPOSE_CHARS) {
+    report.fail(
+      file,
+      1,
+      "step-purpose",
+      `steps[${index}].purpose is ${characters} characters; keep it to ${MAX_PURPOSE_CHARS} or fewer`,
+    );
+  }
+  const withoutTrailing = text.replace(/[。！？!?]+$/, "");
+  if (CJK_SENTENCE_END.test(withoutTrailing) || ASCII_SENTENCE_BOUNDARY.test(withoutTrailing)) {
+    report.fail(file, 1, "step-purpose", `steps[${index}].purpose must be one sentence, not a summary`);
+  }
+}
+
+function checkRoadmap(report, root, subject, scan, enforceOrphans) {
+  const roadmapPath = join(root, "learn", subject, "ROADMAP.md");
+  const file = rel(root, roadmapPath);
+  const parsed = readMarkdown(roadmapPath);
+  if (parsed.error) {
+    report.fail(file, 1, "fm-parse", `invalid YAML frontmatter: ${parsed.error}`);
+    return;
+  }
+
+  const linked = new Set();
+  for (const match of parsed.body.matchAll(/(?<!!)\[[^\]]*\]\((nodes\/[^)\s]+?\.md)\)/g)) {
+    const target = match[1];
+    linked.add(basename(target).replace(/\.md$/, ""));
+    const full = resolve(dirname(roadmapPath), target);
+    if (!existsSync(full)) {
+      report.fail(file, 0, "roadmap-link", `node link "${target}" does not exist`);
+    }
+  }
+
+  if (!enforceOrphans) return;
+  for (const node of scan.nodes) {
+    if (!linked.has(node.id)) {
+      report.fail(rel(root, node.path), 0, "roadmap-node-orphan", `node "${node.id}" is not linked from ROADMAP.md`);
+    }
+  }
+}
+
 function checkNode(report, root, subject, scan, digestIndex, node, stepIndex) {
   const file = rel(root, node.path);
   const parsed = readMarkdown(node.path);
@@ -429,6 +485,7 @@ function checkNode(report, root, subject, scan, digestIndex, node, stepIndex) {
         report.fail(file, 1, "steps-flat", `steps[${index}] must not declare "${key}"`);
       }
     }
+    checkStepPurpose(report, file, index, entry.purpose);
     if (!entry.id) continue;
     if (seen.has(entry.id)) {
       report.fail(file, 1, "steps-duplicate", `duplicate step id "${entry.id}"`);
@@ -626,6 +683,8 @@ export function runChecks({ root = REPO_ROOT, subject, node = null }) {
   if (node && !nodesById.has(node)) {
     report.fail("", 0, "node-missing", `node "${node}" not found under nodes/`);
   }
+
+  checkRoadmap(report, root, subject, scan, !node);
 
   for (const item of targets) {
     checkNode(report, root, subject, scan, digestIndex, item, stepIndex);

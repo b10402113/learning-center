@@ -80,10 +80,14 @@ function readMarkdown(file) {
 }
 
 function slugFromHref(href) {
-  return String(href)
-    .replace(/^.*\/nodes\//, "")
-    .replace(/\.md$/, "")
-    .split("/")[0];
+  const clean = String(href)
+    .split("#")[0]
+    .split("?")[0]
+    .replace(/\.md$/, "");
+  const parts = clean.split("/").filter(Boolean);
+  const nodesAt = parts.lastIndexOf("nodes");
+  if (nodesAt !== -1 && parts[nodesAt + 1]) return parts[nodesAt + 1];
+  return parts[parts.length - 1] || clean;
 }
 
 /** Parse tiers and node ids from a ROADMAP's `### Tier N — name` sections. */
@@ -117,6 +121,15 @@ function parseRoadmap(body) {
   return { tiers, nodes };
 }
 
+/** An article counts as written only when it has prose beyond its H1 skeleton. */
+function hasArticleBody(markdown) {
+  const lines = String(markdown).split("\n");
+  let index = 0;
+  while (index < lines.length && lines[index].trim() === "") index += 1;
+  if (index < lines.length && /^#\s+/.test(lines[index])) index += 1;
+  return lines.slice(index).join("\n").trim().length > 0;
+}
+
 function readStep({ nodesDir, nodeId, entry, order }) {
   const spec = entry && typeof entry === "object" ? entry : { id: entry };
   const file = path.join(nodesDir, nodeId, `${spec.id}.md`);
@@ -133,7 +146,7 @@ function readStep({ nodesDir, nodeId, entry, order }) {
   if (fs.existsSync(file) && fs.statSync(file).isFile()) {
     const { body } = readMarkdown(file);
     step.articleMd = body.trim();
-    step.hasContent = step.articleMd.length > 0;
+    step.hasContent = hasArticleBody(step.articleMd);
   }
 
   return step;

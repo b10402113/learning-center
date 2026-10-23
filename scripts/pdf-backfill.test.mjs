@@ -120,6 +120,24 @@ absorbed_at: 2026-10-22
   );
   write(
     root,
+    "learn/demo/ROADMAP.md",
+    `---
+subject: demo
+status: confirmed
+created: 2026-10-22
+---
+
+# Demo
+
+## Nodes
+
+### Tier 1 — Basics
+
+1. **[Paper](nodes/paper.md)**
+`,
+  );
+  write(
+    root,
     "learn/demo/nodes/paper.md",
     `---
 id: paper

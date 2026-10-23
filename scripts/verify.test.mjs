@@ -29,6 +29,24 @@ absorbed_at: 2026-10-22
 - \`#L1-L10\` — first half
 - \`#L11-L20\` — second half
 `);
+  write(
+    root,
+    "learn/test/ROADMAP.md",
+    `---
+subject: test
+status: confirmed
+created: 2026-10-22
+---
+
+# Test
+
+## Nodes
+
+### Tier 1 — Basics
+
+1. **[Node One](nodes/n1.md)**
+`,
+  );
   write(root, "learn/test/nodes/n1.md", nodeFile());
   write(root, "learn/test/nodes/n1/s1.md", `# Step One
 
@@ -110,6 +128,41 @@ test("a valid Markdown subject passes", (t) => {
   assert.equal(result.pass, true, JSON.stringify(result.failures, null, 2));
 });
 
+test("roadmap node links must resolve", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/ROADMAP.md", "(nodes/n1.md)", "(nodes/missing.md)");
+  assert.ok(failures(root).includes("roadmap-link"));
+});
+
+test("every node must be listed in the roadmap", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/nodes/n2.md",
+    `---
+id: n2
+title: "Node Two"
+subject: test
+tier: 1
+order: 2
+status: draft
+goal: "Plan another thing."
+prerequisites: []
+steps: []
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Node Two
+
+## Lesson
+
+Planned.
+`,
+  );
+  assert.ok(failures(root).includes("roadmap-node-orphan"));
+});
+
 test("a draft node with no steps is accepted", (t) => {
   const root = fixture(t);
   write(
@@ -181,10 +234,61 @@ test("each step entry needs id, title, purpose, and sources", (t) => {
   assert.ok(failures(root).includes("step-entry"));
 });
 
+test("a step purpose is one sentence", (t) => {
+  for (const purpose of [
+    "Explain one thing。Then explain another。",
+    "Explain one thing. Then explain another.",
+  ]) {
+    const root = fixture(t);
+    update(root, "learn/test/nodes/n1.md", 'purpose: "Explain one thing."', `purpose: "${purpose}"`);
+    assert.ok(failures(root).includes("step-purpose"), purpose);
+  }
+});
+
+test("a step purpose allows dots inside names", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/nodes/n1.md", 'purpose: "Explain one thing."', 'purpose: "Run the Node.js loop."');
+  assert.ok(!failures(root).includes("step-purpose"));
+});
+
+test("a step purpose must be a single line of text", (t) => {
+  const root = fixture(t);
+  update(
+    root,
+    "learn/test/nodes/n1.md",
+    'purpose: "Explain one thing."',
+    "purpose: |\n      First line.\n      Second line.",
+  );
+  assert.ok(failures(root).includes("step-purpose"));
+});
+
+test("a non-string step purpose is rejected", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/nodes/n1.md", 'purpose: "Explain one thing."', "purpose: 42");
+  assert.ok(failures(root).includes("step-purpose"));
+});
+
+test("a step purpose must stay short", (t) => {
+  const root = fixture(t);
+  update(
+    root,
+    "learn/test/nodes/n1.md",
+    'purpose: "Explain one thing."',
+    `purpose: "${"目".repeat(121)}"`,
+  );
+  assert.ok(failures(root).includes("step-purpose"));
+});
+
 test("every step entry has an article", (t) => {
   const root = fixture(t);
   rmSync(join(root, "learn/test/nodes/n1/s1.md"));
   assert.ok(failures(root).includes("step-article-missing"));
+});
+
+test("an H1-only article skeleton is accepted", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.md", "# Step One\n");
+  assert.deepEqual(failures(root), []);
 });
 
 test("every article belongs to a step entry", (t) => {

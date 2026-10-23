@@ -40,10 +40,13 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `steps-array` | node `steps` is an array; may be empty for a draft node |
 | `steps-empty` | a `confirmed` or `written` node has at least one step |
 | `step-entry` | every step entry has `id`, `title`, `purpose`, and `sources` |
+| `step-purpose` | `purpose` is a single line of one short sentence (≤ 120 characters, no second sentence) |
 | `steps-flat` | step entries declare no `deps`, `type`, or `order` |
 | `steps-duplicate` | step ids are unique within a node |
 | `node-missing` | the requested `--node` exists |
 | `node-container-missing` | every step folder has a matching `<node>.md` container |
+| `roadmap-link` | every relative `nodes/<id>.md` link in `ROADMAP.md` resolves |
+| `roadmap-node-orphan` | every node container is linked from `ROADMAP.md` (whole-subject checks only) |
 
 ### Step articles
 

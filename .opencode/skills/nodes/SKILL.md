@@ -1,69 +1,70 @@
 ---
 name: nodes
-description: Reason out a node's step-DAG, create skeleton step files, and write the node container. Step content is filled by /teach.
+description: Reason out a node's step list, write the step entries into the node container, and create empty article skeletons. Article content is filled by /article.
 disable-model-invocation: true
-argument-hint: "Which subject/node should be written?"
+argument-hint: "Which subject/node should be planned?"
 ---
 
-Invoke as `/nodes <subject>/<node-id>`, or `/nodes <subject>/<node-id> skip-probe` when the learner knows nothing and wants every step taught deep.
+Invoke as `/nodes <subject>/<node-id>`.
 
-**Prereqs.** `learn/<subject>/MEMORY.md` exists, node container exists. The node must be `probed` or further — a `draft` node stops you; tell the learner to run `/probe <subject>/<node-id>` first. Exception: `skip-probe` accepts `draft` directly (promotes to `confirmed` in step 1).
+A node is one Markdown container. Its `steps` array is the whole plan: each entry carries `id`, `title`, `purpose`, and `sources`, and the array order is the teaching order. `/nodes` writes that plan; it does not write article prose — `/article` does.
 
-1. **Resolve.** Read `learn/<subject>/ROADMAP.md`, `MEMORY.md`, and `learn/<subject>/nodes/<node-id>.mdx`. Resolve source references from the node — do not infer the subject from a node name. Set the node to `confirmed` (the explicit `/nodes` invocation is the confirmation gate). A `draft` node only advances with `skip-probe`.
+**Prereqs.** `learn/<subject>/MEMORY.md` exists, `learn/<subject>/ROADMAP.md` exists, and the node container `learn/<subject>/nodes/<node-id>.md` exists. A `draft` node moves to `confirmed` when this skill runs; no separate probe gate exists.
 
-2. **Read sources via digests.** Follow `docs/reference/source-reading.md`: read sources through `learn/<subject>/digests/` — never raw sources. When L2 detail is insufficient, dispatch a sub-agent to pull the exact section text by locator (one-off, returned in message).
+1. **Resolve.** Read `learn/<subject>/ROADMAP.md`, `MEMORY.md`, and `learn/<subject>/nodes/<node-id>.md`. Resolve source references from the roadmap and digests — do not infer the subject from a node name.
 
-3. **Calibrate step depth.** Read the node's entry in `learn/<subject>/mastery.md` (if it exists). Rate depth by the **most conservative** strand — any `unknown` makes the node deep; all-`solid` makes it shallow; otherwise mixed. Per-step: teach **shallow** where the strands are all `solid` (brief recall, then connections/edges/examples); **deep** where any strand is `unknown` (full phenomenon → term → mechanism, gloss every term, no hidden prerequisites); **mixed** in between. Mastery is a depth input only — it never prunes, reorders, or deletes any step.
+2. **Read sources via digests.** Follow `docs/reference/source-reading.md`: read through `learn/<subject>/digests/` — never the whole raw source. Use the digest's L2 `#Lx-Ly` map to find the lines each step needs. Pull exact slices only when the digest is insufficient.
 
-   With `skip-probe`: skip the lookup, treat every strand `unknown`, teach deep everywhere. Record the skip in `learn/<subject>/mastery.md` — create the node's entry with strands from the digest's `Key claims`/`Learner-relevant` lines, all `unknown`, and a note: `probe skipped via /nodes <subject>/<node-id> skip-probe on <YYYY-MM-DD>`.
+3. **Reason the steps.** Decompose the node into 2–5 coherent steps. Each step is one teaching unit with its own learner-facing outcome. For each step decide:
+   - `id` — immutable kebab-case, unique within the node.
+   - `title` — the article's H1 and the node list label.
+   - `purpose` — **one short sentence (≤ 120 characters)** stating what the learner can do after the step. It is a purpose, not an article summary: no second sentence, no list, no "本節將介紹…".
+   - `sources` — every `[[sources/<subject>/<file>#Lx-Ly]]` slice the article will need. PDFs are never cited; cite the extracted `.txt`.
 
-4. **Reason the step-DAG.** Decompose the node into steps before writing anything. Each step is one coherent teaching unit with its own learner-facing goal. Give each step an immutable kebab-case `id`, a reading `order`, `deps` naming the earlier steps it builds on, and a `type` naming its knowledge form — `concept` | `procedure` | `decision` | `reference` (see [NODE-FORMAT.md](./NODE-FORMAT.md)). A step may branch from or merge into several. 2–5 steps is typical. The DAG is a deliberate plan reasoned from the digests, never improvised while writing articles.
+4. **Confirm the plan (checkpoint).** Present the ordered step list — id, title, purpose, and source ranges — and ask the learner to confirm. Exit options: accept; reorder or rename steps; add, remove, split, or merge steps. Do not write anything until this checkpoint passes.
 
-5. **Confirm the DAG (checkpoint).** Present the step-DAG — step ids, one-line goals, order, deps, type, and each step's calibrated depth (shallow | mixed | deep) — and ask the learner to confirm. Exit options: accept; reorder or rename steps; change a step's type; add, remove, split, or merge steps. Do not write a single step file until this checkpoint passes. Skip this checkpoint when `skip-probe` is active — the learner has asserted they know nothing, so proceed directly to step 6.
+5. **Write the step entries.** Rewrite the node's `steps` frontmatter as an ordered array. Array order is teaching order — do not add `deps`, `type`, or `order`. Example:
 
-6. **Create skeleton step files.** Each step gets a skeleton at `learn/<subject>/nodes/<node-id>/<step-id>.mdx` — frontmatter (`id`, `title`, `subject`, `type`, `sources`, `created`, `updated`), `<LearningGoal>` with the one-sentence goal, `## Lesson` heading only (empty body), and `## Sources` heading only. No lesson content. No sub-agents. When the node's source is a codebase (a directory of source files), each step's `sources` must include the relevant code-file locator, not only prose — otherwise `/teach` has no real code to quote.
+   ```yaml
+   steps:
+     - id: harness-is-the-product
+       title: "Harness 才是產品：LLM 之外的基礎設施"
+       purpose: "能用「LLM + harness」解釋 agent，並說出 memory、tools、long-running 為什麼屬於 harness。"
+       sources:
+         - "[[sources/agent-harness/20260915/1-what-is-an-agent-harness.txt#L7-L25]]"
+   ```
 
-   **Path rule (non-negotiable).** Every step file MUST be written to `learn/<subject>/nodes/<node-id>/` — inside a subdirectory named after the node. Step files MUST NOT be written directly into `learn/<subject>/nodes/`. Before writing, ensure the subdirectory exists (create it if missing). The parent verifies every step file landed at the correct path after all writes.
+6. **Create the article skeletons.** For each step write `learn/<subject>/nodes/<node-id>/<step-id>.md` containing exactly one heading:
 
-7. **Write the node container.** Rewrite `learn/<subject>/nodes/<node-id>.mdx` as a container: `steps` frontmatter (id + order + deps + type), the reading order in `## Steps`, a short `## Lesson` main lesson (the overarching idea the steps build toward — not a second full article), and `## Sources`. Set `prerequisites` to the nodes the learner should know first. No flat lists.
+   ```markdown
+   # <step title>
+   ```
 
-8. **Verify via the script.** Run `node scripts/verify.mjs --node <subject>/<node-id>`. This checks format only — frontmatter, ID/filename match, step↔DAG consistency, step/node link resolution, source-path and digest-locator resolution (per `docs/reference/verify.md`). Fix each non-zero exit and re-run, up to 3 rounds. After the 3rd, list any remaining failures in step 9. Do not re-read article bodies for prose judgment — the script is the sole format gate.
+   No frontmatter, no body. The file exists so every `## Steps` link resolves and verify passes; `/article` fills the body. Never write an article body here.
 
-9. **Report.** List the confirmed DAG (with each step's calibrated depth), skeleton step files created, the node container, the script result (exit status and surviving failures), and any unresolved source or link issues. Move the node to `nodes-written`. Tell the learner: run `/teach <subject>/<node-id>` to begin interactive learning — each step will be taught and its content written to the step file.
+   **Path rule (non-negotiable).** Every step file MUST live at `learn/<subject>/nodes/<node-id>/<step-id>.md` — inside a subdirectory named after the node. Step files MUST NOT be written directly into `learn/<subject>/nodes/`.
 
-## Node container format
+7. **Write the `## Steps` list.** Replace the node body's `## Steps` section with an ordered Markdown list whose links are relative to the node file. Titles and order MUST match the frontmatter exactly:
 
-See [NODE-FORMAT.md](./NODE-FORMAT.md) for the full template and rules.
+   ```markdown
+   ## Steps
 
-## Step format
+   1. [Harness 才是產品：LLM 之外的基礎設施](what-a-harness-is/harness-is-the-product.md)
+   2. [Demo agent 為什麼一進 production 就死](what-a-harness-is/demo-vs-production.md)
+   ```
 
-See [STEP-FORMAT.md](./STEP-FORMAT.md) for the full template, rules, and lesson body-prose rules.
+8. **Update the node metadata.** Set `status: confirmed` and bump `updated`. Keep `goal`, `tier`, `order`, and `prerequisites`; there is no node-level `sources` field.
+
+9. **Verify.** Run `node scripts/verify.mjs --node <subject>/<node-id>`. Every failure must be fixed; re-run up to 3 rounds. The skeleton articles satisfy the article-presence and H1 rules. Treat the script as the sole format gate — do not re-read article bodies for prose judgment.
+
+10. **Report.** List the confirmed steps (id, title, purpose, source count), the skeleton files created, and the verify exit status. Move the node to `confirmed` and tell the learner to run `/article <subject>/<node-id>` to write the articles.
+
+Completion: the node's `steps` array is ordered and complete, each entry has a one-sentence purpose and cited line ranges, every skeleton article exists at the node-qualified path, `## Steps` matches the array exactly, the node is `confirmed`, and `node scripts/verify.mjs --node <subject>/<node-id>` exits 0.
+
+## Formats
+
+See [NODE-FORMAT.md](./NODE-FORMAT.md) for the node container contract and [STEP-FORMAT.md](./STEP-FORMAT.md) for the article contract.
 
 ## Segmented writing protocol
 
-When writing any artifact (step article or node container), never put the entire file body into a single `write` call. Large content (> ~3 KB) risks an Invalid tool error. Instead:
-
-1. **Skeleton** — `write` the file with frontmatter + all section headings only (no body text). Example for a step article:
-   ```markdown
-   ---
-   id: step-id
-   title: Step title
-   subject: <subject>
-   sources:
-     - "[[sources/<subject>/<file>#<section>]]"
-   created: YYYY-MM-DD
-   updated: YYYY-MM-DD
-   ---
-   # Step title
-   ## Learning goal
-   ## Lesson
-   ## Sources
-   ```
-2. **Append sections** — for each section, use `edit` to replace the heading line with itself plus the body text. Match the heading as `oldString`, output heading + body as `newString`. Work through sections in order.
-3. **Lesson body** — for long sections like `## Lesson` (≥ 1000 字), split the body into 2–3 logical paragraphs and append each via a separate `edit` call. This keeps each tool call within safe limits.
-
-The same pattern applies to node containers (write skeleton with all `## ` headings, then fill each section via `edit`).
-
-## Examples
-
-Match the worked examples when writing artifacts. `examples/STEP.mdx` shows a finished step article (lesson with node-qualified source links). `examples/NODE.mdx` shows a finished node container (the `steps` DAG, reading order, and short main lesson). The examples carry prose and voice; the formats above stay the contract — frontmatter, sections, and links still come from the template even where an example omits them.
+When writing a node container, never put the entire file body into a single `write` call if it is large (> ~3 KB). Write the frontmatter and headings first, then fill each section with `edit`.
