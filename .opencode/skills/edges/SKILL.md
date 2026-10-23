@@ -7,16 +7,16 @@ argument-hint: "Which subject/node should have edges written?"
 
 Write high-value relationship pages for one node. Invoke as `/edges <subject>/<node-id>`. Edges are where interleaving happens: the learner compares, contrasts, and judges instead of retrieving in isolation. Less is more.
 
-Prereqs: the selected node's step-DAG and the element files its steps `teach` exist.
+Prereqs: the selected node is `confirmed` or `written`, its `steps` array is filled, and the step articles exist.
 
-1. **Resolve.** Read `ROADMAP.md`, `MEMORY.md`, the selected node, every element its steps `teach`, and any existing edges involving those elements. Source locators come from the digests per the shared `docs/reference/source-reading.md` protocol — never raw sources. Skim other subject elements only to find justified cross-node relationships. Edge prose is always written in plain tone in the subject's `language` from `MEMORY.md`. Write edge prose for a **cold reader** per `docs/reference/article-writing.md`: gloss every non-trivial term on first use within the file and assume no hidden prerequisites.
-2. **Propose.** Generate candidate pairs. Prefer relationships inside the selected node, cross-tier comparisons, conditional choices, and value judgments. A cross-node edge must add a useful connection that the selected node's steps cannot get from the elements they teach.
-3. **Prioritize.** Keep a small set of strong edges. Drop pairs that only restate an element's existing connection or add no decision value.
-4. **Update.** Create or incrementally update one page per selected edge at `learn/<subject>/edges/<edge-id>.mdx`. Preserve useful existing explanations. Use immutable element IDs in `from` and `to`; record every involved node in `nodes`.
-5. **Confirm.** Present the candidate edge set to the learner. Add or remove edges before finalizing. Mark the selected node `edges-written` only after confirmation.
-6. **Verify.** Check that every `from`, `to`, and `nodes` reference resolves, no duplicate relationship page exists, and each edge has an interleave prompt. Run the cold-read self-check per `docs/reference/article-writing.md` (Rule 4) on each edge page before finishing. Then run the **AI-tell audit** per Rule 5 and `docs/reference/humanize.md`: load the `humanizer` skill, rewrite only sentences (never paragraphs, glosses, numbers, links, or frontmatter), and re-run the cold-read self-check on every edge page the audit changed.
+1. **Resolve.** Read `learn/<subject>/ROADMAP.md`, `MEMORY.md`, the selected node, its step articles, and any existing edges that touch those steps. Source locators come from the digests per the shared `docs/reference/source-reading.md` protocol — never raw sources. Skim other nodes only to find justified cross-node relationships. Edge prose is always written in plain tone in the subject's `language` from `MEMORY.md`. Gloss every non-trivial term on first use and assume no hidden prerequisites.
+2. **Propose.** Generate candidate pairs among steps inside the selected node, plus justified comparisons across nodes. Prefer conditional choices and value judgments over restating what a step already says.
+3. **Prioritize.** Keep a small set of strong edges. Drop pairs that only repeat an existing relationship or add no decision value.
+4. **Update.** Create or incrementally update one page per selected edge at `learn/<subject>/edges/<edge-id>.md`. Preserve useful existing explanations. `from` and `to` are node-qualified step ids (`<node>/<step>`), or node ids when the edge compares whole nodes; record every involved node in `nodes`.
+5. **Confirm.** Present the candidate edge set to the learner. Add or remove edges before finalizing.
+6. **Verify.** Check that every `from`, `to`, and `nodes` reference resolves to an existing node or step, no duplicate relationship page exists, each edge has an interleave prompt, and every relative link in the body resolves. There is no `edges-written` node status in the current schema.
 
-Completion: the learner confirmed a small, high-value edge set, every edge resolves to existing elements and nodes, each edge passes the cold-read self-check and the AI-tell audit, and the selected node is marked `edges-written`.
+Completion: the learner confirmed a small, high-value edge set, every reference resolves, and each edge passes a cold-read check.
 
 ## Edge types
 
@@ -27,14 +27,14 @@ Completion: the learner confirmed a small, high-value edge set, every edge resol
 
 ## Edge format
 
-Edge files are written as **MDX**. The `from` and `to` fields use stable element IDs (immutable kebab-case), which remain valid regardless of element `type` (`article` or `video`; `question` is deprecated). Cross-node edges may also reference node IDs.
+Edge files are Markdown (`.md`). `from` and `to` use node-qualified step ids or node ids.
 
 ```markdown
 ---
 title: <X vs Y | X drives Y | ...>
 type: <relationship | comparison | tradeoff | analogy>
-from: <element-id>
-to: <element-id>
+from: <node-id>/<step-id>
+to: <node-id>/<step-id>
 nodes:
   - <subject>/<node-id>
 created: YYYY-MM-DD
@@ -55,7 +55,7 @@ When to reach for A versus B, or how they work together.
 ## Interleave
 A prompt that forces the learner to actively compare, contrast, or judge the pair.
 
-## Element links
-- [[learn/<subject>/elements/<from-id>|<From title>]]
-- [[learn/<subject>/elements/<to-id>|<To title>]]
+## Step links
+- [<From title>](../nodes/<node-id>/<step-id>.md)
+- [<To title>](../nodes/<node-id>/<step-id>.md)
 ```

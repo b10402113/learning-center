@@ -18,6 +18,9 @@ Scott Moss 的定義很直接：agent 是 LLM 加上 harness。只有 LLM 的時
 
 這些都不是 prompt 技巧，是基礎設施。所以 Scott 的說法很硬：沒有 harness，你上不了 production；你會有的只是 transactional inference call。
 
+![第 1 段配圖](./harness-is-the-product-assets/image-1.webp)
+*AI 生成示意圖*
+
 ## 換模型救不了你
 
 這一段是整門課的定調。他看過「harness 差、模型強」被「harness 好、模型弱」打敗。模型都夠好了，連開源模型都很好；真正拉開差距的是誰能把 harness 做好。他甚至說，現在做 AI 最值得投的兩件事就是 harness engineering 和 evals。

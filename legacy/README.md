@@ -1,8 +1,13 @@
 # Legacy
 
-This directory holds the retired HTML-lesson pipeline. Nothing in the active
-Markdown course flow imports from here; it is kept for reference and for
+This directory holds the retired HTML-lesson and MDX pipeline. Nothing in the
+active Markdown course flow imports from here; it is kept for reference and for
 re-reading old lessons.
+
+The active flow uses `src/article.mjs` + `src/article-cli.mjs` for articles and
+images, `scripts/verify.mjs` for the format gate, `scripts/pdf-backfill.mjs` for
+stable `.txt` extraction, and `prompts/article.txt`, `prompts/image-plan.txt`,
+and `prompts/image.txt`. It renders through `course-app/` from `learn/`.
 
 ## Moved here
 
@@ -18,6 +23,7 @@ re-reading old lessons.
 | `.opencode/agent/teach-agent.md`, `article-agent.md`, `humanize-agent.md` | Agents for the retired pipeline |
 | `scripts/generate-data.mjs`, `generate-data.d.mts` | MDX graph generator for the old viewer |
 | `scripts/reset-nodes.mjs` | Removes old MDX lesson output |
+| `docs/skill-scope.md` | Batch-scope parsing for the retired `/batch-nodes`, `/to-article`, `/to-image`, and `/reset-nodes` skills |
 
 Also retired with this move: `learn/**/elements/`, `learn/**/mastery.md`, and
 `learn/**/output/`. Those directories were already removed from the active tree

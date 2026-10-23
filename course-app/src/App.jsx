@@ -175,9 +175,9 @@ export default function App() {
 
       <main className="min-w-0 flex-1 px-4 pb-20 pt-6 sm:px-8 sm:pt-8 lg:max-w-[900px] xl:px-12">
         {step ? (
-          <StepView course={course} node={node} step={step} />
+          <StepView key={step.id} course={course} node={node} step={step} />
         ) : (
-          <NodeView course={course} node={node} onSelect={selectNode} />
+          <NodeView key={node.id} course={course} node={node} onSelect={selectNode} />
         )}
       </main>
     </div>

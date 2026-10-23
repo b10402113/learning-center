@@ -5,7 +5,7 @@ disable-model-invocation: true
 argument-hint: "What subject are you starting to learn? (e.g. /learn-init vibe-engineering)"
 ---
 
-Start a new learning subject. The subject **comes from the argument** — `sources/<subject>/` must exist. If no argument is given, ask for it. Before any roadmap can be built you must know the learner — every element anchors to their experience, so the profile is the foundation.
+Start a new learning subject. The subject **comes from the argument** — `sources/<subject>/` must exist. If no argument is given, ask for it. Before any roadmap can be built you must know the learner — every article anchors to their experience, so the profile is the foundation.
 
 ## Archive source files
 
@@ -46,7 +46,7 @@ Run a `/grilling` session focused on the learner: work in rounds, one frontier p
 - **Goal** — what they want to *be able to do* when this subject is done. Concrete, not "understand X": "ship a production MCP server", "read retrieval papers".
 - **Why** — the motivation underneath. The anchor that carries the subject when it gets hard.
 - **Prior experience** — what they already know that this subject can build on.
-- **Anchors** — concrete experiences the elements can connect to. Push for real specifics ("I run a Rails app", "I've used VS Code"), not "some backend".
+- **Anchors** — concrete experiences the articles can connect to. Push for real specifics ("I run a Rails app", "I've used VS Code"), not "some backend".
 - **Habits & constraints** — time per week, when they learn, environment.
 - **Knowledge type** — where the subject sits on declarative (facts/concepts) vs procedural (doing/skill). See `Interleaving table.md`.
 - **How they learn best** — what made past learning stick, what bored them, how they like being taught.
@@ -57,7 +57,7 @@ Finding *facts* is your job, never the learner's — check `learn/<subject>/` an
 
 After the profile is settled, ask one output question and store the answer in `MEMORY.md` frontmatter:
 
-- **Language** — what language every generated article for this subject should be in (e.g. `en`, `zh-Hant`). This is a hard commitment: later nodes, elements, and edges are written in this language.
+- **Language** — what language every generated article for this subject should be in (e.g. `en`, `zh-Hant`). This is a hard commitment: later nodes, steps, and edges are written in this language.
 
 Write `learn/<subject>/MEMORY.md` in the template below, then confirm the profile is accurate before ending the session.
 
@@ -84,7 +84,7 @@ updated: YYYY-MM-DD
 - ...
 
 ## Anchors
-- <a concrete experience an element can link to>
+- <a concrete experience an article can link to>
 - ...
 
 ## Habits & constraints
@@ -99,4 +99,4 @@ updated: YYYY-MM-DD
 
 Completion: every branch has a settled answer, `MEMORY.md` is written, and the learner confirms it's accurate.
 
-Next stage: `/roadmap <subject>` — the learner runs it next to plan the nodes; each node is then probed via `/probe <subject>/<node-id>` before it is viewed.
+Next stage: `/roadmap <subject>` — the learner runs it next to plan the nodes; then `/nodes <subject>/<node-id>` writes each node's steps.

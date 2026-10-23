@@ -4,7 +4,7 @@ Shared contract for `scripts/verify.mjs` — the single CLI that runs every **de
 
 ## Principle
 
-The script checks **format correctness only**. It verifies frontmatter, step/article pairing, heading and list consistency, source locators, digest coverage, code provenance, and link resolution — never prose quality or content semantics. Because it is the sole gate, an agent only fixes what it flags.
+The script checks **format correctness only**. It verifies frontmatter, step/article pairing, heading and list consistency, source locators, digest coverage, code provenance, quiz JSON, image files, and link resolution — never prose quality or content semantics. Because it is the sole gate, an agent only fixes what it flags.
 
 Every hard-failure rule has a negative fixture in `scripts/verify.test.mjs`: deliberately breaking the fixture must turn the rule red. Advisory flags are not fixtures.
 
@@ -84,6 +84,10 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | id | checks |
 |---|---|
 | `code-provenance` | every fenced code block (except `quiz`) is preceded by `<!-- source: sources/…#Lx-Ly -->` or `<!-- derived -->`; a source comment must resolve to an existing file and non-empty range |
+| `quiz-json` | a `quiz` block is a JSON object with a non-empty `question` |
+| `quiz-options` | `options` is an array of 2–5 non-empty strings |
+| `quiz-answer` | `answer` is a 0-based integer index into `options` |
+| `quiz-explain` | `explain` is a non-empty string |
 | `link` | relative Markdown links resolve |
 | `image-missing` | every local Markdown image target exists |
 | `image-format` | every referenced image is a `.webp` file with a WebP header |
@@ -91,8 +95,6 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `image-orphan` | every file in a step's `*-assets/` directory is referenced by its article, and every `*-assets/` directory belongs to a real step |
 | `sources-empty` | step has at least one source link (flag) |
 | `lint-node-count` | node count is within ±40% of the formula baseline (flag) |
-
-`quiz` JSON validation lands with the reading-experience ticket.
 
 ## False-positive policy
 

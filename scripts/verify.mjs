@@ -16,6 +16,8 @@ const SOURCE_COMMENT = /^<!--\s*source:\s*sources\/.+#L\d+(?:-L\d+)?\s*-->$/;
 const MAX_PURPOSE_CHARS = 120;
 const CJK_SENTENCE_END = /[。！？]/;
 const ASCII_SENTENCE_BOUNDARY = /[.!?](?=\s+\S)/;
+const QUIZ_MIN_OPTIONS = 2;
+const QUIZ_MAX_OPTIONS = 5;
 
 class Report {
   constructor() {
@@ -321,32 +323,99 @@ function checkProvenanceSource(report, root, file, line, marker) {
 
 function checkCodeProvenance(report, root, file, body) {
   const lines = body.split("\n");
+
+  for (const block of fencedBlocks(body)) {
+    if (block.lang === "quiz") continue;
+
+    let previous = block.line - 2;
+    while (previous >= 0 && lines[previous].trim() === "") previous -= 1;
+    const marker = previous >= 0 ? lines[previous].trim() : "";
+    if (DERIVED_COMMENT.test(marker)) continue;
+    if (SOURCE_COMMENT.test(marker)) {
+      checkProvenanceSource(report, root, file, block.line, marker);
+    } else {
+      report.fail(
+        file,
+        block.line,
+        "code-provenance",
+        "code block must be preceded by <!-- source: sources/...#Lx-Ly --> or <!-- derived -->",
+      );
+    }
+  }
+}
+
+function fencedBlocks(body) {
+  const blocks = [];
+  const lines = body.split("\n");
   let fence = null;
+  let start = 0;
+  let content = [];
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     const match = line.match(/^\s*(`{3,}|~{3,})\s*([^\s`]*)/);
     if (!fence) {
       if (!match) continue;
-      fence = { marker: match[1], lang: match[2] };
-      if (fence.lang === "quiz") continue;
-
-      let previous = index - 1;
-      while (previous >= 0 && lines[previous].trim() === "") previous -= 1;
-      const marker = previous >= 0 ? lines[previous].trim() : "";
-      if (DERIVED_COMMENT.test(marker)) continue;
-      if (SOURCE_COMMENT.test(marker)) {
-        checkProvenanceSource(report, root, file, index + 1, marker);
-      } else {
-        report.fail(
-          file,
-          index + 1,
-          "code-provenance",
-          "code block must be preceded by <!-- source: sources/...#Lx-Ly --> or <!-- derived -->",
-        );
-      }
+      fence = { marker: match[1], lang: match[2] || "" };
+      start = index + 1;
+      content = [];
     } else if (line.trim().startsWith(fence.marker)) {
+      blocks.push({ lang: fence.lang, line: start, content: content.join("\n") });
       fence = null;
+    } else {
+      content.push(line);
+    }
+  }
+
+  return blocks;
+}
+
+function checkQuizBlocks(report, file, body) {
+  for (const block of fencedBlocks(body)) {
+    if (block.lang !== "quiz") continue;
+
+    let quiz;
+    try {
+      quiz = JSON.parse(block.content);
+    } catch {
+      report.fail(file, block.line, "quiz-json", "quiz block must contain valid JSON");
+      continue;
+    }
+    if (!quiz || typeof quiz !== "object" || Array.isArray(quiz)) {
+      report.fail(file, block.line, "quiz-json", "quiz block must be a JSON object");
+      continue;
+    }
+    if (typeof quiz.question !== "string" || quiz.question.trim() === "") {
+      report.fail(file, block.line, "quiz-json", "quiz.question must be a non-empty string");
+    }
+
+    const options = quiz.options;
+    if (
+      !Array.isArray(options) ||
+      options.length < QUIZ_MIN_OPTIONS ||
+      options.length > QUIZ_MAX_OPTIONS
+    ) {
+      report.fail(
+        file,
+        block.line,
+        "quiz-options",
+        `quiz.options must be an array of ${QUIZ_MIN_OPTIONS}-${QUIZ_MAX_OPTIONS} strings`,
+      );
+    } else if (!options.every((option) => typeof option === "string" && option.trim() !== "")) {
+      report.fail(file, block.line, "quiz-options", "quiz.options must all be non-empty strings");
+    }
+
+    const optionCount = Array.isArray(options) ? options.length : 0;
+    if (!Number.isInteger(quiz.answer) || quiz.answer < 0 || quiz.answer >= optionCount) {
+      report.fail(
+        file,
+        block.line,
+        "quiz-answer",
+        `quiz.answer must be a 0-based index below ${optionCount}`,
+      );
+    }
+    if (typeof quiz.explain !== "string" || quiz.explain.trim() === "") {
+      report.fail(file, block.line, "quiz-explain", "quiz.explain must be a non-empty string");
     }
   }
 }
@@ -685,6 +754,7 @@ function checkArticle(report, root, entry, step) {
 
   checkLinks(report, root, file, body, dirname(step.path));
   checkCodeProvenance(report, root, file, body);
+  checkQuizBlocks(report, file, body);
   checkImages(report, root, file, body, step);
 }
 

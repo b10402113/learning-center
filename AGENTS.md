@@ -1,151 +1,242 @@
 # Learning Path Schema
 
-This repo turns raw material into customized, subject-specific lessons. A **node** is a step-DAG — a container whose teaching process is a set of **steps** that branch and merge through their deps. A **step** is a first-class article with its own HTML lesson. The step carries the lesson narrative and the detailed content.
+This repo turns raw material into customized, subject-specific **Markdown courses**. A **node** is one Markdown container with one learning goal; its `steps` array is the whole teaching plan, in order. A **step** is a first-class Markdown article that course-app renders directly. There is no HTML lesson pipeline and no MDX.
+
+The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, two steps, two digests, line-addressed citations.
 
 ## Architecture
 
 ```text
-├── AGENTS.md          ← repository schema and workflow
-├── CLAUDE.md          ← @AGENTS.md
-├── docs/reference/    ← shared skill protocols (e.g. source-reading.md)
-├── sources/           ← raw, immutable inputs, one folder per subject
-│   └── <subject>/
-├── learn/             ← generated learning material, one folder per subject
-│   └── <subject>/
-│       ├── MEMORY.md  ← learner profile from /learn-init (incl. language)
-│       ├── ROADMAP.md ← node index and course plan
-│       ├── mastery.md ← per-node mastery report (unknown | partial | solid) from /probe, written back by /tackle
-│       ├── digests/   ← two-level source digests from /learn-init & /roadmap & /ingest
-│       ├── nodes/     ← one container file per node + a folder of step files per node
-│       ├── lessons/   ← HTML lessons from /teach, one folder per node (<node-id>/<step-id>.html); shared assets in lessons/assets/; illustrations in <node>/<step>-assets/
-│       └── output/    ← /to-article & /to-image working files per step (<node>/<step>/original.html, cleaned.html, plan.input.json, plan.json, rewritten.html, manifest.json, assets/); not served
-├── src/               ← Markdown article pipeline (cli.mjs, pipeline.mjs) + HTML lesson pipeline (html-cli.mjs, html.mjs); tests beside them
-├── prompts/           ← rewrite / image / publisher / html-rewrite prompts used by src/
-├── .opencode/         ← skills and subagents; article-agent owns one step of /to-image (its plan and image modes)
-├── wiki/              ← legacy, no longer maintained
-├── legacy/            ← archived material (e.g. old tune/ transcripts)
-├── course-app/        ← React (Vite + Tailwind) course viewer; `npm run dev` regenerates its data from learn/ via scripts/build-data.mjs
-├── previews/          ← static HTML design previews for the course viewer
-└── *.md               ← pedagogy references
+├── AGENTS.md                 ← repository schema and workflow
+├── CLAUDE.md                 ← @AGENTS.md
+├── docs/reference/           ← shared protocols: source reading, verify, polish
+├── sources/                  ← raw, immutable inputs, one folder per subject
+├── learn/<subject>/
+│   ├── MEMORY.md             ← learner profile from /learn-init (incl. language)
+│   ├── ROADMAP.md            ← tiered node index and course plan
+│   ├── digests/              ← one L1 overview + L2 line map per source
+│   ├── nodes/
+│   │   ├── <node>.md         ← node container: frontmatter plan + lesson
+│   │   └── <node>/
+│   │       ├── <step>.md     ← the step article
+│   │       └── <step>-assets/image-N.webp
+│   └── edges/                ← optional relationship pages between steps/nodes
+├── src/                      ← article.mjs, article-cli.mjs, llm.mjs, image-provider.mjs
+├── prompts/                  ← article.txt, image-plan.txt, image.txt
+├── scripts/                  ← verify.mjs, pdf-backfill.mjs, digest-status.mjs
+├── course-app/               ← React (Vite + Tailwind) course viewer
+├── previews/                 ← static design previews for the course viewer
+├── .opencode/skills/         ← active slash-command skills
+├── legacy/                   ← retired HTML/MDX pipeline; no active flow imports it
+└── wiki/                     ← legacy, no longer maintained
 ```
 
-`src/` needs `npm install` at the repo root and a root `.env` (see `.env.example`) holding the text/image API keys.
+`src/` needs `npm install` at the repo root and a root `.env` (see [.env.example](.env.example)) holding the text and image API keys.
 
 ## Pipeline
 
 ```text
 /learn-init <subject>
+    → /ingest <subject>              ← add new source material: digests only
     → /roadmap <subject>
-    → /probe <subject>/<node-id>   ← per node, before viewing it
-    → /nodes <subject>/<node-name>   ← or <node-name> skip-probe to skip /probe
-    → /teach <subject>/<node-name>   ← interactive step-by-step teaching, writes HTML + MDX to step files; -step <id> for Q&A
-    → /edges <subject>/<node-name>
-    → /to-article <subject> [tier<N> | node-slug ...]   ← rewrite HTML lessons into articles (no image spend)
-    → /to-image <subject> [tier<N> | node-slug ...] [-plan-only]   ← plan figures, then generate and insert them
-/ingest <subject>                  ← add new source material: digest only
-    → /absorb <subject> [--teach]  ← integrate pending digests into the graph
-/tackle <step-id>                  ← runtime skill, invoked per step at learning time
+    → /nodes <subject>/<node-id>
+    → /article <subject>/<node-id> [--images]
+    → /edges <subject>/<node-id>     ← optional high-value relationships
+
+/absorb <subject>                    ← integrate pending digests into the graph
 ```
 
-Each stage is user-invoked. `subject/node-name` is explicit so a node name never has to be unique across subjects. The roadmap stage proposes ≥5 learning paths for the learner to pick one, partitions into nodes along the chosen path, and writes `draft` node containers; the probe stage measures one node's mastery before it is viewed (a hard gate); the nodes stage reasons out the node's step-DAG, gets learner confirmation, then creates skeleton step files and the node container; the teach stage fills step content interactively via step-by-step teaching; the edges stage adds high-value relationships; the to-article stage rewrites each step's HTML lesson into an article and publishes it; the to-image stage plans where figures go, then generates and inserts them. `/tackle` verifies one step at learning time, targeting the strands the probe rated weak.
+| Stage | Role |
+| --- | --- |
+| `/learn-init` | Write `MEMORY.md`, extract PDFs to `.txt`, build digests (L1 + line-addressed L2). |
+| `/ingest` | Archive new source files and write `pending` digests. Does not touch roadmap, nodes, or articles. |
+| `/roadmap` | Propose ≥5 learning paths, confirm one, partition into nodes, write `ROADMAP.md` and `draft` node containers. |
+| `/nodes` | Reasoning checkpoint per node: write the `steps` array (`id`, `title`, `purpose`, `sources`), create H1-only article skeletons, set `confirmed`. |
+| `/article` | Thin shell over `src/article-cli.mjs`; one text call per missing step writes `<step>.md`. `--images` plans and generates WebP figures. |
+| `/absorb` | Read `pending` digests, append steps to existing nodes or create new nodes, mark digests `absorbed`, roll affected nodes back to `confirmed`. |
+| `/edges` | Optional relationship pages between steps or nodes. |
+
+`/practice` (generated practice sets) is **out of scope**. The `quiz` block format and its course-app renderer remain available; articles do not need a practice section.
 
 ## Core Principles
 
-1. **Sources are immutable** — Never modify files in `sources/`. Transcripts in `legacy/tune/` are immutable the same way.
-2. **Nodes are step-DAGs** — Each node has one learning goal and decomposes into a set of steps (articles) that branch and merge through their deps. A step is readable as a lesson and generates an HTML lesson via `/teach`.
-3. **Steps are the unit of teaching** — A step is a first-class article with its own HTML lesson. The step carries both the lesson narrative and the detailed content.
-4. **Knowledge stays traceable** — Every claim points to a source, and every step records its sources; the node records its step-DAG.
-5. **Teach-node style, pedagogy decides** — Step articles follow the teach-node writing standard with MDX components; `MEMORY.md` owns the language and teaching constraints. Each step's `type` (`concept | procedure | decision | reference`) selects how `/teach` writes it, via the writer rules in `.opencode/skills/teach/types/`. Writer skills enforce all three, content stays cited to its subject sources, and code is source-grounded — quoted verbatim when the source has it, written from the prose otherwise, and always marked with its provenance.
-
-## Skills
-
-- `/learn-init <subject>` — ensure the subject's source digests exist (sub-agent path for large sources per `docs/reference/source-reading.md`), interview the learner, and write `learn/<subject>/MEMORY.md` (including language)
-- `/probe <subject>/<node-id>` — adaptive MCQ from shallow to deep across one node's source scope, binary-searching each strand; writes that node's mastery entry (`unknown | partial | solid`), moves the node `draft → probed` (a hard gate before `/nodes`, bypassed by `/nodes … skip-probe`), and never prunes content
-- `/roadmap <subject>` — partition the material into nodes against the formula baseline, first proposing ≥5 distinct learning paths (different angles) for the learner to pick one, then the full candidate node list for confirmation, then write `ROADMAP.md` and `draft` node containers
-- `/nodes <subject>/<node-name>` — reason out the node's step-DAG and get learner confirmation (each step's `type` and depth — the depth calibrated from the node's probe mastery: shallow where `solid`, deep where `unknown`, never pruning), then create skeleton step files and the node container. `skip-probe` skips the probe: the learner asserts they know nothing, so a `draft` node is accepted and every step is taught deep
-- `/teach <subject>/<node-name>` — interactive step-by-step teaching following the node's step-DAG; for each step, generates an HTML lesson shaped by the step's `type` and writes content to the skeleton step file. Each step is written source-grounded: the writer reads the step's `sources` locators, quotes source code verbatim when the source has it, and marks every `<pre>` block's provenance (`docs/reference/source-reading.md` §Source-grounded teaching). `skip-task` skips the check questions and writes HTML + MDX directly for each step without user confirmation. `/teach -step <step-id>` enters step-level Q&A mode — verify step existence with grep first, then if found, load and teach that step interactively with Q&A on demand, no HTML or mastery write-back
-- `/edges <subject>/<node-name>` — propose and incrementally write strong edges for the node, including justified cross-node edges
-- `/to-article <subject> [tier<N> | node-slug ...]` — rewrite-only: `src/html-cli.mjs article-batch` rewrites every step of each scoped **node** with a bounded number of parallel `.env` text-model calls (validating that code blocks and links survive) and publishes each rewrite to the live lesson as the plain article; no agent, no planning, no image spend. Steps are enumerated from the node's `steps` DAG; a step with no HTML lesson is skipped and reported.
-- `/to-image <subject> [tier<N> | node-slug ...]` — one `article-agent` per scoped step (mode `plan`) reads the published lesson, inserts `<!--image:N-->` markers, writes the plan, and `src/html-cli.mjs plan` validates the markers, records `plan.json`, and sets `illustration: planned`; then (unless `-plan-only`) one `article-agent` per step (mode `image`) runs `src/html-cli.mjs image` to generate each figure into `lessons/<node>/<step>-assets/` and swap the markers for `<figure>` **in place**, setting `illustration: done`. Spends image-API money (and a text call per step for planning), so it confirms the image count first unless `-skip-ask`.
-- `/reset-nodes <subject> [tier<N> | node-slug ...]` — reset scoped nodes back to `nodes-written` and remove their generated content (step files, HTML lessons, illustration assets, article working files), keeping each node container `.mdx`, so `/batch-nodes` or `/teach` can rebuild it. Confirms first unless `-skip-ask`; `-dry-run` previews.
-- `/ingest <subject>` — archive new source files and create digests (L1 + L2) with `status: pending`. Does not modify roadmap, nodes, or steps.
-- `/absorb <subject> [--teach]` — read pending digests, match concepts to existing nodes (via ROADMAP + step HTML), add steps to nodes or create new nodes, update digest status to `absorbed`. With `--teach`, automatically runs `/teach` on affected nodes.
-- `/tackle <step-id>` — runtime adaptive MCQ for one step, targeting the strands the node's probe rated `unknown`/`partial`; passing estimates its concepts at `solid`, marks the step complete, and writes mastery back
-
-## Source reading
-
-All stages share `docs/reference/source-reading.md`. Sources are read once into two-level digests (`learn/<subject>/digests/`) — L1 overviews for `learn-init`/`roadmap`, L2 detail with locators for `nodes`. A source is a PDF/text file or a codebase directory (detected by source-code file extension). Raw text never enters the main context wholesale:
-
-- Large PDF (> 5,000 `pdftotext` lines or > ~250 KB): parallel sub-agents write part digests.
-- Large codebase (> 5,000 `wc -l` lines): parallel sub-agents write per-directory part digests — there is no merge step.
-- Small source: the main context reads it directly and writes the digest itself.
-- Digest lifecycle: each digest has a `status` field (`pending` | `absorbed`). New digests start as `pending`; `/absorb` marks them `absorbed` after integration; `/roadmap` marks them `absorbed` after consuming them into the node plan. Sources are immutable, so digests are stable once written.
-
-**Node count baseline.** `target = clamp(round(total_lines / 1100), 3, 30)`, where `total_lines` sums `pdftotext` lines (PDFs) and `wc -l` lines (codebases). It is a soft target for the roadmap checkpoint, not a gate — the learner confirms or adjusts the final partition.
+1. **Sources are immutable** — never modify anything under `sources/`. Archived transcripts in `legacy/tune/` are immutable too.
+2. **The node is the plan** — `steps` array order is teaching order. There is no `deps`, `type`, or per-step `order`.
+3. **The step is the article** — `learn/<subject>/nodes/<node>/<step>.md`, with no frontmatter, opens with `# <step title>`.
+4. **Citations are line-addressed** — every source link is `[[sources/<subject>/<file>#Lx-Ly]]` into a `.txt`, covered by a digest L2 range. PDFs are never cited.
+5. **Verify is the format gate** — `scripts/verify.mjs` is the single source of truth; every format rule is a hard failure with a negative fixture.
+6. **No HTML, no MDX** — the course-app renders Markdown. Nothing in the active flow imports from `legacy/`.
+7. **Code is source-grounded** — quote source code verbatim when the source has it, write it from the prose otherwise, and mark every fenced block with `<!-- source: sources/…#Lx-Ly -->` or `<!-- derived -->`.
+8. **Images are generated, not hand-placed** — `/article --images` plans where figures go and writes `image-N.webp`; it reuses existing files on rerun.
 
 ## Formats
 
-The writing skills are the single source of truth for generated templates.
+### Roadmap — `learn/<subject>/ROADMAP.md`
 
-- **Roadmap** — `learn/<subject>/ROADMAP.md`. Frontmatter: `subject, status, created`. It indexes nodes; it does not list elements.
-- **Node (container)** — `learn/<subject>/nodes/<node-id>.mdx`. Frontmatter: `id, title, subject, tier, order, duration, status, goal, sources, steps, prerequisites, created, updated`. The node file holds the **step-DAG** — all step ids with their order, deps, and `type` (`steps`) — plus the reading order and the main lesson. Sections: Learning goal · Steps (the DAG) · Lesson · Sources. Tiers organize nodes from general to specific. `prerequisites` is a list of `learn/<subject>/nodes/<id>` stable IDs.
-- **Step (article)** — `learn/<subject>/nodes/<node-id>/<step-id>.mdx`, a first-class article. Frontmatter: `id, title, subject, type, sources, created, updated` (plus `order` when the node's DAG does not set it, and optional `illustration: none | planned | done`). `type` is the step's knowledge form — `concept | procedure | decision | reference` — set in the node DAG and mirrored here; it shapes how `/teach` writes the article (writer rules in `.opencode/skills/teach/types/<type>.md`). Absent `type` defaults to `concept`. Deps are declared centrally in the node file's `steps` DAG, never in the step file. Sections: Learning goal · Lesson · Sources · Course (link to HTML lesson).
-- **Digest** — `learn/<subject>/digests/<stem>.md`. Frontmatter: `source, source_type (pdf | codebase), source_lines, status, absorbed_at` (plus `language, file_count` for codebases). `status` is `pending` (newly created, not yet integrated) or `absorbed` (integrated by `/absorb` or consumed by `/roadmap`). Sections: L1 overview, L2 detail with locators.
-- **Mastery** — `learn/<subject>/mastery.md`, the per-subject mastery report. Written by `/probe` (and seeded as all-`unknown` by `/nodes … skip-probe`), written back by `/tackle`; it never prunes content. Keyed by node, each node's strands rated `unknown | partial | solid`. It is calibration data only — step completion is separate client-side state.
-- **Edge** — `learn/<subject>/edges/<edge-id>.mdx`. Frontmatter: `title, type, from, to, nodes, created, updated`. Sections: The relationship · Why it matters · When each applies · Interleave.
-
-Source links use:
+Frontmatter: `subject`, `status`, `created` (optionally `path`). The body groups nodes into `### Tier N — <name>` sections. Every node line is a standard relative Markdown link:
 
 ```markdown
-[[sources/<subject>/<file>]]
+1. **[Agent Harness：LLM 之外的那些東西](nodes/what-a-harness-is.md)**
 ```
 
-Node links use stable node IDs with display aliases:
+### Node — `learn/<subject>/nodes/<node-id>.md`
+
+```yaml
+---
+id: what-a-harness-is
+title: "Agent Harness：LLM 之外的那些東西"
+subject: agent-harness
+tier: 1
+order: 1
+status: written            # draft | confirmed | written
+goal: "建立 agent = LLM + harness 的心智模型。"
+prerequisites: []
+steps:
+  - id: harness-is-the-product
+    title: "Harness 才是產品：LLM 之外的基礎設施"
+    purpose: "能用「LLM + harness」解釋 agent，並說出 memory、tools、long-running 為什麼屬於 harness。"
+    sources:
+      - "[[sources/agent-harness/20260915/1-what-is-an-agent-harness.txt#L7-L25]]"
+created: 2026-10-22
+updated: 2026-10-22
+---
+```
+
+Rules:
+
+- `id` equals the filename; `subject` equals the subject argument.
+- `steps` is an ordered array; each entry has exactly `id`, `title`, `purpose`, `sources`.
+- `purpose` is one short sentence (≤ 120 characters), not an article summary.
+- A `draft` node may have `steps: []`; `confirmed` and `written` need at least one step.
+- The body is `# <title>`, a short `## Lesson`, and a `## Steps` list whose titles, ids, and order match the frontmatter. Links are relative to the node file.
+- There is no node-level `sources` field; sources live on step entries.
+- `prerequisites` holds stable node paths such as `learn/<subject>/nodes/<id>.md`.
+
+### Step article — `learn/<subject>/nodes/<node-id>/<step-id>.md`
+
+- No frontmatter. The first non-empty line is `# <step title>`.
+- Free length and free `##` sections; Traditional Chinese, short paragraphs, editorial tone.
+- Do **not** write a source list or inline citations — course-app aggregates the step's sources below the article.
+- Do **not** write a practice section; the optional `quiz` block is the only exercise format the renderer knows.
+- Images: `![第 N 段配圖](./<step>-assets/image-N.webp)` followed by `*AI 生成示意圖*`.
+- Every fenced code block except `quiz` needs a provenance comment immediately above it.
+
+### Quiz block
+
+````markdown
+```quiz
+{
+  "question": "...",
+  "options": ["...", "..."],
+  "answer": 1,
+  "explain": "..."
+}
+```
+````
+
+One question per block, pure JSON, `answer` is a 0-based index, `options` has 2–5 strings, `explain` is non-empty. `quiz` blocks carry no provenance comment.
+
+### Digest — `learn/<subject>/digests/<stem>.md`
 
 ```markdown
-[[learn/<subject>/nodes/<node-id>|<Node title>]]
+---
+source: sources/<subject>/<path>.txt
+source_type: text
+source_lines: 216
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- <key point>
+
+# L2 detail
+
+- `#L1-L11` — <what these lines explain>
+- `#L12-L25` — <what these lines explain>
 ```
 
-Step links use stable, node-qualified step IDs with display aliases:
+PDFs are extracted once into a sibling `.txt` by `node scripts/pdf-backfill.mjs --subject <subject>`; an existing `.txt` is never overwritten. Citations point at the `.txt`, and `source_lines` equals its actual line count. Digest `status` is `pending | absorbed`.
 
-```markdown
-[[learn/<subject>/nodes/<node-id>/<step-id>|<Step title>]]
-```
+### Edge — `learn/<subject>/edges/<edge-id>.md`
+
+Frontmatter: `title`, `type`, `from`, `to`, `nodes`, `created`, `updated`. `from` and `to` are node-qualified step ids (`<node>/<step>`), or node ids when the edge compares whole nodes. Sections: The relationship · Why it matters · When each applies · Interleave.
+
+### Course viewer
+
+`course-app/` reads `learn/` directly. The node page lists steps in `steps` array order and marks a step without a body as `尚未產生`. The step page renders the Markdown article, turns a fenced `quiz` block into an interactive question, resolves figures under `<step>-assets/`, aggregates the step's sources at the end, and shows prev/next links in array order. There is no status badge or progress tracking.
 
 ## Status
 
-The subject roadmap uses `draft → confirmed`. Each node uses:
-
 ```text
-draft → probed → confirmed → nodes-written → content-written → edges-written
+draft → confirmed → written
 ```
 
-`/roadmap` creates `draft` nodes. Invoking `/probe <subject>/<node-id>` measures a node and moves it `draft → probed` — a hard gate, since `/nodes` refuses a `draft` node. The sole exception is `/nodes <subject>/<node-id> skip-probe`: a learner who asserts they know nothing about the topic skips the probe, so `/nodes` accepts the `draft` node and moves it `draft → confirmed` directly, teaching every step deep. Invoking `/nodes <subject>/<node-id>` confirms a probed node and moves it through `nodes-written` (skeleton step files created, no content). Invoking `/teach <subject>/<node-id>` fills step content interactively and moves the node to `content-written`. `/edges` asks for confirmation of its candidate edge set and only then marks the node `edges-written`.
+- `/roadmap` creates `draft` nodes with `steps: []`.
+- `/nodes` writes the ordered step plan and sets `confirmed`.
+- `/article` sets `written` once every step in the node has an article body.
+- `/absorb` may add a step and rolls the node back to `confirmed`; rerun `/article` for the new step.
 
-`/absorb` may roll a node back to `nodes-written` when it adds new steps to an existing node. The learner then runs `/nodes <subject>/<node-id>` to re-confirm the DAG, then `/teach` to fill new step content.
-
-Completion is step-based: a step is complete when its `/tackle` passes (mastery reaches `solid`); a node is complete automatically once every step in its DAG is complete.
+There is no probe gate, mastery report, element page, or completion tracking in the data model.
 
 ## Operations
+
+### Article and image generation
+
+```bash
+node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force] [--images]
+node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force]
+```
+
+- Missing or H1-only articles are generated; articles with a body are skipped unless `--force`.
+- The image count comes from the finished article's Traditional Chinese character count (1–5).
+- Existing images are reused; a second run with no changes makes no image requests.
+- The CLI prints JSON per-step status plus the verify result.
+
+### PDF backfill
+
+```bash
+node scripts/pdf-backfill.mjs --subject <subject> [--dry-run]
+```
+
+Idempotent: existing `.txt` files are not overwritten, so line numbers stay stable.
+
+### Lint
+
+```bash
+node scripts/verify.mjs --subject <subject>
+node scripts/verify.mjs --node <subject>/<node-id>
+```
+
+It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, H1, `## Steps`, source locators and digest coverage, code provenance, quiz JSON, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
 
 ### Query
 
 When the learner asks a question about a subject:
 
-1. Search the subject's nodes and edges.
-2. Synthesize an answer with stable step citations and source citations.
-
-### Lint
-
-Run the verification script: `node scripts/verify.mjs --subject <subject>` (whole-subject) or `node scripts/verify.mjs --node <subject>/<node-id>` (one node). It is the single source of truth for format checks — per `docs/reference/verify.md` — and covers: broken node-qualified step/source links, step IDs that do not match filenames, invalid step `illustration` values, node `steps` DAG entries whose step file does not exist (and step files with no DAG entry), orphan nodes/steps, edges whose `from`/`to`/`nodes` no longer resolve, large sources missing a digest, node count deviating more than ±40% from the formula baseline, source locators that cannot be found in the source's digest, code blocks in a `procedure`/`reference` lesson that lack a `data-source`/`data-provenance` attribute, and nodes/steps with no source link (a flag).
-
-The script checks format only. Content judgment — contradictory or stale claims (mark stale ones `[needs update]` instead of deleting), prose style, and semantic quality — is not automated: it is the learner's manual pass, run on request when reviewing a subject or node.
+1. Search the subject's `ROADMAP.md`, nodes, step articles, and edges.
+2. Answer in the subject's `MEMORY.md` language, citing the step article and its source ranges.
 
 ## Quality Standards
 
-- **Useful** — every node has one learner-facing goal; every step is a readable lesson
-- **Connected** — edges connect steps for higher-order comparison and judgment
-- **Anchored** — every step ties to learner experience or an earlier concept
-- **Checked** — every step is verified by `/tackle`
-- **Current** — later nodes and steps deepen earlier concepts without erasing useful prior explanations
-- **Cited** — every substantive claim traces back to an immutable source
+- **Useful** — every node has one learner-facing goal; every step is a readable article.
+- **Connected** — edges compare steps or nodes that are worth contrasting.
+- **Anchored** — every article starts from the reader's situation and stays with the subject's sources.
+- **Checked** — `verify` passes for the node and the whole subject.
+- **Current** — later articles deepen earlier ones without erasing useful explanations.
+- **Cited** — every substantive claim traces to an immutable source line range.
+
+## Source links vs. document links
+
+Source citations in YAML keep the wiki-link form, because the CLI and verify parse it:
+
+```markdown
+[[sources/<subject>/<file>.txt#Lx-Ly]]
+```
+
+Links inside documentation use standard Markdown so they work in an editor and on GitHub:
+
+```markdown
+[Agent Harness node](learn/agent-harness/nodes/what-a-harness-is.md)
+```

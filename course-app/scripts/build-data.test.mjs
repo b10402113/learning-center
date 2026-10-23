@@ -146,6 +146,9 @@ test("reads Markdown nodes and keeps frontmatter step order", () => {
     ["Second purpose.", "First purpose."]
   );
   assert.equal(node.steps[0].sources[0].label, "source.txt#L10-L20");
+  assert.equal(node.steps[0].sources[0].name, "source.txt");
+  assert.equal(node.steps[0].sources[0].lines, "L10-L20");
+  assert.equal(node.status, undefined, "the viewer no longer exposes node status");
 });
 
 test("orders nodes by relative roadmap links", () => {

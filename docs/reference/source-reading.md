@@ -1,6 +1,6 @@
 # Source Reading Protocol
 
-Shared contract for how `learn-init`, `roadmap`, `nodes`, and `edges` read source material. The goal: raw text never enters the main context wholesale. Sources are read once, condensed into **digests**, and the digests are reused across stages.
+Shared contract for how `learn-init`, `ingest`, `absorb`, `roadmap`, `nodes`, `article`, and `edges` read source material. The goal: raw text never enters the main context wholesale. Sources are read once, condensed into **digests**, and the digests are reused across stages; `article` pulls only the line ranges a step cites.
 
 ## When to use a sub-agent
 

@@ -220,6 +220,7 @@ test("generates one text call per missing article and skips existing bodies", as
   );
   assert.deepEqual(calls, ["Step One", "Step Two"]);
   assert.equal(read(root, "learn/test/nodes/n1/s1.md"), "# Step One\n\nSome prose.\n");
+  assert.match(read(root, "learn/test/nodes/n1.md"), /^status: written$/m);
 
   const second = await runArticle(
     { subject: "test", node: "n1" },

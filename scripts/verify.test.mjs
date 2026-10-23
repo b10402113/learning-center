@@ -547,6 +547,70 @@ Another lesson.
 });
 
 
+function articleWithQuiz(quiz) {
+  return `# Step One
+
+Opening line.
+
+<!-- derived -->
+\`\`\`js
+const answer = 42;
+\`\`\`
+
+\`\`\`quiz
+${typeof quiz === "string" ? quiz : JSON.stringify(quiz)}
+\`\`\`
+`;
+}
+
+function validQuiz(overrides = {}) {
+  return {
+    question: "What is the answer?",
+    options: ["41", "42", "43"],
+    answer: 1,
+    explain: "The fixture says so.",
+    ...overrides,
+  };
+}
+
+test("a valid quiz block passes", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.md", articleWithQuiz(validQuiz()));
+  assert.deepEqual(failures(root), []);
+});
+
+test("a quiz block must contain valid JSON", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.md", articleWithQuiz("{not json"));
+  assert.ok(failures(root).includes("quiz-json"));
+});
+
+test("a quiz question must be non-empty", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.md", articleWithQuiz(validQuiz({ question: " " })));
+  assert.ok(failures(root).includes("quiz-json"));
+});
+
+test("a quiz needs between two and five options", (t) => {
+  for (const options of [["only"], ["1", "2", "3", "4", "5", "6"]]) {
+    const root = fixture(t);
+    write(root, "learn/test/nodes/n1/s1.md", articleWithQuiz(validQuiz({ options })));
+    assert.ok(failures(root).includes("quiz-options"), JSON.stringify(options));
+  }
+});
+
+test("a quiz answer must be a 0-based index in range", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.md", articleWithQuiz(validQuiz({ answer: 3 })));
+  assert.ok(failures(root).includes("quiz-answer"));
+});
+
+test("a quiz needs a non-empty explanation", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.md", articleWithQuiz(validQuiz({ explain: " " })));
+  assert.ok(failures(root).includes("quiz-explain"));
+});
+
 function webpBytes() {
   return Buffer.concat([Buffer.from("RIFF"), Buffer.from([16, 0, 0, 0]), Buffer.from("WEBP"), Buffer.from("VP8 ")]);
 }

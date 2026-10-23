@@ -81,6 +81,21 @@ export function normalizeArticleText(text, title) {
   return `# ${title}\n\n${body}`.trimEnd() + "\n";
 }
 
+function markNodeWritten(node, subject, nodeId, root) {
+  const allWritten = node.steps.every((entry) => {
+    const file = join(root, "learn", subject, "nodes", nodeId, `${entry.id}.md`);
+    return existsSync(file) && hasArticleBody(readFileSync(file, "utf8"));
+  });
+  if (!allWritten) return;
+  const raw = readFileSync(node.file, "utf8");
+  if (/^status:\s*written\s*$/m.test(raw)) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const next = raw
+    .replace(/^status:\s*.+$/m, "status: written")
+    .replace(/^updated:\s*.+$/m, `updated: ${today}`);
+  if (next !== raw) writeFileSync(node.file, next);
+}
+
 function selectSteps(node, stepId) {
   if (!stepId) return node.steps;
   const entry = node.steps.find((step) => step && step.id === stepId);
@@ -131,6 +146,7 @@ export async function runArticle(
     return { id: entry.id, title: entry.title, status: "generated", path: relative };
   });
 
+  markNodeWritten(node, subject, nodeId, root);
   return { subject, node: nodeId, steps: results };
 }
 

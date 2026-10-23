@@ -1,6 +1,11 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { resolveSrc } from "../lib/assets.mjs";
+import Quiz from "./Quiz.jsx";
+
+function fencedText(children) {
+  return Array.isArray(children) ? children.join("") : String(children ?? "");
+}
 
 /**
  * Renders Markdown with paper-theme prose styling. Relative images resolve
@@ -29,6 +34,17 @@ export default function Markdown({ children, className = "", assetBase = "" }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          pre: ({ children }) => {
+            const child = Array.isArray(children) ? children[0] : children;
+            const isQuiz = String(child?.props?.className || "")
+              .split(/\s+/)
+              .includes("language-quiz");
+            return isQuiz ? (
+              <Quiz source={fencedText(child?.props?.children)} />
+            ) : (
+              <pre>{children}</pre>
+            );
+          },
           img: ({ src, alt, title }) => (
             <img
               src={resolveSrc(src, assetBase, window.location.href)}

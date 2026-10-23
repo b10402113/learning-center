@@ -66,10 +66,13 @@ function parseSource(link) {
   const hashAt = raw.indexOf("#");
   const target = hashAt === -1 ? raw : raw.slice(0, hashAt);
   const locator = hashAt === -1 ? "" : raw.slice(hashAt);
+  const name = target.split("/").pop();
   return {
-    label: `${target.split("/").pop()}${locator}`,
+    label: `${name}${locator}`,
     file: target,
     locator,
+    name,
+    lines: locator.replace(/^#/, "") || "全文",
   };
 }
 
@@ -208,7 +211,6 @@ export function buildSubject(
       title: fm.title || roadmapNodes.get(nodeId)?.title || nodeId,
       tier: fm.tier,
       order: fm.order,
-      status: fm.status || "draft",
       goal: fm.goal || "",
       prerequisites: fm.prerequisites || [],
       lessonIntro: cleanWikilinks(section(body, "Lesson")),
@@ -280,7 +282,6 @@ function main() {
   });
 
   const index = [];
-  let writtenStepsTotal = 0;
 
   for (const subject of targets) {
     const course = buildSubject(subject);
@@ -288,12 +289,6 @@ function main() {
       console.warn(`⚠ Skipped ${subject} (no ROADMAP.md)`);
       continue;
     }
-    const writtenSteps = course.nodes.reduce(
-      (acc, n) => acc + n.steps.filter((s) => s.hasContent).length,
-      0
-    );
-    writtenStepsTotal += writtenSteps;
-
     fs.writeFileSync(
       path.join(outDir, `${subject}.json`),
       JSON.stringify(course)
@@ -303,13 +298,11 @@ function main() {
       id: subject,
       title: course.title,
       nodes: course.nodes.length,
-      writtenSteps,
-      totalSteps: course.nodes.reduce((acc, n) => acc + n.steps.length, 0),
       goal: course.goal,
     });
 
     console.log(
-      `✔ ${subject.padEnd(36)} ${String(course.nodes.length).padStart(3)} nodes, ${String(writtenSteps).padStart(3)} written steps`
+      `✔ ${subject.padEnd(36)} ${String(course.nodes.length).padStart(3)} nodes, ${String(course.nodes.reduce((acc, n) => acc + n.steps.length, 0)).padStart(3)} steps`
     );
   }
 
@@ -318,9 +311,7 @@ function main() {
     JSON.stringify({ generatedAt: new Date().toISOString(), subjects: index })
   );
 
-  console.log(
-    `✔ ${index.length} subjects → src/data/ (${writtenStepsTotal} written steps total)`
-  );
+  console.log(`✔ ${index.length} subjects → src/data/`);
 }
 
 const invokedDirectly =

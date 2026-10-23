@@ -88,23 +88,17 @@ export default function Sidebar({
               </div>
               {items.map((node) => {
                 const active = node.id === currentId;
-                const written = node.status === "written";
                 return (
                   <button
                     key={node.id}
                     onClick={() => onSelect(node.id)}
                     aria-current={active ? "page" : undefined}
-                    className={`flex w-full items-center gap-2 rounded-md px-2 py-[7px] text-left text-sm leading-snug transition-colors ${
+                    className={`flex w-full items-center rounded-md px-2 py-[7px] text-left text-sm leading-snug transition-colors ${
                       active
                         ? "bg-accent-soft font-semibold text-ink"
                         : "text-ink hover:bg-accent-soft/60"
                     }`}
                   >
-                    <span
-                      aria-hidden="true"
-                      className={`inline-block size-2 shrink-0 rounded-full ${written ? "bg-good" : "bg-line"}`}
-                      title={written ? "內容已完成" : "草稿"}
-                    />
                     <span className="truncate">{node.title}</span>
                   </button>
                 );
@@ -112,13 +106,6 @@ export default function Sidebar({
             </div>
           );
         })}
-
-        <div className="mt-auto pt-4">
-          <p className="flex items-center gap-2 px-1.5 text-[11px] text-ink-soft">
-            <span className="inline-block size-2 rounded-full bg-good" /> 內容完成
-            <span className="ml-2 inline-block size-2 rounded-full bg-line" /> 草稿
-          </p>
-        </div>
       </nav>
     </>
   );
