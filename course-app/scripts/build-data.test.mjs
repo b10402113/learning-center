@@ -96,7 +96,8 @@ Lesson body for node A.
 
 First article body.
 
-![Figure](./step-one-assets/image-1.webp)
+![第 1 段配圖](./step-one-assets/image-1.webp)
+*AI 生成示意圖*
 `
   );
   write(
@@ -138,6 +139,8 @@ test("reads Markdown nodes and keeps frontmatter step order", () => {
   assert.equal(node.steps[1].hasContent, true);
   assert.match(node.steps[1].articleMd, /^# Step One/);
   assert.match(node.steps[1].articleMd, /First article body/);
+  assert.match(node.steps[1].articleMd, /!\[第 1 段配圖\]\(\.\/step-one-assets\/image-1\.webp\)/);
+  assert.match(node.steps[1].articleMd, /\*AI 生成示意圖\*/);
   assert.deepEqual(
     node.steps.map((step) => step.purpose),
     ["Second purpose.", "First purpose."]

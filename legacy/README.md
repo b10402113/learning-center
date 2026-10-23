@@ -9,7 +9,8 @@ re-reading old lessons.
 | Path | Why |
 | --- | --- |
 | `src/html.mjs`, `src/html-cli.mjs`, `src/html.test.mjs` | HTML lesson publish / image pipeline |
-| `prompts/html-rewrite.txt` | Prompt for rewriting a lesson into HTML |
+| `src/pipeline.mjs`, `src/pipeline.test.mjs`, `src/cli.mjs`, `src/test.ts` | Old Markdown rewrite + image pipeline and its manual test harness |
+| `prompts/html-rewrite.txt`, `prompts/publisher.txt`, `prompts/rewrite.txt`, `prompts/image.txt` | Prompts for the retired HTML and Markdown rewrite pipelines; the image template is a copy of the active prompt so the old harness still runs |
 | `.opencode/skills/teach/`, `.opencode/skills/teach-chinese/` | Interactive HTML teaching |
 | `.opencode/skills/to-article/`, `.opencode/skills/to-image/` | HTML rewrite and figure generation |
 | `.opencode/skills/probe/`, `.opencode/skills/tackle/` | Mastery probing and step verification |
@@ -28,6 +29,5 @@ content.
 - `legacy/tune/` — archived transcripts, unchanged.
 - The nested `article-agent/` repository — untouched by the course refactor.
 - `sources/` — immutable inputs.
-- `prompts/image.txt`, `prompts/publisher.txt`, `prompts/rewrite.txt`, and
-  `src/pipeline.mjs` / `src/cli.mjs` stay in place until the Markdown article
-  CLI replaces them.
+- `prompts/image.txt` stays in place: the Markdown article CLI reuses the same
+  illustration style prompt.

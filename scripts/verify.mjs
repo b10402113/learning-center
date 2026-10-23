@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 
@@ -510,6 +510,22 @@ function checkNode(report, root, subject, scan, digestIndex, node, stepIndex) {
     }
   }
 
+  const nodeStepDir = join(scan.nodesDir, node.id);
+  if (existsSync(nodeStepDir)) {
+    for (const entry of readdirSync(nodeStepDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.endsWith("-assets")) continue;
+      const stepId = entry.name.slice(0, -"-assets".length);
+      if (!seen.has(stepId)) {
+        report.fail(
+          rel(root, join(nodeStepDir, entry.name)),
+          0,
+          "image-orphan",
+          `asset folder has no step "${stepId}"`,
+        );
+      }
+    }
+  }
+
   const items = parseStepsSection(body);
   const expected = data.steps.filter((entry) => entry && entry.id);
   if (!items && expected.length > 0) {
@@ -598,6 +614,58 @@ function checkSourceRef(report, root, subject, scan, digestIndex, file, raw, lab
   }
 }
 
+function checkImages(report, root, file, body, step) {
+  const stepDir = dirname(step.path);
+  const assetsDir = join(stepDir, `${step.id}-assets`);
+  const referenced = new Set();
+
+  for (const match of stripCode(body).matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g)) {
+    const target = match[1].trim().replace(/^<|>$/g, "");
+    if (!target || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(target)) continue;
+    const clean = target.split("#")[0].split("?")[0];
+    if (!clean) continue;
+
+    const full = clean.startsWith("/") ? join(root, clean) : resolve(stepDir, clean);
+    referenced.add(full);
+
+    const inside = relative(assetsDir, full);
+    if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) {
+      report.fail(
+        file,
+        0,
+        "image-location",
+        `image "${target}" must live under nodes/${step.nodeId}/${step.id}-assets/`,
+      );
+    }
+    if (!existsSync(full)) {
+      report.fail(file, 0, "image-missing", `image "${target}" does not exist`);
+      continue;
+    }
+    if (extname(full).toLowerCase() !== ".webp") {
+      report.fail(file, 0, "image-format", `image "${target}" must be a .webp file`);
+      continue;
+    }
+    const header = readFileSync(full).subarray(0, 12);
+    if (header.subarray(0, 4).toString("ascii") !== "RIFF" || header.subarray(8, 12).toString("ascii") !== "WEBP") {
+      report.fail(file, 0, "image-format", `image "${target}" is not a valid WebP file`);
+    }
+  }
+
+  if (!existsSync(assetsDir)) return;
+  for (const entry of readdirSync(assetsDir, { withFileTypes: true })) {
+    if (!entry.isFile() || entry.name.startsWith(".")) continue;
+    const full = join(assetsDir, entry.name);
+    if (!referenced.has(full)) {
+      report.fail(
+        rel(root, full),
+        0,
+        "image-orphan",
+        `asset is not referenced by nodes/${step.nodeId}/${step.id}.md`,
+      );
+    }
+  }
+}
+
 function checkArticle(report, root, entry, step) {
   const file = rel(root, step.path);
   const parsed = readMarkdown(step.path);
@@ -617,6 +685,7 @@ function checkArticle(report, root, entry, step) {
 
   checkLinks(report, root, file, body, dirname(step.path));
   checkCodeProvenance(report, root, file, body);
+  checkImages(report, root, file, body, step);
 }
 
 function checkNodeCount(report, subject, scan) {

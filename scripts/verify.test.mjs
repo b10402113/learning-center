@@ -546,3 +546,57 @@ Another lesson.
   assert.ok(!failures(root, { node: "n1" }).includes("step-h1"));
 });
 
+
+function webpBytes() {
+  return Buffer.concat([Buffer.from("RIFF"), Buffer.from([16, 0, 0, 0]), Buffer.from("WEBP"), Buffer.from("VP8 ")]);
+}
+
+test("a referenced WebP image must exist", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.md", "# Step One\n\n![配圖](./s1-assets/image-1.webp)\n");
+  assert.ok(failures(root).includes("image-missing"));
+});
+
+test("a referenced image must be a valid WebP file", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.md", "# Step One\n\n![配圖](./s1-assets/image-1.webp)\n");
+  write(root, "learn/test/nodes/n1/s1-assets/image-1.webp", "not-a-webp");
+  assert.ok(failures(root).includes("image-format"));
+});
+
+test("a referenced image must be WebP by extension", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.md", "# Step One\n\n![配圖](./s1-assets/image-1.png)\n");
+  write(root, "learn/test/nodes/n1/s1-assets/image-1.png", webpBytes());
+  assert.ok(failures(root).includes("image-format"));
+});
+
+test("images must live in the step asset folder", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.md", "# Step One\n\n![配圖](./image-1.webp)\n");
+  write(root, "learn/test/nodes/n1/image-1.webp", webpBytes());
+  assert.ok(failures(root).includes("image-location"));
+});
+
+test("a valid referenced image passes", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/nodes/n1/s1.md",
+    "# Step One\n\nOpening line.\n\n![第 1 段配圖](./s1-assets/image-1.webp)\n*AI 生成示意圖*\n",
+  );
+  write(root, "learn/test/nodes/n1/s1-assets/image-1.webp", webpBytes());
+  assert.deepEqual(failures(root), []);
+});
+
+test("assets not referenced by the article are orphans", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1-assets/image-2.webp", webpBytes());
+  assert.ok(failures(root).includes("image-orphan"));
+});
+
+test("an asset folder without a step is an orphan", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/ghost-assets/image-1.webp", webpBytes());
+  assert.ok(failures(root).includes("image-orphan"));
+});

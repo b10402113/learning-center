@@ -5,6 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { generateArticle, normalizeImagePlan, parseImagePlanMarkers, insertImages, generateEvolinkImage, generateOpenAIImage, generateGeminiImage, resolveImageProvider, responseFormatFor, textContent, MAX_IMAGES, responseError, outputDirName, slugifyTopic } from './pipeline.mjs';
 
+async function copyPrompts(root) {
+  await fs.cp(new URL('../prompts', import.meta.url), path.join(root, 'prompts'), { recursive: true });
+  await fs.cp(new URL('../../prompts', import.meta.url), path.join(root, 'prompts'), { recursive: true });
+}
+
 test('slugifyTopic strips path and control characters', () => {
   assert.equal(slugifyTopic('a/b\\c:d*e?f|g<h>i"j'), 'a-b-c-d-e-f-g-h-i-j');
   assert.equal(slugifyTopic('   '), 'article');
@@ -52,7 +57,7 @@ test('insertImages replaces each marker with its local image link', () => {
 test('generates one image per agent-chosen marker, never more than the cap', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'article-test-'));
   try {
-    await fs.cp(new URL('../prompts', import.meta.url), path.join(root, 'prompts'), { recursive: true });
+    await copyPrompts(root);
     const paragraphs = Array.from({ length: 8 }, (_, i) => `Paragraph number ${i + 1}.`);
     const imagePlan = Array.from({ length: MAX_IMAGES }, (_, i) => ({ anchor: `Paragraph number ${i + 1}.`, prompt: `focus ${i + 1}` }));
     const body = paragraphs.map((text, i) => i < MAX_IMAGES ? `${text}\n\n<!--image:${i + 1}-->` : text).join('\n\n');
@@ -73,7 +78,7 @@ test('generates one image per agent-chosen marker, never more than the cap', asy
 test('rewrite once, then generate each planned image, with no later text call', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'article-test-'));
   try {
-    await fs.cp(new URL('../prompts', import.meta.url), path.join(root, 'prompts'), { recursive: true });
+    await copyPrompts(root);
     const events = [];
     const imagePlan = [{ anchor: '第一句', prompt: '焦點一' }, { anchor: '第二句', prompt: '焦點二' }];
     const rewritten = '# Revised\n\nRewritten first paragraph.\n\n<!--image:1-->\n\nRewritten second paragraph.\n\n<!--image:2-->';
@@ -106,7 +111,7 @@ test('rewrite once, then generate each planned image, with no later text call', 
 test('generates the planned images concurrently, then restores plan order', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'article-test-'));
   try {
-    await fs.cp(new URL('../prompts', import.meta.url), path.join(root, 'prompts'), { recursive: true });
+    await copyPrompts(root);
     const imagePlan = [{ anchor: '一', prompt: 'p1' }, { anchor: '二', prompt: 'p2' }, { anchor: '三', prompt: 'p3' }];
     const rewritten = '# Revised\n\nFirst.\n\n<!--image:1-->\n\nSecond.\n\n<!--image:2-->\n\nThird.\n\n<!--image:3-->';
     const client = { chat: { completions: { create: async () => ({ id: 'test', choices: [{ message: { content: rewritten } }] }) } } };
@@ -133,7 +138,7 @@ test('generates the planned images concurrently, then restores plan order', asyn
 test('a rewrite that drops an image marker fails and keeps partial files', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'article-test-'));
   try {
-    await fs.cp(new URL('../prompts', import.meta.url), path.join(root, 'prompts'), { recursive: true });
+    await copyPrompts(root);
     const imagePlan = [{ anchor: 'a', prompt: 'p1' }, { anchor: 'b', prompt: 'p2' }];
     const client = { chat: { completions: { create: async () => ({
       id: 'test', choices: [{ message: { content: '# Revised\n\nOnly paragraph.\n\n<!--image:1-->' } }]
@@ -152,7 +157,7 @@ test('a rewrite that drops an image marker fails and keeps partial files', async
 test('rejects an image plan longer than the cap before calling any API', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'article-test-'));
   try {
-    await fs.cp(new URL('../prompts', import.meta.url), path.join(root, 'prompts'), { recursive: true });
+    await copyPrompts(root);
     const imagePlan = Array.from({ length: MAX_IMAGES + 1 }, (_, i) => ({ prompt: `focus ${i + 1}` }));
     let called = false;
     const client = { chat: { completions: { create: async () => { called = true; return {}; } } } };
@@ -314,7 +319,7 @@ test('response error: surfaces a 200-wrapped provider error', () => {
 test('a rewrite answered with a 200 error envelope is captured', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'article-test-'));
   try {
-    await fs.cp(new URL('../prompts', import.meta.url), path.join(root, 'prompts'), { recursive: true });
+    await copyPrompts(root);
     const client = { chat: { completions: { create: async () => ({
       id: 'resp_err', error: { code: 'insufficient_quota', message: 'Insufficient quota. Please top up.', status: 402 }
     }) } } };
@@ -333,7 +338,7 @@ test('a rewrite answered with a 200 error envelope is captured', async () => {
 test('rewrite retries once when the provider returns an unparsable response', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'article-test-'));
   try {
-    await fs.cp(new URL('../prompts', import.meta.url), path.join(root, 'prompts'), { recursive: true });
+    await copyPrompts(root);
     let calls = 0;
     const client = { chat: { completions: { create: async () => {
       calls++;
@@ -352,7 +357,7 @@ test('rewrite retries once when the provider returns an unparsable response', as
 test('resumeDir skips the rewrite, reloads plan.json, and reuses existing images', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'article-test-'));
   try {
-    await fs.cp(new URL('../prompts', import.meta.url), path.join(root, 'prompts'), { recursive: true });
+    await copyPrompts(root);
     const out = path.join(root, 'output', 'article-prev');
     await fs.mkdir(path.join(out, 'assets'), { recursive: true });
     await fs.writeFile(path.join(out, 'original.md'), 'Original article.');
@@ -376,7 +381,7 @@ test('resumeDir skips the rewrite, reloads plan.json, and reuses existing images
 test('a failed run persists a de-identified error message', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'article-test-'));
   try {
-    await fs.cp(new URL('../prompts', import.meta.url), path.join(root, 'prompts'), { recursive: true });
+    await copyPrompts(root);
     const secret = 'SUPER-SECRET-SOURCE-TEXT-DO-NOT-LEAK';
     const client = { chat: { completions: { create: async () => {
       throw Object.assign(new Error(`524 upstream said: ${secret}`), { status: 524 });

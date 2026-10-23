@@ -3,10 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateArticle, generateEvolinkImage, generateOpenAIImage, generateGeminiImage, resolveImageProvider, textContent } from './pipeline.mjs';
 
-const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const outputRoot = path.join(projectRoot, 'output');
+const legacyRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const projectRoot = path.resolve(legacyRoot, '..');
+const outputRoot = path.join(legacyRoot, 'output');
 
-const usage = `用法: node src/test.ts <模式> [選項]
+const usage = `用法: node legacy/src/test.ts <模式> [選項]
 
 模式:
   image [提示詞...]      只測生圖（呼叫 Evolink API，輸出一張 PNG）
@@ -20,10 +21,10 @@ const usage = `用法: node src/test.ts <模式> [選項]
   --model <id>      自訂文字模型 ID（覆寫 TEXT_MODEL，僅 text / all）
 
 範例:
-  node src/test.ts image "安靜的社區共讀空間，溫暖編輯插畫，無文字"
-  node src/test.ts text request.example.json
-  node src/test.ts text request.example.json --model google/gemini-3.8-flash
-  node src/test.ts article request.example.json
+  node legacy/src/test.ts image "安靜的社區共讀空間，溫暖編輯插畫，無文字"
+  node legacy/src/test.ts text request.example.json
+  node legacy/src/test.ts text request.example.json --model google/gemini-3.8-flash
+  node legacy/src/test.ts article request.example.json
 
 注意: article / all 使用的請求 JSON 必須提供 imagePlan（1–5 項，每項含 anchor 與 prompt）；
       續跑時可省略，會沿用輸出資料夾內的 plan.json。`;
@@ -111,7 +112,7 @@ async function createTextClient() {
 }
 
 async function testText(request: RequestInput, modelOverride?: string): Promise<void> {
-  const rewritePrompt = await fs.readFile(path.join(projectRoot, 'prompts', 'rewrite.txt'), 'utf8');
+  const rewritePrompt = await fs.readFile(path.join(legacyRoot, 'prompts', 'rewrite.txt'), 'utf8');
   const model = modelOverride?.trim()
     || process.env.TEXT_MODEL || process.env.OPENAI_TEXT_MODEL || 'gpt-6-astra';
   const client = await createTextClient();
@@ -138,7 +139,7 @@ async function testText(request: RequestInput, modelOverride?: string): Promise<
 async function testArticle(request: RequestInput, resumeDir?: string): Promise<void> {
   console.log(`[article] resume=${resumeDir || '(new)'}`);
   const started = Date.now();
-  const result = await generateArticle({ ...request, resumeDir }, projectRoot);
+  const result = await generateArticle({ ...request, resumeDir }, legacyRoot);
   console.log(`[article] ok in ${Date.now() - started}ms`);
   console.log(`[article] article  -> ${result.article}`);
   console.log(`[article] images   -> ${result.images.length} 張`);

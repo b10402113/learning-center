@@ -14,7 +14,7 @@ import {
   generateGeminiImage,
   loadEnv,
   withRetry,
-} from '../../src/pipeline.mjs';
+} from './pipeline.mjs';
 import { parseFrontmatter } from '../scripts/generate-data.mjs';
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));

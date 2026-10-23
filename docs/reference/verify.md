@@ -85,10 +85,14 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 |---|---|
 | `code-provenance` | every fenced code block (except `quiz`) is preceded by `<!-- source: sources/…#Lx-Ly -->` or `<!-- derived -->`; a source comment must resolve to an existing file and non-empty range |
 | `link` | relative Markdown links resolve |
+| `image-missing` | every local Markdown image target exists |
+| `image-format` | every referenced image is a `.webp` file with a WebP header |
+| `image-location` | every local image lives under `nodes/<node>/<step>-assets/` |
+| `image-orphan` | every file in a step's `*-assets/` directory is referenced by its article, and every `*-assets/` directory belongs to a real step |
 | `sources-empty` | step has at least one source link (flag) |
 | `lint-node-count` | node count is within ±40% of the formula baseline (flag) |
 
-Image-existence and orphan-asset checks land with the image ticket; `quiz` JSON validation lands with the reading-experience ticket.
+`quiz` JSON validation lands with the reading-experience ticket.
 
 ## False-positive policy
 
