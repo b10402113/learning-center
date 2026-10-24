@@ -1,9 +1,23 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { runArticle, runImages } from "./article.mjs";
+import {
+  hasArticleBody,
+  readNode,
+  readStepSlices,
+  runArticle,
+  runImages,
+  selectSteps,
+} from "./article.mjs";
+import {
+  prepareFile,
+  readJson,
+  writeJson,
+  writeMaterial,
+} from "./article-agent-bridge.mjs";
 import { runChecks } from "../scripts/verify.mjs";
+import { publishArticles } from "../scripts/publish-article.mjs";
 import {
   createTextClient,
   httpStatus,
@@ -22,13 +36,75 @@ import {
 } from "./image-provider.mjs";
 
 const usage = `Usage:
+  node src/article-cli.mjs prepare --subject <s> --node <n> [--step <id>] [--force] [--root <dir>]
+  node src/article-cli.mjs publish --subject <s> --node <n> [--step <id>] [--force] [--root <dir>]
   node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force] [--images] [--max-parallel <n>] [--root <dir>]
-  node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--root <dir>]
+  node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only] [--root <dir>]
 
-article  writes one Markdown article per missing step (one text request each).
-         Add --images to plan and generate figures in the same run.
+prepare  writes one material bundle per missing step and lists the publisher job.
+publish  copies completed article-agent runs into learn/ and runs verify.
+article  legacy engine: writes one article per step with a single text request.
 image    plans and generates WebP figures for articles that already exist.
+         --plan-only writes the plan to learn/<subject>/output/image-plans/ and
+         generates nothing; the next image run reuses that plan. --force with
+         --plan-only rebuilds the plan; without it, --force regenerates images.
 Default behaviour skips existing articles and reuses existing images.`;
+
+function prepareArticles({ root, subject, node: nodeId, step = null, force = false }) {
+  const node = readNode(root, subject, nodeId);
+  const entries = selectSteps(node, step);
+  const order = node.steps.map((entry) => entry.id);
+  const steps = [];
+  const skipped = [];
+  for (const entry of entries) {
+    const target = join(root, "learn", subject, "nodes", nodeId, `${entry.id}.md`);
+    const shown = relative(root, target);
+    const existing = existsSync(target) ? readFileSync(target, "utf8") : "";
+    if (!force && hasArticleBody(existing)) {
+      skipped.push({ id: entry.id, title: entry.title, status: "skipped", path: shown });
+      continue;
+    }
+    const slices = readStepSlices(root, entry);
+    const { files } = writeMaterial(root, { subject, node: nodeId, entry, slices });
+    if (force) {
+      for (const key of ["original", "protected", "blocks", "request", "result"]) {
+        rmSync(files[key], { force: true });
+      }
+    }
+    const index = order.indexOf(entry.id);
+    steps.push({
+      id: entry.id,
+      title: entry.title,
+      purpose: entry.purpose,
+      status: "ready",
+      index: index + 1,
+      total: order.length,
+      previous: node.steps[index - 1]?.title ?? null,
+      next: node.steps[index + 1]?.title ?? null,
+      material: relative(root, files.material),
+      original: relative(root, files.original),
+      command: `node scripts/run-article-agent.mjs --subject ${subject} --node ${nodeId} --step ${entry.id}`,
+    });
+  }
+  const skippedIds = new Set(skipped.map((entry) => entry.id));
+  const prepared = [...new Set([...(readJson(prepareFile(root, subject, nodeId))?.steps ?? []), ...steps.map((entry) => entry.id)])]
+    .filter((id) => !skippedIds.has(id));
+  writeJson(prepareFile(root, subject, nodeId), {
+    subject,
+    node: nodeId,
+    preparedAt: new Date().toISOString(),
+    steps: prepared,
+  });
+  return {
+    mode: "prepare",
+    subject,
+    node: nodeId,
+    nodeTitle: node.title,
+    nodeGoal: node.goal ?? null,
+    steps,
+    skipped,
+  };
+}
 
 function requireSubjectNode(values) {
   for (const key of ["subject", "node"]) {
@@ -105,6 +181,7 @@ async function main() {
       step: { type: "string" },
       force: { type: "boolean", default: false },
       images: { type: "boolean", default: false },
+      "plan-only": { type: "boolean", default: false },
       "max-parallel": { type: "string" },
       root: { type: "string" },
       help: { type: "boolean", default: false },
@@ -117,19 +194,35 @@ async function main() {
     console.log(usage);
     return;
   }
-  if (!["article", "image"].includes(mode)) throw new Error(`unknown mode: ${mode}\n\n${usage}`);
+  if (!["article", "image", "prepare", "publish"].includes(mode)) {
+    throw new Error(`unknown mode: ${mode}\n\n${usage}`);
+  }
   requireSubjectNode(values);
 
   const root = resolve(values.root || process.cwd());
   loadEnv(root);
-  const deps = createDeps(root);
+
   const target = {
     subject: values.subject,
     node: values.node,
     step: values.step || null,
     force: values.force,
+    planOnly: values["plan-only"],
     root,
   };
+
+  if (mode === "prepare") {
+    console.log(JSON.stringify(prepareArticles(target), null, 2));
+    return;
+  }
+  if (mode === "publish") {
+    const report = publishArticles(target);
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.verify.pass) process.exitCode = 1;
+    return;
+  }
+
+  const deps = createDeps(root);
 
   const result =
     mode === "article"

@@ -1,5 +1,6 @@
 import Markdown from "./Markdown.jsx";
-import { tierTextClass } from "./Sidebar.jsx";
+import DotMatrix from "./DotMatrix.jsx";
+import { tierDotClass } from "./Sidebar.jsx";
 import { hashFor } from "../lib/route.mjs";
 
 /**
@@ -14,112 +15,158 @@ export default function NodeView({ course, node, onSelect }) {
     })
     .filter(Boolean);
 
+  const tier = course.tiers.find((t) => t.tier === node.tier);
+
   return (
     <article>
-      <h1 className="border-b-2 border-accent pb-1.5 text-[1.7rem] font-semibold leading-tight sm:text-[2rem]">
-        {node.title}
-      </h1>
-      <p className="font-label mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs tracking-wide text-ink-soft sm:text-sm">
-        <span>
-          Node {node.globalOrder}/{course.nodes.length}
+      <nav
+        aria-label="麵包屑"
+        className="robo-kicker flex flex-wrap items-center gap-2 font-label text-[11px] text-ink-soft"
+      >
+        <span>{course.title}</span>
+        <span aria-hidden="true" className="text-ink-soft/50">
+          /
         </span>
-        <span aria-hidden="true">·</span>
-        <span className={tierTextClass(node.tier)}>
-          Tier {node.tier} —{" "}
-          {course.tiers.find((t) => t.tier === node.tier)?.name}
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            aria-hidden="true"
+            className={`size-1.5 ${tierDotClass(node.tier)}`}
+          />
+          Tier {node.tier}
         </span>
-        <span aria-hidden="true">·</span>
-        <span>{node.steps.length} Steps</span>
-      </p>
+        <span aria-hidden="true" className="text-ink-soft/50">
+          /
+        </span>
+        <span className="text-ink">Node {node.globalOrder}</span>
+      </nav>
+
+      <header className="mt-4 grid items-center gap-6 sm:grid-cols-[minmax(0,1fr)_190px]">
+        <div>
+          <p className="robo-kicker font-label text-[11px] text-ink-soft">
+            Node <span className="doto text-accent">{String(node.globalOrder).padStart(2, "0")}</span>
+            {tier ? ` · ${tier.name}` : ""}
+          </p>
+          <h1 className="mt-2 text-[2rem] font-medium leading-[1.15] tracking-[-1px] text-ink sm:text-[2.5rem]">
+            {node.title}
+          </h1>
+          <div className="mt-4 flex flex-wrap items-center gap-2 font-label text-[11px] uppercase tracking-[0.1em] text-ink-soft">
+            <span className="border border-ink bg-surface px-2 py-1">
+              {node.globalOrder} / {course.nodes.length} 個節點
+            </span>
+            <span className="border border-ink bg-surface px-2 py-1">
+              {node.steps.length} 個步驟
+            </span>
+            <span className="border border-ink bg-surface px-2 py-1">
+              Tier {node.tier}
+              {tier ? ` — ${tier.name}` : ""}
+            </span>
+          </div>
+        </div>
+        <div className="hidden sm:block">
+          <div className="border-2 border-ink bg-surface p-2 shadow-[6px_6px_0_rgba(28,26,22,0.9)]">
+            <DotMatrix variant="hexagon" height={150} />
+          </div>
+        </div>
+      </header>
 
       {node.goal && (
-        <div className="mt-6 rounded-r-lg border-l-4 border-accent bg-accent-soft px-4 py-3 text-[0.95em]">
+        <div className="robo-card-hot mt-8 px-5 py-4 text-[1rem] leading-relaxed text-ink">
+          <p className="robo-kicker mb-1.5 font-label text-[11px] font-medium text-accent">
+            學習目標
+          </p>
           {node.goal}
         </div>
       )}
 
       {prereqs.length > 0 && (
-        <div className="font-label mt-4 flex flex-wrap items-center gap-1.5 text-xs">
-          <span className="uppercase tracking-[0.08em] text-ink-soft">前置</span>
+        <div className="mt-6 flex flex-wrap items-center gap-2 font-label text-[11px]">
+          <span className="robo-kicker text-ink-soft">前置節點</span>
           {prereqs.map((p) => (
             <button
               key={p.id}
+              type="button"
               onClick={() => onSelect(p.id)}
-              className="rounded-full border border-line bg-shade px-2.5 py-1 font-medium text-accent transition-colors hover:border-accent hover:bg-accent-soft"
+              className="border-2 border-ink bg-surface px-3 py-1 font-medium text-ink transition-colors hover:border-accent hover:text-accent"
             >
-              ↰ {p.title}
+              ← {p.title}
             </button>
           ))}
         </div>
       )}
 
       {node.lessonIntro && (
-        <div className="mt-5 text-ink/90">
+        <div className="mt-7 text-ink/90">
           <Markdown>{node.lessonIntro}</Markdown>
         </div>
       )}
 
-      <h3 className="font-label mt-8 mb-3 text-xs uppercase tracking-[0.08em] text-ink-soft">
-        Steps
-      </h3>
-      {node.steps.length > 0 ? (
-        <ol className="space-y-2.5">
-          {node.steps.map((step) => (
-            <li key={step.id}>
-              <a
-                href={hashFor(course.subject, node.id, step.id)}
-                className="group flex items-start gap-3 rounded-lg border border-line bg-shade px-3.5 py-3 transition-colors hover:border-accent hover:bg-accent-soft"
-              >
-                <span
-                  aria-hidden="true"
-                  className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-bold text-white"
-                >
-                  {step.order}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[0.95rem] font-medium text-ink sm:text-base">
-                    {step.title}
-                  </span>
-                  {step.purpose && (
-                    <span className="mt-0.5 block text-sm leading-relaxed text-ink-soft">
-                      {step.purpose}
-                    </span>
-                  )}
-                  {!step.hasContent && (
-                    <span className="font-label mt-1 block text-[11px] uppercase tracking-wide text-ink-soft/70">
-                      尚未產生
-                    </span>
-                  )}
-                </span>
-                <svg
-                  aria-hidden="true"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="mt-1 shrink-0 text-ink-soft transition-transform group-hover:translate-x-0.5"
-                >
-                  <path d="m9 18 6-6-6-6" />
-                </svg>
-              </a>
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <div className="mt-2 rounded-lg border border-dashed border-line px-5 py-8 text-center">
-          <p className="text-sm text-ink-soft">此節點尚未規劃步驟。</p>
+      <section className="mt-12">
+        <div className="mb-4 flex items-baseline justify-between gap-3 border-b-2 border-ink pb-2">
+          <h2 className="robo-kicker font-label text-[11px] font-medium text-ink-soft">
+            課程步驟
+          </h2>
+          <span className="font-mono text-[11px] tabular-nums text-ink-soft">
+            {String(node.steps.length).padStart(2, "0")}
+          </span>
         </div>
-      )}
 
-      <footer className="mt-14 border-t border-line pt-4 text-xs text-ink-soft">
-        <p>
-          {course.title} · Node {node.globalOrder}/{course.nodes.length} ·{" "}
-          {node.title} · Generated from learning-center
-        </p>
+        {node.steps.length > 0 ? (
+          <ol className="space-y-3">
+            {node.steps.map((step) => (
+              <li key={step.id}>
+                <a
+                  href={hashFor(course.subject, node.id, step.id)}
+                  className="group robo-card robo-press flex items-start gap-4 px-4 py-4 hover:border-accent"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="mt-0.5 grid size-8 shrink-0 place-items-center border-2 border-ink bg-paper font-mono text-xs font-semibold tabular-nums text-ink transition-colors group-hover:bg-accent group-hover:text-dark"
+                  >
+                    {step.order}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[1rem] font-medium leading-snug text-ink sm:text-[1.05rem]">
+                      {step.title}
+                    </span>
+                    {step.purpose && (
+                      <span className="mt-1.5 block text-[0.95rem] leading-relaxed text-ink-soft">
+                        {step.purpose}
+                      </span>
+                    )}
+                    {!step.hasContent && (
+                      <span className="robo-kicker mt-2 inline-block border border-ink bg-shade px-1.5 py-0.5 font-label text-[10px] text-ink-soft">
+                        尚未產生
+                      </span>
+                    )}
+                  </span>
+                  <svg
+                    aria-hidden="true"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="mt-1 shrink-0 text-ink-soft transition-all group-hover:translate-x-0.5 group-hover:text-accent"
+                  >
+                    <path d="m9 18 6-6-6-6" />
+                  </svg>
+                </a>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <div className="border-2 border-dashed border-ink/40 bg-surface px-5 py-10 text-center">
+            <p className="text-[0.95rem] text-ink-soft">此節點尚未規劃步驟。</p>
+          </div>
+        )}
+      </section>
+
+      <footer className="robo-kicker mt-16 border-t-2 border-ink pt-4 font-label text-[11px] text-ink-soft">
+        {course.title} · Node {node.globalOrder}/{course.nodes.length} ·{" "}
+        {node.title}
       </footer>
     </article>
   );

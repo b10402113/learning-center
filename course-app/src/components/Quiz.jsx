@@ -23,16 +23,16 @@ export default function Quiz({ source }) {
 
   return (
     <section
-      className="my-8 rounded-lg border border-line bg-shade px-4 py-5 sm:px-5"
+      className="robo-card my-9 px-5 py-5"
       aria-label="練習題"
     >
-      <p className="font-label text-[10px] uppercase tracking-[0.12em] text-ink-soft">
+      <p className="robo-kicker font-label text-[11px] font-medium text-accent">
         練習題
       </p>
-      <p className="mt-1 text-base font-medium leading-relaxed text-ink">
+      <p className="mt-2 text-[1.05rem] font-medium leading-relaxed text-ink">
         {quiz.question}
       </p>
-      <ol className="mt-4 space-y-2">
+      <ol className="mt-5 list-none space-y-2.5 !pl-0">
         {quiz.options.map((option, index) => {
           const isWrong = wrong.has(index);
           const isCorrect = solved && index === quiz.answer;
@@ -43,22 +43,22 @@ export default function Quiz({ source }) {
                 onClick={() => pick(index)}
                 disabled={solved}
                 aria-pressed={isCorrect || isWrong}
-                className={`flex w-full items-start gap-3 rounded-md border px-3 py-2 text-left text-sm leading-relaxed transition-colors ${
+                className={`flex w-full items-start gap-3 border-2 px-3 py-2.5 text-left text-[0.95rem] leading-relaxed transition-colors ${
                   isCorrect
-                    ? "border-good bg-good-bg text-ink"
+                    ? "border-accent bg-surface text-ink shadow-[3px_3px_0_var(--color-accent)]"
                     : isWrong
-                      ? "border-bad bg-bad-bg text-ink"
-                      : "border-line bg-paper text-ink hover:border-accent hover:bg-accent-soft"
-                } ${solved && !isCorrect ? "opacity-60" : ""}`}
+                      ? "border-ink bg-shade text-ink-soft"
+                      : "border-ink bg-paper text-ink hover:border-accent hover:bg-surface"
+                } ${solved && !isCorrect ? "opacity-55" : ""}`}
               >
                 <span
                   aria-hidden="true"
-                  className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold ${
+                  className={`mt-0.5 grid size-5 shrink-0 place-items-center border-2 font-mono text-[11px] font-semibold ${
                     isCorrect
-                      ? "border-good text-good"
+                      ? "border-accent text-accent"
                       : isWrong
-                        ? "border-bad text-bad"
-                        : "border-line text-ink-soft"
+                        ? "border-ink text-ink-soft"
+                        : "border-ink text-ink-soft"
                   }`}
                 >
                   {String.fromCharCode(65 + index)}
@@ -69,13 +69,13 @@ export default function Quiz({ source }) {
           );
         })}
       </ol>
-      <div aria-live="polite" className="mt-3 text-sm">
+      <div aria-live="polite" className="mt-4 text-[0.95rem]">
         {solved ? (
-          <p className="text-good">
+          <p className="text-accent">
             答對了 ✓<span className="ml-2 text-ink/80">{quiz.explain}</span>
           </p>
         ) : wrong.size > 0 ? (
-          <p className="text-bad">再想想，答案不是這個。</p>
+          <p className="text-ink-soft">再想想，答案不是這個。</p>
         ) : null}
       </div>
     </section>

@@ -1,11 +1,11 @@
 ---
 id: what-a-harness-is
-title: "Agent Harness：LLM 之外的那些東西"
+title: "Harness 是一個系統，不是一個迴圈"
 subject: agent-harness
 tier: 1
 order: 1
 status: written
-goal: "建立 agent = LLM + harness 的心智模型，並能用一個 naive 迴圈解釋為什麼 demo 能跑、production 會死。"
+goal: "用控制面、狀態面、執行面、context 面拆開 agent 系統，並說出 demo 與 production 的差異。"
 prerequisites: []
 steps:
   - id: harness-is-the-product
@@ -23,14 +23,14 @@ steps:
       - "[[sources/agent-harness/20260915/harness-engineering/lessons/01-intro-to-harness-engineering/index.md#L34-L58]]"
       - "[[sources/agent-harness/20260915/harness-engineering/lessons/01-intro-to-harness-engineering/index.md#L291-L311]]"
 created: 2026-10-22
-updated: 2026-10-22
+updated: 2026-10-24
 ---
 
-# Agent Harness：LLM 之外的那些東西
+# Harness 是一個系統，不是一個迴圈
 
 ## Lesson
 
-這門課不教你做某個垂直 agent，而是造那個能跑任何 agent 的 runtime。先分清楚 LLM 與 harness 的邊界，再看一個「能跑」的 demo 如何在 production 斷掉。
+Agent 不是一個模型呼叫，而是一個由控制面、狀態面、執行面與 context 面組成的系統。先分清楚 LLM 與 harness 的邊界，再用 naive 迴圈看見 production 會在哪裡斷掉；後面每個節點就對應其中一個平面。
 
 ## Steps
 

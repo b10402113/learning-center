@@ -258,6 +258,7 @@ test("normalizes an image plan to exactly the requested count", () => {
   );
   assert.deepEqual(plan.map((item) => item.index), [1, 2]);
   assert.equal(normalizeImagePlan([{ prompt: "only" }], 2).length, 2);
+  assert.equal(normalizeImagePlan([{ heading: "## Section" }], 1)[0].heading, "Section");
   assert.throws(() => normalizeImagePlan("not json", 1), /JSON/);
 });
 
@@ -335,8 +336,73 @@ test("image mode plans and generates once, then reuses on a second run", async (
     { subject: "test", node: "n1", step: "s1", force: true },
     { root, ...deps },
   );
-  assert.equal(planCalls, 2);
+  assert.equal(planCalls, 1);
   assert.equal(imageCalls, 4);
+});
+
+test("image plans can be reviewed before any image is generated", async (t) => {
+  const root = fixture(t);
+  const prose = `# Step One\n\n${"字".repeat(905)}\n\nSecond paragraph anchor.\n`;
+  write(root, "learn/test/nodes/n1/s1.md", prose);
+  const planFile = "learn/test/output/image-plans/n1/s1.json";
+
+  let planCalls = 0;
+  const planned = await runImages(
+    { subject: "test", node: "n1", step: "s1", planOnly: true },
+    {
+      root,
+      planImages: async () => {
+        planCalls += 1;
+        return [
+          { heading: "", anchor: "字".repeat(20), prompt: "first" },
+          { heading: "", anchor: "Second paragraph anchor.", prompt: "second" },
+        ];
+      },
+    },
+  );
+  assert.equal(planned.steps[0].status, "planned");
+  assert.equal(planned.steps[0].plan.length, 2);
+  assert.equal(planned.steps[0].file, planFile);
+  assert.equal(planCalls, 1);
+  assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1-assets/image-1.webp")), false);
+  assert.equal(read(root, "learn/test/nodes/n1/s1.md"), prose);
+
+  const reviewed = JSON.parse(read(root, planFile));
+  reviewed[1].prompt = "edited prompt";
+  write(root, planFile, JSON.stringify(reviewed));
+
+  const prompts = [];
+  const generated = await runImages(
+    { subject: "test", node: "n1", step: "s1" },
+    {
+      root,
+      planImages: async () => assert.fail("must reuse the reviewed plan"),
+      generateImage: async ({ prompt }) => {
+        prompts.push(prompt);
+        return Buffer.from("image");
+      },
+      writeImage: async (target, bytes) => {
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, bytes);
+      },
+    },
+  );
+  assert.equal(generated.steps[0].status, "generated");
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /edited prompt/);
+  assert.equal(read(root, planFile), JSON.stringify(reviewed));
+
+  await runImages(
+    { subject: "test", node: "n1", step: "s1", planOnly: true, force: true },
+    {
+      root,
+      planImages: async () => {
+        planCalls += 1;
+        return [{ prompt: "fresh" }];
+      },
+    },
+  );
+  assert.equal(planCalls, 2);
 });
 
 test("image mode reuses an existing image file", async (t) => {

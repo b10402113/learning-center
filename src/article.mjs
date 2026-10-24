@@ -81,7 +81,7 @@ export function normalizeArticleText(text, title) {
   return `# ${title}\n\n${body}`.trimEnd() + "\n";
 }
 
-function markNodeWritten(node, subject, nodeId, root) {
+export function markNodeWritten(node, subject, nodeId, root) {
   const allWritten = node.steps.every((entry) => {
     const file = join(root, "learn", subject, "nodes", nodeId, `${entry.id}.md`);
     return existsSync(file) && hasArticleBody(readFileSync(file, "utf8"));
@@ -96,7 +96,7 @@ function markNodeWritten(node, subject, nodeId, root) {
   if (next !== raw) writeFileSync(node.file, next);
 }
 
-function selectSteps(node, stepId) {
+export function selectSteps(node, stepId) {
   if (!stepId) return node.steps;
   const entry = node.steps.find((step) => step && step.id === stepId);
   if (!entry) throw new Error(`step "${stepId}" is not in node ${node.id}`);
@@ -166,6 +166,10 @@ function imageAssetPath(subject, nodeId, stepId, index) {
   return `learn/${subject}/nodes/${nodeId}/${stepId}-assets/image-${index}.webp`;
 }
 
+export function imagePlanPath(subject, nodeId, stepId) {
+  return `learn/${subject}/output/image-plans/${nodeId}/${stepId}.json`;
+}
+
 export function expectedImageCount(markdown) {
   const characters = countArticleCharacters(markdown);
   if (characters < 900) return 1;
@@ -196,7 +200,7 @@ export function normalizeImagePlan(raw, count) {
     const prompt = String(item.prompt ?? "").trim() || anchor || `第 ${index + 1} 張示意圖`;
     return {
       index: index + 1,
-      heading: String(item.heading ?? "").trim(),
+      heading: String(item.heading ?? "").trim().replace(/^#{1,6}[ \t]+/, ""),
       anchor,
       prompt,
     };
@@ -300,6 +304,24 @@ function allImagesPresent(root, subject, nodeId, stepId, count) {
   );
 }
 
+function loadImagePlan(file, count) {
+  if (!existsSync(file)) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch (error) {
+    throw new Error(`invalid image plan ${file}: ${error?.message ?? error}`);
+  }
+  if (!Array.isArray(parsed)) throw new Error(`invalid image plan ${file}: expected a JSON array`);
+  if (parsed.length !== count) return null;
+  return normalizeImagePlan(parsed, count);
+}
+
+function saveImagePlan(file, plan) {
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(plan, null, 2) + "\n");
+}
+
 function headingBefore(markdown, anchor) {
   const index = anchor ? markdown.indexOf(anchor) : -1;
   const before = index === -1 ? markdown : markdown.slice(0, index);
@@ -331,12 +353,14 @@ export function buildImagePrompt(item, article, template) {
 }
 
 export async function runImages(
-  { subject, node: nodeId, step = null, force = false },
+  { subject, node: nodeId, step = null, force = false, planOnly = false },
   deps = {},
 ) {
   const root = resolve(deps.root ?? process.cwd());
   if (typeof deps.planImages !== "function") throw new Error("planImages dependency is required");
-  if (typeof deps.generateImage !== "function") throw new Error("generateImage dependency is required");
+  if (!planOnly && typeof deps.generateImage !== "function") {
+    throw new Error("generateImage dependency is required");
+  }
   const writeImage =
     deps.writeImage ??
     (async (target, bytes) => {
@@ -366,26 +390,54 @@ export async function runImages(
 
     const article = readFileSync(file, "utf8");
     const count = expectedImageCount(article);
-    const existing = findArticleImages(article, entry.id);
-    if (!force && existing.length === count && allImagesPresent(root, subject, nodeId, entry.id, count)) {
+    const planFile = join(root, imagePlanPath(subject, nodeId, entry.id));
+    const base = stripImageMedia(article, entry.id);
+    let plan = loadImagePlan(planFile, count);
+    if (!plan) {
+      const existing = findArticleImages(article, entry.id);
+      if (
+        !planOnly &&
+        !force &&
+        existing.length === count &&
+        allImagesPresent(root, subject, nodeId, entry.id, count)
+      ) {
+        results.push({
+          id: entry.id,
+          title: entry.title,
+          status: "reused",
+          images: Array.from({ length: count }, (_, index) => ({
+            index: index + 1,
+            file: imageAssetPath(subject, nodeId, entry.id, index + 1),
+            reused: true,
+          })),
+        });
+        continue;
+      }
+      plan = normalizeImagePlan(
+        await deps.planImages({ step: entry, article: base, count }),
+        count,
+      );
+      saveImagePlan(planFile, plan);
+    } else if (planOnly && force) {
+      plan = normalizeImagePlan(
+        await deps.planImages({ step: entry, article: base, count }),
+        count,
+      );
+      saveImagePlan(planFile, plan);
+    }
+
+    if (planOnly) {
       results.push({
         id: entry.id,
         title: entry.title,
-        status: "reused",
-        images: Array.from({ length: count }, (_, index) => ({
-          index: index + 1,
-          file: imageAssetPath(subject, nodeId, entry.id, index + 1),
-          reused: true,
-        })),
+        status: "planned",
+        plan,
+        file: imagePlanPath(subject, nodeId, entry.id),
+        images: [],
       });
       continue;
     }
 
-    const base = stripImageMedia(article, entry.id);
-    const plan = normalizeImagePlan(
-      await deps.planImages({ step: entry, article: base, count }),
-      count,
-    );
     const marked = insertImageMarkers(base, plan);
     const images = [];
 

@@ -21,9 +21,10 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 │   │       ├── <step>.md     ← the step article
 │   │       └── <step>-assets/image-N.webp
 │   └── edges/                ← optional relationship pages between steps/nodes
-├── src/                      ← article.mjs, article-cli.mjs, llm.mjs, image-provider.mjs
+├── src/                      ← article.mjs, article-cli.mjs, article-agent-bridge.mjs, llm.mjs, image-provider.mjs
 ├── prompts/                  ← article.txt, image-plan.txt, image.txt
-├── scripts/                  ← verify.mjs, pdf-backfill.mjs, digest-status.mjs
+├── scripts/                  ← verify.mjs, publish-article.mjs, run-article-agent.mjs, pdf-backfill.mjs, digest-status.mjs
+├── article-agent/            ← git submodule: publisher-era rewrite pipeline (prompts/rewrite.txt, src/pipeline.mjs)
 ├── course-app/               ← React (Vite + Tailwind) course viewer
 ├── previews/                 ← static design previews for the course viewer
 ├── .opencode/skills/         ← active slash-command skills
@@ -52,9 +53,10 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 | `/ingest` | Archive new source files and write `pending` digests. Does not touch roadmap, nodes, or articles. |
 | `/roadmap` | Propose ≥5 learning paths, confirm one, partition into nodes, write `ROADMAP.md` and `draft` node containers. |
 | `/nodes` | Reasoning checkpoint per node: write the `steps` array (`id`, `title`, `purpose`, `sources`), create H1-only article skeletons, set `confirmed`. |
-| `/article` | Thin shell over `src/article-cli.mjs`; one text call per missing step writes `<step>.md`. `--images` plans and generates WebP figures. |
+| `/article` | `prepare` slices each step into a material bundle; the `publisher` agent writes all originals for the node, one agent per node so steps flow into each other; `article-agent`'s `rewrite.txt` rewrites each original; `publish` writes `<step>.md` and verifies. `--images` plans and generates WebP figures. |
 | `/absorb` | Read `pending` digests, append steps to existing nodes or create new nodes, mark digests `absorbed`, roll affected nodes back to `confirmed`. |
 | `/edges` | Optional relationship pages between steps or nodes. |
+| `/reset-nodes` | Reset chosen nodes to `confirmed`, delete generated articles and figures, keep the plan. |
 
 `/practice` (generated practice sets) is **out of scope**. The `quiz` block format and its course-app renderer remain available; articles do not need a practice section.
 
@@ -185,13 +187,18 @@ There is no probe gate, mastery report, element page, or completion tracking in 
 ### Article and image generation
 
 ```bash
+node src/article-cli.mjs prepare --subject <s> --node <n> [--step <id>] [--force]
+node src/article-cli.mjs publish --subject <s> --node <n> [--step <id>] [--force]
 node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force] [--images]
-node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force]
+node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only]
 ```
 
+- Default engine: `prepare` writes one material bundle per missing step to `learn/<subject>/output/materials/`; the `publisher` subagent writes all originals for the node to `learn/<subject>/output/jobs/`; `run-article-agent.mjs` protects code blocks and runs `article-agent`'s rewrite; `publish` restores the code, normalizes the H1, writes `learn/<subject>/nodes/<node>/<step>.md`, and runs verify.
+- The subtitle `article` command is the legacy engine: one text request per missing step, straight from the cited source slices.
 - Missing or H1-only articles are generated; articles with a body are skipped unless `--force`.
 - The image count comes from the finished article's Traditional Chinese character count (1–5).
 - Existing images are reused; a second run with no changes makes no image requests.
+- `image --plan-only` writes the plan to `learn/<subject>/output/image-plans/<node>/<step>.json` and generates nothing; edit it, then rerun `image` to generate from that plan. `--plan-only --force` rebuilds the plan; plain `--force` regenerates images from the current plan.
 - The CLI prints JSON per-step status plus the verify result.
 
 ### PDF backfill
@@ -201,6 +208,14 @@ node scripts/pdf-backfill.mjs --subject <subject> [--dry-run]
 ```
 
 Idempotent: existing `.txt` files are not overwritten, so line numbers stay stable.
+
+### Node reset
+
+```bash
+node scripts/reset-nodes.mjs --subject <subject> (--all | --tier <n> | --node <id> ...) [--dry-run]
+```
+
+Keeps each node container and its step plan; sets `status: confirmed`, rewrites every step article as a bare H1 skeleton, and removes figures. `/article` then regenerates the bodies.
 
 ### Lint
 
