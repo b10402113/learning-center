@@ -38,13 +38,18 @@ import {
 const usage = `Usage:
   node src/article-cli.mjs prepare --subject <s> --node <n> [--step <id>] [--force] [--root <dir>]
   node src/article-cli.mjs publish --subject <s> --node <n> [--step <id>] [--force] [--root <dir>]
-  node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force] [--images] [--max-parallel <n>] [--root <dir>]
-  node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only] [--root <dir>]
+  node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force] [--images] [--max-parallel <n>] [--root <dir>]  (deprecated)
+  node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only] [--root <dir>]  (deprecated)
 
-prepare  writes one material bundle per missing step and lists the publisher job.
-publish  copies completed article-agent runs into learn/ and runs verify.
-article  legacy engine: writes one article per step with a single text request.
-image    plans and generates WebP figures for articles that already exist.
+prepare  writes one material bundle per missing step and lists the publisher job
+         (material, original, plan, command). The command uses --markers-only, so
+         the article keeps <!--image:N--> markers instead of generating figures.
+publish  writes completed marker-only runs into learn/ without touching figures,
+         marks the node written, and runs verify.
+article  legacy engine (deprecated): writes one article per step with a single
+         text request, optionally generating figures.
+image    legacy engine (deprecated): plans and generates WebP figures for
+         articles that already exist.
          --plan-only writes the plan to learn/<subject>/output/image-plans/ and
          generates nothing; the next image run reuses that plan. --force with
          --plan-only rebuilds the plan; without it, --force regenerates images.
@@ -67,7 +72,7 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     const slices = readStepSlices(root, entry);
     const { files } = writeMaterial(root, { subject, node: nodeId, entry, slices });
     if (force) {
-      for (const key of ["original", "protected", "blocks", "request", "result"]) {
+      for (const key of ["original", "plan", "legacyPlan", "protected", "blocks", "request", "result"]) {
         rmSync(files[key], { force: true });
       }
     }
@@ -79,11 +84,10 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
       status: "ready",
       index: index + 1,
       total: order.length,
-      previous: node.steps[index - 1]?.title ?? null,
-      next: node.steps[index + 1]?.title ?? null,
       material: relative(root, files.material),
       original: relative(root, files.original),
-      command: `node scripts/run-article-agent.mjs --subject ${subject} --node ${nodeId} --step ${entry.id}`,
+      plan: relative(root, files.plan),
+      command: `node scripts/run-article-agent.mjs --subject ${subject} --node ${nodeId} --step ${entry.id} --markers-only`,
     });
   }
   const skippedIds = new Set(skipped.map((entry) => entry.id));
@@ -216,7 +220,7 @@ async function main() {
     return;
   }
   if (mode === "publish") {
-    const report = publishArticles(target);
+    const report = await publishArticles(target);
     console.log(JSON.stringify(report, null, 2));
     if (!report.verify.pass) process.exitCode = 1;
     return;

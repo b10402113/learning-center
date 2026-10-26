@@ -6,21 +6,24 @@ import { parseArgs } from "node:util";
 import { readNode } from "../src/article.mjs";
 import {
   articleAgentRoot,
-  buildBrief,
+  buildRequest,
   jobFiles,
-  outputDir,
   protectCode,
   readJson,
+  readStepPlan,
   writeJson,
 } from "../src/article-agent-bridge.mjs";
 import { loadEnv } from "../src/llm.mjs";
 
 const usage = `Usage:
-  node scripts/run-article-agent.mjs --subject <s> --node <n> --step <id> [--root <dir>]
+  node scripts/run-article-agent.mjs --subject <s> --node <n> --step <id> [--markers-only] [--no-images] [--root <dir>]
 
 Wraps one article-agent rewrite for a single step. It protects the code blocks,
-writes the request into article-agent/output/jobs/, runs article-agent's CLI,
-and records the result. The caller writes the original article first.`;
+reads the publisher's image plan, writes the request into
+article-agent/output/jobs/, runs article-agent's CLI, and records the result.
+The caller writes the original article and (unless --no-images) the plan first.
+--markers-only requires a plan and stops after the rewrite leaves <!--image:N-->
+markers, so no image model is called.`;
 
 const PARTIAL = /partial files: (.+)$/m;
 
@@ -31,6 +34,8 @@ function main() {
       subject: { type: "string" },
       node: { type: "string" },
       step: { type: "string" },
+      "no-images": { type: "boolean", default: false },
+      "markers-only": { type: "boolean", default: false },
       root: { type: "string" },
       help: { type: "boolean", default: false },
     },
@@ -55,23 +60,29 @@ function main() {
     throw new Error(`original article not found: ${relative(root, files.original)}`);
   }
 
+  const markersOnly = values["markers-only"];
+  if (markersOnly && !existsSync(files.plan)) {
+    throw new Error("--markers-only requires an image plan");
+  }
   const original = readFileSync(files.original, "utf8");
+  const plan =
+    values["no-images"] && !markersOnly
+      ? null
+      : readStepPlan(root, { subject: values.subject, node: values.node, step: entry.id }, original);
   const { text, blocks } = protectCode(original);
   writeFileSync(files.protected, text);
   writeJson(files.blocks, blocks);
-  const index = node.steps.findIndex((step) => step && step.id === entry.id);
-  writeJson(files.request, {
-    articleFile: files.protected,
-    brief: buildBrief(entry, {
+  writeJson(
+    files.request,
+    buildRequest(root, {
+      subject: values.subject,
+      files,
+      entry,
+      plan,
       hasCode: blocks.length > 0,
-      nodeTitle: node.title,
-      index: index + 1,
-      total: node.steps.length,
-      previous: node.steps[index - 1]?.title ?? null,
-      next: node.steps[index + 1]?.title ?? null,
+      markersOnly,
     }),
-    outputRoot: outputDir(root, values.subject),
-  });
+  );
 
   const agentRoot = articleAgentRoot(root);
   let stdout = "";
@@ -112,8 +123,15 @@ function describeRun(stdout, stderr) {
     images: (manifest.images ?? []).map((image) => join(outputDir, "assets", image.filename)),
     textModel: manifest.textModel ?? null,
     textRequests: manifest.textRequests ?? 0,
+    imageRequests: manifest.imageRequests ?? 0,
+    markersOnly: manifest.markersOnly ?? false,
     error: manifest.error ?? (stderr.trim() ? { message: stderr.trim() } : null),
   };
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  console.error(error?.message ?? error);
+  process.exitCode = 1;
+}

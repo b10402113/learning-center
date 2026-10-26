@@ -54,6 +54,10 @@ export function prepareFile(root, subject, node) {
   return join(jobsDir(root, subject), `${subject}-${node}.prepare.json`);
 }
 
+export function humanizeRecordPath(root, { subject, node, step }) {
+  return join(outputDir(root, subject), "humanized", node, `${step}.json`);
+}
+
 export function buildBrief(entry, context = {}) {
   const { hasCode = false } = context;
   const lines = [
@@ -108,15 +112,19 @@ export function readStepPlan(root, { subject, node, step }, original) {
   return original ? assertPlanAnchors(plan, original) : plan;
 }
 
-export function buildRequest(root, { subject, files, entry, plan, hasCode }) {
-  return {
+export function buildRequest(root, { subject, files, entry, plan = null, hasCode, markersOnly = false }) {
+  const request = {
     articleFile: files.protected,
     brief: buildBrief(entry, { hasCode }),
-    imagePlan: plan.map(({ heading, anchor, prompt }) => ({ heading, anchor, prompt })),
-    imageStyle: REPO_IMAGE_STYLE,
-    imageTemplate: readFileSync(join(root, "prompts", "image.txt"), "utf8"),
     outputRoot: outputDir(root, subject),
   };
+  if (plan) {
+    request.imagePlan = plan.map(({ heading, anchor, prompt }) => ({ heading, anchor, prompt }));
+    request.imageStyle = REPO_IMAGE_STYLE;
+    request.imageTemplate = readFileSync(join(root, "prompts", "image.txt"), "utf8");
+  }
+  if (markersOnly) request.markersOnly = true;
+  return request;
 }
 
 export function writeMaterial(root, { subject, node, entry, slices }) {

@@ -9,6 +9,7 @@ import {
   assertPlanAnchors,
   buildBrief,
   buildRequest,
+  humanizeRecordPath,
   jobFiles,
   normalizeStepPlan,
   readStepPlan,
@@ -49,6 +50,11 @@ test("readStepPlan reads the shared image plan and validates anchors", (t) => {
     () => readStepPlan(root, { subject: "test", node: "n1", step: "s1" }, "Another sentence."),
     /not verbatim/,
   );
+});
+
+test("the humanize record path stays under the subject output directory", () => {
+  const ids = { subject: "test", node: "n1", step: "s1" };
+  assert.equal(humanizeRecordPath("/repo", ids), "/repo/learn/test/output/humanized/n1/s1.json");
 });
 
 test("buildBrief keeps the step purpose and drops node neighbours", () => {
@@ -110,4 +116,29 @@ test("buildRequest carries the plan, repo style and repo image template", (t) =>
   assert.equal(request.imageStyle, REPO_IMAGE_STYLE);
   assert.equal(request.imageTemplate, readFileSync(join(root, "prompts/image.txt"), "utf8"));
   assert.equal(request.outputRoot, join(root, "learn/test/output"));
+  assert.equal(request.markersOnly, undefined);
+});
+
+test("buildRequest can stop the pipeline at markers", (t) => {
+  const root = fixture(t);
+  const files = jobFiles(root, { subject: "test", node: "n1", step: "s1" });
+  const request = buildRequest(root, {
+    subject: "test",
+    files,
+    entry,
+    plan: normalizeStepPlan([{ anchor: "a sentence", prompt: "draw it" }]),
+    hasCode: false,
+    markersOnly: true,
+  });
+  assert.equal(request.markersOnly, true);
+});
+
+test("buildRequest omits image fields for a text-only legacy run", (t) => {
+  const root = fixture(t);
+  const files = jobFiles(root, { subject: "test", node: "n1", step: "s1" });
+  const request = buildRequest(root, { subject: "test", files, entry, hasCode: false });
+  assert.equal(request.imagePlan, undefined);
+  assert.equal(request.imageStyle, undefined);
+  assert.equal(request.imageTemplate, undefined);
+  assert.equal(request.markersOnly, undefined);
 });
