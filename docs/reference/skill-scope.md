@@ -14,11 +14,12 @@ Validate every resolved node id has a container at `learn/<subject>/nodes/<node-
 
 ## Decide work by state, not scope
 
-Scope selects which nodes the run may touch; node frontmatter decides what each phase actually does. Read each node's `status` and `steps`:
+Scope selects which nodes the run may touch; node frontmatter and the files on disk decide what each phase actually does. Read each node's `status` and `steps`:
 
 - `status: draft`, or `steps: []` — the Nodes phase must build the plan, even when a draft carries stale step entries.
 - A `confirmed` or `written` node with a plan — the Nodes phase is skipped; the Article phase writes only steps without a body.
 - A step already has a body — the Article phase skips it unless the skill's force flag is set.
+- A step has a plan — it is eligible for Humanize and Generate; a step without a plan is an existing article and stays untouched.
 - A `<step>.quiz.json` exists — the Quiz phase skips it unless the skill's force flag is set.
 
 A force flag regenerates generated content. It must not rebuild a node's step plan; that belongs to `/nodes` or `/reset-nodes`.
@@ -31,10 +32,12 @@ The unit depends on the phase:
 
 - **Nodes** — one subagent per node.
 - **Article** — one `publisher` per step; publishers from different nodes may share a batch.
+- **Humanize** — one `humanize-article` per step; steps from different nodes may share a batch.
+- **Generate** — no subagent: one render CLI call per node, in roadmap order.
 - **Quiz** — one `quiz-agent` per step; steps from different nodes may share a batch.
 
 Do not exceed `max-subagents` total parallel subagents in one batch, even when a node contributes several steps.
 
 ## Report
 
-At the end, report per phase: succeeded, failed, and skipped, with a reason for each skip and the error for each failure. Point at the next command — rerun the batch for the failed items, run the `/article` image subcommand for an image repair, or run `/edges` on completed nodes.
+At the end, report per phase: succeeded, failed, and skipped, with a reason for each skip and the error for each failure. Point at the next command — rerun the batch for the failed items, run `/generate-images <subject>/<node>` for an image repair, run `/humanize-article <subject>/<node>` for a text pass, or run `/edges` on completed nodes.
