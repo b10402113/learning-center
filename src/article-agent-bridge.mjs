@@ -58,6 +58,10 @@ export function humanizeRecordPath(root, { subject, node, step }) {
   return join(outputDir(root, subject), "humanized", node, `${step}.json`);
 }
 
+export function humanizeWorkDir(root, { subject, node, step }) {
+  return join(outputDir(root, subject), "humanize", node, step);
+}
+
 export function buildBrief(entry, context = {}) {
   const { hasCode = false } = context;
   const lines = [

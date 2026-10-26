@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -74,6 +74,33 @@ test("prepare asks publishers for markers only and reports skipped steps without
   assert.deepEqual(report.skipped, [
     { id: "s1", title: "Step One", status: "skipped", path: "learn/test/nodes/n1/s1.md" },
   ]);
+});
+
+test("render accepts --step and --max-parallel and skips a step with no plan", (t) => {
+  const root = fixture(t);
+  const run = spawnSync(
+    process.execPath,
+    [
+      CLI,
+      "render",
+      "--subject",
+      "test",
+      "--node",
+      "n1",
+      "--step",
+      "s1",
+      "--max-parallel",
+      "3",
+      "--root",
+      root,
+    ],
+    { encoding: "utf8" },
+  );
+  const report = JSON.parse(run.stdout);
+  assert.equal(report.mode, "render");
+  assert.equal(report.steps.length, 1);
+  assert.equal(report.steps[0].id, "s1");
+  assert.equal(report.steps[0].status, "no-plan");
 });
 
 test("prepare --force clears the step's shared and legacy plans", (t) => {

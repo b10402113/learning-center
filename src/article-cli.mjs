@@ -18,6 +18,7 @@ import {
 } from "./article-agent-bridge.mjs";
 import { runChecks } from "../scripts/verify.mjs";
 import { publishArticles } from "../scripts/publish-article.mjs";
+import { renderImages } from "./render-images.mjs";
 import {
   createTextClient,
   httpStatus,
@@ -38,6 +39,7 @@ import {
 const usage = `Usage:
   node src/article-cli.mjs prepare --subject <s> --node <n> [--step <id>] [--force] [--root <dir>]
   node src/article-cli.mjs publish --subject <s> --node <n> [--step <id>] [--force] [--root <dir>]
+  node src/article-cli.mjs render  --subject <s> --node <n> [--step <id>] [--force] [--max-parallel <n>] [--root <dir>]
   node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force] [--images] [--max-parallel <n>] [--root <dir>]  (deprecated)
   node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only] [--root <dir>]  (deprecated)
 
@@ -46,6 +48,9 @@ prepare  writes one material bundle per missing step and lists the publisher job
          the article keeps <!--image:N--> markers instead of generating figures.
 publish  writes completed marker-only runs into learn/ without touching figures,
          marks the node written, and runs verify.
+render   turns <!--image:N--> markers into WebP figures and image lines. It only
+         reads the publisher's plan; it never plans, rewrites prose, or reads
+         anchors. Existing figures are reused unless --force is given.
 article  legacy engine (deprecated): writes one article per step with a single
          text request, optionally generating figures.
 image    legacy engine (deprecated): plans and generates WebP figures for
@@ -198,7 +203,7 @@ async function main() {
     console.log(usage);
     return;
   }
-  if (!["article", "image", "prepare", "publish"].includes(mode)) {
+  if (!["article", "image", "prepare", "publish", "render"].includes(mode)) {
     throw new Error(`unknown mode: ${mode}\n\n${usage}`);
   }
   requireSubjectNode(values);
@@ -227,6 +232,29 @@ async function main() {
   }
 
   const deps = createDeps(root);
+
+  if (mode === "render") {
+    const result = await renderImages(
+      { ...target, maxParallel: Number(values["max-parallel"] || 2) },
+      deps,
+    );
+    const verify = runChecks({ root, subject: values.subject, node: values.node });
+    const report = {
+      mode,
+      subject: values.subject,
+      node: values.node,
+      imageProvider: deps.imageProvider,
+      imageModel: deps.imageModel,
+      steps: result.steps,
+      verify: { pass: verify.pass, failures: verify.failures },
+    };
+    console.log(JSON.stringify(report, null, 2));
+    if (!verify.pass) process.exitCode = 1;
+    if (result.steps.some((step) => step.status === "failed" || step.status === "no-markers")) {
+      process.exitCode = 1;
+    }
+    return;
+  }
 
   const result =
     mode === "article"

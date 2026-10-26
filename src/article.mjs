@@ -103,7 +103,7 @@ export function selectSteps(node, stepId) {
   return [entry];
 }
 
-async function mapLimit(items, limit, fn) {
+export async function mapLimit(items, limit, fn) {
   const width = Math.max(1, Math.min(Number(limit) || 1, items.length || 1));
   const results = new Array(items.length);
   let next = 0;
@@ -273,6 +273,13 @@ export function replaceImageMarkers(markdown, stepId) {
     .replace(marker, (_, index) => {
       return `![第 ${index} 段配圖](./${stepId}-assets/image-${index}.webp)\n*AI 生成示意圖*`;
     })
+    .trimEnd() + "\n";
+}
+
+export function replaceImageMarkersWithoutCaption(markdown, stepId) {
+  const marker = /^[ \t]*<!--\s*image:(\d+)\s*-->[ \t]*$/gm;
+  return String(markdown)
+    .replace(marker, (_, index) => `![第 ${index} 段配圖](./${stepId}-assets/image-${index}.webp)`)
     .trimEnd() + "\n";
 }
 

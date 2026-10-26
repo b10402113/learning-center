@@ -18,7 +18,14 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
-import { jobFiles, outputDir, prepareFile, readJson } from "../src/article-agent-bridge.mjs";
+import {
+  humanizeRecordPath,
+  humanizeWorkDir,
+  jobFiles,
+  outputDir,
+  prepareFile,
+  readJson,
+} from "../src/article-agent-bridge.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -91,6 +98,8 @@ function emptyRemoved() {
     removedPlanFiles: 0,
     removedRuns: 0,
     removedCandidates: 0,
+    removedHumanized: 0,
+    removedHumanizeWork: 0,
   };
 }
 
@@ -116,6 +125,17 @@ function cleanNodeOutput({ root, subject, id, stepEntries, dryRun }) {
       if (key === "material") removed.removedMaterials += 1;
       else if (key === "plan" || key === "legacyPlan") removed.removedPlanFiles += 1;
       else removed.removedJobs += 1;
+    }
+
+    const record = humanizeRecordPath(root, { subject, node: id, step: entry.id });
+    if (existsSync(record)) {
+      if (!dryRun) rmSync(record, { force: true });
+      removed.removedHumanized += 1;
+    }
+    const workDir = humanizeWorkDir(root, { subject, node: id, step: entry.id });
+    if (existsSync(workDir)) {
+      if (!dryRun) rmSync(workDir, { recursive: true, force: true });
+      removed.removedHumanizeWork += 1;
     }
   }
   const prepare = prepareFile(root, subject, id);
@@ -248,7 +268,8 @@ function main(argv) {
         `${prefix}${node.id}: ${node.status} → confirmed; removed ${node.removedArticles} article(s), ` +
           `${node.removedAssets} asset folder(s), ${node.removedOrphans} other entr${node.removedOrphans === 1 ? "y" : "ies"}; ` +
           `${node.removedMaterials} material(s), ${node.removedJobs} job file(s), ${node.removedPlanFiles} plan file(s), ` +
-          `${node.removedRuns} article-run folder(s), ${node.removedCandidates} quiz candidate(s); ` +
+          `${node.removedRuns} article-run folder(s), ${node.removedCandidates} quiz candidate(s), ` +
+          `${node.removedHumanized} humanize record(s), ${node.removedHumanizeWork} humanize workspace(s); ` +
           "kept node container",
       );
     }
