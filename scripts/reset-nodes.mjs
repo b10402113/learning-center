@@ -9,13 +9,16 @@
  *
  * Add --dry-run to preview. The node container's steps array, purposes, sources,
  * and lesson are kept; status returns to `confirmed` and every article becomes a
- * bare H1 skeleton. Generated figures under <step>-assets/ are removed.
+ * bare H1 skeleton. Generated figures under <step>-assets/ are removed, along with
+ * the node's intermediate pipeline artifacts under learn/<subject>/output/
+ * (material bundles, job files, prepare state, and article-agent run folders).
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
+import { jobFiles, outputDir, prepareFile, readJson } from "../src/article-agent-bridge.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -81,6 +84,61 @@ function setFrontmatterFields(text, fields) {
   return `---\n${block}\n---${text.slice(match[0].length)}`;
 }
 
+function emptyRemoved() {
+  return {
+    removedMaterials: 0,
+    removedJobs: 0,
+    removedPlanFiles: 0,
+    removedRuns: 0,
+    removedCandidates: 0,
+  };
+}
+
+function cleanNodeOutput({ root, subject, id, stepEntries, dryRun }) {
+  const removed = emptyRemoved();
+  const runDirs = new Set();
+  for (const entry of stepEntries) {
+    const files = jobFiles(root, { subject, node: id, step: entry.id });
+    const result = readJson(files.result);
+    if (typeof result?.outputDir === "string") runDirs.add(resolve(result.outputDir));
+    for (const [key, path] of [
+      ["material", files.material],
+      ["original", files.original],
+      ["plan", files.plan],
+      ["legacyPlan", files.legacyPlan],
+      ["protected", files.protected],
+      ["blocks", files.blocks],
+      ["request", files.request],
+      ["result", files.result],
+    ]) {
+      if (!existsSync(path)) continue;
+      if (!dryRun) rmSync(path, { force: true });
+      if (key === "material") removed.removedMaterials += 1;
+      else if (key === "plan" || key === "legacyPlan") removed.removedPlanFiles += 1;
+      else removed.removedJobs += 1;
+    }
+  }
+  const prepare = prepareFile(root, subject, id);
+  if (existsSync(prepare)) {
+    if (!dryRun) rmSync(prepare, { force: true });
+    removed.removedJobs += 1;
+  }
+  const outRoot = resolve(outputDir(root, subject));
+  for (const dir of runDirs) {
+    const rel = relative(outRoot, dir);
+    if (!rel || rel.startsWith("..") || isAbsolute(rel)) continue;
+    if (!existsSync(dir)) continue;
+    if (!dryRun) rmSync(dir, { recursive: true, force: true });
+    removed.removedRuns += 1;
+  }
+  const candidatesDir = join(outRoot, "quiz-candidates", id);
+  if (existsSync(candidatesDir)) {
+    removed.removedCandidates = readdirSync(candidatesDir).length;
+    if (!dryRun) rmSync(candidatesDir, { recursive: true, force: true });
+  }
+  return removed;
+}
+
 export function resetNodes({ root = REPO_ROOT, subject, all = false, tier = null, nodes = [], dryRun = false, today }) {
   const nodeIds = resolveNodeIds({ root, subject, all, tier, nodes });
   const nodesDir = join(root, "learn", subject, "nodes");
@@ -102,7 +160,15 @@ export function resetNodes({ root = REPO_ROOT, subject, all = false, tier = null
     const { id, containerPath, parsed, stepEntries } = plan;
     const status = String(parsed.data.status);
     if (status === "draft" || stepEntries.length === 0) {
-      results.push({ id, status, skipped: "draft", removedArticles: 0, removedAssets: 0, removedOrphans: 0 });
+      results.push({
+        id,
+        status,
+        skipped: "draft",
+        removedArticles: 0,
+        removedAssets: 0,
+        removedOrphans: 0,
+        ...emptyRemoved(),
+      });
       continue;
     }
 
@@ -121,6 +187,8 @@ export function resetNodes({ root = REPO_ROOT, subject, all = false, tier = null
       }
     }
 
+    const output = cleanNodeOutput({ root, subject, id, stepEntries, dryRun });
+
     if (!dryRun) {
       rmSync(nodeDir, { recursive: true, force: true });
       mkdirSync(nodeDir, { recursive: true });
@@ -132,7 +200,7 @@ export function resetNodes({ root = REPO_ROOT, subject, all = false, tier = null
       writeFileSync(containerPath, setFrontmatterFields(container, { status: "confirmed", updated }));
     }
 
-    results.push({ id, status, skipped: null, removedArticles, removedAssets, removedOrphans });
+    results.push({ id, status, skipped: null, removedArticles, removedAssets, removedOrphans, ...output });
   }
 
   return { subject, dryRun, nodes: results };
@@ -179,6 +247,8 @@ function main(argv) {
       console.log(
         `${prefix}${node.id}: ${node.status} → confirmed; removed ${node.removedArticles} article(s), ` +
           `${node.removedAssets} asset folder(s), ${node.removedOrphans} other entr${node.removedOrphans === 1 ? "y" : "ies"}; ` +
+          `${node.removedMaterials} material(s), ${node.removedJobs} job file(s), ${node.removedPlanFiles} plan file(s), ` +
+          `${node.removedRuns} article-run folder(s), ${node.removedCandidates} quiz candidate(s); ` +
           "kept node container",
       );
     }

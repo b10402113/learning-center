@@ -1,7 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 export const ARTICLE_AGENT_DIR = "article-agent";
+export const MAX_STEP_IMAGES = 5;
+export const REPO_IMAGE_STYLE =
+  "暖白色背景（#FAF8F5）、炭灰色線條圖示（#34383F）、亮橘色重點（#FF7A1A）、淡橘色標籤框（#FFF0DE）、深灰色文字（#333333）；平面向量、乾淨留白，不使用漸層或照片。";
 
 const PROVENANCE = /^<!--\s*(?:source:\s*sources\/\S+\s*|derived\s*)-->$/;
 const PLACEHOLDER = /<!--code:(\d+)-->/g;
@@ -22,6 +25,10 @@ export function materialsDir(root, subject) {
   return join(outputDir(root, subject), "materials");
 }
 
+export function imagePlansDir(root, subject, node) {
+  return join(outputDir(root, subject), "image-plans", node);
+}
+
 export function stepSlug(subject, node, step) {
   return `${subject}-${node}-${step}`;
 }
@@ -34,6 +41,8 @@ export function jobFiles(root, { subject, node, step }) {
     dir,
     material: join(materialsDir(root, subject), `${slug}.json`),
     original: join(dir, `${slug}.original.md`),
+    plan: join(imagePlansDir(root, subject, node), `${step}.json`),
+    legacyPlan: join(dir, `${slug}.plan.json`),
     protected: join(dir, `${slug}.protected.md`),
     blocks: join(dir, `${slug}.blocks.json`),
     request: join(dir, `${slug}.request.json`),
@@ -46,17 +55,11 @@ export function prepareFile(root, subject, node) {
 }
 
 export function buildBrief(entry, context = {}) {
-  const { hasCode = false, nodeTitle = null, index = null, total = null, previous = null, next = null } = context;
+  const { hasCode = false } = context;
   const lines = [
     `改寫成清楚、自然、好讀的繁體中文文章；保留原稿的事實、觀點與段落順序，不要新增事實或引述。`,
     `這一課要讓讀者：${entry.purpose}`,
   ];
-  if (nodeTitle && index && total) {
-    const neighbours = [previous ? `上一課是「${previous}」` : "這是第一課", next ? `下一課是「${next}」` : "這是最後一課"];
-    lines.push(
-      `這一課是《${nodeTitle}》的第 ${index}/${total} 課，${neighbours.join("，")}。原稿承接前後課的句子，照原樣保留。`,
-    );
-  }
   if (hasCode) {
     lines.push(
       "文中若出現 <!--code:N--> 這種標記，原樣保留在原本位置，不要改寫、刪除或移動。",
@@ -65,10 +68,62 @@ export function buildBrief(entry, context = {}) {
   return lines.join("\n");
 }
 
+const normalizeSpace = (text) => String(text ?? "").replace(/\s+/g, " ").trim();
+
+export function normalizeStepPlan(raw) {
+  const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (!Array.isArray(parsed)) throw new Error("image plan must be a JSON array");
+  if (parsed.length < 1 || parsed.length > MAX_STEP_IMAGES) {
+    throw new Error(`image plan must have 1-${MAX_STEP_IMAGES} items, got ${parsed.length}`);
+  }
+  return parsed.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`image plan item ${index + 1} must be an object`);
+    }
+    const anchor = String(item.anchor ?? "").trim();
+    const prompt = String(item.prompt ?? "").trim();
+    if (!anchor) throw new Error(`image plan item ${index + 1} needs a non-empty anchor`);
+    if (!prompt) throw new Error(`image plan item ${index + 1} needs a non-empty prompt`);
+    return { index: index + 1, heading: String(item.heading ?? "").trim(), anchor, prompt };
+  });
+}
+
+export function assertPlanAnchors(plan, original) {
+  const text = normalizeSpace(original);
+  for (const item of plan) {
+    if (!text.includes(normalizeSpace(item.anchor))) {
+      throw new Error(`image plan item ${item.index} anchor is not verbatim in the original: ${item.anchor}`);
+    }
+  }
+  return plan;
+}
+
+export function readStepPlan(root, { subject, node, step }, original) {
+  const files = jobFiles(root, { subject, node, step });
+  const raw = readJson(files.plan);
+  if (raw == null) {
+    throw new Error(`image plan not found: ${relative(root, files.plan)}`);
+  }
+  const plan = normalizeStepPlan(raw);
+  return original ? assertPlanAnchors(plan, original) : plan;
+}
+
+export function buildRequest(root, { subject, files, entry, plan, hasCode }) {
+  return {
+    articleFile: files.protected,
+    brief: buildBrief(entry, { hasCode }),
+    imagePlan: plan.map(({ heading, anchor, prompt }) => ({ heading, anchor, prompt })),
+    imageStyle: REPO_IMAGE_STYLE,
+    imageTemplate: readFileSync(join(root, "prompts", "image.txt"), "utf8"),
+    outputRoot: outputDir(root, subject),
+  };
+}
+
 export function writeMaterial(root, { subject, node, entry, slices }) {
   const files = jobFiles(root, { subject, node, step: entry.id });
   mkdirSync(files.dir, { recursive: true });
   mkdirSync(materialsDir(root, subject), { recursive: true });
+  mkdirSync(imagePlansDir(root, subject, node), { recursive: true });
   const material = {
     subject,
     node,

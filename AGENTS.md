@@ -9,7 +9,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 ```text
 ├── AGENTS.md                 ← repository schema and workflow
 ├── CLAUDE.md                 ← @AGENTS.md
-├── docs/reference/           ← shared protocols: source reading, verify, polish
+├── docs/reference/           ← shared protocols: source reading, verify, polish, skill scope
 ├── sources/                  ← raw, immutable inputs, one folder per subject
 ├── learn/<subject>/
 │   ├── MEMORY.md             ← learner profile from /learn-init (incl. language)
@@ -19,14 +19,16 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 │   │   ├── <node>.md         ← node container: frontmatter plan + lesson
 │   │   └── <node>/
 │   │       ├── <step>.md     ← the step article
+│   │       ├── <step>.quiz.json  ← 3–8 generated single-choice questions
 │   │       └── <step>-assets/image-N.webp
 │   └── edges/                ← optional relationship pages between steps/nodes
-├── src/                      ← article.mjs, article-cli.mjs, article-agent-bridge.mjs, llm.mjs, image-provider.mjs
+├── src/                      ← article.mjs, article-cli.mjs, article-agent-bridge.mjs, quiz.mjs, llm.mjs, image-provider.mjs
 ├── prompts/                  ← article.txt, image-plan.txt, image.txt
-├── scripts/                  ← verify.mjs, publish-article.mjs, run-article-agent.mjs, pdf-backfill.mjs, digest-status.mjs
+├── scripts/                  ← verify.mjs, quiz.mjs, publish-article.mjs, run-article-agent.mjs, pdf-backfill.mjs, digest-status.mjs
 ├── article-agent/            ← git submodule: publisher-era rewrite pipeline (prompts/rewrite.txt, src/pipeline.mjs)
 ├── course-app/               ← React (Vite + Tailwind) course viewer
 ├── previews/                 ← static design previews for the course viewer
+├── .opencode/agent/          ← subagent definitions (publisher, quiz-agent, …)
 ├── .opencode/skills/         ← active slash-command skills
 ├── legacy/                   ← retired HTML/MDX pipeline; no active flow imports it
 └── wiki/                     ← legacy, no longer maintained
@@ -41,8 +43,12 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
     → /ingest <subject>              ← add new source material: digests only
     → /roadmap <subject>
     → /nodes <subject>/<node-id>
-    → /article <subject>/<node-id> [--images]
+    → /article <subject>/<node-id> [--no-images] [--no-continuity]
+    → /quiz-gen <subject>/<node-id> [--step <id>] [--force]
     → /edges <subject>/<node-id>     ← optional high-value relationships
+
+/batch-nodes <subject> [tier<N> | <node-id> ...] [flags]
+                                     ← optional bulk path: /nodes → /article → /quiz-gen
 
 /absorb <subject>                    ← integrate pending digests into the graph
 ```
@@ -53,12 +59,14 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 | `/ingest` | Archive new source files and write `pending` digests. Does not touch roadmap, nodes, or articles. |
 | `/roadmap` | Propose ≥5 learning paths, confirm one, partition into nodes, write `ROADMAP.md` and `draft` node containers. |
 | `/nodes` | Reasoning checkpoint per node: write the `steps` array (`id`, `title`, `purpose`, `sources`), create H1-only article skeletons, set `confirmed`. |
-| `/article` | `prepare` slices each step into a material bundle; the `publisher` agent writes all originals for the node, one agent per node so steps flow into each other; `article-agent`'s `rewrite.txt` rewrites each original; `publish` writes `<step>.md` and verifies. `--images` plans and generates WebP figures. |
+| `/article` | `prepare` slices each step into a material bundle; one `publisher` subagent per step writes that step's original and its 1–5 item image plan; `article-agent` rewrites once with image markers and generates the figures; `publish` writes `<step>.md` and its WebP figures, then verifies. The main agent then edits prose only to add continuity between steps. |
+| `/quiz-gen` | One `quiz-agent` per published step reads the article and writes 3–8 single-choice questions; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; course-app renders them after the article. |
+| `/batch-nodes` | Optional bulk path over a tier or node list: parallel Nodes subagents write the step plans, batched `publisher` subagents write and publish the articles (with continuity), then batched `quiz-agent` subagents write the sidecars. Resumes from node state; `-force` regenerates articles and quizzes. |
 | `/absorb` | Read `pending` digests, append steps to existing nodes or create new nodes, mark digests `absorbed`, roll affected nodes back to `confirmed`. |
 | `/edges` | Optional relationship pages between steps or nodes. |
 | `/reset-nodes` | Reset chosen nodes to `confirmed`, delete generated articles and figures, keep the plan. |
 
-`/practice` (generated practice sets) is **out of scope**. The `quiz` block format and its course-app renderer remain available; articles do not need a practice section.
+`/practice` (generated practice sets) is **out of scope**. Step quizzes are generated sidecars (`<step>.quiz.json`); course-app renders them after the article. The legacy fenced `quiz` block still renders for old content, but new questions belong in the sidecar.
 
 ## Core Principles
 
@@ -69,7 +77,8 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 5. **Verify is the format gate** — `scripts/verify.mjs` is the single source of truth; every format rule is a hard failure with a negative fixture.
 6. **No HTML, no MDX** — the course-app renders Markdown. Nothing in the active flow imports from `legacy/`.
 7. **Code is source-grounded** — quote source code verbatim when the source has it, write it from the prose otherwise, and mark every fenced block with `<!-- source: sources/…#Lx-Ly -->` or `<!-- derived -->`.
-8. **Images are generated, not hand-placed** — `/article --images` plans where figures go and writes `image-N.webp`; it reuses existing files on rerun.
+8. **Images are generated, not hand-placed** — the `publisher` decides the image plan while writing each step, and `/article` writes `image-N.webp`; it reuses existing files on rerun.
+9. **Quizzes are sidecars** — `/quiz-gen` writes `<step>.quiz.json`; the article Markdown stays untouched, and course-app renders the questions after the article.
 
 ## Formats
 
@@ -119,24 +128,29 @@ Rules:
 - No frontmatter. The first non-empty line is `# <step title>`.
 - Free length and free `##` sections; Traditional Chinese, short paragraphs, editorial tone.
 - Do **not** write a source list or inline citations — course-app aggregates the step's sources below the article.
-- Do **not** write a practice section; the optional `quiz` block is the only exercise format the renderer knows.
+- Do **not** write a practice section or inline quiz. Generated questions live in the sibling `<step>.quiz.json`.
 - Images: `![第 N 段配圖](./<step>-assets/image-N.webp)` followed by `*AI 生成示意圖*`.
-- Every fenced code block except `quiz` needs a provenance comment immediately above it.
+- Every fenced code block needs a provenance comment immediately above it. The legacy `quiz` fence is data and carries none.
 
-### Quiz block
+### Quiz sidecar — `learn/<subject>/nodes/<node-id>/<step-id>.quiz.json`
 
-````markdown
-```quiz
+```json
 {
-  "question": "...",
-  "options": ["...", "..."],
-  "answer": 1,
-  "explain": "..."
+  "quiz-generated": true,
+  "questions": [
+    {
+      "question": "...",
+      "options": ["...", "..."],
+      "answer": 1,
+      "explain": "..."
+    }
+  ]
 }
 ```
-````
 
-One question per block, pure JSON, `answer` is a 0-based index, `options` has 2–5 strings, `explain` is non-empty. `quiz` blocks carry no provenance comment.
+One file per step. `questions` has 3–8 entries; every entry has a non-empty `question`, 2–5 non-empty `options`, a 0-based integer `answer`, and a non-empty `explain`. `/quiz-gen` writes this file; course-app renders the questions after the article and before the source list. The file is not merged into the Markdown.
+
+The legacy fenced `quiz` block is still accepted by the renderer and `verify`, but new content should not add one.
 
 ### Digest — `learn/<subject>/digests/<stem>.md`
 
@@ -167,7 +181,7 @@ Frontmatter: `title`, `type`, `from`, `to`, `nodes`, `created`, `updated`. `from
 
 ### Course viewer
 
-`course-app/` reads `learn/` directly. The node page lists steps in `steps` array order and marks a step without a body as `尚未產生`. The step page renders the Markdown article, turns a fenced `quiz` block into an interactive question, resolves figures under `<step>-assets/`, aggregates the step's sources at the end, and shows prev/next links in array order. There is no status badge or progress tracking.
+`course-app/` reads `learn/` directly. The node page lists steps in `steps` array order and marks a step without a body as `尚未產生`. The step page renders the Markdown article, turns a fenced `quiz` block into an interactive question, renders the `<step>.quiz.json` questions under a `自我檢查` section, resolves figures under `<step>-assets/`, aggregates the step's sources at the end, and shows prev/next links in array order. There is no status badge or progress tracking.
 
 ## Status
 
@@ -193,13 +207,28 @@ node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force
 node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only]
 ```
 
-- Default engine: `prepare` writes one material bundle per missing step to `learn/<subject>/output/materials/`; the `publisher` subagent writes all originals for the node to `learn/<subject>/output/jobs/`; `run-article-agent.mjs` protects code blocks and runs `article-agent`'s rewrite; `publish` restores the code, normalizes the H1, writes `learn/<subject>/nodes/<node>/<step>.md`, and runs verify.
-- The subtitle `article` command is the legacy engine: one text request per missing step, straight from the cited source slices.
+- Default engine: `prepare` writes one material bundle per missing step to `learn/<subject>/output/materials/`; one `publisher` subagent per step writes that step's original under `learn/<subject>/output/jobs/` and its `plan` to `learn/<subject>/output/image-plans/<node>/<step>.json`; `run-article-agent.mjs` validates the plan, protects code blocks, and runs `article-agent`'s single rewrite plus the figures; `publish` restores the code, converts the figures to WebP under `<step>-assets/`, rewrites their links, normalizes the H1, writes `learn/<subject>/nodes/<node>/<step>.md`, and runs verify.
+- The main agent then reads the published steps in order and edits prose only (openings, handoffs, repeated term definitions); it never moves code blocks, image lines, `quiz` blocks, or the H1.
+- The subtitle `article` command remains as a deprecated single-request engine: one text request per missing step, straight from the cited source slices.
 - Missing or H1-only articles are generated; articles with a body are skipped unless `--force`.
-- The image count comes from the finished article's Traditional Chinese character count (1–5).
+- The `publisher` decides how many figures a step gets (1–5), spread across the article; `--no-images` skips the plan requirement and the figures entirely.
 - Existing images are reused; a second run with no changes makes no image requests.
 - `image --plan-only` writes the plan to `learn/<subject>/output/image-plans/<node>/<step>.json` and generates nothing; edit it, then rerun `image` to generate from that plan. `--plan-only --force` rebuilds the plan; plain `--force` regenerates images from the current plan.
 - The CLI prints JSON per-step status plus the verify result.
+
+### Quiz generation
+
+```bash
+node scripts/quiz.mjs prepare --subject <s> --node <n> [--step <id>] [--force]
+node scripts/quiz.mjs write   --subject <s> --node <n> --step <id> --input <file|-> [--force]
+node scripts/quiz.mjs status  --subject <s> --node <n>
+```
+
+- `/quiz-gen` runs `prepare`, dispatches one `quiz-agent` per ready step, writes the agent's JSON to `learn/<subject>/output/quiz-candidates/`, then runs `write` to validate and publish `<step>.quiz.json`.
+- Each step gets 3–8 questions. The length ceiling is `min(8, max(3, round(CJK字數 / 250)))`; an article that cannot support 3 distinct questions fails instead of padding.
+- `prepare` skips existing quiz files unless `--force`; `write` refuses to overwrite without `--force`.
+- Nothing is inserted into the article Markdown. Regenerate course-app data with `npm --prefix course-app run gen`.
+- After a batch, run `node scripts/verify.mjs --node <subject>/<node>`.
 
 ### PDF backfill
 
@@ -215,7 +244,7 @@ Idempotent: existing `.txt` files are not overwritten, so line numbers stay stab
 node scripts/reset-nodes.mjs --subject <subject> (--all | --tier <n> | --node <id> ...) [--dry-run]
 ```
 
-Keeps each node container and its step plan; sets `status: confirmed`, rewrites every step article as a bare H1 skeleton, and removes figures. `/article` then regenerates the bodies.
+Keeps each node container and its step plan; sets `status: confirmed`, rewrites every step article as a bare H1 skeleton, removes figures, and deletes the node's intermediate `output/` artifacts (material bundles, job files, image plans, article-agent run folders, quiz candidates). `/article` then regenerates the bodies from scratch.
 
 ### Lint
 
@@ -224,7 +253,7 @@ node scripts/verify.mjs --subject <subject>
 node scripts/verify.mjs --node <subject>/<node-id>
 ```
 
-It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, H1, `## Steps`, source locators and digest coverage, code provenance, quiz JSON, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
+It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, H1, `## Steps`, source locators and digest coverage, code provenance, quiz sidecars, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
 
 ### Query
 

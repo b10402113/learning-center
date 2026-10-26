@@ -7,7 +7,7 @@ argument-hint: "/reset-nodes <subject> [tier<N> | <node-id> ...] [-dry-run] [-sk
 
 Invoke as `/reset-nodes <subject> [tier<N> | <node-id> ...] [-dry-run] [-skip-ask]`.
 
-Reset nodes to the state `/nodes` leaves behind: status `confirmed`, node container intact, every step a bare `# <title>` skeleton, no figures. That is the trigger state `/article` regenerates from — use it to rebuild a node with a different model or after the plan changed.
+Reset nodes to the state `/nodes` leaves behind: status `confirmed`, node container intact, every step a bare `# <title>` skeleton, no figures. It also clears the node's intermediate `output/` artifacts (material bundles, job files, image plans, article-agent run folders, quiz candidates) so a later `/article` run starts fresh instead of resurrecting old articles. That is the trigger state `/article` regenerates from — use it to rebuild a node with a different model or after the plan changed.
 
 **Scope**
 
@@ -29,7 +29,7 @@ Prereqs: `learn/<subject>/ROADMAP.md` and `learn/<subject>/nodes/` exist. If eit
 
    The script resolves the roadmap and validates every node container. A missing container or tier fails before anything changes. If the learner passed `-dry-run`, stop here.
 
-2. **Confirm.** Show each resolved node and its transition to `confirmed`, and what disappears: article bodies become `# <title>` skeletons, `<step>-assets/` folders are removed. State what survives: the node container, roadmap, MEMORY, digests, edges, and every other node. Ask the learner to confirm; skip with `-skip-ask`.
+2. **Confirm.**    Show each resolved node and its transition to `confirmed`, and what disappears: article bodies become `# <title>` skeletons, `<step>-assets/` folders are removed, and the node's `output/` artifacts (material bundles, job files, image plans, article-agent run folders, quiz candidates) are deleted. State what survives: the node container, roadmap, MEMORY, digests, edges, and every other node. Ask the learner to confirm; skip with `-skip-ask`.
 
 3. **Reset.** Re-run the same command without `--dry-run`. The script owns the file surgery — never delete or rewrite files by hand.
 
@@ -45,6 +45,11 @@ Completion: every resolved node is `confirmed` with its step skeletons restored,
 | `nodes/<node>/<step>.md` | body replaced by `# <title>` |
 | `nodes/<node>/<step>-assets/` | removed |
 | orphan files in `nodes/<node>/` | removed |
+| `output/materials/<subject>-<node>-<step>.json` | removed |
+| `output/image-plans/<node>/<step>.json` | removed |
+| `output/jobs/<subject>-<node>-*` (incl. `prepare.json` and legacy `*.plan.json`) | removed |
+| `output/quiz-candidates/<node>/` | removed |
+| `output/article_<timestamp>_*` folders referenced by the node's `result.json` | removed |
 | `ROADMAP.md`, `MEMORY.md`, `digests/`, `edges/`, other nodes | untouched |
 
 A `draft` node has no steps to reset; it is reported and skipped.
