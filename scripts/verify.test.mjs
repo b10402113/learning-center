@@ -611,6 +611,121 @@ test("a quiz needs a non-empty explanation", (t) => {
   assert.ok(failures(root).includes("quiz-explain"));
 });
 
+function validQuizFile(questions = [
+  validQuiz({ question: "Question one?" }),
+  validQuiz({ question: "Question two?" }),
+  validQuiz({ question: "Question three?" }),
+]) {
+  return { "quiz-generated": true, questions };
+}
+
+function writeQuizFile(root, payload, step = "s1") {
+  write(
+    root,
+    `learn/test/nodes/n1/${step}.quiz.json`,
+    typeof payload === "string" ? payload : JSON.stringify(payload),
+  );
+}
+
+test("a valid quiz sidecar passes", (t) => {
+  const root = fixture(t);
+  writeQuizFile(root, validQuizFile());
+  assert.deepEqual(failures(root), []);
+});
+
+test("a quiz sidecar must contain valid JSON", (t) => {
+  const root = fixture(t);
+  writeQuizFile(root, "{not json");
+  assert.ok(failures(root).includes("quiz-file-json"));
+});
+
+test("a quiz sidecar must be a JSON object", (t) => {
+  const root = fixture(t);
+  writeQuizFile(root, []);
+  assert.ok(failures(root).includes("quiz-file-json"));
+});
+
+test("a quiz sidecar needs the generated marker", (t) => {
+  for (const payload of [
+    { questions: validQuizFile().questions },
+    { ...validQuizFile(), "quiz-generated": false },
+  ]) {
+    const root = fixture(t);
+    writeQuizFile(root, payload);
+    assert.ok(failures(root).includes("quiz-file-marker"));
+  }
+});
+
+test("a quiz sidecar needs three to eight questions", (t) => {
+  for (const count of [2, 9]) {
+    const root = fixture(t);
+    const questions = Array.from({ length: count }, (_, index) =>
+      validQuiz({ question: `Question ${index + 1}?` }),
+    );
+    writeQuizFile(root, validQuizFile(questions));
+    assert.ok(failures(root).includes("quiz-file-count"), `count ${count}`);
+  }
+});
+
+test("a quiz sidecar may not exceed the article's question ceiling", (t) => {
+  const root = fixture(t);
+  writeQuizFile(root, validQuizFile([
+    validQuiz({ question: "Question one?" }),
+    validQuiz({ question: "Question two?" }),
+    validQuiz({ question: "Question three?" }),
+    validQuiz({ question: "Question four?" }),
+  ]));
+  assert.ok(failures(root).includes("quiz-file-count"));
+});
+
+test("a quiz sidecar question must be non-empty", (t) => {
+  const root = fixture(t);
+  writeQuizFile(root, validQuizFile([
+    validQuiz({ question: " " }),
+    validQuiz(),
+    validQuiz(),
+  ]));
+  assert.ok(failures(root).includes("quiz-file-question"));
+});
+
+test("a quiz sidecar needs two to five options", (t) => {
+  for (const options of [["only"], ["1", "2", "3", "4", "5", "6"]]) {
+    const root = fixture(t);
+    writeQuizFile(root, validQuizFile([
+      validQuiz({ options }),
+      validQuiz(),
+      validQuiz(),
+    ]));
+    assert.ok(failures(root).includes("quiz-file-options"), JSON.stringify(options));
+  }
+});
+
+test("a quiz sidecar answer must be an index in range", (t) => {
+  const root = fixture(t);
+  writeQuizFile(root, validQuizFile([
+    validQuiz({ answer: 3 }),
+    validQuiz(),
+    validQuiz(),
+  ]));
+  assert.ok(failures(root).includes("quiz-file-answer"));
+});
+
+test("a quiz sidecar needs a non-empty explanation", (t) => {
+  const root = fixture(t);
+  writeQuizFile(root, validQuizFile([
+    validQuiz({ explain: " " }),
+    validQuiz(),
+    validQuiz(),
+  ]));
+  assert.ok(failures(root).includes("quiz-file-explain"));
+});
+
+test("a quiz sidecar needs a matching step article", (t) => {
+  const root = fixture(t);
+  writeQuizFile(root, validQuizFile(), "missing-step");
+  assert.ok(failures(root).includes("quiz-orphan"));
+});
+
 function webpBytes() {
   return Buffer.concat([Buffer.from("RIFF"), Buffer.from([16, 0, 0, 0]), Buffer.from("WEBP"), Buffer.from("VP8 ")]);
 }

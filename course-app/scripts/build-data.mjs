@@ -16,6 +16,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import matter from "gray-matter";
+import { countArticleCharacters } from "../../src/article.mjs";
+import { maxQuestionsFor, validateQuizPayload } from "../../src/quiz.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "..");
@@ -133,6 +135,38 @@ function hasArticleBody(markdown) {
   return lines.slice(index).join("\n").trim().length > 0;
 }
 
+function readQuizzes({ nodesDir, nodeId, stepId, characters }) {
+  const file = path.join(nodesDir, nodeId, `${stepId}.quiz.json`);
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return [];
+
+  let payload;
+  try {
+    payload = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    console.warn(
+      `⚠ Skipped ${path.relative(REPO_ROOT, file)}: ${error.message}`,
+    );
+    return [];
+  }
+
+  const errors = validateQuizPayload(payload, {
+    maxQuestions: maxQuestionsFor(characters),
+  });
+  if (errors.length > 0) {
+    console.warn(
+      `⚠ Skipped ${path.relative(REPO_ROOT, file)}: ${errors[0].message}`,
+    );
+    return [];
+  }
+
+  return payload.questions.map(({ question, options, answer, explain }) => ({
+    question,
+    options,
+    answer,
+    explain,
+  }));
+}
+
 function readStep({ nodesDir, nodeId, entry, order }) {
   const spec = entry && typeof entry === "object" ? entry : { id: entry };
   const file = path.join(nodesDir, nodeId, `${spec.id}.md`);
@@ -144,12 +178,21 @@ function readStep({ nodesDir, nodeId, entry, order }) {
     sources: (spec.sources || []).map(parseSource),
     articleMd: "",
     hasContent: false,
+    quizzes: [],
   };
 
   if (fs.existsSync(file) && fs.statSync(file).isFile()) {
     const { body } = readMarkdown(file);
     step.articleMd = body.trim();
     step.hasContent = hasArticleBody(step.articleMd);
+    if (step.hasContent) {
+      step.quizzes = readQuizzes({
+        nodesDir,
+        nodeId,
+        stepId: spec.id,
+        characters: countArticleCharacters(step.articleMd),
+      });
+    }
   }
 
   return step;

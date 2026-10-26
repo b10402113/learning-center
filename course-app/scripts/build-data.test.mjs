@@ -151,6 +151,88 @@ test("reads Markdown nodes and keeps frontmatter step order", () => {
   assert.equal(node.status, undefined, "the viewer no longer exposes node status");
 });
 
+function quizPayload() {
+  return {
+    "quiz-generated": true,
+    questions: [
+      {
+        question: "Question one?",
+        options: ["One", "Two", "Three"],
+        answer: 0,
+        explain: "Because one is first.",
+      },
+      {
+        question: "Question two?",
+        options: ["One", "Two", "Three"],
+        answer: 1,
+        explain: "Because two is second.",
+      },
+      {
+        question: "Question three?",
+        options: ["One", "Two", "Three"],
+        answer: 2,
+        explain: "Because three is third.",
+      },
+    ],
+  };
+}
+
+function stepOneQuizPath(learnRoot) {
+  return path.join(learnRoot, "demo", "nodes", "node-a", "step-one.quiz.json");
+}
+
+test("reads a quiz sidecar onto its step", () => {
+  const { learnRoot, appRoot } = fixture();
+  write(stepOneQuizPath(learnRoot), JSON.stringify(quizPayload()));
+
+  const course = buildSubject("demo", { learnRoot, appRoot });
+  const step = course.nodes[0].steps.find((item) => item.id === "step-one");
+
+  assert.equal(step.quizzes.length, 3);
+  assert.deepEqual(step.quizzes[0], {
+    question: "Question one?",
+    options: ["One", "Two", "Three"],
+    answer: 0,
+    explain: "Because one is first.",
+  });
+});
+
+test("skips an invalid quiz sidecar without failing the build", (t) => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  t.after(() => {
+    console.warn = originalWarn;
+  });
+
+  for (const payload of [
+    "{not json",
+    JSON.stringify({ ...quizPayload(), "quiz-generated": false }),
+    JSON.stringify({
+      "quiz-generated": true,
+      questions: quizPayload().questions.slice(0, 2),
+    }),
+    JSON.stringify({
+      "quiz-generated": true,
+      questions: [
+        ...quizPayload().questions,
+        {
+          question: "Question four?",
+          options: ["One", "Two", "Three"],
+          answer: 0,
+          explain: "Too many for this article.",
+        },
+      ],
+    }),
+  ]) {
+    const { learnRoot, appRoot } = fixture();
+    write(stepOneQuizPath(learnRoot), payload);
+
+    const course = buildSubject("demo", { learnRoot, appRoot });
+    const step = course.nodes[0].steps.find((item) => item.id === "step-one");
+    assert.deepEqual(step.quizzes, []);
+  }
+});
+
 test("orders nodes by relative roadmap links", () => {
   const { learnRoot, appRoot } = fixture();
   write(

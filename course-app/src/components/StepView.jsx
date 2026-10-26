@@ -1,4 +1,5 @@
 import Markdown from "./Markdown.jsx";
+import Quiz from "./Quiz.jsx";
 import { tierDotClass } from "./Sidebar.jsx";
 import { hashFor } from "../lib/route.mjs";
 import { stepNeighbors } from "../lib/steps.mjs";
@@ -71,6 +72,7 @@ export default function StepView({ course, node, step }) {
   const assetBase = `${BASE}nodes/${encodeURIComponent(course.subject)}/${encodeURIComponent(node.id)}/`;
   const { previous, next } = stepNeighbors(node.steps, step.id);
   const sources = step.sources || [];
+  const quizzes = Array.isArray(step.quizzes) ? step.quizzes : [];
   const minutes = readingMinutes(step.articleMd);
   // The article body repeats the step title as an H1; the header already
   // renders it, so drop the leading heading before rendering.
@@ -133,6 +135,31 @@ export default function StepView({ course, node, step }) {
           </div>
         )}
       </div>
+
+      {quizzes.length > 0 && (
+        <section
+          className="mt-14 border-t-2 border-ink pt-8"
+          aria-label="自我檢查"
+        >
+          <p className="robo-kicker font-label text-[11px] font-medium text-accent">
+            SELF CHECK
+          </p>
+          <h2 className="mt-2 text-[1.45rem] font-medium leading-snug text-ink">
+            自我檢查
+          </h2>
+          <p className="mt-2 text-[0.95rem] text-ink-soft">
+            讀完之後，試著回答這幾題。
+          </p>
+          <div className="mt-6">
+            {quizzes.map((quiz, index) => (
+              <Quiz
+                key={`${index}-${quiz.question}`}
+                quiz={quiz}
+              />
+            ))}
+          </div>
+        </section>
+      )}
 
       {sources.length > 0 && (
         <section

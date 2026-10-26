@@ -3,6 +3,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
+import { countArticleCharacters } from "../src/article.mjs";
+import { maxQuestionsFor, validateQuizPayload } from "../src/quiz.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -98,18 +100,28 @@ function scanSubject(root, subject) {
     : [];
 
   const steps = [];
+  const quizFiles = [];
   if (existsSync(nodesDir)) {
     for (const entry of readdirSync(nodesDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const stepDir = join(nodesDir, entry.name);
       for (const file of readdirSync(stepDir, { withFileTypes: true })) {
-        if (!file.isFile() || !file.name.endsWith(".md")) continue;
-        steps.push({
-          nodeId: entry.name,
-          id: file.name.replace(/\.md$/, ""),
-          name: file.name,
-          path: join(stepDir, file.name),
-        });
+        if (!file.isFile()) continue;
+        if (file.name.endsWith(".md")) {
+          steps.push({
+            nodeId: entry.name,
+            id: file.name.replace(/\.md$/, ""),
+            name: file.name,
+            path: join(stepDir, file.name),
+          });
+        } else if (file.name.endsWith(".quiz.json")) {
+          quizFiles.push({
+            nodeId: entry.name,
+            id: file.name.slice(0, -".quiz.json".length),
+            name: file.name,
+            path: join(stepDir, file.name),
+          });
+        }
       }
     }
   }
@@ -128,7 +140,7 @@ function scanSubject(root, subject) {
   }));
   const sourceByRel = new Map(sources.map((source) => [source.rel, source]));
 
-  return { subjectDir, nodesDir, nodes, steps, digests, sources, sourceByRel };
+  return { subjectDir, nodesDir, nodes, steps, quizFiles, digests, sources, sourceByRel };
 }
 
 function parseSourceLink(link) {
@@ -417,6 +429,36 @@ function checkQuizBlocks(report, file, body) {
     if (typeof quiz.explain !== "string" || quiz.explain.trim() === "") {
       report.fail(file, block.line, "quiz-explain", "quiz.explain must be a non-empty string");
     }
+  }
+}
+
+function checkQuizFile(report, root, quiz, articleKeys, stepEntries, stepsByKey) {
+  const file = rel(root, quiz.path);
+  const key = `${quiz.nodeId}/${quiz.id}`;
+  if (!articleKeys.has(key) || !stepEntries.has(key)) {
+    report.fail(
+      file,
+      1,
+      "quiz-orphan",
+      "quiz file has no matching step article in the node plan",
+    );
+    return;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(readFileSync(quiz.path, "utf8"));
+  } catch {
+    report.fail(file, 1, "quiz-file-json", "quiz file must contain valid JSON");
+    return;
+  }
+
+  const step = stepsByKey.get(key);
+  const article = step ? readMarkdown(step.path) : { body: "" };
+  const maxQuestions = maxQuestionsFor(countArticleCharacters(article.body));
+
+  for (const error of validateQuizPayload(payload, { maxQuestions })) {
+    report.fail(file, 1, error.checkId, error.message);
   }
 }
 
@@ -818,6 +860,14 @@ export function runChecks({ root = REPO_ROOT, subject, node = null }) {
       if (entry && entry.id) stepEntries.set(`${item.id}/${entry.id}`, entry);
     }
   }
+  const stepsByKey = new Map(scan.steps.map((step) => [`${step.nodeId}/${step.id}`, step]));
+  const articleKeys = new Set(stepsByKey.keys());
+  const quizNodes = node ? new Set([node]) : new Set(scan.quizFiles.map((quiz) => quiz.nodeId));
+  for (const quiz of scan.quizFiles) {
+    if (!quizNodes.has(quiz.nodeId)) continue;
+    checkQuizFile(report, root, quiz, articleKeys, stepEntries, stepsByKey);
+  }
+
   const targets = node ? [nodesById.get(node)].filter(Boolean) : scan.nodes;
   if (node && !nodesById.has(node)) {
     report.fail("", 0, "node-missing", `node "${node}" not found under nodes/`);

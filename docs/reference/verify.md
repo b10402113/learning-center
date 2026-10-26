@@ -4,7 +4,7 @@ Shared contract for `scripts/verify.mjs` — the single CLI that runs every **de
 
 ## Principle
 
-The script checks **format correctness only**. It verifies frontmatter, step/article pairing, heading and list consistency, source locators, digest coverage, code provenance, quiz JSON, image files, and link resolution — never prose quality or content semantics. Because it is the sole gate, an agent only fixes what it flags.
+The script checks **format correctness only**. It verifies frontmatter, step/article pairing, heading and list consistency, source locators, digest coverage, code provenance, quiz sidecars, image files, and link resolution — never prose quality or content semantics. Because it is the sole gate, an agent only fixes what it flags.
 
 Every hard-failure rule has a negative fixture in `scripts/verify.test.mjs`: deliberately breaking the fixture must turn the rule red. Advisory flags are not fixtures.
 
@@ -88,6 +88,14 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `quiz-options` | `options` is an array of 2–5 non-empty strings |
 | `quiz-answer` | `answer` is a 0-based integer index into `options` |
 | `quiz-explain` | `explain` is a non-empty string |
+| `quiz-file-json` | a `<step>.quiz.json` sidecar parses as a JSON object |
+| `quiz-file-marker` | the sidecar sets `"quiz-generated": true` |
+| `quiz-file-count` | `questions` is an array of 3–8 entries, capped lower for short articles by `min(8, max(3, round(CJK字數 / 250)))` |
+| `quiz-file-question` | every sidecar question has a non-empty `question` |
+| `quiz-file-options` | every sidecar question has 2–5 non-empty `options` |
+| `quiz-file-answer` | every sidecar `answer` is a 0-based index into its options |
+| `quiz-file-explain` | every sidecar question has a non-empty `explain` |
+| `quiz-orphan` | every `<step>.quiz.json` belongs to a real step article and node-plan entry |
 | `link` | relative Markdown links resolve |
 | `image-missing` | every local Markdown image target exists |
 | `image-format` | every referenced image is a `.webp` file with a WebP header |

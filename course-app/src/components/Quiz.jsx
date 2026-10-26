@@ -2,11 +2,11 @@ import { useState } from "react";
 import { parseQuiz } from "../lib/quiz.mjs";
 
 /**
- * Interactive quiz rendered from a fenced `quiz` block. A wrong pick can be
- * retried; a correct pick locks the question and reveals the explanation.
+ * Interactive quiz. A wrong pick can be retried; a correct pick locks the
+ * question and reveals the explanation.
  */
-export default function Quiz({ source }) {
-  const quiz = parseQuiz(source);
+export default function Quiz({ source, quiz: providedQuiz }) {
+  const quiz = providedQuiz ?? parseQuiz(source);
   const [solved, setSolved] = useState(false);
   const [wrong, setWrong] = useState(() => new Set());
 

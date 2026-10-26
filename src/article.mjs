@@ -304,6 +304,13 @@ export function findArticleImages(markdown, stepId) {
   return [...String(markdown).matchAll(pattern)].map((match) => Number(match[1])).sort((a, b) => a - b);
 }
 
+export function missingArticleImages(root, subject, nodeId, markdown, stepId) {
+  const dir = join(root, "learn", subject, "nodes", nodeId, `${stepId}-assets`);
+  return findArticleImages(markdown, stepId).filter(
+    (index) => !existsSync(join(dir, `image-${index}.webp`)),
+  );
+}
+
 function allImagesPresent(root, subject, nodeId, stepId, count) {
   const dir = join(root, "learn", subject, "nodes", nodeId, `${stepId}-assets`);
   return Array.from({ length: count }, (_, index) => join(dir, `image-${index + 1}.webp`)).every(

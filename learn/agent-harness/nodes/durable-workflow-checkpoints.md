@@ -4,7 +4,7 @@ title: "Workflow：把不該重跑的事包成 step"
 subject: agent-harness
 tier: 2
 order: 5
-status: confirmed
+status: written
 goal: "判斷哪些動作必須 durable，並解釋 recovery 為什麼會重跑 workflow body。"
 prerequisites: []
 steps:

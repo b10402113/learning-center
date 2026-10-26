@@ -50,17 +50,3 @@ while (true) {
 講義的第一句話就寫了：我們今天不是在造 agent，是在造那個能跑任何 agent 的東西。Agent 是 crash-test dummy，harness 才是主角。
 
 所以接下來每一步，我們都會先讓 naive 版本失敗一次，再補上對應的 harness 模組，最後把這個模組對到 production 世界裡真正的工具，例如 Temporal、Inngest、e2b、LangGraph、Mastra。
-
-```quiz
-{
-  "question": "naive while 迴圈最根本的 production 風險是什麼？",
-  "options": [
-    "狀態只存在 process 記憶體，crash 後就消失",
-    "模型回答太慢",
-    "工具清單太少",
-    "system prompt 寫得不夠長"
-  ],
-  "answer": 0,
-  "explain": "messages 只活在 process 裡，所以 crash 會同時失去進度與已付費的推論結果。"
-}
-```

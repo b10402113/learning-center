@@ -9,6 +9,7 @@ import {
   countArticleCharacters,
   expectedImageCount,
   insertImageMarkers,
+  missingArticleImages,
   normalizeArticleText,
   normalizeImagePlan,
   readStepSlices,
@@ -481,4 +482,15 @@ test("generated articles and images pass verify", async (t) => {
 
   const result = runChecks({ root, subject: "test" });
   assert.equal(result.pass, true, JSON.stringify(result.failures, null, 2));
+});
+
+test("reports images an existing article references but does not have", (t) => {
+  const root = fixture(t);
+  const body = '# Step One\n\n![第 1 段配圖](./s1-assets/image-1.webp)\n\n*AI 生成示意圖*\n';
+  assert.deepEqual(missingArticleImages(root, "test", "n1", body, "s1"), [1]);
+
+  const figure = join(root, "learn/test/nodes/n1/s1-assets/image-1.webp");
+  mkdirSync(dirname(figure), { recursive: true });
+  writeFileSync(figure, "webp");
+  assert.deepEqual(missingArticleImages(root, "test", "n1", body, "s1"), []);
 });

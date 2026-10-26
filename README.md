@@ -14,6 +14,7 @@ This repo is a personal learning system. You put raw material in `sources/`; the
 | `learn/<subject>/digests/` | One L1 overview plus an L2 line map per source. |
 | `learn/<subject>/nodes/<node>.md` | Node container: frontmatter `steps` plan, `## Lesson`, and `## Steps`. |
 | `learn/<subject>/nodes/<node>/<step>.md` | The step article. |
+| `learn/<subject>/nodes/<node>/<step>.quiz.json` | 3–8 generated single-choice questions. |
 | `learn/<subject>/nodes/<node>/<step>-assets/` | Generated WebP figures. |
 | `learn/<subject>/edges/` | Optional relationship pages between steps or nodes. |
 | `course-app/` | React viewer; renders articles, quizzes, sources, and prev/next. |
@@ -26,8 +27,12 @@ This repo is a personal learning system. You put raw material in `sources/`; the
     → /ingest <subject>              ← only when adding new source material
     → /roadmap <subject>
     → /nodes <subject>/<node-id>
-    → /article <subject>/<node-id> [--images]
+    → /article <subject>/<node-id> [--no-images] [--no-continuity]
+    → /quiz-gen <subject>/<node-id> [--step <id>] [--force]
     → /edges <subject>/<node-id>     ← optional
+
+/batch-nodes <subject> [tier<N> | <node-id> ...] [flags]
+                                     ← optional bulk path: /nodes → /article → /quiz-gen
 
 /absorb <subject>                    ← integrate pending digests
 ```
@@ -36,11 +41,13 @@ This repo is a personal learning system. You put raw material in `sources/`; the
 2. **`/ingest`** — Archive new source files and write `pending` digests. It does not touch the roadmap, nodes, or articles.
 3. **`/roadmap`** — Propose at least five learning paths, confirm one, partition the material into nodes, and write `ROADMAP.md` plus `draft` node containers.
 4. **`/nodes`** — Write the node's ordered `steps` array (`id`, `title`, `purpose`, `sources`), create H1-only article skeletons, and set the node to `confirmed`.
-5. **`/article`** — Generate one article per missing step from its purpose and cited source slices. `--images` plans and generates figures.
-6. **`/edges`** — Add a small set of strong relationships between steps or nodes.
-7. **`/absorb`** — Integrate `pending` digests by appending steps or creating nodes, then roll affected nodes back to `confirmed`.
+5. **`/article`** — One `publisher` subagent per step writes the original and an image plan; `article-agent` rewrites once with figures; publish writes the step and verifies; the main agent then adds continuity between steps.
+6. **`/quiz-gen`** — One `quiz-agent` per published step reads the article and writes 3–8 single-choice questions; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; the viewer renders them after the article.
+7. **`/batch-nodes`** — Optional bulk path over a tier or node list: parallel Nodes subagents write the step plans, batched `publisher` subagents write and publish the articles with continuity, then batched `quiz-agent` subagents write the sidecars. It resumes from node state; `-force` regenerates articles and quizzes.
+8. **`/edges`** — Add a small set of strong relationships between steps or nodes.
+9. **`/absorb`** — Integrate `pending` digests by appending steps or creating nodes, then roll affected nodes back to `confirmed`.
 
-`/practice` (generated practice sets) is out of scope. Articles may still contain a `quiz` block, which the viewer renders as an interactive question.
+`/practice` (generated practice sets) is out of scope. Generated questions live in the `<step>.quiz.json` sidecar; the legacy `quiz` block still renders for old content.
 
 ## Node, step, digest
 
@@ -75,7 +82,7 @@ node scripts/verify.mjs --subject agent-harness
 cd course-app && npm test && npm run build
 ```
 
-`verify` is a hard format gate covering node frontmatter, step/article pairing, source locators and digest coverage, code provenance, quiz JSON, images, and relative links. See [docs/reference/verify.md](docs/reference/verify.md).
+`verify` is a hard format gate covering node frontmatter, step/article pairing, source locators and digest coverage, code provenance, quiz sidecars, images, and relative links. See [docs/reference/verify.md](docs/reference/verify.md).
 
 ## Design principles
 
@@ -84,4 +91,5 @@ cd course-app && npm test && npm run build
 - **The step is the article.** course-app renders the Markdown directly.
 - **Everything is cited.** Substantive claims trace to immutable source lines.
 - **Code is source-grounded.** Quote it verbatim or mark it `derived`.
-- **Images are generated.** `/article --images` owns placement and file names.
+- **Images are generated.** The `publisher` decides placement while writing each step; `/article` writes the WebP files.
+- **Quizzes are sidecars.** `/quiz-gen` writes `<step>.quiz.json`; the article Markdown is never modified.
