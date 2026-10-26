@@ -72,14 +72,14 @@ Work the **frontier**：任何 blocker 都完成的票就可以開始。1 是 pr
 
 **Blocked by:** 2. `/article` 產生文字、配圖清單與 marker，不再生圖；3. `/generate-images` 把 marker 渲染成圖片；4. `/humanize-article` 去 AI 味並同步修改清單
 
-- [ ] 五個階段按順序執行，`-nodes-only`、`-skip-article`、`-skip-humanize`、`-skip-images`、`-skip-quiz`、`-no-continuity`、`-force` 行為與文件一致；`-no-images` 移除並提示改用 `-skip-images`
-- [ ] Article 的 publisher prompt 只要求 original + plan + `--markers-only`，不再要求生圖
-- [ ] Humanize 只排有 plan、文章有 body、沒有有效紀錄的 step；Generate 只排有 plan 的 step；Quiz 在文章有 body 時仍可獨立跑
-- [ ] 失敗傳播正確：Article 失敗的 node 不進 Humanize / Generate / Quiz；Humanize 失敗不進 Generate；Generate 失敗不進 Quiz；已成功檔案保留
-- [ ] 每個階段結束後跑對應 verify；Quiz 有寫入 sidecar 時重建 course-app 資料
-- [ ] 前置條件檢查（`node_modules`、`article-agent`、`TEXT_API_KEY`、`IMAGE_API_KEY`）在派工前完成，缺 key 時停止並指名
-- [ ] 最終報告列出每階段 planned / published / humanized / rendered / written、skipped 原因、failed 與 verify 結果
-- [ ] 用一個 scratch node 跑完整五段，既有文章不被修改
+- [x] 五個階段按順序執行，`-nodes-only`、`-skip-article`、`-skip-humanize`、`-skip-images`、`-skip-quiz`、`-no-continuity`、`-force` 行為與文件一致；`-no-images` 移除並提示改用 `-skip-images`
+- [x] Article 的 publisher prompt 只要求 original + plan + `--markers-only`，不再要求生圖
+- [x] Humanize 只排有 plan、文章有 body、沒有有效紀錄的 step；Generate 只排有 plan 的 step；Quiz 在文章有 body 時仍可獨立跑
+- [x] 失敗傳播正確：Article 失敗的 node 不進 Humanize / Generate / Quiz；Humanize 失敗不進 Generate；Generate 失敗不進 Quiz；已成功檔案保留
+- [x] 每個階段結束後跑對應 verify；Quiz 有寫入 sidecar 時重建 course-app 資料
+- [x] 前置條件檢查（`node_modules`、`article-agent`、`TEXT_API_KEY`、`IMAGE_API_KEY`）在派工前完成，缺 key 時停止並指名
+- [x] 最終報告列出每階段 planned / published / humanized / rendered / written、skipped 原因、failed 與 verify 結果
+- [x] 用一個 scratch node 跑完整五段，既有文章不被修改
 
 ## 6. 文件與端到端驗收
 
@@ -87,11 +87,11 @@ Work the **frontier**：任何 blocker 都完成的票就可以開始。1 是 pr
 
 **Blocked by:** 2. `/article` 產生文字、配圖清單與 marker，不再生圖；3. `/generate-images` 把 marker 渲染成圖片；4. `/humanize-article` 去 AI 味並同步修改清單；5. `/batch-nodes` 五段流程
 
-- [ ] `AGENTS.md` 的架構圖、pipeline、skills 表、核心原則第 8 條、step 格式、operations、reset-nodes、batch flags 都對齊新流程
-- [ ] `README.md`、`docs/reference/skill-scope.md`、`docs/reference/verify.md` 不再說 `/article` 生圖；`verify` 文件說明 marker 是註解、不要求對應圖片，有圖片行才檢查檔案
-- [ ] 舊 `image` / `article` CLI 文件標 deprecated，但指令仍可用
-- [ ] `node scripts/verify.mjs --subject agent-harness` 綠
-- [ ] `npm test` 與 `npm --prefix article-agent test` 全綠
-- [ ] 用 scratch node 跑 `/article` → `/humanize-article` → `/generate-images`：有 plan、marker、humanize 紀錄、無 caption 圖片；再跑一次 humanize 全部 `skipped-record`、再跑 generate 全部 `already-rendered`
-- [ ] `git status` 顯示既有文章未被修改，只有 scratch node、文件與預期檔案變動
-- [ ] 文件內沒有殘留 `*AI 生成示意圖*` 的新流程描述，也沒有把配圖寫成 publisher 的責任
+- [x] `AGENTS.md` 的架構圖、pipeline、skills 表、核心原則第 8 條、step 格式、operations、reset-nodes、batch flags 都對齊新流程
+- [x] `README.md`、`docs/reference/skill-scope.md`、`docs/reference/verify.md` 不再說 `/article` 生圖；`verify` 文件說明 marker 是註解、不要求對應圖片，有圖片行才檢查檔案
+- [x] 舊 `image` / `article` CLI 文件標 deprecated，但指令仍可用
+- [x] `node scripts/verify.mjs --subject agent-harness` 綠
+- [x] `npm test` 與 `npm --prefix article-agent test` 全綠
+- [x] 用 scratch node 跑 `/article` → `/humanize-article` → `/generate-images`：有 plan、marker、humanize 紀錄、無 caption 圖片；再跑一次 humanize 全部 `skipped-record`、再跑 generate 全部 `already-rendered`
+- [x] `git status` 顯示既有文章未被修改，只有 scratch node、文件與預期檔案變動
+- [x] 文件內沒有殘留 `*AI 生成示意圖*` 的新流程描述，也沒有把配圖寫成 publisher 的責任
