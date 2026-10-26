@@ -27,12 +27,15 @@ This repo is a personal learning system. You put raw material in `sources/`; the
     → /ingest <subject>              ← only when adding new source material
     → /roadmap <subject>
     → /nodes <subject>/<node-id>
-    → /article <subject>/<node-id> [--no-images] [--no-continuity]
+    → /article <subject>/<node-id> [--no-continuity]
+    → /humanize-article <subject>/<node-id> [--step <id>] [--force]
+    → /generate-images <subject>/<node-id> [--step <id>] [--force] [--max-parallel <n>]
     → /quiz-gen <subject>/<node-id> [--step <id>] [--force]
     → /edges <subject>/<node-id>     ← optional
 
 /batch-nodes <subject> [tier<N> | <node-id> ...] [flags]
-                                     ← optional bulk path: /nodes → /article → /quiz-gen
+                                     ← optional bulk path: /nodes → /article
+                                       → /humanize-article → /generate-images → /quiz-gen
 
 /absorb <subject>                    ← integrate pending digests
 ```
@@ -41,11 +44,13 @@ This repo is a personal learning system. You put raw material in `sources/`; the
 2. **`/ingest`** — Archive new source files and write `pending` digests. It does not touch the roadmap, nodes, or articles.
 3. **`/roadmap`** — Propose at least five learning paths, confirm one, partition the material into nodes, and write `ROADMAP.md` plus `draft` node containers.
 4. **`/nodes`** — Write the node's ordered `steps` array (`id`, `title`, `purpose`, `sources`), create H1-only article skeletons, and set the node to `confirmed`.
-5. **`/article`** — One `publisher` subagent per step writes the original and an image plan; `article-agent` rewrites once with figures; publish writes the step and verifies; the main agent then adds continuity between steps.
-6. **`/quiz-gen`** — One `quiz-agent` per published step reads the article and writes 3–8 single-choice questions; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; the viewer renders them after the article.
-7. **`/batch-nodes`** — Optional bulk path over a tier or node list: parallel Nodes subagents write the step plans, batched `publisher` subagents write and publish the articles with continuity, then batched `quiz-agent` subagents write the sidecars. It resumes from node state; `-force` regenerates articles and quizzes.
-8. **`/edges`** — Add a small set of strong relationships between steps or nodes.
-9. **`/absorb`** — Integrate `pending` digests by appending steps or creating nodes, then roll affected nodes back to `confirmed`.
+5. **`/article`** — One `publisher` subagent per step writes the original and a 1–5 item image plan; `article-agent` rewrites once and leaves `<!--image:N-->` markers; publish writes the step and verifies; the main agent then adds continuity between steps. It never calls the image model.
+6. **`/humanize-article`** — A `humanize-article` subagent rewrites each eligible article and its plan's `heading` / `prompt` in a workspace; the CLI validates the protected parts, writes both files back, and records their hashes. Reruns skip recorded steps.
+7. **`/generate-images`** — Reads the plan and the article's markers, generates or reuses `image-N.webp`, and replaces each marker with an uncaptioned image line. It never plans or edits prose.
+8. **`/quiz-gen`** — One `quiz-agent` per published step reads the article and writes 3–8 single-choice questions; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; the viewer renders them after the article.
+9. **`/batch-nodes`** — Optional bulk path over a tier or node list: Nodes → Article → Humanize → Generate → Quiz. It resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan, and `-skip-images` skips rendering.
+10. **`/edges`** — Add a small set of strong relationships between steps or nodes.
+11. **`/absorb`** — Integrate `pending` digests by appending steps or creating nodes, then roll affected nodes back to `confirmed`.
 
 `/practice` (generated practice sets) is out of scope. Generated questions live in the `<step>.quiz.json` sidecar; the legacy `quiz` block still renders for old content.
 
@@ -91,5 +96,5 @@ cd course-app && npm test && npm run build
 - **The step is the article.** course-app renders the Markdown directly.
 - **Everything is cited.** Substantive claims trace to immutable source lines.
 - **Code is source-grounded.** Quote it verbatim or mark it `derived`.
-- **Images are generated.** The `publisher` decides placement while writing each step; `/article` writes the WebP files.
+- **Images are rendered from a plan.** The `publisher` decides placement while writing each step; `/article` leaves markers and `/generate-images` writes the WebP files.
 - **Quizzes are sidecars.** `/quiz-gen` writes `<step>.quiz.json`; the article Markdown is never modified.

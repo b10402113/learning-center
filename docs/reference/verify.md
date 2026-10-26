@@ -58,6 +58,8 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `node-steps-list` | `## Steps` exists when the node has steps; titles, ids, and order match frontmatter |
 | `node-step-link` | every `## Steps` link resolves relative to the node file |
 
+`<!--image:N-->` is an HTML comment, not an image line. `verify` never requires a marker to have a matching file, so an article that still carries markers and no figures passes. For rendered `![...](./<step>-assets/image-N.webp)` lines it checks that the file exists, is a valid WebP, and lives under the step's asset folder, and it flags unreferenced files under `*-assets/` as orphans.
+
 ### Sources and digests
 
 | id | checks |

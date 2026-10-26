@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -10,12 +11,33 @@ import {
 } from "./article.mjs";
 import {
   REPO_IMAGE_STYLE,
+  humanizeRecordPath,
   jobFiles,
   normalizeStepPlan,
   readJson,
 } from "./article-agent-bridge.mjs";
 
 const IMAGE_MARKER = /^[ \t]*<!--\s*image:(\d+)\s*-->[ \t]*$/gm;
+
+function sha256(text) {
+  return createHash("sha256").update(String(text)).digest("hex");
+}
+
+function refreshHumanizeRecord(root, ids, before, after) {
+  const recordPath = humanizeRecordPath(root, ids);
+  if (!existsSync(recordPath)) return;
+  let record;
+  try {
+    record = JSON.parse(readFileSync(recordPath, "utf8"));
+  } catch {
+    return;
+  }
+  if (!record || record.article_sha256 !== sha256(before)) return;
+  record.article_sha256 = sha256(after);
+  try {
+    writeFileSync(recordPath, JSON.stringify(record, null, 2) + "\n");
+  } catch {}
+}
 
 export function parseMarkers(markdown) {
   return [...String(markdown).matchAll(IMAGE_MARKER)].map((match) => ({
@@ -196,9 +218,10 @@ async function renderStep({ root, subject, node, entry, force, maxParallel, deps
   }
 
   images.sort((a, b) => a.index - b.index);
+  const rendered = replaceImageMarkersWithoutCaption(article, entry.id);
   try {
     mkdirSync(dirname(articlePath), { recursive: true });
-    writeFileSync(articlePath, replaceImageMarkersWithoutCaption(article, entry.id));
+    writeFileSync(articlePath, rendered);
   } catch (error) {
     return {
       id: entry.id,
@@ -209,6 +232,7 @@ async function renderStep({ root, subject, node, entry, force, maxParallel, deps
       error: `could not write the article: ${error.message}`,
     };
   }
+  refreshHumanizeRecord(root, { subject, node, step: entry.id }, article, rendered);
   return {
     id: entry.id,
     title: entry.title,
