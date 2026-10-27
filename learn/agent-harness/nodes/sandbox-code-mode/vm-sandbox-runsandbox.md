@@ -1,22 +1,22 @@
 # 用 node:vm 蓋一個最小沙箱
 
-上一課結尾留下一個問題：模型寫出的程式是 untrusted code，不能在 host 上直接跑。那這段程式究竟要在哪裡執行？
+如果讓模型自己寫程式碼，再直接執行它，就等於把主程式交給一段你不知道內容的字串。
 
-做法是畫出一條界線，讓程式在我們的 process 裡跑，卻碰不到外面的東西。這條界線，就是本課的主角：`runInSandbox`。
+要讓這段程式跑起來，卻不讓它碰到你的檔案、網路和記憶體，你需要先畫出一道界線。Node.js 內建的 `node:vm`，就能提供這條界線：把程式碼放進隔離的 `context` 中執行。
 
-它接收一段字串形式的程式碼，放進一個幾乎空白的房間裡執行，只提供我們允許的 API；時間一到，就停止這段程式。聽起來像魔法，但拆開來看，其實只是 Node 內建的 `node:vm` 模組，再加上幾個小機制。
+這個函式叫做 `runInSandbox`。顧名思義，就是把一段程式碼丟進沙箱裡執行。
 
-## 三種輸入：code、api、options
+![第 1 段配圖](./vm-sandbox-runsandbox-assets/image-1.webp)
 
-先從函式簽名開始，把邊界講清楚。`runInSandbox` 會接收三個東西：
+## runInSandbox：三個輸入，一個結果
 
-- `code`：一段字串，也就是模型寫出的程式。它不是函式，也不是 AST，而是一段文字。
-- `api`：一張函式地圖。沙箱裡能使用的工具都列在這裡；沒有列進來的工具，沙箱裡看不到。
-- `options`：目前只有一個可選欄位：`timeoutsInMilliseconds`。預設值是 2 秒。這個時間夠讓一支小程式跑完，但不至於讓它長時間卡住你的 process。
+`runInSandbox` 接收三個東西。
 
-還有一樣東西不會從參數傳進來，卻會伴隨整段執行過程：`logs`。
+第一個是 `code`，也就是模型寫出來的程式碼字串。第二個是 `api`，代表沙箱裡可以使用的工具，其實就是一張「函式名稱對應到函式」的表。第三個是 `options`，用來調整沙箱設定，其中最重要的是 `timeout`。
 
-`logs` 是一個字串陣列，用來接住沙箱裡 `console.log` 印出的內容。模型看不到你的終端機，所以如果你想知道它算了什麼，只能透過這個陣列收集結果。
+`timeout` 以毫秒為單位，預設設為 2 秒，不讓程式無限制地跑下去。
+
+另外，還要準備一個 `logs` 陣列，型別是字串陣列。它用來記錄沙箱裡發生的事情，之後你才能知道程式在裡面印出了什麼。
 
 <!-- derived -->
 ```ts
@@ -24,9 +24,9 @@ import vm from "node:vm";
 
 type SandboxResult = {
   ok: boolean;
-  results?: unknown;
-  logs: string[];
-  error?: string;
+  result?: unknown;
+  logs?: string[];
+  error?: unknown;
 };
 
 type SandboxAPI = Record<string, (...args: unknown[]) => unknown>;
@@ -34,157 +34,152 @@ type SandboxAPI = Record<string, (...args: unknown[]) => unknown>;
 async function runInSandbox(
   code: string,
   api: SandboxAPI,
-  options?: { timeoutsInMilliseconds?: number },
+  options: { timeoutMs?: number } = {},
 ): Promise<SandboxResult> {
-  const timeoutsInMilliseconds = options?.timeoutsInMilliseconds ?? 2000;
+  const timeoutMs = options.timeoutMs ?? 2000;
   const logs: string[] = [];
-}
-```
 
-`api` 的型別其實很單純，卻值得特別注意：
-
-- key 是模型在程式裡呼叫的名稱。
-- value 是對應的函式。
-
-沙箱的權限不是靠一套複雜的權限系統，而是取決於一件事：**你到底放了哪些東西進這個物件。**
-
-## 空房間：`vm.createContext`
-
-接著來建立執行環境。`vm.createContext()` 會建立一個全新的環境，也就是 sandbox environment。
-
-重點在於：它跟你的 process 不共享全域物件。你外面的變數、`require`、`process`，在裡面通通不存在，除非你親手放進去。
-
-![第 1 段配圖](./vm-sandbox-runsandbox-assets/image-1.webp)
-
-*AI 生成示意圖*
-
-因此，建立沙箱時只放入兩樣東西：
-
-- `api`：上一節提到的函式地圖，也是沙箱裡唯一的能力來源。
-- `console`：我們自己建立的 console。它的 `log` 不會把內容印到終端機，而是先把參數轉成字串、用空格串起來，再放進 `logs` 陣列。
-
-<!-- derived -->
-```ts
   const context = vm.createContext({
     api,
     console: {
       log: (...args: unknown[]) => {
-        logs.push(args.map((a) => String(a)).join(" "));
+        logs.push(
+          args.map((a) => (typeof a === "string" ? a : String(a))).join(" "),
+        );
       },
     },
   });
-```
 
-這裡有一個容易忽略的決定：連 `console` 都是我們自己重寫的。
-
-真正的 `console.log` 會把文字印到伺服器終端機。模型寫出的程式可能千奇百怪，你不會希望它的除錯訊息直接灌進自己的 log。與其祈禱它乖乖使用，不如從源頭就把輸出導向 `logs`。
-
-具體做法是使用 `args.map`：把每個參數轉成字串，原本已經是字串的就略過，最後再用空格 `join` 成一句話。
-
-## 把程式碼包成 async IIFE
-
-房間準備好了，但程式碼仍然只是一段裸字串。
-
-模型寫的程式常常需要 `await`：呼叫 API、等待資料回來，再繼續計算。不過，直接把裸程式碼交給 `vm.runInContext`，不會自動幫你包成 async 函式；這時候，頂層的 `await` 會直接造成語法錯誤。
-
-所以在執行前，還要多做一個動作：把程式碼包進 async IIFE。
-
-IIFE 是 immediately invoked function expression 的縮寫，意思是「宣告後立即執行的函式」。外層寫成 `(async () => { ... })()`，再把原本的程式碼整段放進大括號裡。
-
-<!-- derived -->
-```ts
   const wrapped = `(async () => {
 ${code}
 })()`;
-```
 
-![第 2 段配圖](./vm-sandbox-runsandbox-assets/image-2.webp)
+  try {
+    const pending = vm.runInContext(wrapped, context, {
+      timeout: timeoutMs,
+    }) as Promise<unknown>;
+    const result = await withTimeout(pending, timeoutMs);
+    return { ok: true, result, logs };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
 
-*AI 生成示意圖*
-
-這樣一來，模型寫出的程式就位在 async 函式裡，可以自然地 `await` API，等待完成後再 `return`。
-
-這個包裝的目的很單純：讓模型更容易寫非同步程式，不必一直提醒它「你現在是在 async 函式裡」。
-
-## 執行，然後用 `Promise.race` 逾時
-
-現在可以真正執行程式了。
-
-`vm.runInContext` 會接收三個參數：
-
-1. 包裝後的 `wrapped`
-2. `context`
-3. `{ timeout }`
-
-這個 `timeout` 是 vm 層的防護。當程式執行超過指定時間，vm 就會中斷它。
-
-執行後會得到一個 Promise。素材先把它存進 `pending`，暫時不使用 `await`。
-
-<!-- derived -->
-```ts
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return Promise.race([
     promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`sandbox timeout: ${ms}ms`)), ms),
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error("timeout")), timeoutMs),
     ),
   ]);
 }
 ```
 
-之所以先不 `await`，是為了讓程式和逾時計時器同時開始。我們另外寫一個 `withTimeout`，它的核心就是 `Promise.race`：
+## context 就是它的全世界
 
-把「程式碼的 Promise」和「倒數計時的 Promise」一起丟進賽局，誰先完成，就採用誰的結果。計時器先結束，就 reject；程式碼先跑完，就取得程式結果。
+沙箱的關鍵在 `vm.createContext`。
 
-![第 3 段配圖](./vm-sandbox-runsandbox-assets/image-3.webp)
+你建立一個 `context`，這個 `context` 就會成為程式碼執行時的環境：全域物件、可以使用的變數，以及能呼叫的函式，全都由它決定。
 
-*AI 生成示意圖*
+它能碰到的東西，只有你親手放進 `context` 的那些項目。
 
-這個函式本身其實沒什麼特別，也和 AI 沒有直接關係。它只是個工具函式，卻能擋住最常見的翻車情況：模型寫出無窮迴圈，讓你的 server 一直卡住。
+![第 2 段配圖](./vm-sandbox-runsandbox-assets/image-2.webp)
 
-整段執行會放在 `try/catch` 裡。等這場賽局分出勝負後，再依照結果回傳資料：
+我們只放兩樣東西進去。
+
+第一樣是 `api`，也就是你決定要交給模型的工具。模型在沙箱裡能呼叫的函式只有這些，一個不多。
+
+第二樣是 `console`。當沙箱裡的程式呼叫 `console.log` 時，訊息不會直接印到你的終端機，而是會先被接住：把傳入的參數逐一轉成字串，再用空格串起來，最後放進 `logs` 陣列。
 
 <!-- derived -->
 ```ts
-  try {
-    const pending = vm.runInContext(wrapped, context, {
-      timeout: timeoutsInMilliseconds,
-    });
-    const results = await withTimeout(pending, timeoutsInMilliseconds);
-    return { ok: true, results, logs };
-  } catch (error) {
-    return { ok: false, logs, error: error instanceof Error ? error.message : String(error) };
-  }
-}
+const context = vm.createContext({
+  api,
+  console: {
+    log: (...args: unknown[]) => {
+      logs.push(
+        args.map((a) => (typeof a === "string" ? a : String(a))).join(" "),
+      );
+    },
+  },
+});
 ```
 
-## `ok: true` 與 `ok: false`
+重點就在「只放兩樣」。
 
-最後來看，為什麼回傳值要設計成 `{ ok: true, ... }`，而不是直接把結果丟出去。
+模型寫的程式在 `context` 裡找不到你的檔案系統，也找不到 `process` 全域物件，更找不到主程式裡的其他東西。它能碰到的，就只有 `api` 和 `console`。
 
-因為這份結果是要交回給 AI 看的。與其丟出一大串複雜資訊，不如用最直接、最不容易誤讀的方式表達。
+少了這道界線，所謂的 sandbox 就只剩下一句口號。
 
-模型不需要看到一整坨例外堆疊。它只要一眼判斷這支程式有沒有成功：
+## async IIFE：讓模型可以 await
 
-- `ok: false` 代表失敗，模型看到後就知道要重寫。
-- 成功時附上 `results`，也就是程式 `return` 的內容，以及 `logs`，也就是程式呼叫 `console.log` 留下的內容。
-- 失敗時則附上 `error`。
+模型常常會想寫非同步程式：呼叫工具取得結果、處理結果，再用 `await` 等待下一個步驟。
+
+可是你收到的 `code` 只是一段字串，不是函式主體。直接丟進 `runInContext` 時，沒辦法在頂層使用 `await`。
+
+解法很簡單：在外面包一層 **async IIFE**。IIFE 是「立即呼叫的函式」，也就是函式建立後馬上執行。
+
+只要包上這一層，模型寫的程式碼就可以使用 `await`。
+
+![第 3 段配圖](./vm-sandbox-runsandbox-assets/image-3.webp)
+
+<!-- derived -->
+```ts
+const wrapped = `(async () => {
+${code}
+})()`;
+```
+
+把 `code` 放進 `(async () => { ... })()` 中間，再立即呼叫它。這樣一來，程式就知道自己是在 `async` 函式裡執行，隨時可以使用 `await`。
+
+這只是讓模型寫程式時更方便，不必另外處理「我現在到底能不能使用 `await`」這個問題。
+
+## runInContext 加 try/catch
+
+接下來才是真正執行程式碼。
+
+用 `vm.runInContext` 傳入 `wrapped`、`context` 和 `timeout`，就能取得執行結果。因為外面包了 `async IIFE`，這個結果 `pending` 會是一個 Promise。
+
+但我們不直接 `await` 它，而是交給 `withTimeout` 處理，確保程式不會超過指定時限。
+
+成功時，回傳 `{ ok: true, result, logs }`；如果發生錯誤，就接住錯誤，回傳 `{ ok: false, error }`。
+
+## withTimeout：Promise.race 先到先贏
+
+`withTimeout` 的工作很單純：確認程式碼能不能在指定時間內跑完。
+
+它的核心是 `Promise.race`。規則就像賽跑一樣：誰先完成，就回傳誰的結果。
 
 ![第 4 段配圖](./vm-sandbox-runsandbox-assets/image-4.webp)
 
-*AI 生成示意圖*
+<!-- derived -->
+```ts
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error("timeout")), timeoutMs),
+    ),
+  ]);
+}
+```
 
-`logs` 無論成功或失敗都會回傳，這點也很重要。
+我們把兩個東西一起丟進 `race`：
 
-程式出錯時，log 往往是唯一的線索。模型也要靠這些內容，才能知道自己是哪裡寫錯。
+- 一個是正在執行的程式，也就是 `pending`
+- 另一個是計時器，會在 `timeoutMs` 毫秒後呼叫 `reject`
 
-## 這一課到這裡，下一步是接回工具
+如果程式先跑完，就回傳程式的結果；如果計時器先到，就回傳逾時錯誤。
 
-到目前為止，`runInSandbox` 還只是一支獨立函式，尚未被其他程式呼叫。
+先到的獲勝，較慢的那個則被丟掉。
 
-如果要讓它真正擋在模型與程式執行之間，下一步還要把它接進 tool 迴圈：
+## `ok: true` 和 `ok: false` 是講給模型聽的
 
-1. 宣告一個叫 `runCode` 的工具。
-2. 在 `runTool` 的 `switch` 裡加入一個 `case`。
+回傳物件用 `ok: true` 和 `ok: false`，而不是直接丟出例外，因為這個結果之後要交回給模型閱讀。
 
-這是下一課的內容，也會順便說明 `node:vm` 擋不住哪些事情。
+模型需要一個一看就懂的訊號：
+
+- `ok: false` 代表「這件事做壞了」
+- `ok: true` 代表「成功」
+
+這就像用大白話告訴模型結果，讓它直接知道接下來該繼續，還是換一個做法。

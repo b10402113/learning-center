@@ -1,6 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { resolveSrc } from "../lib/assets.mjs";
+import { rehypeHighlightPlugin } from "../lib/highlight.mjs";
 import Quiz from "./Quiz.jsx";
 
 function fencedText(children) {
@@ -44,6 +45,7 @@ export default function Markdown({ children, className = "", assetBase = "" }) {
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlightPlugin]}
         components={{
           pre: ({ children }) => {
             const child = Array.isArray(children) ? children[0] : children;

@@ -4,7 +4,7 @@ title: "Production：可觀測性、託管邊界與 evals"
 subject: agent-harness
 tier: 4
 order: 11
-status: written
+status: confirmed
 goal: "從 inspector 事件流讀出系統行為，並列出上 production 還缺什麼。"
 prerequisites: []
 steps:
@@ -56,7 +56,7 @@ steps:
       - "[[sources/agent-harness/20260915/harness-engineering/lessons/06-hierarchical-supervision/index.md#L344-L351]]"
       - "[[sources/agent-harness/20260915/harness-engineering/lessons/07-human-in-the-loop/index.md#L206-L245]]"
 created: 2026-10-24
-updated: 2026-10-26
+updated: 2026-10-27
 ---
 
 # Production：可觀測性、託管邊界與 evals

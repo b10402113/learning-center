@@ -244,7 +244,7 @@ async function renderStep({ root, subject, node, entry, force, maxParallel, deps
 }
 
 export async function renderImages(
-  { subject, node: nodeId, step = null, force = false, maxParallel = 2 },
+  { subject, node: nodeId, step = null, force = false, maxParallel = 3 },
   deps = {},
 ) {
   const root = resolve(deps.root ?? process.cwd());
@@ -277,7 +277,7 @@ export async function renderImages(
         node: nodeId,
         entry,
         force,
-        maxParallel: Number(maxParallel) || 2,
+        maxParallel: Number(maxParallel) || 3,
         deps: imagesDeps,
         template,
         style,

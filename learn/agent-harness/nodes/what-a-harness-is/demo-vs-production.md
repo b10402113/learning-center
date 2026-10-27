@@ -1,14 +1,20 @@
 # Demo agent 為什麼一進 production 就死
 
-那個 agent 在 demo 裡很神。你貼上三個客服工單，它分類、查知識庫、寫回覆、送出，全部正確。上台示範三次都沒問題。
+你可能有過這種經驗：一個晚上就把 agent demo 跑起來了。模型會叫工具、會回話，看起來什麼都能做。
 
-上線第一天，它寄了三封未經審核的信給客人；伺服器重啟後，它完全不記得剛才做到哪；工單變成五十張，它開始變慢、變貴、開始亂回。
+但隔天想把它放進真實環境，問題就開始浮現：
 
-## Demo 裡的 agent，其實就是一個 while 迴圈
+- 跑到一半被重啟，怎麼辦？
+- 它直接寄信給客戶，怎麼辦？
+- 對話越來越長、帳單越來越貴，怎麼辦？
 
-課程講義把這個版本叫 brittle agent：一個 `while` 迴圈，中間夾一次 LLM 呼叫。模型要工具，就執行工具、把結果塞回 messages，再跑下一圈；模型不叫工具，就回傳文字、結束。
+Demo agent 會死，不是因為 prompt 寫得不好，而是因為它本質上只是一個腳本。
 
-<!-- source: sources/agent-harness/20260915/harness-engineering/lessons/01-intro-to-harness-engineering/index.md#L37-L45 -->
+## Demo agent 就是一個 while 迴圈
+
+所謂 naive agent，也就是「天真的、沒有加任何保護的 agent」，其實就是一個中間塞著 LLM 的 while 迴圈：
+
+<!-- source: sources/agent-harness/20260915/harness-engineering/lessons/01-intro-to-harness-engineering/index.md#L34-L58 -->
 ```ts
 while (true) {
   const response = await model(messages);
@@ -21,32 +27,71 @@ while (true) {
 }
 ```
 
-這個迴圈沒有錯，它只是把「一次模型呼叫」重複很多次。問題是它把狀態放在記憶體裡、讓工具直接產生副作用、讓歷史只增不減，還讓同一個 agent 同時做帳務、技術支援、業務。
+`messages` 是整段對話紀錄。每一輪先把 `messages` 傳給模型；如果模型要求呼叫工具，也就是發出「請幫我執行某個函式」的指令，程式就執行工具，把結果塞回 `messages`，然後再問模型一次。
+
+等模型不再要求呼叫工具時，就回傳文字，結束迴圈。
+
+整個流程就是：叫模型、可能叫工具、把結果塞回 `messages`，再叫一次模型。
+
+這就是一個「裡面有 LLM 的腳本」。看起來沒什麼問題，但 production 的六個斷點，全都藏在這個迴圈裡。
+
+<!--image:1-->
 
 ## 六個斷點
 
-講義把 production 會出事的地方列成六條，每一條都對應後面某一個 harness 模組：
+斷點總共有六個，先把重點講在前面：
 
-- **Process crash → 狀態全失、LLM 重新計費。** 因為 `messages` 只活在 process 裡。
-- **Tool 什麼都能做 → runtime 不安全。** `sendReply` 在模型要求的那一瞬間就真的寄信，沒有人擋。
-- **Context 只會長大 → 變慢、變貴、品質下降。**
-- **一個 agent 做全部 → 沒有專業化、沒有隔離。**
-- **Sub-agent 失敗或不同意 → 沒有恢復機制。**
-- **Approval 卡住 server → 架構壞掉。**
+- **行程一崩潰，狀態就沒了。** 記憶體裡的 `messages` 會消失。重啟後，模型對剛才做過的事一無所知；已經呼叫過的 LLM，也等於要再付一次錢。
+- **工具什麼都能做。** 迴圈對 tool call 來者不拒，沒有執行邊界，等於把一個不安全的 runtime，也就是執行環境，交給模型。
+- **上下文無限成長。** 上下文（context）就是模型讀到的全部內容，包含對話和工具結果。這些內容每一輪都變長，模型可能越來越差，帳單也越來越貴。
+- **一個 agent 做所有事。** 什麼都做的結果，就是沒有專業分工，也沒有隔離。
+- **子 agent 會失敗，也可能意見不合。** 發生這些情況時，沒有任何復原機制可以接手。
+- **等人工核准會卡死整個 server。** 如果流程停在伺服器裡等待 approval，也就是人工核准，代表架構本身就有問題。
 
-這些不是程式碼的 bug，是「script」和「harness」的差別。
+這六個斷點，就是 demo 與 production 之間的落差。其中三個最容易親眼看到：crash、不可逆的副作用，以及上下文成長。下面就把它們一個個弄壞給你看。
 
-![第 1 段配圖](./demo-vs-production-assets/image-1.webp)
-*AI 生成示意圖*
+<!--image:2-->
 
-## 為什麼「能跑」不等於「能上線」
+## 把它弄壞給你看
 
-把 demo 跑起來之後，講義要你親手弄壞它：跑到一半按 Ctrl-C，看狀態怎麼消失；看它怎麼在沒有審批的情況下寄信；丟五十張工單，看 context 和帳單一起長大；意識到同一個 agent 同時扮演三個角色。
+**一、把它殺掉。**
 
-這四個 demo 之後，後面的課程才有意義：durable execution、sandbox、memory、routing、supervision、approval，每一個都在補其中一個洞。
+任務送出去、程式正跑得起勁時，按下 Ctrl-C。記憶體裡的 `messages` 陣列就直接消失了。
 
-## 這門課的主線
+重啟之後，agent 完全不知道剛才發生過什麼；已經寄出的 `sendReply` 也收不回來。狀態沒了，同一份工作重新跑一次，LLM 的費用也得再付一次。
 
-講義的第一句話就寫了：我們今天不是在造 agent，是在造那個能跑任何 agent 的東西。Agent 是 crash-test dummy，harness 才是主角。
+<!--image:3-->
 
-所以接下來每一步，我們都會先讓 naive 版本失敗一次，再補上對應的 harness 模組，最後把這個模組對到 production 世界裡真正的工具，例如 Temporal、Inngest、e2b、LangGraph、Mastra。
+**二、它不經核准，就寄信給三個客戶。**
+
+模型一要求執行 `sendReply`，工具就在那個瞬間被呼叫。放進真實系統裡，可能代表退款已經退了、訊息已經寄了、紀錄已經改了，而且無法復原。
+
+工具一被叫用就立刻執行，寄出去的信收不回來。
+
+<!--image:4-->
+
+**三、給它 50 個項目。**
+
+上下文視窗（context window）是模型一次能讀進去的內容長度上限。
+
+任務一多，`messages` 陣列和 token 帳單就會一輪一輪變長，直到模型開始變笨，或直接撐爆上下文視窗。
+
+<!--image:5-->
+
+**四、一個 agent 同時做請款、bug 分派和業務。**
+
+billing，也就是請款；bug triage，也就是分類與派工；sales，也就是業務——全部塞進同一個 agent 裡。
+
+結果就是沒有專業分工，也沒有彼此隔離。
+
+## 斷點不是 bug，而是腳本與 harness 的差別
+
+這些問題沒有一個是 code 寫錯。
+
+它們是腳本與 harness 之間的差別：腳本只負責把這一輪流程跑完；harness 則要回答，崩潰之後狀態去哪裡、工具的邊界在哪裡，以及上下文要怎麼控制成長。
+
+這中間的落差，就是接下來要一層一層補起來的東西。
+
+在 production 裡，這層外殼包含一個迴圈、工具、一份訊息紀錄，以及一條 event stream，也就是事件串流。這些正是 LangGraph、Mastra 和各家 agent SDK 交到你手上的東西。
+
+今天你親手做了縮小版，之後就能拆開那些框架，看看它們底下到底在做什麼。

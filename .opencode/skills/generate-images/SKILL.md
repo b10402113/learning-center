@@ -17,7 +17,7 @@ Invoke as `/generate-images <subject>/<node> [--step <id>] [--force] [--max-para
    node src/article-cli.mjs render --subject <subject> --node <node> [--step <id>] [--force] [--max-parallel <n>]
    ```
 
-   不需要 `TEXT_API_KEY`，也不需要文字模型；只需要圖片 API key（`IMAGE_API_KEY` 或 `EVOLINK_API_KEY`）。`--max-parallel` 控制同一個 step 內的圖片並行數，預設 2。
+   不需要 `TEXT_API_KEY`，也不需要文字模型；只需要圖片 API key（`IMAGE_API_KEY` 或 `EVOLINK_API_KEY`）。`--max-parallel` 控制同一個 step 內的圖片並行數，預設 3。
 
 3. **Read the per-step status.** 輸出 JSON 的 `steps[]` 每筆有 `id`、`title`、`status`、`markers`、`images`、可能的 `error`：
 

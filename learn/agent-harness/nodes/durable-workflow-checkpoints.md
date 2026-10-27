@@ -43,7 +43,7 @@ steps:
       - "[[sources/agent-harness/20260915/11-connecting-dbos-to-the-server.txt#L307-L369]]"
       - "[[sources/agent-harness/20260915/12-durable-execution-recap.txt#L97-L136]]"
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-27
 ---
 
 # Workflow：把不該重跑的事包成 step

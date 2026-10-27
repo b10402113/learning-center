@@ -235,7 +235,7 @@ async function main() {
 
   if (mode === "render") {
     const result = await renderImages(
-      { ...target, maxParallel: Number(values["max-parallel"] || 2) },
+      { ...target, maxParallel: Number(values["max-parallel"] || 3) },
       deps,
     );
     const verify = runChecks({ root, subject: values.subject, node: values.node });

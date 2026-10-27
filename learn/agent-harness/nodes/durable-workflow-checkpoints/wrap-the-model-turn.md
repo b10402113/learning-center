@@ -1,118 +1,146 @@
 # 把 modelTurn 包成 step
 
-上一課把界線畫完，也點名了下一個目標：把 `streamText` 從迴圈裡拿出來，包成一個 `modelTurn` step。這一課就來看，那筆帳單實際上怎麼省下來。
+上一節說，重跑會出事的就包進 step。你的 `while` 迴圈裡最貴的那個是 `streamText`，它目前大概是這樣運作：
 
-原本的寫法很直覺：while 迴圈裡直接呼叫 `streamText`，邊收邊送給前端，收到 tool call 就處理，沒有就結束。
+每繞一圈，就呼叫一次 `streamText`，看模型要不要使用工具。模型要求工具時，就執行工具，把結果放回 `messages`，再進入下一圈。
 
-程式邏輯沒有錯，錯的是它住在 workflow body 裡。Workflow body 重啟之後會從頭再跑一次，前面那幾輪模型呼叫也跟著重跑。使用者的對話沒有前進，token 已經又燒了一輪。
+這個迴圈能正常執行，只是 `streamText` 沒有被標記成 step，這會燒錢。
 
-![第 1 段配圖](./wrap-the-model-turn-assets/image-1.webp)
+這一節只做一件事：把「呼叫 LLM 一輪」抽成 `modelTurn`，再用 DBOS step 包住它。完成後，你就能改寫 `while` 迴圈，讓 workflow 重啟時，不必重新執行已經付過錢的 LLM 呼叫。
 
-*AI 生成示意圖*
+## 先看重啟之後發生什麼事
 
-Durable execution 對這件事的答案，不是「記住模型說了什麼」，而是「把整個呼叫包成一個 step」。Step 完成後，輸入與輸出會被寫進資料庫；同一個 workflow 再遇到同一個 step，就直接拿回上次的結果。模型不會被叫第二次。
+如果直接把 `streamText` 寫在 `while` 迴圈裡，它就不屬於任何 step。這種寫法在 workflow 重啟時，會讓整段迴圈重新執行。
 
-## 先把「一輪」變成一個東西
+問題其實很直接：這一輪 LLM 呼叫明明已經跑過，只是中途停止了，為什麼重啟後還要再跑一次？跑一次，就會支付一次 token；重跑幾次，就付幾次。
 
-要包 step，得先講清楚要包的是什麼。素材把單位定在「一輪」（turn）。
+<!--image:1-->
 
-一輪的定義很具體：呼叫一次模型，模型可能要你執行 tool call，也可能直接回答。要執行 tool call，就執行完再回頭問模型一次，那是下一輪；不用，就結束。
+DBOS 是一個 workflow 引擎，可以把一段段工作標記成 step。完成過的 step 會留下紀錄，workflow 重啟後就不會重做。
 
-每次因為 tool call 而回到迴圈頂端，就是新的一輪。
+LLM 呼叫正是最需要保護的部分：重複執行，就等於重複扣費。
 
-![第 2 段配圖](./wrap-the-model-turn-assets/image-2.webp)
+## 什麼是一個 turn
 
-*AI 生成示意圖*
+動手修改前，要先把執行單位切清楚。
 
-素材為此宣告了 `Turn` 型別，裡面放三樣東西：這一輪的文字串流、這一輪要求了哪些 tool call、以及這一輪回傳的 messages。
+一個 turn 的流程是：先呼叫 LLM。模型可能要求一次 tool call，也可能直接結束。如果模型要求 tool call，就先執行工具，再回到 LLM，讓它根據工具結果重新思考。
 
-記下來不只是為了型別好看，是為了 event log：重啟時要知道自己停在第幾輪，才有辦法從那裡接下去。
+每需要做一次 tool call，就是一個 turn。
 
-## 把 streamText 搬進 modelTurn
+`while` 迴圈每繞一圈，就是一個 turn。把 turn 記進 event log，之後 workflow 接續執行時，才知道自己停在哪一輪，可以從那一輪繼續，不用從頭開始思考。
 
-有了單位，接下來把原本塞在迴圈裡的程式碼整段搬出來，變成一支 `modelTurn` 函式。它收 workflow ID 和 messages，回傳一個 `Turn`。
+<!--image:2-->
 
-內容跟原本幾乎一樣：呼叫 `streamText`，逐段讀 `fullStream`，遇到 text delta 就 emit 出去；串流結束後，等 `toolCalls` 與最終的 `response`，整理成前面說的 `Turn` 回傳。
+## 抽出 modelTurn
+
+要替 turn 加上 step，第一步是把原本放在 `while` 迴圈裡的那一大段程式，抽成獨立函式：`modelTurn`。
+
+它接收 `workflowID` 與 `messages`，回傳一個 Promise。這個 Promise resolve 出來的，就是這一輪的 turn。
+
+`ModelMessage` 是從 `ai` 套件匯入的型別，使用 `import type`。
 
 <!-- derived -->
+
+```ts
+type ToolCall = {
+  toolCallID: string;
+  toolName: string;
+  inputs: Record<string, unknown>;
+};
+
+type Turn = {
+  text: string;
+  toolCalls: ToolCall[];
+  responseMessages: ModelMessage[];
+};
+```
+
+這兩個 helper 型別，把資料結構說清楚：
+
+- tool call 包含 ID、名稱與參數。
+- turn 包含這一輪的最終結果、這一輪要求的 tool calls，以及要接回對話的 response messages。
+
+<!-- derived -->
+
 ```ts
 async function modelTurn(
-  workflowId: string,
+  workflowID: string,
   messages: ModelMessage[],
 ): Promise<Turn> {
-  const result = streamText({ model, messages, tools });
+  const result = streamText({
+    model,
+    messages,
+    tools,
+  });
 
   for await (const part of result.fullStream) {
     if (part.type === "text-delta") {
-      emit(EventType.modelDelta, workflowId, part.text);
+      emit(EventType.modelDelta, workflowID, part.text);
     }
   }
 
   const rawCalls = await result.toolCalls;
   const toolCalls = rawCalls.map((call) => ({
-    toolCallId: call.toolCallId,
+    toolCallID: call.toolCallID,
     toolName: call.toolName,
-    inputs: call.input,
+    inputs: call.inputs,
   }));
 
+  const responseMessages = (await result.response).messages;
+
   return {
+    text: await result.text,
     toolCalls,
-    responseMessages: (await result.response).messages,
+    responseMessages,
   };
 }
 ```
 
-搬出來這件事本身沒有改變行為。串流還在串，emit 還在送，tool call 還是被記下來。改變的是這段程式碼現在有了一個可以被包住的邊界。
+函式裡的邏輯，和原本寫在迴圈裡的內容相同，只是搬到另一個地方：
 
-## 迴圈只剩下一個 await
+- `streamText` 接收 `model`、`messages` 與 `tools`。
+- 迭代 `result.fullStream`。每收到一段文字，就 emit `EventType.modelDelta`，讓外部即時看到文字逐段輸出。
+- 串流結束後，等待 `result.toolCalls`，把這一輪的工具請求整理成 `toolCallID`、`toolName` 與 `inputs`。
+- 等待最終回應，取得 response messages，再和這一輪的最終結果一起包成 turn 回傳。
 
-接著把迴圈裡的 `streamText` 拿掉，換成 `DBOS.runStep`，把 `modelTurn` 交給它執行。
+## 用 step 包住 modelTurn
+
+有了 `modelTurn` 之後，就可以回頭修改 `while` 迴圈：
+
+拿掉原本直接呼叫 `streamText` 的部分，改成 `await runStep(...)`。
+
+step 可以直接 `await`。`runStep` 會接收 `modelTurn`、`workflowID` 與 `messages`，最後替這個 step 指定名稱。素材中的做法是使用 step count 命名：執行到第幾輪，就叫做第幾個 step。
 
 <!-- derived -->
+
 ```ts
-const turn = await DBOS.runStep(
-  () => modelTurn(workflowId, messages),
-  { name: `model-turn-${stepCount}` },
+const turn = await runStep(
+  modelTurn,
+  workflowID,
+  messages,
+  `step ${stepCount}`,
 );
 
-messages.push(...turn.responseMessages);
-stepCount += 1;
+if (turn.toolCalls.length === 0) break;
+
+// 執行工具、把結果塞回 messages，繞下一圈
 ```
 
-Step 的名字帶了計數，純粹是為了看得出來這是第幾輪。同一個 workflow 會有很多輪，log 裡只看到一排 `model-turn`，很難對回對話的第幾步。
+模型不再要求工具時，就 `break`；如果有工具，就執行工具，然後進入下一圈。下一圈會再建立一個新的 step。
 
-這一行 `await` 換掉的是一個模型呼叫，換來的是「這一輪做過了」的紀錄。
+重啟之後，已經完成的 step 不會重跑，還沒完成的那一輪則照常執行。LLM 呼叫因此從「每次重啟都重跑」，變成「做過就跳過」。
 
-## await step 不是等模型吐完
+<!--image:3-->
 
-這裡有一個很容易誤會的地方，素材特別停下來解釋：把 `modelTurn` 包進 step 之後，串流並沒有變成「等全部跑完才一次送出」。
+## await step，串流沒有停
 
-`await` 的是 step 執行完成，不是模型回應的結果。Step 裡面還是在跑 `streamText`，還是在迭代 `fullStream`，每個 text delta 還是照樣 emit。使用者看到的行為不變，字還是一個一個出現。
+最後有一個地方很容易誤會：`await` 這個 step，不代表串流停止了。
 
-![第 3 段配圖](./wrap-the-model-turn-assets/image-3.webp)
+`modelTurn` 裡面仍然會呼叫 `streamText`、迭代 `fullStream`，也照樣一段一段 emit 文字。我們等待的是「這個 step 執行完畢」，不是一次等回整條串流的結果。
 
-*AI 生成示意圖*
+所以文字照樣逐段吐出來，只是這一輪跑完，會被記錄成一個 step。
 
-差別在於，這一輪結束時，step 的結果被留下來了。串流的即時性來自函式內部的迴圈，durability 來自外面那層 step，兩件事不衝突。
+model turn 包好了，剩下的是 tool call 和它前後的 `emit`。下一節把它們也關進 step。
 
-## 邊界外面還剩什麼
-
-迴圈裡不是所有東西都要包。組 prompt、判斷有沒有 tool call、把 messages 接起來、把計數加一，這些每次跑都一樣，留在 workflow body 裡沒問題。
-
-真正要包的，是會碰到外面世界的呼叫。模型呼叫是其一，寫資料庫的 emit 也是。素材在沒有 tool call 的分支裡，連「模型講完了」和「任務完成」這兩個 emit 都包進 step，理由跟包模型一樣：emit 會寫資料庫，重跑一次就多一筆，這不是冪等。
-
-判斷方式跟前一課同一條線：重跑會不會碰到 body 以外的世界？會，就包。
-
-## 這個 step 保證到哪裡
-
-最後要把保證的範圍講清楚，不然很容易過度期待。
-
-Step 記住的是「完成的那一輪」。如果模型跑到一半、串流到一半程式被殺掉，這一輪就沒有完成，重啟後還是得再跑一次。你不會從某個 token 接回去，只會從上一輪的結尾接下去。
-
-![第 4 段配圖](./wrap-the-model-turn-assets/image-4.webp)
-
-*AI 生成示意圖*
-
-所以省下來的是「已經跑完的輪數」，不是「正在跑的那一句」。對一個會反覆呼叫模型的 agent 來說，這樣已經夠了：失敗通常發生在迴圈深處，前面累積的每一輪都不必重付。
-
-模型這一邊包好了，下一課換另一種更麻煩的東西：會產生副作用的 tool call。
+<!--image:4-->

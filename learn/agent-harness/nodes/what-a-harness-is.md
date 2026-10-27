@@ -4,7 +4,7 @@ title: "Harness 是一個系統，不是一個迴圈"
 subject: agent-harness
 tier: 1
 order: 1
-status: written
+status: confirmed
 goal: "用控制面、狀態面、執行面、context 面拆開 agent 系統，並說出 demo 與 production 的差異。"
 prerequisites: []
 steps:
@@ -23,7 +23,7 @@ steps:
       - "[[sources/agent-harness/20260915/harness-engineering/lessons/01-intro-to-harness-engineering/index.md#L34-L58]]"
       - "[[sources/agent-harness/20260915/harness-engineering/lessons/01-intro-to-harness-engineering/index.md#L291-L311]]"
 created: 2026-10-22
-updated: 2026-10-24
+updated: 2026-10-27
 ---
 
 # Harness 是一個系統，不是一個迴圈

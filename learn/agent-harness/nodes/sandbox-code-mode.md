@@ -40,7 +40,7 @@ steps:
       - "[[sources/agent-harness/20260915/13-code-mode-security.txt#L135-L162]]"
       - "[[sources/agent-harness/20260915/15-updating-the-system-prompt.txt#L179-L223]]"
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-27
 ---
 
 # Sandbox：不可信程式的執行邊界

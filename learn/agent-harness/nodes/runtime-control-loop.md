@@ -42,7 +42,7 @@ steps:
       - "[[sources/agent-harness/20260915/5-harness-runtime.txt#L420-L476]]"
       - "[[sources/agent-harness/20260915/6-stream-messages-to-the-ui.txt#L109-L179]]"
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-27
 ---
 
 # Runtime：一回合的控制平面

@@ -4,7 +4,7 @@ title: "Memory：History、State、Context 三層"
 subject: agent-harness
 tier: 3
 order: 7
-status: written
+status: confirmed
 goal: "分辨 history/state/context，並實作以 token 預算觸發的 compaction。"
 prerequisites: []
 steps:
@@ -40,7 +40,7 @@ steps:
       - "[[sources/agent-harness/20260915/18-clearing-durable-event-log.txt#L79-L198]]"
       - "[[sources/agent-harness/20260915/17-summarization-compaction.txt#L278-L321]]"
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-27
 ---
 
 # Memory：History、State、Context 三層

@@ -1,168 +1,171 @@
 # runCode 接回 tool 迴圈，以及 vm 擋不住的事
 
-上一課完成了 `runInSandbox`：把一段字串當成程式碼，放進受限環境裡執行。
+到目前為止，你已經有一個沙箱：`runInSandbox` 使用 Node 的 `vm` 模組，把一段程式關進受限的小環境裡執行。
 
-但只有這個函式還不夠。agent 不知道自己有這項能力，harness 也不知道該怎麼把「執行程式」接回原本的工具迴圈。
+但這個沙箱目前像個沒人接的電話。tool 迴圈裡沒有任何工具會呼叫它，agent 也就無法要求「幫我執行這段程式」。
 
-這一課會補上這兩個缺口，也會正視一個重要問題：`node:vm` 這個沙箱，其實不是真正的安全邊界。
+這一節要補上的，正是這個缺口：
 
-## 先決定沙箱裡有哪幾扇門
+1. 新增 `runCode` 工具，讓 agent 能要求執行一段程式。
+2. 把 `runCode` 接回 `runTool` 的 `switch case`。
+3. 看清楚 `vm` 擋不住的兩件事：沙箱逃脫風險，以及一個雖然寫好、卻沒有真正接上的 timeout。
 
-要讓 agent 使用 `runInSandbox`，第一步是決定沙箱裡的程式可以呼叫哪些函式。
+## 為什麼要讓 agent 執行程式？
 
-素材把這組函式稱為 **sandbox API**。它不是提供給 agent 直接使用的，而是提供給「沙箱裡執行的那支程式」使用。
+有些事情，與其交給語言模型（LM）計算，不如直接寫一段程式處理。
 
-這裡的例子和計費有關。`charge` 需要對金額進行算術運算，而算術正好是 LLM 不擅長的事。素材甚至調侃，模型連 `strawberry` 裡有幾個 `r` 都可能數錯。
+最典型的例子就是金額。這一節的 demo 做了一個叫 `charge` 的工具，負責進行金額的加減運算。理由很直接：LM 連「strawberry 有幾個 R」都不一定數得準，算錢這種事，還是交給函式比較安心。
 
-這類工作，應該交給真正的函式處理。因此，沙箱裡只放兩扇門：
+所以與其讓 LM 變得更會算，不如讓它能把計算交給程式。要做到這件事，就需要一個能執行程式的工具。
+
+## 沙箱 API：開放給沙箱使用的函式
+
+程式送進沙箱後，不能想碰什麼就碰什麼。
+
+`runInSandbox` 執行程式時，會帶入一組 sandbox API。這組 API 就像一張允許清單，列出「沙箱裡的程式可以使用哪些函式」。程式只能使用清單上的函式，其他資源一律拿不到。
 
 <!-- derived -->
 ```ts
-const sandboxAPI: SandboxAPI = {
-  getCharges: (customerId: string) =>
-    charges.filter((c) => c.customerId === customerId),
-  searchKnowledgeBase: (query: string) => searchKB(query),
-};
+// 沙箱 API：程式在沙箱裡只能呼叫這幾支函式
+const sandboxAPI = {
+  // 用 customerId 找出該客戶的 charge 清單
+  getCharges(customerId: string) {
+    return charges.filter((c) => c.customerId === customerId)
+  },
+  // 搜尋知識庫
+  searchKnowledgeBase(query: string) {
+    return searchKB(query)
+  },
+}
 ```
 
-`getCharges` 接收 `customerId`，回傳這個客戶的費用；如果查不到資料，就回傳空陣列。
+`getCharges` 接收一個 `customerId`，從 `charges` 清單中找出這個客戶的資料。`searchKnowledgeBase` 接收一個 `query`，用來搜尋知識庫。
 
-`searchKnowledgeBase` 則接收查詢字串，搜尋知識庫。素材在實作時，把 `searchKB` 抽成共用的 helper，讓沙箱 API 和外部程式共用同一份邏輯。
+底下的 `searchKB` 原本就已經寫好了，這裡只是把它抽成一個 helper，讓沙箱 API 和其他地方都能共用。
 
-sandbox API 這個物件的意義就是白名單：沙箱裡的程式只能碰到你明列出來的函式，其他一律看不見。
+這兩個函式各自做了什麼其實不重要，重要的是這個動作本身：你正在替沙箱列出一份清單，明確規定裡面的程式可以碰哪些東西。
+
+清單以外的資源，就擋在門外。
 
 ![第 1 段配圖](./run-code-tool-and-limits-assets/image-1.webp)
 
-*AI 生成示意圖*
+## runCode：agent 手上的執行程式工具
 
-## runCode：把「寫程式」包成一個 tool
-
-有了 API，接著要讓 agent 知道自己可以寫程式。
-
-做法很直接：新增一個叫做 `runCode` 的 tool。
-
-它的 description 會這樣告訴模型：
-
-> run a JavaScript program, an async function body to fetch, analyze data available inside the program.
-
-翻成白話，就是：你可以寫一支非同步的 JavaScript 程式，透過 `await tools.getCharges` 和 `await tools.searchKnowledgeBase` 取得資料，也可以用 `console.log` 印出內容，或用 `return` 回傳結果。回傳值可以是任何 JSON。
-
-它的 input schema 只有一個欄位，就是 `code`——要執行的程式碼本身。
+接著定義 `runCode` 工具，並把它提供給 agent 使用。
 
 <!-- derived -->
 ```ts
-const runCode = {
+// runCode：agent 可以呼叫它，要求在沙箱裡跑一段 JavaScript
+const runCodeTool = {
+  name: 'runCode',
   description:
-    "run a JavaScript program, an async function body to fetch, analyze data available inside the program.",
-  input: { code: "string" },
-};
+    '執行一段 JavaScript 程式（async function body），在程式內取得並分析資料。' +
+    '你可以用 await tools.getCharges(customerId)、await tools.searchKnowledgeBase(query)，' +
+    '可以 console.log，也可以用 return 回傳任何 JSON 值。',
+  input: { code: 'string' },
+}
 ```
+
+這個工具的 input schema 很簡單，只有一個欄位：`code`，也就是要執行的程式字串。
+
+`description` 則要告訴 agent，程式裡有哪些工具可以使用，例如：
+
+- `await tools.getCharges`
+- `await tools.searchKnowledgeBase`
+- 印出內容
+- 使用 `return` 把結果交回來
+
+作者明說，這個工具本身「不怎麼有趣」。重點在下一步：把它接回 tool 迴圈。
+
+## 接回 `runTool` 的 `switch case`
+
+有了工具，還需要有人處理工具請求。
+
+請求會進入 harness 的 `runTool`，接著在 `switch case` 裡新增一個分支。
+
+<!-- derived -->
+```ts
+async function runTool(call) {
+  switch (call.name) {
+    case 'runCode':
+      // 把程式連同沙箱 API 一起送進沙箱執行
+      return runInSandbox(call.input.code, sandboxAPI)
+    case 'getCharges':
+      return charges
+    case 'searchKB':
+      return { results: searchKB(call.input.query) }
+  }
+}
+```
+
+`runCode` 這個 case 做的事情很單純：呼叫 `runInSandbox`，把 agent 提供的程式字串，也就是 `call.input.code`，和 sandbox API 一起送進去。
+
+沙箱執行完成後，再把結果回傳給 agent，讓 agent 繼續往下處理。
+
+作者也順手補上另外兩個 case：
+
+- `getCharges` 直接回傳 `charges`
+- `searchKB` 用物件包住結果後回傳，和其他工具的格式保持一致
+
+整套流程其實可以濃縮成兩步：
+
+1. 定義工具。
+2. 在 `runTool` 裡處理這個工具。
+
+定義好 `runCode`、處理好它的 case 之後，agent 就能透過 tool 迴圈，把程式送進沙箱執行，再把結果拿回來。
 
 ![第 2 段配圖](./run-code-tool-and-limits-assets/image-2.webp)
 
-*AI 生成示意圖*
+## `vm` 擋不住的事之一：沙箱逃脫
 
-不過，定義 tool 還不代表功能完成。tool 寫好了，harness 還不知道該怎麼處理它，因此還要回到 `runTool`，在 `switch` 裡新增一個 `case`。
+先談談沙箱的安全界線。
 
-## 加一個 case，就是加一個 tool
+作者的警告很直接：你必須確保 agent 活在一個「逃不出去」的沙箱裡。
 
-素材把「新增工具」整理成一個固定流程：
+你不會把陌生人直接帶進 production 環境。同樣地，也不該把 agent 丟進 production 環境。它如果在你的電腦上搞砸，情況就已經很糟；如果是在 production server 上搞砸，後果只會更嚴重。
 
-1. 先定義 tool。
-2. 再在 `runTool` 的 `switch` 裡處理它。
+真正的產品有許多現成的沙箱方案。但這個 demo 使用的是離線版本，也就是 Node 的 `vm` 模組。
 
-`runCode` 的 `case` 很短：
+作者也特別提醒，`vm` 過去曾出現過讓 agent 逃出沙箱的漏洞。即使那些漏洞可能已經修補，對這個離線練習來說，仍然可以先拿來使用。
 
-<!-- derived -->
-```ts
-switch (tool) {
-  case "runCode":
-    return runInSandbox(code, sandboxAPI);
-  case "getCharges":
-    return charges;
-  case "searchKB":
-    return { result: searchKB(query) };
-}
-```
+但如果要上正式環境，就不會直接靠 `vm` 扛住風險，而是把執行工作交給另一個專門處理沙箱的 process。
 
-這條路徑會把 agent 傳來的 `code` 字串，連同 sandbox API 一起交給 `runInSandbox`。
-
-素材在輸入時碰到一個小錯：`runInSandbox` 其實接收三個參數——`code`、API 和 `options`。不過第三個參數是選用的，所以只傳前兩個也可以。
-
-`getCharges` 和 `searchKB` 這兩個 `case`，則讓 agent 不必寫程式，也能直接呼叫函式。它們正好對應到沙箱 API 裡的兩扇門。
-
-所以，每次要新增工具，基本上都是重複同一件事：先定義它，再在 `runTool` 裡處理它。
-
-素材的總結很簡單：先公開沙箱需要使用的 API，再到 `runTool` 裡處理這些工具。
+白話講，`vm` 提供的是「練習用」的界線，不是「production 級」的界線。它可以防止程式不小心碰到不該碰的東西，卻不能保證程式刻意嘗試逃脫時仍然安全。
 
 ![第 3 段配圖](./run-code-tool-and-limits-assets/image-3.webp)
 
-*AI 生成示意圖*
+## `vm` 擋不住的事之二：timeout 寫了卻沒接上
 
-## node:vm 到底擋得住什麼
+有人在課堂上問：能不能設定 timeout，避免 agent 的程式陷入無限迴圈，最後把 server 卡住？
 
-講到這裡，得先潑一盆冷水。
+答案是：timeout 機制已經寫好了，但目前還沒有真正用上。
 
-上一課選用 `node:vm`，是因為它方便，不是因為它安全。
+sandbox 裡有一個 timeout 選項，預設值是 2 秒。你可以傳入 `options`，再透過 `timeoutMs` 設定時間。
 
-素材的立場很清楚：agent 應該待在一個逃不出去的沙箱裡。道理就像你不會把陌生人直接丟進 production 一樣——你也不會想把 agent 丟進正式環境。
+底下的實作使用 `Promise.race`，同時準備兩條路：
 
-在自己的電腦上出錯已經夠麻煩；如果是在正式伺服器上出錯，後果只會更糟。
+- 一條執行你的程式
+- 另一條是時間一到就 `reject` 的 Promise
 
-不過，素材沒有使用商業沙箱產品，而是用 `node:vm` 做出一個離線版本，並直接承認：`node:vm` 曾經出現過能讓 agent 逃出沙箱的漏洞。即使後來可能已經修補，這仍然不能當成正式環境的安全保證。
-
-「沒關係，我們照用，反正是你的 agent」這句話的重點在於：這是教學版本，離線跑跑可以；真的要上 production，就得換成其他執行方式。
-
-素材提到，正式環境大概會使用獨立的 process 來執行這些程式。
-
-換句話說，`node:vm` 提供的是隔離的錯覺，不是隔離的保證。它可以擋住不小心寫錯的程式，卻擋不住刻意尋找漏洞、試圖逃脫的程式。
-
-![第 4 段配圖](./run-code-tool-and-limits-assets/image-4.webp)
-
-*AI 生成示意圖*
-
-## timeout 其實沒接上
-
-最後一個缺口，是讀者提出的問題：
-
-能不能設定 timeout，避免 agent 跑無限迴圈，最後把伺服器掛住？
-
-答案是：有這個機制，但目前沒有真的用上。
-
-`runInSandbox` 裡其實早就寫好逾時處理。預設時間是兩秒，也可以透過 `options` 傳入 timeout 的毫秒數。
-
-它使用 `Promise.race`：同時啟動兩件事，一件是執行你的程式，另一件是「時間到就 reject」的計時器。誰先完成，誰就贏。
+誰先完成，誰就獲勝。程式先執行完，就回傳結果；如果 timeout 先到，就會 `reject` 並丟出錯誤。
 
 <!-- derived -->
 ```ts
-function withTimeout(promise, timeoutMs) {
+// sandbox 內建的 timeout：Promise.race 看誰先完成
+function runInSandbox(code, api, options = { timeoutMs: 2000 }) {
   return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("timeout")), timeoutMs),
-    ),
-  ]);
+    execute(code, api), // 你的程式
+    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), options.timeoutMs)),
+  ])
 }
 ```
 
-問題出在前面的 `switch`。
+![第 4 段配圖](./run-code-tool-and-limits-assets/image-4.webp)
 
-素材自己也指出，呼叫 `runInSandbox` 時沒有傳入 `options` 物件，因此 timeout 參數根本沒有被帶進去。
+但回到剛才的 `runTool` `switch case`，就會發現問題：那個呼叫 `runInSandbox` 的地方，根本沒有把 `options` 傳進去。
 
-機制寫好了，線卻沒有接上。
+所以現在實際執行時，使用的仍然是預設值，而不是你真正想設定的 timeout。
 
-如果真的丟一支無限迴圈的程式進去，它還是會一路執行，直到 process 掛掉。原本應該提供兩秒保護的 timeout，這時就形同虛設。
+缺口就在這裡：timeout 機制躺在 sandbox 裡，卻沒有從 tool 迴圈這一端接上。
 
-![第 5 段配圖](./run-code-tool-and-limits-assets/image-5.webp)
-
-*AI 生成示意圖*
-
-這一課想留下的重點是：
-
-`runCode` 接回 tool 迴圈後，agent 就能寫程式來解題，這部分只需要幾行程式。
-
-真正困難的是邊界管理：
-
-- `node:vm` 不是真正的安全邊界。
-- timeout 機制雖然存在，卻還沒有接到實際呼叫上。
-- demo 能執行，不代表 production 真的撐得住。
+它已經寫好，也確實能用，只是目前還沒被用起來。demo 和 production 的差距，常常就藏在這種沒接上的小地方。

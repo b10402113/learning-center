@@ -1,60 +1,66 @@
 # Schema 是模型與程式之間的契約
 
-上一課的搜尋工具只有一個 `query`，模型填什麼都收，查不到就回空結果。這種自由欄位還算好處理。
+你寫好工具的 `execute function`，裡面假設 `category` 只會是 `billing`、`technical`、`sales`、`other` 四種。
 
-但如果工具的工作是分類，而程式只認得四種分類，就不能讓模型自己發明第五種。
+結果某天模型傳入了 `"feedback"`，`switch` 跑進 `default`，最後回傳一個莫名其妙的結果。
 
-這時候 schema 不只是給模型看的提示，而是模型和程式都要遵守的契約。
+問題不在模型笨，而在於你從來沒有把「我能處理什麼」寫下來給它看。
 
-## 用 Zod 在執行時檢查形狀
+<!--image:1-->
 
-課程用 Zod 定義 schema。它是 JavaScript 的 runtime schema checker：你寫一份 schema，程式在執行時拿它來驗證資料。
+工具的參數由模型產生，但真正執行的是你的程式。兩邊要對得上，靠的不是默契，而是一份事先寫好的契約——**schema**。
 
-可以把它想成搬到執行期的 TypeScript，或是用在記憶體物件上的資料庫 schema。
+## Zod：在執行時期檢查物件的形狀
 
-Zod 是 JavaScript 生態裡最流行的一套，也和 AI SDK 相容，所以直接拿來寫 tool 的 inputSchema。
+Zod 是用來在執行時期檢查物件形狀的工具。
 
-## enum 把選項鎖死
+TypeScript 的型別只存在於編輯器裡，程式實際跑起來之後就消失了。Zod 則不一樣，它有點像資料庫的 schema，只是檢查的對象不是資料表，而是記憶體裡的物件。
 
-分類工具要吃兩個參數：要分類的項目 ID，以及分類本身。
+你先定義好資料形狀，程式執行到那一步時，Zod 才會真的進行驗證。它是 JavaScript 世界裡很受歡迎的選擇，也和 AI SDK 相容，因此工具的 input schema 可以直接用 Zod 來撰寫。
 
 <!-- derived -->
 ```ts
-classifyItem: tool({
-  description: "Classify a work item into one category.",
-  inputSchema: z.object({
-    itemId: z.string(),
-    category: z.enum(["billing", "technical", "sales", "other"]),
-  }),
-  execute: async ({ itemId, category }) => {
-    // ...
-  },
-}),
+// classify item 工具的 input schema
+const inputSchema = z.object({
+  itemId: z.string(),
+  category: z.enum(["billing", "technical", "sales", "other"]),
+});
 ```
 
-`z.enum` 的意思是「這幾個其中之一」。
+一個工具大致上包含三個部分：
 
-模型可以選 billing、technical、sales 或 other，但不能傳「帳務問題」或「其他（急件）」。就像菜單只列四道菜，廚房也只會做這四道，客人不能自己發明第五道。
+- 一段描述（description）
+- 一份輸入格式（input schema）
+- 一個實際做事的 `execute function`
 
-execute 收到 category 時，就知道它一定是這四個字串之一。
+其中，契約就寫在 input schema 裡。
 
-這就是契約：模型負責在允許的範圍裡挑一個，程式負責處理範圍內的東西。模型沒有義務理解你的資料庫，但它必須交出程式能吃的形狀。
+## enum：把選項釘死
 
-![第 1 段配圖](./schema-is-the-contract-assets/image-1.webp)
-*AI 生成示意圖*
+`enum` 的意思很簡單：這個欄位只允許使用清單中的其中一個值。
 
-## 欄位也值得一句 describe
+<!--image:2-->
 
-schema 管的是形狀，不管模型知不知道這個欄位在幹嘛。所以每個欄位都可以加 `describe`。
+範例中要模型替項目分類，而類別只有四種：`billing`、`technical`、`sales`、`other`。
 
-素材裡的回答很直接：如果目標是讓 agent 知道欄位是什麼，那就該加。不過也要看情況。
+用 `z.enum` 列出這四個字串後，模型就只能從這份清單裡選。如果它想填入 `"feedback"`，這個值會在 schema 驗證這一關被擋下來。如此一來，你的 `execute function` 收到的就只會是這四種值之一。
 
-有些模型看到 `itemId` 就懂，尤其你傳的資料本來就帶著這個欄位；但如果資料裡它叫別的名字，或得從另一筆資料查出來，describe 就是你把話講清楚的地方。
+這就是「程式真的能處理」的意思：schema 擋掉的不是模型的創意，而是那些你根本沒有撰寫處理邏輯的輸入。
 
-它和 description 一樣，是影響模型的一個表面，不是開關。寫了不保證模型一定懂，寫得好不好還是得量。
+參數約束得越貼近 `execute function` 的能力範圍，模型填錯的空間就越小。
 
-## 契約管形狀，不管誰動手
+## describe：告訴模型這個欄位到底是什麼
 
-到這裡，schema 已經把參數約束成程式能處理的樣子。但還有一個問題：模型給了參數之後，是誰拿這些參數去執行？
+如果欄位名稱不夠直白，就在 schema 裡使用 `describe`，把意思說清楚。
 
-在原本的寫法裡，execute 就黏在 tool 物件上。下一課會看到，這代表 AI SDK 會替你把這件事做掉，而這正是要拿回來的地方。
+<!--image:3-->
+
+工具的輸入欄位要不要加上 description？要，百分之百要——只要你的目標是讓模型知道欄位代表什麼，就應該把 description 寫上去。
+
+這也是一個會影響模型的介面，和工具本身的描述一樣值得花心思。
+
+不過，是否需要補充說明，還是要看情況。
+
+有時候欄位叫做 `item ID`，模型一看就懂，不需要多說。但如果你的資料裡，item ID 使用了另一個欄位名稱，或是必須從另一筆資料才能取得，就應該用 `describe` 跟模型說清楚：item ID 其實就是它接下來會看到的那個欄位。
+
+把這層關係講明白，模型才比較能把正確的值放進正確的欄位。

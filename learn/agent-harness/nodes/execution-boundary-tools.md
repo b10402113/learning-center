@@ -42,7 +42,7 @@ steps:
       - "[[sources/agent-harness/20260915/3-agent-tools-setup.txt#L361-L395]]"
       - "[[sources/agent-harness/20260915/4-classify-reply-tools.txt#L153-L182]]"
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-27
 ---
 
 # Tools：Harness 拿回執行權
