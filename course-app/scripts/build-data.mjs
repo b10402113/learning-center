@@ -78,6 +78,14 @@ function parseSource(link) {
   };
 }
 
+/** Normalize a frontmatter date to `YYYY-MM-DD` so dates sort as strings. */
+function normalizeDate(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
 function readMarkdown(file) {
   const raw = fs.readFileSync(file, "utf8");
   const { data, content } = matter(raw);
@@ -224,6 +232,7 @@ export function buildSubject(
 
   const roadmap = readMarkdown(roadmapFile);
   const roadmapBody = roadmap.body;
+  const roadmapUpdated = normalizeDate(roadmap.frontmatter.updated);
   const { tiers, nodes: roadmapNodes } = parseRoadmap(roadmapBody);
 
   const nodesDir = path.join(subjectDir, "nodes");
@@ -257,6 +266,7 @@ export function buildSubject(
       goal: fm.goal || "",
       prerequisites: fm.prerequisites || [],
       lessonIntro: cleanWikilinks(section(body, "Lesson")),
+      updated: normalizeDate(fm.updated),
       steps,
     });
   }
@@ -273,12 +283,18 @@ export function buildSubject(
   }
 
   const goal = section(roadmapBody, "Goal");
+  const updated =
+    [roadmapUpdated, ...[...nodesById.values()].map((node) => node.updated)]
+      .filter(Boolean)
+      .sort()
+      .pop() || null;
 
   return {
     subject,
     title: SUBJECT_TITLES[subject] || subject.replace(/-/g, " "),
     language: "zh-Hant",
     goal,
+    updated,
     tiers: tiers.map(({ tier, name }) => ({ tier, name })),
     nodes: orderedNodes.map((node, index) => ({
       ...node,
@@ -341,6 +357,8 @@ function main() {
       id: subject,
       title: course.title,
       nodes: course.nodes.length,
+      steps: course.nodes.reduce((acc, n) => acc + n.steps.length, 0),
+      updated: course.updated,
       goal: course.goal,
     });
 

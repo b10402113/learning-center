@@ -3,9 +3,10 @@ import subjectsIndex from "./data/subjects.json";
 import Sidebar from "./components/Sidebar.jsx";
 import NodeView from "./components/NodeView.jsx";
 import StepView from "./components/StepView.jsx";
+import SubjectsView from "./components/SubjectsView.jsx";
 import PixelMark from "./components/PixelMark.jsx";
 import DotMatrix from "./components/DotMatrix.jsx";
-import { hashFor, parseHash } from "./lib/route.mjs";
+import { hashFor, indexRoute, parseHash } from "./lib/route.mjs";
 
 // Lazy loaders — each subject's course JSON is code-split and fetched on demand.
 const courseLoaders = import.meta.glob("./data/subjects/*.json");
@@ -13,15 +14,16 @@ const SUBJECTS = subjectsIndex.subjects;
 const SIDEBAR_KEY = "lc.sidebar";
 
 function resolveSubjectId(id) {
-  return id && SUBJECTS.some((s) => s.id === id) ? id : SUBJECTS[0]?.id;
+  return id && SUBJECTS.some((s) => s.id === id) ? id : null;
 }
 
 function initialRoute() {
   const h = parseHash(window.location.hash);
+  if (!h) return indexRoute();
   return {
-    subjectId: resolveSubjectId(h?.subjectId),
-    nodeId: h?.nodeId ?? null,
-    stepId: h?.stepId ?? null,
+    subjectId: resolveSubjectId(h.subjectId),
+    nodeId: h.nodeId,
+    stepId: h.stepId,
   };
 }
 
@@ -116,22 +118,36 @@ export default function App() {
   const cacheRef = useRef({});
   const routeKey = `${subjectId ?? ""}/${nodeId ?? ""}/${stepId ?? ""}`;
 
-  // Load the selected subject's data (async, cached)
+  // Load the selected subject's data (async, cached). The index has no course.
   useEffect(() => {
+    if (!subjectId) {
+      setCourse(null);
+      return;
+    }
+    if (cacheRef.current[subjectId]) {
+      setCourse(cacheRef.current[subjectId]);
+      return;
+    }
+    setCourse(null);
     let alive = true;
     (async () => {
-      if (!subjectId) return;
-      if (!cacheRef.current[subjectId]) {
-        const loader = courseLoaders[`./data/subjects/${subjectId}.json`];
-        if (!loader) return;
-        const mod = await loader();
-        cacheRef.current[subjectId] = mod.default;
-      }
+      const loader = courseLoaders[`./data/subjects/${subjectId}.json`];
+      if (!loader) return;
+      const mod = await loader();
+      cacheRef.current[subjectId] = mod.default;
       if (alive) setCourse(cacheRef.current[subjectId]);
     })();
     return () => {
       alive = false;
     };
+  }, [subjectId]);
+
+  // Unknown subject ids fall back to the index; keep the address bar honest.
+  useEffect(() => {
+    if (subjectId) return;
+    if (window.location.hash && window.location.hash !== "#/") {
+      history.replaceState(null, "", "#/");
+    }
   }, [subjectId]);
 
   const node = useMemo(
@@ -220,16 +236,23 @@ export default function App() {
     pushHash(subjectId, id);
   };
 
-  const switchSubject = (sid) => {
-    if (sid === subjectId || !SUBJECTS.some((s) => s.id === sid)) return;
-    setRoute({ subjectId: sid, nodeId: null, stepId: null });
+  const selectStep = (nid, stid) => {
+    setRoute({ subjectId, nodeId: nid, stepId: stid });
+    setSidebarOpen(false);
+    pushHash(subjectId, nid, stid);
+  };
+
+  const goHome = () => {
+    setRoute(indexRoute());
     setCourse(null);
     setSidebarOpen(false);
+    pushHash(null, null);
   };
 
   // Resolve incomplete or stale hashes once the course JSON is loaded.
   useEffect(() => {
     if (!course || course.nodes.length === 0) return;
+    if (course.subject !== subjectId) return;
     const resolved =
       course.nodes.find((n) => n.id === nodeId) || course.nodes[0];
     const resolvedStep = resolved.steps.some((s) => s.id === stepId)
@@ -246,45 +269,36 @@ export default function App() {
     replaceHash(course.subject, resolved.id, resolvedStep);
   }, [course, nodeId, stepId]);
 
-  if (!course || !node) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-paper">
-        <div className="h-32 w-32">
-          <DotMatrix variant="hexagon" height={128} />
-        </div>
-        <p className="robo-kicker font-label text-xs text-ink-soft">
-          Loading
-        </p>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-40 border-b-2 border-ink bg-paper">
         <div className="flex h-14 items-center gap-2 px-3 sm:px-4">
-          <button
-            type="button"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="開啟選單"
-            className="p-2 text-ink-soft transition-colors hover:text-accent lg:hidden"
-          >
-            <HamburgerIcon />
-          </button>
+          {subjectId && (
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="開啟選單"
+              className="p-2 text-ink-soft transition-colors hover:text-accent lg:hidden"
+            >
+              <HamburgerIcon />
+            </button>
+          )}
+
+          {subjectId && (
+            <button
+              type="button"
+              onClick={() => setCollapsed((value) => !value)}
+              aria-label={collapsed ? "展開側欄" : "收合側欄"}
+              title={collapsed ? "展開側欄（⌘B）" : "收合側欄（⌘B）"}
+              className="hidden p-2 text-ink-soft transition-colors hover:text-accent lg:inline-flex"
+            >
+              <PanelIcon expand={collapsed} />
+            </button>
+          )}
 
           <button
             type="button"
-            onClick={() => setCollapsed((value) => !value)}
-            aria-label={collapsed ? "展開側欄" : "收合側欄"}
-            title={collapsed ? "展開側欄（⌘B）" : "收合側欄（⌘B）"}
-            className="hidden p-2 text-ink-soft transition-colors hover:text-accent lg:inline-flex"
-          >
-            <PanelIcon expand={collapsed} />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => selectNode(course.nodes[0].id)}
+            onClick={goHome}
             className="flex min-w-0 items-center gap-3 py-1 pr-2 text-left"
           >
             <span
@@ -298,61 +312,83 @@ export default function App() {
                 Learning Center
               </span>
               <span className="hidden truncate font-label text-[11px] uppercase tracking-[0.16em] text-ink-soft sm:block">
-                {course.title} · {node.title}
+                {course && node ? `${course.title} · ${node.title}` : "課程清單"}
               </span>
             </span>
           </button>
 
-          <div className="ml-auto flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setCollapsed((value) => !value)}
-              className="hidden items-center gap-2 border-2 border-ink bg-surface px-3 py-1.5 font-label text-[11px] uppercase tracking-[0.12em] text-ink transition-colors hover:border-accent hover:text-accent lg:inline-flex"
-            >
-              <PanelIcon expand={collapsed} />
-              {collapsed ? "顯示目錄" : "專注模式"}
-            </button>
-          </div>
+          {subjectId && course && node && (
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCollapsed((value) => !value)}
+                className="hidden items-center gap-2 border-2 border-ink bg-surface px-3 py-1.5 font-label text-[11px] uppercase tracking-[0.12em] text-ink transition-colors hover:border-accent hover:text-accent lg:inline-flex"
+              >
+                <PanelIcon expand={collapsed} />
+                {collapsed ? "顯示目錄" : "專注模式"}
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
-      <ReadingProgress routeKey={routeKey} />
+      {subjectId && <ReadingProgress routeKey={routeKey} />}
 
-      <div className="lg:flex">
-        <Sidebar
-          subjects={SUBJECTS}
-          course={course}
-          currentId={node.id}
-          onSelect={selectNode}
-          onSwitchSubject={switchSubject}
-          open={sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
-          collapsed={collapsed}
-          onToggle={() => setCollapsed((value) => !value)}
-        />
-
+      {!subjectId ? (
         <main className="min-w-0 flex-1">
           <div className="mx-auto w-full max-w-[1040px] px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
             <div className="border-0 bg-transparent px-0 py-0 sm:border-2 sm:border-ink sm:bg-surface sm:px-8 sm:py-8 sm:shadow-[8px_8px_0_rgba(28,26,22,0.9)] lg:px-12 lg:py-11">
-              {step ? (
-                <StepView
-                  key={step.id}
-                  course={course}
-                  node={node}
-                  step={step}
-                />
-              ) : (
-                <NodeView
-                  key={node.id}
-                  course={course}
-                  node={node}
-                  onSelect={selectNode}
-                />
-              )}
+              <SubjectsView subjects={SUBJECTS} />
             </div>
           </div>
         </main>
-      </div>
+      ) : !course || !node ? (
+        <div className="flex min-h-[60vh] flex-col items-center justify-center gap-6">
+          <div className="h-32 w-32">
+            <DotMatrix variant="hexagon" height={128} />
+          </div>
+          <p className="robo-kicker font-label text-xs text-ink-soft">
+            Loading
+          </p>
+        </div>
+      ) : (
+        <div className="lg:flex">
+          <Sidebar
+            course={course}
+            currentId={node.id}
+            currentStepId={stepId}
+            onSelect={selectNode}
+            onSelectStep={selectStep}
+            onHome={goHome}
+            open={sidebarOpen}
+            onClose={() => setSidebarOpen(false)}
+            collapsed={collapsed}
+            onToggle={() => setCollapsed((value) => !value)}
+          />
+
+          <main className="min-w-0 flex-1">
+            <div className="mx-auto w-full max-w-[1040px] px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
+              <div className="border-0 bg-transparent px-0 py-0 sm:border-2 sm:border-ink sm:bg-surface sm:px-8 sm:py-8 sm:shadow-[8px_8px_0_rgba(28,26,22,0.9)] lg:px-12 lg:py-11">
+                {step ? (
+                  <StepView
+                    key={step.id}
+                    course={course}
+                    node={node}
+                    step={step}
+                  />
+                ) : (
+                  <NodeView
+                    key={node.id}
+                    course={course}
+                    node={node}
+                    onSelect={selectNode}
+                  />
+                )}
+              </div>
+            </div>
+          </main>
+        </div>
+      )}
     </div>
   );
 }

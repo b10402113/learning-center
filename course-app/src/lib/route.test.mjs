@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hashFor, parseHash } from "./route.mjs";
+import { hashFor, indexRoute, parseHash } from "./route.mjs";
 
 test("parses a step route", () => {
   assert.deepEqual(
@@ -21,6 +21,20 @@ test("parses a node route without a step", () => {
   });
 });
 
+test("parses a subject-only route", () => {
+  assert.deepEqual(parseHash("#/agent-harness"), {
+    subjectId: "agent-harness",
+    nodeId: null,
+    stepId: null,
+  });
+});
+
+test("treats empty hashes as the subject index", () => {
+  assert.deepEqual(parseHash(""), indexRoute());
+  assert.deepEqual(parseHash("#"), indexRoute());
+  assert.deepEqual(parseHash("#/"), indexRoute());
+});
+
 test("tolerates a trailing slash and decodes ids", () => {
   assert.deepEqual(parseHash("#/a%20b/node%2Fone/"), {
     subjectId: "a b",
@@ -29,11 +43,9 @@ test("tolerates a trailing slash and decodes ids", () => {
   });
 });
 
-test("rejects empty or unrelated hashes", () => {
-  assert.equal(parseHash(""), null);
-  assert.equal(parseHash("#/"), null);
-  assert.equal(parseHash("#/only-subject"), null);
+test("rejects unrelated hashes", () => {
   assert.equal(parseHash("#/a/b/c/d"), null);
+  assert.equal(parseHash("#agent-harness"), null);
 });
 
 test("builds encoded routes with and without a step", () => {
@@ -45,4 +57,6 @@ test("builds encoded routes with and without a step", () => {
     hashFor("agent-harness", "what-a-harness-is"),
     "#/agent-harness/what-a-harness-is"
   );
+  assert.equal(hashFor("agent-harness"), "#/agent-harness");
+  assert.equal(hashFor(null, null), "#/");
 });

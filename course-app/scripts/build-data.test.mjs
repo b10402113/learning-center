@@ -120,6 +120,7 @@ test("reads Markdown nodes and keeps frontmatter step order", () => {
 
   assert.equal(course.subject, "demo");
   assert.equal(course.goal, "Learn the demo.");
+  assert.equal(course.updated, "2026-10-22");
   assert.deepEqual(course.tiers, [{ tier: 1, name: "Basics" }]);
 
   const node = course.nodes[0];

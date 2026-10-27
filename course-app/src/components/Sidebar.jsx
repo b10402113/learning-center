@@ -45,11 +45,12 @@ function CollapseIcon({ expand = false }) {
 }
 
 function SidebarBody({
-  subjects,
   course,
   currentId,
+  currentStepId,
   onSelect,
-  onSwitchSubject,
+  onSelectStep,
+  onHome,
   onToggle,
   showToggle = false,
   onClose,
@@ -102,22 +103,34 @@ function SidebarBody({
       </div>
 
       <div className="px-4 pt-4">
-        <label className="block">
-          <span className="robo-kicker mb-2 block font-label text-[11px] text-ink-soft">
-            Subject
-          </span>
-          <select
-            value={course.subject}
-            onChange={(e) => onSwitchSubject(e.target.value)}
-            className="w-full cursor-pointer appearance-none border-2 border-ink bg-surface px-3 py-2 font-label text-[0.95rem] font-medium text-ink outline-none transition-colors hover:border-accent focus:border-accent"
+        <button
+          type="button"
+          onClick={onHome}
+          className="group flex w-full items-center gap-2 border-2 border-ink bg-surface px-3 py-2 text-left transition-colors hover:border-accent"
+        >
+          <svg
+            aria-hidden="true"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="shrink-0 text-ink-soft transition-colors group-hover:text-accent"
           >
-            {subjects.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.title}（{s.nodes}）
-              </option>
-            ))}
-          </select>
-        </label>
+            <path d="m15 18-6-6 6-6" />
+          </svg>
+          <span className="min-w-0 flex-1">
+            <span className="robo-kicker block font-label text-[10px] text-ink-soft">
+              所有課程
+            </span>
+            <span className="mt-0.5 block truncate font-label text-[0.95rem] font-medium text-ink transition-colors group-hover:text-accent">
+              {course.title}
+            </span>
+          </span>
+        </button>
       </div>
 
       <div className="px-4 pt-4">
@@ -152,6 +165,7 @@ function SidebarBody({
                         type="button"
                         onClick={() => onSelect(node.id)}
                         aria-current={active ? "page" : undefined}
+                        aria-expanded={node.steps.length > 0 ? active : undefined}
                         className={`group flex w-full items-start gap-2.5 border-2 px-2.5 py-2 text-left text-[0.95rem] leading-snug transition-colors ${
                           active
                             ? "border-accent bg-surface font-medium text-ink shadow-[3px_3px_0_var(--color-accent)]"
@@ -167,15 +181,66 @@ function SidebarBody({
                         </span>
                         <span className="min-w-0 flex-1">{node.title}</span>
                         {node.steps.length > 0 && (
-                          <span
-                            className={`mt-0.5 shrink-0 font-mono text-[11px] tabular-nums ${
-                              active ? "text-accent" : "text-ink-soft"
-                            }`}
-                          >
-                            {node.steps.length}
+                          <span className="mt-0.5 flex shrink-0 items-center gap-1">
+                            <span
+                              className={`font-mono text-[11px] tabular-nums ${
+                                active ? "text-accent" : "text-ink-soft"
+                              }`}
+                            >
+                              {node.steps.length}
+                            </span>
+                            <svg
+                              aria-hidden="true"
+                              width="12"
+                              height="12"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className={`transition-transform ${
+                                active
+                                  ? "rotate-90 text-accent"
+                                  : "text-ink-soft"
+                              }`}
+                            >
+                              <path d="m9 18 6-6-6-6" />
+                            </svg>
                           </span>
                         )}
                       </button>
+
+                      {active && node.steps.length > 0 && (
+                        <ul className="mt-1.5 ml-4 space-y-0.5 border-l-2 border-ink/20 pl-2">
+                          {node.steps.map((step) => {
+                            const stepActive = step.id === currentStepId;
+                            return (
+                              <li key={step.id}>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onSelectStep(node.id, step.id)
+                                  }
+                                  aria-current={stepActive ? "step" : undefined}
+                                  className={`flex w-full items-start gap-2 border-2 px-2 py-1.5 text-left text-[0.85rem] leading-snug transition-colors ${
+                                    stepActive
+                                      ? "border-accent bg-surface font-medium text-accent"
+                                      : "border-transparent text-ink-soft hover:border-ink hover:bg-surface hover:text-ink"
+                                  }`}
+                                >
+                                  <span className="mt-0.5 w-4 shrink-0 font-mono text-[10px] tabular-nums">
+                                    {String(step.order).padStart(2, "0")}
+                                  </span>
+                                  <span className="min-w-0 flex-1">
+                                    {step.title}
+                                  </span>
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
                     </li>
                   );
                 })}
@@ -193,11 +258,12 @@ function SidebarBody({
  * numbered rail for focus mode; mobile is a slide-in drawer.
  */
 export default function Sidebar({
-  subjects,
   course,
   currentId,
+  currentStepId,
   onSelect,
-  onSwitchSubject,
+  onSelectStep,
+  onHome,
   open,
   onClose,
   collapsed,
@@ -230,6 +296,27 @@ export default function Sidebar({
           >
             <CollapseIcon expand />
           </button>
+          <button
+            type="button"
+            onClick={onHome}
+            aria-label="所有課程"
+            title="所有課程"
+            className="grid size-9 shrink-0 place-items-center border-2 border-ink bg-surface text-ink-soft transition-colors hover:border-accent hover:text-accent"
+          >
+            <svg
+              aria-hidden="true"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="m15 18-6-6 6-6" />
+            </svg>
+          </button>
           {course.nodes.map((node) => {
             const active = node.id === currentId;
             return (
@@ -261,11 +348,12 @@ export default function Sidebar({
       >
         <div className="scroll-slim flex min-h-0 flex-1 flex-col overflow-y-auto">
           <SidebarBody
-            subjects={subjects}
             course={course}
             currentId={currentId}
+            currentStepId={currentStepId}
             onSelect={onSelect}
-            onSwitchSubject={onSwitchSubject}
+            onSelectStep={onSelectStep}
+            onHome={onHome}
             onToggle={onToggle}
             showToggle
           />
@@ -282,11 +370,12 @@ export default function Sidebar({
       >
         <div className="scroll-slim flex min-h-0 flex-1 flex-col overflow-y-auto">
           <SidebarBody
-            subjects={subjects}
             course={course}
             currentId={currentId}
+            currentStepId={currentStepId}
             onSelect={onSelect}
-            onSwitchSubject={onSwitchSubject}
+            onSelectStep={onSelectStep}
+            onHome={onHome}
             onClose={onClose}
           />
         </div>
