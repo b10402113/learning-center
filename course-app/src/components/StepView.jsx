@@ -22,15 +22,15 @@ function StepLink({ course, node, step, direction }) {
       href={hashFor(course.subject, node.id, step.id)}
       className={`group flex items-center gap-3 border-2 px-4 py-3.5 transition-colors ${
         next
-          ? "border-ink bg-accent text-dark shadow-[6px_6px_0_rgba(28,26,22,0.9)] sm:flex-row-reverse"
-          : "border-ink bg-surface text-ink shadow-[4px_4px_0_rgba(28,26,22,0.9)] hover:border-accent"
+          ? "border-ink bg-accent text-dark shadow-[6px_6px_0_var(--robo-shadow)] sm:flex-row-reverse"
+          : "border-ink bg-surface text-ink shadow-[4px_4px_0_var(--robo-shadow)] hover:border-accent"
       }`}
     >
       <span
         aria-hidden="true"
         className={`grid size-8 shrink-0 place-items-center border-2 border-ink ${
           next
-            ? "bg-surface text-dark"
+            ? "bg-surface text-ink"
             : "bg-paper text-ink transition-colors group-hover:text-accent"
         }`}
       >
@@ -54,7 +54,7 @@ function StepLink({ course, node, step, direction }) {
       <span className={`min-w-0 flex-1 ${next ? "sm:text-right" : ""}`}>
         <span
           className={`robo-kicker block font-label text-[10px] font-medium ${
-            next ? "text-ink/70" : "text-ink-soft"
+            next ? "text-dark/75" : "text-ink-soft"
           }`}
         >
           {next ? "下一步" : "上一步"}
@@ -163,7 +163,7 @@ export default function StepView({ course, node, step }) {
 
       {sources.length > 0 && (
         <section
-          className="mt-14 border-2 border-ink bg-shade px-4 py-4 shadow-[6px_6px_0_rgba(28,26,22,0.9)] sm:px-5"
+          className="mt-14 border-2 border-ink bg-shade px-4 py-4 shadow-[6px_6px_0_var(--robo-shadow)] sm:px-5"
           aria-label="來源"
         >
           <h2 className="robo-kicker font-label text-[11px] font-medium text-ink">

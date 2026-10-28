@@ -275,7 +275,7 @@ export default function Sidebar({
       <div
         onClick={onClose}
         aria-hidden="true"
-        className={`fixed inset-0 z-40 bg-dark/40 transition-opacity lg:hidden ${
+        className={`fixed inset-0 z-40 bg-black/45 transition-opacity lg:hidden ${
           open ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
       />
@@ -329,7 +329,7 @@ export default function Sidebar({
                 aria-current={active ? "page" : undefined}
                 className={`grid size-9 shrink-0 place-items-center border-2 font-mono text-[0.9rem] font-medium tabular-nums transition-colors ${
                   active
-                    ? "border-ink bg-accent text-dark shadow-[3px_3px_0_rgba(28,26,22,0.9)]"
+                    ? "border-ink bg-accent text-dark shadow-[3px_3px_0_var(--robo-shadow)]"
                     : "border-ink bg-surface text-ink-soft hover:border-accent hover:text-accent"
                 }`}
               >
@@ -362,7 +362,7 @@ export default function Sidebar({
 
       {/* Mobile drawer */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-80 max-w-[86vw] shrink-0 flex-col border-r-2 border-ink bg-paper shadow-[8px_8px_0_rgba(28,26,22,0.25)] transition-transform duration-200 ease-out lg:hidden ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-80 max-w-[86vw] shrink-0 flex-col border-r-2 border-ink bg-paper shadow-[8px_8px_0_var(--robo-shadow-soft)] transition-transform duration-200 ease-out lg:hidden ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
         aria-label="課程導覽"

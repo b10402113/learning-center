@@ -1,8 +1,13 @@
 import { useEffect, useRef } from "react";
 
-const INK = "rgba(28,26,22,0.88)";
-const CREAM = "rgba(232,226,210,0.85)";
+const INK = "#1c1a16";
+const CREAM = "#e8e2d2";
 const ORANGE = "#ff6b1a";
+
+function themeColor(host, name, fallback) {
+  const value = window.getComputedStyle(host).getPropertyValue(name).trim();
+  return value || fallback;
+}
 
 const HEX = [
   [0.47, 0.12],
@@ -139,12 +144,16 @@ export default function DotMatrix({
     host.replaceChildren(canvas);
 
     const recipe = RECIPES[variant] || RECIPES.hexagon;
-    const color = tone === "dark" ? CREAM : INK;
 
     const draw = () => {
       const w = host.clientWidth;
       const h = host.clientHeight;
       if (!w || !h) return;
+      const color =
+        tone === "dark"
+          ? themeColor(host, "--color-cream", CREAM)
+          : themeColor(host, "--color-ink", INK);
+      const accent = themeColor(host, "--color-accent", ORANGE);
       const dpr = window.devicePixelRatio || 1;
       const ctx = canvas.getContext("2d");
       canvas.width = Math.round(w * dpr);
@@ -169,7 +178,7 @@ export default function DotMatrix({
             const b2 = recipe.fn2(u, v);
             if (b2 > b) {
               b = b2;
-              col = ORANGE;
+              col = accent;
             }
           }
           if (b <= 0.02) continue;
@@ -184,7 +193,15 @@ export default function DotMatrix({
     draw();
     const observer = new ResizeObserver(draw);
     observer.observe(host);
-    return () => observer.disconnect();
+    const themeObserver = new MutationObserver(draw);
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => {
+      observer.disconnect();
+      themeObserver.disconnect();
+    };
   }, [variant, tone]);
 
   return (

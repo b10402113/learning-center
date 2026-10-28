@@ -63,7 +63,7 @@ export default function NodeView({ course, node, onSelect }) {
           </div>
         </div>
         <div className="hidden sm:block">
-          <div className="border-2 border-ink bg-surface p-2 shadow-[6px_6px_0_rgba(28,26,22,0.9)]">
+          <div className="border-2 border-ink bg-surface p-2 shadow-[6px_6px_0_var(--robo-shadow)]">
             <DotMatrix variant="hexagon" height={150} />
           </div>
         </div>

@@ -25,7 +25,7 @@ export default function Markdown({ children, className = "", assetBase = "" }) {
         prose-h3:mt-9 prose-h3:mb-2 prose-h3:text-[1.25rem]
         prose-h4:text-[1.1rem]
         prose-p:text-[1.15rem] prose-p:leading-[1.9] prose-p:text-ink/90
-        prose-li:text-[1.15rem] prose-li:leading-[1.85] prose-li:text-ink/90 prose-li:my-1.5
+        prose-li:text-[1.15rem] prose-li:leading-[1.85] prose-li:text-ink/90 prose-li:my-1.5 prose-li:marker:text-ink-soft
         prose-ul:my-5 prose-ol:my-5
         prose-strong:font-semibold prose-strong:text-ink
         prose-a:font-medium prose-a:text-accent prose-a:underline prose-a:decoration-2 prose-a:underline-offset-4 hover:prose-a:text-ink
@@ -33,7 +33,7 @@ export default function Markdown({ children, className = "", assetBase = "" }) {
         prose-code:font-mono prose-code:text-[0.86em] prose-code:font-normal prose-code:text-ink
         prose-code:before:content-none prose-code:after:content-none
         prose-pre:my-7 prose-pre:rounded-none prose-pre:border-2 prose-pre:border-ink prose-pre:bg-dark prose-pre:px-5 prose-pre:py-4
-        prose-pre:text-[0.9rem] prose-pre:leading-relaxed prose-pre:text-cream prose-pre:shadow-[6px_6px_0_rgba(28,26,22,0.9)]
+        prose-pre:text-[0.9rem] prose-pre:leading-relaxed prose-pre:text-cream prose-pre:shadow-[6px_6px_0_var(--robo-shadow)]
         prose-blockquote:my-7 prose-blockquote:border-l-4 prose-blockquote:border-accent
         prose-blockquote:bg-surface prose-blockquote:px-4 prose-blockquote:py-1 prose-blockquote:not-italic
         prose-blockquote:text-ink/80

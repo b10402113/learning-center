@@ -12,6 +12,13 @@ import { hashFor, indexRoute, parseHash } from "./lib/route.mjs";
 const courseLoaders = import.meta.glob("./data/subjects/*.json");
 const SUBJECTS = subjectsIndex.subjects;
 const SIDEBAR_KEY = "lc.sidebar";
+const THEME_KEY = "lc.theme";
+
+function initialTheme() {
+  return document.documentElement.classList.contains("dark")
+    ? "dark"
+    : "light";
+}
 
 function resolveSubjectId(id) {
   return id && SUBJECTS.some((s) => s.id === id) ? id : null;
@@ -109,12 +116,50 @@ function HamburgerIcon() {
   );
 }
 
+function SunIcon() {
+  return (
+    <svg
+      width="17"
+      height="17"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg
+      width="17"
+      height="17"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" />
+    </svg>
+  );
+}
+
 export default function App() {
   const [route, setRoute] = useState(initialRoute);
   const { subjectId, nodeId, stepId } = route;
   const [course, setCourse] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(initialSidebarCollapsed);
+  const [theme, setTheme] = useState(initialTheme);
   const cacheRef = useRef({});
   const routeKey = `${subjectId ?? ""}/${nodeId ?? ""}/${stepId ?? ""}`;
 
@@ -209,6 +254,20 @@ export default function App() {
       /* private mode */
     }
   }, [collapsed]);
+
+  // Apply and remember the reader's light/dark preference.
+  useEffect(() => {
+    const dark = theme === "dark";
+    document.documentElement.classList.toggle("dark", dark);
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute("content", dark ? "#141311" : "#f2efe8");
+    try {
+      window.localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      /* private mode */
+    }
+  }, [theme]);
 
   // Every route change starts at the top of the article, not mid-scroll.
   const didMountRef = useRef(false);
@@ -317,8 +376,8 @@ export default function App() {
             </span>
           </button>
 
-          {subjectId && course && node && (
-            <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-2">
+            {subjectId && course && node && (
               <button
                 type="button"
                 onClick={() => setCollapsed((value) => !value)}
@@ -327,8 +386,23 @@ export default function App() {
                 <PanelIcon expand={collapsed} />
                 {collapsed ? "顯示目錄" : "專注模式"}
               </button>
-            </div>
-          )}
+            )}
+            <button
+              type="button"
+              onClick={() =>
+                setTheme((value) => (value === "dark" ? "light" : "dark"))
+              }
+              aria-label={theme === "dark" ? "切換淺色模式" : "切換深色模式"}
+              aria-pressed={theme === "dark"}
+              title={theme === "dark" ? "切換淺色模式" : "切換深色模式"}
+              className="inline-flex items-center gap-2 border-2 border-ink bg-surface px-2.5 py-1.5 font-label text-[11px] uppercase tracking-[0.12em] text-ink transition-colors hover:border-accent hover:text-accent"
+            >
+              {theme === "dark" ? <SunIcon /> : <MoonIcon />}
+              <span className="hidden sm:inline">
+                {theme === "dark" ? "淺色" : "深色"}
+              </span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -337,7 +411,7 @@ export default function App() {
       {!subjectId ? (
         <main className="min-w-0 flex-1">
           <div className="mx-auto w-full max-w-[1040px] px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
-            <div className="border-0 bg-transparent px-0 py-0 sm:border-2 sm:border-ink sm:bg-surface sm:px-8 sm:py-8 sm:shadow-[8px_8px_0_rgba(28,26,22,0.9)] lg:px-12 lg:py-11">
+            <div className="border-0 bg-transparent px-0 py-0 sm:border-2 sm:border-ink sm:bg-surface sm:px-8 sm:py-8 sm:shadow-[8px_8px_0_var(--robo-shadow)] lg:px-12 lg:py-11">
               <SubjectsView subjects={SUBJECTS} />
             </div>
           </div>
@@ -368,7 +442,7 @@ export default function App() {
 
           <main className="min-w-0 flex-1">
             <div className="mx-auto w-full max-w-[1040px] px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
-              <div className="border-0 bg-transparent px-0 py-0 sm:border-2 sm:border-ink sm:bg-surface sm:px-8 sm:py-8 sm:shadow-[8px_8px_0_rgba(28,26,22,0.9)] lg:px-12 lg:py-11">
+              <div className="border-0 bg-transparent px-0 py-0 sm:border-2 sm:border-ink sm:bg-surface sm:px-8 sm:py-8 sm:shadow-[8px_8px_0_var(--robo-shadow)] lg:px-12 lg:py-11">
                 {step ? (
                   <StepView
                     key={step.id}
