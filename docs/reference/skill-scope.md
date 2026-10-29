@@ -34,7 +34,7 @@ The unit depends on the phase:
 - **Article** — one `publisher` per step; publishers from different nodes may share a batch.
 - **Humanize** — one `humanize-article` per step; steps from different nodes may share a batch.
 - **Generate** — no subagent: one render CLI call per node, in roadmap order.
-- **Quiz** — one `quiz-agent` per step; steps from different nodes may share a batch.
+- **Quiz** — one `quiz-agent` per node; a node's steps share that dispatch, and nodes may share a batch.
 
 Do not exceed `max-subagents` total parallel subagents in one batch, even when a node contributes several steps.
 

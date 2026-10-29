@@ -27,15 +27,15 @@ Invoke as `/quiz-gen <subject>/<node> [--step <id>] [--force]`.
 
    每次派工只給這幾項：
 
-   - `article`（相對於 repo root）、`title`、`characters`、`minQuestions`、`maxQuestions`
-   - 一句：「只讀這篇文章，只回傳 JSON，不要修改任何檔案。」
+   - `id`、`article`（相對於 repo root）、`title`、`characters`、`minQuestions`、`maxQuestions`
+   - 一句：「只讀這篇文章，只回傳以 `id` 為 key 的 JSON，不要修改任何檔案。」
    - 一句：「至少 `minQuestions` 題、最多 `maxQuestions` 題；每題的正解都要能在文章裡指到一句話；不同題不要重複考同一個概念。」
 
-   不要給 node plan、其他 step、來源檔或課程目標。quiz-agent 只看這一篇。
+   不要給 node plan、其他 step、來源檔或課程目標。quiz-agent 只看這一篇。回覆是同一個形狀：一個以 step id 為 key 的物件，這裡只會有一個 key。
 
-4. **write：把 agent 的 JSON 存成候選檔，再交給 script 驗**
+4. **write：把 agent 回覆中該 step 的值寫進候選檔，再交給 script 驗**
 
-   先把 agent 最後回覆的 JSON 原樣寫到：
+   先取代理回覆裡該 step id 對應的值；值是 `{ "error": ... }` 時記為該篇失敗，不要寫檔。否則把這個值原樣寫到：
 
    ```text
    learn/<subject>/output/quiz-candidates/<node>/<step>.json

@@ -128,15 +128,17 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    node scripts/quiz.mjs prepare --subject <subject> --node <node> [--force]
    ```
 
-   `steps[]` carries `article`, `title`, `characters`, `minQuestions`, and `maxQuestions`; `skipped[]` explains `article-missing`, `article-empty`, or `quiz-exists`. Record skips and continue.
+   `steps[]` carries `id`, `article`, `title`, `characters`, `minQuestions`, and `maxQuestions`; `skipped[]` explains `article-missing`, `article-empty`, or `quiz-exists`. Record skips and continue.
 
-   **6b. Dispatch quiz agents.** Combine the ready steps from every node into one list and batch it by `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per step in a single message, every call with `subagent_type: quiz-agent` and the [Quiz-prompt](#quiz-prompt) filled in. Give the agent only that step's article path, title, character count, and question range. The agent returns JSON and writes no files.
+   **6b. Dispatch quiz agents.** One `quiz-agent` per node with a non-empty `steps[]`. Batch the ready nodes by `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per node in a single message, every call with `subagent_type: quiz-agent` and the [Quiz-prompt](#quiz-prompt) filled in. Give the agent that node's ready steps — id, title, article path, character count, question range — and nothing from another node. The agent returns one JSON object keyed by step id and writes no files.
 
-   **6c. Write and validate.** For each agent response, create the candidate directory if needed and write the returned JSON verbatim to:
+   **6c. Write and validate.** For each returned mapping, create the candidate directory if needed and write the value for each ready step, verbatim, to:
 
    ```text
    learn/<subject>/output/quiz-candidates/<node>/<step>.json
    ```
+
+   A missing key, or a value carrying `error` instead of `questions`, fails that step with the agent's message; keep the other steps in the node.
 
    Then run:
 
@@ -168,7 +170,7 @@ Completion, for every phase that ran:
 - **Article** — every step that needed an article was prepared, dispatched to its own publisher, and either published with a formal plan and matching markers or reported failed; every multi-step node that received a new article also received the continuity edit unless `-no-continuity` was set; every published node passes `node scripts/verify.mjs --node <subject>/<node>`.
 - **Humanize** — every eligible step was either humanized or skipped for a recorded reason; official files change only after validation; records exist for every humanized step; every processed node verifies clean.
 - **Generate** — every marker-backed step has its `image-N.webp` files and its markers replaced by uncaptioned image lines; rerun without `-force` reports `already-rendered` or reuses images; every processed node verifies clean.
-- **Quiz** — every step that needed a sidecar was dispatched to its own quiz-agent and either has a validated sidecar or a recorded failure; `course-app` data was regenerated when any sidecar was written.
+- **Quiz** — every step that needed a sidecar was included in its node's quiz-agent dispatch and either has a validated sidecar or a recorded failure; `course-app` data was regenerated when any sidecar was written.
 
 The final report lists the outcome of every phase that ran.
 
@@ -256,16 +258,15 @@ Report back: whether you changed the article and/or plan, a short summary, and t
 
 ## Quiz-prompt
 
-Dispatch every call with `subagent_type: quiz-agent`. Fill the fields from `quiz.mjs prepare`'s `steps[]`.
+Dispatch every call with `subagent_type: quiz-agent`. Fill `<SUBJECT>`, `<NODE-ID>`, and one line per ready step from `quiz.mjs prepare`'s `steps[]`. Give the subagent no other node's content.
 
 ```
-Author the quiz sidecar for one published step. Read only this article and return only JSON; do not modify any file.
+Author the quiz sidecars for one node's published steps. Read only the articles listed below and return only one JSON object; do not modify any file.
 
-Article: <ARTICLE>
-Title: <TITLE>
-CJK character count: <CHARACTERS>
-Minimum questions: <MIN-QUESTIONS>
-Maximum questions: <MAX-QUESTIONS>
+Node: <SUBJECT>/<NODE-ID>
+Steps:
+- <STEP-ID> — <TITLE>; article <ARTICLE>; <CHARACTERS> CJK characters; <MIN-QUESTIONS>–<MAX-QUESTIONS> questions
+- <STEP-ID> — <TITLE>; article <ARTICLE>; <CHARACTERS> CJK characters; <MIN-QUESTIONS>–<MAX-QUESTIONS> questions
 
-Write between <MIN-QUESTIONS> and <MAX-QUESTIONS> single-choice questions. Every correct answer must be directly supported by a sentence in this article, and no two questions may test the same concept. Use plausible distractors, keep each question self-contained, and write Traditional Chinese in the article's terminology. Return exactly the JSON object described in your agent instructions, with no commentary and no code fence.
+Write each step its own single-choice questions within that step's range. Every correct answer must be directly supported by a sentence in that step's own article, and no two questions may test the same concept — within a step or across the node's steps. Use plausible distractors, keep each question self-contained, and write Traditional Chinese in the article's terminology. Return exactly the JSON object keyed by step id that your agent instructions describe, with an entry for every listed step and no commentary or code fence.
 ```
