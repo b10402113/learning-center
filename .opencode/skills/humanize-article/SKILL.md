@@ -1,13 +1,13 @@
 ---
 name: humanize-article
-description: 對有正式配圖清單的 step 文章去 AI 味，在備份工作區改文章與 plan 的 heading／prompt，驗證通過才寫回並留下 hash 紀錄。當使用者要潤稿、去 AI 味或同步修改配圖清單時使用。
+description: 對一個 node 有正式配圖清單的 step 文章去 AI 味，由一個 subagent 在工作區改完該 node 的所有文章與 plan 的 heading／prompt，逐篇驗證通過才寫回並留下 hash 紀錄。當使用者要潤稿、去 AI 味或同步修改配圖清單時使用。
 disable-model-invocation: true
 argument-hint: "<subject>/<node> [--step <id>] [--force]"
 ---
 
 Invoke as `/humanize-article <subject>/<node> [--step <id>] [--force]`.
 
-這是一個 thin shell：`scripts/humanize-article.mjs` 只負責挑 step、建立工作區、驗證與寫回；每一篇的改寫由一個新的 `humanize-article` subagent 在工作區完成。沒有 plan 的既有文章完全不動。
+這是一個 thin shell：`scripts/humanize-article.mjs` 只負責挑 step、建立每一篇的工作區、逐篇驗證與寫回；一個 `humanize-article` subagent 依序改完這個 node 的所有工作區，順手統一跨篇用詞。沒有 plan 的既有文章完全不動。
 
 1. **Resolve the target.** 參數是 `subject/node`，在 repo root 執行。不要從敘述推測 subject 或 node。
 
@@ -17,7 +17,7 @@ Invoke as `/humanize-article <subject>/<node> [--step <id>] [--force]`.
    node scripts/humanize-article.mjs prepare --subject <subject> --node <node> [--step <id>] [--force]
    ```
 
-   輸出 JSON 有 `steps[]`、`skipped[]`、`failed[]`：
+   輸出 JSON 有 `nodeTitle`、`steps[]`、`skipped[]`、`failed[]`：
 
    - `steps[]` 每筆有 `id`、`title`、`status: ready`、`article`、`plan`、`workArticle`、`workPlan`。
    - `skipped[]` 的 `status` 是 `skipped-no-article`、`skipped-no-plan`、`skipped-not-published` 或 `skipped-record`。
@@ -25,29 +25,30 @@ Invoke as `/humanize-article <subject>/<node> [--step <id>] [--force]`.
 
    只有 `steps[]` 需要派工。`skipped-record` 代表文章與 plan 的 hash 都和上次紀錄相符；`--force` 才會重做。
 
-3. **humanize subagent：一個 step 派一次**
+   完成標準：`steps.length + skipped.length + failed.length` 等於 node 的 step 數。
 
-   依 `steps[]` 順序，每個 step 各派一個新的 `humanize-article` subagent。不要一次把整個 node 交給同一個 agent。
+3. **humanize subagent：一個 node 派一次**
 
-   每次派工只給這幾項：
+   `steps[]` 不是空的時候，派一個新的 `humanize-article` subagent 處理整個 node。不要逐篇派。
 
-   - `title`、`workArticle`、`workPlan`
-   - 一句：「載入 `speak-human-tw`，用非互動模式直接改工作區的兩個檔案，最後把摘要寫到同一個資料夾的 `summary.txt`。」
+   派工只給這幾項：
+
+   - `nodeTitle` 與 `steps[]` 的完整內容（`id`、`title`、`workArticle`、`workPlan`）
+   - 一句：「依 `steps` 順序逐篇改工作區的兩個檔案，最後在每一篇的資料夾各寫一份 `summary.txt`。」
    - 一句：「只改散文與 plan 的 `heading`／`prompt`；不要碰 H1、marker、圖片行、code、provenance、quiz、相對連結或 `anchor`。」
+   - 一句：「整批讀過再改，統一跨篇用詞與例子；不要讀其他 node 的內容。」
 
-   不要給其他 step 的內容，也不要給 node plan。
-
-   subagent 完成標準：`workArticle` 與 `workPlan` 已被改寫，`summary.txt` 存在；不要自己寫回正式檔。
+   subagent 完成標準：每一篇的 `workArticle` 與 `workPlan` 都已改寫，每一篇的 `summary.txt` 都存在；不要自己寫回正式檔。
 
 4. **apply**
 
-   每個 step 的 subagent 完成後，執行：
+   每一篇的 subagent 都完成後，逐 step 執行：
 
    ```bash
    node scripts/humanize-article.mjs apply --subject <subject> --node <node> --step <step> [--summary <text>]
    ```
 
-   `apply` 會拿工作區和備份比對，硬性檢查：
+   `apply` 會拿該篇工作區和備份比對，硬性檢查：
 
    - 文章非空，第一行 H1 與原檔完全相同。
    - 所有 fenced code block、provenance 註解的數量與內容完全相同。
@@ -57,9 +58,9 @@ Invoke as `/humanize-article <subject>/<node> [--step <id>] [--force]`.
    - plan 是合法 JSON 陣列，長度與 `index` 序列相同。
    - 每個 `anchor` 完全相同；`heading`、`prompt` 非空。
 
-   驗證通過才寫回文章與 `learn/<subject>/output/image-plans/<node>/<step>.json`，並寫 `learn/<subject>/output/humanized/<node>/<step>.json`（時間、兩個 sha256、`changed`、`summary`），最後刪除工作區。
+   驗證通過才寫回文章與 `learn/<subject>/output/image-plans/<node>/<step>.json`，並寫 `learn/<subject>/output/humanized/<node>/<step>.json`（時間、兩個 sha256、`changed`、`summary`），最後刪除該篇工作區。
 
-   驗證失敗時正式檔不動、不寫紀錄，工作區保留供檢查；回報 `failed` 與原因，不要手動改正式檔或重試同一個 subagent。
+   驗證失敗時那一篇的正式檔不動、不寫紀錄，工作區保留供檢查；回報 `failed` 與原因，繼續處理其他篇，不要手動改正式檔或重試同一篇。
 
 5. **verify**
 
@@ -67,9 +68,9 @@ Invoke as `/humanize-article <subject>/<node> [--step <id>] [--force]`.
    node scripts/verify.mjs --node <subject>/<node>
    ```
 
-   `apply` 已經跑過一次 verify；這裡是硬門檻。verify 沒過就回報，不要改生成物掩蓋問題。
+   每篇 `apply` 都跑過一次 verify；這裡是硬門檻。verify 沒過就回報，不要改生成物掩蓋問題。
 
-6. **Report**：列出 `humanized`、`skipped-record`、`skipped-no-plan`、`skipped-not-published`、`failed` 的 step、每篇的 `changed` 與 `summary`、verify 結果。重跑時已處理的 step 應該全部是 `skipped-record`。
+6. **Report**：列出 `humanized`、`skipped-record`、`skipped-no-plan`、`skipped-not-published`、`failed` 的 step、每篇的 `changed` 與 `summary`、subagent 回報的跨篇統一說明、verify 結果。重跑時已處理的 step 應該全部是 `skipped-record`。
 
 **不做的事：**
 

@@ -26,17 +26,17 @@ A force flag regenerates generated content. It must not rebuild a node's step pl
 
 ## Batch the work
 
-Partition the resolved work items into batches of `max-subagents`. Process batches sequentially; items within a batch run in parallel. For each batch launch one `task` subagent per item — all calls in a single message, with the `subagent_type` the skill names. Wait for every subagent to return before starting the next batch, and show a progress line after each batch.
+Partition the resolved nodes into batches of `max-subagents`. Process batches sequentially; nodes within a batch run in parallel. For each batch launch one `task` subagent per node — all calls in a single message, with the `subagent_type` the skill names. Wait for every subagent to return before starting the next batch, and show a progress line after each batch.
 
 The unit depends on the phase:
 
 - **Nodes** — one subagent per node.
-- **Article** — one `publisher` per step; publishers from different nodes may share a batch.
-- **Humanize** — one `humanize-article` per step; steps from different nodes may share a batch.
+- **Article** — one `publisher` per node; a node's steps run inside that subagent in order, and nodes may share a batch.
+- **Humanize** — one `humanize-article` per node; a node's ready steps run inside that subagent in order, and nodes may share a batch.
 - **Generate** — no subagent: one render CLI call per node, in roadmap order.
 - **Quiz** — one `quiz-agent` per node; a node's steps share that dispatch, and nodes may share a batch.
 
-Do not exceed `max-subagents` total parallel subagents in one batch, even when a node contributes several steps.
+Every phase except Generate dispatches one subagent per node, so `max-subagents` caps the number of nodes processed in parallel.
 
 ## Report
 

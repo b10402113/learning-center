@@ -71,7 +71,14 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     const shown = relative(root, target);
     const existing = existsSync(target) ? readFileSync(target, "utf8") : "";
     if (!force && hasArticleBody(existing)) {
-      skipped.push({ id: entry.id, title: entry.title, status: "skipped", path: shown });
+      skipped.push({
+        id: entry.id,
+        title: entry.title,
+        purpose: entry.purpose,
+        status: "skipped",
+        path: shown,
+        article: resolve(root, target),
+      });
       continue;
     }
     const slices = readStepSlices(root, entry);
@@ -109,6 +116,7 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     root: resolve(root),
     subject,
     node: nodeId,
+    nodeFile: resolve(root, "learn", subject, "nodes", `${nodeId}.md`),
     nodeTitle: node.title,
     nodeGoal: node.goal ?? null,
     steps,

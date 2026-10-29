@@ -69,10 +69,18 @@ test("prepare asks publishers for markers only and reports skipped steps without
   assert.equal(report.steps.length, 1);
   const [step] = report.steps;
   assert.equal(step.id, "s2");
+  assert.equal(report.nodeFile, join(root, "learn/test/nodes/n1.md"));
   assert.match(step.command, /--markers-only/);
   assert.match(step.plan, /learn\/test\/output\/image-plans\/n1\/s2\.json$/);
   assert.deepEqual(report.skipped, [
-    { id: "s1", title: "Step One", status: "skipped", path: "learn/test/nodes/n1/s1.md" },
+    {
+      id: "s1",
+      title: "Step One",
+      purpose: "First step.",
+      status: "skipped",
+      path: "learn/test/nodes/n1/s1.md",
+      article: join(root, "learn/test/nodes/n1/s1.md"),
+    },
   ]);
 });
 
