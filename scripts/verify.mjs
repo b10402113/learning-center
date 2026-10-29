@@ -187,6 +187,7 @@ function digestFor(index, sourcePath) {
 
 function buildDigestIndex(report, root, subject, scan) {
   const index = new Map();
+  const meta = [];
 
   for (const digest of scan.digests) {
     const file = rel(root, digest.path);
@@ -265,10 +266,67 @@ function buildDigestIndex(report, root, subject, scan) {
       }
     }
 
+    meta.push({ file, name: digest.name, data, ranges });
+
     if (!sourceKey) continue;
     const entry = index.get(sourceKey) || { ranges: [] };
     entry.ranges.push(...ranges);
     index.set(sourceKey, entry);
+  }
+
+  const byName = new Map(meta.map((entry) => [entry.name, entry]));
+  for (const entry of meta) {
+    const supplements = entry.data.supplements;
+    if (supplements === undefined || supplements === null) continue;
+    if (!Array.isArray(supplements)) {
+      report.fail(entry.file, 1, "digest-supplements", "supplements must be a list of digest filenames");
+      continue;
+    }
+    if (entry.data.source_type !== "text") {
+      report.fail(entry.file, 1, "digest-supplements", "only text digests may declare supplements");
+      continue;
+    }
+    for (const raw of supplements) {
+      const value = typeof raw === "string" ? raw.trim().replace(/^\.\//, "") : "";
+      const hash = value.lastIndexOf("#");
+      const name = hash === -1 ? value : value.slice(0, hash);
+      const locator = hash === -1 ? "" : value.slice(hash + 1).trim();
+      if (!name || !locator) {
+        report.fail(entry.file, 1, "digest-supplements", "supplements entries must be <digest>.md#L1 or <digest>.md#Lx-Ly");
+        continue;
+      }
+      if (name === entry.name) {
+        report.fail(entry.file, 1, "digest-supplements", "a digest cannot supplement itself");
+        continue;
+      }
+      const target = byName.get(name);
+      if (!target) {
+        report.fail(entry.file, 1, "digest-supplement-missing", `supplements entry "${name}" is not a digest in this subject`);
+        continue;
+      }
+      if (!["codebase", "image"].includes(String(target.data.source_type))) {
+        report.fail(entry.file, 1, "digest-supplement-type", `supplements entry "${name}" must be a codebase or image digest`);
+        continue;
+      }
+      if (locator === "L1") continue;
+      const range = parseLocator(locator);
+      if (!range) {
+        report.fail(entry.file, 1, "digest-supplements", `supplements locator "#${locator}" must be #L1 or #Lx-Ly`);
+        continue;
+      }
+      if (String(target.data.source_type) !== "codebase") {
+        report.fail(entry.file, 1, "digest-supplement-type", `supplements entry "${name}" needs #L1; an image digest has no L2 range`);
+        continue;
+      }
+      if (!covers(target.ranges, range.start, range.end)) {
+        report.fail(
+          entry.file,
+          1,
+          "digest-supplement-range",
+          `supplements range #${locator} falls outside ${name}'s L2 line map`,
+        );
+      }
+    }
   }
 
   return index;

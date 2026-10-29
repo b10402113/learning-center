@@ -45,9 +45,9 @@ Completion: every resolved node is `confirmed` with its step skeletons restored,
 | `nodes/<node>/<step>.md` | body replaced by `# <title>` |
 | `nodes/<node>/<step>-assets/` | removed |
 | orphan files in `nodes/<node>/` | removed |
-| `output/materials/<subject>-<node>-<step>.json` | removed |
+| `output/materials/<node>/<step>.json` | removed |
 | `output/image-plans/<node>/<step>.json` | removed |
-| `output/jobs/<subject>-<node>-*` (incl. `prepare.json` and legacy `*.plan.json`) | removed |
+| `output/jobs/<node>/` (`prepare.json`, `<step>/<step>.*`, incl. legacy `*.plan.json`) and pre-`<node>/<step>/` flat `<subject>-<node>-*` files | removed |
 | `output/humanized/<node>/<step>.json` | removed |
 | `output/humanize/<node>/<step>/` | removed |
 | `output/quiz-candidates/<node>/` | removed |

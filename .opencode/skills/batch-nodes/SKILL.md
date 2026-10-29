@@ -2,7 +2,7 @@
 name: batch-nodes
 description: Batch-create a subject's node step plans, write their step articles, humanize them, render their figures, and generate step quizzes, via parallel subagents. Use when the learner wants to build or resume many nodes in one run.
 disable-model-invocation: true
-argument-hint: "/batch-nodes <subject> [tier<N> | node-id ...] [-max-subagents N] [-nodes-only] [-skip-article] [-skip-humanize] [-skip-images] [-skip-quiz] [-no-continuity] [-force]"
+argument-hint: "/batch-nodes <subject> [tier<N> | node-id ...] [-max-subagents N] [-nodes-only] [-skip-article] [-skip-humanize] [-skip-images] [-skip-quiz] [-no-continuity] [-mode rewrite] [-force]"
 ---
 
 Invoke as `/batch-nodes <subject> [scope] [flags]`.
@@ -21,6 +21,7 @@ Run the normal pipeline — `/nodes` → `/article` → `/humanize-article` → 
 - `-skip-images` — skip Generate: no image plan is rendered and no image-API spend happens. Article still writes the plan and markers; a later `/generate-images` renders them.
 - `-skip-quiz` — skip Quiz.
 - `-no-continuity` — tell each publisher to write its node's steps as standalone articles, with no handoff between them.
+- `-mode rewrite` — use the old rewrite-in-place Article flow. The default is `translate`: the publisher writes each original in the source language and the wrapper translates it to Traditional Chinese.
 - `-force` — regenerate generated content: Article rewrites step articles (and clears their old figures and humanize records after a successful write), Humanize redoes processed steps, Generate repaints every marker, and Quiz rewrites sidecars. It does not rebuild a node's step plan; use `/nodes` or `/reset-nodes` for that.
 
 `-no-images` is removed. If someone passes it, stop and report: use `-skip-images` to skip figure rendering, or `-force` to repaint figures that already exist.
@@ -64,7 +65,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    **3a. Prepare.** Run one CLI call per node, without `--force` unless the flag was given:
 
    ```bash
-   node src/article-cli.mjs prepare --subject <subject> --node <node> [--force]
+   node src/article-cli.mjs prepare --subject <subject> --node <node> [--mode rewrite] [--force]
    ```
 
    Read the JSON. `root` is the absolute repo root and `nodeFile` is the node container's absolute path. `steps[]` is the work: each entry carries `id`, `title`, `purpose`, `material`, `original`, `plan`, and `command`; `material`, `original`, and `plan` are absolute paths, and `command` already carries absolute paths, `--root`, and `--markers-only`. `skipped[]` means the step already has a body; its entries carry `id`, `title`, `purpose`, `status`, `path`, and `article`, and they are continuity material for the publisher, not work. A node where every step is skipped yields no publisher. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
@@ -128,23 +129,15 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 
    `steps[]` carries `id`, `article`, `title`, `characters`, `minQuestions`, and `maxQuestions`; `skipped[]` explains `article-missing`, `article-empty`, or `quiz-exists`. Record skips and continue.
 
-   **6b. Dispatch quiz agents.** One `quiz-agent` per node with a non-empty `steps[]`. Batch the ready nodes by `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per node in a single message, every call with `subagent_type: quiz-agent` and the [Quiz-prompt](#quiz-prompt) filled in. Give the agent that node's ready steps — id, title, article path, character count, question range — and nothing from another node. The agent returns one JSON object keyed by step id and writes no files.
+   **6b. Dispatch quiz agents.** One `quiz-agent` per node with a non-empty `steps[]`. Batch the ready nodes by `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per node in a single message, every call with `subagent_type: quiz-agent` and the [Quiz-prompt](#quiz-prompt) filled in. Create the node's candidate directory first (`learn/<subject>/output/quiz-candidates/<node>/`). Give the agent that node's ready steps — id, title, article path, character count, question range, candidate path — and nothing from another node. The agent writes one candidate file per step and writes no other file.
 
-   **6c. Write and validate.** For each returned mapping, create the candidate directory if needed and write the value for each ready step, verbatim, to:
-
-   ```text
-   learn/<subject>/output/quiz-candidates/<node>/<step>.json
-   ```
-
-   A missing key, or a value carrying `error` instead of `questions`, fails that step with the agent's message; keep the other steps in the node.
-
-   Then run:
+   **6c. Validate and write.** For each ready step, run:
 
    ```bash
    node scripts/quiz.mjs write --subject <subject> --node <node> --step <step> --input learn/<subject>/output/quiz-candidates/<node>/<step>.json [--force]
    ```
 
-   The script validates the schema, the 3–8 question window, and the article's character-based ceiling before writing `<step>.quiz.json`. A failed step keeps its candidate file and error; continue with the next step. Never hand-write or hand-edit questions, and never insert them into the article Markdown.
+   The script validates the schema, the 3–8 question window, and the article's character-based ceiling before writing `<step>.quiz.json`. A step with no candidate file fails with the agent's reported reason; a step whose candidate fails validation keeps its file and error. Continue with the next step in either case. Never hand-write or hand-edit questions, and never insert them into the article Markdown.
 
    **6d. Verify and rebuild viewer data.** Run `node scripts/verify.mjs --node <subject>/<node>` for every node the Quiz phase processed. When at least one sidecar was written, run:
 
@@ -165,7 +158,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 Completion, for every phase that ran:
 
 - **Nodes** — every node that needed a plan was dispatched to a Nodes subagent, reached `planned`, and verifies clean.
-- **Article** — every node that needed an article was prepared and dispatched to its own publisher; every prepared step either published with a formal plan and matching markers or is reported as the step where that publisher stopped; every published node passes `node scripts/verify.mjs --node <subject>/<node>`.
+- **Article** — every node that needed an article was prepared and dispatched to its own publisher; every prepared step either published with a formal plan and matching markers or is reported as the step where that publisher stopped; a newly written `index` 1 step carries a preface; every published node passes `node scripts/verify.mjs --node <subject>/<node>`.
 - **Humanize** — every eligible step was either humanized or skipped for a recorded reason; official files change only after validation; records exist for every humanized step; every processed node verifies clean.
 - **Generate** — every marker-backed step has its `image-N.webp` files and its markers replaced by uncaptioned image lines; rerun without `-force` reports `already-rendered` or reuses images; every processed node verifies clean.
 - **Quiz** — every step that needed a sidecar was included in its node's quiz-agent dispatch and either has a validated sidecar or a recorded failure; `course-app` data was regenerated when any sidecar was written.
@@ -211,8 +204,8 @@ Node goal: <NODE-GOAL>
 Node plan: <NODE-FILE>   (the full steps plan; read it first)
 
 Ready steps, in teaching order:
-- <STEP-ID> | <TITLE> | <PURPOSE> | material <MATERIAL> | original <ORIGINAL> | plan <PLAN> | command <COMMAND>
-- <STEP-ID> | <TITLE> | <PURPOSE> | material <MATERIAL> | original <ORIGINAL> | plan <PLAN> | command <COMMAND>
+- <STEP-ID> | <TITLE> | <PURPOSE> | index <INDEX>/<TOTAL> | material <MATERIAL> | original <ORIGINAL> | plan <PLAN> | command <COMMAND>
+- <STEP-ID> | <TITLE> | <PURPOSE> | index <INDEX>/<TOTAL> | material <MATERIAL> | original <ORIGINAL> | plan <PLAN> | command <COMMAND>
 
 Already published steps (continuity material; read their articles):
 - <STEP-ID> | <TITLE> | <PURPOSE> | article <ARTICLE>
@@ -220,13 +213,13 @@ Already published steps (continuity material; read their articles):
 
 Every path above is absolute. Use each string exactly as given; do not join, rewrite, or guess a path, and do not assume the current working directory. Each command already includes absolute paths, --root, and --markers-only.
 
-For each ready step, in order: read its material bundle, write the original article to its original path, write a 1-5 item image plan to its plan path, then run its command and read the article it produced before starting the next step. Write in the language recorded in `<ROOT>/learn/<SUBJECT>/MEMORY.md` (this repo uses Traditional Chinese), grounded only in the material.
+For each ready step, in order: read its material bundle, write the original article to its original path, write a 1-5 item image plan to its plan path, then run its command and read the article it produced before starting the next step. Write the original in the main language of its material (English material in English, Chinese material in Chinese), grounded only in the material; the command translates it to the language in `<ROOT>/learn/<SUBJECT>/MEMORY.md`. Do not translate the original yourself.
 
-The image plan is a JSON array of objects with `heading`, `anchor`, and `prompt`; spread the figures across the article and make every `anchor` a short verbatim sentence from that step's original.
+The image plan is a JSON array of objects with `heading`, `anchor`, and `prompt`; spread the figures across the article and make every `anchor` a short verbatim sentence from that step's original. Write `heading` and `prompt` in the original's language; the command translates them too.
 
-There is no `article_generate` tool in this repo. Writing the original and the plan, then running the command, replaces it. The command rewrites the original once and leaves a `<!--image:N-->` marker for every plan item. It does not generate figures and does not need IMAGE_API_KEY. Do not rewrite after it returns, do not hand-place markers, and do not retry automatically if it fails.
+There is no `article_generate` tool in this repo. Writing the original and the plan, then running the command, replaces it. The command prepares the original once (translate by default, rewrite with `--mode rewrite`) and leaves a `<!--image:N-->` marker for every plan item. It does not generate figures and does not need IMAGE_API_KEY. Do not edit the article after it returns, do not hand-place markers, and do not retry automatically if it fails.
 
-Hold the node together: each step's opening picks up the question or conclusion the previous step left, each step's ending hands the next question to the following step, a term is defined fully once and reused after that, and examples keep the same names. Never add facts, numbers, or quotations the material does not support. <CONTINUITY-MODE> is "write the steps as standalone articles with no handoff" when the run used -no-continuity, otherwise "connect the steps as described".
+Hold the node together: after the first, each step's opening picks up the question or conclusion the previous step left, each step's ending hands the next question to the following step, a term is defined fully once and reused after that, and examples keep the same names. Never add facts, numbers, or quotations the material does not support. <CONTINUITY-MODE> is "write the steps as standalone articles with no handoff" when the run used -no-continuity, otherwise "connect the steps as described".
 
 Stop at the first command that does not report completed. Leave finished originals, plans, and run output in `learn/<SUBJECT>/output/jobs/`.
 
@@ -270,12 +263,12 @@ Report back: per step, whether you changed the article and/or plan and the `summ
 Dispatch every call with `subagent_type: quiz-agent`. Fill `<SUBJECT>`, `<NODE-ID>`, and one line per ready step from `quiz.mjs prepare`'s `steps[]`. Give the subagent no other node's content.
 
 ```
-Author the quiz sidecars for one node's published steps. Read only the articles listed below and return only one JSON object; do not modify any file.
+Author the quiz sidecars for one node's published steps. Read only the articles listed below and write one candidate file per step; write no other file.
 
 Node: <SUBJECT>/<NODE-ID>
 Steps:
-- <STEP-ID> — <TITLE>; article <ARTICLE>; <CHARACTERS> CJK characters; <MIN-QUESTIONS>–<MAX-QUESTIONS> questions
-- <STEP-ID> — <TITLE>; article <ARTICLE>; <CHARACTERS> CJK characters; <MIN-QUESTIONS>–<MAX-QUESTIONS> questions
+- <STEP-ID> — <TITLE>; article <ARTICLE>; <CHARACTERS> CJK characters; <MIN-QUESTIONS>–<MAX-QUESTIONS> questions; candidate <CANDIDATE>
+- <STEP-ID> — <TITLE>; article <ARTICLE>; <CHARACTERS> CJK characters; <MIN-QUESTIONS>–<MAX-QUESTIONS> questions; candidate <CANDIDATE>
 
-Write each step its own single-choice questions within that step's range. Every correct answer must be directly supported by a sentence in that step's own article, and no two questions may test the same concept — within a step or across the node's steps. Use plausible distractors, keep each question self-contained, and write Traditional Chinese in the article's terminology. Return exactly the JSON object keyed by step id that your agent instructions describe, with an entry for every listed step and no commentary or code fence.
+Write each step its own single-choice questions within that step's range, into the step's candidate path. Every correct answer must be directly supported by a sentence in that step's own article, and no two questions may test the same concept — within a step or across the node's steps. Use plausible distractors, keep each question self-contained, and write Traditional Chinese in the article's terminology. A step whose article cannot support the minimum gets no file. Report each step's id, path, and question count, then any skipped step and its reason.
 ```

@@ -34,24 +34,24 @@ export function stepSlug(subject, node, step) {
 }
 
 export function jobFiles(root, { subject, node, step }) {
-  const slug = stepSlug(subject, node, step);
-  const dir = jobsDir(root, subject);
+  const dir = join(jobsDir(root, subject), node, step);
   return {
-    slug,
+    slug: stepSlug(subject, node, step),
     dir,
-    material: join(materialsDir(root, subject), `${slug}.json`),
-    original: join(dir, `${slug}.original.md`),
+    material: join(materialsDir(root, subject), node, `${step}.json`),
+    original: join(dir, `${step}.original.md`),
     plan: join(imagePlansDir(root, subject, node), `${step}.json`),
-    legacyPlan: join(dir, `${slug}.plan.json`),
-    protected: join(dir, `${slug}.protected.md`),
-    blocks: join(dir, `${slug}.blocks.json`),
-    request: join(dir, `${slug}.request.json`),
-    result: join(dir, `${slug}.result.json`),
+    legacyPlan: join(dir, `${step}.plan.json`),
+    protected: join(dir, `${step}.protected.md`),
+    blocks: join(dir, `${step}.blocks.json`),
+    request: join(dir, `${step}.request.json`),
+    result: join(dir, `${step}.result.json`),
+    translated: join(dir, `${step}.translated.md`),
   };
 }
 
 export function prepareFile(root, subject, node) {
-  return join(jobsDir(root, subject), `${subject}-${node}.prepare.json`);
+  return join(jobsDir(root, subject), node, "prepare.json");
 }
 
 export function humanizeRecordPath(root, { subject, node, step }) {
@@ -63,11 +63,17 @@ export function humanizeWorkDir(root, { subject, node, step }) {
 }
 
 export function buildBrief(entry, context = {}) {
-  const { hasCode = false } = context;
-  const lines = [
-    `改寫成清楚、自然、好讀的繁體中文文章；保留原稿的事實、觀點與段落順序，不要新增事實或引述。`,
-    `這一課要讓讀者：${entry.purpose}`,
-  ];
+  const { hasCode = false, mode = "rewrite" } = context;
+  const lines =
+    mode === "translate"
+      ? [
+          "把原稿忠實翻成台灣繁體中文；保留事實、數字、引述、段落順序與結構，不要新增或刪除內容。",
+          `這一課要讓讀者：${entry.purpose}`,
+        ]
+      : [
+          `改寫成清楚、自然、好讀的繁體中文文章；保留原稿的事實、觀點與段落順序，不要新增事實或引述。`,
+          `這一課要讓讀者：${entry.purpose}`,
+        ];
   if (hasCode) {
     lines.push(
       "文中若出現 <!--code:N--> 這種標記，原樣保留在原本位置，不要改寫、刪除或移動。",
@@ -116,10 +122,11 @@ export function readStepPlan(root, { subject, node, step }, original) {
   return original ? assertPlanAnchors(plan, original) : plan;
 }
 
-export function buildRequest(root, { subject, files, entry, plan = null, hasCode, markersOnly = false }) {
+export function buildRequest(root, { subject, files, entry, plan = null, hasCode, markersOnly = false, mode = "rewrite" }) {
   const request = {
+    mode,
     articleFile: files.protected,
-    brief: buildBrief(entry, { hasCode }),
+    brief: buildBrief(entry, { hasCode, mode }),
     outputRoot: outputDir(root, subject),
   };
   if (plan) {
@@ -134,7 +141,7 @@ export function buildRequest(root, { subject, files, entry, plan = null, hasCode
 export function writeMaterial(root, { subject, node, entry, slices }) {
   const files = jobFiles(root, { subject, node, step: entry.id });
   mkdirSync(files.dir, { recursive: true });
-  mkdirSync(materialsDir(root, subject), { recursive: true });
+  mkdirSync(join(materialsDir(root, subject), node), { recursive: true });
   mkdirSync(imagePlansDir(root, subject, node), { recursive: true });
   const material = {
     subject,

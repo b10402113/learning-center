@@ -53,6 +53,7 @@ If the batch contains only one file, or if the learner explicitly wants the old 
    2. L1 overview: summarize what this file contributes to the cluster's unified topic.
    3. L2 detail: a line map, not a slug map. Each entry names the exact `#Lx-Ly` range and a one-line description of what those lines cover. Every line of the file should be covered by some L2 range.
    4. **Images:** if the file references images, cite those image paths inside the relevant L2 section. Images with no text counterpart in the cluster get their own minimal image-only digest (see §Image-only digests).
+   5. **Related code and figures:** when a text digest's source has a sibling codebase digest or image-only digest in the same batch that supplies its code or figures, list that digest plus the entry to use in the text digest's `supplements` frontmatter — `<digest>.md#Lx-Ly` for a codebase L2 range, or `<digest>.md#L1` for an image digest. Only `text` digests carry `supplements`; targets must be `codebase` or `image` digests.
 7. **Mark remaining singles.** Files that did not group with any other file follow the same one-digest-per-source rule, named from their content/topic (or their stem when the file is clearly self-contained).
 
 ### Image-only digests

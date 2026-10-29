@@ -59,7 +59,7 @@ Load `learn/<subject>/nodes/<node-id>.md`. Parse the ordered `steps` array — t
 
 1. Read the node's `goal` and every existing step's `title` + `purpose`.
 2. Decide where the new step belongs in the teaching order: after the last step by default, or inserted where it logically builds on an earlier step.
-3. The new step needs a unique kebab-case `id`, a `title`, a **one-sentence purpose (≤ 120 characters)**, and one or more `[[sources/<subject>/<file>#Lx-Ly]]` line ranges from the new digest.
+3. The new step needs a unique kebab-case `id`, a `title`, a **one-sentence purpose (≤ 120 characters)**, and one or more `[[sources/<subject>/<file>#Lx-Ly]]` line ranges from the new digest. The title must come from a heading or phrase that actually appears in the source, translated faithfully into Traditional Chinese; do not invent one.
 
 ### 5c. Write the step entry
 

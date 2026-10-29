@@ -80,6 +80,10 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `digest-range` | every L2 range is `1 ≤ start ≤ end`, and ends within the actual lines or declared `source_lines` |
 | `digest-l2-empty` | the digest has an L2 line map (image digests excepted) |
 | `digest-locator` | any source link inside a digest uses `#Lx-Ly`, not a slug |
+| `digest-supplements` | `supplements` is a list declared only by a `text` digest, with non-empty non-self `<digest>.md#L1` / `#Lx-Ly` entries |
+| `digest-supplement-missing` | every `supplements` entry names a digest in the same folder |
+| `digest-supplement-type` | every `supplements` target is a `codebase` or `image` digest; an image only takes `#L1` |
+| `digest-supplement-range` | a supplement's `#Lx-Ly` falls inside the target codebase digest's L2 line map |
 
 ### Code, links, and flags
 

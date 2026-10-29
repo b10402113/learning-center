@@ -49,16 +49,16 @@ A short lesson.
     "# Step One\n\nOld body.\n\n![第 1 段配圖](./s1-assets/image-1.webp)\n*AI 生成示意圖*\n",
   );
   write(root, "learn/test/nodes/n1/s1-assets/image-1.webp", "old-image");
-  write(root, "learn/test/output/jobs/test-n1.prepare.json", JSON.stringify({ steps: ["s1"] }));
+  write(root, "learn/test/output/jobs/n1/prepare.json", JSON.stringify({ steps: ["s1"] }));
   write(root, "learn/test/output/humanized/n1/s1.json", JSON.stringify({ humanized_at: "2026-10-26" }));
   const runFile = join(root, "learn/test/output/run/article.md");
   write(root, "learn/test/output/run/article.md", runArticle);
   write(
     root,
-    "learn/test/output/jobs/test-n1-s1.result.json",
+    "learn/test/output/jobs/n1/s1/s1.result.json",
     JSON.stringify({ status: "completed", article: runFile, images: [] }),
   );
-  write(root, "learn/test/output/jobs/test-n1-s1.blocks.json", "[]");
+  write(root, "learn/test/output/jobs/n1/s1/s1.blocks.json", "[]");
   return root;
 }
 

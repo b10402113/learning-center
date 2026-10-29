@@ -13,13 +13,13 @@ A node is one Markdown container. Its `steps` array is the whole plan: each entr
 
 1. **Resolve.** Read `learn/<subject>/ROADMAP.md`, `MEMORY.md`, and `learn/<subject>/nodes/<node-id>.md`. Resolve source references from the roadmap and digests — do not infer the subject from a node name.
 
-2. **Read sources via digests.** Follow `docs/reference/source-reading.md`: read through `learn/<subject>/digests/` — never the whole raw source. Use the digest's L2 `#Lx-Ly` map to find the lines each step needs. Pull exact slices only when the digest is insufficient.
+2. **Read sources via digests.** Follow `docs/reference/source-reading.md`: read through `learn/<subject>/digests/` — never the whole raw source. Use the digest's L2 `#Lx-Ly` map to find the lines each step needs. Pull exact slices only when the digest is insufficient. When a digest declares `supplements`, read each supplement digest too — it carries the code or figures the text refers to, and the text digest alone is incomplete for a step about that code.
 
 3. **Reason the steps.** Decompose the node into 2–5 coherent steps. Each step is one teaching unit with its own learner-facing outcome. For each step decide:
    - `id` — immutable kebab-case, unique within the node.
-   - `title` — the article's H1 and the node list label.
+   - `title` — the article's H1 and the node list label. It must come from a heading or phrase that actually appears in the source material, translated faithfully into Traditional Chinese; do not invent one.
    - `purpose` — **one short sentence (≤ 120 characters)** stating what the learner can do after the step. It is a purpose, not an article summary: no second sentence, no list, no "本節將介紹…".
-   - `sources` — every `[[sources/<subject>/<file>#Lx-Ly]]` slice the article will need. PDFs are never cited; cite the extracted `.txt`.
+   - `sources` — every `[[sources/<subject>/<file>#Lx-Ly]]` slice the article will need. PDFs are never cited; cite the extracted `.txt`. When a text digest declares a `codebase` supplement, every step that teaches that code must cite the real files covered by the supplement's named L2 entry (`<digest>.md#Lx-Ly`) — `[[sources/<subject>/<YYYYMMDD>/<dir>/<file>#Lx-Ly]]`. A supplement that applies to the step is never left out of `sources`, and a digest `.md` is never cited. An `image` supplement is referenced as `#L1`; it has no line ranges, so it stays out of `sources` and feeds `/article`'s image plan instead.
 
 4. **Confirm the plan (checkpoint).** Present the ordered step list — id, title, purpose, and source ranges — and ask the learner to confirm. Exit options: accept; reorder or rename steps; add, remove, split, or merge steps. Do not write anything until this checkpoint passes.
 
@@ -59,7 +59,7 @@ A node is one Markdown container. Its `steps` array is the whole plan: each entr
 
 10. **Report.** List the confirmed steps (id, title, purpose, source count), the skeleton files created, and the verify exit status. Move the node to `confirmed` and tell the learner to run `/article <subject>/<node-id>` to write the articles.
 
-Completion: the node's `steps` array is ordered and complete, each entry has a one-sentence purpose and cited line ranges, every skeleton article exists at the node-qualified path, `## Steps` matches the array exactly, the node is `confirmed`, and `node scripts/verify.mjs --node <subject>/<node-id>` exits 0.
+Completion: the node's `steps` array is ordered and complete, each entry has a one-sentence purpose and cited line ranges, every `codebase` supplement that a step teaches is cited by that step, every skeleton article exists at the node-qualified path, `## Steps` matches the array exactly, the node is `confirmed`, and `node scripts/verify.mjs --node <subject>/<node-id>` exits 0.
 
 ## Formats
 

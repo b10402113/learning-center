@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { readNode } from "../src/article.mjs";
+import { insertImageMarkers, readNode } from "../src/article.mjs";
 import {
   articleAgentRoot,
   buildRequest,
@@ -13,27 +13,43 @@ import {
   readStepPlan,
   writeJson,
 } from "../src/article-agent-bridge.mjs";
-import { loadEnv } from "../src/llm.mjs";
+import { createTextClient, loadEnv, resolveTextModel } from "../src/llm.mjs";
+import {
+  needsChinese,
+  planText,
+  translateArticle,
+  translatePlan,
+  validateTranslatedArticle,
+} from "../src/translate.mjs";
 
 const usage = `Usage:
-  node scripts/run-article-agent.mjs --subject <s> --node <n> --step <id> [--markers-only] [--no-images] [--root <dir>]
+  node scripts/run-article-agent.mjs --subject <s> --node <n> --step <id> [--mode translate|rewrite] [--markers-only] [--no-images] [--root <dir>]
 
-Wraps one article-agent rewrite for a single step. It protects the code blocks,
-reads the publisher's image plan, writes the request into
-article-agent/output/jobs/, runs article-agent's CLI, and records the result.
-The caller writes the original article and (unless --no-images) the plan first.
---markers-only requires a plan and stops after the rewrite leaves <!--image:N-->
-markers, so no image model is called.`;
+Runs one step through the article pipeline. It protects the code blocks and reads
+the publisher's image plan first.
+
+--mode translate (default) inserts the <!--image:N--> markers at the plan anchors,
+then translates the original into Traditional Chinese with prompts/translate.txt.
+The markers and <!--code:N--> placeholders survive verbatim. An original already
+in Traditional Chinese is kept as-is. The plan's heading and prompt are translated
+too.
+
+--mode rewrite keeps the old behaviour: article-agent rewrites the original,
+inserts the markers, and stops after them.
+
+Both modes stop after the markers when --markers-only is set, so no image model
+is called.`;
 
 const PARTIAL = /partial files: (.+)$/m;
 
-function main() {
+async function main() {
   const { values } = parseArgs({
     args: process.argv.slice(2),
     options: {
       subject: { type: "string" },
       node: { type: "string" },
       step: { type: "string" },
+      mode: { type: "string", default: "translate" },
       "no-images": { type: "boolean", default: false },
       "markers-only": { type: "boolean", default: false },
       root: { type: "string" },
@@ -46,6 +62,10 @@ function main() {
   }
   for (const key of ["subject", "node", "step"]) {
     if (!values[key]) throw new Error(`--${key} is required\n\n${usage}`);
+  }
+  const mode = values.mode;
+  if (!["translate", "rewrite"].includes(mode)) {
+    throw new Error(`unknown --mode: ${mode} (use translate or rewrite)\n\n${usage}`);
   }
 
   const root = resolve(values.root || process.cwd());
@@ -70,17 +90,37 @@ function main() {
       ? null
       : readStepPlan(root, { subject: values.subject, node: values.node, step: entry.id }, original);
   const { text, blocks } = protectCode(original);
-  writeFileSync(files.protected, text);
   writeJson(files.blocks, blocks);
+
+  const context = {
+    root,
+    subject: values.subject,
+    files,
+    entry,
+    plan,
+    markersOnly,
+    protectedText: text,
+    blocks,
+  };
+  if (mode === "rewrite") {
+    runRewrite(context);
+  } else {
+    await runTranslate(context);
+  }
+}
+
+function runRewrite({ root, subject, files, entry, plan, markersOnly, protectedText, blocks }) {
+  writeFileSync(files.protected, protectedText);
   writeJson(
     files.request,
     buildRequest(root, {
-      subject: values.subject,
+      subject,
       files,
       entry,
       plan,
       hasCode: blocks.length > 0,
       markersOnly,
+      mode: "rewrite",
     }),
   );
 
@@ -103,6 +143,85 @@ function main() {
   writeJson(files.result, verdict);
   console.log(JSON.stringify(verdict, null, 2));
   if (verdict.status !== "completed") process.exitCode = 1;
+}
+
+async function runTranslate({ root, files, entry, plan, markersOnly, protectedText }) {
+  const model = resolveTextModel();
+  let textRequests = 0;
+  let article = null;
+  try {
+    if (plan) {
+      for (const item of plan) {
+        if (!protectedText.includes(item.anchor)) {
+          throw new Error(`image plan item ${item.index} anchor is not in the unprotected prose: ${item.anchor}`);
+        }
+      }
+    }
+    const prepared = plan ? insertImageMarkers(protectedText, plan) : `${protectedText.trimEnd()}\n`;
+    writeFileSync(files.protected, prepared);
+
+    const translatePlanNeeded = Boolean(plan) && needsChinese(planText(plan));
+    const translateArticleNeeded = needsChinese(prepared);
+    writeJson(files.request, {
+      mode: "translate",
+      title: entry.title,
+      articleFile: relative(root, files.protected),
+      plan: plan ?? null,
+      markersOnly: Boolean(markersOnly),
+    });
+
+    article = prepared;
+    if (translateArticleNeeded || translatePlanNeeded) {
+      const client = await createTextClient();
+      if (translateArticleNeeded) {
+        const system = readFileSync(join(root, "prompts", "translate.txt"), "utf8");
+        article = await translateArticle({
+          client,
+          model,
+          system,
+          article: prepared,
+          validate: (text) => validateTranslatedArticle({ before: prepared, after: text }),
+        });
+        textRequests += 1;
+      }
+      if (translatePlanNeeded) {
+        const system = readFileSync(join(root, "prompts", "translate-plan.txt"), "utf8");
+        writeJson(files.plan, await translatePlan({ client, model, system, plan }));
+        textRequests += 1;
+      }
+    }
+    writeFileSync(files.translated, article.endsWith("\n") ? article : `${article}\n`);
+  } catch (error) {
+    const failed = {
+      status: "failed",
+      outputDir: files.dir,
+      article: null,
+      images: [],
+      textModel: model,
+      textRequests,
+      imageRequests: 0,
+      markersOnly: Boolean(markersOnly),
+      error: { message: error?.message ?? String(error) },
+    };
+    writeJson(files.result, failed);
+    console.log(JSON.stringify(failed, null, 2));
+    process.exitCode = 1;
+    return;
+  }
+
+  const verdict = {
+    status: "completed",
+    outputDir: files.dir,
+    article: files.translated,
+    images: [],
+    textModel: model,
+    textRequests,
+    imageRequests: 0,
+    markersOnly: Boolean(markersOnly),
+    error: null,
+  };
+  writeJson(files.result, verdict);
+  console.log(JSON.stringify(verdict, null, 2));
 }
 
 function describeRun(stdout, stderr) {
@@ -129,9 +248,7 @@ function describeRun(stdout, stderr) {
   };
 }
 
-try {
-  main();
-} catch (error) {
+main().catch((error) => {
   console.error(error?.message ?? error);
   process.exitCode = 1;
-}
+});

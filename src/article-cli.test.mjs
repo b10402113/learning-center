@@ -113,13 +113,13 @@ test("render accepts --step and --max-parallel and skips a step with no plan", (
 
 test("prepare --force clears the step's shared and legacy plans", (t) => {
   const root = fixture(t);
-  write(root, "learn/test/output/jobs/test-n1-s1.plan.json", "[]");
+  write(root, "learn/test/output/jobs/n1/s1/s1.plan.json", "[]");
   write(root, "learn/test/output/image-plans/n1/s1.json", "[]");
   execFileSync(
     process.execPath,
     [CLI, "prepare", "--subject", "test", "--node", "n1", "--step", "s1", "--force", "--root", root],
     { encoding: "utf8" },
   );
-  assert.equal(existsSync(join(root, "learn/test/output/jobs/test-n1-s1.plan.json")), false);
+  assert.equal(existsSync(join(root, "learn/test/output/jobs/n1/s1/s1.plan.json")), false);
   assert.equal(existsSync(join(root, "learn/test/output/image-plans/n1/s1.json")), false);
 });

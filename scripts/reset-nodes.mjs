@@ -22,6 +22,8 @@ import {
   humanizeRecordPath,
   humanizeWorkDir,
   jobFiles,
+  jobsDir,
+  materialsDir,
   outputDir,
   prepareFile,
   readJson,
@@ -103,6 +105,27 @@ function emptyRemoved() {
   };
 }
 
+/** Removes the pre-`<node>/<step>/` flat artifacts: `<subject>-<node>-<step>.*`. */
+function removeLegacyFlat({ root, subject, id, dryRun, removed }) {
+  const jobs = jobsDir(root, subject);
+  if (existsSync(jobs)) {
+    for (const name of readdirSync(jobs)) {
+      if (!name.startsWith(`${subject}-${id}-`) && !name.startsWith(`${subject}-${id}.`)) continue;
+      if (!dryRun) rmSync(join(jobs, name), { recursive: true, force: true });
+      if (name.endsWith(".plan.json")) removed.removedPlanFiles += 1;
+      else removed.removedJobs += 1;
+    }
+  }
+  const materials = materialsDir(root, subject);
+  if (existsSync(materials)) {
+    for (const name of readdirSync(materials)) {
+      if (!name.startsWith(`${subject}-${id}-`)) continue;
+      if (!dryRun) rmSync(join(materials, name), { force: true });
+      removed.removedMaterials += 1;
+    }
+  }
+}
+
 function cleanNodeOutput({ root, subject, id, stepEntries, dryRun }) {
   const removed = emptyRemoved();
   const runDirs = new Set();
@@ -155,6 +178,12 @@ function cleanNodeOutput({ root, subject, id, stepEntries, dryRun }) {
   if (existsSync(candidatesDir)) {
     removed.removedCandidates = readdirSync(candidatesDir).length;
     if (!dryRun) rmSync(candidatesDir, { recursive: true, force: true });
+  }
+  removeLegacyFlat({ root, subject, id, dryRun, removed });
+  if (!dryRun) {
+    for (const dir of [join(jobsDir(root, subject), id), join(materialsDir(root, subject), id)]) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
   return removed;
 }

@@ -102,6 +102,32 @@ A short lesson.
 `;
 }
 
+function addCodebaseDigest(root) {
+  write(root, "sources/test/code/main.js", `${Array.from({ length: 20 }, (_, index) => `// line ${index + 1}`).join("\n")}\n`);
+  write(
+    root,
+    "learn/test/digests/code.md",
+    `---
+source: sources/test/code
+source_type: codebase
+source_lines: 20
+language: JavaScript
+file_count: 1
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- Main module.
+
+# L2 detail
+
+- \`#L1-L20\` — main module
+`,
+  );
+}
+
 function write(root, relative, content) {
   const path = join(root, relative);
   mkdirSync(dirname(path), { recursive: true });
@@ -466,6 +492,112 @@ test("digest line ranges must be valid", (t) => {
   const root = fixture(t);
   update(root, "learn/test/digests/notes.md", "- `#L1-L10` — first half", "- `#L10-L5` — backwards");
   assert.ok(failures(root).includes("digest-range"));
+});
+
+test("a text digest may point at a codebase digest it supplements", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - code.md#L1-L20");
+  assert.ok(!failures(root).some((check) => check.startsWith("digest-supplement")));
+});
+
+test("a step may cite a file inside a codebase digest's directory", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(
+    root,
+    "learn/test/nodes/n1.md",
+    '"[[sources/test/notes.txt#L1-L10]]"',
+    '"[[sources/test/notes.txt#L1-L10]]"\n      - "[[sources/test/code/main.js#L1-L20]]"',
+  );
+  assert.deepEqual(failures(root), []);
+});
+
+test("supplements must name an existing digest", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - missing.md#L1");
+  assert.ok(failures(root).includes("digest-supplement-missing"));
+});
+
+test("supplements must target a codebase or image digest", (t) => {
+  const root = fixture(t);
+  write(root, "sources/test/other.txt", NOTES);
+  write(
+    root,
+    "learn/test/digests/other.md",
+    `---
+source: sources/test/other.txt
+source_type: text
+source_lines: 20
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- Other notes.
+
+# L2 detail
+
+- \`#L1-L20\` — other notes
+`,
+  );
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - other.md#L1");
+  assert.ok(failures(root).includes("digest-supplement-type"));
+});
+
+test("only text digests may declare supplements", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(root, "learn/test/digests/code.md", "status: absorbed", "status: absorbed\nsupplements:\n  - notes.md#L1");
+  assert.ok(failures(root).includes("digest-supplements"));
+});
+
+test("a digest cannot supplement itself", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - notes.md#L1");
+  assert.ok(failures(root).includes("digest-supplements"));
+});
+
+test("supplements need an L1 or L2 locator", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - code.md");
+  assert.ok(failures(root).includes("digest-supplements"));
+});
+
+test("supplement L2 ranges must stay inside the digest line map", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - code.md#L21-L30");
+  assert.ok(failures(root).includes("digest-supplement-range"));
+});
+
+test("an image supplement takes the digest's L1", (t) => {
+  const root = fixture(t);
+  write(root, "sources/test/shot.png", "not-a-real-png");
+  write(
+    root,
+    "learn/test/digests/shot.md",
+    `---
+source: sources/test/shot.png
+source_type: image
+source_lines: 0
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- A screenshot of the workflow.
+
+# L2 detail
+
+- \`sources/test/shot.png\` — the workflow screen
+`,
+  );
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - shot.md#L1");
+  assert.ok(!failures(root).some((check) => check.startsWith("digest-supplement")));
 });
 
 test("source citations must use the wiki-link format", (t) => {

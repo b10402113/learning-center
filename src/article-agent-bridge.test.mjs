@@ -34,7 +34,7 @@ const entry = { id: "s1", title: "Step One", purpose: "Explain one thing." };
 test("jobFiles points the plan at the shared image-plans path", () => {
   const files = jobFiles("/repo", { subject: "test", node: "n1", step: "s1" });
   assert.equal(files.plan, "/repo/learn/test/output/image-plans/n1/s1.json");
-  assert.equal(files.legacyPlan, "/repo/learn/test/output/jobs/test-n1-s1.plan.json");
+  assert.equal(files.legacyPlan, "/repo/learn/test/output/jobs/n1/s1/s1.plan.json");
 });
 
 test("readStepPlan reads the shared image plan and validates anchors", (t) => {
@@ -64,6 +64,12 @@ test("buildBrief keeps the step purpose and drops node neighbours", () => {
   assert.match(brief, /Explain one thing/);
   assert.match(brief, /<!--code:N-->/);
   assert.doesNotMatch(brief, /上一課|下一課|第 1\//);
+});
+
+test("buildBrief in translate mode asks for a faithful translation", () => {
+  const brief = buildBrief(entry, { mode: "translate" });
+  assert.match(brief, /忠實翻成台灣繁體中文/);
+  assert.doesNotMatch(brief, /改寫成清楚、自然/);
 });
 
 test("normalizeStepPlan accepts 1-5 items and numbers them", () => {
