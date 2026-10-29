@@ -89,10 +89,10 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
       status: "ready",
       index: index + 1,
       total: order.length,
-      material: relative(root, files.material),
-      original: relative(root, files.original),
-      plan: relative(root, files.plan),
-      command: `node scripts/run-article-agent.mjs --subject ${subject} --node ${nodeId} --step ${entry.id} --markers-only`,
+      material: resolve(root, files.material),
+      original: resolve(root, files.original),
+      plan: resolve(root, files.plan),
+      command: `node "${resolve(root, "scripts/run-article-agent.mjs")}" --root "${resolve(root)}" --subject ${subject} --node ${nodeId} --step ${entry.id} --markers-only`,
     });
   }
   const skippedIds = new Set(skipped.map((entry) => entry.id));
@@ -106,6 +106,7 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
   });
   return {
     mode: "prepare",
+    root: resolve(root),
     subject,
     node: nodeId,
     nodeTitle: node.title,

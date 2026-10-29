@@ -67,9 +67,9 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    node src/article-cli.mjs prepare --subject <subject> --node <node> [--force]
    ```
 
-   Read the JSON. `steps[]` is the work: each entry carries `id`, `title`, `purpose`, `material`, `original`, `plan`, and `command` (already `--markers-only`). `skipped[]` means the step already has a body; keep it out of the publisher batch. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
+   Read the JSON. `root` is the absolute repo root. `steps[]` is the work: each entry carries `id`, `title`, `purpose`, `material`, `original`, `plan`, and `command`; `material`, `original`, and `plan` are absolute paths, and `command` already carries absolute paths, `--root`, and `--markers-only`. `skipped[]` means the step already has a body; keep it out of the publisher batch. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
 
-   **3b. Dispatch publishers.** Combine the ready `steps[]` from every prepared node into one list, preserving node and step order. Batch that list into groups of `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per step in a single message, every call with `subagent_type: publisher` and the [Publisher-prompt](#publisher-prompt) filled in. Give each publisher only its own step's fields — never another step's article, plan, or source material. Wait for every call and record `completed` or `failed`.
+   **3b. Dispatch publishers.** Combine the ready `steps[]` from every prepared node into one list, preserving node and step order. Batch that list into groups of `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per step in a single message, every call with `subagent_type: publisher` and the [Publisher-prompt](#publisher-prompt) filled in. Give each publisher only its own step's fields plus the prepare JSON's `root` — never another step's article, plan, or source material. Wait for every call and record `completed` or `failed`.
 
    **3c. Publish.** After all publisher batches finish, publish each node that has at least one prepared step, in roadmap order:
 
@@ -204,19 +204,22 @@ Dispatch every call with `subagent_type: publisher`. Fill `<NODE-ID>`, `<SUBJECT
 ```
 Write one step's original article and image plan, then run the repo wrapper. This is one step only: do not read, write, or plan any other step.
 
+Repo root: <ROOT>
 Step: <SUBJECT>/<NODE-ID>/<STEP-ID>
 Title: <TITLE>
 Purpose: <PURPOSE>
 Material bundle: <MATERIAL>
 Original output: <ORIGINAL>
 Image plan output: <PLAN>
-Run this command: <COMMAND>   (already includes --markers-only)
+Run this command: <COMMAND>   (already includes absolute paths, --root, and --markers-only)
 
-Read the material bundle. Write the original article to <ORIGINAL> in the language recorded in `learn/<SUBJECT>/MEMORY.md` (this repo uses Traditional Chinese), grounded only in the material.
+`<ROOT>`, `<MATERIAL>`, `<ORIGINAL>`, and `<PLAN>` are absolute paths. Use each string exactly as given; do not join, rewrite, or guess a path, and do not assume the current working directory.
+
+Read the material bundle at <MATERIAL>. Write the original article to <ORIGINAL> in the language recorded in `<ROOT>/learn/<SUBJECT>/MEMORY.md` (this repo uses Traditional Chinese), grounded only in the material.
 
 Decide 1-5 places where a figure genuinely helps the reader and spread them across the article. Write the imagePlan as a JSON array of objects with `heading`, `anchor`, and `prompt`; every `anchor` must be a short verbatim sentence from the original.
 
-There is no `article_generate` tool in this repo. Writing the original and the plan, then running the command from the repo root, replaces it. The command rewrites the original once and leaves a `<!--image:N-->` marker for every plan item. It does not generate figures and does not need IMAGE_API_KEY. Do not rewrite after it returns, do not hand-place markers, and do not retry automatically if it fails.
+There is no `article_generate` tool in this repo. Writing the original and the plan, then running the command (any working directory; it carries `--root`), replaces it. The command rewrites the original once and leaves a `<!--image:N-->` marker for every plan item. It does not generate figures and does not need IMAGE_API_KEY. Do not rewrite after it returns, do not hand-place markers, and do not retry automatically if it fails.
 
 Report back: command status (completed/failed), output path, plan length, marker count, and any error.
 ```

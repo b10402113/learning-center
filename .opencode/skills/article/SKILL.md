@@ -17,7 +17,7 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
    node src/article-cli.mjs prepare --subject <subject> --node <node> [--step <id>] [--force]
    ```
 
-   輸出 JSON 的 `steps[]` 每筆有 `material`、`original`、`plan`、`command`；`command` 已帶 `--markers-only`。`skipped[]` 是已有內容的 step，只會有 `id`、`title`、`status`、`path`。
+   輸出 JSON 有 `root`（絕對路徑）；`steps[]` 每筆有 `material`、`original`、`plan`、`command`，前三個都是絕對路徑，`command` 已帶絕對路徑、`--root` 與 `--markers-only`。`skipped[]` 是已有內容的 step，只會有 `id`、`title`、`status`、`path`。
    `--force` 連已有內容的 step 也重做，並清掉該 step 的舊執行結果與舊 plan。
 
    完成標準：`steps.length + skipped.length` 等於節點 step 數。
@@ -28,8 +28,8 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
 
    每次派工只給這幾項：
 
-   - `title`、`purpose`、`material`、`original`、`plan`、`command`
-   - 一句：「把原稿寫到 `original`，把 1–5 項的配圖清單寫成 JSON 陣列到 `plan`，再執行 `command`。`anchor` 必須逐字出現在原稿裡。」
+   - `root`、`title`、`purpose`、`material`、`original`、`plan`、`command`
+   - 一句：「`material`、`original`、`plan` 是絕對路徑，照字串使用，不要自己拼路徑。把原稿寫到 `original`，把 1–5 項的配圖清單寫成 JSON 陣列到 `plan`，再執行 `command`。`anchor` 必須逐字出現在原稿裡。」
    - 一句：「只寫這一篇，不要管其他 step。」
 
    不要給其他 step 的內容、不要給上下課關係。publisher 寫出來的就是一篇獨立的文章。
