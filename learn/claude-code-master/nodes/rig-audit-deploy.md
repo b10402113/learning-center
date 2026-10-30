@@ -6,6 +6,9 @@ tier: 7
 order: 14
 status: draft
 goal: "能接真表單（Resend）、用 Playwright 自測、部署到 Vercel，並把整段流程存成可重用的建站 skill。"
+digests:
+  - volume-e-apps.md
+  - volume-f-taste-and-design.md
 prerequisites: []
 steps: []
 created: 2026-10-28

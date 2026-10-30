@@ -50,15 +50,15 @@ This repo is a personal learning system. You put raw material in `sources/`; the
 8. **`/quiz-gen`** — One `quiz-agent` per node reads its published steps and writes 3–8 single-choice questions per step; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; the viewer renders them after the article.
 9. **`/batch-nodes`** — Optional bulk path over a tier or node list: Nodes → Article → Polish → Generate → Quiz. It resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan, and `-skip-images` skips rendering.
 10. **`/edges`** — Add a small set of strong relationships between steps or nodes.
-11. **`/absorb`** — Integrate `pending` digests by appending steps or creating nodes, then roll affected nodes back to `confirmed`.
+11. **`/absorb`** — Integrate `pending` digests by appending steps or creating nodes, resolve each digest to `absorbed` or `skipped`, then roll affected nodes back to `confirmed`.
 
 `/practice` (generated practice sets) is out of scope. Generated questions live in the `<step>.quiz.json` sidecar; the legacy `quiz` block still renders for old content.
 
 ## Node, step, digest
 
-- **Node** — One Markdown container with one learning goal. Its `steps` array is the teaching order; there is no `deps`, `type`, or per-step `order`.
+- **Node** — One Markdown container with one learning goal. Its `steps` array is the teaching order and its `digests` list names the material it teaches; there is no `deps`, `type`, or per-step `order`.
 - **Step** — One article at `learn/<subject>/nodes/<node>/<step>.md`, with no frontmatter and an H1 equal to the node's step title.
-- **Digest** — A discovery layer: an L1 overview plus an L2 `#Lx-Ly` line map. Articles cite `.txt` lines, and verify checks that each citation sits inside a digest range.
+- **Digest** — A discovery layer: an L1 overview plus an L2 `#Lx-Ly` line map. Articles cite `.txt` lines, and verify checks that each citation sits inside a digest range. A digest is either taught by at least one node (`absorbed`) or deliberately set aside with a `skip_reason` (`skipped`).
 
 Source citations use line-addressed wiki links because the CLI and verify parse them:
 

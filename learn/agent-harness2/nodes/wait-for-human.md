@@ -6,6 +6,8 @@ tier: 5
 order: 11
 status: draft
 goal: "在 harness 層實作 needs-approval 對照表與 `DBOS.recv`／`DBOS.send` 的暫停恢復，並收束自己的最小 stack。"
+digests:
+  - 25-human-in-the-loop.md
 prerequisites: []
 steps: []
 created: 2026-10-29

@@ -1,0 +1,32 @@
+---
+source: sources/agentic-engineer/20261030/13. Idea to First Ship — Greenfield
+source_type: text
+source_lines: 2005
+part: 5
+status: absorbed
+absorbed_at: 2026-10-30
+created: 2026-10-30
+updated: 2026-10-30
+supplements:
+  - code-reel-agentic-src.md#L1-L62
+  - code-reel-agentic-docs.md#L1-L188
+
+---
+
+# L1 overview
+
+- **Design System Output** — the architect and develop skills leave behind a full design system, browsable at `/design`: surfaces, line and text scale, three semantic action roles (good, danger, brand), the chosen display font, radii, spacing, motion, accessibility rules, and every component in every state (swipe deck, rail, chips, buttons, form controls, loading, empty, error, success and background toasts, responsive overlay). The point is not the first screen but the design language future feature work inherits, so nothing drifts into ad-hoc colors, radii or spacing.
+- **First Slice Core taste loop** — the walking skeleton: sign in, swipe a fixed starter deck of well-known films, land on a feed of picks each carrying a one-sentence reason, with real accounts and real storage. Scoped narrowly on purpose (no CSV import, no vibe search, no in-feed feedback) and architect-then-develop run end to end, including the manual steps an agent cannot do for you (API keys, enabling the Google provider, fixing a Next.js image regression it found but did not patch).
+- **App Showcase** — the slice is exercised like a user: 20 films swiped by button or drag, two console and fetch errors surfaced, the feed built and checked for quality (Reservoir Dogs matched to Whiplash's intensity), the feature closed, and the core loop declared complete. The remaining features repeat the same architect/develop loop, so the module stops there.
+- **Final Pro Tip** — the workflow can be fast and thorough: batch-architect several features upfront, let the skill answer its own questions with the recommended option, then build them all in one session. You keep the architect role and the spec review; the agent flies on a path that is already planned.
+
+# L2 detail
+
+- `#L1-L205` — `12. First Slice Core taste loop.srt` — Positions the core taste loop as the first real vertical slice after the first five features: sign in, swipe a 20-card starter deck, get 12 picks each with a persisted one-sentence reason. Stated done-when: a new user rates the deck and lands on a reason-bearing feed, a return visit shows the feed rather than onboarding, and verification mail goes through custom SMTP instead of Supabase's rate-limited sender. Explicitly narrow — fixed deck, no CSV import, no vibe search, no in-feed feedback.
+- `#L206-L449` — `12. First Slice Core taste loop.srt` — The architecture interrogation, round by round: auth method (Google as main path, password plus verification as fallback), onboarding finish at five liked or disliked out of 20 with early finish allowed, a prefetched pool of ~500 popular and top-rated TMDB films deduped, 12 picks per build, a building state plus polling with an enum status column, a symmetric taste vector (liked +1, disliked -1, skipped 0), an immediate server action per swipe instead of a batch at finish, one model call per build parsed with Zod, top-12 by cosine distance excluding already rated or picked, and a 25-reason-calls-per-user-per-day quota.
+- `#L450-L702` — `12. First Slice Core taste loop.srt` — Closes the remaining dimensions: session-refreshing middleware that redirects, a strict funnel with no returning to onboarding, and a returning user seeing stored picks with an on-demand "refresh my feed" that marks old picks seen and inserts 12 new ones. A data model is produced and approved, the spec is written from the writing rules and template (cross-model check skipped for time), and the spec is accepted, marking design finished so the develop skill can run the core taste loop.
+- `#L703-L905` — `12. First Slice Core taste loop.srt` — The develop run: all 15 build-plan tasks land on the `feed-core-taste-loop` branch, verify steps are saved from the acceptance criteria, Anthropic and OpenAI keys are added, and `check verify` runs. Playwright spins up Chrome, creates an account and clicks through permutations; the author stops it as too slow for everyday use and reruns `pnpm dev` to test by hand — which immediately surfaces a real defect the automated pass missed.
+- `#L906-L1140` — `12. First Slice Core taste loop.srt` — Google sign-in fails with "unsupported provider": the provider has to be enabled by hand in the Supabase dashboard, which then demands a client ID. Walks through Google Cloud console: create or pick a project, find OAuth clients, create a web client, paste Supabase's authorized redirect URI, then copy the client ID and secret back into Supabase. After saving, continuing with Google signs in and redirects to the onboarding screen.
+- `#L1141-L1273` — `12. First Slice Core taste loop.srt` — A poster that disappears on every second reload of onboarding is reported to the agent, which reproduces it with Playwright (resetting the onboarded user, reloading repeatedly) and reads the fallback tile plus broken-image glyph as "rendered but source failed", ruling out the optimizer and byte-identical server HTML. Root cause: `next/image`'s `priority` prop is deprecated in Next 16 and no longer implies eager loading. Fix: `preload` plus `loading="eager"` on the poster and hero, after which reloads load immediately and the like / not-for-me / skip buttons work.
+- `#L1-L406` — `13. App Showcase.srt` — Hands-on walkthrough of the finished slice: rating Shawshank and the rest of the deck by buttons or drag-and-drop, then two failures at the end — a "cannot update component" console error and a fetch failure — that make "build my feed" unclickable. Rerunning the app locally clears it, the feed builds 12 picks, and the first hero pick (Reservoir Dogs, justified by shared tension with Whiplash) validates the recommendation quality from only 20 ratings. The feature is marked complete and the module ends with the claim that every remaining feature repeats the same architect/develop loop.
+- `#L1-L93` — `14. Final Pro Tip.srt` — The acceleration tip: architecture is the part worth your attention, so batch it. Architect several features upfront, or let the skill ask its own questions and take the recommended answer, then build them all in a single session. You stay the architect and still review the specs; the agent follows an already-planned path, giving speed and precision together.

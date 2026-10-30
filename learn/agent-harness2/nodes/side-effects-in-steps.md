@@ -6,6 +6,13 @@ tier: 2
 order: 5
 status: written
 goal: "移除 AI SDK 的 `execute`、自己跑工具，把 tool call 與 emit 包成 `runStep`，示範重跑不會重打 LLM。"
+digests:
+  - 7-durable-execution-setup-with-neondb.md
+  - 8-implementing-durable-execution.md
+  - 9-durable-tools.md
+  - harness-engineering.1.part.md
+  - harness-engineering.2.part.md
+  - harness-engineering.3.part.md
 prerequisites: []
 steps:
   - id: wrap-tool-calls-and-emits-in-steps

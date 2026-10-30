@@ -6,6 +6,13 @@ tier: 3
 order: 7
 status: written
 goal: "寫出 `runInSandbox`、說出 `vm` 不是真沙箱，並用 code mode 算對退款金額。"
+digests:
+  - 13-code-mode-security.md
+  - 14-sandbox-boundary-runcode-tool.md
+  - 15-updating-the-system-prompt.md
+  - harness-engineering.1.part.md
+  - harness-engineering.2.part.md
+  - harness-engineering.3.part.md
 prerequisites: []
 steps:
   - id: draw-the-execution-boundary

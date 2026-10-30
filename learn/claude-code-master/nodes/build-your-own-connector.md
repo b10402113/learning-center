@@ -6,6 +6,8 @@ tier: 6
 order: 12
 status: draft
 goal: "能用 Printing Press 把任何 App 變成省 token 的 CLI（HAR→Go CLI→skill），或自己造 app 來掌控連線。"
+digests:
+  - volume-e-apps.md
 prerequisites: []
 steps: []
 created: 2026-10-28

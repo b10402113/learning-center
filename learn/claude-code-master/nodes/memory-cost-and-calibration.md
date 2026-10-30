@@ -6,6 +6,8 @@ tier: 4
 order: 8
 status: draft
 goal: "能算出兩個記憶檔的 token 成本、判斷健康大小，並用 calibrate skill 把每次修正回寫成記憶與 skill。"
+digests:
+  - volume-c-memory.md
 prerequisites: []
 steps: []
 created: 2026-10-28

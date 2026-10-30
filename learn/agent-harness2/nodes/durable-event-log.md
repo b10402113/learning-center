@@ -6,6 +6,13 @@ tier: 2
 order: 4
 status: written
 goal: "說出 checkpoint／replay／idempotency，並把 in-memory bus 換成先落地再廣播的 Postgres bus。"
+digests:
+  - 6-stream-messages-to-the-ui.md
+  - 7-durable-execution-setup-with-neondb.md
+  - 8-implementing-durable-execution.md
+  - harness-engineering.1.part.md
+  - harness-engineering.2.part.md
+  - harness-engineering.3.part.md
 prerequisites: []
 steps:
   - id: restart-loses-everything

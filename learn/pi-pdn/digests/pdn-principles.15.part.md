@@ -1,0 +1,35 @@
+---
+source: sources/pi-pdn/20261030/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt
+source_type: text
+source_lines: 25393
+part: 15
+status: absorbed
+absorbed_at: 2026-10-30
+created: 2026-10-30
+updated: 2026-10-30
+---
+
+# L1 overview
+
+- **Impulse, step, and resonant square-wave response (9.10–9.12)** — Three canonical current stimuli reveal the PDN's parameters: clock-edge droop ΔV = Q/ODC gives on-die capacitance, ringing period gives the LC resonance, and decay cycles give the q-factor. Step droop equals Itransient × Z0, so a marginally robust PDN needs the peak's characteristic impedance below target; a square wave at resonance instead scales with the peak impedance and the 4/π first-harmonic factor, yielding the 1.6× rule.
+- **Target impedance in transient vs AC steady state (9.13–9.14)** — The classic Ztarget = Vtolerance/Itransient works because a single-sided peak-to-peak current drives a double-sided voltage response, as the LC recenters after the attack and spikes on release. For AC steady state with one peak, target impedance is conservative by 2× for sine and 1.6× for square waves; engineering equal-height peaks with higher q-factor lowers Z0 and shrinks step droop while lengthening ringing.
+- **Rogue waves and robust design strategy (9.15–9.16)** — Multiple comparable, high-q peaks can compound energy peak-to-peak into a response exceeding ±5% even when every peak meets target (930 mV = 7% droop with q = 4). Since current waveforms cannot be controlled, the cures are a flat impedance profile, low q-factors, low DC resistance, and a regulator feedback point near the load.
+- **Switched-capacitor load and clock-impulse trains (9.17–9.18)** — A switched capacitor load draws current proportional to PDN voltage and therefore supplies the damping a constant current source lacks, making it the realistic CMOS model. Bit sequences generate impulse, step, resonance, and anti-impulse (missing clock edge) signatures in one simulation; doubling clock frequency doubles dynamic current and step droop while leaving per-impulse droop unchanged.
+- **Clock gating, clock swallowing, and power gating (9.19–9.20)** — Gating produces step-like droops set by Z0; swallowing single pulses produces anti-impulse spikes and, at 12-bit patterns, steady-state subharmonic resonance stimulation near 83 MHz. Power gating is charge sharing: with equal upstream/downstream capacitance the always-on rail halves instantly, so the switch RC time constant should be at least ~20× the reactive PDN time constant.
+- **Bottom line and references** — Ten rules consolidate target impedance as the governing metric, the priority of on-die capacitance over loop inductance for edge droop, characteristic vs peak impedance robustness tiers, the switched-capacitor load as preferred model, and the cost of power-saving clock and power-gating techniques.
+
+# L2 detail
+
+- `#L18412-L18502` — Impulse response: Q = Iavg × Tclock = 1.55 nC at 1 GHz, initial clock-edge droop ΔV = Q/ODC (predicted 31 mV, simulated 29 mV), 100 MHz ringing over ~40 nsec with q ≈ 3; only on-die capacitance mitigates the droop because loop inductance has not yet ramped.
+- `#L18503-L18596` — Step response of a parallel RLC: damped sine offset by I0 × IR drop, initial droop = Itransient × Z0, so Z0 < Ztarget is the marginally robust criterion; reduce droop by raising ODC, lowering mounted package loop inductance, or adding low-inductance on-package capacitors.
+- `#L18597-L18746` — Square wave at resonance: first harmonic is 4/π larger, peak impedance = q × Z0, Vpk-pk = (4/π) × Itransient × Zpeak (198 mV predicted, 201 mV simulated); worst case needs flat regions and peak characteristic impedances below target but peak impedances only below 1.6 × target.
+- `#L18747-L18946` — Target impedance Ztarget = Vtolerance/Itransient reexamined: with a recentering VRM loop or LC, a single-sided current attack uses both plus and minus tolerance (droop then inductive kick), making the definition consistent; AC steady state with one peak makes it conservative by 2× (sine) or 1.6× (square wave).
+- `#L18947-L19182` — Equal 50 mΩ peaks at 1 MHz with q from 0 to 8: higher q means lower Z0 (q × Z0 constant), so step droop falls from 50 mV to ~6 mV while ringing lasts q cycles; under sustained sine or square excitation all peaks settle to the same 50 mV pk-pk, independent of sharpness.
+- `#L19183-L19388` — Rogue waves (Hu et al.): three 50 mΩ, q = 4 peaks at 1, 10, 100 MHz each stay within 5% alone (969, 967, 962 mV), but sequential non-overlapping square-wave trains compound to 930 mV, a 7% droop exceeding tolerance; higher q or over-target peaks make it worse.
+- `#L19389-L19488` — Robust design against rogue waves: root causes are multiple comparable peaks, high q, and sequenced transients; a purely resistive PDN stays within 950 mV–1 V under the same stimulus, so aim for flat impedance, low DC resistance, and feedback at the load, using target impedance as a reference line rather than a guarantee.
+- `#L19489-L19763` — Switched capacitor load (SCL): charge impulses proportional to voltage give realistic CMOS damping that constant current sources and time-varying resistors cannot; half-clock topology with Vdd and Vss capacitors avoids ESR artifacts, bit sequencer sets any pattern, and L1/RC = 1/4 clock period shapes the Poisson-like current profile.
+- `#L19764-L19914` — SCL impulse, step, resonance, and anti-impulse responses: 29 mV impulse droop, 56 mV step droop (step envelope plus clock-edge noise), 196 mV pk-pk at 100 MHz resonance, and a missing clock edge charging ODC into an opposite-polarity spike; 2 GHz doubles dynamic current to 106 mV step droop.
+- `#L19915-L20046` — Clock gating and swallowing in real CMOS: gated-on step droop ≈ Itransient × Z0 (twice tolerance if Z0 is 2× target), q ≤ 1.6 keeps a single peak well behaved, and 12-bit swallow patterns (1110, 110110, 101010, 100100, 100010, 100000, 100000000000) produce erratic clock-edge noise including an 83 MHz subharmonic near the 100 MHz resonance.
+- `#L20047-L20203` — Power gating as charge sharing: inrush in <1 nsec leaves no time for board charge, so Vdd+ = Cup/(Cup + Cdown) × Vdd− (half when equal); 1 mΩ switch drops the upstream rail to 0.5 V and rings while 1 Ω limits it to ~16 mV, so size switch RC ≥ ~20× the reactive PDN time constant or use staged switch turn-on.
+- `#L20204-L20265` — The bottom line: ten rules covering target impedance as the primary metric, half-maximum current as a fallback estimate, clock-edge charge impulses filtered by ODC and package inductance, droop-driven V/L rather than Ldi/dt, characteristic vs peak impedance robustness tiers, SCL superiority, rogue-wave rarity, and the PDN cost of power-saving modes.
+- `#L20266-L20305` — References [1]–[10]: Smith's decoupling capacitor and PDN methodology papers, Sun's on-chip PDN noise characterization, Waizman's EAVP, Hu's rogue-wave and 3D power-grid work, and the DesignCon PDN resonance calculator behind the switched capacitor load.

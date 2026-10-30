@@ -6,6 +6,8 @@ tier: 7
 order: 13
 status: draft
 goal: "能走完 CRAFT 的 Create 段——抓區塊、/html 預覽、建設計系統、UI Sniping、/tweak、生圖——做出有品味的頁面。"
+digests:
+  - volume-f-taste-and-design.md
 prerequisites: []
 steps: []
 created: 2026-10-28

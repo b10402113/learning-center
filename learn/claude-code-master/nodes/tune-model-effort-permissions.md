@@ -6,6 +6,9 @@ tier: 2
 order: 4
 status: draft
 goal: "能依任務選對模型層級、effort 等級與 permission mode，並用換模型在排程上省 token。"
+digests:
+  - volume-a-setup-and-fundamentals.md
+  - volume-d-routines.md
 prerequisites: []
 steps: []
 created: 2026-10-28

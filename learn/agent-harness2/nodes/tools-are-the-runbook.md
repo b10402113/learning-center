@@ -6,6 +6,12 @@ tier: 1
 order: 2
 status: written
 goal: "寫出 tool 的 description／schema／execute，並說出為什麼不可逆工具交給 naive harness 會出事。"
+digests:
+  - 3-agent-tools-setup.md
+  - 4-classify-reply-tools.md
+  - harness-engineering.1.part.md
+  - harness-engineering.2.part.md
+  - harness-engineering.3.part.md
 prerequisites: []
 steps:
   - id: tools-file-and-fake-knowledge-base

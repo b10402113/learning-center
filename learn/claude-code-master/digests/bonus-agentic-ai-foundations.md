@@ -2,6 +2,8 @@
 source: sources/claude-code-master/20261028/2-🎁 BONUS- Agentic AI Foundations
 source_type: text
 source_lines: 1
+supplements:
+  - bonus-agentic-ai-foundations-image.md#L1
 status: absorbed
 absorbed_at: 2026-10-28
 created: 2026-10-28

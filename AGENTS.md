@@ -27,7 +27,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 │   └── edges/                ← optional relationship pages between steps/nodes
 ├── src/                      ← article.mjs, article-cli.mjs, render-images.mjs, article-agent-bridge.mjs, translate.mjs, quiz.mjs, llm.mjs, image-provider.mjs
 ├── prompts/                  ← article.txt, image-plan.txt, image.txt, translate.txt, translate-plan.txt, polish.txt
-├── scripts/                  ← verify.mjs, quiz.mjs, publish-article.mjs, run-article-agent.mjs, polish-article.mjs, pdf-backfill.mjs, digest-status.mjs
+├── scripts/                  ← verify.mjs, quiz.mjs, publish-article.mjs, run-article-agent.mjs, polish-article.mjs, pdf-backfill.mjs, digest-status.mjs, backfill-node-digests.mjs
 ├── article-agent/            ← git submodule: publisher-era rewrite pipeline (prompts/rewrite.txt, src/pipeline.mjs)
 ├── course-app/               ← React (Vite + Tailwind) course viewer
 ├── previews/                 ← static design previews for the course viewer
@@ -62,15 +62,15 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 | Stage | Role |
 | --- | --- |
 | `/learn-init` | Write `MEMORY.md`, extract PDFs to `.txt`, build digests (L1 + line-addressed L2). |
-| `/ingest` | Archive new source files and write `pending` digests. Does not touch roadmap, nodes, or articles. |
-| `/roadmap` | Propose ≥5 learning paths, confirm one, partition into nodes, write `ROADMAP.md` and `draft` node containers. |
+| `/ingest` | Archive new source files and write `pending` digests. Does not touch roadmap, nodes, or articles; a `pending` digest makes the subject check fail until `/absorb` resolves it. |
+| `/roadmap` | Propose ≥5 learning paths, confirm one, partition into nodes, write `ROADMAP.md` and `draft` node containers with their `digests` lists. |
 | `/nodes` | Reasoning checkpoint per node: write the `steps` array (`id`, `title`, `purpose`, `sources`), create H1-only article skeletons, set `confirmed`. |
 | `/article` | `prepare` slices each step into a material bundle; one `publisher` subagent per node writes every step's original in the material's main language and a 1–5 item image plan in teaching order, handling continuity between steps as it goes; the wrapper inserts `<!--image:N-->` markers, then translates the original to the subject language with `prompts/translate.txt` (or, with `--mode rewrite`, lets `article-agent` rewrite it); `publish` writes `<step>.md` and verifies. It never calls the image model and never creates `<step>-assets/`. |
 | `/polish-article` | Processes only steps with a plan and a marker or image line: `scripts/polish-article.mjs` masks the H1, code, provenance, markers, image lines, quiz blocks and links, polishes the prose with one model call per step, restores and validates the structure, retries a failed validation once, then writes the article back and records its sha256 in `output/polished/`. A changed article drops its quiz sidecar. Reruns skip recorded steps; `--force` redoes them. |
 | `/generate-images` | Thin shell over `src/render-images.mjs`: reads the plan and the article's `<!--image:N-->` markers, generates or reuses `image-N.webp` under `<step>-assets/`, and replaces each marker with an uncaptioned image line. With `--force` it also repaints the files behind existing image lines. It never plans, edits prose, or reads `anchor`. |
 | `/quiz-gen` | One `quiz-agent` per node reads its published steps and writes 3–8 single-choice questions per step; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; course-app renders them after the article. |
 | `/batch-nodes` | Optional bulk path over a tier or node list: Nodes → Article → Polish → Generate → Quiz. Every phase that writes dispatches one subagent per node — Nodes, `publisher`, `quiz-agent`; Polish is one polish CLI call per node and Generate is one render CLI call per node. Resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan. |
-| `/absorb` | Read `pending` digests, append steps to existing nodes or create new nodes, mark digests `absorbed`, roll affected nodes back to `confirmed`. |
+| `/absorb` | Read `pending` digests, append steps to existing nodes or create new nodes, add each used digest to the node's `digests`, resolve every digest to `absorbed` or `skipped`, roll affected nodes back to `confirmed`. |
 | `/edges` | Optional relationship pages between steps or nodes. |
 | `/reset-nodes` | Reset chosen nodes to `confirmed`, delete generated articles and figures, keep the plan. |
 
@@ -109,6 +109,8 @@ tier: 1
 order: 1
 status: written            # draft | confirmed | written
 goal: "建立 agent = LLM + harness 的心智模型。"
+digests:
+  - 1-what-is-an-agent-harness.md
 prerequisites: []
 steps:
   - id: harness-is-the-product
@@ -129,6 +131,7 @@ Rules:
 - A `draft` node may have `steps: []`; `confirmed` and `written` need at least one step.
 - The body is `# <title>`, a short `## Lesson`, and a `## Steps` list whose titles, ids, and order match the frontmatter. Links are relative to the node file.
 - There is no node-level `sources` field; sources live on step entries.
+- `digests` lists the digest filenames this node teaches; `/roadmap` declares it up front and `/nodes` and `/absorb` keep it true. Every step source must come from a declared digest, a declared digest must be `absorbed`, and a `confirmed`/`written` node may not declare a digest no step cites.
 - `prerequisites` holds stable node paths such as `learn/<subject>/nodes/<id>.md`.
 
 ### Step article — `learn/<subject>/nodes/<node-id>/<step-id>.md`
@@ -168,8 +171,9 @@ The legacy fenced `quiz` block is still accepted by the renderer and `verify`, b
 source: sources/<subject>/<path>.txt
 source_type: text
 source_lines: 216
-status: absorbed
+status: absorbed         # pending | absorbed | skipped
 absorbed_at: 2026-10-22
+skip_reason: ""          # required non-empty when status is skipped
 supplements:            # optional; a supplement digest plus its L1 or L2 entry
   - <dir-stem>.md#Lx-Ly
   - <image-stem>.md#L1
@@ -185,7 +189,7 @@ supplements:            # optional; a supplement digest plus its L1 or L2 entry
 - `#L12-L25` — <what these lines explain>
 ```
 
-PDFs are extracted once into a sibling `.txt` by `node scripts/pdf-backfill.mjs --subject <subject>`; an existing `.txt` is never overwritten. Citations point at the `.txt`, and `source_lines` equals its actual line count. Digest `status` is `pending | absorbed`. A `text` digest may list `supplements` — sibling `codebase` or `image` digests plus the L1 (`<digest>.md#L1`) or L2 (`<digest>.md#Lx-Ly`) entry that carries the code or figures the text refers to.
+PDFs are extracted once into a sibling `.txt` by `node scripts/pdf-backfill.mjs --subject <subject>`; an existing `.txt` is never overwritten. Citations point at the `.txt`, and `source_lines` equals its actual line count. Digest `status` is `pending | absorbed | skipped`; `skipped` means the material was read and deliberately left untaught, and it needs a non-empty `skip_reason`. A subject check fails on any `pending` digest, on an `absorbed` digest no node lists, and on a text digest skipped while its supplement stays absorbed. A `text` digest may list `supplements` — sibling `codebase` or `image` digests plus the L1 (`<digest>.md#L1`) or L2 (`<digest>.md#Lx-Ly`) entry that carries the code or figures the text refers to.
 
 ### Edge — `learn/<subject>/edges/<edge-id>.md`
 
@@ -247,6 +251,19 @@ node scripts/quiz.mjs status  --subject <s> --node <n>
 - Nothing is inserted into the article Markdown. Regenerate course-app data with `npm --prefix course-app run gen`.
 - After a batch, run `node scripts/verify.mjs --node <subject>/<node>`.
 
+### Digest status and coverage
+
+```bash
+node scripts/digest-status.mjs <subject>                    # list digests, the nodes that use them, and coverage
+node scripts/digest-status.mjs <subject> --set absorbed
+node scripts/digest-status.mjs <subject> --set skipped --reason "<why it is not used>"
+node scripts/digest-status.mjs <subject> --from pending --to absorbed
+
+node scripts/backfill-node-digests.mjs [--subject <s>] [--write] [--skip-unused --reason "<text>"]
+```
+
+`digest-status` prints one row per digest: status, the nodes whose `digests` list it, and its `skip_reason`; the footer counts absorbed, pending, skipped, and absorbed digests no node claims. `skipped` requires `--reason`. `backfill-node-digests` derives each node's `digests` from its step sources — dry run by default, `--write` applies it, and with `--skip-unused --reason` it also marks absorbed digests that no node claims as `skipped`. It never overwrites a step-less node's existing declarations.
+
 ### PDF backfill
 
 ```bash
@@ -270,7 +287,7 @@ node scripts/verify.mjs --subject <subject>
 node scripts/verify.mjs --node <subject>/<node-id>
 ```
 
-It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, H1, `## Steps`, source locators and digest coverage, code provenance, quiz sidecars, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
+It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, H1, `## Steps`, source locators and digest coverage, node ↔ digest declarations (`node-digest-unknown`, `node-digest-status`, `node-digest-undeclared`, `node-digest-unused`, `digest-unreferenced`, `digest-pending`, `digest-skip-reason`), code provenance, quiz sidecars, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
 
 ### Query
 

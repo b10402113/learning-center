@@ -6,6 +6,13 @@ tier: 1
 order: 3
 status: written
 goal: "用 `streamText` + `maxSteps` 寫出回合迴圈、把串流 chunk 變成事件，並指出 demo 的重複送信與未經核准呼叫。"
+digests:
+  - 4-classify-reply-tools.md
+  - 5-harness-runtime.md
+  - 6-stream-messages-to-the-ui.md
+  - harness-engineering.1.part.md
+  - harness-engineering.2.part.md
+  - harness-engineering.3.part.md
 prerequisites: []
 steps:
   - id: stream-text-and-max-steps

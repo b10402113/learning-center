@@ -6,6 +6,8 @@ tier: 5
 order: 10
 status: draft
 goal: "能用 cloud routine（skill 放私有 GitHub repo）與 deterministic／Modal（零 token）自動化，並用「有腦 vs 無腦」判斷該用哪種。"
+digests:
+  - volume-d-routines.md
 prerequisites: []
 steps: []
 created: 2026-10-28

@@ -33,12 +33,19 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 |---|---|
 | `no-mdx` | the `learn/` tree contains no `.mdx` files (whole tree for `--subject`, one subject for `--node`) |
 | `fm-parse` | frontmatter parses as YAML; malformed YAML is a failure, not a crash |
-| `fm-required` | node frontmatter has `id, title, subject, tier, order, status, goal, steps, created, updated` |
+| `fm-required` | node frontmatter has `id, title, subject, tier, order, status, goal, digests, steps, created, updated` |
 | `fm-status` | node `status` is `draft` / `confirmed` / `written` |
 | `fm-subject` | node `subject` matches the subject argument |
 | `id-filename` | node frontmatter `id` equals the filename |
 | `steps-array` | node `steps` is an array; may be empty for a draft node |
 | `steps-empty` | a `confirmed` or `written` node has at least one step |
+| `node-digests-array` | node `digests` is a list of digest filenames |
+| `node-digests-format` | every entry is a bare `<digest>.md` filename, not a path or line range |
+| `node-digests-duplicate` | a digest is declared at most once |
+| `node-digest-unknown` | every declared filename exists in `digests/` |
+| `node-digest-status` | every declared digest is `absorbed` (a `pending` or `skipped` digest may not be declared) |
+| `node-digest-undeclared` | every digest covering a step's `sources` is declared on that node |
+| `node-digest-unused` | on a `confirmed`/`written` node, every declared digest is cited by at least one step (draft nodes are exempt) |
 | `step-entry` | every step entry has `id`, `title`, `purpose`, and `sources` |
 | `step-purpose` | `purpose` is a single line of one short sentence (≤ 120 characters, no second sentence) |
 | `steps-flat` | step entries declare no `deps`, `type`, or `order` |
@@ -73,7 +80,10 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `src-digest-missing` | the source has a digest |
 | `src-digest-range` | the citation is covered by the digest's L2 line map |
 | `digest-fm` | digest frontmatter has `source, source_type, source_lines, status` |
-| `digest-status` | digest `status` is `pending` / `absorbed` |
+| `digest-status` | digest `status` is `pending` / `absorbed` / `skipped` |
+| `digest-skip-reason` | a `skipped` digest has a non-empty `skip_reason` |
+| `digest-unreferenced` | an `absorbed` digest is declared by at least one node, unless it is a supplement (whole-subject checks only) |
+| `digest-pending` | no digest is left `pending` (whole-subject checks only) |
 | `digest-source` | digest `source` exists under `sources/<subject>/` |
 | `digest-source-pdf` | digest `source` is the extracted `.txt`, never a PDF |
 | `digest-source-lines` | `source_lines` equals the actual `.txt` line count (single-file digests); directory sources only bound the ranges |
@@ -84,6 +94,7 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `digest-supplement-missing` | every `supplements` entry names a digest in the same folder |
 | `digest-supplement-type` | every `supplements` target is a `codebase` or `image` digest; an image only takes `#L1` |
 | `digest-supplement-range` | a supplement's `#Lx-Ly` falls inside the target codebase digest's L2 line map |
+| `digest-supplement-status` | a supplement of a `skipped` digest is itself `skipped` |
 
 ### Code, links, and flags
 
@@ -117,6 +128,9 @@ The check set stays deterministic so it rarely misfires:
 - Line counts use newline characters, matching `wc -l`.
 - Digest coverage is the union of L2 ranges, so adjacent ranges may jointly cover a citation.
 - Codebase digests may cover citations by directory prefix.
+- An absorbed codebase/image supplement needs no node of its own: it rides on its text digest, and is declared only when a step cites its files.
+- A `draft` node may declare digests before any step exists, so `node-digest-unused` only applies to `confirmed`/`written` nodes.
+- Whole-subject-only rules (`digest-unreferenced`, `digest-pending`) stay out of `--node` so one node's gate never fails on another node's or a new ingest's digests.
 - Fenced code and inline code are stripped before link checking.
 - `.DS_Store` and hidden files are ignored.
 

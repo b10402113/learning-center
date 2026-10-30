@@ -6,6 +6,13 @@ tier: 4
 order: 10
 status: written
 goal: "產出 schema-backed plan、`allSettled` 平行 fan-out、部分失敗時 degrade 再 synthesize。"
+digests:
+  - 22-supervision-with-subagents.md
+  - 23-supervisor-workflow.md
+  - 24-dispatching-subagents.md
+  - harness-engineering.1.part.md
+  - harness-engineering.2.part.md
+  - harness-engineering.3.part.md
 prerequisites: []
 steps:
   - id: plan-mode-before-subagents

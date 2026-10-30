@@ -6,6 +6,16 @@ tier: 2
 order: 6
 status: written
 goal: "啟動 DBOS、以 workflow ID 接回、client 重連時 replay 事件，並實際殺掉 server 驗證。"
+digests:
+  - 10-durable-agent-loop.md
+  - 11-connecting-dbos-to-the-server.md
+  - 12-durable-execution-recap.md
+  - 7-durable-execution-setup-with-neondb.md
+  - 8-implementing-durable-execution.md
+  - 9-durable-tools.md
+  - harness-engineering.1.part.md
+  - harness-engineering.2.part.md
+  - harness-engineering.3.part.md
 prerequisites: []
 steps:
   - id: env-before-dbos

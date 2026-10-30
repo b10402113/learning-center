@@ -2,8 +2,8 @@
 source: sources/background-agents/20261027/2-course-project-setup.md
 source_type: text
 source_lines: 122
-status: absorbed
-absorbed_at: 2026-10-27
+status: skipped
+skip_reason: "The source lesson is not covered by the current node partition."
 created: 2026-10-27
 updated: 2026-10-27
 ---

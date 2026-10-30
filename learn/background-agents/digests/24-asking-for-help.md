@@ -2,8 +2,8 @@
 source: sources/background-agents/20261027/24-asking-for-help.md
 source_type: text
 source_lines: 56
-status: absorbed
-absorbed_at: 2026-10-27
+status: skipped
+skip_reason: "The source lesson is not covered by the current node partition."
 created: 2026-10-27
 updated: 2026-10-27
 ---

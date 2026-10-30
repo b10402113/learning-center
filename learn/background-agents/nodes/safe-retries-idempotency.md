@@ -6,6 +6,11 @@ tier: 2
 order: 7
 status: written
 goal: "說出為何拆 step 不夠、還需要 idempotency key 與 derived action ID、expectedVersion 最後柵欄、cancelOn 與 lost-ack。"
+digests:
+  - 10-durable-execution.md
+  - 15-executing-actions.md
+  - 23-safe-retries-with-derived-ids.md
+  - service.md
 prerequisites: []
 steps:
   - id: why-steps-are-not-enough

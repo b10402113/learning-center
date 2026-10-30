@@ -6,6 +6,11 @@ tier: 1
 order: 1
 status: written
 goal: "能用「LLM + harness + durable runtime」解釋 background agent，說出它和 chat agent 的差別，以及為什麼「需不需要核准」不能交給 LLM。"
+digests:
+  - 0-introduction.md
+  - 1-background-agents.md
+  - 3-goal-and-harness-overview.md
+  - 4-setting-up-the-workflow.md
 prerequisites: []
 steps:
   - id: from-chat-to-background-agent

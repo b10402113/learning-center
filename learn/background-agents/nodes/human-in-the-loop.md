@@ -6,6 +6,10 @@ tier: 2
 order: 6
 status: written
 goal: "說出 inbox 為何是背景 agent 的介面、proposal 持久化 → correlated wait → 重讀 → 重驗 → 執行，以及 approval 是 harness 的確定性邏輯（不讓 agent 知道）。"
+digests:
+  - 20-hitl-human-in-the-loop.md
+  - 21-building-the-approval-flow.md
+  - 22-testing-hitl.md
 prerequisites: []
 steps:
   - id: inbox-not-chat

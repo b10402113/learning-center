@@ -4,8 +4,8 @@ source_type: codebase
 source_lines: 1086
 language: TypeScript
 file_count: 14
-status: absorbed
-absorbed_at: 2026-10-27
+status: skipped
+skip_reason: "Repository scaffolding, not part of the course material."
 created: 2026-10-27
 updated: 2026-10-27
 ---

@@ -2,8 +2,8 @@
 source: sources/background-agents/20261027/tsconfig.json
 source_type: text
 source_lines: 16
-status: absorbed
-absorbed_at: 2026-10-27
+status: skipped
+skip_reason: "Repository scaffolding, not part of the course material."
 created: 2026-10-27
 updated: 2026-10-27
 ---

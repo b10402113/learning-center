@@ -6,6 +6,8 @@ tier: 6
 order: 11
 status: draft
 goal: "能比較 MCP／API／CLI 的 token 成本，選對連法把 Gmail、行事曆、YouTube 接上並真正自動化。"
+digests:
+  - volume-e-apps.md
 prerequisites: []
 steps: []
 created: 2026-10-28

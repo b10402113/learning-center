@@ -6,6 +6,8 @@ tier: 3
 order: 6
 status: written
 goal: "能做出帶腳本／素材、會互相呼叫的進階 skill，並在安裝外部 skill 前先檢查惡意碼、判斷何時該整併。"
+digests:
+  - volume-b-skills.md
 prerequisites: []
 steps:
   - id: skills-with-scripts-and-nesting

@@ -6,6 +6,11 @@ tier: 1
 order: 2
 status: written
 goal: "說出 agent 做決策時真正看到什麼（world state 快照、run state、execution history），以及目標是機械可驗證的 GoalCondition、動作目錄為什麼很小。"
+digests:
+  - 3-goal-and-harness-overview.md
+  - 4-setting-up-the-workflow.md
+  - 5-choosing-the-next-action.md
+  - 7-loop-walkthrough.md
 prerequisites: []
 steps:
   - id: world-is-a-state-snapshot

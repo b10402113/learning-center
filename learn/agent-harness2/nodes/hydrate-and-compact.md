@@ -6,6 +6,13 @@ tier: 3
 order: 8
 status: written
 goal: "分開 history／state／context，用 token 預算做以 turn 為單位的壓縮，並在 log 看到 `MemoryCompacted`。"
+digests:
+  - 16-memory-context-hydration.md
+  - 17-summarization-compaction.md
+  - 18-clearing-durable-event-log.md
+  - harness-engineering.1.part.md
+  - harness-engineering.2.part.md
+  - harness-engineering.3.part.md
 prerequisites: []
 steps:
   - id: context-grows-forever

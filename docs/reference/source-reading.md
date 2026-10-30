@@ -38,8 +38,9 @@ The command is idempotent: an existing `.txt` is never overwritten, so line numb
 source: sources/<subject>/<YYYYMMDD>/<file>.txt
 source_type: text
 source_lines: <wc -l of the .txt>
-status: pending | absorbed
+status: pending | absorbed | skipped
 absorbed_at: YYYY-MM-DD # set when consumed by /roadmap or /absorb
+skip_reason: "<why it is not taught>" # required when status is skipped
 supplements: # optional; a supplement digest plus the L1 or L2 entry to use
   - <dir-stem>.md#Lx-Ly
   - <image-stem>.md#L1
@@ -72,8 +73,9 @@ source_lines: <wc -l for this directory>
 language: <primary language by file count>
 file_count: <code files in this directory>
 part: <n> # parts only; omit for single-file digests
-status: pending | absorbed
+status: pending | absorbed | skipped
 absorbed_at: YYYY-MM-DD
+skip_reason: "<why it is not taught>" # required when status is skipped
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---

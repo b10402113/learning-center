@@ -6,6 +6,8 @@ tier: 8
 order: 15
 status: draft
 goal: "能走一遍四層（apps／routines／memory／skills）串成的第二大腦，說明它為何更省 token，並用模板套到自己身上。"
+digests:
+  - bonus-second-brain-system.md
 prerequisites: []
 steps: []
 created: 2026-10-28

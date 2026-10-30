@@ -1,0 +1,29 @@
+---
+source: sources/agentic-engineer/20261030/5. Context Engineering
+source_type: text
+source_lines: 887
+status: absorbed
+absorbed_at: 2026-10-30
+created: 2026-10-30
+updated: 2026-10-30
+supplements:
+  - code-ai-course-demos-agent-context.md#L1-L5
+  - code-reel-agentic-docs.md#L1-L75
+
+---
+
+# L1 overview
+
+- **What context engineering means** — Prompt engineering is the wrong lever: a prompt lands on top of everything the agent already holds (files read, conversation, always-on setup), and that environment decides output quality more than the wording does. Context engineering is the deliberate, upfront design of what is always loaded, what is reached for on demand, and what is never carried at all.
+- **The three types of context** — Always-on (AGENTS.md loaded every session whether relevant or not), on-demand (files, skills, grep results the agent pulls mid-task), and reference (specs, docs, the wider codebase loaded only when something points at them). Only always-on is paid every session; that single difference is why it must stay ruthlessly small — the "nine-files mistake" is renting nine documents to serve one task.
+- **CLAUDE.md / AGENTS.md and how they load** — Exploration is a maybe; always-on is a guarantee. Claude Code reads exactly one file at startup, CLAUDE.md, and no fallback to AGENTS.md — the shared file only loads because CLAUDE.md imports it. Verify with `/context` (memory files) and `/memory` (file names) rather than trusting the file tree; removing the import silently drops every rule back to "maybe".
+- **Code structure that makes agents work better** — Your code is context. Small focused files, predictable names and locations, and colocating pieces that change together turn a scavenger hunt of searches and wrong guesses into one cheap read, paid off on every future session.
+
+# L2 detail
+
+- `#L1-L160` — `1. What Context Engineering Means.srt` — Reframes the failure: developers reach for prompts ("word it better") when the prompt only arrives into an existing environment. Defines context as files read, conversation so far, and the always-on setup; a beautiful prompt into empty context still guesses, while a rough prompt into the right loaded file/convention/constraint lands first try. Names the skill: designing what the agent knows before it reads a prompt; "engineering" = choosing ahead of time what is always known, what is reached for on demand, and what is never carried — systems architecture, not wording.
+- `#L161-L318` — `1. What Context Engineering Means.srt` — Prompting still matters but is the last and smallest step; leverage is upstream. Sets up the module: the kinds of context and when to use each, why always-on must stay tiny because every line costs every session, how the files actually load, the mistake that silently loads nothing, and one lesson on structuring code because code is context. Closes by tracing every module-one AI coding failure back to an unconsidered context decision.
+- `#L1-L38` — `2. The Three Types of Context (9_11_2026 1：34：51 PM).txt` — Always-on: loaded automatically each session before you type (AGENTS.md as the standing brief — stack, core conventions, rules true regardless of task, e.g. money stored as integer cents). On-demand: pulled by the agent mid-task (opened file after a search, a skill body once its trigger matches, grep results), paid only when used. Reference: available but not loaded until deliberately pointed at (specs, design docs, the wider codebase) — the line from on-demand is who reaches. Rule of thumb: always-on holds only the few standing facts the agent must never get wrong; ask "would the agent need this on most tasks?" and send everything else to a spec or doc. Names the nine-files mistake and the rent/context-rot cost.
+- `#L1-L236` — `3. CLAUDE.md AGENTS.md How They Load.srt` — Two ways rules reach an agent: exploration (it might open the file while looking around — depends on the task, perceived relevance, and whether it pokes around at all) versus always-on context (loaded at session start regardless). The difference is hoping versus guaranteeing. Don't trust the file tree: `/context` shows exactly what is loaded and lists the memory files (with a token share), and `/memory` opens/names them — project memory in CLAUDE.md, user memory, and the imported AGENTS.md.
+- `#L237-L496` — `3. CLAUDE.md AGENTS.md How They Load.srt` — Claude Code reads exactly one file at startup for always-on context, CLAUDE.md, not AGENTS.md, and there is no fallback; AGENTS.md is loaded only because CLAUDE.md imports (points at) it. Demonstrates by removing the import: after reloading the window, memory files drop to zero and the Next.js rules sit on disk unread, downgraded from guaranteed to maybe. Restoring the import costs rent on every session, so keep the file to the handful of rules the agent must never get wrong; anything scoped to one part of the project belongs next to that code or in a file loaded only when relevant (an audit skill later trims AGENTS.md). Takeaways: exploration is a maybe, always-on is a guarantee via import; check `/context` and `/memory`, never assume.
+- `#L1-L35` — `4. Code Structure That Makes Agents Work Better (9_11_2026 1：35：43 PM).txt` — Code is context, paid like everything else. Three structural choices dominate the cost: file size (touching one function in a 600-line file drags unrelated code into the window — self-inflicted context rot, so keep files small and focused); predictable naming and location (auth.ts is one search and one read; utils2.ts with handleThing is a pile of paid misses); colocation (pieces of a feature that live together are loaded in one neighborhood, scattered ones force a scavenger hunt whose noise is carried for the session). One idea under all three: structure is a standing discount or tax on every future task; before accepting a proposed structure ask how much the agent must load to find and safely change it.

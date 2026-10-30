@@ -6,6 +6,10 @@ tier: 3
 order: 8
 status: written
 goal: "沿一個 run 的完整生命週期做整合驗證，並能把 durable runtime 選型與權限邊界套到自己的背景工作流程。"
+digests:
+  - 25-wrapping-up.md
+  - lessons.md
+  - notes.md
 prerequisites: []
 steps:
   - id: run-lifecycle-recap

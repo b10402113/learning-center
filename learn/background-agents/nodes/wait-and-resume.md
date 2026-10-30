@@ -6,6 +6,11 @@ tier: 2
 order: 5
 status: written
 goal: "用「event 是門鈴不是快照」解釋醒來為何要重讀 state，以及 waitForEvent + eventSequence 對帳、timeout、resume。"
+digests:
+  - 16-when-to-wait-for-input.md
+  - 17-add-wait-conditions-steps.md
+  - 18-waiting-loop.md
+  - 19-testing-wait-resume.md
 prerequisites: []
 steps:
   - id: event-is-doorbell-not-snapshot

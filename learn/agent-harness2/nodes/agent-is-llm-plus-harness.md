@@ -6,6 +6,14 @@ tier: 1
 order: 1
 status: written
 goal: "用「LLM + harness」解釋為什麼同一個模型結果差很多，並指出本課要補的七個能力。"
+digests:
+  - 0-introduction.md
+  - 1-what-is-an-agent-harness.md
+  - 2-course-project-setup.md
+  - 26-wrapping-up.md
+  - harness-engineering.1.part.md
+  - harness-engineering.2.part.md
+  - harness-engineering.3.part.md
 prerequisites: []
 steps:
   - id: no-harness-just-an-llm-call

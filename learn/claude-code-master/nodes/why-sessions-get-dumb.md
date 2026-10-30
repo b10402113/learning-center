@@ -6,6 +6,8 @@ tier: 2
 order: 3
 status: draft
 goal: "能解釋 context window、context rot 與 compaction，並判斷何時該壓縮或重開一個 session。"
+digests:
+  - volume-a-setup-and-fundamentals.md
 prerequisites: []
 steps: []
 created: 2026-10-28

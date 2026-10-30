@@ -9,8 +9,20 @@ import { maxQuestionsFor, validateQuizPayload } from "../src/quiz.mjs";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const ALLOWED_NODE_STATUS = new Set(["draft", "confirmed", "written"]);
-const ALLOWED_DIGEST_STATUS = new Set(["pending", "absorbed"]);
-const NODE_FM = ["id", "title", "subject", "tier", "order", "status", "goal", "steps", "created", "updated"];
+const ALLOWED_DIGEST_STATUS = new Set(["pending", "absorbed", "skipped"]);
+const NODE_FM = [
+  "id",
+  "title",
+  "subject",
+  "tier",
+  "order",
+  "status",
+  "goal",
+  "digests",
+  "steps",
+  "created",
+  "updated",
+];
 const STEP_ENTRY_KEYS = ["id", "title", "purpose", "sources"];
 const FORBIDDEN_STEP_KEYS = ["deps", "type", "order"];
 const DERIVED_COMMENT = /^<!--\s*derived\s*-->$/;
@@ -206,6 +218,9 @@ function buildDigestIndex(report, root, subject, scan) {
     if (data.status && !ALLOWED_DIGEST_STATUS.has(String(data.status))) {
       report.fail(file, 1, "digest-status", `invalid digest status: ${data.status}`);
     }
+    if (String(data.status) === "skipped" && !String(data.skip_reason ?? "").trim()) {
+      report.fail(file, 1, "digest-skip-reason", "a skipped digest needs a non-empty skip_reason");
+    }
 
     for (const match of body.matchAll(/\[\[\s*sources\/[^\]]*#([^\]]+?)\s*\]\]/g)) {
       if (!parseLocator(match[1].trim())) {
@@ -269,12 +284,14 @@ function buildDigestIndex(report, root, subject, scan) {
     meta.push({ file, name: digest.name, data, ranges });
 
     if (!sourceKey) continue;
-    const entry = index.get(sourceKey) || { ranges: [] };
+    const entry = index.get(sourceKey) || { ranges: [], names: new Set() };
     entry.ranges.push(...ranges);
+    entry.names.add(digest.name);
     index.set(sourceKey, entry);
   }
 
   const byName = new Map(meta.map((entry) => [entry.name, entry]));
+  const supplementNames = new Set();
   for (const entry of meta) {
     const supplements = entry.data.supplements;
     if (supplements === undefined || supplements === null) continue;
@@ -300,6 +317,7 @@ function buildDigestIndex(report, root, subject, scan) {
         continue;
       }
       const target = byName.get(name);
+      supplementNames.add(name);
       if (!target) {
         report.fail(entry.file, 1, "digest-supplement-missing", `supplements entry "${name}" is not a digest in this subject`);
         continue;
@@ -307,6 +325,14 @@ function buildDigestIndex(report, root, subject, scan) {
       if (!["codebase", "image"].includes(String(target.data.source_type))) {
         report.fail(entry.file, 1, "digest-supplement-type", `supplements entry "${name}" must be a codebase or image digest`);
         continue;
+      }
+      if (String(entry.data.status) === "skipped" && String(target.data.status) !== "skipped") {
+        report.fail(
+          target.file,
+          1,
+          "digest-supplement-status",
+          `"${name}" supplements a skipped digest and must also be skipped`,
+        );
       }
       if (locator === "L1") continue;
       const range = parseLocator(locator);
@@ -329,7 +355,7 @@ function buildDigestIndex(report, root, subject, scan) {
     }
   }
 
-  return index;
+  return { index, meta, supplementNames, byName };
 }
 
 function resolveDigestSource(root, subject, scan, raw) {
@@ -607,7 +633,7 @@ function checkRoadmap(report, root, subject, scan, enforceOrphans) {
   }
 }
 
-function checkNode(report, root, subject, scan, digestIndex, node, stepIndex) {
+function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nodeDigests) {
   const file = rel(root, node.path);
   const parsed = readMarkdown(node.path);
   if (parsed.error) {
@@ -639,6 +665,7 @@ function checkNode(report, root, subject, scan, digestIndex, node, stepIndex) {
   }
 
   const seen = new Set();
+  const usedDigests = new Set();
   for (const [index, entry] of data.steps.entries()) {
     if (!entry || typeof entry !== "object") {
       report.fail(file, 1, "step-entry", `steps[${index}] must be an object`);
@@ -666,12 +693,15 @@ function checkNode(report, root, subject, scan, digestIndex, node, stepIndex) {
       report.fail(file, 1, "step-article-missing", `step "${entry.id}" has no article at ${rel(root, article)}`);
     }
     for (const [sourceIndex, source] of (Array.isArray(entry.sources) ? entry.sources : []).entries()) {
-      checkSourceRef(report, root, subject, scan, digestIndex, file, source, `steps[${index}].sources[${sourceIndex}]`);
+      checkSourceRef(report, root, subject, scan, digestInfo, file, source, `steps[${index}].sources[${sourceIndex}]`);
+      for (const name of digestNamesForSource(digestInfo, source)) usedDigests.add(name);
     }
     if (!Array.isArray(entry.sources) || entry.sources.length === 0) {
       report.flag(file, "sources-empty", `step "${entry.id}" has no sources`);
     }
   }
+
+  checkNodeDigests(report, file, node, data, digestInfo, usedDigests, nodeDigests);
 
   for (const step of stepIndex.byNode.get(node.id) || []) {
     if (!seen.has(step.id)) {
@@ -729,7 +759,96 @@ function checkNode(report, root, subject, scan, digestIndex, node, stepIndex) {
   checkCodeProvenance(report, root, file, body);
 }
 
-function checkSourceRef(report, root, subject, scan, digestIndex, file, raw, label) {
+function digestNamesForSource(digestInfo, raw) {
+  const parsed = parseSourceLink(raw);
+  if (!parsed) return [];
+  const entry = digestFor(digestInfo.index, parsed.path);
+  return entry ? [...entry.names] : [];
+}
+
+function checkNodeDigests(report, file, node, data, digestInfo, usedDigests, nodeDigests) {
+  const declared = new Set();
+  const raw = data.digests;
+  if (raw !== undefined && raw !== null) {
+    if (!Array.isArray(raw)) {
+      report.fail(file, 1, "node-digests-array", "frontmatter digests must be an array of digest filenames");
+    } else {
+      for (const [index, value] of raw.entries()) {
+        const name = typeof value === "string" ? value.trim() : "";
+        if (!name || !name.endsWith(".md") || name.includes("/")) {
+          report.fail(file, 1, "node-digests-format", `digests[${index}] must be a digest filename like "notes.md"`);
+          continue;
+        }
+        if (declared.has(name)) {
+          report.fail(file, 1, "node-digests-duplicate", `duplicate digest "${name}"`);
+          continue;
+        }
+        const target = digestInfo.byName.get(name);
+        if (!target) {
+          report.fail(file, 1, "node-digest-unknown", `digests[${index}] "${name}" is not a digest in this subject`);
+          continue;
+        }
+        if (String(target.data.status) !== "absorbed") {
+          report.fail(
+            file,
+            1,
+            "node-digest-status",
+            `digests[${index}] "${name}" must be absorbed, not ${target.data.status}`,
+          );
+        }
+        declared.add(name);
+      }
+    }
+  }
+
+  for (const name of usedDigests) {
+    if (!declared.has(name)) {
+      report.fail(file, 1, "node-digest-undeclared", `step sources use digest "${name}" but the node does not declare it`);
+    }
+  }
+
+  if (data.status !== "draft") {
+    for (const name of declared) {
+      if (!usedDigests.has(name)) {
+        report.fail(file, 1, "node-digest-unused", `node declares digest "${name}" but no step cites it`);
+      }
+    }
+  }
+
+  nodeDigests.set(node.id, declared);
+}
+
+function checkDigestCoverage(report, digestInfo, nodeDigests) {
+  const referenced = new Set();
+  for (const names of nodeDigests.values()) {
+    for (const name of names) referenced.add(name);
+  }
+
+  for (const entry of digestInfo.meta) {
+    const status = String(entry.data.status);
+    if (status === "pending") {
+      report.fail(
+        entry.file,
+        1,
+        "digest-pending",
+        "digest is still pending; run /absorb for this subject or mark it skipped with a skip_reason",
+      );
+      continue;
+    }
+    if (status !== "absorbed") continue;
+    if (digestInfo.supplementNames.has(entry.name)) continue;
+    if (!referenced.has(entry.name)) {
+      report.fail(
+        entry.file,
+        1,
+        "digest-unreferenced",
+        "absorbed digest is not listed in any node's digests; declare it on a node or mark it skipped with a skip_reason",
+      );
+    }
+  }
+}
+
+function checkSourceRef(report, root, subject, scan, digestInfo, file, raw, label) {
   const parsed = parseSourceLink(raw);
   if (!parsed) {
     report.fail(file, 1, "src-format", `${label} must be [[sources/${subject}/<file>#Lx-Ly]]`);
@@ -770,7 +889,7 @@ function checkSourceRef(report, root, subject, scan, digestIndex, file, raw, lab
   if (!slice) {
     report.fail(file, 1, "src-slice-empty", `${label} range #L${locator.start}-L${locator.end} is empty`);
   }
-  const digest = digestFor(digestIndex, parsed.path);
+  const digest = digestFor(digestInfo.index, parsed.path);
   if (!digest) {
     report.fail(file, 1, "src-digest-missing", `${label} has no digest for ${parsed.path}`);
   } else if (!covers(digest.ranges, locator.start, locator.end)) {
@@ -896,7 +1015,8 @@ export function runChecks({ root = REPO_ROOT, subject, node = null }) {
   }
 
   checkNoMdx(report, root, node ? subject : null);
-  const digestIndex = buildDigestIndex(report, root, subject, scan);
+  const digestInfo = buildDigestIndex(report, root, subject, scan);
+  const nodeDigests = new Map();
 
   const nodesById = new Map(scan.nodes.map((item) => [item.id, item]));
   for (const nodeId of stepIndex.byNode.keys()) {
@@ -934,8 +1054,10 @@ export function runChecks({ root = REPO_ROOT, subject, node = null }) {
   checkRoadmap(report, root, subject, scan, !node);
 
   for (const item of targets) {
-    checkNode(report, root, subject, scan, digestIndex, item, stepIndex);
+    checkNode(report, root, subject, scan, digestInfo, item, stepIndex, nodeDigests);
   }
+
+  if (!node) checkDigestCoverage(report, digestInfo, nodeDigests);
 
   const articleNodes = node ? new Set([node]) : new Set(scan.nodes.map((item) => item.id));
   for (const step of scan.steps) {

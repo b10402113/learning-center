@@ -6,6 +6,8 @@ tier: 4
 order: 7
 status: draft
 goal: "能用 CLAUDE.md（員工手冊／兩份）＋ MEMORY.md 索引 ＋ /init ＋ 自動記憶，建出跨 session 的記憶。"
+digests:
+  - volume-c-memory.md
 prerequisites: []
 steps: []
 created: 2026-10-28

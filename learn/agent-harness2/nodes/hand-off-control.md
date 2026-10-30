@@ -6,6 +6,13 @@ tier: 4
 order: 9
 status: written
 goal: "說出 handoff ≠ subagent，實作 runtime 攔截 handoff、切換 agent、補對應 tool result。"
+digests:
+  - 19-agent-handoffs.md
+  - 20-billing-agent-handoff-tool.md
+  - 21-agent-triage-handoff.md
+  - harness-engineering.1.part.md
+  - harness-engineering.2.part.md
+  - harness-engineering.3.part.md
 prerequisites: []
 steps:
   - id: handoff-vs-subagent

@@ -76,6 +76,8 @@ tier: 1
 order: 1
 status: confirmed
 goal: "Explain the thing."
+digests:
+  - notes.md
 prerequisites: []
 steps:
   - id: s1
