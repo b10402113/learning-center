@@ -14,7 +14,7 @@ die 需要穩定的直流電壓。但只要 die 開始切換，電壓就不再�
 
 電源分配網路（power delivery network，PDN）是電源供應路徑上的所有互連，從電壓調節模組（voltage regulator module，VRM）一路延伸到 die 上的電路。
 
-<!--image:1-->
+![第 1 段配圖](./what-the-pdn-is-assets/image-1.webp)
 
 這裡的關鍵在於「所有」。一塊常見的電腦主機板上有好幾個 VRM，而每個 VRM 都有自己的路徑，負責將電源與接地連接到各個作用中元件的接點。這整條路徑就是 PDN。
 
@@ -30,7 +30,7 @@ die 需要穩定的直流電壓。但只要 die 開始切換，電壓就不再�
 
 PDN 從 VRM 的接點開始，一路延伸到 die 上的電路。
 
-<!--image:2-->
+![第 2 段配圖](./what-the-pdn-is-assets/image-2.webp)
 
 這個邊界是人為劃定的，不是物理定律。在邊界內，所有事情都得由你負責；在邊界外，則假設 VRM 會維持應有的輸出，而 die 會依照邏輯需求汲取所需電流。
 
@@ -40,7 +40,7 @@ PDN 從 VRM 的接點開始，一路延伸到 die 上的電路。
 
 PDN 有三項工作。
 
-<!--image:3-->
+![第 3 段配圖](./what-the-pdn-is-assets/image-3.webp)
 
 第一，將低雜訊的直流電壓與電力送到負責運作的主動元件。人們所說的「電源完整性」，指的就是這項工作。
 
