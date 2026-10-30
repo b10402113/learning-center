@@ -19,7 +19,7 @@ Scope selects which nodes the run may touch; node frontmatter and the files on d
 - `status: draft`, or `steps: []` — the Nodes phase must build the plan, even when a draft carries stale step entries.
 - A `confirmed` or `written` node with a plan — the Nodes phase is skipped; the Article phase writes only steps without a body.
 - A step already has a body — the Article phase skips it unless the skill's force flag is set.
-- A step has a plan — it is eligible for Humanize and Generate; a step without a plan is an existing article and stays untouched.
+- A step has a plan — it is eligible for Polish and Generate; a step without a plan is an existing article and stays untouched.
 - A `<step>.quiz.json` exists — the Quiz phase skips it unless the skill's force flag is set.
 
 A force flag regenerates generated content. It must not rebuild a node's step plan; that belongs to `/nodes` or `/reset-nodes`.
@@ -32,12 +32,12 @@ The unit depends on the phase:
 
 - **Nodes** — one subagent per node.
 - **Article** — one `publisher` per node; a node's steps run inside that subagent in order, and nodes may share a batch.
-- **Humanize** — one `humanize-article` per node; a node's ready steps run inside that subagent in order, and nodes may share a batch.
+- **Polish** — no subagent: one polish CLI call per node, in roadmap order; its eligible steps run in parallel inside the CLI.
 - **Generate** — no subagent: one render CLI call per node, in roadmap order.
 - **Quiz** — one `quiz-agent` per node; a node's steps share that dispatch, and nodes may share a batch.
 
-Every phase except Generate dispatches one subagent per node, so `max-subagents` caps the number of nodes processed in parallel.
+Nodes, Article, and Quiz dispatch one subagent per node, so `max-subagents` caps how many nodes they process in parallel. Polish and Generate are one CLI call per node and do not consume that budget.
 
 ## Report
 
-At the end, report per phase: succeeded, failed, and skipped, with a reason for each skip and the error for each failure. Point at the next command — rerun the batch for the failed items, run `/generate-images <subject>/<node>` for an image repair, run `/humanize-article <subject>/<node>` for a text pass, or run `/edges` on completed nodes.
+At the end, report per phase: succeeded, failed, and skipped, with a reason for each skip and the error for each failure. Point at the next command — rerun the batch for the failed items, run `/generate-images <subject>/<node>` for an image repair, run `/polish-article <subject>/<node>` for a text pass, or run `/edges` on completed nodes.

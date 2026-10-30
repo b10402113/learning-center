@@ -25,6 +25,7 @@ import {
   jobsDir,
   materialsDir,
   outputDir,
+  polishedRecordPath,
   prepareFile,
   readJson,
 } from "../src/article-agent-bridge.mjs";
@@ -100,6 +101,7 @@ function emptyRemoved() {
     removedPlanFiles: 0,
     removedRuns: 0,
     removedCandidates: 0,
+    removedPolished: 0,
     removedHumanized: 0,
     removedHumanizeWork: 0,
   };
@@ -150,6 +152,11 @@ function cleanNodeOutput({ root, subject, id, stepEntries, dryRun }) {
       else removed.removedJobs += 1;
     }
 
+    const polished = polishedRecordPath(root, { subject, node: id, step: entry.id });
+    if (existsSync(polished)) {
+      if (!dryRun) rmSync(polished, { force: true });
+      removed.removedPolished += 1;
+    }
     const record = humanizeRecordPath(root, { subject, node: id, step: entry.id });
     if (existsSync(record)) {
       if (!dryRun) rmSync(record, { force: true });
@@ -298,7 +305,8 @@ function main(argv) {
           `${node.removedAssets} asset folder(s), ${node.removedOrphans} other entr${node.removedOrphans === 1 ? "y" : "ies"}; ` +
           `${node.removedMaterials} material(s), ${node.removedJobs} job file(s), ${node.removedPlanFiles} plan file(s), ` +
           `${node.removedRuns} article-run folder(s), ${node.removedCandidates} quiz candidate(s), ` +
-          `${node.removedHumanized} humanize record(s), ${node.removedHumanizeWork} humanize workspace(s); ` +
+          `${node.removedPolished} polish record(s), ${node.removedHumanized} legacy humanize record(s), ` +
+          `${node.removedHumanizeWork} legacy humanize workspace(s); ` +
           "kept node container",
       );
     }

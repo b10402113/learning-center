@@ -23,17 +23,16 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 │   │       └── <step>-assets/image-N.webp  ← written by /generate-images
 │   ├── output/               ← generated intermediates (ignored by git)
 │   │   ├── image-plans/<node>/<step>.json  ← the only image plan
-│   │   ├── humanized/<node>/<step>.json    ← humanize record
-│   │   └── humanize/<node>/<step>/         ← humanize workspace
+│   │   └── polished/<node>/<step>.json     ← polish record
 │   └── edges/                ← optional relationship pages between steps/nodes
 ├── src/                      ← article.mjs, article-cli.mjs, render-images.mjs, article-agent-bridge.mjs, translate.mjs, quiz.mjs, llm.mjs, image-provider.mjs
-├── prompts/                  ← article.txt, image-plan.txt, image.txt, translate.txt, translate-plan.txt
-├── scripts/                  ← verify.mjs, quiz.mjs, publish-article.mjs, run-article-agent.mjs, humanize-article.mjs, pdf-backfill.mjs, digest-status.mjs
+├── prompts/                  ← article.txt, image-plan.txt, image.txt, translate.txt, translate-plan.txt, polish.txt
+├── scripts/                  ← verify.mjs, quiz.mjs, publish-article.mjs, run-article-agent.mjs, polish-article.mjs, pdf-backfill.mjs, digest-status.mjs
 ├── article-agent/            ← git submodule: publisher-era rewrite pipeline (prompts/rewrite.txt, src/pipeline.mjs)
 ├── course-app/               ← React (Vite + Tailwind) course viewer
 ├── previews/                 ← static design previews for the course viewer
-├── .opencode/agent/          ← subagent definitions (publisher, humanize-article, quiz-agent, …)
-├── .opencode/skills/         ← active slash-command skills (article, humanize-article, generate-images, quiz-gen, …)
+├── .opencode/agent/          ← subagent definitions (publisher, quiz-agent, …)
+├── .opencode/skills/         ← active slash-command skills (article, polish-article, generate-images, quiz-gen, …)
 ├── legacy/                   ← retired HTML/MDX pipeline; no active flow imports it
 └── wiki/                     ← legacy, no longer maintained
 ```
@@ -48,14 +47,14 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
     → /roadmap <subject>
     → /nodes <subject>/<node-id>
     → /article <subject>/<node-id> [--no-continuity]
-    → /humanize-article <subject>/<node-id> [--step <id>] [--force]
+    → /polish-article <subject>/<node-id> [--step <id>] [--force]
     → /generate-images <subject>/<node-id> [--step <id>] [--force] [--max-parallel <n>]
     → /quiz-gen <subject>/<node-id> [--step <id>] [--force]
     → /edges <subject>/<node-id>     ← optional high-value relationships
 
 /batch-nodes <subject> [tier<N> | <node-id> ...] [flags]
                                      ← optional bulk path: /nodes → /article
-                                       → /humanize-article → /generate-images → /quiz-gen
+                                       → /polish-article → /generate-images → /quiz-gen
 
 /absorb <subject>                    ← integrate pending digests into the graph
 ```
@@ -67,10 +66,10 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 | `/roadmap` | Propose ≥5 learning paths, confirm one, partition into nodes, write `ROADMAP.md` and `draft` node containers. |
 | `/nodes` | Reasoning checkpoint per node: write the `steps` array (`id`, `title`, `purpose`, `sources`), create H1-only article skeletons, set `confirmed`. |
 | `/article` | `prepare` slices each step into a material bundle; one `publisher` subagent per node writes every step's original in the material's main language and a 1–5 item image plan in teaching order, handling continuity between steps as it goes; the wrapper inserts `<!--image:N-->` markers, then translates the original to the subject language with `prompts/translate.txt` (or, with `--mode rewrite`, lets `article-agent` rewrite it); `publish` writes `<step>.md` and verifies. It never calls the image model and never creates `<step>-assets/`. |
-| `/humanize-article` | Processes only steps with a plan: one `humanize-article` subagent per node rewrites the articles and the plans' `heading` / `prompt` in per-step workspaces and unifies terms across the node; `scripts/humanize-article.mjs` validates each workspace, writes both files back, and records their hashes in `output/humanized/`. Reruns skip recorded steps; `--force` redoes them. |
+| `/polish-article` | Processes only steps with a plan and a marker or image line: `scripts/polish-article.mjs` masks the H1, code, provenance, markers, image lines, quiz blocks and links, polishes the prose with one model call per step, restores and validates the structure, retries a failed validation once, then writes the article back and records its sha256 in `output/polished/`. A changed article drops its quiz sidecar. Reruns skip recorded steps; `--force` redoes them. |
 | `/generate-images` | Thin shell over `src/render-images.mjs`: reads the plan and the article's `<!--image:N-->` markers, generates or reuses `image-N.webp` under `<step>-assets/`, and replaces each marker with an uncaptioned image line. With `--force` it also repaints the files behind existing image lines. It never plans, edits prose, or reads `anchor`. |
 | `/quiz-gen` | One `quiz-agent` per node reads its published steps and writes 3–8 single-choice questions per step; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; course-app renders them after the article. |
-| `/batch-nodes` | Optional bulk path over a tier or node list: Nodes → Article → Humanize → Generate → Quiz. Every phase that writes dispatches one subagent per node — Nodes, `publisher`, `humanize-article`, `quiz-agent`; Generate is one render CLI call per node. Resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan. |
+| `/batch-nodes` | Optional bulk path over a tier or node list: Nodes → Article → Polish → Generate → Quiz. Every phase that writes dispatches one subagent per node — Nodes, `publisher`, `quiz-agent`; Polish is one polish CLI call per node and Generate is one render CLI call per node. Resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan. |
 | `/absorb` | Read `pending` digests, append steps to existing nodes or create new nodes, mark digests `absorbed`, roll affected nodes back to `confirmed`. |
 | `/edges` | Optional relationship pages between steps or nodes. |
 | `/reset-nodes` | Reset chosen nodes to `confirmed`, delete generated articles and figures, keep the plan. |
@@ -211,29 +210,28 @@ There is no probe gate, mastery report, element page, or completion tracking in 
 
 ## Operations
 
-### Article, humanize, and image generation
+### Article, polish, and image generation
 
 ```bash
 node src/article-cli.mjs prepare --subject <s> --node <n> [--step <id>] [--mode translate|rewrite] [--force]
 node src/article-cli.mjs publish --subject <s> --node <n> [--step <id>] [--force]
 node src/article-cli.mjs render  --subject <s> --node <n> [--step <id>] [--force] [--max-parallel <n>]
-node scripts/humanize-article.mjs prepare --subject <s> --node <n> [--step <id>] [--force]
-node scripts/humanize-article.mjs apply   --subject <s> --node <n> --step <id> [--summary <text>]
+node scripts/polish-article.mjs run --subject <s> --node <n> [--step <id>] [--force] [--max-parallel <n>] [--instruction <text>]
 node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force] [--images]  (deprecated)
 node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only]  (deprecated)
 ```
 
 - `prepare` writes one material bundle per missing step to `learn/<subject>/output/materials/<node>/<step>.json` and returns the node's plan path plus the steps already published; one `publisher` subagent per node writes each step's original to `learn/<subject>/output/jobs/<node>/<step>/<step>.original.md` and its plan to `learn/<subject>/output/image-plans/<node>/<step>.json`, then runs that step's `run-article-agent.mjs --markers-only --mode translate` (the default), which validates the plan, protects code blocks, inserts the `<!--image:N-->` markers, and translates the article and the plan to Traditional Chinese. With `--mode rewrite`, the wrapper runs `article-agent`'s single rewrite instead. It never generates figures.
-- `publish` restores the code, keeps the markers, normalizes the H1, writes `learn/<subject>/nodes/<node>/<step>.md`, marks the node `written`, and runs verify. It never syncs, copies, or deletes `<step>-assets/` unless `--force` succeeds. With `--force`, a successful write clears that step's stale `image-N.webp` files and humanize record.
+- `publish` restores the code, keeps the markers, normalizes the H1, writes `learn/<subject>/nodes/<node>/<step>.md`, marks the node `written`, and runs verify. It never syncs, copies, or deletes `<step>-assets/` unless `--force` succeeds. With `--force`, a successful write clears that step's stale `image-N.webp` files and polish record.
 - Missing or H1-only articles are generated; articles with a body are skipped unless `--force`.
-- `humanize-article.mjs prepare` copies each eligible step's article and plan into `output/humanize/<node>/<step>/`, skipping steps without an article, without a plan, without a marker or image line, or with a matching record; one subagent per node edits every ready workspace, and `apply` runs per step. `apply` validates the workspace against its backup (H1, markers, image lines, code, provenance, quiz, links, plan length/order/`anchor`), writes the article and plan back, records both sha256 hashes in `output/humanized/<node>/<step>.json`, and removes the workspace. A failed validation leaves the official files untouched and keeps the workspace.
-- `render` reads the plan and the article's markers. It generates only the missing `image-N.webp` files, reuses existing ones, and replaces each marker with `![第 N 段配圖](./<step>-assets/image-N.webp)` — no caption. It does not plan, edit prose, or read `anchor`. It needs an image key but no text key. If the step's humanize record still matches the pre-render article, `render` refreshes that record's article hash so a later humanize run still reports `skipped-record`.
+- `polish-article.mjs run` polishes every eligible step (article body, plan, marker or image line) in parallel, skipping steps whose `output/polished/<node>/<step>.json` still matches the article hash unless `--force` is given. Before each model call it masks the H1, fenced code, provenance comments, markers, image lines and captions, quiz blocks, inline code and links; after the call it restores them and validates the article against that backup (H1, code, provenance, markers, image lines, quiz, links). A failed validation retries once, then records `failed` and leaves the official article untouched. It never touches the plan. A changed article deletes its `<step>.quiz.json`.
+- `render` reads the plan and the article's markers. It generates only the missing `image-N.webp` files, reuses existing ones, and replaces each marker with `![第 N 段配圖](./<step>-assets/image-N.webp)` — no caption. It does not plan, edit prose, or read `anchor`. It needs an image key but no text key. If the step's polish record still matches the pre-render article, `render` refreshes that record's article hash so a later polish run still reports `skipped-record`.
 - The legacy `article` and `image` commands are deprecated. They remain usable for repairs on old articles but are not part of the current pipeline; `image --plan-only` still writes the shared plan path.
 - The CLI prints JSON per-step status plus the verify result.
 
 ### Batch pipeline
 
-`/batch-nodes` runs Nodes → Article → Humanize → Generate → Quiz and gates each phase before dispatching. Flags: `-max-subagents N` (default 3), `-nodes-only`, `-skip-article`, `-skip-humanize`, `-skip-images`, `-skip-quiz`, `-no-continuity`, `-force`. `-no-images` is removed; use `-skip-images` to skip rendering. `-force` regenerates generated content but never rebuilds a node's step plan. Failure propagates downstream: a failed Article node leaves Humanize, Generate, and Quiz; a failed Humanize node leaves Generate and Quiz; a failed Generate node leaves Quiz. Successful files stay in place.
+`/batch-nodes` runs Nodes → Article → Polish → Generate → Quiz and gates each phase before dispatching. Flags: `-max-subagents N` (default 3), `-nodes-only`, `-skip-article`, `-skip-polish`, `-skip-images`, `-skip-quiz`, `-no-continuity`, `-force`. `-no-images` is removed; use `-skip-images` to skip rendering. `-skip-humanize` is removed; the stage is Polish and the flag is `-skip-polish`. `-force` regenerates generated content but never rebuilds a node's step plan. Failure propagates downstream: a failed Article node leaves Polish, Generate, and Quiz; a failed Polish node leaves Generate and Quiz; a failed Generate node leaves Quiz. Successful files stay in place.
 
 ### Quiz generation
 
@@ -263,7 +261,7 @@ Idempotent: existing `.txt` files are not overwritten, so line numbers stay stab
 node scripts/reset-nodes.mjs --subject <subject> (--all | --tier <n> | --node <id> ...) [--dry-run]
 ```
 
-Keeps each node container and its step plan; sets `status: confirmed`, rewrites every step article as a bare H1 skeleton, removes figures, and deletes the node's intermediate `output/` artifacts (material bundles, job files, the formal image plans, humanize records and workspaces, article-agent run folders, quiz candidates). `/article` then regenerates the bodies and plans from scratch, and `/generate-images` renders the figures.
+Keeps each node container and its step plan; sets `status: confirmed`, rewrites every step article as a bare H1 skeleton, removes figures, and deletes the node's intermediate `output/` artifacts (material bundles, job files, the formal image plans, polish records, legacy humanize records and workspaces, article-agent run folders, quiz candidates). `/article` then regenerates the bodies and plans from scratch, and `/generate-images` renders the figures.
 
 ### Lint
 

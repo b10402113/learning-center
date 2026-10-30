@@ -28,14 +28,14 @@ This repo is a personal learning system. You put raw material in `sources/`; the
     → /roadmap <subject>
     → /nodes <subject>/<node-id>
     → /article <subject>/<node-id> [--no-continuity]
-    → /humanize-article <subject>/<node-id> [--step <id>] [--force]
+    → /polish-article <subject>/<node-id> [--step <id>] [--force]
     → /generate-images <subject>/<node-id> [--step <id>] [--force] [--max-parallel <n>]
     → /quiz-gen <subject>/<node-id> [--step <id>] [--force]
     → /edges <subject>/<node-id>     ← optional
 
 /batch-nodes <subject> [tier<N> | <node-id> ...] [flags]
                                      ← optional bulk path: /nodes → /article
-                                       → /humanize-article → /generate-images → /quiz-gen
+                                       → /polish-article → /generate-images → /quiz-gen
 
 /absorb <subject>                    ← integrate pending digests
 ```
@@ -45,10 +45,10 @@ This repo is a personal learning system. You put raw material in `sources/`; the
 3. **`/roadmap`** — Propose at least five learning paths, confirm one, partition the material into nodes, and write `ROADMAP.md` plus `draft` node containers.
 4. **`/nodes`** — Write the node's ordered `steps` array (`id`, `title`, `purpose`, `sources`), create H1-only article skeletons, and set the node to `confirmed`.
 5. **`/article`** — One `publisher` subagent per node writes every step's original and 1–5 item image plan in order, keeping the handoffs between steps; `article-agent` rewrites each step and leaves `<!--image:N-->` markers; publish writes the steps and verifies. It never calls the image model.
-6. **`/humanize-article`** — One `humanize-article` subagent per node rewrites every eligible article and its plan's `heading` / `prompt` in per-step workspaces and unifies terms across the node; the CLI validates each workspace, writes both files back, and records their hashes. Reruns skip recorded steps.
+6. **`/polish-article`** — Polishes every eligible step with one model call per article. The CLI masks the H1, code, provenance, markers, image lines, quiz blocks and links, restores them after the call, validates the structure, retries a failed validation once, writes the article back, and records its sha256. A changed article drops its quiz sidecar. Reruns skip recorded steps.
 7. **`/generate-images`** — Reads the plan and the article's markers, generates or reuses `image-N.webp`, and replaces each marker with an uncaptioned image line. It never plans or edits prose.
 8. **`/quiz-gen`** — One `quiz-agent` per node reads its published steps and writes 3–8 single-choice questions per step; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; the viewer renders them after the article.
-9. **`/batch-nodes`** — Optional bulk path over a tier or node list: Nodes → Article → Humanize → Generate → Quiz. It resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan, and `-skip-images` skips rendering.
+9. **`/batch-nodes`** — Optional bulk path over a tier or node list: Nodes → Article → Polish → Generate → Quiz. It resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan, and `-skip-images` skips rendering.
 10. **`/edges`** — Add a small set of strong relationships between steps or nodes.
 11. **`/absorb`** — Integrate `pending` digests by appending steps or creating nodes, then roll affected nodes back to `confirmed`.
 

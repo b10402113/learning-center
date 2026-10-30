@@ -11,7 +11,7 @@ import {
 } from "./article.mjs";
 import {
   REPO_IMAGE_STYLE,
-  humanizeRecordPath,
+  polishedRecordPath,
   jobFiles,
   normalizeStepPlan,
   readJson,
@@ -23,8 +23,8 @@ function sha256(text) {
   return createHash("sha256").update(String(text)).digest("hex");
 }
 
-function refreshHumanizeRecord(root, ids, before, after) {
-  const recordPath = humanizeRecordPath(root, ids);
+function refreshPolishRecord(root, ids, before, after) {
+  const recordPath = polishedRecordPath(root, ids);
   if (!existsSync(recordPath)) return;
   let record;
   try {
@@ -232,7 +232,7 @@ async function renderStep({ root, subject, node, entry, force, maxParallel, deps
       error: `could not write the article: ${error.message}`,
     };
   }
-  refreshHumanizeRecord(root, { subject, node, step: entry.id }, article, rendered);
+  refreshPolishRecord(root, { subject, node, step: entry.id }, article, rendered);
   return {
     id: entry.id,
     title: entry.title,

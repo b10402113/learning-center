@@ -54,6 +54,10 @@ export function prepareFile(root, subject, node) {
   return join(jobsDir(root, subject), node, "prepare.json");
 }
 
+export function polishedRecordPath(root, { subject, node, step }) {
+  return join(outputDir(root, subject), "polished", node, `${step}.json`);
+}
+
 export function humanizeRecordPath(root, { subject, node, step }) {
   return join(outputDir(root, subject), "humanized", node, `${step}.json`);
 }

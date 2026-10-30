@@ -38,6 +38,7 @@ Invoke as `/article <subject>/<node> [--step <id>] [--mode translate|rewrite] [-
    - 一句：「依 `steps` 順序逐篇寫原稿與 1–5 項配圖清單，每篇寫完就執行該篇 `command`，再讀它回報的 `article` 路徑寫下一篇。」
    - 一句：「`material`、`original`、`plan` 是絕對路徑，照字串使用，不要自己拼路徑。`anchor` 必須逐字出現在原稿裡。」
    - 一句：「原稿用素材的主要語言寫，配圖清單的 `heading`、`prompt` 也用同一語言；wrapper 會翻成繁中，原稿不要自己翻。」
+   - 一句：「句子要短，一句只講一件事；每段 1–3 句，第 4 句就開新段落，套語直接刪掉。」
    - 一句：「依 `nodeFile` 與 `skipped[]` 的既有文章處理跨篇連貫；`--no-continuity` 時各篇獨立寫。」
    - 一句：「只處理這個 node，不讀其他 node 的內容。」
 
@@ -55,7 +56,7 @@ Invoke as `/article <subject>/<node> [--step <id>] [--mode translate|rewrite] [-
 
    它還原被保護的 code block、把 H1 對齊 node plan、保留 `<!--image:N-->` marker、寫入 `learn/<subject>/nodes/<node>/<step>.md`，全部 step 有正文才把 node 標成 `written`，最後跑 verify。它不呼叫圖片同步；非 `--force` 時不改動圖片檔。
 
-   帶 `--force` 且寫入成功後，它會清掉該 step 舊的 `image-N.webp`（新文章只有 marker，舊圖已經對不上）與 humanize 紀錄；寫入失敗時，舊圖與紀錄都保留。
+   帶 `--force` 且寫入成功後，它會清掉該 step 舊的 `image-N.webp`（新文章只有 marker，舊圖已經對不上）與 polish 紀錄；寫入失敗時，舊圖與紀錄都保留。
 
    完成標準：`verify.pass` 為 `true`，而且 `step.md` 裡的 marker 還在。
 

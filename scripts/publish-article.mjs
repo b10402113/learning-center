@@ -11,7 +11,7 @@ import {
   selectSteps,
 } from "../src/article.mjs";
 import {
-  humanizeRecordPath,
+  polishedRecordPath,
   jobFiles,
   prepareFile,
   readJson,
@@ -68,12 +68,12 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
     }
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, body);
-    // A forced rewrite invalidates the figures and humanize record from the
+    // A forced rewrite invalidates the figures and polish record from the
     // previous run. Clear them only after the new article is safely written, so
     // a failed publish leaves the old state intact.
     if (force) {
       clearStepImages(root, { subject, node: nodeId, step: entry.id });
-      rmSync(humanizeRecordPath(root, { subject, node: nodeId, step: entry.id }), { force: true });
+      rmSync(polishedRecordPath(root, { subject, node: nodeId, step: entry.id }), { force: true });
     }
     results.push({ id: entry.id, title: entry.title, status: "published", path: shown });
   }
@@ -96,7 +96,7 @@ Copies each completed marker-only article-agent run back into learn/, restores
 protected code blocks, keeps the <!--image:N--> markers, normalizes the H1,
 marks the node written, and runs verify. With --force, a successful write also
 removes the step's stale image-N files (the markers are rendered later) and its
-humanize record.`;
+polish record.`;
 
 async function main() {
   const { values } = parseArgs({

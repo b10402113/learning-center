@@ -4,7 +4,7 @@ title: "Agent 是 LLM 加上 harness"
 subject: agent-harness2
 tier: 1
 order: 1
-status: confirmed
+status: written
 goal: "用「LLM + harness」解釋為什麼同一個模型結果差很多，並指出本課要補的七個能力。"
 prerequisites: []
 steps:

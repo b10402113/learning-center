@@ -92,6 +92,9 @@ Alpha lesson.
   writeFileSync(join(root, "learn/demo/output/materials/alpha/one.json"), "{}\n");
   mkdirSync(join(root, "learn/demo/output/jobs"), { recursive: true });
   writeFileSync(join(root, "learn/demo/output/jobs/demo-alpha-one.plan.json"), "[]\n");
+  mkdirSync(join(root, "learn/demo/output/polished/alpha"), { recursive: true });
+  writeFileSync(join(root, "learn/demo/output/polished/alpha/one.json"), "{}\n");
+  writeFileSync(join(root, "learn/demo/output/polished/alpha/two.json"), "{}\n");
   mkdirSync(join(root, "learn/demo/output/humanized/alpha"), { recursive: true });
   writeFileSync(join(root, "learn/demo/output/humanized/alpha/one.json"), "{}\n");
   writeFileSync(join(root, "learn/demo/output/humanized/alpha/two.json"), "{}\n");
@@ -136,6 +139,7 @@ test("reset keeps the node container, restores skeletons, and clears generated c
   assert.equal(result.nodes[0].removedOrphans, 1);
   assert.equal(result.nodes[0].removedCandidates, 2);
   assert.equal(result.nodes[0].removedPlanFiles, 5);
+  assert.equal(result.nodes[0].removedPolished, 2);
   assert.equal(result.nodes[0].removedHumanized, 2);
   assert.equal(result.nodes[0].removedHumanizeWork, 2);
 
@@ -158,6 +162,8 @@ test("reset keeps the node container, restores skeletons, and clears generated c
   assert.equal(existsSync(join(root, "learn/demo/output/jobs/demo-alpha-one.plan.json")), false);
   assert.equal(existsSync(join(root, "learn/demo/output/jobs/alpha/one/one.plan.json")), false);
   assert.equal(existsSync(join(root, "learn/demo/output/jobs/alpha/two/two.plan.json")), false);
+  assert.equal(existsSync(join(root, "learn/demo/output/polished/alpha/one.json")), false);
+  assert.equal(existsSync(join(root, "learn/demo/output/polished/alpha/two.json")), false);
   assert.equal(existsSync(join(root, "learn/demo/output/humanized/alpha/one.json")), false);
   assert.equal(existsSync(join(root, "learn/demo/output/humanized/alpha/two.json")), false);
   assert.equal(existsSync(join(root, "learn/demo/output/humanize/alpha/one")), false);
@@ -180,6 +186,7 @@ test("dry run reports the plan without touching files", (t) => {
   assert.equal(existsSync(join(root, "learn/demo/output/quiz-candidates/alpha/one.json")), true);
   assert.equal(existsSync(join(root, "learn/demo/output/image-plans/alpha/one.json")), true);
   assert.equal(existsSync(join(root, "learn/demo/output/jobs/alpha/one/one.plan.json")), true);
+  assert.equal(existsSync(join(root, "learn/demo/output/polished/alpha/one.json")), true);
   assert.equal(existsSync(join(root, "learn/demo/output/humanized/alpha/one.json")), true);
   assert.equal(existsSync(join(root, "learn/demo/output/humanize/alpha/one/article.md")), true);
 });

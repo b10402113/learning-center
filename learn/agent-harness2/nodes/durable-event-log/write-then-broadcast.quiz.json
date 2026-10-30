@@ -2,59 +2,70 @@
   "quiz-generated": true,
   "questions": [
     {
-      "question": "emit 的執行順序是什麼？如果程序在寫入完成、廣播還沒開始時中斷，會怎樣？",
+      "question": "emit 為什麼要等資料插入完成後，才去通知 listeners？",
       "options": [
-        "先通知監聽器再寫資料庫，中斷時事件可能重複送出",
-        "先 await 寫入 Postgres，再逐一呼叫監聽器；中斷時事件已經存好，重連後用 history 讀得到",
-        "兩件事同時進行，資料庫寫失敗也不影響廣播",
-        "先寫資料庫，但寫入失敗仍會廣播，以免用戶端漏掉事件"
+        "因為 listener 只能接收已經依 seq 排序過的事件",
+        "因為必須先從資料庫取得 seq，才能把 id 加進事件裡",
+        "因為事件一旦存進資料庫就能放心傳給用戶端：插入後程序才停止的話事件已保存、可重新播放；插入前停止則不會有人收到不實的通知",
+        "因為連線池只有五個連線，必須等寫入釋放後才能廣播"
       ],
-      "answer": 1,
-      "explain": "文章說 await 就卡在兩步之間：資料寫完、事件安全躺在資料庫裡，這時才交給用戶端；若在寫入完成、廣播尚未開始時中斷，用戶端重連後用 history 就讀得到。"
+      "answer": 2,
+      "explain": "文章說這個順序讓系統保持可靠：如果處理程序在插入資料後停止，事件已經妥善保存，用戶端可以重新播放；如果在插入前停止，就不會有任何用戶端收到不實的通知。"
     },
     {
-      "question": "subscribe 回傳的那個函式有什麼用途？",
+      "question": "舊版事件匯流排的 class 為什麼可以直接刪掉？",
       "options": [
-        "立刻把目前的完整事件歷史回傳給剛連上的用戶端",
-        "讓訂閱方在用戶端離線時把監聽器從集合移除，否則集合會留著失效參照造成記憶體洩漏",
-        "取消與 Postgres 的連線",
-        "清空 event_log 這張表"
+        "因為 TypeScript 在刪除 class 之後不再支援這種寫法",
+        "因為這個 class 存在的唯一理由就是保存記憶體狀態，狀態改存到 Postgres 後就沒有東西需要保存",
+        "因為 WebSocket 伺服器只能使用函式，不能使用 class",
+        "因為 DBOS 要求所有程式碼都必須是純函式"
       ],
       "answer": 1,
-      "explain": "文章說回傳的函式就是清理機制；沒有它，集合就會一直留著已失效監聽器的參照，最後變成記憶體洩漏，而清理是讓集合縮小的唯一方法。"
+      "explain": "文章說舊版匯流排是個 class，而這個 class 存在的唯一理由就是把狀態保存在記憶體裡；狀態改存到 Postgres 後，它就沒有需要保存的東西，最後只留下 listeners 集合與三個函式。"
     },
     {
-      "question": "history 回傳的內容是什麼？",
+      "question": "如果 subscribe 沒有回傳清理函式，會發生什麼問題？",
       "options": [
-        "照 seq 排序的全部事件，seq 也一併附在每個事件上",
-        "照 seq 排序的事件，只從每列取出 data，seq 不會出現在結果裡",
-        "只回傳這次連線之後才發生的事件",
-        "照寫入時間排序並去掉重複後的事件"
+        "事件不會被寫入 event_log，重啟後時間軸會少掉一段",
+        "同一個事件會被寫成兩筆資料列，seq 因此重複",
+        "用戶端連線後會立刻被伺服器關閉",
+        "每次連線都會留下未清理的 listener，下一次廣播就得遍歷一整組已失效的 socket"
       ],
-      "answer": 1,
-      "explain": "文章說 history 讀出全部資料列、照 seq 排序，再從每一列取出 data；seq 只拿來排序，最後不會出現在回傳結果裡。"
+      "answer": 3,
+      "explain": "文章說這個回傳值很重要：沒有它，每次連線都會留下未清理的 listener，下一次廣播就得遍歷一整組已失效的 socket，並把它比喻成 useEffect 回傳的清理函式。"
     },
     {
-      "question": "每個事件的 id 和 ts 是誰產生的？",
+      "question": "history 查詢時為什麼要依 eventLog.seq 排序？",
       "options": [
-        "呼叫 emit 的程式自己帶進來的",
-        "事件匯流排用 randomUUID() 補上 id、用 Date.now() 補上 ts",
-        "由 Postgres 的 seq 與資料庫時間決定",
-        "由用戶端連線時自行產生"
+        "因為 jsonb 欄位無法直接比較大小，必須靠 seq 代替",
+        "讓資料列依寫入順序回傳，而不是依 Postgres 找到它們的順序",
+        "為了在回傳前過濾掉 data 內容重複的資料列",
+        "因為 listener 需要依事件的 id 字串排序"
       ],
       "answer": 1,
-      "explain": "文章說呼叫端只傳 EventInput，事件匯流排再用 randomUUID() 補上 id、用 Date.now() 補上 ts；每個事件的編號和時間都由 harness 統一產生。"
+      "explain": "文章說 seq 這個欄位之所以存在，就是為了排序：資料列會依照寫入順序回傳，而不是依照 Postgres 找到它們的順序。"
     },
     {
-      "question": "為什麼程式裡寫 EventType.ToolCompleted，而不是直接寫字串 tool.completed？",
+      "question": "shared/events.ts 在系統中扮演什麼角色？",
       "options": [
-        "常數在執行時比字串快很多",
-        "拼錯字編譯就會擋下來，編輯器自動完成也列得出目前有哪些事件",
-        "字串形式的型別沒辦法存進 jsonb 欄位",
-        "只有常數才能通過 notNull 的限制"
+        "它是 Postgres 資料表 schema 的唯一定義來源",
+        "它是 DBOS workflow 的設定檔，用來指定哪些函式是 step",
+        "它是 harness 和 inspector 之間的契約；UI 不會直接和模型或工具溝通，只會呈現這條事件串流",
+        "它是 WebSocket 的連線設定，包含重連與心跳參數"
       ],
-      "answer": 1,
-      "explain": "文章說用常數而不是字串，拼錯字編譯就會擋下來，編輯器自動完成也列得出目前有哪些事件。"
+      "answer": 2,
+      "explain": "文章說 shared/events.ts 是 harness 和 inspector 之間的契約：harness 執行的所有事情都會成為事件串流上的事件，UI 不會直接和模型或工具溝通，只會呈現這條串流。"
+    },
+    {
+      "question": "EventType 的存在解決了什麼問題？",
+      "options": [
+        "它在執行階段驗證每個事件是否符合 schema",
+        "它決定事件寫入資料表時的 seq 順序",
+        "它為每個事件字串提供名稱，讓程式寫 EventType.WorkflowStarted 而不是字串，編譯器能抓出拼字錯誤，自動完成也會列出所有事件",
+        "它把事件轉換成使用者看得懂的說明文字"
+      ],
+      "answer": 2,
+      "explain": "文章說 EventType 為每個字串提供一個名稱，你可以寫 EventType.WorkflowStarted 而不用直接寫字串，編譯器會抓出拼字錯誤，自動完成也會列出 harness 能發出的所有事件。"
     }
   ]
 }

@@ -11,7 +11,7 @@ import {
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { hasArticleBody, readNode, selectSteps } from "../src/article.mjs";
+import { hasArticleBody, readNode, selectSteps } from "../../src/article.mjs";
 import {
   humanizeRecordPath,
   humanizeWorkDir,
@@ -19,8 +19,8 @@ import {
   normalizeStepPlan,
   protectCode,
   readJson,
-} from "../src/article-agent-bridge.mjs";
-import { runChecks } from "./verify.mjs";
+} from "../../src/article-agent-bridge.mjs";
+import { runChecks } from "../../scripts/verify.mjs";
 
 const MARKER = /^[ \t]*<!--\s*image:(\d+)\s*-->[ \t]*$/gm;
 const IMAGE_LINE = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;

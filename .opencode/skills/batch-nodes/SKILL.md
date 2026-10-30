@@ -1,13 +1,13 @@
 ---
 name: batch-nodes
-description: Batch-create a subject's node step plans, write their step articles, humanize them, render their figures, and generate step quizzes, via parallel subagents. Use when the learner wants to build or resume many nodes in one run.
+description: Batch-create a subject's node step plans, write their step articles, polish them, render their figures, and generate step quizzes, via parallel subagents. Use when the learner wants to build or resume many nodes in one run.
 disable-model-invocation: true
-argument-hint: "/batch-nodes <subject> [tier<N> | node-id ...] [-max-subagents N] [-nodes-only] [-skip-article] [-skip-humanize] [-skip-images] [-skip-quiz] [-no-continuity] [-mode rewrite] [-force]"
+argument-hint: "/batch-nodes <subject> [tier<N> | node-id ...] [-max-subagents N] [-nodes-only] [-skip-article] [-skip-polish] [-skip-images] [-skip-quiz] [-no-continuity] [-mode rewrite] [-force]"
 ---
 
 Invoke as `/batch-nodes <subject> [scope] [flags]`.
 
-Run the normal pipeline — `/nodes` → `/article` → `/humanize-article` → `/generate-images` → `/quiz-gen` — over many nodes in five phases. Each phase hands out work to parallel subagents where it has any, waits for the batch, records every outcome, and moves on. It does not invent a second content pipeline: the Nodes subagent follows `/nodes`, the Article phase dispatches one `publisher` per node and runs the `/article` CLI, the Humanize phase dispatches one `humanize-article` per node and runs `scripts/humanize-article.mjs`, the Generate phase runs the `/generate-images` render CLI, and the Quiz phase dispatches one `quiz-agent` per node and runs `/quiz-gen`'s CLI.
+Run the normal pipeline — `/nodes` → `/article` → `/polish-article` → `/generate-images` → `/quiz-gen` — over many nodes in five phases. Each phase hands out work to parallel subagents where it has any, waits for the batch, records every outcome, and moves on. It does not invent a second content pipeline: the Nodes subagent follows `/nodes`, the Article phase dispatches one `publisher` per node and runs the `/article` CLI, the Polish phase runs `scripts/polish-article.mjs` once per node, the Generate phase runs the `/generate-images` render CLI, and the Quiz phase dispatches one `quiz-agent` per node and runs `/quiz-gen`'s CLI.
 
 **Invocation modes:**
 
@@ -16,49 +16,50 @@ Run the normal pipeline — `/nodes` → `/article` → `/humanize-article` → 
 - `/batch-nodes <subject> <node-id> [<node-id> ...]` — only the listed nodes.
 - `-max-subagents N` — batch width in nodes (default 3). Each node is one subagent; a node's steps run inside it in order.
 - `-nodes-only` — run the Nodes phase and stop.
-- `-skip-article` — skip Article. Humanize, Generate, and Quiz still run against whatever is already on disk.
-- `-skip-humanize` — skip Humanize. Article, Generate, and Quiz still run.
+- `-skip-article` — skip Article. Polish, Generate, and Quiz still run against whatever is already on disk.
+- `-skip-polish` — skip Polish. Article, Generate, and Quiz still run.
 - `-skip-images` — skip Generate: no image plan is rendered and no image-API spend happens. Article still writes the plan and markers; a later `/generate-images` renders them.
 - `-skip-quiz` — skip Quiz.
 - `-no-continuity` — tell each publisher to write its node's steps as standalone articles, with no handoff between them.
 - `-mode rewrite` — use the old rewrite-in-place Article flow. The default is `translate`: the publisher writes each original in the source language and the wrapper translates it to Traditional Chinese.
-- `-force` — regenerate generated content: Article rewrites step articles (and clears their old figures and humanize records after a successful write), Humanize redoes processed steps, Generate repaints every marker, and Quiz rewrites sidecars. It does not rebuild a node's step plan; use `/nodes` or `/reset-nodes` for that.
+- `-force` — regenerate generated content: Article rewrites step articles (and clears their old figures and polish records after a successful write), Polish redoes processed steps, Generate repaints every marker, and Quiz rewrites sidecars. It does not rebuild a node's step plan; use `/nodes` or `/reset-nodes` for that.
 
-`-no-images` is removed. If someone passes it, stop and report: use `-skip-images` to skip figure rendering, or `-force` to repaint figures that already exist.
+`-no-images` is removed. If someone passes it, stop and report: use `-skip-images` to skip figure rendering, or `-force` to repaint figures that already exist. `-skip-humanize` is removed the same way: stop and report that the stage is now Polish and the flag is `-skip-polish`.
 
 **State decides the work.** Rerunning the command resumes instead of redoing:
 
-| State | Nodes | Article | Humanize | Generate | Quiz |
+| State | Nodes | Article | Polish | Generate | Quiz |
 | --- | --- | --- | --- | --- | --- |
 | `status: draft`, or `steps: []` | build the plan | write every new step | after Article | after Article | after articles exist |
 | plan exists, some step is missing or H1-only | skip | write only the missing steps | on the new markers | render the new markers | after articles exist |
 | every step has a body, no plan | skip | skip (existing article) | skip (`skipped-no-plan`) | skip (`no-plan`) | can run |
-| step has a plan and markers | skip | skip | humanize or `skipped-record` | render or reuse | can run |
-| step has a plan and image lines, no markers | skip | skip | humanize, protecting image lines | `already-rendered` | can run |
+| step has a plan and markers | skip | skip | polish or `skipped-record` | render or reuse | can run |
+| step has a plan and image lines, no markers | skip | skip | polish, protecting image lines | `already-rendered` | can run |
 | step has a plan, no markers, no image lines | skip | skip | `skipped-not-published` | `no-markers` failure | can run |
 | `<step>.quiz.json` exists | — | — | — | — | skip, unless `-force` |
 
 Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<subject>/digests/` exist. Gate each enabled phase before it dispatches work, name anything missing, and stop without dispatching:
 
 - **Article** — root `node_modules`, an initialized `article-agent/` with its own dependencies, and `TEXT_API_KEY` (or `OPENAI_API_KEY`) in the root `.env`.
+- **Polish** — `TEXT_API_KEY` (or `OPENAI_API_KEY`) in the root `.env`.
 - **Generate** — `IMAGE_API_KEY` (or `EVOLINK_API_KEY`) in the root `.env`.
 - **Quiz** — `course-app`'s npm dependencies, so it can rebuild viewer data.
-- **Nodes** and **Humanize** need no additional key.
+- **Nodes** needs no additional key.
 
 1. **Resolve.** Parse `subject`, the flags, and the scope (`tier<N>` | explicit node ids | all) per [skill-scope](../../../docs/reference/skill-scope.md). Never infer the subject from prose. Validate every resolved node container at `learn/<subject>/nodes/<node-id>.md`. Read each node's `status` and `steps` array and build the phase queues:
    - **Nodes queue** — `status: draft` or `steps: []`.
    - **Article queue** — every node with a non-empty `steps` array. The `prepare` call in step 3 decides which steps actually need writing; a node whose steps all have bodies yields no publisher unless `-force`.
-   - **Humanize queue** — rebuilt in step 4 from the nodes with a published article; `humanize-article.mjs prepare` decides which steps need editing.
+   - **Polish queue** — rebuilt in step 4 from the nodes with a published article; `polish-article.mjs run` decides which steps need polishing.
    - **Generate queue** — rebuilt in step 5 from the nodes with at least one step plan under `learn/<subject>/output/image-plans/<node>/`.
    - **Quiz queue** — rebuilt in step 6 from the nodes with published articles; `quiz.mjs prepare` decides which sidecars are missing.
 
    Show a one-paragraph scope summary: resolved nodes, phase queues, and the flags in effect. Do not ask for confirmation; the invocation is the consent.
 
-2. **Nodes.** Batch the Nodes queue into groups of `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per node in a single message, every call with `subagent_type: general` and the [Nodes-prompt](#nodes-prompt) filled in. Wait for every subagent, record `planned` or `failed` with the error, and print a progress line. A node that fails here is dropped from Article, Humanize, Generate, and Quiz. Do not read its article folders to compensate.
+2. **Nodes.** Batch the Nodes queue into groups of `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per node in a single message, every call with `subagent_type: general` and the [Nodes-prompt](#nodes-prompt) filled in. Wait for every subagent, record `planned` or `failed` with the error, and print a progress line. A node that fails here is dropped from Article, Polish, Generate, and Quiz. Do not read its article folders to compensate.
 
    Nodes that are already `confirmed` or `written` and have a non-empty `steps` array skip this phase entirely. Their plan is the contract; `-force` does not change it.
 
-   After the batch, run `node scripts/verify.mjs --node <subject>/<node>` for every node that reached `planned`. Drop any node whose verify fails from Article, Humanize, Generate, and Quiz, and record the failures. Add every surviving node to the Article queue before starting step 3.
+   After the batch, run `node scripts/verify.mjs --node <subject>/<node>` for every node that reached `planned`. Drop any node whose verify fails from Article, Polish, Generate, and Quiz, and record the failures. Add every surviving node to the Article queue before starting step 3.
 
 3. **Article** (skip with `-nodes-only` or `-skip-article`). Process the Article queue in roadmap order.
 
@@ -68,7 +69,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    node src/article-cli.mjs prepare --subject <subject> --node <node> [--mode rewrite] [--force]
    ```
 
-   Read the JSON. `root` is the absolute repo root and `nodeFile` is the node container's absolute path. `steps[]` is the work: each entry carries `id`, `title`, `purpose`, `material`, `original`, `plan`, and `command`; `material`, `original`, and `plan` are absolute paths, and `command` already carries absolute paths, `--root`, and `--markers-only`. `skipped[]` means the step already has a body; its entries carry `id`, `title`, `purpose`, `status`, `path`, and `article`, and they are continuity material for the publisher, not work. A node where every step is skipped yields no publisher. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
+   Read the JSON. `root` is the absolute repo root and `nodeFile` is the node container's absolute path. `steps[]` is the work: each entry carries `id`, `title`, `purpose`, `material`, `original`, `plan`, and `command`; `material`, `original`, and `plan` are absolute paths, and `command` already carries absolute paths, `--root`, and `--markers-only`. `skipped[]` means the step already has a body; its entries carry `id`, `title`, `purpose`, `status`, `path`, and `article`, and they are continuity material for the publisher, not work. A node where every step is skipped yields no publisher. A prepare failure drops that node from the rest of Article, Polish, Generate, and Quiz; record its error and continue with the next node.
 
    **3b. Dispatch publishers.** One `publisher` per node with a non-empty `steps[]`. Batch the ready nodes by `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per node in a single message, every call with `subagent_type: publisher` and the [Publisher-prompt](#publisher-prompt) filled in. Give each publisher only its own node's fields — `root`, `nodeFile`, `nodeTitle`, `nodeGoal`, `steps[]`, `skipped[]` — and nothing from another node. When the run was invoked with `-no-continuity`, add the standalone instruction the prompt describes. Wait for every call and record `completed`, `partial`, or `failed`.
 
@@ -78,31 +79,25 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    node src/article-cli.mjs publish --subject <subject> --node <node> [--force]
    ```
 
-   Pass `--force` only when the run was invoked with `-force`, so a successful write clears the step's stale figures and humanize record. It restores protected code, keeps the `<!--image:N-->` markers, writes the step Markdown, marks the node `written` when every step has a body, and runs verify. It does not touch `<step>-assets/` or render figures. Record every step status and the verify result. A publisher that stopped before its last step publishes the finished steps, then marks the node failed and drops it from Humanize, Generate, and Quiz.
+   Pass `--force` only when the run was invoked with `-force`, so a successful write clears the step's stale figures and polish record. It restores protected code, keeps the `<!--image:N-->` markers, writes the step Markdown, marks the node `written` when every step has a body, and runs verify. It does not touch `<step>-assets/` or render figures. Record every step status and the verify result. A publisher that stopped before its last step publishes the finished steps, then marks the node failed and drops it from Polish, Generate, and Quiz.
 
-   **3d. Verify the phase.** For every node in the Article queue that did not fail prepare, run `node scripts/verify.mjs --node <subject>/<node>` even when no publisher ran, so an existing `written` node cannot slip into Humanize or Quiz with a broken link or a missing sidecar. Marker-only articles pass: `<!--image:N-->` is an HTML comment, not an image line. Drop any node whose verify fails and record the failures.
+   **3d. Verify the phase.** For every node in the Article queue that did not fail prepare, run `node scripts/verify.mjs --node <subject>/<node>` even when no publisher ran, so an existing `written` node cannot slip into Polish or Quiz with a broken link or a missing sidecar. Marker-only articles pass: `<!--image:N-->` is an HTML comment, not an image line. Drop any node whose verify fails and record the failures.
 
-4. **Humanize** (skip with `-nodes-only` or `-skip-humanize`). Only steps with a plan are eligible; existing articles without a plan are never touched. Process the Humanize queue in roadmap order.
+4. **Polish** (skip with `-nodes-only` or `-skip-polish`). Only steps with a plan and a marker or image line are eligible; existing articles without a plan are never touched. Process the Polish queue in roadmap order.
 
-   **4a. Prepare.** Run one CLI call per node, without `--force` unless the flag was given:
-
-   ```bash
-   node scripts/humanize-article.mjs prepare --subject <subject> --node <node> [--step <id>] [--force]
-   ```
-
-   `steps[]` is the work: each entry carries `id`, `title`, `status: ready`, `article`, `plan`, `workArticle`, and `workPlan`. `skipped[]` carries `skipped-no-article`, `skipped-no-plan`, `skipped-not-published`, or `skipped-record`. `failed[]` carries plan-format errors. Record skips and continue; a prepare failure drops the node from Generate and Quiz. A node with no ready step yields no humanize agent.
-
-   **4b. Dispatch humanize agents.** One `humanize-article` per node with a non-empty `steps[]`. Batch the ready nodes by `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per node in a single message, every call with `subagent_type: humanize-article` and the [Humanize-prompt](#humanize-prompt) filled in. Give the agent its node title and ready steps' `id`, `title`, `workArticle`, `workPlan`, and the instruction to write a `summary.txt` next to each pair. Never give it the official articles, the official plans, or another node's content.
-
-   **4c. Apply and verify.** After the agent finishes a node, loop over that node's ready steps in order and run:
+   **4a. Run.** One CLI call per node:
 
    ```bash
-   node scripts/humanize-article.mjs apply --subject <subject> --node <node> --step <step> [--summary <text>]
+   node scripts/polish-article.mjs run --subject <subject> --node <node> [--force]
    ```
 
-   `apply` validates one step's workspace against its backup, writes the article and plan back, records both sha256 hashes, and deletes that workspace. A validation failure leaves the official files untouched, writes no record, and keeps the workspace; record it as `failed` and continue with the next step, including steps from the same node. After the node's ready steps are applied, run `node scripts/verify.mjs --node <subject>/<node>`; drop the node from Generate and Quiz if verify fails.
+   It polishes every eligible step in parallel (`--max-parallel`, default 3). Before the model call it masks the H1, fenced code, provenance comments, `<!--image:N-->` markers, image lines and captions, quiz blocks, inline code and links; after the call it restores them and validates the article against that backup. A failed validation retries once, then records `failed` and leaves the official article untouched. A record whose `article_sha256` still matches yields `skipped-record` unless `--force` is given.
 
-   **4d. Failure propagation.** Every step that fails validation is left with its official files unchanged. A node with any failed humanize step is dropped from Generate and Quiz. Other nodes continue.
+   Read the JSON. `steps[]` carries `id`, `title`, `status: polished`, `changed`, `attempts`, `path`, `record`. `skipped[]` carries `skipped-no-article`, `skipped-no-plan`, `skipped-not-published` or `skipped-record`. `failed[]` carries `id` and `error`. A changed article also deletes its `<step>.quiz.json` so the Quiz phase regenerates it.
+
+   **4b. Verify.** Run `node scripts/verify.mjs --node <subject>/<node>` for every processed node; drop the node from Generate and Quiz if verify fails.
+
+   **4c. Failure propagation.** Every failed step keeps its official article unchanged. A node with any failed polish step is dropped from Generate and Quiz. Other nodes continue.
 
 5. **Generate** (skip with `-nodes-only` or `-skip-images`). Only nodes with at least one step plan are eligible. Process the Generate queue in roadmap order:
 
@@ -119,7 +114,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 
    Then run `node scripts/verify.mjs --node <subject>/<node>` for every Generate node that did not fail. Drop a node from Quiz if verify fails.
 
-6. **Quiz** (skip with `-skip-quiz` or `-nodes-only`). Build the Quiz queue from the current node containers: every node not dropped by Nodes, Article, Humanize, or Generate whose steps have articles. With `-skip-article`, Article did not run, so let `quiz.mjs prepare` report any step without a body. Generate is not a prerequisite: quiz questions need the article text, not the figures.
+6. **Quiz** (skip with `-skip-quiz` or `-nodes-only`). Build the Quiz queue from the current node containers: every node not dropped by Nodes, Article, Polish, or Generate whose steps have articles. With `-skip-article`, Article did not run, so let `quiz.mjs prepare` report any step without a body. Generate is not a prerequisite: quiz questions need the article text, not the figures.
 
    **6a. Prepare.** Run one CLI call per node, without `--force` unless the flag was given:
 
@@ -149,17 +144,17 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 
    - **Nodes** — planned / skipped / failed, with step counts and errors.
    - **Article** — publishers completed / partial / failed, published steps, skipped steps, markers written, failed nodes, verify results.
-   - **Humanize** — per node: the agent's outcome; per step: humanized / skipped-record / skipped-no-plan / skipped-not-published / failed, each with `changed` and `summary`; verify results.
+   - **Polish** — per node: per step polished / skipped-record / skipped-no-article / skipped-no-plan / skipped-not-published / failed, each with `changed`; verify results.
    - **Generate** — rendered / already-rendered / no-plan / no-article / no-markers / failed, image counts, reused counts, verify results.
    - **Quiz** — written sidecars, skipped steps with reasons, failed steps with validation errors, verify results, and the `course-app` data result.
 
-   List every failure with its error. Suggest rerunning `/batch-nodes <subject> <failed-node>`, running `/generate-images <subject>/<node> [--step <id>]` for an image repair, running `/humanize-article <subject>/<node>` for a text pass, or running `/edges <subject>/<node>` on completed nodes.
+   List every failure with its error. Suggest rerunning `/batch-nodes <subject> <failed-node>`, running `/generate-images <subject>/<node> [--step <id>]` for an image repair, running `/polish-article <subject>/<node>` for a text pass, or running `/edges <subject>/<node>` on completed nodes.
 
 Completion, for every phase that ran:
 
 - **Nodes** — every node that needed a plan was dispatched to a Nodes subagent, reached `planned`, and verifies clean.
 - **Article** — every node that needed an article was prepared and dispatched to its own publisher; every prepared step either published with a formal plan and matching markers or is reported as the step where that publisher stopped; a newly written `index` 1 step carries a preface; every published node passes `node scripts/verify.mjs --node <subject>/<node>`.
-- **Humanize** — every eligible step was either humanized or skipped for a recorded reason; official files change only after validation; records exist for every humanized step; every processed node verifies clean.
+- **Polish** — every eligible step was polished, skipped for a recorded reason, or reported as failed with the official article unchanged; a record exists for every polished step; every processed node verifies clean.
 - **Generate** — every marker-backed step has its `image-N.webp` files and its markers replaced by uncaptioned image lines; rerun without `-force` reports `already-rendered` or reuses images; every processed node verifies clean.
 - **Quiz** — every step that needed a sidecar was included in its node's quiz-agent dispatch and either has a validated sidecar or a recorded failure; `course-app` data was regenerated when any sidecar was written.
 
@@ -224,38 +219,6 @@ Hold the node together: after the first, each step's opening picks up the questi
 Stop at the first command that does not report completed. Leave finished originals, plans, and run output in `learn/<SUBJECT>/output/jobs/`.
 
 Report back: steps completed out of steps dispatched, each command status, original paths, plan lengths, marker counts, the failing step, and its error.
-```
-
-## Humanize-prompt
-
-Dispatch every call with `subagent_type: humanize-article`. Fill `<SUBJECT>`, `<NODE-ID>`, `<NODE-TITLE>`, and one line per ready step from `humanize-article.mjs prepare`'s `steps[]`. Give the subagent no other node's content.
-
-```
-Humanize every ready step of one node, in order. Work only on the workspace copies; never touch the official files.
-
-Node: <SUBJECT>/<NODE-ID>
-Node title: <NODE-TITLE>
-Steps:
-- <STEP-ID> | <TITLE> | work article <WORK-ARTICLE> | work plan <WORK-PLAN>
-- <STEP-ID> | <TITLE> | work article <WORK-ARTICLE> | work plan <WORK-PLAN>
-
-Load the `speak-human-tw` skill and work in non-interactive mode: skip the confirmation list, edit the workspace files directly, and write one post-hoc summary (original sentence / reason / replacement) to `summary.txt` in each step's folder.
-
-Rules:
-- Traditional Chinese (Taiwan).
-- Change prose only; do not add facts, numbers, or quotations.
-- Keep one term, one example, and one name across the whole node; define a term fully in the first step that uses it and reuse that wording later.
-- Do not change the H1.
-- Do not change fenced code blocks or provenance comments.
-- Do not change `<!--image:N-->` markers.
-- Do not change existing image lines or their captions.
-- Do not change quiz blocks or relative / source links.
-- In each plan, change only `heading` and `prompt`; never change `anchor`, the array length, the order, or the indices.
-- If a sentence needs a fact you do not have, leave it or mark it; do not invent.
-
-The main program validates each step's workspace against its backup. Any changed marker, image line, code block, quiz block, link, H1, plan structure, or `anchor` fails that step and the official files stay untouched; the other steps still apply. Do not run the apply command and do not write back yourself.
-
-Report back: per step, whether you changed the article and/or plan and the `summary.txt` path; then one sentence on the terms you unified across the node.
 ```
 
 ## Quiz-prompt

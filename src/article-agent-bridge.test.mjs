@@ -11,6 +11,7 @@ import {
   buildRequest,
   humanizeRecordPath,
   humanizeWorkDir,
+  polishedRecordPath,
   jobFiles,
   normalizeStepPlan,
   readStepPlan,
@@ -53,7 +54,12 @@ test("readStepPlan reads the shared image plan and validates anchors", (t) => {
   );
 });
 
-test("the humanize record and workspace paths stay under the subject output directory", () => {
+test("the polish record sits under the subject output directory", () => {
+  const ids = { subject: "test", node: "n1", step: "s1" };
+  assert.equal(polishedRecordPath("/repo", ids), "/repo/learn/test/output/polished/n1/s1.json");
+});
+
+test("the legacy humanize record and workspace paths stay under the subject output directory", () => {
   const ids = { subject: "test", node: "n1", step: "s1" };
   assert.equal(humanizeRecordPath("/repo", ids), "/repo/learn/test/output/humanized/n1/s1.json");
   assert.equal(humanizeWorkDir("/repo", ids), "/repo/learn/test/output/humanize/n1/s1");

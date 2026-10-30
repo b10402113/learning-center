@@ -7,7 +7,7 @@ argument-hint: "/reset-nodes <subject> [tier<N> | <node-id> ...] [-dry-run] [-sk
 
 Invoke as `/reset-nodes <subject> [tier<N> | <node-id> ...] [-dry-run] [-skip-ask]`.
 
-Reset nodes to the state `/nodes` leaves behind: status `confirmed`, node container intact, every step a bare `# <title>` skeleton, no figures. It also clears the node's intermediate `output/` artifacts (material bundles, job files, image plans, humanize records and workspaces, article-agent run folders, quiz candidates) so a later `/article` run starts fresh instead of resurrecting old articles. That is the trigger state `/article` regenerates from — use it to rebuild a node with a different model or after the plan changed.
+Reset nodes to the state `/nodes` leaves behind: status `confirmed`, node container intact, every step a bare `# <title>` skeleton, no figures. It also clears the node's intermediate `output/` artifacts (material bundles, job files, image plans, polish records, legacy humanize records and workspaces, article-agent run folders, quiz candidates) so a later `/article` run starts fresh instead of resurrecting old articles. That is the trigger state `/article` regenerates from — use it to rebuild a node with a different model or after the plan changed.
 
 **Scope**
 
@@ -48,8 +48,9 @@ Completion: every resolved node is `confirmed` with its step skeletons restored,
 | `output/materials/<node>/<step>.json` | removed |
 | `output/image-plans/<node>/<step>.json` | removed |
 | `output/jobs/<node>/` (`prepare.json`, `<step>/<step>.*`, incl. legacy `*.plan.json`) and pre-`<node>/<step>/` flat `<subject>-<node>-*` files | removed |
-| `output/humanized/<node>/<step>.json` | removed |
-| `output/humanize/<node>/<step>/` | removed |
+| `output/polished/<node>/<step>.json` | removed |
+| `output/humanized/<node>/<step>.json` | removed (legacy) |
+| `output/humanize/<node>/<step>/` | removed (legacy) |
 | `output/quiz-candidates/<node>/` | removed |
 | `output/article_<timestamp>_*` folders referenced by the node's `result.json` | removed |
 | `ROADMAP.md`, `MEMORY.md`, `digests/`, `edges/`, other nodes | untouched |
