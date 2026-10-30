@@ -23,16 +23,16 @@ import {
 } from "../src/translate.mjs";
 
 const usage = `Usage:
-  node scripts/run-article-agent.mjs --subject <s> --node <n> --step <id> [--mode translate|rewrite] [--markers-only] [--no-images] [--root <dir>]
+  node scripts/run-article-agent.mjs --subject <s> --node <n> --step <id> [--mode direct|translate|rewrite] [--markers-only] [--no-images] [--root <dir>]
 
 Runs one step through the article pipeline. It protects the code blocks and reads
 the publisher's image plan first.
 
---mode translate (default) inserts the <!--image:N--> markers at the plan anchors,
-then translates the original into Traditional Chinese with prompts/translate.txt.
-The markers and <!--code:N--> placeholders survive verbatim. An original already
-in Traditional Chinese is kept as-is. The plan's heading and prompt are translated
-too.
+--mode direct (default) inserts the <!--image:N--> markers at the plan anchors and
+leaves the prose exactly as the publisher wrote it. No text model is called.
+
+--mode translate is legacy: it translates a non-Chinese original into Traditional
+Chinese with prompts/translate.txt. The pipeline never uses it.
 
 --mode rewrite keeps the old behaviour: article-agent rewrites the original,
 inserts the markers, and stops after them.
@@ -49,7 +49,7 @@ async function main() {
       subject: { type: "string" },
       node: { type: "string" },
       step: { type: "string" },
-      mode: { type: "string", default: "translate" },
+      mode: { type: "string", default: "direct" },
       "no-images": { type: "boolean", default: false },
       "markers-only": { type: "boolean", default: false },
       root: { type: "string" },
@@ -64,8 +64,8 @@ async function main() {
     if (!values[key]) throw new Error(`--${key} is required\n\n${usage}`);
   }
   const mode = values.mode;
-  if (!["translate", "rewrite"].includes(mode)) {
-    throw new Error(`unknown --mode: ${mode} (use translate or rewrite)\n\n${usage}`);
+  if (!["direct", "translate", "rewrite"].includes(mode)) {
+    throw new Error(`unknown --mode: ${mode} (use direct, translate, or rewrite)\n\n${usage}`);
   }
 
   const root = resolve(values.root || process.cwd());
@@ -104,9 +104,44 @@ async function main() {
   };
   if (mode === "rewrite") {
     runRewrite(context);
+  } else if (mode === "direct") {
+    runDirect(context);
   } else {
     await runTranslate(context);
   }
+}
+
+function runDirect({ root, files, entry, plan, markersOnly, protectedText }) {
+  if (plan) {
+    for (const item of plan) {
+      if (!protectedText.includes(item.anchor)) {
+        throw new Error(`image plan item ${item.index} anchor is not in the unprotected prose: ${item.anchor}`);
+      }
+    }
+  }
+  const article = plan ? insertImageMarkers(protectedText, plan) : `${protectedText.trimEnd()}\n`;
+  writeFileSync(files.protected, article);
+  writeJson(files.request, {
+    mode: "direct",
+    title: entry.title,
+    articleFile: relative(root, files.protected),
+    plan: plan ?? null,
+    markersOnly: Boolean(markersOnly),
+  });
+  writeFileSync(files.marked, article.endsWith("\n") ? article : `${article}\n`);
+  const verdict = {
+    status: "completed",
+    outputDir: files.dir,
+    article: files.marked,
+    images: [],
+    textModel: null,
+    textRequests: 0,
+    imageRequests: 0,
+    markersOnly: Boolean(markersOnly),
+    error: null,
+  };
+  writeJson(files.result, verdict);
+  console.log(JSON.stringify(verdict, null, 2));
 }
 
 function runRewrite({ root, subject, files, entry, plan, markersOnly, protectedText, blocks }) {

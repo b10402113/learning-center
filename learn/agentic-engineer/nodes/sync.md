@@ -4,7 +4,7 @@ title: "sync：Understand It, Then Automate It"
 subject: agentic-engineer
 tier: 3
 order: 15
-status: written
+status: confirmed
 goal: "能用真實 diff 對帳 scope 勾選與 spec 狀態，並用 MCP 讓 migration 打在真的 schema 上。"
 digests:
   - ch08-workflow-ship-something-real.1.part.md

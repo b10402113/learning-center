@@ -1,13 +1,13 @@
 ---
 name: batch-nodes
-description: Batch-create a subject's node step plans, write their step articles, polish them, render their figures, and generate step quizzes, via parallel subagents. Use when the learner wants to build or resume many nodes in one run.
+description: Batch-create a subject's node step plans, design their teaching plans, write their step articles, polish them, render their figures, and generate step quizzes, via parallel subagents. Use when the learner wants to build or resume many nodes in one run.
 disable-model-invocation: true
-argument-hint: "/batch-nodes <subject> [tier<N> | node-id ...] [-max-subagents N] [-nodes-only] [-skip-article] [-skip-polish] [-skip-images] [-skip-quiz] [-no-continuity] [-mode rewrite] [-force]"
+argument-hint: "/batch-nodes <subject> [tier<N> | node-id ...] [-max-subagents N] [-nodes-only] [-skip-teach] [-skip-article] [-skip-polish] [-skip-images] [-skip-quiz] [-no-continuity] [-force]"
 ---
 
 Invoke as `/batch-nodes <subject> [scope] [flags]`.
 
-Run the normal pipeline — `/nodes` → `/article` → `/polish-article` → `/generate-images` → `/quiz-gen` — over many nodes in five phases. Each phase hands out work to parallel subagents where it has any, waits for the batch, records every outcome, and moves on. It does not invent a second content pipeline: the Nodes subagent follows `/nodes`, the Article phase dispatches one `publisher` per node and runs the `/article` CLI, the Polish phase runs `scripts/polish-article.mjs` once per node, the Generate phase runs the `/generate-images` render CLI, and the Quiz phase dispatches one `quiz-agent` per node and runs `/quiz-gen`'s CLI.
+Run the normal pipeline — `/nodes` → `/article` → `/polish-article` → `/generate-images` → `/quiz-gen` — over many nodes in phases. Each phase hands out work to parallel subagents where it has any, waits for the batch, records every outcome, and moves on. It does not invent a second content pipeline: the Nodes subagent follows `/nodes`, the Article phase runs `/article` in order — `prepare`, one `teach-agent` per node, one `publisher` per node, then `publish` — the Polish phase runs `scripts/polish-article.mjs` once per node, the Generate phase runs the `/generate-images` render CLI, and the Quiz phase dispatches one `quiz-agent` per node and runs `/quiz-gen`'s CLI.
 
 **Invocation modes:**
 
@@ -16,30 +16,32 @@ Run the normal pipeline — `/nodes` → `/article` → `/polish-article` → `/
 - `/batch-nodes <subject> <node-id> [<node-id> ...]` — only the listed nodes.
 - `-max-subagents N` — batch width in nodes (default 3). Each node is one subagent; a node's steps run inside it in order.
 - `-nodes-only` — run the Nodes phase and stop.
-- `-skip-article` — skip Article. Polish, Generate, and Quiz still run against whatever is already on disk.
+- `-skip-teach` — skip Teach. Publisher still runs against an existing teaching plan.
+- `-skip-article` — skip the whole Article phase (prepare, Teach, Publisher, publish). Polish, Generate, and Quiz still run against whatever is already on disk.
 - `-skip-polish` — skip Polish. Article, Generate, and Quiz still run.
 - `-skip-images` — skip Generate: no image plan is rendered and no image-API spend happens. Article still writes the plan and markers; a later `/generate-images` renders them.
 - `-skip-quiz` — skip Quiz.
 - `-no-continuity` — tell each publisher to write its node's steps as standalone articles, with no handoff between them.
-- `-mode rewrite` — use the old rewrite-in-place Article flow. The default is `translate`: the publisher writes each original in the source language and the wrapper translates it to Traditional Chinese.
-- `-force` — regenerate generated content: Article rewrites step articles (and clears their old figures and polish records after a successful write), Polish redoes processed steps, Generate repaints every marker, and Quiz rewrites sidecars. It does not rebuild a node's step plan; use `/nodes` or `/reset-nodes` for that.
+- `-force` — regenerate generated content: Teach rewrites the teaching plan, Article rewrites step articles (and clears their old figures and polish records after a successful write), Polish redoes processed steps, Generate repaints every marker, and Quiz rewrites sidecars. It does not rebuild a node's step plan; use `/nodes` or `/reset-nodes` for that.
 
 `-no-images` is removed. If someone passes it, stop and report: use `-skip-images` to skip figure rendering, or `-force` to repaint figures that already exist. `-skip-humanize` is removed the same way: stop and report that the stage is now Polish and the flag is `-skip-polish`.
 
 **State decides the work.** Rerunning the command resumes instead of redoing:
 
-| State | Nodes | Article | Polish | Generate | Quiz |
-| --- | --- | --- | --- | --- | --- |
-| `status: draft`, or `steps: []` | build the plan | write every new step | after Article | after Article | after articles exist |
-| plan exists, some step is missing or H1-only | skip | write only the missing steps | on the new markers | render the new markers | after articles exist |
-| every step has a body, no plan | skip | skip (existing article) | skip (`skipped-no-plan`) | skip (`no-plan`) | can run |
-| step has a plan and markers | skip | skip | polish or `skipped-record` | render or reuse | can run |
-| step has a plan and image lines, no markers | skip | skip | polish, protecting image lines | `already-rendered` | can run |
-| step has a plan, no markers, no image lines | skip | skip | `skipped-not-published` | `no-markers` failure | can run |
-| `<step>.quiz.json` exists | — | — | — | — | skip, unless `-force` |
+| State | Nodes | Teach | Publisher | Polish | Generate | Quiz |
+| --- | --- | --- | --- | --- | --- | --- |
+| `status: draft`, or `steps: []` | build the plan | after prepare | after Teach | after Article | after Article | after articles exist |
+| plan exists, some step is missing or H1-only | skip | if the plan is missing | only missing steps | on the new markers | render the new markers | after articles exist |
+| every step has a body, no plan | skip | skip | skip (existing article) | skip (`skipped-no-plan`) | skip (`no-plan`) | can run |
+| node has a teaching plan | skip | skip, unless `-force` | reads the plan | — | — | — |
+| step has a plan and markers | skip | — | skip | polish or `skipped-record` | render or reuse | can run |
+| step has a plan and image lines, no markers | skip | — | skip | polish, protecting image lines | `already-rendered` | can run |
+| step has a plan, no markers, no image lines | skip | — | skip | `skipped-not-published` | `no-markers` failure | can run |
+| `<step>.quiz.json` exists | — | — | — | — | — | skip, unless `-force` |
 
 Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<subject>/digests/` exist. Gate each enabled phase before it dispatches work, name anything missing, and stop without dispatching:
 
+- **Teach** — the prepared material bundles under `learn/<subject>/output/materials/` and `MEMORY.md`; no API key.
 - **Article** — root `node_modules`, an initialized `article-agent/` with its own dependencies, and `TEXT_API_KEY` (or `OPENAI_API_KEY`) in the root `.env`.
 - **Polish** — `TEXT_API_KEY` (or `OPENAI_API_KEY`) in the root `.env`.
 - **Generate** — `IMAGE_API_KEY` (or `EVOLINK_API_KEY`) in the root `.env`.
@@ -48,12 +50,13 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 
 1. **Resolve.** Parse `subject`, the flags, and the scope (`tier<N>` | explicit node ids | all) per [skill-scope](../../../docs/reference/skill-scope.md). Never infer the subject from prose. Validate every resolved node container at `learn/<subject>/nodes/<node-id>.md`. Read each node's `status` and `steps` array and build the phase queues:
    - **Nodes queue** — `status: draft` or `steps: []`.
-   - **Article queue** — every node with a non-empty `steps` array. The `prepare` call in step 3 decides which steps actually need writing; a node whose steps all have bodies yields no publisher unless `-force`.
+   - **Article queue** — every node with a non-empty `steps` array. The `prepare` call in step 3a decides which steps actually need writing; a node whose steps all have bodies yields no teach or publisher call unless `-force`.
+   - **Teach queue** — rebuilt in step 3b from each prepared node whose teaching plan is missing, or every prepared node under `-force`.
    - **Polish queue** — rebuilt in step 4 from the nodes with a published article; `polish-article.mjs run` decides which steps need polishing.
    - **Generate queue** — rebuilt in step 5 from the nodes with at least one step plan under `learn/<subject>/output/image-plans/<node>/`.
    - **Quiz queue** — rebuilt in step 6 from the nodes with published articles; `quiz.mjs prepare` decides which sidecars are missing.
 
-   Show a one-paragraph scope summary: resolved nodes, phase queues, and the flags in effect. Do not ask for confirmation; the invocation is the consent.
+   Show a one-paragraph scope summary: resolved nodes, phase queues, the output language, and the flags in effect. Do not ask for confirmation; the invocation is the consent.
 
 2. **Nodes.** Batch the Nodes queue into groups of `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per node in a single message, every call with `subagent_type: general` and the [Nodes-prompt](#nodes-prompt) filled in. Wait for every subagent, record `planned` or `failed` with the error, and print a progress line. A node that fails here is dropped from Article, Polish, Generate, and Quiz. Do not read its article folders to compensate.
 
@@ -66,14 +69,16 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    **3a. Prepare.** Run one CLI call per node, without `--force` unless the flag was given:
 
    ```bash
-   node src/article-cli.mjs prepare --subject <subject> --node <node> [--mode rewrite] [--force]
+   node src/article-cli.mjs prepare --subject <subject> --node <node> [--force]
    ```
 
-   Read the JSON. `root` is the absolute repo root and `nodeFile` is the node container's absolute path. `steps[]` is the work: each entry carries `id`, `title`, `purpose`, `material`, `original`, `plan`, and `command`; `material`, `original`, and `plan` are absolute paths, and `command` already carries absolute paths, `--root`, and `--markers-only`. `skipped[]` means the step already has a body; its entries carry `id`, `title`, `purpose`, `status`, `path`, and `article`, and they are continuity material for the publisher, not work. A node where every step is skipped yields no publisher. A prepare failure drops that node from the rest of Article, Polish, Generate, and Quiz; record its error and continue with the next node.
+   Read the JSON. `root` is the absolute repo root, `nodeFile` is the node container's absolute path, and `teachingPlan` is the node's teaching-plan path. `steps[]` is the work: each entry carries `id`, `title`, `purpose`, `index`, `material`, `original`, `plan`, and `command`; these paths are absolute, and `command` already carries `--root` and `--markers-only`. `skipped[]` means the step already has a body; its entries carry `id`, `title`, `purpose`, `status`, `path`, and `article`, and they are continuity material, not work. A node where every step is skipped yields no teach or publisher call. A prepare failure drops that node from the rest of Article, Polish, Generate, and Quiz; record its error and continue with the next node.
 
-   **3b. Dispatch publishers.** One `publisher` per node with a non-empty `steps[]`. Batch the ready nodes by `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per node in a single message, every call with `subagent_type: publisher` and the [Publisher-prompt](#publisher-prompt) filled in. Give each publisher only its own node's fields — `root`, `nodeFile`, `nodeTitle`, `nodeGoal`, `steps[]`, `skipped[]` — and nothing from another node. When the run was invoked with `-no-continuity`, add the standalone instruction the prompt describes. Wait for every call and record `completed`, `partial`, or `failed`.
+   **3b. Teach.** One `teach-agent` per prepared node with at least one ready step (skip with `-skip-teach`). Batch by `max-subagents` and dispatch with the [Teach-prompt](#teach-prompt) filled in. Give it `nodeFile`, `MEMORY.md`, `teachingPlan`, the output language, one line per ready step with its `material`, and one line per `skipped[]` entry with its `article`. A node whose teaching plan already exists is skipped unless `-force`. Wait for every call and record `completed` or `failed`. A failed node is dropped from Publisher, Publish, Polish, Generate, and Quiz. Under `-skip-teach`, a node with no teaching plan is dropped the same way with the reason.
 
-   **3c. Publish.** After all publisher batches finish, publish each node whose publisher completed at least one step, in roadmap order:
+   **3c. Dispatch publishers.** One `publisher` per node with a non-empty `steps[]`. Batch the ready nodes by `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per node in a single message, every call with `subagent_type: publisher` and the [Publisher-prompt](#publisher-prompt) filled in. Give each publisher only its own node's fields — `root`, `nodeFile`, `nodeTitle`, `nodeGoal`, `teachingPlan`, the output language, `steps[]`, `skipped[]` — and nothing from another node. When the run was invoked with `-no-continuity`, add the standalone instruction the prompt describes. Wait for every call and record `completed`, `partial`, or `failed`.
+
+   **3d. Publish.** After all publisher batches finish, publish each node whose publisher completed at least one step, in roadmap order:
 
    ```bash
    node src/article-cli.mjs publish --subject <subject> --node <node> [--force]
@@ -81,7 +86,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 
    Pass `--force` only when the run was invoked with `-force`, so a successful write clears the step's stale figures and polish record. It restores protected code, keeps the `<!--image:N-->` markers, writes the step Markdown, marks the node `written` when every step has a body, and runs verify. It does not touch `<step>-assets/` or render figures. Record every step status and the verify result. A publisher that stopped before its last step publishes the finished steps, then marks the node failed and drops it from Polish, Generate, and Quiz.
 
-   **3d. Verify the phase.** For every node in the Article queue that did not fail prepare, run `node scripts/verify.mjs --node <subject>/<node>` even when no publisher ran, so an existing `written` node cannot slip into Polish or Quiz with a broken link or a missing sidecar. Marker-only articles pass: `<!--image:N-->` is an HTML comment, not an image line. Drop any node whose verify fails and record the failures.
+   **3e. Verify the phase.** For every node in the Article queue that did not fail prepare, run `node scripts/verify.mjs --node <subject>/<node>` even when no publisher ran, so an existing `written` node cannot slip into Polish or Quiz with a broken link or a missing sidecar. Marker-only articles pass: `<!--image:N-->` is an HTML comment, not an image line. Drop any node whose verify fails and record the failures.
 
 4. **Polish** (skip with `-nodes-only` or `-skip-polish`). Only steps with a plan and a marker or image line are eligible; existing articles without a plan are never touched. Process the Polish queue in roadmap order.
 
@@ -143,7 +148,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 7. **Report.** Summarise per phase:
 
    - **Nodes** — planned / skipped / failed, with step counts and errors.
-   - **Article** — publishers completed / partial / failed, published steps, skipped steps, markers written, failed nodes, verify results.
+   - **Article** — Teach: plans written / skipped / failed; Publisher: completed / partial / failed; published steps, skipped steps, markers written, failed nodes, verify results.
    - **Polish** — per node: per step polished / skipped-record / skipped-no-article / skipped-no-plan / skipped-not-published / failed, each with `changed`; verify results.
    - **Generate** — rendered / already-rendered / no-plan / no-article / no-markers / failed, image counts, reused counts, verify results.
    - **Quiz** — written sidecars, skipped steps with reasons, failed steps with validation errors, verify results, and the `course-app` data result.
@@ -153,7 +158,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 Completion, for every phase that ran:
 
 - **Nodes** — every node that needed a plan was dispatched to a Nodes subagent, reached `planned`, and verifies clean.
-- **Article** — every node that needed an article was prepared and dispatched to its own publisher; every prepared step either published with a formal plan and matching markers or is reported as the step where that publisher stopped; a newly written `index` 1 step carries a preface; every published node passes `node scripts/verify.mjs --node <subject>/<node>`.
+- **Article** — every node that needed an article was prepared, taught, and dispatched to its own publisher; every prepared node has one teaching plan in steps order; every prepared step either published with a formal plan and matching markers or is reported as the step where that publisher stopped; a newly written `index` 1 step carries a preface; every published node passes `node scripts/verify.mjs --node <subject>/<node>`.
 - **Polish** — every eligible step was polished, skipped for a recorded reason, or reported as failed with the official article unchanged; a record exists for every polished step; every processed node verifies clean.
 - **Generate** — every marker-backed step has its `image-N.webp` files and its markers replaced by uncaptioned image lines; rerun without `-force` reports `already-rendered` or reuses images; every processed node verifies clean.
 - **Quiz** — every step that needed a sidecar was included in its node's quiz-agent dispatch and either has a validated sidecar or a recorded failure; `course-app` data was regenerated when any sidecar was written.
@@ -185,9 +190,41 @@ Workspace:
 Report back: step count, ordered step ids, skeleton files created, verify exit status, any missing digests or errors.
 ```
 
+## Teach-prompt
+
+Dispatch every call with `subagent_type: teach-agent`. Fill `<ROOT>`, `<SUBJECT>`, `<NODE-ID>`, `<NODE-FILE>`, `<TEACHING-PLAN>`, `<LANGUAGE>`, one line per ready step with its material, and one line per skipped step with its article. Give the subagent no other node's content.
+
+```
+Design one teaching plan for one node. This is one node only.
+
+Load the documentation skill via the skill tool (name: "documentation") and follow it.
+
+Repo root: <ROOT>
+Node: <SUBJECT>/<NODE-ID>
+Node plan: <NODE-FILE>   (the steps order is the contract)
+Teaching plan output: <TEACHING-PLAN>
+Reader profile: <ROOT>/learn/<SUBJECT>/MEMORY.md
+Output language: <LANGUAGE>   (the `language` in MEMORY.md)
+
+Ready steps and their material:
+- <STEP-ID> | <TITLE> | <PURPOSE> | material <MATERIAL>
+- <STEP-ID> | <TITLE> | <PURPOSE> | material <MATERIAL>
+
+Already published steps (continuity only):
+- <STEP-ID> | <TITLE> | article <ARTICLE>
+
+Every path above is absolute. Use each string exactly as given.
+
+Read every slice in each step's material bundle. Choose each step's article type, the concept order, each section's reader question, the facts it uses with their line-addressed citations, the examples, the handoffs, and what each step deliberately does not teach. Do not ask the learner questions. Use no fact the material bundles do not support.
+
+Stop once the plan has one section per ready step, in the node's steps order, with a Spine that matches it. Do not write articles.
+
+Report back: the plan path, the steps covered in order, each step's type, and any step whose material was missing or too thin.
+```
+
 ## Publisher-prompt
 
-Dispatch every call with `subagent_type: publisher`. Fill `<SUBJECT>`, `<NODE-ID>`, `<NODE-FILE>`, node title and goal, one line per ready step from `prepare`'s `steps[]`, and one line per entry in `skipped[]`. Give the subagent no other node's content.
+Dispatch every call with `subagent_type: publisher`. Fill `<ROOT>`, `<SUBJECT>`, `<NODE-ID>`, `<NODE-FILE>`, `<TEACHING-PLAN>`, `<LANGUAGE>`, node title and goal, one line per ready step from `prepare`'s `steps[]`, and one line per entry in `skipped[]`. Give the subagent no other node's content.
 
 ```
 Write every step of one node, in order: original article, image plan, then the repo wrapper. This is one node only: do not read, write, or plan any other node's content.
@@ -197,6 +234,8 @@ Node: <SUBJECT>/<NODE-ID>
 Node title: <NODE-TITLE>
 Node goal: <NODE-GOAL>
 Node plan: <NODE-FILE>   (the full steps plan; read it first)
+Teaching plan: <TEACHING-PLAN>   (read its Reader, Spine, and this node's step sections)
+Output language: <LANGUAGE>   (the `language` in MEMORY.md)
 
 Ready steps, in teaching order:
 - <STEP-ID> | <TITLE> | <PURPOSE> | index <INDEX>/<TOTAL> | material <MATERIAL> | original <ORIGINAL> | plan <PLAN> | command <COMMAND>
@@ -208,13 +247,15 @@ Already published steps (continuity material; read their articles):
 
 Every path above is absolute. Use each string exactly as given; do not join, rewrite, or guess a path, and do not assume the current working directory. Each command already includes absolute paths, --root, and --markers-only.
 
-For each ready step, in order: read its material bundle, write the original article to its original path, write a 1-5 item image plan to its plan path, then run its command and read the article it produced before starting the next step. Write the original in the main language of its material (English material in English, Chinese material in Chinese), grounded only in the material; the command translates it to the language in `<ROOT>/learn/<SUBJECT>/MEMORY.md`. Do not translate the original yourself.
+Load the sepia-write skill via the skill tool (name: "sepia-write") and bind its `write` operation for every original. Route the target as a technical article: Sepia reads `professional-pass.md`, `domains/tech-articles.md`, and `discourse-pass.md` §1–3 before drafting.
 
-The image plan is a JSON array of objects with `heading`, `anchor`, and `prompt`; spread the figures across the article and make every `anchor` a short verbatim sentence from that step's original. Write `heading` and `prompt` in the original's language; the command translates them too.
+For each ready step, in order: read its material bundle and its section in the teaching plan, write the original article to its original path, write a 1-5 item image plan to its plan path, then run its command and read the article it produced before starting the next step. Write the original in <LANGUAGE>, grounded only in the material and the plan's cited facts, and follow the teaching plan's outline without adding, dropping, or reordering sections. The wrapper leaves the prose exactly as you wrote it and only inserts markers.
 
-There is no `article_generate` tool in this repo. Writing the original and the plan, then running the command, replaces it. The command prepares the original once (translate by default, rewrite with `--mode rewrite`) and leaves a `<!--image:N-->` marker for every plan item. It does not generate figures and does not need IMAGE_API_KEY. Do not edit the article after it returns, do not hand-place markers, and do not retry automatically if it fails.
+The image plan is a JSON array of objects with `heading`, `anchor`, and `prompt`; spread the figures across the article and make every `anchor` a short verbatim sentence from that step's original. Write `heading` and `prompt` in the article's language.
 
-Hold the node together: after the first, each step's opening picks up the question or conclusion the previous step left, each step's ending hands the next question to the following step, a term is defined fully once and reused after that, and examples keep the same names. Never add facts, numbers, or quotations the material does not support. <CONTINUITY-MODE> is "write the steps as standalone articles with no handoff" when the run used -no-continuity, otherwise "connect the steps as described".
+There is no `article_generate` tool in this repo. Writing the original and the plan, then running the command, replaces it. The command protects code blocks, leaves a `<!--image:N-->` marker for every plan item, and changes no prose. It does not generate figures and does not need IMAGE_API_KEY. Do not edit the article after it returns, do not hand-place markers, and do not retry automatically if it fails.
+
+Hold the node together through the teaching plan: after the first, each step's opening picks up the handoff the previous step wrote, each step's ending hands off the next question, a term is defined fully once and reused after that, and examples keep the plan's names. Never add facts, numbers, or quotations the material does not support. <CONTINUITY-MODE> is "write the steps as standalone articles with no handoff" when the run used -no-continuity, otherwise "connect the steps as described".
 
 Stop at the first command that does not report completed. Leave finished originals, plans, and run output in `learn/<SUBJECT>/output/jobs/`.
 

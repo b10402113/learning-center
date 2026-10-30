@@ -29,6 +29,10 @@ export function imagePlansDir(root, subject, node) {
   return join(outputDir(root, subject), "image-plans", node);
 }
 
+export function teachingPlanPath(root, subject, node) {
+  return join(jobsDir(root, subject), node, "teaching-plan.md");
+}
+
 export function stepSlug(subject, node, step) {
   return `${subject}-${node}-${step}`;
 }
@@ -46,6 +50,7 @@ export function jobFiles(root, { subject, node, step }) {
     blocks: join(dir, `${step}.blocks.json`),
     request: join(dir, `${step}.request.json`),
     result: join(dir, `${step}.result.json`),
+    marked: join(dir, `${step}.article.md`),
     translated: join(dir, `${step}.translated.md`),
   };
 }

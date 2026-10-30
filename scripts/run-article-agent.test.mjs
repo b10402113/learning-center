@@ -128,3 +128,69 @@ A short lesson.
   assert.equal(result.status, 1);
   assert.match(result.stderr, /--markers-only requires an image plan/);
 });
+
+test("direct mode inserts the markers and never calls a text model", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "article-agent-direct-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  write(root, "learn/test/nodes/n1.md", `---
+id: n1
+title: "Node One"
+subject: test
+tier: 1
+order: 1
+status: confirmed
+goal: "Explain one thing."
+prerequisites: []
+steps:
+  - id: s1
+    title: "Step One"
+    purpose: "First step."
+    sources:
+      - "[[sources/test/notes.txt#L1-L10]]"
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Node One
+
+## Lesson
+
+Test.
+
+## Steps
+
+1. [Step One](n1/s1.md)
+`);
+  write(
+    root,
+    "learn/test/output/jobs/n1/s1/s1.original.md",
+    `# Step One
+
+The first paragraph stays exactly as written.
+
+## Detail
+
+This paragraph carries the figure.
+`,
+  );
+  write(
+    root,
+    "learn/test/output/image-plans/n1/s1.json",
+    JSON.stringify([{ heading: "Detail", anchor: "This paragraph carries the figure.", prompt: "A flow" }]),
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [SCRIPT, "--subject", "test", "--node", "n1", "--step", "s1", "--mode", "direct", "--markers-only", "--root", root],
+    { encoding: "utf8", env: { ...process.env, TEXT_API_KEY: "", OPENAI_API_KEY: "" } },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const verdict = JSON.parse(result.stdout);
+  assert.equal(verdict.status, "completed");
+  assert.equal(verdict.textRequests, 0);
+  assert.equal(verdict.textModel, null);
+  assert.match(verdict.article, /s1\.article\.md$/);
+  const article = readFileSync(verdict.article, "utf8");
+  assert.match(article, /The first paragraph stays exactly as written\./);
+  assert.match(article, /<!--image:1-->/);
+});

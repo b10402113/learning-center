@@ -4,7 +4,7 @@ title: "Reading a Spec：The Build Sees 什麼、你留下什麼"
 subject: agentic-engineer
 tier: 3
 order: 13
-status: written
+status: confirmed
 goal: "能分辨 spec 給 build 的決策與留給你的理由，並跑一次 `/architect` 產出一份 Accepted 決策。"
 digests:
   - ch08-workflow-ship-something-real.1.part.md

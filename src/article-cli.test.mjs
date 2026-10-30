@@ -70,7 +70,9 @@ test("prepare asks publishers for markers only and reports skipped steps without
   const [step] = report.steps;
   assert.equal(step.id, "s2");
   assert.equal(report.nodeFile, join(root, "learn/test/nodes/n1.md"));
+  assert.equal(report.teachingPlan, join(root, "learn/test/output/jobs/n1/teaching-plan.md"));
   assert.match(step.command, /--markers-only/);
+  assert.match(step.command, /--mode direct/);
   assert.match(step.plan, /learn\/test\/output\/image-plans\/n1\/s2\.json$/);
   assert.deepEqual(report.skipped, [
     {

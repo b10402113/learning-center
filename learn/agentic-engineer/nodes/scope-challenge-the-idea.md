@@ -4,7 +4,7 @@ title: "scope：Challenge the Idea Before Any Code"
 subject: agentic-engineer
 tier: 3
 order: 12
-status: written
+status: confirmed
 goal: "能跑一次 `/scope`，把隱形的預設換成寫下來的 MVP 邊界、`Done when` 與 tracer bullet 切片。"
 digests:
   - ch08-workflow-ship-something-real.1.part.md

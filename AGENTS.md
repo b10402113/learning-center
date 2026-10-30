@@ -22,6 +22,9 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 │   │       ├── <step>.quiz.json  ← 3–8 generated single-choice questions
 │   │       └── <step>-assets/image-N.webp  ← written by /generate-images
 │   ├── output/               ← generated intermediates (ignored by git)
+│   │   ├── materials/<node>/<step>.json     ← source slices from prepare
+│   │   ├── jobs/<node>/teaching-plan.md     ← teach-agent plan for the node
+│   │   ├── jobs/<node>/<step>/<step>.original.md  ← publisher's original
 │   │   ├── image-plans/<node>/<step>.json  ← the only image plan
 │   │   └── polished/<node>/<step>.json     ← polish record
 │   └── edges/                ← optional relationship pages between steps/nodes
@@ -31,7 +34,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 ├── article-agent/            ← git submodule: publisher-era rewrite pipeline (prompts/rewrite.txt, src/pipeline.mjs)
 ├── course-app/               ← React (Vite + Tailwind) course viewer
 ├── previews/                 ← static design previews for the course viewer
-├── .opencode/agent/          ← subagent definitions (publisher, quiz-agent, …)
+├── .opencode/agent/          ← subagent definitions (teach-agent, publisher, quiz-agent, …)
 ├── .opencode/skills/         ← active slash-command skills (article, polish-article, generate-images, quiz-gen, …)
 ├── legacy/                   ← retired HTML/MDX pipeline; no active flow imports it
 └── wiki/                     ← legacy, no longer maintained
@@ -65,11 +68,11 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 | `/ingest` | Archive new source files and write `pending` digests. Does not touch roadmap, nodes, or articles; a `pending` digest makes the subject check fail until `/absorb` resolves it. |
 | `/roadmap` | Propose ≥5 learning paths, confirm one, partition into nodes, write `ROADMAP.md` and `draft` node containers with their `digests` lists. |
 | `/nodes` | Reasoning checkpoint per node: write the `steps` array (`id`, `title`, `purpose`, `sources`), create H1-only article skeletons, set `confirmed`. |
-| `/article` | `prepare` slices each step into a material bundle; one `publisher` subagent per node writes every step's original in the material's main language and a 1–5 item image plan in teaching order, handling continuity between steps as it goes; the wrapper inserts `<!--image:N-->` markers, then translates the original to the subject language with `prompts/translate.txt` (or, with `--mode rewrite`, lets `article-agent` rewrite it); `publish` writes `<step>.md` and verifies. It never calls the image model and never creates `<step>-assets/`. |
+| `/article` | `prepare` slices each step into a material bundle; one `teach-agent` per node reads the bundles and writes a single teaching plan (article type, reader, concept order, per-section questions, cited facts, examples, handoffs); one `publisher` per node writes every step's original in the subject's MEMORY language and a 1–5 item image plan, following the teaching plan; the wrapper inserts `<!--image:N-->` markers and leaves the publisher's prose untouched; `publish` writes `<step>.md` and verifies. Polish is the only later prose stage. It never calls the image model and never creates `<step>-assets/`. |
 | `/polish-article` | Processes only steps with a plan and a marker or image line: `scripts/polish-article.mjs` masks the H1, code, provenance, markers, image lines, quiz blocks and links, polishes the prose with one model call per step, restores and validates the structure, retries a failed validation once, then writes the article back and records its sha256 in `output/polished/`. A changed article drops its quiz sidecar. Reruns skip recorded steps; `--force` redoes them. |
 | `/generate-images` | Thin shell over `src/render-images.mjs`: reads the plan and the article's `<!--image:N-->` markers, generates or reuses `image-N.webp` under `<step>-assets/`, and replaces each marker with an uncaptioned image line. With `--force` it also repaints the files behind existing image lines. It never plans, edits prose, or reads `anchor`. |
 | `/quiz-gen` | One `quiz-agent` per node reads its published steps and writes 3–8 single-choice questions per step; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; course-app renders them after the article. |
-| `/batch-nodes` | Optional bulk path over a tier or node list: Nodes → Article → Polish → Generate → Quiz. Every phase that writes dispatches one subagent per node — Nodes, `publisher`, `quiz-agent`; Polish is one polish CLI call per node and Generate is one render CLI call per node. Resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan. |
+| `/batch-nodes` | Optional bulk path over a tier or node list: Nodes → Article → Polish → Generate → Quiz. Every phase that writes dispatches one subagent per node — Nodes, `teach-agent`, `publisher`, `quiz-agent`; Polish is one polish CLI call per node and Generate is one render CLI call per node. Resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan. |
 | `/absorb` | Read `pending` digests, append steps to existing nodes or create new nodes, add each used digest to the node's `digests`, resolve every digest to `absorbed` or `skipped`, roll affected nodes back to `confirmed`. |
 | `/edges` | Optional relationship pages between steps or nodes. |
 | `/reset-nodes` | Reset chosen nodes to `confirmed`, delete generated articles and figures, keep the plan. |
@@ -217,7 +220,7 @@ There is no probe gate, mastery report, element page, or completion tracking in 
 ### Article, polish, and image generation
 
 ```bash
-node src/article-cli.mjs prepare --subject <s> --node <n> [--step <id>] [--mode translate|rewrite] [--force]
+node src/article-cli.mjs prepare --subject <s> --node <n> [--step <id>] [--mode direct|translate|rewrite] [--force]
 node src/article-cli.mjs publish --subject <s> --node <n> [--step <id>] [--force]
 node src/article-cli.mjs render  --subject <s> --node <n> [--step <id>] [--force] [--max-parallel <n>]
 node scripts/polish-article.mjs run --subject <s> --node <n> [--step <id>] [--force] [--max-parallel <n>] [--instruction <text>]
@@ -225,7 +228,7 @@ node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force
 node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only]  (deprecated)
 ```
 
-- `prepare` writes one material bundle per missing step to `learn/<subject>/output/materials/<node>/<step>.json` and returns the node's plan path plus the steps already published; one `publisher` subagent per node writes each step's original to `learn/<subject>/output/jobs/<node>/<step>/<step>.original.md` and its plan to `learn/<subject>/output/image-plans/<node>/<step>.json`, then runs that step's `run-article-agent.mjs --markers-only --mode translate` (the default), which validates the plan, protects code blocks, inserts the `<!--image:N-->` markers, and translates the article and the plan to Traditional Chinese. With `--mode rewrite`, the wrapper runs `article-agent`'s single rewrite instead. It never generates figures.
+- `prepare` writes one material bundle per missing step to `learn/<subject>/output/materials/<node>/<step>.json`, returns the node's teaching-plan path and the steps already published. One `teach-agent` per node reads `learn/<subject>/output/materials/<node>/<step>.json` and writes `learn/<subject>/output/jobs/<node>/teaching-plan.md`; one `publisher` per node writes each step's original to `learn/<subject>/output/jobs/<node>/<step>/<step>.original.md` and its plan to `learn/<subject>/output/image-plans/<node>/<step>.json`, then runs that step's `run-article-agent.mjs --markers-only`, which validates the plan, protects code blocks, inserts the `<!--image:N-->` markers, and leaves the prose as the publisher wrote it. The original is written in the subject's MEMORY language, so the pipeline never translates. The default `--mode direct` calls no text model; `--mode translate` and `--mode rewrite` remain as legacy modes for repairing old articles. It never generates figures.
 - `publish` restores the code, keeps the markers, normalizes the H1, writes `learn/<subject>/nodes/<node>/<step>.md`, marks the node `written`, and runs verify. It never syncs, copies, or deletes `<step>-assets/` unless `--force` succeeds. With `--force`, a successful write clears that step's stale `image-N.webp` files and polish record.
 - Missing or H1-only articles are generated; articles with a body are skipped unless `--force`.
 - `polish-article.mjs run` polishes every eligible step (article body, plan, marker or image line) in parallel, skipping steps whose `output/polished/<node>/<step>.json` still matches the article hash unless `--force` is given. Before each model call it masks the H1, fenced code, provenance comments, markers, image lines and captions, quiz blocks, inline code and links; after the call it restores them and validates the article against that backup (H1, code, provenance, markers, image lines, quiz, links). A failed validation retries once, then records `failed` and leaves the official article untouched. It never touches the plan. A changed article deletes its `<step>.quiz.json`.
@@ -235,7 +238,7 @@ node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force
 
 ### Batch pipeline
 
-`/batch-nodes` runs Nodes → Article → Polish → Generate → Quiz and gates each phase before dispatching. Flags: `-max-subagents N` (default 3), `-nodes-only`, `-skip-article`, `-skip-polish`, `-skip-images`, `-skip-quiz`, `-no-continuity`, `-force`. `-no-images` is removed; use `-skip-images` to skip rendering. `-skip-humanize` is removed; the stage is Polish and the flag is `-skip-polish`. `-force` regenerates generated content but never rebuilds a node's step plan. Failure propagates downstream: a failed Article node leaves Polish, Generate, and Quiz; a failed Polish node leaves Generate and Quiz; a failed Generate node leaves Quiz. Successful files stay in place.
+`/batch-nodes` runs Nodes → Article → Polish → Generate → Quiz and gates each phase before dispatching. Flags: `-max-subagents N` (default 3), `-nodes-only`, `-skip-teach`, `-skip-article`, `-skip-polish`, `-skip-images`, `-skip-quiz`, `-no-continuity`, `-force`. `-no-images` is removed; use `-skip-images` to skip rendering. `-skip-humanize` is removed; the stage is Polish and the flag is `-skip-polish`. `-force` regenerates generated content but never rebuilds a node's step plan. Failure propagates downstream: a failed Article node leaves Polish, Generate, and Quiz; a failed Polish node leaves Generate and Quiz; a failed Generate node leaves Quiz. Successful files stay in place.
 
 ### Quiz generation
 

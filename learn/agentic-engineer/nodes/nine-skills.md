@@ -4,7 +4,7 @@ title: "Nine Skills：Finding Your Entry Point"
 subject: agentic-engineer
 tier: 3
 order: 11
-status: written
+status: confirmed
 goal: "能背出九個 skill 的順序，並依手上的材料（greenfield / 既有 repo / 小改動）選出正確的入口。"
 digests:
   - ch08-workflow-ship-something-real.1.part.md

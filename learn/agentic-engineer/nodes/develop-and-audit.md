@@ -4,7 +4,7 @@ title: "Demo: Planning a Feature with develop"
 subject: agentic-engineer
 tier: 3
 order: 14
-status: written
+status: confirmed
 goal: "能說明 plan 上沒有的工作怎麼被 gate 成一張 `Assumed` spec，並用 `/audit` 寫出短而有用的 AGENTS.md。"
 digests:
   - ch08-workflow-ship-something-real.1.part.md

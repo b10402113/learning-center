@@ -13,6 +13,7 @@ import {
 import {
   prepareFile,
   readJson,
+  teachingPlanPath,
   writeJson,
   writeMaterial,
 } from "./article-agent-bridge.mjs";
@@ -37,18 +38,18 @@ import {
 } from "./image-provider.mjs";
 
 const usage = `Usage:
-  node src/article-cli.mjs prepare --subject <s> --node <n> [--step <id>] [--mode translate|rewrite] [--force] [--root <dir>]
+  node src/article-cli.mjs prepare --subject <s> --node <n> [--step <id>] [--mode direct|translate|rewrite] [--force] [--root <dir>]
   node src/article-cli.mjs publish --subject <s> --node <n> [--step <id>] [--force] [--root <dir>]
   node src/article-cli.mjs render  --subject <s> --node <n> [--step <id>] [--force] [--max-parallel <n>] [--root <dir>]
   node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force] [--images] [--max-parallel <n>] [--root <dir>]  (deprecated)
   node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only] [--root <dir>]  (deprecated)
 
-prepare  writes one material bundle per missing step and lists the publisher job
-         (material, original, plan, command). The command uses --markers-only, so
-         the article keeps <!--image:N--> markers instead of generating figures.
-         --mode translate (default) writes the original in the source language and
-         translates it to Traditional Chinese; --mode rewrite keeps the old
-         rewrite-in-place behaviour.
+prepare  writes one material bundle per missing step and lists the write job
+         (material, original, plan, command) plus the node's
+         teaching-plan path. The command uses --markers-only, so the article keeps
+         <!--image:N--> markers instead of generating figures.
+         --mode direct (default) inserts markers and leaves the prose unchanged;
+         --mode translate and --mode rewrite remain legacy modes for old articles.
 publish  writes completed marker-only runs into learn/ without touching figures,
          marks the node written, and runs verify.
 render   turns <!--image:N--> markers into WebP figures and image lines. It only
@@ -63,7 +64,7 @@ image    legacy engine (deprecated): plans and generates WebP figures for
          --plan-only rebuilds the plan; without it, --force regenerates images.
 Default behaviour skips existing articles and reuses existing images.`;
 
-function prepareArticles({ root, subject, node: nodeId, step = null, force = false, mode = "translate" }) {
+function prepareArticles({ root, subject, node: nodeId, step = null, force = false, mode = "direct" }) {
   const node = readNode(root, subject, nodeId);
   const entries = selectSteps(node, step);
   const order = node.steps.map((entry) => entry.id);
@@ -87,7 +88,7 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     const slices = readStepSlices(root, entry);
     const { files } = writeMaterial(root, { subject, node: nodeId, entry, slices });
     if (force) {
-      for (const key of ["original", "plan", "legacyPlan", "protected", "blocks", "request", "result", "translated"]) {
+      for (const key of ["original", "plan", "legacyPlan", "protected", "blocks", "request", "result", "marked", "translated"]) {
         rmSync(files[key], { force: true });
       }
     }
@@ -123,6 +124,7 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     nodeFile: resolve(root, "learn", subject, "nodes", `${nodeId}.md`),
     nodeTitle: node.title,
     nodeGoal: node.goal ?? null,
+    teachingPlan: resolve(root, teachingPlanPath(root, subject, nodeId)),
     steps,
     skipped,
   };
@@ -201,7 +203,7 @@ async function main() {
       subject: { type: "string" },
       node: { type: "string" },
       step: { type: "string" },
-      mode: { type: "string", default: "translate" },
+      mode: { type: "string", default: "direct" },
       force: { type: "boolean", default: false },
       images: { type: "boolean", default: false },
       "plan-only": { type: "boolean", default: false },
@@ -225,9 +227,9 @@ async function main() {
   const root = resolve(values.root || process.cwd());
   loadEnv(root);
 
-  const articleMode = values.mode || "translate";
-  if (!["translate", "rewrite"].includes(articleMode)) {
-    throw new Error(`unknown --mode: ${articleMode} (use translate or rewrite)\n\n${usage}`);
+  const articleMode = values.mode || "direct";
+  if (!["direct", "translate", "rewrite"].includes(articleMode)) {
+    throw new Error(`unknown --mode: ${articleMode} (use direct, translate, or rewrite)\n\n${usage}`);
   }
 
   const target = {
