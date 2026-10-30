@@ -35,7 +35,7 @@ prepare ─→ teach-agent ─→ publisher ─→ publish ─→ verify
 
 3. **Teach：一個 node 派一次**
 
-   派一個 `teach-agent`，給 `nodeFile`、`MEMORY.md`、`teachingPlan`、MEMORY 的 `language`，每個 ready step 的 `id`、`title`、`purpose`、`material`，以及 `skipped[]` 的 `article`。指示它用 skill tool 載入 `documentation` skill，逐 step 讀完 material 的每個 slice，決定每一步的文章型別、概念順序、每節的讀者問題與帶行號引用的事實、例子、交棒，寫成一份 teaching plan。
+   派一個 `teach-agent`，給 `nodeFile`、`MEMORY.md`、`teachingPlan`、MEMORY 的 `language`，每個 ready step 的 `id`、`title`、`purpose`、`material`，以及 `skipped[]` 的 `article`。指示它用 skill tool 載入 `teach` skill，從 `MEMORY.md` 與 node goal 對齊學習者的 mission 與最近發展區，逐 step 讀完 material 的每個 slice，決定每一步的文章型別、概念順序、每節的讀者問題與帶行號引用的事實、例子、retrieval checkpoint、交棒，寫成一份 teaching plan。
 
    不要讓它問使用者問題或寫文章。完成標準：teaching plan 依 node 的 steps 順序，一步一節，Spine 與 steps 一致；每節的事實都有 `[[sources/…#Lx-Ly]]` 引用。
 

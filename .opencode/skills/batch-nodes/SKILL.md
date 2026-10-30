@@ -197,7 +197,7 @@ Dispatch every call with `subagent_type: teach-agent`. Fill `<ROOT>`, `<SUBJECT>
 ```
 Design one teaching plan for one node. This is one node only.
 
-Load the documentation skill via the skill tool (name: "documentation") and follow it.
+Load the teach skill via the skill tool (name: "teach") and follow it.
 
 Repo root: <ROOT>
 Node: <SUBJECT>/<NODE-ID>
@@ -215,7 +215,7 @@ Already published steps (continuity only):
 
 Every path above is absolute. Use each string exactly as given.
 
-Read every slice in each step's material bundle. Choose each step's article type, the concept order, each section's reader question, the facts it uses with their line-addressed citations, the examples, the handoffs, and what each step deliberately does not teach. Do not ask the learner questions. Use no fact the material bundles do not support.
+Read every slice in each step's material bundle. Ground every step in the learner's mission and zone of proximal development (from MEMORY.md, the node goal, and the published steps). Choose each step's article type, the concept order, each section's reader question, the facts it uses with their line-addressed citations, the examples, the retrieval checkpoint, the handoffs, and what each step deliberately does not teach. Do not ask the learner questions. Use no fact the material bundles do not support.
 
 Stop once the plan has one section per ready step, in the node's steps order, with a Spine that matches it. Do not write articles.
 
