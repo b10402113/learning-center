@@ -1,85 +1,99 @@
 ---
 subject: claude-code-master
-status: draft # draft → confirmed
-path: problem-driven
-created: 2026-10-28
+status: draft
+path: course-order
+created: 2026-10-31
 ---
 
 # ROADMAP — claude-code-master
 
 ## Goal
 
-把 Claude Code 從「一個會寫程式的聊天視窗」升級成自己的作業系統：skills、memory、routines、apps 四個層都親手搭起來，讓它替我自動跑重複性的工作，並且能把它接到我真正在用的工具（Gmail、行事曆、YouTube、筆記）上。最後還要用同一套 agent 平台，做出能上線、長得好看的網站／小工具。
-
-判準不是「知道有這個功能」，而是：我能在自己的 workspace 裡指出哪個檔案、哪個 skill、哪條 routine 在替我做事，並且說出它斷掉時會怎樣。
+照課程順序 A → G 完整走一遍，把四層 ARMS（Apps、Routines、Memory、Skills）裝進自己的 workspace，而不是再懂一次名詞。驗收判準是「重複工作真的被自動化」：至少一條 routine 在排程上自己跑、一個 skill 會自己觸發、memory 大到能被檢索、一個原本沒有 connector 的 app 接得上，最後用 design system 做出一個真的上線的網站。
 
 ## Learning path
 
-**problem-driven（問題驅動）** — 每個節點都是一個學習者實際會撞到的問題，節點內先看「沒設定會怎樣」的失敗長相，再學對應機制，最後一定綁到一個可操作動作。
-
-- **角度：** 用真實痛點當節點邊界，機制按「這個問題需要什麼」拉進來，而不是按功能清單排列。
-- **優化：** 立即適用性——每學完一個節點，就有一件手上的麻煩被解決。
-- **如何排 Tier：** Tier 1 先立「同樣的模型、結果為何差這麼多」的心智模型（model／harness／context ＋ ARMS 地圖）；接著 Tier 2 處理 session 內的即時旋鈕；Tier 3–6 依序解掉「重打 prompt（Skills）→ 記不住（Memory）→ 不會自動（Routines）→ 接不上工具（Apps）」四個痛點；Tier 7 解決「做不美、上不了線（Taste & Design）」；Tier 8 收束成第二大腦。每一層都先回答問題、再給機制。
+**course-order（見習制）** — 照課程的建置順序走：先介面、成本與 workspace 的心智模型，再 skills 與 memory，再 routines 與 apps，最後 taste／design 與 Agentic OS v2。這個角度優化的是「不跳前置、每一步都接得上下一步」；每個 tier 的產物都是下一個 tier 的前提，設計給想完整走一遍、把四層真的裝起來的人。
 
 ## How to use
 
-Read the nodes in order. Each node is a Markdown container whose `steps` array sets the teaching order. Run `/nodes <subject>/<node-id>` to confirm a node and write its steps.
+Read the nodes in order. Each node is a Markdown container whose `steps` array sets the teaching order. Run `/nodes claude-code-master/<node-id>` to confirm a node and write its steps.
 
 ## Nodes
 
-### Tier 1 — 立框架：為什麼同樣的模型、結果差這麼多
+### Tier 1 — 介面、成本與 workspace
 
-1. **[為什麼同一個模型，別人做得到你做不到](nodes/why-same-model-different-results.md)**
-   - Goal: 能用 model／harness／context 三層說出「差異只在 context」，並用 ARMS 四層地圖定位整個 workspace。
-2. **[把環境架起來：介面、花費、工具去哪拿](nodes/set-up-the-workspace.md)**
-   - Goal: 能在自己的機器上選定介面、開好 workspace、看懂方案與用量、知道從 GitHub 裝工具，並用語音輸入加速。
+1. **[三種介面](nodes/three-surfaces.md)**
+   - Goal: 能在 desktop、VS Code、terminal 之間選一個日常介面，並說出另外兩個換到什麼。
 
-### Tier 2 — 控場：session 裡的即時旋鈕
+2. **[Workspace 設定與 GitHub 工具](nodes/workspace-setup-and-github-tools.md)**
+   - Goal: 從空資料夾建出第一個 workspace，並用 `/personalize` 安全評估 GitHub 上的工具。
 
-3. **[為什麼聊越久它越笨](nodes/why-sessions-get-dumb.md)**
-   - Goal: 能解釋 context window、context rot 與 compaction，並判斷何時該壓縮或重開一個 session。
-4. **[模型、思考力度、放行程度怎麼調](nodes/tune-model-effort-permissions.md)**
-   - Goal: 能依任務選對模型層級、effort 等級與 permission mode，並用換模型在排程上省 token。
+3. **[方案、模型與 effort](nodes/plans-models-and-effort.md)**
+   - Goal: 用 `/usage`、token 單位與 effort 等級判斷哪個方案、模型、思考深度值得花。
 
-### Tier 3 — 別再重打：Skills
+4. **[Context Window 與權限模式](nodes/context-window-and-permission-modes.md)**
+   - Goal: 用 `/context` 讀出預佔的 token，並在五種權限模式之間選出速度與控制的平衡。
 
-5. **[怎麼不再重打同一個 prompt](nodes/stop-retyping-prompts.md)**
-   - Goal: 能寫出第一個 skill，並用「兩次法則」把重複的 prompt 或一整段 session 存成可重用的 skill。
-6. **[怎麼讓 skill 又強又安全](nodes/make-skills-powerful-and-safe.md)**
-   - Goal: 能做出帶腳本／素材、會互相呼叫的進階 skill，並在安裝外部 skill 前先檢查惡意碼、判斷何時該整併。
+5. **[把 workspace 當作業系統（ARMS）](nodes/workspace-as-operating-system.md)**
+   - Goal: 用 model／harness／context 與 ARMS 四層解釋自己的 workspace，排出 bottoms-up 建置順序。
 
-### Tier 4 — 讓它記住你：Memory
+### Tier 2 — Skills
 
-7. **[怎麼給它一個跨 session 的記憶](nodes/give-it-memory.md)**
-   - Goal: 能用 CLAUDE.md（員工手冊／兩份）＋ MEMORY.md 索引 ＋ `/init` ＋ 自動記憶，建出跨 session 的記憶。
-8. **[怎麼讓它每聊一次就更懂你](nodes/memory-cost-and-calibration.md)**
-   - Goal: 能算出兩個記憶檔的 token 成本、判斷健康大小，並用 calibrate skill 把每次修正回寫成記憶與 skill。
+6. **[Skill 是什麼](nodes/what-a-skill-is.md)**
+   - Goal: 解釋 SKILL.md 的 name／description 預載與 body lazy-load，並知道什麼時候該用 `/` 觸發。
 
-### Tier 5 — 讓它自己跑：Routines
+7. **[建立好 skill](nodes/creating-good-skills.md)**
+   - Goal: 用「同一個 prompt 打兩次就存」的規則建 skill，並用 `/align` 在動工前對齊。
 
-9. **[怎麼讓工作在你不在時自己完成](nodes/routines-local.md)**
-   - Goal: 能建一條 local routine（排程自寄 prompt ＋ 塞進 skill），檢查第一次跑並用白話優化它。
-10. **[筆電關了也要跑——以及什麼時候根本不該用 LLM](nodes/routines-cloud-and-deterministic.md)**
-    - Goal: 能用 cloud routine（skill 放私有 GitHub repo）與 deterministic／Modal（零 token）自動化，並用「有腦 vs 無腦」判斷該用哪種。
+8. **[進階 skill 與安全安裝](nodes/advanced-and-safe-skills.md)**
+   - Goal: 判斷 skill 何時該長出 scripts／references、如何審查社群 skill、以及用 `/context` 抓數量上限。
 
-### Tier 6 — 接上你真正在用的工具：Apps
+### Tier 3 — Memory
 
-11. **[怎麼接 Gmail／行事曆／YouTube——MCP、API、CLI 哪個省 token](nodes/connect-apps-mcp-api-cli.md)**
-    - Goal: 能比較 MCP／API／CLI 的 token 成本，選對連法把 Gmail、行事曆、YouTube 接上並真正自動化。
-12. **[想接的 App 沒有 connector 怎麼辦](nodes/build-your-own-connector.md)**
-    - Goal: 能用 Printing Press 把任何 App 變成省 token 的 CLI（HAR→Go CLI→skill），或自己造 app 來掌控連線。
+9. **[CLAUDE.md：agent 的員工手冊](nodes/claude-md-employee-handbook.md)**
+   - Goal: 寫出 identity／goals／rules／workspace map 四支柱的 CLAUDE.md，並分清 global 與 project 兩份。
 
-### Tier 7 — 做得好看、真的上線：Taste & Design
+10. **[MEMORY.md、自動記憶與 calibrate](nodes/memory-md-and-calibration.md)**
+    - Goal: 建出「索引指向 artifact」的 MEMORY.md，知道自動記憶何時寫、何時該用 `/calibrate` 回寫。
 
-13. **[怎麼做出「不像 AI 生成」的網站](nodes/design-with-taste.md)**
-    - Goal: 能走完 CRAFT 的 Create 段——抓區塊、`/html` 預覽、建設計系統、UI Sniping、`/tweak`、生圖——做出有品味的頁面。
-14. **[怎麼把它真的上線](nodes/rig-audit-deploy.md)**
-    - Goal: 能接真表單（Resend）、用 Playwright 自測、部署到 Vercel，並把整段流程存成可重用的建站 skill。
+### Tier 4 — Routines
 
-### Tier 8 — 收束
+11. **[排程的三種做法](nodes/three-kinds-of-routines.md)**
+    - Goal: 分辨 local／cloud／24-7 routine，並把一條 routine 從 draft 跑到排程。
 
-15. **[把整個 workspace 變成你的第二大腦](nodes/second-brain-capstone.md)**
-    - Goal: 能走一遍四層（apps／routines／memory／skills）串成的第二大腦，說明它為何更省 token，並用模板套到自己身上。
+12. **[不用 token 的 deterministic routine](nodes/deterministic-routines.md)**
+    - Goal: 用 Modal 建一條不花 token 的 deterministic pipeline，並判斷何時不該讓 LLM 參與。
+
+### Tier 5 — Apps
+
+13. **[接上一個 app 的三條路](nodes/three-ways-to-connect-an-app.md)**
+    - Goal: 依 CLI → API → MCP 的成本順序選路，實際把一個 app 接上 Claude Code。
+
+14. **[自己印一個 CLI](nodes/print-your-own-cli.md)**
+    - Goal: 用 HAR 抓真實 API，產出 CLI 與 skill，把沒有 connector 的 app 變成自己的工具。
+
+### Tier 6 — Taste 與 Design
+
+15. **[Craft：create 與 rig](nodes/craft-create-and-rig.md)**
+    - Goal: 用 Craft 的 create 與 rig 產出 section plan、骨架與可運作的表單。
+
+16. **[Design system、UI sniping 與 tweak](nodes/design-system-sniping-and-tweak.md)**
+    - Goal: 用 design system skill 把 generic 頁面變成品牌一致，並用 21st.dev、RoboCapture、`/tweak` 收尾。
+
+17. **[素材、後端與上線](nodes/assets-backend-and-launch.md)**
+    - Goal: 用 aggregator 生成素材、用 Resend 接通表單，並用 Playwright 審計後部署上線。
+
+### Tier 7 — Agentic OS v2
+
+18. **[我的 Agentic OS v2](nodes/agentic-os-v2.md)**
+    - Goal: 用十二個等級檢查自己的 setup，指出每一層現在缺哪一級。
+
+19. **[Skills、Routines、Apps 的三個等級](nodes/three-levels-skills-routines-apps.md)**
+    - Goal: 把 skill 分成 database／artifact／self-triggered、routine 分成 active／passive／capped，各升一級。
+
+20. **[Memory 的三個等級與 Second Brain](nodes/three-levels-memory-and-second-brain.md)**
+    - Goal: 用 plain-text routers 與 `brain.js` 取代 vector RAG，量出 second brain 比預設省多少 token。
 
 ## Status
 
