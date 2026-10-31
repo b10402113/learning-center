@@ -194,3 +194,60 @@ This paragraph carries the figure.
   assert.match(article, /The first paragraph stays exactly as written\./);
   assert.match(article, /<!--image:1-->/);
 });
+
+test("direct mode rejects an original that already carries image markers", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "article-agent-hand-markers-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  write(root, "learn/test/nodes/n1.md", `---
+id: n1
+title: "Node One"
+subject: test
+tier: 1
+order: 1
+status: confirmed
+goal: "Explain one thing."
+prerequisites: []
+steps:
+  - id: s1
+    title: "Step One"
+    purpose: "First step."
+    sources:
+      - "[[sources/test/notes.txt#L1-L10]]"
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Node One
+
+## Lesson
+
+Test.
+
+## Steps
+
+1. [Step One](n1/s1.md)
+`);
+  write(
+    root,
+    "learn/test/output/jobs/n1/s1/s1.original.md",
+    `# Step One
+
+This paragraph carries the figure.
+
+<!--image:1-->
+`,
+  );
+  write(
+    root,
+    "learn/test/output/image-plans/n1/s1.json",
+    JSON.stringify([{ heading: "Detail", anchor: "This paragraph carries the figure.", prompt: "A flow" }]),
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [SCRIPT, "--subject", "test", "--node", "n1", "--step", "s1", "--mode", "direct", "--markers-only", "--root", root],
+    { encoding: "utf8", env: { ...process.env, TEXT_API_KEY: "", OPENAI_API_KEY: "" } },
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /hand-placed.*image:N.*markers/);
+});

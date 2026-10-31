@@ -1,13 +1,13 @@
 ---
 name: article
-description: 產生一個 node 的 step 文章：prepare 素材包、逐篇派 publisher 寫原稿與配圖清單、article-agent 改寫並留下 <!--image:N--> marker、publish 回寫、主 agent 補連續性。當使用者要產生、重寫或補齊某個 node 的文章時使用。
+description: 產生一個 node 的 step 文章：prepare 素材包、逐篇派 publisher 寫原稿與配圖清單、command 依 anchor 插入 <!--image:N--> marker、publish 回寫、主 agent 補連續性。當使用者要產生、重寫或補齊某個 node 的文章時使用。
 disable-model-invocation: true
 argument-hint: "<subject>/<node> [--step <id>] [--force] [--no-continuity]"
 ---
 
 Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
 
-這是一個 thin shell：文章由 `publisher` 一篇一篇寫原稿並決定配圖位置，`article-agent` 用一次 rewrite 把配圖位置換成 `<!--image:N-->` marker；主 agent 最後補上 step 之間的連續性。`src/article-cli.mjs` 只負責切片、保護 code、回寫與 verify。這條流程不呼叫圖片模型，也不建立 `<step>-assets/`。
+這是一個 thin shell：文章由 `publisher` 一篇一篇寫原稿並決定配圖位置，`run-article-agent.mjs --markers-only`（direct mode）依 plan 的 `anchor` 把 `<!--image:N-->` marker 插進原稿，散文保持原樣；主 agent 最後補上 step 之間的連續性。`src/article-cli.mjs` 只負責切片、保護 code、回寫與 verify。這條流程不呼叫圖片模型，也不建立 `<step>-assets/`。
 
 1. **Resolve the target.** 參數是 `subject/node`，在 repo root 執行。不要從敘述推測 subject 或 node。
 
@@ -29,7 +29,7 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
    每次派工只給這幾項：
 
    - `id`、`title`、`purpose`、`material`、`original`、`plan`、`command`、`titleCommand`
-   - 一句：「`material` 的 `purpose` 是這篇的主旨；用 Read 讀完 `material.sources` 的每個完整來源檔，`locator` 只是引用範圍，不是閱讀範圍。把原稿寫到 `original`，把 1–5 項的配圖清單寫成 JSON 陣列到 `plan`，再執行 `command`。`anchor` 必須逐字出現在原稿裡。`title` 是 `null` 時，自己從來源裡實際出現的標題或句子選一個當 H1，不要發明。」
+   - 一句：「`material` 的 `purpose` 是這篇的主旨；用 Read 讀完 `material.sources` 的每個完整來源檔，`locator` 只是引用範圍，不是閱讀範圍。把原稿寫到 `original`，把 1–5 項的配圖清單寫成 JSON 陣列到 `plan`，再執行 `command`。原稿裡不要放任何 `<!--image:N-->` marker；marker 由 `command` 依 `anchor` 插入。`anchor` 必須逐字出現在原稿裡。`title` 是 `null` 時，自己從來源裡實際出現的標題或句子選一個當 H1，不要發明。」
    - 一句：「`command` 成功後執行 `titleCommand`，把 H1 寫回 node 的 step entry 與 `## Steps` 標籤；不要用其他方式改 node。」
    - 一句：「只寫這一篇，不要管其他 step。」
 

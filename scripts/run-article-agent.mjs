@@ -112,6 +112,11 @@ async function main() {
 }
 
 function runDirect({ root, files, entry, plan, markersOnly, protectedText }) {
+  if (/<!--\s*image:\d+\s*-->/.test(protectedText)) {
+    throw new Error(
+      "the original contains hand-placed <!--image:N--> markers; remove them — the command inserts markers from the plan",
+    );
+  }
   if (plan) {
     for (const item of plan) {
       if (!protectedText.includes(item.anchor)) {
