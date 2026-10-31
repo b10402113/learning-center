@@ -6,6 +6,12 @@ tier: 2
 order: 5
 status: written
 goal: "判斷哪些動作必須 durable，並解釋 recovery 為什麼會重跑 workflow body。"
+digests:
+  - 10-durable-agent-loop.md
+  - 11-connecting-dbos-to-the-server.md
+  - 12-durable-execution-recap.md
+  - 7-durable-execution-setup-with-neondb.md
+  - 9-durable-tools.md
 prerequisites: []
 steps:
   - id: what-must-be-durable

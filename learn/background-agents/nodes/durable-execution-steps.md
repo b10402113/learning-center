@@ -6,6 +6,9 @@ tier: 2
 order: 3
 status: written
 goal: "解釋為什麼要把 loop 拆成 step、replay 的真相（memoize 而非重播 stack），以及 deterministic workflow + idempotent step 兩條規則。"
+digests:
+  - 10-durable-execution.md
+  - 12-multi-step-loop.md
 prerequisites: []
 steps:
   - id: why-split-into-steps
@@ -30,7 +33,7 @@ steps:
     sources:
       - "[[sources/background-agents/20261027/12-multi-step-loop.md#L33-L65]]"
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-10-31
 ---
 
 # Durable execution：把 loop 拆成 step

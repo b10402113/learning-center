@@ -6,6 +6,7 @@ tier: 3
 order: 8
 status: draft
 goal: "沿一個 run 的完整生命週期做整合驗證，並能把 durable runtime 選型與權限邊界套到自己的背景工作流程。"
+digests: []
 prerequisites: []
 steps: []
 created: 2026-10-27

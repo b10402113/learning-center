@@ -4,8 +4,13 @@ title: "安全重試與 idempotency"
 subject: background-agents
 tier: 2
 order: 7
-status: written
+status: confirmed
 goal: "說出為何拆 step 不夠、還需要 idempotency key 與 derived action ID、expectedVersion 最後柵欄、cancelOn 與 lost-ack。"
+digests:
+  - 10-durable-execution.md
+  - 15-executing-actions.md
+  - 23-safe-retries-with-derived-ids.md
+  - service.md
 prerequisites: []
 steps:
   - id: why-steps-are-not-enough
@@ -43,7 +48,7 @@ steps:
       - "[[sources/background-agents/20261027/service/checkout.ts#L13-L48]]"
       - "[[sources/background-agents/20261027/service/checkout.ts#L123-L182]]"
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-10-31
 ---
 
 # 安全重試與 idempotency

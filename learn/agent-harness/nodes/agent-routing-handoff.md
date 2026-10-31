@@ -6,6 +6,10 @@ tier: 3
 order: 8
 status: draft
 goal: "把 agent 定義成 name + prompt + tools，並在 runtime 攔截 handoff 完成換手。"
+digests:
+  - 19-agent-handoffs.md
+  - 20-billing-agent-handoff-tool.md
+  - 21-agent-triage-handoff.md
 prerequisites: []
 steps: []
 created: 2026-10-24

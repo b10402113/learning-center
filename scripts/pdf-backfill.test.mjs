@@ -147,6 +147,8 @@ tier: 1
 order: 1
 status: confirmed
 goal: "Read the sample."
+digests:
+  - paper.md
 steps:
   - id: sample
     title: "Sample"

@@ -3,7 +3,7 @@ source: sources/agent-harness/20260915/25-human-in-the-loop.txt
 source_type: text
 source_lines: 94
 status: absorbed
-absorbed_at: 2026-10-24
+absorbed_at: 2026-10-31
 created: 2026-10-24
 updated: 2026-10-24
 ---

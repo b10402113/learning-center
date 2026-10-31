@@ -4,8 +4,13 @@ title: "Background agent 是什麼：LLM + harness + durable runtime"
 subject: background-agents
 tier: 1
 order: 1
-status: written
+status: confirmed
 goal: "能用「LLM + harness + durable runtime」解釋 background agent，說出它和 chat agent 的差別，以及為什麼「需不需要核准」不能交給 LLM。"
+digests:
+  - 0-introduction.md
+  - 1-background-agents.md
+  - 3-goal-and-harness-overview.md
+  - 4-setting-up-the-workflow.md
 prerequisites: []
 steps:
   - id: from-chat-to-background-agent
@@ -35,7 +40,7 @@ steps:
       - "[[sources/background-agents/20261027/1-background-agents.md#L78-L102]]"
       - "[[sources/background-agents/20261027/3-goal-and-harness-overview.md#L69-L87]]"
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-10-31
 ---
 
 # Background agent 是什麼：LLM + harness + durable runtime

@@ -3,7 +3,7 @@ source: sources/agent-harness/20260915/20-billing-agent-handoff-tool.txt
 source_type: text
 source_lines: 308
 status: absorbed
-absorbed_at: 2026-10-24
+absorbed_at: 2026-10-31
 created: 2026-10-24
 updated: 2026-10-24
 ---

@@ -6,6 +6,13 @@ tier: 1
 order: 1
 status: confirmed
 goal: "用控制面、狀態面、執行面、context 面拆開 agent 系統，並說出 demo 與 production 的差異。"
+digests:
+  - 01-intro-to-harness-engineering.md
+  - 1-what-is-an-agent-harness.md
+  - harness-engineering.1.part.md
+  - harness-engineering.2.part.md
+  - harness-engineering.3.part.md
+  - harness-engineering.4.part.md
 prerequisites: []
 steps:
   - id: harness-is-the-product

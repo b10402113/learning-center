@@ -72,6 +72,8 @@ tier: 1
 order: 1
 status: confirmed
 goal: "Do one thing."
+digests:
+  - notes.md
 steps:
 ${steps}created: 2026-10-22
 updated: 2026-10-22
@@ -118,6 +120,32 @@ function update(root, relative, from, to) {
   write(root, relative, current.replace(from, to));
 }
 
+function addCodebaseDigest(root) {
+  write(root, "sources/test/code/main.js", `${Array.from({ length: 20 }, (_, index) => `// line ${index + 1}`).join("\n")}\n`);
+  write(
+    root,
+    "learn/test/digests/code.md",
+    `---
+source: sources/test/code
+source_type: codebase
+source_lines: 20
+language: JavaScript
+file_count: 1
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- Main module.
+
+# L2 detail
+
+- \`#L1-L20\` — main module
+`,
+  );
+}
+
 function failures(root, options = {}) {
   return runChecks({ root, subject: "test", ...options }).failures.map((failure) => failure.checkId);
 }
@@ -148,6 +176,7 @@ order: 2
 status: draft
 goal: "Plan another thing."
 prerequisites: []
+digests: []
 steps: []
 created: 2026-10-22
 updated: 2026-10-22
@@ -176,6 +205,8 @@ tier: 1
 order: 1
 status: draft
 goal: "Do one thing."
+digests:
+  - notes.md
 steps: []
 created: 2026-10-22
 updated: 2026-10-22
@@ -228,7 +259,7 @@ test("steps may not declare deps, type, or order", (t) => {
   }
 });
 
-test("each step entry needs id, title, purpose, and sources", (t) => {
+test("each step entry needs id, purpose, and sources", (t) => {
   const root = fixture(t);
   update(root, "learn/test/nodes/n1.md", "    purpose: \"Explain one thing.\"\n", "");
   assert.ok(failures(root).includes("step-entry"));
@@ -289,6 +320,33 @@ test("an H1-only article skeleton is accepted", (t) => {
   const root = fixture(t);
   write(root, "learn/test/nodes/n1/s1.md", "# Step One\n");
   assert.deepEqual(failures(root), []);
+});
+
+test("a planned step may omit title and use an empty skeleton", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/nodes/n1.md",
+    nodeFile({
+      steps: defaultSteps().replace('    title: "Step One"\n', ""),
+      body: defaultBody().replace("1. [Step One](n1/s1.md)", "1. [s1](n1/s1.md)"),
+    }),
+  );
+  write(root, "learn/test/nodes/n1/s1.md", "");
+  assert.deepEqual(failures(root), []);
+});
+
+test("an article body requires the publisher to write the title back", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/nodes/n1.md",
+    nodeFile({
+      steps: defaultSteps().replace('    title: "Step One"\n', ""),
+      body: defaultBody().replace("1. [Step One](n1/s1.md)", "1. [s1](n1/s1.md)"),
+    }),
+  );
+  assert.ok(failures(root).includes("step-title-missing"));
 });
 
 test("every article belongs to a step entry", (t) => {
@@ -520,6 +578,8 @@ tier: 1
 order: 2
 status: confirmed
 goal: "Do another thing."
+digests:
+  - notes.md
 steps:
   - id: s2
     title: "Step Two"
@@ -778,4 +838,229 @@ test("an asset folder without a step is an orphan", (t) => {
   const root = fixture(t);
   write(root, "learn/test/nodes/n1/ghost-assets/image-1.webp", webpBytes());
   assert.ok(failures(root).includes("image-orphan"));
+});
+
+test("a text digest may point at a codebase digest it supplements", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - code.md#L1-L20");
+  assert.ok(!failures(root).some((check) => check.startsWith("digest-supplement")));
+});
+
+test("a step may cite a file inside a codebase digest's directory", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(
+    root,
+    "learn/test/nodes/n1.md",
+    '"[[sources/test/notes.txt#L1-L10]]"',
+    '"[[sources/test/notes.txt#L1-L10]]"\n      - "[[sources/test/code/main.js#L1-L20]]"',
+  );
+  update(root, "learn/test/nodes/n1.md", "  - notes.md\n", "  - notes.md\n  - code.md\n");
+  assert.deepEqual(failures(root), []);
+});
+
+test("supplements must name an existing digest", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - missing.md#L1");
+  assert.ok(failures(root).includes("digest-supplement-missing"));
+});
+
+test("supplements must target a codebase or image digest", (t) => {
+  const root = fixture(t);
+  write(root, "sources/test/other.txt", NOTES);
+  write(
+    root,
+    "learn/test/digests/other.md",
+    `---
+source: sources/test/other.txt
+source_type: text
+source_lines: 20
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- Other notes.
+
+# L2 detail
+
+- \`#L1-L20\` — other notes
+`,
+  );
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - other.md#L1");
+  assert.ok(failures(root).includes("digest-supplement-type"));
+});
+
+test("only text digests may declare supplements", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(root, "learn/test/digests/code.md", "status: absorbed", "status: absorbed\nsupplements:\n  - notes.md#L1");
+  assert.ok(failures(root).includes("digest-supplements"));
+});
+
+test("a digest cannot supplement itself", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - notes.md#L1");
+  assert.ok(failures(root).includes("digest-supplements"));
+});
+
+test("supplements need an L1 or L2 locator", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - code.md");
+  assert.ok(failures(root).includes("digest-supplements"));
+});
+
+test("supplement L2 ranges must stay inside the digest line map", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - code.md#L21-L30");
+  assert.ok(failures(root).includes("digest-supplement-range"));
+});
+
+test("an image supplement takes the digest's L1", (t) => {
+  const root = fixture(t);
+  write(root, "sources/test/shot.png", "not-a-real-png");
+  write(
+    root,
+    "learn/test/digests/shot.md",
+    `---
+source: sources/test/shot.png
+source_type: image
+source_lines: 0
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- A screenshot of the workflow.
+
+# L2 detail
+
+- \`sources/test/shot.png\` — the workflow screen
+`,
+  );
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: absorbed\nsupplements:\n  - shot.md#L1");
+  assert.ok(!failures(root).some((check) => check.startsWith("digest-supplement")));
+});
+
+test("a node may only declare digests that exist", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/nodes/n1.md", "  - notes.md\n", "  - missing.md\n");
+  assert.ok(failures(root).includes("node-digest-unknown"));
+});
+
+test("a node may only declare absorbed digests", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: pending");
+  assert.ok(failures(root).includes("node-digest-status"));
+});
+
+test("a step source must come from a declared digest", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/nodes/n1.md", "digests:\n  - notes.md\n", "digests: []\n");
+  assert.ok(failures(root).includes("node-digest-undeclared"));
+});
+
+test("a confirmed node may not declare a digest no step cites", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(root, "learn/test/nodes/n1.md", "  - notes.md\n", "  - notes.md\n  - code.md\n");
+  assert.ok(failures(root).includes("node-digest-unused"));
+});
+
+test("a draft node may declare digests its future steps will cite", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/nodes/n1.md", "status: confirmed", "status: draft");
+  assert.ok(!failures(root).includes("node-digest-unused"));
+});
+
+test("a skipped digest needs a reason", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: skipped");
+  assert.ok(failures(root).includes("digest-skip-reason"));
+});
+
+test("an absorbed digest must belong to a node", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/digests/spare.md",
+    `---
+source: sources/test/notes.txt
+source_type: text
+source_lines: 20
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- Spare notes.
+
+# L2 detail
+
+- \`#L1-L20\` — spare notes
+`,
+  );
+  assert.ok(failures(root).includes("digest-unreferenced"));
+});
+
+test("a pending digest fails the subject check but not a node check", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/digests/later.md",
+    `---
+source: sources/test/notes.txt
+source_type: text
+source_lines: 20
+status: pending
+absorbed_at: ""
+---
+
+# L1 overview
+
+- Later notes.
+
+# L2 detail
+
+- \`#L1-L20\` — later notes
+`,
+  );
+  assert.ok(failures(root).includes("digest-pending"));
+  assert.ok(!failures(root, { node: "n1" }).includes("digest-pending"));
+});
+
+test("a skipped digest may not be declared by a node", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/digests/notes.md", "status: absorbed", "status: skipped\nskip_reason: \"Not needed.\"");
+  assert.ok(failures(root).includes("node-digest-status"));
+});
+
+test("a supplement inherits its parent digest's skip", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(
+    root,
+    "learn/test/digests/notes.md",
+    "status: absorbed",
+    "status: skipped\nskip_reason: \"Only the prose matters.\"\nsupplements:\n  - code.md#L1-L20",
+  );
+  assert.ok(failures(root).includes("digest-supplement-status"));
+});
+
+test("an absorbed supplement needs no node of its own", (t) => {
+  const root = fixture(t);
+  addCodebaseDigest(root);
+  update(
+    root,
+    "learn/test/digests/notes.md",
+    "status: absorbed",
+    "status: absorbed\nsupplements:\n  - code.md#L1-L20",
+  );
+  assert.ok(!failures(root).includes("digest-unreferenced"));
 });

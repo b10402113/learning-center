@@ -17,7 +17,7 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
    node src/article-cli.mjs prepare --subject <subject> --node <node> [--step <id>] [--force]
    ```
 
-   輸出 JSON 的 `steps[]` 每筆有 `material`、`original`、`plan`、`command`；`command` 已帶 `--markers-only`。`skipped[]` 是已有內容的 step，只會有 `id`、`title`、`status`、`path`。
+   輸出 JSON 的 `steps[]` 每筆有 `id`、`title`（尚未寫文章時是 `null`）、`purpose`、`material`、`original`、`plan`、`command`、`titleCommand`；`command` 已帶 `--markers-only`。`skipped[]` 是已有內容的 step，只會有 `id`、`title`、`status`、`path`。
    `--force` 連已有內容的 step 也重做，並清掉該 step 的舊執行結果與舊 plan。
 
    完成標準：`steps.length + skipped.length` 等於節點 step 數。
@@ -28,13 +28,14 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
 
    每次派工只給這幾項：
 
-   - `title`、`purpose`、`material`、`original`、`plan`、`command`
-   - 一句：「把原稿寫到 `original`，把 1–5 項的配圖清單寫成 JSON 陣列到 `plan`，再執行 `command`。`anchor` 必須逐字出現在原稿裡。」
+   - `id`、`title`、`purpose`、`material`、`original`、`plan`、`command`、`titleCommand`
+   - 一句：「`material` 的 `purpose` 是這篇的主旨；用 Read 讀完 `material.sources` 的每個完整來源檔，`locator` 只是引用範圍，不是閱讀範圍。把原稿寫到 `original`，把 1–5 項的配圖清單寫成 JSON 陣列到 `plan`，再執行 `command`。`anchor` 必須逐字出現在原稿裡。`title` 是 `null` 時，自己從來源裡實際出現的標題或句子選一個當 H1，不要發明。」
+   - 一句：「`command` 成功後執行 `titleCommand`，把 H1 寫回 node 的 step entry 與 `## Steps` 標籤；不要用其他方式改 node。」
    - 一句：「只寫這一篇，不要管其他 step。」
 
    不要給其他 step 的內容、不要給上下課關係。publisher 寫出來的就是一篇獨立的文章。
 
-   publisher 的完成標準：`command` 回報 `status: completed`，而且文章裡的 marker 數量等於 plan 長度。失敗就停，留在 `learn/<subject>/output/jobs/`，不要進下一個 step。
+   publisher 的完成標準：`command` 回報 `status: completed`、`titleCommand` 回報 `updated` 或 `unchanged`，而且文章裡的 marker 數量等於 plan 長度。失敗就停，留在 `learn/<subject>/output/jobs/`，不要進下一個 step。
 
 4. **publish**
 
@@ -44,7 +45,7 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
 
    帶 `--force` 時，publish 也要一起帶，這樣成功寫入後才會清掉舊狀態。
 
-   它還原被保護的 code block、把 H1 對齊 node plan、保留 `<!--image:N-->` marker、寫入 `learn/<subject>/nodes/<node>/<step>.md`，全部 step 有內容才把 node 標成 `written`，最後跑 verify。它不呼叫圖片同步；非 `--force` 時不改動圖片檔。
+   它還原被保護的 code block、用 publisher 回寫到 node 的 step title 對齊 H1、保留 `<!--image:N-->` marker、寫入 `learn/<subject>/nodes/<node>/<step>.md`，全部 step 有內容才把 node 標成 `written`，最後跑 verify。若 plan 原本沒有 title，publish 會把文章的最終 H1 寫回 node。它不呼叫圖片同步；非 `--force` 時不改動圖片檔。
 
    帶 `--force` 且寫入成功後，它會清掉該 step 舊的 `image-N.webp`（新文章只有 marker，舊圖已經對不上）與 humanize 紀錄；寫入失敗時，舊圖與紀錄都保留。
 
@@ -75,4 +76,4 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
 
 **除了第 5 步的連續性編修，不要手寫文章；不要手動加減 marker，也不要手動補圖片。**
 
-Completion：每個該有文章的 step 都有、H1 與 node plan 一致、每個新產的 step 都有正式 plan 且 marker 數量等於 plan 長度、連續性已處理（或依旗標跳過）、`node scripts/verify.mjs --node <subject>/<node>` exit 0。沒有圖片行是正常的。
+Completion：每個該有文章的 step 都有、publisher 已把標題寫回 node 且 H1 與 step entry 一致、每個新產的 step 都有正式 plan 且 marker 數量等於 plan 長度、連續性已處理（或依旗標跳過）、`node scripts/verify.mjs --node <subject>/<node>` exit 0。沒有圖片行是正常的。

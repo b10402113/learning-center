@@ -2,8 +2,8 @@
 source: sources/agent-harness/20260915/2-course-project-setup.txt
 source_type: text
 source_lines: 315
-status: absorbed
-absorbed_at: 2026-10-24
+status: skipped
+skip_reason: "not taught by any current node"
 created: 2026-10-24
 updated: 2026-10-24
 ---

@@ -6,6 +6,21 @@ tier: 4
 order: 11
 status: confirmed
 goal: "從 inspector 事件流讀出系統行為，並列出上 production 還缺什麼。"
+digests:
+  - 0-introduction.md
+  - 01-intro-to-harness-engineering.md
+  - 1-what-is-an-agent-harness.md
+  - 10-durable-agent-loop.md
+  - 13-code-mode-security.md
+  - 22-supervision-with-subagents.md
+  - 26-wrapping-up.md
+  - 3-agent-tools-setup.md
+  - 6-stream-messages-to-the-ui.md
+  - 7-durable-execution-setup-with-neondb.md
+  - harness-engineering.1.part.md
+  - harness-engineering.2.part.md
+  - harness-engineering.3.part.md
+  - harness-engineering.4.part.md
 prerequisites: []
 steps:
   - id: inspector-is-the-event-stream

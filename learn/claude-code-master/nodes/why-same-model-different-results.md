@@ -6,6 +6,9 @@ tier: 1
 order: 1
 status: draft
 goal: "能用 model／harness／context 三層說出「差異只在 context」，並用 ARMS 四層地圖定位整個 workspace。"
+digests:
+  - welcome-and-arms-framework.md
+  - volume-a-setup-and-fundamentals.md
 prerequisites: []
 steps: []
 created: 2026-10-28

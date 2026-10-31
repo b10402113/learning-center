@@ -57,9 +57,9 @@ Load `learn/<subject>/nodes/<node-id>.md`. Parse the ordered `steps` array — t
 
 ### 5b. Decide the position
 
-1. Read the node's `goal` and every existing step's `title` + `purpose`.
+1. Read the node's `goal` and every existing step's `id` + `purpose`.
 2. Decide where the new step belongs in the teaching order: after the last step by default, or inserted where it logically builds on an earlier step.
-3. The new step needs a unique kebab-case `id`, a `title`, a **one-sentence purpose (≤ 120 characters)**, and one or more `[[sources/<subject>/<file>#Lx-Ly]]` line ranges from the new digest.
+3. The new step needs a unique kebab-case `id`, a **one-sentence purpose (≤ 120 characters)**, and one or more `[[sources/<subject>/<file>#Lx-Ly]]` line ranges from the new digest. Do not write a title; the publisher chooses it when `/article` writes the step.
 
 ### 5c. Write the step entry
 
@@ -67,41 +67,36 @@ Insert the step object into the `steps` array at the chosen position. Array orde
 
 ### 5d. Create the article skeleton
 
-Write `learn/<subject>/nodes/<node-id>/<new-step-id>.md` containing only:
-
-```markdown
-# <step title>
-```
+Create an empty `learn/<subject>/nodes/<node-id>/<new-step-id>.md` — zero bytes, no heading.
 
 ### 5e. Update the `## Steps` list
 
 Insert the matching relative link at the same position:
 
 ```markdown
-3. [<Step title>](<node-id>/<new-step-id>.md)
+3. [<new-step-id>](<node-id>/<new-step-id>.md)
 ```
 
-### 5f. Update the node status
+### 5f. Update the node status and digests
 
-Set `status: confirmed` (even if it was `written`), bump `updated`, and leave the existing articles untouched. The node now has one unwritten step.
+Set `status: confirmed` (even if it was `written`), bump `updated`, and leave the existing articles untouched. The node now has one unwritten step. Add the new digest's filename to the node's `digests` list — `verify` fails with `node-digest-undeclared` if a step cites a digest the node does not declare.
 
 ## Step 6 — Create a new node
 
 For each new node:
 
 1. Generate a kebab-case `id` from the concept name.
-2. Write `learn/<subject>/nodes/<node-id>.md` with `status: draft`, `steps: []`, a one-sentence `goal`, `prerequisites: []`, an `# <title>` H1, a short `## Lesson`, and an empty `## Steps` heading. Use the container contract in `.opencode/skills/nodes/NODE-FORMAT.md`.
+2. Write `learn/<subject>/nodes/<node-id>.md` with `status: draft`, `steps: []`, a one-sentence `goal`, `digests` listing the digest filenames this node will teach, `prerequisites: []`, an `# <title>` H1, a short `## Lesson`, and an empty `## Steps` heading. Use the container contract in `.opencode/skills/nodes/NODE-FORMAT.md`.
 3. Insert a standard relative Markdown link into `learn/<subject>/ROADMAP.md` in the correct tier and position: `**[<Node title>](nodes/<node-id>.md)**`.
 4. The new node enters the standard pipeline: `/nodes <subject>/<node-id>` → `/article <subject>/<node-id>`. Absorb does not run these — it only creates the container.
 
-## Step 7 — Mark digests absorbed
+## Step 7 — Resolve every pending digest
 
-For each digest that contributed at least one concept (step appended or node created), update its frontmatter:
+A subject may not keep a `pending` digest after `/absorb` runs: the subject check fails with `digest-pending`.
 
-- `status: absorbed`
-- `absorbed_at: YYYY-MM-DD`
-
-Digests whose concepts were all skipped (already covered) remain `pending` — they may match future nodes.
+- A digest that contributed at least one concept (step appended or node created) becomes `status: absorbed` with `absorbed_at: YYYY-MM-DD`, and its filename is listed in every node that teaches it.
+- A digest whose material is genuinely not worth teaching becomes `status: skipped` with a non-empty `skip_reason` explaining why.
+- A digest whose concepts are all already covered by existing steps also becomes `skipped` with a reason such as "already covered by <node>/<step>"; it cannot stay `pending`.
 
 ## Step 8 — Verify
 
@@ -116,4 +111,4 @@ Summarise:
 - The verify result (exit status, surviving failures).
 - **Next steps**: for each modified node, run `/article <subject>/<node-id>` to write the new step; for each new node, run `/nodes` first.
 
-Completion: every contributing digest is `absorbed`, every appended step has an entry in the node's `steps` array, a skeleton article, and a matching `## Steps` link, every modified node is `confirmed`, and verify passes (or surviving failures are listed).
+Completion: every processed digest is `absorbed` or `skipped` (with a reason), every node that gained a step lists that digest in `digests`, every appended step has an entry in the node's `steps` array, an empty skeleton article, and a matching `## Steps` link labelled with its id, every modified node is `confirmed`, and verify passes (or surviving failures are listed).

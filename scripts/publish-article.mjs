@@ -18,6 +18,7 @@ import {
   restoreCode,
 } from "../src/article-agent-bridge.mjs";
 import { runChecks } from "./verify.mjs";
+import { setStepTitle } from "./set-step-title.mjs";
 
 function stepAssetsDir(root, { subject, node, step }) {
   return join(root, "learn", subject, "nodes", node, `${step}-assets`);
@@ -41,14 +42,14 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
     const target = join(root, "learn", subject, "nodes", nodeId, `${entry.id}.md`);
     const shown = relative(root, target);
     if (!force && !prepared.has(entry.id)) {
-      results.push({ id: entry.id, title: entry.title, status: "not-prepared", path: shown });
+      results.push({ id: entry.id, title: entry.title ?? entry.id, status: "not-prepared", path: shown });
       continue;
     }
     const result = readJson(files.result);
     if (!result || result.status !== "completed") {
       results.push({
         id: entry.id,
-        title: entry.title,
+        title: entry.title ?? entry.id,
         status: "failed",
         path: shown,
         error: result?.error ?? "no completed article-agent run",
@@ -57,17 +58,21 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
     }
     const article = existsSync(result.article) ? readFileSync(result.article, "utf8") : "";
     if (!article.trim()) {
-      results.push({ id: entry.id, title: entry.title, status: "failed", path: shown, error: "run produced no article" });
+      results.push({ id: entry.id, title: entry.title ?? entry.id, status: "failed", path: shown, error: "run produced no article" });
       continue;
     }
     const blocks = readJson(files.blocks) ?? [];
-    const body = normalizeArticleText(restoreCode(article, blocks), entry.title);
+    const body = normalizeArticleText(restoreCode(article, blocks), entry.title ?? null);
     if (!hasArticleBody(body)) {
-      results.push({ id: entry.id, title: entry.title, status: "failed", path: shown, error: "article has no body" });
+      results.push({ id: entry.id, title: entry.title ?? entry.id, status: "failed", path: shown, error: "article has no body" });
       continue;
     }
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, body);
+    if (!entry.title) {
+      const title = body.split("\n").find((line) => line.trim() !== "")?.replace(/^#\s+/, "").trim();
+      if (title) setStepTitle({ root, subject, node: nodeId, step: entry.id, title });
+    }
     // A forced rewrite invalidates the figures and humanize record from the
     // previous run. Clear them only after the new article is safely written, so
     // a failed publish leaves the old state intact.
@@ -75,7 +80,7 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
       clearStepImages(root, { subject, node: nodeId, step: entry.id });
       rmSync(humanizeRecordPath(root, { subject, node: nodeId, step: entry.id }), { force: true });
     }
-    results.push({ id: entry.id, title: entry.title, status: "published", path: shown });
+    results.push({ id: entry.id, title: entry.title ?? entry.id, status: "published", path: shown });
   }
 
   markNodeWritten(node, subject, nodeId, root);

@@ -67,7 +67,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    node src/article-cli.mjs prepare --subject <subject> --node <node> [--force]
    ```
 
-   Read the JSON. `steps[]` is the work: each entry carries `id`, `title`, `purpose`, `material`, `original`, `plan`, and `command` (already `--markers-only`). `skipped[]` means the step already has a body; keep it out of the publisher batch. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
+   Read the JSON. `steps[]` is the work: each entry carries `id`, `title` (may be `null`), `purpose`, `material`, `original`, `plan`, `command` (already `--markers-only`), and `titleCommand`. `skipped[]` means the step already has a body; keep it out of the publisher batch. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
 
    **3b. Dispatch publishers.** Combine the ready `steps[]` from every prepared node into one list, preserving node and step order. Batch that list into groups of `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per step in a single message, every call with `subagent_type: publisher` and the [Publisher-prompt](#publisher-prompt) filled in. Give each publisher only its own step's fields — never another step's article, plan, or source material. Wait for every call and record `completed` or `failed`.
 
@@ -182,7 +182,7 @@ Dispatch every call with `subagent_type: general`. Fill `<NODE-ID>` and `<SUBJEC
 Build the step plan for one node. Node: <SUBJECT>/<NODE-ID>.
 
 Load the /nodes skill via the skill tool (name: "nodes") and follow it for node <NODE-ID>.
-When you reach step 4 — the checkpoint that asks the learner to confirm the plan — skip it. Do not ask questions and do not wait. Decide the step count, ids, titles, one-sentence purposes, and source ranges yourself from the digests, then continue at step 5. You own the plan.
+When you reach step 4 — the checkpoint that asks the learner to confirm the plan — skip it. Do not ask questions and do not wait. Decide the step count, ids, one-sentence purposes, and source ranges yourself from the digests, then continue at step 5. You own the plan; the publisher chooses each title when `/article` writes the article.
 
 Stop once the node container and every H1-only skeleton are written and `node scripts/verify.mjs --node <SUBJECT>/<NODE-ID>` exits 0. Do not write article prose; /article does that in a later phase.
 
@@ -205,20 +205,23 @@ Dispatch every call with `subagent_type: publisher`. Fill `<NODE-ID>`, `<SUBJECT
 Write one step's original article and image plan, then run the repo wrapper. This is one step only: do not read, write, or plan any other step.
 
 Step: <SUBJECT>/<NODE-ID>/<STEP-ID>
-Title: <TITLE>
+Title: <TITLE or "choose one">
 Purpose: <PURPOSE>
 Material bundle: <MATERIAL>
 Original output: <ORIGINAL>
 Image plan output: <PLAN>
 Run this command: <COMMAND>   (already includes --markers-only)
+Then run this command: <TITLE-COMMAND>
 
-Read the material bundle. Write the original article to <ORIGINAL> in the language recorded in `learn/<SUBJECT>/MEMORY.md` (this repo uses Traditional Chinese), grounded only in the material.
+Read the material bundle. Its `purpose` is the article's main theme; use the Read tool to read every file named in its `sources` in full, all the way to the end — the `locator` is only the cited range for provenance, not the reading range. Write the original article to <ORIGINAL> in the language recorded in `learn/<SUBJECT>/MEMORY.md` (this repo uses Traditional Chinese), grounded only in those sources. The first line is the H1: use <TITLE> exactly when one is given; when it says "choose one", pick a title from a heading or phrase that actually appears in the sources, translated faithfully, and do not invent one.
 
 Decide 1-5 places where a figure genuinely helps the reader and spread them across the article. Write the imagePlan as a JSON array of objects with `heading`, `anchor`, and `prompt`; every `anchor` must be a short verbatim sentence from the original.
 
 There is no `article_generate` tool in this repo. Writing the original and the plan, then running the command from the repo root, replaces it. The command rewrites the original once and leaves a `<!--image:N-->` marker for every plan item. It does not generate figures and does not need IMAGE_API_KEY. Do not rewrite after it returns, do not hand-place markers, and do not retry automatically if it fails.
 
-Report back: command status (completed/failed), output path, plan length, marker count, and any error.
+After the wrapper reports `completed`, run <TITLE-COMMAND>. It copies the H1 into the node's step entry and updates the `## Steps` label. Do not write to `learn/<SUBJECT>/nodes/` any other way.
+
+Report back: command and title-command status, chosen title, output path, plan length, marker count, and any error.
 ```
 
 ## Humanize-prompt

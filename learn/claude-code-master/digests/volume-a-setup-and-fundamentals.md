@@ -3,7 +3,7 @@ source: sources/claude-code-master/20261028/2-Volume A - Setup and Fundamentals
 source_type: text
 source_lines: 1
 status: absorbed
-absorbed_at: 2026-10-28
+absorbed_at: 2026-10-31
 created: 2026-10-28
 updated: 2026-10-28
 ---

@@ -1,70 +1,49 @@
 # eventSequence：醒來之後怎麼知道有新東西
 
-你已經知道，agent 看到事件就會醒來。
+上一步看到，定義 run 的所有資料都序列化進 state，state 才是 run 真正的身分。但 agent 睡著的這段時間，世界一直在變——它醒來後要怎麼知道有沒有新事情發生？還是只是被同一件事又提醒了一次？
 
-但醒來之後，真正麻煩的問題才開始：這次被叫醒，是真的有新事情，還是同一件舊事又敲了一次門？
+如果每次醒來都從頭重看所有資料，會很浪費。更有效率的做法，是用一個簡單、可靠的訊號，快速判斷有沒有新事件。
 
-## 醒來之後，世界不會等你
+## event 是門鈴，不是整個房間
 
-世界不會等 agent 把一個 loop 跑完。
+世界不會等 agent 跑完一輪才發生變化。依賴服務可能在 agent 閒著時恢復，也可能有好幾個 alert 都在描述同一次故障。
 
-agent 閒著的時候，依賴可能已經自己恢復；好幾個 alert 也可能講的其實是同一次故障。
+所以你可以把每個 event 想成門鈴，而不是整個房間。checkout process 發出訊號，API 把它存下來、掛到目前的 incident，接著 agent 醒來，再回頭讀取 checkout process。
 
-所以「我被喚醒了」這件事本身，判斷不了有沒有新事件。你收到的可能還是同一份舊資訊。
+<!--image:1-->
 
-你需要一個可以比較的記號，才能分辨這次門鈴是新的，還是剛才那聲的迴音。
+重點是，agent 不會把 event 的 payload 當成完整快照。payload 只代表有事件發生，並不包含事情的全貌。
 
-![第 1 段配圖](./event-sequence-wake-signal-assets/image-1.webp)
-
-## 事件是門鈴，不是整個房間
-
-要講這個記號之前，得先回到 event 本身的定位。
-
-你可以把每個 event 想成門鈴，而不是整個房間。checkout process 發出訊號後，API 會把它存下來、掛到目前的 incident，接著 agent 醒來，重新去讀 checkout process。
-
-agent 不會把 event 的 payload 當成完整快照，那只是一則事件通知，現場還是得自己去看。
-
-![第 2 段配圖](./event-sequence-wake-signal-assets/image-2.webp)
-
-資訊不完整的時候，agent 會直接說：「這裡沒有我能做的事，我需要看到更多。」
-
-然後它回去睡，看看接下來會發生什麼。
-
-但它睡著的這段時間裡，門鈴可能又響了好幾次。下一次醒來，要怎麼知道這些鈴聲是不是新的？
+因此，agent 會因為收到事件而醒來；如果手上的資訊還不完整，就會發現「目前沒有事能做，需要更多資訊」，接著回去睡，等待後續變化。
 
 ## eventSequence：一筆一筆排下來的序號
 
-答案是一行比較：
+那要怎麼判斷有沒有新事件？答案是一個簡單的計數器：`eventSequence`。
 
-<!-- source: sources/background-agents/20261027/18-waiting-loop.md#L25-L29 -->
+`eventSequence` 就是服務送出的事件序號。每來一個新事件，序號就加一。對每個 run 來說，`eventSequence` 會隨著新事件一路遞增；run 也會在 state 裡記住自己醒來時看到的序號。
 
-```ts
-latest.eventSequence > state.eventSequence
+<!--image:2-->
+
+要判斷有沒有新事件，就把最新的序號和 run 原本記住的序號比一比：
+
+<!-- derived -->
+```typescript
+if (latest.eventSequence > state.eventSequence) {
+  // 期間有新事件發生，跳出 while 迴圈
+  check += 1;
+}
 ```
 
-`eventSequence` 就是字面上的意思：服務送出的每一筆事件，都會依序取得一個序號。
+如果最新序號比 run 原本記住的序號大，代表這段時間有新事件發生。這時就停止 `while` 迴圈，並把 `check` 加一。
 
-每次有新事件送出，這個數字就往上加。它跟著這個 run 走，就是個遞增計數器，跟時間戳、雜湊不一樣。
+<!--image:3-->
 
-![第 3 段配圖](./event-sequence-wake-signal-assets/image-3.webp)
+## 醒來之後，先比序號再決定
 
-比較時會用到兩個值：
+把這兩件事接起來，就是 agent 醒來後的流程。
 
-- `latest.eventSequence`：目前最新那筆事件的序號。
-- `state.eventSequence`：這個 run 原本進來時，記錄在 state 裡的序號。
+Agent 醒來時，先重新確認目前狀況，而不是直接相信 event 的 payload。確認後，再比較 `latest.eventSequence` 和 `state.eventSequence`。
 
-## 比大小，決定要不要跳出等待
+如果序號沒變，代表醒來後沒有新事件，agent 就可以回去睡。若最新序號比較大，代表有新事件進來，agent 就跳出等待，繼續往下做。
 
-接著比這兩個值：
-
-`latest.eventSequence > state.eventSequence`
-
-如果最新序號比原本記錄的大，就代表等待期間真的發生了新事件。這時就停止 `while` 迴圈，並把 `check` 加一。
-
-![第 4 段配圖](./event-sequence-wake-signal-assets/image-4.webp)
-
-反過來，兩個序號一樣，就表示這段等待期間沒有新事件，不用為同一個門鈴再跑一輪。
-
-agent 判斷有沒有新東西，靠的是這個遞增計數器，「我又醒了」不算證據。
-
-這樣一來，「回去睡、等看看」就是一個可以驗證的動作：下一次醒來，比一下兩個 `eventSequence`，就知道值不值得再起來看。
+一個遞增的序號，就能幫助 agent 分辨「醒來了」和「真的有新事件」；不必每次醒來都從頭檢查所有資料。

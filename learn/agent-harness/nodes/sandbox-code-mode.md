@@ -6,6 +6,10 @@ tier: 3
 order: 6
 status: written
 goal: "用 code mode 解釋為什麼要跑模型寫的程式，並說出 vm 沙箱擋得住與擋不住什麼。"
+digests:
+  - 13-code-mode-security.md
+  - 14-sandbox-boundary-runcode-tool.md
+  - 15-updating-the-system-prompt.md
 prerequisites: []
 steps:
   - id: why-run-model-code

@@ -6,6 +6,8 @@ tier: 1
 order: 2
 status: draft
 goal: "能在自己的機器上選定介面、開好 workspace、看懂方案與用量、知道從 GitHub 裝工具，並用語音輸入加速。"
+digests:
+  - volume-a-setup-and-fundamentals.md
 prerequisites: []
 steps: []
 created: 2026-10-28

@@ -4,8 +4,13 @@ title: "等待與事件關聯：醒來之後接回"
 subject: background-agents
 tier: 2
 order: 5
-status: written
+status: confirmed
 goal: "用「event 是門鈴不是快照」解釋醒來為何要重讀 state，以及 waitForEvent + eventSequence 對帳、timeout、resume。"
+digests:
+  - 16-when-to-wait-for-input.md
+  - 17-add-wait-conditions-steps.md
+  - 18-waiting-loop.md
+  - 19-testing-wait-resume.md
 prerequisites: []
 steps:
   - id: event-is-doorbell-not-snapshot
@@ -39,7 +44,7 @@ steps:
       - "[[sources/background-agents/20261027/19-testing-wait-resume.md#L57-L63]]"
       - "[[sources/background-agents/20261027/19-testing-wait-resume.md#L73-L81]]"
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-10-31
 ---
 
 # 等待與事件關聯：醒來之後接回

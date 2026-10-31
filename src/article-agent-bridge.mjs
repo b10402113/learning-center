@@ -140,9 +140,9 @@ export function writeMaterial(root, { subject, node, entry, slices }) {
     subject,
     node,
     step: entry.id,
-    title: entry.title,
+    title: entry.title ?? null,
     purpose: entry.purpose,
-    sources: slices,
+    sources: slices.map(({ path, locator }) => ({ path, locator })),
   };
   writeFileSync(files.material, JSON.stringify(material, null, 2) + "\n");
   return { files, material };

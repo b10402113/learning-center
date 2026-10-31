@@ -74,11 +74,19 @@ export function buildArticleMessages({ prompt, entry, slices }) {
   };
 }
 
-export function normalizeArticleText(text, title) {
+export function normalizeArticleText(text, title = null) {
   let body = String(text ?? "").replace(/\r\n/g, "\n").trim();
   body = body.replace(/^---\n[\s\S]*?\n---\n+/, "").trim();
-  while (/^#\s+/.test(body)) body = body.replace(/^#[^\n]*\n?/, "").trimStart();
-  return `# ${title}\n\n${body}`.trimEnd() + "\n";
+  if (title) {
+    while (/^#\s+/.test(body)) body = body.replace(/^#[^\n]*\n?/, "").trimStart();
+    return `# ${title}\n\n${body}`.trimEnd() + "\n";
+  }
+  const first = body.split("\n").findIndex((line) => line.trim() !== "");
+  const firstLine = first === -1 ? "" : body.split("\n")[first];
+  if (!/^#\s+\S/.test(firstLine)) {
+    throw new Error("article is missing an H1 title");
+  }
+  return body.trimEnd() + "\n";
 }
 
 export function markNodeWritten(node, subject, nodeId, root) {

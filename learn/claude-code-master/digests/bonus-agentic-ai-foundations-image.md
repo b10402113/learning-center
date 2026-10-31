@@ -2,8 +2,8 @@
 source: sources/claude-code-master/20261028/2-🎁 BONUS- Agentic AI Foundations/assets/img_aHR0cHM6Ly_f4b5a5f8cb4c4cc6838db5df69d74c9c3eadb02b28d24bcabbc751211433c8bb.png
 source_type: image
 source_lines: 0
-status: absorbed
-absorbed_at: 2026-10-28
+status: skipped
+skip_reason: "not taught by any current node"
 created: 2026-10-28
 updated: 2026-10-28
 ---

@@ -6,6 +6,9 @@ tier: 3
 order: 9
 status: draft
 goal: "用 plan 與 Promise.allSettled 平行派工，並讓單一 sub-agent 失敗不拖垮 workflow。"
+digests:
+  - 23-supervisor-workflow.md
+  - 24-dispatching-subagents.md
 prerequisites: []
 steps: []
 created: 2026-10-24

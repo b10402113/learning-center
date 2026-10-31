@@ -6,6 +6,12 @@ tier: 2
 order: 4
 status: written
 goal: "說出 run 是什麼、eventSequence 的角色、schema 核心表，以及 business state 與 workflow state 的區別。"
+digests:
+  - 11-workflow-state.md
+  - 16-when-to-wait-for-input.md
+  - 18-waiting-loop.md
+  - 4-setting-up-the-workflow.md
+  - 9-dashboard-database-schema.md
 prerequisites: []
 steps:
   - id: run-is-a-wake-up
@@ -33,7 +39,7 @@ steps:
       - "[[sources/background-agents/20261027/16-when-to-wait-for-input.md#L20-L27]]"
       - "[[sources/background-agents/20261027/18-waiting-loop.md#L25-L29]]"
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-10-31
 ---
 
 # Run 的生命週期與資料模型

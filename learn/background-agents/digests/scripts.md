@@ -4,8 +4,8 @@ source_type: codebase
 source_lines: 565
 language: JavaScript (Node ESM), JSON, Markdown
 file_count: 12
-status: absorbed
-absorbed_at: 2026-10-27
+status: skipped
+skip_reason: "not taught by any current node"
 created: 2026-10-27
 updated: 2026-10-27
 ---

@@ -6,6 +6,10 @@ tier: 3
 order: 7
 status: confirmed
 goal: "分辨 history/state/context，並實作以 token 預算觸發的 compaction。"
+digests:
+  - 16-memory-context-hydration.md
+  - 17-summarization-compaction.md
+  - 18-clearing-durable-event-log.md
 prerequisites: []
 steps:
   - id: history-state-context

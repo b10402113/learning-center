@@ -6,6 +6,9 @@ tier: 2
 order: 2
 status: written
 goal: "追出一則 user 訊息如何變成 model turn、tool call 與 UI 事件，並指出迴圈的終止條件。"
+digests:
+  - 5-harness-runtime.md
+  - 6-stream-messages-to-the-ui.md
 prerequisites: []
 steps:
   - id: turn-and-max-steps

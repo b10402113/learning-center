@@ -17,6 +17,7 @@ import {
   runArticle,
   runImages,
 } from "./article.mjs";
+import { writeMaterial } from "./article-agent-bridge.mjs";
 
 const NOTES = Array.from({ length: 20 }, (_, index) => `source line ${index + 1}`).join("\n") + "\n";
 
@@ -76,6 +77,8 @@ tier: 1
 order: 1
 status: confirmed
 goal: "Explain the thing."
+digests:
+  - notes.md
 prerequisites: []
 steps:
   - id: s1
@@ -161,6 +164,27 @@ test("reads line-addressed source slices", (t) => {
       locator: "#L1-L3",
       text: "source line 1\nsource line 2\nsource line 3",
     },
+  ]);
+});
+
+test("material carries the purpose and source pointers, not slice text", (t) => {
+  const root = fixture(t);
+  const entry = {
+    id: "s1",
+    title: "Step One",
+    purpose: "Explain one thing.",
+    sources: ["[[sources/test/notes.txt#L1-L3]]"],
+  };
+  const { material } = writeMaterial(root, {
+    subject: "test",
+    node: "n1",
+    entry,
+    slices: readStepSlices(root, entry),
+  });
+
+  assert.equal(material.purpose, "Explain one thing.");
+  assert.deepEqual(material.sources, [
+    { path: "sources/test/notes.txt", locator: "#L1-L3" },
   ]);
 });
 

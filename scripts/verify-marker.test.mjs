@@ -54,6 +54,8 @@ tier: 1
 order: 1
 status: confirmed
 goal: "Do one thing."
+digests:
+  - notes.md
 prerequisites: []
 steps:
   - id: s1

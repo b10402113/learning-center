@@ -1,7 +1,7 @@
 ---
 source: sources/claude-code-master/20261028/7-Volume F - Taste and Design
 source_type: text
-source_lines: 1
+source_lines: 106
 status: absorbed
 absorbed_at: 2026-10-28
 created: 2026-10-28
@@ -25,13 +25,13 @@ updated: 2026-10-28
 
 # L2 detail
 
-- `#L1-L1` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/1-Module F1 - Incredible Websites/index.html` — CRAFT framework overview; taste as the edge; module roadmap.
-- `#L1-L1` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/2-Module F2 - Creating the Base/index.html` — Create step; research/trim sections; /html renders plan; generate front end.
-- `#L1-L1` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/3-Module F3 - Awesome Design Systems/index.html` — design system as reusable skill; /robo; Design System X recipe (colors/fonts/spacing/NOT list).
-- `#L1-L1` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/4-Module F4 - UI Sniping/index.html` — 21st.dev components; Robo Capture extension; load unpacked extensions.
-- `#L1-L1` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/5-Module F5 - -tweak/index.html` — /tweak live slider panel; adjust/edit/remove live; bake back to source.
-- `#L1-L1` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/6-Module F6 - Creative AI Aggregators/index.html` — /generate + Fal AI pay-as-you-go; Kie AI / WaveSpeed; generate & place images.
-- `#L1-L1` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/7-Module F7 - Component Building/index.html` — add interactive components in one prompt; use most powerful model near usage reset.
-- `#L1-L1` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/8-Bonus- Claude Design/index.html` — Claude Design beta; future visual workflow with coding agent.
-- `#L1-L1` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/9-Module F8 - Backend Rig and Audit/index.html` — Rig: contact form → Resend + API key; Audit: Playwright self-test; repeatable loop.
-- `#L1-L1` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/10-Module F9 - Deployment and Launch!/index.html` — deploy to Vercel; document build into website-creation skill; Rubric Flows tailoring.
+- `#L94-L98` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/1-Module F1 - Incredible Websites/index.html` — CRAFT framework overview; taste as the edge; module roadmap.
+- `#L94-L98` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/2-Module F2 - Creating the Base/index.html` — Create step; research/trim sections; /html renders plan; generate front end.
+- `#L94-L98` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/3-Module F3 - Awesome Design Systems/index.html` — design system as reusable skill; /robo; Design System X recipe (colors/fonts/spacing/NOT list).
+- `#L94-L98` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/4-Module F4 - UI Sniping/index.html` — 21st.dev components; Robo Capture extension; load unpacked extensions.
+- `#L94-L98` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/5-Module F5 - -tweak/index.html` — /tweak live slider panel; adjust/edit/remove live; bake back to source.
+- `#L94-L98` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/6-Module F6 - Creative AI Aggregators/index.html` — /generate + Fal AI pay-as-you-go; Kie AI / WaveSpeed; generate & place images.
+- `#L94-L98` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/7-Module F7 - Component Building/index.html` — add interactive components in one prompt; use most powerful model near usage reset.
+- `#L94-L98` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/8-Bonus- Claude Design/index.html` — Claude Design beta; future visual workflow with coding agent.
+- `#L94-L98` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/9-Module F8 - Backend Rig and Audit/index.html` — Rig: contact form → Resend + API key, test it live; Audit: Playwright self-test of every button/form; repeatable rig-then-audit loop.
+- `#L94-L98` — `sources/claude-code-master/20261028/7-Volume F - Taste and Design/10-Module F9 - Deployment and Launch!/index.html` — Fire up: deploy to Vercel, chosen URL, custom domain; Tailor: document build + corrections into website-creation skill; Rubric Flows tailoring.

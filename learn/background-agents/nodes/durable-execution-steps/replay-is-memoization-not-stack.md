@@ -1,39 +1,53 @@
 # resume 的真相：memoize 結果，不是重播 JS stack
 
-上一篇把 loop 拆成 step，為的就是斷掉之後能接回來。接下來要問的是：那個「接回來」實際上怎麼運作？
+你已經把 agent 拆成一個個 step，也確認了 workflow 的執行順序是固定的。接下來，你按下 resume。
 
-你寫了多年 JavaScript，第一次聽到「resume」時，腦中大概會浮現這個畫面：
+這時候很容易以為，執行環境會把整個 JavaScript 執行 stack 還原，從中斷的那一行接著往下跑。於是你開始擔心：closure 怎麼辦？函式裡的區域變數怎麼辦？跑到一半的 promise 又該怎麼處理？
 
-runtime 把執行到一半的 stack、變數和 context 全部存起來，之後再原封不動地接著跑。
+但 resume 不是這樣運作的。
 
-這樣想很合理，因為在 JavaScript 裡，這是最直覺的「接回去」方式。
+## 這個誤會是怎麼來的？
 
-但 durable execution 裡的 resume 不是這個意思，沒有那麼深，也沒有那麼複雜。
+我遇過一位 JavaScript 底子很深的人。他第一次接觸 durable execution，我一提到「resume」，他腦中浮現的就是把整個執行環境重播一遍。
 
-![第 1 段配圖](./replay-is-memoization-not-stack-assets/image-1.webp)
+這個直覺可以理解：要接上中斷的執行，聽起來就是得把當時的現場原封不動搬回來。只是實際運作沒這麼複雜。
 
-真正的做法字面上就是這樣：每一個 step 都會被 memoized。
+resume 不重播 stack，也不搬回函式裡的區域變數。它做的事簡單得多。
 
-memoize 就是先把某個 function 的結果記下來。下次遇到相同的輸入，直接回傳記下來的結果，不必重算。
+## resume 看到的是結果，不是現場
 
-在這裡，每個 step 執行完，系統就記下它的結果。之後再遇到同一個 step，有記錄就直接用，不用再跑一次。
+resume 的意思其實只有一層：每個 step 的結果都會被記錄下來，系統讀得到。某個 step 已經有記錄，就不用再跑一次。
 
-就這樣。
+<!--image:1-->
 
-![第 2 段配圖](./replay-is-memoization-not-stack-assets/image-2.webp)
+所以 workflow 重跑時，每個 step 都會先問一句：「這一步有記錄嗎？」有，就直接回傳結果、跳過執行；沒有，才真的跑一次，跑完再把結果留下來。
 
-那麼，「重播」為什麼可靠？
+這比較像查表，不像重播。workflow 的程式碼一個字都沒改，但 resume 之後，大部分的 step 呼叫其實只是在讀記錄。
 
-關鍵在於 workflow 必須是 deterministic（具確定性）：同樣的輸入永遠得到同樣的輸出，不會因為當下的時間、亂數，或某個會變動的狀態而改變。
+## 順序固定，表才對得上
 
-workflow 既然是 deterministic，這些 step 就會照同樣的順序執行。
+光有記錄不夠。系統還得確認一件事：這一輪的第 3 個 step，跟上一輪的第 3 個 step 是不是同一個。
 
-![第 3 段配圖](./replay-is-memoization-not-stack-assets/image-3.webp)
+這要靠 workflow 的 deterministic 性質，也就是執行順序固定。開發者能保證這些 step 每次都照同樣的順序跑。順序固定，位置就固定，同一個位置也就對得上同一筆記錄。
 
-所以，帶著幾個已經完成的 step 去重播，最後拿到的還是同一個結果。重播幾次都一樣。
+只要順序固定，帶著一部分已完成的 step 重跑，拿回來的結果就會一樣，跑幾次都一樣。
 
-這也是 workflow 必須 deterministic 的原因：它不能建立在會動態變化的東西上。
+<!--image:2-->
 
-說到底，這跟 JavaScript 的 stack 無關，也不是 runtime 在背後玩了什麼花樣。
+反過來說，如果 workflow 的順序會變，表格就可能對不上。假設 workflow 靠時間、亂數，或隨時在變的外部狀態來決定下一個 step，那麼同一輪的第 3 個位置，這次可能是寄通知，下次卻變成寫資料庫。系統會把 A 的結果套到 B 身上，而且不會報錯。
 
-它做的事很單純：把每個 function 的結果 memoize 起來，再依序重播。
+這也是 workflow 不能依賴會變動的東西的原因。寫法好不好看是其次，這裡一旦出錯，結果就是錯的。
+
+## 說穿了，就是 memoize
+
+很多人以為 durable execution 裡面藏了一套很聰明的執行狀態快照機制。其實沒有。
+
+整套機制一句話就能講完：把函式的結果 memoize 起來，之後再依序讀一遍。
+
+memoize 這個詞在快取裡也常看到，意思一樣：同一個位置、同一個 step，直接拿上次的答案，不用重算。durable execution 只是把這件事訂成規則，套到每個 step 上。
+
+<!--image:3-->
+
+想通這點，後面很多規則就不用硬背。step 會成為重播的單位，是因為記錄就是以 step 為單位存的。workflow 不能有隨機性，是因為系統靠位置來配對記錄，順序一變，對應就可能錯掉。
+
+所以下次按下 resume，不用想像整個執行 stack 被搬回來。把它想成一張表：從第一列往下讀，有記錄就取出來用，沒有才跑一次，跑完把結果補上。讀到最後一列，workflow 就接上了。

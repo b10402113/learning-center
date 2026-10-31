@@ -33,13 +33,20 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 |---|---|
 | `no-mdx` | the `learn/` tree contains no `.mdx` files (whole tree for `--subject`, one subject for `--node`) |
 | `fm-parse` | frontmatter parses as YAML; malformed YAML is a failure, not a crash |
-| `fm-required` | node frontmatter has `id, title, subject, tier, order, status, goal, steps, created, updated` |
+| `fm-required` | node frontmatter has `id, title, subject, tier, order, status, goal, digests, steps, created, updated` |
 | `fm-status` | node `status` is `draft` / `confirmed` / `written` |
 | `fm-subject` | node `subject` matches the subject argument |
 | `id-filename` | node frontmatter `id` equals the filename |
 | `steps-array` | node `steps` is an array; may be empty for a draft node |
 | `steps-empty` | a `confirmed` or `written` node has at least one step |
-| `step-entry` | every step entry has `id`, `title`, `purpose`, and `sources` |
+| `node-digests-array` | node `digests` is a list of digest filenames |
+| `node-digests-format` | every entry is a bare `<digest>.md` filename, not a path or line range |
+| `node-digests-duplicate` | a digest is declared at most once |
+| `node-digest-unknown` | every declared filename exists in `digests/` |
+| `node-digest-status` | every declared digest is `absorbed` (a `pending` or `skipped` digest may not be declared) |
+| `node-digest-undeclared` | every digest covering a step's `sources` is declared on that node |
+| `node-digest-unused` | on a `confirmed`/`written` node, every declared digest is cited by at least one step (draft nodes are exempt) |
+| `step-entry` | every step entry has `id`, `purpose`, and `sources`; `title` is optional, and non-empty when present |
 | `step-purpose` | `purpose` is a single line of one short sentence (≤ 120 characters, no second sentence) |
 | `steps-flat` | step entries declare no `deps`, `type`, or `order` |
 | `steps-duplicate` | step ids are unique within a node |
@@ -54,8 +61,9 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 |---|---|
 | `step-article-missing` | every step entry has `nodes/<node>/<step>.md` |
 | `step-orphan` | every article in the node folder has a step entry |
-| `step-h1` | the article's first non-empty line is exactly `# <step title>` |
-| `node-steps-list` | `## Steps` exists when the node has steps; titles, ids, and order match frontmatter |
+| `step-h1` | when the entry has `title`, the article's first non-empty line is exactly `# <title>` |
+| `step-title-missing` | an article with a body has its title written back to the step entry |
+| `node-steps-list` | `## Steps` exists when the node has steps; each label is the step title when published, otherwise the id; ids and order match frontmatter |
 | `node-step-link` | every `## Steps` link resolves relative to the node file |
 
 `<!--image:N-->` is an HTML comment, not an image line. `verify` never requires a marker to have a matching file, so an article that still carries markers and no figures passes. For rendered `![...](./<step>-assets/image-N.webp)` lines it checks that the file exists, is a valid WebP, and lives under the step's asset folder, and it flags unreferenced files under `*-assets/` as orphans.
@@ -73,13 +81,21 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `src-digest-missing` | the source has a digest |
 | `src-digest-range` | the citation is covered by the digest's L2 line map |
 | `digest-fm` | digest frontmatter has `source, source_type, source_lines, status` |
-| `digest-status` | digest `status` is `pending` / `absorbed` |
+| `digest-status` | digest `status` is `pending` / `absorbed` / `skipped` |
+| `digest-skip-reason` | a `skipped` digest has a non-empty `skip_reason` |
+| `digest-unreferenced` | an `absorbed` digest is declared by at least one node, unless it is a supplement (whole-subject checks only) |
+| `digest-pending` | no digest is left `pending` (whole-subject checks only) |
 | `digest-source` | digest `source` exists under `sources/<subject>/` |
 | `digest-source-pdf` | digest `source` is the extracted `.txt`, never a PDF |
 | `digest-source-lines` | `source_lines` equals the actual `.txt` line count (single-file digests); directory sources only bound the ranges |
 | `digest-range` | every L2 range is `1 ≤ start ≤ end`, and ends within the actual lines or declared `source_lines` |
 | `digest-l2-empty` | the digest has an L2 line map (image digests excepted) |
 | `digest-locator` | any source link inside a digest uses `#Lx-Ly`, not a slug |
+| `digest-supplements` | `supplements` is a list declared only by a `text` digest, with non-empty non-self `<digest>.md#L1` / `#Lx-Ly` entries |
+| `digest-supplement-missing` | every `supplements` entry names a digest in the same folder |
+| `digest-supplement-type` | every `supplements` target is a `codebase` or `image` digest; an image only takes `#L1` |
+| `digest-supplement-range` | a supplement's `#Lx-Ly` falls inside the target codebase digest's L2 line map |
+| `digest-supplement-status` | a supplement of a `skipped` digest is itself `skipped` |
 
 ### Code, links, and flags
 
@@ -113,6 +129,9 @@ The check set stays deterministic so it rarely misfires:
 - Line counts use newline characters, matching `wc -l`.
 - Digest coverage is the union of L2 ranges, so adjacent ranges may jointly cover a citation.
 - Codebase digests may cover citations by directory prefix.
+- An absorbed codebase/image supplement needs no node of its own: it rides on its text digest, and is declared only when a step cites its files.
+- A `draft` node may declare digests before any step exists, so `node-digest-unused` only applies to `confirmed`/`written` nodes.
+- Whole-subject-only rules (`digest-unreferenced`, `digest-pending`) stay out of `--node` so one node's gate never fails on another node's or a new ingest's digests.
 - Fenced code and inline code are stripped before link checking.
 - `.DS_Store` and hidden files are ignored.
 

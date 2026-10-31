@@ -6,6 +6,11 @@ tier: 2
 order: 4
 status: written
 goal: "說明事件如何先落 Postgres 再廣播，並用 seq 與 replay 重建斷線後的時間軸。"
+digests:
+  - 11-connecting-dbos-to-the-server.md
+  - 12-durable-execution-recap.md
+  - 6-stream-messages-to-the-ui.md
+  - 8-implementing-durable-execution.md
 prerequisites: []
 steps:
   - id: events-cannot-live-in-memory

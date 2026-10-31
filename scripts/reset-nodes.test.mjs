@@ -139,9 +139,12 @@ test("reset keeps the node container, restores skeletons, and clears generated c
   assert.match(container, /steps:/);
   assert.match(container, /Explain the first thing\./);
   assert.match(container, /## Steps/);
+  assert.equal(/^\s+title:/m.test(container), false);
+  assert.match(container, /1\. \[one\]\(alpha\/one\.md\)/);
+  assert.match(container, /2\. \[two\]\(alpha\/two\.md\)/);
 
-  assert.equal(readFileSync(join(root, "learn/demo/nodes/alpha/one.md"), "utf8"), "# First step\n");
-  assert.equal(readFileSync(join(root, "learn/demo/nodes/alpha/two.md"), "utf8"), "# Second step\n");
+  assert.equal(readFileSync(join(root, "learn/demo/nodes/alpha/one.md"), "utf8"), "");
+  assert.equal(readFileSync(join(root, "learn/demo/nodes/alpha/two.md"), "utf8"), "");
   assert.equal(existsSync(join(root, "learn/demo/nodes/alpha/one-assets")), false);
   assert.equal(existsSync(join(root, "learn/demo/nodes/alpha/orphan.md")), false);
   assert.equal(existsSync(join(root, "learn/demo/output/quiz-candidates/alpha")), false);
@@ -207,5 +210,5 @@ test("the CLI resets a subject with --all", (t) => {
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /alpha: written → confirmed/);
   assert.match(run.stdout, /beta: skipped \(draft, no steps\)/);
-  assert.match(readFileSync(join(root, "learn/demo/nodes/alpha/one.md"), "utf8"), /^# First step\n$/);
+  assert.equal(readFileSync(join(root, "learn/demo/nodes/alpha/one.md"), "utf8"), "");
 });

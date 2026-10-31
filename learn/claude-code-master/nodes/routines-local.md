@@ -6,6 +6,8 @@ tier: 5
 order: 9
 status: draft
 goal: "能建一條 local routine（排程自寄 prompt ＋ 塞進 skill），檢查第一次跑並用白話優化它。"
+digests:
+  - volume-d-routines.md
 prerequisites: []
 steps: []
 created: 2026-10-28

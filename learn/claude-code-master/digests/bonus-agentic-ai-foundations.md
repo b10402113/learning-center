@@ -2,8 +2,8 @@
 source: sources/claude-code-master/20261028/2-🎁 BONUS- Agentic AI Foundations
 source_type: text
 source_lines: 1
-status: absorbed
-absorbed_at: 2026-10-28
+status: skipped
+skip_reason: "not taught by any current node"
 created: 2026-10-28
 updated: 2026-10-28
 ---

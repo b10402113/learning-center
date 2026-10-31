@@ -6,6 +6,11 @@ tier: 2
 order: 3
 status: written
 goal: "區分 tool schema 與執行，說明為什麼 execute 必須由 harness 掌控。"
+digests:
+  - 3-agent-tools-setup.md
+  - 4-classify-reply-tools.md
+  - 6-stream-messages-to-the-ui.md
+  - 9-durable-tools.md
 prerequisites: []
 steps:
   - id: anatomy-of-a-tool

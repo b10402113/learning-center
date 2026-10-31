@@ -1,6 +1,6 @@
 # Source Reading Protocol
 
-Shared contract for how `learn-init`, `ingest`, `absorb`, `roadmap`, `nodes`, `article`, and `edges` read source material. The goal: raw text never enters the main context wholesale. Sources are read once, condensed into **digests**, and the digests are reused across stages; `article` pulls only the line ranges a step cites.
+Shared contract for how `learn-init`, `ingest`, `absorb`, `roadmap`, `nodes`, `article`, and `edges` read source material. The goal: raw text never enters the main context wholesale. Sources are read once, condensed into **digests**, and the digests are reused across stages; `article` records only the line ranges a step cites, and its publisher reads each cited source file in full.
 
 ## When to use a sub-agent
 
@@ -19,7 +19,7 @@ A source is **large** when it exceeds either bound:
   - **L1 — overview**: a few lines per chapter (PDF) or per module (codebase). Enough for `learn-init` grilling and `roadmap` partitioning without loading detail.
   - **L2 — line map**: one entry per section (PDF/text) or per module (codebase), each naming the exact `#Lstart-Lend` range and a one-line description. This is the discovery map `nodes` and `article` use to pick the lines worth reading. There are no slug locators.
 - Every source gets a digest, large or small (parts included). `nodes` reads digests only — never raw sources.
-- Frontmatter records `source` (the extracted text file for PDFs), `source_type`, `source_lines` (the actual `.txt` line count, matching `wc -l`), and `status` (`pending` | `absorbed`).
+- Frontmatter records `source` (the extracted text file for PDFs), `source_type`, `source_lines` (the actual `.txt` line count, matching `wc -l`), and `status` (`pending` | `absorbed`). A `text` digest may also carry `supplements` — sibling `codebase` or `image` digests that supply the code or figures this text refers to (see below).
 
 ### PDF text extraction
 
@@ -38,8 +38,12 @@ The command is idempotent: an existing `.txt` is never overwritten, so line numb
 source: sources/<subject>/<YYYYMMDD>/<file>.txt
 source_type: text
 source_lines: <wc -l of the .txt>
-status: pending | absorbed
+status: pending | absorbed | skipped
 absorbed_at: YYYY-MM-DD # set when consumed by /roadmap or /absorb
+skip_reason: "<why it is not taught>" # required when status is skipped
+supplements: # optional; a supplement digest plus the L1 or L2 entry to use
+  - <dir-stem>.md#Lx-Ly
+  - <image-stem>.md#L1
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
@@ -69,8 +73,9 @@ source_lines: <wc -l for this directory>
 language: <primary language by file count>
 file_count: <code files in this directory>
 part: <n> # parts only; omit for single-file digests
-status: pending | absorbed
+status: pending | absorbed | skipped
 absorbed_at: YYYY-MM-DD
+skip_reason: "<why it is not taught>" # required when status is skipped
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
@@ -84,6 +89,18 @@ updated: YYYY-MM-DD
 - `#L1-L40` — <module path> — <purpose, key exports, learner-relevant concept>
 - `#L41-L88` — <module path> — <purpose, key exports, learner-relevant concept>
 ```
+
+### Supplementing text with code and images
+
+A book chapter or article rarely stands alone: the same batch often ships a codebase or a set of screenshots that the prose names. A `text` digest links those siblings through its `supplements` list:
+
+- Each entry names a digest in the same `digests/` folder plus the entry to use: `<digest>.md#L1` for the digest's L1 overview, or `<digest>.md#Lx-Ly` for one of its L2 entries. A bare filename is invalid — the pointer must say which part of the supplement matters.
+- Only a `codebase` digest has L2 ranges, so an L2 entry must match one of the target's L2 ranges (`server.md#L41-L88`). An `image` digest has no line ranges and is referenced by `#L1`.
+- Only `text` digests declare `supplements`; the target must be a `codebase` or `image` digest, and a digest cannot supplement itself.
+- A text digest without related code or figures omits the field — the list is additive, never a requirement.
+- Build order: every `codebase` and `image` digest is written before the text digests that name it. A text digest never points at a supplement that does not exist yet.
+
+Downstream, `nodes` and `article` treat a supplement as part of the text source's material: the text's L2 map still locates the prose, and the named supplement entry locates the code or figures. Because a codebase digest's `source` is a directory, a citation can point at any file inside it (`[[sources/<subject>/<YYYYMMDD>/<dir>/<file>#Lx-Ly]]`) and resolves against the directory digest's line map.
 
 ## Sub-agent workflow (large sources)
 
@@ -133,7 +150,7 @@ Existing per-file digests remain untouched. This batch-aware grouping applies on
 
 ### Lint considerations
 
-When validating digests, the linter checks frontmatter, that `source` exists and is not a PDF, that `source_lines` matches the `.txt`, and that every L2 entry uses `#Lx-Ly`. It does not enforce the batch-aware clustering constraints.
+When validating digests, the linter checks frontmatter, that `source` exists and is not a PDF, that `source_lines` matches the `.txt`, that every L2 entry uses `#Lx-Ly`, and that every `supplements` entry names a sibling `codebase` or `image` digest. It does not enforce the batch-aware clustering constraints.
 
 ## Digest lifecycle
 

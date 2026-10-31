@@ -6,6 +6,8 @@ tier: 3
 order: 5
 status: written
 goal: "能寫出第一個 skill，並用「兩次法則」把重複的 prompt 或一整段 session 存成可重用的 skill。"
+digests:
+  - volume-b-skills.md
 prerequisites: []
 steps:
   - id: skill-is-a-recipe-card

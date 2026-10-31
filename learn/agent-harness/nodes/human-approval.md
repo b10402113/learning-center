@@ -6,6 +6,8 @@ tier: 3
 order: 10
 status: draft
 goal: "用 DBOS recv/send 讓 workflow 停在審批點，重啟後仍能續行。"
+digests:
+  - 25-human-in-the-loop.md
 prerequisites: []
 steps: []
 created: 2026-10-24

@@ -4,8 +4,12 @@ title: "Human-in-the-loop：inbox 與 approval"
 subject: background-agents
 tier: 2
 order: 6
-status: written
+status: confirmed
 goal: "說出 inbox 為何是背景 agent 的介面、proposal 持久化 → correlated wait → 重讀 → 重驗 → 執行，以及 approval 是 harness 的確定性邏輯（不讓 agent 知道）。"
+digests:
+  - 20-hitl-human-in-the-loop.md
+  - 21-building-the-approval-flow.md
+  - 22-testing-hitl.md
 prerequisites: []
 steps:
   - id: inbox-not-chat
@@ -28,7 +32,7 @@ steps:
       - "[[sources/background-agents/20261027/21-building-the-approval-flow.md#L126-L156]]"
       - "[[sources/background-agents/20261027/22-testing-hitl.md#L1-L46]]"
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-10-31
 ---
 
 # Human-in-the-loop：inbox 與 approval
