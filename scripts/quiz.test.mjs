@@ -69,7 +69,7 @@ function questions() {
   return [
     {
       question: "為什麼狀態不能只放在 process 記憶體？",
-      options: ["因為 crash 後會消失", "因為模型太慢", "因為工具太少"],
+      options: ["因為 crash 後會消失", "因為模型跑得太慢", "因為工具數量太少"],
       answer: 0,
       explain: "crash 之後記憶體裡的狀態會消失。",
     },
@@ -81,8 +81,8 @@ function questions() {
     },
     {
       question: "工具直接產生副作用會有什麼風險？",
-      options: ["重試可能重複扣款", "模型會變快", "context 會變短"],
-      answer: 0,
+      options: ["模型會變快", "context 會變短", "重試可能重複扣款"],
+      answer: 2,
       explain: "重試時可能把同一個副作用再做一次。",
     },
   ];
@@ -191,6 +191,38 @@ test("write accepts a fenced JSON reply", (t) => {
   assert.equal(result.status, "written");
 });
 
+test("write rejects options whose length points at the correct answer", (t) => {
+  const root = fixture(t);
+  const input = join(root, "candidate.json");
+  const skewed = questions();
+  skewed[0] = {
+    ...skewed[0],
+    options: [
+      "因為 crash 之後 process 記憶體裡的狀態會全部消失",
+      "因為模型太慢",
+      "因為工具太少",
+    ],
+  };
+  writeFileSync(input, candidate(skewed));
+
+  const result = write({ ...options(root), input });
+  assert.equal(result.status, "failed");
+  assert.ok(result.errors.some((error) => error.checkId === "quiz-option-length"));
+  assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1.quiz.json")), false);
+});
+
+test("write rejects a quiz that parks every correct answer on one position", (t) => {
+  const root = fixture(t);
+  const input = join(root, "candidate.json");
+  const parked = questions().map((question) => ({ ...question, answer: 0 }));
+  writeFileSync(input, candidate(parked));
+
+  const result = write({ ...options(root), input });
+  assert.equal(result.status, "failed");
+  assert.ok(result.errors.some((error) => error.checkId === "quiz-answer-spread"));
+  assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1.quiz.json")), false);
+});
+
 test("write strips inline backticks because quiz cards render plain text", (t) => {
   const root = fixture(t);
   const input = join(root, "candidate.json");
@@ -198,7 +230,7 @@ test("write strips inline backticks because quiz cards render plain text", (t) =
   marked[0] = {
     ...marked[0],
     question: "為什麽 `messages` 不能只放在記憶體？",
-    options: ["因為 `crash` 後會消失", "因為模型太慢", "因為工具太少"],
+    options: ["因為 `crash` 後會消失", "因為模型跑得太慢", "因為工具數量太少"],
     explain: "`crash` 之後記憶體裡的狀態會消失。",
   };
   writeFileSync(input, candidate(marked));

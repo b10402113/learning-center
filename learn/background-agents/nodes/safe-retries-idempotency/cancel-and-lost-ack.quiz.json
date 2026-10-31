@@ -2,48 +2,37 @@
   "quiz-generated": true,
   "questions": [
     {
-      "question": "系統偵測到某個 run ID 已經被使用，於是送出 agent/run.canceled，其 payload 的 data.runId 與即將啟動的 run ID 相同。帶有這個 cancelOn 條件的 workflow 啟動時會怎麼做？",
+      "question": "同一個 run ID 被啟動兩次，會造成什麼後果？",
       "options": [
-        "直接取消執行，連第一步都不會踏出去",
-        "先讓新 run 跑完，之後再回頭收拾狀態衝突",
-        "讓新 run 接手並覆寫舊 run 寫入的 state",
-        "照常執行，但在回應時附上 409 提醒呼叫端"
+        "runtime 會自動把兩個 run 合併成一個",
+        "兩個 workflow 同時執行並操作同一份 state，形成 race condition",
+        "第一個 run 會自動被取消，只留下第二個",
+        "key 與 version 會失效，服務一律回 409"
+      ],
+      "answer": 1,
+      "explain": "文章說同一個 run ID 被啟動兩次，就會有兩個 workflow 同時執行並操作同一份 state，各自觀察、各自判斷，可能得出不同結論並互相覆寫，這就是 race condition。"
+    },
+    {
+      "question": "cancelOn 的檢查在什麼時機執行，防範的是哪一種情況？",
+      "options": [
+        "在 workflow 開始之前，防止第二個 run 加入",
+        "在每個 step 之前，防止同一個 step 重跑",
+        "在 mutation 之後，防止重複寫入 state",
+        "在 commit 之後，防止 ack 遺失"
       ],
       "answer": 0,
-      "explain": "文章說 cancelOn 的條件很窄：收到 agent/run.canceled 且 data.runId 與準備啟動的 run ID 相同時，就取消執行，連第一步都不要踏出去，因為與其讓第二個 run 跑起來再收拾後果，不如一開始就擋住它。"
+      "explain": "文章說條件符合時會取消這次啟動，讓 workflow 根本不會開始執行；這項檢查在 workflow 開始之前執行，防止的是第二個 run 加入，而不是第二個 step 重跑。"
     },
     {
-      "question": "在 lost-ack 的示範中，服務回傳 503 之後，呼叫端為什麼不能把這個 503 當成「操作沒有成功」？",
+      "question": "服務回傳 503，但 GET /state 顯示 release 已經是 v1-stable、版本也增加了。這代表什麼？",
       "options": [
-        "因為 503 只代表網路斷線，伺服器其實還沒收到請求",
-        "因為 outcomes.set、state 更新與 change 記錄都發生在回傳 503 之前，動作已經生效",
-        "因為服務會在回傳 503 的同時自動取消先前寫入的 state",
-        "因為 503 是刻意回傳的錯誤碼，代表 fingerprint 對不上"
+        "rollback 沒有發生，state 顯示的其實是舊資料",
+        "effect 已經 commit 但 ack 遺失；重試同一個 action ID 會回放結果，不會再次修改 state",
+        "必須換一個新的 action ID 重新執行 rollback",
+        "outcomes 沒有寫入，所以服務會再執行一次 mutation"
       ],
       "answer": 1,
-      "explain": "文章強調執行順序：outcomes.set 在前、503 在後，state 已更新、change 記錄已寫入、結果也存進 outcomes，全都發生在服務回傳錯誤之前。ack 是回音，effect 才是已經發生的事。"
-    },
-    {
-      "question": "呼叫端收到 503 後重新送出同一個 action ID，但這次把參數換掉了。服務會怎麼回應？",
-      "options": [
-        "直接回傳第一次執行留下的 prior.result，視為同一次操作",
-        "重新執行一次動作，並以新參數覆蓋舊結果",
-        "回傳 409，因為 fingerprint 對不上，代表這已經不是同一次操作",
-        "忽略這個請求，直到呼叫端改回原本的參數為止"
-      ],
-      "answer": 2,
-      "explain": "文章指出，如果同一個 action ID 改用了不同參數，fingerprint 就會對不上，服務會回傳 409，因為那已經不是同一次操作，不能直接拿舊結果帶過。"
-    },
-    {
-      "question": "依照文章對兩道防線分工的說明，要讓重試真正安全，除了重試機制本身之外還必須確定哪兩件事？",
-      "options": [
-        "先確定回應時間夠短，再確定錯誤碼分類正確",
-        "先確定沒有第二個 run 搶同一份 state，再確定伺服器認得出重試是同一個動作",
-        "先確定 state 備份完成，再確定 change 記錄已經清除",
-        "先確定 cancelOn 已停用，再確定 outcomes 表已經清空"
-      ],
-      "answer": 1,
-      "explain": "文章結尾說，光有重試還不夠：得先確定沒有第二個 run 搶同一份 state，再確定重試送到的伺服器認得出這是同一個動作；前者靠 cancelOn，後者靠 outcomes 表。"
+      "explain": "文章說這就是 lost-ack：effect 已經 commit 但 ack 遺失，呼叫端看到失敗、實際上操作已成功；再次送出相同 action ID 時，outcomes 已有記錄且 fingerprint 相同，服務會回放先前結果，不會再修改 state 或新增 change。"
     }
   ]
 }

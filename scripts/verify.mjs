@@ -23,7 +23,7 @@ const NODE_FM = [
   "created",
   "updated",
 ];
-const STEP_ENTRY_KEYS = ["id", "title", "purpose", "sources"];
+const STEP_ENTRY_KEYS = ["id", "purpose", "sources"];
 const FORBIDDEN_STEP_KEYS = ["deps", "type", "order"];
 const DERIVED_COMMENT = /^<!--\s*derived\s*-->$/;
 const SOURCE_COMMENT = /^<!--\s*source:\s*sources\/.+#L\d+(?:-L\d+)?\s*-->$/;
@@ -676,6 +676,11 @@ function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nod
         report.fail(file, 1, "step-entry", `steps[${index}] missing "${key}"`);
       }
     }
+    if (entry.title !== undefined && entry.title !== null && entry.title !== "") {
+      if (typeof entry.title !== "string" || !entry.title.trim()) {
+        report.fail(file, 1, "step-entry", `steps[${index}].title must be a non-empty string when present`);
+      }
+    }
     for (const key of FORBIDDEN_STEP_KEYS) {
       if (entry[key] !== undefined) {
         report.fail(file, 1, "steps-flat", `steps[${index}] must not declare "${key}"`);
@@ -736,8 +741,8 @@ function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nod
     for (const [index, item] of items.entries()) {
       const entry = expected[index];
       if (!entry) continue;
-      if (item.title !== entry.title) {
-        report.fail(file, 0, "node-steps-list", `## Steps[${index}] title "${item.title}" != "${entry.title}"`);
+      if (item.title !== (entry.title || entry.id)) {
+        report.fail(file, 0, "node-steps-list", `## Steps[${index}] title "${item.title}" != "${entry.title || entry.id}"`);
       }
       const targetPath = resolve(dirname(node.path), item.target.split("#")[0]);
       const expectedPath = resolve(scan.nodesDir, node.id, `${entry.id}.md`);
@@ -965,9 +970,21 @@ function checkArticle(report, root, entry, step) {
 
   if (entry) {
     const first = body.split("\n").find((line) => line.trim() !== "");
-    const expected = `# ${entry.title}`;
-    if (!first || first.trim() !== expected) {
-      report.fail(file, 1, "step-h1", `first heading must be "${expected}"`);
+    if (entry.title) {
+      const expected = `# ${entry.title}`;
+      if (!first || first.trim() !== expected) {
+        report.fail(file, 1, "step-h1", `first heading must be "${expected}"`);
+      }
+    } else {
+      const withoutH1 = body.replace(/^\s*#\s+[^\n]*\n?/, "").trim();
+      if (withoutH1) {
+        report.fail(
+          file,
+          1,
+          "step-title-missing",
+          `article has a body but steps[].title is missing; the publisher must write the H1 back to the node`,
+        );
+      }
     }
   }
 

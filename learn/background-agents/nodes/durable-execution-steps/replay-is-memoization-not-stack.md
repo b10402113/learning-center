@@ -1,39 +1,39 @@
-# resume 的真相：memoize 結果，不是重播 JS stack
+# Resume 不是重播 JavaScript 的 stack
 
-上一篇把 loop 拆成 step，為的就是斷掉之後能接回來。接下來要問的是：那個「接回來」實際上怎麼運作？
+上一篇最後留下一個問題：resume 在走過那些已經完成的 step 時，究竟讀的是什麼？
 
-你寫了多年 JavaScript，第一次聽到「resume」時，腦中大概會浮現這個畫面：
+這件事我得講清楚，因為我遇過一個對 JavaScript 非常熟悉的人，那是他第一次接觸 durable execution。我一說「resume」，他想到的就是把執行 stack 接回去。
 
-runtime 把執行到一半的 stack、變數和 context 全部存起來，之後再原封不動地接著跑。
+## 為什麼會先想到重播 stack
 
-這樣想很合理，因為在 JavaScript 裡，這是最直覺的「接回去」方式。
+如果你寫 JavaScript，這種直覺很自然。程式停在某個 await，你可能會想：runtime 是不是把那一刻的狀態存起來，之後再從那裡接著執行？
 
-但 durable execution 裡的 resume 不是這個意思，沒有那麼深，也沒有那麼複雜。
+要讓這種做法成立，就得儲存很多東西：每個 stack frame、每個 local 變數、每個 closure 裡的內容，還有每個 await 停下來的位置。你得讓一個 process 死掉之後，另一個 process 能從完全相同的中間狀態恢復。
 
-![第 1 段配圖](./replay-is-memoization-not-stack-assets/image-1.webp)
+實際上不是這樣。它沒那麼深入，也沒那麼複雜。
 
-真正的做法字面上就是這樣：每一個 step 都會被 memoized。
+## 真正被存下來的東西
 
-memoize 就是先把某個 function 的結果記下來。下次遇到相同的輸入，直接回傳記下來的結果，不必重算。
+每個 step 的結果都會被 memoize，而你也看得到這些結果。如果某個 step 已經有記錄，就不必再執行一次。就這麼簡單。
 
-在這裡，每個 step 執行完，系統就記下它的結果。之後再遇到同一個 step，有記錄就直接用，不用再跑一次。
+所以，resume 做的事比接回 stack 樸素得多。workflow function 會從頭再跑一次，程式沿著同一份程式碼往下走。遇到已經完成的 step，就不再執行，而是直接把記錄下來的結果當作回傳值。遇到還沒有記錄的 step，才會真正執行。
 
-就這樣。
+<!--image:1-->
 
-![第 2 段配圖](./replay-is-memoization-not-stack-assets/image-2.webp)
+接著程式繼續往下走。前面 step 的結果都已經備妥，所以後續程式碼拿到的東西會和第一次執行時一樣。
 
-那麼，「重播」為什麼可靠？
+這裡不存在什麼「從 stack 中間醒過來」的狀態。只有一份 step 結果紀錄，以及一段依序往下執行的程式碼。
 
-關鍵在於 workflow 必須是 deterministic（具確定性）：同樣的輸入永遠得到同樣的輸出，不會因為當下的時間、亂數，或某個會變動的狀態而改變。
+## 順序才是撐住這一切的關鍵
 
-workflow 既然是 deterministic，這些 step 就會照同樣的順序執行。
+這裡有個前提：workflow 必須是 deterministic 的。因為結果是 deterministic 的，step 每次都會按照相同的順序執行。因此，帶著一些已完成的 step 重播時，你總能拿到相同的結果。
 
-![第 3 段配圖](./replay-is-memoization-not-stack-assets/image-3.webp)
+<!--image:2-->
 
-所以，帶著幾個已經完成的 step 去重播，最後拿到的還是同一個結果。重播幾次都一樣。
+順序一旦改變，整套機制就會失靈。假設第二次執行時，程式走了不同的分支。這時走到的 step，就可能和手上的記錄對不上：該跳過的地方沒有跳過，該執行的 step 卻被跳過了。這樣一來，重播就不再是重播。
 
-這也是 workflow 必須 deterministic 的原因：它不能建立在會動態變化的東西上。
+這也是為什麼 workflow 不能依賴會動態變化的因素。
 
-說到底，這跟 JavaScript 的 stack 無關，也不是 runtime 在背後玩了什麼花樣。
+說到底，這和 JavaScript stack 無關，也不是我們在背後做了什麼聰明的操作。它其實很普通：把 function 的結果 memoize 起來，然後重播。
 
-它做的事很單純：把每個 function 的結果 memoize 起來，再依序重播。
+接下來的問題是：要讓 replay 成立，step 外面的程式碼每次都得做出相同的選擇。這是對 workflow 程式碼的要求，不是 runtime 的事。

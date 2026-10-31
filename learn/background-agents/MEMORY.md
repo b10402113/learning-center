@@ -1,6 +1,6 @@
 ---
 subject: background-agents
-language: en
+language: zh-hant
 created: 2026-10-27
 updated: 2026-10-27
 ---

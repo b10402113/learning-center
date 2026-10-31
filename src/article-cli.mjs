@@ -77,7 +77,7 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     if (!force && hasArticleBody(existing)) {
       skipped.push({
         id: entry.id,
-        title: entry.title,
+        title: entry.title ?? entry.id,
         purpose: entry.purpose,
         status: "skipped",
         path: shown,
@@ -95,7 +95,7 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     const index = order.indexOf(entry.id);
     steps.push({
       id: entry.id,
-      title: entry.title,
+      title: entry.title ?? null,
       purpose: entry.purpose,
       status: "ready",
       index: index + 1,
@@ -104,6 +104,7 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
       original: resolve(root, files.original),
       plan: resolve(root, files.plan),
       command: `node "${resolve(root, "scripts/run-article-agent.mjs")}" --root "${resolve(root)}" --subject ${subject} --node ${nodeId} --step ${entry.id} --mode ${mode} --markers-only`,
+      titleCommand: `node "${resolve(root, "scripts/set-step-title.mjs")}" --root "${resolve(root)}" --subject ${subject} --node ${nodeId} --step ${entry.id} --from "${resolve(root, files.original)}"`,
     });
   }
   const skippedIds = new Set(skipped.map((entry) => entry.id));
@@ -170,7 +171,7 @@ function createDeps(root) {
       const system = readFileSync(join(root, "prompts", "image-plan.txt"), "utf8");
       return chat(
         system,
-        JSON.stringify({ title: step.title, count, article }, null, 2),
+        JSON.stringify({ title: step.title ?? step.id, count, article }, null, 2),
       );
     },
     generateImage: ({ prompt }) =>

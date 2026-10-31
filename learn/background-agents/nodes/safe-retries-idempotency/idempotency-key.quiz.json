@@ -2,48 +2,37 @@
   "quiz-generated": true,
   "questions": [
     {
-      "question": "如果服務只比對 idempotency key、查到就回「這個 ID 我做過了」並直接回傳先前結果，卻不比對參數，文章說會出現什麼問題？",
+      "question": "服務為什麼不能只檢查 action ID，還要另外計算 fingerprint？",
       "options": [
-        "第一次是 disable_feature，第二次卻用同一個 actionId 送 rollback_release，服務會回傳 disable_feature 的結果，你以為成功，其實版本根本沒退回去",
-        "服務會把兩個操作都執行一次，導致 changes 清單出現兩筆紀錄",
-        "服務會回傳 400，因為兩次請求的參數格式不同",
-        "actionId 會被自動作廢，之後所有重試都會被拒絕"
+        "因為 action ID 只是一個字串，同一個 ID 可能對應完全不同的工作",
+        "因為 fingerprint 可以加快資料庫查詢速度",
+        "因為 fingerprint 用來加密 action ID，避免外洩",
+        "因為 fingerprint 會決定 expectedVersion 的預設值"
       ],
       "answer": 0,
-      "explain": "文章指出，只比對 key 時服務可能回傳 disable_feature 的結果，但這次問的是 rollback，於是操作看似成功、版本卻沒有退回去。"
+      "explain": "文章指出 action ID 只是一個字串，同一個 ID 可能對應完全不同的工作；只檢查 ID 就可能把 rollback 的結果回傳給 disable 請求，因此要比對 fingerprint。"
     },
     {
-      "question": "依照文章的設計，服務用 fingerprint 代表「這次請求的參數」，哪些欄位會被放進去？",
+      "question": "同一個 actionId，第一次送出 rollback_release，第二次送出 disable_feature，服務會怎麼回應？",
       "options": [
-        "actionId 與 name",
-        "name 與 expectedVersion",
-        "actionId、name 與 expectedVersion 全部欄位",
-        "整個 request 原封不動存起來"
+        "回放第一次 rollback 的結果",
+        "回傳 409，且這次 mutation 不會執行",
+        "執行 disable_feature 並覆寫先前儲存的結果",
+        "回傳 200，同時執行兩個動作"
       ],
       "answer": 1,
-      "explain": "文章說 actionId 不放進 fingerprint，因為它本來就是查表用的 key；name 和 expectedVersion 要放進去，因為換掉任一個就代表另一個效果。"
+      "explain": "兩次送的 name 不同，fingerprint 就不同，服務會回傳 409，訊息是 Action ID reused with different arguments，且這次 mutation 不會執行。"
     },
     {
-      "question": "為什麼 stale 版本檢查必須排在查到 prior 之後，而不能移到前面？",
+      "question": "程式中 outcomes.set 位於 mutation 之後、回傳之前。這個順序保證了什麼？",
       "options": [
-        "因為版本檢查比較耗時，放在後面可以加快第一次請求的回應",
-        "因為 prior 存在代表決定已經完成，而重播時版本可能早就變了，先檢查會把原本成功過的操作誤判成 stale",
-        "因為 fingerprint 只有查到 prior 之後才算得出來",
-        "因為先檢查版本會讓同一個 key 被允許搭配不同參數"
+        "只要服務能回放結果，就表示這次 mutation 確實執行過，而且結果已經儲存",
+        "mutation 在任何情況下都不會重複執行",
+        "呼叫端永遠不會收到 409",
+        "兩次呼叫的 fingerprint 一定相同"
       ],
-      "answer": 1,
-      "explain": "文章說順序換過來就會出錯：prior 存在代表決定已完成，重播時版本可能早就變了，先檢查版本會把原本成功過的操作誤判成 stale，所以版本檢查只留給真正第一次送進來的請求。"
-    },
-    {
-      "question": "文章建議「同一個 run 永遠使用同一個 key」，不該每次重試都重新產生一個 UUID，主要理由是什麼？",
-      "options": [
-        "重新產生 UUID 會讓 fingerprint 算不出來，服務就無法查表",
-        "重新產生 UUID 會讓服務一直回傳 409 語意衝突",
-        "每次換新 key 等於每次都在宣告一件新事，effect owner 就認不出這是同一件事",
-        "UUID 比 actionId 長，會讓紀錄表佔用過多空間"
-      ],
-      "answer": 2,
-      "explain": "文章說每次重試都重新產生 UUID 等於每次都在宣告一件新事；只有 key 保持穩定，effect owner 才能認出這是同一件事。"
+      "answer": 0,
+      "explain": "文章說 outcomes.set 位於 mutation 之後、回傳之前，因此服務能回放結果，就表示這次 mutation 確實執行過，而且結果也已經儲存。"
     }
   ]
 }

@@ -2,48 +2,48 @@
   "quiz-generated": true,
   "questions": [
     {
-      "question": "作者用什麼問題來判斷某件事需不需要 checkpoint？",
+      "question": "為什麼 getRun 留在 workflow 而沒有放進 step？",
       "options": [
-        "哪些操作最花時間、最值得加速",
-        "哪些呼叫最常失敗、最需要重試",
-        "如果 server 掛掉，哪些事情是我不想再做一次的",
-        "哪些程式碼最長、最值得拆成獨立函式"
-      ],
-      "answer": 2,
-      "explain": "文章把判斷方式寫成一句話：如果 server 掛掉，哪些事情是我不想再做一次的。不想重做的事情才需要 checkpoint，重做也無所謂的事情則不一定需要。"
-    },
-    {
-      "question": "作者刻意不把取得目前 run 的 getRun 放進 step，主要理由是為什麼？",
-      "options": [
-        "他希望每次都拿到最新的 run，不希望結果被 memoize 成快取",
-        "getRun 會產生副作用，重跑會弄髒資料",
-        "getRun 必須在取得 state 之前執行，順序不能更動",
-        "放進 step 會讓後續的 workflow 無法 resume"
+        "不希望它被 memoize，每一圈都要拿到 run 最新的狀態。",
+        "因為 getRun 是非同步呼叫，而非同步呼叫不能放進 step。",
+        "因為 getRun 會寫入資料，放進 step 會在重播時執行兩次。",
+        "因為 step 的 callback 只能回傳 agentState。"
       ],
       "answer": 0,
-      "explain": "文章說他希望每次拿到的都是最新 run，而不是讀取快取，既然不希望結果被快取，就把它留在 workflow 裡。文中也承認 getRun 其實放進 step 也可以，兩種方式差異不大。"
+      "explain": "文章說不希望 getRun 被 memoized，永遠想取得最新的 run，所以它留在 workflow 裡，每一圈都重新讀取。"
     },
     {
-      "question": "為什麼終止狀態的檢查要放在每一圈的開頭，而不是只在 workflow 開始時檢查一次？",
+      "question": "為什麼每一圈都要重新檢查 run 是否處於終止狀態？",
       "options": [
-        "因為查詢 run 狀態會產生副作用，只能每一圈重做",
-        "因為這個判斷一旦被 memoize，resume 之後就讀不到",
-        "因為 agent 做完動作後 run 的狀態可能變成 completed，需要每一圈重新確認",
-        "因為每一圈都會重新建立新的 run，舊的狀態不再有效"
+        "第一次進入時這個判斷必定是 false，但 agent 做完一個動作後 run 可能變成 completed，下一圈需要再確認。",
+        "因為 getRun 的結果會被快取，只能靠狀態檢查來更新。",
+        "因為 step 失敗後 retry policy 會跳過狀態檢查。",
+        "因為 goal 只能在第一圈檢查一次。"
       ],
-      "answer": 2,
-      "explain": "文章指出 agent 做完一個動作、發生某件事之後，run 的狀態可能變成 completed，所以下一圈開始時必須再次檢查；若只檢查一次，後面就不再理會狀態變化。"
+      "answer": 0,
+      "explain": "文章說第一次進入時判斷一定為 false，但 agent 做完一個動作後 run 的狀態可能變成 completed，回到下一圈就需要再次檢查，否則只會在 run 剛開始時確認一次。"
     },
     {
-      "question": "作者說什麼情況下可以把多個非同步操作放進同一個 step？",
+      "question": "為什麼取得 state 要放進 step（observe-state），而不是留在 workflow？",
       "options": [
-        "只要這些操作都是唯讀、不會產生副作用",
-        "只要這些操作彼此有關，而且即使全部重跑也無所謂",
-        "只要這個 step 設定了 retry policy，失敗會自動重試",
-        "只要這些操作都發生在同一圈 cycle 之內"
+        "希望結果被 memoize，取得一次就保留，workflow resume 時不再執行。",
+        "因為 state 每秒都會變，快取後才能拿到最新值。",
+        "因為 step 內的程式碼必須是 deterministic 的。",
+        "因為只有 step 能帶 environmentId 和 runId。"
       ],
-      "answer": 1,
-      "explain": "文章的原則是每個 step 只做一件事，例外是可以放多個非同步操作，但前提是任何一個失敗時整個 step 重跑、所有操作重新執行，你都能接受；也就是操作彼此有關且全部重跑無所謂。"
+      "answer": 0,
+      "explain": "文章說把取得 state 放進 step 是因為希望它被 memoized：取得一次後就保留下來，workflow resume 時這段程式不會再次執行。"
+    },
+    {
+      "question": "為什麼會改變外部世界的呼叫不能留在 workflow？",
+      "options": [
+        "只有 step 的結果會被記錄，留在 workflow 的寫入在重播時會再次執行。",
+        "因為 workflow 不能 await 任何非同步操作。",
+        "因為寫入會讓整個 workflow 無法被 memoize。",
+        "因為外部呼叫一定會改變 step 的執行順序。"
+      ],
+      "answer": 0,
+      "explain": "文章明講只有 step 的結果會被記錄下來；若把會寫入資料的呼叫留在 workflow 裡，重播時它就會再次執行。"
     }
   ]
 }

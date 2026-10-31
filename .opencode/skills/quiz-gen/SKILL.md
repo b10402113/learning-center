@@ -37,6 +37,7 @@ Invoke as `/quiz-gen <subject>/<node> [--step <id>] [--force]`.
    - 每個 step 要寫的候選檔路徑：`learn/<subject>/output/quiz-candidates/<node>/<step>.json`
    - 一句：「只讀列出的文章，把每個 step 寫成自己的候選檔，檔案路徑照上面給的。」
    - 一句：「每個 step 至少 `minQuestions` 題、最多 `maxQuestions` 題；每題的正解都要能在該 step 的文章裡指到一句話；不同題不要重複考同一個概念，跨 step 也一樣。文章撐不到 3 題就不要寫檔，回報是哪個 step。」
+   - 一句：「選項要同型同長，最長不超過最短的 1.5 倍（至少容許差 6 個字）；正解位置要輪替，不能每題都放同一個位置。」
 
    不要給 node plan、其他 node、來源檔或課程目標。
 
@@ -48,7 +49,9 @@ Invoke as `/quiz-gen <subject>/<node> [--step <id>] [--force]`.
    node scripts/quiz.mjs write --subject <subject> --node <node> --step <step> --input learn/<subject>/output/quiz-candidates/<node>/<step>.json [--force]
    ```
 
-   `write` 會驗 schema、3–8 題、以及該文章字數算出的上限；通過才寫入 `learn/<subject>/nodes/<node>/<step>.quiz.json`。
+   `write` 會驗 schema、3–8 題、該文章字數算出的上限，以及選項形狀：`quiz-option-length`（正解明顯比其他選項長）與 `quiz-answer-spread`（正解集中在少數位置）。通過才寫入 `learn/<subject>/nodes/<node>/<step>.quiz.json`。
+
+   只收到 `quiz-option-length` 或 `quiz-answer-spread` 時，把該 step 的題目和錯誤訊息一起再派一次同一個 `quiz-agent` 修候選檔，修完重跑 `write`。修正以一次為限；仍失敗就記為該篇失敗，不要自己改題目。
 
    一篇失敗不要停掉整批：保留候選檔與錯誤訊息，繼續下一篇，最後一起回報。`--force` 只影響已存在的 `quiz.json`，沒帶 `--force` 時 `write` 會拒絕覆蓋。
 
@@ -74,4 +77,4 @@ Invoke as `/quiz-gen <subject>/<node> [--step <id>] [--force]`.
 
 **不要手寫題目，不要改文章 Markdown，不要把 quiz block 插回文章。**
 
-Completion：每個目標 step 都有 `<step>.quiz.json`、題數在 3–`maxQuestions`、`node scripts/verify.mjs --node <subject>/<node>` exit 0、course-app data 已重新產生。
+Completion：每個目標 step 都有 `<step>.quiz.json`、題數在 3–`maxQuestions`、選項通過 `write` 的長度與位置檢查、`node scripts/verify.mjs --node <subject>/<node>` exit 0、course-app data 已重新產生。

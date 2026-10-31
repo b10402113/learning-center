@@ -86,7 +86,7 @@ Write the plan path once. Use this shape:
 ## Spine
 1. <step-id> — <question it answers> → hands off: <next question>
 
-## <step-id> — <step title>
+## <step-id> — <one-line purpose>
 
 - Type: Explanation | Tutorial | How-to — <why>
 - After this step: <observable outcome>

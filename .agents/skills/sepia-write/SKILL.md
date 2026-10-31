@@ -12,4 +12,6 @@ Read the canonical file completely, follow its routing, and bind exactly the `wr
 
 Keep every sentence short: one idea per sentence. Split any sentence carrying more than one clause, and prefer breaking a long sentence in two over trimming words from it.
 
+Write plain language: everyday words, active voice, concrete nouns. Keep changes minimal: the target's meaning and structure stay, and the draft adds no example, flourish, or claim.
+
 If no target was supplied, ask for it. If the user wants another operation, direct them to `sepia-review`, `sepia-refactor`, or `sepia-recreate` instead of switching.

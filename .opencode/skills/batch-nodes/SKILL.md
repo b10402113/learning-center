@@ -31,7 +31,7 @@ Run the normal pipeline — `/nodes` → `/article` → `/polish-article` → `/
 | State | Nodes | Teach | Publisher | Polish | Generate | Quiz |
 | --- | --- | --- | --- | --- | --- | --- |
 | `status: draft`, or `steps: []` | build the plan | after prepare | after Teach | after Article | after Article | after articles exist |
-| plan exists, some step is missing or H1-only | skip | if the plan is missing | only missing steps | on the new markers | render the new markers | after articles exist |
+| plan exists, some step is missing or empty | skip | if the plan is missing | only missing steps | on the new markers | render the new markers | after articles exist |
 | every step has a body, no plan | skip | skip | skip (existing article) | skip (`skipped-no-plan`) | skip (`no-plan`) | can run |
 | node has a teaching plan | skip | skip, unless `-force` | reads the plan | — | — | — |
 | step has a plan and markers | skip | — | skip | polish or `skipped-record` | render or reuse | can run |
@@ -72,7 +72,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    node src/article-cli.mjs prepare --subject <subject> --node <node> [--force]
    ```
 
-   Read the JSON. `root` is the absolute repo root, `nodeFile` is the node container's absolute path, and `teachingPlan` is the node's teaching-plan path. `steps[]` is the work: each entry carries `id`, `title`, `purpose`, `index`, `material`, `original`, `plan`, and `command`; these paths are absolute, and `command` already carries `--root` and `--markers-only`. `skipped[]` means the step already has a body; its entries carry `id`, `title`, `purpose`, `status`, `path`, and `article`, and they are continuity material, not work. A node where every step is skipped yields no teach or publisher call. A prepare failure drops that node from the rest of Article, Polish, Generate, and Quiz; record its error and continue with the next node.
+   Read the JSON. `root` is the absolute repo root, `nodeFile` is the node container's absolute path, and `teachingPlan` is the node's teaching-plan path. `steps[]` is the work: each entry carries `id`, `title` (`null` until the article exists), `purpose`, `index`, `material`, `original`, `plan`, `command`, and `titleCommand`; these paths are absolute, and `command` already carries `--root` and `--markers-only`. `skipped[]` means the step already has a body; its entries carry `id`, `title`, `purpose`, `status`, `path`, and `article`, and they are continuity material, not work. A node where every step is skipped yields no teach or publisher call. A prepare failure drops that node from the rest of Article, Polish, Generate, and Quiz; record its error and continue with the next node.
 
    **3b. Teach.** One `teach-agent` per prepared node with at least one ready step (skip with `-skip-teach`). Batch by `max-subagents` and dispatch with the [Teach-prompt](#teach-prompt) filled in. Give it `nodeFile`, `MEMORY.md`, `teachingPlan`, the output language, one line per ready step with its `material`, and one line per `skipped[]` entry with its `article`. A node whose teaching plan already exists is skipped unless `-force`. Wait for every call and record `completed` or `failed`. A failed node is dropped from Publisher, Publish, Polish, Generate, and Quiz. Under `-skip-teach`, a node with no teaching plan is dropped the same way with the reason.
 
@@ -137,7 +137,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    node scripts/quiz.mjs write --subject <subject> --node <node> --step <step> --input learn/<subject>/output/quiz-candidates/<node>/<step>.json [--force]
    ```
 
-   The script validates the schema, the 3–8 question window, and the article's character-based ceiling before writing `<step>.quiz.json`. A step with no candidate file fails with the agent's reported reason; a step whose candidate fails validation keeps its file and error. Continue with the next step in either case. Never hand-write or hand-edit questions, and never insert them into the article Markdown.
+   The script validates the schema, the 3–8 question window, the article's character-based ceiling, and option shape (`quiz-option-length`, `quiz-answer-spread`) before writing `<step>.quiz.json`. On one of those two shape errors, re-dispatch that step's `quiz-agent` once with the questions and errors to fix the candidate, then rerun `write`. A step with no candidate file fails with the agent's reported reason; a step whose candidate still fails keeps its file and error. Continue with the next step in either case. Never hand-write or hand-edit questions, and never insert them into the article Markdown.
 
    **6d. Verify and rebuild viewer data.** Run `node scripts/verify.mjs --node <subject>/<node>` for every node the Quiz phase processed. When at least one sidecar was written, run:
 
@@ -175,9 +175,9 @@ Dispatch every call with `subagent_type: general`. Fill `<NODE-ID>` and `<SUBJEC
 Build the step plan for one node. Node: <SUBJECT>/<NODE-ID>.
 
 Load the /nodes skill via the skill tool (name: "nodes") and follow it for node <NODE-ID>.
-When you reach step 4 — the checkpoint that asks the learner to confirm the plan — skip it. Do not ask questions and do not wait. Decide the step count, ids, titles, one-sentence purposes, and source ranges yourself from the digests, then continue at step 5. You own the plan.
+When you reach step 4 — the checkpoint that asks the learner to confirm the plan — skip it. Do not ask questions and do not wait. Decide the step count, ids, one-sentence purposes, and source ranges yourself from the digests, then continue at step 5. You own the plan; do not write titles.
 
-Stop once the node container and every H1-only skeleton are written and `node scripts/verify.mjs --node <SUBJECT>/<NODE-ID>` exits 0. Do not write article prose; /article does that in a later phase.
+Stop once the node container and every empty step skeleton are written and `node scripts/verify.mjs --node <SUBJECT>/<NODE-ID>` exits 0. Do not write article prose or titles; /article does that in a later phase.
 
 Workspace:
 - Subject root: learn/<SUBJECT>/
@@ -238,18 +238,18 @@ Teaching plan: <TEACHING-PLAN>   (read its Reader, Spine, and this node's step s
 Output language: <LANGUAGE>   (the `language` in MEMORY.md)
 
 Ready steps, in teaching order:
-- <STEP-ID> | <TITLE> | <PURPOSE> | index <INDEX>/<TOTAL> | material <MATERIAL> | original <ORIGINAL> | plan <PLAN> | command <COMMAND>
-- <STEP-ID> | <TITLE> | <PURPOSE> | index <INDEX>/<TOTAL> | material <MATERIAL> | original <ORIGINAL> | plan <PLAN> | command <COMMAND>
+- <STEP-ID> | <TITLE-OR-NONE> | <PURPOSE> | index <INDEX>/<TOTAL> | material <MATERIAL> | original <ORIGINAL> | plan <PLAN> | command <COMMAND> | titleCommand <TITLE-COMMAND>
+- <STEP-ID> | <TITLE-OR-NONE> | <PURPOSE> | index <INDEX>/<TOTAL> | material <MATERIAL> | original <ORIGINAL> | plan <PLAN> | command <COMMAND> | titleCommand <TITLE-COMMAND>
 
 Already published steps (continuity material; read their articles):
 - <STEP-ID> | <TITLE> | <PURPOSE> | article <ARTICLE>
 - <STEP-ID> | <TITLE> | <PURPOSE> | article <ARTICLE>
 
-Every path above is absolute. Use each string exactly as given; do not join, rewrite, or guess a path, and do not assume the current working directory. Each command already includes absolute paths, --root, and --markers-only.
+Every path above is absolute. Use each string exactly as given; do not join, rewrite, or guess a path, and do not assume the current working directory. Each command already includes absolute paths, --root, and --markers-only. When TITLE is none, choose the article's title from a heading or phrase in the material, translated faithfully into <LANGUAGE>; never invent one. When TITLE is given, keep it exactly.
 
 Load the sepia-write skill via the skill tool (name: "sepia-write") and bind its `write` operation for every original. Route the target as a technical article: Sepia reads `professional-pass.md`, `domains/tech-articles.md`, and `discourse-pass.md` §1–3 before drafting.
 
-For each ready step, in order: read its material bundle and its section in the teaching plan, write the original article to its original path, write a 1-5 item image plan to its plan path, then run its command and read the article it produced before starting the next step. Write the original in <LANGUAGE>, grounded only in the material and the plan's cited facts, and follow the teaching plan's outline without adding, dropping, or reordering sections. The wrapper leaves the prose exactly as you wrote it and only inserts markers.
+For each ready step, in order: read its material bundle and its section in the teaching plan, write the original article to its original path with the chosen title as its H1, write a 1-5 item image plan to its plan path, then run its command. When it reports completed, run the step's titleCommand to write the H1 back into the node plan, then read the article it produced before starting the next step. Write the original in <LANGUAGE>, grounded only in the material and the plan's cited facts, and follow the teaching plan's outline without adding, dropping, or reordering sections. The wrapper leaves the prose exactly as you wrote it and only inserts markers.
 
 The image plan is a JSON array of objects with `heading`, `anchor`, and `prompt`; spread the figures across the article and make every `anchor` a short verbatim sentence from that step's original. Write `heading` and `prompt` in the article's language.
 
@@ -257,9 +257,9 @@ There is no `article_generate` tool in this repo. Writing the original and the p
 
 Hold the node together through the teaching plan: after the first, each step's opening picks up the handoff the previous step wrote, each step's ending hands off the next question, a term is defined fully once and reused after that, and examples keep the plan's names. Never add facts, numbers, or quotations the material does not support. <CONTINUITY-MODE> is "write the steps as standalone articles with no handoff" when the run used -no-continuity, otherwise "connect the steps as described".
 
-Stop at the first command that does not report completed. Leave finished originals, plans, and run output in `learn/<SUBJECT>/output/jobs/`.
+Stop at the first command that does not report completed. Do not run titleCommand for a failed article. Leave finished originals, plans, and run output in `learn/<SUBJECT>/output/jobs/`.
 
-Report back: steps completed out of steps dispatched, each command status, original paths, plan lengths, marker counts, the failing step, and its error.
+Report back: steps completed out of steps dispatched, each chosen title, command and titleCommand status, original paths, plan lengths, marker counts, the failing step, and its error.
 ```
 
 ## Quiz-prompt
@@ -274,5 +274,5 @@ Steps:
 - <STEP-ID> — <TITLE>; article <ARTICLE>; <CHARACTERS> CJK characters; <MIN-QUESTIONS>–<MAX-QUESTIONS> questions; candidate <CANDIDATE>
 - <STEP-ID> — <TITLE>; article <ARTICLE>; <CHARACTERS> CJK characters; <MIN-QUESTIONS>–<MAX-QUESTIONS> questions; candidate <CANDIDATE>
 
-Write each step its own single-choice questions within that step's range, into the step's candidate path. Every correct answer must be directly supported by a sentence in that step's own article, and no two questions may test the same concept — within a step or across the node's steps. Use plausible distractors, keep each question self-contained, and write Traditional Chinese in the article's terminology. A step whose article cannot support the minimum gets no file. Report each step's id, path, and question count, then any skipped step and its reason.
+Write each step its own single-choice questions within that step's range, into the step's candidate path. Every correct answer must be directly supported by a sentence in that step's own article, and no two questions may test the same concept — within a step or across the node's steps. Use plausible distractors, keep every option the same kind and length, rotate which position holds the correct answer, keep each question self-contained, and write Traditional Chinese in the article's terminology. A step whose article cannot support the minimum gets no file. Report each step's id, path, and question count, then any skipped step and its reason.
 ```

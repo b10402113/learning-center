@@ -1,107 +1,72 @@
-# 三種暫停，與 waitForEvent 的契約
+# 不要繼續，但也不要結束
 
-上一篇把等待的來源分成 harness 強制與 agent 自己判斷兩種。這一篇要處理後者：當 agent 決定停下來等，程式到底該怎麼寫？
+上一次留下的問題是：當 decision 說「等」的時候，它到底在等什麼？
 
-「等」看起來很簡單，麻煩的是這個字混著好幾種不同的意思。
+答案比想像中複雜。「等」其實有好幾種，現在的說法太籠統了。
 
-## 三種「等」，其實不是同一件事
+## 三種暫停，三種意思
 
-**wait 的意思是「不要繼續，但也不要結束」**，是一種中間狀態。
+wait 的意思是「不要繼續，但也不要結束」，是一種中間狀態。
 
-但是三種情況的「等」，內容並不一樣：
+<!--image:1-->
 
-- 如果是 **complete**，那個等其實是在說：「好，我們完成了。」
-- 如果是 **request help**，那個等是在說：「不行，我們得產生一則訊息，送給某個人來幫忙。」
-- 如果是單純的 **wait**，那就真的只是等。
+不過，這三種情況下「等」的意思並不相同。
 
-所以先定義這幾種暫停各代表什麼，再決定怎麼等。
+如果是 complete，這個「等」其實是在說：「好，我們完成了。」如果是 request help，這個「等」是在說：「不行，我們得產生一則訊息，送給某個人來幫忙。」如果只是單純的 wait，那就真的只是等。
 
-這一篇要談的是第三種：真的只是等待的 **wait**。
+差別在於需不需要送出訊息。request help 需要，單純的 wait 不需要，只是停在原地；complete 則代表收尾。
 
-![第 1 段配圖](./three-ways-to-pause-and-waitforevent-assets/image-1.webp)
+所以，我們得先定義這幾種情況各自代表什麼，再來處理等待。
 
-## 真正要等，用 step.waitForEvent
+## 一次等待，就是一個事件加上一個期限
 
-當你真的要等，就要使用 **`step.waitForEvent`**。
+真正要等待時，就要用 `step.waitForEvent`。我先打開 Inngest 的文件來看，暫時不參考我們自己的 context，會比較清楚。
 
-寫法和 `step.run` 不同：這裡不呼叫 `step.run`，而是呼叫 `step.waitForEvent`，給它一個 step 名稱，再加上你要等的事件名稱。
+用法是這樣：不用 `step.run`，改用 `step.waitForEvent`，提供一個 step 名稱，再提供要等待的事件名稱。
 
-接著，有兩個條件會決定它什麼時候繼續：
+有兩個條件會決定流程何時繼續：事件抵達，或 timeout 時間到。哪個先發生，就以哪個為準。
 
-- 事件來了
-- timeout 到了
+<!--image:2-->
 
-哪一個先發生，就以哪一個為準。
+中間還可以加上一個 filter。例如 `data.completion ID` 等於 `generated topics ID`。意思是：我只監聽這個事件，而且只有在它的 data 符合條件時才處理；不符合就忽略。
 
-中間還可以放一個 **filter**。例如要求 `data.completion ID` 等於 `generated topics ID`。
-
-意思是我只聽這個事件，而且只有 data 符合條件時才處理；不符合的就略過。
-
-所以這段程式就是：只收符合條件的事件，然後最多等三天，看哪個先到。
-
-![第 2 段配圖](./three-ways-to-pause-and-waitforevent-assets/image-2.webp)
-
-## 它怎麼告訴你「等到了沒」
-
-`step.waitForEvent` 後面的程式，在事件進來或 timeout 發生之前，一行都不會執行。
-
-哪個先成立，這個變數就會被填進結果：
-
-- 有事件進來時，結果是事件本身。
-- timeout 發生時，則不會有結果。
-
-如果沒有結果，就走你為「等不到」準備的那條路；有結果就繼續往下。
+所以整句話的意思是：等待符合條件的事件，或等待三天，兩者以先發生的為準。
 
 <!-- derived -->
 ```ts
-const result = await step.waitForEvent("wait-for-onboarding", {
-  event: "app/onboarding.completed",
+const completed = await step.waitForEvent("wait for onboarding", {
+  event: "onboarding/completed",
+  filter: "data.completionId == generatedTopicsId",
   timeout: "3d",
-  if: "event.data.completionId == async.data.generatedTopicsId",
 });
-
-if (!result) {
-  // timeout 先到了：沒收到事件，做你「等不到」時想做的事
-}
 ```
 
-## 整段都會被凍結，所以必須是確定性的
+事件名稱、filter 條件和三天期限都只是示意，實際上要換成你自己的服務會送出的事件與條件。
 
-這段程式看起來只是普通的 JavaScript，但整段都會被凍結；在這個例子裡，最長可能三天。
+接下來可以寫一個判斷，例如 `if not onboarding is complete`，也就是沒有收到事件。這個判斷只有在 timeout 之後才會成立。
 
-這就是為什麼 workflow 必須是確定性的。
+因此，在 `step.waitForEvent` 後面的程式碼，不會在事件抵達或 timeout 發生之前執行。
 
-這三天內如果它因為任何原因又被執行一次，就得回到一模一樣的位置：
+等其中一個條件成立後，這個變數就會取得結果：要嘛是事件本身，要嘛是 timeout 的結果，也就是沒有收到事件。如果沒有收到事件，就執行你在「等不到」時想做的事；如果收到了事件，就繼續往下執行。
 
-- 不能產生新的 step 結果。
-- 不能產生新的 mutation，因為你的 run 不具備冪等性。
-- 不能走出新的路徑。
+## 伺服器不會一直停在那裡等待
 
-例如不能在 workflow 裡寫 `Math.random`，再靠 `if number > 10` 決定走哪一條路。這樣一來，一致性就沒了，整個流程也跟著毀掉。
+這段看起來像一般的 JavaScript，但整段程式會被凍結；在這個例子裡，最長會凍結三天。
 
-所以控制流和 workflow 最上層的程式碼，都必須是確定性的。
+這也是 workflow 必須具備確定性的原因。如果這三天內，程式因為任何原因再次執行，就必須回到完全相同的位置。不能產生新的 step 結果，也不能有新的 mutation，因為這會讓你的 run 不具冪等性。也不能走上新的執行路徑，例如在 workflow 裡寫 `Math.random`，然後 `if number > 10` 就改走這條路。那樣會把整個流程弄壞。
 
-![第 3 段配圖](./three-ways-to-pause-and-waitforevent-assets/image-3.webp)
+所以，控制流程，也就是 workflow 最上層的程式碼，一定要具備確定性。
 
-## 它沒有真的把伺服器掛在那裡
+不過，程式並不是真的暫停在那裡。這個函式不會停在原處，也不是 server 一直坐著等。假如你是在 server function 裡這樣做，函式會結束，不會把 call stack 留在那裡。它只是暫時不計算後面的內容，因為流程被擋住了，必須等其中一個條件成立才能繼續。
 
-這段程式看起來像是從上到下一行一行執行。你可以把它想成 `async await`，理論上它甚至可以等待一年。
+<!--image:3-->
 
-但它並不是真的把程式暫停在那裡。
+所以，如果把這段程式「翻譯」成白話，其實就是 Inngest 幫你存下一個條件。事件抵達時，Inngest 會更新這個條件；這個更新也會觸發函式重新執行。
 
-如果你在 server function 裡這樣寫，這個函式會先結束，不會把 call stack 一直吊在伺服器上。後面的程式只是暫時不算，因為流程被擋住，得先等其中一個條件成立。
+換句話說，你是在說：這個 workflow 要嘛三天後再次執行，要嘛等這件事發生時再執行。
 
-實際運作起來是這樣：Inngest 幫你存一個等待條件；事件回來時再更新它，這個更新就是喚醒函式的 trigger。
+就是這樣，和我們一直在做的事情一樣。我們的 workflow 本來就可以反覆執行，就像 React 的 render。這裡只是再次 render，只不過觸發來源可能是「事件抵達」，也可能是 cron job。
 
-換句話說，你是在說：
+看起來很神奇，但實際上就是這兩件事：cron job 再呼叫一次這個函式，或是事件再呼叫一次這個函式。
 
-> 這個 workflow 要嘛三天後執行，要嘛等這件事發生時執行。
-
-觸發來源只有兩種：
-
-- cron job 再呼叫這個函式一次
-- 事件再次呼叫這個函式一次
-
-![第 4 段配圖](./three-ways-to-pause-and-waitforevent-assets/image-4.webp)
-
-看起來很神奇，實際上就是這兩件事而已。
+一次 waitForEvent 只會喚醒這個 run 一次。但 incident 不會停在原地，而是會持續變化。所以等待不能只發生一次，而是得放在迴圈裡，持續監看 eventSequence。接下來的問題是：誰會在外面持續監看？又要怎麼知道真的有新東西進來？

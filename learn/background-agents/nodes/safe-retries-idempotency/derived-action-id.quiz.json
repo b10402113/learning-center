@@ -2,37 +2,37 @@
   "quiz-generated": true,
   "questions": [
     {
-      "question": "背景 agent 重試或重播時，隨機 UUID 為什麼會讓同一個 intent 被執行兩次？",
+      "question": "為什麼隨機 UUID 不適合用在 durable execution 的 action ID？",
       "options": [
-        "因為 UUID 長度不夠，容易在不同機器上撞號",
-        "因為每次重試都會產生不同的 ID，系統把它們當成兩件不同的事",
-        "因為 UUID 沒有記下 action 的參數，查不到對照表",
-        "因為重試會清空 effect owner 的對照表，讓 key 失效"
+        "因為 UUID 的長度不符合服務端格式",
+        "因為 step 重跑時會再呼叫一次 randomUUID 取得不同值，服務就把它當成新工作",
+        "因為 UUID 無法寫進 log",
+        "因為隨機 UUID 會讓 fingerprint 無法計算"
       ],
       "answer": 1,
-      "explain": "文章指出，同一個 cycle 被處理兩次時，隨機 UUID 會給出兩個不同的 ID，系統看到兩個 ID 就當成兩件不同的事，於是同一個 intent 被執行兩次。問題不在重試，而在 ID 認不出「這是同一件事」。"
+      "explain": "文章說 step 重跑時程式會再次執行 randomUUID 並取得不同的值，服務看到新的 key 自然會當成新工作；去重的前提是兩次呼叫使用相同的識別碼。"
     },
     {
-      "question": "文章說原本的 idempotency 範圍「太粗」，後來改成什麼？",
-      "options": [
-        "改以 run ID 為範圍，一個 run 只算一件事",
-        "改以 intent 為範圍，同一個 intent 只算一件事",
-        "改以 cycle 加上 action 為範圍，對應某個 run 的某個 cycle 裡做出的那個決定",
-        "改以機器與時間戳為範圍，確保跨機器不重複"
-      ],
-      "answer": 2,
-      "explain": "文章說原本範圍太粗、分不出真正的執行單位，於是收窄成 cycle 加上 action，也就是某個 run 的某個 cycle 裡做出的那個決定。範圍太寬會把兩件事當成一件，太窄則會把一件事拆成好幾件。"
-    },
-    {
-      "question": "依照文章，action ID 要能算成同一個值，需要哪三個輸入相同？",
+      "question": "下列哪一組資訊適合用來推導出重播時不變的 action ID？",
       "options": [
         "run ID、cycle、decision",
-        "run ID、機器 ID、時間戳",
-        "cycle、action 參數、執行結果",
-        "intent key、UUID、重試次數"
+        "run ID、Date.now()、decision",
+        "run ID、retry 的 attempt 次數、decision",
+        "cycle、decision、Date.now()"
       ],
       "answer": 0,
-      "explain": "文章說只要拿 run ID、cycle、decision 這三個值，算出來的永遠是同一個 action ID；不管算幾次、在哪台機器上算、隔多久再算，得到的都是同一個字串，這就是 deterministic 的意思。"
+      "explain": "文章說 run ID、cycle、decision 在重播時都不會改變，三者組合起來就能得到始終相同的 action ID；Date.now() 每次不同，attempt 次數重跑時也會改變。"
+    },
+    {
+      "question": "如果 action ID 只由 run ID 推導，沒有納入 cycle，會出現什麼問題？",
+      "options": [
+        "服務無法辨識這個 run 屬於哪個 workflow",
+        "第 2 輪和第 5 輪的 rollback 共用同一個 ID，第 5 輪會被當成重複而回放第 2 輪的結果",
+        "每次重播都會產生新的 ID，去重立刻失效",
+        "fingerprint 會變成 409，服務拒絕所有請求"
+      ],
+      "answer": 1,
+      "explain": "文章舉例說明，key 只有 run ID 時，第 2 輪的 rollback 和第 5 輪的 rollback 會共用同一個 ID，服務會認為已處理過而回放第 2 輪的結果，讓第 5 輪真正要做的事被誤認為重複操作。"
     }
   ]
 }

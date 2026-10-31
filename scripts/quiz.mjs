@@ -97,7 +97,7 @@ function prepare(options) {
     if (info.missing) {
       skipped.push({
         id: entry.id,
-        title: entry.title,
+        title: entry.title ?? entry.id,
         reason: info.empty ? "article-empty" : "article-missing",
         article: articleRel,
         output: outputRel,
@@ -107,7 +107,7 @@ function prepare(options) {
     if (existsSync(output) && !options.force) {
       skipped.push({
         id: entry.id,
-        title: entry.title,
+        title: entry.title ?? entry.id,
         reason: "quiz-exists",
         article: articleRel,
         output: outputRel,
@@ -117,7 +117,7 @@ function prepare(options) {
 
     ready.push({
       id: entry.id,
-      title: entry.title,
+      title: entry.title ?? entry.id,
       article: articleRel,
       output: outputRel,
       characters: info.characters,
@@ -192,7 +192,7 @@ function write(options) {
   }
 
   const maxQuestions = maxQuestionsFor(info.characters);
-  const errors = validateQuizPayload(payload, { maxQuestions });
+  const errors = validateQuizPayload(payload, { maxQuestions, enforceStyle: true });
   if (errors.length > 0) {
     return {
       status: "failed",
@@ -224,7 +224,7 @@ function status(options) {
     const outputRel = quizFileRel(options.subject, options.node, entry.id);
     const row = {
       id: entry.id,
-      title: entry.title,
+      title: entry.title ?? entry.id,
       article: relative(options.root, info.file),
       characters: info.missing ? 0 : info.characters,
       minQuestions: QUIZ_MIN_QUESTIONS,

@@ -2,81 +2,59 @@
   "quiz-generated": true,
   "questions": [
     {
-      "question": "作者堅持把 proposal 寫進自己的資料庫，最主要的理由是什麼？",
+      "question": "為什麼待審核的動作（proposal）一定要存進資料庫？",
       "options": [
-        "讓 Ingest 之後能回到原本的 workflow 位置，省去查資料庫",
-        "為了讓 waitForEvent 有事件可綁定，否則無法建立 durable 的暫停",
-        "有人按下 approve 時，系統才有地方找回原本的 action、要帶的參數與之後的執行方式",
-        "為了避免建立 proposal 的 step 被快取，先寫入資料庫才能繞過快取"
-      ],
-      "answer": 2,
-      "explain": "文章說儲存 proposal 最直接的理由，是回到收件匣、有人按下 approve 時，系統必須有地方找回原本的 action，並記住它原本是什麼、要帶哪些參數、之後該怎麼執行。依賴 Ingest 的 state 技術上可行，但作者認為那屬於應用邏輯而不採用。"
-    },
-    {
-      "question": "要判斷一筆 proposal 是否過期，agent 在流程中實際傳遞的是什麼？",
-      "options": [
-        "整份狀態快照",
-        "一個版本號，server 再用它找到真正的快照",
-        "proposal 的建立時間",
-        "agent 自己算出的狀態雜湊值"
+        "因為 workflow runtime 不允許在 step 之間傳遞變數",
+        "因為之後要能找回 action 原本的樣子（參數、如何執行），讓收件匣的按鈕對應到它；這屬於應用邏輯，應存在自己的資料庫",
+        "因為資料庫寫入比 runtime state 更省空間",
+        "因為只有資料庫能送出 agent.approval.decided 事件"
       ],
       "answer": 1,
-      "explain": "文章明講不讓 agent 到處傳送整份 snapshot：每次狀態改變時 server 會存下新快照並給一個新 version，所以 agent 只需要傳版本號，傳遞的是快照的 reference 而不是快照本身。"
+      "explain": "文章說按下 approve 時總得有地方找回 action 原本的樣子，才能讓收件匣按鈕對應；這屬於應用邏輯，應存在自己的資料庫，讓 runtime 專心處理 workflow 邏輯。"
     },
     {
-      "question": "既然已經拿到 proposal，為什麼作者還要另開一個 get proposal 的 step 從資料庫重讀，而不是直接沿用剛才的變數？",
+      "question": "proposal 為什麼記版本號，而不是把整份 snapshot 塞進去？",
       "options": [
-        "因為這是非同步流程，中間 proposal 可能被覆寫或清理，他要的是資料庫作為唯一真相來源",
-        "因為 proposedAction 只回傳 ID，無法保證資料真的寫入成功",
-        "因為 step 的輸出會被快取，重讀是唯一能避開快取的方法",
-        "因為要順便取得人類在批准時填寫的備註內容"
+        "版本號是足夠精簡的資訊，之後可用來判斷 proposal 是否仍然有效，server 再依版本號找到真正的快照",
+        "因為 snapshot 無法序列化後存進資料庫",
+        "因為版本號可以避免 approval 事件重複送出",
+        "因為人類比較看得懂版本號"
       ],
       "answer": 0,
-      "explain": "作者說這是非同步流程，中間可能被覆寫，他不想依賴任何快取，也不知道資料庫裡會不會有 override 或衝突；他要的是資料庫作為唯一真相來源。他自己就曾因為沿用上面的變數而拿到 stale proposal。"
+      "explain": "文章說建立 proposal 時比對的是 state.world.version，需要的只是一個足夠精簡、之後能判斷是否仍有效的資訊，版本號就是這個資訊，等於傳快照的 reference 而非快照本身。"
     },
     {
-      "question": "waitForEvent 如果只寫事件名稱 agent.approval.decided，卻不加 proposal ID 的過濾條件，會發生什麼事？",
+      "question": "建立 proposal 只回傳 proposal.id，再開一個 get proposal 從資料庫讀回，主要理由是什麼？",
       "options": [
-        "事件永遠不會被觸發，流程只能靠 timeout 結束",
-        "目前這筆 proposal 會立刻被標成 stale",
-        "同一筆 proposal 會被重複批准，導致 check 計數錯誤",
-        "系統裡任何一筆被批准的任務，都可能被當成自己這筆的批准，於是執行了不該跑的動作"
-      ],
-      "answer": 3,
-      "explain": "文章說沒有過濾的話，只要系統裡有人批准了任何一個任務，所有在等的事件都可能把它當成自己的批准，結果就是去跑了不該跑的動作。因此必須比對 async.data.proposalId 等於目前手上這筆 proposal 的 ID。"
-    },
-    {
-      "question": "proposal 已經獲得批准，但執行前比對發現 fresh.world.version 與這次 workflow 啟動時的 input version 不同，流程會怎麼做？",
-      "options": [
-        "直接把 run 的狀態設成 escalated，結束這次 workflow",
-        "照原本的提案執行，只把版本差異記錄下來",
-        "呼叫 staleProposal 用 proposal ID 把它標成 stale、從收件匣清掉，然後 continue 外層迴圈重新觀察",
-        "把 proposal 標成 superseded，並立刻建立一筆新的 proposal"
-      ],
-      "answer": 2,
-      "explain": "版本不同就代表狀態已經改變、不能執行。文章描述的做法是開一個 invalidate approval step，呼叫 staleProposal 把這筆 proposal 在資料庫裡標成 stale，於是它從收件匣清掉，接著 continue 外層迴圈，重新查看狀態、取得最新資料再決定下一步。"
-    },
-    {
-      "question": "人類按下 no、proposal 沒有被批准時，作者把 run 的狀態設成 escalated。他的理由是什麼？",
-      "options": [
-        "因為 action 執行到一半失敗，無法回到原本的狀態",
-        "因為沒有批准但這件事仍然必須完成，等於宣告「我告訴你我要做什麼，但你說不要，那就交給你處理」",
-        "因為這筆提案已經被較新的版本取代",
-        "因為等待事件逾時，人類沒有在時限內回覆"
+        "為了讓 workflow 圖上看起來比較完整",
+        "因為是非同步流程，資料可能已被覆寫，要以資料庫為唯一真相來源，不依賴可能早已失效的變數",
+        "因為 runtime 只能傳遞字串形式的 id",
+        "因為唯有用 step 讀回才能觸發 waitForEvent"
       ],
       "answer": 1,
-      "explain": "文章說 escalated 代表「我沒有其他辦法了，我告訴你我要做什麼，但你說不要，那就交給你處理」。它不是 completed 因為沒有執行，也不是 failed，更不是 superseded。"
+      "explain": "文章說這是非同步流程，不知道什麼時候會有人處理這筆 proposal，資料可能被覆寫；要的是以資料庫為唯一真相來源，而不是依賴某個可能存在也可能已失效的快取值。"
     },
     {
-      "question": "對於等待迴圈裡的 while，作者怎麼說明它的地位？",
+      "question": "等待 agent.approval.decided 事件時，為什麼一定要用 proposalId 過濾？",
       "options": [
-        "它其實不是必要的，只是用來模擬「人一直沒有回覆時流程會怎樣」，實務上不必完全照這樣實作",
-        "它是必要的，因為少了它 waitForEvent 不會變成 durable 的暫停",
-        "它是必要的，因為只有迴圈才能每一輪重新取得最新版本號",
-        "它只是為了讓 check 計數器遞增，方便除錯時觀察等待次數"
+        "否則系統裡任何一個人批准任何任務，所有任務都會被當成已批准，工作就會搞丟",
+        "否則事件不會被送到正確的 workflow",
+        "因為 proposalId 是這個事件唯一的欄位",
+        "為了避免 proposal 在等待期間被標記為 stale"
       ],
       "answer": 0,
-      "explain": "文章明講這個 while 其實不是必要的，只是用來模擬如果人一直沒有回覆、流程會怎麼樣，實務上不一定要完全照這種方式實作。"
+      "explain": "文章明說必須加上 async.data.proposalId 等於手上 proposal ID 的過濾條件，不然只要有人批准任何一個任務，所有任務都會被當成已批准。"
+    },
+    {
+      "question": "人拒絕之後，run 被設為 escalated，文章怎麼說明這個狀態？",
+      "options": [
+        "它等同 completed，因為流程已經走到終點",
+        "它等同 failed，因為 action 執行時出錯",
+        "它表示「我告訴你我要做這件事，你說不要，那就由你自己處理」，既不是 completed 也不是 failed",
+        "它表示 proposal 已過期，必須重新 observe"
+      ],
+      "answer": 2,
+      "explain": "文章說 escalated 不是 completed（因為沒有執行）也不是 failed，意思是「我沒有別的辦法了：我告訴你我要做這件事，你說不要，那就由你自己處理」。"
     }
   ]
 }

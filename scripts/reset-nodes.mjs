@@ -8,8 +8,9 @@
  *   node scripts/reset-nodes.mjs --subject <subject> --node <slug> [--node <slug> ...]
  *
  * Add --dry-run to preview. The node container's steps array, purposes, sources,
- * and lesson are kept; status returns to `confirmed` and every article becomes a
- * bare H1 skeleton. Generated figures under <step>-assets/ are removed, along with
+ * and lesson are kept; titles are removed from the steps array, status returns to
+ * `confirmed`, and every article becomes an empty skeleton. Generated figures under
+ * <step>-assets/ are removed, along with
  * the node's intermediate pipeline artifacts under learn/<subject>/output/
  * (material bundles, job files, prepare state, and article-agent run folders).
  */
@@ -92,6 +93,42 @@ function setFrontmatterFields(text, fields) {
     else block += `\n${key}: ${value}`;
   }
   return `---\n${block}\n---${text.slice(match[0].length)}`;
+}
+
+/** Remove the publisher-written title from every step entry. */
+function stripStepTitles(text) {
+  const lines = text.split("\n");
+  const fmStart = lines.findIndex((line) => line.trim() === "---");
+  const fmEnd = lines.findIndex((line, index) => index > fmStart && line.trim() === "---");
+  if (fmStart === -1 || fmEnd === -1) return text;
+  const stepsIndex = lines.findIndex(
+    (line, index) => index > fmStart && index < fmEnd && /^steps:\s*$/.test(line),
+  );
+  if (stepsIndex === -1) return text;
+  const kept = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const insideSteps = index > stepsIndex && index < fmEnd;
+    if (insideSteps && /^\s+title:\s*/.test(lines[index])) continue;
+    kept.push(lines[index]);
+  }
+  return kept.join("\n");
+}
+
+/** Point every ## Steps label at the stable step id until the publisher writes a title. */
+function labelStepsWithIds(text, stepEntries) {
+  return text
+    .split("\n")
+    .map((line) => {
+      for (const entry of stepEntries) {
+        const link = new RegExp(
+          `^(\\s*(?:\\d+\\.|[-*])\\s+\\[)([^\\]]*)(\\]\\([^)]*${String(entry.id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.md\\))`,
+        );
+        const match = line.match(link);
+        if (match) return `${match[1]}${entry.id}${match[3]}`;
+      }
+      return line;
+    })
+    .join("\n");
 }
 
 function emptyRemoved() {
@@ -249,11 +286,12 @@ export function resetNodes({ root = REPO_ROOT, subject, all = false, tier = null
       rmSync(nodeDir, { recursive: true, force: true });
       mkdirSync(nodeDir, { recursive: true });
       for (const entry of stepEntries) {
-        writeFileSync(join(nodeDir, `${entry.id}.md`), `# ${entry.title}\n`);
+        writeFileSync(join(nodeDir, `${entry.id}.md`), "");
       }
 
       const container = readFileSync(containerPath, "utf8");
-      writeFileSync(containerPath, setFrontmatterFields(container, { status: "confirmed", updated }));
+      const reset = labelStepsWithIds(stripStepTitles(container), stepEntries);
+      writeFileSync(containerPath, setFrontmatterFields(reset, { status: "confirmed", updated }));
     }
 
     results.push({ id, status, skipped: null, removedArticles, removedAssets, removedOrphans, ...output });

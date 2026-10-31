@@ -46,7 +46,7 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `node-digest-status` | every declared digest is `absorbed` (a `pending` or `skipped` digest may not be declared) |
 | `node-digest-undeclared` | every digest covering a step's `sources` is declared on that node |
 | `node-digest-unused` | on a `confirmed`/`written` node, every declared digest is cited by at least one step (draft nodes are exempt) |
-| `step-entry` | every step entry has `id`, `title`, `purpose`, and `sources` |
+| `step-entry` | every step entry has `id`, `purpose`, and `sources`; `title` is optional, and non-empty when present |
 | `step-purpose` | `purpose` is a single line of one short sentence (≤ 120 characters, no second sentence) |
 | `steps-flat` | step entries declare no `deps`, `type`, or `order` |
 | `steps-duplicate` | step ids are unique within a node |
@@ -61,8 +61,9 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 |---|---|
 | `step-article-missing` | every step entry has `nodes/<node>/<step>.md` |
 | `step-orphan` | every article in the node folder has a step entry |
-| `step-h1` | the article's first non-empty line is exactly `# <step title>` |
-| `node-steps-list` | `## Steps` exists when the node has steps; titles, ids, and order match frontmatter |
+| `step-h1` | when the entry has `title`, the article's first non-empty line is exactly `# <title>` |
+| `step-title-missing` | an article with a body has its title written back to the step entry |
+| `node-steps-list` | `## Steps` exists when the node has steps; each label is the step title when published, otherwise the id; ids and order match frontmatter |
 | `node-step-link` | every `## Steps` link resolves relative to the node file |
 
 `<!--image:N-->` is an HTML comment, not an image line. `verify` never requires a marker to have a matching file, so an article that still carries markers and no figures passes. For rendered `![...](./<step>-assets/image-N.webp)` lines it checks that the file exists, is a valid WebP, and lives under the step's asset folder, and it flags unreferenced files under `*-assets/` as orphans.

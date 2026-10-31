@@ -15,7 +15,7 @@ The dispatch gives you:
 
 - `root`, `nodeFile`, `nodeTitle`, `nodeGoal`
 - one teaching-plan path for the node
-- per ready step: `id`, `title`, `purpose`, `index`, `material`, `original`, `plan`, `command`
+- per ready step: `id`, `title` (null until an article exists), `purpose`, `index`, `material`, `original`, `plan`, `command`, `titleCommand`
 - `skipped[]`: already published steps with their `article` paths
 - the output language
 
@@ -36,11 +36,13 @@ Read the step's material bundle and its section in the teaching plan. Use only c
 
 Write the original to `original`:
 
-- The first line is `# <title>`; do not change the title.
+- The first line is the H1. If the dispatch gives a non-null `title`, keep it exactly. If `title` is null, choose one from a heading or phrase that actually appears in the step's material, translated faithfully into the output language; do not invent one. The same title becomes the node's step label.
 - Follow the teaching plan's outline: the same sections, in the same order, with the reader questions it names. Do not add, drop, or reorder sections.
 - Follow `sepia-write` for architecture, voice, openings, paragraphing, and closing. Do not switch its operation, and do not let its style pass override the teaching plan's outline.
 - Write in the dispatch's output language, which is the subject's MEMORY language. Do not draft in another language first.
 - Keep every sentence short: one idea per sentence. Split any sentence carrying more than one clause, and prefer breaking a long sentence in two over trimming words from it.
+- Write plain language: everyday words, active voice, concrete nouns — the simplest word that carries the meaning.
+- Keep changes minimal: the plan's sections and the source's claims stay as they are. Add no example, flourish, or fact the material lacks.
 - The original contains only the body. No source list, no inline citation block, no images, no `<!--image:N-->` markers, no quiz, no closing boilerplate. The wrapper inserts the markers.
 - If `original` already exists, overwrite it completely instead of appending.
 - Copy code verbatim in a fenced block with `<!-- source: <path>#<locator> -->` on the line above the fence; for code you assembled yourself, use `<!-- derived -->`.
@@ -86,9 +88,11 @@ The command protects code blocks, inserts `<!--image:N-->` per the plan, and lea
 
 The wrapper validates the number and order of markers; a missing, duplicated, or out-of-order marker fails.
 
-The returned JSON has `status`, `outputDir`, and `article`. An article is complete only when `status` is `completed`, the article's marker count equals the plan length, and the `index` 1 article carries a preface. Read the produced article before starting the next step.
+The returned JSON has `status`, `outputDir`, and `article`. An article is complete only when `status` is `completed`, the article's marker count equals the plan length, and the `index` 1 article carries a preface.
 
-If it is not `completed`, stop at this article, report the reason and `outputDir`, and leave the output for a human.
+After a completed wrapper run, run the step's `titleCommand`. It reads the H1 from `original`, writes it into the node's step entry, and updates the `## Steps` label. Confirm it reports `status: updated` (or `unchanged`) with the same title as the H1. Read the produced article before starting the next step.
+
+If the wrapper is not `completed`, stop at this article, report the reason and `outputDir`, and leave the output for a human. Do not run `titleCommand` for a failed article.
 
 ## Continuity
 
@@ -99,9 +103,9 @@ The teaching plan owns continuity. Each step's opening picks up the handoff the 
 ## Boundaries
 
 - Only handle this node's steps; do not read other nodes' articles, material, or plans.
-- Do not run `publish`, do not write to `learn/<subject>/nodes/`, and do not call the image model.
+- Do not run `publish`, do not call the image model, and do not write to `learn/<subject>/nodes/` except through the dispatch's `titleCommand`.
 - Do not rewrite the teaching plan or add facts the material does not support.
 
 ## Report
 
-Report completed articles out of total, each article's `command` status, `original` path, plan item count, and marker count; for a failed article include the reason and `outputDir`.
+Report completed articles out of total, each article's chosen title, `command` and `titleCommand` status, `original` path, plan item count, and marker count; for a failed article include the reason and `outputDir`.

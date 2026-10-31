@@ -123,7 +123,7 @@ function runDirect({ root, files, entry, plan, markersOnly, protectedText }) {
   writeFileSync(files.protected, article);
   writeJson(files.request, {
     mode: "direct",
-    title: entry.title,
+    title: entry.title ?? null,
     articleFile: relative(root, files.protected),
     plan: plan ?? null,
     markersOnly: Boolean(markersOnly),
@@ -199,7 +199,7 @@ async function runTranslate({ root, files, entry, plan, markersOnly, protectedTe
     const translateArticleNeeded = needsChinese(prepared);
     writeJson(files.request, {
       mode: "translate",
-      title: entry.title,
+      title: entry.title ?? null,
       articleFile: relative(root, files.protected),
       plan: plan ?? null,
       markersOnly: Boolean(markersOnly),

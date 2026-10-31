@@ -61,7 +61,7 @@ Never use: "we're excited to announce", "best-in-class", "industry-leading", "cu
 
 ## Title
 
-The title makes a specific claim or promises a specific payoff. "Your JavaScript bundle has 47% dead code" beats "Improving bundle size". Keep the node's step title unless the dispatch explicitly allows retitling; a step title is part of the published plan.
+The title makes a specific claim or promises a specific payoff. "Your JavaScript bundle has 47% dead code" beats "Improving bundle size". Keep the dispatch's title exactly when one is given; otherwise choose a specific title from the material and write it as the H1.
 
 ## Closing
 

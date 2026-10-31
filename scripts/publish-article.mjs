@@ -41,14 +41,14 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
     const target = join(root, "learn", subject, "nodes", nodeId, `${entry.id}.md`);
     const shown = relative(root, target);
     if (!force && !prepared.has(entry.id)) {
-      results.push({ id: entry.id, title: entry.title, status: "not-prepared", path: shown });
+      results.push({ id: entry.id, title: entry.title ?? entry.id, status: "not-prepared", path: shown });
       continue;
     }
     const result = readJson(files.result);
     if (!result || result.status !== "completed") {
       results.push({
         id: entry.id,
-        title: entry.title,
+        title: entry.title ?? entry.id,
         status: "failed",
         path: shown,
         error: result?.error ?? "no completed article-agent run",
@@ -57,13 +57,13 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
     }
     const article = existsSync(result.article) ? readFileSync(result.article, "utf8") : "";
     if (!article.trim()) {
-      results.push({ id: entry.id, title: entry.title, status: "failed", path: shown, error: "run produced no article" });
+      results.push({ id: entry.id, title: entry.title ?? entry.id, status: "failed", path: shown, error: "run produced no article" });
       continue;
     }
     const blocks = readJson(files.blocks) ?? [];
-    const body = normalizeArticleText(restoreCode(article, blocks), entry.title);
+    const body = normalizeArticleText(restoreCode(article, blocks), entry.title ?? null);
     if (!hasArticleBody(body)) {
-      results.push({ id: entry.id, title: entry.title, status: "failed", path: shown, error: "article has no body" });
+      results.push({ id: entry.id, title: entry.title ?? entry.id, status: "failed", path: shown, error: "article has no body" });
       continue;
     }
     mkdirSync(dirname(target), { recursive: true });
@@ -75,7 +75,7 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
       clearStepImages(root, { subject, node: nodeId, step: entry.id });
       rmSync(polishedRecordPath(root, { subject, node: nodeId, step: entry.id }), { force: true });
     }
-    results.push({ id: entry.id, title: entry.title, status: "published", path: shown });
+    results.push({ id: entry.id, title: entry.title ?? entry.id, status: "published", path: shown });
   }
 
   markNodeWritten(node, subject, nodeId, root);

@@ -259,7 +259,7 @@ test("steps may not declare deps, type, or order", (t) => {
   }
 });
 
-test("each step entry needs id, title, purpose, and sources", (t) => {
+test("each step entry needs id, purpose, and sources", (t) => {
   const root = fixture(t);
   update(root, "learn/test/nodes/n1.md", "    purpose: \"Explain one thing.\"\n", "");
   assert.ok(failures(root).includes("step-entry"));
@@ -320,6 +320,33 @@ test("an H1-only article skeleton is accepted", (t) => {
   const root = fixture(t);
   write(root, "learn/test/nodes/n1/s1.md", "# Step One\n");
   assert.deepEqual(failures(root), []);
+});
+
+test("a planned step may omit title and use an empty skeleton", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/nodes/n1.md",
+    nodeFile({
+      steps: defaultSteps().replace('    title: "Step One"\n', ""),
+      body: defaultBody().replace("1. [Step One](n1/s1.md)", "1. [s1](n1/s1.md)"),
+    }),
+  );
+  write(root, "learn/test/nodes/n1/s1.md", "");
+  assert.deepEqual(failures(root), []);
+});
+
+test("an article body requires the publisher to write the title back", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/nodes/n1.md",
+    nodeFile({
+      steps: defaultSteps().replace('    title: "Step One"\n', ""),
+      body: defaultBody().replace("1. [Step One](n1/s1.md)", "1. [s1](n1/s1.md)"),
+    }),
+  );
+  assert.ok(failures(root).includes("step-title-missing"));
 });
 
 test("every article belongs to a step entry", (t) => {

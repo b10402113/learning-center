@@ -20,7 +20,7 @@ The dispatch gives you:
 - the plan path `learn/<subject>/output/jobs/<node-id>/teaching-plan.md`
 - the output language
 
-The node's steps array is the contract: keep its order and its ids. Use the given paths literally; do not join, rewrite, or guess one.
+The node's steps array is the contract: keep its order, its ids, and its one-sentence purposes. Titles do not exist yet; the publisher writes them with the articles. Use the given paths literally; do not join, rewrite, or guess one.
 
 Read every slice of a step's material before planning that step.
 

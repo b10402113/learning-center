@@ -57,9 +57,9 @@ Load `learn/<subject>/nodes/<node-id>.md`. Parse the ordered `steps` array — t
 
 ### 5b. Decide the position
 
-1. Read the node's `goal` and every existing step's `title` + `purpose`.
+1. Read the node's `goal` and every existing step's `id` + `purpose`.
 2. Decide where the new step belongs in the teaching order: after the last step by default, or inserted where it logically builds on an earlier step.
-3. The new step needs a unique kebab-case `id`, a `title`, a **one-sentence purpose (≤ 120 characters)**, and one or more `[[sources/<subject>/<file>#Lx-Ly]]` line ranges from the new digest. The title must come from a heading or phrase that actually appears in the source, translated faithfully into Traditional Chinese; do not invent one.
+3. The new step needs a unique kebab-case `id`, a **one-sentence purpose (≤ 120 characters)**, and one or more `[[sources/<subject>/<file>#Lx-Ly]]` line ranges from the new digest. Do not write a title; the publisher chooses it when `/article` writes the step.
 
 ### 5c. Write the step entry
 
@@ -67,18 +67,14 @@ Insert the step object into the `steps` array at the chosen position. Array orde
 
 ### 5d. Create the article skeleton
 
-Write `learn/<subject>/nodes/<node-id>/<new-step-id>.md` containing only:
-
-```markdown
-# <step title>
-```
+Create an empty `learn/<subject>/nodes/<node-id>/<new-step-id>.md` — zero bytes, no heading.
 
 ### 5e. Update the `## Steps` list
 
 Insert the matching relative link at the same position:
 
 ```markdown
-3. [<Step title>](<node-id>/<new-step-id>.md)
+3. [<new-step-id>](<node-id>/<new-step-id>.md)
 ```
 
 ### 5f. Update the node status and digests
@@ -115,4 +111,4 @@ Summarise:
 - The verify result (exit status, surviving failures).
 - **Next steps**: for each modified node, run `/article <subject>/<node-id>` to write the new step; for each new node, run `/nodes` first.
 
-Completion: every processed digest is `absorbed` or `skipped` (with a reason), every node that gained a step lists that digest in `digests`, every appended step has an entry in the node's `steps` array, a skeleton article, and a matching `## Steps` link, every modified node is `confirmed`, and verify passes (or surviving failures are listed).
+Completion: every processed digest is `absorbed` or `skipped` (with a reason), every node that gained a step lists that digest in `digests`, every appended step has an entry in the node's `steps` array, an empty skeleton article, and a matching `## Steps` link labelled with its id, every modified node is `confirmed`, and verify passes (or surviving failures are listed).

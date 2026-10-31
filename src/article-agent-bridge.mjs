@@ -156,7 +156,7 @@ export function writeMaterial(root, { subject, node, entry, slices }) {
     subject,
     node,
     step: entry.id,
-    title: entry.title,
+    title: entry.title ?? null,
     purpose: entry.purpose,
     sources: slices,
   };

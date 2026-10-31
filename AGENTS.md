@@ -67,8 +67,8 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 | `/learn-init` | Write `MEMORY.md`, extract PDFs to `.txt`, build digests (L1 + line-addressed L2). |
 | `/ingest` | Archive new source files and write `pending` digests. Does not touch roadmap, nodes, or articles; a `pending` digest makes the subject check fail until `/absorb` resolves it. |
 | `/roadmap` | Propose ≥5 learning paths, confirm one, partition into nodes, write `ROADMAP.md` and `draft` node containers with their `digests` lists. |
-| `/nodes` | Reasoning checkpoint per node: write the `steps` array (`id`, `title`, `purpose`, `sources`), create H1-only article skeletons, set `confirmed`. |
-| `/article` | `prepare` slices each step into a material bundle; one `teach-agent` per node reads the bundles and writes a single short teaching plan (mission, reader, spine, and per step: type, load-bearing facts with locators, 2–4 outline questions, a retrieval checkpoint, a handoff); one `publisher` per node writes every step's original in the subject's MEMORY language and a 1–5 item image plan, following the teaching plan; the wrapper inserts `<!--image:N-->` markers and leaves the publisher's prose untouched; `publish` writes `<step>.md` and verifies. Polish is the only later prose stage. It never calls the image model and never creates `<step>-assets/`. |
+| `/nodes` | Reasoning checkpoint per node: write the `steps` array (`id`, `purpose`, `sources`), create empty article skeletons, set `confirmed`. The publisher writes each title with its article. |
+| `/article` | `prepare` slices each step into a material bundle; one `teach-agent` per node reads the bundles and writes a single short teaching plan (mission, reader, spine, and per step: type, load-bearing facts with locators, 2–4 outline questions, a retrieval checkpoint, a handoff); one `publisher` per node writes every step's original in the subject's MEMORY language, chooses its title, and writes a 1–5 item image plan, following the teaching plan; the wrapper inserts `<!--image:N-->` markers and leaves the publisher's prose untouched; a title write-back updates the node's step entry; `publish` writes `<step>.md` and verifies. Polish is the only later prose stage. It never calls the image model and never creates `<step>-assets/`. |
 | `/polish-article` | Processes only steps with a plan and a marker or image line: `scripts/polish-article.mjs` masks the H1, code, provenance, markers, image lines, quiz blocks and links, polishes the prose with one model call per step, restores and validates the structure, retries a failed validation once, then writes the article back and records its sha256 in `output/polished/`. A changed article drops its quiz sidecar. Reruns skip recorded steps; `--force` redoes them. |
 | `/generate-images` | Thin shell over `src/render-images.mjs`: reads the plan and the article's `<!--image:N-->` markers, generates or reuses `image-N.webp` under `<step>-assets/`, and replaces each marker with an uncaptioned image line. With `--force` it also repaints the files behind existing image lines. It never plans, edits prose, or reads `anchor`. |
 | `/quiz-gen` | One `quiz-agent` per node reads its published steps and writes 3–8 single-choice questions per step; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; course-app renders them after the article. |
@@ -83,7 +83,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 
 1. **Sources are immutable** — never modify anything under `sources/`. Archived transcripts in `legacy/tune/` are immutable too.
 2. **The node is the plan** — `steps` array order is teaching order. There is no `deps`, `type`, or per-step `order`.
-3. **The step is the article** — `learn/<subject>/nodes/<node>/<step>.md`, with no frontmatter, opens with `# <step title>`.
+3. **The step is the article** — `learn/<subject>/nodes/<node>/<step>.md`, with no frontmatter, opens with the H1 the publisher chose and wrote back to the step entry.
 4. **Citations are line-addressed** — every source link is `[[sources/<subject>/<file>#Lx-Ly]]` into a `.txt`, covered by a digest L2 range. PDFs are never cited.
 5. **Verify is the format gate** — `scripts/verify.mjs` is the single source of truth; every format rule is a hard failure with a negative fixture.
 6. **No HTML, no MDX** — the course-app renders Markdown. Nothing in the active flow imports from `legacy/`.
@@ -117,7 +117,6 @@ digests:
 prerequisites: []
 steps:
   - id: harness-is-the-product
-    title: "Harness 才是產品：LLM 之外的基礎設施"
     purpose: "能用「LLM + harness」解釋 agent，並說出 memory、tools、long-running 為什麼屬於 harness。"
     sources:
       - "[[sources/agent-harness/20260915/1-what-is-an-agent-harness.txt#L7-L25]]"
@@ -129,17 +128,17 @@ updated: 2026-10-22
 Rules:
 
 - `id` equals the filename; `subject` equals the subject argument.
-- `steps` is an ordered array; each entry has exactly `id`, `title`, `purpose`, `sources`.
+- `steps` is an ordered array; a planned entry has exactly `id`, `purpose`, `sources`. The publisher adds `title` when it writes the article, and that title is the article's H1.
 - `purpose` is one short sentence (≤ 120 characters), not an article summary.
 - A `draft` node may have `steps: []`; `confirmed` and `written` need at least one step.
-- The body is `# <title>`, a short `## Lesson`, and a `## Steps` list whose titles, ids, and order match the frontmatter. Links are relative to the node file.
+- The body is `# <title>`, a short `## Lesson`, and a `## Steps` list whose ids and order match the frontmatter. Each link label is the step's `title` once published, and the step `id` while the article is still unwritten. Links are relative to the node file.
 - There is no node-level `sources` field; sources live on step entries.
 - `digests` lists the digest filenames this node teaches; `/roadmap` declares it up front and `/nodes` and `/absorb` keep it true. Every step source must come from a declared digest, a declared digest must be `absorbed`, and a `confirmed`/`written` node may not declare a digest no step cites.
 - `prerequisites` holds stable node paths such as `learn/<subject>/nodes/<id>.md`.
 
 ### Step article — `learn/<subject>/nodes/<node-id>/<step-id>.md`
 
-- No frontmatter. The first non-empty line is `# <step title>`.
+- No frontmatter. The first non-empty line is the H1, written by the publisher and identical to the step entry's `title`.
 - Free length and free `##` sections; Traditional Chinese, short paragraphs, editorial tone.
 - Do **not** write a source list or inline citations — course-app aggregates the step's sources below the article.
 - Do **not** write a practice section or inline quiz. Generated questions live in the sibling `<step>.quiz.json`.
@@ -163,7 +162,7 @@ Rules:
 }
 ```
 
-One file per step. `questions` has 3–8 entries; every entry has a non-empty `question`, 2–5 non-empty `options`, a 0-based integer `answer`, and a non-empty `explain`. `/quiz-gen` writes this file; course-app renders the questions after the article and before the source list. The file is not merged into the Markdown.
+One file per step. `questions` has 3–8 entries; every entry has a non-empty `question`, 2–5 non-empty `options`, a 0-based integer `answer`, and a non-empty `explain`. Options share one length band — the longest at most half again as long as the shortest, with 6 characters of slack — and correct answers rotate across positions; `write` enforces both, so option length or slot never reveals the answer. `/quiz-gen` writes this file; course-app renders the questions after the article and before the source list. The file is not merged into the Markdown.
 
 The legacy fenced `quiz` block is still accepted by the renderer and `verify`, but new content should not add one.
 
@@ -228,9 +227,9 @@ node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force
 node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only]  (deprecated)
 ```
 
-- `prepare` writes one material bundle per missing step to `learn/<subject>/output/materials/<node>/<step>.json`, returns the node's teaching-plan path and the steps already published. One `teach-agent` per node reads `learn/<subject>/output/materials/<node>/<step>.json` and writes `learn/<subject>/output/jobs/<node>/teaching-plan.md`; one `publisher` per node writes each step's original to `learn/<subject>/output/jobs/<node>/<step>/<step>.original.md` and its plan to `learn/<subject>/output/image-plans/<node>/<step>.json`, then runs that step's `run-article-agent.mjs --markers-only`, which validates the plan, protects code blocks, inserts the `<!--image:N-->` markers, and leaves the prose as the publisher wrote it. The original is written in the subject's MEMORY language, so the pipeline never translates. The default `--mode direct` calls no text model; `--mode translate` and `--mode rewrite` remain as legacy modes for repairing old articles. It never generates figures.
+- `prepare` writes one material bundle per missing step to `learn/<subject>/output/materials/<node>/<step>.json`, returns the node's teaching-plan path and the steps already published. One `teach-agent` per node reads `learn/<subject>/output/materials/<node>/<step>.json` and writes `learn/<subject>/output/jobs/<node>/teaching-plan.md`; one `publisher` per node writes each step's original to `learn/<subject>/output/jobs/<node>/<step>/<step>.original.md` and its plan to `learn/<subject>/output/image-plans/<node>/<step>.json`, then runs that step's `run-article-agent.mjs --markers-only`, which validates the plan, protects code blocks, inserts the `<!--image:N-->` markers, and leaves the prose as the publisher wrote it. Each step also carries a `titleCommand`; the publisher runs it after a completed wrapper to write the chosen H1 back into the step entry and the `## Steps` label. The original is written in the subject's MEMORY language, so the pipeline never translates. The default `--mode direct` calls no text model; `--mode translate` and `--mode rewrite` remain as legacy modes for repairing old articles. It never generates figures.
 - `publish` restores the code, keeps the markers, normalizes the H1, writes `learn/<subject>/nodes/<node>/<step>.md`, marks the node `written`, and runs verify. It never syncs, copies, or deletes `<step>-assets/` unless `--force` succeeds. With `--force`, a successful write clears that step's stale `image-N.webp` files and polish record.
-- Missing or H1-only articles are generated; articles with a body are skipped unless `--force`.
+- Missing or empty articles are generated; articles with a body are skipped unless `--force`.
 - `polish-article.mjs run` polishes every eligible step (article body, plan, marker or image line) in parallel, skipping steps whose `output/polished/<node>/<step>.json` still matches the article hash unless `--force` is given. Before each model call it masks the H1, fenced code, provenance comments, markers, image lines and captions, quiz blocks, inline code and links; after the call it restores them and validates the article against that backup (H1, code, provenance, markers, image lines, quiz, links). A failed validation retries once, then records `failed` and leaves the official article untouched. It never touches the plan. A changed article deletes its `<step>.quiz.json`.
 - `render` reads the plan and the article's markers. It generates only the missing `image-N.webp` files, reuses existing ones, and replaces each marker with `![第 N 段配圖](./<step>-assets/image-N.webp)` — no caption. It does not plan, edit prose, or read `anchor`. It needs an image key but no text key. If the step's polish record still matches the pre-render article, `render` refreshes that record's article hash so a later polish run still reports `skipped-record`.
 - The legacy `article` and `image` commands are deprecated. They remain usable for repairs on old articles but are not part of the current pipeline; `image --plan-only` still writes the shared plan path.
@@ -250,6 +249,7 @@ node scripts/quiz.mjs status  --subject <s> --node <n>
 
 - `/quiz-gen` runs `prepare`, dispatches one `quiz-agent` per ready step, which writes each step's candidate JSON to `learn/<subject>/output/quiz-candidates/`, then runs `write` to validate and publish `<step>.quiz.json`.
 - Each step gets 3–8 questions. The length ceiling is `min(8, max(3, round(CJK字數 / 250)))`; an article that cannot support 3 distinct questions fails instead of padding.
+- `write` also rejects `quiz-option-length` (an option outside the length band) and `quiz-answer-spread` (correct answers crowded onto too few positions); `/quiz-gen` re-dispatches the agent once to fix those before giving up on the step.
 - `prepare` skips existing quiz files unless `--force`; `write` refuses to overwrite without `--force`.
 - Nothing is inserted into the article Markdown. Regenerate course-app data with `npm --prefix course-app run gen`.
 - After a batch, run `node scripts/verify.mjs --node <subject>/<node>`.
@@ -281,7 +281,7 @@ Idempotent: existing `.txt` files are not overwritten, so line numbers stay stab
 node scripts/reset-nodes.mjs --subject <subject> (--all | --tier <n> | --node <id> ...) [--dry-run]
 ```
 
-Keeps each node container and its step plan; sets `status: confirmed`, rewrites every step article as a bare H1 skeleton, removes figures, and deletes the node's intermediate `output/` artifacts (material bundles, job files, the formal image plans, polish records, legacy humanize records and workspaces, article-agent run folders, quiz candidates). `/article` then regenerates the bodies and plans from scratch, and `/generate-images` renders the figures.
+Keeps each node container and its step plan; sets `status: confirmed`, rewrites every step article as an empty skeleton, removes step titles from the plan, removes figures, and deletes the node's intermediate `output/` artifacts (material bundles, job files, the formal image plans, polish records, legacy humanize records and workspaces, article-agent run folders, quiz candidates). `/article` then regenerates the bodies and plans from scratch, and `/generate-images` renders the figures.
 
 ### Lint
 
@@ -290,7 +290,7 @@ node scripts/verify.mjs --subject <subject>
 node scripts/verify.mjs --node <subject>/<node-id>
 ```
 
-It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, H1, `## Steps`, source locators and digest coverage, node ↔ digest declarations (`node-digest-unknown`, `node-digest-status`, `node-digest-undeclared`, `node-digest-unused`, `digest-unreferenced`, `digest-pending`, `digest-skip-reason`), code provenance, quiz sidecars, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
+It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, the publisher-written title and H1, `## Steps`, source locators and digest coverage, node ↔ digest declarations (`node-digest-unknown`, `node-digest-status`, `node-digest-undeclared`, `node-digest-unused`, `digest-unreferenced`, `digest-pending`, `digest-skip-reason`), code provenance, quiz sidecars, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
 
 ### Query
 

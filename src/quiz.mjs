@@ -5,6 +5,8 @@ export const QUIZ_MAX_QUESTIONS = 8;
 export const QUIZ_MIN_OPTIONS = 2;
 export const QUIZ_MAX_OPTIONS = 5;
 export const QUIZ_CHARS_PER_QUESTION = 250;
+export const QUIZ_OPTION_SLACK_CHARS = 6;
+export const QUIZ_OPTION_SLACK_RATIO = 0.5;
 
 export function quizFileRel(subject, nodeId, stepId) {
   return `learn/${subject}/nodes/${nodeId}/${stepId}.quiz.json`;
@@ -21,6 +23,68 @@ export function maxQuestionsFor(characters) {
     QUIZ_MAX_QUESTIONS,
     Math.max(QUIZ_MIN_QUESTIONS, Math.round(count / QUIZ_CHARS_PER_QUESTION)),
   );
+}
+
+function optionLengths(question) {
+  if (!question || !Array.isArray(question.options)) return null;
+  if (!question.options.every((option) => typeof option === "string")) return null;
+  if (
+    !Number.isInteger(question.answer) ||
+    question.answer < 0 ||
+    question.answer >= question.options.length
+  ) {
+    return null;
+  }
+  return question.options.map((option) => option.length);
+}
+
+function optionShapeErrors(question, index) {
+  const lengths = optionLengths(question);
+  if (!lengths || lengths.length === 0) return [];
+
+  const shortest = Math.min(...lengths);
+  const longest = Math.max(...lengths);
+  const slack = Math.max(
+    QUIZ_OPTION_SLACK_CHARS,
+    Math.round(shortest * QUIZ_OPTION_SLACK_RATIO),
+  );
+  if (longest <= shortest + slack) return [];
+
+  return [
+    {
+      checkId: "quiz-option-length",
+      message: `questions[${index}].options run ${shortest}-${longest} characters; keep every option within ${slack} characters of the shortest so length never points at the correct answer`,
+    },
+  ];
+}
+
+function answerSpreadErrors(questions) {
+  const lengths = questions.map(optionLengths);
+  if (lengths.some((item) => item === null)) return [];
+
+  const positions = Math.min(...lengths.map((item) => item.length));
+  const counts = new Map();
+  for (const question of questions) {
+    counts.set(question.answer, (counts.get(question.answer) ?? 0) + 1);
+  }
+
+  const errors = [];
+  const perPosition = Math.ceil(questions.length / positions);
+  const needed = Math.min(questions.length, positions);
+  if (counts.size < needed) {
+    errors.push({
+      checkId: "quiz-answer-spread",
+      message: `correct answers use only ${counts.size} distinct position(s) across ${questions.length} questions; rotate them over at least ${needed} positions`,
+    });
+  }
+  for (const [position, count] of [...counts].sort((a, b) => a[0] - b[0])) {
+    if (count <= perPosition) continue;
+    errors.push({
+      checkId: "quiz-answer-spread",
+      message: `correct answers sit at position ${position} ${count} times; with ${questions.length} questions and ${positions} positions, no position may hold more than ${perPosition}`,
+    });
+  }
+  return errors;
 }
 
 function validateQuestion(question, index) {
@@ -81,7 +145,10 @@ function validateQuestion(question, index) {
   return errors;
 }
 
-export function validateQuizPayload(payload, { maxQuestions = QUIZ_MAX_QUESTIONS } = {}) {
+export function validateQuizPayload(
+  payload,
+  { maxQuestions = QUIZ_MAX_QUESTIONS, enforceStyle = false } = {},
+) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return [{ checkId: "quiz-file-json", message: "quiz file must be a JSON object" }];
   }
@@ -113,6 +180,11 @@ export function validateQuizPayload(payload, { maxQuestions = QUIZ_MAX_QUESTIONS
 
   for (const [index, question] of questions.entries()) {
     errors.push(...validateQuestion(question, index));
+    if (enforceStyle) errors.push(...optionShapeErrors(question, index));
+  }
+
+  if (enforceStyle && questions.length >= QUIZ_MIN_QUESTIONS) {
+    errors.push(...answerSpreadErrors(questions));
   }
 
   return errors;

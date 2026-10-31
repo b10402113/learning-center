@@ -1,103 +1,73 @@
-# 弄壞它：批准期間 state 漂移 → stale proposal
+# 如果批准了：先確認狀態沒跑掉
 
-上一步，你已經把 approval request 寫進資料庫。人從收件匣按下批准，workflow 就會醒來。最直覺的寫法是：醒來、讀到 approved、執行那筆 action，收工。
+上一篇介紹的 approval 分支，已經能撐過等待。這篇要看 approve 之後的第一件事：真正執行前，先確認狀態沒有改變。
 
-這一節要把這個直覺弄壞。
+## 批准了，不代表仍然有效
 
-因為 approval 是非同步的。送出 proposal 的當下，狀態可能是 ABC；等人真的按下按鈕，三個禮拜已經過去，狀態早就變成 XYZ。
+我們做的是非同步 workflow。今天送出一個批准請求，可能要一個禮拜後才有人查看，也可能要等上三個禮拜。
 
-那份「當初看起來很合理的下一步」，現在可能已經不是該做的事。照著三個禮拜前的判斷硬跑，結果可能完全不一樣。
+送出 proposal 的當下，狀態是 ABC；一個禮拜後，狀態可能已經變成 XYZ。
 
-## 為什麼不能批准就執行
+當初看起來合理的下一步，現在很可能已經不該做了。這就是 stale proposal（過期提案）。
 
-用轉帳最容易看出問題。
+想像一下，如果這是轉帳批准：提案送出時，你的帳戶餘額綽綽有餘；等你終於批准時，錢卻已經不夠了。如果執行前不查餘額，就會直接透支。
 
-提案送出的時候，帳戶裡的錢綽綽有餘；等你終於批准，餘額可能已經不夠了。如果執行前不重新查餘額，就等於直接透支。
+所以，批准不等於可以執行。批准只回答了「人同不同意」，沒有回答「現在的條件是否仍然成立」。
 
-rollback 這類 action 也一樣。所以流程不能是「approved 就直接往下跑」，中間要多一道檢查：
+<!--image:1-->
 
-> 真正執行之前，狀態還是不是原本那個？
+## 比對版本；不一致就作廢，而不是執行
 
-這道檢查要拿什麼來比？直接比對完整狀態太重，所以在送出提案時，先把手上的狀態拍成快照存進資料庫。等真的要執行時，再比對「現在」和「當初」是不是同一個。
+approve 之後，我們先開一個 step：`fresh = await step.run("recheck approved state")`，並帶入 cycle。
 
-在這個假 server 裡，每次狀態改變都會在資料庫記下一筆 snapshot，配上一個新的 version。所以 agent 不用把整份 snapshot 傳來傳去，只要傳一個版本號，server 再用這個號碼去找真正的快照。
+接著取得 agent 的最新 state，並帶上 environment ID 和 run ID。
 
-傳的是快照的 reference，不是快照本身。
+然後比對：`fresh.world.version` 和這次 workflow 啟動時的 input 版本是否一致。
 
-![第 1 段配圖](./break-it-stale-proposal-assets/image-1.webp)
+如果一致，就往下走到執行那一行，真正執行 action。
 
-## 把檢查寫進去
+如果不一致，就不執行，而是改做另一件事：開一個 step，叫 `invalidate approval`，並帶入 cycle。接著呼叫 `staleProposal`，用 proposal ID 將它在資料庫裡標記為 stale。這樣它就會從收件匣中消失。
 
-批准之後，先不要執行。開一個 step 重新讀取最新的 state，再拿這次 workflow 啟動時收到的 input 版本來比對。
+然後呼叫 `continue`，回到外層迴圈。從最上面重新檢查狀態、取得最新資訊，再決定下一步。
 
-<!-- derived -->
-```ts
-const fresh = await step.run("recheck approved state", async () => {
-  return getState({ environmentId, runId })
-})
+<!--image:2-->
 
-if (fresh.world.version !== inputVersion) {
-  await step.run("invalidate approval", async () => {
-    await staleProposal(proposalId)
-  })
-  continue
-}
-```
+這裡要分清楚兩條路。人拒絕時，run 會被標記為 escalated。批准過期則不是拒絕：人按下了 approve，只是世界已經變了。因此流程不會走到 escalated，而是回到迴圈頂端，重新觀察狀態。
 
-比的是 `fresh.world.version` 和 input 版本是否相同。
+還有一個實作細節：原本那個 `return` 要拿掉。否則，approved 且 state 仍然新鮮時，流程就會跳不過去，action 永遠不會執行。
 
-不一樣就別執行，改成讓 approval 失效，再用 proposal ID 把這筆 proposal 在資料庫裡標成 stale。
+## 弄髒狀態：狀態變動後再按批准
 
-標成 stale 之後，這筆 proposal 會從收件匣裡消失。人不會再看到一個早就不能用的動作，還擱在那裡等人批准。
+這條分支不實際跑過，就不會知道是否有效，所以要故意讓狀態發生變化。
 
-![第 2 段配圖](./break-it-stale-proposal-assets/image-2.webp)
+先啟動 dev agent。這次切到一個新分支，程式裡有 sleep，所以 agent 會慢慢執行。接著下 `fault release`。它會判斷應該執行 rollback，但 harness 會在這一層攔下它，因為這類動作需要 approval。於是 Harness 送出一個 approval request。
 
-## 重現：讓版本號對不上
+收件匣裡立刻多了一筆資料。
 
-happy path 很容易重現。你送出一個 release fault，接著批准 rollback；workflow 醒來、完成比對，確認版本一致後執行 action。
+這筆資料不是通知，而是資料庫裡的一個 proposed action。Inbox 會從資料庫撈出所有 proposed action，所以能顯示這筆資料。我們沒有把通知送到其他地方，只是將 proposal 存進資料庫，再由 inbox 撈出來。它做的只是讀取那張表。
 
-source 的示範就是這樣：approve 之後 resume，state 原本是 version 1，執行完變成 version 2，表示這個 action 確實改動了 state。
+畫面上顯示：「propose rollback release，please review the exact action before I proceed」。上面沒有參數，這是刻意的：這些工具都是假的，工具本身什麼也不會做。換成真實情況，你會想知道要回滾到哪個版本、從哪個版本回滾；這些才是 arguments。這裡一個都沒有。
 
-真正要弄壞的，是中間那段等待：讓 state 在你按下批准之前先變了。
+工具唯一拿到的參數，是 proposal 送出當下 state 的版本。這個資訊對人來說沒有意義。你看到只會想：「這是什麼？」它只代表 proposal 送出當下生效的是哪個版本。
 
-做法不複雜。先送出 proposal，確認當下的 version，然後別急著批准。先拖一段時間，讓狀態漂移，再回去按批准。
+好，現在不要照正常流程走。在按下批准之前，先修改 state，讓版本往前推進，然後再按 approve。
 
-這時候，`fresh.world.version` 已經不是 proposal 送出時那個號碼。結果不會是「執行」，而是三件事接連發生：
+按下按鈕時，inbox 會觸發 `agent.approval.decided`，讓整個 workflow 再跑一次。不過前面執行過的步驟都已經 cache 了，所以流程幾乎會直接從 wait 那裡 resume，速度非常快。
 
-1. proposal 被標成 stale。
-2. proposal 從收件匣消失。
-3. workflow 繞回迴圈最上面，重新觀察狀態。
+回到程式碼時，流程已經不在 while 迴圈裡。它會從資料庫讀取人類的決定，看到結果是 approved。接著重新檢查狀態，取得最新 state，發現版本已經不同。
 
-![第 3 段配圖](./break-it-stale-proposal-assets/image-3.webp)
+所以它不會執行 rollback，而是將 proposal 標記為 stale，讓它從收件匣中消失。run 則回到最上方，重新 observe，根據目前的狀態重新判斷。
 
-這條分支值得親手跑一次，因為它和平常寫程式的直覺相反。
+## 解法是迴圈，不是重試
 
-在同步程式裡，「使用者按下按鈕」和「讀取狀態」幾乎是同一瞬間的事；在這裡，中間可能隔著好幾天，而這段空白裡，狀態不會乖乖待著。
+為什麼過期之後要回去 observe，而不是重跑同一個 action？
 
-## 為什麼是 continue，不是 return
+因為條件已經變了。正確的下一步可能根本不是原本那個動作。硬跑同一個 action，就等於拿過期的假設去賭。
 
-回到迴圈最上面的那一步，用的是 `continue`，不是 `return`。
+回去 observe 之後，agent 會重新檢查狀態。如果它仍然認為 rollback 是正確選擇，就會再次選擇這個動作、重新送出 proposal。希望這次人能快一點回覆，不必一直重複。
 
-`continue` 是重新查看狀態、拿最新的資料，再決定下一步。
+但這總比拿著過期的狀態硬跑，再祈禱它會成功好得多。
 
-重新想過之後，如果還是認為這個動作該做，它會再選一次、再送一次 proposal，等人下一次批准。
+這和一般寫程式時的直覺很不一樣。現在所有事情都是非同步的，你必須這樣思考：做出決定時所依據的世界，可能早已不復存在。
 
-這比拿著過期狀態硬跑、再祈禱它會成功好得多。source 講得很直接：現在所有東西都是非同步的，你必須用這種方式思考。
-
-## 最後一步：把舊的 return 拿掉
-
-還有一個容易漏掉的收尾：原本那個 `return` 要拿掉。
-
-拿掉之後，流程才會真的往下走。只有通過「已批准，而且 state 還是最新的」這一關，才會落到執行那一行，真的把 action 跑起來。
-
-檢查放在執行之前，執行程式碼放在檢查之後。整個設計的重點就在這個順序。
-
-## 這只是延遲處理的版本
-
-這一版的定位是延遲處理：檢查發生在批准的那一刻，不是狀態改變的那一刻。
-
-更主動的做法相反：每次狀態改變，就掃描所有 pending 的 proposal，看它們還算不算數，失效的直接從收件匣清掉。
-
-這樣一來，人只會看到還有效、可以批准的動作，不會看到過期的 proposal。source 說這是他自己會採用的版本，但課程裡沒有實作，留給你試。
-
-![第 4 段配圖](./break-it-stale-proposal-assets/image-4.webp)
+到這裡，run 能暫停、能續跑，也能拒絕過期的批准。剩下的風險在執行本身：如果 rollback 需要重試，要怎麼確保它不會執行兩次？
