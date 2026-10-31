@@ -221,7 +221,7 @@ test("a step without an article body is skipped", async (t) => {
 
 function recordFor(text) {
   return {
-    humanized_at: "2026-10-27T00:00:00.000Z",
+    polished_at: "2026-10-27T00:00:00.000Z",
     article_sha256: createHash("sha256").update(text).digest("hex"),
     plan_sha256: "plan-hash",
     changed: true,
@@ -229,21 +229,21 @@ function recordFor(text) {
   };
 }
 
-test("rendering refreshes a matching humanize record so the article stays skipped", async (t) => {
+test("rendering refreshes a matching polish record so the article stays skipped", async (t) => {
   const root = fixture(t);
-  write(root, "learn/test/output/humanized/n1/s1.json", JSON.stringify(recordFor(article(root))));
+  write(root, "learn/test/output/polished/n1/s1.json", JSON.stringify(recordFor(article(root))));
   await renderImages({ subject: "test", node: "n1" }, deps(root));
 
-  const record = JSON.parse(readFileSync(join(root, "learn/test/output/humanized/n1/s1.json"), "utf8"));
+  const record = JSON.parse(readFileSync(join(root, "learn/test/output/polished/n1/s1.json"), "utf8"));
   assert.equal(record.article_sha256, createHash("sha256").update(article(root)).digest("hex"));
   assert.equal(record.plan_sha256, "plan-hash");
 });
 
-test("rendering leaves a stale humanize record alone", async (t) => {
+test("rendering leaves a stale polish record alone", async (t) => {
   const root = fixture(t);
-  write(root, "learn/test/output/humanized/n1/s1.json", JSON.stringify({ ...recordFor("old"), article_sha256: "stale" }));
+  write(root, "learn/test/output/polished/n1/s1.json", JSON.stringify({ ...recordFor("old"), article_sha256: "stale" }));
   await renderImages({ subject: "test", node: "n1" }, deps(root));
 
-  const record = JSON.parse(readFileSync(join(root, "learn/test/output/humanized/n1/s1.json"), "utf8"));
+  const record = JSON.parse(readFileSync(join(root, "learn/test/output/polished/n1/s1.json"), "utf8"));
   assert.equal(record.article_sha256, "stale");
 });

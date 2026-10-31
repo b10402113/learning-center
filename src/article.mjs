@@ -64,7 +64,7 @@ export function buildArticleMessages({ prompt, entry, slices }) {
     system: prompt,
     user: JSON.stringify(
       {
-        title: entry.title,
+        title: entry.title ?? null,
         purpose: entry.purpose,
         sources: slices,
       },
@@ -141,17 +141,17 @@ export async function runArticle(
     const file = join(root, relative);
     const existing = existsSync(file) ? readFileSync(file, "utf8") : "";
     if (!force && hasArticleBody(existing)) {
-      return { id: entry.id, title: entry.title, status: "skipped", path: relative };
+      return { id: entry.id, title: entry.title ?? entry.id, status: "skipped", path: relative };
     }
 
     const slices = readStepSlices(root, entry);
     const messages = buildArticleMessages({ prompt, entry, slices });
     const response = await deps.generateText({ ...messages, step: entry });
-    const article = normalizeArticleText(response, entry.title);
+    const article = normalizeArticleText(response, entry.title ?? null);
     if (!hasArticleBody(article)) throw new Error(`model returned no article body for step ${entry.id}`);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, article);
-    return { id: entry.id, title: entry.title, status: "generated", path: relative };
+    return { id: entry.id, title: entry.title ?? entry.id, status: "generated", path: relative };
   });
 
   markNodeWritten(node, subject, nodeId, root);
@@ -406,7 +406,7 @@ export async function runImages(
     const relative = `learn/${subject}/nodes/${nodeId}/${entry.id}.md`;
     const file = join(root, relative);
     if (!existsSync(file) || !hasArticleBody(readFileSync(file, "utf8"))) {
-      results.push({ id: entry.id, title: entry.title, status: "no-article", images: [] });
+      results.push({ id: entry.id, title: entry.title ?? entry.id, status: "no-article", images: [] });
       continue;
     }
 
@@ -425,7 +425,7 @@ export async function runImages(
       ) {
         results.push({
           id: entry.id,
-          title: entry.title,
+          title: entry.title ?? entry.id,
           status: "reused",
           images: Array.from({ length: count }, (_, index) => ({
             index: index + 1,
@@ -451,7 +451,7 @@ export async function runImages(
     if (planOnly) {
       results.push({
         id: entry.id,
-        title: entry.title,
+        title: entry.title ?? entry.id,
         status: "planned",
         plan,
         file: imagePlanPath(subject, nodeId, entry.id),
@@ -488,7 +488,7 @@ export async function runImages(
     writeFileSync(file, replaceImageMarkers(marked, entry.id));
     results.push({
       id: entry.id,
-      title: entry.title,
+      title: entry.title ?? entry.id,
       status: images.every((image) => image.reused) ? "reused" : "generated",
       images,
     });

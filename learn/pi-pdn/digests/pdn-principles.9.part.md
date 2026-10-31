@@ -1,0 +1,32 @@
+---
+source: sources/pi-pdn/20261030/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt
+source_type: text
+source_lines: 25393
+part: 9
+status: absorbed
+absorbed_at: 2026-10-30
+created: 2026-10-30
+updated: 2026-10-30
+---
+
+# L1 overview
+
+- **Planes as cavities and their three impedance regimes** — Any adjacent power/ground pair is a cavity that traps fields and echoes at its edges. Its impedance splits into a low-frequency capacitive region, a mid-frequency inductive region, and a high-frequency region of modal resonances that resembles a transmission line. Design rule: do everything possible to lower plane impedance, which means adjacent planes, thinnest practical dielectric, and cavity placed near the board surface.
+- **Low-frequency capacitance: parallel plate, fringe fields, and puddles** — Cavity capacitance is C = ε0·Dk·A/h, which for FR4 reduces to about 1 nF/inch² per mil of dielectric (0.3 nF/inch² at 3 mils). Fringe fields add roughly 0.16 pF per inch of edge, so the parallel-plate error is 20% at a 10:1 aspect ratio for air and 7% for FR4; aspect ratios near 50 are needed for 1% accuracy, which also governs Dk extraction from capacitance.
+- **Loop, sheet, and spreading inductance** — For long narrow cavities the loop inductance is Lsq × number of squares, with Lsq = 32 pH/mil × h. In wide cavities current spreads radially and the cavity inductance becomes spreading inductance: local impedance falls with distance as Z ≈ (h/2πR)·√(µ0/ε0Dk), giving Lspread = (µ0h/2π)·ln(R2/R1). Thinner dielectric is the dominant lever; one via's spreading inductance is about one square of sheet inductance.
+- **Series and parallel LC self-resonance** — Most spreading inductance sits near the via and most capacitance near the plane edge, so the first impedance dip is a series LC resonance, not a modal resonance. fres scales as 1/D and is independent of dielectric thickness (h cancels between L and C); a practical estimate is fres ≈ 1 GHz / (cavity diameter in inches). Shorted-and-probed-from-edge gives the matching parallel resonance.
+- **Contact geometry as a design variable** — Moving the contact from center to edge doubles spreading inductance (two quadrants instead of four) and to a corner quadruples it. Between two contacts, spreading inductance is about two squares of sheet inductance and grows only with ln(separation); cavity thickness dominates, and larger contact area (multiple vias) lowers it. Above the series resonance, "the impedance of the cavity" is not a single number — it varies over the surface.
+
+# L2 detail
+
+- `#L8970-L9065` — Chapter 6 opening and §6.1: planes as a cavity defined by adjacent plane pairs; two noise drivers (transient current, plane impedance); lumped C at low frequency, loop/spreading L at mid frequency, modal resonances at high frequency; the 4 in × 6 in, 64 mil FR4 example and the three-region impedance profile.
+- `#L9066-L9108` — §6.2: parallel-plate capacitance C = ε0·Dk·A/h; FR4 Dk = 4.2 reduction to nF/inch² vs mils; 3 mil → 0.3 nF/inch², 10 in × 10 in planes → 30 nF; 1 mil FR4 ≈ 1 nF/inch² rule of thumb that scales inversely with h.
+- `#L9109-L9281` — §6.3: fringe-field capacitance from a 2D field solver using the image-plane method (C = TD/(Z0·c·√Dk) style extraction); fringe capacitance per edge saturates at 0.16 pF/inch above aspect ratio 5 and is independent of dielectric spacing; total C ≈ Cpp + 4·0.16 pF/inch edge; 10:1 aspect ratio error is 20% in air, 7% in FR4.
+- `#L9282-L9426` — §6.4: power puddles where dielectric extends past the plane edge, increasing fringe capacitance; square puddle error needs aspect ratio ~50 for 1% (0.3 in on 6 mil); Dk extraction from measured C and the two-port S21 → Z → C → Dk flow; quasi-static validity to <1/20 λ (about 50 MHz for a 6.3 in board); measured Dk 5 below 1 MHz falling to 4.3 at 100 MHz due to material dispersion.
+- `#L9427-L9515` — §6.5: loop inductance of long narrow cavities as Lsq × n squares, Lsq = µ0h = 32 pH/mil × h; 30 in × 0.3 in, 1 mil example predicts and 3D-solves 3.23 nH; lumped model valid to ~1/20 wavelength (10 MHz predicted, inductor-like to 20 MHz); inductance extracted as L = Z(1 MHz)/(2π·1 MHz).
+- `#L9516-L9877` — §6.6: spreading inductance defined for radial current from a point contact in a wide cavity; three equivalent derivations (Ampere's-law via partial self-inductance, coax-section loop inductance, integrated radial wavefront); instantaneous impedance Z ≈ (h/2πR)·√(µ0/ε0Dk) falls with R and scales with h; Lspread = (µ0h/2π)·ln(R2/R1), independent of Dk, ≈1 square of sheet inductance for a 500:1 radius ratio.
+- `#L9878-L9977` — §6.7: extracting spreading inductance from a 3D full-wave solver's S-parameters with no shorting wall, using displacement current; lumped series-LC model valid below 1/20 λ; 1 in diameter, 1 mil, Dvia 25 mil example matches full-wave up to ~7 GHz with the LC dip distinct from the 7 GHz modal peak; square 5 in cavity approximation gives 27.8 pH versus field-solver equivalent.
+- `#L9978-L10125` — §6.8: series versus parallel self-resonant frequency from the same L and C; derivation showing fres tracks 1/4-wave cavity resonance but depends on contact diameter; approximation fres ≈ 0.72–1 GHz/D; 5 in, 10 mil, 30 mil via example; cavity shorted at center and probed at edges yields an equal-frequency parallel resonance peak.
+- `#L10126-L10196` — §6.9: features of the series LC resonance: fres independent of h because h cancels between C and L (10 vs 50 mil overlay); fres rises slightly faster than 1/D (5× diameter shrink → 5.8–5.9× frequency); practical estimate fres ≈ 1 GHz/(cavity diameter in inches) for a 500:1 diameter-to-contact ratio.
+- `#L10197-L10278` — §6.10: source contact location sets spreading inductance via current crowding; center → edge gives ~2×, corner ~4× (quadrant counting); the same log-scaling reduces fres accordingly; low-frequency capacitive impedance is probe-location independent, and above series resonance the cavity impedance is not unique.
+- `#L10279-L10518` — §6.11: point-to-point spreading inductance between two contacts, measured by shorting the pair and reading Z at 1 MHz; ~2 squares of sheet inductance (320 pH/sq for 10 mil) even as spacing grows 10×; empirical model L = k·Lsq·ln(2s/d) with k ≈ 2, first-order dependence on h, log dependence on s and d, and the argument for multiple vias per capacitor pad to enlarge effective contact diameter.

@@ -69,10 +69,20 @@ test("prepare asks publishers for markers only and reports skipped steps without
   assert.equal(report.steps.length, 1);
   const [step] = report.steps;
   assert.equal(step.id, "s2");
+  assert.equal(report.nodeFile, join(root, "learn/test/nodes/n1.md"));
+  assert.equal(report.teachingPlan, join(root, "learn/test/output/jobs/n1/teaching-plan.md"));
   assert.match(step.command, /--markers-only/);
+  assert.match(step.command, /--mode direct/);
   assert.match(step.plan, /learn\/test\/output\/image-plans\/n1\/s2\.json$/);
   assert.deepEqual(report.skipped, [
-    { id: "s1", title: "Step One", status: "skipped", path: "learn/test/nodes/n1/s1.md" },
+    {
+      id: "s1",
+      title: "Step One",
+      purpose: "First step.",
+      status: "skipped",
+      path: "learn/test/nodes/n1/s1.md",
+      article: join(root, "learn/test/nodes/n1/s1.md"),
+    },
   ]);
 });
 
@@ -105,13 +115,13 @@ test("render accepts --step and --max-parallel and skips a step with no plan", (
 
 test("prepare --force clears the step's shared and legacy plans", (t) => {
   const root = fixture(t);
-  write(root, "learn/test/output/jobs/test-n1-s1.plan.json", "[]");
+  write(root, "learn/test/output/jobs/n1/s1/s1.plan.json", "[]");
   write(root, "learn/test/output/image-plans/n1/s1.json", "[]");
   execFileSync(
     process.execPath,
     [CLI, "prepare", "--subject", "test", "--node", "n1", "--step", "s1", "--force", "--root", root],
     { encoding: "utf8" },
   );
-  assert.equal(existsSync(join(root, "learn/test/output/jobs/test-n1-s1.plan.json")), false);
+  assert.equal(existsSync(join(root, "learn/test/output/jobs/n1/s1/s1.plan.json")), false);
   assert.equal(existsSync(join(root, "learn/test/output/image-plans/n1/s1.json")), false);
 });

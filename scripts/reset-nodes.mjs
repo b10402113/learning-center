@@ -23,7 +23,10 @@ import {
   humanizeRecordPath,
   humanizeWorkDir,
   jobFiles,
+  jobsDir,
+  materialsDir,
   outputDir,
+  polishedRecordPath,
   prepareFile,
   readJson,
 } from "../src/article-agent-bridge.mjs";
@@ -135,9 +138,31 @@ function emptyRemoved() {
     removedPlanFiles: 0,
     removedRuns: 0,
     removedCandidates: 0,
+    removedPolished: 0,
     removedHumanized: 0,
     removedHumanizeWork: 0,
   };
+}
+
+/** Removes the pre-`<node>/<step>/` flat artifacts: `<subject>-<node>-<step>.*`. */
+function removeLegacyFlat({ root, subject, id, dryRun, removed }) {
+  const jobs = jobsDir(root, subject);
+  if (existsSync(jobs)) {
+    for (const name of readdirSync(jobs)) {
+      if (!name.startsWith(`${subject}-${id}-`) && !name.startsWith(`${subject}-${id}.`)) continue;
+      if (!dryRun) rmSync(join(jobs, name), { recursive: true, force: true });
+      if (name.endsWith(".plan.json")) removed.removedPlanFiles += 1;
+      else removed.removedJobs += 1;
+    }
+  }
+  const materials = materialsDir(root, subject);
+  if (existsSync(materials)) {
+    for (const name of readdirSync(materials)) {
+      if (!name.startsWith(`${subject}-${id}-`)) continue;
+      if (!dryRun) rmSync(join(materials, name), { force: true });
+      removed.removedMaterials += 1;
+    }
+  }
 }
 
 function cleanNodeOutput({ root, subject, id, stepEntries, dryRun }) {
@@ -164,6 +189,11 @@ function cleanNodeOutput({ root, subject, id, stepEntries, dryRun }) {
       else removed.removedJobs += 1;
     }
 
+    const polished = polishedRecordPath(root, { subject, node: id, step: entry.id });
+    if (existsSync(polished)) {
+      if (!dryRun) rmSync(polished, { force: true });
+      removed.removedPolished += 1;
+    }
     const record = humanizeRecordPath(root, { subject, node: id, step: entry.id });
     if (existsSync(record)) {
       if (!dryRun) rmSync(record, { force: true });
@@ -192,6 +222,12 @@ function cleanNodeOutput({ root, subject, id, stepEntries, dryRun }) {
   if (existsSync(candidatesDir)) {
     removed.removedCandidates = readdirSync(candidatesDir).length;
     if (!dryRun) rmSync(candidatesDir, { recursive: true, force: true });
+  }
+  removeLegacyFlat({ root, subject, id, dryRun, removed });
+  if (!dryRun) {
+    for (const dir of [join(jobsDir(root, subject), id), join(materialsDir(root, subject), id)]) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
   return removed;
 }
@@ -307,7 +343,8 @@ function main(argv) {
           `${node.removedAssets} asset folder(s), ${node.removedOrphans} other entr${node.removedOrphans === 1 ? "y" : "ies"}; ` +
           `${node.removedMaterials} material(s), ${node.removedJobs} job file(s), ${node.removedPlanFiles} plan file(s), ` +
           `${node.removedRuns} article-run folder(s), ${node.removedCandidates} quiz candidate(s), ` +
-          `${node.removedHumanized} humanize record(s), ${node.removedHumanizeWork} humanize workspace(s); ` +
+          `${node.removedPolished} polish record(s), ${node.removedHumanized} legacy humanize record(s), ` +
+          `${node.removedHumanizeWork} legacy humanize workspace(s); ` +
           "kept node container",
       );
     }

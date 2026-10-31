@@ -193,6 +193,10 @@ function readStep({ nodesDir, nodeId, entry, order }) {
     const { body } = readMarkdown(file);
     step.articleMd = body.trim();
     step.hasContent = hasArticleBody(step.articleMd);
+    if (!spec.title) {
+      const heading = step.articleMd.split("\n").find((line) => /^#\s+/.test(line));
+      if (heading) step.title = heading.replace(/^#\s+/, "").trim();
+    }
     if (step.hasContent) {
       step.quizzes = readQuizzes({
         nodesDir,

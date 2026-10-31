@@ -49,22 +49,22 @@ A short lesson.
     "# Step One\n\nOld body.\n\n![第 1 段配圖](./s1-assets/image-1.webp)\n*AI 生成示意圖*\n",
   );
   write(root, "learn/test/nodes/n1/s1-assets/image-1.webp", "old-image");
-  write(root, "learn/test/output/jobs/test-n1.prepare.json", JSON.stringify({ steps: ["s1"] }));
-  write(root, "learn/test/output/humanized/n1/s1.json", JSON.stringify({ humanized_at: "2026-10-26" }));
+  write(root, "learn/test/output/jobs/n1/prepare.json", JSON.stringify({ steps: ["s1"] }));
+  write(root, "learn/test/output/polished/n1/s1.json", JSON.stringify({ polished_at: "2026-10-26" }));
   const runFile = join(root, "learn/test/output/run/article.md");
   write(root, "learn/test/output/run/article.md", runArticle);
   write(
     root,
-    "learn/test/output/jobs/test-n1-s1.result.json",
+    "learn/test/output/jobs/n1/s1/s1.result.json",
     JSON.stringify({ status: "completed", article: runFile, images: [] }),
   );
-  write(root, "learn/test/output/jobs/test-n1-s1.blocks.json", "[]");
+  write(root, "learn/test/output/jobs/n1/s1/s1.blocks.json", "[]");
   return root;
 }
 
 const markerArticle = "# Step One\n\nNew body.\n\n<!--image:1-->\n";
 
-test("a forced publish writes markers, then clears stale figures and the humanize record", async (t) => {
+test("a forced publish writes markers, then clears stale figures and the polish record", async (t) => {
   const root = publishFixture(t, { runArticle: markerArticle });
   const report = await publishArticles({ root, subject: "test", node: "n1", force: true });
   assert.equal(report.steps[0].status, "published");
@@ -72,15 +72,15 @@ test("a forced publish writes markers, then clears stale figures and the humaniz
   assert.match(body, /<!--image:1-->/);
   assert.doesNotMatch(body, /\*AI 生成示意圖\*/);
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1-assets/image-1.webp")), false);
-  assert.equal(existsSync(join(root, "learn/test/output/humanized/n1/s1.json")), false);
+  assert.equal(existsSync(join(root, "learn/test/output/polished/n1/s1.json")), false);
 });
 
-test("a plain publish keeps the existing figures and the humanize record", async (t) => {
+test("a plain publish keeps the existing figures and the polish record", async (t) => {
   const root = publishFixture(t, { runArticle: markerArticle });
   const report = await publishArticles({ root, subject: "test", node: "n1" });
   assert.equal(report.steps[0].status, "published");
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1-assets/image-1.webp")), true);
-  assert.equal(existsSync(join(root, "learn/test/output/humanized/n1/s1.json")), true);
+  assert.equal(existsSync(join(root, "learn/test/output/polished/n1/s1.json")), true);
 });
 
 test("a failed forced publish leaves the figures and record intact", async (t) => {
@@ -88,6 +88,6 @@ test("a failed forced publish leaves the figures and record intact", async (t) =
   const report = await publishArticles({ root, subject: "test", node: "n1", force: true });
   assert.equal(report.steps[0].status, "failed");
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1-assets/image-1.webp")), true);
-  assert.equal(existsSync(join(root, "learn/test/output/humanized/n1/s1.json")), true);
+  assert.equal(existsSync(join(root, "learn/test/output/polished/n1/s1.json")), true);
   assert.match(readFileSync(join(root, "learn/test/nodes/n1/s1.md"), "utf8"), /image-1\.webp/);
 });

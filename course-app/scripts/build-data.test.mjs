@@ -114,6 +114,55 @@ test("discovers subjects that have a ROADMAP.md", () => {
   assert.deepEqual(discoverSubjects(learnRoot), ["demo"]);
 });
 
+test("falls back to the article H1 or the step id when no title is written back", () => {
+  const { learnRoot, appRoot } = fixture();
+  const subjectDir = path.join(learnRoot, "demo");
+  write(
+    path.join(subjectDir, "nodes", "node-a.md"),
+    `---
+id: node-a
+title: "Node A"
+subject: demo
+tier: 1
+order: 1
+status: confirmed
+goal: "Node A goal."
+prerequisites: []
+steps:
+  - id: step-two
+    purpose: "Second purpose."
+    sources:
+      - "[[sources/demo/source.txt#L10-L20]]"
+  - id: step-one
+    purpose: "First purpose."
+    sources:
+      - "[[sources/demo/source.txt#L1-L5]]"
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Node A
+
+## Lesson
+
+Lesson body for node A.
+
+## Steps
+
+1. [step-two](node-a/step-two.md)
+2. [step-one](node-a/step-one.md)
+`
+  );
+  write(path.join(subjectDir, "nodes", "node-a", "step-two.md"), "# Published Title\n\nBody.\n");
+  write(path.join(subjectDir, "nodes", "node-a", "step-one.md"), "");
+
+  const course = buildSubject("demo", { learnRoot, appRoot });
+  assert.deepEqual(
+    course.nodes[0].steps.map((step) => step.title),
+    ["Published Title", "step-one"]
+  );
+});
+
 test("reads Markdown nodes and keeps frontmatter step order", () => {
   const { learnRoot, appRoot } = fixture();
   const course = buildSubject("demo", { learnRoot, appRoot });

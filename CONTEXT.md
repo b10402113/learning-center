@@ -24,12 +24,12 @@ _Avoid_: lesson, chapter, unit, node container file
 
 ## Step
 
-One entry in a node's `steps` array. It carries exactly `id`, `title`, `purpose`, and `sources`. The array order is teaching order — there is no `deps`, `type`, or per-step `order`.
+One entry in a node's `steps` array. A planned entry carries `id`, `purpose`, and `sources`; the publisher adds `title` when it writes the article. The array order is teaching order — there is no `deps`, `type`, or per-step `order`.
 _Avoid_: lesson step, unit, element
 
 ## Article
 
-The step's readable body at `learn/<subject>/nodes/<node>/<step-id>.md`. No frontmatter; opens with `# <step title>`. It may contain a `quiz` block and generated figures. The viewer aggregates the step's sources below the article, so the article does not repeat them.
+The step's readable body at `learn/<subject>/nodes/<node>/<step-id>.md`. No frontmatter; opens with the H1 the publisher chose and wrote back to the step entry. It may contain a `quiz` block and generated figures. The viewer aggregates the step's sources below the article, so the article does not repeat them.
 _Avoid_: lesson HTML, MDX, page
 
 ## Source slice
