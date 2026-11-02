@@ -175,7 +175,7 @@ function imageAssetPath(subject, nodeId, stepId, index) {
 }
 
 export function imagePlanPath(subject, nodeId, stepId) {
-  return `learn/${subject}/output/image-plans/${nodeId}/${stepId}.json`;
+  return `learn/${subject}/nodes/${nodeId}/${stepId}.plan.json`;
 }
 
 export function expectedImageCount(markdown) {

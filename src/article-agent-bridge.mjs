@@ -17,20 +17,20 @@ export function outputDir(root, subject) {
   return join(root, "learn", subject, "output");
 }
 
-export function jobsDir(root, subject) {
-  return join(outputDir(root, subject), "jobs");
+export function nodeOutputDir(root, subject, node) {
+  return join(outputDir(root, subject), node);
 }
 
-export function materialsDir(root, subject) {
-  return join(outputDir(root, subject), "materials");
+export function stepDir(root, { subject, node, step }) {
+  return join(nodeOutputDir(root, subject, node), step);
 }
 
-export function imagePlansDir(root, subject, node) {
-  return join(outputDir(root, subject), "image-plans", node);
+export function stepPlanPath(root, { subject, node, step }) {
+  return join(root, "learn", subject, "nodes", node, `${step}.plan.json`);
 }
 
 export function teachingPlanPath(root, subject, node) {
-  return join(jobsDir(root, subject), node, "teaching-plan.md");
+  return join(nodeOutputDir(root, subject, node), "teaching-plan.md");
 }
 
 export function stepSlug(subject, node, step) {
@@ -38,25 +38,24 @@ export function stepSlug(subject, node, step) {
 }
 
 export function jobFiles(root, { subject, node, step }) {
-  const dir = join(jobsDir(root, subject), node, step);
+  const dir = stepDir(root, { subject, node, step });
   return {
     slug: stepSlug(subject, node, step),
     dir,
-    material: join(materialsDir(root, subject), node, `${step}.json`),
-    original: join(dir, `${step}.original.md`),
-    plan: join(imagePlansDir(root, subject, node), `${step}.json`),
-    legacyPlan: join(dir, `${step}.plan.json`),
-    protected: join(dir, `${step}.protected.md`),
-    blocks: join(dir, `${step}.blocks.json`),
-    request: join(dir, `${step}.request.json`),
-    result: join(dir, `${step}.result.json`),
-    marked: join(dir, `${step}.article.md`),
-    translated: join(dir, `${step}.translated.md`),
+    material: join(dir, "material.json"),
+    original: join(dir, "original.md"),
+    polish: join(dir, "polish.md"),
+    plan: stepPlanPath(root, { subject, node, step }),
+    protected: join(dir, "protected.md"),
+    blocks: join(dir, "blocks.json"),
+    request: join(dir, "request.json"),
+    result: join(dir, "result.json"),
+    translated: join(dir, "translated.md"),
   };
 }
 
 export function prepareFile(root, subject, node) {
-  return join(jobsDir(root, subject), node, "prepare.json");
+  return join(nodeOutputDir(root, subject, node), "prepare.json");
 }
 
 export function polishedRecordPath(root, { subject, node, step }) {
@@ -155,8 +154,6 @@ export function buildRequest(root, { subject, files, entry, plan = null, hasCode
 export function writeMaterial(root, { subject, node, entry, slices }) {
   const files = jobFiles(root, { subject, node, step: entry.id });
   mkdirSync(files.dir, { recursive: true });
-  mkdirSync(join(materialsDir(root, subject), node), { recursive: true });
-  mkdirSync(imagePlansDir(root, subject, node), { recursive: true });
   const material = {
     subject,
     node,

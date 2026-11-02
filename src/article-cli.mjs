@@ -11,8 +11,10 @@ import {
   selectSteps,
 } from "./article.mjs";
 import {
+  jobFiles,
   prepareFile,
   readJson,
+  teachingPlanPath,
   writeJson,
   writeMaterial,
 } from "./article-agent-bridge.mjs";
@@ -44,7 +46,7 @@ const usage = `Usage:
   node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only] [--root <dir>]  (deprecated)
 
 prepare  writes one material bundle per missing step and lists the publisher job
-         (material, original, plan, polishCommand, command). The publisher writes
+         (material, original, polish, plan, polishCommand, command). The publisher writes
          the original with its <!--image:N--> markers and a matching plan, runs
          polishCommand to polish both, then runs the --markers-only command,
          which validates the markers instead of generating figures.
@@ -57,8 +59,8 @@ article  legacy engine (deprecated): writes one article per step with a single
          text request, optionally generating figures.
 image    legacy engine (deprecated): plans and generates WebP figures for
          articles that already exist.
-         --plan-only writes the plan to learn/<subject>/output/image-plans/ and
-         generates nothing; the next image run reuses that plan. --force with
+         --plan-only writes the plan to learn/<subject>/nodes/<node>/<step>.plan.json
+         and generates nothing; the next image run reuses that plan. --force with
          --plan-only rebuilds the plan; without it, --force regenerates images.
 Default behaviour skips existing articles and reuses existing images.`;
 
@@ -73,16 +75,24 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     const shown = relative(root, target);
     const existing = existsSync(target) ? readFileSync(target, "utf8") : "";
     if (!force && hasArticleBody(existing)) {
-      skipped.push({ id: entry.id, title: entry.title, status: "skipped", path: shown });
+      skipped.push({
+        id: entry.id,
+        title: entry.title,
+        purpose: entry.purpose,
+        status: "skipped",
+        path: shown,
+        article: target,
+      });
       continue;
     }
     const slices = readStepSlices(root, entry);
-    const { files } = writeMaterial(root, { subject, node: nodeId, entry, slices });
     if (force) {
-      for (const key of ["original", "plan", "legacyPlan", "protected", "blocks", "request", "result"]) {
-        rmSync(files[key], { force: true });
+      const existingFiles = jobFiles(root, { subject, node: nodeId, step: entry.id });
+      for (const key of ["polish", "result", "blocks", "request", "protected", "translated"]) {
+        rmSync(existingFiles[key], { force: true });
       }
     }
+    const { files } = writeMaterial(root, { subject, node: nodeId, entry, slices });
     const index = order.indexOf(entry.id);
     steps.push({
       id: entry.id,
@@ -93,10 +103,11 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
       total: order.length,
       material: relative(root, files.material),
       original: relative(root, files.original),
+      polish: relative(root, files.polish),
       plan: relative(root, files.plan),
       polishCommand: `node scripts/polish-article.mjs draft --subject ${subject} --node ${nodeId} --step ${entry.id}`,
-      command: `node scripts/run-article-agent.mjs --subject ${subject} --node ${nodeId} --step ${entry.id} --markers-only`,
-      titleCommand: `node "${resolve(root, "scripts/set-step-title.mjs")}" --root "${resolve(root)}" --subject ${subject} --node ${nodeId} --step ${entry.id} --from "${resolve(root, files.original)}"`,
+      command: `node scripts/run-article-agent.mjs --subject ${subject} --node ${nodeId} --step ${entry.id} --mode direct --markers-only`,
+      titleCommand: `node "${resolve(root, "scripts/set-step-title.mjs")}" --root "${resolve(root)}" --subject ${subject} --node ${nodeId} --step ${entry.id} --from "${resolve(root, files.polish)}"`,
     });
   }
   const skippedIds = new Set(skipped.map((entry) => entry.id));
@@ -112,6 +123,8 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     mode: "prepare",
     subject,
     node: nodeId,
+    nodeFile: join(root, "learn", subject, "nodes", `${nodeId}.md`),
+    teachingPlan: teachingPlanPath(root, subject, nodeId),
     nodeTitle: node.title,
     nodeGoal: node.goal ?? null,
     steps,

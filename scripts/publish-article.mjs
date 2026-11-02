@@ -13,6 +13,7 @@ import {
 import {
   humanizeRecordPath,
   jobFiles,
+  polishedRecordPath,
   prepareFile,
   readJson,
   restoreCode,
@@ -56,6 +57,16 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
       });
       continue;
     }
+    if (result.mode === "direct" && resolve(result.article ?? "") !== resolve(files.polish)) {
+      results.push({
+        id: entry.id,
+        title: entry.title ?? entry.id,
+        status: "failed",
+        path: shown,
+        error: "direct run did not finish on polish.md",
+      });
+      continue;
+    }
     const article = existsSync(result.article) ? readFileSync(result.article, "utf8") : "";
     if (!article.trim()) {
       results.push({ id: entry.id, title: entry.title ?? entry.id, status: "failed", path: shown, error: "run produced no article" });
@@ -79,6 +90,8 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
     if (force) {
       clearStepImages(root, { subject, node: nodeId, step: entry.id });
       rmSync(humanizeRecordPath(root, { subject, node: nodeId, step: entry.id }), { force: true });
+      rmSync(polishedRecordPath(root, { subject, node: nodeId, step: entry.id }), { force: true });
+      rmSync(join(root, "learn", subject, "nodes", nodeId, `${entry.id}.quiz.json`), { force: true });
     }
     results.push({ id: entry.id, title: entry.title ?? entry.id, status: "published", path: shown });
   }

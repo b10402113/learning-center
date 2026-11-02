@@ -48,7 +48,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    - **Nodes queue** — `status: draft` or `steps: []`.
    - **Article queue** — every node with a non-empty `steps` array. The `prepare` call in step 3 decides which steps actually need writing; a node whose steps all have bodies yields no publishers unless `-force`.
    - **Humanize queue** — rebuilt in step 4 from the nodes with a published article; the eligibility rules in step 4a decide which steps need a subagent.
-   - **Generate queue** — rebuilt in step 5 from the nodes with at least one step plan under `learn/<subject>/output/image-plans/<node>/`.
+   - **Generate queue** — rebuilt in step 5 from the nodes with at least one step plan at `learn/<subject>/nodes/<node>/<step>.plan.json`.
    - **Quiz queue** — rebuilt in step 6 from the nodes with published articles; `quiz.mjs prepare` decides which sidecars are missing.
 
    Show a one-paragraph scope summary: resolved nodes, phase queues, and the flags in effect. Do not ask for confirmation; the invocation is the consent.
@@ -67,9 +67,9 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    node src/article-cli.mjs prepare --subject <subject> --node <node> [--force]
    ```
 
-   Read the JSON. `steps[]` is the work: each entry carries `id`, `title` (may be `null`), `purpose`, `material`, `original`, `plan`, `polishCommand`, `command` (already `--markers-only`), and `titleCommand`. `skipped[]` means the step already has a body; keep it out of the publisher batch. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
+   Read the JSON. `steps[]` is the work: each entry carries `id`, `title` (may be `null`), `purpose`, `material`, `original`, `polish`, `plan`, `polishCommand`, `command` (already `--markers-only`), and `titleCommand`. `skipped[]` means the step already has a body; keep it out of the publisher batch. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
 
-   **3b. Dispatch publishers.** Combine the ready `steps[]` from every prepared node into one list, preserving node and step order. Batch that list into groups of `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per step in a single message, every call with `subagent_type: publisher` and the [Publisher-prompt](#publisher-prompt) filled in. Give each publisher only its own step's fields — never another step's article, plan, or source material. Each publisher writes the original and plan, runs `polishCommand` on both, then runs the markers-only wrapper and the title command. Wait for every call and record `completed` or `failed`.
+   **3b. Dispatch publishers.** Combine the ready `steps[]` from every prepared node into one list, preserving node and step order. Batch that list into groups of `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per step in a single message, every call with `subagent_type: publisher` and the [Publisher-prompt](#publisher-prompt) filled in. Give each publisher only its own step's fields — never another step's article, plan, or source material. Each publisher writes the original and plan, runs `polishCommand` to produce `polish.md` and polish the plan, then runs the markers-only wrapper and the title command. Wait for every call and record `completed` or `failed`.
 
    **3c. Publish.** After all publisher batches finish, publish each node that has at least one prepared step, in roadmap order:
 
@@ -88,11 +88,11 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    **4a. Build the work list.** Do this yourself; there is no prepare CLI. For each node in the queue, walk its `steps` in order and classify each step:
 
    - **No article, or an empty / H1-only article** → `skipped-no-article`.
-   - **No plan** at `learn/<subject>/output/image-plans/<node>/<step>.json` → `skipped-no-plan`.
+   - **No plan** at `learn/<subject>/nodes/<node>/<step>.plan.json` → `skipped-no-plan`.
    - **No `<!--image:N-->` marker and no image line** in the article → `skipped-not-published`.
-   - Otherwise → ready. The work item is `{ node, step, title, article, plan }` where `article` is `learn/<subject>/nodes/<node>/<step>.md` and `plan` is `learn/<subject>/output/image-plans/<node>/<step>.json`.
+   - Otherwise → ready. The work item is `{ node, step, title, article, plan }` where `article` is `learn/<subject>/nodes/<node>/<step>.md` and `plan` is `learn/<subject>/nodes/<node>/<step>.plan.json`.
 
-   Before dispatching a ready step, copy its plan to `learn/<subject>/output/humanize/<node>/<step>.plan.backup.json`. The plan lives under the git-ignored `output/`, so this backup is the only way to check the plan afterwards.
+   Before dispatching a ready step, copy its plan to `learn/<subject>/output/humanize/<node>/<step>.plan.backup.json`, so a corrupted rewrite can be diffed against the version the agent received.
 
    There is no hash record, so a rerun humanizes every eligible step again. Record every skip and continue. A node with no ready steps is not dispatched and is not a failure.
 
@@ -109,7 +109,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    For each plan, compare it with its backup:
 
    ```bash
-   node -e 'const fs=require("fs");const [a,b]=process.argv.slice(1).map(f=>JSON.parse(fs.readFileSync(f,"utf8")));if(a.length!==b.length)throw new Error("plan length changed");a.forEach((x,i)=>{if(x.anchor!==b[i].anchor)throw new Error("plan anchor changed at "+i);if(typeof b[i].heading!=="string"||!b[i].heading.trim())throw new Error("empty heading at "+i);if(typeof b[i].prompt!=="string"||!b[i].prompt.trim())throw new Error("empty prompt at "+i)})' learn/<subject>/output/humanize/<node>/<step>.plan.backup.json learn/<subject>/output/image-plans/<node>/<step>.json
+   node -e 'const fs=require("fs");const [a,b]=process.argv.slice(1).map(f=>JSON.parse(fs.readFileSync(f,"utf8")));if(a.length!==b.length)throw new Error("plan length changed");a.forEach((x,i)=>{if(x.anchor!==b[i].anchor)throw new Error("plan anchor changed at "+i);if(typeof b[i].heading!=="string"||!b[i].heading.trim())throw new Error("empty heading at "+i);if(typeof b[i].prompt!=="string"||!b[i].prompt.trim())throw new Error("empty prompt at "+i)})' learn/<subject>/output/humanize/<node>/<step>.plan.backup.json learn/<subject>/nodes/<node>/<step>.plan.json
    ```
 
    Only `heading` and `prompt` may differ; length, order, and every `anchor` that exists must match the backup.
@@ -233,7 +233,7 @@ Decide 1-5 places where a figure genuinely helps the reader, spread them across 
 
 There is no `article_generate` tool in this repo. After writing <ORIGINAL> and <PLAN>, run <POLISH-COMMAND> from the repo root. It polishes the prose and each plan item's `heading` and `prompt`, keeps the H1, markers, code, and links intact, and needs TEXT_API_KEY. If it fails, stop and report the error; do not edit the files to work around it and do not retry automatically. Do not modify <ORIGINAL> or <PLAN> after it succeeds.
 
-Then run <COMMAND>. The command validates that the original's `<!--image:N-->` markers match the plan in count and order and keeps them in place; it does not insert or move markers. It does not generate figures and does not need IMAGE_API_KEY. Do not rewrite the article after the command returns, and do not retry automatically if it fails.
+Then run <COMMAND>. The command reads `polish.md` and validates that its `<!--image:N-->` markers match the plan in count and order and keeps them in place; it does not insert or move markers. It does not generate figures and does not need IMAGE_API_KEY. Do not rewrite the article after the command returns, and do not retry automatically if it fails.
 
 After the wrapper reports `completed`, run <TITLE-COMMAND>. It copies the H1 into the node's step entry and updates the `## Steps` label. Do not write to `learn/<SUBJECT>/nodes/` any other way.
 

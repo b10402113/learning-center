@@ -4,6 +4,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 import { countArticleCharacters } from "../src/article.mjs";
+import { normalizeStepPlan } from "../src/article-agent-bridge.mjs";
 import { maxQuestionsFor, validateQuizPayload } from "../src/quiz.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -727,6 +728,21 @@ function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nod
           "image-orphan",
           `asset folder has no step "${stepId}"`,
         );
+      }
+    }
+    for (const name of readdirSync(nodeStepDir)) {
+      if (!name.endsWith(".plan.json")) continue;
+      const stepId = name.slice(0, -".plan.json".length);
+      const planPath = join(nodeStepDir, name);
+      const planFile = rel(root, planPath);
+      if (!seen.has(stepId)) {
+        report.fail(planFile, 0, "image-plan-orphan", `image plan has no step "${stepId}"`);
+        continue;
+      }
+      try {
+        normalizeStepPlan(readFileSync(planPath, "utf8"));
+      } catch (error) {
+        report.fail(planFile, 0, "image-plan", error?.message ?? "invalid image plan");
       }
     }
   }

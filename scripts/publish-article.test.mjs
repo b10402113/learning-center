@@ -49,16 +49,17 @@ A short lesson.
     "# Step One\n\nOld body.\n\n![第 1 段配圖](./s1-assets/image-1.webp)\n*AI 生成示意圖*\n",
   );
   write(root, "learn/test/nodes/n1/s1-assets/image-1.webp", "old-image");
-  write(root, "learn/test/output/jobs/n1/prepare.json", JSON.stringify({ steps: ["s1"] }));
+  write(root, "learn/test/nodes/n1/s1.quiz.json", JSON.stringify({ "quiz-generated": true, questions: [] }));
+  write(root, "learn/test/output/n1/prepare.json", JSON.stringify({ steps: ["s1"] }));
   write(root, "learn/test/output/polished/n1/s1.json", JSON.stringify({ polished_at: "2026-10-26" }));
-  const runFile = join(root, "learn/test/output/run/article.md");
-  write(root, "learn/test/output/run/article.md", runArticle);
+  const polishFile = join(root, "learn/test/output/n1/s1/polish.md");
+  write(root, "learn/test/output/n1/s1/polish.md", runArticle);
   write(
     root,
-    "learn/test/output/jobs/n1/s1/s1.result.json",
-    JSON.stringify({ status: "completed", article: runFile, images: [] }),
+    "learn/test/output/n1/s1/result.json",
+    JSON.stringify({ status: "completed", mode: "direct", article: polishFile, images: [] }),
   );
-  write(root, "learn/test/output/jobs/n1/s1/s1.blocks.json", "[]");
+  write(root, "learn/test/output/n1/s1/blocks.json", "[]");
   return root;
 }
 
@@ -72,6 +73,7 @@ test("a forced publish writes markers, then clears stale figures and the polish 
   assert.match(body, /<!--image:1-->/);
   assert.doesNotMatch(body, /\*AI 生成示意圖\*/);
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1-assets/image-1.webp")), false);
+  assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1.quiz.json")), false);
   assert.equal(existsSync(join(root, "learn/test/output/polished/n1/s1.json")), false);
 });
 
@@ -89,5 +91,22 @@ test("a failed forced publish leaves the figures and record intact", async (t) =
   assert.equal(report.steps[0].status, "failed");
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1-assets/image-1.webp")), true);
   assert.equal(existsSync(join(root, "learn/test/output/polished/n1/s1.json")), true);
+  assert.match(readFileSync(join(root, "learn/test/nodes/n1/s1.md"), "utf8"), /image-1\.webp/);
+});
+
+test("a direct run that did not finish on polish.md is rejected", async (t) => {
+  const root = publishFixture(t, { runArticle: markerArticle });
+  write(
+    root,
+    "learn/test/output/n1/s1/result.json",
+    JSON.stringify({
+      status: "completed",
+      mode: "direct",
+      article: join(root, "learn/test/output/n1/s1/original.md"),
+      images: [],
+    }),
+  );
+  const report = await publishArticles({ root, subject: "test", node: "n1" });
+  assert.equal(report.steps[0].status, "failed");
   assert.match(readFileSync(join(root, "learn/test/nodes/n1/s1.md"), "utf8"), /image-1\.webp/);
 });

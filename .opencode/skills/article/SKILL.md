@@ -7,7 +7,7 @@ argument-hint: "<subject>/<node> [--step <id>] [--force] [--no-continuity]"
 
 Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
 
-這是一個 thin shell：文章由 `publisher` 一篇一篇寫原稿，配圖位置直接放 `<!--image:N-->` marker，並寫出對應的配圖清單；先跑 `polish-article.mjs draft` 潤飾原稿與 plan（marker 保留），再由 `run-article-agent.mjs --markers-only`（direct mode）驗證 marker 與 plan 的數量、順序一致；主 agent 最後補上 step 之間的連續性。`src/article-cli.mjs` 只負責切片、保護 code、回寫與 verify。這條流程會呼叫文字模型（polish），但不呼叫圖片模型，也不建立 `<step>-assets/`。
+這是一個 thin shell：文章由 `publisher` 一篇一篇寫原稿，配圖位置直接放 `<!--image:N-->` marker，並寫出對應的配圖清單；先跑 `polish-article.mjs draft` 從原稿產出 `polish.md` 並潤飾 plan（marker 保留，`original.md` 不再更動），再由 `run-article-agent.mjs --markers-only`（direct mode）驗證 marker 與 plan 的數量、順序一致；主 agent 最後補上 step 之間的連續性。`src/article-cli.mjs` 只負責切片、保護 code、回寫與 verify。這條流程會呼叫文字模型（polish），但不呼叫圖片模型，也不建立 `<step>-assets/`。
 
 1. **Resolve the target.** 參數是 `subject/node`，在 repo root 執行。不要從敘述推測 subject 或 node。
 
@@ -17,8 +17,8 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
    node src/article-cli.mjs prepare --subject <subject> --node <node> [--step <id>] [--force]
    ```
 
-   輸出 JSON 的 `steps[]` 每筆有 `id`、`title`（尚未寫文章時是 `null`）、`purpose`、`material`、`original`、`plan`、`polishCommand`、`command`、`titleCommand`；`polishCommand` 潤飾原稿與配圖清單，`command` 已帶 `--markers-only`。`skipped[]` 是已有內容的 step，只會有 `id`、`title`、`status`、`path`。
-   `--force` 連已有內容的 step 也重做，並清掉該 step 的舊執行結果與舊 plan。
+   輸出 JSON 的 `steps[]` 每筆有 `id`、`title`（尚未寫文章時是 `null`）、`purpose`、`material`、`original`、`polish`、`plan`、`polishCommand`、`command`、`titleCommand`；`polishCommand` 從 `original` 產出 `polish.md` 並潤飾配圖清單，`command` 已帶 `--mode direct --markers-only`。`skipped[]` 是已有內容的 step，含 `id`、`title`、`purpose`、`status`、`path`、`article`。
+   `--force` 連已有內容的 step 也重做：清掉舊的 `polish.md`、`result.json`、`blocks.json`、`request.json`，讓舊 run 不能 publish；`original.md` 與 plan 保留，由 publisher 重寫。
 
    完成標準：`steps.length + skipped.length` 等於節點 step 數。publisher 會執行 `polishCommand`，所以 repo root 的 `.env` 需要 `TEXT_API_KEY`（或 `OPENAI_API_KEY`）。
 
@@ -28,15 +28,15 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
 
    每次派工只給這幾項：
 
-   - `id`、`title`、`purpose`、`material`、`original`、`plan`、`polishCommand`、`command`、`titleCommand`
-   - 一句：「`material` 的 `purpose` 是這篇的主旨；用 Read 讀完 `material.sources` 的每個完整來源檔，`locator` 只是引用範圍，不是閱讀範圍。把原稿寫到 `original`，需要配圖的地方直接放 `<!--image:N-->` marker（單獨一行、前後空行、從 1 依序編號），把對應的 1–5 項配圖清單寫成 JSON 陣列到 `plan`（每項只有 `heading` 與 `prompt`，順序對應 marker），先執行 `polishCommand`，再執行 `command`。`title` 是 `null` 時，自己從來源裡實際出現的標題或句子選一個當 H1，不要發明。」
-   - 一句：「`polishCommand` 會潤飾原稿與 plan 的 `heading`／`prompt`，並保留 H1、marker、code 與連結；marker 數量與位置不變。它失敗就停，不要自己改寫檔案繞過。」
+   - `id`、`title`、`purpose`、`material`、`original`、`polish`、`plan`、`polishCommand`、`command`、`titleCommand`
+   - 一句：「`material` 的 `purpose` 是這篇的主旨；用 Read 讀完 `material.sources` 的每個完整來源檔，`locator` 只是引用範圍，不是閱讀範圍。把原稿寫到 `original`，需要配圖的地方直接放 `<!--image:N-->` marker（單獨一行、前後空行、從 1 依序編號），把對應的 1–5 項配圖清單寫成 JSON 陣列到 `plan`（每項只有 `heading` 與 `prompt`，順序對應 marker），先執行 `polishCommand`（它會寫出 `polish.md`，原稿 `original` 之後不再更動），再執行 `command`。`title` 是 `null` 時，自己從來源裡實際出現的標題或句子選一個當 H1，不要發明。」
+   - 一句：「`polishCommand` 讀 `original`、寫 `polish.md`，並潤飾 plan 的 `heading`／`prompt`；保留 H1、marker、code 與連結，marker 數量與位置不變。它失敗就停，不要自己改寫檔案繞過。」
    - 一句：「`command` 成功後執行 `titleCommand`，把 H1 寫回 node 的 step entry 與 `## Steps` 標籤；不要用其他方式改 node。」
    - 一句：「只寫這一篇，不要管其他 step。」
 
    不要給其他 step 的內容、不要給上下課關係。publisher 寫出來的就是一篇獨立的文章。
 
-   publisher 的完成標準：`polishCommand` 回報 `status: polished`、`command` 回報 `status: completed`、`titleCommand` 回報 `updated` 或 `unchanged`，而且文章裡的 marker 數量等於 plan 長度。失敗就停，留在 `learn/<subject>/output/jobs/`，不要進下一個 step。
+   publisher 的完成標準：`polishCommand` 回報 `status: polished`、`command` 回報 `status: completed`、`titleCommand` 回報 `updated` 或 `unchanged`，而且文章裡的 marker 數量等於 plan 長度。失敗就停，留在 `learn/<subject>/output/<node>/<step>/`，不要進下一個 step。
 
 4. **publish**
 
@@ -46,9 +46,9 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
 
    帶 `--force` 時，publish 也要一起帶，這樣成功寫入後才會清掉舊狀態。
 
-   它還原被保護的 code block、用 publisher 回寫到 node 的 step title 對齊 H1、保留 `<!--image:N-->` marker、寫入 `learn/<subject>/nodes/<node>/<step>.md`，全部 step 有內容才把 node 標成 `written`，最後跑 verify。若 plan 原本沒有 title，publish 會把文章的最終 H1 寫回 node。它不呼叫圖片同步；非 `--force` 時不改動圖片檔。
+   它讀 `polish.md`、還原被保護的 code block、用 publisher 回寫到 node 的 step title 對齊 H1、保留 `<!--image:N-->` marker、寫入 `learn/<subject>/nodes/<node>/<step>.md`，全部 step 有內容才把 node 標成 `written`，最後跑 verify。若 plan 原本沒有 title，publish 會把文章的最終 H1 寫回 node。它不呼叫圖片同步；非 `--force` 時不改動圖片檔。
 
-   帶 `--force` 且寫入成功後，它會清掉該 step 舊的 `image-N.webp`（新文章只有 marker，舊圖已經對不上）與 humanize 紀錄；寫入失敗時，舊圖與紀錄都保留。
+   帶 `--force` 且寫入成功後，它會清掉該 step 舊的 `image-N.webp`（新文章只有 marker，舊圖已經對不上）、`<step>.quiz.json` 與 polish／humanize 紀錄；寫入失敗時，舊圖與紀錄都保留。publish 不會刪掉 publisher 剛寫好的 plan。
 
    完成標準：`verify.pass` 為 `true`，而且 `step.md` 裡的 marker 還在。
 

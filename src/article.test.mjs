@@ -369,7 +369,7 @@ test("image plans can be reviewed before any image is generated", async (t) => {
   const root = fixture(t);
   const prose = `# Step One\n\n${"字".repeat(905)}\n\nSecond paragraph anchor.\n`;
   write(root, "learn/test/nodes/n1/s1.md", prose);
-  const planFile = "learn/test/output/image-plans/n1/s1.json";
+  const planFile = "learn/test/nodes/n1/s1.plan.json";
 
   let planCalls = 0;
   const planned = await runImages(

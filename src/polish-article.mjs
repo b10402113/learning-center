@@ -474,6 +474,7 @@ export async function runPolishDraft({
 
   const files = jobFiles(root, { subject, node: nodeId, step });
   const shownOriginal = relative(root, files.original);
+  const shownPolish = relative(root, files.polish);
   const shownPlan = relative(root, files.plan);
   if (!existsSync(files.original)) {
     return { id: entry.id, title: entry.title, status: "skipped-no-original", path: shownOriginal };
@@ -514,7 +515,7 @@ export async function runPolishDraft({
     return { id: entry.id, title: entry.title, status: "failed", path: shownPlan, error: rewritten.error };
   }
 
-  writeFileSync(files.original, prose.next);
+  writeFileSync(files.polish, prose.next);
   writeFileSync(files.plan, `${JSON.stringify(planForDisk(rewritten.plan), null, 2)}\n`);
   return {
     id: entry.id,
@@ -522,7 +523,7 @@ export async function runPolishDraft({
     status: "polished",
     changed: prose.next !== article || JSON.stringify(rewritten.plan) !== JSON.stringify(plan),
     attempts: prose.attempts,
-    article: shownOriginal,
+    article: shownPolish,
     plan: shownPlan,
     anchors: rewritten.plan.length,
   };

@@ -65,7 +65,7 @@ A short lesson.
 `);
   write(root, "learn/test/nodes/n1/s1.md", body ? article : "# Step One\n");
   if (imagePlan) {
-    write(root, "learn/test/output/image-plans/n1/s1.json", JSON.stringify(imagePlan));
+    write(root, "learn/test/nodes/n1/s1.plan.json", JSON.stringify(imagePlan));
   }
   return root;
 }

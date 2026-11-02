@@ -43,15 +43,13 @@ Completion: every resolved node is `confirmed` with its step skeletons restored,
 | --- | --- |
 | `nodes/<node>.md` | kept; `status` → `confirmed`, `updated` refreshed |
 | `nodes/<node>/<step>.md` | body replaced by an empty file |
+| `nodes/<node>/<step>.plan.json` | removed |
+| `nodes/<node>/<step>.quiz.json` | removed |
 | `nodes/<node>/<step>-assets/` | removed |
 | orphan files in `nodes/<node>/` | removed |
-| `output/materials/<subject>-<node>-<step>.json` | removed |
-| `output/image-plans/<node>/<step>.json` | removed |
-| `output/jobs/<subject>-<node>-*` (incl. `prepare.json` and legacy `*.plan.json`) | removed |
-| `output/humanized/<node>/<step>.json` | removed |
-| `output/humanize/<node>/<step>/` | removed |
-| `output/quiz-candidates/<node>/` | removed |
-| `output/article_<timestamp>_*` folders referenced by the node's `result.json` | removed |
+| `output/<node>/` (step folders, `prepare.json`, `teaching-plan.md`) | removed |
+| `output/<legacy-artifact-dir>/<node>/` (materials, jobs, image-plans, polished, humanized, humanize, quiz-candidates) | removed |
+| article-run folders referenced by the node's `result.json` | removed |
 | `ROADMAP.md`, `MEMORY.md`, `digests/`, `edges/`, other nodes | untouched |
 
 A `draft` node has no steps to reset; it is reported and skipped.

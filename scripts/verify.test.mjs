@@ -840,6 +840,35 @@ test("an asset folder without a step is an orphan", (t) => {
   assert.ok(failures(root).includes("image-orphan"));
 });
 
+test("an image plan beside the node is accepted", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/nodes/n1/s1.plan.json",
+    JSON.stringify([{ heading: "A", prompt: "draw it" }]),
+  );
+  assert.deepEqual(failures(root), []);
+});
+
+test("an image plan must be a 1-5 item array with prompts", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.plan.json", JSON.stringify([{ heading: "A" }]));
+  assert.ok(failures(root).includes("image-plan"));
+
+  write(root, "learn/test/nodes/n1/s1.plan.json", "not json");
+  assert.ok(failures(root).includes("image-plan"));
+});
+
+test("an image plan without a step entry is an orphan", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/nodes/n1/ghost.plan.json",
+    JSON.stringify([{ heading: "A", prompt: "draw it" }]),
+  );
+  assert.ok(failures(root).includes("image-plan-orphan"));
+});
+
 test("a text digest may point at a codebase digest it supplements", (t) => {
   const root = fixture(t);
   addCodebaseDigest(root);

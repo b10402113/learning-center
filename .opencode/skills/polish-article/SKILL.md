@@ -7,7 +7,7 @@ argument-hint: "<subject>/<node> [--step <id>] [--force] [--max-parallel <n>] [-
 
 Invoke as `/polish-article <subject>/<node> [--step <id>] [--force]`.
 
-這是一個 thin shell：`scripts/polish-article.mjs` 挑 step、遮罩受保護結構、呼叫模型、還原與驗證、寫回文章與 plan 的 `heading`／`prompt`，並記錄文章 hash。沒有 subagent。`/article` 的 publisher 會在插入 marker 前先跑同一支 CLI 的 `draft` 模式。
+這是一個 thin shell：`scripts/polish-article.mjs` 挑 step、遮罩受保護結構、呼叫模型、還原與驗證、寫回文章與 plan 的 `heading`／`prompt`，並記錄文章 hash。沒有 subagent。`/article` 的 publisher 寫完 `original.md` 與 marker 後，會跑同一支 CLI 的 `draft` 模式：讀 `output/<node>/<step>/original.md`、寫 `polish.md`，原稿不再更動。
 
 1. **Resolve the target.** 參數是 `subject/node`，在 repo root 執行。不要從敘述推測 subject 或 node。
 
@@ -43,7 +43,8 @@ Invoke as `/polish-article <subject>/<node> [--step <id>] [--force]`.
 - 呼叫模型潤飾散文，保留事實、數字與段落順序。
 - 另一次呼叫只改寫 plan 每一項的 `heading` 與 `prompt`；長度與順序不變，兩者都必須是非空字串。新 plan 沒有 `anchor`；舊 plan 若有 `anchor`，原樣保留。
 - 文章與 plan 都驗證通過才一起寫回；任一失敗則兩份都不動，並重試一次。
-- 成功寫回文章與 plan，寫 `learn/<subject>/output/polished/<node>/<step>.json`（時間、文章 sha256、`changed`、模型），最後跑 verify。
+- `run` 成功寫回文章與 plan，寫 `learn/<subject>/output/polished/<node>/<step>.json`（時間、文章 sha256、`changed`、模型），最後跑 verify。
+- `draft` 只寫 `polish.md` 與 plan；`original.md` 的內容與 hash 保持不變。
 - 文章或 plan 有改動時刪除該 step 的 `<step>.quiz.json`，讓 `/quiz-gen` 重新出題。
 
 **不做的事：**

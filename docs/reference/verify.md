@@ -119,6 +119,8 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `image-format` | every referenced image is a `.webp` file with a WebP header |
 | `image-location` | every local image lives under `nodes/<node>/<step>-assets/` |
 | `image-orphan` | every file in a step's `*-assets/` directory is referenced by its article, and every `*-assets/` directory belongs to a real step |
+| `image-plan` | `<step>.plan.json` parses as an array of 1–5 items, each with a non-empty `prompt` |
+| `image-plan-orphan` | every `<step>.plan.json` belongs to a real step entry |
 | `sources-empty` | step has at least one source link (flag) |
 | `lint-node-count` | node count is within ±40% of the formula baseline (flag) |
 

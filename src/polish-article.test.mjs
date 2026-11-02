@@ -68,7 +68,7 @@ updated: 2026-10-22
 `,
   );
   write(root, "learn/demo/nodes/alpha/one.md", ARTICLE);
-  write(root, "learn/demo/output/image-plans/alpha/one.json", "[]\n");
+  write(root, "learn/demo/nodes/alpha/one.plan.json", "[]\n");
   write(root, "learn/demo/nodes/alpha/one.quiz.json", '{"quiz-generated":true,"questions":[]}\n');
   return root;
 }
@@ -166,13 +166,13 @@ test("an API failure records the step as failed instead of throwing", async () =
 
 test("steps without a plan or without markers are skipped", async () => {
   const root = fixture();
-  rmSync(join(root, "learn/demo/output/image-plans/alpha/one.json"));
+  rmSync(join(root, "learn/demo/nodes/alpha/one.plan.json"));
   const { fetch, calls } = fetchEcho();
   const report = await runPolish({ root, subject: "demo", node: "alpha", fetchImpl: fetch });
   assert.equal(report.skipped[0].status, "skipped-no-plan");
   assert.equal(calls.length, 0);
 
-  write(root, "learn/demo/output/image-plans/alpha/one.json", "[]\n");
+  write(root, "learn/demo/nodes/alpha/one.plan.json", "[]\n");
   write(root, "learn/demo/nodes/alpha/one.md", "# First step\n\n沒有圖片標記的段落。\n");
   const second = await runPolish({ root, subject: "demo", node: "alpha", fetchImpl: fetch });
   assert.equal(second.skipped[0].status, "skipped-not-published");
@@ -206,7 +206,7 @@ updated: 2026-10-22
   );
   write(
     root,
-    "learn/demo/output/jobs/beta/two/two.original.md",
+    "learn/demo/output/beta/two/original.md",
     `# Draft title
 
 這是一段奇怪的文字。
@@ -222,7 +222,7 @@ const b = 2;
   );
   write(
     root,
-    "learn/demo/output/image-plans/beta/two.json",
+    "learn/demo/nodes/beta/two.plan.json",
     JSON.stringify(
       [
         {
@@ -265,8 +265,10 @@ test("protectAnchors masks each anchor and restores it verbatim", () => {
   assert.match(restore(text), /這是一段需要保留的句子。/);
 });
 
-test("draft mode polishes the original and the plan while keeping markers", async () => {
+test("draft mode writes polish.md and leaves the original untouched", async () => {
   const root = draftFixture();
+  const originalPath = join(root, "learn/demo/output/beta/two/original.md");
+  const beforeOriginal = readFileSync(originalPath, "utf8");
   const { fetch, calls } = fetchRoute({
     article: (text) => text.replace("奇怪的", "不順的"),
     plan: (text) => {
@@ -284,10 +286,12 @@ test("draft mode polishes the original and the plan while keeping markers", asyn
 
   assert.equal(report.status, "polished");
   assert.equal(report.changed, true);
+  assert.match(report.article, /polish\.md$/);
   assert.equal(calls.length, 2);
+  assert.equal(readFileSync(originalPath, "utf8"), beforeOriginal);
 
   const article = readFileSync(
-    join(root, "learn/demo/output/jobs/beta/two/two.original.md"),
+    join(root, "learn/demo/output/beta/two/polish.md"),
     "utf8",
   );
   assert.match(article, /不順的文字/);
@@ -295,7 +299,7 @@ test("draft mode polishes the original and the plan while keeping markers", asyn
   assert.match(article, /const b = 2;/);
 
   const plan = JSON.parse(
-    readFileSync(join(root, "learn/demo/output/image-plans/beta/two.json"), "utf8"),
+    readFileSync(join(root, "learn/demo/nodes/beta/two.plan.json"), "utf8"),
   );
   assert.equal(plan.length, 1);
   assert.equal(plan[0].anchor, undefined);
@@ -305,8 +309,8 @@ test("draft mode polishes the original and the plan while keeping markers", asyn
 
 test("draft mode leaves both files untouched when the plan rewrite is invalid", async () => {
   const root = draftFixture();
-  const articlePath = join(root, "learn/demo/output/jobs/beta/two/two.original.md");
-  const planPath = join(root, "learn/demo/output/image-plans/beta/two.json");
+  const articlePath = join(root, "learn/demo/output/beta/two/original.md");
+  const planPath = join(root, "learn/demo/nodes/beta/two.plan.json");
   const beforeArticle = readFileSync(articlePath, "utf8");
   const beforePlan = readFileSync(planPath, "utf8");
   const { fetch } = fetchRoute({
@@ -326,7 +330,7 @@ test("published polish rewrites a valid plan's heading and prompt", async () => 
   const root = fixture();
   write(
     root,
-    "learn/demo/output/image-plans/alpha/one.json",
+    "learn/demo/nodes/alpha/one.plan.json",
     JSON.stringify(
       [
         {
@@ -358,7 +362,7 @@ test("published polish rewrites a valid plan's heading and prompt", async () => 
   assert.equal(report.steps[0].planChanged, true);
   assert.equal(calls.length, 2);
   const plan = JSON.parse(
-    readFileSync(join(root, "learn/demo/output/image-plans/alpha/one.json"), "utf8"),
+    readFileSync(join(root, "learn/demo/nodes/alpha/one.plan.json"), "utf8"),
   );
   assert.equal(plan[0].anchor, "這是一段奇怪的文字。");
   assert.equal(plan[0].heading, "原本的標題（潤飾）");

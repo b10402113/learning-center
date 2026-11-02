@@ -32,17 +32,24 @@ function fixture(t) {
 
 const entry = { id: "s1", title: "Step One", purpose: "Explain one thing." };
 
-test("jobFiles points the plan at the shared image-plans path", () => {
+test("jobFiles keeps every step artifact in one folder and the plan beside the node", () => {
   const files = jobFiles("/repo", { subject: "test", node: "n1", step: "s1" });
-  assert.equal(files.plan, "/repo/learn/test/output/image-plans/n1/s1.json");
-  assert.equal(files.legacyPlan, "/repo/learn/test/output/jobs/n1/s1/s1.plan.json");
+  assert.equal(files.dir, "/repo/learn/test/output/n1/s1");
+  assert.equal(files.material, "/repo/learn/test/output/n1/s1/material.json");
+  assert.equal(files.original, "/repo/learn/test/output/n1/s1/original.md");
+  assert.equal(files.polish, "/repo/learn/test/output/n1/s1/polish.md");
+  assert.equal(files.blocks, "/repo/learn/test/output/n1/s1/blocks.json");
+  assert.equal(files.result, "/repo/learn/test/output/n1/s1/result.json");
+  assert.equal(files.plan, "/repo/learn/test/nodes/n1/s1.plan.json");
+  assert.equal(files.legacyPlan, undefined);
+  assert.equal(files.marked, undefined);
 });
 
-test("readStepPlan reads the shared image plan and validates anchors", (t) => {
+test("readStepPlan reads the plan from the node directory and validates anchors", (t) => {
   const root = fixture(t);
   write(
     root,
-    "learn/test/output/image-plans/n1/s1.json",
+    "learn/test/nodes/n1/s1.plan.json",
     JSON.stringify([{ heading: "A", anchor: "one  sentence", prompt: "draw it" }]),
   );
   const plan = readStepPlan(root, { subject: "test", node: "n1", step: "s1" }, "one sentence.");
