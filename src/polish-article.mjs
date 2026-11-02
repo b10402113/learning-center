@@ -2,7 +2,13 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { hasArticleBody, readNode, selectSteps } from "./article.mjs";
-import { jobFiles, polishedRecordPath, readJson } from "./article-agent-bridge.mjs";
+import {
+  jobFiles,
+  normalizeStepPlan,
+  polishedRecordPath,
+  readJson,
+  readStepPlan,
+} from "./article-agent-bridge.mjs";
 import { polishArticle } from "./polish.mjs";
 
 const MARKER = /^[ \t]*<!--\s*image:(\d+)\s*-->[ \t]*$/gm;
@@ -19,9 +25,11 @@ const INLINE = /`[^`\n]+`|(?<!!)\[[^\]]*\]\([^)\s]+(?:\s+["'][^"']*["'])?\)|\[\[
 const TOKEN_PREFIX = "{{POLISH_KEEP_";
 const TOKEN = (index) => `${TOKEN_PREFIX}${index}}}`;
 const TOKEN_LEFTOVER = new RegExp(`${TOKEN_PREFIX.replace(/[{}]/g, "\\$&")}\\d+\\}\\}`);
+const ANCHOR_PREFIX = "{{POLISH_ANCHOR_";
+const ANCHOR_TOKEN = (index) => `${ANCHOR_PREFIX}${index}}}`;
 
 const PROTECT_NOTE =
-  "文中出現 {{POLISH_KEEP_N}} 這種標記時，原樣保留在原本位置，不要改寫、刪除、複製或移動。";
+  "文中出現 {{POLISH_KEEP_N}} 或 {{POLISH_ANCHOR_N}} 這種標記時，原樣保留在原本位置，不要改寫、刪除、複製或移動。";
 
 export function sha256(text) {
   return createHash("sha256").update(String(text)).digest("hex");
@@ -119,6 +127,44 @@ export function protectArticle(markdown) {
     return restored;
   };
   return { text: protectedText, restore, tokens };
+}
+
+/**
+ * Legacy plans may still carry an `anchor`. Replace each one that exists in the
+ * article with a token so a polish run can rewrite the surrounding prose without
+ * breaking it. New plans have no anchors: their image positions are the
+ * `<!--image:N-->` markers, which protectArticle already preserves.
+ */
+export function protectAnchors(markdown, plan) {
+  let out = String(markdown).replace(/\r\n/g, "\n");
+  const tokens = [];
+  let cursor = 0;
+  for (const item of plan ?? []) {
+    const anchor = String(item?.anchor ?? "");
+    if (!anchor) continue;
+    const found = out.indexOf(anchor, cursor);
+    if (found === -1) continue;
+    const token = ANCHOR_TOKEN(tokens.length);
+    tokens.push(anchor);
+    out = `${out.slice(0, found)}${token}${out.slice(found + anchor.length)}`;
+    cursor = found + token.length;
+  }
+  const restore = (text) => {
+    let restored = String(text);
+    for (let i = 0; i < tokens.length; i += 1) {
+      restored = restored.split(ANCHOR_TOKEN(i)).join(tokens[i]);
+    }
+    return restored;
+  };
+  return { text: out, tokens, restore };
+}
+
+function anchorTokensIntact(text, tokens) {
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = ANCHOR_TOKEN(i).replace(/[{}]/g, "\\$&");
+    const count = (String(text).match(new RegExp(token, "g")) ?? []).length;
+    if (count !== 1) throw new Error("polish changed an image plan anchor");
+  }
 }
 
 function markerSequence(markdown) {
@@ -243,6 +289,101 @@ function withTrailingNewline(original, text) {
   return /\n$/.test(original) || original === "" ? `${body}\n` : body;
 }
 
+async function polishProse({ article, plan, instruction, fetchImpl, root }) {
+  const anchors = protectAnchors(article, plan);
+  const { text, restore } = protectArticle(anchors.text);
+  const combined = [PROTECT_NOTE, instruction?.trim()].filter(Boolean).join("\n\n");
+  const injected = fetchImpl ? { fetch: fetchImpl } : {};
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    let result;
+    try {
+      result = await polishArticle(
+        { articleText: text, instruction: combined, save: false },
+        root,
+        injected,
+      );
+    } catch (error) {
+      return { error: error?.message ?? "polish request failed" };
+    }
+    try {
+      anchorTokensIntact(result.text, anchors.tokens);
+      const next = withTrailingNewline(article, anchors.restore(restore(result.text)));
+      validatePolishedArticle({ original: article, next });
+      return { next, attempts: attempt };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  return { error: lastError?.message ?? "polish failed" };
+}
+
+export function applyPlanRewrite(text, plan) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(text).trim());
+  } catch {
+    throw new Error("polished image plan is not valid JSON");
+  }
+  if (!Array.isArray(parsed) || parsed.length !== plan.length) {
+    throw new Error("polish changed the image plan length");
+  }
+  return plan.map((item, index) => {
+    const next = parsed[index];
+    if (!next || typeof next !== "object" || Array.isArray(next)) {
+      throw new Error(`polished image plan item ${index + 1} is not an object`);
+    }
+    const heading = String(next.heading ?? "").trim();
+    const prompt = String(next.prompt ?? "").trim();
+    if (!heading) throw new Error(`polished image plan item ${index + 1} has an empty heading`);
+    if (!prompt) throw new Error(`polished image plan item ${index + 1} has an empty prompt`);
+    return { index: item.index, heading, anchor: item.anchor, prompt };
+  });
+}
+
+async function polishPlan({ plan, title, instruction, fetchImpl, root }) {
+  const input = plan.map(({ heading, prompt }) => ({ heading, prompt }));
+  const context = [title ? `文章標題：${title}` : "", instruction?.trim()].filter(Boolean).join("\n\n");
+  const injected = fetchImpl ? { fetch: fetchImpl } : {};
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const result = await polishArticle(
+        {
+          articleText: JSON.stringify(input, null, 2),
+          promptFile: "prompts/polish-plan.txt",
+          instruction: context || undefined,
+          save: false,
+        },
+        root,
+        injected,
+      );
+      return { plan: applyPlanRewrite(result.text, plan), attempts: attempt };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  return { error: lastError?.message ?? "plan polish failed" };
+}
+
+function planForDisk(plan) {
+  return plan.map(({ heading, anchor, prompt }) => ({ heading, anchor, prompt }));
+}
+
+function readPolishedPlan(root, { subject, node, step }) {
+  const files = jobFiles(root, { subject, node, step });
+  const raw = readJson(files.plan);
+  if (raw == null) return null;
+  try {
+    const plan = normalizeStepPlan(raw);
+    return plan;
+  } catch {
+    return null;
+  }
+}
+
 async function polishOne({ root, subject, node, entry, force, instruction, fetchImpl }) {
   const articlePath = join(root, "learn", subject, "nodes", node, `${entry.id}.md`);
   const shown = relative(root, articlePath);
@@ -268,63 +409,122 @@ async function polishOne({ root, subject, node, entry, force, instruction, fetch
     return { id: entry.id, title: entry.title, status: "skipped-record", path: shown };
   }
 
-  const { text, restore } = protectArticle(article);
-  const combined = [PROTECT_NOTE, instruction?.trim()].filter(Boolean).join("\n\n");
-  const injected = fetchImpl ? { fetch: fetchImpl } : {};
-
-  let lastError = null;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    let result;
-    try {
-      result = await polishArticle(
-        { articleText: text, instruction: combined, save: false },
-        root,
-        injected,
-      );
-    } catch (error) {
-      return {
-        id: entry.id,
-        title: entry.title,
-        status: "failed",
-        path: shown,
-        error: error?.message ?? "polish request failed",
-      };
-    }
-    try {
-      const next = withTrailingNewline(article, restore(result.text));
-      validatePolishedArticle({ original: article, next });
-      const changed = next !== article;
-      writeFileSync(articlePath, next);
-      const written = {
-        polished_at: new Date().toISOString(),
-        article_sha256: sha256(next),
-        changed,
-        model: process.env.TEXT_MODEL || process.env.OPENAI_TEXT_MODEL || "gpt-4o-mini",
-      };
-      mkdirSync(dirname(recordPath), { recursive: true });
-      writeFileSync(recordPath, JSON.stringify(written, null, 2) + "\n");
-      const quizPath = join(root, "learn", subject, "nodes", node, `${entry.id}.quiz.json`);
-      if (changed && existsSync(quizPath)) rmSync(quizPath, { force: true });
-      return {
-        id: entry.id,
-        title: entry.title,
-        status: "polished",
-        changed,
-        attempts: attempt,
-        path: shown,
-        record: relative(root, recordPath),
-      };
-    } catch (error) {
-      lastError = error;
-    }
+  const plan = readPolishedPlan(root, { subject, node, step: entry.id });
+  const prose = await polishProse({ article, plan: plan ?? [], instruction, fetchImpl, root });
+  if (prose.error) {
+    return { id: entry.id, title: entry.title, status: "failed", path: shown, error: prose.error };
   }
 
+  let nextPlan = plan;
+  let planChanged = false;
+  if (plan) {
+    const rewritten = await polishPlan({
+      plan,
+      title: firstLine(prose.next),
+      instruction,
+      fetchImpl,
+      root,
+    });
+    if (rewritten.error) {
+      return { id: entry.id, title: entry.title, status: "failed", path: shown, error: rewritten.error };
+    }
+    nextPlan = rewritten.plan;
+    planChanged = JSON.stringify(nextPlan) !== JSON.stringify(plan);
+  }
+
+  const changed = prose.next !== article || planChanged;
+  writeFileSync(articlePath, prose.next);
+  if (nextPlan && planChanged) {
+    writeFileSync(files.plan, `${JSON.stringify(planForDisk(nextPlan), null, 2)}\n`);
+  }
+  const written = {
+    polished_at: new Date().toISOString(),
+    article_sha256: sha256(prose.next),
+    changed,
+    model: process.env.TEXT_MODEL || process.env.OPENAI_TEXT_MODEL || "gpt-4o-mini",
+  };
+  mkdirSync(dirname(recordPath), { recursive: true });
+  writeFileSync(recordPath, JSON.stringify(written, null, 2) + "\n");
+  const quizPath = join(root, "learn", subject, "nodes", node, `${entry.id}.quiz.json`);
+  if (changed && existsSync(quizPath)) rmSync(quizPath, { force: true });
   return {
     id: entry.id,
     title: entry.title,
-    status: "failed",
+    status: "polished",
+    changed,
+    planChanged,
+    attempts: prose.attempts,
     path: shown,
-    error: lastError?.message ?? "polish failed",
+    plan: relative(root, files.plan),
+    record: relative(root, recordPath),
+  };
+}
+
+export async function runPolishDraft({
+  root,
+  subject,
+  node: nodeId,
+  step,
+  instruction = null,
+  fetchImpl = null,
+}) {
+  const node = readNode(root, subject, nodeId);
+  const entry = (node.steps ?? []).find((item) => item?.id === step);
+  if (!entry) throw new Error(`step "${step}" is not in node ${nodeId}`);
+
+  const files = jobFiles(root, { subject, node: nodeId, step });
+  const shownOriginal = relative(root, files.original);
+  const shownPlan = relative(root, files.plan);
+  if (!existsSync(files.original)) {
+    return { id: entry.id, title: entry.title, status: "skipped-no-original", path: shownOriginal };
+  }
+  const article = readFileSync(files.original, "utf8");
+  if (!hasArticleBody(article)) {
+    return { id: entry.id, title: entry.title, status: "skipped-no-original", path: shownOriginal };
+  }
+  if (!existsSync(files.plan)) {
+    return { id: entry.id, title: entry.title, status: "skipped-no-plan", path: shownPlan };
+  }
+
+  let plan;
+  try {
+    plan = readStepPlan(root, { subject, node: nodeId, step }, article);
+  } catch (error) {
+    return {
+      id: entry.id,
+      title: entry.title,
+      status: "failed",
+      path: shownPlan,
+      error: error?.message ?? "invalid image plan",
+    };
+  }
+
+  const prose = await polishProse({ article, plan, instruction, fetchImpl, root });
+  if (prose.error) {
+    return { id: entry.id, title: entry.title, status: "failed", path: shownOriginal, error: prose.error };
+  }
+  const rewritten = await polishPlan({
+    plan,
+    title: firstLine(prose.next),
+    instruction,
+    fetchImpl,
+    root,
+  });
+  if (rewritten.error) {
+    return { id: entry.id, title: entry.title, status: "failed", path: shownPlan, error: rewritten.error };
+  }
+
+  writeFileSync(files.original, prose.next);
+  writeFileSync(files.plan, `${JSON.stringify(planForDisk(rewritten.plan), null, 2)}\n`);
+  return {
+    id: entry.id,
+    title: entry.title,
+    status: "polished",
+    changed: prose.next !== article || JSON.stringify(rewritten.plan) !== JSON.stringify(plan),
+    attempts: prose.attempts,
+    article: shownOriginal,
+    plan: shownPlan,
+    anchors: rewritten.plan.length,
   };
 }
 

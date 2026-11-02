@@ -3,7 +3,14 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { protectArticle, runPolish, sha256, validatePolishedArticle } from "./polish-article.mjs";
+import {
+  protectAnchors,
+  protectArticle,
+  runPolish,
+  runPolishDraft,
+  sha256,
+  validatePolishedArticle,
+} from "./polish-article.mjs";
 
 process.env.TEXT_API_KEY = "test-key-0123456789abcdef";
 process.env.TEXT_MODEL = "test-model";
@@ -169,4 +176,191 @@ test("steps without a plan or without markers are skipped", async () => {
   write(root, "learn/demo/nodes/alpha/one.md", "# First step\n\n沒有圖片標記的段落。\n");
   const second = await runPolish({ root, subject: "demo", node: "alpha", fetchImpl: fetch });
   assert.equal(second.skipped[0].status, "skipped-not-published");
+});
+
+function draftFixture() {
+  const root = mkdtempSync(join(tmpdir(), "polish-draft-"));
+  write(
+    root,
+    "learn/demo/nodes/beta.md",
+    `---
+id: beta
+title: "Beta"
+subject: demo
+tier: 1
+order: 2
+status: confirmed
+goal: "Test draft polish."
+prerequisites: []
+steps:
+  - id: two
+    purpose: "Explain the second thing."
+    sources:
+      - "[[sources/demo/a.txt#L1-L2]]"
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Beta
+`,
+  );
+  write(
+    root,
+    "learn/demo/output/jobs/beta/two/two.original.md",
+    `# Draft title
+
+這是一段奇怪的文字。
+
+<!--image:1-->
+
+<!-- source: sources/demo/a.txt#L1-L2 -->
+
+\`\`\`ts
+const b = 2;
+\`\`\`
+`,
+  );
+  write(
+    root,
+    "learn/demo/output/image-plans/beta/two.json",
+    JSON.stringify(
+      [
+        {
+          heading: "第一節",
+          prompt: "說明第二個概念",
+        },
+      ],
+      null,
+      2,
+    ) + "\n",
+  );
+  return root;
+}
+
+function fetchRoute({ article, plan }) {
+  const calls = [];
+  const fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    const system = body.messages.find((message) => message.role === "system").content;
+    const user = body.messages.find((message) => message.role === "user").content;
+    calls.push({ system, user });
+    const content = system.includes("配圖清單") ? plan(user) : article(user);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: "resp_draft",
+        choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
+      }),
+    };
+  };
+  return { fetch, calls };
+}
+
+test("protectAnchors masks each anchor and restores it verbatim", () => {
+  const plan = [{ anchor: "這是一段需要保留的句子。" }];
+  const { text, restore } = protectAnchors(ARTICLE.replace("奇怪的文字。", "奇怪的文字。這是一段需要保留的句子。"), plan);
+  assert.ok(text.includes("{{POLISH_ANCHOR_0}}"));
+  assert.ok(!text.includes("這是一段需要保留的句子。"));
+  assert.match(restore(text), /這是一段需要保留的句子。/);
+});
+
+test("draft mode polishes the original and the plan while keeping markers", async () => {
+  const root = draftFixture();
+  const { fetch, calls } = fetchRoute({
+    article: (text) => text.replace("奇怪的", "不順的"),
+    plan: (text) => {
+      const items = JSON.parse(text);
+      return JSON.stringify(
+        items.map((item) => ({
+          heading: `${item.heading}（潤飾）`,
+          prompt: `${item.prompt}（潤飾）`,
+        })),
+      );
+    },
+  });
+
+  const report = await runPolishDraft({ root, subject: "demo", node: "beta", step: "two", fetchImpl: fetch });
+
+  assert.equal(report.status, "polished");
+  assert.equal(report.changed, true);
+  assert.equal(calls.length, 2);
+
+  const article = readFileSync(
+    join(root, "learn/demo/output/jobs/beta/two/two.original.md"),
+    "utf8",
+  );
+  assert.match(article, /不順的文字/);
+  assert.match(article, /<!--image:1-->/);
+  assert.match(article, /const b = 2;/);
+
+  const plan = JSON.parse(
+    readFileSync(join(root, "learn/demo/output/image-plans/beta/two.json"), "utf8"),
+  );
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].anchor, undefined);
+  assert.equal(plan[0].heading, "第一節（潤飾）");
+  assert.equal(plan[0].prompt, "說明第二個概念（潤飾）");
+});
+
+test("draft mode leaves both files untouched when the plan rewrite is invalid", async () => {
+  const root = draftFixture();
+  const articlePath = join(root, "learn/demo/output/jobs/beta/two/two.original.md");
+  const planPath = join(root, "learn/demo/output/image-plans/beta/two.json");
+  const beforeArticle = readFileSync(articlePath, "utf8");
+  const beforePlan = readFileSync(planPath, "utf8");
+  const { fetch } = fetchRoute({
+    article: (text) => text.replace("奇怪的", "不順的"),
+    plan: () => "not json",
+  });
+
+  const report = await runPolishDraft({ root, subject: "demo", node: "beta", step: "two", fetchImpl: fetch });
+
+  assert.equal(report.status, "failed");
+  assert.match(report.error, /JSON/i);
+  assert.equal(readFileSync(articlePath, "utf8"), beforeArticle);
+  assert.equal(readFileSync(planPath, "utf8"), beforePlan);
+});
+
+test("published polish rewrites a valid plan's heading and prompt", async () => {
+  const root = fixture();
+  write(
+    root,
+    "learn/demo/output/image-plans/alpha/one.json",
+    JSON.stringify(
+      [
+        {
+          heading: "原本的標題",
+          anchor: "這是一段奇怪的文字。",
+          prompt: "說明原本的概念",
+        },
+      ],
+      null,
+      2,
+    ) + "\n",
+  );
+  const { fetch, calls } = fetchRoute({
+    article: (text) => text.replace("奇怪的", "不順的"),
+    plan: (text) => {
+      const items = JSON.parse(text);
+      return JSON.stringify(
+        items.map((item) => ({
+          heading: `${item.heading}（潤飾）`,
+          prompt: `${item.prompt}（潤飾）`,
+        })),
+      );
+    },
+  });
+
+  const report = await runPolish({ root, subject: "demo", node: "alpha", fetchImpl: fetch });
+
+  assert.equal(report.steps.length, 1);
+  assert.equal(report.steps[0].planChanged, true);
+  assert.equal(calls.length, 2);
+  const plan = JSON.parse(
+    readFileSync(join(root, "learn/demo/output/image-plans/alpha/one.json"), "utf8"),
+  );
+  assert.equal(plan[0].anchor, "這是一段奇怪的文字。");
+  assert.equal(plan[0].heading, "原本的標題（潤飾）");
+  assert.equal(plan[0].prompt, "說明原本的概念（潤飾）");
 });

@@ -156,7 +156,8 @@ export async function polishArticle(args, root = process.cwd(), injected = {}) {
   const temperature = Number(process.env.POLISH_TEMPERATURE ?? 0.3);
   const timeoutMs = Number(process.env.POLISH_TIMEOUT_MS || 600000);
 
-  const system = (await fs.readFile(path.join(projectRoot, 'prompts/polish.txt'), 'utf8'))
+  const promptFile = args.promptFile || 'prompts/polish.txt';
+  const system = (await fs.readFile(path.join(projectRoot, promptFile), 'utf8'))
     + (args.instruction?.trim() ? `\n\n## 本次額外要求\n\n${args.instruction.trim()}\n` : '');
 
   const fetchImpl = injected.fetch || globalThis.fetch;

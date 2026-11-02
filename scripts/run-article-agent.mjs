@@ -28,8 +28,10 @@ const usage = `Usage:
 Runs one step through the article pipeline. It protects the code blocks and reads
 the publisher's image plan first.
 
---mode direct (default) inserts the <!--image:N--> markers at the plan anchors and
-leaves the prose exactly as the publisher wrote it. No text model is called.
+--mode direct (default) keeps the publisher's own <!--image:N--> markers when they
+match the plan in count and order, and leaves the prose exactly as written. A plan
+that still carries anchors gets the legacy insertion at those anchors. No text
+model is called.
 
 --mode translate is legacy: it translates a non-Chinese original into Traditional
 Chinese with prompts/translate.txt. The pipeline never uses it.
@@ -112,19 +114,38 @@ async function main() {
 }
 
 function runDirect({ root, files, entry, plan, markersOnly, protectedText }) {
-  if (/<!--\s*image:\d+\s*-->/.test(protectedText)) {
-    throw new Error(
-      "the original contains hand-placed <!--image:N--> markers; remove them — the command inserts markers from the plan",
-    );
-  }
-  if (plan) {
+  const markers = [...protectedText.matchAll(/<!--\s*image:(\d+)\s*-->/g)].map((match) =>
+    Number(match[1]),
+  );
+  let article;
+  if (markers.length > 0) {
+    if (plan) {
+      const expected = plan.map((item) => item.index);
+      const same =
+        markers.length === expected.length &&
+        markers.every((value, index) => value === expected[index]);
+      if (!same) {
+        throw new Error(
+          `the original has image markers ${markers.join(", ")} but the plan expects ${expected.join(", ")}`,
+        );
+      }
+    }
+    article = `${protectedText.trimEnd()}\n`;
+  } else if (plan) {
     for (const item of plan) {
+      if (!item.anchor) {
+        throw new Error(
+          `image plan item ${item.index} has no anchor and the original has no <!--image:N--> markers`,
+        );
+      }
       if (!protectedText.includes(item.anchor)) {
         throw new Error(`image plan item ${item.index} anchor is not in the unprotected prose: ${item.anchor}`);
       }
     }
+    article = insertImageMarkers(protectedText, plan);
+  } else {
+    article = `${protectedText.trimEnd()}\n`;
   }
-  const article = plan ? insertImageMarkers(protectedText, plan) : `${protectedText.trimEnd()}\n`;
   writeFileSync(files.protected, article);
   writeJson(files.request, {
     mode: "direct",

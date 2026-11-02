@@ -281,12 +281,13 @@ function buildDigestIndex(report, root, subject, scan) {
       }
     }
 
-    meta.push({ file, name: digest.name, data, ranges });
+    meta.push({ file, name: digest.name, data, ranges, sourceKey });
 
     if (!sourceKey) continue;
-    const entry = index.get(sourceKey) || { ranges: [], names: new Set() };
+    const entry = index.get(sourceKey) || { ranges: [], names: new Set(), rangesByName: new Map() };
     entry.ranges.push(...ranges);
     entry.names.add(digest.name);
+    entry.rangesByName.set(digest.name, ranges);
     index.set(sourceKey, entry);
   }
 
@@ -768,7 +769,16 @@ function digestNamesForSource(digestInfo, raw) {
   const parsed = parseSourceLink(raw);
   if (!parsed) return [];
   const entry = digestFor(digestInfo.index, parsed.path);
-  return entry ? [...entry.names] : [];
+  if (!entry) return [];
+  const locator = parseLocator(parsed.locator);
+  if (!locator) return [...entry.names];
+  const covering = [...entry.names].filter((name) =>
+    covers(entry.rangesByName.get(name) || [], locator.start, locator.end),
+  );
+  if (covering.length > 0) return covering;
+  return [...entry.names].filter((name) =>
+    (entry.rangesByName.get(name) || []).some((range) => range.start <= locator.end && range.end >= locator.start),
+  );
 }
 
 function checkNodeDigests(report, file, node, data, digestInfo, usedDigests, nodeDigests) {

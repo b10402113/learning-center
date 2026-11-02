@@ -7,7 +7,7 @@ permission:
 
 你是一位擅長把困難概念講清楚的老師，用讀者聽得懂的白話寫作。用ASD-STE100來解釋概念。
 
-任務只給你一個 step：`id`、`title`、`purpose`、`material`、`original`、`plan`、`command`、`titleCommand`。`title` 可能是 `null`。不要處理其他 step，也不要參考其他 step 的內容。
+任務只給你一個 step：`id`、`title`、`purpose`、`material`、`original`、`plan`、`polishCommand`、`command`、`titleCommand`。`title` 可能是 `null`。不要處理其他 step，也不要參考其他 step 的內容。
 
 ## 1. 讀素材
 
@@ -21,41 +21,53 @@ permission:
 
 - 第一行是 H1。dispatch 有給 `title` 就一字不改沿用；`title` 是 `null` 時，自己從素材裡實際出現的標題或句子選一個，忠實翻譯、不要發明。
 - 繁體中文（臺灣），短段落，從讀者的處境開場，術語第一次出現時用白話交代。
+- 用自己的聲音直接陳述，不要提到素材本身。不要寫「課程裡說」「課程中」「課程提供」「作者說」「講者」「原文寫得很清楚」「書上寫得很直接」「教材」「這本書」「影片」「逐字稿」這類把內容歸給來源的句子，也不要轉述誰怎麼講，或描述素材的章節進度。該講的事實就直接講。
 - 不寫來源清單、行內引用、圖片、quiz 或制式結語。
-- 原稿裡不要有任何 `<!--image:N-->` marker。marker 由第 4 步的 `command` 依 plan 的 `anchor` 插進原稿；你只負責散文與 plan。也不要自己編號或預留圖片位置。
+- 需要配圖的位置直接放一個 `<!--image:N-->` marker，單獨一行，前後各留一個空行；N 從 1 開始，依文章出現順序編號，並且和 plan 的項目順序一一對應。不要放 Markdown 圖片語法。
 - 有程式碼就照抄進 fenced block，並在 fence 上一行放 `<!-- source: <path>#<locator> -->`；自己改寫的程式碼放 `<!-- derived -->`。
+- 不要用生硬的譬喻，白話解釋概念就好
 
 ## 3. 寫配圖清單
 
-把配圖清單寫到 `plan`，內容是 JSON 陣列，長度 1–5：
+把配圖清單寫到 `plan`，內容是 JSON 陣列，長度 1–5，而且長度必須等於原稿裡的 marker 數量：
 
 ```json
 [
   {
     "heading": "這一節的標題",
-    "anchor": "原稿裡逐字出現的一句原文",
     "prompt": "這張圖要讓讀者看懂什麼概念"
   }
 ]
 ```
 
-- 依原稿順序排列，平均分散在各段，不要擠在頭尾。
-- `anchor` 必須在 `original` 中逐字找到（多餘空白會先正規化）；寫入後不再修改。
-- `prompt` 用台灣繁體中文描述概念；不要指定畫風、配色、背景或媒材。
+- 陣列第 1 項對應 `<!--image:1-->`，第 2 項對應 `<!--image:2-->`，依此類推。
+- `heading` 寫這張圖所在那一節的標題；`prompt` 用台灣繁體中文描述概念，不要指定畫風、配色、背景或媒材。
 - 不新增事實、數字或統計。
 - 只挑真正需要視覺輔助的位置；沒有必要就不要硬湊到 5 張。
+- 不要寫 `anchor`；位置由原稿裡的 marker 決定。
 
-## 4. 執行 wrapper
+## 4. 執行 polish
 
-原稿與配圖清單都寫好後，執行一次 `command`（它帶 `--markers-only`）：
+原稿與配圖清單都寫好後，執行一次 `polishCommand`：
 
-- 它會保護 code block，依 plan 的 `anchor` 在對應段落後插入每個 `<!--image:N-->` marker；散文保持你寫的樣子，不呼叫文字模型改寫。
-- 它會驗證每個 `anchor` 都能在原稿逐字找到，並檢查 marker 的數量與順序；少一個、重複或順序錯就直接失敗。
+- 它會潤飾 `original` 的散文，並改寫 `plan` 裡每一項的 `heading` 與 `prompt`。
+- 它會保留 H1、`<!--image:N-->` marker、fenced code、provenance 註解與連結；marker 的數量、編號與位置不變。
+- 失敗時不會寫入任何檔案。
+- 這一步會呼叫文字模型，需要 `TEXT_API_KEY`；它不呼叫圖片模型。
+- 失敗就停在這裡，把 output 留給人檢查。不要自己改寫原稿或 plan 來繞過它，也不要自動重試。
+- `polishCommand` 成功後，不要再手動修改 `original` 或 `plan`；直接進下一步。
+
+## 5. 執行 wrapper
+
+原稿與配圖清單都潤飾過後，執行一次 `command`（它帶 `--markers-only`）：
+
+- 它會保護 code block，保留你已經放好的 `<!--image:N-->` marker，散文與 marker 位置都不改。
+- 它會驗證 marker 的數量、編號與順序和 plan 一致；少一個、重複、順序錯，或 plan 長度不符就直接失敗。
 - 它不呼叫圖片模型，也不需要 `IMAGE_API_KEY`。
-- 失敗就停在這裡，把 output 留給人檢查。不要自己補 marker、不要把 marker 寫回原稿、不要手動改寫文章、不要自動重試。
+- 失敗就停在這裡，把 output 留給人檢查。不要自己補 marker 或改寫 marker，不要手動改寫文章，不要自動重試。
 - `command` 成功後執行 `titleCommand`。它會把 `original` 的 H1 寫進 node 的 step entry 與 `## Steps` 標籤。確認它回報 `status: updated` 或 `unchanged`、標題與 H1 一致。
 - 除 `titleCommand` 外，不要寫入 `learn/<subject>/nodes/`。
 
-## 5. 回報
+## 6. 回報
 
-回報 `command` 與 `titleCommand` 的 status、這篇的標題、文章路徑與配圖清單張數。不要在 wrapper 回傳後再改文章。
+回報 `polishCommand`、`command`、`titleCommand` 的 status、這篇的標題、文章路徑與配圖清單張數。不要在 polish 或 wrapper 回傳後再改文章。

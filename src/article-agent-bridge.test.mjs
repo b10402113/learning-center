@@ -95,8 +95,8 @@ test("normalizeStepPlan rejects empty, oversized and malformed plans", () => {
     () => normalizeStepPlan(Array.from({ length: MAX_STEP_IMAGES + 1 }, () => ({ anchor: "a", prompt: "p" }))),
     /1-5 items/,
   );
-  assert.throws(() => normalizeStepPlan([{ prompt: "p" }]), /non-empty anchor/);
-  assert.throws(() => normalizeStepPlan([{ anchor: "a" }]), /non-empty prompt/);
+  assert.equal(normalizeStepPlan([{ heading: "h", prompt: "p" }])[0].anchor, undefined);
+  assert.throws(() => normalizeStepPlan([{ heading: "h" }]), /non-empty prompt/);
   assert.throws(() => normalizeStepPlan("not json"), SyntaxError);
 });
 

@@ -1,6 +1,8 @@
+import { useEffect, useRef, useState } from "react";
 import Markdown from "./Markdown.jsx";
 import Quiz from "./Quiz.jsx";
 import { tierDotClass } from "./Sidebar.jsx";
+import { articleForClipboard, copyText } from "../lib/clipboard.mjs";
 import { hashFor } from "../lib/route.mjs";
 import { stepNeighbors } from "../lib/steps.mjs";
 
@@ -67,6 +69,70 @@ function StepLink({ course, node, step, direction }) {
   );
 }
 
+function CopyIcon({ done }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {done ? (
+        <path d="m4 12 5 5L20 6" />
+      ) : (
+        <>
+          <rect x="9" y="9" width="12" height="12" rx="2" />
+          <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+const COPY_LABELS = {
+  idle: "複製全文",
+  copied: "已複製",
+  failed: "複製失敗",
+};
+
+function CopyArticleButton({ text }) {
+  const [state, setState] = useState("idle");
+  const timerRef = useRef(0);
+
+  useEffect(() => () => window.clearTimeout(timerRef.current), []);
+
+  const onClick = async () => {
+    window.clearTimeout(timerRef.current);
+    const ok = await copyText(text);
+    setState(ok ? "copied" : "failed");
+    timerRef.current = window.setTimeout(() => setState("idle"), 2000);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="複製這一步的完整文章（Markdown）"
+      aria-label="複製這一步的完整文章"
+      className={`inline-flex shrink-0 items-center gap-2 border-2 px-3 py-1.5 font-label text-[11px] uppercase tracking-[0.12em] transition-colors ${
+        state === "copied"
+          ? "border-accent bg-accent text-dark"
+          : state === "failed"
+            ? "border-ink bg-shade text-ink-soft"
+            : "border-ink bg-surface text-ink hover:border-accent hover:text-accent"
+      }`}
+    >
+      <CopyIcon done={state === "copied"} />
+      <span aria-live="polite">{COPY_LABELS[state]}</span>
+    </button>
+  );
+}
+
 /** One step rendered as a full Markdown article. */
 export default function StepView({ course, node, step }) {
   const assetBase = `${BASE}nodes/${encodeURIComponent(course.subject)}/${encodeURIComponent(node.id)}/`;
@@ -77,6 +143,13 @@ export default function StepView({ course, node, step }) {
   // The article body repeats the step title as an H1; the header already
   // renders it, so drop the leading heading before rendering.
   const body = String(step.articleMd || "").replace(/^\s*#\s+.*(?:\r?\n)+/, "");
+  const copyMarkdown = step.hasContent
+    ? articleForClipboard(step.articleMd, {
+        title: step.title,
+        assetBase,
+        origin: window.location.href,
+      })
+    : "";
 
   return (
     <article>
@@ -101,29 +174,34 @@ export default function StepView({ course, node, step }) {
       </nav>
 
       <header className="mt-4">
-        <p className="robo-kicker flex flex-wrap items-center gap-2 font-label text-[11px] text-ink-soft">
-          <span className="inline-flex items-center gap-1.5">
-            <span
-              aria-hidden="true"
-              className={`size-1.5 ${tierDotClass(node.tier)}`}
-            />
-            Tier {node.tier}
-          </span>
-          <span aria-hidden="true" className="text-ink-soft/50">
-            ·
-          </span>
-          <span className="font-mono text-[11px] tabular-nums">
-            Step {String(step.order).padStart(2, "0")} /{" "}
-            {String(node.steps.length).padStart(2, "0")}
-          </span>
-          <span aria-hidden="true" className="text-ink-soft/50">
-            ·
-          </span>
-          <span>約 {minutes} 分鐘</span>
-        </p>
-        <h1 className="mt-2.5 text-[1.95rem] font-medium leading-[1.2] tracking-[-1px] text-ink sm:text-[2.4rem]">
-          {step.title}
-        </h1>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="robo-kicker flex flex-wrap items-center gap-2 font-label text-[11px] text-ink-soft">
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  aria-hidden="true"
+                  className={`size-1.5 ${tierDotClass(node.tier)}`}
+                />
+                Tier {node.tier}
+              </span>
+              <span aria-hidden="true" className="text-ink-soft/50">
+                ·
+              </span>
+              <span className="font-mono text-[11px] tabular-nums">
+                Step {String(step.order).padStart(2, "0")} /{" "}
+                {String(node.steps.length).padStart(2, "0")}
+              </span>
+              <span aria-hidden="true" className="text-ink-soft/50">
+                ·
+              </span>
+              <span>約 {minutes} 分鐘</span>
+            </p>
+            <h1 className="mt-2.5 text-[1.95rem] font-medium leading-[1.2] tracking-[-1px] text-ink sm:text-[2.4rem]">
+              {step.title}
+            </h1>
+          </div>
+          {copyMarkdown && <CopyArticleButton text={copyMarkdown} />}
+        </div>
       </header>
 
       <div className="mt-8 border-t-2 border-ink pt-8">

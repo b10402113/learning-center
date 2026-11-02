@@ -44,8 +44,10 @@ const usage = `Usage:
   node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only] [--root <dir>]  (deprecated)
 
 prepare  writes one material bundle per missing step and lists the publisher job
-         (material, original, plan, command). The command uses --markers-only, so
-         the article keeps <!--image:N--> markers instead of generating figures.
+         (material, original, plan, polishCommand, command). The publisher writes
+         the original with its <!--image:N--> markers and a matching plan, runs
+         polishCommand to polish both, then runs the --markers-only command,
+         which validates the markers instead of generating figures.
 publish  writes completed marker-only runs into learn/ without touching figures,
          marks the node written, and runs verify.
 render   turns <!--image:N--> markers into WebP figures and image lines. It only
@@ -92,6 +94,7 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
       material: relative(root, files.material),
       original: relative(root, files.original),
       plan: relative(root, files.plan),
+      polishCommand: `node scripts/polish-article.mjs draft --subject ${subject} --node ${nodeId} --step ${entry.id}`,
       command: `node scripts/run-article-agent.mjs --subject ${subject} --node ${nodeId} --step ${entry.id} --markers-only`,
       titleCommand: `node "${resolve(root, "scripts/set-step-title.mjs")}" --root "${resolve(root)}" --subject ${subject} --node ${nodeId} --step ${entry.id} --from "${resolve(root, files.original)}"`,
     });

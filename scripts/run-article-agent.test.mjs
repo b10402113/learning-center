@@ -195,7 +195,7 @@ This paragraph carries the figure.
   assert.match(article, /<!--image:1-->/);
 });
 
-test("direct mode rejects an original that already carries image markers", (t) => {
+test("direct mode keeps matching pre-placed markers and rejects a plan mismatch", (t) => {
   const root = mkdtempSync(join(tmpdir(), "article-agent-hand-markers-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   write(root, "learn/test/nodes/n1.md", `---
@@ -240,14 +240,34 @@ This paragraph carries the figure.
   write(
     root,
     "learn/test/output/image-plans/n1/s1.json",
-    JSON.stringify([{ heading: "Detail", anchor: "This paragraph carries the figure.", prompt: "A flow" }]),
+    JSON.stringify([{ heading: "Detail", prompt: "A flow" }]),
   );
 
-  const result = spawnSync(
+  const ok = spawnSync(
     process.execPath,
     [SCRIPT, "--subject", "test", "--node", "n1", "--step", "s1", "--mode", "direct", "--markers-only", "--root", root],
     { encoding: "utf8", env: { ...process.env, TEXT_API_KEY: "", OPENAI_API_KEY: "" } },
   );
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /hand-placed.*image:N.*markers/);
+  assert.equal(ok.status, 0, ok.stderr);
+  const marked = readFileSync(
+    join(root, "learn/test/output/jobs/n1/s1/s1.article.md"),
+    "utf8",
+  );
+  assert.match(marked, /<!--image:1-->/);
+
+  write(
+    root,
+    "learn/test/output/image-plans/n1/s1.json",
+    JSON.stringify([
+      { heading: "Detail", prompt: "A flow" },
+      { heading: "Another", prompt: "Another flow" },
+    ]),
+  );
+  const mismatch = spawnSync(
+    process.execPath,
+    [SCRIPT, "--subject", "test", "--node", "n1", "--step", "s1", "--mode", "direct", "--markers-only", "--root", root],
+    { encoding: "utf8", env: { ...process.env, TEXT_API_KEY: "", OPENAI_API_KEY: "" } },
+  );
+  assert.notEqual(mismatch.status, 0);
+  assert.match(mismatch.stderr, /markers .* plan expects/);
 });

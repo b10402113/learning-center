@@ -67,9 +67,9 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    node src/article-cli.mjs prepare --subject <subject> --node <node> [--force]
    ```
 
-   Read the JSON. `steps[]` is the work: each entry carries `id`, `title` (may be `null`), `purpose`, `material`, `original`, `plan`, `command` (already `--markers-only`), and `titleCommand`. `skipped[]` means the step already has a body; keep it out of the publisher batch. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
+   Read the JSON. `steps[]` is the work: each entry carries `id`, `title` (may be `null`), `purpose`, `material`, `original`, `plan`, `polishCommand`, `command` (already `--markers-only`), and `titleCommand`. `skipped[]` means the step already has a body; keep it out of the publisher batch. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
 
-   **3b. Dispatch publishers.** Combine the ready `steps[]` from every prepared node into one list, preserving node and step order. Batch that list into groups of `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per step in a single message, every call with `subagent_type: publisher` and the [Publisher-prompt](#publisher-prompt) filled in. Give each publisher only its own step's fields — never another step's article, plan, or source material. Wait for every call and record `completed` or `failed`.
+   **3b. Dispatch publishers.** Combine the ready `steps[]` from every prepared node into one list, preserving node and step order. Batch that list into groups of `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per step in a single message, every call with `subagent_type: publisher` and the [Publisher-prompt](#publisher-prompt) filled in. Give each publisher only its own step's fields — never another step's article, plan, or source material. Each publisher writes the original and plan, runs `polishCommand` on both, then runs the markers-only wrapper and the title command. Wait for every call and record `completed` or `failed`.
 
    **3c. Publish.** After all publisher batches finish, publish each node that has at least one prepared step, in roadmap order:
 
@@ -92,7 +92,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    - **No `<!--image:N-->` marker and no image line** in the article → `skipped-not-published`.
    - Otherwise → ready. The work item is `{ node, step, title, article, plan }` where `article` is `learn/<subject>/nodes/<node>/<step>.md` and `plan` is `learn/<subject>/output/image-plans/<node>/<step>.json`.
 
-   Before dispatching a ready step, copy its plan to `learn/<subject>/output/humanize/<node>/<step>.plan.backup.json`. The plan lives under the git-ignored `output/`, so this backup is the only way to check `anchor` afterwards.
+   Before dispatching a ready step, copy its plan to `learn/<subject>/output/humanize/<node>/<step>.plan.backup.json`. The plan lives under the git-ignored `output/`, so this backup is the only way to check the plan afterwards.
 
    There is no hash record, so a rerun humanizes every eligible step again. Record every skip and continue. A node with no ready steps is not dispatched and is not a failure.
 
@@ -112,7 +112,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    node -e 'const fs=require("fs");const [a,b]=process.argv.slice(1).map(f=>JSON.parse(fs.readFileSync(f,"utf8")));if(a.length!==b.length)throw new Error("plan length changed");a.forEach((x,i)=>{if(x.anchor!==b[i].anchor)throw new Error("plan anchor changed at "+i);if(typeof b[i].heading!=="string"||!b[i].heading.trim())throw new Error("empty heading at "+i);if(typeof b[i].prompt!=="string"||!b[i].prompt.trim())throw new Error("empty prompt at "+i)})' learn/<subject>/output/humanize/<node>/<step>.plan.backup.json learn/<subject>/output/image-plans/<node>/<step>.json
    ```
 
-   Only `heading` and `prompt` may differ; length, order, and every `anchor` must match the backup.
+   Only `heading` and `prompt` may differ; length, order, and every `anchor` that exists must match the backup.
 
    There is no rollback and no hash record; if a structural change slipped in, restore that file from git (or from the plan backup) and record the step as `failed`. Drop the node from Generate and Quiz if verify fails or any protected structure changed.
 
@@ -179,7 +179,7 @@ Completion, for every phase that ran:
 
 - **Nodes** — every node that needed a plan was dispatched to a Nodes subagent, reached `planned`, and verifies clean.
 - **Article** — every step that needed an article was prepared, dispatched to its own publisher, and either published with a formal plan and matching markers or reported failed; every multi-step node that received a new article also received the continuity edit unless `-no-continuity` was set; every published node passes `node scripts/verify.mjs --node <subject>/<node>`.
-- **Humanize** — every eligible step was either humanized or skipped for a recorded reason; each humanized article kept its H1, code, provenance, markers, image lines, quiz blocks, and links; each plan kept its length, order, and every `anchor` with only `heading` and `prompt` changed; every processed node verifies clean.
+- **Humanize** — every eligible step was either humanized or skipped for a recorded reason; each humanized article kept its H1, code, provenance, markers, image lines, quiz blocks, and links; each plan kept its length, order, and any existing `anchor` with only `heading` and `prompt` changed; every processed node verifies clean.
 - **Generate** — every marker-backed step has its `image-N.webp` files and its markers replaced by uncaptioned image lines; rerun without `-force` reports `already-rendered` or reuses images; every processed node verifies clean.
 - **Quiz** — every step that needed a sidecar was dispatched to its own quiz-agent and either has a validated sidecar or a recorded failure; `course-app` data was regenerated when any sidecar was written.
 
@@ -215,7 +215,7 @@ Report back: step count, ordered step ids, skeleton files created, verify exit s
 Dispatch every call with `subagent_type: publisher`. Fill `<NODE-ID>`, `<SUBJECT>`, `<STEP-ID>`, and the step's fields from `prepare`'s `steps[]`. Give the subagent no other step's content.
 
 ```
-Write one step's original article and image plan, then run the repo wrapper. This is one step only: do not read, write, or plan any other step.
+Write one step's original article and image plan, polish both, then run the repo wrapper. This is one step only: do not read, write, or plan any other step.
 
 Step: <SUBJECT>/<NODE-ID>/<STEP-ID>
 Title: <TITLE or "choose one">
@@ -223,18 +223,21 @@ Purpose: <PURPOSE>
 Material bundle: <MATERIAL>
 Original output: <ORIGINAL>
 Image plan output: <PLAN>
-Run this command: <COMMAND>   (already includes --markers-only)
+Run this command first: <POLISH-COMMAND>
+Then run this command: <COMMAND>   (already includes --markers-only)
 Then run this command: <TITLE-COMMAND>
 
 Read the material bundle. Its `purpose` is the article's main theme; use the Read tool to read every file named in its `sources` in full, all the way to the end — the `locator` is only the cited range for provenance, not the reading range. Write the original article to <ORIGINAL> in the language recorded in `learn/<SUBJECT>/MEMORY.md` (this repo uses Traditional Chinese), grounded only in those sources. The first line is the H1: use <TITLE> exactly when one is given; when it says "choose one", pick a title from a heading or phrase that actually appears in the sources, translated faithfully, and do not invent one.
 
-Decide 1-5 places where a figure genuinely helps the reader and spread them across the article. Write the imagePlan as a JSON array of objects with `heading`, `anchor`, and `prompt`; every `anchor` must be a short verbatim sentence from the original.
+Decide 1-5 places where a figure genuinely helps the reader, spread them across the article, and put one `<!--image:N-->` marker at each place: its own line, blank lines before and after, numbered 1..N in article order. Write the imagePlan as a JSON array with one item per marker, in the same order; each item has `heading` and `prompt` only, no `anchor`. The plan length must equal the marker count.
 
-There is no `article_generate` tool in this repo. Writing the original and the plan, then running the command from the repo root, replaces it. The command inserts one `<!--image:N-->` marker at each plan `anchor` and leaves the prose unchanged. It does not generate figures and does not need IMAGE_API_KEY. The original must contain no `<!--image:N-->` markers: do not hand-place them, do not rewrite after the command returns, and do not retry automatically if it fails.
+There is no `article_generate` tool in this repo. After writing <ORIGINAL> and <PLAN>, run <POLISH-COMMAND> from the repo root. It polishes the prose and each plan item's `heading` and `prompt`, keeps the H1, markers, code, and links intact, and needs TEXT_API_KEY. If it fails, stop and report the error; do not edit the files to work around it and do not retry automatically. Do not modify <ORIGINAL> or <PLAN> after it succeeds.
+
+Then run <COMMAND>. The command validates that the original's `<!--image:N-->` markers match the plan in count and order and keeps them in place; it does not insert or move markers. It does not generate figures and does not need IMAGE_API_KEY. Do not rewrite the article after the command returns, and do not retry automatically if it fails.
 
 After the wrapper reports `completed`, run <TITLE-COMMAND>. It copies the H1 into the node's step entry and updates the `## Steps` label. Do not write to `learn/<SUBJECT>/nodes/` any other way.
 
-Report back: command and title-command status, chosen title, output path, plan length, marker count, and any error.
+Report back: polish, command, and title-command status, chosen title, output path, plan length, marker count, and any error.
 ```
 
 ## Humanize-prompt
@@ -261,19 +264,19 @@ Article rules:
 - Do not change `<!--image:N-->` markers.
 - Do not change existing image lines or their captions.
 - Do not change quiz blocks, relative links, or source links.
-- The plan's `anchor` values must still appear verbatim in the article after your edit; when an anchor is inside a sentence you rewrite, keep that sentence (or at least the anchor text) intact.
+- If a plan item has an `anchor`, it must still appear verbatim in the article after your edit; when an anchor is inside a sentence you rewrite, keep that sentence (or at least the anchor text) intact. New plans have no anchors — their image positions are the `<!--image:N-->` markers.
 
 Plan rules:
 - Change only each item's `heading` and `prompt`; make them read like natural Traditional Chinese written for this article.
-- Never change `anchor`, the array length, the item order, or the indices.
+- Never change an `anchor` that exists, the array length, the item order, or the indices.
 - Keep every `heading` and `prompt` a non-empty string.
 - Do not turn a `prompt` into article prose; it stays an image brief.
 
 If a sentence needs a fact you do not have, leave it or mark it; do not invent.
 
-There is no apply step and no rollback. The main agent runs `verify` afterwards and checks the article diff and the plan against a backup; a changed H1, code block, provenance comment, marker, image line, caption, quiz block, link, plan length, plan order, or `anchor` fails the step.
+There is no apply step and no rollback. The main agent runs `verify` afterwards and checks the article diff and the plan against a backup; a changed H1, code block, provenance comment, marker, image line, caption, quiz block, link, plan length, plan order, or any existing `anchor` fails the step.
 
-Report back: whether you changed the article and/or plan, the edit count, a short summary, and any anchor you had to keep untouched.
+Report back: whether you changed the article and/or plan, the edit count, a short summary, and any existing anchor you had to keep untouched.
 ```
 
 ## Quiz-prompt

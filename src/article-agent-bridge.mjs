@@ -105,15 +105,20 @@ export function normalizeStepPlan(raw) {
     }
     const anchor = String(item.anchor ?? "").trim();
     const prompt = String(item.prompt ?? "").trim();
-    if (!anchor) throw new Error(`image plan item ${index + 1} needs a non-empty anchor`);
     if (!prompt) throw new Error(`image plan item ${index + 1} needs a non-empty prompt`);
-    return { index: index + 1, heading: String(item.heading ?? "").trim(), anchor, prompt };
+    return {
+      index: index + 1,
+      heading: String(item.heading ?? "").trim(),
+      anchor: anchor || undefined,
+      prompt,
+    };
   });
 }
 
 export function assertPlanAnchors(plan, original) {
   const text = normalizeSpace(original);
   for (const item of plan) {
+    if (!item.anchor) continue;
     if (!text.includes(normalizeSpace(item.anchor))) {
       throw new Error(`image plan item ${item.index} anchor is not verbatim in the original: ${item.anchor}`);
     }
