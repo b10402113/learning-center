@@ -87,7 +87,7 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `digest-pending` | no digest is left `pending` (whole-subject checks only) |
 | `digest-source` | digest `source` exists under `sources/<subject>/` |
 | `digest-source-pdf` | digest `source` is the extracted `.txt`, never a PDF |
-| `digest-source-lines` | `source_lines` equals the actual `.txt` line count (single-file digests); directory sources only bound the ranges |
+| `digest-source-lines` | `source_lines` equals the cited file's actual line count (part digests and single-file text digests); directory sources only bound the ranges |
 | `digest-range` | every L2 range is `1 ≤ start ≤ end`, and ends within the actual lines or declared `source_lines` |
 | `digest-l2-empty` | the digest has an L2 line map (image digests excepted) |
 | `digest-locator` | any source link inside a digest uses `#Lx-Ly`, not a slug |
@@ -96,6 +96,19 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `digest-supplement-type` | every `supplements` target is a `codebase` or `image` digest; an image only takes `#L1` |
 | `digest-supplement-range` | a supplement's `#Lx-Ly` falls inside the target codebase digest's L2 line map |
 | `digest-supplement-status` | a supplement of a `skipped` digest is itself `skipped` |
+| `source-parts-json` | `<stem>.parts.json` parses as a JSON object |
+| `source-parts-text` | the manifest's `text` path is under `sources/<subject>/` |
+| `source-parts-total` | `total_lines` is positive and, while the original `.txt` still exists, equals its line count |
+| `source-parts-list` | `parts` is a non-empty list of objects |
+| `source-parts-order` | `parts[n].part` is `n + 1` in order |
+| `source-parts-file` | every part `file` is a bare filename and exists beside the manifest |
+| `source-parts-range` | every part has positive integer `start`/`end` with `start ≤ end` |
+| `source-parts-lines` | `lines = end - start + 1` and equals the part file's actual line count |
+| `source-parts-coverage` | the ranges start at 1, tile the original with no gap or overlap, and sum to `total_lines` |
+| `digest-source-split` | a digest for a split source cites its part file, never the unsplit source |
+| `source-parts-digest-missing` | every manifest part is claimed by exactly one digest part |
+| `source-parts-digest-duplicate` | no two digests claim the same manifest part |
+| `source-parts-digest-part` | a digest's `part` field matches the manifest part number |
 
 ### Code, links, and flags
 
@@ -128,7 +141,8 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 
 The check set stays deterministic so it rarely misfires:
 
-- Line counts use newline characters, matching `wc -l`.
+- Line counts use newline characters, matching `wc -l`. A parts manifest's `total_lines` counts a final line that lacks a trailing newline; every generated part file is newline-terminated.
+- A source with `<stem>.parts.json` is split: the parts tile the original, and each part file has exactly one digest whose `source` points at that chunk.
 - Digest coverage is the union of L2 ranges, so adjacent ranges may jointly cover a citation.
 - Codebase digests may cover citations by directory prefix.
 - An absorbed codebase/image supplement needs no node of its own: it rides on its text digest, and is declared only when a step cites its files.

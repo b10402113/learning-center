@@ -10,7 +10,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 ├── AGENTS.md                 ← repository schema and workflow
 ├── CLAUDE.md                 ← @AGENTS.md
 ├── docs/reference/           ← shared protocols: source reading, verify, polish, skill scope
-├── sources/                  ← raw, immutable inputs, one folder per subject
+├── sources/                  ← raw inputs, one folder per subject; long .txt files are replaced by generated part files
 ├── learn/<subject>/
 │   ├── MEMORY.md             ← learner profile from /learn-init (incl. language)
 │   ├── ROADMAP.md            ← tiered node index and course plan
@@ -36,7 +36,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 │   └── edges/                ← optional relationship pages between steps/nodes
 ├── src/                      ← article.mjs, article-cli.mjs, render-images.mjs, article-agent-bridge.mjs, quiz.mjs, llm.mjs, image-provider.mjs
 ├── prompts/                  ← article.txt, image-plan.txt, image.txt
-├── scripts/                  ← verify.mjs, quiz.mjs, publish-article.mjs, run-article-agent.mjs, set-step-title.mjs, humanize-article.mjs, pdf-backfill.mjs, digest-status.mjs, backfill-node-digests.mjs
+├── scripts/                  ← verify.mjs, quiz.mjs, publish-article.mjs, run-article-agent.mjs, set-step-title.mjs, humanize-article.mjs, pdf-backfill.mjs, split-sources.mjs, digest-status.mjs, backfill-node-digests.mjs
 ├── article-agent/            ← git submodule: publisher-era rewrite pipeline (prompts/rewrite.txt, src/pipeline.mjs)
 ├── course-app/               ← React (Vite + Tailwind) course viewer
 ├── previews/                 ← static design previews for the course viewer
@@ -87,7 +87,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 
 ## Core Principles
 
-1. **Sources are immutable** — never modify anything under `sources/`. Archived transcripts in `legacy/tune/` are immutable too.
+1. **Sources are immutable** — never edit anything under `sources/` by hand. The one exception is `scripts/split-sources.mjs`, which replaces a long `.txt` with generated part files and a `<stem>.parts.json` manifest. Archived transcripts in `legacy/tune/` are immutable too.
 2. **The node is the plan** — `steps` array order is teaching order. There is no `deps`, `type`, or per-step `order`.
 3. **The step is the article** — `learn/<subject>/nodes/<node>/<step>.md`, with no frontmatter, opens with the H1 the publisher chose and wrote back to the step entry.
 4. **Citations are line-addressed** — every source link is `[[sources/<subject>/<file>#Lx-Ly]]` into a `.txt`, covered by a digest L2 range. PDFs are never cited.
@@ -176,9 +176,10 @@ The legacy fenced `quiz` block is still accepted by the renderer and `verify`, b
 
 ```markdown
 ---
-source: sources/<subject>/<path>.txt
+source: sources/<subject>/<path>.txt   # or <path>.<n>.part.txt when split
 source_type: text
-source_lines: 216
+source_lines: 216                        # the cited file's actual line count
+part: 2                                  # optional; manifest part number when split
 status: absorbed         # pending | absorbed | skipped
 absorbed_at: 2026-10-22
 skip_reason: ""          # required non-empty when status is skipped
@@ -197,7 +198,7 @@ supplements:            # optional; a supplement digest plus its L1 or L2 entry
 - `#L12-L25` — <what these lines explain>
 ```
 
-PDFs are extracted once into a sibling `.txt` by `node scripts/pdf-backfill.mjs --subject <subject>`; an existing `.txt` is never overwritten. Citations point at the `.txt`, and `source_lines` equals its actual line count. Digest `status` is `pending | absorbed | skipped`; `skipped` means the material was read and deliberately left untaught, and it needs a non-empty `skip_reason`. A subject check fails on any `pending` digest, on an `absorbed` digest no node lists, and on a text digest skipped while its supplement stays absorbed. A `text` digest may list `supplements` — sibling `codebase` or `image` digests plus the L1 (`<digest>.md#L1`) or L2 (`<digest>.md#Lx-Ly`) entry that carries the code or figures the text refers to.
+PDFs are extracted once into a sibling `.txt` by `node scripts/pdf-backfill.mjs --subject <subject>`; an existing `.txt` is never overwritten. A text source over 3,000 lines or 250 KB is then split by `node scripts/split-sources.mjs --subject <subject> --dry-run` → confirm → `--apply`, which writes `<stem>.<n>.part.txt` plus `<stem>.parts.json` and deletes the original `.txt` while keeping the PDF. Citations point at the part file that holds the lines, and `source_lines` equals that chunk's actual line count. Digest `status` is `pending | absorbed | skipped`; `skipped` means the material was read and deliberately left untaught, and it needs a non-empty `skip_reason`. A subject check fails on any `pending` digest, on an `absorbed` digest no node lists, and on a text digest skipped while its supplement stays absorbed. A `text` digest may list `supplements` — sibling `codebase` or `image` digests plus the L1 (`<digest>.md#L1`) or L2 (`<digest>.md#Lx-Ly`) entry that carries the code or figures the text refers to.
 
 ### Edge — `learn/<subject>/edges/<edge-id>.md`
 
@@ -281,7 +282,15 @@ node scripts/backfill-node-digests.mjs [--subject <s>] [--write] [--skip-unused 
 node scripts/pdf-backfill.mjs --subject <subject> [--dry-run]
 ```
 
-Idempotent: existing `.txt` files are not overwritten, so line numbers stay stable.
+Idempotent: existing `.txt` files are not overwritten, so line numbers stay stable; a PDF with `<stem>.*.part.txt` siblings is skipped.
+
+### Split long sources
+
+```bash
+node scripts/split-sources.mjs --subject <subject> (--dry-run | --apply) [--boundaries <file>] [--root <dir>] [--json]
+```
+
+`--dry-run` prints the chunk table and writes nothing; `/learn-init` and `/ingest` must show it and get explicit confirmation before `--apply`. Splitting applies only to `.txt` sources over 3,000 lines or 250 KB, cuts on chapter/section headings, merges sub-200-line sections into the next chunk, and splits oversized sections at subheadings or paragraph boundaries. `--apply` writes `<stem>.<n>.part.txt` and `<stem>.parts.json`, deletes the original `.txt`, and keeps the PDF; rerunning never overwrites an existing part. Each chunk has exactly one digest part whose `source` points at the chunk. `verify` checks manifest tiling, part line counts, and the chunk/digest pairing.
 
 ### Node reset
 

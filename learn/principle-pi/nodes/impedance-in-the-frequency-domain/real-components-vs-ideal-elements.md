@@ -24,7 +24,7 @@
 
 頻率再往上，實測曲線就偏離理想電容了。描述高頻行為，一個 series RLC 電路（R、L、C 三個理想元素串聯）就夠。對這顆 0603 MLCC，三個值取成：
 
-<!-- source: sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L1645-L1648 -->
+<!-- source: sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.3.part.txt#L381-L384 -->
 ```
 R = 18 mΩ
 C = 182 nF

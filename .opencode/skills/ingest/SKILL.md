@@ -29,6 +29,20 @@ node scripts/pdf-backfill.mjs --subject <subject>
 
 The command is idempotent — an existing `.txt` is never overwritten — so citations keep stable line numbers. Digests and citations always point at the `.txt`, never the PDF.
 
+Then plan a split for any extracted `.txt` over 3,000 lines or 250 KB:
+
+```bash
+node scripts/split-sources.mjs --subject <subject> --dry-run
+```
+
+Show the chunk table to the learner and wait for explicit confirmation. If they decline, stop; do not digest the unsplit file. On confirmation:
+
+```bash
+node scripts/split-sources.mjs --subject <subject> --apply
+```
+
+This writes `<stem>.<n>.part.txt` plus `<stem>.parts.json`, deletes the original `.txt`, and keeps the PDF. Short sources skip this step. From here every digest cites one part file with part-local line numbers.
+
 ## Step 2 — Create digests
 
 Collect all files that were **just moved** in step 1. These form the **current batch**.
@@ -43,13 +57,13 @@ If the batch contains only one file, or if the learner explicitly wants the old 
 2. **Group by topic.** Analyze the batch holistically and cluster the files into groups by topic/concept relevance. Each cluster must be a single meaningful learning unit that downstream `/absorb` can reason about as one concept block. Files that have no thematic overlap with any other file remain as single-file clusters.
 3. **Choose digest names.** For each cluster, derive a semantic name from its unified topic. A cluster name is a prefix only: every source file still gets its own digest, because a digest maps line ranges into exactly one `.txt`. Name a file's digest `<cluster-name>-<file-stem>.md`, or just `<file-stem>.md` for a single-file cluster.
 4. **Check size.** For each file in a cluster, determine source type and size:
-   - PDF: use the extracted `.txt` (`wc -l`) for line count; byte size still comes from the PDF.
+   - PDF: use the extracted `.txt` (`wc -l`) for line count; byte size still comes from the PDF. If `split-sources` already ran, each `.part.txt` is its own source.
    - Codebase: `wc -l` for line count.
    - Else: treat as small (read directly).
-   Large sources (> 3,000 lines or > ~250 KB) follow the sub-agent path in `docs/reference/source-reading.md`; their part files are named `<cluster-name>-<file-stem>.<n>.part.md` so each part maps to one file.
+   Large sources (> 3,000 lines or > ~250 KB) are split into `.part.txt` files first (Step 1), then follow the sub-agent path in `docs/reference/source-reading.md`; their part digests are named `<cluster-name>-<file-stem>.<n>.part.md` so each part maps to one chunk. One digest part per chunk, and `source` points at that chunk.
 5. **Check for existing digest.** Before writing, check `learn/<subject>/digests/<name>.md` (and `<name>.*.part.md`). If a digest with the same name already exists, skip writing — it was produced in a prior run.
 6. **Write one digest per source.** For every file in the cluster:
-   1. Frontmatter must include `source` (the exact `sources/<subject>/YYYYMMDD/<file>.txt` path), `source_lines` (that file's actual `.txt` line count), `status: pending`, and `absorbed_at: ""`.
+   1. Frontmatter must include `source` (the exact `sources/<subject>/YYYYMMDD/<file>.txt` path, or its `.part.txt` chunk when split), `source_lines` (that cited file's actual line count), `part` (the manifest part number when split), `status: pending`, and `absorbed_at: ""`.
    2. L1 overview: summarize what this file contributes to the cluster's unified topic.
    3. L2 detail: a line map, not a slug map. Each entry names the exact `#Lx-Ly` range and a one-line description of what those lines cover. Every line of the file should be covered by some L2 range.
    4. **Images:** if the file references images, cite those image paths inside the relevant L2 section. Images with no text counterpart in the cluster get their own minimal image-only digest (see §Image-only digests).

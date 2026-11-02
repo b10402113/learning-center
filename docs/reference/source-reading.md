@@ -6,16 +6,32 @@ Shared contract for how `learn-init`, `ingest`, `absorb`, `roadmap`, `nodes`, `a
 
 A source is **large** when it exceeds either bound:
 
-| Source   | Metric            | Threshold | Action                                                |
-| -------- | ----------------- | --------- | ----------------------------------------------------- |
-| PDF      | `pdftotext` lines | > 3,000   | sub-agent path                                        |
-| PDF      | `pdftotext` size  | > ~250 KB | sub-agent path                                        |
-| Codebase | `wc -l` lines     | > 3,000   | sub-agent path                                        |
-| else     | —                 | —         | main context reads directly, writes the digest itself |
+| Source   | Metric            | Threshold | Action                                                        |
+| -------- | ----------------- | --------- | ------------------------------------------------------------- |
+| PDF      | `pdftotext` lines | > 3,000   | split the `.txt` first, then the sub-agent path per part      |
+| PDF      | `pdftotext` size  | > ~250 KB | split the `.txt` first, then the sub-agent path per part      |
+| Codebase | `wc -l` lines     | > 3,000   | sub-agent path                                                |
+| else     | lines or size     | ≤ bounds  | main context reads directly, writes the digest itself         |
+| else     | lines or size     | > bounds  | split into part files first, then digest each part            |
+
+## Split long text sources first
+
+A long `.txt` is the unit of citation only after it is split. Before any digest or article cites it, turn it into part files so every line number is local to a file a reader can actually open.
+
+```bash
+node scripts/split-sources.mjs --subject <subject> --dry-run
+node scripts/split-sources.mjs --subject <subject> --apply
+```
+
+The dry run prints one row per chunk (original line range, target filename, line count, first line) and writes nothing. Show that table to the learner and wait for explicit confirmation before running `--apply`. If the learner declines, stop; do not fall back to digesting the unsplit file. Short sources never enter this flow.
+
+`--apply` writes `<stem>.<n>.part.txt` next to the source, plus `<stem>.parts.json`. The manifest records the original path, `total_lines`, and each part's `start`/`end`/`lines`; the ranges tile the original with no gap and no overlap. After a successful apply the original `.txt` is deleted and the PDF stays in place. `pdf-backfill` sees `<stem>.*.part.txt` and skips that PDF, so a later run cannot recreate the long file. Rerunning `--apply` never overwrites an existing part.
+
+The part file becomes the citation unit: cite `[[sources/<subject>/<date>/<stem>.<n>.part.txt#Lx-Ly]]` with part-local line numbers. A range that would cross a chunk boundary is written as two citations; the digest's L2 entry is split the same way. Each chunk has exactly one part digest, whose `source` points at the chunk and whose `source_lines` equals that chunk's real line count. `verify` fails a manifest with a gap, overlap, wrong line count, a part without a digest, or a digest that still points at the unsplit source.
 
 ## Digest files
 
-- Location: `learn/<subject>/digests/<source-stem>.md` — one file per source (the stem is the original filename without extension for files, or the directory name for codebases). Large sources are split into one **part file per chunk**, named `<source-stem>.<n>.part.md`; each part is a self-contained digest. Digests are two-level:
+- Location: `learn/<subject>/digests/<source-stem>.md` — one file per source (the stem is the original filename without extension for files, or the directory name for codebases). Large sources are split into one **part file per chunk**, named `<source-stem>.<n>.part.md`; each part is a self-contained digest whose `source` points at the matching `<source-stem>.<n>.part.txt`. Digests are two-level:
   - **L1 — overview**: a few lines per chapter (PDF) or per module (codebase). Enough for `learn-init` grilling and `roadmap` partitioning without loading detail.
   - **L2 — line map**: one entry per section (PDF/text) or per module (codebase), each naming the exact `#Lstart-Lend` range and a one-line description. This is the discovery map `nodes` and `article` use to pick the lines worth reading. There are no slug locators.
 - Every source gets a digest, large or small (parts included). `nodes` reads digests only — never raw sources.
@@ -35,9 +51,10 @@ The command is idempotent: an existing `.txt` is never overwritten, so line numb
 
 ```markdown
 ---
-source: sources/<subject>/<YYYYMMDD>/<file>.txt
+source: sources/<subject>/<YYYYMMDD>/<file>.txt # or <file>.<n>.part.txt
 source_type: text
-source_lines: <wc -l of the .txt>
+source_lines: <wc -l of the cited file>
+part: <n> # optional; manifest part number when the source is split
 status: pending | absorbed | skipped
 absorbed_at: YYYY-MM-DD # set when consumed by /roadmap or /absorb
 skip_reason: "<why it is not taught>" # required when status is skipped
@@ -107,8 +124,8 @@ Downstream, `nodes` and `article` treat a supplement as part of the text source'
 ### PDF
 
 1. Run `node scripts/pdf-backfill.mjs --subject <subject>` so every PDF has a stable `.txt`.
-2. Compute the `.txt` line count and chunk on section boundaries (book chapters, numbered sections), each chunk < 2000 lines.
-3. Dispatch sub-agents **in parallel**, one per chunk (<2000 lines). Each sub-agent reads only its line range of the `.txt`, writes a self-contained part digest to `learn/<subject>/digests/<source-stem>.<n>.part.md` with `source_lines` and `status: pending` in its frontmatter, and returns only a compact TOC line for its chunk (chapter ids + `#Lx-Ly` ranges).
+2. Run `node scripts/split-sources.mjs --subject <subject> --dry-run`, show the table, get confirmation, then `--apply`. Each chunk is already < 2000 lines and has part-local line numbers.
+3. Dispatch sub-agents **in parallel**, one per `<source-stem>.<n>.part.txt`. Each sub-agent reads only its part, writes a self-contained part digest to `learn/<subject>/digests/<source-stem>.<n>.part.md` with `source_lines` and `status: pending` in its frontmatter, and returns only a compact TOC line for its chunk (chapter ids + `#Lx-Ly` ranges).
 
 There is no merge step: the part files together are the digest.
 
