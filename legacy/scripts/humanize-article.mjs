@@ -13,14 +13,20 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { hasArticleBody, readNode, selectSteps } from "../../src/article.mjs";
 import {
-  humanizeRecordPath,
-  humanizeWorkDir,
   jobFiles,
   normalizeStepPlan,
   protectCode,
   readJson,
 } from "../../src/article-agent-bridge.mjs";
 import { runChecks } from "../../scripts/verify.mjs";
+
+function humanizeRecordPath(root, { subject, node, step }) {
+  return join(root, "learn", subject, "output", "humanized", node, `${step}.json`);
+}
+
+function humanizeWorkDir(root, { subject, node, step }) {
+  return join(root, "learn", subject, "output", "humanize", node, step);
+}
 
 const MARKER = /^[ \t]*<!--\s*image:(\d+)\s*-->[ \t]*$/gm;
 const IMAGE_LINE = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;

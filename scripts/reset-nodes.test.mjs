@@ -98,13 +98,6 @@ Alpha lesson.
   mkdirSync(join(root, "learn/demo/output/polished/alpha"), { recursive: true });
   writeFileSync(join(root, "learn/demo/output/polished/alpha/one.json"), "{}\n");
   writeFileSync(join(root, "learn/demo/output/polished/alpha/two.json"), "{}\n");
-  mkdirSync(join(root, "learn/demo/output/humanized/alpha"), { recursive: true });
-  writeFileSync(join(root, "learn/demo/output/humanized/alpha/one.json"), "{}\n");
-  writeFileSync(join(root, "learn/demo/output/humanized/alpha/two.json"), "{}\n");
-  mkdirSync(join(root, "learn/demo/output/humanize/alpha/one"), { recursive: true });
-  writeFileSync(join(root, "learn/demo/output/humanize/alpha/one/article.md"), "# One\n");
-  mkdirSync(join(root, "learn/demo/output/humanize/alpha/two"), { recursive: true });
-  writeFileSync(join(root, "learn/demo/output/humanize/alpha/two/article.md"), "# Two\n");
   writeFileSync(join(root, "learn/demo/nodes/alpha/orphan.md"), "# Orphan\n");
   writeFileSync(
     join(root, "learn/demo/nodes/beta.md"),
@@ -147,8 +140,6 @@ test("reset keeps the node container, restores skeletons, and clears generated c
   assert.equal(result.nodes[0].removedLegacyDirs, 1);
   assert.equal(result.nodes[0].removedCandidates, 2);
   assert.equal(result.nodes[0].removedPolished, 2);
-  assert.equal(result.nodes[0].removedHumanized, 2);
-  assert.equal(result.nodes[0].removedHumanizeWork, 2);
 
   const container = readFileSync(join(root, "learn/demo/nodes/alpha.md"), "utf8");
   assert.match(container, /^status: confirmed$/m);
@@ -172,8 +163,6 @@ test("reset keeps the node container, restores skeletons, and clears generated c
   assert.equal(existsSync(join(root, "learn/demo/output/image-plans/alpha")), false);
   assert.equal(existsSync(join(root, "learn/demo/output/jobs/alpha")), false);
   assert.equal(existsSync(join(root, "learn/demo/output/polished/alpha")), false);
-  assert.equal(existsSync(join(root, "learn/demo/output/humanized/alpha")), false);
-  assert.equal(existsSync(join(root, "learn/demo/output/humanize/alpha")), false);
   assert.equal(readFileSync(join(root, "learn/demo/digests/a.md"), "utf8"), "# digest\n");
   assert.equal(readFileSync(join(root, "learn/demo/MEMORY.md"), "utf8"), "# MEMORY\n\nKeep me.\n");
 });
@@ -195,8 +184,6 @@ test("dry run reports the plan without touching files", (t) => {
   assert.equal(existsSync(join(root, "learn/demo/output/quiz-candidates/alpha/one.json")), true);
   assert.equal(existsSync(join(root, "learn/demo/output/image-plans/alpha/one.json")), true);
   assert.equal(existsSync(join(root, "learn/demo/output/polished/alpha/one.json")), true);
-  assert.equal(existsSync(join(root, "learn/demo/output/humanized/alpha/one.json")), true);
-  assert.equal(existsSync(join(root, "learn/demo/output/humanize/alpha/one/article.md")), true);
 });
 
 test("tier scope resolves only the nodes under that roadmap heading", (t) => {

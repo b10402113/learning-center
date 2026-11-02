@@ -45,6 +45,8 @@ export function jobFiles(root, { subject, node, step }) {
     material: join(dir, "material.json"),
     original: join(dir, "original.md"),
     polish: join(dir, "polish.md"),
+    humanized: join(dir, "humanized.md"),
+    humanizedPlan: join(dir, "humanized.plan.json"),
     plan: stepPlanPath(root, { subject, node, step }),
     protected: join(dir, "protected.md"),
     blocks: join(dir, "blocks.json"),
@@ -60,14 +62,6 @@ export function prepareFile(root, subject, node) {
 
 export function polishedRecordPath(root, { subject, node, step }) {
   return join(outputDir(root, subject), "polished", node, `${step}.json`);
-}
-
-export function humanizeRecordPath(root, { subject, node, step }) {
-  return join(outputDir(root, subject), "humanized", node, `${step}.json`);
-}
-
-export function humanizeWorkDir(root, { subject, node, step }) {
-  return join(outputDir(root, subject), "humanize", node, step);
 }
 
 export function buildBrief(entry, context = {}) {

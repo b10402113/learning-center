@@ -7,7 +7,7 @@ argument-hint: "/batch-nodes <subject> [tier<N> | node-id ...] [-max-subagents N
 
 Invoke as `/batch-nodes <subject> [scope] [flags]`.
 
-Run the normal pipeline — `/nodes` → `/article` → humanize → `/generate-images` → `/quiz-gen` — over many nodes in five phases. Each phase hands out work to parallel subagents where it has any, waits for the batch, records every outcome, and moves on. It does not invent a second content pipeline: the Nodes subagent follows `/nodes`, the Article phase dispatches `publisher` subagents and runs the `/article` CLI, the Humanize phase dispatches `general` subagents that load the `speak-human-tw` skill and edit each step article plus its image plan's `heading` and `prompt` in place, the Generate phase runs the `/generate-images` render CLI, and the Quiz phase dispatches `quiz-agent` subagents and runs `/quiz-gen`'s CLI.
+Run the normal pipeline — `/nodes` → `/article` → humanize → `/generate-images` → `/quiz-gen` — over many nodes in five phases. Each phase hands out work to parallel subagents where it has any, waits for the batch, records every outcome, and moves on. It does not invent a second content pipeline: the Nodes subagent follows `/nodes`, the Article phase dispatches `publisher` subagents and runs the `/article` CLI, the Humanize phase dispatches `general` subagents that load the `speak-human-tw` skill and edit each step's `humanized.md` plus its plan's `heading` and `prompt`, the Generate phase runs the `/generate-images` render CLI, and the Quiz phase dispatches `quiz-agent` subagents and runs `/quiz-gen`'s CLI.
 
 **Invocation modes:**
 
@@ -85,36 +85,33 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 
 4. **Humanize** (skip with `-nodes-only` or `-skip-humanize`). Only steps with a plan are eligible; existing articles without a plan are never touched. Process the Humanize queue in roadmap order.
 
-   **4a. Build the work list.** Do this yourself; there is no prepare CLI. For each node in the queue, walk its `steps` in order and classify each step:
+   **4a. Prepare.** Run one CLI call per node in roadmap order:
 
-   - **No article, or an empty / H1-only article** → `skipped-no-article`.
-   - **No plan** at `learn/<subject>/nodes/<node>/<step>.plan.json` → `skipped-no-plan`.
-   - **No `<!--image:N-->` marker and no image line** in the article → `skipped-not-published`.
-   - Otherwise → ready. The work item is `{ node, step, title, article, plan }` where `article` is `learn/<subject>/nodes/<node>/<step>.md` and `plan` is `learn/<subject>/nodes/<node>/<step>.plan.json`.
+   ```bash
+   node scripts/humanize-article.mjs prepare --subject <subject> --node <node>
+   ```
 
-   Before dispatching a ready step, copy its plan to `learn/<subject>/output/humanize/<node>/<step>.plan.backup.json`, so a corrupted rewrite can be diffed against the version the agent received.
+   For every eligible step it creates `output/<node>/<step>/humanized.md` as an exact copy of `step.md` and `output/<node>/<step>/humanized.plan.json` as an exact copy of the plan. `steps[]` is the work; `skipped[]` explains `skipped-no-article`, `skipped-no-plan`, or `skipped-not-published`; `failed[]` carries an invalid plan. Record every skip and continue. A prepare failure drops that node from Generate and Quiz.
 
-   There is no hash record, so a rerun humanizes every eligible step again. Record every skip and continue. A node with no ready steps is not dispatched and is not a failure.
+   There is no hash record and no separate plan backup, so a rerun prepares every eligible step again. A node with no ready steps is not dispatched and is not a failure.
 
-   **4b. Dispatch humanize agents.** Combine the ready steps from every node into one list, preserving node and step order, and batch it by `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per step in a single message, every call with `subagent_type: general` and the [Humanize-prompt](#humanize-prompt) filled in. Give the agent only that step's `title`, its `article` path, and its `plan` path. Never give it another step's content or the node plan.
+   **4b. Dispatch humanize agents.** Combine the ready steps from every node into one list, preserving node and step order, and batch it by `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per step in a single message, every call with `subagent_type: general` and the [Humanize-prompt](#humanize-prompt) filled in. Give the agent only that step's `title`, its `humanized` path, and its `humanizedPlan` path. Never give it the official article, the official plan, another step's content, or the node plan.
 
-   **4c. Verify.** The agent edits the official article and plan in place. After every ready step of a node has returned, run:
+   **4c. Apply.** After every ready step of a node has returned, run one apply call per step:
+
+   ```bash
+   node scripts/humanize-article.mjs apply --subject <subject> --node <node> --step <step> [--summary "<one-line summary>"]
+   ```
+
+   It validates `humanized.md` against the official article: H1, fenced code and provenance, marker sequence, existing image lines and captions, quiz blocks, and relative/source links must be unchanged. It validates `humanized.plan.json` against the official plan: length, item order, every other key, and every existing `anchor` must be unchanged, with only `heading` and `prompt` allowed to change; its length must also match the marker (or rendered image) count. Only then does it write `step.md` and the plan back. On failure both official files stay untouched and the humanized copies stay in place for repair; record the step as `failed` and drop the node from Generate and Quiz.
+
+   After every ready step of a node has applied, run:
 
    ```bash
    node scripts/verify.mjs --node <subject>/<node>
    ```
 
-   Then confirm the article changed prose only by reading its diff (`git diff -- learn/<subject>/nodes/<node>/`): no H1, code fences, provenance comments, `<!--image:N-->` markers, existing image lines or captions, quiz blocks, or links changed.
-
-   For each plan, compare it with its backup:
-
-   ```bash
-   node -e 'const fs=require("fs");const [a,b]=process.argv.slice(1).map(f=>JSON.parse(fs.readFileSync(f,"utf8")));if(a.length!==b.length)throw new Error("plan length changed");a.forEach((x,i)=>{if(x.anchor!==b[i].anchor)throw new Error("plan anchor changed at "+i);if(typeof b[i].heading!=="string"||!b[i].heading.trim())throw new Error("empty heading at "+i);if(typeof b[i].prompt!=="string"||!b[i].prompt.trim())throw new Error("empty prompt at "+i)})' learn/<subject>/output/humanize/<node>/<step>.plan.backup.json learn/<subject>/nodes/<node>/<step>.plan.json
-   ```
-
-   Only `heading` and `prompt` may differ; length, order, and every `anchor` that exists must match the backup.
-
-   There is no rollback and no hash record; if a structural change slipped in, restore that file from git (or from the plan backup) and record the step as `failed`. Drop the node from Generate and Quiz if verify fails or any protected structure changed.
+   A successful apply leaves `humanized.md` identical to `step.md`. Drop the node from Generate and Quiz if verify fails.
 
    **4d. Failure propagation.** A node with any failed humanize step is dropped from Generate and Quiz. Other nodes continue.
 
@@ -242,19 +239,19 @@ Report back: polish, command, and title-command status, chosen title, output pat
 
 ## Humanize-prompt
 
-Dispatch every call with `subagent_type: general`. Fill `<SUBJECT>`, `<NODE-ID>`, `<STEP-ID>`, `<TITLE>`, `<ARTICLE>`, and `<PLAN>`. Give the subagent no other step's content.
+Dispatch every call with `subagent_type: general`. Fill `<SUBJECT>`, `<NODE-ID>`, `<STEP-ID>`, `<TITLE>`, `<HUMANIZED>`, and `<HUMANIZED-PLAN>`. Give the subagent no other step's content.
 
 ```
-Humanize one step's article and its image plan in place.
+Humanize one step's article and image plan copies.
 
 Step: <SUBJECT>/<NODE-ID>/<STEP-ID>
 Title: <TITLE>
-Article: <ARTICLE>
-Image plan: <PLAN>
+Article copy: <HUMANIZED>
+Image plan copy: <HUMANIZED-PLAN>
 
-Load the `speak-human-tw` skill and work in non-interactive mode: skip the confirmation list, edit the article and the plan directly, and report a post-hoc summary (original sentence / reason / replacement) in your final message.
+Load the `speak-human-tw` skill and work in non-interactive mode: skip the confirmation list, edit the two copies directly, and report a post-hoc summary (original sentence / reason / replacement) in your final message.
 
-Edit <ARTICLE> and <PLAN> only. Never edit the node container, another step, or any other file.
+Edit <HUMANIZED> and <HUMANIZED-PLAN> only. Never edit the official article, the official plan, the node container, another step, or any other file.
 
 Article rules:
 - Traditional Chinese (Taiwan).
@@ -274,7 +271,7 @@ Plan rules:
 
 If a sentence needs a fact you do not have, leave it or mark it; do not invent.
 
-There is no apply step and no rollback. The main agent runs `verify` afterwards and checks the article diff and the plan against a backup; a changed H1, code block, provenance comment, marker, image line, caption, quiz block, link, plan length, plan order, or any existing `anchor` fails the step.
+The main agent runs `scripts/humanize-article.mjs apply` afterwards. A changed H1, code block, provenance comment, marker, image line, caption, quiz block, link, plan length, plan order, plan key, or any existing `anchor` fails the step and leaves the official files untouched.
 
 Report back: whether you changed the article and/or plan, the edit count, a short summary, and any existing anchor you had to keep untouched.
 ```

@@ -25,12 +25,13 @@ learn/<subject>/output/<node>/
     original.md
     polish.md
     humanized.md
+    humanized.plan.json
     request.json
     result.json
     blocks.json
 ```
 
-`output/` stays gitignored. Only `original.md`, `polish.md`, and `humanized.md` need to survive within a working copy; they are stage artifacts, not deliverables. The formal plan moves to the node directory because it is needed to regenerate figures after a clone.
+`output/` stays gitignored. Only `original.md`, `polish.md`, `humanized.md`, and `humanized.plan.json` need to survive within a working copy; they are stage artifacts, not deliverables. The formal plan moves to the node directory because it is needed to regenerate figures after a clone.
 
 ### Stage contract
 
@@ -39,9 +40,9 @@ learn/<subject>/output/<node>/
 - `run-article-agent --markers-only` validates that the markers in `polish.md` match the plan in count and order, then writes `result.json`. It no longer produces an article file.
 - `publish` reads `polish.md` (through `result.json`), restores protected code, and writes `nodes/<node>/<step>.md`.
 - Continuity editing by the main agent edits prose in `step.md` only.
-- Humanize seeds `humanized.md` from `step.md`. The subagent edits `humanized.md` and the plan's `heading`/`prompt`; validation compares the structural parts against `step.md`; then `humanized.md` is copied back to `step.md`. There is no separate workspace directory, and no plan backup.
+- Humanize seeds `humanized.md` from `step.md` and `humanized.plan.json` from the formal plan. The subagent edits both copies; validation compares the article's structural parts against `step.md` and the plan against the formal plan; only then is `humanized.md` copied back to `step.md` and `humanized.plan.json` written to the formal plan. There is no separate workspace directory and no separate backup file.
 - `generate-images` reads `nodes/<node>/<step>.plan.json` and replaces markers in `step.md` with image lines.
-- `--force` is split by stage. `prepare --force` clears the step's stale `polish.md`, `result.json`, `blocks.json`, and `request.json` so an old run cannot publish; the publisher then rewrites `original.md`, `polish.md`, and the plan. `publish --force` clears the step's figures, quiz, and polish/humanize records only after the new article is written. A failed run leaves the old article and figures in place.
+- `--force` is split by stage. `prepare --force` clears the step's stale `polish.md`, `result.json`, `blocks.json`, and `request.json` so an old run cannot publish; the publisher then rewrites `original.md`, `polish.md`, and the plan. `publish --force` clears the step's figures, quiz, `humanized.md` / `humanized.plan.json`, and polish record only after the new article is written. A failed run leaves the old article and figures in place.
 
 ### Migration
 
@@ -51,7 +52,7 @@ Move every `output/image-plans/<node>/<step>.json` whose step is still in the no
 
 - **Keep three files (original, polish, article) as a verification gate.** The article file is always identical to polish, so the gate would keep a duplicate without adding a check.
 - **Protect the plan's raw version too.** The plan is configuration, not prose; only its latest version is consumed.
-- **Keep the legacy humanize workspace.** `humanized.md` can be the workspace: the subagent edits only that file, and it is copied to `step.md` only after validation.
+- **Keep the legacy humanize workspace.** The step folder's `humanized.md` and `humanized.plan.json` are the workspace: the subagent edits only those copies, and they are written back only after validation.
 
 ## Consequences
 

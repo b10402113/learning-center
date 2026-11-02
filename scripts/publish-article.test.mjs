@@ -60,6 +60,8 @@ A short lesson.
     JSON.stringify({ status: "completed", mode: "direct", article: polishFile, images: [] }),
   );
   write(root, "learn/test/output/n1/s1/blocks.json", "[]");
+  write(root, "learn/test/output/n1/s1/humanized.md", "# Step One\n\nOld body.\n");
+  write(root, "learn/test/output/n1/s1/humanized.plan.json", "[]\n");
   return root;
 }
 
@@ -75,6 +77,8 @@ test("a forced publish writes markers, then clears stale figures and the polish 
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1-assets/image-1.webp")), false);
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1.quiz.json")), false);
   assert.equal(existsSync(join(root, "learn/test/output/polished/n1/s1.json")), false);
+  assert.equal(existsSync(join(root, "learn/test/output/n1/s1/humanized.md")), false);
+  assert.equal(existsSync(join(root, "learn/test/output/n1/s1/humanized.plan.json")), false);
 });
 
 test("a plain publish keeps the existing figures and the polish record", async (t) => {
@@ -83,6 +87,7 @@ test("a plain publish keeps the existing figures and the polish record", async (
   assert.equal(report.steps[0].status, "published");
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1-assets/image-1.webp")), true);
   assert.equal(existsSync(join(root, "learn/test/output/polished/n1/s1.json")), true);
+  assert.equal(existsSync(join(root, "learn/test/output/n1/s1/humanized.md")), true);
 });
 
 test("a failed forced publish leaves the figures and record intact", async (t) => {
@@ -91,6 +96,7 @@ test("a failed forced publish leaves the figures and record intact", async (t) =
   assert.equal(report.steps[0].status, "failed");
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1-assets/image-1.webp")), true);
   assert.equal(existsSync(join(root, "learn/test/output/polished/n1/s1.json")), true);
+  assert.equal(existsSync(join(root, "learn/test/output/n1/s1/humanized.md")), true);
   assert.match(readFileSync(join(root, "learn/test/nodes/n1/s1.md"), "utf8"), /image-1\.webp/);
 });
 

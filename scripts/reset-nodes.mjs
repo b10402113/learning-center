@@ -136,8 +136,6 @@ function emptyRemoved() {
     removedLegacyDirs: 0,
     removedCandidates: 0,
     removedPolished: 0,
-    removedHumanized: 0,
-    removedHumanizeWork: 0,
   };
 }
 
@@ -149,8 +147,6 @@ function removeLegacyDirs({ root, subject, id, dryRun, removed }) {
     "image-plans": "removedPlanFiles",
     "quiz-candidates": "removedCandidates",
     polished: "removedPolished",
-    humanized: "removedHumanized",
-    humanize: "removedHumanizeWork",
   };
   for (const [name, counter] of Object.entries(legacyDirs)) {
     const dir = join(outRoot, name, id);
@@ -323,8 +319,7 @@ function main(argv) {
           `${node.removedAssets} asset folder(s), ${node.removedOrphans} other entr${node.removedOrphans === 1 ? "y" : "ies"}; ` +
           `${node.removedStepDirs} step folder(s), ${node.removedPlanFiles} plan file(s), ${node.removedQuizzes} quiz file(s), ` +
           `${node.removedRuns} article-run folder(s), ${node.removedLegacyDirs} legacy artifact folder(s), ` +
-          `${node.removedCandidates} quiz candidate(s), ${node.removedPolished} polish record(s), ${node.removedHumanized} legacy humanize record(s), ` +
-          `${node.removedHumanizeWork} legacy humanize workspace(s); ` +
+          `${node.removedCandidates} quiz candidate(s), ${node.removedPolished} polish record(s); ` +
           "kept node container",
       );
     }
