@@ -2,7 +2,7 @@
 
 剛開始用 Claude Code 的時候，額度看起來用不完。用幾個禮拜之後，某個下午它突然停下來，告訴你額度到了。
 
-這時候你要的不是更多 prompt 技巧，而是三個數字：你在哪一層方案、一次對話吃掉多少 token、還有 `/usage` 畫面上那幾個倒數剩多少。
+這時候換 prompt 技巧沒用，你要看的是三個數字：你在哪一層方案、一次對話吃掉多少 token、`/usage` 畫面上那幾個倒數還剩多少。
 
 ## 先確認你在哪一層
 
@@ -10,11 +10,11 @@ Anthropic 的方案分三層。
 
 Free 方案只能打開 claude.ai 的聊天介面，不含 Claude Code。
 
-要用 Claude Code，最低門檻是 Pro。Pro 月繳 20 美元，年繳的話是 17 美元。多數人從這一層開始就夠。
+要用 Claude Code，最低門檻是 Pro。Pro 月繳 20 美元，年繳的話是 17 美元。要入門，從這一層開始就夠。
 
 最高一層是 Max。Max 有兩個子層級，兩個都包含 Pro 的全部功能，差別只在用量：一個是 Pro 的 5 倍，一個是 20 倍。Max 5x 每月 100 美元，Max 20x 每月 200 美元。
 
-<!--image:1-->
+![第 1 段配圖](./plans-tokens-and-usage-assets/image-1.webp)
 
 這裡的「5 倍」「20 倍」指的是 token 額度。不是速度，也不是模型種類。
 
@@ -26,9 +26,9 @@ Free 方案只能打開 claude.ai 的聊天介面，不含 Claude Code。
 
 一個粗略的換算：一個 token 大約等於四個字母。所以「Build your operating system」這句是五個 token。
 
-<!--image:2-->
+![第 2 段配圖](./plans-tokens-and-usage-assets/image-2.webp)
 
-你可以把 token 想成 AI 世界的基本單位。就像上網時 KB、MB、GB 是資料的基本單位。買行動網路的時候，你月付一筆錢，換到一個固定的資料量；訂閱 AI 方案是一樣的概念，只是單位換成 token。
+你可以把 token 想成 AI 世界的 KB、MB、GB。買行動網路的時候，你月付一筆錢，換到一個固定的資料量；訂閱 AI 方案也是一樣的概念，只是單位換成 token。
 
 差別在透明度。電信商會直接寫出這個方案有幾 GB。Anthropic、OpenAI、Google 現在都不這樣做。它們只寫「Pro 的 5 倍」「Pro 的 20 倍」，不公布總共是幾百萬 token。這個狀況以後可能會改，但目前就是這樣。
 
@@ -46,7 +46,7 @@ Free 方案只能打開 claude.ai 的聊天介面，不含 Claude Code。
 
 三個限制不是相加，是各自獨立。任何一個見底，你就會撞牆。所以「這個月還能燒多少」其實要拆成兩題：這個 session 還剩多少，還有這週還剩多少。
 
-<!--image:3-->
+![第 3 段配圖](./plans-tokens-and-usage-assets/image-3.webp)
 
 ## 找出誰在吃額度
 
@@ -62,4 +62,4 @@ Free 方案只能打開 claude.ai 的聊天介面，不含 Claude Code。
 
 先量，再改。不要在不知道剩多少的情況下，猜自己該不該升方案。
 
-知道自己剩多少之後，下一個要決定的才是：哪一層模型值得當每天的預設，因為模型決定每一個 token 有多貴。
+知道自己剩多少之後，剩下要決定的，是哪一層模型值得當每天的預設，因為模型決定每一個 token 有多貴。

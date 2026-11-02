@@ -2,25 +2,25 @@
 
 你大概遇過這種事：同一個 prompt，昨天一個 session 幾秒就交出結果，今天換一個 session，它在那裡轉了半分鐘還沒開始動手。多數人第一個念頭是「模型變笨了」，但更常見的原因是另一個開關被動過——effort。
 
-effort 不在 prompt 裡，它藏在 Claude Code 的 command menu。打開選單、切到 model 那一區，就會看到 effort 可以從 low 一路調到 max。這篇要講的是兩件事：這個旋鈕實際轉動了什麼，以及你要怎麼依任務型態選一個檔位。
+effort 不在 prompt 裡，它藏在 Claude Code 的 command menu。打開選單、切到 model 那一區，就會看到 effort 可以從 low 一路調到 max。這篇要講的是兩件事：這個旋鈕實際轉動了什麼，以及你該怎麼依任務型態挑一個檔位。
 
 ## effort 就是「動手前想多久」
 
 用白話講，effort 是 Claude 在動手之前願意花多少力氣想。
 
-調低，結果來得快、吃的 token 少，但比較不周全，品質也比較沒保證；調高，慢、貴，但輸出變得更鋒利的機率比較高。
+調低，結果來得快、吃的 token 少，但比較不周全，品質也比較沒把握；調高，慢、貴，但結果變得更精準的機率也高一些。
 
 這裡的關鍵字是「機率」。它不是保證，只是把成功的可能性往上推一點。這一點後面會再回來講，因為它決定了你該不該無腦拉到滿。
 
 ## 打開引擎蓋：它調的是 reasoning token budget
 
-如果你在意 harness 底下實際發生什麼，答案出奇地單純：effort 調的是你這一個 prompt 的 reasoning token budget，也就是推理用的 token 額度。
+如果你想知道 harness 底下實際發生什麼，答案很單純：effort 調的是你這一個 prompt 的 reasoning token budget，也就是推理用的 token 額度。
 
-<!--image:1-->
+![第 1 段配圖](./effort-levels-and-tradeoffs-assets/image-1.webp)
 
-選了高 effort，Claude Code 就配更多 token 給規劃、給呼叫工具、給實際把事情做完；選了低 effort，它就把這份預算壓到能給的最小值。
+選了高 effort，Claude Code 就配更多 token 讓它規劃、呼叫工具、把事情做完；選了低 effort，這份預算會被壓到能給的最小值。
 
-有一個細節值得記住：Anthropic 沒有公布每一級對應的具體 token 數字。所以你選的不是一個精確規格，而是「大概落在哪裡」的檔位。這也是為什麼預設值最後會變成一種手感問題，而不是查表問題。
+有個細節要記住：Anthropic 沒有公布每一級對應的具體 token 數字。所以你選的不是一個精確規格，而是「大概落在哪裡」的檔位。這也是為什麼預設值最後會變成一種手感問題，而不是查表問題。
 
 ## 六個檔位，五個是同一件事
 
@@ -36,17 +36,17 @@ low 到 max 這五格，差別單純到有點無聊：同一個 prompt，給你�
 
 結果一眼就分得出來。low 那邊已經做完了，max 那邊還在做那個頁面。再看 thinking 的時間，low 是一次想 1 到 2 秒，max 是一次想 5 秒。
 
-<!--image:2-->
+![第 2 段配圖](./effort-levels-and-tradeoffs-assets/image-2.webp)
 
-換句話說，effort 給這個 session 的是「在交出結果之前多想一下」的空間。它沒有換成一個更聰明的模型，而是讓同一個模型被允許想久一點。
+換句話說，effort 給這個 session 的是「交出結果之前多想一下」的空間。模型沒有換成更聰明的版本，只是同一個模型被允許想久一點。
 
 ## 想得久，不等於做得對
 
-這是整篇最重要的一段：effort 不會自動讓結果變好。
+整篇最該記住的就這一句：effort 不會自動讓結果變好。
 
-課程把兩個 session 產出的 landing page 並排，設計上其實相當接近。特別是在設計與創意類的工作，尤其當你手上根本沒有 codebase 要對齊的時候，low effort 的成果不見得就比 max 差一截。
+課程把兩個 session 產出的 landing page 並排，設計上其實相當接近。設計與創意類的工作尤其如此，當你手上根本沒有 codebase 要對齊時，low effort 的成果不見得比 max 差一截。
 
-所以「把 effort 拉高」不是萬用解法。它比較像是：當你看到結果不如預期，而且判斷是因為它想得不夠深，才值得往上調一格。
+所以拉高 effort 不是萬用解法。看到結果不如預期、而且判斷是它想得不夠深，才值得往上調一格。
 
 ## 帳單長什麼樣：用 /context 看
 
@@ -56,7 +56,7 @@ low 到 max 這五格，差別單純到有點無聊：同一個 prompt，給你�
 
 課程的數字是：low effort 到目前為止用了 20,000 token，max effort 用了 27,000 token。換算下來，max 大約多吃了 35% 到 40%。
 
-<!--image:3-->
+![第 3 段配圖](./effort-levels-and-tradeoffs-assets/image-3.webp)
 
 那這 40% 換到的東西值不值得？還是同一句話：看你在做什麼工作。
 
@@ -66,7 +66,7 @@ low 到 max 這五格，差別單純到有點無聊：同一個 prompt，給你�
 
 如果主要是知識工作，mid 或 high 對大多數人已經夠用。如果是需要 agent 深入處理的開發工作，很多人會直接停在 extra high 或 max，因為任務本身就需要它想得深。
 
-這兩個建議其實並不矛盾。它們的差別不是「哪一級比較好」，而是你的工作長什麼樣。
+這兩個建議並不矛盾。選哪一級，看的是你的工作長什麼樣。
 
 ## Ultra code 先不要碰
 
@@ -74,7 +74,7 @@ low 到 max 這五格，差別單純到有點無聊：同一個 prompt，給你�
 
 它做的事也跟前面五格不同。low 到 max 你是在跟一個 agent 對話；ultra code 則讓 agent 有權限生出多個 agent，平行處理同一個大任務、互相交叉檢查，最後才把結果交回來。
 
-<!--image:4-->
+![第 4 段配圖](./effort-levels-and-tradeoffs-assets/image-4.webp)
 
 現階段先把它當成「知道有這一格就好」。等你判斷得出哪種任務值得那個成本，再回來打開它。
 

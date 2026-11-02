@@ -1,20 +1,20 @@
 # 一開始，建議你用 IDE
 
-你把 Claude Code 安裝好之後，第一個冒出來的問題通常不是「它會不會做」，而是「我要在哪裡用它」。Desktop app 打開後就是一個聊天視窗，跟 ChatGPT 或 claude.ai 沒什麼兩樣；但真的開始每天用它做事，你就會遇到一些很具體的問題：它剛剛寫的檔案在哪裡、看起來是什麼樣子？我想同時交代兩件事，卻只有一個視窗可以用。
+你把 Claude Code 安裝好之後，第一個冒出來的問題通常無關它會不會做。你會先問的是：「我要在哪裡用它？」Desktop app 打開後就是一個聊天視窗，跟 ChatGPT 或 claude.ai 沒什麼兩樣；但真的開始每天用它做事，你就會遇到一些很具體的問題：它剛剛寫的檔案在哪裡、看起來是什麼樣子？我想同時交代兩件事，卻只有一個視窗可以用。
 
-這一段要介紹的是我自己的 daily driver：VS Code 的 Claude Code extension。它的價值不在於功能比別人多，而在於你工作的內容一直都在你看得到的地方。
+這一段要介紹的是我自己的 daily driver：VS Code 的 Claude Code extension。功能比別人多不是它的賣點。它的價值在於你工作的內容一直都在你看得到的地方。
 
 ## 先講清楚：三個介面底下是同一套東西
 
-不管你選哪一個介面，底下用的都是同一組模型——Opus、Sonnet、Haiku，也就是 Anthropic 由強到弱的三個層級——以及同一個 harness，也就是 Anthropic 包在模型外層的程式碼和 system prompt。差別只在介面，以及進階介面多出來的那些功能。
+不管你選哪一個介面，底下都是同一組模型：Opus、Sonnet、Haiku，Anthropic 由強到弱的三個層級；再加上同一個 harness，也就是 Anthropic 包在模型外層的程式碼和 system prompt。差別只在介面，以及進階介面多出來的那些功能。
 
 所以，你不是在選哪一個比較聰明，而是在選自己每天要在哪裡工作。
 
 ## IDE 的意思是「在同一個地方完成所有事」
 
-IDE 是 integrated development environment，也就是整合開發環境。這個名稱很直白：它是一個讓你進行開發工作的軟體環境。之所以叫 integrated，是因為你看得到所有檔案，也可以在同一個軟體裡完成工作。
+IDE 是 integrated development environment，整合開發環境。這個名稱很直白：它是一個讓你進行開發工作的軟體環境。之所以叫 integrated，是因為你看得到所有檔案，也可以在同一個軟體裡完成工作。
 
-<!--image:1-->
+![第 1 段配圖](./vs-code-daily-driver-assets/image-1.webp)
 
 我推薦的 IDE 是 Visual Studio Code。它是開源軟體，問世多年，而且可以免費下載。
 
@@ -32,9 +32,9 @@ IDE 是 integrated development environment，也就是整合開發環境。這�
 
 ## 它可以直接在編輯器裡打開檔案
 
-這是我最喜歡 VS Code 的一點，也是 Desktop app 做不到的事。
+這是我最喜歡 VS Code 的一點，也是 Desktop app 給不了的。
 
-<!--image:2-->
+![第 2 段配圖](./vs-code-daily-driver-assets/image-2.webp)
 
 我請它建立一個文字檔，內容寫著「Hello Robo Nuggets」，它就會把檔案寫進 workspace。接著，我請它「在這裡打開」；因為它知道自己是在 IDE 裡運作，所以不會叫你去檔案總管找檔案，而是直接在 VS Code 編輯器裡開啟那個文字檔。
 
@@ -42,9 +42,9 @@ IDE 是 integrated development environment，也就是整合開發環境。這�
 
 ## 開多個 session，並把它們排成一排
 
-Desktop app 也能開多個 session、分割檢視，最多可以同時開四個。但我在 VS Code 裡的做法更直接：開一個新 session，它就會成為一個新視窗，接著把它往左拖。再開一個，再往左拖。你想怎麼排列都可以。
+Desktop app 也可以開多個 session，也可以分割檢視，最多開到四個。但我在 VS Code 裡的做法更直接：開一個新 session，它就會成為一個新視窗，接著把它往左拖。再開一個，再往左拖。你想怎麼排列都可以。
 
-<!--image:3-->
+![第 3 段配圖](./vs-code-daily-driver-assets/image-3.webp)
 
 我幾乎一直都是這樣工作：在同一個視窗裡開好幾個 session，自己管理、自己切換。跟只有一個聊天視窗相比，大概能同時處理四倍的工作。雙擊其中一個視窗，它們的寬度就會自動平均分配。我有一台第二螢幕，就讓這些 agent 各自在上面執行；等它們做完，我再進去 review。
 
@@ -54,7 +54,7 @@ Desktop app 也能開多個 session、分割檢視，最多可以同時開四個
 
 VS Code extension 唯一讓我不太滿意的地方，是沒有一個介面能讓你一次看完所有 skills。
 
-替代方法是輸入「/」，slash commands 就會列出 Claude Code 可以存取的所有 skills。我自己有八十幾個。真的需要整理時，我也不會一個一個點開修改，而是請 Claude Code 逐一檢視，建議哪些可以停用、刪除或精簡。MCP connectors 也找得到，就在 MCP servers 底下。
+替代方法是輸入「/」，slash commands 就會列出 Claude Code 可以存取的所有 skills。我自己有八十幾個。真的需要整理時，我不會一個一個點開改，會直接請 Claude Code 逐一檢視，建議哪些可以停用、刪除或精簡。MCP connectors 也找得到，就在 MCP servers 底下。
 
 ## terminal 還是要用，但不把它當 daily driver
 
@@ -66,7 +66,7 @@ VS Code extension 唯一讓我不太滿意的地方，是沒有一個介面能�
 
 terminal 的缺點也很具體。你請它打開一個檔案，它會用系統預設的程式開啟，結果就是又多開一個應用程式；而且你在 terminal 裡看不到檔案內容。缺少檔案可視性，這個問題幾乎每天都會讓你碰上一回。
 
-<!--image:4-->
+![第 4 段配圖](./vs-code-daily-driver-assets/image-4.webp)
 
 所以，我的 daily driver 還是 VS Code extension：用起來比較熟悉，也更有彈性、更整合。要開檔案或圖片，都能在同一個應用程式裡完成。
 

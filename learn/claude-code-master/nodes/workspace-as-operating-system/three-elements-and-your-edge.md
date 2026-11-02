@@ -6,9 +6,7 @@
 
 課程把這件事拆得很直白：每一個 agent 平台都由三個基本元素組成。不管它叫 Claude Code、Open Claw、Hermes、Codex 還是 Anti-Gravity，拆開來看都一樣。這三層是 model、harness、context。
 
-<!--image:1-->
-
-下面一層一層看。
+![第 1 段配圖](./three-elements-and-your-edge-assets/image-1.webp)
 
 ## 第一層：model 是引擎
 
@@ -28,31 +26,29 @@ harness 就是 Claude Code 本身。它的本質是一組 system prompt，加上
 
 context 就是你的 workspace。你的 workspace 就是電腦裡的一個資料夾。
 
-<!--image:2-->
+![第 2 段配圖](./three-elements-and-your-edge-assets/image-2.webp)
 
 作者的資料夾叫 Robo。裡面放著他整個事業的 context：程式碼、自動化腳本、圖片、影片，全都收在同一個資料夾底下。
 
-這個工作區整理得好，它就會慢慢變成你的作業系統。作業系統是所有東西跑在上面的那一層。作者說，他現在打開電腦，第一件事就是開 Claude Code，它已經變成他每天、每小時都要對話的那個軟體。
+這個工作區整理得好，它就會慢慢變成你的作業系統。作業系統是所有東西跑在上面的那一層。作者說他現在打開電腦，第一件事就是開 Claude Code，它已經變成他每天、每小時都要對話的軟體。
 
 ## 為什麼只有 context 是你能改的
 
-這裡是整段說明的轉折。
-
 所有人用的 model 和 harness 都一樣。你和我用的是同一批模型，跑的是同一個 Claude Code。
 
-<!--image:3-->
+![第 3 段配圖](./three-elements-and-your-edge-assets/image-3.webp)
 
 能自己動手的只有 context。它也是唯一能拉開差距的地方。
 
-所以「你的優勢就藏在那裡」不是一句鼓勵，而是一個結構上的事實：前兩層你只能等它更新，第三層你每天都可以動。
+所以「你的優勢就藏在那裡」不是喊話。前兩層你只能等它更新，第三層你每天都可以動。
 
-原文的說法是，如果你真的把 context 工程化，並且對自己的事業與個人工作的 context 保持控制，又讓 agent 有效地使用這份 context，你就已經在 Claude Code 使用者的前 1%。
+原文的說法是：把 context 工程化，對自己的事業和個人工作保持掌控，再讓 agent 有效地用上這份 context，你就已經站在 Claude Code 使用者的前 1%。
 
 ## 把 workspace 想成新員工的座位
 
-另一個好用的角度：把 agent 想成一位數位員工。
+換個角度看也成立：把 agent 想成一位數位員工。
 
-<!--image:4-->
+![第 4 段配圖](./three-elements-and-your-edge-assets/image-4.webp)
 
 它來報到的時候，自己帶著引擎（model），也自己帶著車身（harness）。你要替它準備的，只有它的工作區。把 agent 當成一位數位員工，這個比喻會讓四根柱子比較好記。
 
@@ -65,7 +61,7 @@ context 就是你的 workspace。你的 workspace 就是電腦裡的一個資料
 
 這四樣就是課程講的 ARMS：Apps、Routines、Memory、Skills。
 
-為什麼叫 ARMS？作者給了兩個理由。第一，縮寫好記。第二，它們像給 agent 一雙手臂，讓它伸進你的 workspace 和你的聯絡人，把你要它做的事做完。
+為什麼叫 ARMS？作者給了兩個理由。一是縮寫好記；二是它們像給 agent 一雙手臂，讓它伸進你的 workspace 和你的聯絡人，把你要它做的事做完。
 
 ## 從 skills 往上蓋
 
@@ -81,6 +77,6 @@ context 就是你的 workspace。你的 workspace 就是電腦裡的一個資料
 
 如果裡面只有幾個散落的檔案，那你的 agent 每天都在一間空辦公室上班。這不是模型不夠強，是你還沒把 context 交給它。
 
-三層裡，你只能改一層。好消息是，那一層就決定了你是多數人，還是前 1%。
+三層裡，你只能改一層。而那一層，就決定了你是多數人，還是前 1%。
 
 下一段把那一層講得更具體：一個資料夾，什麼時候會真的變成你的作業系統。

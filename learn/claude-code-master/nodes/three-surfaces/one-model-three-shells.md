@@ -2,17 +2,17 @@
 
 你打開 Claude Code，目前可能只用過其中一種介面。有人用桌面 app，有人在 VS Code 裡開，有人只開終端機。三個都能用，所以你很容易以為這是三個不同的產品，甚至以為換一個就會換到不同的模型。
 
-先講結論：底下是同一個東西。換介面不會換到比較笨或比較聰明的東西。
+先講結論：底下是同一個東西。換介面不會換到比較笨或比較聰明的模型。
 
 ## 底下是同一組模型，同一層 harness
 
 不管你選哪個介面，跑的都是 Anthropic 那三個分層模型：Opus、Sonnet、Haiku，能力從最強到最弱排下來。
 
-外面那層 harness 也相同。harness 是 Anthropic 包在模型外面的那一組程式碼與 system prompt，Claude Code 的能力就是它給的。
+外面那層 harness 也相同。harness 是 Anthropic 包在模型外面的那一組程式碼與 system prompt，Claude Code 的能力就來自這一層。
 
-<!--image:1-->
+![第 1 段配圖](./one-model-three-shells-assets/image-1.webp)
 
-所以三個介面的差別不在腦，在外殼。外殼決定兩件事：你看得到多少檔案，以及你用什麼方式派工作。
+所以三個介面的差別不在腦，在外殼。外殼決定兩件事：你看得到多少檔案，還有你用什麼方式派工作。
 
 ## 三個外殼，同一個下載頁
 
@@ -24,7 +24,7 @@ VS Code 版屬於 IDE，也就是 integrated development environment，整合開
 
 ## 桌面 app：最不嚇人，但看檔案最不方便
 
-桌面 app 長得像你熟悉的聊天視窗，跟 claude.ai 的對話框差不多。它的定位是最簡單、最不嚇人，如果你剛開始，這是最低的門檻。
+桌面 app 長得像你熟悉的聊天視窗，跟 claude.ai 的對話框差不多。它的定位很明確：最簡單、最不嚇人。如果你剛開始，這是最低的門檻。
 
 但左上角其實有三個 tab，能力不一樣：
 
@@ -38,7 +38,7 @@ VS Code 版屬於 IDE，也就是 integrated development environment，整合開
 
 選好之後，你就是在一個聊天視窗裡派工作。要並行，就開新 session，再用 split view 把其他 session 拉到旁邊。最多可以並排四個。這對「一個 session 跑深度研究，另一個 session 做別的事」很有用。
 
-<!--image:2-->
+![第 2 段配圖](./one-model-three-shells-assets/image-2.webp)
 
 限制也在這裡。這四個分割視窗只能調大小，不能拖出來，也不能重新排序。作者說，這就是他沒把桌面 app 當每天主要工具的原因。
 
@@ -51,7 +51,7 @@ VS Code 版屬於 IDE，也就是 integrated development environment，整合開
 
 ## VS Code extension：看得到檔案，也排得動 session
 
-多數人，包括初學者，他建議從 IDE 開始。裝法是在 VS Code 的 extensions 裡搜尋 Claude Code for VS Code，然後安裝。VS Code 開源、免費，存在很多年了。
+他建議多數人，包括初學者，先從 IDE 開始。裝法是在 VS Code 的 extensions 裡搜尋 Claude Code for VS Code，然後安裝。VS Code 開源、免費，存在很多年了。
 
 打開同一個 workspace 資料夾之後，你會看到兩件事同時存在：
 
@@ -62,7 +62,7 @@ VS Code 版屬於 IDE，也就是 integrated development environment，整合開
 
 session 也更好排。新開的 session 是一個新視窗，可以拖到左邊或右邊，版面自己決定。作者說他常在一個視窗裡同時跑多個 session 切來切去，產出大概是單一對話視窗的四倍。雙擊某個分割視窗，寬度會平均分配。他也常用第二螢幕放這些 agent，等它們跑完再進去審。
 
-<!--image:3-->
+![第 3 段配圖](./one-model-three-shells-assets/image-3.webp)
 
 缺點是 skill 沒有清單介面。要看清單，按 `/` 看 slash command，那就是 Claude Code 能用的 skill。MCP server 也列在同一區。
 
@@ -72,7 +72,7 @@ session 也更好排。新開的 session 是一個新視窗，可以拖到左邊
 
 代價是你看不到檔案。叫它開一個檔案，它會用 VS Code 或你系統預設的程式開。作者就遇到多開了第三個應用程式的狀況，那不是他要的。另外，你要先自己會幾個終端機指令，才有辦法切到你要的 workspace 資料夾。
 
-<!--image:4-->
+![第 4 段配圖](./one-model-three-shells-assets/image-4.webp)
 
 它也是最嚇人的一個。但新功能常常先在這裡出現。作者提到，有些功能最早只存在於終端機版，`/insights` 這一類指令也是；至少在 VS Code 與桌面 app 裡，它們沒有那麼好用。
 
@@ -92,4 +92,4 @@ session 也更好排。新開的 session 是一個新視窗，可以拖到左邊
 
 這張表就是全部。三個外殼，一個模型，一個 harness。你挑的只是檔案看不看得到，還有工作怎麼排。
 
-接下來先從 desktop app 走起，因為它最不嚇人，也最快讓你撞到這套外殼的第一個限制。
+接下來先從桌面 app 走起，因為它最不嚇人，也最快讓你撞到這套外殼的第一個限制。

@@ -6,7 +6,7 @@
 
 ## repo 是一個資料夾，只是公開給全世界
 
-repo 是 repository 的縮寫，指的是 GitHub repository。你可以把它想成一個資料夾，裡面放著一些程式碼，公開分享給全世界。
+repo 是 repository 的縮寫，講白話就是 GitHub 上的一個專案資料夾：裡面放著程式碼，公開給全世界看。
 
 GitHub 本身可以想成「世界版的 Google Drive」，只是裡面的東西是程式碼與開發成果。它現在也慢慢變成 AI agent 的 Google Drive，很多 agentic 平台的新工具就放在那裡。
 
@@ -16,7 +16,7 @@ GitHub 本身可以想成「世界版的 Google Drive」，只是裡面的東西
 
 你把網址貼進去，Claude Code 會先讀這個 repo 的 README，分析整個專案，看它安不安全。
 
-<!--image:1-->
+![第 1 段配圖](./judge-a-repo-with-personalize-assets/image-1.webp)
 
 這個檢查值得留著。但它回答的是「這東西有沒有問題」，不是「這東西適不適合你」。安全和合適是兩件事。一個乾淨、維護良好、但你已經有同樣功能的工具，裝進來只是多一個要顧的東西。
 
@@ -24,7 +24,7 @@ GitHub 本身可以想成「世界版的 Google Drive」，只是裡面的東西
 
 課程建議你，在開始裝一堆 repo 之前先裝一個叫 personalize 的 skill。
 
-skill 就是一個 markdown 檔，裡面寫給 Claude Code 看的指示。personalize 這個檔的內容，是指導 Claude Code 怎麼「個人化」任何你想安裝的 GitHub repo。
+skill 就是一個 markdown 檔，裡面寫的是給 Claude Code 看的說明。personalize 這個檔的內容，是指導 Claude Code 怎麼「個人化」任何你想安裝的 GitHub repo。
 
 裝法跟裝其他東西一樣：複製它的網址，交給 Claude Code，跟它說「install this skill」。如果你的電腦還沒有 Git，它通常會先請你裝 Git。Git 是開放原始碼、世界上信任度最高的軟體之一，也是你從 GitHub 抓檔案的必要元件。以前你得自己連到網站、自己跑完安裝流程；現在你可以直接授權 Claude Code 從網路抓下來裝好。
 
@@ -34,17 +34,17 @@ skill 就是一個 markdown 檔，裡面寫給 Claude Code 看的指示。person
 
 流程是這樣：複製你想裝的那個 repo 的網址，傳給 Claude Code，然後打 `/personalize`。
 
-它會開始讀 skill 裡的那些指示。這時它做的不是直接安裝，而是給你一個具體意見：這個工具對你有沒有用、它會怎麼套用到你的工作上。
+它會開始讀 skill 裡的說明。這次它不會直接安裝，會先給你一個具體意見：這個工具對你有沒有用、它會怎麼套用到你的工作上。
 
 它會給你三樣東西：
 
 - 工具描述：這個東西到底在做什麼。
-- take rate：它對你目前這套設定有多好。課程的原話是「how good it is for my own setup」。
+- take rate：它對你現在這套設定來說有多合適。課程的原話是「how good it is for my own setup」。
 - 建議：它該放在你現有工具組的哪個位置、跟哪些東西重疊。
 
 第三項最容易被忽略。一個新 repo 真正的問題很少是「它不好」，而是「它跟你已經有的東西做同一件事」。
 
-<!--image:2-->
+![第 2 段配圖](./judge-a-repo-with-personalize-assets/image-2.webp)
 
 ## 三樣東西要合起來看
 
@@ -54,17 +54,17 @@ skill 就是一個 markdown 檔，裡面寫給 Claude Code 看的指示。person
 
 最後看建議那段，問它跟你現有工具重疊在哪。重疊高、又沒有明顯更好的地方，就跳過。重疊低、剛好補上一個你每週都在手動做的缺口，就裝。
 
-<!--image:3-->
+![第 3 段配圖](./judge-a-repo-with-personalize-assets/image-3.webp)
 
 這也是課程說的：等你的 workspace 比較固定之後再用這個流程，會比一開始什麼都裝有效率。
 
 ## 判斷的前提是知道有哪些東西
 
-判斷的前提，是你知道外面有哪些東西存在。課程另外提到 star-history.com。
+要判斷一個 repo 值不值得裝，前提是你知道外面有哪些東西。課程另外提到 star-history.com。
 
-它是一個排行榜，顯示哪些 GitHub 專案正在趨勢上。左邊列出一堆專案，你可以一個一個點進去看。課程講者說，他常常在這裡找到適合自己 agentic coding 設定的專案，或社群會覺得有用的東西，因為這裡列的就是 star 數成長最快的那些。
+它是一個排行榜，顯示最近哪些 GitHub 專案在紅。左邊列出一堆專案，你可以一個一個點進去看。課程講者說，他常常在這裡找到適合自己 agentic coding 設定的專案，或社群會覺得有用的東西，因為這裡列的就是 star 數成長最快的那些。
 
-star 就是給開源 repo 的一個「收藏」或「讚」，讓別人在 star-history 這類網站上發現它。等你開始固定用 Claude Code，這個網站值得加進書籤，偶爾回來看一次。
+star 就是給開源 repo 的一個「收藏」或「讚」，讓別人在 star-history 這類網站上發現它。等你開始固定用 Claude Code，這個網站值得加到書籤，偶爾回來看一次。
 
 ## 這一步讓你的 workspace 多了什麼
 

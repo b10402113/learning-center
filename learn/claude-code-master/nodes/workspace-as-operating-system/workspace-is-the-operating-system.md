@@ -1,32 +1,32 @@
 # 當 workspace 真的開始變成你的作業系統
 
-你每天開 Claude Code，用的是同一顆 model，也是同一套 harness。Claude Code、Open Claw、Hermes、Codex、Anti-Gravity，每個 agent 平台拆開來，都只有三個基本元素。
+你每天打開 Claude Code，用的都是同一顆 model、同一套 harness。Claude Code、Open Claw、Hermes、Codex、Anti-Gravity，每個 agent 平台拆開來，都只有三個基本元素。
 
 既然如此，為什麼有人用起來像多請了一個團隊，有人用起來像多開了一個很會瞎猜的聊天視窗？
 
-差別不在你買到什麼，而在你餵給它什麼。model 跟 harness 大家都一樣，唯一能由你決定的那一項是 context，而 context 基本上就是你的 workspace。你能拉開差距的地方就在這裡。
+差別不在你買到什麼，而在你餵給它什麼。model 跟 harness 大家都一樣，唯一能由你決定的那一項是 context，而 context 基本上就是你的 workspace。
 
 ## 三個元素：引擎、車身，還有你準備的場地
 
-第一個元素是 model，它扮演 agent 的引擎，也就是大腦。
+第一個元素是 model，它是 agent 的引擎，也就是大腦。
 
-第二個是 harness，Claude Code 本身就是這一層。它本質上只是一組 system prompt、一組 coding 檔案，把 model 包起來，讓 model 真的能用工具、能操作你的電腦、能代替你改你的檔案。少了這一層，model 只會講話，不會動手。
+第二個是 harness，Claude Code 本身就是這一層。它就是一組 system prompt、一組 coding 檔案，把 model 包起來，讓 model 真的能用工具、能操作你的電腦、能代替你改你的檔案。少了這一層，model 只會講話，不會動手。
 
 第三個是 context，也就是你的 workspace。
 
-用聘人的角度想會更清楚。你把 AI agent 當成數位員工來聘，他報到那天自帶引擎，也就是 model 這顆大腦；他也自帶車身，也就是 harness。就像一台車不會只交給你一顆引擎，它連車身一起來。
+換個角度，把 AI agent 當成數位員工來聘。他報到那天自帶引擎，也就是 model 這顆大腦；也自帶車身，也就是 harness。就像一台車不會只交給你一顆引擎，它連車身一起來。
 
 所以你這個「老闆」要替他準備的，其實只剩 workspace。
 
-<!--image:1-->
+![第 1 段配圖](./workspace-is-the-operating-system-assets/image-1.webp)
 
 ## Workspace 就是一個資料夾
 
-先把話講白：workspace 就是你電腦上的一個資料夾。
+Workspace 就是你電腦上的一個資料夾。
 
-作者自己的做法，是開一個叫 Robo 的資料夾，把整個事業的 context 放進去。所有程式碼、所有自動化都在裡面，連圖片和影片也放在同一個資料夾。
+作者自己的做法，是開一個叫 Robo 的資料夾，把整個事業的 context 放進去。程式碼、自動化流程都在裡面，連圖片和影片也放在一起。
 
-真正的功夫不在資料夾取什麼名字，而在你怎麼把 context 工程化。當這件事做對，這個資料夾就不只是資料夾，它會開始變成你的作業系統。
+資料夾取什麼名字不重要，重要的是你怎麼把 context 工程化。這件事做對了，資料夾就會開始變成你的作業系統。
 
 ## 作業系統的意思：所有東西跑在上面的那一層
 
@@ -36,19 +36,19 @@
 
 差別在這裡：工具是你想到才開，作業系統是你一開機就在。
 
-<!--image:2-->
+![第 2 段配圖](./workspace-is-the-operating-system-assets/image-2.webp)
 
 ## 新員工的辦公桌：四層 ARMS
 
-如果 workspace 是作業系統，那 ARMS 這四層就是你在這個作業系統裡替他佈置的東西。用新員工的辦公桌來想，會好記很多。
+如果 workspace 是作業系統，那 ARMS 這四層就是你在這個作業系統裡替他佈置的東西。用新員工的辦公桌來記，比較好懂。
 
-<!--image:3-->
+![第 3 段配圖](./workspace-is-the-operating-system-assets/image-3.webp)
 
 **Apps**：他裝置上要有應用程式的存取權。新員工第一天要能開信箱、要能進專案系統，agent 也一樣。
 
 **Routines**：一組排程，讓他知道行事曆上哪些事會反覆發生。這份行事曆本身也該放在他的 workspace 裡。
 
-**Memory**：本質上是一個檔案櫃，存放你們一起做過的所有對話與專案，讓他在相關的時候把資料調出來。
+**Memory**：一個檔案櫃，存放你們一起做過的對話與專案，需要的時候他會把資料調出來。
 
 **Skills**：他的筆記本，裡面是一張張食譜卡、指示卡，讓他想得起某個特定任務該怎麼做。
 
@@ -58,16 +58,14 @@
 
 這套東西建議由下往上建。
 
-<!--image:4-->
+![第 4 段配圖](./workspace-is-the-operating-system-assets/image-4.webp)
 
-先讓 agent 有一批好用的 skills，因為 skills 是所有東西的地基。地基有了，它才開始長出 memory，慢慢累積出關於你事業與工作的知識庫。
+先讓 agent 有一批好用的 skills，因為 skills 是所有東西的地基。地基有了，它才開始長出 memory，慢慢累積成你事業與工作的知識庫。
 
 等到 skills 跟 memory 都可靠了，你才有條件把 routines 疊上去，讓自動化產出的品質對得上你的期待。順序反過來，你只是排了一個每天準時產廢文的排程。
 
-最後才是 Apps 那一層。大部分工作都跟我們在用的工具與應用有關，接上之後，agent 才真的能 24 小時替你做事。
+最後才是 Apps 那一層。大部分工作都離不開我們平常用的工具，接上之後，agent 才真的能 24 小時替你做事。
 
-到那個時候，Claude Code 才從「一顆很強的 model 加上一層 harness」變成真正的隊友：它自己會動、自己會記得、自己會照時間做事，做出來的東西是你預期的那個樣子。
+到那個時候，Claude Code 才從「一顆很強的 model 加上一層 harness」變成真正的隊友：它自己會動、自己會記得、自己會照時間做事。
 
-而這一切的起點，只是一個資料夾。
-
-但一個資料夾不會自己變成作業系統。裡面要放什麼，就是 ARMS 那四層要回答的問題。
+起點只是一個資料夾。但它不會自己變成作業系統，裡面要放什麼，就是 ARMS 那四層要回答的問題。

@@ -4,25 +4,25 @@
 
 然後你打 `/context` 看那個數字，它不是零。
 
-這一篇要處理的就是這件事：先讀帳單，再開始點菜。
+在點菜之前，先把這張帳單讀清楚。
 
 ## `/context` 只回答一個問題
 
 `/context` 做的事很單純：告訴你這個 session 的 context window 已經填掉多少。
 
-畫面上一條用量條，看得到已經用掉多少比例。但那個畫面有一個很容易誤讀的地方——你打在對話框裡的訊息，只算在紫色那一塊。在課程示範的那個 session 裡，紫色區塊總共也才吃掉 7,000 個 token。
+畫面上有一條用量條，看得到已經用掉多少比例。但那個畫面有一個很容易誤讀的地方：你打在對話框裡的訊息，只算在紫色那一塊。在課程示範的那個 session 裡，紫色區塊總共也才吃掉 7,000 個 token。
 
-<!--image:1-->
+![第 1 段配圖](./read-the-context-bill-assets/image-1.webp)
 
 7,000 看起來很少，它確實很少。問題是，那條 bar 上絕大部分的面積不是你講的話。
 
 ## 剩下的面積是誰的
 
-每個 Claude Code session 的實情是：在你跟它說話之前，裡面已經有一個 system prompt。那是 Anthropic 預先寫進 harness 的，你改不了。它還有 system tools，同樣也不能改。除此之外，還有你的 memory 檔案，以及 skills。
+每個 Claude Code session 都是這樣：在你跟它說話之前，裡面已經有一個 system prompt。那是 Anthropic 預先寫進 harness 的，你改不了。它還有 system tools，同樣也不能改。除此之外，還有你的 memory 檔案，以及 skills。
 
-Key point 在這裡——在你跟 agent 講第一句話之前，大約 20,000 到 25,000 個 token 就已經被消耗掉了，甚至更多，取決於你的 workspace 有多大。
+重點是：在你跟 agent 講第一句話之前，大約 20,000 到 25,000 個 token 就已經被消耗掉了，甚至更多，取決於你的 workspace 有多大。
 
-<!--image:2-->
+![第 2 段配圖](./read-the-context-bill-assets/image-2.webp)
 
 所以 context 不是一張空桌子。它比較像一張已經擺好公司設備的桌子，你坐下來的時候，桌面已經被佔掉一角。這筆錢在對話開始之前就付了，我把它叫作 workspace 的固定成本。
 
@@ -30,21 +30,21 @@ Key point 在這裡——在你跟 agent 講第一句話之前，大約 20,000 �
 
 要估算一個 workspace 的固定成本，做法很土，但有效：開一個全新的 session，什麼都不要打，直接跑 `/context`，把那個數字記下來。
 
-<!--image:3-->
+![第 3 段配圖](./read-the-context-bill-assets/image-3.webp)
 
-那個數字就是這個 workspace 的起始水位。換一個 workspace 再跑一次，兩個數字一比，差距就是兩個 workspace 的體積差——同一個專案，memory 檔案多、skills 多的那一邊，起始水位一定比較高。
+那個數字就是這個 workspace 的起始水位。換一個 workspace 再跑一次，兩個數字一比，差距就是兩個 workspace 的體積差。同一個專案，memory 檔案多、skills 多的那一邊，起始水位一定比較高。
 
 知道這兩個數字之後，你才有辦法算真正能拿來做事的預算：整個 window 扣掉固定成本，剩下的才是你的。Opus 是一百萬的 context window，扣掉兩萬五其實沒什麼感覺；但如果你的 workspace 特別肥，這個比例會慢慢變得看得見。
 
 ## 什麼時候該用 `/compact`
 
-固定成本之外，真正讓 context 爆掉的是對話本身。這裡有個詞要記住：context rot。
+固定成本之外，真正讓 context 爆掉的是對話本身。這裡有個詞：context rot。
 
 講白了，一個 session 跑得越久，它就會變笨，而且笨得看得出來。原因是 window 被大量 token 填滿，裡面混著無關的資訊——你聊過的死路、過時的細節、早就修掉的錯誤。AI 會慢慢失去重點，越到後面越難在這一長串東西裡找到你當下要的那一樣。
 
-打個比方，你在書裡找一段話：一百萬個 token 差不多是七本哈利波特並排放在一起的長度。如果對話已經這麼長，你問一個主題，模型可能找到的是第二章那個，而你要的在第十章。它不笨，只是整段對話拖得太久了。
+想像你在書裡找一段話：一百萬個 token 差不多是七本哈利波特並排放在一起的長度。如果對話已經這麼長，你問一個主題，模型可能找到的是第二章那個，而你要的在第十章。它不笨，只是整段對話拖得太久了。
 
-<!--image:4-->
+![第 4 段配圖](./read-the-context-bill-assets/image-4.webp)
 
 覺得開始有 context rot 的跡象時，就下 `/compact`。它會把整個 session 摘要成一個比較短的版本。做法是 AI 自己看著整份文本，給自己一段 prompt 去濃縮。訊息太少的時候它會拒絕，因為沒東西可壓；像那個幫你做出 landing page 的 session，`/compact` 一跑，整段對話就被擠乾，window 裡就能再塞更多東西。
 
@@ -52,7 +52,7 @@ Key point 在這裡——在你跟 agent 講第一句話之前，大約 20,000 �
 
 ## 所以這個 1M 該怎麼看
 
-壞消息講完了，好消息是：這個 token context window 其實很大，而且大概只會越來越大。至少以現在業界的情況來說，context window 並不是大多數人最大的阻礙。
+講了這麼多限制，回頭看，這個 token context window 其實很大，而且大概只會越來越大。至少現在看起來，context window 還不是最卡住大家的地方。
 
 所以不用把開場那兩萬多個 token 當成要殲滅的敵人。把它量出來、記在心裡就好。它的用處是：當某個 session 突然開始不聽話，你分得出這是 context rot，還是別的地方出了問題。
 

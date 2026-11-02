@@ -1,0 +1,24 @@
+---
+source: "sources/agent-as-service/20261101/3-Wk2 - Going Live/4-3️⃣ Building Credentials (Even Without Clients)/4-3️⃣_Building_Credentials_(Even_Without_Clients).en.vtt"
+source_type: text
+source_lines: 581
+status: absorbed
+absorbed_at: 2026-11-01
+created: 2026-11-01
+updated: 2026-11-01
+---
+
+# L1 overview
+
+- Jay tackles the chicken-and-egg blocker — no clients without case studies, no case studies without clients — and argues you already have more credibility than you think; it just needs reframing.
+- Reframes a 100k/year job as "one client paying a 100k annual retainer"; any past work (work automation, side projects, a social account with thousands of views) can become a case study. Introduces the three-part framework: "helped who, achieve what, by how."
+- Covers the two honesty rules (absolute size need not be mentioned; anonymity is fine under NDAs), working for free as an investment (Warren Buffett offering to work for Benjamin Graham for free), community leaderboards as credentials, and the closing idea: clients buy confidence you can solve their problem — credibility is created, not awaited.
+
+# L2 detail
+
+- `#L1-L105` — The blocker and the reframe: "how do I get clients if I don't have case studies, and how do I get case studies if I don't have clients" is the classic chicken-and-egg problem that stops people before they start. The truth: you have more credibility than you think. Key reframe: if you're earning 100k a year at a job, you already have one client paying a 100k annual retainer — you essentially run a six-figure practice serving one client; now you're just branching out to serve more. Same skills, slightly different structure, and domain knowledge plays a big role in which AI vertical you offer.
+- `#L106-L157` — Experience is what counts, and it's already there: you don't need to have owned an agency. If you automated something at work, that's relevant; if you implemented a system for a hobby or grew a social media account to thousands of views, that's a marketing win. Even disjointed past efforts can be case studies because the common thread is you — you made those things happen.
+- `#L158-L260` — Partner credentials: if your past work was external-facing, don't list only your own company — include the external partners you worked with. Jay's example: his corporate experience came from Unilever (and his first clients were Unilever colleagues), but he also worked directly with Ogilvy and Microsoft; even though those were partnerships, he did the work and drove results, so they're real experience you can leverage and talk about.
+- `#L261-L389` — The three-part framework and its two rules: "you helped who achieve what by how." Verbatim-worthy examples: "your team helped a content creator cut production time from two days to four hours by building an automated content workflow"; "helped a business reduce report generation time by 80% by automating their weekly analytics"; "implemented a lead tracking system that improved follow-up rates by 40%." Rule 1 — absolute size doesn't need to be said (a 500-follower content creator doesn't need the follower count mentioned; the result is what matters, it doesn't need to be earth-shattering). Rule 2 — anonymity is fine: NDAs are completely respected in the industry, so say "unfortunately, I can't disclose the name of the clients because of NDAs, but this is what we did"; people care about the headlines of what you did, not the specifics.
+- `#L390-L478` — Working for free as an investment: if you have time but no clients and little experience, offer to help someone for free — especially someone respectable with a good name in the field — and get proof from it: a testimonial, a case study, or the association itself. One free project can unlock paid work because now you have proof; the more high-value the person, the more real experience you gain. Story: after graduating from Columbia, Warren Buffett offered to work for Benjamin Graham for free, and that free work became the foundation of Buffett's career — sometimes experience is worth more than money.
+- `#L479-L581` — Leaderboards and the key takeaway: community leaderboards are a real credential — members have landed clients from within the community because being active and supportive is itself visible proof; top rank in an AI-focused community can go on a CV ("number three member in one of the largest AI communities globally"). Key takeaway: clients aren't buying your resume (nobody browses all your past work unless it's a million-dollar project) — they're buying confidence that you can solve their problem. Before claiming you have no credentials, ask: what have you already done that's relevant? What could you build or document this week to start creating proof? Credibility isn't something you wait for; it's something you create.

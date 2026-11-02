@@ -10,9 +10,9 @@
 
 在 harness 底下，它調的是你這一段 prompt 的 reasoning token budget。等級調高，Claude Code 就分給規劃、呼叫工具、實際做事更多 token；等級調低，就壓到它能給的最小值。
 
-<!--image:1-->
+![第 1 段配圖](./effort-in-practice-assets/image-1.webp)
 
-六個等級裡，low 到 max 這五個的差別很單純：max 就是每一段 prompt 的 token budget 比較大，low 就是小很多。Anthropic 並沒有公布各級對應的實際數字，所以預設要停在哪一級，比較像口味問題——看你平常做什麼工作。
+六個等級裡，low 到 max 這五個的差別很單純：max 就是每一段 prompt 的 token budget 比較大，low 就是小很多。Anthropic 並沒有公布各級對應的實際數字，所以預設要停在哪一級，比較像口味問題，看你平常做什麼工作。
 
 ## 實測：同一個 prompt，low 對 max
 
@@ -20,23 +20,23 @@
 
 一開始就看得出差別。low 那個 session 已經完成，max 那個還在想、還在建頁面。
 
-<!--image:2-->
+![第 2 段配圖](./effort-in-practice-assets/image-2.webp)
 
-再看 thinking time：low 每次只想 1 到 2 秒，max 一次想 5 秒。這就是 effort 全部的意義——給 session 多一點空間，想清楚之後才把結果交出來。
+再看 thinking time：low 每次只想 1 到 2 秒，max 一次想 5 秒。effort 差的就是這一點：給 session 多一點空間，想清楚之後才把結果交出來。
 
 ## 多花的 token 換到什麼
 
 用 `/context` 進去看，messages 那塊紫色區域直接對應 agent 的思考時間。low 花了 20,000 tokens，max 花了 27,000 tokens。
 
-<!--image:3-->
+![第 3 段配圖](./effort-in-practice-assets/image-3.webp)
 
-換算下來，max 大約多吃 35 到 40%。趨勢很清楚：設 max 就是會用掉更多 token。
+換算下來，max 大約多吃 35 到 40%。設 max 就是會用掉更多 token。
 
-那值得嗎？這裡是整段最容易被誤解的地方：effort 不會自動讓結果變好。值不值得，還是回到你手上是哪種工作。
+那值得嗎？effort 不會自動讓結果變好，這點最容易被誤解。值不值得，還是回到你手上是哪種工作。
 
 ## 兩個版本其實長得很像
 
-講者把兩個成品並排：一個是 low 生的，一個是 max 生的。設計上相當接近。
+講者把兩個成品並排：一個 low 生的，一個 max 生的，設計上相當接近。
 
 尤其在做設計、創意，而且不是特別在動 codebase 的時候，low 不會自動比 max 遜色。至於「看起來像 AI 隨手 vibe code 出來的」那種問題，是後面課程要另外處理的事，不是把 effort 拉到 max 就會消失。
 
@@ -54,8 +54,8 @@
 
 它跟前面五級的差別不在「想更久」，而在結構。low 到 max，你是在跟一個 agent 講話；切到 ultra code，等於放手讓 agent 去 spawn 一整批 agent，平行處理一個大任務，彼此 cross-check 之後才把結果交回來。
 
-<!--image:4-->
+![第 4 段配圖](./effort-in-practice-assets/image-4.webp)
 
-這個模式後面課程會再拆。現在你只要記得：它解決的是「一個大任務」，不是「我想要更好的答案」。
+這個模式後面課程會再拆。現在你只要記得：它處理的是「一個大任務」，跟「我想要更好的答案」是兩件事。
 
 所以把 effort 當旋鈕，別當品質保證。固定在 mid，讓「結果不對」成為你往上轉的觸發條件，比一開始就轉到底實際得多。
