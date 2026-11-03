@@ -4,7 +4,7 @@ title: "為什麼你需要排程工具"
 subject: ai-content-accelerator
 tier: 4
 order: 17
-status: confirmed
+status: written
 goal: "用 Blotato + `/post` 把一週內容排到多個平台，並在發佈前核准 caption 與封面。"
 digests:
   - 6-Module_28_-_Automated_Scheduling.md
@@ -18,7 +18,7 @@ steps:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/6-Module 28 - Automated Scheduling/6-Module_28_-_Automated_Scheduling.md#L6-L11]]"
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/6-Module 28 - Automated Scheduling/6-Module_28_-_Automated_Scheduling.md#L39-L58]]"
   - id: blotato-and-nine-platforms
-    title: "Blotato：我們在 RoboNuggets 用的那一個"
+    title: "拿一支影片，發到九個社群平台"
     purpose: "說明 Blotato 為什麼能被 agent 操作，並列出它能連接的九個平台。"
     sources:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/6-Module 28 - Automated Scheduling/6-Module_28_-_Automated_Scheduling.md#L13-L38]]"
@@ -53,7 +53,7 @@ updated: 2026-11-03
 ## Steps
 
 1. [為什麼你需要排程工具](automated-scheduling/manual-posting-cost.md)
-2. [Blotato：我們在 RoboNuggets 用的那一個](automated-scheduling/blotato-and-nine-platforms.md)
+2. [拿一支影片，發到九個社群平台](automated-scheduling/blotato-and-nine-platforms.md)
 3. [一次性設定：API key 跟 account ID](automated-scheduling/post-setup.md)
 4. [從 Rubric Editor 到七天排程](automated-scheduling/schedule-a-week.md)
 5. [發文時間到底重不重要？](automated-scheduling/timing-and-new-accounts.md)

@@ -4,7 +4,7 @@ title: "把鏡頭拉遠：你的 Content OS 全貌"
 subject: ai-content-accelerator
 tier: 4
 order: 18
-status: confirmed
+status: written
 goal: "用 Content OS 全圖檢查每個環節，決定自己的自動化比例與品味介入點。"
 digests:
   - 8-Module_29_-_Your_Content_OS.md
@@ -21,14 +21,17 @@ steps:
     sources:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/8-Module 29 - Your Content OS/8-Module_29_-_Your_Content_OS.md#L21-L29]]"
   - id: still-in-the-loop
+    title: "但有一件事：你仍然在迴圈裡"
     purpose: "指出自己仍必須親自做的品味決策，並說明如何把品味訓練進 agents。"
     sources:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/8-Module 29 - Your Content OS/8-Module_29_-_Your_Content_OS.md#L31-L38]]"
   - id: your-automation-ratios
+    title: "我自己的自動化比例"
     purpose: "用創作 80–90%、發文 95% 的實例，定出自己每個環節的自動化比例。"
     sources:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/8-Module 29 - Your Content OS/8-Module_29_-_Your_Content_OS.md#L40-L48]]"
   - id: automation-spectrum
+    title: "自動化是一道光譜"
     purpose: "在自動化光譜上定位自己，選定品味介入點以避免 AI slop。"
     sources:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/8-Module 29 - Your Content OS/8-Module_29_-_Your_Content_OS.md#L50-L65]]"
@@ -46,6 +49,6 @@ updated: 2026-11-03
 
 1. [把鏡頭拉遠：你的 Content OS 全貌](your-content-os/content-os-map.md)
 2. [一人加一隊 agent，就能跑內容事業](your-content-os/one-person-agent-team.md)
-3. [still-in-the-loop](your-content-os/still-in-the-loop.md)
-4. [your-automation-ratios](your-content-os/your-automation-ratios.md)
-5. [automation-spectrum](your-content-os/automation-spectrum.md)
+3. [但有一件事：你仍然在迴圈裡](your-content-os/still-in-the-loop.md)
+4. [我自己的自動化比例](your-content-os/your-automation-ratios.md)
+5. [自動化是一道光譜](your-content-os/automation-spectrum.md)

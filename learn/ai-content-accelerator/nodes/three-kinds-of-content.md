@@ -4,7 +4,7 @@ title: "先搞清楚：內容其實只有三大類"
 subject: ai-content-accelerator
 tier: 4
 order: 16
-status: confirmed
+status: written
 goal: "用 shorts／longs／text 選出起點（TikTok 優先），並把同一支內容鋪到多個平台。"
 digests:
   - 2-Module_24_-_Welcome_to_Distribution.md
@@ -14,7 +14,7 @@ digests:
 prerequisites: []
 steps:
   - id: three-formats-of-content
-    title: "如果你只能先選一個"
+    title: "先搞清楚：內容其實只有三大類"
     purpose: "用 shorts／longs／text 定位內容型態，並說明 distribution 要讓投入的力氣發揮到最大。"
     sources:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/2-Module 24 - Welcome to Distribution/2-Module_24_-_Welcome_to_Distribution.md#L1-L24]]"
@@ -30,7 +30,7 @@ steps:
     sources:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/3-Module 25 - Master the Channels/3-Module_25_-_Master_the_Channels.md#L51-L90]]"
   - id: choose-shorts-as-starting-point
-    title: "那到底該專注哪一個？"
+    title: "shorts 出貨快，量就是一切"
     purpose: "選定 shorts 當起點，排出本週要發的短片數與 15 則貼文里程碑。"
     sources:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/3-Module 25 - Master the Channels/3-Module_25_-_Master_the_Channels.md#L91-L109]]"
@@ -52,8 +52,8 @@ updated: 2026-11-03
 
 ## Steps
 
-1. [如果你只能先選一個](three-kinds-of-content/three-formats-of-content.md)
+1. [先搞清楚：內容其實只有三大類](three-kinds-of-content/three-formats-of-content.md)
 2. [如果硬要排名：新手先從 TikTok 開始](three-kinds-of-content/shorts-channel-ranking.md)
 3. [一支長片等於六十支短片](three-kinds-of-content/longs-and-text-tradeoffs.md)
-4. [那到底該專注哪一個？](three-kinds-of-content/choose-shorts-as-starting-point.md)
+4. [shorts 出貨快，量就是一切](three-kinds-of-content/choose-shorts-as-starting-point.md)
 5. [品質＝對某個人的用處](three-kinds-of-content/post-everywhere-principle.md)
