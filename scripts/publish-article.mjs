@@ -11,8 +11,8 @@ import {
   selectSteps,
 } from "../src/article.mjs";
 import {
-  humanizeRecordPath,
   jobFiles,
+  polishedRecordPath,
   prepareFile,
   readJson,
   restoreCode,
@@ -56,6 +56,16 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
       });
       continue;
     }
+    if (result.mode === "direct" && resolve(result.article ?? "") !== resolve(files.polish)) {
+      results.push({
+        id: entry.id,
+        title: entry.title ?? entry.id,
+        status: "failed",
+        path: shown,
+        error: "direct run did not finish on polish.md",
+      });
+      continue;
+    }
     const article = existsSync(result.article) ? readFileSync(result.article, "utf8") : "";
     if (!article.trim()) {
       results.push({ id: entry.id, title: entry.title ?? entry.id, status: "failed", path: shown, error: "run produced no article" });
@@ -73,12 +83,15 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
       const title = body.split("\n").find((line) => line.trim() !== "")?.replace(/^#\s+/, "").trim();
       if (title) setStepTitle({ root, subject, node: nodeId, step: entry.id, title });
     }
-    // A forced rewrite invalidates the figures and humanize record from the
+    // A forced rewrite invalidates the figures and stage artifacts from the
     // previous run. Clear them only after the new article is safely written, so
     // a failed publish leaves the old state intact.
     if (force) {
       clearStepImages(root, { subject, node: nodeId, step: entry.id });
-      rmSync(humanizeRecordPath(root, { subject, node: nodeId, step: entry.id }), { force: true });
+      rmSync(files.humanized, { force: true });
+      rmSync(files.humanizedPlan, { force: true });
+      rmSync(polishedRecordPath(root, { subject, node: nodeId, step: entry.id }), { force: true });
+      rmSync(join(root, "learn", subject, "nodes", nodeId, `${entry.id}.quiz.json`), { force: true });
     }
     results.push({ id: entry.id, title: entry.title ?? entry.id, status: "published", path: shown });
   }
@@ -101,7 +114,7 @@ Copies each completed marker-only article-agent run back into learn/, restores
 protected code blocks, keeps the <!--image:N--> markers, normalizes the H1,
 marks the node written, and runs verify. With --force, a successful write also
 removes the step's stale image-N files (the markers are rendered later) and its
-humanize record.`;
+humanized stage files.`;
 
 async function main() {
   const { values } = parseArgs({

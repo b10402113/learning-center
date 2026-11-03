@@ -146,6 +146,110 @@ absorbed_at: 2026-10-22
   );
 }
 
+function splitFixture(t) {
+  const root = mkdtempSync(join(tmpdir(), "verify-split-fixture-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  write(root, "sources/test/book.txt", "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\n");
+  write(root, "sources/test/book.1.part.txt", "line 1\nline 2\nline 3\n");
+  write(root, "sources/test/book.2.part.txt", "line 4\nline 5\nline 6\n");
+  write(
+    root,
+    "sources/test/book.parts.json",
+    `${JSON.stringify(
+      {
+        text: "sources/test/book.txt",
+        total_lines: 6,
+        parts: [
+          { part: 1, file: "book.1.part.txt", start: 1, end: 3, lines: 3 },
+          { part: 2, file: "book.2.part.txt", start: 4, end: 6, lines: 3 },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  for (const part of [1, 2]) {
+    write(
+      root,
+      `learn/test/digests/book.${part}.part.md`,
+      `---
+source: sources/test/book.${part}.part.txt
+source_type: text
+source_lines: 3
+part: ${part}
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- Part ${part}.
+
+# L2 detail
+
+- \`#L1-L3\` — part ${part}
+`,
+    );
+  }
+  write(
+    root,
+    "learn/test/ROADMAP.md",
+    `---
+subject: test
+status: confirmed
+created: 2026-10-22
+---
+
+# Test
+
+## Nodes
+
+### Tier 1 — Basics
+
+1. **[Node One](nodes/n1.md)**
+`,
+  );
+  write(
+    root,
+    "learn/test/nodes/n1.md",
+    `---
+id: n1
+title: "Node One"
+subject: test
+tier: 1
+order: 1
+status: confirmed
+goal: "Do one thing."
+digests:
+  - book.1.part.md
+  - book.2.part.md
+steps:
+  - id: s1
+    title: "Step One"
+    purpose: "Explain one thing."
+    sources:
+      - "[[sources/test/book.1.part.txt#L1-L2]]"
+      - "[[sources/test/book.2.part.txt#L2-L3]]"
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Node One
+
+## Lesson
+
+A short lesson.
+
+## Steps
+
+1. [Step One](n1/s1.md)
+`,
+  );
+  write(root, "learn/test/nodes/n1/s1.md", "# Step One\n\nOpening line.\n");
+  return root;
+}
+
 function failures(root, options = {}) {
   return runChecks({ root, subject: "test", ...options }).failures.map((failure) => failure.checkId);
 }
@@ -840,6 +944,35 @@ test("an asset folder without a step is an orphan", (t) => {
   assert.ok(failures(root).includes("image-orphan"));
 });
 
+test("an image plan beside the node is accepted", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/nodes/n1/s1.plan.json",
+    JSON.stringify([{ heading: "A", prompt: "draw it" }]),
+  );
+  assert.deepEqual(failures(root), []);
+});
+
+test("an image plan must be a 1-5 item array with prompts", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.plan.json", JSON.stringify([{ heading: "A" }]));
+  assert.ok(failures(root).includes("image-plan"));
+
+  write(root, "learn/test/nodes/n1/s1.plan.json", "not json");
+  assert.ok(failures(root).includes("image-plan"));
+});
+
+test("an image plan without a step entry is an orphan", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/nodes/n1/ghost.plan.json",
+    JSON.stringify([{ heading: "A", prompt: "draw it" }]),
+  );
+  assert.ok(failures(root).includes("image-plan-orphan"));
+});
+
 test("a text digest may point at a codebase digest it supplements", (t) => {
   const root = fixture(t);
   addCodebaseDigest(root);
@@ -1063,4 +1196,147 @@ test("an absorbed supplement needs no node of its own", (t) => {
     "status: absorbed\nsupplements:\n  - code.md#L1-L20",
   );
   assert.ok(!failures(root).includes("digest-unreferenced"));
+});
+
+test("a source split into parts with one digest per part passes", (t) => {
+  const root = splitFixture(t);
+  const result = runChecks({ root, subject: "test" });
+  assert.equal(result.pass, true, JSON.stringify(result.failures, null, 2));
+});
+
+test("a parts manifest gap fails", (t) => {
+  const root = splitFixture(t);
+  update(root, "sources/test/book.parts.json", '"start": 4', '"start": 5');
+  assert.ok(failures(root).includes("source-parts-coverage"));
+});
+
+test("a part file's line count must match the manifest", (t) => {
+  const root = splitFixture(t);
+  write(root, "sources/test/book.2.part.txt", "line 4\nline 5\n");
+  assert.ok(failures(root).includes("source-parts-lines"));
+});
+
+test("a digest must cite its part file, not the unsplit source", (t) => {
+  const root = splitFixture(t);
+  update(root, "learn/test/digests/book.1.part.md", "source: sources/test/book.1.part.txt", "source: sources/test/book.txt");
+  assert.ok(failures(root).includes("digest-source-split"));
+});
+
+test("two digests may not claim the same part", (t) => {
+  const root = splitFixture(t);
+  write(
+    root,
+    "learn/test/digests/book.extra.md",
+    `---
+source: sources/test/book.1.part.txt
+source_type: text
+source_lines: 3
+part: 1
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- Extra.
+
+# L2 detail
+
+- \`#L1-L3\` — extra
+`,
+  );
+  assert.ok(failures(root).includes("source-parts-digest-duplicate"));
+});
+
+test("every part needs a digest", (t) => {
+  const root = splitFixture(t);
+  rmSync(join(root, "learn/test/digests/book.2.part.md"));
+  assert.ok(failures(root).includes("source-parts-digest-missing"));
+});
+
+test("a digest's part number must match the manifest", (t) => {
+  const root = splitFixture(t);
+  update(root, "learn/test/digests/book.2.part.md", "part: 2", "part: 1");
+  assert.ok(failures(root).includes("source-parts-digest-part"));
+});
+
+test("a missing part file fails", (t) => {
+  const root = splitFixture(t);
+  rmSync(join(root, "sources/test/book.2.part.txt"));
+  assert.ok(failures(root).includes("source-parts-file"));
+});
+
+
+test("a digest L2 range must use the #Lx-Ly form", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/digests/notes.md", "- `#L1-L10`", "- `#L1-10`");
+  assert.ok(failures(root).includes("digest-locator"));
+});
+
+test("a digest L2 range with a malformed end fails", (t) => {
+  const root = splitFixture(t);
+  update(root, "learn/test/digests/book.1.part.md", "- `#L1-L3`", "- `#L1-3`");
+  assert.ok(failures(root).includes("digest-locator"));
+});
+
+
+function mutateManifest(root, mutate) {
+  const path = join(root, "sources/test/book.parts.json");
+  const data = JSON.parse(readFileSync(path, "utf8"));
+  mutate(data);
+  writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`);
+}
+
+test("a malformed parts manifest is reported", (t) => {
+  const root = splitFixture(t);
+  write(root, "sources/test/book.parts.json", "{ not json\n");
+  assert.ok(failures(root).includes("source-parts-json"));
+});
+
+test("a parts manifest must point under its subject", (t) => {
+  const root = splitFixture(t);
+  mutateManifest(root, (data) => {
+    data.text = "sources/other/book.txt";
+  });
+  assert.ok(failures(root).includes("source-parts-text"));
+});
+
+test("a parts manifest total must match the original", (t) => {
+  const root = splitFixture(t);
+  mutateManifest(root, (data) => {
+    data.total_lines = 7;
+  });
+  assert.ok(failures(root).includes("source-parts-total"));
+});
+
+test("a parts manifest needs a non-empty parts list", (t) => {
+  const root = splitFixture(t);
+  mutateManifest(root, (data) => {
+    data.parts = [];
+  });
+  assert.ok(failures(root).includes("source-parts-list"));
+});
+
+test("parts must be numbered in order", (t) => {
+  const root = splitFixture(t);
+  mutateManifest(root, (data) => {
+    data.parts[1].part = 3;
+  });
+  assert.ok(failures(root).includes("source-parts-order"));
+});
+
+test("a part range must start at line 1 or later", (t) => {
+  const root = splitFixture(t);
+  mutateManifest(root, (data) => {
+    data.parts[0].start = 0;
+  });
+  assert.ok(failures(root).includes("source-parts-range"));
+});
+
+test("overlapping parts fail", (t) => {
+  const root = splitFixture(t);
+  mutateManifest(root, (data) => {
+    data.parts[1].start = 3;
+  });
+  assert.ok(failures(root).includes("source-parts-coverage"));
 });

@@ -13,28 +13,28 @@ steps:
   - id: exact-round-conductor-geometries
     purpose: "用同軸、雙圓柱與圓柱對平面三條封閉式估出 via pair 與導線的 loop L，並指出長度才是主導變數。"
     sources:
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L6029-L6121]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.7.part.txt#L229-L321]]"
   - id: from-round-loop-to-25nh-per-inch
     purpose: "用圓迴路公式算出板級 loop L，並解釋面積與 Dk 為何無關、25 nH/inch 從何而來。"
     sources:
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L6122-L6227]]"
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L6575-L6629]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.7.part.txt#L322-L427]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.7.part.txt#L775-L829]]"
   - id: sheet-inductance-of-wide-conductors
     purpose: "用「每個 square 都一樣」的 sheet inductance 估平面對與寬導體，並說出 10:1 的失效邊界。"
     sources:
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L6228-L6348]]"
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L6349-L6413]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.7.part.txt#L428-L548]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.7.part.txt#L549-L613]]"
   - id: uniform-line-z0-times-td
     purpose: "用 L = Z0·TD 與 8.3 nH/inch 估均勻傳輸線，並在窄長與寬扁之間選對近似法。"
     sources:
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L6414-L6496]]"
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L6497-L6574]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.7.part.txt#L614-L696]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.7.part.txt#L697-L774]]"
   - id: extracting-loop-l-from-s-parameters
     purpose: "從 shorted via pair 的 S11 算出 Zin 與 loop L，並用 λ/20 判斷結果可信到幾 GHz。"
     sources:
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L6630-L6755]]"
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L6756-L6816]]"
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L6817-L6862]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.7.part.txt#L830-L955]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.7.part.txt#L956-L1016]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.7.part.txt#L1017-L1062]]"
 created: 2026-10-31
 updated: 2026-11-01
 ---

@@ -4,6 +4,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 import { countArticleCharacters } from "../src/article.mjs";
+import { normalizeStepPlan } from "../src/article-agent-bridge.mjs";
 import { maxQuestionsFor, validateQuizPayload } from "../src/quiz.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -74,6 +75,11 @@ function rel(root, path) {
 function countLines(text) {
   if (!text) return 0;
   return (text.match(/\n/g) || []).length;
+}
+
+function countSourceLines(text) {
+  if (!text) return 0;
+  return countLines(text) + (text.endsWith("\n") ? 0 : 1);
 }
 
 function lineSlice(text, start, end) {
@@ -151,8 +157,11 @@ function scanSubject(root, subject) {
     rel: path.slice(sourcesRoot.length + 1),
   }));
   const sourceByRel = new Map(sources.map((source) => [source.rel, source]));
+  const manifests = sources
+    .filter((source) => source.rel.endsWith(".parts.json"))
+    .map((source) => ({ path: source.path, rel: source.rel }));
 
-  return { subjectDir, nodesDir, nodes, steps, quizFiles, digests, sources, sourceByRel };
+  return { subjectDir, nodesDir, nodes, steps, quizFiles, digests, sources, sourceByRel, manifests };
 }
 
 function parseSourceLink(link) {
@@ -226,6 +235,10 @@ function buildDigestIndex(report, root, subject, scan) {
       if (!parseLocator(match[1].trim())) {
         report.fail(file, 0, "digest-locator", `locator "#${match[1].trim()}" must be #Lx or #Lx-Ly`);
       }
+    }
+
+    for (const match of body.matchAll(/^\s*[-*]\s+`?#L\d+-\d+/gm)) {
+      report.fail(file, 0, "digest-locator", `locator "${match[0].trim()}" must be #Lx or #Lx-Ly`);
     }
 
     const ranges = [];
@@ -379,6 +392,181 @@ function resolveDigestSource(root, subject, scan, raw) {
     return source.rel === clean || sourceStem === stem;
   });
   return matches.length === 1 ? matches[0] : null;
+}
+
+function normalizeSourceRef(root, subject, raw) {
+  const clean = String(raw).replace(/^\.\//, "").split("\\").join("/");
+  const prefix = `sources/${subject}/`;
+  if (clean.startsWith(prefix)) return clean.slice(prefix.length);
+  if (clean.startsWith("sources/")) return null;
+  if (isAbsolute(clean)) {
+    const suffix = relative(join(root, "sources", subject), clean).split("\\").join("/");
+    if (suffix && !suffix.startsWith("..")) return suffix;
+  }
+  return null;
+}
+
+function checkSourceParts(report, root, subject, scan, digestInfo) {
+  if (scan.manifests.length === 0) return;
+
+  for (const manifest of scan.manifests) {
+    const file = rel(root, manifest.path);
+    let data;
+    try {
+      data = JSON.parse(readFileSync(manifest.path, "utf8"));
+    } catch (error) {
+      report.fail(file, 1, "source-parts-json", `invalid parts manifest: ${error.message}`);
+      continue;
+    }
+
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      report.fail(file, 1, "source-parts-json", "parts manifest must be a JSON object");
+      continue;
+    }
+    if (typeof data.text !== "string" || !data.text.trim()) {
+      report.fail(file, 1, "source-parts-text", "parts manifest needs a text path");
+      continue;
+    }
+    const textRel = normalizeSourceRef(root, subject, data.text.trim());
+    if (!textRel) {
+      report.fail(file, 1, "source-parts-text", `parts manifest text "${data.text}" is not under sources/${subject}/`);
+      continue;
+    }
+    const total = Number(data.total_lines);
+    if (!Number.isInteger(total) || total < 1) {
+      report.fail(file, 1, "source-parts-total", "parts manifest total_lines must be a positive integer");
+      continue;
+    }
+    if (!Array.isArray(data.parts) || data.parts.length === 0) {
+      report.fail(file, 1, "source-parts-list", "parts manifest needs a non-empty parts list");
+      continue;
+    }
+
+    const original = join(root, "sources", subject, textRel);
+    if (existsSync(original)) {
+      const actual = countSourceLines(readFileSync(original, "utf8"));
+      if (actual !== total) {
+        report.fail(file, 1, "source-parts-total", `total_lines ${total} does not match ${actual} lines in ${textRel}`);
+      }
+    }
+
+    const directory = dirname(textRel).split("\\").join("/");
+    const directoryKey = directory === "." ? "" : `${directory}/`;
+    const partBySourceKey = new Map();
+    const digestBySourceKey = new Map();
+    let previousEnd = 0;
+    let sum = 0;
+    let valid = true;
+
+    for (const [index, part] of data.parts.entries()) {
+      if (!part || typeof part !== "object" || Array.isArray(part)) {
+        report.fail(file, 0, "source-parts-list", `parts[${index}] must be an object`);
+        valid = false;
+        continue;
+      }
+      if (part.part !== index + 1) {
+        report.fail(file, 0, "source-parts-order", `parts[${index}].part must be ${index + 1}`);
+        valid = false;
+      }
+      if (typeof part.file !== "string" || !part.file || basename(part.file) !== part.file) {
+        report.fail(file, 0, "source-parts-file", `parts[${index}].file must be a filename`);
+        valid = false;
+        continue;
+      }
+      const start = Number(part.start);
+      const end = Number(part.end);
+      const lines = Number(part.lines);
+      if (![start, end, lines].every((value) => Number.isInteger(value)) || start < 1 || end < start) {
+        report.fail(file, 0, "source-parts-range", `parts[${index}] has an invalid line range`);
+        valid = false;
+        continue;
+      }
+      if (lines !== end - start + 1) {
+        report.fail(file, 0, "source-parts-lines", `parts[${index}].lines must equal ${end - start + 1}`);
+        valid = false;
+      }
+      if (start !== previousEnd + 1) {
+        report.fail(
+          file,
+          0,
+          "source-parts-coverage",
+          start === previousEnd ? `parts[${index}] overlaps the previous part` : `parts[${index}] leaves a gap before line ${start}`,
+        );
+        valid = false;
+      }
+      previousEnd = end;
+      sum += lines;
+
+      const partPath = join(root, "sources", subject, directory, part.file);
+      if (!existsSync(partPath)) {
+        report.fail(file, 0, "source-parts-file", `parts[${index}] file "${part.file}" does not exist`);
+        valid = false;
+        continue;
+      }
+      const actual = countLines(readFileSync(partPath, "utf8"));
+      if (actual !== lines) {
+        report.fail(file, 0, "source-parts-lines", `parts[${index}] ${part.file} has ${actual} lines, manifest says ${lines}`);
+        valid = false;
+      }
+
+      const key = `sources/${subject}/${directoryKey}${part.file}`;
+      partBySourceKey.set(key, part.part);
+      digestBySourceKey.set(key, []);
+    }
+
+    if (previousEnd !== total || sum !== total) {
+      report.fail(
+        file,
+        0,
+        "source-parts-coverage",
+        `parts cover lines 1-${previousEnd} (${sum} lines), manifest says ${total}`,
+      );
+      valid = false;
+    }
+
+    for (const entry of digestInfo.meta) {
+      if (typeof entry.data.source !== "string") continue;
+      const digestSource = normalizeSourceRef(root, subject, entry.data.source.trim());
+      if (!digestSource) continue;
+      if (digestSource === textRel) {
+        report.fail(
+          entry.file,
+          1,
+          "digest-source-split",
+          `digest must cite a part file, not the unsplit source ${data.text}`,
+        );
+        continue;
+      }
+      const key = `sources/${subject}/${digestSource}`;
+      if (partBySourceKey.has(key)) digestBySourceKey.get(key).push(entry);
+    }
+
+    if (!valid) continue;
+
+    for (const [key, partNumber] of partBySourceKey) {
+      const entries = digestBySourceKey.get(key) || [];
+      if (entries.length === 0) {
+        report.fail(file, 0, "source-parts-digest-missing", `part ${partNumber} (${key}) has no digest part`);
+      } else if (entries.length > 1) {
+        report.fail(
+          file,
+          0,
+          "source-parts-digest-duplicate",
+          `part ${partNumber} (${key}) is claimed by ${entries.length} digests`,
+        );
+      }
+      for (const entry of entries) {
+        if (entry.data.part !== undefined && Number(entry.data.part) !== partNumber) {
+          report.fail(
+            entry.file,
+            1,
+            "source-parts-digest-part",
+            `digest part ${entry.data.part} does not match manifest part ${partNumber}`,
+          );
+        }
+      }
+    }
+  }
 }
 
 function checkNoMdx(report, root, subject = null) {
@@ -729,6 +917,21 @@ function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nod
         );
       }
     }
+    for (const name of readdirSync(nodeStepDir)) {
+      if (!name.endsWith(".plan.json")) continue;
+      const stepId = name.slice(0, -".plan.json".length);
+      const planPath = join(nodeStepDir, name);
+      const planFile = rel(root, planPath);
+      if (!seen.has(stepId)) {
+        report.fail(planFile, 0, "image-plan-orphan", `image plan has no step "${stepId}"`);
+        continue;
+      }
+      try {
+        normalizeStepPlan(readFileSync(planPath, "utf8"));
+      } catch (error) {
+        report.fail(planFile, 0, "image-plan", error?.message ?? "invalid image plan");
+      }
+    }
   }
 
   const items = parseStepsSection(body);
@@ -1043,6 +1246,7 @@ export function runChecks({ root = REPO_ROOT, subject, node = null }) {
 
   checkNoMdx(report, root, node ? subject : null);
   const digestInfo = buildDigestIndex(report, root, subject, scan);
+  checkSourceParts(report, root, subject, scan, digestInfo);
   const nodeDigests = new Map();
 
   const nodesById = new Map(scan.nodes.map((item) => [item.id, item]));

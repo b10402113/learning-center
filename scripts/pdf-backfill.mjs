@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
@@ -17,6 +17,12 @@ function findPdfs(dir, out = []) {
   return out;
 }
 
+function hasPartFiles(pdf) {
+  const dir = dirname(pdf);
+  const stem = basename(pdf).replace(/\.pdf$/i, "");
+  return readdirSync(dir).some((name) => name.startsWith(`${stem}.`) && /\.part\.txt$/i.test(name));
+}
+
 export function backfillPdfs({ root = REPO_ROOT, subject, pdftotext = "pdftotext", dryRun = false }) {
   const subjectDir = join(root, "sources", subject);
   const pdfs = findPdfs(subjectDir).sort();
@@ -24,7 +30,7 @@ export function backfillPdfs({ root = REPO_ROOT, subject, pdftotext = "pdftotext
 
   for (const pdf of pdfs) {
     const txt = pdf.replace(/\.pdf$/i, ".txt");
-    if (existsSync(txt)) {
+    if (existsSync(txt) || hasPartFiles(pdf)) {
       result.skipped.push(pdf);
       continue;
     }

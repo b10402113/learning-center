@@ -70,10 +70,13 @@ test("prepare asks publishers for markers only and reports skipped steps without
   const [step] = report.steps;
   assert.equal(step.id, "s2");
   assert.equal(report.nodeFile, join(root, "learn/test/nodes/n1.md"));
-  assert.equal(report.teachingPlan, join(root, "learn/test/output/jobs/n1/teaching-plan.md"));
+  assert.equal(report.teachingPlan, join(root, "learn/test/output/n1/teaching-plan.md"));
   assert.match(step.command, /--markers-only/);
   assert.match(step.command, /--mode direct/);
-  assert.match(step.plan, /learn\/test\/output\/image-plans\/n1\/s2\.json$/);
+  assert.equal(step.material, "learn/test/output/n1/s2/material.json");
+  assert.equal(step.original, "learn/test/output/n1/s2/original.md");
+  assert.equal(step.polish, "learn/test/output/n1/s2/polish.md");
+  assert.equal(step.plan, "learn/test/nodes/n1/s2.plan.json");
   assert.deepEqual(report.skipped, [
     {
       id: "s1",
@@ -113,15 +116,20 @@ test("render accepts --step and --max-parallel and skips a step with no plan", (
   assert.equal(report.steps[0].status, "no-plan");
 });
 
-test("prepare --force clears the step's shared and legacy plans", (t) => {
+test("prepare --force clears stale run metadata but keeps the original and plan", (t) => {
   const root = fixture(t);
-  write(root, "learn/test/output/jobs/n1/s1/s1.plan.json", "[]");
-  write(root, "learn/test/output/image-plans/n1/s1.json", "[]");
+  write(root, "learn/test/output/n1/s1/original.md", "# Old\n");
+  write(root, "learn/test/output/n1/s1/polish.md", "# Old\n");
+  write(root, "learn/test/output/n1/s1/result.json", "{}");
+  write(root, "learn/test/nodes/n1/s1.plan.json", "[]");
   execFileSync(
     process.execPath,
     [CLI, "prepare", "--subject", "test", "--node", "n1", "--step", "s1", "--force", "--root", root],
     { encoding: "utf8" },
   );
-  assert.equal(existsSync(join(root, "learn/test/output/jobs/n1/s1/s1.plan.json")), false);
-  assert.equal(existsSync(join(root, "learn/test/output/image-plans/n1/s1.json")), false);
+  assert.equal(existsSync(join(root, "learn/test/output/n1/s1/original.md")), true);
+  assert.equal(existsSync(join(root, "learn/test/output/n1/s1/polish.md")), false);
+  assert.equal(existsSync(join(root, "learn/test/output/n1/s1/result.json")), false);
+  assert.equal(existsSync(join(root, "learn/test/output/n1/s1/material.json")), true);
+  assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1.plan.json")), true);
 });

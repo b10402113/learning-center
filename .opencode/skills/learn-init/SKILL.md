@@ -27,6 +27,22 @@ node scripts/pdf-backfill.mjs --subject <subject>
 
 Every PDF gets a sibling `.txt`; an existing `.txt` is never overwritten, so line numbers stay stable. All digests and citations point at the `.txt`, never the PDF.
 
+## Split long text sources
+
+Before reading, plan the split for any `.txt` over 3,000 lines or 250 KB:
+
+```bash
+node scripts/split-sources.mjs --subject <subject> --dry-run
+```
+
+Show the chunk table to the learner and wait for explicit confirmation. If they decline, stop the split and say why the long source cannot be digested without it; do not silently fall back to the unsplit file. On confirmation run:
+
+```bash
+node scripts/split-sources.mjs --subject <subject> --apply
+```
+
+This writes `<stem>.<n>.part.txt` and `<stem>.parts.json`, deletes the original `.txt`, and keeps the PDF. Every later digest and citation uses part-local line numbers and one part digest per chunk. Short sources skip this step.
+
 ## Read the material first
 
 Follow the shared `docs/reference/source-reading.md` protocol — never read a source directly and never load a large source into the main context wholesale. Concretely:
@@ -37,7 +53,7 @@ Follow the shared `docs/reference/source-reading.md` protocol — never read a s
       - **Codebase directory:** detect by file extension — if the directory contains ≥ 1 source code file (`.py`, `.ts`, `.js`, `.go`, `.rs`, `.java`, `.c`, `.cpp`, `.rb`, `.swift`, `.kt`, `.php`), treat it as a codebase. Search digests by frontmatter `source` for this directory; check `learn/<subject>/digests/<dir-stem>.md` (small) or part files (large). If it exists and has `status: pending`, skip. If missing, build it per the codebase digest workflow in `source-reading.md`; its L2 is also a `#Lx-Ly` line map. The `dir-stem` is the directory name.
       - **Images and image folders (`.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, and any `images/` folder):** read every image with the Read tool — a visual source teaches through its pictures as much as its text, so frames, screenshots, slides and diagrams are source material too. Record each image's content in the digest's L2 as an image path plus what it shows and what it teaches (no line range). Never infer an image from its filename or its neighbours' text.
    - **Pass 3 — text digests.** Only after every supplement digest is written, build the PDF/text digests:
-      - **PDF / text file:** search `learn/<subject>/digests/*.md` for a digest whose frontmatter `source` is this file. If it exists and has `status: pending`, skip. If missing, build it via the sub-agent workflow (large sources) or read directly in the main context and write it yourself (small sources). Name it `<source-stem>.md`, or `<cluster-name>-<source-stem>.md` when `/ingest` grouped it with others. The digest is an L1 overview plus an L2 line map (`#L1-L11`, `#L12-L25`, …); `source_lines` must equal the actual `.txt` line count and every citation points at the `.txt`.
+      - **PDF / text file:** search `learn/<subject>/digests/*.md` for a digest whose frontmatter `source` is this file or one of its part files. If it exists and has `status: pending`, skip. If missing, build it via the sub-agent workflow (large sources, one digest per `.part.txt`) or read directly in the main context and write it yourself (small sources). Name it `<source-stem>.md` for a single file, or `<source-stem>.<n>.part.md` per part. The digest is an L1 overview plus an L2 line map (`#L1-L11`, `#L12-L25`, …); `source_lines` must equal the cited chunk's actual line count, `part` matches the manifest, and every citation uses part-local lines.
       - **Related code and figures:** when a text source refers to code or figures from pass 2, list the supplement digest plus the entry to use in its `supplements` frontmatter — `<digest>.md#Lx-Ly` for one of the codebase digest's L2 ranges, or `<digest>.md#L1` for an image digest's overview (see `docs/reference/source-reading.md`). Only `text` digests carry `supplements`; targets must be `codebase` or `image` digests.
    Every new digest must have `status: pending` in its frontmatter.
 2. **Load L1 + TOC.** Read only the L1 overviews (and the sub-agents' compact TOC lines), not the L2 section detail. This is the ground truth your grilling questions will probe and your MEMORY will anchor to.

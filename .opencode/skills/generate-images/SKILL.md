@@ -7,7 +7,7 @@ argument-hint: "<subject>/<node> [--step <id>] [--force] [--max-parallel <n>]"
 
 Invoke as `/generate-images <subject>/<node> [--step <id>] [--force] [--max-parallel <n>]`.
 
-這是一個 thin shell：`src/render-images.mjs` 讀文章裡的 marker 與 `learn/<subject>/output/image-plans/<node>/<step>.json`，逐張產生或重用 WebP，再把 marker 換成圖片行。它不規劃、不改文章其他內容、不讀 `anchor`。
+這是一個 thin shell：`src/render-images.mjs` 讀文章裡的 marker 與 `learn/<subject>/nodes/<node>/<step>.plan.json`，逐張產生或重用 WebP，再把 marker 換成圖片行。它不規劃、不改文章其他內容、不讀 `anchor`。
 
 1. **Resolve the target.** 參數是 `subject/node`，在 repo root 執行。不要從敘述推測 subject 或 node。
 

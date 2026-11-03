@@ -1,7 +1,7 @@
 ---
-source: sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt
+source: sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.1.part.txt
 source_type: text
-source_lines: 25393
+source_lines: 837
 part: 1
 status: absorbed
 absorbed_at: 2026-10-31

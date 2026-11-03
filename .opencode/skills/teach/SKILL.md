@@ -15,9 +15,9 @@ The dispatch supplies:
 
 - the node container `learn/<subject>/nodes/<node-id>.md` — the steps array is the contract
 - `learn/<subject>/MEMORY.md` — mission, reader profile, and output language
-- one material bundle per ready step at `learn/<subject>/output/materials/<node>/<step>.json`
+- one material bundle per ready step at `learn/<subject>/output/<node>/<step>/material.json`
 - the published articles of skipped steps, when any exist
-- the plan path: `learn/<subject>/output/jobs/<node-id>/teaching-plan.md`
+- the plan path: `learn/<subject>/output/<node>/teaching-plan.md`
 - the output language
 
 A bundle's `sources[]` carries `path`, `locator`, and `text`; `text` is the exact cited slice, and its `locator` is a coarse range covering the whole step. Work from local material only. Do not search the web, and do not add knowledge the bundles do not support.

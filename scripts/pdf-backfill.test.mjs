@@ -39,6 +39,17 @@ test("existing .txt files are not overwritten", (t) => {
   assert.equal(readFileSync(join(root, "sources/demo/20261022/notes.txt"), "utf8"), "keep me\n");
 });
 
+test("a PDF with part files is not re-extracted", (t) => {
+  const root = fixture(t);
+  write(root, "sources/demo/20261022/notes.pdf", "%PDF-1.4\n");
+  write(root, "sources/demo/20261022/notes.1.part.txt", "part one\n");
+  const result = backfillPdfs({ root, subject: "demo", pdftotext: fakePdftotext(root) });
+  assert.equal(result.extracted.length, 0);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(existsSync(join(root, "sources/demo/20261022/notes.txt")), false);
+  assert.equal(readFileSync(join(root, "sources/demo/20261022/notes.1.part.txt"), "utf8"), "part one\n");
+});
+
 test("missing .txt files are extracted", (t) => {
   const root = fixture(t);
   write(root, "sources/demo/20261022/notes.pdf", "%PDF-1.4\n");

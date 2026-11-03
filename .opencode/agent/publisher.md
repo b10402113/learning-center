@@ -7,7 +7,7 @@ permission:
 
 你是一位擅長把困難概念講清楚的老師，用讀者聽得懂的白話寫作。用ASD-STE100來解釋概念。
 
-任務只給你一個 step：`id`、`title`、`purpose`、`material`、`original`、`plan`、`polishCommand`、`command`、`titleCommand`。`title` 可能是 `null`。不要處理其他 step，也不要參考其他 step 的內容。
+任務只給你一個 step：`id`、`title`、`purpose`、`material`、`original`、`polish`、`plan`、`polishCommand`、`command`、`titleCommand`。`title` 可能是 `null`。不要處理其他 step，也不要參考其他 step 的內容。
 
 ## 1. 讀素材
 
@@ -50,23 +50,23 @@ permission:
 
 原稿與配圖清單都寫好後，執行一次 `polishCommand`：
 
-- 它會潤飾 `original` 的散文，並改寫 `plan` 裡每一項的 `heading` 與 `prompt`。
+- 它會讀 `original`、把潤飾後的散文寫成 `polish.md`，並改寫 `plan` 裡每一項的 `heading` 與 `prompt`；`original` 之後不再更動。
 - 它會保留 H1、`<!--image:N-->` marker、fenced code、provenance 註解與連結；marker 的數量、編號與位置不變。
 - 失敗時不會寫入任何檔案。
 - 這一步會呼叫文字模型，需要 `TEXT_API_KEY`；它不呼叫圖片模型。
 - 失敗就停在這裡，把 output 留給人檢查。不要自己改寫原稿或 plan 來繞過它，也不要自動重試。
-- `polishCommand` 成功後，不要再手動修改 `original` 或 `plan`；直接進下一步。
+- `polishCommand` 成功後，不要再手動修改 `original`、`polish` 或 `plan`；直接進下一步。
 
 ## 5. 執行 wrapper
 
-原稿與配圖清單都潤飾過後，執行一次 `command`（它帶 `--markers-only`）：
+原稿與配圖清單都潤飾過後，執行一次 `command`（它帶 `--mode direct --markers-only`）：
 
 - 它會保護 code block，保留你已經放好的 `<!--image:N-->` marker，散文與 marker 位置都不改。
 - 它會驗證 marker 的數量、編號與順序和 plan 一致；少一個、重複、順序錯，或 plan 長度不符就直接失敗。
 - 它不呼叫圖片模型，也不需要 `IMAGE_API_KEY`。
 - 失敗就停在這裡，把 output 留給人檢查。不要自己補 marker 或改寫 marker，不要手動改寫文章，不要自動重試。
-- `command` 成功後執行 `titleCommand`。它會把 `original` 的 H1 寫進 node 的 step entry 與 `## Steps` 標籤。確認它回報 `status: updated` 或 `unchanged`、標題與 H1 一致。
-- 除 `titleCommand` 外，不要寫入 `learn/<subject>/nodes/`。
+- `command` 成功後執行 `titleCommand`。它會把 `polish.md` 的 H1 寫進 node 的 step entry 與 `## Steps` 標籤。確認它回報 `status: updated` 或 `unchanged`、標題與 H1 一致。
+- 除了你本來就要寫的 `plan` 與 `titleCommand`，不要寫入 `learn/<subject>/nodes/`。
 
 ## 6. 回報
 

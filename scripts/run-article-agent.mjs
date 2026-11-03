@@ -28,10 +28,9 @@ const usage = `Usage:
 Runs one step through the article pipeline. It protects the code blocks and reads
 the publisher's image plan first.
 
---mode direct (default) keeps the publisher's own <!--image:N--> markers when they
-match the plan in count and order, and leaves the prose exactly as written. A plan
-that still carries anchors gets the legacy insertion at those anchors. No text
-model is called.
+--mode direct (default) reads polish.md, checks that its <!--image:N--> markers match
+the plan in count and order, and writes result.json. The publisher must place the
+markers; a plan without markers is an error. No text model is called.
 
 --mode translate is legacy: it translates a non-Chinese original into Traditional
 Chinese with prompts/translate.txt. The pipeline never uses it.
@@ -39,8 +38,7 @@ Chinese with prompts/translate.txt. The pipeline never uses it.
 --mode rewrite keeps the old behaviour: article-agent rewrites the original,
 inserts the markers, and stops after them.
 
-Both modes stop after the markers when --markers-only is set, so no image model
-is called.`;
+--markers-only stops before any image model call.`;
 
 const PARTIAL = /partial files: (.+)$/m;
 
@@ -78,15 +76,16 @@ async function main() {
 
   const files = jobFiles(root, { subject: values.subject, node: values.node, step: entry.id });
   mkdirSync(files.dir, { recursive: true });
-  if (!existsSync(files.original)) {
-    throw new Error(`original article not found: ${relative(root, files.original)}`);
+  const sourceFile = mode === "direct" ? files.polish : files.original;
+  if (!existsSync(sourceFile)) {
+    throw new Error(`article not found: ${relative(root, sourceFile)}`);
   }
 
   const markersOnly = values["markers-only"];
   if (markersOnly && !existsSync(files.plan)) {
     throw new Error("--markers-only requires an image plan");
   }
-  const original = readFileSync(files.original, "utf8");
+  const original = readFileSync(sourceFile, "utf8");
   const plan =
     values["no-images"] && !markersOnly
       ? null
@@ -117,48 +116,33 @@ function runDirect({ root, files, entry, plan, markersOnly, protectedText }) {
   const markers = [...protectedText.matchAll(/<!--\s*image:(\d+)\s*-->/g)].map((match) =>
     Number(match[1]),
   );
-  let article;
-  if (markers.length > 0) {
-    if (plan) {
-      const expected = plan.map((item) => item.index);
-      const same =
-        markers.length === expected.length &&
-        markers.every((value, index) => value === expected[index]);
-      if (!same) {
-        throw new Error(
-          `the original has image markers ${markers.join(", ")} but the plan expects ${expected.join(", ")}`,
-        );
-      }
+  if (plan && markers.length > 0) {
+    const expected = plan.map((item) => item.index);
+    const same =
+      markers.length === expected.length &&
+      markers.every((value, index) => value === expected[index]);
+    if (!same) {
+      throw new Error(
+        `the article has image markers ${markers.join(", ")} but the plan expects ${expected.join(", ")}`,
+      );
     }
-    article = `${protectedText.trimEnd()}\n`;
-  } else if (plan) {
-    for (const item of plan) {
-      if (!item.anchor) {
-        throw new Error(
-          `image plan item ${item.index} has no anchor and the original has no <!--image:N--> markers`,
-        );
-      }
-      if (!protectedText.includes(item.anchor)) {
-        throw new Error(`image plan item ${item.index} anchor is not in the unprotected prose: ${item.anchor}`);
-      }
-    }
-    article = insertImageMarkers(protectedText, plan);
-  } else {
-    article = `${protectedText.trimEnd()}\n`;
+  } else if (plan && markers.length === 0) {
+    throw new Error(
+      "the article has no <!--image:N--> markers; the publisher must place them where the plan expects the figures",
+    );
   }
-  writeFileSync(files.protected, article);
   writeJson(files.request, {
     mode: "direct",
     title: entry.title ?? null,
-    articleFile: relative(root, files.protected),
+    articleFile: relative(root, files.polish),
     plan: plan ?? null,
     markersOnly: Boolean(markersOnly),
   });
-  writeFileSync(files.marked, article.endsWith("\n") ? article : `${article}\n`);
   const verdict = {
     status: "completed",
+    mode: "direct",
     outputDir: files.dir,
-    article: files.marked,
+    article: files.polish,
     images: [],
     textModel: null,
     textRequests: 0,

@@ -14,31 +14,31 @@ steps:
     title: "串聯 RLC 電路：低頻只由電容決定，高頻只由電感決定"
     purpose: "從 Z(f) 的谷反推 series RLC 的 fres 與 Z0，並說出哪個元件決定低頻與高頻兩端。"
     sources:
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L1688-L1777]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.3.part.txt#L424-L513]]"
   - id: parallel-rlc-peak
     title: "阻抗曲線上的峰，幾乎都是並聯 RLC 電路"
     purpose: "從 Z(f) 的峰反推 parallel RLC 的 PRF，並解釋為何阻抗曲線上的峰幾乎都是 parallel RLC。"
     sources:
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L1778-L1824]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.3.part.txt#L514-L560]]"
   - id: q-and-figures-of-merit
     title: "每個 RLC 電路都有四個重要的 figures of merit"
     purpose: "算出 fres、Z0、q 與 Zmin／Zmax，並用 q 判斷阻尼要加到多少。"
     sources:
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L1825-L1935]]"
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L1936-L1985]]"
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L1986-L2056]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.3.part.txt#L561-L671]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.3.part.txt#L672-L721]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.3.part.txt#L722-L792]]"
   - id: die-vs-board-two-views
     title: "從板子看是谷，從 die 看是峰"
     purpose: "用同一組 L、C、R 解釋 board 看到谷、die 看到峰，並把兩個 R 合成 R_eq。"
     sources:
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L2057-L2157]]"
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L2158-L2195]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.3.part.txt#L793-L893]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.3.part.txt#L894-L931]]"
   - id: ringing-fingerprints-the-peak
     title: "Ringing 電壓雜訊是阻抗峰的跡象"
     purpose: "用上升時間與 ringing 週期判斷電流會激發哪個峰，並說明振幅與頻率各由誰決定。"
     sources:
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L2196-L2260]]"
-      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.txt#L2261-L2304]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.3.part.txt#L932-L996]]"
+      - "[[sources/principle-pi/20261031/Principles of power integrity for PDN design -- simplified robust and cost effective design for high speed digital products.3.part.txt#L997-L1040]]"
 created: 2026-10-31
 updated: 2026-11-01
 ---
