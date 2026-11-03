@@ -140,21 +140,17 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 
    `steps[]` carries `article`, `title`, `characters`, `minQuestions`, and `maxQuestions`; `skipped[]` explains `article-missing`, `article-empty`, or `quiz-exists`. Record skips and continue.
 
-   **6b. Dispatch quiz agents.** Combine the ready steps from every node into one list and batch it by `max-subagents`. Run batches sequentially; within a batch dispatch one `task` call per step in a single message, every call with `subagent_type: quiz-agent` and the [Quiz-prompt](#quiz-prompt) filled in. Give the agent only that step's article path, title, character count, and question range. The agent returns JSON and writes no files.
+   **6b. Dispatch quiz agents.** One `quiz-agent` per node, so a node's steps cost one subagent launch. Batch the nodes by `max-subagents`; within a batch dispatch one `task` call per node in a single message, every call with `subagent_type: quiz-agent` and the [Quiz-prompt](#quiz-prompt) filled in for that node's ready steps. Give the agent only its node's step fields and candidate paths. The agent writes `learn/<subject>/output/quiz-candidates/<node>/<step>.json` itself and returns the paths it wrote.
 
-   **6c. Write and validate.** For each agent response, create the candidate directory if needed and write the returned JSON verbatim to:
-
-   ```text
-   learn/<subject>/output/quiz-candidates/<node>/<step>.json
-   ```
-
-   Then run:
+   **6c. Write and validate.** Run one `write` per ready step:
 
    ```bash
    node scripts/quiz.mjs write --subject <subject> --node <node> --step <step> --input learn/<subject>/output/quiz-candidates/<node>/<step>.json [--force]
    ```
 
-   The script validates the schema, the 3–8 question window, and the article's character-based ceiling before writing `<step>.quiz.json`. A failed step keeps its candidate file and error; continue with the next step. Never hand-write or hand-edit questions, and never insert them into the article Markdown.
+   The script validates the schema, the 3–8 question window, the article's character-based ceiling, and the option shape (`quiz-option-length`, `quiz-answer-spread`). Only a passing file becomes `<step>.quiz.json`. The agent self-checks every candidate with `node scripts/quiz.mjs check` before returning, so `write` normally passes on the first call.
+
+   When `write` reports `quiz-option-length`, `quiz-answer-spread`, or a `quiz-file-*` error, re-dispatch that node's agent once with the failed steps' errors quoted, then rerun `write` for those steps. A step that fails the second time keeps its candidate file and error and the batch continues. Never hand-write or hand-edit questions, and never insert them into the article Markdown.
 
    **6d. Verify and rebuild viewer data.** Run `node scripts/verify.mjs --node <subject>/<node>` for every node the Quiz phase processed. When at least one sidecar was written, run:
 
@@ -178,7 +174,7 @@ Completion, for every phase that ran:
 - **Article** — every step that needed an article was prepared, dispatched to its own publisher, and either published with a formal plan and matching markers or reported failed; every multi-step node that received a new article also received the continuity edit unless `-no-continuity` was set; every published node passes `node scripts/verify.mjs --node <subject>/<node>`.
 - **Humanize** — every eligible step was either humanized or skipped for a recorded reason; each humanized article kept its H1, code, provenance, markers, image lines, quiz blocks, and links; each plan kept its length, order, and any existing `anchor` with only `heading` and `prompt` changed; every processed node verifies clean.
 - **Generate** — every marker-backed step has its `image-N.webp` files and its markers replaced by uncaptioned image lines; rerun without `-force` reports `already-rendered` or reuses images; every processed node verifies clean.
-- **Quiz** — every step that needed a sidecar was dispatched to its own quiz-agent and either has a validated sidecar or a recorded failure; `course-app` data was regenerated when any sidecar was written.
+- **Quiz** — every step that needed a sidecar was covered by its node's quiz-agent and either has a validated sidecar or a recorded failure; `course-app` data was regenerated when any sidecar was written.
 
 The final report lists the outcome of every phase that ran.
 
@@ -278,16 +274,22 @@ Report back: whether you changed the article and/or plan, the edit count, a shor
 
 ## Quiz-prompt
 
-Dispatch every call with `subagent_type: quiz-agent`. Fill the fields from `quiz.mjs prepare`'s `steps[]`.
+Dispatch every call with `subagent_type: quiz-agent`. Fill one block per ready step from that node's `quiz.mjs prepare` output.
 
 ```
-Author the quiz sidecar for one published step. Read only this article and return only JSON; do not modify any file.
+Author the quiz sidecars for one node's published steps. Read only the articles listed and write only the candidate files listed.
 
-Article: <ARTICLE>
-Title: <TITLE>
-CJK character count: <CHARACTERS>
-Minimum questions: <MIN-QUESTIONS>
-Maximum questions: <MAX-QUESTIONS>
+Node: <SUBJECT>/<NODE>
 
-Write between <MIN-QUESTIONS> and <MAX-QUESTIONS> single-choice questions. Every correct answer must be directly supported by a sentence in this article, and no two questions may test the same concept. Use plausible distractors, keep each question self-contained, and write Traditional Chinese in the article's terminology. Return exactly the JSON object described in your agent instructions, with no commentary and no code fence.
+Steps:
+- id: <STEP-ID>
+  Article: <ARTICLE>
+  Title: <TITLE>
+  CJK character count: <CHARACTERS>
+  Questions: <MIN-QUESTIONS>-<MAX-QUESTIONS>
+  Candidate file: learn/<SUBJECT>/output/quiz-candidates/<NODE>/<STEP-ID>.json
+
+Every correct answer must be directly supported by a sentence in that step's article. No two questions may test the same concept, within a step or across these steps. Use plausible distractors, keep each question self-contained, and write Traditional Chinese in the article's terminology. The Option shape rules in your instructions are hard requirements: keep every option inside the one length band and rotate the correct index `(n − 1) mod <option count>`. When a range is a single number, write exactly that many questions.
+
+Self-check every file with `node scripts/quiz.mjs check --subject <SUBJECT> --node <NODE> --step <STEP-ID> --input <CANDIDATE>` and fix until each reports `"status": "ok"`. That is the only command you may run. Then report the paths you wrote.
 ```

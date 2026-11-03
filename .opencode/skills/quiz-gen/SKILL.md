@@ -36,8 +36,9 @@ Invoke as `/quiz-gen <subject>/<node> [--step <id>] [--force]`.
    - 每個 step 的 `id`、`article`（相對於 repo root）、`title`、`characters`、`minQuestions`、`maxQuestions`
    - 每個 step 要寫的候選檔路徑：`learn/<subject>/output/quiz-candidates/<node>/<step>.json`
    - 一句：「只讀列出的文章，把每個 step 寫成自己的候選檔，檔案路徑照上面給的。」
-   - 一句：「每個 step 至少 `minQuestions` 題、最多 `maxQuestions` 題；每題的正解都要能在該 step 的文章裡指到一句話；不同題不要重複考同一個概念，跨 step 也一樣。文章撐不到 3 題就不要寫檔，回報是哪個 step。」
-   - 一句：「選項要同型同長，最長不超過最短的 1.5 倍（至少容許差 6 個字）；正解位置要輪替，不能每題都放同一個位置。」
+   - 一句：「每個 step 至少 `minQuestions` 題、最多 `maxQuestions` 題；上下限相同就剛好寫那個數量；每題的正解都要能在該 step 的文章裡指到一句話；不同題不要重複考同一個概念，跨 step 也一樣。文章撐不到 3 題就不要寫檔，回報是哪個 step。」
+   - 一句：「Option shape 在你的 instructions 裡是硬規定：整題所有選項落在同一個長度帶，正解 index 依 `(n − 1) mod 選項數` 輪替。」
+   - 一句：「每寫完一個檔案就用 `node scripts/quiz.mjs check --subject <subject> --node <node> --step <step> --input <候選檔>` 自檢，修到 `"status": "ok"`；這是你唯一可以執行的指令。」
 
    不要給 node plan、其他 node、來源檔或課程目標。
 

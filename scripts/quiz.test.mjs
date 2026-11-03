@@ -3,7 +3,8 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { prepare, status, write } from "./quiz.mjs";
+import { check, prepare, status, write } from "./quiz.mjs";
+import { validateQuizPayload } from "../src/quiz.mjs";
 
 function writeFile(root, relative, content) {
   const path = join(root, relative);
@@ -242,4 +243,36 @@ test("write strips inline backticks because quiz cards render plain text", (t) =
   assert.equal(payload.questions[0].explain.includes("`"), false);
   assert.equal(payload.questions[0].question.includes("為什麽"), false);
   assert.equal(payload.questions[0].question.includes("為什麼"), true);
+});
+
+test("check validates a candidate without writing the sidecar", (t) => {
+  const root = fixture(t);
+  const input = join(root, "candidate.json");
+  writeFileSync(input, candidate(questions()));
+
+  const result = check({ ...options(root), input });
+  assert.equal(result.status, "ok");
+  assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1.quiz.json")), false);
+
+  const parked = questions().map((question) => ({ ...question, answer: 0 }));
+  writeFileSync(input, candidate(parked));
+  const failed = check({ ...options(root), input });
+  assert.equal(failed.status, "failed");
+  assert.ok(failed.errors.some((error) => error.checkId === "quiz-answer-spread"));
+  assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1.quiz.json")), false);
+});
+
+test("the option shape taught to quiz-agent passes validation", () => {
+  const shaped = [0, 1, 2, 3, 0, 1].map((answer, index) => ({
+    question: `問題 ${index}`,
+    options: [0, 1, 2, 3].map((offset) => "字".repeat(18 + ((index + offset) % 7))),
+    answer,
+    explain: "解釋。",
+  }));
+
+  const errors = validateQuizPayload(
+    { "quiz-generated": true, questions: shaped },
+    { maxQuestions: 8, enforceStyle: true },
+  );
+  assert.deepEqual(errors, []);
 });

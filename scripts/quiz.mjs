@@ -24,6 +24,7 @@ function usage() {
   console.error(`usage:
   node scripts/quiz.mjs prepare --subject <s> --node <n> [--step <id>] [--force]
   node scripts/quiz.mjs write   --subject <s> --node <n> --step <id> --input <file|-> [--force]
+  node scripts/quiz.mjs check   --subject <s> --node <n> --step <id> --input <file|->
   node scripts/quiz.mjs status  --subject <s> --node <n>`);
 }
 
@@ -215,6 +216,64 @@ function write(options) {
   };
 }
 
+function check(options) {
+  requireTarget(options);
+  if (!options.step) throw new Error("--step is required");
+
+  const node = readNode(options.root, options.subject, options.node);
+  const [entry] = selectSteps(node, options.step);
+  const info = articleInfo(options.root, options.subject, options.node, entry.id);
+  const targetRel = quizFileRel(options.subject, options.node, entry.id);
+
+  if (info.missing) {
+    return {
+      status: "failed",
+      step: entry.id,
+      output: targetRel,
+      errors: [
+        {
+          checkId: "quiz-article",
+          message: `article is missing or empty: ${relative(options.root, info.file)}`,
+        },
+      ],
+    };
+  }
+
+  let payload;
+  try {
+    payload = normalizeQuizOutput(readInput(options.input));
+  } catch (error) {
+    return {
+      status: "failed",
+      step: entry.id,
+      output: targetRel,
+      errors: [{ checkId: "quiz-output", message: error.message }],
+    };
+  }
+
+  const maxQuestions = maxQuestionsFor(info.characters);
+  const errors = validateQuizPayload(payload, { maxQuestions, enforceStyle: true });
+  if (errors.length > 0) {
+    return {
+      status: "failed",
+      step: entry.id,
+      output: targetRel,
+      characters: info.characters,
+      maxQuestions,
+      errors,
+    };
+  }
+
+  return {
+    status: "ok",
+    step: entry.id,
+    output: targetRel,
+    characters: info.characters,
+    maxQuestions,
+    questions: payload.questions.length,
+  };
+}
+
 function status(options) {
   requireTarget(options);
   const node = readNode(options.root, options.subject, options.node);
@@ -260,6 +319,7 @@ function main(argv) {
   let result;
   if (options.command === "prepare") result = prepare(options);
   else if (options.command === "write") result = write(options);
+  else if (options.command === "check") result = check(options);
   else if (options.command === "status") result = status(options);
   else throw new Error(`unknown command: ${options.command}`);
 
@@ -267,7 +327,7 @@ function main(argv) {
   if (result.status === "failed") process.exit(1);
 }
 
-export { prepare, status, write };
+export { check, prepare, status, write };
 
 const mainUrl = process.argv[1] ? resolve(process.argv[1]) : null;
 if (mainUrl === fileURLToPath(import.meta.url)) {

@@ -77,7 +77,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 | `/article` | `prepare` writes each step's material bundle into `output/<node>/<step>/` — its purpose plus the source files it cites; one `publisher` subagent per step reads those sources in full, writes that step's `original.md` with its 1–5 `<!--image:N-->` markers already in place, writes the matching plan to `nodes/<node>/<step>.plan.json`, chooses its title, runs `polish-article.mjs draft` to write `polish.md` and polish the plan while keeping the markers, then runs the step command to validate the markers and `titleCommand` to write the title back to the node; `publish` writes `<step>.md` from `polish.md` and verifies. It calls the text model for polish but never the image model, and never creates `<step>-assets/`. The main agent then edits prose only to add continuity between steps. |
 | `/humanize-article` | Processes only steps with a plan: `scripts/humanize-article.mjs prepare` copies `step.md` to `output/<node>/<step>/humanized.md` and the plan to `humanized.plan.json`; a humanize subagent edits only those copies; `apply` validates the protected parts and only then writes `step.md` and the plan back. A failed validation leaves the official files untouched and keeps the copies. There is no hash record and no separate plan backup. |
 | `/generate-images` | Thin shell over `src/render-images.mjs`: reads the plan and the article's `<!--image:N-->` markers, generates or reuses `image-N.webp` under `<step>-assets/`, and replaces each marker with an uncaptioned image line. With `--force` it also repaints the files behind existing image lines. It never plans, edits prose, or reads `anchor`. |
-| `/quiz-gen` | One `quiz-agent` per published step reads the article and writes 3–8 single-choice questions; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; course-app renders them after the article. |
+| `/quiz-gen` | One `quiz-agent` per node reads its published steps and writes 3–8 single-choice questions each; the agent self-checks candidates with `quiz.mjs check`; `quiz.mjs write` validates and writes `<step>.quiz.json`; course-app renders them after the article. |
 | `/batch-nodes` | Optional bulk path over a tier or node list: Nodes → Article → Humanize → Generate → Quiz. Parallel Nodes, `publisher`, humanize, and `quiz-agent` subagents do the writing; Generate is one render CLI call per node. Resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan. |
 | `/absorb` | Read `pending` digests, append steps to existing nodes or create new nodes, add each used digest to the node's `digests`, resolve every digest to `absorbed` or `skipped`, roll affected nodes back to `confirmed`. |
 | `/edges` | Optional relationship pages between steps or nodes. |
@@ -254,12 +254,13 @@ node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force
 ```bash
 node scripts/quiz.mjs prepare --subject <s> --node <n> [--step <id>] [--force]
 node scripts/quiz.mjs write   --subject <s> --node <n> --step <id> --input <file|-> [--force]
+node scripts/quiz.mjs check   --subject <s> --node <n> --step <id> --input <file|->
 node scripts/quiz.mjs status  --subject <s> --node <n>
 ```
 
-- `/quiz-gen` runs `prepare`, dispatches one `quiz-agent` per ready step, writes the agent's JSON to `learn/<subject>/output/quiz-candidates/`, then runs `write` to validate and publish `<step>.quiz.json`.
+- `/quiz-gen` runs `prepare`, dispatches one `quiz-agent` per node for its ready steps, and the agent writes its own candidates to `learn/<subject>/output/quiz-candidates/`; `write` then validates and publishes `<step>.quiz.json`.
 - Each step gets 3–8 questions. The length ceiling is `min(8, max(3, round(CJK字數 / 250)))`; an article that cannot support 3 distinct questions fails instead of padding.
-- `prepare` skips existing quiz files unless `--force`; `write` refuses to overwrite without `--force`.
+- `prepare` skips existing quiz files unless `--force`; `write` refuses to overwrite without `--force`; `check` runs the same validation and writes nothing, so a `quiz-agent` can self-check a candidate before returning.
 - Nothing is inserted into the article Markdown. Regenerate course-app data with `npm --prefix course-app run gen`.
 - After a batch, run `node scripts/verify.mjs --node <subject>/<node>`.
 
