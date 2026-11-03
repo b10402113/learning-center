@@ -11,10 +11,12 @@ digests:
 prerequisites: []
 steps:
   - id: content-os-map
+    title: "把鏡頭拉遠：你的 Content OS 全貌"
     purpose: "用 Content OS 全圖說出 identity、點子、創作、發佈四段，並指出各段對應的 skill。"
     sources:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/8-Module 29 - Your Content OS/8-Module_29_-_Your_Content_OS.md#L1-L19]]"
   - id: one-person-agent-team
+    title: "一人加一隊 agent，就能跑內容事業"
     purpose: "說明一人加一隊 agents 為什麼能取代傳統內容團隊，並指出它成立的前提。"
     sources:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/8-Module 29 - Your Content OS/8-Module_29_-_Your_Content_OS.md#L21-L29]]"
@@ -42,8 +44,8 @@ updated: 2026-11-03
 
 ## Steps
 
-1. [content-os-map](your-content-os/content-os-map.md)
-2. [one-person-agent-team](your-content-os/one-person-agent-team.md)
+1. [把鏡頭拉遠：你的 Content OS 全貌](your-content-os/content-os-map.md)
+2. [一人加一隊 agent，就能跑內容事業](your-content-os/one-person-agent-team.md)
 3. [still-in-the-loop](your-content-os/still-in-the-loop.md)
 4. [your-automation-ratios](your-content-os/your-automation-ratios.md)
 5. [automation-spectrum](your-content-os/automation-spectrum.md)

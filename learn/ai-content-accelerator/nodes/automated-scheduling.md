@@ -35,6 +35,7 @@ steps:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/6-Module 28 - Automated Scheduling/6-Module_28_-_Automated_Scheduling.md#L92-L135]]"
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/7-🎁 Bonus- How to use -post/7-🎁_Bonus-_How_to_use_-post.md#L26-L42]]"
   - id: timing-and-new-accounts
+    title: "發文時間到底重不重要？"
     purpose: "選定發文時段與新帳號暖機節奏，並用回饋持續優化 /post。"
     sources:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/6-Module 28 - Automated Scheduling/6-Module_28_-_Automated_Scheduling.md#L136-L172]]"
@@ -55,4 +56,4 @@ updated: 2026-11-03
 2. [Blotato：我們在 RoboNuggets 用的那一個](automated-scheduling/blotato-and-nine-platforms.md)
 3. [一次性設定：API key 跟 account ID](automated-scheduling/post-setup.md)
 4. [從 Rubric Editor 到七天排程](automated-scheduling/schedule-a-week.md)
-5. [timing-and-new-accounts](automated-scheduling/timing-and-new-accounts.md)
+5. [發文時間到底重不重要？](automated-scheduling/timing-and-new-accounts.md)
