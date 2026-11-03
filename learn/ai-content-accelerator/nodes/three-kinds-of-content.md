@@ -14,7 +14,7 @@ digests:
 prerequisites: []
 steps:
   - id: three-formats-of-content
-    title: "先搞清楚：內容其實只有三大類"
+    title: "內容其實只有三大類"
     purpose: "用 shorts／longs／text 定位內容型態，並說明 distribution 要讓投入的力氣發揮到最大。"
     sources:
       - "[[sources/ai-content-accelerator/20261103/5-Wk4 - Content Distribution/2-Module 24 - Welcome to Distribution/2-Module_24_-_Welcome_to_Distribution.md#L1-L24]]"
@@ -52,7 +52,7 @@ updated: 2026-11-03
 
 ## Steps
 
-1. [先搞清楚：內容其實只有三大類](three-kinds-of-content/three-formats-of-content.md)
+1. [內容其實只有三大類](three-kinds-of-content/three-formats-of-content.md)
 2. [如果硬要排名：新手先從 TikTok 開始](three-kinds-of-content/shorts-channel-ranking.md)
 3. [一支長片等於六十支短片](three-kinds-of-content/longs-and-text-tradeoffs.md)
 4. [shorts 出貨快，量就是一切](three-kinds-of-content/choose-shorts-as-starting-point.md)

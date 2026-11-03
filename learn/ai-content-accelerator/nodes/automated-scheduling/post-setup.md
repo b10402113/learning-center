@@ -1,6 +1,6 @@
 # 一次性設定：API key 跟 account ID
 
-影片已經剪好，你卻還在一片一片上傳。開 Instagram、貼 caption、換到 TikTok、再貼一次。內容一模一樣，動作卻要做四遍。
+工具能不能替你發文，取決於一件只做一次的事：把帳號與憑證交給它。
 
 `/post` 就是接手這件差事的 skill。要讓它替你發文，得先做一次設定：申請 Blotato 帳號、連接社群帳號、拿到 API key 與 account ID。
 
