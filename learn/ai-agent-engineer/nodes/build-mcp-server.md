@@ -13,7 +13,9 @@ digests:
   - ticket-bay.2.part.md
   - ticket-bay.3.part.md
   - ticket-bay.4.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/tools-and-mcp.md"
+  - "learn/ai-agent-engineer/nodes/boundary-engineering.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

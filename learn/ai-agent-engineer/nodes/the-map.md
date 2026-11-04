@@ -8,7 +8,8 @@ status: draft
 goal: "用 model、prompt、context、harness、memory、loop、boundary 七層定位失敗，說出拿掉一層會怎麼壞。"
 digests:
   - agentic-coding-handbook.1.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/course-orientation.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

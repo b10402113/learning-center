@@ -12,7 +12,10 @@ digests:
   - ticket-bay.2.part.md
   - ticket-bay.3.part.md
   - ticket-bay.4.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/tests-that-lie.md"
+  - "learn/ai-agent-engineer/nodes/mutation-and-property.md"
+  - "learn/ai-agent-engineer/nodes/end-to-end-and-quicke2e.md"
 steps:
   - id: why-agents-need-a-gate
     title: "The gate"

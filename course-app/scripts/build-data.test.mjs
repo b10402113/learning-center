@@ -201,6 +201,47 @@ test("reads Markdown nodes and keeps frontmatter step order", () => {
   assert.equal(node.status, undefined, "the viewer no longer exposes node status");
 });
 
+test("resolves prerequisite paths to node ids", () => {
+  const { learnRoot, appRoot } = fixture();
+  write(
+    path.join(learnRoot, "demo", "nodes", "node-b.md"),
+    `---
+id: node-b
+title: "Node B"
+subject: demo
+tier: 2
+order: 2
+status: draft
+goal: "Node B goal."
+prerequisites:
+  - "learn/demo/nodes/node-a.md"
+  - "learn/demo/nodes/node-a.md"
+  - "learn/demo/nodes/missing.md"
+steps: []
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Node B
+
+## Lesson
+
+Lesson body for node B.
+
+## Steps
+`
+  );
+
+  const course = buildSubject("demo", { learnRoot, appRoot });
+  const nodeB = course.nodes.find((node) => node.id === "node-b");
+  assert.deepEqual(nodeB.requires, ["node-a"]);
+  assert.deepEqual(nodeB.prerequisites, [
+    "learn/demo/nodes/node-a.md",
+    "learn/demo/nodes/node-a.md",
+    "learn/demo/nodes/missing.md",
+  ]);
+});
+
 function quizPayload() {
   return {
     "quiz-generated": true,

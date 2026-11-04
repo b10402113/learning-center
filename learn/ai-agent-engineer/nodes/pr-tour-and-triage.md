@@ -10,7 +10,8 @@ digests:
   - agentic-coding-handbook.4.part.md
   - skills.1.part.md
   - skills.2.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/review-engineering.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

@@ -14,7 +14,8 @@ digests:
   - ticket-bay.2.part.md
   - ticket-bay.3.part.md
   - ticket-bay.4.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/harness-engineering.md"
 steps:
   - id: trifecta-not-approval
     title: "Approvals don't protect you"

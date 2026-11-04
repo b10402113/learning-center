@@ -8,7 +8,8 @@ status: written
 goal: "說出三種假綠——測試沒驗行為、案例缺漏、整合壞掉——與各自由哪種測試抓。"
 digests:
   - agentic-coding-handbook.3.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/course-orientation.md"
 steps:
   - id: tests-pass-is-not-proof
     title: "三種測試全綠卻在說謊的方式"

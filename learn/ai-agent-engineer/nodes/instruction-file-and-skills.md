@@ -10,7 +10,9 @@ digests:
   - agentic-coding-handbook.2.part.md
   - agentic-coding-handbook.3.part.md
   - skills.1.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/model-prompt-context.md"
+  - "learn/ai-agent-engineer/nodes/harness-engineering.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

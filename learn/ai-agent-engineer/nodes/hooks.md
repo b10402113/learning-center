@@ -10,7 +10,8 @@ digests:
   - agentic-coding-handbook.3.part.md
   - course-kit.md
   - ticket-bay.4.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/harness-engineering.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

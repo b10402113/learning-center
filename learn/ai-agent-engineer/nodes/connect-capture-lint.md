@@ -10,7 +10,8 @@ digests:
   - agentic-coding-handbook.5.part.md
   - agentic-coding-handbook.6.part.md
   - brain-template.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/centralized-brain.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

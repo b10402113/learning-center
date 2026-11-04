@@ -51,6 +51,7 @@ function SidebarBody({
   onSelect,
   onSelectStep,
   onHome,
+  onSubject,
   onToggle,
   showToggle = false,
   onClose,
@@ -102,7 +103,7 @@ function SidebarBody({
         </div>
       </div>
 
-      <div className="px-4 pt-4">
+      <div className="space-y-2 px-4 pt-4">
         <button
           type="button"
           onClick={onHome}
@@ -131,6 +132,33 @@ function SidebarBody({
             </span>
           </span>
         </button>
+        {onSubject && (
+          <button
+            type="button"
+            onClick={onSubject}
+            className="group flex w-full items-center gap-2 border-2 border-ink bg-surface px-3 py-2 text-left transition-colors hover:border-accent"
+          >
+            <svg
+              aria-hidden="true"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="shrink-0 text-ink-soft transition-colors group-hover:text-accent"
+            >
+              <circle cx="6" cy="6" r="2" />
+              <circle cx="18" cy="18" r="2" />
+              <path d="M8 6h6a4 4 0 0 1 0 8H10a4 4 0 0 0 0 8" />
+            </svg>
+            <span className="robo-kicker font-label text-[11px] text-ink transition-colors group-hover:text-accent">
+              課程地圖
+            </span>
+          </button>
+        )}
       </div>
 
       <div className="px-4 pt-4">
@@ -264,6 +292,7 @@ export default function Sidebar({
   onSelect,
   onSelectStep,
   onHome,
+  onSubject,
   open,
   onClose,
   collapsed,
@@ -354,6 +383,7 @@ export default function Sidebar({
             onSelect={onSelect}
             onSelectStep={onSelectStep}
             onHome={onHome}
+            onSubject={onSubject}
             onToggle={onToggle}
             showToggle
           />
@@ -376,6 +406,7 @@ export default function Sidebar({
             onSelect={onSelect}
             onSelectStep={onSelectStep}
             onHome={onHome}
+            onSubject={onSubject}
             onClose={onClose}
           />
         </div>

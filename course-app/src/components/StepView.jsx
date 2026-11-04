@@ -3,7 +3,7 @@ import Markdown from "./Markdown.jsx";
 import Quiz from "./Quiz.jsx";
 import { tierDotClass } from "./Sidebar.jsx";
 import { articleForClipboard, copyText } from "../lib/clipboard.mjs";
-import { hashFor } from "../lib/route.mjs";
+import { pathFor } from "../lib/route.mjs";
 import { stepNeighbors } from "../lib/steps.mjs";
 
 const BASE = import.meta.env.BASE_URL;
@@ -21,7 +21,7 @@ function StepLink({ course, node, step, direction }) {
   const next = direction === "next";
   return (
     <a
-      href={hashFor(course.subject, node.id, step.id)}
+      href={pathFor(course.subject, node.id, step.id)}
       className={`group flex items-center gap-3 border-2 px-4 py-3.5 transition-colors ${
         next
           ? "border-ink bg-accent text-dark shadow-[6px_6px_0_var(--robo-shadow)] sm:flex-row-reverse"
@@ -162,7 +162,7 @@ export default function StepView({ course, node, step }) {
           /
         </span>
         <a
-          href={hashFor(course.subject, node.id)}
+          href={pathFor(course.subject, node.id)}
           className="transition-colors hover:text-accent"
         >
           {node.title}

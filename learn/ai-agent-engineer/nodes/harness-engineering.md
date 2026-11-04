@@ -8,7 +8,9 @@ status: draft
 goal: "用 tools、permissions、verification、routing 補上模型外的機器，讓一次 run 可靠。"
 digests:
   - agentic-coding-handbook.1.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/the-map.md"
+  - "learn/ai-agent-engineer/nodes/model-prompt-context.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

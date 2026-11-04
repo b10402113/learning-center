@@ -822,6 +822,118 @@ function checkRoadmap(report, root, subject, scan, enforceOrphans) {
   }
 }
 
+const PREREQUISITE_PATH = /^learn\/([^/]+)\/nodes\/([^/]+)\.md$/;
+
+/**
+ * Validate the node-level prerequisite DAG. `prerequisites` holds node paths
+ * (`learn/<subject>/nodes/<id>.md`) and must stay inside the subject, point at
+ * a real node, avoid self/cycles, and never point at a later tier.
+ */
+function checkPrerequisites(report, root, subject, scan, onlyNode) {
+  const meta = new Map();
+  for (const node of scan.nodes) {
+    const parsed = readMarkdown(node.path);
+    if (parsed.error) continue;
+    meta.set(node.id, { data: parsed.data || {}, file: rel(root, node.path) });
+  }
+
+  const graph = new Map();
+  for (const [id, { data, file }] of meta) {
+    const reportThis = !onlyNode || onlyNode === id;
+    const raw = data.prerequisites;
+    const deps = [];
+    graph.set(id, deps);
+    if (raw === undefined || raw === null) continue;
+    if (!Array.isArray(raw)) {
+      if (reportThis) {
+        report.fail(file, 1, "prerequisites-type", "prerequisites must be a list of node paths");
+      }
+      continue;
+    }
+    for (const [index, entry] of raw.entries()) {
+      if (typeof entry !== "string" || !entry.trim()) {
+        if (reportThis) {
+          report.fail(file, 1, "prerequisite-path", `prerequisites[${index}] must be a node path`);
+        }
+        continue;
+      }
+      const match = entry.trim().match(PREREQUISITE_PATH);
+      if (!match) {
+        if (reportThis) {
+          report.fail(
+            file,
+            1,
+            "prerequisite-path",
+            `prerequisites[${index}] "${entry}" must look like learn/${subject}/nodes/<node>.md`,
+          );
+        }
+        continue;
+      }
+      const [, targetSubject, targetId] = match;
+      if (targetSubject !== subject) {
+        if (reportThis) {
+          report.fail(
+            file,
+            1,
+            "prerequisite-subject",
+            `prerequisite "${entry}" belongs to subject "${targetSubject}", not "${subject}"`,
+          );
+        }
+        continue;
+      }
+      if (targetId === id) {
+        if (reportThis) {
+          report.fail(file, 1, "prerequisite-self", `nodes can only require other nodes, not "${id}" itself`);
+        }
+        continue;
+      }
+      if (!meta.has(targetId)) {
+        if (reportThis) {
+          report.fail(file, 1, "prerequisite-missing", `prerequisite "${entry}" does not exist`);
+        }
+        continue;
+      }
+      const ownTier = Number(data.tier);
+      const targetTier = Number(meta.get(targetId).data.tier);
+      if (Number.isFinite(ownTier) && Number.isFinite(targetTier) && targetTier > ownTier) {
+        if (reportThis) {
+          report.fail(
+            file,
+            1,
+            "prerequisite-tier",
+            `prerequisite "${targetId}" is tier ${targetTier}, later than this tier ${ownTier}`,
+          );
+        }
+      }
+      deps.push(targetId);
+    }
+  }
+
+  for (const id of graph.keys()) {
+    const stack = [...(graph.get(id) || [])];
+    const seen = new Set();
+    let cyclic = false;
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (current === id) {
+        cyclic = true;
+        break;
+      }
+      if (seen.has(current)) continue;
+      seen.add(current);
+      for (const next of graph.get(current) || []) stack.push(next);
+    }
+    if (!cyclic) continue;
+    if (onlyNode && onlyNode !== id) continue;
+    report.fail(
+      meta.get(id).file,
+      0,
+      "prerequisite-cycle",
+      `node "${id}" is part of a prerequisite cycle`,
+    );
+  }
+}
+
 function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nodeDigests) {
   const file = rel(root, node.path);
   const parsed = readMarkdown(node.path);
@@ -1283,6 +1395,7 @@ export function runChecks({ root = REPO_ROOT, subject, node = null }) {
   }
 
   checkRoadmap(report, root, subject, scan, !node);
+  checkPrerequisites(report, root, subject, scan, node);
 
   for (const item of targets) {
     checkNode(report, root, subject, scan, digestInfo, item, stepIndex, nodeDigests);

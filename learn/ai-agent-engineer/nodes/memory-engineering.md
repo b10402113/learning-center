@@ -8,7 +8,9 @@ status: draft
 goal: "分清 memory 與 context，判斷什麼該進 memory、放哪裡、由誰寫。"
 digests:
   - agentic-coding-handbook.1.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/the-map.md"
+  - "learn/ai-agent-engineer/nodes/model-prompt-context.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

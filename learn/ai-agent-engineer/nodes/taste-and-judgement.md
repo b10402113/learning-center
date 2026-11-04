@@ -8,7 +8,8 @@ status: draft
 goal: "把七層對回 AI employee，說出 judgement 與 taste 各決定什麼，以及為什麼只委派打字。"
 digests:
   - agentic-coding-handbook.9.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/employee-job.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

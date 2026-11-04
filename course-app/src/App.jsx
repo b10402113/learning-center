@@ -4,9 +4,10 @@ import Sidebar from "./components/Sidebar.jsx";
 import NodeView from "./components/NodeView.jsx";
 import StepView from "./components/StepView.jsx";
 import SubjectsView from "./components/SubjectsView.jsx";
+import SubjectOverview from "./components/SubjectOverview.jsx";
 import PixelMark from "./components/PixelMark.jsx";
 import DotMatrix from "./components/DotMatrix.jsx";
-import { hashFor, indexRoute, parseHash } from "./lib/route.mjs";
+import { indexRoute, parsePath, pathFor } from "./lib/route.mjs";
 
 // Lazy loaders — each subject's course JSON is code-split and fetched on demand.
 const courseLoaders = import.meta.glob("./data/subjects/*.json");
@@ -25,12 +26,12 @@ function resolveSubjectId(id) {
 }
 
 function initialRoute() {
-  const h = parseHash(window.location.hash);
-  if (!h) return indexRoute();
+  const parsed = parsePath(window.location.pathname);
+  if (!parsed) return indexRoute();
   return {
-    subjectId: resolveSubjectId(h.subjectId),
-    nodeId: h.nodeId,
-    stepId: h.stepId,
+    subjectId: resolveSubjectId(parsed.subjectId),
+    nodeId: parsed.nodeId,
+    stepId: parsed.stepId,
   };
 }
 
@@ -190,16 +191,13 @@ export default function App() {
   // Unknown subject ids fall back to the index; keep the address bar honest.
   useEffect(() => {
     if (subjectId) return;
-    if (window.location.hash && window.location.hash !== "#/") {
-      history.replaceState(null, "", "#/");
+    if (window.location.pathname !== pathFor(null, null)) {
+      history.replaceState(null, "", pathFor(null, null));
     }
   }, [subjectId]);
 
   const node = useMemo(
-    () =>
-      (course && course.nodes.find((n) => n.id === nodeId)) ||
-      course?.nodes[0] ||
-      null,
+    () => (course && course.nodes.find((n) => n.id === nodeId)) || null,
     [course, nodeId]
   );
 
@@ -210,8 +208,8 @@ export default function App() {
 
   // Browser back/forward support
   useEffect(() => {
-    const onHash = () => {
-      const next = parseHash(window.location.hash);
+    const onPop = () => {
+      const next = parsePath(window.location.pathname);
       if (!next) return;
       setRoute({
         subjectId: resolveSubjectId(next.subjectId),
@@ -219,8 +217,8 @@ export default function App() {
         stepId: next.stepId,
       });
     };
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   // Esc closes the mobile drawer; lock body scroll while open
@@ -279,54 +277,71 @@ export default function App() {
     window.scrollTo(0, 0);
   }, [routeKey]);
 
-  const replaceHash = (sid, nid, stid = null) => {
-    const next = hashFor(sid, nid, stid);
-    if (window.location.hash !== next) history.replaceState(null, "", next);
+  const replacePath = (sid, nid, stid = null) => {
+    const next = pathFor(sid, nid, stid);
+    if (window.location.pathname !== next) history.replaceState(null, "", next);
   };
 
-  const pushHash = (sid, nid, stid = null) => {
-    const next = hashFor(sid, nid, stid);
-    if (window.location.hash !== next) history.pushState(null, "", next);
+  const pushPath = (sid, nid, stid = null) => {
+    const next = pathFor(sid, nid, stid);
+    if (window.location.pathname !== next) history.pushState(null, "", next);
   };
 
   const selectNode = (id) => {
     setRoute((r) => ({ ...r, nodeId: id, stepId: null }));
     setSidebarOpen(false);
-    pushHash(subjectId, id);
+    pushPath(subjectId, id);
   };
 
   const selectStep = (nid, stid) => {
     setRoute({ subjectId, nodeId: nid, stepId: stid });
     setSidebarOpen(false);
-    pushHash(subjectId, nid, stid);
+    pushPath(subjectId, nid, stid);
+  };
+
+  const selectSubject = () => {
+    setRoute({ subjectId, nodeId: null, stepId: null });
+    setSidebarOpen(false);
+    pushPath(subjectId, null);
   };
 
   const goHome = () => {
     setRoute(indexRoute());
     setCourse(null);
     setSidebarOpen(false);
-    pushHash(null, null);
+    pushPath(null, null);
   };
 
-  // Resolve incomplete or stale hashes once the course JSON is loaded.
+  // Resolve incomplete or stale paths once the course JSON is loaded.
   useEffect(() => {
     if (!course || course.nodes.length === 0) return;
     if (course.subject !== subjectId) return;
-    const resolved =
-      course.nodes.find((n) => n.id === nodeId) || course.nodes[0];
+    if (!nodeId) {
+      if (stepId) {
+        setRoute({ subjectId: course.subject, nodeId: null, stepId: null });
+        replacePath(course.subject, null, null);
+      }
+      return;
+    }
+
+    const resolved = course.nodes.find((n) => n.id === nodeId);
+    if (!resolved) {
+      setRoute({ subjectId: course.subject, nodeId: null, stepId: null });
+      replacePath(course.subject, null, null);
+      return;
+    }
     const resolvedStep = resolved.steps.some((s) => s.id === stepId)
       ? stepId
       : null;
-
-    if (resolved.id !== nodeId || resolvedStep !== stepId) {
+    if (resolvedStep !== stepId) {
       setRoute({
         subjectId: course.subject,
         nodeId: resolved.id,
         stepId: resolvedStep,
       });
     }
-    replaceHash(course.subject, resolved.id, resolvedStep);
-  }, [course, nodeId, stepId]);
+    replacePath(course.subject, resolved.id, resolvedStep);
+  }, [course, subjectId, nodeId, stepId]);
 
   return (
     <div className="min-h-screen">
@@ -371,13 +386,17 @@ export default function App() {
                 Learning Center
               </span>
               <span className="hidden truncate font-label text-[11px] uppercase tracking-[0.16em] text-ink-soft sm:block">
-                {course && node ? `${course.title} · ${node.title}` : "課程清單"}
+                {course
+                  ? node
+                    ? `${course.title} · ${node.title}`
+                    : course.title
+                  : "課程清單"}
               </span>
             </span>
           </button>
 
           <div className="ml-auto flex items-center gap-2">
-            {subjectId && course && node && (
+            {subjectId && course && (
               <button
                 type="button"
                 onClick={() => setCollapsed((value) => !value)}
@@ -416,7 +435,7 @@ export default function App() {
             </div>
           </div>
         </main>
-      ) : !course || !node ? (
+      ) : !course ? (
         <div className="flex min-h-[60vh] flex-col items-center justify-center gap-6">
           <div className="h-32 w-32">
             <DotMatrix variant="hexagon" height={128} />
@@ -429,11 +448,12 @@ export default function App() {
         <div className="lg:flex">
           <Sidebar
             course={course}
-            currentId={node.id}
+            currentId={node?.id ?? null}
             currentStepId={stepId}
             onSelect={selectNode}
             onSelectStep={selectStep}
             onHome={goHome}
+            onSubject={selectSubject}
             open={sidebarOpen}
             onClose={() => setSidebarOpen(false)}
             collapsed={collapsed}
@@ -441,7 +461,11 @@ export default function App() {
           />
 
           <main className="min-w-0 flex-1">
-            <div className="mx-auto w-full max-w-[1040px] px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
+            <div
+              className={`mx-auto w-full px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10 ${
+                node ? "max-w-[1040px]" : "max-w-[1240px]"
+              }`}
+            >
               <div className="border-0 bg-transparent px-0 py-0 sm:border-2 sm:border-ink sm:bg-surface sm:px-8 sm:py-8 sm:shadow-[8px_8px_0_var(--robo-shadow)] lg:px-12 lg:py-11">
                 {step ? (
                   <StepView
@@ -450,13 +474,16 @@ export default function App() {
                     node={node}
                     step={step}
                   />
-                ) : (
+                ) : node ? (
                   <NodeView
                     key={node.id}
                     course={course}
                     node={node}
                     onSelect={selectNode}
+                    onSubject={selectSubject}
                   />
+                ) : (
+                  <SubjectOverview key={course.subject} course={course} />
                 )}
               </div>
             </div>

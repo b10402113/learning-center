@@ -8,7 +8,8 @@ status: draft
 goal: "依工作選模型、用四件事寫 prompt、用 select／compress／isolate／offload 管好 context window。"
 digests:
   - agentic-coding-handbook.1.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/the-map.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

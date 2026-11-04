@@ -9,7 +9,9 @@ goal: "用 index、inbox、intents、guidelines、decisions、taste、sources �
 digests:
   - agentic-coding-handbook.5.part.md
   - brain-template.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/memory-engineering.md"
+  - "learn/ai-agent-engineer/nodes/instruction-file-and-skills.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

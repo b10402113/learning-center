@@ -8,7 +8,8 @@ status: draft
 goal: "選對 Context7、Playwright、Chrome DevTools，並分清楚何時用 skill、CLI 或 MCP。"
 digests:
   - agentic-coding-handbook.2.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/harness-engineering.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

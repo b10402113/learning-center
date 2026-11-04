@@ -1,18 +1,15 @@
 import Markdown from "./Markdown.jsx";
 import DotMatrix from "./DotMatrix.jsx";
 import { tierDotClass } from "./Sidebar.jsx";
-import { hashFor } from "../lib/route.mjs";
+import { pathFor } from "../lib/route.mjs";
 
 /**
  * Node detail view: title, goal, node lesson, and the step list in the order
  * declared by the node's `steps` array. Each step links to its own article.
  */
-export default function NodeView({ course, node, onSelect }) {
-  const prereqs = (node.prerequisites || [])
-    .map((p) => {
-      const pid = String(p).split("/").pop().replace(/\.md$/, "");
-      return course.nodes.find((n) => n.id === pid) || null;
-    })
+export default function NodeView({ course, node, onSelect, onSubject }) {
+  const prereqs = (node.requires || [])
+    .map((id) => course.nodes.find((n) => n.id === id) || null)
     .filter(Boolean);
 
   const tier = course.tiers.find((t) => t.tier === node.tier);
@@ -23,7 +20,17 @@ export default function NodeView({ course, node, onSelect }) {
         aria-label="麵包屑"
         className="robo-kicker flex flex-wrap items-center gap-2 font-label text-[11px] text-ink-soft"
       >
-        <span>{course.title}</span>
+        <a
+          href={pathFor(course.subject)}
+          onClick={(event) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+            event.preventDefault();
+            onSubject?.();
+          }}
+          className="transition-colors hover:text-accent"
+        >
+          {course.title}
+        </a>
         <span aria-hidden="true" className="text-ink-soft/50">
           /
         </span>
@@ -115,7 +122,7 @@ export default function NodeView({ course, node, onSelect }) {
             {node.steps.map((step) => (
               <li key={step.id}>
                 <a
-                  href={hashFor(course.subject, node.id, step.id)}
+                  href={pathFor(course.subject, node.id, step.id)}
                   className="group robo-card robo-press flex items-start gap-4 px-4 py-4 hover:border-accent"
                 >
                   <span

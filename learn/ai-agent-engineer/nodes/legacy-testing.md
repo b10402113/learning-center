@@ -10,7 +10,9 @@ digests:
   - agentic-coding-handbook.3.part.md
   - skills.1.part.md
   - skills.2.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/tests-that-lie.md"
+  - "learn/ai-agent-engineer/nodes/mutation-and-property.md"
 steps:
   - id: unit-and-honest-doubles
     title: "測試 public API"

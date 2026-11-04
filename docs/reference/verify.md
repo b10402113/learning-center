@@ -46,6 +46,13 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `node-digest-status` | every declared digest is `absorbed` (a `pending` or `skipped` digest may not be declared) |
 | `node-digest-undeclared` | every digest covering a step's `sources` is declared on that node |
 | `node-digest-unused` | on a `confirmed`/`written` node, every declared digest is cited by at least one step (draft nodes are exempt) |
+| `prerequisites-type` | `prerequisites` is a list when present |
+| `prerequisite-path` | every entry is `learn/<subject>/nodes/<node-id>.md` |
+| `prerequisite-missing` | every referenced node container exists |
+| `prerequisite-subject` | every prerequisite stays inside the subject |
+| `prerequisite-self` | a node never requires itself |
+| `prerequisite-cycle` | the prerequisite graph is acyclic |
+| `prerequisite-tier` | a prerequisite is in the same or an earlier tier |
 | `step-entry` | every step entry has `id`, `purpose`, and `sources`; `title` is optional, and non-empty when present |
 | `step-purpose` | `purpose` is a single line of one short sentence (≤ 120 characters, no second sentence) |
 | `steps-flat` | step entries declare no `deps`, `type`, or `order` |

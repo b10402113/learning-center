@@ -10,7 +10,11 @@ digests:
   - agentic-coding-handbook.7.part.md
   - agentic-coding-handbook.8.part.md
   - course-kit.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/loop-engineering.md"
+  - "learn/ai-agent-engineer/nodes/the-gate.md"
+  - "learn/ai-agent-engineer/nodes/review-engineering.md"
+  - "learn/ai-agent-engineer/nodes/connect-capture-lint.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

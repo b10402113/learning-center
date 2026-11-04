@@ -72,7 +72,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 | --- | --- |
 | `/learn-init` | Write `MEMORY.md`, extract PDFs to `.txt`, build digests (L1 + line-addressed L2), including code and image supplements. |
 | `/ingest` | Archive new source files and write `pending` digests. Does not touch roadmap, nodes, or articles; a `pending` digest makes the subject check fail until `/absorb` resolves it. |
-| `/roadmap` | Propose ≥5 learning paths, confirm one, partition into nodes, write `ROADMAP.md` and `draft` node containers with their `digests` lists, and resolve every read digest to `absorbed` or `skipped`. |
+| `/roadmap` | Propose ≥5 learning paths, confirm one, partition into nodes, confirm the prerequisite DAG, write `ROADMAP.md` and `draft` node containers with their `digests` lists and `prerequisites`, and resolve every read digest to `absorbed` or `skipped`. |
 | `/nodes` | Reasoning checkpoint per node: write the `steps` array (`id`, `purpose`, `sources`), create empty article skeletons, set `confirmed`. The publisher writes each title with its article. |
 | `/article` | `prepare` writes each step's material bundle into `output/<node>/<step>/` — its purpose plus the source files it cites; one `publisher` subagent per step reads those sources in full and curates the material (selected prose and code, each piece keeping `path`/`locator`), picks the title, runs `article-cli compose` to have the text model write `original.md` (no image markers), reads `original.md` to write the 1–5 item plan to `nodes/<node>/<step>.plan.json`, runs `article-cli mark` to insert the `<!--image:N-->` markers, then runs `polish-article.mjs draft` to write `polish.md` and polish the plan while keeping the markers, and `titleCommand` to write the title back to the node; `publish` writes `<step>.md` from `polish.md` and verifies. It calls the text model for compose and polish but never the image model, and never creates `<step>-assets/`. The main agent then edits prose only to add continuity between steps. |
 | `/humanize-article` | Processes only steps with a plan: `scripts/humanize-article.mjs prepare` copies `step.md` to `output/<node>/<step>/humanized.md` and the plan to `humanized.plan.json`; a humanize subagent edits only those copies; `apply` validates the protected parts and only then writes `step.md` and the plan back. A failed validation leaves the official files untouched and keeps the copies. There is no hash record and no separate plan backup. |
@@ -140,7 +140,7 @@ Rules:
 - The body is `# <title>`, a short `## Lesson`, and a `## Steps` list whose ids and order match the frontmatter. Each link label is the step's `title` once published, and the step `id` while the article is still unwritten. Links are relative to the node file.
 - There is no node-level `sources` field; sources live on step entries.
 - `digests` lists the digest filenames this node teaches; `/roadmap` declares it up front and `/nodes` and `/absorb` keep it true. Every step source must come from a declared digest, a declared digest must be `absorbed`, and a `confirmed`/`written` node may not declare a digest no step cites.
-- `prerequisites` holds stable node paths such as `learn/<subject>/nodes/<id>.md`.
+- `prerequisites` is the node-level prerequisite DAG: the earlier nodes a reader should finish first, as stable paths such as `learn/<subject>/nodes/<id>.md`, or `[]` for a root. `/roadmap` proposes the edges at its confirmation checkpoint. A prerequisite stays inside the subject, points at an existing node that is not the node itself, never creates a cycle, and never points at a later tier.
 
 ### Step article — `learn/<subject>/nodes/<node-id>/<step-id>.md`
 
@@ -206,7 +206,7 @@ Frontmatter: `title`, `type`, `from`, `to`, `nodes`, `created`, `updated`. `from
 
 ### Course viewer
 
-`course-app/` reads `learn/` directly. The node page lists steps in `steps` array order and marks a step without a body as `尚未產生`. The step page renders the Markdown article, turns a fenced `quiz` block into an interactive question, renders the `<step>.quiz.json` questions under a `自我檢查` section, resolves figures under `<step>-assets/`, aggregates the step's sources at the end, and shows prev/next links in array order. There is no status badge or progress tracking.
+`course-app/` reads `learn/` directly. A subject opens on its roadmap page: one tier per row, `prerequisites` drawn as edges, and each node card linking to the node. Narrow screens fall back to a tier list. The node page lists steps in `steps` array order and marks a step without a body as `尚未產生`. The step page renders the Markdown article, turns a fenced `quiz` block into an interactive question, renders the `<step>.quiz.json` questions under a `自我檢查` section, resolves figures under `<step>-assets/`, aggregates the step's sources at the end, and shows prev/next links in array order. There is no status badge or progress tracking.
 
 ## Status
 
@@ -310,7 +310,7 @@ node scripts/verify.mjs --subject <subject>
 node scripts/verify.mjs --node <subject>/<node-id>
 ```
 
-It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, the publisher-written title and H1, `## Steps`, source locators and digest coverage, node ↔ digest declarations (`node-digest-unknown`, `node-digest-status`, `node-digest-undeclared`, `node-digest-unused`, `digest-unreferenced`, `digest-pending`, `digest-skip-reason`), code provenance, quiz sidecars, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
+It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, the publisher-written title and H1, `## Steps`, the prerequisite DAG (`prerequisites-type`, `prerequisite-path`, `prerequisite-missing`, `prerequisite-subject`, `prerequisite-self`, `prerequisite-cycle`, `prerequisite-tier`), source locators and digest coverage, node ↔ digest declarations (`node-digest-unknown`, `node-digest-status`, `node-digest-undeclared`, `node-digest-unused`, `digest-unreferenced`, `digest-pending`, `digest-skip-reason`), code provenance, quiz sidecars, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
 
 ### Query
 

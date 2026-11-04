@@ -8,7 +8,9 @@ status: draft
 goal: "用 trigger、goal check、停止機制把多個 session 串成一個不會提早停的 loop。"
 digests:
   - agentic-coding-handbook.1.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/harness-engineering.md"
+  - "learn/ai-agent-engineer/nodes/memory-engineering.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

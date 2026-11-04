@@ -10,7 +10,10 @@ digests:
   - agentic-coding-handbook.8.part.md
   - agentic-coding-handbook.9.part.md
   - course-kit.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/boundary-engineering.md"
+  - "learn/ai-agent-engineer/nodes/connect-capture-lint.md"
+  - "learn/ai-agent-engineer/nodes/build-mcp-server.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

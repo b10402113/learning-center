@@ -120,6 +120,61 @@ function update(root, relative, from, to) {
   write(root, relative, current.replace(from, to));
 }
 
+function setRoadmap(root, entries) {
+  const lines = entries
+    .map(({ id, tier = 1 }, index) => `1. **[Node ${id}](${`nodes/${id}.md`})**`)
+    .join("\n");
+  write(
+    root,
+    "learn/test/ROADMAP.md",
+    `---
+subject: test
+status: confirmed
+created: 2026-10-22
+---
+
+# Test
+
+## Nodes
+
+### Tier 1 — Basics
+
+${lines}
+`,
+  );
+}
+
+function writeDraftNode(root, { id, tier = 1, order = 1, prerequisites = [] }) {
+  write(
+    root,
+    `learn/test/nodes/${id}.md`,
+    `---
+id: ${id}
+title: "Node ${id}"
+subject: test
+tier: ${tier}
+order: ${order}
+status: draft
+goal: "Do ${id}."
+digests: []
+prerequisites:${prerequisites.length === 0 ? " []" : ""}
+${prerequisites.map((p) => `  - "${p}"`).join("\n")}
+steps: []
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Node ${id}
+
+## Lesson
+
+A short lesson.
+
+## Steps
+`,
+  );
+}
+
 function addCodebaseDigest(root) {
   write(root, "sources/test/code/main.js", `${Array.from({ length: 20 }, (_, index) => `// line ${index + 1}`).join("\n")}\n`);
   write(
@@ -367,6 +422,80 @@ test("each step entry needs id, purpose, and sources", (t) => {
   const root = fixture(t);
   update(root, "learn/test/nodes/n1.md", "    purpose: \"Explain one thing.\"\n", "");
   assert.ok(failures(root).includes("step-entry"));
+});
+
+function prerequisiteFixture(t, nodes) {
+  const root = fixture(t);
+  for (const node of nodes) writeDraftNode(root, node);
+  setRoadmap(root, nodes.map(({ id, tier }) => ({ id, tier })));
+  return root;
+}
+
+test("prerequisites must be a list of node paths", (t) => {
+  const root = prerequisiteFixture(t, [{ id: "n1" }]);
+  update(root, "learn/test/nodes/n1.md", "prerequisites: []", 'prerequisites: "learn/test/nodes/n1.md"');
+  assert.ok(failures(root).includes("prerequisites-type"));
+
+  const malformed = prerequisiteFixture(t, [{ id: "n1" }]);
+  update(
+    malformed,
+    "learn/test/nodes/n1.md",
+    "prerequisites: []",
+    "prerequisites:\n  - n1",
+  );
+  assert.ok(failures(malformed).includes("prerequisite-path"));
+});
+
+test("prerequisites must point at an existing node in the same subject", (t) => {
+  const missing = prerequisiteFixture(t, [
+    { id: "n1" },
+    { id: "n2", prerequisites: ["learn/test/nodes/nope.md"] },
+  ]);
+  assert.ok(failures(missing).includes("prerequisite-missing"));
+
+  const otherSubject = prerequisiteFixture(t, [
+    { id: "n1" },
+    { id: "n2", prerequisites: ["learn/other/nodes/n1.md"] },
+  ]);
+  assert.ok(failures(otherSubject).includes("prerequisite-subject"));
+});
+
+test("a node cannot require itself", (t) => {
+  const root = prerequisiteFixture(t, [
+    { id: "n1", prerequisites: ["learn/test/nodes/n1.md"] },
+  ]);
+  assert.ok(failures(root).includes("prerequisite-self"));
+});
+
+test("prerequisite cycles are rejected", (t) => {
+  const root = prerequisiteFixture(t, [
+    { id: "n1", prerequisites: ["learn/test/nodes/n2.md"] },
+    { id: "n2", prerequisites: ["learn/test/nodes/n1.md"] },
+  ]);
+  assert.ok(failures(root).includes("prerequisite-cycle"));
+});
+
+test("a prerequisite may not come from a later tier", (t) => {
+  const root = prerequisiteFixture(t, [
+    { id: "n1", tier: 2, prerequisites: ["learn/test/nodes/n2.md"] },
+    { id: "n2", tier: 3 },
+  ]);
+  assert.ok(failures(root).includes("prerequisite-tier"));
+
+  const sameTier = prerequisiteFixture(t, [
+    { id: "n1", tier: 2, prerequisites: ["learn/test/nodes/n2.md"] },
+    { id: "n2", tier: 2 },
+  ]);
+  assert.ok(!failures(sameTier).includes("prerequisite-tier"));
+});
+
+test("an earlier-tier prerequisite chain passes", (t) => {
+  const root = prerequisiteFixture(t, [
+    { id: "n1" },
+    { id: "n2", tier: 2, prerequisites: ["learn/test/nodes/n1.md"] },
+    { id: "n3", tier: 3, prerequisites: ["learn/test/nodes/n2.md"] },
+  ]);
+  assert.ok(!failures(root).some((id) => id.startsWith("prerequisite")));
 });
 
 test("a step purpose is one sentence", (t) => {

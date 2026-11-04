@@ -9,7 +9,8 @@ goal: "用三個問題決定讀多少、先 grill plan、再用 fresh context �
 digests:
   - agentic-coding-handbook.4.part.md
   - skills.1.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/the-gate.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

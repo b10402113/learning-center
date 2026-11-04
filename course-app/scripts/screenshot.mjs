@@ -9,7 +9,7 @@ const exe = path.join(
   os.homedir(),
   "Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
 );
-const BASE = process.env.BASE_URL || "http://localhost:4173";
+const BASE = (process.env.BASE_URL || "http://localhost:4173/learning-center").replace(/\/+$/, "");
 const OUT = path.join(process.cwd(), "shots");
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -21,31 +21,32 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 
 // 1. Default load → subject index
-await page.goto(BASE, { waitUntil: "networkidle" });
+await page.goto(`${BASE}/`, { waitUntil: "networkidle" });
 await page.screenshot({ path: `${OUT}/8-subject-index.png` });
 
-// 2. Open a subject by clicking its card
+// 2. Open a subject by clicking its card → roadmap
 await page.getByRole("link", { name: /background agents/ }).first().click();
 await page.waitForTimeout(600);
-await page.screenshot({ path: `${OUT}/9-subject-background-agents.png` });
-console.log("hash after card:", await page.evaluate(() => location.hash));
+await page.screenshot({ path: `${OUT}/9-subject-roadmap.png` });
+console.log("path after card:", await page.evaluate(() => location.pathname));
 
-// 3. Open the first node
-await page.getByRole("button", { name: /Background agent 是什麼/ }).first().click();
+// 3. Open the first node from the roadmap
+await page.locator('a[href*="/background-agents/"]').first().click();
 await page.waitForTimeout(300);
 await page.screenshot({ path: `${OUT}/10-node-detail.png` });
+console.log("node path:", await page.evaluate(() => location.pathname));
 
 // 4. Deep link directly to a subject/node
-await page.goto(`${BASE}/#/agent-harness/what-a-harness-is`, {
+await page.goto(`${BASE}/ai-agent-engineer/the-map`, {
   waitUntil: "networkidle",
 });
 await page.waitForTimeout(600);
-await page.screenshot({ path: `${OUT}/11-deeplink-agent-harness.png` });
-console.log("deeplink hash:", await page.evaluate(() => location.hash));
+await page.screenshot({ path: `${OUT}/11-deeplink-ai-agent-engineer.png` });
+console.log("deeplink path:", await page.evaluate(() => location.pathname));
 
 // 5. Mobile: index cards and the drawer's "all subjects" link
 const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
-await mobile.goto(BASE, { waitUntil: "networkidle" });
+await mobile.goto(`${BASE}/`, { waitUntil: "networkidle" });
 await mobile.screenshot({ path: `${OUT}/12-mobile-index.png` });
 await mobile.getByRole("link", { name: /agent harness/ }).first().click();
 await mobile.waitForTimeout(600);

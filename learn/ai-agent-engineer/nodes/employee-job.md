@@ -12,7 +12,10 @@ digests:
   - brain-template.md
   - skills.1.part.md
   - ticket-bay.1.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/ai-employee.md"
+  - "learn/ai-agent-engineer/nodes/email-loop.md"
+  - "learn/ai-agent-engineer/nodes/prompt-injection.md"
 steps: []
 created: 2026-11-03
 updated: 2026-11-03

@@ -14,7 +14,9 @@ digests:
   - ticket-bay.2.part.md
   - ticket-bay.3.part.md
   - ticket-bay.4.part.md
-prerequisites: []
+prerequisites:
+  - "learn/ai-agent-engineer/nodes/tests-that-lie.md"
+  - "learn/ai-agent-engineer/nodes/tools-and-mcp.md"
 steps:
   - id: playwright-and-testcontainers
     title: "Playwright 只測關鍵流程，Testcontainers 給你一個真資料庫"

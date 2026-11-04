@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import DotMatrix from "./DotMatrix.jsx";
-import { hashFor } from "../lib/route.mjs";
+import { pathFor } from "../lib/route.mjs";
 import { SUBJECT_SORTS, sortSubjects } from "../lib/sort.mjs";
 
 const SORT_KEY = "lc.subjects-sort";
@@ -108,7 +108,7 @@ export default function SubjectsView({ subjects }) {
           {sorted.map((subject, index) => (
             <li key={subject.id}>
               <a
-                href={hashFor(subject.id)}
+                href={pathFor(subject.id)}
                 className="group robo-card robo-press flex h-full flex-col px-4 py-4 hover:border-accent"
               >
                 <span className="flex items-center justify-between gap-3">

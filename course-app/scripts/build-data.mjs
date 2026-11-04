@@ -275,6 +275,19 @@ export function buildSubject(
     });
   }
 
+  // Resolve prerequisite paths to node ids in this subject, dropping dangling
+  // edges and duplicates. `prerequisites` stays as the raw frontmatter value.
+  for (const node of nodesById.values()) {
+    const seen = new Set();
+    node.requires = (Array.isArray(node.prerequisites) ? node.prerequisites : [])
+      .map((entry) => String(entry).split("/").pop().replace(/\.md$/, ""))
+      .filter((id) => {
+        if (id === node.id || !nodesById.has(id) || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+  }
+
   const orderedNodes = [];
   for (const tier of tiers) {
     for (const id of tier.nodeIds) {
