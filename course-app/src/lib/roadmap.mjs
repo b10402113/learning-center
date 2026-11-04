@@ -162,6 +162,16 @@ export function layoutRoadmap(nodes) {
   };
 }
 
+/** The hovered node plus every node one edge away in either direction. */
+export function neighbors(edges, id) {
+  const ids = new Set([id]);
+  for (const edge of edges) {
+    if (edge.from === id) ids.add(edge.to);
+    if (edge.to === id) ids.add(edge.from);
+  }
+  return ids;
+}
+
 /** A cubic bezier between two cards, leaving the bottom and entering the top. */
 export function edgePath(from, to) {
   if (!from || !to) return "";

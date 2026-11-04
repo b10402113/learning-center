@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { pathFor } from "../lib/route.mjs";
-import { CARD_H, CARD_W, layoutRoadmap } from "../lib/roadmap.mjs";
+import { CARD_H, CARD_W, layoutRoadmap, neighbors } from "../lib/roadmap.mjs";
 
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 2;
@@ -35,6 +35,11 @@ export default function RoadmapCanvas({ course }) {
   const [fit, setFit] = useState(1);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [hovered, setHovered] = useState(null);
+  const related = useMemo(
+    () => (hovered ? neighbors(layout.edges, hovered) : null),
+    [hovered, layout.edges]
+  );
 
   useLayoutEffect(() => {
     const element = containerRef.current;
@@ -164,17 +169,23 @@ export default function RoadmapCanvas({ course }) {
                 strokeDasharray="3 6"
               />
             ))}
-            {layout.edges.map((edge) => (
-              <path
-                key={`${edge.from}-${edge.to}`}
-                d={edge.path}
-                fill="none"
-                stroke="currentColor"
-                strokeOpacity="0.32"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            ))}
+            {layout.edges.map((edge) => {
+              const connected =
+                hovered && (edge.from === hovered || edge.to === hovered);
+              return (
+                <path
+                  key={`${edge.from}-${edge.to}`}
+                  d={edge.path}
+                  fill="none"
+                  stroke={connected ? "var(--color-accent)" : "currentColor"}
+                  strokeOpacity={
+                    hovered ? (connected ? 0.9 : 0.07) : 0.32
+                  }
+                  strokeWidth={connected ? 2.5 : 2}
+                  strokeLinecap="round"
+                />
+              );
+            })}
           </svg>
 
           {layout.rows.map((row) => {
@@ -198,13 +209,23 @@ export default function RoadmapCanvas({ course }) {
               <a
                 key={node.id}
                 href={pathFor(course.subject, node.id)}
+                onPointerEnter={() => setHovered(node.id)}
+                onPointerLeave={() => setHovered(null)}
+                onFocus={() => setHovered(node.id)}
+                onBlur={() => setHovered(null)}
                 style={{
                   left: position.x,
                   top: position.y,
                   width: CARD_W,
                   height: CARD_H,
+                  opacity: related && !related.has(node.id) ? 0.3 : 1,
+                  zIndex: hovered === node.id ? 10 : 1,
                 }}
-                className="group absolute flex flex-col justify-between border-2 border-ink bg-surface px-3 py-2 shadow-[4px_4px_0_var(--robo-shadow-soft)] transition-colors hover:border-accent"
+                className={`group absolute flex flex-col justify-between border-2 bg-surface px-3 py-2 shadow-[4px_4px_0_var(--robo-shadow-soft)] transition-[opacity,border-color] ${
+                  hovered === node.id
+                    ? "border-accent"
+                    : "border-ink hover:border-accent"
+                }`}
               >
                 <span className="line-clamp-2 text-[0.88rem] font-medium leading-snug text-ink transition-colors group-hover:text-accent">
                   {node.title}

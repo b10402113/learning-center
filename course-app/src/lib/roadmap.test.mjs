@@ -7,6 +7,7 @@ import {
   ROW_GAP,
   buildGraph,
   layoutRoadmap,
+  neighbors,
   reduceEdges,
 } from "./roadmap.mjs";
 
@@ -30,6 +31,16 @@ test("builds one edge per prerequisite and drops dangling ids", () => {
   assert.deepEqual(graph.edges, [{ from: "a", to: "b" }]);
   assert.deepEqual(graph.parents.get("b"), ["a"]);
   assert.deepEqual(graph.children.get("a"), ["b"]);
+});
+
+test("neighbors collects both upstream and downstream nodes", () => {
+  const edges = [
+    { from: "a", to: "b" },
+    { from: "b", to: "c" },
+    { from: "d", to: "b" },
+  ];
+  assert.deepEqual([...neighbors(edges, "b")].sort(), ["a", "b", "c", "d"]);
+  assert.deepEqual([...neighbors(edges, "c")].sort(), ["b", "c"]);
 });
 
 test("drops edges implied by a longer path", () => {

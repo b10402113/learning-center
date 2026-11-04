@@ -11,6 +11,9 @@ export default function NodeView({ course, node, onSelect, onSubject }) {
   const prereqs = (node.requires || [])
     .map((id) => course.nodes.find((n) => n.id === id) || null)
     .filter(Boolean);
+  const dependents = course.nodes.filter((n) =>
+    (n.requires || []).includes(node.id)
+  );
 
   const tier = course.tiers.find((t) => t.tier === node.tier);
 
@@ -96,6 +99,22 @@ export default function NodeView({ course, node, onSelect, onSubject }) {
               className="border-2 border-ink bg-surface px-3 py-1 font-medium text-ink transition-colors hover:border-accent hover:text-accent"
             >
               ← {p.title}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {dependents.length > 0 && (
+        <div className="mt-4 flex flex-wrap items-center gap-2 font-label text-[11px]">
+          <span className="robo-kicker text-ink-soft">後續節點</span>
+          {dependents.map((next) => (
+            <button
+              key={next.id}
+              type="button"
+              onClick={() => onSelect(next.id)}
+              className="border-2 border-ink bg-surface px-3 py-1 font-medium text-ink transition-colors hover:border-accent hover:text-accent"
+            >
+              {next.title} →
             </button>
           ))}
         </div>
