@@ -99,20 +99,3 @@ test("a failed forced publish leaves the figures and record intact", async (t) =
   assert.equal(existsSync(join(root, "learn/test/output/n1/s1/humanized.md")), true);
   assert.match(readFileSync(join(root, "learn/test/nodes/n1/s1.md"), "utf8"), /image-1\.webp/);
 });
-
-test("a direct run that did not finish on polish.md is rejected", async (t) => {
-  const root = publishFixture(t, { runArticle: markerArticle });
-  write(
-    root,
-    "learn/test/output/n1/s1/result.json",
-    JSON.stringify({
-      status: "completed",
-      mode: "direct",
-      article: join(root, "learn/test/output/n1/s1/original.md"),
-      images: [],
-    }),
-  );
-  const report = await publishArticles({ root, subject: "test", node: "n1" });
-  assert.equal(report.steps[0].status, "failed");
-  assert.match(readFileSync(join(root, "learn/test/nodes/n1/s1.md"), "utf8"), /image-1\.webp/);
-});

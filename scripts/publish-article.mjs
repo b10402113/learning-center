@@ -15,7 +15,6 @@ import {
   polishedRecordPath,
   prepareFile,
   readJson,
-  restoreCode,
 } from "../src/article-agent-bridge.mjs";
 import { runChecks } from "./verify.mjs";
 import { setStepTitle } from "./set-step-title.mjs";
@@ -45,36 +44,24 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
       results.push({ id: entry.id, title: entry.title ?? entry.id, status: "not-prepared", path: shown });
       continue;
     }
-    const result = readJson(files.result);
-    if (!result || result.status !== "completed") {
+    if (!existsSync(files.polish)) {
       results.push({
         id: entry.id,
         title: entry.title ?? entry.id,
         status: "failed",
         path: shown,
-        error: result?.error ?? "no completed article-agent run",
+        error: "no polished article; run compose, mark, and polish first",
       });
       continue;
     }
-    if (result.mode === "direct" && resolve(result.article ?? "") !== resolve(files.polish)) {
-      results.push({
-        id: entry.id,
-        title: entry.title ?? entry.id,
-        status: "failed",
-        path: shown,
-        error: "direct run did not finish on polish.md",
-      });
-      continue;
-    }
-    const article = existsSync(result.article) ? readFileSync(result.article, "utf8") : "";
+    const article = readFileSync(files.polish, "utf8");
     if (!article.trim()) {
-      results.push({ id: entry.id, title: entry.title ?? entry.id, status: "failed", path: shown, error: "run produced no article" });
+      results.push({ id: entry.id, title: entry.title ?? entry.id, status: "failed", path: shown, error: "polished article is empty" });
       continue;
     }
-    const blocks = readJson(files.blocks) ?? [];
-    const body = normalizeArticleText(restoreCode(article, blocks), entry.title ?? null);
+    const body = normalizeArticleText(article, entry.title ?? null);
     if (!hasArticleBody(body)) {
-      results.push({ id: entry.id, title: entry.title ?? entry.id, status: "failed", path: shown, error: "article has no body" });
+      results.push({ id: entry.id, title: entry.title ?? entry.id, status: "failed", path: shown, error: "polished article has no body" });
       continue;
     }
     mkdirSync(dirname(target), { recursive: true });
@@ -110,11 +97,10 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
 const usage = `Usage:
   node scripts/publish-article.mjs --subject <s> --node <n> [--step <id>] [--force] [--root <dir>]
 
-Copies each completed marker-only article-agent run back into learn/, restores
-protected code blocks, keeps the <!--image:N--> markers, normalizes the H1,
-marks the node written, and runs verify. With --force, a successful write also
-removes the step's stale image-N files (the markers are rendered later) and its
-humanized stage files.`;
+Copies each prepared step's polish.md back into learn/, keeps the <!--image:N-->
+markers, normalizes the H1, marks the node written, and runs verify. With --force,
+a successful write also removes the step's stale image-N files (the markers are
+rendered later) and its humanized stage files.`;
 
 async function main() {
   const { values } = parseArgs({

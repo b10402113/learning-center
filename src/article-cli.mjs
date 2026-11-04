@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import {
   hasArticleBody,
+  insertImageMarkers,
+  normalizeArticleText,
   readNode,
   readStepSlices,
   runArticle,
@@ -14,6 +16,7 @@ import {
   jobFiles,
   prepareFile,
   readJson,
+  readStepPlan,
   teachingPlanPath,
   writeJson,
   writeMaterial,
@@ -40,19 +43,27 @@ import {
 
 const usage = `Usage:
   node src/article-cli.mjs prepare --subject <s> --node <n> [--step <id>] [--force] [--skip-polish] [--root <dir>]
+  node src/article-cli.mjs compose --subject <s> --node <n> [--step <id>] [--max-chars <n>] [--root <dir>]
+  node src/article-cli.mjs mark    --subject <s> --node <n> [--step <id>] [--root <dir>]
   node src/article-cli.mjs publish --subject <s> --node <n> [--step <id>] [--force] [--root <dir>]
   node src/article-cli.mjs render  --subject <s> --node <n> [--step <id>] [--force] [--max-parallel <n>] [--root <dir>]
   node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force] [--images] [--max-parallel <n>] [--root <dir>]  (deprecated)
   node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only] [--root <dir>]  (deprecated)
 
 prepare  writes one material bundle per missing step and lists the publisher job
-         (material, original, polish, plan, polishCommand, command). The publisher writes
-         the original with its <!--image:N--> markers and a matching plan, runs
-         polishCommand to polish both, then runs the --markers-only command,
-         which validates the markers instead of generating figures.
+         (material, original, polish, plan, composeCommand, markCommand, polishCommand,
+         titleCommand). The publisher curates the material, then compose calls the
+         text model once to write original.md, and mark inserts the <!--image:N-->
+         markers from the publisher's plan.
          --skip-polish hands over a polishCommand that carries --copy, so the
          publisher's original becomes polish.md unchanged and the plan stays as written.
-publish  writes completed marker-only runs into learn/ without touching figures,
+compose  reads the publisher's curated material.json (sources with text) and calls
+         the text model once to write output/<node>/<step>/original.md — no image
+         markers. It enforces an input size cap (ARTICLE_MAX_MATERIAL_CHARS, default
+         120000) and retries only when the model returns an empty body or no H1.
+mark     reads original.md and the publisher's <step>.plan.json, inserts the
+         <!--image:N--> markers, and writes original.md back. It never calls a model.
+publish  writes polished steps into learn/ without touching figures,
          marks the node written, and runs verify.
 render   turns <!--image:N--> markers into WebP figures and image lines. It only
          reads the publisher's plan; it never plans, rewrites prose, or reads
@@ -90,7 +101,7 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     const slices = readStepSlices(root, entry);
     if (force) {
       const existingFiles = jobFiles(root, { subject, node: nodeId, step: entry.id });
-      for (const key of ["polish", "result", "blocks", "request", "protected", "translated"]) {
+      for (const key of ["original", "polish", "result", "blocks", "request", "protected", "translated"]) {
         rmSync(existingFiles[key], { force: true });
       }
     }
@@ -107,10 +118,13 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
       original: relative(root, files.original),
       polish: relative(root, files.polish),
       plan: relative(root, files.plan),
+      composeCommand:
+        `node src/article-cli.mjs compose --subject ${subject} --node ${nodeId} --step ${entry.id}`,
+      markCommand:
+        `node src/article-cli.mjs mark --subject ${subject} --node ${nodeId} --step ${entry.id}`,
       polishCommand:
         `node scripts/polish-article.mjs draft --subject ${subject} --node ${nodeId} --step ${entry.id}` +
         (skipPolish ? " --copy" : ""),
-      command: `node scripts/run-article-agent.mjs --subject ${subject} --node ${nodeId} --step ${entry.id} --mode direct --markers-only`,
       titleCommand: `node "${resolve(root, "scripts/set-step-title.mjs")}" --root "${resolve(root)}" --subject ${subject} --node ${nodeId} --step ${entry.id} --from "${resolve(root, files.polish)}"`,
     });
   }
@@ -134,6 +148,135 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     steps,
     skipped,
   };
+}
+
+async function composeArticles({ root, subject, node: nodeId, step = null, maxChars = null }) {
+  const node = readNode(root, subject, nodeId);
+  const entries = selectSteps(node, step);
+  const prompt = readFileSync(join(root, "prompts", "article.txt"), "utf8");
+  const cap = maxChars ?? Number(process.env.ARTICLE_MAX_MATERIAL_CHARS ?? 120000);
+  const model = resolveTextModel();
+  const results = [];
+  const pending = [];
+  for (const entry of entries) {
+    const files = jobFiles(root, { subject, node: nodeId, step: entry.id });
+    const material = readJson(files.material);
+    if (!material) {
+      results.push({
+        id: entry.id,
+        status: "failed",
+        error: "material.json not found; run prepare and the publisher first",
+      });
+      continue;
+    }
+    const sources = Array.isArray(material.sources) ? material.sources : [];
+    const curated = sources.filter((source) => source && typeof source.text === "string" && source.text.trim());
+    if (curated.length === 0) {
+      results.push({
+        id: entry.id,
+        status: "failed",
+        error: "material.json has no curated text; run the publisher curation first",
+      });
+      continue;
+    }
+    const materialChars = curated.reduce((sum, source) => sum + source.text.length, 0);
+    if (materialChars > cap) {
+      results.push({
+        id: entry.id,
+        status: "failed",
+        materialChars,
+        limit: cap,
+        error: `material is ${materialChars} chars, over the ${cap} limit; curate a smaller selection`,
+      });
+      continue;
+    }
+    pending.push({
+      entry,
+      files,
+      curated,
+      materialChars,
+      title: material.title ?? entry.title ?? null,
+      purpose: material.purpose ?? entry.purpose,
+    });
+  }
+  if (pending.length === 0) {
+    return { mode: "compose", subject, node: nodeId, steps: results };
+  }
+  const client = await createTextClient();
+  for (const { entry, files, curated, materialChars, title, purpose } of pending) {
+    let article = null;
+    let retries = 0;
+    for (let attempt = 0; attempt < 3 && !article; attempt += 1) {
+      retries = attempt;
+      const response = await withRetry(
+        async () => {
+          const result = await client.chat.completions.create({
+            model,
+            messages: [
+              { role: "system", content: prompt },
+              { role: "user", content: JSON.stringify({ title, purpose, sources: curated }, null, 2) },
+            ],
+          });
+          const error = responseError(result);
+          if (error) throw error;
+          return textContent(result).replace(/\r\n/g, "\n");
+        },
+        { attempts: 2, retryOn: (error) => !httpStatus(error) },
+      );
+      const normalized = normalizeArticleText(response, title);
+      if (hasArticleBody(normalized)) article = normalized;
+    }
+    if (!article) {
+      results.push({
+        id: entry.id,
+        title,
+        status: "failed",
+        retries,
+        error: "model returned no article body after retries",
+      });
+      continue;
+    }
+    mkdirSync(files.dir, { recursive: true });
+    writeFileSync(files.original, article);
+    results.push({
+      id: entry.id,
+      title,
+      status: "composed",
+      article: relative(root, files.original),
+      model,
+      materialChars,
+      retries,
+    });
+  }
+  return { mode: "compose", subject, node: nodeId, steps: results };
+}
+
+function markArticles({ root, subject, node: nodeId, step = null }) {
+  const node = readNode(root, subject, nodeId);
+  const entries = selectSteps(node, step);
+  const results = [];
+  for (const entry of entries) {
+    const files = jobFiles(root, { subject, node: nodeId, step: entry.id });
+    if (!existsSync(files.original) || !hasArticleBody(readFileSync(files.original, "utf8"))) {
+      results.push({
+        id: entry.id,
+        status: "failed",
+        error: "original.md missing or empty; run compose first",
+      });
+      continue;
+    }
+    const original = readFileSync(files.original, "utf8");
+    let plan;
+    try {
+      plan = readStepPlan(root, { subject, node: nodeId, step: entry.id }, original);
+    } catch (error) {
+      results.push({ id: entry.id, status: "failed", error: error?.message ?? error });
+      continue;
+    }
+    writeFileSync(files.original, insertImageMarkers(original, plan));
+    results.push({ id: entry.id, status: "marked", markers: plan.length, planLength: plan.length });
+  }
+  return { mode: "mark", subject, node: nodeId, steps: results };
 }
 
 function requireSubjectNode(values) {
@@ -214,6 +357,7 @@ async function main() {
       images: { type: "boolean", default: false },
       "plan-only": { type: "boolean", default: false },
       "max-parallel": { type: "string" },
+      "max-chars": { type: "string" },
       root: { type: "string" },
       help: { type: "boolean", default: false },
     },
@@ -225,7 +369,7 @@ async function main() {
     console.log(usage);
     return;
   }
-  if (!["article", "image", "prepare", "publish", "render"].includes(mode)) {
+  if (!["article", "image", "prepare", "compose", "mark", "publish", "render"].includes(mode)) {
     throw new Error(`unknown mode: ${mode}\n\n${usage}`);
   }
   requireSubjectNode(values);
@@ -245,6 +389,24 @@ async function main() {
 
   if (mode === "prepare") {
     console.log(JSON.stringify(prepareArticles(target), null, 2));
+    return;
+  }
+  if (mode === "compose") {
+    const report = await composeArticles({
+      root,
+      subject: values.subject,
+      node: values.node,
+      step: values.step || null,
+      maxChars: values["max-chars"] ? Number(values["max-chars"]) : null,
+    });
+    console.log(JSON.stringify(report, null, 2));
+    if (report.steps.some((step) => step.status === "failed")) process.exitCode = 1;
+    return;
+  }
+  if (mode === "mark") {
+    const report = markArticles({ root, subject: values.subject, node: values.node, step: values.step || null });
+    console.log(JSON.stringify(report, null, 2));
+    if (report.steps.some((step) => step.status === "failed")) process.exitCode = 1;
     return;
   }
   if (mode === "publish") {

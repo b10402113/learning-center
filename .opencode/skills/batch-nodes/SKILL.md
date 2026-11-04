@@ -18,7 +18,7 @@ Run the normal pipeline — `/nodes` → `/article` → humanize → `/generate-
 - `-article-per-node` — Article dispatches one `publisher` per node instead of one per step, so that subagent writes the node's ready steps in order and `max-subagents` caps nodes in flight rather than steps.
 - `-nodes-only` — run the Nodes phase and stop.
 - `-skip-article` — skip Article. Humanize, Generate, and Quiz still run against whatever is already on disk.
-- `-skip-polish` — the publisher writes the original and the plan and stops there: its `polishCommand` carries `--copy`, which copies the original to `polish.md` unchanged and keeps the plan as written. Humanize is a separate pass and still runs.
+ - `-skip-polish` — the publisher curates the material and writes the plan; `compose` still writes the original, but its `polishCommand` carries `--copy`, which copies the original to `polish.md` unchanged and keeps the plan as written. Humanize is a separate pass and still runs.
 - `-skip-humanize` — skip Humanize. Article, Generate, and Quiz still run.
 - `-skip-images` — skip Generate: no image plan is rendered and no image-API spend happens. Article still writes the plan and markers; a later `/generate-images` renders them.
 - `-skip-quiz` — skip Quiz.
@@ -71,9 +71,9 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 
    Add `--skip-polish` when the run was invoked with it, so every step's `polishCommand` carries `--copy`.
 
-   Read the JSON. `steps[]` is the work: each entry carries `id`, `title` (may be `null`), `purpose`, `material`, `original`, `polish`, `plan`, `polishCommand`, `command` (already `--markers-only`), and `titleCommand`. `skipped[]` means the step already has a body; keep it out of the publisher batch. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
+   Read the JSON. `steps[]` is the work: each entry carries `id`, `title` (may be `null`), `purpose`, `material`, `original`, `polish`, `plan`, `composeCommand`, `markCommand`, `polishCommand`, and `titleCommand`. `skipped[]` means the step already has a body; keep it out of the publisher batch. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
 
-   **3b. Dispatch publishers.** Batch the prepared nodes in roadmap order by `max-subagents` and run the batches sequentially. By default one dispatch is one step: one `task` call per ready step in a single message, `subagent_type: publisher`, the [Publisher-prompt](#publisher-prompt) filled in for that step. With `-article-per-node` one dispatch is one node: one `task` call per node carrying that node's ready steps in order. Give a dispatch only the steps it owns — never another node's article, plan, or source material. Inside a dispatch each step writes its original and plan, runs `polishCommand` to produce `polish.md` and, unless `-skip-polish` was set, polish the plan with it, then runs the markers-only wrapper and the title command. Wait for every call and record `completed` or `failed`.
+   **3b. Dispatch publishers.** Batch the prepared nodes in roadmap order by `max-subagents` and run the batches sequentially. By default one dispatch is one step: one `task` call per ready step in a single message, `subagent_type: publisher`, the [Publisher-prompt](#publisher-prompt) filled in for that step. With `-article-per-node` one dispatch is one node: one `task` call per node carrying that node's ready steps in order. Give a dispatch only the steps it owns — never another node's article, plan, or source material. Inside a dispatch each step curates its material, runs `composeCommand` to write the original, reads it to write the plan, runs `markCommand` to insert the markers, runs `polishCommand` to produce `polish.md` and (unless `-skip-polish`) polish the plan with it, then runs `titleCommand`. Wait for every call and record `completed` or `failed`.
 
    **3c. Publish.** After all publisher batches finish, publish each node that has at least one prepared step, in roadmap order:
 
@@ -212,7 +212,7 @@ Report back: step count, ordered step ids, skeleton files created, verify exit s
 Dispatch every call with `subagent_type: publisher`. Fill `<NODE-ID>`, `<SUBJECT>`, and one block per step the dispatch owns — one step by default, every ready step of the node with `-article-per-node` — from `prepare`'s `steps[]`. Never include another node's content.
 
 ```
-Write the original article and image plan for every step below, polish both, then run the repo wrapper. Node: <SUBJECT>/<NODE-ID>.
+Curate the material and write the image plan for every step below, then compose, mark, and polish. Node: <SUBJECT>/<NODE-ID>.
 
 Steps, in this order — finish one step completely before starting the next:
 - id: <STEP-ID>
@@ -221,25 +221,28 @@ Steps, in this order — finish one step completely before starting the next:
   Material bundle: <MATERIAL>
   Original output: <ORIGINAL>
   Image plan output: <PLAN>
-  Run this command first: <POLISH-COMMAND>
-  Then run this command: <COMMAND>   (already includes --markers-only)
-  Then run this command: <TITLE-COMMAND>
+  Compose command: <COMPOSE-COMMAND>
+  Mark command: <MARK-COMMAND>
+  Polish command: <POLISH-COMMAND>
+  Title command: <TITLE-COMMAND>
 
-Write each step from its own material only: do not carry one step's examples, terms, or conclusions into another.
+Curate each step from its own material only: do not carry one step's examples, terms, or conclusions into another.
 
-For each step, read its material bundle. Its `purpose` is that article's main theme; use the Read tool to read every file named in its `sources` in full, all the way to the end — the `locator` is only the cited range for provenance, not the reading range. Write the original article to <ORIGINAL> in the language recorded in `learn/<SUBJECT>/MEMORY.md` (this repo uses Traditional Chinese), grounded only in those sources. The first line is the H1: use <TITLE> exactly when one is given; when it says "choose one", pick a title from a heading or phrase that actually appears in the sources, translated faithfully, and do not invent one.
+For each step, read its material bundle. Its `purpose` is that article's main theme; use the Read tool to read every file named in its `sources` in full, all the way to the end — the `locator` is only the cited range for provenance, not the reading range. Overwrite <MATERIAL> with your curated selection: keep `title`, `purpose`, and one entry per selected piece with `path`, `locator`, and `text` (the prose or code you picked, trimmed to support this article). Use <TITLE> exactly when one is given; when it says "choose one", pick a title from a heading or phrase that actually appears in the sources, translated faithfully, and do not invent one.
 
-Decide 1-5 places where a figure genuinely helps the reader, spread them across the article, and put one `<!--image:N-->` marker at each place: its own line, blank lines before and after, numbered 1..N in article order. Write the imagePlan as a JSON array with one item per marker, in the same order; each item has `heading` and `prompt` only, no `anchor`. The plan length must equal the marker count.
+There is no `article_generate` tool in this repo and you do not write article prose. Run <COMPOSE-COMMAND> from the repo root: it reads your curated <MATERIAL> and calls the text model once to write <ORIGINAL> in the language recorded in `learn/<SUBJECT>/MEMORY.md` (this repo uses Traditional Chinese), grounded only in those sources, with no `<!--image:N-->` markers. It needs TEXT_API_KEY. If it fails, stop and report the error; do not edit the files to work around it and do not retry automatically.
 
-There is no `article_generate` tool in this repo. After writing <ORIGINAL> and <PLAN>, run <POLISH-COMMAND> from the repo root. It polishes the prose and each plan item's `heading` and `prompt`, keeps the H1, markers, code, and links intact, and needs TEXT_API_KEY; when it carries `--copy` it instead copies the original to `polish.md` unchanged, leaves the plan as written, needs no key, and reports `copied`. If it fails, stop and report the error; do not edit the files to work around it and do not retry automatically. Do not modify <ORIGINAL> or <PLAN> after it succeeds.
+After <ORIGINAL> exists, read it and decide 1-5 places where a figure genuinely helps the reader, spread them across the article. Write <PLAN> as a JSON array with one item per figure, in order; each item has `heading` (the section title from the article), optionally `anchor` (a short phrase copied verbatim from <ORIGINAL>, used only for placement), and `prompt` (a Traditional Chinese description of the concept — no art style, palette, background, or medium). Do not pad to 5.
 
-Then run <COMMAND>. The command reads `polish.md` and validates that its `<!--image:N-->` markers match the plan in count and order and keeps them in place; it does not insert or move markers. It does not generate figures and does not need IMAGE_API_KEY. Do not rewrite the article after the command returns, and do not retry automatically if it fails.
+Then run <MARK-COMMAND>: it reads <ORIGINAL> and <PLAN> and inserts one `<!--image:N-->` marker per plan item, in order, writing <ORIGINAL> back. It calls no model. Do not rewrite the article afterward.
 
-After the wrapper reports `completed`, run <TITLE-COMMAND>. It copies the H1 into the node's step entry and updates the `## Steps` label. Do not write to `learn/<SUBJECT>/nodes/` any other way.
+Then run <POLISH-COMMAND>. It polishes the prose and each plan item's `heading` and `prompt`, keeps the H1, markers, code, and links intact, and needs TEXT_API_KEY; when it carries `--copy` it instead copies the original to `polish.md` unchanged, leaves the plan as written, needs no key, and reports `copied`. If it fails, stop and report the error; do not edit the files to work around it and do not retry automatically. Do not modify <ORIGINAL> or <PLAN> after it succeeds.
 
-Done means every step listed has all three: `polishCommand` reporting `polished` (or `copied`), `command` reporting `completed` with a marker count equal to its plan length, and `titleCommand` reporting `updated` or `unchanged`. Stop at the first failure and leave that step's output for a human.
+After polish reports success, run <TITLE-COMMAND>. It copies the H1 into the node's step entry and updates the `## Steps` label. Do not write to `learn/<SUBJECT>/nodes/` any other way.
 
-Report back, per step: polish, command, and title-command status, chosen title, output path, plan length, marker count, and any error.
+Done means every step listed has all four: `composeCommand` reporting `composed`, `markCommand` reporting `marked`, `polishCommand` reporting `polished` (or `copied`), and `titleCommand` reporting `updated` or `unchanged`, with a marker count equal to its plan length. Stop at the first failure and leave that step's output for a human.
+
+Report back, per step: compose, mark, polish, and title-command status, chosen title, output path, plan length, marker count, and any error.
 ```
 
 ## Humanize-prompt
