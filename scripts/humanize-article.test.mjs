@@ -297,6 +297,27 @@ test("a changed plan anchor, length, key or empty prompt fails validation", (t) 
   );
 });
 
+test("humanize refuses to change a display formula", () => {
+  const article = `# Step One
+
+Opening.
+
+$$
+P(A \\mid B) = \\frac{P(B \\mid A)P(A)}{P(B)}
+$$
+`;
+  assert.doesNotThrow(() =>
+    validateHumanizedArticle({
+      original: article,
+      next: article.replace("Opening.", "A different opening."),
+    }),
+  );
+  assert.throws(
+    () => validateHumanizedArticle({ original: article, next: article.replace("P(A", "P(B") }),
+    /formula block/,
+  );
+});
+
 test("validators accept only prose and heading/prompt changes", () => {
   assert.doesNotThrow(() =>
     validateHumanizedArticle({

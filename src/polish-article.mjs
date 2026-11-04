@@ -86,6 +86,19 @@ export function protectArticle(markdown) {
       continue;
     }
 
+    if (trimmed.startsWith("$$")) {
+      let end = index;
+      if (!(trimmed.length > 2 && trimmed.endsWith("$$"))) {
+        end = index + 1;
+        while (end < lines.length && !lines[end].trim().endsWith("$$")) end += 1;
+        end = Math.min(end, lines.length - 1);
+      }
+      out.push(token(lines.slice(index, end + 1).join("\n")));
+      index = end + 1;
+      previousWasImage = false;
+      continue;
+    }
+
     const fence = line.match(CODE_FENCE);
     if (fence) {
       const end = fenceEnd(lines, index, fence[1].length, fence[1][0]);
@@ -229,6 +242,24 @@ function equalList(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function mathBlocks(markdown) {
+  const lines = String(markdown).replace(/\r\n/g, "\n").split("\n");
+  const blocks = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const trimmed = lines[index].trim();
+    if (!trimmed.startsWith("$$")) continue;
+    let end = index;
+    if (!(trimmed.length > 2 && trimmed.endsWith("$$"))) {
+      end = index + 1;
+      while (end < lines.length && !lines[end].trim().endsWith("$$")) end += 1;
+      end = Math.min(end, lines.length - 1);
+    }
+    blocks.push(lines.slice(index, end + 1).join("\n"));
+    index = end;
+  }
+  return blocks;
+}
+
 function codeBlocks(markdown) {
   const lines = String(markdown).replace(/\r\n/g, "\n").split("\n");
   const blocks = [];
@@ -259,6 +290,9 @@ export function validatePolishedArticle({ original, next }) {
   }
   if (!equalList(codeBlocks(original), codeBlocks(next))) {
     throw new Error("polish changed a fenced code block");
+  }
+  if (!equalList(mathBlocks(original), mathBlocks(next))) {
+    throw new Error("polish changed a formula block");
   }
   if (!equalList(quizBlocks(original), quizBlocks(next))) {
     throw new Error("polish changed a quiz block");
@@ -384,6 +418,21 @@ function readPolishedPlan(root, { subject, node, step }) {
   } catch {
     return null;
   }
+}
+
+function copyDraftAsIs({ files, entry, article, plan, shownPolish, shownPlan, error }) {
+  writeFileSync(files.polish, article);
+  return {
+    id: entry.id,
+    title: entry.title,
+    status: "copied",
+    changed: false,
+    fallback: true,
+    error,
+    article: shownPolish,
+    plan: shownPlan,
+    anchors: plan.length,
+  };
 }
 
 async function polishOne({ root, subject, node, entry, force, instruction, fetchImpl }) {
@@ -518,7 +567,15 @@ export async function runPolishDraft({
 
   const prose = await polishProse({ article, plan, instruction, fetchImpl, root });
   if (prose.error) {
-    return { id: entry.id, title: entry.title, status: "failed", path: shownOriginal, error: prose.error };
+    return copyDraftAsIs({
+      files,
+      entry,
+      article,
+      plan,
+      shownPolish,
+      shownPlan,
+      error: prose.error,
+    });
   }
   const rewritten = await polishPlan({
     plan,
@@ -528,7 +585,15 @@ export async function runPolishDraft({
     root,
   });
   if (rewritten.error) {
-    return { id: entry.id, title: entry.title, status: "failed", path: shownPlan, error: rewritten.error };
+    return copyDraftAsIs({
+      files,
+      entry,
+      article,
+      plan,
+      shownPolish,
+      shownPlan,
+      error: rewritten.error,
+    });
   }
 
   writeFileSync(files.polish, prose.next);

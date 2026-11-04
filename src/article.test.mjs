@@ -184,7 +184,33 @@ test("material carries the purpose and source pointers, not slice text", (t) => 
 
   assert.equal(material.purpose, "Explain one thing.");
   assert.deepEqual(material.sources, [
-    { path: "sources/test/notes.txt", locator: "#L1-L3" },
+    { path: "sources/test/notes.txt", locator: "#L1-L3", type: "article" },
+  ]);
+});
+
+test("material marks code sources and carries their language", (t) => {
+  const root = fixture(t);
+  write(root, "sources/test/loop.mjs", "const a = 1;\n");
+  const entry = {
+    id: "s1",
+    title: "Step One",
+    purpose: "Explain one thing.",
+    sources: ["[[sources/test/loop.mjs#L1-L1]]"],
+  };
+  const { material } = writeMaterial(root, {
+    subject: "test",
+    node: "n1",
+    entry,
+    slices: readStepSlices(root, entry),
+  });
+
+  assert.deepEqual(material.sources, [
+    {
+      path: "sources/test/loop.mjs",
+      locator: "#L1-L1",
+      type: "code",
+      language: "javascript",
+    },
   ]);
 });
 

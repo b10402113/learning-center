@@ -424,6 +424,26 @@ test("each step entry needs id, purpose, and sources", (t) => {
   assert.ok(failures(root).includes("step-entry"));
 });
 
+test("a step author is optional but must be a non-empty string when present", (t) => {
+  const invalid = fixture(t);
+  update(
+    invalid,
+    "learn/test/nodes/n1.md",
+    '    purpose: "Explain one thing."\n',
+    '    purpose: "Explain one thing."\n    author: ""\n',
+  );
+  assert.ok(failures(invalid).includes("step-author"));
+
+  const valid = fixture(t);
+  update(
+    valid,
+    "learn/test/nodes/n1.md",
+    '    purpose: "Explain one thing."\n',
+    '    purpose: "Explain one thing."\n    author: "test-model"\n',
+  );
+  assert.ok(!failures(valid).includes("step-author"));
+});
+
 function prerequisiteFixture(t, nodes) {
   const root = fixture(t);
   for (const node of nodes) writeDraftNode(root, node);

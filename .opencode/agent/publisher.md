@@ -27,14 +27,27 @@ permission:
   "title": "<你選定的標題>",
   "purpose": "<purpose>",
   "sources": [
-    { "path": "sources/<subject>/<file>", "locator": "#Lx-Ly", "text": "<要餵給模型的那段文字或程式碼>" }
+    {
+      "path": "sources/<subject>/<file>",
+      "locator": "#Lx-Ly",
+      "type": "article | code | formula",
+      "language": "<只有 code 需要，選填>",
+      "text": "<要餵給模型的那段文字、程式碼或 LaTeX>"
+    }
   ]
 }
 ```
 
 - `title`：dispatch 有給就一字不改沿用；`title` 是 `null` 時，自己從素材裡實際出現的標題或句子選一個，忠實翻譯、不要發明。
 - `purpose` 原樣保留。
-- `sources` 每項都保留 `path` 與 `locator`（模型要用來寫 provenance 的 `<!-- source: …#Lx-Ly -->`），`text` 是你依 `purpose` 挑選、裁切後真正要餵給模型的內容。程式碼片段照原文保留，不要截斷會看不懂的上下文。
+- `sources` 每項都保留 `path` 與 `locator`。`prepare` 會先用副檔名猜 `type`；你讀完來源後要確認或改正，不要把猜測留下來。
+- `type` 只能填 `article`、`code` 或 `formula`：
+  - `article`：一般敘述、事實、引述與例子。
+  - `code`：逐字要引用的程式碼。`text` 必須跟來源一字不差；不要放 code fence，也不要改寫。`language` 選填，沒有就由 CLI 依副檔名推斷。
+  - `formula`：要排版的 LaTeX。`text` 只放公式本身，不要包 `$` 或 `$$`。
+- 同一個 `locator` 若混有散文與程式碼，拆成兩筆（或收窄成兩個 `locator`），各自標正確的 `type`。
+- `text` 是你依 `purpose` 挑選、裁切後真正要餵給模型的內容。程式碼片段照原文保留，不要截斷會看不懂的上下文。
+- 不要自己寫 `{{ARTICLE_CODE_N}}` 或 `{{ARTICLE_FORMULA_N}}` placeholder；`compose` 會依 `type` 自動配發，並在模型寫完後換成正式內容。
 - 挑選要精簡：只留能支撐這篇文章的事實、程式與引述，不要整檔複製，也不要硬塞到超過字數上限（`compose` 預設上限 120000 字元，超限會直接失敗）。
 
 ## 3. 執行 compose
@@ -45,7 +58,9 @@ permission:
 - 它會把 `title` 當 H1、依 `purpose` 與 `sources` 寫成台灣繁體中文文章；程式碼照抄進 fenced block 並帶 provenance 註解。
 - 它需要 `TEXT_API_KEY`。
 - 它不會放任何 `<!--image:N-->` marker。
-- 失敗就停在這裡，把 output 留給人檢查。不要自己改寫 `original.md` 繞過它，也不要自動重試。
+- 成功回報 `status: composed`；若模型連續三次漏用 placeholder，它仍會寫出 `original.md` 並回報 `status: draft`，`compose.json` 的 `missing` 會列出漏掉的來源。
+- 遇到 `draft`：讀 `original.md` 與 `missing`。缺的程式若要留在文章裡，把那段素材縮短或調整後重跑一次 `composeCommand`；不影響主旨就直接沿用 draft 繼續下一步。不要自己改寫散文，也不要手動編輯 `original.md` 繞過 CLI。
+- 只有回報 `status: failed`（連草稿都沒有）才停在這裡，把 output 留給人檢查，不要自動重試。
 
 ## 4. 寫配圖清單
 
@@ -84,9 +99,8 @@ permission:
 - 它會保留 H1、`<!--image:N-->` marker、fenced code、provenance 註解與連結；marker 的數量、編號與位置不變。
 - 這一步會呼叫文字模型，需要 `TEXT_API_KEY`；它不呼叫圖片模型。
 - 指令帶 `--copy` 時（`-skip-polish`）它反過來不呼叫模型、不需要 key：只把 `original` 原樣複製成 `polish.md`、`plan` 保持原樣，回報 `copied`；這不是失敗。
-- 失敗時不會寫入任何檔案。
-- 失敗就停在這裡，把 output 留給人檢查。不要自己改寫原稿或 plan 來繞過它，也不要自動重試。
-- `polishCommand` 成功後，不要再手動修改 `original`、`polish` 或 `plan`。
+- 模型潤飾失敗時會自動退化成同一種 `copied` 行為：把 `original` 原樣寫成 `polish.md`、`plan` 保持原樣，回報 `status: copied` 加上 `fallback: true` 與 `error`。這不是失敗，帶著 warning 繼續下一步。
+- `polishCommand` 回報 `polished` 或 `copied` 都算成功；`copied` 之後不要再手動修改 `original`、`polish` 或 `plan`。
 
 接著執行 `titleCommand`。它會把 `polish.md` 的 H1 寫進 node 的 step entry 與 `## Steps` 標籤。確認它回報 `status: updated` 或 `unchanged`、標題與 H1 一致。除了你本來就要寫的 `plan` 與 `titleCommand`，不要寫入 `learn/<subject>/nodes/`。
 

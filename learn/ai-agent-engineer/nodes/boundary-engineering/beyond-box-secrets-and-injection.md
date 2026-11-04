@@ -1,87 +1,127 @@
-# box 只覆蓋邊界的兩塊，另外兩塊是你自己的
+# 盒子沒有做的事
 
-box 的檔案和網路邊界已經設定好：`./box`起一個 dev container。掛載進去的只有這個 repo，對外連線也只允許白名單上的項目。盒裡的 Claude Code 開 `--dangerously-skip-permissions`，就不會再詢問權限。
+知道盒子怎麼限制檔案與網路之後，還要看清它的極限。
 
-這很容易讓人以為盒子已經萬無一失，其實不是。盒子只負責其中一部分的邊界。
+把 AI 程式代理放進隔離的開發環境後，它就能不必每一步都等你批准。這時很容易以為，有了盒子，裡面發生的事就都安全了。
 
-## 邊界分四塊，盒子只管兩塊
+但盒子只劃出一道有限的邊界。它主要限制代理能看到哪些檔案，以及能連到哪些網路位置。盒子外還有幾件事，得由你把關。
 
-邊界分成四部分：檔案、網路、秘密和重置。
+## 盒子管得到檔案和網路
 
-box 管檔案和網路。檔案方面，盒裡只能看到這個 repo，看不到 Mac 的家目錄。網路方面，對外連線預設 DROP，只有白名單上的項目可以通過。這兩項會在盒子啟動時自動生效。
-
-另外兩項要自己管理，盒子不會幫你處理。
-
-秘密方面，只提供 agent 完成這項工作所需的 token。token 的效期要短，scope 只開放一個 repo。不要把整把鑰匙都放進盒子裡。
-
-重置方面，如果 agent 把東西弄壞，檔案可以用 git 還原，盒子則可以依照 recipe 重新建立。重新建立的成本應該接近零。這是 dev container 比手動調整過的機器更好的地方。
+在盒子裡，代理可以對工作目錄執行命令，但不應該看得到你電腦上的其他資料。舉例來說，檢查 `~/.ssh/id_*` 時，應該找不到 SSH 私鑰；列出電腦上的使用者家目錄時，也不應該看到你的 Mac 家目錄。
 
 <!--image:1-->
 
-盒子能做的是限制範圍。你還得留意範圍裡放了什麼，以及出問題後要怎麼處理。
+網路連線則由允許清單限制。未列入清單的網站可能無法連線，但工作需要的服務可以放行。例如，測試連到 `example.com` 會被防火牆擋下，`npm ping` 則能連線，因為 npm 在允許清單內。
 
-## 從攻擊者角度再次驗證
+所以，盒子不是「完全斷網」，而是只允許連到指定的網路位置。允許清單應保持精簡，需要哪個工具時，再加入相應的主機。
 
-盒子設定好後，別只確認它能不能啟動，也要確認邊界真的擋得住。進入盒子，試著從攻擊者的角度往外取得東西。
+<!-- source: sources/ai-agent-engineer/20261103/resources/repos/ticket-bay/box#L1-L77 -->
 
-<!-- source: sources/ai-agent-engineer/20261103/The Agentic Coding Handbook.2.part.txt#L19-L41 -->
 ```bash
-./box bash
+#!/usr/bin/env bash
+# box: work inside the sandbox (.devcontainer/) from the terminal, no editor needed.
+#   ./box                  start the box if needed, then run Claude Code inside it
+#   ./box <command...>     run any command inside the box, e.g. ./box npm run test:unit
+#   ./box --docker [...]   the same box on its own Docker engine (a Colima VM that shares only
+#                          this repo, and your brain settings read-only), so Testcontainers and
+#                          the UI tests run inside it. macOS only: the VM uses Apple's virtualization.
+# Inside the box Claude Code runs with --dangerously-skip-permissions: the box is the safety
+# (only this repo, default-deny network). See .devcontainer/README.md for what it does not do.
+set -euo pipefail
 
-# a shell inside the box
+# Compose v5 builds with buildx bake, which stops at the generated Dockerfile and asks for --allow=fs.read: skip that check.
+export BUILDX_BAKE_ENTITLEMENTS_FS=0
 
-whoami
+CLI="@devcontainers/cli@0.89.0"   # pinned devcontainer CLI
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+config=()
 
-# node
+if [ "${1:-}" = "--docker" ]; then
+  shift
+  [ "$(uname -s)" = Darwin ] || { echo "box --docker: runs on macOS only. On Linux or WSL, run Claude Code outside the box for this task: Testcontainers then uses your own Docker Engine." >&2; exit 1; }
+  repo_root="$(cd "$repo_root" && pwd -P)"   # the path the VM shares: no symlinks
+  command -v colima >/dev/null || { echo "box --docker: needs Colima. Install it: brew install colima" >&2; exit 1; }
+  profile="${BOX_DOCKER_PROFILE:-ticketbay-box}"
+  # The brain settings folder (module 5) the box mounts read-only: the VM shares it read-only too.
+  mkdir -p "${BOX_BRAIN_CONFIG:-$HOME/.config/brain}"
+  BOX_BRAIN_CONFIG="$(cd "${BOX_BRAIN_CONFIG:-$HOME/.config/brain}" && pwd -P)"
+  export BOX_BRAIN_CONFIG
+  if ! colima status "$profile" >/dev/null 2>&1; then
+    echo "box: starting the Colima VM '$profile' (shares only $repo_root, and $BOX_BRAIN_CONFIG read-only)..." >&2
+    # --activate=false and --ssh-config=false: your default Docker context and ~/.ssh/config stay as they are.
+    if ! vm_log="$(colima start "$profile" --vm-type vz --cpus 4 --memory 4 --disk 40 \
+      --mount "$repo_root:w" --mount "$BOX_BRAIN_CONFIG" --mount-inotify --activate=false --ssh-config=false 2>&1)"; then
+      echo "$vm_log" >&2
+      echo "box: could not start the Colima VM (see the log above)." >&2
+      exit 1
+    fi
+  fi
+  export DOCKER_CONTEXT="colima-$profile"
+  "$repo_root/.devcontainer/docker/check-engine.sh"
+  BOX_DOCKER_GID="$(colima ssh -p "$profile" -- stat -c %g /var/run/docker.sock)"
+  export BOX_DOCKER_GID
+  config=(--config "$repo_root/.devcontainer/docker/devcontainer.json")
+fi
 
-ls ~/.ssh/id_*
+if ! docker info >/dev/null 2>&1; then
+  echo "box: Docker is not running. Start Docker Desktop (or your Docker daemon) and try again." >&2
+  exit 1
+fi
 
-# No such file or directory: no private keys
+# Start the box (fast no-op when it is already running). Output only on failure.
+if ! up_log="$(npx --yes "$CLI" up --workspace-folder "$repo_root" ${config[@]+"${config[@]}"} 2>&1)"; then
+  echo "$up_log" >&2
+  echo "box: could not start the dev container (see the log above)." >&2
+  exit 1
+fi
 
-ls /Users
+# The engine VM's own firewall (init-firewall.sh --engine), once per VM boot or box IP: with the
+# socket, the box can start containers that skip the box's firewall, so the VM limits them all.
+if [ -n "${profile:-}" ]; then
+  app="$(docker ps -q --filter "label=devcontainer.local_folder=$repo_root" --filter "label=devcontainer.config_file=$repo_root/.devcontainer/docker/devcontainer.json")"
+  box_ip="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$app")"
+  if ! colima ssh -p "$profile" -- sudo iptables -C DOCKER-USER -s "$box_ip" -m set --match-set box-egress dst -j RETURN 2>/dev/null; then
+    image="$(docker inspect --format '{{.Config.Image}}' "$app")"
+    if ! fw_log="$(docker run --rm --network host --cap-add NET_ADMIN --cap-add NET_RAW --user root \
+      --entrypoint /usr/local/bin/init-firewall.sh "$image" --engine "$box_ip" 2>&1)"; then
+      echo "$fw_log" >&2
+      echo "box: could not set the engine VM's firewall (see the log above)." >&2
+      exit 1
+    fi
+  fi
+fi
 
-# your Mac's home folders are not there
-
-curl https://example.com
-
-# blocked by the firewall
-
-npm ping
-
-# PONG: npm is on the allowlist
+if [ "$#" -eq 0 ]; then
+  set -- claude --dangerously-skip-permissions
+fi
+exec npx --yes "$CLI" exec --workspace-folder "$repo_root" ${config[@]+"${config[@]}"} "$@"
 ```
 
-五個指令會得到兩類結果。該被擋下的項目包括：沒有私鑰、看不到主機的家目錄，也不能連線到任意 host。該通過的項目包括：npm 可以連上白名單內的項目，並收到 PONG。兩類結果都符合預期，邊界才算設在正確的位置。
+## 盒子不會替你保管秘密
+
+API token、部署金鑰等憑證，不會因為代理在盒子裡執行，就自動受到保護。只要盒子裡的代理或程式讀得到憑證，惡意內容就可能利用它們。
 
 <!--image:2-->
 
-## 盒子擋不住 prompt injection
+因此，只提供完成工作所需的憑證，並盡量使用短效、權限限定在單一儲存庫的 token。也只在你信任的程式碼儲存庫中執行代理。
 
-即使邊界驗證通過，還有個殘酷的事實：prompt injection 在盒子裡一樣會成功。
+有些環境會在盒子裡登入代理服務。這時要記得，登入憑證也在盒子的範圍內，不能把盒子當成秘密保險箱。
 
-攻擊路徑是先讓不可信內容進入 window，再把資料送出去。盒子能擋住「送出去」這一步，因為白名單以外的 host 都會被擋下來。但它管不了「不可信內容進入 window」這一步。agent 讀取客訴 email、issue 或 README 時，裡面的文字會和你的指令出現在同一個 window。模型無法分辨哪些文字是你下的指令。
+## 盒子不會替你復原所有變更
 
-因此，盒子的作用不是防止 injection，而是限制 injection 能偷走的東西。agent 受騙時，攻擊者能取得的只有這個 repo、白名單內可以連線的 host，以及你放進盒子裡的內容。最後一項要特別留意：放進去的每個 token，都可能從邊界內被帶出去。
+如果代理改壞工作檔案，可以用 Git 還原；如果開發環境本身出問題，可以依照環境設定重新建立盒子。這就是盒子提供的復原方式。
 
 <!--image:3-->
 
-## 惡意 repo 能竊取整個 box
+但復原環境不等於撤回所有外部影響。盒子裡如果有可用的憑證，惡意程式碼仍可能碰到它們。因此，還原檔案和重建盒子都不能取代憑證管理。
 
-另一種更直接的威脅，是在惡意 repo 上執行工作。原則是：秘密不要放進 box，而且只在信任的 repo 上執行 box。
+## Prompt injection 仍然會進來
 
-簡單來說，box 不是永遠不會被突破的保險，而是把損害限制在可以丟棄的範圍內。在信任的 repo 上執行時，出問題就 reset 後重來。在不信任的 repo 上執行時，repo 一啟動，就能把整個 box 裡的內容當成可用資源。
-
-## 把 recipe 放在 repo 裡，讓 agent 幫你建立
-
-box 的 recipe 就在 TicketBay 的 `.devcontainer/README.md`。把這份 recipe 交給 agent，請它為你的 code 建立同樣的 box。這符合 harness 的思路：邊界不是靠手動逐項設定，而是由 repo 裡的幾個檔案組成，因此可以複製，也能讓 agent 讀懂後照著建立。
-
-四條規則：
-
-- 邊界設定一次後，就讓盒子裡的 agent 使用 full permissions。
-- 白名單要精簡，只有工具確實需要時才加入 host。
-- 秘密留在盒子外，只在信任的 repo 上執行盒子。
-- approval prompt 不是邊界。
+Prompt injection（提示注入）是藏在文字或程式碼中的指令，試圖讓代理忽略原本的要求，改做別的事。盒子不會自動辨認或消除這類指令，代理仍可能讀到它們。
 
 <!--image:4-->
 
-盒子只是邊界的一部分，並不是全部。你還要處理盒子管不到的三件事：放進去的是哪些 token、出問題時如何 reset，以及盒子擋不住的 injection 會從哪裡進來。把這三件事處理好，agent 才能真正放著執行。
+盒子的作用，是限制代理在環境內能接觸的檔案和網路，不是保證代理不會受騙。惡意儲存庫也可能利用盒子裡已有的憑證。代理在盒子內擁有完整權限，只代表它能在盒子劃定的範圍內自由操作，並不代表風險消失。
+
+因此，應先用檔案與網路隔離建立安全邊界，再讓代理在邊界內工作。不要把每次跳出的核准提示當成主要防線。盒子外的憑證、使用哪個儲存庫，以及出問題後如何復原，仍要由你負責。

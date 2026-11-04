@@ -49,6 +49,7 @@ prerequisites: []
 steps:
   - id: one
     title: "First step"
+    author: "test-model"
     purpose: "Explain the first thing."
     sources:
       - "[[sources/demo/a.txt#L1-L5]]"
@@ -148,6 +149,7 @@ test("reset keeps the node container, restores skeletons, and clears generated c
   assert.match(container, /Explain the first thing\./);
   assert.match(container, /## Steps/);
   assert.equal(/^\s+title:/m.test(container), false);
+  assert.equal(/^\s+author:/m.test(container), false);
   assert.match(container, /1\. \[one\]\(alpha\/one\.md\)/);
   assert.match(container, /2\. \[two\]\(alpha\/two\.md\)/);
 

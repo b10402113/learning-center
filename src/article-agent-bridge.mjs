@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { inferSourceLanguage, inferSourceType } from "./source-material.mjs";
 
 export const ARTICLE_AGENT_DIR = "article-agent";
 export const MAX_STEP_IMAGES = 5;
@@ -52,6 +53,7 @@ export function jobFiles(root, { subject, node, step }) {
     blocks: join(dir, "blocks.json"),
     request: join(dir, "request.json"),
     result: join(dir, "result.json"),
+    compose: join(dir, "compose.json"),
     translated: join(dir, "translated.md"),
   };
 }
@@ -154,7 +156,15 @@ export function writeMaterial(root, { subject, node, entry, slices }) {
     step: entry.id,
     title: entry.title ?? null,
     purpose: entry.purpose,
-    sources: slices.map(({ path, locator }) => ({ path, locator })),
+    sources: slices.map(({ path, locator }) => {
+      const type = inferSourceType(path);
+      const source = { path, locator, type };
+      if (type === "code") {
+        const language = inferSourceLanguage(path);
+        if (language) source.language = language;
+      }
+      return source;
+    }),
   };
   writeFileSync(files.material, JSON.stringify(material, null, 2) + "\n");
   return { files, material };

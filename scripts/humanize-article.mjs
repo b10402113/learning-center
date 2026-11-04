@@ -66,6 +66,24 @@ function fencedBlocks(markdown) {
   return blocks;
 }
 
+function mathBlocks(markdown) {
+  const lines = String(markdown).replace(/\r\n/g, "\n").split("\n");
+  const blocks = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const trimmed = lines[index].trim();
+    if (!trimmed.startsWith("$$")) continue;
+    let end = index;
+    if (!(trimmed.length > 2 && trimmed.endsWith("$$"))) {
+      end = index + 1;
+      while (end < lines.length && !lines[end].trim().endsWith("$$")) end += 1;
+      end = Math.min(end, lines.length - 1);
+    }
+    blocks.push(lines.slice(index, end + 1).join("\n"));
+    index = end;
+  }
+  return blocks;
+}
+
 function provenanceLines(markdown) {
   return String(markdown)
     .replace(/\r\n/g, "\n")
@@ -130,6 +148,9 @@ export function validateHumanizedArticle({ original, next }) {
   }
   if (!equalList(fencedBlocks(original), fencedBlocks(next))) {
     throw new Error("humanize changed a fenced code block");
+  }
+  if (!equalList(mathBlocks(original), mathBlocks(next))) {
+    throw new Error("humanize changed a formula block");
   }
   if (!equalList(linkTargets(original), linkTargets(next))) {
     throw new Error("humanize changed a relative or source link");

@@ -54,6 +54,7 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `prerequisite-cycle` | the prerequisite graph is acyclic |
 | `prerequisite-tier` | a prerequisite is in the same or an earlier tier |
 | `step-entry` | every step entry has `id`, `purpose`, and `sources`; `title` is optional, and non-empty when present |
+| `step-author` | `author` is optional; when present it must be a non-empty string |
 | `step-purpose` | `purpose` is a single line of one short sentence (≤ 120 characters, no second sentence) |
 | `steps-flat` | step entries declare no `deps`, `type`, or `order` |
 | `steps-duplicate` | step ids are unique within a node |

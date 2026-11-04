@@ -25,6 +25,13 @@ import { runChecks } from "../scripts/verify.mjs";
 import { publishArticles } from "../scripts/publish-article.mjs";
 import { renderImages } from "./render-images.mjs";
 import {
+  buildComposeSources,
+  composeSourcePayload,
+  missingPlaceholders,
+  restoreComposeSources,
+  salvageComposeSources,
+} from "./source-material.mjs";
+import {
   createTextClient,
   httpStatus,
   isRetryable,
@@ -57,10 +64,12 @@ prepare  writes one material bundle per missing step and lists the publisher job
          markers from the publisher's plan.
          --skip-polish hands over a polishCommand that carries --copy, so the
          publisher's original becomes polish.md unchanged and the plan stays as written.
-compose  reads the publisher's curated material.json (sources with text) and calls
-         the text model once to write output/<node>/<step>/original.md — no image
-         markers. It enforces an input size cap (ARTICLE_MAX_MATERIAL_CHARS, default
-         120000) and retries only when the model returns an empty body or no H1.
+   compose  reads the publisher's curated material.json (sources with type and text)
+         and calls the text model once to write output/<node>/<step>/original.md — no
+         image markers. Code and formula sources become placeholders that the CLI
+         replaces with verbatim fenced code or display math. It enforces an input size
+         cap (ARTICLE_MAX_MATERIAL_CHARS, default 120000) and retries when the model
+         returns an empty body, no H1, or drops a placeholder.
 mark     reads original.md and the publisher's <step>.plan.json, inserts the
          <!--image:N--> markers, and writes original.md back. It never calls a model.
 publish  writes polished steps into learn/ without touching figures,
@@ -101,7 +110,7 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     const slices = readStepSlices(root, entry);
     if (force) {
       const existingFiles = jobFiles(root, { subject, node: nodeId, step: entry.id });
-      for (const key of ["original", "polish", "result", "blocks", "request", "protected", "translated"]) {
+      for (const key of ["original", "polish", "result", "compose", "blocks", "request", "protected", "translated"]) {
         rmSync(existingFiles[key], { force: true });
       }
     }
@@ -190,10 +199,21 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
       });
       continue;
     }
+    let preparedSources;
+    try {
+      preparedSources = buildComposeSources(curated);
+    } catch (error) {
+      results.push({
+        id: entry.id,
+        status: "failed",
+        error: error?.message ?? error,
+      });
+      continue;
+    }
     pending.push({
       entry,
       files,
-      curated,
+      sources: preparedSources,
       materialChars,
       title: material.title ?? entry.title ?? null,
       purpose: material.purpose ?? entry.purpose,
@@ -203,41 +223,115 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
     return { mode: "compose", subject, node: nodeId, steps: results };
   }
   const client = await createTextClient();
-  for (const { entry, files, curated, materialChars, title, purpose } of pending) {
+  const maxAttempts = 3;
+  for (const { entry, files, sources, materialChars, title, purpose } of pending) {
     let article = null;
+    let draft = null;
     let retries = 0;
-    for (let attempt = 0; attempt < 3 && !article; attempt += 1) {
+    let lastError = null;
+    let missing = [];
+    for (let attempt = 0; attempt < maxAttempts && !article; attempt += 1) {
       retries = attempt;
-      const response = await withRetry(
-        async () => {
-          const result = await client.chat.completions.create({
-            model,
-            messages: [
-              { role: "system", content: prompt },
-              { role: "user", content: JSON.stringify({ title, purpose, sources: curated }, null, 2) },
-            ],
-          });
-          const error = responseError(result);
-          if (error) throw error;
-          return textContent(result).replace(/\r\n/g, "\n");
-        },
-        { attempts: 2, retryOn: (error) => !httpStatus(error) },
-      );
-      const normalized = normalizeArticleText(response, title);
-      if (hasArticleBody(normalized)) article = normalized;
+      const retry =
+        attempt > 0 && draft
+          ? {
+              draft,
+              previous_error: lastError?.message ?? null,
+              missing_placeholders: missing.map((source) => source.placeholder),
+              instruction: missing.length
+                ? "保留 draft 的內容，只在適合的位置各用單獨一行輸出 missing_placeholders 列出的 placeholder。"
+                : "保留 draft 的內容，依 previous_error 修正格式問題（例如 placeholder 只能在獨立一行出現一次、不能放進 code fence）。",
+            }
+          : null;
+      let response;
+      try {
+        response = await withRetry(
+          async () => {
+            const result = await client.chat.completions.create({
+              model,
+              messages: [
+                { role: "system", content: prompt },
+                {
+                  role: "user",
+                  content: JSON.stringify(
+                    {
+                      title,
+                      purpose,
+                      sources: composeSourcePayload(sources),
+                      ...(retry ? { retry } : {}),
+                    },
+                    null,
+                    2,
+                  ),
+                },
+              ],
+            });
+            const error = responseError(result);
+            if (error) throw error;
+            return textContent(result).replace(/\r\n/g, "\n");
+          },
+          { attempts: 2, retryOn: (error) => !httpStatus(error) },
+        );
+      } catch (error) {
+        lastError = error;
+        break;
+      }
+      let normalized;
+      try {
+        normalized = normalizeArticleText(response, title);
+      } catch (error) {
+        lastError = error;
+        continue;
+      }
+      if (!hasArticleBody(normalized)) {
+        lastError = new Error("model returned no article body");
+        continue;
+      }
+      draft = normalized;
+      try {
+        article = restoreComposeSources(normalized, sources);
+      } catch (error) {
+        lastError = error;
+        missing = missingPlaceholders(normalized, sources);
+      }
     }
     if (!article) {
+      const salvaged = salvageComposeSources(draft ?? "", sources);
+      if (!draft || !hasArticleBody(salvaged.text)) {
+        results.push({
+          id: entry.id,
+          title,
+          status: "failed",
+          retries,
+          error: lastError?.message ?? "model returned no article body after retries",
+        });
+        continue;
+      }
+      mkdirSync(files.dir, { recursive: true });
+      writeFileSync(files.original, salvaged.text);
+      writeJson(files.compose, {
+        model,
+        composed_at: new Date().toISOString(),
+        status: "draft",
+        missing: salvaged.missing,
+        error: lastError?.message ?? null,
+      });
       results.push({
         id: entry.id,
         title,
-        status: "failed",
+        status: "draft",
+        article: relative(root, files.original),
+        model,
+        materialChars,
         retries,
-        error: "model returned no article body after retries",
+        missing: salvaged.missing,
+        error: lastError?.message ?? null,
       });
       continue;
     }
     mkdirSync(files.dir, { recursive: true });
     writeFileSync(files.original, article);
+    writeJson(files.compose, { model, composed_at: new Date().toISOString(), status: "composed" });
     results.push({
       id: entry.id,
       title,

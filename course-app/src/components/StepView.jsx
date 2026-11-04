@@ -199,6 +199,11 @@ export default function StepView({ course, node, step }) {
             <h1 className="mt-2.5 text-[1.95rem] font-medium leading-[1.2] tracking-[-1px] text-ink sm:text-[2.4rem]">
               {step.title}
             </h1>
+            {step.author && (
+              <p className="mt-2 font-mono text-[11px] text-ink-soft">
+                模型 {step.author}
+              </p>
+            )}
           </div>
           {copyMarkdown && <CopyArticleButton text={copyMarkdown} />}
         </div>

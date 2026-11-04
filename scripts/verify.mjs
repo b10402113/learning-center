@@ -982,6 +982,11 @@ function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nod
         report.fail(file, 1, "step-entry", `steps[${index}].title must be a non-empty string when present`);
       }
     }
+    if (entry.author !== undefined && entry.author !== null) {
+      if (typeof entry.author !== "string" || !entry.author.trim()) {
+        report.fail(file, 1, "step-author", `steps[${index}].author must be a non-empty string when present`);
+      }
+    }
     for (const key of FORBIDDEN_STEP_KEYS) {
       if (entry[key] !== undefined) {
         report.fail(file, 1, "steps-flat", `steps[${index}] must not declare "${key}"`);

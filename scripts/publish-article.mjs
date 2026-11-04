@@ -17,7 +17,8 @@ import {
   readJson,
 } from "../src/article-agent-bridge.mjs";
 import { runChecks } from "./verify.mjs";
-import { setStepTitle } from "./set-step-title.mjs";
+import { resolveTextModel } from "../src/llm.mjs";
+import { setStepAuthor, setStepTitle } from "./set-step-title.mjs";
 
 function stepAssetsDir(root, { subject, node, step }) {
   return join(root, "learn", subject, "nodes", node, `${step}-assets`);
@@ -66,6 +67,14 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
     }
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, body);
+    const compose = readJson(files.compose);
+    setStepAuthor({
+      root,
+      subject,
+      node: nodeId,
+      step: entry.id,
+      author: compose?.model || resolveTextModel(),
+    });
     if (!entry.title) {
       const title = body.split("\n").find((line) => line.trim() !== "")?.replace(/^#\s+/, "").trim();
       if (title) setStepTitle({ root, subject, node: nodeId, step: entry.id, title });

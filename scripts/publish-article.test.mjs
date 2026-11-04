@@ -59,6 +59,7 @@ A short lesson.
     "learn/test/output/n1/s1/result.json",
     JSON.stringify({ status: "completed", mode: "direct", article: polishFile, images: [] }),
   );
+  write(root, "learn/test/output/n1/s1/compose.json", JSON.stringify({ model: "test-model", composed_at: "2026-10-26T00:00:00.000Z" }));
   write(root, "learn/test/output/n1/s1/blocks.json", "[]");
   write(root, "learn/test/output/n1/s1/humanized.md", "# Step One\n\nOld body.\n");
   write(root, "learn/test/output/n1/s1/humanized.plan.json", "[]\n");
@@ -88,6 +89,27 @@ test("a plain publish keeps the existing figures and the polish record", async (
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1-assets/image-1.webp")), true);
   assert.equal(existsSync(join(root, "learn/test/output/polished/n1/s1.json")), true);
   assert.equal(existsSync(join(root, "learn/test/output/n1/s1/humanized.md")), true);
+});
+
+test("publish stamps the compose model as the step author", async (t) => {
+  const root = publishFixture(t, { runArticle: markerArticle });
+  await publishArticles({ root, subject: "test", node: "n1" });
+  const node = readFileSync(join(root, "learn/test/nodes/n1.md"), "utf8");
+  assert.match(node, /^    author: "test-model"$/m);
+});
+
+test("publish falls back to the configured text model without a compose record", async (t) => {
+  const root = publishFixture(t, { runArticle: markerArticle });
+  rmSync(join(root, "learn/test/output/n1/s1/compose.json"), { force: true });
+  const previous = process.env.TEXT_MODEL;
+  process.env.TEXT_MODEL = "fallback-model";
+  t.after(() => {
+    if (previous === undefined) delete process.env.TEXT_MODEL;
+    else process.env.TEXT_MODEL = previous;
+  });
+  await publishArticles({ root, subject: "test", node: "n1" });
+  const node = readFileSync(join(root, "learn/test/nodes/n1.md"), "utf8");
+  assert.match(node, /^    author: "fallback-model"$/m);
 });
 
 test("a failed forced publish leaves the figures and record intact", async (t) => {

@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 const CLI = resolve("src/article-cli.mjs");
+const execFileAsync = promisify(execFile);
 
 function write(root, relative, content) {
   const file = join(root, relative);
@@ -138,6 +141,7 @@ test("prepare --force clears stale run metadata and the original but keeps the p
   write(root, "learn/test/output/n1/s1/original.md", "# Old\n");
   write(root, "learn/test/output/n1/s1/polish.md", "# Old\n");
   write(root, "learn/test/output/n1/s1/result.json", "{}");
+  write(root, "learn/test/output/n1/s1/compose.json", "{}");
   write(root, "learn/test/nodes/n1/s1.plan.json", "[]");
   execFileSync(
     process.execPath,
@@ -147,6 +151,7 @@ test("prepare --force clears stale run metadata and the original but keeps the p
   assert.equal(existsSync(join(root, "learn/test/output/n1/s1/original.md")), false);
   assert.equal(existsSync(join(root, "learn/test/output/n1/s1/polish.md")), false);
   assert.equal(existsSync(join(root, "learn/test/output/n1/s1/result.json")), false);
+  assert.equal(existsSync(join(root, "learn/test/output/n1/s1/compose.json")), false);
   assert.equal(existsSync(join(root, "learn/test/output/n1/s1/material.json")), true);
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1.plan.json")), true);
 });
@@ -210,6 +215,167 @@ test("compose rejects material without curated text before calling the model", (
   const report = JSON.parse(run.stdout);
   assert.equal(report.steps[0].status, "failed");
   assert.match(report.steps[0].error, /no curated text/);
+});
+
+test("compose replaces code placeholders with verbatim code and provenance", async (t) => {
+  const root = fixture(t);
+  write(root, "sources/test/loop.mjs", "export function loop() { return 1; }\n");
+  write(
+    root,
+    "learn/test/output/n1/s2/material.json",
+    JSON.stringify({
+      subject: "test",
+      node: "n1",
+      step: "s2",
+      title: "Step Two",
+      purpose: "Second step.",
+      sources: [
+        {
+          path: "sources/test/loop.mjs",
+          locator: "#L1-L1",
+          type: "code",
+          language: "javascript",
+          text: "export function loop() { return 1; }",
+        },
+      ],
+    }),
+  );
+
+  let calls = 0;
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      calls += 1;
+      const payload = JSON.parse(JSON.parse(body).messages.at(-1).content);
+      assert.equal(payload.sources[0].placeholder, "{{ARTICLE_CODE_1}}");
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "# Step Two\n\nBefore.\n\n{{ARTICLE_CODE_1}}\n\nAfter.\n",
+              },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+      );
+    });
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  t.after(() => new Promise((resolveClose) => server.close(resolveClose)));
+  const { port } = server.address();
+
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [CLI, "compose", "--subject", "test", "--node", "n1", "--step", "s2", "--root", root],
+    {
+      env: {
+        ...process.env,
+        TEXT_API_KEY: "test-key",
+        TEXT_BASE_URL: `http://127.0.0.1:${port}/v1`,
+        TEXT_MODEL: "test-model",
+      },
+    },
+  );
+  const report = JSON.parse(stdout);
+  assert.equal(report.steps[0].status, "composed");
+  assert.equal(calls, 1);
+
+  const original = readFileSync(join(root, "learn/test/output/n1/s2/original.md"), "utf8");
+  assert.match(original, /<!-- source: sources\/test\/loop\.mjs#L1-L1 -->/);
+  assert.match(original, /```javascript\nexport function loop\(\) \{ return 1; \}\n```/);
+  assert.doesNotMatch(original, /\{\{ARTICLE_CODE/);
+
+  const compose = JSON.parse(readFileSync(join(root, "learn/test/output/n1/s2/compose.json"), "utf8"));
+  assert.equal(compose.model, "test-model");
+  assert.match(compose.composed_at, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test("compose keeps a salvageable draft when the model drops every placeholder", async (t) => {
+  const root = fixture(t);
+  write(root, "sources/test/loop.mjs", "export function loop() { return 1; }\n");
+  write(
+    root,
+    "learn/test/output/n1/s2/material.json",
+    JSON.stringify({
+      subject: "test",
+      node: "n1",
+      step: "s2",
+      title: "Step Two",
+      purpose: "Second step.",
+      sources: [
+        {
+          path: "sources/test/loop.mjs",
+          locator: "#L1-L1",
+          type: "code",
+          language: "javascript",
+          text: "export function loop() { return 1; }",
+        },
+      ],
+    }),
+  );
+
+  const calls = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      const payload = JSON.parse(JSON.parse(body).messages.at(-1).content);
+      calls.push(payload);
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: { role: "assistant", content: "# Step Two\n\nBefore.\n\nAfter.\n" },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+      );
+    });
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  t.after(() => new Promise((resolveClose) => server.close(resolveClose)));
+  const { port } = server.address();
+
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [CLI, "compose", "--subject", "test", "--node", "n1", "--step", "s2", "--root", root],
+    {
+      env: {
+        ...process.env,
+        TEXT_API_KEY: "test-key",
+        TEXT_BASE_URL: `http://127.0.0.1:${port}/v1`,
+        TEXT_MODEL: "test-model",
+      },
+    },
+  );
+  const report = JSON.parse(stdout);
+  assert.equal(report.steps[0].status, "draft");
+  assert.equal(report.steps[0].retries, 2);
+  assert.equal(report.steps[0].missing.length, 1);
+  assert.equal(report.steps[0].missing[0].placeholder, "{{ARTICLE_CODE_1}}");
+  assert.equal(calls.length, 3);
+  assert.equal(calls[1].retry.missing_placeholders[0], "{{ARTICLE_CODE_1}}");
+  assert.match(calls[1].retry.draft, /Before\./);
+
+  const original = readFileSync(join(root, "learn/test/output/n1/s2/original.md"), "utf8");
+  assert.match(original, /# Step Two/);
+  assert.match(original, /Before\./);
+  assert.doesNotMatch(original, /\{\{ARTICLE_CODE/);
+
+  const compose = JSON.parse(readFileSync(join(root, "learn/test/output/n1/s2/compose.json"), "utf8"));
+  assert.equal(compose.status, "draft");
+  assert.equal(compose.missing[0].placeholder, "{{ARTICLE_CODE_1}}");
 });
 
 test("compose rejects material over the char cap before calling the model", (t) => {

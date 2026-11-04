@@ -183,6 +183,7 @@ function readStep({ nodesDir, nodeId, entry, order }) {
     order,
     title: spec.title || spec.id,
     purpose: spec.purpose || "",
+    author: spec.author || null,
     sources: (spec.sources || []).map(parseSource),
     articleMd: "",
     hasContent: false,

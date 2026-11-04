@@ -65,6 +65,7 @@ prerequisites: []
 steps:
   - id: step-two
     title: "Step Two"
+    author: "test-model"
     purpose: "Second purpose."
     sources:
       - "[[sources/demo/source.txt#L10-L20]]"
@@ -194,6 +195,10 @@ test("reads Markdown nodes and keeps frontmatter step order", () => {
   assert.deepEqual(
     node.steps.map((step) => step.purpose),
     ["Second purpose.", "First purpose."]
+  );
+  assert.deepEqual(
+    node.steps.map((step) => step.author),
+    ["test-model", null]
   );
   assert.equal(node.steps[0].sources[0].label, "source.txt#L10-L20");
   assert.equal(node.steps[0].sources[0].name, "source.txt");

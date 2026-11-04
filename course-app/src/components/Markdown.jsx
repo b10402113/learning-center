@@ -1,5 +1,8 @@
+import "katex/dist/katex.min.css";
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { resolveSrc } from "../lib/assets.mjs";
 import { rehypeHighlightPlugin } from "../lib/highlight.mjs";
 import Quiz from "./Quiz.jsx";
@@ -20,14 +23,14 @@ export default function Markdown({ children, className = "", assetBase = "" }) {
   return (
     <div
       className={`prose prose-base max-w-none
-        prose-headings:font-sans prose-headings:font-medium prose-headings:tracking-tight prose-headings:text-ink
+        prose-headings:font-sans prose-headings:font-medium prose-headings:tracking-tight
         prose-h2:mt-12 prose-h2:mb-4 prose-h2:border-b-2 prose-h2:border-ink prose-h2:pb-2 prose-h2:text-[1.55rem] prose-h2:leading-snug
         prose-h3:mt-9 prose-h3:mb-2 prose-h3:text-[1.25rem]
         prose-h4:text-[1.1rem]
         prose-p:text-[1.15rem] prose-p:leading-[1.9] prose-p:text-ink/90
-        prose-li:text-[1.15rem] prose-li:leading-[1.85] prose-li:text-ink/90 prose-li:my-1.5 prose-li:marker:text-ink-soft
+        prose-li:text-[1.15rem] prose-li:leading-[1.85] prose-li:text-ink/90 prose-li:my-1.5
         prose-ul:my-5 prose-ol:my-5
-        prose-strong:font-semibold prose-strong:text-ink
+        prose-strong:font-semibold
         prose-a:font-medium prose-a:text-accent prose-a:underline prose-a:decoration-2 prose-a:underline-offset-4 hover:prose-a:text-ink
         prose-code:rounded-none prose-code:border prose-code:border-ink prose-code:bg-shade prose-code:px-1.5 prose-code:py-0.5
         prose-code:font-mono prose-code:text-[0.86em] prose-code:font-normal prose-code:text-ink
@@ -44,8 +47,8 @@ export default function Markdown({ children, className = "", assetBase = "" }) {
         ${className}`}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlightPlugin]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeHighlightPlugin, rehypeKatex]}
         components={{
           pre: ({ children }) => {
             const child = Array.isArray(children) ? children[0] : children;

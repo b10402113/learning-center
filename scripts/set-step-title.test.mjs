@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { setStepTitle } from "./set-step-title.mjs";
+import { setStepAuthor, setStepTitle } from "./set-step-title.mjs";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "set-step-title.mjs");
 
@@ -82,6 +82,35 @@ test("replaces an existing title without duplicating it", (t) => {
   assert.equal((node.match(/^    title:/gm) || []).length, 1);
   assert.match(node, /^    title: "Renamed again"$/m);
   assert.match(node, /^2\. \[Renamed again\]\(alpha\/two\.md\)$/m);
+});
+
+test("writes the author into the step entry without touching the title or link", (t) => {
+  const root = fixture(t);
+  const result = setStepAuthor({
+    root,
+    subject: "demo",
+    node: "alpha",
+    step: "one",
+    author: "deepseek/test-model",
+  });
+
+  assert.equal(result.status, "updated");
+  const node = readFileSync(join(root, "learn/demo/nodes/alpha.md"), "utf8");
+  assert.match(node, /^  - id: one\n    author: "deepseek\/test-model"\n    purpose:/m);
+  assert.match(node, /^1\. \[one\]\(alpha\/one\.md\)$/m);
+
+  setStepAuthor({ root, subject: "demo", node: "alpha", step: "one", author: "other-model" });
+  const again = readFileSync(join(root, "learn/demo/nodes/alpha.md"), "utf8");
+  assert.equal((again.match(/^    author:/gm) || []).length, 1);
+  assert.match(again, /^    author: "other-model"$/m);
+});
+
+test("rejects an empty author", (t) => {
+  const root = fixture(t);
+  assert.throws(
+    () => setStepAuthor({ root, subject: "demo", node: "alpha", step: "one", author: "  " }),
+    /non-empty string/,
+  );
 });
 
 test("rejects an unknown step", (t) => {

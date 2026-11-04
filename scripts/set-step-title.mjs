@@ -49,7 +49,7 @@ function readTitleFrom(file) {
   return match[1].trim();
 }
 
-function applyStepTitle(text, stepId, title) {
+function applyStepField(text, stepId, key, value) {
   const lines = text.split("\n");
   const fmStart = lines.findIndex((line) => line.trim() === "---");
   const fmEnd = lines.findIndex((line, index) => index > fmStart && line.trim() === "---");
@@ -92,13 +92,19 @@ function applyStepTitle(text, stepId, title) {
     lines[updatedIndex] = `updated: ${new Date().toISOString().slice(0, 10)}`;
   }
 
-  const titlePattern = new RegExp(`^${escapeRegExp(childIndent)}title:`);
-  const titleIndex = lines.findIndex(
-    (line, index) => index > start && index < end && titlePattern.test(line),
+  const fieldPattern = new RegExp(`^${escapeRegExp(childIndent)}${escapeRegExp(key)}:`);
+  const fieldIndex = lines.findIndex(
+    (line, index) => index > start && index < end && fieldPattern.test(line),
   );
-  const titleLine = `${childIndent}title: ${yamlQuote(title)}`;
-  if (titleIndex === -1) lines.splice(start + 1, 0, titleLine);
-  else lines[titleIndex] = titleLine;
+  const fieldLine = `${childIndent}${key}: ${yamlQuote(value)}`;
+  if (fieldIndex === -1) lines.splice(start + 1, 0, fieldLine);
+  else lines[fieldIndex] = fieldLine;
+
+  return lines.join("\n");
+}
+
+function applyStepTitle(text, stepId, title) {
+  const lines = applyStepField(text, stepId, "title", title).split("\n");
 
   const link = new RegExp(
     `^(\\s*(?:\\d+\\.|[-*])\\s+\\[)([^\\]]*)(\\]\\([^)]*${escapeRegExp(stepId)}\\.md\\))`,
@@ -125,6 +131,16 @@ export function setStepTitle({ root = REPO_ROOT, subject, node, step, title, fro
   const after = applyStepTitle(before, step, resolvedTitle.trim());
   if (after !== before) writeFileSync(nodeFile, after);
   return { status: after === before ? "unchanged" : "updated", node: nodeFile, step, title: resolvedTitle.trim() };
+}
+
+export function setStepAuthor({ root = REPO_ROOT, subject, node, step, author }) {
+  const nodeFile = join(root, "learn", subject, "nodes", `${node}.md`);
+  if (!existsSync(nodeFile)) throw new Error(`node not found: learn/${subject}/nodes/${node}.md`);
+  if (typeof author !== "string" || !author.trim()) throw new Error("author must be a non-empty string");
+  const before = readFileSync(nodeFile, "utf8");
+  const after = applyStepField(before, step, "author", author.trim());
+  if (after !== before) writeFileSync(nodeFile, after);
+  return { status: after === before ? "unchanged" : "updated", node: nodeFile, step, author: author.trim() };
 }
 
 async function main() {

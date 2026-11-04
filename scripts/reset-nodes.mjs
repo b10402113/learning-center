@@ -91,7 +91,7 @@ function setFrontmatterFields(text, fields) {
   return `---\n${block}\n---${text.slice(match[0].length)}`;
 }
 
-/** Remove the publisher-written title from every step entry. */
+/** Remove the publisher-written title and author from every step entry. */
 function stripStepTitles(text) {
   const lines = text.split("\n");
   const fmStart = lines.findIndex((line) => line.trim() === "---");
@@ -104,7 +104,7 @@ function stripStepTitles(text) {
   const kept = [];
   for (let index = 0; index < lines.length; index += 1) {
     const insideSteps = index > stepsIndex && index < fmEnd;
-    if (insideSteps && /^\s+title:\s*/.test(lines[index])) continue;
+    if (insideSteps && /^\s+(?:title|author):\s*/.test(lines[index])) continue;
     kept.push(lines[index]);
   }
   return kept.join("\n");

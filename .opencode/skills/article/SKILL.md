@@ -29,16 +29,16 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
    每次派工只給這幾項：
 
    - `id`、`title`、`purpose`、`material`、`original`、`polish`、`plan`、`composeCommand`、`markCommand`、`polishCommand`、`titleCommand`
-   - 一句：「`material` 的 `purpose` 是這篇的主旨；用 Read 讀完 `material.sources` 的每個完整來源檔，`locator` 只是引用範圍，不是閱讀範圍。把策展結果覆寫回 `material`（`sources` 每項保留 `path` 與 `locator`、加上你挑選裁切的 `text`），`title` 是 `null` 時自己從來源裡實際出現的標題或句子選一個。然後執行 `composeCommand`——文章散文由它呼叫模型寫出 `original.md`，你不要自己寫。再讀 `original.md` 把 1–5 項配圖清單寫成 JSON 陣列到 `plan`（每項 `heading`、可選 `anchor`、`prompt`），執行 `markCommand` 插 marker，接著執行 `polishCommand`，最後執行 `titleCommand`。」
-   - 一句：「`composeCommand` 會把 `material` 餵給文字模型產生 `original.md`，不放任何 `<!--image:N-->` marker；它失敗就停，不要自己改寫檔案繞過。」
+   - 一句：「`material` 的 `purpose` 是這篇的主旨；用 Read 讀完 `material.sources` 的每個完整來源檔，`locator` 只是引用範圍，不是閱讀範圍。把策展結果覆寫回 `material`（`sources` 每項保留 `path` 與 `locator`、確認或改正 `type`（`article`／`code`／`formula`）、加上你挑選裁切的 `text`；`code` 的 `text` 要逐字、`formula` 只放 LaTeX 本身），`title` 是 `null` 時自己從來源裡實際出現的標題或句子選一個。然後執行 `composeCommand`——文章散文由它呼叫模型寫出 `original.md`，你不要自己寫。再讀 `original.md` 把 1–5 項配圖清單寫成 JSON 陣列到 `plan`（每項 `heading`、可選 `anchor`、`prompt`），執行 `markCommand` 插 marker，接著執行 `polishCommand`，最後執行 `titleCommand`。」
+   - 一句：「`composeCommand` 會把 `material` 餵給文字模型產生 `original.md`，不放任何 `<!--image:N-->` marker。`type: code` 與 `type: formula` 的內容由 CLI 用 placeholder 強制逐字插入；模型漏用 placeholder 時 compose 會帶著上一次草稿與漏掉的清單重試；三次仍缺就寫出草稿並回報 `status: draft`（`compose.json` 的 `missing` 列出漏掉的來源），不是失敗。遇到 `draft` 可讀 `original.md` 與 `missing`，必要時縮短素材重跑 `composeCommand`，否則直接沿用草稿繼續；不要自己改寫散文或手動編輯 `original.md`。」
    - 一句：「`markCommand` 依 `plan` 把 marker 插進 `original.md`；它不呼叫模型。」
-   - 一句：「`polishCommand` 讀 `original`、寫 `polish.md`，並潤飾 plan 的 `heading`／`prompt`；保留 H1、marker、code 與連結，marker 數量與位置不變。它失敗就停，不要自己改寫檔案繞過。」
+   - 一句：「`polishCommand` 讀 `original`、寫 `polish.md`，並潤飾 plan 的 `heading`／`prompt`；保留 H1、marker、code 與連結，marker 數量與位置不變。模型潤飾失敗時會自動把 `original` 原樣寫成 `polish.md`、plan 保持原樣，回報 `copied` 加 `fallback: true`；這不是失敗，繼續跑 `titleCommand`。」
    - 一句：「`titleCommand` 把 H1 寫回 node 的 step entry 與 `## Steps` 標籤；不要用其他方式改 node。」
    - 一句：「只寫這一篇，不要管其他 step。」
 
    不要給其他 step 的內容、不要給上下課關係。publisher 寫出來的就是一篇獨立的文章。
 
-   publisher 的完成標準：`composeCommand` 回報 `composed`、`markCommand` 回報 `marked`、`polishCommand` 回報 `status: polished`、`titleCommand` 回報 `updated` 或 `unchanged`，而且文章裡的 marker 數量等於 plan 長度。失敗就停，留在 `learn/<subject>/output/<node>/<step>/`，不要進下一個 step。
+   publisher 的完成標準：`composeCommand` 回報 `composed` 或 `draft`、`markCommand` 回報 `marked`、`polishCommand` 回報 `status: polished` 或 `copied`、`titleCommand` 回報 `updated` 或 `unchanged`，而且文章裡的 marker 數量等於 plan 長度。只有 compose 回報 `failed` 才停，留在 `learn/<subject>/output/<node>/<step>/`，不要進下一個 step。
 
 4. **publish**
 

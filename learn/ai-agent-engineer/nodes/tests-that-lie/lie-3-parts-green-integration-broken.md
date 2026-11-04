@@ -1,50 +1,34 @@
-# 單元與整合測試全綠、mutation score 很高，頁面還是一片空白
+# 端到端測試
 
-前兩段補的分別是「測試有沒有檢查行為」和「該測的輸入有沒有寫成案例」。兩者都補滿，還是有第三種假綠。
-
-這句話值得再讀一次。每一個單元測試都通過，每一個整合測試也都通過，mutation score 還很高，但打開頁面，看到的卻是一片空白。
-
-原因很簡單：前面兩段看的都是單一零件，這裡看的是零件之間的接縫，而沒有任何測試在真正的瀏覽器裡開啟 app。
+第三種盲點是「每個零件都正常，整個 App 卻不能用」。每個單元測試和整合測試都顯示綠燈，使用者打開網站卻只看到一片空白。這兩件事並不衝突：測試可以全數通過，卻沒有任何一個真的用瀏覽器把應用程式打開，確認使用者看見什麼、能不能完成操作。
 
 <!--image:1-->
 
-## Playwright 只測關鍵流程
+端到端測試（E2E）會在貼近真實使用的環境裡檢查應用程式。Playwright 會開啟真實瀏覽器，把重要流程跑一遍；Testcontainers 則會啟動真正的資料庫，不讓測試只靠與現實脫節的替身。
 
-Playwright 會在真正的瀏覽器裡操作 app，模擬使用者的行為。它適合用來測試關鍵流程，例如 TicketBay 的訂票、付款和退款。
+## 用 Playwright 檢查重要流程
 
-代價是執行時間較長。每個測試都要啟動真正的瀏覽器，通常需要幾秒，因此測試數量應該保持精簡，並在 CI 中每個 pull request 執行一次。
-
-斷言應該檢查使用者看得到的行為，例如確認頁面和 My orders 裡的訂單，不要檢查資料庫或內部狀態。TicketBay 的結帳測試流程就是：開啟一個活動、選兩張票、付款，再確認確認頁面和 My orders，大約需要十一秒。
+Playwright 會在真實瀏覽器中操作頁面，像使用者一樣點擊、選擇、提交。代價是每跑一次要重新啟動瀏覽器、花上幾秒，所以不必把每個細節都寫成 E2E。挑出最關鍵的流程就好，例如訂票、付款或退款，並讓測試在每次程式碼送出時於 CI 執行。
 
 <!--image:2-->
 
-<!-- source: sources/ai-agent-engineer/20261103/The Agentic Coding Handbook.3.part.txt#L518-L520 -->
-```bash
-npx playwright install chromium
-npm run test:ui -- e2e/<your-spec>.spec.ts --headed
-```
+以售票網站為例，測試可以開啟活動頁、選兩張票並付款，再確認使用者看到訂購成功頁面，也能在「我的訂單」找到訂單。整個流程約需十一秒。
 
-## Testcontainers：每次執行都使用真正的資料庫
+斷言要看的是使用者看得見的結果，例如頁面有沒有出現、訂單有沒有列在「我的訂單」。不要直接去檢查資料庫內容或應用程式內部狀態。E2E 要確認的是使用者能不能完成操作，系統內部怎麼實作不是重點。
 
-Testcontainers 是一個開源 library，可以在 Docker 裡啟動用完即丟的資料庫、message broker 和瀏覽器。Java、Go、.NET、Node、Python、Rust 都能使用，五十幾種工具都有現成的 module，包括 Postgres、MySQL、Kafka 和 Redis。
+## 用 Testcontainers 測試真正的資料庫
 
-<!-- source: sources/ai-agent-engineer/20261103/The Agentic Coding Handbook.3.part.txt#L527-L527 -->
-```ts
-const container = await new PostgreSqlContainer("postgres:17").start();
-```
+瀏覽器流程可能通過，但程式和資料庫之間還是可能有落差。mock（模擬物件）只會照著測試設定回應，所以就算程式對資料庫的假設是錯的，mock 也會配合，測試照樣過關。
 
-這個過程會先拉取 image，再啟動 container，並將它連到一個空閒的隨機 port，避免平行執行時互相衝突。接著，系統會等到資料庫就緒，再把連線 URL 提供給測試。測試完成後，container 就會刪除。即使測試失敗，也有一個小型的清理 container 負責收尾。
-
-因此，每次執行測試，都會有一個專屬的空資料庫。
+Testcontainers 能在 Docker 中為測試啟動臨時資料庫、訊息代理或瀏覽器。它支援多種程式語言，也提供 PostgreSQL、MySQL、Kafka 和 Redis 等工具的模組。以下是啟動 PostgreSQL 容器的例子：
 
 <!--image:3-->
 
-## 真正的資料庫會拒絕 agent 的錯誤假設
+<!-- source: sources/ai-agent-engineer/20261103/The Agentic Coding Handbook.3.part.txt#L505-L535 -->
+```js
+const container = await new PostgreSqlContainer("postgres:17").start();
+```
 
-真正的資料庫行為和 production 一樣，因此比 mock 更能提供信心。
+Testcontainers 會下載映像檔、啟動容器，並把資料庫映射到可用的隨機連接埠，避免平行測試搶用同一個連接埠。資料庫準備好後，它會提供連線網址。測試結束時，容器會被刪除；即使測試意外中斷，也有清理機制處理。每次執行測試，都能使用自己的空資料庫。
 
-差別就在最後一哩：mock 會配合 agent 對資料庫的錯誤假設，照著演一遍；真正的資料庫不會配合，而是直接拒絕。
-
-Playwright 會真正走過使用者的流程，Testcontainers 則確保資料庫不是假的。兩端都補上，「測試全綠但頁面空白」的情況才會逐漸消失。
-
-走完三段，三種假綠各有對應的測試：測試沒檢查行為，用 mutation testing；重要案例沒寫，用 property testing；零件都通過、合起來卻壞掉，用 end-to-end 測試。
+真正的資料庫比 mock 更接近正式環境，也更容易找出錯誤的假設。搭配 Playwright 的使用者流程測試，就能同時確認頁面能正常操作，背後的資料庫也能配合整個流程。

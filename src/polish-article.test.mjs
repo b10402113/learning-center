@@ -101,6 +101,30 @@ test("protectArticle masks structure and restores it unchanged", () => {
   assert.doesNotThrow(() => validatePolishedArticle({ original: ARTICLE, next: restore(text) }));
 });
 
+test("protectArticle keeps display math out of the polish prompt", () => {
+  const article = `# Step
+
+前言。
+
+$$
+P(A \\mid B) = \\frac{P(B \\mid A)P(A)}{P(B)}
+$$
+
+結論。
+`;
+  const { text, restore } = protectArticle(article);
+
+  assert.ok(!text.includes("\\frac"));
+  assert.equal(restore(text), article);
+  assert.doesNotThrow(() => validatePolishedArticle({ original: article, next: restore(text) }));
+
+  const changed = restore(text).replace("P(A", "P(B");
+  assert.throws(
+    () => validatePolishedArticle({ original: article, next: changed }),
+    /formula block/,
+  );
+});
+
 test("a provenance comment whose path contains a space is still protected", () => {
   const article = `# Step
 
@@ -382,7 +406,7 @@ test("draft --copy still rejects an invalid plan", async () => {
   assert.equal(existsSync(join(root, "learn/demo/output/beta/two/polish.md")), false);
 });
 
-test("draft mode leaves both files untouched when the plan rewrite is invalid", async () => {
+test("draft mode falls back to a copy when the plan rewrite is invalid", async () => {
   const root = draftFixture();
   const articlePath = join(root, "learn/demo/output/beta/two/original.md");
   const planPath = join(root, "learn/demo/nodes/beta/two.plan.json");
@@ -395,10 +419,31 @@ test("draft mode leaves both files untouched when the plan rewrite is invalid", 
 
   const report = await runPolishDraft({ root, subject: "demo", node: "beta", step: "two", fetchImpl: fetch });
 
-  assert.equal(report.status, "failed");
+  assert.equal(report.status, "copied");
+  assert.equal(report.fallback, true);
   assert.match(report.error, /JSON/i);
   assert.equal(readFileSync(articlePath, "utf8"), beforeArticle);
+  assert.equal(readFileSync(join(root, "learn/demo/output/beta/two/polish.md"), "utf8"), beforeArticle);
   assert.equal(readFileSync(planPath, "utf8"), beforePlan);
+});
+
+test("draft mode falls back to a copy when the article polish request fails", async () => {
+  const root = draftFixture();
+  const articlePath = join(root, "learn/demo/output/beta/two/original.md");
+  const beforeArticle = readFileSync(articlePath, "utf8");
+  const { fetch } = fetchRoute({
+    article: () => {
+      throw new Error("model unavailable");
+    },
+    plan: () => "",
+  });
+
+  const report = await runPolishDraft({ root, subject: "demo", node: "beta", step: "two", fetchImpl: fetch });
+
+  assert.equal(report.status, "copied");
+  assert.equal(report.fallback, true);
+  assert.match(report.error, /model unavailable/);
+  assert.equal(readFileSync(join(root, "learn/demo/output/beta/two/polish.md"), "utf8"), beforeArticle);
 });
 
 test("published polish rewrites a valid plan's heading and prompt", async () => {
