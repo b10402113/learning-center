@@ -31,12 +31,12 @@ Partition the resolved nodes into batches of `max-subagents`. Process batches se
 The unit depends on the phase:
 
 - **Nodes** — one subagent per node.
-- **Article** — one `publisher` per node; a node's steps run inside that subagent in order, and nodes may share a batch.
+- **Article** — one `publisher` per step by default; with the skill's per-node flag, one `publisher` per node and a node's steps run inside that subagent in order.
 - **Polish** — no subagent: one polish CLI call per node, in roadmap order; its eligible steps run in parallel inside the CLI.
 - **Generate** — no subagent: one render CLI call per node, in roadmap order.
 - **Quiz** — one `quiz-agent` per node; a node's steps share that dispatch, and nodes may share a batch.
 
-Nodes, Article, and Quiz dispatch one subagent per node, so `max-subagents` caps how many nodes they process in parallel. Polish and Generate are one CLI call per node and do not consume that budget.
+`max-subagents` caps how many units of a phase are in flight at once: nodes for Nodes, Quiz, and Article's per-node mode; steps for Article's default per-step mode. Polish and Generate are one CLI call per node and do not consume that budget.
 
 ## Report
 

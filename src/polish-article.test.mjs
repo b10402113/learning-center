@@ -101,6 +101,29 @@ test("protectArticle masks structure and restores it unchanged", () => {
   assert.doesNotThrow(() => validatePolishedArticle({ original: ARTICLE, next: restore(text) }));
 });
 
+test("a provenance comment whose path contains a space is still protected", () => {
+  const article = `# Step
+
+前言。
+
+<!-- source: sources/demo/The Agentic Handbook.2.part.txt#L1-L3 -->
+
+\`\`\`ts
+const a = 1;
+\`\`\`
+`;
+  const { text, restore } = protectArticle(article);
+
+  assert.ok(!text.includes("<!-- source:"), "a source comment with a space in its path must be masked");
+  assert.equal(restore(text), article);
+
+  const dropped = restore(text).replace(/^<!-- source:.*-->\n\n/m, "");
+  assert.throws(
+    () => validatePolishedArticle({ original: article, next: dropped }),
+    /provenance/,
+  );
+});
+
 test("changes the prose, keeps the structure, and records the hash", async () => {
   const root = fixture();
   const { fetch } = fetchEcho((text) => text.replace("奇怪的", "不順的"));
@@ -305,6 +328,58 @@ test("draft mode writes polish.md and leaves the original untouched", async () =
   assert.equal(plan[0].anchor, undefined);
   assert.equal(plan[0].heading, "第一節（潤飾）");
   assert.equal(plan[0].prompt, "說明第二個概念（潤飾）");
+});
+
+test("draft --copy writes polish.md as an exact copy and calls no model", async () => {
+  const root = draftFixture();
+  const originalPath = join(root, "learn/demo/output/beta/two/original.md");
+  const planPath = join(root, "learn/demo/nodes/beta/two.plan.json");
+  const beforeArticle = readFileSync(originalPath, "utf8");
+  const beforePlan = readFileSync(planPath, "utf8");
+  const { fetch, calls } = fetchRoute({
+    article: () => {
+      throw new Error("copy mode must not call the text model");
+    },
+    plan: () => {
+      throw new Error("copy mode must not call the text model");
+    },
+  });
+
+  const report = await runPolishDraft({
+    root,
+    subject: "demo",
+    node: "beta",
+    step: "two",
+    copy: true,
+    fetchImpl: fetch,
+  });
+
+  assert.equal(report.status, "copied");
+  assert.equal(report.changed, false);
+  assert.equal(calls.length, 0);
+  assert.equal(readFileSync(originalPath, "utf8"), beforeArticle);
+  assert.equal(readFileSync(join(root, "learn/demo/output/beta/two/polish.md"), "utf8"), beforeArticle);
+  assert.equal(readFileSync(planPath, "utf8"), beforePlan);
+});
+
+test("draft --copy still rejects an invalid plan", async () => {
+  const root = draftFixture();
+  write(root, "learn/demo/nodes/beta/two.plan.json", "[]\n");
+  const { fetch, calls } = fetchRoute({ article: () => "", plan: () => "" });
+
+  const report = await runPolishDraft({
+    root,
+    subject: "demo",
+    node: "beta",
+    step: "two",
+    copy: true,
+    fetchImpl: fetch,
+  });
+
+  assert.equal(report.status, "failed");
+  assert.match(report.error, /1-5 items/);
+  assert.equal(calls.length, 0);
+  assert.equal(existsSync(join(root, "learn/demo/output/beta/two/polish.md")), false);
 });
 
 test("draft mode leaves both files untouched when the plan rewrite is invalid", async () => {

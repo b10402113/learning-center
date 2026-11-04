@@ -17,7 +17,9 @@ const IMAGE_LINE_ONLY = /^[ \t]*!\[[^\]]*\]\([^)\s]+(?:\s+["'][^"']*["'])?\)[ \t
 const CAPTION = /^[ \t]*\*[^*\n]+\*[ \t]*$/;
 const LINK = /(?<!!)\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;
 const WIKI_LINK = /\[\[[^\]]+\]\]/g;
-const PROVENANCE = /^<!--\s*(?:source:\s*sources\/\S+\s*|derived\s*)-->$/;
+// Source paths often contain spaces (e.g. "The Agentic Coding Handbook.2.part.txt"),
+// so the path must accept any character, not just \S.
+const PROVENANCE = /^<!--\s*(?:source:\s*sources\/.+\s*|derived\s*)-->$/;
 const QUIZ_FENCE = /^[ \t]*(`{3,}|~{3,})[ \t]*quiz[ \t]*$/i;
 const CODE_FENCE = /^[ \t]*(`{3,}|~{3,})/;
 const MARKER_LINE = /^[ \t]*<!--\s*image:\d+\s*-->[ \t]*$/;
@@ -466,6 +468,7 @@ export async function runPolishDraft({
   node: nodeId,
   step,
   instruction = null,
+  copy = false,
   fetchImpl = null,
 }) {
   const node = readNode(root, subject, nodeId);
@@ -497,6 +500,19 @@ export async function runPolishDraft({
       status: "failed",
       path: shownPlan,
       error: error?.message ?? "invalid image plan",
+    };
+  }
+
+  if (copy) {
+    writeFileSync(files.polish, article);
+    return {
+      id: entry.id,
+      title: entry.title,
+      status: "copied",
+      changed: false,
+      article: shownPolish,
+      plan: shownPlan,
+      anchors: plan.length,
     };
   }
 

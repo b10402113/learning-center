@@ -5,7 +5,7 @@ import { runPolish, runPolishDraft } from "../src/polish-article.mjs";
 
 const usage = `Usage:
   node scripts/polish-article.mjs run   --subject <s> --node <n> [--step <id>] [--force] [--max-parallel <n>] [--instruction <text>] [--root <dir>]
-  node scripts/polish-article.mjs draft --subject <s> --node <n> --step <id> [--instruction <text>] [--root <dir>]
+  node scripts/polish-article.mjs draft --subject <s> --node <n> --step <id> [--instruction <text>] [--copy] [--root <dir>]
 
 run    polishes every eligible step of one node, skips steps whose record still
        matches the article hash unless --force is given, validates each result
@@ -16,7 +16,11 @@ run    polishes every eligible step of one node, skips steps whose record still
 
 draft  polishes one step's unpublished original article and its image plan in
        the publisher job folder, keeping every anchor verbatim. /article runs it
-       between the publisher's original and the markers-only wrapper.`;
+       between the publisher's original and the markers-only wrapper.
+
+--copy (draft only) skips the text model: it validates the plan, copies
+       original.md to polish.md unchanged, and reports status "copied". /batch-nodes
+       -skip-polish uses it so the publisher's first draft is the article.`;
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -28,6 +32,7 @@ async function main() {
       force: { type: "boolean", default: false },
       "max-parallel": { type: "string" },
       instruction: { type: "string" },
+      copy: { type: "boolean", default: false },
       root: { type: "string" },
       help: { type: "boolean", default: false },
     },
@@ -46,6 +51,9 @@ async function main() {
   if (mode === "draft" && !values.step) {
     throw new Error(`--step is required for draft\n\n${usage}`);
   }
+  if (mode === "run" && values.copy) {
+    throw new Error(`--copy only applies to draft\n\n${usage}`);
+  }
 
   const root = resolve(values.root || process.cwd());
   const report =
@@ -56,6 +64,7 @@ async function main() {
           node: values.node,
           step: values.step,
           instruction: values.instruction ?? null,
+          copy: values.copy,
         })
       : await runPolish({
           root,

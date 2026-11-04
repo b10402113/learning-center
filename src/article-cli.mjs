@@ -39,7 +39,7 @@ import {
 } from "./image-provider.mjs";
 
 const usage = `Usage:
-  node src/article-cli.mjs prepare --subject <s> --node <n> [--step <id>] [--force] [--root <dir>]
+  node src/article-cli.mjs prepare --subject <s> --node <n> [--step <id>] [--force] [--skip-polish] [--root <dir>]
   node src/article-cli.mjs publish --subject <s> --node <n> [--step <id>] [--force] [--root <dir>]
   node src/article-cli.mjs render  --subject <s> --node <n> [--step <id>] [--force] [--max-parallel <n>] [--root <dir>]
   node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force] [--images] [--max-parallel <n>] [--root <dir>]  (deprecated)
@@ -50,6 +50,8 @@ prepare  writes one material bundle per missing step and lists the publisher job
          the original with its <!--image:N--> markers and a matching plan, runs
          polishCommand to polish both, then runs the --markers-only command,
          which validates the markers instead of generating figures.
+         --skip-polish hands over a polishCommand that carries --copy, so the
+         publisher's original becomes polish.md unchanged and the plan stays as written.
 publish  writes completed marker-only runs into learn/ without touching figures,
          marks the node written, and runs verify.
 render   turns <!--image:N--> markers into WebP figures and image lines. It only
@@ -64,7 +66,7 @@ image    legacy engine (deprecated): plans and generates WebP figures for
          --plan-only rebuilds the plan; without it, --force regenerates images.
 Default behaviour skips existing articles and reuses existing images.`;
 
-function prepareArticles({ root, subject, node: nodeId, step = null, force = false }) {
+function prepareArticles({ root, subject, node: nodeId, step = null, force = false, skipPolish = false }) {
   const node = readNode(root, subject, nodeId);
   const entries = selectSteps(node, step);
   const order = node.steps.map((entry) => entry.id);
@@ -105,7 +107,9 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
       original: relative(root, files.original),
       polish: relative(root, files.polish),
       plan: relative(root, files.plan),
-      polishCommand: `node scripts/polish-article.mjs draft --subject ${subject} --node ${nodeId} --step ${entry.id}`,
+      polishCommand:
+        `node scripts/polish-article.mjs draft --subject ${subject} --node ${nodeId} --step ${entry.id}` +
+        (skipPolish ? " --copy" : ""),
       command: `node scripts/run-article-agent.mjs --subject ${subject} --node ${nodeId} --step ${entry.id} --mode direct --markers-only`,
       titleCommand: `node "${resolve(root, "scripts/set-step-title.mjs")}" --root "${resolve(root)}" --subject ${subject} --node ${nodeId} --step ${entry.id} --from "${resolve(root, files.polish)}"`,
     });
@@ -206,6 +210,7 @@ async function main() {
       node: { type: "string" },
       step: { type: "string" },
       force: { type: "boolean", default: false },
+      "skip-polish": { type: "boolean", default: false },
       images: { type: "boolean", default: false },
       "plan-only": { type: "boolean", default: false },
       "max-parallel": { type: "string" },
@@ -233,6 +238,7 @@ async function main() {
     node: values.node,
     step: values.step || null,
     force: values.force,
+    skipPolish: values["skip-polish"],
     planOnly: values["plan-only"],
     root,
   };

@@ -73,6 +73,7 @@ test("prepare asks publishers for markers only and reports skipped steps without
   assert.equal(report.teachingPlan, join(root, "learn/test/output/n1/teaching-plan.md"));
   assert.match(step.command, /--markers-only/);
   assert.match(step.command, /--mode direct/);
+  assert.doesNotMatch(step.polishCommand, /--copy/);
   assert.equal(step.material, "learn/test/output/n1/s2/material.json");
   assert.equal(step.original, "learn/test/output/n1/s2/original.md");
   assert.equal(step.polish, "learn/test/output/n1/s2/polish.md");
@@ -87,6 +88,21 @@ test("prepare asks publishers for markers only and reports skipped steps without
       article: join(root, "learn/test/nodes/n1/s1.md"),
     },
   ]);
+});
+
+test("prepare --skip-polish asks for a copy draft instead of a polish call", (t) => {
+  const root = fixture(t);
+  const report = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [CLI, "prepare", "--subject", "test", "--node", "n1", "--skip-polish", "--root", root],
+      { encoding: "utf8" },
+    ),
+  );
+  const [step] = report.steps;
+  assert.match(step.polishCommand, /polish-article\.mjs draft/);
+  assert.match(step.polishCommand, / --copy$/);
+  assert.match(step.command, /--markers-only/);
 });
 
 test("render accepts --step and --max-parallel and skips a step with no plan", (t) => {
