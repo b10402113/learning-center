@@ -13,7 +13,11 @@ permission:
 
 `material` 的重點是這篇文章的主旨與來源位置：`purpose` 是這篇文章要講清楚的主旨，每一段都要服務它。
 
-用 Read 讀完 `material.sources` 裡的每一個來源檔，一路讀到檔尾；`locator` 只標出這個 step 引用哪一段，方便寫 provenance，不是閱讀範圍。只使用來源裡實際出現的事實、數字與引述；來源沒說的不要補。
+新的 `material.json` 會把來源分成兩堆：`course` 是課文，`supplement` 是補充資料；舊格式可能只有 `sources`。用 Read 讀完每一堆裡的每一個來源檔，一路讀到檔尾；`locator` 只標出這個 step 引用哪一段，方便寫 provenance，不是閱讀範圍。
+
+- `course` 是文章的主幹。這篇要忠實呈現課文：課文裡的事實、例子、數字與說法都要保留，不能只挑幾句。
+- `supplement` 只拿來幫讀者理解、補程式碼或補背景，不能取代課文。
+- 只使用來源裡實際出現的事實、數字與引述；來源沒說的不要補。
 
 ## 2. 策展 material
 
@@ -26,13 +30,21 @@ permission:
   "step": "<step-id>",
   "title": "<你選定的標題>",
   "purpose": "<purpose>",
-  "sources": [
+  "course": [
     {
-      "path": "sources/<subject>/<file>",
+      "path": "sources/<subject>/<date>/course/<file>",
       "locator": "#Lx-Ly",
       "type": "article | code | formula",
       "language": "<只有 code 需要，選填>",
-      "text": "<要餵給模型的那段文字、程式碼或 LaTeX>"
+      "text": "<引用範圍的完整文字、程式碼或 LaTeX>"
+    }
+  ],
+  "supplement": [
+    {
+      "path": "sources/<subject>/<date>/supplement/<file>",
+      "locator": "#Lx-Ly",
+      "type": "article | code | formula",
+      "text": "<可節選的補充內容>"
     }
   ]
 }
@@ -40,22 +52,24 @@ permission:
 
 - `title`：dispatch 有給就一字不改沿用；`title` 是 `null` 時，自己從素材裡實際出現的標題或句子選一個，忠實翻譯、不要發明。
 - `purpose` 原樣保留。
-- `sources` 每項都保留 `path` 與 `locator`。`prepare` 會先用副檔名猜 `type`；你讀完來源後要確認或改正，不要把猜測留下來。
+- `course` 的每一個來源都必須放**引用範圍的完整文字**，不能只節選幾段；文章要能完整覆蓋它。`supplement` 可以節選，只留能支撐這篇文章的內容。
+- 舊格式的 `material.sources` 沒有 `course`／`supplement` 時，維持原本的 `sources` 陣列，不要自己發明角色。
+- 每一項都保留 `path` 與 `locator`。`prepare` 會先用副檔名猜 `type`；你讀完來源後要確認或改正，不要把猜測留下來。
 - `type` 只能填 `article`、`code` 或 `formula`：
   - `article`：一般敘述、事實、引述與例子。
   - `code`：逐字要引用的程式碼。`text` 必須跟來源一字不差；不要放 code fence，也不要改寫。`language` 選填，沒有就由 CLI 依副檔名推斷。
   - `formula`：要排版的 LaTeX。`text` 只放公式本身，不要包 `$` 或 `$$`。
 - 同一個 `locator` 若混有散文與程式碼，拆成兩筆（或收窄成兩個 `locator`），各自標正確的 `type`。
-- `text` 是你依 `purpose` 挑選、裁切後真正要餵給模型的內容。程式碼片段照原文保留，不要截斷會看不懂的上下文。
+- `text` 是真正要餵給模型的內容。`course` 要放引用範圍的完整文字，不可裁切；`supplement` 才依 `purpose` 挑選、裁切。程式碼片段照原文保留，不要截斷會看不懂的上下文。
 - 不要自己寫 `{{ARTICLE_CODE_N}}` 或 `{{ARTICLE_FORMULA_N}}` placeholder；`compose` 會依 `type` 自動配發，並在模型寫完後換成正式內容。
-- 挑選要精簡：只留能支撐這篇文章的事實、程式與引述，不要整檔複製，也不要硬塞到超過字數上限（`compose` 預設上限 120000 字元，超限會直接失敗）。
+- `supplement` 挑選要精簡：只留能支撐這篇文章的事實、程式與引述，不要整檔複製。`course` 不可為了省字數而刪減；若兩堆加起來超過字數上限（`compose` 預設 120000 字元），先縮小 `supplement`，不要砍 `course`。
 
 ## 3. 執行 compose
 
 執行一次 `composeCommand`：
 
 - 它讀你策展好的 `material`，用文字模型一次產生 `original.md`。**文章散文由它寫，不是由你寫**；你不要自己寫 `original.md`。
-- 它會把 `title` 當 H1、依 `purpose` 與 `sources` 寫成台灣繁體中文文章；程式碼照抄進 fenced block 並帶 provenance 註解。
+- 它會把 `title` 當 H1、依 `purpose`、`course` 與 `supplement` 寫成台灣繁體中文文章；課文要完整覆蓋，程式碼照抄進 fenced block 並帶 provenance 註解。
 - 它需要 `TEXT_API_KEY`。
 - 它不會放任何 `<!--image:N-->` marker。
 - 成功回報 `status: composed`；若模型連續三次漏用 placeholder，它仍會寫出 `original.md` 並回報 `status: draft`，`compose.json` 的 `missing` 會列出漏掉的來源。

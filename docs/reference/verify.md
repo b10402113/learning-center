@@ -80,9 +80,11 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 
 | id | checks |
 |---|---|
-| `src-format` | a step source is `[[sources/<subject>/<file>#Lx-Ly]]` |
+| `src-format` | a step source parses as `[[sources/<subject>/...<file>#Lx-Ly]]`; new subjects use `<date>/<role>/`, legacy subjects still use the flat path |
 | `src-path` | the source subject matches and the file exists |
 | `src-pdf` | a citation never points at a PDF |
+| `src-raw` | in a course-supplement subject, a citation never points at `raw/` |
+| `src-course-missing` | in a course-supplement subject, every step cites at least one `course/` source |
 | `src-locator-format` | the locator is `#Lx` or `#Lx-Ly` (no slugs) |
 | `src-range` | `1 ≤ start ≤ end ≤ actual line count` |
 | `src-slice-empty` | the cited slice is not blank |
@@ -95,6 +97,8 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `digest-pending` | no digest is left `pending` (whole-subject checks only) |
 | `digest-source` | digest `source` exists under `sources/<subject>/` |
 | `digest-source-pdf` | digest `source` is the extracted `.txt`, never a PDF |
+| `digest-source-raw` | in a course-supplement subject, a digest never points at `raw/` |
+| `digest-source-layout` | in a course-supplement subject, a digest source lives under `course/` or `supplement/` |
 | `digest-source-lines` | `source_lines` equals the cited file's actual line count (part digests and single-file text digests); directory sources only bound the ranges |
 | `digest-range` | every L2 range is `1 ≤ start ≤ end`, and ends within the actual lines or declared `source_lines` |
 | `digest-l2-empty` | the digest has an L2 line map (image digests excepted) |
@@ -109,7 +113,9 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `source-parts-total` | `total_lines` is positive and, while the original `.txt` still exists, equals its line count |
 | `source-parts-list` | `parts` is a non-empty list of objects |
 | `source-parts-order` | `parts[n].part` is `n + 1` in order |
-| `source-parts-file` | every part `file` is a bare filename and exists beside the manifest |
+| `source-parts-file` | every part `file` is a bare filename and resolves in its role folder (or beside the manifest in the legacy layout) |
+| `source-parts-role` | in a course-supplement subject, every part declares `role: course` or `role: supplement` |
+| `source-parts-location` | in a course-supplement subject, a `<stem>.parts.json` manifest lives under `raw/` |
 | `source-parts-range` | every part has positive integer `start`/`end` with `start ≤ end` |
 | `source-parts-lines` | `lines = end - start + 1` and equals the part file's actual line count |
 | `source-parts-coverage` | the ranges start at 1, tile the original with no gap or overlap, and sum to `total_lines` |
@@ -143,7 +149,10 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `image-plan` | `<step>.plan.json` parses as an array of 1–5 items, each with a non-empty `prompt` |
 | `image-plan-orphan` | every `<step>.plan.json` belongs to a real step entry |
 | `sources-empty` | step has at least one source link (flag) |
-| `lint-node-count` | node count is within ±40% of the formula baseline (flag) |
+| `source-layout` | in a course-supplement subject, every source file lives under a dated `course/`, `supplement/`, or `raw/` folder |
+| `source-layout-marker` | a present `source_layout` value is exactly `course-supplement` |
+| `source-layout-no-course` | a course-supplement subject has at least one `.txt` under a dated `course/` folder |
+| `lint-node-count` | node count is within ±40% of the formula baseline (course characters for a course-supplement subject, legacy lines otherwise) (flag) |
 
 ## False-positive policy
 
@@ -158,5 +167,6 @@ The check set stays deterministic so it rarely misfires:
 - Whole-subject-only rules (`digest-unreferenced`, `digest-pending`) stay out of `--node` so one node's gate never fails on another node's or a new ingest's digests.
 - Fenced code and inline code are stripped before link checking.
 - `.DS_Store` and hidden files are ignored.
+- The layout checks (`source-layout`, `source-layout-marker`, `source-layout-no-course`, `src-raw`, `src-course-missing`, `digest-source-raw`, `digest-source-layout`, `source-parts-role`, `source-parts-location`) apply only when `MEMORY.md` declares `source_layout: course-supplement`; older subjects keep the legacy rules.
 
 If a legitimate file trips a check, fix the file rather than relaxing the rule — the script is the contract.

@@ -17,6 +17,16 @@ Before reading, move each source file **and directory** into a dated subfolder s
 
 Skip this step entirely if `sources/<subject>/` already contains only dated subfolders.
 
+## Convert subtitles to text
+
+Before reading, run:
+
+```bash
+node scripts/transcript-backfill.mjs --subject <subject>
+```
+
+Every `.srt` / `.vtt` gets a sibling `.txt` with plain paragraphs and no timestamps; the original stays in place. An existing `.txt` is never overwritten. The `.txt` is the citation unit; the `.srt` / `.vtt` is never cited.
+
 ## Extract PDFs to text
 
 Before reading, run:
@@ -27,33 +37,73 @@ node scripts/pdf-backfill.mjs --subject <subject>
 
 Every PDF gets a sibling `.txt`; an existing `.txt` is never overwritten, so line numbers stay stable. All digests and citations point at the `.txt`, never the PDF.
 
-## Split long text sources
+## Split long text sources and books
 
-Before reading, plan the split for any `.txt` over 3,000 lines or 250 KB:
+Plan the split for any `.txt` over 3,000 lines or 250 KB. A book that mixes chapters and appendices also needs a chapter split so each part can get its own role:
 
 ```bash
 node scripts/split-sources.mjs --subject <subject> --dry-run
+node scripts/split-sources.mjs --subject <subject> --dry-run --chapters
 ```
 
-Show the chunk table to the learner and wait for explicit confirmation. If they decline, stop the split and say why the long source cannot be digested without it; do not silently fall back to the unsplit file. On confirmation run:
+Show the chunk table to the learner and wait for explicit confirmation. If they decline, stop the split and say why the long source cannot be digested without it; do not silently fall back to the unsplit file. On confirmation run the same command with `--apply` (and `--chapters` when the learner accepted the chapter split).
+
+This writes `<stem>.<n>.part.txt` and `<stem>.parts.json`, deletes the original `.txt`, and keeps the PDF. Every later digest and citation uses part-local line numbers and one part digest per chunk.
+
+## Classify sources into course, supplement, and raw
+
+New subjects use the `course-supplement` layout. Every dated folder gets three children:
+
+```text
+sources/<subject>/<YYYYMMDD>/
+├── course/       the material the article must present faithfully
+├── supplement/   code, screenshots, slides, extra reading
+└── raw/          original .srt/.vtt/.pdf and the parts manifest
+```
+
+- **course** — video transcripts (the `.txt`), a book's body text, lecture notes. The article must cover this material completely.
+- **supplement** — code, images, slides, extra articles. It supports the article; it never replaces course text.
+- **raw** — original subtitles, the original PDF, and the parts manifest. It is never digested, never counted, and never cited.
+- One file has exactly one role. Code embedded inside course prose stays in `course/`.
+- A book's PDF and parts manifest go to `raw/`; its chapter parts go to `course/` or `supplement/` by role.
+
+Run the classifier first as a dry run:
 
 ```bash
-node scripts/split-sources.mjs --subject <subject> --apply
+node scripts/classify-sources.mjs --subject <subject>
 ```
 
-This writes `<stem>.<n>.part.txt` and `<stem>.parts.json`, deletes the original `.txt`, and keeps the PDF. Every later digest and citation uses part-local line numbers and one part digest per chunk. Short sources skip this step.
+It prints one row per file: proposed role, path, and reason. Defaults: `.srt`, `.vtt`, `.pdf`, and `.parts.json` → `raw`; `.txt` → `course`; code, images, and other files → `supplement`. Show that table to the learner, adjust ambiguous rows (book appendices, exercises, sample code, lecture notes), and wait for explicit confirmation. Then write the confirmed map to a JSON file:
+
+```json
+{
+  "book.pdf": "raw",
+  "book.parts.json": "raw",
+  "book.1.part.txt": "course",
+  "book.2.part.txt": "supplement",
+  "resources": "supplement"
+}
+```
+
+Keys are relative to the dated folder. Then apply it:
+
+```bash
+node scripts/classify-sources.mjs --subject <subject> --map <file> --apply
+```
+
+The script moves files and directories into `course/`, `supplement/`, and `raw/`, and records each part's role in the parts manifest. If the subject has no course source after classification, stop and ask the learner for at least one piece of course material; do not initialize a code-only subject.
 
 ## Read the material first
 
 Follow the shared `docs/reference/source-reading.md` protocol — never read a source directly and never load a large source into the main context wholesale. Concretely:
 
-1. **Ensure digests in three passes.** Work over `sources/<subject>/YYYYMMDD/` subfolders (do not browse `sources/` or `wiki/` or any other subject's folder):
-   - **Pass 1 — inventory and classify.** List every entry and sort it into text/PDF, codebase directory, or image/image folder.
+1. **Ensure digests in three passes.** Work over `sources/<subject>/YYYYMMDD/course/` and `.../supplement/` (do not browse `raw/`, `sources/`, `wiki/`, or any other subject's folder):
+   - **Pass 1 — inventory.** List every citable entry under `course/` and `supplement/` and sort it into text/PDF-derived text, codebase directory, or image/image folder.
    - **Pass 2 — supplements first.** Build every codebase and image digest before any text digest. Dispatch their sub-agents in parallel and wait until all of them have written their files. A text digest cannot list a supplement that does not exist yet.
       - **Codebase directory:** detect by file extension — if the directory contains ≥ 1 source code file (`.py`, `.ts`, `.js`, `.go`, `.rs`, `.java`, `.c`, `.cpp`, `.rb`, `.swift`, `.kt`, `.php`), treat it as a codebase. Search digests by frontmatter `source` for this directory; check `learn/<subject>/digests/<dir-stem>.md` (small) or part files (large). If it exists and has `status: pending`, skip. If missing, build it per the codebase digest workflow in `source-reading.md`; its L2 is also a `#Lx-Ly` line map. The `dir-stem` is the directory name.
       - **Images and image folders (`.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, and any `images/` folder):** read every image with the Read tool — a visual source teaches through its pictures as much as its text, so frames, screenshots, slides and diagrams are source material too. Record each image's content in the digest's L2 as an image path plus what it shows and what it teaches (no line range). Never infer an image from its filename or its neighbours' text.
    - **Pass 3 — text digests.** Only after every supplement digest is written, build the PDF/text digests:
-      - **PDF / text file:** search `learn/<subject>/digests/*.md` for a digest whose frontmatter `source` is this file or one of its part files. If it exists and has `status: pending`, skip. If missing, build it via the sub-agent workflow (large sources, one digest per `.part.txt`) or read directly in the main context and write it yourself (small sources). Name it `<source-stem>.md` for a single file, or `<source-stem>.<n>.part.md` per part. The digest is an L1 overview plus an L2 line map (`#L1-L11`, `#L12-L25`, …); `source_lines` must equal the cited chunk's actual line count, `part` matches the manifest, and every citation uses part-local lines.
+      - **PDF / text file:** search `learn/<subject>/digests/*.md` for a digest whose frontmatter `source` is this file or one of its part files. If it exists and has `status: pending`, skip. If missing, build it via the sub-agent workflow (large sources, one digest per `.part.txt`) or read directly in the main context and write it yourself (small sources). Name it `<source-stem>.md` for a single file, or `<source-stem>.<n>.part.md` per part. The digest is an L1 overview plus an L2 line map (`#L1-L11`, `#L12-L25`, …); `source_lines` must equal the cited chunk's actual line count, `part` matches the manifest, and every citation uses part-local lines. Every digest `source` points at a file in `course/` or `supplement/`; a `raw/` file never gets a digest.
       - **Related code and figures:** when a text source refers to code or figures from pass 2, list the supplement digest plus the entry to use in its `supplements` frontmatter — `<digest>.md#Lx-Ly` for one of the codebase digest's L2 ranges, or `<digest>.md#L1` for an image digest's overview (see `docs/reference/source-reading.md`). Only `text` digests carry `supplements`; targets must be `codebase` or `image` digests.
    Every new digest must have `status: pending` in its frontmatter.
 2. **Load L1 + TOC.** Read only the L1 overviews (and the sub-agents' compact TOC lines), not the L2 section detail. This is the ground truth your grilling questions will probe and your MEMORY will anchor to.
@@ -87,6 +137,7 @@ Write `learn/<subject>/MEMORY.md` in the template below, then confirm the profil
 ---
 subject: <subject>
 language: <output language for all articles, e.g. en | zh-Hant>
+source_layout: course-supplement
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 ---
@@ -117,6 +168,6 @@ updated: YYYY-MM-DD
 <what sticks, what bores, how they like being taught>
 ```
 
-Completion: every branch has a settled answer, `MEMORY.md` is written, and the learner confirms it's accurate.
+Completion: every branch has a settled answer, `MEMORY.md` is written with `source_layout: course-supplement`, every citable source sits under a dated `course/` or `supplement/` folder (originals in `raw/`), and the learner confirms the profile is accurate.
 
 Next stage: `/roadmap <subject>` — the learner runs it next to plan the nodes; then `/nodes <subject>/<node-id>` writes each node's steps.

@@ -186,3 +186,13 @@ A sample node.
   const result = runChecks({ root, subject: "demo" });
   assert.equal(result.pass, true, JSON.stringify(result.failures, null, 2));
 });
+
+test("a raw PDF is not re-extracted when its text is under course", (t) => {
+  const root = fixture(t);
+  write(root, "sources/demo/20261022/raw/book.pdf", "%PDF-1.4\n");
+  write(root, "sources/demo/20261022/course/book.txt", "classified text\n");
+  const result = backfillPdfs({ root, subject: "demo", pdftotext: fakePdftotext(root) });
+  assert.equal(result.extracted.length, 0);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(existsSync(join(root, "sources/demo/20261022/raw/book.txt")), false);
+});

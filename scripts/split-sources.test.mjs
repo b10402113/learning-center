@@ -211,3 +211,37 @@ test("the dry-run table includes the first line of each chunk", (t) => {
   assert.match(table, /Chapter 1\. First/);
   assert.match(table, /Chapter 2\. Second/);
 });
+
+test("chapters mode splits a short book at each chapter heading", (t) => {
+  const root = fixture(t);
+  const lines = ["Chapter 1. One", "body one", "Chapter 2. Two", "body two"];
+  write(root, "sources/test/book.txt", `${lines.join("\n")}\n`);
+  const plan = planSource({ root, path: join(root, "sources/test/book.txt"), chapters: true });
+  assert.equal(plan.split, true);
+  assert.equal(plan.parts.length, 2);
+  assert.equal(plan.parts[0].start, 1);
+  assert.equal(plan.parts[1].start, 3);
+});
+
+test("chapters mode writes parts even when the book is short", (t) => {
+  const root = fixture(t);
+  const lines = ["Chapter 1. One", "body one", "Chapter 2. Two", "body two"];
+  write(root, "sources/test/book.txt", `${lines.join("\n")}\n`);
+  const result = applySplit({ root, subject: "test", chapters: true });
+  assert.equal(result.failed.length, 0, JSON.stringify(result.failed));
+  assert.equal(result.written.length, 1);
+  assert.equal(existsSync(join(root, "sources/test/book.txt")), false);
+  const manifest = JSON.parse(read(root, "sources/test/book.parts.json"));
+  assert.equal(manifest.parts.length, 2);
+  assert.equal(read(root, "sources/test/book.1.part.txt"), "Chapter 1. One\nbody one\n");
+  assert.equal(read(root, "sources/test/book.2.part.txt"), "Chapter 2. Two\nbody two\n");
+});
+
+test("chapters mode refuses a source with no chapter headings", (t) => {
+  const root = fixture(t);
+  write(root, "sources/test/book.txt", "just a line\nanother line\n");
+  assert.throws(
+    () => planSource({ root, path: join(root, "sources/test/book.txt"), chapters: true }),
+    /no level-1 chapter headings/,
+  );
+});

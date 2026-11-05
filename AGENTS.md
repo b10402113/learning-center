@@ -10,7 +10,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 ├── AGENTS.md                 ← repository schema and workflow
 ├── CLAUDE.md                 ← @AGENTS.md
 ├── docs/reference/           ← shared protocols: source reading, verify, polish, skill scope
-├── sources/                  ← raw inputs, one folder per subject; long .txt files are replaced by generated part files
+├── sources/                  ← raw inputs, one folder per subject; a dated folder holds course/, supplement/, and raw/ (or the legacy flat layout)
 ├── learn/<subject>/
 │   ├── MEMORY.md             ← learner profile from /learn-init (incl. language)
 │   ├── ROADMAP.md            ← tiered node index and course plan
@@ -36,7 +36,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 │   └── edges/                ← optional relationship pages between steps/nodes
 ├── src/                      ← article.mjs, article-cli.mjs, render-images.mjs, article-agent-bridge.mjs, quiz.mjs, llm.mjs, image-provider.mjs
 ├── prompts/                  ← article.txt, image-plan.txt, image.txt
-├── scripts/                  ← verify.mjs, quiz.mjs, publish-article.mjs, run-article-agent.mjs, set-step-title.mjs, humanize-article.mjs, pdf-backfill.mjs, split-sources.mjs, digest-status.mjs, backfill-node-digests.mjs
+├── scripts/                  ← verify.mjs, quiz.mjs, publish-article.mjs, run-article-agent.mjs, set-step-title.mjs, humanize-article.mjs, transcript-backfill.mjs, pdf-backfill.mjs, split-sources.mjs, classify-sources.mjs, digest-status.mjs, backfill-node-digests.mjs
 ├── article-agent/            ← git submodule: publisher-era rewrite pipeline (prompts/rewrite.txt, src/pipeline.mjs)
 ├── course-app/               ← React (Vite + Tailwind) course viewer
 ├── previews/                 ← static design previews for the course viewer
@@ -70,11 +70,11 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 
 | Stage | Role |
 | --- | --- |
-| `/learn-init` | Write `MEMORY.md`, extract PDFs to `.txt`, build digests (L1 + line-addressed L2), including code and image supplements. |
-| `/ingest` | Archive new source files and write `pending` digests. Does not touch roadmap, nodes, or articles; a `pending` digest makes the subject check fail until `/absorb` resolves it. |
+| `/learn-init` | Write `MEMORY.md` with `source_layout: course-supplement`, convert subtitles and PDFs to `.txt`, split long sources and books, classify every file into `course/`, `supplement/`, or `raw/`, then build digests (L1 + line-addressed L2), including code and image supplements. |
+| `/ingest` | Archive new source files, convert subtitles and PDFs, split and classify them, then write `pending` digests. Does not touch roadmap, nodes, or articles; a `pending` digest makes the subject check fail until `/absorb` resolves it. |
 | `/roadmap` | Propose ≥5 learning paths, confirm one, partition into nodes, confirm the prerequisite DAG, write `ROADMAP.md` and `draft` node containers with their `digests` lists and `prerequisites`, and resolve every read digest to `absorbed` or `skipped`. |
 | `/nodes` | Reasoning checkpoint per node: write the `steps` array (`id`, `purpose`, `sources`), create empty article skeletons, set `confirmed`. The publisher writes each title with its article. |
-| `/article` | `prepare` writes each step's material bundle into `output/<node>/<step>/` — its purpose plus the source files it cites; one `publisher` subagent per step reads those sources in full and curates the material (selected prose and code, each piece keeping `path`/`locator`), picks the title, runs `article-cli compose` to have the text model write `original.md` (no image markers), reads `original.md` to write the 1–5 item plan to `nodes/<node>/<step>.plan.json`, runs `article-cli mark` to insert the `<!--image:N-->` markers, then runs `polish-article.mjs draft` to write `polish.md` and polish the plan while keeping the markers, and `titleCommand` to write the title back to the node; `publish` writes `<step>.md` from `polish.md` and verifies. It calls the text model for compose and polish but never the image model, and never creates `<step>-assets/`. The main agent then edits prose only to add continuity between steps. |
+| `/article` | `prepare` writes each step's material bundle into `output/<node>/<step>/` — its purpose plus the source files it cites; one `publisher` subagent per step reads those sources in full and curates the material (all cited course text plus selected supplement prose and code, each piece keeping `path`/`locator`), picks the title, runs `article-cli compose` to have the text model write `original.md` (no image markers), reads `original.md` to write the 1–5 item plan to `nodes/<node>/<step>.plan.json`, runs `article-cli mark` to insert the `<!--image:N-->` markers, then runs `polish-article.mjs draft` to write `polish.md` and polish the plan while keeping the markers, and `titleCommand` to write the title back to the node; `publish` writes `<step>.md` from `polish.md` and verifies. It calls the text model for compose and polish but never the image model, and never creates `<step>-assets/`. The main agent then edits prose only to add continuity between steps. |
 | `/humanize-article` | Processes only steps with a plan: `scripts/humanize-article.mjs prepare` copies `step.md` to `output/<node>/<step>/humanized.md` and the plan to `humanized.plan.json`; a humanize subagent edits only those copies; `apply` validates the protected parts and only then writes `step.md` and the plan back. A failed validation leaves the official files untouched and keeps the copies. There is no hash record and no separate plan backup. |
 | `/generate-images` | Thin shell over `src/render-images.mjs`: reads the plan and the article's `<!--image:N-->` markers, generates or reuses `image-N.webp` under `<step>-assets/`, and replaces each marker with an uncaptioned image line. With `--force` it also repaints the files behind existing image lines. It never plans, edits prose, or reads `anchor`. |
 | `/quiz-gen` | One `quiz-agent` per node reads its published steps and writes 3–8 single-choice questions each; the agent self-checks candidates with `quiz.mjs check`; `quiz.mjs write` validates and writes `<step>.quiz.json`; course-app renders them after the article. |
@@ -87,10 +87,10 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 
 ## Core Principles
 
-1. **Sources are immutable** — never edit anything under `sources/` by hand. The one exception is `scripts/split-sources.mjs`, which replaces a long `.txt` with generated part files and a `<stem>.parts.json` manifest. Archived transcripts in `legacy/tune/` are immutable too.
+1. **Sources are immutable** — never edit anything under `sources/` by hand. The exceptions are the scripts that generate derived files: `scripts/transcript-backfill.mjs` writes sibling `.txt` transcripts, `scripts/pdf-backfill.mjs` writes sibling `.txt` extractions, `scripts/split-sources.mjs` replaces a long `.txt` with generated part files and a `<stem>.parts.json` manifest, and `scripts/classify-sources.mjs` moves files into `course/`, `supplement/`, and `raw/`. Archived transcripts in `legacy/tune/` are immutable too.
 2. **The node is the plan** — `steps` array order is teaching order. There is no `deps`, `type`, or per-step `order`.
 3. **The step is the article** — `learn/<subject>/nodes/<node>/<step>.md`, with no frontmatter, opens with the H1 the publisher chose and wrote back to the step entry.
-4. **Citations are line-addressed** — every source link is `[[sources/<subject>/<file>#Lx-Ly]]` into a `.txt`, covered by a digest L2 range. PDFs are never cited.
+4. **Citations are line-addressed** — every source link is `[[sources/<subject>/<date>/<role>/<file>#Lx-Ly]]` into a `.txt` under `course/` or `supplement/`, covered by a digest L2 range. `raw/` originals and PDFs are never cited.
 5. **Verify is the format gate** — `scripts/verify.mjs` is the single source of truth; every format rule is a hard failure with a negative fixture.
 6. **No HTML, no MDX** — the course-app renders Markdown. Nothing in the active flow imports from `legacy/`.
 7. **Code is source-grounded** — quote source code verbatim when the source has it, write it from the prose otherwise, and mark every fenced block with `<!-- source: sources/…#Lx-Ly -->` or `<!-- derived -->`.
@@ -138,7 +138,7 @@ Rules:
 - `purpose` is one short sentence (≤ 120 characters), not an article summary.
 - A `draft` node may have `steps: []`; `confirmed` and `written` need at least one step.
 - The body is `# <title>`, a short `## Lesson`, and a `## Steps` list whose ids and order match the frontmatter. Each link label is the step's `title` once published, and the step `id` while the article is still unwritten. Links are relative to the node file.
-- There is no node-level `sources` field; sources live on step entries.
+- There is no node-level `sources` field; sources live on step entries. In a `course-supplement` subject every step cites at least one `course/` source; a recap step may reuse an earlier course range.
 - `digests` lists the digest filenames this node teaches; `/roadmap` declares it up front and `/nodes` and `/absorb` keep it true. Every step source must come from a declared digest, a declared digest must be `absorbed`, and a `confirmed`/`written` node may not declare a digest no step cites.
 - `prerequisites` is the node-level prerequisite DAG: the earlier nodes a reader should finish first, as stable paths such as `learn/<subject>/nodes/<id>.md`, or `[]` for a root. `/roadmap` proposes the edges at its confirmation checkpoint. A prerequisite stays inside the subject, points at an existing node that is not the node itself, never creates a cycle, and never points at a later tier.
 
@@ -146,6 +146,7 @@ Rules:
 
 - No frontmatter. The first non-empty line is the H1, written by the publisher and identical to the step entry's `title`.
 - Free length and free `##` sections; Traditional Chinese, short paragraphs, editorial tone.
+- In a `course-supplement` subject the article must cover the cited `course/` range completely. `supplement/` material only supports explanation, code, and figures.
 - Do **not** write a source list or inline citations — course-app aggregates the step's sources below the article.
 - Do **not** write a practice section or inline quiz. Generated questions live in the sibling `<step>.quiz.json`.
 - Before rendering, each planned figure is an `<!--image:N-->` marker on its own line, surrounded by blank lines, numbered 1..N in plan order.
@@ -176,7 +177,7 @@ The legacy fenced `quiz` block is still accepted by the renderer and `verify`, b
 
 ```markdown
 ---
-source: sources/<subject>/<path>.txt   # or <path>.<n>.part.txt when split
+source: sources/<subject>/<date>/<course|supplement>/<path>.txt   # or <path>.<n>.part.txt when split
 source_type: text
 source_lines: 216                        # the cited file's actual line count
 part: 2                                  # optional; manifest part number when split
@@ -198,7 +199,7 @@ supplements:            # optional; a supplement digest plus its L1 or L2 entry
 - `#L12-L25` — <what these lines explain>
 ```
 
-PDFs are extracted once into a sibling `.txt` by `node scripts/pdf-backfill.mjs --subject <subject>`; an existing `.txt` is never overwritten. A text source over 3,000 lines or 250 KB is then split by `node scripts/split-sources.mjs --subject <subject> --dry-run` → confirm → `--apply`, which writes `<stem>.<n>.part.txt` plus `<stem>.parts.json` and deletes the original `.txt` while keeping the PDF. Citations point at the part file that holds the lines, and `source_lines` equals that chunk's actual line count. Digest `status` is `pending | absorbed | skipped`; `skipped` means the material was read and deliberately left untaught, and it needs a non-empty `skip_reason`. A subject check fails on any `pending` digest, on an `absorbed` digest no node lists, and on a text digest skipped while its supplement stays absorbed. A `text` digest may list `supplements` — sibling `codebase` or `image` digests plus the L1 (`<digest>.md#L1`) or L2 (`<digest>.md#Lx-Ly`) entry that carries the code or figures the text refers to.
+A digest `source` always points into `course/` or `supplement/`; a `raw/` original never gets a digest. Subtitles are converted to `.txt` by `node scripts/transcript-backfill.mjs --subject <subject>`, and PDFs are extracted once into a sibling `.txt` by `node scripts/pdf-backfill.mjs --subject <subject>`; an existing `.txt` is never overwritten. A text source over 3,000 lines or 250 KB (and a book whose chapters need separate roles) is split by `node scripts/split-sources.mjs --subject <subject> --dry-run [--chapters]` → confirm → `--apply`, which writes `<stem>.<n>.part.txt` plus `<stem>.parts.json` and deletes the original `.txt` while keeping the PDF. `node scripts/classify-sources.mjs --subject <subject>` then proposes the `course/supplement/raw` moves, the learner confirms a map, and `--map <file> --apply` moves the files and records each part's role. Citations point at the part file that holds the lines, and `source_lines` equals that chunk's actual line count. Digest `status` is `pending | absorbed | skipped`; `skipped` means the material was read and deliberately left untaught, and it needs a non-empty `skip_reason`. A subject check fails on any `pending` digest, on an `absorbed` digest no node lists, and on a text digest skipped while its supplement stays absorbed. A `text` digest may list `supplements` — sibling `codebase` or `image` digests plus the L1 (`<digest>.md#L1`) or L2 (`<digest>.md#Lx-Ly`) entry that carries the code or figures the text refers to.
 
 ### Edge — `learn/<subject>/edges/<edge-id>.md`
 
@@ -238,7 +239,7 @@ node src/article-cli.mjs article --subject <s> --node <n> [--step <id>] [--force
 node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only]  (deprecated)
 ```
 
-- `prepare` writes one material bundle per missing step to `learn/<subject>/output/<node>/<step>/material.json`; each bundle carries the step's `purpose` and `sources` as `{path, locator, type}` pointers, not source text; it infers `type: code` from code-like extensions and defaults to `article`. One `publisher` subagent per step reads every cited source file in full and curates the material — overwriting `material.json` with the selected prose, code and formulas, each piece keeping `{path, locator, type}` (plus optional `language` for code) and adding `text`, and picking the title. `article-cli compose` reads that curated material and calls the text model once to write `original.md` (no image markers) plus `compose.json` (`model`, `composed_at`), enforcing the input size cap (`ARTICLE_MAX_MATERIAL_CHARS`, default 120000). For `code` and `formula` sources it gives the model a placeholder and replaces that placeholder with the verbatim fenced code plus provenance or with display math. On a missing body, H1 or placeholder it retries with the previous draft and the missing placeholder list; if placeholders are still missing after three attempts it still writes a salvageable `original.md` (restoring the placeholders it did use, stripping leftovers) and reports `status: draft` with `compose.json.missing`, so the publisher can repair instead of losing the run. The publisher then reads `original.md` to write the 1–5 item plan to `learn/<subject>/nodes/<node>/<step>.plan.json`, and `article-cli mark` inserts the `<!--image:N-->` markers from that plan. `polish-article.mjs draft` reads `original.md`, writes `polish.md`, and polishes each plan `heading`/`prompt` while keeping the markers; when the model or validation fails it falls back to copying `original.md` to `polish.md` unchanged, reports `status: copied` with `fallback: true`, and the publisher continues. It calls the text model for compose and polish but never generates figures. `prepare --force` clears the step's stale `original.md`, `polish.md`, `result.json`, `compose.json`, `blocks.json` and `request.json` so an old run cannot publish; the publisher and CLI then rewrite `material.json`, `original.md`, `polish.md` and the plan. `draft --copy` skips the text model: it validates the plan, copies `original.md` to `polish.md` unchanged, and reports `copied`. `prepare --skip-polish` is what hands the publisher that copy command instead of the polish call.
+- `prepare` writes one material bundle per missing step to `learn/<subject>/output/<node>/<step>/material.json`; each bundle carries the step's `purpose` plus `course` and `supplement` source lists (legacy subjects use `sources`) as `{path, locator, type}` pointers, not source text; it infers `type: code` from code-like extensions and defaults to `article`. One `publisher` subagent per step reads every cited source file in full and curates the material — overwriting `material.json` with the course text in full and the selected supplement prose, code and formulas, each piece keeping `{path, locator, type}` (plus optional `language` for code) and adding `text`, and picking the title. `article-cli compose` reads that curated material and calls the text model once to write `original.md` (no image markers) plus `compose.json` (`model`, `composed_at`), enforcing the input size cap (`ARTICLE_MAX_MATERIAL_CHARS`, default 120000). For `code` and `formula` sources it gives the model a placeholder and replaces that placeholder with the verbatim fenced code plus provenance or with display math. On a missing body, H1 or placeholder it retries with the previous draft and the missing placeholder list; if placeholders are still missing after three attempts it still writes a salvageable `original.md` (restoring the placeholders it did use, stripping leftovers) and reports `status: draft` with `compose.json.missing`, so the publisher can repair instead of losing the run. The publisher then reads `original.md` to write the 1–5 item plan to `learn/<subject>/nodes/<node>/<step>.plan.json`, and `article-cli mark` inserts the `<!--image:N-->` markers from that plan. `polish-article.mjs draft` reads `original.md`, writes `polish.md`, and polishes each plan `heading`/`prompt` while keeping the markers; when the model or validation fails it falls back to copying `original.md` to `polish.md` unchanged, reports `status: copied` with `fallback: true`, and the publisher continues. It calls the text model for compose and polish but never generates figures. `prepare --force` clears the step's stale `original.md`, `polish.md`, `result.json`, `compose.json`, `blocks.json` and `request.json` so an old run cannot publish; the publisher and CLI then rewrite `material.json`, `original.md`, `polish.md` and the plan. `draft --copy` skips the text model: it validates the plan, copies `original.md` to `polish.md` unchanged, and reports `copied`. `prepare --skip-polish` is what hands the publisher that copy command instead of the polish call.
 - `publish` keeps the markers, normalizes the H1, writes `learn/<subject>/nodes/<node>/<step>.md` from `polish.md`, stamps the step's `author` from `compose.json` (falling back to the current text model), marks the node `written`, and runs verify. It never syncs, copies, or deletes `<step>-assets/` unless `--force` succeeds. With `--force`, a successful write clears that step's stale `image-N.webp` files, its `<step>.quiz.json`, its `humanized.md` / `humanized.plan.json`, and its polish record.
 - The main agent then reads the published steps in order and edits prose only (openings, handoffs, repeated term definitions); it never moves code blocks, `<!--image:N-->` markers, image lines, `quiz` blocks, or the H1.
 - Missing or H1-only articles are generated; articles with a body are skipped unless `--force`.
@@ -279,21 +280,37 @@ node scripts/backfill-node-digests.mjs [--subject <s>] [--write] [--skip-unused 
 
 `digest-status` prints one row per digest: status, the nodes whose `digests` list it, and its `skip_reason`; the footer counts absorbed, pending, skipped, and absorbed digests no node claims. `skipped` requires `--reason`. `backfill-node-digests` derives each node's `digests` from its step sources — dry run by default, `--write` applies it, and with `--skip-unused --reason` it also marks absorbed digests that no node claims as `skipped`. It never overwrites a step-less node's existing declarations.
 
+### Transcript backfill
+
+```bash
+node scripts/transcript-backfill.mjs --subject <subject> [--dry-run] [--json]
+```
+
+Converts every `.srt` / `.vtt` into a sibling `.txt` with plain paragraphs and no timestamps. Idempotent: an existing `.txt` is never overwritten, and a transcript already classified under `course/` is reused. Originals are kept.
+
 ### PDF backfill
 
 ```bash
 node scripts/pdf-backfill.mjs --subject <subject> [--dry-run]
 ```
 
-Idempotent: existing `.txt` files are not overwritten, so line numbers stay stable; a PDF with `<stem>.*.part.txt` siblings is skipped.
+Idempotent: existing `.txt` files are not overwritten, so line numbers stay stable; a PDF with `<stem>.*.part.txt` siblings is skipped, and a PDF in `raw/` whose text already lives under `course/` or `supplement/` is skipped.
+
+### Classify sources
+
+```bash
+node scripts/classify-sources.mjs --subject <subject> [--map <file>] [--apply] [--json]
+```
+
+Dry run by default. Prints one row per planned move: proposed `course` / `supplement` / `raw` role, path, and reason. Defaults: `.srt`, `.vtt`, `.pdf`, and `.parts.json` → `raw`; `.txt` → `course`; code, images, and other files → `supplement`. `--apply` moves files and directories into the dated `course/`, `supplement/`, and `raw/` folders and adds each part's role to its parts manifest. Keys in `--map` are relative to the dated folder.
 
 ### Split long sources
 
 ```bash
-node scripts/split-sources.mjs --subject <subject> (--dry-run | --apply) [--boundaries <file>] [--root <dir>] [--json]
+node scripts/split-sources.mjs --subject <subject> (--dry-run | --apply) [--chapters] [--boundaries <file>] [--root <dir>] [--json]
 ```
 
-`--dry-run` prints the chunk table and writes nothing; `/learn-init` and `/ingest` must show it and get explicit confirmation before `--apply`. Splitting applies only to `.txt` sources over 3,000 lines or 250 KB, cuts on chapter/section headings, merges sub-200-line sections into the next chunk, and splits oversized sections at subheadings or paragraph boundaries. `--apply` writes `<stem>.<n>.part.txt` and `<stem>.parts.json`, deletes the original `.txt`, and keeps the PDF; rerunning never overwrites an existing part. Each chunk has exactly one digest part whose `source` points at the chunk. `verify` checks manifest tiling, part line counts, and the chunk/digest pairing.
+`--dry-run` prints the chunk table and writes nothing; `/learn-init` and `/ingest` must show it and get explicit confirmation before `--apply`. `--chapters` forces one part per level-1 chapter heading, even for a short book, so course and supplement chapters can be classified separately. Size-based splitting applies only to `.txt` sources over 3,000 lines or 250 KB; it merges sub-200-line sections into the next chunk and splits oversized sections at subheadings or paragraph boundaries. `--chapters` instead emits one part per level-1 chapter heading, even for a shorter book, and refuses a source with no chapter headings. `--apply` writes `<stem>.<n>.part.txt` and `<stem>.parts.json`, deletes the original `.txt`, and keeps the PDF; rerunning never overwrites an existing part. Each chunk has exactly one digest part whose `source` points at the chunk. `verify` checks manifest tiling, part line counts, and the chunk/digest pairing.
 
 ### Node reset
 
@@ -310,7 +327,7 @@ node scripts/verify.mjs --subject <subject>
 node scripts/verify.mjs --node <subject>/<node-id>
 ```
 
-It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, the publisher-written title, the optional `author` string and H1, `## Steps`, the prerequisite DAG (`prerequisites-type`, `prerequisite-path`, `prerequisite-missing`, `prerequisite-subject`, `prerequisite-self`, `prerequisite-cycle`, `prerequisite-tier`), source locators and digest coverage, node ↔ digest declarations (`node-digest-unknown`, `node-digest-status`, `node-digest-undeclared`, `node-digest-unused`, `digest-unreferenced`, `digest-pending`, `digest-skip-reason`), code provenance, quiz sidecars, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
+It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, the publisher-written title, the optional `author` string and H1, `## Steps`, the prerequisite DAG (`prerequisites-type`, `prerequisite-path`, `prerequisite-missing`, `prerequisite-subject`, `prerequisite-self`, `prerequisite-cycle`, `prerequisite-tier`), source locators and digest coverage, node ↔ digest declarations (`node-digest-unknown`, `node-digest-status`, `node-digest-undeclared`, `node-digest-unused`, `digest-unreferenced`, `digest-pending`, `digest-skip-reason`), the `course/supplement/raw` layout for new subjects (`source-layout`, `src-raw`, `src-course-missing`, `digest-source-raw`, `digest-source-layout`, `source-parts-role`), code provenance, quiz sidecars, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
 
 ### Query
 

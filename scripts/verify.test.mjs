@@ -1489,3 +1489,443 @@ test("overlapping parts fail", (t) => {
   });
   assert.ok(failures(root).includes("source-parts-coverage"));
 });
+
+function newLayoutFixture(t) {
+  const root = mkdtempSync(join(tmpdir(), "verify-layout-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const notes = `${Array.from({ length: 20 }, (_, index) => `course line ${index + 1}`).join("\n")}\n`;
+  const extra = `${Array.from({ length: 10 }, (_, index) => `extra line ${index + 1}`).join("\n")}\n`;
+  write(root, "sources/test/20261022/course/notes.txt", notes);
+  write(root, "sources/test/20261022/supplement/extra.txt", extra);
+  write(root, "sources/test/20261022/raw/lesson.srt", "1\n00:00:01,000 --> 00:00:02,000\nhi\n");
+  write(
+    root,
+    "learn/test/MEMORY.md",
+    `---
+subject: test
+language: zh-Hant
+source_layout: course-supplement
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# MEMORY — test
+`,
+  );
+  write(
+    root,
+    "learn/test/digests/notes.md",
+    `---
+source: sources/test/20261022/course/notes.txt
+source_type: text
+source_lines: 20
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- Notes.
+
+# L2 detail
+
+- \`#L1-L10\` — first half
+- \`#L11-L20\` — second half
+`,
+  );
+  write(
+    root,
+    "learn/test/digests/extra.md",
+    `---
+source: sources/test/20261022/supplement/extra.txt
+source_type: text
+source_lines: 10
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- Extra.
+
+# L2 detail
+
+- \`#L1-L10\` — all of it
+`,
+  );
+  write(
+    root,
+    "learn/test/ROADMAP.md",
+    `---
+subject: test
+status: confirmed
+created: 2026-10-22
+---
+
+# Test
+
+## Nodes
+
+### Tier 1 — Basics
+
+1. **[Node One](nodes/n1.md)**
+`,
+  );
+  write(
+    root,
+    "learn/test/nodes/n1.md",
+    `---
+id: n1
+title: "Node One"
+subject: test
+tier: 1
+order: 1
+status: confirmed
+goal: "Do one thing."
+digests:
+  - notes.md
+  - extra.md
+steps:
+  - id: s1
+    title: "Step One"
+    purpose: "Explain one thing."
+    sources:
+      - "[[sources/test/20261022/course/notes.txt#L1-L10]]"
+      - "[[sources/test/20261022/supplement/extra.txt#L1-L5]]"
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Node One
+
+## Lesson
+
+A short lesson.
+
+## Steps
+
+1. [Step One](n1/s1.md)
+`,
+  );
+  write(
+    root,
+    "learn/test/nodes/n1/s1.md",
+    `# Step One
+
+Opening line.
+
+Closing line.
+`,
+  );
+  return root;
+}
+
+test("a course-supplement subject passes when every step cites course text", (t) => {
+  const root = newLayoutFixture(t);
+  const result = runChecks({ root, subject: "test" });
+  assert.equal(result.failures.length, 0, JSON.stringify(result.failures));
+});
+
+test("a step without a course source fails", (t) => {
+  const root = newLayoutFixture(t);
+  update(
+    root,
+    "learn/test/nodes/n1.md",
+    `      - "[[sources/test/20261022/course/notes.txt#L1-L10]]"\n`,
+    "",
+  );
+  const result = runChecks({ root, subject: "test" });
+  assert.ok(result.failures.some((failure) => failure.checkId === "src-course-missing"));
+});
+
+test("a source outside the three role folders fails", (t) => {
+  const root = newLayoutFixture(t);
+  write(root, "sources/test/20261022/stray.txt", "stray\n");
+  const result = runChecks({ root, subject: "test" });
+  assert.ok(result.failures.some((failure) => failure.checkId === "source-layout"));
+});
+
+test("citing a raw source fails", (t) => {
+  const root = newLayoutFixture(t);
+  update(
+    root,
+    "learn/test/nodes/n1.md",
+    `      - "[[sources/test/20261022/course/notes.txt#L1-L10]]"`,
+    `      - "[[sources/test/20261022/raw/lesson.srt#L1-L2]]"`,
+  );
+  const result = runChecks({ root, subject: "test" });
+  assert.ok(result.failures.some((failure) => failure.checkId === "src-raw"));
+});
+
+test("a role-aware parts manifest resolves parts in course and supplement", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "verify-parts-role-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const course = `${Array.from({ length: 10 }, (_, index) => `course ${index + 1}`).join("\n")}\n`;
+  const extra = `${Array.from({ length: 10 }, (_, index) => `extra ${index + 1}`).join("\n")}\n`;
+  write(root, "sources/test/20261022/course/book.1.part.txt", course);
+  write(root, "sources/test/20261022/supplement/book.2.part.txt", extra);
+  write(
+    root,
+    "sources/test/20261022/raw/book.parts.json",
+    JSON.stringify({
+      text: "sources/test/20261022/book.txt",
+      total_lines: 20,
+      parts: [
+        { part: 1, file: "book.1.part.txt", role: "course", start: 1, end: 10, lines: 10 },
+        { part: 2, file: "book.2.part.txt", role: "supplement", start: 11, end: 20, lines: 10 },
+      ],
+    }),
+  );
+  write(
+    root,
+    "learn/test/MEMORY.md",
+    `---
+subject: test
+language: zh-Hant
+source_layout: course-supplement
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# MEMORY — test
+`,
+  );
+  write(
+    root,
+    "learn/test/digests/book.1.part.md",
+    `---
+source: sources/test/20261022/course/book.1.part.txt
+source_type: text
+source_lines: 10
+part: 1
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- Course part.
+
+# L2 detail
+
+- \`#L1-L10\` — all of it
+`,
+  );
+  write(
+    root,
+    "learn/test/digests/book.2.part.md",
+    `---
+source: sources/test/20261022/supplement/book.2.part.txt
+source_type: text
+source_lines: 10
+part: 2
+status: absorbed
+absorbed_at: 2026-10-22
+---
+
+# L1 overview
+
+- Supplement part.
+
+# L2 detail
+
+- \`#L1-L10\` — all of it
+`,
+  );
+  write(
+    root,
+    "learn/test/ROADMAP.md",
+    `---
+subject: test
+status: confirmed
+created: 2026-10-22
+---
+
+# Test
+
+## Nodes
+
+### Tier 1 — Basics
+
+1. **[Node One](nodes/n1.md)**
+`,
+  );
+  write(
+    root,
+    "learn/test/nodes/n1.md",
+    `---
+id: n1
+title: "Node One"
+subject: test
+tier: 1
+order: 1
+status: confirmed
+goal: "Do one thing."
+digests:
+  - book.1.part.md
+  - book.2.part.md
+steps:
+  - id: s1
+    title: "Step One"
+    purpose: "Explain the course part."
+    sources:
+      - "[[sources/test/20261022/course/book.1.part.txt#L1-L10]]"
+  - id: s2
+    title: "Step Two"
+    purpose: "Reuse the course part and add the supplement."
+    sources:
+      - "[[sources/test/20261022/course/book.1.part.txt#L1-L1]]"
+      - "[[sources/test/20261022/supplement/book.2.part.txt#L1-L10]]"
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Node One
+
+## Lesson
+
+A short lesson.
+
+## Steps
+
+1. [Step One](n1/s1.md)
+2. [Step Two](n1/s2.md)
+`,
+  );
+  write(root, "learn/test/nodes/n1/s1.md", "# Step One\n\nBody one.\n");
+  write(root, "learn/test/nodes/n1/s2.md", "# Step Two\n\nBody two.\n");
+
+  const result = runChecks({ root, subject: "test" });
+  assert.equal(result.failures.length, 0, JSON.stringify(result.failures));
+});
+
+test("a course-supplement subject with no course text fails", (t) => {
+  const root = newLayoutFixture(t);
+  rmSync(join(root, "sources/test/20261022/course/notes.txt"));
+  const result = runChecks({ root, subject: "test" });
+  assert.ok(result.failures.some((failure) => failure.checkId === "source-layout-no-course"));
+});
+
+test("an unknown source_layout marker fails", (t) => {
+  const root = newLayoutFixture(t);
+  update(root, "learn/test/MEMORY.md", "source_layout: course-supplement", "source_layout: course-supplment");
+  const result = runChecks({ root, subject: "test" });
+  assert.ok(result.failures.some((failure) => failure.checkId === "source-layout-marker"));
+});
+
+test("a split part without a role fails in a course-supplement subject", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "verify-parts-norole-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  write(root, "sources/test/20261022/course/notes.txt", "course text\n");
+  write(root, "sources/test/20261022/course/book.1.part.txt", "part one\n");
+  write(
+    root,
+    "sources/test/20261022/raw/book.parts.json",
+    JSON.stringify({
+      text: "sources/test/20261022/course/book.txt",
+      total_lines: 1,
+      parts: [{ part: 1, file: "book.1.part.txt", start: 1, end: 1, lines: 1 }],
+    }),
+  );
+  write(
+    root,
+    "learn/test/MEMORY.md",
+    `---
+subject: test
+language: zh-Hant
+source_layout: course-supplement
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# MEMORY — test
+`,
+  );
+  const result = runChecks({ root, subject: "test" });
+  assert.ok(result.failures.some((failure) => failure.checkId === "source-parts-role"));
+});
+
+test("a digest pointing at a raw source fails", (t) => {
+  const root = newLayoutFixture(t);
+  write(
+    root,
+    "learn/test/digests/raw.md",
+    `---
+source: sources/test/20261022/raw/lesson.srt
+source_type: text
+source_lines: 3
+status: skipped
+skip_reason: "not taught"
+---
+
+# L1 overview
+
+- Raw.
+
+# L2 detail
+
+- \`#L1-L3\` — all of it
+`,
+  );
+  const result = runChecks({ root, subject: "test" });
+  assert.ok(result.failures.some((failure) => failure.checkId === "digest-source-raw"));
+});
+
+test("a digest outside a role folder fails", (t) => {
+  const root = newLayoutFixture(t);
+  write(root, "sources/test/20261022/stray.txt", "stray\n");
+  write(
+    root,
+    "learn/test/digests/stray.md",
+    `---
+source: sources/test/20261022/stray.txt
+source_type: text
+source_lines: 1
+status: skipped
+skip_reason: "not taught"
+---
+
+# L1 overview
+
+- Stray.
+
+# L2 detail
+
+- \`#L1-L1\` — all of it
+`,
+  );
+  const result = runChecks({ root, subject: "test" });
+  assert.ok(result.failures.some((failure) => failure.checkId === "digest-source-layout"));
+});
+
+test("a parts manifest outside raw fails in a course-supplement subject", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "verify-parts-location-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  write(root, "sources/test/20261022/course/notes.txt", "course text\n");
+  write(root, "sources/test/20261022/course/book.1.part.txt", "part one\n");
+  write(
+    root,
+    "sources/test/20261022/course/book.parts.json",
+    JSON.stringify({
+      text: "sources/test/20261022/course/book.txt",
+      total_lines: 1,
+      parts: [{ part: 1, file: "book.1.part.txt", role: "course", start: 1, end: 1, lines: 1 }],
+    }),
+  );
+  write(
+    root,
+    "learn/test/MEMORY.md",
+    `---
+subject: test
+language: zh-Hant
+source_layout: course-supplement
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# MEMORY — test
+`,
+  );
+  const result = runChecks({ root, subject: "test" });
+  assert.ok(result.failures.some((failure) => failure.checkId === "source-parts-location"));
+});

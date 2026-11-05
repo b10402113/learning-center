@@ -77,6 +77,17 @@ function placeholderFor(type, index) {
   return type === "code" ? `{{ARTICLE_CODE_${index}}}` : `{{ARTICLE_FORMULA_${index}}}`;
 }
 
+export function materialSources(material) {
+  const course = Array.isArray(material?.course)
+    ? material.course.map((source) => ({ ...source, role: "course" }))
+    : [];
+  const supplement = Array.isArray(material?.supplement)
+    ? material.supplement.map((source) => ({ ...source, role: "supplement" }))
+    : [];
+  if (course.length > 0 || supplement.length > 0) return [...course, ...supplement];
+  return Array.isArray(material?.sources) ? material.sources : [];
+}
+
 export function buildComposeSources(sources) {
   const prepared = sources.map((source, index) => {
     const type = normalizeSourceType(source?.type);
@@ -86,6 +97,7 @@ export function buildComposeSources(sources) {
       type,
       text: String(source?.text ?? "").replace(/\r\n/g, "\n"),
     };
+    if (["course", "supplement"].includes(String(source?.role ?? ""))) item.role = source.role;
     if (type === "code") {
       if (!item.path || !item.locator) {
         throw new Error(`code source ${index + 1} needs both path and locator`);
@@ -116,6 +128,7 @@ export function composeSourcePayload(sources) {
       locator: source.locator,
       type: source.type,
     };
+    if (source.role) payload.role = source.role;
     if (source.type === "code" && source.language) payload.language = source.language;
     payload.text = source.text;
     if (source.placeholder) payload.placeholder = source.placeholder;

@@ -2,6 +2,25 @@
 
 Shared contract for how `learn-init`, `ingest`, `absorb`, `roadmap`, `nodes`, `article`, and `edges` read source material. The goal: raw text never enters the main context wholesale. Sources are read once, condensed into **digests**, and the digests are reused across stages; `article` records only the line ranges a step cites, and its publisher reads each cited source file in full.
 
+## Source roles and layout
+
+A subject written by the current `/learn-init` uses `source_layout: course-supplement` in `MEMORY.md`. Every dated folder then has three children:
+
+```text
+sources/<subject>/<YYYYMMDD>/
+├── course/       course text: transcript .txt, book body, lecture notes
+├── supplement/   supporting material: code, images, slides, extra articles
+└── raw/          originals: .srt/.vtt, original PDFs, parts manifests
+```
+
+- **course** — the article's spine. A step must cite at least one `course` source, and the article must cover the cited course range completely.
+- **supplement** — supports the course text; it never replaces it.
+- **raw** — archived originals. It is never digested, never counted toward the node baseline, and never cited. `verify` rejects a citation into `raw/`.
+- One file has exactly one role. Code embedded in course prose stays in `course/`.
+- `classify-sources.mjs` proposes the roles, the learner confirms, and the script moves the files. A book's PDF and parts manifest go to `raw/`; its parts go to `course/` or `supplement/` by role.
+
+Older subjects without the marker keep the pre-role layout and are not checked against these rules.
+
 ## When to use a sub-agent
 
 A source is **large** when it exceeds either bound:
@@ -20,22 +39,34 @@ A long `.txt` is the unit of citation only after it is split. Before any digest 
 
 ```bash
 node scripts/split-sources.mjs --subject <subject> --dry-run
+node scripts/split-sources.mjs --subject <subject> --dry-run --chapters
 node scripts/split-sources.mjs --subject <subject> --apply
+node scripts/split-sources.mjs --subject <subject> --apply --chapters
 ```
 
-The dry run prints one row per chunk (original line range, target filename, line count, first line) and writes nothing. Show that table to the learner and wait for explicit confirmation before running `--apply`. If the learner declines, stop; do not fall back to digesting the unsplit file. Short sources never enter this flow.
+The dry run prints one row per chunk (original line range, target filename, line count, first line) and writes nothing. Show that table to the learner and wait for explicit confirmation before running `--apply`. If the learner declines, stop; do not fall back to digesting the unsplit file. Short sources never enter the size-based flow. `--chapters` forces one part per level-1 chapter heading even when the source is short, so a book's body and appendices can be classified separately.
 
 `--apply` writes `<stem>.<n>.part.txt` next to the source, plus `<stem>.parts.json`. The manifest records the original path, `total_lines`, and each part's `start`/`end`/`lines`; the ranges tile the original with no gap and no overlap. After a successful apply the original `.txt` is deleted and the PDF stays in place. `pdf-backfill` sees `<stem>.*.part.txt` and skips that PDF, so a later run cannot recreate the long file. Rerunning `--apply` never overwrites an existing part.
 
-The part file becomes the citation unit: cite `[[sources/<subject>/<date>/<stem>.<n>.part.txt#Lx-Ly]]` with part-local line numbers. A range that would cross a chunk boundary is written as two citations; the digest's L2 entry is split the same way. Each chunk has exactly one part digest, whose `source` points at the chunk and whose `source_lines` equals that chunk's real line count. `verify` fails a manifest with a gap, overlap, wrong line count, a part without a digest, or a digest that still points at the unsplit source.
+After classification, each part file moves to `course/` or `supplement/`, and `classify-sources.mjs` adds a `role` to the manifest's part entry. The manifest itself lives in `raw/`. The part file becomes the citation unit: cite `[[sources/<subject>/<date>/<role>/<stem>.<n>.part.txt#Lx-Ly]]` with part-local line numbers. A range that would cross a chunk boundary is written as two citations; the digest's L2 entry is split the same way. Each chunk has exactly one part digest, whose `source` points at the chunk and whose `source_lines` equals that chunk's real line count. `verify` fails a manifest with a gap, overlap, wrong line count, a part without a digest, a part without a role in a course-supplement subject, or a digest that still points at the unsplit source.
 
 ## Digest files
 
 - Location: `learn/<subject>/digests/<source-stem>.md` — one file per source (the stem is the original filename without extension for files, or the directory name for codebases). Large sources are split into one **part file per chunk**, named `<source-stem>.<n>.part.md`; each part is a self-contained digest whose `source` points at the matching `<source-stem>.<n>.part.txt`. Digests are two-level:
   - **L1 — overview**: a few lines per chapter (PDF) or per module (codebase). Enough for `learn-init` grilling and `roadmap` partitioning without loading detail.
   - **L2 — line map**: one entry per section (PDF/text) or per module (codebase), each naming the exact `#Lstart-Lend` range and a one-line description. This is the discovery map `nodes` and `article` use to pick the lines worth reading. There are no slug locators.
-- Every source gets a digest, large or small (parts included). `nodes` reads digests only — never raw sources.
-- Frontmatter records `source` (the extracted text file for PDFs), `source_type`, `source_lines` (the actual `.txt` line count, matching `wc -l`), and `status` (`pending` | `absorbed`). A `text` digest may also carry `supplements` — sibling `codebase` or `image` digests that supply the code or figures this text refers to (see below).
+- Every citable source gets a digest, large or small (parts included). `raw/` originals never get one. `nodes` reads digests only — never raw sources.
+- Frontmatter records `source` (a file under `course/` or `supplement/`), `source_type`, `source_lines` (the actual `.txt` line count, matching `wc -l`), and `status` (`pending` | `absorbed`). A `text` digest may also carry `supplements` — sibling `codebase` or `image` digests that supply the code or figures this text refers to (see below).
+
+### Subtitle conversion
+
+A `.srt` / `.vtt` is converted once, at ingest time, into a sibling `.txt` with plain paragraphs and no timestamps:
+
+```bash
+node scripts/transcript-backfill.mjs --subject <subject>
+```
+
+The command is idempotent: an existing `.txt` is never overwritten, and the original subtitle stays in `raw/`. Every citation points at the `.txt`; a subtitle is never cited.
 
 ### PDF text extraction
 
@@ -45,13 +76,13 @@ A PDF is extracted once, at ingest time, into a sibling `.txt`:
 node scripts/pdf-backfill.mjs --subject <subject>
 ```
 
-The command is idempotent: an existing `.txt` is never overwritten, so line numbers stay stable. Every citation points at the `.txt`; citing a PDF is a verification failure. Re-extracting a source means treating it as a new source, because the line numbers may move.
+The command is idempotent: an existing `.txt` is never overwritten, so line numbers stay stable. Every citation points at the `.txt`; citing a PDF is a verification failure. A PDF in `raw/` is skipped when its text already lives under `course/` or `supplement/`. Re-extracting a source means treating it as a new source, because the line numbers may move.
 
 ### Text digest format
 
 ```markdown
 ---
-source: sources/<subject>/<YYYYMMDD>/<file>.txt # or <file>.<n>.part.txt
+source: sources/<subject>/<YYYYMMDD>/<course|supplement>/<file>.txt # or <file>.<n>.part.txt
 source_type: text
 source_lines: <wc -l of the cited file>
 part: <n> # optional; manifest part number when the source is split
@@ -84,7 +115,7 @@ Large codebases are split into one **part file per top-level directory**, named 
 
 ```markdown
 ---
-source: sources/<subject>/<YYYYMMDD>/<dir-stem>
+source: sources/<subject>/<YYYYMMDD>/<supplement|course>/<dir-stem>
 source_type: codebase
 source_lines: <wc -l for this directory>
 language: <primary language by file count>
@@ -145,9 +176,9 @@ This protocol extends the one-file-per-digest rule to accommodate the `ingest` s
 
 ### Grouping principles
 
-1. **The batch is the input.** `ingest` reads all files that were just moved into `sources/<subject>/YYYYMMDD/`. It does not consider earlier archived files, even if they share the same subject.
+1. **The batch is the input.** `ingest` reads all files that were just moved into `sources/<subject>/YYYYMMDD/course/` or `.../supplement/`. It does not consider earlier archived files or anything in `raw/`.
 2. **Clustering.** Files are clustered by semantic similarity. Two files belong in the same cluster if their combined content forms a coherent learning unit that `absorb` can reasonably consider as a single node goal. Standalone files that do not match any other file’s topic form single-file clusters.
-3. **Digest name.** The cluster name is a prefix for discovery, not a merge: every source file gets its own digest (`<cluster-name>-<file-stem>.md`), because an L2 line map points into exactly one text file. A single-file cluster may use the original file stem.
+3. **Digest name.** The cluster name is a prefix for discovery, not a merge: every citable source file gets its own digest (`<cluster-name>-<file-stem>.md`), because an L2 line map points into exactly one text file. A single-file cluster may use the original file stem. A digest never points at a `raw/` original.
 4. **Large-source handling.** The size check and sub-agent path from the large-source sections still apply within a cluster. Part digests are named `<cluster-name>-<file-stem>.<n>.part.md`, so two large files in one cluster never collide.
 5. **Locator preservation.** Each L2 entry records the source path and exact line range, e.g. `#L120-L168`. Image L2 entries keep the image path and a one-line description; they carry no line range.
 
@@ -167,7 +198,7 @@ Existing per-file digests remain untouched. This batch-aware grouping applies on
 
 ### Lint considerations
 
-When validating digests, the linter checks frontmatter, that `source` exists and is not a PDF, that `source_lines` matches the `.txt`, that every L2 entry uses `#Lx-Ly`, and that every `supplements` entry names a sibling `codebase` or `image` digest. It does not enforce the batch-aware clustering constraints.
+When validating digests, the linter checks frontmatter, that `source` exists and is not a PDF, that `source_lines` matches the `.txt`, that every L2 entry uses `#Lx-Ly`, and that every `supplements` entry names a sibling `codebase` or `image` digest. It also enforces the course/supplement/raw layout for subjects that declare `source_layout: course-supplement`, including a course source on every step and a role on every split part. It does not enforce the batch-aware clustering constraints.
 
 ## Digest lifecycle
 
@@ -175,6 +206,7 @@ Each digest has a `status` field in its frontmatter:
 
 - `pending` — newly created, not yet consumed. Set by `/learn-init`, `/roadmap` (when building missing digests), and `/ingest`.
 - `absorbed` — consumed and integrated. Set by `/roadmap` (after partitioning into nodes) or `/absorb` (after integrating into the learning graph).
+- `skipped` — read and deliberately left untaught; needs a non-empty `skip_reason`.
 
 Sources are immutable, so a digest is stable once written. A `pending` digest is ready for consumption; an `absorbed` digest has already been processed.
 
@@ -190,11 +222,11 @@ When a node's step planning needs detail beyond the digest:
 
 `article` is the stage that reads raw source, because an article that shows code must show the real code. `nodes` stays digest-only (above); `article` pulls the located slice on demand. A sub-agent does the read, so the raw text stays in its own context and never enters the main one.
 
-A step's `sources` entries are the entry points. For a step with a source:
+A step's `sources` entries are the entry points. In a `course-supplement` subject, at least one must resolve to a `course/` file; `supplement/` and `raw/` do not satisfy that rule, and `raw/` is never citable. For a step with a source:
 
-1. Resolve every `[[sources/<subject>/<file>#Lx-Ly]]` from the node's step entry.
+1. Resolve every `[[sources/<subject>/<role>/<file>#Lx-Ly]]` from the node's step entry.
 2. Read only that slice — never the whole source. When a locator is absent or stale, fall back to the digest and mark the gap (below).
-3. Write the article with code provenance.
+3. Write the article with code provenance, covering the full course range; the supplement supplies explanation and code, not a replacement for the course text.
 
 ### Code provenance
 
@@ -212,6 +244,15 @@ Surfacing code applies to every step: whenever the prose names a file, function,
 A step whose source cannot be read — no `sources`, a stale locator, a moved code file, a digest without its raw — is still written. Mark the gap `[needs source]` at the claim and list it in the run's report; never invent a citation to cover it.
 
 ## Node count formula
+
+For a `source_layout: course-supplement` subject, count only course text:
+
+```text
+characters = non-whitespace characters in every text file under a dated course/
+target     = clamp(round(characters / 30000), 3, 30)
+```
+
+`supplement/` and `raw/` do not count. For an older subject without the layout marker, use the legacy formula:
 
 ```text
 lines  = total .txt lines (PDFs) + total wc -l lines (codebases)

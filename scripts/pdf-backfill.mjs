@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { classifiedTextFor } from "../src/source-layout.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -23,6 +24,12 @@ function hasPartFiles(pdf) {
   return readdirSync(dir).some((name) => name.startsWith(`${stem}.`) && /\.part\.txt$/i.test(name));
 }
 
+function existingText(pdf) {
+  const txt = pdf.replace(/\.pdf$/i, ".txt");
+  if (existsSync(txt) || hasPartFiles(pdf)) return txt;
+  return classifiedTextFor(pdf);
+}
+
 export function backfillPdfs({ root = REPO_ROOT, subject, pdftotext = "pdftotext", dryRun = false }) {
   const subjectDir = join(root, "sources", subject);
   const pdfs = findPdfs(subjectDir).sort();
@@ -30,7 +37,7 @@ export function backfillPdfs({ root = REPO_ROOT, subject, pdftotext = "pdftotext
 
   for (const pdf of pdfs) {
     const txt = pdf.replace(/\.pdf$/i, ".txt");
-    if (existsSync(txt) || hasPartFiles(pdf)) {
+    if (existingText(pdf)) {
       result.skipped.push(pdf);
       continue;
     }

@@ -150,22 +150,35 @@ export function buildRequest(root, { subject, files, entry, plan = null, hasCode
 export function writeMaterial(root, { subject, node, entry, slices }) {
   const files = jobFiles(root, { subject, node, step: entry.id });
   mkdirSync(files.dir, { recursive: true });
+  const items = slices.map(({ path, locator, role }) => {
+    const type = inferSourceType(path);
+    const source = { path, locator, type };
+    if (role) source.role = role;
+    if (type === "code") {
+      const language = inferSourceLanguage(path);
+      if (language) source.language = language;
+    }
+    return source;
+  });
   const material = {
     subject,
     node,
     step: entry.id,
     title: entry.title ?? null,
     purpose: entry.purpose,
-    sources: slices.map(({ path, locator }) => {
-      const type = inferSourceType(path);
-      const source = { path, locator, type };
-      if (type === "code") {
-        const language = inferSourceLanguage(path);
-        if (language) source.language = language;
-      }
-      return source;
-    }),
   };
+  if (items.some((item) => item.role)) {
+    const raw = items.filter((item) => item.role === "raw");
+    if (raw.length > 0) {
+      throw new Error(`step ${entry.id} cites raw sources: ${raw.map((item) => item.path).join(", ")}`);
+    }
+    material.course = items.filter((item) => item.role === "course").map(({ role, ...item }) => item);
+    material.supplement = items
+      .filter((item) => item.role === "supplement" || !item.role)
+      .map(({ role, ...item }) => item);
+  } else {
+    material.sources = items.map(({ role, ...item }) => item);
+  }
   writeFileSync(files.material, JSON.stringify(material, null, 2) + "\n");
   return { files, material };
 }

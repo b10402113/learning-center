@@ -16,12 +16,20 @@ Prereqs: `learn/<subject>/MEMORY.md` exists, `sources/<subject>/` exists. If eit
 Inventory `sources/<subject>/` recursively. Collect every **file** at any depth, skipping `.DS_Store`. These are the candidates. Then filter out any that have already been processed:
 
 1. Create `sources/<subject>/YYYYMMDD/` (today's date) if missing.
-2. For each candidate file, compute its relative path from `sources/<subject>/` (e.g. `chapter-notes/fig1.png` for a file in a subdirectory, or just `notes.pdf` for a top-level file). Check if `sources/<subject>/<any-date-folder>/<relative-path>` already exists in any dated subfolder. If it does, skip it — it was ingested in a prior run.
+2. For each candidate file, compute its relative path from `sources/<subject>/` (e.g. `chapter-notes/fig1.png` for a file in a subdirectory, or just `notes.pdf` for a top-level file). Check whether `sources/<subject>/<any-date-folder>/<relative-path>` or `sources/<subject>/<any-date-folder>/<role>/<relative-path>` already exists in any dated subfolder, for any role (`course`, `supplement`, `raw`). If it does, skip it — it was ingested in a prior run.
 3. Move the remaining (unprocessed) files into `sources/<subject>/YYYYMMDD/<relative-path>`. Use `mv`, not copy. If the relative path includes subdirectories, create them under the dated folder first (`mkdir -p`).
 
-If no files needed moving (all were already in dated subfolders), say so and stop.
+If no files needed moving (all were already in dated subfolders), say so and continue with conversion and classification for any unprocessed files.
 
-After archiving, extract every new PDF to text:
+After archiving, convert subtitles to text:
+
+```bash
+node scripts/transcript-backfill.mjs --subject <subject>
+```
+
+Every `.srt` / `.vtt` gets a sibling `.txt` with plain paragraphs and no timestamps; the original stays in place and an existing `.txt` is never overwritten.
+
+Then extract every new PDF to text:
 
 ```bash
 node scripts/pdf-backfill.mjs --subject <subject>
@@ -29,23 +37,32 @@ node scripts/pdf-backfill.mjs --subject <subject>
 
 The command is idempotent — an existing `.txt` is never overwritten — so citations keep stable line numbers. Digests and citations always point at the `.txt`, never the PDF.
 
-Then plan a split for any extracted `.txt` over 3,000 lines or 250 KB:
+Then plan a split for any extracted `.txt` over 3,000 lines or 250 KB, and for a book that mixes chapters with appendices:
 
 ```bash
 node scripts/split-sources.mjs --subject <subject> --dry-run
+node scripts/split-sources.mjs --subject <subject> --dry-run --chapters
 ```
 
-Show the chunk table to the learner and wait for explicit confirmation. If they decline, stop; do not digest the unsplit file. On confirmation:
+Show the chunk table to the learner and wait for explicit confirmation. If they decline, stop; do not digest the unsplit file. On confirmation run the same command with `--apply` (and `--chapters` when accepted). This writes `<stem>.<n>.part.txt` plus `<stem>.parts.json`, deletes the original `.txt`, and keeps the PDF. From here every digest cites one part file with part-local line numbers.
+
+Then classify every new file into `course/`, `supplement/`, or `raw/` inside its dated folder:
 
 ```bash
-node scripts/split-sources.mjs --subject <subject> --apply
+node scripts/classify-sources.mjs --subject <subject>
 ```
 
-This writes `<stem>.<n>.part.txt` plus `<stem>.parts.json`, deletes the original `.txt`, and keeps the PDF. Short sources skip this step. From here every digest cites one part file with part-local line numbers.
+Show the table, adjust ambiguous rows (book chapters, appendices, sample code, lecture notes), and wait for explicit confirmation. Then write the confirmed map to JSON and apply:
+
+```bash
+node scripts/classify-sources.mjs --subject <subject> --map <file> --apply
+```
+
+Defaults: `.srt`, `.vtt`, `.pdf`, and `.parts.json` → `raw`; `.txt` → `course`; code, images, and other files → `supplement`. `raw/` files are originals: never digested, never counted, never cited. A book's PDF and parts manifest go to `raw/`; its parts go to `course/` or `supplement/` by role. If no course source remains, stop and ask for course material.
 
 ## Step 2 — Create digests
 
-Collect all files that were **just moved** in step 1. These form the **current batch**.
+Collect all files that were **just moved into `course/` or `supplement/`** in step 1. These form the **current batch**. Files in `raw/` are originals and never enter digest creation. Every digest `source` points at a `course/` or `supplement/` file; part digests use the part file and the manifest records each part's role.
 
 ### Single-file batch → fallback to per-file mode
 
@@ -85,7 +102,7 @@ One file in the batch, or a file that stands alone. One digest per source, named
 
 ### Source path preservation
 
-When citing a source that came from a dated subfolder, preserve its relative path inside the dated folder and use a line range for text: `[[sources/<subject>/YYYYMMDD/chapter-notes/notes.txt#L1-L20]]`. Image paths appear in a digest's L2 description, not in step source locators.
+When citing a source that came from a dated subfolder, preserve its role folder and use a line range for text: `[[sources/<subject>/YYYYMMDD/course/notes.txt#L1-L20]]` or `[[sources/<subject>/YYYYMMDD/supplement/repo/src/a.ts#L1-L20]]`. Image paths appear in a digest's L2 description, not in step source locators.
 
 ### Backward compatibility
 

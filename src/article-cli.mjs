@@ -27,6 +27,7 @@ import { renderImages } from "./render-images.mjs";
 import {
   buildComposeSources,
   composeSourcePayload,
+  materialSources,
   missingPlaceholders,
   restoreComposeSources,
   salvageComposeSources,
@@ -178,7 +179,7 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
       });
       continue;
     }
-    const sources = Array.isArray(material.sources) ? material.sources : [];
+    const sources = materialSources(material);
     const curated = sources.filter((source) => source && typeof source.text === "string" && source.text.trim());
     if (curated.length === 0) {
       results.push({

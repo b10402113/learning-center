@@ -5,6 +5,7 @@ import {
   composeSourcePayload,
   inferSourceLanguage,
   inferSourceType,
+  materialSources,
   missingPlaceholders,
   normalizeSourceType,
   restoreComposeSources,
@@ -138,4 +139,28 @@ test("leaves an article with no placeholders unchanged", () => {
   ]);
   const markdown = "# Title\n\nProse.\n";
   assert.equal(restoreComposeSources(markdown, sources), markdown);
+});
+
+test("materialSources prefers course and supplement arrays", () => {
+  const sources = materialSources({
+    course: [{ path: "sources/test/a.txt", locator: "#L1-L2", text: "a" }],
+    supplement: [{ path: "sources/test/b.txt", locator: "#L3-L4", text: "b" }],
+    sources: [{ path: "sources/test/legacy.txt", locator: "#L5-L6", text: "c" }],
+  });
+  assert.deepEqual(sources.map((source) => source.role), ["course", "supplement"]);
+  assert.deepEqual(sources.map((source) => source.path), ["sources/test/a.txt", "sources/test/b.txt"]);
+});
+
+test("materialSources falls back to the legacy sources array", () => {
+  const sources = materialSources({ sources: [{ path: "sources/test/a.txt", locator: "#L1-L2", text: "a" }] });
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0].role, undefined);
+});
+
+test("compose payload carries the source role", () => {
+  const prepared = buildComposeSources([
+    { path: "sources/test/a.txt", locator: "#L1-L2", type: "article", role: "course", text: "a" },
+    { path: "sources/test/b.txt", locator: "#L3-L4", type: "article", role: "supplement", text: "b" },
+  ]);
+  assert.deepEqual(composeSourcePayload(prepared).map((source) => source.role), ["course", "supplement"]);
 });

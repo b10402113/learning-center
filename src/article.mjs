@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import matter from "gray-matter";
+import { parseSourceRole } from "./source-layout.mjs";
 
 export const MAX_IMAGES = 5;
 
@@ -55,7 +56,8 @@ export function readStepSlices(root, entry) {
     }
     const text = lines.slice(start - 1, end).join("\n");
     if (!text.trim()) throw new Error(`step ${entry.id} range #${locator} is empty in ${path}`);
-    return { path, locator: `#${locator}`, text };
+    const role = parseSourceRole(path);
+    return role ? { path, locator: `#${locator}`, role, text } : { path, locator: `#${locator}`, text };
   });
 }
 

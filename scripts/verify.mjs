@@ -6,6 +6,7 @@ import matter from "gray-matter";
 import { countArticleCharacters } from "../src/article.mjs";
 import { normalizeStepPlan } from "../src/article-agent-bridge.mjs";
 import { maxQuestionsFor, validateQuizPayload } from "../src/quiz.mjs";
+import { CITABLE_ROLES, courseCharacterCount, nodeBaseline, parseSourceRole } from "../src/source-layout.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -406,7 +407,14 @@ function normalizeSourceRef(root, subject, raw) {
   return null;
 }
 
-function checkSourceParts(report, root, subject, scan, digestInfo) {
+function readSourceLayout(root, subject) {
+  const file = join(root, "learn", subject, "MEMORY.md");
+  if (!existsSync(file)) return null;
+  const { data } = readMarkdown(file);
+  return typeof data.source_layout === "string" ? data.source_layout.trim() : null;
+}
+
+function checkSourceParts(report, root, subject, scan, digestInfo, layout) {
   if (scan.manifests.length === 0) return;
 
   for (const manifest of scan.manifests) {
@@ -452,6 +460,13 @@ function checkSourceParts(report, root, subject, scan, digestInfo) {
 
     const directory = dirname(textRel).split("\\").join("/");
     const directoryKey = directory === "." ? "" : `${directory}/`;
+    const manifestRel = relative(join(root, "sources", subject), manifest.path).split("\\").join("/");
+    const datedParts = manifestRel.split("/");
+    const datedIndex = datedParts.findIndex((part) => /^\d{8}$/.test(part));
+    const datedRel = datedIndex === -1 ? directory : datedParts.slice(0, datedIndex + 1).join("/");
+    if (layout === "course-supplement" && parseSourceRole(`sources/${subject}/${manifestRel}`) !== "raw") {
+      report.fail(file, 0, "source-parts-location", "a parts manifest must live under raw/ in a course-supplement subject");
+    }
     const partBySourceKey = new Map();
     const digestBySourceKey = new Map();
     let previousEnd = 0;
@@ -470,6 +485,17 @@ function checkSourceParts(report, root, subject, scan, digestInfo) {
       }
       if (typeof part.file !== "string" || !part.file || basename(part.file) !== part.file) {
         report.fail(file, 0, "source-parts-file", `parts[${index}].file must be a filename`);
+        valid = false;
+        continue;
+      }
+      const role = part.role === undefined ? null : String(part.role);
+      if (role !== null && !CITABLE_ROLES.includes(role)) {
+        report.fail(file, 0, "source-parts-role", `parts[${index}].role must be course or supplement`);
+        valid = false;
+        continue;
+      }
+      if (layout === "course-supplement" && role === null) {
+        report.fail(file, 0, "source-parts-role", `parts[${index}] needs a role in a course-supplement subject`);
         valid = false;
         continue;
       }
@@ -497,7 +523,9 @@ function checkSourceParts(report, root, subject, scan, digestInfo) {
       previousEnd = end;
       sum += lines;
 
-      const partPath = join(root, "sources", subject, directory, part.file);
+      const partPath = role
+        ? join(root, "sources", subject, datedRel, role, part.file)
+        : join(root, "sources", subject, directory, part.file);
       if (!existsSync(partPath)) {
         report.fail(file, 0, "source-parts-file", `parts[${index}] file "${part.file}" does not exist`);
         valid = false;
@@ -509,7 +537,9 @@ function checkSourceParts(report, root, subject, scan, digestInfo) {
         valid = false;
       }
 
-      const key = `sources/${subject}/${directoryKey}${part.file}`;
+      const key = role
+        ? `sources/${subject}/${datedRel}/${role}/${part.file}`
+        : `sources/${subject}/${directoryKey}${part.file}`;
       partBySourceKey.set(key, part.part);
       digestBySourceKey.set(key, []);
     }
@@ -934,7 +964,7 @@ function checkPrerequisites(report, root, subject, scan, onlyNode) {
   }
 }
 
-function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nodeDigests) {
+function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nodeDigests, layout) {
   const file = rel(root, node.path);
   const parsed = readMarkdown(node.path);
   if (parsed.error) {
@@ -1003,9 +1033,27 @@ function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nod
     if (!existsSync(article)) {
       report.fail(file, 1, "step-article-missing", `step "${entry.id}" has no article at ${rel(root, article)}`);
     }
+    let courseSources = 0;
     for (const [sourceIndex, source] of (Array.isArray(entry.sources) ? entry.sources : []).entries()) {
       checkSourceRef(report, root, subject, scan, digestInfo, file, source, `steps[${index}].sources[${sourceIndex}]`);
       for (const name of digestNamesForSource(digestInfo, source)) usedDigests.add(name);
+      if (layout === "course-supplement") {
+        const parsed = parseSourceLink(source);
+        const role = parsed ? parseSourceRole(parsed.path) : null;
+        if (role === "raw") {
+          report.fail(file, 1, "src-raw", `steps[${index}].sources[${sourceIndex}] cites a raw source`);
+        } else if (role === "course") {
+          courseSources += 1;
+        }
+      }
+    }
+    if (layout === "course-supplement" && courseSources === 0) {
+      report.fail(
+        file,
+        1,
+        "src-course-missing",
+        `step "${entry.id}" must cite at least one course source`,
+      );
     }
     if (!Array.isArray(entry.sources) || entry.sources.length === 0) {
       report.flag(file, "sources-empty", `step "${entry.id}" has no sources`);
@@ -1324,18 +1372,64 @@ function checkArticle(report, root, entry, step) {
   checkImages(report, root, file, body, step);
 }
 
-function checkNodeCount(report, subject, scan) {
-  let totalLines = 0;
-  const counted = new Set();
-  for (const file of scan.digests) {
-    const { data } = readMarkdown(file.path);
-    const key = data.source || file.path;
-    if (typeof data.source_lines === "number" && !counted.has(key)) {
-      counted.add(key);
-      totalLines += data.source_lines;
+function checkSourceLayout(report, root, subject, scan, digestInfo, layout) {
+  if (!layout) return;
+  if (layout !== "course-supplement") {
+    report.fail(
+      `learn/${subject}/MEMORY.md`,
+      1,
+      "source-layout-marker",
+      `unknown source_layout "${layout}"; use "course-supplement"`,
+    );
+    return;
+  }
+  if (courseCharacterCount(root, subject) === 0) {
+    report.fail(
+      `sources/${subject}`,
+      0,
+      "source-layout-no-course",
+      "a course-supplement subject needs at least one course text file",
+    );
+  }
+  for (const source of scan.sources) {
+    const path = `sources/${subject}/${source.rel}`;
+    if (!parseSourceRole(path)) {
+      report.fail(
+        rel(root, source.path),
+        0,
+        "source-layout",
+        "source must live under course/, supplement/, or raw/ inside a dated folder",
+      );
     }
   }
-  const target = Math.max(3, Math.min(30, Math.round(totalLines / 1100)));
+  for (const entry of digestInfo.meta) {
+    if (typeof entry.data.source !== "string" || !entry.data.source.trim()) continue;
+    const role = parseSourceRole(entry.data.source);
+    if (role === "raw") {
+      report.fail(entry.file, 1, "digest-source-raw", "a digest cannot point at a raw source");
+    } else if (!role) {
+      report.fail(entry.file, 1, "digest-source-layout", "digest source must live under course/ or supplement/");
+    }
+  }
+}
+
+function checkNodeCount(report, root, subject, scan, layout) {
+  let target;
+  if (layout === "course-supplement") {
+    target = nodeBaseline(courseCharacterCount(root, subject));
+  } else {
+    let totalLines = 0;
+    const counted = new Set();
+    for (const file of scan.digests) {
+      const { data } = readMarkdown(file.path);
+      const key = data.source || file.path;
+      if (typeof data.source_lines === "number" && !counted.has(key)) {
+        counted.add(key);
+        totalLines += data.source_lines;
+      }
+    }
+    target = Math.max(3, Math.min(30, Math.round(totalLines / 1100)));
+  }
   const actual = scan.nodes.length;
   if (target > 0) {
     const deviation = (actual - target) / target;
@@ -1361,9 +1455,11 @@ export function runChecks({ root = REPO_ROOT, subject, node = null }) {
     stepIndex.byNode.get(step.nodeId).push(step);
   }
 
+  const layout = readSourceLayout(root, subject);
   checkNoMdx(report, root, node ? subject : null);
   const digestInfo = buildDigestIndex(report, root, subject, scan);
-  checkSourceParts(report, root, subject, scan, digestInfo);
+  checkSourceParts(report, root, subject, scan, digestInfo, layout);
+  checkSourceLayout(report, root, subject, scan, digestInfo, layout);
   const nodeDigests = new Map();
 
   const nodesById = new Map(scan.nodes.map((item) => [item.id, item]));
@@ -1403,7 +1499,7 @@ export function runChecks({ root = REPO_ROOT, subject, node = null }) {
   checkPrerequisites(report, root, subject, scan, node);
 
   for (const item of targets) {
-    checkNode(report, root, subject, scan, digestInfo, item, stepIndex, nodeDigests);
+    checkNode(report, root, subject, scan, digestInfo, item, stepIndex, nodeDigests, layout);
   }
 
   if (!node) checkDigestCoverage(report, digestInfo, nodeDigests);
@@ -1415,7 +1511,7 @@ export function runChecks({ root = REPO_ROOT, subject, node = null }) {
     checkArticle(report, root, entry, step);
   }
 
-  if (!node) checkNodeCount(report, subject, scan);
+  if (!node) checkNodeCount(report, root, subject, scan, layout);
 
   return {
     subject,

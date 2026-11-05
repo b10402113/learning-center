@@ -544,3 +544,67 @@ test("reports images an existing article references but does not have", (t) => {
   writeFileSync(figure, "webp");
   assert.deepEqual(missingArticleImages(root, "test", "n1", body, "s1"), []);
 });
+
+test("reads the source role from a course-supplement path", (t) => {
+  const root = fixture(t);
+  write(root, "sources/test/20261022/course/notes.txt", "course one\ncourse two\n");
+  write(root, "sources/test/20261022/supplement/extra.txt", "extra one\n");
+  const slices = readStepSlices(root, {
+    id: "s1",
+    sources: [
+      "[[sources/test/20261022/course/notes.txt#L1-L1]]",
+      "[[sources/test/20261022/supplement/extra.txt#L1-L1]]",
+    ],
+  });
+  assert.deepEqual(slices.map((slice) => slice.role), ["course", "supplement"]);
+});
+
+test("material splits course and supplement sources", (t) => {
+  const root = fixture(t);
+  write(root, "sources/test/20261022/course/notes.txt", "course one\ncourse two\n");
+  write(root, "sources/test/20261022/supplement/extra.txt", "extra one\n");
+  const entry = {
+    id: "s1",
+    title: "Step One",
+    purpose: "Explain one thing.",
+    sources: [
+      "[[sources/test/20261022/course/notes.txt#L1-L1]]",
+      "[[sources/test/20261022/supplement/extra.txt#L1-L1]]",
+    ],
+  };
+  const { material } = writeMaterial(root, {
+    subject: "test",
+    node: "n1",
+    entry,
+    slices: readStepSlices(root, entry),
+  });
+
+  assert.deepEqual(material.course, [
+    { path: "sources/test/20261022/course/notes.txt", locator: "#L1-L1", type: "article" },
+  ]);
+  assert.deepEqual(material.supplement, [
+    { path: "sources/test/20261022/supplement/extra.txt", locator: "#L1-L1", type: "article" },
+  ]);
+  assert.equal(material.sources, undefined);
+});
+
+test("material refuses a raw source citation", (t) => {
+  const root = fixture(t);
+  write(root, "sources/test/20261022/raw/lesson.srt", "1\n00:00 --> 00:01\nhi\n");
+  const entry = {
+    id: "s1",
+    title: "Step One",
+    purpose: "Explain one thing.",
+    sources: ["[[sources/test/20261022/raw/lesson.srt#L1-L1]]"],
+  };
+  assert.throws(
+    () =>
+      writeMaterial(root, {
+        subject: "test",
+        node: "n1",
+        entry,
+        slices: readStepSlices(root, entry),
+      }),
+    /cites raw sources/,
+  );
+});

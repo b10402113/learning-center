@@ -126,6 +126,16 @@ function paragraphChunks(lines) {
   return starts;
 }
 
+function assertTiling(parts, lines) {
+  const sum = parts.reduce((total, part) => total + part.lines, 0);
+  if (parts[0].start !== 1 || parts[parts.length - 1].end !== lines.length || sum !== lines.length) {
+    throw new Error("chunk boundaries do not tile the source");
+  }
+  for (let index = 1; index < parts.length; index += 1) {
+    if (parts[index].start !== parts[index - 1].end + 1) throw new Error("chunk boundaries have a gap or overlap");
+  }
+}
+
 function toPartList(lines, starts) {
   const total = lines.length;
   const parts = [];
@@ -157,6 +167,22 @@ function normaliseBoundaries(boundaries, total) {
   }
   if (starts[starts.length - 1] > total) throw new Error("boundaries exceed the source line count");
   return starts.map((value) => value - 1);
+}
+
+export function planChapterChunks(text) {
+  const lines = splitLines(text);
+  if (lines.length === 0) throw new Error("source is empty");
+  const headings = findHeadings(lines)
+    .filter((heading) => heading.level === 1)
+    .map((heading) => heading.index);
+  if (headings.length === 0) {
+    throw new Error("no level-1 chapter headings; use --boundaries or the size-based split");
+  }
+  if (headings[0] !== 0) headings.unshift(0);
+  const starts = headings;
+  const parts = toPartList(lines, starts);
+  assertTiling(parts, lines);
+  return { lines, parts };
 }
 
 export function planChunks(text, { boundaries = null } = {}) {
@@ -199,21 +225,16 @@ export function planChunks(text, { boundaries = null } = {}) {
   }
 
   const parts = toPartList(lines, starts);
-  const sum = parts.reduce((total, part) => total + part.lines, 0);
-  if (parts[0].start !== 1 || parts[parts.length - 1].end !== lines.length || sum !== lines.length) {
-    throw new Error("chunk boundaries do not tile the source");
-  }
-  for (let index = 1; index < parts.length; index += 1) {
-    if (parts[index].start !== parts[index - 1].end + 1) throw new Error("chunk boundaries have a gap or overlap");
-  }
+  assertTiling(parts, lines);
   return { lines, parts };
 }
 
-export function planSource({ root = REPO_ROOT, path, boundaries = null }) {
+export function planSource({ root = REPO_ROOT, path, boundaries = null, chapters = false }) {
   const text = readFileSync(path, "utf8");
   const stats = sourceStats(text);
   const rel = relative(root, path).split("\\").join("/");
   const stem = basename(path).replace(/\.txt$/i, "");
+  const long = isLongSource(stats);
   const plan = {
     path,
     rel,
@@ -221,13 +242,17 @@ export function planSource({ root = REPO_ROOT, path, boundaries = null }) {
     text,
     totalLines: stats.lines,
     bytes: stats.bytes,
-    long: isLongSource(stats),
+    long,
+    chapters,
+    split: false,
     manifestRel: `${dirname(rel)}/${stem}.parts.json`.replace(/^\.\//, ""),
     parts: [],
   };
-  if (!plan.long) return plan;
+  if (!long && !chapters) return plan;
 
-  const { lines, parts } = planChunks(text, { boundaries });
+  const { lines, parts } = chapters ? planChapterChunks(text) : planChunks(text, { boundaries });
+  if (chapters && parts.length <= 1 && !long) return plan;
+  plan.split = true;
   plan.lines = lines;
   const directory = dirname(rel);
   plan.parts = parts.map((part) => ({
@@ -251,22 +276,22 @@ function walkTextSources(dir, out = []) {
   return out;
 }
 
-export function planSources({ root = REPO_ROOT, subject, boundaries = null }) {
+export function planSources({ root = REPO_ROOT, subject, boundaries = null, chapters = false }) {
   const subjectDir = join(root, "sources", subject);
   if (!existsSync(subjectDir)) throw new Error(`unknown subject: ${subject}`);
   return walkTextSources(subjectDir)
     .sort()
-    .map((path) => planSource({ root, path, boundaries }));
+    .map((path) => planSource({ root, path, boundaries, chapters }));
 }
 
 export function renderTable(plans) {
   const lines = [];
-  const long = plans.filter((plan) => plan.long);
-  if (long.length === 0) {
-    lines.push("No source exceeds the split threshold (>3000 lines or >250 KB).");
+  const split = plans.filter((plan) => plan.split);
+  if (split.length === 0) {
+    lines.push("No source needs splitting (none exceeds the threshold and no chapter split was requested).");
     return `${lines.join("\n")}\n`;
   }
-  for (const plan of long) {
+  for (const plan of split) {
     lines.push(`${plan.rel} — ${plan.totalLines} lines, ${plan.parts.length} part(s)`);
     lines.push("  part  original lines   file lines  target file  first line");
     for (const part of plan.parts) {
@@ -328,12 +353,12 @@ function writeParts({ root, plan }) {
   }
 }
 
-export function applySplit({ root = REPO_ROOT, subject, boundaries = null }) {
-  const plans = planSources({ root, subject, boundaries });
+export function applySplit({ root = REPO_ROOT, subject, boundaries = null, chapters = false }) {
+  const plans = planSources({ root, subject, boundaries, chapters });
   const result = { written: [], skipped: [], failed: [], plans };
   for (const plan of plans) {
-    if (!plan.long) {
-      result.skipped.push({ source: plan.rel, reason: "short" });
+    if (!plan.split) {
+      result.skipped.push({ source: plan.rel, reason: chapters ? "no-chapter-split" : "short" });
       continue;
     }
     try {
@@ -357,7 +382,7 @@ function readBoundaries(path) {
 
 function usage() {
   console.error(
-    "usage: node scripts/split-sources.mjs --subject <subject> (--dry-run | --apply) [--boundaries <file>] [--root <dir>] [--json]",
+    "usage: node scripts/split-sources.mjs --subject <subject> (--dry-run | --apply) [--chapters] [--boundaries <file>] [--root <dir>] [--json]",
   );
 }
 
@@ -369,6 +394,7 @@ function main(argv) {
   let apply = false;
   let json = false;
   let boundaryPath = null;
+  let chapters = false;
 
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] === "--subject" && index + 1 < args.length) subject = args[++index];
@@ -376,6 +402,7 @@ function main(argv) {
     else if (args[index] === "--dry-run") dryRun = true;
     else if (args[index] === "--apply") apply = true;
     else if (args[index] === "--json") json = true;
+    else if (args[index] === "--chapters") chapters = true;
     else if (args[index] === "--boundaries" && index + 1 < args.length) boundaryPath = args[++index];
     else if (!args[index].startsWith("--") && !subject) subject = args[index];
   }
@@ -396,7 +423,7 @@ function main(argv) {
 
   try {
     if (dryRun) {
-      const plans = planSources({ root, subject, boundaries });
+      const plans = planSources({ root, subject, boundaries, chapters });
       if (json) {
         const portable = plans.map(({ text, lines, ...plan }) => plan);
         process.stdout.write(`${JSON.stringify(portable, null, 2)}\n`);
@@ -406,7 +433,7 @@ function main(argv) {
       process.exit(0);
     }
 
-    const result = applySplit({ root, subject, boundaries });
+    const result = applySplit({ root, subject, boundaries, chapters });
     if (json) {
       process.stdout.write(`${JSON.stringify({ ...result, plans: undefined }, null, 2)}\n`);
     } else {
