@@ -44,7 +44,7 @@ let delivering = false
 
 在處理 `/operations` 路由時，服務會依序進行兩道檢查：
 
-<!--image:1-->
+![第 1 段配圖](./operations-are-fenced-writes-assets/image-1.webp)
 
 <!-- source: sources/background-agent/20261105/service/checkout.ts#L123-L181 -->
 
@@ -114,7 +114,7 @@ app.post('/operations', (request, response) => {
 
 收到請求後，服務會先根據 `name` 和 `expectedVersion` 算出參數的特徵字串（fingerprint），並在 `outcomes` 查找這個 `actionId`：
 
-<!--image:2-->
+![第 2 段配圖](./operations-are-fenced-writes-assets/image-2.webp)
 
 1. **完全重複的重試**：如果找到舊紀錄且 fingerprint 相同，代表這是先前請求的重試。服務直接回傳當時快取的 `prior.result`，不會再次變更狀態。
 2. **衝突的重複使用**：如果找到舊紀錄但 fingerprint 不同，代表客戶端拿了同一個 `actionId` 去做別的事。服務立刻回傳 HTTP 409，拒絕執行。
@@ -125,7 +125,7 @@ app.post('/operations', (request, response) => {
 
 如果客戶端送來的 `expectedVersion` 不等於目前的 `version`，代表客戶端是根據過期的系統狀態做出決策。此時服務不會執行變更，而是直接回傳：
 
-<!--image:3-->
+![第 3 段配圖](./operations-are-fenced-writes-assets/image-3.webp)
 
 <!-- derived -->
 

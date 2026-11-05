@@ -18,7 +18,7 @@
 
 在實作上，確定性檢查不需要複雜的推論，而是透過明確的規則比對環境狀態。例如，檢查狀態物件中的某個特定路徑是否等於預期值：
 
-<!--image:1-->
+![第 1 段配圖](./the-goal-check-stays-deterministic-assets/image-1.webp)
 
 <!-- source: sources/background-agent/20261105/server/agent-data.ts#L125-L137 -->
 
@@ -116,7 +116,7 @@ export function configuredGoal() {
 
 在 `agent-workflow.ts` 的迴圈中，有兩種可能觸發完成的情境。第一種是迴圈一開頭的 `goalSatisfied` 通過；第二種則是迴圈往下走，模型自己挑選了名為 `complete` 的動作。
 
-<!--image:2-->
+![第 2 段配圖](./the-goal-check-stays-deterministic-assets/image-2.webp)
 
 如果程式執行到了挑選動作之後，模型回傳了 `decision.action === 'complete'`，但最上方的 `goalSatisfied` 卻沒有通過，這代表出現了分歧：模型認為沒事了，確定性檢查卻認為目標尚未滿足。
 
@@ -130,7 +130,7 @@ export function configuredGoal() {
 
 當模型認定任務已經完成，但確定性檢查卻失敗時，這是一個極具價值的信號。開發者應該從兩個方向來除錯：
 
-<!--image:3-->
+![第 3 段配圖](./the-goal-check-stays-deterministic-assets/image-3.webp)
 
 第一，**模型是不是對的？**
 如果檢視當時的實際狀態與系統行為，發現服務確實已經完全修復，那問題就不在模型，而是 harness 的確定性檢查寫得太狹隘或遺漏了條件。這時該做的是把模型捕捉到的判斷依據，補回 `goalSatisfied` 或 `goalCondition` 的規格中。

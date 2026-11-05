@@ -8,7 +8,7 @@
 
 Agent 平常處於休眠狀態。當系統發生異常、上游發出警報或有新日誌進來，這些都是事件（event）。每次事件叫醒 Agent，就觸發了一次 run。
 
-<!--image:1-->
+![第 1 段配圖](./a-run-is-one-wake-up-assets/image-1.webp)
 
 這時系統必須做一個決定：這個事件該開啟一個全新的 run，還是掛到既有的 run 底下？如果上游系統已經將事件分群或歸類為同一件事故（incident），這個事件就可以附加到既有的 run 繼續推進；如果沒有關聯，就必須建立新的 run。
 
@@ -214,7 +214,7 @@ export async function ingestServiceEvent(input: ServiceEventInput) {
 
 這會帶來一個棘手的部署問題：如果 Agent 正在線上長跑，而工程團隊這時要更新 workflow 程式碼，那這些進行中的 run 該怎麼辦？
 
-<!--image:2-->
+![第 2 段配圖](./a-run-is-one-wake-up-assets/image-2.webp)
 
 這就像是在執行資料庫遷移（migration）。如果新的程式碼改動了 workflow 的執行步驟或狀態結構，正在執行的長跑任務一旦走到新步驟，就可能因為記憶體狀態或欄位不符合預期而崩潰，或者行為失控。新程式碼無法直接套用到走到一半的舊邏輯上，這會直接擋住日常的程式碼發布。
 
@@ -222,7 +222,7 @@ export async function ingestServiceEvent(input: ServiceEventInput) {
 
 要讓程式碼隨時可以部署，通常有兩種策略：
 
-<!--image:3-->
+![第 3 段配圖](./a-run-is-one-wake-up-assets/image-3.webp)
 
 1. **工作流程版本控制（Versioning）**：讓系統同時支援多個版本的 workflow 執行。新進來的事件一律交給新版本的程式碼啟動 run，而舊版本的程式碼則繼續在背景運作，直到進行中的 run 自然結束後退出。
 2. **依賴資料庫快照的可攜性（Portability）**：Agent run 的所有狀態、決策與歷史紀錄都完整存入資料庫，而不是留存在特定伺服器的記憶體中。當需要升級時，舊 run 可以被乾淨暫停或標記終止；若需要接續，新 workflow 只要從資料庫載入快照，就能在完全相同的狀態下起跑。

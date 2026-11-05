@@ -56,7 +56,7 @@ export const incidentAgent = inngest.createFunction(
 
 在這個實作中，迴圈最多只允許跑 24 個週期（cycle）。每一次進入迴圈前，都會先檢查當前執行個體（run）的狀態；只要達到決策上限而未完成，外層機制就會強制介入終止，將狀態設為升級人工處理（`escalated`）：
 
-<!--image:1-->
+![第 1 段配圖](./the-harness-caps-the-loop-assets/image-1.webp)
 
 <!-- source: sources/background-agent/20261105/server/agent-workflow.ts#L214-L214 -->
 
@@ -114,6 +114,6 @@ export async function setRun(
 
 一旦執行個體進入上述任何一個 terminal 狀態，後續所有的狀態變更請求都會直接被忽略。這確保了無論是非同步的重試機制、其他背景工作、或是尚未退出的模型推理，都不可能把一個已經結束或轉交人工的任務悄悄重啟。
 
-<!--image:2-->
+![第 2 段配圖](./the-harness-caps-the-loop-assets/image-2.webp)
 
 藉由外層 harness 控制的「決策上限」與「terminal 狀態鎖定」，系統能在模型推理失準或遇到障礙時主動踩剎車，而不是被動等待模型自行結束。

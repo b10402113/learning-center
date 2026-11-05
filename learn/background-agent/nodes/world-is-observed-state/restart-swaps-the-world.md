@@ -82,7 +82,7 @@ function emit(type: string, data: Record<string, unknown>) {
 
 一旦 `checkout` 服務重啟，所有還沒發送成功的 `pendingEvents` 就會立刻蒸發。更關鍵的是，新啟動的進程拿到了全新的 `instanceId`。
 
-<!--image:1-->
+![第 1 段配圖](./restart-swaps-the-world-assets/image-1.webp)
 
 對於負責監控與修復的 Agent 來說，事件只是一個喚醒它的訊號。Agent 被喚醒後，會主動發送 HTTP 請求讀取 `/state` 來確認當前證據，並針對該服務實例維護一個 active run。如果此時服務發生重啟，前一個實例留下來未完成的 run、舊的觀測數據，以及等待人工核准的審批項目（pending approvals），都會直接被新實例取代（superseded）。
 
@@ -94,7 +94,7 @@ function emit(type: string, data: Record<string, unknown>) {
 
 然而，在生產環境中，這種做法無法提供資料持久性（durability）：
 
-<!--image:2-->
+![第 2 段配圖](./restart-swaps-the-world-assets/image-2.webp)
 
 1. **缺少事務性 Outbox（Transactional Outbox）**：真實的生產服務在變更業務狀態時，必須把對應的事件與狀態變更包在同一個資料庫交易（transaction）中寫入硬碟。否則只要伺服器斷電或崩潰，未送出的事件就會永久遺失，造成監控與稽核斷層。
 2. **缺少身分驗證**：模擬環境中事件是直接往本機未授權的端點傳送；真實系統之間的事件傳遞與狀態查詢，都必須依賴嚴格的身分驗證機制（authenticated calls）。

@@ -32,13 +32,13 @@ export const actionPolicy: Record<
 
 策略表的責任是劃分界線：只要屬於一般的讀取或低風險寫入，harness 可以允許自動執行；但只要標註為 `approval` 或 `help`，就代表這件事「不能在沒有人類批准的情況下直接做」。
 
-<!--image:1-->
+![第 1 段配圖](./authority-in-code-assets/image-1.webp)
 
 ## 在效果發生前攔截動作
 
 當模型給出下一個動作的決策時，harness 不能直接把請求打向業務服務。在實際發送任何 HTTP 請求之前，harness 會先檢驗該動作在策略表中的分類。
 
-<!--image:2-->
+![第 2 段配圖](./authority-in-code-assets/image-2.webp)
 
 如果該動作需要審批，harness 會立刻暫停執行循環，將這個動作轉換為待審批提案（proposal）寫入資料庫，並將當前任務狀態切換為等待中。
 
@@ -190,7 +190,7 @@ export async function staleProposal(proposalId: string) {
 
 這個 `actionId` 具備雙重任務：
 
-<!--image:3-->
+![第 3 段配圖](./authority-in-code-assets/image-3.webp)
 
 1. **審批與審計溯源**：在提議階段，`actionId` 就與提案綁定，記錄在活動日誌中，讓後續的人類審批者知道自己正在審查哪一次決策。
 2. **防禦性執行**：當動作獲得批准或本身不需要審批時，harness 呼叫外部業務端點（例如結帳服務的 `operations` 路由）時，會將 `actionId`、動作名稱以及預期狀態版本（`expectedVersion`）一同傳遞過去。

@@ -14,7 +14,7 @@
 
 把流程切成有名字的步驟後，Inngest 會在每個 `step.run` 執行成功時，自動把該步驟的回傳值持久化儲存下來。這就是現成的 checkpoint。當函式中斷重啟時，Inngest 會重新跑過程式碼，但跳過已經完成的步驟，直接拿出上次存好的回傳值，一路快轉到第一個尚未完成的步驟繼續。
 
-<!--image:1-->
+![第 1 段配圖](./postgres-and-inngest-assets/image-1.webp)
 
 <!-- source: sources/background-agent/20261105/server/agent-workflow.ts#L58-L97 -->
 
@@ -160,13 +160,13 @@ export async function activityForRun(runId: string) {
 
 當 Agent 決定記錄一次決策、在資料庫寫入一筆新的觀察紀錄，或是因為版本過期而留下活動日誌時，這些操作會被包在 `step.run` 裡呼叫，資料則老老實實地寫進 Postgres 的資料表。
 
-<!--image:2-->
+![第 2 段配圖](./postgres-and-inngest-assets/image-2.webp)
 
 ## 邊界劃分清楚的好處
 
 這樣的劃分讓兩套系統各司其職：
 
-<!--image:3-->
+![第 3 段配圖](./postgres-and-inngest-assets/image-3.webp)
 
 - **Postgres 存業務狀態與歷史**：產品邏輯需要查詢的資料、報表、後台儀表板要呈現的時間軸，全在關聯式資料庫裡，保有完整的資料模型與查詢能力。
 - **Inngest 存 step 結果**：哪些步驟完成、回傳了什麼資料、當機後如何無痛接關，全部交由執行框架處理。

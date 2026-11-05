@@ -8,7 +8,7 @@
 
 在每一次決策循環中，代理接觸到的資訊其實包含四個不同層次：
 
-<!--image:1-->
+![第 1 段配圖](./four-states-and-a-tiny-toolbox-assets/image-1.webp)
 
 1. **世界狀態（World state）**：外部系統「現在」的真實面貌。例如呼叫結帳服務（checkout）時當下回傳的即時狀態。
 2. **調查狀態（Run state）**：本次調查任務本身的元數據（metadata），包含事故的目標、目前的調查進度，以及代理已經做出幾次決策。
@@ -23,7 +23,7 @@
 
 這套極小的工具目錄只有七個動作，分別承擔三類職責：
 
-<!--image:2-->
+![第 2 段配圖](./four-states-and-a-tiny-toolbox-assets/image-2.webp)
 
 - **搜集證據**：`inspect_logs`（查看日誌）與 `inspect_changes`（查看近期變更），兩者皆屬於唯讀動作，用來了解背景資訊。
 - **改變系統**：`disable_feature`（關閉特定功能）與 `rollback_release`（回滾發布），這兩個動作會直接對結帳等外部服務產生寫入或變更效果。

@@ -10,7 +10,7 @@
 
 World state 代表 Agent 所負責的外部世界「當前」的狀態。在結帳系統的維運 Agent 中，這包含了結帳服務是否健康、當前發布版本、功能開關（feature flags）以及依賴的上游服務狀況。
 
-<!--image:1-->
+![第 1 段配圖](./three-kinds-of-state-assets/image-1.webp)
 
 這個狀態的答案必須直接向業務系統或儲存當前環境的資料庫讀取。在系統的資料庫定義中，它被記錄在環境表（`environments`）內：
 
@@ -163,7 +163,7 @@ export async function getRun(runId: string) {
 
 當 Agent 在每一個決策循環開始時，通常需要把當下的 World state 與這筆 Run state 組合起來，同時載入跟這次 run 相關的近期事件、操作與人工審批結果，形成決策上下文：
 
-<!--image:2-->
+![第 2 段配圖](./three-kinds-of-state-assets/image-2.webp)
 
 <!-- source: sources/background-agent/20261105/server/agent-data.ts#L63-L123 -->
 
@@ -245,7 +245,7 @@ Execution history 則是工作流程引擎（例如 Inngest）底層記錄的執
 
 把這三者放在一起看，就能釐清各自的權責與讀取來源：
 
-<!--image:3-->
+![第 3 段配圖](./three-kinds-of-state-assets/image-3.webp)
 
 1. **World state**：回答「外部世界現在長怎樣？」，隨時間與外部事件隨時改變，每次循環都必須向環境資料庫或外部服務重新查詢。
 2. **Run state**：回答「這趟任務目前走到哪？」，由業務資料庫的 `runs` 表持久化，記錄迭代輪數、目標與整體狀態。

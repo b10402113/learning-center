@@ -2,7 +2,7 @@
 
 知道事件只是喚醒訊號之後，下一個問題是醒來到底要看什麼。當結帳服務（checkout service）發出警報時，運維 Agent 與維運人員並不知道服務啟動時帶了哪一個 `--fault` 參數。所有外部觀察都只能仰賴服務暴露的端點。呼叫 `GET /state` 會取得當前的狀態物件，透過當中的四個核心欄位，就能準確判斷出目前的故障模式。
 
-<!--image:1-->
+![第 1 段配圖](./read-the-world-as-state-assets/image-1.webp)
 
 結帳服務定義的狀態結構如下：
 
@@ -102,7 +102,7 @@ if (fault === 'feature') recordChange('Enabled checkout express feature')
 
 診斷時可以依序檢查以下欄位：
 
-<!--image:2-->
+![第 2 段配圖](./read-the-world-as-state-assets/image-2.webp)
 
 1. **先看 `health.status`**：若為 `'healthy'`，即為正常狀態。
 2. **若為 `'degraded'`，檢查 `release`**：若為 `'v2-bad'`，即為故障版本。

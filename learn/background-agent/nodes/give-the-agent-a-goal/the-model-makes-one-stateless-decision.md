@@ -8,7 +8,7 @@
 
 當背景系統發現當前目標尚未達成，需要決定下一步時，會呼叫 `chooseAction` 函式。這個呼叫完全是單次、一次性的請求（one-off call），不包含任何聊天訊息歷史。
 
-<!--image:1-->
+![第 1 段配圖](./the-model-makes-one-stateless-decision-assets/image-1.webp)
 
 每一次呼叫，系統只會餵給模型兩項核心資訊：
 1. 目前要達成的目標（goal）
@@ -61,7 +61,7 @@ Keep reason to one short sentence. Put a question to the operator in detail for 
 
 在決策物件中，主要包含三個關鍵欄位：
 
-<!--image:2-->
+![第 2 段配圖](./the-model-makes-one-stateless-decision-assets/image-2.webp)
 
 - **action**：從預先定義的動作清單（例如檢查日誌、回滾發布或請求協助等）中，精確選出一個動作名稱。
 - **reason**：簡短說明選擇這個動作的核心理由，限制為一句話，便於快速閱讀。
@@ -73,7 +73,7 @@ Keep reason to one short sentence. Put a question to the operator in detail for 
 
 在一般的對話介面中，如果系統做出奇怪的回答，只要往上滑動看聊天紀錄，就能看出一路上的上下文脈絡。然而在背景靜默運行的系統沒有對話視窗，如果模型偏離預期或是採取了意外的舉動，事後很難憑空推敲它當初為何這麼做。
 
-<!--image:3-->
+![第 3 段配圖](./the-model-makes-one-stateless-decision-assets/image-3.webp)
 
 因此，每當模型回傳決策，系統都必須明確記錄當下的循環輪次（iteration）、選擇的動作與理由：
 
