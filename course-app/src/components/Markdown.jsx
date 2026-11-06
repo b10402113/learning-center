@@ -4,7 +4,9 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { resolveSrc } from "../lib/assets.mjs";
+import { replaceBlockLinks } from "../lib/block-links.mjs";
 import { rehypeHighlightPlugin } from "../lib/highlight.mjs";
+import { followInternalLink } from "../lib/navigation.mjs";
 import Quiz from "./Quiz.jsx";
 
 function fencedText(children) {
@@ -15,10 +17,21 @@ function fencedText(children) {
  * Renders Markdown with the course reading styles. Relative images resolve
  * against `assetBase`, which points at the step's directory in public/nodes/.
  */
-export default function Markdown({ children, className = "", assetBase = "" }) {
+export default function Markdown({
+  children,
+  className = "",
+  assetBase = "",
+  subjectId = null,
+  blockIds = null,
+  onNavigate = null,
+}) {
   // Provenance comments (`<!-- source: … -->`) are editorial metadata for
   // verify, not reading material.
-  const content = String(children ?? "").replace(/<!--[\s\S]*?-->\s*/g, "");
+  const content = replaceBlockLinks(
+    String(children ?? "").replace(/<!--[\s\S]*?-->\s*/g, ""),
+    subjectId,
+    blockIds
+  );
 
   return (
     <div
@@ -61,6 +74,19 @@ export default function Markdown({ children, className = "", assetBase = "" }) {
               <pre>{children}</pre>
             );
           },
+          a: ({ href, children, ...props }) => (
+            <a
+              href={href}
+              onClick={(event) => {
+                if (followInternalLink(event, href, onNavigate)) {
+                  event.preventDefault();
+                }
+              }}
+              {...props}
+            >
+              {children}
+            </a>
+          ),
           img: ({ src, alt, title }) => (
             <img
               src={resolveSrc(src, assetBase, window.location.href)}

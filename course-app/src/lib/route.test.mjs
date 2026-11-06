@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { indexRoute, parsePath, pathFor } from "./route.mjs";
+import {
+  indexRoute,
+  parsePath,
+  pathFor,
+  pathForBlock,
+} from "./route.mjs";
 
 const BASE = "/learning-center";
 
@@ -55,6 +60,23 @@ test("tolerates a trailing slash and decodes ids", () => {
 
 test("rejects unrelated paths", () => {
   assert.equal(parsePath("/learning-center/a/b/c/d", BASE), null);
+});
+
+test("parses one block's detail page", () => {
+  assert.deepEqual(parsePath("/learning-center/demo/blocks/agent", BASE), {
+    subjectId: "demo",
+    nodeId: null,
+    stepId: null,
+    blockId: "agent",
+    blockRoute: true,
+  });
+});
+
+test("builds a block path", () => {
+  assert.equal(
+    pathForBlock("demo", "agent", BASE),
+    "/learning-center/demo/blocks/agent"
+  );
 });
 
 test("builds encoded paths with and without a step", () => {

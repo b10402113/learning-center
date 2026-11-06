@@ -410,3 +410,180 @@ test("copies step assets and does not copy HTML lessons", () => {
   );
   assert.equal(fs.existsSync(path.join(appRoot, "public/lessons")), false);
 });
+
+function writeBlockFiles(learnRoot) {
+  write(
+    path.join(learnRoot, "demo", "nodes", "node-a.md"),
+    `---
+id: node-a
+title: "Node A"
+subject: demo
+tier: 1
+order: 1
+status: confirmed
+goal: "Node A goal."
+prerequisites: []
+steps:
+  - id: step-two
+    title: "Step Two"
+    purpose: "Second purpose."
+    sources:
+      - "[[sources/demo/source.txt#L10-L20]]"
+    blocks:
+      - tool
+  - id: step-one
+    title: "Step One"
+    purpose: "First purpose."
+    sources:
+      - "[[sources/demo/source.txt#L1-L5]]"
+    blocks:
+      - agent
+      - tool
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Node A
+
+## Lesson
+
+Lesson body for node A.
+
+## Steps
+
+1. [Step Two](node-a/step-two.md)
+2. [Step One](node-a/step-one.md)
+`
+  );
+
+  write(
+    path.join(learnRoot, "demo", "blocks", "agent.md"),
+    `---
+id: agent
+title: "Agent（代理）"
+label: Agent
+subject: demo
+type: concept
+status: draft
+summary: "Agent 是能感知環境並採取行動的實體。"
+aliases: []
+prerequisites: []
+related:
+  - tool
+sources:
+  - "[[sources/demo/source.txt#L1-L5]]"
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Agent（代理）
+
+Agent 的說明。
+`
+  );
+  write(
+    path.join(learnRoot, "demo", "blocks", "tool.md"),
+    `---
+id: tool
+title: "Tool（工具）"
+label: Tool
+subject: demo
+type: concept
+status: reviewed
+summary: "Tool 是模型可以呼叫的外部能力。"
+aliases: []
+prerequisites: []
+related: []
+sources:
+  - "[[sources/demo/source.txt#L10-L20]]"
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Tool（工具）
+
+Tool 的說明。
+`
+  );
+}
+
+test("builds block summaries, step blocks, edges, and per-block files", () => {
+  const { learnRoot, appRoot } = fixture();
+  writeBlockFiles(learnRoot);
+  write(
+    path.join(appRoot, "src", "data", "blocks", "demo", "stale.json"),
+    "{}"
+  );
+
+  const course = buildSubject("demo", { learnRoot, appRoot });
+  const agent = course.blocks.find((block) => block.id === "agent");
+  const tool = course.blocks.find((block) => block.id === "tool");
+
+  assert.equal(agent.summary, "Agent 是能感知環境並採取行動的實體。");
+  assert.equal(agent.type, "concept");
+  assert.equal(agent.status, "draft");
+  assert.deepEqual(agent.related, ["tool"]);
+  assert.equal(agent.bodyMd, undefined, "subject data carries no block body");
+  assert.equal(
+    JSON.stringify(course).includes("Agent 的說明"),
+    false,
+    "block prose stays out of the subject JSON"
+  );
+
+  const stepTwo = course.nodes[0].steps.find((step) => step.id === "step-two");
+  const stepOne = course.nodes[0].steps.find((step) => step.id === "step-one");
+  assert.deepEqual(
+    stepOne.blocks.map((block) => block.id),
+    ["agent", "tool"]
+  );
+  assert.deepEqual(stepOne.blocks[0], {
+    id: "agent",
+    title: "Agent（代理）",
+    summary: "Agent 是能感知環境並採取行動的實體。",
+    type: "concept",
+    status: "draft",
+    prerequisites: [],
+    related: ["tool"],
+    steps: ["node-a/step-one"],
+  });
+  assert.deepEqual(
+    stepTwo.blocks.map((block) => block.id),
+    ["tool"]
+  );
+
+  assert.deepEqual(course.blockEdges, [
+    { from: "agent", to: "tool", kind: "related" },
+  ]);
+
+  const blockDir = path.join(appRoot, "src", "data", "blocks", "demo");
+  assert.equal(fs.existsSync(path.join(blockDir, "stale.json")), false);
+
+  const agentFile = JSON.parse(
+    fs.readFileSync(path.join(blockDir, "agent.json"), "utf8")
+  );
+  assert.match(agentFile.bodyMd, /Agent 的說明/);
+  assert.equal(agentFile.sources[0].name, "source.txt");
+  assert.equal(agentFile.sources[0].lines, "L1-L5");
+  assert.deepEqual(agentFile.steps, [
+    {
+      nodeId: "node-a",
+      nodeTitle: "Node A",
+      stepId: "step-one",
+      stepTitle: "Step One",
+    },
+  ]);
+  assert.deepEqual(agentFile.backlinks, [
+    { id: "tool", title: "Tool（工具）", kind: "related" },
+  ]);
+
+  const toolFile = JSON.parse(
+    fs.readFileSync(path.join(blockDir, "tool.json"), "utf8")
+  );
+  assert.deepEqual(
+    toolFile.steps.map((step) => step.stepId),
+    ["step-two", "step-one"]
+  );
+  assert.deepEqual(toolFile.backlinks, [
+    { id: "agent", title: "Agent（代理）", kind: "related" },
+  ]);
+});

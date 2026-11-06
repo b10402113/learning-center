@@ -185,6 +185,9 @@ function readStep({ nodesDir, nodeId, entry, order }) {
     purpose: spec.purpose || "",
     author: spec.author || null,
     sources: (spec.sources || []).map(parseSource),
+    blocks: Array.isArray(spec.blocks)
+      ? spec.blocks.map((id) => String(id).trim()).filter(Boolean)
+      : [],
     articleMd: "",
     hasContent: false,
     quizzes: [],
@@ -209,6 +212,180 @@ function readStep({ nodesDir, nodeId, entry, order }) {
   }
 
   return step;
+}
+
+function idList(value) {
+  return Array.isArray(value)
+    ? value.map((id) => String(id).trim()).filter(Boolean)
+    : [];
+}
+
+/** Read `blocks/*.md` as summaries plus their Markdown body. */
+function readBlocks(subjectDir) {
+  const dir = path.join(subjectDir, "blocks");
+  if (!fs.existsSync(dir)) return [];
+
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => entry.name)
+    .sort()
+    .map((name) => {
+      const id = name.replace(/\.md$/, "");
+      const { frontmatter: fm, body } = readMarkdown(path.join(dir, name));
+      return {
+        id,
+        title: fm.title || id,
+        label: fm.label || fm.title || id,
+        summary: fm.summary || "",
+        type: fm.type || "concept",
+        status: fm.status || "draft",
+        aliases: idList(fm.aliases),
+        prerequisites: idList(fm.prerequisites),
+        related: idList(fm.related),
+        sources: (Array.isArray(fm.sources) ? fm.sources : []).map(parseSource),
+        bodyMd: body.trim(),
+      };
+    });
+}
+
+/**
+ * Derive the summary objects, edges, per-block step usage and backlinks the
+ * viewer needs. The full article body stays in the per-block files.
+ */
+function buildBlockGraph({ blocks, nodes }) {
+  const byId = new Map(blocks.map((block) => [block.id, block]));
+  const usage = new Map(blocks.map((block) => [block.id, []]));
+  const backlinks = new Map(blocks.map((block) => [block.id, []]));
+
+  for (const node of nodes) {
+    for (const step of node.steps) {
+      const ids = step.blocks;
+      for (const id of ids) {
+        if (!byId.has(id)) continue;
+        usage.get(id).push({
+          nodeId: node.id,
+          nodeTitle: node.title,
+          stepId: step.id,
+          stepTitle: step.title,
+        });
+      }
+    }
+  }
+
+  const relatedById = new Map(
+    blocks.map((block) => [block.id, new Set()])
+  );
+  for (const block of blocks) {
+    for (const id of block.related) {
+      if (!byId.has(id) || id === block.id) continue;
+      relatedById.get(block.id).add(id);
+      relatedById.get(id).add(block.id);
+    }
+  }
+  for (const block of blocks) {
+    block.related = [...relatedById.get(block.id)].sort();
+  }
+
+  const edges = [];
+  const edgeKeys = new Set();
+  const addEdge = (from, to, kind) => {
+    if (!byId.has(from) || !byId.has(to) || from === to) return;
+    const key = `${from}->${to}:${kind}`;
+    if (edgeKeys.has(key)) return;
+    edgeKeys.add(key);
+    edges.push({ from, to, kind });
+  };
+
+  for (const block of blocks) {
+    for (const id of block.prerequisites) {
+      addEdge(block.id, id, "prerequisite");
+      if (byId.has(id)) {
+        backlinks.get(id).push({
+          id: block.id,
+          title: block.title,
+          kind: "prerequisite",
+        });
+      }
+    }
+    for (const id of block.related) {
+      if (!byId.has(id)) continue;
+      const [from, to] = [block.id, id].sort();
+      addEdge(from, to, "related");
+      backlinks.get(id).push({
+        id: block.id,
+        title: block.title,
+        kind: "related",
+      });
+    }
+  }
+
+  for (const [id, list] of backlinks) {
+    const seen = new Set();
+    backlinks.set(
+      id,
+      list
+        .filter((entry) => {
+          const key = `${entry.id}|${entry.kind}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .sort(
+          (a, b) => a.id.localeCompare(b.id) || a.kind.localeCompare(b.kind)
+        )
+    );
+  }
+
+  const summaries = new Map(
+    blocks.map((block) => [
+      block.id,
+      {
+        id: block.id,
+        title: block.title,
+        summary: block.summary,
+        type: block.type,
+        status: block.status,
+        prerequisites: [...block.prerequisites],
+        related: [...block.related],
+        steps: usage.get(block.id).map(
+          (step) => `${step.nodeId}/${step.stepId}`
+        ),
+      },
+    ])
+  );
+
+  return { summaries, edges, usage, backlinks };
+}
+
+/** Write one JSON file per block; the subject JSON never carries block prose. */
+function writeBlockFiles({ appRoot, subject, blocks, graph }) {
+  const dir = path.join(appRoot, "src", "data", "blocks", subject);
+  fs.rmSync(dir, { recursive: true, force: true });
+  if (blocks.length === 0) return;
+  fs.mkdirSync(dir, { recursive: true });
+
+  for (const block of blocks) {
+    const payload = {
+      id: block.id,
+      title: block.title,
+      label: block.label,
+      summary: block.summary,
+      type: block.type,
+      status: block.status,
+      aliases: block.aliases,
+      prerequisites: block.prerequisites,
+      related: block.related,
+      sources: block.sources,
+      bodyMd: block.bodyMd,
+      steps: graph.usage.get(block.id),
+      backlinks: graph.backlinks.get(block.id),
+    };
+    fs.writeFileSync(
+      path.join(dir, `${block.id}.json`),
+      JSON.stringify(payload)
+    );
+  }
 }
 
 /** Copy `nodes/<node>/<step>-assets/` into the app's public directory. */
@@ -300,6 +477,17 @@ export function buildSubject(
     if (!orderedNodes.includes(node)) orderedNodes.push(node);
   }
 
+  const blocks = readBlocks(subjectDir);
+  const graph = buildBlockGraph({ blocks, nodes: orderedNodes });
+  for (const node of orderedNodes) {
+    for (const step of node.steps) {
+      step.blocks = step.blocks
+        .map((id) => graph.summaries.get(id))
+        .filter(Boolean);
+    }
+  }
+  writeBlockFiles({ appRoot, subject, blocks, graph });
+
   const goal = section(roadmapBody, "Goal");
   const updated =
     [roadmapUpdated, ...[...nodesById.values()].map((node) => node.updated)]
@@ -314,6 +502,8 @@ export function buildSubject(
     goal,
     updated,
     tiers: tiers.map(({ tier, name }) => ({ tier, name })),
+    blocks: blocks.map((block) => graph.summaries.get(block.id)),
+    blockEdges: graph.edges,
     nodes: orderedNodes.map((node, index) => ({
       ...node,
       globalOrder: index + 1,
@@ -353,6 +543,10 @@ function main() {
   const outDir = path.join(APP_ROOT, "src", "data", "subjects");
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
+  fs.rmSync(path.join(APP_ROOT, "src", "data", "blocks"), {
+    recursive: true,
+    force: true,
+  });
   fs.rmSync(path.join(APP_ROOT, "public", "lessons"), {
     recursive: true,
     force: true,

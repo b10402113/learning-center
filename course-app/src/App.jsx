@@ -5,12 +5,19 @@ import NodeView from "./components/NodeView.jsx";
 import StepView from "./components/StepView.jsx";
 import SubjectsView from "./components/SubjectsView.jsx";
 import SubjectOverview from "./components/SubjectOverview.jsx";
+import BlockView from "./components/BlockView.jsx";
 import PixelMark from "./components/PixelMark.jsx";
 import DotMatrix from "./components/DotMatrix.jsx";
-import { indexRoute, parsePath, pathFor } from "./lib/route.mjs";
+import {
+  indexRoute,
+  parsePath,
+  pathFor,
+  pathForBlock,
+} from "./lib/route.mjs";
 
 // Lazy loaders — each subject's course JSON is code-split and fetched on demand.
 const courseLoaders = import.meta.glob("./data/subjects/*.json");
+const blockLoaders = import.meta.glob("./data/blocks/*/*.json");
 const SUBJECTS = subjectsIndex.subjects;
 const SIDEBAR_KEY = "lc.sidebar";
 const THEME_KEY = "lc.theme";
@@ -29,9 +36,8 @@ function initialRoute() {
   const parsed = parsePath(window.location.pathname);
   if (!parsed) return indexRoute();
   return {
+    ...parsed,
     subjectId: resolveSubjectId(parsed.subjectId),
-    nodeId: parsed.nodeId,
-    stepId: parsed.stepId,
   };
 }
 
@@ -156,13 +162,15 @@ function MoonIcon() {
 
 export default function App() {
   const [route, setRoute] = useState(initialRoute);
-  const { subjectId, nodeId, stepId } = route;
+  const { subjectId, nodeId, stepId, blockId, blockRoute } = route;
   const [course, setCourse] = useState(null);
+  const [block, setBlock] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(initialSidebarCollapsed);
   const [theme, setTheme] = useState(initialTheme);
   const cacheRef = useRef({});
-  const routeKey = `${subjectId ?? ""}/${nodeId ?? ""}/${stepId ?? ""}`;
+  const blockCacheRef = useRef({});
+  const routeKey = `${subjectId ?? ""}/${nodeId ?? ""}/${stepId ?? ""}/${blockId ?? ""}`;
 
   // Load the selected subject's data (async, cached). The index has no course.
   useEffect(() => {
@@ -188,6 +196,34 @@ export default function App() {
     };
   }, [subjectId]);
 
+  // Load one block's full JSON only when its page is open.
+  useEffect(() => {
+    if (!subjectId || !blockId) {
+      setBlock(null);
+      return;
+    }
+    const key = `${subjectId}/${blockId}`;
+    if (blockCacheRef.current[key]) {
+      setBlock(blockCacheRef.current[key]);
+      return;
+    }
+    setBlock(null);
+    const loader = blockLoaders[`./data/blocks/${subjectId}/${blockId}.json`];
+    if (!loader) {
+      setBlock({ id: blockId, missing: true });
+      return;
+    }
+    let alive = true;
+    (async () => {
+      const mod = await loader();
+      blockCacheRef.current[key] = mod.default;
+      if (alive) setBlock(mod.default);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [subjectId, blockId]);
+
   // Unknown subject ids fall back to the index; keep the address bar honest.
   useEffect(() => {
     if (subjectId) return;
@@ -212,9 +248,8 @@ export default function App() {
       const next = parsePath(window.location.pathname);
       if (!next) return;
       setRoute({
+        ...next,
         subjectId: resolveSubjectId(next.subjectId),
-        nodeId: next.nodeId,
-        stepId: next.stepId,
       });
     };
     window.addEventListener("popstate", onPop);
@@ -287,8 +322,41 @@ export default function App() {
     if (window.location.pathname !== next) history.pushState(null, "", next);
   };
 
+  const pushBlockPath = (sid, bid) => {
+    const next = pathForBlock(sid, bid);
+    if (window.location.pathname !== next) history.pushState(null, "", next);
+  };
+
+  // Markdown and card links stay inside the app: parse the href, swap state,
+  // push history, and return true so the caller can cancel the full reload.
+  const navigateHref = (href) => {
+    let url;
+    try {
+      url = new URL(href, window.location.href);
+    } catch {
+      return false;
+    }
+    if (url.origin !== window.location.origin) return false;
+    const parsed = parsePath(url.pathname);
+    if (!parsed) return false;
+    const nextSubject = resolveSubjectId(parsed.subjectId);
+    if (!nextSubject) return false;
+
+    setRoute({ ...parsed, subjectId: nextSubject });
+    setSidebarOpen(false);
+    if (parsed.blockRoute) pushBlockPath(nextSubject, parsed.blockId);
+    else pushPath(nextSubject, parsed.nodeId, parsed.stepId);
+    return true;
+  };
+
   const selectNode = (id) => {
-    setRoute((r) => ({ ...r, nodeId: id, stepId: null }));
+    setRoute({
+      subjectId,
+      nodeId: id,
+      stepId: null,
+      blockId: null,
+      blockRoute: false,
+    });
     setSidebarOpen(false);
     pushPath(subjectId, id);
   };
@@ -463,16 +531,28 @@ export default function App() {
           <main className="min-w-0 flex-1">
             <div
               className={`mx-auto w-full px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10 ${
-                node ? "max-w-[1040px]" : "max-w-[1240px]"
+                step
+                  ? "max-w-[1320px]"
+                  : node
+                    ? "max-w-[1040px]"
+                    : "max-w-[1240px]"
               }`}
             >
               <div className="border-0 bg-transparent px-0 py-0 sm:border-2 sm:border-ink sm:bg-surface sm:px-8 sm:py-8 sm:shadow-[8px_8px_0_var(--robo-shadow)] lg:px-12 lg:py-11">
-                {step ? (
+                {blockRoute ? (
+                  <BlockView
+                    key={`${subjectId}/${blockId}`}
+                    course={course}
+                    block={block?.id === blockId ? block : null}
+                    onNavigate={navigateHref}
+                  />
+                ) : step ? (
                   <StepView
                     key={step.id}
                     course={course}
                     node={node}
                     step={step}
+                    onNavigate={navigateHref}
                   />
                 ) : node ? (
                   <NodeView

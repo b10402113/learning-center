@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "./Markdown.jsx";
 import Quiz from "./Quiz.jsx";
+import BlockRail from "./BlockRail.jsx";
+import { railBlocks } from "../lib/blocks.mjs";
 import { tierDotClass } from "./Sidebar.jsx";
 import { articleForClipboard, copyText } from "../lib/clipboard.mjs";
 import { pathFor } from "../lib/route.mjs";
@@ -134,11 +136,12 @@ function CopyArticleButton({ text }) {
 }
 
 /** One step rendered as a full Markdown article. */
-export default function StepView({ course, node, step }) {
+export default function StepView({ course, node, step, onNavigate = null }) {
   const assetBase = `${BASE}nodes/${encodeURIComponent(course.subject)}/${encodeURIComponent(node.id)}/`;
   const { previous, next } = stepNeighbors(node.steps, step.id);
   const sources = step.sources || [];
   const quizzes = Array.isArray(step.quizzes) ? step.quizzes : [];
+  const hasRail = railBlocks(course, step).length > 0;
   const minutes = readingMinutes(step.articleMd);
   // The article body repeats the step title as an H1; the header already
   // renders it, so drop the leading heading before rendering.
@@ -152,7 +155,14 @@ export default function StepView({ course, node, step }) {
     : "";
 
   return (
-    <article>
+    <div
+      className={
+        hasRail
+          ? "xl:grid xl:grid-cols-[minmax(0,1fr)_280px] xl:gap-10"
+          : "mx-auto max-w-[1040px]"
+      }
+    >
+      <article>
       <nav
         aria-label="麵包屑"
         className="robo-kicker flex flex-wrap items-center gap-2 font-label text-[11px] text-ink-soft"
@@ -211,13 +221,27 @@ export default function StepView({ course, node, step }) {
 
       <div className="mt-8 border-t-2 border-ink pt-8">
         {step.hasContent ? (
-          <Markdown assetBase={assetBase}>{body}</Markdown>
+          <Markdown
+            assetBase={assetBase}
+            subjectId={course.subject}
+            blockIds={(course.blocks || []).map((block) => block.id)}
+            onNavigate={onNavigate}
+          >
+            {body}
+          </Markdown>
         ) : (
           <div className="border-2 border-dashed border-ink/40 bg-surface px-5 py-12 text-center">
             <p className="text-[0.95rem] text-ink-soft">這一步的文章尚未產生。</p>
           </div>
         )}
       </div>
+
+      <BlockRail
+        course={course}
+        step={step}
+        onNavigate={onNavigate}
+        variant="inline"
+      />
 
       {quizzes.length > 0 && (
         <section
@@ -301,6 +325,14 @@ export default function StepView({ course, node, step }) {
         {course.title} · Node {node.globalOrder}/{course.nodes.length} ·{" "}
         {node.title} · Step {step.order}/{node.steps.length}
       </footer>
-    </article>
+      </article>
+
+      <BlockRail
+        course={course}
+        step={step}
+        onNavigate={onNavigate}
+        variant="rail"
+      />
+    </div>
   );
 }

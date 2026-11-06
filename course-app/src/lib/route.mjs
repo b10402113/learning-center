@@ -10,8 +10,9 @@ export function indexRoute() {
 }
 
 /**
- * Parse `/`, `/<subject>`, `/<subject>/<node>`, and
- * `/<subject>/<node>/<step>`. Returns null for anything else.
+ * Parse `/`, `/<subject>`, `/<subject>/<node>`, `/<subject>/<node>/<step>`,
+ * plus one block's detail page `/<subject>/blocks/<block>`. Returns null for
+ * anything else. The `blocks` segment is reserved for block routes.
  */
 export function parsePath(pathname = "/", base = BASE) {
   const prefix = String(base).replace(/\/+$/, "");
@@ -25,8 +26,19 @@ export function parsePath(pathname = "/", base = BASE) {
   if (parts.length === 0) return indexRoute();
   if (parts.length > 3) return null;
 
+  const subjectId = decodeURIComponent(parts[0]);
+  if (parts[1] === "blocks" && parts[2]) {
+    return {
+      subjectId,
+      nodeId: null,
+      stepId: null,
+      blockId: decodeURIComponent(parts[2]),
+      blockRoute: true,
+    };
+  }
+
   return {
-    subjectId: decodeURIComponent(parts[0]),
+    subjectId,
     nodeId: parts[1] ? decodeURIComponent(parts[1]) : null,
     stepId: parts[2] ? decodeURIComponent(parts[2]) : null,
   };
@@ -39,4 +51,9 @@ export function pathFor(subjectId, nodeId, stepId = null, base = BASE) {
     .filter((part) => part != null && part !== "")
     .map((part) => encodeURIComponent(part));
   return `${prefix}/${parts.join("/")}`;
+}
+
+/** Build the path for one block's detail page. */
+export function pathForBlock(subjectId, blockId, base = BASE) {
+  return pathFor(subjectId, "blocks", blockId, base);
 }
