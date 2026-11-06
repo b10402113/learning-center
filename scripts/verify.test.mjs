@@ -1929,3 +1929,391 @@ updated: 2026-10-22
   const result = runChecks({ root, subject: "test" });
   assert.ok(result.failures.some((failure) => failure.checkId === "source-parts-location"));
 });
+
+const CONCEPT_SECTIONS = ["定義", "為什麼重要", "如何運作", "例子", "邊界與常見誤解", "進階"];
+
+function blockMarkdown({
+  id = "tool-calling",
+  title = "Tool Calling",
+  label = "Tool Calling",
+  subject = "test",
+  type = "concept",
+  status = "draft",
+  summary = "模型要求執行外部工具的流程。",
+  aliases = [],
+  prerequisites = [],
+  related = [],
+  sources = ["[[sources/test/notes.txt#L1-L10]]"],
+  sections = CONCEPT_SECTIONS,
+  extra = "",
+} = {}) {
+  const list = (entries) => (entries.length === 0 ? " []" : `\n${entries.map((entry) => `  - ${entry}`).join("\n")}`);
+  const frontmatter = `---
+id: ${id}
+title: "${title}"
+label: "${label}"
+subject: ${subject}
+type: ${type}
+status: ${status}
+summary: "${summary}"
+aliases:${list(aliases)}
+prerequisites:${list(prerequisites)}
+related:${list(related)}
+sources:
+${sources.map((source) => `  - "${source}"`).join("\n")}
+created: 2026-11-06
+updated: 2026-11-06
+---
+
+# ${title}
+
+`;
+  const body = sections.map((section) => `## ${section}\n\nText.`).join("\n\n");
+  return `${frontmatter}${body}${extra ? `\n\n${extra}` : ""}\n`;
+}
+
+function addBlock(root, options = {}) {
+  const id = options.id ?? "tool-calling";
+  write(root, `learn/test/blocks/${id}.md`, blockMarkdown({ ...options, id }));
+  return id;
+}
+
+function linkStepBlock(root, id = "tool-calling") {
+  update(root, "learn/test/nodes/n1.md", "status: confirmed", "status: written");
+  update(
+    root,
+    "learn/test/nodes/n1.md",
+    '      - "[[sources/test/notes.txt#L1-L10]]"\n',
+    `      - "[[sources/test/notes.txt#L1-L10]]"\n    blocks:\n      - ${id}\n`,
+  );
+}
+
+function coverageJson(concepts, steps = { "n1/s1": { concepts } }) {
+  return JSON.stringify({ subject: "test", generatedAt: "2026-11-06", steps }, null, 2);
+}
+
+function addCoverage(root, concepts, steps) {
+  write(root, "learn/test/blocks/coverage.json", coverageJson(concepts, steps));
+}
+
+function coveredConcept(overrides = {}) {
+  return {
+    slug: "tool-calling",
+    label: "Tool Calling",
+    sources: ["[[sources/test/notes.txt#L1-L10]]"],
+    block: "tool-calling",
+    note: "",
+    ...overrides,
+  };
+}
+
+function blockFixture(t, options = {}) {
+  const root = fixture(t);
+  const id = addBlock(root, options);
+  linkStepBlock(root, id);
+  addCoverage(root, [coveredConcept({ slug: id, block: id, label: options.label ?? "Tool Calling" })]);
+  return root;
+}
+
+test("a valid block linked to a step passes", (t) => {
+  const root = blockFixture(t);
+  const result = runChecks({ root, subject: "test" });
+  assert.equal(result.pass, true, JSON.stringify(result.failures, null, 2));
+});
+
+test("block labels may not be sentences", (t) => {
+  const root = blockFixture(t, { label: "先固定輸出 schema 讓模型可驗證。" });
+  assert.ok(failures(root).includes("block-label"));
+});
+
+test("block labels stay short", (t) => {
+  const root = blockFixture(t, { label: "目".repeat(41) });
+  assert.ok(failures(root).includes("block-label"));
+});
+
+test("block type and status are fixed enums", (t) => {
+  const badType = blockFixture(t, { type: "essay" });
+  assert.ok(failures(badType).includes("block-type"));
+
+  const badStatus = blockFixture(t, { status: "done" });
+  assert.ok(failures(badStatus).includes("block-status"));
+});
+
+test("block id must equal the filename and stay kebab-case", (t) => {
+  const root = fixture(t);
+  addBlock(root, { id: "Tool_Calling" });
+  assert.ok(failures(root).includes("block-slug"));
+});
+
+test("block summary is required and bounded", (t) => {
+  const empty = blockFixture(t, { summary: "" });
+  assert.ok(failures(empty).includes("block-summary"));
+
+  const long = blockFixture(t, { summary: "字".repeat(121) });
+  assert.ok(failures(long).includes("block-summary"));
+});
+
+test("each block type needs its required sections", (t) => {
+  const root = fixture(t);
+  addBlock(root, { sections: CONCEPT_SECTIONS.filter((section) => section !== "例子") });
+  assert.ok(failures(root).includes("block-section"));
+});
+
+test("block sources need at least one valid locator", (t) => {
+  const none = fixture(t);
+  addBlock(none, { sources: [] });
+  assert.ok(failures(none).includes("block-sources-empty"));
+
+  const bad = fixture(t);
+  addBlock(bad, { sources: ["[[sources/test/notes.txt#introduction]]"] });
+  assert.ok(failures(bad).includes("src-locator-format"));
+
+  const outside = fixture(t);
+  update(outside, "learn/test/digests/notes.md", "- `#L11-L20` — second half\n", "");
+  addBlock(outside, { sources: ["[[sources/test/notes.txt#L11-L20]]"] });
+  assert.ok(failures(outside).includes("src-digest-range"));
+});
+
+test("block prerequisites and related entries must resolve", (t) => {
+  const root = fixture(t);
+  addBlock(root, { prerequisites: ["missing"], related: ["also-missing"] });
+  const ids = failures(root);
+  assert.ok(ids.includes("block-prerequisite-missing"));
+  assert.ok(ids.includes("block-related-missing"));
+});
+
+test("block prerequisite cycles are rejected", (t) => {
+  const root = fixture(t);
+  addBlock(root, { id: "a", prerequisites: ["b"] });
+  addBlock(root, { id: "b", prerequisites: ["a"] });
+  assert.ok(failures(root).includes("block-prerequisite-cycle"));
+});
+
+test("inline block links must resolve", (t) => {
+  const root = blockFixture(t, { extra: "See [[missing-block]]." });
+  assert.ok(failures(root).includes("block-inline-link"));
+});
+
+test("block aliases may not collide with another block", (t) => {
+  const root = fixture(t);
+  addBlock(root, { id: "agent" });
+  addBlock(root, { id: "tool-calling", aliases: ["agent"] });
+  assert.ok(failures(root).includes("block-alias-conflict"));
+});
+
+test("step blocks must exist and stay unique", (t) => {
+  const root = fixture(t);
+  update(root, "learn/test/nodes/n1.md", "status: confirmed", "status: written");
+  update(
+    root,
+    "learn/test/nodes/n1.md",
+    '      - "[[sources/test/notes.txt#L1-L10]]"\n',
+    '      - "[[sources/test/notes.txt#L1-L10]]"\n    blocks:\n      - missing\n      - missing\n',
+  );
+  const ids = failures(root);
+  assert.ok(ids.includes("step-block-missing"));
+  assert.ok(ids.includes("step-block-duplicate"));
+});
+
+test("a subject with blocks needs coverage.json", (t) => {
+  const root = fixture(t);
+  addBlock(root);
+  assert.ok(failures(root).includes("coverage-missing"));
+});
+
+test("coverage concept blocks must exist", (t) => {
+  const root = blockFixture(t);
+  addCoverage(root, [coveredConcept({ block: "missing" })]);
+  assert.ok(failures(root).includes("coverage-block-missing"));
+});
+
+test("a covered concept must appear in the step blocks list", (t) => {
+  const root = fixture(t);
+  addBlock(root);
+  update(
+    root,
+    "learn/test/nodes/n1.md",
+    "status: confirmed",
+    "status: written",
+  );
+  addCoverage(root, [coveredConcept()]);
+  assert.ok(failures(root).includes("coverage-step-blocks"));
+});
+
+test("coverage keys must point at written steps", (t) => {
+  const root = blockFixture(t);
+  addCoverage(root, [coveredConcept()], {
+    "n1/s1": { concepts: [coveredConcept()] },
+    "n1/ghost": { concepts: [] },
+  });
+  assert.ok(failures(root).includes("coverage-step"));
+});
+
+test("coverage slugs are unique within a step", (t) => {
+  const root = blockFixture(t);
+  addCoverage(root, [coveredConcept(), coveredConcept()]);
+  assert.ok(failures(root).includes("coverage-slug-duplicate"));
+});
+
+test("coverage concepts need an explicit block field", (t) => {
+  const root = blockFixture(t);
+  const concept = coveredConcept();
+  delete concept.block;
+  addCoverage(root, [concept]);
+  assert.ok(failures(root).includes("coverage-block-field"));
+});
+
+test("coverage must be valid JSON", (t) => {
+  const root = blockFixture(t);
+  write(root, "learn/test/blocks/coverage.json", "{not json");
+  assert.ok(failures(root).includes("coverage-json"));
+});
+
+test("a step block without a coverage concept is rejected", (t) => {
+  const root = fixture(t);
+  addBlock(root);
+  linkStepBlock(root);
+  addCoverage(root, []);
+  assert.ok(failures(root).includes("coverage-step-block-uncovered"));
+});
+
+test("coverage subject must match the folder", (t) => {
+  const root = blockFixture(t);
+  write(
+    root,
+    "learn/test/blocks/coverage.json",
+    JSON.stringify({ subject: "other", generatedAt: "2026-11-06", steps: {} }),
+  );
+  assert.ok(failures(root).includes("coverage-subject"));
+});
+
+
+test("block frontmatter failures are named", (t) => {
+  const badYaml = fixture(t);
+  write(badYaml, "learn/test/blocks/tool-calling.md", "---\nid: [unclosed\n---\n");
+  assert.ok(failures(badYaml).includes("block-fm-parse"));
+
+  const mismatchedId = fixture(t);
+  addBlock(mismatchedId);
+  update(mismatchedId, "learn/test/blocks/tool-calling.md", "id: tool-calling", "id: other");
+  assert.ok(failures(mismatchedId).includes("block-id-filename"));
+
+  const wrongSubject = blockFixture(t, { subject: "other" });
+  assert.ok(failures(wrongSubject).includes("block-subject"));
+
+  const noTitle = blockFixture(t, { title: "" });
+  assert.ok(failures(noTitle).includes("block-title"));
+});
+
+test("block alias failures are named", (t) => {
+  const badType = fixture(t);
+  addBlock(badType);
+  update(badType, "learn/test/blocks/tool-calling.md", "aliases: []", 'aliases: "tool"');
+  assert.ok(failures(badType).includes("block-alias-type"));
+
+  const duplicate = fixture(t);
+  addBlock(duplicate, { aliases: ["tool", "tool"] });
+  assert.ok(failures(duplicate).includes("block-alias-duplicate"));
+});
+
+test("block relation failures are named", (t) => {
+  const badType = fixture(t);
+  addBlock(badType);
+  update(badType, "learn/test/blocks/tool-calling.md", "prerequisites: []", 'prerequisites: "agent"');
+  assert.ok(failures(badType).includes("block-prerequisite-type"));
+
+  const badRelatedType = fixture(t);
+  addBlock(badRelatedType);
+  update(badRelatedType, "learn/test/blocks/tool-calling.md", "related: []", 'related: "agent"');
+  assert.ok(failures(badRelatedType).includes("block-related-type"));
+
+  const badSubject = fixture(t);
+  addBlock(badSubject, { prerequisites: ["learn/test/blocks/a.md"] });
+  assert.ok(failures(badSubject).includes("block-prerequisite-subject"));
+
+  const duplicate = fixture(t);
+  addBlock(duplicate, { id: "a" });
+  addBlock(duplicate, { id: "tool-calling", prerequisites: ["a", "a"] });
+  assert.ok(failures(duplicate).includes("block-prerequisite-duplicate"));
+
+  const self = fixture(t);
+  addBlock(self, { related: ["tool-calling"] });
+  assert.ok(failures(self).includes("block-related-self"));
+
+  const prerequisiteSelf = fixture(t);
+  addBlock(prerequisiteSelf, { prerequisites: ["tool-calling"] });
+  assert.ok(failures(prerequisiteSelf).includes("block-prerequisite-self"));
+
+  const relatedSubject = fixture(t);
+  addBlock(relatedSubject, { related: ["learn/test/blocks/a.md"] });
+  assert.ok(failures(relatedSubject).includes("block-related-subject"));
+
+  const relatedDuplicate = fixture(t);
+  addBlock(relatedDuplicate, { id: "a" });
+  addBlock(relatedDuplicate, { id: "tool-calling", related: ["a", "a"] });
+  assert.ok(failures(relatedDuplicate).includes("block-related-duplicate"));
+});
+
+test("block sources must be a list", (t) => {
+  const root = fixture(t);
+  addBlock(root);
+  update(
+    root,
+    "learn/test/blocks/tool-calling.md",
+    'sources:\n  - "[[sources/test/notes.txt#L1-L10]]"',
+    'sources: "[[sources/test/notes.txt#L1-L10]]"',
+  );
+  assert.ok(failures(root).includes("block-sources-type"));
+});
+
+test("step blocks must be a list of ids", (t) => {
+  const badType = fixture(t);
+  update(badType, "learn/test/nodes/n1.md", "status: confirmed", "status: written");
+  update(
+    badType,
+    "learn/test/nodes/n1.md",
+    '      - "[[sources/test/notes.txt#L1-L10]]"\n',
+    '      - "[[sources/test/notes.txt#L1-L10]]"\n    blocks: tool-calling\n',
+  );
+  assert.ok(failures(badType).includes("step-blocks-type"));
+
+  const badId = fixture(t);
+  update(badId, "learn/test/nodes/n1.md", "status: confirmed", "status: written");
+  update(
+    badId,
+    "learn/test/nodes/n1.md",
+    '      - "[[sources/test/notes.txt#L1-L10]]"\n',
+    '      - "[[sources/test/notes.txt#L1-L10]]"\n    blocks:\n      - Tool_Calling\n',
+  );
+  assert.ok(failures(badId).includes("step-block-id"));
+});
+
+test("coverage structure failures are named", (t) => {
+  const noSteps = blockFixture(t);
+  write(noSteps, "learn/test/blocks/coverage.json", JSON.stringify({ subject: "test" }));
+  assert.ok(failures(noSteps).includes("coverage-steps"));
+
+  const noConcepts = blockFixture(t);
+  write(
+    noConcepts,
+    "learn/test/blocks/coverage.json",
+    JSON.stringify({ subject: "test", steps: { "n1/s1": {} } }),
+  );
+  assert.ok(failures(noConcepts).includes("coverage-concepts"));
+
+  const badSlug = blockFixture(t);
+  addCoverage(badSlug, [coveredConcept({ slug: "Tool Calling" })]);
+  assert.ok(failures(badSlug).includes("coverage-slug"));
+
+  const noLabel = blockFixture(t);
+  addCoverage(noLabel, [coveredConcept({ label: "" })]);
+  assert.ok(failures(noLabel).includes("coverage-label"));
+
+  const noSources = blockFixture(t);
+  addCoverage(noSources, [coveredConcept({ sources: [] })]);
+  assert.ok(failures(noSources).includes("coverage-sources"));
+
+  const notWritten = blockFixture(t);
+  update(notWritten, "learn/test/nodes/n1.md", "status: written", "status: confirmed");
+  assert.ok(failures(notWritten).includes("coverage-step-status"));
+});

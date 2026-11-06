@@ -4,7 +4,7 @@ The learning system has one vocabulary. This file defines it; [AGENTS.md](AGENTS
 
 ## Subject
 
-One course folder under `learn/<subject>/`, backed by immutable material under `sources/<subject>/`. A subject owns one `MEMORY.md`, one `ROADMAP.md`, a `digests/` folder, `nodes/`, and optional `edges/`.
+One course folder under `learn/<subject>/`, backed by immutable material under `sources/<subject>/`. A subject owns one `MEMORY.md`, one `ROADMAP.md`, a `digests/` folder, `nodes/`, and optional `blocks/`.
 _Avoid_: course, track, topic folder
 
 ## Learner profile
@@ -47,9 +47,9 @@ _Avoid_: anchor, page number, section id
 `learn/<subject>/digests/<stem>.md`. A discovery layer, not a content store: an **L1 overview** plus an **L2 line map** of `#Lx-Ly` ranges. `source_lines` equals the `.txt` line count. Status is `pending | absorbed`. `/nodes` reads digests; `/article` pulls the raw slice it needs.
 _Avoid_: summary, notes, index
 
-## Edge
+## Block
 
-An optional relationship page at `learn/<subject>/edges/<edge-id>.md`. It compares or connects steps or nodes so the learner has to contrast and judge, not just retrieve. Frontmatter `from` and `to` are node-qualified step ids (`<node>/<step>`) or node ids.
+One standalone knowledge point at `learn/<subject>/blocks/<block-id>.md`, readable without any step. Frontmatter carries `label` (a noun or proper noun), `type` (`concept | procedure | principle | contrast`), `status` (`draft | reviewed`), a one-sentence `summary`, `sources`, and optional `prerequisites` / `related` relations. Steps link the blocks they teach through `blocks:`, and `blocks/coverage.json` records each written step's concepts and whether each has a block.
 _Avoid_: link, connection note
 
 ## Verify
@@ -64,7 +64,7 @@ _Avoid_: pipeline, generator, teach
 
 ## Active flow
 
-`/learn-init → /ingest → /roadmap → /nodes → /article [--images] → /edges`, plus `/absorb` for pending digests.
+`/learn-init → /ingest → /roadmap → /nodes → /article → /blocks`, plus `/absorb` for pending digests.
 
 ## Out of scope
 

@@ -33,10 +33,10 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 │   │           ├── humanized.md   ← humanize work copy, copied back only after validation
 │   │           ├── humanized.plan.json  ← humanize work copy of the plan
 │   │           └── blocks.json / request.json / result.json / compose.json
-│   └── edges/                ← optional relationship pages between steps/nodes
+│   └── blocks/               ← standalone knowledge blocks and coverage.json
 ├── src/                      ← article.mjs, article-cli.mjs, render-images.mjs, article-agent-bridge.mjs, quiz.mjs, llm.mjs, image-provider.mjs
 ├── prompts/                  ← article.txt, image-plan.txt, image.txt
-├── scripts/                  ← verify.mjs, quiz.mjs, publish-article.mjs, run-article-agent.mjs, set-step-title.mjs, humanize-article.mjs, transcript-backfill.mjs, pdf-backfill.mjs, split-sources.mjs, classify-sources.mjs, digest-status.mjs, backfill-node-digests.mjs
+├── scripts/                  ← verify.mjs, blocks.mjs, quiz.mjs, publish-article.mjs, run-article-agent.mjs, set-step-title.mjs, humanize-article.mjs, transcript-backfill.mjs, pdf-backfill.mjs, split-sources.mjs, classify-sources.mjs, digest-status.mjs, backfill-node-digests.mjs
 ├── article-agent/            ← git submodule: publisher-era rewrite pipeline (prompts/rewrite.txt, src/pipeline.mjs)
 ├── course-app/               ← React (Vite + Tailwind) course viewer
 ├── previews/                 ← static design previews for the course viewer
@@ -59,7 +59,6 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
     → /humanize-article <subject>/<node-id> [--step <id>] [--force]
     → /generate-images <subject>/<node-id> [--step <id>] [--force] [--max-parallel <n>]
     → /quiz-gen <subject>/<node-id> [--step <id>] [--force]
-    → /edges <subject>/<node-id>     ← optional high-value relationships
 
 /batch-nodes <subject> [tier<N> | <node-id> ...] [flags]
                                      ← optional bulk path: /nodes → /article
@@ -80,7 +79,6 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 | `/quiz-gen` | One `quiz-agent` per node reads its published steps and writes 3–8 single-choice questions each; the agent self-checks candidates with `quiz.mjs check`; `quiz.mjs write` validates and writes `<step>.quiz.json`; course-app renders them after the article. |
 | `/batch-nodes` | Optional bulk path over a tier or node list: Nodes → Article → Humanize → Generate → Quiz. Parallel Nodes, `publisher`, humanize, and `quiz-agent` subagents do the writing; Generate is one render CLI call per node. Article dispatches one publisher per step, or one per node with `-article-per-node`; the publisher curates material and runs `compose`/`mark`/`polish`, and `-skip-polish` publishes the first draft through a `--copy` polish. Resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan. |
 | `/absorb` | Read `pending` digests, append steps to existing nodes or create new nodes, add each used digest to the node's `digests`, resolve every digest to `absorbed` or `skipped`, roll affected nodes back to `confirmed`. |
-| `/edges` | Optional relationship pages between steps or nodes. |
 | `/reset-nodes` | Reset chosen nodes to `confirmed`, delete generated articles, image plans, figures and quizzes, keep the node container and its step array. |
 
 `/practice` (generated practice sets) is **out of scope**. Step quizzes are generated sidecars (`<step>.quiz.json`); course-app renders them after the article. The legacy fenced `quiz` block still renders for old content, but new questions belong in the sidecar.
@@ -140,7 +138,7 @@ Rules:
 - The body is `# <title>`, a short `## Lesson`, and a `## Steps` list whose ids and order match the frontmatter. Each link label is the step's `title` once published, and the step `id` while the article is still unwritten. Links are relative to the node file.
 - There is no node-level `sources` field; sources live on step entries. In a `course-supplement` subject every step cites at least one `course/` source; a recap step may reuse an earlier course range.
 - `digests` lists the digest filenames this node teaches; `/roadmap` declares it up front and `/nodes` and `/absorb` keep it true. Every step source must come from a declared digest, a declared digest must be `absorbed`, and a `confirmed`/`written` node may not declare a digest no step cites.
-- `prerequisites` is the node-level prerequisite DAG: the earlier nodes a reader should finish first, as stable paths such as `learn/<subject>/nodes/<id>.md`, or `[]` for a root. `/roadmap` proposes the edges at its confirmation checkpoint. A prerequisite stays inside the subject, points at an existing node that is not the node itself, never creates a cycle, and never points at a later tier.
+- `prerequisites` is the node-level prerequisite DAG: the earlier nodes a reader should finish first, as stable paths such as `learn/<subject>/nodes/<id>.md`, or `[]` for a root. `/roadmap` proposes the prerequisite links at its confirmation checkpoint. A prerequisite stays inside the subject, points at an existing node that is not the node itself, never creates a cycle, and never points at a later tier.
 
 ### Step article — `learn/<subject>/nodes/<node-id>/<step-id>.md`
 
@@ -201,13 +199,13 @@ supplements:            # optional; a supplement digest plus its L1 or L2 entry
 
 A digest `source` always points into `course/` or `supplement/`; a `raw/` original never gets a digest. Subtitles are converted to `.txt` by `node scripts/transcript-backfill.mjs --subject <subject>`, and PDFs are extracted once into a sibling `.txt` by `node scripts/pdf-backfill.mjs --subject <subject>`; an existing `.txt` is never overwritten. A text source over 3,000 lines or 250 KB (and a book whose chapters need separate roles) is split by `node scripts/split-sources.mjs --subject <subject> --dry-run [--chapters]` → confirm → `--apply`, which writes `<stem>.<n>.part.txt` plus `<stem>.parts.json` and deletes the original `.txt` while keeping the PDF. `node scripts/classify-sources.mjs --subject <subject>` then proposes the `course/supplement/raw` moves, the learner confirms a map, and `--map <file> --apply` moves the files and records each part's role. Citations point at the part file that holds the lines, and `source_lines` equals that chunk's actual line count. Digest `status` is `pending | absorbed | skipped`; `skipped` means the material was read and deliberately left untaught, and it needs a non-empty `skip_reason`. A subject check fails on any `pending` digest, on an `absorbed` digest no node lists, and on a text digest skipped while its supplement stays absorbed. A `text` digest may list `supplements` — sibling `codebase` or `image` digests plus the L1 (`<digest>.md#L1`) or L2 (`<digest>.md#Lx-Ly`) entry that carries the code or figures the text refers to.
 
-### Edge — `learn/<subject>/edges/<edge-id>.md`
+### Block — `learn/<subject>/blocks/<block-id>.md`
 
-Frontmatter: `title`, `type`, `from`, `to`, `nodes`, `created`, `updated`. `from` and `to` are node-qualified step ids (`<node>/<step>`), or node ids when the edge compares whole nodes. Sections: The relationship · Why it matters · When each applies · Interleave.
+A block is one standalone knowledge point: a reader who has not read any step can still understand it. Frontmatter: `id` (equal to the filename), `title` (display name), `label` (a noun or proper noun, not a sentence), `subject`, `type` (`concept | procedure | principle | contrast`), `status` (`draft | reviewed`), `summary` (one sentence, ≤120 characters), and `sources` (at least one); optional `slug` (kebab-case, defaults to the id), `aliases`, `prerequisites`, and `related`. `prerequisites` is directed, `related` is undirected, both stay inside the subject, and prerequisites never form a cycle. The body uses the required `##` sections for its type; code blocks keep provenance. A node step may list `blocks:` (bare ids, no duplicates) to link the knowledge points it teaches. `learn/<subject>/blocks/coverage.json` records each written step's concepts, their `block` (an id, or `null` when uncovered), and an optional `note`; `scripts/blocks.mjs apply` rebuilds it from the confirmed audits in `output/blocks/*.audit.json` plus each step's `blocks:`. `node scripts/blocks.mjs report|check` prints the coverage numbers and the drift. Verify enforces the block format and the block/step/coverage consistency. Inline `[[block-id]]` links are navigation only; graph relationships come from frontmatter only.
 
 ### Course viewer
 
-`course-app/` reads `learn/` directly. A subject opens on its roadmap page: one tier per row, `prerequisites` drawn as edges, and each node card linking to the node. Narrow screens fall back to a tier list. The node page lists steps in `steps` array order and marks a step without a body as `尚未產生`. The step page renders the Markdown article, turns a fenced `quiz` block into an interactive question, renders the `<step>.quiz.json` questions under a `自我檢查` section, resolves figures under `<step>-assets/`, aggregates the step's sources at the end, and shows prev/next links in array order. There is no status badge or progress tracking.
+`course-app/` reads `learn/` directly. A subject opens on its roadmap page: one tier per row, `prerequisites` drawn as links, and each node card linking to the node. Narrow screens fall back to a tier list. The node page lists steps in `steps` array order and marks a step without a body as `尚未產生`. The step page renders the Markdown article, turns a fenced `quiz` block into an interactive question, renders the `<step>.quiz.json` questions under a `自我檢查` section, resolves figures under `<step>-assets/`, aggregates the step's sources at the end, and shows prev/next links in array order. There is no status badge or progress tracking.
 
 ## Status
 
@@ -280,6 +278,16 @@ node scripts/backfill-node-digests.mjs [--subject <s>] [--write] [--skip-unused 
 
 `digest-status` prints one row per digest: status, the nodes whose `digests` list it, and its `skip_reason`; the footer counts absorbed, pending, skipped, and absorbed digests no node claims. `skipped` requires `--reason`. `backfill-node-digests` derives each node's `digests` from its step sources — dry run by default, `--write` applies it, and with `--skip-unused --reason` it also marks absorbed digests that no node claims as `skipped`. It never overwrites a step-less node's existing declarations.
 
+### Block coverage
+
+```bash
+node scripts/blocks.mjs apply  --subject <s>   # rebuild blocks/coverage.json from audits + step links
+node scripts/blocks.mjs report --subject <s>   # Step coverage, Course coverage, block counts, reuse factor, uncovered list
+node scripts/blocks.mjs check  --subject <s>   # drift: stale steps, dropped sources, uncovered concepts, orphan blocks, broken relations
+```
+
+`apply` reads `learn/<subject>/output/blocks/<node>.audit.json` and each written step's `blocks:`; it writes `learn/<subject>/blocks/coverage.json` and never edits step prose or block bodies. `report` answers how many blocks exist now, how many the course needs after coverage, and both coverage ratios. `check` reports drift only; it does not rewrite anything.
+
 ### Transcript backfill
 
 ```bash
@@ -327,19 +335,19 @@ node scripts/verify.mjs --subject <subject>
 node scripts/verify.mjs --node <subject>/<node-id>
 ```
 
-It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, the compose-written title, the optional `author` string and H1, `## Steps`, the prerequisite DAG (`prerequisites-type`, `prerequisite-path`, `prerequisite-missing`, `prerequisite-subject`, `prerequisite-self`, `prerequisite-cycle`, `prerequisite-tier`), source locators and digest coverage, node ↔ digest declarations (`node-digest-unknown`, `node-digest-status`, `node-digest-undeclared`, `node-digest-unused`, `digest-unreferenced`, `digest-pending`, `digest-skip-reason`), the `course/supplement/raw` layout for new subjects (`source-layout`, `src-raw`, `src-course-missing`, `digest-source-raw`, `digest-source-layout`, `source-parts-role`), code provenance, quiz sidecars, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
+It checks format only: node frontmatter, `id`/filename, status, flat step entries, step/article pairing, the compose-written title, the optional `author` string and H1, `## Steps`, the prerequisite DAG (`prerequisites-type`, `prerequisite-path`, `prerequisite-missing`, `prerequisite-subject`, `prerequisite-self`, `prerequisite-cycle`, `prerequisite-tier`), source locators and digest coverage, block frontmatter and sections, block relations, step `blocks`, block/step/coverage consistency, node ↔ digest declarations (`node-digest-unknown`, `node-digest-status`, `node-digest-undeclared`, `node-digest-unused`, `digest-unreferenced`, `digest-pending`, `digest-skip-reason`), the `course/supplement/raw` layout for new subjects (`source-layout`, `src-raw`, `src-course-missing`, `digest-source-raw`, `digest-source-layout`, `source-parts-role`), code provenance, quiz sidecars, image files and orphans, relative links, and `.mdx` absence. See [docs/reference/verify.md](docs/reference/verify.md). Content judgment stays with the learner.
 
 ### Query
 
 When the learner asks a question about a subject:
 
-1. Search the subject's `ROADMAP.md`, nodes, step articles, and edges.
+1. Search the subject's `ROADMAP.md`, nodes, step articles, and blocks.
 2. Answer in the subject's `MEMORY.md` language, citing the step article and its source ranges.
 
 ## Quality Standards
 
 - **Useful** — every node has one learner-facing goal; every step is a readable article.
-- **Connected** — edges compare steps or nodes that are worth contrasting.
+- **Connected** — related blocks link through `prerequisites` and `related`.
 - **Anchored** — every article starts from the reader's situation and stays with the subject's sources.
 - **Checked** — `verify` passes for the node and the whole subject.
 - **Current** — later articles deepen earlier ones without erasing useful explanations.

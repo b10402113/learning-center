@@ -16,7 +16,7 @@ This repo is a personal learning system. You put raw material in `sources/`; the
 | `learn/<subject>/nodes/<node>/<step>.md` | The step article. |
 | `learn/<subject>/nodes/<node>/<step>.quiz.json` | 3–8 generated single-choice questions. |
 | `learn/<subject>/nodes/<node>/<step>-assets/` | Generated WebP figures. |
-| `learn/<subject>/edges/` | Optional relationship pages between steps or nodes. |
+| `learn/<subject>/blocks/` | Standalone knowledge blocks plus `coverage.json`. |
 | `course-app/` | React viewer; renders articles, quizzes, sources, and prev/next. |
 | `legacy/` | Retired HTML/MDX pipeline, kept for reference only. |
 
@@ -31,7 +31,6 @@ This repo is a personal learning system. You put raw material in `sources/`; the
     → /polish-article <subject>/<node-id> [--step <id>] [--force]
     → /generate-images <subject>/<node-id> [--step <id>] [--force] [--max-parallel <n>]
     → /quiz-gen <subject>/<node-id> [--step <id>] [--force]
-    → /edges <subject>/<node-id>     ← optional
 
 /batch-nodes <subject> [tier<N> | <node-id> ...] [flags]
                                      ← optional bulk path: /nodes → /article
@@ -49,8 +48,7 @@ This repo is a personal learning system. You put raw material in `sources/`; the
 7. **`/generate-images`** — Reads the plan and the article's markers, generates or reuses `image-N.webp`, and replaces each marker with an uncaptioned image line. It never plans or edits prose.
 8. **`/quiz-gen`** — One `quiz-agent` per node reads its published steps and writes 3–8 single-choice questions per step; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; the viewer renders them after the article.
 9. **`/batch-nodes`** — Optional bulk path over a tier or node list: Nodes → Article → Polish → Generate → Quiz. It resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan, and `-skip-images` skips rendering.
-10. **`/edges`** — Add a small set of strong relationships between steps or nodes.
-11. **`/absorb`** — Integrate `pending` digests by appending steps or creating nodes, resolve each digest to `absorbed` or `skipped`, then roll affected nodes back to `confirmed`.
+10. **`/absorb`** — Integrate `pending` digests by appending steps or creating nodes, resolve each digest to `absorbed` or `skipped`, then roll affected nodes back to `confirmed`.
 
 `/practice` (generated practice sets) is out of scope. Generated questions live in the `<step>.quiz.json` sidecar; the legacy `quiz` block still renders for old content.
 

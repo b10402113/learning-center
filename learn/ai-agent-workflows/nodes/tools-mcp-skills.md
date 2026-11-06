@@ -32,6 +32,8 @@ steps:
     purpose: "說明 LLM 只輸出呼叫、harness 執行工具並把結果當 observation 餵回模型的完整流程。"
     sources:
       - "[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L199-L296]]"
+    blocks:
+      - tool-calling
   - id: mcp-standard
     author: "google/gemini-3.8-flash"
     title: "MCP 標準化傳輸與格式，不標準化工具本身"

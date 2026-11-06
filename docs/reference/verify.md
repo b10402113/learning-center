@@ -4,7 +4,7 @@ Shared contract for `scripts/verify.mjs` — the single CLI that runs every **de
 
 ## Principle
 
-The script checks **format correctness only**. It verifies frontmatter, step/article pairing, heading and list consistency, source locators, digest coverage, code provenance, quiz sidecars, image files, and link resolution — never prose quality or content semantics. Because it is the sole gate, an agent only fixes what it flags.
+The script checks **format correctness only**. It verifies frontmatter, step/article pairing, heading and list consistency, source locators, digest coverage, code provenance, quiz sidecars, image files, block format and coverage consistency, and link resolution — never prose quality or content semantics. Because it is the sole gate, an agent only fixes what it flags.
 
 Every hard-failure rule has a negative fixture in `scripts/verify.test.mjs`: deliberately breaking the fixture must turn the rule red. Advisory flags are not fixtures.
 
@@ -56,6 +56,10 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `step-entry` | every step entry has `id`, `purpose`, and `sources`; `title` is optional, and non-empty when present |
 | `step-author` | `author` is optional; when present it must be a non-empty string |
 | `step-purpose` | `purpose` is a single line of one short sentence (≤ 120 characters, no second sentence) |
+| `step-blocks-type` | `blocks` is a list of block ids when present |
+| `step-block-id` | every `blocks` entry is a non-empty kebab-case id |
+| `step-block-duplicate` | a step lists each block at most once |
+| `step-block-missing` | every step `blocks` id exists under `learn/<subject>/blocks/` |
 | `steps-flat` | step entries declare no `deps`, `type`, or `order` |
 | `steps-duplicate` | step ids are unique within a node |
 | `node-missing` | the requested `--node` exists |
@@ -123,6 +127,50 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `source-parts-digest-missing` | every manifest part is claimed by exactly one digest part |
 | `source-parts-digest-duplicate` | no two digests claim the same manifest part |
 | `source-parts-digest-part` | a digest's `part` field matches the manifest part number |
+
+### Blocks and coverage
+
+| id | checks |
+|---|---|
+| `block-fm-parse` | block frontmatter parses as YAML |
+| `block-id-filename` | block frontmatter `id` equals the filename |
+| `block-subject` | block `subject` matches the subject argument |
+| `block-slug` | the block id, and an optional `slug`, is kebab-case |
+| `block-type` | `type` is `concept` / `procedure` / `principle` / `contrast` |
+| `block-status` | `status` is `draft` / `reviewed` |
+| `block-title` | `title` is a non-empty string |
+| `block-label` | `label` is non-empty, ≤ 40 characters, one line, at most 4 words, does not start like a sentence, and carries no sentence punctuation |
+| `block-summary` | `summary` is non-empty, one line, and ≤ 120 characters |
+| `block-alias-type` | `aliases` is a list of kebab-case ids |
+| `block-alias-duplicate` | no alias repeats inside a block |
+| `block-alias-conflict` | no alias collides with another block id |
+| `block-prerequisite-type` / `block-related-type` | relations are lists of block ids |
+| `block-prerequisite-subject` / `block-related-subject` | a relation is a bare id in the same subject |
+| `block-prerequisite-duplicate` / `block-related-duplicate` | no relation repeats |
+| `block-prerequisite-self` / `block-related-self` | a block never relates to itself |
+| `block-section` | the block body has every `##` section required by its type |
+| `block-sources-type` | `sources` is a list when present |
+| `block-sources-empty` | a block has at least one source |
+| `block-prerequisite-missing` / `block-related-missing` | every relation target exists |
+| `block-prerequisite-cycle` | the prerequisite graph is acyclic |
+| `block-inline-link` | every inline `[[block-id]]` resolves in the subject |
+| `coverage-missing` | a subject with blocks has `blocks/coverage.json` |
+| `coverage-json` | coverage parses as a JSON object |
+| `coverage-steps` | coverage has a `steps` object |
+| `coverage-subject` | coverage `subject` matches the subject folder |
+| `coverage-step` | every coverage key has a matching step entry and article |
+| `coverage-step-status` | every coverage key belongs to a `written` node |
+| `coverage-concepts` | every coverage step has a `concepts` array |
+| `coverage-slug` | every concept `slug` is kebab-case |
+| `coverage-slug-duplicate` | no concept slug repeats within a step |
+| `coverage-label` | every concept has a non-empty `label` |
+| `coverage-sources` | every concept has at least one source |
+| `coverage-block-field` | every concept declares `block` (an id or `null`) |
+| `coverage-block-missing` | a non-null `block` exists in `blocks/` |
+| `coverage-step-blocks` | a covered concept's block also appears in the step entry's `blocks:` |
+| `coverage-step-block-uncovered` | every step `blocks:` entry has a coverage concept |
+
+Block `sources` use the same `src-*` rules as step sources, and block code blocks use `code-provenance`. Coverage gaps, short steps, and unused blocks are reported by `scripts/blocks.mjs report|check`, not as hard failures.
 
 ### Code, links, and flags
 

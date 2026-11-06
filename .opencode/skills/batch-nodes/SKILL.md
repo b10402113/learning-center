@@ -170,7 +170,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    - **Generate** — rendered / already-rendered / no-plan / no-article / no-markers / failed, image counts, reused counts, verify results.
    - **Quiz** — written sidecars, skipped steps with reasons, failed steps with validation errors, verify results, and the `course-app` data result.
 
-   List every failure with its error. Suggest rerunning `/batch-nodes <subject> <failed-node>`, running `/generate-images <subject>/<node> [--step <id>]` for an image repair, running `/batch-nodes <subject> <node> -skip-article -skip-images -skip-quiz` for a text pass, or running `/edges <subject>/<node>` on completed nodes.
+   List every failure with its error. Suggest rerunning `/batch-nodes <subject> <failed-node>`, running `/generate-images <subject>/<node> [--step <id>]` for an image repair, running `/batch-nodes <subject> <node> -skip-article -skip-images -skip-quiz` for a text pass.
 
 Completion, for every phase that ran:
 

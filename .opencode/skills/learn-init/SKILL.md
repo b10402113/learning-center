@@ -127,7 +127,7 @@ Finding *facts* is your job, never the learner's — check `learn/<subject>/` an
 
 After the profile is settled, ask one output question and store the answer in `MEMORY.md` frontmatter:
 
-- **Language** — what language every generated article for this subject should be in (e.g. `en`, `zh-Hant`). This is a hard commitment: later nodes, steps, and edges are written in this language.
+- **Language** — what language every generated article for this subject should be in (e.g. `en`, `zh-Hant`). This is a hard commitment: later nodes and steps are written in this language.
 
 Write `learn/<subject>/MEMORY.md` in the template below, then confirm the profile is accurate before ending the session.
 

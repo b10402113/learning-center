@@ -5,6 +5,15 @@ import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 import { countArticleCharacters } from "../src/article.mjs";
 import { normalizeStepPlan } from "../src/article-agent-bridge.mjs";
+import {
+  BLOCK_SLUG,
+  coveragePath,
+  loadBlocks,
+  validateBlockFrontmatter,
+  validateBlockRelations,
+  validateBlockSections,
+  validateInlineLinks,
+} from "../src/blocks.mjs";
 import { maxQuestionsFor, validateQuizPayload } from "../src/quiz.mjs";
 import { CITABLE_ROLES, courseCharacterCount, nodeBaseline, parseSourceRole } from "../src/source-layout.mjs";
 
@@ -964,7 +973,183 @@ function checkPrerequisites(report, root, subject, scan, onlyNode) {
   }
 }
 
-function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nodeDigests, layout) {
+function checkStepBlocks(report, file, subject, entry, index, blockIds) {
+  const raw = entry.blocks;
+  if (raw === undefined || raw === null) return;
+  if (!Array.isArray(raw)) {
+    report.fail(file, 1, "step-blocks-type", `steps[${index}].blocks must be a list of block ids`);
+    return;
+  }
+  const seen = new Set();
+  for (const [blockIndex, rawId] of raw.entries()) {
+    if (typeof rawId !== "string" || !rawId.trim()) {
+      report.fail(file, 1, "step-block-id", `steps[${index}].blocks[${blockIndex}] must be a non-empty block id`);
+      continue;
+    }
+    const id = rawId.trim();
+    if (!BLOCK_SLUG.test(id)) {
+      report.fail(file, 1, "step-block-id", `steps[${index}].blocks[${blockIndex}] "${id}" must be kebab-case`);
+      continue;
+    }
+    if (seen.has(id)) {
+      report.fail(file, 1, "step-block-duplicate", `steps[${index}].blocks has duplicate "${id}"`);
+      continue;
+    }
+    seen.add(id);
+    if (!blockIds.has(id)) {
+      report.fail(
+        file,
+        1,
+        "step-block-missing",
+        `steps[${index}].blocks[${blockIndex}] "${id}" does not exist in learn/${subject}/blocks/`,
+      );
+    }
+  }
+}
+
+function checkBlocks(report, root, subject, scan, digestInfo, blockData, blockIds, stepEntries, stepsByKey) {
+  if (!blockData.hasBlocksDir) return;
+  const blocks = blockData.blocks;
+
+  for (const block of blocks) {
+    for (const failure of validateBlockFrontmatter(block, subject, blockIds)) {
+      report.fail(block.file, failure.line, failure.checkId, failure.message);
+    }
+    for (const failure of validateBlockSections(block)) {
+      report.fail(block.file, failure.line, failure.checkId, failure.message);
+    }
+    if (block.error) continue;
+
+    const sources = Array.isArray(block.data.sources) ? block.data.sources : [];
+    if (sources.length === 0) {
+      report.fail(block.file, 1, "block-sources-empty", "a block needs at least one source");
+    }
+    for (const [index, source] of sources.entries()) {
+      checkSourceRef(report, root, subject, scan, digestInfo, block.file, source, `sources[${index}]`);
+    }
+    checkCodeProvenance(report, root, block.file, block.body);
+    checkLinks(report, root, block.file, block.body, dirname(block.path));
+  }
+
+  for (const failure of validateBlockRelations(blocks)) {
+    report.fail(failure.file, failure.line, failure.checkId, failure.message);
+  }
+  for (const failure of validateInlineLinks(blocks)) {
+    report.fail(failure.file, failure.line, failure.checkId, failure.message);
+  }
+
+  checkBlockCoverage(report, root, subject, scan, blockData, blockIds, stepEntries, stepsByKey);
+}
+
+function checkBlockCoverage(report, root, subject, scan, blockData, blockIds, stepEntries, stepsByKey) {
+  const file = `learn/${subject}/blocks/coverage.json`;
+  const path = coveragePath(root, subject);
+  const exists = existsSync(path);
+  if (blockData.blocks.length === 0 && !exists) return;
+  if (!exists) {
+    report.fail(file, 1, "coverage-missing", "a subject with blocks needs blocks/coverage.json");
+    return;
+  }
+
+  let coverage;
+  try {
+    coverage = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    report.fail(file, 1, "coverage-json", `coverage.json must contain valid JSON: ${error.message}`);
+    return;
+  }
+  if (!coverage || typeof coverage !== "object" || Array.isArray(coverage)) {
+    report.fail(file, 1, "coverage-json", "coverage.json must be a JSON object");
+    return;
+  }
+  if (coverage.subject !== subject) {
+    report.fail(file, 1, "coverage-subject", `coverage subject "${coverage.subject}" does not match "${subject}"`);
+  }
+  if (!coverage.steps || typeof coverage.steps !== "object" || Array.isArray(coverage.steps)) {
+    report.fail(file, 1, "coverage-steps", "coverage.json needs a steps object");
+    return;
+  }
+
+  const statuses = new Map();
+  for (const node of scan.nodes) {
+    const parsed = readMarkdown(node.path);
+    statuses.set(node.id, parsed.data?.status);
+  }
+
+  for (const [key, step] of Object.entries(coverage.steps)) {
+    const nodeId = key.split("/")[0];
+    const entry = stepEntries.get(key);
+    if (!entry || !stepsByKey.has(key)) {
+      report.fail(file, 1, "coverage-step", `coverage key "${key}" has no matching step entry and article`);
+      continue;
+    }
+    if (statuses.get(nodeId) !== "written") {
+      report.fail(
+        file,
+        1,
+        "coverage-step-status",
+        `coverage key "${key}" points at a ${statuses.get(nodeId) ?? "missing"} node, not a written one`,
+      );
+    }
+    if (!step || typeof step !== "object" || !Array.isArray(step.concepts)) {
+      report.fail(file, 1, "coverage-concepts", `coverage for "${key}" needs a concepts array`);
+      continue;
+    }
+
+    const seen = new Set();
+    const coveredBlocks = new Set();
+    const stepBlocks = new Set(Array.isArray(entry.blocks) ? entry.blocks : []);
+    for (const [index, concept] of step.concepts.entries()) {
+      const label = `${key}.concepts[${index}]`;
+      const slug = typeof concept?.slug === "string" ? concept.slug.trim() : "";
+      if (!slug || !BLOCK_SLUG.test(slug)) {
+        report.fail(file, 1, "coverage-slug", `${label}.slug must be kebab-case`);
+      } else if (seen.has(slug)) {
+        report.fail(file, 1, "coverage-slug-duplicate", `${key} has duplicate concept slug "${slug}"`);
+      } else {
+        seen.add(slug);
+      }
+      if (typeof concept?.label !== "string" || !concept.label.trim()) {
+        report.fail(file, 1, "coverage-label", `${label}.label must be a non-empty string`);
+      }
+      const sources = Array.isArray(concept?.sources) ? concept.sources : [];
+      if (sources.length === 0) {
+        report.fail(file, 1, "coverage-sources", `${label} needs at least one source`);
+      }
+      if (!concept || typeof concept !== "object" || concept.block === undefined) {
+        report.fail(file, 1, "coverage-block-field", `${label}.block is required (null means uncovered)`);
+        continue;
+      }
+      if (concept.block === null) continue;
+      const blockId = typeof concept.block === "string" ? concept.block.trim() : "";
+      if (!blockId || !blockIds.has(blockId)) {
+        report.fail(file, 1, "coverage-block-missing", `${label}.block "${concept.block}" is not a block in this subject`);
+      } else if (!stepBlocks.has(blockId)) {
+        report.fail(
+          file,
+          1,
+          "coverage-step-blocks",
+          `${key} covers block "${blockId}" but its step entry does not list it in blocks`,
+        );
+      } else {
+        coveredBlocks.add(blockId);
+      }
+    }
+
+    for (const blockId of stepBlocks) {
+      if (!coveredBlocks.has(blockId)) {
+        report.fail(
+          file,
+          1,
+          "coverage-step-block-uncovered",
+          `${key} links block "${blockId}" but coverage has no concept for it`,
+        );
+      }
+    }
+  }
+}
+
+function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nodeDigests, layout, blockIds) {
   const file = rel(root, node.path);
   const parsed = readMarkdown(node.path);
   if (parsed.error) {
@@ -1058,6 +1243,7 @@ function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nod
     if (!Array.isArray(entry.sources) || entry.sources.length === 0) {
       report.flag(file, "sources-empty", `step "${entry.id}" has no sources`);
     }
+    checkStepBlocks(report, file, subject, entry, index, blockIds);
   }
 
   checkNodeDigests(report, file, node, data, digestInfo, usedDigests, nodeDigests);
@@ -1461,6 +1647,8 @@ export function runChecks({ root = REPO_ROOT, subject, node = null }) {
   checkSourceParts(report, root, subject, scan, digestInfo, layout);
   checkSourceLayout(report, root, subject, scan, digestInfo, layout);
   const nodeDigests = new Map();
+  const blockData = loadBlocks(root, subject);
+  const blockIds = new Set(blockData.blocks.map((block) => block.id));
 
   const nodesById = new Map(scan.nodes.map((item) => [item.id, item]));
   for (const nodeId of stepIndex.byNode.keys()) {
@@ -1497,9 +1685,10 @@ export function runChecks({ root = REPO_ROOT, subject, node = null }) {
 
   checkRoadmap(report, root, subject, scan, !node);
   checkPrerequisites(report, root, subject, scan, node);
+  checkBlocks(report, root, subject, scan, digestInfo, blockData, blockIds, stepEntries, stepsByKey);
 
   for (const item of targets) {
-    checkNode(report, root, subject, scan, digestInfo, item, stepIndex, nodeDigests, layout);
+    checkNode(report, root, subject, scan, digestInfo, item, stepIndex, nodeDigests, layout, blockIds);
   }
 
   if (!node) checkDigestCoverage(report, digestInfo, nodeDigests);

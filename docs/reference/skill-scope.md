@@ -40,4 +40,4 @@ The unit depends on the phase:
 
 ## Report
 
-At the end, report per phase: succeeded, failed, and skipped, with a reason for each skip and the error for each failure. Point at the next command — rerun the batch for the failed items, run `/generate-images <subject>/<node>` for an image repair, run `/polish-article <subject>/<node>` for a text pass, or run `/edges` on completed nodes.
+At the end, report per phase: succeeded, failed, and skipped, with a reason for each skip and the error for each failure. Point at the next command — rerun the batch for the failed items, run `/generate-images <subject>/<node>` for an image repair, run `/polish-article <subject>/<node>` for a text pass.
