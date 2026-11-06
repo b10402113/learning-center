@@ -98,12 +98,11 @@ export default function BlockGraph({ course, type = "all", query = "", onNavigat
     const position = draggedPositions[id] || byId.get(id);
     if (!position) return null;
     const node = byId.get(id);
-    return clampNodePosition(
-      position,
-      node?.radius ?? 0,
-      graph.width,
-      graph.height
-    );
+    const radius = node?.radius ?? 0;
+    return {
+      ...clampNodePosition(position, radius, graph.width, graph.height),
+      radius,
+    };
   };
 
   // Pointer pixels are not SVG user units once the viewBox scales to fit.
