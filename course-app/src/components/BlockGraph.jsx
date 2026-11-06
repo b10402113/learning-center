@@ -5,7 +5,12 @@ import {
   blockTypeLabel,
   blockTypeMark,
 } from "../lib/blocks.mjs";
-import { layoutBlockGraph, neighborsOf } from "../lib/block-graph.mjs";
+import {
+  clampNodePosition,
+  clampOffset,
+  layoutBlockGraph,
+  neighborsOf,
+} from "../lib/block-graph.mjs";
 import { followInternalLink } from "../lib/navigation.mjs";
 import { pathForBlock } from "../lib/route.mjs";
 
@@ -89,7 +94,17 @@ export default function BlockGraph({ course, type = "all", query = "", onNavigat
   );
   const related = hovered ? new Set([hovered, ...neighbors]) : null;
 
-  const positionOf = (id) => draggedPositions[id] || byId.get(id);
+  const positionOf = (id) => {
+    const position = draggedPositions[id] || byId.get(id);
+    if (!position) return null;
+    const node = byId.get(id);
+    return clampNodePosition(
+      position,
+      node?.radius ?? 0,
+      graph.width,
+      graph.height
+    );
+  };
 
   // Pointer pixels are not SVG user units once the viewBox scales to fit.
   const toGraphDelta = (dx, dy) => {
@@ -125,10 +140,14 @@ export default function BlockGraph({ course, type = "all", query = "", onNavigat
     pan.x = event.clientX;
     pan.y = event.clientY;
     const delta = toGraphDelta(dx, dy);
-    setOffset((current) => ({
-      x: current.x + delta.x,
-      y: current.y + delta.y,
-    }));
+    setOffset((current) =>
+      clampOffset(
+        { x: current.x + delta.x, y: current.y + delta.y },
+        scale,
+        graph.width,
+        graph.height
+      )
+    );
   };
 
   const endPan = (event) => {
@@ -144,10 +163,16 @@ export default function BlockGraph({ course, type = "all", query = "", onNavigat
     }
   };
 
+  const zoomBy = (factor) => {
+    const next = clamp(scale * factor);
+    setScale(next);
+    setOffset((current) => clampOffset(current, next, graph.width, graph.height));
+  };
+
   const onWheel = (event) => {
     if (!event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
-    setScale((current) => clamp(current * (event.deltaY < 0 ? 1.1 : 0.9)));
+    zoomBy(event.deltaY < 0 ? 1.1 : 0.9);
   };
 
   const onNodeDown = (event, node) => {
@@ -175,12 +200,15 @@ export default function BlockGraph({ course, type = "all", query = "", onNavigat
     drag.moved = true;
     suppressClickRef.current = true;
     const delta = toGraphDelta(dx, dy);
+    const node = byId.get(drag.id);
     setDraggedPositions((current) => ({
       ...current,
-      [drag.id]: {
-        x: drag.ox + delta.x / scale,
-        y: drag.oy + delta.y / scale,
-      },
+      [drag.id]: clampNodePosition(
+        { x: drag.ox + delta.x / scale, y: drag.oy + delta.y / scale },
+        node?.radius ?? 0,
+        graph.width,
+        graph.height
+      ),
     }));
   };
 
@@ -216,16 +244,10 @@ export default function BlockGraph({ course, type = "all", query = "", onNavigat
           <span className="robo-kicker mr-1 font-label text-[9px] text-ink-soft">
             縮放
           </span>
-          <ZoomButton
-            label="縮小"
-            onClick={() => setScale((current) => clamp(current / 1.15))}
-          >
+          <ZoomButton label="縮小" onClick={() => zoomBy(1 / 1.15)}>
             −
           </ZoomButton>
-          <ZoomButton
-            label="放大"
-            onClick={() => setScale((current) => clamp(current * 1.15))}
-          >
+          <ZoomButton label="放大" onClick={() => zoomBy(1.15)}>
             +
           </ZoomButton>
           <ZoomButton
@@ -407,7 +429,7 @@ export default function BlockGraph({ course, type = "all", query = "", onNavigat
         <p className="pointer-events-none absolute bottom-2.5 left-3 max-w-[70%] truncate font-label text-[10px] text-ink-soft">
           {hoveredNode
             ? `${hoveredNode.title} · ${blockTypeLabel(hoveredNode.type)}`
-            : "拖曳節點移動 · 拖曳空白平移 · ⌘/Ctrl + 滾輪縮放 · 點節點開啟"}
+            : "拖曳節點移動 · 縮放後拖曳空白平移 · ⌘/Ctrl + 滾輪縮放 · 點節點開啟"}
         </p>
       </div>
     </div>

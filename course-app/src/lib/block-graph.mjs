@@ -13,6 +13,7 @@ export const GRAPH_SEED = 20261106;
 
 const GRAPH_TICKS = 420;
 const PADDING = 58;
+const NODE_EDGE_MARGIN = 28;
 
 /** Deterministic PRNG so the force layout matches after every reload. */
 function seededRandom(seed = GRAPH_SEED) {
@@ -86,6 +87,40 @@ export function neighborsOf(edges, id) {
     else if (to === id && from !== id) neighbors.add(from);
   }
   return neighbors;
+}
+
+/**
+ * Keep a dragged node inside the graph box so its edges never converge on a
+ * clipped corner. A non-finite position falls back to the centre.
+ */
+export function clampNodePosition(position, radius, width = GRAPH_WIDTH, height = GRAPH_HEIGHT) {
+  const limit = Math.max(0, Number(radius) || 0) + NODE_EDGE_MARGIN;
+  const x = Number.isFinite(position?.x) ? position.x : width / 2;
+  const y = Number.isFinite(position?.y) ? position.y : height / 2;
+  return {
+    x: Math.min(width - limit, Math.max(limit, x)),
+    y: Math.min(height - limit, Math.max(limit, y)),
+  };
+}
+
+/**
+ * Clamp a pan offset so the graph never leaves the viewport. At scale 1 the
+ * graph already fits, so the only valid offset is zero.
+ */
+export function clampOffset(offset, scale, width = GRAPH_WIDTH, height = GRAPH_HEIGHT) {
+  const factor = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  const spanX = width * factor;
+  const spanY = height * factor;
+  const minX = Math.min(0, width - spanX);
+  const maxX = Math.max(0, width - spanX);
+  const minY = Math.min(0, height - spanY);
+  const maxY = Math.max(0, height - spanY);
+  const x = Number.isFinite(offset?.x) ? offset.x : 0;
+  const y = Number.isFinite(offset?.y) ? offset.y : 0;
+  return {
+    x: Math.min(maxX, Math.max(minX, x)),
+    y: Math.min(maxY, Math.max(minY, y)),
+  };
 }
 
 /** Scale every node into the fixed viewport so the graph always fits. */

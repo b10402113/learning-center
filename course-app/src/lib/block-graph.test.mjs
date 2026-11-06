@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   GRAPH_HEIGHT,
   GRAPH_WIDTH,
+  clampNodePosition,
+  clampOffset,
   filterBlocks,
   graphEdges,
   layoutBlockGraph,
@@ -157,6 +159,22 @@ test("falls back to the title minus its Chinese gloss for the node label", () =>
     blockEdges: [],
   });
   assert.equal(graph.nodes[0].label, "Agent Loop");
+});
+
+test("clamps a dragged node inside the graph box with room for its label", () => {
+  assert.deepEqual(clampNodePosition({ x: -40, y: 900 }, 12), { x: 40, y: GRAPH_HEIGHT - 40 });
+  assert.deepEqual(clampNodePosition({ x: 400, y: 300 }, 12), { x: 400, y: 300 });
+  assert.deepEqual(clampNodePosition({ x: Number.NaN, y: Number.POSITIVE_INFINITY }, 10), {
+    x: GRAPH_WIDTH / 2,
+    y: GRAPH_HEIGHT / 2,
+  });
+});
+
+test("clamps the pan offset so the graph stays in view", () => {
+  assert.deepEqual(clampOffset({ x: 120, y: -80 }, 1), { x: 0, y: 0 });
+  assert.deepEqual(clampOffset({ x: 120, y: -80 }, 2), { x: 0, y: -80 });
+  assert.deepEqual(clampOffset({ x: -2000, y: 2000 }, 2), { x: -GRAPH_WIDTH, y: 0 });
+  assert.deepEqual(clampOffset({ x: -20, y: 20 }, 0.5), { x: 0, y: 20 });
 });
 
 test("returns an empty graph when everything is filtered out", () => {
