@@ -230,7 +230,7 @@ A step's `sources` entries are the entry points. In a `course-supplement` subjec
 
 ### Code provenance
 
-Read the source before writing code. When the source carries code, quote it verbatim: drop whole lines or elide a run with `…` if needed, but never rewrite a line. When the source carries no code, write it from the prose, faithful to what the source says. Either way, every fenced code block carries an HTML comment above it (blank lines between the comment and the fence are ignored):
+Read the source before writing code. When the source carries code, quote a short excerpt — around 10–25 lines — keeping the head and tail and replacing the omitted middle with a single `...` line. Every remaining line stays verbatim; never rewrite a line. When the source carries no code, write it from the prose, faithful to what the source says. Either way, every fenced code block carries an HTML comment above it (blank lines between the comment and the fence are ignored):
 
 - quoted from source: `<!-- source: sources/<subject>/<file>#Lx-Ly -->`
 - written from the prose: `<!-- derived -->`

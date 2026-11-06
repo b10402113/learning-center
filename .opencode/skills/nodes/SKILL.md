@@ -7,7 +7,7 @@ argument-hint: "Which subject/node should be planned?"
 
 Invoke as `/nodes <subject>/<node-id>`.
 
-A node is one Markdown container. Its `steps` array is the whole plan: each entry carries `id`, `purpose`, and `sources`, and the array order is the teaching order. `/nodes` writes that plan; it does not write article prose — `/article` does. The publisher chooses each article's title while writing it and writes that title back to the step entry.
+A node is one Markdown container. Its `steps` array is the whole plan: each entry carries `id`, `purpose`, and `sources`, and the array order is the teaching order. `/nodes` writes that plan; it does not write article prose — `/article` does. The compose model chooses each article's title from the purpose while writing it, and `publish`/`titleCommand` write that H1 back to the step entry.
 
 **Prereqs.** `learn/<subject>/MEMORY.md` exists, `learn/<subject>/ROADMAP.md` exists, and the node container `learn/<subject>/nodes/<node-id>.md` exists. A `draft` node moves to `confirmed` when this skill runs; no separate probe gate exists.
 
@@ -17,7 +17,7 @@ A node is one Markdown container. Its `steps` array is the whole plan: each entr
 
 3. **Reason the steps.** Decompose the node into 2–5 coherent steps. Each step is one teaching unit with its own learner-facing outcome. For each step decide:
    - `id` — immutable kebab-case, unique within the node. It is the only label an unplanned article has.
-   - `purpose` — **one short sentence (≤ 120 characters)** stating what the learner can do after the step. It is a purpose, not an article summary: no second sentence, no list, no "本節將介紹…". The publisher turns it into the article's title later.
+   - `purpose` — **one short sentence (≤ 120 characters)** stating what the learner can do after the step. It is a purpose, not an article summary: no second sentence, no list, no "本節將介紹…". The compose model turns it into the article's title later.
    - `sources` — every `[[sources/<subject>/<file>#Lx-Ly]]` slice the article will need, all drawn from the node's declared digests. If a step genuinely needs another digest, add that filename to the node's `digests` list first; `verify` fails with `node-digest-undeclared` otherwise. PDFs are never cited; cite the extracted `.txt`. When a text digest declares a `codebase` supplement, every step that teaches that code must cite the real files covered by the supplement's named L2 entry (`<digest>.md#Lx-Ly`) — `[[sources/<subject>/<YYYYMMDD>/<dir>/<file>#Lx-Ly]]`. A supplement that applies to the step is never left out of `sources`, and a digest `.md` is never cited. An `image` supplement is referenced as `#L1`; it has no line ranges, so it stays out of `sources` and feeds `/article`'s image plan instead.
 
 4. **Confirm the plan (checkpoint).** Present the ordered step list — id, purpose, and source ranges — and ask the learner to confirm. Exit options: accept; reorder steps; add, remove, split, or merge steps. Do not write anything until this checkpoint passes.
@@ -45,7 +45,7 @@ A node is one Markdown container. Its `steps` array is the whole plan: each entr
    2. [demo-vs-production](what-a-harness-is/demo-vs-production.md)
    ```
 
-   Label each link with the step id until the publisher writes a title.
+   Label each link with the step id until the compose model writes a title.
 
 8. **Update the node metadata.** Set `status: confirmed` and bump `updated`. Keep `goal`, `tier`, `order`, and `prerequisites`; there is no node-level `sources` field.
 

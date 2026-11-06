@@ -7,7 +7,7 @@ argument-hint: "<subject>/<node> [--step <id>] [--force] [--no-continuity]"
 
 Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
 
-這是一個 thin shell：文章散文由 CLI 呼叫文字模型一次產生。`publisher` 一篇一篇策展 material（挑選、裁切來源文字與程式碼）並選標題，`article-cli compose` 讀策展後的 material 呼叫模型寫出 `original.md`，publisher 讀 `original.md` 寫配圖清單，`article-cli mark` 依 plan 把 `<!--image:N-->` marker 插進文章，再跑 `polish-article.mjs draft` 產出 `polish.md` 並潤飾 plan，最後 `titleCommand` 回寫標題。主 agent 最後補上 step 之間的連續性。`src/article-cli.mjs` 只負責寫文章、插 marker、回寫與 verify。這條流程會呼叫文字模型（compose 與 polish），但不呼叫圖片模型，也不建立 `<step>-assets/`。
+這是一個 thin shell：文章散文由 CLI 呼叫文字模型一次產生。`publisher` 一篇一篇策展 material（挑選、裁切來源文字與程式碼），標題由 `article-cli compose` 的模型依 `purpose` 決定，publisher 不傳也不選標題；`article-cli compose` 讀策展後的 material 寫出 `original.md`，publisher 讀 `original.md` 寫配圖清單，`article-cli mark` 依 plan 把 `<!--image:N-->` marker 插進文章，再跑 `polish-article.mjs draft` 產出 `polish.md` 並潤飾 plan，最後 `titleCommand` 回寫標題。主 agent 最後補上 step 之間的連續性。`src/article-cli.mjs` 只負責寫文章、插 marker、回寫與 verify。這條流程會呼叫文字模型（compose 與 polish），但不呼叫圖片模型，也不建立 `<step>-assets/`。
 
 1. **Resolve the target.** 參數是 `subject/node`，在 repo root 執行。不要從敘述推測 subject 或 node。
 
@@ -17,7 +17,7 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
    node src/article-cli.mjs prepare --subject <subject> --node <node> [--step <id>] [--force]
    ```
 
-   輸出 JSON 的 `steps[]` 每筆有 `id`、`title`（尚未寫文章時是 `null`）、`purpose`、`material`、`original`、`polish`、`plan`、`composeCommand`、`markCommand`、`polishCommand`、`titleCommand`；`composeCommand` 呼叫模型寫 `original.md`，`markCommand` 依 plan 插 marker。`skipped[]` 是已有內容的 step，含 `id`、`title`、`purpose`、`status`、`path`、`article`。
+   輸出 JSON 的 `steps[]` 每筆有 `id`、`purpose`、`material`、`original`、`polish`、`plan`、`composeCommand`、`markCommand`、`polishCommand`、`titleCommand`；沒有 `title`，標題由 `composeCommand` 的模型決定。`composeCommand` 呼叫模型寫 `original.md`，`markCommand` 依 plan 插 marker。`skipped[]` 是已有內容的 step，含 `id`、`title`、`purpose`、`status`、`path`、`article`。
    `--force` 連已有內容的 step 也重做：清掉舊的 `original.md`、`polish.md`、`result.json`、`blocks.json`、`request.json`，讓舊 run 不能 publish；plan 保留，由 publisher 重寫。
 
    完成標準：`steps.length + skipped.length` 等於節點 step 數。publisher 會執行 `composeCommand` 與 `polishCommand`，所以 repo root 的 `.env` 需要 `TEXT_API_KEY`（或 `OPENAI_API_KEY`）。
@@ -28,9 +28,9 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
 
    每次派工只給這幾項：
 
-   - `id`、`title`、`purpose`、`material`、`original`、`polish`、`plan`、`composeCommand`、`markCommand`、`polishCommand`、`titleCommand`
-   - 一句：「`material` 的 `purpose` 是這篇的主旨；用 Read 讀完 `material.course`、`material.supplement`（舊格式是 `material.sources`）裡的每個完整來源檔，`locator` 只是引用範圍，不是閱讀範圍。把策展結果覆寫回 `material`（每項保留 `path` 與 `locator`、確認或改正 `type`（`article`／`code`／`formula`）、加上 `text`；`course` 要放引用範圍的完整文字，`supplement` 才可挑選裁切；`code` 的 `text` 要逐字、`formula` 只放 LaTeX 本身），`title` 是 `null` 時自己從來源裡實際出現的標題或句子選一個。然後執行 `composeCommand`——文章散文由它呼叫模型寫出 `original.md`，你不要自己寫。再讀 `original.md` 把 1–5 項配圖清單寫成 JSON 陣列到 `plan`（每項 `heading`、可選 `anchor`、`prompt`），執行 `markCommand` 插 marker，接著執行 `polishCommand`，最後執行 `titleCommand`。」
-   - 一句：「`composeCommand` 會把 `material` 餵給文字模型產生 `original.md`，不放任何 `<!--image:N-->` marker。`type: code` 與 `type: formula` 的內容由 CLI 用 placeholder 強制逐字插入；模型漏用 placeholder 時 compose 會帶著上一次草稿與漏掉的清單重試；三次仍缺就寫出草稿並回報 `status: draft`（`compose.json` 的 `missing` 列出漏掉的來源），不是失敗。遇到 `draft` 可讀 `original.md` 與 `missing`，必要時縮短素材重跑 `composeCommand`，否則直接沿用草稿繼續；不要自己改寫散文或手動編輯 `original.md`。」
+   - `id`、`purpose`、`material`、`original`、`polish`、`plan`、`composeCommand`、`markCommand`、`polishCommand`、`titleCommand`
+   - 一句：「`material` 的 `purpose` 是這篇的主旨；用 Read 讀完 `material.course`、`material.supplement`（舊格式是 `material.sources`）裡的每個完整來源檔，`locator` 只是引用範圍，不是閱讀範圍。把策展結果覆寫回 `material`（每項保留 `path` 與 `locator`、確認或改正 `type`（`article`／`code`／`formula`）、加上 `text`；`course` 的散文要放引用範圍的完整文字，`course` 的程式碼與 `supplement` 可挑選裁切；`code` 只留約 10–25 行關鍵片段，中間用單獨一行 `...` 省略，每一行仍與來源一字不差；`formula` 只放 LaTeX 本身）。不要放 `title`，標題由 CLI 決定。然後執行 `composeCommand`——文章散文由它呼叫模型寫出 `original.md`，你不要自己寫。再讀 `original.md` 把 1–5 項配圖清單寫成 JSON 陣列到 `plan`（每項 `heading`、可選 `anchor`、`prompt`），執行 `markCommand` 插 marker，接著執行 `polishCommand`，最後執行 `titleCommand`。」
+   - 一句：「`composeCommand` 會把 `material` 餵給文字模型產生 `original.md`，由模型依 `purpose` 決定 H1，不放任何 `<!--image:N-->` marker。`type: code` 與 `type: formula` 的內容由 CLI 用 placeholder 插入；程式碼會節選，太長時只留頭尾、中間以 `...` 省略。模型漏用 placeholder 時 compose 會帶著上一次草稿與漏掉的清單重試；三次仍缺就寫出草稿並回報 `status: draft`（`compose.json` 的 `missing` 列出漏掉的來源），不是失敗。遇到 `draft` 可讀 `original.md` 與 `missing`，必要時縮短素材重跑 `composeCommand`，否則直接沿用草稿繼續；不要自己改寫散文或手動編輯 `original.md`。」
    - 一句：「`markCommand` 依 `plan` 把 marker 插進 `original.md`；它不呼叫模型。」
    - 一句：「`polishCommand` 讀 `original`、寫 `polish.md`，並潤飾 plan 的 `heading`／`prompt`；保留 H1、marker、code 與連結，marker 數量與位置不變。模型潤飾失敗時會自動把 `original` 原樣寫成 `polish.md`、plan 保持原樣，回報 `copied` 加 `fallback: true`；這不是失敗，繼續跑 `titleCommand`。」
    - 一句：「`titleCommand` 把 H1 寫回 node 的 step entry 與 `## Steps` 標籤；不要用其他方式改 node。」
@@ -48,7 +48,7 @@ Invoke as `/article <subject>/<node> [--step <id>] [--force] [--no-continuity]`.
 
    帶 `--force` 時，publish 也要一起帶，這樣成功寫入後才會清掉舊狀態。
 
-   它讀 `polish.md`、用 publisher 回寫到 node 的 step title 對齊 H1、保留 `<!--image:N-->` marker、寫入 `learn/<subject>/nodes/<node>/<step>.md`，全部 step 有內容才把 node 標成 `written`，最後跑 verify。若 plan 原本沒有 title，publish 會把文章的最終 H1 寫回 node。它不呼叫圖片同步；非 `--force` 時不改動圖片檔。
+   它讀 `polish.md`、把模型的 H1 寫回 node 的 step title、保留 `<!--image:N-->` marker、寫入 `learn/<subject>/nodes/<node>/<step>.md`，全部 step 有內容才把 node 標成 `written`，最後跑 verify。node 的 step title 以文章最終 H1 為準。它不呼叫圖片同步；非 `--force` 時不改動圖片檔。
 
    帶 `--force` 且寫入成功後，它會清掉該 step 舊的 `image-N.webp`（新文章只有 marker，舊圖已經對不上）、`<step>.quiz.json` 與 polish／humanize 紀錄；寫入失敗時，舊圖與紀錄都保留。publish 不會刪掉 publisher 剛寫好的 plan。
 

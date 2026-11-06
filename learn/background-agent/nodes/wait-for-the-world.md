@@ -4,7 +4,7 @@ title: "等待世界改變"
 subject: background-agent
 tier: 2
 order: 10
-status: confirmed
+status: written
 goal: "能說明事件只負責喚醒、醒來必須重讀狀態，並用 waitForEvent + eventSequence 避免漏接。"
 digests:
   - 16-when-to-wait-for-input.md
@@ -15,6 +15,7 @@ prerequisites:
   - learn/background-agent/nodes/make-progress-durable.md
 steps:
   - id: waiting-is-a-decision
+    author: "google/gemini-3.8-flash"
     title: "門鈴，不是房間"
     purpose: "能說明為何等待與否必須由代理自己判斷，並把事件當成門鈴而不是狀態快照。"
     sources:
@@ -25,6 +26,7 @@ steps:
       - "[[sources/background-agent/20261105/16-when-to-wait-for-input.vtt#L440-L472]]"
       - "[[sources/background-agent/20261105/lessons/03-events-and-waiting/index.md#L6-L12]]"
   - id: suspend-with-a-reason
+    author: "google/gemini-3.8-flash"
     title: "三種暫停：wait、complete、request_help"
     purpose: "能分辨 complete、request_help、wait 的暫停語意，並說明 harness 如何記下等待理由。"
     sources:
@@ -39,6 +41,7 @@ steps:
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L99-L117]]"
       - "[[sources/background-agent/20261105/server/agent-log.ts#L6-L32]]"
   - id: wait-for-event-primitive
+    author: "google/gemini-3.8-flash"
     title: "等到事件，或等到逾時"
     purpose: "能說明 step.waitForEvent 的 event、if、timeout 三個參數，以及等待不是掛起呼叫堆疊。"
     sources:
@@ -48,6 +51,7 @@ steps:
       - "[[sources/background-agent/20261105/17-add-wait-conditions-steps.vtt#L790-L835]]"
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L118-L132]]"
   - id: wake-re-read-reconcile
+    author: "google/gemini-3.8-flash"
     title: "醒來之後，重讀世界"
     purpose: "能實作醒來後重讀世界狀態，並用 eventSequence 與逾時重檢避免漏接喚醒。"
     sources:

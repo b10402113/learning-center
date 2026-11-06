@@ -43,7 +43,7 @@ For an Explanation, step 4 is applying the model to a case. For a Tutorial, it i
 
 - Numbers over adjectives. "p99 dropped from 340 ms to 45 ms", not "significantly faster".
 - Define a term in full the first time it appears, then reuse the same wording.
-- Copy code verbatim inside a fenced block, with `<!-- source: sources/<subject>/<file>.txt#Lx-Ly -->` on the line above the fence; write `<!-- derived -->` for code you assembled yourself.
+- Quote a short code excerpt inside a fenced block (head and tail, `...` for the omitted middle; keep every shown line verbatim), with `<!-- source: sources/<subject>/<file>.txt#Lx-Ly -->` on the line above the fence; write `<!-- derived -->` for code you assembled yourself.
 - Keep the examples and names the teaching plan assigns. Do not introduce a new scenario.
 - State limitations and failure modes instead of smoothing them over.
 

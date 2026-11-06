@@ -150,8 +150,18 @@ function longestRun(text, character) {
   return longest;
 }
 
+export function condenseCode(text, maxLines = Number(process.env.ARTICLE_CODE_MAX_LINES) || 24) {
+  const lines = String(text ?? "").replace(/\r\n/g, "\n").replace(/\n+$/, "").split("\n");
+  const limit = Math.max(4, Number(maxLines) || 24);
+  if (lines.length <= limit) return lines.join("\n");
+  const kept = limit - 1;
+  const head = Math.max(1, Math.ceil(kept * 0.6));
+  const tail = Math.max(1, kept - head);
+  return [...lines.slice(0, head), "...", ...lines.slice(-tail)].join("\n");
+}
+
 function codeMarkdown(source) {
-  const text = source.text.replace(/\n+$/, "");
+  const text = condenseCode(source.text);
   const fence = "`".repeat(Math.max(3, longestRun(text, "`") + 1));
   const language = source.language ? source.language : "";
   return [

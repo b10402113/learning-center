@@ -4,7 +4,7 @@ title: "把迴圈拆成獨立步驟"
 subject: background-agent
 tier: 2
 order: 9
-status: confirmed
+status: written
 goal: "能替觀察、決策、行動各建 step，並用 cycle 編號讓重播對得上。"
 digests:
   - 12-multi-step-loop.md
@@ -17,6 +17,7 @@ prerequisites:
   - learn/background-agent/nodes/make-progress-durable.md
 steps:
   - id: cycle-named-checkpoints
+    author: "google/gemini-3.8-flash"
     title: "把整個迴圈的 checkpoint 換成具名 step，並保留唯一的 cycle 後綴"
     purpose: "能替每一輪的觀察建具名 step，並用 cycle 編號讓重播對回同一個檢查點。"
     sources:
@@ -26,6 +27,7 @@ steps:
       - "[[sources/background-agent/20261105/lessons/02-durable-execution/index.md#L112-L243]]"
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L1-L216]]"
   - id: the-decision-is-a-step
+    author: "google/gemini-3.8-flash"
     title: "把 step 想成 useMemo"
     purpose: "能說明決策與 iteration 為何各自進 step，並用 replay 與 useMemo 解釋重播時的值從哪來。"
     sources:
@@ -37,6 +39,7 @@ steps:
       - "[[sources/background-agent/20261105/server/agent-brain.ts#L1-L51]]"
       - "[[sources/background-agent/20261105/server/agent-data.ts#L139-L154]]"
   - id: one-async-per-step
+    author: "google/gemini-3.8-flash"
     title: "非同步的事放進 step，而且一次只放一件"
     purpose: "能用 async ⇒ step、一個 step 一件事判斷切點，並說明重試時整個 step 會重跑的代價。"
     sources:
@@ -46,6 +49,7 @@ steps:
       - "[[sources/background-agent/20261105/13-generate-a-decision.vtt#L701-L790]]"
       - "[[sources/background-agent/20261105/lessons/02-durable-execution/index.md#L31-L36]]"
   - id: special-outcomes-exit-the-loop
+    author: "google/gemini-3.8-flash"
     title: "需要一個 return，否則迴圈會繼續跑"
     purpose: "能為 wait、complete、request_help 各寫一個分支，並用 return 決定迴圈下一輪或結束。"
     sources:
@@ -55,6 +59,7 @@ steps:
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L1-L216]]"
       - "[[sources/background-agent/20261105/server/agent-data.ts#L16-L43]]"
   - id: policy-then-execute
+    author: "google/gemini-3.8-flash"
     title: "AI 有沒有權限做這件事？"
     purpose: "能用 actionPolicy 分流並把執行包進 step，送出 expectedVersion、把 stale 結果當成功記錄。"
     sources:

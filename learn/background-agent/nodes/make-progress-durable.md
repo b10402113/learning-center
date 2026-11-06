@@ -4,7 +4,7 @@ title: "讓進度可持久"
 subject: background-agent
 tier: 2
 order: 8
-status: confirmed
+status: written
 goal: "能解釋 replay 為何跳過已完成 step，並說明 workflow body 必須確定性、step 必須幂等。"
 digests:
   - 10-durable-execution.md
@@ -16,6 +16,7 @@ prerequisites:
   - learn/background-agent/nodes/first-runnable-loop.md
 steps:
   - id: single-step-is-not-durable
+    author: "google/gemini-3.8-flash"
     title: "全部都在一個 step 裡"
     purpose: "能指出把整個迴圈放進一個 step 的崩潰窗口，並說明重啟為何會重做觀察、模型呼叫與副作用。"
     sources:
@@ -25,6 +26,7 @@ steps:
       - "[[sources/background-agent/20261105/lessons/02-durable-execution/index.md#L37-L50]]"
       - "[[sources/background-agent/20261105/lessons/02-durable-execution/index.md#L251-L258]]"
   - id: replay-skips-completed-steps
+    author: "google/gemini-3.8-flash"
     title: "Replay 不是恢復暫停的堆疊"
     purpose: "能解釋 replay 重跑 workflow body 卻跳過已完成 step，並說明這不是恢復 JS 堆疊。"
     sources:
@@ -34,6 +36,7 @@ steps:
       - "[[sources/background-agent/20261105/server/agent.ts#L1-L28]]"
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L1-L216]]"
   - id: deterministic-workflow-body
+    author: "google/gemini-3.8-flash"
     title: "step 之外的程式碼必須是確定性的"
     purpose: "能說明 step.run 之外的 workflow body 必須確定性，並指出時間與隨機會如何破壞 replay。"
     sources:
@@ -41,6 +44,7 @@ steps:
       - "[[sources/background-agent/20261105/lessons/02-durable-execution/index.md#L6-L20]]"
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L1-L216]]"
   - id: idempotent-steps
+    author: "google/gemini-3.8-flash"
     title: "step 必須是冪等的"
     purpose: "能說明 step 的副作用為何必須幂等，並用 idempotency key 解釋重播為何不重複收費。"
     sources:
@@ -49,6 +53,7 @@ steps:
       - "[[sources/background-agent/20261105/server/agent-data.ts#L1-L288]]"
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L1-L216]]"
   - id: checkpoints-and-live-deploys
+    author: "google/gemini-3.8-flash"
     title: "兩個時鐘，兩個儲存位置"
     purpose: "能說明 checkpoint 由平台保存、我們只存業務狀態，並權衡長跑中部署新版的代價。"
     sources:

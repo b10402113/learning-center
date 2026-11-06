@@ -2,7 +2,7 @@
 /**
  * set-step-title.mjs — Write a published step title back into its node plan.
  *
- * The publisher chooses the title while writing the article. This script copies
+ * The compose model chooses the title while writing the article. This script copies
  * the H1 from the original (or an explicit --title) into the node's steps entry
  * and updates the matching ## Steps label, so verify can keep both in sync.
  *

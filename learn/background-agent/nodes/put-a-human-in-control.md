@@ -4,7 +4,7 @@ title: "讓人類掌握控制權"
 subject: background-agent
 tier: 2
 order: 12
-status: confirmed
+status: written
 goal: "能實作 propose → wait → 重讀 → 重驗版本的批准流程，並處理 stale approval。"
 digests:
   - 20-hitl-human-in-the-loop.md
@@ -18,6 +18,7 @@ prerequisites:
   - learn/background-agent/nodes/wait-for-the-world.md
 steps:
   - id: approval-is-harness-policy
+    author: "google/gemini-3.8-flash"
     title: "批准不是萬用的安全盾"
     purpose: "能說明批准是 harness 的政策決定、為何模型不該知道，以及何時該改為去風險化而非增加關卡。"
     sources:
@@ -32,6 +33,8 @@ steps:
       - "[[sources/background-agent/20261105/lessons/04-human-approval/index.md#L20-L33]]"
       - "[[sources/background-agent/20261105/server/tool-policy.ts#L1-L15]]"
   - id: persist-the-proposal
+    author: "google/gemini-3.8-flash"
+    title: "資料庫才是唯一真相來源"
     purpose: "能把 proposal 連同 expectedVersion 寫進資料庫，並只回傳 id 讓下一步重讀，而不是沿用區域變數。"
     sources:
       - "[[sources/background-agent/20261105/21-building-the-approval-flow.vtt#L47-L160]]"
@@ -42,6 +45,8 @@ steps:
       - "[[sources/background-agent/20261105/server/schema.ts#L92-L108]]"
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L141-L158]]"
   - id: wait-and-reread-the-decision
+    author: "google/gemini-3.8-flash"
+    title: "等待一個綁定 proposal.id 的決定"
     purpose: "能用綁定 proposal.id 的 waitForEvent 等待決定，醒來後從資料庫重讀，並用 timeout 補救漏接的喚醒事件。"
     sources:
       - "[[sources/background-agent/20261105/21-building-the-approval-flow.vtt#L482-L524]]"
@@ -55,6 +60,8 @@ steps:
       - "[[sources/background-agent/20261105/server/agent-data.ts#L214-L226]]"
       - "[[sources/background-agent/20261105/server/operator.ts#L40-L49]]"
   - id: recheck-and-invalidate-stale
+    author: "google/gemini-3.8-flash"
+    title: "批准只對當初那個版本有效"
     purpose: "能在執行前重驗 world version，用 staleProposal 讓過期批准離開 inbox，並把拒絕升級為 escalated。"
     sources:
       - "[[sources/background-agent/20261105/21-building-the-approval-flow.vtt#L1040-L1170]]"
@@ -66,6 +73,8 @@ steps:
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L171-L185]]"
       - "[[sources/background-agent/20261105/server/agent-data.ts#L228-L288]]"
   - id: exercise-the-three-outcomes
+    author: "google/gemini-3.8-flash"
+    title: "把每個 loop 的輸出看清楚"
     purpose: "能用 fault release 演練 approve、reject、stale 三條結局，並在 Inngest run view 讀懂每個 loop 的輸出。"
     sources:
       - "[[sources/background-agent/20261105/22-testing-hitl.vtt#L1-L64]]"
@@ -92,7 +101,7 @@ updated: 2026-11-05
 ## Steps
 
 1. [批准不是萬用的安全盾](put-a-human-in-control/approval-is-harness-policy.md)
-2. [persist-the-proposal](put-a-human-in-control/persist-the-proposal.md)
-3. [wait-and-reread-the-decision](put-a-human-in-control/wait-and-reread-the-decision.md)
-4. [recheck-and-invalidate-stale](put-a-human-in-control/recheck-and-invalidate-stale.md)
-5. [exercise-the-three-outcomes](put-a-human-in-control/exercise-the-three-outcomes.md)
+2. [資料庫才是唯一真相來源](put-a-human-in-control/persist-the-proposal.md)
+3. [等待一個綁定 proposal.id 的決定](put-a-human-in-control/wait-and-reread-the-decision.md)
+4. [批准只對當初那個版本有效](put-a-human-in-control/recheck-and-invalidate-stale.md)
+5. [把每個 loop 的輸出看清楚](put-a-human-in-control/exercise-the-three-outcomes.md)

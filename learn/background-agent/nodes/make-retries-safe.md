@@ -4,7 +4,7 @@ title: "讓重試安全"
 subject: background-agent
 tier: 2
 order: 13
-status: confirmed
+status: written
 goal: "能用 derived action ID 與 expectedVersion，讓「效果已落地但回應遺失」的重試不重複執行。"
 digests:
   - 23-safe-retries-with-derived-ids.md
@@ -15,6 +15,8 @@ prerequisites:
   - learn/background-agent/nodes/split-the-loop-into-steps.md
 steps:
   - id: why-retries-duplicate
+    author: "google/gemini-3.8-flash"
+    title: "失敗落在效果與確認之間"
     purpose: "能解釋「效果已落地、回應遺失」為何讓天真重試重複副作用，並把每個副作用拆成獨立 step。"
     sources:
       - "[[sources/background-agent/20261105/23-safe-retries-with-derived-ids.vtt#L1-L65]]"
@@ -25,6 +27,8 @@ steps:
       - "[[sources/background-agent/20261105/lessons/05-safe-retries/index.md#L21-L30]]"
       - "[[sources/background-agent/20261105/service/checkout.ts#L171-L179]]"
   - id: idempotency-at-the-effect-owner
+    author: "google/gemini-3.8-flash"
+    title: "效果擁有者記得每個 actionId"
     purpose: "能說明服務端如何用 actionId 帳本重播已記錄結果，並拒絕同 ID 搭配不同參數的重用。"
     sources:
       - "[[sources/background-agent/20261105/23-safe-retries-with-derived-ids.vtt#L298-L325]]"
@@ -35,6 +39,8 @@ steps:
       - "[[sources/background-agent/20261105/server/agent-data.ts#L156-L173]]"
       - "[[sources/background-agent/20261105/server/schema.ts#L63-L72]]"
   - id: derive-a-stable-action-id
+    author: "google/gemini-3.8-flash"
+    title: "永遠推導出同一個 action ID"
     purpose: "能用 runId + cycle + action 推導穩定 action ID，讓重播重建同一個意圖鍵。"
     sources:
       - "[[sources/background-agent/20261105/23-safe-retries-with-derived-ids.vtt#L471-L520]]"
@@ -45,6 +51,8 @@ steps:
       - "[[sources/background-agent/20261105/server/agent-data.ts#L73-L78]]"
       - "[[sources/background-agent/20261105/server/schema.ts#L63-L72]]"
   - id: fence-writes-with-expected-version
+    author: "google/gemini-3.8-flash"
+    title: "帶著觀察到的版本改狀態"
     purpose: "能用 expectedVersion 讓服務在改狀態處拒絕過期寫入，並在批准後重讀版本再行動。"
     sources:
       - "[[sources/background-agent/20261105/lessons/05-safe-retries/index.md#L15-L15]]"
@@ -59,6 +67,8 @@ steps:
       - "[[sources/background-agent/20261105/service/checkout.ts#L138-L143]]"
       - "[[sources/background-agent/20261105/service/checkout.ts#L153-L168]]"
   - id: cancel-duplicate-runs-and-unknown-outcomes
+    author: "google/gemini-3.8-flash"
+    title: "取消不是補償"
     purpose: "能用 cancelOn 阻止同一個 run 被重複執行，並把無法確認的外部結果保存成待核對狀態。"
     sources:
       - "[[sources/background-agent/20261105/23-safe-retries-with-derived-ids.vtt#L326-L420]]"
@@ -80,8 +90,8 @@ updated: 2026-11-05
 
 ## Steps
 
-1. [why-retries-duplicate](make-retries-safe/why-retries-duplicate.md)
-2. [idempotency-at-the-effect-owner](make-retries-safe/idempotency-at-the-effect-owner.md)
-3. [derive-a-stable-action-id](make-retries-safe/derive-a-stable-action-id.md)
-4. [fence-writes-with-expected-version](make-retries-safe/fence-writes-with-expected-version.md)
-5. [cancel-duplicate-runs-and-unknown-outcomes](make-retries-safe/cancel-duplicate-runs-and-unknown-outcomes.md)
+1. [失敗落在效果與確認之間](make-retries-safe/why-retries-duplicate.md)
+2. [效果擁有者記得每個 actionId](make-retries-safe/idempotency-at-the-effect-owner.md)
+3. [永遠推導出同一個 action ID](make-retries-safe/derive-a-stable-action-id.md)
+4. [帶著觀察到的版本改狀態](make-retries-safe/fence-writes-with-expected-version.md)
+5. [取消不是補償](make-retries-safe/cancel-duplicate-runs-and-unknown-outcomes.md)

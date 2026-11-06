@@ -71,7 +71,7 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
 
    Add `--skip-polish` when the run was invoked with it, so every step's `polishCommand` carries `--copy`.
 
-   Read the JSON. `steps[]` is the work: each entry carries `id`, `title` (may be `null`), `purpose`, `material`, `original`, `polish`, `plan`, `composeCommand`, `markCommand`, `polishCommand`, and `titleCommand`. `skipped[]` means the step already has a body; keep it out of the publisher batch. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
+   Read the JSON. `steps[]` is the work: each entry carries `id`, `purpose`, `material`, `original`, `polish`, `plan`, `composeCommand`, `markCommand`, `polishCommand`, and `titleCommand`. There is no `title`; the compose model chooses the H1. `skipped[]` means the step already has a body; keep it out of the publisher batch. A prepare failure drops that node from the rest of Article, Humanize, Generate, and Quiz; record its error and continue with the next node.
 
    **3b. Dispatch publishers.** Batch the prepared nodes in roadmap order by `max-subagents` and run the batches sequentially. By default one dispatch is one step: one `task` call per ready step in a single message, `subagent_type: publisher`, the [Publisher-prompt](#publisher-prompt) filled in for that step. With `-article-per-node` one dispatch is one node: one `task` call per node carrying that node's ready steps in order. Give a dispatch only the steps it owns — never another node's article, plan, or source material. Inside a dispatch each step curates its material, runs `composeCommand` to write the original, reads it to write the plan, runs `markCommand` to insert the markers, runs `polishCommand` to produce `polish.md` and (unless `-skip-polish`) polish the plan with it, then runs `titleCommand`. Wait for every call and record `completed` or `failed`.
 
@@ -192,7 +192,7 @@ Dispatch every call with `subagent_type: general`. Fill `<NODE-ID>` and `<SUBJEC
 Build the step plan for one node. Node: <SUBJECT>/<NODE-ID>.
 
 Load the /nodes skill via the skill tool (name: "nodes") and follow it for node <NODE-ID>.
-When you reach step 4 — the checkpoint that asks the learner to confirm the plan — skip it. Do not ask questions and do not wait. Decide the step count, ids, one-sentence purposes, and source ranges yourself from the digests, then continue at step 5. You own the plan; the publisher chooses each title when `/article` writes the article.
+When you reach step 4 — the checkpoint that asks the learner to confirm the plan — skip it. Do not ask questions and do not wait. Decide the step count, ids, one-sentence purposes, and source ranges yourself from the digests, then continue at step 5. You own the plan; the compose model chooses each title when `/article` writes the article.
 
 Stop once the node container and every H1-only skeleton are written and `node scripts/verify.mjs --node <SUBJECT>/<NODE-ID>` exits 0. Do not write article prose; /article does that in a later phase.
 
@@ -216,7 +216,6 @@ Curate the material and write the image plan for every step below, then compose,
 
 Steps, in this order — finish one step completely before starting the next:
 - id: <STEP-ID>
-  Title: <TITLE or "choose one">
   Purpose: <PURPOSE>
   Material bundle: <MATERIAL>
   Original output: <ORIGINAL>
@@ -228,9 +227,9 @@ Steps, in this order — finish one step completely before starting the next:
 
 Curate each step from its own material only: do not carry one step's examples, terms, or conclusions into another.
 
-For each step, read its material bundle. Its `purpose` is that article's main theme; use the Read tool to read every file named in its `sources` in full, all the way to the end — the `locator` is only the cited range for provenance, not the reading range. Overwrite <MATERIAL> with your curated selection: keep `title`, `purpose`, and one entry per selected piece with `path`, `locator`, and `text` (the prose or code you picked, trimmed to support this article). Use <TITLE> exactly when one is given; when it says "choose one", pick a title from a heading or phrase that actually appears in the sources, translated faithfully, and do not invent one.
+For each step, read its material bundle. Its `purpose` is that article's main theme; use the Read tool to read every file named in its `sources` in full, all the way to the end — the `locator` is only the cited range for provenance, not the reading range. Overwrite <MATERIAL> with your curated selection: keep `purpose`, and one entry per selected piece with `path`, `locator`, and `text` (the prose or code you picked, trimmed to support this article). Do not write a `title`; the compose model chooses the H1 from the purpose. For `code`, quote only a 10-25 line excerpt, keeping the head and tail and replacing the omitted middle with a single `...` line; every remaining line must match the source verbatim.
 
-There is no `article_generate` tool in this repo and you do not write article prose. Run <COMPOSE-COMMAND> from the repo root: it reads your curated <MATERIAL> and calls the text model once to write <ORIGINAL> in the language recorded in `learn/<SUBJECT>/MEMORY.md` (this repo uses Traditional Chinese), grounded only in those sources, with no `<!--image:N-->` markers. It needs TEXT_API_KEY. If it fails, stop and report the error; do not edit the files to work around it and do not retry automatically.
+There is no `article_generate` tool in this repo and you do not write article prose. Run <COMPOSE-COMMAND> from the repo root: it reads your curated <MATERIAL> and calls the text model once to write <ORIGINAL> in the language recorded in `learn/<SUBJECT>/MEMORY.md` (this repo uses Traditional Chinese), grounded only in those sources, with no `<!--image:N-->` markers. The model writes the H1 itself. It needs TEXT_API_KEY. If it fails, stop and report the error; do not edit the files to work around it and do not retry automatically.
 
 After <ORIGINAL> exists, read it and decide 1-5 places where a figure genuinely helps the reader, spread them across the article. Write <PLAN> as a JSON array with one item per figure, in order; each item has `heading` (the section title from the article), optionally `anchor` (a short phrase copied verbatim from <ORIGINAL>, used only for placement), and `prompt` (a Traditional Chinese description of the concept — no art style, palette, background, or medium). Do not pad to 5.
 
@@ -242,7 +241,7 @@ After polish reports success, run <TITLE-COMMAND>. It copies the H1 into the nod
 
 Done means every step listed has all four: `composeCommand` reporting `composed`, `markCommand` reporting `marked`, `polishCommand` reporting `polished` (or `copied`), and `titleCommand` reporting `updated` or `unchanged`, with a marker count equal to its plan length. Stop at the first failure and leave that step's output for a human.
 
-Report back, per step: compose, mark, polish, and title-command status, chosen title, output path, plan length, marker count, and any error.
+Report back, per step: compose, mark, polish, and title-command status, the H1 the model chose, output path, plan length, marker count, and any error.
 ```
 
 ## Humanize-prompt

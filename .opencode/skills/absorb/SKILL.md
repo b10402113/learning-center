@@ -59,7 +59,7 @@ Load `learn/<subject>/nodes/<node-id>.md`. Parse the ordered `steps` array — t
 
 1. Read the node's `goal` and every existing step's `id` + `purpose`.
 2. Decide where the new step belongs in the teaching order: after the last step by default, or inserted where it logically builds on an earlier step.
-3. The new step needs a unique kebab-case `id`, a **one-sentence purpose (≤ 120 characters)**, and one or more `[[sources/<subject>/<file>#Lx-Ly]]` line ranges from the new digest. Do not write a title; the publisher chooses it when `/article` writes the step.
+3. The new step needs a unique kebab-case `id`, a **one-sentence purpose (≤ 120 characters)**, and one or more `[[sources/<subject>/<file>#Lx-Ly]]` line ranges from the new digest. Do not write a title; the compose model chooses it from the purpose when `/article` writes the step.
 
 ### 5c. Write the step entry
 

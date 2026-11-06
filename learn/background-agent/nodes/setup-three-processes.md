@@ -4,7 +4,7 @@ title: "設定：三個程序與故障注入"
 subject: background-agent
 tier: 2
 order: 6
-status: confirmed
+status: written
 goal: "能從乾淨 repo 啟動 checkout、operator、agent 三個程序，並用 fault flags 造出可觀察的事件。"
 digests:
   - 2-course-project-setup.md
@@ -17,6 +17,7 @@ prerequisites:
   - learn/background-agent/nodes/world-is-observed-state.md
 steps:
   - id: bootstrap-the-repo
+    author: "google/gemini-3.8-flash"
     title: "環境設定"
     purpose: "能從乾淨 repo 完成安裝、環境變數、資料庫推版與 preflight，確認三個程序有可啟動的基礎。"
     sources:
@@ -30,6 +31,7 @@ steps:
       - "[[sources/background-agent/20261105/lessons/index.md#L51-L55]]"
       - "[[sources/background-agent/20261105/scripts/preflight.mjs#L1-L54]]"
   - id: start-the-three-processes
+    author: "google/gemini-3.8-flash"
     title: "在三個終端機啟動系統"
     purpose: "能依序啟動 agent、operator 與 checkout，說出每個程序的埠與擁有的狀態，並用 stop 收乾淨。"
     sources:
@@ -42,6 +44,7 @@ steps:
       - "[[sources/background-agent/20261105/scripts/wait-for.mjs#L1-L18]]"
       - "[[sources/background-agent/20261105/scripts/stop.mjs#L1-L73]]"
   - id: inject-faults
+    author: "google/gemini-3.8-flash"
     title: "用啟動旗標建立四種故障情境"
     purpose: "能用 --fault 與觸發參數重現四種故障情境，並說出每次重啟如何換掉世界狀態。"
     sources:
@@ -52,6 +55,7 @@ steps:
       - "[[sources/background-agent/20261105/notes/simulator.md#L4-L5]]"
       - "[[sources/background-agent/20261105/notes/simulator.md#L8-L9]]"
   - id: move-between-lessons
+    author: "google/gemini-3.8-flash"
     title: "分支如何運作"
     purpose: "能在 lesson 分支間切換、用產生的 notes 追上進度，並在改動後跑 format、lint、typecheck。"
     sources:

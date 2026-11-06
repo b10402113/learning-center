@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildComposeSources,
   composeSourcePayload,
+  condenseCode,
   inferSourceLanguage,
   inferSourceType,
   materialSources,
@@ -76,6 +77,23 @@ test("restores code verbatim with a fence longer than any backtick run", () => {
   assert.match(restored, /````javascript\nconst fence = ```;\n````/);
   assert.match(restored, /Before\.\n\n<!-- source:/);
   assert.match(restored, /```;\n````\n\nAfter\./);
+});
+
+test("condenses long code to a head, an ellipsis, and a tail", () => {
+  const text = Array.from({ length: 40 }, (_, index) => `line ${index + 1};`).join("\n");
+  const short = condenseCode(text, 12);
+  const lines = short.split("\n");
+
+  assert.equal(lines.length, 12);
+  assert.equal(lines[0], "line 1;");
+  assert.equal(lines[7], "...");
+  assert.equal(lines.at(-1), "line 40;");
+  assert.doesNotMatch(short, /line 20;/);
+});
+
+test("leaves code at or under the limit untouched", () => {
+  const text = "const a = 1;\nconst b = 2;";
+  assert.equal(condenseCode(text, 24), text);
 });
 
 test("restores a formula placeholder as display math", () => {

@@ -1360,7 +1360,7 @@ function checkArticle(report, root, entry, step) {
           file,
           1,
           "step-title-missing",
-          `article has a body but steps[].title is missing; the publisher must write the H1 back to the node`,
+          `article has a body but steps[].title is missing; publish must write the H1 back to the node`,
         );
       }
     }

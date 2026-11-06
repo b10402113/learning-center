@@ -4,7 +4,7 @@ title: "等待迴圈"
 subject: background-agent
 tier: 2
 order: 11
-status: confirmed
+status: written
 goal: "能實作可重播的等待迴圈，並用同一個 run 完成 wait → 醒來 → 重新觀察 → 完成。"
 digests:
   - 18-waiting-loop.md
@@ -17,6 +17,7 @@ prerequisites:
   - learn/background-agent/nodes/wait-for-the-world.md
 steps:
   - id: wait-is-an-inner-loop
+    author: "google/gemini-3.8-flash"
     title: "每一次都重新檢查"
     purpose: "能說明等待為何是巢狀 while 迴圈，並用 check 計數與終止狀態檢查讓每輪可重播。"
     sources:
@@ -27,6 +28,8 @@ steps:
       - "[[sources/background-agent/20261105/18-waiting-loop.vtt#L175-L230]]"
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L99-L124]]"
   - id: poll-before-you-wait
+    author: "google/gemini-3.8-flash"
+    title: "通知可能搶在等待註冊之前"
     purpose: "能用 eventSequence 先檢查再等待，並用逾時重檢接住搶在註冊前落地的事件。"
     sources:
       - "[[sources/background-agent/20261105/18-waiting-loop.vtt#L145-L175]]"
@@ -38,6 +41,8 @@ steps:
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L118-L132]]"
       - "[[sources/background-agent/20261105/server/incident-data.ts#L89-L119]]"
   - id: wake-resumes-the-same-run
+    author: "google/gemini-3.8-flash"
+    title: "醒來後接著跑下一行"
     purpose: "能說明喚醒如何從同一 run 的下一行續跑、重新觀察並完成，而不是另開 run。"
     sources:
       - "[[sources/background-agent/20261105/19-testing-wait-resume.vtt#L1-L40]]"
@@ -52,6 +57,8 @@ steps:
       - "[[sources/background-agent/20261105/server/observe.ts#L1-L17]]"
       - "[[sources/background-agent/20261105/service/checkout.ts#L95-L108]]"
   - id: prove-the-loop-with-faults
+    author: "google/gemini-3.8-flash"
+    title: "故意弄壞它"
     purpose: "能用延遲恢復、重複告警與零秒恢復驗證等待迴圈，並解釋卡住與改走求助的原因。"
     sources:
       - "[[sources/background-agent/20261105/19-testing-wait-resume.vtt#L40-L80]]"
@@ -78,6 +85,6 @@ updated: 2026-11-05
 ## Steps
 
 1. [每一次都重新檢查](the-waiting-loop/wait-is-an-inner-loop.md)
-2. [poll-before-you-wait](the-waiting-loop/poll-before-you-wait.md)
-3. [wake-resumes-the-same-run](the-waiting-loop/wake-resumes-the-same-run.md)
-4. [prove-the-loop-with-faults](the-waiting-loop/prove-the-loop-with-faults.md)
+2. [通知可能搶在等待註冊之前](the-waiting-loop/poll-before-you-wait.md)
+3. [醒來後接著跑下一行](the-waiting-loop/wake-resumes-the-same-run.md)
+4. [故意弄壞它](the-waiting-loop/prove-the-loop-with-faults.md)

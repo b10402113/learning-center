@@ -67,8 +67,10 @@ prepare  writes one material bundle per missing step and lists the publisher job
          publisher's original becomes polish.md unchanged and the plan stays as written.
    compose  reads the publisher's curated material.json (sources with type and text)
          and calls the text model once to write output/<node>/<step>/original.md — no
-         image markers. Code and formula sources become placeholders that the CLI
-         replaces with verbatim fenced code or display math. It enforces an input size
+         image markers. The model chooses the H1 from the step's purpose; no title is
+         passed in. Code sources become placeholders that the CLI replaces with a
+         fenced excerpt (long blocks keep the head and tail, middle elided as ...)
+         and formula sources become display math. It enforces an input size
          cap (ARTICLE_MAX_MATERIAL_CHARS, default 120000) and retries when the model
          returns an empty body, no H1, or drops a placeholder.
 mark     reads original.md and the publisher's <step>.plan.json, inserts the
@@ -119,7 +121,6 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     const index = order.indexOf(entry.id);
     steps.push({
       id: entry.id,
-      title: entry.title ?? null,
       purpose: entry.purpose,
       status: "ready",
       index: index + 1,
@@ -216,7 +217,6 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
       files,
       sources: preparedSources,
       materialChars,
-      title: material.title ?? entry.title ?? null,
       purpose: material.purpose ?? entry.purpose,
     });
   }
@@ -225,7 +225,7 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
   }
   const client = await createTextClient();
   const maxAttempts = 3;
-  for (const { entry, files, sources, materialChars, title, purpose } of pending) {
+  for (const { entry, files, sources, materialChars, purpose } of pending) {
     let article = null;
     let draft = null;
     let retries = 0;
@@ -256,7 +256,6 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
                   role: "user",
                   content: JSON.stringify(
                     {
-                      title,
                       purpose,
                       sources: composeSourcePayload(sources),
                       ...(retry ? { retry } : {}),
@@ -279,7 +278,7 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
       }
       let normalized;
       try {
-        normalized = normalizeArticleText(response, title);
+        normalized = normalizeArticleText(response, null);
       } catch (error) {
         lastError = error;
         continue;
@@ -301,7 +300,7 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
       if (!draft || !hasArticleBody(salvaged.text)) {
         results.push({
           id: entry.id,
-          title,
+          title: entry.title ?? null,
           status: "failed",
           retries,
           error: lastError?.message ?? "model returned no article body after retries",
@@ -319,7 +318,7 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
       });
       results.push({
         id: entry.id,
-        title,
+        title: entry.title ?? null,
         status: "draft",
         article: relative(root, files.original),
         model,
@@ -335,7 +334,7 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
     writeJson(files.compose, { model, composed_at: new Date().toISOString(), status: "composed" });
     results.push({
       id: entry.id,
-      title,
+      title: entry.title ?? null,
       status: "composed",
       article: relative(root, files.original),
       model,

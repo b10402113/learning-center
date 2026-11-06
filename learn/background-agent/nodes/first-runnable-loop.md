@@ -4,7 +4,7 @@ title: "第一個可跑的迴圈"
 subject: background-agent
 tier: 2
 order: 7
-status: confirmed
+status: written
 goal: "能實作 observe → 目標檢查 → chooseAction → 執行，並用決策上限收尾。"
 digests:
   - 4-setting-up-the-workflow.md
@@ -20,6 +20,7 @@ prerequisites:
   - learn/background-agent/nodes/setup-three-processes.md
 steps:
   - id: trigger-to-observation
+    author: "google/gemini-3.8-flash"
     title: "事件是門鈴，不是世界狀態"
     purpose: "能從觸發事件取得 run，並在每輪重讀 checkout 的 /state 組出世界快照。"
     sources:
@@ -32,6 +33,7 @@ steps:
       - "[[sources/background-agent/20261105/server/agent-data.ts#L63-L121]]"
       - "[[sources/background-agent/20261105/server/observe.ts#L1-L17]]"
   - id: check-the-goal-before-spending-tokens
+    author: "google/gemini-3.8-flash"
     title: "不用 LLM 決定目標是否完成"
     purpose: "能用 goalSatisfied 對 world state 做確定性完成判定，達標就寫報告並結束 run。"
     sources:
@@ -46,6 +48,7 @@ steps:
       - "[[sources/background-agent/20261105/server/environment.ts#L7-L13]]"
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L87-L91]]"
   - id: ask-and-record-one-decision
+    author: "google/gemini-3.8-flash"
     title: "這裡沒有 messages"
     purpose: "能用無狀態的 chooseAction 取得結構化決策，並記錄 iteration 與 decision 作為稽核軌跡。"
     sources:
@@ -62,6 +65,7 @@ steps:
       - "[[sources/background-agent/20261105/server/agent-data.ts#L139-L154]]"
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L93-L97]]"
   - id: gate-and-execute-actions
+    author: "google/gemini-3.8-flash"
     title: "迴圈由我控制"
     purpose: "能在執行前攔下特殊動作，並用 actionId 與 expectedVersion 安全地呼叫 service。"
     sources:
@@ -78,6 +82,7 @@ steps:
       - "[[sources/background-agent/20261105/server/agent-workflow.ts#L141-L195]]"
       - "[[sources/background-agent/20261105/server/agent-data.ts#L156-L173]]"
   - id: run-it-to-the-decision-limit
+    author: "google/gemini-3.8-flash"
     title: "決策上限到了"
     purpose: "能從 dashboard 追蹤每輪觀察與決策，並說明決策上限如何收尾。"
     sources:

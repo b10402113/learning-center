@@ -589,7 +589,7 @@ test("a planned step may omit title and use an empty skeleton", (t) => {
   assert.deepEqual(failures(root), []);
 });
 
-test("an article body requires the publisher to write the title back", (t) => {
+test("an article body requires publish to write the title back", (t) => {
   const root = fixture(t);
   write(
     root,

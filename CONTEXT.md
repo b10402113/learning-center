@@ -24,7 +24,7 @@ _Avoid_: lesson, chapter, unit, node container file
 
 ## Step
 
-One entry in a node's `steps` array. A planned entry carries `id`, `purpose`, and `sources`; the publisher adds `title` when it writes the article. The array order is teaching order — there is no `deps`, `type`, or per-step `order`.
+One entry in a node's `steps` array. A planned entry carries `id`, `purpose`, and `sources`; the compose model decides the H1 from the purpose, and `publish`/`titleCommand` add `title` when the article is written. The array order is teaching order — there is no `deps`, `type`, or per-step `order`.
 _Avoid_: lesson step, unit, element
 
 ## Article
