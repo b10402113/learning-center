@@ -39,7 +39,7 @@ Each task message contains only:
 - That node's `steps[]` from the manifest (id, article, title, purpose, sources, current blocks).
 - The subject's `blocks[]` summary, so it can decide new / reuse / merge / fuzzy.
 - Its exact audit path: `learn/<subject>/output/blocks/<node>.audit.json`.
-- One line: audit 3–6 concepts per step; a short step may have 1–2 only with a `note`; more than 6 is capped, never split.
+- One line: initial audit 3–6 concepts per step; a short step may have 1–2 only with a `note`; more than 6 is capped, never split. The main agent trims the audit to the confirmed five-block selection later.
 - One line: labels are nouns (`Tool Calling`, `Bubble Sort`), sentences go in the block summary.
 - One line: sources are a subset of that step's sources and keep the `[[sources/...#Lx-Ly]]` form.
 - One line: dedupe against existing ids, aliases, and normalized labels; ambiguous overlaps are `fuzzy` and need a human.
@@ -128,7 +128,7 @@ Report the drift as printed, grouped by kind: a step newer than its block, a blo
 
 ## Completion
 
-- Every eligible written step has an audit and 3–6 concepts (shorter steps carry a `note`).
+- Every eligible written step has an audit matching the confirmed selection; a node links at most five blocks, and a step that keeps fewer than three concepts carries a `note`.
 - The subject-level table was confirmed once, or `--yes` was passed.
 - Confirmed `new` concepts have draft blocks; reused concepts link an existing block; every step `blocks:` matches its audit.
 - Merged ids live in the canonical block's `aliases`, and no file references the old id.

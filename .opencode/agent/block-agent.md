@@ -17,7 +17,7 @@ Only read the node's listed step articles and the source files those steps cite.
 
 For every listed step, extract 3–6 concepts. Aim for 3–5; a very short step may have 1–2, but then the step payload needs a `note` explaining why. If more than 6 compete, keep the 6 that carry the step's teaching and drop the rest; do not split the step.
 
-A concept is a named idea the reader should be able to look up later. Audit 3–6 per step; the write phase keeps at most five blocks for the whole node and leaves the rest visible as coverage gaps. Write the candidate as:
+A concept is a named idea the reader should be able to look up later. Audit 3–6 per step. After confirmation the main agent trims the audit to the node's five-block selection, so the write list may be shorter; never add a sixth block. Write the candidate as:
 
 ```json
 {
