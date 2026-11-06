@@ -6,6 +6,7 @@ import StepView from "./components/StepView.jsx";
 import SubjectsView from "./components/SubjectsView.jsx";
 import SubjectOverview from "./components/SubjectOverview.jsx";
 import BlockView from "./components/BlockView.jsx";
+import BlocksIndex from "./components/BlocksIndex.jsx";
 import PixelMark from "./components/PixelMark.jsx";
 import DotMatrix from "./components/DotMatrix.jsx";
 import {
@@ -13,6 +14,7 @@ import {
   parsePath,
   pathFor,
   pathForBlock,
+  pathForBlocks,
 } from "./lib/route.mjs";
 
 // Lazy loaders — each subject's course JSON is code-split and fetched on demand.
@@ -162,7 +164,7 @@ function MoonIcon() {
 
 export default function App() {
   const [route, setRoute] = useState(initialRoute);
-  const { subjectId, nodeId, stepId, blockId, blockRoute } = route;
+  const { subjectId, nodeId, stepId, blockId, blockRoute, blocksRoute } = route;
   const [course, setCourse] = useState(null);
   const [block, setBlock] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -170,7 +172,9 @@ export default function App() {
   const [theme, setTheme] = useState(initialTheme);
   const cacheRef = useRef({});
   const blockCacheRef = useRef({});
-  const routeKey = `${subjectId ?? ""}/${nodeId ?? ""}/${stepId ?? ""}/${blockId ?? ""}`;
+  const routeKey = `${subjectId ?? ""}/${nodeId ?? ""}/${stepId ?? ""}/${blockId ?? ""}${
+    blocksRoute ? "/blocks" : ""
+  }`;
 
   // Load the selected subject's data (async, cached). The index has no course.
   useEffect(() => {
@@ -327,6 +331,11 @@ export default function App() {
     if (window.location.pathname !== next) history.pushState(null, "", next);
   };
 
+  const pushBlocksPath = (sid) => {
+    const next = pathForBlocks(sid);
+    if (window.location.pathname !== next) history.pushState(null, "", next);
+  };
+
   // Markdown and card links stay inside the app: parse the href, swap state,
   // push history, and return true so the caller can cancel the full reload.
   const navigateHref = (href) => {
@@ -344,7 +353,8 @@ export default function App() {
 
     setRoute({ ...parsed, subjectId: nextSubject });
     setSidebarOpen(false);
-    if (parsed.blockRoute) pushBlockPath(nextSubject, parsed.blockId);
+    if (parsed.blocksRoute) pushBlocksPath(nextSubject);
+    else if (parsed.blockRoute) pushBlockPath(nextSubject, parsed.blockId);
     else pushPath(nextSubject, parsed.nodeId, parsed.stepId);
     return true;
   };
@@ -546,6 +556,12 @@ export default function App() {
                     block={block?.id === blockId ? block : null}
                     onNavigate={navigateHref}
                   />
+                ) : blocksRoute ? (
+                  <BlocksIndex
+                    key={`${subjectId}/blocks`}
+                    course={course}
+                    onNavigate={navigateHref}
+                  />
                 ) : step ? (
                   <StepView
                     key={step.id}
@@ -563,7 +579,11 @@ export default function App() {
                     onSubject={selectSubject}
                   />
                 ) : (
-                  <SubjectOverview key={course.subject} course={course} />
+                  <SubjectOverview
+                    key={course.subject}
+                    course={course}
+                    onNavigate={navigateHref}
+                  />
                 )}
               </div>
             </div>

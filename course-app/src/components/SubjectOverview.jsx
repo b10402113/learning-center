@@ -1,6 +1,7 @@
 import DotMatrix from "./DotMatrix.jsx";
 import RoadmapCanvas from "./RoadmapCanvas.jsx";
-import { pathFor } from "../lib/route.mjs";
+import { followInternalLink } from "../lib/navigation.mjs";
+import { pathFor, pathForBlocks } from "../lib/route.mjs";
 
 function NodeLink({ course, node }) {
   return (
@@ -29,11 +30,14 @@ function NodeLink({ course, node }) {
  * screens the same data falls back to a tier list, where a scaled diagram
  * would be unreadable.
  */
-export default function SubjectOverview({ course }) {
+export default function SubjectOverview({ course, onNavigate = null }) {
   const totalSteps = course.nodes.reduce(
     (sum, node) => sum + node.steps.length,
     0
   );
+  const blocks = Array.isArray(course.blocks) ? course.blocks : [];
+  const blockEdges = Array.isArray(course.blockEdges) ? course.blockEdges : [];
+  const blocksHref = pathForBlocks(course.subject);
   return (
     <article>
       <nav
@@ -67,7 +71,39 @@ export default function SubjectOverview({ course }) {
             <span className="border border-ink bg-surface px-2 py-1">
               {totalSteps} 個步驟
             </span>
+            {blocks.length > 0 && (
+              <span className="border border-ink bg-surface px-2 py-1">
+                {blocks.length} 個知識點
+              </span>
+            )}
           </div>
+          <a
+            href={blocksHref}
+            onClick={(event) => {
+              if (followInternalLink(event, blocksHref, onNavigate)) {
+                event.preventDefault();
+              }
+            }}
+            className="group mt-4 flex flex-wrap items-center gap-3 border-2 border-ink bg-surface px-3 py-2 shadow-[4px_4px_0_var(--robo-shadow)] transition-colors hover:border-accent sm:inline-flex"
+          >
+            <span
+              aria-hidden="true"
+              className="grid size-8 shrink-0 place-items-center border-2 border-ink bg-shade font-mono text-[13px] text-ink"
+            >
+              ◉
+            </span>
+            <span className="min-w-0">
+              <span className="block font-label text-[9px] uppercase tracking-[0.16em] text-ink-soft">
+                Knowledge Graph
+              </span>
+              <span className="block text-[0.95rem] font-medium leading-snug text-ink transition-colors group-hover:text-accent">
+                知識圖
+              </span>
+            </span>
+            <span className="font-mono text-[10px] tabular-nums text-ink-soft">
+              {blocks.length} 知識點 · {blockEdges.length} 條關係
+            </span>
+          </a>
         </div>
         <div className="hidden sm:block">
           <div className="border-2 border-ink bg-surface p-2 shadow-[6px_6px_0_var(--robo-shadow)]">

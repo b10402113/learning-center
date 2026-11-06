@@ -5,6 +5,7 @@ import {
   parsePath,
   pathFor,
   pathForBlock,
+  pathForBlocks,
 } from "./route.mjs";
 
 const BASE = "/learning-center";
@@ -72,11 +73,24 @@ test("parses one block's detail page", () => {
   });
 });
 
+test("parses the block index route", () => {
+  assert.deepEqual(parsePath("/learning-center/demo/blocks", BASE), {
+    subjectId: "demo",
+    nodeId: null,
+    stepId: null,
+    blocksRoute: true,
+  });
+});
+
 test("builds a block path", () => {
   assert.equal(
     pathForBlock("demo", "agent", BASE),
     "/learning-center/demo/blocks/agent"
   );
+});
+
+test("builds a block index path", () => {
+  assert.equal(pathForBlocks("demo", BASE), "/learning-center/demo/blocks");
 });
 
 test("builds encoded paths with and without a step", () => {

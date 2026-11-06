@@ -11,8 +11,9 @@ export function indexRoute() {
 
 /**
  * Parse `/`, `/<subject>`, `/<subject>/<node>`, `/<subject>/<node>/<step>`,
- * plus one block's detail page `/<subject>/blocks/<block>`. Returns null for
- * anything else. The `blocks` segment is reserved for block routes.
+ * the block index `/<subject>/blocks`, and one block's detail page
+ * `/<subject>/blocks/<block>`. Returns null for anything else. The `blocks`
+ * segment is reserved for block routes.
  */
 export function parsePath(pathname = "/", base = BASE) {
   const prefix = String(base).replace(/\/+$/, "");
@@ -27,14 +28,21 @@ export function parsePath(pathname = "/", base = BASE) {
   if (parts.length > 3) return null;
 
   const subjectId = decodeURIComponent(parts[0]);
-  if (parts[1] === "blocks" && parts[2]) {
-    return {
-      subjectId,
-      nodeId: null,
-      stepId: null,
-      blockId: decodeURIComponent(parts[2]),
-      blockRoute: true,
-    };
+  if (parts[1] === "blocks") {
+    return parts[2]
+      ? {
+          subjectId,
+          nodeId: null,
+          stepId: null,
+          blockId: decodeURIComponent(parts[2]),
+          blockRoute: true,
+        }
+      : {
+          subjectId,
+          nodeId: null,
+          stepId: null,
+          blocksRoute: true,
+        };
   }
 
   return {
@@ -56,4 +64,9 @@ export function pathFor(subjectId, nodeId, stepId = null, base = BASE) {
 /** Build the path for one block's detail page. */
 export function pathForBlock(subjectId, blockId, base = BASE) {
   return pathFor(subjectId, "blocks", blockId, base);
+}
+
+/** Build the path for a subject's block index and knowledge graph. */
+export function pathForBlocks(subjectId, base = BASE) {
+  return pathFor(subjectId, "blocks", null, base);
 }

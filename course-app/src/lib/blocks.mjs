@@ -5,10 +5,38 @@ const BLOCK_TYPE_LABELS = {
   contrast: "對比",
 };
 
+const BLOCK_TYPE_MARKS = {
+  concept: "●",
+  procedure: "▤",
+  principle: "◆",
+  contrast: "⇄",
+};
+
+const BLOCK_TYPE_FILLS = {
+  concept: "var(--color-surface)",
+  procedure: "var(--color-shade)",
+  principle: "var(--color-accent)",
+  contrast: "var(--color-dark)",
+};
+
 export const RAIL_LIMIT = 6;
 
 export function blockTypeLabel(type) {
   return BLOCK_TYPE_LABELS[type] || type || "概念";
+}
+
+/** A short glyph for graph nodes; colours alone would not be accessible. */
+export function blockTypeMark(type) {
+  return BLOCK_TYPE_MARKS[type] || BLOCK_TYPE_MARKS.concept;
+}
+
+export function blockTypeFill(type) {
+  return BLOCK_TYPE_FILLS[type] || BLOCK_TYPE_FILLS.concept;
+}
+
+/** Ink that stays legible on top of the type's fill. */
+export function blockTypeInk(type) {
+  return type === "contrast" ? "var(--color-paper)" : "var(--color-ink)";
 }
 
 export function blockIndex(course) {

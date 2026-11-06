@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { blockIndex, blockTypeLabel, railBlocks } from "./blocks.mjs";
+import {
+  blockIndex,
+  blockTypeFill,
+  blockTypeInk,
+  blockTypeLabel,
+  blockTypeMark,
+  railBlocks,
+} from "./blocks.mjs";
 
 const course = {
   blocks: [
@@ -33,6 +40,17 @@ test("labels the four block types and falls back to the raw type", () => {
   assert.equal(blockTypeLabel("contrast"), "對比");
   assert.equal(blockTypeLabel("custom"), "custom");
   assert.equal(blockTypeLabel(null), "概念");
+});
+
+test("gives every type a mark, a fill, and a legible ink", () => {
+  for (const type of ["concept", "procedure", "principle", "contrast"]) {
+    assert.ok(blockTypeMark(type));
+    assert.match(blockTypeFill(type), /var\(--color-/);
+    assert.match(blockTypeInk(type), /var\(--color-/);
+  }
+  assert.equal(blockTypeMark("custom"), "●");
+  assert.equal(blockTypeFill("custom"), "var(--color-surface)");
+  assert.equal(blockTypeInk("contrast"), "var(--color-paper)");
 });
 
 test("adds a prerequisite that the step does not cover and marks it", () => {
