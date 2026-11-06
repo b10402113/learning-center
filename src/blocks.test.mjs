@@ -94,10 +94,18 @@ test("a label must stay short and must not end with punctuation", () => {
   assert.ok(ids(validateBlockFrontmatter(block({ label: "Tool Calling." }), "test")).includes("block-label"));
 });
 
-test("a summary is required and stays within the limit", () => {
+test("a summary is required, stays within the limit, and is one sentence", () => {
   assert.ok(ids(validateBlockFrontmatter(block({ summary: "" }), "test")).includes("block-summary"));
   assert.ok(
     ids(validateBlockFrontmatter(block({ summary: "字".repeat(121) }), "test")).includes("block-summary"),
+  );
+  assert.ok(
+    ids(validateBlockFrontmatter(block({ summary: "第一句。第二句。" }), "test")).includes("block-summary"),
+  );
+  assert.ok(
+    !ids(validateBlockFrontmatter(block({ summary: "第一句，含逗號與分號；仍然是同一句。" }), "test")).includes(
+      "block-summary",
+    ),
   );
 });
 
@@ -127,6 +135,17 @@ test("required sections depend on the block type", () => {
     [],
   );
   assert.ok(validateBlockSections({ ...block({ type: "procedure" }), body }).length > 0);
+});
+
+test("required sections keep their order and extra sections may follow", () => {
+  const sections = BLOCK_SECTIONS.concept;
+  const reordered = [sections[1], sections[0], ...sections.slice(2)]
+    .map((section) => `## ${section}\n\nText.`)
+    .join("\n\n");
+  assert.deepEqual(ids(validateBlockSections({ ...block(), body: reordered })), ["block-section"]);
+
+  const withExtra = [...sections, "延伸閱讀"].map((section) => `## ${section}\n\nText.`).join("\n\n");
+  assert.deepEqual(validateBlockSections({ ...block(), body: withExtra }), []);
 });
 
 test("relations must resolve, stay inside the subject, and avoid self", () => {

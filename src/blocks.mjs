@@ -18,6 +18,7 @@ export const BLOCK_SECTIONS = {
 
 const SENTENCE_PUNCTUATION = /[。！？；?!;]/;
 const SENTENCE_START = /^(?:如何|為什麼|怎麼|是否|先|請|把|讓|避免|需要)/;
+const SENTENCE_END = /[。！？!?]/;
 const TRAILING_PUNCTUATION = /[.。！？；;,，、]$/;
 const INLINE_LINK = /\[\[([^\]]+)\]\]/g;
 const SOURCE_LINK = /^\[\[\s*(sources\/[^\]#]+?)(?:\s*#\s*([^\]]+?))?\s*\]\]$/;
@@ -62,6 +63,33 @@ export function labelProblems(label) {
   }
   if (TRAILING_PUNCTUATION.test(value)) {
     problems.push(`label "${value}" must not end with sentence punctuation`);
+  }
+  return problems;
+}
+
+/**
+ * A summary is the one place a full sentence belongs, and only one. Returns
+ * one message per broken rule so verify and the audit checker share wording.
+ */
+function summaryProblems(summary) {
+  if (typeof summary !== "string" || !summary.trim()) {
+    return ["summary is required and must be one sentence"];
+  }
+  const value = summary.trim();
+  const problems = [];
+  const length = characterCount(value);
+  if (length > BLOCK_SUMMARY_MAX) {
+    problems.push(`summary is ${length} characters; keep it to ${BLOCK_SUMMARY_MAX} or fewer`);
+  }
+  if (value.includes("\n")) {
+    problems.push("summary must be a single line");
+  }
+  const withoutClosingQuotes = value.replace(/[」』”’"')]+$/u, "");
+  const withoutFinalStop = SENTENCE_END.test(withoutClosingQuotes)
+    ? withoutClosingQuotes.slice(0, -1)
+    : withoutClosingQuotes;
+  if (SENTENCE_END.test(withoutFinalStop)) {
+    problems.push("summary must be one sentence; move extra sentences into the body");
   }
   return problems;
 }
@@ -164,17 +192,8 @@ export function validateBlockFrontmatter(block, subject, blockIds = new Set()) {
     fail("block-label", message);
   }
 
-  if (typeof data.summary !== "string" || !data.summary.trim()) {
-    fail("block-summary", "summary is required and must be one sentence");
-  } else {
-    const summary = data.summary.trim();
-    const length = characterCount(summary);
-    if (length > BLOCK_SUMMARY_MAX) {
-      fail("block-summary", `summary is ${length} characters; keep it to ${BLOCK_SUMMARY_MAX} or fewer`);
-    }
-    if (summary.includes("\n")) {
-      fail("block-summary", "summary must be a single line");
-    }
+  for (const message of summaryProblems(data.summary)) {
+    fail("block-summary", message);
   }
 
   if (data.aliases !== undefined && data.aliases !== null) {
@@ -242,14 +261,27 @@ export function validateBlockSections(block) {
   const type = String(block.data?.type);
   const required = BLOCK_SECTIONS[type];
   if (!required) return [];
-  const headings = new Set(blockHeadings(block.body));
-  return required
-    .filter((section) => !headings.has(section))
+  const headings = blockHeadings(block.body);
+  const missing = required
+    .filter((section) => !headings.includes(section))
     .map((section) => ({
       checkId: "block-section",
       message: `a ${type} block needs a "## ${section}" section`,
       line: 1,
     }));
+  if (missing.length > 0) return missing;
+  const positions = required.map((section) => headings.indexOf(section));
+  const inOrder = positions.every((position, index) => index === 0 || position > positions[index - 1]);
+  if (!inOrder) {
+    return [
+      {
+        checkId: "block-section",
+        message: `a ${type} block must keep its required sections in this order: ${required.join(" / ")}`,
+        line: 1,
+      },
+    ];
+  }
+  return [];
 }
 
 function prerequisiteGraph(blocks) {

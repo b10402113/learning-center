@@ -31,6 +31,7 @@ This repo is a personal learning system. You put raw material in `sources/`; the
     → /polish-article <subject>/<node-id> [--step <id>] [--force]
     → /generate-images <subject>/<node-id> [--step <id>] [--force] [--max-parallel <n>]
     → /quiz-gen <subject>/<node-id> [--step <id>] [--force]
+    → /blocks <subject> [--node <id>] [--audit | --write | --report | --check]
 
 /batch-nodes <subject> [tier<N> | <node-id> ...] [flags]
                                      ← optional bulk path: /nodes → /article
@@ -48,7 +49,8 @@ This repo is a personal learning system. You put raw material in `sources/`; the
 7. **`/generate-images`** — Reads the plan and the article's markers, generates or reuses `image-N.webp`, and replaces each marker with an uncaptioned image line. It never plans or edits prose.
 8. **`/quiz-gen`** — One `quiz-agent` per node reads its published steps and writes 3–8 single-choice questions per step; `scripts/quiz.mjs` validates and writes `<step>.quiz.json`; the viewer renders them after the article.
 9. **`/batch-nodes`** — Optional bulk path over a tier or node list: Nodes → Article → Polish → Generate → Quiz. It resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan, and `-skip-images` skips rendering.
-10. **`/absorb`** — Integrate `pending` digests by appending steps or creating nodes, resolve each digest to `absorbed` or `skipped`, then roll affected nodes back to `confirmed`.
+10. **`/blocks`** — Audits written steps into 3–6 concepts each, shows one subject-level confirmation table, then creates `draft` blocks, links each step's `blocks:`, rebuilds `coverage.json`, and reports coverage and drift.
+11. **`/absorb`** — Integrate `pending` digests by appending steps or creating nodes, resolve each digest to `absorbed` or `skipped`, then roll affected nodes back to `confirmed`.
 
 `/practice` (generated practice sets) is out of scope. Generated questions live in the `<step>.quiz.json` sidecar; the legacy `quiz` block still renders for old content.
 
@@ -85,7 +87,7 @@ node scripts/verify.mjs --subject agent-harness
 cd course-app && npm test && npm run build
 ```
 
-`verify` is a hard format gate covering node frontmatter, step/article pairing, source locators and digest coverage, code provenance, quiz sidecars, images, and relative links. See [docs/reference/verify.md](docs/reference/verify.md).
+`verify` is a hard format gate covering node frontmatter, step/article pairing, source locators and digest coverage, block format and coverage consistency, code provenance, quiz sidecars, images, and relative links. See [docs/reference/verify.md](docs/reference/verify.md).
 
 ## Design principles
 
@@ -94,5 +96,6 @@ cd course-app && npm test && npm run build
 - **The step is the article.** course-app renders the Markdown directly.
 - **Everything is cited.** Substantive claims trace to immutable source lines.
 - **Code is source-grounded.** Quote it verbatim or mark it `derived`.
+- **Blocks are standalone knowledge points.** Steps link to canonical blocks through `blocks:`, and `coverage.json` measures how much of the course has one.
 - **Images are rendered from a plan.** The `publisher` decides placement while writing each step; `/article` leaves markers and `/generate-images` writes the WebP files.
 - **Quizzes are sidecars.** `/quiz-gen` writes `<step>.quiz.json`; the article Markdown is never modified.

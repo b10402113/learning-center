@@ -2045,17 +2045,27 @@ test("block id must equal the filename and stay kebab-case", (t) => {
   assert.ok(failures(root).includes("block-slug"));
 });
 
-test("block summary is required and bounded", (t) => {
+test("block summary is required, bounded, and one sentence", (t) => {
   const empty = blockFixture(t, { summary: "" });
   assert.ok(failures(empty).includes("block-summary"));
 
   const long = blockFixture(t, { summary: "字".repeat(121) });
   assert.ok(failures(long).includes("block-summary"));
+
+  const twoSentences = blockFixture(t, { summary: "第一句。第二句。" });
+  assert.ok(failures(twoSentences).includes("block-summary"));
 });
 
 test("each block type needs its required sections", (t) => {
   const root = fixture(t);
   addBlock(root, { sections: CONCEPT_SECTIONS.filter((section) => section !== "例子") });
+  assert.ok(failures(root).includes("block-section"));
+});
+
+test("required block sections keep their order", (t) => {
+  const root = fixture(t);
+  const reordered = [CONCEPT_SECTIONS[1], CONCEPT_SECTIONS[0], ...CONCEPT_SECTIONS.slice(2)];
+  addBlock(root, { sections: reordered });
   assert.ok(failures(root).includes("block-section"));
 });
 

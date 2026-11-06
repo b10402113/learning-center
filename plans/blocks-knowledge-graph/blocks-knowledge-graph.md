@@ -47,7 +47,7 @@ Phase 1（skill、schema、verify、block 頁、右側欄）與 Phase 2（graph�
 
 | # | 決策 | 說明 |
 | --- | --- | --- |
-| D1 | block 是分型知識點 | `concept` / `procedure` / `principle` / `contrast`；以 `concept` 為主，每個 step 目標 3–6 個 |
+| D1 | block 是分型知識點 | `concept` / `procedure` / `principle` / `contrast`；以 `concept` 為主，每個 step 目標 3–6 個；確認後一個 node 最多連結 5 個 block |
 | D2 | block 是獨立層 | step 仍是教學主體；block 從 step 與原始碼蒸餾，內容可重複，但必須 standalone |
 | D3 | step 端存連結 | node 的 step entry 增加 `blocks: [id]`；build 反推 backlinks |
 | D4 | block 內文固定骨架 | 每個 type 有自己的必要 `##` 區塊 |
@@ -307,7 +307,7 @@ steps:
 - **Course coverage** = `|{c ∈ D : 至少一個 pair 被 cover}| / |D|`
   - 回答「整門課還缺哪些知識點」。
 - **目前 block 數** = coverage.json 中 distinct 非 null `block` id 數。
-- **補齊後 projected block 數** = `|D|`；預設 1 concept = 1 block；`contrast` / 不可分割 `procedure` 可一 block 對多 concept，報告扣掉節省量。
+- **補齊後 projected block 數** = `|D|`；預設 1 concept = 1 block；當一個 block 覆蓋多個 concept slug（例如 `contrast`、不可分割的 `procedure`，或 alias）時，報告扣掉節省量。
 - **Reuse factor** = `|P| / |D|`。
 
 範例：
@@ -384,6 +384,7 @@ steps:
 
 - 只處理 `written` 且有文章 body 的 step；其餘跳過並列在報告。
 - 每步目標 3–6 個 concept；短 step 允許 1–2 並在 coverage.json 寫 `note`。
+- 確認後一個 node 最多連結 5 個 block；被裁到 5 個以下的 step 在 coverage.json 寫 `note` 說明。
 - 超過 6 個只取最重要的 6 個並標 `concept-overflow`，不自動拆 step。
 
 ### 9.6 `block-agent`
@@ -513,7 +514,7 @@ Phase 1 與 Phase 2 都在這次範圍；照以下順序落地。
    - 新增 `.opencode/skills/blocks/SKILL.md`。
    - 新增 `.opencode/agent/block-agent.md`。
 4. **Pilot**
-   - 選一個 subject 跑 `/blocks`（預設 `agent-harness2`）。
+   - 選一個 subject 跑 `/blocks`（本實作用 `ai-agent-workflows`）。
    - 確認 audit 表格、coverage 數字、block 品質。
 5. **course-app**
    - 改 `build-data.mjs` 產生 subject summary、block JSON、graph edge。
@@ -558,7 +559,7 @@ Phase 1 與 Phase 2 都在這次範圍；照以下順序落地。
 
 ### 14.3 驗收標準
 
-- [ ] 每個 written step 都有 3–6 個 concept（短 step 可 1–2 並註明原因）。
+- [ ] 每個 written step 的 audit 有 3–6 個 concept；確認後 node 最多連結 5 個 block，短 step 或被裁減的 step 在 coverage 註明原因。
 - [ ] 每個 concept 的 `label` 都是名詞／專有名詞。
 - [ ] block 不依賴 step 也能讀懂。
 - [ ] step `blocks`、coverage.json、block frontmatter 三邊一致。
@@ -589,5 +590,5 @@ Phase 1 與 Phase 2 都在這次範圍；照以下順序落地。
 
 ## 16. 待確認
 
-- Pilot subject：預設 `agent-harness2`；若要換，實作前指定。
+- Pilot subject：實作用 `ai-agent-workflows`（原預設為 `agent-harness2`）。
 - 這份計畫是否定稿。

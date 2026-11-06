@@ -141,7 +141,7 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `block-status` | `status` is `draft` / `reviewed` |
 | `block-title` | `title` is a non-empty string |
 | `block-label` | `label` is non-empty, ≤ 40 characters, one line, at most 4 words, does not start like a sentence, and carries no sentence punctuation |
-| `block-summary` | `summary` is non-empty, one line, and ≤ 120 characters |
+| `block-summary` | `summary` is non-empty, one line, one sentence, and ≤ 120 characters |
 | `block-alias-type` | `aliases` is a list of kebab-case ids |
 | `block-alias-duplicate` | no alias repeats inside a block |
 | `block-alias-conflict` | no alias collides with another block id |
@@ -149,7 +149,7 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `block-prerequisite-subject` / `block-related-subject` | a relation is a bare id in the same subject |
 | `block-prerequisite-duplicate` / `block-related-duplicate` | no relation repeats |
 | `block-prerequisite-self` / `block-related-self` | a block never relates to itself |
-| `block-section` | the block body has every `##` section required by its type |
+| `block-section` | the block body has every `##` section required by its type, in order; extra sections may follow |
 | `block-sources-type` | `sources` is a list when present |
 | `block-sources-empty` | a block has at least one source |
 | `block-prerequisite-missing` / `block-related-missing` | every relation target exists |

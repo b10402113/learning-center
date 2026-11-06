@@ -81,12 +81,12 @@ Work the **frontier**：任何 blocker 都完成的票就可以開始。這是�
 
 **Blocked by:** 3. Block 詳情頁與 step 右側欄；4. Block 索引頁與知識圖
 
-- [ ] AGENTS.md 的架構圖、schema、pipeline、skills 表、operations 都包含 block 與 `/blocks`，且不再提 edges
-- [ ] README、verify 文件與 active 文件沒有 edges 殘留；歷史 ADR/spec 保留
-- [ ] pilot subject 的 block、step `blocks:`、coverage.json 三方一致
-- [ ] step 右側欄、block 詳情頁、索引頁、知識圖都可用
-- [ ] `node scripts/verify.mjs --subject <pilot>` 綠
-- [ ] coverage `report` 與 `check` 輸出可讀且數字正確
-- [ ] course-app `gen` / `test` / `build` 全綠
-- [ ] 沒有 stale generated data；git diff 只有預期檔案
-- [ ] 文件中的 label 範例都是名詞／專有名詞，沒有句子型 label
+- [x] AGENTS.md 的架構圖、schema、pipeline、skills 表、operations 都包含 block 與 `/blocks`，且不再提 edges
+- [x] README、verify 文件與 active 文件沒有 edges 殘留；歷史 ADR/spec 保留
+- [x] pilot subject 的 block、step `blocks:`、coverage.json 三方一致
+- [x] step 右側欄、block 詳情頁、索引頁、知識圖都可用
+- [x] `node scripts/verify.mjs --subject <pilot>` 綠
+- [x] coverage `report` 與 `check` 輸出可讀且數字正確
+- [x] course-app `gen` / `test` / `build` 全綠
+- [x] 沒有 stale generated data；git diff 只有預期檔案
+- [x] 文件中的 label 範例都是名詞／專有名詞，沒有句子型 label
