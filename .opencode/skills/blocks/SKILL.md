@@ -70,7 +70,7 @@ Read the audit files and build one table, grouped by node:
 
 Above the table, print counts: eligible steps, concepts, `new` / `reuse` / `merge` / `fuzzy`, uncovered candidates, short steps, overflow steps. Below it, list every merge candidate and every fuzzy overlap with a one-line recommendation.
 
-A node may link **at most five blocks across all its steps**. When a node's table has more than five `new`/`reuse` concepts, keep the five that carry the node's goal and leave the rest uncovered in coverage; do not silently drop them from the audit. Show the selected five and the uncovered remainder in the table.
+A node may link **at most five blocks across all its steps**. When a node's table has more than five `new`/`reuse` concepts, keep the five that carry the node's goal. Show the selected five and the deferred remainder in the confirmation table. After confirmation, rewrite that node's audit to only the selected concepts (with a step `note` when a step keeps fewer than three) so coverage measures the agreed plan, not the raw concept inventory.
 
 Ask the learner to confirm the whole table once. `--yes` skips the question. If `--audit` was passed, stop here. If the learner rejects or edits rows, adjust the audit files or the match kinds and re-present; do not start writing.
 
@@ -92,7 +92,7 @@ node scripts/blocks.mjs merge --subject <subject> --from <old-id> --into <canoni
 
 The dry run prints every file the merge will touch; show it before applying. The applied merge rewrites all step `blocks:` entries and all block `prerequisites` / `related`, removes the old block file, and recomputes coverage. Do not perform this rewrite by hand.
 
-Select at most five blocks per node from the confirmed table. Assign each selected `new` concept to exactly one owning node (the first node that needs it); unselected concepts stay in the audit and appear as uncovered in coverage. Dispatch one `block-agent` per node again, in batches sized by the session's subagent budget (default 5), with mode `write`:
+Select at most five blocks per node from the confirmed table. Assign each selected `new` concept to exactly one owning node (the first node that needs it), and rewrite the node's audit to the selected concepts before `apply`; deferred concepts are outside this pilot's coverage. Dispatch one `block-agent` per node again, in batches sized by the session's subagent budget (default 5), with mode `write`:
 
 - The node's steps and the confirmed concept list for that node.
 - For `reuse` / `merge`: the target block id to link, and no block file to create.
