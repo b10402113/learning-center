@@ -60,6 +60,7 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `step-block-id` | every `blocks` entry is a non-empty kebab-case id |
 | `step-block-duplicate` | a step lists each block at most once |
 | `step-block-missing` | every step `blocks` id exists under `learn/<subject>/blocks/` |
+| `node-blocks-limit` | a node links at most five distinct blocks across all its steps |
 | `steps-flat` | step entries declare no `deps`, `type`, or `order` |
 | `steps-duplicate` | step ids are unique within a node |
 | `node-missing` | the requested `--node` exists |

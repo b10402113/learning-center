@@ -1,18 +1,17 @@
 ---
 id: fixed-workflow
-title: "Fixed Workflow（固定流程）"
-label: "Fixed Workflow"
+title: Fixed Workflow（固定流程）
+label: Fixed Workflow
 subject: ai-agent-workflows
 type: concept
 status: draft
-summary: "流程的方塊與箭頭在執行前由程式碼畫好，模型只能在既定步驟內做判斷。"
+summary: 流程的方塊與箭頭在執行前由程式碼畫好，模型只能在既定步驟內做判斷。
 aliases: []
 prerequisites: []
-related:
-  - workflow
-  - orchestrator-workers
+related: []
 sources:
-  - "[[sources/ai-agent-workflows/20261105/course/11-parallelization-other-workflows.txt#L211-L269]]"
+  - >-
+    [[sources/ai-agent-workflows/20261105/course/11-parallelization-other-workflows.txt#L211-L269]]
 created: 2026-11-06
 updated: 2026-11-06
 ---
@@ -46,4 +45,4 @@ Fixed workflow 是一種流程結構在執行前就由開發者寫死在程式�
 
 ## 進階
 
-真正需要放手的情況，是分支數量無法事先窮舉，例如資格審核規則每年變動、程式修改規模從一行到上千行。那時才把畫箭頭的權力交給模型，見 [[orchestrator-workers]] 與 [[workflow-agent-handoff]]。
+真正需要放手的情況，是分支數量無法事先窮舉，例如資格審核規則每年變動、程式修改規模從一行到上千行。那時才把畫箭頭的權力交給模型，見 Orchestrator-Workers 與 Workflow-Agent Handoff。

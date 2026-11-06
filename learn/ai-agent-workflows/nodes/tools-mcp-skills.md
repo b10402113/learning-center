@@ -1,11 +1,11 @@
 ---
 id: tools-mcp-skills
-title: "Agent 能做什麼：tools、MCP 與 skills"
+title: Agent 能做什麼：tools、MCP 與 skills
 subject: ai-agent-workflows
 tier: 1
 order: 2
 status: written
-goal: "判斷一個能力該做成 tool、MCP server 還是 skill，並寫出模型看得懂的 tool metadata。"
+goal: 判斷一個能力該做成 tool、MCP server 還是 skill，並寫出模型看得懂的 tool metadata。
 digests:
   - 2-tools.md
   - 3-mcp-skills.md
@@ -13,62 +13,42 @@ prerequisites:
   - learn/ai-agent-workflows/nodes/reasoning-llm-vs-agent.md
 steps:
   - id: tools-extend-reach
-    author: "google/gemini-3.8-flash"
-    title: "工具讓 LLM 能與環境互動"
-    purpose: "說明 tool 是 harness 接給模型的外部能力，並舉例它如何讓 agent 取得訓練資料以外的資訊。"
+    author: google/gemini-3.8-flash
+    title: 工具讓 LLM 能與環境互動
+    purpose: 說明 tool 是 harness 接給模型的外部能力，並舉例它如何讓 agent 取得訓練資料以外的資訊。
     sources:
-      - "[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L21-L58]]"
-      - "[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L59-L105]]"
-    blocks:
-      - tool
-      - agent-loop
-      - read-only-vs-read-write-tools
-      - tool-guardrails
+      - '[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L21-L58]]'
+      - '[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L59-L105]]'
   - id: tool-metadata
-    author: "google/gemini-3.8-flash"
-    title: "模型只看得到工具的 metadata"
-    purpose: "寫出讓模型聽得懂的 tool 名稱、描述與參數，並說明模糊 metadata 為何是工具錯誤主因。"
+    author: google/gemini-3.8-flash
+    title: 模型只看得到工具的 metadata
+    purpose: 寫出讓模型聽得懂的 tool 名稱、描述與參數，並說明模糊 metadata 為何是工具錯誤主因。
     sources:
-      - "[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L106-L198]]"
-      - "[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L297-L334]]"
-    blocks:
-      - tool-metadata
-      - tool-parameter-schema
-      - tool-documentation
-      - tool-overload
+      - '[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L106-L198]]'
+      - '[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L297-L334]]'
   - id: tool-execution
-    author: "google/gemini-3.8-flash"
-    title: "LLM 只是輸出一段字串"
-    purpose: "說明 LLM 只輸出呼叫、harness 執行工具並把結果當 observation 餵回模型的完整流程。"
+    author: google/gemini-3.8-flash
+    title: LLM 只是輸出一段字串
+    purpose: 說明 LLM 只輸出呼叫、harness 執行工具並把結果當 observation 餵回模型的完整流程。
     sources:
-      - "[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L199-L296]]"
+      - '[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L199-L296]]'
     blocks:
       - tool-calling
-      - agent-harness
-      - prompted-tool-use
-      - tool-training-reliability
   - id: mcp-standard
-    author: "google/gemini-3.8-flash"
-    title: "MCP 標準化傳輸與格式，不標準化工具本身"
-    purpose: "用 client/server 角色說明 MCP 標準化的是連接與格式，並解釋它如何分攤 API 變更的維運。"
+    author: google/gemini-3.8-flash
+    title: MCP 標準化傳輸與格式，不標準化工具本身
+    purpose: 用 client/server 角色說明 MCP 標準化的是連接與格式，並解釋它如何分攤 API 變更的維運。
     sources:
-      - "[[sources/ai-agent-workflows/20261105/course/3-mcp-skills.txt#L1-L127]]"
-    blocks:
-      - mcp
-      - mcp-client-server
-      - mcp-standardization-scope
-      - api-change-maintenance-shift
+      - '[[sources/ai-agent-workflows/20261105/course/3-mcp-skills.txt#L1-L127]]'
   - id: skills-lazy-loading
-    author: "google/gemini-3.8-flash"
-    title: "skill 的 metadata 常駐，指示只在被呼叫時載入"
-    purpose: "用 SKILL.md 與 lazy loading 判斷何時該把指示或腳本包成 skill，而不是做成 tool。"
+    author: google/gemini-3.8-flash
+    title: skill 的 metadata 常駐，指示只在被呼叫時載入
+    purpose: 用 SKILL.md 與 lazy loading 判斷何時該把指示或腳本包成 skill，而不是做成 tool。
     sources:
-      - "[[sources/ai-agent-workflows/20261105/course/3-mcp-skills.txt#L128-L266]]"
-      - "[[sources/ai-agent-workflows/20261105/course/3-mcp-skills.txt#L267-L281]]"
-    blocks:
-      - skill
-      - skill-lazy-loading
-      - skill-bundled-scripts
+      - >-
+        [[sources/ai-agent-workflows/20261105/course/3-mcp-skills.txt#L128-L266]]
+      - >-
+        [[sources/ai-agent-workflows/20261105/course/3-mcp-skills.txt#L267-L281]]
 created: 2026-11-05
 updated: 2026-11-05
 ---

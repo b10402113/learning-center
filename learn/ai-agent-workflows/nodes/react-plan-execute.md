@@ -29,11 +29,6 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/13-what-is-a-single-agent-system.txt#L35-L66]]
       - >-
         [[sources/ai-agent-workflows/20261105/course/13-what-is-a-single-agent-system.txt#L67-L77]]
-    blocks:
-      - agent-loop
-      - single-agent-system
-      - stopping-condition
-      - runaway-agent-cost
   - id: react-reason-act-observe
     author: google/gemini-3.8-flash
     title: 推理與行動
@@ -44,11 +39,6 @@ steps:
       - '[[sources/ai-agent-workflows/20261105/course/14-react.txt#L46-L92]]'
       - '[[sources/ai-agent-workflows/20261105/course/14-react.txt#L198-L227]]'
       - '[[sources/ai-agent-workflows/20261105/course/14-react.txt#L228-L254]]'
-    blocks:
-      - react
-      - chain-of-thought
-      - thought-action-observation
-      - agent-vs-workflow
   - id: react-in-code
     author: google/gemini-3.8-flash
     title: 一個 LLM 在迴圈裡跑
@@ -60,12 +50,6 @@ steps:
       - '[[sources/ai-agent-workflows/20261105/course/14-react.txt#L395-L434]]'
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/single-agents/careerReActAgent.js#L1-L146]]
-    blocks:
-      - react-system-prompt
-      - transcript-memory
-      - context-window-bloat
-      - stopping-condition
-      - tool-error-as-observation
   - id: plan-and-execute
     author: google/gemini-3.8-flash
     title: 先規劃，再執行
@@ -83,14 +67,8 @@ steps:
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/single-agents/careerPlanAndExecuteAgent.js#L1-L145]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/single-agents/careerPlanAndExecuteAgent.js#L146-L207]]
-    blocks:
-      - plan-and-execute
-      - planner-executor-responder
-      - plan-adaptability-tradeoff
-      - react-vs-plan-and-execute
-      - plan-step-cap
-created: 2026-11-05T00:00:00.000Z
-updated: 2026-11-05T00:00:00.000Z
+created: 2026-11-05
+updated: 2026-11-05
 ---
 
 # Single-agent 系統：ReAct 與 plan-and-execute

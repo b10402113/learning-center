@@ -2317,3 +2317,17 @@ test("coverage structure failures are named", (t) => {
   update(notWritten, "learn/test/nodes/n1.md", "status: written", "status: confirmed");
   assert.ok(failures(notWritten).includes("coverage-step-status"));
 });
+
+test("a node links at most five blocks", (t) => {
+  const root = fixture(t);
+  const ids = ["a", "b", "c", "d", "e", "f"];
+  for (const id of ids) addBlock(root, { id, label: `Block ${id.toUpperCase()}` });
+  update(root, "learn/test/nodes/n1.md", "status: confirmed", "status: written");
+  update(
+    root,
+    "learn/test/nodes/n1.md",
+    '      - "[[sources/test/notes.txt#L1-L10]]"\n',
+    `      - "[[sources/test/notes.txt#L1-L10]]"\n    blocks:\n${ids.map((id) => `      - ${id}`).join("\n")}\n`,
+  );
+  assert.ok(failures(root).includes("node-blocks-limit"));
+});

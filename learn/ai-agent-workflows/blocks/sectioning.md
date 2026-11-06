@@ -1,20 +1,22 @@
 ---
 id: sectioning
-title: "Sectioning（區塊拆分）"
-label: "Sectioning"
+title: Sectioning（區塊拆分）
+label: Sectioning
 subject: ai-agent-workflows
 type: concept
 status: draft
-summary: "把大任務拆成互不依賴的子任務，同時呼叫多個 LLM，最後再組裝結果。"
+summary: 把大任務拆成互不依賴的子任務，同時呼叫多個 LLM，最後再組裝結果。
 aliases: []
 prerequisites: []
 related:
   - voting
-  - parallelization
 sources:
-  - "[[sources/ai-agent-workflows/20261105/course/11-parallelization-other-workflows.txt#L19-L32]]"
-  - "[[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/workflows/careerParallelWorkflow.js#L1-L154]]"
-  - "[[sources/ai-agent-workflows/20261105/course/21-multi-agent-parallelization.txt#L13-L18]]"
+  - >-
+    [[sources/ai-agent-workflows/20261105/course/11-parallelization-other-workflows.txt#L19-L32]]
+  - >-
+    [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/workflows/careerParallelWorkflow.js#L1-L154]]
+  - >-
+    [[sources/ai-agent-workflows/20261105/course/21-multi-agent-parallelization.txt#L13-L18]]
 created: 2026-11-06
 updated: 2026-11-06
 ---

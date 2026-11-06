@@ -34,12 +34,6 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/1-reasoning-llms-vs-agents.txt#L69-L95]]
       - >-
         [[sources/ai-agent-workflows/20261105/course/1-reasoning-llms-vs-agents.txt#L96-L111]]
-    blocks:
-      - boxes-and-arrows
-      - agent-vs-workflow
-      - agent
-      - context-reliability-cost
-      - guardrails
   - id: reasoning-llm-as-component
     author: google/gemini-3.8-flash
     title: LLM 只是 agent 的零件
@@ -55,15 +49,8 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/1-reasoning-llms-vs-agents.txt#L176-L199]]
       - >-
         [[sources/ai-agent-workflows/20261105/course/1-reasoning-llms-vs-agents.txt#L200-L246]]
-    blocks:
-      - agent-harness
-      - llm
-      - reasoning-llm
-      - chain-of-thought-prompting
-      - thinking-summary
-      - llm-as-agent-component
-created: 2026-11-05T00:00:00.000Z
-updated: 2026-11-05T00:00:00.000Z
+created: 2026-11-05
+updated: 2026-11-05
 ---
 
 # Reasoning LLM 與 agent：誰來畫箭頭

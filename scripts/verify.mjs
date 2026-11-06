@@ -1246,6 +1246,21 @@ function checkNode(report, root, subject, scan, digestInfo, node, stepIndex, nod
     checkStepBlocks(report, file, subject, entry, index, blockIds);
   }
 
+  const nodeBlocks = new Set();
+  for (const entry of data.steps) {
+    for (const id of Array.isArray(entry?.blocks) ? entry.blocks : []) {
+      if (typeof id === "string" && id.trim()) nodeBlocks.add(id.trim());
+    }
+  }
+  if (nodeBlocks.size > 5) {
+    report.fail(
+      file,
+      1,
+      "node-blocks-limit",
+      `node links ${nodeBlocks.size} blocks; keep it to at most 5 per node`,
+    );
+  }
+
   checkNodeDigests(report, file, node, data, digestInfo, usedDigests, nodeDigests);
 
   for (const step of stepIndex.byNode.get(node.id) || []) {

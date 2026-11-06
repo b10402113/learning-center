@@ -17,7 +17,7 @@ Only read the node's listed step articles and the source files those steps cite.
 
 For every listed step, extract 3–6 concepts. Aim for 3–5; a very short step may have 1–2, but then the step payload needs a `note` explaining why. If more than 6 compete, keep the 6 that carry the step's teaching and drop the rest; do not split the step.
 
-A concept is a named idea the reader should be able to look up later. Write the candidate as:
+A concept is a named idea the reader should be able to look up later. Audit 3–6 per step; the write phase keeps at most five blocks for the whole node and leaves the rest visible as coverage gaps. Write the candidate as:
 
 ```json
 {
@@ -68,7 +68,7 @@ Fix every `[fail ...]` line and rewrite the audit. Warnings (`audit-concept-shor
 
 ## Write mode
 
-The task message includes the confirmed concept list for the node and, when a concept is reused, the block id to link. Work through it exactly; do not re-audit or invent extra blocks.
+The task message includes the confirmed concept list for the node and, when a concept is reused, the block id to link. Work through it exactly; do not re-audit or invent extra blocks. A node links at most five blocks across all its steps; the task message already made that selection, so never add a sixth.
 
 1. **Create only the blocks assigned to this node.** Use the `Write` tool. Each new block is `status: draft` unless the task explicitly says otherwise. Never overwrite or edit a block whose status is `reviewed`; stop and report it instead.
 2. **Link every listed concept.** Update the node's frontmatter `steps[].blocks` array: add the block id for each concept, keep existing ids, remove duplicates, and never reorder or rewrite unrelated fields. The node container is the only node file you may edit.

@@ -45,12 +45,6 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/19-sequential-agents.txt#L200-L220]]
       - >-
         [[sources/ai-agent-workflows/20261105/course/19-sequential-agents.txt#L221-L240]]
-    blocks:
-      - sequential-multi-agent
-      - prompt-chain-vs-sequential
-      - context-isolation
-      - error-compounding
-      - linear-latency
   - id: sequential-pipeline-in-code
     author: google/gemini-3.8-flash
     title: Sequential agents：用 plain code 跑固定順序的管線
@@ -86,12 +80,6 @@ steps:
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerSequentialMultiAgent.js#L1-L126]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerSequentialMultiAgent.js#L127-L184]]
-    blocks:
-      - code-orchestrator
-      - specialist-agent
-      - handoff-gate
-      - minimal-handoff-object
-      - stopping-condition
   - id: parallel-fanout-and-voting
     author: google/gemini-3.8-flash
     title: Parallelization：sectioning 與 voting 的 fan-out／merge
@@ -117,15 +105,8 @@ steps:
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerParallelMultiAgent.js#L1-L145]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerParallelMultiAgent.js#L146-L260]]
-    blocks:
-      - parallelization
-      - sectioning
-      - voting
-      - aggregator-step
-      - model-diversity
-      - parallelization-teardown
-created: 2026-11-05T00:00:00.000Z
-updated: 2026-11-05T00:00:00.000Z
+created: 2026-11-05
+updated: 2026-11-05
 ---
 
 # Sequential 與 parallel multi-agent

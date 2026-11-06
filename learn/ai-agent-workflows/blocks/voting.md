@@ -1,20 +1,22 @@
 ---
 id: voting
-title: "Voting（多數決）"
-label: "Voting"
+title: Voting（多數決）
+label: Voting
 subject: ai-agent-workflows
 type: concept
 status: draft
-summary: "對同一個任務平行跑多次，再彙整答案，用冗餘換取準確度與信心。"
+summary: 對同一個任務平行跑多次，再彙整答案，用冗餘換取準確度與信心。
 aliases: []
 prerequisites: []
 related:
   - sectioning
-  - parallelization
 sources:
-  - "[[sources/ai-agent-workflows/20261105/course/11-parallelization-other-workflows.txt#L33-L54]]"
-  - "[[sources/ai-agent-workflows/20261105/course/11-parallelization-other-workflows.txt#L86-L129]]"
-  - "[[sources/ai-agent-workflows/20261105/course/21-multi-agent-parallelization.txt#L41-L51]]"
+  - >-
+    [[sources/ai-agent-workflows/20261105/course/11-parallelization-other-workflows.txt#L33-L54]]
+  - >-
+    [[sources/ai-agent-workflows/20261105/course/11-parallelization-other-workflows.txt#L86-L129]]
+  - >-
+    [[sources/ai-agent-workflows/20261105/course/21-multi-agent-parallelization.txt#L41-L51]]
 created: 2026-11-06
 updated: 2026-11-06
 ---
@@ -58,4 +60,4 @@ return majority(votes);
 
 ## 進階
 
-Voting 可以整個放進其他 workflow 裡，例如在 evaluator-optimizer 的某一步用 voting 決定草稿方向。這種堆疊見 [[parallelization]] 與 [[workflow-scorecard]]。
+Voting 可以整個放進其他 workflow 裡，例如在 evaluator-optimizer 的某一步用 voting 決定草稿方向。這種堆疊見 Parallelization 與 [[workflow-scorecard]]。

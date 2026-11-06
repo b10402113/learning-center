@@ -34,13 +34,6 @@ steps:
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerSupervisorMultiAgent.js#L1-L154]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerSupervisorMultiAgent.js#L155-L242]]
-    blocks:
-      - supervisor
-      - subagents-as-tools
-      - dynamic-decomposition
-      - worker-context-isolation
-      - supervisor-cost
-      - rubber-stamp-tower
   - id: dispatcher-one-lane
     author: google/gemini-3.8-flash
     title: Dispatcher 多代理系統：一次分類，只走一條 lane
@@ -57,13 +50,6 @@ steps:
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerDispatcherMultiAgent.js#L1-L153]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerDispatcherMultiAgent.js#L154-L262]]
-    blocks:
-      - dispatcher
-      - fork-vs-decomposition
-      - route-menu
-      - bad-route-recovery
-      - clarification-lane
-      - advisor-strategy
   - id: evaluator-optimizer-loop
     author: google/gemini-3.8-flash
     title: Evaluator-Optimizer：生成、批評、再生成，直到停止條件
@@ -79,12 +65,6 @@ steps:
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerEvaluatorOptimizerMultiAgent.js#L1-L161]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerEvaluatorOptimizerMultiAgent.js#L162-L261]]
-    blocks:
-      - evaluator-optimizer
-      - stopping-condition
-      - external-signal
-      - review-criteria
-      - compaction
   - id: peer-to-peer-mesh
     author: google/gemini-3.8-flash
     title: Peer-to-Peer：沒有協調者，關係數隨 agent 數量暴增
@@ -102,12 +82,6 @@ steps:
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerPeerToPeerMultiAgent.js#L1-L166]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerPeerToPeerMultiAgent.js#L167-L268]]
-    blocks:
-      - peer-to-peer-topology
-      - handoff-tool
-      - shared-conversation-history
-      - relation-growth
-      - coordination-failure
   - id: choose-topology-by-arrows
     author: google/gemini-3.8-flash
     title: 誰在畫箭頭？四種多代理拓撲，選最簡單可用的那一個
@@ -123,15 +97,8 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/26-multi-agent-systems-summary.txt#L106-L151]]
       - >-
         [[sources/ai-agent-workflows/20261105/course/26-multi-agent-systems-summary.txt#L152-L205]]
-    blocks:
-      - control-ownership-spectrum
-      - multi-agent-context-advantage
-      - verification-gap
-      - debugging-trajectory
-      - workload-fit
-      - simplicity-first
-created: 2026-11-05T00:00:00.000Z
-updated: 2026-11-05T00:00:00.000Z
+created: 2026-11-05
+updated: 2026-11-05
 ---
 
 # 動態編排：supervisor、dispatcher、evaluator-optimizer、peer-to-peer

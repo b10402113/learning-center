@@ -44,11 +44,6 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/16-reflexion-self-refining.txt#L65-L89]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/workflows/careerEvaluatorOptimizerWorkflow.js#L1-L155]]
-    blocks:
-      - reflection
-      - self-refine
-      - external-signal
-      - bounded-retry-loop
   - id: reflexion-memory-across-attempts
     author: google/gemini-3.8-flash
     title: Reflexion：反思累積在記憶裡
@@ -68,13 +63,6 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/16-reflexion-self-refining.txt#L109-L132]]
       - >-
         [[sources/ai-agent-workflows/20261105/course/16-reflexion-self-refining.txt#L133-L151]]
-    blocks:
-      - reflexion
-      - reflexion-roles
-      - trajectory
-      - reflection-memory
-      - in-context-learning
-      - react-vs-reflexion
   - id: codeact-actions-as-code
     author: google/gemini-3.8-flash
     title: CodeAct：動作是可執行的程式碼，而不是 JSON
@@ -87,11 +75,6 @@ steps:
       - '[[sources/ai-agent-workflows/20261105/course/17-codeact.txt#L71-L93]]'
       - '[[sources/ai-agent-workflows/20261105/course/17-codeact.txt#L94-L116]]'
       - '[[sources/ai-agent-workflows/20261105/course/17-codeact.txt#L117-L127]]'
-    blocks:
-      - codeact
-      - sandbox
-      - round-trip
-      - tool-parameter-schema
   - id: single-agent-scorecard
     author: google/gemini-3.8-flash
     title: 單一 Agent 計分卡：我們換到了適應力
@@ -113,14 +96,8 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/18-single-agent-systems-scorecard.txt#L98-L112]]
       - >-
         [[sources/ai-agent-workflows/20261105/course/18-single-agent-systems-scorecard.txt#L113-L141]]
-    blocks:
-      - single-agent-scorecard
-      - context-window
-      - lost-in-the-middle
-      - adaptability
-      - prompt-injection-defense
-created: 2026-11-05T00:00:00.000Z
-updated: 2026-11-05T00:00:00.000Z
+created: 2026-11-05
+updated: 2026-11-05
 ---
 
 # Reflexion、CodeAct 與 single-agent 成績單
