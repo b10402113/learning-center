@@ -1,16 +1,17 @@
 ---
 id: tool-calling
-title: "Tool Calling（工具呼叫）"
-label: "Tool Calling"
+title: Tool Calling（工具呼叫）
+label: Tool Calling
 subject: ai-agent-workflows
 type: procedure
 status: draft
-summary: "模型輸出工具呼叫，harness 執行後把結果當 observation 餵回模型。"
+summary: 模型輸出工具呼叫，harness 執行後把結果當 observation 餵回模型。
 aliases: []
 prerequisites: []
 related: []
 sources:
-  - "[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L199-L296]]"
+  - '[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L199-L296]]'
+  - '[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L199-L245]]'
 created: 2026-11-06
 updated: 2026-11-06
 ---

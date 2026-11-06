@@ -8,7 +8,8 @@ status: draft
 summary: 流程的方塊與箭頭在執行前由程式碼畫好，模型只能在既定步驟內做判斷。
 aliases: []
 prerequisites: []
-related: []
+related:
+  - workflow
 sources:
   - >-
     [[sources/ai-agent-workflows/20261105/course/11-parallelization-other-workflows.txt#L211-L269]]

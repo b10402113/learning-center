@@ -19,6 +19,8 @@ steps:
     sources:
       - '[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L21-L58]]'
       - '[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L59-L105]]'
+    blocks:
+      - tool
   - id: tool-metadata
     author: google/gemini-3.8-flash
     title: 模型只看得到工具的 metadata
@@ -26,6 +28,8 @@ steps:
     sources:
       - '[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L106-L198]]'
       - '[[sources/ai-agent-workflows/20261105/course/2-tools.txt#L297-L334]]'
+    blocks:
+      - tool-metadata
   - id: tool-execution
     author: google/gemini-3.8-flash
     title: LLM 只是輸出一段字串
@@ -40,6 +44,8 @@ steps:
     purpose: 用 client/server 角色說明 MCP 標準化的是連接與格式，並解釋它如何分攤 API 變更的維運。
     sources:
       - '[[sources/ai-agent-workflows/20261105/course/3-mcp-skills.txt#L1-L127]]'
+    blocks:
+      - mcp
   - id: skills-lazy-loading
     author: google/gemini-3.8-flash
     title: skill 的 metadata 常駐，指示只在被呼叫時載入
@@ -49,6 +55,8 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/3-mcp-skills.txt#L128-L266]]
       - >-
         [[sources/ai-agent-workflows/20261105/course/3-mcp-skills.txt#L267-L281]]
+    blocks:
+      - skill
 created: 2026-11-05
 updated: 2026-11-05
 ---

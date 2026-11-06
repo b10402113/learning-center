@@ -399,6 +399,10 @@ function check(root, subject) {
   return { subject, drifts };
 }
 
+function uniqueStrings(values) {
+  return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value).trim()).filter(Boolean))];
+}
+
 function mergeReferences(list, { from, into, selfId }) {
   const out = [];
   const seen = new Set();
@@ -473,6 +477,10 @@ function merge(root, subject, { from, into, dryRun = false } = {}) {
   const canonicalData = {
     ...canonical.data,
     aliases: [...aliases],
+    sources: uniqueStrings([
+      ...(Array.isArray(canonical.data?.sources) ? canonical.data.sources : []),
+      ...(Array.isArray(oldBlock.data?.sources) ? oldBlock.data.sources : []),
+    ]),
     prerequisites: mergeReferences(
       [
         ...(Array.isArray(canonical.data?.prerequisites) ? canonical.data.prerequisites : []),

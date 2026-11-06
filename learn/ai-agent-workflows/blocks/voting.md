@@ -10,6 +10,7 @@ aliases: []
 prerequisites: []
 related:
   - sectioning
+  - parallelization
 sources:
   - >-
     [[sources/ai-agent-workflows/20261105/course/11-parallelization-other-workflows.txt#L33-L54]]
@@ -60,4 +61,4 @@ return majority(votes);
 
 ## 進階
 
-Voting 可以整個放進其他 workflow 裡，例如在 evaluator-optimizer 的某一步用 voting 決定草稿方向。這種堆疊見 Parallelization 與 [[workflow-scorecard]]。
+Voting 可以整個放進其他 workflow 裡，例如在 evaluator-optimizer 的某一步用 voting 決定草稿方向。這種堆疊見 [[parallelization]] 與 [[workflow-scorecard]]。

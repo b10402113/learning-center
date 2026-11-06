@@ -34,6 +34,8 @@ steps:
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerSupervisorMultiAgent.js#L1-L154]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerSupervisorMultiAgent.js#L155-L242]]
+    blocks:
+      - supervisor
   - id: dispatcher-one-lane
     author: google/gemini-3.8-flash
     title: Dispatcher 多代理系統：一次分類，只走一條 lane
@@ -50,6 +52,8 @@ steps:
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerDispatcherMultiAgent.js#L1-L153]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerDispatcherMultiAgent.js#L154-L262]]
+    blocks:
+      - dispatcher
   - id: evaluator-optimizer-loop
     author: google/gemini-3.8-flash
     title: Evaluator-Optimizer：生成、批評、再生成，直到停止條件
@@ -65,6 +69,8 @@ steps:
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerEvaluatorOptimizerMultiAgent.js#L1-L161]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerEvaluatorOptimizerMultiAgent.js#L162-L261]]
+    blocks:
+      - evaluator-optimizer
   - id: peer-to-peer-mesh
     author: google/gemini-3.8-flash
     title: Peer-to-Peer：沒有協調者，關係數隨 agent 數量暴增
@@ -82,6 +88,8 @@ steps:
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerPeerToPeerMultiAgent.js#L1-L166]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/multi-agent-systems/careerPeerToPeerMultiAgent.js#L167-L268]]
+    blocks:
+      - peer-to-peer-topology
   - id: choose-topology-by-arrows
     author: google/gemini-3.8-flash
     title: 誰在畫箭頭？四種多代理拓撲，選最簡單可用的那一個
@@ -97,6 +105,8 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/26-multi-agent-systems-summary.txt#L106-L151]]
       - >-
         [[sources/ai-agent-workflows/20261105/course/26-multi-agent-systems-summary.txt#L152-L205]]
+    blocks:
+      - control-ownership-spectrum
 created: 2026-11-05
 updated: 2026-11-05
 ---

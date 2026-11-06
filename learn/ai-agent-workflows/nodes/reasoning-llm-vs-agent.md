@@ -34,6 +34,10 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/1-reasoning-llms-vs-agents.txt#L69-L95]]
       - >-
         [[sources/ai-agent-workflows/20261105/course/1-reasoning-llms-vs-agents.txt#L96-L111]]
+    blocks:
+      - boxes-and-arrows
+      - agent-vs-workflow
+      - agent
   - id: reasoning-llm-as-component
     author: google/gemini-3.8-flash
     title: LLM 只是 agent 的零件
@@ -49,6 +53,9 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/1-reasoning-llms-vs-agents.txt#L176-L199]]
       - >-
         [[sources/ai-agent-workflows/20261105/course/1-reasoning-llms-vs-agents.txt#L200-L246]]
+    blocks:
+      - llm
+      - reasoning-llm
 created: 2026-11-05
 updated: 2026-11-05
 ---

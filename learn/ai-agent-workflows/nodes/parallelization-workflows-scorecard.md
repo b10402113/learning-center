@@ -79,7 +79,7 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/12-workflows-scorecard.txt#L193-L218]]
     blocks:
       - workflow-scorecard
-      - fail-early
+      - bounded-context
 created: 2026-11-05
 updated: 2026-11-05
 ---

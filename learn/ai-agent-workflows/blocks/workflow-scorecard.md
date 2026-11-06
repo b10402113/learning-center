@@ -8,7 +8,9 @@ status: draft
 summary: 用 context、reliability、cost 三欄評估 workflow 形狀，判斷何時該換成 agent。
 aliases: []
 prerequisites: []
-related: []
+related:
+  - bounded-context
+  - three-column-scorecard
 sources:
   - >-
     [[sources/ai-agent-workflows/20261105/course/12-workflows-scorecard.txt#L41-L73]]
@@ -46,4 +48,4 @@ Workflow scorecard 是一套評估工作流體質的三欄框架：context 是�
 
 ## 進階
 
-當分支數量爆炸、規則持續變動，手寫 `if/else` 根本窮舉不完時，成績單再漂亮也救不了。這時就是 workflow 交棒給 agent 的時刻，判斷線索見 Workflow-Agent Handoff，三欄的來源見 Bounded Context。
+當分支數量爆炸、規則持續變動，手寫 `if/else` 根本窮舉不完時，成績單再漂亮也救不了。這時就是 workflow 交棒給 agent 的時刻，判斷線索見 Workflow-Agent Handoff，三欄的來源見 [[bounded-context]]。

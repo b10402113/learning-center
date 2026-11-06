@@ -10,6 +10,7 @@ aliases: []
 prerequisites: []
 related:
   - voting
+  - parallelization
 sources:
   - >-
     [[sources/ai-agent-workflows/20261105/course/11-parallelization-other-workflows.txt#L19-L32]]

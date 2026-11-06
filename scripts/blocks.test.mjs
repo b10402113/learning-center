@@ -309,8 +309,8 @@ test("audit --check validates the audit files", (t) => {
 
 test("merge is a dry run until applied and rewrites every reference", (t) => {
   const root = fixture(t, { blocks: ["old-block", "other-block"] });
-  blockFile(root, { id: "old-block", label: "Old Block", related: ["other-block"] });
-  blockFile(root, { id: "canonical-block", label: "Canonical Block" });
+  blockFile(root, { id: "old-block", label: "Old Block", sources: ["notes.txt"], related: ["other-block"] });
+  blockFile(root, { id: "canonical-block", label: "Canonical Block", sources: ["other.txt"] });
   blockFile(root, { id: "other-block", label: "Other Block", related: ["old-block"] });
   write(
     root,
@@ -361,6 +361,8 @@ test("merge is a dry run until applied and rewrites every reference", (t) => {
   assert.match(canonical, /aliases:\n  - old-block/);
   assert.match(canonical, /related:\n  - other-block/);
   assert.match(canonical, /\[\[canonical-block\]\]/);
+  assert.match(canonical, /sources\/test\/notes\.txt/);
+  assert.match(canonical, /sources\/test\/other\.txt/);
 
   const other = read(root, "learn/test/blocks/other-block.md");
   assert.match(other, /related:\n  - canonical-block/);

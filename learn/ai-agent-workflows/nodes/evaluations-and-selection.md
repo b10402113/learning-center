@@ -27,6 +27,9 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/27-evaluations.txt#L161-L183]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/ai-agent-workflows-slides.txt#L383-L406]]
+    blocks:
+      - three-column-scorecard
+      - benchmark-leaderboard
   - id: build-your-own-eval
     author: google/gemini-3.8-flash
     title: 建立自己的 eval
@@ -40,6 +43,9 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/27-evaluations.txt#L360-L463]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/ai-agent-workflows-slides.txt#L407-L417]]
+    blocks:
+      - custom-eval-set
+      - trajectory-evaluation
   - id: choose-the-simplest-system
     author: google/gemini-3.8-flash
     title: 挑最簡單、做得到的那個系統
@@ -55,6 +61,9 @@ steps:
         [[sources/ai-agent-workflows/20261105/course/28-wrapping-up.txt#L282-L331]]
       - >-
         [[sources/ai-agent-workflows/20261105/supplement/ai-agent-workflows-slides.txt#L418-L430]]
+    blocks:
+      - architecture-spectrum
+      - three-column-scorecard
 created: 2026-11-05
 updated: 2026-11-05
 ---
