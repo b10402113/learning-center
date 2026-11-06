@@ -7,6 +7,7 @@ export const BLOCK_STATUSES = ["draft", "reviewed"];
 export const BLOCK_SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export const BLOCK_LABEL_MAX = 40;
 export const BLOCK_SUMMARY_MAX = 120;
+export const AUDIT_MATCH_KINDS = ["new", "reuse", "merge", "fuzzy"];
 
 export const BLOCK_SECTIONS = {
   concept: ["定義", "為什麼重要", "如何運作", "例子", "邊界與常見誤解", "進階"],
@@ -32,6 +33,37 @@ export function asDateString(value) {
 
 export function characterCount(value) {
   return Array.from(String(value ?? "")).length;
+}
+
+/**
+ * A block label names a knowledge point: a noun or proper noun, never a
+ * sentence. Returns one message per broken rule so verify and the audit
+ * checker can share the same wording.
+ */
+export function labelProblems(label) {
+  if (typeof label !== "string" || !label.trim()) {
+    return ["label is required and must be a noun or proper noun"];
+  }
+  const value = label.trim();
+  const problems = [];
+  const length = characterCount(value);
+  if (length > BLOCK_LABEL_MAX) {
+    problems.push(`label is ${length} characters; keep it to ${BLOCK_LABEL_MAX} or fewer`);
+  }
+  if (value.includes("\n")) problems.push("label must be a single line");
+  if (SENTENCE_PUNCTUATION.test(value)) {
+    problems.push(`label "${value}" looks like a sentence; move the explanation to summary`);
+  }
+  if (SENTENCE_START.test(value)) {
+    problems.push(`label "${value}" starts like a sentence; use a noun or proper noun`);
+  }
+  if (value.trim().split(/\s+/).length > 4) {
+    problems.push(`label "${value}" has too many words; keep it to 1–4`);
+  }
+  if (TRAILING_PUNCTUATION.test(value)) {
+    problems.push(`label "${value}" must not end with sentence punctuation`);
+  }
+  return problems;
 }
 
 export function sourceLinkPath(raw) {
@@ -128,29 +160,8 @@ export function validateBlockFrontmatter(block, subject, blockIds = new Set()) {
     fail("block-title", "title is required and must be a non-empty string");
   }
 
-  if (typeof data.label !== "string" || !data.label.trim()) {
-    fail("block-label", "label is required and must be a noun or proper noun");
-  } else {
-    const label = data.label.trim();
-    const length = characterCount(label);
-    if (length > BLOCK_LABEL_MAX) {
-      fail("block-label", `label is ${length} characters; keep it to ${BLOCK_LABEL_MAX} or fewer`);
-    }
-    if (label.includes("\n")) {
-      fail("block-label", "label must be a single line");
-    }
-    if (SENTENCE_PUNCTUATION.test(label)) {
-      fail("block-label", `label "${label}" looks like a sentence; move the explanation to summary`);
-    }
-    if (SENTENCE_START.test(label)) {
-      fail("block-label", `label "${label}" starts like a sentence; use a noun or proper noun`);
-    }
-    if (label.trim().split(/\s+/).length > 4) {
-      fail("block-label", `label "${label}" has too many words; keep it to 1–4`);
-    }
-    if (TRAILING_PUNCTUATION.test(label)) {
-      fail("block-label", `label "${label}" must not end with sentence punctuation`);
-    }
+  for (const message of labelProblems(data.label)) {
+    fail("block-label", message);
   }
 
   if (typeof data.summary !== "string" || !data.summary.trim()) {
@@ -339,6 +350,173 @@ export function validateInlineLinks(blocks) {
   return failures;
 }
 
+export function aliasMap(blocks) {
+  const aliases = new Map();
+  for (const block of blocks) {
+    for (const raw of Array.isArray(block.data?.aliases) ? block.data.aliases : []) {
+      if (typeof raw === "string" && raw.trim()) aliases.set(raw.trim(), block.id);
+    }
+  }
+  return aliases;
+}
+
+/**
+ * A label's comparable form for dedupe: case-folded, without a parenthetical
+ * translation, whitespace, or ordinary punctuation. Symbols that change the
+ * term itself (`@`, `^`, `+`, `#`) are kept so pass@k and pass^k stay distinct.
+ */
+export function normalizeTerm(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[（(][^）)]*[）)]/g, "")
+    .toLowerCase()
+    .replace(/[\s\-_,，。.：:；;！!？?'"「」『』（）()]+/g, "");
+}
+
+/**
+ * Check one node's audit file before its candidates become blocks. A failure
+ * blocks the write phase; a warning (short step, overflow, already-existing
+ * "new" slug) is shown to the learner but does not stop the run.
+ *
+ * `eligibleSteps` is a Set of "<node>/<step>" keys for steps that are written,
+ * in the node plan, and have an article body. When it is empty the eligibility
+ * check is skipped, which keeps this function usable on its own.
+ */
+export function validateAudit(
+  audit,
+  { subject, nodes = new Map(), blocks = [], eligibleSteps = new Set() } = {},
+) {
+  const failures = [];
+  const warnings = [];
+  const fail = (checkId, message, detail = {}) => failures.push({ checkId, message, ...detail });
+  const warn = (checkId, message, detail = {}) => warnings.push({ checkId, message, ...detail });
+
+  if (!audit || typeof audit !== "object" || Array.isArray(audit)) {
+    fail("audit-object", "audit must be a JSON object");
+    return { failures, warnings };
+  }
+  const nodeId = typeof audit.node === "string" ? audit.node.trim() : "";
+  if (!nodeId) {
+    fail("audit-node", "audit.node is required");
+    return { failures, warnings };
+  }
+  const node = nodes.get(nodeId);
+  if (!node) fail("audit-node-unknown", `audit.node "${nodeId}" is not a node in ${subject}`);
+  else if (node.status !== "written") {
+    fail("audit-node-status", `audit.node "${nodeId}" is ${node.status}, not written`);
+  }
+  if (!audit.steps || typeof audit.steps !== "object" || Array.isArray(audit.steps)) {
+    fail("audit-steps", `audit for "${nodeId}" needs a steps object`);
+    return { failures, warnings };
+  }
+
+  const ids = new Set(blocks.map((block) => block.id));
+  const aliases = aliasMap(blocks);
+  const labels = new Map(
+    blocks.map((block) => [normalizeTerm(block.data?.label ?? block.id), block.id]),
+  );
+
+  for (const [stepId, payload] of Object.entries(audit.steps)) {
+    const key = `${nodeId}/${stepId}`;
+    if (node && !node.steps.has(stepId)) {
+      fail("audit-step-unknown", `${key} is not a step of node "${nodeId}"`, { step: key });
+    }
+    if (eligibleSteps.size > 0 && !eligibleSteps.has(key)) {
+      fail("audit-step-not-eligible", `${key} is not a written step with an article body`, { step: key });
+    }
+    const concepts = Array.isArray(payload?.concepts) ? payload.concepts : [];
+    if (concepts.length === 0) {
+      fail("audit-concepts-empty", `${key} needs at least one concept`, { step: key });
+    }
+    const note = typeof payload?.note === "string" ? payload.note.trim() : "";
+    if (concepts.length > 0 && concepts.length < 3 && !note) {
+      warn("audit-concept-short", `${key} has ${concepts.length} concept(s); add a note explaining why`, {
+        step: key,
+      });
+    }
+    if (concepts.length > 6) {
+      warn("audit-concept-overflow", `${key} has ${concepts.length} concepts; keep the six strongest`, {
+        step: key,
+      });
+    }
+
+    const seen = new Set();
+    for (const [index, concept] of concepts.entries()) {
+      const label = `${key}.concepts[${index}]`;
+      const slug = typeof concept?.slug === "string" ? concept.slug.trim() : "";
+      if (!slug || !BLOCK_SLUG.test(slug)) {
+        fail("audit-concept-slug", `${label}.slug must be kebab-case`, { step: key, slug });
+      } else if (seen.has(slug)) {
+        fail("audit-concept-duplicate", `${key} repeats concept "${slug}"`, { step: key, slug });
+      } else {
+        seen.add(slug);
+      }
+      for (const message of labelProblems(concept?.label)) {
+        fail("audit-concept-label", `${label}: ${message}`, { step: key, slug });
+      }
+      const sources = Array.isArray(concept?.sources) ? concept.sources : [];
+      if (sources.length === 0) {
+        fail("audit-concept-sources", `${label} needs at least one source link`, { step: key, slug });
+      } else {
+        for (const [sourceIndex, source] of sources.entries()) {
+          if (!sourceLinkPath(source)) {
+            fail(
+              "audit-concept-sources",
+              `${label}.sources[${sourceIndex}] must be a [[sources/...#Lx-Ly]] link`,
+              { step: key, slug },
+            );
+          }
+        }
+      }
+
+      const kind = concept?.match?.kind;
+      if (!AUDIT_MATCH_KINDS.includes(kind)) {
+        fail(
+          "audit-match-kind",
+          `${label}.match.kind must be one of ${AUDIT_MATCH_KINDS.join(", ")}`,
+          { step: key, slug },
+        );
+        continue;
+      }
+      if (kind === "reuse" || kind === "merge") {
+        const target = typeof concept?.match?.block === "string" ? concept.match.block.trim() : "";
+        if (!target) {
+          fail("audit-match-block", `${label} is a ${kind} candidate but names no block`, { step: key, slug });
+        } else if (!ids.has(target) && !aliases.has(target)) {
+          fail("audit-match-block", `${label} points at unknown block "${target}"`, { step: key, slug });
+        }
+      }
+      if (kind === "new" && slug) {
+        if (ids.has(slug)) {
+          warn(
+            "audit-new-existing",
+            `${label} is marked new but block "${slug}" already exists; reuse it`,
+            { step: key, slug },
+          );
+        } else if (aliases.has(slug)) {
+          warn(
+            "audit-new-existing",
+            `${label} is marked new but "${slug}" is an alias of block "${aliases.get(slug)}"; reuse it`,
+            { step: key, slug },
+          );
+        } else {
+          const normalized = normalizeTerm(concept?.label);
+          const existing = normalized ? labels.get(normalized) : null;
+          if (existing && existing !== slug) {
+            warn(
+              "audit-new-existing",
+              `${label} is marked new but its label matches block "${existing}"; reuse or merge it`,
+              { step: key, slug },
+            );
+          }
+        }
+      }
+    }
+  }
+
+  return { failures, warnings };
+}
+
 export function conceptPairs(coverage) {
   const pairs = [];
   const steps = coverage && typeof coverage === "object" ? coverage.steps : {};
@@ -419,12 +597,15 @@ export function detectDrift({ blocks = [], steps = [], coverage = null } = {}) {
   const drifts = [];
   const byId = new Map(blocks.map((block) => [block.id, block]));
   const used = new Set();
+  const usage = new Map();
 
   for (const step of steps) {
     const stepBlocks = Array.isArray(step.blocks) ? step.blocks : [];
-    for (const id of stepBlocks) used.add(id);
-    const sources = stepSources(step);
     for (const id of stepBlocks) {
+      used.add(id);
+      const entries = usage.get(id) ?? [];
+      entries.push({ key: step.key, sources: stepSources(step) });
+      usage.set(id, entries);
       const block = byId.get(id);
       if (!block) continue;
       const blockDate = asDateString(block.data?.updated) ?? asDateString(block.data?.created);
@@ -436,15 +617,25 @@ export function detectDrift({ blocks = [], steps = [], coverage = null } = {}) {
           message: `step ${step.key} (${step.updated}) is newer than block ${id} (${blockDate})`,
         });
       }
-      const referenced = blockSources(block);
-      if (referenced.length > 0 && sources.length > 0 && !referenced.some((path) => sources.includes(path))) {
-        drifts.push({
-          kind: "source-not-referenced",
-          step: step.key,
-          block: id,
-          message: `block ${id} cites ${referenced.join(", ")}, which step ${step.key} no longer cites`,
-        });
-      }
+    }
+  }
+
+  for (const [id, entries] of usage) {
+    const block = byId.get(id);
+    if (!block) continue;
+    const referenced = blockSources(block);
+    if (referenced.length === 0) continue;
+    const cited = entries.some((entry) =>
+      entry.sources.some((path) => referenced.includes(path)),
+    );
+    if (!cited) {
+      const keys = entries.map((entry) => entry.key);
+      drifts.push({
+        kind: "source-not-referenced",
+        step: keys.length === 1 ? keys[0] : null,
+        block: id,
+        message: `block ${id} cites ${referenced.join(", ")}, which none of its steps (${keys.join(", ")}) cites`,
+      });
     }
   }
 

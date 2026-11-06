@@ -23,6 +23,12 @@ steps:
       - "[[sources/ai-agent-workflows/20261105/course/4-rag.txt#L95-L126]]"
       - "[[sources/ai-agent-workflows/20261105/course/4-rag.txt#L161-L215]]"
       - "[[sources/ai-agent-workflows/20261105/course/4-rag.txt#L256-L389]]"
+    blocks:
+      - retrieval-augmented-generation
+      - chunking
+      - embedding
+      - vector-similarity
+      - rag-vs-fine-tuning
   - id: context-budget-and-compaction
     author: "google/gemini-3.8-flash"
     title: "Context 有限：re-ranker、compaction 與 MMR"
@@ -33,6 +39,12 @@ steps:
       - "[[sources/ai-agent-workflows/20261105/course/5-context.txt#L147-L235]]"
       - "[[sources/ai-agent-workflows/20261105/course/5-context.txt#L236-L323]]"
       - "[[sources/ai-agent-workflows/20261105/course/5-context.txt#L324-L400]]"
+    blocks:
+      - context-budget
+      - reranker
+      - compaction
+      - maximal-marginal-relevance
+      - lost-in-the-middle
   - id: agent-memory
     author: "google/gemini-3.8-flash"
     title: "Agent 沒有記憶：working、semantic、episodic、procedural"
@@ -43,6 +55,12 @@ steps:
       - "[[sources/ai-agent-workflows/20261105/course/6-agent-memory.txt#L140-L218]]"
       - "[[sources/ai-agent-workflows/20261105/course/6-agent-memory.txt#L219-L262]]"
       - "[[sources/ai-agent-workflows/20261105/course/6-agent-memory.txt#L263-L302]]"
+    blocks:
+      - working-memory
+      - semantic-memory
+      - episodic-memory
+      - procedural-memory
+      - memory-retrieval
 created: 2026-11-05
 updated: 2026-11-05
 ---

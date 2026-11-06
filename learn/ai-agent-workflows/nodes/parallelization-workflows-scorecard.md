@@ -32,6 +32,12 @@ steps:
       - "[[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/workflows/careerParallelWorkflow.js#L1-L154]]"
       - "[[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/workflows/careerEvaluatorOptimizerWorkflow.js#L1-L155]]"
       - "[[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/workflows/careerOrchestratorWorkersWorkflow.js#L1-L177]]"
+    blocks:
+      - fixed-workflow
+      - sectioning
+      - voting
+      - evaluator-optimizer
+      - orchestrator-workers
   - id: workflows-scorecard
     author: "google/gemini-3.8-flash"
     title: "成績單：context 有界、可靠度高、成本可控"
@@ -46,6 +52,12 @@ steps:
       - "[[sources/ai-agent-workflows/20261105/course/12-workflows-scorecard.txt#L151-L174]]"
       - "[[sources/ai-agent-workflows/20261105/course/12-workflows-scorecard.txt#L175-L192]]"
       - "[[sources/ai-agent-workflows/20261105/course/12-workflows-scorecard.txt#L193-L218]]"
+    blocks:
+      - workflow-scorecard
+      - bounded-context
+      - fail-early
+      - wrap-up-and-log
+      - workflow-agent-handoff
 created: 2026-11-05
 updated: 2026-11-05
 ---

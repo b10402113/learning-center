@@ -23,6 +23,12 @@ steps:
       - "[[sources/ai-agent-workflows/20261105/course/27-evaluations.txt#L74-L160]]"
       - "[[sources/ai-agent-workflows/20261105/course/27-evaluations.txt#L161-L183]]"
       - "[[sources/ai-agent-workflows/20261105/supplement/ai-agent-workflows-slides.txt#L383-L406]]"
+    blocks:
+      - three-column-scorecard
+      - benchmark-leaderboard
+      - single-run-benchmark
+      - pass-at-k
+      - pass-hat-k
   - id: build-your-own-eval
     author: "google/gemini-3.8-flash"
     title: "建立自己的 eval"
@@ -32,6 +38,13 @@ steps:
       - "[[sources/ai-agent-workflows/20261105/course/27-evaluations.txt#L261-L359]]"
       - "[[sources/ai-agent-workflows/20261105/course/27-evaluations.txt#L360-L463]]"
       - "[[sources/ai-agent-workflows/20261105/supplement/ai-agent-workflows-slides.txt#L407-L417]]"
+    blocks:
+      - custom-eval-set
+      - trajectory-evaluation
+      - eval-harness
+      - eval-hacking
+      - llm-as-a-judge
+      - judge-bias
   - id: choose-the-simplest-system
     author: "google/gemini-3.8-flash"
     title: "挑最簡單、做得到的那個系統"
@@ -42,6 +55,13 @@ steps:
       - "[[sources/ai-agent-workflows/20261105/course/28-wrapping-up.txt#L212-L281]]"
       - "[[sources/ai-agent-workflows/20261105/course/28-wrapping-up.txt#L282-L331]]"
       - "[[sources/ai-agent-workflows/20261105/supplement/ai-agent-workflows-slides.txt#L418-L430]]"
+    blocks:
+      - architecture-spectrum
+      - deterministic-baseline
+      - incremental-escalation
+      - path-knowledge-heuristic
+      - three-column-scorecard
+      - feedback-vs-handoff
 created: 2026-11-05
 updated: 2026-11-05
 ---

@@ -22,6 +22,12 @@ steps:
       - "[[sources/ai-agent-workflows/20261105/course/8-prompt-chaining.txt#L1-L51]]"
       - "[[sources/ai-agent-workflows/20261105/course/8-prompt-chaining.txt#L65-L77]]"
       - "[[sources/ai-agent-workflows/20261105/course/8-prompt-chaining.txt#L169-L209]]"
+    blocks:
+      - workflow
+      - control-ownership-spectrum
+      - prompt-chaining
+      - latency-accuracy-tradeoff
+      - task-decomposition
   - id: gate-and-code-chain
     author: "google/gemini-3.8-flash"
     title: "難的是讓程式碼流程跑起來"
@@ -31,6 +37,12 @@ steps:
       - "[[sources/ai-agent-workflows/20261105/course/9-prompt-chaining-example-workflow.txt#L144-L178]]"
       - "[[sources/ai-agent-workflows/20261105/course/9-prompt-chaining-example-workflow.txt#L258-L356]]"
       - "[[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/workflows/careerPromptChainWorkflow.js#L1-L104]]"
+    blocks:
+      - prompt-chaining
+      - code-gate
+      - error-compounding
+      - fake-llm-call
+      - structured-json-output
   - id: routing-as-a-fork
     author: "google/gemini-3.8-flash"
     title: "Routing 是分岔，不是序列"
@@ -38,6 +50,11 @@ steps:
     sources:
       - "[[sources/ai-agent-workflows/20261105/course/10-routing.txt#L4-L31]]"
       - "[[sources/ai-agent-workflows/20261105/course/10-routing.txt#L32-L76]]"
+    blocks:
+      - routing
+      - sequence-vs-fork
+      - routing-criteria
+      - classifier
   - id: routing-in-code-and-cost
     author: "google/gemini-3.8-flash"
     title: "LLM 分類，程式碼決定路徑"
@@ -46,6 +63,12 @@ steps:
       - "[[sources/ai-agent-workflows/20261105/course/10-routing.txt#L77-L105]]"
       - "[[sources/ai-agent-workflows/20261105/course/10-routing.txt#L106-L153]]"
       - "[[sources/ai-agent-workflows/20261105/supplement/practical-ai-agents-code-exercise-main/workflows/careerRoutingWorkflow.js#L1-L150]]"
+    blocks:
+      - routing
+      - monolithic-prompt
+      - classifier
+      - fallback-gate
+      - route-table
 created: 2026-11-05
 updated: 2026-11-05
 ---

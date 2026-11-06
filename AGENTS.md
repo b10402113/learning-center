@@ -59,6 +59,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
     → /humanize-article <subject>/<node-id> [--step <id>] [--force]
     → /generate-images <subject>/<node-id> [--step <id>] [--force] [--max-parallel <n>]
     → /quiz-gen <subject>/<node-id> [--step <id>] [--force]
+    → /blocks <subject> [--node <id>] [--audit | --write | --report | --check]
 
 /batch-nodes <subject> [tier<N> | <node-id> ...] [flags]
                                      ← optional bulk path: /nodes → /article
@@ -77,6 +78,7 @@ The pilot lives in [`learn/agent-harness/`](learn/agent-harness/) — one node, 
 | `/humanize-article` | Processes only steps with a plan: `scripts/humanize-article.mjs prepare` copies `step.md` to `output/<node>/<step>/humanized.md` and the plan to `humanized.plan.json`; a humanize subagent edits only those copies; `apply` validates the protected parts and only then writes `step.md` and the plan back. A failed validation leaves the official files untouched and keeps the copies. There is no hash record and no separate plan backup. |
 | `/generate-images` | Thin shell over `src/render-images.mjs`: reads the plan and the article's `<!--image:N-->` markers, generates or reuses `image-N.webp` under `<step>-assets/`, and replaces each marker with an uncaptioned image line. With `--force` it also repaints the files behind existing image lines. It never plans, edits prose, or reads `anchor`. |
 | `/quiz-gen` | One `quiz-agent` per node reads its published steps and writes 3–8 single-choice questions each; the agent self-checks candidates with `quiz.mjs check`; `quiz.mjs write` validates and writes `<step>.quiz.json`; course-app renders them after the article. |
+| `/blocks` | `blocks.mjs audit` prints the written steps with a body and the existing blocks; one `block-agent` per node writes `output/blocks/<node>.audit.json` with 3–6 concepts per step. The main agent presents a subject-level new/reuse/merge/fuzzy table, confirms once, then block-agents create `draft` blocks and link each step's `blocks:`. `blocks.mjs merge` carries a draft id into a canonical block's `aliases` and rewrites every reference; `apply` rebuilds `coverage.json`, `report` prints the coverage numbers, and `check` prints drift. |
 | `/batch-nodes` | Optional bulk path over a tier or node list: Nodes → Article → Humanize → Generate → Quiz. Parallel Nodes, `publisher`, humanize, and `quiz-agent` subagents do the writing; Generate is one render CLI call per node. Article dispatches one publisher per step, or one per node with `-article-per-node`; the publisher curates material and runs `compose`/`mark`/`polish`, and `-skip-polish` publishes the first draft through a `--copy` polish. Resumes from node state; `-force` regenerates generated content without rebuilding a node's step plan. |
 | `/absorb` | Read `pending` digests, append steps to existing nodes or create new nodes, add each used digest to the node's `digests`, resolve every digest to `absorbed` or `skipped`, roll affected nodes back to `confirmed`. |
 | `/reset-nodes` | Reset chosen nodes to `confirmed`, delete generated articles, image plans, figures and quizzes, keep the node container and its step array. |
@@ -201,7 +203,9 @@ A digest `source` always points into `course/` or `supplement/`; a `raw/` origin
 
 ### Block — `learn/<subject>/blocks/<block-id>.md`
 
-A block is one standalone knowledge point: a reader who has not read any step can still understand it. Frontmatter: `id` (equal to the filename), `title` (display name), `label` (a noun or proper noun, not a sentence), `subject`, `type` (`concept | procedure | principle | contrast`), `status` (`draft | reviewed`), `summary` (one sentence, ≤120 characters), and `sources` (at least one); optional `slug` (kebab-case, defaults to the id), `aliases`, `prerequisites`, and `related`. `prerequisites` is directed, `related` is undirected, both stay inside the subject, and prerequisites never form a cycle. The body uses the required `##` sections for its type; code blocks keep provenance. A node step may list `blocks:` (bare ids, no duplicates) to link the knowledge points it teaches. `learn/<subject>/blocks/coverage.json` records each written step's concepts, their `block` (an id, or `null` when uncovered), and an optional `note`; `scripts/blocks.mjs apply` rebuilds it from the confirmed audits in `output/blocks/*.audit.json` plus each step's `blocks:`. `node scripts/blocks.mjs report|check` prints the coverage numbers and the drift. Verify enforces the block format and the block/step/coverage consistency. Inline `[[block-id]]` links are navigation only; graph relationships come from frontmatter only.
+A block is one standalone knowledge point: a reader who has not read any step can still understand it. Frontmatter: `id` (equal to the filename), `title` (display name), `label` (a noun or proper noun, not a sentence), `subject`, `type` (`concept | procedure | principle | contrast`), `status` (`draft | reviewed`), `summary` (one sentence, ≤120 characters), and `sources` (at least one); optional `slug` (kebab-case, defaults to the id), `aliases`, `prerequisites`, and `related`. `prerequisites` is directed, `related` is undirected, both stay inside the subject, and prerequisites never form a cycle. The body uses the required `##` sections for its type; code blocks keep provenance. A node step may list `blocks:` (bare ids, no duplicates) to link the knowledge points it teaches.
+
+`learn/<subject>/blocks/coverage.json` records each written step's concepts, their `block` (an id, or `null` when uncovered), an optional step `note` for a short step, and `overflow` / `overflowCount` when an audit supplied more than six concepts (the first six are kept). `scripts/blocks.mjs apply` rebuilds it from the confirmed audits in `output/blocks/*.audit.json` plus each step's `blocks:`. An audit file is `{ node, steps: { <step>: { concepts: [{ slug, label, sources, match: { kind: new|reuse|merge|fuzzy, block? }, note }], note } } }`; only written steps with an article body appear, and `blocks.mjs audit --check` validates the file before it is used. `node scripts/blocks.mjs report|check` prints the coverage numbers and the drift. Verify enforces the block format and the block/step/coverage consistency. Inline `[[block-id]]` links are navigation only; graph relationships come from frontmatter only.
 
 ### Course viewer
 
@@ -281,12 +285,14 @@ node scripts/backfill-node-digests.mjs [--subject <s>] [--write] [--skip-unused 
 ### Block coverage
 
 ```bash
-node scripts/blocks.mjs apply  --subject <s>   # rebuild blocks/coverage.json from audits + step links
-node scripts/blocks.mjs report --subject <s>   # Step coverage, Course coverage, block counts, reuse factor, uncovered list
-node scripts/blocks.mjs check  --subject <s>   # drift: stale steps, dropped sources, uncovered concepts, orphan blocks, broken relations
+node scripts/blocks.mjs audit  --subject <s> [--node <id>] [--step <node>/<step>] [--check] [--json]
+node scripts/blocks.mjs apply  --subject <s>
+node scripts/blocks.mjs report --subject <s>
+node scripts/blocks.mjs check  --subject <s>
+node scripts/blocks.mjs merge  --subject <s> --from <old-id> --into <canonical-id> [--dry-run]
 ```
 
-`apply` reads `learn/<subject>/output/blocks/<node>.audit.json` and each written step's `blocks:`; it writes `learn/<subject>/blocks/coverage.json` and never edits step prose or block bodies. `report` answers how many blocks exist now, how many the course needs after coverage, and both coverage ratios. `check` reports drift only; it does not rewrite anything.
+`audit` prints the manifest (eligible nodes/steps, articles, sources, existing blocks, skips) or, with `--check`, validates the audit files. `apply` reads `learn/<subject>/output/blocks/<node>.audit.json` and each written step's `blocks:`; it writes `learn/<subject>/blocks/coverage.json`, caps an audit step at six concepts, and never edits step prose or block bodies. `report` answers how many blocks exist now, how many the course needs after coverage, and both coverage ratios. `check` reports drift only; it does not rewrite anything. `merge` rewrites step `blocks:`, block `prerequisites` / `related`, and inline `[[old-id]]` links into the canonical id, puts the old id in `aliases`, and works only between `draft` blocks.
 
 ### Transcript backfill
 

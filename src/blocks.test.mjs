@@ -5,6 +5,7 @@ import {
   computeCoverage,
   detectDrift,
   findPrerequisiteCycles,
+  validateAudit,
   validateBlockFrontmatter,
   validateBlockRelations,
   validateBlockSections,
@@ -266,4 +267,134 @@ test("drift is empty when a step and block agree", () => {
     steps: { "n1/a": { concepts: [{ slug: "tool-calling", label: "Tool Calling", block: "tool-calling" }] } },
   };
   assert.deepEqual(detectDrift({ blocks, steps, coverage }), []);
+});
+
+function auditFixture(concepts, { node = "n1", steps = { s1: { concepts } } } = {}) {
+  return { node, steps };
+}
+
+function auditContext(overrides = {}) {
+  return {
+    subject: "test",
+    nodes: new Map([["n1", { status: "written", steps: new Map([["s1", {}]]) }]]),
+    blocks: [block({ id: "existing-block", label: "Existing Block", aliases: ["tool-invocation"] })],
+    eligibleSteps: new Set(["n1/s1"]),
+    ...overrides,
+  };
+}
+
+const validConcept = {
+  slug: "tool-calling",
+  label: "Tool Calling",
+  sources: ["[[sources/test/notes.txt#L1-L10]]"],
+  match: { kind: "new" },
+  note: "",
+};
+
+test("a valid audit passes", () => {
+  const audit = auditFixture([validConcept, { ...validConcept, slug: "agent", label: "Agent" }, { ...validConcept, slug: "loop", label: "Loop" }]);
+  assert.deepEqual(validateAudit(audit, auditContext()), { failures: [], warnings: [] });
+});
+
+test("an audit must name a written node and its own steps", () => {
+  const audit = auditFixture([validConcept]);
+  assert.ok(
+    validateAudit({ ...audit, node: "missing" }, auditContext()).failures.some(
+      (failure) => failure.checkId === "audit-node-unknown",
+    ),
+  );
+  assert.ok(
+    validateAudit(audit, auditContext({ eligibleSteps: new Set(["n1/other"]) })).failures.some(
+      (failure) => failure.checkId === "audit-step-not-eligible",
+    ),
+  );
+  assert.ok(
+    validateAudit({ ...audit, steps: { missing: { concepts: [validConcept] } } }, auditContext()).failures.some(
+      (failure) => failure.checkId === "audit-step-unknown",
+    ),
+  );
+});
+
+test("audit concepts check slug, label, sources, and match kind", () => {
+  const bad = [
+    { ...validConcept, slug: "Tool Calling" },
+    { ...validConcept, label: "如何避免模型亂回答" },
+    { ...validConcept, sources: [] },
+    { ...validConcept, sources: ["notes.txt"] },
+    { ...validConcept, match: { kind: "maybe" } },
+  ];
+  const result = validateAudit(auditFixture(bad), auditContext());
+  const checkIds = result.failures.map((failure) => failure.checkId);
+  assert.ok(checkIds.includes("audit-concept-slug"));
+  assert.ok(checkIds.includes("audit-concept-label"));
+  assert.ok(checkIds.includes("audit-concept-sources"));
+  assert.ok(checkIds.includes("audit-match-kind"));
+});
+
+test("a reuse or merge candidate must point at an existing block or alias", () => {
+  const audit = auditFixture([
+    { ...validConcept, match: { kind: "reuse", block: "tool-invocation" } },
+    { ...validConcept, slug: "agent", label: "Agent", match: { kind: "merge" } },
+    { ...validConcept, slug: "loop", label: "Loop", match: { kind: "reuse", block: "missing" } },
+  ]);
+  const checkIds = validateAudit(audit, auditContext()).failures.map((failure) => failure.checkId);
+  assert.equal(checkIds.filter((id) => id === "audit-match-block").length, 2);
+});
+
+test("short steps need a note, and more than six concepts is an overflow warning", () => {
+  const short = validateAudit(auditFixture([validConcept]), auditContext());
+  assert.ok(short.warnings.some((warning) => warning.checkId === "audit-concept-short"));
+  const noted = validateAudit(
+    { ...auditFixture([validConcept]), steps: { s1: { concepts: [validConcept], note: "很短的一步。" } } },
+    auditContext(),
+  );
+  assert.ok(!noted.warnings.some((warning) => warning.checkId === "audit-concept-short"));
+
+  const many = Array.from({ length: 7 }, (_, index) => ({
+    ...validConcept,
+    slug: `concept-${index}`,
+    label: `Concept ${index}`,
+  }));
+  assert.ok(
+    validateAudit(auditFixture(many), auditContext()).warnings.some(
+      (warning) => warning.checkId === "audit-concept-overflow",
+    ),
+  );
+});
+
+test("duplicate slugs fail and a new slug that already exists warns", () => {
+  const result = validateAudit(
+    auditFixture([
+      validConcept,
+      validConcept,
+      { ...validConcept, slug: "existing-block", label: "Existing Block" },
+    ]),
+    auditContext(),
+  );
+  assert.ok(result.failures.some((failure) => failure.checkId === "audit-concept-duplicate"));
+  assert.ok(result.warnings.some((warning) => warning.checkId === "audit-new-existing"));
+});
+
+test("a new candidate dedupes against aliases and normalized labels", () => {
+  const concept = { ...validConcept, slug: "other-name", label: "Existing Block" };
+  const byLabel = validateAudit(auditFixture([validConcept, concept, { ...validConcept, slug: "agent", label: "Agent" }]), auditContext());
+  assert.ok(
+    byLabel.warnings.some(
+      (warning) => warning.checkId === "audit-new-existing" && warning.message.includes("label matches"),
+    ),
+  );
+
+  const byAlias = validateAudit(
+    auditFixture([
+      validConcept,
+      { ...validConcept, slug: "tool-invocation", label: "Tool Invocation" },
+      { ...validConcept, slug: "agent", label: "Agent" },
+    ]),
+    auditContext(),
+  );
+  assert.ok(
+    byAlias.warnings.some(
+      (warning) => warning.checkId === "audit-new-existing" && warning.message.includes("alias"),
+    ),
+  );
 });

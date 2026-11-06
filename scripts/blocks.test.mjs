@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,8 +62,29 @@ A short lesson.
   return root;
 }
 
-function blockFile(root, { id = "tool-calling", label = "Tool Calling", updated = "2026-01-01", sources = ["notes.txt"] } = {}) {
+function blockFile(
+  root,
+  {
+    id = "tool-calling",
+    label = "Tool Calling",
+    updated = "2026-01-01",
+    sources = ["notes.txt"],
+    status = "draft",
+    type = "concept",
+    aliases = [],
+    prerequisites = [],
+    related = [],
+  } = {},
+) {
   const sourceLines = sources.map((source) => `  - "[[sources/test/${source}#L1-L10]]"`).join("\n");
+  const yamlList = (key, values) =>
+    values.length ? `${key}:\n${values.map((value) => `  - ${value}`).join("\n")}` : `${key}: []`;
+  const sectionList = {
+    concept: ["定義", "為什麼重要", "如何運作", "例子", "邊界與常見誤解", "進階"],
+    procedure: ["問題", "前置條件", "步驟", "例子", "失敗模式", "進階"],
+    principle: ["主張", "為什麼成立", "適用範圍", "反例", "進階"],
+    contrast: ["A 是什麼", "B 是什麼", "關鍵差異", "何時用哪個", "進階"],
+  }[type];
   write(
     root,
     `learn/test/blocks/${id}.md`,
@@ -72,12 +93,12 @@ id: ${id}
 title: "${label}（工具呼叫）"
 label: "${label}"
 subject: test
-type: concept
-status: draft
+type: ${type}
+status: ${status}
 summary: "一句話解釋。"
-aliases: []
-prerequisites: []
-related: []
+${yamlList("aliases", aliases)}
+${yamlList("prerequisites", prerequisites)}
+${yamlList("related", related)}
 sources:
 ${sourceLines}
 created: 2026-01-01
@@ -86,29 +107,7 @@ updated: ${updated}
 
 # ${label}
 
-## 定義
-
-Text.
-
-## 為什麼重要
-
-Text.
-
-## 如何運作
-
-Text.
-
-## 例子
-
-Text.
-
-## 邊界與常見誤解
-
-Text.
-
-## 進階
-
-Text.
+${sectionList.map((section) => `## ${section}\n\nText.`).join("\n\n")}
 `,
   );
 }
@@ -246,4 +245,162 @@ test("check reports drift", (t) => {
   const kinds = result.drifts.map((drift) => drift.kind);
   assert.ok(kinds.includes("stale-step"));
   assert.ok(kinds.includes("source-not-referenced"));
+});
+
+function runArgs(root, args) {
+  return spawnSync(process.execPath, [SCRIPT, ...args], { cwd: root, encoding: "utf8" });
+}
+
+test("audit prints a manifest of written steps with a body", (t) => {
+  const root = fixture(t);
+  blockFile(root);
+
+  const result = runArgs(root, ["audit", "--subject", "test", "--json"]);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const manifest = JSON.parse(result.stdout);
+  assert.equal(manifest.nodes.length, 1);
+  assert.equal(manifest.nodes[0].node, "n1");
+  assert.deepEqual(
+    manifest.nodes[0].steps.map((step) => step.id),
+    ["s1"],
+  );
+  assert.equal(manifest.nodes[0].steps[0].article, "learn/test/nodes/n1/s1.md");
+  assert.equal(manifest.blocks[0].id, "tool-calling");
+  assert.deepEqual(manifest.skipped, []);
+});
+
+test("audit skips an article without a body", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/nodes/n1/s1.md", "# Step One\n");
+
+  const manifest = JSON.parse(runArgs(root, ["audit", "--subject", "test", "--json"]).stdout);
+  assert.deepEqual(manifest.nodes, []);
+  assert.ok(manifest.skipped.some((entry) => entry.reason === "article-missing-or-empty"));
+});
+
+test("audit --check validates the audit files", (t) => {
+  const root = fixture(t);
+  blockFile(root);
+  audit(root, [
+    {
+      slug: "tool-calling",
+      label: "Tool Calling",
+      sources: ["[[sources/test/notes.txt#L1-L10]]"],
+      match: { kind: "new" },
+      note: "",
+    },
+    { slug: "agent", label: "Agent", sources: ["[[sources/test/notes.txt#L1-L10]]"], match: { kind: "new" } },
+    { slug: "loop", label: "Loop", sources: ["[[sources/test/notes.txt#L1-L10]]"], match: { kind: "new" } },
+  ]);
+
+  const clean = runArgs(root, ["audit", "--subject", "test", "--check", "--json"]);
+  assert.equal(clean.status, 0, clean.stderr || clean.stdout);
+  assert.deepEqual(JSON.parse(clean.stdout).failures, []);
+
+  write(
+    root,
+    "learn/test/output/blocks/n1.audit.json",
+    JSON.stringify({ node: "n1", steps: { s1: { concepts: [{ slug: "Bad Slug", label: "how to" }] } } }),
+  );
+  const bad = runArgs(root, ["audit", "--subject", "test", "--check", "--json"]);
+  assert.equal(bad.status, 1);
+  assert.ok(JSON.parse(bad.stdout).failures.length > 0);
+});
+
+test("merge is a dry run until applied and rewrites every reference", (t) => {
+  const root = fixture(t, { blocks: ["old-block", "other-block"] });
+  blockFile(root, { id: "old-block", label: "Old Block", related: ["other-block"] });
+  blockFile(root, { id: "canonical-block", label: "Canonical Block" });
+  blockFile(root, { id: "other-block", label: "Other Block", related: ["old-block"] });
+  write(
+    root,
+    "learn/test/blocks/canonical-block.md",
+    read(root, "learn/test/blocks/canonical-block.md").replace(
+      "## 進階\n\nText.",
+      "## 進階\n\nSee [[old-block]].",
+    ),
+  );
+  write(
+    root,
+    "learn/test/blocks/other-block.md",
+    read(root, "learn/test/blocks/other-block.md").replace(
+      "## 進階\n\nText.",
+      "## 進階\n\nSee [[old-block|Old Block]].",
+    ),
+  );
+
+  const preview = runArgs(root, [
+    "merge",
+    "--subject",
+    "test",
+    "--from",
+    "old-block",
+    "--into",
+    "canonical-block",
+    "--dry-run",
+    "--json",
+  ]);
+  assert.equal(preview.status, 0, preview.stderr || preview.stdout);
+  assert.equal(JSON.parse(preview.stdout).dryRun, true);
+  assert.ok(existsSync(join(root, "learn/test/blocks/old-block.md")));
+
+  const result = runArgs(root, [
+    "merge",
+    "--subject",
+    "test",
+    "--from",
+    "old-block",
+    "--into",
+    "canonical-block",
+    "--json",
+  ]);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.ok(!existsSync(join(root, "learn/test/blocks/old-block.md")));
+
+  const canonical = read(root, "learn/test/blocks/canonical-block.md");
+  assert.match(canonical, /aliases:\n  - old-block/);
+  assert.match(canonical, /related:\n  - other-block/);
+  assert.match(canonical, /\[\[canonical-block\]\]/);
+
+  const other = read(root, "learn/test/blocks/other-block.md");
+  assert.match(other, /related:\n  - canonical-block/);
+  assert.match(other, /\[\[canonical-block\|Old Block\]\]/);
+  assert.doesNotMatch(other, /\[\[old-block/);
+
+  const node = read(root, "learn/test/nodes/n1.md");
+  assert.match(node, /blocks:\n      - canonical-block\n      - other-block/);
+
+  const coverage = JSON.parse(read(root, "learn/test/blocks/coverage.json"));
+  const blocks = coverage.steps["n1/s1"].concepts.map((concept) => concept.block);
+  assert.deepEqual(blocks, ["canonical-block", "other-block"]);
+});
+
+test("apply keeps a short step note and caps overflow at six concepts", (t) => {
+  const root = fixture(t);
+  blockFile(root);
+  const many = Array.from({ length: 7 }, (_, index) => ({
+    slug: `concept-${index}`,
+    label: `Concept ${index}`,
+    sources: ["[[sources/test/notes.txt#L1-L10]]"],
+    match: { kind: "new" },
+    note: "",
+  }));
+  audit(root, many.slice(0, 2));
+  const shortPath = join(root, "learn/test/output/blocks/n1.audit.json");
+  writeFileSync(
+    shortPath,
+    JSON.stringify({ node: "n1", steps: { s1: { concepts: many.slice(0, 2), note: "很短的一步。" } } }),
+  );
+
+  run(root, "apply");
+  let coverage = JSON.parse(read(root, "learn/test/blocks/coverage.json"));
+  assert.equal(coverage.steps["n1/s1"].note, "很短的一步。");
+  assert.equal(coverage.steps["n1/s1"].concepts.length, 2);
+
+  writeFileSync(shortPath, JSON.stringify({ node: "n1", steps: { s1: { concepts: many } } }));
+  run(root, "apply");
+  coverage = JSON.parse(read(root, "learn/test/blocks/coverage.json"));
+  assert.equal(coverage.steps["n1/s1"].concepts.length, 6);
+  assert.equal(coverage.steps["n1/s1"].overflow, true);
+  assert.equal(coverage.steps["n1/s1"].overflowCount, 7);
 });
