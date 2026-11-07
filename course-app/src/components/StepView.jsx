@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Markdown from "./Markdown.jsx";
-import Quiz from "./Quiz.jsx";
+import QuizDeck from "./QuizDeck.jsx";
 import ConceptGraph from "./ConceptGraph.jsx";
 import { ConceptList, TocDetails } from "./ContextRail.jsx";
 import { railBlocks } from "../lib/blocks.mjs";
@@ -286,12 +286,10 @@ export default function StepView({
               自我檢查
             </h2>
             <p className="mt-2 text-[0.95rem] text-ink-soft">
-              讀完之後，試著回答這幾題。
+              讀完之後，一題一題確認理解；答對後自己按下一題，也可以隨時切換。
             </p>
             <div className="mt-6">
-              {quizzes.map((quiz, index) => (
-                <Quiz key={`${index}-${quiz.question}`} quiz={quiz} />
-              ))}
+              <QuizDeck quizzes={quizzes} />
             </div>
           </section>
         )}

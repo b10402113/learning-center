@@ -5,17 +5,24 @@ import { parseQuiz } from "../lib/quiz.mjs";
  * Interactive quiz. A wrong pick can be retried; a correct pick locks the
  * question and reveals the explanation.
  */
-export default function Quiz({ source, quiz: providedQuiz }) {
+export default function Quiz({
+  source,
+  quiz: providedQuiz,
+  solved: solvedProp,
+  onSolved,
+}) {
   const quiz = providedQuiz ?? parseQuiz(source);
-  const [solved, setSolved] = useState(false);
+  const [localSolved, setLocalSolved] = useState(false);
   const [wrong, setWrong] = useState(() => new Set());
+  const solved = solvedProp ?? localSolved;
 
   if (!quiz) return null;
 
   const pick = (index) => {
     if (solved) return;
     if (index === quiz.answer) {
-      setSolved(true);
+      setLocalSolved(true);
+      onSolved?.();
       return;
     }
     setWrong((current) => new Set(current).add(index));
