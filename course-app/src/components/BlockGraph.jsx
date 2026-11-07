@@ -138,6 +138,7 @@ export default function BlockGraph({
   framed = true,
   settleImmediately = false,
   onNavigate = null,
+  onOpenBlock = null,
 }) {
   const graph = useMemo(
     () => buildGraph(course, { type, query, focus, focusIds, depth }),
@@ -339,6 +340,11 @@ export default function BlockGraph({
 
   const onNodeClick = useCallback(
     (node, event) => {
+      if (onOpenBlock && isPlainLeftClick(event)) {
+        event.preventDefault();
+        onOpenBlock(node.id);
+        return;
+      }
       const href = pathForBlock(course.subject, node.id);
       if (onNavigate && followInternalLink(event, href, onNavigate)) {
         event.preventDefault();
@@ -348,7 +354,7 @@ export default function BlockGraph({
         window.location.assign(href);
       }
     },
-    [course.subject, onNavigate]
+    [course.subject, onNavigate, onOpenBlock]
   );
 
   const zoomBy = (factor) => {

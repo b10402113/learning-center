@@ -7,11 +7,27 @@ import { resolveSrc } from "../lib/assets.mjs";
 import { replaceBlockLinks } from "../lib/block-links.mjs";
 import { rehypeHeadingIds } from "../lib/heading-anchor.mjs";
 import { rehypeHighlightPlugin } from "../lib/highlight.mjs";
-import { followInternalLink } from "../lib/navigation.mjs";
+import { followInternalLink, isPlainLeftClick } from "../lib/navigation.mjs";
+import { parsePath } from "../lib/route.mjs";
 import Quiz from "./Quiz.jsx";
 
 function fencedText(children) {
   return Array.isArray(children) ? children.join("") : String(children ?? "");
+}
+
+/** The block id when `href` points at a block page in this subject. */
+function blockIdFromHref(href, subjectId) {
+  if (!href || !subjectId) return null;
+  let url;
+  try {
+    url = new URL(href, window.location.href);
+  } catch {
+    return null;
+  }
+  if (url.origin !== window.location.origin) return null;
+  const parsed = parsePath(url.pathname);
+  if (!parsed?.blockRoute || parsed.subjectId !== subjectId) return null;
+  return parsed.blockId;
 }
 
 /**
@@ -25,6 +41,7 @@ export default function Markdown({
   subjectId = null,
   blockIds = null,
   onNavigate = null,
+  onOpenBlock = null,
 }) {
   // Provenance comments (`<!-- source: … -->`) are editorial metadata for
   // verify, not reading material.
@@ -79,6 +96,14 @@ export default function Markdown({
             <a
               href={href}
               onClick={(event) => {
+                if (onOpenBlock && isPlainLeftClick(event)) {
+                  const blockId = blockIdFromHref(href, subjectId);
+                  if (blockId) {
+                    event.preventDefault();
+                    onOpenBlock(blockId);
+                    return;
+                  }
+                }
                 if (followInternalLink(event, href, onNavigate)) {
                   event.preventDefault();
                 }

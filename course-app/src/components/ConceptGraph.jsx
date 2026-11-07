@@ -3,7 +3,12 @@ import BlockGraph from "./BlockGraph.jsx";
 import { railBlocks } from "../lib/blocks.mjs";
 
 /** The step's local concept graph, rendered at the end of the article. */
-export default function ConceptGraph({ course, step, onNavigate = null }) {
+export default function ConceptGraph({
+  course,
+  step,
+  onNavigate = null,
+  onOpenBlock = null,
+}) {
   const focusIds = useMemo(
     () =>
       (Array.isArray(step?.blocks) ? step.blocks : [])
@@ -39,6 +44,7 @@ export default function ConceptGraph({ course, step, onNavigate = null }) {
           framed={false}
           settleImmediately
           onNavigate={onNavigate}
+          onOpenBlock={onOpenBlock}
         />
       </div>
     </section>

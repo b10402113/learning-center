@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import subjectsIndex from "./data/subjects.json";
 import Sidebar, { SidebarDrawer } from "./components/Sidebar.jsx";
 import ContextRail from "./components/ContextRail.jsx";
@@ -7,6 +7,7 @@ import StepView from "./components/StepView.jsx";
 import SubjectsView from "./components/SubjectsView.jsx";
 import SubjectOverview from "./components/SubjectOverview.jsx";
 import BlockView from "./components/BlockView.jsx";
+import BlockModal from "./components/BlockModal.jsx";
 import BlocksIndex from "./components/BlocksIndex.jsx";
 import PixelMark from "./components/PixelMark.jsx";
 import { OrbitMark } from "./components/Glyphs.jsx";
@@ -186,6 +187,7 @@ export default function App() {
   const [railOpen, setRailOpen] = useState(initialRailOpen);
   const [focusMode, setFocusMode] = useState(false);
   const [theme, setTheme] = useState(initialTheme);
+  const [modalBlockId, setModalBlockId] = useState(null);
   const cacheRef = useRef({});
   const blockCacheRef = useRef({});
   const routeKey = `${subjectId ?? ""}/${nodeId ?? ""}/${stepId ?? ""}/${blockId ?? ""}${
@@ -378,6 +380,11 @@ export default function App() {
     window.scrollTo(0, 0);
   }, [routeKey]);
 
+  // The block modal belongs to the step that opened it.
+  useEffect(() => {
+    setModalBlockId(null);
+  }, [routeKey]);
+
   const replacePath = (sid, nid, stid = null) => {
     const next = pathFor(sid, nid, stid);
     if (window.location.pathname !== next) history.replaceState(null, "", next);
@@ -419,6 +426,38 @@ export default function App() {
     else if (parsed.blockRoute) pushBlockPath(nextSubject, parsed.blockId);
     else pushPath(nextSubject, parsed.nodeId, parsed.stepId);
     return true;
+  };
+
+  const openBlockModal = useCallback((id) => setModalBlockId(id), []);
+  const closeBlockModal = useCallback(() => setModalBlockId(null), []);
+
+  const expandBlockModal = () => {
+    if (!modalBlockId) return;
+    const href = pathForBlock(subjectId, modalBlockId);
+    setModalBlockId(null);
+    navigateHref(href);
+  };
+
+  const navigateModalHref = (href) => {
+    let url;
+    try {
+      url = new URL(href, window.location.href);
+    } catch {
+      return false;
+    }
+    if (url.origin !== window.location.origin) return false;
+    const parsed = parsePath(url.pathname);
+    if (!parsed) return false;
+    const nextSubject = resolveSubjectId(parsed.subjectId);
+    if (!nextSubject) return false;
+
+    // A related block swaps the modal's content; a step or node closes it.
+    if (parsed.blockRoute) {
+      setModalBlockId(parsed.blockId);
+      return true;
+    }
+    setModalBlockId(null);
+    return navigateHref(href);
   };
 
   const selectNode = (id) => {
@@ -634,6 +673,7 @@ export default function App() {
                       node={node}
                       step={step}
                       onNavigate={navigateHref}
+                      onOpenBlock={openBlockModal}
                     />
                   ) : node ? (
                     <NodeView
@@ -661,6 +701,7 @@ export default function App() {
                       course={course}
                       step={step}
                       onNavigate={navigateHref}
+                      onOpenBlock={openBlockModal}
                       onClose={() => setRailOpen(false)}
                     />
                   )}
@@ -669,6 +710,16 @@ export default function App() {
             </div>
           </div>
         </>
+      )}
+
+      {modalBlockId && course && (
+        <BlockModal
+          course={course}
+          blockId={modalBlockId}
+          onClose={closeBlockModal}
+          onExpand={expandBlockModal}
+          onNavigate={navigateModalHref}
+        />
       )}
     </div>
   );

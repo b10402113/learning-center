@@ -142,6 +142,7 @@ export default function StepView({
   node,
   step,
   onNavigate = null,
+  onOpenBlock = null,
 }) {
   const assetBase = `${BASE}nodes/${encodeURIComponent(course.subject)}/${encodeURIComponent(node.id)}/`;
   const { previous, next } = stepNeighbors(node.steps, step.id);
@@ -235,6 +236,7 @@ export default function StepView({
               subjectId={course.subject}
               blockIds={(course.blocks || []).map((block) => block.id)}
               onNavigate={onNavigate}
+              onOpenBlock={onOpenBlock}
             >
               {body}
             </Markdown>
@@ -259,6 +261,7 @@ export default function StepView({
               course={course}
               step={step}
               onNavigate={onNavigate}
+              onOpenBlock={onOpenBlock}
               className="mt-4"
             />
           </section>
@@ -268,6 +271,7 @@ export default function StepView({
           course={course}
           step={step}
           onNavigate={onNavigate}
+          onOpenBlock={onOpenBlock}
         />
 
         {quizzes.length > 0 && (

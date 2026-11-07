@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { blockTypeMark, railBlocks } from "../lib/blocks.mjs";
-import { followInternalLink } from "../lib/navigation.mjs";
+import { followInternalLink, isPlainLeftClick } from "../lib/navigation.mjs";
 import { pathForBlock } from "../lib/route.mjs";
 
 const TOC_LINE = 120;
@@ -75,6 +75,7 @@ export default function ContextRail({
   course,
   step,
   onNavigate = null,
+  onOpenBlock = null,
   onClose = null,
 }) {
   const headings = Array.isArray(step?.headings) ? step.headings : [];
@@ -131,6 +132,7 @@ export default function ContextRail({
               course={course}
               step={step}
               onNavigate={onNavigate}
+              onOpenBlock={onOpenBlock}
               className="mt-3"
             />
           </section>
@@ -141,7 +143,13 @@ export default function ContextRail({
 }
 
 /** The step's blocks as a quiet list; shared by the rail and narrow screens. */
-export function ConceptList({ course, step, onNavigate = null, className = "" }) {
+export function ConceptList({
+  course,
+  step,
+  onNavigate = null,
+  onOpenBlock = null,
+  className = "",
+}) {
   const blocks = railBlocks(course, step);
   if (blocks.length === 0) return null;
 
@@ -154,6 +162,11 @@ export function ConceptList({ course, step, onNavigate = null, className = "" })
             <a
               href={href}
               onClick={(event) => {
+                if (onOpenBlock && isPlainLeftClick(event)) {
+                  event.preventDefault();
+                  onOpenBlock(block.id);
+                  return;
+                }
                 if (followInternalLink(event, href, onNavigate)) {
                   event.preventDefault();
                 }

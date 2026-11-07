@@ -19,7 +19,49 @@ function Badge({ children, hot = false }) {
   );
 }
 
-function BlockLink({ course, id, title, onNavigate }) {
+function ArrowIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="mt-1 shrink-0 text-ink-soft/50 transition duration-200 group-hover:translate-x-0.5 group-hover:text-accent"
+    >
+      <path d="M5 12h14M13 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+function RelationLabel({ children, hot = false }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 font-label text-[9.5px] uppercase tracking-[0.14em] ${
+        hot ? "text-accent" : "text-ink-soft"
+      }`}
+    >
+      {hot && (
+        <span aria-hidden="true" className="size-1 rounded-full bg-accent" />
+      )}
+      {children}
+    </span>
+  );
+}
+
+function RelationCard({
+  course,
+  id,
+  title,
+  summary,
+  relation,
+  hot = false,
+  onNavigate,
+}) {
   const href = pathForBlock(course.subject, id);
   return (
     <a
@@ -29,17 +71,25 @@ function BlockLink({ course, id, title, onNavigate }) {
           event.preventDefault();
         }
       }}
-      className="group inline-flex items-baseline gap-2 rounded-full bg-surface px-3 py-1.5 ring-1 ring-hairline transition-colors hover:ring-accent/40"
+      className="group flex min-w-0 items-start gap-3 rounded-xl border border-hairline bg-surface/60 px-4 py-3.5 transition-colors duration-200 hover:border-accent/35 hover:bg-surface"
     >
-      <span className="font-medium text-ink transition-colors group-hover:text-accent">
-        {title || id}
+      <span className="min-w-0 flex-1">
+        <RelationLabel hot={hot}>{relation}</RelationLabel>
+        <span className="mt-1.5 block text-[0.95rem] font-medium leading-snug text-ink transition-colors group-hover:text-accent">
+          {title || id}
+        </span>
+        {summary && (
+          <span className="mt-1 line-clamp-2 block text-[0.82rem] leading-relaxed text-ink-soft">
+            {summary}
+          </span>
+        )}
       </span>
-      <span className="font-mono text-[10px] text-ink-soft">{id}</span>
+      <ArrowIcon />
     </a>
   );
 }
 
-function StepLink({ course, step, onNavigate }) {
+function StepCard({ course, step, onNavigate }) {
   const href = pathFor(course.subject, step.nodeId, step.stepId);
   return (
     <a
@@ -49,28 +99,60 @@ function StepLink({ course, step, onNavigate }) {
           event.preventDefault();
         }
       }}
-      className="group flex items-baseline gap-2 rounded-xl bg-surface px-3.5 py-2 ring-1 ring-hairline transition-colors hover:ring-accent/40"
+      className="group flex min-w-0 items-start gap-3 rounded-xl border border-hairline bg-surface/60 px-4 py-3.5 transition-colors duration-200 hover:border-accent/35 hover:bg-surface"
     >
-      <span className="min-w-0 flex-1 truncate font-medium text-ink transition-colors group-hover:text-accent">
-        {step.stepTitle}
+      <span className="min-w-0 flex-1">
+        <RelationLabel>步驟引用</RelationLabel>
+        <span className="mt-1.5 block text-[0.95rem] font-medium leading-snug text-ink transition-colors group-hover:text-accent">
+          {step.stepTitle}
+        </span>
+        <span className="mt-1 block truncate text-[0.82rem] leading-relaxed text-ink-soft">
+          {step.nodeTitle}
+        </span>
       </span>
-      <span className="shrink-0 font-mono text-[10px] text-ink-soft">
-        {step.nodeTitle}
-      </span>
+      <ArrowIcon />
     </a>
   );
 }
 
-function Section({ title, count, children }) {
+function CardGrid({ children }) {
+  return (
+    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">{children}</div>
+  );
+}
+
+function Subhead({ children, count }) {
+  return (
+    <div className="mb-2.5 flex items-center gap-2">
+      <span
+        aria-hidden="true"
+        className="size-1 rounded-full bg-accent/70"
+      />
+      <span className="font-label text-[9.5px] uppercase tracking-[0.14em] text-ink-soft">
+        {children}
+      </span>
+      <span className="font-mono text-[10px] tabular-nums text-ink-soft/70">
+        {count}
+      </span>
+    </div>
+  );
+}
+
+function Section({ title, count, hint, children }) {
   return (
     <section className="mt-12">
-      <div className="mb-4 flex items-end justify-between gap-3 border-b border-hairline pb-3">
-        <h2 className="font-display text-[1.1rem] font-semibold text-ink">
-          {title}
-        </h2>
-        <span className="font-mono text-[10px] tabular-nums text-ink-soft">
-          {count}
-        </span>
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <div className="flex items-baseline gap-2.5">
+          <h2 className="font-display text-[1.1rem] font-semibold text-ink">
+            {title}
+          </h2>
+          <span className="rounded-full bg-shade px-2 py-0.5 font-mono text-[10px] leading-none tabular-nums text-ink-soft">
+            {count}
+          </span>
+        </div>
+        {hint && (
+          <p className="text-[0.78rem] text-ink-soft/80">{hint}</p>
+        )}
       </div>
       {children}
     </section>
@@ -81,7 +163,12 @@ function Section({ title, count, children }) {
  * One standalone knowledge point. The body arrives in its own lazily loaded
  * JSON file; this view adds the relations and backlinks the reader needs.
  */
-export default function BlockView({ course, block, onNavigate = null }) {
+export default function BlockView({
+  course,
+  block,
+  onNavigate = null,
+  embedded = false,
+}) {
   if (block?.missing) {
     return (
       <p className="py-16 text-center text-[0.95rem] text-ink-soft">
@@ -108,7 +195,12 @@ export default function BlockView({ course, block, onNavigate = null }) {
   const related = (block.related || []).map(
     (id) => byId.get(id) || { id, title: id }
   );
-  const backlinkBlocks = Array.isArray(block.backlinks) ? block.backlinks : [];
+  const backlinkBlocks = (
+    Array.isArray(block.backlinks) ? block.backlinks : []
+  ).map((item) => {
+    const meta = byId.get(item.id);
+    return { ...meta, ...item, summary: meta?.summary || "" };
+  });
   const backlinkSteps = Array.isArray(block.steps) ? block.steps : [];
   const sources = Array.isArray(block.sources) ? block.sources : [];
   const localIds = localNodeIds(course.blockEdges, block.id, 2);
@@ -120,7 +212,9 @@ export default function BlockView({ course, block, onNavigate = null }) {
     <article>
       <nav
         aria-label="麵包屑"
-        className="flex flex-wrap items-center gap-2 font-label text-[11px] text-ink-soft"
+        className={`flex flex-wrap items-center gap-2 font-label text-[11px] text-ink-soft ${
+          embedded ? "hidden" : ""
+        }`}
       >
         <a
           href={pathFor(course.subject)}
@@ -149,7 +243,7 @@ export default function BlockView({ course, block, onNavigate = null }) {
         <span className="text-ink">{block.title}</span>
       </nav>
 
-      <header className="mt-4">
+      <header className={embedded ? "" : "mt-4"}>
         <div className="flex flex-wrap items-center gap-2">
           <Badge hot>{blockTypeLabel(block.type)}</Badge>
           <Badge>{block.status}</Badge>
@@ -157,7 +251,11 @@ export default function BlockView({ course, block, onNavigate = null }) {
             {block.id}
           </span>
         </div>
-        <h1 className="mt-3 font-display text-[2.2rem] font-semibold leading-[1.15] tracking-[-0.5px] text-ink sm:text-[2.6rem]">
+        <h1
+          className={`mt-3 font-display font-semibold leading-[1.15] tracking-[-0.5px] text-ink ${
+            embedded ? "text-[1.75rem] sm:text-[2rem]" : "text-[2.2rem] sm:text-[2.6rem]"
+          }`}
+        >
           {block.title}
         </h1>
         {block.summary && (
@@ -178,34 +276,47 @@ export default function BlockView({ course, block, onNavigate = null }) {
       </div>
 
       {prerequisites.length > 0 && (
-        <Section title="先備知識" count={prerequisites.length}>
-          <div className="flex flex-wrap gap-2">
+        <Section
+          title="先備知識"
+          count={prerequisites.length}
+          hint="閱讀前先掌握的概念"
+        >
+          <CardGrid>
             {prerequisites.map((item) => (
-              <BlockLink
+              <RelationCard
                 key={item.id}
                 course={course}
                 id={item.id}
                 title={item.title}
+                summary={item.summary}
+                relation="先備知識"
                 onNavigate={onNavigate}
               />
             ))}
-          </div>
+          </CardGrid>
         </Section>
       )}
 
       {related.length > 0 && (
-        <Section title="相關知識" count={related.length}>
-          <div className="flex flex-wrap gap-2">
+        <Section
+          title="相關知識"
+          count={related.length}
+          hint="同一主題的延伸"
+        >
+          <CardGrid>
             {related.map((item) => (
-              <BlockLink
+              <RelationCard
                 key={item.id}
                 course={course}
                 id={item.id}
                 title={item.title}
+                summary={item.summary}
+                relation="相關知識"
+                hot
                 onNavigate={onNavigate}
               />
             ))}
-          </div>
+          </CardGrid>
         </Section>
       )}
 
@@ -213,42 +324,52 @@ export default function BlockView({ course, block, onNavigate = null }) {
         <Section
           title="反向連結"
           count={backlinkSteps.length + backlinkBlocks.length}
+          hint="從其他內容連回這裡"
         >
-          {backlinkSteps.length > 0 && (
-            <div>
-              <p className="robo-kicker mb-2 font-label text-[9.5px] text-ink-soft">
-                使用此知識點的步驟
-              </p>
-              <div className="space-y-2">
-                {backlinkSteps.map((step) => (
-                  <StepLink
-                    key={`${step.nodeId}/${step.stepId}`}
-                    course={course}
-                    step={step}
-                    onNavigate={onNavigate}
-                  />
-                ))}
+          <div className="space-y-6">
+            {backlinkSteps.length > 0 && (
+              <div>
+                <Subhead count={backlinkSteps.length}>
+                  使用此知識點的步驟
+                </Subhead>
+                <CardGrid>
+                  {backlinkSteps.map((step) => (
+                    <StepCard
+                      key={`${step.nodeId}/${step.stepId}`}
+                      course={course}
+                      step={step}
+                      onNavigate={onNavigate}
+                    />
+                  ))}
+                </CardGrid>
               </div>
-            </div>
-          )}
-          {backlinkBlocks.length > 0 && (
-            <div className={backlinkSteps.length > 0 ? "mt-5" : ""}>
-              <p className="robo-kicker mb-2 font-label text-[9.5px] text-ink-soft">
-                指向此知識點的知識點
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {backlinkBlocks.map((item) => (
-                  <BlockLink
-                    key={`${item.id}-${item.kind}`}
-                    course={course}
-                    id={item.id}
-                    title={item.title}
-                    onNavigate={onNavigate}
-                  />
-                ))}
+            )}
+            {backlinkBlocks.length > 0 && (
+              <div>
+                <Subhead count={backlinkBlocks.length}>
+                  指向此知識點的知識點
+                </Subhead>
+                <CardGrid>
+                  {backlinkBlocks.map((item) => (
+                    <RelationCard
+                      key={`${item.id}-${item.kind}`}
+                      course={course}
+                      id={item.id}
+                      title={item.title}
+                      summary={item.summary}
+                      relation={
+                        item.kind === "prerequisite"
+                          ? "來自先備知識"
+                          : "來自相關知識"
+                      }
+                      hot={item.kind !== "prerequisite"}
+                      onNavigate={onNavigate}
+                    />
+                  ))}
+                </CardGrid>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </Section>
       )}
 
@@ -287,9 +408,11 @@ export default function BlockView({ course, block, onNavigate = null }) {
         />
       </Section>
 
-      <footer className="robo-kicker mt-20 border-t border-hairline pt-5 font-label text-[10px] text-ink-soft">
-        {course.title} · 知識點 · {block.title}
-      </footer>
+      {!embedded && (
+        <footer className="robo-kicker mt-20 border-t border-hairline pt-5 font-label text-[10px] text-ink-soft">
+          {course.title} · 知識點 · {block.title}
+        </footer>
+      )}
     </article>
   );
 }
