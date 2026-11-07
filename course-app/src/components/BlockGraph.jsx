@@ -1,47 +1,107 @@
-import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  blockTypeFill,
-  blockTypeInk,
-  blockTypeLabel,
-  blockTypeMark,
-} from "../lib/blocks.mjs";
-import {
-  clampNodePosition,
-  clampOffset,
-  layoutBlockGraph,
-  neighborsOf,
-} from "../lib/block-graph.mjs";
-import { followInternalLink } from "../lib/navigation.mjs";
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import ForceGraph2D from "react-force-graph-2d";
+import { forceCollide } from "d3-force";
+import { blockTypeLabel, blockTypeMark } from "../lib/blocks.mjs";
+import { buildGraph, neighborsOf } from "../lib/block-graph.mjs";
+import { followInternalLink, isPlainLeftClick } from "../lib/navigation.mjs";
 import { pathForBlock } from "../lib/route.mjs";
 
-const MIN_SCALE = 0.5;
-const MAX_SCALE = 2.4;
+const MIN_GRAPH_HEIGHT = 420;
+const MAX_GRAPH_HEIGHT = 680;
+const FONT_FAMILY =
+  'ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans TC", sans-serif';
 
-function clamp(value) {
-  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
-/** Phones start zoomed in; the whole graph is still reachable by panning. */
-function defaultScale() {
-  if (typeof window === "undefined" || !window.matchMedia) return 1;
-  return window.matchMedia("(max-width: 640px)").matches ? 2 : 1;
-}
-
-function wrapLabel(text, max = 14) {
-  const lines = [];
-  let line = "";
-  for (const word of String(text || "").split(/\s+/)) {
-    if (!word) continue;
-    const next = line ? `${line} ${word}` : word;
-    if (next.length > max && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = next;
-    }
+/** Resolve the theme tokens once per paint; canvas cannot read CSS variables. */
+function readPalette() {
+  if (typeof document === "undefined") {
+    return {
+      paper: "#f2efe8",
+      surface: "#faf8f2",
+      shade: "#e8e2d2",
+      accent: "#ff6b1a",
+      darkColor: "#131311",
+      ink: "#1c1a16",
+      inkSoft: "#6f6a5c",
+      isDark: false,
+    };
   }
-  if (line) lines.push(line);
-  return lines.slice(0, 2);
+  const styles = getComputedStyle(document.documentElement);
+  const read = (name, fallback) =>
+    styles.getPropertyValue(name).trim() || fallback;
+  return {
+    paper: read("--color-paper", "#f2efe8"),
+    surface: read("--color-surface", "#faf8f2"),
+    shade: read("--color-shade", "#e8e2d2"),
+    accent: read("--color-accent", "#ff6b1a"),
+    darkColor: read("--color-dark", "#131311"),
+    ink: read("--color-ink", "#1c1a16"),
+    inkSoft: read("--color-ink-soft", "#6f6a5c"),
+    isDark: document.documentElement.classList.contains("dark"),
+  };
+}
+
+function usePalette() {
+  const [palette, setPalette] = useState(readPalette);
+  useEffect(() => {
+    const observer = new MutationObserver(() => setPalette(readPalette()));
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => observer.disconnect();
+  }, []);
+  return palette;
+}
+
+function fillFor(type, palette) {
+  if (type === "procedure") return palette.shade;
+  if (type === "principle") return palette.accent;
+  if (type === "contrast") return palette.darkColor;
+  return palette.surface;
+}
+
+function inkFor(type, palette) {
+  if (type !== "contrast") return palette.ink;
+  return palette.isDark ? palette.ink : palette.paper;
+}
+
+function truncate(text, max) {
+  const value = String(text || "");
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+/** Width, and a height that keeps the graph readable at every breakpoint. */
+function useCanvasSize(minHeight = MIN_GRAPH_HEIGHT, maxHeight = MAX_GRAPH_HEIGHT) {
+  const ref = useRef(null);
+  const [size, setSize] = useState({ width: 0, height: minHeight });
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const update = () => {
+      const width = element.clientWidth;
+      if (!width) return;
+      setSize({
+        width,
+        height: Math.round(clamp(width * 0.64, minHeight, maxHeight)),
+      });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [minHeight, maxHeight]);
+  return [ref, size];
 }
 
 function ZoomButton({ label, children, onClick }) {
@@ -51,7 +111,7 @@ function ZoomButton({ label, children, onClick }) {
       onClick={onClick}
       aria-label={label}
       title={label}
-      className="grid size-7 place-items-center border-2 border-ink bg-surface font-mono text-sm leading-none text-ink transition-colors hover:border-accent hover:text-accent"
+      className="grid size-8 place-items-center rounded-lg bg-surface text-sm leading-none text-ink ring-1 ring-hairline transition-colors hover:text-accent hover:ring-accent/40"
     >
       {children}
     </button>
@@ -59,34 +119,56 @@ function ZoomButton({ label, children, onClick }) {
 }
 
 /**
- * One subject's knowledge graph: blocks as nodes, `prerequisite` edges with an
- * arrow, `related` edges dotted. The force layout runs once from a fixed seed,
- * so the picture is stable after a reload.
+ * One subject's knowledge graph, drawn on a canvas by react-force-graph.
+ * Blocks are nodes; `prerequisite` edges carry an arrow and `related` edges
+ * are dashed. Hovering dims everything but the node and its neighbours.
  */
-export default function BlockGraph({ course, type = "all", query = "", onNavigate = null }) {
+export default function BlockGraph({
+  course,
+  type = "all",
+  query = "",
+  focus = null,
+  focusIds = null,
+  depth = 1,
+  minHeight = MIN_GRAPH_HEIGHT,
+  maxHeight = MAX_GRAPH_HEIGHT,
+  compact = false,
+  showHint = true,
+  framed = true,
+  onNavigate = null,
+}) {
   const graph = useMemo(
-    () => layoutBlockGraph(course, { type, query }),
-    [course, type, query]
+    () => buildGraph(course, { type, query, focus, focusIds, depth }),
+    [course, type, query, focus, focusIds, depth]
   );
-  const containerRef = useRef(null);
-  const svgRef = useRef(null);
-  const panRef = useRef({ active: false, moved: false, x: 0, y: 0 });
-  const nodeDragRef = useRef(null);
-  const suppressClickRef = useRef(false);
-  const [scale, setScale] = useState(defaultScale);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [draggedPositions, setDraggedPositions] = useState({});
-  const [hovered, setHovered] = useState(null);
 
-  // A new filter or a dragged node must not survive the next layout.
-  useEffect(() => {
-    setDraggedPositions({});
-    setHovered(null);
-  }, [graph]);
+  // react-force-graph wants `source`/`target`; the layout starts empty.
+  const data = useMemo(
+    () => ({
+      // Hubs are painted first, so their labels win the collision pass.
+      nodes: [...graph.nodes]
+        .sort((a, b) => b.degree - a.degree)
+        .map((node) => ({ ...node })),
+      links: graph.links.map((link) => ({
+        ...link,
+        source: link.from,
+        target: link.to,
+      })),
+    }),
+    [graph]
+  );
+
+  const palette = usePalette();
+  const [containerRef, size] = useCanvasSize(minHeight, maxHeight);
+  const fgRef = useRef(null);
+  const fittedForRef = useRef(null);
+  const placedLabelsRef = useRef([]);
+  const [hovered, setHovered] = useState(null);
+  const [ready, setReady] = useState(false);
 
   const byId = useMemo(
-    () => new Map(graph.nodes.map((node) => [node.id, node])),
-    [graph.nodes]
+    () => new Map(data.nodes.map((node) => [node.id, node])),
+    [data.nodes]
   );
   const neighbors = useMemo(
     () => neighborsOf(graph.links, hovered),
@@ -94,138 +176,213 @@ export default function BlockGraph({ course, type = "all", query = "", onNavigat
   );
   const related = hovered ? new Set([hovered, ...neighbors]) : null;
 
-  const positionOf = (id) => {
-    const position = draggedPositions[id] || byId.get(id);
-    if (!position) return null;
-    const node = byId.get(id);
-    const radius = node?.radius ?? 0;
-    return {
-      ...clampNodePosition(position, radius, graph.width, graph.height),
-      radius,
-    };
-  };
+  // A new filter rebuilds the graph; drop the stale hover and marker.
+  useEffect(() => {
+    setHovered(null);
+    fittedForRef.current = null;
+  }, [data]);
 
-  // Pointer pixels are not SVG user units once the viewBox scales to fit.
-  const toGraphDelta = (dx, dy) => {
-    const element = svgRef.current;
-    if (!element) return { x: dx, y: dy };
-    const rect = element.getBoundingClientRect();
-    return {
-      x: (dx * graph.width) / (rect.width || graph.width),
-      y: (dy * graph.height) / (rect.height || graph.height),
-    };
-  };
-
-  const onPointerDown = (event) => {
-    if (event.button !== 0 || nodeDragRef.current) return;
-    panRef.current = {
-      active: true,
-      moved: false,
-      x: event.clientX,
-      y: event.clientY,
-    };
-  };
-
-  const onPointerMove = (event) => {
-    const pan = panRef.current;
-    if (!pan.active) return;
-    const dx = event.clientX - pan.x;
-    const dy = event.clientY - pan.y;
-    if (!pan.moved && Math.hypot(dx, dy) < 4) return;
-    if (!pan.moved) {
-      pan.moved = true;
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-    }
-    pan.x = event.clientX;
-    pan.y = event.clientY;
-    const delta = toGraphDelta(dx, dy);
-    setOffset((current) =>
-      clampOffset(
-        { x: current.x + delta.x, y: current.y + delta.y },
-        scale,
-        graph.width,
-        graph.height
-      )
+  // Softer charge and a little collision keep the 50-node course tidy.
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    fg.d3Force("charge")?.strength(-160).distanceMax(520);
+    const link = fg.d3Force("link");
+    link?.distance(72);
+    link?.strength(0.5);
+    fg.d3Force(
+      "collide",
+      forceCollide((node) => (node.radius || 12) + 16).iterations(3)
     );
-  };
+  }, [data, ready]);
 
-  const endPan = (event) => {
-    const pan = panRef.current;
-    pan.active = false;
-    if (pan.moved) {
-      window.setTimeout(() => {
-        pan.moved = false;
-      }, 0);
-    }
-    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  };
+  // Wait until the container is measured so the canvas is not created at 0px.
+  useEffect(() => {
+    if (size.width > 0) setReady(true);
+  }, [size.width]);
+
+  const drawNode = useCallback(
+    (node, ctx, globalScale) => {
+      const dim = related && !related.has(node.id);
+      const hot = hovered === node.id;
+      const radius = node.radius;
+
+      ctx.save();
+      ctx.globalAlpha = dim ? 0.18 : 1;
+
+      if (node.isFocus) {
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radius + 5, 0, Math.PI * 2);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = palette.accent;
+        ctx.stroke();
+      }
+
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = hot ? palette.accent : fillFor(node.type, palette);
+      ctx.fill();
+      ctx.lineWidth = hot ? 2.4 : 1.6;
+      ctx.strokeStyle = hot ? palette.accent : palette.ink;
+      ctx.stroke();
+
+      const markSize = Math.max(7, radius * 0.95);
+      ctx.font = `700 ${markSize}px ui-monospace, monospace`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = hot ? palette.paper : inkFor(node.type, palette);
+      ctx.fillText(blockTypeMark(node.type), node.x, node.y + markSize * 0.04);
+
+      const priority = hot || node.isFocus || related?.has(node.id);
+      const showLabel = priority || globalScale >= 0.15;
+      if (showLabel) {
+        const labelSize = 12 / globalScale;
+        const label = truncate(node.label, 20);
+        ctx.font = `500 ${labelSize}px ${FONT_FAMILY}`;
+        const width = ctx.measureText(label).width;
+        const labelY = node.y + radius + 4 / globalScale;
+        const rect = {
+          x: node.x - width / 2 - 2,
+          y: labelY - 1,
+          w: width + 4,
+          h: labelSize * 1.25,
+        };
+        const collides = placedLabelsRef.current.some(
+          (placed) =>
+            rect.x < placed.x + placed.w &&
+            rect.x + rect.w > placed.x &&
+            rect.y < placed.y + placed.h &&
+            rect.y + rect.h > placed.y
+        );
+        if (priority || !collides) {
+          placedLabelsRef.current.push(rect);
+          ctx.textAlign = "center";
+          ctx.textBaseline = "top";
+          ctx.lineWidth = 3 / globalScale;
+          ctx.strokeStyle = palette.paper;
+          ctx.lineJoin = "round";
+          ctx.strokeText(label, node.x, labelY);
+          ctx.fillStyle = hot ? palette.ink : palette.inkSoft;
+          ctx.fillText(label, node.x, labelY);
+        }
+      }
+
+      ctx.restore();
+    },
+    [hovered, related, palette]
+  );
+
+  const drawPointerArea = useCallback((node, color, ctx) => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, node.radius + 4, 0, Math.PI * 2);
+    ctx.fill();
+  }, []);
+
+  const drawLink = useCallback(
+    (link, ctx, globalScale) => {
+      const from = link.source;
+      const to = link.target;
+      if (!from || !to || typeof from !== "object" || typeof to !== "object") {
+        return;
+      }
+
+      const prerequisite = link.kind === "prerequisite";
+      const active =
+        !related || from.id === hovered || to.id === hovered;
+
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const length = Math.hypot(dx, dy) || 1;
+      const x1 = from.x + (dx / length) * (from.radius || 0);
+      const y1 = from.y + (dy / length) * (from.radius || 0);
+      const x2 = to.x - (dx / length) * (to.radius || 0);
+      const y2 = to.y - (dy / length) * (to.radius || 0);
+
+      ctx.save();
+      ctx.globalAlpha = active ? 0.6 : 0.08;
+      ctx.strokeStyle = palette.inkSoft;
+      ctx.lineWidth = prerequisite ? 1.8 : 1.2;
+      ctx.setLineDash(prerequisite ? [] : [5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      if (prerequisite && active) {
+        const size = 6;
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        ctx.setLineDash([]);
+        ctx.fillStyle = palette.inkSoft;
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(
+          x2 - size * Math.cos(angle - Math.PI / 6),
+          y2 - size * Math.sin(angle - Math.PI / 6)
+        );
+        ctx.lineTo(
+          x2 - size * Math.cos(angle + Math.PI / 6),
+          y2 - size * Math.sin(angle + Math.PI / 6)
+        );
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      ctx.restore();
+    },
+    [hovered, palette, related]
+  );
+
+  const onNodeClick = useCallback(
+    (node, event) => {
+      const href = pathForBlock(course.subject, node.id);
+      if (onNavigate && followInternalLink(event, href, onNavigate)) {
+        event.preventDefault();
+        return;
+      }
+      if (!onNavigate && isPlainLeftClick(event)) {
+        window.location.assign(href);
+      }
+    },
+    [course.subject, onNavigate]
+  );
 
   const zoomBy = (factor) => {
-    const next = clamp(scale * factor);
-    setScale(next);
-    setOffset((current) => clampOffset(current, next, graph.width, graph.height));
+    const fg = fgRef.current;
+    if (!fg) return;
+    fg.zoom(fg.zoom() * factor, 200);
   };
 
-  const onWheel = (event) => {
-    if (!event.ctrlKey && !event.metaKey) return;
-    event.preventDefault();
-    zoomBy(event.deltaY < 0 ? 1.1 : 0.9);
-  };
-
-  const onNodeDown = (event, node) => {
-    if (event.button !== 0) return;
-    event.stopPropagation();
-    const start = positionOf(node.id);
-    if (!start) return;
-    nodeDragRef.current = {
-      id: node.id,
-      x: event.clientX,
-      y: event.clientY,
-      ox: start.x,
-      oy: start.y,
-      moved: false,
-    };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-  };
-
-  const onNodeMove = (event) => {
-    const drag = nodeDragRef.current;
-    if (!drag) return;
-    const dx = event.clientX - drag.x;
-    const dy = event.clientY - drag.y;
-    if (!drag.moved && Math.hypot(dx, dy) < 3) return;
-    drag.moved = true;
-    suppressClickRef.current = true;
-    const delta = toGraphDelta(dx, dy);
-    const node = byId.get(drag.id);
-    setDraggedPositions((current) => ({
-      ...current,
-      [drag.id]: clampNodePosition(
-        { x: drag.ox + delta.x / scale, y: drag.oy + delta.y / scale },
-        node?.radius ?? 0,
-        graph.width,
-        graph.height
-      ),
-    }));
-  };
-
-  const endNodeDrag = (event) => {
-    if (nodeDragRef.current) nodeDragRef.current = null;
-    if (suppressClickRef.current) {
-      window.setTimeout(() => {
-        suppressClickRef.current = false;
-      }, 0);
+  const fitView = (duration = 500) => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    // Fitting one node would zoom until the circle fills the canvas.
+    if (data.nodes.length === 1) {
+      const node = data.nodes[0];
+      if (Number.isFinite(node.x) && Number.isFinite(node.y)) {
+        fg.centerAt(node.x, node.y, duration);
+      }
+      fg.zoom(1.2, duration);
+      return;
     }
-    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
+    fg.zoomToFit(duration, 96);
+    window.setTimeout(() => {
+      // A handful of nodes should not be blown up to fill the canvas.
+      if (data.nodes.length <= 4 && fg.zoom() > 1.8) {
+        fg.zoom(1.8, 200);
+      }
+      // A phone-sized canvas would render a big graph as tiny dots.
+      if (size.width < 640 && data.nodes.length > 8) {
+        fg.zoom(fg.zoom() * 2.2, 250);
+      }
+    }, duration + 20);
   };
+
+  const resetView = () => fitView(450);
 
   if (graph.nodes.length === 0) {
     return (
-      <p className="border-2 border-dashed border-ink/40 bg-surface px-5 py-12 text-center text-[0.95rem] text-ink-soft">
+      <p className="rounded-2xl border border-dashed border-hairline bg-surface/50 px-5 py-12 text-center text-[0.95rem] text-ink-soft">
         沒有符合條件的知識點。
       </p>
     );
@@ -236,27 +393,20 @@ export default function BlockGraph({ course, type = "all", query = "", onNavigat
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <p className="robo-kicker font-label text-[10px] text-ink-soft">
-          實線箭頭＝先備知識 · 虛線＝相關知識
+        <p className="font-label text-[10px] tracking-[0.04em] text-ink-soft">
+          {compact ? "點節點可跳轉" : "實線箭頭＝先備知識 · 虛線＝相關知識"}
         </p>
         <div className="flex items-center gap-1">
           <span className="robo-kicker mr-1 font-label text-[9px] text-ink-soft">
             縮放
           </span>
-          <ZoomButton label="縮小" onClick={() => zoomBy(1 / 1.15)}>
+          <ZoomButton label="縮小" onClick={() => zoomBy(1 / 1.2)}>
             −
           </ZoomButton>
-          <ZoomButton label="放大" onClick={() => zoomBy(1.15)}>
+          <ZoomButton label="放大" onClick={() => zoomBy(1.2)}>
             +
           </ZoomButton>
-          <ZoomButton
-            label="重設視圖"
-            onClick={() => {
-              setScale(defaultScale());
-              setOffset({ x: 0, y: 0 });
-              setDraggedPositions({});
-            }}
-          >
+          <ZoomButton label="重設視圖" onClick={resetView}>
             ⟲
           </ZoomButton>
         </div>
@@ -264,172 +414,47 @@ export default function BlockGraph({ course, type = "all", query = "", onNavigat
 
       <div
         ref={containerRef}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endPan}
-        onPointerCancel={endPan}
-        onWheel={onWheel}
-        onClickCapture={(event) => {
-          if (!panRef.current.moved) return;
-          event.preventDefault();
-          event.stopPropagation();
-          panRef.current.moved = false;
-        }}
-        className="relative touch-none select-none overflow-hidden border-2 border-ink bg-paper"
+        role="img"
+        aria-label={`${course.title} 知識圖`}
+        className={`relative overflow-hidden rounded-2xl ${
+          framed ? "border border-hairline bg-surface/40" : "bg-shade/40"
+        }`}
+        style={{ height: size.height }}
       >
-        <svg
-          ref={svgRef}
-          viewBox={`0 0 ${graph.width} ${graph.height}`}
-          className="block h-auto w-full"
-          role="img"
-          aria-label={`${course.title} 知識圖`}
-        >
-          <defs>
-            <marker
-              id="block-graph-arrow"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--color-ink-soft)" />
-            </marker>
-          </defs>
+        {ready && size.width > 0 && (
+          <ForceGraph2D
+            ref={fgRef}
+            graphData={data}
+            width={size.width}
+            height={size.height}
+            backgroundColor="rgba(0,0,0,0)"
+            nodeCanvasObject={drawNode}
+            nodePointerAreaPaint={drawPointerArea}
+            linkCanvasObject={drawLink}
+            onNodeHover={(node) => setHovered(node ? node.id : null)}
+            onNodeClick={onNodeClick}
+            onRenderFramePre={() => {
+              placedLabelsRef.current = [];
+            }}
+            onEngineStop={() => {
+              if (fittedForRef.current === data) return;
+              fittedForRef.current = data;
+              fitView();
+            }}
+            cooldownTicks={200}
+            enableNodeDrag
+          />
+        )}
 
-          <g
-            transform={`translate(${offset.x} ${offset.y}) scale(${scale})`}
-          >
-            {graph.links.map((link) => {
-              const from = positionOf(link.from);
-              const to = positionOf(link.to);
-              if (!from || !to) return null;
-              const active =
-                !related || link.from === hovered || link.to === hovered;
-              const prerequisite = link.kind === "prerequisite";
-              const dx = to.x - from.x;
-              const dy = to.y - from.y;
-              const length = Math.hypot(dx, dy) || 1;
-              const x1 = from.x + (dx / length) * from.radius;
-              const y1 = from.y + (dy / length) * from.radius;
-              const x2 = to.x - (dx / length) * to.radius;
-              const y2 = to.y - (dy / length) * to.radius;
-              return (
-                <line
-                  key={`${link.from}-${link.to}-${link.kind}`}
-                  x1={x1}
-                  y1={y1}
-                  x2={x2}
-                  y2={y2}
-                  stroke={active ? "var(--color-ink-soft)" : "var(--color-ink)"}
-                  strokeOpacity={active ? 0.55 : 0.08}
-                  strokeWidth={prerequisite ? 1.8 : 1.2}
-                  strokeDasharray={prerequisite ? undefined : "4 5"}
-                  markerEnd={
-                    prerequisite && active
-                      ? "url(#block-graph-arrow)"
-                      : undefined
-                  }
-                  vectorEffect="non-scaling-stroke"
-                />
-              );
-            })}
-
-            {graph.nodes.map((node) => {
-              const position = positionOf(node.id);
-              if (!position) return null;
-              const dim = related && !related.has(node.id);
-              const hot = hovered === node.id;
-              const href = pathForBlock(course.subject, node.id);
-              const lines = wrapLabel(node.label);
-              const ink = hot ? "var(--color-ink)" : blockTypeInk(node.type);
-              return (
-                <a
-                  key={node.id}
-                  href={href}
-                  onPointerDown={(event) => onNodeDown(event, node)}
-                  onPointerMove={onNodeMove}
-                  onPointerUp={endNodeDrag}
-                  onPointerCancel={endNodeDrag}
-                  onPointerEnter={() => setHovered(node.id)}
-                  onPointerLeave={() => setHovered(null)}
-                  onFocus={() => setHovered(node.id)}
-                  onBlur={() => setHovered(null)}
-                  onClick={(event) => {
-                    if (suppressClickRef.current) {
-                      suppressClickRef.current = false;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      return;
-                    }
-                    if (followInternalLink(event, href, onNavigate)) {
-                      event.preventDefault();
-                    }
-                  }}
-                  opacity={dim ? 0.25 : 1}
-                  className="cursor-pointer"
-                >
-                  <title>
-                    {node.summary
-                      ? `${node.title} — ${node.summary}`
-                      : node.title}
-                  </title>
-                  <circle
-                    cx={position.x}
-                    cy={position.y}
-                    r={node.radius}
-                    fill={
-                      hot ? "var(--color-accent)" : blockTypeFill(node.type)
-                    }
-                    stroke={hot ? "var(--color-accent)" : "var(--color-ink)"}
-                    strokeWidth={hot ? 3 : 2}
-                  />
-                  <text
-                    x={position.x}
-                    y={position.y}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    fill={ink}
-                    className="font-mono text-[9px]"
-                    style={{ pointerEvents: "none" }}
-                  >
-                    {blockTypeMark(node.type)}
-                  </text>
-                  <text
-                    x={position.x}
-                    y={position.y + node.radius + 13}
-                    textAnchor="middle"
-                    className="fill-ink font-sans text-[10px]"
-                    style={{
-                      pointerEvents: "none",
-                      paintOrder: "stroke",
-                      stroke: "var(--color-paper)",
-                      strokeWidth: 3,
-                      strokeLinejoin: "round",
-                    }}
-                  >
-                    {lines.map((line, index) => (
-                      <tspan
-                        key={`${node.id}-${index}`}
-                        x={position.x}
-                        dy={index === 0 ? 0 : 11}
-                      >
-                        {line}
-                      </tspan>
-                    ))}
-                  </text>
-                </a>
-              );
-            })}
-          </g>
-        </svg>
-
-        <p className="pointer-events-none absolute bottom-2.5 left-3 max-w-[70%] truncate font-label text-[10px] text-ink-soft">
-          {hoveredNode
-            ? `${hoveredNode.title} · ${blockTypeLabel(hoveredNode.type)}`
-            : "拖曳節點移動 · 縮放後拖曳空白平移 · ⌘/Ctrl + 滾輪縮放 · 點節點開啟"}
-        </p>
+        {showHint && (
+          <p className="pointer-events-none absolute bottom-2.5 left-3 max-w-[70%] truncate font-label text-[10px] text-ink-soft">
+            {hoveredNode
+              ? `${hoveredNode.title} · ${blockTypeLabel(hoveredNode.type)}`
+              : compact
+                ? "拖曳 · 滾輪縮放 · 點節點開啟"
+                : "拖曳節點移動 · 拖曳空白平移 · 滾輪縮放 · 點節點開啟"}
+          </p>
+        )}
       </div>
     </div>
   );

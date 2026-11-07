@@ -1,4 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { NodeGlyph } from "./Glyphs.jsx";
 import { pathFor } from "../lib/route.mjs";
 import { CARD_H, CARD_W, layoutRoadmap, neighbors } from "../lib/roadmap.mjs";
 
@@ -16,7 +17,7 @@ function ZoomButton({ label, children, onClick }) {
       onClick={onClick}
       aria-label={label}
       title={label}
-      className="grid size-7 place-items-center border-2 border-ink bg-surface font-mono text-sm leading-none text-ink transition-colors hover:border-accent hover:text-accent"
+      className="grid size-8 place-items-center rounded-lg bg-surface text-sm leading-none text-ink ring-1 ring-hairline transition-colors hover:text-accent hover:ring-accent/40"
     >
       {children}
     </button>
@@ -45,10 +46,22 @@ export default function RoadmapCanvas({ course }) {
     const element = containerRef.current;
     if (!element) return undefined;
     const update = () => {
-      const next = Math.min(1, element.clientWidth / layout.width);
+      const ratio = element.clientWidth / layout.width;
+      // Keep node labels readable: on wide screens do not shrink the map below
+      // 0.78. The canvas overflows and the reader pans instead of squinting.
+      const next =
+        element.clientWidth >= 640 && ratio < 0.78
+          ? 0.78
+          : Math.min(1, ratio);
       setFit(next);
       setScale(next);
-      setOffset({ x: 0, y: 0 });
+      setOffset({
+        x:
+          next > ratio
+            ? Math.round((element.clientWidth - layout.width * next) / 2)
+            : 0,
+        y: 0,
+      });
     };
     update();
     const observer = new ResizeObserver(update);
@@ -98,7 +111,7 @@ export default function RoadmapCanvas({ course }) {
 
   return (
     <div>
-      <div className="mb-2 flex items-center justify-end gap-1">
+      <div className="mb-3 flex items-center justify-end gap-1">
         <span className="robo-kicker mr-1 font-label text-[9px] text-ink-soft">
           縮放
         </span>
@@ -117,8 +130,13 @@ export default function RoadmapCanvas({ course }) {
         <ZoomButton
           label="重設視圖"
           onClick={() => {
+            const element = containerRef.current;
+            if (!element) return;
             setScale(fit);
-            setOffset({ x: 0, y: 0 });
+            setOffset({
+              x: Math.round((element.clientWidth - layout.width * fit) / 2),
+              y: 0,
+            });
           }}
         >
           ⟲
@@ -138,7 +156,7 @@ export default function RoadmapCanvas({ course }) {
           event.stopPropagation();
           dragRef.current.moved = false;
         }}
-        className="relative touch-none select-none overflow-hidden border-2 border-ink bg-paper"
+        className="dot-grid relative touch-none select-none overflow-hidden rounded-2xl border border-hairline bg-surface/40"
         style={{ height }}
         role="group"
         aria-label={`${course.title} roadmap`}
@@ -165,8 +183,8 @@ export default function RoadmapCanvas({ course }) {
                 y1={row.y - 26}
                 y2={row.y - 26}
                 stroke="currentColor"
-                strokeOpacity="0.08"
-                strokeDasharray="3 6"
+                strokeOpacity="0.06"
+                strokeDasharray="2 7"
               />
             ))}
             {layout.edges.map((edge) => {
@@ -179,9 +197,9 @@ export default function RoadmapCanvas({ course }) {
                   fill="none"
                   stroke={connected ? "var(--color-accent)" : "currentColor"}
                   strokeOpacity={
-                    hovered ? (connected ? 0.9 : 0.07) : 0.32
+                    hovered ? (connected ? 0.9 : 0.06) : 0.26
                   }
-                  strokeWidth={connected ? 2.5 : 2}
+                  strokeWidth={connected ? 1.7 : 1.3}
                   strokeLinecap="round"
                 />
               );
@@ -193,7 +211,7 @@ export default function RoadmapCanvas({ course }) {
             return (
               <span
                 key={`label-${row.tier}`}
-                className="robo-kicker absolute left-1 -translate-y-1/2 bg-paper pr-2 font-label text-[9px] text-ink-soft"
+                className="robo-kicker absolute left-1 -translate-y-1/2 bg-surface pr-2 font-label text-[9px] text-ink-soft"
                 style={{ top: row.y - 26 }}
               >
                 T{row.tier}
@@ -221,30 +239,37 @@ export default function RoadmapCanvas({ course }) {
                   opacity: related && !related.has(node.id) ? 0.3 : 1,
                   zIndex: hovered === node.id ? 10 : 1,
                 }}
-                className={`group absolute flex flex-col justify-between border-2 bg-surface px-3 py-2 shadow-[4px_4px_0_var(--robo-shadow-soft)] transition-[opacity,border-color] ${
+                className={`group absolute flex flex-col justify-between rounded-xl bg-surface px-3 py-2.5 shadow-soft ring-1 transition-[opacity,box-shadow] ${
                   hovered === node.id
-                    ? "border-accent"
-                    : "border-ink hover:border-accent"
+                    ? "shadow-lift ring-accent"
+                    : "ring-hairline hover:shadow-lift hover:ring-accent/40"
                 }`}
               >
-                <span className="line-clamp-2 text-[0.88rem] font-medium leading-snug text-ink transition-colors group-hover:text-accent">
+                <NodeGlyph
+                  seed={node.id}
+                  size={13}
+                  className="absolute right-2.5 top-2.5 text-ink-soft/40 transition-colors group-hover:text-accent"
+                />
+                <span className="line-clamp-2 pr-4 text-[0.86rem] font-medium leading-snug text-ink transition-colors group-hover:text-accent">
                   {node.title}
                 </span>
                 <span className="font-mono text-[10px] tabular-nums text-ink-soft">
                   {node.steps.length} 篇
-                </span>
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-x-3 bottom-1 h-[3px] bg-ink/10"
-                >
-                  <span className="block h-full w-full bg-accent/45" />
                 </span>
               </a>
             );
           })}
         </div>
 
-        <p className="robo-kicker pointer-events-none absolute bottom-2.5 left-3 font-label text-[9px] text-ink-soft">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 left-0 w-12 bg-gradient-to-r from-paper/80 to-transparent"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-paper/80 to-transparent"
+        />
+        <p className="pointer-events-none absolute bottom-2.5 left-3 font-label text-[9.5px] tracking-[0.04em] text-ink-soft">
           拖曳移動 · ⌘/Ctrl + 滾輪縮放 · 點節點開始讀
         </p>
       </div>

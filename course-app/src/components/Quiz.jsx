@@ -23,10 +23,10 @@ export default function Quiz({ source, quiz: providedQuiz }) {
 
   return (
     <section
-      className="robo-card my-9 px-5 py-5"
+      className="my-8 rounded-2xl bg-surface px-5 py-5 shadow-soft ring-1 ring-hairline"
       aria-label="練習題"
     >
-      <p className="robo-kicker font-label text-[11px] font-medium text-accent">
+      <p className="robo-kicker font-label text-[9.5px] font-medium text-accent">
         練習題
       </p>
       <p className="mt-2 text-[1.05rem] font-medium leading-relaxed text-ink">
@@ -43,22 +43,22 @@ export default function Quiz({ source, quiz: providedQuiz }) {
                 onClick={() => pick(index)}
                 disabled={solved}
                 aria-pressed={isCorrect || isWrong}
-                className={`flex w-full items-start gap-3 border-2 px-3 py-2.5 text-left text-[0.95rem] leading-relaxed transition-colors ${
+                className={`flex w-full items-start gap-3 rounded-xl border px-3.5 py-3 text-left text-[0.95rem] leading-relaxed transition-colors ${
                   isCorrect
-                    ? "border-accent bg-surface text-ink shadow-[3px_3px_0_var(--color-accent)]"
+                    ? "border-accent/50 bg-accent-tint text-ink"
                     : isWrong
-                      ? "border-ink bg-shade text-ink-soft"
-                      : "border-ink bg-paper text-ink hover:border-accent hover:bg-surface"
+                      ? "border-hairline bg-shade/60 text-ink-soft"
+                      : "border-hairline bg-paper text-ink hover:border-accent/40 hover:bg-surface"
                 } ${solved && !isCorrect ? "opacity-55" : ""}`}
               >
                 <span
                   aria-hidden="true"
-                  className={`mt-0.5 grid size-5 shrink-0 place-items-center border-2 font-mono text-[11px] font-semibold ${
+                  className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border font-mono text-[10px] font-semibold ${
                     isCorrect
                       ? "border-accent text-accent"
                       : isWrong
-                        ? "border-ink text-ink-soft"
-                        : "border-ink text-ink-soft"
+                        ? "border-hairline text-ink-soft"
+                        : "border-hairline text-ink-soft"
                   }`}
                 >
                   {String.fromCharCode(65 + index)}
@@ -71,8 +71,24 @@ export default function Quiz({ source, quiz: providedQuiz }) {
       </ol>
       <div aria-live="polite" className="mt-4 text-[0.95rem]">
         {solved ? (
-          <p className="text-accent">
-            答對了 ✓<span className="ml-2 text-ink/80">{quiz.explain}</span>
+          <p className="flex items-start gap-2 text-accent">
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              className="mt-0.5 shrink-0"
+            >
+              <path d="m4 12 5 5L20 6" />
+            </svg>
+            <span>
+              答對了<span className="ml-2 text-ink/80">{quiz.explain}</span>
+            </span>
           </p>
         ) : wrong.size > 0 ? (
           <p className="text-ink-soft">再想想，答案不是這個。</p>

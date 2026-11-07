@@ -1,3 +1,5 @@
+import { NodeGlyph } from "./Glyphs.jsx";
+
 const TIER_TEXT = {
   1: "text-ink-soft",
   2: "text-ink-soft",
@@ -24,67 +26,33 @@ function groupByTier(course) {
   return grouped;
 }
 
-function CollapseIcon({ expand = false }) {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3" y="4" width="18" height="16" rx="0" />
-      <path d="M9 4v16" />
-      {expand ? <path d="m13 9 3 3-3 3" /> : <path d="m16 9-3 3 3 3" />}
-    </svg>
-  );
-}
-
 function SidebarBody({
   course,
   currentId,
   currentStepId,
   onSelect,
   onSelectStep,
-  onHome,
   onSubject,
-  onToggle,
-  showToggle = false,
   onClose,
 }) {
   const nodesByTier = groupByTier(course);
 
   return (
     <>
-      <div className="flex items-center justify-between gap-2 border-b-2 border-ink px-4 py-4">
-        <p className="robo-kicker font-label text-[11px] text-ink-soft">
+      <div className="flex items-center justify-between gap-2 px-5 pb-3 pt-5">
+        <p className="robo-kicker font-label text-[10px] text-ink-soft">
           課程目錄
         </p>
         <div className="flex items-center gap-1.5">
-          <span className="border border-ink bg-surface px-2 py-0.5 font-mono text-[11px] tabular-nums text-ink">
+          <span className="rounded-full bg-surface px-2 py-0.5 font-mono text-[10px] tabular-nums text-ink ring-1 ring-hairline">
             {course.nodes.length} 節點
           </span>
-          {showToggle && (
-            <button
-              type="button"
-              onClick={onToggle}
-              aria-label="收合側欄"
-              title="收合側欄（⌘B）"
-              className="p-1.5 text-ink-soft transition-colors hover:text-accent"
-            >
-              <CollapseIcon />
-            </button>
-          )}
           {onClose && (
             <button
               type="button"
               onClick={onClose}
               aria-label="關閉選單"
-              className="p-1.5 text-ink-soft transition-colors hover:text-accent lg:hidden"
+              className="rounded-lg p-1.5 text-ink-soft transition-colors hover:bg-surface hover:text-accent lg:hidden"
             >
               <svg
                 width="18"
@@ -92,7 +60,7 @@ function SidebarBody({
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="2"
+                strokeWidth="1.8"
                 strokeLinecap="round"
                 aria-hidden="true"
               >
@@ -103,71 +71,57 @@ function SidebarBody({
         </div>
       </div>
 
-      <div className="space-y-2 px-4 pt-4">
-        <button
-          type="button"
-          onClick={onHome}
-          className="group flex w-full items-center gap-2 border-2 border-ink bg-surface px-3 py-2 text-left transition-colors hover:border-accent"
-        >
-          <svg
-            aria-hidden="true"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="shrink-0 text-ink-soft transition-colors group-hover:text-accent"
-          >
-            <path d="m15 18-6-6 6-6" />
-          </svg>
+      <div className="space-y-1 px-3">
+        <div className="flex items-center gap-3 px-2.5 py-1.5">
+          <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-surface text-ink-soft ring-1 ring-hairline">
+            <NodeGlyph seed={course.subject} size={16} />
+          </span>
           <span className="min-w-0 flex-1">
-            <span className="robo-kicker block font-label text-[10px] text-ink-soft">
-              所有課程
+            <span className="robo-kicker block font-label text-[9px] text-ink-soft">
+              課程
             </span>
-            <span className="mt-0.5 block truncate font-label text-[0.95rem] font-medium text-ink transition-colors group-hover:text-accent">
+            <span className="mt-0.5 block truncate font-display text-[1rem] font-semibold text-ink">
               {course.title}
             </span>
           </span>
-        </button>
+        </div>
         {onSubject && (
           <button
             type="button"
             onClick={onSubject}
-            className="group flex w-full items-center gap-2 border-2 border-ink bg-surface px-3 py-2 text-left transition-colors hover:border-accent"
+            className="group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-surface"
           >
-            <svg
-              aria-hidden="true"
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="shrink-0 text-ink-soft transition-colors group-hover:text-accent"
-            >
-              <circle cx="6" cy="6" r="2" />
-              <circle cx="18" cy="18" r="2" />
-              <path d="M8 6h6a4 4 0 0 1 0 8H10a4 4 0 0 0 0 8" />
-            </svg>
-            <span className="robo-kicker font-label text-[11px] text-ink transition-colors group-hover:text-accent">
+            <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-surface text-ink-soft ring-1 ring-hairline transition-colors group-hover:text-accent">
+              <svg
+                aria-hidden="true"
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="6" cy="6" r="2" />
+                <circle cx="18" cy="18" r="2" />
+                <path d="M8 6h6a4 4 0 0 1 0 8H10a4 4 0 0 0 0 8" />
+              </svg>
+            </span>
+            <span className="robo-kicker font-label text-[10px] text-ink transition-colors group-hover:text-accent">
               課程地圖
             </span>
           </button>
         )}
       </div>
 
-      <div className="px-4 pt-4">
-        <p className="border-l-4 border-accent pl-3 text-sm leading-relaxed text-ink-soft line-clamp-4">
+      <div className="px-5 pt-4">
+        <p className="border-l-2 border-accent/45 pl-3 text-[0.82rem] leading-relaxed text-ink-soft line-clamp-4">
           {course.goal}
         </p>
       </div>
 
-      <nav className="mt-6 flex-1 space-y-7 px-3 pb-10" aria-label="課程導覽">
+      <nav className="mt-7 flex-1 space-y-8 px-3 pb-12" aria-label="課程導覽">
         {course.tiers.map((tier) => {
           const items = nodesByTier.get(tier.tier) || [];
           if (!items.length) return null;
@@ -176,15 +130,15 @@ function SidebarBody({
               <div className="mb-2 flex items-center gap-2 px-2">
                 <span
                   aria-hidden="true"
-                  className={`size-2 ${tierDotClass(tier.tier)}`}
+                  className={`size-1.5 rounded-full ${tierDotClass(tier.tier)}`}
                 />
                 <span
-                  className={`robo-kicker font-label text-[10px] font-medium ${tierTextClass(tier.tier)}`}
+                  className={`robo-kicker font-label text-[9.5px] font-medium ${tierTextClass(tier.tier)}`}
                 >
                   Tier {tier.tier} · {tier.name}
                 </span>
               </div>
-              <ul className="space-y-1.5">
+              <ul className="space-y-0.5">
                 {items.map((node) => {
                   const active = node.id === currentId;
                   return (
@@ -194,14 +148,20 @@ function SidebarBody({
                         onClick={() => onSelect(node.id)}
                         aria-current={active ? "page" : undefined}
                         aria-expanded={node.steps.length > 0 ? active : undefined}
-                        className={`group flex w-full items-start gap-2.5 border-2 px-2.5 py-2 text-left text-[0.95rem] leading-snug transition-colors ${
+                        className={`group relative flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-[0.92rem] leading-snug transition-colors ${
                           active
-                            ? "border-accent bg-surface font-medium text-ink shadow-[3px_3px_0_var(--color-accent)]"
-                            : "border-transparent text-ink hover:border-ink hover:bg-surface"
+                            ? "bg-accent-tint font-medium text-ink ring-1 ring-accent/20"
+                            : "text-ink hover:bg-surface"
                         }`}
                       >
                         <span
-                          className={`mt-0.5 w-4 shrink-0 font-mono text-[11px] font-medium tabular-nums ${
+                          aria-hidden="true"
+                          className={`absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full transition-colors ${
+                            active ? "bg-accent" : "bg-transparent"
+                          }`}
+                        />
+                        <span
+                          className={`mt-0.5 w-4 shrink-0 font-mono text-[10px] font-medium tabular-nums ${
                             active ? "text-accent" : "text-ink-soft"
                           }`}
                         >
@@ -211,7 +171,7 @@ function SidebarBody({
                         {node.steps.length > 0 && (
                           <span className="mt-0.5 flex shrink-0 items-center gap-1">
                             <span
-                              className={`font-mono text-[11px] tabular-nums ${
+                              className={`font-mono text-[10px] tabular-nums ${
                                 active ? "text-accent" : "text-ink-soft"
                               }`}
                             >
@@ -224,7 +184,7 @@ function SidebarBody({
                               viewBox="0 0 24 24"
                               fill="none"
                               stroke="currentColor"
-                              strokeWidth="2.2"
+                              strokeWidth="2"
                               strokeLinecap="round"
                               strokeLinejoin="round"
                               className={`transition-transform ${
@@ -240,7 +200,7 @@ function SidebarBody({
                       </button>
 
                       {active && node.steps.length > 0 && (
-                        <ul className="mt-1.5 ml-4 space-y-0.5 border-l-2 border-ink/20 pl-2">
+                        <ul className="ml-5 mt-1 space-y-0.5 border-l border-hairline pl-2.5">
                           {node.steps.map((step) => {
                             const stepActive = step.id === currentStepId;
                             return (
@@ -251,13 +211,13 @@ function SidebarBody({
                                     onSelectStep(node.id, step.id)
                                   }
                                   aria-current={stepActive ? "step" : undefined}
-                                  className={`flex w-full items-start gap-2 border-2 px-2 py-1.5 text-left text-[0.85rem] leading-snug transition-colors ${
+                                  className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[0.82rem] leading-snug transition-colors ${
                                     stepActive
-                                      ? "border-accent bg-surface font-medium text-accent"
-                                      : "border-transparent text-ink-soft hover:border-ink hover:bg-surface hover:text-ink"
+                                      ? "bg-accent-tint font-medium text-accent"
+                                      : "text-ink-soft hover:bg-surface hover:text-ink"
                                   }`}
                                 >
-                                  <span className="mt-0.5 w-4 shrink-0 font-mono text-[10px] tabular-nums">
+                                  <span className="mt-0.5 w-4 shrink-0 font-mono text-[9.5px] tabular-nums">
                                     {String(step.order).padStart(2, "0")}
                                   </span>
                                   <span className="min-w-0 flex-1">
@@ -291,7 +251,6 @@ export default function Sidebar({
   currentStepId,
   onSelect,
   onSelectStep,
-  onHome,
   onSubject,
   open,
   onClose,
@@ -304,48 +263,49 @@ export default function Sidebar({
       <div
         onClick={onClose}
         aria-hidden="true"
-        className={`fixed inset-0 z-40 bg-black/45 transition-opacity lg:hidden ${
+        className={`fixed inset-0 z-40 bg-black/25 backdrop-blur-[2px] transition-opacity lg:hidden ${
           open ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
       />
 
       {/* Desktop rail (focus mode) */}
       <aside
-        className={`sticky top-[3.625rem] hidden h-[calc(100vh-3.625rem)] shrink-0 border-r-2 border-ink bg-paper ${
+        className={`sticky top-[4.75rem] hidden h-[calc(100vh-4.75rem)] w-80 shrink-0 bg-transparent ${
           collapsed ? "lg:flex" : ""
         }`}
       >
-        <div className="scroll-slim flex w-16 flex-col items-center gap-2 overflow-y-auto py-4">
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-label="展開側欄"
-            title="展開側欄（⌘B）"
-            className="mb-1 p-2 text-ink-soft transition-colors hover:text-accent"
-          >
-            <CollapseIcon expand />
-          </button>
-          <button
-            type="button"
-            onClick={onHome}
-            aria-label="所有課程"
-            title="所有課程"
-            className="grid size-9 shrink-0 place-items-center border-2 border-ink bg-surface text-ink-soft transition-colors hover:border-accent hover:text-accent"
-          >
-            <svg
-              aria-hidden="true"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="m15 18-6-6 6-6" />
-            </svg>
-          </button>
+        <div className="scroll-slim flex w-[4.25rem] flex-col items-center gap-2 overflow-y-auto py-4">
+          {onToggle && (
+            <>
+              <button
+                type="button"
+                onClick={onToggle}
+                aria-label="展開目錄"
+                title="展開目錄（⌘B）"
+                className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent-tint text-accent transition-colors hover:bg-accent hover:text-dark"
+              >
+                <svg
+                  aria-hidden="true"
+                  width="17"
+                  height="17"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect x="3" y="4" width="18" height="16" rx="2.5" />
+                  <path d="M9 4v16" />
+                  <path d="m13 9 3 3-3 3" />
+                </svg>
+              </button>
+              <span
+                aria-hidden="true"
+                className="my-0.5 h-px w-6 rounded-full bg-hairline"
+              />
+            </>
+          )}
           {course.nodes.map((node) => {
             const active = node.id === currentId;
             return (
@@ -356,13 +316,17 @@ export default function Sidebar({
                 title={node.title}
                 aria-label={node.title}
                 aria-current={active ? "page" : undefined}
-                className={`grid size-9 shrink-0 place-items-center border-2 font-mono text-[0.9rem] font-medium tabular-nums transition-colors ${
+                className={`group grid size-9 shrink-0 place-items-center rounded-xl text-[0.8rem] font-medium tabular-nums transition-colors ${
                   active
-                    ? "border-ink bg-accent text-dark shadow-[3px_3px_0_var(--robo-shadow)]"
-                    : "border-ink bg-surface text-ink-soft hover:border-accent hover:text-accent"
+                    ? "bg-accent text-dark"
+                    : "bg-surface text-ink-soft ring-1 ring-hairline hover:text-accent"
                 }`}
               >
-                {node.globalOrder}
+                <NodeGlyph
+                  seed={node.id}
+                  size={16}
+                  className={active ? "text-dark" : ""}
+                />
               </button>
             );
           })}
@@ -371,7 +335,7 @@ export default function Sidebar({
 
       {/* Desktop expanded column */}
       <aside
-        className={`sticky top-[3.625rem] hidden h-[calc(100vh-3.625rem)] w-80 shrink-0 flex-col border-r-2 border-ink bg-paper ${
+        className={`sticky top-[4.75rem] hidden h-[calc(100vh-4.75rem)] w-80 shrink-0 flex-col border-r border-hairline bg-paper/40 ${
           collapsed ? "" : "lg:flex"
         }`}
       >
@@ -382,17 +346,14 @@ export default function Sidebar({
             currentStepId={currentStepId}
             onSelect={onSelect}
             onSelectStep={onSelectStep}
-            onHome={onHome}
             onSubject={onSubject}
-            onToggle={onToggle}
-            showToggle
           />
         </div>
       </aside>
 
       {/* Mobile drawer */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-80 max-w-[86vw] shrink-0 flex-col border-r-2 border-ink bg-paper shadow-[8px_8px_0_var(--robo-shadow-soft)] transition-transform duration-200 ease-out lg:hidden ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-80 max-w-[86vw] shrink-0 flex-col bg-paper shadow-2xl ring-1 ring-hairline transition-transform duration-200 ease-out lg:hidden ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
         aria-label="課程導覽"
@@ -405,7 +366,6 @@ export default function Sidebar({
             currentStepId={currentStepId}
             onSelect={onSelect}
             onSelectStep={onSelectStep}
-            onHome={onHome}
             onSubject={onSubject}
             onClose={onClose}
           />

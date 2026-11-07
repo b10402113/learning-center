@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import matter from "gray-matter";
 import { countArticleCharacters } from "../../src/article.mjs";
+import { extractHeadings } from "../src/lib/heading-anchor.mjs";
 import { maxQuestionsFor, validateQuizPayload } from "../../src/quiz.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -189,6 +190,7 @@ function readStep({ nodesDir, nodeId, entry, order }) {
       ? spec.blocks.map((id) => String(id).trim()).filter(Boolean)
       : [],
     articleMd: "",
+    headings: [],
     hasContent: false,
     quizzes: [],
   };
@@ -197,6 +199,7 @@ function readStep({ nodesDir, nodeId, entry, order }) {
     const { body } = readMarkdown(file);
     step.articleMd = body.trim();
     step.hasContent = hasArticleBody(step.articleMd);
+    step.headings = extractHeadings(step.articleMd);
     if (!spec.title) {
       const heading = step.articleMd.split("\n").find((line) => /^#\s+/.test(line));
       if (heading) step.title = heading.replace(/^#\s+/, "").trim();

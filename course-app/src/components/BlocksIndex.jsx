@@ -18,10 +18,10 @@ function ModeButton({ active, children, onClick }) {
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`border-2 px-3 py-1.5 font-label text-[11px] uppercase tracking-[0.12em] transition-colors ${
+      className={`rounded-full px-3 py-1.5 font-label text-[11px] transition-colors ${
         active
-          ? "border-accent bg-accent text-dark"
-          : "border-ink bg-surface text-ink hover:border-accent hover:text-accent"
+          ? "bg-accent-tint font-medium text-accent ring-1 ring-accent/30"
+          : "text-ink-soft hover:bg-surface hover:text-ink"
       }`}
     >
       {children}
@@ -35,10 +35,10 @@ function TypeButton({ active, children, onClick }) {
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`border px-2 py-1 font-label text-[10px] uppercase tracking-[0.12em] transition-colors ${
+      className={`rounded-full px-2.5 py-1 font-label text-[10px] transition-colors ${
         active
-          ? "border-accent bg-accent text-dark"
-          : "border-ink bg-surface text-ink-soft hover:border-accent hover:text-accent"
+          ? "bg-accent-tint font-medium text-accent ring-1 ring-accent/25"
+          : "text-ink-soft hover:bg-surface hover:text-ink"
       }`}
     >
       {children}
@@ -57,10 +57,10 @@ function BlockCard({ course, block, onNavigate }) {
           event.preventDefault();
         }
       }}
-      className="group flex flex-col border-2 border-ink bg-surface px-4 py-4 shadow-[4px_4px_0_var(--robo-shadow)] transition-colors hover:border-accent"
+      className="group flex flex-col rounded-2xl bg-surface px-4 py-4 ring-1 ring-hairline shadow-soft transition duration-300 hover:-translate-y-1 hover:shadow-lift hover:ring-accent/40"
     >
       <span className="flex flex-wrap items-center gap-2">
-        <span className="border border-ink bg-shade px-1.5 py-0.5 font-label text-[9px] uppercase tracking-[0.14em] text-ink-soft">
+        <span className="rounded-full bg-shade px-2 py-0.5 font-label text-[9px] uppercase tracking-[0.12em] text-ink-soft">
           {blockTypeLabel(block.type)}
         </span>
         <span className="font-mono text-[10px] text-ink-soft">{block.id}</span>
@@ -73,7 +73,7 @@ function BlockCard({ course, block, onNavigate }) {
           {block.summary}
         </span>
       )}
-      <span className="mt-3 font-mono text-[10px] tabular-nums text-ink-soft">
+      <span className="mt-auto pt-3 font-mono text-[10px] tabular-nums text-ink-soft">
         {steps} 步使用
       </span>
     </a>
@@ -109,7 +109,7 @@ export default function BlocksIndex({ course, onNavigate = null }) {
     <article>
       <nav
         aria-label="麵包屑"
-        className="robo-kicker flex flex-wrap items-center gap-2 font-label text-[11px] text-ink-soft"
+        className="flex flex-wrap items-center gap-2 font-label text-[11px] text-ink-soft"
       >
         <span>課程清單</span>
         <span aria-hidden="true" className="text-ink-soft/50">
@@ -134,32 +134,29 @@ export default function BlocksIndex({ course, onNavigate = null }) {
       </nav>
 
       <header className="mt-4">
-        <p className="robo-kicker font-label text-[11px] text-ink-soft">
+        <p className="robo-kicker font-label text-[10px] text-accent">
           Knowledge Graph
         </p>
-        <h1 className="mt-2 text-[2rem] font-medium leading-[1.15] tracking-[-1px] text-ink sm:text-[2.5rem]">
+        <h1 className="mt-3 font-display text-[2.2rem] font-semibold leading-[1.15] tracking-[-0.5px] text-ink sm:text-[2.6rem]">
           知識點
         </h1>
-        <p className="mt-3 max-w-[62ch] text-[1rem] leading-relaxed text-ink-soft">
+        <p className="mt-4 max-w-[62ch] text-[1rem] leading-[1.85] text-ink-soft">
           這門課萃取出的獨立知識點。切換成圖，看先備與相關概念怎麼連在一起。
         </p>
-        <div className="mt-5 flex flex-wrap items-center gap-2 font-label text-[11px] uppercase tracking-[0.1em] text-ink-soft">
-          <span className="border border-ink bg-surface px-2 py-1">
-            {blocks.length} 個知識點
-          </span>
-          <span className="border border-ink bg-surface px-2 py-1">
-            {edges.length} 條關係
-          </span>
+        <div className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] tabular-nums text-ink-soft">
+          <span>{blocks.length} 個知識點</span>
+          <span aria-hidden="true" className="text-hairline">·</span>
+          <span>{edges.length} 條關係</span>
         </div>
       </header>
 
       {blocks.length === 0 ? (
-        <p className="mt-10 border-2 border-dashed border-ink/40 bg-surface px-5 py-12 text-center text-[0.95rem] text-ink-soft">
+        <p className="mt-10 rounded-2xl border border-dashed border-hairline bg-surface/50 px-5 py-12 text-center text-[0.95rem] text-ink-soft">
           這門課還沒有建立知識點。
         </p>
       ) : (
         <>
-          <section className="mt-8 border-y-2 border-ink py-3">
+          <section className="mt-8 border-y border-hairline py-3">
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center gap-1">
                 {MODES.map((item) => (
@@ -191,7 +188,7 @@ export default function BlocksIndex({ course, onNavigate = null }) {
                 ))}
               </div>
 
-              <label className="ml-auto flex min-w-[180px] items-center gap-2 border-2 border-ink bg-surface px-2 py-1">
+              <label className="ml-auto flex min-w-[190px] items-center gap-2 rounded-full border border-hairline bg-surface px-3 py-1">
                 <span className="sr-only">搜尋知識點</span>
                 <svg
                   width="14"
@@ -233,7 +230,7 @@ export default function BlocksIndex({ course, onNavigate = null }) {
 
           {mode === "list" ? (
             filtered.length === 0 ? (
-              <p className="mt-10 border-2 border-dashed border-ink/40 bg-surface px-5 py-12 text-center text-[0.95rem] text-ink-soft">
+              <p className="mt-10 rounded-2xl border border-dashed border-hairline bg-surface/50 px-5 py-12 text-center text-[0.95rem] text-ink-soft">
                 沒有符合條件的知識點。
               </p>
             ) : (
@@ -261,7 +258,7 @@ export default function BlocksIndex({ course, onNavigate = null }) {
         </>
       )}
 
-      <footer className="robo-kicker mt-16 border-t-2 border-ink pt-4 font-label text-[11px] text-ink-soft">
+      <footer className="robo-kicker mt-20 border-t border-hairline pt-5 font-label text-[10px] text-ink-soft">
         {course.title} · {blocks.length} 個知識點 · {edges.length} 條關係
       </footer>
     </article>
