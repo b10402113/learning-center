@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import subjectsIndex from "./data/subjects.json";
-import Sidebar from "./components/Sidebar.jsx";
+import Sidebar, { SidebarDrawer } from "./components/Sidebar.jsx";
+import ContextRail from "./components/ContextRail.jsx";
 import NodeView from "./components/NodeView.jsx";
 import StepView from "./components/StepView.jsx";
 import SubjectsView from "./components/SubjectsView.jsx";
@@ -8,7 +9,7 @@ import SubjectOverview from "./components/SubjectOverview.jsx";
 import BlockView from "./components/BlockView.jsx";
 import BlocksIndex from "./components/BlocksIndex.jsx";
 import PixelMark from "./components/PixelMark.jsx";
-import { KnowledgeGlyph, OrbitMark } from "./components/Glyphs.jsx";
+import { OrbitMark } from "./components/Glyphs.jsx";
 import { railBlocks } from "./lib/blocks.mjs";
 import {
   indexRoute,
@@ -61,37 +62,25 @@ function initialSidebarCollapsed() {
   }
 }
 
-function FocusExit({ onExit }) {
-  const [quiet, setQuiet] = useState(false);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setQuiet(true), 10000);
-    return () => window.clearTimeout(timer);
-  }, []);
-
+function FocusIcon({ active = false }) {
   return (
-    <button
-      type="button"
-      onClick={onExit}
-      aria-label="退出專注模式"
-      title="退出專注模式（Esc / ⌘B）"
-      className={`fixed bottom-5 right-5 z-30 inline-flex items-center gap-2 rounded-full border border-hairline bg-surface/90 shadow-soft backdrop-blur transition-opacity duration-500 hover:border-accent/40 hover:text-accent ${
-        quiet ? "opacity-45" : "opacity-100"
-      }`}
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
     >
-      <span
-        className={`inline-flex ${
-          quiet ? "p-2.5" : "py-2 pl-3.5"
-        }`}
-      >
-        <PanelIcon expand />
-      </span>
-      {!quiet && (
-        <span className="pr-3.5 font-label text-[10px] uppercase tracking-[0.12em]">
-          退出專注
-        </span>
+      {active ? (
+        <path d="M9 3H3v6M15 3h6v6M9 21H3v-6M15 21h6v-6" />
+      ) : (
+        <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
       )}
-    </button>
+    </svg>
   );
 }
 
@@ -130,26 +119,6 @@ function ReadingProgress({ routeKey }) {
         style={{ transform: `scaleX(${ratio})` }}
       />
     </div>
-  );
-}
-
-function PanelIcon({ expand = false }) {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3" y="4" width="18" height="16" rx="2.5" />
-      <path d="M9 4v16" />
-      {expand ? <path d="m13 9 3 3-3 3" /> : <path d="m16 9-3 3 3 3" />}
-    </svg>
   );
 }
 
@@ -214,14 +183,11 @@ export default function App() {
   const [block, setBlock] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(initialSidebarCollapsed);
-  const [railOpen, setRailOpen] = useState(() =>
-    initialSidebarCollapsed() ? false : initialRailOpen()
-  );
+  const [railOpen, setRailOpen] = useState(initialRailOpen);
+  const [focusMode, setFocusMode] = useState(false);
   const [theme, setTheme] = useState(initialTheme);
   const cacheRef = useRef({});
   const blockCacheRef = useRef({});
-  const railBeforeFocus = useRef(initialRailOpen());
-  const wasCollapsed = useRef(collapsed);
   const routeKey = `${subjectId ?? ""}/${nodeId ?? ""}/${stepId ?? ""}/${blockId ?? ""}${
     blocksRoute ? "/blocks" : ""
   }`;
@@ -329,7 +295,7 @@ export default function App() {
         setSidebarOpen(false);
         return;
       }
-      if (collapsed) setCollapsed(false);
+      if (focusMode) setFocusMode(false);
     };
     document.body.style.overflow = sidebarOpen ? "hidden" : "";
     window.addEventListener("keydown", onKey);
@@ -337,14 +303,14 @@ export default function App() {
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = "";
     };
-  }, [sidebarOpen, collapsed]);
+  }, [sidebarOpen, focusMode]);
 
-  // ⌘B / Ctrl+B toggles focus mode (both side columns)
+  // ⌘B / Ctrl+B toggles focus mode (both side columns, article unmoved)
   useEffect(() => {
     const onKey = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
-        setCollapsed((value) => !value);
+        setFocusMode((value) => !value);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -363,6 +329,13 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Leaving focus mode always brings the right outline back.
+  const wasFocusRef = useRef(false);
+  useEffect(() => {
+    if (wasFocusRef.current && !focusMode) setRailOpen(true);
+    wasFocusRef.current = focusMode;
+  }, [focusMode]);
+
   // Remember the reader's sidebar preference
   useEffect(() => {
     try {
@@ -372,29 +345,14 @@ export default function App() {
     }
   }, [collapsed]);
 
-  // Focus mode collapses both side columns; toggling the rail stays possible.
+  // Remember the reader's rail preference independently of focus mode.
   useEffect(() => {
-    if (collapsed === wasCollapsed.current) return;
-    wasCollapsed.current = collapsed;
-    if (collapsed) {
-      railBeforeFocus.current = railOpen;
-      setRailOpen(false);
-    } else {
-      setRailOpen(railBeforeFocus.current);
-    }
-    // `railOpen` is read only when entering focus mode.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collapsed]);
-
-  // Remember the reader's rail preference, but not the temporary focus state.
-  useEffect(() => {
-    if (collapsed) return;
     try {
       window.localStorage.setItem(RAIL_KEY, railOpen ? "open" : "hidden");
     } catch {
       /* private mode */
     }
-  }, [railOpen, collapsed]);
+  }, [railOpen]);
 
   // Apply and remember the reader's light/dark preference.
   useEffect(() => {
@@ -402,7 +360,7 @@ export default function App() {
     document.documentElement.classList.toggle("dark", dark);
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute("content", dark ? "#141311" : "#f2efe8");
+      ?.setAttribute("content", dark ? "#141311" : "#faf8f5");
     try {
       window.localStorage.setItem(THEME_KEY, theme);
     } catch {
@@ -540,7 +498,6 @@ export default function App() {
             </button>
           )}
 
-
           <button
             type="button"
             onClick={goHome}
@@ -570,30 +527,18 @@ export default function App() {
             {subjectId && course && (
               <button
                 type="button"
-                onClick={() => setCollapsed((value) => !value)}
-                aria-label={collapsed ? "展開側欄" : "收合側欄"}
-                title={collapsed ? "展開側欄（⌘B）" : "收合側欄（⌘B）"}
-                className="hidden items-center gap-2 rounded-full border border-hairline bg-surface/70 px-3 py-1.5 font-label text-[11px] uppercase tracking-[0.12em] text-ink transition-colors hover:border-accent/40 hover:text-accent lg:inline-flex"
-              >
-                <PanelIcon expand={collapsed} />
-                {collapsed ? "顯示目錄" : "專注模式"}
-              </button>
-            )}
-            {hasStepRail && (
-              <button
-                type="button"
-                onClick={() => setRailOpen((value) => !value)}
-                aria-pressed={railOpen}
-                aria-label={railOpen ? "收合右欄" : "展開右欄"}
-                title={railOpen ? "收合右欄（⌘\\）" : "展開右欄（⌘\\）"}
-                className={`hidden items-center gap-2 rounded-full border px-3 py-1.5 font-label text-[11px] uppercase tracking-[0.12em] transition-colors xl:inline-flex ${
-                  railOpen
+                onClick={() => setFocusMode((value) => !value)}
+                aria-pressed={focusMode}
+                aria-label={focusMode ? "退出專注模式" : "進入專注模式"}
+                title={focusMode ? "退出專注模式（Esc / ⌘B）" : "進入專注模式（⌘B）"}
+                className={`hidden items-center gap-2 rounded-full border px-3 py-1.5 font-label text-[11px] uppercase tracking-[0.12em] transition-colors lg:inline-flex ${
+                  focusMode
                     ? "border-accent/40 bg-accent-tint text-accent"
                     : "border-hairline bg-surface/70 text-ink hover:border-accent/40 hover:text-accent"
                 }`}
               >
-                <KnowledgeGlyph size={16} />
-                {railOpen ? "收合右欄" : "展開右欄"}
+                <FocusIcon active={focusMode} />
+                {focusMode ? "退出專注" : "專注模式"}
               </button>
             )}
             <button
@@ -616,9 +561,6 @@ export default function App() {
       </header>
 
       {subjectId && <ReadingProgress routeKey={routeKey} />}
-      {collapsed && subjectId && (
-        <FocusExit onExit={() => setCollapsed(false)} />
-      )}
 
       {!subjectId ? (
         <main className="min-w-0 flex-1">
@@ -634,81 +576,99 @@ export default function App() {
           </p>
         </div>
       ) : (
-        <div className="mx-auto w-full max-w-[1408px] px-4 sm:px-6 lg:px-8">
-          <div className="lg:flex">
-            <Sidebar
-              course={course}
-              currentId={node?.id ?? null}
-              currentStepId={stepId}
-              onSelect={selectNode}
-              onSelectStep={selectStep}
-              onSubject={selectSubject}
-              open={sidebarOpen}
-              onClose={() => setSidebarOpen(false)}
-              collapsed={collapsed}
-              onToggle={() => setCollapsed((value) => !value)}
-            />
+        <>
+          <SidebarDrawer
+            course={course}
+            currentId={node?.id ?? null}
+            currentStepId={stepId}
+            onSelect={selectNode}
+            onSelectStep={selectStep}
+            onSubject={selectSubject}
+            open={sidebarOpen}
+            onClose={() => setSidebarOpen(false)}
+          />
 
-            <main className="min-w-0 flex-1">
-              <div
-                className={`w-full py-7 sm:py-9 lg:py-12 ${
-                  step
-                    ? ""
-                    : node
-                      ? "mx-auto max-w-[1100px]"
-                      : "mx-auto max-w-[1240px]"
-                }`}
-              >
-                <div
-                  className={
-                    step
-                      ? ""
-                      : "rounded-[22px] bg-transparent px-0 py-0 sm:rounded-[26px] sm:bg-surface/65 sm:p-8 sm:ring-1 sm:ring-hairline sm:shadow-soft lg:p-8 min-[1440px]:p-11"
-                  }
-                >
-                {blockRoute ? (
-                  <BlockView
-                    key={`${subjectId}/${blockId}`}
+          <div className="mx-auto w-full max-w-[1408px] px-4 sm:px-6 lg:px-8">
+            <div className="lg:grid lg:grid-cols-[20rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)_13rem]">
+              <div className="hidden lg:block">
+                {!focusMode && (
+                  <Sidebar
                     course={course}
-                    block={block?.id === blockId ? block : null}
-                    onNavigate={navigateHref}
-                  />
-                ) : blocksRoute ? (
-                  <BlocksIndex
-                    key={`${subjectId}/blocks`}
-                    course={course}
-                    onNavigate={navigateHref}
-                  />
-                ) : step ? (
-                  <StepView
-                    key={step.id}
-                    course={course}
-                    node={node}
-                    step={step}
-                    onNavigate={navigateHref}
-                    railOpen={railOpen}
-                    onCloseRail={() => setRailOpen(false)}
-                  />
-                ) : node ? (
-                  <NodeView
-                    key={node.id}
-                    course={course}
-                    node={node}
+                    currentId={node?.id ?? null}
+                    currentStepId={stepId}
                     onSelect={selectNode}
+                    onSelectStep={selectStep}
                     onSubject={selectSubject}
-                  />
-                ) : (
-                  <SubjectOverview
-                    key={course.subject}
-                    course={course}
-                    onNavigate={navigateHref}
+                    collapsed={collapsed}
+                    onToggle={() => setCollapsed((value) => !value)}
                   />
                 )}
-                </div>
               </div>
-            </main>
+
+              <main className="min-w-0">
+                <div className="w-full py-7 sm:py-9 lg:py-12">
+                  <div
+                    className={
+                      step
+                        ? ""
+                        : "mx-auto w-full max-w-[816px] px-0 lg:px-8 xl:px-12"
+                    }
+                  >
+                  {blockRoute ? (
+                    <BlockView
+                      key={`${subjectId}/${blockId}`}
+                      course={course}
+                      block={block?.id === blockId ? block : null}
+                      onNavigate={navigateHref}
+                    />
+                  ) : blocksRoute ? (
+                    <BlocksIndex
+                      key={`${subjectId}/blocks`}
+                      course={course}
+                      onNavigate={navigateHref}
+                    />
+                  ) : step ? (
+                    <StepView
+                      key={step.id}
+                      course={course}
+                      node={node}
+                      step={step}
+                      onNavigate={navigateHref}
+                    />
+                  ) : node ? (
+                    <NodeView
+                      key={node.id}
+                      course={course}
+                      node={node}
+                      onSelect={selectNode}
+                      onSubject={selectSubject}
+                    />
+                  ) : (
+                    <SubjectOverview
+                      key={course.subject}
+                      course={course}
+                      onNavigate={navigateHref}
+                    />
+                  )}
+                  </div>
+                </div>
+              </main>
+
+              {step && (
+                <div className="hidden xl:block">
+                  {!focusMode && railOpen && hasStepRail && (
+                    <ContextRail
+                      course={course}
+                      step={step}
+                      onNavigate={navigateHref}
+                      onClose={() => setRailOpen(false)}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );

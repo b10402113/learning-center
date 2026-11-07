@@ -491,7 +491,8 @@ export function buildSubject(
   }
   writeBlockFiles({ appRoot, subject, blocks, graph });
 
-  const goal = section(roadmapBody, "Goal");
+  const rawGoal = section(roadmapBody, "Goal");
+  const goal = /^none$/i.test(rawGoal.trim()) ? "" : rawGoal;
   const updated =
     [roadmapUpdated, ...[...nodesById.values()].map((node) => node.updated)]
       .filter(Boolean)

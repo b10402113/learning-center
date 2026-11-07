@@ -7,7 +7,7 @@
  */
 
 export const CARD_W = 184;
-export const CARD_H = 68;
+export const CARD_H = 84;
 export const COL_GAP = 32;
 export const ROW_GAP = 92;
 export const PAD = 36;

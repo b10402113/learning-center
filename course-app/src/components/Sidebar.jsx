@@ -34,6 +34,7 @@ function SidebarBody({
   onSelectStep,
   onSubject,
   onClose,
+  onToggle,
 }) {
   const nodesByTier = groupByTier(course);
 
@@ -47,6 +48,31 @@ function SidebarBody({
           <span className="rounded-full bg-surface px-2 py-0.5 font-mono text-[10px] tabular-nums text-ink ring-1 ring-hairline">
             {course.nodes.length} 節點
           </span>
+          {onToggle && (
+            <button
+              type="button"
+              onClick={onToggle}
+              aria-label="收合左側目錄"
+              title="收合左側目錄"
+              className="grid size-7 place-items-center rounded-lg text-ink-soft transition-colors hover:bg-surface hover:text-accent"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="4" width="18" height="16" rx="2.5" />
+                <path d="M9 4v16" />
+                <path d="m16 9-3 3 3 3" />
+              </svg>
+            </button>
+          )}
           {onClose && (
             <button
               type="button"
@@ -115,11 +141,13 @@ function SidebarBody({
         )}
       </div>
 
-      <div className="px-5 pt-4">
-        <p className="border-l-2 border-accent/45 pl-3 text-[0.82rem] leading-relaxed text-ink-soft line-clamp-4">
-          {course.goal}
-        </p>
-      </div>
+      {course.goal && course.goal !== "none" && (
+        <div className="px-5 pt-4">
+          <p className="border-l-2 border-accent/45 pl-3 text-[0.82rem] leading-relaxed text-ink-soft line-clamp-4">
+            {course.goal}
+          </p>
+        </div>
+      )}
 
       <nav className="mt-7 flex-1 space-y-8 px-3 pb-12" aria-label="課程導覽">
         {course.tiers.map((tier) => {
@@ -242,8 +270,9 @@ function SidebarBody({
 }
 
 /**
- * Course navigation. Desktop is a sticky column that collapses into a slim
- * numbered rail for focus mode; mobile is a slide-in drawer.
+ * Desktop course navigation. It sits in a fixed-width layout slot so showing
+ * or collapsing it never moves the article. Collapsed, it becomes a slim icon
+ * rail with native tooltips.
  */
 export default function Sidebar({
   course,
@@ -252,36 +281,23 @@ export default function Sidebar({
   onSelect,
   onSelectStep,
   onSubject,
-  open,
-  onClose,
   collapsed,
   onToggle,
 }) {
   return (
-    <>
-      {/* Mobile backdrop */}
-      <div
-        onClick={onClose}
-        aria-hidden="true"
-        className={`fixed inset-0 z-40 bg-black/25 backdrop-blur-[2px] transition-opacity lg:hidden ${
-          open ? "opacity-100" : "pointer-events-none opacity-0"
-        }`}
-      />
-
-      {/* Desktop rail (focus mode) */}
-      <aside
-        className={`sticky top-[4.75rem] hidden h-[calc(100vh-4.75rem)] w-80 shrink-0 bg-transparent ${
-          collapsed ? "lg:flex" : ""
-        }`}
-      >
-        <div className="scroll-slim flex w-[4.25rem] flex-col items-center gap-2 overflow-y-auto py-4">
+    <aside
+      className="sticky top-[4.75rem] hidden h-[calc(100vh-4.75rem)] w-full lg:block"
+      aria-label="課程導覽"
+    >
+      {collapsed ? (
+        <div className="scroll-slim flex h-full w-[4.25rem] flex-col items-center gap-2 overflow-y-auto border-r border-hairline bg-paper/40 py-4">
           {onToggle && (
             <>
               <button
                 type="button"
                 onClick={onToggle}
-                aria-label="展開目錄"
-                title="展開目錄（⌘B）"
+                aria-label="展開左側目錄"
+                title="展開左側目錄"
                 className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent-tint text-accent transition-colors hover:bg-accent hover:text-dark"
               >
                 <svg
@@ -316,30 +332,19 @@ export default function Sidebar({
                 title={node.title}
                 aria-label={node.title}
                 aria-current={active ? "page" : undefined}
-                className={`group grid size-9 shrink-0 place-items-center rounded-xl text-[0.8rem] font-medium tabular-nums transition-colors ${
+                className={`group grid size-9 shrink-0 place-items-center rounded-xl transition-colors ${
                   active
-                    ? "bg-accent text-dark"
+                    ? "bg-accent-tint text-accent ring-1 ring-accent/30"
                     : "bg-surface text-ink-soft ring-1 ring-hairline hover:text-accent"
                 }`}
               >
-                <NodeGlyph
-                  seed={node.id}
-                  size={16}
-                  className={active ? "text-dark" : ""}
-                />
+                <NodeGlyph seed={node.id} size={16} />
               </button>
             );
           })}
         </div>
-      </aside>
-
-      {/* Desktop expanded column */}
-      <aside
-        className={`sticky top-[4.75rem] hidden h-[calc(100vh-4.75rem)] w-80 shrink-0 flex-col border-r border-hairline bg-paper/40 ${
-          collapsed ? "" : "lg:flex"
-        }`}
-      >
-        <div className="scroll-slim flex min-h-0 flex-1 flex-col overflow-y-auto">
+      ) : (
+        <div className="scroll-slim flex h-full flex-col overflow-y-auto border-r border-hairline bg-paper/40">
           <SidebarBody
             course={course}
             currentId={currentId}
@@ -347,11 +352,35 @@ export default function Sidebar({
             onSelect={onSelect}
             onSelectStep={onSelectStep}
             onSubject={onSubject}
+            onToggle={onToggle}
           />
         </div>
-      </aside>
+      )}
+    </aside>
+  );
+}
 
-      {/* Mobile drawer */}
+/** Mobile slide-in drawer; the desktop column lives in the layout slot. */
+export function SidebarDrawer({
+  course,
+  currentId,
+  currentStepId,
+  onSelect,
+  onSelectStep,
+  onSubject,
+  open,
+  onClose,
+}) {
+  return (
+    <>
+      <div
+        onClick={onClose}
+        aria-hidden="true"
+        className={`fixed inset-0 z-40 bg-black/25 backdrop-blur-[2px] transition-opacity lg:hidden ${
+          open ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+      />
+
       <aside
         className={`fixed inset-y-0 left-0 z-50 flex w-80 max-w-[86vw] shrink-0 flex-col bg-paper shadow-2xl ring-1 ring-hairline transition-transform duration-200 ease-out lg:hidden ${
           open ? "translate-x-0" : "-translate-x-full"

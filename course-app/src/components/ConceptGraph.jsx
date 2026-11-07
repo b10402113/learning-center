@@ -37,6 +37,7 @@ export default function ConceptGraph({ course, step, onNavigate = null }) {
           maxHeight={420}
           showHint={false}
           framed={false}
+          settleImmediately
           onNavigate={onNavigate}
         />
       </div>

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Markdown from "./Markdown.jsx";
 import Quiz from "./Quiz.jsx";
 import ConceptGraph from "./ConceptGraph.jsx";
-import ContextRail, { ConceptList, TocDetails } from "./ContextRail.jsx";
+import { ConceptList, TocDetails } from "./ContextRail.jsx";
 import { railBlocks } from "../lib/blocks.mjs";
 import { tierDotClass } from "./Sidebar.jsx";
 import { articleForClipboard, copyText } from "../lib/clipboard.mjs";
@@ -142,8 +142,6 @@ export default function StepView({
   node,
   step,
   onNavigate = null,
-  railOpen = true,
-  onCloseRail = null,
 }) {
   const assetBase = `${BASE}nodes/${encodeURIComponent(course.subject)}/${encodeURIComponent(node.id)}/`;
   const { previous, next } = stepNeighbors(node.steps, step.id);
@@ -152,7 +150,6 @@ export default function StepView({
   const headings = Array.isArray(step.headings) ? step.headings : [];
   const hasBlocks = railBlocks(course, step).length > 0;
   const hasRailContent = headings.length >= 2 || hasBlocks;
-  const showRail = hasRailContent && railOpen;
   const minutes = readingMinutes(step.articleMd);
   // The article body repeats the step title as an H1; the header already
   // renders it, so drop the leading heading before rendering.
@@ -166,7 +163,7 @@ export default function StepView({
     : "";
 
   return (
-    <div className="flex w-full">
+    <div className="w-full">
       <article className="mx-auto min-w-0 w-full max-w-[816px] px-0 lg:px-8 xl:px-12">
         <nav
           aria-label="麵包屑"
@@ -353,19 +350,6 @@ export default function StepView({
           {node.title} · Step {step.order}/{node.steps.length}
         </footer>
       </article>
-
-      {hasRailContent && (
-        <div className="hidden w-[208px] flex-none xl:block">
-          {showRail && (
-            <ContextRail
-              course={course}
-              step={step}
-              onNavigate={onNavigate}
-              onClose={onCloseRail}
-            />
-          )}
-        </div>
-      )}
     </div>
   );
 }

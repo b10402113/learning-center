@@ -15,6 +15,7 @@ import { pathForBlock } from "../lib/route.mjs";
 
 const MIN_GRAPH_HEIGHT = 420;
 const MAX_GRAPH_HEIGHT = 680;
+const INITIAL_FIT_PADDING = 116;
 const FONT_FAMILY =
   'ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans TC", sans-serif';
 
@@ -26,7 +27,7 @@ function clamp(value, min, max) {
 function readPalette() {
   if (typeof document === "undefined") {
     return {
-      paper: "#f2efe8",
+      paper: "#faf8f5",
       surface: "#faf8f2",
       shade: "#e8e2d2",
       accent: "#ff6b1a",
@@ -40,7 +41,7 @@ function readPalette() {
   const read = (name, fallback) =>
     styles.getPropertyValue(name).trim() || fallback;
   return {
-    paper: read("--color-paper", "#f2efe8"),
+    paper: read("--color-paper", "#faf8f5"),
     surface: read("--color-surface", "#faf8f2"),
     shade: read("--color-shade", "#e8e2d2"),
     accent: read("--color-accent", "#ff6b1a"),
@@ -135,6 +136,7 @@ export default function BlockGraph({
   compact = false,
   showHint = true,
   framed = true,
+  settleImmediately = false,
   onNavigate = null,
 }) {
   const graph = useMemo(
@@ -165,6 +167,7 @@ export default function BlockGraph({
   const placedLabelsRef = useRef([]);
   const [hovered, setHovered] = useState(null);
   const [ready, setReady] = useState(false);
+  const [fitted, setFitted] = useState(!settleImmediately);
 
   const byId = useMemo(
     () => new Map(data.nodes.map((node) => [node.id, node])),
@@ -180,7 +183,8 @@ export default function BlockGraph({
   useEffect(() => {
     setHovered(null);
     fittedForRef.current = null;
-  }, [data]);
+    setFitted(!settleImmediately);
+  }, [data, settleImmediately]);
 
   // Softer charge and a little collision keep the 50-node course tidy.
   useEffect(() => {
@@ -353,9 +357,10 @@ export default function BlockGraph({
     fg.zoom(fg.zoom() * factor, 200);
   };
 
-  const fitView = (duration = 500) => {
+  const fitView = (duration = 500, padding = 96) => {
     const fg = fgRef.current;
     if (!fg) return;
+    const instant = duration === 0;
     // Fitting one node would zoom until the circle fills the canvas.
     if (data.nodes.length === 1) {
       const node = data.nodes[0];
@@ -365,20 +370,39 @@ export default function BlockGraph({
       fg.zoom(1.2, duration);
       return;
     }
-    fg.zoomToFit(duration, 96);
+    fg.zoomToFit(duration, padding);
     window.setTimeout(() => {
       // A handful of nodes should not be blown up to fill the canvas.
       if (data.nodes.length <= 4 && fg.zoom() > 1.8) {
-        fg.zoom(1.8, 200);
+        fg.zoom(1.8, instant ? 0 : 200);
       }
       // A phone-sized canvas would render a big graph as tiny dots.
       if (size.width < 640 && data.nodes.length > 8) {
-        fg.zoom(fg.zoom() * 2.2, 250);
+        fg.zoom(fg.zoom() * 2.2, instant ? 0 : 250);
       }
     }, duration + 20);
   };
 
-  const resetView = () => fitView(450);
+  const resetView = () =>
+    fitView(450, settleImmediately ? INITIAL_FIT_PADDING : 96);
+
+  // Settled graphs must never show the unstyled layout first: fit and reveal
+  // once, with no animated zoom. This effect is the fallback if the engine
+  // stops before the ref is wired.
+  useEffect(() => {
+    if (!settleImmediately || !ready) return;
+    if (fittedForRef.current === data) {
+      setFitted(true);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (fittedForRef.current === data) return;
+      fittedForRef.current = data;
+      fitView(0, settleImmediately ? INITIAL_FIT_PADDING : 96);
+      setFitted(true);
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [settleImmediately, ready, data]);
 
   if (graph.nodes.length === 0) {
     return (
@@ -437,12 +461,21 @@ export default function BlockGraph({
               placedLabelsRef.current = [];
             }}
             onEngineStop={() => {
-              if (fittedForRef.current === data) return;
+              if (fittedForRef.current === data) {
+                setFitted(true);
+                return;
+              }
               fittedForRef.current = data;
-              fitView();
+              fitView(0, settleImmediately ? INITIAL_FIT_PADDING : 96);
+              setFitted(true);
             }}
-            cooldownTicks={200}
+            warmupTicks={settleImmediately ? 180 : 0}
+            cooldownTicks={settleImmediately ? 0 : 200}
             enableNodeDrag
+            style={{
+              opacity: fitted ? 1 : 0,
+              transition: "none",
+            }}
           />
         )}
 

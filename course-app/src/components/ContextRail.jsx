@@ -83,10 +83,10 @@ export default function ContextRail({
 
   return (
     <aside
-      className="w-full"
+      className="scroll-slim sticky top-[4.75rem] max-h-[calc(100vh-4.75rem)] w-full overflow-y-auto py-12 pr-1"
       aria-label="本步情境"
     >
-      <div className="scroll-slim sticky top-[4.75rem] max-h-[calc(100vh-4.75rem)] overflow-y-auto py-12 pr-1">
+      <div>
         {headings.length >= 2 && (
           <nav aria-label="本頁目錄">
             <div className="flex items-center justify-between gap-2">
@@ -97,8 +97,8 @@ export default function ContextRail({
                 <button
                   type="button"
                   onClick={onClose}
-                  aria-label="收合右欄"
-                  title="收合右欄（⌘\\）"
+                  aria-label="收合右側大綱"
+                  title="收合右側大綱（⌘\\ 重新展開）"
                   className="-mr-1 grid size-6 place-items-center rounded-md text-[0.85rem] text-ink-soft transition-colors hover:bg-surface hover:text-accent"
                 >
                   ✕
