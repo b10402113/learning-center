@@ -1,14 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { blockTypeMark, railBlocks } from "../lib/blocks.mjs";
+import {
+  scrollBehaviorFor,
+  tocIndicatorFrame,
+} from "../lib/motion.mjs";
+import { usePrefersReducedMotion } from "../lib/use-prefers-reduced-motion.mjs";
 import { followInternalLink, isPlainLeftClick } from "../lib/navigation.mjs";
 import { pathForBlock } from "../lib/route.mjs";
 
 const TOC_LINE = 120;
 
-function jumpTo(id) {
+function jumpTo(id, reduced) {
   const el = document.getElementById(id);
   if (!el) return false;
-  el.scrollIntoView({ behavior: "smooth", block: "start" });
+  el.scrollIntoView({
+    behavior: scrollBehaviorFor(reduced),
+    block: "start",
+  });
   return true;
 }
 
@@ -49,25 +57,63 @@ function useActiveHeading(headings) {
   return active;
 }
 
-function TocLink({ heading, active, compact = false }) {
+function TocLink({ heading, active, compact = false, reduced = false }) {
   return (
     <a
       href={`#${heading.id}`}
+      data-toc-id={heading.id}
       onClick={(event) => {
-        if (jumpTo(heading.id)) event.preventDefault();
+        if (jumpTo(heading.id, reduced)) event.preventDefault();
       }}
       style={{ paddingLeft: heading.depth === 3 ? (compact ? 14 : 22) : 10 }}
       className={`block border-l-2 py-1 pr-1 leading-snug transition-colors ${
         compact ? "text-[0.82rem]" : "text-[0.8rem]"
       } ${
         active
-          ? "border-accent font-medium text-accent"
+          ? "border-transparent font-medium text-accent"
           : "border-transparent text-ink-soft hover:border-hairline hover:text-ink"
       }`}
     >
       {heading.text}
     </a>
   );
+}
+
+/**
+ * Measure the active heading's link so the orange bookmark can slide to it.
+ * Re-measures on window resize and whenever the list's own size changes.
+ */
+function useTocIndicator(headings, active) {
+  const listRef = useRef(null);
+  const [frame, setFrame] = useState(null);
+  const key = headings.map((heading) => heading.id).join("|");
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || !active) {
+      setFrame(null);
+      return undefined;
+    }
+    const link = Array.from(
+      list.querySelectorAll("[data-toc-id]")
+    ).find((item) => item.dataset.tocId === active);
+    const measure = () => setFrame(tocIndicatorFrame(link));
+    measure();
+
+    let observer = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(measure);
+      observer.observe(list);
+      if (link) observer.observe(link);
+    }
+    window.addEventListener("resize", measure);
+    return () => {
+      if (observer) observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [active, key]);
+
+  return { listRef, frame };
 }
 
 /** The right-hand context rail: page TOC plus the step's knowledge points. */
@@ -81,6 +127,8 @@ export default function ContextRail({
   const headings = Array.isArray(step?.headings) ? step.headings : [];
   const blockCount = railBlocks(course, step).length;
   const active = useActiveHeading(headings);
+  const reduced = usePrefersReducedMotion();
+  const { listRef, frame } = useTocIndicator(headings, active);
 
   return (
     <aside
@@ -106,12 +154,30 @@ export default function ContextRail({
                 </button>
               )}
             </div>
-            <ol className="mt-3 space-y-0.5">
+            <ol ref={listRef} className="relative mt-3 space-y-0.5">
               {headings.map((heading) => (
                 <li key={heading.id}>
-                  <TocLink heading={heading} active={active === heading.id} />
+                  <TocLink
+                    heading={heading}
+                    active={active === heading.id}
+                    reduced={reduced}
+                  />
                 </li>
               ))}
+              <li
+                aria-hidden="true"
+                className={`pointer-events-none absolute left-0 top-0 w-[2px] list-none rounded-full bg-accent transition-transform duration-[160ms] ease-[var(--mo-ease)] ${
+                  frame ? "opacity-100" : "opacity-0"
+                }`}
+                style={
+                  frame
+                    ? {
+                        height: `${frame.height}px`,
+                        transform: `translateY(${frame.top}px)`,
+                      }
+                    : undefined
+                }
+              />
             </ol>
           </nav>
         )}
@@ -199,6 +265,7 @@ export function ConceptList({
 
 /** Narrow screens keep the TOC inline, collapsed under the title. */
 export function TocDetails({ headings, className = "" }) {
+  const reduced = usePrefersReducedMotion();
   if (!Array.isArray(headings) || headings.length < 2) return null;
 
   return (
@@ -214,7 +281,12 @@ export function TocDetails({ headings, className = "" }) {
       <ol className="mt-3 space-y-0.5">
         {headings.map((heading) => (
           <li key={heading.id}>
-            <TocLink heading={heading} active={false} compact />
+            <TocLink
+              heading={heading}
+              active={false}
+              compact
+              reduced={reduced}
+            />
           </li>
         ))}
       </ol>

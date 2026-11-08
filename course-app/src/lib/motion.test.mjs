@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   MIN_LOADING_MS,
+  imageAlreadyLoaded,
   remainingDisplayMs,
   resolveMotionPreference,
+  scrollBehaviorFor,
   subscribeMotionPreference,
+  tocIndicatorFrame,
 } from "./motion.mjs";
 
 function fakeMediaQueryList(matches = false) {
@@ -69,4 +72,32 @@ test("remainingDisplayMs keeps the minimum window and then returns zero", () => 
   assert.equal(remainingDisplayMs(1000, 1050, 150), 100);
   assert.equal(remainingDisplayMs(1000, 1150, 150), 0);
   assert.equal(remainingDisplayMs(1000, 2000, 150), 0);
+});
+
+test("scrollBehaviorFor keeps TOC jumps instant under reduced motion", () => {
+  assert.equal(scrollBehaviorFor(true), "auto");
+  assert.equal(scrollBehaviorFor(false), "smooth");
+});
+
+test("tocIndicatorFrame reads the active link's offset and height", () => {
+  assert.deepEqual(tocIndicatorFrame({ offsetTop: 42, offsetHeight: 18 }), {
+    top: 42,
+    height: 18,
+  });
+  assert.deepEqual(tocIndicatorFrame({ offsetTop: 0, offsetHeight: 20 }), {
+    top: 0,
+    height: 20,
+  });
+});
+
+test("tocIndicatorFrame ignores a missing or empty link", () => {
+  assert.equal(tocIndicatorFrame(null), null);
+  assert.equal(tocIndicatorFrame({ offsetTop: 10, offsetHeight: 0 }), null);
+  assert.equal(tocIndicatorFrame({ offsetTop: NaN, offsetHeight: 18 }), null);
+});
+
+test("imageAlreadyLoaded reveals a cached image on the first paint", () => {
+  assert.equal(imageAlreadyLoaded({ complete: true }), true);
+  assert.equal(imageAlreadyLoaded({ complete: false }), false);
+  assert.equal(imageAlreadyLoaded(null), false);
 });

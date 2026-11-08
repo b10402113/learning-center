@@ -1,4 +1,5 @@
 import "katex/dist/katex.min.css";
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -7,6 +8,7 @@ import { resolveSrc } from "../lib/assets.mjs";
 import { replaceBlockLinks } from "../lib/block-links.mjs";
 import { rehypeHeadingIds } from "../lib/heading-anchor.mjs";
 import { rehypeHighlightPlugin } from "../lib/highlight.mjs";
+import { imageAlreadyLoaded } from "../lib/motion.mjs";
 import { followInternalLink, isPlainLeftClick } from "../lib/navigation.mjs";
 import { parsePath } from "../lib/route.mjs";
 import Quiz from "./Quiz.jsx";
@@ -28,6 +30,34 @@ function blockIdFromHref(href, subjectId) {
   const parsed = parsePath(url.pathname);
   if (!parsed?.blockRoute || parsed.subjectId !== subjectId) return null;
   return parsed.blockId;
+}
+
+/**
+ * A lesson figure that fades in once, without changing size. A cached image
+ * is revealed from the ref callback on the first paint, so it never flashes
+ * a blank frame before appearing.
+ */
+function LessonImage({ src, alt = "", title }) {
+  const [loadedSrc, setLoadedSrc] = useState(null);
+  const loaded = loadedSrc === src;
+
+  return (
+    <img
+      ref={(image) => {
+        if (image && imageAlreadyLoaded(image)) setLoadedSrc(src);
+      }}
+      src={src}
+      alt={alt}
+      title={title}
+      loading="lazy"
+      decoding="async"
+      onLoad={() => setLoadedSrc(src)}
+      onError={() => setLoadedSrc(src)}
+      className={`lesson-figure figure-in my-7 w-full ${
+        loaded ? "is-loaded" : ""
+      }`}
+    />
+  );
 }
 
 /**
@@ -115,12 +145,10 @@ export default function Markdown({
             </a>
           ),
           img: ({ src, alt, title }) => (
-            <img
+            <LessonImage
               src={resolveSrc(src, assetBase, window.location.href)}
               alt={alt || ""}
               title={title}
-              loading="lazy"
-              className="lesson-figure my-7 w-full"
             />
           ),
           table: (props) => (

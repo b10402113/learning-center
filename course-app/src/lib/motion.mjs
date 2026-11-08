@@ -41,3 +41,33 @@ export function remainingDisplayMs(startedAt, now, minMs = MIN_LOADING_MS) {
   const remaining = minMs - (now - startedAt);
   return remaining > 0 ? remaining : 0;
 }
+
+/**
+ * Scroll behaviour for a table-of-contents jump. Reduced motion jumps
+ * instantly; otherwise the reader gets the usual smooth glide.
+ */
+export function scrollBehaviorFor(reduced) {
+  return reduced ? "auto" : "smooth";
+}
+
+/**
+ * The frame the TOC bookmark should occupy, read from the active link's
+ * offsets. Returns null when there is no visible link to measure.
+ */
+export function tocIndicatorFrame(link) {
+  if (!link) return null;
+  const top = Number(link.offsetTop);
+  const height = Number(link.offsetHeight);
+  if (!Number.isFinite(top) || !Number.isFinite(height) || height <= 0) {
+    return null;
+  }
+  return { top, height };
+}
+
+/**
+ * True when the browser already holds the image, so a cached figure appears
+ * on the first paint instead of fading in from invisible.
+ */
+export function imageAlreadyLoaded(image) {
+  return Boolean(image && image.complete);
+}

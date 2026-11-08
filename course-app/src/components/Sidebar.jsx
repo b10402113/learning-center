@@ -229,35 +229,43 @@ function SidebarBody({
                         )}
                       </button>
 
-                      {active && node.steps.length > 0 && (
-                        <ul className="ml-5 mt-1.5 space-y-1 border-l border-hairline pl-3">
-                          {node.steps.map((step) => {
-                            const stepActive = step.id === currentStepId;
-                            return (
-                              <li key={step.id}>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    onSelectStep(node.id, step.id)
-                                  }
-                                  aria-current={stepActive ? "step" : undefined}
-                                  className={`flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-[0.88rem] leading-relaxed transition-colors ${
-                                    stepActive
-                                      ? "bg-accent-tint font-medium text-accent"
-                                      : "text-ink-soft hover:bg-surface hover:text-ink"
-                                  }`}
-                                >
-                                  <span className="mt-[3px] w-4 shrink-0 font-mono text-[10px] tabular-nums">
-                                    {String(step.order).padStart(2, "0")}
-                                  </span>
-                                  <span className="min-w-0 flex-1 break-words">
-                                    {step.title}
-                                  </span>
-                                </button>
-                              </li>
-                            );
-                          })}
-                        </ul>
+                      {node.steps.length > 0 && (
+                        <div
+                          className={`step-fold ${active ? "is-open" : ""}`}
+                          inert={active ? undefined : ""}
+                          aria-hidden={active ? undefined : true}
+                        >
+                          <ul className="ml-5 mt-1.5 space-y-1 border-l border-hairline pl-3">
+                            {node.steps.map((step) => {
+                              const stepActive = step.id === currentStepId;
+                              return (
+                                <li key={step.id}>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onSelectStep(node.id, step.id)
+                                    }
+                                    aria-current={
+                                      stepActive ? "step" : undefined
+                                    }
+                                    className={`flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-[0.88rem] leading-relaxed transition-colors ${
+                                      stepActive
+                                        ? "bg-accent-tint font-medium text-accent"
+                                        : "text-ink-soft hover:bg-surface hover:text-ink"
+                                    }`}
+                                  >
+                                    <span className="mt-[3px] w-4 shrink-0 font-mono text-[10px] tabular-nums">
+                                      {String(step.order).padStart(2, "0")}
+                                    </span>
+                                    <span className="min-w-0 flex-1 break-words">
+                                      {step.title}
+                                    </span>
+                                  </button>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
                       )}
                     </li>
                   );
@@ -378,13 +386,13 @@ export function SidebarDrawer({
       <div
         onClick={onClose}
         aria-hidden="true"
-        className={`fixed inset-0 z-40 bg-black/25 backdrop-blur-[2px] transition-opacity lg:hidden ${
+        className={`fixed inset-0 z-40 bg-black/25 backdrop-blur-[2px] transition-opacity duration-[150ms] ease-[var(--mo-ease)] lg:hidden ${
           open ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
       />
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-80 max-w-[86vw] shrink-0 flex-col bg-paper shadow-2xl ring-1 ring-hairline transition-transform duration-200 ease-out lg:hidden ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-80 max-w-[86vw] shrink-0 flex-col bg-paper shadow-2xl ring-1 ring-hairline transition-transform duration-[180ms] ease-[var(--mo-ease)] lg:hidden ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
         aria-label="課程導覽"
