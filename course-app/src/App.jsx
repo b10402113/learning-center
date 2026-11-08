@@ -10,8 +10,8 @@ import BlockView from "./components/BlockView.jsx";
 import BlockModal from "./components/BlockModal.jsx";
 import BlocksIndex from "./components/BlocksIndex.jsx";
 import PixelMark from "./components/PixelMark.jsx";
-import { OrbitMark } from "./components/Glyphs.jsx";
 import { railBlocks } from "./lib/blocks.mjs";
+import { MIN_LOADING_MS, remainingDisplayMs } from "./lib/motion.mjs";
 import {
   indexRoute,
   parsePath,
@@ -110,16 +110,83 @@ function ReadingProgress({ routeKey }) {
     };
   }, [routeKey]);
 
+  // The track is only useful mid-article; it fades away at both ends.
+  const idle = ratio === 0 || ratio === 1;
+
   return (
     <div
       aria-hidden="true"
-      className="pointer-events-none fixed inset-x-0 top-16 z-30 h-[3px] bg-ink/5"
+      className={`pointer-events-none fixed inset-x-0 top-16 z-30 h-[3px] bg-ink/5 transition-opacity duration-150 ${
+        idle ? "opacity-0" : "opacity-100"
+      }`}
     >
       <div
-        className="h-full origin-left rounded-r-full bg-accent"
+        className="h-full origin-left rounded-r-full bg-accent transition-transform duration-[90ms] ease-linear"
         style={{ transform: `scaleX(${ratio})` }}
       />
     </div>
+  );
+}
+
+/**
+ * Keep the skeleton on screen for at least `minMs` so a fast cached load does
+ * not flash a half-frame of placeholder before the article.
+ */
+function useMinimumLoading(loading, minMs = MIN_LOADING_MS) {
+  const [visible, setVisible] = useState(loading);
+  const startedAtRef = useRef(loading ? Date.now() : 0);
+
+  useEffect(() => {
+    if (loading) {
+      startedAtRef.current = Date.now();
+      setVisible(true);
+      return undefined;
+    }
+    const remaining = remainingDisplayMs(startedAtRef.current, Date.now(), minMs);
+    if (!remaining) {
+      setVisible(false);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setVisible(false), remaining);
+    return () => window.clearTimeout(timer);
+  }, [loading, minMs]);
+
+  return visible;
+}
+
+/**
+ * A layout column that stays mounted but fades out and leaves the Tab order
+ * when `hidden` is true, so focus mode never shifts the article.
+ */
+function FadingColumn({ hidden, className = "", children }) {
+  return (
+    <div
+      className={`hidden transition-opacity duration-[160ms] ease-[var(--mo-ease)] ${className} ${
+        hidden ? "pointer-events-none opacity-0" : "opacity-100"
+      }`}
+      inert={hidden ? "" : undefined}
+      aria-hidden={hidden || undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
+function LoadingSkeleton() {
+  return (
+    <main className="min-w-0 flex-1" aria-busy="true">
+      <div className="mx-auto w-full max-w-[816px] px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
+        <div className="loading-breathe space-y-4" aria-hidden="true">
+          <div className="h-9 w-3/5 rounded-xl bg-shade" />
+          <div className="h-4 w-full rounded-full bg-shade" />
+          <div className="h-4 w-11/12 rounded-full bg-shade" />
+          <div className="h-4 w-4/5 rounded-full bg-shade" />
+          <div className="mt-8 h-4 w-full rounded-full bg-shade" />
+          <div className="h-4 w-10/12 rounded-full bg-shade" />
+        </div>
+        <p className="sr-only">課程載入中</p>
+      </div>
+    </main>
   );
 }
 
@@ -193,6 +260,9 @@ export default function App() {
   const routeKey = `${subjectId ?? ""}/${nodeId ?? ""}/${stepId ?? ""}/${blockId ?? ""}${
     blocksRoute ? "/blocks" : ""
   }`;
+  const loadingCourse = Boolean(subjectId) && !course;
+  const showLoading = useMinimumLoading(loadingCourse);
+  const contentReady = Boolean(course) && !showLoading;
 
   // Load the selected subject's data (async, cached). The index has no course.
   useEffect(() => {
@@ -590,7 +660,22 @@ export default function App() {
               title={theme === "dark" ? "切換淺色模式" : "切換深色模式"}
               className="inline-flex items-center gap-2 rounded-full border border-hairline bg-surface/70 px-3 py-1.5 font-label text-[11px] uppercase tracking-[0.12em] text-ink transition-colors hover:border-accent/40 hover:text-accent"
             >
-              {theme === "dark" ? <SunIcon /> : <MoonIcon />}
+              <span className="theme-icon" aria-hidden="true">
+                <span
+                  className={`theme-icon__glyph ${
+                    theme === "dark" ? "is-active" : ""
+                  }`}
+                >
+                  <SunIcon />
+                </span>
+                <span
+                  className={`theme-icon__glyph ${
+                    theme === "dark" ? "" : "is-active"
+                  }`}
+                >
+                  <MoonIcon />
+                </span>
+              </span>
               <span className="hidden sm:inline">
                 {theme === "dark" ? "淺色" : "深色"}
               </span>
@@ -607,13 +692,8 @@ export default function App() {
             <SubjectsView subjects={SUBJECTS} />
           </div>
         </main>
-      ) : !course ? (
-        <div className="flex min-h-[60vh] flex-col items-center justify-center gap-5">
-          <OrbitMark className="h-32 w-40 text-ink" />
-          <p className="robo-kicker font-label text-[10px] text-ink-soft">
-            Loading
-          </p>
-        </div>
+      ) : !contentReady ? (
+        <LoadingSkeleton />
       ) : (
         <>
           <SidebarDrawer
@@ -629,23 +709,21 @@ export default function App() {
 
           <div className="mx-auto w-full max-w-[1408px] px-4 sm:px-6 lg:px-8">
             <div className="lg:grid lg:grid-cols-[20rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)_13rem]">
-              <div className="hidden lg:block">
-                {!focusMode && (
-                  <Sidebar
-                    course={course}
-                    currentId={node?.id ?? null}
-                    currentStepId={stepId}
-                    onSelect={selectNode}
-                    onSelectStep={selectStep}
-                    onSubject={selectSubject}
-                    collapsed={collapsed}
-                    onToggle={() => setCollapsed((value) => !value)}
-                  />
-                )}
-              </div>
+              <FadingColumn hidden={focusMode} className="lg:block">
+                <Sidebar
+                  course={course}
+                  currentId={node?.id ?? null}
+                  currentStepId={stepId}
+                  onSelect={selectNode}
+                  onSelectStep={selectStep}
+                  onSubject={selectSubject}
+                  collapsed={collapsed}
+                  onToggle={() => setCollapsed((value) => !value)}
+                />
+              </FadingColumn>
 
               <main className="min-w-0">
-                <div className="w-full py-7 sm:py-9 lg:py-12">
+                <div key={routeKey} className="lc-enter w-full py-7 sm:py-9 lg:py-12">
                   <div
                     className={
                       step
@@ -694,18 +772,16 @@ export default function App() {
                 </div>
               </main>
 
-              {step && (
-                <div className="hidden xl:block">
-                  {!focusMode && railOpen && hasStepRail && (
-                    <ContextRail
-                      course={course}
-                      step={step}
-                      onNavigate={navigateHref}
-                      onOpenBlock={openBlockModal}
-                      onClose={() => setRailOpen(false)}
-                    />
-                  )}
-                </div>
+              {step && hasStepRail && railOpen && (
+                <FadingColumn hidden={focusMode} className="xl:block">
+                  <ContextRail
+                    course={course}
+                    step={step}
+                    onNavigate={navigateHref}
+                    onOpenBlock={openBlockModal}
+                    onClose={() => setRailOpen(false)}
+                  />
+                </FadingColumn>
               )}
             </div>
           </div>
