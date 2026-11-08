@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  COMPLETION_STAGGER_MS,
   MIN_LOADING_MS,
+  completionDelayMs,
   imageAlreadyLoaded,
+  quizDirection,
+  quizEnterOffset,
   remainingDisplayMs,
   resolveMotionPreference,
   scrollBehaviorFor,
@@ -100,4 +104,26 @@ test("imageAlreadyLoaded reveals a cached image on the first paint", () => {
   assert.equal(imageAlreadyLoaded({ complete: true }), true);
   assert.equal(imageAlreadyLoaded({ complete: false }), false);
   assert.equal(imageAlreadyLoaded(null), false);
+});
+
+test("quizDirection remembers whether the deck moved forward or back", () => {
+  assert.equal(quizDirection(0, 1), "next");
+  assert.equal(quizDirection(1, 2), "next");
+  assert.equal(quizDirection(3, 2), "prev");
+  assert.equal(quizDirection(1, 1), "next");
+});
+
+test("quizEnterOffset slides in from the direction of travel", () => {
+  assert.equal(quizEnterOffset("next"), 8);
+  assert.equal(quizEnterOffset("prev"), -8);
+  assert.equal(quizEnterOffset(undefined), 8);
+});
+
+test("completionDelayMs staggers the finish card in order", () => {
+  assert.equal(COMPLETION_STAGGER_MS, 20);
+  assert.equal(completionDelayMs(0), 0);
+  assert.equal(completionDelayMs(1), 20);
+  assert.equal(completionDelayMs(3), 60);
+  assert.equal(completionDelayMs(-1), 0);
+  assert.equal(completionDelayMs(Number.NaN), 0);
 });

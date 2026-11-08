@@ -71,3 +71,26 @@ export function tocIndicatorFrame(link) {
 export function imageAlreadyLoaded(image) {
   return Boolean(image && image.complete);
 }
+
+/**
+ * Which way the quiz deck travelled. The entering card slides in from that
+ * side, so stepping back feels like going back.
+ */
+export function quizDirection(fromIndex, toIndex) {
+  return Number(toIndex) < Number(fromIndex) ? "prev" : "next";
+}
+
+/** Horizontal entrance offset in pixels for a quiz card's direction. */
+export function quizEnterOffset(direction) {
+  return direction === "prev" ? -8 : 8;
+}
+
+/** Gap between each item in the completion card's entrance. */
+export const COMPLETION_STAGGER_MS = 20;
+
+/** Entrance delay for the nth completion item, clamped at zero. */
+export function completionDelayMs(order) {
+  const index = Number(order);
+  if (!Number.isFinite(index) || index <= 0) return 0;
+  return index * COMPLETION_STAGGER_MS;
+}

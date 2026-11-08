@@ -1,5 +1,12 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { parseQuiz } from "../lib/quiz.mjs";
+import { usePrefersReducedMotion } from "../lib/use-prefers-reduced-motion.mjs";
+
+const NUDGE_KEYFRAMES = [
+  { transform: "translateX(-2px)" },
+  { transform: "translateX(2px)" },
+  { transform: "translateX(0)" },
+];
 
 /**
  * Interactive quiz. A wrong pick can be retried; a correct pick locks the
@@ -15,8 +22,22 @@ export default function Quiz({
   const [localSolved, setLocalSolved] = useState(false);
   const [wrong, setWrong] = useState(() => new Set());
   const solved = solvedProp ?? localSolved;
+  const reduced = usePrefersReducedMotion();
+  const optionsRef = useRef(null);
+  const nudgeRef = useRef(null);
 
   if (!quiz) return null;
+
+  // One quiet push, no loop: a wrong pick nudges the list once and stops.
+  const nudge = () => {
+    const list = optionsRef.current;
+    if (reduced || !list || typeof list.animate !== "function") return;
+    nudgeRef.current?.cancel();
+    nudgeRef.current = list.animate(NUDGE_KEYFRAMES, {
+      duration: 180,
+      easing: "ease-in-out",
+    });
+  };
 
   const pick = (index) => {
     if (solved) return;
@@ -26,6 +47,7 @@ export default function Quiz({
       return;
     }
     setWrong((current) => new Set(current).add(index));
+    nudge();
   };
 
   return (
@@ -39,7 +61,10 @@ export default function Quiz({
       <p className="mt-2 text-[1.05rem] font-medium leading-relaxed text-ink">
         {quiz.question}
       </p>
-      <ol className="mt-5 list-none space-y-2.5 !pl-0">
+      <ol
+        ref={optionsRef}
+        className="mt-5 list-none space-y-2.5 !pl-0"
+      >
         {quiz.options.map((option, index) => {
           const isWrong = wrong.has(index);
           const isCorrect = solved && index === quiz.answer;
@@ -50,7 +75,7 @@ export default function Quiz({
                 onClick={() => pick(index)}
                 disabled={solved}
                 aria-pressed={isCorrect || isWrong}
-                className={`flex w-full items-start gap-3 rounded-xl border px-3.5 py-3 text-left text-[0.95rem] leading-relaxed transition-colors ${
+                className={`flex w-full origin-center items-start gap-3 rounded-xl border px-3.5 py-3 text-left text-[0.95rem] leading-relaxed transition-[transform,scale,background-color,border-color,color,opacity] duration-[160ms] active:scale-[0.995] active:duration-[120ms] ${
                   isCorrect
                     ? "border-accent/50 bg-accent-tint text-ink"
                     : isWrong
@@ -78,7 +103,7 @@ export default function Quiz({
       </ol>
       <div aria-live="polite" className="mt-4 text-[0.95rem]">
         {solved ? (
-          <p className="flex items-start gap-2 text-accent">
+          <p className="quiz-explain flex items-start gap-2 text-accent">
             <svg
               width="15"
               height="15"
@@ -89,9 +114,9 @@ export default function Quiz({
               strokeLinecap="round"
               strokeLinejoin="round"
               aria-hidden="true"
-              className="mt-0.5 shrink-0"
+              className="quiz-check mt-0.5 shrink-0"
             >
-              <path d="m4 12 5 5L20 6" />
+              <path d="m4 12 5 5L20 6" pathLength="1" />
             </svg>
             <span>
               答對了<span className="ml-2 text-ink/80">{quiz.explain}</span>
