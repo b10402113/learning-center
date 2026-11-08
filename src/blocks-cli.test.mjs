@@ -156,6 +156,8 @@ test("publish writes the body back and records the compose model", (t) => {
   assert.match(published, /^# Tool Calling（工具呼叫）/m);
   assert.ok(published.includes("author: fake-model"));
   assert.ok(published.includes("## 進階"));
+  assert.ok(published.includes("created: 2026-11-06"));
+  assert.ok(!published.includes("T00:00:00.000Z"));
 
   const reviewed = fixture(t);
   write(reviewed, "learn/test/blocks/tool-calling.md", blockFile({ status: "reviewed", body: fullBody() }));

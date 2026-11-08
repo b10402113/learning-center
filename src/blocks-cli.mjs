@@ -341,9 +341,18 @@ export function markBlocks({ root, subject, ids }) {
 
 function writeFrontmatterBody(entry, body, data) {
   const source = readFileSync(entry.path, "utf8");
-  const parsed = matter(source);
-  const next = matter.stringify(body, { ...parsed.data, ...data });
-  writeFileSync(entry.path, next.endsWith("\n") ? next : `${next}\n`);
+  const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!match) throw new Error(`${entry.file} has no frontmatter`);
+  let front = match[1];
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined || value === null || value === "") continue;
+    const line = `${key}: ${value}`;
+    const pattern = new RegExp(`^${key}:.*$`, "m");
+    if (pattern.test(front)) front = front.replace(pattern, line);
+    else front = `${front.replace(/\s+$/, "")}\n${line}`;
+  }
+  const normalized = String(body).replace(/\r\n/g, "\n").trimEnd();
+  writeFileSync(entry.path, `---\n${front}\n---\n\n${normalized}\n`);
 }
 
 const BLOCK_POLISH_NOTE =
