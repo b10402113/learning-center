@@ -68,6 +68,7 @@ export default function Markdown({
         prose-code:before:content-none prose-code:after:content-none
         prose-pre:my-8 prose-pre:rounded-2xl prose-pre:border prose-pre:border-hairline prose-pre:bg-dark prose-pre:px-5 prose-pre:py-4
         prose-pre:text-[0.88rem] prose-pre:leading-relaxed prose-pre:text-cream prose-pre:shadow-soft
+        prose-pre:whitespace-pre-wrap prose-pre:[overflow-wrap:anywhere] prose-pre:overflow-x-hidden
         prose-blockquote:my-8 prose-blockquote:rounded-r-xl prose-blockquote:border-l-2 prose-blockquote:border-accent
         prose-blockquote:bg-accent-tint prose-blockquote:px-5 prose-blockquote:py-2 prose-blockquote:not-italic
         prose-blockquote:text-ink/80
