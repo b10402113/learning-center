@@ -2021,6 +2021,108 @@ test("a valid block linked to a step passes", (t) => {
   assert.equal(result.pass, true, JSON.stringify(result.failures, null, 2));
 });
 
+function addBlockImage(root, id = "tool-calling", { marker = true, image = false, extraPlan = null } = {}) {
+  const file = `learn/test/blocks/${id}.md`;
+  const current = read(root, file);
+  const figure = [marker ? "<!--image:1-->" : "", image ? `![概念示意圖](./${id}-assets/image-1.webp)` : ""]
+    .filter(Boolean)
+    .join("\n\n");
+  const body = figure
+    ? current.replace(`# Tool Calling\n`, `# Tool Calling\n\n${figure}\n`)
+    : current;
+  write(root, file, body);
+  write(root, `learn/test/blocks/${id}.plan.json`, JSON.stringify(extraPlan ?? [{ prompt: "hero" }]));
+  return file;
+}
+
+test("a block figure may be a marker or a rendered image", (t) => {
+  const markerRoot = blockFixture(t);
+  addBlockImage(markerRoot);
+  assert.ok(!failures(markerRoot).includes("block-image-position"));
+
+  const imageRoot = blockFixture(t);
+  addBlockImage(imageRoot, "tool-calling", { marker: false, image: true });
+  write(imageRoot, "learn/test/blocks/tool-calling-assets/image-1.webp", webpBytes());
+  assert.ok(!failures(imageRoot).includes("block-image-missing"));
+});
+
+test("a block figure must sit between the H1 and the first section", (t) => {
+  const root = blockFixture(t);
+  const file = addBlockImage(root);
+  write(root, file, read(root, file).replace("\n\n<!--image:1-->\n", "\n").replace("## 例子", "<!--image:1-->\n\n## 例子"));
+  assert.ok(failures(root).includes("block-image-position"));
+});
+
+test("a block has exactly one figure", (t) => {
+  const root = blockFixture(t);
+  const file = addBlockImage(root);
+  write(root, file, read(root, file).replace("<!--image:1-->", "<!--image:1-->\n\n<!--image:2-->"));
+  assert.ok(failures(root).includes("block-image-count"));
+
+  const mixed = blockFixture(t);
+  const mixedFile = addBlockImage(mixed, "tool-calling", { marker: true, image: true });
+  write(mixed, "learn/test/blocks/tool-calling-assets/image-1.webp", webpBytes());
+  assert.ok(failures(mixed).includes("block-image-state"));
+});
+
+test("a block image plan has exactly one prompt", (t) => {
+  const root = blockFixture(t);
+  addBlockImage(root, "tool-calling", { extraPlan: [{ prompt: "a" }, { prompt: "b" }] });
+  assert.ok(failures(root).includes("block-image-plan"));
+});
+
+test("block image assets must be referenced and live under the block's folder", (t) => {
+  const root = blockFixture(t);
+  addBlockImage(root, "tool-calling", { marker: false, image: true });
+  write(root, "learn/test/blocks/tool-calling-assets/image-1.webp", webpBytes());
+  write(root, "learn/test/blocks/tool-calling-assets/image-9.webp", webpBytes());
+  assert.ok(failures(root).includes("block-image-orphan"));
+
+  const missing = blockFixture(t);
+  addBlockImage(missing, "tool-calling", { marker: false, image: true });
+  assert.ok(failures(missing).includes("block-image-missing"));
+
+  const wrongType = blockFixture(t);
+  addBlockImage(wrongType, "tool-calling", { marker: false, image: true });
+  write(wrongType, "learn/test/blocks/tool-calling-assets/image-1.webp", "not a webp");
+  assert.ok(failures(wrongType).includes("block-image-format"));
+
+  const outside = blockFixture(t);
+  const outsideFile = addBlockImage(outside, "tool-calling", { marker: false, image: true });
+  write(outside, outsideFile, read(outside, outsideFile).replace("./tool-calling-assets/image-1.webp", "./other-assets/image-1.webp"));
+  write(outside, "learn/test/blocks/other-assets/image-1.webp", webpBytes());
+  assert.ok(failures(outside).includes("block-image-location"));
+});
+
+test("a block with an image plan or asset folder needs its figure", (t) => {
+  const withPlan = blockFixture(t);
+  write(withPlan, "learn/test/blocks/tool-calling.plan.json", JSON.stringify([{ prompt: "hero" }]));
+  assert.ok(failures(withPlan).includes("block-image-required"));
+
+  const withAssets = blockFixture(t);
+  write(withAssets, "learn/test/blocks/tool-calling-assets/image-1.webp", webpBytes());
+  assert.ok(failures(withAssets).includes("block-image-required"));
+});
+
+test("an anchored or malformed block plan is rejected", (t) => {
+  const anchored = blockFixture(t);
+  addBlockImage(anchored, "tool-calling", { extraPlan: [{ anchor: "第一段", prompt: "hero" }] });
+  assert.ok(failures(anchored).includes("block-image-plan"));
+});
+
+test("a block author must be a non-empty string", (t) => {
+  const root = blockFixture(t);
+  const file = "learn/test/blocks/tool-calling.md";
+  write(root, file, read(root, file).replace("created: 2026-11-06", "author: 3\ncreated: 2026-11-06"));
+  assert.ok(failures(root).includes("block-author"));
+});
+
+test("an orphan block plan is reported", (t) => {
+  const root = blockFixture(t);
+  write(root, "learn/test/blocks/ghost.plan.json", JSON.stringify([{ prompt: "hero" }]));
+  assert.ok(failures(root).includes("block-image-plan-orphan"));
+});
+
 test("block labels may not be sentences", (t) => {
   const root = blockFixture(t, { label: "先固定輸出 schema 讓模型可驗證。" });
   assert.ok(failures(root).includes("block-label"));

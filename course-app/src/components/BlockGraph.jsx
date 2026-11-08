@@ -8,10 +8,10 @@ import {
 } from "react";
 import ForceGraph2D from "react-force-graph-2d";
 import { forceCollide } from "d3-force";
-import { blockTypeLabel, blockTypeMark } from "../lib/blocks.mjs";
+import { entityLabel, graphNodeMark } from "../lib/blocks.mjs";
 import { buildGraph, neighborsOf } from "../lib/block-graph.mjs";
 import { followInternalLink, isPlainLeftClick } from "../lib/navigation.mjs";
-import { pathForBlock } from "../lib/route.mjs";
+import { pathFor, pathForBlock } from "../lib/route.mjs";
 
 const MIN_GRAPH_HEIGHT = 420;
 const MAX_GRAPH_HEIGHT = 680;
@@ -65,16 +65,43 @@ function usePalette() {
   return palette;
 }
 
-function fillFor(type, palette) {
+function fillFor(node, palette) {
+  if (node.entity === "node") return palette.darkColor;
+  if (node.entity === "step") return palette.shade;
+  const type = node.type;
   if (type === "procedure") return palette.shade;
   if (type === "principle") return palette.accent;
   if (type === "contrast") return palette.darkColor;
   return palette.surface;
 }
 
-function inkFor(type, palette) {
-  if (type !== "contrast") return palette.ink;
-  return palette.isDark ? palette.ink : palette.paper;
+function inkFor(node, palette) {
+  if (node.entity === "node") return palette.isDark ? palette.ink : palette.paper;
+  if (node.entity === "step") return palette.ink;
+  return node.type === "contrast" ? (palette.isDark ? palette.ink : palette.paper) : palette.ink;
+}
+
+/** Circle for a block, rounded square for a step, diamond for a node. */
+function traceShape(ctx, node) {
+  const { x, y, radius } = node;
+  ctx.beginPath();
+  if (node.entity === "step") {
+    const size = radius * 1.7;
+    const half = size / 2;
+    const corner = Math.max(3, size * 0.24);
+    ctx.roundRect(x - half, y - half, size, size, corner);
+    return;
+  }
+  if (node.entity === "node") {
+    const size = radius * 1.25;
+    ctx.moveTo(x, y - size);
+    ctx.lineTo(x + size, y);
+    ctx.lineTo(x, y + size);
+    ctx.lineTo(x - size, y);
+    ctx.closePath();
+    return;
+  }
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
 }
 
 function truncate(text, max) {
@@ -131,6 +158,7 @@ export default function BlockGraph({
   focus = null,
   focusIds = null,
   depth = 1,
+  entities = false,
   minHeight = MIN_GRAPH_HEIGHT,
   maxHeight = MAX_GRAPH_HEIGHT,
   compact = false,
@@ -141,8 +169,8 @@ export default function BlockGraph({
   onOpenBlock = null,
 }) {
   const graph = useMemo(
-    () => buildGraph(course, { type, query, focus, focusIds, depth }),
-    [course, type, query, focus, focusIds, depth]
+    () => buildGraph(course, { type, query, focus, focusIds, depth, entities }),
+    [course, type, query, focus, focusIds, depth, entities]
   );
 
   // react-force-graph wants `source`/`target`; the layout starts empty.
@@ -223,9 +251,8 @@ export default function BlockGraph({
         ctx.stroke();
       }
 
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
-      ctx.fillStyle = hot ? palette.accent : fillFor(node.type, palette);
+      traceShape(ctx, node);
+      ctx.fillStyle = hot ? palette.accent : fillFor(node, palette);
       ctx.fill();
       ctx.lineWidth = hot ? 2.4 : 1.6;
       ctx.strokeStyle = hot ? palette.accent : palette.ink;
@@ -235,8 +262,8 @@ export default function BlockGraph({
       ctx.font = `700 ${markSize}px ui-monospace, monospace`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillStyle = hot ? palette.paper : inkFor(node.type, palette);
-      ctx.fillText(blockTypeMark(node.type), node.x, node.y + markSize * 0.04);
+      ctx.fillStyle = hot ? palette.paper : inkFor(node, palette);
+      ctx.fillText(graphNodeMark(node), node.x, node.y + markSize * 0.04);
 
       const priority = hot || node.isFocus || related?.has(node.id);
       const showLabel = priority || globalScale >= 0.15;
@@ -279,8 +306,7 @@ export default function BlockGraph({
 
   const drawPointerArea = useCallback((node, color, ctx) => {
     ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, node.radius + 4, 0, Math.PI * 2);
+    traceShape(ctx, { ...node, radius: node.radius + 4 });
     ctx.fill();
   }, []);
 
@@ -293,6 +319,7 @@ export default function BlockGraph({
       }
 
       const prerequisite = link.kind === "prerequisite";
+      const relation = link.kind === "related";
       const active =
         !related || from.id === hovered || to.id === hovered;
 
@@ -307,8 +334,8 @@ export default function BlockGraph({
       ctx.save();
       ctx.globalAlpha = active ? 0.6 : 0.08;
       ctx.strokeStyle = palette.inkSoft;
-      ctx.lineWidth = prerequisite ? 1.8 : 1.2;
-      ctx.setLineDash(prerequisite ? [] : [5, 5]);
+      ctx.lineWidth = prerequisite ? 1.8 : relation ? 1.2 : 1;
+      ctx.setLineDash(relation ? [5, 5] : []);
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
@@ -340,6 +367,26 @@ export default function BlockGraph({
 
   const onNodeClick = useCallback(
     (node, event) => {
+      if (node.entity === "step") {
+        const [nodeId, stepId] = node.id.slice("step:".length).split("/");
+        const href = pathFor(course.subject, nodeId, stepId);
+        if (onNavigate && followInternalLink(event, href, onNavigate)) {
+          event.preventDefault();
+          return;
+        }
+        if (!onNavigate && isPlainLeftClick(event)) window.location.assign(href);
+        return;
+      }
+      if (node.entity === "node") {
+        const nodeId = node.id.slice("node:".length);
+        const href = pathFor(course.subject, nodeId);
+        if (onNavigate && followInternalLink(event, href, onNavigate)) {
+          event.preventDefault();
+          return;
+        }
+        if (!onNavigate && isPlainLeftClick(event)) window.location.assign(href);
+        return;
+      }
       if (onOpenBlock && isPlainLeftClick(event)) {
         event.preventDefault();
         onOpenBlock(node.id);
@@ -424,7 +471,11 @@ export default function BlockGraph({
     <div>
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <p className="font-label text-[10px] tracking-[0.04em] text-ink-soft">
-          {compact ? "點節點可跳轉" : "實線箭頭＝先備知識 · 虛線＝相關知識"}
+          {entities
+            ? "◯ 知識點 · ▢ 步驟 · ◇ 節點"
+            : compact
+              ? "點節點可跳轉"
+              : "實線箭頭＝先備知識 · 虛線＝相關知識"}
         </p>
         <div className="flex items-center gap-1">
           <span className="robo-kicker mr-1 font-label text-[9px] text-ink-soft">
@@ -488,7 +539,7 @@ export default function BlockGraph({
         {showHint && (
           <p className="pointer-events-none absolute bottom-2.5 left-3 max-w-[70%] truncate font-label text-[10px] text-ink-soft">
             {hoveredNode
-              ? `${hoveredNode.title} · ${blockTypeLabel(hoveredNode.type)}`
+              ? `${hoveredNode.title} · ${entityLabel(hoveredNode.entity)}`
               : compact
                 ? "拖曳 · 滾輪縮放 · 點節點開啟"
                 : "拖曳節點移動 · 拖曳空白平移 · 滾輪縮放 · 點節點開啟"}

@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import BlockGraph from "./BlockGraph.jsx";
+
+const BASE = import.meta.env.BASE_URL;
 import { blockTypeLabel } from "../lib/blocks.mjs";
 import { filterBlocks } from "../lib/block-graph.mjs";
 import { followInternalLink } from "../lib/navigation.mjs";
@@ -49,6 +51,9 @@ function TypeButton({ active, children, onClick }) {
 function BlockCard({ course, block, onNavigate }) {
   const href = pathForBlock(course.subject, block.id);
   const steps = Array.isArray(block.steps) ? block.steps.length : 0;
+  const image = block.image
+    ? `${BASE}blocks/${encodeURIComponent(course.subject)}/${block.image}`
+    : null;
   return (
     <a
       href={href}
@@ -59,6 +64,14 @@ function BlockCard({ course, block, onNavigate }) {
       }}
       className="group flex flex-col rounded-2xl bg-surface px-4 py-4 ring-1 ring-hairline shadow-soft transition duration-300 hover:-translate-y-1 hover:shadow-lift hover:ring-accent/40"
     >
+      {image && (
+        <img
+          src={image}
+          alt=""
+          loading="lazy"
+          className="mb-3 aspect-[16/9] w-full rounded-xl object-cover ring-1 ring-hairline"
+        />
+      )}
       <span className="flex flex-wrap items-center gap-2">
         <span className="rounded-full bg-shade px-2 py-0.5 font-label text-[9px] uppercase tracking-[0.12em] text-ink-soft">
           {blockTypeLabel(block.type)}
@@ -89,6 +102,7 @@ export default function BlocksIndex({ course, onNavigate = null }) {
   const [mode, setMode] = useState("list");
   const [type, setType] = useState("all");
   const [query, setQuery] = useState("");
+  const [showEntities, setShowEntities] = useState(false);
 
   const types = useMemo(() => {
     const present = new Set(blocks.map((block) => block.type));
@@ -222,6 +236,18 @@ export default function BlocksIndex({ course, onNavigate = null }) {
                 )}
               </label>
 
+              {mode === "graph" && (
+                <label className="flex items-center gap-1.5 font-label text-[10px] text-ink-soft">
+                  <input
+                    type="checkbox"
+                    checked={showEntities}
+                    onChange={(event) => setShowEntities(event.target.checked)}
+                    className="size-3.5 accent-[color:var(--color-accent)]"
+                  />
+                  顯示步驟與節點
+                </label>
+              )}
+
               <span className="font-mono text-[10px] tabular-nums text-ink-soft">
                 {filtered.length}/{blocks.length}
               </span>
@@ -251,6 +277,7 @@ export default function BlocksIndex({ course, onNavigate = null }) {
                 course={course}
                 type={type}
                 query={query}
+                entities={showEntities}
                 onNavigate={onNavigate}
               />
             </div>

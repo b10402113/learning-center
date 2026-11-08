@@ -115,7 +115,7 @@ export function localNodeIds(edges, focusId, depth = 1) {
  */
 export function buildGraph(
   course,
-  { type = "all", query = "", focus = null, focusIds = null, depth = 1 } = {}
+  { type = "all", query = "", focus = null, focusIds = null, depth = 1, entities = false } = {}
 ) {
   const focusList =
     Array.isArray(focusIds) && focusIds.length > 0
@@ -144,6 +144,7 @@ export function buildGraph(
     const isFocus = Boolean(focusSet && focusSet.has(block.id));
     return {
       id: block.id,
+      entity: "block",
       title: block.title,
       label: shortLabel(block),
       summary: block.summary || "",
@@ -154,5 +155,77 @@ export function buildGraph(
     };
   });
 
-  return { nodes, links };
+  if (!entities) return { nodes, links };
+
+  return { nodes: [...nodes, ...entityNodes(course, blocks)], links: entityLinks(blocks, links) };
+}
+
+/** The step and node nodes that teach the visible blocks, plus their edges. */
+function entityNodes(course, blocks) {
+  const nodes = Array.isArray(course?.nodes) ? course.nodes : [];
+  const byNode = new Map(nodes.map((node) => [node.id, node]));
+  const seenSteps = new Set();
+  const seenNodes = new Set();
+  const result = [];
+
+  for (const block of blocks) {
+    for (const usage of Array.isArray(block.steps) ? block.steps : []) {
+      const key = typeof usage === "string" ? usage : `${usage?.nodeId}/${usage?.stepId}`;
+      if (!key || key === "/" || seenSteps.has(key)) continue;
+      seenSteps.add(key);
+      const [nodeId, stepId] = key.split("/");
+      const nodeEntry = byNode.get(nodeId);
+      const stepEntry = nodeEntry?.steps?.find((step) => step.id === stepId);
+      result.push({
+        id: `step:${key}`,
+        entity: "step",
+        title: stepEntry?.title || stepId,
+        label: stepEntry?.title || stepId,
+        summary: "",
+        type: "step",
+        degree: 0,
+        isFocus: false,
+        radius: 8,
+      });
+      if (!seenNodes.has(nodeId)) {
+        seenNodes.add(nodeId);
+        result.push({
+          id: `node:${nodeId}`,
+          entity: "node",
+          title: nodeEntry?.title || nodeId,
+          label: nodeEntry?.title || nodeId,
+          summary: "",
+          type: "node",
+          degree: 0,
+          isFocus: false,
+          radius: 10,
+        });
+      }
+    }
+  }
+  return result;
+}
+
+function entityLinks(blocks, links) {
+  const seen = new Set();
+  const result = [...links];
+
+  for (const block of blocks) {
+    for (const usage of Array.isArray(block.steps) ? block.steps : []) {
+      const key = typeof usage === "string" ? usage : `${usage?.nodeId}/${usage?.stepId}`;
+      if (!key || key === "/") continue;
+      const stepNode = `step:${key}`;
+      const [nodeId] = key.split("/");
+      for (const [from, to, kind] of [
+        [block.id, stepNode, "step"],
+        [stepNode, `node:${nodeId}`, "node"],
+      ]) {
+        const edgeKey = `${from}->${to}:${kind}`;
+        if (seen.has(edgeKey)) continue;
+        seen.add(edgeKey);
+        result.push({ from, to, kind });
+      }
+    }
+  }
+  return result;
 }

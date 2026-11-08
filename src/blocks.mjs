@@ -9,6 +9,8 @@ export const BLOCK_LABEL_MAX = 40;
 export const BLOCK_SUMMARY_MAX = 120;
 export const AUDIT_MATCH_KINDS = ["new", "reuse", "merge", "fuzzy"];
 
+export const MAX_BLOCK_IMAGES = 1;
+
 export const BLOCK_SECTIONS = {
   concept: ["定義", "為什麼重要", "如何運作", "例子", "邊界與常見誤解", "進階"],
   procedure: ["問題", "前置條件", "步驟", "例子", "失敗模式", "進階"],
@@ -20,6 +22,8 @@ const SENTENCE_PUNCTUATION = /[。！？；?!;]/;
 const SENTENCE_START = /^(?:如何|為什麼|怎麼|是否|先|請|把|讓|避免|需要)/;
 const SENTENCE_END = /[。！？!?]/;
 const TRAILING_PUNCTUATION = /[.。！？；;,，、]$/;
+const BLOCK_MARKER = /^[ \t]*<!--\s*image:(\d+)\s*-->[ \t]*$/gm;
+const IMAGE_LINK = /!\[[^\]]*\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;
 const INLINE_LINK = /\[\[([^\]]+)\]\]/g;
 const SOURCE_LINK = /^\[\[\s*(sources\/[^\]#]+?)(?:\s*#\s*([^\]]+?))?\s*\]\]$/;
 
@@ -109,6 +113,149 @@ export function collectInlineBlockLinks(body) {
     if (id) links.push(id);
   }
   return links;
+}
+
+export function blockPlanPath(root, subject, id) {
+  return join(blocksDir(root, subject), `${id}.plan.json`);
+}
+
+export function blockAssetsDir(root, subject, id) {
+  return join(blocksDir(root, subject), `${id}-assets`);
+}
+
+export function blockImageLink(id, index = 1) {
+  return `./${id}-assets/image-${index}.webp`;
+}
+
+/**
+ * A block shows exactly one hero figure. The plan is a one-item array so it
+ * can be hand-edited and rerendered with --force.
+ */
+export function normalizeBlockPlan(raw) {
+  let parsed = raw;
+  if (typeof raw === "string") {
+    const text = String(raw).replace(/^```(?:json)?[ \t]*$/gm, "").trim();
+    const start = text.indexOf("[");
+    const end = text.lastIndexOf("]");
+    if (start === -1 || end <= start) throw new Error("block image plan must be a JSON array");
+    try {
+      parsed = JSON.parse(text.slice(start, end + 1));
+    } catch {
+      throw new Error("block image plan must be a JSON array");
+    }
+  }
+  if (!Array.isArray(parsed)) throw new Error("block image plan must be a JSON array");
+  if (parsed.length !== MAX_BLOCK_IMAGES) {
+    throw new Error(`block image plan must have exactly ${MAX_BLOCK_IMAGES} item, got ${parsed.length}`);
+  }
+  const item = parsed[0];
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new Error("block image plan item 1 must be an object");
+  }
+  if (item.anchor !== undefined && item.anchor !== null && String(item.anchor).trim()) {
+    throw new Error("block image plan does not take an anchor; the figure always follows the H1");
+  }
+  const prompt = String(item.prompt ?? "").trim();
+  if (!prompt) throw new Error("block image plan item 1 needs a non-empty prompt");
+  const heading = String(item.heading ?? "").trim().replace(/^#{1,6}[ \t]+/, "");
+  return [{ index: 1, heading, prompt }];
+}
+
+/**
+ * Put the <!--image:1--> marker between the H1 and the first `##` section.
+ * Idempotent: an existing marker is left alone.
+ */
+export function insertBlockImageMarker(markdown) {
+  const text = String(markdown).replace(/\r\n/g, "\n").trimEnd();
+  if (/^[ \t]*<!--\s*image:\d+\s*-->[ \t]*$/m.test(text)) return `${text}\n`;
+  const lines = text.split("\n");
+  const h1 = lines.findIndex((line) => /^#\s+\S/.test(line));
+  if (h1 === -1) throw new Error("block body needs an H1 before the image marker can be placed");
+  let section = lines.findIndex((line, index) => index > h1 && /^##\s+/.test(line));
+  if (section === -1) section = lines.length;
+  const before = lines.slice(0, section);
+  while (before.length > 0 && before[before.length - 1].trim() === "") before.pop();
+  const after = lines.slice(section);
+  const out = [...before, "", "<!--image:1-->", "", ...after].join("\n").trimEnd();
+  return `${out}\n`;
+}
+
+export function replaceBlockImageMarker(markdown, id) {
+  return String(markdown)
+    .replace(BLOCK_MARKER, (_, index) => `![概念示意圖](${blockImageLink(id, Number(index))})`)
+    .trimEnd() + "\n";
+}
+
+function stripFences(text) {
+  return String(text).replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[^\n]*$/gm, "");
+}
+
+/**
+ * Layout rules for a block figure: at most one marker or one image, placed
+ * between the H1 and the first section, and the image must be the block's own
+ * `-assets/image-1.webp`.
+ */
+export function blockImageProblems(body, id) {
+  const problems = [];
+  const text = stripFences(body ?? "");
+  const figures = [...text.matchAll(new RegExp(BLOCK_MARKER.source, "gm"))].length +
+    [...text.matchAll(IMAGE_LINK)].length;
+  const h1 = text.match(/^#\s+\S.*$/m);
+  if (!h1) {
+    return figures === 0
+      ? []
+      : [{ checkId: "block-image-position", message: "a block needs an H1 before its figure", line: 1 }];
+  }
+  const h1End = h1.index + h1[0].length;
+  const section = text.match(/^##\s+\S.*$/m);
+  const sectionStart = section ? section.index : text.length;
+
+  const markers = [...text.matchAll(/^[ \t]*<!--\s*image:(\d+)\s*-->[ \t]*$/gm)].map((match) => ({
+    kind: "marker",
+    at: match.index,
+    index: Number(match[1]),
+  }));
+  const images = [...text.matchAll(IMAGE_LINK)]
+    .filter((match) => !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(match[1]))
+    .map((match) => ({ kind: "image", at: match.index, src: match[1].trim() }));
+
+  const total = markers.length + images.length;
+  if (total === 0) return [];
+  if (total > 1) {
+    problems.push({
+      checkId: "block-image-count",
+      message: `a block shows exactly one figure; found ${total} markers/images`,
+      line: 1,
+    });
+  }
+  if (markers.length > 0 && images.length > 0) {
+    problems.push({
+      checkId: "block-image-state",
+      message: "a block has both an unrendered marker and a rendered image; render once",
+      line: 1,
+    });
+  }
+  for (const token of [...markers, ...images]) {
+    if (token.at < h1End || token.at >= sectionStart) {
+      problems.push({
+        checkId: "block-image-position",
+        message: "the block figure must sit after the H1 and before the first ## section",
+        line: 1,
+      });
+      break;
+    }
+  }
+  for (const image of images) {
+    const expected = blockImageLink(id, 1);
+    if (image.src !== expected) {
+      problems.push({
+        checkId: "block-image-location",
+        message: `a block image must be "${expected}", found "${image.src}"`,
+        line: 1,
+      });
+    }
+  }
+  return problems;
 }
 
 export function blockHeadings(body) {
@@ -253,6 +400,12 @@ export function validateBlockFrontmatter(block, subject, blockIds = new Set()) {
     fail("block-sources-type", "sources must be a list of source links");
   }
 
+  if (data.author !== undefined && data.author !== null) {
+    if (typeof data.author !== "string" || !data.author.trim()) {
+      fail("block-author", "author must be a non-empty string when present");
+    }
+  }
+
   return failures;
 }
 
@@ -262,6 +415,8 @@ export function validateBlockSections(block) {
   const required = BLOCK_SECTIONS[type];
   if (!required) return [];
   const headings = blockHeadings(block.body);
+  const draft = String(block.data?.status) === "draft";
+  if (headings.length === 0 && draft && /^#\s+\S/m.test(String(block.body))) return [];
   const missing = required
     .filter((section) => !headings.includes(section))
     .map((section) => ({

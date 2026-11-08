@@ -411,6 +411,21 @@ test("copies step assets and does not copy HTML lessons", () => {
   assert.equal(fs.existsSync(path.join(appRoot, "public/lessons")), false);
 });
 
+test("copies block assets and exposes the block image", () => {
+  const { learnRoot, appRoot } = fixture();
+  writeBlockFiles(learnRoot);
+  write(path.join(learnRoot, "demo", "blocks", "agent-assets", "image-1.webp"), "fake-webp");
+
+  const course = buildSubject("demo", { learnRoot, appRoot });
+  const agent = course.blocks.find((block) => block.id === "agent");
+  assert.equal(agent.image, "agent-assets/image-1.webp");
+  assert.equal(
+    fs.readFileSync(path.join(appRoot, "public/blocks/demo/agent-assets/image-1.webp"), "utf8"),
+    "fake-webp"
+  );
+  assert.equal(course.blocks.find((block) => block.id === "tool").image, undefined);
+});
+
 function writeBlockFiles(learnRoot) {
   write(
     path.join(learnRoot, "demo", "nodes", "node-a.md"),

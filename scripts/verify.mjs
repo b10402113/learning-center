@@ -7,8 +7,12 @@ import { countArticleCharacters } from "../src/article.mjs";
 import { normalizeStepPlan } from "../src/article-agent-bridge.mjs";
 import {
   BLOCK_SLUG,
+  blockImageLink,
+  blockImageProblems,
+  blockPlanPath,
   coveragePath,
   loadBlocks,
+  normalizeBlockPlan,
   validateBlockFrontmatter,
   validateBlockRelations,
   validateBlockSections,
@@ -1007,6 +1011,69 @@ function checkStepBlocks(report, file, subject, entry, index, blockIds) {
   }
 }
 
+function checkBlockImage(report, root, subject, block) {
+  for (const problem of blockImageProblems(block.body, block.id)) {
+    report.fail(block.file, problem.line, problem.checkId, problem.message);
+  }
+
+  const assetsDir = join(dirname(block.path), `${block.id}-assets`);
+  const hasImage = block.body.includes(blockImageLink(block.id, 1));
+  const hasMarker = /<!--\s*image:1\s*-->/.test(block.body);
+  const planPath = blockPlanPath(root, subject, block.id);
+  const planExists = existsSync(planPath);
+  if ((planExists || existsSync(assetsDir)) && !hasImage && !hasMarker) {
+    report.fail(
+      block.file,
+      0,
+      "block-image-required",
+      "a block with an image plan or asset folder needs its figure",
+    );
+  }
+
+  const referenced = new Set();
+  if (hasImage) {
+    const full = resolve(dirname(block.path), blockImageLink(block.id, 1));
+    referenced.add(full);
+    if (!existsSync(full)) {
+      report.fail(
+        block.file,
+        0,
+        "block-image-missing",
+        `image "${blockImageLink(block.id, 1)}" does not exist`,
+      );
+    }
+  }
+  for (const full of referenced) {
+    if (!existsSync(full)) continue;
+    const problem = webpProblem(full);
+    if (problem) {
+      report.fail(block.file, 0, "block-image-format", `block image "${relative(root, full)}" ${problem}`);
+    }
+  }
+
+  if (planExists) {
+    try {
+      normalizeBlockPlan(readFileSync(planPath, "utf8"));
+    } catch (error) {
+      report.fail(relative(root, planPath), 0, "block-image-plan", error?.message ?? "invalid block image plan");
+    }
+  }
+
+  if (!existsSync(assetsDir)) return;
+  for (const entry of readdirSync(assetsDir, { withFileTypes: true })) {
+    if (!entry.isFile() || entry.name.startsWith(".")) continue;
+    const full = join(assetsDir, entry.name);
+    if (!referenced.has(resolve(full))) {
+      report.fail(
+        relative(root, full),
+        0,
+        "block-image-orphan",
+        `asset is not referenced by learn/${subject}/blocks/${block.id}.md`,
+      );
+    }
+  }
+}
+
 function checkBlocks(report, root, subject, scan, digestInfo, blockData, blockIds, stepEntries, stepsByKey) {
   if (!blockData.hasBlocksDir) return;
   const blocks = blockData.blocks;
@@ -1029,7 +1096,10 @@ function checkBlocks(report, root, subject, scan, digestInfo, blockData, blockId
     }
     checkCodeProvenance(report, root, block.file, block.body);
     checkLinks(report, root, block.file, block.body, dirname(block.path));
+    checkBlockImage(report, root, subject, block);
   }
+
+  checkBlockImageOrphans(report, root, subject, blockData, blockIds);
 
   for (const failure of validateBlockRelations(blocks)) {
     report.fail(failure.file, failure.line, failure.checkId, failure.message);
@@ -1039,6 +1109,34 @@ function checkBlocks(report, root, subject, scan, digestInfo, blockData, blockId
   }
 
   checkBlockCoverage(report, root, subject, scan, blockData, blockIds, stepEntries, stepsByKey);
+}
+
+function checkBlockImageOrphans(report, root, subject, blockData, blockIds) {
+  if (!blockData.hasBlocksDir) return;
+  for (const entry of readdirSync(blockData.dir, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name.endsWith("-assets")) {
+      const id = entry.name.slice(0, -"-assets".length);
+      if (!blockIds.has(id)) {
+        report.fail(
+          `learn/${subject}/blocks/${entry.name}`,
+          0,
+          "block-image-orphan",
+          `asset folder has no block "${id}"`,
+        );
+      }
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith(".plan.json")) continue;
+    const id = entry.name.slice(0, -".plan.json".length);
+    if (!blockIds.has(id)) {
+      report.fail(
+        `learn/${subject}/blocks/${entry.name}`,
+        0,
+        "block-image-plan-orphan",
+        `image plan has no block "${id}"`,
+      );
+    }
+  }
 }
 
 function checkBlockCoverage(report, root, subject, scan, blockData, blockIds, stepEntries, stepsByKey) {
@@ -1486,6 +1584,15 @@ function checkSourceRef(report, root, subject, scan, digestInfo, file, raw, labe
   }
 }
 
+function webpProblem(full) {
+  if (extname(full).toLowerCase() !== ".webp") return "must be a .webp file";
+  const header = readFileSync(full).subarray(0, 12);
+  if (header.subarray(0, 4).toString("ascii") !== "RIFF" || header.subarray(8, 12).toString("ascii") !== "WEBP") {
+    return "is not a valid WebP file";
+  }
+  return null;
+}
+
 function checkImages(report, root, file, body, step) {
   const stepDir = dirname(step.path);
   const assetsDir = join(stepDir, `${step.id}-assets`);
@@ -1513,13 +1620,10 @@ function checkImages(report, root, file, body, step) {
       report.fail(file, 0, "image-missing", `image "${target}" does not exist`);
       continue;
     }
-    if (extname(full).toLowerCase() !== ".webp") {
-      report.fail(file, 0, "image-format", `image "${target}" must be a .webp file`);
+    const problem = webpProblem(full);
+    if (problem) {
+      report.fail(file, 0, "image-format", `image "${target}" ${problem}`);
       continue;
-    }
-    const header = readFileSync(full).subarray(0, 12);
-    if (header.subarray(0, 4).toString("ascii") !== "RIFF" || header.subarray(8, 12).toString("ascii") !== "WEBP") {
-      report.fail(file, 0, "image-format", `image "${target}" is not a valid WebP file`);
     }
   }
 

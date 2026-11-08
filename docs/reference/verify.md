@@ -155,6 +155,17 @@ Exit code: `0` = no failures, `1` = at least one failure, `2` = bad invocation. 
 | `block-prerequisite-missing` / `block-related-missing` | every relation target exists |
 | `block-prerequisite-cycle` | the prerequisite graph is acyclic |
 | `block-inline-link` | every inline `[[block-id]]` resolves in the subject |
+| `block-author` | `author`, when present, is a non-empty string |
+| `block-image-required` | a block with an image plan or an asset folder has its figure |
+| `block-image-position` | a block figure (marker or image) sits after the H1 and before the first `##` section |
+| `block-image-count` | a block shows exactly one figure |
+| `block-image-state` | a block never carries both an unrendered marker and a rendered image |
+| `block-image-location` | a rendered block image points at `./<id>-assets/image-1.webp` |
+| `block-image-format` | a block image is a real `.webp` |
+| `block-image-missing` | a referenced block image exists on disk |
+| `block-image-orphan` | no `blocks/<id>-assets/` file or folder is unreferenced or unknown |
+| `block-image-plan` | `blocks/<id>.plan.json` holds exactly one item with a non-empty prompt |
+| `block-image-plan-orphan` | every block plan belongs to an existing block |
 | `coverage-missing` | a subject with blocks has `blocks/coverage.json` |
 | `coverage-json` | coverage parses as a JSON object |
 | `coverage-steps` | coverage has a `steps` object |

@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   BLOCK_SECTIONS,
+  blockImageProblems,
   computeCoverage,
   detectDrift,
   findPrerequisiteCycles,
+  insertBlockImageMarker,
+  normalizeBlockPlan,
+  replaceBlockImageMarker,
   validateAudit,
   validateBlockFrontmatter,
   validateBlockRelations,
@@ -416,4 +420,72 @@ test("a new candidate dedupes against aliases and normalized labels", () => {
       (warning) => warning.checkId === "audit-new-existing" && warning.message.includes("alias"),
     ),
   );
+});
+
+test("an H1-only draft block is a skeleton, but a started body needs every section", () => {
+  const skeleton = { ...block(), body: "# Tool Calling（工具呼叫）\n" };
+  assert.deepEqual(validateBlockSections(skeleton), []);
+
+  const partial = { ...block(), body: "# Tool Calling（工具呼叫）\n\n## 定義\n\nText.\n" };
+  assert.ok(ids(validateBlockSections(partial)).includes("block-section"));
+});
+
+test("a block image plan takes exactly one prompt", () => {
+  assert.deepEqual(normalizeBlockPlan([{ heading: "定義", prompt: "畫出工具呼叫的流程" }]), [
+    { index: 1, heading: "定義", prompt: "畫出工具呼叫的流程" },
+  ]);
+  assert.deepEqual(normalizeBlockPlan('[{"prompt":"hero"}]'), [
+    { index: 1, heading: "", prompt: "hero" },
+  ]);
+  assert.throws(() => normalizeBlockPlan([]), /exactly 1/);
+  assert.throws(() => normalizeBlockPlan([{ prompt: "a" }, { prompt: "b" }]), /exactly 1/);
+  assert.throws(() => normalizeBlockPlan([{ heading: "定義" }]), /non-empty prompt/);
+  assert.throws(() => normalizeBlockPlan("not json"), /JSON array/);
+});
+
+test("the block image marker sits between the H1 and the first section", () => {
+  const body = "## 定義\n\nText.\n\n## 例子\n\nMore.\n";
+  assert.equal(
+    insertBlockImageMarker(`# Tool Calling\n\n${body}`),
+    "# Tool Calling\n\n<!--image:1-->\n\n## 定義\n\nText.\n\n## 例子\n\nMore.\n",
+  );
+  const already = "# Tool Calling\n\n<!--image:1-->\n\n## 定義\n\nText.\n";
+  assert.equal(insertBlockImageMarker(already), already);
+  assert.throws(() => insertBlockImageMarker("## 定義\n\nText.\n"), /H1/);
+});
+
+test("block image layout accepts a marker or an image, never both, and only after the H1", () => {
+  const ok = "# T\n\n<!--image:1-->\n\n## 定義\n\nText.\n";
+  assert.deepEqual(blockImageProblems(ok, "t"), []);
+
+  const rendered = "# T\n\n![概念示意圖](./t-assets/image-1.webp)\n\n## 定義\n\nText.\n";
+  assert.deepEqual(blockImageProblems(rendered, "t"), []);
+
+  const both = "# T\n\n<!--image:1-->\n\n![概念示意圖](./t-assets/image-1.webp)\n\n## 定義\n";
+  assert.ok(ids(blockImageProblems(both, "t")).includes("block-image-state"));
+
+  const after = "# T\n\n## 定義\n\nText.\n\n<!--image:1-->\n";
+  assert.ok(ids(blockImageProblems(after, "t")).includes("block-image-position"));
+
+  const two = "# T\n\n<!--image:1-->\n\n<!--image:2-->\n\n## 定義\n";
+  assert.ok(ids(blockImageProblems(two, "t")).includes("block-image-count"));
+
+  const wrong = "# T\n\n![x](./other-assets/image-1.webp)\n\n## 定義\n";
+  assert.ok(ids(blockImageProblems(wrong, "t")).includes("block-image-location"));
+
+  const none = "# T\n\n## 定義\n\nText.\n";
+  assert.deepEqual(blockImageProblems(none, "t"), []);
+});
+
+test("a rendered block image is rewritten without a caption", () => {
+  assert.equal(
+    replaceBlockImageMarker("# T\n\n<!--image:1-->\n", "t"),
+    "# T\n\n![概念示意圖](./t-assets/image-1.webp)\n",
+  );
+});
+
+test("a block author, when present, is a non-empty string", () => {
+  assert.deepEqual(validateBlockFrontmatter(block({ author: "gpt-x" }), "test", new Set(["tool-calling"])), []);
+  assert.ok(ids(validateBlockFrontmatter(block({ author: "  " }), "test", new Set(["tool-calling"]))).includes("block-author"));
+  assert.ok(ids(validateBlockFrontmatter(block({ author: 3 }), "test", new Set(["tool-calling"]))).includes("block-author"));
 });

@@ -8,6 +8,7 @@ export default function ConceptGraph({
   step,
   onNavigate = null,
   onOpenBlock = null,
+  entities = true,
 }) {
   const focusIds = useMemo(
     () =>
@@ -38,6 +39,7 @@ export default function ConceptGraph({
           course={course}
           focusIds={focusIds}
           depth={1}
+          entities={entities}
           minHeight={360}
           maxHeight={420}
           showHint={false}

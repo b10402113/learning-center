@@ -211,3 +211,48 @@ test("falls back to a single focus when focusIds is empty", () => {
     "tool",
   ]);
 });
+
+test("entities adds teach steps and their nodes to the graph", () => {
+  const course = {
+    blocks: [
+      {
+        ...BLOCKS[0],
+        steps: ["n1/s1", "n1/s2"],
+      },
+      { ...BLOCKS[1], steps: ["n2/s1"] },
+    ],
+    blockEdges: [{ from: "agent", to: "tool", kind: "related" }],
+    nodes: [
+      { id: "n1", title: "Node One", steps: [{ id: "s1", title: "First Step" }, { id: "s2", title: "Second Step" }] },
+      { id: "n2", title: "Node Two", steps: [{ id: "s1", title: "Third Step" }] },
+    ],
+  };
+  const plain = buildGraph(course, {});
+  assert.equal(plain.nodes.every((node) => node.entity === "block"), true);
+
+  const graph = buildGraph(course, { entities: true });
+  const entities = new Set(graph.nodes.map((node) => node.entity));
+  assert.deepEqual([...entities].sort(), ["block", "node", "step"]);
+
+  const step = graph.nodes.find((node) => node.id === "step:n1/s1");
+  assert.equal(step.entity, "step");
+  assert.equal(step.label, "First Step");
+  const node = graph.nodes.find((node) => node.id === "node:n1");
+  assert.equal(node.entity, "node");
+  assert.equal(node.label, "Node One");
+
+  assert.ok(graph.links.some((link) => link.from === "agent" && link.to === "step:n1/s1" && link.kind === "step"));
+  assert.ok(graph.links.some((link) => link.from === "step:n1/s1" && link.to === "node:n1" && link.kind === "node"));
+  assert.ok(graph.links.some((link) => link.from === "agent" && link.to === "tool" && link.kind === "related"));
+});
+
+test("entities stays on for a focused block neighbourhood", () => {
+  const course = {
+    blocks: [{ ...BLOCKS[0], steps: ["n1/s1"] }],
+    blockEdges: [],
+    nodes: [{ id: "n1", title: "Node One", steps: [{ id: "s1", title: "First Step" }] }],
+  };
+  const graph = buildGraph(course, { focus: "agent", entities: true });
+  assert.equal(graph.nodes.length, 3);
+  assert.equal(graph.nodes.filter((node) => node.entity === "block").length, 1);
+});

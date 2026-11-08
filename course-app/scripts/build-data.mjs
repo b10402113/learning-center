@@ -236,6 +236,9 @@ function readBlocks(subjectDir) {
     .map((name) => {
       const id = name.replace(/\.md$/, "");
       const { frontmatter: fm, body } = readMarkdown(path.join(dir, name));
+      const image = fs.existsSync(path.join(dir, `${id}-assets`, "image-1.webp"))
+        ? `${id}-assets/image-1.webp`
+        : null;
       return {
         id,
         title: fm.title || id,
@@ -247,6 +250,7 @@ function readBlocks(subjectDir) {
         prerequisites: idList(fm.prerequisites),
         related: idList(fm.related),
         sources: (Array.isArray(fm.sources) ? fm.sources : []).map(parseSource),
+        image,
         bodyMd: body.trim(),
       };
     });
@@ -349,6 +353,7 @@ function buildBlockGraph({ blocks, nodes }) {
         summary: block.summary,
         type: block.type,
         status: block.status,
+        ...(block.image ? { image: block.image } : {}),
         prerequisites: [...block.prerequisites],
         related: [...block.related],
         steps: usage.get(block.id).map(
@@ -380,6 +385,7 @@ function writeBlockFiles({ appRoot, subject, blocks, graph }) {
       prerequisites: block.prerequisites,
       related: block.related,
       sources: block.sources,
+      ...(block.image ? { image: block.image } : {}),
       bodyMd: block.bodyMd,
       steps: graph.usage.get(block.id),
       backlinks: graph.backlinks.get(block.id),
@@ -388,6 +394,19 @@ function writeBlockFiles({ appRoot, subject, blocks, graph }) {
       path.join(dir, `${block.id}.json`),
       JSON.stringify(payload)
     );
+  }
+}
+
+/** Copy `blocks/<id>-assets/` into the app's public directory. */
+function copyBlockAssets({ blocksDir, blocks, appRoot, subject }) {
+  const dest = path.join(appRoot, "public", "blocks", subject);
+  fs.rmSync(dest, { recursive: true, force: true });
+  for (const block of blocks) {
+    const assetsDir = path.join(blocksDir, `${block.id}-assets`);
+    if (!fs.existsSync(assetsDir)) continue;
+    fs.cpSync(assetsDir, path.join(dest, `${block.id}-assets`), {
+      recursive: true,
+    });
   }
 }
 
@@ -481,6 +500,7 @@ export function buildSubject(
   }
 
   const blocks = readBlocks(subjectDir);
+  copyBlockAssets({ blocksDir: path.join(subjectDir, "blocks"), blocks, appRoot, subject });
   const graph = buildBlockGraph({ blocks, nodes: orderedNodes });
   for (const node of orderedNodes) {
     for (const step of node.steps) {

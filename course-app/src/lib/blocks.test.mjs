@@ -6,6 +6,8 @@ import {
   blockTypeInk,
   blockTypeLabel,
   blockTypeMark,
+  entityLabel,
+  graphNodeMark,
   railBlocks,
 } from "./blocks.mjs";
 
@@ -84,4 +86,13 @@ test("does not repeat a block and respects the rail limit", () => {
     railBlocks(course, step, 2).map((block) => block.id),
     ["tool", "agent"]
   );
+});
+
+test("graph nodes carry an entity label and mark", () => {
+  assert.equal(entityLabel("block"), "知識點");
+  assert.equal(entityLabel("step"), "步驟");
+  assert.equal(entityLabel("node"), "節點");
+  assert.equal(graphNodeMark({ entity: "block", type: "procedure" }), "▤");
+  assert.equal(graphNodeMark({ entity: "step" }), "▸");
+  assert.equal(graphNodeMark({ entity: "node" }), "◈");
 });

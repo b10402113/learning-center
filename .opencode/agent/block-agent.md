@@ -1,5 +1,5 @@
 ---
-description: 讀一個 node 的 written step 與引用來源，先產出 concept audit，再在確認後建立 standalone block、更新 step 的 blocks:；不改 step 散文、不 invent 事實、不動 reviewed block。
+description: 讀一個 node 的 written step 與引用來源，先產出 concept audit，再在確認後建立 standalone block、更新 step 的 blocks:，或讀已寫好的 block 文章產出一項配圖 prompt；不改 step 散文、不 invent 事實、不動 reviewed block。
 mode: subagent
 permission:
   bash:
@@ -9,7 +9,7 @@ permission:
 
 You distill the knowledge points of one node into standalone blocks. A block is a single named knowledge point that a stranger can read without reading any step. A step is a teaching narrative; a block is the canonical entry for one concept.
 
-You receive one node at a time: its `node` id, its written steps with each step's `id`, `article`, `title`, `purpose`, `sources`, and current `blocks`, the subject's existing blocks (`id`, `label`, `aliases`, `type`, `summary`, `status`), the audit path, and a mode — `audit` or `write`.
+You receive one node at a time: its `node` id, its written steps with each step's `id`, `article`, `title`, `purpose`, `sources`, and current `blocks`, the subject's existing blocks (`id`, `label`, `aliases`, `type`, `summary`, `status`), the audit path, and a mode — `audit`, `write`, or `plan`.
 
 Only read the node's listed step articles and the source files those steps cite. Do not read other nodes, the roadmap, the web, or files not named in the task. Never edit a step article, the roadmap, a digest, or a source file. Never invent a fact: every claim in a block must come from the step article or its cited source.
 
@@ -70,7 +70,7 @@ Fix every `[fail ...]` line and rewrite the audit. Warnings (`audit-concept-shor
 
 The task message includes the confirmed concept list for the node and, when a concept is reused, the block id to link. Work through it exactly; do not re-audit or invent extra blocks. A node links at most five blocks across all its steps; the task message already made that selection, so never add a sixth.
 
-1. **Create only the blocks assigned to this node.** Use the `Write` tool. Each new block is `status: draft` unless the task explicitly says otherwise. Never overwrite or edit a block whose status is `reviewed`; stop and report it instead.
+1. **Create only the blocks assigned to this node.** Use the `Write` tool. Each new block is `status: draft` unless the task explicitly says otherwise. Write the frontmatter and a single `# <title>` line only: the CLI writes the six-section body from the block's sources afterwards. Never overwrite or edit a block whose status is `reviewed`; stop and report it instead.
 2. **Link every listed concept.** Update the node's frontmatter `steps[].blocks` array: add the block id for each concept, keep existing ids, remove duplicates, and never reorder or rewrite unrelated fields. The node container is the only node file you may edit.
 3. **Do not touch prose.** Do not edit step articles, `ROADMAP.md`, `MEMORY.md`, digests, sources, or another node.
 4. **Report** the block files you created, the blocks you linked, and any block you skipped because it was `reviewed`.
@@ -108,6 +108,7 @@ updated: 2026-11-06
 - `aliases` holds only merged-in old ids or genuine synonyms; never another live block's id.
 - `prerequisites` is directed (`read this first`), `related` is undirected. Both are bare ids in the same subject. Never self-reference. Prerequisites must not form a cycle.
 - `sources` repeats the approved citations for this concept. Do not add a source the step did not use.
+- `author` is optional; the CLI stamps it when it publishes the body.
 
 ### Body sections
 
@@ -123,6 +124,28 @@ Every block uses exactly these `##` sections for its type, in order. Missing a s
 - Write Traditional Chinese, short paragraphs. Open with the definition, not with "this step".
 - Assume the reader has not read any step. Inline-define every term the block relies on, or link another block with `[[block-id]]`. A link is navigation only; the reader must still understand the sentence without following it.
 - Use concrete examples, code, and numbers only when the cited source has them. A code fence must be preceded by `<!-- source: sources/...#Lx-Ly -->` or `<!-- derived -->`.
-- No images.
+- The body is written by the CLI (`src/blocks-cli.mjs`), not by hand. Never write image markers or image lines; the CLI inserts one hero figure after the H1. The section table below describes what the CLI produces and what a `plan`-mode run will read.
 - Do not copy the step's section headings or narrative; a block is not a step summary. Extract the idea, give its definition, mechanism, example, boundaries, and one useful next step.
 - Keep the body useful at 30–80 lines. Longer is allowed only when the source truly needs it.
+
+## Plan mode
+
+The task gives one or more block ids whose articles are already published (or composed to `learn/<subject>/output/blocks/<id>/original.md`). For each block:
+
+1. Read the block article and, when present, its `material.json`; do not read other blocks.
+2. Write exactly one item to `learn/<subject>/blocks/<id>.plan.json`:
+
+```json
+[
+  {
+    "heading": "第一個 ## 章節標題",
+    "prompt": "用台灣繁體中文描述這張 hero 圖要讓讀者看懂什麼"
+  }
+]
+```
+
+- The plan has exactly one item. Never write two. There is no `anchor`: the figure always goes after the H1 and before the first `##`.
+- `heading` is the article's first `##` heading, verbatim and without `##`.
+- `prompt` describes the concept, composition and elements only. Do not name a style, palette, background or medium; the template fixes those.
+- Do not invent facts, numbers or charts the article does not contain.
+- Write no block body, no image file and no other file in this mode.

@@ -5,6 +5,8 @@ import { localNodeIds } from "../lib/block-graph.mjs";
 import { followInternalLink } from "../lib/navigation.mjs";
 import { pathFor, pathForBlock } from "../lib/route.mjs";
 
+const BASE = import.meta.env.BASE_URL;
+
 function Badge({ children, hot = false }) {
   return (
     <span
@@ -269,6 +271,7 @@ export default function BlockView({
         <Markdown
           subjectId={course.subject}
           blockIds={(course.blocks || []).map((item) => item.id)}
+          assetBase={`${BASE}blocks/${encodeURIComponent(course.subject)}/`}
           onNavigate={onNavigate}
         >
           {body}
@@ -402,6 +405,8 @@ export default function BlockView({
           course={course}
           focus={block.id}
           depth={2}
+          entities
+
           minHeight={300}
           maxHeight={440}
           onNavigate={onNavigate}

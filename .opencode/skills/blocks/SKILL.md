@@ -2,14 +2,14 @@
 name: blocks
 description: 把 written step 文章萃取成獨立 block 知識點：先 audit、一次確認 subject 級表格，再建立 draft block、更新 step blocks:、重算 coverage；也支援 report、check、merge、refresh 與 rewrite。當使用者要把課程知識點抽成 block、維護知識圖或檢查 coverage/drift 時使用。
 disable-model-invocation: true
-argument-hint: "<subject> [--node <id> | --step <node>/<step>] [--audit] [--write] [--report] [--check] [--refresh <block-id>] [--rewrite <block-id>] [--force] [--yes]"
+argument-hint: "<subject> [--node <id> | --step <node>/<step>] [--audit] [--write] [--articles] [--images] [--report] [--check] [--refresh <block-id>] [--rewrite <block-id>] [--force] [--yes]"
 ---
 
-Invoke as `/blocks <subject> [--node <id> | --step <node>/<step>] [--audit] [--write] [--report] [--check] [--refresh <block-id>] [--rewrite <block-id>] [--force] [--yes]`.
+Invoke as `/blocks <subject> [--node <id> | --step <node>/<step>] [--audit] [--write] [--articles] [--images] [--report] [--check] [--refresh <block-id>] [--rewrite <block-id>] [--force] [--yes]`.
 
 This skill turns a subject's published steps into standalone blocks under `learn/<subject>/blocks/`. A block is one named knowledge point a stranger can read without any step. Steps stay the teaching narrative; they link to blocks through `steps[].blocks` and the coverage report measures how much of the course is covered.
 
-No mode flag means audit → confirm → write → apply → report. `--audit` stops after the table; `--write` reuses existing audits; `--report` and `--check` are read-only.
+No mode flag means audit → confirm → write → articles → images → apply → report. `--audit` stops after the table; `--write` stops before the articles (add `--articles` to continue, `--images` renders only the missing figures); `--report` and `--check` are read-only.
 
 Only process `written` nodes and steps that have an article body. The CLI owns file discovery, coverage math, drift, and merge rewriting; the block-agent owns the concept judgment and the block prose. Never hand-write `coverage.json`, a node's `blocks:` array, or a block file the CLI can produce.
 
@@ -110,6 +110,26 @@ node scripts/blocks.mjs report --subject <subject>
 
 `apply` rebuilds `blocks/coverage.json` from the confirmed audits and the step `blocks:` entries. `verify` is the format gate; if it reports `coverage-step-blocks` or `coverage-step-block-uncovered`, the step and audit disagree — fix the audit or the node entry, then rerun `apply` and `verify`. Never silence verify by editing `coverage.json` by hand. Then show the report: Step coverage, Course coverage, current blocks, projected blocks, reuse factor, and the uncovered concept list.
 
+## 4.5 產生 block 文章與配圖
+
+Step 4 只建立 frontmatter 與 H1 骨架。預設流程接著替每個 `draft` block 產出該 type 要求的章節與一張 hero 圖；`--write` 停在 step 4，加上 `--articles` 才續跑。
+
+```bash
+node src/blocks-cli.mjs prepare --subject <s> --block <id>
+node src/blocks-cli.mjs compose --subject <s> --block <id>
+# dispatch block-agent in plan mode; it writes blocks/<id>.plan.json (exactly one item)
+node src/blocks-cli.mjs mark    --subject <s> --block <id>
+node src/blocks-cli.mjs polish  --subject <s> --block <id>
+node src/blocks-cli.mjs publish --subject <s> --block <id>
+node src/blocks-cli.mjs render  --subject <s> --block <id>
+```
+
+- `prepare` 從 block 的 `sources` 抽段落寫 `output/blocks/<id>/material.json`；`compose` 用 `prompts/block-article.txt` 寫出該 type 要求的章節，H1 固定等於 `title`。已有本文的 block 除非 `--force` 否則跳過。`polish` 潤飾散文並保護章節、H1、marker 與程式碼，失敗時自動退回原稿（`copied`）。
+- 一個 block 恰好一張圖：`block-agent` 在 `plan` 模式讀文章後寫 `<id>.plan.json`（一項、沒有 `anchor`），`mark` 把 `<!--image:1-->` 插在 H1 後、第一個 `##` 前，`render` 換成 `./<id>-assets/image-1.webp`。
+- 只補既有 block 的圖時，跳過 `prepare` 與 `compose`，直接派 `plan` 模式（它讀既有本文）→ `mark` → `publish` → `render`。
+- `reviewed` block 的散文永不重寫；只有 `render --force` 可以重畫它的圖。
+- 批次：`node src/blocks-cli.mjs article --subject <s> --all-drafts --images` 只碰 `draft`。
+
 ## 5. Refresh, rewrite, and force
 
 - `--refresh <block-id>` — one block drifted. Run `check`, read the block, the steps that use it, and its sources, then write the proposed body to `learn/<subject>/output/blocks/<id>.proposed.md` (same frontmatter) and run `diff -u learn/<subject>/blocks/<id>.md learn/<subject>/output/blocks/<id>.proposed.md`. Show that diff, confirm, then replace the official file. A `draft` may be written after confirmation; a `reviewed` block requires `--rewrite` instead.
@@ -132,5 +152,6 @@ Report the drift as printed, grouped by kind: a step newer than its block, a blo
 - The subject-level table was confirmed once, or `--yes` was passed.
 - Confirmed `new` concepts have draft blocks; reused concepts link an existing block; every step `blocks:` matches its audit.
 - Merged ids live in the canonical block's `aliases`, and no file references the old id.
+- Every `draft` block has a body whose H1 equals its `title`, a one-item plan, and exactly one figure under `blocks/<id>-assets/`; a `reviewed` block was never rewritten.
 - `node scripts/blocks.mjs apply` has run, `node scripts/blocks.mjs report` answers current blocks / projected blocks / Step coverage / Course coverage, and `node scripts/verify.mjs --subject <subject>` exits 0.
 - No `reviewed` block was silently overwritten.

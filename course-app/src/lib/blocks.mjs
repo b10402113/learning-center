@@ -21,6 +21,19 @@ const BLOCK_TYPE_FILLS = {
 
 export const RAIL_LIMIT = 6;
 
+export const ENTITY_LABELS = { block: "知識點", step: "步驟", node: "節點" };
+const ENTITY_MARKS = { step: "▸", node: "◈" };
+
+export function entityLabel(entity) {
+  return ENTITY_LABELS[entity] || ENTITY_LABELS.block;
+}
+
+/** A graph node's glyph: block type marks, plus a step and node mark. */
+export function graphNodeMark(node) {
+  if (node?.entity === "block") return blockTypeMark(node.type);
+  return ENTITY_MARKS[node?.entity] ?? "";
+}
+
 export function blockTypeLabel(type) {
   return BLOCK_TYPE_LABELS[type] || type || "概念";
 }
