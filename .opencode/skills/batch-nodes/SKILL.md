@@ -39,6 +39,8 @@ Run the normal pipeline — `/nodes` → `/article` → humanize → `/generate-
 | step has a plan, no markers, no image lines | skip | skip | `skipped-not-published` | `no-markers` failure | can run |
 | `<step>.quiz.json` exists | — | — | — | — | skip, unless `-force` |
 
+A Generate failure is never a Quiz blocker: after three failed render attempts the step is recorded as `skipped-after-retries` and the run continues to Quiz with that node still in the queue.
+
 Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<subject>/digests/` exist. Gate each enabled phase before it dispatches work, name anything missing, and stop without dispatching:
 
 - **Article** — root `node_modules`, an initialized `article-agent/` with its own dependencies, and `TEXT_API_KEY` (or `OPENAI_API_KEY`) in the root `.env`. `-skip-polish` calls no text model, so it needs no key.
@@ -130,11 +132,11 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    Read the per-step status and record it:
 
    - `rendered` / `already-rendered` / `no-plan` / `no-article` — success or expected skip.
-   - `no-markers` / `failed` — record the error and mark the node failed. A failed node is dropped from Quiz; successful files and previously written images stay. Do not hand-place markers, do not retry automatically, and do not edit the article.
+   - `no-markers` / `failed` — record the error and re-run the same `render` call for that node, up to three attempts in total. Rerunning is safe: it reuses the images already written and regenerates only the missing or orphaned ones. Stop retrying a step that fails all three attempts, record it as `skipped-after-retries` with the last error, and leave it for repair. Successful files and previously written images stay. Do not hand-place markers, never hand-write a prompt into the plan, and do not edit the article.
 
-   Then run `node scripts/verify.mjs --node <subject>/<node>` for every Generate node that did not fail. Drop a node from Quiz if verify fails.
+   Then run `node scripts/verify.mjs --node <subject>/<node>` for every Generate node. A node that still has markers, orphaned assets, or a failed step verifies red: record that, keep it out of the Generate success count, and **still send it to Quiz** — image trouble never blocks the Quiz phase.
 
-6. **Quiz** (skip with `-skip-quiz` or `-nodes-only`). Build the Quiz queue from the current node containers: every node not dropped by Nodes, Article, Humanize, or Generate whose steps have articles. With `-skip-article`, Article did not run, so let `quiz.mjs prepare` report any step without a body. Generate is not a prerequisite: quiz questions need the article text, not the figures.
+6. **Quiz** (skip with `-skip-quiz` or `-nodes-only`). Build the Quiz queue from the current node containers: every node kept through Nodes, Article, and Humanize whose steps have articles. Generate never removes a node from this queue: quiz questions need the article text, not the figures, so a node whose images failed or were skipped still gets its sidecars. With `-skip-article`, Article did not run, so let `quiz.mjs prepare` report any step without a body.
 
    **6a. Prepare.** Run one CLI call per node, without `--force` unless the flag was given:
 
@@ -167,8 +169,8 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    - **Nodes** — planned / skipped / failed, with step counts and errors.
    - **Article** — published steps, skipped steps, markers written, continuity nodes, failed nodes, verify results.
    - **Humanize** — humanized / skipped-no-article / skipped-no-plan / skipped-not-published / failed, each with a one-line summary, article and plan status, plus verify results.
-   - **Generate** — rendered / already-rendered / no-plan / no-article / no-markers / failed, image counts, reused counts, verify results.
-   - **Quiz** — written sidecars, skipped steps with reasons, failed steps with validation errors, verify results, and the `course-app` data result.
+   - **Generate** — rendered / already-rendered / no-plan / no-article / no-markers / failed / `skipped-after-retries`, image counts, reused counts, attempts used, verify results.
+   - **Quiz** — written sidecars, skipped steps with reasons, failed steps with validation errors, verify results, and the `course-app` data result. State explicitly that Generate failures did not block this phase.
 
    List every failure with its error. Suggest rerunning `/batch-nodes <subject> <failed-node>`, running `/generate-images <subject>/<node> [--step <id>]` for an image repair, running `/batch-nodes <subject> <node> -skip-article -skip-images -skip-quiz` for a text pass.
 
@@ -177,8 +179,8 @@ Completion, for every phase that ran:
 - **Nodes** — every node that needed a plan was dispatched to a Nodes subagent, reached `planned`, and verifies clean.
 - **Article** — every step that needed an article was prepared and dispatched to a publisher (its own by default, its node's with `-article-per-node`), and either published with a formal plan and matching markers or reported failed; every multi-step node that received a new article also received the continuity edit unless `-no-continuity` was set; every published node passes `node scripts/verify.mjs --node <subject>/<node>`.
 - **Humanize** — every eligible step was either humanized or skipped for a recorded reason; each humanized article kept its H1, code, provenance, markers, image lines, quiz blocks, and links; each plan kept its length, order, and any existing `anchor` with only `heading` and `prompt` changed; every processed node verifies clean.
-- **Generate** — every marker-backed step has its `image-N.webp` files and its markers replaced by uncaptioned image lines; rerun without `-force` reports `already-rendered` or reuses images; every processed node verifies clean.
-- **Quiz** — every step that needed a sidecar was covered by its node's quiz-agent and either has a validated sidecar or a recorded failure; `course-app` data was regenerated when any sidecar was written.
+- **Generate** — every marker-backed step was retried up to three attempts and then either has its `image-N.webp` files with its markers replaced by uncaptioned image lines, or is recorded as `skipped-after-retries` with its last error and left for repair; rerun without `-force` reports `already-rendered` or reuses images.
+- **Quiz** — every node whose steps have articles reached the Quiz phase regardless of its images; every step that needed a sidecar was covered by its node's quiz-agent and either has a validated sidecar or a recorded failure; `course-app` data was regenerated when any sidecar was written.
 
 The final report lists the outcome of every phase that ran.
 
