@@ -595,7 +595,7 @@ export default function App() {
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-40 border-b border-hairline bg-paper/85 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-[1408px] items-center gap-1.5 px-3 sm:gap-2 sm:px-5 lg:px-8">
+        <div className="mx-auto flex h-16 max-w-[1536px] items-center gap-1.5 px-3 sm:gap-2 sm:px-5 lg:pl-8 lg:pr-12">
           {subjectId && (
             <button
               type="button"
@@ -610,7 +610,7 @@ export default function App() {
           <button
             type="button"
             onClick={goHome}
-            className="group flex min-w-0 items-center gap-3 rounded-xl py-1 pr-2 text-left"
+            className="group flex min-w-0 items-center gap-3 rounded-xl py-1 pr-2 text-left lg:ml-4"
           >
             <span
               aria-hidden="true"
@@ -707,8 +707,8 @@ export default function App() {
             onClose={() => setSidebarOpen(false)}
           />
 
-          <div className="mx-auto w-full max-w-[1408px] px-4 sm:px-6 lg:px-8">
-            <div className="lg:grid lg:grid-cols-[20rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)_13rem]">
+          <div className="mx-auto w-full max-w-[1536px] px-4 sm:px-6 lg:pl-8 lg:pr-12">
+            <div className="lg:grid lg:grid-cols-[20rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)_20rem]">
               <FadingColumn hidden={focusMode} className="lg:block">
                 <Sidebar
                   course={course}

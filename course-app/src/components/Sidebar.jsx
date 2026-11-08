@@ -40,12 +40,12 @@ function SidebarBody({
 
   return (
     <>
-      <div className="flex items-center justify-between gap-2 px-5 pb-3 pt-5">
-        <p className="robo-kicker font-label text-[10px] text-ink-soft">
+      <div className="flex items-center justify-between gap-2 pb-3 pt-5">
+          <p className="robo-kicker font-label text-[13px] text-ink-soft">
           課程目錄
         </p>
         <div className="flex items-center gap-1.5">
-          <span className="rounded-full bg-surface px-2 py-0.5 font-mono text-[10px] tabular-nums text-ink ring-1 ring-hairline">
+          <span className="rounded-full bg-surface px-2 py-0.5 font-mono text-[10.5px] tabular-nums text-ink ring-1 ring-hairline">
             {course.nodes.length} 節點
           </span>
           {onToggle && (
@@ -97,16 +97,16 @@ function SidebarBody({
         </div>
       </div>
 
-      <div className="space-y-1 px-3">
-        <div className="flex items-center gap-3 px-2.5 py-1.5">
+      <div className="space-y-1">
+        <div className="flex items-center gap-3 py-1.5">
           <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-surface text-ink-soft ring-1 ring-hairline">
             <NodeGlyph seed={course.subject} size={16} />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="robo-kicker block font-label text-[9px] text-ink-soft">
+            <span className="robo-kicker block font-label text-[10px] text-ink-soft">
               課程
             </span>
-            <span className="mt-0.5 block truncate font-display text-[1rem] font-semibold text-ink">
+            <span className="mt-0.5 block truncate font-display text-[1.08rem] font-semibold text-ink">
               {course.title}
             </span>
           </span>
@@ -115,7 +115,7 @@ function SidebarBody({
           <button
             type="button"
             onClick={onSubject}
-            className="group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-surface"
+            className="group flex w-full items-center gap-3 rounded-xl py-2 text-left transition-colors hover:bg-surface"
           >
             <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-surface text-ink-soft ring-1 ring-hairline transition-colors group-hover:text-accent">
               <svg
@@ -134,7 +134,7 @@ function SidebarBody({
                 <path d="M8 6h6a4 4 0 0 1 0 8H10a4 4 0 0 0 0 8" />
               </svg>
             </span>
-            <span className="robo-kicker font-label text-[10px] text-ink transition-colors group-hover:text-accent">
+            <span className="robo-kicker font-label text-[11px] text-ink transition-colors group-hover:text-accent">
               課程地圖
             </span>
           </button>
@@ -142,31 +142,31 @@ function SidebarBody({
       </div>
 
       {course.goal && course.goal !== "none" && (
-        <div className="px-5 pt-4">
-          <p className="border-l-2 border-accent/45 pl-3 text-[0.82rem] leading-relaxed text-ink-soft line-clamp-4">
+        <div className="pt-4">
+          <p className="border-l-2 border-accent/45 pl-3 text-[0.9rem] leading-relaxed text-ink-soft line-clamp-4">
             {course.goal}
           </p>
         </div>
       )}
 
-      <nav className="mt-7 flex-1 space-y-8 px-3 pb-12" aria-label="課程導覽">
+      <nav className="mt-7 flex-1 space-y-7 pb-12" aria-label="課程導覽">
         {course.tiers.map((tier) => {
           const items = nodesByTier.get(tier.tier) || [];
           if (!items.length) return null;
           return (
             <div key={tier.tier}>
-              <div className="mb-2 flex items-center gap-2 px-2">
+              <div className="mb-3 flex items-center gap-2">
                 <span
                   aria-hidden="true"
                   className={`size-1.5 rounded-full ${tierDotClass(tier.tier)}`}
                 />
                 <span
-                  className={`robo-kicker font-label text-[9.5px] font-medium ${tierTextClass(tier.tier)}`}
+                  className={`robo-kicker font-label text-[10.5px] font-medium ${tierTextClass(tier.tier)}`}
                 >
                   Tier {tier.tier} · {tier.name}
                 </span>
               </div>
-              <ul className="space-y-0.5">
+              <ul className="space-y-1">
                 {items.map((node) => {
                   const active = node.id === currentId;
                   return (
@@ -176,7 +176,7 @@ function SidebarBody({
                         onClick={() => onSelect(node.id)}
                         aria-current={active ? "page" : undefined}
                         aria-expanded={node.steps.length > 0 ? active : undefined}
-                        className={`group relative flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-[0.92rem] leading-snug transition-colors ${
+                        className={`group relative flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-[0.95rem] leading-relaxed transition-colors ${
                           active
                             ? "bg-accent-tint font-medium text-ink ring-1 ring-accent/20"
                             : "text-ink hover:bg-surface"
@@ -189,17 +189,19 @@ function SidebarBody({
                           }`}
                         />
                         <span
-                          className={`mt-0.5 w-4 shrink-0 font-mono text-[10px] font-medium tabular-nums ${
+                          className={`mt-[3px] w-5 shrink-0 font-mono text-[10.5px] font-medium tabular-nums ${
                             active ? "text-accent" : "text-ink-soft"
                           }`}
                         >
                           {String(node.globalOrder).padStart(2, "0")}
                         </span>
-                        <span className="min-w-0 flex-1">{node.title}</span>
+                        <span className="min-w-0 flex-1 break-words">
+                          {node.title}
+                        </span>
                         {node.steps.length > 0 && (
-                          <span className="mt-0.5 flex shrink-0 items-center gap-1">
+                          <span className="mt-[3px] flex shrink-0 items-center gap-1">
                             <span
-                              className={`font-mono text-[10px] tabular-nums ${
+                              className={`font-mono text-[10.5px] tabular-nums ${
                                 active ? "text-accent" : "text-ink-soft"
                               }`}
                             >
@@ -228,7 +230,7 @@ function SidebarBody({
                       </button>
 
                       {active && node.steps.length > 0 && (
-                        <ul className="ml-5 mt-1 space-y-0.5 border-l border-hairline pl-2.5">
+                        <ul className="ml-5 mt-1.5 space-y-1 border-l border-hairline pl-3">
                           {node.steps.map((step) => {
                             const stepActive = step.id === currentStepId;
                             return (
@@ -239,16 +241,16 @@ function SidebarBody({
                                     onSelectStep(node.id, step.id)
                                   }
                                   aria-current={stepActive ? "step" : undefined}
-                                  className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[0.82rem] leading-snug transition-colors ${
+                                  className={`flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left text-[0.88rem] leading-relaxed transition-colors ${
                                     stepActive
                                       ? "bg-accent-tint font-medium text-accent"
                                       : "text-ink-soft hover:bg-surface hover:text-ink"
                                   }`}
                                 >
-                                  <span className="mt-0.5 w-4 shrink-0 font-mono text-[9.5px] tabular-nums">
+                                  <span className="mt-[3px] w-4 shrink-0 font-mono text-[10px] tabular-nums">
                                     {String(step.order).padStart(2, "0")}
                                   </span>
-                                  <span className="min-w-0 flex-1">
+                                  <span className="min-w-0 flex-1 break-words">
                                     {step.title}
                                   </span>
                                 </button>
@@ -344,7 +346,7 @@ export default function Sidebar({
           })}
         </div>
       ) : (
-        <div className="scroll-slim flex h-full flex-col overflow-y-auto border-r border-hairline bg-paper/40">
+        <div className="scroll-slim flex h-full flex-col overflow-y-auto border-r border-hairline bg-paper/40 px-4">
           <SidebarBody
             course={course}
             currentId={currentId}
@@ -388,7 +390,7 @@ export function SidebarDrawer({
         aria-label="課程導覽"
         aria-hidden={!open}
       >
-        <div className="scroll-slim flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="scroll-slim flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-4">
           <SidebarBody
             course={course}
             currentId={currentId}
