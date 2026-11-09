@@ -19,6 +19,8 @@ steps:
     sources:
       - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L321-L430]]"
       - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L641-L720]]"
+    blocks:
+      - model-quality-vs-product-behavior
   - id: safety-reliability-cost-latency
     author: "google/gemini-3.8-flash"
     title: "評估 AI 不能只看準確度：Safety、Reliability、Cost 與 Latency 的度量重點"
@@ -26,6 +28,9 @@ steps:
     sources:
       - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L791-L920]]"
       - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L321-L430]]"
+    blocks:
+      - six-quality-dimensions
+      - safety-eval
   - id: ai-metrics-vs-business-metrics
     author: "google/gemini-3.8-flash"
     title: "評估 AI 產品成效：搞懂 AI 指標與業務指標的差別"
@@ -34,6 +39,8 @@ steps:
       - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L791-L920]]"
       - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L921-L1000]]"
       - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L321-L430]]"
+    blocks:
+      - ai-metrics-vs-business-metrics
   - id: contextual-thresholds-and-accuracy-trap
     author: "google/gemini-3.8-flash"
     title: "儀表板全綠卻客訴翻倍？評估門檻設定與單一準確率的盲點"
@@ -41,6 +48,8 @@ steps:
     sources:
       - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L1601-L1700]]"
       - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L721-L852]]"
+    blocks:
+      - accuracy-trap
 created: 2026-11-08
 updated: 2026-11-08
 ---

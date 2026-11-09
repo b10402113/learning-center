@@ -21,6 +21,9 @@ steps:
       - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L409-L480]]"
       - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L121-L152]]"
       - "[[sources/ai-eval/20261108/supplement/code/README.html#L23-L31]]"
+    blocks:
+      - non-determinism
+      - pass-rate
   - id: benchmarks-are-not-product-evals
     author: "google/gemini-3.8-flash"
     title: "為什麼排行榜上的模型高分，無法預測你的真實工作流？"
@@ -28,6 +31,8 @@ steps:
     sources:
       - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L349-L407]]"
       - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L153-L170]]"
+    blocks:
+      - product-eval
   - id: write-the-eval-before-the-product
     author: "google/gemini-3.8-flash"
     title: "用評測規格寫出 AI 產品的 PRD：拆解成果、體驗、軌跡與治理"
@@ -35,6 +40,8 @@ steps:
     sources:
       - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L921-L1000]]"
       - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L1001-L1100]]"
+    blocks:
+      - eval-rubric
   - id: evals-answer-can-we-ship
     author: "google/gemini-3.8-flash"
     title: "AI 評估不只看 Benchmark：用五個問題、可逆性與爆炸半徑決定能否上線"
@@ -42,6 +49,8 @@ steps:
     sources:
       - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L1701-L1851]]"
       - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L129-L141]]"
+    blocks:
+      - eval-gate
 created: 2026-11-08
 updated: 2026-11-08
 ---
