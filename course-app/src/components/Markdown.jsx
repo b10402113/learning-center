@@ -102,9 +102,9 @@ export default function Markdown({
         prose-blockquote:my-8 prose-blockquote:rounded-r-xl prose-blockquote:border-l-2 prose-blockquote:border-accent
         prose-blockquote:bg-accent-tint prose-blockquote:px-5 prose-blockquote:py-2 prose-blockquote:not-italic
         prose-blockquote:text-ink/80
-        prose-th:border prose-th:border-hairline prose-th:bg-shade prose-th:px-3 prose-th:py-2
+        prose-th:bg-shade prose-th:px-3 prose-th:py-2
         prose-th:font-label prose-th:text-sm prose-th:font-medium prose-th:uppercase prose-th:tracking-wide prose-th:text-ink
-        prose-td:border prose-td:border-hairline prose-td:px-3 prose-td:py-2 prose-td:align-top
+        prose-td:px-3 prose-td:py-2 prose-td:align-top
         prose-hr:my-12 prose-hr:border-t prose-hr:border-hairline
         ${className}`}
     >
@@ -152,7 +152,7 @@ export default function Markdown({
             />
           ),
           table: (props) => (
-            <div className="my-7 overflow-x-auto rounded-xl border border-hairline">
+            <div className="prose-table my-7 overflow-x-auto rounded-xl border border-hairline">
               <table {...props} />
             </div>
           ),

@@ -1,11 +1,11 @@
 ---
-source: sources/background-agent/20261105/scripts/lesson-prose/02.md
+source: sources/background-agent/20261109/supplement/scripts/lesson-prose/02.md
 source_type: text
 source_lines: 27
 status: skipped
-skip_reason: "raw prose input to npm run notes:generate; the generated lesson page lessons/<NN>/index.md carries this prose plus the exact code diffs and is digested as lessons-<NN>-*.md"
-created: 2026-11-05
-updated: 2026-11-05
+skip_reason: "raw prose input to the note generator; the generated lesson page is digested as the matching lessons-0N page"
+created: 2026-11-09
+updated: 2026-11-09
 ---
 
 # L1 overview

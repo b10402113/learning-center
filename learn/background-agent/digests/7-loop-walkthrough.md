@@ -1,41 +1,35 @@
 ---
-source: sources/background-agent/20261105/7-loop-walkthrough.vtt
+source: sources/background-agent/20261109/course/7-loop-walkthrough.txt
 source_type: text
-source_lines: 635
+source_lines: 89
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
-supplements:
-  - server.md#L1-L216
-  - server.md#L970-L1006
-  - server.md#L1052-L1066
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 ---
 
 # L1 overview
 
-- Full loop recap — one event-ingest workflow function containing one `step.run` step, and inside it a `for` loop capped at 8 iterations. The whole cycle in order: observe the world → deterministic goal check → ask the LLM what to do next → bookkeeping → safety gates → execute or return.
-- Observation first, per iteration — read the current checkout-service state ("the current world") and decide deterministically whether it is already a good state; if it is, job done and no tokens are spent. Only a bad state escalates to the model.
-- The decision step — the model gets the overall goal, the current view of the world, whatever system prompt is configured, and the list of all possible actions, and is asked which action is most likely, why, and in more detail. That recommendation is then recorded, not executed.
-- Harness-owned safety gates before execution — `wait` and `request_help` need Inngest-specific behaviour (pause the workflow or step, notify a person, wait indefinitely for a reply); `complete` needs something special (a final summarising LLM pass, an update, an email). None are implemented yet, so each is stubbed with a `return` — caught but not yet handled.
-- Approval-by-policy — `rollback_release` must never be executed autonomously, so it is gated with another `if` and a `return`; the human-in-the-loop plumbing arrives in later lessons. Everything that isn't gated runs autonomously, and the action itself is just an API call because the actions live on the service.
-- Actions must mutate observable state — otherwise, on the next loop, the exact same state plus the action it just ran leaves the agent doubting reality ("I swear I did the thing"), blaming caching, and going into what he calls psychosis. Letting the agent ignore the state when it disagrees defeats the entire design.
-- Predicate vs prompt conflict — when the deterministic goal check says "not complete" but the agent's chosen action says "complete", the gap is your code and your goal/system prompt pulling in different directions; that's a developer bug, and it may not be closable deterministically. Alternative: make `goalSatisfied` itself an LLM call with its own narrower prompt and its own evals — smaller surface, higher accuracy, possibly a different model.
-- Live run attempt — `npm run dev agent` for the API, with the usual port contention (whichever app starts first claims the port, and the docs can steal it), checkout service already running, dashboard on 5173.
+- Full loop walkthrough — one ingest workflow, one step, a for loop capped at eight cycles.
+- Each cycle — read state, deterministically check the goal, ask the LLM for the next action, then guard the special actions.
+- Guarded actions — wait and request-for-help need pausing; complete needs a special finish; rollback needs human approval.
+- Everything else runs — unguarded actions are executed through the service's API and recorded.
+- State is the feedback loop — mutating actions must update state or the agent cannot tell its work succeeded.
+- Debugging value of state — a stuck agent behaves like a person whose edit never shows up on screen.
+- Goal-check gap — deterministic completion and the model's "complete" can conflict, exposing prompt/code mismatches.
+- LLM goal check alternative — a focused LLM goal-checker creates a smaller, more evaluable surface.
+- Demo setup — start the API and checkout service, then open the app on port 5173.
 
 # L2 detail
 
-- `#L1-L29` — Sets up the recap: one ingest workflow function containing one step, and inside that step a `for` loop that loops no more than eight times.
-- `#L30-L45` — Start of each iteration: fetch the current state, i.e. the current world — here the checkout service and whatever state it is currently in.
-- `#L46-L57` — The loop's first decision is deterministic: can we tell from that state whether it is a good state? If it is, job done, we are finished.
-- `#L58-L103` — If it is not a good state, ask the LLM what to do next given the overall goal, the current view of the world, the configured system prompt, and the full list of possible actions — which action is most likely, why, and the breakdown of what it is trying to do.
-- `#L104-L112` — Housekeeping immediately after the decision: update the loop count and record that the LLM decided this.
-- `#L113-L149` — Why waiting and requesting help are special: they need Inngest-specific machinery — pause the workflow or the step, send something to a person, and wait indefinitely until something comes back; we want to do something special in those cases.
-- `#L150-L176` — `complete` also needs something special (another LLM pass for a final summary, an update somewhere, an email), and since none of it is implemented yet these are all just `return` for now.
-- `#L177-L204` — The `rollback_release` guardrail: we do not want it executed autonomously without human intervention, so the `if` stops it — the human-input work lands in the next few lessons.
-- `#L205-L246` — Everything else is allowed to run on its own: make the API call to the service (the actions live there rather than in the agent), get the results, record the action, and that is it.
-- `#L247-L292` — The loop continues only if no gate returned and nothing threw; the next iteration re-reads the state — which is exactly why actions are expected to change it, so the agent can see what changed.
-- `#L293-L360` — The CSS analogy: you set the background to red, save, watch the server restart, then the site is still not red — you would conclude something is broken, and so will the agent.
-- `#L361-L411` — The failure mode named: it goes into psychosis, claims the state is cached or broken, and cannot make progress; and if you let it assume the action worked and ignore the state, none of the design works anymore — "that has nothing to do with LLM, that's just you making sure the systems work".
-- `#L412-L519` — Mark's question on whether the in-loop `goalSatisfied` check catches the last iteration (yes, if the predicate can express the completion condition), then the real gap: the deterministic check said not complete while the agent decided complete — that conflict lives between your predicate code and the goal/system prompt, and closing it is your job.
-- `#L520-L635` — David's question on making `goalSatisfied` itself a reasoning call — yes, it gives a much smaller surface with its own prompt and its own evals, better accuracy, and freedom to pick another model; then the run attempt: `npm run dev agent` for the API, docs/app port contention ("whichever one you start first claims the port"), checkout service already up, dashboard at 5173.
+- `#L1-L10` — One ingest workflow function, one step, and an eight-cycle loop that observes state and runs a deterministic goal check.
+- `#L11-L16` — If the goal is unmet, the LLM picks the most likely action from the allowed set and explains its reasoning.
+- `#L17-L22` — After the decision, housekeeping updates the loop count and records the decision before executing.
+- `#L23-L28` — Waiting and request-for-help need ingest-specific pausing; complete likely needs a summary or notification.
+- `#L29-L33` — Rollback release is blocked pending human input; all other actions may run autonomously.
+- `#L34-L38` — Actions live on the service, so the harness only makes an API call, records the action, and loops again.
+- `#L39-L50` — The loop re-observes state; a CSS edit analogy shows an agent confused when a change does not appear.
+- `#L51-L62` — Without state updates the agent is stuck in "psychosis"; letting it ignore state defeats the whole design.
+- `#L63-L72` — A question notes the in-loop goal check; the gap is between the agent's "complete" and the deterministic check.
+- `#L73-L84` — Conflicting goal/system prompt and check code is a developer error; an LLM goal checker can shrink that surface.
+- `#L85-L89` — Running the demo: start the agent API and checkout service, manage ports, and open the app on 5173.

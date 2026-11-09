@@ -1,11 +1,11 @@
 ---
-source: sources/background-agent/20261105/notes/lesson-authoring.md
+source: sources/background-agent/20261109/supplement/notes/lesson-authoring.md
 source_type: text
 source_lines: 11
-status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
+status: skipped
+skip_reason: "instructor authoring and rehearsal guide; not learner-facing agent material"
+created: 2026-11-09
+updated: 2026-11-09
 supplements:
   - scripts.md#L1-L132
 ---

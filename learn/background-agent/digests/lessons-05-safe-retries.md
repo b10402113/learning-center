@@ -1,14 +1,14 @@
 ---
-source: sources/background-agent/20261105/lessons/05-safe-retries/index.md
+source: sources/background-agent/20261109/supplement/lessons/05-safe-retries/index.md
 source_type: text
 source_lines: 92
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 supplements:
-  - server.md#L217-L504
-  - server.md#L1052-L1066
+  - server.md#L52-L339
+  - server.md#L1072-L1086
   - service.md#L1-L221
 ---
 

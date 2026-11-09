@@ -1,15 +1,15 @@
 ---
-source: sources/background-agent/20261105/lessons/02-durable-execution/index.md
+source: sources/background-agent/20261109/supplement/lessons/02-durable-execution/index.md
 source_type: text
 source_lines: 265
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 supplements:
-  - server.md#L1-L216
-  - server.md#L929-L969
-  - server.md#L1007-L1034
+  - server.md#L381-L596
+  - server.md#L340-L380
+  - server.md#L597-L624
 ---
 
 # L1 overview

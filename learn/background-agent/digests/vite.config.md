@@ -1,11 +1,11 @@
 ---
-source: sources/background-agent/20261105/vite.config.ts
+source: sources/background-agent/20261109/supplement/vite.config.ts
 source_type: text
 source_lines: 18
 status: skipped
-skip_reason: "project configuration/dependency lock; the commands, ports and setup facts that matter are captured in the README.md digest"
-created: 2026-11-05
-updated: 2026-11-05
+skip_reason: "project configuration or dependency lockfile; setup facts are covered by README.md and chapter 2"
+created: 2026-11-09
+updated: 2026-11-09
 ---
 
 # L1 overview

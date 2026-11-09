@@ -5,72 +5,73 @@ subject: background-agent
 tier: 1
 order: 1
 status: written
-goal: "能用 standing goal、durability 與 operator inbox 說明背景代理和聊天代理的差別。"
+goal: "能用 standing goal、lifecycle、harness 與 inbox 說明背景代理和聊天代理的差別，並說出課程要蓋什麼。"
 digests:
   - 0-introduction.md
   - 1-background-agents.md
   - lessons-index.md
+  - notes-course-plan.md
   - course.yaml.md
-  - README.md
 prerequisites: []
 steps:
-  - id: chat-agent-vs-background-agent
+  - id: background-agent-vs-chat-agent
     author: "google/gemini-3.8-flash"
-    title: "背景代理是另一種代理"
-    purpose: "能用事件觸發、standing goal 與 fire-and-forget 說明背景代理和聊天代理的差別。"
+    title: "背景代理與聊天代理有何不同？從持續目標、事件觸發與耐久性看起"
+    purpose: "能用 standing goal、事件觸發與耐久性說明背景代理和聊天代理的差別。"
     sources:
-      - "[[sources/background-agent/20261105/0-introduction.vtt#L1-L118]]"
-      - "[[sources/background-agent/20261105/1-background-agents.vtt#L149-L286]]"
-      - "[[sources/background-agent/20261105/1-background-agents.vtt#L458-L580]]"
-      - "[[sources/background-agent/20261105/course.yaml#L3-L12]]"
-  - id: goal-not-prompt
+      - "[[sources/background-agent/20261109/course/1-background-agents.txt#L1-L9]]"
+      - "[[sources/background-agent/20261109/course/1-background-agents.txt#L10-L22]]"
+      - "[[sources/background-agent/20261109/course/1-background-agents.txt#L23-L31]]"
+      - "[[sources/background-agent/20261109/course/1-background-agents.txt#L32-L41]]"
+      - "[[sources/background-agent/20261109/course/1-background-agents.txt#L42-L57]]"
+      - "[[sources/background-agent/20261109/course/1-background-agents.txt#L58-L67]]"
+      - "[[sources/background-agent/20261109/course/1-background-agents.txt#L68-L77]]"
+  - id: authority-and-the-harness
     author: "google/gemini-3.8-flash"
-    title: "它拿到的是目標，不是任務"
-    purpose: "能說明背景代理的目標是持續維持的狀態，並用 durability 解釋它為何能等待與恢復。"
+    title: "為什麼 Approval 與停止條件必須由 Harness 決定，而不是交給模型？"
+    purpose: "能說明為什麼 approval 與停止條件要交給 harness 決定，而不是交給模型。"
     sources:
-      - "[[sources/background-agent/20261105/1-background-agents.vtt#L287-L457]]"
-      - "[[sources/background-agent/20261105/1-background-agents.vtt#L863-L948]]"
-      - "[[sources/background-agent/20261105/lessons/index.md#L1-L9]]"
-  - id: observe-decide-act-harness
+      - "[[sources/background-agent/20261109/course/1-background-agents.txt#L96-L111]]"
+      - "[[sources/background-agent/20261109/course/1-background-agents.txt#L112-L129]]"
+      - "[[sources/background-agent/20261109/course/1-background-agents.txt#L130-L145]]"
+  - id: incident-lifecycle-and-inbox
     author: "google/gemini-3.8-flash"
-    title: "觀察、決定、行動的迴圈"
-    purpose: "能畫出 observe → decide → act 迴圈，並指出 harness 而非模型持有工具與完成判定。"
+    title: "從一次結帳事故看背景代理人的運作週期"
+    purpose: "能用一次 checkout 事故說明 run 的開場、事件加入、inbox 求助與恢復收尾。"
     sources:
-      - "[[sources/background-agent/20261105/0-introduction.vtt#L183-L315]]"
-      - "[[sources/background-agent/20261105/1-background-agents.vtt#L736-L862]]"
-      - "[[sources/background-agent/20261105/README.md#L4-L16]]"
-      - "[[sources/background-agent/20261105/lessons/index.md#L10-L24]]"
-  - id: authority-and-operator-inbox
+      - "[[sources/background-agent/20261109/course/0-introduction.txt#L20-L30]]"
+      - "[[sources/background-agent/20261109/course/0-introduction.txt#L31-L43]]"
+      - "[[sources/background-agent/20261109/course/0-introduction.txt#L44-L55]]"
+      - "[[sources/background-agent/20261109/course/0-introduction.txt#L56-L61]]"
+      - "[[sources/background-agent/20261109/course/0-introduction.txt#L62-L70]]"
+      - "[[sources/background-agent/20261109/course/0-introduction.txt#L71-L83]]"
+      - "[[sources/background-agent/20261109/supplement/lessons/index.md#L1-L9]]"
+      - "[[sources/background-agent/20261109/supplement/notes/course-plan.md#L6-L7]]"
+  - id: what-the-course-builds
     author: "google/gemini-3.8-flash"
-    title: "誰有權做什麼？"
-    purpose: "能區分模型、harness 與人類的權威，並說明 operator inbox 何時出現。"
+    title: "打造 Background Agent：Observe-Decide-Act 迴圈與六項 Harness 能力"
+    purpose: "能說出課程要蓋的 observe-decide-act 迴圈與六個 harness 能力。"
     sources:
-      - "[[sources/background-agent/20261105/0-introduction.vtt#L316-L400]]"
-      - "[[sources/background-agent/20261105/0-introduction.vtt#L471-L533]]"
-      - "[[sources/background-agent/20261105/1-background-agents.vtt#L581-L735]]"
-      - "[[sources/background-agent/20261105/course.yaml#L13-L24]]"
-  - id: waiting-and-the-incident-demo
-    author: "google/gemini-3.8-flash"
-    title: "我看了最新的狀態"
-    purpose: "能用 dependency 故障示範說明等待中事件仍會到達，且恢復必須重讀世界狀態。"
-    sources:
-      - "[[sources/background-agent/20261105/0-introduction.vtt#L401-L470]]"
-      - "[[sources/background-agent/20261105/0-introduction.vtt#L534-L578]]"
-      - "[[sources/background-agent/20261105/README.md#L70-L84]]"
-created: 2026-11-05
-updated: 2026-11-04
+      - "[[sources/background-agent/20261109/course/0-introduction.txt#L14-L19]]"
+      - "[[sources/background-agent/20261109/course/0-introduction.txt#L84-L85]]"
+      - "[[sources/background-agent/20261109/supplement/lessons/index.md#L10-L24]]"
+      - "[[sources/background-agent/20261109/supplement/notes/course-plan.md#L1-L3]]"
+      - "[[sources/background-agent/20261109/supplement/notes/course-plan.md#L8-L11]]"
+      - "[[sources/background-agent/20261109/supplement/course.yaml#L13-L24]]"
+      - "[[sources/background-agent/20261109/supplement/course.yaml#L25-L31]]"
+created: 2026-11-09
+updated: 2026-11-08
 ---
 
 # 打造不會睡的 AI 代理
 
 ## Lesson
 
-聊天代理是一次問答，背景代理則是一個會自己活下去的目標。這個節點先建立「standing goal + durability」的心智模型，再說明為什麼這種代理需要 harness、事件，以及一個只在使用者需要判斷時才出現的收件匣。
+這門課把「背景代理」當成一種生命周期，而不是一個聊天介面：它帶著 standing goal 自己醒來、觀察世界、採取行動，必要時透過 inbox 找人。這個節點先建立 harness、authority、durability 與事件的基本詞彙，讓後面每一段程式碼都有同一個心智模型可以掛靠。
 
 ## Steps
 
-1. [背景代理是另一種代理](build-agents-that-never-sleep/chat-agent-vs-background-agent.md)
-2. [它拿到的是目標，不是任務](build-agents-that-never-sleep/goal-not-prompt.md)
-3. [觀察、決定、行動的迴圈](build-agents-that-never-sleep/observe-decide-act-harness.md)
-4. [誰有權做什麼？](build-agents-that-never-sleep/authority-and-operator-inbox.md)
-5. [我看了最新的狀態](build-agents-that-never-sleep/waiting-and-the-incident-demo.md)
+1. [背景代理與聊天代理有何不同？從持續目標、事件觸發與耐久性看起](build-agents-that-never-sleep/background-agent-vs-chat-agent.md)
+2. [為什麼 Approval 與停止條件必須由 Harness 決定，而不是交給模型？](build-agents-that-never-sleep/authority-and-the-harness.md)
+3. [從一次結帳事故看背景代理人的運作週期](build-agents-that-never-sleep/incident-lifecycle-and-inbox.md)
+4. [打造 Background Agent：Observe-Decide-Act 迴圈與六項 Harness 能力](build-agents-that-never-sleep/what-the-course-builds.md)

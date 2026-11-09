@@ -1,11 +1,11 @@
 ---
-source: sources/background-agent/20261105/openspec/config.yaml
+source: sources/background-agent/20261109/supplement/openspec/config.yaml
 source_type: text
 source_lines: 32
 status: skipped
-skip_reason: "OpenSpec tool config; no teaching content"
-created: 2026-11-05
-updated: 2026-11-05
+skip_reason: "historical project change-management artifact; requirements are covered by the README, notes, and lesson pages"
+created: 2026-11-09
+updated: 2026-11-09
 ---
 
 # L1 overview

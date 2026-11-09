@@ -1,13 +1,20 @@
 import Markdown from "./Markdown.jsx";
 import { ChapterRule, EmptyMark, NodeGlyph } from "./Glyphs.jsx";
 import { tierDotClass } from "./Sidebar.jsx";
+import { followInternalLink } from "../lib/navigation.mjs";
 import { pathFor } from "../lib/route.mjs";
 
 /**
  * Node detail view: title, goal, node lesson, and the step list in the order
  * declared by the node's `steps` array. Each step links to its own article.
  */
-export default function NodeView({ course, node, onSelect, onSubject }) {
+export default function NodeView({
+  course,
+  node,
+  onSelect,
+  onSubject,
+  onNavigate = null,
+}) {
   const prereqs = (node.requires || [])
     .map((id) => course.nodes.find((n) => n.id === id) || null)
     .filter(Boolean);
@@ -180,10 +187,17 @@ export default function NodeView({ course, node, onSelect, onSubject }) {
 
         {node.steps.length > 0 ? (
           <ol className="space-y-3">
-            {node.steps.map((step) => (
+            {node.steps.map((step) => {
+              const href = pathFor(course.subject, node.id, step.id);
+              return (
               <li key={step.id}>
                 <a
-                  href={pathFor(course.subject, node.id, step.id)}
+                  href={href}
+                  onClick={(event) => {
+                    if (followInternalLink(event, href, onNavigate)) {
+                      event.preventDefault();
+                    }
+                  }}
                   className="group flex items-start gap-4 rounded-2xl bg-surface px-4 py-4 ring-1 ring-hairline shadow-soft transition duration-300 hover:-translate-y-0.5 hover:shadow-lift hover:ring-accent/40"
                 >
                   <span
@@ -223,7 +237,8 @@ export default function NodeView({ course, node, onSelect, onSubject }) {
                   </svg>
                 </a>
               </li>
-            ))}
+              );
+            })}
           </ol>
         ) : (
           <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-hairline bg-surface/50 px-5 py-12 text-center">

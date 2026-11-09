@@ -1,14 +1,14 @@
 ---
-source: sources/background-agent/20261105/lessons/advanced-lab/index.md
+source: sources/background-agent/20261109/supplement/lessons/advanced-lab/index.md
 source_type: text
 source_lines: 28
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 supplements:
-  - web.md#L1-L713
-  - server.md#L1035-L1051
+  - web.md#L14-L726
+  - server.md#L863-L879
   - service.md#L1-L221
 ---
 

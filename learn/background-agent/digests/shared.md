@@ -1,19 +1,19 @@
 ---
-source: sources/background-agent/20261105/shared
+source: sources/background-agent/20261109/supplement/shared
 source_type: codebase
 source_lines: 13
-language: typescript
+language: ts
 file_count: 1
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 ---
 
 # L1 overview
 
-- shared/types.ts — The workshop's only shared vocabulary module: the list of action names an agent may choose, plus two deliberately loose type aliases. No runtime logic, no schemas, no Inngest or event types — it is imported by the agent harness, the server, and the web app purely for the `ActionName` union.
+- `shared/types.ts` — Defines the shared vocabulary for the durable background agent: a fixed `ACTIONS` tuple of seven operational actions (inspect logs, inspect changes, disable feature, rollback release, request help, complete, wait), its derived `ActionName` union, a free-form `WorldState` record, and a `GoalCondition` that expresses a single path/equals predicate (or `null` for "no goal"). This is the contract every other module types against.
 
 # L2 detail
 
-- `#L1-L13` — shared/types.ts — To be honest about what is here: it defines exactly three things and nothing more. `ACTIONS` (L1-L9) is an `as const` tuple of seven action names — `inspect_logs`, `inspect_changes`, `disable_feature`, `rollback_release`, `request_help`, `complete`, `wait`; note the first four match the names `POST /operations` accepts in service/checkout.ts, while `request_help`, `complete` and `wait` are harness-only decisions that no checkout endpoint implements (the asymmetry is the teaching point: the model proposes, the harness decides what becomes an effect). `ActionName` (L10) is the union derived from that tuple via `(typeof ACTIONS)[number]`. The remaining two are untyped escape hatches, not contracts: `WorldState = Record<string, unknown>` (L12) and `GoalCondition = { path: string; equals: string | number | boolean } | null` (L13). There are no zod schemas, no response types for the checkout service, no Inngest step or event types, and no guarantee that world state or goal conditions actually look like this — learners should not expect type safety from this file.
+- `#L1-L13` — `shared/types.ts` — Purpose is a minimal, dependency-free type contract. Key exports: `ACTIONS` (`as const` tuple of 7 action strings), `ActionName` (`typeof ACTIONS[number]`, so adding an action widens the type automatically), `WorldState` (`Record<string, unknown>`, the agent's viewed environment), and `GoalCondition` (`{ path, equals } | null`, a flat single-condition goal used to decide when the loop is done). Learner-relevant concept: the action set is deliberately closed and inspected as data, and the goal is intentionally shallow — the agent's decision surface lives in these types rather than in free-form prompt text.

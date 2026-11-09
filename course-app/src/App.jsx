@@ -760,6 +760,7 @@ export default function App() {
                       node={node}
                       onSelect={selectNode}
                       onSubject={selectSubject}
+                      onNavigate={navigateHref}
                     />
                   ) : (
                     <SubjectOverview

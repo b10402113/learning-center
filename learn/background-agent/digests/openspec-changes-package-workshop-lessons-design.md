@@ -1,11 +1,11 @@
 ---
-source: sources/background-agent/20261105/openspec/changes/package-workshop-lessons/design.md
+source: sources/background-agent/20261109/supplement/openspec/changes/package-workshop-lessons/design.md
 source_type: text
 source_lines: 17
 status: skipped
-skip_reason: "project change-management artifact (proposal/design/tasks/spec) for building the workshop repo; its requirements and rationale are already covered by the README.md, notes-* and lessons-* digests — not separate agent-teaching material"
-created: 2026-11-05
-updated: 2026-11-05
+skip_reason: "historical project change-management artifact; requirements are covered by the README, notes, and lesson pages"
+created: 2026-11-09
+updated: 2026-11-09
 ---
 
 # L1 overview

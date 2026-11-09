@@ -1,11 +1,11 @@
 ---
-source: sources/background-agent/20261105/notes/simulator.md
+source: sources/background-agent/20261109/supplement/notes/simulator.md
 source_type: text
 source_lines: 9
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 supplements:
   - service.md#L1-L221
 ---

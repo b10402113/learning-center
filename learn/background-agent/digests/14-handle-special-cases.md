@@ -1,38 +1,35 @@
 ---
-source: sources/background-agent/20261105/14-handle-special-cases.vtt
+source: sources/background-agent/20261109/course/14-handle-special-cases.txt
 source_type: text
-source_lines: 941
+source_lines: 133
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
-supplements:
-  - server.md#L1-L216
-  - server.md#L1052-L1066
-  - server.md#L692-L811
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 ---
 
 # L1 overview
 
-- Special decision types can't be copy-pasted — the old single-step handling is close but not identical, so `wait` / `complete` / `request_for_help` are rewritten as separate branches on `decision.action` plus a new `run.goal.condition` existence check (a run without a condition is "gaslighting the agent" into finding a problem).
-- Unbuilt branches are honest placeholders — the wait branch escalates the run in a step and records a wait event with `wait unavailable / waits not built`, returning so the loop stops; the help branch mirrors it with `help unavailable` / `human help not created yet`.
-- Completion is two steps plus a return — `step.run("write report cycle N")` (LLM call, must be memoized), `step.run("complete run cycle N")` writing `completed` + report, then `return report`. Skipping the run update leaves the agent re-solving an already-solved problem.
-- Every `step.run` is a checkpoint — the framing is "0 of 1" instead of "all of it", and the mem oization saves real dollars on LLM calls, not just time/space.
-- Derived action ID lives outside a step — generating it with `crypto.randomUUID()` is technically nondeterministic, but nothing branches on its value: it is only recorded, so it behaves deterministically. Contrast: `Math.random()` as a loop bound *would* break the workflow.
-- Action policy table replaces per-tool branching — an `actionPolicy` map classifies each action as read / write / approval / help / terminal, and the harness writes one branch per *policy* instead of one per action, so adding a tool means tagging it, not editing control flow.
-- Read is the fallback policy — everything not explicitly handled falls through to execution, so approval (and later help/terminal) are the only branches you must write.
+- Special-case actions — `wait`, `complete`, and `request-for-help` each get their own branch before the normal action path, with placeholder steps where a feature is not built yet.
+- Complete flow — writing the report is a step (LLM call), marking the run complete is a step, then the report is returned.
+- Durability wins — every `step.run` is a checkpoint that avoids recomputation and, for LLM calls, real money; it is the same business logic made durable.
+- Action ID exception — a unique action ID need not be memoized because no logic depends on its value, unlike a random number used in calculations.
+- Policy abstraction — actions carry `read` / `write` / `approval` / `help` / `terminal` policies, so the harness branches on a few policies instead of one `if` per action.
 
 # L2 detail
 
-- `#L1-L55` — Starts the special-case block, notes the old code cannot simply be pasted over, and opens `if (decision.action === "wait" || decision.action === "complete")` extended with `&& !run.goal.condition`.
-- `#L56-L130` — Explains the condition guard (a run created without a goal condition is unfair to the agent), then the wait branch: a step that updates the run to `escalated`, records the `wait/waits not built` event, plus the mandatory `return`.
-- `#L131-L200` — The `complete` branch: reminding that it must return at some point, then `step.run("write report cycle N")` wrapping `writeReport({ goal, state })` because the LLM call is nondeterministic.
-- `#L201-L280` — `step.run("complete run cycle N")` setting the run to `completed, null` with the report, and the gotcha: without marking the run complete the top-of-loop guard never fires and the agent keeps solving an already-solved incident.
-- `#L281-L370` — The `request_for_help` branch, copied from wait with a different message (`help unavailable`, `human help not created yet`) and the same escalate-and-return shape.
-- `#L371-L430` — Restates that no new business logic is being introduced, only durability, and that every `step.run` is a checkpoint measuring "0 of 1" — including budget/dollar complexity for LLM calls.
-- `#L431-L520` — Generates the action ID inline (`crypto.randomUUID()`) and turns the "is this deterministic?" question into a worked argument about uniqueness-only records.
-- `#L521-L600` — The reasoning: we never branch on the action ID, we only persist it, so regenerating it on replay is fine — versus a `Math.random()`-bounded loop where the value drives execution and would genuinely break the workflow.
-- `#L601-L680` — Pushes further: if the unique ID came from a network call it would be worth a step purely to cache the request, not for determinism; here it is free, so it stays in the workflow.
-- `#L681-L760` — Introduces `actionPolicy[decision.action]` as an authority abstraction and reads the table aloud: `inspect_log` = read, `inspect_changes` = read, `disable_feature` = write, `rollback_release` = approval.
-- `#L761-L830` — Justifies the policy indirection: 30 actions would otherwise mean 30 if-branches; with policies the harness only needs a branch per read/write/approval/help/terminal class.
-- `#L831-L941` — Writes the `if (policy === "approval")` placeholder (human approval comes later), then closes with read as the unhandled fallback so all real execution flows through the default path.
+- `#L1-L6` — Introduces reusing the earlier special-case handling for `wait`, `complete`, and `help`, noting the code can't be pasted verbatim.
+- `#L7-L15` — Builds the `wait` (and incomplete run) branch: a step that marks the run as waiting with an "unavailable" message.
+- `#L16-L22` — For `complete`, calls an LLM-written report inside a `write-report` step because LLM calls are nondeterministic.
+- `#L23-L34` — Adds a `complete-run` step to mark the run done, preventing it from solving an already-solved problem, then returns the report.
+- `#L35-L41` — Handles `request-for-help` like `wait` with a different "human help unavailable" message.
+- `#L42-L50` — Explains that each `step.run` is a checkpoint giving free computation, saving time, space, and real LLM dollars.
+- `#L51-L58` — Asks whether the action ID is deterministic and whether it needs a step.
+- `#L59-L79` — Argues the action ID needs no step: it only needs to be unique, nothing depends on its value, so random regeneration is harmless.
+- `#L80-L91` — Contrasts with a random value used in calculations (which would break determinism); a network-fetched ID might warrant a step for caching, not determinism.
+- `#L92-L97` — Introduces the action policy as a gate on whether the AI has authority to perform an action.
+- `#L98-L106` — Lists policy mappings: inspect log/changes are `read`, disable feature is `write`, rollback release is `approval`.
+- `#L107-L113` — Defines how the harness interprets policies: read allowed, write needs approval, approval requires approval, help/terminal map to actions.
+- `#L114-L120` — Explains policies let the harness handle a few categories instead of 30 per-action `if` statements.
+- `#L121-L128` — Writes an approval-policy branch as a placeholder to be filled when human approval is implemented.
+- `#L129-L133` — Leaves `read` as the fallback executed by default, with an option to be explicit.

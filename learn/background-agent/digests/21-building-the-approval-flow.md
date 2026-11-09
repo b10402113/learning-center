@@ -1,41 +1,39 @@
 ---
-source: sources/background-agent/20261105/21-building-the-approval-flow.vtt
+source: sources/background-agent/20261109/course/21-building-the-approval-flow.txt
 source_type: text
-source_lines: 1431
+source_lines: 187
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
-supplements:
-  - server.md#L1-L216
-  - server.md#L217-L504
-  - web.md#L1-L713
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 ---
 
 # L1 overview
 
-- Proposals live in your database — `proposedAction()` persists the decision + inputs so the inbox button can restore that exact action and its arguments later; relying on Inngest state instead would bury application logic in the workflow engine.
-- Staleness is a first-class field — the proposal is saved with `expectedVersion = state.world.version` (a reference to the server-side snapshot), because an approval sent today may be clicked a week later against drifted state.
-- Propose then re-read — one step creates the proposal and returns only `proposal.id`, the next step (`read human`) re-queries the DB instead of reusing the local variable; the instructor lost two hours to the opposite pattern producing permanently stale proposals.
-- The wait is `step.waitForEvent("wait for human")` on `agent/approval.decided`, filtered on `async.data.proposal.id` with a 10s timeout, inside a `while (proposal.status === "pending")` poll — without that filter, one person's approval would approve every proposal in the system.
-- Rejection path — `stop after human` step sets the run status to `escalated` and returns the human decision, deliberately giving up ("I told you I needed to do this and you're saying no, so you figure it out"); other agents retry another path instead.
-- Approved path — `recheck approved state` re-reads the world; if `fresh.world.version !== input.version` the `invalidate approval` step calls `staleProposal()` (clearing it from the inbox) and `continue`s the outer loop to re-decide, otherwise execution falls through to the action.
-- Proactive alternative — invalidate stale pending proposals on every state change so the operator never even sees an obsolete inbox item; not built in the course.
-- Remaining work flagged at the end: self-approval, and deleting the leftover guard `return` so a fresh, approved proposal reaches the execute step.
+- New imports and persistence — adds `getProposal`, `proposedAction`, and `staleProposal` from the agent data layer so each approval request is stored as a proposed action in the app's own database and linked back to an inbox button.
+- Stale-proposal reasoning — because approvals are async, the state can drift between proposal and decision; a saved state snapshot/version lets the harness detect staleness and force another loop.
+- Building the approval branch — replaces the empty approval-policy branch with a propose step, a correlated `waitForEvent`, a reread of the decision, and an escalation path on rejection.
+- Reading from the database, not cache — re-fetches the proposal and state at each step because the run may resume much later and the cached value may be overridden; mirrors the discipline of database transactions.
+- Freshness fence and invalidation — re-checks the world version after approval, marks stale proposals stale (clearing the inbox), and loops back instead of acting on an outdated state.
 
 # L2 detail
 
-- `#L1-L46` — New imports from the agent data layer: `getProposal`, `proposedAction`, `staleProposal`; `getProposal` just queries the saved proposal.
-- `#L47-L160` — Why store a proposed action at all: approval through the inbox has to find the original action and its arguments to re-run them; application logic belongs in your DB, while Inngest owns workflow logic — and it enables a dashboard/history of everything your agents proposed.
-- `#L161-L315` — The stale-proposal concept: state snapshotted at propose time, a person may look a week later when the state is different, so the agent should loop again and re-observe rather than run an action against a world that moved.
-- `#L316-L378` — Inside `if policy === "approval"`: build inputs with `expectedVersion: state.world.version`; the version is a pointer reconciled against the snapshot the fake server stores on every state change, so snapshots aren't passed around.
-- `#L379-L481` — Step one, `propose action`: `proposedAction({ envId, runId, actionId: decision.action, inputs: state, cycle })` then `return proposal.id`, keeping the cycle counter.
-- `#L482-L524` — Step two, `read human`: `getProposal(proposalId)` in its own `step.run`, deliberately named apart from the local variable (no hoisting confusion).
-- `#L525-L668` — The gotcha and its fix: don't carry the created proposal forward — a step result can be a cached/overridden value that no longer matches the DB, so always re-read the source of truth; the same rule as a database transaction where you wait for the write before reading. Instructor re-hit this trap while writing the curriculum and got stale proposals for two hours.
-- `#L669-L770` — Q&A sharpening the trap: the service can stop mid-step and restart, someone else may have resolved and cleaned up the proposal meanwhile, so the row can differ from creation time to read time.
-- `#L771-L902` — The pending loop: `while (proposal.status === "pending")`, increment check, `step.waitForEvent("wait for human", { cycle })`, then re-fetch the proposal every pass (poll-like); includes a TypeScript inference hissy fit on the proposal id that resolves to a missing second argument.
-- `#L903-L1039` — Event contract: `agent/approval.decided` filtered on `async.data.proposal.id === proposalId` (otherwise one approval approves all tasks, "you would lose your job"), `timeout: "10s"`, plus a misplaced argument the instructor removes, then `reconcile human` to grab the latest answered proposal.
-- `#L1040-L1170` — Outside the loop: `if (proposal.status !== "approved")` → `step.run("stop after human")` sets the run to `escalated` and returns `humanDecision`; discusses why escalated (not completed, not errored) and other rejection strategies like finding an alternate path.
-- `#L1171-L1236` — Approved branch: `step.run("recheck approved state")` → `getAgentState(envId, runId)`; the money-transfer example — you had funds when the approval was sent, you approved three weeks later with an empty account, so check before acting.
-- `#L1237-L1293` — Proactive alternative design: on every state change, sweep pending proposals and delete the invalid ones from the inbox so a person only ever sees approvable, relevant actions (left as an exercise).
-- `#L1294-L1431` — The guard: `if (fresh.world.version !== input.version)` → `step.run("invalidate approval")` → `staleProposal(proposalId)` marks it stale so it leaves the inbox, then `continue` the outer loop to look at state again; deleting the old `return` finally lets an approved+fresh proposal fall through and execute the action.
+- `#L1-L6` — Introduces the lesson: wire the approval / human-in-the-loop flow into the workflow file, starting with three new imports from agent data.
+- `#L7-L20` — Explains `getProposal` (DB lookup of a saved proposal), `proposedAction` (an action parked in the database when it needs approval, so the inbox can restore it later), and the case for owning this in app logic rather than leaning on Inngest state.
+- `#L21-L41` — Defines the stale proposal: an approval sent today may be answered a week later, so a snapshot/version of state is saved with the proposal and compared on decision to detect drift and force another observation loop.
+- `#L42-L51` — Enters the approval-policy branch that currently does nothing; gathers inputs, using `state.world.version` as a lightweight snapshot reference rather than passing snapshots around.
+- `#L52-L58` — Creates a proposal ID to track the request, keeps the cycle counter, and opens an async step for the meaningful work.
+- `#L59-L66` — Builds the `proposedAction` call with environment ID, run ID, `decision.action`, and the input state, then returns the new proposal ID.
+- `#L67-L73` — Starts a second step to fetch the proposal by ID instead of reusing the in-scope variable, and poses why it is done this way.
+- `#L74-L86` — Answers: because the workflow is async, nothing should be cached or hoisted; read fresh from the database so an override or long delay cannot leave a stale in-memory value.
+- `#L87-L100` — Admits the trap was learned the hard way (stuck two hours during curriculum writing): reading the cached proposal produced stale approvals because days passed between proposal and use.
+- `#L101-L108` — Draws the analogy to database transactions: you wait for the write to finalize and then read from the database as the source of truth, never trusting an earlier value.
+- `#L109-L120` — Opens a while loop on `proposal.status === pending`, increments the check counter, and calls `step.waitForEvent` for the human decision.
+- `#L121-L131` — Uses the event `agent/approval.decided`, filters on `async.data.proposal.ID` matching this proposal so one approval cannot unlock unrelated tasks, and sets a 10-second timeout.
+- `#L132-L136` — Cleans up a misplaced argument, then confirms the wait: event, filter, 10-second timeout.
+- `#L137-L149` — Reconciles the answered proposal in a step, re-fetches the latest proposal, then after the loop checks status; anything not `approved` goes to a stop step that sets the run to `escalated`.
+- `#L150-L158` — Discusses disapproval policy: some agents retry another path, but this one gives up and escalates, and records the human decision before returning.
+- `#L159-L169` — On approval, re-fetches fresh state in a step; motivates with a money-transfer example where conditions may have changed between request and approval, so the action must be re-validated.
+- `#L170-L175` — Suggests a more proactive alternative: on every state change, scan pending proposals and clear invalid ones so people never see stale approvals (not built in this lesson).
+- `#L176-L182` — Compares the fresh world version to the input version; on mismatch, runs an invalidate-approval step and marks the proposal stale so it leaves the inbox.
+- `#L183-L187` — Continues the outer loop to re-observe state after invalidation, then removes the leftover return statement so approved-and-fresh runs fall through to execute the action.

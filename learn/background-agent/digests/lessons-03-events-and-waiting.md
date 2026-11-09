@@ -1,14 +1,14 @@
 ---
-source: sources/background-agent/20261105/lessons/03-events-and-waiting/index.md
+source: sources/background-agent/20261109/supplement/lessons/03-events-and-waiting/index.md
 source_type: text
 source_lines: 137
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 supplements:
-  - server.md#L505-L691
-  - server.md#L1035-L1051
+  - server.md#L672-L858
+  - server.md#L863-L879
   - service.md#L1-L221
 ---
 

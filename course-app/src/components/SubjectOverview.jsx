@@ -8,10 +8,16 @@ import {
 import { followInternalLink } from "../lib/navigation.mjs";
 import { pathFor, pathForBlocks } from "../lib/route.mjs";
 
-function NodeLink({ course, node }) {
+function NodeLink({ course, node, onNavigate }) {
+  const href = pathFor(course.subject, node.id);
   return (
     <a
-      href={pathFor(course.subject, node.id)}
+      href={href}
+      onClick={(event) => {
+        if (followInternalLink(event, href, onNavigate)) {
+          event.preventDefault();
+        }
+      }}
       className="group flex items-start gap-3 rounded-xl bg-surface px-3.5 py-3 ring-1 ring-hairline transition-colors hover:bg-surface hover:ring-accent/40"
     >
       <span className="mt-0.5 w-6 shrink-0 font-mono text-[10px] tabular-nums text-ink-soft">
@@ -138,7 +144,7 @@ export default function SubjectOverview({ course, onNavigate = null }) {
           </span>
         </div>
         <ChapterRule className="mb-4" />
-        <RoadmapCanvas course={course} />
+        <RoadmapCanvas course={course} onNavigate={onNavigate} />
       </section>
 
       <section className="mt-12 md:hidden">
@@ -167,7 +173,11 @@ export default function SubjectOverview({ course, onNavigate = null }) {
                 <ul className="space-y-2">
                   {nodes.map((node) => (
                     <li key={node.id}>
-                      <NodeLink course={course} node={node} />
+                      <NodeLink
+                        course={course}
+                        node={node}
+                        onNavigate={onNavigate}
+                      />
                     </li>
                   ))}
                 </ul>

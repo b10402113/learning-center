@@ -6,6 +6,7 @@ import { ConceptList, TocDetails } from "./ContextRail.jsx";
 import { railBlocks } from "../lib/blocks.mjs";
 import { tierDotClass } from "./Sidebar.jsx";
 import { articleForClipboard, copyText } from "../lib/clipboard.mjs";
+import { followInternalLink } from "../lib/navigation.mjs";
 import { pathFor } from "../lib/route.mjs";
 import { stepNeighbors } from "../lib/steps.mjs";
 
@@ -20,11 +21,17 @@ function readingMinutes(markdown) {
   return Math.max(1, Math.round(chars / 450));
 }
 
-function StepLink({ course, node, step, direction }) {
+function StepLink({ course, node, step, direction, onNavigate }) {
   const next = direction === "next";
+  const href = pathFor(course.subject, node.id, step.id);
   return (
     <a
-      href={pathFor(course.subject, node.id, step.id)}
+      href={href}
+      onClick={(event) => {
+        if (followInternalLink(event, href, onNavigate)) {
+          event.preventDefault();
+        }
+      }}
       className={`group flex items-center gap-3 rounded-2xl px-4 py-3.5 ring-1 shadow-soft transition duration-300 hover:-translate-y-0.5 hover:shadow-lift ${
         next
           ? "bg-accent-tint ring-accent/30 hover:ring-accent/50 sm:flex-row-reverse"
@@ -155,6 +162,7 @@ export default function StepView({
   // The article body repeats the step title as an H1; the header already
   // renders it, so drop the leading heading before rendering.
   const body = String(step.articleMd || "").replace(/^\s*#\s+.*(?:\r?\n)+/, "");
+  const nodeHref = pathFor(course.subject, node.id);
   const copyMarkdown = step.hasContent
     ? articleForClipboard(step.articleMd, {
         title: step.title,
@@ -175,7 +183,12 @@ export default function StepView({
             /
           </span>
           <a
-            href={pathFor(course.subject, node.id)}
+            href={nodeHref}
+            onClick={(event) => {
+              if (followInternalLink(event, nodeHref, onNavigate)) {
+                event.preventDefault();
+              }
+            }}
             className="transition-colors hover:text-accent"
           >
             {node.title}
@@ -331,6 +344,7 @@ export default function StepView({
               node={node}
               step={previous}
               direction="previous"
+              onNavigate={onNavigate}
             />
           ) : (
             <span aria-hidden="true" className="hidden sm:block" />
@@ -341,6 +355,7 @@ export default function StepView({
               node={node}
               step={next}
               direction="next"
+              onNavigate={onNavigate}
             />
           ) : (
             <span aria-hidden="true" className="hidden sm:block" />

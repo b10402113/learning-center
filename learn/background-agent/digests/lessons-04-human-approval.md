@@ -1,15 +1,15 @@
 ---
-source: sources/background-agent/20261105/lessons/04-human-approval/index.md
+source: sources/background-agent/20261109/supplement/lessons/04-human-approval/index.md
 source_type: text
 source_lines: 140
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 supplements:
-  - server.md#L217-L504
-  - server.md#L812-L877
-  - web.md#L1-L713
+  - server.md#L52-L339
+  - server.md#L880-L945
+  - web.md#L14-L726
 ---
 
 # L1 overview

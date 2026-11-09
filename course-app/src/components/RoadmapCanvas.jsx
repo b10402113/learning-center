@@ -1,5 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { NodeGlyph } from "./Glyphs.jsx";
+import { followInternalLink } from "../lib/navigation.mjs";
 import { pathFor } from "../lib/route.mjs";
 import { CARD_H, CARD_W, layoutRoadmap, neighbors } from "../lib/roadmap.mjs";
 
@@ -29,7 +30,7 @@ function ZoomButton({ label, children, onClick }) {
  * every node card links to its node page. Fits the graph to the container and
  * lets the reader drag or zoom when it gets dense.
  */
-export default function RoadmapCanvas({ course }) {
+export default function RoadmapCanvas({ course, onNavigate = null }) {
   const layout = useMemo(() => layoutRoadmap(course.nodes), [course.nodes]);
   const containerRef = useRef(null);
   const dragRef = useRef({ active: false, moved: false, x: 0, y: 0 });
@@ -223,10 +224,16 @@ export default function RoadmapCanvas({ course }) {
           {course.nodes.map((node) => {
             const position = layout.positions.get(node.id);
             if (!position) return null;
+            const href = pathFor(course.subject, node.id);
             return (
               <a
                 key={node.id}
-                href={pathFor(course.subject, node.id)}
+                href={href}
+                onClick={(event) => {
+                  if (followInternalLink(event, href, onNavigate)) {
+                    event.preventDefault();
+                  }
+                }}
                 onPointerEnter={() => setHovered(node.id)}
                 onPointerLeave={() => setHovered(null)}
                 onFocus={() => setHovered(node.id)}

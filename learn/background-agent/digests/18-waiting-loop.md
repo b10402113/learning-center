@@ -1,39 +1,32 @@
 ---
-source: sources/background-agent/20261105/18-waiting-loop.vtt
+source: sources/background-agent/20261109/course/18-waiting-loop.txt
 source_type: text
-source_lines: 644
+source_lines: 95
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
-supplements:
-  - server.md#L1-L216
-  - server.md#L505-L691
-  - server.md#L1035-L1051
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 ---
 
 # L1 overview
 
-- The waiting loop is a `while (true)` nested inside the existing cycle loop: each pass reads the run's `eventSequence`, stops if the run went terminal, and otherwise breaks out to wait.
-- A `check` counter (with the outer cycle cursor) becomes the step-name suffix, so every poll and every wait gets a distinct, replayable checkpoint id.
-- The poll is a guard, not the mechanism: `latest.eventSequence > state.eventSequence` means new signal already arrived, so break immediately instead of waiting.
-- Terminal re-check is mandatory every iteration — in a distributed, non-request/response system the run can complete, fail, cancel, escalate or be superseded underneath you; skipping this check produces "a lot of bugs".
-- The wait itself is `step.waitForEvent('wait-for-service-N-M', { event: 'incident/updated', if: 'async.data.runId == "<runId>"', timeout: '10s' })` — effectively a `setTimeout` that also listens for a matching event.
-- `step.sleep` + querying an event store is the alternative and is worse: it can only observe state after the full interval, which is fine at 10s and actively harmful at 30 minutes.
+- Building the wait loop — introduce a `check` counter and a `while (true)` loop that each iteration reads the event sequence and the current run, calling each iteration a "check".
+- Re-validating distributed state — before each step, confirm the run is still valid (not completed/failed/canceled/escalated/superseded), since asynchronous distributed work can change state underneath you.
+- Waiting on a new event — when the latest event sequence exceeds the stored one, increment `check` and call `step.waitForEvent` for `incident/updated` filtered by matching `runId`, with a 10-second timeout.
+- waitForEvent vs. sleep — a `step.sleep` plus querying an event store only checks after the full delay, while `waitForEvent` resumes as soon as the matching event arrives; the difference matters at longer waits like 30 minutes.
+- Cleanup — the now-redundant `request help` decision action branch below is removed because it is handled above; TypeScript narrows the types.
 
 # L2 detail
 
-- `#L1-L40` — Framing: several valid designs, no single right answer; introduces `let check = 0` as the variable tracking whether the loop may keep going.
-- `#L40-L88` — Chooses `while (true)` deliberately as the first example because everyone already understands it, even though it is not strictly required.
-- `#L88-L112` — Inside the loop: `latest = await step.run('read-event-sequence-...')` with the cycle cursor appended to the step id.
-- `#L112-L145` — Naming convention explained: the inner loop's cursor is the `check`, so the code is literally "checking" for events on every pass.
-- `#L145-L175` — The step also fetches the current run by id (`getRun(runId)`) to make sure the in-memory view is up to date.
-- `#L175-L230` — Guard clause copied from the main loop: if `latest.status` is completed, failed, cancelled, escalated or superseded, do nothing and stop.
-- `#L230-L290` — Why that guard exists at all: this is asynchronous and distributed, another instance may have driven the same run id to completion, so state can change underneath your feet.
-- `#L290-L340` — The break condition: `latest.eventSequence > state.eventSequence` — the service fired new events, so exit the `while` and let the outer cycle continue.
-- `#L340-L400` — Increments `check`, then introduces `await step.waitForEvent('wait-for-service-<cycle>-<check>')` as the pause point.
-- `#L400-L450` — Event naming: `incident/updated` is an arbitrary name created by the harness, and the slash is the naming convention Inngest recommends.
-- `#L450-L510` — The `if` filter: `async` is the handle to the received event's data, and the string is interpolated to `async.data.runId == "<this runId>"` so only this run's incident updates wake it.
-- `#L510-L560` — Timeout semantics: `10s`, then move on regardless — "a setTimeout with a conditional of listening for an event", which is why plain `setTimeout` is unavailable here.
-- `#L560-L630` — Compares with `step.sleep('10s')` then querying an event store: it can only look after the full sleep, so you lose the wake-up-in-2-seconds case; at 30 minutes that lag becomes a real problem.
-- `#L630-L644` — Closes the inner loop with a `continue` on the outer cycle loop, then deletes the now-redundant `decision.action === 'request_help'` branch because it is handled above.
+- `#L1-L8` — No single right way; introduce `let check = 0` as the variable tracking whether we can keep going.
+- `#L9-L17` — `while (true)` as the first example; each iteration awaits `step.run` to read the event sequence, tracking both the cycle and check cursors.
+- `#L18-L23` — Fetch the current run by ID, then copy the earlier guard that ignores runs already completed, failed, canceled, escalated, or superseded.
+- `#L24-L31` — Why the guard matters in distributed async execution: state can change under you, so validate before each step or expect bugs.
+- `#L32-L38` — If `latest.eventSequence` (events fired by the service) is greater than `state.eventSequence`, stop/exit the wait and increment `check`.
+- `#L39-L44` — Rationale for hard-coding a wait in the harness: many events are arriving, so pause to see what happens next; begin `step.waitForEvent`.
+- `#L45-L51` — The `waitForEvent` object names the event `incident/updated`; the slash is a recommended naming convention.
+- `#L52-L61` — The string filter is interpreted as JavaScript with `async` as the received event handle; match `async.data.runId` to this run ID.
+- `#L62-L68` — Set a 10-second timeout; either the matching event arrives or 10 seconds pass, then move on.
+- `#L69-L78` — Compare with `step.sleep` plus an event-store query: that only checks after the full delay, so waitForEvent is the better optimization for long waits.
+- `#L79-L87` — Continue the outer loop; double-check the code, then remove the now-redundant `request help` branch below.
+- `#L88-L95` — TypeScript flags the no-overlap removal, with commentary on appreciating typed code while not wanting to author it.

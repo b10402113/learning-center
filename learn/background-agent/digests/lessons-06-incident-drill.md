@@ -1,15 +1,15 @@
 ---
-source: sources/background-agent/20261105/lessons/06-incident-drill/index.md
+source: sources/background-agent/20261109/supplement/lessons/06-incident-drill/index.md
 source_type: text
 source_lines: 136
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 supplements:
-  - server.md#L217-L504
-  - server.md#L929-L969
-  - web.md#L1-L713
+  - server.md#L52-L339
+  - server.md#L340-L380
+  - web.md#L14-L726
 ---
 
 # L1 overview

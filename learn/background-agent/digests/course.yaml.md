@@ -1,11 +1,11 @@
 ---
-source: sources/background-agent/20261105/course.yaml
+source: sources/background-agent/20261109/supplement/course.yaml
 source_type: text
 source_lines: 61
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 ---
 
 # L1 overview

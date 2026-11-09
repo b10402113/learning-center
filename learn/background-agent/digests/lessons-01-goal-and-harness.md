@@ -1,15 +1,15 @@
 ---
-source: sources/background-agent/20261105/lessons/01-goal-and-harness/index.md
+source: sources/background-agent/20261109/supplement/lessons/01-goal-and-harness/index.md
 source_type: text
 source_lines: 136
 status: absorbed
-absorbed_at: 2026-11-05
-created: 2026-11-05
-updated: 2026-11-05
+absorbed_at: 2026-11-09
+created: 2026-11-09
+updated: 2026-11-09
 supplements:
-  - server.md#L1-L216
-  - server.md#L970-L1006
-  - server.md#L1052-L1066
+  - server.md#L381-L596
+  - server.md#L635-L671
+  - server.md#L1072-L1086
 ---
 
 # L1 overview

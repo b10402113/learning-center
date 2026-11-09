@@ -3,79 +3,77 @@ id: make-progress-durable
 title: "讓進度可持久"
 subject: background-agent
 tier: 2
-order: 8
+order: 5
 status: written
-goal: "能解釋 replay 為何跳過已完成 step，並說明 workflow body 必須確定性、step 必須幂等。"
+goal: "能說明 replay/memoization 與 workflow 確定性，並把迴圈拆成具名 durable steps。"
 digests:
   - 10-durable-execution.md
   - 11-workflow-state.md
+  - 12-multi-step-loop.md
   - lessons-02-durable-execution.md
   - server.md
 prerequisites:
-  - learn/background-agent/nodes/two-clocks-two-stores.md
-  - learn/background-agent/nodes/first-runnable-loop.md
+  - learn/background-agent/nodes/custom-tool-loop.md
 steps:
-  - id: single-step-is-not-durable
+  - id: replay-is-not-a-stack
     author: "google/gemini-3.8-flash"
-    title: "全部都在一個 step 裡"
-    purpose: "能指出把整個迴圈放進一個 step 的崩潰窗口，並說明重啟為何會重做觀察、模型呼叫與副作用。"
+    title: "Durable Execution 的運作原理：Memoize 重播而非還原 Call Stack"
+    purpose: "能說明 durable execution 以 memoize 的 step 結果重播，而非恢復暫停的 JavaScript call stack。"
     sources:
-      - "[[sources/background-agent/20261105/10-durable-execution.vtt#L1-L94]]"
-      - "[[sources/background-agent/20261105/10-durable-execution.vtt#L95-L123]]"
-      - "[[sources/background-agent/20261105/lessons/02-durable-execution/index.md#L6-L20]]"
-      - "[[sources/background-agent/20261105/lessons/02-durable-execution/index.md#L37-L50]]"
-      - "[[sources/background-agent/20261105/lessons/02-durable-execution/index.md#L251-L258]]"
-  - id: replay-skips-completed-steps
+      - "[[sources/background-agent/20261109/course/10-durable-execution.txt#L1-L14]]"
+      - "[[sources/background-agent/20261109/course/10-durable-execution.txt#L41-L49]]"
+      - "[[sources/background-agent/20261109/supplement/lessons/02-durable-execution/index.md#L7-L25]]"
+  - id: deterministic-workflow-idempotent-steps
     author: "google/gemini-3.8-flash"
-    title: "Replay 不是恢復暫停的堆疊"
-    purpose: "能解釋 replay 重跑 workflow body 卻跳過已完成 step，並說明這不是恢復 JS 堆疊。"
+    title: "打造可重放的 Workflow：確定性邏輯與步驟冪等性"
+    purpose: "能讓 workflow 保持確定性，並把每個 step 寫成可安全重試的冪等操作。"
     sources:
-      - "[[sources/background-agent/20261105/10-durable-execution.vtt#L313-L364]]"
-      - "[[sources/background-agent/20261105/10-durable-execution.vtt#L365-L401]]"
-      - "[[sources/background-agent/20261105/lessons/02-durable-execution/index.md#L21-L30]]"
-      - "[[sources/background-agent/20261105/server/agent.ts#L1-L28]]"
-      - "[[sources/background-agent/20261105/server/agent-workflow.ts#L1-L216]]"
-  - id: deterministic-workflow-body
+      - "[[sources/background-agent/20261109/course/10-durable-execution.txt#L15-L27]]"
+      - "[[sources/background-agent/20261109/course/10-durable-execution.txt#L28-L36]]"
+      - "[[sources/background-agent/20261109/course/10-durable-execution.txt#L37-L40]]"
+      - "[[sources/background-agent/20261109/supplement/lessons/02-durable-execution/index.md#L251-L258]]"
+  - id: business-state-vs-workflow-state
     author: "google/gemini-3.8-flash"
-    title: "step 之外的程式碼必須是確定性的"
-    purpose: "能說明 step.run 之外的 workflow body 必須確定性，並指出時間與隨機會如何破壞 replay。"
+    title: "區分業務狀態與工作流程狀態：長時間運行 Agent 的升級策略"
+    purpose: "能區分 Postgres 的 business state 與 Inngest 的 workflow state，並為在跑中的 run 規劃升級。"
     sources:
-      - "[[sources/background-agent/20261105/10-durable-execution.vtt#L124-L204]]"
-      - "[[sources/background-agent/20261105/lessons/02-durable-execution/index.md#L6-L20]]"
-      - "[[sources/background-agent/20261105/server/agent-workflow.ts#L1-L216]]"
-  - id: idempotent-steps
+      - "[[sources/background-agent/20261109/course/11-workflow-state.txt#L1-L20]]"
+      - "[[sources/background-agent/20261109/course/11-workflow-state.txt#L21-L36]]"
+      - "[[sources/background-agent/20261109/supplement/lessons/02-durable-execution/index.md#L27-L30]]"
+  - id: split-loop-into-durable-steps
     author: "google/gemini-3.8-flash"
-    title: "step 必須是冪等的"
-    purpose: "能說明 step 的副作用為何必須幂等，並用 idempotency key 解釋重播為何不重複收費。"
+    title: "重構 Agent 迴圈：拆解為具名且可記憶的有界工作流步驟"
+    purpose: "能把單一 step 的迴圈改寫成有界、具名、可 memoize 的 durable steps，並抽出行動 helper。"
     sources:
-      - "[[sources/background-agent/20261105/10-durable-execution.vtt#L205-L283]]"
-      - "[[sources/background-agent/20261105/lessons/02-durable-execution/index.md#L6-L20]]"
-      - "[[sources/background-agent/20261105/server/agent-data.ts#L1-L288]]"
-      - "[[sources/background-agent/20261105/server/agent-workflow.ts#L1-L216]]"
-  - id: checkpoints-and-live-deploys
+      - "[[sources/background-agent/20261109/course/12-multi-step-loop.txt#L1-L84]]"
+      - "[[sources/background-agent/20261109/course/12-multi-step-loop.txt#L105-L122]]"
+      - "[[sources/background-agent/20261109/course/11-workflow-state.txt#L37-L129]]"
+      - "[[sources/background-agent/20261109/supplement/lessons/02-durable-execution/index.md#L37-L243]]"
+      - "[[sources/background-agent/20261109/supplement/server/agent-workflow.ts#L1-L216]]"
+      - "[[sources/background-agent/20261109/supplement/server/agent-log.ts#L1-L41]]"
+  - id: step-boundaries-and-portability
     author: "google/gemini-3.8-flash"
-    title: "兩個時鐘，兩個儲存位置"
-    purpose: "能說明 checkpoint 由平台保存、我們只存業務狀態，並權衡長跑中部署新版的代價。"
+    title: "如何劃定 Checkpoint 邊界：非同步工作一次只做一個 Step"
+    purpose: "能用「非同步工作一次一個 step」的判準決定 checkpoint 邊界，並對應到 Temporal 等工具。"
     sources:
-      - "[[sources/background-agent/20261105/11-workflow-state.vtt#L1-L117]]"
-      - "[[sources/background-agent/20261105/11-workflow-state.vtt#L118-L237]]"
-      - "[[sources/background-agent/20261105/10-durable-execution.vtt#L284-L312]]"
-      - "[[sources/background-agent/20261105/lessons/02-durable-execution/index.md#L31-L36]]"
-      - "[[sources/background-agent/20261105/server/agent-data.ts#L1-L288]]"
-created: 2026-11-05
-updated: 2026-11-05
+      - "[[sources/background-agent/20261109/course/12-multi-step-loop.txt#L85-L104]]"
+      - "[[sources/background-agent/20261109/course/12-multi-step-loop.txt#L123-L145]]"
+      - "[[sources/background-agent/20261109/supplement/lessons/02-durable-execution/index.md#L31-L36]]"
+      - "[[sources/background-agent/20261109/supplement/lessons/02-durable-execution/index.md#L259-L265]]"
+created: 2026-11-09
+updated: 2026-11-08
 ---
 
 # 讓進度可持久
 
 ## Lesson
 
-只要整個迴圈包在一個 step 裡，程序一死就得從頭再來，模型呼叫與副作用都會重複。這個節點說明 step 是記憶化的單位、replay 不是恢復堆疊，以及 workflow body 的確定性與 step 的幂等性為何是耐久執行的兩個前提。
+當整個迴圈塞在一個 step 裡，任何重啟都會從頭再跑一次模型與副作用；durable execution 把觀察、決策、行動與報告拆成可 memoize 的 checkpoint。這個節點解釋 replay 不是恢復暫停的 call stack，而是照確定性 workflow 重播已完成的 step，並要求每個 step 自己容忍重試。
 
 ## Steps
 
-1. [全部都在一個 step 裡](make-progress-durable/single-step-is-not-durable.md)
-2. [Replay 不是恢復暫停的堆疊](make-progress-durable/replay-skips-completed-steps.md)
-3. [step 之外的程式碼必須是確定性的](make-progress-durable/deterministic-workflow-body.md)
-4. [step 必須是冪等的](make-progress-durable/idempotent-steps.md)
-5. [兩個時鐘，兩個儲存位置](make-progress-durable/checkpoints-and-live-deploys.md)
+1. [Durable Execution 的運作原理：Memoize 重播而非還原 Call Stack](make-progress-durable/replay-is-not-a-stack.md)
+2. [打造可重放的 Workflow：確定性邏輯與步驟冪等性](make-progress-durable/deterministic-workflow-idempotent-steps.md)
+3. [區分業務狀態與工作流程狀態：長時間運行 Agent 的升級策略](make-progress-durable/business-state-vs-workflow-state.md)
+4. [重構 Agent 迴圈：拆解為具名且可記憶的有界工作流步驟](make-progress-durable/split-loop-into-durable-steps.md)
+5. [如何劃定 Checkpoint 邊界：非同步工作一次只做一個 Step](make-progress-durable/step-boundaries-and-portability.md)

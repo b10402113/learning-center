@@ -197,6 +197,10 @@ export default function BlockGraph({
   const [hovered, setHovered] = useState(null);
   const [ready, setReady] = useState(false);
   const [fitted, setFitted] = useState(!settleImmediately);
+  // A settled graph starts with zero cooldown so the first paint is instant.
+  // Once it is revealed we restore a cooldown budget so dragging a node can
+  // reheat the simulation and pull its neighbours along, like the block graph.
+  const [cooldownTicks, setCooldownTicks] = useState(settleImmediately ? 0 : 200);
 
   const byId = useMemo(
     () => new Map(data.nodes.map((node) => [node.id, node])),
@@ -213,6 +217,7 @@ export default function BlockGraph({
     setHovered(null);
     fittedForRef.current = null;
     setFitted(!settleImmediately);
+    setCooldownTicks(settleImmediately ? 0 : 200);
   }, [data, settleImmediately]);
 
   // Softer charge and a little collision keep the 50-node course tidy.
@@ -453,6 +458,7 @@ export default function BlockGraph({
       fittedForRef.current = data;
       fitView(0, settleImmediately ? INITIAL_FIT_PADDING : 96);
       setFitted(true);
+      if (settleImmediately) setCooldownTicks(200);
     }, 120);
     return () => window.clearTimeout(timer);
   }, [settleImmediately, ready, data]);
@@ -525,9 +531,10 @@ export default function BlockGraph({
               fittedForRef.current = data;
               fitView(0, settleImmediately ? INITIAL_FIT_PADDING : 96);
               setFitted(true);
+              if (settleImmediately) setCooldownTicks(200);
             }}
             warmupTicks={settleImmediately ? 180 : 0}
-            cooldownTicks={settleImmediately ? 0 : 200}
+            cooldownTicks={cooldownTicks}
             enableNodeDrag
             style={{
               opacity: fitted ? 1 : 0,
