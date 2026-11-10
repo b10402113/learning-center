@@ -26,6 +26,7 @@ import matter from "gray-matter";
 import {
   BLOCK_SLUG,
   asDateString,
+  auditConcepts,
   blocksDir,
   aliasMap,
   computeCoverage,
@@ -90,7 +91,7 @@ function readNodeFiles(root, subject) {
   const nodes = new Map();
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    const parsed = matter(readFileSync(join(dir, entry.name), "utf8"));
+    const parsed = matter(readFileSync(join(dir, entry.name), "utf8"), {});
     const id = entry.name.replace(/\.md$/, "");
     const steps = new Map();
     for (const step of Array.isArray(parsed.data.steps) ? parsed.data.steps : []) {
@@ -120,7 +121,7 @@ function readAudits(root, subject) {
 function articleHasBody(path) {
   if (!existsSync(path)) return false;
   try {
-    const { content } = matter(readFileSync(path, "utf8"));
+    const { content } = matter(readFileSync(path, "utf8"), {});
     return content.replace(/^\s*#\s+[^\n]*\n?/, "").trim().length > 0;
   } catch {
     return false;
@@ -178,6 +179,7 @@ function auditManifest(root, subject, { node = null, step = null } = {}) {
     nodes: manifestNodes,
     blocks: blocks.map((block) => ({
       id: block.id,
+      file: block.file,
       label: typeof block.data?.label === "string" ? block.data.label : block.id,
       type: block.data?.type ?? null,
       status: block.data?.status ?? null,
@@ -276,43 +278,50 @@ function buildCoverage(root, subject) {
   for (const audit of audits) {
     const node = nodes.get(audit.node);
     if (!node || node.status !== "written") continue;
-    for (const [stepId, payload] of Object.entries(audit.steps ?? {})) {
-      const step = node.steps.get(stepId);
-      if (!step) continue;
-      const article = join(root, "learn", subject, "nodes", audit.node, `${stepId}.md`);
-      if (!existsSync(article)) continue;
-      const concepts = [];
-      for (const candidate of Array.isArray(payload?.concepts) ? payload.concepts : []) {
-        if (!candidate || typeof candidate.slug !== "string") continue;
-        const slug = candidate.slug.trim();
-        if (!BLOCK_SLUG.test(slug)) continue;
-        let block = null;
-        const matchBlock = candidate.match?.block;
-        if (typeof matchBlock === "string" && matchBlock.trim()) {
-          block = canonicalBlockId(aliases, matchBlock.trim());
-        } else if (["new", "reuse", "merge"].includes(candidate.match?.kind) && blockById.has(slug)) {
-          block = slug;
-        }
-        if (block && !blockById.has(block)) block = null;
-        concepts.push({
-          slug,
-          label: typeof candidate.label === "string" ? candidate.label : slug,
-          sources: Array.isArray(candidate.sources) ? candidate.sources : [],
-          block,
-          note: typeof candidate.note === "string" ? candidate.note : "",
-        });
+    for (const candidate of auditConcepts(audit)) {
+      if (!candidate || typeof candidate.slug !== "string") continue;
+      const slug = candidate.slug.trim();
+      if (!BLOCK_SLUG.test(slug)) continue;
+      let block = null;
+      const matchBlock = candidate.match?.block;
+      if (typeof matchBlock === "string" && matchBlock.trim()) {
+        block = canonicalBlockId(aliases, matchBlock.trim());
+      } else if (["new", "reuse", "merge"].includes(candidate.match?.kind) && blockById.has(slug)) {
+        block = slug;
       }
-      const deduped = dedupeConcepts(concepts);
-      const overflow = deduped.length > 6;
-      const entry = { concepts: overflow ? deduped.slice(0, 6) : deduped };
-      const note = typeof payload?.note === "string" ? payload.note.trim() : "";
-      if (note) entry.note = note;
-      if (overflow) {
-        entry.overflow = true;
-        entry.overflowCount = deduped.length;
+      if (block && !blockById.has(block)) block = null;
+      const concept = {
+        slug,
+        label: typeof candidate.label === "string" ? candidate.label : slug,
+        sources: Array.isArray(candidate.sources) ? candidate.sources : [],
+        block,
+        note: typeof candidate.note === "string" ? candidate.note : "",
+      };
+      for (const stepId of candidate.steps ?? []) {
+        const step = node.steps.get(stepId);
+        if (!step) continue;
+        const article = join(root, "learn", subject, "nodes", audit.node, `${stepId}.md`);
+        if (!existsSync(article)) continue;
+        const key = `${audit.node}/${stepId}`;
+        const entry = steps[key] ?? { concepts: [] };
+        entry.concepts.push(concept);
+        steps[key] = entry;
       }
-      steps[`${audit.node}/${stepId}`] = entry;
     }
+  }
+
+  for (const [key, entry] of Object.entries(steps)) {
+    const deduped = dedupeConcepts(entry.concepts);
+    const overflow = deduped.length > 6;
+    const next = { ...entry, concepts: overflow ? deduped.slice(0, 6) : deduped };
+    if (!next.note && deduped.find((concept) => concept.note)?.note) {
+      next.note = deduped.find((concept) => concept.note).note;
+    }
+    if (overflow) {
+      next.overflow = true;
+      next.overflowCount = deduped.length;
+    }
+    steps[key] = next;
   }
 
   for (const [nodeId, node] of nodes) {
@@ -430,7 +439,7 @@ function rewriteNodeBlocks(root, subject, from, into, dryRun = false) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
     const path = join(dir, entry.name);
-    const parsed = matter(readFileSync(path, "utf8"));
+    const parsed = matter(readFileSync(path, "utf8"), {});
     let changed = false;
     for (const step of Array.isArray(parsed.data.steps) ? parsed.data.steps : []) {
       if (!Array.isArray(step?.blocks)) continue;

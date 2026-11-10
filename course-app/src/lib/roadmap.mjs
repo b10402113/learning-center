@@ -3,7 +3,9 @@
  *
  * One tier is one horizontal row, ordered top to bottom. Within a row, nodes
  * start in teaching order and then settle by the median x of their
- * prerequisites, which keeps most edges from crossing.
+ * prerequisites, which keeps most edges from crossing. A row whose own
+ * prerequisites form a chain stays in teaching order so the diagram never
+ * shows a step before the step it requires.
  */
 
 export const CARD_W = 184;
@@ -113,9 +115,10 @@ export function layoutRoadmap(nodes) {
   };
   place(rows);
 
+  const tierOf = new Map(nodes.map((node) => [node.id, node.tier]));
   const reorder = (currentRows) =>
-    currentRows.map((row) =>
-      [...row].sort((a, b) => {
+    currentRows.map((row) => {
+      const sorted = [...row].sort((a, b) => {
         const score = (node) => {
           const parents = graph.parents.get(node.id) || [];
           if (parents.length === 0) return x.get(node.id) ?? 0;
@@ -125,8 +128,21 @@ export function layoutRoadmap(nodes) {
           );
         };
         return score(a) - score(b) || teachingOrder(a, b);
-      })
-    );
+      });
+
+      // A row whose own prerequisites form a chain can be rotated by the
+      // barycenter pass (the chain's anchors sit in the same row), which puts
+      // a later step before the step it depends on. Keep teaching order there.
+      const index = new Map(sorted.map((node, i) => [node.id, i]));
+      const violatesTier = sorted.some((node) =>
+        (graph.parents.get(node.id) || []).some(
+          (parentId) =>
+            tierOf.get(parentId) === node.tier &&
+            (index.get(parentId) ?? -1) > index.get(node.id)
+        )
+      );
+      return violatesTier ? [...row].sort(teachingOrder) : sorted;
+    });
 
   for (let pass = 0; pass < 3; pass += 1) {
     rows = reorder(rows);

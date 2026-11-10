@@ -1,4 +1,5 @@
 import Markdown from "./Markdown.jsx";
+import RoadmapCanvas from "./RoadmapCanvas.jsx";
 import { ChapterRule, EmptyMark, NodeGlyph } from "./Glyphs.jsx";
 import { tierDotClass } from "./Sidebar.jsx";
 import { followInternalLink } from "../lib/navigation.mjs";
@@ -162,6 +163,28 @@ export default function NodeView({
           ))}
         </div>
       )}
+
+      <section className="mt-10">
+        <div className="mb-3 flex items-end justify-between gap-3">
+          <div>
+            <p className="robo-kicker font-label text-[10px] text-ink-soft">
+              課程地圖
+            </p>
+            <h2 className="mt-1 font-display text-[1.15rem] font-semibold text-ink">
+              此節點在 roadmap 的位置
+            </h2>
+          </div>
+          <span className="font-mono text-[10px] tabular-nums text-ink-soft">
+            高光自己與相連節點
+          </span>
+        </div>
+        <ChapterRule className="mb-4" />
+        <RoadmapCanvas
+          course={course}
+          onNavigate={onNavigate}
+          focusNodeId={node.id}
+        />
+      </section>
 
       {node.lessonIntro && (
         <div className="mt-8 max-w-[74ch] text-ink">

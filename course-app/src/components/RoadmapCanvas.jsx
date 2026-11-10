@@ -30,7 +30,11 @@ function ZoomButton({ label, children, onClick }) {
  * every node card links to its node page. Fits the graph to the container and
  * lets the reader drag or zoom when it gets dense.
  */
-export default function RoadmapCanvas({ course, onNavigate = null }) {
+export default function RoadmapCanvas({
+  course,
+  onNavigate = null,
+  focusNodeId = null,
+}) {
   const layout = useMemo(() => layoutRoadmap(course.nodes), [course.nodes]);
   const containerRef = useRef(null);
   const dragRef = useRef({ active: false, moved: false, x: 0, y: 0 });
@@ -38,9 +42,12 @@ export default function RoadmapCanvas({ course, onNavigate = null }) {
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [hovered, setHovered] = useState(null);
+  // A node page keeps its own neighbourhood lit. On the subject roadmap
+  // (no focus) hovering previews a node instead.
+  const anchor = focusNodeId ?? hovered ?? null;
   const related = useMemo(
-    () => (hovered ? neighbors(layout.edges, hovered) : null),
-    [hovered, layout.edges]
+    () => (anchor ? neighbors(layout.edges, anchor) : null),
+    [anchor, layout.edges]
   );
 
   useLayoutEffect(() => {
@@ -190,7 +197,7 @@ export default function RoadmapCanvas({ course, onNavigate = null }) {
             ))}
             {layout.edges.map((edge) => {
               const connected =
-                hovered && (edge.from === hovered || edge.to === hovered);
+                anchor && (edge.from === anchor || edge.to === anchor);
               return (
                 <path
                   key={`${edge.from}-${edge.to}`}
@@ -238,16 +245,17 @@ export default function RoadmapCanvas({ course, onNavigate = null }) {
                 onPointerLeave={() => setHovered(null)}
                 onFocus={() => setHovered(node.id)}
                 onBlur={() => setHovered(null)}
+                aria-current={node.id === focusNodeId ? "page" : undefined}
                 style={{
                   left: position.x,
                   top: position.y,
                   width: CARD_W,
                   height: CARD_H,
                   opacity: related && !related.has(node.id) ? 0.3 : 1,
-                  zIndex: hovered === node.id ? 10 : 1,
+                  zIndex: anchor === node.id ? 10 : 1,
                 }}
                 className={`group absolute flex flex-col justify-between rounded-xl bg-surface px-3 py-2.5 shadow-soft ring-1 transition-[opacity,box-shadow] ${
-                  hovered === node.id
+                  anchor === node.id
                     ? "shadow-lift ring-accent"
                     : "ring-hairline hover:shadow-lift hover:ring-accent/40"
                 }`}

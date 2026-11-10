@@ -4,12 +4,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import {
+  blockIdsForNode,
   composeBlocks,
+  imageBlocks,
   markBlocks,
   polishBlocks,
   prepareBlocks,
   publishBlocks,
   renderBlocks,
+  writeConcept,
 } from "./blocks-cli.mjs";
 
 const SECTIONS = ["定義", "為什麼重要", "如何運作", "例子", "邊界與常見誤解", "進階"];
@@ -153,7 +156,7 @@ test("publish writes the body back and records the compose model", (t) => {
   const [result] = publishBlocks({ root, subject: "test", ids: ["tool-calling"] });
   assert.equal(result.status, "published");
   const published = read(root, "learn/test/blocks/tool-calling.md");
-  assert.match(published, /^# Tool Calling（工具呼叫）/m);
+  assert.match(published, /^# Tool Calling/m);
   assert.ok(published.includes("author: fake-model"));
   assert.ok(published.includes("## 進階"));
   assert.ok(published.includes("created: 2026-11-06"));
@@ -256,4 +259,210 @@ test("polish keeps the six sections and falls back to a copy on a broken rewrite
   assert.equal(broken[0].status, "copied");
   assert.equal(broken[0].fallback, true);
   assert.equal(read(root, "learn/test/output/blocks/tool-calling/polish.md"), fullBody());
+});
+
+function writeFixture(t) {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/nodes/n1.md",
+    `---
+id: n1
+title: "Node One"
+subject: test
+tier: 1
+order: 1
+status: written
+goal: "Do one thing."
+digests: []
+prerequisites: []
+steps:
+  - id: s1
+    title: "Step One"
+    purpose: "Explain one thing."
+    sources:
+      - "[[sources/test/notes.txt#L1-L10]]"
+created: 2026-11-06
+updated: 2026-11-06
+---
+
+# Node One
+
+## Lesson
+
+A short lesson.
+
+## Steps
+
+1. [Step One](n1/s1.md)
+`,
+  );
+  write(root, "learn/test/nodes/n1/s1.md", "# Step One\n\nTool calling means the model emits a call and the harness runs it.\n");
+  write(
+    root,
+    "learn/test/output/blocks/n1.audit.json",
+    JSON.stringify(
+      {
+        node: "n1",
+        concepts: [
+          {
+            slug: "tool-calling",
+            label: "Tool Calling",
+            type: "concept",
+            summary: "模型輸出工具呼叫，harness 執行後把結果餵回模型。",
+            steps: ["s1"],
+            sources: ["[[sources/test/notes.txt#L1-L10]]"],
+            match: { kind: "new" },
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  rmSync(join(root, "learn/test/blocks/tool-calling.md"), { force: true });
+  return root;
+}
+
+test("write reads related step articles and creates the block without material", async (t) => {
+  const root = writeFixture(t);
+  const calls = [];
+  const result = await writeConcept({
+    root,
+    subject: "test",
+    node: "n1",
+    block: "tool-calling",
+    deps: {
+      prompt: "ELI5 prompt",
+      model: "fake-model",
+      generateText: async (input) => {
+        calls.push(input);
+        return fullBody();
+      },
+    },
+  });
+  assert.equal(result.status, "composed");
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].user, /Tool calling means the model emits a call/);
+  assert.doesNotMatch(calls[0].user, /material/);
+  assert.match(read(root, "learn/test/blocks/tool-calling.md"), /^# Tool Calling$/m);
+  assert.match(read(root, "learn/test/nodes/n1.md"), /blocks:\n      - tool-calling/);
+});
+
+test("write reuses an existing block and only links the step", async (t) => {
+  const root = writeFixture(t);
+  write(root, "learn/test/blocks/tool-calling.md", blockFile({ body: fullBody() }));
+  const result = await writeConcept({
+    root,
+    subject: "test",
+    node: "n1",
+    block: "tool-calling",
+    deps: { generateText: async () => { throw new Error("should not compose"); } },
+  });
+  assert.equal(result.status, "linked");
+  assert.match(read(root, "learn/test/nodes/n1.md"), /blocks:\n      - tool-calling/);
+});
+
+test("image sends the concept markdown to the provider and places one figure", async (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/blocks/tool-calling.md", blockFile({ body: fullBody() }));
+  const calls = [];
+  const deps = {
+    imageTemplate: "IMAGES FROM CONCEPT",
+    generateImage: async (input) => {
+      calls.push(input);
+      return Buffer.from("image");
+    },
+    writeImage: async (target, bytes) => write(root, target.slice(root.length + 1), bytes),
+  };
+  const [first] = await imageBlocks({ root, subject: "test", ids: ["tool-calling"], deps });
+  assert.equal(first.status, "rendered");
+  assert.match(calls[0].prompt, /IMAGES FROM CONCEPT/);
+  assert.match(calls[0].prompt, /## 定義/);
+  assert.match(read(root, "learn/test/blocks/tool-calling.md"), /!\[概念示意圖\]\(\.\/tool-calling-assets\/image-1\.webp\)/);
+
+  const [second] = await imageBlocks({ root, subject: "test", ids: ["tool-calling"], deps });
+  assert.equal(second.status, "already-rendered");
+  assert.equal(calls.length, 1);
+});
+
+test("image runs up to maxParallel blocks at once, three by default", async (t) => {
+  const root = fixture(t);
+  const ids = ["b1", "b2", "b3", "b4", "b5"];
+  for (const id of ids) {
+    const sections = fullBody().split("\n").slice(2).join("\n");
+    write(
+      root,
+      `learn/test/blocks/${id}.md`,
+      `---
+id: ${id}
+title: "${id}"
+label: "${id}"
+subject: test
+type: concept
+status: draft
+summary: "x."
+sources:
+  - "[[sources/test/notes.txt#L1-L10]]"
+created: 2026-11-06
+updated: 2026-11-06
+---
+
+# ${id}
+
+${sections}
+`,
+    );
+  }
+
+  let active = 0;
+  let peak = 0;
+  const deps = {
+    imageTemplate: "t",
+    generateImage: async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      return Buffer.from("image");
+    },
+    writeImage: async (target, bytes) => write(root, target.slice(root.length + 1), bytes),
+  };
+
+  const results = await imageBlocks({ root, subject: "test", ids, deps });
+  assert.equal(results.length, 5);
+  assert.ok(results.every((result) => result.status === "rendered"));
+  assert.equal(peak, 3);
+
+  active = 0;
+  peak = 0;
+  const limited = await imageBlocks({ root, subject: "test", ids, maxParallel: 2, force: true, deps });
+  assert.equal(limited.length, 5);
+  assert.equal(peak, 2);
+});
+
+test("blockIdsForNode collects the existing blocks linked from its steps", (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/nodes/n1.md",
+    `---
+id: n1
+title: "Node One"
+subject: test
+status: written
+steps:
+  - id: s1
+    blocks:
+      - tool-calling
+      - missing-block
+  - id: s2
+    blocks:
+      - tool-calling
+---
+
+# Node One
+`,
+  );
+  assert.deepEqual(blockIdsForNode(root, "test", "n1"), ["tool-calling"]);
 });

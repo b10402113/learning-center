@@ -1,157 +1,136 @@
 ---
 name: blocks
-description: 把 written step 文章萃取成獨立 block 知識點：先 audit、一次確認 subject 級表格，再建立 draft block、更新 step blocks:、重算 coverage；也支援 report、check、merge、refresh 與 rewrite。當使用者要把課程知識點抽成 block、維護知識圖或檢查 coverage/drift 時使用。
+description: 把 written step 文章萃取成獨立 block：一個 node 一份共享 concept audit，確認一次（或用 -skip-check 跳過），CLI 直接讀相關 step 文章以 ELI5 寫 block、直接拿 concept markdown 生圖，最後 check 結束。
 disable-model-invocation: true
-argument-hint: "<subject> [--node <id> | --step <node>/<step>] [--audit] [--write] [--articles] [--images] [--report] [--check] [--refresh <block-id>] [--rewrite <block-id>] [--force] [--yes]"
+argument-hint: "<subject> [--node <id> | --step <node>/<step>] [--audit] [--write] [--images] [--max-parallel <n>] [-skip-check] [--report] [--check] [--force]"
 ---
 
-Invoke as `/blocks <subject> [--node <id> | --step <node>/<step>] [--audit] [--write] [--articles] [--images] [--report] [--check] [--refresh <block-id>] [--rewrite <block-id>] [--force] [--yes]`.
+Invoke as `/blocks <subject> [--node <id> | --step <node>/<step>] [--audit] [--write] [--images] [--max-parallel <n>] [-skip-check] [--report] [--check] [--force]`.
 
-This skill turns a subject's published steps into standalone blocks under `learn/<subject>/blocks/`. A block is one named knowledge point a stranger can read without any step. Steps stay the teaching narrative; they link to blocks through `steps[].blocks` and the coverage report measures how much of the course is covered.
+把一個 subject 的已發布 step 文章萃取成 `learn/<subject>/blocks/` 下的獨立知識點。一個 block 是一個陌生讀者不讀 step 也能看懂的具名概念；step 仍是教學敘事，透過 `steps[].blocks` 連到 block。
 
-No mode flag means audit → confirm → write → articles → images → apply → report. `--audit` stops after the table; `--write` stops before the articles (add `--articles` to continue, `--images` renders only the missing figures); `--report` and `--check` are read-only.
+## 預設流程
 
-Only process `written` nodes and steps that have an article body. The CLI owns file discovery, coverage math, drift, and merge rewriting; the block-agent owns the concept judgment and the block prose. Never hand-write `coverage.json`, a node's `blocks:` array, or a block file the CLI can produce.
+```text
+audit → 確認一次 → write → images → apply → check → 結束
+```
 
-## 1. Resolve and inspect
+- 無 flag：跑完整流程。
+- `--audit`：只做到 audit 表格。
+- `--write`：做到 write，不產圖。
+- `--images`：只補缺圖。
+- `--max-parallel <n>`：生圖同時數量，預設 3。
+- `-skip-check`：跳過人工確認，直接照 audit 寫。
+- `--report`、`--check`：唯讀。
+- `--force`：重寫既有 draft block 的本文與圖，不動 reviewed block 的散文。
 
-Run from the repo root. `--node` limits the run to one node; `--step <node>/<step>` limits it to one step.
+只處理 `status: written` 且 step 文章有本文的 node。CLI 負責找檔案、coverage、drift；`block-agent` 只負責概念判斷與寫 audit。不要手寫 `coverage.json`、step 的 `blocks:` 或 block 本文。
+
+## 1. Audit
 
 ```bash
 node scripts/blocks.mjs audit --subject <subject> [--node <id>] [--step <node>/<step>] --json
 ```
 
-The manifest has:
+看 manifest 的 eligible node/step、既有 `blocks[]`、以及 `skipped[]`，先回報數量和略過的項目。
 
-- `nodes[]` — every eligible node, with its `audit` path and each step's `id`, `article`, `title`, `purpose`, `sources`, and current `blocks`.
-- `blocks[]` — the subject's existing blocks, so candidates can reuse or merge instead of duplicating.
-- `skipped[]` — written nodes or steps with no article body and the reason.
+每個 eligible node 派一個 `block-agent`（`subagent_type: block-agent`），只給它：
 
-Report the eligible node/step count and every skipped item before dispatching. Do not infer the subject from a node id or the conversation.
+- subject、node id、mode `audit`。
+- 該 node 的 `steps[]`（id、article、title、purpose、sources、現有 blocks）。
+- subject 既有 `blocks[]`（含 `file` 路徑）。**先讀這份清單，close match 就打開 `file` 比對本文。**
+- audit 路徑：`learn/<subject>/output/blocks/<node>.audit.json`。
+- 一行：**一個 node 一份共享 concept 清單，最多 5 個 concept，不要按 step 分開列。**
+- 一行：每個 concept 用 `steps: [...]` 記錄它由哪些 step 支撐；label 是名詞，句子放 `summary`。
+- 一行：sources 必須是相關 step 有引用的 `[[sources/...#Lx-Ly]]`。
+- 一行：**先看既有 block；能復用就 `reuse`，同義或涵蓋範圍相近就 `reuse`／`merge`，不要造 `tool-use` 這種和 `tool-calling` 差不多的新 block。**
+- 一行：用 id／aliases／正規化 label 去重；撞到既有 id／alias／label 一律不得 `new`，真的說不準才標 `fuzzy`。
+- 一行：只寫 audit 檔，然後跑 `node scripts/blocks.mjs audit --subject <subject> --node <node> --check` 到沒有 `[fail ...]`；這是它唯一能跑的指令。
 
-## 2. Audit: one block-agent per node
+Audit JSON：
 
-Dispatch one `block-agent` per eligible node, in batches sized by the session's subagent budget (default 5). In a single message use one `task` call per node with `subagent_type: block-agent`. Never give an agent another node's steps.
+```json
+{
+  "node": "tools-are-the-runbook",
+  "concepts": [
+    {
+      "slug": "tool-calling",
+      "label": "Tool Calling",
+      "type": "concept",
+      "summary": "模型透過結構化介面呼叫外部工具，再由 harness 執行。",
+      "steps": ["classify-item-and-draft-reply"],
+      "sources": ["[[sources/agent-harness/20260915/course/notes.txt#L40-L60]]"],
+      "match": { "kind": "new" },
+      "note": ""
+    }
+  ]
+}
+```
 
-Each task message contains only:
+`match.kind` 是 `new | reuse | merge | fuzzy`。`reuse`／`merge` 要填 `match.block`。`fuzzy` 在確認時由人決定。
 
-- The subject, node id, and mode `audit`.
-- That node's `steps[]` from the manifest (id, article, title, purpose, sources, current blocks).
-- The subject's `blocks[]` summary, so it can decide new / reuse / merge / fuzzy.
-- Its exact audit path: `learn/<subject>/output/blocks/<node>.audit.json`.
-- One line: initial audit 3–6 concepts per step; a short step may have 1–2 only with a `note`; more than 6 is capped, never split. The main agent trims the audit to the confirmed five-block selection later.
-- One line: labels are nouns (`Tool Calling`, `Bubble Sort`), sentences go in the block summary.
-- One line: sources are a subset of that step's sources and keep the `[[sources/...#Lx-Ly]]` form.
-- One line: dedupe against existing ids, aliases, and normalized labels; ambiguous overlaps are `fuzzy` and need a human.
-- One line: write only the audit file, then run `node scripts/blocks.mjs audit --subject <subject> --node <node> --check` until there is no `[fail ...]`; this is the only command it may run.
-- One line: do not edit a step, node, block, source, or digest in audit mode.
-
-Then validate all audits:
+全部 audit 寫完後驗證：
 
 ```bash
 node scripts/blocks.mjs audit --subject <subject> --check --json
 ```
 
-Exit 1 means at least one audit is unusable. Re-dispatch the same node's agent with the exact failures and rewrite the audit. Warnings:
+有 fail 就把錯誤原文丟回同一個 node 的 agent 重寫。
 
-- `audit-concept-short` — require a `note` explaining why the step supports fewer than 3 concepts.
-- `audit-concept-overflow` — keep the six strongest; do not split the step.
-- `audit-new-existing` — change the candidate to `reuse` against that block.
+## 2. 確認（`-skip-check` 可跳過）
 
-## 3. Confirm once, at subject level
+讀 audit，依 node 分組印一張表：
 
-Read the audit files and build one table, grouped by node:
+| node / concept | label | type | steps | match | block |
+| --- | --- | --- | --- | --- | --- |
+| tools-are-the-runbook / tool-calling | Tool Calling | concept | classify-item… | reuse | tool-calling |
+| tools-are-the-runbook / grounded-generation | Grounded Generation | concept | draft-reply | new | (new) |
 
-| node / step | concept (label) | match | block |
-| --- | --- | --- | --- |
-| tools-are-the-runbook / classify-item-and-draft-reply | Tool Calling | reuse | tool-calling |
-| tools-are-the-runbook / classify-item-and-draft-reply | Grounded Generation | new | (new) |
-| tools-are-the-runbook / classify-item-and-draft-reply | Classification | fuzzy | (needs decision) |
+表上方印：eligible steps、concept 數、new/reuse/merge/fuzzy 數、每個 node 超過 5 個而被延後的 concept。表下方列每個 fuzzy 與 merge，附一行建議。
 
-Above the table, print counts: eligible steps, concepts, `new` / `reuse` / `merge` / `fuzzy`, uncovered candidates, short steps, overflow steps. Below it, list every merge candidate and every fuzzy overlap with a one-line recommendation.
+請學習者確認整張表一次。`-skip-check` 直接略過。若被退回，修 audit 後重印，不要開始寫。
 
-A node may link **at most five blocks across all its steps**. When a node's table has more than five `new`/`reuse` concepts, keep the five that carry the node's goal. Show the selected five and the deferred remainder in the confirmation table. After confirmation, rewrite that node's audit to only the selected concepts (with a step `note` when a step keeps fewer than three) so coverage measures the agreed plan, not the raw concept inventory.
+規則：**能復用一律先用既有 block**；同 id／alias／正規化 label 只能是 `reuse`，標成 `new` 會被 `audit --check` 擋下；兩個既有 block 同義才提 `merge`；fuzzy 不自動合併；同一概念出現在多個 step 只寫一個 block。
 
-Ask the learner to confirm the whole table once. `--yes` skips the question. If `--audit` was passed, stop here. If the learner rejects or edits rows, adjust the audit files or the match kinds and re-present; do not start writing.
+## 3. Write
 
-Deduplication rules the table must already obey:
-
-- Same id, alias, or normalized label → `reuse`, never a second block.
-- Two existing blocks that are the same idea → propose `merge` with the canonical id unchanged.
-- A fuzzy candidate never becomes a merge automatically; the learner names the target or keeps it as a separate block.
-- The same concept used by several steps is one block linked from each step.
-
-## 4. Write: create drafts and link steps
-
-First resolve every confirmed merge with the CLI. Merging is draft-only; a `reviewed` block must be changed through `--rewrite` instead. v1 keeps the canonical id and puts the old id in `aliases`, with no URL redirect.
+對每個確認的 concept 呼叫一次，**不用 prepare、不用 material**：
 
 ```bash
-node scripts/blocks.mjs merge --subject <subject> --from <old-id> --into <canonical-id> --dry-run --json
-node scripts/blocks.mjs merge --subject <subject> --from <old-id> --into <canonical-id> --json
+node src/blocks-cli.mjs write --subject <subject> --node <node> --block <slug>
 ```
 
-The dry run prints every file the merge will touch; show it before applying. The applied merge rewrites all step `blocks:` entries and all block `prerequisites` / `related`, removes the old block file, and recomputes coverage. Do not perform this rewrite by hand.
+- 只讀 audit 裡 `steps` 指到的 step 文章，直接用 ELI5 方式寫成該 type 的固定章節。
+- block 不存在時自動建立 draft frontmatter；已存在且有本文時只補 `steps[].blocks`，加 `--force` 才重寫。
+- `reuse`／`merge` 的 concept 只連結既有 block，不重建。
+- `reviewed` block 的散文永不改寫。
 
-Select at most five blocks per node from the confirmed table. Assign each selected `new` concept to exactly one owning node (the first node that needs it), and rewrite the node's audit to the selected concepts before `apply`; deferred concepts are outside this pilot's coverage. Dispatch one `block-agent` per node again, in batches sized by the session's subagent budget (default 5), with mode `write`:
+## 4. Images
 
-- The node's steps and the confirmed concept list for that node.
-- For `reuse` / `merge`: the target block id to link, and no block file to create.
-- For `new` concepts owned by another node: only the block id to link; do not create a second copy.
-- The existing `reviewed` block ids, with one line: never overwrite or edit a `reviewed` block.
-- One line: update only the node's `steps[].blocks` and create only its assigned draft blocks; do not edit prose, sources, digests, or another node.
+把已發布的 concept markdown 直接交給生圖 CLI。**一個 node 呼叫一次**，CLI 會並行生成該 node 的 block，預設同時 3 張：
 
-After every node returns:
+```bash
+node src/blocks-cli.mjs image --subject <subject> --node <node> --max-parallel 3
+```
+
+例如 node 有 5 個新 block，會以 3 個 worker 跑完（3 → 2）。單一 block 用 `--block <slug>`，整個 subject 用 `--all-drafts`。
+
+`image` 讀整篇 block markdown，生成 `blocks/<slug>-assets/image-1.webp`，插在 H1 後、第一個 `##` 前。一個 block 恰好一張圖；已有圖就重用，`--force` 才重畫。`--images` 只跑這一步。
+
+## 5. Apply & check
 
 ```bash
 node scripts/blocks.mjs apply --subject <subject>
-node scripts/verify.mjs --subject <subject>
-node scripts/blocks.mjs report --subject <subject>
-```
-
-`apply` rebuilds `blocks/coverage.json` from the confirmed audits and the step `blocks:` entries. `verify` is the format gate; if it reports `coverage-step-blocks` or `coverage-step-block-uncovered`, the step and audit disagree — fix the audit or the node entry, then rerun `apply` and `verify`. Never silence verify by editing `coverage.json` by hand. Then show the report: Step coverage, Course coverage, current blocks, projected blocks, reuse factor, and the uncovered concept list.
-
-## 4.5 產生 block 文章與配圖
-
-Step 4 只建立 frontmatter 與 H1 骨架。預設流程接著替每個 `draft` block 產出該 type 要求的章節與一張 hero 圖；`--write` 停在 step 4，加上 `--articles` 才續跑。
-
-```bash
-node src/blocks-cli.mjs prepare --subject <s> --block <id>
-node src/blocks-cli.mjs compose --subject <s> --block <id>
-# dispatch block-agent in plan mode; it writes blocks/<id>.plan.json (exactly one item)
-node src/blocks-cli.mjs mark    --subject <s> --block <id>
-node src/blocks-cli.mjs polish  --subject <s> --block <id>
-node src/blocks-cli.mjs publish --subject <s> --block <id>
-node src/blocks-cli.mjs render  --subject <s> --block <id>
-```
-
-- `prepare` 從 block 的 `sources` 抽段落寫 `output/blocks/<id>/material.json`；`compose` 用 `prompts/block-article.txt` 寫出該 type 要求的章節，H1 固定等於 `title`。已有本文的 block 除非 `--force` 否則跳過。`polish` 潤飾散文並保護章節、H1、marker 與程式碼，失敗時自動退回原稿（`copied`）。
-- 一個 block 恰好一張圖：`block-agent` 在 `plan` 模式讀文章後寫 `<id>.plan.json`（一項、沒有 `anchor`），`mark` 把 `<!--image:1-->` 插在 H1 後、第一個 `##` 前，`render` 換成 `./<id>-assets/image-1.webp`。
-- 只補既有 block 的圖時，跳過 `prepare` 與 `compose`，直接派 `plan` 模式（它讀既有本文）→ `mark` → `publish` → `render`。
-- `reviewed` block 的散文永不重寫；只有 `render --force` 可以重畫它的圖。
-- 批次：`node src/blocks-cli.mjs article --subject <s> --all-drafts --images` 只碰 `draft`。
-
-## 5. Refresh, rewrite, and force
-
-- `--refresh <block-id>` — one block drifted. Run `check`, read the block, the steps that use it, and its sources, then write the proposed body to `learn/<subject>/output/blocks/<id>.proposed.md` (same frontmatter) and run `diff -u learn/<subject>/blocks/<id>.md learn/<subject>/output/blocks/<id>.proposed.md`. Show that diff, confirm, then replace the official file. A `draft` may be written after confirmation; a `reviewed` block requires `--rewrite` instead.
-- `--rewrite <block-id>` — same proposed-file and `diff -u` step, but for a `reviewed` block. Always show the diff first and require an explicit confirmation; then write it, rerun `apply` and `verify`.
-- `--force` — with a default or `--write` run, regenerate existing `draft` blocks from the confirmed audit. It never overwrites a `reviewed` block. It does not change a node's step plan or create concepts that are not in the audit.
-
-A refresh or rewrite must keep the block's `id`, `subject`, `aliases`, `prerequisites`, `related`, and `status`; only the prose and, when the source changed, `updated` move.
-
-## 6. Check (read-only)
-
-```bash
 node scripts/blocks.mjs check --subject <subject>
+node scripts/verify.mjs --subject <subject>
 ```
 
-Report the drift as printed, grouped by kind: a step newer than its block, a block source the step no longer cites, an uncovered concept, an orphan block, and a broken or cyclic prerequisite. Recommend `--refresh <id>` for one drifted draft, `--rewrite <id>` for a reviewed block, `/blocks <subject>` for uncovered concepts, and a manual relation fix for a broken prerequisite. Do not rewrite anything in this mode.
+`apply` 從 audit＋step `blocks:` 重建 `coverage.json`。`check` 印 drift（step 比 block 新、block 來源已不被引用、未覆蓋概念、孤兒 block、壞掉的 prerequisite）。有問題就回報，不要手改 `coverage.json`。完成後結束。
 
-## Completion
+## 完成條件
 
-- Every eligible written step has an audit matching the confirmed selection; a node links at most five blocks, and a step that keeps fewer than three concepts carries a `note`.
-- The subject-level table was confirmed once, or `--yes` was passed.
-- Confirmed `new` concepts have draft blocks; reused concepts link an existing block; every step `blocks:` matches its audit.
-- Merged ids live in the canonical block's `aliases`, and no file references the old id.
-- Every `draft` block has a body whose H1 equals its `title`, a one-item plan, and exactly one figure under `blocks/<id>-assets/`; a `reviewed` block was never rewritten.
-- `node scripts/blocks.mjs apply` has run, `node scripts/blocks.mjs report` answers current blocks / projected blocks / Step coverage / Course coverage, and `node scripts/verify.mjs --subject <subject>` exits 0.
-- No `reviewed` block was silently overwritten.
+- 每個 eligible node 有一份 node 級 audit，concept 數 ≤ 5，且每個 concept 都有非空的 `steps`。
+- 表格確認過一次，或用了 `-skip-check`。
+- 每個 `new` concept 有 draft block，`reuse` concept 連到既有 block，step `blocks:` 與 audit 一致。
+- 每個 draft block 有本文、H1 等於 `title`、一張 hero 圖；reviewed block 未被重寫。
+- `apply`、`check`、`verify` 都跑過且 verify 退出 0。

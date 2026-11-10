@@ -286,7 +286,7 @@ test("audit --check validates the audit files", (t) => {
       slug: "tool-calling",
       label: "Tool Calling",
       sources: ["[[sources/test/notes.txt#L1-L10]]"],
-      match: { kind: "new" },
+      match: { kind: "reuse", block: "tool-calling" },
       note: "",
     },
     { slug: "agent", label: "Agent", sources: ["[[sources/test/notes.txt#L1-L10]]"], match: { kind: "new" } },
@@ -405,4 +405,40 @@ test("apply keeps a short step note and caps overflow at six concepts", (t) => {
   assert.equal(coverage.steps["n1/s1"].concepts.length, 6);
   assert.equal(coverage.steps["n1/s1"].overflow, true);
   assert.equal(coverage.steps["n1/s1"].overflowCount, 7);
+});
+
+function nodeAudit(root, concepts) {
+  write(
+    root,
+    "learn/test/output/blocks/n1.audit.json",
+    JSON.stringify({ node: "n1", concepts }, null, 2),
+  );
+}
+
+test("apply expands a node-level shared concept to its related steps", (t) => {
+  const root = fixture(t, { blocks: ["tool-calling"] });
+  blockFile(root);
+  nodeAudit(root, [
+    {
+      slug: "tool-calling",
+      label: "Tool Calling",
+      type: "concept",
+      summary: "模型輸出工具呼叫，harness 執行後把結果餵回模型。",
+      steps: ["s1"],
+      sources: ["[[sources/test/notes.txt#L1-L10]]"],
+      match: { kind: "new" },
+    },
+  ]);
+
+  run(root, "apply");
+  const coverage = JSON.parse(read(root, "learn/test/blocks/coverage.json"));
+  assert.deepEqual(coverage.steps["n1/s1"].concepts, [
+    {
+      slug: "tool-calling",
+      label: "Tool Calling",
+      sources: ["[[sources/test/notes.txt#L1-L10]]"],
+      block: "tool-calling",
+      note: "",
+    },
+  ]);
 });

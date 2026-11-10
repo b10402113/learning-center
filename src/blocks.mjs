@@ -292,7 +292,7 @@ export function loadBlocks(root, subject) {
     const path = join(dir, name);
     const file = `learn/${subject}/blocks/${name}`;
     try {
-      const parsed = matter(readFileSync(path, "utf8"));
+      const parsed = matter(readFileSync(path, "utf8"), {});
       return { id, name, path, file, data: parsed.data ?? {}, body: parsed.content ?? "", error: null };
     } catch (error) {
       return { id, name, path, file, data: {}, body: "", error: error.message };
@@ -548,6 +548,44 @@ export function aliasMap(blocks) {
 }
 
 /**
+ * Flatten an audit into one list of concepts. The current shape stores one
+ * shared list per node (`{ node, concepts: [...] }`); the legacy shape stored
+ * a list per step (`{ node, steps: { <step>: { concepts } } }`). Both are
+ * accepted so old audits still build coverage.
+ */
+export function auditConcepts(audit) {
+  if (!audit || typeof audit !== "object" || Array.isArray(audit)) return [];
+  if (Array.isArray(audit.concepts)) {
+    return audit.concepts.map((concept) => ({
+      ...concept,
+      steps: Array.isArray(concept?.steps)
+        ? concept.steps
+            .map((step) => (typeof step === "string" ? step.trim() : ""))
+            .filter(Boolean)
+        : [],
+    }));
+  }
+  const out = [];
+  if (audit.steps && typeof audit.steps === "object" && !Array.isArray(audit.steps)) {
+    for (const [stepId, payload] of Object.entries(audit.steps)) {
+      for (const concept of Array.isArray(payload?.concepts) ? payload.concepts : []) {
+        out.push({
+          ...concept,
+          steps: [stepId],
+          note:
+            typeof concept?.note === "string" && concept.note.trim()
+              ? concept.note
+              : typeof payload?.note === "string"
+                ? payload.note
+                : "",
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * A label's comparable form for dedupe: case-folded, without a parenthetical
  * translation, whitespace, or ordinary punctuation. Symbols that change the
  * term itself (`@`, `^`, `+`, `#`) are kept so pass@k and pass^k stay distinct.
@@ -592,16 +630,153 @@ export function validateAudit(
   else if (node.status !== "written") {
     fail("audit-node-status", `audit.node "${nodeId}" is ${node.status}, not written`);
   }
-  if (!audit.steps || typeof audit.steps !== "object" || Array.isArray(audit.steps)) {
-    fail("audit-steps", `audit for "${nodeId}" needs a steps object`);
-    return { failures, warnings };
-  }
-
   const ids = new Set(blocks.map((block) => block.id));
   const aliases = aliasMap(blocks);
   const labels = new Map(
     blocks.map((block) => [normalizeTerm(block.data?.label ?? block.id), block.id]),
   );
+
+  if (Array.isArray(audit.concepts)) {
+    const concepts = audit.concepts;
+    if (concepts.length === 0) {
+      fail("audit-concepts-empty", `audit for "${nodeId}" needs at least one shared concept`);
+    }
+    if (concepts.length > 5) {
+      warn(
+        "audit-concepts-overflow",
+        `audit for "${nodeId}" has ${concepts.length} concepts; a node links at most five blocks`,
+      );
+    }
+
+    const seen = new Set();
+    for (const [index, concept] of concepts.entries()) {
+      const label = `concepts[${index}]`;
+      const slug = typeof concept?.slug === "string" ? concept.slug.trim() : "";
+      if (!slug || !BLOCK_SLUG.test(slug)) {
+        fail("audit-concept-slug", `${label}.slug must be kebab-case`, { slug });
+      } else if (seen.has(slug)) {
+        fail("audit-concept-duplicate", `audit repeats concept "${slug}"`, { slug });
+      } else {
+        seen.add(slug);
+      }
+      for (const message of labelProblems(concept?.label)) {
+        fail("audit-concept-label", `${label}: ${message}`, { slug });
+      }
+
+      const stepIds = Array.isArray(concept?.steps) ? concept.steps : [];
+      if (stepIds.length === 0) {
+        fail("audit-concept-steps", `${label} needs at least one related step`, { slug });
+      }
+      const stepSources = new Set();
+      const seenSteps = new Set();
+      for (const rawStep of stepIds) {
+        const stepId = typeof rawStep === "string" ? rawStep.trim() : "";
+        if (!stepId) {
+          fail("audit-concept-steps", `${label}.steps must contain non-empty step ids`, { slug });
+          continue;
+        }
+        if (seenSteps.has(stepId)) {
+          fail("audit-concept-steps", `${label}.steps repeats "${stepId}"`, { slug });
+          continue;
+        }
+        seenSteps.add(stepId);
+        const key = `${nodeId}/${stepId}`;
+        if (node && !node.steps.has(stepId)) {
+          fail("audit-step-unknown", `${key} is not a step of node "${nodeId}"`, { step: key, slug });
+        }
+        if (eligibleSteps.size > 0 && !eligibleSteps.has(key)) {
+          fail("audit-step-not-eligible", `${key} is not a written step with an article body`, {
+            step: key,
+            slug,
+          });
+        }
+        const step = node?.steps?.get?.(stepId);
+        for (const rawSource of Array.isArray(step?.sources) ? step.sources : []) {
+          const path = sourceLinkPath(rawSource);
+          if (path) stepSources.add(path);
+        }
+      }
+
+      const type = concept?.type;
+      if (type !== undefined && type !== null && !BLOCK_TYPES.includes(String(type))) {
+        fail("audit-concept-type", `${label}.type must be one of ${BLOCK_TYPES.join(", ")}`, { slug });
+      }
+      for (const message of summaryProblems(concept?.summary)) {
+        fail("audit-concept-summary", `${label}: ${message}`, { slug });
+      }
+
+      const sources = Array.isArray(concept?.sources) ? concept.sources : [];
+      if (sources.length === 0) {
+        fail("audit-concept-sources", `${label} needs at least one source link`, { slug });
+      } else {
+        for (const [sourceIndex, source] of sources.entries()) {
+          const path = sourceLinkPath(source);
+          if (!path) {
+            fail(
+              "audit-concept-sources",
+              `${label}.sources[${sourceIndex}] must be a [[sources/...#Lx-Ly]] link`,
+              { slug },
+            );
+          } else if (stepSources.size > 0 && !stepSources.has(path)) {
+            fail(
+              "audit-concept-sources",
+              `${label}.sources[${sourceIndex}] cites ${path}, which its steps do not cite`,
+              { slug },
+            );
+          }
+        }
+      }
+
+      const kind = concept?.match?.kind;
+      if (!AUDIT_MATCH_KINDS.includes(kind)) {
+        fail(
+          "audit-match-kind",
+          `${label}.match.kind must be one of ${AUDIT_MATCH_KINDS.join(", ")}`,
+          { slug },
+        );
+        continue;
+      }
+      if (kind === "reuse" || kind === "merge") {
+        const target = typeof concept?.match?.block === "string" ? concept.match.block.trim() : "";
+        if (!target) {
+          fail("audit-match-block", `${label} is a ${kind} candidate but names no block`, { slug });
+        } else if (!ids.has(target) && !aliases.has(target)) {
+          fail("audit-match-block", `${label} points at unknown block "${target}"`, { slug });
+        }
+      }
+      if (kind === "new" && slug) {
+        if (ids.has(slug)) {
+          fail(
+            "audit-new-existing",
+            `${label} is marked new but block "${slug}" already exists; reuse it`,
+            { slug },
+          );
+        } else if (aliases.has(slug)) {
+          fail(
+            "audit-new-existing",
+            `${label} is marked new but "${slug}" is an alias of block "${aliases.get(slug)}"; reuse it`,
+            { slug },
+          );
+        } else {
+          const normalized = normalizeTerm(concept?.label);
+          const existing = normalized ? labels.get(normalized) : null;
+          if (existing && existing !== slug) {
+            fail(
+              "audit-new-existing",
+              `${label} is marked new but its label matches block "${existing}"; reuse or merge it`,
+              { slug },
+            );
+          }
+        }
+      }
+    }
+    return { failures, warnings };
+  }
+
+  if (!audit.steps || typeof audit.steps !== "object" || Array.isArray(audit.steps)) {
+    fail("audit-steps", `audit for "${nodeId}" needs a concepts array or a legacy steps object`);
+    return { failures, warnings };
+  }
 
   for (const [stepId, payload] of Object.entries(audit.steps)) {
     const key = `${nodeId}/${stepId}`;
@@ -675,13 +850,13 @@ export function validateAudit(
       }
       if (kind === "new" && slug) {
         if (ids.has(slug)) {
-          warn(
+          fail(
             "audit-new-existing",
             `${label} is marked new but block "${slug}" already exists; reuse it`,
             { step: key, slug },
           );
         } else if (aliases.has(slug)) {
-          warn(
+          fail(
             "audit-new-existing",
             `${label} is marked new but "${slug}" is an alias of block "${aliases.get(slug)}"; reuse it`,
             { step: key, slug },
@@ -690,7 +865,7 @@ export function validateAudit(
           const normalized = normalizeTerm(concept?.label);
           const existing = normalized ? labels.get(normalized) : null;
           if (existing && existing !== slug) {
-            warn(
+            fail(
               "audit-new-existing",
               `${label} is marked new but its label matches block "${existing}"; reuse or merge it`,
               { step: key, slug },

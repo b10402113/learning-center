@@ -24,9 +24,6 @@ steps:
       - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L531-L640]]"
       - "[[sources/ai-eval/20261108/supplement/lesson2.en.txt#L261-L360]]"
       - "[[sources/ai-eval/20261108/supplement/code/week-01-assignments v1.txt#L11-L24]]"
-    blocks:
-      - agent-trace
-      - logs-vs-traces
   - id: annotate-trace-outcomes
     author: "google/gemini-3.8-flash"
     title: "讀懂一條 Trace：逐筆標註 Pass/Fail 與具體原因"
@@ -35,8 +32,6 @@ steps:
       - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L1401-L1500]]"
       - "[[sources/ai-eval/20261108/supplement/lesson2.en.txt#L171-L260]]"
       - "[[sources/ai-eval/20261108/supplement/code/week-01-assignments v1.txt#L20-L35]]"
-    blocks:
-      - error-analysis
   - id: cluster-failure-codes
     author: "google/gemini-3.8-flash"
     title: "從失敗 Trace 歸納出清楚可數的 Failure Code"
@@ -45,8 +40,6 @@ steps:
       - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L431-L530]]"
       - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L1501-L1600]]"
       - "[[sources/ai-eval/20261108/supplement/code/week-01-assignments v1.txt#L36-L52]]"
-    blocks:
-      - failure-taxonomy
   - id: prioritize-failure-taxonomy
     author: "google/gemini-3.8-flash"
     title: "用頻率與嚴重度排定修復順序：建立失敗分類法與回歸案例"
@@ -56,9 +49,6 @@ steps:
       - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L641-L720]]"
       - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L721-L852]]"
       - "[[sources/ai-eval/20261108/supplement/code/week-01-assignments v1.txt#L53-L64]]"
-    blocks:
-      - frequency-severity-priority
-      - failure-taxonomy
 created: 2026-11-08
 updated: 2026-11-08
 ---

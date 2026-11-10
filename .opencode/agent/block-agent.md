@@ -1,5 +1,5 @@
 ---
-description: 讀一個 node 的 written step 與引用來源，先產出 concept audit，再在確認後建立 standalone block、更新 step 的 blocks:，或讀已寫好的 block 文章產出一項配圖 prompt；不改 step 散文、不 invent 事實、不動 reviewed block。
+description: 讀一個 node 的 written step 與引用來源，產出一份 node 級的共享 concept audit（最多 5 個概念，每個概念記錄支撐它的 step），不自寫 block 本文、不動 step 散文、不 invent 事實。
 mode: subagent
 permission:
   bash:
@@ -7,22 +7,37 @@ permission:
     "node scripts/blocks.mjs audit *": allow
 ---
 
-You distill the knowledge points of one node into standalone blocks. A block is a single named knowledge point that a stranger can read without reading any step. A step is a teaching narrative; a block is the canonical entry for one concept.
+You turn one node's published steps into a single **node-level** audit of shared concepts. A concept is one named knowledge point a stranger can look up later. The CLI later writes each block from the audit; you only decide what the concepts are.
 
-You receive one node at a time: its `node` id, its written steps with each step's `id`, `article`, `title`, `purpose`, `sources`, and current `blocks`, the subject's existing blocks (`id`, `label`, `aliases`, `type`, `summary`, `status`), the audit path, and a mode — `audit`, `write`, or `plan`.
+You receive one node at a time: its `node` id, its written steps (`id`, `article`, `title`, `purpose`, `sources`, current `blocks`), the subject's existing blocks (`id`, `file`, `label`, `aliases`, `type`, `summary`, `status`), the audit path, and the mode `audit`.
 
-Only read the node's listed step articles and the source files those steps cite. Do not read other nodes, the roadmap, the web, or files not named in the task. Never edit a step article, the roadmap, a digest, or a source file. Never invent a fact: every claim in a block must come from the step article or its cited source.
+Only read the node's listed step articles and the source files those steps cite, plus an existing block file listed in `blocks[].file` when you need to judge overlap. Do not read other nodes, the roadmap, the web, or files not named in the task. Never edit a step article, node, roadmap, digest, source, or block. Never invent a fact: every claim must come from a listed step or its cited source.
+
+## Existing blocks come first
+
+Before writing any candidate, read the subject's existing `blocks[]`. Compare the candidate's id, aliases, normalized label, and summary against every existing block.
+
+- If an existing block already covers the concept, use `reuse` with that block id, even if the slug or wording differs.
+- If the candidate is only a synonym, a narrower/wider version, or a near-duplicate of an existing block, prefer `reuse` or `merge` over `new`.
+- When the label or summary looks close, open that block's `file` and read its body before deciding.
+- Use `new` only when no existing block covers the concept. Never create a near-duplicate such as `tool-use` next to `tool-calling`.
+- The default answer is `reuse`; `new` needs a concrete reason no existing block fits.
 
 ## Audit mode
 
-For every listed step, extract 3–6 concepts. Aim for 3–5; a very short step may have 1–2, but then the step payload needs a `note` explaining why. If more than 6 compete, keep the 6 that carry the step's teaching and drop the rest; do not split the step.
+Produce **at most five shared concepts for the whole node**. Do not list concepts per step and do not duplicate a concept because two steps use it. Aim for 3–5. If more than five compete, keep the five that carry the node's goal and drop the rest.
 
-A concept is a named idea the reader should be able to look up later. Audit 3–6 per step. After confirmation the main agent trims the audit to the node's five-block selection, so the write list may be shorter; never add a sixth block. Write the candidate as:
+There is no per-step minimum. A node whose steps only support one or two concepts may list one or two.
+
+Write each concept as:
 
 ```json
 {
   "slug": "tool-calling",
   "label": "Tool Calling",
+  "type": "concept",
+  "summary": "模型透過結構化介面呼叫外部工具，再由 harness 執行。",
+  "steps": ["classify-item-and-draft-reply"],
   "sources": ["[[sources/<subject>/<date>/course/<file>.txt#L20-L30]]"],
   "match": { "kind": "new" },
   "note": ""
@@ -31,121 +46,33 @@ A concept is a named idea the reader should be able to look up later. Audit 3–
 
 Rules:
 
-- `slug` is English kebab-case, `^[a-z0-9]+(-[a-z0-9]+)*$`. It is the future block id.
-- `label` is a noun or proper noun, 1–4 words, no sentence punctuation, no verb instruction. Examples: `Agent`, `Tool Calling`, `Bubble Sort`, `Single Responsibility Principle`, `TCP vs UDP`. A sentence such as `先固定輸出 schema 讓模型可驗證` is wrong; the concept is `Structured Output` and the sentence belongs in the block summary.
-- `sources` is a non-empty subset of that step's own sources. Never cite a file the step does not cite. Keep the `[[sources/...#Lx-Ly]]` form exactly.
+- `slug` is English kebab-case, `^[a-z0-9]+(-[a-z0-9]+)*$`. It becomes the block id.
+- `label` is a noun or proper noun, 1–4 words, no sentence punctuation, no verb instruction. Examples: `Agent`, `Tool Calling`, `Bubble Sort`, `Single Responsibility Principle`, `TCP vs UDP`. A sentence belongs in `summary`.
+- `type` is `concept`, `procedure`, `principle`, or `contrast`; pick the one that matches the idea. Default `concept`.
+- `summary` is exactly one sentence, ≤ 120 characters, and explains the concept without the body.
+- `steps` is a non-empty subset of this node's written step ids that actually support the concept. Several steps may share one concept.
+- `sources` is a non-empty subset of the **union of those steps' sources**. Never cite a file the related steps do not cite. Keep the `[[sources/...#Lx-Ly]]` form.
 - `match.kind` is one of:
-  - `new` — no existing block covers it; a new block is needed.
-  - `reuse` — an existing block already covers it. Set `match.block` to that block id (or one of its aliases).
-  - `merge` — two existing blocks (or a new candidate and an existing block) are the same idea and should be merged. Set `match.block` to the canonical block id.
-  - `fuzzy` — it might overlap an existing block, but a human must decide. Add a one-line `note` naming the block and the overlap.
-- Dedupe against the existing blocks by id, aliases, and a normalized label (lowercase, punctuation and spaces removed, parenthetical translation ignored). Do not create a second block for the same idea.
-- Dedupe inside one step: one concept appears once. If two steps of the node use the same concept, both list it; the write phase reuses one block.
-- Do not emit `new` when an existing block id or alias already matches the slug.
-- Sources must support the specific concept, not just the step as a whole.
+  - `new` — no existing block covers it.
+  - `reuse` — an existing block already covers it; set `match.block` to that id or alias.
+  - `merge` — two existing blocks, or a new candidate and an existing block, are the same idea; set `match.block` to the canonical id.
+  - `fuzzy` — it might overlap an existing block but a human must decide; add a one-line `note` naming the block and the overlap.
+- Dedupe against existing blocks by id, aliases, and a normalized label (lowercase, punctuation and spaces removed, parenthetical translation ignored). Never create a second block for the same idea.
+- If an existing block already covers the idea, use `reuse`, not `new`.
 
-Write the whole node's audit to exactly the audit path given in the task:
+Write the whole node's audit to exactly the audit path given:
 
 ```json
 {
   "node": "<node>",
-  "steps": {
-    "<step>": {
-      "concepts": [ ... ],
-      "note": ""
-    }
-  }
+  "concepts": [ ... ]
 }
 ```
 
-Only written steps with an article body appear. Write no other file. Then self-check:
+Write no other file. Then self-check:
 
 ```bash
 node scripts/blocks.mjs audit --subject <SUBJECT> --node <NODE> --check
 ```
 
-Fix every `[fail ...]` line and rewrite the audit. Warnings (`audit-concept-short`, `audit-concept-overflow`, `audit-new-existing`) must be resolved or explained in the step `note`; do not ignore an overflow by quietly padding. This is the only command you may run.
-
-## Write mode
-
-The task message includes the confirmed concept list for the node and, when a concept is reused, the block id to link. Work through it exactly; do not re-audit or invent extra blocks. A node links at most five blocks across all its steps; the task message already made that selection, so never add a sixth.
-
-1. **Create only the blocks assigned to this node.** Use the `Write` tool. Each new block is `status: draft` unless the task explicitly says otherwise. Write the frontmatter and a single `# <title>` line only: the CLI writes the six-section body from the block's sources afterwards. Never overwrite or edit a block whose status is `reviewed`; stop and report it instead.
-2. **Link every listed concept.** Update the node's frontmatter `steps[].blocks` array: add the block id for each concept, keep existing ids, remove duplicates, and never reorder or rewrite unrelated fields. The node container is the only node file you may edit.
-3. **Do not touch prose.** Do not edit step articles, `ROADMAP.md`, `MEMORY.md`, digests, sources, or another node.
-4. **Report** the block files you created, the blocks you linked, and any block you skipped because it was `reviewed`.
-
-## Block file format
-
-```markdown
----
-id: structured-output
-title: "Structured Output（結構化輸出）"
-label: "Structured Output"
-subject: agent-harness2
-type: concept
-status: draft
-summary: "先固定輸出 schema，讓模型的行為可被驗證與組合。"
-aliases: []
-prerequisites: []
-related: []
-sources:
-  - "[[sources/agent-harness2/20261029/course/...txt#L20-L30]]"
-created: 2026-11-06
-updated: 2026-11-06
----
-
-# Structured Output（結構化輸出）
-
-## 定義
-...
-```
-
-- `id` equals the filename; `subject` equals the subject folder.
-- `title` is the display name, usually `English Term（中文）`; `label` is the bare noun.
-- `summary` is one sentence, ≤ 120 characters. It is the line the step sidebar shows, so it must explain the block without the body.
-- `type` is `concept`, `procedure`, `principle`, or `contrast`.
-- `aliases` holds only merged-in old ids or genuine synonyms; never another live block's id.
-- `prerequisites` is directed (`read this first`), `related` is undirected. Both are bare ids in the same subject. Never self-reference. Prerequisites must not form a cycle.
-- `sources` repeats the approved citations for this concept. Do not add a source the step did not use.
-- `author` is optional; the CLI stamps it when it publishes the body.
-
-### Body sections
-
-Every block uses exactly these `##` sections for its type, in order. Missing a section fails verify.
-
-| type | required sections |
-| --- | --- |
-| `concept` | 定義 / 為什麼重要 / 如何運作 / 例子 / 邊界與常見誤解 / 進階 |
-| `procedure` | 問題 / 前置條件 / 步驟 / 例子 / 失敗模式 / 進階 |
-| `principle` | 主張 / 為什麼成立 / 適用範圍 / 反例 / 進階 |
-| `contrast` | A 是什麼 / B 是什麼 / 關鍵差異 / 何時用哪個 / 進階 |
-
-- Write Traditional Chinese, short paragraphs. Open with the definition, not with "this step".
-- Assume the reader has not read any step. Inline-define every term the block relies on, or link another block with `[[block-id]]`. A link is navigation only; the reader must still understand the sentence without following it.
-- Use concrete examples, code, and numbers only when the cited source has them. A code fence must be preceded by `<!-- source: sources/...#Lx-Ly -->` or `<!-- derived -->`.
-- The body is written by the CLI (`src/blocks-cli.mjs`), not by hand. Never write image markers or image lines; the CLI inserts one hero figure after the H1. The section table below describes what the CLI produces and what a `plan`-mode run will read.
-- Do not copy the step's section headings or narrative; a block is not a step summary. Extract the idea, give its definition, mechanism, example, boundaries, and one useful next step.
-- Keep the body useful at 30–80 lines. Longer is allowed only when the source truly needs it.
-
-## Plan mode
-
-The task gives one or more block ids whose articles are already published (or composed to `learn/<subject>/output/blocks/<id>/original.md`). For each block:
-
-1. Read the block article and, when present, its `material.json`; do not read other blocks.
-2. Write exactly one item to `learn/<subject>/blocks/<id>.plan.json`:
-
-```json
-[
-  {
-    "heading": "第一個 ## 章節標題",
-    "prompt": "用台灣繁體中文描述這張 hero 圖要讓讀者看懂什麼"
-  }
-]
-```
-
-- The plan has exactly one item. Never write two. There is no `anchor`: the figure always goes after the H1 and before the first `##`.
-- `heading` is the article's first `##` heading, verbatim and without `##`.
-- `prompt` describes the concept, composition and elements only. Do not name a style, palette, background or medium; the template fixes those.
-- Do not invent facts, numbers or charts the article does not contain.
-- Write no block body, no image file and no other file in this mode.
+Fix every `[fail ...]` line and rewrite the audit. `audit-new-existing` is a hard failure: change that candidate to `reuse` (or `merge`/`fuzzy`) against the block it names. `audit-concepts-overflow` must be reduced to five. This is the only command you may run.

@@ -385,7 +385,7 @@ test("short steps need a note, and more than six concepts is an overflow warning
   );
 });
 
-test("duplicate slugs fail and a new slug that already exists warns", () => {
+test("duplicate slugs and a new slug that already exists both fail", () => {
   const result = validateAudit(
     auditFixture([
       validConcept,
@@ -395,15 +395,15 @@ test("duplicate slugs fail and a new slug that already exists warns", () => {
     auditContext(),
   );
   assert.ok(result.failures.some((failure) => failure.checkId === "audit-concept-duplicate"));
-  assert.ok(result.warnings.some((warning) => warning.checkId === "audit-new-existing"));
+  assert.ok(result.failures.some((failure) => failure.checkId === "audit-new-existing"));
 });
 
-test("a new candidate dedupes against aliases and normalized labels", () => {
+test("a new candidate must reuse an alias or normalized label match", () => {
   const concept = { ...validConcept, slug: "other-name", label: "Existing Block" };
   const byLabel = validateAudit(auditFixture([validConcept, concept, { ...validConcept, slug: "agent", label: "Agent" }]), auditContext());
   assert.ok(
-    byLabel.warnings.some(
-      (warning) => warning.checkId === "audit-new-existing" && warning.message.includes("label matches"),
+    byLabel.failures.some(
+      (failure) => failure.checkId === "audit-new-existing" && failure.message.includes("label matches"),
     ),
   );
 
@@ -416,8 +416,8 @@ test("a new candidate dedupes against aliases and normalized labels", () => {
     auditContext(),
   );
   assert.ok(
-    byAlias.warnings.some(
-      (warning) => warning.checkId === "audit-new-existing" && warning.message.includes("alias"),
+    byAlias.failures.some(
+      (failure) => failure.checkId === "audit-new-existing" && failure.message.includes("alias"),
     ),
   );
 });
@@ -488,4 +488,43 @@ test("a block author, when present, is a non-empty string", () => {
   assert.deepEqual(validateBlockFrontmatter(block({ author: "gpt-x" }), "test", new Set(["tool-calling"])), []);
   assert.ok(ids(validateBlockFrontmatter(block({ author: "  " }), "test", new Set(["tool-calling"]))).includes("block-author"));
   assert.ok(ids(validateBlockFrontmatter(block({ author: 3 }), "test", new Set(["tool-calling"]))).includes("block-author"));
+});
+
+test("a node-level shared concept audit validates", () => {
+  const audit = {
+    node: "n1",
+    concepts: [
+      {
+        slug: "tool-calling",
+        label: "Tool Calling",
+        type: "concept",
+        summary: "模型輸出工具呼叫，harness 執行後把結果餵回模型。",
+        steps: ["s1"],
+        sources: ["[[sources/test/notes.txt#L1-L10]]"],
+        match: { kind: "new" },
+      },
+    ],
+  };
+  assert.deepEqual(validateAudit(audit, auditContext()), { failures: [], warnings: [] });
+});
+
+test("a node-level audit needs steps, a summary, and a valid type", () => {
+  const audit = {
+    node: "n1",
+    concepts: [
+      {
+        slug: "tool-calling",
+        label: "Tool Calling",
+        summary: "",
+        steps: [],
+        sources: ["[[sources/test/notes.txt#L1-L10]]"],
+        match: { kind: "new" },
+        type: "diagram",
+      },
+    ],
+  };
+  const ids = validateAudit(audit, auditContext()).failures.map((failure) => failure.checkId);
+  assert.ok(ids.includes("audit-concept-steps"));
+  assert.ok(ids.includes("audit-concept-summary"));
+  assert.ok(ids.includes("audit-concept-type"));
 });

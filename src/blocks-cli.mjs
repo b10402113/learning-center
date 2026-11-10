@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import matter from "gray-matter";
 import { hasArticleBody, readStepSlices } from "./article.mjs";
 import {
+  auditConcepts,
   blockAssetsDir,
   blockImageLink,
   blockPlanPath,
@@ -45,6 +46,8 @@ import {
 } from "./image-provider.mjs";
 
 const usage = `Usage:
+  node src/blocks-cli.mjs write   --subject <s> --node <n> --block <id> [--force]
+  node src/blocks-cli.mjs image   --subject <s> (--node <n> | --block <id> | --all-drafts) [--max-parallel <n>] [--force]
   node src/blocks-cli.mjs prepare --subject <s> --block <id> [--force]
   node src/blocks-cli.mjs compose --subject <s> --block <id> [--force]
   node src/blocks-cli.mjs mark    --subject <s> --block <id>
@@ -53,10 +56,10 @@ const usage = `Usage:
   node src/blocks-cli.mjs publish --subject <s> --block <id>
   node src/blocks-cli.mjs article --subject <s> (--block <id> | --all-drafts) [--images] [--force]
 
-A block is one standalone knowledge point. This CLI writes its six-section
-body with the text model, places one hero figure after the H1, and publishes
-the body back to learn/<subject>/blocks/<id>.md. It never touches a reviewed
-block's prose.`;
+'write' reads the audit's related step articles (no material bundle) and asks
+the text model for an ELI5 block body. 'image' reads the published concept
+markdown and generates its one hero figure directly. The older prepare /
+compose / mark / polish / render / publish commands stay for repairs.`;
 
 export function blockFiles(root, subject, id) {
   const dir = join(root, "learn", subject, "output", "blocks", id);
@@ -76,7 +79,7 @@ export function blockFiles(root, subject, id) {
 export function readBlock(root, subject, id) {
   const path = join(blocksDir(root, subject), `${id}.md`);
   if (!existsSync(path)) throw new Error(`block not found: learn/${subject}/blocks/${id}.md`);
-  const parsed = matter(readFileSync(path, "utf8"));
+  const parsed = matter(readFileSync(path, "utf8"), {});
   return {
     id,
     path,
@@ -93,6 +96,24 @@ function blockIdsOnDisk(root, subject) {
     .filter((name) => name.endsWith(".md"))
     .map((name) => name.slice(0, -".md".length))
     .sort();
+}
+
+export function blockIdsForNode(root, subject, node) {
+  const path = join(root, "learn", subject, "nodes", `${node}.md`);
+  if (!existsSync(path)) throw new Error(`node not found: learn/${subject}/nodes/${node}.md`);
+  const parsed = matter(readFileSync(path, "utf8"), {});
+  const ids = [];
+  const seen = new Set();
+  for (const step of Array.isArray(parsed.data?.steps) ? parsed.data.steps : []) {
+    for (const raw of Array.isArray(step?.blocks) ? step.blocks : []) {
+      const id = typeof raw === "string" ? raw.trim() : "";
+      if (!id || seen.has(id)) continue;
+      if (!existsSync(join(blocksDir(root, subject), `${id}.md`))) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  return ids;
 }
 
 export function selectBlockIds(root, subject, { block = null, allDrafts = false } = {}) {
@@ -455,6 +476,267 @@ export function publishBlocks({ root, subject, ids, deps = {} }) {
   });
 }
 
+function nodePath(root, subject, node) {
+  return join(root, "learn", subject, "nodes", `${node}.md`);
+}
+
+function readNodeEntry(root, subject, node) {
+  const path = nodePath(root, subject, node);
+  if (!existsSync(path)) throw new Error(`node not found: learn/${subject}/nodes/${node}.md`);
+  const parsed = matter(readFileSync(path, "utf8"), {});
+  return {
+    path,
+    file: `learn/${subject}/nodes/${node}.md`,
+    data: parsed.data ?? {},
+    body: parsed.content ?? "",
+  };
+}
+
+function auditFile(root, subject, node) {
+  return join(root, "learn", subject, "output", "blocks", `${node}.audit.json`);
+}
+
+function readNodeAudit(root, subject, node) {
+  const path = auditFile(root, subject, node);
+  if (!existsSync(path)) throw new Error(`audit not found: learn/${subject}/output/blocks/${node}.audit.json`);
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function findConcept(audit, block) {
+  return (
+    auditConcepts(audit).find(
+      (concept) => concept.slug === block || concept.match?.block === block,
+    ) ?? null
+  );
+}
+
+function linkConceptSteps(root, subject, node, stepIds, blockId) {
+  const entry = readNodeEntry(root, subject, node);
+  let changed = false;
+  for (const step of Array.isArray(entry.data.steps) ? entry.data.steps : []) {
+    if (!step || !stepIds.includes(step.id)) continue;
+    const blocks = Array.isArray(step.blocks) ? step.blocks : [];
+    if (!blocks.includes(blockId)) {
+      step.blocks = [...blocks, blockId];
+      changed = true;
+    }
+  }
+  if (changed) writeFileSync(entry.path, matter.stringify(entry.body, entry.data));
+  return changed;
+}
+
+function createBlockSkeleton(root, subject, id, concept) {
+  const title = concept.title ?? concept.label ?? id;
+  const data = {
+    id,
+    title,
+    label: concept.label ?? id,
+    subject,
+    type: concept.type ?? "concept",
+    status: "draft",
+    summary: concept.summary ?? "",
+    aliases: [],
+    prerequisites: [],
+    related: [],
+    sources: Array.isArray(concept.sources) ? concept.sources : [],
+    created: today(),
+    updated: today(),
+  };
+  const path = join(blocksDir(root, subject), `${id}.md`);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, matter.stringify(`# ${title}\n`, data));
+}
+
+function readConceptSteps(root, subject, node, concept) {
+  const entry = readNodeEntry(root, subject, node);
+  const meta = new Map(
+    (Array.isArray(entry.data.steps) ? entry.data.steps : []).map((step) => [step?.id, step]),
+  );
+  return (concept.steps ?? []).map((id) => {
+    const path = join(root, "learn", subject, "nodes", node, `${id}.md`);
+    if (!existsSync(path)) throw new Error(`step article not found: learn/${subject}/nodes/${node}/${id}.md`);
+    const markdown = matter(readFileSync(path, "utf8"), {}).content.trim();
+    return {
+      id,
+      title: typeof meta.get(id)?.title === "string" ? meta.get(id).title : "",
+      purpose: typeof meta.get(id)?.purpose === "string" ? meta.get(id).purpose : "",
+      markdown,
+    };
+  });
+}
+
+export async function writeConcept({ root, subject, node, block, force = false, deps = {} }) {
+  const audit = readNodeAudit(root, subject, node);
+  const concept = findConcept(audit, block);
+  if (!concept) throw new Error(`concept "${block}" is not in learn/${subject}/output/blocks/${node}.audit.json`);
+
+  const kind = concept.match?.kind;
+  const targetId =
+    (kind === "reuse" || kind === "merge") && typeof concept.match?.block === "string" && concept.match.block.trim()
+      ? concept.match.block.trim()
+      : concept.slug;
+  if (!targetId || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(targetId)) {
+    throw new Error(`concept "${block}" does not resolve to a kebab-case block id`);
+  }
+  const stepIds = concept.steps ?? [];
+  if (stepIds.length === 0) throw new Error(`concept "${block}" lists no related steps`);
+
+  const blockPath = join(blocksDir(root, subject), `${targetId}.md`);
+  if (!existsSync(blockPath)) {
+    if (kind === "reuse" || kind === "merge") {
+      throw new Error(`concept "${block}" reuses "${targetId}", but that block does not exist`);
+    }
+    createBlockSkeleton(root, subject, targetId, concept);
+  }
+
+  const entry = readBlock(root, subject, targetId);
+  if (isReviewed(entry)) {
+    linkConceptSteps(root, subject, node, stepIds, targetId);
+    return { id: targetId, status: "linked", reason: "block is reviewed; only its link was added" };
+  }
+  if (hasArticleBody(entry.body) && !force) {
+    linkConceptSteps(root, subject, node, stepIds, targetId);
+    return { id: targetId, status: "linked", reason: "block already has a body; pass --force to rewrite" };
+  }
+
+  const prompt = deps.prompt ?? readFileSync(join(root, "prompts", "block-write.txt"), "utf8");
+  const steps = readConceptSteps(root, subject, node, concept);
+  const payload = {
+    title: typeof entry.data?.title === "string" ? entry.data.title : concept.label ?? targetId,
+    label: typeof entry.data?.label === "string" ? entry.data.label : concept.label ?? targetId,
+    type: typeof entry.data?.type === "string" ? entry.data.type : concept.type ?? "concept",
+    summary: typeof entry.data?.summary === "string" ? entry.data.summary : concept.summary ?? "",
+    sources: Array.isArray(entry.data?.sources) ? entry.data.sources : concept.sources ?? [],
+    steps,
+  };
+
+  let body = null;
+  let draft = null;
+  let lastError = null;
+  for (let attempt = 0; attempt < 3 && !body; attempt += 1) {
+    let text;
+    try {
+      text = await deps.generateText({
+        system: prompt,
+        user: JSON.stringify(
+          attempt > 0 && draft
+            ? {
+                ...payload,
+                retry: {
+                  draft,
+                  previous_error: lastError?.message ?? null,
+                  instruction: "保留 draft 的內容，補齊缺少或順序錯誤的 ## 章節，並修正格式。",
+                },
+              }
+            : payload,
+        ),
+      });
+    } catch (error) {
+      lastError = error;
+      break;
+    }
+    const normalized = normalizeBlockBody(text, payload.title);
+    draft = normalized;
+    if (!hasArticleBody(normalized)) {
+      lastError = new Error("model returned no block body");
+      continue;
+    }
+    const failures = validateBlockSections({ data: { type: payload.type, status: "draft" }, body: normalized });
+    if (failures.length > 0) {
+      lastError = new Error(failures[0].message);
+      continue;
+    }
+    body = normalized;
+  }
+
+  if (!body) throw new Error(lastError?.message ?? "model returned no valid block body");
+
+  const files = blockFiles(root, subject, targetId);
+  mkdirSync(files.dir, { recursive: true });
+  rmSync(files.polish, { force: true });
+  writeFileSync(files.original, body);
+  writeJson(files.compose, {
+    model: deps.model ?? "unknown",
+    composed_at: new Date().toISOString(),
+    status: "composed",
+  });
+  linkConceptSteps(root, subject, node, stepIds, targetId);
+  publishBlocks({ root, subject, ids: [targetId] });
+  return { id: targetId, status: "composed", article: relative(root, files.original), model: deps.model ?? "unknown" };
+}
+
+export async function imageBlocks({ root, subject, ids, force = false, maxParallel = 3, deps = {} }) {
+  if (typeof deps.generateImage !== "function") throw new Error("generateImage dependency is required");
+  const writeImage =
+    deps.writeImage ??
+    (async (target, bytes) => {
+      await writeWebp(target, bytes);
+    });
+  const template =
+    deps.imageTemplate ?? readFileSync(join(root, "prompts", "block-image-direct.txt"), "utf8");
+
+  async function renderOne(id) {
+    const entry = readBlock(root, subject, id);
+    const files = blockFiles(root, subject, id);
+    const hasImage = entry.body.includes(blockImageLink(id, 1));
+    if (isReviewed(entry) && !force) {
+      return { id, status: "failed", error: "block is reviewed; pass --force to rerender its figure" };
+    }
+    if (isReviewed(entry) && !hasImage) {
+      return { id, status: "failed", error: "a reviewed block has no rendered figure; fix its body by hand" };
+    }
+    if (!force && hasImage && existsSync(files.image)) {
+      return { id, status: "already-rendered", image: blockImageLink(id, 1), reused: true };
+    }
+
+    const markdown = String(entry.body)
+      .replace(/^[ \t]*<!--\s*image:\d+\s*-->[ \t]*$/gm, "")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    try {
+      const bytes = await deps.generateImage({
+        prompt: `${template}\n\n## CONCEPT_MARKDOWN\n\n${markdown}`,
+        block: { id, title: entry.data?.title ?? id },
+        index: 1,
+      });
+      if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw new Error(`no image returned for block ${id}`);
+      await writeImage(files.image, bytes);
+    } catch (error) {
+      return { id, status: "failed", error: error?.message ?? String(error) };
+    }
+
+    if (!isReviewed(entry)) {
+      const body = /<!--\s*image:\d+\s*-->/.test(entry.body)
+        ? replaceBlockImageMarker(entry.body, id)
+        : hasImage
+          ? entry.body
+          : replaceBlockImageMarker(insertBlockImageMarker(entry.body), id);
+      writeFrontmatterBody(entry, body, {});
+    }
+    return {
+      id,
+      status: "rendered",
+      image: blockImageLink(id, 1),
+      file: relative(root, files.image),
+      reused: false,
+    };
+  }
+
+  const limit = Math.max(1, Math.floor(Number(maxParallel) || 1));
+  const results = new Array(ids.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < ids.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await renderOne(ids[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, ids.length) }, () => worker()));
+  return results;
+}
+
 export async function renderBlocks({ root, subject, ids, force = false, deps = {} }) {
   if (typeof deps.generateImage !== "function") throw new Error("generateImage dependency is required");
   const writeImage =
@@ -594,8 +876,10 @@ export async function main(argv = process.argv.slice(2)) {
     allowPositionals: true,
     options: {
       subject: { type: "string" },
+      node: { type: "string" },
       block: { type: "string" },
       "all-drafts": { type: "boolean" },
+      "max-parallel": { type: "string" },
       copy: { type: "boolean" },
       force: { type: "boolean" },
       images: { type: "boolean" },
@@ -603,20 +887,52 @@ export async function main(argv = process.argv.slice(2)) {
     },
   });
   const mode = positionals[0] ?? "article";
-  if (!["prepare", "compose", "mark", "polish", "render", "publish", "article"].includes(mode)) {
+  if (!["write", "image", "prepare", "compose", "mark", "polish", "render", "publish", "article"].includes(mode)) {
     throw new Error(`unknown command "${mode}"\n\n${usage}`);
   }
   requireSubject(values);
   loadEnv();
   const root = values.root ? join(process.cwd(), values.root) : process.cwd();
   const subject = values.subject;
-  const ids = selectBlockIds(root, subject, {
-    block: values.block ?? null,
-    allDrafts: Boolean(values["all-drafts"]),
-  });
+
+  if (mode === "write") {
+    if (!values.node) throw new Error(`--node is required for write\n\n${usage}`);
+    if (!values.block) throw new Error(`--block is required for write\n\n${usage}`);
+    const deps = createDeps(root);
+    const result = await writeConcept({
+      root,
+      subject,
+      node: values.node,
+      block: values.block,
+      force: Boolean(values.force),
+      deps,
+    });
+    const report = { mode, subject, node: values.node, block: values.block, result };
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return report;
+  }
+
+  const ids =
+    mode === "image" && values.node && !values.block && !values["all-drafts"]
+      ? blockIdsForNode(root, subject, values.node)
+      : selectBlockIds(root, subject, {
+          block: values.block ?? null,
+          allDrafts: Boolean(values["all-drafts"]),
+        });
 
   let report;
   switch (mode) {
+    case "image": {
+      const deps = createDeps(root);
+      const maxParallel = values["max-parallel"] ? Number(values["max-parallel"]) : 3;
+      report = {
+        mode,
+        subject,
+        node: values.node ?? null,
+        blocks: await imageBlocks({ root, subject, ids, force: Boolean(values.force), maxParallel, deps }),
+      };
+      break;
+    }
     case "prepare":
       report = { mode, subject, blocks: prepareBlocks({ root, subject, ids, force: Boolean(values.force) }) };
       break;

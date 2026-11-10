@@ -89,6 +89,21 @@ test("the layout is deterministic", () => {
   assert.deepEqual(layoutRoadmap(nodes), layoutRoadmap(nodes));
 });
 
+test("a same-tier prerequisite chain keeps teaching order", () => {
+  const layout = layoutRoadmap([
+    node("x", 1, 1),
+    node("base", 1, 2, ["x"]),
+    node("a", 2, 3, ["base"]),
+    node("b", 2, 4, ["a"]),
+    node("c", 2, 5, ["b"]),
+    node("d", 2, 6, ["c"]),
+  ]);
+  assert.deepEqual(
+    layout.rows[1].nodes.map(({ node: n }) => n.id),
+    ["a", "b", "c", "d"]
+  );
+});
+
 test("same-tier edges leave the right side and enter the left", () => {
   const layout = layoutRoadmap([
     node("a", 1, 1),
