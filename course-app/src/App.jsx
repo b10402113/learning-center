@@ -344,6 +344,7 @@ export default function App() {
       ),
     [course, step]
   );
+  const showRail = Boolean(step && hasStepRail && railOpen && !focusMode);
 
   // Browser back/forward support
   useEffect(() => {
@@ -708,7 +709,13 @@ export default function App() {
           />
 
           <div className="mx-auto w-full max-w-[1536px] px-4 sm:px-6 lg:pl-8 lg:pr-12">
-            <div className="lg:grid lg:grid-cols-[20rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)_20rem]">
+            <div
+              className={`lg:grid lg:grid-cols-[20rem_minmax(0,1fr)] ${
+                showRail
+                  ? "xl:grid-cols-[20rem_minmax(0,1fr)_20rem]"
+                  : "xl:grid-cols-[20rem_minmax(0,1fr)]"
+              }`}
+            >
               <FadingColumn hidden={focusMode} className="lg:block">
                 <Sidebar
                   course={course}
@@ -728,7 +735,11 @@ export default function App() {
                     className={
                       step
                         ? ""
-                        : "mx-auto w-full max-w-[816px] px-0 lg:px-8 xl:px-12"
+                        : blocksRoute
+                          ? "mx-auto w-full max-w-[1280px] px-0 lg:px-8 xl:px-12"
+                          : blockRoute
+                            ? "mx-auto w-full max-w-[1080px] px-0 lg:px-8 xl:px-12"
+                            : "mx-auto w-full max-w-[816px] px-0 lg:px-8 xl:px-12"
                     }
                   >
                   {blockRoute ? (
@@ -773,7 +784,7 @@ export default function App() {
                 </div>
               </main>
 
-              {step && hasStepRail && railOpen && (
+              {showRail && (
                 <FadingColumn hidden={focusMode} className="xl:block">
                   <ContextRail
                     course={course}

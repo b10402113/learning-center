@@ -154,9 +154,9 @@ Prereqs: `learn/<subject>/MEMORY.md`, `learn/<subject>/ROADMAP.md`, and `learn/<
    node scripts/quiz.mjs write --subject <subject> --node <node> --step <step> --input learn/<subject>/output/quiz-candidates/<node>/<step>.json [--force]
    ```
 
-   The script validates the schema, the 3–8 question window, the article's character-based ceiling, and the option shape (`quiz-option-length`, `quiz-answer-spread`). Only a passing file becomes `<step>.quiz.json`. The agent self-checks every candidate with `node scripts/quiz.mjs check` before returning, so `write` normally passes on the first call.
+   The script validates the schema, the 3–8 question window, the article's character-based ceiling, and the option shape (`quiz-option-length`, `quiz-answer-spread`, `quiz-answer-pattern`). Only a passing file becomes `<step>.quiz.json`. The agent self-checks every candidate with `node scripts/quiz.mjs check` before returning, so `write` normally passes on the first call.
 
-   When `write` reports `quiz-option-length`, `quiz-answer-spread`, or a `quiz-file-*` error, re-dispatch that node's agent once with the failed steps' errors quoted, then rerun `write` for those steps. A step that fails the second time keeps its candidate file and error and the batch continues. Never hand-write or hand-edit questions, and never insert them into the article Markdown.
+   When `write` reports `quiz-option-length`, `quiz-answer-spread`, `quiz-answer-pattern`, or a `quiz-file-*` error, re-dispatch that node's agent once with the failed steps' errors quoted, then rerun `write` for those steps. A step that fails the second time keeps its candidate file and error and the batch continues. Never hand-write or hand-edit questions, and never insert them into the article Markdown.
 
    **6d. Verify and rebuild viewer data.** Run `node scripts/verify.mjs --node <subject>/<node>` for every node the Quiz phase processed. When at least one sidecar was written, run:
 
@@ -302,7 +302,7 @@ Steps:
   Questions: <MIN-QUESTIONS>-<MAX-QUESTIONS>
   Candidate file: learn/<SUBJECT>/output/quiz-candidates/<NODE>/<STEP-ID>.json
 
-Every correct answer must be directly supported by a sentence in that step's article. No two questions may test the same concept, within a step or across these steps. Use plausible distractors, keep each question self-contained, and write Traditional Chinese in the article's terminology. The Option shape rules in your instructions are hard requirements: keep every option inside the one length band and rotate the correct index `(n − 1) mod <option count>`. When a range is a single number, write exactly that many questions.
+Every correct answer must be directly supported by a sentence in that step's article. No two questions may test the same concept, within a step or across these steps. Use plausible distractors, keep each question self-contained, and write Traditional Chinese in the article's terminology. The Option shape rules in your instructions are hard requirements: keep every option inside the one length band and scatter the correct index so it never follows the question order or a fixed rotation. When a range is a single number, write exactly that many questions.
 
 Self-check every file with `node scripts/quiz.mjs check --subject <SUBJECT> --node <NODE> --step <STEP-ID> --input <CANDIDATE>` and fix until each reports `"status": "ok"`. That is the only command you may run. Then report the paths you wrote.
 ```

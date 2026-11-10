@@ -3,7 +3,7 @@ import BlockGraph from "./BlockGraph.jsx";
 import { blockTypeLabel, blockIndex } from "../lib/blocks.mjs";
 import { localNodeIds } from "../lib/block-graph.mjs";
 import { followInternalLink } from "../lib/navigation.mjs";
-import { pathFor, pathForBlock } from "../lib/route.mjs";
+import { pathFor, pathForBlock, pathForBlocks } from "../lib/route.mjs";
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -238,7 +238,18 @@ export default function BlockView({
         <span aria-hidden="true" className="text-ink-soft/50">
           /
         </span>
-        <span>知識點</span>
+        <a
+          href={pathForBlocks(course.subject)}
+          onClick={(event) => {
+            const href = pathForBlocks(course.subject);
+            if (followInternalLink(event, href, onNavigate)) {
+              event.preventDefault();
+            }
+          }}
+          className="transition-colors hover:text-accent"
+        >
+          知識點
+        </a>
         <span aria-hidden="true" className="text-ink-soft/50">
           /
         </span>

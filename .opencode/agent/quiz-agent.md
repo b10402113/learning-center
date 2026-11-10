@@ -30,7 +30,7 @@ The task message lists the only articles you may use. Do not read other nodes, t
 A reader must not be able to guess the answer from how the options look. Two rules are hard requirements, and the validator behind `check` and `write` rejects a file that breaks either:
 
 - **One length band.** Every option in a question is 18–24 characters long (each CJK character and each Latin letter counts as one). Write all options as the same kind of thing — full claims in one grammatical form, never one explanatory sentence beside three bare labels — then pad or trim each until it sits in the band. The correct option never stands out as the longest.
-- **Rotated position.** Number the questions 1..N. Put question n's correct answer at index `(n − 1) mod <option count>` — with 4 options that walks 0, 1, 2, 3, 0, 1, … `answer` is that plain integer. A value like `2 - 2` is not a number and fails validation.
+- **Scattered position.** Do not follow a fixed rotation or the question order. Place each question's correct answer at an arbitrary index that varies from question to question, and spread the answers across all positions so a reader cannot learn the pattern. Never let question n's answer sit at a predictable slot such as index `n − 1`. `answer` is that plain 0-based integer; a value like `2 - 2` is not a number and fails validation.
 
 Before returning, read each question's options with the answer hidden: the options should look interchangeable in shape and length, and the correct index should move from question to question rather than parking in one slot. Then self-check each file:
 

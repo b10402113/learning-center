@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { parseQuiz } from "../lib/quiz.mjs";
+import { useMemo, useRef, useState } from "react";
+import { parseQuiz, shuffleQuiz } from "../lib/quiz.mjs";
 import { usePrefersReducedMotion } from "../lib/use-prefers-reduced-motion.mjs";
 
 const NUDGE_KEYFRAMES = [
@@ -18,7 +18,11 @@ export default function Quiz({
   solved: solvedProp,
   onSolved,
 }) {
-  const quiz = providedQuiz ?? parseQuiz(source);
+  const [shuffleSeed] = useState(() => Math.floor(Math.random() * 0xffffffff));
+  const quiz = useMemo(
+    () => shuffleQuiz(providedQuiz ?? parseQuiz(source), shuffleSeed),
+    [providedQuiz, source, shuffleSeed],
+  );
   const [localSolved, setLocalSolved] = useState(false);
   const [wrong, setWrong] = useState(() => new Set());
   const solved = solvedProp ?? localSolved;

@@ -87,6 +87,29 @@ function answerSpreadErrors(questions) {
   return errors;
 }
 
+function answerPatternErrors(questions) {
+  if (questions.length < 2) return [];
+
+  const sequential = questions.every((question, index) => {
+    const options = question && question.options;
+    return (
+      Array.isArray(options) &&
+      options.length >= QUIZ_MIN_OPTIONS &&
+      Number.isInteger(question.answer) &&
+      question.answer === index % options.length
+    );
+  });
+  if (!sequential) return [];
+
+  return [
+    {
+      checkId: "quiz-answer-pattern",
+      message:
+        "correct answers follow the question order (0, 1, 2, …); scatter them randomly so the position never reveals the answer",
+    },
+  ];
+}
+
 function validateQuestion(question, index) {
   const errors = [];
   const label = `questions[${index}]`;
@@ -185,6 +208,7 @@ export function validateQuizPayload(
 
   if (enforceStyle && questions.length >= QUIZ_MIN_QUESTIONS) {
     errors.push(...answerSpreadErrors(questions));
+    errors.push(...answerPatternErrors(questions));
   }
 
   return errors;

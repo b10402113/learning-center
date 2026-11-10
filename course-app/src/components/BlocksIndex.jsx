@@ -260,7 +260,7 @@ export default function BlocksIndex({ course, onNavigate = null }) {
                 沒有符合條件的知識點。
               </p>
             ) : (
-              <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {filtered.map((block) => (
                   <BlockCard
                     key={block.id}

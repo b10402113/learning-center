@@ -71,19 +71,19 @@ function questions() {
     {
       question: "為什麼狀態不能只放在 process 記憶體？",
       options: ["因為 crash 後會消失", "因為模型跑得太慢", "因為工具數量太少"],
-      answer: 0,
+      answer: 2,
       explain: "crash 之後記憶體裡的狀態會消失。",
     },
     {
       question: "工具執行應該屬於哪一層？",
       options: ["模型", "harness", "使用者"],
-      answer: 1,
+      answer: 0,
       explain: "文章說工具執行屬於 harness。",
     },
     {
       question: "工具直接產生副作用會有什麼風險？",
       options: ["模型會變快", "context 會變短", "重試可能重複扣款"],
-      answer: 2,
+      answer: 1,
       explain: "重試時可能把同一個副作用再做一次。",
     },
   ];
@@ -224,6 +224,21 @@ test("write rejects a quiz that parks every correct answer on one position", (t)
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1.quiz.json")), false);
 });
 
+test("write rejects answers that follow the question order", (t) => {
+  const root = fixture(t);
+  const input = join(root, "candidate.json");
+  const rotated = questions().map((question, index) => ({
+    ...question,
+    answer: index % question.options.length,
+  }));
+  writeFileSync(input, candidate(rotated));
+
+  const result = write({ ...options(root), input });
+  assert.equal(result.status, "failed");
+  assert.ok(result.errors.some((error) => error.checkId === "quiz-answer-pattern"));
+  assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1.quiz.json")), false);
+});
+
 test("write strips inline backticks because quiz cards render plain text", (t) => {
   const root = fixture(t);
   const input = join(root, "candidate.json");
@@ -263,7 +278,7 @@ test("check validates a candidate without writing the sidecar", (t) => {
 });
 
 test("the option shape taught to quiz-agent passes validation", () => {
-  const shaped = [0, 1, 2, 3, 0, 1].map((answer, index) => ({
+  const shaped = [2, 0, 3, 1, 0, 2].map((answer, index) => ({
     question: `問題 ${index}`,
     options: [0, 1, 2, 3].map((offset) => "字".repeat(18 + ((index + offset) % 7))),
     answer,
