@@ -344,7 +344,9 @@ export default function App() {
       ),
     [course, step]
   );
-  const showRail = Boolean(step && hasStepRail && railOpen && !focusMode);
+  // Keep the rail's grid column while focus mode is on; FadingColumn hides it
+  // visually so the article never shifts sideways.
+  const showRail = Boolean(step && hasStepRail && railOpen);
 
   // Browser back/forward support
   useEffect(() => {
