@@ -1,11 +1,11 @@
 ---
 id: task-dataset-scorer
-title: "每個 eval 都是 task、dataset、scorer"
+title: 每個 eval 都是 task、dataset、scorer
 subject: ai-eval
 tier: 1
 order: 3
 status: written
-goal: "能把任何 eval 拆成 task／dataset／scorer 三塊，並說出 eval 是 build→test→monitor 的迴路。"
+goal: 能把任何 eval 拆成 task／dataset／scorer 三塊，並說出 eval 是 build→test→monitor 的迴路。
 digests:
   - lesson1.en.md
   - ByteByteGo_AI_Evals_Week1_SlideDeck.md
@@ -14,44 +14,61 @@ prerequisites:
   - learn/ai-eval/nodes/why-ai-products-need-evals.md
 steps:
   - id: task-is-the-jobs-to-be-done
-    author: "google/gemini-3.8-flash"
-    title: "定義 AI Eval 的任務：從任務目標、成功條件到禁止行為"
-    purpose: "能把一個 eval 的 task 寫成 jobs-to-be-done、可驗收的成功條件，以及明確的禁止行為。"
+    author: google/gemini-3.8-flash
+    title: 定義 AI Eval 的任務：從任務目標、成功條件到禁止行為
+    purpose: 能把一個 eval 的 task 寫成 jobs-to-be-done、可驗收的成功條件，以及明確的禁止行為。
     sources:
-      - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L408-L600]]"
-      - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L1001-L1100]]"
-      - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L201-L320]]"
+      - '[[sources/ai-eval/20261108/course/lesson1.en.txt#L408-L600]]'
+      - '[[sources/ai-eval/20261108/course/lesson1.en.txt#L1001-L1100]]'
+      - >-
+        [[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L201-L320]]
+    blocks:
+      - three-leg-eval-system
+      - scenario-mix-dataset
+      - eval-task-definition
   - id: dataset-is-a-set-of-scenarios
-    author: "google/gemini-3.8-flash"
-    title: "為 AI 任務建立涵蓋典型、邊界與對抗案例的評測資料集"
-    purpose: "能為一個 task 組出涵蓋典型、邊界與對抗案例的 dataset，並標明每個案例的預期結果。"
+    author: google/gemini-3.8-flash
+    title: 為 AI 任務建立涵蓋典型、邊界與對抗案例的評測資料集
+    purpose: 能為一個 task 組出涵蓋典型、邊界與對抗案例的 dataset，並標明每個案例的預期結果。
     sources:
-      - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L408-L600]]"
-      - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L1101-L1210]]"
-      - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L721-L852]]"
-      - "[[sources/ai-eval/20261108/supplement/lesson2.en.txt#L71-L170]]"
-      - "[[sources/ai-eval/20261108/supplement/lesson2.en.txt#L561-L660]]"
+      - '[[sources/ai-eval/20261108/course/lesson1.en.txt#L408-L600]]'
+      - '[[sources/ai-eval/20261108/course/lesson1.en.txt#L1101-L1210]]'
+      - >-
+        [[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L721-L852]]
+      - '[[sources/ai-eval/20261108/supplement/lesson2.en.txt#L71-L170]]'
+      - '[[sources/ai-eval/20261108/supplement/lesson2.en.txt#L561-L660]]'
+    blocks:
+      - three-leg-eval-system
+      - scenario-mix-dataset
   - id: scorer-turns-judgment-into-a-verdict
-    author: "google/gemini-3.8-flash"
-    title: "AI 評估三腳架：如何為任務選對 Code、LLM Judge 與真人評分者"
-    purpose: "能為同一個 task 選對 code、LLM judge 或 human scorer，並說明每個選擇的誤判風險。"
+    author: google/gemini-3.8-flash
+    title: AI 評估三腳架：如何為任務選對 Code、LLM Judge 與真人評分者
+    purpose: 能為同一個 task 選對 code、LLM judge 或 human scorer，並說明每個選擇的誤判風險。
     sources:
-      - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L408-L600]]"
-      - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L1001-L1100]]"
-      - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L201-L320]]"
-      - "[[sources/ai-eval/20261108/supplement/lesson2.en.txt#L71-L170]]"
+      - '[[sources/ai-eval/20261108/course/lesson1.en.txt#L408-L600]]'
+      - '[[sources/ai-eval/20261108/course/lesson1.en.txt#L1001-L1100]]'
+      - >-
+        [[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L201-L320]]
+      - '[[sources/ai-eval/20261108/supplement/lesson2.en.txt#L71-L170]]'
+    blocks:
+      - three-leg-eval-system
+      - evaluator-selection
   - id: eval-is-a-build-test-monitor-loop
-    author: "google/gemini-3.8-flash"
-    title: "把離線評測與線上監控接成完整迴路：從 Build、Test 到 Monitor 的 AI 迭代法"
-    purpose: "能把 offline batch 測試與線上監控接成 build→test→monitor 的迴路，並說明失敗如何變成回歸案例。"
+    author: google/gemini-3.8-flash
+    title: 把離線評測與線上監控接成完整迴路：從 Build、Test 到 Monitor 的 AI 迭代法
+    purpose: 能把 offline batch 測試與線上監控接成 build→test→monitor 的迴路，並說明失敗如何變成回歸案例。
     sources:
-      - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L408-L600]]"
-      - "[[sources/ai-eval/20261108/course/lesson1.en.txt#L601-L700]]"
-      - "[[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L201-L320]]"
-      - "[[sources/ai-eval/20261108/supplement/lesson2.en.txt#L261-L360]]"
-      - "[[sources/ai-eval/20261108/supplement/lesson2.en.txt#L561-L660]]"
-created: 2026-11-08
-updated: 2026-11-08
+      - '[[sources/ai-eval/20261108/course/lesson1.en.txt#L408-L600]]'
+      - '[[sources/ai-eval/20261108/course/lesson1.en.txt#L601-L700]]'
+      - >-
+        [[sources/ai-eval/20261108/course/code/ByteByteGo_AI_Evals_Week1_SlideDeck.txt#L201-L320]]
+      - '[[sources/ai-eval/20261108/supplement/lesson2.en.txt#L261-L360]]'
+      - '[[sources/ai-eval/20261108/supplement/lesson2.en.txt#L561-L660]]'
+    blocks:
+      - three-leg-eval-system
+      - build-test-monitor-loop
+created: 2026-11-08T00:00:00.000Z
+updated: 2026-11-08T00:00:00.000Z
 ---
 
 # 每個 eval 都是 task、dataset、scorer
