@@ -1,84 +1,94 @@
 # 用 Prototype Ticket 把決策拉到高擬真度，驗證行為才關票
 
-在規劃軟體架構或挑選第三方服務時，單看文件往往難以察覺實際整合的盲點。此時最有效的方法不是寫出完美的正式程式碼，而是開啟一張專門的 Prototype Ticket（原型工單）。透過高擬真度（high fidelity）的原型，親自操作並驗證行為，直到所有決策都確認無誤，才能關閉票券。
+在規劃軟體架構或挑選第三方服務時，光看文件很難發現實際整合會踩到的坑。
+
+這時最有效的方法不是直接寫出正式程式碼，而是開一張專門的 Prototype Ticket（原型工單）。
+
+打造高擬真度（high fidelity）的原型，親自操作並驗證系統行為。確認所有技術決策都沒問題後，才把工單關閉。
 
 ## 原型工單的核心精神：高擬真度反饋與隨意拋棄
 
-原型工單並不是要在主要程式庫裡堆疊未成熟的程式碼，它的運作模式與先前的研究（research）工作類似：
+原型工單不是要把不成熟的程式碼塞進主要專案中。它的運作邏輯跟前期的研究（research）工作很像：
 
-- **獨立分支存放**：原型程式碼放在隨機、拋棄式的分支中（例如 `prototype-knock-spike`），不合併進主分支（main checkout）。這樣既能讓本機 Agent 隨時存取與參考，又不會讓 Agent 誤以為這是正式環境的程式碼。
-- **高額 Token 消耗的「Vibe Coding」**：原型階段本來就會消耗大量 Token。你可以不斷要求 Agent：「我不喜歡這個，換成那種做法」，在快速往返的調整中，把架構決策直接體現在畫面上。
-- **程式碼可以走捷徑**：負責原型的技能（skill）通常被允許忽略生產環境規範。例如出現 `catch (e) { /* null */ }` 這種直接吞掉錯誤的寫法在 Code Review 是禁忌，但在原型中完全可以接受。
-- **關票條件是「決策整合與行為驗證」**：原型工單不是寫完原型就結束，而是要等到你的所有決策都落實進去、功能行為驗證正確，才算完成。
+- **放在獨立分支**：原型程式碼放在隨機、拋棄式的分支中（例如 `prototype-knock-spike`），不要合併進主分支（main checkout）。本機 Agent 能隨時讀取參考，也不會把這些實驗程式碼誤當成正式環境邏輯。
+- **高 Token 消耗的「Vibe Coding」**：原型階段本來就會消耗大量 Token。隨時向 Agent 提出調整要求，把架構決策直接反應在操作畫面上。
+- **程式碼可以抄捷徑**：負責原型的技能（skill）不需要遵守正式環境的規範。即使出現 `catch (e) { /* null */ }` 這種直接忽略錯誤的寫法，在原型開發中也完全可以接受。
+- **關票條件在於「決策拍板與行為驗證」**：原型不是寫完畫面就算數。必須落實所有架構決策，並確認功能行為完全正確，工單才算完成。
 
 ![第 1 段配圖](./prototype-at-high-fidelity-assets/image-1.webp)
 
 ## 啟動原型：以 Wayfinder 測試 Knock 通知服務
 
-以在 Cadence 系統中整合第三方通知服務 Knock 為例，當 API key 準備就緒後，便可以清空 Agent 的上下文，啟動 Wayfinder 執行這張原型工單。
+以在 Cadence 系統整合第三方通知服務 Knock 為例。
 
-Wayfinder 的優勢在於它有一個全域地圖（map）。以往手動探索容易擔心清空上下文會遺失成果，但 Wayfinder 會把決策寫回地圖中，新啟動的 Session 只要抓取所需資料即可，非常節省 Token。
+準備好 API key 後，清空 Agent 的上下文，啟動 Wayfinder 執行這張原型工單。
 
-這次 Agent 認領了 prototype skill 後，自動執行了幾個動作：
-1. 查閱 Knock 官方文件並安裝 Node SDK。
-2. 結合先前地圖中記錄的 Knock 研究資料。
-3. 在獨立分支建置一個拋棄式路由，並在 `localhost:5199` 啟動開發伺服器，準備驗證工單上的 4 項檢查點（checks）。
+Wayfinder 的特色在於擁有全域地圖（map）。傳統手動探索常擔心清空對話會遺失進度，Wayfinder 則會把決策同步記錄在地圖裡。新啟動的 Session 只要抓取需要的資料，非常節省 Token。
 
-## 當第三方後台難以操作時：讓 Agent 建立引導精靈
+Agent 取得 prototype skill 後，會自動執行幾個步驟：
+1. 查閱 Knock 官方文件，安裝 Node SDK。
+2. 匯入地圖中先前留下的 Knock 研究資料。
+3. 在獨立分支建立一個拋棄式的路由，在 `localhost:5199` 跑起開發伺服器，準備驗證工單上的 4 項檢查點（checks）。
 
-伺服器跑起來後，檢查點一「簽署的使用者權杖（signed user tokens）」順利通過：只要有公開金鑰與該權杖，使用者就能讀取自己的通知動態（feed）。
+## 第三方後台不好操作時：讓 Agent 建立引導精靈
 
-但檢查點二到四需要先在 Knock 後台完成設定。面對繁瑣的第三方介面，若不想自己迷失在後台選單中，可以直接要求 Agent：「可以為我建立一個精靈（wizard）來設定檢查點二到四需要的東西嗎？」因為系統具備模型呼叫技能（model invoked skill），Agent 便會自動呼叫對應技能生成引導腳本。
+伺服器啟動後，檢查點一「簽署的使用者權杖（signed user tokens）」順利通過。只要有公開金鑰和這組權杖，使用者就能讀取自己的通知動態（feed）。
 
-開啟新終端機執行這個精靈後，螢幕左邊是終端機引導、右邊是瀏覽器：
+檢查點二到四必須先在 Knock 後台完成設定。
+
+如果不想在繁瑣的第三方介面裡迷路，可以直接要求 Agent 建立精靈（wizard），指引完成檢查點二到四的設定。系統內建模型呼叫技能（model invoked skill），Agent 會自動呼叫對應功能，產出操作導引腳本。
+
+開啟新終端機執行這個精靈後，螢幕左邊放終端機引導，右邊放瀏覽器：
 
 ![第 2 段配圖](./prototype-at-high-fidelity-assets/image-2.webp)
 
-1. **建立討論回覆工作流程**：建立名為 `discussion reply` 的 workflow，新增 `discussion` 分類，在流程建置器中加入 `in-app feed` 頻道步驟，設定步驟範本的 Markdown 內容，最後儲存並 commit 到 development 環境。精靈還會自動觸發並驗證設定是否生效。
+1. **建立討論回覆工作流程**：建立名為 `discussion reply` 的 workflow，加上 `discussion` 分類。在流程建置器加入 `in-app feed` 頻道步驟，設定範本的 Markdown 內容，儲存並 commit 到 development 環境。精靈會自動觸發並驗證設定是否生效。
 2. **建立註冊工作流程**：同樣建立 `enrollment` workflow，填入對應的 Markdown 範本並提交。
 
-### 從撞牆中淬煉出的架構決策
+### 從卡關中逼出真正的架構決策
 
-到了精靈的第三階段，要求在平台偏好設定（platform preferences）中，將 `enrollment` 分類底下的 in-app feed 預設關閉。
+執行到精靈第三階段時，需要進到平台偏好設定（platform preferences），將 `enrollment` 分類底下的 in-app feed 預設關閉。
 
-Knock 的偏好設定介面相當複雜，即便在偏好中心（Preference Center）找到了選項，也找不到修改預設值（defaults）的地方。這時將整個卡住的階段文字直接貼回給 Agent，尋求協助或確認是否能用程式化解決。
+Knock 的偏好設定介面相當複雜，就算在偏好中心（Preference Center）找到選項，也找不到修改預設值（defaults）的欄位。這時可以把卡住的畫面文字複製給 Agent，請它協助確認能不能用程式碼解決。
 
 ![第 3 段配圖](./prototype-at-high-fidelity-assets/image-3.webp)
 
-在嘗試與討論的過程中，意外得出了重要決策：**我們根本不需要在 Knock 後台設定這個預設值**。
+在反覆測試與討論後，得出了一個關鍵結論：**根本不需要在 Knock 後台設定這個預設值**。
 
-因為 Cadence 系統在將講師資料同步至 Knock 時，可以直接將使用者的偏好設定寫入「enrollment off」；當使用者主動選擇加入時，Cadence 再將其切換為「on」。這個在操作第三方服務時遇到的阻礙，反而替系統省去了一道後台設定程序。這正是原型的真正價值：提早摸清工具是否合手，並找出真正可行的架構路徑。
+Cadence 將講師資料同步到 Knock 時，就能順手將使用者的偏好設定帶入「enrollment off」。等使用者主動加入，Cadence 再將狀態改成「on」即可。
+
+操作第三方服務遇到的阻礙，反而替系統省下一道後台設定手續。這就是原型的真正價值：提早確認工具是否好用，摸索出切實可行的架構路線。
 
 ## 動手進行「行為驗證」：狂按按鈕找出邊界問題
 
-跳過不必要的設定後，便可進入原型介面。這類原型並非講求精美的 UI，而是「行為是否正確（does it behave right）」的原型——畫面上會充滿各種測試按鈕，讓你能自由切換身分、測試邏輯並嘗試把它玩壞。
+跳過不必要的設定，進入原型介面。這類原型並非講求精美的 UI，而是要確認「行為是否正確（does it behave right）」的原型。畫面上會有大量的測試按鈕，方便切換身分、測試邏輯，試著找出破綻。
 
 ![第 4 段配圖](./prototype-at-high-fidelity-assets/image-4.webp)
 
-以多角色切換為例進行驗證：
+透過多角色切換進行驗證：
 
 1. **驗證討論回覆通知**：
-   - 登入為 Sarah Chen，按下對 Emma Wilson 問題的回覆按鈕。
-   - 切換至 Emma Wilson，在 Headless feed 中確認通知是否在 3 秒內出現。
-   - 測試過程發現按鈕沒有作用，向 Agent 回報後，發現是原型本身的錯誤。Agent 修正後重新指示測試序列：改以 Sarah Chen 觸發通知給 Olivia Martinez，登入 Olivia 的帳號後便順利看到通知出現。
+   - 登入為 Sarah Chen，點擊回覆 Emma Wilson 提問的按鈕。
+   - 切換至 Emma Wilson，在 Headless feed 確認通知是否在 3 秒內跳出。
+   - 測試時如果按鈕沒有反應，回報給 Agent。確認是原型自身的錯誤後，Agent 會修復程式碼並重新規劃測試流程：改由 Sarah Chen 觸發通知給 Olivia Martinez，登入 Olivia 帳號後確認收到通知。
 2. **驗證已讀與已看狀態**：
    - 測試單則通知的「標為已讀（mark read）」與「標為未讀」。
-   - 點擊「全部標為已看（mark all as seen）」時發現沒有外觀變化。向 Agent 回報後才釐清 Knock 的行為機制：標為「已看（seen）」並不等同於「已讀（read）」，只有已讀項目才會反灰變淡。
+   - 點擊「全部標為已看（mark all as seen）」時，外觀如果沒有變化，向 Agent 詢問。藉此釐清 Knock 的機制：標為「已看（seen）」不等於「已讀（read）」，只有已讀的項目才會變灰。
 3. **驗證預設關閉與主動加入（Opt-in）**：
-   - 依序以 Olivia 與其他學生身分點擊「註冊並通知 Marcus Johnson」。此時 Marcus 的動態中完全不該收到新通知，符合預設關閉的期待。
-   - 切換為 Marcus 點擊「加入註冊通知（opt in enrollment）」。
-   - 再換成 James Park 進行註冊通知，切回 Marcus 時，便順利看到來自 James Park 的通知。
+   - 換成 Olivia 與其他學生身分，點擊「註冊並通知 Marcus Johnson」。Marcus 的動態完全不該收到通知，符合預設關閉的規則。
+   - 切換成 Marcus，點擊「加入註冊通知（opt in enrollment）」。
+   - 換成 James Park 送出註冊通知，切回 Marcus 時，就會看到來自 James Park 的通知。
 
-## 紀錄經驗並關閉工單
+## 記錄經驗並關閉工單
 
-經歷一輪扎實的測試與除錯後，原型成功驗證了所有核心行為。此時的 Session 大約消耗了 107k tokens，仍在合理運算範圍內。
+經過一輪測試與除錯，原型成功驗證了所有核心行為。整趟 Session 大約消耗 107k tokens，在合理範圍內。
 
-最後告訴 Agent：「我對這個原型很滿意，QA 已經足夠，把我們的學習收穫存回地圖吧。」
+確認測試充足後，指示 Agent 把這次學到的成果存回地圖。
 
-Agent 隨即關閉這張原型工單，並在結案摘要中清楚記錄關鍵決策與踩坑經驗（gotchas）：
-- 預設關閉機制改由 Cadence 同步時寫入，而非依賴 Knock 後台設定。
-- 釐清 Knock 系統中 seen 與 read 的狀態差異。
+Agent 隨即關閉這張原型工單，並在結案摘要寫下關鍵決策與踩坑經驗（gotchas）：
+- 預設關閉機制由 Cadence 同步資料時寫入，不依賴 Knock 後台設定。
+- 釐清 Knock 系統中 seen 與 read 的狀態定義差異。
 
 ![第 5 段配圖](./prototype-at-high-fidelity-assets/image-5.webp)
 
-這就像傳統敏捷開發中的探針（Spike）。透過高擬真度的原型，在初期先把硬仗打完；未來負責正式實作的 Agent 將有完整的實作脈絡與現成範例可以參考，開發過程將變得無比輕鬆。
+這就像敏捷開發裡的探針（Spike）。利用高擬真度的原型把硬仗打在前面，未來負責正式開發的 Agent 就能對照完整的實作脈絡與現成範例，後續建置會省力許多。

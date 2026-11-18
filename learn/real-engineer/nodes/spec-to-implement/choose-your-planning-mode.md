@@ -1,10 +1,14 @@
 # 依 Diff 大小選擇開發流程：One-shot、Grill with Docs 與 Wayfinder
 
-完整的 Wayfinder 流程非常厚重。從一開始的嚴格探問（grilling）、做原型（prototyping）、技術調研（research）、拆解任務（tasks）、整理成規格書（spec），最後才進到實作規格。
+完整的 Wayfinder 流程非常厚重。
 
-自己實際操作時，因為不需要邊做邊對旁人解說，速度會快一些，但事前依然包含大量的探問對話、原型嘗試，以及在 AI Agent 動手寫 code 前的縝密思考。
+前期的準備包含嚴格探問（grilling）、製作原型（prototyping）、技術調研（research）、拆解任務（tasks）與整理規格書（spec），最後才會進到實作規格。
 
-面對一個新需求，何時該用 Grill with docs？何時該用 Wayfinder？其實還有第三個選項：什麼時候根本不需要 Grill with docs，直接「One-shot」請 Agent 一步到位把程式碼寫出來？
+獨自操作時，因為不需要向旁人解說，速度會快一些。但在 AI Agent 動手寫 code 前，依然需要大量的探問對話、原型嘗試，以及事前縝密的思考。
+
+面對新需求時，該選擇 Grill with docs 還是 Wayfinder？
+
+其實還有第三個選項：完全不需要 Grill with docs，直接「One-shot」讓 Agent 一步到位把程式碼寫出來。
 
 ## 第一道判斷題：這次的 Diff 很小嗎？
 
@@ -12,16 +16,20 @@
 
 <!--image:1-->
 
-舉例來說：
-- 修改一個按鈕的顏色
-- 讓一個失敗的測試（failing test）通過
-- QA 階段常見的微調：更換圖示、修改文案、修正太大的邊界（margin）或尺寸等 UI 細節
+常見的例子包括：
+- 修改按鈕顏色
+- 讓失敗的測試（failing test）通過
+- QA 階段的常見微調，例如更換圖示、修改文案、調整過大的邊界（margin）或尺寸等 UI 細節
 
-如果你要審查（review）的內容非常小，就完全不用擔心與 Agent 認知不一致（misalignment）的問題。
+如果要審查（review）的範圍極小，就完全不必擔心與 Agent 認知不一致（misalignment）的問題。
 
-Grill me 或 Grill with docs 的核心價值，是避免 Agent 寫出龐大的 diff 後，你才發現方向完全錯誤，白白浪費大量 token 與時間在毫無價值的產出上。但如果 diff 本身非常小，就算第一次做出來完全不能用也無所謂，因為成本極低，Agent 隨時能以極快的速度重新做一次。
+Grill me 或 Grill with docs 的核心價值，是避免 Agent 寫出龐大 diff 後才發現方向完全錯誤，白白浪費大量 token 與時間在無效產出上。
 
-遇到這類微小變更，不需要事前做一堆確認，直接告訴 Agent「去做吧，做完我再 review」即可。這類情境採用 One-shot 的比例其實可以比想像中更高。
+如果 diff 本身非常小，就算第一次產出的內容完全不能用也無所謂。因為試錯成本極低，Agent 隨時能以極快的速度重做一次。
+
+遇到這類微小變更，不需要事前反覆確認。直接交給 Agent 處理，完成後再 review 即可。
+
+這類情境使用 One-shot 的比例，實際上可以比想像中更高。
 
 ## 只要 Diff 不是極小，一律從 Grill with Docs 起手
 
@@ -29,13 +37,13 @@ Grill me 或 Grill with docs 的核心價值，是避免 Agent 寫出龐大的 d
 
 <!--image:2-->
 
-在實務上，只要不是打算 One-shot 的任務，**一律建議直接從 Grill with docs 開始，不要一開始就開 Wayfinder**。
+實務上，只要不是打算 One-shot 的任務，**一律直接從 Grill with docs 開始，不要一開始就開 Wayfinder**。
 
-之所以這樣設計，是因為你隨時可以從 Grill with docs「升級（graduate）」成 Wayfinder：
+這項策略的關鍵在於隨時能從 Grill with docs「升級（graduate）」成 Wayfinder。
 
-在進行 Grill with docs 的過程中，如果你發現事情開始進入難以掌握的混亂地帶（dumb zone），規模比預期大得多、迷霧（fog）遠超想像，你隨時可以在同一個 session 裡直接對 Agent 說：「好，我們把這些討論轉成一張 Wayfinder 地圖。」
+在進行 Grill with docs 的過程中，如果發現事情開始進入難以掌握的混亂地帶（dumb zone），規模比預期大得多、迷霧（fog）遠超想像，隨時可以在同一個 session 裡直接對 Agent 說：「好，我們把這些討論轉成一張 Wayfinder 地圖。」
 
-這個策略讓你的初始決策變得非常單純：你永遠只需要在「One-shot」和「Grill with docs」兩者之間二選一。
+這讓初始決策變得非常單純：一開始永遠只需要在「One-shot」和「Grill with docs」之間二選一。
 
 ## 為什麼不一開始就開 Wayfinder？
 
@@ -43,11 +51,13 @@ Grill me 或 Grill with docs 的核心價值，是避免 Agent 寫出龐大的 d
 
 <!--image:3-->
 
-你已經完成了一整套繁複的儀式，畫好了龐大的地圖，產出了一堆複雜的規劃資產，結果才意識到問題根本沒那麼複雜。這種沉沒成本很難優雅地收場與復原。
+這代表已經走完了一整套繁複的儀式，畫好了龐大地圖，產出許多複雜的規劃資產，才意識到問題根本不複雜。這種沉沒成本很難優雅地收場與復原。
 
-因此，比較穩健的決策路徑是：
+較穩健的決策路徑是：
 1. **極小 Diff**：直接 One-shot，節省前期溝通成本。
 2. **中型以上或不確定大小**：先用 Grill with docs 摸清輪廓。
-3. **發現迷霧過多、複雜度失控**：把 Wayfinder 當成升級的逃生門（escape hatch），在對話中無縫轉移成完整地圖與規格流程。
+3. **發現迷霧過多、複雜度失控**：把 Wayfinder 當成升級的逃生門（escape hatch），在對話中直接切換為完整地圖與規格流程。
 
-你不必對每一項任務都 Grill with docs，更不需要為每件事都動用 Wayfinder。大膽增加 One-shot 的使用頻率，並在 Grill with docs 遇到真正龐大複雜的情境時，再升級到 Wayfinder 即可。
+不必對每一項任務都做 Grill with docs，更不需要動輒動用 Wayfinder。
+
+面對小變更，大膽提高 One-shot 的使用頻率。只有在 Grill with docs 遇到真正龐大複雜的情境時，再升級到 Wayfinder 即可。
