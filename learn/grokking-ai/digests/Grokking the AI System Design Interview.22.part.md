@@ -1,0 +1,49 @@
+---
+source: sources/grokking-ai/20261119/course/Grokking the AI System Design Interview.22.part.txt
+source_type: text
+source_lines: 2036
+part: 22
+status: skipped
+created: 2026-11-19
+updated: 2026-11-19
+skip_reason: "duplicate chapter-level rendering of the same lessons; the course teaches from the per-lesson digests"
+---
+
+# L1 overview
+
+- Lesson 59 · System Design of Harmful Content at Platform Scale — The harmful-content risk funnel with fraud's adversary attached, over 200 million uploads a day. Success is prevalence of violating views, sampled per policy category with confidence intervals, guarded by false-removal and appeal-overturn rates; the latency that matters is views accrued before action. The design starts with policy and a separate governed CSAM lane (perceptual hashes, staff decides, never a score), maps three gameable label feeds (reviewer decisions, appeals as free false-positive labels, reports weighted by reporter reputation), and argues the evasion catalog forces multimodal features (OCR on frames, ASR on audio). The four-stage funnel (hashes and hard rules, fast per-modality classifiers, heavy multimodal models on about 1 percent, humans on about 0.1 percent) adds an action ladder owned by Trust and Safety, reach-aware re-scoring at view tiers, three defense speeds (incident lane in minutes, review loop in hours, retraining in weeks), moderator exposure budgets, and ledgers where GPU cost is about 46 busy GPUs but reviewer hours (about 800 shifts a day) are the real limit.
+
+- Lesson 60 · System Design of Visual Search for a Marketplace — The Module 3 search funnel with a photo as the query, over 100 million listings and 10 million searches a day at 300 ms. Three changes drive the design: no words (a shared embedding space replaces the inverted index), no behavior labels at launch (human-judged relevance scored by NDCG graduates to click-through then contact-seller rate), and listings sell all day (tombstones plus a status check stop sold items twice). Same-listing photos give free supervision from day zero, upgraded with in-batch then category-hard negatives, a light ranker for price/condition/seller/freshness/distance, pre-filters during traversal, failure modes that fail closed on safety, encoder-and-index atomic promotion with a five-step upgrade path (judged set, interleaved slice, full re-embed), and a cost ledger where the index memory (about 200 GB raw, near a terabyte with copies) beats the encoder (about $170 a day).
+
+- Lesson 61 · System Design of a Legal Research Assistant — Enterprise RAG at maximum stakes: attorney-verified usefulness as the north star, with fabricated citations (target a measured zero), unsupported claims, and refusal correctness both ways as binding metrics, and latency deliberately traded for verification (about 30 seconds). The corpus carries validity (citation graph and treatment status, so an overturned case is caught) and two permission layers (tenant ID per firm, ethical walls resolved live), with freshness SLOs in hours. Hybrid retrieval (BM25 plus embeddings, fused with RRF) then a heavy cross-encoder rerank feed a low-temperature frontier model that writes claims, not prose; each claim carries a pinpoint quote and passes three synchronous checks (per-claim entailment, citation existence, treatment re-check) with links built from document IDs so an unresolved citation cannot render. Failure means strip, retry once, or refuse with research pointers, and isolation extends beyond retrieval filters to training, caches, and the provider.
+
+# L2 detail
+
+- `#L1-L54` — Lesson 59 vocabulary, the question (200 million uploads a day), and the recognition move: the risk funnel at platform scale with fraud's adversary, and the four things that change.
+- `#L55-L85` — Part 1: policy first with per-category thresholds, scope in and out (ads and DMs out), and CSAM in its own governed lane decided by trained staff, never by a score.
+- `#L86-L124` — Part 2: the north star (prevalence of violating views, sampled per category with confidence intervals, views not uploads), the reverse guardrail (false removal and appeal overturns), views accrued as the real latency, and about 2,300 items a second.
+- `#L125-L211` — Part 3: three label feeds (reviewer decisions, appeals as free false-positive labels, reports weighted by reporter reputation, never verdicts) and the evasion catalog (re-encoding, crops, on-frame text, spoken words, leetspeak) that forces multimodal features.
+- `#L212-L253` — Part 4: the baseline (hashes, rules, reports) and the four-stage funnel with its arithmetic — flag rate at about 1 percent sets the GPU bill, and about 0.1 percent reaches humans.
+- `#L254-L516` — Part 5: the full diagram, when each stage runs, the five-rung action ladder owned by Trust and Safety per category and region, the review queue ordered by uncertainty times reach, reach-aware re-scoring at view tiers, one street-fight video followed from upload to removal at about 14,000 views, and fail open or fail closed per category and surface.
+- `#L517-L624` — Part 6: three speeds of defense (incident lane in minutes, review loop in hours, retraining in weeks), the four-step promotion discipline (backtest, shadow scoring, reviewed outcomes, canary), watching for attacks and policy changes, and moderator well-being as a design input.
+- `#L625-L655` — Part 7: the top four failures with responses and the cost ledger — about 46 busy GPUs, but about 800 reviewer shifts a day, so review is the harder limit.
+- `#L656-L681` — Part 8: follow-ups on a scoring outage, a report brigade, a government ban in a week, a halved heavy-model budget, and protecting reviewers.
+- `#L682-L700` — Part 9: mid-level (measures uploads), senior (views, numbers, incident lane, weighted reports), and staff (a machine for spending reviewer hours and legitimacy).
+- `#L701-L743` — Part 10 plus mistakes and takeaways: the same skeleton for live-audio rooms, marketplace listings, and small-site comments; the six mistakes; the summary.
+- `#L744-L793` — Lesson 60 vocabulary and the question (photo of a chair, 100 million listings), plus the recognition move and its three changes.
+- `#L794-L897` — Parts 1 and 2: scope and made-up numbers (about 2 million new listings and 1.5 million sales a day, 10 million searches, 300 ms), contact-seller rate as the delayed truth, the judged set and NDCG, metric graduation, and four guardrails including sold-item rate.
+- `#L898-L964` — Part 3: free supervision from same-listing photo pairs and photo-title pairs, seller versus buyer photo gaps, labels after launch with their flaws, and freshness targets (embed at creation, tombstone within the hour).
+- `#L965-L1028` — Part 4: why inverted index, tags, and category classification fail; the CLIP-style baseline; fine-tuning on marketplace pairs; category-hard negatives; and the light ranker with its five structured signals.
+- `#L1029-L1193` — Part 5: the query lane step by step (about 130 ms of a 300 ms budget), the index lane, pre-filters during traversal, and the failure table including a safety filter that fails closed.
+- `#L1194-L1283` — Part 6: why an encoder upgrade forces a full re-embed and atomic promotion, the five-step upgrade path, per-category tracking, and the other four loops (ranker retraining, judged-set growth, drift, index health).
+- `#L1284-L1324` — Part 7: the failure ledger (sold items, version skew, offensive adjacency, a hidden category break) and the cost ledger (about 200 GB of raw vectors, $170 a day for query encoding, $1,700 per full re-embed).
+- `#L1325-L1358` — Parts 8 and 9: follow-ups on classifying first, right-looking but no contacts, "this jacket but in black", and paying for a new encoder; mid, senior, and staff levels.
+- `#L1359-L1396` — Part 10 plus mistakes and takeaways: furniture retailer, shop-the-look, and text-and-photo variations; five mistakes; the summary.
+- `#L1397-L1456` — Lesson 61 vocabulary, the question, and the recognition move: enterprise RAG at maximum stakes with four changes (binding error metrics, latency traded for verification, a validity dimension, two permission layers).
+- `#L1457-L1505` — Parts 1 and 2: scope (US law, research answers with citations, no drafting or legal advice), the north star (attorney-verified usefulness), three binding metrics, the 30-second latency posture, and about 40,000 questions a day.
+- `#L1506-L1609` — Part 3: one index with jurisdiction, treatment status, tenant ID, and matter tags; the citation graph and treatment data; ethical walls resolved live; freshness SLOs of 4 and 2 hours; labels from attorneys.
+- `#L1610-L1662` — Part 4: hybrid retrieval as non-negotiable (semantic plus BM25, fused with RRF), the heavy cross-encoder rerank over about 200 to keep 20, and the model posture (frontier, low temperature, no knowledge fine-tune, a small citation-format fine-tune only).
+- `#L1663-L1870` — Part 5: claims with pinpoint quotes, three synchronous checks, structural prevention (links built from document IDs), the strip-retry-refuse cascade, one attorney question end to end in about 26 seconds, and the two degraded modes.
+- `#L1871-L1905` — Part 6: golden sets in four case kinds (ordinary, unanswerable, overturned traps, wall probes) gating every change, and tenant isolation beyond retrieval filters (no cross-tenant training, per-tenant caches, zero-retention inference).
+- `#L1906-L1961` — Part 7: the five-failure ledger where every response shows less or refuses, and a cost ledger where licensed corpus (about $2 a query) beats the frontier model (about $0.15–0.50).
+- `#L1962-L2036` — Parts 8–10 plus mistakes and takeaways: follow-ups on tracing a fabricated citation, a 5-second requirement, and multi-jurisdiction questions; the three levels; three variations; five mistakes; the summary.
