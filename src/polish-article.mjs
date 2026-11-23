@@ -10,6 +10,8 @@ import {
   readStepPlan,
 } from "./article-agent-bridge.mjs";
 import { polishArticle } from "./polish.mjs";
+import { resolveTextModel } from "./llm.mjs";
+import { setStepTitle } from "../scripts/set-step-title.mjs";
 
 const MARKER = /^[ \t]*<!--\s*image:(\d+)\s*-->[ \t]*$/gm;
 const IMAGE_LINE = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;
@@ -624,6 +626,393 @@ async function mapLimit(items, limit, fn) {
     }),
   );
   return results;
+}
+
+const NODE_PLAN_OPEN = /^<<<PLAN:[ \t]*(.+?)[ \t]*>>>$/;
+const NODE_PLAN_CLOSE = /^<<<END-PLAN>>>$/;
+const NODE_STEP_OPEN = /^<<<STEP:[ \t]*(.+?)[ \t]*>>>$/;
+const NODE_STEP_CLOSE = /^<<<END-STEP>>>$/;
+const CONTEXT_CHARS = 900;
+const NODE_CONTEXT_ALLOWANCE = 4000;
+
+export const DEFAULT_NODE_MAX_CHARS = 180000;
+
+function nodeLimit(maxChars) {
+  const value = Number(maxChars ?? process.env.POLISH_NODE_MAX_CHARS);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_NODE_MAX_CHARS;
+  return value;
+}
+
+function takeAfterHeading(text, limit) {
+  const lines = String(text).replace(/\r\n/g, "\n").split("\n");
+  let index = 0;
+  while (index < lines.length && lines[index].trim() === "") index += 1;
+  if (index < lines.length && /^#\s+/.test(lines[index])) index += 1;
+  return lines.slice(index).join("\n").trim().slice(0, limit);
+}
+
+function takeTail(text, limit) {
+  const body = String(text).replace(/\r\n/g, "\n").trim();
+  return body.length <= limit ? body : body.slice(body.length - limit);
+}
+
+/**
+ * Split the editable steps into batches that fit the character ceiling. Splits
+ * at step boundaries only and in halves, so 4 steps over the limit become 1,2
+ * and 3,4. A single oversized step stays in its own batch: the step is never
+ * cut in half, because a half article cannot be validated.
+ */
+export function splitNodeBatches(items, maxChars, baseChars = 0) {
+  const limit = nodeLimit(maxChars);
+  const total = items.reduce((sum, item) => sum + item.chars, baseChars);
+  if (items.length <= 1 || total <= limit) return [items];
+  const middle = Math.ceil(items.length / 2);
+  return [
+    ...splitNodeBatches(items.slice(0, middle), limit, baseChars),
+    ...splitNodeBatches(items.slice(middle), limit, baseChars),
+  ];
+}
+
+/** Read one PLAN or STEP block list out of the model reply. */
+export function parseNodeReply(text) {
+  const lines = String(text).replace(/\r\n/g, "\n").split("\n");
+  const plans = new Map();
+  const steps = new Map();
+  const duplicates = [];
+  const unterminated = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const plan = lines[index].match(NODE_PLAN_OPEN);
+    const step = lines[index].match(NODE_STEP_OPEN);
+    if (!plan && !step) continue;
+    const target = plan ? plans : steps;
+    const close = plan ? NODE_PLAN_CLOSE : NODE_STEP_CLOSE;
+    const id = (plan ?? step)[1];
+    let end = index + 1;
+    while (end < lines.length && !close.test(lines[end])) end += 1;
+    if (end >= lines.length) {
+      unterminated.push(id);
+      break;
+    }
+    if (target.has(id)) duplicates.push(id);
+    else target.set(id, lines.slice(index + 1, end).join("\n").trim());
+    index = end;
+  }
+
+  return { plans, steps, duplicates: [...new Set(duplicates)], unterminated };
+}
+
+function nodeManifest(node, editable, contexts) {
+  return {
+    nodeTitle: node.title ?? null,
+    goal: node.goal ?? null,
+    steps: (node.steps ?? []).map((entry, position) => ({
+      order: position + 1,
+      id: entry.id,
+      title: entry.title ?? null,
+      purpose: entry.purpose ?? null,
+      editable: editable.includes(entry.id),
+      ...(contexts[entry.id] ? { context: contexts[entry.id] } : {}),
+    })),
+  };
+}
+
+/**
+ * Compose the user message for one batch: the node manifest, then one PLAN and
+ * one STEP block per editable step, in teaching order.
+ */
+export function buildNodePayload({ node, editableEntries, plans, protectedTexts, contexts = {} }) {
+  const editable = editableEntries.map((entry) => entry.id);
+  const blocks = [`<<<NODE>>>`, JSON.stringify(nodeManifest(node, editable, contexts), null, 2), `<<<END-NODE>>>`];
+  for (const entry of editableEntries) {
+    blocks.push(`<<<PLAN: ${entry.id}>>>`);
+    blocks.push(JSON.stringify(plans[entry.id].map(({ heading, prompt }) => ({ heading, prompt })), null, 2));
+    blocks.push(`<<<END-PLAN>>>`);
+    blocks.push(`<<<STEP: ${entry.id}>>>`);
+    blocks.push(protectedTexts[entry.id]);
+    blocks.push(`<<<END-STEP>>>`);
+  }
+  return blocks.join("\n\n");
+}
+
+function neighbourContexts({ root, subject, node, editableEntries, allEntries }) {
+  const order = allEntries.map((entry) => entry.id);
+  const contexts = {};
+  const read = (id) => {
+    const file = join(root, "learn", subject, "nodes", node, `${id}.md`);
+    if (!existsSync(file)) return null;
+    const article = readFileSync(file, "utf8");
+    if (!hasArticleBody(article)) return null;
+    return { head: takeAfterHeading(article, CONTEXT_CHARS), tail: takeTail(article, CONTEXT_CHARS) };
+  };
+  const first = order.indexOf(editableEntries[0].id);
+  const last = order.indexOf(editableEntries[editableEntries.length - 1].id);
+  const before = order[first - 1];
+  const after = order[last + 1];
+  for (const id of [before, after]) {
+    if (!id) continue;
+    const excerpt = read(id);
+    if (excerpt) contexts[id] = excerpt;
+  }
+  return contexts;
+}
+
+function planFromDisk(root, { subject, node, step }) {
+  const raw = readJson(jobFiles(root, { subject, node, step }).plan);
+  if (raw == null) return null;
+  return normalizeStepPlan(raw);
+}
+
+function writeTitle({ root, subject, node, step }) {
+  const files = jobFiles(root, { subject, node, step });
+  try {
+    const result = setStepTitle({ root, subject, node, step, from: files.polish });
+    return { status: result.status, title: result.title };
+  } catch (error) {
+    return { status: "failed", error: error?.message ?? String(error) };
+  }
+}
+
+function copyOriginal({ files, article, plan }) {
+  writeFileSync(files.polish, article);
+  return { plan, changed: false };
+}
+
+/**
+ * Node-level polish: one model call for the whole node, so the steps can share
+ * terminology, drop repeated explanations and hand off to each other.
+ *
+ * Only the steps this run prepared are editable. Published neighbours appear in
+ * the manifest (and their head/tail excerpts as context) but are never written.
+ * A step whose batch response fails validation is rescued with a single-step
+ * polish; if that also fails the original is copied through unchanged.
+ */
+export async function runPolishNode({
+  root,
+  subject,
+  node: nodeId,
+  steps = null,
+  force = false,
+  copy = false,
+  instruction = null,
+  fetchImpl = null,
+  maxChars = null,
+  context = true,
+  log = () => {},
+}) {
+  const node = readNode(root, subject, nodeId);
+  const allEntries = node.steps ?? [];
+  const wanted = steps && steps.length > 0 ? new Set(steps) : null;
+  const editableEntries = [];
+  const skipped = [];
+  const failed = [];
+
+  for (const entry of allEntries) {
+    if (wanted && !wanted.has(entry.id)) continue;
+    const files = jobFiles(root, { subject, node: nodeId, step: entry.id });
+    const shownOriginal = relative(root, files.original);
+    if (!existsSync(files.original) || !hasArticleBody(readFileSync(files.original, "utf8"))) {
+      skipped.push({ id: entry.id, title: entry.title, status: "skipped-no-original", path: shownOriginal });
+      continue;
+    }
+    if (!existsSync(files.plan)) {
+      skipped.push({ id: entry.id, title: entry.title, status: "skipped-no-plan", path: relative(root, files.plan) });
+      continue;
+    }
+    if (!force && existsSync(files.polish)) {
+      skipped.push({ id: entry.id, title: entry.title, status: "skipped-existing", path: relative(root, files.polish) });
+      continue;
+    }
+    let plan;
+    try {
+      plan = planFromDisk(root, { subject, node: nodeId, step: entry.id });
+      if (!plan) throw new Error("image plan is empty");
+    } catch (error) {
+      failed.push({ id: entry.id, title: entry.title, status: "failed", error: error?.message ?? String(error) });
+      continue;
+    }
+    editableEntries.push({ ...entry, plan });
+  }
+
+  const report = {
+    mode: "node",
+    subject,
+    node: nodeId,
+    nodeTitle: node.title ?? null,
+    model: resolveTextModel(),
+    batches: 0,
+    steps: [],
+    skipped,
+    failed,
+  };
+
+  if (wanted) {
+    for (const id of wanted) {
+      if (!allEntries.some((entry) => entry.id === id)) {
+        failed.push({ id, status: "failed", error: `step "${id}" is not in node ${nodeId}` });
+      }
+    }
+  }
+  if (editableEntries.length === 0) return report;
+
+  if (copy) {
+    for (const entry of editableEntries) {
+      const files = jobFiles(root, { subject, node: nodeId, step: entry.id });
+      const article = readFileSync(files.original, "utf8");
+      writeFileSync(files.polish, article);
+      const title = writeTitle({ root, subject, node: nodeId, step: entry.id });
+      report.steps.push({
+        id: entry.id,
+        title: entry.title,
+        status: "copied",
+        copy: true,
+        changed: false,
+        article: relative(root, files.polish),
+        plan: relative(root, files.plan),
+        ...(title.status === "failed" ? { titleError: title.error } : { title: title.title }),
+      });
+    }
+    return report;
+  }
+
+  const protectedTexts = {};
+  const plans = {};
+  const restores = {};
+  const anchorSets = {};
+  for (const entry of editableEntries) {
+    const files = jobFiles(root, { subject, node: nodeId, step: entry.id });
+    const article = readFileSync(files.original, "utf8");
+    const anchors = protectAnchors(article, entry.plan);
+    const protectedArticle = protectArticle(anchors.text);
+    protectedTexts[entry.id] = protectedArticle.text;
+    restores[entry.id] = (text) => protectedArticle.restore(anchors.restore(text));
+    anchorSets[entry.id] = anchors;
+    plans[entry.id] = entry.plan;
+  }
+
+  const batches = splitNodeBatches(
+    editableEntries.map((entry) => ({ id: entry.id, chars: protectedTexts[entry.id].length + JSON.stringify(plans[entry.id]).length })),
+    maxChars,
+    NODE_CONTEXT_ALLOWANCE,
+  ).map((batch) => batch.map((item) => editableEntries.find((entry) => entry.id === item.id)));
+  report.batches = batches.length;
+
+  const promptFile = "prompts/polish-node.txt";
+  const injected = fetchImpl ? { fetch: fetchImpl } : {};
+  const extra = [PROTECT_NOTE, instruction?.trim()].filter(Boolean).join("\n\n");
+
+  for (const batch of batches) {
+    const contexts = context
+      ? neighbourContexts({ root, subject, node: nodeId, editableEntries: batch, allEntries })
+      : {};
+    const payload = buildNodePayload({
+      node,
+      editableEntries: batch,
+      plans,
+      protectedTexts,
+      contexts,
+    });
+    log(`polish node ${nodeId}: ${batch.length} step(s), ${payload.length} chars`);
+
+    let reply = null;
+    let batchError = null;
+    try {
+      const result = await polishArticle(
+        { articleText: payload, promptFile, instruction: extra, save: false },
+        root,
+        injected,
+      );
+      reply = parseNodeReply(result.text);
+    } catch (error) {
+      batchError = error?.message ?? "polish request failed";
+    }
+
+    for (const entry of batch) {
+      const files = jobFiles(root, { subject, node: nodeId, step: entry.id });
+      const article = readFileSync(files.original, "utf8");
+      let next = null;
+      let attempts = 1;
+      let rescued = false;
+      let error = batchError;
+
+      const rawStep = reply?.steps.get(entry.id);
+      if (!batchError && rawStep) {
+        try {
+          if (reply.unterminated.includes(entry.id)) throw new Error("reply block is not terminated");
+          anchorTokensIntact(rawStep, anchorSets[entry.id].tokens);
+          next = withTrailingNewline(article, restores[entry.id](rawStep));
+          validatePolishedArticle({ original: article, next });
+        } catch (failure) {
+          next = null;
+          error = failure?.message ?? "polished article failed validation";
+        }
+      } else if (!batchError) {
+        error = "the model did not return this step";
+      }
+
+      if (!next) {
+        const rescue = await polishProse({ article, plan: entry.plan, instruction, fetchImpl, root });
+        attempts += rescue.attempts ?? 2;
+        if (rescue.error) {
+          error = rescue.error;
+        } else {
+          next = rescue.next;
+          rescued = true;
+        }
+      }
+
+      if (!next) {
+        copyOriginal({ files, article, plan: entry.plan });
+        const title = writeTitle({ root, subject, node: nodeId, step: entry.id });
+        report.steps.push({
+          id: entry.id,
+          title: entry.title,
+          status: "copied",
+          fallback: true,
+          changed: false,
+          attempts,
+          error,
+          article: relative(root, files.polish),
+          plan: relative(root, files.plan),
+          ...(title.status === "failed" ? { titleError: title.error } : { title: title.title }),
+        });
+        continue;
+      }
+
+      let planChanged = false;
+      let planError = null;
+      const rawPlan = reply?.plans.get(entry.id);
+      if (rawPlan) {
+        try {
+          const rewritten = applyPlanRewrite(rawPlan, entry.plan);
+          planChanged = JSON.stringify(rewritten) !== JSON.stringify(entry.plan);
+          if (planChanged) writeFileSync(files.plan, `${JSON.stringify(planForDisk(rewritten), null, 2)}\n`);
+        } catch (failure) {
+          planError = failure?.message ?? "image plan rewrite failed";
+        }
+      }
+
+      writeFileSync(files.polish, next);
+      if (next !== article) rmSync(join(root, "learn", subject, "nodes", nodeId, `${entry.id}.quiz.json`), { force: true });
+      const title = writeTitle({ root, subject, node: nodeId, step: entry.id });
+      report.steps.push({
+        id: entry.id,
+        title: entry.title,
+        status: "polished",
+        changed: next !== article,
+        planChanged,
+        attempts,
+        ...(rescued ? { rescued: true } : {}),
+        article: relative(root, files.polish),
+        plan: relative(root, files.plan),
+        ...(planError ? { planError } : {}),
+        ...(error ? { error } : {}),
+        ...(title.status === "failed" ? { titleError: title.error } : { title: title.title }),
+      });
+    }
+  }
+
+  return report;
 }
 
 export async function runPolish({

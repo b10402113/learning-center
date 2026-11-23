@@ -20,6 +20,7 @@ import {
 } from "../src/blocks.mjs";
 import { maxQuestionsFor, validateQuizPayload } from "../src/quiz.mjs";
 import { CITABLE_ROLES, courseCharacterCount, nodeBaseline, parseSourceRole } from "../src/source-layout.mjs";
+import { isProvenanceLine } from "../src/provenance.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -40,7 +41,6 @@ const NODE_FM = [
 ];
 const STEP_ENTRY_KEYS = ["id", "purpose", "sources"];
 const FORBIDDEN_STEP_KEYS = ["deps", "type", "order"];
-const DERIVED_COMMENT = /^<!--\s*derived\s*-->$/;
 const SOURCE_COMMENT = /^<!--\s*source:\s*sources\/.+#L\d+(?:-L\d+)?\s*-->$/;
 const MAX_PURPOSE_CHARS = 120;
 const CJK_SENTENCE_END = /[。！？]/;
@@ -658,17 +658,16 @@ function checkCodeProvenance(report, root, file, body) {
     let previous = block.line - 2;
     while (previous >= 0 && lines[previous].trim() === "") previous -= 1;
     const marker = previous >= 0 ? lines[previous].trim() : "";
-    if (DERIVED_COMMENT.test(marker)) continue;
-    if (SOURCE_COMMENT.test(marker)) {
-      checkProvenanceSource(report, root, file, block.line, marker);
-    } else {
+    if (!isProvenanceLine(marker)) {
       report.fail(
         file,
         block.line,
         "code-provenance",
         "code block must be preceded by <!-- source: sources/...#Lx-Ly --> or <!-- derived -->",
       );
+      continue;
     }
+    if (SOURCE_COMMENT.test(marker)) checkProvenanceSource(report, root, file, block.line, marker);
   }
 }
 

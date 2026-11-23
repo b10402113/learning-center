@@ -4,11 +4,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import {
+  parseNodeReply,
   protectAnchors,
   protectArticle,
   runPolish,
   runPolishDraft,
+  runPolishNode,
   sha256,
+  splitNodeBatches,
   validatePolishedArticle,
 } from "./polish-article.mjs";
 
@@ -487,4 +490,295 @@ test("published polish rewrites a valid plan's heading and prompt", async () => 
   assert.equal(plan[0].anchor, "這是一段奇怪的文字。");
   assert.equal(plan[0].heading, "原本的標題（潤飾）");
   assert.equal(plan[0].prompt, "說明原本的概念（潤飾）");
+});
+
+const NODE_ARTICLE = `# 第一篇
+
+這是一段奇怪的文字。
+
+<!--image:1-->
+
+<!-- source: sources/demo/a.txt#L1-L2 -->
+
+\`\`\`ts
+const a = 1;
+\`\`\`
+
+請參考 [文件](https://example.com)。
+`;
+
+function nodeFixture({ publishedPolish = false } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "polish-node-"));
+  write(
+    root,
+    "learn/demo/nodes/gamma.md",
+    `---
+id: gamma
+title: "Gamma"
+subject: demo
+tier: 1
+order: 3
+status: confirmed
+goal: "用一個 node 測試整包潤飾。"
+prerequisites: []
+steps:
+  - id: a
+    purpose: "Explain the first thing."
+    sources:
+      - "[[sources/demo/a.txt#L1-L2]]"
+  - id: b
+    purpose: "Explain the second thing."
+    sources:
+      - "[[sources/demo/a.txt#L1-L2]]"
+  - id: c
+    purpose: "Explain the third thing."
+    sources:
+      - "[[sources/demo/a.txt#L1-L2]]"
+created: 2026-10-22
+updated: 2026-10-22
+---
+
+# Gamma
+
+## Lesson
+
+A short lesson.
+
+## Steps
+
+1. [a](gamma/a.md)
+2. [b](gamma/b.md)
+3. [c](gamma/c.md)
+`,
+  );
+  const plan = JSON.stringify([{ heading: "第一節", prompt: "說明第一個概念" }], null, 2) + "\n";
+  for (const step of ["a", "b"]) {
+    write(root, `learn/demo/output/gamma/${step}/original.md`, NODE_ARTICLE);
+    write(root, `learn/demo/nodes/gamma/${step}.plan.json`, plan);
+  }
+  write(root, "learn/demo/nodes/gamma/c.md", "# 第三篇\n\n已發布的鄰居文章。\n");
+  if (publishedPolish) write(root, "learn/demo/output/gamma/a/polish.md", "already polished\n");
+  write(root, "learn/demo/nodes/gamma/a.quiz.json", '{"quiz-generated":true,"questions":[]}\n');
+  return root;
+}
+
+function polishPath(root, step) {
+  return join(root, "learn/demo/output/gamma", step, "polish.md");
+}
+
+function nodeFetch({ transformArticle = (text) => text, transformPlan = (items) => items, drop = [] } = {}) {
+  const calls = [];
+  const fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    const system = body.messages.find((message) => message.role === "system").content;
+    const user = body.messages.find((message) => message.role === "user").content;
+    calls.push({ system, user });
+    const out = [];
+    const planRe = /<<<PLAN: (.+?)>>>\s*\n([\s\S]*?)\n\s*<<<END-PLAN>>>/g;
+    let match;
+    while ((match = planRe.exec(user))) {
+      const items = JSON.parse(match[2]);
+      out.push(`<<<PLAN: ${match[1]}>>>\n${JSON.stringify(transformPlan(items, match[1]))}\n<<<END-PLAN>>>`);
+    }
+    const stepRe = /<<<STEP: (.+?)>>>\s*\n([\s\S]*?)\n\s*<<<END-STEP>>>/g;
+    while ((match = stepRe.exec(user))) {
+      if (drop.includes(match[1])) continue;
+      out.push(`<<<STEP: ${match[1]}>>>\n${transformArticle(match[2], match[1])}\n<<<END-STEP>>>`);
+    }
+    const content = out.length > 0 ? out.join("\n\n") : transformArticle(user);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: "resp_node",
+        choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
+      }),
+    };
+  };
+  return { fetch, calls };
+}
+
+function manifestOf(user) {
+  return JSON.parse(user.split("<<<NODE>>>")[1].split("<<<END-NODE>>>")[0]);
+}
+
+test("splitNodeBatches halves an oversized node at step boundaries", () => {
+  const items = [
+    { id: "a", chars: 100 },
+    { id: "b", chars: 100 },
+    { id: "c", chars: 100 },
+    { id: "d", chars: 100 },
+  ];
+  const batches = splitNodeBatches(items, 250);
+  assert.deepEqual(batches.map((batch) => batch.map((item) => item.id)), [["a", "b"], ["c", "d"]]);
+  assert.equal(splitNodeBatches(items, 1000).length, 1);
+  assert.deepEqual(splitNodeBatches([{ id: "a", chars: 900 }], 100).map((b) => b.length), [1]);
+  const three = splitNodeBatches(
+    [{ id: "a", chars: 100 }, { id: "b", chars: 100 }, { id: "c", chars: 100 }],
+    250,
+  );
+  assert.deepEqual(three.map((batch) => batch.map((item) => item.id)), [["a", "b"], ["c"]]);
+});
+
+test("parseNodeReply reads plan and step blocks and reports duplicates", () => {
+  const reply = `<<<PLAN: a>>>
+[{"heading":"h","prompt":"p"}]
+<<<END-PLAN>>>
+
+<<<STEP: a>>>
+# A
+
+body
+<<<END-STEP>>>
+
+<<<STEP: a>>>
+# A
+
+dup
+<<<END-STEP>>>
+
+<<<STEP: b>>>
+unterminated
+`;
+  const parsed = parseNodeReply(reply);
+  assert.deepEqual([...parsed.plans.keys()], ["a"]);
+  assert.deepEqual([...parsed.steps.keys()], ["a"]);
+  assert.deepEqual(parsed.duplicates, ["a"]);
+  assert.deepEqual(parsed.unterminated, ["b"]);
+  assert.match(parsed.steps.get("a"), /^# A/);
+});
+
+test("node polish rewrites every prepared step and writes titles back", async () => {
+  const root = nodeFixture();
+  const { fetch, calls } = nodeFetch({
+    transformArticle: (text) => text.replace("奇怪的", "不順的"),
+    transformPlan: (items) => items.map((item) => ({ ...item, heading: `${item.heading}（潤飾）` })),
+  });
+
+  const report = await runPolishNode({ root, subject: "demo", node: "gamma", fetchImpl: fetch });
+
+  assert.equal(calls.length, 1);
+  assert.equal(report.batches, 1);
+  assert.equal(report.steps.length, 2);
+  assert.ok(report.steps.every((step) => step.status === "polished"));
+  assert.equal(readFileSync(polishPath(root, "a"), "utf8").includes("不順的文字"), true);
+  assert.equal(readFileSync(polishPath(root, "b"), "utf8").includes("不順的文字"), true);
+  assert.equal(readFileSync(polishPath(root, "a"), "utf8").includes("const a = 1;"), true);
+
+  const plan = JSON.parse(readFileSync(join(root, "learn/demo/nodes/gamma/a.plan.json"), "utf8"));
+  assert.equal(plan[0].heading, "第一節（潤飾）");
+
+  assert.equal(existsSync(join(root, "learn/demo/nodes/gamma/a.quiz.json")), false);
+  const nodeText = readFileSync(join(root, "learn/demo/nodes/gamma.md"), "utf8");
+  assert.match(nodeText, /title: "第一篇"/);
+  assert.match(nodeText, /1\. \[第一篇\]\(gamma\/a\.md\)/);
+
+  const manifest = manifestOf(calls[0].user);
+  assert.equal(manifest.steps.find((step) => step.id === "a").editable, true);
+  assert.equal(manifest.steps.find((step) => step.id === "c").editable, false);
+  assert.match(manifest.steps.find((step) => step.id === "c").context.head, /已發布的鄰居文章/);
+  assert.equal(readFileSync(join(root, "learn/demo/nodes/gamma/c.md"), "utf8"), "# 第三篇\n\n已發布的鄰居文章。\n");
+});
+
+test("node polish rescues a single step when the batch reply drops it", async () => {
+  const root = nodeFixture();
+  const { fetch, calls } = nodeFetch({
+    drop: ["b"],
+    transformArticle: (text) => text.replace("奇怪的", "不順的"),
+  });
+
+  const report = await runPolishNode({ root, subject: "demo", node: "gamma", fetchImpl: fetch });
+
+  assert.equal(calls.length, 2);
+  assert.equal(report.steps.length, 2);
+  const rescued = report.steps.find((step) => step.id === "b");
+  assert.equal(rescued.status, "polished");
+  assert.equal(rescued.rescued, true);
+  assert.equal(readFileSync(polishPath(root, "b"), "utf8").includes("不順的文字"), true);
+});
+
+test("node polish copies the original through when the batch and the rescue both fail", async () => {
+  const root = nodeFixture();
+  const { fetch } = nodeFetch({
+    drop: ["b"],
+    transformArticle: (text, id) => {
+      if (id === undefined) throw new Error("model unavailable");
+      return text;
+    },
+  });
+
+  const report = await runPolishNode({ root, subject: "demo", node: "gamma", fetchImpl: fetch });
+
+  const copied = report.steps.find((step) => step.id === "b");
+  assert.equal(copied.status, "copied");
+  assert.equal(copied.fallback, true);
+  assert.match(copied.error, /model unavailable/);
+  assert.equal(
+    readFileSync(polishPath(root, "b"), "utf8"),
+    readFileSync(join(root, "learn/demo/output/gamma/b/original.md"), "utf8"),
+  );
+});
+
+test("node polish --copy writes polish.md unchanged and calls no model", async () => {
+  const root = nodeFixture();
+  const { fetch, calls } = nodeFetch({
+    transformArticle: () => {
+      throw new Error("copy mode must not call the text model");
+    },
+  });
+
+  const report = await runPolishNode({ root, subject: "demo", node: "gamma", copy: true, fetchImpl: fetch });
+
+  assert.equal(calls.length, 0);
+  assert.equal(report.steps.length, 2);
+  assert.ok(report.steps.every((step) => step.status === "copied"));
+  for (const step of ["a", "b"]) {
+    assert.equal(
+      readFileSync(polishPath(root, step), "utf8"),
+      readFileSync(join(root, `learn/demo/output/gamma/${step}/original.md`), "utf8"),
+    );
+  }
+});
+
+test("node polish skips an existing polish.md unless --force is given", async () => {
+  const root = nodeFixture({ publishedPolish: true });
+  const { fetch, calls } = nodeFetch({ transformArticle: (text) => text.replace("奇怪的", "不順的") });
+
+  const first = await runPolishNode({ root, subject: "demo", node: "gamma", fetchImpl: fetch });
+  assert.deepEqual(first.skipped.filter((step) => step.status === "skipped-existing").map((s) => s.id), ["a"]);
+  assert.equal(readFileSync(polishPath(root, "a"), "utf8"), "already polished\n");
+
+  const second = await runPolishNode({ root, subject: "demo", node: "gamma", force: true, fetchImpl: fetch });
+  assert.equal(second.steps.length, 2);
+  assert.equal(calls.length, 2);
+  assert.match(readFileSync(polishPath(root, "a"), "utf8"), /不順的文字/);
+});
+
+test("node polish with --step only edits the listed step", async () => {
+  const root = nodeFixture();
+  const { fetch, calls } = nodeFetch({ transformArticle: (text) => text.replace("奇怪的", "不順的") });
+
+  const report = await runPolishNode({
+    root,
+    subject: "demo",
+    node: "gamma",
+    steps: ["b"],
+    fetchImpl: fetch,
+  });
+
+  assert.equal(report.steps.length, 1);
+  assert.equal(report.steps[0].id, "b");
+  assert.equal(existsSync(polishPath(root, "a")), false);
+  const manifest = manifestOf(calls[0].user);
+  assert.deepEqual(manifest.steps.map((step) => step.editable), [false, true, false]);
+});
+
+test("node polish leaves a step without an original in skipped", async () => {
+  const root = nodeFixture();
+  const { fetch } = nodeFetch();
+  const report = await runPolishNode({ root, subject: "demo", node: "gamma", fetchImpl: fetch });
+  assert.deepEqual(
+    report.skipped.filter((step) => step.status === "skipped-no-original").map((s) => s.id),
+    ["c"],
+  );
 });

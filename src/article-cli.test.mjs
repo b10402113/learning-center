@@ -77,7 +77,9 @@ test("prepare asks publishers for markers only and reports skipped steps without
   assert.equal(report.teachingPlan, join(root, "learn/test/output/n1/teaching-plan.md"));
   assert.match(step.composeCommand, /article-cli\.mjs compose/);
   assert.match(step.markCommand, /article-cli\.mjs mark/);
-  assert.doesNotMatch(step.polishCommand, /--copy/);
+  assert.equal(step.polishCommand, undefined);
+  assert.equal(step.titleCommand, undefined);
+  assert.equal(report.polishNodeCommand, "node scripts/polish-article.mjs node --subject test --node n1");
   assert.equal(step.material, "learn/test/output/n1/s2/material.json");
   assert.equal(step.original, "learn/test/output/n1/s2/original.md");
   assert.equal(step.polish, "learn/test/output/n1/s2/polish.md");
@@ -94,7 +96,7 @@ test("prepare asks publishers for markers only and reports skipped steps without
   ]);
 });
 
-test("prepare --skip-polish asks for a copy draft instead of a polish call", (t) => {
+test("prepare --skip-polish asks for a node-level copy instead of a polish call", (t) => {
   const root = fixture(t);
   const report = JSON.parse(
     execFileSync(
@@ -103,10 +105,10 @@ test("prepare --skip-polish asks for a copy draft instead of a polish call", (t)
       { encoding: "utf8" },
     ),
   );
+  assert.equal(report.polishNodeCommand, "node scripts/polish-article.mjs node --subject test --node n1 --copy");
   const [step] = report.steps;
-  assert.match(step.polishCommand, /polish-article\.mjs draft/);
-  assert.match(step.polishCommand, / --copy$/);
   assert.match(step.composeCommand, /article-cli\.mjs compose/);
+  assert.equal(step.polishCommand, undefined);
 });
 
 test("render accepts --step and --max-parallel and skips a step with no plan", (t) => {
@@ -154,6 +156,18 @@ test("prepare --force clears stale run metadata and the original but keeps the p
   assert.equal(existsSync(join(root, "learn/test/output/n1/s1/compose.json")), false);
   assert.equal(existsSync(join(root, "learn/test/output/n1/s1/material.json")), true);
   assert.equal(existsSync(join(root, "learn/test/nodes/n1/s1.plan.json")), true);
+});
+
+test("prepare clears a stale polish.md so the node polish cannot skip a re-composed step", (t) => {
+  const root = fixture(t);
+  write(root, "learn/test/output/n1/s2/polish.md", "# Stale\n");
+  execFileSync(
+    process.execPath,
+    [CLI, "prepare", "--subject", "test", "--node", "n1", "--step", "s2", "--root", root],
+    { encoding: "utf8" },
+  );
+  assert.equal(existsSync(join(root, "learn/test/output/n1/s2/polish.md")), false);
+  assert.equal(existsSync(join(root, "learn/test/output/n1/s2/material.json")), true);
 });
 
 test("mark inserts <!--image:N--> markers from the plan into original.md", (t) => {
@@ -376,6 +390,129 @@ test("compose keeps a salvageable draft when the model drops every placeholder",
   const compose = JSON.parse(readFileSync(join(root, "learn/test/output/n1/s2/compose.json"), "utf8"));
   assert.equal(compose.status, "draft");
   assert.equal(compose.missing[0].placeholder, "{{ARTICLE_CODE_1}}");
+});
+
+test("compose asks the model to fix an unprovenanced fence before falling back", async (t) => {
+  const root = fixture(t);
+  write(root, "sources/test/loop.mjs", "export function loop() { return 1; }\n");
+  write(
+    root,
+    "learn/test/output/n1/s2/material.json",
+    JSON.stringify({
+      subject: "test",
+      node: "n1",
+      step: "s2",
+      purpose: "Second step.",
+      sources: [{ path: "sources/test/notes.txt", locator: "#L11-L20", type: "article", text: "Prose." }],
+    }),
+  );
+
+  const calls = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      const payload = JSON.parse(JSON.parse(body).messages.at(-1).content);
+      calls.push(payload);
+      const content =
+        calls.length === 1
+          ? "# Step Two\n\n先重設：\n\n```bash\nnpm run reset\n```\n"
+          : "# Step Two\n\n先重設：\n\n<!-- derived -->\n\n```bash\nnpm run reset\n```\n";
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
+        }),
+      );
+    });
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  t.after(() => new Promise((resolveClose) => server.close(resolveClose)));
+  const { port } = server.address();
+
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [CLI, "compose", "--subject", "test", "--node", "n1", "--step", "s2", "--root", root],
+    {
+      env: {
+        ...process.env,
+        TEXT_API_KEY: "test-key",
+        TEXT_BASE_URL: `http://127.0.0.1:${port}/v1`,
+        TEXT_MODEL: "test-model",
+      },
+    },
+  );
+  const report = JSON.parse(stdout);
+  assert.equal(report.steps[0].status, "composed");
+  assert.equal(report.steps[0].retries, 1);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].retry.previous_error, /provenance/);
+
+  const original = readFileSync(join(root, "learn/test/output/n1/s2/original.md"), "utf8");
+  assert.match(original, /<!-- derived -->\n\n```bash\nnpm run reset\n```/);
+});
+
+test("compose adds derived provenance itself when the model never fixes the fence", async (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    "learn/test/output/n1/s2/material.json",
+    JSON.stringify({
+      subject: "test",
+      node: "n1",
+      step: "s2",
+      purpose: "Second step.",
+      sources: [{ path: "sources/test/notes.txt", locator: "#L11-L20", type: "article", text: "Prose." }],
+    }),
+  );
+
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: { role: "assistant", content: "# Step Two\n\n指令：\n\n```bash\nnpm run reset\n```\n" },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+      );
+    });
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  t.after(() => new Promise((resolveClose) => server.close(resolveClose)));
+  const { port } = server.address();
+
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [CLI, "compose", "--subject", "test", "--node", "n1", "--step", "s2", "--root", root],
+    {
+      env: {
+        ...process.env,
+        TEXT_API_KEY: "test-key",
+        TEXT_BASE_URL: `http://127.0.0.1:${port}/v1`,
+        TEXT_MODEL: "test-model",
+      },
+    },
+  );
+  const report = JSON.parse(stdout);
+  assert.equal(report.steps[0].status, "composed");
+  assert.equal(report.steps[0].provenanceAdded, 1);
+
+  const original = readFileSync(join(root, "learn/test/output/n1/s2/original.md"), "utf8");
+  assert.match(original, /<!-- derived -->\n\n```bash\nnpm run reset\n```/);
+
+  const compose = JSON.parse(readFileSync(join(root, "learn/test/output/n1/s2/compose.json"), "utf8"));
+  assert.equal(compose.status, "composed");
+  assert.equal(compose.provenance_added, 1);
 });
 
 test("compose rejects material over the char cap before calling the model", (t) => {

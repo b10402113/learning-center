@@ -7,7 +7,7 @@ argument-hint: "Which subject/node should be planned?"
 
 Invoke as `/nodes <subject>/<node-id>`.
 
-A node is one Markdown container. Its `steps` array is the whole plan: each entry carries `id`, `purpose`, and `sources`, and the array order is the teaching order. `/nodes` writes that plan; it does not write article prose — `/article` does. The compose model chooses each article's title from the purpose while writing it, and `publish`/`titleCommand` write that H1 back to the step entry.
+A node is one Markdown container. Its `steps` array is the whole plan: each entry carries `id`, `purpose`, and `sources`, and the array order is the teaching order. `/nodes` writes that plan; it does not write article prose — `/article` does. The compose model chooses each article's title from the purpose while writing it, and `polish-article.mjs node` writes that H1 back to the step entry.
 
 **Prereqs.** `learn/<subject>/MEMORY.md` exists, `learn/<subject>/ROADMAP.md` exists, and the node container `learn/<subject>/nodes/<node-id>.md` exists. A `draft` node moves to `confirmed` when this skill runs; no separate probe gate exists.
 

@@ -121,3 +121,23 @@ test("a failed forced publish leaves the figures and record intact", async (t) =
   assert.equal(existsSync(join(root, "learn/test/output/n1/s1/humanized.md")), true);
   assert.match(readFileSync(join(root, "learn/test/nodes/n1/s1.md"), "utf8"), /image-1\.webp/);
 });
+
+test("publish refuses a polish.md whose code fence has no provenance", async (t) => {
+  const root = publishFixture(t, {
+    runArticle: "# Step One\n\n指令：\n\n```bash\nnpm run reset\n```\n",
+  });
+  const report = await publishArticles({ root, subject: "test", node: "n1" });
+  assert.equal(report.steps[0].status, "failed");
+  assert.match(report.steps[0].error, /no provenance comment/);
+  const official = readFileSync(join(root, "learn/test/nodes/n1/s1.md"), "utf8");
+  assert.match(official, /Old body\./);
+  assert.doesNotMatch(official, /npm run reset/);
+});
+
+test("publish accepts a polish.md whose fence carries a derived comment", async (t) => {
+  const root = publishFixture(t, {
+    runArticle: "# Step One\n\n指令：\n\n<!-- derived -->\n\n```bash\nnpm run reset\n```\n",
+  });
+  const report = await publishArticles({ root, subject: "test", node: "n1" });
+  assert.equal(report.steps[0].status, "published");
+});

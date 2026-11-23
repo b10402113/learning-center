@@ -18,6 +18,7 @@ import {
 } from "../src/article-agent-bridge.mjs";
 import { runChecks } from "./verify.mjs";
 import { resolveTextModel } from "../src/llm.mjs";
+import { unprovenancedBlocks } from "../src/provenance.mjs";
 import { setStepAuthor, setStepTitle } from "./set-step-title.mjs";
 
 function stepAssetsDir(root, { subject, node, step }) {
@@ -63,6 +64,19 @@ export async function publishArticles({ root, subject, node: nodeId, step = null
     const body = normalizeArticleText(article, entry.title ?? null);
     if (!hasArticleBody(body)) {
       results.push({ id: entry.id, title: entry.title ?? entry.id, status: "failed", path: shown, error: "polished article has no body" });
+      continue;
+    }
+    const unprovenanced = unprovenancedBlocks(body);
+    if (unprovenanced.length > 0) {
+      results.push({
+        id: entry.id,
+        title: entry.title ?? entry.id,
+        status: "failed",
+        path: shown,
+        error: `${unprovenanced.length} fenced code block(s) in polish.md have no provenance comment (line ${unprovenanced
+          .map((block) => block.line)
+          .join(", ")}); add <!-- source: sources/...#Lx-Ly --> or <!-- derived --> above each block`,
+      });
       continue;
     }
     mkdirSync(dirname(target), { recursive: true });

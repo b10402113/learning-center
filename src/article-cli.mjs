@@ -32,6 +32,7 @@ import {
   restoreComposeSources,
   salvageComposeSources,
 } from "./source-material.mjs";
+import { addDerivedProvenance, unprovenancedBlocks } from "./provenance.mjs";
 import {
   createTextClient,
   httpStatus,
@@ -59,12 +60,13 @@ const usage = `Usage:
   node src/article-cli.mjs image   --subject <s> --node <n> [--step <id>] [--force] [--plan-only] [--root <dir>]  (deprecated)
 
 prepare  writes one material bundle per missing step and lists the publisher job
-         (material, original, polish, plan, composeCommand, markCommand, polishCommand,
-         titleCommand). The publisher curates the material, then compose calls the
-         text model once to write original.md, and mark inserts the <!--image:N-->
-         markers from the publisher's plan.
-         --skip-polish hands over a polishCommand that carries --copy, so the
-         publisher's original becomes polish.md unchanged and the plan stays as written.
+         (material, original, polish, plan, composeCommand, markCommand) plus the
+         node-level polishNodeCommand. The publisher curates the material, then
+         compose calls the text model once to write original.md, and mark inserts
+         the <!--image:N--> markers from the publisher's plan. polishNodeCommand
+         then polishes the whole node in one call and writes each polish.md.
+         --skip-polish makes polishNodeCommand carry --copy, so each original
+         becomes polish.md unchanged and the plan stays as written.
    compose  reads the publisher's curated material.json (sources with type and text)
          and calls the text model once to write output/<node>/<step>/original.md — no
          image markers. The model chooses the H1 from the step's purpose; no title is
@@ -111,9 +113,13 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
       continue;
     }
     const slices = readStepSlices(root, entry);
+    const existingFiles = jobFiles(root, { subject, node: nodeId, step: entry.id });
+    // A step only reaches this point when it is about to be composed again, so
+    // any polish.md from an interrupted run is stale: the node polish skips a
+    // step that has one, and publish would ship the old prose.
+    rmSync(existingFiles.polish, { force: true });
     if (force) {
-      const existingFiles = jobFiles(root, { subject, node: nodeId, step: entry.id });
-      for (const key of ["original", "polish", "result", "compose", "blocks", "request", "protected", "translated"]) {
+      for (const key of ["original", "result", "compose", "blocks", "request", "protected", "translated"]) {
         rmSync(existingFiles[key], { force: true });
       }
     }
@@ -133,10 +139,6 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
         `node src/article-cli.mjs compose --subject ${subject} --node ${nodeId} --step ${entry.id}`,
       markCommand:
         `node src/article-cli.mjs mark --subject ${subject} --node ${nodeId} --step ${entry.id}`,
-      polishCommand:
-        `node scripts/polish-article.mjs draft --subject ${subject} --node ${nodeId} --step ${entry.id}` +
-        (skipPolish ? " --copy" : ""),
-      titleCommand: `node "${resolve(root, "scripts/set-step-title.mjs")}" --root "${resolve(root)}" --subject ${subject} --node ${nodeId} --step ${entry.id} --from "${resolve(root, files.polish)}"`,
     });
   }
   const skippedIds = new Set(skipped.map((entry) => entry.id));
@@ -156,6 +158,9 @@ function prepareArticles({ root, subject, node: nodeId, step = null, force = fal
     teachingPlan: teachingPlanPath(root, subject, nodeId),
     nodeTitle: node.title,
     nodeGoal: node.goal ?? null,
+    polishNodeCommand:
+      `node scripts/polish-article.mjs node --subject ${subject} --node ${nodeId}` +
+      (skipPolish ? " --copy" : ""),
     steps,
     skipped,
   };
@@ -231,6 +236,8 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
     let retries = 0;
     let lastError = null;
     let missing = [];
+    let unprovenanced = [];
+    let provenanceAdded = 0;
     for (let attempt = 0; attempt < maxAttempts && !article; attempt += 1) {
       retries = attempt;
       const retry =
@@ -241,7 +248,7 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
               missing_placeholders: missing.map((source) => source.placeholder),
               instruction: missing.length
                 ? "保留 draft 的內容，只在適合的位置各用單獨一行輸出 missing_placeholders 列出的 placeholder。"
-                : "保留 draft 的內容，依 previous_error 修正格式問題（例如 placeholder 只能在獨立一行出現一次、不能放進 code fence）。",
+                : "保留 draft 的內容，依 previous_error 修正格式問題（例如 placeholder 只能在獨立一行出現一次、不能放進 code fence；每個 fenced code block 正上方必須有一行 provenance，引用來源用 <!-- source: sources/...#Lx-Ly -->，自己寫的用 <!-- derived -->）。",
             }
           : null;
       let response;
@@ -288,11 +295,23 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
         continue;
       }
       draft = normalized;
+      article = null;
+      unprovenanced = [];
       try {
         article = restoreComposeSources(normalized, sources);
       } catch (error) {
         lastError = error;
         missing = missingPlaceholders(normalized, sources);
+        continue;
+      }
+      unprovenanced = unprovenancedBlocks(article);
+      if (unprovenanced.length > 0) {
+        lastError = new Error(
+          `${unprovenanced.length} fenced code block(s) have no provenance comment (line ${unprovenanced
+            .map((block) => block.line)
+            .join(", ")}); put <!-- source: sources/...#Lx-Ly --> above a block quoted from a source, or <!-- derived --> above code you wrote yourself`,
+        );
+        article = null;
       }
     }
     if (!article) {
@@ -307,25 +326,32 @@ async function composeArticles({ root, subject, node: nodeId, step = null, maxCh
         });
         continue;
       }
+      // The model never cited its own fences; add `derived` deterministically so
+      // an unexplained code block can never reach polish or publish.
+      const repaired = addDerivedProvenance(salvaged.text);
+      provenanceAdded = repaired.added;
+      const isDraft = salvaged.missing.length > 0;
       mkdirSync(files.dir, { recursive: true });
-      writeFileSync(files.original, salvaged.text);
+      writeFileSync(files.original, repaired.text);
       writeJson(files.compose, {
         model,
         composed_at: new Date().toISOString(),
-        status: "draft",
+        status: isDraft ? "draft" : "composed",
         missing: salvaged.missing,
-        error: lastError?.message ?? null,
+        ...(provenanceAdded ? { provenance_added: provenanceAdded } : {}),
+        ...(isDraft ? { error: lastError?.message ?? null } : {}),
       });
       results.push({
         id: entry.id,
         title: entry.title ?? null,
-        status: "draft",
+        status: isDraft ? "draft" : "composed",
         article: relative(root, files.original),
         model,
         materialChars,
         retries,
         missing: salvaged.missing,
-        error: lastError?.message ?? null,
+        ...(provenanceAdded ? { provenanceAdded } : {}),
+        ...(isDraft ? { error: lastError?.message ?? null } : {}),
       });
       continue;
     }
