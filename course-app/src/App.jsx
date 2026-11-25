@@ -86,7 +86,47 @@ function FocusIcon({ active = false }) {
 }
 
 
-function ReadingProgress({ routeKey }) {
+/**
+ * In focus mode the chrome gets out of the way: scrolling down past the title
+ * tucks the header off-screen, scrolling back up brings it back.
+ */
+function useHeaderAutoHide(enabled, resetKey) {
+  const [hidden, setHidden] = useState(false);
+
+  useEffect(() => {
+    setHidden(false);
+  }, [resetKey]);
+
+  useEffect(() => {
+    if (!enabled) {
+      setHidden(false);
+      return undefined;
+    }
+    let lastY = window.scrollY;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const y = window.scrollY;
+      const delta = y - lastY;
+      if (y < 72) setHidden(false);
+      else if (delta > 6) setHidden(true);
+      else if (delta < -6) setHidden(false);
+      lastY = y;
+    };
+    const onScroll = () => {
+      if (!frame) frame = window.requestAnimationFrame(update);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", onScroll);
+    };
+  }, [enabled]);
+
+  return hidden;
+}
+
+function ReadingProgress({ routeKey, raised = false }) {
   const [ratio, setRatio] = useState(0);
 
   useEffect(() => {
@@ -116,9 +156,9 @@ function ReadingProgress({ routeKey }) {
   return (
     <div
       aria-hidden="true"
-      className={`pointer-events-none fixed inset-x-0 top-16 z-30 h-[3px] bg-ink/5 transition-opacity duration-150 ${
-        idle ? "opacity-0" : "opacity-100"
-      }`}
+      className={`pointer-events-none fixed inset-x-0 z-30 h-[3px] bg-ink/5 transition-[top,opacity] duration-150 ${
+        raised ? "top-0" : "top-16"
+      } ${idle ? "opacity-0" : "opacity-100"}`}
     >
       <div
         className="h-full origin-left rounded-r-full bg-accent transition-transform duration-[90ms] ease-linear"
@@ -347,6 +387,12 @@ export default function App() {
   // Keep the rail's grid column while focus mode is on; FadingColumn hides it
   // visually so the article never shifts sideways.
   const showRail = Boolean(step && hasStepRail && railOpen);
+  // A step without a TOC still reserves the rail column, so the article stays
+  // centred on the page instead of drifting toward the right edge.
+  const reserveRailColumn = Boolean(
+    step && (!hasStepRail || railOpen)
+  );
+  const headerHidden = useHeaderAutoHide(focusMode, routeKey);
 
   // Browser back/forward support
   useEffect(() => {
@@ -597,7 +643,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen">
-      <header className="sticky top-0 z-40 border-b border-hairline bg-paper/85 backdrop-blur-md">
+      <header
+        className={`sticky top-0 z-40 border-b border-hairline bg-paper/85 backdrop-blur-md transition-transform duration-[220ms] ease-[var(--mo-ease)] ${
+          headerHidden ? "-translate-y-full" : "translate-y-0"
+        }`}
+        inert={headerHidden ? "" : undefined}
+        aria-hidden={headerHidden || undefined}
+      >
         <div className="mx-auto flex h-16 max-w-[1536px] items-center gap-1.5 px-3 sm:gap-2 sm:px-5 lg:pl-8 lg:pr-12">
           {subjectId && (
             <button
@@ -687,7 +739,9 @@ export default function App() {
         </div>
       </header>
 
-      {subjectId && <ReadingProgress routeKey={routeKey} />}
+      {subjectId && (
+        <ReadingProgress routeKey={routeKey} raised={headerHidden} />
+      )}
 
       {!subjectId ? (
         <main className="min-w-0 flex-1">
@@ -713,7 +767,7 @@ export default function App() {
           <div className="mx-auto w-full max-w-[1536px] px-4 sm:px-6 lg:pl-8 lg:pr-12">
             <div
               className={`lg:grid lg:grid-cols-[20rem_minmax(0,1fr)] ${
-                showRail
+                reserveRailColumn
                   ? "xl:grid-cols-[20rem_minmax(0,1fr)_20rem]"
                   : "xl:grid-cols-[20rem_minmax(0,1fr)]"
               }`}
